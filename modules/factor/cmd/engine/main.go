@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/engine"
+	"github.com/mooyang-code/moox/modules/factor/internal/gapledger"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	"github.com/mooyang-code/moox/packages/requestauth"
@@ -55,11 +57,13 @@ func run(args []string, out io.Writer) error {
 		return runOnce(args, out)
 	case "health":
 		return health(args, out)
+	case "reset-gap-ledger":
+		return resetGapLedger(args, out)
 	case "version":
 		_, err := fmt.Fprintf(out, "moox-factor-engine %s %s %s\n", Version, GitCommit, BuildTime)
 		return err
 	default:
-		return fmt.Errorf("unknown command %q (serve, run-once, health, version)", command)
+		return fmt.Errorf("unknown command %q (serve, run-once, health, reset-gap-ledger, version)", command)
 	}
 }
 
@@ -161,6 +165,34 @@ func health(args []string, out io.Writer) error {
 		return fmt.Errorf("factor engine is not ready: HTTP %d", response.StatusCode)
 	}
 	return nil
+}
+
+// resetGapLedger 删除空洞账本。数据被整体清空之后账本里的待恢复项指向已不存在的数据，必须在引擎停止后执行：
+// 引擎持有打开的账本文件，并在内存里维护待恢复集合。
+func resetGapLedger(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("reset-gap-ledger", flag.ContinueOnError)
+	app := fs.String("config", "config/engine.yaml", "factor engine config")
+	healthAddr := fs.String("health-addr", "127.0.0.1:11417", "引擎健康检查地址；能连上说明引擎还在运行，拒绝执行")
+	yes := fs.Bool("yes", false, "确认删除全部空洞账本")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := engine.Load(*app)
+	if err != nil {
+		return err
+	}
+	if conn, dialErr := net.DialTimeout("tcp", *healthAddr, time.Second); dialErr == nil {
+		_ = conn.Close()
+		return fmt.Errorf("因子引擎仍在运行（%s 可以连上）：先停止引擎再重置账本", *healthAddr)
+	}
+	if !*yes {
+		return errors.New("该命令会删除全部空洞账本（含待恢复记录与审计历史）；确认后加 --yes 重新执行")
+	}
+	removed, err := gapledger.Reset(cfg.Gap.LedgerDir)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(out).Encode(map[string]any{"status": "ok", "ledger_dir": cfg.Gap.LedgerDir, "files_removed": removed})
 }
 
 func signHealthRequest(request *http.Request) error {

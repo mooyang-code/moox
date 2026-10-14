@@ -524,6 +524,21 @@ message GetFetchPlansRsp {
   repeated FetchFunctionState functions = 5;
 }
 
+// ReregisterFetchPlan 在 Storage 数据被清空后让采集计划重新生效：把最近一份已生效计划里各数据集标记为
+// “快照未登记”，下一轮对账会生成新计划、重新登记序列快照并选新的生效周期；同时清掉该空间的补采作业，
+// 把自动补采水位推到当前时间（否则会从最早的计划起点开始回补历史）。
+message ReregisterFetchPlanReq {
+  string space_id = 1;
+}
+
+message ReregisterFetchPlanRsp {
+  common.RetInfo ret_info = 1;
+  // datasets 是被标记为需要重新登记快照的“数据集|频率”。
+  repeated string datasets = 2;
+  // backfill_jobs 是被清掉的补采作业数。
+  int32 backfill_jobs = 3;
+}
+
 service CollectMgr {
   // ----- 采集任务 -----
   rpc GetTaskList(GetTaskListReq) returns (GetTaskListRsp);
@@ -555,4 +570,5 @@ service CollectMgr {
 
   // ----- 采集计划 -----
   rpc GetFetchPlans(GetFetchPlansReq) returns (GetFetchPlansRsp);
+  rpc ReregisterFetchPlan(ReregisterFetchPlanReq) returns (ReregisterFetchPlanRsp);
 }

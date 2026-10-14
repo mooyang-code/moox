@@ -612,6 +612,7 @@ components:
           - ListKlineBackfills
           - CancelKlineBackfill
           - GetFetchPlans
+          - ReregisterFetchPlan
         read_only_methods:
           - GetTaskList
           - GetTaskDetail
@@ -650,6 +651,7 @@ components:
               - moox-cli
           - methods:
               - SyncSubjects
+              - ReregisterFetchPlan
             callers:
               - moox-cli
           - methods:

@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -103,6 +104,27 @@ type Ledger struct {
 	// skipped 是自启动以来因空洞跳过的条目数；ignored 是回放时无法解析而忽略的行数。
 	skipped int64
 	ignored int
+}
+
+// Reset 删除账本目录里的全部账本文件（factor-gap-*.jsonl），返回删除的文件数；目录不存在视为没有账本。
+// 用于数据被整体清空之后：账本里的待恢复项指向已不存在的数据，留着只会让恢复一直白跑、超期后还会告警。
+// 调用方必须保证没有引擎进程在使用该目录：引擎持有打开的文件，并在内存里维护待恢复集合。
+func Reset(dir string) (int, error) {
+	if strings.TrimSpace(dir) == "" {
+		return 0, fmt.Errorf("gap ledger directory is required")
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "factor-gap-*.jsonl"))
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, file := range files {
+		if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return removed, fmt.Errorf("remove gap ledger %s: %w", file, err)
+		}
+		removed++
+	}
+	return removed, nil
 }
 
 // Open 打开账本目录并回放全部账本文件重建待恢复集合；giveUp > 0 时，已超过期限的待恢复项立即追加 gave_up

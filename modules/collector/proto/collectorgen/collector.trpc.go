@@ -59,6 +59,8 @@ type CollectMgrService interface {
 	CancelKlineBackfill(ctx context.Context, req *CancelKlineBackfillReq) (*CancelKlineBackfillRsp, error)
 	// GetFetchPlans ----- 采集计划 -----
 	GetFetchPlans(ctx context.Context, req *GetFetchPlansReq) (*GetFetchPlansRsp, error)
+
+	ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq) (*ReregisterFetchPlanRsp, error)
 }
 
 func CollectMgrService_GetTaskList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -421,6 +423,24 @@ func CollectMgrService_GetFetchPlans_Handler(svr interface{}, ctx context.Contex
 	return rsp, nil
 }
 
+func CollectMgrService_ReregisterFetchPlan_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReregisterFetchPlanReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ReregisterFetchPlan(ctx, reqbody.(*ReregisterFetchPlanReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CollectMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.collector.CollectMgr",
@@ -505,6 +525,10 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.collector.CollectMgr/GetFetchPlans",
 			Func: CollectMgrService_GetFetchPlans_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ReregisterFetchPlan",
+			Func: CollectMgrService_ReregisterFetchPlan_Handler,
 		},
 	},
 }
@@ -591,6 +615,9 @@ func (s *UnimplementedCollectMgr) CancelKlineBackfill(ctx context.Context, req *
 func (s *UnimplementedCollectMgr) GetFetchPlans(ctx context.Context, req *GetFetchPlansReq) (*GetFetchPlansRsp, error) {
 	return nil, errors.New("rpc GetFetchPlans of service CollectMgr is not implemented")
 }
+func (s *UnimplementedCollectMgr) ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq) (*ReregisterFetchPlanRsp, error) {
+	return nil, errors.New("rpc ReregisterFetchPlan of service CollectMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -640,6 +667,8 @@ type CollectMgrClientProxy interface {
 	CancelKlineBackfill(ctx context.Context, req *CancelKlineBackfillReq, opts ...client.Option) (rsp *CancelKlineBackfillRsp, err error)
 	// GetFetchPlans ----- 采集计划 -----
 	GetFetchPlans(ctx context.Context, req *GetFetchPlansReq, opts ...client.Option) (rsp *GetFetchPlansRsp, err error)
+
+	ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq, opts ...client.Option) (rsp *ReregisterFetchPlanRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -1045,6 +1074,26 @@ func (c *CollectMgrClientProxyImpl) GetFetchPlans(ctx context.Context, req *GetF
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetFetchPlansRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq, opts ...client.Option) (*ReregisterFetchPlanRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ReregisterFetchPlan")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ReregisterFetchPlan")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReregisterFetchPlanRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -82,8 +82,31 @@ var collectorFetchPlanCmd = &cobra.Command{
 	},
 }
 
+var fetchPlanReregisterFlags struct {
+	klineRangeFlags
+	Yes bool
+}
+
+var collectorFetchPlanReregisterCmd = &cobra.Command{
+	Use:   "reregister",
+	Short: "Storage 数据被清空后，让采集计划重新登记序列快照并重置补采状态",
+	Long: "Storage 的数据被整体清空（moox-cli storage reset-view-consumers --reset-all-storage-data）后，已登记的序列快照也没了，\n" +
+		"采集函数的周期提交会因“快照缺失”被拒绝；而对账只在数据集标的集合变化时才重新登记。本命令把最近一份已生效计划里的\n" +
+		"全部数据集标记为“快照未登记”，下一轮对账（约 1 分钟内）会生成新计划、重新登记快照并选新的生效周期，\n" +
+		"1m 数据集约 2 分钟后恢复写入，1h 数据集等下一个整点。同时清掉该空间的补采作业，并把自动补采水位推到现在\n" +
+		"（否则会从最早的计划起点开始回补历史）。空间里还有未生效的计划时拒绝，等它生效后再执行。",
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return runFetchPlanReregister(cmd.Context(), cmd.OutOrStdout(), fetchPlanReregisterFlags.klineRangeFlags, fetchPlanReregisterFlags.Yes)
+	},
+}
+
 func init() {
 	collectorCmd.AddCommand(collectorKlineCmd, collectorFetchPlanCmd)
+	collectorFetchPlanCmd.AddCommand(collectorFetchPlanReregisterCmd)
+	collectorFetchPlanReregisterCmd.Flags().StringVar(&fetchPlanReregisterFlags.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
+	collectorFetchPlanReregisterCmd.Flags().StringVar(&fetchPlanReregisterFlags.SpaceID, "space-id", "", "空间 ID")
+	collectorFetchPlanReregisterCmd.Flags().BoolVar(&fetchPlanReregisterFlags.Yes, "yes", false, "确认清空补采作业并让采集计划重新登记")
 	collectorKlineCmd.AddCommand(collectorKlineCheckCmd, collectorKlineBackfillCmd, collectorKlineBackfillStatusCmd, collectorKlineBackfillCancelCmd)
 	bindRange := func(cmd *cobra.Command, flags *klineRangeFlags, withRange bool) {
 		cmd.Flags().StringVar(&flags.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
@@ -312,4 +335,27 @@ func runFetchPlan(ctx context.Context, out io.Writer, flags klineRangeFlags) err
 		functions = append(functions, map[string]any{"name": function.GetName(), "region": function.GetRegion(), "market": function.GetMarket(), "cron": function.GetCron(), "subjects": function.GetSubjectCount(), "datasets": function.GetDatasets(), "state": function.GetState()})
 	}
 	return printJSON(out, map[string]any{"open": summary(rsp.GetOpen()), "applied": summary(rsp.GetApplied()), "datasets": datasets, "functions": functions})
+}
+
+// runFetchPlanReregister 调用 ReregisterFetchPlan；没有 --yes 时只提示，不动任何东西。
+func runFetchPlanReregister(ctx context.Context, out io.Writer, flags klineRangeFlags, yes bool) error {
+	if strings.TrimSpace(flags.SpaceID) == "" {
+		return errors.New("--space-id is required")
+	}
+	if !yes {
+		return errors.New("该命令会清空空间的补采作业并让采集计划重新登记序列快照；确认后加 --yes 重新执行")
+	}
+	gateway, err := openCommandGateway(ctx, flags.File, nil)
+	if err != nil {
+		return err
+	}
+	defer gateway.Close()
+	rsp := &collectorpb.ReregisterFetchPlanRsp{}
+	if err := gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "ReregisterFetchPlan", &collectorpb.ReregisterFetchPlanReq{SpaceId: flags.SpaceID}, rsp); err != nil {
+		return fmt.Errorf("reregister fetch plan: %w", err)
+	}
+	if err := collectorRetError("reregister fetch plan", rsp.GetRetInfo()); err != nil {
+		return err
+	}
+	return printJSON(out, map[string]any{"status": "marked", "space_id": flags.SpaceID, "datasets": rsp.GetDatasets(), "backfill_jobs_removed": rsp.GetBackfillJobs()})
 }

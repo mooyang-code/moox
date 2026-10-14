@@ -326,6 +326,32 @@ func (r *BackfillRepository) SetWatermark(ctx context.Context, spaceID, datasetI
 		row.SpaceID, row.DatasetID, row.Frequency, row.ScannedUntil, row.UpdatedAt).Error
 }
 
+// Reset 清掉该空间全部补采作业、分块与自动补采水位，返回清掉的作业数。用于 Storage 数据被清空之后：
+// 旧作业指向已经不存在的数据，水位不清会让自动补采沿用旧位置。运行中的分块写回状态时找不到行，直接放弃。
+func (r *BackfillRepository) Reset(ctx context.Context, spaceID string) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, fmt.Errorf("backfill repository is not initialized")
+	}
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return 0, fmt.Errorf("space_id is required")
+	}
+	var jobs int64
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		jobIDs := tx.Model(&backfillJobRow{}).Select("c_job_id").Where("c_space_id = ?", spaceID)
+		if err := tx.Where("c_job_id IN (?)", jobIDs).Delete(&backfillChunkRow{}).Error; err != nil {
+			return err
+		}
+		result := tx.Where("c_space_id = ?", spaceID).Delete(&backfillJobRow{})
+		if result.Error != nil {
+			return result.Error
+		}
+		jobs = result.RowsAffected
+		return tx.Where("c_space_id = ?", spaceID).Delete(&backfillWatermarkRow{}).Error
+	})
+	return jobs, err
+}
+
 // ListJobs 按创建时间倒序分页返回该空间的补采作业，并返回总数。
 func (r *BackfillRepository) ListJobs(ctx context.Context, spaceID string, page, size int) ([]BackfillJob, int64, error) {
 	if r == nil || r.db == nil {

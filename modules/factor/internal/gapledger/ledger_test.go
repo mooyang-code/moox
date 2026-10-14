@@ -140,3 +140,30 @@ func TestLedgerDiskFailureKeepsMemoryAndMarksDegraded(t *testing.T) {
 	require.True(t, ledger.Degraded())
 	require.Equal(t, 1, ledger.PendingCount(), "内存里的待办不因写盘失败丢失")
 }
+
+// Reset 只删账本文件，不碰目录里的其他东西；之后重新打开得到空的待恢复集合；目录不存在不算错。
+func TestResetRemovesLedgerFilesOnly(t *testing.T) {
+	dir := t.TempDir()
+	c := &clock{now: t0}
+	ledger, _ := open(t, dir, c, 0)
+	require.NoError(t, ledger.RecordGaps(context.Background(), gap("BTC-USDT", 0, "f1", "f2")))
+	require.Equal(t, 2, ledger.PendingCount())
+	require.NoError(t, ledger.Close())
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "factor-gap-202609.jsonl"), []byte("{}\n"), 0o640))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("keep"), 0o640))
+
+	removed, err := Reset(dir)
+	require.NoError(t, err)
+	require.Equal(t, 2, removed, "当月与上月两个账本文件")
+	require.FileExists(t, filepath.Join(dir, "notes.txt"))
+
+	reopened, expired := open(t, dir, c, time.Hour)
+	require.Empty(t, expired)
+	require.Zero(t, reopened.PendingCount(), "重置后没有待恢复项")
+
+	none, err := Reset(filepath.Join(dir, "missing"))
+	require.NoError(t, err)
+	require.Zero(t, none)
+	_, err = Reset(" ")
+	require.Error(t, err)
+}

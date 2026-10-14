@@ -161,6 +161,25 @@ func (r *FetchPlanRepository) SavePlan(ctx context.Context, id int64, plan strin
 	return nil
 }
 
+// UpdateAppliedPlan 改写一份已生效计划的内容。只给维护命令用：Storage 数据被清空后，把数据集标记为“快照未登记”，
+// 让下一轮对账重新登记（见 marketfetch.ClearRegisteredSnapshots）。普通流程只改未生效的计划（SavePlan）。
+func (r *FetchPlanRepository) UpdateAppliedPlan(ctx context.Context, id int64, plan string) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("fetch plan repository is not initialized")
+	}
+	if strings.TrimSpace(plan) == "" {
+		return fmt.Errorf("plan is required")
+	}
+	result := r.db.WithContext(ctx).Model(&fetchPlanRow{}).Where("c_id = ? AND c_status = ?", id, FetchPlanApplied).Updates(map[string]any{"c_plan": plan, "c_mtime": time.Now().UTC()})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
 // ListAll 按先后顺序返回该空间全部采集计划（含未生效的），用于还原历史上的应有标的。
 func (r *FetchPlanRepository) ListAll(ctx context.Context, spaceID string) ([]*FetchPlanRecord, error) {
 	if r == nil || r.db == nil {
