@@ -90,7 +90,8 @@ func OpenIndexManager(opts IndexManagerOptions) (*IndexManager, error) {
 			// A process may have been interrupted after creating the temporary
 			// build file. It is never an authoritative slot and is safe to
 			// remove before Metadata restores active indexes.
-			_ = os.Remove(filepath.Join(opts.Root, entry.Name()))
+			// 准备文件专属的临时目录（<文件>.tmp）名称里也含 ".duckdb.prepare-"，一并清掉。
+			_ = os.RemoveAll(filepath.Join(opts.Root, entry.Name()))
 			_ = os.Remove(filepath.Join(opts.Root, entry.Name()+".wal"))
 		}
 	}
@@ -120,8 +121,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 	}
 	cleanupTemp := func() {
 		_ = db.Close()
-		_ = os.Remove(tempPath)
-		_ = os.Remove(tempPath + ".wal")
+		removePrepared(tempPath)
 	}
 	columns := schemaColumns(schema.Columns)
 	createColumns := []string{
@@ -158,20 +158,19 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		}
 	}
 	if err := db.Close(); err != nil {
-		_ = os.Remove(tempPath)
-		_ = os.Remove(tempPath + ".wal")
+		removePrepared(tempPath)
 		return err
 	}
 	if err := m.closeIndex(id); err != nil {
-		_ = os.Remove(tempPath)
-		_ = os.Remove(tempPath + ".wal")
+		removePrepared(tempPath)
 		return err
 	}
 	if err := os.Rename(tempPath, path); err != nil {
-		_ = os.Remove(tempPath)
-		_ = os.Remove(tempPath + ".wal")
+		removePrepared(tempPath)
 		return err
 	}
+	// 准备文件已改名为正式索引，它的临时目录不再有用；正式索引重新打开后使用自己的临时目录。
+	_ = os.RemoveAll(indexTempDir(tempPath))
 	db, err = open(path)
 	if err != nil {
 		return err
@@ -1230,6 +1229,10 @@ func (m *IndexManager) Remove(_ context.Context, id string) error {
 	// the retired index so an A/B rotation does not strand storage on disk. The
 	// WAL is removed first: if that removal fails, the main managed file remains
 	// discoverable and the cleanup Timer can retry the complete artifact.
+	// 专属临时目录最先删除，原因同上：它删不掉时主文件还在，清理定时器会整体重试。
+	if err := os.RemoveAll(indexTempDir(path)); err != nil {
+		return err
+	}
 	if err := os.Remove(path + ".wal"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -1411,6 +1414,19 @@ func (m *IndexManager) ListManagedIndexes(ctx context.Context) ([]string, error)
 	return ids, nil
 }
 
+// indexTempDir 是某个索引专属的 DuckDB 临时目录。
+// 多个索引不能共用一个临时目录：DuckDB 的临时文件按实例从头编号（如 duckdb_temp_storage_S32K-0.tmp），
+// 不同实例在同一目录里会重名，一个实例清理时会删掉另一个实例正在用的文件，
+// 随后那个实例提交失败（"Could not remove file ... No such file or directory"），索引之后一直写不进去。
+func indexTempDir(path string) string { return path + ".tmp" }
+
+// removePrepared 删除一个未完成（或已放弃）的准备文件，连同它的 WAL 和专属临时目录。
+func removePrepared(path string) {
+	_ = os.Remove(path)
+	_ = os.Remove(path + ".wal")
+	_ = os.RemoveAll(indexTempDir(path))
+}
+
 func open(path string) (*sql.DB, error) {
 	db, err := sql.Open("duckdb", path)
 	if err != nil {
@@ -1451,9 +1467,15 @@ func open(path string) (*sql.DB, error) {
 	// The storage host is intentionally small. Bound every view connection and
 	// spill temporary query state beside the index instead of allowing DuckDB's
 	// host-sized default memory limit to compete with the other services.
+	// 临时状态溢出到索引专属的目录，见 indexTempDir。
+	tempDir := indexTempDir(path)
+	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("create duckdb temp directory: %w", err)
+	}
 	settings := fmt.Sprintf(
 		"SET memory_limit = %s; SET threads = %d; SET temp_directory = %s",
-		sqlStringLiteral(memoryLimit), threads, sqlStringLiteral(filepath.Dir(path)),
+		sqlStringLiteral(memoryLimit), threads, sqlStringLiteral(tempDir),
 	)
 	if _, err := db.Exec(settings); err != nil {
 		_ = db.Close()
