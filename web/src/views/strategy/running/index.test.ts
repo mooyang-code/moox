@@ -40,8 +40,13 @@ const stubs = {
   StatusBadge: true,
   StrategyInstanceCreate: defineComponent({
     props: ["visible", "presetStrategyId"],
-    setup(props) {
-      return () => h("div", { class: "create" }, `create:${props.visible}:${props.presetStrategyId}`);
+    emits: ["created"],
+    setup(props, { emit }) {
+      return () =>
+        h("div", { class: "create" }, [
+          `create:${props.visible}:${props.presetStrategyId}`,
+          h("button", { class: "emit-created", onClick: () => emit("created", "i-new") })
+        ]);
     }
   }),
   InstanceQuickDrawer: defineComponent({
@@ -114,6 +119,14 @@ describe("strategy running page", () => {
     const { wrapper } = await setup({ create: "1", instance_id: "i1", strategy_id: "s1" });
     expect(wrapper.find(".create").text()).toBe("create:true:s1");
     expect(wrapper.find(".quick").text()).toBe("quick:");
+  });
+
+  it("ends on the detail page of a newly created instance instead of falling back to the list", async () => {
+    const { router, wrapper } = await setup({ create: "1", strategy_id: "s1" });
+    await wrapper.find(".emit-created").trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.name).toBe("strategy-detail");
+    expect(router.currentRoute.value.params.instanceId).toBe("i-new");
   });
 
   it("does not reload when only the overlay changes", async () => {
