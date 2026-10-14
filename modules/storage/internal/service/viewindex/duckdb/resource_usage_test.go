@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/hostmem"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 )
 
@@ -22,7 +23,7 @@ func usageTestIndexID(view string) string {
 func TestUsageReportSummarizesAndFlagsOnlyTheIndexesThatNeedAttention(t *testing.T) {
 	report := usageReport{
 		limitText:  "967MB",
-		limitBytes: parseMemoryLimitBytes("967MB"),
+		limitBytes: hostmem.ParseSize("967MB"),
 		rssBytes:   488 << 20,
 		indexes: []indexUsage{
 			{id: usageTestIndexID("kline_1h"), memoryBytes: 1 << 20},
@@ -164,14 +165,6 @@ func TestCloseStopsTheUsageLoop(t *testing.T) {
 	}
 	if err := manager.Close(); err != nil {
 		t.Fatalf("重复 Close 不应报错或 panic：%v", err)
-	}
-}
-
-func TestParseMemoryLimitBytesUsesDuckDBDecimalUnits(t *testing.T) {
-	for limit, want := range map[string]int64{"256MB": 256_000_000, "2GB": 2_000_000_000, "512KB": 512_000, "1TB": 1_000_000_000_000, "": 0, "abc": 0, "0MB": 0, "12MiB": 0} {
-		if got := parseMemoryLimitBytes(limit); got != want {
-			t.Errorf("parseMemoryLimitBytes(%q) = %d，want %d", limit, got, want)
-		}
 	}
 }
 

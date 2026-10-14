@@ -43,6 +43,8 @@ type Options struct {
 	ProcessedEventRetention time.Duration
 	DisableSyncWrites       bool
 	PeriodNow               func() time.Time
+	// BlockCacheBytes 是 Pebble 块缓存大小；为 0 时由环境变量或主机内存推算，见 resolveBlockCache。
+	BlockCacheBytes int64
 }
 
 type OutboxEntry struct {
@@ -88,6 +90,10 @@ type Store struct {
 	historyBackfilled       map[string]bool
 	historyBackfillStarted  map[string]bool
 	closing                 bool
+	blockCacheBytes         int64
+	// statsStop 通知缓存用量日志协程退出，由 Close 关闭。
+	statsStop chan struct{}
+	statsOnce sync.Once
 }
 
 func Open(opts Options) (*Store, error) {
@@ -109,10 +115,15 @@ func Open(opts Options) (*Store, error) {
 	if err := ensureLayout(opts.Path); err != nil {
 		return nil, err
 	}
-	db, err := cpebble.Open(opts.Path, &cpebble.Options{Merger: BitmapORMerger})
+	cacheBytes, cacheSource := resolveBlockCache(opts.BlockCacheBytes)
+	cache := cpebble.NewCache(cacheBytes)
+	// Open 会自己持有一份引用；这里放掉创建时的那份，DB 关闭时缓存随之释放。
+	defer cache.Unref()
+	db, err := cpebble.Open(opts.Path, &cpebble.Options{Merger: BitmapORMerger, Cache: cache})
 	if err != nil {
 		return nil, err
 	}
+	cacheLogf("storage node Pebble 块缓存 %dMB（%s）", cacheBytes>>20, cacheSource)
 	sourceStoreID, err := bindSourceStore(db, opts.NodeID)
 	if err != nil {
 		_ = db.Close()
@@ -123,8 +134,9 @@ func Open(opts Options) (*Store, error) {
 		writeOptions = cpebble.NoSync
 	}
 	historyCtx, historyCancel := context.WithCancel(context.Background())
-	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, periodNow: opts.PeriodNow, historyCtx: historyCtx, historyCancel: historyCancel, historyBackfilled: make(map[string]bool), historyBackfillStarted: make(map[string]bool)}
+	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, periodNow: opts.PeriodNow, historyCtx: historyCtx, historyCancel: historyCancel, historyBackfilled: make(map[string]bool), historyBackfillStarted: make(map[string]bool), blockCacheBytes: cacheBytes, statsStop: make(chan struct{})}
 	store.startPeriodFinalizer()
+	store.startCacheStats(cacheStatsFirstDelay, cacheStatsInterval)
 	return store, nil
 }
 
@@ -144,6 +156,11 @@ func (s *Store) Close() error {
 	s.maintenanceMu.Lock()
 	s.closing = true
 	s.maintenanceMu.Unlock()
+	s.statsOnce.Do(func() {
+		if s.statsStop != nil {
+			close(s.statsStop)
+		}
+	})
 	if s.historyCancel != nil {
 		s.historyCancel()
 	}

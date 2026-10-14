@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/hostmem"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 )
 
@@ -55,7 +56,7 @@ func (m *IndexManager) collectUsage() usageReport {
 	sort.Strings(ids)
 
 	limitText, _ := resolveMemoryLimit()
-	report := usageReport{limitText: limitText, limitBytes: parseMemoryLimitBytes(limitText), rssBytes: processRSSBytes(os.ReadFile)}
+	report := usageReport{limitText: limitText, limitBytes: hostmem.ParseSize(limitText), rssBytes: processRSSBytes(os.ReadFile)}
 	for _, id := range ids {
 		m.mu.Lock()
 		db := m.dbs[id]
@@ -135,18 +136,6 @@ func (m *IndexManager) logUsageLoop(stop <-chan struct{}, firstDelay, interval t
 		}
 		timer.Reset(interval)
 	}
-}
-
-// parseMemoryLimitBytes 把 DuckDB 的内存值（如 "967MB"）转成字节；DuckDB 的 KB/MB/GB/TB 按 1000 进制。读不出来返回 0。
-func parseMemoryLimitBytes(limit string) int64 {
-	for suffix, unit := range map[string]int64{"KB": 1e3, "MB": 1e6, "GB": 1e9, "TB": 1e12} {
-		if strings.HasSuffix(limit, suffix) {
-			if n, err := strconv.ParseInt(strings.TrimSuffix(limit, suffix), 10, 64); err == nil && n > 0 {
-				return n * unit
-			}
-		}
-	}
-	return 0
 }
 
 // processRSSBytes 读取本进程的常驻内存（Linux 的 /proc/self/status），读不到返回 0。
