@@ -92,6 +92,13 @@ func (s *ServiceImpl) resolveEventBusTarget(ctx context.Context) (eventBusTarget
 	return target, nil
 }
 
+// eventBusRequest 为单次 JetStream 请求派生独立的两分钟上限。nats.go 遇到带截止时间的 Context 会直接使用它而忽略
+// JetStream 的 MaxWait，所以不能指望 MaxWait 限制单次请求：一个无响应的请求会耗尽整个 RPC 的截止时间，
+// 连此前已完成的删除或清除结果都来不及返回。
+func eventBusRequest(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, eventBusRequestTimeout)
+}
+
 // connectEventBus 用管理员令牌连上 EventBus 并返回 JetStream 会话；连不上时立即失败，不做后台重试。
 func connectEventBus(target eventBusTarget) (eventBusSession, error) {
 	pool := x509.NewCertPool()
@@ -194,7 +201,10 @@ func (s *ServiceImpl) InspectEventBus(ctx context.Context, req *pb.InspectEventB
 		return &pb.InspectEventBusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	defer session.Close()
-	if _, err := session.StreamInfo(req.GetStream(), nats.Context(ctx)); err != nil {
+	streamCtx, cancelStream := eventBusRequest(ctx)
+	_, err = session.StreamInfo(req.GetStream(), nats.Context(streamCtx))
+	cancelStream()
+	if err != nil {
 		if errors.Is(err, nats.ErrStreamNotFound) {
 			return &pb.InspectEventBusRsp{RetInfo: eventBusRet(pb.ErrorCode_NOT_FOUND, "EventBus 流 %s 不存在", req.GetStream())}, nil
 		}
@@ -202,7 +212,9 @@ func (s *ServiceImpl) InspectEventBus(ctx context.Context, req *pb.InspectEventB
 	}
 	rsp := &pb.InspectEventBusRsp{RetInfo: retOK()}
 	for _, durable := range durables {
-		info, err := session.ConsumerInfo(req.GetStream(), durable, nats.Context(ctx))
+		consumerCtx, cancelConsumer := eventBusRequest(ctx)
+		info, err := session.ConsumerInfo(req.GetStream(), durable, nats.Context(consumerCtx))
+		cancelConsumer()
 		if errors.Is(err, nats.ErrConsumerNotFound) {
 			rsp.Consumers = append(rsp.Consumers, &pb.EventBusConsumerState{Durable: durable})
 			continue
@@ -235,7 +247,10 @@ func (s *ServiceImpl) DeleteEventBusConsumers(ctx context.Context, req *pb.Delet
 	defer session.Close()
 	rsp := &pb.DeleteEventBusConsumersRsp{RetInfo: retOK()}
 	for _, durable := range durables {
-		err := session.DeleteConsumer(req.GetStream(), durable, nats.Context(ctx))
+		rsp.Attempted = true
+		deleteCtx, cancelDelete := eventBusRequest(ctx)
+		err := session.DeleteConsumer(req.GetStream(), durable, nats.Context(deleteCtx))
+		cancelDelete()
 		if errors.Is(err, nats.ErrConsumerNotFound) {
 			continue
 		}
@@ -267,12 +282,15 @@ func (s *ServiceImpl) PurgeEventBusSubjects(ctx context.Context, req *pb.PurgeEv
 	defer session.Close()
 	purged := 0
 	for _, subject := range subjects {
-		if err := session.PurgeStream(req.GetStream(), &nats.StreamPurgeRequest{Subject: subject}, nats.Context(ctx)); err != nil {
+		purgeCtx, cancelPurge := eventBusRequest(ctx)
+		err := session.PurgeStream(req.GetStream(), &nats.StreamPurgeRequest{Subject: subject}, nats.Context(purgeCtx))
+		cancelPurge()
+		if err != nil {
 			log.ErrorContextf(ctx, "eventbus ops 清除主题失败 stream=%s subject=%s purged=%d: %v", req.GetStream(), subject, purged, err)
-			return &pb.PurgeEventBusSubjectsRsp{RetInfo: eventBusRet(pb.ErrorCode_INNER_ERR, "清除主题 %s 失败（已清除 %d 个）: %v", subject, purged, err)}, nil
+			return &pb.PurgeEventBusSubjectsRsp{RetInfo: eventBusRet(pb.ErrorCode_INNER_ERR, "清除主题 %s 失败（已清除 %d 个）: %v", subject, purged, err), Attempted: true}, nil
 		}
 		purged++
 	}
 	log.WarnContextf(ctx, "eventbus ops 已清除主题 stream=%s subjects=%d", req.GetStream(), purged)
-	return &pb.PurgeEventBusSubjectsRsp{RetInfo: retOK()}, nil
+	return &pb.PurgeEventBusSubjectsRsp{RetInfo: retOK(), Attempted: true}, nil
 }

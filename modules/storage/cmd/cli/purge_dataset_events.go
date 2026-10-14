@@ -82,7 +82,7 @@ func purgeDatasetEventSubjectsFromJetStream(ctx context.Context, opts purgeDatas
 		return err
 	}
 	defer admin.Close()
-	if err := admin.PurgeSubjects(ctx, opts.stream, subjects); err != nil {
+	if _, err := purgeSubjects(ctx, admin, opts.stream, subjects); err != nil {
 		return fmt.Errorf("purge subjects: %w", err)
 	}
 	return nil

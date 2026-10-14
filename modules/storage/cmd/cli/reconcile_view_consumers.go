@@ -134,7 +134,7 @@ func reconcileViewConsumers(ctx context.Context, opts reconcileViewConsumersOpti
 		}
 	}()
 	for _, consumer := range sortedConsumerNames(drift) {
-		if _, err := admin.DeleteConsumers(ctx, opts.stream, []string{consumer}); err != nil {
+		if _, _, err := admin.DeleteConsumers(ctx, opts.stream, []string{consumer}); err != nil {
 			return fmt.Errorf("reset View consumer %s: %w", consumer, err)
 		}
 		summary.ResetConsumers = append(summary.ResetConsumers, consumer)

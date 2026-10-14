@@ -796,7 +796,7 @@ func deleteJetStreamConsumer(ctx context.Context, storageConf, packageRoot, stre
 		return false, err
 	}
 	defer admin.Close()
-	deleted, err := admin.DeleteConsumers(ctx, stream, []string{consumer})
+	deleted, _, err := admin.DeleteConsumers(ctx, stream, []string{consumer})
 	return len(deleted) > 0, err
 }
 

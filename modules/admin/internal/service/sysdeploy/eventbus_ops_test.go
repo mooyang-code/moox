@@ -34,23 +34,38 @@ type fakeEventBusSession struct {
 	purgeErrors     map[string]error
 	deleted, purged []string
 	closed          bool
+	// deadlines 记录每次请求所用 Context 的截止时间（无截止时间的记零值）。
+	deadlines []time.Time
 }
 
-func (f *fakeEventBusSession) StreamInfo(stream string, _ ...nats.JSOpt) (*nats.StreamInfo, error) {
+func (f *fakeEventBusSession) record(opts []nats.JSOpt) {
+	var deadline time.Time
+	for _, opt := range opts {
+		if c, ok := opt.(nats.ContextOpt); ok {
+			deadline, _ = c.Deadline()
+		}
+	}
+	f.deadlines = append(f.deadlines, deadline)
+}
+
+func (f *fakeEventBusSession) StreamInfo(stream string, opts ...nats.JSOpt) (*nats.StreamInfo, error) {
+	f.record(opts)
 	if f.streamMissing {
 		return nil, nats.ErrStreamNotFound
 	}
 	return &nats.StreamInfo{Config: nats.StreamConfig{Name: stream}}, nil
 }
 
-func (f *fakeEventBusSession) ConsumerInfo(_, durable string, _ ...nats.JSOpt) (*nats.ConsumerInfo, error) {
+func (f *fakeEventBusSession) ConsumerInfo(_, durable string, opts ...nats.JSOpt) (*nats.ConsumerInfo, error) {
+	f.record(opts)
 	if info, ok := f.consumers[durable]; ok {
 		return info, nil
 	}
 	return nil, nats.ErrConsumerNotFound
 }
 
-func (f *fakeEventBusSession) DeleteConsumer(_, durable string, _ ...nats.JSOpt) error {
+func (f *fakeEventBusSession) DeleteConsumer(_, durable string, opts ...nats.JSOpt) error {
+	f.record(opts)
 	if err := f.deleteErrors[durable]; err != nil {
 		return err
 	}
@@ -62,6 +77,7 @@ func (f *fakeEventBusSession) DeleteConsumer(_, durable string, _ ...nats.JSOpt)
 }
 
 func (f *fakeEventBusSession) PurgeStream(_ string, opts ...nats.JSOpt) error {
+	f.record(opts)
 	subject := ""
 	for _, opt := range opts {
 		if request, ok := opt.(*nats.StreamPurgeRequest); ok {
@@ -229,6 +245,7 @@ func TestDeleteEventBusConsumersSkipsMissingAndReportsPartialFailure(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Equal(t, []string{events.StorageViewFactorConsumer, events.StorageViewMetricsConsumer}, rsp.GetDeleted(), "不存在的 misc 不计入")
+	require.True(t, rsp.GetAttempted())
 	require.True(t, session.closed)
 
 	session = &fakeEventBusSession{
@@ -243,6 +260,7 @@ func TestDeleteEventBusConsumersSkipsMissingAndReportsPartialFailure(t *testing.
 	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
 	require.Contains(t, rsp.GetRetInfo().GetMsg(), events.StorageViewMetricsConsumer)
 	require.Equal(t, []string{events.StorageViewFactorConsumer}, rsp.GetDeleted(), "失败前已删除的要返回，调用方才知道动过什么")
+	require.True(t, rsp.GetAttempted())
 	require.NotContains(t, session.deleted, events.StorageViewMiscConsumer, "出错后不再继续删除")
 }
 
@@ -257,6 +275,7 @@ func TestPurgeEventBusSubjectsPurgesEachSubjectOnceAndStopsOnFailure(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.Equal(t, subjects, session.purged, "重复主题只清一次，顺序保持")
+	require.True(t, rsp.GetAttempted())
 	require.True(t, session.closed)
 
 	session = &fakeEventBusSession{purgeErrors: map[string]error{subjects[2]: errors.New("boom")}}
@@ -266,7 +285,66 @@ func TestPurgeEventBusSubjectsPurgesEachSubjectOnceAndStopsOnFailure(t *testing.
 	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
 	require.Contains(t, rsp.GetRetInfo().GetMsg(), subjects[2])
 	require.Contains(t, rsp.GetRetInfo().GetMsg(), "已清除 2 个")
+	require.True(t, rsp.GetAttempted())
 	require.Equal(t, subjects[:2], session.purged)
+}
+
+// 失败发生在发出变更请求之前（参数越界、连不上 EventBus）时 attempted 必须是 false：
+// 调用方据此判断 EventBus 上什么都没动，可以安全地恢复本地状态。
+func TestEventBusOpsReportNotAttemptedWhenFailingBeforeAnyMutation(t *testing.T) {
+	unreachable := &ServiceImpl{openEventBus: func(context.Context) (eventBusSession, error) {
+		return nil, errors.New("连接 EventBus 失败")
+	}}
+	deleted, err := unreachable.DeleteEventBusConsumers(t.Context(), &pb.DeleteEventBusConsumersReq{Stream: events.StorageViewConsumerStream, Durables: events.StorageViewConsumerDurables})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, deleted.GetRetInfo().GetCode())
+	require.False(t, deleted.GetAttempted())
+	purged, err := unreachable.PurgeEventBusSubjects(t.Context(), &pb.PurgeEventBusSubjectsReq{Stream: events.StorageViewConsumerStream, Subjects: datasetSubjects(t, "mooxsys", "ds")})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, purged.GetRetInfo().GetCode())
+	require.False(t, purged.GetAttempted())
+
+	service, _ := eventBusTestService(&fakeEventBusSession{})
+	deleted, err = service.DeleteEventBusConsumers(t.Context(), &pb.DeleteEventBusConsumersReq{Stream: "MOOX_TRADE", Durables: events.StorageViewConsumerDurables})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, deleted.GetRetInfo().GetCode())
+	require.False(t, deleted.GetAttempted())
+	purged, err = service.PurgeEventBusSubjects(t.Context(), &pb.PurgeEventBusSubjectsReq{Stream: events.StorageViewConsumerStream, Subjects: []string{">"}})
+	require.NoError(t, err)
+	require.False(t, purged.GetAttempted())
+}
+
+// nats.go 对带截止时间的 Context 会忽略 JetStream 的 MaxWait，所以每次请求必须自带两分钟上限；
+// 否则一个无响应的请求会耗尽整个 RPC 的截止时间，已完成的删除与清除结果也来不及返回。
+func TestEventBusOpsBoundEveryRequestIndependentlyOfTheRPCDeadline(t *testing.T) {
+	subjects := datasetSubjects(t, "mooxsys", "kline.1m")
+	session := &fakeEventBusSession{consumers: map[string]*nats.ConsumerInfo{events.StorageViewFactorConsumer: {}}}
+	service, _ := eventBusTestService(session)
+
+	long, cancelLong := context.WithTimeout(t.Context(), 10*time.Minute)
+	defer cancelLong()
+	_, err := service.InspectEventBus(long, &pb.InspectEventBusReq{Stream: events.StorageViewConsumerStream, Durables: events.StorageViewConsumerDurables})
+	require.NoError(t, err)
+	_, err = service.DeleteEventBusConsumers(long, &pb.DeleteEventBusConsumersReq{Stream: events.StorageViewConsumerStream, Durables: events.StorageViewConsumerDurables})
+	require.NoError(t, err)
+	_, err = service.PurgeEventBusSubjects(long, &pb.PurgeEventBusSubjectsReq{Stream: events.StorageViewConsumerStream, Subjects: subjects})
+	require.NoError(t, err)
+	require.Len(t, session.deadlines, 1+3+3+len(subjects), "每次 NATS 请求都要记录到")
+	for i, deadline := range session.deadlines {
+		require.False(t, deadline.IsZero(), "第 %d 次请求没有截止时间", i)
+		require.LessOrEqual(t, time.Until(deadline), eventBusRequestTimeout, "第 %d 次请求的上限超过两分钟", i)
+		require.Greater(t, time.Until(deadline), time.Minute, "第 %d 次请求的上限不应被误缩短", i)
+	}
+
+	// RPC 自己的截止时间更短时仍以它为准。
+	short, cancelShort := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancelShort()
+	session.deadlines = nil
+	_, err = service.PurgeEventBusSubjects(short, &pb.PurgeEventBusSubjectsReq{Stream: events.StorageViewConsumerStream, Subjects: subjects})
+	require.NoError(t, err)
+	for _, deadline := range session.deadlines {
+		require.LessOrEqual(t, time.Until(deadline), 20*time.Second)
+	}
 }
 
 func TestEventBusOpsReportConnectionFailureWithoutLeakingCredentials(t *testing.T) {

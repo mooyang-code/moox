@@ -159,6 +159,9 @@ message DeleteEventBusConsumersRsp {
   trpc.moox.common.RetInfo ret_info = 1;
   // 实际删除的消费者；本来就不存在的不计入。
   repeated string deleted = 2;
+  // 是否已向 EventBus 发出过删除请求。为 false 表示失败发生在发出之前（参数不合规、连不上 EventBus），EventBus 上没有任何改动；
+  // 为 true 时即使出错，也可能已经改动，调用方不能当作“什么都没发生”。
+  bool attempted = 3;
 }
 message PurgeEventBusSubjectsReq {
   string stream = 1;
@@ -166,6 +169,8 @@ message PurgeEventBusSubjectsReq {
 }
 message PurgeEventBusSubjectsRsp {
   trpc.moox.common.RetInfo ret_info = 1;
+  // 是否已向 EventBus 发出过清除请求，含义同 DeleteEventBusConsumersRsp.attempted。
+  bool attempted = 2;
 }
 
 service SysDeploy {

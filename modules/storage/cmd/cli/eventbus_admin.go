@@ -24,10 +24,28 @@ type eventBusAdmin interface {
 	// Inspect 返回 durables 各自是否存在及其过滤主题；流不存在时报错。
 	Inspect(ctx context.Context, stream string, durables []string) (map[string]viewConsumerFilterState, error)
 	// DeleteConsumers 删除消费者，不存在的跳过；返回实际删除的消费者（出错时也返回已删除的）。
-	DeleteConsumers(ctx context.Context, stream string, durables []string) ([]string, error)
-	// PurgeSubjects 清除流里这些主题的消息。
-	PurgeSubjects(ctx context.Context, stream string, subjects []string) error
+	// attempted 表示是否可能已经改动了 EventBus：Admin 明确说没有发出过删除请求（参数不合规、连不上 EventBus）时为 false；
+	// 请求本身没有得到应答（网关超时、断开）时结果未知，按已改动处理。
+	DeleteConsumers(ctx context.Context, stream string, durables []string) (deleted []string, attempted bool, err error)
+	// PurgeSubjects 清除流里这些主题的消息，attempted 含义同上。一次最多处理 purgeSubjectBatch 个主题，更多的用 purgeSubjects 分批。
+	PurgeSubjects(ctx context.Context, stream string, subjects []string) (attempted bool, err error)
 	Close() error
+}
+
+// purgeSubjectBatch 是一次清除请求携带的主题数，要不超过 Admin 单次请求的上限（256）。
+const purgeSubjectBatch = 64
+
+// purgeSubjects 把主题分批提交。任何一批已经发出（含出错）就算 attempted，调用方据此判断 EventBus 是否可能已被改动。
+func purgeSubjects(ctx context.Context, admin eventBusAdmin, stream string, subjects []string) (attempted bool, err error) {
+	for start := 0; start < len(subjects); start += purgeSubjectBatch {
+		end := min(start+purgeSubjectBatch, len(subjects))
+		batchAttempted, err := admin.PurgeSubjects(ctx, stream, subjects[start:end])
+		attempted = attempted || batchAttempted
+		if err != nil {
+			return attempted, err
+		}
+	}
+	return attempted, nil
 }
 
 // openEventBusAdmin 打开 EventBus 管理通道；测试里替换成替身。
@@ -59,6 +77,10 @@ func openGatewayEventBusAdmin(storageConf, packageRoot string) (eventBusAdmin, e
 	}
 	if config.GatewayClient.Caller != "storage-view" {
 		return nil, fmt.Errorf("%s 里的 gateway_client.caller 必须是 storage-view（EventBus 维护只授权给这个身份），当前是 %q", configPath, config.GatewayClient.Caller)
+	}
+	if strings.TrimSpace(config.GatewayClient.KeyID) == "" {
+		return nil, fmt.Errorf("%s 里没有 gateway_client.key_id，无法以 storage-view 的身份经网关访问 Admin；EventBus 维护命令要读 storage-view 的配置"+
+			"（原生部署在 <包根>/storage-view/config/storage.yaml，--storage-conf 或 --package-root 指向了不含网关身份的配置或旧部署布局）", configPath)
 	}
 	absolute, err := filepath.Abs(configPath)
 	if err != nil {
@@ -114,20 +136,21 @@ func (a gatewayEventBusAdmin) Inspect(ctx context.Context, stream string, durabl
 	return result, nil
 }
 
-func (a gatewayEventBusAdmin) DeleteConsumers(ctx context.Context, stream string, durables []string) ([]string, error) {
+func (a gatewayEventBusAdmin) DeleteConsumers(ctx context.Context, stream string, durables []string) ([]string, bool, error) {
 	var rsp adminpb.DeleteEventBusConsumersRsp
 	if err := a.call(ctx, "DeleteEventBusConsumers", &adminpb.DeleteEventBusConsumersReq{Stream: stream, Durables: durables}, &rsp); err != nil {
-		return nil, err
+		// 没有得到 Admin 的应答：请求可能已经执行，按已改动处理。
+		return nil, true, err
 	}
-	return rsp.GetDeleted(), retError("DeleteEventBusConsumers", rsp.GetRetInfo())
+	return rsp.GetDeleted(), rsp.GetAttempted(), retError("DeleteEventBusConsumers", rsp.GetRetInfo())
 }
 
-func (a gatewayEventBusAdmin) PurgeSubjects(ctx context.Context, stream string, subjects []string) error {
+func (a gatewayEventBusAdmin) PurgeSubjects(ctx context.Context, stream string, subjects []string) (bool, error) {
 	var rsp adminpb.PurgeEventBusSubjectsRsp
 	if err := a.call(ctx, "PurgeEventBusSubjects", &adminpb.PurgeEventBusSubjectsReq{Stream: stream, Subjects: subjects}, &rsp); err != nil {
-		return err
+		return true, err
 	}
-	return retError("PurgeEventBusSubjects", rsp.GetRetInfo())
+	return rsp.GetAttempted(), retError("PurgeEventBusSubjects", rsp.GetRetInfo())
 }
 
 // loadRuntimeConfig 读取 storage.yaml 的完整运行配置（含 gateway_client）。

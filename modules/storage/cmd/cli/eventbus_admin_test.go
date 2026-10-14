@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -79,12 +80,12 @@ func TestGatewayEventBusAdminSurfacesAdminFailuresAndTransportErrors(t *testing.
 		*rsp.(*adminpb.PurgeEventBusSubjectsRsp) = adminpb.PurgeEventBusSubjectsRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_INNER_ERR, Msg: "连接 EventBus 失败"}}
 		return nil
 	}}
-	err := gatewayEventBusAdmin{gateway: failed}.PurgeSubjects(t.Context(), events.StorageViewConsumerStream, []string{"s"})
+	_, err := gatewayEventBusAdmin{gateway: failed}.PurgeSubjects(t.Context(), events.StorageViewConsumerStream, []string{"s"})
 	require.ErrorContains(t, err, "PurgeEventBusSubjects")
 	require.ErrorContains(t, err, "连接 EventBus 失败", "要带上 Admin 给出的原因")
 
 	broken := &fakeGateway{invoke: func(string, interface{}, interface{}) error { return errors.New("no route") }}
-	err = gatewayEventBusAdmin{gateway: broken}.PurgeSubjects(t.Context(), events.StorageViewConsumerStream, []string{"s"})
+	_, err = gatewayEventBusAdmin{gateway: broken}.PurgeSubjects(t.Context(), events.StorageViewConsumerStream, []string{"s"})
 	require.ErrorContains(t, err, "经网关调用 Admin PurgeEventBusSubjects 失败")
 	require.ErrorContains(t, err, "no route")
 }
@@ -97,22 +98,72 @@ func TestGatewayEventBusAdminDeleteReturnsDeletedEvenOnFailure(t *testing.T) {
 		}
 		return nil
 	}}
-	deleted, err := gatewayEventBusAdmin{gateway: gateway}.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, events.StorageViewConsumerDurables)
+	deleted, _, err := gatewayEventBusAdmin{gateway: gateway}.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, events.StorageViewConsumerDurables)
 	require.ErrorContains(t, err, "storage_view_metrics")
 	require.Equal(t, []string{events.StorageViewFactorConsumer}, deleted, "失败前已删除的也要告诉调用方")
 }
 
+// attempted 决定重置失败后本地状态能否恢复：Admin 明确说没发出过变更请求才算“没动过”，
+// 网关层没有拿到应答时请求可能已经执行，必须按已改动处理。
+func TestGatewayEventBusAdminReportsWhetherEventBusMayHaveChanged(t *testing.T) {
+	notAttempted := &fakeGateway{invoke: func(_ string, _, rsp interface{}) error {
+		failure := &adminpb.RetInfo{Code: adminpb.ErrorCode_INNER_ERR, Msg: "连接 EventBus 失败"}
+		switch response := rsp.(type) {
+		case *adminpb.DeleteEventBusConsumersRsp:
+			*response = adminpb.DeleteEventBusConsumersRsp{RetInfo: failure}
+		case *adminpb.PurgeEventBusSubjectsRsp:
+			*response = adminpb.PurgeEventBusSubjectsRsp{RetInfo: failure}
+		}
+		return nil
+	}}
+	admin := gatewayEventBusAdmin{gateway: notAttempted}
+	_, attempted, err := admin.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, events.StorageViewConsumerDurables)
+	require.Error(t, err)
+	require.False(t, attempted, "Admin 没发出过删除请求，EventBus 没被改动")
+	attempted, err = admin.PurgeSubjects(t.Context(), events.StorageViewConsumerStream, []string{"s"})
+	require.Error(t, err)
+	require.False(t, attempted)
+
+	executedThenFailed := &fakeGateway{invoke: func(_ string, _, rsp interface{}) error {
+		switch response := rsp.(type) {
+		case *adminpb.DeleteEventBusConsumersRsp:
+			*response = adminpb.DeleteEventBusConsumersRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_INNER_ERR, Msg: "x"}, Attempted: true}
+		case *adminpb.PurgeEventBusSubjectsRsp:
+			*response = adminpb.PurgeEventBusSubjectsRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_INNER_ERR, Msg: "x"}, Attempted: true}
+		}
+		return nil
+	}}
+	admin = gatewayEventBusAdmin{gateway: executedThenFailed}
+	_, attempted, err = admin.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, events.StorageViewConsumerDurables)
+	require.Error(t, err)
+	require.True(t, attempted)
+	attempted, err = admin.PurgeSubjects(t.Context(), events.StorageViewConsumerStream, []string{"s"})
+	require.Error(t, err)
+	require.True(t, attempted)
+
+	noAnswer := &fakeGateway{invoke: func(string, interface{}, interface{}) error { return errors.New("deadline exceeded") }}
+	admin = gatewayEventBusAdmin{gateway: noAnswer}
+	_, attempted, err = admin.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, events.StorageViewConsumerDurables)
+	require.Error(t, err)
+	require.True(t, attempted, "没有拿到应答时请求可能已经执行")
+	attempted, err = admin.PurgeSubjects(t.Context(), events.StorageViewConsumerStream, []string{"s"})
+	require.Error(t, err)
+	require.True(t, attempted)
+}
+
 // fakeEventBusAdmin 直接实现 eventBusAdmin，用来驱动各命令的流程。
 type fakeEventBusAdmin struct {
-	inspect       map[string]viewConsumerFilterState
-	inspectErr    error
-	deleteErr     error
-	purgeErr      error
-	deleted       []string
-	purged        []string
-	purgeCalls    int
-	inspectCalled bool
-	closed        bool
+	inspect    map[string]viewConsumerFilterState
+	inspectErr error
+	// deleteErr / purgeErr 非空时对应调用失败，*Attempted 决定失败时是否算“可能已改动”。
+	deleteErr, purgeErr             error
+	deleteAttempted, purgeAttempted bool
+	deleted                         []string
+	purged                          []string
+	purgeBatches                    [][]string
+	purgeCalls                      int
+	inspectCalled                   bool
+	closed                          bool
 }
 
 func (f *fakeEventBusAdmin) Inspect(_ context.Context, _ string, _ []string) (map[string]viewConsumerFilterState, error) {
@@ -120,21 +171,22 @@ func (f *fakeEventBusAdmin) Inspect(_ context.Context, _ string, _ []string) (ma
 	return f.inspect, f.inspectErr
 }
 
-func (f *fakeEventBusAdmin) DeleteConsumers(_ context.Context, _ string, durables []string) ([]string, error) {
+func (f *fakeEventBusAdmin) DeleteConsumers(_ context.Context, _ string, durables []string) ([]string, bool, error) {
 	if f.deleteErr != nil {
-		return nil, f.deleteErr
+		return nil, f.deleteAttempted, f.deleteErr
 	}
 	f.deleted = append(f.deleted, durables...)
-	return durables, nil
+	return durables, true, nil
 }
 
-func (f *fakeEventBusAdmin) PurgeSubjects(_ context.Context, _ string, subjects []string) error {
+func (f *fakeEventBusAdmin) PurgeSubjects(_ context.Context, _ string, subjects []string) (bool, error) {
 	f.purgeCalls++
+	f.purgeBatches = append(f.purgeBatches, append([]string(nil), subjects...))
 	if f.purgeErr != nil {
-		return f.purgeErr
+		return f.purgeAttempted, f.purgeErr
 	}
 	f.purged = append(f.purged, subjects...)
-	return nil
+	return true, nil
 }
 
 func (f *fakeEventBusAdmin) Close() error { f.closed = true; return nil }
@@ -171,19 +223,33 @@ func TestResetStorageViewConsumersDeletesConsumersThenPurgesEverySubject(t *test
 	require.Equal(t, 1, admin.purgeCalls, "所有主题一次提交")
 }
 
-func TestResetStorageViewConsumersReportsMutationOnceBrokerStateMayHaveChanged(t *testing.T) {
+func TestResetStorageViewConsumersReportsMutationOnlyWhenBrokerStateMayHaveChanged(t *testing.T) {
 	views := []resetViewRecord{{SpaceID: "stockcn", ViewID: "v", PrimaryDatasetID: "ds_b"}}
 	opts := resetViewConsumersOptions{stream: events.StorageViewConsumerStream}
 
-	admin := &fakeEventBusAdmin{deleteErr: errors.New("admin unreachable")}
+	// Admin 明确说没发出过删除请求（例如预检之后 EventBus 暂时不可达）：什么都没动，调用方要恢复本地状态。
+	admin := &fakeEventBusAdmin{deleteErr: errors.New("Admin DeleteEventBusConsumers 失败: 连接 EventBus 失败")}
 	mutated, err := resetStorageViewConsumers(t.Context(), admin, opts, resetTestViewConfig(), views)
 	require.ErrorContains(t, err, "delete consumers")
-	require.True(t, mutated, "删除请求发出后就可能已经改动，调用方要据此保留重置状态而不是回滚本地")
+	require.False(t, mutated, "确定没有改动 EventBus 时不能判为已改动，否则本地状态不会被恢复")
 	require.Zero(t, admin.purgeCalls, "删除消费者失败后不再清除消息")
 
-	admin = &fakeEventBusAdmin{purgeErr: errors.New("timeout")}
+	// 请求发出后失败：可能已经删了一部分，旧事件无法再保证，必须保留重置状态。
+	admin = &fakeEventBusAdmin{deleteErr: errors.New("timeout"), deleteAttempted: true}
+	mutated, err = resetStorageViewConsumers(t.Context(), admin, opts, resetTestViewConfig(), views)
+	require.ErrorContains(t, err, "delete consumers")
+	require.True(t, mutated)
+	require.Zero(t, admin.purgeCalls)
+
+	admin = &fakeEventBusAdmin{purgeErr: errors.New("timeout"), purgeAttempted: true}
 	mutated, err = resetStorageViewConsumers(t.Context(), admin, opts, resetTestViewConfig(), views)
 	require.ErrorContains(t, err, "purge stream")
+	require.True(t, mutated)
+
+	// 消费者已经删掉后，即使清除请求没发出去，EventBus 也已被改动。
+	admin = &fakeEventBusAdmin{purgeErr: errors.New("Admin PurgeEventBusSubjects 失败: 连接 EventBus 失败")}
+	mutated, err = resetStorageViewConsumers(t.Context(), admin, opts, resetTestViewConfig(), views)
+	require.Error(t, err)
 	require.True(t, mutated)
 
 	// 通配路由没有可展开的数据集：连主题都渲染不出，此时还没有动过任何东西。
@@ -192,6 +258,79 @@ func TestResetStorageViewConsumersReportsMutationOnceBrokerStateMayHaveChanged(t
 	require.Error(t, err)
 	require.False(t, mutated)
 	require.Empty(t, admin.deleted)
+}
+
+// Admin 一次最多接受 256 个主题。数据集多到主题超过上限时必须分批提交，
+// 否则会在本地状态已经重置、消费者已经删除之后被拒绝，把 Storage 留在停止状态。
+func TestResetStorageViewConsumersPurgesLargeTopologiesInBatches(t *testing.T) {
+	const datasets = 70
+	ids := make([]string, 0, datasets)
+	for i := 0; i < datasets; i++ {
+		ids = append(ids, fmt.Sprintf("ds_%03d", i))
+	}
+	config := storageconfig.StorageView{ConsumerPartitions: []storageconfig.StorageViewConsumerPartition{
+		{Durable: events.StorageViewFactorConsumer, Routes: []storageconfig.StorageViewConsumerRoute{{SpaceID: "crypto", DatasetIDs: ids}}},
+	}}
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+	expected, err := resetEventSubjects(registry, config, nil)
+	require.NoError(t, err)
+	require.Len(t, expected, datasets*len(events.StorageDatasetEvents))
+	require.Greater(t, len(expected), 256, "夹具要超过 Admin 的单次上限才有意义")
+
+	admin := &fakeEventBusAdmin{}
+	opts := resetViewConsumersOptions{stream: events.StorageViewConsumerStream}
+	require.NoError(t, preflightResetEventBus(t.Context(), admin, opts, config, nil), "预检不能因为主题多而失败")
+	mutated, err := resetStorageViewConsumers(t.Context(), admin, opts, config, nil)
+	require.NoError(t, err)
+	require.True(t, mutated)
+	require.Equal(t, expected, admin.purged, "所有主题都要清除且顺序不变")
+	require.Equal(t, 5, admin.purgeCalls)
+	for i, batch := range admin.purgeBatches {
+		require.LessOrEqual(t, len(batch), purgeSubjectBatch, "第 %d 批过大", i)
+	}
+
+	// 中间一批失败：停止后续批次，并仍然算已改动。
+	admin = &fakeEventBusAdmin{}
+	failing := &failOnPurgeCall{fakeEventBusAdmin: admin, failAt: 2, failAttempted: true}
+	mutated, err = resetStorageViewConsumers(t.Context(), failing, opts, config, nil)
+	require.ErrorContains(t, err, "purge stream")
+	require.True(t, mutated)
+	require.Equal(t, 2, admin.purgeCalls, "第二批失败后不再提交第三批")
+}
+
+// 前面的批次已经清除成功后，后一批即使 Admin 说“没发出请求”，整体也已经改动过 EventBus。
+func TestPurgeSubjectsKeepsAttemptedFromEarlierBatches(t *testing.T) {
+	subjects := make([]string, 3*purgeSubjectBatch)
+	admin := &failOnPurgeCall{fakeEventBusAdmin: &fakeEventBusAdmin{}, failAt: 2, failAttempted: false}
+	attempted, err := purgeSubjects(t.Context(), admin, events.StorageViewConsumerStream, subjects)
+	require.Error(t, err)
+	require.True(t, attempted)
+	require.Equal(t, 2, admin.purgeCalls, "失败后不再提交后续批次")
+
+	admin = &failOnPurgeCall{fakeEventBusAdmin: &fakeEventBusAdmin{}, failAt: 1, failAttempted: false}
+	attempted, err = purgeSubjects(t.Context(), admin, events.StorageViewConsumerStream, subjects)
+	require.Error(t, err)
+	require.False(t, attempted, "第一批就确定没发出请求时没有改动")
+
+	attempted, err = purgeSubjects(t.Context(), &fakeEventBusAdmin{}, events.StorageViewConsumerStream, nil)
+	require.NoError(t, err)
+	require.False(t, attempted, "没有主题时不发请求")
+}
+
+// failOnPurgeCall 让第 failAt 次清除调用失败，failAttempted 决定失败时是否算已尝试。
+type failOnPurgeCall struct {
+	*fakeEventBusAdmin
+	failAt        int
+	failAttempted bool
+}
+
+func (f *failOnPurgeCall) PurgeSubjects(ctx context.Context, stream string, subjects []string) (bool, error) {
+	attempted, err := f.fakeEventBusAdmin.PurgeSubjects(ctx, stream, subjects)
+	if err == nil && f.purgeCalls == f.failAt {
+		return f.failAttempted, errors.New("boom")
+	}
+	return attempted, err
 }
 
 func TestResetStorageViewConsumersSkipsPurgeWithoutSubjects(t *testing.T) {
@@ -282,6 +421,12 @@ func TestOpenGatewayEventBusAdminRequiresStorageViewIdentity(t *testing.T) {
 
 	_, err = openGatewayEventBusAdmin("", dir)
 	require.ErrorContains(t, err, "--storage-conf")
+
+	// 配置里没有网关身份（例如指到了 storage-primary 的配置）要明确说出缺什么、该读哪份。
+	require.NoError(t, os.WriteFile(config, []byte("storage:\n  root: ./var\n"), 0o600))
+	_, err = openGatewayEventBusAdmin(config, dir)
+	require.ErrorContains(t, err, "gateway_client.key_id")
+	require.ErrorContains(t, err, "storage-view/config/storage.yaml")
 }
 
 // repairFixture 准备一个带一个 View 的元数据库和最小配置，返回 runRepairViewOperation 的选项。

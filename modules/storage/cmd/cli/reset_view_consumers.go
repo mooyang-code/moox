@@ -585,6 +585,8 @@ func listResetViewRecords(ctx context.Context, dbPath string) ([]resetViewRecord
 }
 
 // preflightResetEventBus 在不改动任何状态的前提下确认：经网关能到 Admin、Admin 能连上 EventBus、流存在，并且清除主题能渲染出来。
+// preflightResetEventBus 在不改动任何状态的前提下确认：经网关能到 Admin、Admin 能连上 EventBus、流存在，
+// 并且要清除的主题都能渲染、都在 Admin 会接受的范围内（否则会在本地状态已经重置之后才被拒绝）。
 func preflightResetEventBus(ctx context.Context, admin eventBusAdmin, opts resetViewConsumersOptions, viewConfig storageconfig.StorageView, views []resetViewRecord) error {
 	if _, err := admin.Inspect(ctx, opts.stream, events.StorageViewConsumerDurables); err != nil {
 		return fmt.Errorf("inspect stream %s: %w", opts.stream, err)
@@ -593,12 +595,21 @@ func preflightResetEventBus(ctx context.Context, admin eventBusAdmin, opts reset
 	if err != nil {
 		return err
 	}
-	if _, err := resetEventSubjects(registry, viewConfig, views); err != nil {
+	subjects, err := resetEventSubjects(registry, viewConfig, views)
+	if err != nil {
 		return err
+	}
+	for _, subject := range subjects {
+		if !events.IsStorageDatasetSubject(subject) {
+			return fmt.Errorf("主题 %q 不在 Admin 允许清除的范围内", subject)
+		}
 	}
 	return nil
 }
 
+// resetStorageViewConsumers 删除 View 消费者并清除数据集事件。mutationStarted 表示 EventBus 是否可能已被改动：
+// 为 false 时失败发生在任何改动之前（Admin 连不上 EventBus 等），本地状态还能安全恢复；为 true 时旧事件可能已经丢失，
+// 旧的本地状态不能再恢复，调用方要保留已重置的状态并让操作员重试。
 func resetStorageViewConsumers(ctx context.Context, admin eventBusAdmin, opts resetViewConsumersOptions, viewConfig storageconfig.StorageView, views []resetViewRecord) (mutationStarted bool, err error) {
 	registry, err := events.DefaultRegistry()
 	if err != nil {
@@ -608,14 +619,14 @@ func resetStorageViewConsumers(ctx context.Context, admin eventBusAdmin, opts re
 	if err != nil {
 		return false, err
 	}
-	mutationStarted = true
-	if _, err := admin.DeleteConsumers(ctx, opts.stream, events.StorageViewConsumerDurables); err != nil {
+	_, attempted, err := admin.DeleteConsumers(ctx, opts.stream, events.StorageViewConsumerDurables)
+	mutationStarted = attempted
+	if err != nil {
 		return mutationStarted, fmt.Errorf("delete consumers: %w", err)
 	}
-	if len(ordered) == 0 {
-		return mutationStarted, nil
-	}
-	if err := admin.PurgeSubjects(ctx, opts.stream, ordered); err != nil {
+	attempted, err = purgeSubjects(ctx, admin, opts.stream, ordered)
+	mutationStarted = mutationStarted || attempted
+	if err != nil {
 		return mutationStarted, fmt.Errorf("purge stream %s: %w", opts.stream, err)
 	}
 	return mutationStarted, nil
