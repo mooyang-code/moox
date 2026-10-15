@@ -484,11 +484,12 @@ message CollectorDatasetStatus {
   string frequency = 2;
   int32 subject_count = 3;
   int32 function_count = 4;
-  // effective_from 是最早一次采集计划生效的周期；scanned_until 是自动检查的水位，没有扫描过为空。
+  // effective_from 是最早一次采集计划生效的周期；inspected_until 是自动巡检已查到的时间（不含），没有巡检过为空。
   string effective_from = 5;
-  string scanned_until = 6;
-  // lag_seconds 是自动检查落后于当前应扫到时间的秒数。
-  int64 lag_seconds = 7;
+  string inspected_until = 6;
+  // inspect_lag_seconds 是自动巡检超出预期的秒数：水位之后的下一根 K 线进入巡检范围后仍未被检查的时长。
+  // 它衡量的是“自动补漏是否跟上”，不是数据本身的延迟；正常在 0 到几分钟之间。
+  int64 inspect_lag_seconds = 7;
   // gap_bars_24h、gap_subjects_24h 是 24 小时内自动补采发现的实时缺口（实时采集漏掉的 K 线）。
   int32 gap_bars_24h = 8;
   int32 gap_subjects_24h = 9;

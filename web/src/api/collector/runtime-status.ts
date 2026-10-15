@@ -18,8 +18,10 @@ export interface CollectorDatasetStatus {
   subject_count?: number;
   function_count?: number;
   effective_from?: string;
-  scanned_until?: string;
-  lag_seconds?: number | string;
+  /** 自动巡检已查到的时间（不含），没有巡检过为空。 */
+  inspected_until?: string;
+  /** 自动巡检超出预期的秒数：衡量自动补漏是否跟上，不是数据延迟。 */
+  inspect_lag_seconds?: number | string;
   gap_bars_24h?: number;
   gap_subjects_24h?: number;
   failed_chunks_24h?: number;

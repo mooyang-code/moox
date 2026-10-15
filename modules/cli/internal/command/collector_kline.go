@@ -109,7 +109,7 @@ var collectorKlineAbsencesClearCmd = &cobra.Command{
 
 var collectorStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "查看空间的采集运行状态：总体健康、各数据集的检查滞后与缺口、补采汇总",
+	Short: "查看空间的采集运行状态：总体健康、各数据集的自动巡检进度与缺口、补采汇总",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return runCollectorStatus(cmd.Context(), cmd.OutOrStdout(), statusFlags)
@@ -412,7 +412,7 @@ func runCollectorStatus(ctx context.Context, out io.Writer, flags klineRangeFlag
 		datasets = append(datasets, map[string]any{
 			"dataset_id": item.GetDatasetId(), "dataset_name": item.GetDatasetName(), "frequency": item.GetFrequency(), "level": item.GetLevel(), "reasons": item.GetReasons(),
 			"subjects": item.GetSubjectCount(), "functions": item.GetFunctionCount(), "effective_from": item.GetEffectiveFrom(),
-			"scanned_until": item.GetScannedUntil(), "lag_seconds": item.GetLagSeconds(),
+			"inspected_until": item.GetInspectedUntil(), "inspect_lag_seconds": item.GetInspectLagSeconds(),
 			"gap_bars_24h": item.GetGapBars_24H(), "gap_subjects_24h": item.GetGapSubjects_24H(), "failed_chunks_24h": item.GetFailedChunks_24H(),
 			"history_scanned_at": item.GetHistoryScannedAt(), "history_gap_bars": item.GetHistoryGapBars(), "history_gap_subjects": item.GetHistoryGapSubjects(),
 			"history_error": item.GetHistoryError(), "absent_bars": item.GetAbsentBars(),

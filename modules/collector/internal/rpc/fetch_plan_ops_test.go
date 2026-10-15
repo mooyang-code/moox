@@ -130,15 +130,15 @@ func TestGetCollectorStatusSummarizesPlanAndDatasetHealth(t *testing.T) {
 	require.Len(t, rsp.GetDatasets(), 1, "只列出正在采集（已登记生效点）的数据集")
 	require.Equal(t, "ds1", rsp.GetDatasets()[0].GetDatasetId())
 	require.Equal(t, "Binance 现货 K 线 1m", rsp.GetDatasets()[0].GetDatasetName(), "展示名取所属采集任务名")
-	require.Equal(t, "error", rsp.GetLevel(), "从未扫描过，检查滞后远超阈值")
-	require.Contains(t, rsp.GetReasons()[0], "Binance 现货 K 线 1m：自动检查滞后")
+	require.Equal(t, "error", rsp.GetLevel(), "从未巡检过，落后远超阈值")
+	require.Contains(t, rsp.GetReasons()[0], "Binance 现货 K 线 1m：自动巡检已停")
 
 	require.NoError(t, db.Backfill().SetWatermark(ctx, "crypto", "ds1", "1m", time.Now().UTC()))
 	rsp, err = service.GetCollectorStatus(ctx, &pb.GetCollectorStatusReq{SpaceId: "crypto"})
 	require.NoError(t, err)
 	require.Equal(t, "ok", rsp.GetLevel(), rsp.GetReasons())
 	require.Empty(t, rsp.GetReasons())
-	require.NotEmpty(t, rsp.GetDatasets()[0].GetScannedUntil())
+	require.NotEmpty(t, rsp.GetDatasets()[0].GetInspectedUntil())
 
 	record, err := db.FetchPlans().Create(ctx, "crypto", reregisterPlan, "{}")
 	require.NoError(t, err)

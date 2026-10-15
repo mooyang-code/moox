@@ -94,9 +94,13 @@
               </a-table-column>
               <a-table-column title="标的" data-index="subject_count" :width="64" align="right" />
               <a-table-column title="函数" data-index="function_count" :width="64" align="right" />
-              <a-table-column title="检查滞后" :width="110">
+              <a-table-column :width="220">
+                <template #title>
+                  自动巡检
+                  <a-tooltip :content="INSPECTION_TIP"><icon-question-circle class="column-tip" /></a-tooltip>
+                </template>
                 <template #cell="{ record }">
-                  <span :style="{ color: lagColor(record.lag_seconds) }">{{ durationText(record.lag_seconds) }}</span>
+                  <span :style="{ color: inspectionInfo(record).color }">{{ inspectionInfo(record).text }}</span>
                 </template>
               </a-table-column>
               <a-table-column title="24h 实时缺口" :width="130">
@@ -133,8 +137,9 @@
                   <icon-exclamation-circle /> {{ reason }}
                 </div>
                 <div class="detail-line">
-                  首次生效 {{ localTimeText(record.effective_from) }} · 自动检查水位
-                  {{ record.scanned_until ? localTimeText(record.scanned_until) : "尚未扫描" }}
+                  首次生效 {{ localTimeText(record.effective_from) }} · 自动巡检已查至
+                  {{ record.inspected_until ? localTimeText(record.inspected_until) : "尚未巡检" }}（每 5
+                  分钟一次，发现缺口自动补采）
                 </div>
                 <div class="detail-line">
                   历史缺口扫描：
@@ -284,11 +289,11 @@ import {
   datasetKey,
   datasetLabel,
   datasetNameMap,
-  durationText,
   filterFunctions,
   functionOptions,
   functionStateInfo,
-  lagColor,
+  INSPECTION_TIP,
+  inspectionInfo,
   levelInfo,
   levelRank,
   localTimeText,
@@ -564,6 +569,11 @@ onMounted(loadStatus);
   text-overflow: ellipsis;
   white-space: nowrap;
   word-break: normal;
+}
+.column-tip {
+  margin-left: 2px;
+  color: var(--color-text-3);
+  cursor: help;
 }
 .freq-tag {
   flex: none;

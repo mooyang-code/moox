@@ -45,13 +45,30 @@ export function durationText(seconds?: number | string) {
   return `${Math.floor(minutes / (24 * 60))} 天`;
 }
 
-/** 检查滞后的颜色：与后端阈值一致（超过 15 分钟需关注，超过 1 小时异常）。 */
-export function lagColor(seconds?: number | string) {
-  const value = Number(seconds || 0);
-  if (value > 3600) return "rgb(var(--danger-6))";
-  if (value > 900) return "rgb(var(--warning-6))";
-  return "var(--color-text-2)";
+/** 巡检时间的短格式：今天只显示时分，其余显示月日时分（本地时间）。 */
+export function inspectTimeText(value: string, now = new Date()) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const time = `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+  return parsed.toDateString() === now.toDateString() ? time : `${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())} ${time}`;
 }
+
+/**
+ * 自动巡检列的展示：正常时只说“查到哪里了”，不出现时长，避免被误读为数据延迟；
+ * 只有超出预期（与后端阈值一致：超过 15 分钟落后、超过 1 小时已停）时才带上时长。
+ */
+export function inspectionInfo(record: { inspected_until?: string; inspect_lag_seconds?: number | string }, now = new Date()) {
+  const lag = Number(record.inspect_lag_seconds || 0);
+  const base = record.inspected_until ? `已查至 ${inspectTimeText(record.inspected_until, now)}` : "尚未巡检";
+  if (lag > 3600) return { text: `${base} · 已停 ${durationText(lag)}`, color: "rgb(var(--danger-6))" };
+  if (lag > 900) return { text: `${base} · 落后 ${durationText(lag)}`, color: "rgb(var(--warning-6))" };
+  return { text: base, color: "var(--color-text-3)" };
+}
+
+/** 自动巡检列的说明。 */
+export const INSPECTION_TIP =
+  "自动巡检每 5 分钟检查一次已收盘的 K 线，发现缺口会自动补采。落后时，这段时间的缺口暂时不会被发现和补上，不代表数据缺失；数据是否齐全看“24h 实时缺口”和“历史缺口”。";
 
 export interface StatusSummary {
   functions: number;

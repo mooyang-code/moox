@@ -102,12 +102,12 @@ func planSummary(record *store.FetchPlanRecord) *pb.FetchPlanSummary {
 func datasetStatusToPB(item klinecheck.DatasetHealth, functions int) *pb.CollectorDatasetStatus {
 	out := &pb.CollectorDatasetStatus{
 		DatasetId: item.DatasetID, Frequency: item.Frequency, SubjectCount: int32(item.Subjects), FunctionCount: int32(functions),
-		EffectiveFrom: item.EffectiveFrom.UTC().Format(time.RFC3339), LagSeconds: int64(item.Lag / time.Second),
+		EffectiveFrom: item.EffectiveFrom.UTC().Format(time.RFC3339), InspectLagSeconds: int64(item.InspectLag / time.Second),
 		GapBars_24H: int32(item.GapBars), GapSubjects_24H: int32(item.GapSubjects), FailedChunks_24H: int32(item.FailedChunks),
 		AbsentBars: int32(item.AbsentBars), Level: item.Level, Reasons: item.Reasons,
 	}
-	if !item.ScannedUntil.IsZero() {
-		out.ScannedUntil = item.ScannedUntil.UTC().Format(time.RFC3339)
+	if !item.InspectedUntil.IsZero() {
+		out.InspectedUntil = item.InspectedUntil.UTC().Format(time.RFC3339)
 	}
 	if history := item.History; history != nil {
 		out.HistoryScannedAt = history.ScannedAt.UTC().Format(time.RFC3339)

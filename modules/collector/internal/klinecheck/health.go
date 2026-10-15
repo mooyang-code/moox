@@ -19,7 +19,7 @@ const (
 )
 
 const (
-	// lagWarn、lagError 是自动检查滞后的告警阈值：正常情况下滞后不超过一个扫描槽（5 分钟）加偏移。
+	// lagWarn、lagError 是自动巡检落后的告警阈值：正常情况下滞后不超过一个扫描槽（5 分钟）加偏移。
 	lagWarn  = 15 * time.Minute
 	lagError = time.Hour
 	// healthWindow 是统计实时缺口与失败分块的时间窗口。
@@ -42,11 +42,11 @@ type DatasetHealth struct {
 	DatasetID string
 	Frequency string
 	Subjects  int
-	// EffectiveFrom 是最早一次采集计划生效的周期；ScannedUntil 是自动检查的水位，没有扫描过为零值。
-	EffectiveFrom time.Time
-	ScannedUntil  time.Time
-	// Lag 是自动检查落后于“当前应扫到的时间”的时长。
-	Lag time.Duration
+	// EffectiveFrom 是最早一次采集计划生效的周期；InspectedUntil 是自动巡检已查到的时间（不含），没有巡检过为零值。
+	EffectiveFrom  time.Time
+	InspectedUntil time.Time
+	// InspectLag 是自动巡检超出预期的时长（见 Health 里的说明），衡量自动补漏是否跟上，不是数据延迟。
+	InspectLag time.Duration
 	// GapBars、GapSubjects 是窗口内自动补采发现的实时缺口（实时采集漏掉的 K 线）。
 	GapBars      int
 	GapSubjects  int
@@ -121,17 +121,17 @@ func Health(ctx context.Context, plans PlanHistory, repo HealthStore, spaceID st
 		last := segments[len(segments)-1]
 		health := DatasetHealth{
 			DatasetID: datasetID, Frequency: frequencyName, Subjects: len(last.Subjects), EffectiveFrom: time.Unix(segments[0].From, 0).UTC(),
-			ScannedUntil: watermarks[key], FailedChunks: failed[key], AbsentBars: absent[key],
+			InspectedUntil: watermarks[key], FailedChunks: failed[key], AbsentBars: absent[key],
 		}
-		// 滞后是“超出预期多久”：自动补采只扫到 alignDown(now - 迟到容忍 - 一个周期)（不含），水位之后第一根未检查的
+		// 巡检落后是“超出预期多久”：自动补采只扫到 alignDown(now - 迟到容忍 - 一个周期)（不含），水位之后第一根未检查的
 		// K 线从 alignUp(水位) 开始，要到 它 + 两个周期 + 迟到容忍 才进入扫描范围，从那一刻起算。不能直接用
 		// “应扫到的时间 - 水位”，否则 1h 等低频数据集每个整点刚过、下一个扫描槽到来之前都会一下子“滞后”一个周期。
-		baseline := health.ScannedUntil
+		baseline := health.InspectedUntil
 		if baseline.IsZero() {
 			baseline = health.EffectiveFrom
 		}
 		expected := alignUp(frequency, baseline).Add(2*frequency.NominalDuration() + time.Duration(last.LatenessS)*time.Second)
-		health.Lag = max(now.Sub(expected), 0)
+		health.InspectLag = max(now.Sub(expected), 0)
 		if stat := gaps[key]; stat != nil {
 			health.GapBars, health.GapSubjects = stat.bars, len(stat.subjects)
 		}
@@ -161,10 +161,10 @@ func assess(health DatasetHealth) (string, []string) {
 		reasons = append(reasons, reason)
 	}
 	switch {
-	case health.Lag > lagError:
-		raise(HealthError, "自动检查滞后 "+FormatDuration(health.Lag))
-	case health.Lag > lagWarn:
-		raise(HealthWarn, "自动检查滞后 "+FormatDuration(health.Lag))
+	case health.InspectLag > lagError:
+		raise(HealthError, "自动巡检已停 "+FormatDuration(health.InspectLag)+"，期间的缺口不会被自动补上")
+	case health.InspectLag > lagWarn:
+		raise(HealthWarn, "自动巡检落后 "+FormatDuration(health.InspectLag)+"，期间的缺口暂未自动补上")
 	}
 	if health.FailedChunks > 0 {
 		raise(HealthWarn, fmt.Sprintf("24 小时内 %d 个补采分块失败", health.FailedChunks))

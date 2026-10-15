@@ -9,7 +9,7 @@ import {
   filterFunctions,
   functionOptions,
   functionStateInfo,
-  lagColor,
+  inspectionInfo,
   levelInfo,
   statusSummary
 } from "./runtime-status-model";
@@ -47,14 +47,31 @@ describe("collector runtime status helpers", () => {
     expect(functionStateInfo("custom").text).toBe("custom");
   });
 
-  it("formats lag with the backend thresholds", () => {
+  it("formats durations", () => {
     expect(durationText(42 * 60)).toBe("42 分钟");
     expect(durationText(65 * 60)).toBe("1 小时 5 分钟");
     expect(durationText("7200")).toBe("2 小时");
     expect(durationText(50 * 3600)).toBe("2 天");
-    expect(lagColor(60)).toBe("var(--color-text-2)");
-    expect(lagColor(1000)).toContain("warning");
-    expect(lagColor(4000)).toContain("danger");
+  });
+
+  it("describes the auto inspection by where it has reached, with a duration only when it falls behind", () => {
+    const now = new Date(2026, 9, 15, 15, 10);
+    const until = new Date(2026, 9, 15, 15, 6).toISOString();
+    expect(inspectionInfo({ inspected_until: until, inspect_lag_seconds: 120 }, now)).toEqual({
+      text: "已查至 15:06",
+      color: "var(--color-text-3)"
+    });
+    expect(inspectionInfo({ inspected_until: until, inspect_lag_seconds: 42 * 60 }, now).text).toBe(
+      "已查至 15:06 · 落后 42 分钟"
+    );
+    expect(inspectionInfo({ inspected_until: until, inspect_lag_seconds: 42 * 60 }, now).color).toContain("warning");
+    const stopped = inspectionInfo(
+      { inspected_until: new Date(2026, 9, 14, 13, 0).toISOString(), inspect_lag_seconds: 7200 },
+      now
+    );
+    expect(stopped.text).toBe("已查至 10-14 13:00 · 已停 2 小时");
+    expect(stopped.color).toContain("danger");
+    expect(inspectionInfo({ inspect_lag_seconds: 0 }, now).text).toBe("尚未巡检");
   });
 
   it("shows dataset display names and falls back to the id", () => {
@@ -108,6 +125,12 @@ describe("collector runtime status page", () => {
     expect(page).toContain('category="collector.subject_change"');
     expect(page).not.toContain("a-tab-pane");
     expect(page).not.toContain("hash");
+  });
+
+  it("names the column 自动巡检 and explains it is not data latency", () => {
+    expect(page).not.toContain("检查滞后");
+    expect(page).toContain("自动巡检");
+    expect(page).toContain("INSPECTION_TIP");
   });
 
   it("shows dataset display names instead of ids", () => {

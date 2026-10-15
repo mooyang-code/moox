@@ -25,7 +25,7 @@ func TestHealthReportsLagGapsAndHistory(t *testing.T) {
 	require.Equal(t, 2, health[0].Subjects)
 	require.True(t, health[0].EffectiveFrom.Equal(base))
 	require.Equal(t, HealthError, health[0].Level)
-	require.Contains(t, health[0].Reasons[0], "自动检查滞后")
+	require.Contains(t, health[0].Reasons[0], "自动巡检已停")
 
 	// 自动补采发现的实时缺口只展示，水位跟上后等级正常。
 	require.NoError(t, backfiller.AutoScan(ctx, "crypto"))
@@ -83,15 +83,15 @@ func TestHealthLagIsMeasuredFromWhenTheNextBarBecomesScannable(t *testing.T) {
 	}
 	// 10:03：08:00 这根 K 线要到 10:01 才进入扫描范围，下一个扫描槽还没到，滞后 2 分钟，正常。
 	early := at(watermark.Add(2*time.Hour + 3*time.Minute))
-	require.Equal(t, 2*time.Minute, early.Lag)
+	require.Equal(t, 2*time.Minute, early.InspectLag)
 	require.Equal(t, HealthOK, early.Level)
 	// 10:31：已经超出预期 30 分钟，需关注。
 	late := at(watermark.Add(2*time.Hour + 31*time.Minute))
-	require.Equal(t, 30*time.Minute, late.Lag)
+	require.Equal(t, 30*time.Minute, late.InspectLag)
 	require.Equal(t, HealthWarn, late.Level)
 	// 水位停在非整点（追赶留下的）时，下一根从下一个整点算起。
 	require.NoError(t, repo.SetWatermark(ctx, "crypto", "ds", "1h", watermark.Add(55*time.Minute)))
-	require.Equal(t, time.Duration(0), at(watermark.Add(2*time.Hour+3*time.Minute)).Lag)
+	require.Equal(t, time.Duration(0), at(watermark.Add(2*time.Hour+3*time.Minute)).InspectLag)
 }
 
 var marketdataMinute, _ = marketdata.ParseFrequency("1m")
