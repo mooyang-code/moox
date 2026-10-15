@@ -300,7 +300,7 @@ func runKlineBackfill(ctx context.Context, out io.Writer, flags klineRangeFlags)
 func klineJobMap(job *collectorpb.KlineBackfillJob) map[string]any {
 	return map[string]any{
 		"job_id": job.GetJobId(), "space_id": job.GetSpaceId(), "source": job.GetSource(), "kind": job.GetKind(), "status": job.GetStatus(), "last_error": job.GetLastError(),
-		"dataset_id": job.GetDatasetId(), "frequency": job.GetFrequency(), "subject_id": job.GetSubjectId(), "from": job.GetFrom(), "to": job.GetTo(),
+		"dataset_id": job.GetDatasetId(), "dataset_name": job.GetDatasetName(), "frequency": job.GetFrequency(), "subject_id": job.GetSubjectId(), "from": job.GetFrom(), "to": job.GetTo(),
 		"created_at": job.GetCreatedAt(), "updated_at": job.GetUpdatedAt(),
 		"chunks": map[string]int32{"pending": job.GetPending(), "running": job.GetRunning(), "succeeded": job.GetSucceeded(), "failed": job.GetFailed(), "canceled": job.GetCanceled()},
 	}
@@ -410,7 +410,7 @@ func runCollectorStatus(ctx context.Context, out io.Writer, flags klineRangeFlag
 	datasets := make([]map[string]any, 0, len(rsp.GetDatasets()))
 	for _, item := range rsp.GetDatasets() {
 		datasets = append(datasets, map[string]any{
-			"dataset_id": item.GetDatasetId(), "frequency": item.GetFrequency(), "level": item.GetLevel(), "reasons": item.GetReasons(),
+			"dataset_id": item.GetDatasetId(), "dataset_name": item.GetDatasetName(), "frequency": item.GetFrequency(), "level": item.GetLevel(), "reasons": item.GetReasons(),
 			"subjects": item.GetSubjectCount(), "functions": item.GetFunctionCount(), "effective_from": item.GetEffectiveFrom(),
 			"scanned_until": item.GetScannedUntil(), "lag_seconds": item.GetLagSeconds(),
 			"gap_bars_24h": item.GetGapBars_24H(), "gap_subjects_24h": item.GetGapSubjects_24H(), "failed_chunks_24h": item.GetFailedChunks_24H(),
