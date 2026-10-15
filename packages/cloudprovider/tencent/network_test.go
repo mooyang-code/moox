@@ -35,7 +35,8 @@ func TestNetworkClientLookupCVM(t *testing.T) {
 			"PrivateIpAddresses":["10.1.2.8"],"PublicIpAddresses":["146.56.196.204"],
 			"SecurityGroupIds":["sg-storage"],
 			"Placement":{"Zone":"ap-hongkong-2"},
-			"VirtualPrivateCloud":{"VpcId":"vpc-storage","SubnetId":"subnet-storage","PrivateIpAddresses":["10.1.2.8"]}
+			"VirtualPrivateCloud":{"VpcId":"vpc-storage","SubnetId":"subnet-storage","PrivateIpAddresses":["10.1.2.8"]},
+			"CPU":4,"Memory":16,"SystemDisk":{"DiskSize":50},"DataDisks":[{"DiskSize":100},{"DiskSize":20}]
 		}]}}`))
 	})
 	got, found, err := client.LookupCVM(context.Background(), "146.56.196.204")
@@ -44,6 +45,9 @@ func TestNetworkClientLookupCVM(t *testing.T) {
 	}
 	if !found || got.InstanceID != "ins-storage" || got.VpcID != "vpc-storage" || got.PrivateIPs[0] != "10.1.2.8" {
 		t.Fatalf("instance = %+v", got)
+	}
+	if got.CPU != 4 || got.MemoryGB != 16 || got.DiskGB != 170 {
+		t.Fatalf("规格应取自 CPU、Memory 与系统盘加数据盘: %+v", got)
 	}
 }
 
@@ -254,6 +258,7 @@ func TestLighthouseLookupInstance(t *testing.T) {
 			InstanceSet: []InstanceBrief{{
 				InstanceID: "lhins-control", InstanceName: "control", Zone: "ap-guangzhou-3",
 				PublicAddresses: []string{"106.53.107.122"}, PrivateAddresses: []string{"10.0.1.12"},
+				CPU: 4, Memory: 4, SystemDisk: diskSize{DiskSize: 40},
 			}},
 		}})
 	}))
@@ -267,7 +272,7 @@ func TestLighthouseLookupInstance(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("found=%v err=%v", found, err)
 	}
-	if got.Kind != KindLighthouse || got.PrivateIPs[0] != "10.0.1.12" {
+	if got.Kind != KindLighthouse || got.PrivateIPs[0] != "10.0.1.12" || got.CPU != 4 || got.MemoryGB != 4 || got.DiskGB != 40 {
 		t.Fatalf("instance = %+v", got)
 	}
 }

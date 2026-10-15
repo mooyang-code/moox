@@ -42,13 +42,17 @@ type Options struct {
 	Open func(url string) error
 	// Notice 接收给用户看的提示（不含任何填写的值）；为空则丢弃。
 	Notice io.Writer
+	// Cloud 与 Prober 为空时用腾讯云接口和真实的环境检测；测试里替换。
+	Cloud  Cloud
+	Prober Prober
 }
 
 // Result 只含「写到哪里、有哪些主机」，不含任何值。
 type Result struct {
-	Path        string   `json:"path"`
-	Hosts       []string `json:"hosts"`
-	CompileHost string   `json:"compile_host,omitempty"`
+	Path         string   `json:"path"`
+	Hosts        []string `json:"hosts"`
+	CompileHost  string   `json:"compile_host,omitempty"`
+	FactorEngine string   `json:"factor_engine,omitempty"`
 }
 
 // Run 起一个只绑回环地址的一次性页面，等用户提交，渲染并写出 moox.toml（0600，不覆盖已有文件）。
@@ -83,9 +87,18 @@ func Run(ctx context.Context, options Options) (Result, error) {
 		_ = listener.Close()
 		return Result{}, err
 	}
+	cloud := options.Cloud
+	if cloud == nil {
+		cloud = tencentCloud{}
+	}
+	session.cloud = newCloudCache(cloud)
+	session.prober = options.Prober
+	if session.prober == nil {
+		session.prober = systemProber{}
+	}
 	server := &http.Server{
 		Handler: session, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second,
-		WriteTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10,
+		WriteTimeout: 90 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10,
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -132,6 +145,8 @@ type session struct {
 	output string
 	token  string
 	boot   template.JS
+	cloud  *cloudCache
+	prober Prober
 
 	mu     sync.Mutex
 	done   bool
@@ -180,17 +195,32 @@ func (s *session) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "页面已使用完毕，请重新运行命令", http.StatusGone)
 		return
 	}
-	switch {
-	case rest == "" && r.Method == http.MethodGet:
+	if rest == "" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		s.page(w)
-	case rest == "submit" && r.Method == http.MethodPost:
-		s.submit(w, r)
-	case rest == "" || rest == "submit":
-		w.Header().Set("Allow", "GET, POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	default:
-		http.NotFound(w, r)
+		return
 	}
+	handler, ok := map[string]func(http.ResponseWriter, *http.Request){
+		"submit":         s.submit,
+		"tencent/verify": s.verifyTencent,
+		"tencent/lookup": s.lookupServer,
+		"factor/check":   s.checkFactor,
+		"factor/trust":   s.trustFactor,
+	}[rest]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	handler(w, r)
 }
 
 // splitPath 把 /<令牌>/<其余> 拆成两段。
@@ -226,13 +256,15 @@ func (s *session) page(w http.ResponseWriter) {
 	n := base64.RawURLEncoding.EncodeToString(nonce)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'nonce-"+n+"'; script-src 'nonce-"+n+"'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
-	_ = pageTemplate.Execute(w, map[string]any{"Nonce": n, "Output": s.output, "Boot": s.boot})
+	_ = pageTemplate.Execute(w, map[string]any{"Nonce": n, "Boot": s.boot})
 }
 
 type response struct {
-	OK      bool   `json:"ok"`
-	Message string `json:"message,omitempty"`
-	Path    string `json:"path,omitempty"`
+	OK       bool         `json:"ok"`
+	Message  string       `json:"message,omitempty"`
+	Account  *Account     `json:"account,omitempty"`
+	Instance *Instance    `json:"instance,omitempty"`
+	Report   *ProbeReport `json:"report,omitempty"`
 }
 
 func reply(w http.ResponseWriter, status int, body response) {
@@ -241,23 +273,111 @@ func reply(w http.ResponseWriter, status int, body response) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-func (s *session) submit(w http.ResponseWriter, r *http.Request) {
+// decode 检查请求来源与格式，并严格解码请求体；失败时已经写好了响应。
+func (s *session) decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	if !s.originAllowed(r.Header.Get("Origin")) || (r.Header.Get("Sec-Fetch-Site") != "" && r.Header.Get("Sec-Fetch-Site") != "same-origin") {
 		reply(w, http.StatusForbidden, response{Message: "请求来源不被允许"})
-		return
+		return false
 	}
 	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
 		reply(w, http.StatusUnsupportedMediaType, response{Message: "请求格式不对"})
-		return
+		return false
 	}
-	var request Request
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
+	if err := decoder.Decode(v); err != nil {
 		reply(w, http.StatusBadRequest, response{Message: "请求内容不对或过大"})
+		return false
+	}
+	return true
+}
+
+func (s *session) verifyTencent(w http.ResponseWriter, r *http.Request) {
+	var keys Keys
+	if !s.decode(w, r, &keys) {
 		return
 	}
-	raw, err := Render(&request)
+	account, err := s.cloud.verify(r.Context(), keys)
+	if err != nil {
+		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
+		return
+	}
+	reply(w, http.StatusOK, response{OK: true, Account: &account})
+}
+
+func (s *session) lookupServer(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Tencent Keys   `json:"tencent"`
+		Address string `json:"address"`
+	}
+	if !s.decode(w, r, &request) {
+		return
+	}
+	instance, err := s.cloud.lookup(r.Context(), request.Tencent, request.Address)
+	if err != nil {
+		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
+		return
+	}
+	reply(w, http.StatusOK, response{OK: true, Instance: &instance})
+}
+
+func (s *session) checkFactor(w http.ResponseWriter, r *http.Request) {
+	var target FactorServer
+	if !s.decode(w, r, &target) {
+		return
+	}
+	s.checkTarget(w, r, target)
+}
+
+// trustFactor 在用户确认指纹后记录因子计算机的主机密钥，再检测一次。
+func (s *session) trustFactor(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Target      FactorServer `json:"target"`
+		Fingerprint string       `json:"fingerprint"`
+	}
+	if !s.decode(w, r, &request) {
+		return
+	}
+	target, err := request.Target.normalize()
+	if err == nil && target.Mode != FactorRemote {
+		err = fmt.Errorf("这台电脑不需要确认指纹")
+	}
+	if err == nil {
+		err = checkText("主机指纹", strings.TrimSpace(request.Fingerprint), true)
+	}
+	if err == nil {
+		err = s.prober.Trust(r.Context(), target, request.Fingerprint)
+	}
+	if err != nil {
+		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
+		return
+	}
+	s.checkTarget(w, r, target)
+}
+
+func (s *session) checkTarget(w http.ResponseWriter, r *http.Request, target FactorServer) {
+	report, err := s.probe(r.Context(), target)
+	if err != nil {
+		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
+		return
+	}
+	reply(w, http.StatusOK, response{OK: true, Report: &report})
+}
+
+func (s *session) probe(ctx context.Context, target FactorServer) (ProbeReport, error) {
+	target, err := target.normalize()
+	if err != nil {
+		return ProbeReport{}, err
+	}
+	return s.prober.Probe(ctx, target)
+}
+
+func (s *session) submit(w http.ResponseWriter, r *http.Request) {
+	var request Request
+	if !s.decode(w, r, &request) {
+		return
+	}
+	raw, err := Render(r.Context(), &request, Environment{Lookup: s.cloud.lookup, Probe: s.probe})
 	if err != nil {
 		// 校验没过不消耗令牌：用户改完可以直接再提交。
 		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
@@ -278,14 +398,14 @@ func (s *session) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.done = true
-	result := Result{Path: s.output}
+	result := Result{Path: s.output, FactorEngine: request.factorEngine}
 	for _, host := range request.hosts {
 		result.Hosts = append(result.Hosts, host.ID)
 	}
 	if request.compile != nil {
 		result.CompileHost = request.compile.ID
 	}
-	reply(w, http.StatusOK, response{OK: true, Path: s.output})
+	reply(w, http.StatusOK, response{OK: true})
 	s.result <- result
 }
 

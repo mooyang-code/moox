@@ -112,6 +112,9 @@ type InstanceBrief struct {
 	Zone             string   `json:"Zone"`
 	PublicAddresses  []string `json:"PublicAddresses"`
 	PrivateAddresses []string `json:"PrivateAddresses"`
+	CPU              int      `json:"CPU"`
+	Memory           int      `json:"Memory"`
+	SystemDisk       diskSize `json:"SystemDisk"`
 }
 
 func NewClient(opts ClientOptions) (*Client, error) {
@@ -293,6 +296,7 @@ func (c *Client) LookupInstance(ctx context.Context, publicIP string) (CloudInst
 		Kind: KindLighthouse, Region: c.region, Zone: item.Zone,
 		InstanceID: item.InstanceID, InstanceName: item.InstanceName, State: item.InstanceState,
 		PublicIPs: uniqueNonEmpty(item.PublicAddresses), PrivateIPs: uniqueNonEmpty(item.PrivateAddresses),
+		CPU: item.CPU, MemoryGB: item.Memory, DiskGB: item.SystemDisk.DiskSize,
 	}, true, nil
 }
 

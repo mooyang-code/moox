@@ -2,11 +2,15 @@ package privatenet
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 )
+
+// ErrHostNotFound 表示在给定地域里都没找到这个公网 IP 对应的实例。
+var ErrHostNotFound = errors.New("tencent instance not found")
 
 type TencentCloud struct {
 	Network    *tencent.NetworkClient
@@ -45,7 +49,7 @@ func (c TencentCloud) LookupHost(ctx context.Context, publicIP string, regions [
 	if last != nil {
 		return tencent.CloudInstance{}, fmt.Errorf("lookup %s: %w", publicIP, last)
 	}
-	return tencent.CloudInstance{}, fmt.Errorf("tencent instance not found for public ip %s", publicIP)
+	return tencent.CloudInstance{}, fmt.Errorf("%w for public ip %s", ErrHostNotFound, publicIP)
 }
 
 func (c TencentCloud) DescribeVpc(ctx context.Context, region, vpcID string) (tencent.VpcInfo, error) {

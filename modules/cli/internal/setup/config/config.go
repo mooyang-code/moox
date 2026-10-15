@@ -239,6 +239,15 @@ type HostDefinition struct {
 	SSH            SSHConfig `toml:"ssh"`
 }
 
+// FactorEngineLocal 表示因子引擎运行在执行 moox-cli 的这台电脑上。
+const FactorEngineLocal = "local"
+
+// FactorEngineReference 记录因子引擎所在的机器：local，或 [hosts.*] 里的主机 ID。
+// 该主机只登记登录方式，不放置组件时不属于 MooX 部署拓扑。
+type FactorEngineReference struct {
+	Host string `toml:"host"`
+}
+
 // CompileHostReference selects credentials from hosts without deploying a
 // compiler-only host. An explicit placements entry also makes it a MooX host.
 type CompileHostReference struct {
@@ -315,6 +324,7 @@ type Manifest struct {
 	SCFPlan            SCFPlan                   `toml:"scf_plan"`
 	HostCatalog        map[string]HostDefinition `toml:"hosts"`
 	CompileHostRef     CompileHostReference      `toml:"compile_host"`
+	FactorEngineRef    FactorEngineReference     `toml:"factor_engine"`
 }
 
 type Snapshot struct {
@@ -441,6 +451,8 @@ func decodeStrict(raw []byte, out *Manifest) error {
 			return fmt.Errorf("config_invalid: dns_resolver is retired; use [egress_proxy.dns] and remove trade_node")
 		case "compile_host":
 			return fmt.Errorf("config_invalid: compile_host accepts only host = <host-id>; SSH credentials belong to hosts.<host-id>.ssh")
+		case "factor_engine":
+			return fmt.Errorf("config_invalid: factor_engine accepts only host = \"local\" or <host-id>; SSH credentials belong to hosts.<host-id>.ssh")
 		}
 		return fmt.Errorf("config_invalid: unknown field %s", first)
 	}
@@ -463,6 +475,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		out.HostCatalog[id] = definition
 	}
 	out.CompileHostRef.Host = strings.TrimSpace(out.CompileHostRef.Host)
+	out.FactorEngineRef.Host = strings.TrimSpace(out.FactorEngineRef.Host)
 	out.Paths = out.Paths.Resolved()
 	if !md.IsDefined("factors", "enabled") {
 		out.Factors.Enabled = false

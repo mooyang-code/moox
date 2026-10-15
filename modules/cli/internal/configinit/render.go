@@ -3,6 +3,7 @@
 package configinit
 
 import (
+	"context"
 	_ "embed"
 	"fmt"
 	"strconv"
@@ -17,10 +18,10 @@ import (
 //go:embed moox.toml.example
 var exampleTemplate string
 
-// Render 把请求（按角色换算成主机后）渲染成一份完整的 moox.toml，并用 CLI 自己的严格解码和校验确认它可用。
-// 渲染失败或校验不过时返回错误，错误信息不含任何秘密值。
-func Render(request *Request) ([]byte, error) {
-	if err := request.normalize(); err != nil {
+// Render 把请求渲染成一份完整的 moox.toml：先借助 env 识别服务器、检测因子计算机，
+// 再用 CLI 自己的严格解码和校验确认结果可用。失败时返回的错误信息不含任何秘密值。
+func Render(ctx context.Context, request *Request, env Environment) ([]byte, error) {
+	if err := request.normalize(ctx, env); err != nil {
 		return nil, err
 	}
 	lines := strings.Split(exampleTemplate, "\n")
@@ -29,7 +30,7 @@ func Render(request *Request) ([]byte, error) {
 		{"admin", "password", tomlString(request.Admin.Password)},
 		{"tencent_cloud", "secret_id", tomlString(request.Tencent.SecretID)},
 		{"tencent_cloud", "secret_key", tomlString(request.Tencent.SecretKey)},
-		{"tencent_cloud", "region", tomlString(request.Tencent.Region)},
+		{"tencent_cloud", "region", tomlString(request.region)},
 		{"notification", "channel_type", tomlString(request.Notification.ChannelType)},
 		{"notification", "webhook_url", tomlString(request.Notification.WebhookURL)},
 	}
@@ -98,12 +99,20 @@ func renderTopology(request *Request) []string {
 		out = append(out, renderHost(host)...)
 		out = append(out, "")
 	}
-	if request.compile != nil {
+	switch {
+	case request.compile != nil:
 		out = append(out,
-			"# 因子执行服务器：运行因子引擎（另行安装），同时作为 CGO Linux 制品（Storage）的编译机；",
-			"# 纯 Go 交叉编译与前端构建在本机执行。它不加入 MooX 部署拓扑。")
+			"# 因子计算机：运行因子引擎，同时作为 CGO Linux 制品（Storage）的编译机；",
+			"# 纯 Go 交叉编译与前端构建在本机执行。它只登记登录方式，不加入 MooX 部署拓扑。")
 		out = append(out, renderHost(*request.compile)...)
 		out = append(out, "", "[compile_host]", "host = "+tomlString(request.compile.ID), "")
+	case request.factorRemote.ID != "":
+		out = append(out, "# 因子计算机：运行因子引擎。它只登记登录方式，不加入 MooX 部署拓扑。")
+		out = append(out, renderHost(request.factorRemote)...)
+		out = append(out, "")
+	}
+	if request.factorEngine != "" {
+		out = append(out, "# 因子引擎所在的机器：local 表示运行 moox-cli 的这台电脑。", "[factor_engine]", "host = "+tomlString(request.factorEngine), "")
 	}
 	out = append(out, "# host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。", "[placements]")
 	for _, host := range request.hosts {
@@ -118,9 +127,6 @@ func renderTopology(request *Request) []string {
 
 func renderHost(host Host) []string {
 	out := []string{"[hosts." + host.ID + "]", "address = " + tomlString(host.Address)}
-	if host.PrivateAddress != "" {
-		out = append(out, "private_address = "+tomlString(host.PrivateAddress))
-	}
 	if host.Region != "" {
 		out = append(out, "region = "+tomlString(host.Region))
 	}

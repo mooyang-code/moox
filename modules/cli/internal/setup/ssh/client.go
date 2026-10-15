@@ -413,6 +413,19 @@ func (t *transport) Run(ctx context.Context, argv []string, stdin io.Reader) (Re
 	if len(argv) == 0 {
 		return Result{}, fmt.Errorf("ssh_command_invalid")
 	}
+	command := make([]string, len(argv))
+	for i, arg := range argv {
+		command[i] = shellQuote(arg)
+	}
+	return t.RunCommand(ctx, strings.Join(command, " "), stdin)
+}
+
+// RunCommand 原样把命令交给远端的登录 shell，不做 POSIX 转义。
+// 只用于远端不是 POSIX shell 的场景（例如 Windows 的 cmd.exe）；其余情况用 Run。
+func (t *transport) RunCommand(ctx context.Context, command string, stdin io.Reader) (Result, error) {
+	if strings.TrimSpace(command) == "" {
+		return Result{}, fmt.Errorf("ssh_command_invalid")
+	}
 	session, err := t.client.NewSession()
 	if err != nil {
 		return Result{}, fmt.Errorf("ssh_command_failed: %w", err)
@@ -426,12 +439,8 @@ func (t *transport) Run(ctx context.Context, argv []string, stdin io.Reader) (Re
 	session.Stdout = &stdout
 	session.Stderr = &stderr
 	session.Stdin = stdin
-	command := make([]string, len(argv))
-	for i, arg := range argv {
-		command[i] = shellQuote(arg)
-	}
 	done := make(chan error, 1)
-	go func() { done <- session.Run(strings.Join(command, " ")) }()
+	go func() { done <- session.Run(command) }()
 	select {
 	case <-ctx.Done():
 		_ = session.Close()

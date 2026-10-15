@@ -56,6 +56,31 @@ host = "compile"
 	assert.Equal(t, "192.0.2.10", m.ControlHost().Address)
 }
 
+func TestFactorEngineHostIsRecordedButNotDeployed(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[hosts.factor]
+address = "192.168.0.103"
+ssh = { username = "builder" }
+[factor_engine]
+host = "factor"
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	m := snapshot.Manifest
+	assert.Equal(t, "192.168.0.103", m.FactorEngineHost().Address)
+	assert.False(t, m.FactorEngineIsLocal())
+	for _, host := range m.Hosts() {
+		assert.NotEqual(t, "factor", host.Name, "因子计算机不放置组件时不是部署主机")
+	}
+
+	dir := t.TempDir()
+	local, err := Load(writeManifest(t, dir, validManifest+"[factor_engine]\nhost = \"local\"\n", 0o600), dir)
+	require.NoError(t, err)
+	assert.True(t, local.Manifest.FactorEngineIsLocal())
+	assert.Empty(t, local.Manifest.FactorEngineHost().Name)
+}
+
 func TestLoadHostNormalizationAndSecretRedaction(t *testing.T) {
 	root := t.TempDir()
 	body := strings.Replace(validManifest, `address = "192.0.2.10"`, `address = " 192.0.2.10 "

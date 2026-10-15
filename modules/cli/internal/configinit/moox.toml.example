@@ -268,15 +268,19 @@ region = "ap-hongkong"
 provider = "tencent"
 ssh = { port = 22, username = "ubuntu" }
 
-# 仅 CGO Linux 制品使用编译机；纯 Go 交叉编译与前端构建在本机执行。
-# 编译机使用独立主机 ID，且默认不加入 MooX 部署拓扑。
-# 如需同时部署组件，显式在 placements 中声明 compile（可为空列表）。
-[hosts.compile]
+# 因子计算机：运行因子引擎，可以是局域网里的机器。Linux 机器同时作为编译机，
+# 只有 CGO Linux 制品（Storage）使用；纯 Go 交叉编译与前端构建在本机执行。
+# 它只登记登录方式，不加入 MooX 部署拓扑；如需同时部署组件，在 placements 中显式声明。
+[hosts.factor]
 address = "192.0.2.30"
 ssh = { port = 22, username = "builder" }
 
 [compile_host]
-host = "compile"
+host = "factor"
+
+# 因子引擎所在的机器：local 表示运行 moox-cli 的这台电脑，也可以是上面登记的主机 ID。
+[factor_engine]
+host = "factor"
 
 # host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。
 [placements]

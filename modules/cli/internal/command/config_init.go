@@ -17,8 +17,10 @@ func newConfigInitCommand() *cobra.Command {
 		Use:   "init",
 		Short: "在本机打开一次性表单，填写部署信息，生成 moox.toml",
 		Long: `在本机起一个只监听 127.0.0.1 的一次性页面，并用系统浏览器打开。
-在页面里填写管理员账号、腾讯云凭据、告警 webhook，并按用途填写四类服务器（数据存储、海外、管理台主控、可选的因子执行服务器）的地址与 SSH 密码；
-各服务按服务器用途自动放置，提交后直接生成 moox.toml（权限 0600）。
+页面分步填写：腾讯云密钥（先验证）、服务器（数据存储、管理台、可选的海外服务器与因子计算机）、管理员与告警。
+腾讯云服务器只填公网 IP 和 SSH 登录方式，地域与规格按 IP 从当前账号识别，不在账号下的 IP 不能使用；
+因子计算机可以是这台电脑或局域网里的机器，提交前要通过环境检测。各服务按服务器用途自动放置，
+确认后直接生成 moox.toml（权限 0600）。
 
 填写的内容只在本机处理，不会经过 Agent：命令只输出「已生成」、文件路径和主机 ID。
 如果在 Agent 里运行，请在弹出的浏览器页面里填写，不要把密码贴到对话里。
@@ -35,7 +37,7 @@ setup 系列命令只认仓库根目录下名为 moox.toml 的文件，生成到
 				return err
 			}
 			return writeSetupJSON(cmd, map[string]any{
-				"status": "written", "path": result.Path, "hosts": result.Hosts, "compile_host": result.CompileHost,
+				"status": "written", "path": result.Path, "hosts": result.Hosts, "compile_host": result.CompileHost, "factor_engine": result.FactorEngine,
 				"next": "确认文件位于仓库根目录且名为 moox.toml（其他 setup 命令只认这个位置），再运行 moox-cli setup validate",
 			})
 		},

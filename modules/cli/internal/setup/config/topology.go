@@ -17,20 +17,32 @@ func (m Manifest) HostByID(id string) Host {
 	}
 	return Host{Name: id, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region, Port: definition.SSH.Port, Username: definition.SSH.Username, Password: definition.SSH.Password, Provider: definition.Provider, TLSMode: definition.TLSMode}
 }
-func (m Manifest) ControlHost() Host     { return m.HostByID(m.PlacementHost("admin")) }
-func (m Manifest) CompileHost() Host     { return m.HostByID(m.CompileHostRef.Host) }
-func (m Manifest) StorageHost() Host     { return m.HostByID(m.PlacementHost("storage-primary")) }
-func (m Manifest) ViewHost() Host        { return m.HostByID(m.PlacementHost("storage-view")) }
-func (m Manifest) StrategyHost() Host    { return m.HostByID(m.PlacementHost("strategy")) }
-func (m Manifest) HasCompileHost() bool  { return m.CompileHostRef.Host != "" }
-func (m Manifest) HasStorageHost() bool  { return m.StorageHost().Name != "" }
-func (m Manifest) HasViewHost() bool     { return m.ViewHost().Name != "" }
-func (m Manifest) HasStrategyHost() bool { return m.StrategyHost().Name != "" }
+func (m Manifest) ControlHost() Host    { return m.HostByID(m.PlacementHost("admin")) }
+func (m Manifest) CompileHost() Host    { return m.HostByID(m.CompileHostRef.Host) }
+func (m Manifest) StorageHost() Host    { return m.HostByID(m.PlacementHost("storage-primary")) }
+func (m Manifest) ViewHost() Host       { return m.HostByID(m.PlacementHost("storage-view")) }
+func (m Manifest) StrategyHost() Host   { return m.HostByID(m.PlacementHost("strategy")) }
+func (m Manifest) HasCompileHost() bool { return m.CompileHostRef.Host != "" }
+
+// FactorEngineHost 返回因子引擎所在的主机；未配置或在本机（local）时返回空 Host。
+func (m Manifest) FactorEngineHost() Host {
+	if m.FactorEngineRef.Host == FactorEngineLocal {
+		return Host{}
+	}
+	return m.HostByID(m.FactorEngineRef.Host)
+}
+
+// FactorEngineIsLocal 表示因子引擎运行在执行 moox-cli 的这台电脑上。
+func (m Manifest) FactorEngineIsLocal() bool { return m.FactorEngineRef.Host == FactorEngineLocal }
+func (m Manifest) HasStorageHost() bool      { return m.StorageHost().Name != "" }
+func (m Manifest) HasViewHost() bool         { return m.ViewHost().Name != "" }
+func (m Manifest) HasStrategyHost() bool     { return m.StrategyHost().Name != "" }
 
 func (m Manifest) Hosts() []Host {
 	ids := make([]string, 0, len(m.HostCatalog))
 	for id := range m.HostCatalog {
-		if id == m.CompileHostRef.Host {
+		// 编译机和因子计算机只登记登录方式；没有放置组件时不是部署主机。
+		if id == m.CompileHostRef.Host || id == m.FactorEngineRef.Host {
 			if _, deployed := m.Placements[id]; !deployed {
 				continue
 			}
@@ -131,6 +143,11 @@ func resolveManifestReferences(m *Manifest) error {
 	if m.CompileHostRef.Host != "" {
 		if _, ok := m.HostCatalog[m.CompileHostRef.Host]; !ok {
 			return fmt.Errorf("config_invalid: compile_host.host must select an existing host ID")
+		}
+	}
+	if ref := m.FactorEngineRef.Host; ref != "" && ref != FactorEngineLocal {
+		if _, ok := m.HostCatalog[ref]; !ok {
+			return fmt.Errorf("config_invalid: factor_engine.host must be \"local\" or an existing host ID")
 		}
 	}
 	if err := validatePlacements(m); err != nil {

@@ -44,6 +44,10 @@ type CloudInstance struct {
 	PublicIPs        []string `json:"public_ips,omitempty"`
 	PrivateIPs       []string `json:"private_ips,omitempty"`
 	SecurityGroupIDs []string `json:"security_group_ids,omitempty"`
+	// CPU、MemoryGB、DiskGB 是实例规格；接口没返回时为 0。DiskGB 是系统盘与数据盘之和。
+	CPU      int `json:"cpu,omitempty"`
+	MemoryGB int `json:"memory_gb,omitempty"`
+	DiskGB   int `json:"disk_gb,omitempty"`
 }
 
 type VpcInfo struct {
@@ -255,6 +259,14 @@ type cvmInstance struct {
 		SubnetID           string   `json:"SubnetId"`
 		PrivateIPAddresses []string `json:"PrivateIpAddresses"`
 	} `json:"VirtualPrivateCloud"`
+	CPU        int        `json:"CPU"`
+	Memory     int        `json:"Memory"`
+	SystemDisk diskSize   `json:"SystemDisk"`
+	DataDisks  []diskSize `json:"DataDisks"`
+}
+
+type diskSize struct {
+	DiskSize int `json:"DiskSize"`
 }
 
 func cloudInstanceFromCVM(region string, item cvmInstance) CloudInstance {
@@ -265,7 +277,16 @@ func cloudInstanceFromCVM(region string, item cvmInstance) CloudInstance {
 		VpcID: item.VirtualPrivateCloud.VpcID, SubnetID: item.VirtualPrivateCloud.SubnetID,
 		PublicIPs: uniqueNonEmpty(item.PublicIPAddresses), PrivateIPs: privateIPs,
 		SecurityGroupIDs: uniqueNonEmpty(item.SecurityGroupIDs),
+		CPU:              item.CPU, MemoryGB: item.Memory, DiskGB: totalDisk(item.SystemDisk, item.DataDisks),
 	}
+}
+
+func totalDisk(system diskSize, data []diskSize) int {
+	total := system.DiskSize
+	for _, disk := range data {
+		total += disk.DiskSize
+	}
+	return total
 }
 
 func (c *NetworkClient) DescribeVpc(ctx context.Context, vpcID string) (VpcInfo, error) {

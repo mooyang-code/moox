@@ -654,6 +654,8 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{"automatic component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "host-gateway"`, 1), "automatic component"},
 		{"unknown field", "unexpected = true\n" + validManifest, "unknown field"},
 		{"unknown compile host", validManifest + "[compile_host]\nhost = \"missing\"\n", "compile_host.host"},
+		{"unknown factor engine host", validManifest + "[factor_engine]\nhost = \"missing\"\n", "factor_engine.host"},
+		{"factor engine with credentials", validManifest + "[factor_engine]\nhost = \"local\"\npassword = \"x\"\n", "factor_engine accepts only"},
 		{"duplicate address", validManifest + "[hosts.compute]\naddress = \"192.0.2.10\"\nssh = { username = \"ubuntu\" }\n", "duplicates hosts."},
 	}
 	for _, hook := range []string{"http://example.test/hook", "not-a-url", "https://open.feishu.cn/hook", "https://example.invalid/hook"} {

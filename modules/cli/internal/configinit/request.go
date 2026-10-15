@@ -1,6 +1,7 @@
 package configinit
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -15,94 +16,82 @@ type Request struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	} `json:"admin"`
-	Tencent struct {
-		SecretID  string `json:"secret_id"`
-		SecretKey string `json:"secret_key"`
-		Region    string `json:"region"`
-	} `json:"tencent"`
+	Tencent      Keys `json:"tencent"`
 	Notification struct {
 		ChannelType string `json:"channel_type"`
 		WebhookURL  string `json:"webhook_url"`
 	} `json:"notification"`
-	// Servers 按角色收集服务器；因子执行服务器可选（nil 表示不配置）。
+	// Servers 按用途收集服务器；海外服务器和因子计算机可选（nil 表示不配置）。
 	Servers struct {
-		Storage  *Server `json:"storage"`
-		Overseas *Server `json:"overseas"`
-		Control  *Server `json:"control"`
-		Factor   *Server `json:"factor"`
+		Storage  *Server       `json:"storage"`
+		Control  *Server       `json:"control"`
+		Overseas *Server       `json:"overseas"`
+		Factor   *FactorServer `json:"factor"`
 	} `json:"servers"`
 
-	// normalize 根据角色算出的部署主机与编译机，供渲染使用。
-	hosts   []Host
-	compile *Host
+	// 以下由 normalize 算出，供渲染使用。
+	hosts        []Host
+	compile      *Host
+	factorRemote Host // 非 Linux 的因子计算机：只登记，不作为编译机
+	factorEngine string
+	region       string
 }
 
-// Server 是页面上一类服务器的填写内容。
+// Server 是一台腾讯云服务器的填写内容；地域等信息由公网 IP 识别得到，不让用户填。
 type Server struct {
-	// SharedWith 不为空时表示与该角色共用同一台服务器（只有管理台主控可以），其余字段忽略。
-	SharedWith     string `json:"shared_with"`
-	ID             string `json:"id"`
-	Address        string `json:"address"`
-	PrivateAddress string `json:"private_address"`
-	Region         string `json:"region"`
-	Provider       string `json:"provider"`
-	TLSMode        string `json:"tls_mode"`
-	SSHPort        int    `json:"ssh_port"`
-	SSHUser        string `json:"ssh_user"`
-	SSHPassword    string `json:"ssh_password"`
+	// SharedWith 不为空时表示与该角色共用同一台服务器（只有管理台服务器可以），其余字段忽略。
+	SharedWith  string `json:"shared_with"`
+	Address     string `json:"address"`
+	SSHPort     int    `json:"ssh_port"`
+	SSHUser     string `json:"ssh_user"`
+	SSHPassword string `json:"ssh_password"`
 }
 
-// Host 是渲染进 moox.toml 的一台主机。Components 只对部署主机有意义，编译机不放置组件。
+// Host 是渲染进 moox.toml 的一台主机。Components 只对部署主机有意义，编译机与因子计算机不放置组件。
 type Host struct {
-	ID             string
-	Address        string
-	PrivateAddress string
-	Region         string
-	Provider       string
-	TLSMode        string
-	SSHPort        int
-	SSHUser        string
-	SSHPassword    string
-	Components     []string
+	ID          string
+	Address     string
+	Region      string
+	Provider    string
+	TLSMode     string
+	SSHPort     int
+	SSHUser     string
+	SSHPassword string
+	Components  []string
+}
+
+// Environment 是换算拓扑时要用的外部能力：识别腾讯云服务器、检测因子计算机。
+type Environment struct {
+	Lookup func(ctx context.Context, keys Keys, address string) (Instance, error)
+	Probe  func(ctx context.Context, target FactorServer) (ProbeReport, error)
 }
 
 const maxFieldBytes = 512
 
-// normalize 去掉非秘密字段的首尾空白并做输入层面的检查，再把角色换算成主机与组件放置；
-// 格式与拓扑的语义校验交给 config.Parse。秘密字段原样保留（密码里的空格是有意义的），只拒绝控制字符与超长。
-func (r *Request) normalize() error {
-	trim := func(values ...*string) {
-		for _, v := range values {
-			*v = strings.TrimSpace(*v)
+// normalize 检查填写内容，并借助 env 把服务器换算成主机与组件放置；格式与拓扑的语义校验交给 config.Parse。
+// 秘密字段原样保留（密码里的空格是有意义的），只拒绝控制字符与超长。
+func (r *Request) normalize(ctx context.Context, env Environment) error {
+	r.Admin.Username = strings.TrimSpace(r.Admin.Username)
+	r.Notification.ChannelType = strings.TrimSpace(r.Notification.ChannelType)
+	r.Notification.WebhookURL = strings.TrimSpace(r.Notification.WebhookURL)
+	for _, field := range []struct{ name, value string }{
+		{"管理员用户名", r.Admin.Username}, {"管理员密码", r.Admin.Password},
+		{"告警渠道", r.Notification.ChannelType}, {"告警机器人的 Webhook 地址", r.Notification.WebhookURL},
+	} {
+		if err := checkText(field.name, field.value, true); err != nil {
+			return err
 		}
 	}
-	trim(&r.Admin.Username, &r.Tencent.SecretID, &r.Tencent.Region, &r.Notification.ChannelType, &r.Notification.WebhookURL)
-	if err := checkText("管理员用户名", r.Admin.Username, true); err != nil {
+	keys, err := r.Tencent.normalize()
+	if err != nil {
 		return err
 	}
-	for _, secret := range []struct{ name, value string }{
-		{"管理员密码", r.Admin.Password}, {"腾讯云 SecretKey", r.Tencent.SecretKey},
-	} {
-		if err := checkText(secret.name, secret.value, true); err != nil {
-			return err
-		}
-	}
-	for _, field := range []struct {
-		name, value string
-		required    bool
-	}{
-		{"腾讯云 SecretId", r.Tencent.SecretID, true}, {"腾讯云地域", r.Tencent.Region, true},
-		{"通知渠道", r.Notification.ChannelType, true}, {"通知 webhook 地址", r.Notification.WebhookURL, true},
-	} {
-		if err := checkText(field.name, field.value, field.required); err != nil {
-			return err
-		}
-	}
-	return r.buildTopology()
+	r.Tencent = keys
+	return r.buildTopology(ctx, env)
 }
 
-// buildTopology 把四类服务器换算成部署主机（含组件放置）和编译机。
-func (r *Request) buildTopology() error {
+// buildTopology 把各类服务器换算成部署主机（含组件放置）、编译机和因子引擎位置。
+func (r *Request) buildTopology(ctx context.Context, env Environment) error {
 	roles, err := loadRoles()
 	if err != nil {
 		return err
@@ -111,30 +100,37 @@ func (r *Request) buildTopology() error {
 	if err != nil {
 		return err
 	}
-	r.hosts, r.compile = nil, nil
+	r.hosts, r.compile, r.factorEngine, r.region = nil, nil, "", ""
 	byRole := map[string]int{}
-	var titles []string // 与 hosts（以及排在最后的编译机）一一对应的角色名称，用于错误提示
+	var titles []string // 与 hosts（以及排在最后的因子计算机）一一对应，用于错误提示
 	for _, item := range []struct {
 		key    string
 		server *Server
 	}{{RoleStorage, r.Servers.Storage}, {RoleOverseas, r.Servers.Overseas}, {RoleControl, r.Servers.Control}} {
-		role, _ := roleByKey(roles, item.key)
+		role := roleByKey(roles, item.key)
 		if item.server == nil {
-			return fmt.Errorf("缺少%s", role.Title)
-		}
-		if item.server.SharedWith != "" {
-			if !slices.Contains(role.CanShareWith, item.server.SharedWith) {
-				return fmt.Errorf("%s不能与 %q 共用服务器", role.Title, item.server.SharedWith)
+			if role.Optional {
+				continue
 			}
-			target := &r.hosts[byRole[item.server.SharedWith]]
+			return fmt.Errorf("请填写%s", role.Title)
+		}
+		if shared := item.server.SharedWith; shared != "" {
+			if !canShare(role, shared) {
+				return fmt.Errorf("%s不能和 %q 共用", role.Title, shared)
+			}
+			index, ok := byRole[shared]
+			if !ok {
+				return fmt.Errorf("%s选择了和%s共用，但没有配置%s", role.Title, roleByKey(roles, shared).Title, roleByKey(roles, shared).Title)
+			}
+			target := &r.hosts[index]
 			target.Components = append(target.Components, role.components...)
-			// 管理台的 HTTPS 入口在共用的主机上，证书模式取管理台的选择。
-			if tls := firstNonEmpty(strings.TrimSpace(item.server.TLSMode), target.TLSMode, role.Defaults.TLSMode); tls != "" {
-				target.TLSMode = tls
+			// 管理台的 HTTPS 入口跟着搬到共用的主机上。
+			if target.TLSMode == "" {
+				target.TLSMode = role.tlsMode
 			}
 			continue
 		}
-		host, err := item.server.host(role, catalog, false)
+		host, err := item.server.host(ctx, env, r.Tencent, role, catalog)
 		if err != nil {
 			return err
 		}
@@ -142,89 +138,134 @@ func (r *Request) buildTopology() error {
 		r.hosts = append(r.hosts, host)
 		titles = append(titles, role.Title)
 	}
-	// 管理台独立部署时排到最前面，生成的文件与示例模板的顺序一致，读起来更直观。
+	// 管理台单独部署时排到最前面，生成的文件与示例模板的顺序一致。
 	if i, ok := byRole[RoleControl]; ok && i > 0 {
 		r.hosts = append(append([]Host{r.hosts[i]}, r.hosts[:i]...), r.hosts[i+1:]...)
 		titles = append(append([]string{titles[i]}, titles[:i]...), titles[i+1:]...)
 	}
-	if r.Servers.Factor != nil {
-		role, _ := roleByKey(roles, RoleFactor)
-		if r.Servers.Factor.SharedWith != "" {
-			return fmt.Errorf("%s不能与其他服务器共用", role.Title)
+	// 腾讯云的默认地域取管理台所在的地域。
+	for _, host := range r.hosts {
+		if slices.Contains(host.Components, "admin") {
+			r.region = host.Region
 		}
-		host, err := r.Servers.Factor.host(role, catalog, true)
+	}
+	if r.Servers.Factor != nil {
+		factor, err := r.factorHost(ctx, env, roleByKey(roles, RoleFactor))
 		if err != nil {
 			return err
 		}
-		r.compile = &host
-		titles = append(titles, role.Title)
+		if factor != nil {
+			titles = append(titles, roleByKey(roles, RoleFactor).Title)
+		}
 	}
-
 	all := append([]Host(nil), r.hosts...)
-	if r.compile != nil {
-		all = append(all, *r.compile)
+	if r.factorEngine != "" && r.factorEngine != FactorLocal {
+		all = append(all, factorHostOf(r))
 	}
-	ids, addresses := map[string]string{}, map[string]string{}
+	addresses := map[string]string{}
 	for i, host := range all {
-		title := titles[i]
-		if other, ok := ids[host.ID]; ok {
-			return fmt.Errorf("%s和%s的主机 ID 都是 %q，请在高级设置里改成不同的 ID", other, title, host.ID)
-		}
-		ids[host.ID] = title
 		if other, ok := addresses[host.Address]; ok {
-			control, _ := roleByKey(roles, RoleControl)
-			switch control.Title {
-			case title:
-				return fmt.Errorf("%s和%s的地址相同；如果是同一台服务器，请在%s里选择“与%s共用”", other, title, title, other)
-			case other:
-				return fmt.Errorf("%s和%s的地址相同；如果是同一台服务器，请在%s里选择“与%s共用”", other, title, other, title)
+			if other == roleByKey(roles, RoleControl).Title || titles[i] == roleByKey(roles, RoleControl).Title {
+				return fmt.Errorf("%s和%s的 IP 相同；如果是同一台服务器，请在管理台服务器里选择共用", other, titles[i])
 			}
-			return fmt.Errorf("%s和%s的地址相同，这两类服务器需要分开部署", other, title)
+			return fmt.Errorf("%s和%s的 IP 相同，这两类服务器需要分开", other, titles[i])
 		}
-		addresses[host.Address] = title
+		addresses[host.Address] = titles[i]
 	}
 	return nil
 }
 
-// host 校验一类服务器的填写内容并换算成主机；compile 为 true 时是编译机，不放置组件。
-func (s *Server) host(role Role, catalog servicecatalog.Catalog, compile bool) (Host, error) {
-	for _, v := range []*string{&s.ID, &s.Address, &s.PrivateAddress, &s.Region, &s.Provider, &s.TLSMode, &s.SSHUser} {
-		*v = strings.TrimSpace(*v)
+// factorHostOf 返回因子计算机的主机定义（Linux 时它同时是编译机）。
+func factorHostOf(r *Request) Host {
+	if r.compile != nil {
+		return *r.compile
 	}
-	host := Host{
-		ID: firstNonEmpty(s.ID, role.Defaults.ID), Address: s.Address, PrivateAddress: s.PrivateAddress,
-		Region: s.Region, Provider: s.Provider, TLSMode: s.TLSMode, SSHPort: s.SSHPort, SSHUser: s.SSHUser, SSHPassword: s.SSHPassword,
+	return r.factorRemote
+}
+
+func canShare(role Role, with string) bool {
+	for _, option := range role.Share {
+		if option.Value != "" && option.Value == with {
+			return true
+		}
 	}
-	if !servicecatalog.ValidHostID(host.ID) {
-		return Host{}, fmt.Errorf("%s的主机 ID %q 不合法，请用小写字母、数字、连字符", role.Title, host.ID)
-	}
-	for _, field := range []struct {
-		name, value string
-		required    bool
-	}{
-		{"地址", host.Address, true}, {"私网地址", host.PrivateAddress, false}, {"地域", host.Region, false},
-		{"云厂商", host.Provider, false}, {"SSH 用户名", host.SSHUser, true}, {"SSH 密码", host.SSHPassword, true},
+	return false
+}
+
+// host 校验一台腾讯云服务器的填写内容，用公网 IP 识别它，并换算成带组件放置的主机。
+func (s *Server) host(ctx context.Context, env Environment, keys Keys, role Role, catalog servicecatalog.Catalog) (Host, error) {
+	s.Address = strings.TrimSpace(s.Address)
+	s.SSHUser = strings.TrimSpace(s.SSHUser)
+	for _, field := range []struct{ name, value string }{
+		{"公网 IP", s.Address}, {"SSH 用户名", s.SSHUser}, {"SSH 密码", s.SSHPassword},
 	} {
-		if err := checkText(role.Title+"的"+field.name, field.value, field.required); err != nil {
+		if err := checkText(role.Title+"的"+field.name, field.value, true); err != nil {
 			return Host{}, err
 		}
 	}
-	if host.SSHPort == 0 {
-		host.SSHPort = 22
-	}
-	if host.SSHPort < 1 || host.SSHPort > 65535 {
-		return Host{}, fmt.Errorf("%s的 SSH 端口 %d 不合法", role.Title, host.SSHPort)
-	}
-	if compile {
-		return host, nil
+	port, err := sshPort(role.Title, s.SSHPort)
+	if err != nil {
+		return Host{}, err
 	}
 	for _, id := range role.components {
 		if component, ok := catalog.Component(id); !ok || component.Scope == servicecatalog.ScopeHost {
 			return Host{}, fmt.Errorf("%s的组件 %q 不在服务目录里，请同步模板", role.Title, id)
 		}
 	}
-	host.Components = append([]string(nil), role.components...)
-	return host, nil
+	instance, err := env.Lookup(ctx, keys, s.Address)
+	if err != nil {
+		return Host{}, fmt.Errorf("%s：%w", role.Title, err)
+	}
+	return Host{
+		ID: role.hostID, Address: s.Address, Region: instance.Region, Provider: "tencent", TLSMode: role.tlsMode,
+		SSHPort: port, SSHUser: s.SSHUser, SSHPassword: s.SSHPassword, Components: append([]string(nil), role.components...),
+	}, nil
+}
+
+// factorHost 检测因子计算机并决定怎么写：本机只记 local；另一台机器登记登录方式，Linux 时同时作为编译机。
+// 返回 nil 表示没有需要登记的主机（本机）。
+func (r *Request) factorHost(ctx context.Context, env Environment, role Role) (*Host, error) {
+	target, err := r.Servers.Factor.normalize()
+	if err != nil {
+		return nil, err
+	}
+	report, err := env.Probe(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	if report.HostKey != "" {
+		return nil, fmt.Errorf("第一次连接%s，请先点「检测环境」并确认它的主机指纹", role.Title)
+	}
+	if !report.OK {
+		for _, item := range report.Items {
+			if item.Status == CheckFail {
+				return nil, fmt.Errorf("%s环境检测没有通过：%s %s", role.Title, item.Name, item.Detail)
+			}
+		}
+		return nil, fmt.Errorf("%s环境检测没有通过", role.Title)
+	}
+	if target.Mode == FactorLocal {
+		r.factorEngine = FactorLocal
+		return nil, nil
+	}
+	host := Host{ID: role.hostID, Address: target.Address, SSHPort: target.SSHPort, SSHUser: target.SSHUser, SSHPassword: target.SSHPassword}
+	r.factorEngine = host.ID
+	if report.OS == "linux" {
+		r.compile = &host
+	} else {
+		r.factorRemote = host
+	}
+	return &host, nil
+}
+
+func sshPort(title string, port int) (int, error) {
+	if port == 0 {
+		return 22, nil
+	}
+	if port < 1 || port > 65535 {
+		return 0, fmt.Errorf("%s的 SSH 端口 %d 不合法", title, port)
+	}
+	return port, nil
 }
 
 func firstNonEmpty(values ...string) string {
