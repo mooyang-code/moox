@@ -14,7 +14,7 @@
       <a-form :model="form" layout="vertical">
         <a-form-item label="数据集">
           <a-select v-model="form.datasetId" placeholder="全部数据集" allow-clear allow-search>
-            <a-option v-for="item in datasetOptions" :key="item" :value="item">{{ item }}</a-option>
+            <a-option v-for="item in datasetOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
           </a-select>
         </a-form-item>
         <a-form-item label="标的（留空表示全部）">
@@ -65,7 +65,7 @@
         :bordered="{ cell: true }"
       >
         <template #columns>
-          <a-table-column title="数据集" data-index="dataset_id" />
+          <a-table-column title="数据集" data-index="dataset_label" />
           <a-table-column title="频率" data-index="frequency" :width="70" />
           <a-table-column title="标的" data-index="subject_id" :width="130" />
           <a-table-column title="范围（UTC）" :width="260">
@@ -86,19 +86,19 @@
 import { computed, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { checkKline, submitKlineBackfill, type CheckKlineResponse } from "@/api/collector/runtime-status";
-import { quickRange, toRFC3339, utcText } from "./runtime-status-model";
+import { quickRange, toRFC3339, utcText } from "./backfill-model";
 
 const props = defineProps<{
   visible: boolean;
   mode: "check" | "backfill";
   spaceId: string;
-  datasetOptions: string[];
+  datasetOptions: { value: string; label: string }[];
   datasetId?: string;
 }>();
 
 const emit = defineEmits<{
   (event: "update:visible", value: boolean): void;
-  (event: "submitted"): void;
+  (event: "submitted", jobId: string): void;
 }>();
 
 const quickRanges = [
@@ -117,6 +117,7 @@ const checkedRequest = ref<{ dataset_id?: string; subject_id?: string; from: str
 const gapRows = computed(() =>
   (result.value?.gaps || []).map((item, index) => ({
     ...item,
+    dataset_label: props.datasetOptions.find(option => option.value === item.dataset_id)?.label || item.dataset_id,
     key: `${item.dataset_id}|${item.subject_id}|${item.from}|${index}`
   }))
 );
@@ -159,7 +160,7 @@ function rangeRequest() {
 async function submitBackfill(request: { dataset_id?: string; subject_id?: string; from: string; to: string }, force: boolean) {
   const created = await submitKlineBackfill({ space_id: props.spaceId, ...request, force });
   Message.success(created.job_id ? `已创建补采作业，共 ${created.chunks || 0} 个分块` : "范围内没有缺口");
-  if (created.job_id) emit("submitted");
+  if (created.job_id) emit("submitted", created.job_id);
 }
 
 async function onSubmit(): Promise<boolean> {

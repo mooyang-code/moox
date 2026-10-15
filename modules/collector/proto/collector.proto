@@ -361,6 +361,8 @@ message KlineBackfillChunk {
   int32 attempts = 7;
   string last_error = 8;
   int32 rows = 9;
+  // dataset_name 是数据集的展示名（所属采集任务名），任务已删除时为空。
+  string dataset_name = 10;
 }
 
 message KlineBackfillJob {
@@ -384,6 +386,8 @@ message KlineBackfillJob {
   int32 succeeded = 16;
   int32 failed = 17;
   int32 canceled = 18;
+  // dataset_name 是数据集的展示名（所属采集任务名），不限数据集或任务已删除时为空。
+  string dataset_name = 19;
 }
 
 message GetKlineBackfillReq {
@@ -499,6 +503,8 @@ message CollectorDatasetStatus {
   // level 取值 ok、warn、error。
   string level = 16;
   repeated string reasons = 17;
+  // dataset_name 是数据集的展示名（所属采集任务名），任务已删除时为空。
+  string dataset_name = 18;
 }
 
 message CollectorFunctionStatus {

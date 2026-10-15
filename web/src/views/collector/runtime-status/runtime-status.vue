@@ -1,5 +1,5 @@
 <template>
-  <div class="moox-page">
+  <div class="moox-page runtime-status-page">
     <div class="moox-inner runtime-status">
       <a-alert v-if="!selectedSpaceId" type="warning">请先在顶部选择空间。</a-alert>
       <template v-else>
@@ -51,8 +51,8 @@
               <b class="metric-value" :class="{ 'metric-value--warn': summary.gapBars > 0 }">{{ summary.gapBars }} 根</b>
               <span class="metric-sub">{{ summary.gapSubjects }} 个标的，由自动补采修复</span>
             </div>
-            <div class="metric">
-              <span class="metric-label">补采</span>
+            <div class="metric metric--link" role="button" tabindex="0" @click="goBackfills()" @keydown.enter="goBackfills()">
+              <span class="metric-label">补采 <icon-right /></span>
               <b class="metric-value">{{ status.active_backfills || 0 }}</b>
               <span class="metric-sub" :class="{ 'danger-text': (status.failed_backfills_24h || 0) > 0 }"
                 >进行中 · 24h 失败 {{ status.failed_backfills_24h || 0 }}</span
@@ -81,11 +81,14 @@
           >
             <template #empty><div class="empty-text">还没有正在采集的数据集</div></template>
             <template #columns>
-              <a-table-column title="数据集 / 频率">
+              <a-table-column title="数据集">
                 <template #cell="{ record }">
-                  <div class="dataset-cell">
-                    <span class="mono-text dataset-name" :title="record.dataset_id">{{ record.dataset_id }}</span>
-                    <a-tag size="small" class="freq-tag">{{ record.frequency }}</a-tag>
+                  <div class="dataset-cell" :title="`${record.dataset_id} · ${record.frequency}`">
+                    <span v-if="record.dataset_name" class="dataset-name">{{ record.dataset_name }}</span>
+                    <template v-else>
+                      <span class="mono-text dataset-name">{{ record.dataset_id }}</span>
+                      <a-tag size="small" class="freq-tag">{{ record.frequency }}</a-tag>
+                    </template>
                   </div>
                 </template>
               </a-table-column>
@@ -180,83 +183,67 @@
           </a-table>
         </section>
 
-        <section>
-          <a-tabs v-model:active-key="activePane" class="pane-tabs" :header-padding="false">
-            <a-tab-pane key="functions">
-              <template #title>
-                函数 <span class="tab-count">{{ summary.functions }}</span>
-              </template>
-            </a-tab-pane>
-            <a-tab-pane key="backfills">
-              <template #title>
-                补采作业
-                <span v-if="status.active_backfills" class="tab-count tab-count--warn">{{ status.active_backfills }}</span>
-              </template>
-            </a-tab-pane>
-          </a-tabs>
-
-          <div v-show="activePane === 'functions'">
-            <div class="pane-toolbar">
-              <a-input v-model="functionFilters.keyword" placeholder="搜索函数名或数据集" allow-clear style="width: 240px">
-                <template #prefix><icon-search /></template>
-              </a-input>
-              <a-select v-model="functionFilters.region" placeholder="全部地域" allow-clear style="width: 140px">
-                <a-option v-for="item in regionOptions" :key="item" :value="item">{{ item }}</a-option>
-              </a-select>
-              <a-select v-model="functionFilters.market" placeholder="全部市场" allow-clear style="width: 160px">
-                <a-option v-for="item in marketOptions" :key="item" :value="item">{{ item }}</a-option>
-              </a-select>
-              <a-checkbox v-model="functionFilters.abnormalOnly">只看异常</a-checkbox>
-              <span class="muted toolbar-count">共 {{ filteredFunctions.length }} 个</span>
-            </div>
-            <a-table
-              row-key="name"
-              size="small"
-              :data="filteredFunctions"
-              :loading="statusLoading"
-              :pagination="{ pageSize: 20, showTotal: true, size: 'small' }"
-              :bordered="{ cell: true }"
-              table-layout-fixed
-            >
-              <template #empty><div class="empty-text">没有匹配的函数</div></template>
-              <template #columns>
-                <a-table-column title="函数" :width="270">
-                  <template #cell="{ record }"
-                    ><span class="mono-text function-name" :title="record.name">{{ record.name }}</span></template
-                  >
-                </a-table-column>
-                <a-table-column title="地域" data-index="region" :width="120" />
-                <a-table-column title="市场" data-index="market" :width="150" />
-                <a-table-column title="触发" :width="150">
-                  <template #cell="{ record }"
-                    ><span class="mono-text function-name" :title="record.cron">{{ record.cron }}</span></template
-                  >
-                </a-table-column>
-                <a-table-column title="标的" data-index="subject_count" :width="80" align="right" />
-                <a-table-column title="服务的数据集">
-                  <template #cell="{ record }">
-                    <a-tag v-for="item in record.datasets || []" :key="item" size="small" class="dataset-tag">{{ item }}</a-tag>
-                  </template>
-                </a-table-column>
-                <a-table-column title="状态" :width="90" align="center">
-                  <template #cell="{ record }">
-                    <a-tag size="small" :color="functionStateInfo(record.state).color">{{
-                      functionStateInfo(record.state).text
-                    }}</a-tag>
-                  </template>
-                </a-table-column>
-              </template>
-            </a-table>
+        <section class="function-section">
+          <header class="block-header">
+            <h3>
+              函数 <span class="tab-count">{{ summary.functions }}</span>
+            </h3>
+          </header>
+          <div class="pane-toolbar">
+            <a-input v-model="functionFilters.keyword" placeholder="搜索函数名或数据集" allow-clear style="width: 240px">
+              <template #prefix><icon-search /></template>
+            </a-input>
+            <a-select v-model="functionFilters.region" placeholder="全部地域" allow-clear style="width: 140px">
+              <a-option v-for="item in regionOptions" :key="item" :value="item">{{ item }}</a-option>
+            </a-select>
+            <a-select v-model="functionFilters.market" placeholder="全部市场" allow-clear style="width: 160px">
+              <a-option v-for="item in marketOptions" :key="item" :value="item">{{ item }}</a-option>
+            </a-select>
+            <a-checkbox v-model="functionFilters.abnormalOnly">只看异常</a-checkbox>
+            <span class="muted toolbar-count">共 {{ filteredFunctions.length }} 个</span>
           </div>
-
-          <BackfillJobs
-            v-show="activePane === 'backfills'"
-            ref="backfillJobs"
-            :space-id="selectedSpaceId || ''"
-            @check="openRange('check')"
-            @backfill="openRange('backfill')"
-            @changed="loadStatus"
-          />
+          <a-table
+            row-key="name"
+            size="small"
+            class="function-table"
+            :data="filteredFunctions"
+            :loading="statusLoading"
+            :pagination="false"
+            :scroll="{ y: '100%' }"
+            :bordered="{ cell: true }"
+            table-layout-fixed
+          >
+            <template #empty><div class="empty-text">没有匹配的函数</div></template>
+            <template #columns>
+              <a-table-column title="函数" :width="270">
+                <template #cell="{ record }"
+                  ><span class="mono-text function-name" :title="record.name">{{ record.name }}</span></template
+                >
+              </a-table-column>
+              <a-table-column title="地域" data-index="region" :width="120" />
+              <a-table-column title="市场" data-index="market" :width="150" />
+              <a-table-column title="触发" :width="150">
+                <template #cell="{ record }"
+                  ><span class="mono-text function-name" :title="record.cron">{{ record.cron }}</span></template
+                >
+              </a-table-column>
+              <a-table-column title="标的" data-index="subject_count" :width="80" align="right" />
+              <a-table-column title="服务的数据集">
+                <template #cell="{ record }">
+                  <a-tag v-for="item in record.datasets || []" :key="item" size="small" class="dataset-tag" :title="item">{{
+                    datasetLabel(datasetNames, item)
+                  }}</a-tag>
+                </template>
+              </a-table-column>
+              <a-table-column title="状态" :width="90" align="center">
+                <template #cell="{ record }">
+                  <a-tag size="small" :color="functionStateInfo(record.state).color">{{
+                    functionStateInfo(record.state).text
+                  }}</a-tag>
+                </template>
+              </a-table-column>
+            </template>
+          </a-table>
         </section>
       </template>
     </div>
@@ -278,6 +265,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { storeToRefs } from "pinia";
 import ActivityLog from "@/components/activity-log/index.vue";
@@ -290,11 +278,12 @@ import {
 } from "@/api/collector/runtime-status";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import BackfillJobs from "./backfill-jobs.vue";
-import KlineRangeDialog from "./kline-range-dialog.vue";
+import KlineRangeDialog from "@/views/collector/backfill-jobs/kline-range-dialog.vue";
 import {
   datasetFunctions,
   datasetKey,
+  datasetLabel,
+  datasetNameMap,
   durationText,
   filterFunctions,
   functionOptions,
@@ -306,6 +295,7 @@ import {
   statusSummary
 } from "./runtime-status-model";
 
+const router = useRouter();
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
 const guard = createLatestRequestGuard();
@@ -313,13 +303,11 @@ const guard = createLatestRequestGuard();
 const status = ref<GetCollectorStatusResponse>({});
 const statusLoading = ref(false);
 const expandedKeys = ref<string[]>([]);
-const activePane = ref<"functions" | "backfills">("functions");
 const functionFilters = ref({ keyword: "", region: "", market: "", abnormalOnly: false });
 const rangeVisible = ref(false);
 const rangeMode = ref<"check" | "backfill">("check");
 const rangeDataset = ref("");
 const logVisible = ref(false);
-const backfillJobs = ref<InstanceType<typeof BackfillJobs> | null>(null);
 
 const summary = computed(() => statusSummary(status.value));
 const overall = computed(() => ({
@@ -332,11 +320,16 @@ const datasetRows = computed(() =>
     .sort((a, b) => levelRank(b.level) - levelRank(a.level))
     .map(item => ({ ...item, key: datasetKey(item) }))
 );
-const datasetOptions = computed(() =>
-  [...new Set((status.value.datasets || []).map(item => item.dataset_id || "").filter(Boolean))].sort()
-);
+const datasetNames = computed(() => datasetNameMap(status.value.datasets || []));
+const datasetOptions = computed(() => {
+  const options = new Map<string, string>();
+  for (const item of status.value.datasets || []) {
+    if (item.dataset_id && !options.has(item.dataset_id)) options.set(item.dataset_id, item.dataset_name || item.dataset_id);
+  }
+  return [...options].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
+});
 const filteredFunctions = computed(() => {
-  const list = filterFunctions(status.value.functions || [], functionFilters.value);
+  const list = filterFunctions(status.value.functions || [], functionFilters.value, datasetNames.value);
   // 下发中、退役中排前，其余保持后端顺序。
   const rank = (state?: string) => (state === "pending" ? 2 : state === "retiring" ? 1 : 0);
   return [...list].sort((a, b) => rank(b.state) - rank(a.state));
@@ -356,9 +349,9 @@ const planSub = computed(() => {
 });
 
 function datasetFunctionText(record: CollectorDatasetStatus) {
-  const names = datasetFunctions(status.value.functions || [], record);
-  if (!names.length) return "-";
-  return names.length > 3 ? `${names.slice(0, 3).join("、")} 等` : names.join("、");
+  const functions = datasetFunctions(status.value.functions || [], record);
+  if (!functions.length) return "-";
+  return functions.length > 3 ? `${functions.slice(0, 3).join("、")} 等` : functions.join("、");
 }
 
 async function loadStatus() {
@@ -370,11 +363,6 @@ async function loadStatus() {
     const data = await getCollectorStatus(spaceId);
     if (!request.isLatest() || spaceId !== (selectedSpaceId.value || "")) return;
     status.value = data;
-    // 首次加载时展开第一个异常的数据集。
-    if (!expandedKeys.value.length) {
-      const first = (data.datasets || []).find(item => item.level && item.level !== "ok");
-      if (first) expandedKeys.value = [datasetKey(first)];
-    }
   } catch (error) {
     if (request.isLatest()) console.error("获取运行状态失败:", error);
   } finally {
@@ -384,7 +372,6 @@ async function loadStatus() {
 
 function refreshAll() {
   void loadStatus();
-  void backfillJobs.value?.reload();
 }
 
 function toggleDataset(record: { key: string }) {
@@ -394,8 +381,8 @@ function toggleDataset(record: { key: string }) {
 }
 
 function showFunctionsOf(record: CollectorDatasetStatus) {
-  functionFilters.value = { keyword: datasetKey(record), region: "", market: "", abnormalOnly: false };
-  activePane.value = "functions";
+  functionFilters.value = { keyword: record.dataset_name || datasetKey(record), region: "", market: "", abnormalOnly: false };
+  document.querySelector(".function-section")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 
 function openRange(mode: "check" | "backfill", datasetId = "") {
@@ -404,17 +391,21 @@ function openRange(mode: "check" | "backfill", datasetId = "") {
   rangeVisible.value = true;
 }
 
-function onJobSubmitted() {
-  activePane.value = "backfills";
-  backfillJobs.value?.showAttention();
+/** 打开补采 Tab；带上作业 ID 时直接展开它的详情。 */
+function goBackfills(jobId?: string) {
+  void router.push({ path: "/collector/tasks", query: { tab: "backfills", ...(jobId ? { job: jobId } : {}) } });
+}
+
+function onJobSubmitted(jobId: string) {
   void loadStatus();
+  goBackfills(jobId);
 }
 
 async function onConfirmHistory(record: CollectorDatasetStatus) {
   try {
     const result = await confirmHistoryGaps(selectedSpaceId.value || "", record.dataset_id || "", record.frequency || "");
     Message.success(result.job_id ? `已创建补采作业，共 ${result.chunks || 0} 个分块` : "没有待确认的历史缺口");
-    if (result.job_id) onJobSubmitted();
+    if (result.job_id) onJobSubmitted(result.job_id);
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "补采确认失败");
   }
@@ -441,10 +432,37 @@ onMounted(loadStatus);
 </script>
 
 <style scoped>
+/* 页面占满 Tab 内容区：状态条与数据集健康固定在上方，函数列表占据剩余高度并在表格内部滚动。 */
+.runtime-status-page {
+  height: 100%;
+}
 .runtime-status {
   display: flex;
+  height: 100%;
   flex-direction: column;
-  gap: var(--moox-space-4);
+  gap: var(--moox-space-3);
+}
+.runtime-status > section {
+  flex: none;
+}
+.runtime-status > .function-section {
+  display: flex;
+  min-height: 200px;
+  flex: 1;
+  flex-direction: column;
+}
+.function-table {
+  min-height: 0;
+  flex: 1;
+}
+.function-table :deep(.arco-table-container) {
+  height: 100%;
+}
+.metric--link {
+  cursor: pointer;
+}
+.metric--link:hover {
+  background: var(--color-fill-2);
 }
 .status-card {
   padding: var(--moox-space-3) var(--moox-space-4);
@@ -568,9 +586,6 @@ onMounted(loadStatus);
   margin-left: var(--moox-space-1);
   font-size: 12px;
 }
-.pane-tabs :deep(.arco-tabs-content) {
-  display: none;
-}
 .tab-count {
   margin-left: 4px;
   padding: 0 6px;
@@ -579,16 +594,12 @@ onMounted(loadStatus);
   color: var(--color-text-2);
   font-size: 12px;
 }
-.tab-count--warn {
-  background: rgb(var(--warning-1));
-  color: rgb(var(--warning-6));
-}
 .pane-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--moox-space-2);
-  margin: var(--moox-space-2) 0 var(--moox-space-toolbar-table);
+  margin-bottom: var(--moox-space-toolbar-table);
 }
 .toolbar-count {
   margin-left: auto;

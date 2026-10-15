@@ -26,6 +26,7 @@ const pageShellFiles = [
   "src/views/collector/task-management/index.vue",
   "src/views/collector/task-results/index.vue",
   "src/views/collector/runtime-status/runtime-status.vue",
+  "src/views/collector/backfill-jobs/index.vue",
   "src/views/trading/account-overview/account-overview.vue",
   "src/views/trading/position-detail/position-detail.vue",
   "src/views/trading/trade-record/trade-record.vue",
@@ -37,8 +38,7 @@ const pageShellFiles = [
 const tableFiles = [
   ...pageShellFiles,
   "src/views/collector/cloud-account/cloud-account-manage.vue",
-  "src/views/collector/runtime-status/backfill-jobs.vue",
-  "src/views/collector/runtime-status/kline-range-dialog.vue"
+  "src/views/collector/backfill-jobs/kline-range-dialog.vue"
 ];
 
 function read(relativePath) {

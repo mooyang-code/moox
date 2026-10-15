@@ -52,6 +52,24 @@ func (r *TaskRepository) List(ctx context.Context, filter TaskFilter) ([]domain.
 	return tasks, total, nil
 }
 
+// ResultDatasetNames 返回空间内每个任务结果数据集的展示名（即任务名），键为结果数据集 ID。
+func (r *TaskRepository) ResultDatasetNames(ctx context.Context, spaceID string) (map[string]string, error) {
+	type row struct {
+		DatasetID string `gorm:"column:c_result_dataset_id"`
+		Name      string `gorm:"column:c_task_name"`
+	}
+	var rows []row
+	if err := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).Select("c_result_dataset_id, c_task_name").
+		Where("c_space_id = ? AND c_result_dataset_id <> ''", spaceID).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	names := make(map[string]string, len(rows))
+	for _, item := range rows {
+		names[item.DatasetID] = item.Name
+	}
+	return names, nil
+}
+
 // ListEnabled returns enabled tasks in one space.
 func (r *TaskRepository) ListEnabled(ctx context.Context, spaceID string) ([]domain.CollectionTask, error) {
 	var tasks []domain.CollectionTask

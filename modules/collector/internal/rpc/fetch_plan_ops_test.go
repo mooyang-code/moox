@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
@@ -19,7 +20,7 @@ func newReregisterFixture(t *testing.T) (*Service, *store.Store) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
-	return &Service{persistence: db}, db
+	return &Service{persistence: db, taskRepo: db.Tasks()}, db
 }
 
 const reregisterPlan = `{"datasets":{` +
@@ -119,6 +120,7 @@ func TestGetCollectorStatusSummarizesPlanAndDatasetHealth(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()
 	applyPlan(t, db, "crypto", reregisterPlan)
+	require.NoError(t, db.Tasks().Create(ctx, domain.CollectionTask{SpaceID: "crypto", TaskID: "t1", TaskName: "Binance 现货 K 线 1m", DataType: "kline", ResultDatasetID: "ds1", ResultViewID: "view_ds1"}))
 
 	rsp, err := service.GetCollectorStatus(ctx, &pb.GetCollectorStatusReq{SpaceId: "crypto"})
 	require.NoError(t, err)
@@ -127,8 +129,9 @@ func TestGetCollectorStatusSummarizesPlanAndDatasetHealth(t *testing.T) {
 	require.Nil(t, rsp.GetOpen())
 	require.Len(t, rsp.GetDatasets(), 1, "只列出正在采集（已登记生效点）的数据集")
 	require.Equal(t, "ds1", rsp.GetDatasets()[0].GetDatasetId())
+	require.Equal(t, "Binance 现货 K 线 1m", rsp.GetDatasets()[0].GetDatasetName(), "展示名取所属采集任务名")
 	require.Equal(t, "error", rsp.GetLevel(), "从未扫描过，检查滞后远超阈值")
-	require.Contains(t, rsp.GetReasons()[0], "ds1|1m：自动检查滞后")
+	require.Contains(t, rsp.GetReasons()[0], "Binance 现货 K 线 1m：自动检查滞后")
 
 	require.NoError(t, db.Backfill().SetWatermark(ctx, "crypto", "ds1", "1m", time.Now().UTC()))
 	rsp, err = service.GetCollectorStatus(ctx, &pb.GetCollectorStatusReq{SpaceId: "crypto"})

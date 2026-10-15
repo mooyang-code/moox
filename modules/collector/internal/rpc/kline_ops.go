@@ -103,10 +103,11 @@ func (s *Service) SubmitKlineBackfill(ctx context.Context, req *pb.SubmitKlineBa
 	return &pb.SubmitKlineBackfillRsp{RetInfo: retOK(), JobId: jobID, Chunks: int32(chunks)}, nil
 }
 
-func jobToPB(status klinecheck.JobStatus) *pb.KlineBackfillJob {
+func jobToPB(status klinecheck.JobStatus, names map[string]string) *pb.KlineBackfillJob {
 	job := status.Job
 	return &pb.KlineBackfillJob{
-		JobId: job.JobID, SpaceId: job.SpaceID, Source: job.Source, Kind: job.Kind, DatasetId: job.DatasetID, Frequency: job.Frequency, SubjectId: job.SubjectID,
+		DatasetName: names[job.DatasetID],
+		JobId:       job.JobID, SpaceId: job.SpaceID, Source: job.Source, Kind: job.Kind, DatasetId: job.DatasetID, Frequency: job.Frequency, SubjectId: job.SubjectID,
 		From: job.From.UTC().Format(time.RFC3339), To: job.To.UTC().Format(time.RFC3339), Status: job.Status, LastError: job.LastError,
 		CreatedAt: job.CreatedAt.UTC().Format(time.RFC3339), UpdatedAt: job.UpdatedAt.UTC().Format(time.RFC3339),
 		Pending: int32(status.Counts[store.BackfillPending]), Running: int32(status.Counts[store.BackfillRunning]), Succeeded: int32(status.Counts[store.BackfillSucceeded]),
@@ -126,11 +127,15 @@ func (s *Service) GetKlineBackfill(ctx context.Context, req *pb.GetKlineBackfill
 		// 作业不属于请求的空间时与不存在一样处理，避免跨空间读取。
 		return &pb.GetKlineBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "补采作业不存在")}, nil
 	}
-	rsp := &pb.GetKlineBackfillRsp{RetInfo: retOK(), Job: jobToPB(*status)}
+	names, err := s.taskRepo.ResultDatasetNames(ctx, status.Job.SpaceID)
+	if err != nil {
+		return &pb.GetKlineBackfillRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
+	rsp := &pb.GetKlineBackfillRsp{RetInfo: retOK(), Job: jobToPB(*status, names)}
 	for _, chunk := range status.Failed {
 		rsp.FailedChunks = append(rsp.FailedChunks, &pb.KlineBackfillChunk{
 			DatasetId: chunk.DatasetID, Frequency: chunk.Frequency, SubjectId: chunk.SubjectID, From: chunk.From.UTC().Format(time.RFC3339), To: chunk.To.UTC().Format(time.RFC3339),
-			Status: chunk.Status, Attempts: int32(chunk.Attempts), LastError: chunk.LastError, Rows: int32(chunk.Rows),
+			Status: chunk.Status, Attempts: int32(chunk.Attempts), LastError: chunk.LastError, Rows: int32(chunk.Rows), DatasetName: names[chunk.DatasetID],
 		})
 	}
 	return rsp, nil
@@ -159,9 +164,13 @@ func (s *Service) ListKlineBackfills(ctx context.Context, req *pb.ListKlineBackf
 	if err != nil {
 		return &pb.ListKlineBackfillsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
+	names, err := s.taskRepo.ResultDatasetNames(ctx, strings.TrimSpace(req.GetSpaceId()))
+	if err != nil {
+		return &pb.ListKlineBackfillsRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
 	rsp := &pb.ListKlineBackfillsRsp{RetInfo: retOK(), Page: &pb.PageResult{Page: uint32(page), Size: uint32(size), Total: uint32(total), HasMore: int64(page*size) < total}}
 	for _, item := range items {
-		rsp.Items = append(rsp.Items, jobToPB(item))
+		rsp.Items = append(rsp.Items, jobToPB(item, names))
 	}
 	return rsp, nil
 }

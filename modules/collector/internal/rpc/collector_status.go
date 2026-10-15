@@ -60,6 +60,10 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 	if err != nil {
 		return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
+	names, err := s.taskRepo.ResultDatasetNames(ctx, spaceID)
+	if err != nil {
+		return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
 	functionCounts := map[string]int{}
 	for _, function := range rsp.Functions {
 		for _, key := range function.GetDatasets() {
@@ -68,9 +72,15 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 	}
 	for _, item := range health {
 		key := klinecheck.DatasetKey(item.DatasetID, item.Frequency)
-		rsp.Datasets = append(rsp.Datasets, datasetStatusToPB(item, functionCounts[key]))
+		status := datasetStatusToPB(item, functionCounts[key])
+		status.DatasetName = names[item.DatasetID]
+		rsp.Datasets = append(rsp.Datasets, status)
+		label := status.DatasetName
+		if label == "" {
+			label = key
+		}
 		for _, reason := range item.Reasons {
-			raise(item.Level, key+"："+reason)
+			raise(item.Level, label+"："+reason)
 		}
 	}
 

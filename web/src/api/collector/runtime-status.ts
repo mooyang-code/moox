@@ -12,6 +12,8 @@ export interface FetchPlanSummary {
 
 export interface CollectorDatasetStatus {
   dataset_id?: string;
+  /** 数据集展示名（所属采集任务名）；不限数据集或任务已删除时为空。 */
+  dataset_name?: string;
   frequency?: string;
   subject_count?: number;
   function_count?: number;
@@ -58,6 +60,8 @@ export interface KlineBackfillJob {
   source?: string;
   kind?: string;
   dataset_id?: string;
+  /** 数据集展示名（所属采集任务名）；不限数据集或任务已删除时为空。 */
+  dataset_name?: string;
   frequency?: string;
   subject_id?: string;
   from?: string;
@@ -75,6 +79,8 @@ export interface KlineBackfillJob {
 
 export interface KlineBackfillChunk {
   dataset_id?: string;
+  /** 数据集展示名（所属采集任务名）；不限数据集或任务已删除时为空。 */
+  dataset_name?: string;
   frequency?: string;
   subject_id?: string;
   from?: string;
