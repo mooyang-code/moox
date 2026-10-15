@@ -91,6 +91,13 @@ a:hover { text-decoration: underline; }
 ol.guide { margin: 0 0 12px; padding: 0 0 0 20px; color: var(--ink-2); font-size: 13.5px; }
 ol.guide li { margin-bottom: 6px; padding-left: 2px; }
 ol.guide b { font-weight: 600; color: var(--ink); }
+table.policies { width: 100%; border-collapse: collapse; margin: 8px 0 8px; font-size: 12.5px; }
+table.policies th { text-align: left; font-weight: 500; color: var(--faint); padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); }
+table.policies td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); color: var(--muted); vertical-align: top; }
+table.policies td:nth-child(2) { color: var(--ink-2); white-space: nowrap; }
+table.policies code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+button.small { height: 28px; padding: 0 10px; font-size: 12.5px; }
+.copied { color: var(--ok); font-size: 12.5px; margin-left: 6px; }
 .aside { margin: 0 0 20px; color: var(--faint); font-size: 12.5px; }
 .found { grid-column: 1 / -1; display: flex; gap: 10px; align-items: baseline; font-size: 13px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--hover); color: var(--ink-2); }
 .found .k { color: var(--ok); font-weight: 600; flex: none; }
@@ -168,7 +175,20 @@ button.ghost.away { visibility: hidden; }
         <div>
         <ol class="guide">
           <li>打开腾讯云控制台的 <a href="https://console.cloud.tencent.com/cam" target="_blank" rel="noopener noreferrer">访问管理 → 用户列表</a>，新建一个子用户（已有的话直接用），访问方式勾选「编程访问」。</li>
-          <li>给它授权云函数、对象存储、日志服务、轻量应用服务器、云服务器和私有网络，例如预设策略 QcloudSCFFullAccess、QcloudCOSFullAccess、QcloudCLSFullAccess、QcloudLighthouseFullAccess、QcloudCVMFullAccess、QcloudVPCFullAccess。</li>
+          <li>给它授权：在「设置用户权限」里搜索并勾选下面 6 个预设策略（可以点「复制全部策略名」后逐个粘贴搜索）。
+            <table class="policies">
+              <thead><tr><th>预设策略</th><th>腾讯云服务</th><th>MooX 用来做什么</th></tr></thead>
+              <tbody>
+                <tr><td><code>QcloudSCFFullAccess</code></td><td>云函数 SCF</td><td>部署和更新行情采集函数、定时触发器</td></tr>
+                <tr><td><code>QcloudCOSFullAccess</code></td><td>对象存储 COS</td><td>上传采集函数的代码包</td></tr>
+                <tr><td><code>QcloudCLSFullAccess</code></td><td>日志服务 CLS</td><td>开通日志服务、创建日志集与主题、写入和查询日志</td></tr>
+                <tr><td><code>QcloudLighthouseFullAccess</code></td><td>轻量应用服务器</td><td>识别服务器、开放防火墙端口、接入云联网、故障时重启</td></tr>
+                <tr><td><code>QcloudCVMFullAccess</code></td><td>云服务器 CVM</td><td>识别服务器、故障时重启（用的是 CVM 时需要）</td></tr>
+                <tr><td><code>QcloudVPCFullAccess</code></td><td>私有网络 VPC</td><td>识别弹性公网 IP、安全组放行、私有网络与云联网打通</td></tr>
+              </tbody>
+            </table>
+            <button type="button" id="copy-policies" class="small">复制全部策略名</button> <span class="copied" id="copied" hidden>已复制</span>
+          </li>
           <li>点进这个子用户，切到「API 密钥」页签，点「新建密钥」。</li>
           <li>把弹窗里的 SecretId 和 SecretKey 复制到下面。<b>SecretKey 只在创建时显示一次</b>，关掉弹窗后就查不到了，请先保存好。</li>
         </ol>
@@ -564,6 +584,11 @@ button.ghost.away { visibility: hidden; }
   // 密钥变了，之前的识别结果作废。
   ['secret-id', 'secret-key'].forEach(function (id) { $(id).addEventListener('input', function () { state.account = null; state.found = {}; $('account').hidden = true; }); });
 
+  $('copy-policies').addEventListener('click', function () {
+    var names = Array.prototype.map.call(document.querySelectorAll('table.policies code'), function (code) { return code.textContent; }).join('\n');
+    var done = function () { $('copied').hidden = false; setTimeout(function () { $('copied').hidden = true; }, 2000); };
+    if (navigator.clipboard) navigator.clipboard.writeText(names).then(done, function () {});
+  });
   $('generate').addEventListener('click', function () {
     var alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_@#%+=';
     var random = new Uint32Array(20);

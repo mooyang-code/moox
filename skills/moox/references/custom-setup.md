@@ -19,6 +19,11 @@ not a deployment artifact.
 用户在页面上确认主机指纹。确认后直接写出仓库根目录的 `moox.toml`（权限 0600），Linux 因子计算机同时登记
 为编译机，`[factor_engine]` 记录因子引擎所在的机器（`local` 表示这台电脑）。规则：
 
+- 腾讯云密钥建议用子用户（访问管理 → 用户列表，编程访问），需要授权 6 个预设策略：
+  `QcloudSCFFullAccess`（采集云函数）、`QcloudCOSFullAccess`（函数代码包）、`QcloudCLSFullAccess`（日志）、
+  `QcloudLighthouseFullAccess`（轻量服务器识别、防火墙、云联网、重启）、`QcloudCVMFullAccess`（CVM 识别、重启）、
+  `QcloudVPCFullAccess`（弹性 IP、安全组、私有网络与云联网）。页面第 1 步列出了这张表；识别服务器或部署报权限
+  不足时，先核对这 6 个策略是否都已授权。
 - 目标文件已存在时命令拒绝覆盖；旧文件必须由用户自己改名备份，Agent 不读取、不改写。
 - 命令只输出「已生成」、文件路径和主机 ID。Agent 不得读取生成的文件，也不得用自己的浏览器
   工具打开或填写这个页面。

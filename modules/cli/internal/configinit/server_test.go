@@ -151,6 +151,12 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 	if !strings.Contains(body, `href="https://console.cloud.tencent.com/cam"`) {
 		t.Fatal("第一步应引导用户去访问管理创建密钥")
 	}
+	// 系统用到的每个腾讯云服务都要列出对应的预设策略，免得用户不知道授什么权限。
+	for _, policy := range []string{"QcloudSCFFullAccess", "QcloudCOSFullAccess", "QcloudCLSFullAccess", "QcloudLighthouseFullAccess", "QcloudCVMFullAccess", "QcloudVPCFullAccess"} {
+		if !strings.Contains(body, "<code>"+policy+"</code>") {
+			t.Fatalf("权限清单里缺少 %s", policy)
+		}
+	}
 	// 用户不需要理解底层细节：页面里不出现文件名和路径。
 	for _, detail := range []string{h.output, "moox.toml", "placements"} {
 		if strings.Contains(body, detail) {
