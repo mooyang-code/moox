@@ -670,7 +670,7 @@ func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 	for _, key := range keys {
 		datasetID, frequencyName, _ := strings.Cut(key, "|")
 		segments := timeline[key]
-		if len(segments) == 0 {
+		if !timeline.Active(key) {
 			continue
 		}
 		frequency, err := marketdata.ParseFrequency(frequencyName)

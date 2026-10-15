@@ -91,13 +91,18 @@ $S catalog-changed --since <上次整体发布目录的提交>   # 退出码 10 
 $S catalog-changed --host control                    # 用台账里最近一次 moox-admin 的提交；台账还没有记录时用 --since
 ```
 
-台账只记录用本脚本装的二进制；在此之前手工装的没有记录。2026-10-14 整体发布目录时对应的提交是 `9f0c3d52`。
+台账只记录用本脚本装的二进制；在此之前手工装的没有记录。最近一次整体发布目录对应的提交是 `defc05c7`（2026-10-15）。
 
 顺序（缺一不可）：
 
 1. 构建 `host-gateway admin monitor`（同一个提交）。
 2. 三台主机的 `host` 单元：**`moox-host-gateway` 和 `moox-host-gateway-cli` 都装**（旧 cli 会拒绝新快照），重启 `host-gateway`；一台一台来，间隔约 15 秒，控制机最后。
 3. Admin 与 Monitor 连着装（先 Admin 后 Monitor），间隔不超过 1～2 分钟：两者之间 Monitor 与 Admin 的目录不一致，放置同步会停摆，窗口越短越好。
+   **控制机的 host-gateway 装完后可能起不来**：它启动时从还是旧版的 Admin 取初始路由快照，新目录校验不过就退出
+   （日志 `initial host snapshot unavailable: invalid host gateway snapshot: route differs from catalog or directory`，`status` 里 `host-gateway stopped`，
+   脚本不打印 `RESULT/READY`）。此时控制机上的组件跨主机调用全部中断，要立刻装 Admin，Admin 就绪后在控制机执行
+   `/data/moox/host/current/bin/moox-runtime start --plan /data/moox/host/current/runtime.json --components host-gateway` 拉起网关（2026-10-15 实测中断约 50 秒）。
+   Storage 主机和 compute-1 的网关不受影响。
 4. 核对：Admin 数据库的 `t_host_gateway_status` 里三台主机 `c_expected_hash == c_applied_hash` 且 `c_last_error` 为空；Monitor 日志每分钟有 `placement sync updated N checks`、没有 `catalog differs`。
 
 只想发布别的改动、而目录改动还不想发布时，在构建树里去掉目录改动再构建（不要把半截目录发出去）。

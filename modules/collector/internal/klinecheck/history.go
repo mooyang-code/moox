@@ -242,6 +242,9 @@ func (b *Backfiller) ScanHistory(ctx context.Context, spaceID string) (*HistoryR
 	sort.Strings(keys)
 	var due string
 	for _, key := range keys {
+		if !timeline.Active(key) {
+			continue
+		}
 		scan, scanned := scans[key]
 		wait := historyScanInterval
 		if scan.LastError != "" {

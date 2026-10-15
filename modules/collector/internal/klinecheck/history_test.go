@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -174,4 +175,42 @@ func TestConfirmHistoryCreatesAJobForTheScannedGaps(t *testing.T) {
 	result, err := backfiller.Checker.CheckHistory(ctx, "crypto", "ds", "1m")
 	require.NoError(t, err)
 	require.Empty(t, result.Gaps)
+}
+
+// goneRecord 构造把数据集移出采集计划的记录（任务删除后对账产生）。
+func goneRecord(t *testing.T, id int64, dataset string, p int64) *store.FetchPlanRecord {
+	t.Helper()
+	content := &marketfetch.FetchPlanContent{Datasets: map[string]*marketfetch.PlanDatasetChange{}, Functions: map[string]*marketfetch.PlanFunctionChange{}}
+	change := &marketfetch.PlanDatasetChange{Changed: true, Gone: true, P: p}
+	change.DatasetID, change.Frequency = dataset, "1m"
+	content.Datasets[dataset+"|1m"] = change
+	return &store.FetchPlanRecord{ID: id, SpaceID: "crypto", Status: store.FetchPlanApplied, Plan: mustJSON(content), Progress: "{}"}
+}
+
+// 已停止采集的数据集（结果数据可能已随任务删除）不再参与自动补采与历史扫描，否则会因读不到 View 反复失败。
+func TestScansSkipDatasetsThatStoppedCollecting(t *testing.T) {
+	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	records := []*store.FetchPlanRecord{
+		recordFor(t, 1, "removed", store.FetchPlanApplied, base.Unix(), "A-USDT"),
+		goneRecord(t, 2, "removed", base.Add(5*time.Minute).Unix()),
+	}
+	timeline, err := BuildTimeline(records)
+	require.NoError(t, err)
+	require.False(t, timeline.Active("removed|1m"))
+
+	now := base.Add(48 * time.Hour)
+	repo := openBackfillStore(t)
+	backfiller := &Backfiller{Checker: &Checker{Plans: fakePlans{records}, Rows: failingRows{errors.New("dataset has no active view")}, Now: func() time.Time { return now }}, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
+	result, err := backfiller.ScanHistory(context.Background(), "crypto")
+	require.NoError(t, err)
+	require.Nil(t, result)
+	scans, err := repo.HistoryScans(context.Background(), "crypto")
+	require.NoError(t, err)
+	require.Empty(t, scans)
+
+	backfiller.Now = func() time.Time { return now.Truncate(autoScanInterval).Add(autoScanOffset + time.Second) }
+	require.NoError(t, backfiller.AutoScan(context.Background(), "crypto"))
+	jobs, err := repo.ActiveJobs(context.Background(), "crypto")
+	require.NoError(t, err)
+	require.Empty(t, jobs)
 }

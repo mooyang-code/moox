@@ -65,6 +65,13 @@ func BuildTimeline(records []*store.FetchPlanRecord) (Timeline, error) {
 	return timeline, nil
 }
 
+// Active 报告数据集是否仍在采集：最后一段没有结束。已停止采集的数据集不再有新数据，结果数据可能已随任务删除，
+// 自动补采与历史扫描都跳过它们。
+func (t Timeline) Active(key string) bool {
+	segments := t[key]
+	return len(segments) > 0 && segments[len(segments)-1].To == 0
+}
+
 // closeSegment 把最后一段在 at 处结束。
 func closeSegment(timeline Timeline, key string, at int64) {
 	segments := timeline[key]
