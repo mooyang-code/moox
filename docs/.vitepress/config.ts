@@ -109,6 +109,7 @@ export default defineConfig({
           { text: '数据保留与配置发布', link: '/计划/数据保留与配置发布' },
           { text: '网关与服务部署重构设计', link: '/计划/网关与服务部署重构设计' },
           { text: '网关与服务部署重构执行计划', link: '/计划/网关与服务部署重构执行计划' },
+          { text: '秘密管理与初始化录入设计', link: '/计划/秘密管理与初始化录入设计' },
           { text: 'Console Proxy 实施记录', link: '/2026-10-09-console-proxy-embedded-caddy-execution-plan' },
           { text: 'Timer 写入压测记录', link: '/计划/Timer模式Storage写入压测报告' },
         ],
