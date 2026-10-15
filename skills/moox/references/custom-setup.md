@@ -6,7 +6,24 @@ not a deployment artifact.
 
 ## User Preparation
 
-Show the user `moox.toml.example`. The user must fill it as repository-root
+推荐用本机表单生成 `moox.toml`，密码和云凭据不经过 Agent：
+
+```bash
+./bin/moox-cli config init
+```
+
+命令在 `127.0.0.1` 起一个一次性页面并用系统浏览器打开，用户在页面里填写管理员账号、
+腾讯云凭据、告警 webhook、主机地址与 SSH 密码、组件放置，提交后直接写出仓库根目录的
+`moox.toml`（权限 0600）。规则：
+
+- 目标文件已存在时命令拒绝覆盖；旧文件必须由用户自己改名备份，Agent 不读取、不改写。
+- 命令只输出「已生成」、文件路径和主机 ID。Agent 不得读取生成的文件，也不得用自己的浏览器
+  工具打开或填写这个页面。
+- 系统浏览器没能自动打开时（例如远程环境），命令会在 stderr 打印页面地址；把地址原样转给用户，
+  由用户在自己的浏览器里打开。页面 10 分钟没有提交会自动关闭，不写任何文件，重新运行即可。
+- 其余配置（保留期、日志、因子等）沿用示例默认值，用户之后可以直接编辑文件。
+
+也可以手工填写：Show the user `moox.toml.example`. The user must fill it as repository-root
 `moox.toml` and protect it before the Agent continues:
 
 ```bash

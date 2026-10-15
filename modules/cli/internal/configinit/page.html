@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>MooX 初始化配置</title>
+<style nonce="{{.Nonce}}">
+:root { color-scheme: light dark; --bg:#f6f7f9; --fg:#1c2128; --muted:#656d76; --card:#fff; --line:#d0d7de; --accent:#0969da; --danger:#cf222e; --ok:#1a7f37; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --card:#161b22; --line:#30363d; --accent:#4493f8; --danger:#f85149; --ok:#3fb950; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+main { max-width: 880px; margin: 0 auto; padding: 28px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 6px; }
+h2 { font-size: 16px; margin: 0 0 12px; }
+.lead { color: var(--muted); margin: 0 0 20px; }
+code { background: var(--line); padding: 1px 6px; border-radius: 4px; font-size: 13px; word-break: break-all; }
+section, .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.card { margin-bottom: 12px; background: transparent; }
+.card-head { display:flex; justify-content: space-between; align-items:center; margin-bottom: 10px; }
+.grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+.field { display:flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.field.wide { grid-column: 1 / -1; }
+input[type=text], input[type=password], input[type=number], input[type=url], select { width:100%; padding: 7px 9px; border:1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+fieldset.components { border:1px solid var(--line); border-radius: 6px; margin: 12px 0 0; padding: 8px 12px 10px; }
+fieldset.components legend { font-size: 13px; color: var(--muted); padding: 0 6px; }
+.chips { display:flex; flex-wrap: wrap; gap: 6px 14px; }
+.chips label { font-size: 13px; display:flex; align-items:center; gap:5px; cursor:pointer; }
+button { font: inherit; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 9px 22px; }
+button.link { border: none; background: none; color: var(--danger); padding: 2px 6px; }
+button:disabled { opacity: .55; cursor: default; }
+.row { display:flex; gap: 10px; align-items:center; flex-wrap: wrap; }
+.hint { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; }
+.banner { border-radius: 6px; padding: 10px 14px; margin: 0 0 16px; border: 1px solid; }
+.banner.error { color: var(--danger); border-color: var(--danger); }
+.banner.ok { color: var(--ok); border-color: var(--ok); }
+[hidden] { display:none !important; }
+@media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+<h1>MooX 初始化配置</h1>
+<p class="lead">填写部署信息，生成 <code>moox.toml</code>（写到 <code>{{.Output}}</code>）。页面只在本机运行，填写的内容不会发给 Agent 或任何外部服务。示例里的其余配置（保留期、日志、因子等）保持默认，之后可以直接编辑文件。</p>
+
+<div id="error" class="banner error" role="alert" hidden></div>
+<div id="done" class="banner ok" hidden></div>
+
+<form id="form" autocomplete="off" novalidate>
+<section>
+  <h2>管理员账号</h2>
+  <div class="grid">
+    <label class="field"><span>用户名 *</span><input type="text" id="admin-username" value="admin" autocomplete="off"></label>
+    <label class="field"><span>密码 *（不超过 72 字节）</span><input type="password" id="admin-password" data-secret="1" autocomplete="new-password"></label>
+  </div>
+  <div class="row"><button type="button" id="generate">生成强密码</button><span class="hint">生成后会显示在输入框里，请先记下来。</span></div>
+</section>
+
+<section>
+  <h2>腾讯云</h2>
+  <div class="grid">
+    <label class="field"><span>SecretId *</span><input type="text" id="tencent-id" autocomplete="off" spellcheck="false"></label>
+    <label class="field"><span>SecretKey *</span><input type="password" id="tencent-key" data-secret="1" autocomplete="new-password" spellcheck="false"></label>
+    <label class="field"><span>默认地域 *</span><input type="text" id="tencent-region" value="ap-guangzhou" autocomplete="off"></label>
+  </div>
+  <p class="hint">建议使用只授权 SCF、COS、CLS 所需权限的子账号密钥。</p>
+</section>
+
+<section>
+  <h2>告警通知</h2>
+  <div class="grid">
+    <label class="field"><span>渠道 *</span><select id="notify-type"><option value="wecom">企业微信群机器人</option><option value="feishu">飞书群机器人</option></select></label>
+    <label class="field wide"><span>Webhook 地址 *（必须是对应平台的 https 地址）</span><input type="password" id="notify-url" data-secret="1" autocomplete="new-password" spellcheck="false"></label>
+  </div>
+</section>
+
+<section>
+  <h2>主机与组件放置</h2>
+  <div class="row"><button type="button" id="preset">使用示例三主机拓扑</button><button type="button" id="add-host">添加主机</button></div>
+  <p class="hint">地址、SSH 密码要自己填；组件放置可以按需调整。host-gateway、host-agent 会自动放到每台主机，不用选。</p>
+  <div id="hosts"></div>
+</section>
+
+<section>
+  <h2>Linux 编译机（可选）</h2>
+  <label class="chips"><input type="checkbox" id="compile-on"> 我有 Linux 编译机（只有 CGO 制品才需要，例如 Storage）</label>
+  <div id="compile-fields" hidden>
+    <div class="grid">
+      <label class="field"><span>主机 ID *</span><input type="text" id="compile-id" value="compile" autocomplete="off"></label>
+      <label class="field"><span>地址 *</span><input type="text" id="compile-address" autocomplete="off"></label>
+      <label class="field"><span>SSH 端口</span><input type="number" id="compile-port" value="22"></label>
+      <label class="field"><span>SSH 用户名 *</span><input type="text" id="compile-user" value="builder" autocomplete="off"></label>
+      <label class="field"><span>SSH 密码 *</span><input type="password" id="compile-password" data-secret="1" autocomplete="new-password"></label>
+    </div>
+  </div>
+</section>
+
+<div class="row">
+  <button type="submit" class="primary" id="submit">生成 moox.toml</button>
+  <label class="chips"><input type="checkbox" id="show"> 显示密码</label>
+</div>
+</form>
+</main>
+
+<script type="application/json" id="boot">{{.Boot}}</script>
+<script nonce="{{.Nonce}}">
+(function () {
+  'use strict';
+  var boot = JSON.parse(document.getElementById('boot').textContent);
+  var finished = false;
+  function $(id) { return document.getElementById(id); }
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (key) {
+      if (key === 'class') node.className = attrs[key];
+      else if (key === 'text') node.textContent = attrs[key];
+      else node.setAttribute(key, attrs[key]);
+    });
+    (children || []).forEach(function (child) { node.append(child); });
+    return node;
+  }
+  function field(label, name, options) {
+    options = options || {};
+    var input = el('input', { type: options.type || 'text', 'data-name': name, autocomplete: options.secret ? 'new-password' : 'off', spellcheck: 'false' });
+    if (options.value !== undefined) input.value = options.value;
+    if (options.secret) input.setAttribute('data-secret', '1');
+    return el('label', { class: 'field' }, [el('span', { text: label + (options.required ? ' *' : '') }), input]);
+  }
+  function tlsField(value) {
+    var select = el('select', { 'data-name': 'tls_mode' }, [
+      el('option', { value: '', text: '不设置' }), el('option', { value: 'auto', text: 'auto（自动）' }),
+      el('option', { value: 'public', text: 'public（公网证书）' }), el('option', { value: 'internal', text: 'internal（内部 CA）' })
+    ]);
+    select.value = value || '';
+    return el('label', { class: 'field' }, [el('span', { text: 'TLS 模式（控制机用）' }), select]);
+  }
+  function addHost(preset) {
+    preset = preset || {};
+    var remove = el('button', { type: 'button', class: 'link', text: '删除' });
+    var chips = el('div', { class: 'chips' }, boot.components.map(function (component) {
+      var box = el('input', { type: 'checkbox', value: component.id });
+      box.checked = (preset.components || []).indexOf(component.id) >= 0;
+      return el('label', { title: component.name }, [box, document.createTextNode(component.id)]);
+    }));
+    var card = el('div', { class: 'card host' }, [
+      el('div', { class: 'card-head' }, [el('strong', { text: '部署主机' }), remove]),
+      el('div', { class: 'grid' }, [
+        field('主机 ID', 'id', { required: true, value: preset.id || '' }),
+        field('公网地址', 'address', { required: true }),
+        field('私网地址（可选）', 'private_address'),
+        field('地域', 'region', { value: preset.region || '' }),
+        field('SSH 端口', 'ssh_port', { type: 'number', value: preset.ssh_port || 22 }),
+        field('SSH 用户名', 'ssh_user', { required: true, value: preset.ssh_user || 'ubuntu' }),
+        field('SSH 密码', 'ssh_password', { type: 'password', secret: true, required: true }),
+        field('provider', 'provider', { value: preset.provider || 'tencent' }),
+        tlsField(preset.tls_mode)
+      ]),
+      el('fieldset', { class: 'components' }, [el('legend', { text: '放置的组件' }), chips])
+    ]);
+    remove.addEventListener('click', function () { card.remove(); });
+    $('hosts').append(card);
+    applyShow();
+  }
+  function readHost(card) {
+    function value(name) { return card.querySelector('[data-name="' + name + '"]').value; }
+    return {
+      id: value('id'), address: value('address'), private_address: value('private_address'), region: value('region'),
+      provider: value('provider'), tls_mode: value('tls_mode'), ssh_port: parseInt(value('ssh_port'), 10) || 0,
+      ssh_user: value('ssh_user'), ssh_password: value('ssh_password'),
+      components: Array.prototype.map.call(card.querySelectorAll('input[type=checkbox]:checked'), function (box) { return box.value; })
+    };
+  }
+  function gather() {
+    var body = {
+      admin: { username: $('admin-username').value, password: $('admin-password').value },
+      tencent: { secret_id: $('tencent-id').value, secret_key: $('tencent-key').value, region: $('tencent-region').value },
+      notification: { channel_type: $('notify-type').value, webhook_url: $('notify-url').value },
+      hosts: Array.prototype.map.call(document.querySelectorAll('#hosts .host'), readHost),
+      compile: null
+    };
+    if ($('compile-on').checked) {
+      body.compile = {
+        id: $('compile-id').value, address: $('compile-address').value, ssh_port: parseInt($('compile-port').value, 10) || 0,
+        ssh_user: $('compile-user').value, ssh_password: $('compile-password').value,
+        private_address: '', region: '', provider: '', tls_mode: '', components: []
+      };
+    }
+    return body;
+  }
+  function applyShow() {
+    var type = $('show').checked ? 'text' : 'password';
+    Array.prototype.forEach.call(document.querySelectorAll('[data-secret]'), function (input) { input.type = type; });
+  }
+  function showError(message) { var box = $('error'); box.textContent = message; box.hidden = false; box.scrollIntoView({ block: 'nearest' }); }
+
+  $('preset').addEventListener('click', function () {
+    $('hosts').replaceChildren();
+    boot.preset.forEach(addHost);
+  });
+  $('add-host').addEventListener('click', function () { addHost({}); });
+  $('show').addEventListener('change', applyShow);
+  $('compile-on').addEventListener('change', function () { $('compile-fields').hidden = !$('compile-on').checked; });
+  $('generate').addEventListener('click', function () {
+    var alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_@#%+=';
+    var random = new Uint32Array(20);
+    crypto.getRandomValues(random);
+    var password = '';
+    for (var i = 0; i < random.length; i++) password += alphabet.charAt(random[i] % alphabet.length);
+    var input = $('admin-password');
+    input.value = password;
+    input.type = 'text';
+  });
+
+  $('form').addEventListener('submit', function (event) {
+    event.preventDefault();
+    if (finished) return;
+    $('error').hidden = true;
+    var button = $('submit');
+    button.disabled = true;
+    fetch('submit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(gather()) })
+      .then(function (response) {
+        return response.json().catch(function () { return {}; }).then(function (data) { return { ok: response.ok, status: response.status, data: data }; });
+      })
+      .then(function (result) {
+        if (result.ok && result.data.ok) {
+          finished = true;
+          $('done').textContent = '已生成 ' + result.data.path + '（权限 0600）。可以关闭这个页面，回到终端继续。';
+          $('done').hidden = false;
+          $('form').hidden = true;
+          window.scrollTo(0, 0);
+          return;
+        }
+        showError(result.data.message || '提交失败（HTTP ' + result.status + '）');
+        button.disabled = false;
+      })
+      .catch(function () {
+        showError('连不上本机录入服务：页面可能已超时关闭，请重新运行命令。');
+        button.disabled = false;
+      });
+  });
+
+  boot.preset.forEach(addHost);
+})();
+</script>
+</body>
+</html>

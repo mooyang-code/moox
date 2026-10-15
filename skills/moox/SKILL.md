@@ -284,7 +284,9 @@ indexing or delivery errors, but never print CLS credentials.
 
 When initializing a fresh MooX system, follow
 [`references/custom-setup.md`](references/custom-setup.md) exactly. The user
-creates repository-root `moox.toml` before deployment. The Agent may test only
+creates repository-root `moox.toml` before deployment (preferably by running
+`moox-cli config init` and filling the local form in their own browser; the
+Agent never fills or reads it). The Agent may test only
 whether it exists and must never read, parse, print, copy, or source it outside
 `moox-cli setup`, except the `storage_gateway_host` confirmation in
 [`references/private-network.md`](references/private-network.md) when checking

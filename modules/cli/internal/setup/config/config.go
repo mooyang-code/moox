@@ -357,6 +357,19 @@ func Load(path, repositoryRoot string) (*Snapshot, error) {
 	}, nil
 }
 
+// Parse 按与 Load 相同的严格解码和校验解析 moox.toml 的内容，不读取文件，也不检查文件名与权限。
+// 生成配置的工具用它保证写出的文件一定能被 CLI 自己接受。
+func Parse(raw []byte) (Manifest, error) {
+	if len(raw) > maxFileSize {
+		return Manifest{}, fmt.Errorf("config_invalid: moox.toml exceeds 1 MiB")
+	}
+	var manifest Manifest
+	if err := decodeStrict(raw, &manifest); err != nil {
+		return Manifest{}, err
+	}
+	return manifest, nil
+}
+
 func (s *Snapshot) VerifyUnchanged() error {
 	info, raw, err := readSecureFile(s.path)
 	if err != nil {
