@@ -687,8 +687,9 @@ func (b *Backfiller) AutoScan(ctx context.Context, spaceID string) error {
 		if !watermark.IsZero() {
 			from = watermark.Add(-autoScanOverlap)
 		}
-		if from.Before(to.Add(-autoScanWindow)) {
-			// 追赶：每次只向前推进一个窗口。
+		if from.Before(to.Add(-autoScanWindow - autoScanOverlap)) {
+			// 追赶：每次只向前推进一个窗口。判断时扣掉向前重叠的部分，否则 1h 等低频数据集每到新的整点都会被误判为落后，
+			// 先扫到“整点 - 重叠”、下一轮再补到整点。
 			to = from.Add(autoScanWindow)
 		}
 		if !from.Before(to) {

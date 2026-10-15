@@ -123,13 +123,15 @@ func Health(ctx context.Context, plans PlanHistory, repo HealthStore, spaceID st
 			DatasetID: datasetID, Frequency: frequencyName, Subjects: len(last.Subjects), EffectiveFrom: time.Unix(segments[0].From, 0).UTC(),
 			ScannedUntil: watermarks[key], FailedChunks: failed[key], AbsentBars: absent[key],
 		}
-		// 与自动补采一致：当前应扫到“已过迟到容忍的最后一个完整周期”。
-		due := alignDown(frequency, now.Add(-time.Duration(last.LatenessS)*time.Second-frequency.NominalDuration()))
+		// 滞后是“超出预期多久”：自动补采只扫到 alignDown(now - 迟到容忍 - 一个周期)（不含），水位之后第一根未检查的
+		// K 线从 alignUp(水位) 开始，要到 它 + 两个周期 + 迟到容忍 才进入扫描范围，从那一刻起算。不能直接用
+		// “应扫到的时间 - 水位”，否则 1h 等低频数据集每个整点刚过、下一个扫描槽到来之前都会一下子“滞后”一个周期。
 		baseline := health.ScannedUntil
 		if baseline.IsZero() {
 			baseline = health.EffectiveFrom
 		}
-		health.Lag = max(due.Sub(baseline), 0)
+		expected := alignUp(frequency, baseline).Add(2*frequency.NominalDuration() + time.Duration(last.LatenessS)*time.Second)
+		health.Lag = max(now.Sub(expected), 0)
 		if stat := gaps[key]; stat != nil {
 			health.GapBars, health.GapSubjects = stat.bars, len(stat.subjects)
 		}
