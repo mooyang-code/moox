@@ -33,8 +33,6 @@ type CollectMgrService interface {
 	DisableTask(ctx context.Context, req *DisableTaskReq) (*DisableTaskRsp, error)
 
 	DeleteTask(ctx context.Context, req *DeleteTaskReq) (*DeleteTaskRsp, error)
-	// GetTaskInstanceList ----- 任务实例 -----
-	GetTaskInstanceList(ctx context.Context, req *GetTaskInstanceListReq) (*GetTaskInstanceListRsp, error)
 	// GetDataTypeConfigs ----- 数据类型配置 -----
 	GetDataTypeConfigs(ctx context.Context, req *GetDataTypeConfigsReq) (*GetDataTypeConfigsRsp, error)
 
@@ -57,8 +55,14 @@ type CollectMgrService interface {
 	ListKlineBackfills(ctx context.Context, req *ListKlineBackfillsReq) (*ListKlineBackfillsRsp, error)
 
 	CancelKlineBackfill(ctx context.Context, req *CancelKlineBackfillReq) (*CancelKlineBackfillRsp, error)
-	// GetFetchPlans ----- 采集计划 -----
-	GetFetchPlans(ctx context.Context, req *GetFetchPlansReq) (*GetFetchPlansRsp, error)
+
+	RetryKlineBackfill(ctx context.Context, req *RetryKlineBackfillReq) (*RetryKlineBackfillRsp, error)
+
+	ConfirmHistoryGaps(ctx context.Context, req *ConfirmHistoryGapsReq) (*ConfirmHistoryGapsRsp, error)
+
+	ClearSourceAbsences(ctx context.Context, req *ClearSourceAbsencesReq) (*ClearSourceAbsencesRsp, error)
+	// GetCollectorStatus ----- 运行状态与采集计划 -----
+	GetCollectorStatus(ctx context.Context, req *GetCollectorStatusReq) (*GetCollectorStatusRsp, error)
 
 	ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq) (*ReregisterFetchPlanRsp, error)
 }
@@ -179,24 +183,6 @@ func CollectMgrService_DeleteTask_Handler(svr interface{}, ctx context.Context, 
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(CollectMgrService).DeleteTask(ctx, reqbody.(*DeleteTaskReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func CollectMgrService_GetTaskInstanceList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetTaskInstanceListReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).GetTaskInstanceList(ctx, reqbody.(*GetTaskInstanceListReq))
 	}
 
 	var rsp interface{}
@@ -405,14 +391,68 @@ func CollectMgrService_CancelKlineBackfill_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
-func CollectMgrService_GetFetchPlans_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetFetchPlansReq{}
+func CollectMgrService_RetryKlineBackfill_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RetryKlineBackfillReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).GetFetchPlans(ctx, reqbody.(*GetFetchPlansReq))
+		return svr.(CollectMgrService).RetryKlineBackfill(ctx, reqbody.(*RetryKlineBackfillReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ConfirmHistoryGaps_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ConfirmHistoryGapsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ConfirmHistoryGaps(ctx, reqbody.(*ConfirmHistoryGapsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ClearSourceAbsences_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ClearSourceAbsencesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ClearSourceAbsences(ctx, reqbody.(*ClearSourceAbsencesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_GetCollectorStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetCollectorStatusReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).GetCollectorStatus(ctx, reqbody.(*GetCollectorStatusReq))
 	}
 
 	var rsp interface{}
@@ -475,10 +515,6 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CollectMgrService_DeleteTask_Handler,
 		},
 		{
-			Name: "/trpc.moox.collector.CollectMgr/GetTaskInstanceList",
-			Func: CollectMgrService_GetTaskInstanceList_Handler,
-		},
-		{
 			Name: "/trpc.moox.collector.CollectMgr/GetDataTypeConfigs",
 			Func: CollectMgrService_GetDataTypeConfigs_Handler,
 		},
@@ -523,8 +559,20 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CollectMgrService_CancelKlineBackfill_Handler,
 		},
 		{
-			Name: "/trpc.moox.collector.CollectMgr/GetFetchPlans",
-			Func: CollectMgrService_GetFetchPlans_Handler,
+			Name: "/trpc.moox.collector.CollectMgr/RetryKlineBackfill",
+			Func: CollectMgrService_RetryKlineBackfill_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ConfirmHistoryGaps",
+			Func: CollectMgrService_ConfirmHistoryGaps_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ClearSourceAbsences",
+			Func: CollectMgrService_ClearSourceAbsences_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/GetCollectorStatus",
+			Func: CollectMgrService_GetCollectorStatus_Handler,
 		},
 		{
 			Name: "/trpc.moox.collector.CollectMgr/ReregisterFetchPlan",
@@ -567,11 +615,6 @@ func (s *UnimplementedCollectMgr) DeleteTask(ctx context.Context, req *DeleteTas
 	return nil, errors.New("rpc DeleteTask of service CollectMgr is not implemented")
 }
 
-// GetTaskInstanceList ----- 任务实例 -----
-func (s *UnimplementedCollectMgr) GetTaskInstanceList(ctx context.Context, req *GetTaskInstanceListReq) (*GetTaskInstanceListRsp, error) {
-	return nil, errors.New("rpc GetTaskInstanceList of service CollectMgr is not implemented")
-}
-
 // GetDataTypeConfigs ----- 数据类型配置 -----
 func (s *UnimplementedCollectMgr) GetDataTypeConfigs(ctx context.Context, req *GetDataTypeConfigsReq) (*GetDataTypeConfigsRsp, error) {
 	return nil, errors.New("rpc GetDataTypeConfigs of service CollectMgr is not implemented")
@@ -610,10 +653,19 @@ func (s *UnimplementedCollectMgr) ListKlineBackfills(ctx context.Context, req *L
 func (s *UnimplementedCollectMgr) CancelKlineBackfill(ctx context.Context, req *CancelKlineBackfillReq) (*CancelKlineBackfillRsp, error) {
 	return nil, errors.New("rpc CancelKlineBackfill of service CollectMgr is not implemented")
 }
+func (s *UnimplementedCollectMgr) RetryKlineBackfill(ctx context.Context, req *RetryKlineBackfillReq) (*RetryKlineBackfillRsp, error) {
+	return nil, errors.New("rpc RetryKlineBackfill of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) ConfirmHistoryGaps(ctx context.Context, req *ConfirmHistoryGapsReq) (*ConfirmHistoryGapsRsp, error) {
+	return nil, errors.New("rpc ConfirmHistoryGaps of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) ClearSourceAbsences(ctx context.Context, req *ClearSourceAbsencesReq) (*ClearSourceAbsencesRsp, error) {
+	return nil, errors.New("rpc ClearSourceAbsences of service CollectMgr is not implemented")
+}
 
-// GetFetchPlans ----- 采集计划 -----
-func (s *UnimplementedCollectMgr) GetFetchPlans(ctx context.Context, req *GetFetchPlansReq) (*GetFetchPlansRsp, error) {
-	return nil, errors.New("rpc GetFetchPlans of service CollectMgr is not implemented")
+// GetCollectorStatus ----- 运行状态与采集计划 -----
+func (s *UnimplementedCollectMgr) GetCollectorStatus(ctx context.Context, req *GetCollectorStatusReq) (*GetCollectorStatusRsp, error) {
+	return nil, errors.New("rpc GetCollectorStatus of service CollectMgr is not implemented")
 }
 func (s *UnimplementedCollectMgr) ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq) (*ReregisterFetchPlanRsp, error) {
 	return nil, errors.New("rpc ReregisterFetchPlan of service CollectMgr is not implemented")
@@ -641,8 +693,6 @@ type CollectMgrClientProxy interface {
 	DisableTask(ctx context.Context, req *DisableTaskReq, opts ...client.Option) (rsp *DisableTaskRsp, err error)
 
 	DeleteTask(ctx context.Context, req *DeleteTaskReq, opts ...client.Option) (rsp *DeleteTaskRsp, err error)
-	// GetTaskInstanceList ----- 任务实例 -----
-	GetTaskInstanceList(ctx context.Context, req *GetTaskInstanceListReq, opts ...client.Option) (rsp *GetTaskInstanceListRsp, err error)
 	// GetDataTypeConfigs ----- 数据类型配置 -----
 	GetDataTypeConfigs(ctx context.Context, req *GetDataTypeConfigsReq, opts ...client.Option) (rsp *GetDataTypeConfigsRsp, err error)
 
@@ -665,8 +715,14 @@ type CollectMgrClientProxy interface {
 	ListKlineBackfills(ctx context.Context, req *ListKlineBackfillsReq, opts ...client.Option) (rsp *ListKlineBackfillsRsp, err error)
 
 	CancelKlineBackfill(ctx context.Context, req *CancelKlineBackfillReq, opts ...client.Option) (rsp *CancelKlineBackfillRsp, err error)
-	// GetFetchPlans ----- 采集计划 -----
-	GetFetchPlans(ctx context.Context, req *GetFetchPlansReq, opts ...client.Option) (rsp *GetFetchPlansRsp, err error)
+
+	RetryKlineBackfill(ctx context.Context, req *RetryKlineBackfillReq, opts ...client.Option) (rsp *RetryKlineBackfillRsp, err error)
+
+	ConfirmHistoryGaps(ctx context.Context, req *ConfirmHistoryGapsReq, opts ...client.Option) (rsp *ConfirmHistoryGapsRsp, err error)
+
+	ClearSourceAbsences(ctx context.Context, req *ClearSourceAbsencesReq, opts ...client.Option) (rsp *ClearSourceAbsencesRsp, err error)
+	// GetCollectorStatus ----- 运行状态与采集计划 -----
+	GetCollectorStatus(ctx context.Context, req *GetCollectorStatusReq, opts ...client.Option) (rsp *GetCollectorStatusRsp, err error)
 
 	ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq, opts ...client.Option) (rsp *ReregisterFetchPlanRsp, err error)
 }
@@ -814,26 +870,6 @@ func (c *CollectMgrClientProxyImpl) DeleteTask(ctx context.Context, req *DeleteT
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &DeleteTaskRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *CollectMgrClientProxyImpl) GetTaskInstanceList(ctx context.Context, req *GetTaskInstanceListReq, opts ...client.Option) (*GetTaskInstanceListRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetTaskInstanceList")
-	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("collector")
-	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("GetTaskInstanceList")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetTaskInstanceListRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -1060,20 +1096,80 @@ func (c *CollectMgrClientProxyImpl) CancelKlineBackfill(ctx context.Context, req
 	return rsp, nil
 }
 
-func (c *CollectMgrClientProxyImpl) GetFetchPlans(ctx context.Context, req *GetFetchPlansReq, opts ...client.Option) (*GetFetchPlansRsp, error) {
+func (c *CollectMgrClientProxyImpl) RetryKlineBackfill(ctx context.Context, req *RetryKlineBackfillReq, opts ...client.Option) (*RetryKlineBackfillRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetFetchPlans")
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/RetryKlineBackfill")
 	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("collector")
 	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("GetFetchPlans")
+	msg.WithCalleeMethod("RetryKlineBackfill")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetFetchPlansRsp{}
+	rsp := &RetryKlineBackfillRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ConfirmHistoryGaps(ctx context.Context, req *ConfirmHistoryGapsReq, opts ...client.Option) (*ConfirmHistoryGapsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ConfirmHistoryGaps")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ConfirmHistoryGaps")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ConfirmHistoryGapsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ClearSourceAbsences(ctx context.Context, req *ClearSourceAbsencesReq, opts ...client.Option) (*ClearSourceAbsencesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ClearSourceAbsences")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ClearSourceAbsences")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ClearSourceAbsencesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) GetCollectorStatus(ctx context.Context, req *GetCollectorStatusReq, opts ...client.Option) (*GetCollectorStatusRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetCollectorStatus")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("GetCollectorStatus")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetCollectorStatusRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

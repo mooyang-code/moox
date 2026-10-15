@@ -75,28 +75,8 @@ func TestPageHelpers_ShouldNormalizeBounds(t *testing.T) {
 	assert.Equal(t, uint32(120), result.GetTotal())
 }
 
-func TestToPBInstance_ShouldMapStatus(t *testing.T) {
-	now := time.Now().UTC()
-	instance := toPBInstance(domain.TaskInstance{
-		SpaceID: "crypto", InstanceID: "task-1", DataType: "kline", LastExecStatus: domain.InstanceStatusSuccess,
-		CreateTime: now, ModifyTime: now,
-	})
-	assert.Equal(t, "task-1", instance.GetInstanceId())
-	assert.Equal(t, pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS, instance.GetLastExecStatus())
-	encoded, err := protojson.Marshal(instance)
-	require.NoError(t, err)
-	assert.NotContains(t, string(encoded), "plannedExecNode")
-}
-
 func TestStatusAndJSONHelpers(t *testing.T) {
-	assert.Equal(t, pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PENDING, toPBStatus(domain.InstanceStatusPending))
-	assert.Equal(t, pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS, toPBStatus(domain.InstanceStatusSuccess))
-	assert.Equal(t, pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_FAILED, toPBStatus(domain.InstanceStatusFailed))
-	assert.Equal(t, domain.InstanceStatusSuccess, fromPBStatus(pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS))
-	assert.Equal(t, 0, fromPBStatus(pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_UNSPECIFIED))
-
 	assert.Equal(t, "", formatTime(time.Time{}))
-	assert.Equal(t, "", formatPtrTime(nil))
 	assert.Equal(t, "{}", jsonStringFromStruct(nil))
 	st := structFromJSONString(`{"k":"v"}`)
 	assert.Equal(t, "v", st.GetFields()["k"].GetStringValue())

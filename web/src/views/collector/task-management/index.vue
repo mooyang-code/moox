@@ -17,15 +17,15 @@ import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import CollectionTasks from "@/views/collector/collection-tasks/collection-tasks.vue";
-import TaskInstances from "@/views/collector/task-instances/task-instances.vue";
+import RuntimeStatus from "@/views/collector/runtime-status/runtime-status.vue";
 import CloudNode from "@/views/collector/cloud-node/cloud-node.vue";
 import TaskResults from "@/views/collector/task-results/index.vue";
 
-type CollectorTaskTab = "tasks" | "instances" | "executors" | "results";
+type CollectorTaskTab = "tasks" | "status" | "executors" | "results";
 
 const tabs = [
   { key: "tasks", label: "采集任务" },
-  { key: "instances", label: "采集实例" },
+  { key: "status", label: "运行状态" },
   { key: "executors", label: "执行器" },
   { key: "results", label: "采集结果" }
 ] as const;
@@ -40,14 +40,14 @@ const activeComponent = computed(
   () =>
     ({
       tasks: CollectionTasks,
-      instances: TaskInstances,
+      status: RuntimeStatus,
       executors: CloudNode,
       results: TaskResults
     })[activeTab.value]
 );
 
 function normalizeTab(value: unknown): CollectorTaskTab {
-  return value === "instances" || value === "executors" || value === "results" ? value : "tasks";
+  return value === "status" || value === "executors" || value === "results" ? value : "tasks";
 }
 
 function onTabChange(value: string | number) {

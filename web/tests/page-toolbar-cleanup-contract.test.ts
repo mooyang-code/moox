@@ -37,7 +37,6 @@ describe("page toolbar cleanup contract", () => {
       "collector/cloud-node/cloud-node.vue": ['@click="reset"'],
       "collector/cloud-node/function-package-manage.vue": ['@click="resetSearch"'],
       "collector/collection-tasks/collection-tasks.vue": ['@click="reset"'],
-      "collector/task-instances/task-instances.vue": ['@click="reset"'],
       "container/ssh-hosts/ssh-hosts.vue": ['@click="reset"'],
       "data/subjects/index.vue": ['<a-button :disabled="!selectedSpaceId" @click="load">', '<a-button @click="loadSymbols">'],
       "settings/secrets/index.vue": ['<a-button @click="load">'],

@@ -53,7 +53,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	}
 	var reconcilers sync.Map
 	var autoScans sync.Map
-	checker := &klinecheck.Checker{Plans: dbm.FetchPlans(), Rows: storageio.NewGatewayClient(process.gateway), Auth: auth}
+	checker := &klinecheck.Checker{Plans: dbm.FetchPlans(), Rows: storageio.NewGatewayClient(process.gateway), Auth: auth, Absences: dbm.Backfill()}
 	checkCalendar := newStockCNCheckCalendar()
 	checker.Calendar, checker.CalendarReady = checkCalendar.valid, checkCalendar.ready
 	backfiller := &klinecheck.Backfiller{

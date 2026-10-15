@@ -21,7 +21,6 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"github.com/rs/xid"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -745,63 +744,6 @@ func (s *Service) refreshRealtimeInventory(ctx context.Context) {
 	if err := s.inventory.Refresh(ctx); err != nil {
 		log.WarnContextf(ctx, "[Collector] refresh realtime dataset inventory failed: %v", err)
 	}
-}
-
-// GetTaskInstanceList returns task instances from the new collector DB.
-func (s *Service) GetTaskInstanceList(ctx context.Context, req *pb.GetTaskInstanceListReq) (*pb.GetTaskInstanceListRsp, error) {
-	filter := req.GetFilter()
-	if filter == nil || strings.TrimSpace(filter.GetSpaceId()) == "" {
-		return &pb.GetTaskInstanceListRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
-	}
-	spaceID := strings.TrimSpace(filter.GetSpaceId())
-	repoFilter := store.TaskInstanceFilter{Page: 1, PageSize: 50}
-	page, size := 1, 50
-	if filter != nil {
-		page, size = pageParams(filter.GetPage())
-		repoFilter.SpaceID = spaceID
-		repoFilter.CollectionTaskID = filter.GetTaskId()
-		repoFilter.InstanceID = filter.GetInstanceId()
-		repoFilter.Provider = filter.GetProvider()
-		repoFilter.SourceID = filter.GetSourceId()
-		repoFilter.MarketType = filter.GetMarketType()
-		repoFilter.DataType = filter.GetDataType()
-		repoFilter.DatasetID = filter.GetDatasetId()
-		repoFilter.SubjectID = filter.GetSubjectId()
-		repoFilter.Frequency = filter.GetFrequency()
-		repoFilter.FunctionName = filter.GetFunctionName()
-		repoFilter.IncludeDeleted = filter.GetIncludeDeleted()
-		repoFilter.Page = page
-		repoFilter.PageSize = size
-		if filter.GetLastExecStatus() != pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_UNSPECIFIED {
-			status := fromPBStatus(filter.GetLastExecStatus())
-			repoFilter.LastExecStatus = &status
-		}
-	}
-	instances, hasMore, err := s.instanceRepo.ListPage(ctx, repoFilter)
-	if err != nil {
-		log.ErrorContextf(ctx, "[Collector] list task instances failed: %v", err)
-		return &pb.GetTaskInstanceListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-	}
-	instanceIDs := make([]string, 0, len(instances))
-	for _, instance := range instances {
-		instanceIDs = append(instanceIDs, instance.InstanceID)
-	}
-	targetsByInstance, targetsErr := s.instanceRepo.ListWriteTargetsForInstances(ctx, spaceID, instanceIDs)
-	if targetsErr != nil {
-		log.ErrorContextf(ctx, "[Collector] list task instance write targets failed: %v", targetsErr)
-		return &pb.GetTaskInstanceListRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, targetsErr.Error())}, nil
-	}
-	out := make([]*pb.TaskInstance, 0, len(instances))
-	for _, instance := range instances {
-		item := toPBInstance(instance)
-		for _, target := range targetsByInstance[instance.InstanceID] {
-			item.Targets = append(item.Targets, toPBWriteTarget(target))
-		}
-		out = append(out, item)
-	}
-	return &pb.GetTaskInstanceListRsp{RetInfo: retOK(), Instances: out, Page: &pb.PageResult{
-		Page: uint32(page), Size: uint32(size), HasMore: hasMore, TotalState: commonpb.TotalState_SKIPPED,
-	}}, nil
 }
 
 // GetDataTypeConfigs returns the currently supported collection task data types.

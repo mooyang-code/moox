@@ -2,6 +2,7 @@ package klinecheck
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -16,7 +18,8 @@ import (
 //
 // 采集计划只记录“从哪个周期起实时采集”，更早的数据来自旧的采集方式或历史导入，检查与自动补采都不看这段时间，
 // 那里的孔洞（例如一次写入故障漏掉的一根 K 线）没有任何东西会发现。这里按数据集定期读回生效点之前的一段，
-// 报告其中的缺口；只告警不补采：更早时间的标的集合与行情源能力已无记录，由操作员确认后用 force 补采。
+// 把扣除已确认行情源缺失后的缺口记进库里，不自动补采：由操作员确认（ConfirmHistory）后精确补采这些缺口，
+// 行情源本来没有的部分在补采时被确认，以后不再报告。
 
 const (
 	// historyScanBars 是每次向前读回的 K 线根数（相对数据集最早的生效点）。
@@ -29,19 +32,21 @@ const (
 	historyRetryAfter = time.Hour
 	// maxHistoryGapLogs 是一次扫描最多逐条记录的缺口组数，其余只在汇总里计数。
 	maxHistoryGapLogs = 50
+	// maxStoredHistoryGaps 是库里保存的缺口组数上限（供确认补采），超过时只保存前面的组。
+	maxStoredHistoryGaps = 200
 	// historySampleSubjects 是每组缺口日志里列出的标的样例数。
 	historySampleSubjects = 5
 )
 
 // HistoryGap 是同一个数据集里范围相同的历史缺口，合并了所有受影响的标的。
 type HistoryGap struct {
-	DatasetID string
-	Frequency string
-	From      time.Time
-	To        time.Time
+	DatasetID string    `json:"dataset_id"`
+	Frequency string    `json:"frequency"`
+	From      time.Time `json:"from"`
+	To        time.Time `json:"to"`
 	// Missing 是每个受影响标的在 [From, To) 内缺的根数。
-	Missing  int
-	Subjects []string
+	Missing  int      `json:"missing"`
+	Subjects []string `json:"subjects"`
 }
 
 // HistoryResult 是一个数据集（某个频率）生效点之前一段历史的检查结果。
@@ -117,16 +122,32 @@ func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequenc
 			defer wg.Done()
 			defer func() { <-slots }()
 			present, err := c.readPresent(ctx, spaceID, datasetID, frequencyName, batch, bars[0], bars[len(bars)-1].Add(time.Second), []string{"close"}, false)
-			mu.Lock()
-			defer mu.Unlock()
 			if err != nil {
+				mu.Lock()
+				defer mu.Unlock()
 				if firstErr == nil {
 					firstErr = fmt.Errorf("read history %s %s %s 等 %d 个标的: %w", datasetID, frequencyName, batch[0], len(batch), err)
 				}
 				return
 			}
+			starts := make(map[string]int, len(batch))
 			for _, subject := range batch {
-				start := firstPresent(bars, present[subject])
+				starts[subject] = firstPresent(bars, present[subject])
+			}
+			// 先按真实数据定位每个标的的第一根，再扣除已确认的行情源缺失。
+			if _, coverErr := c.coverAbsences(ctx, spaceID, datasetID, frequencyName, batch, bars, present); coverErr != nil {
+				err = coverErr
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				return
+			}
+			for _, subject := range batch {
+				start := starts[subject]
 				if start < 0 {
 					continue
 				}
@@ -188,14 +209,13 @@ func groupHistoryGaps(gaps []Gap) []HistoryGap {
 	return out
 }
 
-// ScanHistory 在自动补采之后调用：每个空间每 historyScanSpacing 最多扫一个数据集，每个数据集每 historyScanInterval 扫一次，
-// 把发现的历史缺口写进日志（只告警，不补采）。返回本次扫描的数据集结果；没有到期的数据集时返回 nil。
+// ScanHistory 在自动补采之后调用：每个空间每 historyScanSpacing 最多扫一个数据集，每个数据集每 historyScanInterval 扫一次
+// （上次失败的 historyRetryAfter 后重试），把结果记进库里并写日志。返回本次扫描的数据集结果；没有到期的数据集时返回 nil。
 func (b *Backfiller) ScanHistory(ctx context.Context, spaceID string) (*HistoryResult, error) {
 	now := b.now()
 	b.mu.Lock()
 	if b.lastHistoryRun == nil {
 		b.lastHistoryRun = map[string]time.Time{}
-		b.lastHistory = map[string]time.Time{}
 	}
 	if now.Sub(b.lastHistoryRun[spaceID]) < historyScanSpacing {
 		b.mu.Unlock()
@@ -211,39 +231,98 @@ func (b *Backfiller) ScanHistory(ctx context.Context, spaceID string) (*HistoryR
 	if err != nil {
 		return nil, err
 	}
+	scans, err := b.Store.HistoryScans(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
 	keys := make([]string, 0, len(timeline))
 	for key := range timeline {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-
-	b.mu.Lock()
 	var due string
 	for _, key := range keys {
-		if now.Sub(b.lastHistory[spaceID+"|"+key]) >= historyScanInterval {
+		scan, scanned := scans[key]
+		wait := historyScanInterval
+		if scan.LastError != "" {
+			wait = historyRetryAfter
+		}
+		if !scanned || now.Sub(scan.ScannedAt) >= wait {
 			due = key
 			break
 		}
 	}
 	if due == "" {
-		b.mu.Unlock()
 		return nil, nil
 	}
+	b.mu.Lock()
 	b.lastHistoryRun[spaceID] = now
-	b.lastHistory[spaceID+"|"+due] = now
 	b.mu.Unlock()
 
 	datasetID, frequencyName, _ := strings.Cut(due, "|")
 	result, err := b.Checker.CheckHistory(ctx, spaceID, datasetID, frequencyName)
 	if err != nil {
-		// 失败（含被取消）后一小时再试，不等一整天。
-		b.mu.Lock()
-		b.lastHistory[spaceID+"|"+due] = now.Add(historyRetryAfter - historyScanInterval)
-		b.mu.Unlock()
+		if saveErr := b.Store.SaveHistoryScan(ctx, store.HistoryScan{SpaceID: spaceID, DatasetID: datasetID, Frequency: frequencyName, ScannedAt: now, LastError: err.Error()}); saveErr != nil {
+			log.WarnContextf(ctx, "collector history scan state write failed space=%s dataset=%s: %v", spaceID, due, saveErr)
+		}
 		return nil, fmt.Errorf("history scan %s: %w", due, err)
+	}
+	if err := b.Store.SaveHistoryScan(ctx, historyScanOf(spaceID, now, result)); err != nil {
+		return nil, fmt.Errorf("save history scan %s: %w", due, err)
 	}
 	logHistory(ctx, spaceID, result)
 	return result, nil
+}
+
+// historyScanOf 把扫描结果转成库里的记录：缺口根数按“每组根数 × 标的数”累计，标的数去重。
+func historyScanOf(spaceID string, at time.Time, result *HistoryResult) store.HistoryScan {
+	scan := store.HistoryScan{SpaceID: spaceID, DatasetID: result.DatasetID, Frequency: result.Frequency, ScannedAt: at, From: result.From, To: result.To}
+	subjects := map[string]bool{}
+	for _, gap := range result.Gaps {
+		scan.GapBars += gap.Missing * len(gap.Subjects)
+		for _, subject := range gap.Subjects {
+			subjects[subject] = true
+		}
+	}
+	scan.GapSubjects = len(subjects)
+	stored := result.Gaps
+	if len(stored) > maxStoredHistoryGaps {
+		stored = stored[:maxStoredHistoryGaps]
+	}
+	if stored == nil {
+		stored = []HistoryGap{}
+	}
+	raw, _ := json.Marshal(stored)
+	scan.Gaps = string(raw)
+	return scan
+}
+
+// ConfirmHistory 按最近一次历史扫描记下的缺口建立补采作业：只补这些缺口，补完复查仍缺的部分确认为行情源没有。
+// 没有缺口时返回空作业 ID。
+func (b *Backfiller) ConfirmHistory(ctx context.Context, spaceID, datasetID, frequency string) (string, int, error) {
+	scans, err := b.Store.HistoryScans(ctx, spaceID)
+	if err != nil {
+		return "", 0, err
+	}
+	scan, ok := scans[DatasetKey(datasetID, frequency)]
+	if !ok || scan.GapBars == 0 {
+		return "", 0, nil
+	}
+	var groups []HistoryGap
+	if err := json.Unmarshal([]byte(scan.Gaps), &groups); err != nil {
+		return "", 0, fmt.Errorf("decode history gaps: %w", err)
+	}
+	var gaps []Gap
+	job := store.BackfillJob{SpaceID: spaceID, Source: store.BackfillSourceManual, Kind: store.BackfillKindHistory, DatasetID: datasetID, Frequency: frequency, From: scan.From, To: scan.To}
+	for _, group := range groups {
+		for _, subject := range group.Subjects {
+			gaps = append(gaps, Gap{DatasetID: datasetID, Frequency: frequency, SubjectID: subject, From: group.From, To: group.To, Missing: group.Missing})
+		}
+	}
+	if len(gaps) == 0 {
+		return "", 0, nil
+	}
+	return b.createJob(ctx, job, gaps, MaxChunksPerJob)
 }
 
 // logHistory 写扫描汇总与逐组缺口。缺口日志带上范围和补采命令，操作员确认行情源有这些 K 线后直接使用。
@@ -260,8 +339,8 @@ func logHistory(ctx context.Context, spaceID string, result *HistoryResult) {
 		}
 		sample := gap.Subjects[:min(len(gap.Subjects), historySampleSubjects)]
 		log.WarnContextf(ctx, "collector_history_gap space=%s dataset=%s frequency=%s from=%s to=%s missing_bars=%d subjects=%d sample=%s "+
-			"hint=该范围早于数据集最早的采集计划生效点，检查与自动补采看不到；确认行情源有这些 K 线后用 moox-cli collector kline backfill --force --space-id %s --dataset-id %s --from %s --to %s 补采（行情源本来没有的 K 线，如尚未上市或无成交，可忽略）",
+			"hint=该范围早于数据集最早的采集计划生效点，检查与自动补采看不到；在运行状态页点“补采确认”或用 moox-cli collector kline history-confirm --space-id %s --dataset-id %s --frequency %s 补采，行情源本来没有的 K 线会被确认并不再报告",
 			spaceID, gap.DatasetID, gap.Frequency, gap.From.Format(time.RFC3339), gap.To.Format(time.RFC3339), gap.Missing, len(gap.Subjects), strings.Join(sample, ","),
-			spaceID, gap.DatasetID, gap.From.Format(time.RFC3339), gap.To.Format(time.RFC3339))
+			spaceID, gap.DatasetID, gap.Frequency)
 	}
 }

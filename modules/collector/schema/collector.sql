@@ -276,33 +276,50 @@ BEGIN
     UPDATE t_collector_fetch_plans SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
+-- 旧版补采表：范围存成 JSON、缺少缺失判定列，改名重建；作业是可重建的运行状态，直接删除。
+DROP TABLE IF EXISTS t_collector_backfill_chunks;
+DROP TABLE IF EXISTS t_collector_backfill_jobs;
+
 -- K 线补采作业：一个作业拆成若干（数据集、标的、时间段）分块。
-CREATE TABLE IF NOT EXISTS t_collector_backfill_jobs (
+-- c_dataset_id、c_frequency、c_subject_id 为空表示全部；c_kind 取 gap（按缺口）、force（整段重拉）、history（确认历史缺口）。
+CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_jobs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_job_id TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
     c_source TEXT NOT NULL DEFAULT 'manual',
-    c_request TEXT NOT NULL,
+    c_kind TEXT NOT NULL DEFAULT 'gap',
+    c_dataset_id TEXT NOT NULL DEFAULT '',
+    c_frequency TEXT NOT NULL DEFAULT '',
+    c_subject_id TEXT NOT NULL DEFAULT '',
+    c_from DATETIME NOT NULL,
+    c_to DATETIME NOT NULL,
+    c_advance_watermark INTEGER NOT NULL DEFAULT 0,
     c_status TEXT NOT NULL DEFAULT 'pending',
     c_last_error TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_source IN ('manual', 'auto')),
+    CHECK (c_kind IN ('gap', 'force', 'history')),
     CHECK (c_status IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
     UNIQUE (c_job_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_collector_backfill_jobs_space ON t_collector_backfill_jobs (c_space_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_collector_kline_backfill_jobs_space ON t_collector_kline_backfill_jobs (c_space_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_collector_kline_backfill_jobs_source
+ON t_collector_kline_backfill_jobs (c_space_id, c_source, c_ctime);
+CREATE INDEX IF NOT EXISTS idx_t_collector_kline_backfill_jobs_retention
+ON t_collector_kline_backfill_jobs (c_space_id, c_mtime);
 
-CREATE TRIGGER IF NOT EXISTS trg_t_collector_backfill_jobs_mtime
-AFTER UPDATE ON t_collector_backfill_jobs
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_kline_backfill_jobs_mtime
+AFTER UPDATE ON t_collector_kline_backfill_jobs
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_collector_backfill_jobs SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+    UPDATE t_collector_kline_backfill_jobs SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
-CREATE TABLE IF NOT EXISTS t_collector_backfill_chunks (
+-- c_missing 是上一次执行后复查仍缺的 K 线（规范化区间串）：连续两次一致才确认是行情源没有。
+CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_chunks (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_job_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
@@ -314,6 +331,7 @@ CREATE TABLE IF NOT EXISTS t_collector_backfill_chunks (
     c_status TEXT NOT NULL DEFAULT 'pending',
     c_attempts INTEGER NOT NULL DEFAULT 0,
     c_rows INTEGER NOT NULL DEFAULT 0,
+    c_missing TEXT NOT NULL DEFAULT '',
     c_started_at DATETIME,
     c_latest_end_at DATETIME,
     c_last_error TEXT NOT NULL DEFAULT '',
@@ -322,15 +340,44 @@ CREATE TABLE IF NOT EXISTS t_collector_backfill_chunks (
     UNIQUE (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_from)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_collector_backfill_chunks_job ON t_collector_backfill_chunks (c_job_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_collector_kline_backfill_chunks_job ON t_collector_kline_backfill_chunks (c_job_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_collector_kline_backfill_chunks_status ON t_collector_kline_backfill_chunks (c_status, c_mtime);
 
-CREATE TRIGGER IF NOT EXISTS trg_t_collector_backfill_chunks_mtime
-AFTER UPDATE ON t_collector_backfill_chunks
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_kline_backfill_chunks_mtime
+AFTER UPDATE ON t_collector_kline_backfill_chunks
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_collector_backfill_chunks SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+    UPDATE t_collector_kline_backfill_chunks SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
+
+-- 已确认“行情源没有”的 K 线：补采成功后复查仍缺且结果一致的连续区间，检查与补采都扣除。
+CREATE TABLE IF NOT EXISTS t_collector_source_absences (
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_subject_id TEXT NOT NULL,
+    c_from DATETIME NOT NULL,
+    c_to DATETIME NOT NULL,
+    c_bars INTEGER NOT NULL DEFAULT 0,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_from)
+);
+
+-- 每个数据集最近一次历史缺口扫描（早于最早生效点的一段历史）的结果；c_gaps 是缺口分组 JSON，供确认补采。
+CREATE TABLE IF NOT EXISTS t_collector_history_scans (
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_scanned_at DATETIME NOT NULL,
+    c_from DATETIME,
+    c_to DATETIME,
+    c_gap_bars INTEGER NOT NULL DEFAULT 0,
+    c_gap_subjects INTEGER NOT NULL DEFAULT 0,
+    c_gaps TEXT NOT NULL DEFAULT '[]',
+    c_last_error TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (c_space_id, c_dataset_id, c_frequency)
+);
 
 -- 自动补采的扫描水位：已扫描到哪个时间点。
 CREATE TABLE IF NOT EXISTS t_collector_backfill_watermarks (

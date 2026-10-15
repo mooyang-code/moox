@@ -44,23 +44,23 @@ const (
 	chunkSafetyMargin = 30 * time.Second
 )
 
-// JobRequest 是补采作业的范围，保存在作业记录里。
+// JobRequest 是补采作业的范围。
 type JobRequest struct {
-	SpaceID   string    `json:"space_id"`
-	DatasetID string    `json:"dataset_id,omitempty"`
-	SubjectID string    `json:"subject_id,omitempty"`
-	From      time.Time `json:"from"`
-	To        time.Time `json:"to"`
+	SpaceID   string
+	DatasetID string
+	SubjectID string
+	From      time.Time
+	To        time.Time
 	// Force 为 true 时不检查缺口，范围内应有的 K 线全部重拉。
-	Force bool `json:"force,omitempty"`
+	Force bool
 	// Watermark 非空表示这是自动补采作业：作业成功后才把该数据集的扫描水位推进到 To。
-	Watermark *WatermarkTarget `json:"watermark,omitempty"`
+	Watermark *WatermarkTarget
 }
 
 // WatermarkTarget 标识自动补采作业成功后要推进水位的数据集与频率。
 type WatermarkTarget struct {
-	DatasetID string `json:"dataset_id"`
-	Frequency string `json:"frequency"`
+	DatasetID string
+	Frequency string
 }
 
 // BackfillStore 是补采需要的持久化接口，由 *store.BackfillRepository 实现。
@@ -68,17 +68,24 @@ type BackfillStore interface {
 	CreateJob(context.Context, store.BackfillJob, []store.BackfillChunk) error
 	GetJob(context.Context, string) (*store.BackfillJob, []store.BackfillChunk, error)
 	ActiveJobs(context.Context, string) ([]store.BackfillJob, error)
-	ListJobs(context.Context, string, int, int) ([]store.BackfillJob, int64, error)
+	ListJobs(context.Context, string, store.BackfillJobFilter, int, int) ([]store.BackfillJob, int64, error)
 	SetJobStatus(context.Context, string, string, string) error
 	CancelJob(context.Context, string) error
+	RetryJob(context.Context, string) (int, error)
 	ClaimChunks(context.Context, string, int, time.Time) ([]store.BackfillChunk, error)
 	InFlightChunks(context.Context, string) (int, error)
 	FinishChunk(context.Context, int64, int, string, int, string) error
+	RequeueChunk(context.Context, int64, int, string, string) error
 	RenewChunk(context.Context, int64, int, time.Time) error
 	ReleaseChunk(context.Context, int64, int) error
 	ChunkStatusCounts(context.Context, string) (map[string]int, error)
+	ChunkStatusCountsOf(context.Context, []string) (map[string]map[string]int, error)
 	Watermark(context.Context, string, string, string) (time.Time, error)
 	SetWatermark(context.Context, string, string, string, time.Time) error
+	AddAbsences(context.Context, []store.SourceAbsence) error
+	ClearAbsences(context.Context, string, string, string) (int64, error)
+	HistoryScans(context.Context, string) (map[string]store.HistoryScan, error)
+	SaveHistoryScan(context.Context, store.HistoryScan) error
 }
 
 // FunctionProvider 保证补采函数存在并返回函数名。
@@ -108,24 +115,12 @@ type Backfiller struct {
 
 	mu       sync.Mutex
 	lastScan map[string]time.Time
-	// absent 记录“补采成功后行情源仍然没有”的 K 线（例如冷门标的某分钟没有成交）。
-	// 它们不再被自动补采重复提交；只存在于内存，到期或重启后会重新尝试一次。
-	absent map[absentKey]time.Time
-	// lastHistoryRun 是每个空间最近一次历史缺口扫描的时间，lastHistory 是每个（空间|数据集|频率）最近一次的时间（见 ScanHistory）。
+	// lastHistoryRun 是每个空间最近一次历史缺口扫描的时间（见 ScanHistory）；每个数据集的扫描记录保存在库里。
 	lastHistoryRun map[string]time.Time
-	lastHistory    map[string]time.Time
 	workers        sync.WaitGroup
 	// tickMu 串行化认领，避免补位与调度节拍同时超出并发上限。
 	tickMu sync.Mutex
 }
-
-type absentKey struct {
-	spaceID, datasetID, frequency, subjectID string
-	barStart                                 int64
-}
-
-// absentTTL 是“行情源没有这根 K 线”的记忆时长。
-const absentTTL = 6 * time.Hour
 
 func (b *Backfiller) now() time.Time {
 	if b.Now != nil {
@@ -183,18 +178,30 @@ func (b *Backfiller) submit(ctx context.Context, request JobRequest, source stri
 	if err != nil {
 		return "", 0, err
 	}
-	if source == "auto" {
-		result.Gaps = b.dropAbsent(request.SpaceID, result.Gaps)
-	}
 	if len(result.Gaps) == 0 {
 		return "", 0, nil
 	}
 	if result.Truncated {
 		return "", 0, fmt.Errorf("%w: more than %d gaps", errTooManyChunks, MaxGaps)
 	}
+	job := store.BackfillJob{SpaceID: request.SpaceID, Source: source, Kind: store.BackfillKindGap, DatasetID: request.DatasetID, SubjectID: request.SubjectID, From: request.From, To: request.To}
+	if request.Force {
+		job.Kind = store.BackfillKindForce
+	}
+	if request.Watermark != nil {
+		job.DatasetID, job.Frequency, job.AdvanceWatermark = request.Watermark.DatasetID, request.Watermark.Frequency, true
+	}
+	return b.createJob(ctx, job, result.Gaps, maxChunks)
+}
+
+// createJob 把缺口拆成分块并保存作业，返回作业 ID 与分块数。作业没写频率时，若全部缺口属于同一频率就补上。
+func (b *Backfiller) createJob(ctx context.Context, job store.BackfillJob, gaps []Gap, maxChunks int) (string, int, error) {
 	jobID := uuid.NewString()
+	job.JobID = jobID
+	frequencies := map[string]bool{}
 	var chunks []store.BackfillChunk
-	for _, gap := range result.Gaps {
+	for _, gap := range gaps {
+		frequencies[gap.Frequency] = true
 		frequency, err := marketdata.ParseFrequency(gap.Frequency)
 		if err != nil {
 			return "", 0, err
@@ -206,19 +213,25 @@ func (b *Backfiller) submit(ctx context.Context, request JobRequest, source stri
 	if len(chunks) > maxChunks {
 		return "", 0, fmt.Errorf("%w: %d chunks (limit %d)", errTooManyChunks, len(chunks), maxChunks)
 	}
-	raw, _ := json.Marshal(request)
-	if err := b.Store.CreateJob(ctx, store.BackfillJob{JobID: jobID, SpaceID: request.SpaceID, Source: source, Request: string(raw)}, chunks); err != nil {
+	if job.Frequency == "" && len(frequencies) == 1 {
+		for frequency := range frequencies {
+			job.Frequency = frequency
+		}
+	}
+	if err := b.Store.CreateJob(ctx, job, chunks); err != nil {
 		return "", 0, err
 	}
 	return jobID, len(chunks), nil
 }
 
-// JobStatus 是作业的进度。
+// JobStatus 是作业的进度；Failed 只在查询单个作业时填写，至多 maxFailedChunks 个。
 type JobStatus struct {
 	Job    store.BackfillJob
 	Counts map[string]int
 	Failed []store.BackfillChunk
 }
+
+const maxFailedChunks = 50
 
 // Status 返回作业进度与失败的分块。
 func (b *Backfiller) Status(ctx context.Context, jobID string) (*JobStatus, error) {
@@ -232,26 +245,34 @@ func (b *Backfiller) Status(ctx context.Context, jobID string) (*JobStatus, erro
 	status := &JobStatus{Job: *job, Counts: map[string]int{}}
 	for _, chunk := range chunks {
 		status.Counts[chunk.Status]++
-		if chunk.Status == store.BackfillFailed && len(status.Failed) < 20 {
+		if chunk.Status == store.BackfillFailed && len(status.Failed) < maxFailedChunks {
 			status.Failed = append(status.Failed, chunk)
 		}
 	}
 	return status, nil
 }
 
-// List 分页返回空间的补采作业及各状态的分块数。
-func (b *Backfiller) List(ctx context.Context, spaceID string, page, size int) ([]JobStatus, int64, error) {
-	jobs, total, err := b.Store.ListJobs(ctx, spaceID, page, size)
+// List 分页返回空间符合筛选的补采作业及各状态的分块数。
+func (b *Backfiller) List(ctx context.Context, spaceID string, filter store.BackfillJobFilter, page, size int) ([]JobStatus, int64, error) {
+	jobs, total, err := b.Store.ListJobs(ctx, spaceID, filter, page, size)
+	if err != nil {
+		return nil, 0, err
+	}
+	jobIDs := make([]string, 0, len(jobs))
+	for _, job := range jobs {
+		jobIDs = append(jobIDs, job.JobID)
+	}
+	counts, err := b.Store.ChunkStatusCountsOf(ctx, jobIDs)
 	if err != nil {
 		return nil, 0, err
 	}
 	items := make([]JobStatus, 0, len(jobs))
 	for _, job := range jobs {
-		counts, err := b.Store.ChunkStatusCounts(ctx, job.JobID)
-		if err != nil {
-			return nil, 0, err
+		jobCounts := counts[job.JobID]
+		if jobCounts == nil {
+			jobCounts = map[string]int{}
 		}
-		items = append(items, JobStatus{Job: job, Counts: counts})
+		items = append(items, JobStatus{Job: job, Counts: jobCounts})
 	}
 	return items, total, nil
 }
@@ -259,6 +280,16 @@ func (b *Backfiller) List(ctx context.Context, spaceID string, page, size int) (
 // Cancel 取消作业：尚未开始的分块不再执行，运行中的分块等其结束。
 func (b *Backfiller) Cancel(ctx context.Context, jobID string) error {
 	return b.Store.CancelJob(ctx, jobID)
+}
+
+// Retry 把已失败作业的失败分块退回待执行，由下一次调度继续执行；返回退回的分块数。
+func (b *Backfiller) Retry(ctx context.Context, jobID string) (int, error) {
+	return b.Store.RetryJob(ctx, jobID)
+}
+
+// ClearAbsences 清掉一个数据集已确认的行情源缺失，并让历史扫描重新进行；返回清掉的区间数。
+func (b *Backfiller) ClearAbsences(ctx context.Context, spaceID, datasetID, frequency string) (int64, error) {
+	return b.Store.ClearAbsences(ctx, spaceID, datasetID, frequency)
 }
 
 // Tick 推进该空间的补采作业：在名额内认领分块并异步执行，作业全部结束后标记结果。
@@ -454,7 +485,11 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		}
 	}
 	if chunk.Attempts > maxChunkAttempts {
-		fail(fmt.Errorf("gave up after %d attempts", chunk.Attempts-1))
+		reason := fmt.Sprintf("gave up after %d attempts", chunk.Attempts-1)
+		if chunk.LastError != "" {
+			reason += ": " + chunk.LastError
+		}
+		fail(errors.New(reason))
 		return
 	}
 	plan, err := b.datasetMarket(ctx, spaceID, chunk.DatasetID, chunk.Frequency, chunk.SubjectID, chunk.From)
@@ -500,8 +535,8 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		log.WarnContextf(ctx, "collector backfill invoke outcome unknown space=%s chunk=%s: %v", spaceID, chunk.ChunkID, err)
 		return
 	}
-	if success, _ := result.Result["success"].(bool); !success && !(bars(chunk) == 1 && sourceReportedEmpty(result)) {
-		// 单根分块且函数只因“行情源没有已收盘 K 线”失败时，不算执行失败，继续走下面的复查与缺失判定。
+	if success, _ := result.Result["success"].(bool); !success && !sourceReportedEmpty(result) {
+		// 函数只因“行情源没有已收盘 K 线”失败时不算执行失败，继续走下面的复查与缺失判定。
 		fail(fmt.Errorf("function reported failure: code=%d message=%q result=%v", result.Code, result.Message, result.Result))
 		return
 	}
@@ -511,23 +546,31 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		fail(fmt.Errorf("verify chunk: %w", err))
 		return
 	}
+	finished = true
 	note := ""
-	rows := bars(chunk)
-	if check.Missing > 0 && bars(chunk) > 1 {
-		// 多根分块只写入了一部分时无法判断剩下的是行情源没有还是暂时缺失：按失败处理，保持重试。
-		fail(fmt.Errorf("%d bars are still missing after the backfill", check.Missing))
-		return
-	}
+	rows := bars(chunk) - check.Absent
 	if check.Missing > 0 {
-		// 单根分块：函数已成功执行且写入没有出错，复查仍缺的 K 线是行情源本身没有的（没有成交的分钟等）。
-		// 记下来不再重复补，分块按成功结束，缺口数写进说明。
-		b.markAbsent(spaceID, chunk, check.Gaps)
+		missing := missingKey(check.Gaps)
+		if bars(chunk) > 1 && missing != chunk.Missing {
+			// 函数已成功执行，但复查仍缺一部分：可能是行情源没有，也可能是暂时缺失。记下这次缺的 K 线退回重跑，
+			// 连续两次缺的完全一样才认定是行情源没有；超过最大尝试次数仍不一致时由下一次认领标记失败。
+			note = fmt.Sprintf("%d bars are still missing after the backfill", check.Missing)
+			if err := b.Store.RequeueChunk(ctx, chunk.ID, chunk.Attempts, missing, note); err != nil {
+				log.WarnContextf(ctx, "collector backfill chunk requeue failed chunk=%s: %v", chunk.ChunkID, err)
+			}
+			return finished
+		}
+		// 单根分块、或连续两次缺的一样：这些 K 线是行情源本身没有的（没有成交的分钟、停牌等）。
+		// 写进已确认缺失，检查与补采以后都扣除它们；分块按成功结束，缺口数写进说明。
+		if err := b.Store.AddAbsences(ctx, absencesOf(spaceID, check.Gaps)); err != nil {
+			fail(fmt.Errorf("record source absences: %w", err))
+			return
+		}
 		rows -= check.Missing
 		note = fmt.Sprintf("%d bars are absent at the source", check.Missing)
 		log.InfoContextf(ctx, "collector backfill chunk finished with source gaps space=%s chunk=%s missing=%d", spaceID, chunk.ChunkID, check.Missing)
 	}
-	finished = true
-	if err := b.Store.FinishChunk(ctx, chunk.ID, chunk.Attempts, store.BackfillSucceeded, rows, note); err != nil {
+	if err := b.Store.FinishChunk(ctx, chunk.ID, chunk.Attempts, store.BackfillSucceeded, max(rows, 0), note); err != nil {
 		log.WarnContextf(ctx, "collector backfill chunk state write failed chunk=%s: %v", chunk.ChunkID, err)
 	}
 	return finished
@@ -539,66 +582,22 @@ func sourceReportedEmpty(result scfinvoker.InvocationResult) bool {
 	return strings.Contains(text, strings.ToLower(marketdata.ErrNoClosedBar.Error()))
 }
 
-// markAbsent 记住补采成功后仍缺的 K 线。
-func (b *Backfiller) markAbsent(spaceID string, chunk store.BackfillChunk, gaps []Gap) {
-	frequency, err := marketdata.ParseFrequency(chunk.Frequency)
-	if err != nil {
-		return
-	}
-	now := b.now()
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.absent == nil {
-		b.absent = map[absentKey]time.Time{}
-	}
-	for key, at := range b.absent {
-		if now.Sub(at) > absentTTL {
-			delete(b.absent, key)
-		}
-	}
+// missingKey 把复查仍缺的 K 线规范化成区间串，用于比较两次执行缺的是否相同。
+func missingKey(gaps []Gap) string {
+	parts := make([]string, 0, len(gaps))
 	for _, gap := range gaps {
-		for t := gap.From; t.Before(gap.To); t = frequency.BarEnd(t) {
-			b.absent[absentKey{spaceID: spaceID, datasetID: chunk.DatasetID, frequency: chunk.Frequency, subjectID: chunk.SubjectID, barStart: t.Unix()}] = now
-		}
+		parts = append(parts, fmt.Sprintf("%d-%d", gap.From.Unix(), gap.To.Unix()))
 	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
 }
 
-// dropAbsent 去掉缺口里已知行情源没有的 K 线，剩下的拆成连续的小缺口。
-func (b *Backfiller) dropAbsent(spaceID string, gaps []Gap) []Gap {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if len(b.absent) == 0 {
-		return gaps
-	}
-	now := b.now()
-	var kept []Gap
+func absencesOf(spaceID string, gaps []Gap) []store.SourceAbsence {
+	out := make([]store.SourceAbsence, 0, len(gaps))
 	for _, gap := range gaps {
-		frequency, err := marketdata.ParseFrequency(gap.Frequency)
-		if err != nil {
-			kept = append(kept, gap)
-			continue
-		}
-		var open *Gap
-		for t := gap.From; t.Before(gap.To); t = frequency.BarEnd(t) {
-			at, known := b.absent[absentKey{spaceID: spaceID, datasetID: gap.DatasetID, frequency: gap.Frequency, subjectID: gap.SubjectID, barStart: t.Unix()}]
-			if known && now.Sub(at) <= absentTTL {
-				if open != nil {
-					kept = append(kept, *open)
-					open = nil
-				}
-				continue
-			}
-			if open == nil {
-				open = &Gap{DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, From: t}
-			}
-			open.To = frequency.BarEnd(t)
-			open.Missing++
-		}
-		if open != nil {
-			kept = append(kept, *open)
-		}
+		out = append(out, store.SourceAbsence{SpaceID: spaceID, DatasetID: gap.DatasetID, Frequency: gap.Frequency, SubjectID: gap.SubjectID, From: gap.From, To: gap.To, Bars: gap.Missing})
 	}
-	return kept
+	return out
 }
 
 func bars(chunk store.BackfillChunk) int {
@@ -611,11 +610,10 @@ func bars(chunk store.BackfillChunk) int {
 
 // advanceWatermark 自动补采作业全部成功后才推进扫描水位；失败的作业不推进，下次扫描会重新覆盖同一窗口。
 func (b *Backfiller) advanceWatermark(ctx context.Context, job store.BackfillJob) {
-	var request JobRequest
-	if json.Unmarshal([]byte(job.Request), &request) != nil || request.Watermark == nil {
+	if !job.AdvanceWatermark || job.DatasetID == "" || job.Frequency == "" {
 		return
 	}
-	if err := b.Store.SetWatermark(ctx, job.SpaceID, request.Watermark.DatasetID, request.Watermark.Frequency, request.To); err != nil {
+	if err := b.Store.SetWatermark(ctx, job.SpaceID, job.DatasetID, job.Frequency, job.To); err != nil {
 		log.WarnContextf(ctx, "collector auto backfill watermark update failed job=%s: %v", job.JobID, err)
 	}
 }

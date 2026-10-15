@@ -45,8 +45,8 @@ func TestReregisterFetchPlanClearsSnapshotsAndResetsBackfill(t *testing.T) {
 	oldWatermark := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
 	require.NoError(t, db.Backfill().SetWatermark(ctx, "crypto", "ds1", "1m", oldWatermark))
 	require.NoError(t, db.Backfill().SetWatermark(ctx, "stockcn", "ds1", "1m", oldWatermark))
-	require.NoError(t, db.Backfill().CreateJob(ctx, store.BackfillJob{JobID: "job-crypto", SpaceID: "crypto"}, []store.BackfillChunk{{DatasetID: "ds1", Frequency: "1m", SubjectID: "BTC", From: oldWatermark, To: oldWatermark.Add(time.Minute), ChunkID: "c1"}}))
-	require.NoError(t, db.Backfill().CreateJob(ctx, store.BackfillJob{JobID: "job-stockcn", SpaceID: "stockcn"}, []store.BackfillChunk{{DatasetID: "ds1", Frequency: "1m", SubjectID: "600000", From: oldWatermark, To: oldWatermark.Add(time.Minute), ChunkID: "c2"}}))
+	require.NoError(t, db.Backfill().CreateJob(ctx, store.BackfillJob{JobID: "job-crypto", SpaceID: "crypto", From: oldWatermark, To: oldWatermark.Add(time.Minute)}, []store.BackfillChunk{{DatasetID: "ds1", Frequency: "1m", SubjectID: "BTC", From: oldWatermark, To: oldWatermark.Add(time.Minute), ChunkID: "c1"}}))
+	require.NoError(t, db.Backfill().CreateJob(ctx, store.BackfillJob{JobID: "job-stockcn", SpaceID: "stockcn", From: oldWatermark, To: oldWatermark.Add(time.Minute)}, []store.BackfillChunk{{DatasetID: "ds1", Frequency: "1m", SubjectID: "600000", From: oldWatermark, To: oldWatermark.Add(time.Minute), ChunkID: "c2"}}))
 
 	before := time.Now().UTC().Add(-time.Second)
 	rsp, err := service.ReregisterFetchPlan(ctx, &pb.ReregisterFetchPlanReq{SpaceId: " crypto "})
@@ -112,4 +112,41 @@ func TestReregisterFetchPlanRefusesWithoutAppliedPlanOrWithAnOpenPlan(t *testing
 	require.NoError(t, err)
 	require.Equal(t, applied.ID, latest.ID)
 	require.Equal(t, "h1", content.Datasets["ds1|1m"].Hash, "拒绝时不改计划")
+}
+
+// 运行状态：数据集健康决定总体等级；计划下发失败是空间级的异常。
+func TestGetCollectorStatusSummarizesPlanAndDatasetHealth(t *testing.T) {
+	service, db := newReregisterFixture(t)
+	ctx := context.Background()
+	applyPlan(t, db, "crypto", reregisterPlan)
+
+	rsp, err := service.GetCollectorStatus(ctx, &pb.GetCollectorStatusReq{SpaceId: "crypto"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.NotNil(t, rsp.GetApplied())
+	require.Nil(t, rsp.GetOpen())
+	require.Len(t, rsp.GetDatasets(), 1, "只列出正在采集（已登记生效点）的数据集")
+	require.Equal(t, "ds1", rsp.GetDatasets()[0].GetDatasetId())
+	require.Equal(t, "error", rsp.GetLevel(), "从未扫描过，检查滞后远超阈值")
+	require.Contains(t, rsp.GetReasons()[0], "ds1|1m：自动检查滞后")
+
+	require.NoError(t, db.Backfill().SetWatermark(ctx, "crypto", "ds1", "1m", time.Now().UTC()))
+	rsp, err = service.GetCollectorStatus(ctx, &pb.GetCollectorStatusReq{SpaceId: "crypto"})
+	require.NoError(t, err)
+	require.Equal(t, "ok", rsp.GetLevel(), rsp.GetReasons())
+	require.Empty(t, rsp.GetReasons())
+	require.NotEmpty(t, rsp.GetDatasets()[0].GetScannedUntil())
+
+	record, err := db.FetchPlans().Create(ctx, "crypto", reregisterPlan, "{}")
+	require.NoError(t, err)
+	require.NoError(t, db.FetchPlans().Update(ctx, record.ID, store.FetchPlanPending, "{}", "deploy failed"))
+	rsp, err = service.GetCollectorStatus(ctx, &pb.GetCollectorStatusReq{SpaceId: "crypto"})
+	require.NoError(t, err)
+	require.NotNil(t, rsp.GetOpen())
+	require.Equal(t, "error", rsp.GetLevel())
+	require.Contains(t, rsp.GetReasons()[0], "下发失败：deploy failed")
+
+	invalid, err := service.GetCollectorStatus(ctx, &pb.GetCollectorStatusReq{})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, invalid.GetRetInfo().GetCode())
 }

@@ -33,6 +33,8 @@ type healingInvoker struct {
 	noWrite bool
 	// sourceEmpty 让函数按真实路径失败：行情源返回空结果（no closed bar），不写入任何行。
 	sourceEmpty bool
+	// healOne 让函数每次只补上请求范围里最早缺的一根，模拟每次缺的都不一样的暂时缺失。
+	healOne bool
 }
 
 func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string]any, _ cloudnodepb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
@@ -58,7 +60,13 @@ func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string
 	subject := item["subject_id"].(string)
 	h.rows.mu.Lock()
 	for t := from; t.Before(to); t = t.Add(time.Minute) {
+		if h.healOne && !h.rows.missing[subject][t.Unix()] {
+			continue
+		}
 		delete(h.rows.missing[subject], t.Unix())
+		if h.healOne {
+			break
+		}
 	}
 	h.rows.mu.Unlock()
 	return scfinvoker.InvocationResult{Result: map[string]any{"success": true}}, nil
@@ -95,7 +103,7 @@ func newBackfillFixture(t *testing.T) (*Backfiller, *healingInvoker, *fakeRows, 
 		rows.missing["BTC-USDT"][base.Add(time.Duration(minute)*time.Minute).Unix()] = true
 	}
 	rows.missing["ETH-USDT"][base.Add(10*time.Minute).Unix()] = true
-	checker := &Checker{Plans: db.FetchPlans(), Rows: rows, Now: func() time.Time { return now }}
+	checker := &Checker{Plans: db.FetchPlans(), Rows: rows, Absences: db.Backfill(), Now: func() time.Time { return now }}
 	invoker := &healingInvoker{rows: rows}
 	backfiller := &Backfiller{
 		Checker: checker, Store: db.Backfill(), Plans: db.FetchPlans(), Invoker: invoker, BaseCtx: context.Background(), Now: func() time.Time { return now },
@@ -185,7 +193,8 @@ func TestBackfillForceFillsAGapBeforeTheFirstPlan(t *testing.T) {
 	require.False(t, rows.missing["BTC-USDT"][gapAt.Unix()], "函数写入后复查已读到这根 K 线")
 }
 
-// 早于计划生效点的分块完成后同样读回确认：函数“成功”却没有写入时，多根分块按失败处理，不会被当成已补齐。
+// 早于计划生效点的分块完成后同样读回确认：函数“成功”却没有写入时不会被当成已补齐，
+// 先退回重跑，两次缺的一样才确认为行情源没有，写入根数为 0。
 func TestBackfillBeforeTheFirstPlanIsVerifiedByReadingBack(t *testing.T) {
 	backfiller, invoker, rows, base := newBackfillFixture(t)
 	ctx := context.Background()
@@ -200,14 +209,19 @@ func TestBackfillBeforeTheFirstPlanIsVerifiedByReadingBack(t *testing.T) {
 	jobID, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: gapAt, To: gapAt.Add(3 * time.Minute), Force: true}, "manual")
 	require.NoError(t, err)
 	require.Equal(t, 1, chunks)
-	require.NoError(t, backfiller.Tick(ctx, "crypto"))
-	backfiller.Wait()
-	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	step(t, backfiller, 1)
+	_, stored, err := backfiller.Store.GetJob(ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillPending, stored[0].Status)
+	require.Contains(t, stored[0].LastError, "3 bars are still missing")
+
+	step(t, backfiller, 2)
 	status, err := backfiller.Status(ctx, jobID)
 	require.NoError(t, err)
-	require.Equal(t, store.BackfillFailed, status.Job.Status)
-	require.Len(t, status.Failed, 1)
-	require.Contains(t, status.Failed[0].LastError, "3 bars are still missing")
+	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
+	_, stored, _ = backfiller.Store.GetJob(ctx, jobID)
+	require.Zero(t, stored[0].Rows)
+	require.Equal(t, "3 bars are absent at the source", stored[0].LastError)
 }
 
 func TestBackfillUnknownOutcomeKeepsSlotAndFailureIsReported(t *testing.T) {
@@ -303,16 +317,26 @@ func TestAutoScanCatchUpAdvancesOneWindowAtATime(t *testing.T) {
 	jobs, err := backfiller.Store.ActiveJobs(ctx, "crypto")
 	require.NoError(t, err)
 	require.Len(t, jobs, 1)
-	var request JobRequest
-	require.NoError(t, json.Unmarshal([]byte(jobs[0].Request), &request))
-	require.True(t, request.From.Equal(base))
-	require.Equal(t, autoScanWindow, request.To.Sub(request.From))
+	require.True(t, jobs[0].From.Equal(base))
+	require.Equal(t, autoScanWindow, jobs[0].To.Sub(jobs[0].From))
+	require.True(t, jobs[0].AdvanceWatermark)
+	require.Equal(t, "ds", jobs[0].DatasetID)
+	require.Equal(t, "1m", jobs[0].Frequency)
 }
 
 func TestCheckRejectsOversizedRanges(t *testing.T) {
 	backfiller, _, _, base := newBackfillFixture(t)
 	_, err := backfiller.Check(context.Background(), Request{SpaceID: "crypto", From: base, To: base.AddDate(20, 0, 0)})
 	require.ErrorContains(t, err, "narrow")
+}
+
+// step 推进一次调度（认领并执行一轮分块、结算上一轮已结束的作业）并等待分块执行完。
+func step(t *testing.T, backfiller *Backfiller, times int) {
+	t.Helper()
+	for range times {
+		require.NoError(t, backfiller.Tick(context.Background(), "crypto"))
+		backfiller.Wait()
+	}
 }
 
 func TestBackfillTreatsASingleBarMissingAtTheSourceAsDoneAndDoesNotResubmitIt(t *testing.T) {
@@ -323,30 +347,98 @@ func TestBackfillTreatsASingleBarMissingAtTheSourceAsDoneAndDoesNotResubmitIt(t 
 	request := JobRequest{SpaceID: "crypto", SubjectID: "ETH-USDT", From: base, To: base.Add(time.Hour)}
 	jobID, _, err := backfiller.Submit(ctx, request, "manual")
 	require.NoError(t, err)
-	require.NoError(t, backfiller.Tick(ctx, "crypto"))
-	backfiller.Wait()
-	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	step(t, backfiller, 2)
 	status, err := backfiller.Status(ctx, jobID)
 	require.NoError(t, err)
 	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
 
-	// 手动补采仍会重新尝试；自动补采不再重复提交已知行情源没有的 K 线。
-	manual, _, err := backfiller.Submit(ctx, request, "manual")
+	// 已确认的缺失写进库里：检查扣除它们，手动与自动补采都不再提交。
+	result, err := backfiller.Check(ctx, Request{SpaceID: "crypto", SubjectID: "ETH-USDT", From: base, To: base.Add(time.Hour)})
 	require.NoError(t, err)
-	require.NotEmpty(t, manual)
-	auto, _, err := backfiller.Submit(ctx, request, "auto")
+	require.Zero(t, result.Missing)
+	require.Equal(t, 1, result.Absent)
+	for _, source := range []string{"manual", "auto"} {
+		again, _, err := backfiller.Submit(ctx, request, source)
+		require.NoError(t, err)
+		require.Empty(t, again, source)
+	}
+	// 整段重拉不扣除。
+	forced, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "ETH-USDT", From: base.Add(10 * time.Minute), To: base.Add(11 * time.Minute), Force: true}, "manual")
 	require.NoError(t, err)
-	require.Empty(t, auto)
+	require.NotEmpty(t, forced)
 
-	// 多根分块只写入一部分时无法判断剩余缺口的原因：按失败处理，继续重试。
-	multi, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: base, To: base.Add(time.Hour)}, "manual")
+	// 清除后重新报告。
+	cleared, err := backfiller.ClearAbsences(ctx, "crypto", "ds", "1m")
 	require.NoError(t, err)
-	require.NoError(t, backfiller.Tick(ctx, "crypto"))
-	backfiller.Wait()
-	require.NoError(t, backfiller.Tick(ctx, "crypto"))
-	failed, err := backfiller.Status(ctx, multi)
+	require.EqualValues(t, 1, cleared)
+	result, err = backfiller.Check(ctx, Request{SpaceID: "crypto", SubjectID: "ETH-USDT", From: base, To: base.Add(time.Hour)})
 	require.NoError(t, err)
-	require.Equal(t, store.BackfillFailed, failed.Job.Status)
+	require.Equal(t, 1, result.Missing)
+}
+
+// 多根分块补完仍缺一部分：第一次退回重跑，第二次缺的完全一样才确认是行情源没有。
+func TestBackfillConfirmsMultiBarSourceGapsAfterTwoIdenticalAttempts(t *testing.T) {
+	backfiller, invoker, _, base := newBackfillFixture(t)
+	ctx := context.Background()
+	invoker.noWrite = true
+	jobID, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: base, To: base.Add(time.Hour)}, "manual")
+	require.NoError(t, err)
+
+	step(t, backfiller, 1)
+	_, chunks, err := backfiller.Store.GetJob(ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillPending, chunks[0].Status, "第一次缺失还不能确认，退回重跑")
+	require.NotEmpty(t, chunks[0].Missing)
+
+	step(t, backfiller, 2)
+	status, err := backfiller.Status(ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
+	_, chunks, _ = backfiller.Store.GetJob(ctx, jobID)
+	require.Equal(t, "3 bars are absent at the source", chunks[0].LastError)
+	result, err := backfiller.Check(ctx, Request{SpaceID: "crypto", SubjectID: "BTC-USDT", From: base, To: base.Add(time.Hour)})
+	require.NoError(t, err)
+	require.Zero(t, result.Missing)
+	require.Equal(t, 3, result.Absent)
+}
+
+// 每次缺的不一样说明是暂时缺失：持续重跑直到补齐，不会确认为行情源没有。
+func TestBackfillKeepsRetryingWhileTheMissingBarsChange(t *testing.T) {
+	backfiller, invoker, _, base := newBackfillFixture(t)
+	ctx := context.Background()
+	invoker.healOne = true
+	jobID, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", SubjectID: "BTC-USDT", From: base, To: base.Add(time.Hour)}, "manual")
+	require.NoError(t, err)
+	step(t, backfiller, 4)
+	status, err := backfiller.Status(ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
+	result, err := backfiller.Check(ctx, Request{SpaceID: "crypto", SubjectID: "BTC-USDT", From: base, To: base.Add(time.Hour)})
+	require.NoError(t, err)
+	require.Zero(t, result.Missing)
+	require.Zero(t, result.Absent, "补齐的 K 线不会被记为行情源缺失")
+}
+
+func TestBackfillRetryRerunsFailedChunks(t *testing.T) {
+	backfiller, invoker, _, base := newBackfillFixture(t)
+	ctx := context.Background()
+	invoker.fail = true
+	jobID, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", From: base, To: base.Add(time.Hour)}, "manual")
+	require.NoError(t, err)
+	step(t, backfiller, 2)
+	status, _ := backfiller.Status(ctx, jobID)
+	require.Equal(t, store.BackfillFailed, status.Job.Status)
+	require.Len(t, status.Failed, 2)
+
+	invoker.fail = false
+	retried, err := backfiller.Retry(ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, 2, retried)
+	step(t, backfiller, 2)
+	status, _ = backfiller.Status(ctx, jobID)
+	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
+	_, err = backfiller.Retry(ctx, jobID)
+	require.ErrorIs(t, err, store.ErrJobNotRetryable)
 }
 
 func TestBackfillTreatsSourceEmptyFailureOfASingleBarAsAbsent(t *testing.T) {

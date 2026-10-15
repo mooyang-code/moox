@@ -499,6 +499,13 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 			} else {
 				deletedRows["period_readiness"] = readinessDeleted
 			}
+			backfillDeleted, err := dbm.Backfill().CleanupFinishedJobs(passCtx, spaceID, now.Add(-autoBackfillRetention), now.Add(-manualBackfillRetention),
+				maintenanceBudget(retentionConfig.MaxRowsPerPass, len(spaceIDs), offset))
+			if err != nil {
+				passErrors = append(passErrors, fmt.Errorf("cleanup finished backfill jobs for space %s: %w", spaceID, err))
+			} else {
+				deletedRows["backfill_jobs"] = backfillDeleted
+			}
 			if err := observeCollectorMaintenanceSpace(passCtx, dbm, metrics, spaceID, now, deletedRows); err != nil {
 				log.WarnContextf(passCtx, "Collector store metrics refresh failed space=%s: %v", spaceID, err)
 			}
@@ -573,6 +580,12 @@ func observeCollectorMaintenanceSpace(ctx context.Context, db *store.Store, metr
 	defer cancel()
 	return metrics.RefreshOperationalStats(statsCtx, db, spaceID, now)
 }
+
+// 已结束的补采作业的保留期：自动作业量大、只用于观察近况；手动作业保留更久以便追溯。
+const (
+	autoBackfillRetention   = 7 * 24 * time.Hour
+	manualBackfillRetention = 30 * 24 * time.Hour
+)
 
 func maintenanceBudget(total, spaces, index int) int {
 	if total <= 0 || spaces <= 0 || index < 0 || index >= spaces {

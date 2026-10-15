@@ -3,14 +3,25 @@ package klinecheck
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
+	"github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 )
+
+func openBackfillStore(t *testing.T) *store.BackfillRepository {
+	t.Helper()
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	t.Cleanup(func() { _ = db.Close() })
+	return db.Backfill()
+}
 
 // markMissing 把 [from, to) 内每分钟登记为缺失。
 func markMissing(rows *fakeRows, subject string, from, to time.Time) {
@@ -66,13 +77,18 @@ func TestScanHistoryScansOneDatasetPerSpacingAndOncePerInterval(t *testing.T) {
 		recordFor(t, 2, "ds2", store.FetchPlanApplied, base.Unix(), "A-USDT"),
 	}
 	now := base.Add(48 * time.Hour)
-	backfiller := &Backfiller{Checker: &Checker{Plans: fakePlans{records}, Rows: rows, Now: func() time.Time { return now }}, Plans: fakePlans{records}, Now: func() time.Time { return now }}
+	repo := openBackfillStore(t)
+	backfiller := &Backfiller{Checker: &Checker{Plans: fakePlans{records}, Rows: rows, Now: func() time.Time { return now }}, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
 	ctx := context.Background()
 
 	first, err := backfiller.ScanHistory(ctx, "crypto")
 	require.NoError(t, err)
 	require.Equal(t, "ds1", first.DatasetID)
 	require.Len(t, first.Gaps, 1)
+	scans, err := repo.HistoryScans(ctx, "crypto")
+	require.NoError(t, err)
+	require.Equal(t, 1, scans["ds1|1m"].GapBars, "扫描结果记进库里")
+	require.Equal(t, 1, scans["ds1|1m"].GapSubjects)
 
 	now = now.Add(time.Minute)
 	again, err := backfiller.ScanHistory(ctx, "crypto")
@@ -107,11 +123,15 @@ func TestScanHistoryRetriesAfterAnHourWhenReadingFails(t *testing.T) {
 	records := []*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "A-USDT")}
 	now := base.Add(48 * time.Hour)
 	checker := &Checker{Plans: fakePlans{records}, Rows: failingRows{errors.New("read timeout")}, Now: func() time.Time { return now }}
-	backfiller := &Backfiller{Checker: checker, Plans: fakePlans{records}, Now: func() time.Time { return now }}
+	repo := openBackfillStore(t)
+	backfiller := &Backfiller{Checker: checker, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
 	ctx := context.Background()
 
 	_, err := backfiller.ScanHistory(ctx, "crypto")
 	require.ErrorContains(t, err, "read timeout")
+	scans, err := repo.HistoryScans(ctx, "crypto")
+	require.NoError(t, err)
+	require.Contains(t, scans["ds|1m"].LastError, "read timeout", "失败也记下来，页面可见")
 
 	now = now.Add(historyScanSpacing)
 	skipped, err := backfiller.ScanHistory(ctx, "crypto")
@@ -121,4 +141,37 @@ func TestScanHistoryRetriesAfterAnHourWhenReadingFails(t *testing.T) {
 	now = now.Add(historyRetryAfter)
 	_, err = backfiller.ScanHistory(ctx, "crypto")
 	require.ErrorContains(t, err, "read timeout", "过了一小时再试一次")
+}
+
+// 确认历史缺口：按扫描记下的缺口建立 history 作业，只补这些缺口。
+func TestConfirmHistoryCreatesAJobForTheScannedGaps(t *testing.T) {
+	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	rows := &fakeRows{missing: map[string]map[int64]bool{}}
+	hole := base.Add(-30 * time.Minute)
+	markMissing(rows, "A-USDT", hole, hole.Add(2*time.Minute))
+	records := []*store.FetchPlanRecord{record(t, 1, store.FetchPlanApplied, base.Unix(), "A-USDT")}
+	now := base.Add(48 * time.Hour)
+	repo := openBackfillStore(t)
+	backfiller := &Backfiller{Checker: &Checker{Plans: fakePlans{records}, Rows: rows, Absences: repo, Now: func() time.Time { return now }}, Store: repo, Plans: fakePlans{records}, Now: func() time.Time { return now }}
+	ctx := context.Background()
+
+	empty, _, err := backfiller.ConfirmHistory(ctx, "crypto", "ds", "1m")
+	require.NoError(t, err)
+	require.Empty(t, empty, "还没扫描过")
+	_, err = backfiller.ScanHistory(ctx, "crypto")
+	require.NoError(t, err)
+	jobID, chunks, err := backfiller.ConfirmHistory(ctx, "crypto", "ds", "1m")
+	require.NoError(t, err)
+	require.Equal(t, 1, chunks)
+	job, stored, err := repo.GetJob(ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillKindHistory, job.Kind)
+	require.Equal(t, "ds", job.DatasetID)
+	require.True(t, stored[0].From.Equal(hole) && stored[0].To.Equal(hole.Add(2*time.Minute)))
+
+	// 已确认的缺失在下一次扫描里扣除。
+	require.NoError(t, repo.AddAbsences(ctx, []store.SourceAbsence{{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", SubjectID: "A-USDT", From: hole, To: hole.Add(2 * time.Minute), Bars: 2}}))
+	result, err := backfiller.Checker.CheckHistory(ctx, "crypto", "ds", "1m")
+	require.NoError(t, err)
+	require.Empty(t, result.Gaps)
 }

@@ -13,7 +13,7 @@ const collectorTaskUI = [
   collectorTaskWorkbench,
   fs.readFileSync(path.join(root, "src/views/collector/collection-tasks/collection-tasks.vue"), "utf8"),
   fs.readFileSync(path.join(root, "src/views/collector/collection-tasks/resample-backfill.vue"), "utf8"),
-  fs.readFileSync(path.join(root, "src/views/collector/task-instances/task-instances.vue"), "utf8"),
+  fs.readFileSync(path.join(root, "src/views/collector/runtime-status/runtime-status.vue"), "utf8"),
   fs.readFileSync(path.join(root, "src/views/home/home.vue"), "utf8"),
   collectorTaskResults
 ].join("\n");
@@ -124,7 +124,7 @@ assert(collectorTasks.parentId === dataCollection.id, "collector-tasks must be u
 assert(collectorTasks.path === "/collector/tasks", "collector-tasks path must be canonical");
 assert(dataFields.sort < collectorTasks.sort, "base fields must appear before collection tasks");
 assert(routes.includes('path: "/collector/tasks"'), "collector tasks route must exist");
-const collectorTabOrder = ["采集任务", "任务实例", "执行器", "采集结果"].map(label =>
+const collectorTabOrder = ["采集任务", "运行状态", "执行器", "采集结果"].map(label =>
   collectorTaskWorkbench.indexOf(`label: "${label}"`)
 );
 assert(

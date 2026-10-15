@@ -623,7 +623,6 @@ components:
           - UpdateTask
           - DisableTask
           - DeleteTask
-          - GetTaskInstanceList
           - GetDataTypeConfigs
           - GetDataTypeConfigWithFields
           - StartKlineResampleBackfill
@@ -635,20 +634,22 @@ components:
           - GetKlineBackfill
           - ListKlineBackfills
           - CancelKlineBackfill
-          - GetFetchPlans
+          - RetryKlineBackfill
+          - ConfirmHistoryGaps
+          - ClearSourceAbsences
+          - GetCollectorStatus
           - ReregisterFetchPlan
         read_only_methods:
           - GetTaskList
           - GetTaskDetail
           - GetTaskResultInventory
-          - GetTaskInstanceList
           - GetDataTypeConfigs
           - GetDataTypeConfigWithFields
           - GetKlineResampleBackfill
           - CheckKline
           - GetKlineBackfill
           - ListKlineBackfills
-          - GetFetchPlans
+          - GetCollectorStatus
         acl:
           - methods:
               - GetTaskList
@@ -658,7 +659,6 @@ components:
               - UpdateTask
               - DisableTask
               - DeleteTask
-              - GetTaskInstanceList
               - GetDataTypeConfigs
               - GetDataTypeConfigWithFields
               - StartKlineResampleBackfill
@@ -669,7 +669,10 @@ components:
               - GetKlineBackfill
               - ListKlineBackfills
               - CancelKlineBackfill
-              - GetFetchPlans
+              - RetryKlineBackfill
+              - ConfirmHistoryGaps
+              - ClearSourceAbsences
+              - GetCollectorStatus
             callers:
               - console
               - moox-cli

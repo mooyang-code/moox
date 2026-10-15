@@ -30,6 +30,11 @@ type RowReader interface {
 	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 }
 
+// AbsenceSource 返回已确认“行情源没有”的 K 线区间。
+type AbsenceSource interface {
+	AbsencesIn(ctx context.Context, spaceID, datasetID, frequency string, subjects []string, from, to time.Time) ([]store.SourceAbsence, error)
+}
+
 // PlanHistory 返回空间的全部采集计划。
 type PlanHistory interface {
 	ListAll(context.Context, string) ([]*store.FetchPlanRecord, error)
@@ -47,6 +52,8 @@ type Checker struct {
 	Calendar func(spaceID, frequency string, barStart time.Time) (bool, error)
 	// CalendarReady 非空时在检查前确认该空间的日历可用；不可用必须报错，不能当作“没有应有数据”。
 	CalendarReady func(spaceID string) error
+	// Absences 非空时，缺口扣除已确认的行情源缺失（强制重拉除外）。
+	Absences AbsenceSource
 }
 
 // Request 是一次检查的范围。From 含、To 不含（K 线开始时间）。
@@ -73,11 +80,12 @@ type Gap struct {
 	Missing   int
 }
 
-// Result 是检查结果。
+// Result 是检查结果。Absent 是已扣除的、确认行情源没有的根数，不计入 Missing。
 type Result struct {
 	Gaps      []Gap
 	Expected  int
 	Missing   int
+	Absent    int
 	Truncated bool
 }
 
@@ -177,7 +185,7 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 			defer wg.Done()
 			defer func() { <-slots }()
 			datasetID, frequency, _ := strings.Cut(item.key, "|")
-			gaps, expected, err := c.checkSubjects(ctx, request, datasetID, frequency, item.subjects, item.segment)
+			gaps, expected, absent, err := c.checkSubjects(ctx, request, datasetID, frequency, item.subjects, item.segment)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -187,6 +195,7 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 				return
 			}
 			result.Expected += expected
+			result.Absent += absent
 			for _, gap := range gaps {
 				result.Missing += gap.Missing
 				if len(result.Gaps) >= MaxGaps {
@@ -249,10 +258,11 @@ func (c *Checker) expectedBars(spaceID string, frequency marketdata.Frequency, f
 }
 
 // checkSubjects 检查同一数据集、同一计划段内的一批标的：应有的 K 线对它们相同，只读一次 Storage，再逐标的求缺口。
-func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID, frequencyName string, subjects []string, segment Segment) ([]Gap, int, error) {
+// 返回缺口、应有根数与扣除的已确认缺失根数。
+func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID, frequencyName string, subjects []string, segment Segment) ([]Gap, int, int, error) {
 	frequency, err := marketdata.ParseFrequency(frequencyName)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	from, to := request.From.UTC(), request.To.UTC()
 	if from.Unix() < segment.From {
@@ -262,31 +272,67 @@ func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID,
 		to = time.Unix(segment.To, 0).UTC()
 	}
 	if !from.Before(to) {
-		return nil, 0, nil
+		return nil, 0, 0, nil
 	}
 	bars, err := c.expectedBars(request.SpaceID, frequency, frequencyName, from, to, time.Duration(segment.LatenessS)*time.Second)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	if len(bars) == 0 {
-		return nil, 0, nil
+		return nil, 0, 0, nil
 	}
 	required := []string{"close"}
 	if request.Deep {
 		required = deepFields(segment.OutputFields)
 	}
 	present := map[string]map[int64]bool{}
+	absent := 0
 	if !request.AssumeMissing {
 		present, err = c.readPresent(ctx, request.SpaceID, datasetID, frequencyName, subjects, bars[0], bars[len(bars)-1].Add(time.Second), required, request.Deep)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
+		}
+		if absent, err = c.coverAbsences(ctx, request.SpaceID, datasetID, frequencyName, subjects, bars, present); err != nil {
+			return nil, 0, 0, err
 		}
 	}
 	var gaps []Gap
 	for _, subject := range subjects {
 		gaps = append(gaps, subjectGaps(datasetID, frequencyName, subject, frequency, bars, present[subject])...)
 	}
-	return gaps, len(bars) * len(subjects), nil
+	return gaps, len(bars) * len(subjects), absent, nil
+}
+
+// coverAbsences 把已确认行情源没有、且确实缺失的 K 线并入 present（不再算缺口），返回并入的根数。
+func (c *Checker) coverAbsences(ctx context.Context, spaceID, datasetID, frequencyName string, subjects []string, bars []time.Time, present map[string]map[int64]bool) (int, error) {
+	if c.Absences == nil || len(bars) == 0 {
+		return 0, nil
+	}
+	frequency, err := marketdata.ParseFrequency(frequencyName)
+	if err != nil {
+		return 0, err
+	}
+	absences, err := c.Absences.AbsencesIn(ctx, spaceID, datasetID, frequencyName, subjects, bars[0], frequency.BarEnd(bars[len(bars)-1]))
+	if err != nil {
+		return 0, fmt.Errorf("read source absences: %w", err)
+	}
+	covered := 0
+	for _, absence := range absences {
+		bySubject := present[absence.SubjectID]
+		if bySubject == nil {
+			bySubject = map[int64]bool{}
+			present[absence.SubjectID] = bySubject
+		}
+		// bars 已按时间排序：二分找到区间内的第一根。
+		start := sort.Search(len(bars), func(i int) bool { return !bars[i].Before(absence.From) })
+		for i := start; i < len(bars) && bars[i].Before(absence.To); i++ {
+			if !bySubject[bars[i].Unix()] {
+				bySubject[bars[i].Unix()] = true
+				covered++
+			}
+		}
+	}
+	return covered, nil
 }
 
 // subjectGaps 把应有的 K 线与实际存在的时间点比对，合并成连续缺口。
