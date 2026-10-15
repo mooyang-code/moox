@@ -1064,9 +1064,6 @@ func (a *dataNodeProxyAdapter) RegisterSeriesSnapshot(ctx context.Context, req *
 	return a.periodProxy.RegisterSeriesSnapshot(ctx, req)
 }
 
-
-
-
 func (a *dataNodeProxyAdapter) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
 	if a == nil || a.periodProxy == nil {
 		return nil, errors.New("DataNode period runtime is unavailable")
