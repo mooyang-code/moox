@@ -44,6 +44,8 @@ type Options struct {
 	Address string
 	// Fingerprint 不为空时只接受 SHA-256 指纹等于它的证书（用户确认过的自签证书）。
 	Fingerprint string
+	// RootCAs 不为空时用它校验证书链（例如部署时缓存的管理台内部 CA 根证书），否则用系统信任。
+	RootCAs *x509.CertPool
 	// HTTPClient 为空时按上面的规则建一个；测试里替换。
 	HTTPClient *http.Client
 }
@@ -65,7 +67,7 @@ func New(options Options) (*Client, error) {
 	client := options.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
-			Proxy: nil, TLSClientConfig: tlsConfig(strings.ToLower(strings.TrimSpace(options.Fingerprint))), ForceAttemptHTTP2: true,
+			Proxy: nil, TLSClientConfig: tlsConfig(strings.ToLower(strings.TrimSpace(options.Fingerprint)), options.RootCAs), ForceAttemptHTTP2: true,
 		}}
 	}
 	return &Client{base: base, http: client}, nil
@@ -89,8 +91,8 @@ func baseURL(address string) (string, error) {
 }
 
 // tlsConfig 默认按系统信任校验证书；给了指纹时改为只认这张证书（自签或内部 CA 的情况）。
-func tlsConfig(fingerprint string) *tls.Config {
-	config := &tls.Config{MinVersion: tls.VersionTLS12}
+func tlsConfig(fingerprint string, roots *x509.CertPool) *tls.Config {
+	config := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}
 	if fingerprint == "" {
 		return config
 	}
@@ -211,6 +213,11 @@ func (c *Client) post(ctx context.Context, service, method string, request any, 
 
 // describeTransportError 把证书不受信任单独区分出来，交给调用方让用户核对指纹。
 func describeTransportError(err error, base string) error {
+	// macOS 等平台用系统校验，不受信任时返回的不是 x509 的具体类型；统一从握手校验错误里取对方证书。
+	var verification *tls.CertificateVerificationError
+	if errors.As(err, &verification) && len(verification.UnverifiedCertificates) > 0 {
+		return &UntrustedError{Fingerprint: Fingerprint(verification.UnverifiedCertificates[0].Raw)}
+	}
 	var unknown x509.UnknownAuthorityError
 	if errors.As(err, &unknown) && unknown.Cert != nil {
 		return &UntrustedError{Fingerprint: Fingerprint(unknown.Cert.Raw)}

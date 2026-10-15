@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/consoleclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
@@ -247,5 +251,31 @@ func TestRestoreExplainsAMissingBackup(t *testing.T) {
 	}
 	if _, err := os.Stat(h.output); !os.IsNotExist(err) {
 		t.Fatal("没有恢复成功时不能写文件")
+	}
+}
+
+// 本机缓存的管理台 CA 过期或缺失时，备份先从管理台服务器取回根证书刷新缓存，再按证书链校验。
+func TestBackupRefreshesAStaleConsoleCA(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	console := newFakeConsole(t, "Adm1n-P@ss")
+	useFakeConsole(t, console, false)
+	original := refreshConsoleCA
+	t.Cleanup(func() { refreshConsoleCA = original })
+	refreshed := 0
+	refreshConsoleCA = func(_ context.Context, manifest setupconfig.Manifest) error {
+		refreshed++
+		pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: console.server.Certificate().Raw})
+		return setupdeploy.FileCAStore{}.Save(manifest.ControlHost().Address, pemBytes)
+	}
+	keys := &configcrypt.MemoryStore{}
+	if _, err := BackupFile(context.Background(), writeConfig(t, keys), keys); err != nil {
+		t.Fatal(err)
+	}
+	if refreshed != 1 || console.envelope == "" {
+		t.Fatalf("应刷新一次根证书后完成备份: refreshed=%d", refreshed)
+	}
+	// 缓存已经是对的，下次不再刷新。
+	if _, err := BackupFile(context.Background(), writeConfig(t, keys), keys); err != nil || refreshed != 1 {
+		t.Fatalf("第二次备份不应再刷新: %v refreshed=%d", err, refreshed)
 	}
 }

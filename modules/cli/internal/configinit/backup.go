@@ -2,9 +2,14 @@ package configinit
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"os"
 	"time"
+
+	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
+	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/consoleclient"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -54,15 +59,19 @@ func backupPlain(ctx context.Context, plain []byte, manifest setupconfig.Manifes
 	}
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	client, err := newConsole(consoleclient.Options{Address: address})
-	if err != nil {
-		return BackupResult{}, err
-	}
-	if err := client.Login(ctx, manifest.Admin.Username, manifest.Admin.Password); err != nil {
-		var untrusted *consoleclient.UntrustedError
-		if errors.As(err, &untrusted) {
-			return BackupResult{}, fmt.Errorf("这台电脑不信任管理台的 HTTPS 证书；运行 moox-cli setup trust-browser 安装信任后再同步")
+	client, err := loginForBackup(ctx, manifest)
+	var untrusted *consoleclient.UntrustedError
+	if errors.As(err, &untrusted) {
+		// 本机缓存的管理台 CA 可能是旧的（控制机重新初始化后会换 CA）：用配置里的 SSH 读一次控制机上发布的根证书再试。
+		if refreshErr := refreshConsoleCA(ctx, manifest); refreshErr != nil {
+			return BackupResult{}, fmt.Errorf("这台电脑不信任管理台的 HTTPS 证书，也没能从管理台服务器取回它的根证书：%w", refreshErr)
 		}
+		client, err = loginForBackup(ctx, manifest)
+	}
+	if errors.As(err, &untrusted) {
+		return BackupResult{}, errors.New("管理台的 HTTPS 证书和它发布的根证书对不上，没有备份")
+	}
+	if err != nil {
 		return BackupResult{}, err
 	}
 	envelope, err := configcrypt.SealBackup(plain, manifest.Admin.Password)
@@ -83,6 +92,46 @@ func backupPlain(ctx context.Context, plain []byte, manifest setupconfig.Manifes
 		return BackupResult{}, err
 	}
 	return BackupResult{Console: address, UpdatedAt: time.Unix(int64(response.UpdatedAt), 0)}, nil
+}
+
+func loginForBackup(ctx context.Context, manifest setupconfig.Manifest) (*consoleclient.Client, error) {
+	address := manifest.ControlHost().Address
+	client, err := newConsole(consoleclient.Options{Address: address, RootCAs: consoleRoots(address)})
+	if err != nil {
+		return nil, err
+	}
+	return client, client.Login(ctx, manifest.Admin.Username, manifest.Admin.Password)
+}
+
+// refreshConsoleCA 用配置里的 SSH 登录管理台服务器，读取 console-proxy 发布的根证书（公开证书），
+// 校验是 CA 证书后更新本机缓存。测试里替换。
+var refreshConsoleCA = func(ctx context.Context, manifest setupconfig.Manifest) error {
+	host := manifest.ControlHost()
+	client, err := setupssh.Dial(ctx, setupssh.Target{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username}, host.Password, setupssh.Options{Timeout: 15 * time.Second})
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	result, err := client.Run(ctx, []string{"sh", "-c", `cat -- "$1/current/console-proxy/certs/caddy/root.crt"`, "moox-read-console-ca", manifest.Paths.ControlRoot}, nil)
+	if err != nil {
+		return fmt.Errorf("读取根证书失败")
+	}
+	return setupdeploy.FileCAStore{}.Save(host.Address, []byte(result.Stdout))
+}
+
+// consoleRoots 返回校验管理台证书用的根证书：系统信任，加上部署时缓存在本机的管理台内部 CA 根证书（如果有）。
+// 管理台用内部 CA 时，原来部署的电脑上就有这张根证书，备份不需要再改系统信任。
+func consoleRoots(address string) *x509.CertPool {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if path := setupdeploy.CAPath(address); path != "" {
+		if pem, err := os.ReadFile(path); err == nil {
+			pool.AppendCertsFromPEM(pem)
+		}
+	}
+	return pool
 }
 
 // fetchBackup 登录管理台，取回配置备份并用管理员密码解开，返回明文配置。
