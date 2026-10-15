@@ -64,12 +64,12 @@ button.plain { background: var(--panel); color: var(--ink); border-color: var(--
 <main>
   <section id="form-page">
     <h1>从管理台恢复配置</h1>
-    <p class="lede">换了电脑时用这个页面：登录你的管理台，取回之前备份的配置。备份是用管理员密码加密的，只会在这台电脑上解开。</p>
+    <p class="lede">换了电脑时用这个页面：登录你的管理台，取回之前备份的配置。备份是用<b>初始化时设置的管理员密码</b>加密的，只会在这台电脑上解开。</p>
     <div class="alert" id="alert" role="alert" hidden></div>
     <div class="card">
       <label class="f"><span>管理台地址</span><input type="text" id="address" placeholder="管理台服务器的 IP 或域名，例如 106.53.10.20" autocomplete="off" spellcheck="false"><small>就是平时打开管理台的地址，不用写 https:// 和端口。</small></label>
       <div class="row">
-        <label class="f"><span>管理员用户名</span><input type="text" id="username" value="admin" autocomplete="off"></label>
+        <label class="f"><span>管理员用户名</span><input type="text" id="username" value="admin" autocomplete="off"><small>初始化时设置的那个管理员</small></label>
         <label class="f"><span>管理员密码</span><input type="password" id="password" autocomplete="current-password"></label>
       </div>
       <div class="trust" id="trust" hidden></div>

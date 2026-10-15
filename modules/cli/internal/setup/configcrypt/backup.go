@@ -20,8 +20,8 @@ const (
 	backupSaltLen = 16
 )
 
-// ErrBackupPassword 表示管理员密码解不开这份备份（密码不对，或备份之后改过管理员密码）。
-var ErrBackupPassword = errors.New("管理员密码解不开这份备份：密码不对，或者备份之后改过管理员密码")
+// ErrBackupPassword 表示密码解不开这份备份：备份用的是初始化时设置的管理员密码（设定后不能修改）。
+var ErrBackupPassword = errors.New("密码解不开这份备份：请用初始化时设置的管理员账号和密码")
 
 // SealBackup 用管理员密码加密配置，生成上传到服务端的备份信封。
 func SealBackup(plain []byte, password string) (string, error) {

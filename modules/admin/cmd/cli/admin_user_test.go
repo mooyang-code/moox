@@ -45,23 +45,20 @@ func TestAdminUserEnsureCreatesSuperAdminAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 }
 
-func TestAdminUserResetPasswordChangesOnlyHash(t *testing.T) {
+// 管理员密码不能修改；需要另一个账号时新建一个管理员，原账号的密码不受影响。
+func TestAdminPasswordCannotBeResetButNewAdminsCanBeAdded(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "admin.db")
-	runAdminUserForTest(t, []string{"user", "ensure", "--db-path", dbPath, "--username", "admin", "--password-stdin"}, "old password\n")
-	db := openUserTestDB(t, dbPath)
-	require.NoError(t, db.Table("t_users").Where("c_username = ?", "admin").Update("c_nickname", "Root User").Error)
-	before := readAdminUser(t, db, "admin")
+	runAdminUserForTest(t, []string{"user", "ensure", "--db-path", dbPath, "--username", "admin", "--password-stdin"}, "first password\n")
+	var stdout, stderr bytes.Buffer
+	err := runAdminUserCommand([]string{"user", "reset-password", "--db-path", dbPath, "--username", "admin", "--password-stdin"}, strings.NewReader("new password\n"), &stdout, &stderr)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown user subcommand")
 
-	result := runAdminUserForTest(t, []string{"user", "reset-password", "--db-path", dbPath, "--username", "admin", "--password-stdin"}, "new password\n")
-	assert.Equal(t, "password_reset", result["action"])
-	after := readAdminUser(t, db, "admin")
-	assert.Equal(t, before.UserID, after.UserID)
-	assert.Equal(t, before.Username, after.Username)
-	assert.Equal(t, before.Role, after.Role)
-	assert.Equal(t, before.Status, after.Status)
-	assert.Equal(t, before.Nickname, after.Nickname)
-	assert.NotEqual(t, before.PasswordHash, after.PasswordHash)
-	assert.True(t, mooxsecurity.VerifyPassword("new password", after.PasswordHash))
+	added := runAdminUserForTest(t, []string{"user", "ensure", "--db-path", dbPath, "--username", "ops", "--password-stdin"}, "ops password\n")
+	assert.Equal(t, "created", added["action"])
+	db := openUserTestDB(t, dbPath)
+	assert.True(t, mooxsecurity.VerifyPassword("first password", readAdminUser(t, db, "admin").PasswordHash))
+	assert.True(t, mooxsecurity.VerifyPassword("ops password", readAdminUser(t, db, "ops").PasswordHash))
 }
 
 func TestAdminUserRejectsUnsafePasswordInput(t *testing.T) {

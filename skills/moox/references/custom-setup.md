@@ -38,8 +38,8 @@ not a deployment artifact.
 - 初始化部署完成、管理台可以访问后，运行一次 `./bin/moox-cli config backup`：用 moox.toml 里的管理员账号登录管理台，
   把用管理员密码加密的整份配置备份到管理后台（服务端解不开）。之后在配置页保存时会自动同步。
 - 用户换了电脑：运行 `./bin/moox-cli config restore`，用户在本机恢复页填管理台地址和管理员账号，CLI 取回备份、在本机解开，
-  用新电脑的钥匙串密钥重新加密写成 `moox.toml`。Agent 同样不打开、不读取恢复页。备份之后改过管理员密码时，
-  需要先在原来的电脑上更新配置里的管理员密码并重新同步。
+  用新电脑的钥匙串密钥重新加密写成 `moox.toml`。Agent 同样不打开、不读取恢复页。恢复要用初始化时设置的管理员账号：
+  管理员密码设定后不能修改（备份用它加密），需要别的账号时新建管理员，不影响备份。
 
 也可以手工填写：Show the user `moox.toml.example`. The user must fill it as repository-root
 `moox.toml` and protect it before the Agent continues:
