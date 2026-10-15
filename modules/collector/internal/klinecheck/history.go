@@ -114,39 +114,72 @@ func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequenc
 	if c.Concurrency > 0 {
 		slots = make(chan struct{}, c.Concurrency)
 	}
-	for from := 0; from < len(first.Subjects); from += subjectsPerRead {
-		batch := first.Subjects[from:min(from+subjectsPerRead, len(first.Subjects))]
+	counter, counting := c.counter(Request{})
+	batchSize := subjectsPerRead
+	if counting {
+		batchSize = subjectsPerCount
+	}
+	end := bars[len(bars)-1].Add(time.Second)
+	for from := 0; from < len(first.Subjects); from += batchSize {
+		batch := first.Subjects[from:min(from+batchSize, len(first.Subjects))]
 		wg.Add(1)
 		slots <- struct{}{}
 		go func() {
 			defer wg.Done()
 			defer func() { <-slots }()
-			present, err := c.readPresent(ctx, spaceID, datasetID, frequencyName, batch, bars[0], bars[len(bars)-1].Add(time.Second), []string{"close"}, false)
-			if err != nil {
+			fail := func(err error) {
 				mu.Lock()
 				defer mu.Unlock()
 				if firstErr == nil {
-					firstErr = fmt.Errorf("read history %s %s %s 等 %d 个标的: %w", datasetID, frequencyName, batch[0], len(batch), err)
-				}
-				return
-			}
-			starts := make(map[string]int, len(batch))
-			for _, subject := range batch {
-				starts[subject] = firstPresent(bars, present[subject])
-			}
-			// 先按真实数据定位每个标的的第一根，再扣除已确认的行情源缺失。
-			if _, coverErr := c.coverAbsences(ctx, spaceID, datasetID, frequencyName, batch, bars, present); coverErr != nil {
-				err = coverErr
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				if firstErr == nil {
 					firstErr = err
 				}
+			}
+			absent, err := c.absentBars(ctx, spaceID, datasetID, frequencyName, batch, bars)
+			if err != nil {
+				fail(err)
 				return
 			}
-			for _, subject := range batch {
+			// 先比对根数：一根都没有的标的没有历史，根数齐全的标的没有缺口，只有其余的标的才读行定位缺口。
+			detail, complete := batch, 0
+			if counting {
+				counts, err := countPresent(ctx, counter, spaceID, datasetID, frequencyName, batch, bars[0], end)
+				if err != nil {
+					log.WarnContextf(ctx, "collector history count failed, falling back to row reads space=%s dataset=%s|%s: %v", spaceID, datasetID, frequencyName, err)
+				} else {
+					detail = nil
+					for _, subject := range batch {
+						switch counts[subject] {
+						case 0:
+						case len(bars) - len(absent[subject]):
+							complete++
+						default:
+							detail = append(detail, subject)
+						}
+					}
+				}
+			}
+			present := map[string]map[int64]bool{}
+			for from := 0; from < len(detail); from += subjectsPerRead {
+				chunk := detail[from:min(from+subjectsPerRead, len(detail))]
+				rows, err := c.readPresent(ctx, spaceID, datasetID, frequencyName, chunk, bars[0], end, []string{"close"}, false)
+				if err != nil {
+					fail(fmt.Errorf("read history %s %s %s 等 %d 个标的: %w", datasetID, frequencyName, chunk[0], len(chunk), err))
+					return
+				}
+				for subject, times := range rows {
+					present[subject] = times
+				}
+			}
+			// 先按真实数据定位每个标的的第一根，再扣除已确认的行情源缺失。
+			starts := make(map[string]int, len(detail))
+			for _, subject := range detail {
+				starts[subject] = firstPresent(bars, present[subject])
+			}
+			coverAbsences(bars, present, absent, detail)
+			mu.Lock()
+			defer mu.Unlock()
+			result.WithHistory += complete
+			for _, subject := range detail {
 				start := starts[subject]
 				if start < 0 {
 					continue

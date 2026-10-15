@@ -26,6 +26,16 @@ message ResultColumn {
 // 该接口查询 DuckDB 中当前 active View 索引。
 // View 索引是可重建的近期派生结果，不是完整事实存储。
 // 完整历史以 PrimaryStore KV/Pebble 为准。
+// CountTimeSeriesViewRowsReq 按标的统计 active View 索引里时间范围内的行数（同一时间点多个 series_tag 只计一次）。
+message CountTimeSeriesViewRowsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  // selectors 需要 subject_id 与 freq；time_range 是左闭右开时间范围。
+  repeated TimeSeriesSelector selectors = 4;
+  TimeRange time_range = 5;
+}
+
 message QueryTimeSeriesRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
   common.AuthInfo auth_info = 1;
@@ -142,6 +152,8 @@ service DataView {
   // View 索引是可重建的近期派生结果，不是完整事实存储。
   // 完整历史以 PrimaryStore KV/Pebble 为准。
   rpc QueryTimeSeriesRows(QueryTimeSeriesRowsReq) returns (QueryTimeSeriesRowsRsp);
+  // CountTimeSeriesRows 按标的统计 active View 索引里的行数，只回传计数，供完整性检查先比对根数。
+  rpc CountTimeSeriesRows(CountTimeSeriesViewRowsReq) returns (CountTimeSeriesRowsRsp);
   // SearchRecordRows 搜索 Bleve 中当前 active View 索引。
   // View 索引是可重建的近期派生结果，不是完整事实存储。
   // 完整历史以 PrimaryStore KV/Pebble 为准。

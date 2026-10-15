@@ -1358,6 +1358,7 @@ components:
           - DeleteDatasetRows
           - RestoreDatasetRows
           - ReadTimeSeriesRows
+          - CountTimeSeriesRows
           - ListHistorySubjects
           - ReadRecordRows
           - ReportCollectorPeriodCompleted
@@ -1368,6 +1369,7 @@ components:
         read_only_methods:
           - ReadFields
           - ReadTimeSeriesRows
+          - CountTimeSeriesRows
           - ListHistorySubjects
           - ReadRecordRows
           - GetFactorPeriodComputed
@@ -1384,6 +1386,7 @@ components:
               - DeleteDatasetRows
               - RestoreDatasetRows
               - ReadTimeSeriesRows
+              - CountTimeSeriesRows
               - ListHistorySubjects
               - ReadRecordRows
               - ReportCollectorPeriodCompleted
@@ -1407,6 +1410,7 @@ components:
               - ReadFields
               - ReadRecordRows
               - ReadTimeSeriesRows
+              - CountTimeSeriesRows
               - ListHistorySubjects
               - WaitViewSyncPoint
               - GetFactorPeriodComputed
@@ -1505,13 +1509,16 @@ components:
         max_body_bytes: 33554432
         methods:
           - QueryTimeSeriesRows
+          - CountTimeSeriesRows
           - SearchRecordRows
         read_only_methods:
           - QueryTimeSeriesRows
+          - CountTimeSeriesRows
           - SearchRecordRows
         acl:
           - methods:
               - QueryTimeSeriesRows
+              - CountTimeSeriesRows
               - SearchRecordRows
             callers:
               - console

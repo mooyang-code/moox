@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -19,6 +20,8 @@ const (
 	defaultConcurrent = 8
 	// subjectsPerRead 是一次读取合并的标的数：把逐标的的小请求合成批量请求，减少公网往返与网关压力。
 	subjectsPerRead = 50
+	// subjectsPerCount 是一次计数合并的标的数：计数只回传每个标的一个数字，批次可以比读行大得多（Storage 上限 2000）。
+	subjectsPerCount = 500
 	// MaxGaps 是一次检查返回的缺口数上限；超过时标记 Truncated。
 	MaxGaps = 5000
 	// MaxCheckPoints 是一次检查或补采允许展开的（标的 × 时间点）总数上限，防止一次请求占满内存。
@@ -33,6 +36,12 @@ type RowReader interface {
 // AbsenceSource 返回已确认“行情源没有”的 K 线区间。
 type AbsenceSource interface {
 	AbsencesIn(ctx context.Context, spaceID, datasetID, frequency string, subjects []string, from, to time.Time) ([]store.SourceAbsence, error)
+}
+
+// RowCounter 按标的统计时间范围内已存在的行数，由 Storage 的 active View 回答，只回传计数。
+// Rows 实现了它时，检查先比对根数，只有根数对不上的标的才读行定位缺口。
+type RowCounter interface {
+	CountTimeSeriesRows(context.Context, *storagepb.CountTimeSeriesRowsReq, ...client.Option) (*storagepb.CountTimeSeriesRowsRsp, error)
 }
 
 // PlanHistory 返回空间的全部采集计划。
@@ -126,6 +135,10 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 		subjects []string
 	}
 	var jobs []job
+	batch := subjectsPerRead
+	if _, counting := c.counter(request); counting {
+		batch = subjectsPerCount
+	}
 	keys := make([]string, 0, len(timeline))
 	for key := range timeline {
 		keys = append(keys, key)
@@ -144,8 +157,8 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 				}
 				selected = append(selected, subject)
 			}
-			for from := 0; from < len(selected); from += subjectsPerRead {
-				jobs = append(jobs, job{key: key, segment: segment, subjects: selected[from:min(from+subjectsPerRead, len(selected))]})
+			for from := 0; from < len(selected); from += batch {
+				jobs = append(jobs, job{key: key, segment: segment, subjects: selected[from:min(from+batch, len(selected))]})
 			}
 		}
 	}
@@ -286,53 +299,136 @@ func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID,
 		required = deepFields(segment.OutputFields)
 	}
 	present := map[string]map[int64]bool{}
+	complete := map[string]bool{}
 	absent := 0
 	if !request.AssumeMissing {
-		present, err = c.readPresent(ctx, request.SpaceID, datasetID, frequencyName, subjects, bars[0], bars[len(bars)-1].Add(time.Second), required, request.Deep)
+		end := bars[len(bars)-1].Add(time.Second)
+		absentBars, err := c.absentBars(ctx, request.SpaceID, datasetID, frequencyName, subjects, bars)
 		if err != nil {
 			return nil, 0, 0, err
 		}
-		if absent, err = c.coverAbsences(ctx, request.SpaceID, datasetID, frequencyName, subjects, bars, present); err != nil {
-			return nil, 0, 0, err
+		detail := subjects
+		if counter, ok := c.counter(request); ok {
+			// 先比对根数：根数正好等于“应有 - 已确认缺失”的标的没有缺口，不用读行。
+			if counts, err := countPresent(ctx, counter, request.SpaceID, datasetID, frequencyName, subjects, bars[0], end); err != nil {
+				// 计数失败（例如 Storage 还没升级）不影响检查，退回逐行比对。
+				log.WarnContextf(ctx, "collector kline count failed, falling back to row reads space=%s dataset=%s|%s: %v", request.SpaceID, datasetID, frequencyName, err)
+			} else {
+				detail = nil
+				for _, subject := range subjects {
+					if counts[subject] == len(bars)-len(absentBars[subject]) {
+						complete[subject] = true
+						absent += len(absentBars[subject])
+						continue
+					}
+					detail = append(detail, subject)
+				}
+			}
 		}
+		for from := 0; from < len(detail); from += subjectsPerRead {
+			chunk := detail[from:min(from+subjectsPerRead, len(detail))]
+			rows, err := c.readPresent(ctx, request.SpaceID, datasetID, frequencyName, chunk, bars[0], end, required, request.Deep)
+			if err != nil {
+				return nil, 0, 0, err
+			}
+			for subject, times := range rows {
+				present[subject] = times
+			}
+		}
+		absent += coverAbsences(bars, present, absentBars, detail)
 	}
 	var gaps []Gap
 	for _, subject := range subjects {
+		if complete[subject] {
+			continue
+		}
 		gaps = append(gaps, subjectGaps(datasetID, frequencyName, subject, frequency, bars, present[subject])...)
 	}
 	return gaps, len(bars) * len(subjects), absent, nil
 }
 
-// coverAbsences 把已确认行情源没有、且确实缺失的 K 线并入 present（不再算缺口），返回并入的根数。
-func (c *Checker) coverAbsences(ctx context.Context, spaceID, datasetID, frequencyName string, subjects []string, bars []time.Time, present map[string]map[int64]bool) (int, error) {
+// counter 返回可用的计数能力：深度检查要校验字段，强制重拉不读数据，二者都不计数。
+func (c *Checker) counter(request Request) (RowCounter, bool) {
+	if request.Deep || request.AssumeMissing {
+		return nil, false
+	}
+	counter, ok := c.Rows.(RowCounter)
+	return counter, ok
+}
+
+// countPresent 按标的统计 [from, to) 内已存在的 K 线根数（同一时间点多个 series_tag 只计一次）。
+func countPresent(ctx context.Context, counter RowCounter, spaceID, datasetID, frequency string, subjects []string, from, to time.Time) (map[string]int, error) {
+	selectors := make([]*storagepb.TimeSeriesSelector, 0, len(subjects))
+	for _, subject := range subjects {
+		selectors = append(selectors, &storagepb.TimeSeriesSelector{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: frequency})
+	}
+	rsp, err := counter.CountTimeSeriesRows(ctx, &storagepb.CountTimeSeriesRowsReq{
+		SpaceId: spaceID, DatasetId: datasetID, Selectors: selectors,
+		TimeRange: &storagepb.TimeRange{StartTime: from.Format(time.RFC3339), EndTime: to.Format(time.RFC3339)},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return nil, fmt.Errorf("count rows: %s", rsp.GetRetInfo().GetMsg())
+	}
+	counts := make(map[string]int, len(rsp.GetCounts()))
+	for _, item := range rsp.GetCounts() {
+		counts[item.GetSubjectId()] = int(item.GetRows())
+	}
+	return counts, nil
+}
+
+// absentBars 返回每个标的在 bars 里已确认行情源没有的 K 线开始时间。
+func (c *Checker) absentBars(ctx context.Context, spaceID, datasetID, frequencyName string, subjects []string, bars []time.Time) (map[string]map[int64]bool, error) {
+	out := map[string]map[int64]bool{}
 	if c.Absences == nil || len(bars) == 0 {
-		return 0, nil
+		return out, nil
 	}
 	frequency, err := marketdata.ParseFrequency(frequencyName)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	absences, err := c.Absences.AbsencesIn(ctx, spaceID, datasetID, frequencyName, subjects, bars[0], frequency.BarEnd(bars[len(bars)-1]))
 	if err != nil {
-		return 0, fmt.Errorf("read source absences: %w", err)
+		return nil, fmt.Errorf("read source absences: %w", err)
 	}
-	covered := 0
 	for _, absence := range absences {
-		bySubject := present[absence.SubjectID]
-		if bySubject == nil {
-			bySubject = map[int64]bool{}
-			present[absence.SubjectID] = bySubject
+		set := out[absence.SubjectID]
+		if set == nil {
+			set = map[int64]bool{}
+			out[absence.SubjectID] = set
 		}
 		// bars 已按时间排序：二分找到区间内的第一根。
 		start := sort.Search(len(bars), func(i int) bool { return !bars[i].Before(absence.From) })
 		for i := start; i < len(bars) && bars[i].Before(absence.To); i++ {
-			if !bySubject[bars[i].Unix()] {
-				bySubject[bars[i].Unix()] = true
+			set[bars[i].Unix()] = true
+		}
+	}
+	return out, nil
+}
+
+// coverAbsences 把这些标的已确认行情源没有、且确实缺失的 K 线并入 present（不再算缺口），返回并入的根数。
+func coverAbsences(bars []time.Time, present map[string]map[int64]bool, absent map[string]map[int64]bool, subjects []string) int {
+	covered := 0
+	for _, subject := range subjects {
+		set := absent[subject]
+		if len(set) == 0 {
+			continue
+		}
+		bySubject := present[subject]
+		if bySubject == nil {
+			bySubject = map[int64]bool{}
+			present[subject] = bySubject
+		}
+		for at := range set {
+			if !bySubject[at] {
+				bySubject[at] = true
 				covered++
 			}
 		}
 	}
-	return covered, nil
+	return covered
 }
 
 // subjectGaps 把应有的 K 线与实际存在的时间点比对，合并成连续缺口。

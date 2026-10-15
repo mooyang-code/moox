@@ -965,6 +965,38 @@ func (m *IndexManager) Query(ctx context.Context, id string, spec viewindex.Quer
 	return rows, -1, err
 }
 
+// CountBySubject 按标的统计谓词范围内不同 data_time 的行数：同一时间点有多个 series_tag 只计一次，
+// 与按行比对“这根 K 线在不在”的口径一致。
+func (m *IndexManager) CountBySubject(ctx context.Context, id string, spec viewindex.QuerySpec) (map[string]int64, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return nil, err
+	}
+	db, columns, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	where, _, err := buildWhere(spec, columns)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, "SELECT subject_id, COUNT(DISTINCT data_time) FROM view_rows"+where.sql+" GROUP BY subject_id", where.args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := map[string]int64{}
+	for rows.Next() {
+		var subject string
+		var count int64
+		if err := rows.Scan(&subject, &count); err != nil {
+			return nil, err
+		}
+		counts[subject] = count
+	}
+	return counts, rows.Err()
+}
+
 type whereClause struct {
 	sql  string
 	args []any

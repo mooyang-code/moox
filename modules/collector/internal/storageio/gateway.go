@@ -165,6 +165,11 @@ func (c *Client) RegisterSeriesSnapshot(ctx context.Context, request *storagepb.
 	return invoke[storagepb.PrimaryRegisterSeriesSnapshotRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "RegisterSeriesSnapshot", request, options)
 }
 
+// CountTimeSeriesRows 按标的统计时间范围内已存在的行数，只回传计数（完整性检查先比对根数用）。
+func (c *Client) CountTimeSeriesRows(ctx context.Context, request *storagepb.CountTimeSeriesRowsReq, options ...client.Option) (*storagepb.CountTimeSeriesRowsRsp, error) {
+	return invoke[storagepb.CountTimeSeriesRowsRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "CountTimeSeriesRows", request, options)
+}
+
 func (c *Client) ReadTimeSeriesRows(ctx context.Context, request *storagepb.ReadTimeSeriesRowsReq, options ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	return invoke[storagepb.ReadTimeSeriesRowsRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", request, options)
 }

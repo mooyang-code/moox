@@ -61,6 +61,14 @@ type recordingMarkerNode struct {
 
 type recordingView struct {
 	query func(context.Context, *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error)
+	count func(context.Context, *pb.CountTimeSeriesViewRowsReq) (*pb.CountTimeSeriesRowsRsp, error)
+}
+
+func (v *recordingView) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesViewRowsReq) (*pb.CountTimeSeriesRowsRsp, error) {
+	if v.count == nil {
+		return nil, errors.New("unexpected count")
+	}
+	return v.count(ctx, req)
 }
 
 func (v *recordingView) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
@@ -1164,4 +1172,40 @@ func TestCollectorIdentityWritesOnlyCollectorOwnedDatasets(t *testing.T) {
 	require.NoError(t, validateDatasetWriteOwner(ctx, &pb.AuthInfo{AppId: "strategy"}, rowFor("strategy")), "other callers keep their existing behavior")
 	record := []*pb.RowFieldUpsert{{Key: &pb.RowKey{SpaceId: "space", DatasetId: "strategy", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}}
 	require.NoError(t, validateDatasetWriteOwner(ctx, &pb.AuthInfo{AppId: "collector"}, record), "record rows such as task results are not time-series writes")
+}
+
+func TestCountTimeSeriesRowsRoutesToTheActiveView(t *testing.T) {
+	var captured *pb.CountTimeSeriesViewRowsReq
+	view := &recordingView{count: func(_ context.Context, req *pb.CountTimeSeriesViewRowsReq) (*pb.CountTimeSeriesRowsRsp, error) {
+		captured = req
+		return &pb.CountTimeSeriesRowsRsp{RetInfo: successRetInfo(), Counts: []*pb.SubjectRowCount{{SubjectId: "BTC-USDT", Rows: 60}}}, nil
+	}}
+	svc, err := New(Options{
+		Node: &recordingNode{},
+		View: func(_ context.Context, spaceID, datasetID string) (pb.DataViewService, string, error) {
+			if spaceID != "space" || datasetID != "market" {
+				t.Fatalf("resolved scope=%s/%s", spaceID, datasetID)
+			}
+			return view, "prices", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeRange := &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T01:00:00Z"}
+	rsp, err := svc.CountTimeSeriesRows(context.Background(), &pb.CountTimeSeriesRowsReq{
+		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"}, SpaceId: "space", DatasetId: "market",
+		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
+		TimeRange: timeRange,
+	})
+	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetCounts()) != 1 || rsp.GetCounts()[0].GetRows() != 60 {
+		t.Fatalf("rsp=%v err=%v", rsp, err)
+	}
+	if captured.GetViewId() != "prices" || captured.GetSpaceId() != "space" || len(captured.GetSelectors()) != 1 || captured.GetTimeRange().GetEndTime() != timeRange.GetEndTime() {
+		t.Fatalf("view request=%v", captured)
+	}
+	invalid, err := svc.CountTimeSeriesRows(context.Background(), &pb.CountTimeSeriesRowsReq{AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"}, SpaceId: "space", DatasetId: "market"})
+	if err != nil || invalid.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
+		t.Fatalf("missing selectors rsp=%v err=%v", invalid, err)
+	}
 }

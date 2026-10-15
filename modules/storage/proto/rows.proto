@@ -125,6 +125,29 @@ message ReadTimeSeriesRowsReq {
   uint32 latest_per_series = 11;
 }
 
+// CountTimeSeriesRowsReq 按标的统计时间范围内已存在的行数，不回传行：同一时间点有多个 series_tag 只计一次。
+// Collector 的完整性检查先用它比对“应有根数”，只有根数不够的标的才读行定位缺口，读取量随缺口而不是随标的数增长。
+// 和范围读一样由数据集当前的 active View 回答。
+message CountTimeSeriesRowsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  // selectors 需要 subject_id 与 freq，同一请求属于同一数据集。
+  repeated TimeSeriesSelector selectors = 4;
+  TimeRange time_range = 5;
+}
+
+message SubjectRowCount {
+  string subject_id = 1;
+  uint32 rows = 2;
+}
+
+message CountTimeSeriesRowsRsp {
+  common.RetInfo ret_info = 1;
+  // counts 只包含有行的标的；没有出现的标的根数为 0。
+  repeated SubjectRowCount counts = 2;
+}
+
 // ListHistorySubjectsReq lists the subjects that have rows at one frequency
 // in a time-series Dataset, read from the subject-first history index. View
 // rebuilds use it for Datasets without a subject catalog.

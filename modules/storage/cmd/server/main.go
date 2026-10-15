@@ -1143,6 +1143,12 @@ func (a *dataViewProxyAdapter) QueryTimeSeriesRows(ctx context.Context, req *pb.
 	return a.proxy.QueryTimeSeriesRows(ctx, clone)
 }
 
+func (a *dataViewProxyAdapter) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesViewRowsReq) (*pb.CountTimeSeriesRowsRsp, error) {
+	clone := proto.Clone(req).(*pb.CountTimeSeriesViewRowsReq)
+	clone.AuthInfo = proto.Clone(a.auth).(*pb.AuthInfo)
+	return a.proxy.CountTimeSeriesRows(ctx, clone)
+}
+
 func (a *dataViewProxyAdapter) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRowsReq) (*pb.SearchRecordRowsRsp, error) {
 	clone := proto.Clone(req).(*pb.SearchRecordRowsReq)
 	clone.AuthInfo = proto.Clone(a.auth).(*pb.AuthInfo)

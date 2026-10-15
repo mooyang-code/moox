@@ -23,6 +23,8 @@ type DataViewService interface {
 	//  View 索引是可重建的近期派生结果，不是完整事实存储。
 	//  完整历史以 PrimaryStore KV/Pebble 为准。
 	QueryTimeSeriesRows(ctx context.Context, req *QueryTimeSeriesRowsReq) (*QueryTimeSeriesRowsRsp, error)
+	// CountTimeSeriesRows CountTimeSeriesRows 按标的统计 active View 索引里的行数，只回传计数，供完整性检查先比对根数。
+	CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesViewRowsReq) (*CountTimeSeriesRowsRsp, error)
 	// SearchRecordRows SearchRecordRows 搜索 Bleve 中当前 active View 索引。
 	//  View 索引是可重建的近期派生结果，不是完整事实存储。
 	//  完整历史以 PrimaryStore KV/Pebble 为准。
@@ -37,6 +39,24 @@ func DataViewService_QueryTimeSeriesRows_Handler(svr interface{}, ctx context.Co
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(DataViewService).QueryTimeSeriesRows(ctx, reqbody.(*QueryTimeSeriesRowsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func DataViewService_CountTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CountTimeSeriesViewRowsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataViewService).CountTimeSeriesRows(ctx, reqbody.(*CountTimeSeriesViewRowsReq))
 	}
 
 	var rsp interface{}
@@ -75,6 +95,10 @@ var DataViewServer_ServiceDesc = server.ServiceDesc{
 			Func: DataViewService_QueryTimeSeriesRows_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.DataView/CountTimeSeriesRows",
+			Func: DataViewService_CountTimeSeriesRows_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.DataView/SearchRecordRows",
 			Func: DataViewService_SearchRecordRows_Handler,
 		},
@@ -100,6 +124,11 @@ func (s *UnimplementedDataView) QueryTimeSeriesRows(ctx context.Context, req *Qu
 	return nil, errors.New("rpc QueryTimeSeriesRows of service DataView is not implemented")
 }
 
+// CountTimeSeriesRows CountTimeSeriesRows 按标的统计 active View 索引里的行数，只回传计数，供完整性检查先比对根数。
+func (s *UnimplementedDataView) CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesViewRowsReq) (*CountTimeSeriesRowsRsp, error) {
+	return nil, errors.New("rpc CountTimeSeriesRows of service DataView is not implemented")
+}
+
 // SearchRecordRows SearchRecordRows 搜索 Bleve 中当前 active View 索引。
 //
 //	View 索引是可重建的近期派生结果，不是完整事实存储。
@@ -120,6 +149,8 @@ type DataViewClientProxy interface {
 	//  View 索引是可重建的近期派生结果，不是完整事实存储。
 	//  完整历史以 PrimaryStore KV/Pebble 为准。
 	QueryTimeSeriesRows(ctx context.Context, req *QueryTimeSeriesRowsReq, opts ...client.Option) (rsp *QueryTimeSeriesRowsRsp, err error)
+	// CountTimeSeriesRows CountTimeSeriesRows 按标的统计 active View 索引里的行数，只回传计数，供完整性检查先比对根数。
+	CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesViewRowsReq, opts ...client.Option) (rsp *CountTimeSeriesRowsRsp, err error)
 	// SearchRecordRows SearchRecordRows 搜索 Bleve 中当前 active View 索引。
 	//  View 索引是可重建的近期派生结果，不是完整事实存储。
 	//  完整历史以 PrimaryStore KV/Pebble 为准。
@@ -149,6 +180,26 @@ func (c *DataViewClientProxyImpl) QueryTimeSeriesRows(ctx context.Context, req *
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &QueryTimeSeriesRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataViewClientProxyImpl) CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesViewRowsReq, opts ...client.Option) (*CountTimeSeriesRowsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataView/CountTimeSeriesRows")
+	msg.WithCalleeServiceName(DataViewServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataView")
+	msg.WithCalleeMethod("CountTimeSeriesRows")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CountTimeSeriesRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

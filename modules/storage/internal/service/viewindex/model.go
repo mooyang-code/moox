@@ -175,6 +175,12 @@ type Engine interface {
 	Remove(context.Context, string) error
 }
 
+// RowCounter 是可选能力：按标的统计谓词范围内不同 data_time 的行数，只回传计数。
+// 完整性检查先比对根数，只有不够的标的才读行，读取量随缺口而不是随标的数增长。
+type RowCounter interface {
+	CountBySubject(context.Context, string, QuerySpec) (map[string]int64, error)
+}
+
 // SchemaExtender applies an append-only schema revision to an existing active
 // physical index without replacing the index or rebuilding its rows.
 type SchemaExtender interface {

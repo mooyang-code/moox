@@ -888,6 +888,42 @@ func TestDuckDBPrepareWriteAndPushdownQuery(t *testing.T) {
 	}
 }
 
+// 按标的计数：只统计选择器与时间范围内的行，同一时间点多个 series_tag 只计一次，没有行的标的不出现。
+func TestDuckDBCountBySubjectCountsDistinctBarsInRange(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash"}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	row := func(subject, tag string, minute int) viewindex.RowWrite {
+		return viewindex.RowWrite{Key: viewindex.RowKey{Key: duckRowKey("s", "prices", subject, "1m", fmt.Sprintf("2026-07-20T00:%02d:00Z", minute), tag)}}
+	}
+	rows := []viewindex.RowWrite{
+		row("BTC", "", 0), row("BTC", "", 1), row("BTC", "venue:other", 1), row("BTC", "", 2), row("BTC", "", 5),
+		row("ETH", "", 0), row("SOL", "", 1),
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{RowWrites: rows, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite}); err != nil {
+		t.Fatal(err)
+	}
+	selector := func(subject string) viewindex.TimeSeriesSelector {
+		return viewindex.TimeSeriesSelector{SpaceID: "s", DatasetID: "prices", SubjectID: subject, Freq: "1m"}
+	}
+	counts, err := manager.CountBySubject(context.Background(), "idx", viewindex.QuerySpec{
+		Selectors: []viewindex.TimeSeriesSelector{selector("BTC"), selector("ETH"), selector("DOGE")},
+		TimeRange: &pb.TimeRange{StartTime: "2026-07-20T00:00:00Z", EndTime: "2026-07-20T00:03:00Z"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(counts) != 2 || counts["BTC"] != 3 || counts["ETH"] != 1 {
+		t.Fatalf("counts=%v", counts)
+	}
+}
+
 func TestStatMetadataTracksCoverageWithoutScanningRows(t *testing.T) {
 	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
 	if err != nil {

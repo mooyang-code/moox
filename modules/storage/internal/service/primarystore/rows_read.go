@@ -63,6 +63,31 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	return &pb.ReadTimeSeriesRowsRsp{RetInfo: rsp.GetRetInfo(), Rows: rows}, nil
 }
 
+// CountTimeSeriesRows 按标的统计时间范围内已存在的行数，由数据集当前的 active View 回答，只回传计数。
+func (s *Service) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesRowsReq) (*pb.CountTimeSeriesRowsRsp, error) {
+	if req == nil || len(req.GetSelectors()) == 0 || req.GetTimeRange() == nil {
+		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("selectors and time_range are required"))}, nil
+	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	spaceID, datasetID, err := timeSeriesDataset(&pb.ReadTimeSeriesRowsReq{SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Selectors: req.GetSelectors()})
+	if err != nil {
+		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
+	if s.view == nil {
+		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_FOUND, errors.New("range counts require a registered DataView"))}, nil
+	}
+	view, viewID, err := s.view(ctx, spaceID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	if view == nil || viewID == "" {
+		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_FOUND, errors.New("range counts require a registered DataView"))}, nil
+	}
+	return view.CountTimeSeriesRows(ctx, &pb.CountTimeSeriesViewRowsReq{AuthInfo: req.GetAuthInfo(), SpaceId: spaceID, ViewId: viewID, Selectors: req.GetSelectors(), TimeRange: req.GetTimeRange()})
+}
+
 func isFactorHistoryRead(req *pb.ReadTimeSeriesRowsReq) bool {
 	return req != nil && len(req.GetKeys()) == 0 && isFactorAppID(req.GetAuthInfo().GetAppId())
 }
