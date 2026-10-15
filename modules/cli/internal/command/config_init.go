@@ -24,7 +24,7 @@ func newConfigInitCommand() *cobra.Command {
 
 目标文件已存在时不会覆盖：请先自行改名备份旧文件，或用 --output 指定新的路径。
 setup 系列命令只认仓库根目录下名为 moox.toml 的文件，生成到别处的文件需要自己放到这个位置。
-页面超过 --timeout（默认 10 分钟）没有提交会自动关闭，不写任何文件。
+页面超过 --timeout（默认 1 小时，页面上有倒计时）没有提交会自动关闭，不写任何文件。
 示例里的其余配置（保留期、日志、因子等）保持默认值，生成后可以直接编辑文件。`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,

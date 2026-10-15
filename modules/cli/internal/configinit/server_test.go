@@ -107,7 +107,8 @@ func validBody(t *testing.T) []byte {
 }
 
 func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
-	h := start(t, time.Minute)
+	before := time.Now()
+	h := start(t, 45*time.Minute)
 	resp, body := h.request(http.MethodGet, "", nil, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("状态 %d", resp.StatusCode)
@@ -141,9 +142,17 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 	var boot struct {
 		Components []struct{ ID string } `json:"components"`
 		Preset     []PresetHost          `json:"preset"`
+		Deadline   int64                 `json:"deadline"`
 	}
 	if err := json.Unmarshal([]byte(between(body, `id="boot">`, "</script>")), &boot); err != nil {
 		t.Fatalf("页面应内嵌可解析的初始数据: %v", err)
+	}
+	// 倒计时用的截止时间 = 启动时刻 + 有效期，页面里有倒计时条。
+	if low, high := before.Add(45*time.Minute).UnixMilli(), time.Now().Add(45*time.Minute).UnixMilli(); boot.Deadline < low || boot.Deadline > high {
+		t.Fatalf("截止时间 %d 应在 [%d, %d] 内", boot.Deadline, low, high)
+	}
+	if !strings.Contains(body, `id="timer"`) {
+		t.Fatal("页面应有倒计时条")
 	}
 	ids := map[string]bool{}
 	for _, c := range boot.Components {
@@ -464,5 +473,11 @@ func TestBrowserFailureShowsTheAddressButSuccessDoesNot(t *testing.T) {
 	h.wait()
 	if strings.Contains(h.notice.String(), token) || strings.Contains(h.notice.String(), "http://") {
 		t.Fatalf("成功打开浏览器后提示里不该出现地址和令牌: %q", h.notice.String())
+	}
+}
+
+func TestDefaultTimeoutIsOneHour(t *testing.T) {
+	if DefaultTimeout != time.Hour {
+		t.Fatalf("默认有效期 = %s，应为 1 小时", DefaultTimeout)
 	}
 }

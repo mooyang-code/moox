@@ -38,6 +38,9 @@ skills/dev-helper/.env.local
 
 # User-owned initialization manifest. Keep the checked-in example only.
 /moox.toml
+# 改名备份的旧配置同样含明文凭据（示例文件除外）
+/moox.toml.*
+!/moox.toml.example
 
 # Local Cursor MCP config contains the remote bearer token.
 .cursor/mcp.json

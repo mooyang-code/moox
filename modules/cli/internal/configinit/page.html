@@ -6,8 +6,8 @@
 <meta name="referrer" content="no-referrer">
 <title>MooX 初始化配置</title>
 <style nonce="{{.Nonce}}">
-:root { color-scheme: light dark; --bg:#f6f7f9; --fg:#1c2128; --muted:#656d76; --card:#fff; --line:#d0d7de; --accent:#0969da; --danger:#cf222e; --ok:#1a7f37; }
-@media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --card:#161b22; --line:#30363d; --accent:#4493f8; --danger:#f85149; --ok:#3fb950; } }
+:root { color-scheme: light dark; --bg:#f6f7f9; --fg:#1c2128; --muted:#656d76; --card:#fff; --line:#d0d7de; --accent:#0969da; --danger:#cf222e; --ok:#1a7f37; --warn:#9a6700; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --card:#161b22; --line:#30363d; --accent:#4493f8; --danger:#f85149; --ok:#3fb950; --warn:#d29922; } }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
 main { max-width: 880px; margin: 0 auto; padding: 28px 16px 64px; }
@@ -36,11 +36,18 @@ button:disabled { opacity: .55; cursor: default; }
 .banner { border-radius: 6px; padding: 10px 14px; margin: 0 0 16px; border: 1px solid; }
 .banner.error { color: var(--danger); border-color: var(--danger); }
 .banner.ok { color: var(--ok); border-color: var(--ok); }
+.timer { position: sticky; top: 0; z-index: 10; padding: 8px 16px; font-size: 13.5px; text-align: center; background: var(--card); border-bottom: 1px solid var(--line); color: var(--muted); }
+.timer strong { font-variant-numeric: tabular-nums; font-size: 15px; color: var(--fg); }
+.timer.warn { color: var(--warn); border-bottom-color: var(--warn); }
+.timer.warn strong { color: var(--warn); }
+.timer.urgent, .timer.expired { color: var(--danger); border-bottom-color: var(--danger); }
+.timer.urgent strong, .timer.expired strong { color: var(--danger); }
 [hidden] { display:none !important; }
 @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
+<div id="timer" class="timer" role="timer"></div>
 <main>
 <h1>MooX 初始化配置</h1>
 <p class="lead">填写部署信息，生成 <code>moox.toml</code>（写到 <code>{{.Output}}</code>）。页面只在本机运行，填写的内容不会发给 Agent 或任何外部服务。示例里的其余配置（保留期、日志、因子等）保持默认，之后可以直接编辑文件。</p>
@@ -240,6 +247,28 @@ button:disabled { opacity: .55; cursor: default; }
         button.disabled = false;
       });
   });
+
+  var timer = $('timer');
+  function pad(n) { return n < 10 ? '0' + n : String(n); }
+  function formatLeft(ms) {
+    var total = Math.max(0, Math.ceil(ms / 1000));
+    var hours = Math.floor(total / 3600), minutes = Math.floor((total % 3600) / 60), seconds = total % 60;
+    return (hours > 0 ? hours + ':' + pad(minutes) : pad(minutes)) + ':' + pad(seconds);
+  }
+  function tick() {
+    if (finished) { timer.hidden = true; return; }
+    var left = boot.deadline - Date.now();
+    var level = left <= 0 ? 'expired' : left <= 2 * 60 * 1000 ? 'urgent' : left <= 10 * 60 * 1000 ? 'warn' : '';
+    timer.className = 'timer' + (level ? ' ' + level : '');
+    if (left <= 0) {
+      timer.textContent = '已超过有效期，页面可能已经关闭。提交失败的话请重新运行 moox-cli config init（已填内容不会保留）。';
+      return;
+    }
+    timer.replaceChildren(document.createTextNode('本页剩余有效时间 '), el('strong', { text: formatLeft(left) }),
+      document.createTextNode(left <= 10 * 60 * 1000 ? '，请尽快提交；超时后页面关闭，已填内容会丢失。' : '。超时后页面自动关闭，已填内容会丢失，需要重新运行 moox-cli config init。'));
+  }
+  tick();
+  setInterval(tick, 1000);
 
   boot.preset.forEach(addHost);
 })();

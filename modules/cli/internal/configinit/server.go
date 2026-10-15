@@ -25,7 +25,7 @@ import (
 
 const (
 	// DefaultTimeout 是录入页的有效期：超时后令牌失效，进程退出。
-	DefaultTimeout = 10 * time.Minute
+	DefaultTimeout = time.Hour
 	maxBodyBytes   = 1 << 20
 )
 
@@ -80,7 +80,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("无法在本机起录入页: %w", err)
 	}
-	session, err := newSession(listener.Addr().String(), output)
+	session, err := newSession(listener.Addr().String(), output, time.Now().Add(timeout))
 	if err != nil {
 		_ = listener.Close()
 		return Result{}, err
@@ -100,7 +100,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 
 	url := "http://" + listener.Addr().String() + "/" + session.token + "/"
 	if err := open(url); err != nil {
-		// 浏览器打不开时才把地址给用户（令牌在里面，一次性且 10 分钟内有效）。
+		// 浏览器打不开时才把地址给用户（令牌在里面，一次性且只在有效期内可用）。
 		fmt.Fprintf(notice, "没能自动打开浏览器，请手动打开这个地址填写（只在本机有效）：\n%s\n", url)
 	} else {
 		fmt.Fprintf(notice, "已在浏览器里打开本机录入页（%s，%s 内有效）。请在页面里填写；填写的内容不会发给 Agent。\n", listener.Addr().String(), timeout)
@@ -140,7 +140,8 @@ type session struct {
 	result chan Result
 }
 
-func newSession(addr, output string) (*session, error) {
+// newSession 的 deadline 只用于让页面显示倒计时；真正的超时由 Run 的 context 负责。
+func newSession(addr, output string, deadline time.Time) (*session, error) {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
 		return nil, err
@@ -164,7 +165,7 @@ func newSession(addr, output string) (*session, error) {
 		return nil, err
 	}
 	// json.Marshal 默认转义 <、>、&，放进 <script> 数据块是安全的。
-	boot, err := json.Marshal(map[string]any{"components": components, "preset": preset})
+	boot, err := json.Marshal(map[string]any{"components": components, "preset": preset, "deadline": deadline.UnixMilli()})
 	if err != nil {
 		return nil, err
 	}
