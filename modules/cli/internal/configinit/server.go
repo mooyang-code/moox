@@ -19,8 +19,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 const (
@@ -146,26 +144,12 @@ func newSession(addr, output string, deadline time.Time) (*session, error) {
 	if _, err := rand.Read(raw); err != nil {
 		return nil, err
 	}
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return nil, err
-	}
-	type component struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-	}
-	var components []component
-	for _, c := range catalog.Components {
-		if c.Scope != servicecatalog.ScopeHost {
-			components = append(components, component{ID: c.ID, Name: c.Name})
-		}
-	}
-	preset, err := examplePreset()
+	roles, err := loadRoles()
 	if err != nil {
 		return nil, err
 	}
 	// json.Marshal 默认转义 <、>、&，放进 <script> 数据块是安全的。
-	boot, err := json.Marshal(map[string]any{"components": components, "preset": preset, "deadline": deadline.UnixMilli()})
+	boot, err := json.Marshal(map[string]any{"roles": roles, "deadline": deadline.UnixMilli()})
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +257,7 @@ func (s *session) submit(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusBadRequest, response{Message: "请求内容不对或过大"})
 		return
 	}
-	raw, err := Render(request)
+	raw, err := Render(&request)
 	if err != nil {
 		// 校验没过不消耗令牌：用户改完可以直接再提交。
 		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
@@ -295,11 +279,11 @@ func (s *session) submit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.done = true
 	result := Result{Path: s.output}
-	for _, host := range request.Hosts {
+	for _, host := range request.hosts {
 		result.Hosts = append(result.Hosts, host.ID)
 	}
-	if request.Compile != nil {
-		result.CompileHost = request.Compile.ID
+	if request.compile != nil {
+		result.CompileHost = request.compile.ID
 	}
 	reply(w, http.StatusOK, response{OK: true, Path: s.output})
 	s.result <- result

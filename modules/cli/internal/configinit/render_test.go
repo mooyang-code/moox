@@ -3,6 +3,7 @@ package configinit
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,7 +11,7 @@ import (
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 )
 
-// sampleRequest 是与示例拓扑同构的三主机请求（地址用文档保留的测试网段）。
+// sampleRequest 是三台独立服务器（存储、海外、管理台）的请求，不配因子执行服务器（地址用文档保留的测试网段）。
 func sampleRequest() Request {
 	var request Request
 	request.Admin.Username = "admin"
@@ -20,19 +21,15 @@ func sampleRequest() Request {
 	request.Tencent.Region = "ap-guangzhou"
 	request.Notification.ChannelType = "wecom"
 	request.Notification.WebhookURL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=abc"
-	request.Hosts = []Host{
-		{ID: "control", Address: "198.51.100.10", Region: "ap-guangzhou", Provider: "tencent", TLSMode: "auto", SSHUser: "ubuntu", SSHPassword: "pw-control",
-			Components: []string{"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"}},
-		{ID: "storage", Address: "198.51.100.11", Region: "ap-nanjing", Provider: "tencent", TLSMode: "auto", SSHUser: "ubuntu", SSHPassword: "pw-storage",
-			Components: []string{"storage-primary", "storage-node", "storage-view", "access"}},
-		{ID: "compute-1", Address: "198.51.100.12", Region: "ap-hongkong", Provider: "tencent", SSHUser: "ubuntu", SSHPassword: "pw-compute",
-			Components: []string{"trade", "access", "egress-proxy"}},
-	}
+	request.Servers.Storage = &Server{ID: "storage", Address: "198.51.100.11", Region: "ap-nanjing", Provider: "tencent", TLSMode: "auto", SSHUser: "ubuntu", SSHPassword: "pw-storage"}
+	request.Servers.Overseas = &Server{ID: "compute-1", Address: "198.51.100.12", Region: "ap-hongkong", Provider: "tencent", SSHUser: "ubuntu", SSHPassword: "pw-compute"}
+	request.Servers.Control = &Server{ID: "control", Address: "198.51.100.10", Region: "ap-guangzhou", Provider: "tencent", TLSMode: "auto", SSHUser: "ubuntu", SSHPassword: "pw-control"}
 	return request
 }
 
-func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
-	raw, err := Render(sampleRequest())
+func render(t *testing.T, request Request) setupconfig.Manifest {
+	t.Helper()
+	raw, err := Render(&request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +37,11 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("渲染结果应通过 CLI 自己的校验: %v", err)
 	}
+	return manifest
+}
+
+func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
+	manifest := render(t, sampleRequest())
 	if manifest.Admin.Username != "admin" || manifest.Admin.Password != "Adm1n-P@ss" {
 		t.Fatalf("管理员 = %+v", manifest.Admin)
 	}
@@ -52,8 +54,14 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 	if len(manifest.HostCatalog) != 3 || manifest.HostCatalog["storage"].SSH.Password != "pw-storage" || manifest.HostCatalog["control"].Address != "198.51.100.10" {
 		t.Fatalf("主机 = %+v", manifest.HostCatalog)
 	}
-	if manifest.PlacementHost("storage-view") != "storage" || manifest.PlacementHost("admin") != "control" {
+	// 角色到组件的映射与示例模板的放置一致。
+	if !slices.Equal(manifest.Placements["control"], []string{"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"}) ||
+		!slices.Equal(manifest.Placements["storage"], []string{"storage-primary", "storage-node", "storage-view", "access"}) ||
+		!slices.Equal(manifest.Placements["compute-1"], []string{"trade", "access", "egress-proxy"}) {
 		t.Fatalf("放置 = %+v", manifest.Placements)
+	}
+	if manifest.HasCompileHost() {
+		t.Fatal("没配因子执行服务器时不应有编译机")
 	}
 	if manifest.EventBus.PublicAddress != "198.51.100.10" {
 		t.Fatalf("EventBus 地址应由 eventbus 所在主机推出，实际 %q", manifest.EventBus.PublicAddress)
@@ -61,7 +69,8 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 }
 
 func TestRenderKeepsTheExampleDefaultsAndComments(t *testing.T) {
-	raw, err := Render(sampleRequest())
+	request := sampleRequest()
+	raw, err := Render(&request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,37 +87,69 @@ func TestRenderKeepsTheExampleDefaultsAndComments(t *testing.T) {
 	}
 }
 
-func TestRenderWritesTheCompileHostOnlyWhenRequested(t *testing.T) {
+func TestFactorServerBecomesTheCompileHostAndAcceptsALANAddress(t *testing.T) {
 	request := sampleRequest()
-	request.Compile = &Host{ID: "builder", Address: "198.51.100.30", SSHPort: 2222, SSHUser: "builder", SSHPassword: "pw-build"}
-	raw, err := Render(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := setupconfig.Parse(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !manifest.HasCompileHost() || manifest.CompileHost().Name != "builder" || manifest.CompileHost().Port != 2222 || manifest.CompileHost().Password != "pw-build" {
+	request.Servers.Factor = &Server{Address: "192.168.0.103", SSHPort: 2222, SSHUser: "builder", SSHPassword: "pw-build"}
+	manifest := render(t, request)
+	if !manifest.HasCompileHost() || manifest.CompileHost().Name != "factor" || manifest.CompileHost().Port != 2222 || manifest.CompileHost().Password != "pw-build" {
 		t.Fatalf("编译机 = %+v", manifest.CompileHost())
 	}
-	if len(manifest.Placements["builder"]) != 0 {
-		t.Fatal("编译机不应放置组件")
+	if manifest.HostCatalog["factor"].Address != "192.168.0.103" {
+		t.Fatalf("因子执行服务器 = %+v", manifest.HostCatalog["factor"])
+	}
+	if _, placed := manifest.Placements["factor"]; placed {
+		t.Fatal("因子执行服务器不放置 MooX 组件")
+	}
+}
+
+func TestControlCanShareAServerWithStorageOrOverseas(t *testing.T) {
+	for _, target := range []struct{ role, host string }{{RoleStorage, "storage"}, {RoleOverseas, "compute-1"}} {
+		request := sampleRequest()
+		// 共用时管理台自己的地址和密码不用填，填了也忽略。
+		request.Servers.Control = &Server{SharedWith: target.role, TLSMode: "public"}
+		manifest := render(t, request)
+		if len(manifest.HostCatalog) != 2 {
+			t.Fatalf("%s：应只有两台主机，实际 %v", target.role, manifest.HostCatalog)
+		}
+		if manifest.PlacementHost("admin") != target.host || manifest.PlacementHost("console-proxy") != target.host {
+			t.Fatalf("%s：管理台组件应放到 %s，实际 %+v", target.role, target.host, manifest.Placements)
+		}
+		if manifest.HostCatalog[target.host].TLSMode != "public" {
+			t.Fatalf("%s：证书模式应取管理台的选择，实际 %q", target.role, manifest.HostCatalog[target.host].TLSMode)
+		}
+		if manifest.EventBus.PublicAddress != manifest.HostCatalog[target.host].Address {
+			t.Fatalf("%s：EventBus 地址应是共用主机的地址", target.role)
+		}
+	}
+}
+
+func TestSameAddressWithoutSharingSuggestsTheShareOption(t *testing.T) {
+	request := sampleRequest()
+	request.Servers.Control.Address = request.Servers.Storage.Address
+	_, err := Render(&request)
+	if err == nil || !strings.Contains(err.Error(), "与数据存储服务器共用") {
+		t.Fatalf("地址相同时应提示选择共用，实际 %v", err)
+	}
+}
+
+func TestEmptyHostIDUsesTheRoleDefault(t *testing.T) {
+	request := sampleRequest()
+	request.Servers.Storage.ID = ""
+	request.Servers.Overseas.ID = " "
+	manifest := render(t, request)
+	if _, ok := manifest.HostCatalog["storage"]; !ok {
+		t.Fatalf("存储服务器应默认用 storage，实际 %v", manifest.HostCatalog)
+	}
+	if _, ok := manifest.HostCatalog["compute-1"]; !ok {
+		t.Fatalf("海外服务器应默认用 compute-1，实际 %v", manifest.HostCatalog)
 	}
 }
 
 func TestRenderWritesEveryHostFieldAndOmitsTheUnsetOnes(t *testing.T) {
 	request := sampleRequest()
-	request.Hosts[0].PrivateAddress = "10.0.0.5"
-	request.Hosts[0].SSHPort = 2200
-	raw, err := Render(request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := setupconfig.Parse(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
+	request.Servers.Control.PrivateAddress = "10.0.0.5"
+	request.Servers.Control.SSHPort = 2200
+	manifest := render(t, request)
 	control := manifest.HostCatalog["control"]
 	if control.PrivateAddress != "10.0.0.5" || control.Region != "ap-guangzhou" || control.Provider != "tencent" || control.TLSMode != "auto" || control.SSH.Port != 2200 || control.SSH.Username != "ubuntu" {
 		t.Fatalf("control = %+v", control)
@@ -121,7 +162,8 @@ func TestRenderWritesEveryHostFieldAndOmitsTheUnsetOnes(t *testing.T) {
 
 // 只替换账号、云凭据、通知和拓扑；拓扑之后的段落（egress_proxy 起）必须与示例逐字一致。
 func TestRenderLeavesEverythingAfterTheTopologyUntouched(t *testing.T) {
-	raw, err := Render(sampleRequest())
+	request := sampleRequest()
+	raw, err := Render(&request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,9 +204,9 @@ func TestRenderEscapesSecretsAndRoundTrips(t *testing.T) {
 		if len([]byte(secret)) > 72 {
 			continue
 		}
-		request.Hosts[0].SSHPassword = secret
+		request.Servers.Control.SSHPassword = secret
 		request.Tencent.SecretKey = secret
-		raw, err := Render(request)
+		raw, err := Render(&request)
 		if err != nil {
 			if strings.Contains(secret, "\t") {
 				continue // 控制字符（制表符）按规则被拒绝
@@ -192,27 +234,34 @@ func TestRenderEscapesSecretsAndRoundTrips(t *testing.T) {
 func TestRenderRejectsInputThatCouldBreakTheFile(t *testing.T) {
 	cases := map[string]func(*Request){
 		"管理员密码含换行":        func(r *Request) { r.Admin.Password = "a\nb" },
-		"SSH 密码含换行":       func(r *Request) { r.Hosts[0].SSHPassword = "x\r\n[hosts.evil]" },
+		"SSH 密码含换行":       func(r *Request) { r.Servers.Control.SSHPassword = "x\r\n[hosts.evil]" },
 		"SecretKey 含控制字符": func(r *Request) { r.Tencent.SecretKey = "a\x00b" },
-		"主机 ID 含大写":       func(r *Request) { r.Hosts[0].ID = "Control" },
-		"主机 ID 含特殊字符":     func(r *Request) { r.Hosts[0].ID = `x"]` + "\n[evil" },
+		"主机 ID 含大写":       func(r *Request) { r.Servers.Control.ID = "Control" },
+		"主机 ID 含特殊字符":     func(r *Request) { r.Servers.Control.ID = `x"]` + "\n[evil" },
 		"管理员密码为空":         func(r *Request) { r.Admin.Password = "" },
-		"没有主机":            func(r *Request) { r.Hosts = nil },
-		"主机没有组件":          func(r *Request) { r.Hosts[1].Components = nil },
-		"组件不存在":           func(r *Request) { r.Hosts[1].Components = []string{"no-such"} },
-		"自动放置的组件":         func(r *Request) { r.Hosts[1].Components = []string{"host-gateway"} },
-		"主机 ID 重复":        func(r *Request) { r.Hosts[1].ID = "control" },
-		"地址重复":            func(r *Request) { r.Hosts[1].Address = r.Hosts[0].Address },
-		"webhook 不是官方域名":  func(r *Request) { r.Notification.WebhookURL = "https://evil.example/x" },
-		"管理员密码超过 72 字节":   func(r *Request) { r.Admin.Password = strings.Repeat("x", 73) },
-		"字段超长":            func(r *Request) { r.Hosts[0].Address = strings.Repeat("a", 600) },
-		"缺少 eventbus":     func(r *Request) { r.Hosts[0].Components = []string{"console-proxy", "web-host", "admin"} },
+		"缺少存储服务器":         func(r *Request) { r.Servers.Storage = nil },
+		"缺少海外服务器":         func(r *Request) { r.Servers.Overseas = nil },
+		"缺少管理台服务器":        func(r *Request) { r.Servers.Control = nil },
+		"存储服务器不能共用":       func(r *Request) { r.Servers.Storage.SharedWith = RoleOverseas },
+		"管理台共用未知角色":       func(r *Request) { r.Servers.Control.SharedWith = "nowhere" },
+		"管理台不能与因子机共用":     func(r *Request) { r.Servers.Control.SharedWith = RoleFactor },
+		"因子机不能共用":         func(r *Request) { r.Servers.Factor = &Server{SharedWith: RoleStorage} },
+		"因子机缺密码":          func(r *Request) { r.Servers.Factor = &Server{Address: "192.168.0.9", SSHUser: "u"} },
+		"主机 ID 重复":        func(r *Request) { r.Servers.Overseas.ID = "control" },
+		"因子机 ID 与部署主机重复": func(r *Request) {
+			r.Servers.Factor = &Server{ID: "storage", Address: "192.168.0.9", SSHUser: "u", SSHPassword: "p"}
+		},
+		"地址重复":           func(r *Request) { r.Servers.Overseas.Address = r.Servers.Control.Address },
+		"SSH 端口越界":       func(r *Request) { r.Servers.Storage.SSHPort = 70000 },
+		"webhook 不是官方域名": func(r *Request) { r.Notification.WebhookURL = "https://evil.example/x" },
+		"管理员密码超过 72 字节":  func(r *Request) { r.Admin.Password = strings.Repeat("x", 73) },
+		"字段超长":           func(r *Request) { r.Servers.Control.Address = strings.Repeat("a", 600) },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
 			request := sampleRequest()
 			mutate(&request)
-			raw, err := Render(request)
+			raw, err := Render(&request)
 			if err == nil {
 				t.Fatalf("应被拒绝，却渲染出了 %d 字节", len(raw))
 			}

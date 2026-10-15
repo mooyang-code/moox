@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -140,9 +141,8 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 		t.Fatal("页面内容里不应出现令牌")
 	}
 	var boot struct {
-		Components []struct{ ID string } `json:"components"`
-		Preset     []PresetHost          `json:"preset"`
-		Deadline   int64                 `json:"deadline"`
+		Roles    []Role `json:"roles"`
+		Deadline int64  `json:"deadline"`
 	}
 	if err := json.Unmarshal([]byte(between(body, `id="boot">`, "</script>")), &boot); err != nil {
 		t.Fatalf("页面应内嵌可解析的初始数据: %v", err)
@@ -154,24 +154,20 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 	if !strings.Contains(body, `id="timer"`) {
 		t.Fatal("页面应有倒计时条")
 	}
-	ids := map[string]bool{}
-	for _, c := range boot.Components {
-		ids[c.ID] = true
+	var keys []string
+	for _, role := range boot.Roles {
+		keys = append(keys, role.Key)
+		if role.Title == "" || role.Purpose == "" || len(role.Specs) == 0 || len(role.Groups) == 0 || role.Defaults.ID == "" {
+			t.Fatalf("角色 %s 缺少说明、推荐规格、功能分组或默认 ID: %+v", role.Key, role)
+		}
 	}
-	if !ids["console-proxy"] || !ids["storage-view"] || !ids["admin"] {
-		t.Fatalf("可选组件应来自服务目录: %v", ids)
+	if !slices.Equal(keys, []string{RoleStorage, RoleOverseas, RoleControl, RoleFactor}) {
+		t.Fatalf("角色顺序 = %v", keys)
 	}
-	if ids["host-gateway"] || ids["host-agent"] {
-		t.Fatal("自动放置的 host-gateway、host-agent 不应出现在可选组件里")
-	}
-	if len(boot.Preset) != 3 || boot.Preset[0].ID != "control" || boot.Preset[1].ID != "storage" || boot.Preset[2].ID != "compute-1" {
-		t.Fatalf("示例拓扑 = %+v", boot.Preset)
-	}
-	for _, host := range boot.Preset {
-		for _, id := range host.Components {
-			if !ids[id] {
-				t.Fatalf("示例拓扑里的组件 %q 不在可选组件里", id)
-			}
+	// 用户只看到中文功能分组，不看到组件 ID。
+	for _, id := range []string{"storage-primary", "console-proxy", "egress-proxy", "factor-mgr"} {
+		if strings.Contains(body, id) {
+			t.Fatalf("页面不应展示组件 ID %q", id)
 		}
 	}
 }

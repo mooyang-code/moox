@@ -6,110 +6,242 @@
 <meta name="referrer" content="no-referrer">
 <title>MooX 初始化配置</title>
 <style nonce="{{.Nonce}}">
-:root { color-scheme: light dark; --bg:#f6f7f9; --fg:#1c2128; --muted:#656d76; --card:#fff; --line:#d0d7de; --accent:#0969da; --danger:#cf222e; --ok:#1a7f37; --warn:#9a6700; }
-@media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --card:#161b22; --line:#30363d; --accent:#4493f8; --danger:#f85149; --ok:#3fb950; --warn:#d29922; } }
+:root {
+  color-scheme: light dark;
+  --bg: #f4f6fa; --bg-grad: #e9eefb; --fg: #172033; --muted: #5d6779; --faint: #8a93a3;
+  --card: #ffffff; --line: #dfe4ec; --soft: #f6f8fb; --input: #ffffff;
+  --accent: #3d63dd; --accent-soft: #e8eefe; --accent-fg: #ffffff;
+  --danger: #d1283a; --danger-soft: #fdecee; --ok: #188a4a; --ok-soft: #e6f6ec; --warn: #a96500; --warn-soft: #fff4e0;
+  --shadow: 0 1px 2px rgba(23, 32, 51, .04), 0 4px 16px rgba(23, 32, 51, .06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1117; --bg-grad: #131a2a; --fg: #e6eaf2; --muted: #9aa4b5; --faint: #6c7586;
+    --card: #161b24; --line: #2a3140; --soft: #1b212c; --input: #10141b;
+    --accent: #6f8ff5; --accent-soft: #1f2a4a; --accent-fg: #0e1117;
+    --danger: #ff6b7a; --danger-soft: #3a1a20; --ok: #4cc983; --ok-soft: #14301f; --warn: #f0b252; --warn-soft: #3a2a10;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 20px rgba(0, 0, 0, .25);
+  }
+}
 * { box-sizing: border-box; }
-body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
-main { max-width: 880px; margin: 0 auto; padding: 28px 16px 64px; }
-h1 { font-size: 22px; margin: 0 0 6px; }
-h2 { font-size: 16px; margin: 0 0 12px; }
-.lead { color: var(--muted); margin: 0 0 20px; }
-code { background: var(--line); padding: 1px 6px; border-radius: 4px; font-size: 13px; word-break: break-all; }
-section, .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-.card { margin-bottom: 12px; background: transparent; }
-.card-head { display:flex; justify-content: space-between; align-items:center; margin-bottom: 10px; }
-.grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
-.field { display:flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-.field.wide { grid-column: 1 / -1; }
-input[type=text], input[type=password], input[type=number], input[type=url], select { width:100%; padding: 7px 9px; border:1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
-input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 0; }
-fieldset.components { border:1px solid var(--line); border-radius: 6px; margin: 12px 0 0; padding: 8px 12px 10px; }
-fieldset.components legend { font-size: 13px; color: var(--muted); padding: 0 6px; }
-.chips { display:flex; flex-wrap: wrap; gap: 6px 14px; }
-.chips label { font-size: 13px; display:flex; align-items:center; gap:5px; cursor:pointer; }
-button { font: inherit; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 9px 22px; }
-button.link { border: none; background: none; color: var(--danger); padding: 2px 6px; }
-button:disabled { opacity: .55; cursor: default; }
-.row { display:flex; gap: 10px; align-items:center; flex-wrap: wrap; }
-.hint { font-size: 12.5px; color: var(--muted); margin: 6px 0 0; }
-.banner { border-radius: 6px; padding: 10px 14px; margin: 0 0 16px; border: 1px solid; }
-.banner.error { color: var(--danger); border-color: var(--danger); }
-.banner.ok { color: var(--ok); border-color: var(--ok); }
-.timer { position: sticky; top: 0; z-index: 10; padding: 8px 16px; font-size: 13.5px; text-align: center; background: var(--card); border-bottom: 1px solid var(--line); color: var(--muted); }
-.timer strong { font-variant-numeric: tabular-nums; font-size: 15px; color: var(--fg); }
-.timer.warn { color: var(--warn); border-bottom-color: var(--warn); }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; color: var(--fg); background: linear-gradient(180deg, var(--bg-grad) 0, var(--bg) 360px);
+  background-color: var(--bg); font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+main { max-width: 920px; margin: 0 auto; padding: 32px 16px 120px; }
+code { font: 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--soft); border: 1px solid var(--line); padding: 1px 6px; border-radius: 5px; word-break: break-all; }
+
+/* 倒计时条 */
+.timer { position: sticky; top: 0; z-index: 20; padding: 8px 16px; font-size: 13.5px; text-align: center; color: var(--muted);
+  background: color-mix(in srgb, var(--card) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+.timer strong { font-variant-numeric: tabular-nums; font-size: 15px; color: var(--fg); margin: 0 2px; }
+.timer.warn { color: var(--warn); background: var(--warn-soft); border-bottom-color: var(--warn); }
 .timer.warn strong { color: var(--warn); }
-.timer.urgent, .timer.expired { color: var(--danger); border-bottom-color: var(--danger); }
+.timer.urgent, .timer.expired { color: var(--danger); background: var(--danger-soft); border-bottom-color: var(--danger); }
 .timer.urgent strong, .timer.expired strong { color: var(--danger); }
-[hidden] { display:none !important; }
-@media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+
+/* 页头 */
+.hero { display: flex; gap: 16px; align-items: center; margin-bottom: 14px; }
+.logo { flex: none; width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; color: #fff;
+  background: linear-gradient(135deg, #5b7cfa, #3d4fd8); box-shadow: 0 6px 18px rgba(61, 99, 221, .35); }
+.logo svg { width: 28px; height: 28px; }
+h1 { font-size: 24px; line-height: 1.3; margin: 0; letter-spacing: .2px; }
+.subtitle { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 24px; }
+.fact { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); background: var(--card);
+  border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; max-width: 100%; }
+.fact svg { width: 14px; height: 14px; color: var(--ok); flex: none; }
+.fact code { border: none; background: none; padding: 0; }
+.nowrap { white-space: nowrap; }
+
+/* 步骤卡片 */
+.step { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px 22px 20px; margin-bottom: 18px; box-shadow: var(--shadow); }
+.step-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 16px; }
+.num { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 700;
+  color: var(--accent); background: var(--accent-soft); }
+h2 { font-size: 17px; margin: 1px 0 0; }
+.step-desc { margin: 2px 0 0; color: var(--muted); font-size: 13.5px; }
+
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; }
+.grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--muted); min-width: 0; }
+.field .req { color: var(--danger); margin-left: 2px; font-style: normal; }
+.field small { color: var(--faint); font-size: 12px; }
+input[type=text], input[type=password], input[type=number], select {
+  width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--input); color: var(--fg);
+  font: inherit; font-size: 14px; transition: border-color .15s, box-shadow .15s; }
+input::placeholder { color: var(--faint); }
+input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.inline { display: flex; gap: 8px; }
+.inline input { flex: 1; min-width: 0; }
+.hint { font-size: 12.5px; color: var(--faint); margin: 10px 0 0; }
+
+button { font: inherit; font-size: 14px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; white-space: nowrap; }
+button:hover { border-color: var(--accent); color: var(--accent); }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; padding: 11px 28px; font-size: 15px; box-shadow: 0 4px 14px rgba(61, 99, 221, .3); }
+button.primary:hover { filter: brightness(1.06); color: var(--accent-fg); }
+button:disabled { opacity: .55; cursor: default; }
+
+/* 服务器卡片 */
+.servers { display: grid; gap: 16px; }
+.server { border: 1px solid var(--line); border-radius: 12px; background: var(--soft); overflow: hidden; }
+.server.off .server-body { display: none; }
+.server-top { display: flex; gap: 14px; padding: 16px 18px; align-items: flex-start; background: var(--card); border-bottom: 1px solid var(--line); }
+.server.off .server-top { border-bottom: none; }
+.icon { flex: none; width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; }
+.icon svg { width: 22px; height: 22px; }
+.icon.storage { color: #2f6fd6; background: #e5efff; }
+.icon.overseas { color: #0f8a7a; background: #dff6f1; }
+.icon.control { color: #7a4fd6; background: #efe8ff; }
+.icon.factor { color: #c25b12; background: #fff0e2; }
+@media (prefers-color-scheme: dark) {
+  .icon.storage { background: #172a4a; color: #7fb0ff; } .icon.overseas { background: #12332e; color: #5fd3c0; }
+  .icon.control { background: #2a1f45; color: #b79cff; } .icon.factor { background: #3a2412; color: #ffab66; }
+}
+.server-title { flex: 1; min-width: 0; }
+.server-title h3 { font-size: 16px; margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tag { font-size: 11.5px; font-weight: 500; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.tag.must { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
+.server-title p { margin: 4px 0 0; color: var(--muted); font-size: 13.5px; }
+.server-body { padding: 16px 18px 18px; }
+.about { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-bottom: 16px; }
+.box { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.box-title { font-size: 12px; font-weight: 600; color: var(--faint); letter-spacing: .5px; margin: 0 0 8px; }
+.specs { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13.5px; }
+.specs li { display: flex; gap: 8px; align-items: baseline; }
+.specs li::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); transform: translateY(-2px); }
+.specs li.ref { color: var(--faint); font-size: 12.5px; }
+.specs li.ref::before { background: var(--faint); }
+.groups { display: grid; gap: 7px; }
+.group { display: flex; gap: 8px; align-items: baseline; font-size: 13.5px; }
+.group b { flex: none; font-weight: 600; font-size: 12.5px; color: var(--fg); background: var(--soft); border: 1px solid var(--line); border-radius: 6px; padding: 0 8px; }
+.group span { color: var(--muted); font-size: 12.5px; }
+
+/* 共用选择（分段按钮） */
+.segment { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); margin-bottom: 14px; }
+.segment label { position: relative; cursor: pointer; }
+.segment input { position: absolute; opacity: 0; pointer-events: none; }
+.segment span { display: block; padding: 6px 14px; border-radius: 7px; font-size: 13.5px; color: var(--muted); }
+.segment input:checked + span { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
+.segment input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+.shared-note { font-size: 13.5px; color: var(--muted); background: var(--card); border: 1px dashed var(--line); border-radius: 10px; padding: 12px 14px; }
+
+/* 开关 */
+.switch { position: relative; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13.5px; color: var(--muted); flex: none; }
+.switch input { position: absolute; opacity: 0; pointer-events: none; }
+.switch i { width: 38px; height: 22px; border-radius: 999px; background: var(--line); position: relative; transition: background .15s; }
+.switch i::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); }
+.switch input:checked + i { background: var(--accent); }
+.switch input:checked + i::after { transform: translateX(16px); }
+.switch input:focus-visible + i { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+details.advanced { margin-top: 14px; }
+details.advanced summary { cursor: pointer; font-size: 13px; color: var(--accent); width: max-content; list-style: none; }
+details.advanced summary::-webkit-details-marker { display: none; }
+details.advanced summary::before { content: "▸ "; }
+details.advanced[open] summary::before { content: "▾ "; }
+details.advanced .grid { margin-top: 12px; }
+
+/* 提示与底部操作条 */
+.banner { border-radius: 10px; padding: 12px 16px; margin: 0 0 18px; border: 1px solid; font-size: 14px; }
+.banner.error { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+.done { text-align: center; padding: 48px 24px; }
+.done .check { width: 64px; height: 64px; border-radius: 50%; margin: 0 auto 16px; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok); }
+.done .check svg { width: 34px; height: 34px; }
+.done h2 { font-size: 20px; margin-bottom: 8px; }
+.done p { color: var(--muted); margin: 4px 0; word-break: break-all; }
+.actions { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; background: color-mix(in srgb, var(--card) 92%, transparent);
+  backdrop-filter: blur(8px); border-top: 1px solid var(--line); }
+.actions-inner { max-width: 920px; margin: 0 auto; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.actions .note { font-size: 12.5px; color: var(--faint); flex: 1; text-align: right; }
+[hidden] { display: none !important; }
+@media (max-width: 720px) {
+  .grid, .grid.three, .about { grid-template-columns: 1fr; }
+  .step { padding: 18px 16px; }
+  .server-top { flex-wrap: wrap; }
+  .actions .note { display: none; }
+}
 </style>
 </head>
 <body>
 <div id="timer" class="timer" role="timer"></div>
+
+<template id="icon-storage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7.5" ry="2.8"/><path d="M4.5 5.5v6.5c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V5.5"/><path d="M4.5 12v6.5c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8V12"/></svg></template>
+<template id="icon-overseas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg></template>
+<template id="icon-control"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 13l3-3 2.5 2L17 8"/></svg></template>
+<template id="icon-factor"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9.5 9.5h5v5h-5z"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></svg></template>
+
 <main>
-<h1>MooX 初始化配置</h1>
-<p class="lead">填写部署信息，生成 <code>moox.toml</code>（写到 <code>{{.Output}}</code>）。页面只在本机运行，填写的内容不会发给 Agent 或任何外部服务。示例里的其余配置（保留期、日志、因子等）保持默认，之后可以直接编辑文件。</p>
+<header class="hero">
+  <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V6l8 8 8-8v13"/></svg></div>
+  <div>
+    <h1>MooX 初始化配置</h1>
+    <p class="subtitle">填写账号、云服务与服务器信息，生成 moox.toml</p>
+  </div>
+</header>
+<div class="facts">
+  <span class="fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>只在本机运行，填写的内容不会发给 Agent 或任何外部服务</span>
+  <span class="fact"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg><span class="nowrap">写到</span><code>{{.Output}}</code></span>
+</div>
 
 <div id="error" class="banner error" role="alert" hidden></div>
-<div id="done" class="banner ok" hidden></div>
+<section id="done" class="step done" hidden>
+  <div class="check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
+  <h2>moox.toml 已生成</h2>
+  <p id="done-path"></p>
+  <p>文件权限 0600。可以关闭这个页面，回到终端继续。</p>
+</section>
 
 <form id="form" autocomplete="off" novalidate>
-<section>
-  <h2>管理员账号</h2>
+<section class="step">
+  <div class="step-head"><span class="num">1</span><div><h2>管理员账号</h2><p class="step-desc">登录管理台用的超级管理员。</p></div></div>
   <div class="grid">
-    <label class="field"><span>用户名 *</span><input type="text" id="admin-username" value="admin" autocomplete="off"></label>
-    <label class="field"><span>密码 *（不超过 72 字节）</span><input type="password" id="admin-password" data-secret="1" autocomplete="new-password"></label>
+    <label class="field"><span>用户名<em class="req">*</em></span><input type="text" id="admin-username" value="admin" autocomplete="off"></label>
+    <label class="field"><span>密码<em class="req">*</em> <small>不超过 72 字节</small></span>
+      <span class="inline"><input type="password" id="admin-password" data-secret="1" autocomplete="new-password"><button type="button" id="generate">生成强密码</button></span>
+    </label>
   </div>
-  <div class="row"><button type="button" id="generate">生成强密码</button><span class="hint">生成后会显示在输入框里，请先记下来。</span></div>
+  <p class="hint">生成的密码会直接显示在输入框里，请先记下来。</p>
 </section>
 
-<section>
-  <h2>腾讯云</h2>
+<section class="step">
+  <div class="step-head"><span class="num">2</span><div><h2>腾讯云</h2><p class="step-desc">用于部署采集云函数、对象存储和日志服务。建议使用只授权 SCF、COS、CLS 的子账号密钥。</p></div></div>
+  <div class="grid three">
+    <label class="field"><span>SecretId<em class="req">*</em></span><input type="text" id="tencent-id" autocomplete="off" spellcheck="false"></label>
+    <label class="field"><span>SecretKey<em class="req">*</em></span><input type="password" id="tencent-key" data-secret="1" autocomplete="new-password" spellcheck="false"></label>
+    <label class="field"><span>默认地域<em class="req">*</em></span><input type="text" id="tencent-region" value="ap-guangzhou" list="regions" autocomplete="off"></label>
+  </div>
+</section>
+
+<section class="step">
+  <div class="step-head"><span class="num">3</span><div><h2>告警通知</h2><p class="step-desc">数据中断、服务异常时推送到群机器人。</p></div></div>
   <div class="grid">
-    <label class="field"><span>SecretId *</span><input type="text" id="tencent-id" autocomplete="off" spellcheck="false"></label>
-    <label class="field"><span>SecretKey *</span><input type="password" id="tencent-key" data-secret="1" autocomplete="new-password" spellcheck="false"></label>
-    <label class="field"><span>默认地域 *</span><input type="text" id="tencent-region" value="ap-guangzhou" autocomplete="off"></label>
-  </div>
-  <p class="hint">建议使用只授权 SCF、COS、CLS 所需权限的子账号密钥。</p>
-</section>
-
-<section>
-  <h2>告警通知</h2>
-  <div class="grid">
-    <label class="field"><span>渠道 *</span><select id="notify-type"><option value="wecom">企业微信群机器人</option><option value="feishu">飞书群机器人</option></select></label>
-    <label class="field wide"><span>Webhook 地址 *（必须是对应平台的 https 地址）</span><input type="password" id="notify-url" data-secret="1" autocomplete="new-password" spellcheck="false"></label>
+    <label class="field"><span>渠道<em class="req">*</em></span><select id="notify-type"><option value="wecom">企业微信群机器人</option><option value="feishu">飞书群机器人</option></select></label>
+    <label class="field"><span>Webhook 地址<em class="req">*</em> <small>对应平台的 https 地址</small></span><input type="password" id="notify-url" data-secret="1" autocomplete="new-password" spellcheck="false"></label>
   </div>
 </section>
 
-<section>
-  <h2>主机与组件放置</h2>
-  <div class="row"><button type="button" id="preset">使用示例三主机拓扑</button><button type="button" id="add-host">添加主机</button></div>
-  <p class="hint">地址、SSH 密码要自己填；组件放置可以按需调整。host-gateway、host-agent 会自动放到每台主机，不用选。</p>
-  <div id="hosts"></div>
+<section class="step">
+  <div class="step-head"><span class="num">4</span><div><h2>服务器</h2><p class="step-desc">按用途准备服务器，填写地址和 SSH 登录方式即可，各项服务会自动放到对应的服务器上。</p></div></div>
+  <div id="servers" class="servers"></div>
 </section>
-
-<section>
-  <h2>Linux 编译机（可选）</h2>
-  <label class="chips"><input type="checkbox" id="compile-on"> 我有 Linux 编译机（只有 CGO 制品才需要，例如 Storage）</label>
-  <div id="compile-fields" hidden>
-    <div class="grid">
-      <label class="field"><span>主机 ID *</span><input type="text" id="compile-id" value="compile" autocomplete="off"></label>
-      <label class="field"><span>地址 *</span><input type="text" id="compile-address" autocomplete="off"></label>
-      <label class="field"><span>SSH 端口</span><input type="number" id="compile-port" value="22"></label>
-      <label class="field"><span>SSH 用户名 *</span><input type="text" id="compile-user" value="builder" autocomplete="off"></label>
-      <label class="field"><span>SSH 密码 *</span><input type="password" id="compile-password" data-secret="1" autocomplete="new-password"></label>
-    </div>
-  </div>
-</section>
-
-<div class="row">
-  <button type="submit" class="primary" id="submit">生成 moox.toml</button>
-  <label class="chips"><input type="checkbox" id="show"> 显示密码</label>
-</div>
 </form>
+
+<datalist id="regions">
+  <option value="ap-guangzhou">广州</option><option value="ap-shanghai">上海</option><option value="ap-nanjing">南京</option>
+  <option value="ap-beijing">北京</option><option value="ap-chengdu">成都</option><option value="ap-chongqing">重庆</option>
+  <option value="ap-hongkong">香港</option><option value="ap-singapore">新加坡</option><option value="ap-tokyo">东京</option>
+</datalist>
 </main>
+
+<div class="actions" id="actions">
+  <div class="actions-inner">
+    <label class="switch"><input type="checkbox" id="show"><i></i>显示密码</label>
+    <span class="note">提交前请确认地址与 SSH 密码正确</span>
+    <button type="submit" form="form" class="primary" id="submit">生成 moox.toml</button>
+  </div>
+</div>
 
 <script type="application/json" id="boot">{{.Boot}}</script>
 <script nonce="{{.Nonce}}">
@@ -117,6 +249,7 @@ button:disabled { opacity: .55; cursor: default; }
   'use strict';
   var boot = JSON.parse(document.getElementById('boot').textContent);
   var finished = false;
+  var cards = {};
   function $(id) { return document.getElementById(id); }
   function el(tag, attrs, children) {
     var node = document.createElement(tag);
@@ -125,90 +258,139 @@ button:disabled { opacity: .55; cursor: default; }
       else if (key === 'text') node.textContent = attrs[key];
       else node.setAttribute(key, attrs[key]);
     });
-    (children || []).forEach(function (child) { node.append(child); });
+    (children || []).forEach(function (child) { if (child) node.append(child); });
     return node;
+  }
+  function roleTitle(key) {
+    for (var i = 0; i < boot.roles.length; i++) if (boot.roles[i].key === key) return boot.roles[i].title;
+    return key;
   }
   function field(label, name, options) {
     options = options || {};
     var input = el('input', { type: options.type || 'text', 'data-name': name, autocomplete: options.secret ? 'new-password' : 'off', spellcheck: 'false' });
-    if (options.value !== undefined) input.value = options.value;
+    if (options.value !== undefined && options.value !== '') input.value = options.value;
+    if (options.placeholder) input.placeholder = options.placeholder;
+    if (options.list) input.setAttribute('list', options.list);
     if (options.secret) input.setAttribute('data-secret', '1');
-    return el('label', { class: 'field' }, [el('span', { text: label + (options.required ? ' *' : '') }), input]);
+    var caption = el('span', { text: label }, [
+      options.required ? el('em', { class: 'req', text: '*' }) : null,
+      options.note ? document.createTextNode(' ') : null,
+      options.note ? el('small', { text: options.note }) : null
+    ]);
+    return el('label', { class: 'field' }, [caption, input]);
   }
   function tlsField(value) {
     var select = el('select', { 'data-name': 'tls_mode' }, [
-      el('option', { value: '', text: '不设置' }), el('option', { value: 'auto', text: 'auto（自动）' }),
-      el('option', { value: 'public', text: 'public（公网证书）' }), el('option', { value: 'internal', text: 'internal（内部 CA）' })
+      el('option', { value: 'auto', text: '自动（公网地址用公网证书）' }),
+      el('option', { value: 'public', text: '公网证书' }),
+      el('option', { value: 'internal', text: '内部证书（需要本机信任）' })
     ]);
-    select.value = value || '';
-    return el('label', { class: 'field' }, [el('span', { text: 'TLS 模式（控制机用）' }), select]);
+    select.value = value || 'auto';
+    return el('label', { class: 'field' }, [el('span', { text: '管理台 HTTPS 证书' }), select]);
   }
-  function addHost(preset) {
-    preset = preset || {};
-    var remove = el('button', { type: 'button', class: 'link', text: '删除' });
-    var chips = el('div', { class: 'chips' }, boot.components.map(function (component) {
-      var box = el('input', { type: 'checkbox', value: component.id });
-      box.checked = (preset.components || []).indexOf(component.id) >= 0;
-      return el('label', { title: component.name }, [box, document.createTextNode(component.id)]);
+  function icon(key) {
+    var holder = el('div', { class: 'icon ' + key });
+    holder.append($('icon-' + key).content.cloneNode(true));
+    return holder;
+  }
+  function about(role) {
+    var specs = el('ul', { class: 'specs' }, role.specs.map(function (spec) {
+      return el('li', { class: spec.indexOf('线上现用') === 0 ? 'ref' : '', text: spec });
     }));
-    var card = el('div', { class: 'card host' }, [
-      el('div', { class: 'card-head' }, [el('strong', { text: '部署主机' }), remove]),
-      el('div', { class: 'grid' }, [
-        field('主机 ID', 'id', { required: true, value: preset.id || '' }),
-        field('公网地址', 'address', { required: true }),
-        field('私网地址（可选）', 'private_address'),
-        field('地域', 'region', { value: preset.region || '' }),
-        field('SSH 端口', 'ssh_port', { type: 'number', value: preset.ssh_port || 22 }),
-        field('SSH 用户名', 'ssh_user', { required: true, value: preset.ssh_user || 'ubuntu' }),
-        field('SSH 密码', 'ssh_password', { type: 'password', secret: true, required: true }),
-        field('provider', 'provider', { value: preset.provider || 'tencent' }),
-        tlsField(preset.tls_mode)
-      ]),
-      el('fieldset', { class: 'components' }, [el('legend', { text: '放置的组件' }), chips])
+    var groups = el('div', { class: 'groups' }, role.groups.map(function (group) {
+      return el('div', { class: 'group' }, [el('b', { text: group.name }), el('span', { text: group.desc })]);
+    }));
+    return el('div', { class: 'about' }, [
+      el('div', { class: 'box' }, [el('p', { class: 'box-title', text: '推荐配置' }), specs]),
+      el('div', { class: 'box' }, [el('p', { class: 'box-title', text: '承担的功能' }), groups])
     ]);
-    remove.addEventListener('click', function () { card.remove(); });
-    $('hosts').append(card);
-    applyShow();
   }
-  function readHost(card) {
-    function value(name) { return card.querySelector('[data-name="' + name + '"]').value; }
+
+  function addServer(role) {
+    var d = role.defaults;
+    var main = el('div', { class: 'grid' }, [
+      field('地址', 'address', { required: true, placeholder: role.address_hint }),
+      field('地域', 'region', { value: d.region, list: 'regions', placeholder: role.key === 'factor' ? '家用机器可以不填' : '例如 ap-guangzhou' }),
+      field('SSH 用户名', 'ssh_user', { required: true, value: d.ssh_user, placeholder: '例如 ubuntu' }),
+      field('SSH 密码', 'ssh_password', { type: 'password', secret: true, required: true, note: '用于首次登录安装' })
+    ]);
+    var advancedFields = [
+      field('主机 ID', 'id', { value: d.id, note: '小写字母、数字、连字符' }),
+      field('SSH 端口', 'ssh_port', { type: 'number', value: d.ssh_port || 22 }),
+      field('私网地址', 'private_address', { placeholder: '同地域内网互通时填写' }),
+      field('云厂商', 'provider', { value: d.provider, placeholder: '例如 tencent' })
+    ];
+    if (role.key === 'control') advancedFields.push(tlsField(d.tls_mode));
+    var advanced = el('details', { class: 'advanced' }, [el('summary', { text: '高级设置' }), el('div', { class: 'grid' }, advancedFields)]);
+    var fields = el('div', { class: 'fields' }, [main, advanced]);
+
+    var tags = [el('span', { class: 'tag' + (role.optional ? '' : ' must'), text: role.optional ? '可选' : '必需' })];
+    if (role.can_share_with) tags.push(el('span', { class: 'tag', text: '可与其他服务器共用' }));
+    var top = el('div', { class: 'server-top' }, [
+      icon(role.key),
+      el('div', { class: 'server-title' }, [el('h3', { text: role.title }, tags), el('p', { text: role.purpose })])
+    ]);
+    var body = el('div', { class: 'server-body' }, [about(role)]);
+    var card = el('div', { class: 'server', 'data-role': role.key }, [top, body]);
+
+    if (role.can_share_with) {
+      var options = [{ value: '', text: '独立服务器（推荐）' }].concat(role.can_share_with.map(function (key) {
+        return { value: key, text: '与' + roleTitle(key) + '共用' };
+      }));
+      var segment = el('div', { class: 'segment', role: 'radiogroup' }, options.map(function (option, i) {
+        var radio = el('input', { type: 'radio', name: 'share-' + role.key, value: option.value });
+        radio.checked = i === 0;
+        return el('label', {}, [radio, el('span', { text: option.text })]);
+      }));
+      var note = el('div', { class: 'shared-note' });
+      note.hidden = true;
+      segment.addEventListener('change', function () {
+        var shared = card.querySelector('input[name="share-' + role.key + '"]:checked').value;
+        fields.hidden = shared !== '';
+        note.hidden = shared === '';
+        note.textContent = shared ? '管理台相关服务会和「' + roleTitle(shared) + '」部署在同一台机器上，不用再填写地址和密码。' : '';
+      });
+      body.append(segment, note);
+    }
+    if (role.optional) {
+      var toggle = el('input', { type: 'checkbox', 'data-name': 'enabled' });
+      toggle.checked = true;
+      top.append(el('label', { class: 'switch' }, [toggle, el('i'), document.createTextNode('配置')]));
+      toggle.addEventListener('change', function () { card.classList.toggle('off', !toggle.checked); });
+    }
+    body.append(fields);
+    cards[role.key] = card;
+    $('servers').append(card);
+  }
+
+  function readServer(key) {
+    var card = cards[key];
+    var enabled = card.querySelector('[data-name="enabled"]');
+    if (enabled && !enabled.checked) return null;
+    var share = card.querySelector('input[name="share-' + key + '"]:checked');
+    function value(name) { var input = card.querySelector('[data-name="' + name + '"]'); return input ? input.value : ''; }
     return {
+      shared_with: share ? share.value : '',
       id: value('id'), address: value('address'), private_address: value('private_address'), region: value('region'),
       provider: value('provider'), tls_mode: value('tls_mode'), ssh_port: parseInt(value('ssh_port'), 10) || 0,
-      ssh_user: value('ssh_user'), ssh_password: value('ssh_password'),
-      components: Array.prototype.map.call(card.querySelectorAll('input[type=checkbox]:checked'), function (box) { return box.value; })
+      ssh_user: value('ssh_user'), ssh_password: value('ssh_password')
     };
   }
   function gather() {
-    var body = {
+    return {
       admin: { username: $('admin-username').value, password: $('admin-password').value },
       tencent: { secret_id: $('tencent-id').value, secret_key: $('tencent-key').value, region: $('tencent-region').value },
       notification: { channel_type: $('notify-type').value, webhook_url: $('notify-url').value },
-      hosts: Array.prototype.map.call(document.querySelectorAll('#hosts .host'), readHost),
-      compile: null
+      servers: { storage: readServer('storage'), overseas: readServer('overseas'), control: readServer('control'), factor: readServer('factor') }
     };
-    if ($('compile-on').checked) {
-      body.compile = {
-        id: $('compile-id').value, address: $('compile-address').value, ssh_port: parseInt($('compile-port').value, 10) || 0,
-        ssh_user: $('compile-user').value, ssh_password: $('compile-password').value,
-        private_address: '', region: '', provider: '', tls_mode: '', components: []
-      };
-    }
-    return body;
   }
   function applyShow() {
     var type = $('show').checked ? 'text' : 'password';
     Array.prototype.forEach.call(document.querySelectorAll('[data-secret]'), function (input) { input.type = type; });
   }
-  function showError(message) { var box = $('error'); box.textContent = message; box.hidden = false; box.scrollIntoView({ block: 'nearest' }); }
+  function showError(message) { var box = $('error'); box.textContent = message; box.hidden = false; box.scrollIntoView({ block: 'center' }); }
 
-  $('preset').addEventListener('click', function () {
-    $('hosts').replaceChildren();
-    boot.preset.forEach(addHost);
-  });
-  $('add-host').addEventListener('click', function () { addHost({}); });
   $('show').addEventListener('change', applyShow);
-  $('compile-on').addEventListener('change', function () { $('compile-fields').hidden = !$('compile-on').checked; });
   $('generate').addEventListener('click', function () {
     var alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789-_@#%+=';
     var random = new Uint32Array(20);
@@ -233,9 +415,11 @@ button:disabled { opacity: .55; cursor: default; }
       .then(function (result) {
         if (result.ok && result.data.ok) {
           finished = true;
-          $('done').textContent = '已生成 ' + result.data.path + '（权限 0600）。可以关闭这个页面，回到终端继续。';
+          $('done-path').textContent = result.data.path;
           $('done').hidden = false;
           $('form').hidden = true;
+          $('actions').hidden = true;
+          $('timer').hidden = true;
           window.scrollTo(0, 0);
           return;
         }
@@ -243,7 +427,7 @@ button:disabled { opacity: .55; cursor: default; }
         button.disabled = false;
       })
       .catch(function () {
-        showError('连不上本机录入服务：页面可能已超时关闭，请重新运行命令。');
+        showError('连不上本机录入服务：页面可能已超时关闭，请重新运行 moox-cli config init。');
         button.disabled = false;
       });
   });
@@ -264,13 +448,14 @@ button:disabled { opacity: .55; cursor: default; }
       timer.textContent = '已超过有效期，页面可能已经关闭。提交失败的话请重新运行 moox-cli config init（已填内容不会保留）。';
       return;
     }
-    timer.replaceChildren(document.createTextNode('本页剩余有效时间 '), el('strong', { text: formatLeft(left) }),
+    timer.replaceChildren(document.createTextNode('本页剩余有效时间'), el('strong', { text: formatLeft(left) }),
       document.createTextNode(left <= 10 * 60 * 1000 ? '，请尽快提交；超时后页面关闭，已填内容会丢失。' : '。超时后页面自动关闭，已填内容会丢失，需要重新运行 moox-cli config init。'));
   }
   tick();
   setInterval(tick, 1000);
 
-  boot.preset.forEach(addHost);
+  boot.roles.forEach(addServer);
+  applyShow();
 })();
 </script>
 </body>

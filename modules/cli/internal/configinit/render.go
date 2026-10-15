@@ -17,9 +17,9 @@ import (
 //go:embed moox.toml.example
 var exampleTemplate string
 
-// Render 把请求渲染成一份完整的 moox.toml，并用 CLI 自己的严格解码和校验确认它可用。
+// Render 把请求（按角色换算成主机后）渲染成一份完整的 moox.toml，并用 CLI 自己的严格解码和校验确认它可用。
 // 渲染失败或校验不过时返回错误，错误信息不含任何秘密值。
-func Render(request Request) ([]byte, error) {
+func Render(request *Request) ([]byte, error) {
 	if err := request.normalize(); err != nil {
 		return nil, err
 	}
@@ -92,21 +92,21 @@ func replaceTopology(lines []string, topology []string) ([]string, error) {
 	return append(out, lines[end:]...), nil
 }
 
-func renderTopology(request Request) []string {
+func renderTopology(request *Request) []string {
 	var out []string
-	for _, host := range request.Hosts {
+	for _, host := range request.hosts {
 		out = append(out, renderHost(host)...)
 		out = append(out, "")
 	}
-	if request.Compile != nil {
+	if request.compile != nil {
 		out = append(out,
-			"# 仅 CGO Linux 制品使用编译机；纯 Go 交叉编译与前端构建在本机执行。",
-			"# 编译机使用独立主机 ID，且不加入 MooX 部署拓扑。")
-		out = append(out, renderHost(*request.Compile)...)
-		out = append(out, "", "[compile_host]", "host = "+tomlString(request.Compile.ID), "")
+			"# 因子执行服务器：运行因子引擎（另行安装），同时作为 CGO Linux 制品（Storage）的编译机；",
+			"# 纯 Go 交叉编译与前端构建在本机执行。它不加入 MooX 部署拓扑。")
+		out = append(out, renderHost(*request.compile)...)
+		out = append(out, "", "[compile_host]", "host = "+tomlString(request.compile.ID), "")
 	}
 	out = append(out, "# host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。", "[placements]")
-	for _, host := range request.Hosts {
+	for _, host := range request.hosts {
 		quoted := make([]string, len(host.Components))
 		for i, id := range host.Components {
 			quoted[i] = tomlString(id)
