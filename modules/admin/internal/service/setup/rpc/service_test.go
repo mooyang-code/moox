@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/setup"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -18,6 +19,20 @@ type fakeSetupService struct {
 	status      setup.Status
 	statusErr   error
 	manifest    setup.Manifest
+	backup      setup.Backup
+	backupErr   error
+}
+
+func (f *fakeSetupService) PutBackup(_ context.Context, envelope string) (time.Time, error) {
+	if f.backupErr != nil {
+		return time.Time{}, f.backupErr
+	}
+	f.backup = setup.Backup{Envelope: envelope, UpdatedAt: time.Unix(1700000000, 0)}
+	return f.backup.UpdatedAt, nil
+}
+
+func (f *fakeSetupService) GetBackup(context.Context) (setup.Backup, error) {
+	return f.backup, f.backupErr
 }
 
 func (f *fakeSetupService) Apply(_ context.Context, manifest setup.Manifest) (setup.Result, error) {
@@ -120,4 +135,27 @@ func TestApplySetupRejectsMissingSections(t *testing.T) {
 	response, err := NewService(&fakeSetupService{}).ApplySetup(context.Background(), &pb.ApplySetupReq{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, response.GetRetInfo().GetCode())
+}
+
+func TestConfigBackupRPCs(t *testing.T) {
+	fake := &fakeSetupService{}
+	service := NewService(fake)
+	put, err := service.PutConfigBackup(context.Background(), &pb.PutConfigBackupReq{Envelope: "MOOX-CONFIG-BACKUP v1\nx"})
+	if err != nil || put.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || put.GetUpdatedAt() != 1700000000 {
+		t.Fatalf("保存: %+v %v", put, err)
+	}
+	got, err := service.GetConfigBackup(context.Background(), &pb.GetConfigBackupReq{})
+	if err != nil || got.GetEnvelope() != "MOOX-CONFIG-BACKUP v1\nx" {
+		t.Fatalf("取回: %+v %v", got, err)
+	}
+	fake.backupErr = setup.ErrBackupMissing
+	got, _ = service.GetConfigBackup(context.Background(), &pb.GetConfigBackupReq{})
+	if got.GetRetInfo().GetCode() != pb.ErrorCode_NOT_FOUND || got.GetRetInfo().GetMsg() != "config_backup_missing" {
+		t.Fatalf("没有备份时应返回 NOT_FOUND: %+v", got.GetRetInfo())
+	}
+	fake.backupErr = setup.ErrBackupInvalid
+	put, _ = service.PutConfigBackup(context.Background(), &pb.PutConfigBackupReq{Envelope: "plain"})
+	if put.GetRetInfo().GetMsg() != "config_backup_invalid" {
+		t.Fatalf("非法信封: %+v", put.GetRetInfo())
+	}
 }

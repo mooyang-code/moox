@@ -73,7 +73,28 @@ message GetSetupStatusRsp {
   int32 spaces = 8;
 }
 
+// 配置备份：CLI 用管理员密码派生的密钥加密整份 moox.toml 后上传，服务端只保存密文信封（解不开），
+// 入库时再用管理后台主密钥加密一层。换电脑时登录管理台取回，在本机用管理员密码解开。
+message PutConfigBackupReq {
+  string envelope = 1;  // 以 "MOOX-CONFIG-BACKUP v1" 开头的密文信封
+}
+
+message PutConfigBackupRsp {
+  common.RetInfo ret_info = 1;
+  int64 updated_at = 2;  // Unix 秒
+}
+
+message GetConfigBackupReq {}
+
+message GetConfigBackupRsp {
+  common.RetInfo ret_info = 1;
+  string envelope = 2;
+  int64 updated_at = 3;  // Unix 秒
+}
+
 service Setup {
   rpc ApplySetup(ApplySetupReq) returns (ApplySetupRsp);
   rpc GetSetupStatus(GetSetupStatusReq) returns (GetSetupStatusRsp);
+  rpc PutConfigBackup(PutConfigBackupReq) returns (PutConfigBackupRsp);
+  rpc GetConfigBackup(GetConfigBackupReq) returns (GetConfigBackupRsp);
 }

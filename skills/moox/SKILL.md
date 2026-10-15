@@ -289,7 +289,9 @@ creates repository-root `moox.toml` before deployment (preferably by running
 Agent never fills or reads it). The file is stored encrypted (key in the OS
 keychain); when the user wants to view or change it, run `moox-cli config edit`
 so they can do it on the local config page, and use `moox-cli config encrypt`
-for a hand-written plaintext file. The Agent may test only
+for a hand-written plaintext file. After the initial deployment run
+`moox-cli config backup` once (encrypted with the admin password, stored on the
+user's own Admin); on a new computer run `moox-cli config restore`. The Agent may test only
 whether it exists and must never read, parse, print, copy, or source it outside
 `moox-cli setup`, except the `storage_gateway_host` confirmation in
 [`references/private-network.md`](references/private-network.md) when checking

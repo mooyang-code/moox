@@ -71,7 +71,7 @@ func TestConfigCommandRegistersInitEditAndEncrypt(t *testing.T) {
 	for _, sub := range cmd.Commands() {
 		names[sub.Name()] = true
 	}
-	for _, want := range []string{"init", "edit", "encrypt"} {
+	for _, want := range []string{"init", "edit", "encrypt", "backup", "restore"} {
 		if !names[want] {
 			t.Fatalf("config 命令下应有 %s", want)
 		}

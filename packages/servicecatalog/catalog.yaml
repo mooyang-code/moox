@@ -363,8 +363,11 @@ components:
         methods:
           - ApplySetup
           - GetSetupStatus
+          - PutConfigBackup
+          - GetConfigBackup
         read_only_methods:
           - GetSetupStatus
+          - GetConfigBackup
         acl:
           - methods:
               - ApplySetup
@@ -372,6 +375,11 @@ components:
             callers:
               - console
               - moox-cli
+          - methods:
+              - PutConfigBackup
+              - GetConfigBackup
+            callers:
+              - console
       - path: trpc.moox.admin.CollectorPublishLease
         port: 11111
         console_name: publishlease

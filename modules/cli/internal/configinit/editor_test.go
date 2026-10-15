@@ -20,12 +20,14 @@ import (
 )
 
 type editorHarness struct {
-	t    *testing.T
-	base string
-	host string
-	path string
-	keys *configcrypt.MemoryStore
-	done chan editorOutcome
+	t       *testing.T
+	backups []string // 每次同步时的明文配置
+	syncErr error
+	base    string
+	host    string
+	path    string
+	keys    *configcrypt.MemoryStore
+	done    chan editorOutcome
 }
 
 type editorOutcome struct {
@@ -53,7 +55,11 @@ func startEditor(t *testing.T, content []byte) *editorHarness {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		result, err := RunEditor(ctx, EditorOptions{File: h.path, Timeout: time.Minute, KeyStore: h.keys, Open: func(u string) error { urls <- u; return nil }})
+		result, err := RunEditor(ctx, EditorOptions{File: h.path, Timeout: time.Minute, KeyStore: h.keys, Open: func(u string) error { urls <- u; return nil },
+			Backup: func(_ context.Context, plain []byte, _ setupconfig.Manifest) (BackupResult, error) {
+				h.backups = append(h.backups, string(plain))
+				return BackupResult{}, h.syncErr
+			}})
 		h.done <- editorOutcome{result, err}
 	}()
 	select {
@@ -203,6 +209,15 @@ func TestEditorSavesValidChangesAndRejectsInvalidOnes(t *testing.T) {
 	}
 	if h.plain() != changed {
 		t.Fatal("保存后的内容应与提交的一致")
+	}
+	if len(h.backups) != 1 || h.backups[0] != changed || !strings.Contains(saved.Sync, "已同步") {
+		t.Fatalf("保存后应同步到管理后台: %d 次, %q", len(h.backups), saved.Sync)
+	}
+	h.syncErr = errors.New("连不上管理台")
+	again := strings.Replace(changed, `username = "owner"`, `username = "owner2"`, 1)
+	status, saved, _ = h.call("config/save", map[string]string{"text": again}, nil)
+	if status != http.StatusOK || !strings.Contains(saved.Sync, "本机已保存") || h.plain() != again {
+		t.Fatalf("同步失败不影响本机保存: %d %q", status, saved.Sync)
 	}
 	if _, err := setupconfig.Parse([]byte(h.plain())); err != nil {
 		t.Fatal(err)

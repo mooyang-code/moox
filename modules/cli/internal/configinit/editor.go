@@ -40,6 +40,9 @@ type EditorOptions struct {
 	Notice io.Writer
 	// KeyStore 为空时用本机的系统钥匙串（没有钥匙串时用仅本人可读的密钥文件）。
 	KeyStore configcrypt.KeyStore
+	// Backup 在每次保存后把配置备份到管理后台；为空时用 moox.toml 里的管理员账号登录管理台上传。
+	// 测试里替换，避免连接真实的管理台。
+	Backup func(context.Context, []byte, setupconfig.Manifest) (BackupResult, error)
 }
 
 // EditorResult 只说明发生了什么，不含任何配置值。
@@ -83,7 +86,11 @@ func RunEditor(ctx context.Context, options EditorOptions) (EditorResult, error)
 	if keys == nil {
 		keys = configcrypt.Default()
 	}
-	editor := &editorSession{path: path, keys: keys, result: make(chan EditorResult, 1)}
+	backup := options.Backup
+	if backup == nil {
+		backup = backupPlain
+	}
+	editor := &editorSession{path: path, keys: keys, backup: backup, result: make(chan EditorResult, 1)}
 	if _, err := editor.load(); err != nil {
 		return EditorResult{}, err
 	}
@@ -124,6 +131,7 @@ type editorSession struct {
 	*localPage
 	path   string
 	keys   configcrypt.KeyStore
+	backup func(context.Context, []byte, setupconfig.Manifest) (BackupResult, error)
 	result chan EditorResult
 
 	// digest 是最近一次读到或写入的文件摘要；保存前核对，避免覆盖别处的改动。
@@ -271,7 +279,7 @@ func (e *editorSession) save(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusUnprocessableEntity, response{Message: "配置没有通过校验，没有保存：" + err.Error()})
 		return
 	}
-	e.write(w, []byte(request.Text))
+	e.write(w, r, []byte(request.Text))
 }
 
 // encrypt 把明文保存的配置原样加密保存。
@@ -280,34 +288,51 @@ func (e *editorSession) encrypt(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	e.write(w, state.plain)
+	e.write(w, r, state.plain)
 }
 
-func (e *editorSession) write(w http.ResponseWriter, plain []byte) {
+func (e *editorSession) write(w http.ResponseWriter, r *http.Request, plain []byte) {
+	state, status, err := e.saveLocked(plain)
+	if err != nil {
+		reply(w, status, response{Message: err.Error()})
+		return
+	}
+	view := describe(state.manifest, state.encrypted, e.keys.Where())
+	reply(w, http.StatusOK, response{OK: true, Overview: &view, Sync: e.sync(r.Context(), state)})
+}
+
+// saveLocked 在文件锁内核对、加密并替换文件，返回新读到的配置。
+func (e *editorSession) saveLocked(plain []byte) (loaded, int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	raw, err := readConfigFile(e.path)
 	if err != nil || sha256.Sum256(raw) != e.digest {
-		reply(w, http.StatusConflict, response{Message: "moox.toml 在别处被改动过，为避免覆盖没有保存；请刷新页面后重新修改"})
-		return
+		return loaded{}, http.StatusConflict, errors.New("moox.toml 在别处被改动过，为避免覆盖没有保存；请刷新页面后重新修改")
 	}
 	sealed, err := configcrypt.Encrypt(plain, e.keys)
 	if err != nil {
-		reply(w, http.StatusInternalServerError, response{Message: "加密失败：" + err.Error()})
-		return
+		return loaded{}, http.StatusInternalServerError, fmt.Errorf("加密失败：%w", err)
 	}
 	if err := replaceFile(e.path, sealed); err != nil {
-		reply(w, http.StatusInternalServerError, response{Message: err.Error()})
-		return
+		return loaded{}, http.StatusInternalServerError, err
 	}
 	e.saved = true
 	state, err := e.load()
 	if err != nil {
-		reply(w, http.StatusInternalServerError, response{Message: err.Error()})
-		return
+		return loaded{}, http.StatusInternalServerError, err
 	}
-	view := describe(state.manifest, state.encrypted, e.keys.Where())
-	reply(w, http.StatusOK, response{OK: true, Overview: &view})
+	return state, http.StatusOK, nil
+}
+
+// sync 在本机保存成功后把配置备份到管理后台（不持锁，失败只提示，不影响本机保存）。
+func (e *editorSession) sync(ctx context.Context, state loaded) string {
+	if e.backup == nil {
+		return ""
+	}
+	if _, err := e.backup(ctx, state.plain, state.manifest); err != nil {
+		return "本机已保存；暂时没能同步到管理后台（" + err.Error() + "）。管理台部署好后，再保存一次或让 Agent 运行一次同步即可。"
+	}
+	return "已同步到你的管理后台（用管理员密码加密备份，换电脑时可以恢复）。"
 }
 
 func (e *editorSession) close(w http.ResponseWriter, r *http.Request) {

@@ -219,7 +219,7 @@ button.ghost.away { visibility: hidden; }
         <div><h2>管理员账号</h2><p>系统只有这一个超级管理员。</p></div>
         <div class="fields two">
           <label class="f"><span>用户名</span><input type="text" id="admin-username" value="admin" autocomplete="off"></label>
-          <label class="f"><span>密码</span><span class="withbtn"><input type="password" id="admin-password" data-secret autocomplete="new-password"><button type="button" id="generate">随机生成</button></span><small>建议 12 位以上；生成后会直接显示，请先记下来。</small></label>
+          <label class="f"><span>密码</span><span class="withbtn"><input type="password" id="admin-password" data-secret autocomplete="new-password"><button type="button" id="generate">随机生成</button></span><small>建议 12 位以上，请记好：换电脑恢复配置时要用它解开备份。生成后会直接显示。</small></label>
         </div>
       </div>
       <div class="block">
@@ -241,14 +241,14 @@ button.ghost.away { visibility: hidden; }
     <section class="page finish" id="page-5" hidden>
       <div class="mark">✓</div>
       <h1>配置完成</h1>
-      <p class="lede">配置已加密保存在这台电脑上。可以关闭这个页面，回到 Agent 继续部署；以后想查看或修改配置，告诉 Agent「打开配置页」即可。</p>
+      <p class="lede">配置已加密保存在这台电脑上。可以关闭这个页面，回到 Agent 继续部署；以后想查看或修改配置，告诉 Agent「打开配置页」；换了电脑，告诉 Agent「恢复配置」，用管理员账号登录管理台即可取回。</p>
     </section>
   </main>
 </div>
 
 <div class="footer" id="footer">
   <div class="footer-in">
-    <span class="note privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span>你填写的密码和密钥会加密保存在这台电脑上（解密密钥存放在<span id="key-store">系统钥匙串</span>），<b>不会发给 AI，也不会发给 MooX 开发者</b>。部署时，云密钥和服务器密码会导入你自己服务器上的管理后台，同样加密保存。</span></span>
+    <span class="note privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span>你填写的密码和密钥会加密保存在这台电脑上（解密密钥存放在<span id="key-store">系统钥匙串</span>），<b>不会发给 AI，也不会发给 MooX 开发者</b>。部署完成后，整份配置会用管理员密码加密备份到你自己的管理后台，换电脑时可以恢复。</span></span>
     <button type="button" class="ghost" id="back">上一步</button>
     <button type="button" class="primary" id="next">下一步</button>
   </div>

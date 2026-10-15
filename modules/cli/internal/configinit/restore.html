@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>MooX 恢复配置</title>
+<style nonce="{{.Nonce}}">
+:root {
+  color-scheme: light dark;
+  --bg: #fafaf9; --panel: #ffffff; --ink: #1c1917; --ink-2: #44403c; --muted: #78716c; --faint: #a8a29e;
+  --line: #e7e5e4; --line-2: #d6d3d1; --field: #ffffff; --hover: #f5f5f4;
+  --brand: #1d4ed8; --brand-ink: #ffffff; --brand-tint: #eff4ff;
+  --ok: #15803d; --warn: #b45309; --warn-tint: #fffbeb; --err: #b91c1c; --err-tint: #fef2f2;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121212; --panel: #1a1a1a; --ink: #f5f5f4; --ink-2: #d6d3d1; --muted: #a8a29e; --faint: #78716c;
+    --line: #2a2a2a; --line-2: #3a3a3a; --field: #141414; --hover: #222222;
+    --brand: #6b8cff; --brand-ink: #0b0b0b; --brand-tint: #1b2238;
+    --ok: #4ade80; --warn: #fbbf24; --warn-tint: #2a2210; --err: #f87171; --err-tint: #2a1515;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+[hidden] { display: none !important; }
+.topbar { height: 56px; border-bottom: 1px solid var(--line); background: var(--panel); display: flex; align-items: center; padding: 0 28px; gap: 12px; }
+.brand { font-weight: 650; letter-spacing: .3px; font-size: 15px; }
+.topbar .sep { color: var(--line-2); }
+.topbar .title { color: var(--muted); }
+.timer { margin-left: auto; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.timer b { color: var(--ink-2); font-weight: 600; }
+.timer.warn, .timer.warn b { color: var(--warn); }
+.timer.urgent, .timer.urgent b { color: var(--err); }
+main { max-width: 560px; margin: 0 auto; padding: 56px 24px 80px; }
+h1 { font-size: 22px; font-weight: 650; margin: 0 0 6px; letter-spacing: -.2px; }
+.lede { color: var(--muted); margin: 0 0 28px; }
+.alert { margin: 0 0 20px; padding: 10px 12px; border-radius: 6px; background: var(--err-tint); color: var(--err); font-size: 13.5px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 24px; }
+label.f { display: block; margin-bottom: 16px; }
+label.f > span { display: block; font-size: 13px; color: var(--ink-2); margin-bottom: 6px; font-weight: 500; }
+label.f > small { display: block; font-size: 12px; color: var(--faint); margin-top: 6px; }
+input { width: 100%; height: 36px; padding: 0 11px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--field); color: var(--ink); font: inherit; }
+input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint); }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 520px) { .row { grid-template-columns: 1fr; } }
+button { font: inherit; height: 38px; padding: 0 20px; border-radius: 6px; border: 1px solid var(--brand); background: var(--brand); color: var(--brand-ink); font-weight: 600; cursor: pointer; width: 100%; }
+button:disabled { opacity: .55; cursor: default; }
+button.plain { background: var(--panel); color: var(--ink); border-color: var(--line-2); font-weight: 500; width: auto; height: 32px; padding: 0 14px; margin-top: 10px; }
+.trust { margin: 0 0 16px; padding: 12px; border-radius: 6px; background: var(--warn-tint); font-size: 13px; color: var(--ink-2); }
+.trust code { display: block; margin: 6px 0 4px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; color: var(--ink); }
+.note { display: flex; gap: 8px; margin-top: 20px; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+.note svg { flex: none; width: 15px; height: 15px; margin-top: 1px; color: var(--ok); }
+.note b { font-weight: 600; color: var(--ink-2); }
+.done .mark { width: 40px; height: 40px; border-radius: 50%; border: 1.5px solid var(--ok); color: var(--ok); display: grid; place-items: center; margin-bottom: 18px; font-size: 20px; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <span class="brand">MooX</span><span class="sep">/</span><span class="title">恢复配置</span>
+  <span class="timer" id="timer"></span>
+</div>
+<main>
+  <section id="form-page">
+    <h1>从管理台恢复配置</h1>
+    <p class="lede">换了电脑时用这个页面：登录你的管理台，取回之前备份的配置。备份是用管理员密码加密的，只会在这台电脑上解开。</p>
+    <div class="alert" id="alert" role="alert" hidden></div>
+    <div class="card">
+      <label class="f"><span>管理台地址</span><input type="text" id="address" placeholder="管理台服务器的 IP 或域名，例如 106.53.10.20" autocomplete="off" spellcheck="false"><small>就是平时打开管理台的地址，不用写 https:// 和端口。</small></label>
+      <div class="row">
+        <label class="f"><span>管理员用户名</span><input type="text" id="username" value="admin" autocomplete="off"></label>
+        <label class="f"><span>管理员密码</span><input type="password" id="password" autocomplete="current-password"></label>
+      </div>
+      <div class="trust" id="trust" hidden></div>
+      <button type="button" id="restore">登录并恢复</button>
+      <p class="note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span>密码只用来登录你自己的管理台、在这台电脑上解开备份，<b>不会发给 AI，也不会发给 MooX 开发者</b>。恢复后的配置会加密保存在这台电脑上（解密密钥存放在<span id="key-store">系统钥匙串</span>）。</span></p>
+    </div>
+  </section>
+  <section class="done" id="done-page" hidden>
+    <div class="mark">✓</div>
+    <h1>配置已恢复</h1>
+    <p class="lede">配置已加密保存在这台电脑上。可以关闭这个页面，回到 Agent 继续。</p>
+  </section>
+</main>
+
+<script type="application/json" id="boot">{{.Boot}}</script>
+<script nonce="{{.Nonce}}">
+(function () {
+  'use strict';
+  var boot = JSON.parse(document.getElementById('boot').textContent);
+  var fingerprint = '';
+  var finished = false;
+  function $(id) { return document.getElementById(id); }
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    Object.keys(attrs || {}).forEach(function (key) { if (key === 'text') node.textContent = attrs[key]; else node.setAttribute(key, attrs[key]); });
+    (children || []).forEach(function (child) { if (child) node.append(typeof child === 'string' ? document.createTextNode(child) : child); });
+    return node;
+  }
+  function showAlert(message) { $('alert').textContent = message || ''; $('alert').hidden = !message; }
+  $('key-store').textContent = boot.key_store;
+  $('address').addEventListener('input', function () { fingerprint = ''; $('trust').hidden = true; });
+
+  function restore() {
+    var button = $('restore');
+    showAlert('');
+    var body = { address: $('address').value.trim(), username: $('username').value.trim(), password: $('password').value, fingerprint: fingerprint };
+    if (!body.address || !body.username || !body.password) { showAlert('请填写管理台地址、管理员用户名和密码'); return; }
+    button.disabled = true; button.textContent = '正在恢复…';
+    fetch('restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(function (response) { return response.json().catch(function () { return {}; }).then(function (data) { return { ok: response.ok, data: data }; }); },
+        function () { throw new Error('连不上本机的恢复服务：页面可能已超时关闭，请回到 Agent 重新打开。'); })
+      .then(function (result) {
+        if (result.data.fingerprint) {
+          var confirm = el('button', { type: 'button', class: 'plain', text: '是我的管理台，继续' });
+          confirm.addEventListener('click', function () { fingerprint = result.data.fingerprint; $('trust').hidden = true; restore(); });
+          $('trust').replaceChildren('这台电脑还不认识管理台的 HTTPS 证书。请确认下面的证书指纹和管理台一致（在原来的电脑上打开管理台，点浏览器地址栏的锁图标可以查看）：', el('code', { text: result.data.fingerprint }), confirm);
+          $('trust').hidden = false;
+          return;
+        }
+        if (!result.ok || !result.data.ok) throw new Error(result.data.message || '恢复失败');
+        finished = true;
+        $('form-page').hidden = true; $('done-page').hidden = false; $('timer').hidden = true;
+      })
+      .catch(function (err) { showAlert(err.message); })
+      .finally(function () { button.disabled = false; button.textContent = '登录并恢复'; });
+  }
+  $('restore').addEventListener('click', restore);
+  $('password').addEventListener('keydown', function (event) { if (event.key === 'Enter') restore(); });
+
+  function pad(n) { return n < 10 ? '0' + n : String(n); }
+  function tick() {
+    if (finished) return;
+    var left = boot.deadline - Date.now(), timer = $('timer');
+    if (left <= 0) { timer.className = 'timer urgent'; timer.textContent = '页面已过期，请回到 Agent 重新打开'; return; }
+    var total = Math.ceil(left / 1000), h = Math.floor(total / 3600), m = Math.floor(total % 3600 / 60), s = total % 60;
+    timer.className = 'timer' + (left <= 2 * 60000 ? ' urgent' : left <= 10 * 60000 ? ' warn' : '');
+    timer.replaceChildren('页面有效期还剩 ', el('b', { text: (h ? h + ':' + pad(m) : pad(m)) + ':' + pad(s) }));
+  }
+  tick();
+  setInterval(tick, 1000);
+})();
+</script>
+</body>
+</html>

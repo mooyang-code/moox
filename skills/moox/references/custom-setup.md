@@ -35,7 +35,11 @@ not a deployment artifact.
   运行 `./bin/moox-cli config edit`，在本机配置页里查看（密码默认隐藏）和修改（保存前校验，保存后重新加密）。
   Agent 同样不得打开或读取这个页面，命令只输出是否保存过、文件是否加密。
 - 手工填写的明文 `moox.toml` 用 `./bin/moox-cli config encrypt` 原样加密保存；已加密的文件只核对能否解开。
-  配置换到另一台电脑时，那台电脑没有解密密钥，需要在那台电脑上重新运行 `config init`。
+- 初始化部署完成、管理台可以访问后，运行一次 `./bin/moox-cli config backup`：用 moox.toml 里的管理员账号登录管理台，
+  把用管理员密码加密的整份配置备份到管理后台（服务端解不开）。之后在配置页保存时会自动同步。
+- 用户换了电脑：运行 `./bin/moox-cli config restore`，用户在本机恢复页填管理台地址和管理员账号，CLI 取回备份、在本机解开，
+  用新电脑的钥匙串密钥重新加密写成 `moox.toml`。Agent 同样不打开、不读取恢复页。备份之后改过管理员密码时，
+  需要先在原来的电脑上更新配置里的管理员密码并重新同步。
 
 也可以手工填写：Show the user `moox.toml.example`. The user must fill it as repository-root
 `moox.toml` and protect it before the Agent continues:

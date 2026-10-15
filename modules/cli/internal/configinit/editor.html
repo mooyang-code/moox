@@ -46,6 +46,7 @@ h1 { font-size: 22px; font-weight: 650; margin: 0 0 6px; letter-spacing: -.2px; 
 .alert { margin: 0 0 20px; padding: 10px 12px; border-radius: 6px; font-size: 13.5px; }
 .alert.err { background: var(--err-tint); color: var(--err); }
 .alert.ok { background: var(--ok-tint); color: var(--ok); }
+.alert.warn { background: var(--warn-tint); color: var(--warn); }
 .status { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 8px; margin-bottom: 28px; font-size: 13.5px; }
 .status.ok { background: var(--ok-tint); color: var(--ink-2); }
 .status.ok svg { color: var(--ok); }
@@ -171,6 +172,13 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
   }
   function showAlert(message, kind) { var box = $('alert'); box.textContent = message || ''; box.className = 'alert ' + (kind || 'err'); box.hidden = !message; if (message) window.scrollTo(0, 0); }
 
+  // 本机保存成功后，再说明有没有同步到管理后台的备份。
+  function showSaved(sync) {
+    var failed = sync && sync.indexOf('暂时没能') >= 0;
+    showAlert('已校验并加密保存在这台电脑上。' + (sync && !failed ? sync : ''), 'ok');
+    if (failed) showAlert(sync, 'warn');
+  }
+
   function secret(field, masked) {
     var value = el('span', { class: 'value', text: masked || '••••••••' });
     var button = el('button', { type: 'button', class: 'link', text: '显示' });
@@ -192,7 +200,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
       var encrypt = el('button', { type: 'button', text: '加密保存' });
       encrypt.addEventListener('click', function () {
         encrypt.disabled = true;
-        post('config/encrypt').then(function (data) { renderOverview(data.overview); showAlert('已加密保存', 'ok'); }, function (err) { showAlert(err.message); encrypt.disabled = false; });
+        post('config/encrypt').then(function (data) { renderOverview(data.overview); showSaved(data.sync); }, function (err) { showAlert(err.message); encrypt.disabled = false; });
       });
       status.className = 'status warn';
       status.replaceChildren(icon(WARN), el('span', { text: '这份配置目前是明文保存的。加密后，密钥会存放在' + view.key_store + '，文件被拷走也无法读取。' }), encrypt);
@@ -222,7 +230,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     $('accounts').replaceChildren.apply($('accounts'), rows.map(function (row) { return el('tr', {}, [el('th', { text: row[0] }), el('td', {}, [row[1]])]); }));
     var privacy = $('privacy');
     privacy.replaceChildren(icon(LOCK), el('span', {}, view.encrypted
-      ? ['配置加密保存在这台电脑上，密钥存放在' + view.key_store + '，', el('b', { text: '不会发给 AI，也不会发给 MooX 开发者' }), '。']
+      ? ['配置加密保存在这台电脑上，密钥存放在' + view.key_store + '，', el('b', { text: '不会发给 AI，也不会发给 MooX 开发者' }), '。保存时会用管理员密码加密备份到你自己的管理后台，换电脑时可以恢复。']
       : ['配置保存在这台电脑上，', el('b', { text: '不会发给 AI，也不会发给 MooX 开发者' }), '。建议加密保存。']));
   }
 
@@ -242,7 +250,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     post('config/save', { text: $('text').value }).then(function (data) {
       state.original = $('text').value;
       renderOverview(data.overview);
-      showAlert('已校验并加密保存。', 'ok');
+      showSaved(data.sync);
     }, function (err) { showAlert(err.message); }).finally(function () { button.disabled = false; });
   });
   $('reset').addEventListener('click', function () { $('text').value = state.original; showAlert(''); });
