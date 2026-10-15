@@ -5,10 +5,10 @@ import { describe, expect, it } from "vitest";
 const normalizeSource = (source: string) => source.replace(/\s+/g, "").replace(/'/g, '"');
 
 describe("collector task management workbench", () => {
-  it("keeps the five tabs in tasks, status, backfills, executors, results order", () => {
+  it("keeps the five tabs in tasks, results, status, executors, backfills order", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     const normalized = normalizeSource(source);
-    const positions = ["采集任务", "运行状态", "补采", "执行器", "采集结果"].map(label => normalized.indexOf(`label:"${label}"`));
+    const positions = ["采集任务", "采集结果", "运行状态", "执行器", "补采"].map(label => normalized.indexOf(`label:"${label}"`));
 
     expect(source).toContain("PageTitleTabs");
     expect(source).toContain('aria-label="采集任务"');

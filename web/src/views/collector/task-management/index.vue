@@ -24,12 +24,13 @@ import TaskResults from "@/views/collector/task-results/index.vue";
 
 type CollectorTaskTab = "tasks" | "status" | "backfills" | "executors" | "results";
 
+// 顺序与因子“计算任务 → 计算结果 → 补算”一致：先看任务和产出，再看运维（运行状态、执行器），补采放最后。
 const tabs = [
   { key: "tasks", label: "采集任务" },
+  { key: "results", label: "采集结果" },
   { key: "status", label: "运行状态" },
-  { key: "backfills", label: "补采" },
   { key: "executors", label: "执行器" },
-  { key: "results", label: "采集结果" }
+  { key: "backfills", label: "补采" }
 ] as const;
 
 const route = useRoute();

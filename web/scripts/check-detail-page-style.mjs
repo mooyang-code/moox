@@ -75,7 +75,7 @@ assert(taskResults.includes("task-results-model"), "task-results must use its pu
 assert(taskResults.includes("暂无采集任务"), "task-results must define the no-task empty state");
 assert(taskResults.includes("结果准备中，请稍后刷新"), "task-results must define the pending result state");
 assert(taskResults.includes("resultTask"), "task-results must persist the selected task");
-for (const label of ["采集任务", "运行状态", "执行器", "采集结果"]) {
+for (const label of ["采集任务", "采集结果", "运行状态", "执行器", "补采"]) {
   assert(taskManagement.includes(`label: "${label}"`), `task management must expose ${label}`);
 }
 for (const retiredPath of ["/collector/rules", "/collector/data-management", "/collector/datasets", "/collector/packages"]) {

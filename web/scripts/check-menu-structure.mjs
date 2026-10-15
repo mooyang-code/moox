@@ -124,12 +124,12 @@ assert(collectorTasks.parentId === dataCollection.id, "collector-tasks must be u
 assert(collectorTasks.path === "/collector/tasks", "collector-tasks path must be canonical");
 assert(dataFields.sort < collectorTasks.sort, "base fields must appear before collection tasks");
 assert(routes.includes('path: "/collector/tasks"'), "collector tasks route must exist");
-const collectorTabOrder = ["采集任务", "运行状态", "执行器", "采集结果"].map(label =>
+const collectorTabOrder = ["采集任务", "采集结果", "运行状态", "执行器", "补采"].map(label =>
   collectorTaskWorkbench.indexOf(`label: "${label}"`)
 );
 assert(
   collectorTabOrder.every(position => position >= 0),
-  "collector task workbench must expose all four tabs"
+  "collector task workbench must expose all five tabs"
 );
 assert(
   collectorTabOrder.every((position, index) => index === 0 || position > collectorTabOrder[index - 1]),
