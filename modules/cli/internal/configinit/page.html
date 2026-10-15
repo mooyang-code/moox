@@ -86,6 +86,12 @@ input.bad { border-color: var(--err); }
 .withbtn { display: flex; gap: 8px; }
 .withbtn input { flex: 1; min-width: 0; }
 
+a { color: var(--brand); text-decoration: none; }
+a:hover { text-decoration: underline; }
+ol.guide { margin: 0 0 12px; padding: 0 0 0 20px; color: var(--ink-2); font-size: 13.5px; }
+ol.guide li { margin-bottom: 6px; padding-left: 2px; }
+ol.guide b { font-weight: 600; color: var(--ink); }
+.aside { margin: 0 0 20px; color: var(--faint); font-size: 12.5px; }
 .found { grid-column: 1 / -1; display: flex; gap: 10px; align-items: baseline; font-size: 13px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--hover); color: var(--ink-2); }
 .found .k { color: var(--ok); font-weight: 600; flex: none; }
 .found .v span + span::before { content: "·"; margin: 0 6px; color: var(--faint); }
@@ -157,11 +163,21 @@ button.ghost.away { visibility: hidden; }
       <h1>腾讯云账号</h1>
       <p class="lede">MooX 部署在你的腾讯云上：采集行情用云函数，服务器也需要是这个账号下的。下一步会用它自动识别服务器所在地域和规格。</p>
       <div class="block">
-        <div><h2>访问密钥</h2><p>在腾讯云控制台「访问管理 → API 密钥」中创建。建议用只授权云函数、对象存储、日志服务和服务器查询的子账号。</p></div>
+        <div><h2>访问密钥</h2><p>一对 SecretId 和 SecretKey，在腾讯云控制台创建。建议给 MooX 单独建一个子用户，不用主账号的密钥。</p>
+          <p><a href="https://cloud.tencent.com/document/product/598/37140" target="_blank" rel="noopener noreferrer">查看腾讯云的官方说明</a></p></div>
+        <div>
+        <ol class="guide">
+          <li>打开腾讯云控制台的 <a href="https://console.cloud.tencent.com/cam" target="_blank" rel="noopener noreferrer">访问管理 → 用户列表</a>，新建一个子用户（已有的话直接用），访问方式勾选「编程访问」。</li>
+          <li>给它授权云函数、对象存储、日志服务、轻量应用服务器、云服务器和私有网络，例如预设策略 QcloudSCFFullAccess、QcloudCOSFullAccess、QcloudCLSFullAccess、QcloudLighthouseFullAccess、QcloudCVMFullAccess、QcloudVPCFullAccess。</li>
+          <li>点进这个子用户，切到「API 密钥」页签，点「新建密钥」。</li>
+          <li>把弹窗里的 SecretId 和 SecretKey 复制到下面。<b>SecretKey 只在创建时显示一次</b>，关掉弹窗后就查不到了，请先保存好。</li>
+        </ol>
+        <p class="aside">也可以用主账号在 <a href="https://console.cloud.tencent.com/cam/capi" target="_blank" rel="noopener noreferrer">API 密钥管理</a> 里创建，但主账号密钥权限过大，不推荐。</p>
         <div class="fields two">
           <label class="f full"><span>SecretId</span><input type="text" id="secret-id" autocomplete="off" spellcheck="false"></label>
           <label class="f full"><span>SecretKey</span><input type="password" id="secret-key" data-secret autocomplete="new-password" spellcheck="false"></label>
           <div class="found" id="account" hidden></div>
+        </div>
         </div>
       </div>
     </section>

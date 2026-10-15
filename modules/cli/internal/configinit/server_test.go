@@ -132,10 +132,24 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 	if nonce == "" || !strings.Contains(body, `<script nonce="`+nonce+`">`) || !strings.Contains(body, `<style nonce="`+nonce+`">`) {
 		t.Fatal("页面的脚本与样式必须带本次响应的 nonce")
 	}
-	for _, external := range []string{"<link", "<img", "<iframe", `src="http`, `href="http`, "url(", "@import"} {
+	for _, external := range []string{"<link", "<img", "<iframe", `src="http`, "url(", "@import"} {
 		if strings.Contains(body, external) {
 			t.Fatalf("页面不应引用外部资源: %s", external)
 		}
+	}
+	// 外部链接只有腾讯云的帮助入口，而且在新窗口打开、不带来源信息。
+	for rest := body; strings.Contains(rest, `href="`); {
+		rest = rest[strings.Index(rest, `href="`)+len(`href="`):]
+		link := rest[:strings.Index(rest, `"`)]
+		if !strings.HasPrefix(link, "https://console.cloud.tencent.com/") && !strings.HasPrefix(link, "https://cloud.tencent.com/document/") {
+			t.Fatalf("页面不应链接到 %q", link)
+		}
+		if tag := rest[:strings.Index(rest, ">")]; !strings.Contains(tag, `target="_blank"`) || !strings.Contains(tag, `rel="noopener noreferrer"`) {
+			t.Fatalf("链接 %q 应在新窗口打开且带 noopener noreferrer", link)
+		}
+	}
+	if !strings.Contains(body, `href="https://console.cloud.tencent.com/cam"`) {
+		t.Fatal("第一步应引导用户去访问管理创建密钥")
 	}
 	// 用户不需要理解底层细节：页面里不出现文件名和路径。
 	for _, detail := range []string{h.output, "moox.toml", "placements"} {
