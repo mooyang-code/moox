@@ -133,7 +133,7 @@ type response struct {
 	Instance *Instance    `json:"instance,omitempty"`
 	Report   *ProbeReport `json:"report,omitempty"`
 	Overview *Overview    `json:"overview,omitempty"`
-	Text     string       `json:"text,omitempty"`
+	Form     *ConfigForm  `json:"form,omitempty"`
 	Value    string       `json:"value,omitempty"`
 	// Fingerprint 是待用户核对的管理台证书指纹（证书不被这台电脑信任时）。
 	Fingerprint string `json:"fingerprint,omitempty"`

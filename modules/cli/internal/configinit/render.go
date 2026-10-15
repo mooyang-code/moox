@@ -52,25 +52,6 @@ func Render(ctx context.Context, request *Request, env Environment) ([]byte, err
 	return raw, nil
 }
 
-// setKey 把 [section] 段内的 key 行整行替换为 key = value。示例里找不到时报错，避免示例改版后悄悄漏替换。
-func setKey(lines []string, section, key, value string) ([]string, error) {
-	header := "[" + section + "]"
-	in := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") {
-			in = trimmed == header
-			continue
-		}
-		if in && (strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=")) {
-			out := append([]string(nil), lines...)
-			out[i] = key + " = " + value
-			return out, nil
-		}
-	}
-	return nil, fmt.Errorf("示例配置里没有 [%s] 的 %s，请同步模板", section, key)
-}
-
 // replaceTopology 把示例里从第一个 [hosts.*] 到 [egress_proxy] 之前的主机、编译机和放置段整体换成生成的拓扑。
 func replaceTopology(lines []string, topology []string) ([]string, error) {
 	start, end := -1, -1

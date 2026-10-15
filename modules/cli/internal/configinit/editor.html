@@ -71,9 +71,27 @@ table.kv th { width: 140px; color: var(--muted); font-size: 13.5px; border-botto
 .link { border: none; background: none; color: var(--brand); padding: 0; height: auto; font-size: 12.5px; cursor: pointer; }
 .link:hover { text-decoration: underline; background: none; }
 
-textarea { width: 100%; min-height: 520px; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--field); color: var(--ink);
-  font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; tab-size: 2; }
-textarea:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint); }
+.fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 16px; }
+.fields.two { grid-template-columns: 1fr 1fr; }
+@media (max-width: 640px) { .fields, .fields.two { grid-template-columns: 1fr; } }
+label.f { display: block; min-width: 0; }
+label.f > span { display: block; font-size: 13px; color: var(--ink-2); margin-bottom: 6px; font-weight: 500; }
+label.f > small { display: block; font-size: 12px; color: var(--faint); margin-top: 6px; }
+input[type=text], input[type=password], input[type=number], select { width: 100%; height: 34px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 6px;
+  background: var(--field); color: var(--ink); font: inherit; font-size: 13.5px; }
+input:focus, select:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint); }
+label.f > span.withbtn, .withbtn { display: flex; gap: 6px; margin: 0; font-weight: 400; }
+.withbtn input { flex: 1; min-width: 0; }
+.withbtn button { height: 34px; padding: 0 10px; font-size: 12.5px; }
+.host { padding: 12px 0; border-top: 1px dashed var(--line); }
+.host:first-child { border-top: none; padding-top: 0; }
+.host-head { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+.host-head b { color: var(--ink); font-weight: 600; margin-right: 8px; }
+.desc { color: var(--muted); font-size: 12.5px; margin: 4px 0 0; }
+table.grid td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); }
+table.grid th { white-space: nowrap; }
+table.grid input { height: 30px; font-size: 12.5px; }
+.scroll { overflow-x: auto; margin-top: 14px; }
 .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
 .row .hint { color: var(--faint); font-size: 12.5px; }
 
@@ -117,12 +135,12 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
 
     <section id="page-edit" hidden>
       <h1>修改配置</h1>
-      <p class="lede">直接修改下面的配置内容。保存前会完整校验，有错误不会保存；保存后重新加密写回。</p>
-      <textarea id="text" spellcheck="false" autocomplete="off"></textarea>
+      <p class="lede">修改常用设置。保存前会完整校验，有错误不会保存；保存后重新加密写回，并同步备份到你的管理后台。</p>
+      <div id="form"></div>
       <div class="row">
-        <button type="button" class="primary" id="save">校验并保存</button>
+        <button type="button" class="primary" id="save">保存修改</button>
         <button type="button" id="reset">放弃修改</button>
-        <span class="hint">改动服务器或组件后，需要回到 Agent 重新部署才会生效。</span>
+        <span class="hint">因子、云函数、出口代理等高级设置不在这里，保存时原样保留。</span>
       </div>
     </section>
 
@@ -146,7 +164,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
 (function () {
   'use strict';
   var boot = JSON.parse(document.getElementById('boot').textContent);
-  var state = { overview: null, original: '', closed: false };
+  var state = { overview: null, form: null, dirty: false, closed: false };
   function $(id) { return document.getElementById(id); }
   function el(tag, attrs, children) {
     var node = document.createElement(tag);
@@ -238,24 +256,124 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     ['overview', 'edit'].forEach(function (name) { $('page-' + name).hidden = name !== page; });
     Array.prototype.forEach.call($('nav').children, function (li) { li.className = li.getAttribute('data-page') === page ? 'on' : ''; });
     showAlert('');
-    if (page === 'edit' && !state.original) {
-      post('config/text').then(function (data) { state.original = data.text; $('text').value = data.text; }, function (err) { showAlert(err.message); });
-    }
+    if (page === 'edit' && !state.form) loadForm();
   }
   Array.prototype.forEach.call($('nav').children, function (li) { li.addEventListener('click', function () { show(li.getAttribute('data-page')); }); });
 
+  // ---------- 修改配置（表单） ----------
+  function input(attrs, value) {
+    var node = el('input', Object.assign({ type: 'text', autocomplete: 'off', spellcheck: 'false' }, attrs));
+    node.value = value == null ? '' : String(value);
+    node.addEventListener('input', function () { state.dirty = true; });
+    return node;
+  }
+  function field(label, control, note) {
+    return el('label', { class: 'f' }, [el('span', { text: label }), control, note ? el('small', { text: note }) : null]);
+  }
+  function secretInput(value) {
+    var box = input({ type: 'password', autocomplete: 'new-password' }, value);
+    var toggle = el('button', { type: 'button', text: '显示' });
+    toggle.addEventListener('click', function () { var hidden = box.type === 'password'; box.type = hidden ? 'text' : 'password'; toggle.textContent = hidden ? '隐藏' : '显示'; });
+    return { input: box, node: el('span', { class: 'withbtn' }, [box, toggle]) };
+  }
+  function block(title, desc, body) {
+    return el('div', { class: 'block' }, [el('div', {}, [el('h2', { text: title }), desc ? el('p', { class: 'desc', text: desc }) : null]), body]);
+  }
+  var ctl = {};
+  function renderForm(form) {
+    state.form = form; state.dirty = false; ctl = { hosts: [], defaults: {}, spaces: [] };
+    var root = $('form');
+    root.replaceChildren();
+
+    ctl.adminUser = input({}, form.admin.username);
+    var adminPass = secretInput(form.admin.password); ctl.adminPass = adminPass.input;
+    root.append(block('管理员', '登录管理台的账号。密码设定后不能修改，这里填的必须和管理台的登录密码一致（配置备份也用它加密）。',
+      el('div', { class: 'fields two' }, [field('用户名', ctl.adminUser), field('密码', adminPass.node)])));
+
+    ctl.secretId = input({}, form.tencent.secret_id);
+    var secretKey = secretInput(form.tencent.secret_key); ctl.secretKey = secretKey.input;
+    root.append(block('腾讯云', '访问密钥。更换后需要重新部署采集云函数才会生效。',
+      el('div', { class: 'fields two' }, [field('SecretId', ctl.secretId), field('SecretKey', secretKey.node)])));
+
+    ctl.channel = el('select', {}, [el('option', { value: 'wecom', text: '企业微信群机器人' }), el('option', { value: 'feishu', text: '飞书群机器人' })]);
+    ctl.channel.value = form.notification.channel_type || 'wecom';
+    ctl.channel.addEventListener('change', function () { state.dirty = true; });
+    var webhook = secretInput(form.notification.webhook_url); ctl.webhook = webhook.input;
+    root.append(block('告警通知', '行情中断、服务异常时推送的群机器人。',
+      el('div', { class: 'fields two' }, [field('发送到', ctl.channel), field('机器人 Webhook 地址', webhook.node)])));
+
+    var hosts = el('div');
+    form.hosts.forEach(function (host) {
+      var user = input({}, host.ssh_user), port = input({ type: 'number', min: '1', max: '65535' }, host.ssh_port || 22);
+      var pass = secretInput(host.ssh_password);
+      ctl.hosts.push({ id: host.id, user: user, port: port, pass: pass.input });
+      var head = el('div', { class: 'host-head' }, [el('b', { text: (host.uses && host.uses.length ? host.uses.join('、') : '服务器') }), host.address + (host.region ? ' · ' + host.region : '')]);
+      hosts.append(el('div', { class: 'host' }, [head, el('div', { class: 'fields' }, [field('SSH 用户名', user), field('端口', port), field('SSH 密码', pass.node, '用密钥登录时留空')])]));
+    });
+    root.append(block('服务器登录', 'IP 和用途不能在这里改（需要重新部署）；可以修改 SSH 登录方式。', hosts));
+
+    var r = form.retention;
+    ctl.viewBars = input({ type: 'number', min: '1' }, r.view_bars);
+    var head = el('tr', {}, [el('th', { text: '频率' }), el('th', { text: '默认' })].concat(r.spaces.map(function (sp) { return el('th', { text: sp.name }); })));
+    var rows = r.frequencies.map(function (freq) {
+      var cells = [el('td', { class: 'mono', text: freq })];
+      var def = input({ placeholder: '例如 7d' }, r.defaults[freq]);
+      ctl.defaults[freq] = def;
+      cells.push(el('td', {}, [def]));
+      r.spaces.forEach(function (sp, i) {
+        ctl.spaces[i] = ctl.spaces[i] || { id: sp.id, cells: {} };
+        var cell = input({ placeholder: '跟随默认' }, sp.values[freq]);
+        ctl.spaces[i].cells[freq] = cell;
+        cells.push(el('td', {}, [cell]));
+      });
+      return el('tr', {}, cells);
+    });
+    var table = el('table', { class: 'grid' }, [el('thead', {}, [head]), el('tbody', {}, rows)]);
+    root.append(block('数据保留', '原始数据按频率保留的时长：小时写 h、天写 d，例如 48h、7d，永久保留写 forever。市场一栏留空表示跟随默认。缩短保留期会删除数据。',
+      el('div', {}, [el('div', { class: 'fields two' }, [field('每个序列保留的 K 线根数', ctl.viewBars, '给策略和管理台查询用的最近数据')]), el('div', { class: 'scroll' }, [table])])));
+
+    ctl.logSize = input({ type: 'number', min: '1' }, form.logs.max_size_mb);
+    ctl.logCount = input({ type: 'number', min: '0' }, form.logs.backup_count);
+    root.append(block('本地日志', '各服务器上日志文件的大小上限，超过后保留尾部并截断。',
+      el('div', { class: 'fields two' }, [field('单个日志上限（MB）', ctl.logSize), field('保留份数', ctl.logCount)])));
+  }
+  function loadForm() {
+    post('config/form').then(function (data) { renderForm(data.form); }, function (err) { showAlert(err.message); });
+  }
+  function gatherForm() {
+    var num = function (node) { return parseInt(node.value, 10) || 0; };
+    var defaults = {};
+    Object.keys(ctl.defaults).forEach(function (freq) { if (ctl.defaults[freq].value.trim() || state.form.retention.defaults[freq] != null) defaults[freq] = ctl.defaults[freq].value.trim(); });
+    return {
+      admin: { username: ctl.adminUser.value.trim(), password: ctl.adminPass.value },
+      tencent: { secret_id: ctl.secretId.value.trim(), secret_key: ctl.secretKey.value },
+      notification: { channel_type: ctl.channel.value, webhook_url: ctl.webhook.value.trim() },
+      hosts: ctl.hosts.map(function (h) { return { id: h.id, ssh_user: h.user.value.trim(), ssh_port: num(h.port), ssh_password: h.pass.value }; }),
+      retention: {
+        view_bars: num(ctl.viewBars), defaults: defaults,
+        spaces: ctl.spaces.map(function (sp) {
+          var values = {};
+          Object.keys(sp.cells).forEach(function (freq) { values[freq] = sp.cells[freq].value.trim(); });
+          return { id: sp.id, values: values };
+        })
+      },
+      logs: { max_size_mb: num(ctl.logSize), backup_count: num(ctl.logCount) }
+    };
+  }
+
   $('save').addEventListener('click', function () {
+    if (!state.form) return;
     var button = $('save');
     button.disabled = true;
-    post('config/save', { text: $('text').value }).then(function (data) {
-      state.original = $('text').value;
+    post('config/update', gatherForm()).then(function (data) {
       renderOverview(data.overview);
       showSaved(data.sync);
+      loadForm();
     }, function (err) { showAlert(err.message); }).finally(function () { button.disabled = false; });
   });
-  $('reset').addEventListener('click', function () { $('text').value = state.original; showAlert(''); });
+  $('reset').addEventListener('click', function () { if (state.form) renderForm(state.form); showAlert(''); });
   $('close').addEventListener('click', function () {
-    if ($('text').value !== state.original && !confirm('修改还没有保存，确定关闭吗？')) return;
+    if (state.dirty && !confirm('修改还没有保存，确定关闭吗？')) return;
     post('close').then(function () {
       state.closed = true;
       $('page-overview').hidden = true; $('page-edit').hidden = true; $('page-done').hidden = false;

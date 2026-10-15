@@ -185,42 +185,99 @@ func TestEditorEncryptsAPlaintextConfigInPlace(t *testing.T) {
 	}
 }
 
-func TestEditorSavesValidChangesAndRejectsInvalidOnes(t *testing.T) {
+func TestEditorFormShowsTheCommonSettings(t *testing.T) {
 	h := startEditor(t, nil)
-	_, reply, _ := h.call("config/text", struct{}{}, nil)
-	if !strings.Contains(reply.Text, `password = "Adm1n-P@ss"`) {
-		t.Fatal("修改页应拿到完整的配置文本")
+	status, reply, _ := h.call("config/form", struct{}{}, nil)
+	form := reply.Form
+	if status != http.StatusOK || form == nil {
+		t.Fatalf("表单: %d %+v", status, reply)
 	}
+	if form.Admin.Username != "admin" || form.Admin.Password != "Adm1n-P@ss" || form.Tencent.SecretKey != "key-example" || form.Notification.ChannelType != "wecom" {
+		t.Fatalf("账号与通知 = %+v %+v %+v", form.Admin, form.Tencent, form.Notification)
+	}
+	if len(form.Hosts) != 3 || form.Hosts[0].ID != "control" || form.Hosts[0].SSHUser != "ubuntu" || form.Hosts[0].SSHPassword != "pw-control" || form.Hosts[0].Address == "" {
+		t.Fatalf("主机 = %+v", form.Hosts)
+	}
+	if form.Retention.ViewBars != 5000 || form.Retention.Defaults["1m"] != "7d" || len(form.Retention.Frequencies) != 10 {
+		t.Fatalf("保留期 = %+v", form.Retention)
+	}
+	names := map[string]string{}
+	for _, space := range form.Retention.Spaces {
+		names[space.ID] = space.Name
+	}
+	if names["stockcn"] != "A 股" || names["mooxsys"] != "系统数据" {
+		t.Fatalf("空间 = %v", names)
+	}
+	if form.Logs.MaxSizeMB != 50 || form.Logs.BackupCount != 5 {
+		t.Fatalf("日志 = %+v", form.Logs)
+	}
+}
+
+func TestEditorSavesFormChangesLineByLine(t *testing.T) {
+	h := startEditor(t, nil)
+	_, reply, _ := h.call("config/form", struct{}{}, nil)
+	form := *reply.Form
 	before := h.plain()
-	if status, reply, _ := h.call("config/save", map[string]string{"text": "unknown_field = 1\n" + reply.Text}, nil); status != http.StatusUnprocessableEntity || !strings.Contains(reply.Message, "没有保存") {
-		t.Fatalf("校验不过时应拒绝: %d %+v", status, reply)
+
+	bad := form
+	bad.Retention = form.Retention
+	bad.Retention.Defaults = copyMap(form.Retention.Defaults)
+	bad.Retention.Defaults["1m"] = "seven days"
+	if status, reply, _ := h.call("config/update", bad, nil); status != http.StatusUnprocessableEntity || !strings.Contains(reply.Message, "没有保存") {
+		t.Fatalf("保留期写错时应拒绝: %d %+v", status, reply)
+	}
+	unknown := form
+	unknown.Hosts = append(append([]FormHost(nil), form.Hosts...), FormHost{ID: "ghost", SSHUser: "u"})
+	if status, _, _ := h.call("config/update", unknown, nil); status != http.StatusUnprocessableEntity {
+		t.Fatal("表单里多出的主机应拒绝")
 	}
 	if h.plain() != before {
 		t.Fatal("校验不过时文件不能变")
 	}
-	broken := strings.Replace(reply.Text, `username = "admin"`, `username = "Adm1n-P@ss`, 1)
-	if status, syntax, _ := h.call("config/save", map[string]string{"text": broken}, nil); status != http.StatusUnprocessableEntity || !strings.Contains(syntax.Message, "第 2 行") || strings.Contains(syntax.Message, "Adm1n") {
-		t.Fatalf("语法错误应给出行号且不回显内容: %d %+v", status, syntax)
+
+	form.Admin.Username, form.Admin.Password = "admin123", "Live-P@ss"
+	form.Hosts[1].SSHPort, form.Hosts[1].SSHPassword = 2222, "" // storage 改用密钥登录
+	form.Retention.ViewBars = 5500
+	form.Retention.Defaults["1m"] = "14d"
+	for i := range form.Retention.Spaces {
+		if form.Retention.Spaces[i].ID == "stockcn" {
+			form.Retention.Spaces[i].Values["1m"] = "" // 跟随默认
+		}
 	}
-	changed := strings.Replace(reply.Text, `username = "admin"`, `username = "owner"`, 1)
-	status, saved, text := h.call("config/save", map[string]string{"text": changed}, nil)
-	if status != http.StatusOK || saved.Overview == nil || saved.Overview.Admin != "owner" || !saved.Overview.Encrypted {
+	form.Logs.MaxSizeMB, form.Logs.BackupCount = 100, 3
+	status, saved, text := h.call("config/update", form, nil)
+	if status != http.StatusOK || saved.Overview == nil || saved.Overview.Admin != "admin123" || !saved.Overview.Encrypted {
 		t.Fatalf("保存: %d %s", status, text)
 	}
-	if h.plain() != changed {
-		t.Fatal("保存后的内容应与提交的一致")
+	after := h.plain()
+	manifest, err := setupconfig.Parse([]byte(after))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(h.backups) != 1 || h.backups[0] != changed || !strings.Contains(saved.Sync, "已同步") {
+	storage := manifest.HostCatalog["storage"]
+	if manifest.Admin.Password != "Live-P@ss" || storage.SSH.Port != 2222 || storage.SSH.Password != "" || manifest.HostCatalog["control"].SSH.Password != "pw-control" {
+		t.Fatalf("账号或主机没有写对: %+v %+v", manifest.Admin, storage.SSH)
+	}
+	if manifest.StorageRetention.ViewBars != 5500 || manifest.StorageRetention.Defaults["1m"] != "14d" || manifest.LocalLogs.MaxSizeMB != 100 || manifest.LocalLogs.BackupCount != 3 {
+		t.Fatalf("保留期或日志没有写对: %+v %+v", manifest.StorageRetention, manifest.LocalLogs)
+	}
+	if _, ok := manifest.StorageRetention.Spaces["stockcn"]["1m"]; ok || manifest.StorageRetention.Spaces["stockcn"]["5m"] != "240d" {
+		t.Fatalf("留空的格子应删掉，其余不变: %+v", manifest.StorageRetention.Spaces["stockcn"])
+	}
+	// 只改目标行：注释和没动的设置原样保留。
+	for _, kept := range []string{"# View 只按根数保留", "view_bars = 5500   # 每个序列 View 保留最近 N 根", "[factors]", "maintenance_offset = \"35s\""} {
+		if !strings.Contains(after, kept) {
+			t.Fatalf("应保留 %q", kept)
+		}
+	}
+	if len(h.backups) != 1 || h.backups[0] != after || !strings.Contains(saved.Sync, "已同步") {
 		t.Fatalf("保存后应同步到管理后台: %d 次, %q", len(h.backups), saved.Sync)
 	}
 	h.syncErr = errors.New("连不上管理台")
-	again := strings.Replace(changed, `username = "owner"`, `username = "owner2"`, 1)
-	status, saved, _ = h.call("config/save", map[string]string{"text": again}, nil)
-	if status != http.StatusOK || !strings.Contains(saved.Sync, "本机已保存") || h.plain() != again {
+	form.Logs.BackupCount = 4
+	status, saved, _ = h.call("config/update", form, nil)
+	if status != http.StatusOK || !strings.Contains(saved.Sync, "本机已保存") || !strings.Contains(h.plain(), "backup_count = 4") {
 		t.Fatalf("同步失败不影响本机保存: %d %q", status, saved.Sync)
-	}
-	if _, err := setupconfig.Parse([]byte(h.plain())); err != nil {
-		t.Fatal(err)
 	}
 	if status, _, _ := h.call("close", struct{}{}, nil); status != http.StatusOK {
 		t.Fatal("关闭失败")
@@ -235,26 +292,27 @@ func TestEditorSavesValidChangesAndRejectsInvalidOnes(t *testing.T) {
 	}
 }
 
-// 页面打开后文件在别处被改过时，保存要拒绝，不能覆盖别人的改动。
-func TestEditorRefusesToOverwriteOutsideChanges(t *testing.T) {
+// 表单按项写回：页面打开后在别处改过的其它设置不会被冲掉。
+func TestEditorKeepsOutsideChangesToOtherSettings(t *testing.T) {
 	h := startEditor(t, nil)
-	_, reply, _ := h.call("config/text", struct{}{}, nil)
-	outside := strings.Replace(reply.Text, `username = "admin"`, `username = "outside"`, 1)
+	_, reply, _ := h.call("config/form", struct{}{}, nil)
+	outside := strings.Replace(h.plain(), `region = "ap-guangzhou"`, `region = "ap-shanghai"`, 1)
 	if err := os.WriteFile(h.path, []byte(outside), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	status, saved, _ := h.call("config/save", map[string]string{"text": reply.Text}, nil)
-	if status != http.StatusConflict || !strings.Contains(saved.Message, "别处被改动") {
-		t.Fatalf("应拒绝覆盖: %d %+v", status, saved)
+	form := *reply.Form
+	form.Admin.Username = "owner"
+	if status, _, text := h.call("config/update", form, nil); status != http.StatusOK {
+		t.Fatalf("保存: %d %s", status, text)
 	}
-	if h.plain() != outside {
-		t.Fatal("别处的改动不能被覆盖")
+	if after := h.plain(); !strings.Contains(after, `region = "ap-shanghai"`) || !strings.Contains(after, `username = "owner"`) {
+		t.Fatal("别处改动的设置应保留，表单里的修改应写入")
 	}
 }
 
 func TestEditorEndpointsRequireSameOriginJSON(t *testing.T) {
 	h := startEditor(t, nil)
-	for _, path := range []string{"config/overview", "config/text", "config/reveal", "config/save", "config/encrypt", "close"} {
+	for _, path := range []string{"config/overview", "config/form", "config/reveal", "config/update", "config/encrypt", "close"} {
 		if status, _, _ := h.call(path, struct{}{}, func(r *http.Request) { r.Header.Set("Origin", "http://evil.example") }); status != http.StatusForbidden {
 			t.Fatalf("%s：跨站请求状态 %d，应为 403", path, status)
 		}

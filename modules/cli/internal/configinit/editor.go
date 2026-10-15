@@ -17,8 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
-
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
 )
@@ -118,9 +116,9 @@ func RunEditor(ctx context.Context, options EditorOptions) (EditorResult, error)
 	editor.localPage = page
 	page.routes = map[string]http.HandlerFunc{
 		"config/overview": editor.overview,
-		"config/text":     editor.text,
+		"config/form":     editor.form,
 		"config/reveal":   editor.reveal,
-		"config/save":     editor.save,
+		"config/update":   editor.update,
 		"config/encrypt":  editor.encrypt,
 		"close":           editor.close,
 	}
@@ -208,12 +206,14 @@ func (e *editorSession) overview(w http.ResponseWriter, r *http.Request) {
 	reply(w, http.StatusOK, response{OK: true, Overview: &view})
 }
 
-func (e *editorSession) text(w http.ResponseWriter, r *http.Request) {
+// form 返回「修改配置」表单的当前值（含密码，只在本机页面里使用）。
+func (e *editorSession) form(w http.ResponseWriter, r *http.Request) {
 	state, ok := e.current(w, r)
 	if !ok {
 		return
 	}
-	reply(w, http.StatusOK, response{OK: true, Text: string(state.plain)})
+	form := formFrom(state.manifest)
+	reply(w, http.StatusOK, response{OK: true, Form: &form})
 }
 
 // reveal 按需取出一个秘密的值，供页面上「显示」使用。
@@ -256,30 +256,28 @@ func (e *editorSession) reveal(w http.ResponseWriter, r *http.Request) {
 	reply(w, http.StatusOK, response{OK: true, Value: value})
 }
 
-// save 校验修改后的配置，加密后原子替换文件；文件在别处被改过时拒绝覆盖。
-func (e *editorSession) save(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Text string `json:"text"`
-	}
-	if !e.decode(w, r, &request) {
+// update 把表单的修改逐项写回配置，完整校验后加密保存；文件在别处改动过时拒绝覆盖。
+func (e *editorSession) update(w http.ResponseWriter, r *http.Request) {
+	var form ConfigForm
+	if !e.decode(w, r, &form) {
 		return
 	}
-	// 先单独检查 TOML 语法，给出行号（不回显该行内容，免得把秘密带进提示）。
-	var syntax map[string]any
-	if _, err := toml.Decode(request.Text, &syntax); err != nil {
-		message := "配置的格式不对，没有保存"
-		var parseErr toml.ParseError
-		if errors.As(err, &parseErr) && parseErr.Position.Line > 0 {
-			message = fmt.Sprintf("第 %d 行附近的格式不对，没有保存", parseErr.Position.Line)
-		}
-		reply(w, http.StatusUnprocessableEntity, response{Message: message})
+	e.mu.Lock()
+	state, err := e.load()
+	e.mu.Unlock()
+	if err != nil {
+		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
 		return
 	}
-	if _, err := setupconfig.Parse([]byte(request.Text)); err != nil {
-		reply(w, http.StatusUnprocessableEntity, response{Message: "配置没有通过校验，没有保存：" + err.Error()})
+	updated, err := applyForm(state.plain, state.manifest, form)
+	if err == nil {
+		_, err = setupconfig.Parse(updated)
+	}
+	if err != nil {
+		reply(w, http.StatusUnprocessableEntity, response{Message: "修改没有通过校验，没有保存：" + err.Error()})
 		return
 	}
-	e.write(w, r, []byte(request.Text))
+	e.write(w, r, updated)
 }
 
 // encrypt 把明文保存的配置原样加密保存。
