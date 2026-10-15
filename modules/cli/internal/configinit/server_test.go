@@ -19,6 +19,7 @@ import (
 	"time"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
 )
 
 type outcome struct {
@@ -28,6 +29,7 @@ type outcome struct {
 
 type harness struct {
 	t      *testing.T
+	keys   *configcrypt.MemoryStore
 	cloud  *fakeCloud
 	prober *fakeProber
 	base   string // http://127.0.0.1:port/<token>/
@@ -41,14 +43,14 @@ type harness struct {
 func start(t *testing.T, timeout time.Duration) *harness {
 	t.Helper()
 	h := &harness{t: t, output: filepath.Join(t.TempDir(), "moox.toml"), done: make(chan outcome, 1), notice: &bytes.Buffer{},
-		cloud: newFakeCloud(), prober: &fakeProber{report: linuxReport()}}
+		keys: &configcrypt.MemoryStore{}, cloud: newFakeCloud(), prober: &fakeProber{report: linuxReport()}}
 	urls := make(chan string, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
 	t.Cleanup(cancel)
 	go func() {
 		result, err := Run(ctx, Options{
-			Output: h.output, Timeout: timeout, Notice: h.notice, Cloud: h.cloud, Prober: h.prober,
+			Output: h.output, Timeout: timeout, Notice: h.notice, Cloud: h.cloud, Prober: h.prober, KeyStore: h.keys,
 			Open: func(u string) error { urls <- u; return nil },
 		})
 		h.done <- outcome{result, err}
@@ -150,6 +152,16 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 	}
 	if !strings.Contains(body, `href="https://console.cloud.tencent.com/cam"`) {
 		t.Fatal("第一步应引导用户去访问管理创建密钥")
+	}
+	// 隐私说明要讲清去向，且不能承诺本地加密（本地是仅本人可读的明文文件）。
+	if !strings.Contains(body, "不会发给 AI，也不会发给 MooX 开发者") || strings.Contains(body, "本地加密") {
+		t.Fatal("底部应如实说明信息的去向")
+	}
+	// 隐私说明按实际实现描述：本机加密保存、密钥位置、不发给 AI 和开发者。
+	for _, want := range []string{"加密保存在这台电脑上", "不会发给 AI，也不会发给 MooX 开发者", `"key_store":"测试内存"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("页面应说明 %q", want)
+		}
 	}
 	// 系统用到的每个腾讯云服务都要列出对应的预设策略，免得用户不知道授什么权限。
 	for _, policy := range []string{"QcloudSCFFullAccess", "QcloudCOSFullAccess", "QcloudCLSFullAccess", "QcloudLighthouseFullAccess", "QcloudCVMFullAccess", "QcloudVPCFullAccess"} {
@@ -361,7 +373,20 @@ func TestSubmitWritesTheFileAndEndsTheSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := setupconfig.Parse(raw); err != nil {
+	// 写出的文件是加密的：不含任何明文配置，用本机密钥能解开并通过 CLI 校验。
+	if !configcrypt.IsEncrypted(raw) {
+		t.Fatal("写出的 moox.toml 应加密保存")
+	}
+	for _, plain := range []string{"Adm1n-P@ss", "key-example", "pw-storage", "[admin]", "198.51.100.10"} {
+		if strings.Contains(string(raw), plain) {
+			t.Fatalf("加密文件里出现了明文 %q", plain)
+		}
+	}
+	plain, err := configcrypt.Decrypt(raw, h.keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := setupconfig.Parse(plain); err != nil {
 		t.Fatalf("写出的文件应通过 CLI 校验: %v", err)
 	}
 	if runtime.GOOS != "windows" {

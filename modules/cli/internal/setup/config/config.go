@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+
 	"github.com/BurntSushi/toml"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/security/domainpolicy"
@@ -329,9 +331,11 @@ type Manifest struct {
 
 type Snapshot struct {
 	Manifest Manifest
-	path     string
-	info     os.FileInfo
-	digest   [sha256.Size]byte
+	// Encrypted 表示磁盘上的 moox.toml 是加密保存的。
+	Encrypted bool
+	path      string
+	info      os.FileInfo
+	digest    [sha256.Size]byte
 }
 
 func Load(path, repositoryRoot string) (*Snapshot, error) {
@@ -355,16 +359,33 @@ func Load(path, repositoryRoot string) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
+	plain, encrypted, err := Plaintext(raw)
+	if err != nil {
+		return nil, err
+	}
 	var manifest Manifest
-	if err := decodeStrict(raw, &manifest); err != nil {
+	if err := decodeStrict(plain, &manifest); err != nil {
 		return nil, err
 	}
 	return &Snapshot{
-		Manifest: manifest,
-		path:     resolvedPath,
-		info:     info,
-		digest:   sha256.Sum256(raw),
+		Manifest:  manifest,
+		Encrypted: encrypted,
+		path:      resolvedPath,
+		info:      info,
+		digest:    sha256.Sum256(raw),
 	}, nil
+}
+
+// Plaintext 返回 moox.toml 的明文：加密保存的用本机密钥解开，明文原样返回。
+func Plaintext(raw []byte) (plain []byte, encrypted bool, err error) {
+	if !configcrypt.IsEncrypted(raw) {
+		return raw, false, nil
+	}
+	plain, err = configcrypt.Decrypt(raw, configcrypt.Default())
+	if err != nil {
+		return nil, true, fmt.Errorf("config_invalid: %w", err)
+	}
+	return plain, true, nil
 }
 
 // Parse 按与 Load 相同的严格解码和校验解析 moox.toml 的内容，不读取文件，也不检查文件名与权限。

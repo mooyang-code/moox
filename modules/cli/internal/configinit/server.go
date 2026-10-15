@@ -2,30 +2,22 @@ package configinit
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/subtle"
 	_ "embed"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
-	"mime"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
 )
 
-const (
-	// DefaultTimeout 是录入页的有效期：超时后令牌失效，进程退出。
-	DefaultTimeout = time.Hour
-	maxBodyBytes   = 1 << 20
-)
+// DefaultTimeout 是录入页的有效期：超时后令牌失效，进程退出。
+const DefaultTimeout = time.Hour
 
 //go:embed page.html
 var pageSource string
@@ -45,6 +37,8 @@ type Options struct {
 	// Cloud 与 Prober 为空时用腾讯云接口和真实的环境检测；测试里替换。
 	Cloud  Cloud
 	Prober Prober
+	// KeyStore 为空时用本机的系统钥匙串（没有钥匙串时用仅本人可读的密钥文件）。
+	KeyStore configcrypt.KeyStore
 }
 
 // Result 只含「写到哪里、有哪些主机」，不含任何值。
@@ -78,11 +72,15 @@ func Run(ctx context.Context, options Options) (Result, error) {
 		open = openBrowser
 	}
 
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		return Result{}, fmt.Errorf("无法在本机起录入页: %w", err)
+	keys := options.KeyStore
+	if keys == nil {
+		keys = configcrypt.Default()
 	}
-	session, err := newSession(listener.Addr().String(), output, time.Now().Add(timeout))
+	listener, err := listenLocal()
+	if err != nil {
+		return Result{}, err
+	}
+	session, err := newSession(listener.Addr().String(), output, time.Now().Add(timeout), keys)
 	if err != nil {
 		_ = listener.Close()
 		return Result{}, err
@@ -96,35 +94,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	if session.prober == nil {
 		session.prober = systemProber{}
 	}
-	server := &http.Server{
-		Handler: session, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second,
-		WriteTimeout: 90 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10,
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	go func() { _ = server.Serve(listener) }()
-	defer func() {
-		shutdown, stop := context.WithTimeout(context.Background(), 3*time.Second)
-		defer stop()
-		_ = server.Shutdown(shutdown)
-	}()
-
-	url := "http://" + listener.Addr().String() + "/" + session.token + "/"
-	if err := open(url); err != nil {
-		// 浏览器打不开时才把地址给用户（令牌在里面，一次性且只在有效期内可用）。
-		fmt.Fprintf(notice, "没能自动打开浏览器，请手动打开这个地址填写（只在本机有效）：\n%s\n", url)
-	} else {
-		fmt.Fprintf(notice, "已在浏览器里打开本机录入页（%s，%s 内有效）。请在页面里填写；填写的内容不会发给 Agent。\n", listener.Addr().String(), timeout)
-	}
-	select {
-	case result := <-session.result:
-		return result, nil
-	case <-ctx.Done():
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return Result{}, fmt.Errorf("录入页已超过 %s 没有提交，已关闭；需要时重新运行", timeout)
-		}
-		return Result{}, ctx.Err()
-	}
+	return serveLocal(ctx, listener, session.localPage, serveOptions{Timeout: timeout, Open: open, Notice: notice, Name: "录入页"}, session.result)
 }
 
 // checkOutput 在起页面之前就确认输出位置可用，免得用户填完才发现写不进去。
@@ -141,155 +111,33 @@ func checkOutput(path string) error {
 }
 
 type session struct {
-	addr   string
+	*localPage
 	output string
-	token  string
-	boot   template.JS
+	keys   configcrypt.KeyStore
 	cloud  *cloudCache
 	prober Prober
-
-	mu     sync.Mutex
-	done   bool
 	result chan Result
 }
 
-// newSession 的 deadline 只用于让页面显示倒计时；真正的超时由 Run 的 context 负责。
-func newSession(addr, output string, deadline time.Time) (*session, error) {
-	raw := make([]byte, 24)
-	if _, err := rand.Read(raw); err != nil {
-		return nil, err
-	}
+// newSession 的 deadline 只用于让页面显示倒计时；真正的超时由 serveLocal 负责。
+func newSession(addr, output string, deadline time.Time, keys configcrypt.KeyStore) (*session, error) {
 	roles, err := loadRoles()
 	if err != nil {
 		return nil, err
 	}
-	// json.Marshal 默认转义 <、>、&，放进 <script> 数据块是安全的。
-	boot, err := json.Marshal(map[string]any{"roles": roles, "deadline": deadline.UnixMilli()})
+	page, err := newLocalPage(addr, pageTemplate, map[string]any{"roles": roles, "deadline": deadline.UnixMilli(), "key_store": keys.Where()})
 	if err != nil {
 		return nil, err
 	}
-	return &session{
-		addr: addr, output: output, token: base64.RawURLEncoding.EncodeToString(raw),
-		boot: template.JS(boot), result: make(chan Result, 1),
-	}, nil
-}
-
-func (s *session) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h := w.Header()
-	h.Set("Cache-Control", "no-store")
-	h.Set("Referrer-Policy", "no-referrer")
-	h.Set("X-Content-Type-Options", "nosniff")
-	if !s.hostAllowed(r.Host) {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
-	}
-	segment, rest, ok := splitPath(r.URL.Path)
-	if !ok || subtle.ConstantTimeCompare([]byte(segment), []byte(s.token)) != 1 {
-		http.NotFound(w, r)
-		return
-	}
-	s.mu.Lock()
-	finished := s.done
-	s.mu.Unlock()
-	if finished {
-		http.Error(w, "页面已使用完毕，请重新运行命令", http.StatusGone)
-		return
-	}
-	if rest == "" {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", "GET")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		s.page(w)
-		return
-	}
-	handler, ok := map[string]func(http.ResponseWriter, *http.Request){
+	s := &session{localPage: page, output: output, keys: keys, result: make(chan Result, 1)}
+	page.routes = map[string]http.HandlerFunc{
 		"submit":         s.submit,
 		"tencent/verify": s.verifyTencent,
 		"tencent/lookup": s.lookupServer,
 		"factor/check":   s.checkFactor,
 		"factor/trust":   s.trustFactor,
-	}[rest]
-	if !ok {
-		http.NotFound(w, r)
-		return
 	}
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	handler(w, r)
-}
-
-// splitPath 把 /<令牌>/<其余> 拆成两段。
-func splitPath(p string) (token, rest string, ok bool) {
-	p = strings.TrimPrefix(p, "/")
-	token, rest, found := strings.Cut(p, "/")
-	return token, rest, found && token != ""
-}
-
-// hostAllowed 只接受回环主机名加本次端口，挡掉 DNS 重绑定。
-func (s *session) hostAllowed(host string) bool {
-	_, port, err := net.SplitHostPort(s.addr)
-	if err != nil {
-		return false
-	}
-	return host == "127.0.0.1:"+port || host == "localhost:"+port
-}
-
-func (s *session) originAllowed(origin string) bool {
-	_, port, err := net.SplitHostPort(s.addr)
-	if err != nil {
-		return false
-	}
-	return origin == "http://127.0.0.1:"+port || origin == "http://localhost:"+port
-}
-
-func (s *session) page(w http.ResponseWriter) {
-	nonce := make([]byte, 16)
-	if _, err := rand.Read(nonce); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	n := base64.RawURLEncoding.EncodeToString(nonce)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'nonce-"+n+"'; script-src 'nonce-"+n+"'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
-	_ = pageTemplate.Execute(w, map[string]any{"Nonce": n, "Boot": s.boot})
-}
-
-type response struct {
-	OK       bool         `json:"ok"`
-	Message  string       `json:"message,omitempty"`
-	Account  *Account     `json:"account,omitempty"`
-	Instance *Instance    `json:"instance,omitempty"`
-	Report   *ProbeReport `json:"report,omitempty"`
-}
-
-func reply(w http.ResponseWriter, status int, body response) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
-}
-
-// decode 检查请求来源与格式，并严格解码请求体；失败时已经写好了响应。
-func (s *session) decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	if !s.originAllowed(r.Header.Get("Origin")) || (r.Header.Get("Sec-Fetch-Site") != "" && r.Header.Get("Sec-Fetch-Site") != "same-origin") {
-		reply(w, http.StatusForbidden, response{Message: "请求来源不被允许"})
-		return false
-	}
-	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
-		reply(w, http.StatusUnsupportedMediaType, response{Message: "请求格式不对"})
-		return false
-	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(v); err != nil {
-		reply(w, http.StatusBadRequest, response{Message: "请求内容不对或过大"})
-		return false
-	}
-	return true
+	return s, nil
 }
 
 func (s *session) verifyTencent(w http.ResponseWriter, r *http.Request) {
@@ -383,13 +231,18 @@ func (s *session) submit(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusUnprocessableEntity, response{Message: err.Error()})
 		return
 	}
+	sealed, err := configcrypt.Encrypt(raw, s.keys)
+	if err != nil {
+		reply(w, http.StatusInternalServerError, response{Message: "加密配置失败：" + err.Error()})
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.done {
 		reply(w, http.StatusGone, response{Message: "页面已使用完毕"})
 		return
 	}
-	if err := writeNew(s.output, raw); err != nil {
+	if err := writeNew(s.output, sealed); err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, os.ErrExist) {
 			status = http.StatusConflict

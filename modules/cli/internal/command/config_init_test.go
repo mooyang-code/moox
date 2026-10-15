@@ -65,12 +65,15 @@ func TestConfigInitCommandPassesFlagsAndErrors(t *testing.T) {
 	}
 }
 
-func TestConfigCommandRegistersInit(t *testing.T) {
+func TestConfigCommandRegistersInitEditAndEncrypt(t *testing.T) {
 	cmd := newConfigCommand(configDeps{})
+	names := map[string]bool{}
 	for _, sub := range cmd.Commands() {
-		if sub.Name() == "init" {
-			return
+		names[sub.Name()] = true
+	}
+	for _, want := range []string{"init", "edit", "encrypt"} {
+		if !names[want] {
+			t.Fatalf("config 命令下应有 %s", want)
 		}
 	}
-	t.Fatal("config 命令下应有 init")
 }

@@ -286,7 +286,10 @@ When initializing a fresh MooX system, follow
 [`references/custom-setup.md`](references/custom-setup.md) exactly. The user
 creates repository-root `moox.toml` before deployment (preferably by running
 `moox-cli config init` and filling the local form in their own browser; the
-Agent never fills or reads it). The Agent may test only
+Agent never fills or reads it). The file is stored encrypted (key in the OS
+keychain); when the user wants to view or change it, run `moox-cli config edit`
+so they can do it on the local config page, and use `moox-cli config encrypt`
+for a hand-written plaintext file. The Agent may test only
 whether it exists and must never read, parse, print, copy, or source it outside
 `moox-cli setup`, except the `storage_gateway_host` confirmation in
 [`references/private-network.md`](references/private-network.md) when checking

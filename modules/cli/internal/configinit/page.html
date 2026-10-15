@@ -142,7 +142,11 @@ table.review tr + tr th, table.review tr + tr td { border-top: 1px solid var(--l
 
 .footer { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line); z-index: 10; }
 .footer-in { max-width: 1040px; margin: 0 auto; padding: 14px 28px; display: flex; align-items: center; gap: 12px; }
-.footer .note { color: var(--faint); font-size: 12.5px; margin-right: auto; }
+.footer .note { color: var(--muted); font-size: 12.5px; margin-right: auto; }
+.privacy { display: flex; gap: 8px; align-items: flex-start; max-width: 640px; line-height: 1.5; }
+.privacy svg { flex: none; width: 15px; height: 15px; margin-top: 1px; color: var(--ok); }
+.privacy b { font-weight: 600; color: var(--ink-2); }
+@media (max-width: 720px) { .privacy { font-size: 12px; } }
 button { font: inherit; height: 36px; padding: 0 16px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); cursor: pointer; white-space: nowrap; }
 button:hover { background: var(--hover); }
 button:disabled { opacity: .5; cursor: default; }
@@ -237,14 +241,14 @@ button.ghost.away { visibility: hidden; }
     <section class="page finish" id="page-5" hidden>
       <div class="mark">✓</div>
       <h1>配置完成</h1>
-      <p class="lede">可以关闭这个页面，回到 Agent 继续部署。</p>
+      <p class="lede">配置已加密保存在这台电脑上。可以关闭这个页面，回到 Agent 继续部署；以后想查看或修改配置，告诉 Agent「打开配置页」即可。</p>
     </section>
   </main>
 </div>
 
 <div class="footer" id="footer">
   <div class="footer-in">
-    <span class="note">填写的信息只保存在这台电脑上</span>
+    <span class="note privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><span>你填写的密码和密钥会加密保存在这台电脑上（解密密钥存放在<span id="key-store">系统钥匙串</span>），<b>不会发给 AI，也不会发给 MooX 开发者</b>。部署时，云密钥和服务器密码会导入你自己服务器上的管理后台，同样加密保存。</span></span>
     <button type="button" class="ghost" id="back">上一步</button>
     <button type="button" class="primary" id="next">下一步</button>
   </div>
@@ -598,6 +602,8 @@ button.ghost.away { visibility: hidden; }
     $('admin-password').value = password;
     $('admin-password').type = 'text';
   });
+
+  $('key-store').textContent = boot.key_store;
 
   // ---------- 有效期 ----------
   function pad(n) { return n < 10 ? '0' + n : String(n); }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -750,4 +751,27 @@ func TestSnapshotDetectsReplacement(t *testing.T) {
 	err = snapshot.VerifyUnchanged()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config_changed")
+}
+
+func TestLoadDecryptsAnEncryptedManifest(t *testing.T) {
+	restore := configcrypt.SetDefaultForTest(&configcrypt.MemoryStore{})
+	defer restore()
+	sealed, err := configcrypt.Encrypt([]byte(validManifest), configcrypt.Default())
+	require.NoError(t, err)
+	root := t.TempDir()
+	path := writeManifest(t, root, string(sealed), 0o600)
+	snapshot, err := Load(path, root)
+	require.NoError(t, err)
+	assert.True(t, snapshot.Encrypted)
+	assert.Equal(t, "admin", snapshot.Manifest.Admin.Username)
+	require.NoError(t, snapshot.VerifyUnchanged())
+
+	plain, err := Load(writeManifest(t, root, validManifest, 0o600), root)
+	require.NoError(t, err)
+	assert.False(t, plain.Encrypted, "明文配置仍然可以读取")
+
+	tampered := []byte(strings.Replace(string(sealed), "key: ", "key: f", 1))
+	_, err = Load(writeManifest(t, root, string(tampered), 0o600), root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config_invalid")
 }

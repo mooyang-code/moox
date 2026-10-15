@@ -16,7 +16,9 @@ not a deployment artifact.
 （数据存储、管理台；可选的海外服务器只在使用加密货币行情时需要；可选的因子计算机可以是这台电脑或
 局域网里的 Linux/macOS/Windows 机器）→ 管理员与告警 → 确认。腾讯云服务器只填公网 IP 和 SSH 登录方式，
 地域与规格按 IP 从当前账号识别，不在账号下的 IP 不能用；因子计算机提交前要通过环境检测，首次 SSH 连接由
-用户在页面上确认主机指纹。确认后直接写出仓库根目录的 `moox.toml`（权限 0600），Linux 因子计算机同时登记
+用户在页面上确认主机指纹。确认后直接写出仓库根目录的 `moox.toml`（权限 0600，**整份加密保存**，解密密钥在
+系统钥匙串里：macOS 钥匙串、Windows 凭据管理器或 Linux Secret Service；没有钥匙串时是 `~/.config/moox/config.key`），
+所有 `moox-cli` 命令会自动解密，Linux 因子计算机同时登记
 为编译机，`[factor_engine]` 记录因子引擎所在的机器（`local` 表示这台电脑）。规则：
 
 - 腾讯云密钥建议用子用户（访问管理 → 用户列表，编程访问），需要授权 6 个预设策略：
@@ -29,7 +31,11 @@ not a deployment artifact.
   工具打开或填写这个页面。
 - 系统浏览器没能自动打开时（例如远程环境），命令会在 stderr 打印页面地址；把地址原样转给用户，
   由用户在自己的浏览器里打开。页面默认 1 小时有效，页面顶部有倒计时；超时没有提交会自动关闭，不写任何文件，重新运行即可。
-- 其余配置（保留期、日志、因子等）沿用示例默认值，用户之后可以直接编辑文件。
+- 其余配置（保留期、日志、因子等）沿用示例默认值。文件加密后不能再手工编辑：用户要查看或修改配置时，
+  运行 `./bin/moox-cli config edit`，在本机配置页里查看（密码默认隐藏）和修改（保存前校验，保存后重新加密）。
+  Agent 同样不得打开或读取这个页面，命令只输出是否保存过、文件是否加密。
+- 手工填写的明文 `moox.toml` 用 `./bin/moox-cli config encrypt` 原样加密保存；已加密的文件只核对能否解开。
+  配置换到另一台电脑时，那台电脑没有解密密钥，需要在那台电脑上重新运行 `config init`。
 
 也可以手工填写：Show the user `moox.toml.example`. The user must fill it as repository-root
 `moox.toml` and protect it before the Agent continues:

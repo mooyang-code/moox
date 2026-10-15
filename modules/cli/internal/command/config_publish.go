@@ -93,12 +93,14 @@ func newConfigCommand(deps configDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "把 moox.toml 的变更发布到各主机的模块配置",
-		Long: `config init 在本机打开一次性表单，填写部署信息并生成 moox.toml；
+		Long: `config init 在本机打开一次性表单，填写部署信息并生成加密保存的 moox.toml；
+config edit 在本机打开配置页，查看并修改 moox.toml（保存后重新加密）；
+config encrypt 把明文保存的 moox.toml 加密保存；
 config plan 渲染由 moox.toml 派生的各主机配置文件并与主机上的当前文件对比，不做任何修改；
 config publish 写入有变更的文件、重启受影响的服务并等待就绪，失败时恢复原文件。`,
 		SilenceUsage: true,
 	}
-	cmd.AddCommand(newConfigInitCommand(), newConfigPlanCommand(deps), newConfigPublishCommand(deps))
+	cmd.AddCommand(newConfigInitCommand(), newConfigEditCommand(), newConfigEncryptCommand(), newConfigPlanCommand(deps), newConfigPublishCommand(deps))
 	return cmd
 }
 
