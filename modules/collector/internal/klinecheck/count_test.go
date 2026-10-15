@@ -32,6 +32,10 @@ func (c *countingRows) CountTimeSeriesRows(_ context.Context, req *storagepb.Cou
 	if c.countErr != nil {
 		return nil, c.countErr
 	}
+	// 与 Storage 一致：没有鉴权信息的请求被拒绝。
+	if req.GetAuthInfo() == nil {
+		return &storagepb.CountTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INVALID_PARAM, Msg: "auth_info is required"}}, nil
+	}
 	start, _ := time.Parse(time.RFC3339, req.GetTimeRange().GetStartTime())
 	end, _ := time.Parse(time.RFC3339, req.GetTimeRange().GetEndTime())
 	rsp := &storagepb.CountTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}
@@ -77,7 +81,7 @@ func TestCheckCountsFirstAndReadsOnlySubjectsWithMissingBars(t *testing.T) {
 	now := func() time.Time { return base.Add(time.Hour) }
 
 	counted := newCountingRows(missing)
-	result, err := (&Checker{Plans: fakePlans{records}, Rows: counted, Now: now}).Check(context.Background(), request)
+	result, err := (&Checker{Plans: fakePlans{records}, Rows: counted, Auth: testAuth, Now: now}).Check(context.Background(), request)
 	require.NoError(t, err)
 	require.Equal(t, []string{"ETH-USDT"}, counted.readSubjects(), "根数齐全的标的不读行")
 	require.Equal(t, 1, counted.countCalls, "三个标的合成一次计数")
@@ -103,7 +107,7 @@ func TestCheckCountsSubtractConfirmedAbsences(t *testing.T) {
 		{SpaceID: "crypto", DatasetID: "ds", Frequency: "1m", SubjectID: "ETH-USDT", From: base.Add(2 * time.Minute), To: base.Add(3 * time.Minute), Bars: 1},
 	}))
 	counted := newCountingRows(missing)
-	result, err := (&Checker{Plans: fakePlans{records}, Rows: counted, Absences: repo, Now: func() time.Time { return base.Add(time.Hour) }}).Check(context.Background(),
+	result, err := (&Checker{Plans: fakePlans{records}, Rows: counted, Auth: testAuth, Absences: repo, Now: func() time.Time { return base.Add(time.Hour) }}).Check(context.Background(),
 		Request{SpaceID: "crypto", From: base, To: base.Add(10 * time.Minute)})
 	require.NoError(t, err)
 	require.Equal(t, []string{"ETH-USDT"}, counted.readSubjects(), "BTC 只缺已确认的那根，不用读行")
@@ -121,7 +125,7 @@ func TestCheckFallsBackToRowReadsWhenCountingFails(t *testing.T) {
 	markMissingIn(missing, "ETH-USDT", base.Add(3*time.Minute), base.Add(4*time.Minute))
 	counted := newCountingRows(missing)
 	counted.countErr = errors.New("unknown method CountTimeSeriesRows")
-	result, err := (&Checker{Plans: fakePlans{records}, Rows: counted, Now: func() time.Time { return base.Add(time.Hour) }}).Check(context.Background(),
+	result, err := (&Checker{Plans: fakePlans{records}, Rows: counted, Auth: testAuth, Now: func() time.Time { return base.Add(time.Hour) }}).Check(context.Background(),
 		Request{SpaceID: "crypto", From: base, To: base.Add(10 * time.Minute)})
 	require.NoError(t, err)
 	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, counted.readSubjects())
@@ -129,7 +133,7 @@ func TestCheckFallsBackToRowReadsWhenCountingFails(t *testing.T) {
 
 	// 深度检查要校验字段，不走计数。
 	deep := newCountingRows(missing)
-	_, err = (&Checker{Plans: fakePlans{records}, Rows: deep, Now: func() time.Time { return base.Add(time.Hour) }}).Check(context.Background(),
+	_, err = (&Checker{Plans: fakePlans{records}, Rows: deep, Auth: testAuth, Now: func() time.Time { return base.Add(time.Hour) }}).Check(context.Background(),
 		Request{SpaceID: "crypto", From: base, To: base.Add(10 * time.Minute), Deep: true})
 	require.NoError(t, err)
 	require.Zero(t, deep.countCalls)
@@ -148,7 +152,7 @@ func TestCheckHistoryCountsFirst(t *testing.T) {
 	now := func() time.Time { return base.Add(2 * time.Hour) }
 
 	counted := newCountingRows(missing)
-	result, err := (&Checker{Plans: fakePlans{records}, Rows: counted, Now: now}).CheckHistory(context.Background(), "crypto", "ds", "1m")
+	result, err := (&Checker{Plans: fakePlans{records}, Rows: counted, Auth: testAuth, Now: now}).CheckHistory(context.Background(), "crypto", "ds", "1m")
 	require.NoError(t, err)
 	require.Equal(t, []string{"A-USDT", "B-USDT"}, counted.readSubjects(), "C 没有历史、G 齐全，都不读行")
 
@@ -158,6 +162,8 @@ func TestCheckHistoryCountsFirst(t *testing.T) {
 	require.Equal(t, 3, result.WithHistory)
 	require.Len(t, result.Gaps, 1)
 }
+
+var testAuth = &storagepb.AuthInfo{AppId: "collector", AppKey: "key"}
 
 func markMissingIn(missing map[string]map[int64]bool, subject string, from, to time.Time) {
 	if missing[subject] == nil {

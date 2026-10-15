@@ -142,7 +142,7 @@ func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequenc
 			// 先比对根数：一根都没有的标的没有历史，根数齐全的标的没有缺口，只有其余的标的才读行定位缺口。
 			detail, complete := batch, 0
 			if counting {
-				counts, err := countPresent(ctx, counter, spaceID, datasetID, frequencyName, batch, bars[0], end)
+				counts, err := countPresent(ctx, counter, c.Auth, spaceID, datasetID, frequencyName, batch, bars[0], end)
 				if err != nil {
 					log.WarnContextf(ctx, "collector history count failed, falling back to row reads space=%s dataset=%s|%s: %v", spaceID, datasetID, frequencyName, err)
 				} else {

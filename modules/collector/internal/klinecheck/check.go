@@ -310,7 +310,7 @@ func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID,
 		detail := subjects
 		if counter, ok := c.counter(request); ok {
 			// 先比对根数：根数正好等于“应有 - 已确认缺失”的标的没有缺口，不用读行。
-			if counts, err := countPresent(ctx, counter, request.SpaceID, datasetID, frequencyName, subjects, bars[0], end); err != nil {
+			if counts, err := countPresent(ctx, counter, c.Auth, request.SpaceID, datasetID, frequencyName, subjects, bars[0], end); err != nil {
 				// 计数失败（例如 Storage 还没升级）不影响检查，退回逐行比对。
 				log.WarnContextf(ctx, "collector kline count failed, falling back to row reads space=%s dataset=%s|%s: %v", request.SpaceID, datasetID, frequencyName, err)
 			} else {
@@ -357,13 +357,13 @@ func (c *Checker) counter(request Request) (RowCounter, bool) {
 }
 
 // countPresent 按标的统计 [from, to) 内已存在的 K 线根数（同一时间点多个 series_tag 只计一次）。
-func countPresent(ctx context.Context, counter RowCounter, spaceID, datasetID, frequency string, subjects []string, from, to time.Time) (map[string]int, error) {
+func countPresent(ctx context.Context, counter RowCounter, auth *storagepb.AuthInfo, spaceID, datasetID, frequency string, subjects []string, from, to time.Time) (map[string]int, error) {
 	selectors := make([]*storagepb.TimeSeriesSelector, 0, len(subjects))
 	for _, subject := range subjects {
 		selectors = append(selectors, &storagepb.TimeSeriesSelector{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: frequency})
 	}
 	rsp, err := counter.CountTimeSeriesRows(ctx, &storagepb.CountTimeSeriesRowsReq{
-		SpaceId: spaceID, DatasetId: datasetID, Selectors: selectors,
+		AuthInfo: auth, SpaceId: spaceID, DatasetId: datasetID, Selectors: selectors,
 		TimeRange: &storagepb.TimeRange{StartTime: from.Format(time.RFC3339), EndTime: to.Format(time.RFC3339)},
 	})
 	if err != nil {
