@@ -318,7 +318,13 @@
         }
       ],
       "id": "storage",
-      "name": "存储主服务 / 存储数据节点 / 存储视图服务",
+      "name": "存储主服务 / 存储数据节点",
+      "status": "disabled"
+    },
+    {
+      "datasets": [],
+      "id": "view",
+      "name": "存储视图服务",
       "status": "disabled"
     },
     {

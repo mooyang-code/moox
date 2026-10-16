@@ -229,7 +229,9 @@ describe("monitor page", () => {
     });
     await flushPromises();
     await flushPromises();
-    const rows = page.findAll(".dataset-table tbody tr");
+    const rows = page.findAll(".dataset-table tr.dataset-row");
+    // 按环节分组：组标题写环节名与数量，收起时只列需要关注的行。
+    expect(page.findAll(".dataset-table .group-row").map(row => row.text())).toEqual(["入库2 个数据集 · 1 个需要关注"]);
     expect(rows).toHaveLength(1);
     expect(rows[0].text()).toContain("现货分钟K线");
     expect(rows[0].text()).toContain("最近成功结果已过期");
@@ -237,7 +239,7 @@ describe("monitor page", () => {
     expect(rows[0].find(".lag").text()).toBe("等待中，已过收线 18 分钟（缺 19 根）");
     expect(vi.mocked(listAllDatasets)).toHaveBeenCalledWith("crypto", { spaceId: "crypto" });
     await page.find('[aria-label="数据链路"] .link-button').trigger("click");
-    expect(page.findAll(".dataset-table tbody tr")).toHaveLength(2);
+    expect(page.findAll(".dataset-table tr.dataset-row")).toHaveLength(2);
   });
 
   it("keeps the last data on errors and ignores a late older refresh", async () => {

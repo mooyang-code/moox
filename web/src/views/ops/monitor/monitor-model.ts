@@ -141,7 +141,8 @@ export function barDelay(item: HealthDataset, nowMs: number): BarDelay {
       ratio: ratioOf(delaySeconds)
     };
   }
-  if (item.output_watermark_at) return { text: "—", tone: "idle", title: "生产者没有上报到达时间", ratio: 0 };
+  // 已按交易日历识别出最新一根、只是生产者没上报到达时间时说明原因；没有交易日历的系统数据（mooxsys）不判断到达延迟，不提示。
+  if (item.latest_bar_close_at) return { text: "—", tone: "idle", title: "生产者没有上报到达时间", ratio: 0 };
   return { text: "—", tone: "idle", title: "", ratio: 0 };
 }
 
@@ -489,7 +490,8 @@ export function componentsByHost(overview: HealthOverview | undefined): HostComp
 
 const STAGE_LABELS: Record<string, string> = {
   collection: "采集",
-  storage: "存储与视图",
+  storage: "入库",
+  view: "视图",
   factor: "因子",
   strategy: "策略计算",
   trade: "交易"
@@ -560,7 +562,7 @@ function datasetRow(item: HealthDataset, names: NameBook, nowMs: number): Datase
   };
 }
 
-/** 数据链路：采集 → 存储与视图 → 因子 → 策略计算 → 交易；每个数据集最新一根 K 线的到达延迟，需要关注、等得久的在前。 */
+/** 数据链路：采集 → 入库 → 视图 → 因子 → 策略计算 → 交易；每个数据集最新一根 K 线的到达延迟，需要关注、等得久的在前。 */
 export function pipelineStages(
   overview: HealthOverview | undefined,
   names: NameBook,

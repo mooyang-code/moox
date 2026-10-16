@@ -294,6 +294,31 @@ describe("layers", () => {
       ["现货分钟K线", "延迟 5 秒", "ok", false]
     ]);
     expect(stages[1].rows[2].delayTitle).toContain("迟到，已恢复");
+    // 没有交易日历的系统数据（mooxsys）不判断到达延迟：只显示“—”，不给提示。
+    const [view] = pipelineStages(
+      {
+        pipeline: [
+          {
+            id: "view",
+            status: "healthy",
+            datasets: [
+              {
+                producer: "storage_view",
+                space_id: "mooxsys",
+                dataset_id: "view_mooxsys_host_resource",
+                freq: "1m",
+                status: "healthy",
+                output_watermark_at: at(1)
+              }
+            ]
+          }
+        ]
+      },
+      names,
+      now
+    );
+    expect(view.label).toBe("视图");
+    expect(view.rows[0]).toMatchObject({ delay: "—", delayTitle: "", delayTone: "idle" });
     expect(stages[1].rows[3].limit).toBe("10 分钟");
   });
 

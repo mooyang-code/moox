@@ -99,7 +99,13 @@ export function prettifyIds(text: string, names: NameBook): string {
   return text.replace(/\b(dataset|view)_[a-z0-9_]+\b/gi, id => names.datasets[id] || names.views[id] || id);
 }
 
-const STAGE_LABELS: Record<string, string> = { collector: "采集", storage: "入库", storage_view: "视图", factor: "因子" };
+const STAGE_LABELS: Record<string, string> = {
+  collector: "采集",
+  storage: "入库",
+  storage_view: "视图",
+  factor: "因子",
+  strategy: "策略"
+};
 
 export interface FreshnessRow {
   key: string;

@@ -188,7 +188,7 @@
                 </span>
               </template>
             </div>
-            <div v-if="datasetRows.length" class="table-scroll">
+            <div v-if="datasetGroups.length" class="table-scroll">
               <table class="dataset-table">
                 <thead>
                   <tr>
@@ -200,10 +200,15 @@
                     <th>状态</th>
                   </tr>
                 </thead>
-                <tbody>
-                  <tr v-for="row in datasetRows" :key="row.key" :class="`is-${row.tone}`">
+                <tbody v-for="group in datasetGroups" :key="group.id" :aria-label="group.label">
+                  <tr class="group-row">
+                    <th colspan="6">
+                      {{ group.label }}<small>{{ group.summary }}</small>
+                    </th>
+                  </tr>
+                  <tr v-for="row in group.rows" :key="row.key" class="dataset-row" :class="`is-${row.tone}`">
                     <td>
-                      <span class="dot" />{{ row.name }}<small>{{ row.producer }} · {{ row.spaceId }}</small>
+                      <span class="dot" />{{ row.name }}<small>{{ row.spaceId }}</small>
                     </td>
                     <td>{{ row.freq }}</td>
                     <td>{{ row.latest }}</td>
@@ -215,7 +220,7 @@
               </table>
             </div>
             <footer class="tile-foot">
-              <span v-if="!datasetRows.length" class="muted">{{ pipelineQuiet }}</span>
+              <span v-if="!datasetGroups.length" class="muted">{{ pipelineQuiet }}</span>
               <button
                 v-if="allDatasetRows.length"
                 type="button"
@@ -451,8 +456,19 @@ const unregistered = computed(() => overview.value.unregistered || []);
 const hosts = computed(() => hostCards(overview.value, nowMs.value));
 const stages = computed(() => pipelineStages(overview.value, names, nowMs.value));
 const allDatasetRows = computed(() => stages.value.flatMap(stage => stage.rows));
-const datasetRows = computed(() =>
-  expanded.pipeline ? allDatasetRows.value : allDatasetRows.value.filter(row => row.attention)
+// 数据集按环节分组：展开时列出全部，收起时只列需要关注的行，没有需要关注的环节不出现。
+const datasetGroups = computed(() =>
+  stages.value
+    .map(stage => {
+      const attention = stage.rows.filter(row => row.attention).length;
+      return {
+        id: stage.id,
+        label: stage.label,
+        summary: `${stage.rows.length} 个数据集${attention ? ` · ${attention} 个需要关注` : ""}`,
+        rows: expanded.pipeline ? stage.rows : stage.rows.filter(row => row.attention)
+      };
+    })
+    .filter(group => group.rows.length)
 );
 const pipelineQuiet = computed(() =>
   allDatasetRows.value.length ? `${allDatasetRows.value.length} 条数据链路都在按时更新` : "暂无数据集观测"
@@ -1179,6 +1195,19 @@ td small {
 }
 .status-cell {
   white-space: normal;
+}
+.dataset-table .group-row th {
+  padding-top: 12px;
+  color: var(--color-text-1);
+  font-weight: 600;
+}
+.dataset-table .group-row small {
+  margin-left: 8px;
+  color: var(--color-text-3);
+  font-weight: 400;
+}
+.dataset-table tbody:first-of-type .group-row th {
+  padding-top: 6px;
 }
 
 .detail {

@@ -173,5 +173,13 @@ func TestSpaceClocksPreferTheExchangeCalendar(t *testing.T) {
 	require.NoError(t, clocks["crypto"].err)
 	_, missing := clocks["mooxsys"]
 	require.False(t, missing, "没有采集任务的空间不按交易日历判断")
+	// 没有交易日历的空间（mooxsys 系统数据）不判断到达延迟，也不给提示。
+	now := time.Date(2026, 10, 16, 8, 0, 30, 0, time.UTC)
+	system := datasetStatus(now, datasetKey{producer: "storage_view", spaceID: "mooxsys", datasetID: "view_mooxsys_host_resource", freq: "1m"},
+		healthyRun(now, now.Add(-time.Minute), now), testRealtimePolicy(), spaceClock{err: monmetrics.ErrNoTradingCalendar})
+	require.Equal(t, "healthy", system.Status)
+	require.Empty(t, system.ClockIssue)
+	require.False(t, system.DelayKnown)
+	require.Zero(t, system.WaitingBars)
 	require.Empty(t, (Builder{}).spaceClocks(t.Context(), time.Now()))
 }

@@ -14,12 +14,14 @@ func projectPipeline(facts observability.Overview) []*pb.HealthPipelineStage {
 		components []string
 	}{
 		{"collection", []string{"collector"}},
-		{"storage", []string{"storage-primary", "storage-node", "storage-view"}},
+		// 入库与视图分成两个环节：入库是 Storage 写入水位，视图是 View 提交水位，同一数据可能一边正常一边落后。
+		{"storage", []string{"storage-primary", "storage-node"}},
+		{"view", []string{"storage-view"}},
 		{"factor", []string{"factor-mgr"}},
 		{"strategy", []string{"strategy"}},
 		{"trade", []string{"trade"}},
 	}
-	producerStage := map[string]string{"collector": "collection", "storage": "storage", "storage_view": "storage", "factor": "factor", "strategy": "strategy", "trade": "trade"}
+	producerStage := map[string]string{"collector": "collection", "storage": "storage", "storage_view": "view", "factor": "factor", "strategy": "strategy", "trade": "trade"}
 	storageScopes := make(map[string]bool)
 	key := func(item observability.DatasetFrequencyStatus) string {
 		return item.SpaceID + "\x00" + item.DatasetID + "\x00" + strings.ToLower(item.Freq)

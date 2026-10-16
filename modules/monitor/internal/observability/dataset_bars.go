@@ -101,15 +101,14 @@ func evaluateBars(sc spaceClock, freqRaw string, output, arrival, now time.Time)
 	return facts
 }
 
-// clockIssueText 是无法按交易日历判断时给人看的原因。
+// clockIssueText 是无法按交易日历判断时给人看的原因。没有交易日历的空间（例如 mooxsys 的主机、服务指标）不是行情 K 线，
+// 本来就不判断到达延迟，不给提示。
 func clockIssueText(err error) string {
 	switch {
-	case err == nil:
+	case err == nil, errors.Is(err, monmetrics.ErrNoTradingCalendar):
 		return ""
 	case errors.Is(err, monmetrics.ErrCalendarNotCovered):
 		return "日历未覆盖：" + strings.TrimPrefix(err.Error(), monmetrics.ErrCalendarNotCovered.Error()+"：")
-	case errors.Is(err, monmetrics.ErrNoTradingCalendar):
-		return "没有交易日历，无法判断应收的最新一根"
 	case errors.Is(err, monmetrics.ErrAlignmentUnconfirmed):
 		return "周期对齐未确认，暂不判断"
 	default:
