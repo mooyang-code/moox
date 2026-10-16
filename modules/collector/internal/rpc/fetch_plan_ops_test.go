@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -152,4 +153,31 @@ func TestGetCollectorStatusSummarizesPlanAndDatasetHealth(t *testing.T) {
 	invalid, err := service.GetCollectorStatus(ctx, &pb.GetCollectorStatusReq{})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, invalid.GetRetInfo().GetCode())
+}
+
+// 函数详情：每个数据集上本函数负责的标的取当前生效的那份快照。
+func TestPlanFunctionsListSubjectsPerDataset(t *testing.T) {
+	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	options := marketfetch.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
+	desired, err := marketfetch.BuildDesiredState(options, []marketfetch.TaskGroup{{
+		Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m",
+		Subjects: []string{"BTC-USDT", "ETH-USDT"},
+	}}, nil)
+	require.NoError(t, err)
+	content, _, err := marketfetch.BuildPlanContent(nil, nil, desired, func(string) (int64, error) { return base.Unix(), nil })
+	require.NoError(t, err)
+	raw, err := json.Marshal(content)
+	require.NoError(t, err)
+
+	functions, err := planFunctions(&store.FetchPlanRecord{ID: 1, SpaceID: "crypto", Status: store.FetchPlanApplied, Plan: string(raw), Progress: "{}"})
+	require.NoError(t, err)
+	require.Len(t, functions, 1)
+	function := functions[0]
+	require.Equal(t, []string{"ds|1m"}, function.GetDatasets())
+	require.EqualValues(t, 2, function.GetSubjectCount())
+	require.Len(t, function.GetDatasetSubjects(), 1)
+	detail := function.GetDatasetSubjects()[0]
+	require.Equal(t, "ds|1m", detail.GetDataset())
+	require.ElementsMatch(t, []string{"BTC-USDT", "ETH-USDT"}, detail.GetSubjects())
+	require.Equal(t, base.Format(time.RFC3339), detail.GetEffectiveFrom())
 }

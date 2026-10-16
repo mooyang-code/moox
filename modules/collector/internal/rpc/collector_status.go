@@ -153,8 +153,17 @@ func planFunctions(source *store.FetchPlanRecord) ([]*pb.CollectorFunctionStatus
 				continue
 			}
 			last := dataset.Copies[len(dataset.Copies)-1]
+			key := marketfetch.PlanDatasetKeyOf(dataset)
 			state.SubjectCount += int32(len(last.Subjects))
-			state.Datasets = append(state.Datasets, marketfetch.PlanDatasetKeyOf(dataset))
+			state.Datasets = append(state.Datasets, key)
+			detail := &pb.CollectorFunctionDataset{Dataset: key, Subjects: make([]string, 0, len(last.Subjects))}
+			if last.From > 0 {
+				detail.EffectiveFrom = time.Unix(last.From, 0).UTC().Format(time.RFC3339)
+			}
+			for _, subject := range last.Subjects {
+				detail.Subjects = append(detail.Subjects, subject.ID)
+			}
+			state.DatasetSubjects = append(state.DatasetSubjects, detail)
 		}
 		out = append(out, state)
 	}

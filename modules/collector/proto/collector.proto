@@ -508,6 +508,15 @@ message CollectorDatasetStatus {
   string dataset_name = 18;
 }
 
+// CollectorFunctionDataset 是函数在一个数据集上负责的标的（取当前生效的那份快照）。
+message CollectorFunctionDataset {
+  // dataset 是“数据集|频率”。
+  string dataset = 1;
+  repeated string subjects = 2;
+  // effective_from 是这份快照的生效周期（RFC3339）。
+  string effective_from = 3;
+}
+
 message CollectorFunctionStatus {
   string name = 1;
   string region = 2;
@@ -518,6 +527,8 @@ message CollectorFunctionStatus {
   repeated string datasets = 6;
   // state 取值 applied（已生效）、pending（正在下发）、retiring（退役中）。
   string state = 7;
+  // dataset_subjects 是每个数据集上本函数负责的标的，供详情查看。
+  repeated CollectorFunctionDataset dataset_subjects = 8;
 }
 
 message GetCollectorStatusRsp {

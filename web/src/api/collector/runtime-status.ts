@@ -34,6 +34,14 @@ export interface CollectorDatasetStatus {
   reasons?: string[];
 }
 
+export interface CollectorFunctionDataset {
+  /** “数据集|频率”。 */
+  dataset?: string;
+  /** 本函数在该数据集上负责的标的（当前生效的那份快照）。 */
+  subjects?: string[];
+  effective_from?: string;
+}
+
 export interface CollectorFunctionStatus {
   name?: string;
   region?: string;
@@ -42,6 +50,7 @@ export interface CollectorFunctionStatus {
   subject_count?: number;
   datasets?: string[];
   state?: string;
+  dataset_subjects?: CollectorFunctionDataset[];
 }
 
 export interface GetCollectorStatusResponse {

@@ -115,6 +115,17 @@ describe("collector runtime status helpers", () => {
   });
 });
 
+describe("collector function detail dialog", () => {
+  const dialog = readFileSync(resolve(__dirname, "function-detail-dialog.vue"), "utf8");
+
+  it("lists subjects per dataset with a search box and copyable name", () => {
+    expect(dialog).toContain("dataset_subjects");
+    expect(dialog).toContain('placeholder="搜索标的"');
+    expect(dialog).toContain("datasetLabel(props.datasetNames");
+    expect(dialog).toContain("navigator.clipboard.writeText");
+  });
+});
+
 describe("collector runtime status page", () => {
   const page = readFileSync(resolve(__dirname, "runtime-status.vue"), "utf8");
 
@@ -152,6 +163,12 @@ describe("collector runtime status page", () => {
     expect(page).toContain("const MIN_FUNCTION_ROWS = 8;");
     expect(page).toMatch(/\.single-line\s*\{[^}]*white-space:\s*nowrap;/);
     expect(page).toContain("watch(functionFilters, () => (functionPage.value = 1), { deep: true })");
+  });
+
+  it("opens the function detail dialog from a widened name column", () => {
+    expect(page).toContain('@click="openFunction(record)"');
+    expect(page).toContain("<FunctionDetailDialog");
+    expect(page).toMatch(/title="函数"[^>]*:width="330"|:width="330"[^>]*title="函数"/);
   });
 
   it("offers the dataset actions and opens the backfill tab for new jobs", () => {

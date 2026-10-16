@@ -229,23 +229,28 @@
             >
               <template #empty><div class="empty-text">没有匹配的函数</div></template>
               <template #columns>
-                <a-table-column title="函数" :width="270">
-                  <template #cell="{ record }"
-                    ><span class="mono-text function-name" :title="record.name">{{ record.name }}</span></template
-                  >
+                <a-table-column title="函数" :width="330">
+                  <template #cell="{ record }">
+                    <a-link
+                      class="mono-text function-name function-link"
+                      :title="`${record.name}（点击查看详情）`"
+                      @click="openFunction(record)"
+                      >{{ record.name }}</a-link
+                    >
+                  </template>
                 </a-table-column>
-                <a-table-column title="地域" data-index="region" :width="120" />
-                <a-table-column title="市场" :width="150">
+                <a-table-column title="地域" data-index="region" :width="110" />
+                <a-table-column title="市场" :width="140">
                   <template #cell="{ record }"
                     ><span class="single-line" :title="record.market">{{ record.market }}</span></template
                   >
                 </a-table-column>
-                <a-table-column title="触发" :width="150">
+                <a-table-column title="触发" :width="140">
                   <template #cell="{ record }"
                     ><span class="mono-text function-name" :title="record.cron">{{ record.cron }}</span></template
                   >
                 </a-table-column>
-                <a-table-column title="标的" data-index="subject_count" :width="80" align="right" />
+                <a-table-column title="标的" data-index="subject_count" :width="70" align="right" />
                 <a-table-column title="服务的数据集">
                   <template #cell="{ record }">
                     <div class="single-line" :title="functionDatasetsText(record)">
@@ -278,6 +283,8 @@
       @submitted="onJobSubmitted"
     />
 
+    <FunctionDetailDialog :fn="selectedFunction" :dataset-names="datasetNames" @close="selectedFunction = null" />
+
     <a-drawer v-model:visible="logVisible" :width="860" :footer="false" title="标的变更记录" unmount-on-close>
       <ActivityLog :space-id="selectedSpaceId" category="collector.subject_change" :page-size="20" />
     </a-drawer>
@@ -301,6 +308,7 @@ import {
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import KlineRangeDialog from "@/views/collector/backfill-jobs/kline-range-dialog.vue";
+import FunctionDetailDialog from "./function-detail-dialog.vue";
 import {
   datasetFunctions,
   datasetKey,
@@ -407,6 +415,12 @@ const planSub = computed(() => {
   const plan = status.value.open || status.value.applied;
   return plan ? `${localTimeText(plan.updated_at)} 更新` : "创建采集任务后自动生成";
 });
+
+const selectedFunction = ref<CollectorFunctionStatus | null>(null);
+
+function openFunction(record: CollectorFunctionStatus) {
+  selectedFunction.value = record;
+}
 
 function functionDatasetsText(record: CollectorFunctionStatus) {
   return (record.datasets || []).map(item => datasetLabel(datasetNames.value, item)).join("、");
@@ -524,6 +538,14 @@ onMounted(loadStatus);
 .function-area {
   min-height: 0;
   flex: 1;
+}
+.function-link {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .single-line {
   display: block;
