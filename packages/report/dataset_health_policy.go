@@ -30,18 +30,41 @@ type RealtimeTimeSeriesPolicy struct {
 type RealtimeTimeSeriesDefaults struct {
 	RunMissedIntervals     int `yaml:"run_missed_intervals" json:"run_missed_intervals"`
 	SuccessMissedIntervals int `yaml:"success_missed_intervals" json:"success_missed_intervals"`
-	// WatermarkPeriods 与 MinimumWatermarkLag 决定最新一根 K 线允许迟到多久：按市场交易日历，
-	// 此刻应已收线的那根从收线起超过 max(WatermarkPeriods × 周期, MinimumWatermarkLag) 仍没到，数据集判为过期。
-	WatermarkPeriods    int           `yaml:"watermark_periods" json:"watermark_periods"`
-	MinimumWatermarkLag time.Duration `yaml:"minimum_watermark_lag" json:"minimum_watermark_lag"`
+	// MinuteLateness 与 HourLateness 是应收的最新一根 K 线收线后允许迟到多久：分钟级（短于 1 小时的周期）与
+	// 小时级（1h、4h）；日线及以上允许迟到 1 个周期。超过仍没到，数据集判为过期并告警。
+	MinuteLateness time.Duration `yaml:"minute_lateness" json:"minute_lateness"`
+	HourLateness   time.Duration `yaml:"hour_lateness" json:"hour_lateness"`
 }
 
 type RealtimeTimeSeriesOverride struct {
 	SpaceID   string `yaml:"space_id" json:"space_id"`
 	DatasetID string `yaml:"dataset_id" json:"dataset_id"`
 	Freq      string `yaml:"freq" json:"freq"`
-	// WatermarkLag 覆盖该数据集最新一根 K 线允许迟到的时间。
-	WatermarkLag time.Duration `yaml:"watermark_lag,omitempty" json:"watermark_lag,omitempty"`
+	// Lateness 覆盖该数据集最新一根 K 线收线后允许迟到的时间。
+	Lateness time.Duration `yaml:"lateness,omitempty" json:"lateness,omitempty"`
+}
+
+// Lateness 返回数据集最新一根 K 线收线后允许迟到多久：有按数据集的覆盖就用覆盖，否则分钟级用 MinuteLateness、
+// 小时级用 HourLateness，日线及以上允许迟到 1 个周期（月按 30 天计）。周期无法识别时返回 0（不判断迟到）。
+func (p RealtimeTimeSeriesPolicy) Lateness(spaceID, datasetID, freq string) time.Duration {
+	parsed, err := frequency.Parse(freq)
+	if err != nil {
+		return 0
+	}
+	for _, override := range p.Overrides {
+		overrideFreq, err := frequency.Parse(override.Freq)
+		if err == nil && override.SpaceID == spaceID && override.DatasetID == datasetID && overrideFreq == parsed && override.Lateness > 0 {
+			return override.Lateness
+		}
+	}
+	switch period := parsed.NominalDuration(); {
+	case period < time.Hour:
+		return p.Defaults.MinuteLateness
+	case period < 24*time.Hour:
+		return p.Defaults.HourLateness
+	default:
+		return period
+	}
 }
 
 func LoadDatasetHealthPolicy(path string) (DatasetHealthPolicy, error) {
@@ -80,8 +103,8 @@ func (c DatasetHealthPolicy) Validate() error {
 	defaults := c.RealtimeTimeSeries.Defaults
 	if defaults.RunMissedIntervals <= 0 ||
 		defaults.SuccessMissedIntervals <= 0 ||
-		defaults.WatermarkPeriods <= 0 ||
-		defaults.MinimumWatermarkLag <= 0 {
+		defaults.MinuteLateness <= 0 ||
+		defaults.HourLateness <= 0 {
 		return fmt.Errorf("realtime_timeseries defaults must be positive")
 	}
 	seen := make(map[string]bool, len(c.RealtimeTimeSeries.Overrides))
@@ -105,8 +128,8 @@ func (c DatasetHealthPolicy) Validate() error {
 			)
 		}
 		seen[key] = true
-		if override.WatermarkLag < 0 {
-			return fmt.Errorf("realtime_timeseries override %d watermark_lag must not be negative", index)
+		if override.Lateness < 0 {
+			return fmt.Errorf("realtime_timeseries override %d lateness must not be negative", index)
 		}
 	}
 	return nil

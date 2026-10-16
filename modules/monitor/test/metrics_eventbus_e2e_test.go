@@ -154,7 +154,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	query := metrics.NewQueryService(messageStore, nil)
 	reports, err := metrics.NewKlineFreshnessEvaluator(query, []metrics.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
-		ViewID: "view_crypto_kline_1m", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
+		ViewID: "view_crypto_kline_1m", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20).Evaluate(ctx, observed)
 	if err != nil || len(reports) != 1 || !reports[0].Success || reports[0].ObservedCount != 1 {
 		t.Fatalf("kline freshness reports=%+v err=%v", reports, err)

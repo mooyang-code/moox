@@ -125,7 +125,7 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 	}
 	repositories := manager.Repositories()
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
-		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
 		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results, Now: func() time.Time { return now },
@@ -185,7 +185,7 @@ func TestBusinessFreshnessReporterReenablesRetiredKlineCheckWhenStillExpected(t 
 		t.Fatal(err)
 	}
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
-		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
 	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
 		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results, Now: func() time.Time { return now },
@@ -259,7 +259,7 @@ func TestBusinessFreshnessReporterReportsKlineFailureWithoutObservation(t *testi
 		t.Fatal(err)
 	}
 	evaluator := monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{{
-		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
+		Enabled: true, SpaceID: "crypto", DatasetID: "dataset", ViewID: "view", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20)
 	run := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results}, repositories, nil, 5*time.Minute, evaluator)
 	if err := run(t.Context()); err != nil {
@@ -305,7 +305,7 @@ func TestBusinessFreshnessReporterPersistsInventoryFailureWithoutResolvingKlineC
 	if err != nil {
 		t.Fatal(err)
 	}
-	evaluator := monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20)
+	evaluator := monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(2*time.Minute), 20)
 	builder := &monitorobservability.Builder{
 		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 		Now: func() time.Time { return now },
@@ -375,7 +375,7 @@ func TestBusinessFreshnessReporterDoesNotResolveKlineCheckDuringTaskPrepare(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	evaluator := monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20)
+	evaluator := monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(2*time.Minute), 20)
 	builder := &monitorobservability.Builder{
 		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 		Now: func() time.Time { return now },
@@ -863,7 +863,7 @@ func TestBusinessFreshnessReporterAlertsOncePerStaleReporterAndSuppressesDataset
 		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
 		Policy: report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{
 			RunMissedIntervals: 2, SuccessMissedIntervals: 3,
-			WatermarkPeriods: 3, MinimumWatermarkLag: 10 * time.Minute,
+			MinuteLateness: 10 * time.Minute, HourLateness: time.Hour,
 		}},
 	}, repositories, nil)
 	if err := run(t.Context()); err != nil {
@@ -966,7 +966,7 @@ func TestBusinessFreshnessReporterSkipsDatasetChecksCoveredByKlineFreshness(t *t
 	build := func(withKline bool) func(context.Context) error {
 		var evaluators []*monmetrics.KlineFreshnessEvaluator
 		if withKline {
-			rule := monmetrics.KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m", ViewID: "view_binance_kline_1m", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute}
+			rule := monmetrics.KlineFreshnessRule{Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m", ViewID: "view_binance_kline_1m", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute}
 			evaluators = append(evaluators, monmetrics.NewKlineFreshnessEvaluator(query, []monmetrics.KlineFreshnessRule{rule}, 20))
 		}
 		// K 线评估间隔 1 小时：同一个 reporter 的后续轮次不重新评估，验证覆盖集合会沿用。
@@ -1079,4 +1079,11 @@ func TestBusinessFreshnessReporterNamesStrategyDatasetByInstance(t *testing.T) {
 	check, err = repositories.Checks.Get(t.Context(), "crypto", "dataset:strategy:strategy_b:1m")
 	require.NoError(t, err)
 	require.Equal(t, "strategy_b（1分钟）· 策略结果", check.Name)
+}
+
+// latenessPolicy 是所有周期都允许迟到 lateness 的健康策略。
+func latenessPolicy(lateness time.Duration) report.RealtimeTimeSeriesPolicy {
+	return report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{
+		RunMissedIntervals: 2, SuccessMissedIntervals: 3, MinuteLateness: lateness, HourLateness: lateness,
+	}}
 }

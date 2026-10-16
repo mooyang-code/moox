@@ -116,7 +116,6 @@ type KlineFreshnessConfig struct {
 	InventoryRefreshInterval time.Duration `yaml:"inventory_refresh_interval"`
 	InventoryPageSize        int           `yaml:"inventory_page_size"`
 	InventoryMaxEntries      int           `yaml:"inventory_max_entries"`
-	StaleAfter               time.Duration `yaml:"stale_after"`
 	MaxSubjectsPerAlert      int           `yaml:"max_subjects_per_alert"`
 }
 
@@ -223,7 +222,7 @@ func Default() *Config {
 		MarketHealth: MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
 		KlineFreshness: KlineFreshnessConfig{
 			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
-			InventoryPageSize: 100, InventoryMaxEntries: 1000, StaleAfter: 5 * time.Minute, MaxSubjectsPerAlert: 20,
+			InventoryPageSize: 100, InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
 		},
 		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
 	}
@@ -329,9 +328,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.KlineFreshness.InventoryMaxEntries == 0 {
 		c.KlineFreshness.InventoryMaxEntries = klineDefaults.InventoryMaxEntries
-	}
-	if c.KlineFreshness.StaleAfter == 0 {
-		c.KlineFreshness.StaleAfter = klineDefaults.StaleAfter
 	}
 	if c.KlineFreshness.MaxSubjectsPerAlert == 0 {
 		c.KlineFreshness.MaxSubjectsPerAlert = klineDefaults.MaxSubjectsPerAlert
@@ -549,9 +545,6 @@ func (c *Config) validateKlineFreshness() error {
 	}
 	if kline.InventoryMaxEntries < 1 || kline.InventoryMaxEntries > 1000 {
 		return fmt.Errorf("kline_freshness.inventory_max_entries must be between 1 and 1000")
-	}
-	if kline.StaleAfter < 2*kline.EvaluationInterval {
-		return fmt.Errorf("kline_freshness.stale_after must be at least twice evaluation_interval")
 	}
 	if kline.MaxSubjectsPerAlert < 1 || kline.MaxSubjectsPerAlert > 100 {
 		return fmt.Errorf("kline_freshness.max_subjects_per_alert must be between 1 and 100")

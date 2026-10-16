@@ -8,6 +8,7 @@ import (
 
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -304,7 +305,7 @@ func TestKlineFreshnessEvaluatorUsesDynamicTaskInventoryAndReportsStaleAge(t *te
 		// minutes ago.
 		Latest: now.Add(-5 * time.Minute),
 	}})
-	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20)
+	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(2*time.Minute), 20)
 	reports, err := evaluator.Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 2)
@@ -343,7 +344,7 @@ func TestKlineFreshnessEvaluatorDetectsViewBehindCompletedPeriodWithinStaleWindo
 		ViewID: "view-dynamic", DatasetID: "dataset-dynamic", Subjects: 1, ObservedAt: now,
 		Latest: now.Add(-3 * time.Minute),
 	}})
-	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, 10*time.Minute, 20)
+	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(10*time.Minute), 20)
 	reports, err := evaluator.Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 2)
@@ -372,7 +373,7 @@ func TestKlineFreshnessEvaluatorIgnoresShortPendingTaskBacklog(t *testing.T) {
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
 	query := newViewSummaryQuery(t, nil)
-	reports, err := NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20).Evaluate(context.Background(), now)
+	reports, err := NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(2*time.Minute), 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 2)
 	require.Equal(t, TaskResultInventoryCheckID, reports[1].CheckID)
@@ -391,7 +392,7 @@ func TestKlineFreshnessEvaluatorPreservesUnownedErrorAndPendingTaskStates(t *tes
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
 	query := newViewSummaryQuery(t, nil)
-	reports, err := NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20).Evaluate(context.Background(), now)
+	reports, err := NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(2*time.Minute), 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 3)
 
@@ -410,4 +411,11 @@ func TestKlineFreshnessEvaluatorPreservesUnownedErrorAndPendingTaskStates(t *tes
 	require.True(t, ok)
 	require.True(t, pendingReport.Skipped)
 	require.Equal(t, "task_result_not_ready", pendingReport.Reason)
+}
+
+// latenessPolicy 是所有周期都允许迟到 lateness 的健康策略。
+func latenessPolicy(lateness time.Duration) report.RealtimeTimeSeriesPolicy {
+	return report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{
+		RunMissedIntervals: 2, SuccessMissedIntervals: 3, MinuteLateness: lateness, HourLateness: lateness,
+	}}
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+	"github.com/mooyang-code/moox/packages/report"
 )
 
 const (
@@ -36,9 +37,9 @@ type KlineFreshnessRule struct {
 	CalendarID string
 	Timezone   string
 	Sessions   []string
-	StaleAfter time.Duration
-	// AllowedLateness 是结果数据集周期的允许迟到时间：K 线收盘后最多迟这么久才算按时。
-	AllowedLateness       time.Duration
+	// Lateness 是应收的最新一根收线后允许迟到多久：取健康策略按周期给出的值与采集任务声明的允许迟到（数据源自身的
+	// 发布延迟，例如 A 股 90 秒）中较大的一个。缺的根从收线起超过它仍没到，就判为过期。
+	Lateness              time.Duration
 	ResultStatus          string
 	LatestCompletedPeriod time.Time
 	LatestCompletedStatus string
@@ -69,7 +70,7 @@ type KlineFreshnessEvaluator struct {
 	rules       []KlineFreshnessRule
 	maxSubjects int
 	inventory   *TaskResultInventoryCache
-	staleAfter  time.Duration
+	policy      report.RealtimeTimeSeriesPolicy
 }
 
 func NewKlineFreshnessEvaluator(query *QueryService, rules []KlineFreshnessRule, maxSubjects int) *KlineFreshnessEvaluator {
@@ -82,10 +83,11 @@ func NewKlineFreshnessEvaluator(query *QueryService, rules []KlineFreshnessRule,
 	return &KlineFreshnessEvaluator{query: query, rules: append([]KlineFreshnessRule(nil), rules...), maxSubjects: maxSubjects}
 }
 
-func NewKlineFreshnessEvaluatorWithInventory(query *QueryService, inventory *TaskResultInventoryCache, staleAfter time.Duration, maxSubjects int) *KlineFreshnessEvaluator {
+// NewKlineFreshnessEvaluatorWithInventory 按采集任务清单生成规则；允许迟到按健康策略的周期规则给出。
+func NewKlineFreshnessEvaluatorWithInventory(query *QueryService, inventory *TaskResultInventoryCache, policy report.RealtimeTimeSeriesPolicy, maxSubjects int) *KlineFreshnessEvaluator {
 	evaluator := NewKlineFreshnessEvaluator(query, nil, maxSubjects)
 	evaluator.inventory = inventory
-	evaluator.staleAfter = staleAfter
+	evaluator.policy = policy
 	return evaluator
 }
 
@@ -109,7 +111,7 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		if err != nil {
 			return nil, &TaskResultInventoryRefreshError{Cause: fmt.Errorf("load task-result inventory: %w", err), State: e.inventory.State(now)}
 		}
-		rules = klineFreshnessRulesFromInventory(inventory, e.staleAfter)
+		rules = klineFreshnessRulesFromInventory(inventory, e.policy)
 		inventoryEvaluated = true
 		inventoryStale = stale
 	}
@@ -367,39 +369,39 @@ func KlineFreshnessCheckID(rule KlineFreshnessRule) string {
 	return fmt.Sprintf("kline_freshness:%s:%s:%s", strings.TrimSpace(rule.SpaceID), strings.TrimSpace(rule.ViewID), strings.TrimSpace(rule.Frequency))
 }
 
-func klineFreshnessRulesFromInventory(snapshot TaskResultInventorySnapshot, staleAfter time.Duration) []KlineFreshnessRule {
+func klineFreshnessRulesFromInventory(snapshot TaskResultInventorySnapshot, policy report.RealtimeTimeSeriesPolicy) []KlineFreshnessRule {
 	rules := make([]KlineFreshnessRule, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
 		if !entry.Enabled {
-			rules = append(rules, inventoryRule(entry, false, staleAfter))
+			rules = append(rules, inventoryRule(entry, false, policy))
 			continue
 		}
 		if entry.ResultStatus == "error" {
-			rules = append(rules, inventoryRule(entry, true, staleAfter))
+			rules = append(rules, inventoryRule(entry, true, policy))
 			continue
 		}
 		if entry.ResultStatus == "pending" {
-			rules = append(rules, inventoryRule(entry, true, staleAfter))
+			rules = append(rules, inventoryRule(entry, true, policy))
 			continue
 		}
 		if !entry.OwnershipVerified || entry.ResultStatus != "ready" {
-			unverified := inventoryRule(entry, true, staleAfter)
+			unverified := inventoryRule(entry, true, policy)
 			unverified.ResultStatus = "unverified"
 			rules = append(rules, unverified)
 			continue
 		}
-		rules = append(rules, inventoryRule(entry, true, staleAfter))
+		rules = append(rules, inventoryRule(entry, true, policy))
 	}
 	return rules
 }
 
-func inventoryRule(entry TaskResultInventoryEntry, enabled bool, staleAfter time.Duration) KlineFreshnessRule {
+func inventoryRule(entry TaskResultInventoryEntry, enabled bool, policy report.RealtimeTimeSeriesPolicy) KlineFreshnessRule {
+	lateness := max(policy.Lateness(entry.SpaceID, entry.DatasetID, entry.Frequency), time.Duration(entry.AllowedLatenessSeconds)*time.Second)
 	return KlineFreshnessRule{
 		Enabled: enabled, SpaceID: entry.SpaceID, DatasetID: entry.DatasetID, ViewID: entry.ViewID,
 		Frequency: entry.Frequency, MarketID: entry.MarketID, CalendarID: entry.CalendarID,
-		Timezone: entry.Timezone, Sessions: append([]string(nil), entry.Sessions...), StaleAfter: staleAfter,
-		AllowedLateness: time.Duration(entry.AllowedLatenessSeconds) * time.Second,
-		ResultStatus:    entry.ResultStatus, LatestCompletedPeriod: entry.LatestCompletedPeriod,
+		Timezone: entry.Timezone, Sessions: append([]string(nil), entry.Sessions...), Lateness: lateness,
+		ResultStatus: entry.ResultStatus, LatestCompletedPeriod: entry.LatestCompletedPeriod,
 		LatestCompletedStatus: entry.LatestCompletedStatus, ViewLastDataTime: entry.ViewLastDataTime,
 		InventoryObservedAt: entry.ObservedAt,
 	}
@@ -540,8 +542,8 @@ func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessRepo
 		report.Diagnostic = err.Error()
 		return
 	}
-	report.StaleAge = positive(overdue - rule.AllowedLateness)
-	if overdue-rule.AllowedLateness > rule.StaleAfter {
+	report.StaleAge = overdue
+	if overdue > rule.Lateness {
 		report.ViewStale = true
 		report.StaleCount = max(summary.subjects, len(active))
 		report.Reason = "business_data_stale"
@@ -553,7 +555,7 @@ func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessRepo
 	suffix := expectedKlineSubjectSuffix(rule.DatasetID)
 	stale := make(map[string]struct{})
 	inactive, withinGrace := 0, 0
-	threshold := rule.AllowedLateness + rule.StaleAfter
+	threshold := rule.Lateness
 	for _, item := range summary.laggingSubjects {
 		name, ok := activeSubjectName(item.subjectID, active, aliases, suffix)
 		if !ok {

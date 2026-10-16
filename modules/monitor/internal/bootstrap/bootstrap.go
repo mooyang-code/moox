@@ -241,7 +241,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		// 最后一份有效的任务清单持久化：采集服务不可用或重启后仍可检查新鲜度。
 		klineInventory.SetStore(store.NewInventoryRepository(runtime.Store))
 	}
-	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg, klineInventory)
+	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg, klineInventory, doctorContext.DatasetHealthPolicy.RealtimeTimeSeries)
 	businessFreshness := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
 		Metrics: metricsQuery, Hosts: hostStore,
 		Checks: runtime.Repositories.Checks, Topology: runtime.Repositories.Topology, Results: runtime.Repositories.Results, Gateways: runtime.Repositories.Gateways,
@@ -324,11 +324,11 @@ func inventorySource(cache *monmetrics.TaskResultInventoryCache) monitorobservab
 	return cache
 }
 
-func buildKlineFreshnessEvaluator(query *monmetrics.QueryService, cfg *config.Config, inventory *monmetrics.TaskResultInventoryCache) *monmetrics.KlineFreshnessEvaluator {
+func buildKlineFreshnessEvaluator(query *monmetrics.QueryService, cfg *config.Config, inventory *monmetrics.TaskResultInventoryCache, policy report.RealtimeTimeSeriesPolicy) *monmetrics.KlineFreshnessEvaluator {
 	if query == nil || cfg == nil || !cfg.KlineFreshness.Enabled {
 		return nil
 	}
-	return monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, inventory, cfg.KlineFreshness.StaleAfter, cfg.KlineFreshness.MaxSubjectsPerAlert)
+	return monmetrics.NewKlineFreshnessEvaluatorWithInventory(query, inventory, policy, cfg.KlineFreshness.MaxSubjectsPerAlert)
 }
 
 func loadMonitorDatasetHealthPolicy(cfg *config.Config) (report.DatasetHealthPolicy, error) {

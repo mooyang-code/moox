@@ -34,7 +34,7 @@ func TestRunBootstrapInventory(t *testing.T) {
 	releaseManifest, err := core.LoadManifestFile(filepath.Join(manifestDir, "catalog.yaml"))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(manifestDir, "catalog.yaml.sha256"), []byte(releaseManifest.Checksum), 0o600))
-	require.NoError(t, os.WriteFile(datasetHealthPolicyPath, []byte("version: 2\nrealtime_timeseries:\n  defaults:\n    run_missed_intervals: 2\n    success_missed_intervals: 3\n    watermark_periods: 3\n    minimum_watermark_lag: 10m\n  overrides: []\n"), 0o600))
+	require.NoError(t, os.WriteFile(datasetHealthPolicyPath, []byte("version: 2\nrealtime_timeseries:\n  defaults:\n    run_missed_intervals: 2\n    success_missed_intervals: 3\n    minute_lateness: 30s\n    hour_lateness: 1m\n  overrides: []\n"), 0o600))
 	report, err := RunBootstrap(context.Background(), BootstrapOptions{NodeID: "node-a", LocalNodeID: "node-a", ReleaseRoot: root, DatasetHealthPolicyPath: datasetHealthPolicyPath, CheckIDs: []string{"bootstrap.inventory"}, Client: deploymentClientStub{rows: rows}})
 	require.NoError(t, err)
 	require.Equal(t, core.ConclusionHealthy, report.Conclusion)

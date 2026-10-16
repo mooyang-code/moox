@@ -82,7 +82,6 @@ kline_freshness:
   inventory_refresh_interval: 1m
   inventory_page_size: 100
   inventory_max_entries: 1000
-  stale_after: 5m
   max_subjects_per_alert: 20
 
 metrics:

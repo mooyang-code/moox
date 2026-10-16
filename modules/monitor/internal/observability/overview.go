@@ -796,7 +796,6 @@ func ownsExpectedDatasetInventory(producer string) bool {
 
 func datasetTolerances(key datasetKey, interval float64, policy report.RealtimeTimeSeriesPolicy) (time.Duration, time.Duration, time.Duration) {
 	runBase := time.Duration(interval * float64(time.Second))
-	frequency := parseOverviewFrequency(key.freq)
 	defaults := policy.Defaults
 	var runLag, successLag time.Duration
 	if defaults.RunMissedIntervals > 0 && runBase > 0 {
@@ -805,15 +804,8 @@ func datasetTolerances(key datasetKey, interval float64, policy report.RealtimeT
 	if defaults.SuccessMissedIntervals > 0 && runBase > 0 {
 		successLag = time.Duration(defaults.SuccessMissedIntervals)*runBase + 30*time.Second
 	}
-	// 允许迟到按周期算：应收的最新一根已按交易日历确定，周末、长假不再需要放大容忍。
-	lateness := max(time.Duration(defaults.WatermarkPeriods)*frequency, defaults.MinimumWatermarkLag)
-	for _, override := range policy.Overrides {
-		if override.SpaceID == key.spaceID && override.DatasetID == key.datasetID && sameDatasetFrequency(override.Freq, key.freq) && override.WatermarkLag > 0 {
-			lateness = override.WatermarkLag
-			break
-		}
-	}
-	return runLag, successLag, lateness
+	// 允许迟到按周期分级（分钟级、小时级、日线及以上），由健康策略统一给出；应收的最新一根已按交易日历确定，周末、长假不需要放大。
+	return runLag, successLag, policy.Lateness(key.spaceID, key.datasetID, key.freq)
 }
 
 func sameDatasetFrequency(left, right string) bool {

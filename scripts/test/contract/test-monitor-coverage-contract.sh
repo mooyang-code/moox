@@ -44,8 +44,8 @@ defaults_policy = ((policy.get("realtime_timeseries") or {}).get("defaults") or 
 required_defaults = {
     "run_missed_intervals",
     "success_missed_intervals",
-    "watermark_periods",
-    "minimum_watermark_lag",
+    "minute_lateness",
+    "hour_lateness",
 }
 if set(defaults_policy) != required_defaults:
     raise SystemExit(

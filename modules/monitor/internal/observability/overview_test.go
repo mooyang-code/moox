@@ -51,24 +51,24 @@ func TestDatasetStatusDistinguishesMissingStaleAndEmpty(t *testing.T) {
 func TestDatasetTolerancesWhenIntervalIsShorterThanFrequency(t *testing.T) {
 	for _, freq := range []string{"1h", "1H"} {
 		key := datasetKey{spaceID: "crypto", datasetID: "market_kline", freq: freq}
-		runLag, successLag, watermarkLag := datasetTolerances(key, 60, testRealtimePolicy())
+		runLag, successLag, lateness := datasetTolerances(key, 60, testRealtimePolicy())
 		if runLag != 2*time.Minute+30*time.Second {
 			t.Fatalf("%s run lag = %s", freq, runLag)
 		}
 		if successLag != 3*time.Minute+30*time.Second {
 			t.Fatalf("%s success lag = %s", freq, successLag)
 		}
-		if watermarkLag != 3*time.Hour {
-			t.Fatalf("%s watermark lag = %s", freq, watermarkLag)
+		if lateness != time.Hour {
+			t.Fatalf("%s lateness = %s", freq, lateness)
 		}
 	}
 }
 
-// 允许迟到只按周期算，不再随期望间隔放大：应收的最新一根已按交易日历确定，周末、长假不会被算成迟到。
+// 允许迟到只按周期分级，不随期望间隔放大：应收的最新一根已按交易日历确定，周末、长假不会被算成迟到。日线及以上为 1 个周期。
 func TestDatasetLatenessDoesNotScaleWithExpectedInterval(t *testing.T) {
 	key := datasetKey{spaceID: "stockcn", datasetID: "strategy_signal", freq: "1d"}
 	_, _, lateness := datasetTolerances(key, (40 * time.Hour).Seconds(), testRealtimePolicy())
-	if lateness != 72*time.Hour {
+	if lateness != 24*time.Hour {
 		t.Fatalf("lateness = %s", lateness)
 	}
 }
@@ -76,7 +76,7 @@ func TestDatasetLatenessDoesNotScaleWithExpectedInterval(t *testing.T) {
 func TestDatasetTolerancesMatchFrequencyAliasesInOverrides(t *testing.T) {
 	policy := testRealtimePolicy()
 	policy.Overrides = []report.RealtimeTimeSeriesOverride{{
-		SpaceID: "crypto", DatasetID: "market_kline", Freq: "1h", WatermarkLag: 90 * time.Minute,
+		SpaceID: "crypto", DatasetID: "market_kline", Freq: "1h", Lateness: 90 * time.Minute,
 	}}
 
 	_, _, watermarkLag := datasetTolerances(
@@ -105,7 +105,7 @@ var cryptoClock = spaceClock{clock: monmetrics.ContinuousClock()}
 
 func testRealtimePolicy() report.RealtimeTimeSeriesPolicy {
 	return report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{
-		RunMissedIntervals: 2, SuccessMissedIntervals: 3, WatermarkPeriods: 3, MinimumWatermarkLag: 10 * time.Minute,
+		RunMissedIntervals: 2, SuccessMissedIntervals: 3, MinuteLateness: 10 * time.Minute, HourLateness: time.Hour,
 	}}
 }
 

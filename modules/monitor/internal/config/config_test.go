@@ -295,7 +295,7 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 		t.Fatal("obsolete Collector HTTP route remains")
 	}
 	if cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
-		cfg.KlineFreshness.InventoryMaxEntries != 1000 || cfg.KlineFreshness.StaleAfter != 5*time.Minute {
+		cfg.KlineFreshness.InventoryMaxEntries != 1000 {
 		t.Fatalf("dynamic kline freshness inventory = %+v", cfg.KlineFreshness)
 	}
 	if !reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
@@ -365,7 +365,7 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 	cfg := Default()
 	if cfg.KlineFreshness.EvaluationInterval != 30*time.Second || cfg.KlineFreshness.MaxSubjectsPerAlert != 20 ||
 		cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
-		cfg.KlineFreshness.InventoryMaxEntries != 1000 || cfg.KlineFreshness.StaleAfter != 5*time.Minute ||
+		cfg.KlineFreshness.InventoryMaxEntries != 1000 ||
 		!reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
 		t.Fatalf("kline freshness defaults = %+v", cfg.KlineFreshness)
 	}
@@ -385,7 +385,6 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 		{"refresh interval unbounded", func(c *Config) { c.KlineFreshness.InventoryRefreshInterval = 11 * time.Minute }},
 		{"page size out of range", func(c *Config) { c.KlineFreshness.InventoryPageSize = 101 }},
 		{"inventory cap out of range", func(c *Config) { c.KlineFreshness.InventoryMaxEntries = 1001 }},
-		{"stale after too short", func(c *Config) { c.KlineFreshness.StaleAfter = 30 * time.Second }},
 		{"subjects out of range", func(c *Config) { c.KlineFreshness.MaxSubjectsPerAlert = 101 }},
 	}
 	for _, test := range cases {
