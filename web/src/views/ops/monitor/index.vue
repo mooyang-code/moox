@@ -9,7 +9,7 @@
         <a-space>
           <span class="muted">告警推送：{{ notificationLabel }}</span>
           <a-button :loading="loading" @click="refresh">刷新</a-button>
-          <a-button type="outline" @click="openNotification">消息通知设置</a-button>
+          <a-button v-if="isAdmin" type="outline" @click="openNotification">消息通知设置</a-button>
         </a-space>
       </header>
 
@@ -100,7 +100,7 @@
       <section v-if="loaded" class="health-section" aria-label="分层健康">
         <h3 class="section-title">分层健康<small>只列出需要关注的项，点“展开”看全部</small></h3>
         <div class="layers">
-          <article class="tile layer" :class="`is-${layers.components.tone}`">
+          <article class="tile layer" aria-label="组件" :class="`is-${layers.components.tone}`">
             <header class="tile-head">
               <h4><span class="dot" />组件</h4>
               <span class="muted">{{ layerCountText(layers.components) }}</span>
@@ -146,7 +146,7 @@
             </footer>
           </article>
 
-          <article class="tile layer" :class="`is-${layers.hosts.tone}`">
+          <article class="tile layer" aria-label="主机" :class="`is-${layers.hosts.tone}`">
             <header class="tile-head">
               <h4><span class="dot" />主机</h4>
               <span class="muted">{{ layerCountText(layers.hosts) }}</span>
@@ -178,7 +178,7 @@
             </div>
           </article>
 
-          <article class="tile layer layer--wide" :class="`is-${layers.pipeline.tone}`">
+          <article class="tile layer" aria-label="数据链路" :class="`is-${layers.pipeline.tone}`">
             <header class="tile-head">
               <h4><span class="dot" />数据链路</h4>
               <span class="muted">{{ layerCountText(layers.pipeline) }}</span>
@@ -229,7 +229,7 @@
             </footer>
           </article>
 
-          <article class="tile layer layer--wide" :class="`is-${layers.business.tone}`">
+          <article class="tile layer" aria-label="业务检查" :class="`is-${layers.business.tone}`">
             <header class="tile-head">
               <h4><span class="dot" />业务检查</h4>
               <span class="muted">{{ layerCountText(layers.business) }}</span>
@@ -266,6 +266,7 @@
     <a-modal
       v-model:visible="notificationVisible"
       title="消息通知设置"
+      width="min(640px, 100vw)"
       @ok="saveNotification"
       @cancel="notificationVisible = false"
     >
@@ -280,7 +281,16 @@
             @input="notification.url_changed = true"
             placeholder="输入新的 HTTPS Webhook URL" /></a-form-item
         ><a-checkbox v-model="notification.clear_url">清空当前 URL，停止站外通知</a-checkbox>
-        <div class="muted">当前配置：{{ notification.masked || "未配置" }}</div></a-form
+        <section class="notification-current" aria-label="当前配置">
+          <h4>当前配置</h4>
+          <dl v-if="notification.current_url" class="facts">
+            <dt>通知平台</dt>
+            <dd>{{ channelName(notification.current_type) }}</dd>
+            <dt>Webhook URL</dt>
+            <dd class="notification-current__url">{{ notification.current_url }}</dd>
+          </dl>
+          <p v-else class="muted">未配置，告警不会推送到站外平台</p>
+        </section></a-form
       >
     </a-modal>
 
@@ -348,11 +358,13 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { storeToRefs } from "pinia";
 import { Message, Modal } from "@arco-design/web-vue";
 import { monitorApi, type HealthComponent, type HealthOverview } from "@/api/monitor";
 import { listAllDatasets, listAllViews } from "@/api/storage/metadata";
 import { usePolling } from "@/hooks/usePolling";
 import { createLatestRequestGuard } from "@/utils/latest-request";
+import { useUserInfoStore } from "@/store/modules/user-info";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { relativeTime, toneIcon, type NameBook } from "@/views/home/home-model";
 import { formatCheckedAt, statusLabel } from "./health-display";
@@ -386,7 +398,18 @@ const expanded = reactive({ components: false, pipeline: false, business: false 
 const detailVisible = ref(false);
 const selected = ref<HealthComponent | null>(null);
 const notificationVisible = ref(false);
-const notification = reactive({ channel_type: "wecom", webhook_url: "", masked: "", clear_url: false, url_changed: false });
+// current_type / current_url 是已保存的配置，表单里的 channel_type / webhook_url 是待保存的修改。
+const notification = reactive({
+  channel_type: "wecom",
+  webhook_url: "",
+  current_type: "",
+  current_url: "",
+  clear_url: false,
+  url_changed: false
+});
+// 完整的 Webhook URL 是推送凭据，读取接口只对全局管理员开放，其他用户不显示设置入口。
+const { account } = storeToRefs(useUserInfoStore());
+const isAdmin = computed(() => !!account.value.user?.admin);
 let notificationInitialType = "wecom";
 const refreshGuard = createLatestRequestGuard();
 
@@ -447,8 +470,12 @@ const businessQuiet = computed(() => (businessCount.value ? "没有需要关注�
 const notificationLabel = computed(() => {
   const setting = overview.value.notification;
   if (!setting?.configured) return "未配置";
-  return ({ wecom: "企业微信", feishu: "飞书" }[setting.channel_type || ""] || setting.channel_type) + " ✓";
+  return channelName(setting.channel_type) + " ✓";
 });
+
+function channelName(type?: string) {
+  return ({ wecom: "企业微信", feishu: "飞书" } as Record<string, string>)[type || ""] || type || "";
+}
 
 function othersText(titles: string[]) {
   return titles.length > 2 ? `${titles.slice(0, 2).join("、")} 等 ${titles.length} 项` : titles.join("、");
@@ -509,7 +536,8 @@ async function openNotification() {
     const setting = rsp.channel || {};
     notification.channel_type = setting.channel_type || "wecom";
     notificationInitialType = notification.channel_type;
-    notification.masked = setting.masked_url || "";
+    notification.current_type = setting.channel_type || "";
+    notification.current_url = setting.webhook_url || "";
     notification.webhook_url = "";
     notification.clear_url = false;
     notification.url_changed = false;
@@ -546,13 +574,14 @@ async function persistNotification() {
       channel_type: notification.channel_type,
       webhook_url: notification.clear_url ? "" : notification.webhook_url
     });
-    overview.value.notification = rsp.channel;
+    overview.value.notification = { channel_type: rsp.channel?.channel_type, configured: !!rsp.channel?.webhook_url };
     // 配置已保存；但弹窗已被关闭/重新打开时，不能清空用户在新表单里刚输入的 Webhook，也不能关闭新弹窗
     if (!submission.isCurrent()) {
       Message.success("通知配置已保存");
       return;
     }
-    notification.masked = rsp.channel?.masked_url || "";
+    notification.current_type = rsp.channel?.channel_type || "";
+    notification.current_url = rsp.channel?.webhook_url || "";
     notification.webhook_url = "";
     notification.clear_url = false;
     notification.url_changed = false;
@@ -816,6 +845,23 @@ a {
   margin: 0;
   overflow-wrap: anywhere;
 }
+.notification-current {
+  margin-top: 16px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--color-fill-1);
+}
+.notification-current h4 {
+  margin-bottom: 6px;
+  color: var(--color-text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+.notification-current__url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  user-select: all;
+  word-break: break-all;
+}
 
 .timeline {
   padding: 6px 14px;
@@ -860,10 +906,10 @@ a {
   margin: 6px 0;
 }
 
+/* 各层整行排列：并排时两张卡片高度相差很大（主机卡片随主机数变高），较矮的一侧会留下大块空白。 */
 .layers {
   display: grid;
-  align-items: start;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--moox-space-3);
 }
 .layer {
@@ -871,9 +917,6 @@ a {
   min-width: 0;
   flex-direction: column;
   padding: 12px 14px;
-}
-.layer--wide {
-  grid-column: span 2;
 }
 .tile-head {
   display: flex;
@@ -968,14 +1011,27 @@ a {
   margin-left: 8px;
 }
 
+/* 主机卡片在卡内横向平分整行，主机多时自动换行。 */
 .host-cards {
   display: grid;
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+  gap: 10px;
+}
+.host-card {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--color-fill-1);
 }
 .host-card__head {
   display: flex;
   align-items: baseline;
   gap: 6px;
+  white-space: nowrap;
+}
+.host-card__head .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .host-card__link {
   margin-left: auto;
@@ -1113,12 +1169,6 @@ td small {
 }
 
 @media (max-width: 760px) {
-  .layers {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .layer--wide {
-    grid-column: auto;
-  }
   .incident {
     grid-template-columns: 70px auto minmax(0, 1fr);
   }

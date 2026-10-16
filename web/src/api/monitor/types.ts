@@ -156,15 +156,20 @@ export interface HealthOverview {
   business_checks?: HealthBusinessCheck[];
   hosts?: HealthHost[];
   unregistered?: HealthComponent[];
-  notification?: NotificationChannelSetting;
+  /** 概览对所有登录用户可见，只带推送平台和是否已配置。 */
+  notification?: NotificationChannelStatus;
   /** 最近 incident_window_hours 小时的告警经过，按触发时间倒序。 */
   incidents?: AlertIncident[];
   incident_window_hours?: number;
 }
-export interface NotificationChannelSetting {
+export interface NotificationChannelStatus {
   channel_type?: string;
   configured?: boolean;
-  masked_url?: string;
+}
+/** 完整的推送渠道配置；只有全局管理员能读取。 */
+export interface NotificationChannelSetting {
+  channel_type?: string;
+  webhook_url?: string;
   updated_at?: string;
 }
 export interface NotificationChannelResponse {

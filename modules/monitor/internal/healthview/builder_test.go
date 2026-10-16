@@ -119,7 +119,6 @@ func TestUnknownTopologyNeverInventsComponentsAndNamesNeverMatchSubstrings(t *te
 	require.Empty(t, object.ComponentId)
 	require.Equal(t, "random-factor-collector", componentName(observability.Overview{}, "random-factor-collector"))
 	require.Equal(t, "监控上报正常；健康检查正常", ChineseReason("reporter fresh; health check ok"))
-	require.Equal(t, "https://...abcd", MaskURL("https://secret.example/abcd"))
 }
 
 func TestDisabledHostAgentDoesNotTurnAnEnabledHostIntoSilenceFailure(t *testing.T) {

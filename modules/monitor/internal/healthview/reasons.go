@@ -2,16 +2,6 @@ package healthview
 
 import "strings"
 
-func MaskURL(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	if len(raw) <= 12 {
-		return "********"
-	}
-	return raw[:8] + "..." + raw[len(raw)-4:]
-}
-
 func ChineseReason(raw string) string {
 	text := strings.TrimSpace(raw)
 	if strings.Contains(text, ";") {

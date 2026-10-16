@@ -18,7 +18,7 @@ func (s *Service) GetNotificationChannel(ctx context.Context, _ *monitorpb.GetNo
 	if err != nil {
 		return &monitorpb.GetNotificationChannelRsp{RetInfo: inner(err)}, nil
 	}
-	return &monitorpb.GetNotificationChannelRsp{RetInfo: success(), Channel: &monitorpb.NotificationChannelSetting{ChannelType: channel.ChannelType, Configured: strings.TrimSpace(channel.WebhookURL) != "", MaskedUrl: maskNotificationURL(channel.WebhookURL), UpdatedAt: channel.UpdatedAt.UTC().Format(time.RFC3339Nano)}}, nil
+	return &monitorpb.GetNotificationChannelRsp{RetInfo: success(), Channel: &monitorpb.NotificationChannelSetting{ChannelType: channel.ChannelType, WebhookUrl: strings.TrimSpace(channel.WebhookURL), UpdatedAt: channel.UpdatedAt.UTC().Format(time.RFC3339Nano)}}, nil
 }
 
 func (s *Service) UpdateNotificationChannel(ctx context.Context, req *monitorpb.UpdateNotificationChannelReq) (*monitorpb.UpdateNotificationChannelRsp, error) {
@@ -43,14 +43,4 @@ func (s *Service) UpdateNotificationChannel(ctx context.Context, req *monitorpb.
 		return &monitorpb.UpdateNotificationChannelRsp{RetInfo: inner(err)}, nil
 	}
 	return &monitorpb.UpdateNotificationChannelRsp{RetInfo: got.RetInfo, Channel: got.Channel}, nil
-}
-
-func maskNotificationURL(raw string) string {
-	if raw == "" {
-		return ""
-	}
-	if len(raw) <= 12 {
-		return "********"
-	}
-	return raw[:8] + "..." + raw[len(raw)-4:]
 }

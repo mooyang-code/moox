@@ -1,9 +1,11 @@
 import { defineComponent } from "vue";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
+import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callControl } from "@/api/admin/http";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
 import { listAllDatasets } from "@/api/storage/metadata";
+import { useUserInfoStore } from "@/store/modules/user-info";
 import HealthMonitor from "./index.vue";
 
 vi.mock("@/api/admin/http", () => ({ callControl: vi.fn() }));
@@ -53,6 +55,7 @@ const refreshButton = (page: VueWrapper) => page.findAll("button.refresh")[0];
 describe("monitor page", () => {
   beforeEach(() => {
     mockedCallControl.mockReset();
+    setActivePinia(createPinia());
   });
   afterEach(() => {
     wrapper?.unmount();
@@ -220,7 +223,7 @@ describe("monitor page", () => {
     expect(rows[0].text()).toContain("最近成功结果已过期");
     expect(rows[0].find(".lag").classes()).toContain("is-bad");
     expect(vi.mocked(listAllDatasets)).toHaveBeenCalledWith("crypto", { spaceId: "crypto" });
-    await page.findAll(".layer--wide .link-button")[0].trigger("click");
+    await page.find('[aria-label="数据链路"] .link-button').trigger("click");
     expect(page.findAll(".dataset-table tbody tr")).toHaveLength(2);
   });
 
@@ -248,6 +251,36 @@ describe("monitor page", () => {
     expect(page.find(".verdict").text()).toContain("加载失败");
     expect(page.find(".verdict").classes()).not.toContain("is-ok");
     expect(page.findAll(".host-card")).toHaveLength(1);
+  });
+
+  it("shows the saved notification platform and full webhook URL to administrators", async () => {
+    useUserInfoStore().account.user = { admin: true };
+    const url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=0f6c3c1e-1234-4abc-9def-000000000000";
+    const page = render({ ...healthy, notification: { channel_type: "wecom", configured: true } });
+    await flushPromises();
+    expect(page.text()).toContain("告警推送：企业微信 ✓");
+    mockedCallControl.mockResolvedValueOnce({ channel: { channel_type: "wecom", webhook_url: url } });
+    const settings = page.findAll("button").find(button => button.text() === "消息通知设置");
+    await settings!.trigger("click");
+    await flushPromises();
+    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetNotificationChannel", {});
+    const current = page.find('[aria-label="当前配置"]');
+    expect(current.text()).toContain("企业微信");
+    expect(current.find(".notification-current__url").text()).toBe(url);
+  });
+
+  it("hides notification settings from users who cannot read the webhook", async () => {
+    const page = render(healthy);
+    await flushPromises();
+    expect(page.findAll("button").some(button => button.text() === "消息通知设置")).toBe(false);
+  });
+
+  it("stacks every health layer on its own row so no side-by-side gap appears", async () => {
+    const page = render(healthy);
+    await flushPromises();
+    const labels = page.findAll(".layers > .layer").map(layer => layer.attributes("aria-label"));
+    expect(labels).toEqual(["组件", "主机", "数据链路", "业务检查"]);
+    expect(page.find(".layer--wide").exists()).toBe(false);
   });
 
   it("uses the structured overview and global notification endpoints", async () => {

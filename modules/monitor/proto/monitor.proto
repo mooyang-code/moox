@@ -175,7 +175,8 @@ message HealthOverview {
   repeated HealthBusinessCheck business_checks = 7;
   repeated HealthHost hosts = 8;
   repeated HealthComponent unregistered = 9;
-  NotificationChannelSetting notification = 10;
+  // 概览对所有登录用户可见，只带推送平台和是否已配置；完整 Webhook URL 只由仅管理员可调的 GetNotificationChannel 返回。
+  NotificationChannelStatus notification = 10;
   // 最近 incident_window_hours 小时内的告警经过（触发到恢复为一条），按触发时间倒序。
   repeated AlertIncident incidents = 11;
   int32 incident_window_hours = 12;
@@ -198,11 +199,15 @@ message AlertIncident {
 message GetHealthOverviewReq { string space_id = 1; }
 message GetHealthOverviewRsp { common.RetInfo ret_info = 1; HealthOverview overview = 2; }
 
-message NotificationChannelSetting {
+message NotificationChannelStatus {
   string channel_type = 1;
   bool configured = 2;
-  string masked_url = 3;
-  string updated_at = 4;
+}
+// NotificationChannelSetting 是全局推送渠道的完整配置。Webhook URL 本身就是推送凭据，控制台只允许全局管理员读取。
+message NotificationChannelSetting {
+  string channel_type = 1;
+  string webhook_url = 2;
+  string updated_at = 3;
 }
 message GetNotificationChannelReq {}
 message GetNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationChannelSetting channel = 2; }

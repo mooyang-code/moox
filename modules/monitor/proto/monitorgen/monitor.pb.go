@@ -1519,16 +1519,17 @@ type HealthOverview struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	GeneratedAt    string                      `protobuf:"bytes,1,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
-	TopologyKnown  bool                        `protobuf:"varint,2,opt,name=topology_known,json=topologyKnown,proto3" json:"topology_known,omitempty"`
-	Summary        *HealthSummary              `protobuf:"bytes,3,opt,name=summary,proto3" json:"summary,omitempty"`
-	Alerts         []*HealthAlert              `protobuf:"bytes,4,rep,name=alerts,proto3" json:"alerts,omitempty"`
-	Components     []*HealthComponent          `protobuf:"bytes,5,rep,name=components,proto3" json:"components,omitempty"`
-	Pipeline       []*HealthPipelineStage      `protobuf:"bytes,6,rep,name=pipeline,proto3" json:"pipeline,omitempty"`
-	BusinessChecks []*HealthBusinessCheck      `protobuf:"bytes,7,rep,name=business_checks,json=businessChecks,proto3" json:"business_checks,omitempty"`
-	Hosts          []*HealthHost               `protobuf:"bytes,8,rep,name=hosts,proto3" json:"hosts,omitempty"`
-	Unregistered   []*HealthComponent          `protobuf:"bytes,9,rep,name=unregistered,proto3" json:"unregistered,omitempty"`
-	Notification   *NotificationChannelSetting `protobuf:"bytes,10,opt,name=notification,proto3" json:"notification,omitempty"`
+	GeneratedAt    string                 `protobuf:"bytes,1,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
+	TopologyKnown  bool                   `protobuf:"varint,2,opt,name=topology_known,json=topologyKnown,proto3" json:"topology_known,omitempty"`
+	Summary        *HealthSummary         `protobuf:"bytes,3,opt,name=summary,proto3" json:"summary,omitempty"`
+	Alerts         []*HealthAlert         `protobuf:"bytes,4,rep,name=alerts,proto3" json:"alerts,omitempty"`
+	Components     []*HealthComponent     `protobuf:"bytes,5,rep,name=components,proto3" json:"components,omitempty"`
+	Pipeline       []*HealthPipelineStage `protobuf:"bytes,6,rep,name=pipeline,proto3" json:"pipeline,omitempty"`
+	BusinessChecks []*HealthBusinessCheck `protobuf:"bytes,7,rep,name=business_checks,json=businessChecks,proto3" json:"business_checks,omitempty"`
+	Hosts          []*HealthHost          `protobuf:"bytes,8,rep,name=hosts,proto3" json:"hosts,omitempty"`
+	Unregistered   []*HealthComponent     `protobuf:"bytes,9,rep,name=unregistered,proto3" json:"unregistered,omitempty"`
+	// 概览对所有登录用户可见，只带推送平台和是否已配置；完整 Webhook URL 只由仅管理员可调的 GetNotificationChannel 返回。
+	Notification *NotificationChannelStatus `protobuf:"bytes,10,opt,name=notification,proto3" json:"notification,omitempty"`
 	// 最近 incident_window_hours 小时内的告警经过（触发到恢复为一条），按触发时间倒序。
 	Incidents           []*AlertIncident `protobuf:"bytes,11,rep,name=incidents,proto3" json:"incidents,omitempty"`
 	IncidentWindowHours int32            `protobuf:"varint,12,opt,name=incident_window_hours,json=incidentWindowHours,proto3" json:"incident_window_hours,omitempty"`
@@ -1629,7 +1630,7 @@ func (x *HealthOverview) GetUnregistered() []*HealthComponent {
 	return nil
 }
 
-func (x *HealthOverview) GetNotification() *NotificationChannelSetting {
+func (x *HealthOverview) GetNotification() *NotificationChannelStatus {
 	if x != nil {
 		return x.Notification
 	}
@@ -1874,21 +1875,76 @@ func (x *GetHealthOverviewRsp) GetOverview() *HealthOverview {
 	return nil
 }
 
-type NotificationChannelSetting struct {
+type NotificationChannelStatus struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
 	ChannelType string `protobuf:"bytes,1,opt,name=channel_type,json=channelType,proto3" json:"channel_type,omitempty"`
 	Configured  bool   `protobuf:"varint,2,opt,name=configured,proto3" json:"configured,omitempty"`
-	MaskedUrl   string `protobuf:"bytes,3,opt,name=masked_url,json=maskedUrl,proto3" json:"masked_url,omitempty"`
-	UpdatedAt   string `protobuf:"bytes,4,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+}
+
+func (x *NotificationChannelStatus) Reset() {
+	*x = NotificationChannelStatus{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_monitor_proto_msgTypes[17]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *NotificationChannelStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NotificationChannelStatus) ProtoMessage() {}
+
+func (x *NotificationChannelStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_monitor_proto_msgTypes[17]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NotificationChannelStatus.ProtoReflect.Descriptor instead.
+func (*NotificationChannelStatus) Descriptor() ([]byte, []int) {
+	return file_monitor_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *NotificationChannelStatus) GetChannelType() string {
+	if x != nil {
+		return x.ChannelType
+	}
+	return ""
+}
+
+func (x *NotificationChannelStatus) GetConfigured() bool {
+	if x != nil {
+		return x.Configured
+	}
+	return false
+}
+
+// NotificationChannelSetting 是全局推送渠道的完整配置。Webhook URL 本身就是推送凭据，控制台只允许全局管理员读取。
+type NotificationChannelSetting struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	ChannelType string `protobuf:"bytes,1,opt,name=channel_type,json=channelType,proto3" json:"channel_type,omitempty"`
+	WebhookUrl  string `protobuf:"bytes,2,opt,name=webhook_url,json=webhookUrl,proto3" json:"webhook_url,omitempty"`
+	UpdatedAt   string `protobuf:"bytes,3,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 }
 
 func (x *NotificationChannelSetting) Reset() {
 	*x = NotificationChannelSetting{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[17]
+		mi := &file_monitor_proto_msgTypes[18]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1901,7 +1957,7 @@ func (x *NotificationChannelSetting) String() string {
 func (*NotificationChannelSetting) ProtoMessage() {}
 
 func (x *NotificationChannelSetting) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[17]
+	mi := &file_monitor_proto_msgTypes[18]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1914,7 +1970,7 @@ func (x *NotificationChannelSetting) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NotificationChannelSetting.ProtoReflect.Descriptor instead.
 func (*NotificationChannelSetting) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{17}
+	return file_monitor_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *NotificationChannelSetting) GetChannelType() string {
@@ -1924,16 +1980,9 @@ func (x *NotificationChannelSetting) GetChannelType() string {
 	return ""
 }
 
-func (x *NotificationChannelSetting) GetConfigured() bool {
+func (x *NotificationChannelSetting) GetWebhookUrl() string {
 	if x != nil {
-		return x.Configured
-	}
-	return false
-}
-
-func (x *NotificationChannelSetting) GetMaskedUrl() string {
-	if x != nil {
-		return x.MaskedUrl
+		return x.WebhookUrl
 	}
 	return ""
 }
@@ -1954,7 +2003,7 @@ type GetNotificationChannelReq struct {
 func (x *GetNotificationChannelReq) Reset() {
 	*x = GetNotificationChannelReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[18]
+		mi := &file_monitor_proto_msgTypes[19]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1967,7 +2016,7 @@ func (x *GetNotificationChannelReq) String() string {
 func (*GetNotificationChannelReq) ProtoMessage() {}
 
 func (x *GetNotificationChannelReq) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[18]
+	mi := &file_monitor_proto_msgTypes[19]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1980,7 +2029,7 @@ func (x *GetNotificationChannelReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNotificationChannelReq.ProtoReflect.Descriptor instead.
 func (*GetNotificationChannelReq) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{18}
+	return file_monitor_proto_rawDescGZIP(), []int{19}
 }
 
 type GetNotificationChannelRsp struct {
@@ -1995,7 +2044,7 @@ type GetNotificationChannelRsp struct {
 func (x *GetNotificationChannelRsp) Reset() {
 	*x = GetNotificationChannelRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[19]
+		mi := &file_monitor_proto_msgTypes[20]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2008,7 +2057,7 @@ func (x *GetNotificationChannelRsp) String() string {
 func (*GetNotificationChannelRsp) ProtoMessage() {}
 
 func (x *GetNotificationChannelRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[19]
+	mi := &file_monitor_proto_msgTypes[20]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2021,7 +2070,7 @@ func (x *GetNotificationChannelRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNotificationChannelRsp.ProtoReflect.Descriptor instead.
 func (*GetNotificationChannelRsp) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{19}
+	return file_monitor_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *GetNotificationChannelRsp) GetRetInfo() *commonpb.RetInfo {
@@ -2050,7 +2099,7 @@ type UpdateNotificationChannelReq struct {
 func (x *UpdateNotificationChannelReq) Reset() {
 	*x = UpdateNotificationChannelReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[20]
+		mi := &file_monitor_proto_msgTypes[21]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2063,7 +2112,7 @@ func (x *UpdateNotificationChannelReq) String() string {
 func (*UpdateNotificationChannelReq) ProtoMessage() {}
 
 func (x *UpdateNotificationChannelReq) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[20]
+	mi := &file_monitor_proto_msgTypes[21]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2076,7 +2125,7 @@ func (x *UpdateNotificationChannelReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateNotificationChannelReq.ProtoReflect.Descriptor instead.
 func (*UpdateNotificationChannelReq) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{20}
+	return file_monitor_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *UpdateNotificationChannelReq) GetChannelType() string {
@@ -2105,7 +2154,7 @@ type UpdateNotificationChannelRsp struct {
 func (x *UpdateNotificationChannelRsp) Reset() {
 	*x = UpdateNotificationChannelRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[21]
+		mi := &file_monitor_proto_msgTypes[22]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2118,7 +2167,7 @@ func (x *UpdateNotificationChannelRsp) String() string {
 func (*UpdateNotificationChannelRsp) ProtoMessage() {}
 
 func (x *UpdateNotificationChannelRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[21]
+	mi := &file_monitor_proto_msgTypes[22]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2131,7 +2180,7 @@ func (x *UpdateNotificationChannelRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateNotificationChannelRsp.ProtoReflect.Descriptor instead.
 func (*UpdateNotificationChannelRsp) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{21}
+	return file_monitor_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *UpdateNotificationChannelRsp) GetRetInfo() *commonpb.RetInfo {
@@ -2167,7 +2216,7 @@ type HostAgentInfo struct {
 func (x *HostAgentInfo) Reset() {
 	*x = HostAgentInfo{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[22]
+		mi := &file_monitor_proto_msgTypes[23]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2180,7 +2229,7 @@ func (x *HostAgentInfo) String() string {
 func (*HostAgentInfo) ProtoMessage() {}
 
 func (x *HostAgentInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[22]
+	mi := &file_monitor_proto_msgTypes[23]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2193,7 +2242,7 @@ func (x *HostAgentInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAgentInfo.ProtoReflect.Descriptor instead.
 func (*HostAgentInfo) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{22}
+	return file_monitor_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *HostAgentInfo) GetAgentId() string {
@@ -2268,7 +2317,7 @@ type ListHostAgentsReq struct {
 func (x *ListHostAgentsReq) Reset() {
 	*x = ListHostAgentsReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[23]
+		mi := &file_monitor_proto_msgTypes[24]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2281,7 +2330,7 @@ func (x *ListHostAgentsReq) String() string {
 func (*ListHostAgentsReq) ProtoMessage() {}
 
 func (x *ListHostAgentsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[23]
+	mi := &file_monitor_proto_msgTypes[24]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2294,7 +2343,7 @@ func (x *ListHostAgentsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListHostAgentsReq.ProtoReflect.Descriptor instead.
 func (*ListHostAgentsReq) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{23}
+	return file_monitor_proto_rawDescGZIP(), []int{24}
 }
 
 type ListHostAgentsRsp struct {
@@ -2311,7 +2360,7 @@ type ListHostAgentsRsp struct {
 func (x *ListHostAgentsRsp) Reset() {
 	*x = ListHostAgentsRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[24]
+		mi := &file_monitor_proto_msgTypes[25]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2324,7 +2373,7 @@ func (x *ListHostAgentsRsp) String() string {
 func (*ListHostAgentsRsp) ProtoMessage() {}
 
 func (x *ListHostAgentsRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[24]
+	mi := &file_monitor_proto_msgTypes[25]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2337,7 +2386,7 @@ func (x *ListHostAgentsRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListHostAgentsRsp.ProtoReflect.Descriptor instead.
 func (*ListHostAgentsRsp) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{24}
+	return file_monitor_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ListHostAgentsRsp) GetRetInfo() *commonpb.RetInfo {
@@ -2381,7 +2430,7 @@ type HostMetricHistoryPoint struct {
 func (x *HostMetricHistoryPoint) Reset() {
 	*x = HostMetricHistoryPoint{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[25]
+		mi := &file_monitor_proto_msgTypes[26]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2394,7 +2443,7 @@ func (x *HostMetricHistoryPoint) String() string {
 func (*HostMetricHistoryPoint) ProtoMessage() {}
 
 func (x *HostMetricHistoryPoint) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[25]
+	mi := &file_monitor_proto_msgTypes[26]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2407,7 +2456,7 @@ func (x *HostMetricHistoryPoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostMetricHistoryPoint.ProtoReflect.Descriptor instead.
 func (*HostMetricHistoryPoint) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{25}
+	return file_monitor_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *HostMetricHistoryPoint) GetAgentId() string {
@@ -2445,7 +2494,7 @@ type QueryHostMetricHistoryReq struct {
 func (x *QueryHostMetricHistoryReq) Reset() {
 	*x = QueryHostMetricHistoryReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[26]
+		mi := &file_monitor_proto_msgTypes[27]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2458,7 +2507,7 @@ func (x *QueryHostMetricHistoryReq) String() string {
 func (*QueryHostMetricHistoryReq) ProtoMessage() {}
 
 func (x *QueryHostMetricHistoryReq) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[26]
+	mi := &file_monitor_proto_msgTypes[27]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2471,7 +2520,7 @@ func (x *QueryHostMetricHistoryReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryHostMetricHistoryReq.ProtoReflect.Descriptor instead.
 func (*QueryHostMetricHistoryReq) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{26}
+	return file_monitor_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *QueryHostMetricHistoryReq) GetAgentId() string {
@@ -2516,7 +2565,7 @@ type QueryHostMetricHistoryRsp struct {
 func (x *QueryHostMetricHistoryRsp) Reset() {
 	*x = QueryHostMetricHistoryRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[27]
+		mi := &file_monitor_proto_msgTypes[28]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2529,7 +2578,7 @@ func (x *QueryHostMetricHistoryRsp) String() string {
 func (*QueryHostMetricHistoryRsp) ProtoMessage() {}
 
 func (x *QueryHostMetricHistoryRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[27]
+	mi := &file_monitor_proto_msgTypes[28]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2542,7 +2591,7 @@ func (x *QueryHostMetricHistoryRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueryHostMetricHistoryRsp.ProtoReflect.Descriptor instead.
 func (*QueryHostMetricHistoryRsp) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{27}
+	return file_monitor_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *QueryHostMetricHistoryRsp) GetRetInfo() *commonpb.RetInfo {
@@ -2591,7 +2640,7 @@ type DoctorExpectedComponent struct {
 func (x *DoctorExpectedComponent) Reset() {
 	*x = DoctorExpectedComponent{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[28]
+		mi := &file_monitor_proto_msgTypes[29]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2604,7 +2653,7 @@ func (x *DoctorExpectedComponent) String() string {
 func (*DoctorExpectedComponent) ProtoMessage() {}
 
 func (x *DoctorExpectedComponent) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[28]
+	mi := &file_monitor_proto_msgTypes[29]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2617,7 +2666,7 @@ func (x *DoctorExpectedComponent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DoctorExpectedComponent.ProtoReflect.Descriptor instead.
 func (*DoctorExpectedComponent) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{28}
+	return file_monitor_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *DoctorExpectedComponent) GetComponentId() string {
@@ -2701,7 +2750,7 @@ type DoctorObservation struct {
 func (x *DoctorObservation) Reset() {
 	*x = DoctorObservation{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[29]
+		mi := &file_monitor_proto_msgTypes[30]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2714,7 +2763,7 @@ func (x *DoctorObservation) String() string {
 func (*DoctorObservation) ProtoMessage() {}
 
 func (x *DoctorObservation) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[29]
+	mi := &file_monitor_proto_msgTypes[30]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2727,7 +2776,7 @@ func (x *DoctorObservation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DoctorObservation.ProtoReflect.Descriptor instead.
 func (*DoctorObservation) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{29}
+	return file_monitor_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *DoctorObservation) GetKind() string {
@@ -2851,7 +2900,7 @@ type DoctorWatermark struct {
 func (x *DoctorWatermark) Reset() {
 	*x = DoctorWatermark{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[30]
+		mi := &file_monitor_proto_msgTypes[31]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2864,7 +2913,7 @@ func (x *DoctorWatermark) String() string {
 func (*DoctorWatermark) ProtoMessage() {}
 
 func (x *DoctorWatermark) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[30]
+	mi := &file_monitor_proto_msgTypes[31]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2877,7 +2926,7 @@ func (x *DoctorWatermark) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DoctorWatermark.ProtoReflect.Descriptor instead.
 func (*DoctorWatermark) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{30}
+	return file_monitor_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *DoctorWatermark) GetModule() string {
@@ -2940,7 +2989,7 @@ type DoctorDiskForecast struct {
 func (x *DoctorDiskForecast) Reset() {
 	*x = DoctorDiskForecast{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[31]
+		mi := &file_monitor_proto_msgTypes[32]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2953,7 +3002,7 @@ func (x *DoctorDiskForecast) String() string {
 func (*DoctorDiskForecast) ProtoMessage() {}
 
 func (x *DoctorDiskForecast) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[31]
+	mi := &file_monitor_proto_msgTypes[32]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2966,7 +3015,7 @@ func (x *DoctorDiskForecast) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DoctorDiskForecast.ProtoReflect.Descriptor instead.
 func (*DoctorDiskForecast) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{31}
+	return file_monitor_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *DoctorDiskForecast) GetNodeId() string {
@@ -3038,7 +3087,7 @@ type GetDoctorContextReq struct {
 func (x *GetDoctorContextReq) Reset() {
 	*x = GetDoctorContextReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[32]
+		mi := &file_monitor_proto_msgTypes[33]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3051,7 +3100,7 @@ func (x *GetDoctorContextReq) String() string {
 func (*GetDoctorContextReq) ProtoMessage() {}
 
 func (x *GetDoctorContextReq) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[32]
+	mi := &file_monitor_proto_msgTypes[33]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3064,7 +3113,7 @@ func (x *GetDoctorContextReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDoctorContextReq.ProtoReflect.Descriptor instead.
 func (*GetDoctorContextReq) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{32}
+	return file_monitor_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *GetDoctorContextReq) GetNodeId() string {
@@ -3110,7 +3159,7 @@ type GetDoctorContextRsp struct {
 func (x *GetDoctorContextRsp) Reset() {
 	*x = GetDoctorContextRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_monitor_proto_msgTypes[33]
+		mi := &file_monitor_proto_msgTypes[34]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3123,7 +3172,7 @@ func (x *GetDoctorContextRsp) String() string {
 func (*GetDoctorContextRsp) ProtoMessage() {}
 
 func (x *GetDoctorContextRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_monitor_proto_msgTypes[33]
+	mi := &file_monitor_proto_msgTypes[34]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3136,7 +3185,7 @@ func (x *GetDoctorContextRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDoctorContextRsp.ProtoReflect.Descriptor instead.
 func (*GetDoctorContextRsp) Descriptor() ([]byte, []int) {
-	return file_monitor_proto_rawDescGZIP(), []int{33}
+	return file_monitor_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *GetDoctorContextRsp) GetRetInfo() *commonpb.RetInfo {
@@ -3478,7 +3527,7 @@ var file_monitor_proto_rawDesc = []byte{
 	0x73, 0x18, 0x06, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1f, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d,
 	0x6f, 0x6f, 0x78, 0x2e, 0x6d, 0x6f, 0x6e, 0x69, 0x74, 0x6f, 0x72, 0x2e, 0x48, 0x65, 0x61, 0x6c,
 	0x74, 0x68, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x73, 0x52, 0x0a, 0x63, 0x6f, 0x6d, 0x70, 0x6f, 0x6e,
-	0x65, 0x6e, 0x74, 0x73, 0x22, 0xeb, 0x05, 0x0a, 0x0e, 0x48, 0x65, 0x61, 0x6c, 0x74, 0x68, 0x4f,
+	0x65, 0x6e, 0x74, 0x73, 0x22, 0xea, 0x05, 0x0a, 0x0e, 0x48, 0x65, 0x61, 0x6c, 0x74, 0x68, 0x4f,
 	0x76, 0x65, 0x72, 0x76, 0x69, 0x65, 0x77, 0x12, 0x21, 0x0a, 0x0c, 0x67, 0x65, 0x6e, 0x65, 0x72,
 	0x61, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x67,
 	0x65, 0x6e, 0x65, 0x72, 0x61, 0x74, 0x65, 0x64, 0x41, 0x74, 0x12, 0x25, 0x0a, 0x0e, 0x74, 0x6f,
@@ -3512,62 +3561,66 @@ var file_monitor_proto_rawDesc = []byte{
 	0x72, 0x65, 0x64, 0x18, 0x09, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x22, 0x2e, 0x74, 0x72, 0x70, 0x63,
 	0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6d, 0x6f, 0x6e, 0x69, 0x74, 0x6f, 0x72, 0x2e, 0x48, 0x65,
 	0x61, 0x6c, 0x74, 0x68, 0x43, 0x6f, 0x6d, 0x70, 0x6f, 0x6e, 0x65, 0x6e, 0x74, 0x52, 0x0c, 0x75,
-	0x6e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x65, 0x72, 0x65, 0x64, 0x12, 0x51, 0x0a, 0x0c, 0x6e,
+	0x6e, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x65, 0x72, 0x65, 0x64, 0x12, 0x50, 0x0a, 0x0c, 0x6e,
 	0x6f, 0x74, 0x69, 0x66, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x18, 0x0a, 0x20, 0x01, 0x28,
-	0x0b, 0x32, 0x2d, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6d, 0x6f,
+	0x0b, 0x32, 0x2c, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6d, 0x6f,
 	0x6e, 0x69, 0x74, 0x6f, 0x72, 0x2e, 0x4e, 0x6f, 0x74, 0x69, 0x66, 0x69, 0x63, 0x61, 0x74, 0x69,
-	0x6f, 0x6e, 0x43, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x53, 0x65, 0x74, 0x74, 0x69, 0x6e, 0x67,
-	0x52, 0x0c, 0x6e, 0x6f, 0x74, 0x69, 0x66, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x3e,
-	0x0a, 0x09, 0x69, 0x6e, 0x63, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x73, 0x18, 0x0b, 0x20, 0x03, 0x28,
-	0x0b, 0x32, 0x20, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6d, 0x6f,
-	0x6e, 0x69, 0x74, 0x6f, 0x72, 0x2e, 0x41, 0x6c, 0x65, 0x72, 0x74, 0x49, 0x6e, 0x63, 0x69, 0x64,
-	0x65, 0x6e, 0x74, 0x52, 0x09, 0x69, 0x6e, 0x63, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x73, 0x12, 0x32,
-	0x0a, 0x15, 0x69, 0x6e, 0x63, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x5f, 0x77, 0x69, 0x6e, 0x64, 0x6f,
-	0x77, 0x5f, 0x68, 0x6f, 0x75, 0x72, 0x73, 0x18, 0x0c, 0x20, 0x01, 0x28, 0x05, 0x52, 0x13, 0x69,
-	0x6e, 0x63, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x57, 0x69, 0x6e, 0x64, 0x6f, 0x77, 0x48, 0x6f, 0x75,
-	0x72, 0x73, 0x22, 0xca, 0x02, 0x0a, 0x0d, 0x41, 0x6c, 0x65, 0x72, 0x74, 0x49, 0x6e, 0x63, 0x69,
-	0x64, 0x65, 0x6e, 0x74, 0x12, 0x0e, 0x0a, 0x02, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09,
-	0x52, 0x02, 0x69, 0x64, 0x12, 0x1a, 0x0a, 0x08, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79,
-	0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79,
-	0x12, 0x37, 0x0a, 0x06, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0b,
-	0x32, 0x1f, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6d, 0x6f, 0x6e,
-	0x69, 0x74, 0x6f, 0x72, 0x2e, 0x48, 0x65, 0x61, 0x6c, 0x74, 0x68, 0x4f, 0x62, 0x6a, 0x65, 0x63,
-	0x74, 0x52, 0x06, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x12, 0x14, 0x0a, 0x05, 0x74, 0x69, 0x74,
-	0x6c, 0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x74, 0x69, 0x74, 0x6c, 0x65, 0x12,
-	0x16, 0x0a, 0x06, 0x72, 0x65, 0x61, 0x73, 0x6f, 0x6e, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52,
-	0x06, 0x72, 0x65, 0x61, 0x73, 0x6f, 0x6e, 0x12, 0x21, 0x0a, 0x0c, 0x74, 0x72, 0x69, 0x67, 0x67,
-	0x65, 0x72, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x74,
-	0x72, 0x69, 0x67, 0x67, 0x65, 0x72, 0x65, 0x64, 0x41, 0x74, 0x12, 0x1f, 0x0a, 0x0b, 0x72, 0x65,
-	0x73, 0x6f, 0x6c, 0x76, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18, 0x07, 0x20, 0x01, 0x28, 0x09, 0x52,
-	0x0a, 0x72, 0x65, 0x73, 0x6f, 0x6c, 0x76, 0x65, 0x64, 0x41, 0x74, 0x12, 0x16, 0x0a, 0x06, 0x61,
-	0x63, 0x74, 0x69, 0x76, 0x65, 0x18, 0x08, 0x20, 0x01, 0x28, 0x08, 0x52, 0x06, 0x61, 0x63, 0x74,
-	0x69, 0x76, 0x65, 0x12, 0x25, 0x0a, 0x0e, 0x72, 0x65, 0x6d, 0x69, 0x6e, 0x64, 0x65, 0x72, 0x5f,
-	0x63, 0x6f, 0x75, 0x6e, 0x74, 0x18, 0x09, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0d, 0x72, 0x65, 0x6d,
-	0x69, 0x6e, 0x64, 0x65, 0x72, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x12, 0x23, 0x0a, 0x0d, 0x6e, 0x6f,
-	0x74, 0x69, 0x66, 0x79, 0x5f, 0x66, 0x61, 0x69, 0x6c, 0x65, 0x64, 0x18, 0x0a, 0x20, 0x01, 0x28,
-	0x08, 0x52, 0x0c, 0x6e, 0x6f, 0x74, 0x69, 0x66, 0x79, 0x46, 0x61, 0x69, 0x6c, 0x65, 0x64, 0x22,
-	0x31, 0x0a, 0x14, 0x47, 0x65, 0x74, 0x48, 0x65, 0x61, 0x6c, 0x74, 0x68, 0x4f, 0x76, 0x65, 0x72,
-	0x76, 0x69, 0x65, 0x77, 0x52, 0x65, 0x71, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65,
-	0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65,
-	0x49, 0x64, 0x22, 0x8b, 0x01, 0x0a, 0x14, 0x47, 0x65, 0x74, 0x48, 0x65, 0x61, 0x6c, 0x74, 0x68,
-	0x4f, 0x76, 0x65, 0x72, 0x76, 0x69, 0x65, 0x77, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72,
-	0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e,
-	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e,
-	0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66,
-	0x6f, 0x12, 0x3d, 0x0a, 0x08, 0x6f, 0x76, 0x65, 0x72, 0x76, 0x69, 0x65, 0x77, 0x18, 0x02, 0x20,
-	0x01, 0x28, 0x0b, 0x32, 0x21, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
-	0x6d, 0x6f, 0x6e, 0x69, 0x74, 0x6f, 0x72, 0x2e, 0x48, 0x65, 0x61, 0x6c, 0x74, 0x68, 0x4f, 0x76,
-	0x65, 0x72, 0x76, 0x69, 0x65, 0x77, 0x52, 0x08, 0x6f, 0x76, 0x65, 0x72, 0x76, 0x69, 0x65, 0x77,
-	0x22, 0x9d, 0x01, 0x0a, 0x1a, 0x4e, 0x6f, 0x74, 0x69, 0x66, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f,
-	0x6e, 0x43, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x53, 0x65, 0x74, 0x74, 0x69, 0x6e, 0x67, 0x12,
-	0x21, 0x0a, 0x0c, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x5f, 0x74, 0x79, 0x70, 0x65, 0x18,
-	0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x54, 0x79,
-	0x70, 0x65, 0x12, 0x1e, 0x0a, 0x0a, 0x63, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x75, 0x72, 0x65, 0x64,
-	0x18, 0x02, 0x20, 0x01, 0x28, 0x08, 0x52, 0x0a, 0x63, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x75, 0x72,
-	0x65, 0x64, 0x12, 0x1d, 0x0a, 0x0a, 0x6d, 0x61, 0x73, 0x6b, 0x65, 0x64, 0x5f, 0x75, 0x72, 0x6c,
-	0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6d, 0x61, 0x73, 0x6b, 0x65, 0x64, 0x55, 0x72,
+	0x6f, 0x6e, 0x43, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52,
+	0x0c, 0x6e, 0x6f, 0x74, 0x69, 0x66, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x3e, 0x0a,
+	0x09, 0x69, 0x6e, 0x63, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x73, 0x18, 0x0b, 0x20, 0x03, 0x28, 0x0b,
+	0x32, 0x20, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6d, 0x6f, 0x6e,
+	0x69, 0x74, 0x6f, 0x72, 0x2e, 0x41, 0x6c, 0x65, 0x72, 0x74, 0x49, 0x6e, 0x63, 0x69, 0x64, 0x65,
+	0x6e, 0x74, 0x52, 0x09, 0x69, 0x6e, 0x63, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x73, 0x12, 0x32, 0x0a,
+	0x15, 0x69, 0x6e, 0x63, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x5f, 0x77, 0x69, 0x6e, 0x64, 0x6f, 0x77,
+	0x5f, 0x68, 0x6f, 0x75, 0x72, 0x73, 0x18, 0x0c, 0x20, 0x01, 0x28, 0x05, 0x52, 0x13, 0x69, 0x6e,
+	0x63, 0x69, 0x64, 0x65, 0x6e, 0x74, 0x57, 0x69, 0x6e, 0x64, 0x6f, 0x77, 0x48, 0x6f, 0x75, 0x72,
+	0x73, 0x22, 0xca, 0x02, 0x0a, 0x0d, 0x41, 0x6c, 0x65, 0x72, 0x74, 0x49, 0x6e, 0x63, 0x69, 0x64,
+	0x65, 0x6e, 0x74, 0x12, 0x0e, 0x0a, 0x02, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x02, 0x69, 0x64, 0x12, 0x1a, 0x0a, 0x08, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79, 0x18,
+	0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x73, 0x65, 0x76, 0x65, 0x72, 0x69, 0x74, 0x79, 0x12,
+	0x37, 0x0a, 0x06, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0b, 0x32,
+	0x1f, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6d, 0x6f, 0x6e, 0x69,
+	0x74, 0x6f, 0x72, 0x2e, 0x48, 0x65, 0x61, 0x6c, 0x74, 0x68, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74,
+	0x52, 0x06, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x12, 0x14, 0x0a, 0x05, 0x74, 0x69, 0x74, 0x6c,
+	0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x74, 0x69, 0x74, 0x6c, 0x65, 0x12, 0x16,
+	0x0a, 0x06, 0x72, 0x65, 0x61, 0x73, 0x6f, 0x6e, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06,
+	0x72, 0x65, 0x61, 0x73, 0x6f, 0x6e, 0x12, 0x21, 0x0a, 0x0c, 0x74, 0x72, 0x69, 0x67, 0x67, 0x65,
+	0x72, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x74, 0x72,
+	0x69, 0x67, 0x67, 0x65, 0x72, 0x65, 0x64, 0x41, 0x74, 0x12, 0x1f, 0x0a, 0x0b, 0x72, 0x65, 0x73,
+	0x6f, 0x6c, 0x76, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18, 0x07, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a,
+	0x72, 0x65, 0x73, 0x6f, 0x6c, 0x76, 0x65, 0x64, 0x41, 0x74, 0x12, 0x16, 0x0a, 0x06, 0x61, 0x63,
+	0x74, 0x69, 0x76, 0x65, 0x18, 0x08, 0x20, 0x01, 0x28, 0x08, 0x52, 0x06, 0x61, 0x63, 0x74, 0x69,
+	0x76, 0x65, 0x12, 0x25, 0x0a, 0x0e, 0x72, 0x65, 0x6d, 0x69, 0x6e, 0x64, 0x65, 0x72, 0x5f, 0x63,
+	0x6f, 0x75, 0x6e, 0x74, 0x18, 0x09, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0d, 0x72, 0x65, 0x6d, 0x69,
+	0x6e, 0x64, 0x65, 0x72, 0x43, 0x6f, 0x75, 0x6e, 0x74, 0x12, 0x23, 0x0a, 0x0d, 0x6e, 0x6f, 0x74,
+	0x69, 0x66, 0x79, 0x5f, 0x66, 0x61, 0x69, 0x6c, 0x65, 0x64, 0x18, 0x0a, 0x20, 0x01, 0x28, 0x08,
+	0x52, 0x0c, 0x6e, 0x6f, 0x74, 0x69, 0x66, 0x79, 0x46, 0x61, 0x69, 0x6c, 0x65, 0x64, 0x22, 0x31,
+	0x0a, 0x14, 0x47, 0x65, 0x74, 0x48, 0x65, 0x61, 0x6c, 0x74, 0x68, 0x4f, 0x76, 0x65, 0x72, 0x76,
+	0x69, 0x65, 0x77, 0x52, 0x65, 0x71, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f,
+	0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49,
+	0x64, 0x22, 0x8b, 0x01, 0x0a, 0x14, 0x47, 0x65, 0x74, 0x48, 0x65, 0x61, 0x6c, 0x74, 0x68, 0x4f,
+	0x76, 0x65, 0x72, 0x76, 0x69, 0x65, 0x77, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65,
+	0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74,
+	0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e,
+	0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f,
+	0x12, 0x3d, 0x0a, 0x08, 0x6f, 0x76, 0x65, 0x72, 0x76, 0x69, 0x65, 0x77, 0x18, 0x02, 0x20, 0x01,
+	0x28, 0x0b, 0x32, 0x21, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x6d,
+	0x6f, 0x6e, 0x69, 0x74, 0x6f, 0x72, 0x2e, 0x48, 0x65, 0x61, 0x6c, 0x74, 0x68, 0x4f, 0x76, 0x65,
+	0x72, 0x76, 0x69, 0x65, 0x77, 0x52, 0x08, 0x6f, 0x76, 0x65, 0x72, 0x76, 0x69, 0x65, 0x77, 0x22,
+	0x5e, 0x0a, 0x19, 0x4e, 0x6f, 0x74, 0x69, 0x66, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x43,
+	0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12, 0x21, 0x0a, 0x0c,
+	0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x5f, 0x74, 0x79, 0x70, 0x65, 0x18, 0x01, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x0b, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x54, 0x79, 0x70, 0x65, 0x12,
+	0x1e, 0x0a, 0x0a, 0x63, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x75, 0x72, 0x65, 0x64, 0x18, 0x02, 0x20,
+	0x01, 0x28, 0x08, 0x52, 0x0a, 0x63, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x75, 0x72, 0x65, 0x64, 0x22,
+	0x7f, 0x0a, 0x1a, 0x4e, 0x6f, 0x74, 0x69, 0x66, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x43,
+	0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x53, 0x65, 0x74, 0x74, 0x69, 0x6e, 0x67, 0x12, 0x21, 0x0a,
+	0x0c, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x5f, 0x74, 0x79, 0x70, 0x65, 0x18, 0x01, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x0b, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x54, 0x79, 0x70, 0x65,
+	0x12, 0x1f, 0x0a, 0x0b, 0x77, 0x65, 0x62, 0x68, 0x6f, 0x6f, 0x6b, 0x5f, 0x75, 0x72, 0x6c, 0x18,
+	0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x77, 0x65, 0x62, 0x68, 0x6f, 0x6f, 0x6b, 0x55, 0x72,
 	0x6c, 0x12, 0x1d, 0x0a, 0x0a, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18,
-	0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x41, 0x74,
+	0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x41, 0x74,
 	0x22, 0x1b, 0x0a, 0x19, 0x47, 0x65, 0x74, 0x4e, 0x6f, 0x74, 0x69, 0x66, 0x69, 0x63, 0x61, 0x74,
 	0x69, 0x6f, 0x6e, 0x43, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x52, 0x65, 0x71, 0x22, 0x9a, 0x01,
 	0x0a, 0x19, 0x47, 0x65, 0x74, 0x4e, 0x6f, 0x74, 0x69, 0x66, 0x69, 0x63, 0x61, 0x74, 0x69, 0x6f,
@@ -3882,7 +3935,7 @@ func file_monitor_proto_rawDescGZIP() []byte {
 }
 
 var file_monitor_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_monitor_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_monitor_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_monitor_proto_goTypes = []interface{}{
 	(AlertStatus)(0),                     // 0: trpc.moox.monitor.AlertStatus
 	(AlertEventType)(0),                  // 1: trpc.moox.monitor.AlertEventType
@@ -3903,25 +3956,26 @@ var file_monitor_proto_goTypes = []interface{}{
 	(*AlertIncident)(nil),                // 16: trpc.moox.monitor.AlertIncident
 	(*GetHealthOverviewReq)(nil),         // 17: trpc.moox.monitor.GetHealthOverviewReq
 	(*GetHealthOverviewRsp)(nil),         // 18: trpc.moox.monitor.GetHealthOverviewRsp
-	(*NotificationChannelSetting)(nil),   // 19: trpc.moox.monitor.NotificationChannelSetting
-	(*GetNotificationChannelReq)(nil),    // 20: trpc.moox.monitor.GetNotificationChannelReq
-	(*GetNotificationChannelRsp)(nil),    // 21: trpc.moox.monitor.GetNotificationChannelRsp
-	(*UpdateNotificationChannelReq)(nil), // 22: trpc.moox.monitor.UpdateNotificationChannelReq
-	(*UpdateNotificationChannelRsp)(nil), // 23: trpc.moox.monitor.UpdateNotificationChannelRsp
-	(*HostAgentInfo)(nil),                // 24: trpc.moox.monitor.HostAgentInfo
-	(*ListHostAgentsReq)(nil),            // 25: trpc.moox.monitor.ListHostAgentsReq
-	(*ListHostAgentsRsp)(nil),            // 26: trpc.moox.monitor.ListHostAgentsRsp
-	(*HostMetricHistoryPoint)(nil),       // 27: trpc.moox.monitor.HostMetricHistoryPoint
-	(*QueryHostMetricHistoryReq)(nil),    // 28: trpc.moox.monitor.QueryHostMetricHistoryReq
-	(*QueryHostMetricHistoryRsp)(nil),    // 29: trpc.moox.monitor.QueryHostMetricHistoryRsp
-	(*DoctorExpectedComponent)(nil),      // 30: trpc.moox.monitor.DoctorExpectedComponent
-	(*DoctorObservation)(nil),            // 31: trpc.moox.monitor.DoctorObservation
-	(*DoctorWatermark)(nil),              // 32: trpc.moox.monitor.DoctorWatermark
-	(*DoctorDiskForecast)(nil),           // 33: trpc.moox.monitor.DoctorDiskForecast
-	(*GetDoctorContextReq)(nil),          // 34: trpc.moox.monitor.GetDoctorContextReq
-	(*GetDoctorContextRsp)(nil),          // 35: trpc.moox.monitor.GetDoctorContextRsp
-	(*commonpb.RetInfo)(nil),             // 36: trpc.moox.common.RetInfo
-	(*hostmetricpb.HostSnapshot)(nil),    // 37: trpc.moox.hostagent.HostSnapshot
+	(*NotificationChannelStatus)(nil),    // 19: trpc.moox.monitor.NotificationChannelStatus
+	(*NotificationChannelSetting)(nil),   // 20: trpc.moox.monitor.NotificationChannelSetting
+	(*GetNotificationChannelReq)(nil),    // 21: trpc.moox.monitor.GetNotificationChannelReq
+	(*GetNotificationChannelRsp)(nil),    // 22: trpc.moox.monitor.GetNotificationChannelRsp
+	(*UpdateNotificationChannelReq)(nil), // 23: trpc.moox.monitor.UpdateNotificationChannelReq
+	(*UpdateNotificationChannelRsp)(nil), // 24: trpc.moox.monitor.UpdateNotificationChannelRsp
+	(*HostAgentInfo)(nil),                // 25: trpc.moox.monitor.HostAgentInfo
+	(*ListHostAgentsReq)(nil),            // 26: trpc.moox.monitor.ListHostAgentsReq
+	(*ListHostAgentsRsp)(nil),            // 27: trpc.moox.monitor.ListHostAgentsRsp
+	(*HostMetricHistoryPoint)(nil),       // 28: trpc.moox.monitor.HostMetricHistoryPoint
+	(*QueryHostMetricHistoryReq)(nil),    // 29: trpc.moox.monitor.QueryHostMetricHistoryReq
+	(*QueryHostMetricHistoryRsp)(nil),    // 30: trpc.moox.monitor.QueryHostMetricHistoryRsp
+	(*DoctorExpectedComponent)(nil),      // 31: trpc.moox.monitor.DoctorExpectedComponent
+	(*DoctorObservation)(nil),            // 32: trpc.moox.monitor.DoctorObservation
+	(*DoctorWatermark)(nil),              // 33: trpc.moox.monitor.DoctorWatermark
+	(*DoctorDiskForecast)(nil),           // 34: trpc.moox.monitor.DoctorDiskForecast
+	(*GetDoctorContextReq)(nil),          // 35: trpc.moox.monitor.GetDoctorContextReq
+	(*GetDoctorContextRsp)(nil),          // 36: trpc.moox.monitor.GetDoctorContextRsp
+	(*commonpb.RetInfo)(nil),             // 37: trpc.moox.common.RetInfo
+	(*hostmetricpb.HostSnapshot)(nil),    // 38: trpc.moox.hostagent.HostSnapshot
 }
 var file_monitor_proto_depIdxs = []int32{
 	1,  // 0: trpc.moox.monitor.AlertEvent.event_type:type_name -> trpc.moox.monitor.AlertEventType
@@ -3943,43 +3997,43 @@ var file_monitor_proto_depIdxs = []int32{
 	10, // 16: trpc.moox.monitor.HealthOverview.business_checks:type_name -> trpc.moox.monitor.HealthBusinessCheck
 	12, // 17: trpc.moox.monitor.HealthOverview.hosts:type_name -> trpc.moox.monitor.HealthHost
 	7,  // 18: trpc.moox.monitor.HealthOverview.unregistered:type_name -> trpc.moox.monitor.HealthComponent
-	19, // 19: trpc.moox.monitor.HealthOverview.notification:type_name -> trpc.moox.monitor.NotificationChannelSetting
+	19, // 19: trpc.moox.monitor.HealthOverview.notification:type_name -> trpc.moox.monitor.NotificationChannelStatus
 	16, // 20: trpc.moox.monitor.HealthOverview.incidents:type_name -> trpc.moox.monitor.AlertIncident
 	3,  // 21: trpc.moox.monitor.AlertIncident.object:type_name -> trpc.moox.monitor.HealthObject
-	36, // 22: trpc.moox.monitor.GetHealthOverviewRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	37, // 22: trpc.moox.monitor.GetHealthOverviewRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	15, // 23: trpc.moox.monitor.GetHealthOverviewRsp.overview:type_name -> trpc.moox.monitor.HealthOverview
-	36, // 24: trpc.moox.monitor.GetNotificationChannelRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	19, // 25: trpc.moox.monitor.GetNotificationChannelRsp.channel:type_name -> trpc.moox.monitor.NotificationChannelSetting
-	36, // 26: trpc.moox.monitor.UpdateNotificationChannelRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	19, // 27: trpc.moox.monitor.UpdateNotificationChannelRsp.channel:type_name -> trpc.moox.monitor.NotificationChannelSetting
-	37, // 28: trpc.moox.monitor.HostAgentInfo.snapshot:type_name -> trpc.moox.hostagent.HostSnapshot
-	36, // 29: trpc.moox.monitor.ListHostAgentsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	24, // 30: trpc.moox.monitor.ListHostAgentsRsp.agents:type_name -> trpc.moox.monitor.HostAgentInfo
-	37, // 31: trpc.moox.monitor.HostMetricHistoryPoint.snapshot:type_name -> trpc.moox.hostagent.HostSnapshot
-	36, // 32: trpc.moox.monitor.QueryHostMetricHistoryRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	27, // 33: trpc.moox.monitor.QueryHostMetricHistoryRsp.points:type_name -> trpc.moox.monitor.HostMetricHistoryPoint
-	36, // 34: trpc.moox.monitor.GetDoctorContextRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	30, // 35: trpc.moox.monitor.GetDoctorContextRsp.expected_components:type_name -> trpc.moox.monitor.DoctorExpectedComponent
-	31, // 36: trpc.moox.monitor.GetDoctorContextRsp.health_observations:type_name -> trpc.moox.monitor.DoctorObservation
-	31, // 37: trpc.moox.monitor.GetDoctorContextRsp.reporter_observations:type_name -> trpc.moox.monitor.DoctorObservation
-	31, // 38: trpc.moox.monitor.GetDoctorContextRsp.module_observations:type_name -> trpc.moox.monitor.DoctorObservation
-	32, // 39: trpc.moox.monitor.GetDoctorContextRsp.watermarks:type_name -> trpc.moox.monitor.DoctorWatermark
-	24, // 40: trpc.moox.monitor.GetDoctorContextRsp.host_resources:type_name -> trpc.moox.monitor.HostAgentInfo
-	33, // 41: trpc.moox.monitor.GetDoctorContextRsp.disk_forecasts:type_name -> trpc.moox.monitor.DoctorDiskForecast
+	37, // 24: trpc.moox.monitor.GetNotificationChannelRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	20, // 25: trpc.moox.monitor.GetNotificationChannelRsp.channel:type_name -> trpc.moox.monitor.NotificationChannelSetting
+	37, // 26: trpc.moox.monitor.UpdateNotificationChannelRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	20, // 27: trpc.moox.monitor.UpdateNotificationChannelRsp.channel:type_name -> trpc.moox.monitor.NotificationChannelSetting
+	38, // 28: trpc.moox.monitor.HostAgentInfo.snapshot:type_name -> trpc.moox.hostagent.HostSnapshot
+	37, // 29: trpc.moox.monitor.ListHostAgentsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 30: trpc.moox.monitor.ListHostAgentsRsp.agents:type_name -> trpc.moox.monitor.HostAgentInfo
+	38, // 31: trpc.moox.monitor.HostMetricHistoryPoint.snapshot:type_name -> trpc.moox.hostagent.HostSnapshot
+	37, // 32: trpc.moox.monitor.QueryHostMetricHistoryRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	28, // 33: trpc.moox.monitor.QueryHostMetricHistoryRsp.points:type_name -> trpc.moox.monitor.HostMetricHistoryPoint
+	37, // 34: trpc.moox.monitor.GetDoctorContextRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	31, // 35: trpc.moox.monitor.GetDoctorContextRsp.expected_components:type_name -> trpc.moox.monitor.DoctorExpectedComponent
+	32, // 36: trpc.moox.monitor.GetDoctorContextRsp.health_observations:type_name -> trpc.moox.monitor.DoctorObservation
+	32, // 37: trpc.moox.monitor.GetDoctorContextRsp.reporter_observations:type_name -> trpc.moox.monitor.DoctorObservation
+	32, // 38: trpc.moox.monitor.GetDoctorContextRsp.module_observations:type_name -> trpc.moox.monitor.DoctorObservation
+	33, // 39: trpc.moox.monitor.GetDoctorContextRsp.watermarks:type_name -> trpc.moox.monitor.DoctorWatermark
+	25, // 40: trpc.moox.monitor.GetDoctorContextRsp.host_resources:type_name -> trpc.moox.monitor.HostAgentInfo
+	34, // 41: trpc.moox.monitor.GetDoctorContextRsp.disk_forecasts:type_name -> trpc.moox.monitor.DoctorDiskForecast
 	2,  // 42: trpc.moox.monitor.GetDoctorContextRsp.active_alerts:type_name -> trpc.moox.monitor.AlertEvent
-	31, // 43: trpc.moox.monitor.GetDoctorContextRsp.missing_observations:type_name -> trpc.moox.monitor.DoctorObservation
+	32, // 43: trpc.moox.monitor.GetDoctorContextRsp.missing_observations:type_name -> trpc.moox.monitor.DoctorObservation
 	17, // 44: trpc.moox.monitor.MonitorMgr.GetHealthOverview:input_type -> trpc.moox.monitor.GetHealthOverviewReq
-	20, // 45: trpc.moox.monitor.MonitorMgr.GetNotificationChannel:input_type -> trpc.moox.monitor.GetNotificationChannelReq
-	22, // 46: trpc.moox.monitor.MonitorMgr.UpdateNotificationChannel:input_type -> trpc.moox.monitor.UpdateNotificationChannelReq
-	25, // 47: trpc.moox.monitor.MonitorMgr.ListHostAgents:input_type -> trpc.moox.monitor.ListHostAgentsReq
-	28, // 48: trpc.moox.monitor.MonitorMgr.QueryHostMetricHistory:input_type -> trpc.moox.monitor.QueryHostMetricHistoryReq
-	34, // 49: trpc.moox.monitor.MonitorMgr.GetDoctorContext:input_type -> trpc.moox.monitor.GetDoctorContextReq
+	21, // 45: trpc.moox.monitor.MonitorMgr.GetNotificationChannel:input_type -> trpc.moox.monitor.GetNotificationChannelReq
+	23, // 46: trpc.moox.monitor.MonitorMgr.UpdateNotificationChannel:input_type -> trpc.moox.monitor.UpdateNotificationChannelReq
+	26, // 47: trpc.moox.monitor.MonitorMgr.ListHostAgents:input_type -> trpc.moox.monitor.ListHostAgentsReq
+	29, // 48: trpc.moox.monitor.MonitorMgr.QueryHostMetricHistory:input_type -> trpc.moox.monitor.QueryHostMetricHistoryReq
+	35, // 49: trpc.moox.monitor.MonitorMgr.GetDoctorContext:input_type -> trpc.moox.monitor.GetDoctorContextReq
 	18, // 50: trpc.moox.monitor.MonitorMgr.GetHealthOverview:output_type -> trpc.moox.monitor.GetHealthOverviewRsp
-	21, // 51: trpc.moox.monitor.MonitorMgr.GetNotificationChannel:output_type -> trpc.moox.monitor.GetNotificationChannelRsp
-	23, // 52: trpc.moox.monitor.MonitorMgr.UpdateNotificationChannel:output_type -> trpc.moox.monitor.UpdateNotificationChannelRsp
-	26, // 53: trpc.moox.monitor.MonitorMgr.ListHostAgents:output_type -> trpc.moox.monitor.ListHostAgentsRsp
-	29, // 54: trpc.moox.monitor.MonitorMgr.QueryHostMetricHistory:output_type -> trpc.moox.monitor.QueryHostMetricHistoryRsp
-	35, // 55: trpc.moox.monitor.MonitorMgr.GetDoctorContext:output_type -> trpc.moox.monitor.GetDoctorContextRsp
+	22, // 51: trpc.moox.monitor.MonitorMgr.GetNotificationChannel:output_type -> trpc.moox.monitor.GetNotificationChannelRsp
+	24, // 52: trpc.moox.monitor.MonitorMgr.UpdateNotificationChannel:output_type -> trpc.moox.monitor.UpdateNotificationChannelRsp
+	27, // 53: trpc.moox.monitor.MonitorMgr.ListHostAgents:output_type -> trpc.moox.monitor.ListHostAgentsRsp
+	30, // 54: trpc.moox.monitor.MonitorMgr.QueryHostMetricHistory:output_type -> trpc.moox.monitor.QueryHostMetricHistoryRsp
+	36, // 55: trpc.moox.monitor.MonitorMgr.GetDoctorContext:output_type -> trpc.moox.monitor.GetDoctorContextRsp
 	50, // [50:56] is the sub-list for method output_type
 	44, // [44:50] is the sub-list for method input_type
 	44, // [44:44] is the sub-list for extension type_name
@@ -4198,7 +4252,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[17].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*NotificationChannelSetting); i {
+			switch v := v.(*NotificationChannelStatus); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4210,7 +4264,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[18].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetNotificationChannelReq); i {
+			switch v := v.(*NotificationChannelSetting); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4222,7 +4276,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[19].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetNotificationChannelRsp); i {
+			switch v := v.(*GetNotificationChannelReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4234,7 +4288,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[20].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*UpdateNotificationChannelReq); i {
+			switch v := v.(*GetNotificationChannelRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4246,7 +4300,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[21].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*UpdateNotificationChannelRsp); i {
+			switch v := v.(*UpdateNotificationChannelReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4258,7 +4312,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[22].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*HostAgentInfo); i {
+			switch v := v.(*UpdateNotificationChannelRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4270,7 +4324,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[23].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListHostAgentsReq); i {
+			switch v := v.(*HostAgentInfo); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4282,7 +4336,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[24].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListHostAgentsRsp); i {
+			switch v := v.(*ListHostAgentsReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4294,7 +4348,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[25].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*HostMetricHistoryPoint); i {
+			switch v := v.(*ListHostAgentsRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4306,7 +4360,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[26].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*QueryHostMetricHistoryReq); i {
+			switch v := v.(*HostMetricHistoryPoint); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4318,7 +4372,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[27].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*QueryHostMetricHistoryRsp); i {
+			switch v := v.(*QueryHostMetricHistoryReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4330,7 +4384,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[28].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DoctorExpectedComponent); i {
+			switch v := v.(*QueryHostMetricHistoryRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4342,7 +4396,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[29].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DoctorObservation); i {
+			switch v := v.(*DoctorExpectedComponent); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4354,7 +4408,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[30].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DoctorWatermark); i {
+			switch v := v.(*DoctorObservation); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4366,7 +4420,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[31].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DoctorDiskForecast); i {
+			switch v := v.(*DoctorWatermark); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4378,7 +4432,7 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[32].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetDoctorContextReq); i {
+			switch v := v.(*DoctorDiskForecast); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -4390,6 +4444,18 @@ func file_monitor_proto_init() {
 			}
 		}
 		file_monitor_proto_msgTypes[33].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetDoctorContextReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_monitor_proto_msgTypes[34].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*GetDoctorContextRsp); i {
 			case 0:
 				return &v.state
@@ -4408,7 +4474,7 @@ func file_monitor_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_monitor_proto_rawDesc,
 			NumEnums:      2,
-			NumMessages:   34,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

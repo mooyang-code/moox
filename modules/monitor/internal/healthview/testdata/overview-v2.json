@@ -263,9 +263,7 @@
   "incidents": [],
   "notification": {
     "channel_type": "",
-    "configured": false,
-    "masked_url": "",
-    "updated_at": ""
+    "configured": false
   },
   "pipeline": [
     {

@@ -98,7 +98,7 @@ func (b Builder) Build(ctx context.Context, spaceID string) (*Overview, error) {
 			return nil, err
 		}
 		if channel != nil {
-			out.Notification = &pb.NotificationChannelSetting{ChannelType: channel.ChannelType, Configured: strings.TrimSpace(channel.WebhookURL) != "", MaskedUrl: MaskURL(channel.WebhookURL)}
+			out.Notification = &pb.NotificationChannelStatus{ChannelType: channel.ChannelType, Configured: strings.TrimSpace(channel.WebhookURL) != ""}
 		}
 	}
 	sort.Slice(out.Alerts, func(i, j int) bool {
@@ -144,7 +144,7 @@ func (b Builder) decorateHostThresholds(ctx context.Context, hosts []*pb.HealthH
 }
 
 func projectFacts(facts observability.Overview) *Overview {
-	out := &Overview{GeneratedAt: stamp(facts.GeneratedAt), TopologyKnown: facts.TopologyKnown, Summary: &pb.HealthSummary{Components: &pb.HealthCounts{}}, Notification: &pb.NotificationChannelSetting{}}
+	out := &Overview{GeneratedAt: stamp(facts.GeneratedAt), TopologyKnown: facts.TopologyKnown, Summary: &pb.HealthSummary{Components: &pb.HealthCounts{}}, Notification: &pb.NotificationChannelStatus{}}
 	for _, service := range facts.Services {
 		component := projectComponent(service, facts)
 		out.Components = append(out.Components, component)
