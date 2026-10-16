@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  cronText,
   datasetFunctions,
   datasetLabel,
   datasetNameMap,
@@ -72,6 +73,21 @@ describe("collector runtime status helpers", () => {
     expect(stopped.text).toBe("已查至 10-14 13:00 · 已停 2 小时");
     expect(stopped.color).toContain("danger");
     expect(inspectionInfo({ inspect_lag_seconds: 0 }, now).text).toBe("尚未巡检");
+  });
+
+  it("translates cron expressions into Chinese and keeps the raw text when it cannot", () => {
+    expect(cronText("0 * * * * * *")).toBe("每分钟");
+    expect(cronText("0 */5 * * * * *")).toBe("每 5 分钟");
+    expect(cronText("0 0 * * * * *")).toBe("每小时整点");
+    expect(cronText("0 30 */2 * * * *")).toBe("每 2 小时第 30 分");
+    expect(cronText("10 8 * * *")).toBe("每天 08:10");
+    expect(cronText("0 30 9,13 * * 1-5")).toBe("工作日 09:30、13:30");
+    expect(cronText("0 */5 9-15 * * 1-5 *")).toBe("工作日 9–15 点每 5 分钟");
+    expect(cronText("0 0 3 1 * *")).toBe("每月 1 日 03:00");
+    expect(cronText("0 0 3 * * 1,3")).toBe("每周一、三 03:00");
+    expect(cronText("5 * * * * *")).toBe("每分钟（第 5 秒）");
+    expect(cronText("0 0 0 1 1 * 2026")).toBe("0 0 0 1 1 * 2026");
+    expect(cronText("")).toBe("-");
   });
 
   it("shows dataset display names and falls back to the id", () => {
@@ -168,6 +184,7 @@ describe("collector runtime status page", () => {
   it("opens the function detail dialog from a widened name column", () => {
     expect(page).toContain('@click="openFunction(record)"');
     expect(page).toContain("<FunctionDetailDialog");
+    expect(page).toContain("cronText(record.cron)");
     expect(page).toMatch(/title="函数"[^>]*:width="330"|:width="330"[^>]*title="函数"/);
   });
 

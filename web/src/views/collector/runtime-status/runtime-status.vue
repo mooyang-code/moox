@@ -247,7 +247,7 @@
                 </a-table-column>
                 <a-table-column title="触发" :width="140">
                   <template #cell="{ record }"
-                    ><span class="mono-text function-name" :title="record.cron">{{ record.cron }}</span></template
+                    ><span class="single-line" :title="record.cron">{{ cronText(record.cron) }}</span></template
                   >
                 </a-table-column>
                 <a-table-column title="标的" data-index="subject_count" :width="70" align="right" />
@@ -312,6 +312,7 @@ import FunctionDetailDialog from "./function-detail-dialog.vue";
 import {
   datasetFunctions,
   datasetKey,
+  cronText,
   datasetLabel,
   datasetNameMap,
   filterFunctions,

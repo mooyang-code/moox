@@ -13,7 +13,7 @@
       <a-descriptions :column="2" bordered size="small">
         <a-descriptions-item label="地域">{{ fn.region || "-" }}</a-descriptions-item>
         <a-descriptions-item label="触发"
-          ><span class="mono-text">{{ fn.cron || "-" }}</span></a-descriptions-item
+          >{{ cronText(fn.cron) }}<span v-if="fn.cron" class="mono-text muted"> （{{ fn.cron }}）</span></a-descriptions-item
         >
         <a-descriptions-item label="市场" :span="2"
           ><span class="mono-text">{{ fn.market || "-" }}</span></a-descriptions-item
@@ -51,7 +51,7 @@
 import { computed, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import type { CollectorFunctionStatus } from "@/api/collector/runtime-status";
-import { datasetLabel, functionStateInfo, localTimeText } from "./runtime-status-model";
+import { cronText, datasetLabel, functionStateInfo, localTimeText } from "./runtime-status-model";
 
 const props = defineProps<{ fn: CollectorFunctionStatus | null; datasetNames: Map<string, string> }>();
 const emit = defineEmits<{ (event: "close"): void }>();

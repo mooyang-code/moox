@@ -145,3 +145,80 @@ export function datasetFunctions(functions: CollectorFunctionStatus[], dataset: 
   const key = datasetKey(dataset);
   return functions.filter(item => (item.datasets || []).includes(key)).map(item => item.name || "");
 }
+
+const WEEKDAY_NAMES: Record<string, string> = {
+  "0": "日",
+  "1": "一",
+  "2": "二",
+  "3": "三",
+  "4": "四",
+  "5": "五",
+  "6": "六",
+  "7": "日",
+  SUN: "日",
+  MON: "一",
+  TUE: "二",
+  WED: "三",
+  THU: "四",
+  FRI: "五",
+  SAT: "六"
+};
+
+const isNumber = (value: string) => /^\d+$/.test(value);
+const isAny = (value: string) => value === "*" || value === "?";
+const stepOf = (value: string) => /^\*\/(\d+)$/.exec(value)?.[1];
+const pad2 = (value: string) => value.padStart(2, "0");
+
+/** 日期部分：每天 / 工作日 / 每周一、三 / 每月 1 日；无法表达时返回 undefined。 */
+function cronDayText(dom: string, dow: string) {
+  if (isAny(dom) && isAny(dow)) return "每天";
+  if (isAny(dom)) {
+    const upper = dow.toUpperCase();
+    if (upper === "1-5" || upper === "MON-FRI") return "工作日";
+    if (upper === "0,6" || upper === "6,0" || upper === "SAT,SUN" || upper === "SUN,SAT") return "周末";
+    const days = upper.split(",").map(day => WEEKDAY_NAMES[day]);
+    if (days.every(Boolean)) return `每周${days.join("、")}`;
+    return undefined;
+  }
+  if (isAny(dow) && /^\d+(,\d+)*$/.test(dom)) return `每月 ${dom.split(",").join("、")} 日`;
+  return undefined;
+}
+
+/**
+ * 把 cron 表达式翻译成中文，翻译不了时原样返回。
+ * 支持 5 段（分 时 日 月 周）、6 段（秒 分 时 日 月 周）与腾讯云 SCF 的 7 段（秒 分 时 日 月 周 年）。
+ */
+export function cronText(expr?: string) {
+  const raw = (expr || "").trim();
+  if (!raw) return "-";
+  const parts = raw.split(/\s+/);
+  if (parts.length < 5 || parts.length > 7) return raw;
+  const [sec, min, hour, dom, mon, dow, year = "*"] = parts.length === 5 ? ["0", ...parts] : parts;
+  if (!isAny(mon) || !isAny(year)) return raw;
+  const day = cronDayText(dom, dow);
+  if (!day) return raw;
+  // 一天内多次触发时，“每天”可以省略，其余日期限定作为前缀
+  const prefix = day === "每天" ? "" : `${day} `;
+  const secondSuffix = isNumber(sec) && Number(sec) !== 0 ? `（第 ${Number(sec)} 秒）` : "";
+  const hourRange = /^(\d+)-(\d+)$/.exec(hour);
+  const hourScope = hourRange ? `${Number(hourRange[1])}–${Number(hourRange[2])} 点` : "";
+
+  if (min === "*" && (isAny(hour) || hourRange)) {
+    if (sec === "*") return `${prefix}${hourScope}每秒`;
+    if (stepOf(sec)) return `${prefix}${hourScope}每 ${stepOf(sec)} 秒`;
+    if (isNumber(sec)) return `${prefix}${hourScope}每分钟${secondSuffix}`;
+    return raw;
+  }
+  if (!isNumber(sec)) return raw;
+  if (stepOf(min) && (isAny(hour) || hourRange)) return `${prefix}${hourScope}每 ${stepOf(min)} 分钟${secondSuffix}`;
+  if (!isNumber(min)) return raw;
+  const minuteOfHour =
+    Number(min) === 0 && Number(sec) === 0 ? "整点" : `第 ${Number(min)} 分${Number(sec) ? ` ${Number(sec)} 秒` : ""}`;
+  if (isAny(hour)) return `${prefix}每小时${minuteOfHour}`;
+  if (stepOf(hour)) return `${prefix}每 ${stepOf(hour)} 小时${minuteOfHour}`;
+  if (/^\d+(,\d+)*$/.test(hour)) {
+    const time = (h: string) => `${pad2(h)}:${pad2(min)}${Number(sec) ? `:${pad2(sec)}` : ""}`;
+    return `${day} ${hour.split(",").map(time).join("、")}`;
+  }
+  return raw;
+}
