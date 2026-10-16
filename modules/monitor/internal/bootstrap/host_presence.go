@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/notifier"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/notification"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -102,6 +103,14 @@ func hostPresenceTransitionSinkWithGate(provider func(context.Context) (notifica
 				err = sender.Send(ctx, message)
 			}
 			if err == nil {
+				return nil
+			}
+			if notifier.IsPartial(err) {
+				// 已有渠道送达：记录失败的渠道，不再重发，免得已收到的群重复收到。
+				log.WarnContextf(ctx, "host presence notification partially failed agent_id=%s: %v", transition.AgentID, err)
+				if onFailure != nil {
+					onFailure(ctx, transition, err)
+				}
 				return nil
 			}
 			lastErr = err

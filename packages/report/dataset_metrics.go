@@ -45,17 +45,19 @@ type DatasetObservation struct {
 }
 
 type DatasetMetrics struct {
-	enabled                  *prometheus.GaugeVec
-	expectedInterval         *prometheus.GaugeVec
-	info                     *prometheus.GaugeVec
-	inventoryRefreshErrors   prometheus.Counter
-	inventoryLastSuccess     prometheus.Gauge
-	runs                     *prometheus.CounterVec
-	lastRun                  *prometheus.GaugeVec
-	lastSuccess              *prometheus.GaugeVec
-	lastPartial              *prometheus.GaugeVec
-	inputWatermark           *prometheus.GaugeVec
-	outputWatermark          *prometheus.GaugeVec
+	enabled                *prometheus.GaugeVec
+	expectedInterval       *prometheus.GaugeVec
+	info                   *prometheus.GaugeVec
+	inventoryRefreshErrors prometheus.Counter
+	inventoryLastSuccess   prometheus.Gauge
+	runs                   *prometheus.CounterVec
+	lastRun                *prometheus.GaugeVec
+	lastSuccess            *prometheus.GaugeVec
+	lastPartial            *prometheus.GaugeVec
+	inputWatermark         *prometheus.GaugeVec
+	outputWatermark        *prometheus.GaugeVec
+	// outputArrival 是输出水位最近一次前进时的墙上时间（这批数据写入完成的时刻），Monitor 用它算最新一根 K 线的到达延迟。
+	outputArrival            *prometheus.GaugeVec
 	rows                     *prometheus.CounterVec
 	mu                       sync.Mutex
 	expected                 map[DatasetKey]time.Duration
@@ -86,6 +88,7 @@ func NewDatasetMetrics(registerer prometheus.Registerer, module string) (*Datase
 		lastPartial:              prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: prefix + "last_partial_timestamp_seconds", Help: "Unix timestamp of the last realtime dataset run that produced only partial results by design (data still accumulating)."}, labels),
 		inputWatermark:           prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: prefix + "input_watermark_timestamp_seconds", Help: "Latest observed input business watermark."}, labels),
 		outputWatermark:          prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: prefix + "output_watermark_timestamp_seconds", Help: "Latest observed output business watermark."}, labels),
+		outputArrival:            prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: prefix + "output_arrival_timestamp_seconds", Help: "输出水位最近一次前进时的墙上时间（这批数据写入完成的时刻）。"}, labels),
 		rows:                     prometheus.NewCounterVec(prometheus.CounterOpts{Name: prefix + "rows_total", Help: "Rows produced by realtime dataset runs."}, append(labels, "result")),
 		expected:                 make(map[DatasetKey]time.Duration),
 		known:                    make(map[DatasetKey]struct{}),
@@ -94,7 +97,7 @@ func NewDatasetMetrics(registerer prometheus.Registerer, module string) (*Datase
 	}
 	collectors := []prometheus.Collector{
 		m.enabled, m.expectedInterval, m.info, m.inventoryRefreshErrors, m.inventoryLastSuccess,
-		m.runs, m.lastRun, m.lastSuccess, m.lastPartial, m.inputWatermark, m.outputWatermark, m.rows,
+		m.runs, m.lastRun, m.lastSuccess, m.lastPartial, m.inputWatermark, m.outputWatermark, m.outputArrival, m.rows,
 	}
 	registered := make([]prometheus.Collector, 0, len(collectors))
 	for _, collector := range collectors {
@@ -230,20 +233,24 @@ func (m *DatasetMetrics) observeRun(observation DatasetObservation, requireExpec
 		m.lastPartial.WithLabelValues(values...).Set(finishedAt)
 	}
 	m.advanceWatermark(m.inputWatermark, m.inputWatermarkByDataset, observation.Key, observation.InputWatermark)
-	m.advanceWatermark(m.outputWatermark, m.outputWatermarkByDataset, observation.Key, observation.OutputWatermark)
+	if m.advanceWatermark(m.outputWatermark, m.outputWatermarkByDataset, observation.Key, observation.OutputWatermark) {
+		m.outputArrival.WithLabelValues(values...).Set(finishedAt)
+	}
 	return nil
 }
 
-func (m *DatasetMetrics) advanceWatermark(metric *prometheus.GaugeVec, values map[DatasetKey]float64, key DatasetKey, watermark time.Time) {
+// advanceWatermark 只让水位前进，返回本次是否前进了。
+func (m *DatasetMetrics) advanceWatermark(metric *prometheus.GaugeVec, values map[DatasetKey]float64, key DatasetKey, watermark time.Time) bool {
 	if watermark.IsZero() {
-		return
+		return false
 	}
 	seconds := float64(watermark.UTC().Unix())
 	if previous, ok := values[key]; ok && seconds <= previous {
-		return
+		return false
 	}
 	values[key] = seconds
 	metric.WithLabelValues(datasetLabelValues(key)...).Set(seconds)
+	return true
 }
 
 func validateDatasetKey(key DatasetKey) error {

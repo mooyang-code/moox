@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
+	"github.com/mooyang-code/moox/modules/monitor/internal/notifier"
+	"trpc.group/trpc-go/trpc-go/log"
 
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -28,14 +31,15 @@ type Event struct {
 }
 
 type Options struct {
-	Channel func(context.Context) (*domain.NotificationChannel, error)
-	Now     func() time.Time
+	// Sender 返回发给全部通知渠道的发送器；返回 nil 表示没有渠道，只记录告警、不推送。
+	Sender func(context.Context) (notification.Sender, error)
+	Now    func() time.Time
 }
 
 type Evaluator struct {
-	alerts  *store.AlertRepository
-	channel func(context.Context) (*domain.NotificationChannel, error)
-	now     func() time.Time
+	alerts *store.AlertRepository
+	sender func(context.Context) (notification.Sender, error)
+	now    func() time.Time
 }
 
 func NewEvaluator(alerts *store.AlertRepository, opts Options) *Evaluator {
@@ -44,9 +48,9 @@ func NewEvaluator(alerts *store.AlertRepository, opts Options) *Evaluator {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Evaluator{
-		alerts:  alerts,
-		channel: opts.Channel,
-		now:     now,
+		alerts: alerts,
+		sender: opts.Sender,
+		now:    now,
 	}
 }
 
@@ -168,20 +172,26 @@ func (e *Evaluator) recordAndSend(ctx context.Context, check domain.Check, resul
 	if err := e.recordEventObject(ctx, event); err != nil {
 		return err
 	}
-	var sendErr error
-	if e.channel != nil {
-		channel, err := e.channel(ctx)
-		if err != nil {
-			return e.recordSendFailure(ctx, check, result, rule, state, err)
+	if e.sender == nil {
+		return nil
+	}
+	sender, err := e.sender(ctx)
+	if err != nil {
+		return e.recordSendFailure(ctx, check, result, rule, state, err)
+	}
+	if sender == nil {
+		return nil
+	}
+	sendErr := sender.Send(ctx, notification.Message{Key: event.DedupeKey, Severity: notificationSeverity(eventType), Title: event.Check.Name, Body: event.Message})
+	if notifier.IsPartial(sendErr) {
+		// 已有渠道送达：只记录失败的渠道，不按未送达重试，免得已收到的群重复收到。发送可能已耗尽父 context，
+		// 记录用不受取消影响的短期限 context；记录失败也只写日志，不能让调用方把这条通知当成未送达而整体重发。
+		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := e.recordEvent(recordCtx, check, result, rule, state, domain.AlertEventSendFailed, "通知发送失败："+sendErr.Error()); err != nil {
+			log.WarnContextf(ctx, "record partial notification failure check=%s: %v", check.CheckID, err)
 		}
-		if channel == nil || strings.TrimSpace(channel.WebhookURL) == "" {
-			return nil
-		}
-		sender, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channel.ChannelType), WebhookURL: channel.WebhookURL})
-		if err != nil {
-			return e.recordSendFailure(ctx, check, result, rule, state, err)
-		}
-		sendErr = sender.Send(ctx, notification.Message{Key: event.DedupeKey, Severity: notificationSeverity(eventType), Title: event.Check.Name, Body: event.Message})
+		return nil
 	}
 	if sendErr != nil {
 		return e.recordSendFailure(ctx, check, result, rule, state, fmt.Errorf("send alert notification: %w", sendErr))

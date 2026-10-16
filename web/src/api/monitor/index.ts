@@ -1,5 +1,5 @@
 import { callControl } from "@/api/admin/http";
-import type { HealthOverview, NotificationChannelResponse } from "./types";
+import type { HealthOverview, NotificationChannel } from "./types";
 
 const SERVICE = "monitor";
 
@@ -7,11 +7,15 @@ export const monitorApi = {
   getOverview(req: { space_id?: string } = {}) {
     return callControl<typeof req, { overview?: HealthOverview }>(SERVICE, "GetHealthOverview", req);
   },
-  getNotification() {
-    return callControl<Record<string, never>, NotificationChannelResponse>(SERVICE, "GetNotificationChannel", {});
+  /** 列出全部推送渠道（含完整 Webhook URL，只有全局管理员能调用）。 */
+  listNotificationChannels() {
+    return callControl<Record<string, never>, { channels?: NotificationChannel[] }>(SERVICE, "ListNotificationChannels", {});
   },
-  updateNotification(req: { channel_type: string; webhook_url: string }) {
-    return callControl<typeof req, NotificationChannelResponse>(SERVICE, "UpdateNotificationChannel", req);
+  addNotificationChannel(req: { channel_type: string; webhook_url: string }) {
+    return callControl<typeof req, { channel?: NotificationChannel }>(SERVICE, "AddNotificationChannel", req);
+  },
+  deleteNotificationChannel(req: { channel_id: string }) {
+    return callControl<typeof req, Record<string, never>>(SERVICE, "DeleteNotificationChannel", req);
   }
 };
 

@@ -114,7 +114,7 @@ describe("home page", () => {
       pipeline: [
         {
           name: "存储",
-          datasets: [{ producer: "storage", dataset_id: "dataset_abc", freq: "1m", status: "healthy", lag_seconds: "95" }]
+          datasets: [{ producer: "storage", dataset_id: "dataset_abc", freq: "1m", status: "healthy" }]
         }
       ]
     };
@@ -219,7 +219,17 @@ describe("home page", () => {
     ctx.overview.pipeline = [
       {
         name: "存储",
-        datasets: [{ producer: "storage", dataset_id: "dataset_abc", freq: "1m", status: "degraded", lag_seconds: "52920" }]
+        datasets: [
+          {
+            producer: "storage",
+            dataset_id: "dataset_abc",
+            freq: "1m",
+            status: "degraded",
+            latest_bar_close_at: new Date(Date.now() - 52980_000).toISOString(),
+            waiting_bars: 882,
+            overdue_seconds: "52920"
+          }
+        ]
       }
     ];
     const wrapper = await render();

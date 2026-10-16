@@ -136,8 +136,8 @@ func TestEnsureDefaultHostAlertRulesCoversRegisteredAgent(t *testing.T) {
 	}
 }
 
-func TestEnsureDefaultCheckAlertRulesDisablesPersistedDefaultsWhenWebhookCleared(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old")
+// 部署配置里的推送地址只写入一次（启动时只在首次建库调用）；没有配置地址时不写入渠道。
+func TestSeedNotificationChannelAddsDeploymentChannel(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -147,67 +147,25 @@ func TestEnsureDefaultCheckAlertRulesDisablesPersistedDefaultsWhenWebhookCleared
 		t.Fatal(err)
 	}
 	repositories := manager.Repositories()
-	check := domain.Check{
-		SpaceID: "crypto", CheckID: "market_canary:kline:BTC-USDT:1m",
-		Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true,
-	}
-	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureDefaultCheckAlertRules(t.Context(), repositories); err != nil {
-		t.Fatal(err)
-	}
-
 	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
-	if err := ensureDefaultCheckAlertRules(t.Context(), repositories); err != nil {
+	if err := seedNotificationChannel(t.Context(), repositories); err != nil {
 		t.Fatal(err)
 	}
-	rule, err := repositories.Alerts.GetRule(t.Context(), "crypto", "default:"+check.CheckID)
-	if err != nil {
+	if channels, err := repositories.Notifications.List(t.Context()); err != nil || len(channels) != 0 {
+		t.Fatalf("empty deployment URL must not add a channel: %+v err=%v", channels, err)
+	}
+	const url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=seed"
+	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", url)
+	if err := seedNotificationChannel(t.Context(), repositories); err != nil {
 		t.Fatal(err)
 	}
-	if !rule.Enabled {
-		t.Fatal("default rule was disabled after webhook was cleared")
+	channels, err := repositories.Notifications.List(t.Context())
+	if err != nil || len(channels) != 1 || channels[0].ChannelType != "wecom" || channels[0].WebhookURL != url {
+		t.Fatalf("channels = %+v err=%v", channels, err)
 	}
-	channel, err := repositories.Notifications.GetGlobal(t.Context())
-	if err != nil || channel.WebhookURL != "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old" {
-		t.Fatalf("global channel = %+v err=%v", channel, err)
-	}
-}
-
-func TestEnsureDefaultCheckAlertRulesRotatesPersistedWebhook(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old")
-	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = manager.Close() })
-	if err := manager.ApplySchema(schema.SQL()); err != nil {
-		t.Fatal(err)
-	}
-	repositories := manager.Repositories()
-	check := domain.Check{
-		SpaceID: "crypto", CheckID: "market_canary:kline:BTC-USDT:1m",
-		Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true,
-	}
-	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureDefaultCheckAlertRules(t.Context(), repositories); err != nil {
-		t.Fatal(err)
-	}
-
-	const rotated = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=new"
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", rotated)
-	if err := ensureDefaultCheckAlertRules(t.Context(), repositories); err != nil {
-		t.Fatal(err)
-	}
-	channel, err := repositories.Notifications.GetGlobal(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if channel.WebhookURL != "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old" {
-		t.Fatalf("seeded global channel was overwritten on restart: %+v", channel)
+	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "https://not-approved.example/hook")
+	if err := seedNotificationChannel(t.Context(), repositories); err == nil {
+		t.Fatal("an invalid deployment URL must fail the first start")
 	}
 }
 

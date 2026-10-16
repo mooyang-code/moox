@@ -148,19 +148,84 @@ func TestKlineFreshnessEvaluatorRejectsAmbiguousMarketSuffix(t *testing.T) {
 	require.Equal(t, 2, reports[0].MissingCount)
 }
 
-func TestKlineFreshnessEvaluatorSkipsStockClosedAndWarmup(t *testing.T) {
+// A 股按交易日历判断应收的最新一根：午休、下午第一根收线前、次日开盘前都指向上一时段的最后一根，
+// 不需要“休市跳过”“开盘预热”；缺的根真的超时才算停止更新。2026-09-08 是周二，09-09 是周三。
+func TestKlineFreshnessEvaluatorUsesTheStockCalendar(t *testing.T) {
+	shanghai := time.FixedZone("Asia/Shanghai", 8*60*60)
+	local := func(day, clock string) time.Time {
+		value, err := time.ParseInLocation("2006-01-02 15:04:05", day+" "+clock, shanghai)
+		require.NoError(t, err)
+		return value.UTC()
+	}
 	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockcn", ViewID: "view", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, StaleAfter: 10 * time.Minute}
-	query := newViewSummaryQuery(t, []viewSummaryTestSample{{SpaceID: "stockcn", Latest: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC), Subjects: 1, ObservedAt: time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC)}})
-	for now, reason := range map[time.Time]string{
-		time.Date(2026, 9, 8, 4, 0, 0, 0, time.UTC):   "skipped_market_closed",
-		time.Date(2026, 9, 8, 1, 30, 30, 0, time.UTC): "skipped_session_warmup",
-	} {
+	evaluate := func(latest, now time.Time) KlineFreshnessReport {
+		query := newViewSummaryQuery(t, []viewSummaryTestSample{{SpaceID: "stockcn", Latest: latest, Subjects: 1, ObservedAt: now}})
 		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 		require.NoError(t, err)
 		require.Len(t, reports, 1)
-		require.True(t, reports[0].Skipped)
-		require.Equal(t, reason, reports[0].Reason)
+		return reports[0]
 	}
+	morningClose := local("2026-09-08", "11:29:00")
+	for name, now := range map[string]time.Time{
+		"午休 12:10": local("2026-09-08", "12:10:00"),
+		"13:00:30": local("2026-09-08", "13:00:30"),
+		"下午第一根刚收线": local("2026-09-08", "13:01:20"),
+	} {
+		report := evaluate(morningClose, now)
+		require.False(t, report.Skipped, name)
+		require.True(t, report.Success, "%s reason=%s diagnostic=%s", name, report.Reason, report.Diagnostic)
+	}
+	dayClose := local("2026-09-08", "14:59:00")
+	report := evaluate(dayClose, local("2026-09-09", "09:00:00"))
+	require.True(t, report.Success, "次日开盘前 reason=%s", report.Reason)
+	// 上午停在 10:00：缺的 10:01 那根 10:02 收线，到 12:10 已逾期两个多小时（不把午休算进去也远超 10 分钟）。
+	report = evaluate(local("2026-09-08", "10:00:00"), local("2026-09-08", "12:10:00"))
+	require.False(t, report.Success)
+	require.True(t, report.ViewStale)
+	require.Equal(t, local("2026-09-08", "12:10:00").Sub(local("2026-09-08", "10:02:00")), report.StaleAge)
+}
+
+// Storage 按连续时间判落后：下午第一根刚到时，还停在 11:29 的标的会被它算成落后。Monitor 按交易日历再筛：
+// 它们缺的 13:00 那根 13:01 收线，还在允许迟到之内就不算过期；等到超过“允许迟到 + stale_after”才算。
+func TestKlineFreshnessEvaluatorFiltersStorageLaggingByCalendar(t *testing.T) {
+	shanghai := time.FixedZone("Asia/Shanghai", 8*60*60)
+	local := func(clock string) time.Time {
+		value, err := time.ParseInLocation("2006-01-02 15:04:05", "2026-09-08 "+clock, shanghai)
+		require.NoError(t, err)
+		return value.UTC()
+	}
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockcn", ViewID: "view", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, StaleAfter: 5 * time.Minute}
+	evaluate := func(now time.Time) KlineFreshnessReport {
+		query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+			SpaceID: "stockcn", Latest: local("13:00:00"), TrackedSince: local("09:30:00"), Subjects: 3, Lagging: 2, ObservedAt: now,
+			LaggingSubjects: []viewSummaryLaggingSample{
+				{Subject: "600000.XSHG", DataTime: local("11:29:00"), ObservedAt: now},
+				{Subject: "600001.XSHG", DataTime: local("11:29:00"), ObservedAt: now},
+			},
+		}})
+		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+		require.NoError(t, err)
+		require.Len(t, reports, 1)
+		return reports[0]
+	}
+	early := evaluate(local("13:01:20"))
+	require.True(t, early.Success, "reason=%s stale=%d diagnostic=%s", early.Reason, early.StaleCount, early.Diagnostic)
+	late := evaluate(local("13:07:00"))
+	require.False(t, late.Success)
+	require.Equal(t, 2, late.StaleCount)
+	require.Equal(t, 6*time.Minute, late.StaleAge)
+}
+
+func TestKlineFreshnessEvaluatorReportsCalendarCoverage(t *testing.T) {
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "stockcn", ViewID: "view", Frequency: "1m", MarketID: "stockcn", CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}, StaleAfter: 10 * time.Minute}
+	now := time.Date(2099, 1, 5, 2, 0, 0, 0, time.UTC)
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{SpaceID: "stockcn", Latest: now.Add(-time.Hour), Subjects: 1, ObservedAt: now}})
+	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+	require.NoError(t, err)
+	require.Len(t, reports, 1)
+	require.False(t, reports[0].Success)
+	require.Equal(t, "calendar_not_covered", reports[0].Reason)
+	require.Contains(t, reports[0].Diagnostic, "日历未覆盖")
 }
 
 type viewSummaryLaggingSample struct {
@@ -262,7 +327,6 @@ func TestKlineFrequencyAcceptsOnlyCanonicalIdentities(t *testing.T) {
 	require.True(t, isValidKlineFrequency("1h"))
 	require.True(t, isValidKlineFrequency("1mo"))
 	require.False(t, isValidKlineFrequency("1H"), "Storage identities are canonical")
-	require.Equal(t, time.Hour, klineFrequencyDuration("1H"), "rules may use aliases")
 	require.Equal(t, "1h", canonicalRuleFrequency("1H"))
 }
 

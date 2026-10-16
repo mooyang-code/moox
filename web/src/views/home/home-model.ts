@@ -2,7 +2,7 @@ import type { ActivityLogItem } from "@/api/admin/activity";
 import type { FactorSetInfo } from "@/api/factor/types";
 import type { HealthAlert, HealthHost, HealthOverview } from "@/api/monitor";
 import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
-import { closedBarLag, freqSeconds, runBarLag, setHealth } from "@/views/factor/shared/health";
+import { freqSeconds, runBarLag, setHealth } from "@/views/factor/shared/health";
 import { statusLabel } from "@/views/ops/monitor/health-display";
 import { resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { percent, rankTargets, targetStateTag } from "@/views/strategy/model";
@@ -123,36 +123,37 @@ const TONE_RANK: Record<Tone, number> = { bad: 0, warn: 1, idle: 2, ok: 3 };
 const FRESHNESS_RANK: Record<Tone, number> = { bad: 0, warn: 1, ok: 2, idle: 3 };
 
 /**
- * 数据新鲜度：每个数据集在各环节落后了多少，异常的排前面，其次落后多的。
- * 落后量以“最近一根已收盘的 K 线”为基准，不是 现在 − 水位时间：水位是 K 线的开盘时间，
- * 用当前时间去减，一个完全追平的 1m 数据集也会常年显示 1～2 分钟。时钟取监控概览的生成时间，避免浏览器时钟偏差。
+ * 数据新鲜度：每个数据集在各环节是否追平，异常的排前面，其次等得久的。
+ * 后端按市场交易日历算出此刻应已收线的最新一根：已经到了就是“已追平”；还没到的显示从它收线起已等待多久。
+ * 不用“当前时间 − 最新 K 线时间”，休市、午休、节假日不会被当作落后。
  */
 export function freshnessRows(overview: HealthOverview | undefined, names: NameBook, nowMs: number = Date.now()): FreshnessRow[] {
-  const clockSeconds = (toMillis(overview?.generated_at) ?? nowMs) / 1000;
+  const clockMs = toMillis(overview?.generated_at) ?? nowMs;
   const entries = (overview?.pipeline || []).flatMap(stage =>
     (stage.datasets || []).map(item => {
       const id = item.dataset_id || "";
       const producer = item.producer || "";
       const tone = toneOf(item.status);
-      const watermark = toMillis(item.output_watermark_at);
-      const rawSeconds = toSeconds(item.lag_seconds);
-      const barLag =
-        watermark !== null && freqSeconds(item.freq || "") > 0
-          ? closedBarLag(item.freq || "", watermark / 1000, clockSeconds).seconds
-          : null;
-      // 状态未知时服务端给的 0 不代表“已追平”，不显示；正常即已追平；异常时优先写落后的 K 线时长，没有水位时退回原始延迟。
-      const behind = tone === "idle" ? null : tone === "ok" ? 0 : barLag || rawSeconds;
-      // 水位是最近一根 K 线的开盘时间；没有水位时由“服务端时钟 − 延迟”推出。收盘时刻不会晚于服务端时钟。
-      const openMs = watermark ?? (rawSeconds === null ? null : clockSeconds * 1000 - rawSeconds * 1000);
-      const closeMs =
-        tone === "idle" || openMs === null ? null : Math.min(openMs + freqSeconds(item.freq || "") * 1000, clockSeconds * 1000);
+      const waiting = Number(item.waiting_bars) || 0;
+      const since = toMillis(item.waiting_since);
+      // 状态未知时不下“已追平”的结论；有还没到的根时写已等待多久（按服务端时钟），否则已追平。
+      const behind =
+        tone === "idle"
+          ? null
+          : waiting > 0
+            ? since === null
+              ? toSeconds(item.overdue_seconds) || 0
+              : Math.max(0, Math.floor((clockMs - since) / 1000))
+            : 0;
+      // 数据已写到的最近一根的收线时刻，由后端按交易日历算出。
+      const closeMs = tone === "idle" ? null : toMillis(item.latest_bar_close_at);
       const row: FreshnessRow = {
         key: `${producer}/${item.space_id}/${id}/${item.freq}`,
         datasetId: id,
         stage: STAGE_LABELS[producer] || stage.name || producer,
         name: names.datasets[id] || names.views[id] || id,
         freq: item.freq || "",
-        lag: behind === null ? "—" : behind === 0 ? "已追平" : humanizeDuration(behind),
+        lag: behind === null ? "—" : waiting > 0 ? `等待 ${humanizeDuration(behind)}` : "已追平",
         tone,
         status: statusLabel(item.status),
         reason: item.reason || "",
@@ -340,7 +341,7 @@ export function attentionItems(input: {
       tone: row.tone,
       source: "数据",
       title: `${row.stage} · ${row.name}${row.freq ? ` · ${row.freq}` : ""}`,
-      detail: `落后 ${row.lag}`,
+      detail: row.lag === "已追平" || row.lag === "—" ? row.reason || row.status : row.lag,
       when: "",
       target: row.path
     });

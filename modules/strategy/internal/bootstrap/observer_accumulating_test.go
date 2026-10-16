@@ -54,27 +54,27 @@ func TestObserverTreatsHistoryAccumulationAsPartialWithinTheLimit(t *testing.T) 
 	observer.now = func() time.Time { return now }
 	barEnd := now
 
-	observer.ObservePeriod(instance, "1h", barEnd, store.StatusSkipped, "history_insufficient")
-	observer.ObservePeriod(instance, "1h", barEnd.Add(time.Hour), store.StatusSkipped, "factor_skipped")
+	observer.ObservePeriod(instance, "1h", barEnd.Add(-time.Hour), barEnd, store.StatusSkipped, "history_insufficient")
+	observer.ObservePeriod(instance, "1h", barEnd.Add(time.Hour).Add(-time.Hour), barEnd.Add(time.Hour), store.StatusSkipped, "factor_skipped")
 	require.EqualValues(t, 2, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "partial"))
 	require.Zero(t, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "incomplete"))
 	require.Zero(t, counterByLabel(t, registry, "moox_strategy_runs_total", "error"), "积累中不计模块失败")
 	require.EqualValues(t, 2, counterByLabel(t, registry, "moox_strategy_runs_total", "success"), "积累中模块在正常处理事件，记成功，健康检查才不会因长时间没有成功而过期")
 
 	now = now.Add(minAccumulationLimit)
-	observer.ObservePeriod(instance, "1h", barEnd.Add(2*time.Hour), store.StatusSkipped, "history_insufficient")
+	observer.ObservePeriod(instance, "1h", barEnd.Add(2*time.Hour).Add(-time.Hour), barEnd.Add(2*time.Hour), store.StatusSkipped, "history_insufficient")
 	require.EqualValues(t, 3, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "partial"), "上限之内（72 小时，含一小时余量）")
 
 	now = now.Add(2 * time.Hour)
-	observer.ObservePeriod(instance, "1h", barEnd.Add(3*time.Hour), store.StatusSkipped, "history_insufficient")
+	observer.ObservePeriod(instance, "1h", barEnd.Add(3*time.Hour).Add(-time.Hour), barEnd.Add(3*time.Hour), store.StatusSkipped, "history_insufficient")
 	require.EqualValues(t, 1, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "incomplete"), "超过上限不再是积累")
 	require.EqualValues(t, 1, counterByLabel(t, registry, "moox_strategy_runs_total", "error"), "回到模块失败")
 
-	observer.ObservePeriod(instance, "1h", barEnd.Add(4*time.Hour), store.StatusOK, "")
+	observer.ObservePeriod(instance, "1h", barEnd.Add(4*time.Hour).Add(-time.Hour), barEnd.Add(4*time.Hour), store.StatusOK, "")
 	require.Empty(t, observer.accumulatingSince, "ok 之后清除计时")
-	observer.ObservePeriod(instance, "1h", barEnd.Add(5*time.Hour), store.StatusSkipped, "history_insufficient")
+	observer.ObservePeriod(instance, "1h", barEnd.Add(5*time.Hour).Add(-time.Hour), barEnd.Add(5*time.Hour), store.StatusSkipped, "history_insufficient")
 	require.EqualValues(t, 4, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "partial"), "重新计时")
 
-	observer.ObservePeriod(instance, "1h", barEnd.Add(6*time.Hour), store.StatusSkipped, "factor_missing")
+	observer.ObservePeriod(instance, "1h", barEnd.Add(6*time.Hour).Add(-time.Hour), barEnd.Add(6*time.Hour), store.StatusSkipped, "factor_missing")
 	require.EqualValues(t, 2, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "incomplete"), "与积累无关的跳过原因照旧")
 }

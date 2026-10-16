@@ -16,9 +16,10 @@ func projectPipeline(facts observability.Overview) []*pb.HealthPipelineStage {
 		{"collection", []string{"collector"}},
 		{"storage", []string{"storage-primary", "storage-node", "storage-view"}},
 		{"factor", []string{"factor-mgr"}},
+		{"strategy", []string{"strategy"}},
 		{"trade", []string{"trade"}},
 	}
-	producerStage := map[string]string{"collector": "collection", "storage": "storage", "storage_view": "storage", "factor": "factor", "trade": "trade"}
+	producerStage := map[string]string{"collector": "collection", "storage": "storage", "storage_view": "storage", "factor": "factor", "strategy": "strategy", "trade": "trade"}
 	storageScopes := make(map[string]bool)
 	key := func(item observability.DatasetFrequencyStatus) string {
 		return item.SpaceID + "\x00" + item.DatasetID + "\x00" + strings.ToLower(item.Freq)
@@ -72,7 +73,16 @@ func projectPipeline(facts observability.Overview) []*pb.HealthPipelineStage {
 
 func projectDataset(item observability.DatasetFrequencyStatus) *pb.HealthDataset {
 	status := domain.HealthStatus(item.Status)
-	return &pb.HealthDataset{Producer: item.Producer, SpaceId: item.SpaceID, DatasetId: item.DatasetID, Freq: item.Freq, Status: status, Reason: ChineseReason(item.Reason), RawError: unhealthyRaw(status, item.Reason, ""), InputWatermarkAt: stamp(item.InputWatermarkAt), OutputWatermarkAt: stamp(item.OutputWatermarkAt), LastSuccessAt: stamp(item.LastSuccessAt), LastRunAt: stamp(item.LastRunAt), LastReportedAt: stamp(item.LastReportedAt), LagSeconds: item.LagSeconds, LagLimitSeconds: item.LagLimitSeconds}
+	return &pb.HealthDataset{
+		Producer: item.Producer, SpaceId: item.SpaceID, DatasetId: item.DatasetID, DisplayName: item.DisplayName, Freq: item.Freq,
+		Status: status, Reason: ChineseReason(item.Reason), RawError: unhealthyRaw(status, item.Reason, ""),
+		InputWatermarkAt: stamp(item.InputWatermarkAt), OutputWatermarkAt: stamp(item.OutputWatermarkAt),
+		LastSuccessAt: stamp(item.LastSuccessAt), LastRunAt: stamp(item.LastRunAt), LastReportedAt: stamp(item.LastReportedAt),
+		LatestBarCloseAt: stamp(item.LatestBarClose), ArrivedAt: stamp(item.OutputArrivedAt),
+		DelaySeconds: item.DelaySeconds, DelayKnown: item.DelayKnown,
+		WaitingBars: int32(item.WaitingBars), WaitingSince: stamp(item.WaitingSince), OverdueSeconds: item.OverdueSeconds,
+		LatenessLimitSeconds: item.LatenessLimitSeconds, ClockIssue: item.ClockIssue,
+	}
 }
 
 func rank(status string) int {

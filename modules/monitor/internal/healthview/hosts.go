@@ -55,7 +55,9 @@ func projectHosts(facts observability.Overview) []*pb.HealthHost {
 	var out []*pb.HealthHost
 	covered := make(map[string]bool)
 	for _, item := range facts.Hosts {
-		host := &pb.HealthHost{HostId: item.HostID, AgentId: item.AgentID, Hostname: item.Hostname, Status: domain.HealthStatus(item.Status), Reason: ChineseReason(item.Reason), CpuPercent: item.CPUPercent, MemoryPercent: item.MemoryPercent, DiskPercent: item.FilesystemMaxPercent, MemoryAvailable: item.MemoryAvailable, DiskAvailable: item.DiskAvailable, MetricsAvailable: item.MetricsAvailable, CpuAvailable: item.CPUAvailable, LastReportedAt: stamp(item.LastSeenAt)}
+		host := &pb.HealthHost{HostId: item.HostID, AgentId: item.AgentID, Hostname: item.Hostname, Status: domain.HealthStatus(item.Status), Reason: ChineseReason(item.Reason), CpuPercent: item.CPUPercent, MemoryPercent: item.MemoryPercent, DiskPercent: item.FilesystemMaxPercent, MemoryAvailable: item.MemoryAvailable, DiskAvailable: item.DiskAvailable, MetricsAvailable: item.MetricsAvailable, CpuAvailable: item.CPUAvailable, LastReportedAt: stamp(item.LastSeenAt),
+			CpuCores: item.CPUCores, MemoryTotalBytes: item.MemoryTotalBytes, MemoryUsedBytes: item.MemoryUsedBytes,
+			DiskTotalBytes: item.FilesystemTotalBytes, DiskUsedBytes: item.FilesystemUsedBytes, DiskMountpoint: item.FilesystemMountpoint}
 		decorate(host)
 		out = append(out, host)
 		covered[item.HostID] = true

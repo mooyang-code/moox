@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
+	"github.com/mooyang-code/moox/modules/monitor/internal/notifier"
 
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -22,10 +24,11 @@ import (
 // AlertEvaluator computes host threshold transitions after Storage accepts a sample.
 // Alert failures never participate in the EventBus ACK decision.
 type AlertEvaluator struct {
-	Cache        *RuleCache
-	Repository   *store.AlertRepository
-	Now          func() time.Time
-	Notification func(context.Context) (*domain.NotificationChannel, error)
+	Cache      *RuleCache
+	Repository *store.AlertRepository
+	Now        func() time.Time
+	// Notification 返回发给全部通知渠道的发送器；返回 nil 表示没有渠道。
+	Notification func(context.Context) (notification.Sender, error)
 	mu           sync.Mutex
 	seen         map[string]struct{}
 }
@@ -199,7 +202,7 @@ func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, samp
 		}
 	}
 	if e.Notification != nil {
-		channel, err := e.Notification(ctx)
+		sender, err := e.Notification(ctx)
 		if err != nil {
 			if persistBeforeSend {
 				state.LastReminderAt = nil
@@ -208,17 +211,8 @@ func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, samp
 			_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
 			return err
 		}
-		if channel == nil || strings.TrimSpace(channel.WebhookURL) == "" {
+		if sender == nil {
 			return nil
-		}
-		sender, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channel.ChannelType), WebhookURL: channel.WebhookURL})
-		if err != nil {
-			if persistBeforeSend {
-				state.LastReminderAt = nil
-				_ = e.Repository.UpsertState(ctx, state)
-			}
-			_ = e.Repository.CreateEvent(ctx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
-			return err
 		}
 		severity := notification.SeverityCritical
 		if eventType == domain.AlertEventResolved {
@@ -226,7 +220,15 @@ func (e *AlertEvaluator) record(ctx context.Context, rule domain.AlertRule, samp
 		} else if eventType == domain.AlertEventReminder {
 			severity = notification.SeverityWarning
 		}
-		if err := sender.Send(ctx, notification.Message{Key: rule.RuleID + ":" + rule.CheckID, Severity: severity, Title: title, Body: message}); err != nil {
+		err = sender.Send(ctx, notification.Message{Key: rule.RuleID + ":" + rule.CheckID, Severity: severity, Title: title, Body: message})
+		if notifier.IsPartial(err) {
+			// 已有渠道送达：只记录失败的渠道，不按未送达重试；发送可能已耗尽父 context，记录用不受取消影响的短期限 context。
+			recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			_ = e.Repository.CreateEvent(recordCtx, &domain.AlertEvent{EventID: uuid.NewString(), SpaceID: SpaceID, RuleID: rule.RuleID, CheckID: rule.CheckID, EventType: domain.AlertEventSendFailed, Status: state.Status, Message: err.Error(), CreatedAt: now})
+			return nil
+		}
+		if err != nil {
 			if persistBeforeSend {
 				state.LastReminderAt = nil
 				_ = e.Repository.UpsertState(ctx, state)

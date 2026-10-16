@@ -2,8 +2,7 @@ package domain
 
 import "time"
 
-const GlobalNotificationChannelID = "global"
-
+// NotificationChannel 是一个告警推送渠道（企业微信或飞书群机器人）；告警发给全部渠道。
 type NotificationChannel struct {
 	ID          int64     `gorm:"column:c_id;primaryKey"`
 	ChannelID   string    `gorm:"column:c_channel_id"`

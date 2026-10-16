@@ -94,27 +94,28 @@ describe("home data rows", () => {
         {
           name: "存储",
           datasets: [
-            { producer: "storage", dataset_id: "dataset_abc", freq: "1h", status: "healthy", lag_seconds: "95" },
+            { producer: "storage", dataset_id: "dataset_abc", freq: "1h", status: "healthy" },
             {
               producer: "storage",
               dataset_id: "dataset_abc",
               freq: "1m",
               status: "degraded",
-              lag_seconds: "51035",
+              waiting_bars: 850,
+              overdue_seconds: "51035",
               reason: "落后"
             }
           ]
         },
         {
           name: "视图",
-          datasets: [{ producer: "storage_view", dataset_id: "view_xyz", freq: "1m", status: "healthy", lag_seconds: 4535 }]
+          datasets: [{ producer: "storage_view", dataset_id: "view_xyz", freq: "1m", status: "healthy" }]
         }
       ]
     };
     const rows = freshnessRows(overview, names);
-    // 正常的写“已追平”；异常的写落后时长（这里没有水位时间，退回服务端给的延迟）。
+    // 应收的最新一根已到写“已追平”；还没到的写从它收线起已等待多久（这里没有收线时刻，用服务端给的等待时长）。
     expect(rows.map(row => [row.stage, row.name, row.freq, row.lag, row.status])).toEqual([
-      ["入库", "现货K线", "1m", "14 小时 10 分", "需关注"],
+      ["入库", "现货K线", "1m", "等待 14 小时 10 分", "需关注"],
       ["入库", "现货K线", "1h", "已追平", "正常"],
       ["视图", "因子宽表", "1m", "已追平", "正常"]
     ]);
@@ -320,8 +321,22 @@ describe("home tiles", () => {
           {
             name: "存储",
             datasets: [
-              { producer: "storage", dataset_id: "dataset_abc", freq: "1m", status: "degraded", lag_seconds: "51035" },
-              { producer: "storage", dataset_id: "dataset_abc", freq: "1h", status: "healthy", lag_seconds: "95" }
+              {
+                producer: "storage",
+                dataset_id: "dataset_abc",
+                freq: "1m",
+                status: "degraded",
+                latest_bar_close_at: new Date(NOW - 51035_000).toISOString(),
+                waiting_bars: 850,
+                overdue_seconds: "51000"
+              },
+              {
+                producer: "storage",
+                dataset_id: "dataset_abc",
+                freq: "1h",
+                status: "healthy",
+                latest_bar_close_at: new Date(NOW - 3600_000).toISOString()
+              }
             ]
           }
         ]
@@ -333,7 +348,7 @@ describe("home tiles", () => {
     expect(facts.map(fact => [fact.key, fact.value, fact.tone])).toEqual([
       ["strategy", "09:58:00", "ok"],
       ["factor", "09:59:00", "ok"],
-      ["data", "10-12 19:50:25", "warn"]
+      ["data", "10-12 19:49:25", "warn"]
     ]);
     expect(bannerFacts({ strategies: [], factors: [], freshness: [], nowMs: NOW }).map(fact => fact.value)).toEqual([
       "—",
@@ -405,8 +420,22 @@ describe("home tiles", () => {
           {
             name: "存储",
             datasets: [
-              { producer: "storage", dataset_id: "d1", freq: "1m", status: "degraded", lag_seconds: "900" },
-              { producer: "storage", dataset_id: "d2", freq: "1m", status: "healthy", lag_seconds: "5" }
+              {
+                producer: "storage",
+                dataset_id: "d1",
+                freq: "1m",
+                status: "degraded",
+                latest_bar_close_at: new Date(NOW - 840_000).toISOString(),
+                waiting_bars: 14,
+                overdue_seconds: "780"
+              },
+              {
+                producer: "storage",
+                dataset_id: "d2",
+                freq: "1m",
+                status: "healthy",
+                latest_bar_close_at: new Date(NOW - 5_000).toISOString()
+              }
             ]
           }
         ]
@@ -461,15 +490,40 @@ describe("home tiles", () => {
     const at = (secondsAgo: number) => new Date(NOW - secondsAgo * 1000).toISOString();
     const healthy = cardsOf(
       [set("a", 120)],
-      [{ producer: "storage", dataset_id: "dataset_abc", freq: "1m", status: "healthy", output_watermark_at: at(120) }]
+      [
+        {
+          producer: "storage",
+          dataset_id: "dataset_abc",
+          freq: "1m",
+          status: "healthy",
+          output_watermark_at: at(120),
+          latest_bar_close_at: at(60)
+        }
+      ]
     );
     expect(healthy[1]).toMatchObject({ note: "2 个因子 · 收盘 09:59:00", tone: "ok" });
     expect(healthy[2]).toMatchObject({ note: "收盘 09:59:00", tone: "ok" });
     const bad = cardsOf(
       [set("a", 120), set("b", 1860, "failed")],
       [
-        { producer: "storage", dataset_id: "dataset_abc", freq: "1m", status: "healthy", output_watermark_at: at(120) },
-        { producer: "storage", dataset_id: "view_xyz", freq: "1m", status: "degraded", output_watermark_at: at(7200) }
+        {
+          producer: "storage",
+          dataset_id: "dataset_abc",
+          freq: "1m",
+          status: "healthy",
+          output_watermark_at: at(120),
+          latest_bar_close_at: at(60)
+        },
+        {
+          producer: "storage",
+          dataset_id: "view_xyz",
+          freq: "1m",
+          status: "degraded",
+          output_watermark_at: at(7200),
+          latest_bar_close_at: at(7140),
+          waiting_bars: 119,
+          waiting_since: at(7080)
+        }
       ]
     );
     // 异常的任务 / 数据集排在前面：卡片上的时间就是它们自己的收盘时间，不会被正常的覆盖。
@@ -501,9 +555,23 @@ describe("home tiles", () => {
           {
             name: "采集",
             datasets: [
-              { producer: "collector", dataset_id: "dataset_abc", freq: "1h", status: "unknown", lag_seconds: "0" },
-              { producer: "storage", dataset_id: "dataset_abc", freq: "1m", status: "healthy", lag_seconds: "5" },
-              { producer: "storage", dataset_id: "dataset_abc", freq: "1h", status: "degraded", lag_seconds: "900" }
+              { producer: "collector", dataset_id: "dataset_abc", freq: "1h", status: "unknown" },
+              {
+                producer: "storage",
+                dataset_id: "dataset_abc",
+                freq: "1m",
+                status: "healthy",
+                latest_bar_close_at: new Date(NOW - 60_000).toISOString()
+              },
+              {
+                producer: "storage",
+                dataset_id: "dataset_abc",
+                freq: "1h",
+                status: "degraded",
+                latest_bar_close_at: new Date(NOW - 3600_000).toISOString(),
+                waiting_bars: 1,
+                waiting_since: new Date(NOW - 900_000).toISOString()
+              }
             ]
           }
         ]
@@ -512,13 +580,13 @@ describe("home tiles", () => {
       NOW
     );
     expect(rows.map(row => [row.freq, row.lag, row.tone])).toEqual([
-      ["1h", "15 分钟", "warn"],
+      ["1h", "等待 15 分钟", "warn"],
       ["1m", "已追平", "ok"],
       ["1h", "—", "idle"]
     ]);
     const facts = bannerFacts({ strategies: [], factors: [], freshness: rows, nowMs: NOW });
-    // 1h 数据集落后 15 分钟：没有水位时由“服务端时钟 − 延迟”推出开盘 09:45:00，收盘不晚于服务端时钟，即 10:00:00。
-    expect(facts[2]).toMatchObject({ value: "10:00:00", tone: "warn" });
+    // 横幅写 1h 数据集已到的最新一根的收线时间 09:00（后端按交易日历算出）；它在等待 10:00 前缺的那根，所以换成告警色。
+    expect(facts[2]).toMatchObject({ value: "09:00:00", tone: "warn" });
   });
 
   it("counts stale data as something to handle, without repeating what a monitor alert already covers", () => {
@@ -528,8 +596,22 @@ describe("home tiles", () => {
           {
             name: "存储",
             datasets: [
-              { producer: "storage", dataset_id: "dataset_abc", freq: "1m", status: "degraded", lag_seconds: "52920" },
-              { producer: "storage", dataset_id: "dataset_abc", freq: "1h", status: "degraded", lag_seconds: "18660" }
+              {
+                producer: "storage",
+                dataset_id: "dataset_abc",
+                freq: "1m",
+                status: "degraded",
+                waiting_bars: 882,
+                overdue_seconds: "52920"
+              },
+              {
+                producer: "storage",
+                dataset_id: "dataset_abc",
+                freq: "1h",
+                status: "degraded",
+                waiting_bars: 5,
+                overdue_seconds: "18660"
+              }
             ]
           }
         ]
@@ -546,8 +628,8 @@ describe("home tiles", () => {
     };
     const items = attentionItems({ ...base, alerts: [] });
     expect(items.map(item => [item.source, item.title, item.detail])).toEqual([
-      ["数据", "入库 · 现货K线 · 1m", "落后 14 小时 42 分"],
-      ["数据", "入库 · 现货K线 · 1h", "落后 5 小时 11 分"]
+      ["数据", "入库 · 现货K线 · 1m", "等待 14 小时 42 分"],
+      ["数据", "入库 · 现货K线 · 1h", "等待 5 小时 11 分"]
     ]);
     expect(statusLine({ attention: items, overview: {}, monitorError: "" })).toEqual({ tone: "warn", text: "2 项需要处理" });
     const covered = attentionItems({
@@ -583,7 +665,7 @@ describe("home tiles", () => {
     expect(rows.map(row => row.title)).toEqual(["现货K线 1h：新增 1 个、移除 0 个标的，10-13 09:00 生效"]);
   });
 
-  it("measures data lag against the latest closed bar, so a caught-up dataset never shows a delay", () => {
+  it("reads caught-up and waiting from the backend's calendar-aware latest bar, never from now minus the watermark", () => {
     const at = (secondsBefore: number) => new Date(NOW - secondsBefore * 1000).toISOString();
     const rows = freshnessRows(
       {
@@ -592,23 +674,25 @@ describe("home tiles", () => {
           {
             name: "存储",
             datasets: [
-              // 10:00:00 时最近一根已收盘的 1m K 线是 09:58 开盘的那根；09:58 的水位就是已追平，尽管“现在 − 水位”是 2 分钟。
+              // 应收的最新一根已到：已追平，尽管“现在 − 水位”是 2 分钟。
               {
                 producer: "storage",
                 dataset_id: "dataset_abc",
                 freq: "1m",
                 status: "healthy",
                 output_watermark_at: at(120),
-                lag_seconds: 120
+                latest_bar_close_at: at(60)
               },
-              // 水位停在 09:55：落后 09:56、09:57、09:58 三根已收盘的 K 线，而不是“5 分钟”。
+              // 水位停在 09:55：09:56 那根 09:57 收线后还没到，按服务端时钟已等待 3 分钟（缺 3 根）。
               {
                 producer: "storage",
                 dataset_id: "view_xyz",
                 freq: "1m",
                 status: "degraded",
                 output_watermark_at: at(300),
-                lag_seconds: 300
+                latest_bar_close_at: at(240),
+                waiting_bars: 3,
+                waiting_since: at(180)
               }
             ]
           }
@@ -617,11 +701,11 @@ describe("home tiles", () => {
       names
     );
     expect(rows.map(row => [row.name, row.lag, row.seconds])).toEqual([
-      ["因子宽表", "3 分钟", 180],
+      ["因子宽表", "等待 3 分钟", 180],
       ["现货K线", "已追平", 0]
     ]);
     const facts = bannerFacts({ strategies: [], factors: [], freshness: rows, nowMs: NOW });
-    // 水位 09:55 开盘的 1m K 线 09:56:00 收盘：横幅写这个具体时间，并按状态换色，不再写“落后 X”。
+    // 横幅写已到的最新一根的收线时间，并按状态换色。
     expect(facts[2]).toMatchObject({ value: "09:56:00", tone: "warn" });
   });
 

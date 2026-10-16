@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -36,9 +37,14 @@ type ServiceStatus struct {
 }
 
 type HostStatus struct {
-	HostID, AgentID, Hostname, Status, Reason                      string
-	LastSeenAt                                                     time.Time
-	CPUPercent, MemoryPercent, FilesystemMaxPercent                float64
+	HostID, AgentID, Hostname, Status, Reason       string
+	LastSeenAt                                      time.Time
+	CPUPercent, MemoryPercent, FilesystemMaxPercent float64
+	// 资源总量：CPU 逻辑核数、内存总量与已用量；磁盘是使用率最高的文件系统（与 FilesystemMaxPercent 同一个）。
+	CPUCores                                                       uint32
+	MemoryTotalBytes, MemoryUsedBytes                              uint64
+	FilesystemTotalBytes, FilesystemUsedBytes                      uint64
+	FilesystemMountpoint                                           string
 	MemoryAvailable, DiskAvailable, MetricsAvailable, CPUAvailable bool
 }
 
@@ -56,9 +62,21 @@ type DatasetFrequencyStatus struct {
 	LastPartialAt                       time.Time
 	InputWatermarkAt, OutputWatermarkAt time.Time
 	LastReportedAt                      time.Time
-	LagSeconds                          int64
-	// LagLimitSeconds 是输出水位允许落后的秒数，超过即判为过期；0 表示没有水位要求。
-	LagLimitSeconds int64
+	// 最新一根 K 线（由输出水位识别，水位是它在存储里的 data_time）：LatestBarClose 是按市场交易日历算出的收线时间，
+	// OutputArrivedAt 是生产者写完它的时刻。延迟 = 到达 − 收线，在到达那一刻定值，不随当前时间增长；
+	// 生产者没有上报到达时间时 DelayKnown 为 false。
+	LatestBarClose  time.Time
+	OutputArrivedAt time.Time
+	DelaySeconds    int64
+	DelayKnown      bool
+	// WaitingBars 是此刻应已收线却还没到的根数；WaitingSince 是其中最早一根的收线时间，OverdueSeconds 是它已过收线多久。
+	WaitingBars    int
+	WaitingSince   time.Time
+	OverdueSeconds int64
+	// LatenessLimitSeconds 是允许迟到的秒数：等待超过它判为过期并告警；已到的根延迟超过它只标为迟到，不影响当前状态。
+	LatenessLimitSeconds int64
+	// ClockIssue 说明无法按交易日历判断的原因，例如“日历未覆盖”“周期对齐未确认”；为空表示已按日历判断。
+	ClockIssue string
 }
 
 type BusinessStatus struct {
@@ -89,7 +107,14 @@ type Builder struct {
 	Policy                     report.RealtimeTimeSeriesPolicy
 	BalanceDifferenceThreshold float64
 	MarketFetchThresholds      MarketFetchThresholds
-	Now                        func() time.Time
+	// Inventory 是采集任务清单，用来确定每个空间的市场交易日历（市场、日历、时区、交易时段）。
+	Inventory InventorySource
+	Now       func() time.Time
+}
+
+// InventorySource 提供最近一份有效的采集任务清单；monmetrics.TaskResultInventoryCache 实现它。
+type InventorySource interface {
+	GetAllowStale(ctx context.Context, now time.Time) (monmetrics.TaskResultInventorySnapshot, bool, error)
 }
 
 type MarketFetchThresholds struct {
@@ -224,6 +249,7 @@ func (b Builder) buildHosts(ctx context.Context, now time.Time) ([]HostStatus, e
 		item.LastSeenAt, _ = time.Parse(time.RFC3339Nano, row.LastSeenAt)
 		if snapshot := row.Snapshot; snapshot != nil {
 			item.MetricsAvailable = true
+			item.CPUCores = snapshot.GetCpu().GetLogicalCores()
 			if snapshot.GetCpu() != nil && snapshot.GetCpu().GetUsageAvailable() {
 				item.CPUAvailable = true
 				item.CPUPercent = snapshot.GetCpu().GetUsagePercent()
@@ -231,10 +257,15 @@ func (b Builder) buildHosts(ctx context.Context, now time.Time) ([]HostStatus, e
 			if snapshot.GetMemory() != nil {
 				item.MemoryAvailable = true
 				item.MemoryPercent = snapshot.GetMemory().GetUsagePercent()
+				item.MemoryTotalBytes, item.MemoryUsedBytes = snapshot.GetMemory().GetTotalBytes(), snapshot.GetMemory().GetUsedBytes()
 			}
 			item.DiskAvailable = len(snapshot.GetFilesystems()) > 0
-			for _, filesystem := range snapshot.GetFilesystems() {
-				item.FilesystemMaxPercent = max(item.FilesystemMaxPercent, filesystem.GetUsagePercent())
+			for index, filesystem := range snapshot.GetFilesystems() {
+				if index == 0 || filesystem.GetUsagePercent() > item.FilesystemMaxPercent {
+					item.FilesystemMaxPercent = filesystem.GetUsagePercent()
+					item.FilesystemTotalBytes, item.FilesystemUsedBytes = filesystem.GetTotalBytes(), filesystem.GetUsedBytes()
+					item.FilesystemMountpoint = filesystem.GetMountpoint()
+				}
 			}
 		}
 		out = append(out, item)
@@ -248,8 +279,10 @@ type datasetKey struct {
 
 type datasetValues struct {
 	interval, inventory, lastRun, lastSuccess, lastPartial, input, output float64
-	reporterStale                                                         bool
-	reportedAt                                                            time.Time
+	// arrival 是输出水位最近一次前进时生产者写完的墙上时间。
+	arrival       float64
+	reporterStale bool
+	reportedAt    time.Time
 }
 
 func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Time) ([]DatasetFrequencyStatus, error) {
@@ -420,8 +453,12 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 				return nil, err
 			}
 			observed := latest.ObservedAt.UTC().Unix()
+			arrival, err := b.viewArrival(ctx, series)
+			if err != nil {
+				return nil, err
+			}
 			key := datasetKey{service: series.ServiceName, producer: "storage_view", instance: series.InstanceID, spaceID: viewSpaceID, datasetID: viewID, primaryDatasetID: labels["dataset_id"], freq: freq, labels: series.LabelsJSON}
-			values[key] = datasetValues{interval: interval.Seconds(), lastRun: float64(observed), lastSuccess: float64(observed), output: latest.Value, reporterStale: series.IsStale, reportedAt: latest.ObservedAt.UTC()}
+			values[key] = datasetValues{interval: interval.Seconds(), lastRun: float64(observed), lastSuccess: float64(observed), output: latest.Value, arrival: arrival, reporterStale: series.IsStale, reportedAt: latest.ObservedAt.UTC()}
 		}
 	}
 	type aggregatedDataset struct {
@@ -447,6 +484,13 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			current.value.lastSuccess = max(current.value.lastSuccess, value.lastSuccess)
 			current.value.lastPartial = max(current.value.lastPartial, value.lastPartial)
 			current.value.input = max(current.value.input, value.input)
+			// 到达时间跟着最新的输出走；多个实例写到同一根时取最早到的那次。
+			switch {
+			case value.output > current.value.output:
+				current.value.arrival = value.arrival
+			case value.output == current.value.output && value.arrival > 0 && (current.value.arrival == 0 || value.arrival < current.value.arrival):
+				current.value.arrival = value.arrival
+			}
 			current.value.output = max(current.value.output, value.output)
 			current.value.reportedAt = maxTime(current.value.reportedAt, value.reportedAt)
 			current.value.reporterStale = current.value.reporterStale && value.reporterStale
@@ -454,9 +498,14 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 		aggregated[identity] = current
 	}
 	displayNames := b.datasetDisplayNames(ctx, names, spaceID)
+	clocks := b.spaceClocks(ctx, now)
 	out := make([]DatasetFrequencyStatus, 0, len(aggregated))
 	for identity, current := range aggregated {
-		item := datasetStatus(now, current.key, current.value, b.Policy)
+		clock, ok := clocks[current.key.spaceID]
+		if !ok {
+			clock = spaceClock{err: monmetrics.ErrNoTradingCalendar}
+		}
+		item := datasetStatus(now, current.key, current.value, b.Policy, clock)
 		item.DisplayName = displayNames[identity]
 		out = append(out, item)
 	}
@@ -526,6 +575,26 @@ metrics:
 	return out
 }
 
+// viewArrival 读取与 View 水位同一身份的到达时间（View 水位最近一次前进时提交完成的时刻）；没有上报时为 0。
+func (b Builder) viewArrival(ctx context.Context, watermark monmetrics.MetricSeries) (float64, error) {
+	const viewArrivalMetric = "moox_storage_view_output_arrival_timestamp_seconds"
+	series, err := b.Metrics.Catalog().FindSeries(ctx, "", watermark.ServiceName, viewArrivalMetric, watermark.LabelsJSON, 10)
+	if err != nil {
+		return 0, err
+	}
+	for _, item := range series {
+		if item.InstanceID != watermark.InstanceID {
+			continue
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return 0, err
+		}
+		return latest.Value, nil
+	}
+	return 0, nil
+}
+
 func minPositive(left, right float64) float64 {
 	switch {
 	case left <= 0:
@@ -560,6 +629,7 @@ func (b Builder) populateDatasetValues(
 			"last_partial_timestamp_seconds":     &current.lastPartial,
 			"input_watermark_timestamp_seconds":  &current.input,
 			"output_watermark_timestamp_seconds": &current.output,
+			"output_arrival_timestamp_seconds":   &current.arrival,
 		} {
 			series, err := b.Metrics.Catalog().FindSeries(ctx, "", key.service, prefix+suffix, key.labels, 500)
 			if err != nil {
@@ -656,7 +726,9 @@ func datasetLimitError() error {
 	return fmt.Errorf("dataset frequency statuses exceed limit %d", MaxDatasetFrequencyStatuses)
 }
 
-func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy report.RealtimeTimeSeriesPolicy) DatasetFrequencyStatus {
+// datasetStatus 判定一个数据集的状态。新鲜度看“最新一根 K 线是否按时到达”：按市场交易日历算出此刻应已收线的最新一根，
+// 还没到且从收线起超过允许迟到时间才判为过期；已经到了的根即使迟到，也只记下延迟，当前状态仍是正常。
+func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy report.RealtimeTimeSeriesPolicy, clock spaceClock) DatasetFrequencyStatus {
 	item := DatasetFrequencyStatus{
 		Producer: key.producer, SpaceID: key.spaceID, DatasetID: key.datasetID, Freq: key.freq,
 		PrimaryDatasetID: key.primaryDatasetID,
@@ -664,15 +736,13 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		InputWatermarkAt: unixTime(value.input), OutputWatermarkAt: unixTime(value.output),
 		LastReportedAt: value.reportedAt,
 	}
-	reference := item.OutputWatermarkAt
-	if reference.IsZero() {
-		reference = item.LastSuccessAt
-	}
-	if !reference.IsZero() {
-		item.LagSeconds = max(int64(0), int64(now.Sub(reference)/time.Second))
-	}
-	runLag, successLag, watermarkLag := datasetTolerances(key, value.interval, policy)
-	item.LagLimitSeconds = int64(watermarkLag / time.Second)
+	runLag, successLag, lateness := datasetTolerances(key, value.interval, policy)
+	item.LatenessLimitSeconds = int64(lateness / time.Second)
+	bars := evaluateBars(clock, key.freq, item.OutputWatermarkAt, unixTime(value.arrival), now)
+	item.LatestBarClose, item.OutputArrivedAt = bars.latestClose, unixTime(value.arrival)
+	item.DelaySeconds, item.DelayKnown = int64(bars.delay/time.Second), bars.delayKnown
+	item.WaitingBars, item.WaitingSince, item.OverdueSeconds = bars.waiting, bars.waitingSince, int64(bars.overdue/time.Second)
+	item.ClockIssue = clockIssueText(bars.issue)
 	inventoryAt := unixTime(value.inventory)
 	switch {
 	case value.reporterStale:
@@ -690,8 +760,12 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		item.Status, item.Reason = "degraded", "尚无成功运行"
 	case successLag > 0 && now.Sub(item.LastSuccessAt) > successLag:
 		item.Status, item.Reason = "degraded", "success stale"
-	case watermarkLag > 0 && item.LagSeconds > int64(watermarkLag/time.Second):
-		item.Status, item.Reason = "stale", datasetWatermarkStaleReason(item, now)
+	case errors.Is(bars.issue, monmetrics.ErrCalendarNotCovered):
+		// 日历覆盖不到就无法判断应收哪一根：不推测，报出来让人更新交易日历。
+		item.Status, item.Reason = "unknown", item.ClockIssue
+	case bars.waiting > 0 && lateness > 0 && bars.overdue > lateness:
+		item.Status = "stale"
+		item.Reason = waitingReason(item)
 	case item.OutputWatermarkAt.IsZero():
 		item.Status, item.Reason = "healthy", "正常但空结果"
 	default:
@@ -716,42 +790,6 @@ func warmingNow(now time.Time, item DatasetFrequencyStatus, successLag time.Dura
 // datasetWatermarkStaleReason keeps the alert useful without requiring an
 // operator to translate the internal "watermark" term. Timestamps are
 // explicitly UTC so the value can be compared with Collector/Storage logs.
-func datasetWatermarkStaleReason(item DatasetFrequencyStatus, now time.Time) string {
-	lag := formatDatasetLag(item.LagSeconds)
-	latest := "未产生"
-	if !item.OutputWatermarkAt.IsZero() {
-		latest = item.OutputWatermarkAt.UTC().Format("2006-01-02 15:04:05 UTC")
-	}
-	reason := fmt.Sprintf("输出水位已落后 %s，最新输出时间 %s", lag, latest)
-	if !item.InputWatermarkAt.IsZero() {
-		reason += fmt.Sprintf("，输入水位 %s", item.InputWatermarkAt.UTC().Format("2006-01-02 15:04:05 UTC"))
-	}
-	if !now.IsZero() {
-		reason += fmt.Sprintf("（检查时间 %s）", now.UTC().Format("2006-01-02 15:04:05 UTC"))
-	}
-	return reason
-}
-
-func formatDatasetLag(seconds int64) string {
-	if seconds < 60 {
-		return fmt.Sprintf("%d 秒", max(int64(0), seconds))
-	}
-	minutes := seconds / 60
-	remainingSeconds := seconds % 60
-	if minutes < 60 {
-		if remainingSeconds == 0 {
-			return fmt.Sprintf("%d 分钟", minutes)
-		}
-		return fmt.Sprintf("%d 分 %d 秒", minutes, remainingSeconds)
-	}
-	hours := minutes / 60
-	remainingMinutes := minutes % 60
-	if remainingMinutes == 0 {
-		return fmt.Sprintf("%d 小时", hours)
-	}
-	return fmt.Sprintf("%d 小时 %d 分钟", hours, remainingMinutes)
-}
-
 func ownsExpectedDatasetInventory(producer string) bool {
 	return producer == "collector" || producer == "factor"
 }
@@ -767,15 +805,15 @@ func datasetTolerances(key datasetKey, interval float64, policy report.RealtimeT
 	if defaults.SuccessMissedIntervals > 0 && runBase > 0 {
 		successLag = time.Duration(defaults.SuccessMissedIntervals)*runBase + 30*time.Second
 	}
-	// 水位容忍按“周期与期望间隔中较大者”放大：A 股等交易日历数据集的期望间隔跨周末、长假，可能远大于名义周期。
-	watermarkLag := max(time.Duration(defaults.WatermarkPeriods)*max(frequency, runBase), defaults.MinimumWatermarkLag)
+	// 允许迟到按周期算：应收的最新一根已按交易日历确定，周末、长假不再需要放大容忍。
+	lateness := max(time.Duration(defaults.WatermarkPeriods)*frequency, defaults.MinimumWatermarkLag)
 	for _, override := range policy.Overrides {
 		if override.SpaceID == key.spaceID && override.DatasetID == key.datasetID && sameDatasetFrequency(override.Freq, key.freq) && override.WatermarkLag > 0 {
-			watermarkLag = override.WatermarkLag
+			lateness = override.WatermarkLag
 			break
 		}
 	}
-	return runLag, successLag, watermarkLag
+	return runLag, successLag, lateness
 }
 
 func sameDatasetFrequency(left, right string) bool {

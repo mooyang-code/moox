@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -10,8 +11,6 @@ import (
 	"time"
 
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
-
-	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
 
 const (
@@ -155,15 +154,21 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			reports = append(reports, report)
 			continue
 		}
+		// 应收的最新一根（E）按市场交易日历算：休市、午休、未开盘时它停在上一时段的最后一根，所以不需要“休市跳过”“开盘预热”。
+		// 日历覆盖不到、市场没有日历、周期对齐无法确认时不推测，按无法判断报出来。
+		clock, freq, expected, clockErr := klineExpectedBar(rule, now)
 		if rule.ResultStatus == "error" {
 			report.Reason = "task_result_error"
-			report.StaleAge = inventoryDataAge(now, rule.ViewLastDataTime)
+			if clockErr == nil {
+				report.StaleAge, _ = overdueAfter(clock, freq, rule.ViewLastDataTime, expected, now)
+			}
 			report.Diagnostic = formatKlineDiagnostic(report)
 			reports = append(reports, report)
 			continue
 		}
-		if reason := klineMarketSkipReason(rule, now); reason != "" {
-			report.Skipped, report.Reason = true, reason
+		if clockErr != nil {
+			report.Reason = klineClockReason(clockErr)
+			report.Diagnostic = clockErr.Error()
 			reports = append(reports, report)
 			continue
 		}
@@ -179,7 +184,7 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 				continue
 			}
 		}
-		if lag, behind := completedPeriodViewLag(rule, summary.latest, now); behind {
+		if lag, behind := completedPeriodViewLag(clock, freq, rule, summary.latest, now); behind {
 			report.Success = false
 			report.Reason = "view_behind_latest_completed_period"
 			report.StaleAge = lag
@@ -197,19 +202,20 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 			// An enabled rule with no output is a real failure: a misrouted
 			// View or an unbound consumer must not remain silent.
 			report.Success, report.Reason = false, "no_observation"
-			report.StaleAge = inventoryDataAge(now, rule.ViewLastDataTime)
+			report.StaleAge, _ = overdueAfter(clock, freq, rule.ViewLastDataTime, expected, now)
 			report.Diagnostic = formatKlineDiagnostic(report)
 			reports = append(reports, report)
 			continue
 		}
-		e.evaluateViewSummary(&report, rule, summary, activeSubjects, now)
+		e.evaluateViewSummary(&report, rule, clock, freq, expected, summary, activeSubjects, now)
 		reports = append(reports, report)
 	}
 	sort.Slice(reports, func(i, j int) bool { return reports[i].CheckID < reports[j].CheckID })
 	return reports, nil
 }
 
-func completedPeriodViewLag(rule KlineFreshnessRule, viewLatest time.Time, now time.Time) (time.Duration, bool) {
+// completedPeriodViewLag 判断结果视图是否落后于采集已完成的最新一期；落后时返回该期之后视图还缺的第一根已过收线多久。
+func completedPeriodViewLag(clock MarketClock, freq frequencypkg.Frequency, rule KlineFreshnessRule, viewLatest time.Time, now time.Time) (time.Duration, bool) {
 	status := strings.ToLower(strings.TrimSpace(rule.LatestCompletedStatus))
 	if rule.LatestCompletedPeriod.IsZero() || (status != "complete" && status != "degraded") {
 		return 0, false
@@ -221,10 +227,70 @@ func completedPeriodViewLag(rule KlineFreshnessRule, viewLatest time.Time, now t
 	if !latestViewTime.IsZero() && !latestViewTime.Before(rule.LatestCompletedPeriod) {
 		return 0, false
 	}
-	if latestViewTime.IsZero() {
-		return inventoryDataAge(now, rule.LatestCompletedPeriod), true
+	completed, err := clock.BarAt(rule.LatestCompletedPeriod, freq)
+	if err != nil {
+		return 0, true
 	}
-	return rule.LatestCompletedPeriod.Sub(latestViewTime), true
+	if latestViewTime.IsZero() {
+		return positive(now.Sub(completed.Close)), true
+	}
+	overdue, _ := overdueAfter(clock, freq, latestViewTime, completed, now)
+	return overdue, true
+}
+
+// klineExpectedBar 按规则声明的市场日历算出此刻应已收线的最新一根。
+func klineExpectedBar(rule KlineFreshnessRule, now time.Time) (MarketClock, frequencypkg.Frequency, Bar, error) {
+	freq, err := frequencypkg.Parse(rule.Frequency)
+	if err != nil {
+		return MarketClock{}, "", Bar{}, fmt.Errorf("周期 %q 无效：%w", rule.Frequency, err)
+	}
+	clock, err := MarketClockFor(rule.MarketID, rule.CalendarID, rule.Timezone, rule.Sessions)
+	if err != nil {
+		return MarketClock{}, "", Bar{}, err
+	}
+	expected, err := clock.LatestClosed(now, freq)
+	if err != nil {
+		return MarketClock{}, "", Bar{}, err
+	}
+	return clock, freq, expected, nil
+}
+
+// klineClockReason 把无法按日历判断的原因转成报告原因码。
+func klineClockReason(err error) string {
+	switch {
+	case errors.Is(err, ErrCalendarNotCovered):
+		return "calendar_not_covered"
+	case errors.Is(err, ErrNoTradingCalendar):
+		return "calendar_unknown"
+	case errors.Is(err, ErrAlignmentUnconfirmed):
+		return "alignment_unconfirmed"
+	default:
+		return "calendar_error"
+	}
+}
+
+// overdueAfter 返回 latest 之后、截至 expected 还缺的第一根已过收线多久；latest 已经是（或晚于）应收的最新一根时为 0。
+// latest 为零（从未产出）时无法确定缺的是哪一根，返回 0。
+func overdueAfter(clock MarketClock, freq frequencypkg.Frequency, latest time.Time, expected Bar, now time.Time) (time.Duration, error) {
+	if latest.IsZero() {
+		return 0, nil
+	}
+	bar, err := clock.BarAt(latest, freq)
+	if err != nil {
+		return 0, err
+	}
+	if !bar.Close.Before(expected.Close) {
+		return 0, nil
+	}
+	next, err := clock.Next(bar, freq)
+	if err != nil {
+		return 0, err
+	}
+	return positive(now.Sub(next.Close)), nil
+}
+
+func positive(value time.Duration) time.Duration {
+	return max(value, 0)
 }
 
 // activeSubjectName maps a View subject onto the active metadata catalog. It
@@ -337,13 +403,6 @@ func inventoryRule(entry TaskResultInventoryEntry, enabled bool, staleAfter time
 		LatestCompletedStatus: entry.LatestCompletedStatus, ViewLastDataTime: entry.ViewLastDataTime,
 		InventoryObservedAt: entry.ObservedAt,
 	}
-}
-
-func inventoryDataAge(now, dataTime time.Time) time.Duration {
-	if dataTime.IsZero() || dataTime.After(now) {
-		return 0
-	}
-	return now.Sub(dataTime)
 }
 
 type viewSummaryIdentity struct {
@@ -470,17 +529,19 @@ func parseViewSummaryLabels(rawLabels string, withSubject bool) (viewSummaryIden
 // whole once the bar after its latest bar is overdue. Otherwise its lagging
 // subjects, and active subjects with no output once the View has moved a bar
 // past the start of tracking, are stale.
-func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessReport, rule KlineFreshnessRule, summary viewSummary, active map[string]struct{}, now time.Time) {
-	bar := klineFrequencyDuration(rule.Frequency)
+func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessReport, rule KlineFreshnessRule, clock MarketClock, freq frequencypkg.Frequency, expected Bar, summary viewSummary, active map[string]struct{}, now time.Time) {
 	report.ObservedCount = summary.subjects
 	report.OldestDataTime = summary.latest
-	// A bar is stamped with its period start and exists only once the period
-	// closes, so the newest bar is always one period behind. Data is stale
-	// once the bar after it is overdue: that bar closes two periods after the
-	// latest bar's start, plus stale_after.
-	nextBarDue := summary.latest.Add(2*bar + rule.AllowedLateness)
-	report.StaleAge = inventoryDataAge(now, nextBarDue)
-	if now.Sub(nextBarDue) > rule.StaleAfter {
+	// 视图最新一根之后、应收的最新一根之前还缺的第一根，从收线起超过“允许迟到 + stale_after”就算整体停止更新。
+	// 缺的根按交易日历数：午休、收盘后、节假日不会被算成缺失。
+	overdue, err := overdueAfter(clock, freq, summary.latest, expected, now)
+	if err != nil {
+		report.Success, report.Reason = false, klineClockReason(err)
+		report.Diagnostic = err.Error()
+		return
+	}
+	report.StaleAge = positive(overdue - rule.AllowedLateness)
+	if overdue-rule.AllowedLateness > rule.StaleAfter {
 		report.ViewStale = true
 		report.StaleCount = max(summary.subjects, len(active))
 		report.Reason = "business_data_stale"
@@ -491,25 +552,36 @@ func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessRepo
 	aliases := activeSubjectAliases(active)
 	suffix := expectedKlineSubjectSuffix(rule.DatasetID)
 	stale := make(map[string]struct{})
-	inactive := 0
+	inactive, withinGrace := 0, 0
+	threshold := rule.AllowedLateness + rule.StaleAfter
 	for _, item := range summary.laggingSubjects {
 		name, ok := activeSubjectName(item.subjectID, active, aliases, suffix)
 		if !ok {
 			inactive++
 			continue
 		}
+		// Storage 按连续时间判落后（比视图最新一根落后超过一根加容忍）：A 股午休、隔夜后新时段第一根刚到时，还没到的标的
+		// 也会被它算进来。按交易日历再筛一遍：缺的第一根从收线起还在“允许迟到 + stale_after”之内的，不算过期。
+		age, err := overdueAfter(clock, freq, item.dataTime, expected, now)
+		if err == nil && age <= threshold {
+			withinGrace++
+			continue
+		}
 		stale[name] = struct{}{}
 		if item.dataTime.Before(report.OldestDataTime) {
 			report.OldestDataTime = item.dataTime
 		}
-		if age := inventoryDataAge(now, item.dataTime.Add(2*bar)); age > report.StaleAge {
+		if err == nil && age > report.StaleAge {
 			report.StaleAge = age
 		}
 	}
-	report.StaleCount = max(summary.lagging-inactive, 0)
+	report.StaleCount = max(summary.lagging-inactive-withinGrace, 0)
 	namesTruncated := active != nil && summary.lagging > len(summary.laggingSubjects)
-	trackingMoved := !summary.trackedSince.IsZero() && !summary.latest.Before(summary.trackedSince.Add(bar))
-	if active != nil && summary.lagging > len(summary.laggingSubjects) {
+	// 名单按最落后在前：名单里的活跃标的都还在允许迟到之内，没列出的落后得更少，同样不算过期。
+	allWithinGrace := withinGrace > 0 && len(stale) == 0
+	// 视图开始跟踪之后至少又前进了一根（data_time 都是开盘时间，比跟踪起点晚就是后面的根）。
+	trackingMoved := !summary.trackedSince.IsZero() && summary.latest.After(summary.trackedSince)
+	if active != nil && namesTruncated && !allWithinGrace {
 		// 落后对象名单被截断（只上报最落后的若干个）：名单只能用于展示，不能用来扣减完整计数，
 		// 否则超过名单长度的已停用对象会被当作过期持续误报。改用集合算术：没有落后的对象视为活跃，
 		// 活跃集合里放不下它们的那部分才是落后或缺失的；不会低于名单里已确认的活跃过期对象数。
@@ -531,7 +603,7 @@ func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessRepo
 	} else {
 		report.Reason = "business_data_stale"
 	}
-	if namesTruncated && report.StaleCount == 0 {
+	if namesTruncated && report.StaleCount == 0 && !allWithinGrace {
 		// 名单被截断，只能推出“落后数下界为零”：无法确认活跃对象是否都在更新，不能据此宣告健康（也不触发新告警）。
 		// 按“无法判定”跳过本轮，已有告警保持，等名单不再截断或有确定结论。
 		report.Skipped, report.Success = true, false
@@ -596,74 +668,4 @@ func formatKlineDiagnostic(report KlineFreshnessReport) string {
 		report.StaleCount, report.MissingCount, report.ObservedCount, format(report.OldestDataTime), report.StaleAge,
 		format(report.Rule.LatestCompletedPeriod), report.Rule.LatestCompletedStatus,
 		format(report.Rule.ViewLastDataTime), format(report.Rule.InventoryObservedAt), strings.Join(report.StaleSubjects, ","))
-}
-
-func klineMarketSkipReason(rule KlineFreshnessRule, now time.Time) string {
-	if rule.MarketID == "crypto" {
-		return sessionSkipReason(rule, now, time.UTC)
-	}
-	if rule.MarketID != "stockcn" {
-		return "skipped_calendar_unknown"
-	}
-	location, err := time.LoadLocation(rule.Timezone)
-	if err != nil || strings.TrimSpace(rule.CalendarID) == "" {
-		return "skipped_calendar_unknown"
-	}
-	calendar, err := marketcalendar.Load(rule.CalendarID)
-	if err != nil {
-		return "skipped_calendar_unknown"
-	}
-	localNow := now.In(location)
-	civilDate, err := marketcalendar.NewCivilDate(localNow.Year(), localNow.Month(), localNow.Day())
-	if err != nil {
-		return "skipped_calendar_unknown"
-	}
-	status, err := calendar.Status(civilDate)
-	if err != nil {
-		return "skipped_calendar_unknown"
-	}
-	if status != marketcalendar.TradingDay {
-		return "skipped_market_closed"
-	}
-	return sessionSkipReason(rule, now, location)
-}
-
-func sessionSkipReason(rule KlineFreshnessRule, now time.Time, location *time.Location) string {
-	if len(rule.Sessions) == 0 {
-		return ""
-	}
-	localNow := now.In(location)
-	for _, raw := range rule.Sessions {
-		parts := strings.Split(strings.TrimSpace(raw), "-")
-		if len(parts) != 2 {
-			continue
-		}
-		start, startErr := time.ParseInLocation("15:04", strings.TrimSpace(parts[0]), location)
-		end, endErr := time.ParseInLocation("15:04", strings.TrimSpace(parts[1]), location)
-		if startErr != nil || endErr != nil {
-			continue
-		}
-		start = time.Date(localNow.Year(), localNow.Month(), localNow.Day(), start.Hour(), start.Minute(), 0, 0, location)
-		end = time.Date(localNow.Year(), localNow.Month(), localNow.Day(), end.Hour(), end.Minute(), 0, 0, location)
-		if !localNow.Before(start) && localNow.Before(end) {
-			warmup := rule.StaleAfter
-			if warmup <= 0 {
-				warmup = 2 * klineFrequencyDuration(rule.Frequency)
-			}
-			if warmup > 0 && localNow.Sub(start) < warmup {
-				return "skipped_session_warmup"
-			}
-			return ""
-		}
-	}
-	return "skipped_market_closed"
-}
-
-// klineFrequencyDuration returns the fixed bar length, or 0 for a month.
-func klineFrequencyDuration(value string) time.Duration {
-	parsed, err := frequencypkg.Parse(value)
-	if err != nil {
-		return 0
-	}
-	return parsed.Duration()
 }

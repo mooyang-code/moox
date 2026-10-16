@@ -69,23 +69,24 @@ func (f collectorInventoryTestInvoke) Invoke(ctx context.Context, service, metho
 	return f(ctx, service, method, req, rsp)
 }
 
-func TestBuildKlineFreshnessInventoryBorrowsGateway(t *testing.T) {
+func TestBuildTaskResultInventoryBorrowsGateway(t *testing.T) {
 	cfg := config.Default()
 	cfg.KlineFreshness.Enabled = true
 	gateway := collectorInventoryTestInvoke(func(context.Context, string, string, any, any) error { return nil })
-	cache, err := buildKlineFreshnessInventory(cfg, gateway)
+	cache, err := buildTaskResultInventory(cfg, gateway)
 	require.NoError(t, err)
 	require.NotNil(t, cache)
-	_, err = buildKlineFreshnessInventory(cfg, nil)
+	_, err = buildTaskResultInventory(cfg, nil)
 	require.ErrorContains(t, err, "gateway client")
+	// 清单还决定数据集新鲜度用哪套交易日历：关掉 K 线新鲜度检查也照常构造。
 	disabled := *cfg
 	disabled.KlineFreshness.Enabled = false
-	cache, err = buildKlineFreshnessInventory(&disabled, nil)
+	cache, err = buildTaskResultInventory(&disabled, gateway)
 	require.NoError(t, err)
-	require.Nil(t, cache)
+	require.NotNil(t, cache)
 	invalid := *cfg
 	invalid.KlineFreshness.InventoryPageSize = 101
-	_, err = buildKlineFreshnessInventory(&invalid, gateway)
+	_, err = buildTaskResultInventory(&invalid, gateway)
 	require.ErrorContains(t, err, "page size")
 }
 

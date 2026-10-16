@@ -345,9 +345,12 @@ func TestConsoleGlobalWritesRequireAdministrator(t *testing.T) {
 		{"/api/admin/cloudnode/UpdateCloudAccount", 1, http.StatusForbidden},
 		{"/api/admin/cloudnode/DeleteCloudAccount", 1, http.StatusForbidden},
 		{"/api/admin/factor-mgr/ListFactors", 1, http.StatusForbidden}, // 无空间的 Factor 请求本来就要管理员
-		// 推送渠道的完整 Webhook URL 是凭据：只有全局管理员能读；概览仍对所有登录用户开放。
-		{"/api/admin/monitor/GetNotificationChannel", 1, http.StatusForbidden},
-		{"/api/admin/monitor/GetNotificationChannel", 2, http.StatusOK},
+		// 推送渠道的完整 Webhook URL 是凭据：只有全局管理员能列出、增删；概览仍对所有登录用户开放。
+		{"/api/admin/monitor/ListNotificationChannels", 1, http.StatusForbidden},
+		{"/api/admin/monitor/ListNotificationChannels", 2, http.StatusOK},
+		{"/api/admin/monitor/AddNotificationChannel", 1, http.StatusForbidden},
+		{"/api/admin/monitor/DeleteNotificationChannel", 1, http.StatusForbidden},
+		{"/api/admin/monitor/AddNotificationChannel", 2, http.StatusOK},
 		{"/api/admin/monitor/GetHealthOverview", 1, http.StatusOK},
 	} {
 		_, secret, key, sid := setupRequestAuthTest(t)

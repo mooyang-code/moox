@@ -81,9 +81,22 @@ export interface HealthDataset {
   last_success_at?: string;
   last_run_at?: string;
   last_reported_at?: string;
-  lag_seconds?: number | string;
-  /** 输出水位允许落后的秒数；0 表示没有水位要求。 */
-  lag_limit_seconds?: number | string;
+  /** 生产者上报的展示名称（例如策略实例名）；为空时按 Storage 名称或数据集 ID 展示。 */
+  display_name?: string;
+  /** 最新一根 K 线（output_watermark_at 是它的开盘时间）按交易日历的收线时间与生产者写完它的时刻。 */
+  latest_bar_close_at?: string;
+  arrived_at?: string;
+  /** 到达 − 收线，在到达那一刻定值；delay_known 为 false 表示生产者没上报到达时间。 */
+  delay_seconds?: number | string;
+  delay_known?: boolean;
+  /** 此刻应已收线却还没到的根数，其中最早一根的收线时间，以及它已过收线多久。 */
+  waiting_bars?: number;
+  waiting_since?: string;
+  overdue_seconds?: number | string;
+  /** 允许迟到的秒数：等待超过它判为过期；已到的根延迟超过它只标为迟到。 */
+  lateness_limit_seconds?: number | string;
+  /** 无法按交易日历判断的原因，例如“日历未覆盖”“周期对齐未确认”。 */
+  clock_issue?: string;
 }
 export interface HealthPipelineStage {
   id?: string;
@@ -130,6 +143,13 @@ export interface HealthHost {
   cpu_threshold?: number;
   memory_threshold?: number;
   disk_threshold?: number;
+  /** 资源总量；字节数是 uint64，JSON 里可能是字符串。磁盘取使用率最高的文件系统。 */
+  cpu_cores?: number;
+  memory_total_bytes?: number | string;
+  memory_used_bytes?: number | string;
+  disk_total_bytes?: number | string;
+  disk_used_bytes?: number | string;
+  disk_mountpoint?: string;
 }
 export interface HealthCounts {
   healthy_count?: number;
@@ -156,22 +176,21 @@ export interface HealthOverview {
   business_checks?: HealthBusinessCheck[];
   hosts?: HealthHost[];
   unregistered?: HealthComponent[];
-  /** 概览对所有登录用户可见，只带推送平台和是否已配置。 */
-  notification?: NotificationChannelStatus;
+  /** 概览对所有登录用户可见，只带渠道数量和平台。 */
+  notification?: NotificationSummary;
   /** 最近 incident_window_hours 小时的告警经过，按触发时间倒序。 */
   incidents?: AlertIncident[];
   incident_window_hours?: number;
 }
-export interface NotificationChannelStatus {
-  channel_type?: string;
-  configured?: boolean;
+export interface NotificationSummary {
+  channel_count?: number;
+  /** 各渠道的平台（wecom / feishu），按添加顺序，可重复。 */
+  channel_types?: string[];
 }
-/** 完整的推送渠道配置；只有全局管理员能读取。 */
-export interface NotificationChannelSetting {
+/** 一个告警推送渠道；告警发给全部渠道。完整的 Webhook URL 只有全局管理员能读取。 */
+export interface NotificationChannel {
+  channel_id?: string;
   channel_type?: string;
   webhook_url?: string;
-  updated_at?: string;
-}
-export interface NotificationChannelResponse {
-  channel?: NotificationChannelSetting;
+  created_at?: string;
 }

@@ -18,7 +18,9 @@ type runTracker struct {
 }
 
 type trackedRun struct {
-	periodTime     time.Time
+	periodTime time.Time
+	// completedAt 是这一期结果写完的时刻，作为因子结果的到达时间上报给 Monitor。
+	completedAt    time.Time
 	status         string
 	factors        []domain.FactorPeriodState
 	failedSubjects []string
@@ -27,7 +29,7 @@ type trackedRun struct {
 
 func newRunTracker() *runTracker { return &runTracker{runs: make(map[string]trackedRun)} }
 
-func (t *runTracker) record(setID string, periodTime time.Time, status string, outcome pipeline.Outcome) {
+func (t *runTracker) record(setID string, periodTime time.Time, status string, outcome pipeline.Outcome, completedAt time.Time) {
 	if t == nil || setID == "" || periodTime.IsZero() {
 		return
 	}
@@ -48,7 +50,7 @@ func (t *runTracker) record(setID string, periodTime time.Time, status string, o
 		})
 	}
 	t.runs[setID] = trackedRun{
-		periodTime: periodTime, status: status, factors: factors,
+		periodTime: periodTime, completedAt: completedAt, status: status, factors: factors,
 		failedSubjects: outcome.FailedSubjects, warming: outcome.Warming,
 	}
 }
@@ -72,8 +74,12 @@ func summaryOf(setID string, run trackedRun, now time.Time) domain.SetRunSummary
 	if lag < 0 {
 		lag = 0
 	}
+	var completedAt int64
+	if !run.completedAt.IsZero() {
+		completedAt = run.completedAt.Unix()
+	}
 	return domain.SetRunSummary{
-		SetID: setID, LastPeriodTime: run.periodTime.Unix(), LastStatus: run.status, LagSeconds: lag,
+		SetID: setID, LastPeriodTime: run.periodTime.Unix(), CompletedAt: completedAt, LastStatus: run.status, LagSeconds: lag,
 		Factors: run.factors, FailedSubjects: run.failedSubjects, WarmingSubjects: int32(run.warming),
 	}
 }

@@ -85,13 +85,64 @@ export interface AlertGroup {
 function datasetFacts(dataset: HealthDataset | undefined, nowMs: number): Fact[] {
   if (!dataset) return [];
   const facts: Fact[] = [];
-  if (dataset.output_watermark_at) facts.push({ label: "最新数据", value: shortTime(dataset.output_watermark_at, nowMs) });
-  const lag = toSeconds(dataset.lag_seconds);
-  if (lag !== null) facts.push({ label: "已落后", value: humanizeDuration(lag) });
-  const limit = toSeconds(dataset.lag_limit_seconds);
-  if (limit) facts.push({ label: "允许落后", value: humanizeDuration(limit) });
+  if (dataset.output_watermark_at) facts.push({ label: "最新K线", value: shortTime(dataset.output_watermark_at, nowMs) });
+  const delay = barDelay(dataset, nowMs);
+  if (delay.text !== "—") facts.push({ label: "到达", value: delay.text });
+  const limit = toSeconds(dataset.lateness_limit_seconds);
+  if (limit) facts.push({ label: "允许迟到", value: humanizeDuration(limit) });
   if (dataset.last_success_at) facts.push({ label: "最近成功", value: relativeTime(dataset.last_success_at, nowMs) });
   return facts;
+}
+
+export interface BarDelay {
+  /** 准时或迟到：“延迟 5 秒”；还没到：“等待中，已过收线 3 分钟”；无法按日历判断：原因。 */
+  text: string;
+  /** 等待超过允许迟到为红；已到但延迟超过允许迟到为橙（当前状态仍正常）。 */
+  tone: Tone;
+  /** 悬停说明：收线、到达时刻等。 */
+  title: string;
+  /** 等待或延迟相对允许迟到的比例，用于排序。 */
+  ratio: number;
+}
+
+/**
+ * 最新一根 K 线的到达情况。延迟 = 到达 − 收线，在到达那一刻定值；还没到的那根从收线起按页面时钟持续计时。
+ * 不用“当前时间 − 最新 K 线时间”：休市、午休、节假日由后端按交易日历排除。
+ */
+export function barDelay(item: HealthDataset, nowMs: number): BarDelay {
+  const limit = toSeconds(item.lateness_limit_seconds) || 0;
+  const ratioOf = (seconds: number) => (limit ? seconds / limit : 0);
+  if (item.clock_issue) {
+    return { text: item.clock_issue, tone: item.status === "unknown" ? "bad" : "idle", title: item.clock_issue, ratio: 0 };
+  }
+  const waiting = Number(item.waiting_bars) || 0;
+  const delaySeconds = item.delay_known ? toSeconds(item.delay_seconds) : null;
+  const arrivedNote =
+    delaySeconds === null
+      ? ""
+      : `上一根 ${shortTime(item.latest_bar_close_at, nowMs)} 收线，延迟 ${humanizeDuration(delaySeconds)}`;
+  if (waiting > 0) {
+    const since = toMillis(item.waiting_since);
+    const overdue = since === null ? toSeconds(item.overdue_seconds) || 0 : Math.max(0, Math.floor((nowMs - since) / 1000));
+    const missing = waiting > 1 ? `（缺 ${waiting} 根）` : "";
+    return {
+      text: `等待中，已过收线 ${humanizeDuration(overdue)}${missing}`,
+      tone: limit && overdue > limit ? "bad" : "ok",
+      title: [`${shortTime(item.waiting_since, nowMs)} 收线的那根还没到`, arrivedNote].filter(Boolean).join("；"),
+      ratio: ratioOf(overdue)
+    };
+  }
+  if (delaySeconds !== null) {
+    const late = limit > 0 && delaySeconds > limit;
+    return {
+      text: `延迟 ${humanizeDuration(delaySeconds)}`,
+      tone: late ? "warn" : "ok",
+      title: `${shortTime(item.latest_bar_close_at, nowMs)} 收线，${shortTime(item.arrived_at, nowMs)} 到达${late ? "（迟到，已恢复）" : ""}`,
+      ratio: ratioOf(delaySeconds)
+    };
+  }
+  if (item.output_watermark_at) return { text: "—", tone: "idle", title: "生产者没有上报到达时间", ratio: 0 };
+  return { text: "—", tone: "idle", title: "", ratio: 0 };
 }
 
 function alertLine(alert: HealthAlert, names: NameBook, nowMs: number): AlertLine {
@@ -436,12 +487,19 @@ export function componentsByHost(overview: HealthOverview | undefined): HostComp
 
 // ---------- 数据链路 ----------
 
-const STAGE_LABELS: Record<string, string> = { collection: "采集", storage: "存储与视图", factor: "因子", trade: "交易" };
+const STAGE_LABELS: Record<string, string> = {
+  collection: "采集",
+  storage: "存储与视图",
+  factor: "因子",
+  strategy: "策略计算",
+  trade: "交易"
+};
 const PRODUCER_LABELS: Record<string, string> = {
   collector: "采集",
   storage: "入库",
   storage_view: "视图",
   factor: "因子",
+  strategy: "策略",
   trade: "交易"
 };
 
@@ -451,17 +509,19 @@ export interface DatasetRow {
   producer: string;
   spaceId: string;
   freq: string;
-  /** 输出水位落后多久；与告警判定用的是同一个量。 */
-  lag: string;
-  /** 允许落后多久，超过即告警。 */
+  /** 最新一根 K 线的开盘时间。 */
+  latest: string;
+  /** 最新一根的到达情况，见 barDelay。 */
+  delay: string;
+  delayTone: Tone;
+  delayTitle: string;
+  /** 允许迟到多久。 */
   limit: string;
-  /** 落后量相对允许值的色调：超过为红，超过八成为橙。 */
-  lagTone: Tone;
   tone: Tone;
   status: string;
   reason: string;
   attention: boolean;
-  /** 落后量占允许值的比例，用于排序；没有允许值为 0。 */
+  /** 等待或延迟相对允许迟到的比例，用于排序；没有允许值为 0。 */
   ratio: number;
 }
 
@@ -476,35 +536,39 @@ export interface StageSummary {
   rows: DatasetRow[];
 }
 
-function datasetRow(item: HealthDataset, names: NameBook): DatasetRow {
+function datasetRow(item: HealthDataset, names: NameBook, nowMs: number): DatasetRow {
   const id = item.dataset_id || "";
   const cls = classify(item.status);
-  const lag = toSeconds(item.lag_seconds);
-  const limit = toSeconds(item.lag_limit_seconds);
-  const ratio = lag !== null && limit ? lag / limit : 0;
-  const unobserved = item.status === "unknown" && !lag;
+  const limit = toSeconds(item.lateness_limit_seconds);
+  const delay = barDelay(item, nowMs);
   return {
     key: `${item.producer}/${item.space_id}/${id}/${item.freq}`,
-    name: names.datasets[id] || names.views[id] || id,
+    name: item.display_name || names.datasets[id] || names.views[id] || id,
     producer: PRODUCER_LABELS[item.producer || ""] || item.producer || "",
     spaceId: item.space_id || "",
     freq: item.freq || "",
-    lag: lag === null || unobserved ? "—" : humanizeDuration(lag),
+    latest: shortTime(item.output_watermark_at, nowMs),
+    delay: delay.text,
+    delayTone: delay.tone,
+    delayTitle: delay.title,
     limit: limit ? humanizeDuration(limit) : "—",
-    lagTone: unobserved || !limit ? "idle" : ratio > 1 ? "bad" : ratio > 0.8 ? "warn" : "ok",
     tone: cls.tone,
     status: statusLabel(item.status),
     reason: item.reason || "",
     attention: cls.attention,
-    ratio
+    ratio: delay.ratio
   };
 }
 
-/** 数据链路：采集 → 存储与视图 → 因子 → 交易；每个数据集的水位落后与允许落后，需要关注、落后多的在前。 */
-export function pipelineStages(overview: HealthOverview | undefined, names: NameBook): StageSummary[] {
+/** 数据链路：采集 → 存储与视图 → 因子 → 策略计算 → 交易；每个数据集最新一根 K 线的到达延迟，需要关注、等得久的在前。 */
+export function pipelineStages(
+  overview: HealthOverview | undefined,
+  names: NameBook,
+  nowMs: number = Date.now()
+): StageSummary[] {
   return (overview?.pipeline || []).map(stage => {
     const rows = (stage.datasets || [])
-      .map(item => datasetRow(item, names))
+      .map(item => datasetRow(item, names, nowMs))
       .sort((a, b) => Number(b.attention) - Number(a.attention) || TONE_RANK[a.tone] - TONE_RANK[b.tone] || b.ratio - a.ratio);
     const id = stage.id || "";
     let note = "";
@@ -608,6 +672,10 @@ export interface Meter {
   /** 告警阈值；没有规则为 null。 */
   threshold: number | null;
   tone: Tone;
+  /** 资源总量，例如“4 核”“5.6 / 7.7 GB”；主机没有上报时为空。 */
+  capacity: string;
+  /** 总量的补充说明，例如磁盘对应的挂载点。 */
+  capacityTitle: string;
 }
 
 export interface HostCard {
@@ -625,11 +693,34 @@ export interface HostCard {
 
 const GATEWAY_LABELS: Record<string, string> = { heartbeat: "网关心跳", instance_conflict: "网关实例", route_sync: "路由同步" };
 
-function meter(label: string, available: boolean | undefined, value: number | undefined, threshold: number | undefined): Meter {
+function meter(
+  label: string,
+  available: boolean | undefined,
+  value: number | undefined,
+  threshold: number | undefined,
+  capacity = "",
+  capacityTitle = ""
+): Meter {
   const limit = threshold && threshold > 0 ? threshold : null;
-  if (!available || value === undefined) return { label, value: null, threshold: limit, tone: "idle" };
+  if (!available || value === undefined) return { label, value: null, threshold: limit, tone: "idle", capacity, capacityTitle };
   const tone: Tone = limit === null ? "ok" : value >= limit ? "bad" : value >= limit * 0.9 ? "warn" : "ok";
-  return { label, value, threshold: limit, tone };
+  return { label, value, threshold: limit, tone, capacity, capacityTitle };
+}
+
+const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"];
+
+/** 已用 / 总量，两个数用总量的单位，例如“5.6 / 7.7 GB”；没有总量返回空串。 */
+export function capacityText(used: number | string | undefined, total: number | string | undefined): string {
+  const totalBytes = Number(total);
+  if (!Number.isFinite(totalBytes) || totalBytes <= 0) return "";
+  const index = Math.min(Math.floor(Math.log(totalBytes) / Math.log(1024)), BYTE_UNITS.length - 1);
+  const scale = (bytes: number) => {
+    const value = bytes / 1024 ** index;
+    return value >= 100 ? value.toFixed(0) : value.toFixed(1).replace(/\.0$/, "");
+  };
+  const usedBytes = Number(used);
+  const usedText = Number.isFinite(usedBytes) && usedBytes >= 0 ? scale(usedBytes) : "—";
+  return `${usedText} / ${scale(totalBytes)} ${BYTE_UNITS[index]}`;
 }
 
 export function hostCards(overview: HealthOverview | undefined, nowMs: number): HostCard[] {
@@ -641,9 +732,22 @@ export function hostCards(overview: HealthOverview | undefined, nowMs: number): 
     status: statusLabel(host.status),
     reason: host.reason || "",
     meters: [
-      meter("CPU", host.cpu_available, host.cpu_percent, host.cpu_threshold),
-      meter("内存", host.memory_available, host.memory_percent, host.memory_threshold),
-      meter("磁盘", host.disk_available, host.disk_percent, host.disk_threshold)
+      meter("CPU", host.cpu_available, host.cpu_percent, host.cpu_threshold, host.cpu_cores ? `${host.cpu_cores} 核` : ""),
+      meter(
+        "内存",
+        host.memory_available,
+        host.memory_percent,
+        host.memory_threshold,
+        capacityText(host.memory_used_bytes, host.memory_total_bytes)
+      ),
+      meter(
+        "磁盘",
+        host.disk_available,
+        host.disk_percent,
+        host.disk_threshold,
+        capacityText(host.disk_used_bytes, host.disk_total_bytes),
+        host.disk_mountpoint ? `使用率最高的挂载点：${host.disk_mountpoint}` : ""
+      )
     ],
     gatewayIssues: (host.gateway_signals || [])
       .filter(signal => signal.signal?.status && signal.signal.status !== "healthy")

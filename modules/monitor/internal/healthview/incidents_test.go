@@ -184,14 +184,15 @@ func TestHostThresholdsComeFromEnabledDefaultRules(t *testing.T) {
 
 func TestDatasetAlertCarriesDatasetFactsInsteadOfConcatenatedReason(t *testing.T) {
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
-	facts := observability.Overview{GeneratedAt: now, Datasets: []observability.DatasetFrequencyStatus{{Producer: "factor", SpaceID: "crypto", DatasetID: "dataset_factor_x_1m", Freq: "1m", Status: "stale", Reason: "run stale", LastSuccessAt: now.Add(-time.Hour), OutputWatermarkAt: now.Add(-time.Hour), LagSeconds: 3600, LagLimitSeconds: 180}}}
+	facts := observability.Overview{GeneratedAt: now, Datasets: []observability.DatasetFrequencyStatus{{Producer: "factor", SpaceID: "crypto", DatasetID: "dataset_factor_x_1m", Freq: "1m", Status: "stale", Reason: "run stale", LastSuccessAt: now.Add(-time.Hour), OutputWatermarkAt: now.Add(-time.Hour), WaitingBars: 59, WaitingSince: now.Add(-58 * time.Minute), OverdueSeconds: 3480, LatenessLimitSeconds: 600}}}
 	checkID := "dataset:factor:dataset_factor_x_1m:1m"
 	alert, err := (Builder{}).projectAlert(t.Context(), domain.AlertState{SpaceID: "crypto", CheckID: checkID, DedupeKey: checkID, TriggeredAt: &now, UpdatedAt: now}, facts, newCheckTitles(nil))
 	require.NoError(t, err)
 	require.Equal(t, "任务运行结果已过期", alert.Reason)
 	require.NotNil(t, alert.Dataset)
-	require.Equal(t, int64(180), alert.Dataset.LagLimitSeconds)
-	require.Equal(t, int64(3600), alert.Dataset.LagSeconds)
+	require.Equal(t, int64(600), alert.Dataset.LatenessLimitSeconds)
+	require.Equal(t, int64(3480), alert.Dataset.OverdueSeconds)
+	require.EqualValues(t, 59, alert.Dataset.WaitingBars)
 	require.Equal(t, "dataset_factor_x_1m · 1m", alert.Title)
 	require.Equal(t, "critical", alert.Severity)
 }

@@ -45,10 +45,10 @@ func adminOnlyWriteService(serviceID string) bool {
 // 云账户没有空间归属（表里没有 space 字段，按 account_id 全局定位），创建是 UPSERT，空间管理员改它会影响其他空间共用的账户，
 // 所以写方法同样只允许全局管理员。
 //
-// 推送渠道的 Webhook URL 本身就是推送凭据（拿到即可往群里发消息），读取完整配置的接口只给全局管理员；
-// 其他登录用户从监控概览只能看到推送平台和是否已配置。
+// 推送渠道的 Webhook URL 本身就是推送凭据（拿到即可往群里发消息），列出渠道的接口只给全局管理员；
+// 其他登录用户从监控概览只能看到渠道数量和平台。增删渠道是 monitor 的写方法，本来就只允许全局管理员。
 var adminOnlyMethods = map[string]bool{
-	"monitor/GetNotificationChannel": true,
+	"monitor/ListNotificationChannels": true,
 	"factor-mgr/CreateFactor": true, "factor-mgr/UpdateFactor": true,
 	// 策略定义没有空间归属（按全局 strategy_id 定位），实例与回放按空间授权：空间管理员改定义会影响其他空间已引用它的实例。
 	"strategy/CreateStrategy": true, "strategy/UpdateStrategy": true, "strategy/DeleteStrategy": true,

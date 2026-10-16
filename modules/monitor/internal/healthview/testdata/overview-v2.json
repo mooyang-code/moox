@@ -189,11 +189,15 @@
       "address": "",
       "agent_id": "STANDALONE",
       "cpu_available": false,
+      "cpu_cores": 0,
       "cpu_percent": 0,
       "cpu_threshold": 0,
       "disk_available": false,
+      "disk_mountpoint": "",
       "disk_percent": 0,
       "disk_threshold": 0,
+      "disk_total_bytes": "0",
+      "disk_used_bytes": "0",
       "gateway_signals": [],
       "host_id": "",
       "hostname": "control",
@@ -201,6 +205,8 @@
       "memory_available": false,
       "memory_percent": 0,
       "memory_threshold": 0,
+      "memory_total_bytes": "0",
+      "memory_used_bytes": "0",
       "metrics_available": false,
       "reason": "主机连接正常",
       "status": "healthy"
@@ -209,11 +215,15 @@
       "address": "control.test",
       "agent_id": "",
       "cpu_available": false,
+      "cpu_cores": 0,
       "cpu_percent": 0,
       "cpu_threshold": 0,
       "disk_available": false,
+      "disk_mountpoint": "",
       "disk_percent": 0,
       "disk_threshold": 0,
+      "disk_total_bytes": "0",
+      "disk_used_bytes": "0",
       "gateway_signals": [],
       "host_id": "control",
       "hostname": "",
@@ -221,6 +231,8 @@
       "memory_available": false,
       "memory_percent": 0,
       "memory_threshold": 0,
+      "memory_total_bytes": "0",
+      "memory_used_bytes": "0",
       "metrics_available": false,
       "reason": "尚未收到主机指标",
       "status": "unknown"
@@ -229,11 +241,15 @@
       "address": "offline.test",
       "agent_id": "PHYSICAL01",
       "cpu_available": false,
+      "cpu_cores": 0,
       "cpu_percent": 0,
       "cpu_threshold": 0,
       "disk_available": false,
+      "disk_mountpoint": "",
       "disk_percent": 0,
       "disk_threshold": 0,
+      "disk_total_bytes": "0",
+      "disk_used_bytes": "0",
       "gateway_signals": [
         {
           "applied_hash": "",
@@ -254,6 +270,8 @@
       "memory_available": false,
       "memory_percent": 0,
       "memory_threshold": 0,
+      "memory_total_bytes": "0",
+      "memory_used_bytes": "0",
       "metrics_available": false,
       "reason": "主机网关心跳已中断",
       "status": "down"
@@ -262,8 +280,8 @@
   "incident_window_hours": 0,
   "incidents": [],
   "notification": {
-    "channel_type": "",
-    "configured": false
+    "channel_count": 0,
+    "channel_types": []
   },
   "pipeline": [
     {
@@ -275,20 +293,28 @@
     {
       "datasets": [
         {
+          "arrived_at": "2026-10-09T11:59:03Z",
+          "clock_issue": "",
           "dataset_id": "bars",
+          "delay_known": true,
+          "delay_seconds": "3",
+          "display_name": "",
           "freq": "1m",
           "input_watermark_at": "2026-10-09T12:00:00Z",
-          "lag_limit_seconds": "0",
-          "lag_seconds": "120",
           "last_reported_at": "2026-10-09T12:00:00Z",
           "last_run_at": "2026-10-09T12:00:00Z",
           "last_success_at": "2026-10-09T11:59:00Z",
+          "lateness_limit_seconds": "600",
+          "latest_bar_close_at": "2026-10-09T11:59:00Z",
           "output_watermark_at": "2026-10-09T11:58:00Z",
+          "overdue_seconds": "0",
           "producer": "storage",
           "raw_error": "",
           "reason": "输出水位已落后",
           "space_id": "crypto",
-          "status": "degraded"
+          "status": "degraded",
+          "waiting_bars": 0,
+          "waiting_since": ""
         }
       ],
       "id": "storage",
@@ -299,6 +325,12 @@
       "datasets": [],
       "id": "factor",
       "name": "因子管理服务",
+      "status": "disabled"
+    },
+    {
+      "datasets": [],
+      "id": "strategy",
+      "name": "策略服务",
       "status": "disabled"
     },
     {

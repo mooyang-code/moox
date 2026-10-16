@@ -19,8 +19,8 @@ func TestStockIntervalCoversSuccessAfterSkippedMonday(t *testing.T) {
 	friday := time.Date(2026, 10, 9, 15, 0, 0, 0, shanghai)
 	monday := time.Date(2026, 10, 12, 15, 0, 0, 0, shanghai)
 	instance := store.Instance{InstanceID: "i1", SpaceID: "stock", ResolvedJSON: []byte(`{"completion_kind":"collector.period.completed","view_id":"v","bar":"1d","calendar":"cn_stock","columns":{},"view_columns":["close"]}`)}
-	observer.ObservePeriod(instance, "1d", friday, store.StatusOK, "")
-	observer.ObservePeriod(instance, "1d", monday, store.StatusSkipped, "factor_missing")
+	observer.ObservePeriod(instance, "1d", friday.Add(-24*time.Hour), friday, store.StatusOK, "")
+	observer.ObservePeriod(instance, "1d", monday.Add(-24*time.Hour), monday, store.StatusSkipped, "factor_missing")
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
 	interval := observer.runIntervalLocked("i1", "cn_stock", "1d", 24*time.Hour)

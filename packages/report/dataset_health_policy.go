@@ -28,16 +28,19 @@ type RealtimeTimeSeriesPolicy struct {
 }
 
 type RealtimeTimeSeriesDefaults struct {
-	RunMissedIntervals     int           `yaml:"run_missed_intervals" json:"run_missed_intervals"`
-	SuccessMissedIntervals int           `yaml:"success_missed_intervals" json:"success_missed_intervals"`
-	WatermarkPeriods       int           `yaml:"watermark_periods" json:"watermark_periods"`
-	MinimumWatermarkLag    time.Duration `yaml:"minimum_watermark_lag" json:"minimum_watermark_lag"`
+	RunMissedIntervals     int `yaml:"run_missed_intervals" json:"run_missed_intervals"`
+	SuccessMissedIntervals int `yaml:"success_missed_intervals" json:"success_missed_intervals"`
+	// WatermarkPeriods 与 MinimumWatermarkLag 决定最新一根 K 线允许迟到多久：按市场交易日历，
+	// 此刻应已收线的那根从收线起超过 max(WatermarkPeriods × 周期, MinimumWatermarkLag) 仍没到，数据集判为过期。
+	WatermarkPeriods    int           `yaml:"watermark_periods" json:"watermark_periods"`
+	MinimumWatermarkLag time.Duration `yaml:"minimum_watermark_lag" json:"minimum_watermark_lag"`
 }
 
 type RealtimeTimeSeriesOverride struct {
-	SpaceID      string        `yaml:"space_id" json:"space_id"`
-	DatasetID    string        `yaml:"dataset_id" json:"dataset_id"`
-	Freq         string        `yaml:"freq" json:"freq"`
+	SpaceID   string `yaml:"space_id" json:"space_id"`
+	DatasetID string `yaml:"dataset_id" json:"dataset_id"`
+	Freq      string `yaml:"freq" json:"freq"`
+	// WatermarkLag 覆盖该数据集最新一根 K 线允许迟到的时间。
 	WatermarkLag time.Duration `yaml:"watermark_lag,omitempty" json:"watermark_lag,omitempty"`
 }
 

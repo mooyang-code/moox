@@ -108,7 +108,7 @@
             <div class="host-rows">
               <div v-for="host in componentHosts" :key="host.hostId" class="host-row">
                 <span class="host-row__name">{{ host.hostId }}</span>
-                <span class="chips" :class="{ 'chips--labeled': expanded.components }">
+                <span class="chips">
                   <button
                     v-for="chip in host.chips"
                     :key="chip.key"
@@ -119,7 +119,7 @@
                     :aria-label="`${chip.name}（${host.hostId}）：${chip.status}`"
                     @click="openComponent(chip.item)"
                   >
-                    <span class="dot" /><span v-if="expanded.components">{{ chip.name }}</span>
+                    <span class="dot" /><span>{{ chip.name }}</span>
                   </button>
                 </span>
               </div>
@@ -139,11 +139,6 @@
                 </button>
               </li>
             </ul>
-            <footer class="tile-foot">
-              <button type="button" class="link-button" @click="expanded.components = !expanded.components">
-                {{ expanded.components ? "只显示状态点" : "显示组件名称" }}
-              </button>
-            </footer>
           </article>
 
           <article class="tile layer" aria-label="主机" :class="`is-${layers.hosts.tone}`">
@@ -166,6 +161,7 @@
                       <b v-if="item.threshold" :style="{ left: `${item.threshold}%` }" />
                     </span>
                     <span class="meter-row__value">{{ item.value === null ? "暂无" : `${item.value.toFixed(1)}%` }}</span>
+                    <span class="meter-row__capacity" :title="item.capacityTitle">{{ item.capacity }}</span>
                   </div>
                 </div>
                 <p v-if="host.tone !== 'ok'" class="host-card__reason">{{ host.reason }}</p>
@@ -198,8 +194,9 @@
                   <tr>
                     <th>数据集</th>
                     <th>周期</th>
-                    <th>水位落后</th>
-                    <th>允许落后</th>
+                    <th>最新K线</th>
+                    <th>到达延迟</th>
+                    <th>允许迟到</th>
                     <th>状态</th>
                   </tr>
                 </thead>
@@ -209,7 +206,8 @@
                       <span class="dot" />{{ row.name }}<small>{{ row.producer }} · {{ row.spaceId }}</small>
                     </td>
                     <td>{{ row.freq }}</td>
-                    <td class="lag" :class="`is-${row.lagTone}`">{{ row.lag }}</td>
+                    <td>{{ row.latest }}</td>
+                    <td class="lag" :class="`is-${row.delayTone}`" :title="row.delayTitle">{{ row.delay }}</td>
                     <td>{{ row.limit }}</td>
                     <td class="status-cell">{{ row.attention ? row.reason || row.status : row.status }}</td>
                   </tr>
@@ -263,35 +261,39 @@
       </section>
     </div>
 
-    <a-modal
-      v-model:visible="notificationVisible"
-      title="消息通知设置"
-      width="min(640px, 100vw)"
-      @ok="saveNotification"
-      @cancel="notificationVisible = false"
-    >
-      <a-form layout="vertical"
-        ><a-form-item label="通知平台"
-          ><a-select v-model="notification.channel_type"
+    <a-modal v-model:visible="notificationVisible" title="消息通知设置" width="min(680px, 100vw)" :footer="false">
+      <p class="muted notification-intro">告警会同时发到下面每个渠道；全部删除后，告警只在这里记录，不再推送到站外。</p>
+      <ul class="notification-list" aria-label="通知渠道">
+        <li v-for="channel in channels" :key="channel.channel_id">
+          <span class="notification-list__type">{{ channelName(channel.channel_type) }}</span>
+          <span class="notification-list__url">{{ channel.webhook_url }}</span>
+          <a-button
+            size="mini"
+            type="text"
+            status="danger"
+            :loading="removing === channel.channel_id"
+            @click="removeChannel(channel)"
+            >删除</a-button
+          >
+        </li>
+        <li v-if="!channels.length" class="notification-list__empty muted">还没有通知渠道，告警不会推送到站外平台</li>
+      </ul>
+      <section class="notification-add" aria-label="添加通知渠道">
+        <h4>添加通知渠道</h4>
+        <div class="notification-add__row">
+          <a-select v-model="draft.channel_type" class="notification-add__type" aria-label="通知平台"
             ><a-option value="wecom">企业微信</a-option><a-option value="feishu">飞书</a-option></a-select
-          ></a-form-item
-        ><a-form-item label="机器人 Webhook URL"
-          ><a-input
-            v-model="notification.webhook_url"
-            @input="notification.url_changed = true"
-            placeholder="输入新的 HTTPS Webhook URL" /></a-form-item
-        ><a-checkbox v-model="notification.clear_url">清空当前 URL，停止站外通知</a-checkbox>
-        <section class="notification-current" aria-label="当前配置">
-          <h4>当前配置</h4>
-          <dl v-if="notification.current_url" class="facts">
-            <dt>通知平台</dt>
-            <dd>{{ channelName(notification.current_type) }}</dd>
-            <dt>Webhook URL</dt>
-            <dd class="notification-current__url">{{ notification.current_url }}</dd>
-          </dl>
-          <p v-else class="muted">未配置，告警不会推送到站外平台</p>
-        </section></a-form
-      >
+          >
+          <a-input
+            v-model="draft.webhook_url"
+            aria-label="Webhook URL"
+            placeholder="群机器人的 HTTPS Webhook URL"
+            allow-clear
+            @press-enter="addChannel"
+          />
+          <a-button type="primary" status="success" :loading="adding" @click="addChannel">添加</a-button>
+        </div>
+      </section>
     </a-modal>
 
     <a-drawer v-model:visible="detailVisible" title="组件详情" width="min(760px, 100vw)" :footer="false">
@@ -360,7 +362,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { Message, Modal } from "@arco-design/web-vue";
-import { monitorApi, type HealthComponent, type HealthOverview } from "@/api/monitor";
+import { monitorApi, type HealthComponent, type HealthOverview, type NotificationChannel } from "@/api/monitor";
 import { listAllDatasets, listAllViews } from "@/api/storage/metadata";
 import { usePolling } from "@/hooks/usePolling";
 import { createLatestRequestGuard } from "@/utils/latest-request";
@@ -394,23 +396,17 @@ const clockMs = ref(Date.now());
 const names = reactive<NameBook>({ datasets: {}, views: {} });
 const expandedAlert = ref("");
 const showAllIncidents = ref(false);
-const expanded = reactive({ components: false, pipeline: false, business: false });
+const expanded = reactive({ pipeline: false, business: false });
 const detailVisible = ref(false);
 const selected = ref<HealthComponent | null>(null);
 const notificationVisible = ref(false);
-// current_type / current_url 是已保存的配置，表单里的 channel_type / webhook_url 是待保存的修改。
-const notification = reactive({
-  channel_type: "wecom",
-  webhook_url: "",
-  current_type: "",
-  current_url: "",
-  clear_url: false,
-  url_changed: false
-});
+const channels = ref<NotificationChannel[]>([]);
+const draft = reactive({ channel_type: "wecom", webhook_url: "" });
+const adding = ref(false);
+const removing = ref("");
 // 完整的 Webhook URL 是推送凭据，读取接口只对全局管理员开放，其他用户不显示设置入口。
 const { account } = storeToRefs(useUserInfoStore());
 const isAdmin = computed(() => !!account.value.user?.admin);
-let notificationInitialType = "wecom";
 const refreshGuard = createLatestRequestGuard();
 
 const nowMs = computed(() => serverNow(overview.value, clockMs.value));
@@ -453,7 +449,7 @@ const componentHosts = computed(() => componentsByHost(overview.value));
 const componentIssues = computed(() => componentHosts.value.flatMap(host => host.chips.filter(chip => chip.attention)));
 const unregistered = computed(() => overview.value.unregistered || []);
 const hosts = computed(() => hostCards(overview.value, nowMs.value));
-const stages = computed(() => pipelineStages(overview.value, names));
+const stages = computed(() => pipelineStages(overview.value, names, nowMs.value));
 const allDatasetRows = computed(() => stages.value.flatMap(stage => stage.rows));
 const datasetRows = computed(() =>
   expanded.pipeline ? allDatasetRows.value : allDatasetRows.value.filter(row => row.attention)
@@ -468,9 +464,11 @@ const businessRows = computed(() =>
 );
 const businessQuiet = computed(() => (businessCount.value ? "没有需要关注的业务检查" : "暂无业务检查"));
 const notificationLabel = computed(() => {
-  const setting = overview.value.notification;
-  if (!setting?.configured) return "未配置";
-  return channelName(setting.channel_type) + " ✓";
+  const summary = overview.value.notification;
+  const count = summary?.channel_count || 0;
+  if (!count) return "未配置";
+  const platforms = [...new Set((summary?.channel_types || []).map(type => channelName(type)))].join("、");
+  return count > 1 ? `${platforms}（${count} 个渠道）` : `${platforms} ✓`;
 });
 
 function channelName(type?: string) {
@@ -532,72 +530,74 @@ function openComponent(item: HealthComponent) {
 
 async function openNotification() {
   try {
-    const rsp = await monitorApi.getNotification();
-    const setting = rsp.channel || {};
-    notification.channel_type = setting.channel_type || "wecom";
-    notificationInitialType = notification.channel_type;
-    notification.current_type = setting.channel_type || "";
-    notification.current_url = setting.webhook_url || "";
-    notification.webhook_url = "";
-    notification.clear_url = false;
-    notification.url_changed = false;
+    const rsp = await monitorApi.listNotificationChannels();
+    channels.value = rsp.channels || [];
+    syncNotificationSummary();
+    draft.webhook_url = "";
     notificationVisible.value = true;
   } catch (err) {
-    Message.error(err instanceof Error ? err.message : "通知配置加载失败");
+    Message.error(err instanceof Error ? err.message : "通知渠道加载失败");
   }
 }
-async function saveNotification() {
-  const clearing = notification.clear_url || (notification.url_changed && !notification.webhook_url.trim());
-  if (!notification.url_changed && !notification.clear_url && notification.channel_type === notificationInitialType) {
-    notificationVisible.value = false;
-    return;
-  }
-  if (!notification.url_changed && !notification.clear_url) {
-    Message.warning("修改通知平台前，请重新输入 Webhook URL 或勾选清空");
-    return;
-  }
-  if (clearing) {
-    if (!notification.clear_url) notification.clear_url = true;
-    Modal.warning({
-      title: "确认停用通知",
-      content: "清空后系统将不再向站外平台发送告警，是否继续？",
-      onOk: () => void persistNotification()
-    });
-    return;
-  }
-  await persistNotification();
+// 页头的“告警推送”跟着弹窗里的增删即时更新，不等下一次刷新概览。
+function syncNotificationSummary() {
+  overview.value.notification = {
+    channel_count: channels.value.length,
+    channel_types: channels.value.map(channel => channel.channel_type || "")
+  };
 }
-async function persistNotification() {
+async function addChannel() {
+  const url = draft.webhook_url.trim();
+  if (!url) {
+    Message.warning("请填写群机器人的 Webhook URL");
+    return;
+  }
   const submission = notificationScope.begin();
+  adding.value = true;
   try {
-    const rsp = await monitorApi.updateNotification({
-      channel_type: notification.channel_type,
-      webhook_url: notification.clear_url ? "" : notification.webhook_url
-    });
-    overview.value.notification = { channel_type: rsp.channel?.channel_type, configured: !!rsp.channel?.webhook_url };
-    // 配置已保存；但弹窗已被关闭/重新打开时，不能清空用户在新表单里刚输入的 Webhook，也不能关闭新弹窗
-    if (!submission.isCurrent()) {
-      Message.success("通知配置已保存");
-      return;
-    }
-    notification.current_type = rsp.channel?.channel_type || "";
-    notification.current_url = rsp.channel?.webhook_url || "";
-    notification.webhook_url = "";
-    notification.clear_url = false;
-    notification.url_changed = false;
-    notificationInitialType = notification.channel_type;
-    notificationVisible.value = false;
-    Message.success("通知配置已保存");
+    const rsp = await monitorApi.addNotificationChannel({ channel_type: draft.channel_type, webhook_url: url });
+    if (!submission.isCurrent()) return;
+    if (rsp.channel) channels.value = [...channels.value, rsp.channel];
+    syncNotificationSummary();
+    draft.webhook_url = "";
+    Message.success("已添加通知渠道");
   } catch (err) {
-    Message.error(err instanceof Error ? err.message : "通知配置保存失败");
+    Message.error(err instanceof Error ? err.message : "添加通知渠道失败");
+  } finally {
+    if (submission.isCurrent()) adding.value = false;
+  }
+}
+function removeChannel(channel: NotificationChannel) {
+  const last = channels.value.length === 1;
+  Modal.warning({
+    title: "删除通知渠道",
+    content: last
+      ? "这是最后一个渠道，删除后告警只在这里记录，不再推送到站外。是否继续？"
+      : `删除后不再向这个${channelName(channel.channel_type)}群推送告警，是否继续？`,
+    hideCancel: false,
+    onOk: () => void deleteChannel(channel)
+  });
+}
+async function deleteChannel(channel: NotificationChannel) {
+  const id = channel.channel_id || "";
+  const submission = notificationScope.begin();
+  removing.value = id;
+  try {
+    await monitorApi.deleteNotificationChannel({ channel_id: id });
+    if (!submission.isCurrent()) return;
+    channels.value = channels.value.filter(item => item.channel_id !== id);
+    syncNotificationSummary();
+    Message.success("已删除通知渠道");
+  } catch (err) {
+    Message.error(err instanceof Error ? err.message : "删除通知渠道失败");
+  } finally {
+    if (submission.isCurrent()) removing.value = "";
   }
 }
 
-// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域：弹窗关闭或重新打开后，迟到的响应不能再改动重新加载的渠道列表
 const notificationScope = createSubmitScope({ global: true });
-watch(notificationVisible, open => {
-  if (open) notificationScope.invalidate();
-});
+watch(notificationVisible, () => notificationScope.invalidate());
 
 // 编辑通知设置时暂停轮询，避免刷新打断表单。
 usePolling(refresh, 30000, () => !notificationVisible.value);
@@ -845,22 +845,57 @@ a {
   margin: 0;
   overflow-wrap: anywhere;
 }
-.notification-current {
-  margin-top: 16px;
-  padding: 10px 12px;
+.notification-intro {
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.notification-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.notification-list li {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
   border-radius: 6px;
   background: var(--color-fill-1);
+  font-size: 13px;
 }
-.notification-current h4 {
-  margin-bottom: 6px;
+.notification-list .notification-list__empty {
+  display: block;
+}
+.notification-list__type {
+  color: var(--color-text-2);
+  font-weight: 600;
+}
+.notification-list__url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  word-break: break-all;
+  user-select: all;
+}
+.notification-add {
+  margin-top: 16px;
+}
+.notification-add h4 {
+  margin-bottom: 8px;
   color: var(--color-text-2);
   font-size: 13px;
   font-weight: 600;
 }
-.notification-current__url {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  user-select: all;
-  word-break: break-all;
+.notification-add__row {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) auto;
+  gap: 8px;
+}
+@media (max-width: 520px) {
+  .notification-add__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .timeline {
@@ -961,23 +996,19 @@ a {
 .component-chip {
   display: inline-flex;
   align-items: center;
-  padding: 3px;
-  border: 0;
-  border-radius: 4px;
-  background: none;
-  cursor: pointer;
-}
-.component-chip .dot {
-  width: 10px;
-  height: 10px;
-  margin: 0;
-}
-.chips--labeled .component-chip {
   gap: 6px;
   padding: 2px 8px;
+  border: 0;
+  border-radius: 4px;
   background: var(--color-fill-1);
   color: var(--color-text-1);
   font-size: 12px;
+  cursor: pointer;
+}
+.component-chip .dot {
+  width: 8px;
+  height: 8px;
+  margin: 0;
 }
 .component-chip:hover,
 .component-chip:focus-visible {
@@ -1045,7 +1076,7 @@ a {
 }
 .meter-row {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) 52px;
+  grid-template-columns: 32px minmax(0, 1fr) 46px 96px;
   align-items: center;
   gap: 8px;
   font-size: 12px;
@@ -1055,6 +1086,13 @@ a {
 }
 .meter-row__value {
   text-align: right;
+}
+.meter-row__capacity {
+  overflow: hidden;
+  color: var(--color-text-3);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .meter {
   position: relative;

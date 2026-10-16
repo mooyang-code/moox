@@ -1,4 +1,5 @@
 import { defineComponent } from "vue";
+import { Message, Modal } from "@arco-design/web-vue";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -30,7 +31,11 @@ function render(overview: HealthOverview) {
         "a-form-item": box,
         "a-select": box,
         "a-option": box,
-        "a-input": box,
+        "a-input": {
+          props: ["modelValue"],
+          emits: ["update:modelValue", "press-enter"],
+          template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />'
+        },
         "a-checkbox": box,
         "icon-arrow-right": true,
         "icon-check-circle-fill": true,
@@ -58,6 +63,7 @@ describe("monitor page", () => {
     setActivePinia(createPinia());
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     wrapper?.unmount();
     wrapper = undefined;
   });
@@ -197,10 +203,12 @@ describe("monitor page", () => {
               space_id: "crypto",
               dataset_id: "dataset_abc",
               freq: "1m",
-              status: "degraded",
+              status: "stale",
               reason: "最近成功结果已过期",
-              lag_seconds: "600",
-              lag_limit_seconds: "180"
+              output_watermark_at: "2026-10-16T02:40:00Z",
+              waiting_bars: 19,
+              waiting_since: "2026-10-16T02:42:00Z",
+              lateness_limit_seconds: "600"
             },
             {
               producer: "storage",
@@ -208,8 +216,12 @@ describe("monitor page", () => {
               dataset_id: "dataset_def",
               freq: "1h",
               status: "healthy",
-              output_watermark_at: "2026-10-16T02:00:00Z",
-              lag_limit_seconds: "7200"
+              output_watermark_at: "2026-10-16T01:00:00Z",
+              latest_bar_close_at: "2026-10-16T02:00:00Z",
+              arrived_at: "2026-10-16T02:00:04Z",
+              delay_known: true,
+              delay_seconds: "4",
+              lateness_limit_seconds: "3600"
             }
           ]
         }
@@ -222,6 +234,7 @@ describe("monitor page", () => {
     expect(rows[0].text()).toContain("现货分钟K线");
     expect(rows[0].text()).toContain("最近成功结果已过期");
     expect(rows[0].find(".lag").classes()).toContain("is-bad");
+    expect(rows[0].find(".lag").text()).toBe("等待中，已过收线 18 分钟（缺 19 根）");
     expect(vi.mocked(listAllDatasets)).toHaveBeenCalledWith("crypto", { spaceId: "crypto" });
     await page.find('[aria-label="数据链路"] .link-button').trigger("click");
     expect(page.findAll(".dataset-table tbody tr")).toHaveLength(2);
@@ -253,20 +266,68 @@ describe("monitor page", () => {
     expect(page.findAll(".host-card")).toHaveLength(1);
   });
 
-  it("shows the saved notification platform and full webhook URL to administrators", async () => {
+  it("lets administrators add and delete notification channels and shows full webhook URLs", async () => {
     useUserInfoStore().account.user = { admin: true };
-    const url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=0f6c3c1e-1234-4abc-9def-000000000000";
-    const page = render({ ...healthy, notification: { channel_type: "wecom", configured: true } });
+    vi.spyOn(Message, "success").mockImplementation(() => ({ close: () => undefined }));
+    vi.spyOn(Modal, "warning").mockImplementation(config => {
+      config.onOk?.();
+      return { close: () => undefined, update: () => undefined };
+    });
+    const wecom = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=0f6c3c1e-1234-4abc-9def-000000000000";
+    const feishu = "https://open.feishu.cn/open-apis/bot/v2/hook/0f6c3c1e-1234-4abc-9def-111111111111";
+    const page = render({ ...healthy, notification: { channel_count: 1, channel_types: ["wecom"] } });
     await flushPromises();
     expect(page.text()).toContain("告警推送：企业微信 ✓");
-    mockedCallControl.mockResolvedValueOnce({ channel: { channel_type: "wecom", webhook_url: url } });
+
+    mockedCallControl.mockResolvedValueOnce({ channels: [{ channel_id: "nc_1", channel_type: "wecom", webhook_url: wecom }] });
     const settings = page.findAll("button").find(button => button.text() === "消息通知设置");
     await settings!.trigger("click");
     await flushPromises();
-    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetNotificationChannel", {});
-    const current = page.find('[aria-label="当前配置"]');
-    expect(current.text()).toContain("企业微信");
-    expect(current.find(".notification-current__url").text()).toBe(url);
+    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "ListNotificationChannels", {});
+    const list = () => page.find('[aria-label="通知渠道"]');
+    expect(list().text()).toContain("企业微信");
+    expect(list().find(".notification-list__url").text()).toBe(wecom);
+
+    mockedCallControl.mockResolvedValueOnce({ channel: { channel_id: "nc_2", channel_type: "feishu", webhook_url: feishu } });
+    await page.find('[aria-label="添加通知渠道"] input').setValue(` ${feishu} `);
+    await page
+      .findAll("button")
+      .find(button => button.text() === "添加")!
+      .trigger("click");
+    await flushPromises();
+    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "AddNotificationChannel", {
+      channel_type: "wecom",
+      webhook_url: feishu
+    });
+    expect(
+      list()
+        .findAll(".notification-list__url")
+        .map(item => item.text())
+    ).toEqual([wecom, feishu]);
+    expect(page.text()).toContain("告警推送：企业微信、飞书（2 个渠道）");
+    expect((page.find('[aria-label="添加通知渠道"] input').element as HTMLInputElement).value).toBe("");
+
+    mockedCallControl.mockResolvedValueOnce({});
+    await list()
+      .findAll("button")
+      .find(button => button.text() === "删除")!
+      .trigger("click");
+    await flushPromises();
+    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "DeleteNotificationChannel", { channel_id: "nc_1" });
+    expect(
+      list()
+        .findAll(".notification-list__url")
+        .map(item => item.text())
+    ).toEqual([feishu]);
+    expect(page.text()).toContain("告警推送：飞书 ✓");
+  });
+
+  it("always labels component chips with their names", async () => {
+    const page = render(healthy);
+    await flushPromises();
+    const chip = page.find('[aria-label="组件"] .component-chip');
+    expect(chip.text()).toBe("管理后台");
+    expect(page.find('[aria-label="组件"]').text()).not.toContain("只显示状态点");
   });
 
   it("hides notification settings from users who cannot read the webhook", async () => {
@@ -283,12 +344,9 @@ describe("monitor page", () => {
     expect(page.find(".layer--wide").exists()).toBe(false);
   });
 
-  it("uses the structured overview and global notification endpoints", async () => {
+  it("uses the structured overview endpoint", async () => {
     mockedCallControl.mockResolvedValue({ overview: healthy });
     await monitorApi.getOverview({ space_id: "crypto" });
     expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetHealthOverview", { space_id: "crypto" });
-    mockedCallControl.mockResolvedValue({ channel: { configured: false } });
-    await monitorApi.getNotification();
-    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetNotificationChannel", {});
   });
 });

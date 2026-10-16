@@ -76,6 +76,8 @@ message SetRunSummary {
   // warming_subjects were left out of the period while their lookback window
   // loads; their results are not formal.
   int32 warming_subjects = 7;
+  // completed_at 是引擎写完 last_period_time 这一期的 Unix 秒；0 表示未知。
+  int64 completed_at = 8;
 }
 
 message FactorSetInfo {

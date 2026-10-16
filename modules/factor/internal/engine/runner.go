@@ -73,7 +73,7 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 		r.metrics.PeriodLag.WithLabelValues(setID).Set(max(0, time.Since(periodTime).Seconds()))
 		if !periodTime.IsZero() && (err == nil || outcome.Status != "") {
 			r.metrics.LastPeriodTime.WithLabelValues(setID).Set(float64(periodTime.Unix()))
-			r.runs.record(setID, periodTime, status, outcome)
+			r.runs.record(setID, periodTime, status, outcome, time.Now())
 		}
 	}
 	for _, factor := range outcome.Factors {

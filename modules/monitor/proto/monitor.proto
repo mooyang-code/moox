@@ -99,9 +99,22 @@ message HealthDataset {
   string last_success_at = 10;
   string last_run_at = 11;
   string last_reported_at = 12;
-  int64 lag_seconds = 13;
-  // 输出水位允许落后的秒数，超过即判为过期；0 表示没有水位要求。
-  int64 lag_limit_seconds = 14;
+  // 生产者随期望清单上报的展示名称（例如策略实例名）；为空时由页面按 Storage 名称或数据集 ID 展示。
+  string display_name = 13;
+  // 最新一根 K 线：output_watermark_at 是它的 data_time（开盘时间），latest_bar_close_at 是按市场交易日历算出的收线时间，
+  // arrived_at 是生产者写完它的时刻。延迟 = 到达 − 收线，到达那一刻定值；生产者没上报到达时间时 delay_known 为 false。
+  string latest_bar_close_at = 14;
+  string arrived_at = 15;
+  int64 delay_seconds = 16;
+  bool delay_known = 17;
+  // 此刻应已收线却还没到的根数；waiting_since 是其中最早一根的收线时间，overdue_seconds 是它已过收线多久（持续增长）。
+  int32 waiting_bars = 18;
+  string waiting_since = 19;
+  int64 overdue_seconds = 20;
+  // 允许迟到的秒数：等待超过它判为过期并告警；已到的根延迟超过它只标为迟到，不影响当前状态。
+  int64 lateness_limit_seconds = 21;
+  // 无法按交易日历判断的原因，例如“日历未覆盖”“周期对齐未确认”；为空表示已按日历判断。
+  string clock_issue = 22;
 }
 message HealthPipelineStage {
   string id = 1;
@@ -149,6 +162,13 @@ message HealthHost {
   double cpu_threshold = 16;
   double memory_threshold = 17;
   double disk_threshold = 18;
+  // 资源总量：CPU 逻辑核数、内存总量与已用量；磁盘取使用率最高的那个文件系统（与 disk_percent 同一个）。
+  uint32 cpu_cores = 19;
+  uint64 memory_total_bytes = 20;
+  uint64 memory_used_bytes = 21;
+  uint64 disk_total_bytes = 22;
+  uint64 disk_used_bytes = 23;
+  string disk_mountpoint = 24;
 }
 message HealthCounts {
   int32 healthy_count = 1;
@@ -175,8 +195,8 @@ message HealthOverview {
   repeated HealthBusinessCheck business_checks = 7;
   repeated HealthHost hosts = 8;
   repeated HealthComponent unregistered = 9;
-  // 概览对所有登录用户可见，只带推送平台和是否已配置；完整 Webhook URL 只由仅管理员可调的 GetNotificationChannel 返回。
-  NotificationChannelStatus notification = 10;
+  // 概览对所有登录用户可见，只带渠道数量和平台；完整 Webhook URL 只由仅管理员可调的 ListNotificationChannels 返回。
+  NotificationSummary notification = 10;
   // 最近 incident_window_hours 小时内的告警经过（触发到恢复为一条），按触发时间倒序。
   repeated AlertIncident incidents = 11;
   int32 incident_window_hours = 12;
@@ -199,20 +219,25 @@ message AlertIncident {
 message GetHealthOverviewReq { string space_id = 1; }
 message GetHealthOverviewRsp { common.RetInfo ret_info = 1; HealthOverview overview = 2; }
 
-message NotificationChannelStatus {
-  string channel_type = 1;
-  bool configured = 2;
+// NotificationSummary 是告警推送的概况：配置了几个渠道、各是什么平台（按添加顺序，可重复）。
+message NotificationSummary {
+  int32 channel_count = 1;
+  repeated string channel_types = 2;
 }
-// NotificationChannelSetting 是全局推送渠道的完整配置。Webhook URL 本身就是推送凭据，控制台只允许全局管理员读取。
-message NotificationChannelSetting {
-  string channel_type = 1;
-  string webhook_url = 2;
-  string updated_at = 3;
+// NotificationChannel 是一个告警推送渠道（企业微信或飞书群机器人）。告警发给全部渠道。
+// Webhook URL 本身就是推送凭据，控制台只允许全局管理员列出渠道。
+message NotificationChannel {
+  string channel_id = 1;
+  string channel_type = 2;
+  string webhook_url = 3;
+  string created_at = 4;
 }
-message GetNotificationChannelReq {}
-message GetNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationChannelSetting channel = 2; }
-message UpdateNotificationChannelReq { string channel_type = 1; string webhook_url = 2; }
-message UpdateNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationChannelSetting channel = 2; }
+message ListNotificationChannelsReq {}
+message ListNotificationChannelsRsp { common.RetInfo ret_info = 1; repeated NotificationChannel channels = 2; }
+message AddNotificationChannelReq { string channel_type = 1; string webhook_url = 2; }
+message AddNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationChannel channel = 2; }
+message DeleteNotificationChannelReq { string channel_id = 1; }
+message DeleteNotificationChannelRsp { common.RetInfo ret_info = 1; }
 
 message HostAgentInfo {
   string agent_id = 1;
@@ -302,8 +327,9 @@ message GetDoctorContextRsp {
 
 service MonitorMgr {
   rpc GetHealthOverview(GetHealthOverviewReq) returns (GetHealthOverviewRsp);
-  rpc GetNotificationChannel(GetNotificationChannelReq) returns (GetNotificationChannelRsp);
-  rpc UpdateNotificationChannel(UpdateNotificationChannelReq) returns (UpdateNotificationChannelRsp);
+  rpc ListNotificationChannels(ListNotificationChannelsReq) returns (ListNotificationChannelsRsp);
+  rpc AddNotificationChannel(AddNotificationChannelReq) returns (AddNotificationChannelRsp);
+  rpc DeleteNotificationChannel(DeleteNotificationChannelReq) returns (DeleteNotificationChannelRsp);
   rpc ListHostAgents(ListHostAgentsReq) returns (ListHostAgentsRsp);
   rpc QueryHostMetricHistory(QueryHostMetricHistoryReq) returns (QueryHostMetricHistoryRsp);
   rpc GetDoctorContext(GetDoctorContextReq) returns (GetDoctorContextRsp);

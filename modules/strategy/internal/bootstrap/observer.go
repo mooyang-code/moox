@@ -324,8 +324,9 @@ func expectations(values map[string]report.DatasetExpectation) []report.DatasetE
 	return out
 }
 
-// ObservePeriod 记录一个处理周期：ok → success（推进输出水位），skipped → incomplete。
-func (o *instanceObserver) ObservePeriod(instance store.Instance, bar string, barEnd time.Time, result, reason string) {
+// ObservePeriod 记录一个处理周期：ok → success（推进输出水位），skipped → incomplete。水位用这根 K 线在存储里的 data_time
+// （开盘时间），与 Storage、因子的水位同一口径，Monitor 按交易日历算它的收线时间和到达延迟。
+func (o *instanceObserver) ObservePeriod(instance store.Instance, bar string, barStart, barEnd time.Time, result, reason string) {
 	o.periods.WithLabelValues(instance.InstanceID, result, reason).Inc()
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -355,11 +356,11 @@ func (o *instanceObserver) ObservePeriod(instance store.Instance, bar string, ba
 		o.expected = next
 	}
 	finishedAt := o.now().UTC()
-	observation := report.DatasetObservation{Key: expectation.Key, Result: "incomplete", FinishedAt: finishedAt, InputWatermark: barEnd}
+	observation := report.DatasetObservation{Key: expectation.Key, Result: "incomplete", FinishedAt: finishedAt, InputWatermark: barStart}
 	accumulating := false
 	if result == store.StatusOK {
 		observation.Result = "success"
-		observation.OutputWatermark = barEnd
+		observation.OutputWatermark = barStart
 		delete(o.accumulatingSince, instance.InstanceID)
 	} else if accumulatingReasons[reason] && o.accumulatingLocked(instance, bar, finishedAt) {
 		observation.Result = "partial"

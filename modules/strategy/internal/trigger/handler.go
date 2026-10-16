@@ -43,7 +43,8 @@ type Loader interface {
 
 // Observer 接收每个处理周期的结果，用于指标与 Monitor 上报。
 type Observer interface {
-	ObservePeriod(instance store.Instance, bar string, barEnd time.Time, result, reason string)
+	// barStart 是这根 K 线在存储里的 data_time（开盘时间），作为输出水位上报；barEnd 是收线时间。
+	ObservePeriod(instance store.Instance, bar string, barStart, barEnd time.Time, result, reason string)
 }
 
 // Handler 处理 ViewDataReady：遍历绑定该 View 的启用实例，错误汇总，全部终态落库后才 ACK。
@@ -166,7 +167,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	if rt == nil || rt.resolved.Bar == "" {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
 			h.logf("实例 %s 的绑定快照无法解析，本期丢弃：%v", instance.InstanceID, rtErr)
-			h.observe(instance, strings.ToLower(payload.GetFrequency()), time.Time{}, store.StatusSkipped, input.SkipConfigError)
+			h.observe(instance, strings.ToLower(payload.GetFrequency()), time.Time{}, time.Time{}, store.StatusSkipped, input.SkipConfigError)
 		}
 		return nil
 	}
@@ -183,7 +184,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	if err != nil {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
 			h.logf("实例 %s 无法确定周期边界（%s/%s），本期丢弃：%v", instance.InstanceID, calendar, bar, err)
-			h.observe(instance, bar, time.Time{}, store.StatusSkipped, input.SkipConfigError)
+			h.observe(instance, bar, time.Time{}, time.Time{}, store.StatusSkipped, input.SkipConfigError)
 		}
 		return nil
 	}
@@ -191,7 +192,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	if err != nil {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
 			h.logf("实例 %s 周期 %s 无法推算有效期（%s/%s），本期丢弃：%v", instance.InstanceID, input.BarEndLabel(calendar, bar, boundary.BarEnd), calendar, bar, err)
-			h.observe(instance, bar, boundary.BarEnd, store.StatusSkipped, input.SkipConfigError)
+			h.observe(instance, bar, boundary.StorageStart, boundary.BarEnd, store.StatusSkipped, input.SkipConfigError)
 		}
 		return nil
 	}
@@ -258,7 +259,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		case err == nil:
 			if created {
 				h.logTiming(p, payload, decision.Status, loaded.Steps)
-				h.observe(instance, bar, boundary.BarEnd, decision.Status, decision.SkipReason)
+				h.observe(instance, bar, boundary.StorageStart, boundary.BarEnd, decision.Status, decision.SkipReason)
 				h.updateHealth(ctx, instance.InstanceID, rt.sessionID, decision.Status, decision.SkipReason)
 			}
 			return nil
@@ -437,14 +438,14 @@ func (h *Handler) commitSkipped(ctx context.Context, p *period, reason, detail s
 			// 连兜底的 skipped 也写不进去：重投不会成功，记错误日志并计入模块健康失败后确认，不能无限重投。
 			if h.firstDrop(p.eventID, p.instance.InstanceID) {
 				h.logf("实例 %s 周期 %s 的 skipped(%s) 记录无法写入，放弃本期：%v", p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), reason, err)
-				h.observe(p.instance, p.input.Bar, p.boundary.BarEnd, store.StatusSkipped, input.SkipConfigError)
+				h.observe(p.instance, p.input.Bar, p.boundary.StorageStart, p.boundary.BarEnd, store.StatusSkipped, input.SkipConfigError)
 			}
 			return nil
 		}
 		return fmt.Errorf("写入 skipped(%s) 记录：%w", reason, err)
 	}
 	if created {
-		h.observe(p.instance, p.input.Bar, p.boundary.BarEnd, store.StatusSkipped, reason)
+		h.observe(p.instance, p.input.Bar, p.boundary.StorageStart, p.boundary.BarEnd, store.StatusSkipped, reason)
 		h.updateHealth(ctx, p.instance.InstanceID, p.runtime.sessionID, store.StatusSkipped, reason)
 		h.logf("实例 %s 周期 %s 跳过（%s）：%s", p.instance.InstanceID, p.boundary.BarEnd.Format(time.RFC3339), reason, detail)
 	}
@@ -471,9 +472,9 @@ func (h *Handler) updateHealth(ctx context.Context, instanceID, sessionID, statu
 	}
 }
 
-func (h *Handler) observe(instance store.Instance, bar string, barEnd time.Time, result, reason string) {
+func (h *Handler) observe(instance store.Instance, bar string, barStart, barEnd time.Time, result, reason string) {
 	if h.Observer != nil {
-		h.Observer.ObservePeriod(instance, bar, barEnd, result, reason)
+		h.Observer.ObservePeriod(instance, bar, barStart, barEnd, result, reason)
 	}
 }
 

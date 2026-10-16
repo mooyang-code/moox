@@ -97,8 +97,8 @@ func TestInstanceObserverRegistersEnabledInstancesAndCountsPeriods(t *testing.T)
 		t.Fatal(err)
 	}
 	barEnd := time.Date(2026, 10, 1, 1, 0, 0, 0, time.UTC)
-	observer.ObservePeriod(instance, "1h", barEnd, store.StatusOK, "")
-	observer.ObservePeriod(instance, "1h", barEnd.Add(time.Hour), store.StatusSkipped, "factor_missing")
+	observer.ObservePeriod(instance, "1h", barEnd.Add(-time.Hour), barEnd, store.StatusOK, "")
+	observer.ObservePeriod(instance, "1h", barEnd.Add(time.Hour).Add(-time.Hour), barEnd.Add(time.Hour), store.StatusSkipped, "factor_missing")
 	if got := testutil.ToFloat64(observer.periods.WithLabelValues("i1", "ok", "")); got != 1 {
 		t.Fatalf("ok 计数不符：%v", got)
 	}
@@ -113,9 +113,17 @@ func TestInstanceObserverRegistersEnabledInstancesAndCountsPeriods(t *testing.T)
 	for _, family := range families {
 		found[family.GetName()] = true
 	}
-	for _, name := range []string{"moox_strategy_dataset_enabled", "moox_strategy_dataset_info", "moox_strategy_dataset_last_success_timestamp_seconds", "moox_strategy_dataset_output_watermark_timestamp_seconds", "moox_strategy_period_total", "moox_strategy_runs_total"} {
+	for _, name := range []string{"moox_strategy_dataset_enabled", "moox_strategy_dataset_info", "moox_strategy_dataset_last_success_timestamp_seconds", "moox_strategy_dataset_output_watermark_timestamp_seconds", "moox_strategy_dataset_output_arrival_timestamp_seconds", "moox_strategy_period_total", "moox_strategy_runs_total"} {
 		if !found[name] {
 			t.Fatalf("缺少指标 %s", name)
+		}
+	}
+	// 输出水位是这根 K 线在存储里的开盘时间，与 Storage、因子同一口径。
+	for _, family := range families {
+		if family.GetName() == "moox_strategy_dataset_output_watermark_timestamp_seconds" {
+			if got := family.GetMetric()[0].GetGauge().GetValue(); got != float64(barEnd.Add(-time.Hour).Unix()) {
+				t.Fatalf("输出水位应为开盘时间：%v", got)
+			}
 		}
 	}
 	// 新启用、尚未刷新清单的实例在首次观测时自动登记。
@@ -124,7 +132,7 @@ func TestInstanceObserverRegistersEnabledInstancesAndCountsPeriods(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	observer.ObservePeriod(second, "1h", barEnd, store.StatusOK, "")
+	observer.ObservePeriod(second, "1h", barEnd.Add(-time.Hour), barEnd, store.StatusOK, "")
 	if len(observer.expected) != 2 {
 		t.Fatalf("首次观测应登记新实例：%+v", observer.expected)
 	}

@@ -3,6 +3,7 @@ import type { HealthOverview } from "@/api/monitor";
 import {
   alertGroups,
   businessKinds,
+  capacityText,
   componentsByHost,
   hostCards,
   incidentTimeline,
@@ -43,7 +44,14 @@ describe("current alerts", () => {
         triggered_at: at(189),
         recovering: true,
         object: { type: "dataset", producer: "factor" },
-        dataset: { lag_seconds: "3600", lag_limit_seconds: "180", output_watermark_at: at(60) }
+        dataset: {
+          status: "stale",
+          output_watermark_at: at(60),
+          latest_bar_close_at: at(59),
+          waiting_bars: 58,
+          waiting_since: at(58),
+          lateness_limit_seconds: "180"
+        }
       }
     ]
   };
@@ -63,8 +71,8 @@ describe("current alerts", () => {
     expect(line.recovering).toBe(true);
     expect(line.facts).toEqual(
       expect.arrayContaining([
-        { label: "已落后", value: "1 小时" },
-        { label: "允许落后", value: "3 分钟" }
+        { label: "到达", value: "等待中，已过收线 58 分钟（缺 58 根）" },
+        { label: "允许迟到", value: "3 分钟" }
       ])
     );
     expect(line.link.href).toBe("#/factor/tasks?tab=results");
@@ -204,7 +212,8 @@ describe("layers", () => {
     ]);
   });
 
-  it("shows watermark lag against the allowed lag with names", () => {
+  it("shows each dataset's latest bar delay: on time, late but arrived, waiting, and calendar issues", () => {
+    const close = at(10);
     const stages = pipelineStages(
       {
         pipeline: [
@@ -219,45 +228,73 @@ describe("layers", () => {
                 dataset_id: "dataset_abc",
                 freq: "1m",
                 status: "healthy",
-                lag_seconds: "97",
-                lag_limit_seconds: "180"
+                output_watermark_at: at(11),
+                latest_bar_close_at: close,
+                arrived_at: at(10, 5),
+                delay_known: true,
+                delay_seconds: "5",
+                lateness_limit_seconds: "600"
               },
               {
                 producer: "factor",
                 space_id: "crypto",
-                dataset_id: "dataset_def",
-                freq: "1h",
-                status: "degraded",
-                reason: "数据积累中，结果暂不完整",
-                lag_seconds: "3817",
-                lag_limit_seconds: "7200"
-              },
-              {
-                producer: "factor",
-                space_id: "crypto",
-                dataset_id: "dataset_ghi",
+                dataset_id: "dataset_late",
                 freq: "1m",
                 status: "healthy",
-                lag_seconds: "170",
-                lag_limit_seconds: "180"
+                output_watermark_at: at(41),
+                latest_bar_close_at: at(40),
+                arrived_at: at(0),
+                delay_known: true,
+                delay_seconds: "2400",
+                lateness_limit_seconds: "600"
+              },
+              {
+                producer: "factor",
+                space_id: "crypto",
+                dataset_id: "dataset_wait",
+                freq: "1m",
+                status: "stale",
+                reason: "等待中",
+                output_watermark_at: at(15),
+                waiting_bars: 3,
+                waiting_since: at(12),
+                overdue_seconds: "700",
+                lateness_limit_seconds: "600"
+              },
+              {
+                producer: "factor",
+                space_id: "stockcn",
+                dataset_id: "dataset_cal",
+                freq: "1m",
+                status: "unknown",
+                reason: "日历未覆盖：2027-01-04",
+                clock_issue: "日历未覆盖：2027-01-04",
+                lateness_limit_seconds: "600"
               }
             ]
           },
           { id: "trade", status: "disabled", datasets: [] }
         ]
       },
-      names
+      names,
+      now
     );
     expect(stages.map(stage => [stage.label, stage.total, stage.note])).toEqual([
       ["采集", 0, "服务正常，暂无数据集观测"],
-      ["因子", 3, ""],
+      ["因子", 4, ""],
       ["交易", 0, "未部署"]
     ]);
-    expect(stages[1].rows.map(row => [row.name, row.lag, row.limit, row.lagTone, row.attention])).toEqual([
-      ["dataset_def", "1 小时 3 分", "2 小时", "ok", true],
-      ["dataset_ghi", "2 分钟", "3 分钟", "warn", false],
-      ["现货分钟K线", "1 分钟", "3 分钟", "ok", false]
+    expect(stages[1].rows.map(row => [row.name, row.delay, row.delayTone, row.attention])).toEqual([
+      // 还没到：从收线起按页面时钟计时，超过允许迟到为红。
+      ["dataset_wait", "等待中，已过收线 12 分钟（缺 3 根）", "bad", true],
+      ["dataset_cal", "日历未覆盖：2027-01-04", "bad", true],
+      // 迟到但已到：标橙，当前状态仍正常。
+      ["dataset_late", "延迟 40 分钟", "warn", false],
+      // 准时：延迟在到达那一刻定值。
+      ["现货分钟K线", "延迟 5 秒", "ok", false]
     ]);
+    expect(stages[1].rows[2].delayTitle).toContain("迟到，已恢复");
+    expect(stages[1].rows[3].limit).toBe("10 分钟");
   });
 
   it("labels business checks by kind and treats retired checks as inactive", () => {
@@ -322,5 +359,63 @@ describe("layers", () => {
       ["磁盘", "idle", null]
     ]);
     expect(card.href).toBe("#/ops/hosts?tab=monitor&agent_id=pwU2&host_id=control");
+  });
+
+  it("shows host capacity next to each usage meter", () => {
+    const [card] = hostCards(
+      {
+        hosts: [
+          {
+            host_id: "storage",
+            status: "healthy",
+            cpu_available: true,
+            cpu_percent: 9,
+            cpu_cores: 4,
+            memory_available: true,
+            memory_percent: 40,
+            memory_total_bytes: String(8 * 1024 ** 3),
+            memory_used_bytes: String(3.2 * 1024 ** 3),
+            disk_available: true,
+            disk_percent: 62,
+            disk_total_bytes: 200 * 1024 ** 3,
+            disk_used_bytes: 124 * 1024 ** 3,
+            disk_mountpoint: "/data"
+          }
+        ]
+      },
+      now
+    );
+    expect(card.meters.map(meter => meter.capacity)).toEqual(["4 核", "3.2 / 8 GB", "124 / 200 GB"]);
+    expect(card.meters[2].capacityTitle).toContain("/data");
+    expect(capacityText(undefined, undefined)).toBe("");
+    expect(capacityText(512 * 1024 ** 2, 2 * 1024 ** 4)).toBe("0 / 2 TB");
+  });
+
+  it("puts strategy results after factors and names rows by the producer's display name", () => {
+    const stages = pipelineStages(
+      {
+        pipeline: [
+          { id: "factor", status: "healthy", datasets: [] },
+          {
+            id: "strategy",
+            status: "healthy",
+            datasets: [
+              {
+                producer: "strategy",
+                space_id: "crypto",
+                dataset_id: "strategy_26d51f7e-4c40-4e33-b637-4ec72d4cd7e6",
+                display_name: "binance_spot_momentum（26d51f7e）",
+                freq: "1m",
+                status: "healthy"
+              }
+            ]
+          },
+          { id: "trade", status: "healthy", datasets: [] }
+        ]
+      },
+      names
+    );
+    expect(stages.map(stage => stage.label)).toEqual(["因子", "策略计算", "交易"]);
+    expect(stages[1].rows[0]).toMatchObject({ name: "binance_spot_momentum（26d51f7e）", producer: "策略" });
   });
 });

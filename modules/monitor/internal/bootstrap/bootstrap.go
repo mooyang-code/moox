@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/notifier"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	monitorplacement "github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
@@ -47,10 +48,24 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "初始化 monitor 数据库失败: %v", err)
 		return nil, err
 	}
+	// 部署配置里的推送地址只在首次建库时写入；之后渠道由监控页增删，删光了重启也不会自动加回来。
+	channelsExisted, err := mgr.TableExists(domain.NotificationChannel{}.TableName())
+	if err != nil {
+		_ = mgr.Close()
+		log.ErrorContextf(ctx, "检查 monitor 数据库失败: %v", err)
+		return nil, err
+	}
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
 		_ = mgr.Close()
 		log.ErrorContextf(ctx, "初始化 monitor schema 失败: %v", err)
 		return nil, err
+	}
+	if !channelsExisted {
+		if err := seedNotificationChannel(ctx, mgr.Repositories()); err != nil {
+			_ = mgr.Close()
+			log.ErrorContextf(ctx, "写入初始通知渠道失败: %v", err)
+			return nil, err
+		}
 	}
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	runtime := &Runtime{StartedAt: time.Now(), cancel: cancelRuntime, Store: mgr, Repositories: mgr.Repositories()}
@@ -98,11 +113,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		presenceFailures[key] = struct{}{}
 	}
 	presenceProvider := func(ctx context.Context) (notification.Sender, error) {
-		channel, channelErr := runtime.Repositories.Notifications.GetGlobal(ctx)
-		if channelErr != nil || channel == nil || strings.TrimSpace(channel.WebhookURL) == "" {
-			return nil, channelErr
-		}
-		return notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channel.ChannelType), WebhookURL: channel.WebhookURL})
+		return notifier.Sender(ctx, runtime.Repositories.Notifications)
 	}
 	// The scanner and sample path use separate failure callbacks so a failed
 	// transition is audited exactly once.
@@ -136,8 +147,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{
 			Cache: hostRuleCache, Repository: runtime.Repositories.Alerts,
-			Notification: func(ctx context.Context) (*domain.NotificationChannel, error) {
-				return runtime.Repositories.Notifications.GetGlobal(ctx)
+			Notification: func(ctx context.Context) (notification.Sender, error) {
+				return notifier.Sender(ctx, runtime.Repositories.Notifications)
 			},
 		})
 	} else {
@@ -221,7 +232,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		InstrumentMinimumCount:      cfg.MarketHealth.InstrumentMinimumCount,
 		InstrumentRequiredExchanges: append([]string(nil), cfg.MarketHealth.InstrumentRequiredExchanges...),
 	}
-	klineInventory, err := buildKlineFreshnessInventory(cfg, runtime.Gateway)
+	klineInventory, err := buildTaskResultInventory(cfg, runtime.Gateway)
 	if err != nil {
 		_ = runtime.Close()
 		return nil, err
@@ -237,6 +248,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		Policy:                     doctorContext.DatasetHealthPolicy.RealtimeTimeSeries,
 		BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold,
 		MarketFetchThresholds:      marketFetchThresholds,
+		Inventory:                  inventorySource(klineInventory),
 	}, runtime.Repositories, resultHook, cfg.KlineFreshness.EvaluationInterval, klineFreshness)
 	watchdogRun := func(watchdogCtx context.Context) error {
 		var marketErr, freshnessErr error
@@ -252,7 +264,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		// must not create a false "missing completion" alert.
 		return errors.Join(marketErr, freshnessErr)
 	}
-	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Checks: runtime.Repositories.Checks, Topology: runtime.Repositories.Topology, Results: runtime.Repositories.Results, Gateways: runtime.Repositories.Gateways, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold, MarketFetchThresholds: marketFetchThresholds}, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
+	health := &healthview.Builder{ComponentHealth: runtime.Repositories.ComponentHealth, Facts: &monitorobservability.Builder{Metrics: metricsQuery, Hosts: hostStore, Checks: runtime.Repositories.Checks, Topology: runtime.Repositories.Topology, Results: runtime.Repositories.Results, Gateways: runtime.Repositories.Gateways, Policy: doctorContext.DatasetHealthPolicy.RealtimeTimeSeries, BalanceDifferenceThreshold: cfg.Observability.BalanceDifferenceThreshold, MarketFetchThresholds: marketFetchThresholds, Inventory: inventorySource(klineInventory)}, Checks: runtime.Repositories.Checks, Results: runtime.Repositories.Results, Alerts: runtime.Repositories.Alerts, Notifications: runtime.Repositories.Notifications}
 	registerMonitorService(s, cfg, runtime, hostStore, hostReader, hostReady, probeRunner, resultHook, syncSystem, metricsQuery, doctorContext, health)
 	runtime.ModuleMetrics = registerMetricsReporter(s, runtime)
 	if err := registerMonitorDataCleanupTimer(s, cfg, runtime); err != nil {
@@ -283,8 +295,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	return s, nil
 }
 
-func buildKlineFreshnessInventory(cfg *config.Config, gateway gatewayclient.Invoker) (*monmetrics.TaskResultInventoryCache, error) {
-	if cfg == nil || !cfg.KlineFreshness.Enabled {
+// buildTaskResultInventory 构造采集任务清单缓存。清单声明了每个空间的市场交易日历，数据集新鲜度按它判断应收的最新一根，
+// 所以不随 K 线新鲜度检查的开关关闭；开关只决定是否运行 K 线新鲜度检查。
+func buildTaskResultInventory(cfg *config.Config, gateway gatewayclient.Invoker) (*monmetrics.TaskResultInventoryCache, error) {
+	if cfg == nil {
 		return nil, nil
 	}
 	client, err := monmetrics.NewCollectorInventoryGatewayClient(gateway)
@@ -300,6 +314,14 @@ func buildKlineFreshnessInventory(cfg *config.Config, gateway gatewayclient.Invo
 		return nil, fmt.Errorf("monitor collector inventory cache: %w", err)
 	}
 	return cache, nil
+}
+
+// inventorySource 把可能为空的清单缓存转成接口：没有启用 K 线新鲜度时返回 nil，概览不按交易日历判断。
+func inventorySource(cache *monmetrics.TaskResultInventoryCache) monitorobservability.InventorySource {
+	if cache == nil {
+		return nil
+	}
+	return cache
 }
 
 func buildKlineFreshnessEvaluator(query *monmetrics.QueryService, cfg *config.Config, inventory *monmetrics.TaskResultInventoryCache) *monmetrics.KlineFreshnessEvaluator {

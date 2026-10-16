@@ -76,12 +76,20 @@ func klineReasonText(report monmetrics.KlineFreshnessReport, now time.Time) stri
 		return "无法读取采集对象清单，暂时无法判断哪些对象落后"
 	case "task_result_error":
 		return "采集任务的结果状态异常，请检查采集任务"
+	case "calendar_not_covered":
+		return "日历未覆盖：交易日历没有覆盖到当前日期，无法判断应收的最新一根K线，请更新交易日历"
+	case "calendar_unknown":
+		return "该市场没有可用的交易日历，无法判断应收的最新一根K线"
+	case "alignment_unconfirmed":
+		return "周期对齐未确认：这个周期的K线按什么时刻对齐还没有确认，暂不判断"
+	case "calendar_error":
+		return "无法按交易日历识别最新一根K线：" + report.Diagnostic
 	case "view_behind_latest_completed_period":
 		if report.OldestDataTime.IsZero() {
-			return fmt.Sprintf("采集已完成到 %s 这一期，但还没有看到该结果的数据（已等待 %s）",
+			return fmt.Sprintf("采集已完成到 %s 这一期，但还没有看到该结果的数据（这一根已过收线 %s）",
 				alerttext.Time(report.Rule.LatestCompletedPeriod), alerttext.Duration(report.StaleAge))
 		}
-		return fmt.Sprintf("采集已完成到 %s 这一期，但结果只更新到 %s，落后 %s",
+		return fmt.Sprintf("采集已完成到 %s 这一期，但结果只更新到 %s，之后的一根已过收线 %s",
 			alerttext.Time(report.Rule.LatestCompletedPeriod), alerttext.Time(report.OldestDataTime), alerttext.Duration(report.StaleAge))
 	case "business_data_stale":
 		if report.ViewStale {
@@ -131,8 +139,6 @@ func datasetReasonText(dataset monitorobservability.DatasetFrequencyStatus, now 
 		return "数据积累中：结果暂不完整（窗口空洞保护或历史不足），数据攒够后自动恢复"
 	case dataset.Reason == "尚无成功运行":
 		return "已在运行，但还没有成功过"
-	case dataset.Status == "stale" && !dataset.OutputWatermarkAt.IsZero():
-		return fmt.Sprintf("数据停止更新：最新数据停在 %s，已落后 %s", alerttext.Time(dataset.OutputWatermarkAt), alerttext.Duration(time.Duration(dataset.LagSeconds)*time.Second))
 	default:
 		return dataset.Reason
 	}

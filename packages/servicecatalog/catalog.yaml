@@ -548,22 +548,24 @@ components:
         max_body_bytes: 4194304
         methods:
           - GetHealthOverview
-          - GetNotificationChannel
-          - UpdateNotificationChannel
+          - ListNotificationChannels
+          - AddNotificationChannel
+          - DeleteNotificationChannel
           - ListHostAgents
           - QueryHostMetricHistory
           - GetDoctorContext
         read_only_methods:
           - GetHealthOverview
-          - GetNotificationChannel
+          - ListNotificationChannels
           - ListHostAgents
           - QueryHostMetricHistory
           - GetDoctorContext
         acl:
           - methods:
               - GetHealthOverview
-              - GetNotificationChannel
-              - UpdateNotificationChannel
+              - ListNotificationChannels
+              - AddNotificationChannel
+              - DeleteNotificationChannel
               - ListHostAgents
               - QueryHostMetricHistory
               - GetDoctorContext

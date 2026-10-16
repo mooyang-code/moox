@@ -93,15 +93,18 @@ CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Legacy UUID subjects are retained as aliases so existing Storage history
--- remains queryable after HostAgent rotates to a compact four-character ID.
+-- 告警推送渠道（企业微信或飞书群机器人），告警发给全部渠道；首次建库时按部署配置写入一个，之后在监控页增删
 CREATE TABLE IF NOT EXISTS t_monitor_notification_channels (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_channel_id TEXT NOT NULL UNIQUE CHECK (c_channel_id = 'global'),
-    c_channel_type TEXT NOT NULL DEFAULT 'wecom' CHECK (c_channel_type IN ('wecom', 'feishu')),
-    c_webhook_url TEXT NOT NULL DEFAULT '',
+    c_channel_id TEXT NOT NULL,
+    c_channel_type TEXT NOT NULL,
+    c_webhook_url TEXT NOT NULL,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_channel_type IN ('wecom', 'feishu')),
+    CHECK (c_webhook_url <> ''),
+    UNIQUE (c_channel_id),
+    UNIQUE (c_webhook_url)
 );
 
 CREATE TABLE IF NOT EXISTS t_monitor_alert_rules (

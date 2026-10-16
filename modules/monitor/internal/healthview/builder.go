@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -93,13 +92,14 @@ func (b Builder) Build(ctx context.Context, spaceID string) (*Overview, error) {
 		out.IncidentWindowHours = int32(IncidentWindow / time.Hour)
 	}
 	if b.Notifications != nil {
-		channel, err := b.Notifications.GetGlobal(ctx)
+		channels, err := b.Notifications.List(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if channel != nil {
-			out.Notification = &pb.NotificationChannelStatus{ChannelType: channel.ChannelType, Configured: strings.TrimSpace(channel.WebhookURL) != ""}
+		for _, channel := range channels {
+			out.Notification.ChannelTypes = append(out.Notification.ChannelTypes, channel.ChannelType)
 		}
+		out.Notification.ChannelCount = int32(len(channels))
 	}
 	sort.Slice(out.Alerts, func(i, j int) bool {
 		a, z := out.Alerts[i], out.Alerts[j]
@@ -144,7 +144,7 @@ func (b Builder) decorateHostThresholds(ctx context.Context, hosts []*pb.HealthH
 }
 
 func projectFacts(facts observability.Overview) *Overview {
-	out := &Overview{GeneratedAt: stamp(facts.GeneratedAt), TopologyKnown: facts.TopologyKnown, Summary: &pb.HealthSummary{Components: &pb.HealthCounts{}}, Notification: &pb.NotificationChannelStatus{}}
+	out := &Overview{GeneratedAt: stamp(facts.GeneratedAt), TopologyKnown: facts.TopologyKnown, Summary: &pb.HealthSummary{Components: &pb.HealthCounts{}}, Notification: &pb.NotificationSummary{}}
 	for _, service := range facts.Services {
 		component := projectComponent(service, facts)
 		out.Components = append(out.Components, component)

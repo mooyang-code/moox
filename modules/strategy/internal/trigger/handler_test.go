@@ -111,7 +111,7 @@ type recordingObserver struct {
 	results []string
 }
 
-func (o *recordingObserver) ObservePeriod(instance store.Instance, bar string, barEnd time.Time, result, reason string) {
+func (o *recordingObserver) ObservePeriod(instance store.Instance, bar string, barStart, barEnd time.Time, result, reason string) {
 	o.results = append(o.results, fmt.Sprintf("%s:%s:%s", barEnd.Format("15"), result, reason))
 }
 

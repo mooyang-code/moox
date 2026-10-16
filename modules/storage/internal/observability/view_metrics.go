@@ -23,27 +23,31 @@ type ViewMetrics struct {
 	deliveryTotal   *prometheus.CounterVec
 	redeliveryTotal prometheus.Counter
 
-	consumerLagMessages              prometheus.Gauge
-	consumerBound                    prometheus.Gauge
-	consumerPartitionLag             *prometheus.GaugeVec
-	consumerPartitionBound           *prometheus.GaugeVec
-	oldestPendingEventAge            prometheus.GaugeFunc
-	deliveryDuration                 prometheus.Histogram
-	ackErrorsTotal                   prometheus.Counter
-	inProgressErrorsTotal            prometheus.Counter
-	retryExhaustedTotal              prometheus.Counter
-	laneActive                       prometheus.Gauge
-	outboxPendingEntries             prometheus.Gauge
-	outboxOldestAge                  prometheus.Gauge
-	outboxPublishErrorsTotal         prometheus.Counter
-	outboxDuplicatePublish           prometheus.Counter
-	outboxPublisherReady             prometheus.Gauge
-	outboxPublisherUnavailableAge    prometheus.GaugeFunc
-	outboxLastPublishSuccess         prometheus.Gauge
-	outboxLastReconnect              prometheus.Gauge
-	outboxReconnectAttempts          *prometheus.CounterVec
-	periodWaitingDatasets            *prometheus.GaugeVec
-	viewOutputWatermark              *prometheus.GaugeVec
+	consumerLagMessages           prometheus.Gauge
+	consumerBound                 prometheus.Gauge
+	consumerPartitionLag          *prometheus.GaugeVec
+	consumerPartitionBound        *prometheus.GaugeVec
+	oldestPendingEventAge         prometheus.GaugeFunc
+	deliveryDuration              prometheus.Histogram
+	ackErrorsTotal                prometheus.Counter
+	inProgressErrorsTotal         prometheus.Counter
+	retryExhaustedTotal           prometheus.Counter
+	laneActive                    prometheus.Gauge
+	outboxPendingEntries          prometheus.Gauge
+	outboxOldestAge               prometheus.Gauge
+	outboxPublishErrorsTotal      prometheus.Counter
+	outboxDuplicatePublish        prometheus.Counter
+	outboxPublisherReady          prometheus.Gauge
+	outboxPublisherUnavailableAge prometheus.GaugeFunc
+	outboxLastPublishSuccess      prometheus.Gauge
+	outboxLastReconnect           prometheus.Gauge
+	outboxReconnectAttempts       *prometheus.CounterVec
+	periodWaitingDatasets         *prometheus.GaugeVec
+	viewOutputWatermark           *prometheus.GaugeVec
+	// viewOutputArrival 是 View 输出水位最近一次前进时的墙上时间，Monitor 用它算最新一根 K 线的到达延迟。
+	viewOutputArrival *prometheus.GaugeVec
+	// now 只供测试替换时钟。
+	now                              func() time.Time
 	viewSubjects                     *viewSubjectTracker
 	readyPublishRetry                *prometheus.CounterVec
 	readyQueuePending                prometheus.Gauge
@@ -249,6 +253,11 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "output_watermark_timestamp_seconds",
 			Help: "Latest business timestamp successfully committed to an active Storage View.",
 		}, []string{"space_id", "view_id", "dataset_id", "freq"}),
+		viewOutputArrival: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: "moox", Subsystem: "storage_view", Name: "output_arrival_timestamp_seconds",
+			Help: "View 输出水位最近一次前进时的墙上时间（这批数据提交完成的时刻）。",
+		}, []string{"space_id", "view_id", "dataset_id", "freq"}),
+		now:          time.Now,
 		viewSubjects: newViewSubjectTracker(),
 		readyPublishRetry: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "moox", Subsystem: "storage_view", Name: "ready_publish_retry_total",
@@ -416,6 +425,9 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 	if metrics.viewOutputWatermark, err = registerOrReuse(registerer, metrics.viewOutputWatermark); err != nil {
 		return nil, err
 	}
+	if metrics.viewOutputArrival, err = registerOrReuse(registerer, metrics.viewOutputArrival); err != nil {
+		return nil, err
+	}
 	if metrics.viewSubjects, err = registerOrReuse(registerer, metrics.viewSubjects); err != nil {
 		return nil, err
 	}
@@ -517,6 +529,7 @@ func (m *ViewMetrics) ObserveViewOutputWatermark(spaceID, viewID, datasetID, fre
 	}
 	m.viewWatermarks[key] = watermarkUnix
 	m.viewOutputWatermark.WithLabelValues(spaceID, viewID, datasetID, frequency).Set(float64(watermarkUnix))
+	m.viewOutputArrival.WithLabelValues(spaceID, viewID, datasetID, frequency).Set(float64(m.now().UTC().Unix()))
 }
 
 // ObservePeriodWaiting records the current missing-dataset count for a View

@@ -113,6 +113,18 @@ func (m *Store) Ping(ctx context.Context) error {
 	return m.db.WithContext(ctx).Exec("SELECT 1").Error
 }
 
+// TableExists 判断表是否已经存在；用于区分首次建库（例如只在首次建库时写入部署配置里的通知渠道）。
+func (m *Store) TableExists(name string) (bool, error) {
+	if m == nil || m.db == nil {
+		return false, fmt.Errorf("monitor database is not open")
+	}
+	var count int64
+	if err := m.db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (m *Store) ApplySchema(sql string) error {
 	if m == nil || m.db == nil {
 		return fmt.Errorf("monitor database is not open")

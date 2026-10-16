@@ -34,7 +34,7 @@ func TestStockBasesLoadedAfterEventsArrivedFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 积压事件先到：周一跳过（只记运行，不是 ok）。
-	observer.ObservePeriod(instance, "1d", monday, store.StatusSkipped, "previous_version_unknown")
+	observer.ObservePeriod(instance, "1d", monday.Add(-24*time.Hour), monday, store.StatusSkipped, "previous_version_unknown")
 	if err := observer.refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}

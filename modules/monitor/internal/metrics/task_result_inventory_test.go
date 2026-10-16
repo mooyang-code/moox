@@ -332,15 +332,16 @@ func TestKlineFreshnessEvaluatorDetectsViewBehindCompletedPeriodWithinStaleWindo
 		Entries: []TaskResultInventoryEntry{{
 			SpaceID: "crypto", TaskID: "task-private", DatasetID: "dataset-dynamic", ViewID: "view-dynamic", Frequency: "1m",
 			MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready",
-			LatestCompletedPeriod: now.Add(-time.Minute), LatestCompletedStatus: "complete",
-			ViewLastDataTime: now.Add(-2 * time.Minute), ObservedAt: now,
+			LatestCompletedPeriod: now.Add(-2 * time.Minute), LatestCompletedStatus: "complete",
+			ViewLastDataTime: now.Add(-3 * time.Minute), ObservedAt: now,
 		}},
 	}}
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
+	// 采集已完成 now-2m 那一期（now-1m 收线），视图只到 now-3m：缺的那根已过收线 1 分钟。
 	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
 		ViewID: "view-dynamic", DatasetID: "dataset-dynamic", Subjects: 1, ObservedAt: now,
-		Latest: now.Add(-2 * time.Minute),
+		Latest: now.Add(-3 * time.Minute),
 	}})
 	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, 10*time.Minute, 20)
 	reports, err := evaluator.Evaluate(context.Background(), now)

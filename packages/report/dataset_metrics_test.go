@@ -117,6 +117,21 @@ func TestDatasetMetricsObserveRunUsesMaxWatermarks(t *testing.T) {
 	if got := testutil.ToFloat64(metrics.rows.WithLabelValues("crypto", "market_kline", "1m", "success")); got != 3 {
 		t.Fatalf("rows total = %v, want 3", got)
 	}
+	// 到达时间只在输出水位前进时记录：第二次运行没有推进水位，仍是第一次写入完成的时刻。
+	if got := testutil.ToFloat64(metrics.outputArrival.WithLabelValues(labels...)); got != 210 {
+		t.Fatalf("output arrival = %v, want 210", got)
+	}
+	if err := metrics.ObserveRun(DatasetObservation{
+		Key: key, Result: "success", Rows: 1, FinishedAt: time.Unix(275, 0), OutputWatermark: newer.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(metrics.outputArrival.WithLabelValues(labels...)); got != 275 {
+		t.Fatalf("output arrival after advance = %v, want 275", got)
+	}
+	if !IsMonitoredMetric("moox_collector_dataset_output_arrival_timestamp_seconds") || !IsMonitoredMetric("moox_storage_view_output_arrival_timestamp_seconds") {
+		t.Fatal("arrival metrics must be reported to Monitor")
+	}
 }
 
 func TestDatasetMetricsAcceptsCanonicalStorageFrequency(t *testing.T) {

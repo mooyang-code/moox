@@ -144,9 +144,14 @@ func TestViewMetricsExposeAggregateRuntimeMetricsWithFixedLabels(t *testing.T) {
 	metrics.SetOutboxSnapshotAt(3, time.Now().Add(-4*time.Second))
 	metrics.ObserveDelivery("term", "success")
 	metrics.ObservePeriodWaiting("prices-view", "1m", 1)
+	arrived := time.Date(2026, 8, 20, 14, 1, 3, 0, time.UTC)
+	metrics.now = func() time.Time { return arrived }
 	metrics.ObserveViewOutputWatermark("crypto", "view_factor_binance_kline_1m", "dataset_factor_binance_kline_1m", "1m", time.Date(2026, 8, 20, 14, 0, 0, 0, time.UTC))
+	metrics.now = func() time.Time { return arrived.Add(time.Minute) }
 	metrics.ObserveViewOutputWatermark("crypto", "view_factor_binance_kline_1m", "dataset_factor_binance_kline_1m", "1m", time.Date(2026, 8, 20, 13, 0, 0, 0, time.UTC))
 	assert.Equal(t, float64(time.Date(2026, 8, 20, 14, 0, 0, 0, time.UTC).Unix()), testutil.ToFloat64(metrics.viewOutputWatermark.WithLabelValues("crypto", "view_factor_binance_kline_1m", "dataset_factor_binance_kline_1m", "1m")))
+	// 到达时间只在水位前进时记录：较旧的水位不改动它。
+	assert.Equal(t, float64(arrived.Unix()), testutil.ToFloat64(metrics.viewOutputArrival.WithLabelValues("crypto", "view_factor_binance_kline_1m", "dataset_factor_binance_kline_1m", "1m")))
 	metrics.ObserveReadyPublishRetry("prices-view", "source_period_ready")
 	metrics.ObserveRestore(true, 250*time.Millisecond)
 

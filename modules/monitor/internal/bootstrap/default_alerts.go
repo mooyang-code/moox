@@ -24,9 +24,6 @@ func ensureDefaultCheckAlertRules(ctx context.Context, repositories *store.Repos
 	if repositories == nil {
 		return fmt.Errorf("default alerts require repositories")
 	}
-	if err := seedNotificationChannel(ctx, repositories); err != nil {
-		return err
-	}
 	checks, err := listDefaultAlertChecks(ctx, repositories)
 	if err != nil {
 		return err
@@ -119,9 +116,6 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 	if repositories == nil || registry == nil {
 		return fmt.Errorf("default host alerts require repositories and registry")
 	}
-	if err := seedNotificationChannel(ctx, repositories); err != nil {
-		return err
-	}
 	agents, err := registry.List(ctx, time.Now().UTC())
 	if err != nil {
 		return err
@@ -183,6 +177,7 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 	return nil
 }
 
+// seedNotificationChannel 在首次建库时按部署配置（MOOX_NOTIFICATION_*）写入第一个推送渠道；没有配置推送地址时不写入。
 func seedNotificationChannel(ctx context.Context, repositories *store.Repositories) error {
 	if repositories == nil || repositories.Notifications == nil {
 		return fmt.Errorf("notification repository is unavailable")
@@ -192,8 +187,12 @@ func seedNotificationChannel(ctx context.Context, repositories *store.Repositori
 		typ = string(notification.ChannelTypeWeCom)
 	}
 	url := strings.TrimSpace(os.Getenv("MOOX_NOTIFICATION_WEBHOOK_URL"))
+	if url == "" {
+		return nil
+	}
 	if _, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(typ), WebhookURL: url}); err != nil {
 		return fmt.Errorf("notification channel: %w", err)
 	}
-	return repositories.Notifications.SeedIfAbsent(ctx, domain.NotificationChannel{ChannelID: domain.GlobalNotificationChannelID, ChannelType: typ, WebhookURL: url})
+	_, err := repositories.Notifications.Add(ctx, typ, url)
+	return err
 }

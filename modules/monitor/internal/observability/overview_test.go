@@ -22,7 +22,7 @@ func TestDatasetStatusDistinguishesMissingStaleAndEmpty(t *testing.T) {
 	policy := testRealtimePolicy()
 	inventory := float64(now.Unix())
 
-	missing := datasetStatus(now, key, datasetValues{interval: 60, inventory: inventory}, policy)
+	missing := datasetStatus(now, key, datasetValues{interval: 60, inventory: inventory}, policy, cryptoClock)
 	if missing.Status != "unknown" || missing.Reason != "尚未上报" {
 		t.Fatalf("missing = %+v", missing)
 	}
@@ -30,19 +30,19 @@ func TestDatasetStatusDistinguishesMissingStaleAndEmpty(t *testing.T) {
 		interval: 60, lastRun: float64(now.Add(-10 * time.Minute).Unix()),
 		lastSuccess: float64(now.Add(-10 * time.Minute).Unix()), output: float64(now.Add(-10 * time.Minute).Unix()),
 		inventory: inventory,
-	}, policy)
-	if stale.Status != "stale" || stale.Reason != "run stale" || stale.LagSeconds != 600 {
+	}, policy, cryptoClock)
+	if stale.Status != "stale" || stale.Reason != "run stale" || stale.WaitingBars != 9 {
 		t.Fatalf("stale = %+v", stale)
 	}
 	empty := datasetStatus(now, key, datasetValues{
 		interval: 60, inventory: inventory, lastRun: float64(now.Unix()), lastSuccess: float64(now.Unix()),
-	}, policy)
+	}, policy, cryptoClock)
 	if empty.Status != "healthy" || empty.Reason != "正常但空结果" {
 		t.Fatalf("empty = %+v", empty)
 	}
 	producerStale := datasetStatus(now, key, datasetValues{
 		reporterStale: true, inventory: inventory, lastRun: float64(now.Unix()), lastSuccess: float64(now.Unix()),
-	}, policy)
+	}, policy, cryptoClock)
 	if producerStale.Status != "stale" || producerStale.Reason != "producer stale" {
 		t.Fatalf("producer stale = %+v", producerStale)
 	}
@@ -64,17 +64,12 @@ func TestDatasetTolerancesWhenIntervalIsShorterThanFrequency(t *testing.T) {
 	}
 }
 
-// 交易日历数据集的期望间隔可能远大于名义周期（周五到周一 40 小时、长假更久），水位容忍随期望间隔放大，
-// 否则节后第一根产出前就会报水位落后；期望间隔不超过周期时（加密货币）保持按周期计算。
-func TestDatasetTolerancesScaleWatermarkWithExpectedInterval(t *testing.T) {
-	key := datasetKey{spaceID: "cn_stock", datasetID: "strategy_signal", freq: "1d"}
-	_, _, watermarkLag := datasetTolerances(key, (40 * time.Hour).Seconds(), testRealtimePolicy())
-	if watermarkLag != 120*time.Hour {
-		t.Fatalf("watermark lag = %s", watermarkLag)
-	}
-	_, _, watermarkLag = datasetTolerances(key, (12 * time.Hour).Seconds(), testRealtimePolicy())
-	if watermarkLag != 72*time.Hour {
-		t.Fatalf("watermark lag = %s", watermarkLag)
+// 允许迟到只按周期算，不再随期望间隔放大：应收的最新一根已按交易日历确定，周末、长假不会被算成迟到。
+func TestDatasetLatenessDoesNotScaleWithExpectedInterval(t *testing.T) {
+	key := datasetKey{spaceID: "stockcn", datasetID: "strategy_signal", freq: "1d"}
+	_, _, lateness := datasetTolerances(key, (40 * time.Hour).Seconds(), testRealtimePolicy())
+	if lateness != 72*time.Hour {
+		t.Fatalf("lateness = %s", lateness)
 	}
 }
 
@@ -95,40 +90,18 @@ func TestDatasetTolerancesMatchFrequencyAliasesInOverrides(t *testing.T) {
 	}
 }
 
-func TestDatasetStatusMarksCanonicalFrequencyWatermarkStale(t *testing.T) {
-	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-	got := datasetStatus(now, datasetKey{
-		producer: "collector", spaceID: "crypto", datasetID: "market_kline", freq: "1h",
-	}, datasetValues{
-		interval: 3600, inventory: float64(now.Unix()), lastRun: float64(now.Unix()),
-		lastSuccess: float64(now.Unix()), output: float64(now.Add(-4 * time.Hour).Unix()),
-	}, testRealtimePolicy())
-
-	if got.Status != "stale" || !strings.Contains(got.Reason, "输出水位已落后 4 小时") || !strings.Contains(got.Reason, "最新输出时间 2026-07-29 08:00:00 UTC") {
-		t.Fatalf("status = %+v", got)
-	}
-}
-
-func TestDatasetWatermarkStaleReasonUsesUTCAndLag(t *testing.T) {
-	now := time.Date(2026, 8, 13, 4, 0, 0, 0, time.UTC)
-	got := datasetWatermarkStaleReason(DatasetFrequencyStatus{
-		OutputWatermarkAt: now.Add(-2*time.Hour - 3*time.Minute),
-		InputWatermarkAt:  now.Add(-time.Minute),
-		LagSeconds:        2*60*60 + 3*60,
-	}, now)
-	require.Equal(t, "输出水位已落后 2 小时 3 分钟，最新输出时间 2026-08-13 01:57:00 UTC，输入水位 2026-08-13 03:59:00 UTC（检查时间 2026-08-13 04:00:00 UTC）", got)
-}
-
 func TestDatasetStatusRejectsStaleInventory(t *testing.T) {
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	got := datasetStatus(now, datasetKey{producer: "collector", spaceID: "crypto", datasetID: "market_kline", freq: "1m"}, datasetValues{
 		interval: 60, inventory: float64(now.Add(-11 * time.Minute).Unix()),
 		lastRun: float64(now.Unix()), lastSuccess: float64(now.Unix()),
-	}, testRealtimePolicy())
+	}, testRealtimePolicy(), cryptoClock)
 	if got.Status != "unknown" || got.Reason != "inventory_stale" {
 		t.Fatalf("status = %+v", got)
 	}
 }
+
+var cryptoClock = spaceClock{clock: monmetrics.ContinuousClock()}
 
 func testRealtimePolicy() report.RealtimeTimeSeriesPolicy {
 	return report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{
@@ -169,7 +142,7 @@ func TestDatasetStatusUsesMetricObservationAsLastReport(t *testing.T) {
 	reportedAt := now.Add(-30 * time.Second)
 	got := datasetStatus(now, datasetKey{producer: "collector", spaceID: "crypto", datasetID: "bars", freq: "1m"}, datasetValues{
 		interval: 60, lastRun: float64(now.Unix()), lastSuccess: float64(now.Unix()), reportedAt: reportedAt,
-	}, testRealtimePolicy())
+	}, testRealtimePolicy(), cryptoClock)
 	if !got.LastReportedAt.Equal(reportedAt) {
 		t.Fatalf("last report = %s, want %s", got.LastReportedAt, reportedAt)
 	}
@@ -224,12 +197,6 @@ func TestBuilderReportsTimerCoordinationHealth(t *testing.T) {
 	}
 }
 
-
-
-
-
-
-
 func TestBuilderUsesConfiguredTimerCoordinationThreshold(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	lastSuccess := now.Add(-2 * time.Minute)
@@ -242,7 +209,7 @@ func TestBuilderUsesConfiguredTimerCoordinationThreshold(t *testing.T) {
 
 	got, err := (Builder{
 		Metrics: query, Now: func() time.Time { return now },
-		MarketFetchThresholds: MarketFetchThresholds{CoordinationStaleAfter: time.Minute, PendingGrace: 30 * time.Second,},
+		MarketFetchThresholds: MarketFetchThresholds{CoordinationStaleAfter: time.Minute, PendingGrace: 30 * time.Second},
 	}).Build(t.Context(), "stockcn")
 
 	require.NoError(t, err)
@@ -250,8 +217,6 @@ func TestBuilderUsesConfiguredTimerCoordinationThreshold(t *testing.T) {
 	require.Equal(t, "down", got.BusinessChecks[0].Status)
 	require.Contains(t, got.BusinessChecks[0].Reason, "超过允许时间")
 }
-
-
 
 func TestBuilderIgnoresDisabledTimerNodes(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
@@ -689,11 +654,13 @@ func TestBuilderIncludesStorageCommitFactsWithoutEnabledInventory(t *testing.T) 
 func TestBuilderReportsStorageViewWatermarkAsIndependentDataset(t *testing.T) {
 	now := time.Date(2026, 8, 20, 15, 0, 0, 0, time.UTC)
 	watermark := now.Add(-20 * time.Minute)
-	labels := `{"space_id":"crypto","view_id":"view_crypto_kline_1m_factor","freq":"1m"}`
+	// 指标目录按规范化（键排序）的标签 JSON 匹配同一身份的序列。
+	labels := `{"freq":"1m","space_id":"crypto","view_id":"view_crypto_kline_1m_factor"}`
 	query := openOverviewMetrics(t, func(db *gorm.DB) {
 		seedOverviewMetricForInstance(t, db, "factor-view-watermark", "storage-view", "storage-view@control", "moox_storage_view_output_watermark_timestamp_seconds", labels, float64(watermark.Unix()), now)
+		seedOverviewMetricForInstance(t, db, "factor-view-arrival", "storage-view", "storage-view@control", "moox_storage_view_output_arrival_timestamp_seconds", labels, float64(watermark.Add(time.Minute+4*time.Second).Unix()), now)
 	})
-	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, Policy: testRealtimePolicy()}).Build(t.Context(), "")
+	got, err := (Builder{Metrics: query, Inventory: cryptoInventory, Now: func() time.Time { return now }, Policy: testRealtimePolicy()}).Build(t.Context(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -704,8 +671,12 @@ func TestBuilderReportsStorageViewWatermarkAsIndependentDataset(t *testing.T) {
 	if row.Producer != "storage_view" || row.DatasetID != "view_crypto_kline_1m_factor" || row.Freq != "1m" || row.Status != "stale" {
 		t.Fatalf("storage view status = %+v", row)
 	}
-	if !row.OutputWatermarkAt.Equal(watermark) || row.LagSeconds != int64((20*time.Minute).Seconds()) {
+	// 水位 14:40 那根 14:41 收线，之后的 14:41 那根 14:42 收线，到 15:00 已等待 18 分钟；视图写完的时刻作为到达时间。
+	if !row.OutputWatermarkAt.Equal(watermark) || row.WaitingBars != 19 || row.OverdueSeconds != int64((18*time.Minute).Seconds()) {
 		t.Fatalf("storage view watermark = %+v", row)
+	}
+	if !row.DelayKnown || row.DelaySeconds != 4 {
+		t.Fatalf("storage view arrival = %+v", row)
 	}
 }
 
@@ -925,32 +896,32 @@ func TestDatasetStatusReportsWarmingWhilePartialRunsKeepArriving(t *testing.T) {
 
 	never := base
 	never.lastPartial = at(10 * time.Second)
-	got := datasetStatus(now, key, never, policy)
+	got := datasetStatus(now, key, never, policy, cryptoClock)
 	require.Equal(t, "degraded", got.Status)
 	require.Equal(t, DatasetReasonWarming, got.Reason, "从未成功过但部分结果在持续产出")
 	require.Equal(t, now.Add(-10*time.Second), got.LastPartialAt)
 
 	afterSuccess := base
 	afterSuccess.lastSuccess, afterSuccess.lastPartial = at(2*time.Hour), at(10*time.Second)
-	got = datasetStatus(now, key, afterSuccess, policy)
+	got = datasetStatus(now, key, afterSuccess, policy, cryptoClock)
 	require.Equal(t, DatasetReasonWarming, got.Reason, "原来成功过、数据重置后重新积累")
 
 	recovered := base
 	recovered.lastSuccess, recovered.lastPartial = at(10*time.Second), at(5*time.Minute)
-	got = datasetStatus(now, key, recovered, policy)
+	got = datasetStatus(now, key, recovered, policy, cryptoClock)
 	require.Equal(t, "healthy", got.Status, "最近一次是成功就恢复健康")
 
 	partialStopped := base
 	partialStopped.lastSuccess, partialStopped.lastPartial = at(3*time.Hour), at(30*time.Minute)
-	got = datasetStatus(now, key, partialStopped, policy)
+	got = datasetStatus(now, key, partialStopped, policy, cryptoClock)
 	require.Equal(t, "success stale", got.Reason, "部分结果也断了，回到成功过期")
 
 	producerStopped := datasetValues{interval: 60, inventory: float64(now.Unix()), lastRun: at(10 * time.Minute), lastPartial: at(10 * time.Minute)}
-	got = datasetStatus(now, key, producerStopped, policy)
+	got = datasetStatus(now, key, producerStopped, policy, cryptoClock)
 	require.Equal(t, "run stale", got.Reason, "生产者停了仍然是 stale，不会被当成积累")
 
 	noPartial := base
-	got = datasetStatus(now, key, noPartial, policy)
+	got = datasetStatus(now, key, noPartial, policy, cryptoClock)
 	require.Equal(t, "尚无成功运行", got.Reason, "没有部分结果上报时保持原样")
 }
 
