@@ -28,7 +28,8 @@ type trackedRun struct {
 	failedSubjects []string
 	warming        int
 	// repaired 是缺口补算已补齐的这一期 (因子 → 标的)：预热中或回看窗口有空洞而跳过的项补齐后，摘要据此改写。
-	repaired map[string]map[string]struct{}
+	// unwritten 是补算重算这一期时没有写成的 (因子 → 标的)，整因子跳过的因子据此保留失败。
+	repaired, unwritten map[string]map[string]struct{}
 }
 
 func newRunTracker() *runTracker { return &runTracker{runs: make(map[string]trackedRun)} }
@@ -82,37 +83,44 @@ func (t *runTracker) record(setID string, periodTime time.Time, status string, o
 // done 为真表示账本里这一期已经没有待恢复项，这时按补齐的结果改写摘要：去掉已补齐的失败标的与空洞标的，
 // 不再算作预热中，余下没有失败时记为完成；completedAt 作为这一期新的完成时刻，并像实时周期一样立刻补发心跳。
 // 已完成、已失败的期次不改写（失败的期次没有写完，补算只补跳过的项）。返回是否改写了摘要。
-func (t *runTracker) repair(setID string, periodTime time.Time, items []pipeline.ItemKey, done bool, completedAt time.Time) bool {
+func (t *runTracker) repair(setID string, result RepairedPeriod, completedAt time.Time) bool {
 	if t == nil || setID == "" {
 		return false
 	}
 	t.mu.Lock()
 	run, ok := t.runs[setID]
-	if !ok || !run.periodTime.Equal(periodTime) || run.status == "failed" || (run.status == "complete" && run.warming == 0) {
+	if !ok || !run.periodTime.Equal(result.Period) || run.status == "failed" || (run.status == "complete" && run.warming == 0) {
 		t.mu.Unlock()
 		return false
 	}
-	if run.repaired == nil {
-		run.repaired = make(map[string]map[string]struct{})
-	}
-	for _, item := range items {
-		if !item.Period.Equal(periodTime) {
-			continue
-		}
-		if run.repaired[item.FactorID] == nil {
-			run.repaired[item.FactorID] = make(map[string]struct{})
-		}
-		run.repaired[item.FactorID][item.Subject] = struct{}{}
-	}
-	if done {
+	run.repaired = addItems(run.repaired, result.Repaired, result.Period)
+	run.unwritten = addItems(run.unwritten, result.Unwritten, result.Period)
+	if result.Done {
 		run = run.withRepairs(completedAt)
 	}
 	t.runs[setID] = run
 	t.mu.Unlock()
-	if done {
+	if result.Done {
 		t.notifyRecorded()
 	}
-	return done
+	return result.Done
+}
+
+// addItems 把属于 period 的 (因子, 标的) 并入 into。
+func addItems(into map[string]map[string]struct{}, items []pipeline.ItemKey, period time.Time) map[string]map[string]struct{} {
+	for _, item := range items {
+		if !item.Period.Equal(period) {
+			continue
+		}
+		if into == nil {
+			into = make(map[string]map[string]struct{})
+		}
+		if into[item.FactorID] == nil {
+			into[item.FactorID] = make(map[string]struct{})
+		}
+		into[item.FactorID][item.Subject] = struct{}{}
+	}
+	return into
 }
 
 // withRepairs 按补齐的 (因子, 标的) 改写一期的结果。补算没有覆盖的失败（上游失败、读取失败、计算出错、放弃或取消的待办）原样保留。
@@ -131,6 +139,10 @@ func (run trackedRun) withRepairs(completedAt time.Time) trackedRun {
 		next := factor
 		next.FailedSubjects = subjectsWithout(factor.FailedSubjects, fixed)
 		next.GapSubjects = subjectsWithout(factor.GapSubjects, fixed)
+		// 整因子跳过的因子实时路径一行没写：补算重算时没写成的标的仍然缺结果。
+		if factor.Status == "skipped" {
+			next.FailedSubjects = mergeSubjects(next.FailedSubjects, run.unwritten[factor.FactorID], fixed)
+		}
 		// 只因标的失败（含预热中、空洞）而不完整的因子，这些标的都补齐后记为完成；没有列出标的的整因子失败保持原状。
 		if next.Status != "complete" && len(factor.FailedSubjects)+len(factor.GapSubjects) > 0 && len(next.FailedSubjects)+len(next.GapSubjects) == 0 {
 			next.Status = "complete"
@@ -157,6 +169,30 @@ func (run trackedRun) withRepairs(completedAt time.Time) trackedRun {
 		run.status = "complete"
 	}
 	return run
+}
+
+// mergeSubjects 把 extra 里不在 skip 中的标的并入 subjects，结果排序、去重。
+func mergeSubjects(subjects []string, extra, skip map[string]struct{}) []string {
+	if len(extra) == 0 {
+		return subjects
+	}
+	seen := make(map[string]struct{}, len(subjects)+len(extra))
+	out := make([]string, 0, len(subjects)+len(extra))
+	for _, subject := range subjects {
+		seen[subject] = struct{}{}
+		out = append(out, subject)
+	}
+	for subject := range extra {
+		if _, fixed := skip[subject]; fixed {
+			continue
+		}
+		if _, ok := seen[subject]; !ok {
+			seen[subject] = struct{}{}
+			out = append(out, subject)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func subjectsWithout(subjects []string, drop map[string]struct{}) []string {

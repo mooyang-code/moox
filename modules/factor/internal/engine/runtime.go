@@ -137,7 +137,15 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	logExpired(expired, cfg.Gap.GiveUpAfter)
 	r.metrics.GapGaveUp.Add(float64(len(expired)))
 	log.InfoContextf(ctx, "factor_gap_ledger_opened dir=%s pending=%d ignored_lines=%d expired=%d gap_check=%t", cfg.Gap.LedgerDir, ledger.PendingCount(), ledger.Ignored(), len(expired), cfg.Gap.Enabled)
-	pipelineConfig.GapSink = ledger
+	// 记入预热中跳过的项、或者一批预热完成时唤醒跳过恢复：集合预热已就绪时这些项不用再等 Settle。
+	gapKick := make(chan struct{}, 1)
+	kickGap := func() {
+		select {
+		case gapKick <- struct{}{}:
+		default:
+		}
+	}
+	pipelineConfig.GapSink = warmingKickSink{GapSink: ledger, kick: kickGap}
 	if cfg.Gap.Enabled {
 		pipelineConfig.GapCheck, pipelineConfig.MassRatio = true, cfg.Gap.MassRatio
 	}
@@ -173,16 +181,16 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	filler := &gapFiller{
 		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
 		active: r.active, cfg: cfg.Gap, now: time.Now, onGaveUp: func(n int) { r.metrics.GapGaveUp.Add(float64(n)) },
-		kick: make(chan struct{}, 1),
+		kick: gapKick, warmup: r.pipeline.WarmupStatuses,
 		// 补齐的最新一期记入运行摘要（并立刻补发心跳）：预热中跳过的那一期补算后，因子管理服务马上把它记为完成。
-		onRepaired: func(setID string, period time.Time, items []pipeline.ItemKey, done bool) {
-			if r.runs.repair(setID, period, items, done, time.Now()) {
-				log.Infof("factor_period_repaired set_id=%s period_time=%s", setID, period.UTC().Format(time.RFC3339))
+		onRepaired: func(setID string, period RepairedPeriod) {
+			if r.runs.repair(setID, period, time.Now()) {
+				log.Infof("factor_period_repaired set_id=%s period_time=%s", setID, period.Period.UTC().Format(time.RFC3339))
 			}
 		},
 	}
 	// 预热完成后立刻补算预热期间跳过的那几期，不等 Settle 与下一轮轮询。
-	r.pipeline.OnWarmupDone(filler.Warmed)
+	r.pipeline.OnWarmupDone(func(string) { kickGap() })
 
 	r.goRun(appCtx, filler.Run)
 	r.goRun(appCtx, r.syncer.Run)

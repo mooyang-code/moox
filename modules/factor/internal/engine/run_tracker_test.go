@@ -73,13 +73,13 @@ func TestRunTrackerUpgradesLatestPeriodOnceRepairIsDone(t *testing.T) {
 	tracker.record("fset", period, "degraded", warmingRun, live)
 	require.Equal(t, 1, notified)
 
-	require.False(t, tracker.repair("fset", period, items("BTC"), false, live.Add(time.Minute)), "这一期还有待办：先记下，摘要不变")
-	require.False(t, tracker.repair("fset", period.Add(-time.Hour), items("ETH"), true, live.Add(time.Minute)), "更早的期次不改写")
+	require.False(t, tracker.repair("fset", RepairedPeriod{Period: period, Repaired: items("BTC")}, live.Add(time.Minute)), "这一期还有待办：先记下，摘要不变")
+	require.False(t, tracker.repair("fset", RepairedPeriod{Period: period.Add(-time.Hour), Repaired: items("ETH"), Done: true}, live.Add(time.Minute)), "更早的期次不改写")
 	require.EqualValues(t, 2, tracker.latest("fset", live).WarmingSubjects)
 	require.Equal(t, 1, notified)
 
 	repaired := live.Add(4 * time.Minute)
-	require.True(t, tracker.repair("fset", period, items("ETH"), true, repaired))
+	require.True(t, tracker.repair("fset", RepairedPeriod{Period: period, Repaired: items("ETH"), Done: true}, repaired))
 	require.Equal(t, 2, notified, "改写后立刻补发心跳")
 	summary := tracker.latest("fset", repaired)
 	require.Equal(t, period.Unix(), summary.LastPeriodTime)
@@ -103,18 +103,41 @@ func TestRunTrackerUpgradesLatestPeriodOnceRepairIsDone(t *testing.T) {
 	}
 	next := period.Add(time.Hour)
 	tracker.record("fset", next, "degraded", clean, live.Add(time.Hour))
-	require.False(t, tracker.repair("fset", period, items("XRP"), true, repaired), "已经有更新的一期")
+	require.False(t, tracker.repair("fset", RepairedPeriod{Period: period, Repaired: items("XRP"), Done: true}, repaired), "已经有更新的一期")
 	nextItems := []pipeline.ItemKey{
 		{FactorID: "ma", Subject: "BTC", Period: next}, {FactorID: "ma", Subject: "ETH", Period: next},
 		{FactorID: "rank", Subject: "BTC", Period: next}, {FactorID: "rank", Subject: "ETH", Period: next},
 	}
-	require.True(t, tracker.repair("fset", next, nextItems, true, repaired.Add(time.Hour)))
+	require.True(t, tracker.repair("fset", RepairedPeriod{Period: next, Repaired: nextItems, Done: true}, repaired.Add(time.Hour)))
 	summary = tracker.latest("fset", repaired.Add(time.Hour))
 	require.Equal(t, "complete", summary.LastStatus)
 	require.Empty(t, summary.FailedSubjects)
 	require.Equal(t, []domain.FactorPeriodState{{FactorID: "ma", Status: "complete"}, {FactorID: "rank", Status: "complete"}}, summary.Factors)
-	require.False(t, tracker.repair("fset", next, nextItems, true, repaired.Add(2*time.Hour)), "已完成的期次不再改写")
+	require.False(t, tracker.repair("fset", RepairedPeriod{Period: next, Repaired: nextItems, Done: true}, repaired.Add(2*time.Hour)), "已完成的期次不再改写")
 	require.Equal(t, repaired.Add(time.Hour).Unix(), tracker.latest("fset", repaired).CompletedAt)
+}
+
+// 严格截面因子因 A 有洞整期跳过（实时路径一行没写）：补算补齐了 A，但 B 这次没写成，这一期仍缺 B，不能记为完成。
+func TestRunTrackerKeepsUnwrittenItemsOfSkippedFactor(t *testing.T) {
+	period := time.Date(2026, 10, 16, 15, 0, 0, 0, time.UTC)
+	tracker := newRunTracker()
+	tracker.record("fset", period, "degraded", pipeline.Outcome{
+		Status:  "degraded",
+		Factors: []storageio.FactorState{{FactorID: "rank", Status: "skipped", GapSubjects: []string{"A"}}, {FactorID: "ma", Status: "degraded", FailedSubjects: []string{"A"}, GapSubjects: []string{"A"}}},
+	}, period.Add(time.Hour))
+	at := func(factor, subject string) pipeline.ItemKey {
+		return pipeline.ItemKey{FactorID: factor, Subject: subject, Period: period}
+	}
+	require.True(t, tracker.repair("fset", RepairedPeriod{
+		Period: period, Repaired: []pipeline.ItemKey{at("rank", "A"), at("ma", "A")},
+		Unwritten: []pipeline.ItemKey{at("rank", "B"), at("ma", "C")}, Done: true,
+	}, period.Add(time.Hour+time.Minute)))
+	summary := tracker.latest("fset", period)
+	require.Equal(t, "degraded", summary.LastStatus)
+	require.Equal(t, []domain.FactorPeriodState{
+		{FactorID: "rank", Status: "skipped", FailedSubjects: []string{"B"}},
+		{FactorID: "ma", Status: "complete"},
+	}, summary.Factors, "时序因子 C 的值实时路径已经写过，补算没写成不影响")
 }
 
 func TestPeriodFailureReasonClassifiesAbortedPeriods(t *testing.T) {

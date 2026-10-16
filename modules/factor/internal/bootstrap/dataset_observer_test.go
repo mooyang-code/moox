@@ -104,6 +104,38 @@ func TestFactorDatasetObserverAcceptsSamePeriodUpgradedByRepair(t *testing.T) {
 	require.Equal(t, 2.0, runs())
 }
 
+// 空洞跳过的一期首次观测时已经是正式结果（推进了水位），补齐后升级为成功：水位不再前进，观察器主动补报一次。
+func TestFactorDatasetObserverFlushesWhenFormalPeriodTurnsSuccessful(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	datasets, err := report.NewDatasetMetrics(registry, "factor")
+	require.NoError(t, err)
+	period := time.Date(2026, 10, 16, 15, 0, 0, 0, time.UTC)
+	partial := domain.SetRunSummary{
+		SetID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: period.Add(time.Hour).Unix(), LastStatus: "degraded", FailedSubjects: []string{"A"},
+		Factors: []domain.FactorPeriodState{{FactorID: "f1", Status: "degraded", FailedSubjects: []string{"A"}, GapSubjects: []string{"A"}}},
+	}
+	engine := &fakeEngineView{
+		sets: []domain.EngineSet{{Set: domain.FactorSet{SetID: "spot_1h", SpaceID: "crypto", ResultDatasetID: "dataset_factor_spot_1h", Freq: "1h"}, ResultReady: true}},
+		runs: []domain.SetRunSummary{partial},
+	}
+	observer := newFactorDatasetObserver(engine, datasets)
+	var flushed []string
+	observer.notify = func(spaceID string) { flushed = append(flushed, spaceID) }
+
+	require.NoError(t, observer.observe(context.Background()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_output_watermark_timestamp_seconds", "dataset_factor_spot_1h", float64(period.Unix()))
+	require.Empty(t, flushed, "新的一期由水位前进触发补报，观察器不重复触发")
+
+	repaired := period.Add(time.Hour + 20*time.Minute)
+	engine.runs = []domain.SetRunSummary{{SetID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: repaired.Unix(), LastStatus: "complete"}}
+	require.NoError(t, observer.observe(context.Background()))
+	require.Equal(t, []string{"crypto"}, flushed)
+	requireDatasetValue(t, registry, "moox_factor_dataset_last_success_timestamp_seconds", "dataset_factor_spot_1h", float64(repaired.Unix()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_output_arrival_timestamp_seconds", "dataset_factor_spot_1h", float64(period.Add(time.Hour).Unix()))
+	require.NoError(t, observer.observe(context.Background()))
+	require.Len(t, flushed, 1)
+}
+
 // datasetValue returns one dataset's gauge value in a gathered family.
 func datasetValue(t *testing.T, registry *prometheus.Registry, name, datasetID string) (float64, bool) {
 	t.Helper()

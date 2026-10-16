@@ -58,7 +58,9 @@ type runCall struct {
 type fakeChunks struct {
 	calls  []runCall
 	status func(recalcexec.Selection, time.Time) pipeline.ItemStatus
-	err    error
+	// statusFor 按标的给出逐项结果，优先于 status。
+	statusFor func(subject string) pipeline.ItemStatus
+	err       error
 }
 
 func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.SelectionSource, start, end time.Time, after func(recalcexec.Selection, pipeline.Outcome, error)) (pipeline.Outcome, error) {
@@ -75,7 +77,10 @@ func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.Selecti
 		for _, subject := range selection.Subjects {
 			for at := start; at.Before(end); at = at.Add(time.Minute) {
 				status := pipeline.ItemWritten
-				if f.status != nil {
+				switch {
+				case f.statusFor != nil:
+					status = f.statusFor(subject)
+				case f.status != nil:
 					status = f.status(selection, at)
 				}
 				outcome.Items[pipeline.ItemKey{FactorID: factor.FactorID, Subject: subject, Period: at}] = status
@@ -330,21 +335,24 @@ func TestGapFillerRepairsWarmingCrossSectionWithFrozenUniverse(t *testing.T) {
 }
 
 type repairedCall struct {
-	period time.Time
-	items  int
-	done   bool
+	period              time.Time
+	repaired, unwritten int
+	done                bool
 }
 
-// 预热完成后立刻补算预热期间跳过的那一期：不等 Settle，也不等下一轮轮询；空洞跳过的项和预热完成之后才跳过的项仍等 Settle。
+// 预热就绪后立刻补算预热期间跳过的那一期：不等 Settle；空洞跳过的项仍等 Settle，集合还在预热时也等。
 // 每批补齐后按周期回调，账本里这一期没有待办了才算补齐。
-func TestGapFillerRepairsWarmingSkipsRightAfterWarmup(t *testing.T) {
+func TestGapFillerRepairsWarmingSkipsOnceSetIsWarm(t *testing.T) {
 	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
 	f := newGapFixture(t, fakeUniverse{}, factor)
-	f.filler.kick = make(chan struct{}, 1)
+	state := pipeline.WarmupWarming
+	f.filler.warmup = func() []pipeline.WarmupStatus {
+		return []pipeline.WarmupStatus{{SetID: "fset", State: state}, {SetID: "other", State: pipeline.WarmupReady}}
+	}
 	var calls []repairedCall
-	f.filler.onRepaired = func(setID string, period time.Time, items []pipeline.ItemKey, done bool) {
+	f.filler.onRepaired = func(setID string, period RepairedPeriod) {
 		require.Equal(t, "fset", setID)
-		calls = append(calls, repairedCall{period: period, items: len(items), done: done})
+		calls = append(calls, repairedCall{period: period.Period, repaired: len(period.Repaired), unwritten: len(period.Unwritten), done: period.Done})
 	}
 	for i := 0; i < maxFillSubjects+1; i++ {
 		f.recordWarming(t, fmt.Sprintf("S%03d", i), 0, "evt-0", factor) // 发现于 gapT0
@@ -353,37 +361,51 @@ func TestGapFillerRepairsWarmingSkipsRightAfterWarmup(t *testing.T) {
 
 	f.now = gapT0.Add(2 * time.Minute)
 	f.filler.tick(context.Background())
-	require.Empty(t, f.chunks.calls, "还在 Settle 内，集合也没有预热完成")
+	require.Empty(t, f.chunks.calls, "还在 Settle 内，集合也还在预热")
 
-	f.filler.Warmed("fset", gapT0.Add(90*time.Second))
-	require.Len(t, f.filler.kick, 1, "预热完成唤醒恢复循环")
-	<-f.filler.kick
+	state = pipeline.WarmupReady
 	f.filler.tick(context.Background())
 	require.Len(t, f.chunks.calls, 2, "预热跳过的 101 个标的分两批，空洞跳过的 DOGE 仍等 Settle")
 	for _, call := range f.chunks.calls {
 		require.NotContains(t, call.selection.Subjects, "DOGE")
 	}
 	require.Equal(t, 1, f.ledger.PendingCount())
-	require.Len(t, calls, 2)
-	require.False(t, calls[0].done, "第一批补完时这一期还有待办")
-	require.Equal(t, repairedCall{period: gapT0, items: 1, done: true}, calls[1])
-	require.Equal(t, maxFillSubjects, calls[0].items)
-
-	// 预热完成之后才因预热中跳过的项（标的又落后了，要重新预热）不算已预热，仍等 Settle。
-	f.now = gapT0.Add(3 * time.Minute)
-	f.recordWarmingAt(t, gapT0.Add(2*time.Minute), "LATE", 2, factor)
-	f.filler.tick(context.Background())
-	require.Len(t, f.chunks.calls, 2)
-	require.Equal(t, 2, f.ledger.PendingCount())
+	require.Equal(t, []repairedCall{{period: gapT0, repaired: maxFillSubjects}, {period: gapT0, repaired: 1, done: true}}, calls,
+		"第一批补完时这一期还有待办")
 }
 
-func (f *gapFixture) recordWarmingAt(t *testing.T, at time.Time, subject string, minute int, factor domain.FactorDef) {
-	t.Helper()
-	saved := f.now
-	f.now = at
-	require.NoError(t, f.ledger.RecordGaps(context.Background(), []pipeline.GapEntry{{
-		SetID: "fset", Subject: subject, Period: gapT0.Add(time.Duration(minute) * time.Minute), FactorID: factor.FactorID,
-		DefinitionHash: domain.DefinitionHash(factor), TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming,
-	}}))
-	f.now = saved
+// 截面恢复重算整个冻结全集：账本里只有当初有洞的标的，别的标的这次没写成要随回调带回，摘要据此保留失败。
+func TestGapFillerReportsUnwrittenCrossSectionItems(t *testing.T) {
+	factor := gapFactor("rank", domain.FactorTypeCrossSection, false)
+	f := newGapFixture(t, fakeUniverse{subjects: []string{"A", "B"}, found: true}, factor)
+	f.record(t, gapT0, "A", 0, "evt-0", factor)
+	var got RepairedPeriod
+	f.filler.onRepaired = func(_ string, period RepairedPeriod) { got = period }
+	f.chunks.statusFor = func(subject string) pipeline.ItemStatus {
+		if subject == "B" {
+			return pipeline.ItemFailed
+		}
+		return pipeline.ItemWritten
+	}
+	f.now = gapT0.Add(6 * time.Minute)
+	f.filler.tick(context.Background())
+	require.True(t, got.Done)
+	require.Equal(t, []pipeline.ItemKey{{FactorID: "rank", Subject: "A", Period: gapT0}}, got.Repaired)
+	require.Equal(t, []pipeline.ItemKey{{FactorID: "rank", Subject: "B", Period: gapT0}}, got.Unwritten)
+}
+
+// 记账时有预热中跳过的项就唤醒跳过恢复；只有空洞跳过的不唤醒。
+func TestWarmingKickSinkKicksOnWarmingEntries(t *testing.T) {
+	ledger, _, err := gapledger.Open(t.TempDir(), time.Now, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ledger.Close() })
+	kicks := 0
+	sink := warmingKickSink{GapSink: ledger, kick: func() { kicks++ }}
+	entry := pipeline.GapEntry{SetID: "fset", Subject: "BTC", Period: gapT0, FactorID: "ma", DefinitionHash: "h"}
+	require.NoError(t, sink.RecordGaps(context.Background(), []pipeline.GapEntry{entry}))
+	require.Zero(t, kicks)
+	entry.Subject, entry.Reason = "ETH", pipeline.SkipReasonWarming
+	require.NoError(t, sink.RecordGaps(context.Background(), []pipeline.GapEntry{entry, entry}))
+	require.Equal(t, 1, kicks)
+	require.Equal(t, 2, ledger.PendingCount())
 }

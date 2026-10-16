@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -44,20 +43,18 @@ type gapFiller struct {
 	now      func() time.Time
 	// onGaveUp 在条目被记为 gave_up 时调用（指标用，可为 nil）。
 	onGaveUp func(entries int)
-	// onRepaired 在一批待办确认补齐后按周期调用（可为 nil）：items 是这一期补齐的 (因子, 标的, 周期)，
-	// done 表示账本里这一期已没有待恢复项。引擎据此把补齐的最新一期记入运行摘要。
-	onRepaired func(setID string, period time.Time, items []pipeline.ItemKey, done bool)
-	// kick 让恢复循环立刻做一轮（预热完成时），不阻塞；为 nil 时只按 SweepInterval 轮询。
-	kick chan struct{}
-	// warmedAt 是每个集合最近一次预热完成的时刻：在它之前因预热中跳过的待办，窗口已经载入，不再等 Settle 就恢复。
-	warmMu   sync.Mutex
-	warmedAt map[string]time.Time
+	// onRepaired 在一批待办确认补齐后按周期调用（可为 nil），在集合锁内。引擎据此把补齐的最新一期记入运行摘要。
+	onRepaired func(setID string, period RepairedPeriod)
+	// kick 让恢复循环立刻做一轮（预热完成、记入预热中跳过的项时），为 nil 时只按 SweepInterval 轮询。
+	kick <-chan struct{}
+	// warmup 返回各集合的预热状态（可为 nil）：已就绪集合里因预热中跳过的待办不再等 Settle。
+	warmup func() []pipeline.WarmupStatus
 	// lastTried 记录每个组最近一次尝试的时间：一轮只处理 MaxGroupsPerSweep 个组，按「最久没试过的优先」轮转，
 	// 前面一直补不上的组不会让后面已经补齐的组长期得不到执行机会。
 	lastTried map[string]time.Time
 }
 
-// Run 按 SweepInterval 轮询、或者被预热完成唤醒，直到 ctx 结束。
+// Run 按 SweepInterval 轮询、或者被唤醒（预热完成、记入预热中跳过的项），直到 ctx 结束。
 func (g *gapFiller) Run(ctx context.Context) {
 	ticker := time.NewTicker(g.cfg.SweepInterval)
 	defer ticker.Stop()
@@ -72,42 +69,42 @@ func (g *gapFiller) Run(ctx context.Context) {
 	}
 }
 
-// Warmed 在一个集合的后台预热完成时调用：此前因预热中跳过的那几期不再等 Settle、也不等下一轮轮询，立刻补算。
-// 否则重启后第一期（1h 集合是整整一根）要在预热完成后再等 5～10 分钟才补齐。
-func (g *gapFiller) Warmed(setID string, at time.Time) {
-	if g == nil || setID == "" {
-		return
-	}
-	g.warmMu.Lock()
-	if g.warmedAt == nil {
-		g.warmedAt = make(map[string]time.Time)
-	}
-	if at.After(g.warmedAt[setID]) {
-		g.warmedAt[setID] = at
-	}
-	g.warmMu.Unlock()
-	if g.kick == nil {
-		return
-	}
-	select {
-	case g.kick <- struct{}{}:
-	default:
-	}
+// warmingKickSink 记账后，有预热中跳过的项就唤醒跳过恢复：少量新增或落后的标的预热很快，可能在本期算完、记账之前就已就绪，
+// 只靠预热完成时的唤醒会错过它们。
+type warmingKickSink struct {
+	pipeline.GapSink
+	kick func()
 }
 
-// settled 判断一条待办是否可以恢复了：发现后过了 Settle（给自动补采留时间）；预热中跳过的项在该集合预热完成后即可恢复，
-// 那一期的源数据在跳过时就已经入库，只是窗口还没载入。
-func (g *gapFiller) settled(entry gapledger.Entry, cutoff time.Time) bool {
-	if !entry.FirstSeen.After(cutoff) {
-		return true
+func (s warmingKickSink) RecordGaps(ctx context.Context, entries []pipeline.GapEntry) error {
+	err := s.GapSink.RecordGaps(ctx, entries)
+	for _, entry := range entries {
+		if entry.Reason == pipeline.SkipReasonWarming {
+			s.kick()
+			break
+		}
 	}
-	if entry.Reason != pipeline.SkipReasonWarming {
-		return false
+	return err
+}
+
+// settled 判断一条待办是否可以恢复了：发现后过了 Settle（给自动补采留时间）；预热中跳过的项在该集合预热就绪后即可恢复，
+// 那一期的源数据在跳过时就已入库，只是窗口还没载入。否则重启后第一期（1h 集合是整整一根）要在预热完成后再等 5～10 分钟才补齐。
+func settled(entry gapledger.Entry, cutoff time.Time, ready map[string]bool) bool {
+	return !entry.FirstSeen.After(cutoff) || (entry.Reason == pipeline.SkipReasonWarming && ready[entry.Set])
+}
+
+// readySets 返回预热已就绪（全部标的窗口已载入、没有排队或在途的预热）的集合。
+func (g *gapFiller) readySets() map[string]bool {
+	if g.warmup == nil {
+		return nil
 	}
-	g.warmMu.Lock()
-	warmed, ok := g.warmedAt[entry.Set]
-	g.warmMu.Unlock()
-	return ok && !entry.FirstSeen.After(warmed)
+	ready := make(map[string]bool)
+	for _, status := range g.warmup() {
+		if status.State == pipeline.WarmupReady {
+			ready[status.SetID] = true
+		}
+	}
+	return ready
 }
 
 // maxFillSubjects 是一次时序恢复最多合并的标的数。恢复区间相同的标的（同一期整体预热跳过、同一段采集中断造成的空洞）
@@ -133,6 +130,7 @@ func (g *gapFiller) tick(ctx context.Context) {
 	}
 	g.expire()
 	cutoff := g.now().UTC().Add(-g.cfg.Settle)
+	ready := g.readySets()
 	type groupKey struct {
 		set, subject string
 		cross        bool
@@ -143,7 +141,7 @@ func (g *gapFiller) tick(ctx context.Context) {
 	setCache := make(map[string]domain.EngineSet)
 	lookups := make(map[string]SetLookup)
 	for _, entry := range g.ledger.Pending() {
-		if !g.settled(entry, cutoff) {
+		if !settled(entry, cutoff, ready) {
 			continue // 刚发现，给自动补采一点时间
 		}
 		set, lookup := setCache[entry.Set], lookups[entry.Set]
@@ -512,13 +510,34 @@ func (g *gapFiller) confirm(current []gapledger.Entry, selection recalcexec.Sele
 	if g.onRepaired == nil {
 		return
 	}
-	byPeriod := make(map[int64][]pipeline.ItemKey)
+	byPeriod := make(map[int64]*RepairedPeriod)
 	for _, ref := range repaired {
 		at := ref.Period.UTC().Unix()
-		byPeriod[at] = append(byPeriod[at], pipeline.ItemKey{FactorID: ref.FactorID, Subject: ref.Subject, Period: ref.Period})
+		if byPeriod[at] == nil {
+			byPeriod[at] = &RepairedPeriod{Period: time.Unix(at, 0).UTC()}
+		}
+		byPeriod[at].Repaired = append(byPeriod[at].Repaired, pipeline.ItemKey{FactorID: ref.FactorID, Subject: ref.Subject, Period: ref.Period})
 	}
-	for at, items := range byPeriod {
-		period := time.Unix(at, 0).UTC()
-		g.onRepaired(selection.Set.SetID, period, items, !g.ledger.HasPendingIn(selection.Set.SetID, period))
+	// 这次重算没有写成的项也带上：截面恢复重算整个冻结全集，账本里只有当初有洞的标的；别的标的这次没写成，
+	// 而实时路径当时整因子跳过、也没写，这一期的结果仍然缺它们，不能因为账本清空就记为完成。
+	for key, status := range outcome.Items {
+		if _, ok := selected[key.FactorID]; !ok || status == pipeline.ItemWritten {
+			continue
+		}
+		if period := byPeriod[key.Period.UTC().Unix()]; period != nil {
+			period.Unwritten = append(period.Unwritten, key)
+		}
 	}
+	for _, period := range byPeriod {
+		period.Done = !g.ledger.HasPendingIn(selection.Set.SetID, period.Period)
+		g.onRepaired(selection.Set.SetID, *period)
+	}
+}
+
+// RepairedPeriod 是一批恢复对一个周期的结果：Repaired 是补齐的待办，Unwritten 是这次重算没有写成的项，
+// Done 表示账本里这一期已经没有待恢复项。
+type RepairedPeriod struct {
+	Period              time.Time
+	Repaired, Unwritten []pipeline.ItemKey
+	Done                bool
 }

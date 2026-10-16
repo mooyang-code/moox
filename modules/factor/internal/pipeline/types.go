@@ -93,7 +93,7 @@ type Runner struct {
 	// firstBars 缓存标的的首根 K 线时间，用来区分新上市与空洞。
 	firstBars firstBarCache
 	// warmed 在一批后台预热载入窗口后调用，见 OnWarmupDone。
-	warmed atomic.Pointer[func(setID string, at time.Time)]
+	warmed atomic.Pointer[func(setID string)]
 }
 
 func NewRunner(store storageio.Store, exec pyexec.Executor, clock periodclock.Clock, cfg Config) *Runner {

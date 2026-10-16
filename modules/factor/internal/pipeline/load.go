@@ -344,9 +344,9 @@ func (r *Runner) Prewarm(plan Plan) int {
 	return r.windows.prewarm(plan, uniqueSorted(plan.Available))
 }
 
-// OnWarmupDone 登记一批后台预热载入窗口之后调用的函数（参数是集合与完成时刻），在预热协程里同步调用、应当很快返回。
+// OnWarmupDone 登记一批后台预热载入窗口之后调用的函数（参数是集合），这时预热状态已经更新；在预热协程里同步调用、应当很快返回。
 // 引擎用它让跳过恢复立刻补算预热期间跳过的那几期。
-func (r *Runner) OnWarmupDone(hook func(setID string, at time.Time)) {
+func (r *Runner) OnWarmupDone(hook func(setID string)) {
 	if r == nil {
 		return
 	}
@@ -384,7 +384,7 @@ func (r *Runner) warmup(ctx context.Context, plan Plan, subjects []string) bool 
 	log.Infof("factor_warmup_done set_id=%s subjects=%d warmed=%d failed=%d window=%s/%s duration=%s", plan.Set.SetID, len(subjects), len(frames), len(failed),
 		plan.TargetStart.UTC().Format(time.RFC3339), plan.TargetEnd.UTC().Format(time.RFC3339), time.Since(started).Round(time.Millisecond))
 	if hook := r.warmed.Load(); hook != nil && len(frames) > 0 {
-		(*hook)(plan.Set.SetID, time.Now())
+		(*hook)(plan.Set.SetID)
 	}
 	return len(failed) == 0
 }

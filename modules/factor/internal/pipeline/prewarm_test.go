@@ -100,8 +100,8 @@ func TestWarmupDoneHookRunsAfterWindowsAreLoaded(t *testing.T) {
 	store := &hourlyStore{}
 	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{BackgroundWarmup: true})
 	done := make(chan string, 1)
-	runner.OnWarmupDone(func(setID string, at time.Time) {
-		require.False(t, at.IsZero())
+	runner.OnWarmupDone(func(setID string) {
+		require.Equal(t, WarmupReady, runner.WarmupStatuses()[0].State, "回调时预热状态已经就绪")
 		done <- setID
 	})
 	require.Equal(t, 2, runner.Prewarm(hourlyPlan(t, time.Date(2026, 10, 16, 6, 0, 0, 0, time.UTC))))
