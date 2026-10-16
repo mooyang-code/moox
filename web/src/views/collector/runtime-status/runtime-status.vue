@@ -213,8 +213,10 @@
             class="function-table"
             :data="filteredFunctions"
             :loading="statusLoading"
-            :pagination="false"
+            :pagination="functionPagination"
             :scroll="{ y: '100%' }"
+            @page-change="functionPage = $event"
+            @page-size-change="onFunctionPageSizeChange"
             :bordered="{ cell: true }"
             table-layout-fixed
           >
@@ -309,6 +311,8 @@ const status = ref<GetCollectorStatusResponse>({});
 const statusLoading = ref(false);
 const expandedKeys = ref<string[]>([]);
 const functionFilters = ref({ keyword: "", region: "", market: "", abnormalOnly: false });
+const functionPage = ref(1);
+const functionPageSize = ref(20);
 const rangeVisible = ref(false);
 const rangeMode = ref<"check" | "backfill">("check");
 const rangeDataset = ref("");
@@ -333,6 +337,21 @@ const datasetOptions = computed(() => {
   }
   return [...options].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
 });
+// 普通翻页：分页条固定在函数区底部，当前页的行放不下时在表格内部滚动，页面本身不滚动。
+const functionPagination = computed(() => ({
+  current: functionPage.value,
+  pageSize: functionPageSize.value,
+  showTotal: true,
+  showPageSize: true,
+  pageSizeOptions: [20, 50, 100],
+  size: "small" as const
+}));
+
+function onFunctionPageSizeChange(size: number) {
+  functionPageSize.value = size;
+  functionPage.value = 1;
+}
+
 const filteredFunctions = computed(() => {
   const list = filterFunctions(status.value.functions || [], functionFilters.value, datasetNames.value);
   // 下发中、退役中排前，其余保持后端顺序。
@@ -426,6 +445,9 @@ async function onClearAbsences(record: CollectorDatasetStatus) {
   }
 }
 
+// 筛选变化时回到第一页，避免停在超出结果页数的空页。
+watch(functionFilters, () => (functionPage.value = 1), { deep: true });
+
 watch(selectedSpaceId, () => {
   guard.invalidate();
   status.value = {};
@@ -437,7 +459,7 @@ onMounted(loadStatus);
 </script>
 
 <style scoped>
-/* 页面占满 Tab 内容区：状态条与数据集健康固定在上方，函数列表占据剩余高度并在表格内部滚动。 */
+/* 页面占满 Tab 内容区：状态条与数据集健康固定在上方，函数列表占据剩余高度，翻页条固定在底部。 */
 .runtime-status-page {
   height: 100%;
 }
@@ -460,8 +482,18 @@ onMounted(loadStatus);
   min-height: 0;
   flex: 1;
 }
-.function-table :deep(.arco-table-container) {
+/* 表格区占满剩余高度：分页条固定在底部，表体在中间滚动。 */
+.function-table :deep(.arco-spin) {
+  display: flex;
   height: 100%;
+  flex-direction: column;
+}
+.function-table :deep(.arco-table-container) {
+  min-height: 0;
+  flex: 1;
+}
+.function-table :deep(.arco-table-pagination) {
+  flex: none;
 }
 .metric--link {
   cursor: pointer;

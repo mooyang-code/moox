@@ -138,13 +138,16 @@ describe("collector runtime status page", () => {
     expect(page).toContain("datasetLabel(datasetNames, item)");
   });
 
-  it("keeps the function filters on one row and scrolls inside the function table", () => {
+  it("keeps the function filters on one row and pages the function table with the pager pinned at the bottom", () => {
     const toolbar = page.slice(
       page.indexOf('<div class="pane-toolbar">'),
       page.indexOf("</div>", page.indexOf('<div class="pane-toolbar">'))
     );
     for (const marker of ["搜索函数名或数据集", "全部地域", "全部市场", "只看异常"]) expect(toolbar).toContain(marker);
     expect(page).toContain(":scroll=\"{ y: '100%' }\"");
+    expect(page).toContain(':pagination="functionPagination"');
+    expect(page).toContain("pageSizeOptions: [20, 50, 100]");
+    expect(page).toContain("watch(functionFilters, () => (functionPage.value = 1), { deep: true })");
     expect(page).toMatch(/\.runtime-status > \.function-section\s*\{[^}]*flex:\s*1;/);
   });
 
