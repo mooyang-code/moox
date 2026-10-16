@@ -33,6 +33,11 @@ assert_loopback_server_services() {
 	' "${config}" || fail "non-timer server listener is not loopback-only: ${config}"
 }
 
+# Linux 下 tRPC 对 tcp+trpc 服务默认启用 tnet，其空闲定时器会把每 30～60 秒才复用一次的连接提前关掉，
+# 调用方随后读到 ReadFrame EOF（171）。所有 tcp+trpc 服务端必须显式声明 transport: go-net；
+# 检查用 tRPC 自己的配置加载，按框架默认值和 server 级继承判断最终生效的传输层。
+(cd packages/healthz && go run ./cmd/trpctransportcheck ../../modules) || fail "tcp+trpc server must declare transport: go-net"
+
 modules=(admin archive cloudnode collector eventbus factor hostagent monitor storage strategy trade)
 validation_modules=(admin cloudnode collector eventbus factor hostagent monitor storage strategy trade)
 

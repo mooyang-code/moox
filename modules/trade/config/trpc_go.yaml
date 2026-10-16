@@ -28,6 +28,7 @@ server:
       port: 11200
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 15000
 
     - name: trpc.moox.trade.metrics.timer

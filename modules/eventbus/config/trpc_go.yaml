@@ -19,6 +19,7 @@ server:
       port: 11420
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 30000
     - name: trpc.moox.eventbus.Health
       ip: 127.0.0.1

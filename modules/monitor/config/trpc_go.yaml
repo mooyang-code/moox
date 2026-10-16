@@ -19,8 +19,6 @@ server:
       port: 11410
       network: tcp
       protocol: trpc
-      # 显式 go-net：Linux 默认的 tnet 空闲定时器会把每 30 秒复用一次的连接在约 90 秒时关掉，
-      # 控制台轮询健康概览会因此偶发 ReadFrame EOF（171）。
       transport: go-net
       timeout: 30000
     - name: trpc.moox.monitor.Health

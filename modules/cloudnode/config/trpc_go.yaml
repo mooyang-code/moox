@@ -21,6 +21,7 @@ server:
       port: 11401
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 960000
     - name: trpc.moox.cloudnode.Health
       ip: 127.0.0.1

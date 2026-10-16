@@ -38,30 +38,35 @@ server:
       port: 11100
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 10000
     - name: trpc.moox.ops.Ssh
       ip: 127.0.0.1
       port: 11106
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 30000
     - name: trpc.moox.admin.SpaceMgr
       ip: 127.0.0.1
       port: 11107
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 10000
     - name: trpc.moox.ops.SecretMgr
       ip: 127.0.0.1
       port: 11108
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 10000
     - name: trpc.moox.ops.SysDeploy
       ip: 127.0.0.1
       port: 11109
       network: tcp
       protocol: trpc
+      transport: go-net
       # EventBus 维护（清除主题等）单次最多等 5 分钟，要不小于服务目录里的方法超时。
       timeout: 300000
     - name: trpc.moox.admin.Setup
@@ -69,24 +74,28 @@ server:
       port: 11110
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 30000
     - name: trpc.moox.admin.CollectorPublishLease
       ip: 127.0.0.1
       port: 11111
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 10000
     - name: trpc.moox.admin.ActivityLog
       ip: 127.0.0.1
       port: 11113
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 10000
     - name: trpc.moox.admin.GatewayControl
       ip: 127.0.0.1
       port: 11112
       network: tcp
       protocol: trpc
+      transport: go-net
       timeout: 5000
     - name: trpc.moox.admin.metrics.timer
       port: 11305
