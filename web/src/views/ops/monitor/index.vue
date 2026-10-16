@@ -1022,20 +1022,21 @@ a {
   border-radius: 6px;
   background: var(--color-fill-1);
 }
+/* 主机名、地址、链接各自不拆开，放不下时整段换到下一行；只有比整行还长的主机名才断开。 */
 .host-card__head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 6px;
-  white-space: nowrap;
+  gap: 2px 6px;
 }
-.host-card__head .muted {
+.host-card__head strong {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 .host-card__link {
   margin-left: auto;
   font-size: 12px;
+  white-space: nowrap;
 }
 .meters {
   display: grid;
