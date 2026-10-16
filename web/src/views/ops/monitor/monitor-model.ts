@@ -8,7 +8,6 @@ import type {
   HealthOverview
 } from "@/api/monitor";
 import {
-  clockTime,
   humanizeDuration,
   prettifyIds,
   relativeTime,
@@ -19,6 +18,7 @@ import {
   type Tone
 } from "@/views/home/home-model";
 import { alertLink, hostHref, statusLabel } from "./health-display";
+import { marketTime } from "./market-time";
 
 /** 触发时间相差不超过 60 秒的告警多半是同一个原因（服务重启、网络抖动），合并成一组展示。 */
 export const SAME_CAUSE_WINDOW_MS = 60_000;
@@ -86,9 +86,10 @@ export interface AlertGroup {
 function datasetFacts(dataset: HealthDataset | undefined, nowMs: number): Fact[] {
   if (!dataset) return [];
   const facts: Fact[] = [];
-  if (dataset.output_watermark_at) facts.push({ label: "最新K线", value: shortTime(dataset.output_watermark_at, nowMs) });
+  const zone = dataset.timezone;
+  if (dataset.output_watermark_at) facts.push({ label: "最新K线", value: marketTime(dataset.output_watermark_at, zone, nowMs) });
   if (Number(dataset.waiting_bars) > 0 && dataset.expected_bar_at) {
-    facts.push({ label: "预期K线", value: shortTime(dataset.expected_bar_at, nowMs) });
+    facts.push({ label: "预期K线", value: marketTime(dataset.expected_bar_at, zone, nowMs) });
   }
   const delay = barDelay(dataset, nowMs);
   if (delay.text !== "—") facts.push({ label: "到达", value: delay.text });
@@ -125,7 +126,7 @@ export function barDelay(item: HealthDataset, nowMs: number): BarDelay {
   const arrivedNote =
     delaySeconds === null
       ? ""
-      : `上一根 ${shortTime(item.latest_bar_close_at, nowMs)} 收线，延迟 ${humanizeDuration(delaySeconds)}`;
+      : `上一根 ${marketTime(item.latest_bar_close_at, item.timezone, nowMs)} 收线，延迟 ${humanizeDuration(delaySeconds)}`;
   if (waiting > 0) {
     const since = toMillis(item.waiting_since);
     const overdue = since === null ? toSeconds(item.overdue_seconds) || 0 : Math.max(0, Math.floor((nowMs - since) / 1000));
@@ -138,7 +139,13 @@ export function barDelay(item: HealthDataset, nowMs: number): BarDelay {
     return {
       text: `${confirmed ? "未到" : "等待中"}，已晚 ${humanizeDuration(overdue)}${missing}`,
       tone: confirmed ? "bad" : overLimit ? "warn" : "ok",
-      title: [`${clockTime(item.waiting_since, nowMs)} 收线的那根还没收到`, pending, arrivedNote].filter(Boolean).join("；"),
+      title: [
+        `${marketTime(item.waiting_since, item.timezone, nowMs, { seconds: true })} 收线的那根还没收到`,
+        pending,
+        arrivedNote
+      ]
+        .filter(Boolean)
+        .join("；"),
       ratio: ratioOf(overdue)
     };
   }
@@ -147,7 +154,7 @@ export function barDelay(item: HealthDataset, nowMs: number): BarDelay {
     return {
       text: `延迟 ${humanizeDuration(delaySeconds)}`,
       tone: late ? "warn" : "ok",
-      title: `${shortTime(item.latest_bar_close_at, nowMs)} 收线，${shortTime(item.arrived_at, nowMs)} 到达${late ? "（迟到，已恢复）" : ""}`,
+      title: `${marketTime(item.latest_bar_close_at, item.timezone, nowMs)} 收线，${marketTime(item.arrived_at, item.timezone, nowMs, { seconds: true })} 到达${late ? "（迟到，已恢复）" : ""}`,
       ratio: ratioOf(delaySeconds)
     };
   }
@@ -168,11 +175,14 @@ export interface ExpectedBar {
 /** 预期 K 线：此刻按交易日历应已收线的最新一根；最新 K 线就是它即已到。 */
 export function expectedBar(item: HealthDataset, delay: BarDelay, nowMs: number): ExpectedBar {
   if (!item.expected_bar_at) return { text: "—", tone: "idle", title: "" };
-  const text = shortTime(item.expected_bar_at, nowMs);
+  const text = marketTime(item.expected_bar_at, item.timezone, nowMs);
   const closeMs = toMillis(item.expected_bar_close_at);
   const limit = toSeconds(item.lateness_limit_seconds) || 0;
-  const closing = closeMs === null ? "" : ` ${clockTime(item.expected_bar_close_at, nowMs)} 收线`;
-  const deadline = closeMs === null || !limit ? "" : `，应在 ${clockTime(iso(closeMs + limit * 1000), nowMs)} 前到达`;
+  const closing = closeMs === null ? "" : ` ${marketTime(closeMs, item.timezone, nowMs, { seconds: true })} 收线`;
+  const deadline =
+    closeMs === null || !limit
+      ? ""
+      : `，应在 ${marketTime(closeMs + limit * 1000, item.timezone, nowMs, { seconds: true })} 前到达`;
   if (Number(item.waiting_bars) > 0) {
     return { text, tone: delay.tone, title: `${text} 那根${closing}${deadline}，还没收到` };
   }
@@ -588,7 +598,7 @@ function datasetRow(item: HealthDataset, names: NameBook, nowMs: number): Datase
     producer: PRODUCER_LABELS[item.producer || ""] || item.producer || "",
     spaceId: item.space_id || "",
     freq: item.freq || "",
-    latest: shortTime(item.output_watermark_at, nowMs),
+    latest: marketTime(item.output_watermark_at, item.timezone, nowMs),
     expected: expected.text,
     expectedTone: expected.tone,
     expectedTitle: expected.title,

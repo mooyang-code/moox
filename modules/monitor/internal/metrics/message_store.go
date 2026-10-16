@@ -82,6 +82,10 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 		if err := upsertMetricService(tx, report, reportSeenAt(msg, now)); err != nil {
 			return err
 		}
+		// 必须在更新最新值之前：要和上一份已提交的水位比较。
+		if err := recordBarArrivals(tx, samples); err != nil {
+			return fmt.Errorf("record bar arrivals: %w", err)
+		}
 		return upsertSamples(tx, samples)
 	})
 	if err != nil {

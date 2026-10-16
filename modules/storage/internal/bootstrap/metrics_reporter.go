@@ -48,6 +48,10 @@ func RegisterMetricsReporter(s *server.Server, role string) error {
 	if service == nil {
 		return fmt.Errorf("%s metrics timer service is not configured", spec.ServiceName)
 	}
+	if role == "primary" || role == "view" {
+		// 写入水位与 View 水位前进时立刻补报，Monitor 约 1 秒内就能看到新写完的那根，不等 30 秒定时上报。
+		handler.FlushOnOutputAdvance()
+	}
 	timer.RegisterHandlerService(service, handler.Handle)
 	return nil
 }

@@ -177,7 +177,17 @@
           <article class="tile layer" aria-label="数据链路" :class="`is-${layers.pipeline.tone}`">
             <header class="tile-head">
               <h4><span class="dot" />数据链路</h4>
-              <span class="muted">{{ layerCountText(layers.pipeline) }}</span>
+              <span class="tile-head__side">
+                <span class="muted">{{ layerCountText(layers.pipeline) }}</span>
+                <span class="view-toggle" role="group" aria-label="数据链路视图">
+                  <button type="button" :class="{ active: pipelineView === 'table' }" @click="pipelineView = 'table'">
+                    表格
+                  </button>
+                  <button type="button" :class="{ active: pipelineView === 'chart' }" @click="pipelineView = 'chart'">
+                    曲线
+                  </button>
+                </span>
+              </span>
             </header>
             <div class="stages">
               <template v-for="(stage, index) in stages" :key="stage.id">
@@ -188,7 +198,8 @@
                 </span>
               </template>
             </div>
-            <div v-if="datasetGroups.length" class="table-scroll">
+            <arrival-chart v-if="pipelineView === 'chart'" :overview="overview" :names="names" :now-ms="nowMs" />
+            <div v-else-if="datasetGroups.length" class="table-scroll">
               <table class="dataset-table">
                 <thead>
                   <tr>
@@ -221,7 +232,7 @@
                 </tbody>
               </table>
             </div>
-            <footer class="tile-foot">
+            <footer v-if="pipelineView === 'table'" class="tile-foot">
               <span v-if="!datasetGroups.length" class="muted">{{ pipelineQuiet }}</span>
               <button
                 v-if="allDatasetRows.length"
@@ -392,6 +403,7 @@ import {
   type LayerKey,
   type LayerSummary
 } from "./monitor-model";
+import ArrivalChart from "./arrival-chart.vue";
 import RawError from "./raw-error.vue";
 
 const overview = ref<HealthOverview>({});
@@ -404,6 +416,8 @@ const names = reactive<NameBook>({ datasets: {}, views: {} });
 const expandedAlert = ref("");
 const showAllIncidents = ref(false);
 const expanded = reactive({ pipeline: false, business: false });
+/** 数据链路的视图：表格（各数据集当前状态）或曲线（一条链路某一天逐根 K 线的到达延迟）。 */
+const pipelineView = ref<"table" | "chart">("table");
 const detailVisible = ref(false);
 const selected = ref<HealthComponent | null>(null);
 const notificationVisible = ref(false);
@@ -982,6 +996,32 @@ a {
 .tile-head h4 {
   font-size: 14px;
   font-weight: 600;
+}
+.tile-head__side {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.view-toggle {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--color-border-2);
+  border-radius: 4px;
+}
+.view-toggle button {
+  padding: 1px 10px;
+  border: 0;
+  background: none;
+  color: var(--color-text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.view-toggle button + button {
+  border-left: 1px solid var(--color-border-2);
+}
+.view-toggle button.active {
+  background: rgb(var(--primary-1));
+  color: rgb(var(--primary-6));
 }
 .tile-foot {
   display: flex;

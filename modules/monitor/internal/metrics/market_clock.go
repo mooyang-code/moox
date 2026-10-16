@@ -58,6 +58,15 @@ type sessionSpan struct {
 // ContinuousClock 是全天交易的市场（加密货币）。
 func ContinuousClock() MarketClock { return MarketClock{} }
 
+// Location 是市场时区：有交易日历的市场用交易所时区（A 股 Asia/Shanghai），全天交易的（加密货币）用 UTC。
+// 按天查询、页面显示时间都按它。
+func (c MarketClock) Location() *time.Location {
+	if c.location == nil {
+		return time.UTC
+	}
+	return c.location
+}
+
 // NewExchangeClock 按交易日历和交易时段（形如 "09:30-11:30"，按开盘先后排列）构造交易所市场的时钟。
 func NewExchangeClock(days TradingDays, location *time.Location, sessions []string) (MarketClock, error) {
 	if days == nil || location == nil {

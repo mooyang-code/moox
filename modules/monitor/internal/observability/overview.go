@@ -84,6 +84,8 @@ type DatasetFrequencyStatus struct {
 	LatenessLimitSeconds int64
 	// ClockIssue 说明无法按交易日历判断的原因，例如“日历未覆盖”“周期对齐未确认”；为空表示已按日历判断。
 	ClockIssue string
+	// Timezone 是市场时区（IANA 名称）：加密货币 UTC，A 股 Asia/Shanghai；没有交易日历时为 UTC。
+	Timezone string
 }
 
 type BusinessStatus struct {
@@ -772,6 +774,10 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 	item.WaitingBars, item.WaitingSince, item.OverdueSeconds = bars.waiting, bars.waitingSince, int64(bars.overdue/time.Second)
 	item.LateConfirmed = bars.waiting > 0 && lateness > 0 && bars.confirmed && bars.confirmedOverdue > lateness
 	item.ClockIssue = clockIssueText(bars.issue)
+	item.Timezone = time.UTC.String()
+	if clock.err == nil {
+		item.Timezone = clock.clock.Location().String()
+	}
 	inventoryAt := unixTime(value.inventory)
 	switch {
 	case value.reporterStale:

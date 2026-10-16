@@ -258,6 +258,29 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_ingest_messages (
 CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_ingest_message ON t_monitor_metric_ingest_messages (c_message_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_metric_ingest_expiry ON t_monitor_metric_ingest_messages (c_expires_at);
 
+-- 数据链路逐根到达记录：生产者的输出水位每前进一次记一行（新的最新一根；一批写完的更早几根不单独记），
+-- 与指标入库在同一事务里写入；按空间、周期与开盘时间查询，按到达时间清理（保留 7 天）。时间均为 UTC。
+CREATE TABLE IF NOT EXISTS t_monitor_bar_arrivals (
+    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    c_producer TEXT NOT NULL,
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_primary_dataset_id TEXT NOT NULL DEFAULT '',
+    c_freq TEXT NOT NULL,
+    c_bar_at DATETIME NOT NULL,
+    c_previous_bar_at DATETIME,
+    c_arrived_at DATETIME NOT NULL,
+    c_reported_at DATETIME NOT NULL,
+    c_service_name TEXT NOT NULL DEFAULT '',
+    c_instance_id TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_bar_arrival
+ON t_monitor_bar_arrivals (c_producer, c_space_id, c_dataset_id, c_freq, c_bar_at);
+CREATE INDEX IF NOT EXISTS idx_monitor_bar_arrival_space_bar ON t_monitor_bar_arrivals (c_space_id, c_freq, c_bar_at);
+CREATE INDEX IF NOT EXISTS idx_monitor_bar_arrival_arrived ON t_monitor_bar_arrivals (c_arrived_at);
+
 CREATE TRIGGER IF NOT EXISTS trg_monitor_metric_services_mtime
 AFTER UPDATE ON t_monitor_metric_services
 FOR EACH ROW

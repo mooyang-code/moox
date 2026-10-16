@@ -102,6 +102,8 @@ export interface HealthDataset {
   /** 预期 K 线：此刻应已收线的最新一根的开盘时间（与 output_watermark_at 同一口径，相同即已到）与收线时间。 */
   expected_bar_at?: string;
   expected_bar_close_at?: string;
+  /** 市场时区（IANA 名称）：加密货币 UTC，A 股 Asia/Shanghai；K 线时间按它显示并标注时区。 */
+  timezone?: string;
 }
 export interface HealthPipelineStage {
   id?: string;
@@ -198,4 +200,32 @@ export interface NotificationChannel {
   channel_type?: string;
   webhook_url?: string;
   created_at?: string;
+}
+
+/** 数据链路逐根到达历史的一个点：收线时间（UTC）、到达延迟、与上一条记录之间跳过的根数。 */
+export interface ArrivalHistoryPoint {
+  close_at?: string;
+  delay_seconds?: number | string;
+  skipped_bars?: number;
+}
+/** 链路上一个环节的一个数据集一天的到达曲线；stage 为 storage、view、factor、factor_view、strategy。 */
+export interface ArrivalHistorySeries {
+  stage?: string;
+  producer?: string;
+  dataset_id?: string;
+  primary_dataset_id?: string;
+  lateness_limit_seconds?: number | string;
+  points?: ArrivalHistoryPoint[];
+}
+export interface ArrivalHistory {
+  /** 市场时区（IANA 名称），day 按它切分。 */
+  timezone?: string;
+  day?: string;
+  start_at?: string;
+  end_at?: string;
+  series?: ArrivalHistorySeries[];
+  /** 这一天早于 7 天的保留期，曲线可能不完整。 */
+  retention_truncated?: boolean;
+  /** 记录超过一次查询的上限，曲线只含这一天前面的部分。 */
+  truncated?: boolean;
 }

@@ -76,7 +76,7 @@ view_bars = 5000   # 每个序列 View 保留最近 N 根；超过 ceil(1.2 × N
 
 [storage_retention.spaces.mooxsys]
 "30s" = "48h"
-"1m" = "180d"
+"1m" = "7d"
 
 # View 维护的检查节奏与单个 View 文件上限。
 [storage_view]

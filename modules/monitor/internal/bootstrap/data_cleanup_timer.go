@@ -22,6 +22,8 @@ type monitorDataCleanupOps struct {
 	deleteAlerts  func(context.Context, time.Time) error
 	pruneDedupe   func(context.Context, time.Time) error
 	pruneSeries   func(context.Context, time.Time) error
+	// pruneArrivals 按 monmetrics.BarArrivalRetention 清理数据链路逐根到达记录（按到达时间）。
+	pruneArrivals func(context.Context, time.Time) error
 }
 
 func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error {
@@ -49,6 +51,11 @@ func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error
 	if ops.pruneSeries != nil {
 		if err := ops.pruneSeries(ctx, now); err != nil {
 			errs = append(errs, fmt.Errorf("prune retired metric series: %w", err))
+		}
+	}
+	if ops.pruneArrivals != nil {
+		if err := ops.pruneArrivals(ctx, now.Add(-monmetrics.BarArrivalRetention)); err != nil {
+			errs = append(errs, fmt.Errorf("prune bar arrivals: %w", err))
 		}
 	}
 	return errors.Join(errs...)
@@ -98,6 +105,10 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 				}
 			}
 			_, err := runtime.MetricStores.Messages.PruneRetiredSeries(ctx, now, registered)
+			return err
+		}
+		ops.pruneArrivals = func(ctx context.Context, cutoff time.Time) error {
+			_, err := runtime.MetricStores.Messages.PruneBarArrivals(ctx, cutoff)
 			return err
 		}
 	}

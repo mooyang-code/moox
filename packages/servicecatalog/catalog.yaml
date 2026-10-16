@@ -553,12 +553,14 @@ components:
           - DeleteNotificationChannel
           - ListHostAgents
           - QueryHostMetricHistory
+          - QueryPipelineArrivalHistory
           - GetDoctorContext
         read_only_methods:
           - GetHealthOverview
           - ListNotificationChannels
           - ListHostAgents
           - QueryHostMetricHistory
+          - QueryPipelineArrivalHistory
           - GetDoctorContext
         acl:
           - methods:
@@ -568,6 +570,7 @@ components:
               - DeleteNotificationChannel
               - ListHostAgents
               - QueryHostMetricHistory
+              - QueryPipelineArrivalHistory
               - GetDoctorContext
             callers:
               - console

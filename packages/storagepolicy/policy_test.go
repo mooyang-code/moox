@@ -39,7 +39,7 @@ func TestResolvePrefersSpaceOverride(t *testing.T) {
 		{"stockhk", "1m", "720h", SourceSpace},
 		{"stockcn", "1d", Forever, SourceDefault},
 		{"mooxsys", "30s", "48h", SourceSpace},
-		{"mooxsys", "1m", "4320h", SourceSpace},
+		{"mooxsys", "1m", "168h", SourceSpace},
 		{"newspace", "5m", "720h", SourceDefault},
 	}
 	for _, tc := range cases {

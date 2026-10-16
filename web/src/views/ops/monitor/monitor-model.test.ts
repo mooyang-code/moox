@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { HealthOverview } from "@/api/monitor";
-import { shortTime } from "@/views/home/home-model";
 import {
   alertGroups,
   barDelay,
@@ -77,7 +76,8 @@ describe("current alerts", () => {
     expect(line.recovering).toBe(true);
     expect(line.facts).toEqual(
       expect.arrayContaining([
-        { label: "预期K线", value: shortTime(at(1), now) },
+        // K 线时间按市场时区显示并带时区标记；没有时区时按 UTC。
+        { label: "预期K线", value: "02:59 UTC" },
         { label: "到达", value: "未到，已晚 58 分钟（缺 58 根）" },
         { label: "允许迟到", value: "3 分钟" }
       ])
@@ -476,7 +476,7 @@ describe("expected bar", () => {
     const delay = barDelay(arrived, now);
     expect(delay).toMatchObject({ text: "延迟 1 秒", tone: "ok" });
     const expected = expectedBar(arrived, delay, now);
-    expect(expected.text).toBe(shortTime(at(2), now));
+    expect(expected.text).toBe("02:58 UTC");
     expect(expected.tone).toBe("ok");
     expect(expected.title).toContain("已到");
     expect(expectedBar({ ...base }, delay, now)).toEqual({ text: "—", tone: "idle", title: "" });
@@ -493,7 +493,7 @@ describe("expected bar", () => {
     expect(delay.title).toContain("还没收到");
     expect(delay.title).toContain("上一根");
     const expected = expectedBar(waiting, delay, later(25));
-    expect(expected).toMatchObject({ text: shortTime(at(1), now), tone: "ok" });
+    expect(expected).toMatchObject({ text: "02:59 UTC", tone: "ok" });
     expect(expected.title).toContain("应在");
     expect(expected.title).toContain("还没收到");
     // 已晚超过允许迟到、但还没被上报确认（后端仍判正常）：标橙，等下次上报确认。
@@ -510,5 +510,30 @@ describe("expected bar", () => {
     const warming = { ...waiting, status: "degraded" as const, reason: "数据积累中，结果暂不完整" };
     expect(barDelay(warming, later(10)).tone).toBe("ok");
     expect(barDelay(warming, later(45))).toMatchObject({ text: "等待中，已晚 45 秒", tone: "warn" });
+  });
+});
+
+describe("market time zone", () => {
+  it("shows A-share times in Beijing time with the zone mark", () => {
+    const stock = {
+      producer: "storage",
+      space_id: "stockcn",
+      dataset_id: "dataset_stockcn_kline_1m",
+      freq: "1m",
+      status: "healthy" as const,
+      timezone: "Asia/Shanghai",
+      output_watermark_at: "2026-10-16T01:30:00Z",
+      expected_bar_at: "2026-10-16T01:30:00Z",
+      expected_bar_close_at: "2026-10-16T01:31:00Z",
+      latest_bar_close_at: "2026-10-16T01:31:00Z",
+      arrived_at: "2026-10-16T01:31:02Z",
+      delay_known: true,
+      delay_seconds: "2",
+      lateness_limit_seconds: "90"
+    };
+    const [stage] = pipelineStages({ pipeline: [{ id: "storage", status: "healthy", datasets: [stock] }] }, names, now);
+    expect(stage.rows[0]).toMatchObject({ latest: "09:30 UTC+8", expected: "09:30 UTC+8" });
+    expect(stage.rows[0].delayTitle).toBe("09:31 UTC+8 收线，09:31:02 UTC+8 到达");
+    expect(stage.rows[0].expectedTitle).toContain("09:31:00 UTC+8 收线");
   });
 });

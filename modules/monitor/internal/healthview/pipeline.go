@@ -85,7 +85,7 @@ func projectDataset(item observability.DatasetFrequencyStatus) *pb.HealthDataset
 		ExpectedBarAt: stamp(item.ExpectedBarAt), ExpectedBarCloseAt: stamp(item.ExpectedBarClose),
 		WaitingBars: int32(item.WaitingBars), WaitingSince: stamp(item.WaitingSince), OverdueSeconds: item.OverdueSeconds,
 		LateConfirmed:        item.LateConfirmed,
-		LatenessLimitSeconds: item.LatenessLimitSeconds, ClockIssue: item.ClockIssue,
+		LatenessLimitSeconds: item.LatenessLimitSeconds, ClockIssue: item.ClockIssue, Timezone: item.Timezone,
 	}
 }
 

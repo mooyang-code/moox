@@ -123,6 +123,8 @@ message HealthDataset {
   string expected_bar_close_at = 24;
   // 应到的那根已由生产者的上报确认迟到：上报那一刻它已晚超过允许迟到仍没有，数据集据此判为过期并告警。
   bool late_confirmed = 25;
+  // 市场时区（IANA 名称）：加密货币 UTC，A 股 Asia/Shanghai；没有交易日历的系统数据为 UTC。页面按它显示 K 线时间并标注时区。
+  string timezone = 26;
 }
 message HealthPipelineStage {
   string id = 1;
@@ -268,6 +270,48 @@ message HostMetricHistoryPoint {
 message QueryHostMetricHistoryReq { string agent_id = 1; string start_at = 2; string end_at = 3; uint32 limit = 4; }
 message QueryHostMetricHistoryRsp { common.RetInfo ret_info = 1; repeated HostMetricHistoryPoint points = 2; bool storage_available = 3; bool data_gap = 4; }
 
+// 数据链路逐根到达历史：一条链路（源数据集 + 周期）某一天每个环节每一根 K 线的到达延迟。
+message QueryPipelineArrivalHistoryReq {
+  string space_id = 1;
+  // 链路的源数据集（入库的数据集）与周期。
+  string dataset_id = 2;
+  string freq = 3;
+  // YYYY-MM-DD，按市场时区（加密货币 UTC，A 股 Asia/Shanghai）的自然日；为空取市场时区的今天。
+  string day = 4;
+}
+message ArrivalHistoryPoint {
+  // 收线时间（UTC，RFC3339）。
+  string close_at = 1;
+  // 到达 − 收线（秒），在到达那一刻定值。
+  int64 delay_seconds = 2;
+  // 和上一份快照里的水位之间跳过的根数：补数据时一批写完，中间几根不单独记录；0 表示连续。
+  int32 skipped_bars = 3;
+}
+message ArrivalHistorySeries {
+  // 环节：storage（入库）、view（视图）、factor（因子）、factor_view（因子视图）、strategy（策略计算，按同空间同周期列出）。
+  string stage = 1;
+  string producer = 2;
+  // 数据集 ID；View 为 view_id，primary_dataset_id 是它服务的数据集。
+  string dataset_id = 3;
+  string primary_dataset_id = 4;
+  int64 lateness_limit_seconds = 5;
+  repeated ArrivalHistoryPoint points = 6;
+}
+message QueryPipelineArrivalHistoryRsp {
+  common.RetInfo ret_info = 1;
+  // 市场时区（IANA 名称），day 按它切分。
+  string timezone = 2;
+  string day = 3;
+  // 这一天的起止（UTC，RFC3339，左闭右开），时间点按收线时间落在其中。
+  string start_at = 4;
+  string end_at = 5;
+  repeated ArrivalHistorySeries series = 6;
+  // 记录只保留 7 天：这一天的开头早于保留期时为 true，曲线可能不完整。
+  bool retention_truncated = 7;
+  // 记录超过一次查询的上限，曲线只含这一天前面的部分。
+  bool truncated = 8;
+}
+
 message DoctorExpectedComponent {
   string component_id = 1;
   string service_name = 2;
@@ -340,5 +384,6 @@ service MonitorMgr {
   rpc DeleteNotificationChannel(DeleteNotificationChannelReq) returns (DeleteNotificationChannelRsp);
   rpc ListHostAgents(ListHostAgentsReq) returns (ListHostAgentsRsp);
   rpc QueryHostMetricHistory(QueryHostMetricHistoryReq) returns (QueryHostMetricHistoryRsp);
+  rpc QueryPipelineArrivalHistory(QueryPipelineArrivalHistoryReq) returns (QueryPipelineArrivalHistoryRsp);
   rpc GetDoctorContext(GetDoctorContextReq) returns (GetDoctorContextRsp);
 }

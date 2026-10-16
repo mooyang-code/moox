@@ -15,6 +15,14 @@ type QueryService struct {
 	noDataAfter  time.Duration
 }
 
+// ListBarArrivals 读取一条数据链路在 [from, to) 内开盘的逐根到达记录。
+func (q *QueryService) ListBarArrivals(ctx context.Context, chain BarArrivalChain, from, to time.Time) ([]BarArrival, bool, error) {
+	if q == nil {
+		return nil, false, ErrMetricsStoreUnavailable
+	}
+	return q.messageStore.ListBarArrivals(ctx, chain, from, to)
+}
+
 func NewQueryService(messageStore *MetricMessageStore, storage *StorageAdapter) *QueryService {
 	return &QueryService{messageStore: messageStore, catalog: NewCatalog(messageStore), storage: storage, noDataAfter: 2 * time.Minute}
 }

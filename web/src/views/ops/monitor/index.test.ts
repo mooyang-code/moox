@@ -7,10 +7,19 @@ import { callControl } from "@/api/admin/http";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
 import { listAllDatasets } from "@/api/storage/metadata";
 import { useUserInfoStore } from "@/store/modules/user-info";
-import { shortTime } from "@/views/home/home-model";
 import HealthMonitor from "./index.vue";
 
 vi.mock("@/api/admin/http", () => ({ callControl: vi.fn() }));
+vi.mock("@visactor/vchart", () => ({
+  default: class {
+    renderSync() {
+      return this;
+    }
+    release() {
+      return undefined;
+    }
+  }
+}));
 vi.mock("@/api/storage/metadata", () => ({
   listAllDatasets: vi.fn(async () => [{ dataset_id: "dataset_abc", name: "现货分钟K线" }]),
   listAllViews: vi.fn(async () => [])
@@ -242,10 +251,39 @@ describe("monitor page", () => {
     expect(rows[0].find(".lag").classes()).toContain("is-bad");
     expect(rows[0].find(".lag").text()).toBe("未到，已晚 18 分钟（缺 19 根）");
     expect(rows[0].find(".expected").classes()).toContain("is-bad");
-    expect(rows[0].find(".expected").text()).toBe(shortTime("2026-10-16T02:59:00Z", Date.parse(generated)));
+    expect(rows[0].find(".expected").text()).toBe("02:59 UTC");
     expect(vi.mocked(listAllDatasets)).toHaveBeenCalledWith("crypto", { spaceId: "crypto" });
     await page.find('[aria-label="数据链路"] .link-button').trigger("click");
     expect(page.findAll(".dataset-table tr.dataset-row")).toHaveLength(2);
+  });
+
+  it("switches the pipeline between the table and the arrival curves", async () => {
+    const page = render({
+      ...healthy,
+      pipeline: [
+        {
+          id: "storage",
+          status: "healthy",
+          datasets: [
+            { producer: "storage", space_id: "crypto", dataset_id: "dataset_abc", freq: "1m", status: "healthy", timezone: "UTC" }
+          ]
+        }
+      ]
+    });
+    await flushPromises();
+    expect(page.find(".arrival-chart").exists()).toBe(false);
+    expect(page.find('[aria-label="数据链路"] .link-button').text()).toBe("展开全部 1 条");
+    await page.findAll(".view-toggle button")[1].trigger("click");
+    await flushPromises();
+    expect(page.find(".arrival-chart").exists()).toBe(true);
+    expect(page.find('[aria-label="数据链路"] .link-button').exists()).toBe(false);
+    expect(mockedCallControl).toHaveBeenCalledWith(
+      "monitor",
+      "QueryPipelineArrivalHistory",
+      expect.objectContaining({ space_id: "crypto", dataset_id: "dataset_abc", freq: "1m" })
+    );
+    await page.findAll(".view-toggle button")[0].trigger("click");
+    expect(page.find(".arrival-chart").exists()).toBe(false);
   });
 
   it("keeps the last data on errors and ignores a late older refresh", async () => {

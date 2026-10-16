@@ -235,6 +235,7 @@ func (m *DatasetMetrics) observeRun(observation DatasetObservation, requireExpec
 	m.advanceWatermark(m.inputWatermark, m.inputWatermarkByDataset, observation.Key, observation.InputWatermark)
 	if m.advanceWatermark(m.outputWatermark, m.outputWatermarkByDataset, observation.Key, observation.OutputWatermark) {
 		m.outputArrival.WithLabelValues(values...).Set(finishedAt)
+		NotifyOutputAdvanced(observation.Key.SpaceID)
 	}
 	return nil
 }

@@ -316,6 +316,7 @@
           "reason": "输出水位已落后",
           "space_id": "crypto",
           "status": "degraded",
+          "timezone": "UTC",
           "waiting_bars": 0,
           "waiting_since": ""
         }
