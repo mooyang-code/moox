@@ -55,6 +55,55 @@ func TestFactorDatasetObserverReportsEngineRuns(t *testing.T) {
 	require.Equal(t, 2, testutil.CollectAndCount(registry, "moox_factor_dataset_runs_total"))
 }
 
+// 生产现象（2026-10-16）：引擎重启后 1h 那一期全部标的预热中，缺口补算几分钟后补齐，但因子环节一直显示“数据积累中”到下一个整点：
+// 同一期的摘要升级为完成后，管理端只认更新的期次、不再记录。现在同一期结果变好时照常记录，产出水位前进，到达时间是补齐的时刻。
+func TestFactorDatasetObserverAcceptsSamePeriodUpgradedByRepair(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	datasets, err := report.NewDatasetMetrics(registry, "factor")
+	require.NoError(t, err)
+	period := time.Date(2026, 10, 16, 15, 0, 0, 0, time.UTC)
+	live := period.Add(time.Hour + 9*time.Second)
+	repaired := period.Add(time.Hour + 4*time.Minute)
+	engine := &fakeEngineView{
+		sets: []domain.EngineSet{{Set: domain.FactorSet{SetID: "spot_1h", SpaceID: "crypto", ResultDatasetID: "dataset_factor_spot_1h", Freq: "1h"}, ResultReady: true}},
+		runs: []domain.SetRunSummary{{SetID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: live.Unix(), LastStatus: "degraded", WarmingSubjects: 511, FailedSubjects: []string{"A"}}},
+	}
+	observer := newFactorDatasetObserver(engine, datasets)
+	observer.now = func() time.Time { return repaired.Add(time.Second) }
+	runs := func() float64 {
+		families, err := registry.Gather()
+		require.NoError(t, err)
+		total := 0.0
+		for _, family := range families {
+			if family.GetName() == "moox_factor_dataset_runs_total" {
+				for _, metric := range family.GetMetric() {
+					total += metric.GetCounter().GetValue()
+				}
+			}
+		}
+		return total
+	}
+
+	require.NoError(t, observer.observe(context.Background()))
+	_, found := datasetValue(t, registry, "moox_factor_dataset_output_watermark_timestamp_seconds", "dataset_factor_spot_1h")
+	require.False(t, found, "预热中的结果不推进产出水位")
+	requireDatasetValue(t, registry, "moox_factor_dataset_last_partial_timestamp_seconds", "dataset_factor_spot_1h", float64(live.Unix()))
+
+	// 补算补齐后同一期升级为完成：记一次成功，产出水位前进，到达时间是补齐的时刻。
+	engine.runs = []domain.SetRunSummary{{SetID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: repaired.Unix(), LastStatus: "complete"}}
+	require.NoError(t, observer.observe(context.Background()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_output_watermark_timestamp_seconds", "dataset_factor_spot_1h", float64(period.Unix()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_output_arrival_timestamp_seconds", "dataset_factor_spot_1h", float64(repaired.Unix()))
+	requireDatasetValue(t, registry, "moox_factor_dataset_last_success_timestamp_seconds", "dataset_factor_spot_1h", float64(repaired.Unix()))
+	require.Equal(t, 2.0, runs())
+
+	// 同一期重复的心跳、结果没有变好的不再记录。
+	require.NoError(t, observer.observe(context.Background()))
+	engine.runs[0].LastStatus, engine.runs[0].WarmingSubjects = "degraded", 3
+	require.NoError(t, observer.observe(context.Background()))
+	require.Equal(t, 2.0, runs())
+}
+
 // datasetValue returns one dataset's gauge value in a gathered family.
 func datasetValue(t *testing.T, registry *prometheus.Registry, name, datasetID string) (float64, bool) {
 	t.Helper()

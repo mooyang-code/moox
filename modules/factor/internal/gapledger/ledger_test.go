@@ -188,3 +188,23 @@ func TestLedgerKeepsWarmingReasonAndCountsOnlyGapSkips(t *testing.T) {
 	}
 	require.Equal(t, map[string]string{"BTC|a": "", "ETH|a": pipeline.SkipReasonWarming, "ETH|b": pipeline.SkipReasonWarming}, reasons)
 }
+
+// HasPendingIn 只看指定集合、指定周期是否还有待办；终结后即为 false。
+func TestLedgerHasPendingInPeriod(t *testing.T) {
+	ledger, _ := open(t, t.TempDir(), &clock{now: t0}, 0)
+	require.NoError(t, ledger.RecordGaps(context.Background(), append(gap("BTC", 0, "a"), gap("ETH", 1, "a")...)))
+	require.True(t, ledger.HasPendingIn("fset", t0))
+	require.True(t, ledger.HasPendingIn("fset", t0.Add(time.Minute).In(time.FixedZone("UTC+8", 8*3600))))
+	require.False(t, ledger.HasPendingIn("other", t0))
+	require.False(t, ledger.HasPendingIn("fset", t0.Add(2*time.Minute)))
+
+	var refs []Ref
+	for _, entry := range ledger.Pending() {
+		if entry.Period.Equal(t0) {
+			refs = append(refs, entry.Ref())
+		}
+	}
+	require.NoError(t, ledger.MarkRepaired(refs))
+	require.False(t, ledger.HasPendingIn("fset", t0))
+	require.True(t, ledger.HasPendingIn("fset", t0.Add(time.Minute)))
+}

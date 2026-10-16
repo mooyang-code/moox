@@ -27,6 +27,8 @@ type trackedRun struct {
 	factors        []domain.FactorPeriodState
 	failedSubjects []string
 	warming        int
+	// repaired 是缺口补算已补齐的这一期 (因子 → 标的)：预热中或回看窗口有空洞而跳过的项补齐后，摘要据此改写。
+	repaired map[string]map[string]struct{}
 }
 
 func newRunTracker() *runTracker { return &runTracker{runs: make(map[string]trackedRun)} }
@@ -74,6 +76,100 @@ func (t *runTracker) record(setID string, periodTime time.Time, status string, o
 	}
 	t.mu.Unlock()
 	t.notifyRecorded()
+}
+
+// repair 记下缺口补算对 periodTime 这一期补齐的 (因子, 标的)。只处理最新一期：更早的期次已被更新的结果取代。
+// done 为真表示账本里这一期已经没有待恢复项，这时按补齐的结果改写摘要：去掉已补齐的失败标的与空洞标的，
+// 不再算作预热中，余下没有失败时记为完成；completedAt 作为这一期新的完成时刻，并像实时周期一样立刻补发心跳。
+// 已完成、已失败的期次不改写（失败的期次没有写完，补算只补跳过的项）。返回是否改写了摘要。
+func (t *runTracker) repair(setID string, periodTime time.Time, items []pipeline.ItemKey, done bool, completedAt time.Time) bool {
+	if t == nil || setID == "" {
+		return false
+	}
+	t.mu.Lock()
+	run, ok := t.runs[setID]
+	if !ok || !run.periodTime.Equal(periodTime) || run.status == "failed" || (run.status == "complete" && run.warming == 0) {
+		t.mu.Unlock()
+		return false
+	}
+	if run.repaired == nil {
+		run.repaired = make(map[string]map[string]struct{})
+	}
+	for _, item := range items {
+		if !item.Period.Equal(periodTime) {
+			continue
+		}
+		if run.repaired[item.FactorID] == nil {
+			run.repaired[item.FactorID] = make(map[string]struct{})
+		}
+		run.repaired[item.FactorID][item.Subject] = struct{}{}
+	}
+	if done {
+		run = run.withRepairs(completedAt)
+	}
+	t.runs[setID] = run
+	t.mu.Unlock()
+	if done {
+		t.notifyRecorded()
+	}
+	return done
+}
+
+// withRepairs 按补齐的 (因子, 标的) 改写一期的结果。补算没有覆盖的失败（上游失败、读取失败、计算出错、放弃或取消的待办）原样保留。
+func (run trackedRun) withRepairs(completedAt time.Time) trackedRun {
+	fixedAny := make(map[string]struct{})
+	for _, subjects := range run.repaired {
+		for subject := range subjects {
+			fixedAny[subject] = struct{}{}
+		}
+	}
+	stillFailed := make(map[string]struct{})
+	complete := true
+	factors := make([]domain.FactorPeriodState, len(run.factors))
+	for i, factor := range run.factors {
+		fixed := run.repaired[factor.FactorID]
+		next := factor
+		next.FailedSubjects = subjectsWithout(factor.FailedSubjects, fixed)
+		next.GapSubjects = subjectsWithout(factor.GapSubjects, fixed)
+		// 只因标的失败（含预热中、空洞）而不完整的因子，这些标的都补齐后记为完成；没有列出标的的整因子失败保持原状。
+		if next.Status != "complete" && len(factor.FailedSubjects)+len(factor.GapSubjects) > 0 && len(next.FailedSubjects)+len(next.GapSubjects) == 0 {
+			next.Status = "complete"
+		}
+		for _, subject := range next.FailedSubjects {
+			stillFailed[subject] = struct{}{}
+		}
+		if next.Status != "complete" {
+			complete = false
+		}
+		factors[i] = next
+	}
+	var failed []string
+	for _, subject := range run.failedSubjects {
+		_, fixed := fixedAny[subject]
+		_, still := stillFailed[subject]
+		if fixed && !still {
+			continue
+		}
+		failed = append(failed, subject)
+	}
+	run.factors, run.failedSubjects, run.warming, run.completedAt = factors, failed, 0, completedAt
+	if complete && len(failed) == 0 {
+		run.status = "complete"
+	}
+	return run
+}
+
+func subjectsWithout(subjects []string, drop map[string]struct{}) []string {
+	if len(drop) == 0 {
+		return subjects
+	}
+	var out []string
+	for _, subject := range subjects {
+		if _, ok := drop[subject]; !ok {
+			out = append(out, subject)
+		}
+	}
+	return out
 }
 
 func (t *runTracker) all(now time.Time) []domain.SetRunSummary {

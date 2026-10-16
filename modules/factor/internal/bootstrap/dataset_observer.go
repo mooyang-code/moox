@@ -32,11 +32,30 @@ type factorDatasetObserver struct {
 	// observed is the latest period recorded per set, so a heartbeat repeating
 	// the same period is not counted as another run. Timer ticks may overlap.
 	mu       sync.Mutex
-	observed map[string]int64
+	observed map[string]observedPeriod
+}
+
+// observedPeriod 是一个集合已记录的最新一期与它的结果等级。同一期只接受结果变好的升级（缺口补算补齐了预热中或空洞跳过的项）：
+// 从不正式（预热中、出错，不推进产出水位）到正式，或者从不完整到成功。
+type observedPeriod struct {
+	period int64
+	rank   int
+}
+
+// resultRank 给一期的结果分级：0 不推进产出水位（预热中、出错），1 正式但不完整，2 成功。
+func resultRank(observation report.DatasetObservation) int {
+	switch {
+	case observation.OutputWatermark.IsZero():
+		return 0
+	case observation.Result == "success":
+		return 2
+	default:
+		return 1
+	}
 }
 
 func newFactorDatasetObserver(engine engineView, metrics *report.DatasetMetrics) *factorDatasetObserver {
-	return &factorDatasetObserver{engine: engine, metrics: metrics, clock: periodclock.Continuous{}, now: time.Now, observed: make(map[string]int64)}
+	return &factorDatasetObserver{engine: engine, metrics: metrics, clock: periodclock.Continuous{}, now: time.Now, observed: make(map[string]observedPeriod)}
 }
 
 func (o *factorDatasetObserver) observe(ctx context.Context) error {
@@ -71,11 +90,10 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 	finishedAt := o.now().UTC()
 	for _, run := range status.RecentRuns {
 		key, expected := keys[run.SetID]
-		if !expected || run.LastPeriodTime <= o.observed[run.SetID] {
+		if !expected || run.LastPeriodTime <= 0 {
 			continue
 		}
-		o.observed[run.SetID] = run.LastPeriodTime
-		// 到达时间用引擎写完这一期的时刻；引擎没有给出时（重启前的期次）退回观测时刻。
+		// 到达时间用引擎写完这一期的时刻（补算补齐时是补齐的时刻）；引擎没有给出时（重启前的期次）退回观测时刻。
 		observedAt := finishedAt
 		if run.CompletedAt > 0 {
 			observedAt = time.Unix(run.CompletedAt, 0).UTC()
@@ -85,6 +103,12 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 		if run.WarmingSubjects == 0 && observation.Result != "error" {
 			observation.OutputWatermark = time.Unix(run.LastPeriodTime, 0).UTC()
 		}
+		previous, seen := o.observed[run.SetID]
+		next := observedPeriod{period: run.LastPeriodTime, rank: resultRank(observation)}
+		if seen && (next.period < previous.period || (next.period == previous.period && next.rank <= previous.rank)) {
+			continue
+		}
+		o.observed[run.SetID] = next
 		if err := o.metrics.ObserveRun(observation); err != nil {
 			return fmt.Errorf("observe factor set %s: %w", run.SetID, err)
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -43,12 +44,20 @@ type gapFiller struct {
 	now      func() time.Time
 	// onGaveUp 在条目被记为 gave_up 时调用（指标用，可为 nil）。
 	onGaveUp func(entries int)
+	// onRepaired 在一批待办确认补齐后按周期调用（可为 nil）：items 是这一期补齐的 (因子, 标的, 周期)，
+	// done 表示账本里这一期已没有待恢复项。引擎据此把补齐的最新一期记入运行摘要。
+	onRepaired func(setID string, period time.Time, items []pipeline.ItemKey, done bool)
+	// kick 让恢复循环立刻做一轮（预热完成时），不阻塞；为 nil 时只按 SweepInterval 轮询。
+	kick chan struct{}
+	// warmedAt 是每个集合最近一次预热完成的时刻：在它之前因预热中跳过的待办，窗口已经载入，不再等 Settle 就恢复。
+	warmMu   sync.Mutex
+	warmedAt map[string]time.Time
 	// lastTried 记录每个组最近一次尝试的时间：一轮只处理 MaxGroupsPerSweep 个组，按「最久没试过的优先」轮转，
 	// 前面一直补不上的组不会让后面已经补齐的组长期得不到执行机会。
 	lastTried map[string]time.Time
 }
 
-// Run 按 SweepInterval 轮询直到 ctx 结束。
+// Run 按 SweepInterval 轮询、或者被预热完成唤醒，直到 ctx 结束。
 func (g *gapFiller) Run(ctx context.Context) {
 	ticker := time.NewTicker(g.cfg.SweepInterval)
 	defer ticker.Stop()
@@ -57,9 +66,48 @@ func (g *gapFiller) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			g.tick(ctx)
+		case <-g.kick:
 		}
+		g.tick(ctx)
 	}
+}
+
+// Warmed 在一个集合的后台预热完成时调用：此前因预热中跳过的那几期不再等 Settle、也不等下一轮轮询，立刻补算。
+// 否则重启后第一期（1h 集合是整整一根）要在预热完成后再等 5～10 分钟才补齐。
+func (g *gapFiller) Warmed(setID string, at time.Time) {
+	if g == nil || setID == "" {
+		return
+	}
+	g.warmMu.Lock()
+	if g.warmedAt == nil {
+		g.warmedAt = make(map[string]time.Time)
+	}
+	if at.After(g.warmedAt[setID]) {
+		g.warmedAt[setID] = at
+	}
+	g.warmMu.Unlock()
+	if g.kick == nil {
+		return
+	}
+	select {
+	case g.kick <- struct{}{}:
+	default:
+	}
+}
+
+// settled 判断一条待办是否可以恢复了：发现后过了 Settle（给自动补采留时间）；预热中跳过的项在该集合预热完成后即可恢复，
+// 那一期的源数据在跳过时就已经入库，只是窗口还没载入。
+func (g *gapFiller) settled(entry gapledger.Entry, cutoff time.Time) bool {
+	if !entry.FirstSeen.After(cutoff) {
+		return true
+	}
+	if entry.Reason != pipeline.SkipReasonWarming {
+		return false
+	}
+	g.warmMu.Lock()
+	warmed, ok := g.warmedAt[entry.Set]
+	g.warmMu.Unlock()
+	return ok && !entry.FirstSeen.After(warmed)
 }
 
 // maxFillSubjects 是一次时序恢复最多合并的标的数。恢复区间相同的标的（同一期整体预热跳过、同一段采集中断造成的空洞）
@@ -95,7 +143,7 @@ func (g *gapFiller) tick(ctx context.Context) {
 	setCache := make(map[string]domain.EngineSet)
 	lookups := make(map[string]SetLookup)
 	for _, entry := range g.ledger.Pending() {
-		if entry.FirstSeen.After(cutoff) {
+		if !g.settled(entry, cutoff) {
 			continue // 刚发现，给自动补采一点时间
 		}
 		set, lookup := setCache[entry.Set], lookups[entry.Set]
@@ -457,7 +505,20 @@ func (g *gapFiller) confirm(current []gapledger.Entry, selection recalcexec.Sele
 		log.Errorf("factor_gap_ledger_repaired_failed entries=%d error=%v", len(repaired), err)
 		return
 	}
-	if len(repaired) > 0 {
-		log.Infof("factor_gap_repaired set_id=%s entries=%d window=%s/%s", selection.Set.SetID, len(repaired), start.Format(time.RFC3339), end.Format(time.RFC3339))
+	if len(repaired) == 0 {
+		return
+	}
+	log.Infof("factor_gap_repaired set_id=%s entries=%d window=%s/%s", selection.Set.SetID, len(repaired), start.Format(time.RFC3339), end.Format(time.RFC3339))
+	if g.onRepaired == nil {
+		return
+	}
+	byPeriod := make(map[int64][]pipeline.ItemKey)
+	for _, ref := range repaired {
+		at := ref.Period.UTC().Unix()
+		byPeriod[at] = append(byPeriod[at], pipeline.ItemKey{FactorID: ref.FactorID, Subject: ref.Subject, Period: ref.Period})
+	}
+	for at, items := range byPeriod {
+		period := time.Unix(at, 0).UTC()
+		g.onRepaired(selection.Set.SetID, period, items, !g.ledger.HasPendingIn(selection.Set.SetID, period))
 	}
 }

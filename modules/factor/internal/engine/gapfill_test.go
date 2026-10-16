@@ -328,3 +328,62 @@ func TestGapFillerRepairsWarmingCrossSectionWithFrozenUniverse(t *testing.T) {
 	require.True(t, f.chunks.calls[0].selection.FillCarry)
 	require.Zero(t, f.ledger.PendingCount())
 }
+
+type repairedCall struct {
+	period time.Time
+	items  int
+	done   bool
+}
+
+// 预热完成后立刻补算预热期间跳过的那一期：不等 Settle，也不等下一轮轮询；空洞跳过的项和预热完成之后才跳过的项仍等 Settle。
+// 每批补齐后按周期回调，账本里这一期没有待办了才算补齐。
+func TestGapFillerRepairsWarmingSkipsRightAfterWarmup(t *testing.T) {
+	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
+	f := newGapFixture(t, fakeUniverse{}, factor)
+	f.filler.kick = make(chan struct{}, 1)
+	var calls []repairedCall
+	f.filler.onRepaired = func(setID string, period time.Time, items []pipeline.ItemKey, done bool) {
+		require.Equal(t, "fset", setID)
+		calls = append(calls, repairedCall{period: period, items: len(items), done: done})
+	}
+	for i := 0; i < maxFillSubjects+1; i++ {
+		f.recordWarming(t, fmt.Sprintf("S%03d", i), 0, "evt-0", factor) // 发现于 gapT0
+	}
+	f.record(t, gapT0, "DOGE", 1, "", factor) // 空洞跳过
+
+	f.now = gapT0.Add(2 * time.Minute)
+	f.filler.tick(context.Background())
+	require.Empty(t, f.chunks.calls, "还在 Settle 内，集合也没有预热完成")
+
+	f.filler.Warmed("fset", gapT0.Add(90*time.Second))
+	require.Len(t, f.filler.kick, 1, "预热完成唤醒恢复循环")
+	<-f.filler.kick
+	f.filler.tick(context.Background())
+	require.Len(t, f.chunks.calls, 2, "预热跳过的 101 个标的分两批，空洞跳过的 DOGE 仍等 Settle")
+	for _, call := range f.chunks.calls {
+		require.NotContains(t, call.selection.Subjects, "DOGE")
+	}
+	require.Equal(t, 1, f.ledger.PendingCount())
+	require.Len(t, calls, 2)
+	require.False(t, calls[0].done, "第一批补完时这一期还有待办")
+	require.Equal(t, repairedCall{period: gapT0, items: 1, done: true}, calls[1])
+	require.Equal(t, maxFillSubjects, calls[0].items)
+
+	// 预热完成之后才因预热中跳过的项（标的又落后了，要重新预热）不算已预热，仍等 Settle。
+	f.now = gapT0.Add(3 * time.Minute)
+	f.recordWarmingAt(t, gapT0.Add(2*time.Minute), "LATE", 2, factor)
+	f.filler.tick(context.Background())
+	require.Len(t, f.chunks.calls, 2)
+	require.Equal(t, 2, f.ledger.PendingCount())
+}
+
+func (f *gapFixture) recordWarmingAt(t *testing.T, at time.Time, subject string, minute int, factor domain.FactorDef) {
+	t.Helper()
+	saved := f.now
+	f.now = at
+	require.NoError(t, f.ledger.RecordGaps(context.Background(), []pipeline.GapEntry{{
+		SetID: "fset", Subject: subject, Period: gapT0.Add(time.Duration(minute) * time.Minute), FactorID: factor.FactorID,
+		DefinitionHash: domain.DefinitionHash(factor), TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming,
+	}}))
+	f.now = saved
+}

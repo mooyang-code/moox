@@ -95,6 +95,30 @@ func TestPrewarmLoadsWindowsBeforeFirstLivePeriod(t *testing.T) {
 	require.Len(t, loaded.Frames["BTC"].Rows, 3)
 }
 
+// 一批后台预热载入窗口后回调（引擎据此立刻补算预热期间跳过的那几期），回调时窗口已经在缓存里。
+func TestWarmupDoneHookRunsAfterWindowsAreLoaded(t *testing.T) {
+	store := &hourlyStore{}
+	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{BackgroundWarmup: true})
+	done := make(chan string, 1)
+	runner.OnWarmupDone(func(setID string, at time.Time) {
+		require.False(t, at.IsZero())
+		done <- setID
+	})
+	require.Equal(t, 2, runner.Prewarm(hourlyPlan(t, time.Date(2026, 10, 16, 6, 0, 0, 0, time.UTC))))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runner.RunWarmup(ctx)
+	select {
+	case setID := <-done:
+		require.Equal(t, "fset_1h", setID)
+	case <-time.After(time.Second):
+		t.Fatal("预热完成后没有回调")
+	}
+	loaded, err := runner.Load(context.Background(), hourlyPlan(t, time.Date(2026, 10, 16, 8, 0, 0, 0, time.UTC)))
+	require.NoError(t, err)
+	require.Empty(t, loaded.WarmingSubjects)
+}
+
 // 只回看一根的集合：预热窗口终点比第一期的窗口起点早一根，落后不多，本期直接读整窗口，不再当作预热中。
 func TestPrewarmConnectsToFirstPeriodWithSingleBarLookback(t *testing.T) {
 	store := &hourlyStore{}

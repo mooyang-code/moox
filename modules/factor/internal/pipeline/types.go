@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -91,6 +92,8 @@ type Runner struct {
 	windows *liveWindowCache
 	// firstBars 缓存标的的首根 K 线时间，用来区分新上市与空洞。
 	firstBars firstBarCache
+	// warmed 在一批后台预热载入窗口后调用，见 OnWarmupDone。
+	warmed atomic.Pointer[func(setID string, at time.Time)]
 }
 
 func NewRunner(store storageio.Store, exec pyexec.Executor, clock periodclock.Clock, cfg Config) *Runner {

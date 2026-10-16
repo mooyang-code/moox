@@ -344,6 +344,19 @@ func (r *Runner) Prewarm(plan Plan) int {
 	return r.windows.prewarm(plan, uniqueSorted(plan.Available))
 }
 
+// OnWarmupDone 登记一批后台预热载入窗口之后调用的函数（参数是集合与完成时刻），在预热协程里同步调用、应当很快返回。
+// 引擎用它让跳过恢复立刻补算预热期间跳过的那几期。
+func (r *Runner) OnWarmupDone(hook func(setID string, at time.Time)) {
+	if r == nil {
+		return
+	}
+	if hook == nil {
+		r.warmed.Store(nil)
+		return
+	}
+	r.warmed.Store(&hook)
+}
+
 // WarmupStatuses reports the warm-up state of every live set seen so far.
 func (r *Runner) WarmupStatuses() []WarmupStatus {
 	if r == nil || r.windows == nil {
@@ -353,7 +366,6 @@ func (r *Runner) WarmupStatuses() []WarmupStatus {
 }
 
 func (r *Runner) warmup(ctx context.Context, plan Plan, subjects []string) bool {
-	defer r.windows.finishWarmup(plan, subjects)
 	started := time.Now()
 	reads := make(map[string]subjectRead, len(subjects))
 	for _, subject := range subjects {
@@ -361,13 +373,19 @@ func (r *Runner) warmup(ctx context.Context, plan Plan, subjects []string) bool 
 	}
 	frames, failed, err := r.readSubjects(ctx, plan, reads, true, true)
 	if err != nil {
+		r.windows.finishWarmup(plan, subjects)
 		log.Warnf("factor_warmup_failed set_id=%s subjects=%d window=%s/%s duration=%s error=%v", plan.Set.SetID, len(subjects),
 			plan.TargetStart.UTC().Format(time.RFC3339), plan.TargetEnd.UTC().Format(time.RFC3339), time.Since(started).Round(time.Millisecond), err)
 		return false
 	}
+	// 写入缓存后紧接着结束这一批：两步之间实时周期已经能读到窗口，预热状态却还是 warming，间隔越短越好；日志与回调放在之后。
 	r.storeWindows(ctx, plan, frames)
+	r.windows.finishWarmup(plan, subjects)
 	log.Infof("factor_warmup_done set_id=%s subjects=%d warmed=%d failed=%d window=%s/%s duration=%s", plan.Set.SetID, len(subjects), len(frames), len(failed),
 		plan.TargetStart.UTC().Format(time.RFC3339), plan.TargetEnd.UTC().Format(time.RFC3339), time.Since(started).Round(time.Millisecond))
+	if hook := r.warmed.Load(); hook != nil && len(frames) > 0 {
+		(*hook)(plan.Set.SetID, time.Now())
+	}
 	return len(failed) == 0
 }
 

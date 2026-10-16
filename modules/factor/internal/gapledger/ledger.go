@@ -309,6 +309,19 @@ func (l *Ledger) pendingLocked(match func(Entry) bool) []Entry {
 	return out
 }
 
+// HasPendingIn 报告一个集合的某个周期是否还有待恢复项；补算据此判断这一期是否已经补齐。
+func (l *Ledger) HasPendingIn(set string, period time.Time) bool {
+	at := period.UTC().Unix()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for k := range l.pending {
+		if k.set == set && k.period == at {
+			return true
+		}
+	}
+	return false
+}
+
 // PendingCount 是待恢复项的数量（指标用）。
 func (l *Ledger) PendingCount() int {
 	l.mu.Lock()
