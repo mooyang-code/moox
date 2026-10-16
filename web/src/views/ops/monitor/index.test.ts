@@ -136,6 +136,25 @@ describe("monitor page", () => {
     expect(timeline.text()).toContain("29 秒后恢复 · 闪断");
   });
 
+  it("shows only the latest incidents until expanded", async () => {
+    const page = render({
+      ...healthy,
+      incidents: Array.from({ length: 12 }, (_, index) => ({
+        id: `i${index}`,
+        severity: "critical",
+        title: `告警 ${index}`,
+        triggered_at: new Date(Date.parse(generated) - (index + 1) * 3_600_000).toISOString(),
+        resolved_at: new Date(Date.parse(generated) - (index + 1) * 3_600_000 + 600_000).toISOString()
+      }))
+    });
+    await flushPromises();
+    const timeline = page.find(".timeline");
+    expect(timeline.findAll(".incident")).toHaveLength(8);
+    expect(timeline.find(".link-button").text()).toBe("展开其余 4 条");
+    await timeline.find(".link-button").trigger("click");
+    expect(timeline.findAll(".incident")).toHaveLength(12);
+  });
+
   it("opens component details from the host dots and keeps raw errors untranslated", async () => {
     const raw = "x509: certificate expired\n原始错误";
     const page = render({

@@ -86,8 +86,13 @@
               >{{ row.outcome }}<template v-if="row.flap"> · 闪断</template></span
             >
           </div>
-          <button v-if="timeline.flaps" type="button" class="link-button" @click="showFlaps = !showFlaps">
-            {{ showFlaps ? "收起闪断" : `另有 ${timeline.flaps} 条闪断（1 分钟内自动恢复），展开` }}
+          <button
+            v-if="showAllIncidents || hiddenIncidents"
+            type="button"
+            class="link-button"
+            @click="showAllIncidents = !showAllIncidents"
+          >
+            {{ showAllIncidents ? "收起" : hiddenIncidentsText }}
           </button>
         </div>
       </section>
@@ -376,7 +381,7 @@ const loadedAt = ref("");
 const clockMs = ref(Date.now());
 const names = reactive<NameBook>({ datasets: {}, views: {} });
 const expandedAlert = ref("");
-const showFlaps = ref(false);
+const showAllIncidents = ref(false);
 const expanded = reactive({ components: false, pipeline: false, business: false });
 const detailVisible = ref(false);
 const selected = ref<HealthComponent | null>(null);
@@ -402,7 +407,16 @@ const conclusion = computed(() =>
   })
 );
 const timeline = computed(() => incidentTimeline(overview.value, names, nowMs.value));
-const visibleIncidents = computed(() => (showFlaps.value ? timeline.value.rows : timeline.value.rows.filter(row => !row.flap)));
+// 默认只看最近几条非闪断的经过；其余（含 1 分钟内自愈的闪断）收起，避免长列表把分层健康挤到很远。
+const INCIDENT_PREVIEW_ROWS = 8;
+const visibleIncidents = computed(() =>
+  showAllIncidents.value ? timeline.value.rows : timeline.value.rows.filter(row => !row.flap).slice(0, INCIDENT_PREVIEW_ROWS)
+);
+const hiddenIncidents = computed(() => timeline.value.rows.length - visibleIncidents.value.length);
+const hiddenIncidentsText = computed(() => {
+  const flaps = timeline.value.flaps;
+  return `展开其余 ${hiddenIncidents.value} 条${flaps ? `（含 ${flaps} 条 1 分钟内自愈的闪断）` : ""}`;
+});
 const timelineSummary = computed(() => {
   const { total, rows, flaps, active } = timeline.value;
   if (!total) return "没有告警";
