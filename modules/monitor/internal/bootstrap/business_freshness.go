@@ -247,14 +247,19 @@ func buildBusinessFreshnessReporterWithInterval(
 				suppressed[dataset.SpaceID+"\x00"+checkID] = struct{}{}
 				continue
 			}
-			nameDatasetID := dataset.DatasetID
-			if dataset.Producer == "storage_view" && dataset.PrimaryDatasetID != "" {
-				nameDatasetID = dataset.PrimaryDatasetID
+			// 名称优先取生产者随清单上报的（策略实例名等），再取 Storage 里登记的数据集名称，都没有时用数据集 ID。
+			displayName := dataset.DisplayName
+			if displayName == "" {
+				nameDatasetID := dataset.DatasetID
+				if dataset.Producer == "storage_view" && dataset.PrimaryDatasetID != "" {
+					nameDatasetID = dataset.PrimaryDatasetID
+				}
+				displayName = builder.Metrics.DatasetDisplayName(ctx, dataset.SpaceID, nameDatasetID)
 			}
 			item := businessFreshnessItem{
 				spaceID: dataset.SpaceID,
 				checkID: checkID,
-				name:    datasetCheckName(dataset.Producer, datasetSubject(builder.Metrics.DatasetDisplayName(ctx, dataset.SpaceID, nameDatasetID), dataset.DatasetID, dataset.Freq)),
+				name:    datasetCheckName(dataset.Producer, datasetSubject(displayName, dataset.DatasetID, dataset.Freq)),
 				success: datasetCheckPasses(dataset),
 				reason:  datasetReasonText(dataset, overview.GeneratedAt),
 			}

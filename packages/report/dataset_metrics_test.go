@@ -1,8 +1,10 @@
 package report
 
 import (
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -228,5 +230,58 @@ func TestDatasetMetricsAcceptsEmptyWithoutExpandingModuleResults(t *testing.T) {
 	}
 	if err := module.ObserveRun("collect", "empty", "market-data", time.Now()); err == nil {
 		t.Fatal("module metrics accepted dataset-only empty result")
+	}
+}
+
+func TestDatasetMetricsPublishesDisplayNames(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewDatasetMetrics(registry, "strategy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsMonitoredMetric("moox_strategy_dataset_info") {
+		t.Fatal("名称序列应该上报给 Monitor")
+	}
+	named := DatasetKey{SpaceID: "crypto", DatasetID: "strategy_a", Freq: "1m"}
+	unnamed := DatasetKey{SpaceID: "crypto", DatasetID: "strategy_b", Freq: "1m"}
+	if err := metrics.ReplaceExpected([]DatasetExpectation{
+		{Key: named, Interval: time.Minute, Name: "  动量轮动（26d51f7e）  "},
+		{Key: unnamed, Interval: time.Minute},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.CollectAndCount(metrics.info); got != 1 {
+		t.Fatalf("名称序列 %d 条，只有带名称的数据集应该有", got)
+	}
+	if got := testutil.ToFloat64(metrics.info.WithLabelValues("crypto", "strategy_a", "1m", "动量轮动（26d51f7e）")); got != 1 {
+		t.Fatalf("名称序列取值 %v，应为 1", got)
+	}
+
+	// 改名后旧名称序列消失；移出清单的数据集名称序列也消失。
+	if err := metrics.ReplaceExpected([]DatasetExpectation{{Key: named, Interval: time.Minute, Name: "均值回归（26d51f7e）"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.CollectAndCount(metrics.info); got != 1 {
+		t.Fatalf("改名后名称序列 %d 条，旧名称应已删除", got)
+	}
+	if got := testutil.ToFloat64(metrics.info.WithLabelValues("crypto", "strategy_a", "1m", "均值回归（26d51f7e）")); got != 1 {
+		t.Fatalf("新名称序列取值 %v，应为 1", got)
+	}
+	if err := metrics.ReplaceExpected(nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.CollectAndCount(metrics.info); got != 0 {
+		t.Fatalf("清单清空后名称序列 %d 条，应全部删除", got)
+	}
+}
+
+func TestDatasetDisplayNameTruncatesOnRuneBoundary(t *testing.T) {
+	long := strings.Repeat("策", MaxDatasetNameBytes)
+	got := datasetDisplayName(long)
+	if len(got) > MaxDatasetNameBytes || !utf8.ValidString(got) || !strings.HasSuffix(got, "…") {
+		t.Fatalf("截断结果不合法：%d 字节 %q", len(got), got)
+	}
+	if got := datasetDisplayName("坏\xff名"); got != "坏名" {
+		t.Fatalf("非法 UTF-8 应被去掉，得到 %q", got)
 	}
 }

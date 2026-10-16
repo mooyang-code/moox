@@ -137,7 +137,7 @@ func TestBusinessFreshnessReporterCreatesOneKlineGroupCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if check.Name != "view（1分钟） · K线结果" {
+	if check.Name != "view（1分钟）· K线结果" {
 		t.Fatalf("check = %+v", check)
 	}
 	results, err := repositories.Results.Recent(t.Context(), "crypto", check.CheckID, 1)
@@ -1024,4 +1024,59 @@ func TestDatasetCheckPassesTreatsWarmingAsPassing(t *testing.T) {
 	require.False(t, datasetCheckPasses(status("stale", "run stale")))
 	require.False(t, datasetCheckPasses(status("unknown", "尚未上报")))
 	require.Contains(t, datasetReasonText(status("degraded", monitorobservability.DatasetReasonWarming), time.Now()), "数据积累中")
+}
+
+// 策略数据集检查用策略随清单上报的实例名命名：刚改名、旧名称序列还没过期时取最近上报的那条；只剩已过期的名称序列
+// （策略不再上报名称）时退回数据集 ID，不报错。
+func TestBusinessFreshnessReporterNamesStrategyDatasetByInstance(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.Close() })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	now := time.Now().UTC().Truncate(time.Second)
+	named := `{"dataset_id":"strategy_26d51f7e-4c40","freq":"1m","space_id":"crypto"}`
+	unnamed := `{"dataset_id":"strategy_b","freq":"1m","space_id":"crypto"}`
+	info := func(datasetID, name string) string {
+		return `{"dataset_id":"` + datasetID + `","freq":"1m","name":"` + name + `","space_id":"crypto"}`
+	}
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		for _, metric := range []struct {
+			id, name, labels string
+			value            float64
+			seenAt           time.Time
+		}{
+			{"enabled-a", "moox_strategy_dataset_enabled", named, 1, now},
+			{"interval-a", "moox_strategy_dataset_expected_interval_seconds", named, 60, now},
+			{"enabled-b", "moox_strategy_dataset_enabled", unnamed, 1, now},
+			{"interval-b", "moox_strategy_dataset_expected_interval_seconds", unnamed, 60, now},
+			{"info-a-current", "moox_strategy_dataset_info", info("strategy_26d51f7e-4c40", "动量轮动（26d51f7e）"), 1, now},
+			{"info-a-renamed", "moox_strategy_dataset_info", info("strategy_26d51f7e-4c40", "旧名称（26d51f7e）"), 1, now.Add(-30 * time.Second)},
+			{"info-b-stale", "moox_strategy_dataset_info", info("strategy_b", "已停用名称（strategy）"), 1, now.Add(-10 * time.Minute)},
+		} {
+			require.NoError(t, db.Create(&monmetrics.MetricSeries{
+				ServiceName: "strategy", InstanceID: "strategy@node-a", SeriesID: metric.id,
+				MetricName: metric.name, MetricType: "gauge", LabelsJSON: metric.labels, LastSeenAt: metric.seenAt,
+			}).Error)
+			require.NoError(t, db.Create(&monmetrics.MetricLatest{
+				SeriesID: metric.id, ServiceName: "strategy", InstanceID: "strategy@node-a",
+				MetricName: metric.name, MetricType: "gauge", LabelsJSON: metric.labels,
+				Value: metric.value, ObservedAt: metric.seenAt,
+			}).Error)
+		}
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	require.NoError(t, err)
+	repositories := manager.Repositories()
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
+		Now: func() time.Time { return now },
+	}, repositories, nil)
+	require.NoError(t, run(t.Context()))
+
+	check, err := repositories.Checks.Get(t.Context(), "crypto", "dataset:strategy:strategy_26d51f7e-4c40:1m")
+	require.NoError(t, err)
+	require.Equal(t, "动量轮动（26d51f7e）· 策略结果", check.Name)
+	check, err = repositories.Checks.Get(t.Context(), "crypto", "dataset:strategy:strategy_b:1m")
+	require.NoError(t, err)
+	require.Equal(t, "strategy_b（1分钟）· 策略结果", check.Name)
 }

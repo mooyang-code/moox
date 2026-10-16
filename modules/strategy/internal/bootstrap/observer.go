@@ -120,6 +120,41 @@ func datasetKey(instance store.Instance, bar string) (report.DatasetExpectation,
 	return report.DatasetExpectation{Key: report.DatasetKey{SpaceID: instance.SpaceID, DatasetID: datasetID, Freq: string(freq)}, Interval: freq.NominalDuration()}, true
 }
 
+// maxDefinitionNameRunes 是实例展示名里定义名称的字符上限：告警标题还要带实例 ID 前 8 位和检查类型，过长的定义名截断。
+const maxDefinitionNameRunes = 40
+
+// instanceDisplayName 是实例给人看的名称「定义名称（实例 ID 前 8 位）」，与控制台策略页一致：同一定义的多个实例靠
+// 实例 ID 前 8 位区分，也能在策略页按它找到实例。定义名称未知时返回空，Monitor 退回数据集 ID。
+func instanceDisplayName(definitionName, instanceID string) string {
+	definitionName = strings.TrimSpace(definitionName)
+	if definitionName == "" {
+		return ""
+	}
+	if runes := []rune(definitionName); len(runes) > maxDefinitionNameRunes {
+		definitionName = strings.TrimSpace(string(runes[:maxDefinitionNameRunes-1])) + "…"
+	}
+	shortID := []rune(strings.TrimSpace(instanceID))
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	return definitionName + "（" + string(shortID) + "）"
+}
+
+// definitionNames 读取未删除定义的名称（键为策略 ID）。只用于给 Monitor 的数据集检查起名，读取失败时返回空表，
+// 期望清单照常登记（不带名称），下一轮刷新再取。
+func (o *instanceObserver) definitionNames(ctx context.Context) map[string]string {
+	definitions, err := o.store.ListDefinitions(ctx)
+	if err != nil {
+		o.log("读取策略定义名称失败，本轮数据集不带名称：%v", err)
+		return nil
+	}
+	names := make(map[string]string, len(definitions))
+	for _, definition := range definitions {
+		names[definition.StrategyID] = definition.Name
+	}
+	return names
+}
+
 // refresh 用当前启用实例重建期望数据集清单；停用的实例随之移出。
 func (o *instanceObserver) refresh(ctx context.Context) error {
 	enabled := true
@@ -129,6 +164,7 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 		return fmt.Errorf("读取启用实例：%w", err)
 	}
 	o.loadBases(ctx, instances)
+	definitionNames := o.definitionNames(ctx)
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	next := make(map[string]report.DatasetExpectation, len(instances))
@@ -139,6 +175,7 @@ func (o *instanceObserver) refresh(ctx context.Context) error {
 		}
 		if expectation, ok := datasetKey(instance, resolved.Bar); ok {
 			expectation.Interval = o.runIntervalLocked(instance.InstanceID, resolved.Calendar, resolved.Bar, expectation.Interval)
+			expectation.Name = instanceDisplayName(definitionNames[instance.StrategyID], instance.InstanceID)
 			next[instance.InstanceID] = expectation
 		}
 	}

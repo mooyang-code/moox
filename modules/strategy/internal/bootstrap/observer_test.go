@@ -28,6 +28,56 @@ func TestDatasetKeyDerivation(t *testing.T) {
 	}
 }
 
+func TestInstanceDisplayName(t *testing.T) {
+	if got := instanceDisplayName("动量轮动", "26d51f7e-4c40-4e33-b637-4ec72d4cd7e6"); got != "动量轮动（26d51f7e）" {
+		t.Fatalf("实例名 %q，应为「定义名称（实例 ID 前 8 位）」", got)
+	}
+	if got := instanceDisplayName(" 短 ", "i1"); got != "短（i1）" {
+		t.Fatalf("短实例 ID 应完整保留：%q", got)
+	}
+	if got := instanceDisplayName("  ", "i1"); got != "" {
+		t.Fatalf("定义名称未知时应返回空：%q", got)
+	}
+	long := instanceDisplayName(strings.Repeat("策", maxDefinitionNameRunes+10), "i1")
+	if want := strings.Repeat("策", maxDefinitionNameRunes-1) + "…（i1）"; long != want {
+		t.Fatalf("过长的定义名称应截断：%q", long)
+	}
+}
+
+// 期望清单带上实例名「定义名称（实例 ID 前 8 位）」，Monitor 用它命名策略数据集检查。
+func TestInstanceObserverPublishesInstanceDisplayName(t *testing.T) {
+	repo := openStore(t)
+	seedEnabled(t, repo, "i1", nil, resolvedJSON)
+	registry := prometheus.NewRegistry()
+	observer, err := newInstanceObserver(repo, registry, t.Logf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := observer.refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := observer.expected["i1"].Name; got != "demo（i1）" {
+		t.Fatalf("期望数据集名称 %q，应为 demo（i1）", got)
+	}
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "moox_strategy_dataset_info" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "name" && label.GetValue() == "demo（i1）" {
+					return
+				}
+			}
+		}
+	}
+	t.Fatal("没有上报实例名称序列")
+}
+
 func TestInstanceObserverRegistersEnabledInstancesAndCountsPeriods(t *testing.T) {
 	repo := openStore(t)
 	seedEnabled(t, repo, "i1", nil, resolvedJSON)
@@ -63,7 +113,7 @@ func TestInstanceObserverRegistersEnabledInstancesAndCountsPeriods(t *testing.T)
 	for _, family := range families {
 		found[family.GetName()] = true
 	}
-	for _, name := range []string{"moox_strategy_dataset_enabled", "moox_strategy_dataset_last_success_timestamp_seconds", "moox_strategy_dataset_output_watermark_timestamp_seconds", "moox_strategy_period_total", "moox_strategy_runs_total"} {
+	for _, name := range []string{"moox_strategy_dataset_enabled", "moox_strategy_dataset_info", "moox_strategy_dataset_last_success_timestamp_seconds", "moox_strategy_dataset_output_watermark_timestamp_seconds", "moox_strategy_period_total", "moox_strategy_runs_total"} {
 		if !found[name] {
 			t.Fatalf("缺少指标 %s", name)
 		}

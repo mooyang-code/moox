@@ -2,14 +2,20 @@ package report
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/packages/frequency"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 const MaxDatasetMetricSeries = 1000
+
+// MaxDatasetNameBytes 是数据集展示名称的字节上限，超出按字符截断：名称只用于告警标题，远低于上报的标签值上限（512 字节），
+// 一个过长的名称不能让整份指标快照被拒收。
+const MaxDatasetNameBytes = 192
 
 // partial 是按设计只产出部分结果的运行（窗口空洞保护、历史不足、预热中）：生产者在正常工作，只是数据还在积累，
 // Monitor 据此显示“积累中”而不告警；incomplete 才是意外的不完整，仍按失败处理。
@@ -24,6 +30,9 @@ type DatasetKey struct {
 type DatasetExpectation struct {
 	Key      DatasetKey
 	Interval time.Duration
+	// Name 是数据集给人看的名称（例如策略实例名），Monitor 用它命名该数据集的新鲜度检查；为空时 Monitor 退回 Storage
+	// 里登记的数据集名称或数据集 ID。名称不是数据集身份，可以随时变化。
+	Name string
 }
 
 type DatasetObservation struct {
@@ -38,6 +47,7 @@ type DatasetObservation struct {
 type DatasetMetrics struct {
 	enabled                  *prometheus.GaugeVec
 	expectedInterval         *prometheus.GaugeVec
+	info                     *prometheus.GaugeVec
 	inventoryRefreshErrors   prometheus.Counter
 	inventoryLastSuccess     prometheus.Gauge
 	runs                     *prometheus.CounterVec
@@ -50,6 +60,7 @@ type DatasetMetrics struct {
 	mu                       sync.Mutex
 	expected                 map[DatasetKey]time.Duration
 	known                    map[DatasetKey]struct{}
+	names                    map[DatasetKey]string
 	inputWatermarkByDataset  map[DatasetKey]float64
 	outputWatermarkByDataset map[DatasetKey]float64
 }
@@ -66,6 +77,7 @@ func NewDatasetMetrics(registerer prometheus.Registerer, module string) (*Datase
 	m := &DatasetMetrics{
 		enabled:                  prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: prefix + "enabled", Help: "Whether a realtime dataset is expected to run."}, labels),
 		expectedInterval:         prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: prefix + "expected_interval_seconds", Help: "Expected realtime dataset collection interval."}, labels),
+		info:                     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: prefix + "info", Help: "期望数据集的展示名称，值恒为 1；只列出当前清单中有名称的数据集。"}, append(append([]string(nil), labels...), "name")),
 		inventoryRefreshErrors:   prometheus.NewCounter(prometheus.CounterOpts{Name: prefix + "inventory_refresh_errors_total", Help: "Failed expected dataset inventory replacements."}),
 		inventoryLastSuccess:     prometheus.NewGauge(prometheus.GaugeOpts{Name: prefix + "inventory_last_success_timestamp_seconds", Help: "Unix timestamp of the last successful expected dataset inventory replacement."}),
 		runs:                     prometheus.NewCounterVec(prometheus.CounterOpts{Name: prefix + "runs_total", Help: "Completed realtime dataset runs."}, append(labels, "result")),
@@ -81,7 +93,7 @@ func NewDatasetMetrics(registerer prometheus.Registerer, module string) (*Datase
 		outputWatermarkByDataset: make(map[DatasetKey]float64),
 	}
 	collectors := []prometheus.Collector{
-		m.enabled, m.expectedInterval, m.inventoryRefreshErrors, m.inventoryLastSuccess,
+		m.enabled, m.expectedInterval, m.info, m.inventoryRefreshErrors, m.inventoryLastSuccess,
 		m.runs, m.lastRun, m.lastSuccess, m.lastPartial, m.inputWatermark, m.outputWatermark, m.rows,
 	}
 	registered := make([]prometheus.Collector, 0, len(collectors))
@@ -102,6 +114,7 @@ func (m *DatasetMetrics) ReplaceExpected(items []DatasetExpectation) error {
 		return fmt.Errorf("dataset metrics are nil")
 	}
 	next := make(map[DatasetKey]time.Duration, len(items))
+	names := make(map[DatasetKey]string, len(items))
 	for i, item := range items {
 		key, err := canonicalDatasetKey(item.Key)
 		if err != nil {
@@ -117,6 +130,9 @@ func (m *DatasetMetrics) ReplaceExpected(items []DatasetExpectation) error {
 			return fmt.Errorf("duplicate expected dataset %s/%s/%s", key.SpaceID, key.DatasetID, key.Freq)
 		}
 		next[key] = item.Interval
+		if name := datasetDisplayName(item.Name); name != "" {
+			names[key] = name
+		}
 	}
 
 	m.mu.Lock()
@@ -145,6 +161,16 @@ func (m *DatasetMetrics) ReplaceExpected(items []DatasetExpectation) error {
 		m.enabled.WithLabelValues(values...).Set(1)
 		m.expectedInterval.WithLabelValues(values...).Set(interval.Seconds())
 	}
+	// 改名或移出清单（含失去名称）的数据集删除旧名称序列，旧名称随即不再上报，Monitor 只认仍在上报的那条。
+	for key, name := range m.names {
+		if names[key] != name {
+			m.info.DeleteLabelValues(append(datasetLabelValues(key), name)...)
+		}
+	}
+	for key, name := range names {
+		m.info.WithLabelValues(append(datasetLabelValues(key), name)...).Set(1)
+	}
+	m.names = names
 	m.expected = next
 	m.known = known
 	m.inventoryLastSuccess.Set(float64(time.Now().UTC().Unix()))
@@ -253,6 +279,20 @@ func validateDatasetFrequency(value string) error {
 		return fmt.Errorf("invalid freq %q", value)
 	}
 	return nil
+}
+
+// datasetDisplayName 规整展示名称：去掉首尾空白和非法 UTF-8（标签值必须是合法 UTF-8），超长时按字符截断。
+func datasetDisplayName(name string) string {
+	name = strings.TrimSpace(strings.ToValidUTF8(name, ""))
+	if len(name) <= MaxDatasetNameBytes {
+		return name
+	}
+	const ellipsis = "…"
+	cut := MaxDatasetNameBytes - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(name[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(name[:cut]) + ellipsis
 }
 
 func datasetLabelValues(key DatasetKey) []string {

@@ -14,6 +14,7 @@ var healthMetricSuffixes = []string{
 	"_dataset_input_watermark_timestamp_seconds",
 	"_dataset_output_watermark_timestamp_seconds",
 	"_dataset_inventory_last_success_timestamp_seconds",
+	"_dataset_info",
 	"_runs_total",
 	"_last_success_timestamp_seconds",
 	"_last_error_timestamp_seconds",

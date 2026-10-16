@@ -44,6 +44,9 @@ type HostStatus struct {
 
 type DatasetFrequencyStatus struct {
 	Producer, SpaceID, DatasetID, Freq, Status, Reason string
+	// DisplayName 是生产者随期望清单上报的展示名称（moox_<模块>_dataset_info 的 name 标签，例如策略实例名），
+	// 没有上报时为空，由调用方退回 Storage 里的数据集名称或数据集 ID。
+	DisplayName string
 	// PrimaryDatasetID links an independent Storage View fact back to the
 	// dataset whose Collector produces its input. It is empty for other
 	// producers and keeps DatasetID available as the View identity.
@@ -450,11 +453,77 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 		}
 		aggregated[identity] = current
 	}
+	displayNames := b.datasetDisplayNames(ctx, names, spaceID)
 	out := make([]DatasetFrequencyStatus, 0, len(aggregated))
-	for _, current := range aggregated {
-		out = append(out, datasetStatus(now, current.key, current.value, b.Policy))
+	for identity, current := range aggregated {
+		item := datasetStatus(now, current.key, current.value, b.Policy)
+		item.DisplayName = displayNames[identity]
+		out = append(out, item)
 	}
 	return out, nil
+}
+
+// maxDatasetNameSeries 是读取数据集名称序列的总条数上限。名称序列随改名留下历史身份，过期后由指标保留期清理；
+// 超出上限的部分不再读取，对应数据集退回默认名称，不影响状态判断。
+const maxDatasetNameSeries = 4 * MaxDatasetFrequencyStatuses
+
+// datasetDisplayNames 读取生产者上报的数据集展示名称，键与数据集聚合身份一致（生产者、空间、数据集、频率）。
+// 只认仍在上报的序列；同一数据集有多条（刚改名，旧序列还没过期）时取最近上报的那条。名称只用于给检查起名：
+// 读取出错时停止读取、返回已读到的部分，其余数据集退回默认名称，不让概览和业务检查因此失败。
+func (b Builder) datasetDisplayNames(ctx context.Context, names []monmetrics.MetricName, spaceID string) map[string]string {
+	type candidate struct {
+		name   string
+		seenAt time.Time
+	}
+	best := make(map[string]candidate)
+	read := 0
+metrics:
+	for _, metric := range names {
+		if !strings.HasPrefix(metric.MetricName, "moox_") || !strings.HasSuffix(metric.MetricName, "_dataset_info") {
+			continue
+		}
+		producer := datasetModuleFromMetric(metric.MetricName)
+		if producer == "" {
+			continue
+		}
+		for offset := 0; read < maxDatasetNameSeries; {
+			rows, total, err := b.Metrics.Catalog().ListSeries(ctx, metric.ServiceName, metric.MetricName, "", offset, 500)
+			if err != nil {
+				break metrics
+			}
+			read += len(rows)
+			for _, series := range rows {
+				if series.IsStale {
+					continue
+				}
+				labels, err := datasetLabels(series.LabelsJSON)
+				if err != nil {
+					continue
+				}
+				name := strings.TrimSpace(labels["name"])
+				if name == "" || labels["space_id"] == "" || labels["dataset_id"] == "" || labels["freq"] == "" {
+					continue
+				}
+				if spaceID != "" && labels["space_id"] != spaceID {
+					continue
+				}
+				identity := strings.Join([]string{producer, labels["space_id"], labels["dataset_id"], labels["freq"]}, "\x00")
+				current, exists := best[identity]
+				if !exists || series.LastSeenAt.After(current.seenAt) || (series.LastSeenAt.Equal(current.seenAt) && name < current.name) {
+					best[identity] = candidate{name: name, seenAt: series.LastSeenAt}
+				}
+			}
+			offset += len(rows)
+			if len(rows) == 0 || int64(offset) >= total {
+				break
+			}
+		}
+	}
+	out := make(map[string]string, len(best))
+	for identity, item := range best {
+		out[identity] = item.name
+	}
+	return out
 }
 
 func minPositive(left, right float64) float64 {

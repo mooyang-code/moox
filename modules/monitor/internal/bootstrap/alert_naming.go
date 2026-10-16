@@ -10,8 +10,7 @@ import (
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 )
 
-// datasetSubject names what a dataset check watches: the dataset's human
-// name when Storage knows it, otherwise its ID with the frequency.
+// datasetSubject 是数据集检查所看的对象：有名称（生产者上报的或 Storage 登记的）时用名称，否则用数据集 ID 加频率。
 func datasetSubject(name, datasetID, freq string) string {
 	if strings.TrimSpace(name) != "" {
 		return name
@@ -19,26 +18,36 @@ func datasetSubject(name, datasetID, freq string) string {
 	return datasetID + "（" + alerttext.Frequency(freq) + "）"
 }
 
-// datasetCheckName names a dataset freshness check by what produces the data.
+// datasetCheckName 按产出数据的环节给数据集新鲜度检查起名。
 func datasetCheckName(producer, subject string) string {
 	switch producer {
 	case "collector":
-		return subject + " · 采集"
+		return checkName(subject, "采集")
 	case "storage":
-		return subject + " · 写入存储"
+		return checkName(subject, "写入存储")
 	case "storage_view":
-		return subject + " · 结果视图"
+		return checkName(subject, "结果视图")
 	case "factor":
-		return subject + " · 因子计算"
+		return checkName(subject, "因子计算")
+	case "strategy":
+		return checkName(subject, "策略结果")
 	default:
-		return subject + " · " + producer
+		return checkName(subject, producer)
 	}
 }
 
-func klineCheckName(subject string) string { return subject + " · K线结果" }
+func klineCheckName(subject string) string { return checkName(subject, "K线结果") }
+
+// checkName 用「对象 · 环节」给检查起名；对象以全角括号结尾时省掉括号后的空格（「market_kline（1分钟）· 采集」）。
+func checkName(subject, stage string) string {
+	if strings.HasSuffix(subject, "）") {
+		return subject + "· " + stage
+	}
+	return subject + " · " + stage
+}
 
 func reporterCheckName(service, node string) string {
-	return alerttext.Service(service) + "（" + alerttext.Node(node) + "）· 运行指标上报"
+	return checkName(alerttext.Service(service)+"（"+alerttext.Node(node)+"）", "运行指标上报")
 }
 
 // reporterReasonText explains a reporter status to people.
