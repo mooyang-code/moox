@@ -5,6 +5,14 @@ import { setSelectedSpaceIdCache } from "@/api/admin/space-header";
 import { setSpaceInitializer } from "@/api/admin/signed-client";
 import type { Space } from "@/api/admin/types";
 
+/**
+ * 系统内部空间：以 mooxsys 开头的空间存放主机指标、服务指标及其视图，不是交易市场，
+ * 不出现在全局空间选择里，也不能设为当前空间。
+ */
+export function isSystemSpace(spaceId: string | undefined): boolean {
+  return (spaceId || "").trim().toLowerCase().startsWith("mooxsys");
+}
+
 export const useSpaceStore = defineStore(
   "spaceStore",
   () => {
@@ -31,7 +39,7 @@ export const useSpaceStore = defineStore(
       loading.value = true;
       try {
         const rsp = await listSpaces({ status: "active", page: { page: 1, size: 200 } });
-        spaces.value = rsp.spaces || [];
+        spaces.value = (rsp.spaces || []).filter(space => !isSystemSpace(space.space_id));
         if (!selectedSpaceId.value && spaces.value.length > 0) {
           selectedSpaceId.value = spaces.value[0].space_id;
         }

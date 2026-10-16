@@ -44,7 +44,8 @@
                 <a-button
                   size="mini"
                   type="text"
-                  :disabled="record.status !== 'active'"
+                  :disabled="record.status !== 'active' || isSystemSpace(record.space_id)"
+                  :title="isSystemSpace(record.space_id) ? '系统内部空间，不是交易市场，不能设为当前' : ''"
                   @click="spaceStore.setSelectedSpace(record.space_id)"
                 >
                   设为当前
@@ -93,7 +94,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createSpace, listSpaces, updateSpace } from "@/api/admin/spaces";
 import type { Space } from "@/api/admin/types";
-import { useSpaceStore } from "@/store/modules/space";
+import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
 import {
   applyPageResult,
   defaultPagination,

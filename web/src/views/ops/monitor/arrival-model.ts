@@ -1,4 +1,5 @@
 import type { ArrivalHistory, HealthOverview } from "@/api/monitor";
+import { isSystemSpace } from "@/store/modules/space";
 import { humanizeDuration, toMillis, toSeconds, type NameBook } from "@/views/home/home-model";
 import { marketClock, marketTime, marketZone, zoneLabel } from "./market-time";
 
@@ -12,11 +13,11 @@ export interface ArrivalChain {
   timezone: string;
 }
 
-/** 链路选项：数据链路“入库”环节的每个数据集一条（同一数据集不同周期分开）；没有交易日历的系统数据不记录到达，不列出。 */
+/** 链路选项：数据链路“入库”环节的每个数据集一条（同一数据集不同周期分开）；mooxsys 开头的系统空间不是交易市场，不列出。 */
 export function arrivalChains(overview: HealthOverview | undefined, names: NameBook): ArrivalChain[] {
   const storage = (overview?.pipeline || []).find(stage => stage.id === "storage");
   return (storage?.datasets || [])
-    .filter(item => item.space_id && item.space_id !== "mooxsys" && item.dataset_id && item.freq)
+    .filter(item => item.space_id && !isSystemSpace(item.space_id) && item.dataset_id && item.freq)
     .map(item => {
       const id = item.dataset_id || "";
       const name = item.display_name || names.datasets[id] || id;
