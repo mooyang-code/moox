@@ -66,7 +66,19 @@ describe("arrival chart", () => {
     });
     expect(page.text()).toContain("日期（UTC）");
     expect(page.find(".arrival-summary").text()).toContain("入库：现货分钟K线");
+    expect(page.find(".arrival-summary").text()).toContain("全天 1 根");
     expect(charts.created).toBe(1);
+    // 默认 3 小时：当前 19:00 往前 2 小时、往后 1 小时。
+    expect(page.find(".arrival-range").text()).toBe("17:00–20:00 UTC");
+    await page.find('[aria-label="晚 1 小时"]').trigger("click");
+    expect(page.find(".arrival-range").text()).toBe("18:00–21:00 UTC");
+    expect(page.find(".arrival-reset").exists()).toBe(true);
+    expect(charts.created).toBe(2);
+    await page.find(".arrival-reset").trigger("click");
+    expect(page.find(".arrival-range").text()).toBe("17:00–20:00 UTC");
+    await page.findAll(".arrival-scale button")[1].trigger("click");
+    expect(page.find(".arrival-pan").exists()).toBe(false);
+    await page.findAll(".arrival-scale button")[0].trigger("click");
 
     // A 股按北京时间：UTC 19:00 已是北京时间 10-17。
     await page.find("select").setValue("stockcn/dataset_stockcn_1m/1m");

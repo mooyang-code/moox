@@ -135,12 +135,87 @@ export function arrivalModel(
 
 const SERIES_COLORS = ["#2563eb", "#16a34a", "#7c3aed", "#0891b2", "#d97706", "#db2777"];
 
-/** VChart 折线图配置：横轴是收线时间（按市场时区标注），纵轴是到达延迟（秒）；超过允许迟到的点标红，补数据跳过处标橙。 */
-export function arrivalChartSpec(model: ArrivalModel, nowMs: number): Record<string, unknown> {
-  const values = model.series.flatMap(series => series.points.map(point => ({ ...point, series: series.name })));
+const HOUR_MS = 60 * 60 * 1000;
+/** 默认窗口：锚点之前 2 小时、之后 1 小时；全天画在一起分钟线会挤成一团。 */
+export const WINDOW_BEFORE_MS = 2 * HOUR_MS;
+export const WINDOW_AFTER_MS = HOUR_MS;
+/** 前后挪动窗口的步长。 */
+export const WINDOW_STEP_MS = HOUR_MS;
+
+/** 时间范围（毫秒，左闭右闭）。 */
+export interface ArrivalWindow {
+  startMs: number;
+  endMs: number;
+}
+
+/**
+ * 默认窗口：看今天时以当前时间为锚点；看历史日期时以当天延迟最大的那一根为锚点（没有记录时取当天结束），
+ * 取锚点前 2 小时到后 1 小时。返回的窗口不截断，显示时再用 visibleArrivalWindow 截到当天，
+ * 这样前后挪动始终是锚点移 1 小时，来回挪能回到原处。
+ */
+export function defaultArrivalWindow(model: ArrivalModel, nowMs: number): ArrivalWindow {
+  let anchor = model.endMs;
+  if (nowMs >= model.startMs && nowMs < model.endMs) {
+    anchor = nowMs;
+  } else {
+    let worst = -1;
+    for (const series of model.series) {
+      for (const point of series.points) {
+        if (point.delay > worst) {
+          worst = point.delay;
+          anchor = point.x;
+        }
+      }
+    }
+  }
+  return { startMs: anchor - WINDOW_BEFORE_MS, endMs: anchor + WINDOW_AFTER_MS };
+}
+
+/** 窗口的锚点。 */
+function anchorOf(window: ArrivalWindow): number {
+  return window.startMs + WINDOW_BEFORE_MS;
+}
+
+/** 把锚点挪动 deltaMs（锚点不出当天），窗口仍是锚点前 2 小时到后 1 小时。 */
+export function shiftArrivalWindow(model: ArrivalModel, window: ArrivalWindow, deltaMs: number): ArrivalWindow {
+  const anchor = Math.min(Math.max(anchorOf(window) + deltaMs, model.startMs), model.endMs);
+  return { startMs: anchor - WINDOW_BEFORE_MS, endMs: anchor + WINDOW_AFTER_MS };
+}
+
+/** 锚点还能往早、往晚挪。 */
+export function canShiftArrivalWindow(model: ArrivalModel, window: ArrivalWindow): { earlier: boolean; later: boolean } {
+  const anchor = anchorOf(window);
+  return { earlier: anchor > model.startMs, later: anchor < model.endMs };
+}
+
+/** 显示用的范围：跨天的部分以当天的界限为准截掉。 */
+export function visibleArrivalWindow(model: ArrivalModel, window: ArrivalWindow): ArrivalWindow {
+  return { startMs: Math.max(window.startMs, model.startMs), endMs: Math.min(window.endMs, model.endMs) };
+}
+
+/** 窗口跨度对应的刻度间隔：3 小时 15 分钟一格，6 小时以内 30 分钟，全天 2 小时（UTC 与 UTC+8 的整点都落在倍数上）。 */
+function tickStepFor(spanMs: number): number {
+  if (spanMs <= 3 * HOUR_MS) return 15 * 60 * 1000;
+  if (spanMs <= 6 * HOUR_MS) return 30 * 60 * 1000;
+  return 2 * HOUR_MS;
+}
+
+/**
+ * VChart 折线图配置：横轴是收线时间（按市场时区标注），纵轴是到达延迟（秒）；超过允许迟到的点标红，补数据跳过处标橙。
+ * 只画窗口内的点（不传窗口为全天），纵轴按可见的点缩放。
+ */
+export function arrivalChartSpec(model: ArrivalModel, nowMs: number, window?: ArrivalWindow): Record<string, unknown> {
+  const range = window || { startMs: model.startMs, endMs: model.endMs };
+  const visible = model.series.map(series => ({
+    name: series.name,
+    points: series.points.filter(point => point.x >= range.startMs && point.x <= range.endMs)
+  }));
+  const values = visible.flatMap(series => series.points.map(point => ({ ...point, series: series.name })));
   const limits = [...new Set(model.series.map(series => series.limitSeconds).filter(limit => limit > 0))];
   // 点稀疏时（小时线一天 24 根，日线、周线、月线一天至多一根）正常的点也画出来，否则单点连不成线、什么都看不到。
-  const sparse = model.series.every(series => series.points.length <= 48);
+  const sparse = visible.every(series => series.points.length <= 24);
+  // 纵轴包住允许迟到：延迟都很小时也看得到虚线，知道离允许迟到还有多远。
+  const yMax = Math.ceil(Math.max(1, ...limits, ...values.map(value => value.delay)) * 1.15);
   const colors = new Map(model.series.map((series, index) => [series.name, SERIES_COLORS[index % SERIES_COLORS.length]]));
   const closeTitle = (datum: ArrivalPointModel) => `${marketTime(datum.x, model.timezone, nowMs, { seconds: true })} 收线`;
   const delayLine = {
@@ -154,7 +229,12 @@ export function arrivalChartSpec(model: ArrivalModel, nowMs: number): Record<str
     xField: "x",
     yField: "delay",
     seriesField: "series",
-    color: SERIES_COLORS,
+    // 按全部曲线固定配色：窗口里没有点的曲线也占着自己的颜色，线和点的颜色不会错位。
+    color: {
+      type: "ordinal",
+      domain: model.series.map(series => series.name),
+      range: model.series.map(series => colors.get(series.name))
+    },
     line: { style: { lineWidth: 1.5, curveType: "linear" } },
     point: {
       style: {
@@ -165,15 +245,14 @@ export function arrivalChartSpec(model: ArrivalModel, nowMs: number): Record<str
     },
     legends: { visible: true, orient: "top" },
     axes: [
-      { orient: "left", type: "linear", min: 0, title: { visible: true, text: "到达延迟（秒）" } },
+      { orient: "left", type: "linear", min: 0, max: yMax, title: { visible: true, text: "到达延迟（秒）" } },
       {
         orient: "bottom",
         type: "linear",
-        min: model.startMs,
-        max: model.endMs,
+        min: range.startMs,
+        max: range.endMs,
         nice: false,
-        // 每 2 小时一个刻度：一天从市场时区的 0 点开始，UTC 与 UTC+8 的整点都落在 2 小时的倍数上。
-        tick: { tickStep: 2 * 60 * 60 * 1000 },
+        tick: { tickStep: tickStepFor(range.endMs - range.startMs) },
         title: { visible: true, text: `收线时间（${model.zone}）` },
         label: { formatMethod: (value: number) => marketClock(value, model.timezone) }
       }
