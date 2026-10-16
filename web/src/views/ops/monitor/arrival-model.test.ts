@@ -4,11 +4,11 @@ import {
   arrivalChains,
   arrivalChartSpec,
   arrivalModel,
-  canShiftArrivalWindow,
-  defaultArrivalWindow,
+  arrivalWindowAt,
+  defaultArrivalAnchor,
+  defaultArrivalScale,
   pipelineDisplayNames,
-  shiftArrivalWindow,
-  visibleArrivalWindow
+  shiftArrivalAnchor
 } from "./arrival-model";
 
 const names = {
@@ -146,36 +146,36 @@ describe("arrival window", () => {
   const at = (clock: string) => Date.parse(`2026-10-16T${clock}:00Z`);
   const dayEnd = Date.parse("2026-10-17T00:00:00Z");
   const window = (startMs: number, endMs: number) => ({ startMs, endMs });
-  const visible = (nowMs: number) => visibleArrivalWindow(model, defaultArrivalWindow(model, nowMs));
 
-  it("shows two hours before and one hour after now, clipped to the day", () => {
-    expect(visible(at("18:56"))).toEqual(window(at("16:56"), at("19:56")));
-    expect(visible(at("00:30"))).toEqual(window(at("00:00"), at("01:30")));
-    expect(visible(at("23:30"))).toEqual(window(at("21:30"), dayEnd));
+  it("picks one hour for minute bars and the whole day for hourly and longer", () => {
+    expect(["30s", "1m", "5m", "30m"].map(defaultArrivalScale)).toEqual(["1h", "1h", "1h", "1h"]);
+    expect(["1h", "4h", "1d", "1w", "1mo"].map(defaultArrivalScale)).toEqual(["day", "day", "day", "day", "day"]);
   });
 
-  it("centers a past day on its worst delay, or its end when it has no records", () => {
+  it("anchors on now today, else on the worst delay of the day or its end", () => {
+    expect(defaultArrivalAnchor(model, at("18:56"))).toBe(at("18:56"));
     const later = Date.parse("2026-10-18T10:00:00Z");
     // 当天延迟最大的是 18:56 收线那根（45 秒）。
-    expect(visibleArrivalWindow(model, defaultArrivalWindow(model, later))).toEqual(window(at("16:56"), at("19:56")));
-    const empty = arrivalModel({ ...history, series: [] }, names);
-    expect(visibleArrivalWindow(empty, defaultArrivalWindow(empty, later))).toEqual(window(at("22:00"), dayEnd));
+    expect(defaultArrivalAnchor(model, later)).toBe(at("18:56"));
+    expect(defaultArrivalAnchor(arrivalModel({ ...history, series: [] }, names), later)).toBe(dayEnd);
   });
 
-  it("moves the anchor an hour at a time, so moving back restores the range", () => {
-    const hour = 3_600_000;
-    const start = defaultArrivalWindow(model, at("00:30"));
-    const later = shiftArrivalWindow(model, start, hour);
-    // 截在 0 点的窗口往后挪 1 小时，右边界也只走 1 小时。
-    expect(visibleArrivalWindow(model, later)).toEqual(window(at("00:00"), at("02:30")));
-    expect(visibleArrivalWindow(model, shiftArrivalWindow(model, later, -hour))).toEqual(window(at("00:00"), at("01:30")));
-    // 锚点不出当天：挪到头就停住，按钮随之不可用。
-    const first = shiftArrivalWindow(model, start, -5 * hour);
-    expect(visibleArrivalWindow(model, first)).toEqual(window(at("00:00"), at("01:00")));
-    expect(canShiftArrivalWindow(model, first)).toEqual({ earlier: false, later: true });
-    const last = shiftArrivalWindow(model, start, 30 * hour);
-    expect(visibleArrivalWindow(model, last)).toEqual(window(at("22:00"), dayEnd));
-    expect(canShiftArrivalWindow(model, last)).toEqual({ earlier: true, later: false });
+  it("shows 45 minutes before and 15 after the anchor, clipped to the day", () => {
+    expect(arrivalWindowAt(model, at("18:56"), "1h")).toEqual(window(at("18:11"), at("19:11")));
+    expect(arrivalWindowAt(model, at("18:56"), "3h")).toEqual(window(at("16:56"), at("19:56")));
+    expect(arrivalWindowAt(model, at("18:56"), "day")).toEqual(window(at("00:00"), dayEnd));
+    expect(arrivalWindowAt(model, at("00:30"), "1h")).toEqual(window(at("00:00"), at("00:45")));
+    expect(arrivalWindowAt(model, at("23:50"), "1h")).toEqual(window(at("23:05"), dayEnd));
+  });
+
+  it("moves the anchor a step at a time within the day, so moving back restores the range", () => {
+    const start = at("00:30");
+    const later = shiftArrivalAnchor(model, start, 1, "1h");
+    expect(arrivalWindowAt(model, later, "1h")).toEqual(window(at("00:15"), at("01:15")));
+    expect(shiftArrivalAnchor(model, later, -1, "1h")).toBe(start);
+    expect(shiftArrivalAnchor(model, start, 1, "3h")).toBe(at("01:30"));
+    expect(shiftArrivalAnchor(model, start, -1, "1h")).toBe(at("00:00"));
+    expect(shiftArrivalAnchor(model, at("23:50"), 1, "1h")).toBe(dayEnd);
   });
 
   it("draws only the points inside the window with finer ticks", () => {
@@ -183,7 +183,8 @@ describe("arrival window", () => {
     expect(spec.data[0].values.map((value: any) => value.x)).toEqual([at("18:55"), at("18:56"), at("18:55"), at("18:55")]);
     const bottom = spec.axes.find((axis: any) => axis.orient === "bottom");
     expect([bottom.min, bottom.max]).toEqual([at("18:55"), at("18:57")]);
-    expect(bottom.tick.tickStep).toBe(15 * 60 * 1000);
+    expect(bottom.tick.tickStep).toBe(5 * 60 * 1000);
+    expect(spec.animation).toBe(false);
     // 纵轴包住允许迟到（策略 60 秒、其余 30 秒）与可见的最大延迟（45 秒），留一点余量：60 × 1.15 取整为 69。
     expect(spec.axes.find((axis: any) => axis.orient === "left").max).toBe(69);
     expect((arrivalChartSpec(model, now) as any).axes.find((axis: any) => axis.orient === "bottom").tick.tickStep).toBe(
@@ -191,5 +192,16 @@ describe("arrival window", () => {
     );
     // 配色按全部曲线固定：窗口里没有点的曲线也占着自己的颜色。
     expect(spec.color.domain).toEqual(model.series.map(series => series.name));
+    // 三小时 15 分钟一格。
+    const threeHours = arrivalChartSpec(model, now, window(at("16:56"), at("19:56"))) as any;
+    expect(threeHours.axes.find((axis: any) => axis.orient === "bottom").tick.tickStep).toBe(15 * 60 * 1000);
+  });
+
+  it("still draws empty axes for a chain without records", () => {
+    const empty = arrivalModel({ ...history, series: [] }, names);
+    const spec = arrivalChartSpec(empty, now, window(at("18:11"), at("19:11"))) as any;
+    expect(spec.data[0].values).toEqual([]);
+    expect(spec.axes.find((axis: any) => axis.orient === "left").max).toBe(12);
+    expect(spec.axes.find((axis: any) => axis.orient === "bottom").min).toBe(at("18:11"));
   });
 });

@@ -59,7 +59,7 @@ func TestLoadDatasetHealthPolicyRejectsUnknownFieldsAndDocuments(t *testing.T) {
 	}
 }
 
-// 仓库默认策略：分钟级允许迟到 30 秒、小时级 1 分钟，日线及以上 1 个周期；按数据集的覆盖优先。
+// 仓库默认策略：分钟级允许迟到 10 秒、小时级 20 秒，日线及以上 1 个周期；按数据集的覆盖优先。
 func TestDatasetHealthPolicyLatenessByFrequency(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -72,8 +72,8 @@ func TestDatasetHealthPolicyLatenessByFrequency(t *testing.T) {
 	}
 	policy := cfg.RealtimeTimeSeries
 	for freq, want := range map[string]time.Duration{
-		"30s": 30 * time.Second, "1m": 30 * time.Second, "5m": 30 * time.Second, "30m": 30 * time.Second,
-		"1h": time.Minute, "1H": time.Minute, "4h": time.Minute,
+		"30s": 10 * time.Second, "1m": 10 * time.Second, "5m": 10 * time.Second, "30m": 10 * time.Second,
+		"1h": 20 * time.Second, "1H": 20 * time.Second, "4h": 20 * time.Second,
 		"1d": 24 * time.Hour, "1w": 7 * 24 * time.Hour, "bad": 0,
 	} {
 		if got := policy.Lateness("crypto", "dataset_x", freq); got != want {
@@ -84,7 +84,7 @@ func TestDatasetHealthPolicyLatenessByFrequency(t *testing.T) {
 	if got := policy.Lateness("crypto", "dataset_x", "1h"); got != 5*time.Minute {
 		t.Fatalf("override lateness = %s", got)
 	}
-	if got := policy.Lateness("crypto", "dataset_y", "1h"); got != time.Minute {
+	if got := policy.Lateness("crypto", "dataset_y", "1h"); got != 20*time.Second {
 		t.Fatalf("another dataset must keep the default: %s", got)
 	}
 }

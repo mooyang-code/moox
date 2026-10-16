@@ -135,12 +135,25 @@ export function arrivalModel(
 
 const SERIES_COLORS = ["#2563eb", "#16a34a", "#7c3aed", "#0891b2", "#d97706", "#db2777"];
 
-const HOUR_MS = 60 * 60 * 1000;
-/** 默认窗口：锚点之前 2 小时、之后 1 小时；全天画在一起分钟线会挤成一团。 */
-export const WINDOW_BEFORE_MS = 2 * HOUR_MS;
-export const WINDOW_AFTER_MS = HOUR_MS;
-/** 前后挪动窗口的步长。 */
-export const WINDOW_STEP_MS = HOUR_MS;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+
+/** 时间范围的档位：全天画在一起分钟线会挤成一团，默认只看锚点前后一小段。 */
+export type ArrivalScale = "1h" | "3h" | "day";
+
+/** 窗口档位：锚点之前、之后各多长，前后挪动的步长。 */
+export const ARRIVAL_WINDOWS: Record<
+  Exclude<ArrivalScale, "day">,
+  { before: number; after: number; step: number; stepLabel: string }
+> = {
+  "1h": { before: 45 * MINUTE_MS, after: 15 * MINUTE_MS, step: 30 * MINUTE_MS, stepLabel: "30 分钟" },
+  "3h": { before: 2 * HOUR_MS, after: HOUR_MS, step: HOUR_MS, stepLabel: "1 小时" }
+};
+
+/** 默认档位：分钟级周期（短于 1 小时）看 1 小时；小时线及以上一天至多 24 根，直接看全天。 */
+export function defaultArrivalScale(freq: string): ArrivalScale {
+  return /^\d+[sm]$/.test(freq.trim()) ? "1h" : "day";
+}
 
 /** 时间范围（毫秒，左闭右闭）。 */
 export interface ArrivalWindow {
@@ -149,54 +162,42 @@ export interface ArrivalWindow {
 }
 
 /**
- * 默认窗口：看今天时以当前时间为锚点；看历史日期时以当天延迟最大的那一根为锚点（没有记录时取当天结束），
- * 取锚点前 2 小时到后 1 小时。返回的窗口不截断，显示时再用 visibleArrivalWindow 截到当天，
- * 这样前后挪动始终是锚点移 1 小时，来回挪能回到原处。
+ * 默认锚点：看今天时是当前时间；看历史日期时是当天延迟最大的那一根（没有记录时取当天结束）。
+ * 窗口由锚点和档位决定，切换档位时位置不变，前后挪动就是挪锚点，来回挪能回到原处。
  */
-export function defaultArrivalWindow(model: ArrivalModel, nowMs: number): ArrivalWindow {
+export function defaultArrivalAnchor(model: ArrivalModel, nowMs: number): number {
+  if (nowMs >= model.startMs && nowMs < model.endMs) return nowMs;
   let anchor = model.endMs;
-  if (nowMs >= model.startMs && nowMs < model.endMs) {
-    anchor = nowMs;
-  } else {
-    let worst = -1;
-    for (const series of model.series) {
-      for (const point of series.points) {
-        if (point.delay > worst) {
-          worst = point.delay;
-          anchor = point.x;
-        }
+  let worst = -1;
+  for (const series of model.series) {
+    for (const point of series.points) {
+      if (point.delay > worst) {
+        worst = point.delay;
+        anchor = point.x;
       }
     }
   }
-  return { startMs: anchor - WINDOW_BEFORE_MS, endMs: anchor + WINDOW_AFTER_MS };
+  return anchor;
 }
 
-/** 窗口的锚点。 */
-function anchorOf(window: ArrivalWindow): number {
-  return window.startMs + WINDOW_BEFORE_MS;
+/** 档位下的显示范围：锚点前后各取一段，跨天的部分以当天的界限为准截掉；全天就是当天。 */
+export function arrivalWindowAt(model: ArrivalModel, anchor: number, scale: ArrivalScale): ArrivalWindow {
+  if (scale === "day") return { startMs: model.startMs, endMs: model.endMs };
+  const { before, after } = ARRIVAL_WINDOWS[scale];
+  return { startMs: Math.max(anchor - before, model.startMs), endMs: Math.min(anchor + after, model.endMs) };
 }
 
-/** 把锚点挪动 deltaMs（锚点不出当天），窗口仍是锚点前 2 小时到后 1 小时。 */
-export function shiftArrivalWindow(model: ArrivalModel, window: ArrivalWindow, deltaMs: number): ArrivalWindow {
-  const anchor = Math.min(Math.max(anchorOf(window) + deltaMs, model.startMs), model.endMs);
-  return { startMs: anchor - WINDOW_BEFORE_MS, endMs: anchor + WINDOW_AFTER_MS };
+/** 把锚点往早（-1）或往晚（1）挪一步，锚点不出当天。 */
+export function shiftArrivalAnchor(model: ArrivalModel, anchor: number, direction: number, scale: ArrivalScale): number {
+  if (scale === "day") return anchor;
+  return Math.min(Math.max(anchor + direction * ARRIVAL_WINDOWS[scale].step, model.startMs), model.endMs);
 }
 
-/** 锚点还能往早、往晚挪。 */
-export function canShiftArrivalWindow(model: ArrivalModel, window: ArrivalWindow): { earlier: boolean; later: boolean } {
-  const anchor = anchorOf(window);
-  return { earlier: anchor > model.startMs, later: anchor < model.endMs };
-}
-
-/** 显示用的范围：跨天的部分以当天的界限为准截掉。 */
-export function visibleArrivalWindow(model: ArrivalModel, window: ArrivalWindow): ArrivalWindow {
-  return { startMs: Math.max(window.startMs, model.startMs), endMs: Math.min(window.endMs, model.endMs) };
-}
-
-/** 窗口跨度对应的刻度间隔：3 小时 15 分钟一格，6 小时以内 30 分钟，全天 2 小时（UTC 与 UTC+8 的整点都落在倍数上）。 */
+/** 窗口跨度对应的刻度间隔：1 小时 5 分钟一格，3 小时 15 分钟，6 小时以内 30 分钟，全天 2 小时（UTC 与 UTC+8 的整点都落在倍数上）。 */
 function tickStepFor(spanMs: number): number {
-  if (spanMs <= 3 * HOUR_MS) return 15 * 60 * 1000;
-  if (spanMs <= 6 * HOUR_MS) return 30 * 60 * 1000;
+  if (spanMs <= HOUR_MS) return 5 * MINUTE_MS;
+  if (spanMs <= 3 * HOUR_MS) return 15 * MINUTE_MS;
+  if (spanMs <= 6 * HOUR_MS) return 30 * MINUTE_MS;
   return 2 * HOUR_MS;
 }
 
@@ -214,8 +215,8 @@ export function arrivalChartSpec(model: ArrivalModel, nowMs: number, window?: Ar
   const limits = [...new Set(model.series.map(series => series.limitSeconds).filter(limit => limit > 0))];
   // 点稀疏时（小时线一天 24 根，日线、周线、月线一天至多一根）正常的点也画出来，否则单点连不成线、什么都看不到。
   const sparse = visible.every(series => series.points.length <= 24);
-  // 纵轴包住允许迟到：延迟都很小时也看得到虚线，知道离允许迟到还有多远。
-  const yMax = Math.ceil(Math.max(1, ...limits, ...values.map(value => value.delay)) * 1.15);
+  // 纵轴包住允许迟到：延迟都很小时也看得到虚线，知道离允许迟到还有多远；没有数据时也给出 0～10 秒的坐标。
+  const yMax = Math.ceil(Math.max(10, ...limits, ...values.map(value => value.delay)) * 1.15);
   const colors = new Map(model.series.map((series, index) => [series.name, SERIES_COLORS[index % SERIES_COLORS.length]]));
   const closeTitle = (datum: ArrivalPointModel) => `${marketTime(datum.x, model.timezone, nowMs, { seconds: true })} 收线`;
   const delayLine = {
@@ -225,6 +226,8 @@ export function arrivalChartSpec(model: ArrivalModel, nowMs: number, window?: Ar
   };
   return {
     type: "line",
+    // 不要入场与更新动画：页面每次刷新都会重画，动画只会让曲线一闪一闪。
+    animation: false,
     data: [{ id: "arrivals", values }],
     xField: "x",
     yField: "delay",

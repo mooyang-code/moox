@@ -12,21 +12,29 @@
         <input v-model="day" type="date" aria-label="日期" :min="minDay" :max="maxDay" />
       </label>
       <span class="arrival-scale" role="group" aria-label="时间范围">
-        <button type="button" :class="{ active: scale === 'window' }" @click="scale = 'window'">3 小时</button>
-        <button type="button" :class="{ active: scale === 'day' }" @click="scale = 'day'">全天</button>
+        <button
+          v-for="option in SCALE_OPTIONS"
+          :key="option.value"
+          type="button"
+          :class="{ active: scale === option.value }"
+          @click="scale = option.value"
+        >
+          {{ option.label }}
+        </button>
       </span>
-      <span v-if="scale === 'window' && model.series.length" class="arrival-pan">
-        <button type="button" aria-label="早 1 小时" :disabled="!canShiftEarlier" @click="shift(-1)">‹ 早 1 小时</button>
+      <span v-if="scale !== 'day' && history" class="arrival-pan">
+        <button type="button" aria-label="往早挪" :disabled="!canShiftEarlier" @click="shift(-1)">‹ 早 {{ stepLabel }}</button>
         <span class="arrival-range">{{ rangeText }}</span>
-        <button type="button" aria-label="晚 1 小时" :disabled="!canShiftLater" @click="shift(1)">晚 1 小时 ›</button>
-        <button v-if="pinnedWindow" type="button" class="arrival-reset" @click="pinnedWindow = null">回到默认</button>
+        <button type="button" aria-label="往晚挪" :disabled="!canShiftLater" @click="shift(1)">晚 {{ stepLabel }} ›</button>
+        <button v-if="pinnedAnchor !== null" type="button" class="arrival-reset" @click="pinnedAnchor = null">回到默认</button>
       </span>
       <span v-if="loading" class="muted">加载中…</span>
       <span v-else-if="error" class="arrival-error">{{ error }}</span>
       <span v-else-if="model.notice" class="muted">{{ model.notice }}</span>
     </div>
     <p v-if="!chains.length" class="muted">没有可查看的数据链路（入库环节还没有行情数据集）</p>
-    <div v-show="model.series.length" ref="chartRef" class="arrival-canvas" />
+    <!-- 链路这一天没有记录也画出空的坐标，不让图表区消失。 -->
+    <div v-show="history" ref="chartRef" class="arrival-canvas" />
     <ul v-if="model.series.length" class="arrival-summary">
       <li v-for="series in model.series" :key="series.key" :class="{ 'is-bad': series.lateCount }">
         <strong>{{ series.name }}</strong
@@ -42,16 +50,16 @@ import { default as VChart } from "@visactor/vchart";
 import { monitorApi, type ArrivalHistory, type HealthOverview } from "@/api/monitor";
 import type { NameBook } from "@/views/home/home-model";
 import {
+  ARRIVAL_WINDOWS,
   arrivalChains,
   arrivalChartSpec,
   arrivalModel,
-  canShiftArrivalWindow,
-  defaultArrivalWindow,
+  arrivalWindowAt,
+  defaultArrivalAnchor,
+  defaultArrivalScale,
   pipelineDisplayNames,
-  shiftArrivalWindow,
-  visibleArrivalWindow,
-  WINDOW_STEP_MS,
-  type ArrivalWindow
+  shiftArrivalAnchor,
+  type ArrivalScale
 } from "./arrival-model";
 import { marketClock, marketDay, zoneLabel } from "./market-time";
 
@@ -70,18 +78,20 @@ const history = ref<ArrivalHistory>();
 const loading = ref(false);
 const error = ref("");
 const model = computed(() => arrivalModel(history.value, props.names, pipelineDisplayNames(props.overview)));
-// 时间范围：默认 3 小时窗口（看今天时为当前时间前 2 小时到后 1 小时，跨天以当天界限为准），可切到全天；
-// pinnedWindow 是手动前后挪动后的窗口，为空时跟随默认窗口（看今天时随页面刷新向后走）。窗口不截断，显示时截到当天。
-const scale = ref<"window" | "day">("window");
-const pinnedWindow = ref<ArrivalWindow | null>(null);
-const logicalWindow = computed<ArrivalWindow | undefined>(() => {
-  if (scale.value === "day" || !model.value.series.length) return undefined;
-  return pinnedWindow.value || defaultArrivalWindow(model.value, props.nowMs);
-});
-const visibleWindow = computed(() => logicalWindow.value && visibleArrivalWindow(model.value, logicalWindow.value));
-const shiftable = computed(() => logicalWindow.value && canShiftArrivalWindow(model.value, logicalWindow.value));
-const canShiftEarlier = computed(() => !!shiftable.value?.earlier);
-const canShiftLater = computed(() => !!shiftable.value?.later);
+// 时间范围：分钟级链路默认 1 小时（锚点前 45 分钟、后 15 分钟），小时线及以上默认全天；跨天以当天界限为准。
+// 锚点默认跟随（今天是当前时间，随页面刷新向后走；历史日期是当天延迟最大的那一根），前后挪动后固定在 pinnedAnchor。
+const SCALE_OPTIONS: Array<{ value: ArrivalScale; label: string }> = [
+  { value: "1h", label: "1 小时" },
+  { value: "3h", label: "3 小时" },
+  { value: "day", label: "全天" }
+];
+const scale = ref<ArrivalScale>("1h");
+const pinnedAnchor = ref<number | null>(null);
+const anchor = computed(() => pinnedAnchor.value ?? defaultArrivalAnchor(model.value, props.nowMs));
+const visibleWindow = computed(() => (history.value ? arrivalWindowAt(model.value, anchor.value, scale.value) : undefined));
+const canShiftEarlier = computed(() => anchor.value > model.value.startMs);
+const canShiftLater = computed(() => anchor.value < model.value.endMs);
+const stepLabel = computed(() => (scale.value === "day" ? "" : ARRIVAL_WINDOWS[scale.value].stepLabel));
 const rangeText = computed(() => {
   const window = visibleWindow.value;
   if (!window) return "";
@@ -89,8 +99,7 @@ const rangeText = computed(() => {
   return `${marketClock(window.startMs, model.value.timezone)}–${end} ${model.value.zone}`;
 });
 function shift(direction: number) {
-  if (!logicalWindow.value) return;
-  pinnedWindow.value = shiftArrivalWindow(model.value, logicalWindow.value, direction * WINDOW_STEP_MS);
+  pinnedAnchor.value = shiftArrivalAnchor(model.value, anchor.value, direction, scale.value);
 }
 const chartRef = ref<HTMLElement>();
 let chart: VChart | null = null;
@@ -119,7 +128,7 @@ watch(maxDay, (next, previous) => {
 function render() {
   chart?.release();
   chart = null;
-  if (!chartRef.value || !model.value.series.length) return;
+  if (!chartRef.value || !history.value) return;
   chart = new VChart(arrivalChartSpec(model.value, props.nowMs, visibleWindow.value) as never, { dom: chartRef.value });
   chart.renderSync();
 }
@@ -154,16 +163,24 @@ async function load(options: { refresh?: boolean } = {}) {
   if (id === requestID) render();
 }
 
+// 换链路时回到这条链路的默认档位（分钟线 1 小时，小时线及以上全天）。
+watch(
+  chainKey,
+  () => {
+    scale.value = defaultArrivalScale(chain.value?.freq || "");
+  },
+  { immediate: true }
+);
 watch(
   [chainKey, day],
   () => {
-    pinnedWindow.value = null;
+    pinnedAnchor.value = null;
     void load();
   },
   { immediate: true }
 );
-// 切换范围或挪动窗口只重画，不重新查询。
-watch([scale, pinnedWindow], () => render());
+// 切换档位或挪动窗口只重画，不重新查询。
+watch([scale, pinnedAnchor], () => render());
 // 页面每次刷新（30 秒轮询或点“刷新”）时，正在看今天就重新加载，曲线跟上新到的 K 线；看历史日期时不重复查询。
 watch(
   () => props.nowMs,

@@ -1002,26 +1002,33 @@ a {
   align-items: center;
   gap: 10px;
 }
+// 表格 / 曲线切换要醒目：按钮加大，选中的用实心主色。
 .view-toggle {
   display: inline-flex;
   overflow: hidden;
-  border: 1px solid var(--color-border-2);
-  border-radius: 4px;
+  border: 1px solid rgb(var(--primary-6));
+  border-radius: 6px;
 }
 .view-toggle button {
-  padding: 1px 10px;
+  min-width: 64px;
+  padding: 5px 16px;
   border: 0;
-  background: none;
-  color: var(--color-text-2);
-  font-size: 12px;
+  background: var(--color-bg-2);
+  color: rgb(var(--primary-6));
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
   cursor: pointer;
 }
 .view-toggle button + button {
-  border-left: 1px solid var(--color-border-2);
+  border-left: 1px solid rgb(var(--primary-6));
+}
+.view-toggle button:hover:not(.active) {
+  background: rgb(var(--primary-1));
 }
 .view-toggle button.active {
-  background: rgb(var(--primary-1));
-  color: rgb(var(--primary-6));
+  background: rgb(var(--primary-6));
+  color: #fff;
 }
 .tile-foot {
   display: flex;
