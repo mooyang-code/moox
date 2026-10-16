@@ -334,6 +334,16 @@ func (r *Runner) RunWarmup(ctx context.Context) {
 	}
 }
 
+// Prewarm 为实时缓存里还没有的因子集排队后台预热 plan.Available 的回看窗口，返回排队的标的数。引擎在成为租约持有者、
+// 或者目录里出现新的因子集之后调用它主动预热，不等第一个实时周期到达才开始：否则那一期的全部标的都在预热中，只能跳过。
+// 已经有实时周期或预热记录的因子集不处理。plan 必须是实时计划，需要 Config.BackgroundWarmup。
+func (r *Runner) Prewarm(plan Plan) int {
+	if r == nil || r.windows == nil || plan.Mode != ModeLive || !plan.TargetStart.Before(plan.TargetEnd) {
+		return 0
+	}
+	return r.windows.prewarm(plan, uniqueSorted(plan.Available))
+}
+
 // WarmupStatuses reports the warm-up state of every live set seen so far.
 func (r *Runner) WarmupStatuses() []WarmupStatus {
 	if r == nil || r.windows == nil {

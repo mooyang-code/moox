@@ -1,6 +1,6 @@
-// Package gapledger 是因子引擎的 K 线空洞账本：每次因回看窗口空洞跳过的 (标的, 周期, 因子) 都追加一行到按月的
-// JSONL 文件，永不自动删除。它同时是永久审计（可用 DuckDB 的 read_json_auto 或 jq 分析空洞的频率、集中的标的与时段、
-// 从发现到补齐的耗时）和恢复的待办来源：启动时回放全部账本重建待恢复集合。
+// Package gapledger 是因子引擎的跳过账本：每次因回看窗口空洞、或实时周期里标的还在预热而跳过的 (标的, 周期, 因子)
+// 都追加一行到按月的 JSONL 文件，永不自动删除。它同时是永久审计（可用 DuckDB 的 read_json_auto 或 jq 分析空洞的频率、
+// 集中的标的与时段、从发现到补齐的耗时；预热跳过的行带 reason=warming）和恢复的待办来源：启动时回放全部账本重建待恢复集合。
 // 设计见 docs/计划/因子窗口空洞防护详细设计.md 2.5。
 package gapledger
 
@@ -25,7 +25,7 @@ import (
 
 // 账本事件。
 const (
-	EventSkip      = "skip"      // 因空洞跳过
+	EventSkip      = "skip"      // 因空洞（reason 为空）或预热中（reason=warming）跳过
 	EventRepaired  = "repaired"  // 已补齐并写入
 	EventCancelled = "cancelled" // 因子定义已变更或因子、标的已不在范围，不再恢复
 	EventGaveUp    = "gave_up"   // 超过期限仍补不上，交给人工
@@ -70,6 +70,8 @@ type Entry struct {
 	Trigger   string
 	Missing   []time.Time
 	Tags      []string
+	// Reason 是跳过的原因：空洞为空，预热中为 pipeline.SkipReasonWarming。
+	Reason string
 }
 
 // Ref 精确指向一条待恢复项：确认时必须带上读取待办时的 SkipID，期间被再次失效（SkipID 已变）的项不会被移除。
@@ -199,12 +201,13 @@ func (l *Ledger) apply(entry line) {
 				if entry.Trigger != "" {
 					existing.Trigger = entry.Trigger
 				}
-				existing.Missing, existing.Tags = entry.Missing, entry.Tags
+				existing.Missing, existing.Tags, existing.Reason = entry.Missing, entry.Tags, entry.Reason
 				continue
 			}
 			l.pending[k] = &Entry{
 				Set: entry.Set, Subject: entry.Subject, Period: entry.Period.UTC(), FactorID: factor.ID, Hash: factor.Hash,
 				SkipID: entry.SkipID, FirstSeen: entry.At.UTC(), Trigger: entry.Trigger, Missing: entry.Missing, Tags: entry.Tags,
+				Reason: entry.Reason,
 			}
 		case EventRepaired, EventCancelled, EventGaveUp:
 			// 只移除 skipID 一致的项：期间再次失效（skipID 已变）的项保留，留待下一轮。
@@ -215,28 +218,28 @@ func (l *Ledger) apply(entry line) {
 	}
 }
 
-// RecordGaps 实现 pipeline.GapSink：每个 (标的, 周期) 追加一行 skip（带新的 skipID，同一行的多个因子共用），
+// RecordGaps 实现 pipeline.GapSink：每个 (标的, 周期, 原因) 追加一行 skip（带新的 skipID，同一行的多个因子共用），
 // 一次写入后 fsync。内存先更新，写盘失败返回错误并标记降级。
 func (l *Ledger) RecordGaps(_ context.Context, entries []pipeline.GapEntry) error {
 	if len(entries) == 0 {
 		return nil
 	}
 	type groupKey struct {
-		set, subject string
-		period       int64
+		set, subject, reason string
+		period               int64
 	}
 	groups := make(map[groupKey]*line)
 	var order []groupKey
 	now := l.now().UTC()
 	for _, entry := range entries {
-		gk := groupKey{set: entry.SetID, subject: entry.Subject, period: entry.Period.UTC().Unix()}
+		gk := groupKey{set: entry.SetID, subject: entry.Subject, reason: entry.Reason, period: entry.Period.UTC().Unix()}
 		row := groups[gk]
 		if row == nil {
 			skipID, err := newSkipID()
 			if err != nil {
 				return err
 			}
-			row = &line{Event: EventSkip, At: now, Set: entry.SetID, Subject: entry.Subject, Period: entry.Period.UTC(), SkipID: skipID, Trigger: entry.TriggerEventID}
+			row = &line{Event: EventSkip, At: now, Set: entry.SetID, Subject: entry.Subject, Period: entry.Period.UTC(), SkipID: skipID, Trigger: entry.TriggerEventID, Reason: entry.Reason}
 			groups[gk] = row
 			order = append(order, gk)
 		}
@@ -252,7 +255,9 @@ func (l *Ledger) RecordGaps(_ context.Context, entries []pipeline.GapEntry) erro
 	defer l.mu.Unlock()
 	for _, row := range lines {
 		l.apply(row)
-		l.skipped += int64(len(row.Factors))
+		if row.Reason == "" {
+			l.skipped += int64(len(row.Factors))
+		}
 	}
 	return l.appendLocked(lines)
 }
@@ -264,11 +269,18 @@ func (l *Ledger) Pending() []Entry {
 	return l.pendingLocked(func(Entry) bool { return true })
 }
 
-// PendingFor 返回一个集合下一个标的的待恢复项；恢复在集合锁内用它重读待办，保证用到最新的 skipID。
-func (l *Ledger) PendingFor(set, subject string) []Entry {
+// PendingFor 返回一个集合下若干标的的待恢复项；恢复在集合锁内用它重读待办，保证用到最新的 skipID。
+func (l *Ledger) PendingFor(set string, subjects []string) []Entry {
+	wanted := make(map[string]struct{}, len(subjects))
+	for _, subject := range subjects {
+		wanted[subject] = struct{}{}
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.pendingLocked(func(e Entry) bool { return e.Set == set && e.Subject == subject })
+	return l.pendingLocked(func(e Entry) bool {
+		_, ok := wanted[e.Subject]
+		return ok && e.Set == set
+	})
 }
 
 func (l *Ledger) pendingLocked(match func(Entry) bool) []Entry {
@@ -311,7 +323,7 @@ func (l *Ledger) Degraded() bool {
 	return l.degraded
 }
 
-// SkippedTotal 是自启动以来因空洞跳过的条目数（指标用）。
+// SkippedTotal 是自启动以来因空洞跳过的条目数（指标用）；预热跳过不计入。
 func (l *Ledger) SkippedTotal() int64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()

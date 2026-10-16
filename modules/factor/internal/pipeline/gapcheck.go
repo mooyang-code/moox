@@ -97,7 +97,11 @@ func (g GapReport) AffectedSubjects() []string {
 	return sortedKeys(set)
 }
 
-// GapEntry 是写入账本的一条空洞记录：一个标的、一个周期、一个因子。
+// SkipReasonWarming 是账本里「预热中被跳过」的原因：回看窗口还没载入，本期没有算。空洞跳过的原因为空。
+const SkipReasonWarming = "warming"
+
+// GapEntry 是写入账本的一条跳过记录：一个标的、一个周期、一个因子。跳过有两种：回看窗口有空洞（Reason 为空），
+// 或者实时周期里标的还在预热（Reason 为 SkipReasonWarming）；两者都由空洞恢复按「只填充」补算。
 type GapEntry struct {
 	SetID          string
 	Subject        string
@@ -108,9 +112,10 @@ type GapEntry struct {
 	Tags           []string
 	// TriggerEventID 是触发本期的上游事件，截面因子的恢复据此读取冻结全集；人工补算为空。
 	TriggerEventID string
+	Reason         string
 }
 
-// GapSink 接收每次因空洞跳过的记录（引擎的永久账本）。写入失败不影响周期推进，调用方记日志与指标。
+// GapSink 接收每次跳过的记录（引擎的永久账本）。写入失败不影响周期推进，调用方记日志与指标。
 type GapSink interface {
 	RecordGaps(ctx context.Context, entries []GapEntry) error
 }

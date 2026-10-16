@@ -131,6 +131,7 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 		// 先记账本、再写结果与 marker：崩溃后事件重投时，同一条目按唯一键合并，不会丢账。
 		if !plan.FillOnly {
 			r.recordGaps(ctx, plan, loaded.Gaps)
+			r.recordWarming(ctx, plan, loaded.WarmingSubjects)
 		}
 		stage = time.Now()
 		target, targetErr := planTarget(r.clock, plan)
@@ -189,6 +190,36 @@ func (r *Runner) recordGaps(ctx context.Context, plan Plan, gaps GapReport) {
 	}
 	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
 		log.ErrorContextf(ctx, "factor_gap_record_failed set_id=%s entries=%d error=%v", plan.Set.SetID, len(entries), err)
+	}
+}
+
+// recordWarming 把实时周期里因预热中被跳过的 (因子, 标的, 周期) 记入账本：这些结果本期没有算，marker 照常按失败标的上报，
+// 之后由空洞恢复按「只填充」补算写入。不记账的话，引擎重启后第一期的结果会永久缺失，1h 及更长周期就是整整一根。
+// 截面因子也逐标的记录：恢复按周期分组，用 marker 里冻结的全集重算。写入失败只记日志，不影响周期推进。
+func (r *Runner) recordWarming(ctx context.Context, plan Plan, warming []string) {
+	if r.cfg.GapSink == nil || plan.Mode != ModeLive || len(warming) == 0 || len(plan.Factors) == 0 {
+		return
+	}
+	target, err := planTarget(r.clock, plan)
+	if err != nil {
+		log.ErrorContextf(ctx, "factor_warming_record_failed set_id=%s error=%v", plan.Set.SetID, err)
+		return
+	}
+	hashes := make([]string, len(plan.Factors))
+	for i, factor := range plan.Factors {
+		hashes[i] = domain.DefinitionHash(factor)
+	}
+	entries := make([]GapEntry, 0, len(warming)*len(plan.Factors))
+	for _, subject := range warming {
+		for i, factor := range plan.Factors {
+			entries = append(entries, GapEntry{
+				SetID: plan.Set.SetID, Subject: subject, Period: target.UTC(), FactorID: factor.FactorID, DefinitionHash: hashes[i],
+				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonWarming,
+			})
+		}
+	}
+	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
+		log.ErrorContextf(ctx, "factor_warming_record_failed set_id=%s period=%s subjects=%d error=%v", plan.Set.SetID, target.UTC().Format(time.RFC3339), len(warming), err)
 	}
 }
 

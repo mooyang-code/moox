@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -249,4 +250,81 @@ func TestGapFillerSkipsWhenNotActive(t *testing.T) {
 	f.filler.tick(context.Background())
 	require.Empty(t, f.chunks.calls)
 	require.Equal(t, 1, f.ledger.PendingCount())
+}
+
+func (f *gapFixture) recordWarming(t *testing.T, subject string, minute int, trigger string, factors ...domain.FactorDef) {
+	t.Helper()
+	var entries []pipeline.GapEntry
+	for _, factor := range factors {
+		entries = append(entries, pipeline.GapEntry{SetID: "fset", Subject: subject, Period: gapT0.Add(time.Duration(minute) * time.Minute),
+			FactorID: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor), TriggerEventID: trigger, Reason: pipeline.SkipReasonWarming})
+	}
+	saved := f.now
+	f.now = gapT0
+	require.NoError(t, f.ledger.RecordGaps(context.Background(), entries))
+	f.now = saved
+}
+
+// 重启后一期整体预热跳过：恢复区间相同的标的合并成一次只填充重算，不逐个标的各跑一遍；区间不同的标的单独一批。
+func TestGapFillerBatchesSubjectsWithSameSpan(t *testing.T) {
+	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
+	f := newGapFixture(t, fakeUniverse{}, factor)
+	for _, subject := range []string{"SOL", "BTC", "ETH"} {
+		f.recordWarming(t, subject, 0, "evt-0", factor)
+	}
+	f.record(t, gapT0, "DOGE", 0, "", factor)
+	f.record(t, gapT0, "DOGE", 1, "", factor)
+
+	f.now = gapT0.Add(6 * time.Minute)
+	f.filler.tick(context.Background())
+	require.Len(t, f.chunks.calls, 2)
+	byFirst := map[string]runCall{}
+	for _, call := range f.chunks.calls {
+		require.True(t, call.selection.FillOnly)
+		byFirst[call.selection.Subjects[0]] = call
+	}
+	warming := byFirst["BTC"]
+	require.Equal(t, []string{"BTC", "ETH", "SOL"}, warming.selection.Subjects, "同一期预热跳过的标的一次恢复")
+	require.True(t, warming.selection.FillCarry, "预热跳过的那一期没有写任何行，carry 列一并补上")
+	require.Equal(t, gapT0, warming.start)
+	require.Equal(t, gapT0.Add(time.Minute), warming.end)
+	doge := byFirst["DOGE"]
+	require.Equal(t, []string{"DOGE"}, doge.selection.Subjects)
+	require.False(t, doge.selection.FillCarry, "空洞那一期已写过 carry 列，只补因子列")
+	require.Equal(t, gapT0.Add(2*time.Minute), doge.end)
+	require.Zero(t, f.ledger.PendingCount(), "写入确认后全部 repaired")
+}
+
+// 一批最多 maxFillSubjects 个标的；每轮的上限按批计。
+func TestGapFillerCapsBatchSizeAndCountsBatchesPerSweep(t *testing.T) {
+	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
+	f := newGapFixture(t, fakeUniverse{}, factor)
+	for i := 0; i < maxFillSubjects+20; i++ {
+		f.recordWarming(t, fmt.Sprintf("S%03d", i), 0, "evt-0", factor)
+	}
+	f.filler.cfg.MaxGroupsPerSweep = 1
+	f.now = gapT0.Add(6 * time.Minute)
+	f.filler.tick(context.Background())
+	require.Len(t, f.chunks.calls, 1)
+	require.Len(t, f.chunks.calls[0].selection.Subjects, maxFillSubjects)
+	require.Equal(t, 20, f.ledger.PendingCount())
+
+	f.filler.tick(context.Background())
+	require.Len(t, f.chunks.calls, 2)
+	require.Len(t, f.chunks.calls[1].selection.Subjects, 20, "剩下的标的下一轮恢复")
+	require.Zero(t, f.ledger.PendingCount())
+}
+
+// 截面因子的预热跳过同样按周期用冻结全集恢复。
+func TestGapFillerRepairsWarmingCrossSectionWithFrozenUniverse(t *testing.T) {
+	factor := gapFactor("rank", domain.FactorTypeCrossSection, false)
+	f := newGapFixture(t, fakeUniverse{subjects: []string{"BTC", "ETH"}, found: true}, factor)
+	f.recordWarming(t, "BTC", 0, "evt-0", factor)
+	f.recordWarming(t, "ETH", 0, "evt-0", factor)
+	f.now = gapT0.Add(6 * time.Minute)
+	f.filler.tick(context.Background())
+	require.Len(t, f.chunks.calls, 1)
+	require.Equal(t, []string{"BTC", "ETH"}, f.chunks.calls[0].selection.Subjects)
+	require.True(t, f.chunks.calls[0].selection.FillCarry)
+	require.Zero(t, f.ledger.PendingCount())
 }

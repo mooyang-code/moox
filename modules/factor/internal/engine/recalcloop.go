@@ -109,7 +109,7 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 		return current != jobStatusRunning, nil
 	}
 	source := func(ctx context.Context) (recalcexec.Selection, error) {
-		subjects, err := l.subjects(ctx, set, job.Subjects)
+		subjects, err := setSubjects(ctx, l.source, set, job.Subjects)
 		if err != nil {
 			return recalcexec.Selection{}, err
 		}
@@ -122,16 +122,16 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 	return l.executor.Run(ctx, job.Window, source, report)
 }
 
-// subjects resolves an empty job selection the way the manager accepted it:
+// setSubjects resolves an empty selection the way the manager accepted it:
 // an include set uses its own subjects, an all set the source dataset's.
-func (l *recalcLoop) subjects(ctx context.Context, set domain.EngineSet, requested []string) ([]string, error) {
+func setSubjects(ctx context.Context, source SourceDataset, set domain.EngineSet, requested []string) ([]string, error) {
 	if len(requested) > 0 {
 		return requested, nil
 	}
 	if set.Set.SubjectMode == domain.SubjectModeInclude {
 		return set.Set.Subjects, nil
 	}
-	subjects, err := l.source.ListDatasetSubjects(ctx, set.Set.SpaceID, set.Set.SourceDatasetID)
+	subjects, err := source.ListDatasetSubjects(ctx, set.Set.SpaceID, set.Set.SourceDatasetID)
 	if err != nil {
 		return nil, fmt.Errorf("list source dataset subjects: %w", err)
 	}

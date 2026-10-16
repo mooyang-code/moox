@@ -372,6 +372,24 @@ func TestRunChunkWithRereadsSelectionAndCallsAfterUnderLock(t *testing.T) {
 	require.False(t, locks.held)
 }
 
+// 预热跳过的恢复：只填充同时写 carry 列（那一期实时路径没有写任何行）。
+func TestRunChunkWithFillCarryWritesCarryColumns(t *testing.T) {
+	runner := &recordingRunner{}
+	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}))
+	source := func(context.Context) (Selection, error) {
+		selection := executorSelection("BTC")
+		selection.FillOnly, selection.FillCarry = true, true
+		return selection, nil
+	}
+	start := testWindow(1).Start
+	_, err := executor.RunChunkWith(context.Background(), source, start, start.Add(time.Minute), nil)
+	require.NoError(t, err)
+	plans := runner.snapshot()
+	require.Len(t, plans, 1)
+	require.True(t, plans[0].FillOnly)
+	require.True(t, plans[0].WriteCarry)
+}
+
 // 锁内重读发现没有标的：不运行，也不调用 after。
 func TestRunChunkWithSkipsWhenSelectionBecomesEmpty(t *testing.T) {
 	locks := &countingLocks{}

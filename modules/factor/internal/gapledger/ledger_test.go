@@ -167,3 +167,24 @@ func TestResetRemovesLedgerFilesOnly(t *testing.T) {
 	_, err = Reset(" ")
 	require.Error(t, err)
 }
+
+// 预热跳过的行带 reason=warming，回放后原因保留；空洞计数只统计真正的空洞。
+func TestLedgerKeepsWarmingReasonAndCountsOnlyGapSkips(t *testing.T) {
+	dir, c := t.TempDir(), &clock{now: t0}
+	ledger, _ := open(t, dir, c, 0)
+	warming := []pipeline.GapEntry{
+		{SetID: "fset", Subject: "ETH", Period: t0, FactorID: "a", DefinitionHash: "h-a", TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming},
+		{SetID: "fset", Subject: "ETH", Period: t0, FactorID: "b", DefinitionHash: "h-b", TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming},
+	}
+	require.NoError(t, ledger.RecordGaps(context.Background(), append(gap("BTC", 0, "a"), warming...)))
+	require.Equal(t, 3, ledger.PendingCount())
+	require.EqualValues(t, 1, ledger.SkippedTotal(), "预热跳过不计入空洞计数")
+	require.NoError(t, ledger.Close())
+
+	reopened, _ := open(t, dir, c, 0)
+	reasons := map[string]string{}
+	for _, entry := range reopened.Pending() {
+		reasons[entry.Subject+"|"+entry.FactorID] = entry.Reason
+	}
+	require.Equal(t, map[string]string{"BTC|a": "", "ETH|a": pipeline.SkipReasonWarming, "ETH|b": pipeline.SkipReasonWarming}, reasons)
+}

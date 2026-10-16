@@ -36,6 +36,8 @@ type Selection struct {
 	Columns  []string
 	// FillOnly 只填充：窗口检查通过才计算并写入，有洞与失败都不写任何字段，也不写 carry 列。用于 K 线空洞补齐后的恢复。
 	FillOnly bool
+	// FillCarry 让只填充同时按源数据写 carry 列：预热中被跳过的周期在实时路径上一行都没写，恢复时要把 carry 列一并补上。
+	FillCarry bool
 }
 
 // SelectionSource is consulted under the set lock before every chunk attempt,
@@ -291,7 +293,7 @@ func plan(selection Selection, start, end time.Time) pipeline.Plan {
 		TargetStart: start, TargetEnd: end,
 		Expected:     append([]string(nil), selection.Subjects...),
 		Available:    append([]string(nil), selection.Subjects...),
-		CarryColumns: selection.Columns, WriteCarry: !selection.FillOnly, FillOnly: selection.FillOnly,
+		CarryColumns: selection.Columns, WriteCarry: !selection.FillOnly || selection.FillCarry, FillOnly: selection.FillOnly,
 	}
 }
 

@@ -318,7 +318,7 @@ func TestLoadLiveWarmsUpInBackground(t *testing.T) {
 	require.Len(t, loaded.Frames["BTC"].Rows, 3)
 	require.Equal(t, WarmupReady, runner.WarmupStatuses()[0].State)
 
-	far := t1.Add(time.Duration(liveCatchUpBars+1) * time.Minute)
+	far := t1.Add(time.Duration(liveCatchUpBars+2) * time.Minute) // 缓存终点是 t1 之后一分钟：落后 liveCatchUpBars+1 根
 	loaded, err = runner.Load(context.Background(), livePlan(far))
 	require.NoError(t, err)
 	require.Equal(t, []string{"BTC", "ETH"}, loaded.WarmingSubjects, "a subject too far behind warms up again")

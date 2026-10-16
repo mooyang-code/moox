@@ -58,8 +58,7 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	loop := &recalcLoop{source: storage}
-	subjects, err := loop.subjects(ctx, set, req.Subjects)
+	subjects, err := setSubjects(ctx, storage, set, req.Subjects)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}

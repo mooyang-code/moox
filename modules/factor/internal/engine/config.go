@@ -94,9 +94,9 @@ type RecalcConfig struct {
 	PollInterval time.Duration `yaml:"poll_interval"`
 }
 
-// GapConfig 是 K 线空洞防护：回看窗口有洞的因子对该标的当期失败，账本永久记录，补齐后定时只填充重算。
-// 默认关闭：下游（Storage、策略、Trade）全部支持 gap_subjects 与保持标记之后才打开。
-// 设计见 docs/计划/因子窗口空洞防护详细设计.md。
+// GapConfig 是跳过账本与恢复：回看窗口有洞、或实时周期里标的还在预热而跳过的结果，账本永久记录，定时只填充重算。
+// 账本与恢复始终开启；Enabled 只控制 K 线空洞检查（有洞的因子对该标的当期失败），默认关闭：
+// 下游（Storage、策略、Trade）全部支持 gap_subjects 与保持标记之后才打开。设计见 docs/计划/因子窗口空洞防护详细设计.md。
 type GapConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// LedgerDir 是账本目录（按月一个 JSONL 文件，永不自动删除，纳入备份）。
@@ -106,7 +106,8 @@ type GapConfig struct {
 	Settle        time.Duration `yaml:"settle"`
 	// GiveUpAfter 是超过多久仍补不上就记 gave_up 并告警，交给人工。
 	GiveUpAfter time.Duration `yaml:"give_up_after"`
-	// MaxGroupsPerSweep 与 MaxSpan 限制一轮恢复的工作量：每个组一次最多处理 MaxSpan 个周期，避免长时间占住集合锁。
+	// MaxGroupsPerSweep 与 MaxSpan 限制一轮恢复的工作量：一轮最多运行 MaxGroupsPerSweep 批（恢复区间相同的时序分组合并成一批），
+	// 每个组一次最多处理 MaxSpan 个周期，避免长时间占住集合锁。
 	MaxGroupsPerSweep int `yaml:"max_groups_per_sweep"`
 	MaxSpan           int `yaml:"max_span"`
 	// MassRatio 是整期大面积缺失的告警阈值：有空洞或上游失败的标的占预期的比例达到它时输出 ERROR 日志；0 表示不告警。

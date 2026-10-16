@@ -49,6 +49,7 @@ type Runtime struct {
 	gap      *gapledger.Ledger
 	lease    *leaseState
 	syncer   *catalogSyncer
+	prewarm  *prewarmer
 	health   *factorhealth.State
 
 	// reconcileMu serializes consumer start/stop; consumerMu only guards the
@@ -127,20 +128,23 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		WriteRetryBackoff: 300 * time.Millisecond, PythonWorkers: cfg.Python.Workers, FactorsDir: cfg.Python.FactorsDir,
 		BackgroundWarmup: true,
 	}
+	// 跳过账本与恢复始终开启：预热中被跳过的周期也靠它补算。gap.enabled 只控制回看窗口的空洞检查。
+	ledger, expired, err := gapledger.Open(cfg.Gap.LedgerDir, time.Now, cfg.Gap.GiveUpAfter)
+	if err != nil {
+		return nil, fmt.Errorf("open factor gap ledger: %w", err)
+	}
+	r.gap = ledger
+	logExpired(expired, cfg.Gap.GiveUpAfter)
+	r.metrics.GapGaveUp.Add(float64(len(expired)))
+	log.InfoContextf(ctx, "factor_gap_ledger_opened dir=%s pending=%d ignored_lines=%d expired=%d gap_check=%t", cfg.Gap.LedgerDir, ledger.PendingCount(), ledger.Ignored(), len(expired), cfg.Gap.Enabled)
+	pipelineConfig.GapSink = ledger
 	if cfg.Gap.Enabled {
-		ledger, expired, ledgerErr := gapledger.Open(cfg.Gap.LedgerDir, time.Now, cfg.Gap.GiveUpAfter)
-		if ledgerErr != nil {
-			return nil, fmt.Errorf("open factor gap ledger: %w", ledgerErr)
-		}
-		r.gap = ledger
-		logExpired(expired, cfg.Gap.GiveUpAfter)
-		r.metrics.GapGaveUp.Add(float64(len(expired)))
-		log.InfoContextf(ctx, "factor_gap_ledger_opened dir=%s pending=%d ignored_lines=%d expired=%d", cfg.Gap.LedgerDir, ledger.PendingCount(), ledger.Ignored(), len(expired))
-		pipelineConfig.GapCheck, pipelineConfig.MassRatio, pipelineConfig.GapSink = true, cfg.Gap.MassRatio, ledger
+		pipelineConfig.GapCheck, pipelineConfig.MassRatio = true, cfg.Gap.MassRatio
 	}
 	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, r.python, clock, pipelineConfig)
 	r.pipeline = base
 	r.runner = &measuredRunner{inner: base, metrics: r.metrics, health: r.monitor, runs: r.runs}
+	r.prewarm = newPrewarmer(r.catalog, r.storage, base, r.active)
 
 	r.syncer = &catalogSyncer{
 		client: r.manager, cache: r.catalog, interval: cfg.CatalogSync.Interval, offset: cfg.CatalogSync.Offset,
@@ -164,20 +168,19 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	executor := recalcexec.NewExecutor(r.runner,
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks), recalcexec.WithClock(clock))
 	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval, materialize: r.catalog.Materialize}
-	if r.gap != nil {
-		filler := &gapFiller{
-			ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
-			active: r.active, cfg: cfg.Gap, now: time.Now, onGaveUp: func(n int) { r.metrics.GapGaveUp.Add(float64(n)) },
-		}
-		r.goRun(appCtx, filler.Run)
+	filler := &gapFiller{
+		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
+		active: r.active, cfg: cfg.Gap, now: time.Now, onGaveUp: func(n int) { r.metrics.GapGaveUp.Add(float64(n)) },
 	}
 
+	r.goRun(appCtx, filler.Run)
 	r.goRun(appCtx, r.syncer.Run)
 	r.goRun(appCtx, beat.Run)
 	r.goRun(appCtx, recalc.Run)
 	r.goRun(appCtx, r.superviseConsumer)
 	r.goRun(appCtx, r.reportMetrics)
 	r.goRun(appCtx, r.pipeline.RunWarmup)
+	r.goRun(appCtx, r.prewarm.Run)
 
 	r.health.SnapshotFunc = r.healthSnapshot
 	if err := factorhealth.Register(s.Service(healthService), r.health); err != nil {
@@ -194,10 +197,15 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 func (r *Runtime) active() bool { return r.catalog.Loaded() && !r.lease.Conflict() }
 
 // reconcileConsumer starts the period consumer when the engine becomes active,
-// stops it on a lease conflict and refreshes its set filters otherwise.
+// stops it on a lease conflict and refreshes its set filters otherwise. While
+// active it also kicks the prewarmer, so a new lease holder or a newly enabled
+// set starts loading its lookback windows before its first live period.
 func (r *Runtime) reconcileConsumer() {
 	r.reconcileMu.Lock()
 	defer r.reconcileMu.Unlock()
+	if r.active() {
+		r.prewarm.Kick()
+	}
 	current := r.currentConsumer()
 	switch {
 	case r.active() && current == nil:
@@ -301,9 +309,6 @@ func (r *Runtime) reportMetrics(ctx context.Context) {
 
 // reportGapMetrics 把账本的待恢复数、累计跳过数与写盘状态同步到指标。
 func (r *Runtime) reportGapMetrics(lastSkipped *int64) {
-	if r.gap == nil {
-		return
-	}
 	r.metrics.GapPending.Set(float64(r.gap.PendingCount()))
 	if total := r.gap.SkippedTotal(); total > *lastSkipped {
 		r.metrics.GapSkipped.Add(float64(total - *lastSkipped))
@@ -326,10 +331,8 @@ func (r *Runtime) healthSnapshot(context.Context) healthz.Response {
 	r.monitor.SetDependency("python", pythonReady)
 	r.monitor.SetDependency("eventbus", consumerReady)
 	r.monitor.SetDependency("lease", !lease.Conflict)
-	if r.gap != nil {
-		// 账本写盘失败：账本可能不完整，健康检查降级（周期推进不受影响）。
-		r.monitor.SetDependency("gap_ledger", !r.gap.Degraded())
-	}
+	// 账本写盘失败：账本可能不完整，健康检查降级（周期推进不受影响）。
+	r.monitor.SetDependency("gap_ledger", !r.gap.Degraded())
 	check := r.monitor.Check(time.Now())
 	state := "ok"
 	if !check.Healthy {
@@ -340,10 +343,8 @@ func (r *Runtime) healthSnapshot(context.Context) healthz.Response {
 		"catalog_hash": catalog.Hash, "catalog_sets": catalog.Sets, "consumer_ready": consumerReady,
 		"lease_conflict": lease.Conflict,
 	}
-	if r.gap != nil {
-		details["gap_pending"] = r.gap.PendingCount()
-		details["gap_ledger_degraded"] = r.gap.Degraded()
-	}
+	details["gap_pending"] = r.gap.PendingCount()
+	details["gap_ledger_degraded"] = r.gap.Degraded()
 	if !catalog.SyncedAt.IsZero() {
 		details["catalog_synced_at"] = catalog.SyncedAt.Format(time.RFC3339)
 	}

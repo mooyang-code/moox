@@ -128,7 +128,10 @@ func (c *liveWindowCache) plan(plan Plan, subjects []string) (map[string]subject
 			reads[subject] = subjectRead{start: start, prefix: rowsBetween(cached.rows, plan.TargetStart, start)}
 			continue
 		}
-		if c.wake == nil {
+		// 缓存终点早于窗口起点、但落后不超过 liveCatchUpBars 根（回看很短，或中间漏了几期）：本期直接读整窗口。
+		// 这时窗口不超过 liveCatchUpBars 根，代价与增量读取相同；否则只回看一根的集合永远接不上主动预热的窗口。
+		behind := ok && period > 0 && cached.end.Before(plan.TargetStart) && plan.PeriodTime.Sub(cached.end) <= liveCatchUpBars*period
+		if c.wake == nil || behind {
 			reads[subject] = subjectRead{start: plan.TargetStart}
 			continue
 		}
@@ -148,6 +151,30 @@ func (c *liveWindowCache) plan(plan Plan, subjects []string) (map[string]subject
 		}
 	}
 	return reads, warming
+}
+
+// prewarm 为缓存里还没有的因子集排队预热全部标的，返回排队的标的数。已经有记录（实时周期到过或已经预热过）的集合不处理：
+// 之后哪些标的需要再预热由实时周期自己判断。没有后台预热时不处理。
+func (c *liveWindowCache) prewarm(plan Plan, subjects []string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.wake == nil || len(subjects) == 0 {
+		return 0
+	}
+	if _, seen := c.sets[plan.Set.SetID]; seen {
+		return 0
+	}
+	set := c.setFor(plan)
+	for _, subject := range subjects {
+		set.pending[subject] = struct{}{}
+	}
+	set.warmup = plan
+	set.expected, set.warm = len(subjects), 0
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+	return len(subjects)
 }
 
 // store merges loaded windows into the cache; subjects without a frame keep
@@ -219,14 +246,23 @@ func (c *liveWindowCache) nextWarmup() (Plan, []string, bool) {
 	return Plan{}, nil, false
 }
 
+// finishWarmup 结束一批预热，并把窗口已载入到本次目标的标的计入已预热数：预热中的标的在排队时都没有计入，
+// 不在这里计入的话，状态要等下一个实时周期才会变成 ready（主动预热的 1h 集合要等将近一个小时）。
 func (c *liveWindowCache) finishWarmup(plan Plan, subjects []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if set := c.sets[plan.Set.SetID]; set != nil {
-		for _, subject := range subjects {
-			delete(set.inflight, subject)
+	set := c.sets[plan.Set.SetID]
+	if set == nil {
+		return
+	}
+	warmed := 0
+	for _, subject := range subjects {
+		delete(set.inflight, subject)
+		if cached, ok := set.subjects[subject]; ok && !cached.end.Before(plan.TargetEnd) {
+			warmed++
 		}
 	}
+	set.warm = min(set.expected, set.warm+warmed)
 }
 
 func (c *liveWindowCache) statuses() []WarmupStatus {
