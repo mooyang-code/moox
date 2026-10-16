@@ -74,6 +74,18 @@ func TestHeartbeatGrantsLeaseToFirstEngine(t *testing.T) {
 	require.True(t, status.ConsumerRunning)
 }
 
+func TestHeartbeatHookRunsOnlyForAcceptedHeartbeats(t *testing.T) {
+	hub, _, _ := newTestHub(t)
+	calls := 0
+	hub.OnHeartbeat(func() { calls++ })
+	_, err := hub.Heartbeat(context.Background(), engineA, domain.EngineStatus{})
+	require.NoError(t, err)
+	require.Equal(t, 1, calls, "accepted heartbeat refreshes the factor dataset metrics")
+	_, err = hub.Heartbeat(context.Background(), engineB, domain.EngineStatus{})
+	require.ErrorIs(t, err, ErrLeaseConflict)
+	require.Equal(t, 1, calls, "a rejected heartbeat carries no progress of the lease holder")
+}
+
 func TestHeartbeatRejectsSecondEngineWithinTTL(t *testing.T) {
 	hub, _, clock := newTestHub(t)
 	_, err := hub.Heartbeat(context.Background(), engineA, domain.EngineStatus{})

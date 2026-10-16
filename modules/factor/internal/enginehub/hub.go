@@ -59,6 +59,15 @@ type Hub struct {
 	mu     sync.Mutex
 	ready  map[string]bool
 	engine *engineState
+	// onHeartbeat 在每次心跳被接受后调用（锁外）：因子管理服务据此立刻刷新因子数据集指标并补报。
+	onHeartbeat func()
+}
+
+// OnHeartbeat 登记每次心跳被接受后调用的函数。
+func (h *Hub) OnHeartbeat(hook func()) {
+	h.mu.Lock()
+	h.onHeartbeat = hook
+	h.mu.Unlock()
 }
 
 type engineState struct {
@@ -85,15 +94,20 @@ func (h *Hub) Heartbeat(_ context.Context, id domain.EngineIdentity, status doma
 	}
 	now := h.now().UTC()
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	// A live lease is held by one process: another engine id, or the same id
 	// from another boot (a copied config), is rejected until the lease lapses.
 	if h.engine != nil && now.Before(h.engine.lastSeen.Add(h.engineTTL)) &&
 		(h.engine.identity.EngineID != id.EngineID || h.engine.identity.BootID != id.BootID) {
+		h.mu.Unlock()
 		return 0, fmt.Errorf("%w: %s (boot %s)", ErrLeaseConflict, h.engine.identity.EngineID, h.engine.identity.BootID)
 	}
 	h.engine = &engineState{identity: id, status: status, lastSeen: now}
-	return h.engineTTL, nil
+	hook, ttl := h.onHeartbeat, h.engineTTL
+	h.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return ttl, nil
 }
 
 // SetResultReady records whether a set's result dataset accepted its columns

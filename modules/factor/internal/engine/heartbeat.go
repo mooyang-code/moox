@@ -63,6 +63,20 @@ type heartbeater struct {
 	interval time.Duration
 	onChange func()
 	now      func() time.Time
+	// wake 让心跳循环不等定时器立刻发一次（容量 1，多次唤醒合并）：每算完一期就唤醒，
+	// 因子管理服务和 Monitor 因此约 1 秒内知道这一期的完成时刻，而不是最多等 10 秒的心跳间隔。
+	wake chan struct{}
+}
+
+// Wake 请求尽快发一次心跳；已有待发的唤醒时合并。
+func (h *heartbeater) Wake() {
+	if h == nil || h.wake == nil {
+		return
+	}
+	select {
+	case h.wake <- struct{}{}:
+	default:
+	}
 }
 
 func (h *heartbeater) BeatOnce(ctx context.Context) error {
@@ -86,9 +100,10 @@ func (h *heartbeater) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			beatCtx, cancel := context.WithTimeout(ctx, h.interval)
-			_ = h.BeatOnce(beatCtx)
-			cancel()
+		case <-h.wake:
 		}
+		beatCtx, cancel := context.WithTimeout(ctx, h.interval)
+		_ = h.BeatOnce(beatCtx)
+		cancel()
 	}
 }

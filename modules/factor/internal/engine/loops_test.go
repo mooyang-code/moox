@@ -313,3 +313,42 @@ func TestRecalcLoopFailsJobWhenSourceCannotBeMaterialized(t *testing.T) {
 	require.Equal(t, jobStatusFailed, client.reports[0].status)
 	require.Contains(t, client.reports[0].errText, "disk full")
 }
+
+// beatRecorder 记录每次心跳，供并发的心跳循环测试使用。
+type beatRecorder struct{ beats chan domain.EngineStatus }
+
+func (r *beatRecorder) Heartbeat(_ context.Context, status domain.EngineStatus) (time.Duration, error) {
+	r.beats <- status
+	return 45 * time.Second, nil
+}
+
+// 每算完一期就唤醒心跳循环：不等 10 秒的定时器，立刻把这一期的完成时刻报给因子管理服务。
+func TestHeartbeatWakeSendsWithoutWaitingForTheTicker(t *testing.T) {
+	recorder := &beatRecorder{beats: make(chan domain.EngineStatus, 4)}
+	beat := &heartbeater{client: recorder, lease: &leaseState{}, status: func() domain.EngineStatus { return domain.EngineStatus{} },
+		interval: time.Hour, now: time.Now, wake: make(chan struct{}, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go beat.Run(ctx)
+
+	runs := newRunTracker()
+	runs.setOnRecord(beat.Wake)
+	period := time.Date(2026, 10, 16, 15, 45, 0, 0, time.UTC)
+	runs.record("set_a", period, "complete", pipeline.Outcome{}, period.Add(66*time.Second))
+	select {
+	case <-recorder.beats:
+	case <-time.After(5 * time.Second):
+		t.Fatal("recording a period must send a heartbeat right away")
+	}
+	// 比已记录的更早的一期不覆盖，也不唤醒。
+	runs.record("set_a", period.Add(-time.Minute), "complete", pipeline.Outcome{}, period)
+	select {
+	case <-recorder.beats:
+		t.Fatal("an older period must not wake the heartbeat")
+	case <-time.After(200 * time.Millisecond):
+	}
+	// 多次唤醒在发出前合并成一次。
+	beat.Wake()
+	beat.Wake()
+	(&heartbeater{}).Wake()
+}

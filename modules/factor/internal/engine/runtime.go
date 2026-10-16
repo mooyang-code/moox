@@ -152,8 +152,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	}
 	beat := &heartbeater{
 		client: r.manager, lease: r.lease, status: r.engineStatus, interval: cfg.Engine.HeartbeatInterval,
-		onChange: r.reconcileConsumer, now: time.Now,
+		onChange: r.reconcileConsumer, now: time.Now, wake: make(chan struct{}, 1),
 	}
+	// 每算完一期立刻补发心跳：因子管理服务据此马上更新数据集指标并补报，Monitor 约 1 秒内看到这一期的完成时刻。
+	r.runs.setOnRecord(beat.Wake)
 	// Heartbeat before the first catalog sync: the sync's onChange reconciles
 	// the consumer, and an engine that does not hold the lease must learn so
 	// before that, or it briefly consumes periods beside the lease holder.
