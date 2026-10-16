@@ -81,8 +81,7 @@ func invokeAttempt(ctx context.Context, req, rsp interface{}, responseType refle
 			delay = parsed
 		}
 	}
-	code := errs.Code(err)
-	final := last || err == nil || (code != errs.RetClientNetErr && code != errs.RetClientTimeout) || delay < 0
+	final := last || err == nil || !retryable(err) || delay < 0
 	if !final {
 		return err, delay, false
 	}
@@ -106,6 +105,17 @@ func invokeAttempt(ctx context.Context, req, rsp interface{}, responseType refle
 		err = copyOutput(rsp, output)
 	}
 	return err, 0, true
+}
+
+// retryable 只认重发一次就可能成功的客户端框架错误：网络错误、超时，以及读响应时连接被对端关闭
+// （171，例如复用到上游刚关闭的空闲连接）。只读调用重发没有副作用；业务错误和其他框架错误不重试。
+func retryable(err error) bool {
+	switch errs.Code(err) {
+	case errs.RetClientNetErr, errs.RetClientTimeout, errs.RetClientReadFrameErr:
+		return true
+	default:
+		return false
+	}
 }
 
 func cloneHeader(header interface{}) (interface{}, error) {

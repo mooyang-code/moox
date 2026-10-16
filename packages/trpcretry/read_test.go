@@ -23,6 +23,20 @@ func TestReadOnlyBoundsNetworkRetries(t *testing.T) {
 	require.Equal(t, 2, attempts)
 }
 
+// 复用到上游刚关闭的连接时读响应得到 EOF（171），只读调用应换一次连接重发。
+func TestReadOnlyRetriesReadFrameEOF(t *testing.T) {
+	attempts := 0
+	err := ReadOnly()(context.Background(), nil, nil, func(context.Context, interface{}, interface{}) error {
+		attempts++
+		if attempts == 1 {
+			return errs.NewFrameError(errs.RetClientReadFrameErr, "tcp client transport ReadFrame: EOF")
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, attempts)
+}
+
 func TestReadOnlyDoesNotRetryBusinessErrors(t *testing.T) {
 	attempts := 0
 	err := ReadOnly()(context.Background(), nil, nil, filter.ClientHandleFunc(func(context.Context, interface{}, interface{}) error {

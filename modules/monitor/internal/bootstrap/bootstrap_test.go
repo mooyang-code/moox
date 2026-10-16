@@ -203,6 +203,28 @@ func TestMonitorTRPCConfigDeclaresPlacementTimer(t *testing.T) {
 	t.Fatal("missing trpc.moox.monitor.placement.timer service")
 }
 
+// MonitorMgr 必须显式用 go-net：tnet 的空闲定时器会提前关闭仍在按 30 秒轮询使用的连接。
+func TestMonitorMgrUsesGoNetTransport(t *testing.T) {
+	raw, err := os.ReadFile("../../config/trpc_go.yaml")
+	require.NoError(t, err)
+	var trpcConfig struct {
+		Server struct {
+			Services []struct {
+				Name      string `yaml:"name"`
+				Transport string `yaml:"transport"`
+			} `yaml:"service"`
+		} `yaml:"server"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &trpcConfig))
+	for _, service := range trpcConfig.Server.Services {
+		if service.Name == "trpc.moox.monitor.MonitorMgr" {
+			assert.Equal(t, "go-net", service.Transport)
+			return
+		}
+	}
+	t.Fatal("missing trpc.moox.monitor.MonitorMgr service")
+}
+
 func TestWaitObservabilityRespectsCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

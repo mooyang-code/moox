@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 
 	"trpc.group/trpc-go/trpc-go/pool/connpool"
@@ -62,6 +63,12 @@ func (p *Pool) dial(opts *connpool.DialOptions) (net.Conn, error) {
 	}
 	p.connections[conn] = struct{}{}
 	p.mu.Unlock()
+	// 明文 TCP 透出原始套接字：tRPC 连接池复用空闲连接前会对它做一次非阻塞读，
+	// 发现对端已关闭（例如上游重启或空闲回收）就丢弃并重新建连，而不是把请求发到死连接上读到 EOF。
+	// TLS 连接不透出：直接读底层套接字会吞掉 TLS 记录，只能依赖空闲超时回收和只读重试。
+	if _, ok := raw.(syscall.Conn); ok && p.tls == nil {
+		return plainConnection{conn}, nil
+	}
 	return conn, nil
 }
 
@@ -95,4 +102,13 @@ func (c *connection) Close() error {
 		c.owner.mu.Unlock()
 	})
 	return c.err
+}
+
+// plainConnection 是明文连接：在 connection 的基础上实现 syscall.Conn，供连接池做存活探测。
+type plainConnection struct {
+	*connection
+}
+
+func (c plainConnection) SyscallConn() (syscall.RawConn, error) {
+	return c.Conn.(syscall.Conn).SyscallConn()
 }
