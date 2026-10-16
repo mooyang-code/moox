@@ -291,6 +291,19 @@ func overdueAfter(clock MarketClock, freq frequencypkg.Frequency, latest time.Ti
 	return positive(now.Sub(next.Close)), nil
 }
 
+// ReportSnapshotGrace 是上报快照可以代表“此刻”的最长时间：生产者每 30 秒上报一次，超过它还没有新快照（漏报、
+// 停止上报，或重启后某个视图一直没有新写入、不再产生摘要）就不能再按快照时刻判断，否则停更会一直被当作没逾期。
+const ReportSnapshotGrace = time.Minute
+
+// SnapshotTime 返回判逾期用的观测时刻：快照在 ReportSnapshotGrace 之内用快照时刻（之后才收线、可能已写完但还没上报的根
+// 不算逾期）；没有快照、快照太旧或晚于 now（生产者时钟偏快）时用 now。
+func SnapshotTime(at, now time.Time) time.Time {
+	if at.IsZero() || at.After(now) || now.Sub(at) > ReportSnapshotGrace {
+		return now
+	}
+	return at
+}
+
 func positive(value time.Duration) time.Duration {
 	return max(value, 0)
 }
@@ -534,9 +547,12 @@ func parseViewSummaryLabels(rawLabels string, withSubject bool) (viewSummaryIden
 func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessReport, rule KlineFreshnessRule, clock MarketClock, freq frequencypkg.Frequency, expected Bar, summary viewSummary, active map[string]struct{}, now time.Time) {
 	report.ObservedCount = summary.subjects
 	report.OldestDataTime = summary.latest
-	// 视图最新一根之后、应收的最新一根之前还缺的第一根，从收线起超过“允许迟到 + stale_after”就算整体停止更新。
+	// 摘要是 Storage View 上报快照那一刻的状态（每 30 秒上报一次，整分与半分对齐）：逾期按快照时刻算。按当前时间算会把
+	// 快照之后才写完、还没来得及上报的准时 K 线算成逾期——半分评估若早于那次快照入库，就会误判“整体停止更新”。
+	seen := SnapshotTime(summary.snapshotAt, now)
+	// 视图最新一根之后、应收的最新一根之前还缺的第一根，到快照时已晚超过允许迟到仍没有，就算整体停止更新。
 	// 缺的根按交易日历数：午休、收盘后、节假日不会被算成缺失。
-	overdue, err := overdueAfter(clock, freq, summary.latest, expected, now)
+	overdue, err := overdueAfter(clock, freq, summary.latest, expected, seen)
 	if err != nil {
 		report.Success, report.Reason = false, klineClockReason(err)
 		report.Diagnostic = err.Error()
@@ -564,7 +580,7 @@ func (e *KlineFreshnessEvaluator) evaluateViewSummary(report *KlineFreshnessRepo
 		}
 		// Storage 按连续时间判落后（比视图最新一根落后超过一根加容忍）：A 股午休、隔夜后新时段第一根刚到时，还没到的标的
 		// 也会被它算进来。按交易日历再筛一遍：缺的第一根从收线起还在“允许迟到 + stale_after”之内的，不算过期。
-		age, err := overdueAfter(clock, freq, item.dataTime, expected, now)
+		age, err := overdueAfter(clock, freq, item.dataTime, expected, seen)
 		if err == nil && age <= threshold {
 			withinGrace++
 			continue

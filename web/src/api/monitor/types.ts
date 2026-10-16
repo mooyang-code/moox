@@ -89,14 +89,19 @@ export interface HealthDataset {
   /** 到达 − 收线，在到达那一刻定值；delay_known 为 false 表示生产者没上报到达时间。 */
   delay_seconds?: number | string;
   delay_known?: boolean;
-  /** 此刻应已收线却还没到的根数，其中最早一根的收线时间，以及它已过收线多久。 */
+  /** 此刻应已收线却还没到的根数，其中最早一根的收线时间（应到时间），以及它已晚多久（当前时间 − 应到时间）。 */
   waiting_bars?: number;
   waiting_since?: string;
   overdue_seconds?: number | string;
-  /** 允许迟到的秒数：等待超过它判为过期；已到的根延迟超过它只标为迟到。 */
+  /** 应到的那根已由生产者的上报确认迟到（上报那一刻已晚超过允许迟到仍没有），数据集据此判为过期。 */
+  late_confirmed?: boolean;
+  /** 允许迟到的秒数：生产者的上报确认超过它仍未到时判为过期；已到的根延迟超过它只标为迟到。 */
   lateness_limit_seconds?: number | string;
   /** 无法按交易日历判断的原因，例如“日历未覆盖”“周期对齐未确认”。 */
   clock_issue?: string;
+  /** 预期 K 线：此刻应已收线的最新一根的开盘时间（与 output_watermark_at 同一口径，相同即已到）与收线时间。 */
+  expected_bar_at?: string;
+  expected_bar_close_at?: string;
 }
 export interface HealthPipelineStage {
   id?: string;

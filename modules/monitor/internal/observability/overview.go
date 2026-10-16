@@ -69,11 +69,18 @@ type DatasetFrequencyStatus struct {
 	OutputArrivedAt time.Time
 	DelaySeconds    int64
 	DelayKnown      bool
-	// WaitingBars 是此刻应已收线却还没到的根数；WaitingSince 是其中最早一根的收线时间，OverdueSeconds 是它已过收线多久。
+	// ExpectedBarAt、ExpectedBarClose 是预期 K 线：按市场交易日历此刻应已收线的最新一根。ExpectedBarAt 是它的 data_time
+	// （开盘时间），与 OutputWatermarkAt 相同即已到；无法按交易日历判断时为零。
+	ExpectedBarAt, ExpectedBarClose time.Time
+	// WaitingBars 是此刻应已收线却还没到的根数；WaitingSince 是其中最早一根的收线时间（应到时间），
+	// OverdueSeconds 是它已晚多久（当前时间 − 应到时间）。
 	WaitingBars    int
 	WaitingSince   time.Time
 	OverdueSeconds int64
-	// LatenessLimitSeconds 是允许迟到的秒数：等待超过它判为过期并告警；已到的根延迟超过它只标为迟到，不影响当前状态。
+	// LateConfirmed 表示应到的那根已由生产者的上报确认迟到：上报那一刻它已晚超过允许迟到仍没有（见 evaluateBars）。
+	LateConfirmed bool
+	// LatenessLimitSeconds 是允许迟到的秒数：生产者的上报确认应到的那根超过它仍未到时判为过期并告警；
+	// 已到的根延迟超过它只标为迟到，不影响当前状态。
 	LatenessLimitSeconds int64
 	// ClockIssue 说明无法按交易日历判断的原因，例如“日历未覆盖”“周期对齐未确认”；为空表示已按日历判断。
 	ClockIssue string
@@ -283,6 +290,8 @@ type datasetValues struct {
 	arrival       float64
 	reporterStale bool
 	reportedAt    time.Time
+	// confirmedAt 是能确认最新一根“到此刻还没更新”的时刻，即生产者上报快照的时刻；多个实例合并后见 confirmedUntil。
+	confirmedAt time.Time
 }
 
 func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Time) ([]DatasetFrequencyStatus, error) {
@@ -477,7 +486,9 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 				},
 				value: value,
 			}
+			current.value.confirmedAt = value.reportedAt
 		} else {
+			current.value.confirmedAt = confirmedUntil(current.value, value)
 			current.value.interval = minPositive(current.value.interval, value.interval)
 			current.value.inventory = max(current.value.inventory, value.inventory)
 			current.value.lastRun = max(current.value.lastRun, value.lastRun)
@@ -615,6 +626,22 @@ func maxTime(left, right time.Time) time.Time {
 	return left
 }
 
+// confirmedUntil 把又一个实例并入已合并的数据集时，给出能确认最新一根“到此刻还没更新”的时刻。数据集的最新一根取各实例的最大值，
+// 某一根要所有实例都上报过、都还没有它才算确认未到，所以取仍在上报的实例里最早的那次上报；已停止上报的实例不拖住确认
+// （全部停止时由 producer stale 判断）。merged.reporterStale 表示已合并的实例是否全部停止上报。
+func confirmedUntil(merged, next datasetValues) time.Time {
+	switch {
+	case next.reportedAt.IsZero() || next.reporterStale && !merged.reporterStale:
+		return merged.confirmedAt
+	case merged.confirmedAt.IsZero() || merged.reporterStale && !next.reporterStale:
+		return next.reportedAt
+	case next.reportedAt.Before(merged.confirmedAt):
+		return next.reportedAt
+	default:
+		return merged.confirmedAt
+	}
+}
+
 func (b Builder) populateDatasetValues(
 	ctx context.Context,
 	values map[datasetKey]datasetValues,
@@ -726,8 +753,8 @@ func datasetLimitError() error {
 	return fmt.Errorf("dataset frequency statuses exceed limit %d", MaxDatasetFrequencyStatuses)
 }
 
-// datasetStatus 判定一个数据集的状态。新鲜度看“最新一根 K 线是否按时到达”：按市场交易日历算出此刻应已收线的最新一根，
-// 还没到且从收线起超过允许迟到时间才判为过期；已经到了的根即使迟到，也只记下延迟，当前状态仍是正常。
+// datasetStatus 判定一个数据集的状态。新鲜度看“最新一根 K 线是否按时到达”：按市场交易日历算出此刻应已收线的最新一根（预期 K 线），
+// 还没到、并且生产者在收线超过允许迟到之后的上报里仍没有它，才判为过期；已经到了的根即使迟到，也只记下延迟，当前状态仍是正常。
 func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy report.RealtimeTimeSeriesPolicy, clock spaceClock) DatasetFrequencyStatus {
 	item := DatasetFrequencyStatus{
 		Producer: key.producer, SpaceID: key.spaceID, DatasetID: key.datasetID, Freq: key.freq,
@@ -738,10 +765,12 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 	}
 	runLag, successLag, lateness := datasetTolerances(key, value.interval, policy)
 	item.LatenessLimitSeconds = int64(lateness / time.Second)
-	bars := evaluateBars(clock, key.freq, item.OutputWatermarkAt, unixTime(value.arrival), now)
+	bars := evaluateBars(clock, key.freq, item.OutputWatermarkAt, unixTime(value.arrival), value.confirmedAt, now)
 	item.LatestBarClose, item.OutputArrivedAt = bars.latestClose, unixTime(value.arrival)
 	item.DelaySeconds, item.DelayKnown = int64(bars.delay/time.Second), bars.delayKnown
+	item.ExpectedBarAt, item.ExpectedBarClose = bars.expected.Open, bars.expected.Close
 	item.WaitingBars, item.WaitingSince, item.OverdueSeconds = bars.waiting, bars.waitingSince, int64(bars.overdue/time.Second)
+	item.LateConfirmed = bars.waiting > 0 && lateness > 0 && bars.confirmed && bars.confirmedOverdue > lateness
 	item.ClockIssue = clockIssueText(bars.issue)
 	inventoryAt := unixTime(value.inventory)
 	switch {
@@ -763,7 +792,7 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 	case errors.Is(bars.issue, monmetrics.ErrCalendarNotCovered):
 		// 日历覆盖不到就无法判断应收哪一根：不推测，报出来让人更新交易日历。
 		item.Status, item.Reason = "unknown", item.ClockIssue
-	case bars.waiting > 0 && lateness > 0 && bars.overdue > lateness:
+	case item.LateConfirmed:
 		item.Status = "stale"
 		item.Reason = waitingReason(item)
 	case item.OutputWatermarkAt.IsZero():

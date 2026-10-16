@@ -354,6 +354,36 @@ func TestKlineFreshnessMeasuresStalenessFromBarClose(t *testing.T) {
 	require.Equal(t, 6*time.Minute, stale.StaleAge)
 }
 
+// Storage View 每 30 秒上报一次摘要（整分与半分对齐，比收线晚几毫秒）：逾期按快照时刻算。生产上 :30 的评估偶尔早于
+// :30 那次快照入库，按当前时间算会把准时写完、还没来得及上报的分钟线判成“整体停止更新”（2026-10-16 一天 22 次）。
+func TestKlineFreshnessMeasuresOverdueAtTheSnapshot(t *testing.T) {
+	rule := KlineFreshnessRule{Enabled: true, SpaceID: "crypto", ViewID: "view", DatasetID: "dataset", Frequency: "1m", MarketID: "crypto", Lateness: 30 * time.Second}
+	minute := time.Date(2026, 10, 16, 10, 48, 0, 0, time.UTC)
+	evaluate := func(snapshot, now time.Time) KlineFreshnessReport {
+		// 快照里最新一根是 10:46 那根（10:47 收线）；10:47 那根 10:48 收线后还没出现在快照里。
+		query := newViewSummaryQuery(t, []viewSummaryTestSample{{Latest: minute.Add(-2 * time.Minute), Subjects: 1, ObservedAt: snapshot}})
+		reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
+		require.NoError(t, err)
+		require.Len(t, reports, 1)
+		return reports[0]
+	}
+	// 10:48:30.6 评估，最近的快照仍是 10:48:00.002：快照时它只晚了 2 毫秒，不算停止更新。
+	early := evaluate(minute.Add(2*time.Millisecond), minute.Add(30*time.Second+600*time.Millisecond))
+	require.True(t, early.Success, early.Diagnostic)
+	require.Zero(t, early.StaleAge)
+	// 10:48:30.002 的快照里仍没有：快照时已晚超过允许迟到，判为整体停止更新，逾期按快照时刻记。
+	stale := evaluate(minute.Add(30*time.Second+2*time.Millisecond), minute.Add(30*time.Second+600*time.Millisecond))
+	require.False(t, stale.Success)
+	require.True(t, stale.ViewStale)
+	require.Equal(t, 30*time.Second+2*time.Millisecond, stale.StaleAge)
+	// 快照时刻晚于当前时间（生产者时钟偏快）时按当前时间算。
+	require.False(t, evaluate(minute.Add(time.Minute), minute.Add(31*time.Second)).Success)
+	// 摘要超过 1 分钟没有更新（漏报，或重启后视图没有新写入、不再产生摘要）：按当前时间算，停更照样报出来。
+	frozen := evaluate(minute.Add(-time.Minute), minute.Add(30*time.Second+600*time.Millisecond))
+	require.False(t, frozen.Success)
+	require.Equal(t, 30*time.Second+600*time.Millisecond, frozen.StaleAge)
+}
+
 // 落后对象名单只上报最落后的若干个：停用对象多于名单长度时，名单只能用于展示，不能用来扣减完整计数，
 // 否则剩下那个未上报名字的停用对象会被算作过期，持续误报。
 func TestKlineFreshnessEvaluatorTruncatedLaggingListDoesNotKeepAlertingForRetiredSubjects(t *testing.T) {

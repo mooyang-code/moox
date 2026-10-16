@@ -195,6 +195,7 @@
                     <th>数据集</th>
                     <th>周期</th>
                     <th>最新K线</th>
+                    <th title="此刻按交易日历应已收线的最新一根">预期K线</th>
                     <th>到达延迟</th>
                     <th>允许迟到</th>
                     <th>状态</th>
@@ -202,7 +203,7 @@
                 </thead>
                 <tbody v-for="group in datasetGroups" :key="group.id" :aria-label="group.label">
                   <tr class="group-row">
-                    <th colspan="6">
+                    <th colspan="7">
                       {{ group.label }}<small>{{ group.summary }}</small>
                     </th>
                   </tr>
@@ -212,6 +213,7 @@
                     </td>
                     <td>{{ row.freq }}</td>
                     <td>{{ row.latest }}</td>
+                    <td class="expected" :class="`is-${row.expectedTone}`" :title="row.expectedTitle">{{ row.expected }}</td>
                     <td class="lag" :class="`is-${row.delayTone}`" :title="row.delayTitle">{{ row.delay }}</td>
                     <td>{{ row.limit }}</td>
                     <td class="status-cell">{{ row.attention ? row.reason || row.status : row.status }}</td>
@@ -1184,12 +1186,17 @@ th {
 td small {
   margin-left: 8px;
 }
+// 预期K线与到达情况：正常、待上报用正文色，迟到或过期用状态色加粗。
 .dataset-table .lag.is-ok,
-.dataset-table .lag.is-idle {
+.dataset-table .lag.is-idle,
+.dataset-table .expected.is-ok,
+.dataset-table .expected.is-idle {
   color: var(--color-text-1);
 }
 .dataset-table .lag.is-warn,
-.dataset-table .lag.is-bad {
+.dataset-table .lag.is-bad,
+.dataset-table .expected.is-warn,
+.dataset-table .expected.is-bad {
   color: var(--tone);
   font-weight: 600;
 }

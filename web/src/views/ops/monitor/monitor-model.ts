@@ -8,6 +8,7 @@ import type {
   HealthOverview
 } from "@/api/monitor";
 import {
+  clockTime,
   humanizeDuration,
   prettifyIds,
   relativeTime,
@@ -86,6 +87,9 @@ function datasetFacts(dataset: HealthDataset | undefined, nowMs: number): Fact[]
   if (!dataset) return [];
   const facts: Fact[] = [];
   if (dataset.output_watermark_at) facts.push({ label: "最新K线", value: shortTime(dataset.output_watermark_at, nowMs) });
+  if (Number(dataset.waiting_bars) > 0 && dataset.expected_bar_at) {
+    facts.push({ label: "预期K线", value: shortTime(dataset.expected_bar_at, nowMs) });
+  }
   const delay = barDelay(dataset, nowMs);
   if (delay.text !== "—") facts.push({ label: "到达", value: delay.text });
   const limit = toSeconds(dataset.lateness_limit_seconds);
@@ -95,9 +99,9 @@ function datasetFacts(dataset: HealthDataset | undefined, nowMs: number): Fact[]
 }
 
 export interface BarDelay {
-  /** 准时或迟到：“延迟 5 秒”；还没到：“等待中，已过收线 3 分钟”；无法按日历判断：原因。 */
+  /** 已到：“延迟 5 秒”；还没收到：“等待中，已晚 20 秒”，判为过期后“未到，已晚 3 分钟”；无法按日历判断：原因。 */
   text: string;
-  /** 等待超过允许迟到为红；已到但延迟超过允许迟到为橙（当前状态仍正常）。 */
+  /** 过期为红；已晚超过允许迟到但还没被上报确认、或已到但延迟超过允许迟到为橙。 */
   tone: Tone;
   /** 悬停说明：收线、到达时刻等。 */
   title: string;
@@ -106,8 +110,9 @@ export interface BarDelay {
 }
 
 /**
- * 最新一根 K 线的到达情况。延迟 = 到达 − 收线，在到达那一刻定值；还没到的那根从收线起按页面时钟持续计时。
- * 不用“当前时间 − 最新 K 线时间”：休市、午休、节假日由后端按交易日历排除。
+ * 到达情况：最新一根已是预期 K 线（此刻应已收线的最新一根）时显示它的延迟（到达 − 收线，在到达那一刻定值）；
+ * 还没收到时显示应到的那根已晚多久（当前时间 − 应到时间，按服务端时钟）。生产者每 30 秒上报一次，已晚超过允许迟到后
+ * 要等下一次上报确认，后端判为过期才标红。不用“当前时间 − 最新 K 线时间”：休市、午休、节假日由后端按交易日历排除。
  */
 export function barDelay(item: HealthDataset, nowMs: number): BarDelay {
   const limit = toSeconds(item.lateness_limit_seconds) || 0;
@@ -125,10 +130,15 @@ export function barDelay(item: HealthDataset, nowMs: number): BarDelay {
     const since = toMillis(item.waiting_since);
     const overdue = since === null ? toSeconds(item.overdue_seconds) || 0 : Math.max(0, Math.floor((nowMs - since) / 1000));
     const missing = waiting > 1 ? `（缺 ${waiting} 根）` : "";
+    const overLimit = limit > 0 && overdue > limit;
+    // 只认后端的确认：生产者的上报里它已晚超过允许迟到仍没有。数据集因别的原因降级（例如数据积累中）不算。
+    const confirmed = Boolean(item.late_confirmed);
+    const pending =
+      overLimit && !confirmed ? `已超过允许迟到 ${humanizeDuration(limit)}，等生产者下次上报确认（每 30 秒上报一次）` : "";
     return {
-      text: `等待中，已过收线 ${humanizeDuration(overdue)}${missing}`,
-      tone: limit && overdue > limit ? "bad" : "ok",
-      title: [`${shortTime(item.waiting_since, nowMs)} 收线的那根还没到`, arrivedNote].filter(Boolean).join("；"),
+      text: `${confirmed ? "未到" : "等待中"}，已晚 ${humanizeDuration(overdue)}${missing}`,
+      tone: confirmed ? "bad" : overLimit ? "warn" : "ok",
+      title: [`${clockTime(item.waiting_since, nowMs)} 收线的那根还没收到`, pending, arrivedNote].filter(Boolean).join("；"),
       ratio: ratioOf(overdue)
     };
   }
@@ -144,6 +154,30 @@ export function barDelay(item: HealthDataset, nowMs: number): BarDelay {
   // 已按交易日历识别出最新一根、只是生产者没上报到达时间时说明原因；没有交易日历的系统数据（mooxsys）不判断到达延迟，不提示。
   if (item.latest_bar_close_at) return { text: "—", tone: "idle", title: "生产者没有上报到达时间", ratio: 0 };
   return { text: "—", tone: "idle", title: "", ratio: 0 };
+}
+
+export interface ExpectedBar {
+  /** 预期 K 线的开盘时间（与“最新K线”同一口径）；无法按交易日历判断时为“—”。 */
+  text: string;
+  /** 已到为 ok；还没到时与到达情况同色；还没有任何产出为 idle。 */
+  tone: Tone;
+  /** 悬停说明：收线时间、最晚应到时间、是否已到。 */
+  title: string;
+}
+
+/** 预期 K 线：此刻按交易日历应已收线的最新一根；最新 K 线就是它即已到。 */
+export function expectedBar(item: HealthDataset, delay: BarDelay, nowMs: number): ExpectedBar {
+  if (!item.expected_bar_at) return { text: "—", tone: "idle", title: "" };
+  const text = shortTime(item.expected_bar_at, nowMs);
+  const closeMs = toMillis(item.expected_bar_close_at);
+  const limit = toSeconds(item.lateness_limit_seconds) || 0;
+  const closing = closeMs === null ? "" : ` ${clockTime(item.expected_bar_close_at, nowMs)} 收线`;
+  const deadline = closeMs === null || !limit ? "" : `，应在 ${clockTime(iso(closeMs + limit * 1000), nowMs)} 前到达`;
+  if (Number(item.waiting_bars) > 0) {
+    return { text, tone: delay.tone, title: `${text} 那根${closing}${deadline}，还没收到` };
+  }
+  if (!item.output_watermark_at) return { text, tone: "idle", title: `${text} 那根${closing}；数据集还没有任何产出` };
+  return { text, tone: "ok", title: `${text} 那根${closing}，已到` };
 }
 
 function alertLine(alert: HealthAlert, names: NameBook, nowMs: number): AlertLine {
@@ -513,7 +547,11 @@ export interface DatasetRow {
   freq: string;
   /** 最新一根 K 线的开盘时间。 */
   latest: string;
-  /** 最新一根的到达情况，见 barDelay。 */
+  /** 预期 K 线（此刻应已收线的最新一根）的开盘时间，见 expectedBar。 */
+  expected: string;
+  expectedTone: Tone;
+  expectedTitle: string;
+  /** 到达情况，见 barDelay。 */
   delay: string;
   delayTone: Tone;
   delayTitle: string;
@@ -543,6 +581,7 @@ function datasetRow(item: HealthDataset, names: NameBook, nowMs: number): Datase
   const cls = classify(item.status);
   const limit = toSeconds(item.lateness_limit_seconds);
   const delay = barDelay(item, nowMs);
+  const expected = expectedBar(item, delay, nowMs);
   return {
     key: `${item.producer}/${item.space_id}/${id}/${item.freq}`,
     name: item.display_name || names.datasets[id] || names.views[id] || id,
@@ -550,6 +589,9 @@ function datasetRow(item: HealthDataset, names: NameBook, nowMs: number): Datase
     spaceId: item.space_id || "",
     freq: item.freq || "",
     latest: shortTime(item.output_watermark_at, nowMs),
+    expected: expected.text,
+    expectedTone: expected.tone,
+    expectedTitle: expected.title,
     delay: delay.text,
     delayTone: delay.tone,
     delayTitle: delay.title,
@@ -562,7 +604,7 @@ function datasetRow(item: HealthDataset, names: NameBook, nowMs: number): Datase
   };
 }
 
-/** 数据链路：采集 → 入库 → 视图 → 因子 → 策略计算 → 交易；每个数据集最新一根 K 线的到达延迟，需要关注、等得久的在前。 */
+/** 数据链路：采集 → 入库 → 视图 → 因子 → 策略计算 → 交易；每个数据集的最新 K 线、预期 K 线与到达情况，需要关注、等得久的在前。 */
 export function pipelineStages(
   overview: HealthOverview | undefined,
   names: NameBook,

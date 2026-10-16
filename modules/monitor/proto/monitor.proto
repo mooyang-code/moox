@@ -107,14 +107,22 @@ message HealthDataset {
   string arrived_at = 15;
   int64 delay_seconds = 16;
   bool delay_known = 17;
-  // 此刻应已收线却还没到的根数；waiting_since 是其中最早一根的收线时间，overdue_seconds 是它已过收线多久（持续增长）。
+  // 此刻应已收线却还没到的根数；waiting_since 是其中最早一根的收线时间（应到时间），overdue_seconds 是它已晚多久
+  // （当前时间 − 应到时间，持续增长）。
   int32 waiting_bars = 18;
   string waiting_since = 19;
   int64 overdue_seconds = 20;
-  // 允许迟到的秒数：等待超过它判为过期并告警；已到的根延迟超过它只标为迟到，不影响当前状态。
+  // 允许迟到的秒数：生产者的上报确认应到的那根超过它仍未到时判为过期并告警（生产者每 30 秒上报一次，最多晚一次上报才判定）；
+  // 已到的根延迟超过它只标为迟到，不影响当前状态。
   int64 lateness_limit_seconds = 21;
   // 无法按交易日历判断的原因，例如“日历未覆盖”“周期对齐未确认”；为空表示已按日历判断。
   string clock_issue = 22;
+  // 预期 K 线：按市场交易日历此刻应已收线的最新一根。expected_bar_at 是它的 data_time（开盘时间，与 output_watermark_at 同一口径，
+  // 两者相同即已到），expected_bar_close_at 是收线时间；无法按交易日历判断时为空。
+  string expected_bar_at = 23;
+  string expected_bar_close_at = 24;
+  // 应到的那根已由生产者的上报确认迟到：上报那一刻它已晚超过允许迟到仍没有，数据集据此判为过期并告警。
+  bool late_confirmed = 25;
 }
 message HealthPipelineStage {
   string id = 1;

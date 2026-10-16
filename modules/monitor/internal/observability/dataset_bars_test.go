@@ -183,3 +183,99 @@ func TestSpaceClocksPreferTheExchangeCalendar(t *testing.T) {
 	require.Zero(t, system.WaitingBars)
 	require.Empty(t, (Builder{}).spaceClocks(t.Context(), time.Now()))
 }
+
+// 生产者每 30 秒上报一次（整分与半分对齐）：预期 K 线收线后，要等生产者下一次上报才知道它到没到。
+// 已晚多久按当前时间算；上报那一刻它已晚超过允许迟到仍没有，才判为过期。
+func TestExpectedBarIsJudgedByTheProducerReport(t *testing.T) {
+	key := datasetKey{producer: "storage", spaceID: "crypto", datasetID: "dataset_crypto_kline_1m", freq: "1m"}
+	policy := testRealtimePolicy()
+	policy.Defaults.MinuteLateness = 30 * time.Second
+	at := func(clock string) time.Time {
+		value, err := time.Parse("2006-01-02 15:04:05.000", "2026-10-16 "+clock)
+		require.NoError(t, err)
+		return value
+	}
+	latest := at("18:54:00.000") // 18:55 收线，18:55:01 写完
+	run := func(now, reportedAt time.Time) DatasetFrequencyStatus {
+		value := healthyRun(now, latest, at("18:55:01.000"))
+		value.reportedAt, value.confirmedAt = reportedAt, reportedAt
+		return datasetStatus(now, key, value, policy, cryptoClock)
+	}
+
+	// 18:55:40：应收的就是 18:54 那根，已到，预期 K 线与最新 K 线相同。
+	arrived := run(at("18:55:40.000"), at("18:55:30.002"))
+	require.Equal(t, "healthy", arrived.Status, arrived.Reason)
+	require.True(t, arrived.ExpectedBarAt.Equal(latest))
+	require.True(t, arrived.ExpectedBarClose.Equal(at("18:55:00.000")))
+	require.Zero(t, arrived.WaitingBars)
+
+	// 18:56:25：预期 K 线变成 18:55 那根（18:56 收线），18:56:00.002 的上报里还没有它，已晚 25 秒，在允许迟到之内。
+	waiting := run(at("18:56:25.000"), at("18:56:00.002"))
+	require.Equal(t, "healthy", waiting.Status, waiting.Reason)
+	require.False(t, waiting.LateConfirmed)
+	require.True(t, waiting.ExpectedBarAt.Equal(at("18:55:00.000")))
+	require.Equal(t, 1, waiting.WaitingBars)
+	require.True(t, waiting.WaitingSince.Equal(at("18:56:00.000")))
+	require.EqualValues(t, 25, waiting.OverdueSeconds)
+	require.EqualValues(t, 1, waiting.DelaySeconds, "上一根的延迟照常保留")
+
+	// 18:56:30.500：已晚 30.5 秒超过允许迟到，但 18:56:30 那次上报还没处理到（最近一次仍是 18:56:00），不能判过期——
+	// 它可能早已写完，只是还没上报。
+	beforeReport := run(at("18:56:30.500"), at("18:56:00.002"))
+	require.Equal(t, "healthy", beforeReport.Status, beforeReport.Reason)
+	require.EqualValues(t, 30, beforeReport.OverdueSeconds)
+	require.False(t, beforeReport.LateConfirmed)
+
+	// 超过 1 分钟没有新上报（漏报或停止上报）：不能再按上报时刻判断，按当前时间算，已晚 45 秒判过期。
+	missed := run(at("18:56:45.000"), at("18:55:30.002"))
+	require.Equal(t, "stale", missed.Status)
+	require.True(t, missed.LateConfirmed)
+
+	// 18:56:30.002 的上报里仍没有：确认时已晚 30.002 秒，超过允许迟到 30 秒，判为过期并告警。
+	stale := run(at("18:56:31.000"), at("18:56:30.002"))
+	require.Equal(t, "stale", stale.Status)
+	require.True(t, stale.LateConfirmed)
+	require.True(t, strings.HasPrefix(stale.Reason, "等待中：10-17 02:56 收线的那根已晚 31 秒 仍未到（缺 1 根，允许迟到 30 秒）"), stale.Reason)
+
+	// 继续没到：18:56 那根也已收线，预期 K 线跟着前进，缺 2 根，已晚从最早缺的那根算。
+	later := run(at("18:57:05.000"), at("18:57:00.002"))
+	require.Equal(t, "stale", later.Status)
+	require.Equal(t, 2, later.WaitingBars)
+	require.True(t, later.ExpectedBarAt.Equal(at("18:56:00.000")))
+	require.EqualValues(t, 65, later.OverdueSeconds)
+
+	// 生产者时钟比 Monitor 快：上报时刻晚于当前时间时按当前时间算。
+	require.Equal(t, "stale", run(at("18:57:05.000"), at("18:57:30.000")).Status)
+}
+
+// 没有产出时也给出预期 K 线；无法按交易日历判断时不给。
+func TestExpectedBarWithoutOutputAndWithoutCalendar(t *testing.T) {
+	key := datasetKey{producer: "storage", spaceID: "crypto", datasetID: "dataset_crypto_kline_1h", freq: "1h"}
+	now := time.Date(2026, 10, 16, 18, 56, 0, 0, time.UTC)
+	empty := datasetStatus(now, key, healthyRun(now, time.Time{}, time.Time{}), testRealtimePolicy(), cryptoClock)
+	require.True(t, empty.ExpectedBarAt.Equal(time.Date(2026, 10, 16, 17, 0, 0, 0, time.UTC)), "18:56 应收的 1h 是 17:00 那根")
+	require.True(t, empty.ExpectedBarClose.Equal(time.Date(2026, 10, 16, 18, 0, 0, 0, time.UTC)))
+	require.Zero(t, empty.WaitingBars)
+
+	system := datasetStatus(now, key, healthyRun(now, now.Add(-2*time.Hour), now), testRealtimePolicy(), spaceClock{err: monmetrics.ErrNoTradingCalendar})
+	require.True(t, system.ExpectedBarAt.IsZero())
+	require.True(t, system.ExpectedBarClose.IsZero())
+}
+
+func TestConfirmedUntilUsesTheEarliestReportingInstance(t *testing.T) {
+	base := time.Date(2026, 10, 16, 18, 56, 0, 0, time.UTC)
+	fresh := func(offset time.Duration) datasetValues {
+		return datasetValues{reportedAt: base.Add(offset), confirmedAt: base.Add(offset)}
+	}
+	stopped := datasetValues{reportedAt: base.Add(-10 * time.Minute), confirmedAt: base.Add(-10 * time.Minute), reporterStale: true}
+
+	// 两个实例都在上报：最新一根取最大值，要到较早上报的那个实例也上报过才能确认未到。
+	require.True(t, confirmedUntil(fresh(20*time.Second), fresh(5*time.Second)).Equal(base.Add(5*time.Second)))
+	require.True(t, confirmedUntil(fresh(5*time.Second), fresh(20*time.Second)).Equal(base.Add(5*time.Second)))
+	// 已停止上报的实例不拖住确认，先并入哪个都一样。
+	require.True(t, confirmedUntil(fresh(0), stopped).Equal(base))
+	require.True(t, confirmedUntil(stopped, fresh(0)).Equal(base))
+	// 没有上报时间的实例不参与。
+	require.True(t, confirmedUntil(fresh(0), datasetValues{}).Equal(base))
+	require.True(t, confirmedUntil(datasetValues{}, fresh(0)).Equal(base))
+}

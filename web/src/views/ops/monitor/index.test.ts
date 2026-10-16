@@ -7,6 +7,7 @@ import { callControl } from "@/api/admin/http";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
 import { listAllDatasets } from "@/api/storage/metadata";
 import { useUserInfoStore } from "@/store/modules/user-info";
+import { shortTime } from "@/views/home/home-model";
 import HealthMonitor from "./index.vue";
 
 vi.mock("@/api/admin/http", () => ({ callControl: vi.fn() }));
@@ -206,8 +207,11 @@ describe("monitor page", () => {
               status: "stale",
               reason: "最近成功结果已过期",
               output_watermark_at: "2026-10-16T02:40:00Z",
+              expected_bar_at: "2026-10-16T02:59:00Z",
+              expected_bar_close_at: "2026-10-16T03:00:00Z",
               waiting_bars: 19,
               waiting_since: "2026-10-16T02:42:00Z",
+              late_confirmed: true,
               lateness_limit_seconds: "600"
             },
             {
@@ -236,7 +240,9 @@ describe("monitor page", () => {
     expect(rows[0].text()).toContain("现货分钟K线");
     expect(rows[0].text()).toContain("最近成功结果已过期");
     expect(rows[0].find(".lag").classes()).toContain("is-bad");
-    expect(rows[0].find(".lag").text()).toBe("等待中，已过收线 18 分钟（缺 19 根）");
+    expect(rows[0].find(".lag").text()).toBe("未到，已晚 18 分钟（缺 19 根）");
+    expect(rows[0].find(".expected").classes()).toContain("is-bad");
+    expect(rows[0].find(".expected").text()).toBe(shortTime("2026-10-16T02:59:00Z", Date.parse(generated)));
     expect(vi.mocked(listAllDatasets)).toHaveBeenCalledWith("crypto", { spaceId: "crypto" });
     await page.find('[aria-label="数据链路"] .link-button').trigger("click");
     expect(page.findAll(".dataset-table tr.dataset-row")).toHaveLength(2);

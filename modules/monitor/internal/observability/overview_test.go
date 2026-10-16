@@ -678,6 +678,31 @@ func TestBuilderReportsStorageViewWatermarkAsIndependentDataset(t *testing.T) {
 	if !row.DelayKnown || row.DelaySeconds != 4 {
 		t.Fatalf("storage view arrival = %+v", row)
 	}
+	if !row.LateConfirmed || !row.ExpectedBarAt.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("storage view expected bar = %+v", row)
+	}
+}
+
+// 水位是生产者在上报那一刻的快照：预期 K 线在那次上报之后才收线，还不知道它是否已到，不判过期。
+func TestBuilderDoesNotCountBarsClosedAfterTheLastReport(t *testing.T) {
+	// 指标目录按真实时钟判断上报是否中断，所以用当前时间：整分 + 40 秒，上一次上报在整分前 5 秒。
+	minute := time.Now().UTC().Truncate(time.Minute)
+	now, reported := minute.Add(40*time.Second), minute.Add(-5*time.Second)
+	labels := `{"freq":"1m","space_id":"crypto","view_id":"view_crypto_kline_1m"}`
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		seedOverviewMetricForInstance(t, db, "view-watermark", "storage-view", "storage-view@control", "moox_storage_view_output_watermark_timestamp_seconds", labels, float64(minute.Add(-2*time.Minute).Unix()), reported)
+	})
+	policy := testRealtimePolicy()
+	policy.Defaults.MinuteLateness = 30 * time.Second
+	got, err := (Builder{Metrics: query, Inventory: cryptoInventory, Now: func() time.Time { return now }, Policy: policy}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.Datasets, 1)
+	row := got.Datasets[0]
+	require.Equal(t, "healthy", row.Status, row.Reason)
+	require.Equal(t, 1, row.WaitingBars)
+	require.EqualValues(t, 40, row.OverdueSeconds, "已晚按当前时间算，超过允许迟到但还没有收线后的上报，不判过期")
+	require.False(t, row.LateConfirmed)
+	require.True(t, row.ExpectedBarAt.Equal(minute.Add(-time.Minute)))
 }
 
 func TestBuilderAggregatesDatasetInstances(t *testing.T) {

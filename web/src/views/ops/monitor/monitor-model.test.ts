@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { HealthOverview } from "@/api/monitor";
+import { shortTime } from "@/views/home/home-model";
 import {
   alertGroups,
+  barDelay,
   businessKinds,
+  expectedBar,
   capacityText,
   componentsByHost,
   hostCards,
@@ -48,8 +51,11 @@ describe("current alerts", () => {
           status: "stale",
           output_watermark_at: at(60),
           latest_bar_close_at: at(59),
+          expected_bar_at: at(1),
+          expected_bar_close_at: at(0),
           waiting_bars: 58,
           waiting_since: at(58),
+          late_confirmed: true,
           lateness_limit_seconds: "180"
         }
       }
@@ -71,7 +77,8 @@ describe("current alerts", () => {
     expect(line.recovering).toBe(true);
     expect(line.facts).toEqual(
       expect.arrayContaining([
-        { label: "到达", value: "等待中，已过收线 58 分钟（缺 58 根）" },
+        { label: "预期K线", value: shortTime(at(1), now) },
+        { label: "到达", value: "未到，已晚 58 分钟（缺 58 根）" },
         { label: "允许迟到", value: "3 分钟" }
       ])
     );
@@ -258,6 +265,7 @@ describe("layers", () => {
                 output_watermark_at: at(15),
                 waiting_bars: 3,
                 waiting_since: at(12),
+                late_confirmed: true,
                 overdue_seconds: "700",
                 lateness_limit_seconds: "600"
               },
@@ -285,8 +293,8 @@ describe("layers", () => {
       ["交易", 0, "未部署"]
     ]);
     expect(stages[1].rows.map(row => [row.name, row.delay, row.delayTone, row.attention])).toEqual([
-      // 还没到：从收线起按页面时钟计时，超过允许迟到为红。
-      ["dataset_wait", "等待中，已过收线 12 分钟（缺 3 根）", "bad", true],
+      // 判为过期：从应到时间起按服务端时钟计时，标红。
+      ["dataset_wait", "未到，已晚 12 分钟（缺 3 根）", "bad", true],
       ["dataset_cal", "日历未覆盖：2027-01-04", "bad", true],
       // 迟到但已到：标橙，当前状态仍正常。
       ["dataset_late", "延迟 40 分钟", "warn", false],
@@ -442,5 +450,65 @@ describe("layers", () => {
     );
     expect(stages.map(stage => stage.label)).toEqual(["因子", "策略计算", "交易"]);
     expect(stages[1].rows[0]).toMatchObject({ name: "binance_spot_momentum（26d51f7e）", producer: "策略" });
+  });
+});
+
+describe("expected bar", () => {
+  // 1m 数据集：最新一根 02:58 开盘（02:59 收线）、准时到达；预期 K 线是 02:59 那根（03:00 收线），允许迟到 30 秒。
+  const base = {
+    producer: "storage",
+    space_id: "crypto",
+    dataset_id: "dataset_abc",
+    freq: "1m",
+    status: "healthy",
+    output_watermark_at: at(2),
+    latest_bar_close_at: at(1),
+    arrived_at: at(1, 1),
+    delay_known: true,
+    delay_seconds: "1",
+    lateness_limit_seconds: "30"
+  };
+  const waiting = { ...base, expected_bar_at: at(1), expected_bar_close_at: at(0), waiting_bars: 1, waiting_since: at(0) };
+  const later = (seconds: number) => now + seconds * 1000;
+
+  it("shows the expected bar next to the latest one once it has arrived", () => {
+    const arrived = { ...base, expected_bar_at: at(2), expected_bar_close_at: at(1) };
+    const delay = barDelay(arrived, now);
+    expect(delay).toMatchObject({ text: "延迟 1 秒", tone: "ok" });
+    const expected = expectedBar(arrived, delay, now);
+    expect(expected.text).toBe(shortTime(at(2), now));
+    expect(expected.tone).toBe("ok");
+    expect(expected.title).toContain("已到");
+    expect(expectedBar({ ...base }, delay, now)).toEqual({ text: "—", tone: "idle", title: "" });
+    // 还没有任何产出：不写“已到”。
+    const empty = { ...base, output_watermark_at: undefined, expected_bar_at: at(2), expected_bar_close_at: at(1) };
+    expect(expectedBar(empty, barDelay(empty, now), now)).toMatchObject({ tone: "idle" });
+    expect(expectedBar(empty, barDelay(empty, now), now).title).toContain("还没有任何产出");
+  });
+
+  it("counts the bar that should have arrived from its due time", () => {
+    // 允许迟到之内：等待中，按正文色显示。
+    const delay = barDelay(waiting, later(25));
+    expect(delay).toMatchObject({ text: "等待中，已晚 25 秒", tone: "ok" });
+    expect(delay.title).toContain("还没收到");
+    expect(delay.title).toContain("上一根");
+    const expected = expectedBar(waiting, delay, later(25));
+    expect(expected).toMatchObject({ text: shortTime(at(1), now), tone: "ok" });
+    expect(expected.title).toContain("应在");
+    expect(expected.title).toContain("还没收到");
+    // 已晚超过允许迟到、但还没被上报确认（后端仍判正常）：标橙，等下次上报确认。
+    const pending = barDelay(waiting, later(45));
+    expect(pending).toMatchObject({ text: "等待中，已晚 45 秒", tone: "warn", ratio: 1.5 });
+    expect(pending.title).toContain("等生产者下次上报确认");
+    // 上报确认已晚超过允许迟到（后端判为过期，概览里投影为 degraded）：标红，写“未到”。
+    const confirmed = { ...waiting, status: "degraded" as const, late_confirmed: true, waiting_bars: 2 };
+    const stale = barDelay(confirmed, later(65));
+    expect(stale).toMatchObject({ text: "未到，已晚 1 分钟（缺 2 根）", tone: "bad" });
+    expect(stale.title).not.toContain("等生产者下次上报确认");
+    expect(expectedBar(confirmed, stale, later(65)).tone).toBe("bad");
+    // 数据集因别的原因降级（例如数据积累中），后端没有确认迟到：不标红。
+    const warming = { ...waiting, status: "degraded" as const, reason: "数据积累中，结果暂不完整" };
+    expect(barDelay(warming, later(10)).tone).toBe("ok");
+    expect(barDelay(warming, later(45))).toMatchObject({ text: "等待中，已晚 45 秒", tone: "warn" });
   });
 });

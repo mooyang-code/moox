@@ -49,18 +49,28 @@ type barFacts struct {
 	// delay 是最新一根的到达时间 − 收线时间，在到达那一刻定值，之后不随当前时间增长。
 	delay      time.Duration
 	delayKnown bool
-	// waiting 是应收却还没到的根数，waitingSince 是其中最早一根的收线时间，overdue 是它已过收线多久（持续增长）。
+	// expected 是预期 K 线：此刻应已收线的最新一根。
+	expected monmetrics.Bar
+	// waiting 是应收却还没到的根数，waitingSince 是其中最早一根的收线时间（应到时间），overdue 是它已晚多久（当前时间 − 应到时间）。
 	waiting      int
 	waitingSince time.Time
 	overdue      time.Duration
+	// confirmed 表示生产者在应到时间之后上报过、上报里仍没有这根；confirmedOverdue 是那次上报时它已晚多久。
+	confirmed        bool
+	confirmedOverdue time.Duration
 	// issue 说明无法按交易日历判断的原因。
 	issue error
 }
 
 // evaluateBars 用市场时钟识别输出水位对应的那一根（水位是 K 线在存储里的 data_time，即开盘时间），
-// 算出它的收线时间与到达延迟，并和此刻应已收线的最新一根比较，数出还在等待的根数。
+// 算出它的收线时间与到达延迟，并和此刻应已收线的最新一根（预期 K 线）比较，数出还在等待的根数。
 // 不使用“当前时间 − 最新 K 线时间”：休市、午休、节假日不会被当作落后。
-func evaluateBars(sc spaceClock, freqRaw string, output, arrival, now time.Time) barFacts {
+//
+// confirmedAt 是生产者最近一次上报快照的时刻（Monitor 只能看到这一刻的输出水位）。生产者每 30 秒上报一次，
+// 一根准时写完的 K 线最长要等 30 秒才出现在 Monitor 里：overdue 按当前时间算，用于展示；判过期看 confirmedOverdue——
+// 上报那一刻它已晚超过允许迟到仍没有，才算确认迟到，不会把还没来得及上报的准时 K 线判成过期。
+// confirmedAt 为零、晚于 now（时钟偏差）或超过 monmetrics.ReportSnapshotGrace 没有新上报时按 now 处理。
+func evaluateBars(sc spaceClock, freqRaw string, output, arrival, confirmedAt, now time.Time) barFacts {
 	facts := barFacts{}
 	if sc.err != nil {
 		facts.issue = sc.err
@@ -76,6 +86,7 @@ func evaluateBars(sc spaceClock, freqRaw string, output, arrival, now time.Time)
 		facts.issue = err
 		return facts
 	}
+	facts.expected = expected
 	if output.IsZero() {
 		return facts
 	}
@@ -97,6 +108,10 @@ func evaluateBars(sc spaceClock, freqRaw string, output, arrival, now time.Time)
 		}
 		facts.waiting, facts.waitingSince = count, first.Close
 		facts.overdue = max(now.Sub(first.Close), 0)
+		confirmedAt = monmetrics.SnapshotTime(confirmedAt, now)
+		if !confirmedAt.Before(first.Close) {
+			facts.confirmed, facts.confirmedOverdue = true, confirmedAt.Sub(first.Close)
+		}
 	}
 	return facts
 }
@@ -116,9 +131,9 @@ func clockIssueText(err error) string {
 	}
 }
 
-// waitingReason 说明还没到的最新一根：哪一根、已过收线多久、缺几根、允许迟到多久。
+// waitingReason 说明还没到的那根：哪一根、已晚多久、缺几根、允许迟到多久。
 func waitingReason(item DatasetFrequencyStatus) string {
-	return fmt.Sprintf("等待中：%s 收线的那根已过收线 %s 仍未到（缺 %d 根，允许迟到 %s）",
+	return fmt.Sprintf("等待中：%s 收线的那根已晚 %s 仍未到（缺 %d 根，允许迟到 %s）",
 		alerttext.Time(item.WaitingSince), alerttext.Duration(time.Duration(item.OverdueSeconds)*time.Second),
 		item.WaitingBars, alerttext.Duration(time.Duration(item.LatenessLimitSeconds)*time.Second))
 }
