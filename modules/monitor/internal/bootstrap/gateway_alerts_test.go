@@ -31,14 +31,18 @@ func TestGatewayAlertsFreezeDuringUncertaintyAndRetireWhenHostDisabled(t *testin
 	builder := &observability.Builder{Checks: repos.Checks, Results: repos.Results, Gateways: repos.Gateways, Now: func() time.Time { return now }}
 	runtime := &Runtime{Repositories: repos}
 	run := buildBusinessFreshnessReporter(builder, repos, monitorResultHook(runtime))
-	require.NoError(t, run(t.Context()))
+	// 外部检查持续失败满宽限时间才告警
+	samples := externalFailureThreshold(30)
+	for range samples {
+		require.NoError(t, run(t.Context()))
+	}
 	id := "gateway:control:status" // 三项网关信号合并成一条检查
 	state, err := repos.Alerts.GetState(t.Context(), monmetrics.InternalMetricSpaceID, "default:"+id, id)
 	require.NoError(t, err)
 	require.Equal(t, domain.AlertStatusFiring, state.Status)
 	results, err := repos.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, id, 10)
 	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.Len(t, results, samples)
 	require.Contains(t, results[0].RawError, "conflict_instance_id=old")
 
 	failed := domain.GatewayObservation{HostID: "control", ReadError: "GetHostRoutes unavailable", HostEnabledAt: row.HostEnabledAt}
@@ -49,7 +53,7 @@ func TestGatewayAlertsFreezeDuringUncertaintyAndRetireWhenHostDisabled(t *testin
 	require.Equal(t, domain.AlertStatusFiring, state.Status, "unknown gateway status cannot resolve an existing conflict")
 	results, err = repos.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, id, 10)
 	require.NoError(t, err)
-	require.Len(t, results, 1, "unknown status cannot synthesize a healthy probe")
+	require.Len(t, results, samples, "unknown status cannot synthesize a healthy probe")
 
 	require.NoError(t, repos.Gateways.Reconcile(t.Context(), nil, now.Add(2*time.Second)))
 	require.NoError(t, run(t.Context()))
@@ -91,7 +95,9 @@ func TestGatewayAlertsMigrateLegacyPerSignalChecks(t *testing.T) {
 	require.NoError(t, repos.Gateways.Reconcile(t.Context(), []domain.GatewayObservation{row}, now))
 	builder := &observability.Builder{Checks: repos.Checks, Results: repos.Results, Gateways: repos.Gateways, Now: func() time.Time { return now }}
 	run := buildBusinessFreshnessReporter(builder, repos, monitorResultHook(&Runtime{Repositories: repos}))
-	require.NoError(t, run(t.Context()))
+	for range externalFailureThreshold(30) {
+		require.NoError(t, run(t.Context()))
+	}
 
 	for _, kind := range []string{"heartbeat", "instance_conflict", "route_sync"} {
 		id := "gateway:control:" + kind

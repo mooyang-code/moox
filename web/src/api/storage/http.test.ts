@@ -48,4 +48,15 @@ describe("Storage HTTP facade", () => {
     await callStorage("ListDataSources", req);
     expect(mocks.post).toHaveBeenCalledTimes(3);
   });
+
+  it("sends an explicit space header only when the caller names a space", async () => {
+    await callStorage("ListDatasets", { space_id: "other-space" }, { spaceId: "other-space" });
+    expect(mocks.post).toHaveBeenLastCalledWith(
+      "/api/admin/storage/ListDatasets",
+      expect.objectContaining({ space_id: "other-space" }),
+      { headers: { "X-Space-Id": "other-space" } }
+    );
+    await callStorage("ListDatasets", { space_id: "selected-space" });
+    expect(mocks.post.mock.lastCall).toHaveLength(2);
+  });
 });

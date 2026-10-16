@@ -2,6 +2,7 @@ package alerting
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
@@ -226,6 +227,11 @@ func (e *Evaluator) recordEvent(ctx context.Context, check domain.Check, result 
 }
 
 func (e *Evaluator) recordEventObject(ctx context.Context, event Event) error {
+	// payload 记录结构化的问题描述，概览按它展示告警经过，不再解析推送正文。
+	payload, err := json.Marshal(map[string]string{"reason": alerttext.Reason(strings.TrimSpace(event.Result.ErrorMessage))})
+	if err != nil {
+		return err
+	}
 	return e.alerts.CreateEvent(ctx, &domain.AlertEvent{
 		EventID:   event.EventID,
 		SpaceID:   event.Rule.SpaceID,
@@ -234,7 +240,7 @@ func (e *Evaluator) recordEventObject(ctx context.Context, event Event) error {
 		EventType: event.EventType,
 		Status:    event.Status,
 		Message:   event.Message,
-		Payload:   "{}",
+		Payload:   string(payload),
 		CreatedAt: e.now(),
 	})
 }

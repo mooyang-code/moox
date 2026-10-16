@@ -45,11 +45,8 @@ vi.mock("@/api/factor", () => ({
   }))
 }));
 vi.mock("@/api/storage/metadata", () => ({
-  listDatasets: vi.fn(async () => ({
-    datasets: [{ dataset_id: "dataset_abc", name: "现货K线", attributes: {} }],
-    page_result: { has_more: false }
-  })),
-  listViews: vi.fn(async () => ({ views: [], page_result: { has_more: false } })),
+  listAllDatasets: vi.fn(async () => [{ dataset_id: "dataset_abc", name: "现货K线", attributes: {} }]),
+  listAllViews: vi.fn(async () => []),
   listDataSources: vi.fn(async () => ({ data_sources: [], page_result: { total: 3 } }))
 }));
 vi.mock("@/api/strategy", () => ({

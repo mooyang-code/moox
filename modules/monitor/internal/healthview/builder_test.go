@@ -41,7 +41,7 @@ func TestOverviewV2MixedFactsSnapshot(t *testing.T) {
 		Datasets:       []observability.DatasetFrequencyStatus{{Producer: "storage", SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Status: "degraded", Reason: "输出水位已落后", LastRunAt: now, LastSuccessAt: now.Add(-time.Minute), InputWatermarkAt: now, OutputWatermarkAt: now.Add(-2 * time.Minute), LastReportedAt: now, LagSeconds: 120}},
 	}
 	view := projectFacts(facts)
-	hostAlert, err := (Builder{}).projectAlert(t.Context(), domain.AlertState{CheckID: "host:PHYSICAL01:cpu", DedupeKey: "host-alert", TriggeredAt: &now, UpdatedAt: now}, facts)
+	hostAlert, err := (Builder{}).projectAlert(t.Context(), domain.AlertState{CheckID: "host:PHYSICAL01:cpu", DedupeKey: "host-alert", TriggeredAt: &now, UpdatedAt: now}, facts, newCheckTitles(nil))
 	require.NoError(t, err)
 	view.Alerts = append(view.Alerts, hostAlert)
 	view.Summary.AlertCount = int32(len(view.Alerts))
@@ -85,8 +85,8 @@ func TestActiveHostAlertsAndRecoveryKeepCauseAndLatestCheckSeparate(t *testing.T
 		require.NoError(t, repos.Alerts.CreateRule(t.Context(), &domain.AlertRule{RuleID: "default:" + id, CheckID: id, Enabled: true}))
 		require.NoError(t, repos.Alerts.UpsertState(t.Context(), &domain.AlertState{RuleID: "default:" + id, CheckID: id, Status: domain.AlertStatusFiring, DedupeKey: id, TriggeredAt: &now, UpdatedAt: now}))
 	}
-	require.NoError(t, repos.Alerts.CreateEvent(t.Context(), &domain.AlertEvent{EventID: "host-alert", RuleID: "default:host:AGENT01:cpu", CheckID: "host:AGENT01:cpu", EventType: domain.AlertEventTriggered, Message: "主机 CPU 使用率超过阈值（95%）", CreatedAt: now}))
-	view, err := (Builder{Results: repos.Results, Alerts: repos.Alerts, Now: func() time.Time { return now }}).Build(t.Context(), "crypto")
+	require.NoError(t, repos.Alerts.CreateEvent(t.Context(), &domain.AlertEvent{EventID: "host-alert", RuleID: "default:host:AGENT01:cpu", CheckID: "host:AGENT01:cpu", EventType: domain.AlertEventTriggered, Message: "状态：新告警\n问题：CPU 使用率 95.0%，超过阈值 80.0%", Payload: `{"agent_id":"AGENT01","metric":"cpu","value":95,"threshold":80}`, CreatedAt: now}))
+	view, err := (Builder{Checks: repos.Checks, Results: repos.Results, Alerts: repos.Alerts, Now: func() time.Time { return now }}).Build(t.Context(), "crypto")
 	require.NoError(t, err)
 	require.Len(t, view.Alerts, 2, "global host/component alerts remain visible when a space is selected")
 	var hostFound bool
@@ -94,12 +94,16 @@ func TestActiveHostAlertsAndRecoveryKeepCauseAndLatestCheckSeparate(t *testing.T
 		if alert.Object.Type == "host" {
 			hostFound = true
 			require.Equal(t, "AGENT01", alert.Object.AgentId)
-			require.Contains(t, alert.Reason, "95%")
+			require.Equal(t, "CPU 使用率 95.0%，超过阈值 80%", alert.Reason, "主机告警原因来自事件的结构化指标值，不是推送正文")
+			require.Equal(t, "warning", alert.Severity)
 		} else {
 			require.Equal(t, "web-host", alert.Object.ComponentId)
 			require.Equal(t, "x509: 原始错误\ncertificate expired", alert.RawError)
 			require.Equal(t, stamp(now.Add(19*time.Second)), alert.LastCheckedAt)
 			require.Equal(t, stamp(now), alert.TriggeredAt)
+			require.True(t, alert.Recovering, "latest probe passed while the alert waits for recovery confirmation")
+			require.Equal(t, "任意名称", alert.Title, "alert titles follow the check name used by notifications")
+			require.Equal(t, "critical", alert.Severity)
 		}
 	}
 	require.True(t, hostFound)

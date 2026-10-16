@@ -30,6 +30,15 @@ func HostRuleKey(agentID, metric string) string {
 	return HostRulePrefix + strings.TrimSpace(agentID) + ":" + strings.TrimSpace(metric)
 }
 
+// PresenceRuleID 是主机失联告警的规则 ID。主机失联由主机注册表的上下线转换驱动，没有阈值规则，
+// 只借用同一套 rule/check 身份把事件写进告警事件表。
+const PresenceRuleID = "default:host-presence"
+
+// PresenceCheckID 返回主机失联告警事件使用的 check_id。
+func PresenceCheckID(agentID string) string {
+	return HostRulePrefix + strings.TrimSpace(agentID) + ":presence"
+}
+
 // ParseHostRuleKey validates and splits a host alert rule key.
 func ParseHostRuleKey(key string) (agentID, metric string, ok bool) {
 	parts := strings.Split(key, ":")

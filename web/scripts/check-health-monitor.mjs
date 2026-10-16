@@ -8,7 +8,7 @@ function readTree(dir) { return fs.readdirSync(dir, { withFileTypes: true }).map
 const all = readTree(path.join(root, "src"));
 const page = read("src/views/ops/monitor/index.vue");
 const api = read("src/api/monitor/index.ts");
-for (const token of ["GetHealthOverview", "GetNotificationChannel", "UpdateNotificationChannel", "当前告警", "组件", "数据链路", "业务检查", "主机", "未登记进程", "topology_known", "summary", "RawError"]) {
+for (const token of ["GetHealthOverview", "GetNotificationChannel", "UpdateNotificationChannel", "当前告警", "组件", "数据链路", "业务检查", "主机", "未登记进程", "topology_known", "incidents", "最近", "RawError"]) {
   if (!page.includes(token) && !api.includes(token)) throw new Error(`health monitor contract missing ${token}`);
 }
 for (const token of ["CreateCheck", "UpdateCheck", "DeleteCheck", "RunCheckOnce", "CreateWebhookChannel", "DeleteWebhookChannel", "CreateAlertRule", "UpdateAlertRule", "DeleteAlertRule", "ListMetricServices", "QueryMetricHistory", "CreateMetricRule", "新增探测", "编辑探测", "手动运行", "新增告警规则", "原始指标名", "序列 ID", "Headers JSON", "Body Template"]) {

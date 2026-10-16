@@ -953,3 +953,20 @@ func TestDatasetStatusReportsWarmingWhilePartialRunsKeepArriving(t *testing.T) {
 	got = datasetStatus(now, key, noPartial, policy)
 	require.Equal(t, "尚无成功运行", got.Reason, "没有部分结果上报时保持原样")
 }
+
+// 检查对象已停用或移除时仍写入通过结果（让既有告警恢复），概览要显示“已停用”，不能算作正常。
+func TestBusinessCheckRetiredResultIsDisabled(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	repos := manager.Repositories()
+	now := time.Now().UTC()
+	checkID := "kline_freshness:stockcn:view_a:1m"
+	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{SpaceID: "stockcn", CheckID: checkID, Name: "A 股分钟K线", Kind: domain.CheckKindExternal, Enabled: true}))
+	require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: "retired", SpaceID: "stockcn", CheckID: checkID, Status: domain.CheckStatusOK, Success: true, ErrorMessage: domain.CheckReasonRetired, CheckedAt: now}))
+	got, err := (Builder{Checks: repos.Checks, Results: repos.Results, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "disabled", got.BusinessChecks[0].Status)
+}

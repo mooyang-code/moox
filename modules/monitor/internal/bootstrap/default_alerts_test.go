@@ -53,14 +53,14 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if canaryRule.FailureThreshold != 1 || canaryRule.SuccessThreshold != 1 {
+	if canaryRule.FailureThreshold != 3 || canaryRule.SuccessThreshold != 1 {
 		t.Fatalf("canary rule = %+v", canaryRule)
 	}
 	klineRule, err := repositories.Alerts.GetRule(ctx, "crypto", "default:kline_freshness:crypto:view:1m")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if klineRule.FailureThreshold != 2 || klineRule.SuccessThreshold != 2 || klineRule.MinimumReminderIntervalSeconds != 300 || !klineRule.SendOnResolved {
+	if klineRule.FailureThreshold != 3 || klineRule.SuccessThreshold != 2 || klineRule.MinimumReminderIntervalSeconds != 300 || !klineRule.SendOnResolved {
 		t.Fatalf("kline rule = %+v", klineRule)
 	}
 }
@@ -208,5 +208,14 @@ func TestEnsureDefaultCheckAlertRulesRotatesPersistedWebhook(t *testing.T) {
 	}
 	if channel.WebhookURL != "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old" {
 		t.Fatalf("seeded global channel was overwritten on restart: %+v", channel)
+	}
+}
+
+// 外部检查持续失败满 60 秒才告警：首次失败之后还要再失败覆盖整个宽限时间。
+func TestExternalFailureThresholdCoversGracePeriod(t *testing.T) {
+	for interval, want := range map[int]int{30: 3, 10: 7, 60: 2, 45: 3, 120: 2, 0: 3} {
+		if got := externalFailureThreshold(interval); got != want {
+			t.Fatalf("externalFailureThreshold(%d) = %d, want %d", interval, got, want)
+		}
 	}
 }

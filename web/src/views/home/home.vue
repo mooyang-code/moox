@@ -266,8 +266,7 @@ import { getNodeList } from "@/api/cloud-node";
 import { listFactorSets } from "@/api/factor";
 import type { FactorSetInfo } from "@/api/factor/types";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
-import { listDataSources, listDatasets, listViews } from "@/api/storage/metadata";
-import type { Dataset, View } from "@/api/storage/types";
+import { listAllDatasets, listAllViews, listDataSources } from "@/api/storage/metadata";
 import { listInstances, listStrategies, listStrategyTargets } from "@/api/strategy";
 import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { listTradingAccounts } from "@/api/trade";
@@ -428,26 +427,6 @@ function go(target: HomeTarget) {
 function stamp() {
   nowMs.value = Date.now();
   updatedAt.value = new Date(nowMs.value).toLocaleTimeString("zh-CN", { hour12: false });
-}
-
-async function listAllDatasets(spaceId: string) {
-  const items: Dataset[] = [];
-  for (let pageNo = 1; pageNo <= 20; pageNo += 1) {
-    const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size: 500 } });
-    items.push(...(rsp.datasets || []));
-    if (!rsp.page_result?.has_more || !(rsp.datasets || []).length) break;
-  }
-  return items;
-}
-
-async function listAllViews(spaceId: string) {
-  const items: View[] = [];
-  for (let pageNo = 1; pageNo <= 20; pageNo += 1) {
-    const rsp = await listViews({ space_id: spaceId, page: { page: pageNo, size: 500 } });
-    items.push(...(rsp.views || []));
-    if (!rsp.page_result?.has_more || !(rsp.views || []).length) break;
-  }
-  return items;
 }
 
 /** 空间范围：数据集 / View 名称、资产数量与策略定义名称。单项失败不影响其它项。 */

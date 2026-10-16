@@ -54,11 +54,13 @@ type DatasetFrequencyStatus struct {
 	InputWatermarkAt, OutputWatermarkAt time.Time
 	LastReportedAt                      time.Time
 	LagSeconds                          int64
+	// LagLimitSeconds 是输出水位允许落后的秒数，超过即判为过期；0 表示没有水位要求。
+	LagLimitSeconds int64
 }
 
 type BusinessStatus struct {
 	SpaceID, Kind, Module, Status, Reason string
-	CheckID, RawError                     string
+	CheckID, RawError, Name               string
 	LastCheckedAt                         time.Time
 }
 
@@ -601,6 +603,7 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		item.LagSeconds = max(int64(0), int64(now.Sub(reference)/time.Second))
 	}
 	runLag, successLag, watermarkLag := datasetTolerances(key, value.interval, policy)
+	item.LagLimitSeconds = int64(watermarkLag / time.Second)
 	inventoryAt := unixTime(value.inventory)
 	switch {
 	case value.reporterStale:
@@ -735,7 +738,7 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 			if kind == "" {
 				continue
 			}
-			item := BusinessStatus{CheckID: check.CheckID, SpaceID: check.SpaceID, Kind: kind, Module: businessModule(check.CheckID), Status: "unknown", Reason: "尚未上报"}
+			item := BusinessStatus{CheckID: check.CheckID, SpaceID: check.SpaceID, Name: check.Name, Kind: kind, Module: businessModule(check.CheckID), Status: "unknown", Reason: "尚未上报"}
 			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
 			if err != nil {
 				return nil, err
@@ -747,6 +750,9 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 				item.RawError = results[0].RawError
 				if item.Reason == "" {
 					item.Reason = map[bool]string{true: "normal", false: "check failed"}[results[0].Success]
+				}
+				if item.Reason == domain.CheckReasonRetired {
+					item.Status = "disabled"
 				}
 			}
 			out = append(out, item)

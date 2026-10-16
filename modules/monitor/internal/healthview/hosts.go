@@ -99,7 +99,7 @@ func hostPresenceAlerts(facts observability.Overview) []*pb.HealthAlert {
 		if title == "" {
 			title = host.AgentID
 		}
-		out = append(out, &pb.HealthAlert{Id: "host-presence:" + host.AgentID, Severity: "critical", Object: &pb.HealthObject{Type: "host", HostId: host.HostID, AgentId: host.AgentID, Kind: "presence"}, Title: "主机 " + title + " · 上报已中断", Reason: "主机采集代理超过三分钟未上报", TriggeredAt: stamp(host.LastSeenAt.Add(hostmetrics.DefaultHostStaleAfter)), LastCheckedAt: stamp(facts.GeneratedAt)})
+		out = append(out, &pb.HealthAlert{Id: "host-presence:" + host.AgentID, Severity: "critical", Object: &pb.HealthObject{Type: "host", HostId: host.HostID, AgentId: host.AgentID, Kind: "presence"}, Title: "主机 " + title + " · 失联", Reason: "主机采集代理超过三分钟未上报，主机可能宕机、断网，或采集代理已停止", TriggeredAt: stamp(host.LastSeenAt.Add(hostmetrics.DefaultHostStaleAfter)), LastCheckedAt: stamp(facts.GeneratedAt)})
 	}
 	return out
 }

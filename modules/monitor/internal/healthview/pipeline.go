@@ -56,10 +56,10 @@ func projectPipeline(facts observability.Overview) []*pb.HealthPipelineStage {
 			if item.Producer == "collector" && storageScopes[key(item)] {
 				continue
 			}
-			status := domain.HealthStatus(item.Status)
-			stage.Datasets = append(stage.Datasets, &pb.HealthDataset{Producer: item.Producer, SpaceId: item.SpaceID, DatasetId: item.DatasetID, Freq: item.Freq, Status: status, Reason: ChineseReason(item.Reason), RawError: unhealthyRaw(status, item.Reason, ""), InputWatermarkAt: stamp(item.InputWatermarkAt), OutputWatermarkAt: stamp(item.OutputWatermarkAt), LastSuccessAt: stamp(item.LastSuccessAt), LastRunAt: stamp(item.LastRunAt), LastReportedAt: stamp(item.LastReportedAt), LagSeconds: item.LagSeconds})
-			if rank(status) > rank(stage.Status) {
-				stage.Status = status
+			dataset := projectDataset(item)
+			stage.Datasets = append(stage.Datasets, dataset)
+			if rank(dataset.Status) > rank(stage.Status) {
+				stage.Status = dataset.Status
 			}
 		}
 		if facts.TopologyKnown && !expected {
@@ -68,6 +68,11 @@ func projectPipeline(facts observability.Overview) []*pb.HealthPipelineStage {
 		out = append(out, stage)
 	}
 	return out
+}
+
+func projectDataset(item observability.DatasetFrequencyStatus) *pb.HealthDataset {
+	status := domain.HealthStatus(item.Status)
+	return &pb.HealthDataset{Producer: item.Producer, SpaceId: item.SpaceID, DatasetId: item.DatasetID, Freq: item.Freq, Status: status, Reason: ChineseReason(item.Reason), RawError: unhealthyRaw(status, item.Reason, ""), InputWatermarkAt: stamp(item.InputWatermarkAt), OutputWatermarkAt: stamp(item.OutputWatermarkAt), LastSuccessAt: stamp(item.LastSuccessAt), LastRunAt: stamp(item.LastRunAt), LastReportedAt: stamp(item.LastReportedAt), LagSeconds: item.LagSeconds, LagLimitSeconds: item.LagLimitSeconds}
 }
 
 func rank(status string) int {

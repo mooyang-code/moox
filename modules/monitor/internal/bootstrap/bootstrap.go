@@ -81,8 +81,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		err := runtime.Repositories.Alerts.CreateEvent(auditCtx, &domain.AlertEvent{
 			EventID:   uuid.NewString(),
 			SpaceID:   hostmetrics.SpaceID,
-			RuleID:    "default:host-presence",
-			CheckID:   "host:" + transition.AgentID + ":presence",
+			RuleID:    hostmetrics.PresenceRuleID,
+			CheckID:   hostmetrics.PresenceCheckID(transition.AgentID),
 			EventType: domain.AlertEventSendFailed,
 			Status:    domain.AlertStatusFiring,
 			Message:   "主机状态通知发送失败：" + sendErr.Error(),
@@ -110,8 +110,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	presenceGate := newPresenceGate(func(ctx context.Context, agentID string) (string, error) {
 		return hostRegistry.Status(ctx, agentID)
 	})
-	presenceSink := hostPresenceTransitionSinkWithGate(presenceProvider, nil, presenceGate)
-	presenceScannerSink := hostPresenceTransitionSinkWithGate(presenceProvider, presenceNotificationFailure, presenceGate)
+	presenceSink := recordHostPresence(runtime.Repositories.Alerts, hostPresenceTransitionSinkWithGate(presenceProvider, nil, presenceGate))
+	presenceScannerSink := recordHostPresence(runtime.Repositories.Alerts, hostPresenceTransitionSinkWithGate(presenceProvider, presenceNotificationFailure, presenceGate))
 	hostSilence := hostmetrics.NewSilenceScanner(hostRegistry, hostmetrics.DefaultHostStaleAfter, presenceScannerSink)
 
 	var hostStore *hostmetrics.Store

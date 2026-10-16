@@ -1,6 +1,7 @@
 {
   "alerts": [
     {
+      "dataset": null,
       "id": "host-presence:PHYSICAL01",
       "last_checked_at": "2026-10-09T12:00:00Z",
       "object": {
@@ -15,12 +16,14 @@
         "type": "host"
       },
       "raw_error": "",
-      "reason": "主机采集代理超过三分钟未上报",
+      "reason": "主机采集代理超过三分钟未上报，主机可能宕机、断网，或采集代理已停止",
+      "recovering": false,
       "severity": "critical",
-      "title": "主机 offline · 上报已中断",
+      "title": "主机 offline · 失联",
       "triggered_at": "2026-10-09T11:53:00Z"
     },
     {
+      "dataset": null,
       "id": "host-alert",
       "last_checked_at": "2026-10-09T12:00:00Z",
       "object": {
@@ -36,7 +39,8 @@
       },
       "raw_error": "",
       "reason": "监控项持续异常",
-      "severity": "critical",
+      "recovering": false,
+      "severity": "warning",
       "title": "主机 offline · CPU 使用率",
       "triggered_at": "2026-10-09T12:00:00Z"
     }
@@ -47,6 +51,7 @@
       "checked_at": "2026-10-09T12:00:00Z",
       "kind": "console-page",
       "module": "console-proxy",
+      "name": "",
       "raw_error": "HTTP 502\nupstream web-host",
       "reason": "页面请求失败",
       "space_id": "",
@@ -185,14 +190,17 @@
       "agent_id": "STANDALONE",
       "cpu_available": false,
       "cpu_percent": 0,
+      "cpu_threshold": 0,
       "disk_available": false,
       "disk_percent": 0,
+      "disk_threshold": 0,
       "gateway_signals": [],
       "host_id": "",
       "hostname": "control",
       "last_reported_at": "2026-10-09T12:00:00Z",
       "memory_available": false,
       "memory_percent": 0,
+      "memory_threshold": 0,
       "metrics_available": false,
       "reason": "主机连接正常",
       "status": "healthy"
@@ -202,14 +210,17 @@
       "agent_id": "",
       "cpu_available": false,
       "cpu_percent": 0,
+      "cpu_threshold": 0,
       "disk_available": false,
       "disk_percent": 0,
+      "disk_threshold": 0,
       "gateway_signals": [],
       "host_id": "control",
       "hostname": "",
       "last_reported_at": "",
       "memory_available": false,
       "memory_percent": 0,
+      "memory_threshold": 0,
       "metrics_available": false,
       "reason": "尚未收到主机指标",
       "status": "unknown"
@@ -219,8 +230,10 @@
       "agent_id": "PHYSICAL01",
       "cpu_available": false,
       "cpu_percent": 0,
+      "cpu_threshold": 0,
       "disk_available": false,
       "disk_percent": 0,
+      "disk_threshold": 0,
       "gateway_signals": [
         {
           "applied_hash": "",
@@ -240,11 +253,14 @@
       "last_reported_at": "2026-10-09T11:50:00Z",
       "memory_available": false,
       "memory_percent": 0,
+      "memory_threshold": 0,
       "metrics_available": false,
       "reason": "主机网关心跳已中断",
       "status": "down"
     }
   ],
+  "incident_window_hours": 0,
+  "incidents": [],
   "notification": {
     "channel_type": "",
     "configured": false,
@@ -264,6 +280,7 @@
           "dataset_id": "bars",
           "freq": "1m",
           "input_watermark_at": "2026-10-09T12:00:00Z",
+          "lag_limit_seconds": "0",
           "lag_seconds": "120",
           "last_reported_at": "2026-10-09T12:00:00Z",
           "last_run_at": "2026-10-09T12:00:00Z",

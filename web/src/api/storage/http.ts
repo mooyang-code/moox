@@ -74,12 +74,21 @@ function assertSuccess(retInfo?: RetInfo) {
   }
 }
 
-async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo }>(method: string, req: TReq): Promise<TRsp> {
+/** 调用选项：spaceId 显式指定请求所属空间（X-Space-Id），用于读取当前所选空间以外的元数据。 */
+export interface StorageCallOptions {
+  spaceId?: string;
+}
+
+async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo }>(
+  method: string,
+  req: TReq,
+  options: StorageCallOptions = {}
+): Promise<TRsp> {
   const readOnly = storageReadMethods.has(method);
   if (!readOnly) {
     invalidateStorageReadCache();
   }
-  const key = readOnly ? storageCacheKey(method, req) : "";
+  const key = readOnly ? storageCacheKey(method, { ...req, explicit_space_id: options.spaceId || "" }) : "";
   if (readOnly) {
     const cached = storageReadCache.get(key);
     if (cached && cached.expiresAt > Date.now()) {
@@ -94,10 +103,12 @@ async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo
 
   const generation = storageReadGeneration;
   const request = (async () => {
-    const rsp = await storageClient.post<TRsp>(`/api/admin/storage/${method}`, {
-      auth_info: getStorageAuthInfo(),
-      ...req
-    });
+    const url = `/api/admin/storage/${method}`;
+    const body = { auth_info: getStorageAuthInfo(), ...req };
+    // 显式空间的请求带上自己的 X-Space-Id，签名客户端不再注入当前所选空间。
+    const rsp = options.spaceId
+      ? await storageClient.post<TRsp>(url, body, { headers: { "X-Space-Id": options.spaceId } })
+      : await storageClient.post<TRsp>(url, body);
     try {
       assertSuccess(rsp.data.ret_info);
     } catch (error) {

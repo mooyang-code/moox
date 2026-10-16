@@ -1,4 +1,4 @@
-import { callStorage as callMetadata } from "./http";
+import { callStorage as callMetadata, type StorageCallOptions } from "./http";
 import type {
   ArchiveFile,
   DataNode,
@@ -99,14 +99,17 @@ export function getDataset(params: { space_id: string; dataset_id: string }) {
   return callMetadata<typeof params, RetRsp & { dataset: Dataset }>("GetDataset", params);
 }
 
-export function listDatasets(params: {
-  space_id: string;
-  data_source_id?: string;
-  data_kind?: string;
-  data_node_id?: string;
-  page?: Page;
-}) {
-  return callMetadata<typeof params, RetRsp & { datasets: Dataset[]; page_result: PageResult }>("ListDatasets", params);
+export function listDatasets(
+  params: {
+    space_id: string;
+    data_source_id?: string;
+    data_kind?: string;
+    data_node_id?: string;
+    page?: Page;
+  },
+  options?: StorageCallOptions
+) {
+  return callMetadata<typeof params, RetRsp & { datasets: Dataset[]; page_result: PageResult }>("ListDatasets", params, options);
 }
 
 export async function createField(field: Field) {
@@ -194,18 +197,25 @@ export function getView(params: { space_id: string; view_id: string }) {
   return callMetadata<typeof params, RetRsp & { view: View }>("GetView", params);
 }
 
-export function listViews(params: {
-  space_id: string;
-  dataset_id?: string;
-  primary_dataset_id?: string;
-  status?: string;
-  page?: Page;
-}) {
+export function listViews(
+  params: {
+    space_id: string;
+    dataset_id?: string;
+    primary_dataset_id?: string;
+    status?: string;
+    page?: Page;
+  },
+  options?: StorageCallOptions
+) {
   const { primary_dataset_id, dataset_id, ...rest } = params;
-  return callMetadata<typeof rest & { dataset_id?: string }, RetRsp & { views: View[]; page_result: PageResult }>("ListViews", {
-    ...rest,
-    ...(dataset_id || primary_dataset_id ? { dataset_id: dataset_id || primary_dataset_id } : {})
-  });
+  return callMetadata<typeof rest & { dataset_id?: string }, RetRsp & { views: View[]; page_result: PageResult }>(
+    "ListViews",
+    {
+      ...rest,
+      ...(dataset_id || primary_dataset_id ? { dataset_id: dataset_id || primary_dataset_id } : {})
+    },
+    options
+  );
 }
 
 export function listViewColumns(params: { space_id: string; view_id: string; page?: Page }) {
@@ -241,4 +251,26 @@ export function listArchiveFiles(params: {
     "ListArchiveFiles",
     params
   );
+}
+
+/** 分页读取空间内全部数据集（最多 20 页 × 500 条）。 */
+export async function listAllDatasets(spaceId: string, options?: StorageCallOptions) {
+  const items: Dataset[] = [];
+  for (let pageNo = 1; pageNo <= 20; pageNo += 1) {
+    const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size: 500 } }, options);
+    items.push(...(rsp.datasets || []));
+    if (!rsp.page_result?.has_more || !(rsp.datasets || []).length) break;
+  }
+  return items;
+}
+
+/** 分页读取空间内全部 View（最多 20 页 × 500 条）。 */
+export async function listAllViews(spaceId: string, options?: StorageCallOptions) {
+  const items: View[] = [];
+  for (let pageNo = 1; pageNo <= 20; pageNo += 1) {
+    const rsp = await listViews({ space_id: spaceId, page: { page: pageNo, size: 500 } }, options);
+    items.push(...(rsp.views || []));
+    if (!rsp.page_result?.has_more || !(rsp.views || []).length) break;
+  }
+  return items;
 }

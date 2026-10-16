@@ -45,6 +45,7 @@ message HealthObject {
   string space_id = 8;
   string producer = 9;
 }
+// severity：critical 表示服务不可用或数据中断，warning 表示资源吃紧、指标上报中断等需要关注的风险。
 message HealthAlert {
   string id = 1;
   string severity = 2;
@@ -54,6 +55,10 @@ message HealthAlert {
   string raw_error = 6;
   string triggered_at = 7;
   string last_checked_at = 8;
+  // 最近一次检查已经通过，正在等待连续成功确认恢复。
+  bool recovering = 9;
+  // 数据集告警对应的数据集事实（水位、最近成功、允许落后）。
+  HealthDataset dataset = 10;
 }
 message HealthSignal {
   string status = 1;
@@ -95,6 +100,8 @@ message HealthDataset {
   string last_run_at = 11;
   string last_reported_at = 12;
   int64 lag_seconds = 13;
+  // 输出水位允许落后的秒数，超过即判为过期；0 表示没有水位要求。
+  int64 lag_limit_seconds = 14;
 }
 message HealthPipelineStage {
   string id = 1;
@@ -111,6 +118,8 @@ message HealthBusinessCheck {
   string reason = 6;
   string raw_error = 7;
   string checked_at = 8;
+  // 检查名称，与推送标题一致。
+  string name = 9;
 }
 message HealthGatewaySignal {
   string kind = 1;
@@ -136,6 +145,10 @@ message HealthHost {
   repeated HealthGatewaySignal gateway_signals = 13;
   bool memory_available = 14;
   bool disk_available = 15;
+  // 告警阈值（百分比）；0 表示没有对应的告警规则。
+  double cpu_threshold = 16;
+  double memory_threshold = 17;
+  double disk_threshold = 18;
 }
 message HealthCounts {
   int32 healthy_count = 1;
@@ -163,6 +176,24 @@ message HealthOverview {
   repeated HealthHost hosts = 8;
   repeated HealthComponent unregistered = 9;
   NotificationChannelSetting notification = 10;
+  // 最近 incident_window_hours 小时内的告警经过（触发到恢复为一条），按触发时间倒序。
+  repeated AlertIncident incidents = 11;
+  int32 incident_window_hours = 12;
+}
+message AlertIncident {
+  string id = 1;
+  string severity = 2;
+  HealthObject object = 3;
+  string title = 4;
+  string reason = 5;
+  // 触发时间早于窗口且找不到触发记录时为空。
+  string triggered_at = 6;
+  // 为空表示尚未收到恢复记录。
+  string resolved_at = 7;
+  // 告警是否仍在进行；检查被停用或删除时告警直接撤销，没有恢复记录，active 为 false。
+  bool active = 8;
+  int32 reminder_count = 9;
+  bool notify_failed = 10;
 }
 message GetHealthOverviewReq { string space_id = 1; }
 message GetHealthOverviewRsp { common.RetInfo ret_info = 1; HealthOverview overview = 2; }

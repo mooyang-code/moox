@@ -1,4 +1,4 @@
-import type { HealthAlert } from "@/api/monitor";
+import type { HealthObject } from "@/api/monitor";
 
 export function statusLabel(status?: string) {
   switch (status) {
@@ -36,33 +36,52 @@ export function formatCheckedAt(value?: string) {
   return Number.isNaN(date.getTime()) ? "暂无" : date.toLocaleString("zh-CN", { hour12: false });
 }
 
-export function formatDuration(start?: string, end?: string) {
-  const first = Date.parse(start || "");
-  const last = Date.parse(end || "");
-  if (!Number.isFinite(first) || !Number.isFinite(last)) return "暂无";
-  const seconds = Math.max(0, Math.floor((last - first) / 1000));
-  if (seconds < 60) return `${seconds} 秒`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟`;
-  return `${Math.floor(seconds / 3600)} 小时 ${Math.floor((seconds % 3600) / 60)} 分钟`;
-}
-
 export function hostHref(agentID?: string, hostID?: string) {
   return (
     "#/ops/hosts?" +
     new URLSearchParams({ tab: "monitor", ...(agentID ? { agent_id: agentID } : {}), ...(hostID ? { host_id: hostID } : {}) })
   );
 }
-export function alertHref(item: HealthAlert) {
-  const object = item.object;
-  if (object?.type === "host") return hostHref(object.agent_id, object.host_id);
-  if (object?.type === "dataset")
-    return object.producer === "factor" ? "#/factor/tasks?tab=results" : "#/collector/tasks?tab=results";
-  return (
-    "#/ops/deployments?" +
-    new URLSearchParams({
-      tab: "services",
-      ...(object?.host_id ? { host_id: object.host_id } : {}),
-      ...(object?.component_id ? { component_id: object.component_id } : {})
-    })
-  );
+
+const COLLECTOR_RESULTS = { href: "#/collector/tasks?tab=results", label: "查看采集结果" };
+
+/** 告警对象的处理入口：页面地址与链接文字。 */
+export function alertLink(object?: HealthObject): { href: string; label: string } {
+  if (object?.type === "host") return { href: hostHref(object.agent_id, object.host_id), label: "查看主机" };
+  if (object?.type === "dataset") {
+    switch (object.producer) {
+      case "factor":
+        return { href: "#/factor/tasks?tab=results", label: "查看因子结果" };
+      case "strategy":
+        return { href: "#/strategy/tasks", label: "查看策略实例" };
+      case "trade":
+        return { href: "#/trading/accounts", label: "查看交易账户" };
+      default:
+        return COLLECTOR_RESULTS;
+    }
+  }
+  switch (object?.kind) {
+    case "kline_freshness":
+    case "market_canary":
+    case "market_fetch":
+      return COLLECTOR_RESULTS;
+    case "data_delivery":
+      return { href: "#/ops/storage/nodes", label: "查看存储节点" };
+    case "balance":
+      return { href: "#/trading/accounts", label: "查看交易账户" };
+  }
+  return {
+    href:
+      "#/ops/deployments?" +
+      new URLSearchParams({
+        tab: "services",
+        ...(object?.host_id ? { host_id: object.host_id } : {}),
+        ...(object?.component_id ? { component_id: object.component_id } : {})
+      }),
+    label: "查看服务"
+  };
+}
+
+export function alertHref(item: { object?: HealthObject }) {
+  return alertLink(item.object).href;
 }

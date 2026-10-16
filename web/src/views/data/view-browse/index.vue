@@ -403,12 +403,12 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
+  listAllDatasets,
+  listAllViews,
   listDatasetColumns,
-  listDatasets,
   listFields,
   listViewColumns,
   listViewRebuildLogs,
-  listViews,
   requestViewRebuild as requestViewRebuildTask
 } from "@/api/storage/metadata";
 import { queryTimeSeriesRows, searchRecordRows } from "@/api/storage/view";
@@ -957,30 +957,6 @@ async function loadMeta() {
     }
   } finally {
     if (sequence === metaLoadSequence) metaLoading.value = false;
-  }
-}
-
-async function listAllViews(spaceId: string) {
-  const views: View[] = [];
-  const size = 500;
-  for (let pageNo = 1; ; pageNo += 1) {
-    const rsp = await listViews({ space_id: spaceId, page: { page: pageNo, size } });
-    views.push(...(rsp.views || []));
-    if (!rsp.page_result?.has_more || (rsp.views || []).length === 0) {
-      return views;
-    }
-  }
-}
-
-async function listAllDatasets(spaceId: string) {
-  const datasets: Dataset[] = [];
-  const size = 500;
-  for (let pageNo = 1; ; pageNo += 1) {
-    const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size } });
-    datasets.push(...(rsp.datasets || []));
-    if (!rsp.page_result?.has_more || (rsp.datasets || []).length === 0) {
-      return datasets;
-    }
   }
 }
 

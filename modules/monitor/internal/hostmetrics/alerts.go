@@ -44,7 +44,7 @@ func (e *AlertEvaluator) Evaluate(ctx context.Context, agentID, hostname, messag
 			if e.isSeen(messageID, rule.RuleID) {
 				continue
 			}
-			threshold, recovery := hostThresholds(rule)
+			threshold, recovery := RuleThresholds(rule)
 			if !value.available {
 				continue
 			}
@@ -108,7 +108,8 @@ func hostValues(s *hostmetricpb.HostSnapshot) map[string]hostValue {
 	return values
 }
 
-func hostThresholds(rule domain.AlertRule) (float64, float64) {
+// RuleThresholds 解析主机阈值规则的告警线与恢复线（百分比）。
+func RuleThresholds(rule domain.AlertRule) (float64, float64) {
 	threshold := 80.0
 	recovery := threshold
 	var definition struct {
@@ -255,6 +256,9 @@ var hostMetricLabels = map[string]string{
 	HostMetricMemory:          "内存使用率",
 	HostMetricFilesystemUsage: "磁盘空间使用率",
 }
+
+// MetricLabel 返回主机指标的中文名称；未知指标返回空字符串。
+func MetricLabel(metric string) string { return hostMetricLabels[metric] }
 
 // hostAlertText renders a host threshold alert for people: the host and
 // metric as the title, the value against its threshold in the body.

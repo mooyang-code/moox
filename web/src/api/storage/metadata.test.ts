@@ -29,13 +29,17 @@ describe("Storage metadata DataNode APIs", () => {
       data_kind: "DATA_KIND_TIME_SERIES",
       page: { page: 1, size: 20 }
     });
-    expect(mocks.callStorage).toHaveBeenLastCalledWith("ListDatasets", {
-      space_id: "space-a",
-      data_source_id: "source-a",
-      data_node_id: "node-a",
-      data_kind: "DATA_KIND_TIME_SERIES",
-      page: { page: 1, size: 20 }
-    });
+    expect(mocks.callStorage).toHaveBeenLastCalledWith(
+      "ListDatasets",
+      {
+        space_id: "space-a",
+        data_source_id: "source-a",
+        data_node_id: "node-a",
+        data_kind: "DATA_KIND_TIME_SERIES",
+        page: { page: 1, size: 20 }
+      },
+      undefined
+    );
   });
 
   it("loads View rebuild history on demand", async () => {

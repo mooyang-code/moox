@@ -34,10 +34,10 @@ func ensureDefaultCheckAlertRules(ctx context.Context, repositories *store.Repos
 	for _, check := range checks {
 		failureThreshold, successThreshold := 3, 2
 		if check.Kind == domain.CheckKindExternal {
-			failureThreshold, successThreshold = 1, 1
+			failureThreshold, successThreshold = externalFailureThreshold(check.IntervalSeconds), 1
 		}
 		if strings.HasPrefix(check.CheckID, "kline_freshness:") {
-			failureThreshold, successThreshold = 2, 2
+			successThreshold = 2
 		}
 		rule := &domain.AlertRule{
 			SpaceID: check.SpaceID, RuleID: "default:" + check.CheckID, CheckID: check.CheckID,
@@ -61,6 +61,21 @@ func ensureDefaultCheckAlertRules(ctx context.Context, repositories *store.Repos
 		}
 	}
 	return nil
+}
+
+// externalAlertGrace 是外部检查从第一次失败到告警的宽限时间。外部检查（运行指标上报、采集计划对账、
+// 行情探针、数据集新鲜度等）每个周期评估一次，服务重启时会有一两个周期读不到指标；原来失败一次就告警，
+// 一次重启就推送一对“新告警 / 已恢复”（2026-10-14～15 两天 122 次告警，大多 29 秒内自愈）。
+// 持续失败满 60 秒才告警，重启造成的短暂中断不再推送，真正的故障最多晚一分钟。
+const externalAlertGrace = 60 * time.Second
+
+// externalFailureThreshold 把宽限时间换算成连续失败次数：首次失败之后还要再失败满宽限时间。
+func externalFailureThreshold(intervalSeconds int) int {
+	if intervalSeconds <= 0 {
+		intervalSeconds = 30
+	}
+	interval := time.Duration(intervalSeconds) * time.Second
+	return 1 + int((externalAlertGrace+interval-1)/interval)
 }
 
 func listDefaultAlertChecks(ctx context.Context, repositories *store.Repositories) ([]domain.Check, error) {

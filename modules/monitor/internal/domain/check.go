@@ -9,6 +9,9 @@ const (
 
 	CheckSourcePlacement     = "placement"
 	CheckSourceObservability = "observability"
+
+	// CheckReasonRetired 是检查对象已停用或移除时写入的通过结果原因：让既有告警恢复，概览按“已停用”展示。
+	CheckReasonRetired = "已停用或移除，不再检查"
 )
 
 type Check struct {

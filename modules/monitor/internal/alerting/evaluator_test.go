@@ -49,6 +49,10 @@ func TestEvaluatorRecordsNotificationConstructionFailure(t *testing.T) {
 	if events[1].Message == "" || events[1].Message == "Timer 不可用" {
 		t.Fatalf("alert message was not human-readable: %q", events[1].Message)
 	}
+	// 概览的告警经过读 payload 里的结构化原因，不解析推送正文
+	if events[1].Payload != `{"reason":"Timer 不可用"}` {
+		t.Fatalf("alert payload = %s", events[1].Payload)
+	}
 }
 
 func TestNotificationSeverityMatchesAlertLifecycle(t *testing.T) {

@@ -2,13 +2,17 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
-
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/notification"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -67,11 +71,11 @@ func hostPresenceTransitionSinkWithGate(provider func(context.Context) (notifica
 		}
 		severity := notification.SeverityCritical
 		title := "主机 " + host + " · 失联"
-		body := "状态：新告警\n问题：主机采集代理停止上报，主机可能宕机、断网，或采集代理已停止"
+		body := "状态：新告警\n问题：" + presenceLostReason
 		if transition.To == hostmetrics.PresenceReachable {
 			severity = notification.SeverityInfo
 			title = "主机 " + host + " · 已恢复在线"
-			body = "状态：已恢复\n当前：主机重新开始上报"
+			body = "状态：已恢复\n当前：" + presenceBackReason
 		}
 		message := notification.Message{
 			Key:      "host-presence:" + transition.AgentID,
@@ -121,5 +125,38 @@ func hostPresenceTransitionSinkWithGate(provider func(context.Context) (notifica
 			}
 		}
 		return lastErr
+	}
+}
+
+const (
+	presenceLostReason = "主机采集代理停止上报，主机可能宕机、断网，或采集代理已停止"
+	presenceBackReason = "主机重新开始上报"
+)
+
+// recordHostPresence 把主机上下线写进告警事件表，概览的告警经过里才能看到主机失联。
+// 事件 ID 由主机、目标状态和观察时间决定，同一次转换重复投递只记一条；记录失败不影响通知。
+func recordHostPresence(alerts *store.AlertRepository, next hostmetrics.PresenceTransitionFunc) hostmetrics.PresenceTransitionFunc {
+	return func(ctx context.Context, transition hostmetrics.PresenceTransition) error {
+		if alerts != nil {
+			if err := alerts.CreateEventIdempotent(ctx, presenceEvent(transition)); err != nil {
+				log.ErrorContextf(ctx, "record host presence event agent_id=%s: %v", transition.AgentID, err)
+			}
+		}
+		return next(ctx, transition)
+	}
+}
+
+func presenceEvent(transition hostmetrics.PresenceTransition) *domain.AlertEvent {
+	eventType, status, reason := domain.AlertEventTriggered, domain.AlertStatusFiring, presenceLostReason
+	if transition.To == hostmetrics.PresenceReachable {
+		eventType, status, reason = domain.AlertEventResolved, domain.AlertStatusResolved, presenceBackReason
+	}
+	payload, _ := json.Marshal(map[string]string{"reason": reason})
+	observed := transition.ObservedAt.UTC()
+	sum := sha256.Sum256([]byte(transition.AgentID + "\x00" + transition.To + "\x00" + observed.Format(time.RFC3339Nano)))
+	return &domain.AlertEvent{
+		EventID: "host-presence-" + hex.EncodeToString(sum[:16]), SpaceID: hostmetrics.SpaceID,
+		RuleID: hostmetrics.PresenceRuleID, CheckID: hostmetrics.PresenceCheckID(transition.AgentID),
+		EventType: eventType, Status: status, Message: reason, Payload: string(payload), CreatedAt: observed,
 	}
 }

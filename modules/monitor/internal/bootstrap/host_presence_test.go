@@ -3,11 +3,15 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/notification"
 )
 
@@ -89,5 +93,41 @@ func TestPresenceGateDropsOfflineRetryAfterRecovery(t *testing.T) {
 	<-recovered
 	if len(sender.recorded) != 1 || sender.recorded[0].Labels["to"] != hostmetrics.PresenceReachable {
 		t.Fatalf("recorded = %+v, want only the recovery notice", sender.recorded)
+	}
+}
+
+// 主机上下线写进告警事件表供概览展示告警经过；同一次转换重复投递只记一条，记录不影响通知。
+func TestRecordHostPresenceWritesIdempotentAlertEvents(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	if err := manager.ApplySchema(schema.SQL()); err != nil {
+		t.Fatal(err)
+	}
+	repos := manager.Repositories()
+	sender := &recordingPresenceSender{}
+	sink := recordHostPresence(repos.Alerts, hostPresenceTransitionSink(sender))
+	now := time.Date(2026, 10, 16, 3, 0, 0, 0, time.UTC)
+	lost := hostmetrics.PresenceTransition{AgentID: "agent-a", From: hostmetrics.PresenceReachable, To: hostmetrics.PresenceUnreachable, ObservedAt: now}
+	back := hostmetrics.PresenceTransition{AgentID: "agent-a", From: hostmetrics.PresenceUnreachable, To: hostmetrics.PresenceReachable, ObservedAt: now.Add(5 * time.Minute)}
+	for _, transition := range []hostmetrics.PresenceTransition{lost, lost, back} {
+		if err := sink(t.Context(), transition); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := repos.Alerts.ListEventsSince(t.Context(), nil, now.Add(-time.Hour), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].EventType != domain.AlertEventTriggered || events[1].EventType != domain.AlertEventResolved {
+		t.Fatalf("events = %+v", events)
+	}
+	if events[0].CheckID != hostmetrics.PresenceCheckID("agent-a") || events[0].SpaceID != hostmetrics.SpaceID || events[0].Payload != `{"reason":"`+presenceLostReason+`"}` {
+		t.Fatalf("lost event = %+v", events[0])
+	}
+	if len(sender.messages) != 3 {
+		t.Fatalf("notifications = %d", len(sender.messages))
 	}
 }

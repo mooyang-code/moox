@@ -531,7 +531,7 @@ func serviceDeploymentExpected(ctx context.Context, topology *store.TopologyRepo
 }
 
 // noLongerExpected resolves a check whose subject was disabled or removed.
-const noLongerExpected = "已停用或移除，不再检查"
+const noLongerExpected = domain.CheckReasonRetired
 
 func hostMonitoringDataset(dataset monitorobservability.DatasetFrequencyStatus) bool {
 	for _, id := range []string{dataset.DatasetID, dataset.PrimaryDatasetID} {

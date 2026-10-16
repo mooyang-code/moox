@@ -36,15 +36,37 @@ export interface HealthObject {
   space_id?: string;
   producer?: string;
 }
+/** critical：服务不可用、数据中断、主机失联或网关异常；warning：资源超阈值、指标上报中断等风险。 */
+export type AlertSeverity = "critical" | "warning";
 export interface HealthAlert {
   id?: string;
-  severity?: string;
+  severity?: AlertSeverity;
   object?: HealthObject;
   title?: string;
   reason?: string;
   raw_error?: string;
   triggered_at?: string;
   last_checked_at?: string;
+  /** 最近一次检查已通过，正在等待连续成功确认恢复。 */
+  recovering?: boolean;
+  /** 数据集告警对应的数据集事实。 */
+  dataset?: HealthDataset;
+}
+/** 一次告警经过：触发到恢复为一条。 */
+export interface AlertIncident {
+  id?: string;
+  severity?: AlertSeverity;
+  object?: HealthObject;
+  title?: string;
+  reason?: string;
+  /** 触发早于窗口且找不到触发记录时为空。 */
+  triggered_at?: string;
+  /** 为空表示没有恢复记录。 */
+  resolved_at?: string;
+  /** 仍在告警；没有恢复记录且不在告警说明告警已撤销（检查停用或删除）。 */
+  active?: boolean;
+  reminder_count?: number;
+  notify_failed?: boolean;
 }
 export interface HealthDataset {
   producer?: string;
@@ -60,6 +82,8 @@ export interface HealthDataset {
   last_run_at?: string;
   last_reported_at?: string;
   lag_seconds?: number | string;
+  /** 输出水位允许落后的秒数；0 表示没有水位要求。 */
+  lag_limit_seconds?: number | string;
 }
 export interface HealthPipelineStage {
   id?: string;
@@ -69,6 +93,8 @@ export interface HealthPipelineStage {
 }
 export interface HealthBusinessCheck {
   check_id?: string;
+  /** 检查名称，与推送标题一致；由指标推导的检查没有名称。 */
+  name?: string;
   kind?: string;
   module?: string;
   space_id?: string;
@@ -100,6 +126,10 @@ export interface HealthHost {
   cpu_available?: boolean;
   last_reported_at?: string;
   gateway_signals?: HealthGatewaySignal[];
+  /** 告警阈值（百分比）；0 或缺省表示没有对应规则。 */
+  cpu_threshold?: number;
+  memory_threshold?: number;
+  disk_threshold?: number;
 }
 export interface HealthCounts {
   healthy_count?: number;
@@ -127,6 +157,9 @@ export interface HealthOverview {
   hosts?: HealthHost[];
   unregistered?: HealthComponent[];
   notification?: NotificationChannelSetting;
+  /** 最近 incident_window_hours 小时的告警经过，按触发时间倒序。 */
+  incidents?: AlertIncident[];
+  incident_window_hours?: number;
 }
 export interface NotificationChannelSetting {
   channel_type?: string;

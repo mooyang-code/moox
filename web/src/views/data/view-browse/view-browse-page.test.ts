@@ -15,8 +15,8 @@ vi.mock("@/api/storage/metadata", () => ({
   listViewColumns: mocks.columns,
   listFields: vi.fn().mockResolvedValue({ fields: [] }),
   listFactors: vi.fn().mockResolvedValue({ factors: [] }),
-  listDatasets: vi.fn(),
-  listViews: vi.fn(),
+  listAllDatasets: vi.fn(),
+  listAllViews: vi.fn(),
   listViewRebuildLogs: vi.fn(),
   requestViewRebuild: vi.fn()
 }));
