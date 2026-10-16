@@ -33,30 +33,40 @@
           <div class="metric-grid">
             <div class="metric">
               <span class="metric-label">采集计划</span>
-              <b class="metric-value metric-value--text">{{ planText }}</b>
-              <span class="metric-sub">{{ planSub }}</span>
+              <div class="metric-line">
+                <b class="metric-value metric-value--text">{{ planText }}</b>
+                <span class="metric-sub">{{ planSub }}</span>
+              </div>
             </div>
             <div class="metric">
               <span class="metric-label">函数</span>
-              <b class="metric-value">{{ summary.functions }}</b>
-              <span class="metric-sub">下发中 {{ summary.pendingFunctions }} · 退役中 {{ summary.retiringFunctions }}</span>
+              <div class="metric-line">
+                <b class="metric-value">{{ summary.functions }}</b>
+                <span class="metric-sub">下发中 {{ summary.pendingFunctions }} · 退役中 {{ summary.retiringFunctions }}</span>
+              </div>
             </div>
             <div class="metric">
               <span class="metric-label">数据集 / 标的</span>
-              <b class="metric-value">{{ summary.datasets }} / {{ summary.subjects }}</b>
-              <span class="metric-sub">正在采集</span>
+              <div class="metric-line">
+                <b class="metric-value">{{ summary.datasets }} / {{ summary.subjects }}</b>
+                <span class="metric-sub">正在采集</span>
+              </div>
             </div>
             <div class="metric">
               <span class="metric-label">近 24h 实时缺口</span>
-              <b class="metric-value" :class="{ 'metric-value--warn': summary.gapBars > 0 }">{{ summary.gapBars }} 根</b>
-              <span class="metric-sub">{{ summary.gapSubjects }} 个标的，由自动补采修复</span>
+              <div class="metric-line">
+                <b class="metric-value" :class="{ 'metric-value--warn': summary.gapBars > 0 }">{{ summary.gapBars }} 根</b>
+                <span class="metric-sub">{{ summary.gapSubjects }} 个标的，由自动补采修复</span>
+              </div>
             </div>
             <div class="metric metric--link" role="button" tabindex="0" @click="goBackfills()" @keydown.enter="goBackfills()">
               <span class="metric-label">补采 <icon-right /></span>
-              <b class="metric-value">{{ status.active_backfills || 0 }}</b>
-              <span class="metric-sub" :class="{ 'danger-text': (status.failed_backfills_24h || 0) > 0 }"
-                >进行中 · 24h 失败 {{ status.failed_backfills_24h || 0 }}</span
-              >
+              <div class="metric-line">
+                <b class="metric-value">{{ status.active_backfills || 0 }}</b>
+                <span class="metric-sub" :class="{ 'danger-text': (status.failed_backfills_24h || 0) > 0 }"
+                  >进行中 · 24h 失败 {{ status.failed_backfills_24h || 0 }}</span
+                >
+              </div>
             </div>
           </div>
         </section>
@@ -189,12 +199,10 @@
         </section>
 
         <section class="function-section">
-          <header class="block-header">
-            <h3>
+          <div class="pane-toolbar">
+            <h3 class="toolbar-title">
               函数 <span class="tab-count">{{ summary.functions }}</span>
             </h3>
-          </header>
-          <div class="pane-toolbar">
             <a-input v-model="functionFilters.keyword" placeholder="搜索函数名或数据集" allow-clear style="width: 240px">
               <template #prefix><icon-search /></template>
             </a-input>
@@ -207,50 +215,56 @@
             <a-checkbox v-model="functionFilters.abnormalOnly">只看异常</a-checkbox>
             <span class="muted toolbar-count">共 {{ filteredFunctions.length }} 个</span>
           </div>
-          <a-table
-            row-key="name"
-            size="small"
-            class="function-table"
-            :data="filteredFunctions"
-            :loading="statusLoading"
-            :pagination="functionPagination"
-            :scroll="{ y: '100%' }"
-            @page-change="functionPage = $event"
-            @page-size-change="onFunctionPageSizeChange"
-            :bordered="{ cell: true }"
-            table-layout-fixed
-          >
-            <template #empty><div class="empty-text">没有匹配的函数</div></template>
-            <template #columns>
-              <a-table-column title="函数" :width="270">
-                <template #cell="{ record }"
-                  ><span class="mono-text function-name" :title="record.name">{{ record.name }}</span></template
-                >
-              </a-table-column>
-              <a-table-column title="地域" data-index="region" :width="120" />
-              <a-table-column title="市场" data-index="market" :width="150" />
-              <a-table-column title="触发" :width="150">
-                <template #cell="{ record }"
-                  ><span class="mono-text function-name" :title="record.cron">{{ record.cron }}</span></template
-                >
-              </a-table-column>
-              <a-table-column title="标的" data-index="subject_count" :width="80" align="right" />
-              <a-table-column title="服务的数据集">
-                <template #cell="{ record }">
-                  <a-tag v-for="item in record.datasets || []" :key="item" size="small" class="dataset-tag" :title="item">{{
-                    datasetLabel(datasetNames, item)
-                  }}</a-tag>
-                </template>
-              </a-table-column>
-              <a-table-column title="状态" :width="90" align="center">
-                <template #cell="{ record }">
-                  <a-tag size="small" :color="functionStateInfo(record.state).color">{{
-                    functionStateInfo(record.state).text
-                  }}</a-tag>
-                </template>
-              </a-table-column>
-            </template>
-          </a-table>
+          <div ref="functionArea" class="function-area">
+            <a-table
+              row-key="name"
+              size="mini"
+              class="function-table"
+              :data="filteredFunctions"
+              :loading="statusLoading"
+              :pagination="functionPagination"
+              @page-change="functionPage = $event"
+              :bordered="{ cell: true }"
+              table-layout-fixed
+            >
+              <template #empty><div class="empty-text">没有匹配的函数</div></template>
+              <template #columns>
+                <a-table-column title="函数" :width="270">
+                  <template #cell="{ record }"
+                    ><span class="mono-text function-name" :title="record.name">{{ record.name }}</span></template
+                  >
+                </a-table-column>
+                <a-table-column title="地域" data-index="region" :width="120" />
+                <a-table-column title="市场" :width="150">
+                  <template #cell="{ record }"
+                    ><span class="single-line" :title="record.market">{{ record.market }}</span></template
+                  >
+                </a-table-column>
+                <a-table-column title="触发" :width="150">
+                  <template #cell="{ record }"
+                    ><span class="mono-text function-name" :title="record.cron">{{ record.cron }}</span></template
+                  >
+                </a-table-column>
+                <a-table-column title="标的" data-index="subject_count" :width="80" align="right" />
+                <a-table-column title="服务的数据集">
+                  <template #cell="{ record }">
+                    <div class="single-line" :title="functionDatasetsText(record)">
+                      <a-tag v-for="item in record.datasets || []" :key="item" size="small" class="dataset-tag">{{
+                        datasetLabel(datasetNames, item)
+                      }}</a-tag>
+                    </div>
+                  </template>
+                </a-table-column>
+                <a-table-column title="状态" :width="90" align="center">
+                  <template #cell="{ record }">
+                    <a-tag size="small" :color="functionStateInfo(record.state).color">{{
+                      functionStateInfo(record.state).text
+                    }}</a-tag>
+                  </template>
+                </a-table-column>
+              </template>
+            </a-table>
+          </div>
         </section>
       </template>
     </div>
@@ -271,7 +285,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { storeToRefs } from "pinia";
@@ -281,6 +295,7 @@ import {
   confirmHistoryGaps,
   getCollectorStatus,
   type CollectorDatasetStatus,
+  type CollectorFunctionStatus,
   type GetCollectorStatusResponse
 } from "@/api/collector/runtime-status";
 import { useSpaceStore } from "@/store/modules/space";
@@ -337,20 +352,41 @@ const datasetOptions = computed(() => {
   }
   return [...options].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
 });
-// 普通翻页：分页条固定在函数区底部，当前页的行放不下时在表格内部滚动，页面本身不滚动。
+// 普通翻页：每行固定单行高度，每页行数按函数区剩余高度自动计算，表格正好铺满，页面和表格都不出现滚动条。
 const functionPagination = computed(() => ({
   current: functionPage.value,
   pageSize: functionPageSize.value,
   showTotal: true,
-  showPageSize: true,
-  pageSizeOptions: [20, 50, 100],
   size: "small" as const
 }));
 
-function onFunctionPageSizeChange(size: number) {
-  functionPageSize.value = size;
-  functionPage.value = 1;
+const functionArea = ref<HTMLElement | null>(null);
+// 每页至少 8 行：空间不够时整页滚动（只有这一个滚动条，表格本身不滚动），空间够时按高度铺满、没有滚动条。
+const MIN_FUNCTION_ROWS = 8;
+
+/** 按函数区高度算每页行数：区域高度减去表头与分页条，除以单行高度；换页大小时保持当前页第一行仍可见。 */
+function fitFunctionPageSize() {
+  const area = functionArea.value;
+  if (!area || area.clientHeight === 0) return;
+  const header = area.querySelector<HTMLElement>("thead")?.offsetHeight || 40;
+  const pager = area.querySelector<HTMLElement>(".arco-table-pagination");
+  const pagerHeight = pager ? pager.offsetHeight + parseFloat(getComputedStyle(pager).marginTop || "0") : 44;
+  const row = area.querySelector<HTMLElement>("tbody tr.arco-table-tr")?.offsetHeight || 41;
+  const rows = Math.max(MIN_FUNCTION_ROWS, Math.floor((area.clientHeight - header - pagerHeight - 2) / row));
+  if (rows === functionPageSize.value) return;
+  const first = (functionPage.value - 1) * functionPageSize.value;
+  functionPageSize.value = rows;
+  functionPage.value = Math.floor(first / rows) + 1;
 }
+
+const functionResize =
+  typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => requestAnimationFrame(fitFunctionPageSize));
+watch(functionArea, (area, previous) => {
+  if (previous) functionResize?.unobserve(previous);
+  if (area) functionResize?.observe(area);
+});
+onActivated(() => void nextTick(fitFunctionPageSize));
+onBeforeUnmount(() => functionResize?.disconnect());
 
 const filteredFunctions = computed(() => {
   const list = filterFunctions(status.value.functions || [], functionFilters.value, datasetNames.value);
@@ -372,6 +408,10 @@ const planSub = computed(() => {
   return plan ? `${localTimeText(plan.updated_at)} 更新` : "创建采集任务后自动生成";
 });
 
+function functionDatasetsText(record: CollectorFunctionStatus) {
+  return (record.datasets || []).map(item => datasetLabel(datasetNames.value, item)).join("、");
+}
+
 function datasetFunctionText(record: CollectorDatasetStatus) {
   const functions = datasetFunctions(status.value.functions || [], record);
   if (!functions.length) return "-";
@@ -387,6 +427,8 @@ async function loadStatus() {
     const data = await getCollectorStatus(spaceId);
     if (!request.isLatest() || spaceId !== (selectedSpaceId.value || "")) return;
     status.value = data;
+    // 行高要等数据渲染后才能量到。
+    void nextTick(fitFunctionPageSize);
   } catch (error) {
     if (request.isLatest()) console.error("获取运行状态失败:", error);
   } finally {
@@ -459,7 +501,7 @@ onMounted(loadStatus);
 </script>
 
 <style scoped>
-/* 页面占满 Tab 内容区：状态条与数据集健康固定在上方，函数列表占据剩余高度，翻页条固定在底部。 */
+/* 页面占满 Tab 内容区：状态条与数据集健康固定在上方，函数列表占据剩余高度。 */
 .runtime-status-page {
   height: 100%;
 }
@@ -474,26 +516,20 @@ onMounted(loadStatus);
 }
 .runtime-status > .function-section {
   display: flex;
-  min-height: 200px;
+  min-height: 0;
   flex: 1;
   flex-direction: column;
 }
-.function-table {
+/* 函数区占满剩余高度；表格按自动算出的行数正好铺满，不出现滚动条。 */
+.function-area {
   min-height: 0;
   flex: 1;
 }
-/* 表格区占满剩余高度：分页条固定在底部，表体在中间滚动。 */
-.function-table :deep(.arco-spin) {
-  display: flex;
-  height: 100%;
-  flex-direction: column;
-}
-.function-table :deep(.arco-table-container) {
-  min-height: 0;
-  flex: 1;
-}
-.function-table :deep(.arco-table-pagination) {
-  flex: none;
+.single-line {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .metric--link {
   cursor: pointer;
@@ -569,6 +605,21 @@ onMounted(loadStatus);
   font-size: 20px;
   font-weight: 500;
   line-height: 28px;
+}
+.metric-line {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--moox-space-2);
+}
+.metric-line .metric-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.toolbar-title {
+  margin: 0 var(--moox-space-2) 0 0;
+  font-size: 15px;
 }
 .metric-value--text {
   font-size: 15px;

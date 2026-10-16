@@ -138,17 +138,20 @@ describe("collector runtime status page", () => {
     expect(page).toContain("datasetLabel(datasetNames, item)");
   });
 
-  it("keeps the function filters on one row and pages the function table with the pager pinned at the bottom", () => {
+  it("keeps the function filters on one row and fits single-line rows per page without any table scrolling", () => {
     const toolbar = page.slice(
       page.indexOf('<div class="pane-toolbar">'),
       page.indexOf("</div>", page.indexOf('<div class="pane-toolbar">'))
     );
-    for (const marker of ["搜索函数名或数据集", "全部地域", "全部市场", "只看异常"]) expect(toolbar).toContain(marker);
-    expect(page).toContain(":scroll=\"{ y: '100%' }\"");
+    for (const marker of ["函数", "搜索函数名或数据集", "全部地域", "全部市场", "只看异常"]) expect(toolbar).toContain(marker);
+    expect(page).toMatch(/\.pane-toolbar\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap;/);
     expect(page).toContain(':pagination="functionPagination"');
-    expect(page).toContain("pageSizeOptions: [20, 50, 100]");
+    expect(page).not.toContain(":scroll=");
+    expect(page).toContain('size="mini"');
+    expect(page).toContain("new ResizeObserver(");
+    expect(page).toContain("const MIN_FUNCTION_ROWS = 8;");
+    expect(page).toMatch(/\.single-line\s*\{[^}]*white-space:\s*nowrap;/);
     expect(page).toContain("watch(functionFilters, () => (functionPage.value = 1), { deep: true })");
-    expect(page).toMatch(/\.runtime-status > \.function-section\s*\{[^}]*flex:\s*1;/);
   });
 
   it("offers the dataset actions and opens the backfill tab for new jobs", () => {
