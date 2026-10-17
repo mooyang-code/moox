@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -23,6 +24,11 @@ const (
 	DefaultStopTimeout = 2 * time.Minute
 	maxStopTimeout     = 30 * time.Minute
 	maxPrivateBytes    = 1 << 20
+
+	// 每个发布自带它打包时的服务目录与包清单（unitpackage 写入），清单记录目录文件的哈希。
+	releaseCatalogPath  = "config/servicecatalog/catalog.yaml"
+	releaseManifestName = "package-manifest.json"
+	maxReleaseFileBytes = 4 << 20
 )
 
 type Plan struct {
@@ -98,7 +104,110 @@ func physicalDirectory(path string) error {
 	return nil
 }
 
+// LoadPlan 读取已安装发布（当前或上一发布）的运行计划。计划记录的是该发布打包时的服务目录：runtime 升级后服务目录
+// 可能已经变了，组件定义以发布自带、并经计划与包清单两处哈希核对过的目录为准，所以新 runtime 仍能读取、启停旧目录的发布。
 func LoadPlan(path string) (Plan, error) {
+	plan, _, err := loadPlan(path, false)
+	return plan, err
+}
+
+// LoadCandidatePlan 读取候选发布（准备中、待激活）的运行计划：候选发布必须使用本 runtime 内嵌的服务目录。
+func LoadCandidatePlan(path string) (Plan, error) {
+	plan, _, err := loadPlan(path, true)
+	return plan, err
+}
+
+func loadPlan(path string, candidate bool) (Plan, servicecatalog.Catalog, error) {
+	plan, err := readPlan(path, candidate)
+	if err != nil {
+		return Plan{}, servicecatalog.Catalog{}, err
+	}
+	catalog, err := releaseCatalog(plan)
+	if err != nil {
+		return Plan{}, servicecatalog.Catalog{}, err
+	}
+	seen := map[string]bool{}
+	for _, component := range plan.Components {
+		if _, ok := catalog.Component(component.ID); !ok || seen[component.ID] {
+			return Plan{}, servicecatalog.Catalog{}, errors.New("runtime components must be unique catalog IDs")
+		}
+		seen[component.ID] = true
+		if component.EnvironmentFile != filepath.Join(plan.ReleaseRoot, "secrets", "runtime-"+component.ID+".json") {
+			return Plan{}, servicecatalog.Catalog{}, errors.New("runtime environment must use its private release file")
+		}
+	}
+	return plan, catalog, nil
+}
+
+// releaseManifest 是包清单（unitpackage.Manifest）里 runtime 用到的部分：目录哈希与文件条目。
+type releaseManifest struct {
+	CatalogSHA256 string                `json:"catalog_sha256"`
+	Files         []releaseManifestFile `json:"files"`
+}
+
+type releaseManifestFile struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+// releaseCatalog 读取发布自带的服务目录：文件哈希必须等于运行计划记录的值，也必须等于包清单记录的目录哈希与文件条目，
+// 否则视为被改动过而拒绝。候选发布的计划已要求与内嵌目录一致，这里读到的就是同一份目录。
+func releaseCatalog(plan Plan) (servicecatalog.Catalog, error) {
+	raw, err := readReleaseFile(filepath.Join(plan.ReleaseRoot, releaseCatalogPath))
+	if err != nil {
+		return servicecatalog.Catalog{}, fmt.Errorf("release service catalog cannot be read: %w", err)
+	}
+	digest := sha256.Sum256(raw)
+	actual := "sha256:" + hex.EncodeToString(digest[:])
+	if actual != plan.CatalogSHA256 {
+		return servicecatalog.Catalog{}, errors.New("release service catalog does not match its runtime plan")
+	}
+	manifestRaw, err := readReleaseFile(filepath.Join(plan.ReleaseRoot, releaseManifestName))
+	if err != nil {
+		return servicecatalog.Catalog{}, fmt.Errorf("release package manifest cannot be read: %w", err)
+	}
+	var manifest releaseManifest
+	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
+		return servicecatalog.Catalog{}, errors.New("release package manifest is invalid")
+	}
+	if manifest.CatalogSHA256 != actual || !slices.ContainsFunc(manifest.Files, func(file releaseManifestFile) bool {
+		return file.Path == releaseCatalogPath && file.SHA256 == actual
+	}) {
+		return servicecatalog.Catalog{}, errors.New("release service catalog does not match its package manifest")
+	}
+	return servicecatalog.Decode(bytes.NewReader(raw))
+}
+
+// readReleaseFile 读取发布里打包进来的不可变文件：本用户所有、组和其他人不可写的普通文件，大小有上限。
+func readReleaseFile(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 || !ownerMatches(info) || info.Size() <= 0 || info.Size() > maxReleaseFileBytes {
+		return nil, errors.New("release file must be a bounded regular file writable only by its owner")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return nil, errors.New("release file changed while opening")
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, maxReleaseFileBytes+1))
+	if err != nil || len(raw) > maxReleaseFileBytes {
+		return nil, errors.New("release file cannot be read or exceeds its bound")
+	}
+	return raw, nil
+}
+
+func validCatalogDigest(value string) bool {
+	return strings.HasPrefix(value, "sha256:") && validDigest(strings.TrimPrefix(value, "sha256:"))
+}
+
+func readPlan(path string, candidate bool) (Plan, error) {
 	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
 		return Plan{}, errors.New("runtime plan must be a regular file, with directory views permitted")
 	}
@@ -110,8 +219,11 @@ func LoadPlan(path string) (Plan, error) {
 	if err := privateJSON(physical, &plan); err != nil {
 		return Plan{}, err
 	}
-	if plan.Version != 1 || !servicecatalog.ValidHostID(plan.HostID) || plan.CatalogSHA256 != CatalogSHA256() || len(plan.Components) == 0 || len(plan.Components) > 64 {
-		return Plan{}, errors.New("runtime plan requires version 1, a canonical host, the current catalog and deployed components")
+	if plan.Version != 1 || !servicecatalog.ValidHostID(plan.HostID) || !validCatalogDigest(plan.CatalogSHA256) || len(plan.Components) == 0 || len(plan.Components) > 64 {
+		return Plan{}, errors.New("runtime plan requires version 1, a canonical host, a service catalog digest and deployed components")
+	}
+	if candidate && plan.CatalogSHA256 != CatalogSHA256() {
+		return Plan{}, errors.New("candidate release must use this runtime's service catalog")
 	}
 	if physical != filepath.Join(plan.ReleaseRoot, "runtime.json") {
 		return Plan{}, errors.New("runtime.json must belong to its physical release root")
@@ -119,20 +231,6 @@ func LoadPlan(path string) (Plan, error) {
 	for _, root := range []string{plan.DeploymentRoot, plan.ReleaseRoot} {
 		if err := physicalDirectory(root); err != nil {
 			return Plan{}, err
-		}
-	}
-	catalog, err := servicecatalog.LoadEmbedded()
-	if err != nil {
-		return Plan{}, err
-	}
-	seen := map[string]bool{}
-	for _, component := range plan.Components {
-		if _, ok := catalog.Component(component.ID); !ok || seen[component.ID] {
-			return Plan{}, errors.New("runtime components must be unique catalog IDs")
-		}
-		seen[component.ID] = true
-		if component.EnvironmentFile != filepath.Join(plan.ReleaseRoot, "secrets", "runtime-"+component.ID+".json") {
-			return Plan{}, errors.New("runtime environment must use its private release file")
 		}
 	}
 	return plan, nil

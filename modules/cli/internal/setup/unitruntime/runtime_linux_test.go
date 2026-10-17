@@ -239,6 +239,33 @@ func TestRuntimeLinuxPausePersistsAcrossReleaseAndAllAutomaticStarts(t *testing.
 	require.Equal(t, next.ReleaseRoot, record.ReleaseRoot)
 }
 
+// runtime 升级后服务目录变了：旧目录打包的已安装发布仍能被新 runtime 查询、停止（组件定义取发布自带的目录），
+// 之后由用新目录打包的发布接替。
+func TestRuntimeLinuxManagesReleasePackagedWithAnOlderCatalog(t *testing.T) {
+	path, plan := planFixture(t, "console-proxy")
+	proxyBudgetFixture(t, plan.ReleaseRoot, "1s", "1s", "1s", "5s")
+	executableFixture(t, plan)
+	plan = olderCatalogFixture(t, path, plan)
+	cleanupRuntime(t, path)
+	started := runRuntime(t, path, "start")
+	require.True(t, started.Components[0].Ready)
+	status := runRuntime(t, path, "status")
+	require.Equal(t, started.Components[0].PID, status.Components[0].PID)
+	stopped := runRuntime(t, path, "stop")
+	require.Equal(t, "stopped", stopped.Components[0].State)
+	require.Zero(t, stopped.Components[0].PID)
+
+	newPath, next := planFixture(t, "console-proxy")
+	next.DeploymentRoot = plan.DeploymentRoot
+	writeFixture(t, newPath, next)
+	proxyBudgetFixture(t, next.ReleaseRoot, "1s", "1s", "1s", "5s")
+	executableFixture(t, next)
+	cleanupRuntime(t, newPath)
+	resumed := runRuntime(t, newPath, "start")
+	require.True(t, resumed.Components[0].Ready)
+	require.NotEqual(t, started.Components[0].PID, resumed.Components[0].PID)
+}
+
 func TestRuntimeLinuxUsesRunningReleaseBudgetBeforeForceAndKeepsDrainOnCancellation(t *testing.T) {
 	path, plan := planFixture(t, "console-proxy")
 	proxyBudgetFixture(t, plan.ReleaseRoot, "1s", "1s", "1s", "5s")

@@ -27,7 +27,7 @@ func initializeCandidateDatabase(ctx context.Context, guard *unitruntime.Mainten
 	if !slices.Contains(candidate.Components, "storage-primary") {
 		return nil
 	}
-	if _, err := unitruntime.LoadPlan(planPath(candidate)); err != nil {
+	if _, err := unitruntime.LoadCandidatePlan(planPath(candidate)); err != nil {
 		return err
 	}
 	root, err := fsutil.OpenPhysicalRoot(candidate.Directory, true)

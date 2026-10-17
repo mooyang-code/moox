@@ -32,11 +32,12 @@ required=[
     'TestRuntimeLinuxRefusesUnrelatedOrReusedPIDAndDoesNotExposeSecrets',
     'TestRuntimeLinuxRealProxyDrainsHTTPSAndPreservesCAWhilePaused',
     'TestRuntimeLinuxStartBarrierRejectsUnrecordedChildAndRecoversDurableLaunch',
+    'TestRuntimeLinuxManagesReleasePackagedWithAnOlderCatalog',
 ]
 for name in required:
     if not re.search(r'^--- PASS: '+re.escape(name)+r' \(',log,re.M):
         raise SystemExit('required runtime scenario did not pass: '+name)
 if re.search(r'^[ \t]*--- (SKIP|FAIL):|^FAIL$',log,re.M):
     raise SystemExit('runtime Linux gate must not skip or fail a scenario')
-print('unit runtime Linux gate passed: 14 required kernel/real-proxy scenarios, no compilation')
+print(f'unit runtime Linux gate passed: {len(required)} required kernel/real-proxy scenarios, no compilation')
 PY

@@ -230,7 +230,7 @@ func Prepare(ctx context.Context, options PrepareOptions, lockOptions unitruntim
 		if err := writePlan(root, plan, false); err != nil {
 			return err
 		}
-		if err := unitruntime.ValidateRelease(filepath.Join(stagePath, "runtime.json")); err != nil {
+		if err := unitruntime.ValidateCandidate(filepath.Join(stagePath, "runtime.json")); err != nil {
 			return err
 		}
 		plan = runtimePlan(options, components, destination)

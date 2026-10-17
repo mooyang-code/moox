@@ -42,11 +42,12 @@ required=[
     'TestUnitPreparationLinuxBusinessUsesHostViewAndOnlyAccessIdentities',
     'TestUnitPreparationLinuxFailureDoesNotPublishOrReplaceCurrent',
     'TestUnitPreparationLinuxReceiptRejectsChangedFilesAndEscapingHostView',
+    'TestUnitActivationLinuxReplacesAndRollsBackAcrossServiceCatalogChange',
 ]
 for name in required:
     if not re.search(r'^--- PASS: '+re.escape(name)+r' \(',log,re.M):
         raise SystemExit('required installation scenario did not pass: '+name)
 if re.search(r'^[ \t]*--- (SKIP|FAIL):|^FAIL$',log,re.M):
     raise SystemExit('unit installation Linux gate must not skip or fail a scenario')
-print('unit installation Linux gate passed: 20 required preparation/activation/identity projection/state import/rollback scenarios, no compilation')
+print(f'unit installation Linux gate passed: {len(required)} required preparation/activation/identity projection/state import/rollback scenarios, no compilation')
 PY

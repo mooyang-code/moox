@@ -4,6 +4,8 @@ package unitinstall
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -178,6 +180,84 @@ func TestUnitActivationLinuxUsesActualWebHostCopiesStateAndRollsBack(t *testing.
 	_, err = activationCommand(t, "activate", "--directory", third.Directory)
 	require.NoError(t, err, "completed activation is idempotent with mutable data")
 	require.NoFileExists(t, filepath.Join(options.DeploymentRoot, "run/installation.json"))
+}
+
+// ageReleaseCatalog 把一个已安装的发布改造成“由上一个 runtime 版本打包”：自带的服务目录换成另一份（组件相同），
+// 包清单、运行计划与准备回执都记录这份目录，和 runtime 升级前生产上的发布一样。
+func ageReleaseCatalog(t *testing.T, prepared Prepared) {
+	t.Helper()
+	catalogPath := filepath.Join(prepared.Directory, "config/servicecatalog/catalog.yaml")
+	raw, err := os.ReadFile(catalogPath)
+	require.NoError(t, err)
+	older := append(raw, []byte("\n# packaged by an older runtime release\n")...)
+	require.NoError(t, os.WriteFile(catalogPath, older, 0o644))
+	sum := sha256.Sum256(older)
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+
+	rewrite := func(name string, change func(map[string]any)) {
+		path := filepath.Join(prepared.Directory, name)
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var document map[string]any
+		require.NoError(t, json.Unmarshal(raw, &document))
+		change(document)
+		raw, err = json.Marshal(document)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(path, append(raw, '\n'), 0))
+	}
+	rewrite("package-manifest.json", func(manifest map[string]any) {
+		manifest["catalog_sha256"] = digest
+		for _, item := range manifest["files"].([]any) {
+			if file := item.(map[string]any); file["path"] == "config/servicecatalog/catalog.yaml" {
+				file["sha256"], file["size"] = digest, len(older)
+			}
+		}
+	})
+	rewrite("runtime.json", func(plan map[string]any) { plan["catalog_sha256"] = digest })
+
+	root, err := fsutil.OpenPhysicalRoot(prepared.Directory, false)
+	require.NoError(t, err)
+	defer root.Close()
+	prepared.Files, err = inventory(t.Context(), root, prepared, true)
+	require.NoError(t, err)
+	receipt, err := json.Marshal(prepared)
+	require.NoError(t, err)
+	require.NoError(t, fsutil.WritePrivate(root, "prepared.json", append(receipt, '\n'), true))
+}
+
+// runtime 跨服务目录变更升级：当前发布是旧目录打包的，新 runtime 仍能读取它、在激活新发布时停止它、回滚时再启用它；
+// 它不能再作为候选发布。
+func TestUnitActivationLinuxReplacesAndRollsBackAcrossServiceCatalogChange(t *testing.T) {
+	options := controlActivationOptions(t)
+	first, err := prepareWithHelper(t, options)
+	require.NoError(t, err)
+	cleanupActivation(t, first)
+	_, err = activationCommand(t, "activate", "--directory", first.Directory)
+	require.NoError(t, err)
+	started := runScript(t, first.Directory, "status").Components[0]
+	require.Positive(t, started.PID)
+
+	ageReleaseCatalog(t, first)
+	_, err = ReadInstalled(t.Context(), first.Directory)
+	require.NoError(t, err)
+	_, err = ReadPrepared(t.Context(), first.Directory)
+	require.ErrorContains(t, err, "candidate release must use this runtime's service catalog")
+	require.Equal(t, started.PID, runScript(t, first.Directory, "status").Components[0].PID)
+
+	options.ReleaseID = "second"
+	second, err := prepareWithHelper(t, options)
+	require.NoError(t, err)
+	active, err := activationCommand(t, "activate", "--directory", second.Directory)
+	require.NoError(t, err)
+	require.Equal(t, first.Directory, active.PreviousDirectory)
+	require.Equal(t, second.Directory, currentTarget(t, options.UnitRoot))
+	require.NoFileExists(t, "/proc/"+strconv.Itoa(started.PID)+"/exe")
+
+	rolled, err := activationCommand(t, "rollback", "--unit-root", options.UnitRoot)
+	require.NoError(t, err)
+	require.Equal(t, "rolled-back", rolled.Phase)
+	require.Equal(t, first.Directory, currentTarget(t, options.UnitRoot))
+	require.Positive(t, runScript(t, first.Directory, "status").Components[0].PID)
 }
 
 func TestUnitActivationLinuxFailedStartAndInterruptedPhasesRecover(t *testing.T) {

@@ -83,7 +83,12 @@ func readRelease(ctx context.Context, directory string, installed, verifyInvento
 	} else if err := validateHostView(PrepareOptions{HostUnitRoot: prepared.HostUnitRoot, UnitRoot: prepared.UnitRoot, DeploymentRoot: prepared.DeploymentRoot}, prepared.HostID); err != nil {
 		return Prepared{}, err
 	}
-	plan, err := unitruntime.LoadPlan(filepath.Join(directory, "runtime.json"))
+	// 已安装的发布（当前或上一发布）按它自带的服务目录读取，新 runtime 才能停止、替换旧目录的发布；候选发布必须用本 runtime 的目录。
+	loadPlan, validateRelease := unitruntime.LoadCandidatePlan, unitruntime.ValidateCandidate
+	if installed {
+		loadPlan, validateRelease = unitruntime.LoadPlan, unitruntime.ValidateRelease
+	}
+	plan, err := loadPlan(filepath.Join(directory, "runtime.json"))
 	if err != nil {
 		return Prepared{}, err
 	}
@@ -104,7 +109,7 @@ func readRelease(ctx context.Context, directory string, installed, verifyInvento
 			return Prepared{}, errors.New("prepared release inventory changed after preparation")
 		}
 	}
-	if err := unitruntime.ValidateRelease(filepath.Join(directory, "runtime.json")); err != nil {
+	if err := validateRelease(filepath.Join(directory, "runtime.json")); err != nil {
 		return Prepared{}, err
 	}
 	return prepared, nil

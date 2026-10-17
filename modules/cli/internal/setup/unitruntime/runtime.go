@@ -165,7 +165,12 @@ func Execute(ctx context.Context, planPath, operation string, ids []string, opts
 }
 
 func openRuntime(plan Plan) (*runtimeState, error) {
+	// 组件定义（二进制名、健康检查等）取发布自带的目录：新 runtime 管理旧目录的发布时也按那份目录启停。
+	// 主机级维护（维护锁、引导与安装日志）不针对某个发布，计划里没有发布目录，沿用内嵌目录。
 	catalog, err := servicecatalog.LoadEmbedded()
+	if plan.ReleaseRoot != "" {
+		catalog, err = releaseCatalog(plan)
+	}
 	if err != nil {
 		return nil, err
 	}
