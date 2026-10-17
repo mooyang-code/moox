@@ -169,8 +169,9 @@ func TestPartitionOfDayAndMonth(t *testing.T) {
 		time.Date(2026, 9, 30, 16, 0, 0, 0, time.UTC), // 上海 10-01 零点
 		time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),  // 美股 10-01 的 UTC 零点
 	} {
-		if key, _, _ := PartitionOf("month", utc, dataTime); key != "2026-10" {
-			t.Fatalf("月初日线 %s 应落在 2026-10: %s", dataTime, key)
+		key, start, end := PartitionOf("month", utc, dataTime)
+		if key != "2026-10" || dataTime.Before(start) || !dataTime.Before(end) {
+			t.Fatalf("月初日线 %s 应落在 2026-10 且在分区范围内: %s [%s, %s)", dataTime, key, start, end)
 		}
 	}
 	if key, _, _ := PartitionOf("month", utc, time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)); key != "2026-09" {
@@ -200,7 +201,8 @@ func TestPartitionCloseAndExportEstimate(t *testing.T) {
 	// 月分区：分区结束 + 一根 K 线的最大跨度（周线 7 天）。
 	mkey, mstart, mend := PartitionOf("month", time.UTC, time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC))
 	mclose, _ := PartitionClose("month", time.UTC, "", "1w", mstart, mend)
-	if mkey != "2026-08" || !mclose.Equal(time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)) {
+	// 8 月分区在 data_time 上结束于 08-31 12:00，加一根周线的最大跨度 7 天 = 09-07 12:00。
+	if mkey != "2026-08" || !mend.Equal(time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)) || !mclose.Equal(time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)) {
 		t.Fatalf("月分区收盘 = %s key=%s", mclose, mkey)
 	}
 	if _, err := PartitionClose("day", sh, "25:99", "1m", start, end); err == nil {

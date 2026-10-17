@@ -615,3 +615,12 @@ limit 根，有范围按升序取最早 limit 根；`data rows export` 需要 `-
 - 实现：`modules/archive`（schema 四张表、`ArchiveMgr` 14 个方法、`ArchiveWorker` 4 个方法、执行计划校验、每秒全局触发器与每分钟维护、worker 租约、运行租约与取消、完成上报、健康等级）；服务目录新增 `archive-mgr` 组件（可选，`required_in_default_profile: false`）、外部身份 `archive-worker`、`Metadata.GetDataset` 对 `archive-mgr` 放行；Admin 空间头策略、CLI 部署单元（顺序、打包、运行参数、Storage 密钥、核心构建）、`build.sh archive-mgr` 与发行脚本已登记。本机 `go test -race` 通过（store、service、schedule、config、bootstrap、health、schema）。
 - Codex 审查 5 处，核实后全部修复：停用后重新启用并「立即运行」会与已有运行并行（现在已有排队 / 运行中的运行时不再生成）；取消的运行可被重复完成上报覆盖后来的分区登记（完成后令牌作废）；worker 接管与领取之间的竞态（领取事务内再核对实例与租约）；`release.sh` 没有创建 `modules/archive/bin`；被取消的运行即使上报成功也推进了任务的最近成功时间（现在不推进，且最近成功时间只前进）。
 - 未做：真实进程联调（mgr 需要 Admin 分配的网关密钥）、`moox-archive-cli`、Monitor 指标与告警（doctor 暂为 `health_only`）；worker 是阶段 7。
+
+### 15.z 阶段 7（archive-worker）实现记录（2026-10-17）
+
+- 实现：`modules/archive/cmd/worker` 与 `internal/worker/{config,pacing,source,staging,export,runner,manager,app}`——DuckDB 暂存区（水位、永久的分区状态、按任务的暂存表、`ALTER TABLE ADD COLUMN`、批量比对写入、导出、读回已定稿文件、定稿与水位同一事务、库重建）、
+  节奏控制（时间窗、请求间隔、共享令牌桶）、区间读取（按分区切块、游标、重试、保留期截断）、心跳 / 领取 / 进度 / 完成上报与每日维护。
+- 过程中修正了一个 mgr 侧的分区范围错误：月分区在 `data_time` 上的范围是 `[当月 1 日 − 12h, 下月 1 日 − 12h)`（`schedule.PartitionOf` 之前直接返回了加 12 小时之后的范围）。
+- 验证：`go test -race` 通过（含 `internal/e2e`：真实 mgr（SQLite）与真实 worker（DuckDB）在同一进程里走完「建任务 → 触发 → 领取 → 读取 → 暂存 → 导出 → 登记 → 定稿 → 补拉区间读回重写」）；`deploy-archive-worker.sh` 契约测试；Linux 版在编译机上构建成功并能启动。
+- 构建与部署：`build.sh archive-worker`、`build-storage-linux.sh` 与 `moox-cli setup build-linux` 增加 `archive-worker`；`scripts/deploy/deploy-archive-worker.sh` 与 systemd / launchd 模板。
+- 未做：线上联调（需要发布 B 先发布 mgr 与服务目录）、`moox-archive-cli`、Monitor 指标与告警。

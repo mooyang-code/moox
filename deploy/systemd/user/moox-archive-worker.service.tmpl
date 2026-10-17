@@ -1,0 +1,19 @@
+# Rendered by scripts/deploy/deploy-archive-worker.sh into
+# ~/.config/systemd/user/moox-archive-worker.service.
+[Unit]
+Description=MooX archive worker
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__ROOT__
+EnvironmentFile=__SECRETS__/health-auth.env
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
+ExecStart=__ROOT__/bin/moox-archive-worker -config __ROOT__/config/app.yaml
+Restart=always
+RestartSec=10
+StandardOutput=append:__ROOT__/logs/archive-worker.log
+StandardError=append:__ROOT__/logs/archive-worker.log
+
+[Install]
+WantedBy=default.target

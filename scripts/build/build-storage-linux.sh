@@ -22,6 +22,9 @@ case "${linux_cgo_target}" in
   storage-primary)
     linux_cgo_binaries=(moox-storage-primary)
     ;;
+  archive-worker)
+    linux_cgo_binaries=(moox-archive-worker)
+    ;;
   *)
     die "unsupported linux CGO build target: ${linux_cgo_target}"
     ;;
