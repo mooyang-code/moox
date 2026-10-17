@@ -53,7 +53,7 @@ func TestPullReturnsJobWithEnabledSelection(t *testing.T) {
 	require.True(t, set.ResultReady)
 	require.Len(t, set.Factors, 1)
 	require.Equal(t, "cci", set.Factors[0].FactorID)
-	require.NotEmpty(t, set.Factors[0].SourceCode)
+	require.NotEmpty(t, set.Factors[0].Spec)
 }
 
 func TestPullDefaultsToAllEnabledMembers(t *testing.T) {

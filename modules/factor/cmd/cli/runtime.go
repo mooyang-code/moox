@@ -14,7 +14,6 @@ import (
 // runtimeConfig shares the Manager's strict configuration and deployment identity.
 type runtimeConfig struct {
 	DatabasePath  string
-	PythonBin     string
 	ConfigPath    string
 	GatewayClient gatewayclient.FileConfig
 }
@@ -39,7 +38,7 @@ func loadRuntimeConfig(path string) (runtimeConfig, error) {
 	if strings.TrimSpace(os.Getenv("MOOX_FACTOR_DB_PATH")) == "" && !filepath.IsAbs(databasePath) {
 		databasePath = filepath.Clean(filepath.Join(root, databasePath))
 	}
-	return runtimeConfig{DatabasePath: databasePath, PythonBin: manager.Python.Bin, ConfigPath: absolute, GatewayClient: manager.GatewayClient}, nil
+	return runtimeConfig{DatabasePath: databasePath, ConfigPath: absolute, GatewayClient: manager.GatewayClient}, nil
 }
 
 func normalizeCLIList(name string, values []string) ([]string, error) {

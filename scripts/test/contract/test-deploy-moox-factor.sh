@@ -24,8 +24,6 @@ ln -s "${ROOT}/modules/cli" "${FIXTURE_ROOT}/modules/cli"
 ln -s "${ROOT}/modules/factor" "${FIXTURE_ROOT}/modules/factor"
 ln -s "${ROOT}/packages/doctor" "${FIXTURE_ROOT}/packages/doctor"
 ln -s "${ROOT}/packages/servicecatalog" "${FIXTURE_ROOT}/packages/servicecatalog"
-mkdir -p "${FIXTURE_ROOT}/packages/pyruntime"
-ln -s "${ROOT}/packages/pyruntime/python" "${FIXTURE_ROOT}/packages/pyruntime/python"
 ln -s "${ROOT}/examples" "${FIXTURE_ROOT}/examples"
 mkdir -p "${FIXTURE_ROOT}/config"
 ln -s "${ROOT}/config/setup" "${FIXTURE_ROOT}/config/setup"
@@ -70,7 +68,7 @@ for path in \
   bin/moox-factor-mgr-cli \
   factor-mgr/config/app.yaml \
   factor-mgr/config/trpc_go.yaml \
-  factor-mgr/factors/Bias.py \
+  factor-mgr/factors/xbx.yaml \
   secrets/gateway-factor.key \
   secrets/gateway-service.env \
   secrets/storage-internal-auth.env \
@@ -97,7 +95,10 @@ grep -Fxq 'MOOX_GATEWAY_NODE_ID=factor-contract' "${UNPACKED}/secrets/gateway-se
 grep -Fq 'MOOX_FACTOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor-mgr/factor.db}' "${UNPACKED}/start.sh"
-grep -Fq "import pandas, numpy" "${UNPACKED}/start.sh"
+if grep -Eq 'import pandas|MOOX_FACTOR_PYTHON_BIN' "${UNPACKED}/start.sh"; then
+  echo "control start.sh still requires a Python factor runtime" >&2
+  exit 1
+fi
 for removed in factor-mgr/pyworker python-runtime/moox_pyruntime bin/moox-factor-engine factor-mgr/config/engine.yaml; do
   [[ ! -e "${UNPACKED}/${removed}" ]] || { echo "the manager package must not ship ${removed}" >&2; exit 1; }
 done

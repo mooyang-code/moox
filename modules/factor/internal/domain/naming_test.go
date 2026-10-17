@@ -1,68 +1,80 @@
 package domain
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
-func baseFactor() FactorDef {
-	return FactorDef{
-		FactorID: "mom", Name: "动量", FactorType: "single_symbol_timeseries", SourceCode: "def compute(x):\n    return x\n",
-		InputColumns: []string{"close"}, Outputs: []string{"mom"}, ParamsJSON: `{"window":20,"scale":1.5}`,
-		LookbackPeriods: 21, AllowPartialUniverse: false,
-	}
+const baseSpec = `# 动量
+params: {window: 20}
+let:
+  r: close / delay(close, window) - 1
+outputs:
+  mom_{window}: r
+`
+
+func baseFactor(t *testing.T) FactorDef {
+	t.Helper()
+	def, err := NormalizeFactorDefinition(FactorDef{FactorID: "mom", Name: "动量", Spec: baseSpec})
+	require.NoError(t, err)
+	return def
 }
 
-// DefinitionHash 是完整计算契约的指纹：源码、类型、参数、回看周期、输入输出列、allow_partial_universe 任一变化都要变；
-// 只改参数而不改源码时 SourceHash 不变、DefinitionHash 变化。
+func withSpec(t *testing.T, spec string, partial bool) FactorDef {
+	t.Helper()
+	def, err := NormalizeFactorDefinition(FactorDef{FactorID: "mom", Name: "动量", Spec: spec, AllowPartialUniverse: partial})
+	require.NoError(t, err)
+	return def
+}
+
+// DefinitionHash 是计算契约的指纹：改窗口、改表达式、改输出名、改 allow_partial_universe 都要变（设计 9.3）。
 func TestDefinitionHashChangesWithEveryContractField(t *testing.T) {
-	base := baseFactor()
-	want := DefinitionHash(base)
-	if DefinitionHash(base) != want {
-		t.Fatal("同一定义的指纹必须稳定")
+	want := DefinitionHash(baseFactor(t))
+	require.NotEmpty(t, want)
+	require.Equal(t, want, DefinitionHash(baseFactor(t)), "同一定义的指纹必须稳定")
+	changes := map[string]string{
+		"窗口":  strings.Replace(baseSpec, "window: 20", "window: 30", 1),
+		"表达式": strings.Replace(baseSpec, "close / delay", "open / delay", 1),
+		"输出名": strings.Replace(baseSpec, "mom_{window}", "momentum_{window}", 1),
 	}
-	changes := map[string]func(*FactorDef){
-		"源码":                     func(f *FactorDef) { f.SourceCode += "# changed\n" },
-		"因子类型":                   func(f *FactorDef) { f.FactorType = "cross_section" },
-		"参数值":                    func(f *FactorDef) { f.ParamsJSON = `{"window":30,"scale":1.5}` },
-		"参数新增键":                  func(f *FactorDef) { f.ParamsJSON = `{"window":20,"scale":1.5,"extra":1}` },
-		"回看周期":                   func(f *FactorDef) { f.LookbackPeriods = 22 },
-		"输入列":                    func(f *FactorDef) { f.InputColumns = []string{"close", "volume"} },
-		"输出列":                    func(f *FactorDef) { f.Outputs = []string{"mom", "mom2"} },
-		"allow_partial_universe": func(f *FactorDef) { f.AllowPartialUniverse = true },
+	for name, spec := range changes {
+		require.NotEqual(t, want, DefinitionHash(withSpec(t, spec, false)), name)
 	}
-	for name, change := range changes {
-		changed := baseFactor()
-		change(&changed)
-		if DefinitionHash(changed) == want {
-			t.Errorf("%s 变化后指纹应不同", name)
-		}
-	}
-	// 只改参数：源码 hash 不变，定义指纹变化。
-	params := baseFactor()
-	params.ParamsJSON = `{"window":30,"scale":1.5}`
-	if SourceHash(params.SourceCode) != SourceHash(base.SourceCode) || DefinitionHash(params) == want {
-		t.Error("只改参数时 SourceHash 不变、DefinitionHash 应变化")
-	}
+	cross := `outputs:
+  r: cs_rank(close)
+`
+	require.NotEqual(t, DefinitionHash(withSpec(t, cross, false)), DefinitionHash(withSpec(t, cross, true)), "allow_partial_universe")
 }
 
-// 不属于计算契约的字段（标识、名称、时间戳）和参数的书写形式（键序、空白）不影响指纹；预先算好的 SourceHash 与现算一致。
-func TestDefinitionHashIgnoresNonContractFieldsAndNormalizesParams(t *testing.T) {
-	base := baseFactor()
+// 不影响结果的改动（标识、名称、时间戳、注释、格式、let 名）不改变指纹，但会改变 SpecHash。
+func TestDefinitionHashIgnoresNonContractChanges(t *testing.T) {
+	base := baseFactor(t)
 	want := DefinitionHash(base)
-	same := baseFactor()
+	same := withSpec(t, `params:
+  window: 20
+let:
+  ret: close/delay(close,window)-1   # 改了 let 名与格式
+outputs:
+  mom_{window}: ret
+`, false)
 	same.FactorID, same.Name = "other", "另一个名字"
 	same.CreatedAt, same.UpdatedAt = time.Unix(1, 0), time.Unix(2, 0)
-	same.ParamsJSON = "{ \"scale\": 1.5,\n  \"window\": 20 }"
-	same.SourceHash = SourceHash(same.SourceCode)
-	if got := DefinitionHash(same); got != want {
-		t.Fatalf("标识、名称、时间戳、参数书写形式与键序不应影响指纹：%s != %s", got, want)
-	}
-	empty := baseFactor()
-	empty.ParamsJSON = ""
-	braces := baseFactor()
-	braces.ParamsJSON = "{}"
-	if DefinitionHash(empty) != DefinitionHash(braces) {
-		t.Error("空参数与 {} 应规范化为同一指纹")
-	}
+	require.Equal(t, want, DefinitionHash(same))
+	require.NotEqual(t, base.SpecHash, same.SpecHash, "SpecHash 跟随原文")
+	// 编译失败（expr 版本不一致）时按原文派生稳定、非空的指纹：周期标记与账本要求指纹非空。
+	broken := FactorDef{Spec: "outputs: {x: nope(close)}"}
+	require.NotEmpty(t, DefinitionHash(broken))
+	require.Equal(t, DefinitionHash(broken), DefinitionHash(broken))
+	require.NotEqual(t, DefinitionHash(broken), DefinitionHash(FactorDef{Spec: "outputs: {x: nope(open)}"}))
+	require.Empty(t, DefinitionHash(FactorDef{}))
+}
+
+func TestSpecHashIsStableAndPrefixed(t *testing.T) {
+	got := SpecHash("outputs: {x: close}\n")
+	require.True(t, strings.HasPrefix(got, "sha256:"))
+	require.Equal(t, got, SpecHash("outputs: {x: close}\n"))
+	require.NotEqual(t, got, SpecHash("outputs: {x: open}\n"))
 }

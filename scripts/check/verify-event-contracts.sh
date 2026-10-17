@@ -92,13 +92,13 @@ reject '^[[:space:]]+(stream|consumer|url):' \
 # persistence and recalculation APIs belong in this removal guard.
 reject 'NewDurableEventBatcher|PendingEventStore|t_factor_event_inbox|arrow_mmap|GetRecalcProgress|ListFactorRuns' \
   "removed Factor capability remains" \
-  --glob '*.go' --glob '*.proto' --glob '*.py' --glob '!**/*_test.go' \
-  modules/factor/internal modules/factor/proto modules/factor/cmd modules/factor/pyworker
+  --glob '*.go' --glob '*.proto' --glob '!**/*_test.go' \
+  modules/factor/internal modules/factor/proto modules/factor/cmd
 reject 'KLineColumns|DependsFromSource|DefaultLookback|signal_multi_params|c_periods_json|c_depends_json' \
   "legacy OHLCV/period Factor contract remains" \
-  --glob '*.go' --glob '*.proto' --glob '*.py' --glob '*.sql' --glob '!**/*_test.go' \
+  --glob '*.go' --glob '*.proto' --glob '*.yaml' --glob '*.sql' --glob '!**/*_test.go' \
   examples/factors modules/factor/internal modules/factor/proto modules/factor/schema \
-  modules/factor/cmd modules/factor/pyworker
+  modules/factor/cmd modules/factor/factors
 reject 'NATSURL|EmbeddedJetStreamConfig|yaml:"nats_url"|yaml:"embedded"' \
   "CloudNode still exposes duplicate or embedded JetStream settings" \
   --glob '*.go' modules/cloudnode/internal

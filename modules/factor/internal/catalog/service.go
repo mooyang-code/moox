@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -17,11 +16,6 @@ import (
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"gorm.io/gorm"
 )
-
-// SourceChecker asks the Python runtime to load a materialized source version.
-type SourceChecker interface {
-	CheckSource(ctx context.Context, factor domain.FactorDef, sourcePath string) error
-}
 
 // RecalcSubmitter durably accepts an initial historical backfill before the
 // factor becomes visible to live triggers.
@@ -36,9 +30,6 @@ type EarliestPeriodProvider interface {
 type Option func(*Service)
 
 func WithLockDir(path string) Option { return func(s *Service) { s.locks = setlock.New(path) } }
-func WithSourceChecker(checker SourceChecker) Option {
-	return func(s *Service) { s.sourceChecker = checker }
-}
 func WithRecalcSubmitter(submitter RecalcSubmitter) Option {
 	return func(s *Service) { s.recalc = submitter }
 }
@@ -65,7 +56,6 @@ func WithReadyRecorder(record func(setID string, ready bool)) Option {
 type Service struct {
 	db             *store.Store
 	metadata       storageio.Metadata
-	sourceChecker  SourceChecker
 	recalc         RecalcSubmitter
 	earliestPeriod EarliestPeriodProvider
 	recordReady    func(setID string, ready bool)
@@ -286,13 +276,10 @@ func (s *Service) ListSets(ctx context.Context) ([]domain.FactorSet, error) {
 }
 
 // CreateFactor registers a standalone definition. It only runs the static
-// checks and a trial load of the source; dataset checks wait for AddFactorToSet.
+// checks (compiling the spec); dataset checks wait for AddFactorToSet.
 func (s *Service) CreateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error) {
-	factor, err := normalizeFactor(in)
+	factor, err := domain.NormalizeFactorDefinition(in)
 	if err != nil {
-		return domain.FactorDef{}, err
-	}
-	if err := domain.ValidateDefinition(factor); err != nil {
 		return domain.FactorDef{}, err
 	}
 	unlock, err := s.locks.LockFactorContext(ctx, factor.FactorID)
@@ -300,9 +287,6 @@ func (s *Service) CreateFactor(ctx context.Context, in domain.FactorDef) (domain
 		return domain.FactorDef{}, err
 	}
 	defer unlock()
-	if err := s.loadSource(ctx, factor); err != nil {
-		return domain.FactorDef{}, err
-	}
 	if err := s.db.CreateFactor(ctx, factor); err != nil {
 		return domain.FactorDef{}, err
 	}
@@ -313,11 +297,8 @@ func (s *Service) CreateFactor(ctx context.Context, in domain.FactorDef) (domain
 // enabled; otherwise the new definition is re-validated against every set that
 // references it and any failure rejects the whole update.
 func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain.FactorDef, error) {
-	factor, err := normalizeFactor(in)
+	factor, err := domain.NormalizeFactorDefinition(in)
 	if err != nil {
-		return domain.FactorDef{}, err
-	}
-	if err := domain.ValidateDefinition(factor); err != nil {
 		return domain.FactorDef{}, err
 	}
 	unlockFactor, err := s.locks.LockFactorContext(ctx, factor.FactorID)
@@ -361,9 +342,6 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 		if _, err := s.validateMembership(ctx, set, factor); err != nil {
 			return domain.FactorDef{}, fmt.Errorf("factor set %q: %w", setID, err)
 		}
-	}
-	if err := s.loadSource(ctx, factor); err != nil {
-		return domain.FactorDef{}, err
 	}
 	if err := s.db.UpdateFactor(ctx, factor); err != nil {
 		return domain.FactorDef{}, err
@@ -624,7 +602,7 @@ func (s *Service) validateMembership(ctx context.Context, set domain.FactorSet, 
 			origins[column.ColumnName] = column.OriginID
 		}
 	}
-	if err := domain.ValidateMembership(set, factor, columnNames(columns), siblings, origins); err != nil {
+	if err := domain.ValidateMembership(set, factor, sourceColumns(columns), siblings, origins); err != nil {
 		return nil, err
 	}
 	return members, nil
@@ -636,29 +614,6 @@ func requireSetOpen(set domain.FactorSet) error {
 		return errors.New("factor set is not ready")
 	case domain.SetStatusDeleting:
 		return errors.New("factor set purge is pending")
-	}
-	return nil
-}
-
-func (s *Service) loadSource(ctx context.Context, factor domain.FactorDef) error {
-	if s.sourceChecker == nil {
-		return errors.New("factor source checker is required")
-	}
-	tmp, err := os.CreateTemp("", "moox-factor-check-*.py")
-	if err != nil {
-		return fmt.Errorf("create temporary factor source: %w", err)
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmp.WriteString(factor.SourceCode); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write temporary factor source: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temporary factor source: %w", err)
-	}
-	if err := s.sourceChecker.CheckSource(ctx, factor, tmpPath); err != nil {
-		return fmt.Errorf("load factor source: %w", err)
 	}
 	return nil
 }
@@ -743,20 +698,6 @@ func (s *Service) markReady(setID string, ready bool) {
 	}
 }
 
-func normalizeFactor(factor domain.FactorDef) (domain.FactorDef, error) {
-	normalized, err := domain.NormalizeFactorDefinition(factor)
-	if err != nil {
-		return domain.FactorDef{}, err
-	}
-	if normalized.SourceHash == "" {
-		normalized.SourceHash = domain.SourceHash(normalized.SourceCode)
-	}
-	if normalized.SourceHash != domain.SourceHash(normalized.SourceCode) {
-		return domain.FactorDef{}, errors.New("source_hash does not match source_code")
-	}
-	return normalized, nil
-}
-
 func sameSetIdentity(existing, requested domain.FactorSet) error {
 	if existing.SpaceID != requested.SpaceID || existing.SourceDatasetID != requested.SourceDatasetID ||
 		existing.Freq != requested.Freq || existing.ResultDatasetID != requested.ResultDatasetID {
@@ -814,10 +755,12 @@ func businessColumns(columns []storageio.ColumnInfo) []storageio.ColumnInfo {
 	return out
 }
 
-func columnNames(columns []storageio.ColumnInfo) []string {
-	out := make([]string, 0, len(columns))
-	for _, col := range columns {
-		out = append(out, col.ColumnName)
+// sourceColumns 把源数据集的列转换成成员校验用的形式：int 与 double 是数值列。
+func sourceColumns(columns []storageio.ColumnInfo) []domain.SourceColumn {
+	out := make([]domain.SourceColumn, 0, len(columns))
+	for _, column := range columns {
+		out = append(out, domain.SourceColumn{Name: column.ColumnName,
+			Numeric: column.ValueType == storageio.ColumnTypeInt || column.ValueType == storageio.ColumnTypeDouble})
 	}
 	return out
 }

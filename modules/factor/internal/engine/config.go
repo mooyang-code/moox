@@ -1,5 +1,5 @@
 // Package engine wires moox-factor-engine: it consumes collector period
-// events, runs the Python factor pipeline and recalc jobs, and talks to
+// events, runs the factor expression pipeline and recalc jobs, and talks to
 // moox-factor-mgr only through outbound FactorEngine calls.
 package engine
 
@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,7 +26,7 @@ type Config struct {
 	CatalogSync   CatalogSyncConfig                `yaml:"catalog_sync"`
 	Storage       StorageConfig                    `yaml:"storage"`
 	EventBus      EventBusConfig                   `yaml:"eventbus"`
-	Python        PythonConfig                     `yaml:"python"`
+	Compute       ComputeConfig                    `yaml:"compute"`
 	Pipeline      PipelineConfig                   `yaml:"pipeline"`
 	Recalc        RecalcConfig                     `yaml:"recalc"`
 	Gap           GapConfig                        `yaml:"gap"`
@@ -65,22 +64,36 @@ type EventBusConfig struct {
 	FetchMaxWait   time.Duration `yaml:"fetch_max_wait"`
 }
 
-type PythonConfig struct {
-	Bin         string        `yaml:"bin"`
-	WorkerPath  string        `yaml:"worker_path"`
-	FactorsDir  string        `yaml:"factors_dir"`
-	Workers     int           `yaml:"workers"`
-	TaskTimeout time.Duration `yaml:"task_timeout"`
+// ComputeConfig 是表达式执行器的资源配置（设计 7.2、7.5）。
+type ComputeConfig struct {
+	// Workers 是一次程序执行的并行度，默认 min(4, 核数)。
+	Workers int `yaml:"workers"`
+	// MaxMemory 是一个计算分块（实时周期视为 1 个周期的分块）估算峰值内存的上限，例如 "1GiB"、"512MiB"，默认 1GiB。
+	MaxMemory ByteSize `yaml:"max_memory"`
 }
 
-// processConfig 是常驻服务与 run-once 共用的 Python worker 启动配置。
-// 因子只做逐元素与滚动运算，不调用 BLAS，worker 以单线程 BLAS 启动，免得每个进程按核数各开一个线程池。
-func (c PythonConfig) processConfig() process.Config {
-	return process.Config{
-		PythonBin: c.Bin, WorkerPath: c.WorkerPath,
-		Args: []string{"--factors-dir", c.FactorsDir}, Env: process.SingleThreadBLASEnv(),
-		TaskTimeout: c.TaskTimeout, Limits: process.DefaultLimits(),
+// ByteSize 是字节数，YAML 里可以写整数或带 KiB、MiB、GiB 后缀的字符串。
+type ByteSize int64
+
+func (b *ByteSize) UnmarshalYAML(node *yaml.Node) error {
+	text := strings.TrimSpace(node.Value)
+	units := []struct {
+		suffix string
+		scale  int64
+	}{{"GiB", 1 << 30}, {"MiB", 1 << 20}, {"KiB", 1 << 10}, {"B", 1}}
+	scale := int64(1)
+	for _, unit := range units {
+		if strings.HasSuffix(text, unit.suffix) {
+			text, scale = strings.TrimSpace(strings.TrimSuffix(text, unit.suffix)), unit.scale
+			break
+		}
 	}
+	var value int64
+	if _, err := fmt.Sscan(text, &value); err != nil || value < 0 || fmt.Sprint(value) != text {
+		return fmt.Errorf("无法解析的字节数 %q（示例：1GiB、512MiB、1073741824）", node.Value)
+	}
+	*b = ByteSize(value * scale)
+	return nil
 }
 
 type PipelineConfig struct {
@@ -172,10 +185,7 @@ func Default() *Config {
 		CatalogSync:   CatalogSyncConfig{Interval: time.Minute, Offset: 45 * time.Second, StateFile: "./data/engine/catalog.json"},
 		Storage:       StorageConfig{AuthSecretFile: "./secrets/storage-primary-auth.secret"},
 		EventBus:      EventBusConfig{FetchMaxWait: 10 * time.Second},
-		Python: PythonConfig{
-			Bin: "python3", WorkerPath: "./pyworker/worker.py", FactorsDir: "./data/engine/factors",
-			Workers: autoPythonWorkers(runtime.NumCPU()), TaskTimeout: 30 * time.Second,
-		},
+		Compute:       ComputeConfig{Workers: min(4, runtime.NumCPU()), MaxMemory: 1 << 30},
 		Pipeline: PipelineConfig{
 			ReadBatchSubjects: 100, ReadWorkers: autoReadWorkers(runtime.NumCPU()), ReadTimeout: 60 * time.Second,
 			BulkReadWorkers: 4, ReadRetryBackoff: 2 * time.Second, ReadBreakerFailures: 3,
@@ -198,11 +208,10 @@ func (c *Config) applyDefaults() {
 	setDuration(&c.CatalogSync.Interval, d.CatalogSync.Interval)
 	setString(&c.CatalogSync.StateFile, d.CatalogSync.StateFile)
 	setDuration(&c.EventBus.FetchMaxWait, d.EventBus.FetchMaxWait)
-	setString(&c.Python.Bin, d.Python.Bin)
-	setString(&c.Python.WorkerPath, d.Python.WorkerPath)
-	setString(&c.Python.FactorsDir, d.Python.FactorsDir)
-	setInt(&c.Python.Workers, d.Python.Workers)
-	setDuration(&c.Python.TaskTimeout, d.Python.TaskTimeout)
+	setInt(&c.Compute.Workers, d.Compute.Workers)
+	if c.Compute.MaxMemory == 0 {
+		c.Compute.MaxMemory = d.Compute.MaxMemory
+	}
 	setInt(&c.Pipeline.ReadBatchSubjects, d.Pipeline.ReadBatchSubjects)
 	setInt(&c.Pipeline.ReadWorkers, d.Pipeline.ReadWorkers)
 	setDuration(&c.Pipeline.ReadTimeout, d.Pipeline.ReadTimeout)
@@ -231,16 +240,13 @@ func (c *Config) applyDefaults() {
 func (c *Config) resolvePaths(root string) {
 	for _, path := range []*string{
 		&c.CatalogSync.StateFile, &c.Storage.AuthSecretFile, &c.EventBus.CredentialFile,
-		&c.Python.WorkerPath, &c.Python.FactorsDir, &c.Gap.LedgerDir,
+		&c.Gap.LedgerDir,
 	} {
 		value := strings.TrimSpace(*path)
 		if value == "" || filepath.IsAbs(value) || strings.HasPrefix(value, "~") {
 			continue
 		}
 		*path = filepath.Clean(filepath.Join(root, value))
-	}
-	if bin := strings.TrimSpace(c.Python.Bin); strings.Contains(bin, string(filepath.Separator)) && !filepath.IsAbs(bin) {
-		c.Python.Bin = filepath.Clean(filepath.Join(root, bin))
 	}
 }
 
@@ -262,7 +268,7 @@ func (c *Config) Validate() error {
 	require(c.CatalogSync.Offset >= 0 && c.CatalogSync.Offset < c.CatalogSync.Interval, "catalog_sync.offset must be within [0, interval)")
 	require(strings.TrimSpace(c.Storage.AuthSecretFile) != "", "storage.auth_secret_file is required")
 	require(len(c.EventBus.URLs) > 0, "eventbus.urls must not be empty")
-	require(c.Python.Workers > 0 && c.Python.TaskTimeout > 0, "python.workers and python.task_timeout must be positive")
+	require(c.Compute.Workers > 0 && c.Compute.MaxMemory > 0, "compute.workers and compute.max_memory must be positive")
 	require(c.Pipeline.PeriodBudgetMin <= c.Pipeline.PeriodBudgetMax, "pipeline.period_budget_min must not exceed period_budget_max")
 	require(c.Recalc.ChunkPeriods > 0, "recalc.chunk_periods must be positive")
 	require(c.Gap.SweepInterval > 0 && c.Gap.Settle >= 0 && c.Gap.GiveUpAfter > 0, "gap.sweep_interval, gap.settle and gap.give_up_after must be positive")
@@ -284,13 +290,6 @@ func setDuration(target *time.Duration, fallback time.Duration) {
 	if *target == 0 {
 		*target = fallback
 	}
-}
-
-// autoPythonWorkers 按目标机器核数选择 Python 因子进程数（配置里 workers 不写或为 0 时）：
-// 取核数的四分之一，范围 [4, 16]。计算只在每分钟周期里突发，周期时延的大头是读取而不是计算，
-// 常驻进程再多也只是空占内存与调度开销，留出余量给 Go 进程与同机其他服务。
-func autoPythonWorkers(cpus int) int {
-	return min(16, max(4, cpus/4))
 }
 
 // autoReadWorkers 按核数选择读取并发（read_workers 不写或为 0 时），范围 [4, 16]。

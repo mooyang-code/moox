@@ -2,27 +2,23 @@ package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
+	"math"
 	"sort"
-	"sync"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/factorexpr"
+	"github.com/mooyang-code/moox/packages/factorexpr/exec"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
 
-type computeTask struct {
-	subject string
-	cross   bool
-	factors []domain.FactorDef
-	target  time.Time
-}
-
+// Compute 每个集合每期（补算每个分块）调用一次 factorexpr 程序（设计 8）：集合内可计算的因子编译成一个程序，
+// 在 available 标的的网格面板上算出全部目标时刻，再按源行转换成逐行结果。因子级的判断（严格截面因子跳过、
+// 空洞标的失败）与 Python 时代一致。
 func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Computation, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -31,13 +27,9 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		return Computation{}, errors.New("factor period clock is required")
 	}
 	if len(plan.Factors) == 0 {
-		return Computation{Results: map[string]map[string]pyexec.ItemResult{}, FactorStates: map[string]storageio.FactorState{}}, nil
+		return Computation{Results: map[string]map[string]ItemResult{}, FactorStates: map[string]storageio.FactorState{}}, nil
 	}
 	target, err := planTarget(r.clock, plan)
-	if err != nil {
-		return Computation{}, err
-	}
-	freqDuration, err := r.clock.Duration(plan.Set.Freq)
 	if err != nil {
 		return Computation{}, err
 	}
@@ -54,11 +46,20 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 	missing = uniqueSorted(append(missing, loaded.FailedSubjects...))
 	computation := Computation{
 		CrossPeriods: make(map[string]map[int64]periodOutcome),
-		Results:      make(map[string]map[string]pyexec.ItemResult, len(plan.Factors)),
+		Results:      make(map[string]map[string]ItemResult, len(plan.Factors)),
 		FactorStates: make(map[string]storageio.FactorState, len(plan.Factors)),
 	}
-	statesMu := sync.Mutex{}
+	compiled := make(map[string]domain.FactorDef, len(plan.Factors))
+	compileErrs := make(map[string]error)
 	for _, factor := range plan.Factors {
+		def, compileErr := r.compile(factor)
+		if compileErr != nil {
+			compileErrs[factor.FactorID] = fmt.Errorf("因子 %s 在引擎侧编译失败：%w", factor.FactorID, compileErr)
+			if r.cfg.OnCompileError != nil {
+				r.cfg.OnCompileError(plan.Set.SetID, factor.FactorID)
+			}
+		}
+		compiled[factor.FactorID] = def
 		status := "complete"
 		failed := append([]string(nil), missing...)
 		// 回看窗口有 K 线空洞的标的对该因子失败（gap_subjects 是 failed_subjects 的子集）。
@@ -67,7 +68,7 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		if factor.FactorType == domain.FactorTypeCrossSection && len(missing) > 0 && !factor.AllowPartialUniverse {
 			status = "skipped"
 		}
-		// 严格截面因子：实时周期只要有标的有洞就整因子 skipped；补算按周期逐个跳过（见下面的任务生成），不整块跳过。
+		// 严格截面因子：实时周期只要有标的有洞就整因子 skipped；补算按周期逐个跳过（见 crossPeriods），不整块跳过。
 		if factor.FactorType == domain.FactorTypeCrossSection && len(gapSubjects) > 0 && !factor.AllowPartialUniverse && plan.Mode == ModeLive {
 			status = "skipped"
 		}
@@ -77,88 +78,30 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		if len(failed) > 0 && status != "skipped" {
 			status = "degraded"
 		}
-		computation.Results[factor.FactorID] = make(map[string]pyexec.ItemResult)
+		computation.Results[factor.FactorID] = make(map[string]ItemResult)
 		computation.FactorStates[factor.FactorID] = storageio.FactorState{
-			FactorID: factor.FactorID, Status: status, FailedSubjects: failed, SourceHash: factor.SourceHash,
-			DefinitionHash: domain.DefinitionHash(factor), GapSubjects: gapSubjects,
-		}
-	}
-	addResult := func(factorID, key string, item pyexec.ItemResult) {
-		statesMu.Lock()
-		defer statesMu.Unlock()
-		if _, ok := computation.Results[factorID]; !ok {
-			computation.Results[factorID] = make(map[string]pyexec.ItemResult)
-		}
-		if previous, exists := computation.Results[factorID][key]; exists && previous.Err == nil && item.Err == nil {
-			if len(previous.Columns) > 0 && len(item.Columns) > 0 && !equalStrings(previous.Columns, item.Columns) {
-				item = pyexec.ItemResult{FactorID: factorID, Err: fmt.Errorf("executor changed result columns between recalc periods")}
-			} else {
-				if len(item.Columns) == 0 {
-					item.Columns = previous.Columns
-				}
-				item.Rows = append(previous.Rows, item.Rows...)
-			}
-		}
-		computation.Results[factorID][key] = item
-		if item.Err != nil {
-			state := computation.FactorStates[factorID]
-			state.FailedSubjects = uniqueSorted(append(state.FailedSubjects, key))
-			state.Status = "degraded"
-			computation.FactorStates[factorID] = state
+			FactorID: factor.FactorID, Status: status, FailedSubjects: failed, SourceHash: factor.SpecHash,
+			DefinitionHash: domain.DefinitionHash(def), GapSubjects: gapSubjects,
 		}
 	}
 
-	var timeFactors []domain.FactorDef
-	var crossFactors []domain.FactorDef
+	// 参与本次程序的因子：时序因子全部参与；截面因子未被整因子跳过才参与。
+	var runnable []domain.FactorDef
 	for _, factor := range plan.Factors {
-		switch factor.FactorType {
-		case domain.FactorTypeTimeSeries:
-			timeFactors = append(timeFactors, factor)
-		case domain.FactorTypeCrossSection:
-			if computation.FactorStates[factor.FactorID].Status != "skipped" {
-				crossFactors = append(crossFactors, factor)
-			}
-		}
-	}
-	tasks := make([]computeTask, 0, len(available)+len(crossFactors))
-	for _, subject := range available {
-		if len(timeFactors) > 0 {
-			tasks = append(tasks, computeTask{subject: subject, factors: timeFactors, target: target})
-		}
-	}
-	for _, factor := range crossFactors {
-		factorTargets := []time.Time{target}
-		if plan.Mode == ModeRecalc {
-			factorTargets = targets
-		}
-		for _, factorTarget := range factorTargets {
-			// 严格截面因子在该周期有标的有洞：这个周期不算（其余周期照常），不能用缺了标的的全集算排名与标准化。
-			if !factor.AllowPartialUniverse && len(gaps.Subjects(factor.FactorID, factorTarget)) > 0 {
-				setCrossPeriod(&computation, factor.FactorID, factorTarget, periodGap)
+		if factor.FactorType == domain.FactorTypeCrossSection {
+			if computation.FactorStates[factor.FactorID].Status == "skipped" {
 				continue
 			}
-			tasks = append(tasks, computeTask{cross: true, factors: []domain.FactorDef{factor}, target: factorTarget})
+			computation.crossPeriods(factor, gaps, targets)
 		}
+		if err := compileErrs[factor.FactorID]; err != nil {
+			computation.fail(factor, plan, available, err)
+			continue
+		}
+		runnable = append(runnable, compiled[factor.FactorID])
 	}
-	if len(tasks) == 0 {
+	if len(runnable) == 0 || len(available) == 0 {
 		return computation, nil
-	}
-	if r.exec == nil {
-		return Computation{}, errors.New("factor Python executor is required")
-	}
-	var panel storageio.Frame
-	var panels *panelIndex
-	if len(crossFactors) > 0 {
-		var panelErr error
-		panel, panelErr = buildPanelFrame(available, loaded.Frames)
-		if panelErr != nil {
-			return Computation{}, panelErr
-		}
-		if plan.Mode == ModeRecalc {
-			if panels, panelErr = newPanelIndex(panel); panelErr != nil {
-				return Computation{}, panelErr
-			}
-		}
 	}
 
 	workCtx := ctx
@@ -167,121 +110,356 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		workCtx, cancel = context.WithTimeout(ctx, plan.Budget)
 	}
 	defer cancel()
-	workers := r.cfg.PythonWorkers
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > len(tasks) {
-		workers = len(tasks)
-	}
-	jobs := make(chan computeTask)
-	var workersDone sync.WaitGroup
-	for worker := 0; worker < workers; worker++ {
-		workersDone.Add(1)
-		go func() {
-			defer workersDone.Done()
-			for task := range jobs {
-				frame := any(panel)
-				// 允许部分全集的截面因子：该周期有洞的标的不进 panel 与 available_subjects，用剩下的计算。
-				taskAvailable, excluded := available, map[string]struct{}(nil)
-				if task.cross {
-					if dropped := gaps.Subjects(task.factors[0].FactorID, task.target); len(dropped) > 0 {
-						excluded = make(map[string]struct{}, len(dropped))
-						for _, subject := range dropped {
-							excluded[subject] = struct{}{}
-						}
-						taskAvailable = subjectDifference(available, dropped)
-						frame = filterPanel(panel, excluded)
-					}
-				}
-				contextValues, contextErr := crossSectionContext(r.clock, plan, task.target, task.factors, taskAvailable)
-				if task.cross && plan.Mode == ModeRecalc && contextErr == nil {
-					factorStart, windowErr := r.clock.Window(task.target, plan.Set.Freq, task.factors[0].LookbackPeriods)
-					if windowErr != nil {
-						contextErr = windowErr
-					} else {
-						frame = filterPanel(panels.slice(factorStart[0], task.target.Add(freqDuration)), excluded)
-						contextValues["target_period_times"] = []string{task.target.UTC().Format(time.RFC3339Nano)}
-					}
-				}
-				if task.cross {
-					// Python 要求面板按 (data_time, series_tag, subject_id) 排序，而面板按标的拼接。
-					sortedFrame, sortErr := sortPanelFrame(frame.(storageio.Frame))
-					if sortErr != nil {
-						contextErr = sortErr
-					}
-					frame = sortedFrame
-				}
-				resultKey := ""
-				if !task.cross {
-					frame = frameFor(loaded.Frames[task.subject], task.subject, plan.CarryColumns)
-					contextValues, contextErr = timeseriesContext(r.clock, plan, task.target, task.factors, task.subject)
-					resultKey = task.subject
-				}
-				if contextErr != nil {
-					for _, factor := range task.factors {
-						addResult(factor.FactorID, resultKey, pyexec.ItemResult{FactorID: factor.FactorID, Err: contextErr})
-					}
-					continue
-				}
-				if workCtx.Err() != nil {
-					for _, factor := range task.factors {
-						addResult(factor.FactorID, resultKey, pyexec.ItemResult{FactorID: factor.FactorID, Err: workCtx.Err()})
-					}
-					continue
-				}
-				calls := make([]pyexec.FactorCall, 0, len(task.factors))
-				for _, factor := range task.factors {
-					calls = append(calls, factorCall(r.cfg.FactorsDir, factor))
-				}
-				items, callErr := r.exec.Exec(workCtx, pyexec.Request{Frame: frame, Factors: calls, Context: contextValues})
-				itemsByID := make(map[string]pyexec.ItemResult, len(items))
-				for _, item := range items {
-					itemsByID[item.FactorID] = item
-				}
-				for _, factor := range task.factors {
-					item, ok := itemsByID[factor.FactorID]
-					if !ok {
-						item = pyexec.ItemResult{FactorID: factor.FactorID, Err: fmt.Errorf("executor omitted factor result")}
-					}
-					if callErr != nil {
-						item = pyexec.ItemResult{FactorID: factor.FactorID, Err: callErr}
-					}
-					if task.cross {
-						outcome := periodOK
-						if item.Err != nil {
-							outcome = periodFailed
-						}
-						statesMu.Lock()
-						setCrossPeriod(&computation, factor.FactorID, task.target, outcome)
-						statesMu.Unlock()
-					}
-					if task.cross && item.Err != nil {
-						statesMu.Lock()
-						state := computation.FactorStates[factor.FactorID]
-						state.FailedSubjects = uniqueSorted(append(state.FailedSubjects, available...))
-						state.Status = "degraded"
-						computation.FactorStates[factor.FactorID] = state
-						statesMu.Unlock()
-						if plan.Mode == ModeRecalc {
-							item.Err = nil
-						}
-					}
-					addResult(factor.FactorID, resultKey, item)
-				}
-			}
-		}()
-	}
-	for _, task := range tasks {
-		jobs <- task
-	}
-	close(jobs)
-	workersDone.Wait()
+	result, grid, runErr := r.run(workCtx, plan, runnable, available, loaded.Frames)
 	if ctx.Err() != nil {
 		return computation, ctx.Err()
 	}
 	computation.BudgetHit = errors.Is(workCtx.Err(), context.DeadlineExceeded)
+	if runErr != nil {
+		// 补算分块超出内存预算是资源错误：整块失败、不写入、不推进进度（分块在读取前已按预算收窄，正常不会出现）。
+		if plan.Mode == ModeRecalc && errors.Is(runErr, ErrMemoryBudget) {
+			return computation, runErr
+		}
+		for _, factor := range runnable {
+			computation.fail(factor, plan, available, runErr)
+		}
+		return computation, nil
+	}
+	for _, factor := range runnable {
+		if factor.FactorType == domain.FactorTypeCrossSection {
+			computation.addCross(factor, result, grid)
+		} else {
+			computation.addTimeSeries(factor, result, grid)
+		}
+	}
 	return computation, nil
+}
+
+// compile 返回编译好的定义。引擎目录里的定义来自 JSON 快照，没有编译结果；按 (factor_id, spec) 缓存编译结果。
+func (r *Runner) compile(factor domain.FactorDef) (domain.FactorDef, error) {
+	if factor.Compiled() != nil {
+		return factor, nil
+	}
+	key := factor.FactorID + "\x00" + factor.Spec
+	if cached, ok := r.compiled.Load(key); ok {
+		def := cached.(domain.FactorDef)
+		def.Name, def.SpecHash, def.AllowPartialUniverse = factor.Name, factor.SpecHash, factor.AllowPartialUniverse
+		def.CreatedAt, def.UpdatedAt = factor.CreatedAt, factor.UpdatedAt
+		return def, nil
+	}
+	def, err := domain.CompileDefinition(factor)
+	if err != nil {
+		return factor, err
+	}
+	r.compiled.Store(key, def)
+	return def, nil
+}
+
+// computeGrid 是一次计算的时间网格与目标区间（网格下标）。
+type computeGrid struct {
+	start    time.Time
+	duration time.Duration
+	first    int
+	last     int
+}
+
+func (g computeGrid) at(t int) time.Time { return g.start.Add(time.Duration(t) * g.duration) }
+
+func (g computeGrid) index(at time.Time) int { return int(at.Sub(g.start) / g.duration) }
+
+// run 构建面板并执行程序。网格从“第一个目标周期的集合回看窗口起点”到最后一个目标周期（设计 7.1）。
+func (r *Runner) run(ctx context.Context, plan Plan, factors []domain.FactorDef, subjects []string,
+	frames map[string]*storageio.Frame) (*exec.Result, computeGrid, error) {
+	if r.cfg.MaxMemory > 0 {
+		// 读取后按实际的序列数（标的 × series_tag）复核：读取前的预检只能按标的数估计。
+		if err := withinBudget(factors, countSeries(subjects, frames), planPeriods(r.clock, plan), len(plan.CarryColumns), r.cfg.MaxMemory); err != nil {
+			return nil, computeGrid{}, err
+		}
+	}
+	inputs := make([]factorexpr.ProgramInput, 0, len(factors))
+	for _, factor := range factors {
+		inputs = append(inputs, factorexpr.ProgramInput{FactorID: factor.FactorID, Factor: factor.Compiled()})
+	}
+	program, err := factorexpr.NewProgram(inputs)
+	if err != nil {
+		return nil, computeGrid{}, err
+	}
+	duration, err := r.clock.Duration(plan.Set.Freq)
+	if err != nil {
+		return nil, computeGrid{}, err
+	}
+	last, err := planTarget(r.clock, plan)
+	if err != nil {
+		return nil, computeGrid{}, err
+	}
+	first := last
+	if plan.Mode == ModeRecalc {
+		first = plan.TargetStart.UTC()
+	}
+	window, err := r.clock.Window(first, plan.Set.Freq, max(1, program.Lookback))
+	if err != nil {
+		return nil, computeGrid{}, err
+	}
+	grid := computeGrid{start: window[0].UTC(), duration: duration}
+	grid.first, grid.last = grid.index(first), grid.index(last)
+	panel, err := buildPanel(grid, program.Columns, subjects, frames)
+	if err != nil {
+		return nil, computeGrid{}, err
+	}
+	result, err := exec.Run(ctx, program, panel, exec.Options{Start: grid.first, End: grid.last, Workers: r.cfg.ComputeWorkers})
+	if err != nil {
+		return nil, computeGrid{}, err
+	}
+	return result, grid, nil
+}
+
+// planPeriods 是计划的目标周期数：实时 1 期，补算为目标区间的周期数。
+func planPeriods(clock periodclock.Clock, plan Plan) int {
+	if plan.Mode != ModeRecalc {
+		return 1
+	}
+	duration, err := clock.Duration(plan.Set.Freq)
+	if err != nil || duration <= 0 {
+		return 1
+	}
+	return max(1, int(plan.TargetEnd.Sub(plan.TargetStart)/duration))
+}
+
+// countSeries 数出窗口里的 (标的, series_tag) 序列数；没有行的标的按 1 条计。
+func countSeries(subjects []string, frames map[string]*storageio.Frame) int {
+	total := 0
+	for _, subject := range subjects {
+		frame := frames[subject]
+		if frame == nil {
+			total++
+			continue
+		}
+		tags := map[any]struct{}{}
+		for _, row := range frame.Rows {
+			if len(row) > 1 {
+				tags[row[1]] = struct{}{}
+			}
+		}
+		total += max(1, len(tags))
+	}
+	return total
+}
+
+// precheckMemory 在读取之前按标的数（每个标的按一条序列估计）检查本次计算的估算峰值内存。
+func (r *Runner) precheckMemory(plan Plan) error {
+	if r.cfg.MaxMemory <= 0 {
+		return nil
+	}
+	return withinBudget(plan.Factors, len(plan.Available), planPeriods(r.clock, plan), len(plan.CarryColumns), r.cfg.MaxMemory)
+}
+
+// failAll 返回本期全部因子对全部预期标的计算失败的结果（内存预检不通过时使用，没有读取）。
+func (r *Runner) failAll(plan Plan, err error) Computation {
+	computation := Computation{
+		CrossPeriods: make(map[string]map[int64]periodOutcome),
+		Results:      make(map[string]map[string]ItemResult, len(plan.Factors)),
+		FactorStates: make(map[string]storageio.FactorState, len(plan.Factors)),
+	}
+	targets := []time.Time{}
+	if target, targetErr := planTarget(r.clock, plan); targetErr == nil {
+		targets = append(targets, target)
+	}
+	if plan.Mode == ModeRecalc {
+		if periods, rangeErr := periodRange(r.clock, plan.TargetStart, plan.TargetEnd, plan.Set.Freq); rangeErr == nil {
+			targets = periods
+		}
+	}
+	expected := uniqueSorted(plan.Expected)
+	for _, factor := range plan.Factors {
+		computation.Results[factor.FactorID] = make(map[string]ItemResult)
+		computation.FactorStates[factor.FactorID] = storageio.FactorState{
+			FactorID: factor.FactorID, Status: "degraded", SourceHash: factor.SpecHash, DefinitionHash: domain.DefinitionHash(factor),
+		}
+		if factor.FactorType == domain.FactorTypeCrossSection {
+			computation.crossPeriods(factor, GapReport{}, targets)
+		}
+		computation.fail(factor, plan, expected, err)
+	}
+	return computation
+}
+
+// buildPanel 把各标的的窗口放到网格上：每个 (标的, series_tag) 一条序列，按 (标的, 标签) 排序，结果与工作线程数无关；
+// null 与网格上缺失的行是 NaN，非数值值报错（入成员时已校验列类型，正常不会出现）。
+func buildPanel(grid computeGrid, columns []string, subjects []string, frames map[string]*storageio.Frame) (*exec.Panel, error) {
+	length := grid.last + 1
+	ordered := append([]string(nil), subjects...)
+	sort.Strings(ordered)
+	var keys []exec.SeriesKey
+	for _, subject := range ordered {
+		frame := frames[subject]
+		if frame == nil {
+			continue
+		}
+		if len(frame.Columns) < 2 || frame.Columns[0] != "data_time" || frame.Columns[1] != "series_tag" {
+			return nil, fmt.Errorf("frame for %q does not start with data_time, series_tag", subject)
+		}
+		seen := map[string]bool{}
+		var tags []string
+		for rowNo, row := range frame.Rows {
+			if len(row) != len(frame.Columns) {
+				return nil, fmt.Errorf("frame row %d for %q has %d values for %d columns", rowNo, subject, len(row), len(frame.Columns))
+			}
+			tag, ok := row[1].(string)
+			if !ok {
+				return nil, fmt.Errorf("标的 %s 的 series_tag 类型为 %T", subject, row[1])
+			}
+			if !seen[tag] {
+				seen[tag] = true
+				tags = append(tags, tag)
+			}
+		}
+		sort.Strings(tags)
+		for _, tag := range tags {
+			keys = append(keys, exec.SeriesKey{Subject: subject, Tag: tag})
+		}
+	}
+	panel, err := exec.NewPanel(length, columns, keys)
+	if err != nil {
+		return nil, err
+	}
+	for _, subject := range ordered {
+		frame := frames[subject]
+		if frame == nil {
+			continue
+		}
+		positions := make([]int, len(columns))
+		for i, column := range columns {
+			positions[i] = -1
+			for j, name := range frame.Columns {
+				if name == column {
+					positions[i] = j
+					break
+				}
+			}
+			if positions[i] < 0 {
+				return nil, fmt.Errorf("标的 %s 的窗口缺少输入列 %s", subject, column)
+			}
+		}
+		for rowNo, row := range frame.Rows {
+			at, err := parseDataTime(row[0])
+			if err != nil {
+				return nil, fmt.Errorf("标的 %s 第 %d 行 data_time：%w", subject, rowNo, err)
+			}
+			offset := at.Sub(grid.start)
+			if offset < 0 || offset%grid.duration != 0 || int(offset/grid.duration) >= length {
+				continue
+			}
+			t := int(offset / grid.duration)
+			s, _ := panel.SeriesIndex(exec.SeriesKey{Subject: subject, Tag: row[1].(string)})
+			for i, position := range positions {
+				value, ok := numericOrNull(row[position])
+				if !ok {
+					return nil, fmt.Errorf("标的 %s 的列 %s 不是数值（%T）", subject, columns[i], row[position])
+				}
+				if row[position] == nil {
+					value = math.NaN()
+				}
+				panel.Set(i, s, t, value)
+			}
+			panel.MarkPresent(s, t)
+		}
+	}
+	return panel, nil
+}
+
+// outputColumns 返回因子各输出列在结果里的位置。
+func outputColumns(result *exec.Result, factor domain.FactorDef) []int {
+	positions := make([]int, 0, len(factor.Outputs))
+	for _, output := range factor.Outputs {
+		for i, column := range result.Columns {
+			if column.FactorID == factor.FactorID && column.Name == output {
+				positions = append(positions, i)
+				break
+			}
+		}
+	}
+	return positions
+}
+
+// rowValues 取一个 (序列, 时刻) 的输出值；NaN 写成 null。
+func rowValues(result *exec.Result, positions []int, s, t int) []any {
+	values := make([]any, len(positions))
+	for i, column := range positions {
+		if value := result.Value(column, s, t); !math.IsNaN(value) {
+			values[i] = value
+		}
+	}
+	return values
+}
+
+// addTimeSeries 把时序因子的结果按标的转换成逐行结果：只在有源行的目标时刻产生行（设计 7.4）。
+func (c *Computation) addTimeSeries(factor domain.FactorDef, result *exec.Result, grid computeGrid) {
+	positions := outputColumns(result, factor)
+	columns := append([]string{"data_time", "series_tag"}, factor.Outputs...)
+	for s, key := range result.Series {
+		item := c.Results[factor.FactorID][key.Subject]
+		item.FactorID, item.Columns = factor.FactorID, columns
+		for t := grid.first; t <= grid.last; t++ {
+			if result.Present(s, t) {
+				item.Rows = append(item.Rows, append([]any{grid.at(t), key.Tag}, rowValues(result, positions, s, t)...))
+			}
+		}
+		c.Results[factor.FactorID][key.Subject] = item
+	}
+}
+
+// crossPeriods 预置截面因子各目标周期的结果：严格截面因子在有标的有洞的周期记为 gap、不产出（其余周期照常），
+// 不能用缺了标的的全集算排名与标准化；其余周期先记为 ok，计算失败时由 fail 改为 failed。
+func (c *Computation) crossPeriods(factor domain.FactorDef, gaps GapReport, targets []time.Time) {
+	for _, period := range targets {
+		if !factor.AllowPartialUniverse && len(gaps.Subjects(factor.FactorID, period)) > 0 {
+			setCrossPeriod(c, factor.FactorID, period, periodGap)
+			continue
+		}
+		setCrossPeriod(c, factor.FactorID, period, periodOK)
+	}
+}
+
+// addCross 把截面因子的结果合成一个以空串为键的结果，跳过记为 gap 的周期。
+func (c *Computation) addCross(factor domain.FactorDef, result *exec.Result, grid computeGrid) {
+	positions := outputColumns(result, factor)
+	item := ItemResult{FactorID: factor.FactorID, Columns: append([]string{"data_time", "series_tag", "subject_id"}, factor.Outputs...)}
+	for t := grid.first; t <= grid.last; t++ {
+		if c.CrossPeriods[factor.FactorID][grid.at(t).Unix()] != periodOK {
+			continue
+		}
+		for s, key := range result.Series {
+			if result.Present(s, t) {
+				item.Rows = append(item.Rows, append([]any{grid.at(t), key.Tag, key.Subject}, rowValues(result, positions, s, t)...))
+			}
+		}
+	}
+	c.Results[factor.FactorID][""] = item
+}
+
+// fail 记录一个因子本期（本分块）整体计算失败：时序因子对每个标的失败；截面因子未跳过的周期记为 failed，
+// 补算时结果不带错误（各周期的结果由 CrossPeriods 表达），与 Python 时代一致。
+func (c *Computation) fail(factor domain.FactorDef, plan Plan, available []string, err error) {
+	state := c.FactorStates[factor.FactorID]
+	state.FailedSubjects = uniqueSorted(append(state.FailedSubjects, available...))
+	state.Status = "degraded"
+	c.FactorStates[factor.FactorID] = state
+	if factor.FactorType != domain.FactorTypeCrossSection {
+		for _, subject := range available {
+			c.Results[factor.FactorID][subject] = ItemResult{FactorID: factor.FactorID, Err: err}
+		}
+		return
+	}
+	for period, outcome := range c.CrossPeriods[factor.FactorID] {
+		if outcome == periodOK {
+			c.CrossPeriods[factor.FactorID][period] = periodFailed
+		}
+	}
+	item := ItemResult{FactorID: factor.FactorID, Err: err}
+	if plan.Mode == ModeRecalc {
+		item.Err = nil
+	}
+	c.Results[factor.FactorID][""] = item
 }
 
 func planTarget(clock periodclock.Clock, plan Plan) (time.Time, error) {
@@ -295,66 +473,6 @@ func planTarget(clock periodclock.Clock, plan Plan) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return aligned, nil
-}
-
-func timeseriesContext(clock periodclock.Clock, plan Plan, target time.Time, factors []domain.FactorDef, subject string) (map[string]any, error) {
-	if plan.Mode == ModeRecalc {
-		return recalcTimeseriesContext(clock, plan, factors, subject)
-	}
-	return baseComputeContext(clock, plan, target, factors, map[string]any{"subject_id": subject})
-}
-
-func crossSectionContext(clock periodclock.Clock, plan Plan, target time.Time, factors []domain.FactorDef, available []string) (map[string]any, error) {
-	extra := map[string]any{"expected_subjects": append([]string(nil), plan.Expected...), "available_subjects": append([]string(nil), available...)}
-	if plan.Mode == ModeRecalc {
-		extra["target_period_times"] = []string{target.UTC().Format(time.RFC3339Nano)}
-	}
-	return baseComputeContext(clock, plan, target, factors, extra)
-}
-
-func recalcTimeseriesContext(clock periodclock.Clock, plan Plan, factors []domain.FactorDef, subject string) (map[string]any, error) {
-	targets, err := periodRange(clock, plan.TargetStart, plan.TargetEnd, plan.Set.Freq)
-	if err != nil {
-		return nil, err
-	}
-	periodsByFactor := make(map[string][]string, len(factors))
-	for _, factor := range factors {
-		window, err := clock.Window(plan.TargetStart, plan.Set.Freq, factor.LookbackPeriods)
-		if err != nil {
-			return nil, fmt.Errorf("factor %q lookback window: %w", factor.FactorID, err)
-		}
-		periods, err := periodRange(clock, window[0], plan.TargetEnd, plan.Set.Freq)
-		if err != nil {
-			return nil, err
-		}
-		periodsByFactor[factor.FactorID] = formatPeriods(periods)
-	}
-	last := targets[len(targets)-1]
-	return map[string]any{
-		"period_time": last.Unix(), "frequency": plan.Set.Freq,
-		"period_times_by_factor": periodsByFactor, "target_period_times": formatPeriods(targets),
-		"subject_id": subject,
-	}, nil
-}
-
-func baseComputeContext(clock periodclock.Clock, plan Plan, target time.Time, factors []domain.FactorDef, extra map[string]any) (map[string]any, error) {
-	periods := make(map[string][]string, len(factors))
-	for _, factor := range factors {
-		window, err := clock.Window(target, plan.Set.Freq, factor.LookbackPeriods)
-		if err != nil {
-			return nil, fmt.Errorf("factor %q lookback window: %w", factor.FactorID, err)
-		}
-		values := make([]string, len(window))
-		for i, period := range window {
-			values[i] = period.UTC().Format(time.RFC3339Nano)
-		}
-		periods[factor.FactorID] = values
-	}
-	contextValues := map[string]any{"period_time": target.Unix(), "frequency": plan.Set.Freq, "period_times_by_factor": periods}
-	for key, value := range extra {
-		contextValues[key] = value
-	}
-	return contextValues, nil
 }
 
 func periodRange(clock periodclock.Clock, start, end time.Time, freq string) ([]time.Time, error) {
@@ -380,156 +498,6 @@ func periodRange(clock periodclock.Clock, start, end time.Time, freq string) ([]
 		return nil, fmt.Errorf("factor period range contains no periods")
 	}
 	return periods, nil
-}
-
-func formatPeriods(periods []time.Time) []string {
-	values := make([]string, len(periods))
-	for i, period := range periods {
-		values[i] = period.UTC().Format(time.RFC3339Nano)
-	}
-	return values
-}
-
-func factorCall(factorsDir string, factor domain.FactorDef) pyexec.FactorCall {
-	return pyexec.FactorCall{
-		FactorID: factor.FactorID, Name: factor.Name, SourceHash: factor.SourceHash,
-		SourcePath: filepath.Join(factorsDir, factor.Name, factor.SourceHash+".py"),
-		FactorType: factor.FactorType, InputColumns: append([]string(nil), factor.InputColumns...),
-		Outputs: append([]string(nil), factor.Outputs...), Params: json.RawMessage(factor.ParamsJSON),
-		LookbackPeriods: factor.LookbackPeriods,
-	}
-}
-
-func frameFor(frame *storageio.Frame, subject string, columns []string) storageio.Frame {
-	if frame == nil {
-		return storageio.Frame{SubjectID: subject, Columns: append([]string{"data_time", "series_tag"}, columns...), Rows: [][]any{}}
-	}
-	return *frame
-}
-
-func buildPanelFrame(subjects []string, frames map[string]*storageio.Frame) (storageio.Frame, error) {
-	ordered := append([]string(nil), subjects...)
-	sort.Strings(ordered)
-	panel := storageio.Frame{Columns: []string{"data_time", "series_tag", "subject_id"}}
-	var expectedColumns []string
-	for _, subject := range ordered {
-		frame := frames[subject]
-		if frame == nil {
-			continue
-		}
-		if len(frame.Columns) < 2 || frame.Columns[0] != "data_time" || frame.Columns[1] != "series_tag" {
-			return storageio.Frame{}, fmt.Errorf("frame for %q does not start with data_time, series_tag", subject)
-		}
-		if expectedColumns == nil {
-			expectedColumns = append([]string(nil), frame.Columns[2:]...)
-			panel.Columns = append(panel.Columns, expectedColumns...)
-		} else if !equalStrings(expectedColumns, frame.Columns[2:]) {
-			return storageio.Frame{}, fmt.Errorf("frame columns differ for subject %q", subject)
-		}
-		for rowNo, row := range frame.Rows {
-			if len(row) != len(frame.Columns) {
-				return storageio.Frame{}, fmt.Errorf("frame row %d for %q has %d values for %d columns", rowNo, subject, len(row), len(frame.Columns))
-			}
-			values := make([]any, 0, len(row)+1)
-			values = append(values, row[:2]...)
-			values = append(values, subject)
-			values = append(values, row[2:]...)
-			panel.Rows = append(panel.Rows, values)
-		}
-	}
-	return panel, nil
-}
-
-// sortPanelFrame 返回按 (data_time, series_tag, subject_id) 升序的面板副本，不改动共享的原面板。
-func sortPanelFrame(panel storageio.Frame) (storageio.Frame, error) {
-	type keyed struct {
-		at  time.Time
-		row []any
-	}
-	rows := make([]keyed, len(panel.Rows))
-	for i, row := range panel.Rows {
-		at, err := parseDataTime(row[0])
-		if err != nil {
-			return storageio.Frame{}, fmt.Errorf("panel row %d data_time: %w", i, err)
-		}
-		rows[i] = keyed{at: at, row: row}
-	}
-	sort.SliceStable(rows, func(a, b int) bool {
-		left, right := rows[a], rows[b]
-		if !left.at.Equal(right.at) {
-			return left.at.Before(right.at)
-		}
-		if leftTag, rightTag := fmt.Sprint(left.row[1]), fmt.Sprint(right.row[1]); leftTag != rightTag {
-			return leftTag < rightTag
-		}
-		return fmt.Sprint(left.row[2]) < fmt.Sprint(right.row[2])
-	})
-	sorted := storageio.Frame{SubjectID: panel.SubjectID, Columns: panel.Columns, Rows: make([][]any, len(rows))}
-	for i, item := range rows {
-		sorted.Rows[i] = item.row
-	}
-	return sorted, nil
-}
-
-// panelIndex keeps the cross-section panel grouped by subject with rows ordered
-// by data_time, so a recalc period can cut its lookback window by binary search
-// instead of re-scanning and re-parsing the whole chunk for every period.
-type panelIndex struct {
-	columns  []string
-	subjects []panelSubject
-}
-
-type panelSubject struct {
-	times []time.Time
-	rows  [][]any
-}
-
-func newPanelIndex(panel storageio.Frame) (*panelIndex, error) {
-	index := &panelIndex{columns: append([]string(nil), panel.Columns...)}
-	current := -1
-	var currentSubject any
-	for rowNo, row := range panel.Rows {
-		at, err := parseDataTime(row[0])
-		if err != nil {
-			return nil, fmt.Errorf("panel row %d data_time: %w", rowNo, err)
-		}
-		if current < 0 || row[2] != currentSubject {
-			index.subjects = append(index.subjects, panelSubject{})
-			current++
-			currentSubject = row[2]
-		}
-		group := &index.subjects[current]
-		group.times = append(group.times, at)
-		group.rows = append(group.rows, row)
-	}
-	for i := range index.subjects {
-		group := &index.subjects[i]
-		if !sort.SliceIsSorted(group.rows, func(a, b int) bool { return group.times[a].Before(group.times[b]) }) {
-			order := make([]int, len(group.rows))
-			for k := range order {
-				order[k] = k
-			}
-			sort.SliceStable(order, func(a, b int) bool { return group.times[order[a]].Before(group.times[order[b]]) })
-			times := make([]time.Time, len(order))
-			rows := make([][]any, len(order))
-			for k, from := range order {
-				times[k], rows[k] = group.times[from], group.rows[from]
-			}
-			group.times, group.rows = times, rows
-		}
-	}
-	return index, nil
-}
-
-// slice returns the rows with start <= data_time < end, subject by subject.
-func (p *panelIndex) slice(start, end time.Time) storageio.Frame {
-	frame := storageio.Frame{Columns: append([]string(nil), p.columns...)}
-	for _, group := range p.subjects {
-		lo := sort.Search(len(group.times), func(i int) bool { return !group.times[i].Before(start) })
-		hi := sort.Search(len(group.times), func(i int) bool { return !group.times[i].Before(end) })
-		frame.Rows = append(frame.Rows, group.rows[lo:hi]...)
-	}
-	return frame
 }
 
 func equalStrings(left, right []string) bool {
@@ -564,21 +532,4 @@ func setCrossPeriod(computation *Computation, factorID string, period time.Time,
 		computation.CrossPeriods[factorID] = make(map[int64]periodOutcome)
 	}
 	computation.CrossPeriods[factorID][period.UTC().Unix()] = outcome
-}
-
-// filterPanel 返回去掉指定标的的 panel（subject_id 是第三列）；没有要去掉的标的时原样返回。
-func filterPanel(frame storageio.Frame, exclude map[string]struct{}) storageio.Frame {
-	if len(exclude) == 0 {
-		return frame
-	}
-	out := storageio.Frame{SubjectID: frame.SubjectID, Columns: frame.Columns, Rows: make([][]any, 0, len(frame.Rows))}
-	for _, row := range frame.Rows {
-		if subject, ok := row[2].(string); ok {
-			if _, dropped := exclude[subject]; dropped {
-				continue
-			}
-		}
-		out.Rows = append(out.Rows, row)
-	}
-	return out
 }

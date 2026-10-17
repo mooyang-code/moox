@@ -5,11 +5,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-factor-engine-deploy.XXXXXX")"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 DIR="${TMP_ROOT}/engine"
-mkdir -p "${DIR}/bin" "${DIR}/venv/bin" "${DIR}/secrets"
+mkdir -p "${DIR}/bin" "${DIR}/secrets"
 DIR="$(cd "${DIR}" && pwd -P)"
 printf '#!/usr/bin/env bash\nexit 0\n' >"${DIR}/bin/moox-factor-engine"
-printf '#!/usr/bin/env bash\nexit 0\n' >"${DIR}/venv/bin/python"
-chmod +x "${DIR}/bin/moox-factor-engine" "${DIR}/venv/bin/python"
+chmod +x "${DIR}/bin/moox-factor-engine"
 for secret in access-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
   printf 'secret-%s\n' "${secret}" >"${DIR}/secrets/${secret}"
   chmod 0600 "${DIR}/secrets/${secret}"
@@ -32,7 +31,13 @@ grep -Fq 'access_id: "access@storage"' "${config}"
 grep -Fq "key_file: ${DIR}/secrets/access-factor-engine.key" "${config}"
 grep -Fq 'tls://control.example:4222' "${config}"
 ! grep -Eq '^database:' "${config}"
-[[ -s "${DIR}/config/trpc_go.engine.yaml" && -s "${DIR}/pyworker/worker.py" && -s "${DIR}/pyworker/codec.py" ]]
+# 因子由引擎内置的表达式执行器计算：配置里只有 compute 段，不再安装 Python 环境与 worker。
+grep -Eq '^compute:' "${config}"
+! grep -Eq '^python:' "${config}"
+[[ -s "${DIR}/config/trpc_go.engine.yaml" ]]
+for removed in venv pyworker python-runtime; do
+  [[ ! -e "${DIR}/${removed}" ]] || { echo "the engine install must not create ${removed}" >&2; exit 1; }
+done
 grep -Eq '^MOOX_HEALTH_AUTH_SECRET_KEY=[0-9a-f]{64}$' "${DIR}/secrets/health-auth.env"
 
 if [[ "$(uname -s)" == Darwin ]]; then
@@ -43,17 +48,10 @@ else
 fi
 [[ -s "${service}" ]]
 grep -Fq "${DIR}/bin/moox-factor-engine" "${service}"
-# The worker imports moox_pyruntime from the shipped runtime directory.
-[[ -s "${DIR}/python-runtime/moox_pyruntime/protocol.py" ]]
-grep -Fq "${DIR}/python-runtime" "${service}"
-# Python worker 以单线程 BLAS 运行，服务环境兜底。
-for key in OPENBLAS_NUM_THREADS OMP_NUM_THREADS MKL_NUM_THREADS; do
-  if [[ "$(uname -s)" == Darwin ]]; then
-    [[ "$(plutil -extract "EnvironmentVariables.${key}" raw "${service}")" == 1 ]]
-  else
-    grep -Eq "^Environment=(.*[[:space:]])?${key}=1([[:space:]]|$)" "${service}"
-  fi
-done
+if grep -Eq 'python-runtime|MOOX_PYTHON_RUNTIME_PATH|OPENBLAS_NUM_THREADS' "${service}"; then
+  echo "the engine service must not carry Python runtime settings" >&2
+  exit 1
+fi
 if grep -Eq '(HTTPS?_PROXY|https?_proxy)[^ ]*=|<key>HTTPS?_PROXY' "${service}"; then
   echo "the engine service must not carry proxy variables" >&2
   exit 1

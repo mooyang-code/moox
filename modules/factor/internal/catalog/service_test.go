@@ -141,7 +141,6 @@ func TestReconcileResumesDurableResultDatasetPurge(t *testing.T) {
 	set, err := svc.CreateSet(context.Background(), newSet())
 	require.NoError(t, err)
 	require.NoError(t, db.SetSetStatus(context.Background(), set.SetID, domain.SetStatusEnabled, domain.SetStatusDisabled))
-	svc.sourceChecker = &sourceCheckerFake{}
 	_, err = svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
 	meta.deleteErrs = 1
@@ -185,7 +184,6 @@ func TestDeletingSetRejectsLifecycleMutation(t *testing.T) {
 
 	// Even if an invariant-breaking writer inserted a member, member mutations
 	// still cannot alter the pending purge into an enabled or stuck state.
-	svc.sourceChecker = &sourceCheckerFake{}
 	factor, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
 	_, err = svc.AddFactorToSet(context.Background(), set.SetID, factor.FactorID)
@@ -220,10 +218,8 @@ func TestReconcileFinishesPurgeAfterStorageMetadataWasAlreadyDeleted(t *testing.
 func TestCreateFactorDoesNotNeedSet(t *testing.T) {
 	db := openCatalogStore(t)
 	svc := NewService(db, newMetadataFake())
-	svc.sourceChecker = &sourceCheckerFake{}
 
-	factor := testFactor()
-	factor.InputColumns = []string{"any_column_name"}
+	factor := factorWithSpec("momentum", "outputs:\n  momentum: any_column_name\n")
 	created, err := svc.CreateFactor(context.Background(), factor)
 	require.NoError(t, err)
 	require.Equal(t, "momentum", created.FactorID)
@@ -232,23 +228,17 @@ func TestCreateFactorDoesNotNeedSet(t *testing.T) {
 	require.Empty(t, info.Usages)
 }
 
-func TestCreateFactorRunsStaticValidationAndLoadsSource(t *testing.T) {
+func TestCreateFactorRunsStaticValidation(t *testing.T) {
 	db := openCatalogStore(t)
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
-	checker := &sourceCheckerFake{err: errors.New("syntax error")}
-	svc.sourceChecker = checker
 
-	_, err := svc.CreateFactor(context.Background(), testFactor())
-	require.ErrorContains(t, err, "syntax error")
-	require.Equal(t, 1, checker.calls)
+	_, err := svc.CreateFactor(context.Background(), factorWithSpec("momentum", "outputs:\n  momentum: ts_mean(close,\n"))
+	require.ErrorContains(t, err, "编译失败")
 	_, err = db.GetFactor(context.Background(), "momentum")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 
-	svc.sourceChecker = &sourceCheckerFake{}
-	reserved := testFactor()
-	reserved.Outputs = []string{"series_tag"}
-	_, err = svc.CreateFactor(context.Background(), reserved)
+	_, err = svc.CreateFactor(context.Background(), factorWithSpec("momentum", "outputs:\n  series_tag: close\n"))
 	require.Error(t, err)
 	_, err = svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
@@ -260,16 +250,13 @@ func TestCreateFactorRunsStaticValidationAndLoadsSource(t *testing.T) {
 func TestAddFactorToSetValidatesAgainstSourceColumns(t *testing.T) {
 	db := openCatalogStore(t)
 	svc := newReadyService(t, db, newMetadataFake())
-	unknown := testFactor()
-	unknown.FactorID, unknown.Name, unknown.InputColumns = "unknown_input", "unknown_input", []string{"missing"}
-	unknown.Outputs = []string{"unknown_input"}
+	unknown := factorWithSpec("unknown_input", "outputs:\n  unknown_input: missing\n")
 	_, err := svc.CreateFactor(context.Background(), unknown)
 	require.NoError(t, err)
 	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "unknown_input")
 	require.ErrorContains(t, err, "unknown input column")
 
-	collide := testFactor()
-	collide.FactorID, collide.Name, collide.Outputs = "collide", "collide", []string{"close"}
+	collide := factorWithSpec("collide", "outputs:\n  close: close * 2\n")
 	_, err = svc.CreateFactor(context.Background(), collide)
 	require.NoError(t, err)
 	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "collide")
@@ -308,7 +295,7 @@ func TestAddFactorToSetRejectsOutputOwnedByOtherFactor(t *testing.T) {
 	require.NoError(t, err)
 	// A retained result column from a removed "other" member.
 	require.NoError(t, meta.UpsertColumns(context.Background(), "crypto", domain.ResultDatasetID("dataset_prices", "1m"),
-		appendFactorColumns(nil, other)))
+		appendFactorColumns(nil, domain.MustDefinition(other.FactorID, other.Name, other.Spec))))
 	_, err = svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
 
@@ -532,21 +519,21 @@ func TestUpdateFactorRejectedWhenAnyEnabledMember(t *testing.T) {
 	db := openCatalogStore(t)
 	svc := newReadyService(t, db, newMetadataFake())
 	addMember(t, svc, testSetID(), "momentum", domain.MemberStatusEnabled)
-	factor := testFactor()
-	factor.SourceCode = "def compute(frame, context): return frame['close'] + 1"
+	factor := factorWithSpec("momentum", "outputs:\n  momentum: ts_mean(close, 3) + 1\n")
 
 	_, err := svc.UpdateFactor(context.Background(), factor)
 	require.ErrorIs(t, err, store.ErrConflict)
 	require.ErrorContains(t, err, "disable")
 	got, err := db.GetFactor(context.Background(), "momentum")
 	require.NoError(t, err)
-	require.NotEqual(t, factor.SourceCode, got.SourceCode)
+	require.NotContains(t, got.Spec, "+ 1")
 
 	_, _, err = svc.SetFactorMemberStatus(context.Background(), testSetID(), "momentum", domain.MemberStatusDisabled)
 	require.NoError(t, err)
 	updated, err := svc.UpdateFactor(context.Background(), factor)
 	require.NoError(t, err)
-	require.Equal(t, factor.SourceCode, updated.SourceCode)
+	require.Contains(t, updated.Spec, "+ 1")
+	require.Equal(t, domain.SpecHash(updated.Spec), updated.SpecHash)
 }
 
 func TestUpdateFactorRevalidatesAllReferencingSetsAndNamesTheFailingSet(t *testing.T) {
@@ -554,8 +541,7 @@ func TestUpdateFactorRevalidatesAllReferencingSetsAndNamesTheFailingSet(t *testi
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
 	addMember(t, svc, testSetID(), "momentum", domain.MemberStatusDisabled)
-	factor := testFactor()
-	factor.InputColumns = []string{"missing"}
+	factor := factorWithSpec("momentum", "outputs:\n  momentum: missing\n")
 
 	_, err := svc.UpdateFactor(context.Background(), factor)
 	require.ErrorContains(t, err, testSetID())
@@ -590,8 +576,7 @@ func TestListFactorsWithAndWithoutSet(t *testing.T) {
 	db := openCatalogStore(t)
 	svc := newReadyService(t, db, newMetadataFake())
 	addMember(t, svc, testSetID(), "momentum", domain.MemberStatusEnabled)
-	loose := testFactor()
-	loose.FactorID, loose.Name, loose.Outputs = "loose", "loose", []string{"loose"}
+	loose := factorWithSpec("loose", "outputs:\n  loose: close\n")
 	_, err := svc.CreateFactor(context.Background(), loose)
 	require.NoError(t, err)
 
@@ -744,7 +729,6 @@ func newReadyService(t *testing.T, db *store.Store, meta *metadataFake) *Service
 	svc := NewService(db, meta)
 	_, err := svc.CreateSet(context.Background(), newSet())
 	require.NoError(t, err)
-	svc.sourceChecker = &sourceCheckerFake{}
 	svc.recalc = &recalcFake{db: db}
 	return svc
 }
@@ -757,12 +741,12 @@ func newSet() domain.FactorSet {
 }
 
 func testFactor() domain.FactorDef {
-	return domain.FactorDef{
-		FactorID: "momentum", Name: "momentum",
-		FactorType: domain.FactorTypeTimeSeries, SourceCode: "def compute(frame, context):\n    return frame['close']",
-		InputColumns: []string{"close"}, Outputs: []string{"momentum"}, ParamsJSON: "{}",
-		LookbackPeriods: 3,
-	}
+	return factorWithSpec("momentum", "outputs:\n  momentum: ts_mean(close, 3)\n")
+}
+
+// factorWithSpec 返回一个未规范化的请求定义（与接口收到的一样），输出列名由 spec 决定。
+func factorWithSpec(factorID, spec string) domain.FactorDef {
+	return domain.FactorDef{FactorID: factorID, Name: factorID, Spec: spec}
 }
 
 func testSetID() string { return domain.SetID("dataset_prices", "1m") }
@@ -773,9 +757,7 @@ func addMember(t *testing.T, svc *Service, setID, factorID, status string) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := svc.db.GetFactor(ctx, factorID); err != nil {
-		factor := testFactor()
-		factor.FactorID, factor.Name, factor.Outputs = factorID, factorID, []string{factorID}
-		_, err = svc.CreateFactor(ctx, factor)
+		_, err = svc.CreateFactor(ctx, factorWithSpec(factorID, "outputs:\n  "+factorID+": ts_mean(close, 3)\n"))
 		require.NoError(t, err)
 	}
 	_, err := svc.AddFactorToSet(ctx, setID, factorID)
@@ -943,16 +925,6 @@ func (f *metadataFake) DeleteDataset(_ context.Context, spaceID, datasetID strin
 	return nil
 }
 
-type sourceCheckerFake struct {
-	calls int
-	err   error
-}
-
-func (f *sourceCheckerFake) CheckSource(context.Context, domain.FactorDef, string) error {
-	f.calls++
-	return f.err
-}
-
 type recalcFake struct {
 	// requestPrefix 是回填任务请求号的前缀，默认 "enable-"；设成 "factor-enable-" 才会与真实环境一样被并入排队中的任务。
 	requestPrefix string
@@ -1007,7 +979,6 @@ func TestReconcileRecordsResultReady(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ready[set.SetID], "a freshly created set is ready")
 
-	svc.sourceChecker = &sourceCheckerFake{}
 	svc.recalc = &recalcFake{db: db}
 	addMember(t, svc, set.SetID, "momentum", domain.MemberStatusEnabled)
 	meta.sourceColumns = append(meta.sourceColumns, sourceColumn("momentum"))

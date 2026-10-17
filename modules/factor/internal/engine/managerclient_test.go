@@ -72,14 +72,15 @@ func TestManagerClientSignsNativeRequestsWithAssignedExternalIdentity(t *testing
 		require.NoError(t, proto.Unmarshal(body, &req))
 		require.Equal(t, "hash-0", req.GetKnownHash())
 		require.Equal(t, "factor-engine@mac", req.GetEngine().GetEngineId())
-		return &factorpb.SyncEngineCatalogRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, CatalogHash: "hash-1", Sets: []*factorpb.EngineSet{{FactorSet: &factorpb.FactorSet{SetId: "fset_a"}, ResultReady: true, Factors: []*factorpb.FactorDef{{FactorId: "bias", SourceCode: "src"}}}}}, nil
+		return &factorpb.SyncEngineCatalogRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, CatalogHash: "hash-1", Sets: []*factorpb.EngineSet{{FactorSet: &factorpb.FactorSet{SetId: "fset_a"}, ResultReady: true, Factors: []*factorpb.FactorDef{{FactorId: "bias", Name: "bias", Spec: "outputs:\n  bias: close\n"}}}}}, nil
 	})
 	snapshot, err := client.SyncCatalog(t.Context(), "hash-0")
 	require.NoError(t, err)
 	require.Equal(t, "hash-1", snapshot.Hash)
 	require.Len(t, snapshot.Sets, 1)
 	require.True(t, snapshot.Sets[0].ResultReady)
-	require.Equal(t, "src", snapshot.Sets[0].Factors[0].SourceCode)
+	require.Equal(t, "outputs:\n  bias: close\n", snapshot.Sets[0].Factors[0].Spec)
+	require.Equal(t, []string{"bias"}, snapshot.Sets[0].Factors[0].Outputs, "接收方编译得到派生字段")
 }
 
 func TestManagerClientUsesNativeTransportAndMapsLeaseConflict(t *testing.T) {

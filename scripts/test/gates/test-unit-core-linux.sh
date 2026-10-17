@@ -13,8 +13,6 @@ export MOOX_RUNTIME_BINARY MOOX_BOOTSTRAP_HOST_ARCHIVE MOOX_BOOTSTRAP_CONTROL_AR
 export MOOX_CORE_SOURCE_ROOT
 [[ "${MOOX_BUSINESS_BINARY_DIRECTORY:-}" == /* && -d "${MOOX_BUSINESS_BINARY_DIRECTORY}" ]] || { echo 'MOOX_BUSINESS_BINARY_DIRECTORY must select prebuilt Access, egress, Trade and CGO Storage binaries' >&2; exit 1; }
 export MOOX_BUSINESS_BINARY_DIRECTORY
-[[ "${MOOX_FACTOR_PYTHON:-}" == /* && -x "${MOOX_FACTOR_PYTHON}" ]] || { echo 'MOOX_FACTOR_PYTHON must select a prepared real pandas/numpy interpreter for full control' >&2; exit 1; }
-export MOOX_FACTOR_PYTHON
 task_root="$(mktemp -d "${TMPDIR:-/tmp}/moox-native-core-gate.XXXXXXXX")"
 trap 'rm -rf "${task_root}"' EXIT
 "${MOOX_CORE_TEST_BINARY}" -test.v -test.count=1 -test.timeout=20m | tee "${task_root}/tests.log"
@@ -32,7 +30,7 @@ required=[
     'TestStorageEnvironmentSharesOnlyRequiredPersistentCredentials',
     'TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints',
     'TestControlEnvironmentDistributesOnlyRequiredStorageRoleSecrets',
-    'TestControlPreflightRejectsUnreadyAndUnrelatedRuntimeOrPython',
+    'TestControlPreflightRejectsUnreadyAndUnrelatedRuntime',
 ]
 for name in required:
     if not re.search(r'^--- PASS: '+re.escape(name)+r' \(',log,re.M):

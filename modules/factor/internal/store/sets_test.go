@@ -28,12 +28,14 @@ func testSet(setID, status string) domain.FactorSet {
 }
 
 func testFactorDef(factorID string) domain.FactorDef {
-	return domain.FactorDef{
-		FactorID: factorID, Name: factorID,
-		FactorType: domain.FactorTypeTimeSeries, SourceCode: "def compute(): return 1",
-		SourceHash: "hash-" + factorID, InputColumns: []string{"close"}, Outputs: []string{factorID},
-		ParamsJSON: "{}", LookbackPeriods: 1,
-	}
+	return domain.MustDefinition(factorID, factorID, "outputs:\n  "+factorID+": close\n")
+}
+
+// changedSpec 返回改了表达式的同一个定义（输出列不变）。
+func changedSpec(def domain.FactorDef, spec string) domain.FactorDef {
+	changed := domain.MustDefinition(def.FactorID, def.Name, spec)
+	changed.CreatedAt = def.CreatedAt
+	return changed
 }
 
 // addTestMember creates the definition if needed and attaches it to the set with the given status.
@@ -112,11 +114,12 @@ func TestSetCRUDAndFactorCRUD(t *testing.T) {
 	require.NoError(t, err)
 	require.NotZero(t, def.CreatedAt)
 	require.NotZero(t, def.UpdatedAt)
-	def.LookbackPeriods = 10
+	def = changedSpec(def, "outputs:\n  factor_close: ts_mean(close, 10)\n")
 	require.NoError(t, s.UpdateFactor(ctx, def))
 	def, err = s.GetFactor(ctx, def.FactorID)
 	require.NoError(t, err)
-	require.Equal(t, 10, def.LookbackPeriods)
+	require.Equal(t, 10, def.LookbackPeriods, "读取时编译得到派生字段")
+	require.Equal(t, domain.SpecHash(def.Spec), def.SpecHash)
 
 	defs, err := s.ListFactors(ctx)
 	require.NoError(t, err)

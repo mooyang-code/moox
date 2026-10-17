@@ -6,10 +6,6 @@ gateway_client:
   key_id: ""
   key_file: ../../secrets/caller-factor-mgr.key
 
-# python 只用于创建、编辑因子定义时试加载源码，需要能 import pandas 与 numpy
-python:
-  bin: python3
-
 engine:
   lease_ttl: 45s
   job_lease_ttl: 15m

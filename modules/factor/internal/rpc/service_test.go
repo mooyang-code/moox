@@ -78,8 +78,8 @@ func TestUpdateFactorAndDeleteFactorSurfaceCatalogConflicts(t *testing.T) {
 
 func TestListFactorsWithoutSetReturnsAllWithUsages(t *testing.T) {
 	catalog := &catalogFake{infos: []domain.FactorInfo{
-		{Factor: domain.FactorDef{FactorID: "a", SourceCode: "src-a", SourceHash: "h-a"}, Usages: []domain.FactorUsage{{SetID: "s1", Status: "enabled"}, {SetID: "s2", Status: "disabled"}}},
-		{Factor: domain.FactorDef{FactorID: "b", SourceCode: "src-b", SourceHash: "h-b"}},
+		{Factor: domain.FactorDef{FactorID: "a", Spec: "src-a", SpecHash: "h-a"}, Usages: []domain.FactorUsage{{SetID: "s1", Status: "enabled"}, {SetID: "s2", Status: "disabled"}}},
+		{Factor: domain.FactorDef{FactorID: "b", Spec: "src-b", SpecHash: "h-b"}},
 	}}
 	svc := NewService(catalog, &recalcFake{})
 
@@ -105,27 +105,27 @@ func TestListFactorsWithSetFiltersByMemberStatus(t *testing.T) {
 }
 
 func TestListFactorsOmitsSourceByDefault(t *testing.T) {
-	catalog := &catalogFake{infos: []domain.FactorInfo{{Factor: domain.FactorDef{FactorID: "a", SourceCode: "src-a", SourceHash: "h-a"}}}}
+	catalog := &catalogFake{infos: []domain.FactorInfo{{Factor: domain.FactorDef{FactorID: "a", Spec: "src-a", SpecHash: "h-a"}}}}
 	svc := NewService(catalog, &recalcFake{})
 
 	rsp, err := svc.ListFactors(context.Background(), &factorpb.ListFactorsReq{})
 	require.NoError(t, err)
-	require.Empty(t, rsp.GetFactors()[0].GetFactor().GetSourceCode())
-	require.Equal(t, "h-a", rsp.GetFactors()[0].GetFactor().GetSourceHash())
+	require.Empty(t, rsp.GetFactors()[0].GetFactor().GetSpec())
+	require.Equal(t, "h-a", rsp.GetFactors()[0].GetFactor().GetSpecHash())
 }
 
-func TestListFactorsIncludeSourceWhenRequested(t *testing.T) {
-	catalog := &catalogFake{infos: []domain.FactorInfo{{Factor: domain.FactorDef{FactorID: "a", SourceCode: "src-a"}}}}
+func TestListFactorsIncludeSpecWhenRequested(t *testing.T) {
+	catalog := &catalogFake{infos: []domain.FactorInfo{{Factor: domain.FactorDef{FactorID: "a", Spec: "src-a"}}}}
 	svc := NewService(catalog, &recalcFake{})
 
-	rsp, err := svc.ListFactors(context.Background(), &factorpb.ListFactorsReq{IncludeSource: true})
+	rsp, err := svc.ListFactors(context.Background(), &factorpb.ListFactorsReq{IncludeSpec: true})
 	require.NoError(t, err)
-	require.Equal(t, "src-a", rsp.GetFactors()[0].GetFactor().GetSourceCode())
+	require.Equal(t, "src-a", rsp.GetFactors()[0].GetFactor().GetSpec())
 }
 
 func TestGetFactorAlwaysIncludesSourceAndUsages(t *testing.T) {
 	catalog := &catalogFake{infos: []domain.FactorInfo{{
-		Factor: domain.FactorDef{FactorID: "a", SourceCode: "src-a", SourceHash: "h-a"},
+		Factor: domain.FactorDef{FactorID: "a", Spec: "src-a", SpecHash: "h-a"},
 		Usages: []domain.FactorUsage{{SetID: "s1", Status: "enabled"}},
 	}}}
 	svc := NewService(catalog, &recalcFake{})
@@ -133,7 +133,7 @@ func TestGetFactorAlwaysIncludesSourceAndUsages(t *testing.T) {
 	rsp, err := svc.GetFactor(context.Background(), &factorpb.GetFactorReq{FactorId: "a"})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Equal(t, "src-a", rsp.GetFactor().GetSourceCode())
+	require.Equal(t, "src-a", rsp.GetFactor().GetSpec())
 	require.Len(t, rsp.GetUsages(), 1)
 	require.Equal(t, "enabled", rsp.GetUsages()[0].GetStatus())
 }
@@ -143,7 +143,7 @@ func TestListFactorSetsMembersOmitSource(t *testing.T) {
 		set: domain.FactorSet{SetID: "fset_a", Status: domain.SetStatusEnabled},
 		members: []domain.SetMember{{
 			FactorSetMember: domain.FactorSetMember{SetID: "fset_a", FactorID: "a", Status: domain.MemberStatusEnabled},
-			Factor:          domain.FactorDef{FactorID: "a", SourceCode: "src-a", SourceHash: "h-a"},
+			Factor:          domain.FactorDef{FactorID: "a", Spec: "src-a", SpecHash: "h-a"},
 		}},
 		sets: []domain.FactorSet{{SetID: "fset_a", Status: domain.SetStatusEnabled}},
 	}
@@ -154,13 +154,13 @@ func TestListFactorSetsMembersOmitSource(t *testing.T) {
 	require.Len(t, list.GetFactorSets()[0].GetMembers(), 1)
 	member := list.GetFactorSets()[0].GetMembers()[0]
 	require.Equal(t, "enabled", member.GetStatus())
-	require.Empty(t, member.GetFactor().GetSourceCode())
-	require.Equal(t, "h-a", member.GetFactor().GetSourceHash())
+	require.Empty(t, member.GetFactor().GetSpec())
+	require.Equal(t, "h-a", member.GetFactor().GetSpecHash())
 
 	got, err := svc.GetFactorSet(context.Background(), &factorpb.GetFactorSetReq{SetId: "fset_a"})
 	require.NoError(t, err)
 	require.Len(t, got.GetMembers(), 1)
-	require.Empty(t, got.GetMembers()[0].GetFactor().GetSourceCode())
+	require.Empty(t, got.GetMembers()[0].GetFactor().GetSpec())
 }
 
 func TestAddFactorToSetAndRemoveSurfaceCatalogErrors(t *testing.T) {
@@ -277,6 +277,7 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 		"CreateFactor", "UpdateFactor", "DeleteFactor", "GetFactor", "ListFactors",
 		"AddFactorToSet", "RemoveFactorFromSet", "SetFactorMemberStatus",
 		"RecalcFactors", "ListRecalcJobs", "GetRecalcJob", "CancelRecalcJob", "GetStatus",
+		"ValidateFactorSpec", "PreviewFactor", "ListFactorFunctions",
 	}
 	got := make([]string, 0, service.Methods().Len())
 	for i := 0; i < service.Methods().Len(); i++ {

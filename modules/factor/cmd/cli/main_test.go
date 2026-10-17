@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,33 +13,31 @@ import (
 )
 
 func TestParseImport(t *testing.T) {
-	cfg, err := parseArgs([]string{
-		"import", "--set", "fset_bars_1m", "--file", "./Bias.py", "--factor-id", "Bias",
-		"--inputs", "close, volume", "--outputs", "bias", "--lookback", "20",
-		"--params", `{"window":20}`,
-	})
+	cfg, err := parseArgs([]string{"import", "--set", "fset_bars_1m", "--file", "./xbx.yaml", "--factor-id", "Bias"})
 	require.NoError(t, err)
 	require.Equal(t, "fset_bars_1m", cfg.SetID)
-	require.Equal(t, []string{"close", "volume"}, cfg.InputColumns)
-	require.Equal(t, []string{"bias"}, cfg.Outputs)
-	require.Equal(t, 20, cfg.LookbackPeriods)
-	require.Equal(t, "timeseries", cfg.FactorType)
-}
+	require.Equal(t, "./xbx.yaml", cfg.File)
+	require.Equal(t, "Bias", cfg.FactorID)
 
-func TestParseImportDefinitionsAndMembers(t *testing.T) {
-	// A definition can be imported on its own; --set additionally adds a disabled member.
-	alone, err := parseArgs([]string{"import", "--file", "./Bias.py", "--factor-id", "Bias", "--inputs", "close", "--outputs", "bias", "--lookback", "5"})
+	alone, err := parseArgs([]string{"import", "--file", "./xbx.yaml"})
 	require.NoError(t, err)
 	require.Empty(t, alone.SetID)
 
-	catalogOnly, err := parseArgs([]string{"import-catalog", "--dir", "/opt/factors"})
-	require.NoError(t, err)
-	require.Empty(t, catalogOnly.SetID)
+	for _, retired := range []string{"--inputs", "--outputs", "--lookback", "--params", "--factor-type"} {
+		_, err := parseArgs([]string{"import", "--file", "./xbx.yaml", retired, "x"})
+		require.Error(t, err, retired)
+	}
 }
 
-func TestParseImportRejectsBlankColumns(t *testing.T) {
-	_, err := parseArgs([]string{"import", "--set", "s", "--file", "f.py", "--factor-id", "f", "--inputs", "close,,open", "--outputs", "value", "--lookback", "1"})
-	require.Error(t, err)
+func TestParseMigrateExpr(t *testing.T) {
+	cfg, err := parseArgs([]string{"migrate-expr", "--db", "/data/factor.db", "--library", "/opt/factors"})
+	require.NoError(t, err)
+	require.Equal(t, "/data/factor.db", cfg.DBPath)
+	require.Equal(t, "/opt/factors", cfg.CatalogDir)
+	require.False(t, cfg.NoBackup)
+	var output bytes.Buffer
+	err = runMigrateExpr(t.Context(), cliConfig{DBPath: "/data/factor.db"}, &output)
+	require.ErrorContains(t, err, "--library")
 }
 
 func TestParseImportCatalogUsesDirectoryAndSet(t *testing.T) {
@@ -100,23 +97,28 @@ func TestRunInitCreatesFactorSchema(t *testing.T) {
 	require.NoError(t, db.Close())
 }
 
+const testLibrary = `- factor_id: Bias
+  name: Bias
+  spec: |
+    params: {window: 5}
+    outputs:
+      bias_{window}: close / ts_mean(close, window)
+- factor_id: Cci
+  name: CCI
+  spec: |
+    outputs:
+      cci: close
+`
+
 func TestImportCatalogCreatesDefinitionsOnly(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 is required to validate factor sources")
-	}
 	root := t.TempDir()
 	factorsDir := filepath.Join(root, "factors")
 	require.NoError(t, os.MkdirAll(factorsDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "Bias.py"),
-		[]byte("def compute(df, params, context):\n    return df\n"), 0o600))
-	// The catalog has no set or status field: it only describes definitions.
-	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "catalog.json"), []byte(`[
-		{"factor_type":"timeseries","file":"Bias.py","factor_id":"Bias","input_columns":["close"],
-		 "outputs":["bias_5"],"params":{"window":5},"lookback_periods":5}
-	]`), 0o600))
+	// The library has no set or status field: it only describes definitions.
+	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "lib.yaml"), []byte(testLibrary), 0o600))
 	dbPath := filepath.Join(root, "factor.db")
 	configPath := filepath.Join(root, "app.yaml")
-	require.NoError(t, os.WriteFile(configPath, []byte("database:\n  path: "+dbPath+"\npython:\n  bin: python3\n"), 0o600))
+	require.NoError(t, os.WriteFile(configPath, []byte("database:\n  path: "+dbPath+"\n"), 0o600))
 
 	var output bytes.Buffer
 	require.NoError(t, runImportCatalog(t.Context(), cliConfig{ConfigPath: configPath, CatalogDir: factorsDir}, &output))
@@ -129,17 +131,52 @@ func TestImportCatalogCreatesDefinitionsOnly(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(output.Bytes(), &result))
 	require.True(t, result.OK)
-	require.Len(t, result.Imported, 1)
+	require.Len(t, result.Imported, 2)
 	require.Equal(t, "Bias", result.Imported[0].FactorID)
 	require.Empty(t, result.Imported[0].MemberStatus)
 
 	db, err := store.Open(&store.Options{Path: dbPath})
 	require.NoError(t, err)
-	defer db.Close()
 	defs, err := db.ListFactors(t.Context())
 	require.NoError(t, err)
-	require.Len(t, defs, 1)
+	require.Len(t, defs, 2)
+	require.Equal(t, []string{"bias_5"}, defs[0].Outputs)
 	usages, err := db.ListUsages(t.Context(), "Bias")
 	require.NoError(t, err)
 	require.Empty(t, usages["Bias"])
+	require.NoError(t, db.Close())
+
+	output.Reset()
+	err = runImportCatalog(t.Context(), cliConfig{ConfigPath: configPath, CatalogDir: factorsDir}, &output)
+	require.ErrorContains(t, err, "already exists", "重复导入不覆盖已有定义")
+}
+
+func TestImportSelectsOneDefinitionFromFile(t *testing.T) {
+	root := t.TempDir()
+	library := filepath.Join(root, "lib.yaml")
+	require.NoError(t, os.WriteFile(library, []byte(testLibrary), 0o600))
+	dbPath := filepath.Join(root, "factor.db")
+	configPath := filepath.Join(root, "app.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("database:\n  path: "+dbPath+"\n"), 0o600))
+
+	var output bytes.Buffer
+	err := runImport(t.Context(), cliConfig{ConfigPath: configPath, File: library}, &output)
+	require.ErrorContains(t, err, "--factor-id", "文件里有多个定义时必须指定")
+	err = runImport(t.Context(), cliConfig{ConfigPath: configPath, File: library, FactorID: "Missing"}, &output)
+	require.ErrorContains(t, err, "没有因子 Missing")
+	require.NoError(t, runImport(t.Context(), cliConfig{ConfigPath: configPath, File: library, FactorID: "Cci"}, &output))
+	require.Contains(t, output.String(), `"definition_hash":"sha256:`)
+}
+
+func TestMigrateExprIsNoOpOnCurrentSchema(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "factor.db")
+	require.NoError(t, runInit(cliConfig{DBPath: dbPath}, &bytes.Buffer{}))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "lib.yaml"), []byte(testLibrary), 0o600))
+	var output bytes.Buffer
+	require.NoError(t, runMigrateExpr(t.Context(), cliConfig{DBPath: dbPath, CatalogDir: root}, &output))
+	require.Contains(t, output.String(), `"already_migrated":true`)
+	matches, err := filepath.Glob(dbPath + ".bak-*")
+	require.NoError(t, err)
+	require.Empty(t, matches, "已经是新结构时不备份")
 }

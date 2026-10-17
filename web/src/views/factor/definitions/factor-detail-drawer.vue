@@ -13,7 +13,7 @@
       <template v-if="factor">
         <a-descriptions :column="2" bordered size="small">
           <a-descriptions-item label="因子 ID">{{ factor.factor_id }}</a-descriptions-item>
-          <a-descriptions-item label="模块名">{{ factor.name }}</a-descriptions-item>
+          <a-descriptions-item label="展示名">{{ factor.name }}</a-descriptions-item>
           <a-descriptions-item label="类型">{{ factorTypeLabel(factor.factor_type) }}</a-descriptions-item>
           <a-descriptions-item label="回看周期数">{{ factor.lookback_periods }}</a-descriptions-item>
           <a-descriptions-item v-if="factor.factor_type === 'cross_section'" label="允许部分对象" :span="2">
@@ -21,11 +21,11 @@
           </a-descriptions-item>
           <a-descriptions-item label="输入列" :span="2">{{ factor.input_columns.join(", ") || "-" }}</a-descriptions-item>
           <a-descriptions-item label="输出列" :span="2">{{ factor.outputs.join(", ") || "-" }}</a-descriptions-item>
-          <a-descriptions-item label="参数" :span="2">
-            <code>{{ factor.params_json }}</code>
+          <a-descriptions-item label="定义指纹" :span="2">
+            <span class="source-hash">{{ factor.definition_hash || "-" }}</span>
           </a-descriptions-item>
-          <a-descriptions-item label="源码 Hash" :span="2">
-            <span class="source-hash">{{ factor.source_hash || "-" }}</span>
+          <a-descriptions-item label="原文 Hash" :span="2">
+            <span class="source-hash">{{ factor.spec_hash || "-" }}</span>
           </a-descriptions-item>
           <a-descriptions-item label="更新时间" :span="2">{{ formatTime(factor.updated_at) }}</a-descriptions-item>
         </a-descriptions>
@@ -41,13 +41,14 @@
         </section>
 
         <section class="detail-section">
-          <h3>源码</h3>
+          <h3>表达式定义</h3>
           <AsyncCodeEditor
-            :model-value="factor.source_code || ''"
+            :model-value="factor.spec || ''"
+            language="yaml"
             read-only
             :min-lines="6"
             :max-lines="28"
-            aria-label="因子源码（只读）"
+            aria-label="因子表达式定义（只读）"
           />
         </section>
       </template>

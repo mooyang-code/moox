@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/factorlib"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalc"
 	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
@@ -28,16 +28,6 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/transport"
 )
-
-type catalogEntry struct {
-	FactorType      string         `json:"factor_type"`
-	File            string         `json:"file"`
-	FactorID        string         `json:"factor_id"`
-	InputColumns    []string       `json:"input_columns"`
-	Outputs         []string       `json:"outputs"`
-	Params          map[string]any `json:"params"`
-	LookbackPeriods int            `json:"lookback_periods"`
-}
 
 func runInit(cfg cliConfig, out io.Writer) error {
 	db, err := store.Open(&store.Options{Path: cfg.DBPath})
@@ -54,12 +44,21 @@ func runInit(cfg cliConfig, out io.Writer) error {
 	})
 }
 
-// runImport registers one definition. With --set it also attaches the
-// definition to that factor set as a disabled member; enabling (which adds
-// result columns and submits a backfill) goes through FactorMgr.
+// runImport registers one definition read from a YAML factor library file.
+// With --set it also attaches the definition to that factor set as a disabled
+// member; enabling (which adds result columns and submits a backfill) goes
+// through FactorMgr.
 func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
-	if cfg.File == "" || cfg.FactorID == "" || len(cfg.InputColumns) == 0 || len(cfg.Outputs) == 0 || cfg.LookbackPeriods < 1 {
-		return errors.New("--file, --factor-id, --inputs, --outputs and --lookback are required")
+	if cfg.File == "" {
+		return errors.New("--file is required")
+	}
+	entries, err := factorlib.LoadFile(cfg.File)
+	if err != nil {
+		return err
+	}
+	entry, err := selectEntry(entries, cfg.FactorID)
+	if err != nil {
+		return err
 	}
 	runtime, err := loadRuntimeConfig(cfg.ConfigPath)
 	if err != nil {
@@ -73,25 +72,14 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		return err
 	}
 	defer db.Close()
-	unlock, err := lockImport(ctx, runtime.DatabasePath, []string{cfg.FactorID}, cfg.SetID)
+	unlock, err := lockImport(ctx, runtime.DatabasePath, []string{entry.FactorID}, cfg.SetID)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	source, err := os.ReadFile(cfg.File)
-	if err != nil {
-		return fmt.Errorf("read factor source: %w", err)
-	}
-	factor, err := normalizeImportedFactor(cfg.FactorID, cfg.FactorType, cfg.File,
-		string(source), cfg.InputColumns, cfg.Outputs, cfg.ParamsJSON, cfg.LookbackPeriods)
+	factor, err := entryDefinition(entry)
 	if err != nil {
 		return err
-	}
-	if err := domain.ValidateDefinition(factor); err != nil {
-		return fmt.Errorf("validate factor: %w", err)
-	}
-	if err := pyexec.ValidateSourceCode(ctx, runtime.PythonBin, string(source)); err != nil {
-		return fmt.Errorf("load factor source: %w", err)
 	}
 	var target *importTarget
 	if cfg.SetID != "" {
@@ -106,7 +94,8 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	if err := db.CreateFactor(ctx, factor); err != nil {
 		return err
 	}
-	result := map[string]any{"ok": true, "factor_id": factor.FactorID, "source_hash": factor.SourceHash}
+	result := map[string]any{"ok": true, "factor_id": factor.FactorID, "spec_hash": factor.SpecHash,
+		"definition_hash": domain.DefinitionHash(factor)}
 	if target != nil {
 		if _, err := db.AddMember(ctx, target.set.SetID, factor.FactorID); err != nil {
 			return fmt.Errorf("add factor to set: %w", err)
@@ -116,29 +105,47 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	return json.NewEncoder(out).Encode(result)
 }
 
-// runImportCatalog registers every definition in catalog.json. The catalog
-// itself carries no set; with --set the definitions are also attached to that
-// set as disabled members.
+// selectEntry 从一个库文件里取出要导入的定义：文件只有一个定义时可以不指定 --factor-id。
+func selectEntry(entries []factorlib.Entry, factorID string) (factorlib.Entry, error) {
+	if factorID == "" {
+		if len(entries) != 1 {
+			return factorlib.Entry{}, fmt.Errorf("文件里有 %d 个定义，请用 --factor-id 指定", len(entries))
+		}
+		return entries[0], nil
+	}
+	for _, entry := range entries {
+		if entry.FactorID == factorID {
+			return entry, nil
+		}
+	}
+	return factorlib.Entry{}, fmt.Errorf("文件里没有因子 %s", factorID)
+}
+
+// entryDefinition 把库里的定义规范化并编译。
+func entryDefinition(entry factorlib.Entry) (domain.FactorDef, error) {
+	factor, err := domain.NormalizeFactorDefinition(domain.FactorDef{
+		FactorID: entry.FactorID, Name: entry.Name, Spec: entry.Spec, AllowPartialUniverse: entry.AllowPartialUniverse,
+	})
+	if err != nil {
+		return domain.FactorDef{}, fmt.Errorf("因子 %s（%s）：%w", entry.FactorID, entry.File, err)
+	}
+	return factor, nil
+}
+
+// runImportCatalog registers every definition of the YAML factor library
+// directory. The library itself carries no set; with --set the definitions are
+// also attached to that set as disabled members.
 func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
+	entries, err := factorlib.LoadDir(cfg.CatalogDir)
+	if err != nil {
+		return err
+	}
 	runtime, err := loadRuntimeConfig(cfg.ConfigPath)
 	if err != nil {
 		return err
 	}
 	if cfg.DBPath != "" {
 		runtime.DatabasePath = cfg.DBPath
-	}
-	catalogDir := cfg.CatalogDir
-	catalogPath := filepath.Join(catalogDir, "catalog.json")
-	raw, err := os.ReadFile(catalogPath)
-	if err != nil {
-		return fmt.Errorf("read factor catalog: %w", err)
-	}
-	var entries []catalogEntry
-	if err := json.Unmarshal(raw, &entries); err != nil {
-		return fmt.Errorf("decode factor catalog: %w", err)
-	}
-	if len(entries) == 0 {
-		return errors.New("factor catalog is empty")
 	}
 	db, err := store.Open(&store.Options{Path: runtime.DatabasePath})
 	if err != nil {
@@ -169,42 +176,14 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	for _, factor := range existing {
 		known[factor.FactorID] = struct{}{}
 	}
-	seenIDs := make(map[string]struct{}, len(entries))
 	prepared := make([]domain.FactorDef, 0, len(entries))
 	for _, entry := range entries {
-		if entry.File == "" || filepath.Base(entry.File) != entry.File {
-			return fmt.Errorf("factor %q has an invalid file path", entry.FactorID)
+		if _, exists := known[entry.FactorID]; exists {
+			return fmt.Errorf("factor %q already exists", entry.FactorID)
 		}
-		path := filepath.Join(catalogDir, entry.File)
-		source, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return fmt.Errorf("read factor %s: %w", entry.FactorID, readErr)
-		}
-		params := entry.Params
-		if params == nil {
-			params = map[string]any{}
-		}
-		paramsJSON, marshalErr := json.Marshal(params)
-		if marshalErr != nil {
-			return fmt.Errorf("encode params for %s: %w", entry.FactorID, marshalErr)
-		}
-		factor, normalizeErr := normalizeImportedFactor(entry.FactorID, entry.FactorType,
-			path, string(source), entry.InputColumns, entry.Outputs, string(paramsJSON), entry.LookbackPeriods)
-		if normalizeErr != nil {
-			return normalizeErr
-		}
-		if err := pyexec.ValidateSourceCode(ctx, runtime.PythonBin, string(source)); err != nil {
-			return fmt.Errorf("load factor %s: %w", entry.FactorID, err)
-		}
-		if _, duplicate := seenIDs[factor.FactorID]; duplicate {
-			return fmt.Errorf("duplicate factor catalog entry %q", factor.FactorID)
-		}
-		seenIDs[factor.FactorID] = struct{}{}
-		if _, exists := known[factor.FactorID]; exists {
-			return fmt.Errorf("factor %q already exists", factor.FactorID)
-		}
-		if err := domain.ValidateDefinition(factor); err != nil {
-			return fmt.Errorf("validate factor %s: %w", factor.FactorID, err)
+		factor, err := entryDefinition(entry)
+		if err != nil {
+			return err
 		}
 		if target != nil {
 			if err := target.validate(factor, prepared); err != nil {
@@ -218,7 +197,7 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	}
 	imported := make([]map[string]string, 0, len(prepared))
 	for _, factor := range prepared {
-		item := map[string]string{"factor_id": factor.FactorID, "source_hash": factor.SourceHash}
+		item := map[string]string{"factor_id": factor.FactorID, "spec_hash": factor.SpecHash}
 		if target != nil {
 			if _, err := db.AddMember(ctx, target.set.SetID, factor.FactorID); err != nil {
 				return fmt.Errorf("add factor %s to set: %w", factor.FactorID, err)
@@ -234,10 +213,41 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	return json.NewEncoder(out).Encode(result)
 }
 
+// runMigrateExpr 把定义表从 Python 源码的旧结构迁移为表达式结构（设计 13.2）。必须在 factor-mgr 停止时运行；
+// 迁移前先把数据库一致地备份为 <db>.bak-<UTC 时间>。已经是新结构时什么也不做，也不备份。
+func runMigrateExpr(ctx context.Context, cfg cliConfig, out io.Writer) error {
+	if cfg.CatalogDir == "" {
+		return errors.New("--library is required")
+	}
+	entries, err := factorlib.LoadDir(cfg.CatalogDir)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(cfg.DBPath); err != nil {
+		return fmt.Errorf("数据库 %s 不可用：%w", cfg.DBPath, err)
+	}
+	library := make(map[string]store.LibraryDefinition, len(entries))
+	for _, entry := range entries {
+		library[entry.FactorID] = store.LibraryDefinition{Name: entry.Name, Spec: entry.Spec}
+	}
+	backup := ""
+	if !cfg.NoBackup {
+		backup = fmt.Sprintf("%s.bak-%s", cfg.DBPath, time.Now().UTC().Format("20060102T150405Z"))
+	}
+	result, err := store.MigrateExprWithBackup(ctx, cfg.DBPath, backup, library)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(out).Encode(map[string]any{
+		"ok": true, "database": cfg.DBPath, "already_migrated": result.AlreadyMigrated,
+		"migrated": result.Migrated, "backup": result.Backup,
+	})
+}
+
 // importTarget is the set (and its source columns) that imported definitions are attached to.
 type importTarget struct {
 	set           domain.FactorSet
-	sourceColumns []string
+	sourceColumns []domain.SourceColumn
 	siblings      []domain.FactorDef
 }
 
@@ -262,9 +272,14 @@ func loadImportTarget(ctx context.Context, db *store.Store, runtime runtimeConfi
 	for _, member := range members {
 		siblings = append(siblings, member.Factor)
 	}
-	sourceColumns, err := storage.DatasetColumns(ctx, set.SpaceID, set.SourceDatasetID)
+	columns, err := storage.ListColumns(ctx, set.SpaceID, set.SourceDatasetID)
 	if err != nil {
 		return nil, fmt.Errorf("list source dataset columns: %w", err)
+	}
+	sourceColumns := make([]domain.SourceColumn, 0, len(columns))
+	for _, column := range columns {
+		sourceColumns = append(sourceColumns, domain.SourceColumn{Name: column.ColumnName,
+			Numeric: column.ValueType == storageio.ColumnTypeInt || column.ValueType == storageio.ColumnTypeDouble})
 	}
 	return &importTarget{set: set, sourceColumns: sourceColumns, siblings: siblings}, nil
 }
@@ -319,23 +334,6 @@ func lockImport(ctx context.Context, databasePath string, factorIDs []string, se
 		unlocks = append(unlocks, unlock)
 	}
 	return release, nil
-}
-
-func normalizeImportedFactor(factorID, factorType, sourcePath, source string, inputs, outputs []string, params string, lookback int) (domain.FactorDef, error) {
-	if strings.ToLower(filepath.Ext(sourcePath)) != ".py" {
-		return domain.FactorDef{}, errors.New("factor source file must end in .py")
-	}
-	name := strings.TrimSuffix(filepath.Base(sourcePath), filepath.Ext(sourcePath))
-	factor, err := domain.NormalizeFactorDefinition(domain.FactorDef{
-		FactorID: factorID, Name: name, FactorType: factorType,
-		SourceCode: source, InputColumns: inputs, Outputs: outputs,
-		ParamsJSON: params, LookbackPeriods: lookback,
-	})
-	if err != nil {
-		return domain.FactorDef{}, err
-	}
-	factor.SourceHash = domain.SourceHash(factor.SourceCode)
-	return factor, nil
 }
 
 func runRecalc(ctx context.Context, cli cliConfig, out io.Writer) error {

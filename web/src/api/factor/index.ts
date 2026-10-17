@@ -13,7 +13,11 @@ import type {
   GetFactorRsp,
   ListRecalcJobsReq,
   ListRecalcJobsRsp,
+  ListFactorFunctionsRsp,
+  PreviewFactorReq,
+  PreviewFactorRsp,
   RecalcFactorsReq,
+  ValidateFactorSpecRsp,
   RecalcJob,
   SetFactorMemberStatusResult
 } from "./types";
@@ -113,4 +117,21 @@ export function listRecalcJobs(params: ListRecalcJobsReq) {
 
 export function getFactorStatus() {
   return callFactor<Record<string, never>, EngineStatus>("GetStatus", {});
+}
+
+/** 编译一个定义：定义不合法时 valid=false，诊断带字段路径与行列（不是接口错误）。 */
+export function validateFactorSpec(spec: string, allow_partial_universe = false) {
+  return callFactor<{ spec: string; allow_partial_universe: boolean }, ValidateFactorSpecRsp>("ValidateFactorSpec", {
+    spec,
+    allow_partial_universe
+  });
+}
+
+/** 在因子集的源数据上试算：少量标的、最近若干期，不写结果。 */
+export function previewFactor(params: PreviewFactorReq) {
+  return callFactor<PreviewFactorReq, PreviewFactorRsp>("PreviewFactor", params);
+}
+
+export function listFactorFunctions() {
+  return callFactor<Record<string, never>, ListFactorFunctionsRsp>("ListFactorFunctions", {});
 }

@@ -2,6 +2,7 @@ package recalc
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -147,12 +148,8 @@ func addRecalcMember(t *testing.T, db *store.Store, setID string, member recalcM
 }
 
 func testRecalcFactor(id, status string, lookback int) recalcMember {
-	return recalcMember{status: status, def: domain.FactorDef{
-		FactorID: id, Name: id, FactorType: domain.FactorTypeTimeSeries,
-		SourceCode: "def compute(df, params, context): return df", SourceHash: domain.SourceHash("def compute(df, params, context): return df"),
-		InputColumns: []string{"close"}, Outputs: []string{id + "_value"}, ParamsJSON: "{}",
-		LookbackPeriods: lookback,
-	}}
+	return recalcMember{status: status, def: domain.MustDefinition(id, id,
+		fmt.Sprintf("outputs:\n  %s_value: ts_mean(close, %d)\n", id, lookback))}
 }
 
 func TestRecalcRejectsFactorThatIsNotAMember(t *testing.T) {

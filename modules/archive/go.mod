@@ -53,7 +53,6 @@ replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
-replace github.com/mooyang-code/moox/packages/pyruntime => ../../packages/pyruntime
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect

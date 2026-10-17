@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/mooyang-code/moox/packages/factorexpr"
+)
 
 const (
 	FactorTypeTimeSeries   = "timeseries"
@@ -34,19 +38,22 @@ type FactorSet struct {
 func (FactorSet) TableName() string { return "t_factor_sets" }
 
 // FactorDef describes an algorithm only; it has no set binding and no run state.
+// 持久化的只有 FactorID、Name、Spec、SpecHash、AllowPartialUniverse 与时间；FactorType、InputColumns、Outputs、
+// LookbackPeriods 由编译 Spec 派生（CompileDefinition），不落库。
 type FactorDef struct {
 	FactorID             string    `json:"factor_id" gorm:"column:c_factor_id;primaryKey"`
 	Name                 string    `json:"name" gorm:"column:c_name"`
-	FactorType           string    `json:"factor_type" gorm:"column:c_factor_type"`
-	SourceCode           string    `json:"source_code" gorm:"column:c_source_code"`
-	SourceHash           string    `json:"source_hash" gorm:"column:c_source_hash"`
-	InputColumns         []string  `json:"input_columns" gorm:"column:c_input_columns_json;serializer:json"`
-	Outputs              []string  `json:"outputs" gorm:"column:c_outputs_json;serializer:json"`
-	ParamsJSON           string    `json:"params_json" gorm:"column:c_params_json"`
-	LookbackPeriods      int       `json:"lookback_periods" gorm:"column:c_lookback_periods"`
+	Spec                 string    `json:"spec" gorm:"column:c_spec"`
+	SpecHash             string    `json:"spec_hash" gorm:"column:c_spec_hash"`
 	AllowPartialUniverse bool      `json:"allow_partial_universe" gorm:"column:c_allow_partial_universe"`
 	CreatedAt            time.Time `json:"created_at" gorm:"column:c_ctime"`
 	UpdatedAt            time.Time `json:"updated_at" gorm:"column:c_mtime"`
+
+	FactorType      string   `json:"factor_type,omitempty" gorm:"-"`
+	InputColumns    []string `json:"input_columns,omitempty" gorm:"-"`
+	Outputs         []string `json:"outputs,omitempty" gorm:"-"`
+	LookbackPeriods int      `json:"lookback_periods,omitempty" gorm:"-"`
+	compiled        *factorexpr.Factor
 }
 
 func (FactorDef) TableName() string { return "t_factor_defs" }

@@ -73,8 +73,7 @@ for contract in \
   'RELEASE_ROOT}/modules/strategy/bin' \
   'copy_binary moox-strategy ' \
   'copy_binary moox-strategy-cli ' \
-  'modules/strategy/config/.' \
-  'RELEASE_ROOT}/modules/factor/python-runtime/'; do
+  'modules/strategy/config/.'; do
   grep -q "${contract}" "${ROOT}/scripts/release/release.sh" || {
     echo "missing Strategy release contract: ${contract}" >&2
     exit 1
@@ -82,11 +81,11 @@ for contract in \
 done
 tmp_strategy="$(mktemp -d "${TMPDIR:-/tmp}/moox-strategy-release.XXXXXX")"
 trap 'rm -rf "${tmp_strategy}"' EXIT
-mkdir -p \
-  "${tmp_strategy}/factor/python-runtime" \
-  "${tmp_strategy}/strategy"
-cp -R "${ROOT}/packages/pyruntime/python/." "${tmp_strategy}/factor/python-runtime/"
-PYTHONPATH="${tmp_strategy}/factor/python-runtime" python3 -c 'from moox_pyruntime import protocol; assert protocol.TYPE_RUN'
+mkdir -p "${tmp_strategy}/strategy"
+if grep -Eq 'python-runtime|pyruntime|modules/factor/pyworker' "${ROOT}/scripts/release/release.sh"; then
+  echo "the release must not ship the retired factor Python runtime" >&2
+  exit 1
+fi
 grep -q "name __pycache__ -o -name .pytest_cache" "${ROOT}/scripts/release/release.sh"
 grep -q "name '\*.pyc' -o -name '\*.sqlite' -o -name '\*.db'" "${ROOT}/scripts/release/release.sh"
 

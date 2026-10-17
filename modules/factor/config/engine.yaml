@@ -32,12 +32,11 @@ eventbus:
   credential_file: ./secrets/factor-eventbus.yaml
   fetch_max_wait: 10s
 
-python:
-  bin: ./venv/bin/python
-  worker_path: ./pyworker/worker.py
-  factors_dir: ./data/engine/factors
-  workers: 8
-  task_timeout: 30s
+# 表达式执行器：workers 是一次程序执行的并行度（默认 min(4, 核数)）；
+# max_memory 是一个计算分块估算峰值内存的上限（默认 1GiB）。
+compute:
+  workers: 4
+  max_memory: 1GiB
 
 pipeline:
   read_batch_subjects: 100

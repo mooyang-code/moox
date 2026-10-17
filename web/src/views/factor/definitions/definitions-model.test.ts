@@ -8,10 +8,9 @@ const def = (id: string, patch: Partial<FactorDef> = {}): FactorDef => ({
   factor_id: id,
   name: `${id}_module`,
   factor_type: "timeseries",
-  source_hash: "h",
+  spec_hash: "h",
   input_columns: ["close"],
   outputs: [id.toLowerCase()],
-  params_json: "{}",
   lookback_periods: 20,
   allow_partial_universe: false,
   created_at: "",
@@ -97,9 +96,9 @@ describe("definitions page contract", () => {
     expect(page).toContain("未被使用");
   });
 
-  it("reads definitions without source and fetches the source only for the detail view", () => {
+  it("reads definitions without the spec and fetches it only for the detail view", () => {
     expect(page).toContain("listFactors");
-    expect(page).not.toContain("include_source");
+    expect(page).not.toContain("include_spec");
     expect(fs.readFileSync(path.resolve(__dirname, "factor-detail-drawer.vue"), "utf8")).toContain("getFactor");
   });
 });

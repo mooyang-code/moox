@@ -53,7 +53,7 @@ func newCatalogHandler(t *testing.T, cache *CatalogCache, runner *planRecorder) 
 }
 
 func TestHandlerRetriesWhenSetNotResultReady(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", false, "bias")}})
 	require.NoError(t, err)
 	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
@@ -65,7 +65,7 @@ func TestHandlerRetriesWhenSetNotResultReady(t *testing.T) {
 }
 
 func TestHandlerComputesReadySet(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
@@ -78,7 +78,7 @@ func TestHandlerComputesReadySet(t *testing.T) {
 }
 
 func TestHandlerAcksWhenSetRemovedFromSnapshot(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 	_, err = cache.Apply(CatalogSnapshot{Hash: "hash-2"})
@@ -92,7 +92,7 @@ func TestHandlerAcksWhenSetRemovedFromSnapshot(t *testing.T) {
 }
 
 func TestHandlerRetriesBeforeFirstCatalog(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 	runner := &planRecorder{}
 
 	result := newCatalogHandler(t, cache, runner).Handle(context.Background(), periodDelivery(t, "dataset_a"))

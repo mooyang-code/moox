@@ -444,9 +444,7 @@ compute1 = ["access"]
 			require.Equal(t, control, status(initial.Bootstrap.ControlDirectory))
 			t.Log("actual business unit ready with immutable retry:", profile)
 		}
-		python := os.Getenv("MOOX_FACTOR_PYTHON")
-		require.NotEmpty(t, python, "full control gate requires a real prepared pandas/numpy interpreter")
-		promotion := ControlOptions{CoreOptions: options, ProxyCA: unitbootstrap.ProxyCAAuthorization{Create: true}, FactorPython: python}
+		promotion := ControlOptions{CoreOptions: options, ProxyCA: unitbootstrap.ProxyCAAuthorization{Create: true}}
 		full, err := BootstrapControl(t.Context(), snapshot, promotion)
 		require.NoError(t, err)
 		require.Equal(t, "control-ready", full.Stage)

@@ -18,11 +18,13 @@ import (
 var gapT0 = time.Date(2026, 10, 14, 6, 0, 0, 0, time.UTC)
 
 func gapFactor(id, factorType string, partial bool) domain.FactorDef {
-	code := "def compute(df, params, context): return df"
-	return domain.FactorDef{
-		FactorID: id, Name: id, FactorType: factorType, SourceCode: code, SourceHash: domain.SourceHash(code),
-		InputColumns: []string{"close"}, Outputs: []string{id + "_value"}, ParamsJSON: "{}", LookbackPeriods: 3, AllowPartialUniverse: partial,
+	expression := "ts_mean(close, 3)"
+	if factorType == domain.FactorTypeCrossSection {
+		expression = "cs_rank(ts_mean(close, 3))"
 	}
+	def := domain.MustDefinition(id, id, "outputs:\n  "+id+"_value: "+expression+"\n")
+	def.AllowPartialUniverse = partial
+	return def
 }
 
 type fakeSets struct {
@@ -177,8 +179,7 @@ func TestGapFillerCancelsWhenDefinitionChangedOrFactorRemoved(t *testing.T) {
 	old := gapFactor("ma", domain.FactorTypeTimeSeries, false)
 	removed := gapFactor("rsi", domain.FactorTypeTimeSeries, false)
 	f := newGapFixture(t, fakeUniverse{}, old)
-	changed := old
-	changed.LookbackPeriods = 9 // 定义变化，哈希不同
+	changed := domain.MustDefinition("ma", "ma", "outputs:\n  ma_value: ts_mean(close, 9)\n") // 定义变化，哈希不同
 	f.record(t, gapT0, "BTC", 0, "", changed, removed)
 	f.now = gapT0.Add(6 * time.Minute)
 	f.filler.tick(context.Background())

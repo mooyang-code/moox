@@ -12,10 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadRuntimeConfigReadsDatabaseStorageAndPython(t *testing.T) {
+func TestLoadRuntimeConfigReadsDatabaseAndStorage(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "app.yaml")
-	contents := "database:\n  path: ./state/factor.db\ngateway_client:\n  caller: factor-mgr\n  key_id: admin-assigned-factor-key\n  key_file: ../../secrets/caller-factor-mgr.key\npython:\n  bin: python311\n"
+	contents := "database:\n  path: ./state/factor.db\ngateway_client:\n  caller: factor-mgr\n  key_id: admin-assigned-factor-key\n  key_file: ../../secrets/caller-factor-mgr.key\n"
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
 
 	cfg, err := loadRuntimeConfig(path)
@@ -24,20 +24,26 @@ func TestLoadRuntimeConfigReadsDatabaseStorageAndPython(t *testing.T) {
 	require.Equal(t, "factor-mgr", cfg.GatewayClient.Caller)
 	require.Equal(t, "admin-assigned-factor-key", cfg.GatewayClient.KeyID)
 	require.Equal(t, path, cfg.ConfigPath)
-	require.Equal(t, "python311", cfg.PythonBin)
+}
+
+func TestLoadRuntimeConfigRejectsRetiredPythonSection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("python:\n  bin: python3\n"), 0o600))
+	_, err := loadRuntimeConfig(path)
+	require.Error(t, err, "旧配置的 python 段必须随发布删除")
 }
 
 func TestLoadRuntimeConfigEnvironmentOverridesConfig(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("python:\n  bin: configured-python\n"), 0o600))
-	t.Setenv("MOOX_FACTOR_PYTHON_BIN", "env-python")
+	require.NoError(t, os.WriteFile(path, []byte("database:\n  path: ./configured.db\n"), 0o600))
+	t.Setenv("MOOX_FACTOR_DB_PATH", "/env/factor.db")
 	t.Setenv("MOOX_FACTOR_STORAGE_GATEWAY_TARGET", "ip://127.0.0.1:11003")
 	t.Setenv("MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID", "storage-node-0")
 
 	cfg, err := loadRuntimeConfig(path)
 	require.NoError(t, err)
-	require.Equal(t, "env-python", cfg.PythonBin)
+	require.Equal(t, "/env/factor.db", cfg.DatabasePath)
 	require.Equal(t, "factor-mgr", cfg.GatewayClient.Caller)
 	require.Empty(t, cfg.GatewayClient.KeyID)
 }

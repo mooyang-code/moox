@@ -85,7 +85,7 @@ var roleCatalog = []Role{
 	{
 		Key: RoleFactor, Title: "因子计算机", Optional: true, hostID: "factor",
 		Purpose: "计算因子，需要较高性能。可以是这台电脑，也可以是家里的另一台机器（Linux、macOS 或 Windows），不要求是腾讯云。",
-		Specs:   []string{"8 核以上 · 16 GB 以上", "Python 3.10 以上"},
+		Specs:   []string{"8 核以上 · 16 GB 以上"},
 		Toggle:  &Toggle{Label: "现在配置", Hint: "以后也可以再加。"},
 	},
 }

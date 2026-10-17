@@ -40,7 +40,7 @@ func TestRunTrackerKeepsNewestPeriodAndComputesLag(t *testing.T) {
 	degraded := tracker.latest("fset_b", t1)
 	require.Equal(t, []string{"ETHUSDT"}, degraded.FailedSubjects)
 	require.Equal(t, []domain.FactorPeriodState{
-		{FactorID: "momentum", Status: "complete", SourceHash: "abc"},
+		{FactorID: "momentum", Status: "complete", SpecHash: "abc"},
 		{FactorID: "rank", Status: "degraded", FailedSubjects: []string{"ETHUSDT"}},
 	}, degraded.Factors)
 }

@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,12 +19,7 @@ import (
 func engineSet(setID, datasetID string, ready bool, factorIDs ...string) domain.EngineSet {
 	factors := make([]domain.FactorDef, 0, len(factorIDs))
 	for _, id := range factorIDs {
-		source := "def compute(frame, params, context):\n    return frame  # " + id + "\n"
-		factors = append(factors, domain.FactorDef{
-			FactorID: id, Name: id, FactorType: domain.FactorTypeTimeSeries, SourceCode: source,
-			SourceHash: domain.SourceHash(source), InputColumns: []string{"close"}, Outputs: []string{id + "_value"},
-			ParamsJSON: "{}", LookbackPeriods: 2,
-		})
+		factors = append(factors, domain.MustDefinition(id, id, fmt.Sprintf("outputs:\n  %s_value: ts_mean(close, 2)\n", id)))
 	}
 	return domain.EngineSet{
 		Set: domain.FactorSet{
@@ -33,27 +30,40 @@ func engineSet(setID, datasetID string, ready bool, factorIDs ...string) domain.
 	}
 }
 
-func newTestCache(t *testing.T) (*CatalogCache, string, string) {
+func newTestCache(t *testing.T) (*CatalogCache, string) {
 	t.Helper()
-	root := t.TempDir()
-	factorsDir := filepath.Join(root, "factors")
-	stateFile := filepath.Join(root, "data", "catalog.json")
-	cache, err := NewCatalogCache(factorsDir, stateFile)
+	stateFile := filepath.Join(t.TempDir(), "data", "catalog.json")
+	cache, err := NewCatalogCache(stateFile)
 	require.NoError(t, err)
-	return cache, factorsDir, stateFile
+	return cache, stateFile
 }
 
-func TestCatalogApplyMaterializesSourcesAndPersists(t *testing.T) {
-	cache, factorsDir, stateFile := newTestCache(t)
-	set := engineSet("fset_a", "dataset_a", true, "bias")
+// 快照里的定义来自 JSON，没有编译结果；目录安装快照时编译每个定义（设计 8）。
+func uncompiled(set domain.EngineSet) domain.EngineSet {
+	raw, err := json.Marshal(set)
+	if err != nil {
+		panic(err)
+	}
+	var decoded domain.EngineSet
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		panic(err)
+	}
+	return decoded
+}
+
+func TestCatalogApplyCompilesAndPersists(t *testing.T) {
+	cache, stateFile := newTestCache(t)
+	set := uncompiled(engineSet("fset_a", "dataset_a", true, "bias"))
+	require.Nil(t, set.Factors[0].Compiled())
 
 	changed, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{set}})
 
 	require.NoError(t, err)
 	require.True(t, changed)
-	source, err := os.ReadFile(filepath.Join(factorsDir, "bias", set.Factors[0].SourceHash+".py"))
-	require.NoError(t, err)
-	require.Equal(t, set.Factors[0].SourceCode, string(source))
+	got, lookup := cache.SetByID("fset_a")
+	require.Equal(t, SetFound, lookup)
+	require.NotNil(t, got.Factors[0].Compiled())
+	require.Equal(t, 2, got.Factors[0].LookbackPeriods)
 	info, err := os.Stat(stateFile)
 	require.NoError(t, err)
 	require.False(t, info.IsDir())
@@ -64,12 +74,11 @@ func TestCatalogApplyMaterializesSourcesAndPersists(t *testing.T) {
 }
 
 func TestCatalogLoadFromStateFile(t *testing.T) {
-	cache, factorsDir, stateFile := newTestCache(t)
+	cache, stateFile := newTestCache(t)
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
-	require.NoError(t, os.RemoveAll(factorsDir))
 
-	restarted, err := NewCatalogCache(factorsDir, stateFile)
+	restarted, err := NewCatalogCache(stateFile)
 	require.NoError(t, err)
 	loaded, err := restarted.Load()
 
@@ -81,12 +90,27 @@ func TestCatalogLoadFromStateFile(t *testing.T) {
 	require.True(t, found)
 	require.Equal(t, "fset_a", set.SetID)
 	require.Len(t, factors, 1)
-	_, err = os.Stat(filepath.Join(factorsDir, "bias"))
-	require.NoError(t, err, "loading re-materializes the sources")
+	require.NotNil(t, factors[0].Compiled(), "加载快照时重新编译")
+	require.Equal(t, []string{"bias_value"}, factors[0].Outputs)
+}
+
+// 派生字段以编译结果为准：快照里的派生字段即使被改动，也按 spec 重新推导。
+// 编译失败的定义原样保留，由流水线按该因子失败处理，不影响同集合的其他因子。
+func TestCatalogRederivesFieldsAndKeepsUncompilableDefinitions(t *testing.T) {
+	cache, _ := newTestCache(t)
+	set := uncompiled(engineSet("fset_a", "dataset_a", true, "bias", "cci"))
+	set.Factors[0].LookbackPeriods, set.Factors[0].Outputs = 999, []string{"forged"}
+	set.Factors[1].Spec = "outputs:\n  cci_value: future_function(close)\n"
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{set}})
+	require.NoError(t, err)
+	got, _ := cache.SetByID("fset_a")
+	require.Equal(t, 2, got.Factors[0].LookbackPeriods)
+	require.Equal(t, []string{"bias_value"}, got.Factors[0].Outputs)
+	require.Nil(t, got.Factors[1].Compiled())
 }
 
 func TestCatalogLoadWithoutStateFile(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 
 	loaded, err := cache.Load()
 
@@ -97,13 +121,15 @@ func TestCatalogLoadWithoutStateFile(t *testing.T) {
 }
 
 func TestCatalogApplyFailureKeepsPreviousSnapshot(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
-	broken := engineSet("fset_b", "dataset_b", true, "cci")
-	broken.Factors[0].SourceHash = "does-not-match"
+	// 快照写盘失败：新快照不生效。
+	blocker := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
+	cache.stateFile = filepath.Join(blocker, "catalog.json")
 
-	_, err = cache.Apply(CatalogSnapshot{Hash: "hash-2", Sets: []domain.EngineSet{broken}})
+	_, err = cache.Apply(CatalogSnapshot{Hash: "hash-2", Sets: []domain.EngineSet{engineSet("fset_b", "dataset_b", true, "cci")}})
 
 	require.Error(t, err)
 	require.Equal(t, "hash-1", cache.Status().Hash)
@@ -113,7 +139,7 @@ func TestCatalogApplyFailureKeepsPreviousSnapshot(t *testing.T) {
 }
 
 func TestCatalogNotModifiedKeepsSets(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 
@@ -125,7 +151,7 @@ func TestCatalogNotModifiedKeepsSets(t *testing.T) {
 }
 
 func TestCatalogSyncFailureKeepsServing(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 
@@ -144,7 +170,7 @@ func TestCatalogSyncFailureKeepsServing(t *testing.T) {
 }
 
 func TestCatalogNotReadySetReturnsInfraError(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", false, "bias")}})
 	require.NoError(t, err)
 
@@ -154,7 +180,7 @@ func TestCatalogNotReadySetReturnsInfraError(t *testing.T) {
 }
 
 func TestCatalogUnknownDatasetNotFound(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 
@@ -165,7 +191,7 @@ func TestCatalogUnknownDatasetNotFound(t *testing.T) {
 }
 
 func TestCatalogFilterSubjects(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{
 		engineSet("fset_b", "dataset_b", true, "bias"), engineSet("fset_a", "dataset_a", true, "bias"),
 	}})
@@ -186,7 +212,7 @@ func TestCatalogFilterSubjects(t *testing.T) {
 }
 
 func TestCatalogApplyReportsSetChanges(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 
@@ -231,7 +257,7 @@ func (f *catalogClientFake) SyncCatalog(_ context.Context, knownHash string) (Ca
 }
 
 func TestSyncerSendsKnownHashAndNotifiesChanges(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 	client := &catalogClientFake{snapshots: []CatalogSnapshot{
 		{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}},
 		{Hash: "hash-1", NotModified: true},
@@ -247,7 +273,7 @@ func TestSyncerSendsKnownHashAndNotifiesChanges(t *testing.T) {
 }
 
 func TestSyncerFailureMarksCache(t *testing.T) {
-	cache, _, _ := newTestCache(t)
+	cache, _ := newTestCache(t)
 	syncer := &catalogSyncer{client: &catalogClientFake{err: errors.New("dial tcp: timeout")}, cache: cache}
 
 	require.Error(t, syncer.SyncOnce(context.Background()))

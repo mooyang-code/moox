@@ -32,7 +32,7 @@ func TestLoadUsesMaxLookbackRange(t *testing.T) {
 		require.Equal(t, []string{"close", "volume"}, req.Columns)
 		return emptyFrames(req), nil
 	}}
-	loaded, err := NewRunner(store, nil, periodclock.Continuous{}, Config{}).Load(context.Background(), plan)
+	loaded, err := NewRunner(store, periodclock.Continuous{}, Config{}).Load(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, []string{"BTC"}, loaded.Available)
 }
@@ -50,7 +50,7 @@ func TestLoadRecalcExtendsReadRangeByLookback(t *testing.T) {
 		require.Equal(t, start.Add(3*time.Minute), req.End)
 		return emptyFrames(req), nil
 	}}
-	_, err := NewRunner(store, nil, periodclock.Continuous{}, Config{}).Load(context.Background(), plan)
+	_, err := NewRunner(store, periodclock.Continuous{}, Config{}).Load(context.Background(), plan)
 	require.NoError(t, err)
 }
 
@@ -70,7 +70,7 @@ func TestLoadBatchesSubjectsAndLimitsConcurrency(t *testing.T) {
 		return emptyFrames(req), nil
 	}}
 	plan := loadPlan(subjects)
-	loaded, err := NewRunner(store, nil, periodclock.Continuous{}, Config{ReadBatchSubjects: 100, ReadWorkers: 2}).Load(context.Background(), plan)
+	loaded, err := NewRunner(store, periodclock.Continuous{}, Config{ReadBatchSubjects: 100, ReadWorkers: 2}).Load(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, int32(3), calls.Load())
 	require.LessOrEqual(t, maxActive.Load(), int32(2))
@@ -90,7 +90,7 @@ func TestLoadBatchFailureMarksSubjectsFailed(t *testing.T) {
 		}
 		return emptyFrames(req), nil
 	}}
-	loaded, err := NewRunner(store, nil, periodclock.Continuous{}, Config{ReadBatchSubjects: 2, ReadWorkers: 1, ReadRetries: 2}).Load(context.Background(), loadPlan([]string{"A", "B", "C", "D"}))
+	loaded, err := NewRunner(store, periodclock.Continuous{}, Config{ReadBatchSubjects: 2, ReadWorkers: 1, ReadRetries: 2}).Load(context.Background(), loadPlan([]string{"A", "B", "C", "D"}))
 	require.NoError(t, err)
 	require.Equal(t, []string{"A", "B"}, loaded.FailedSubjects)
 	require.Equal(t, []string{"C", "D"}, loaded.Available)
@@ -102,7 +102,7 @@ func TestLoadAllBatchesFailReturnsErrInfra(t *testing.T) {
 	store := &fakeStore{read: func(context.Context, storageio.ReadRequest) (map[string]*storageio.Frame, error) {
 		return nil, errors.New("temporary network failure")
 	}}
-	_, err := NewRunner(store, nil, periodclock.Continuous{}, Config{ReadBatchSubjects: 1, ReadWorkers: 2, ReadRetries: 1}).Load(context.Background(), loadPlan([]string{"A", "B"}))
+	_, err := NewRunner(store, periodclock.Continuous{}, Config{ReadBatchSubjects: 1, ReadWorkers: 2, ReadRetries: 1}).Load(context.Background(), loadPlan([]string{"A", "B"}))
 	require.ErrorIs(t, err, storageio.ErrInfra)
 }
 
@@ -161,7 +161,7 @@ func TestReadDeadlinesDifferForLiveAndRecalc(t *testing.T) {
 			seen = observed{hasDeadline: ok, deadline: time.Until(deadline), pageTimeout: req.PageTimeout}
 			return emptyFrames(req), nil
 		}}
-		runner := NewRunner(store, nil, periodclock.Continuous{}, Config{ReadTimeout: 10 * time.Second})
+		runner := NewRunner(store, periodclock.Continuous{}, Config{ReadTimeout: 10 * time.Second})
 		target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 		plan := computePlan(target, []domain.FactorDef{testPipelineFactor("momentum", domain.FactorTypeTimeSeries, 2, false)}, []string{"BTC"})
 		plan.Mode = mode
@@ -202,7 +202,7 @@ func TestLoadLiveReusesPreviousWindow(t *testing.T) {
 		}
 		return frames, nil
 	}}
-	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
+	runner := NewRunner(store, periodclock.Continuous{}, Config{})
 	t0 := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 
 	_, err := runner.Load(context.Background(), livePlan(t0, "BTC"))
@@ -248,7 +248,7 @@ func TestLoadLiveOlderPeriodKeepsNewerWindow(t *testing.T) {
 		start = req.Start
 		return emptyFrames(req), nil
 	}}
-	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{})
+	runner := NewRunner(store, periodclock.Continuous{}, Config{})
 	t0 := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	for _, target := range []time.Time{t0, t0.Add(-time.Minute)} {
 		_, err := runner.Load(context.Background(), livePlan(target))
@@ -283,7 +283,7 @@ func TestLoadLiveWarmsUpInBackground(t *testing.T) {
 		mu.Unlock()
 		return frames, nil
 	}}
-	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{BackgroundWarmup: true})
+	runner := NewRunner(store, periodclock.Continuous{}, Config{BackgroundWarmup: true})
 	t0 := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 
 	loaded, err := runner.Load(context.Background(), livePlan(t0))
@@ -354,7 +354,7 @@ func TestBulkReadsAreCappedByBulkReadWorkers(t *testing.T) {
 		mu.Unlock()
 		return emptyFrames(req), nil
 	}}
-	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{ReadBatchSubjects: 1, ReadWorkers: 16, BulkReadWorkers: 3})
+	runner := NewRunner(store, periodclock.Continuous{}, Config{ReadBatchSubjects: 1, ReadWorkers: 16, BulkReadWorkers: 3})
 	_, err := runner.Load(context.Background(), recalcLoadPlan(manySubjects(24)...))
 	require.NoError(t, err)
 	require.Equal(t, 3, peak, "补算读取的并发不超过 BulkReadWorkers")
@@ -375,7 +375,7 @@ func TestBulkReadCircuitOpensAfterConsecutiveFailedBatches(t *testing.T) {
 		return nil, errors.New("i/o timeout")
 	}}
 	config := Config{ReadBatchSubjects: 1, ReadWorkers: 1, BulkReadWorkers: 1, ReadRetries: 1, ReadRetryBackoff: time.Millisecond, ReadBreakerFailures: 2}
-	_, err := NewRunner(store, nil, periodclock.Continuous{}, config).Load(context.Background(), recalcLoadPlan(manySubjects(10)...))
+	_, err := NewRunner(store, periodclock.Continuous{}, config).Load(context.Background(), recalcLoadPlan(manySubjects(10)...))
 	require.ErrorIs(t, err, storageio.ErrInfra)
 	require.Equal(t, int32(4), calls.Load(), "2 个批次各读 2 次（1 次重试）后断路，其余 8 个批次不再请求")
 
@@ -383,7 +383,7 @@ func TestBulkReadCircuitOpensAfterConsecutiveFailedBatches(t *testing.T) {
 	calls.Store(0)
 	live := config
 	live.ReadWorkers = 1
-	_, err = NewRunner(store, nil, periodclock.Continuous{}, live).Load(context.Background(), loadPlan(manySubjects(10)))
+	_, err = NewRunner(store, periodclock.Continuous{}, live).Load(context.Background(), loadPlan(manySubjects(10)))
 	require.ErrorIs(t, err, storageio.ErrInfra)
 	require.Equal(t, int32(20), calls.Load())
 
@@ -397,7 +397,7 @@ func TestBulkReadCircuitOpensAfterConsecutiveFailedBatches(t *testing.T) {
 	}}
 	flakyConfig := config
 	flakyConfig.ReadRetries = 2
-	_, err = NewRunner(flaky, nil, periodclock.Continuous{}, flakyConfig).Load(context.Background(), recalcLoadPlan(manySubjects(6)...))
+	_, err = NewRunner(flaky, periodclock.Continuous{}, flakyConfig).Load(context.Background(), recalcLoadPlan(manySubjects(6)...))
 	require.NoError(t, err)
 	require.Equal(t, int32(18), calls.Load(), "每个批次读 3 次，第 3 次成功，断路计数始终归零")
 }
@@ -416,7 +416,7 @@ func TestBulkReadRetriesBackOffButLiveReadsDoNot(t *testing.T) {
 				return emptyFrames(req), nil
 			}
 		}}
-		runner := NewRunner(store, nil, periodclock.Continuous{}, Config{ReadBatchSubjects: 10, ReadWorkers: 1, ReadRetries: 1, ReadRetryBackoff: backoff})
+		runner := NewRunner(store, periodclock.Continuous{}, Config{ReadBatchSubjects: 10, ReadWorkers: 1, ReadRetries: 1, ReadRetryBackoff: backoff})
 		_, err := runner.Load(context.Background(), plan)
 		require.NoError(t, err)
 		return second.Sub(first)

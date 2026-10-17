@@ -1,11 +1,11 @@
 package command
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +15,7 @@ import (
 
 	adminclient "github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"gopkg.in/yaml.v3"
 )
 
 var factorIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -29,18 +30,51 @@ type setupFactorSet struct {
 	Subjects        []string
 }
 
-// setupFactorDefinition is the global factor contract. It carries no set or
-// status: those belong to a membership.
+// setupFactorDefinition is the global factor contract read from a YAML factor
+// library file. It carries no set or status: those belong to a membership.
 type setupFactorDefinition struct {
-	FactorType      string
-	FactorID        string
-	Name            string
-	SourceCode      string
-	SourceHash      string
-	InputColumns    []string
-	Outputs         []string
-	ParamsJSON      string
-	LookbackPeriods int
+	FactorID             string
+	Name                 string
+	Spec                 string
+	AllowPartialUniverse bool
+}
+
+// libraryEntry 是 YAML 因子库文件里的一项：[{factor_id, name, spec, allow_partial_universe}]。
+type libraryEntry struct {
+	FactorID             string `yaml:"factor_id"`
+	Name                 string `yaml:"name"`
+	Spec                 string `yaml:"spec"`
+	AllowPartialUniverse bool   `yaml:"allow_partial_universe"`
+}
+
+// readFactorLibrary 严格解析一个因子库文件：未知字段、多文档、缺少 factor_id/name/spec、重复 factor_id 都报错。
+func readFactorLibrary(path string) (map[string]libraryEntry, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	var entries []libraryEntry
+	if err := decoder.Decode(&entries); err != nil {
+		return nil, fmt.Errorf("parse factor library %s: %w", path, err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("factor library %s must contain exactly one YAML document", path)
+	}
+	library := make(map[string]libraryEntry, len(entries))
+	for index, entry := range entries {
+		entry.FactorID, entry.Name = strings.TrimSpace(entry.FactorID), strings.TrimSpace(entry.Name)
+		if entry.FactorID == "" || entry.Name == "" || strings.TrimSpace(entry.Spec) == "" {
+			return nil, fmt.Errorf("factor library %s item %d requires factor_id, name and spec", path, index+1)
+		}
+		if _, duplicate := library[entry.FactorID]; duplicate {
+			return nil, fmt.Errorf("factor library %s defines %q more than once", path, entry.FactorID)
+		}
+		library[entry.FactorID] = entry
+	}
+	return library, nil
 }
 
 type setupFactorMember struct {
@@ -114,10 +148,8 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) (setupFact
 	sort.Slice(plan.Sets, func(i, j int) bool { return plan.Sets[i].SetID < plan.Sets[j].SetID })
 	root := filepath.Join(repoRoot, filepath.FromSlash(manifest.Factors.SourceDir))
 	seen := make(map[string]struct{}, len(definitions))
+	libraries := map[string]map[string]libraryEntry{}
 	for index, item := range definitions {
-		if item.FactorType != "timeseries" && item.FactorType != "cross_section" {
-			return plan, fmt.Errorf("factors.definitions[%d].factor_type must be timeseries or cross_section", index)
-		}
 		factorID := strings.TrimSpace(item.FactorID)
 		if !factorIDPattern.MatchString(factorID) {
 			return plan, fmt.Errorf("factors.definitions[%d].factor_id is invalid", index)
@@ -143,45 +175,19 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) (setupFact
 		if err != nil || !pathWithin(resolvedRoot, resolvedPath) {
 			return plan, fmt.Errorf("factor %q file must stay under factors.source_dir", factorID)
 		}
-		source, err := os.ReadFile(resolvedPath)
-		if err != nil {
-			return plan, fmt.Errorf("read factor %q source: %w", factorID, err)
+		library, loaded := libraries[resolvedPath]
+		if !loaded {
+			if library, err = readFactorLibrary(resolvedPath); err != nil {
+				return plan, fmt.Errorf("read factor %q library: %w", factorID, err)
+			}
+			libraries[resolvedPath] = library
 		}
-		sourceCode := strings.TrimSpace(string(source))
-		factorName := strings.TrimSuffix(filepath.Base(resolvedPath), filepath.Ext(resolvedPath))
-		if factorID != factorName {
-			return plan, fmt.Errorf("factor_id %q must match factor file name %q", factorID, factorName)
+		entry, ok := library[factorID]
+		if !ok {
+			return plan, fmt.Errorf("factor library %s has no factor %q", item.File, factorID)
 		}
-		name := strings.TrimSpace(item.Name)
-		if name == "" {
-			name = factorName
-		}
-		if name != factorName {
-			return plan, fmt.Errorf("factor %q name must match factor file name %q", factorID, factorName)
-		}
-		if !factorIDPattern.MatchString(name) {
-			return plan, fmt.Errorf("factor %q name is invalid", factorID)
-		}
-		params := strings.TrimSpace(item.ParamsJSON)
-		if params == "" {
-			params = "{}"
-		}
-		var paramsValue map[string]any
-		if err := json.Unmarshal([]byte(params), &paramsValue); err != nil || paramsValue == nil {
-			return plan, fmt.Errorf("factor %q params_json must be a JSON object", factorID)
-		}
-		inputColumns := cleanStrings(item.InputColumns)
-		outputs := cleanStrings(item.Outputs)
-		sort.Strings(inputColumns)
-		sort.Strings(outputs)
-		if len(inputColumns) == 0 || len(outputs) == 0 {
-			return plan, fmt.Errorf("factor %q must declare input_columns and outputs", factorID)
-		}
-		hash := sha256.Sum256([]byte(sourceCode))
 		plan.Definitions = append(plan.Definitions, setupFactorDefinition{
-			FactorType: item.FactorType,
-			FactorID:   factorID, Name: name, SourceCode: sourceCode, SourceHash: "sha256:" + hex.EncodeToString(hash[:]),
-			InputColumns: inputColumns, Outputs: outputs, ParamsJSON: params, LookbackPeriods: item.LookbackPeriods,
+			FactorID: factorID, Name: entry.Name, Spec: entry.Spec, AllowPartialUniverse: entry.AllowPartialUniverse,
 		})
 	}
 	sort.Slice(plan.Definitions, func(i, j int) bool { return plan.Definitions[i].FactorID < plan.Definitions[j].FactorID })
@@ -283,15 +289,10 @@ type factorAPIRetInfo struct {
 // factorAPIDef mirrors the FactorDef proto JSON: a definition has no set or
 // status, those live in the usages beside it.
 type factorAPIDef struct {
-	FactorType      string   `json:"factor_type"`
-	FactorID        string   `json:"factor_id"`
-	Name            string   `json:"name"`
-	SourceCode      string   `json:"source_code"`
-	SourceHash      string   `json:"source_hash"`
-	InputColumns    []string `json:"input_columns"`
-	Outputs         []string `json:"outputs"`
-	ParamsJSON      string   `json:"params_json"`
-	LookbackPeriods int      `json:"lookback_periods"`
+	FactorID             string `json:"factor_id"`
+	Name                 string `json:"name"`
+	AllowPartialUniverse bool   `json:"allow_partial_universe"`
+	DefinitionHash       string `json:"definition_hash"`
 }
 
 // factorAPIUsage mirrors the FactorUsage proto JSON.
@@ -307,10 +308,16 @@ type factorAPIInfo struct {
 }
 
 type factorAPIResponse struct {
-	RetInfo   *factorAPIRetInfo `json:"ret_info"`
-	Factor    factorAPIDef      `json:"factor"`
-	Usages    []factorAPIUsage  `json:"usages"`
-	Factors   []factorAPIInfo   `json:"factors"`
+	RetInfo *factorAPIRetInfo `json:"ret_info"`
+	// ValidateFactorSpec 的结果。
+	Valid          bool   `json:"valid"`
+	DefinitionHash string `json:"definition_hash"`
+	Diagnostic     struct {
+		Message string `json:"message"`
+	} `json:"diagnostic"`
+	Factor    factorAPIDef     `json:"factor"`
+	Usages    []factorAPIUsage `json:"usages"`
+	Factors   []factorAPIInfo  `json:"factors"`
 	FactorSet struct {
 		SetID           string   `json:"set_id"`
 		SpaceID         string   `json:"space_id"`
@@ -398,17 +405,25 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 		if err != nil {
 			create := factorAPIResponse{}
 			if createErr := r.call(ctx, "CreateFactor", map[string]any{"factor": map[string]any{
-				"factor_type": def.FactorType, "factor_id": def.FactorID,
-				"name": def.Name, "source_code": def.SourceCode, "source_hash": def.SourceHash,
-				"input_columns": def.InputColumns, "outputs": def.Outputs, "params_json": def.ParamsJSON,
-				"lookback_periods": def.LookbackPeriods,
+				"factor_id": def.FactorID, "name": def.Name, "spec": def.Spec,
+				"allow_partial_universe": def.AllowPartialUniverse,
 			}}, &create); createErr != nil {
 				return summary, createErr
 			}
 			summary.Imported++
 			continue
 		}
-		if !sameFactorContract(get.Factor, def) {
+		// 幂等比较用 definition_hash：本地定义的哈希由 FactorMgr 编译得到，只改注释、格式不算不同。
+		validated := factorAPIResponse{}
+		if err := r.call(ctx, "ValidateFactorSpec", map[string]any{
+			"spec": def.Spec, "allow_partial_universe": def.AllowPartialUniverse,
+		}, &validated); err != nil {
+			return summary, err
+		}
+		if !validated.Valid {
+			return summary, fmt.Errorf("factor %q spec is invalid: %s", def.FactorID, validated.Diagnostic.Message)
+		}
+		if get.Factor.Name != def.Name || get.Factor.DefinitionHash != validated.DefinitionHash {
 			return summary, fmt.Errorf("factor %q already exists with a different definition; update moox.toml or replace it explicitly", def.FactorID)
 		}
 		for _, usage := range get.Usages {
@@ -450,42 +465,6 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 func factorAPINotFound(response factorAPIResponse) bool {
 	return response.RetInfo != nil && (response.RetInfo.Code == 9 || response.RetInfo.Code == 5 ||
 		(response.RetInfo.Code == 4 && strings.Contains(strings.ToLower(response.RetInfo.Msg), "not found")))
-}
-
-func sameFactorContract(got factorAPIDef, want setupFactorDefinition) bool {
-	if got.FactorType != want.FactorType {
-		return false
-	}
-	if got.SourceHash != want.SourceHash || got.Name != want.Name || got.LookbackPeriods != want.LookbackPeriods || !slicesEqual(got.InputColumns, want.InputColumns) || !slicesEqual(got.Outputs, want.Outputs) {
-		return false
-	}
-	return canonicalJSON(got.ParamsJSON) == canonicalJSON(want.ParamsJSON)
-}
-
-func slicesEqual(left, right []string) bool {
-	left = cleanStrings(left)
-	right = cleanStrings(right)
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
-func canonicalJSON(raw string) string {
-	var value any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &value); err != nil {
-		return strings.TrimSpace(raw)
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return strings.TrimSpace(raw)
-	}
-	return string(encoded)
 }
 
 func (r *remoteSetupFactor) Close() error {

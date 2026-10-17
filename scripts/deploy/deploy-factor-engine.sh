@@ -92,7 +92,7 @@ require_secret() {
   grep -q '[^[:space:]]' "${path}" || fail "credential ${path} is empty"
 }
 
-mkdir -p "${DEPLOY_DIR}/bin" "${DEPLOY_DIR}/config" "${DEPLOY_DIR}/pyworker" "${DEPLOY_DIR}/data/engine" "${DEPLOY_DIR}/logs"
+mkdir -p "${DEPLOY_DIR}/bin" "${DEPLOY_DIR}/config" "${DEPLOY_DIR}/data/engine" "${DEPLOY_DIR}/logs"
 mkdir -p "${SECRETS_DIR}"
 chmod 0700 "${SECRETS_DIR}"
 for secret in access-factor-engine.key storage-primary-auth.secret factor-eventbus.yaml; do
@@ -109,27 +109,12 @@ if [[ "${SKIP_BUILD}" -eq 0 ]]; then
 fi
 [[ -x "${DEPLOY_DIR}/bin/moox-factor-engine" ]] || fail "missing ${DEPLOY_DIR}/bin/moox-factor-engine"
 
-install -m 0644 "${ROOT}/modules/factor/pyworker/worker.py" "${ROOT}/modules/factor/pyworker/codec.py" "${DEPLOY_DIR}/pyworker/"
-# The worker imports the shared moox_pyruntime package; MOOX_PYTHON_RUNTIME_PATH
-# in the service definition points it here.
-rm -rf "${DEPLOY_DIR}/python-runtime"
-mkdir -p "${DEPLOY_DIR}/python-runtime"
-cp -R "${ROOT}/packages/pyruntime/python/." "${DEPLOY_DIR}/python-runtime/"
-find "${DEPLOY_DIR}/python-runtime" -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
 install -m 0644 "${ROOT}/modules/factor/config/trpc_go.engine.yaml" "${DEPLOY_DIR}/config/trpc_go.engine.yaml"
-
-python_bin="${DEPLOY_DIR}/venv/bin/python"
-if ! "${python_bin}" -c 'import pandas, numpy' >/dev/null 2>&1; then
-  log "create Python environment ${DEPLOY_DIR}/venv"
-  if command -v uv >/dev/null 2>&1; then
-    uv venv --python 3.12 "${DEPLOY_DIR}/venv"
-    VIRTUAL_ENV="${DEPLOY_DIR}/venv" uv pip install -r "${ROOT}/modules/factor/pyworker/runtime-requirements.txt"
-  else
-    python3 -m venv "${DEPLOY_DIR}/venv"
-    "${python_bin}" -m pip install -r "${ROOT}/modules/factor/pyworker/runtime-requirements.txt"
-  fi
-  "${python_bin}" -c 'import pandas, numpy' || fail "the engine Python environment cannot import pandas and numpy"
-fi
+# 因子由引擎内置的表达式执行器计算，不再需要 Python 环境。Python 时代留下的 venv、pyworker、python-runtime
+# 与源码落盘目录 data/engine/factors 不再使用；切换期间作为回滚备份保留，验证完成后手工删除。
+for stale in venv pyworker python-runtime data/engine/factors; do
+  [[ -e "${DEPLOY_DIR}/${stale}" ]] && log "note: ${DEPLOY_DIR}/${stale} is no longer used (kept for rollback)"
+done
 
 umask 077
 cat >"${DEPLOY_DIR}/config/engine.yaml" <<EOF
@@ -163,11 +148,8 @@ eventbus:
   credential_file: ${SECRETS_DIR}/factor-eventbus.yaml
   fetch_max_wait: 10s
 
-python:
-  bin: ./venv/bin/python
-  worker_path: ./pyworker/worker.py
-  factors_dir: ./data/engine/factors
-  task_timeout: 30s
+compute:
+  max_memory: 1GiB
 
 pipeline:
   read_batch_subjects: 50

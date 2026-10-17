@@ -30,12 +30,12 @@ describe("factor API contract", () => {
       factor_id: "Bias",
       factor_type: "timeseries",
       name: "Bias",
-      source_code: "def compute(df, params): return {}",
-      source_hash: "hash",
-      input_columns: ["nav", "benchmark_return"],
+      spec: "outputs:\n  excess_return: nav - benchmark_return\n  rolling_rank: ts_rank(nav, 100)\n",
+      spec_hash: "sha256:hash",
+      input_columns: ["benchmark_return", "nav"],
       outputs: ["excess_return", "rolling_rank"],
-      params_json: `{"window":20}`,
       lookback_periods: 100,
+      definition_hash: "sha256:definition",
       allow_partial_universe: false,
       created_at: "2026-10-04T00:00:00Z",
       updated_at: "2026-10-04T00:00:00Z"
@@ -49,7 +49,7 @@ describe("factor API contract", () => {
       created_at: factor.created_at,
       updated_at: factor.updated_at
     };
-    expect(factor.input_columns).toEqual(["nav", "benchmark_return"]);
+    expect(factor.input_columns).toEqual(["benchmark_return", "nav"]);
     expect(factor.lookback_periods).toBe(100);
     expect(factor).not.toHaveProperty("set_id");
     expect(factor).not.toHaveProperty("status");
@@ -105,8 +105,9 @@ describe("factor API contract", () => {
     const engine: EngineStatus = {
       ret_info: { code: 0, msg: "success" },
       consumer_running: true,
-      python_workers: 100,
-      python_busy: 2,
+      compute_workers: 4,
+      engine_expr_version: "expr/1",
+      manager_expr_version: "expr/1",
       lanes: [],
       recent_runs: [run]
     };
@@ -148,11 +149,12 @@ describe("factor pages contract", () => {
     expect(definitionsPage).toContain("filterDefinitions(items.value, applied)");
   });
 
-  it("keeps editor inputs free-form and shows partial universe only for cross sections", () => {
+  it("derives the factor type from the compiled spec and shows partial universe only for cross sections", () => {
     expect(factorEditor).toContain("listDatasetColumns");
-    expect(factorEditor).toContain("form.factor_type === 'cross_section'");
-    expect(factorEditor).toContain('value="timeseries"');
-    expect(factorEditor).toContain('value="cross_section"');
+    expect(factorEditor).toContain("derived.factor_type === 'cross_section'");
+    expect(factorEditor).toContain("insertTemplate('timeseries')");
+    expect(factorEditor).toContain("insertTemplate('cross_section')");
+    expect(factorEditor).not.toContain('v-model="form.factor_type"');
     expect(factorEditor).not.toContain("createFactorSet");
     expect(factorEditor).toContain("onBeforeRouteLeave");
   });

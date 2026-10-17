@@ -1,42 +1,30 @@
-/** 「插入模板」的 compute(df, params, context) 骨架：时序因子，按 series_tag 分组滚动。 */
-export const FACTOR_SOURCE_TEMPLATE = [
-  "def compute(df, params, context):",
-  "    result = df[['data_time', 'series_tag']].copy()",
-  "    close = df.groupby('series_tag', sort=False)['close']",
-  "    for window in params['windows']:",
-  "        average = close.transform(lambda values: values.rolling(window, min_periods=1).mean())",
-  "        result[f'bias_{window}'] = df['close'] / average - 1",
-  "    return result",
+/** 「插入模板」的时序因子定义：列表参数会展开成多个输出列（bias_5、bias_20）。 */
+export const TIMESERIES_SPEC_TEMPLATE = [
+  "# 时序因子：每个标的、每个 series_tag 各自沿时间计算。",
+  "params: {window: [5, 20]}",
+  "let:",
+  "  ma: ts_mean(close, window)",
+  "outputs:",
+  "  bias_{window}: close / ma - 1",
   ""
 ].join("\n");
 
-/** 截面因子骨架：输入输出都带 subject_id，同一 data_time 内按标的做横向排名。 */
-export const CROSS_SECTION_SOURCE_TEMPLATE = [
-  "def compute(df, params, context):",
-  "    result = df[['data_time', 'series_tag', 'subject_id']].copy()",
-  "    result['close_rank'] = df.groupby(['data_time', 'series_tag'])['close'].rank(pct=True)",
-  "    return result",
+/** 截面因子定义：同一时刻、同一 series_tag 的全部标的之间横向计算（排名、标准化）。 */
+export const CROSS_SECTION_SPEC_TEMPLATE = [
+  "# 截面因子：同一时刻的全部标的之间排名，结果在 (0, 1]。",
+  "params: {window: 20}",
+  "outputs:",
+  "  momentum_rank_{window}: cs_rank(close / delay(close, window) - 1)",
   ""
 ].join("\n");
 
-/** 模板配套的声明：输入列、输出列与参数要和模板源码一致，否则保存后计算会报 outputs mismatch。 */
-export interface FactorTemplate {
-  source: string;
-  inputColumns: string[];
-  outputs: string[];
-  paramsJson: string;
+export type FactorTemplateKind = "timeseries" | "cross_section";
+
+export function specTemplate(kind: FactorTemplateKind) {
+  return kind === "cross_section" ? CROSS_SECTION_SPEC_TEMPLATE : TIMESERIES_SPEC_TEMPLATE;
 }
 
-export const TIMESERIES_TEMPLATE: FactorTemplate = {
-  source: FACTOR_SOURCE_TEMPLATE,
-  inputColumns: ["close"],
-  outputs: ["bias_20"],
-  paramsJson: `{"windows":[20]}`
-};
-
-export const CROSS_SECTION_TEMPLATE: FactorTemplate = {
-  source: CROSS_SECTION_SOURCE_TEMPLATE,
-  inputColumns: ["close"],
-  outputs: ["close_rank"],
-  paramsJson: "{}"
-};
+/** 内置模板原样（未改动）时可以直接替换，不用二次确认。 */
+export function isBuiltinTemplate(spec: string) {
+  return spec === TIMESERIES_SPEC_TEMPLATE || spec === CROSS_SECTION_SPEC_TEMPLATE;
+}

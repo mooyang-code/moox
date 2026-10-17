@@ -50,7 +50,7 @@ Host Agent deployment:
 - `modules/storage`: metadata (primary), field-level facts and outbox (node), rebuildable views (view).
 - `modules/collector`: collection tasks, period batch planning, SCF Timer runtime and reconciliation.
 - `modules/cloudnode`: cloud accounts, SCF nodes, code packages and function publishing.
-- `modules/factor`: factor manager and the Python factor engine.
+- `modules/factor`: factor manager and the expression factor engine (`packages/factorexpr`).
 - `modules/strategy`, `modules/trade`, `modules/monitor`, `modules/hostagent`, `modules/archive`.
 - `docs`: 总体设计、部署与运维和 `docs/模块/` 下的模块设计文档.
 - `scripts`: build, release, deploy, quality checks, and contract/E2E test scripts.
@@ -111,7 +111,7 @@ When crypto K-line or Factor periods stall, read
 [`references/view-catchup.md`](references/view-catchup.md) first. Measure Primary vs View vs
 Factor separately. Collector completion events drive Factor reads from Storage PrimaryStore;
 the Factor durable is `factor_collector_period_v1`. Use set-labeled period and lane metrics to
-distinguish event backlog, Storage failures, and Python saturation.
+distinguish event backlog, Storage failures, and compute errors (`factor_compile_errors_total`).
 
 ### Tencent Lighthouse Firewall
 

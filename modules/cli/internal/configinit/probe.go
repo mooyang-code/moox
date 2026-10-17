@@ -142,12 +142,6 @@ else
   echo "mem_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)"
 fi
 echo "disk_kb=$(df -Pk "$HOME" | awk 'NR==2{print $4}')"
-for p in python3.13 python3.12 python3.11 python3.10 python3; do
-  if command -v "$p" >/dev/null 2>&1; then
-    v=$("$p" -c 'import sys,venv,ensurepip;print("%d.%d.%d"%sys.version_info[:3])' 2>/dev/null) && { echo "python=$v"; break; }
-  fi
-done
-command -v uv >/dev/null 2>&1 && echo "uv=1"
 command -v go >/dev/null 2>&1 && echo "go=$(go env GOVERSION 2>/dev/null)"
 command -v gcc >/dev/null 2>&1 && echo "gcc=1"
 true`
@@ -158,14 +152,7 @@ $cs = Get-CimInstance Win32_ComputerSystem; $os = Get-CimInstance Win32_Operatin
 "os=Windows"; "osname=" + $os.Caption; "arch=" + $env:PROCESSOR_ARCHITECTURE
 "cpu=" + $cs.NumberOfLogicalProcessors; "mem_bytes=" + $cs.TotalPhysicalMemory
 "disk_bytes=" + (Get-PSDrive -Name $env:USERPROFILE.Substring(0,1)).Free
-foreach ($c in @('py', 'python', 'python3')) {
-  if (Get-Command $c) {
-    $a = @(); if ($c -eq 'py') { $a = @('-3') }
-    $v = & $c @a -c "import sys,venv,ensurepip;print('%d.%d.%d'%sys.version_info[:3])" 2>$null
-    if ($LASTEXITCODE -eq 0 -and $v) { "python=" + $v; break }
-  }
-}
-if (Get-Command uv) { "uv=1" }`
+`
 
 func powershellCommand() string {
 	encoded := utf16.Encode([]rune(windowsProbe))
@@ -288,18 +275,6 @@ func evaluate(f facts, remote bool) ProbeReport {
 		add("磁盘", CheckFail, fmt.Sprintf("可用只有 %.1f GB，至少需要 %d GB", diskGB, factorLowDiskGB))
 	}
 
-	python := f["python"]
-	switch {
-	case pythonAtLeast(python, 3, 10):
-		add("Python", CheckOK, "Python "+python)
-	case f["uv"] == "1":
-		add("Python", CheckOK, "已安装 uv，安装时会自动准备 Python 3.12")
-	case python != "":
-		add("Python", CheckFail, "Python "+python+" 版本太低，需要 3.10 以上（或安装 uv）")
-	default:
-		add("Python", CheckFail, "没有找到可用的 Python 3.10 以上版本（需要带 venv），也可以安装 uv")
-	}
-
 	// 只有用 SSH 登录的 Linux 机器才能兼作编译机。
 	if remote && report.OS == "linux" {
 		if f["go"] != "" && f["gcc"] == "1" {
@@ -309,17 +284,4 @@ func evaluate(f facts, remote bool) ProbeReport {
 		}
 	}
 	return report
-}
-
-func pythonAtLeast(version string, major, minor int) bool {
-	parts := strings.Split(version, ".")
-	if len(parts) < 2 {
-		return false
-	}
-	gotMajor, err1 := strconv.Atoi(parts[0])
-	gotMinor, err2 := strconv.Atoi(parts[1])
-	if err1 != nil || err2 != nil {
-		return false
-	}
-	return gotMajor > major || (gotMajor == major && gotMinor >= minor)
 }

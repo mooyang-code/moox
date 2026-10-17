@@ -47,7 +47,6 @@ use (
 	./packages/marketfetchpb
 	./packages/metricspb
 	./packages/notification
-	./packages/pyruntime
 	./packages/report
 	./packages/requestauth
 	./packages/seriesset

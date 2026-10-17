@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/factorexpr"
 )
 
 var _ factorpb.FactorMgrService = (*Service)(nil)
@@ -89,11 +90,18 @@ func WithEngineAPI(engine EngineAPI) ServiceOption {
 	return func(s *Service) { s.engine = engine }
 }
 
+// WithPreviewer 启用 PreviewFactor；不设置时该接口返回错误。
+func WithPreviewer(previewer Previewer) ServiceOption {
+	return func(s *Service) { s.previewer = previewer }
+}
+
 // Service implements the FactorMgr RPC contract and delegates domain work.
 type Service struct {
 	catalog CatalogAPI
 	recalc  RecalcAPI
 	engine  EngineAPI
+	// previewer 执行 PreviewFactor 的试算。
+	previewer Previewer
 }
 
 func NewService(catalog CatalogAPI, recalc RecalcAPI, opts ...ServiceOption) *Service {
@@ -332,14 +340,14 @@ func (s *Service) GetFactor(ctx context.Context, req *factorpb.GetFactorReq) (*f
 	if err != nil {
 		return &factorpb.GetFactorRsp{RetInfo: invalid(err)}, nil
 	}
-	// GetFactor is the one read that always carries the source code.
+	// GetFactor is the one read that always carries the spec.
 	return &factorpb.GetFactorRsp{RetInfo: success(), Factor: factorwire.DefToPB(info.Factor), Usages: usagesToPB(usages)}, nil
 }
 
 func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq) (*factorpb.ListFactorsRsp, error) {
-	setID, status, includeSource := "", "", false
+	setID, status, includeSpec := "", "", false
 	if req != nil {
-		setID, status, includeSource = req.GetSetId(), req.GetStatus(), req.GetIncludeSource()
+		setID, status, includeSpec = req.GetSetId(), req.GetStatus(), req.GetIncludeSpec()
 	}
 	if setID != "" {
 		if err := s.checkSetSpace(ctx, setID); err != nil {
@@ -362,7 +370,7 @@ func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq)
 		scoped[i] = info
 	}
 	items = scoped
-	return &factorpb.ListFactorsRsp{RetInfo: success(), Factors: factorInfosToPB(items, includeSource), PageResult: pageResult(page, size, total)}, nil
+	return &factorpb.ListFactorsRsp{RetInfo: success(), Factors: factorInfosToPB(items, includeSpec), PageResult: pageResult(page, size, total)}, nil
 }
 
 func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactorsReq) (*factorpb.RecalcFactorsRsp, error) {
@@ -461,15 +469,15 @@ func (s *Service) GetStatus(ctx context.Context, _ *factorpb.GetStatusReq) (*fac
 		return &factorpb.GetStatusRsp{RetInfo: inner(err)}, nil
 	}
 	if !seen {
-		return &factorpb.GetStatusRsp{RetInfo: success(), Engine: &factorpb.EngineInfo{}}, nil
+		return &factorpb.GetStatusRsp{RetInfo: success(), Engine: &factorpb.EngineInfo{}, ManagerExprVersion: factorexpr.ExprVersion}, nil
 	}
 	recent := make([]*factorpb.SetRunSummary, 0, len(status.RecentRuns))
 	for _, run := range status.RecentRuns {
 		recent = append(recent, factorwire.RunSummaryToPB(run))
 	}
 	return &factorpb.GetStatusRsp{
-		RetInfo: success(), ConsumerRunning: status.ConsumerRunning, PythonWorkers: status.PythonWorkers,
-		PythonBusy: status.PythonBusy, Lanes: factorwire.LanesToPB(status.Lanes), RecentRuns: recent,
+		RetInfo: success(), ConsumerRunning: status.ConsumerRunning, ComputeWorkers: status.ComputeWorkers,
+		EngineExprVersion: status.ExprVersion, ManagerExprVersion: factorexpr.ExprVersion, Lanes: factorwire.LanesToPB(status.Lanes), RecentRuns: recent,
 		Engine: &factorpb.EngineInfo{
 			EngineId: info.EngineID, BootId: info.BootID, Version: info.Version, Online: info.Online,
 			LastHeartbeatAt: factorwire.FormatTime(info.LastHeartbeatAt), CatalogHash: info.CatalogHash,

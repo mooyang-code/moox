@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/stretchr/testify/require"
 )
@@ -224,10 +223,37 @@ func pipelineSelection(factors ...recalcMember) Selection {
 	}
 }
 
+// 内存预算让分块在读取之前收窄；1 个周期也超限时补算以资源错误失败，不读取。
+func TestChunkNarrowsToMemoryBudget(t *testing.T) {
+	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	selection := pipelineSelection(testRecalcFactor("mean", domain.MemberStatusEnabled, 3))
+	full, err := pipeline.EstimateChunkMemory(selection.Factors, len(selection.Subjects), 6, len(selection.Columns))
+	require.NoError(t, err)
+	fit, err := pipeline.MaxPeriodsWithin(selection.Factors, len(selection.Subjects), len(selection.Columns), 6, full.Total()/2)
+	require.NoError(t, err)
+	require.Less(t, fit, 6)
+
+	storage := &recalcPipelineStore{}
+	runner := pipeline.NewRunner(storage, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
+	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(6), WithMemoryBudget(full.Total()/2))
+	var records []progressRecord
+	err = executor.Run(context.Background(), Window{Start: start, End: start.Add(6 * time.Minute)}, fixedSource(selection), recordProgress(&records, 0))
+	require.NoError(t, err)
+	require.Greater(t, len(storage.readRequests), 1, "分块被收窄成多块")
+	require.Equal(t, start.Add(time.Duration(fit)*time.Minute), storage.readRequests[0].End)
+	require.Len(t, storage.written, 6)
+
+	tiny := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithMemoryBudget(64))
+	storage.readRequests = nil
+	err = tiny.Run(context.Background(), Window{Start: start, End: start.Add(time.Minute)}, fixedSource(selection), recordProgress(&records, 0))
+	require.ErrorIs(t, err, pipeline.ErrMemoryBudget)
+	require.Empty(t, storage.readRequests)
+}
+
 func TestChunkReadRangeIncludesLookback(t *testing.T) {
 	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	storage := &recalcPipelineStore{}
-	runner := pipeline.NewRunner(storage, &recalcExecutor{}, periodclock.Continuous{}, pipeline.Config{PythonWorkers: 1})
+	runner := pipeline.NewRunner(storage, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
 	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(3))
 	selection := pipelineSelection(
 		testRecalcFactor("short", domain.MemberStatusEnabled, 2),
@@ -249,7 +275,7 @@ func TestChunkReadRangeIncludesLookback(t *testing.T) {
 
 func TestRecalcDoesNotReportMarker(t *testing.T) {
 	storage := &recalcPipelineStore{}
-	runner := pipeline.NewRunner(storage, &recalcExecutor{}, periodclock.Continuous{}, pipeline.Config{PythonWorkers: 1})
+	runner := pipeline.NewRunner(storage, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
 	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}))
 	period := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 
@@ -292,32 +318,6 @@ func (*recalcPipelineStore) ComputedExists(context.Context, string, string, stri
 	return false, nil
 }
 
-func (*recalcExecutor) Exec(_ context.Context, req pyexec.Request) ([]pyexec.ItemResult, error) {
-	targets, ok := req.Context["target_period_times"].([]string)
-	if !ok {
-		return nil, errors.New("recalc target periods are missing")
-	}
-	items := make([]pyexec.ItemResult, 0, len(req.Factors))
-	for _, factor := range req.Factors {
-		rows := make([][]any, 0, len(targets))
-		for _, raw := range targets {
-			at, err := time.Parse(time.RFC3339Nano, raw)
-			if err != nil {
-				return nil, err
-			}
-			rows = append(rows, []any{at, "source", 7.0})
-		}
-		items = append(items, pyexec.ItemResult{FactorID: factor.FactorID, Columns: []string{"data_time", "series_tag", factor.Outputs[0]}, Rows: rows})
-	}
-	return items, nil
-}
-
-type recalcExecutor struct{}
-
-func (*recalcExecutor) Busy() int { return 0 }
-
-func (*recalcExecutor) Close() error { return nil }
-
 // recalcMember is a test definition together with its member status.
 type recalcMember struct {
 	def    domain.FactorDef
@@ -325,12 +325,8 @@ type recalcMember struct {
 }
 
 func testRecalcFactor(id, status string, lookback int) recalcMember {
-	return recalcMember{status: status, def: domain.FactorDef{
-		FactorID: id, Name: id, FactorType: domain.FactorTypeTimeSeries,
-		SourceCode: "def compute(df, params, context): return df", SourceHash: domain.SourceHash("def compute(df, params, context): return df"),
-		InputColumns: []string{"close"}, Outputs: []string{id + "_value"}, ParamsJSON: "{}",
-		LookbackPeriods: lookback,
-	}}
+	return recalcMember{status: status, def: domain.MustDefinition(id, id,
+		fmt.Sprintf("outputs:\n  %s_value: ts_mean(close, %d)\n", id, lookback))}
 }
 
 // RunChunkWith：先取集合锁再在锁内重读选择；after 在仍持有锁时调用；FillOnly 传到计划里并且不写 carry 列。

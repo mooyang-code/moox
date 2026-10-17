@@ -5,44 +5,36 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/factorlib"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/factorexpr/exec"
-	"github.com/mooyang-code/moox/packages/pyruntime/process"
-	"gopkg.in/yaml.v3"
 )
 
-// compare 是因子表达式引擎上线前的一致性验收工具（docs/计划/因子表达式引擎详细设计.md 12.2）：沿用补算的读取路径读一份窗口，
-// 同一份 LoadResult 一份交给现有的 Python 计算，一份交给 factorexpr，逐个 (因子输出, 标的, 周期, 标签) 比较。
+// compare 是因子表达式引擎的一致性核对工具（docs/计划/因子表达式引擎详细设计.md 12.2）：沿用补算的读取路径读一份窗口交给
+// factorexpr 计算，与结果数据集里已经写入的值（基线，例如 Python 时代的历史结果）逐个 (因子输出, 标的, 周期, 标签) 比较。
 // 只读：不组装、不写 Storage、不上报、不记账本、不同步目录、不访问 mgr，也不写引擎的状态目录。
 
 // CompareRequest 是一次核对的输入。
 type CompareRequest struct {
-	// SetFile 是引擎目录快照 data/engine/catalog.json 的副本：提供因子集、启用成员与 Python 源码。
+	// SetFile 是引擎目录快照 data/engine/catalog.json 的副本：提供因子集与启用成员的定义。
 	SetFile string
-	// Library 是 YAML 因子库目录（每个 *.yaml 是 [{factor_id, name, spec}]），按 factor_id 对应新定义。
-	Library string
-	// WorkDir 存放落盘的 Python 源码，不使用引擎的状态目录。
-	WorkDir        string
+	// Library 可选：YAML 因子库目录（每个 *.yaml 是 [{factor_id, name, spec}]），按 factor_id 覆盖快照里的定义，
+	// 用于核对改过的定义；不填时使用快照里的定义。
+	Library        string
 	SetIDs         []string
 	Start, End     time.Time
 	Factors        []string
 	Subjects       []string
-	PythonWorkers  int
 	ComputeWorkers int
 	ChunkPeriods   int
-	// WorkerPath 覆盖配置里的 python.worker_path，便于使用与本程序同一提交的 pyworker。
-	WorkerPath string
 }
 
 // 连续值超过容差时的裁决。
@@ -86,8 +78,7 @@ type OutputStats struct {
 	ContinuousOutliers map[string]int64 `json:"continuous_outliers"`
 	OldValueNewNull    map[string]int64 `json:"old_value_new_null"`
 	OldNullNewValue    int64            `json:"old_null_new_value"`
-	PythonFailures     int64            `json:"python_failures"`
-	MissingPython      int64            `json:"missing_python"` // 新引擎有值、Python 没有对应行
+	MissingBaseline    int64            `json:"missing_baseline"` // 新引擎有值、基线没有对应行（例如当时预热中跳过），只做参考
 	Samples            []string         `json:"samples,omitempty"`
 }
 
@@ -105,9 +96,6 @@ func (r CompareReport) Failures() []string {
 	var failures []string
 	for _, stats := range r.Outputs {
 		label := stats.Set + "/" + stats.Output
-		if stats.PythonFailures > 0 {
-			failures = append(failures, fmt.Sprintf("%s：Python 侧计算失败 %d 次", label, stats.PythonFailures))
-		}
 		if stats.OldNullNewValue > 0 {
 			failures = append(failures, fmt.Sprintf("%s：旧为 null、新有值 %d 个", label, stats.OldNullNewValue))
 		}
@@ -121,42 +109,19 @@ func (r CompareReport) Failures() []string {
 	return failures
 }
 
-type libraryFactor struct {
-	FactorID string `yaml:"factor_id"`
-	Name     string `yaml:"name"`
-	Spec     string `yaml:"spec"`
-}
-
 // LoadLibrary 读取 YAML 因子库目录并编译每个因子。
 func LoadLibrary(dir string) (map[string]*factorexpr.Factor, error) {
-	paths, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
+	entries, err := factorlib.LoadDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	if len(paths) == 0 {
-		return nil, fmt.Errorf("因子库目录 %s 里没有 *.yaml", dir)
-	}
-	sort.Strings(paths)
-	library := map[string]*factorexpr.Factor{}
-	for _, path := range paths {
-		raw, err := os.ReadFile(path)
+	library := make(map[string]*factorexpr.Factor, len(entries))
+	for _, entry := range entries {
+		factor, err := factorexpr.Compile(entry.Spec)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("编译因子 %s：%w", entry.FactorID, err)
 		}
-		var entries []libraryFactor
-		if err := yaml.Unmarshal(raw, &entries); err != nil {
-			return nil, fmt.Errorf("解析因子库 %s：%w", path, err)
-		}
-		for _, entry := range entries {
-			if _, duplicate := library[entry.FactorID]; duplicate {
-				return nil, fmt.Errorf("因子库里 %s 重复", entry.FactorID)
-			}
-			factor, err := factorexpr.Compile(entry.Spec)
-			if err != nil {
-				return nil, fmt.Errorf("编译因子 %s：%w", entry.FactorID, err)
-			}
-			library[entry.FactorID] = factor
-		}
+		library[entry.FactorID] = factor
 	}
 	return library, nil
 }
@@ -168,18 +133,20 @@ func Compare(ctx context.Context, cfg *Config, req CompareRequest) (CompareRepor
 	if cfg == nil {
 		return report, errors.New("factor engine config is required")
 	}
-	if req.SetFile == "" || req.Library == "" || req.WorkDir == "" {
-		return report, errors.New("--set-file、--library 与 --work-dir 都是必填项")
+	if req.SetFile == "" {
+		return report, errors.New("--set-file 是必填项")
 	}
 	if !req.Start.Before(req.End) {
 		return report, errors.New("--start 必须早于 --end")
 	}
-	library, err := LoadLibrary(req.Library)
-	if err != nil {
-		return report, err
+	var library map[string]*factorexpr.Factor
+	if req.Library != "" {
+		var err error
+		if library, err = LoadLibrary(req.Library); err != nil {
+			return report, err
+		}
 	}
-	factorsDir := filepath.Join(req.WorkDir, "factors")
-	cache, err := NewCatalogCache(factorsDir, req.SetFile)
+	cache, err := NewCatalogCache(req.SetFile)
 	if err != nil {
 		return report, err
 	}
@@ -197,24 +164,11 @@ func Compare(ctx context.Context, cfg *Config, req CompareRequest) (CompareRepor
 	if err != nil {
 		return report, err
 	}
-	workerPath := cfg.Python.WorkerPath
-	if req.WorkerPath != "" {
-		workerPath = req.WorkerPath
-	}
-	workers := max(1, req.PythonWorkers)
-	pool, err := pyexec.New(ctx, workers, process.Config{
-		PythonBin: cfg.Python.Bin, WorkerPath: workerPath, Args: []string{"--factors-dir", factorsDir},
-		TaskTimeout: cfg.Python.TaskTimeout, Limits: process.DefaultLimits(),
-	})
-	if err != nil {
-		return report, err
-	}
-	defer pool.Close()
 	clock := periodclock.Continuous{}
-	runner := pipeline.NewRunner(storage, pool, clock, pipeline.Config{
+	runner := pipeline.NewRunner(storage, clock, pipeline.Config{
 		ReadBatchSubjects: cfg.Pipeline.ReadBatchSubjects, ReadWorkers: cfg.Pipeline.ReadWorkers, ReadTimeout: cfg.Pipeline.ReadTimeout,
 		BulkReadWorkers: cfg.Pipeline.BulkReadWorkers, ReadRetryBackoff: cfg.Pipeline.ReadRetryBackoff,
-		ReadBreakerFailures: cfg.Pipeline.ReadBreakerFailures, PythonWorkers: workers, FactorsDir: factorsDir,
+		ReadBreakerFailures: cfg.Pipeline.ReadBreakerFailures, ComputeWorkers: req.ComputeWorkers,
 	})
 	chunk := req.ChunkPeriods
 	if chunk <= 0 {
@@ -229,7 +183,15 @@ func Compare(ctx context.Context, cfg *Config, req CompareRequest) (CompareRepor
 		if err != nil {
 			return report, err
 		}
-		target, err := newCompareTarget(set.Set, factors, library, req.ComputeWorkers)
+		definitions := make(map[string]*factorexpr.Factor, len(factors))
+		for _, factor := range factors {
+			if override, ok := library[factor.FactorID]; ok {
+				definitions[factor.FactorID] = override
+			} else if factor.Compiled() != nil {
+				definitions[factor.FactorID] = factor.Compiled()
+			}
+		}
+		target, err := newCompareTarget(set.Set, factors, definitions, req.ComputeWorkers)
 		if err != nil {
 			return report, err
 		}
@@ -262,11 +224,11 @@ func Compare(ctx context.Context, cfg *Config, req CompareRequest) (CompareRepor
 			if err != nil {
 				return report, fmt.Errorf("读取 %s [%s, %s)：%w", setID, chunkStart.Format(time.RFC3339), chunkEnd.Format(time.RFC3339), err)
 			}
-			computation, err := runner.Compute(ctx, plan, loaded)
+			baseline, err := readBaseline(ctx, storage, cfg, set.Set, target.order, subjects, chunkStart, chunkEnd)
 			if err != nil {
-				return report, fmt.Errorf("Python 计算 %s：%w", setID, err)
+				return report, fmt.Errorf("读取 %s 的已有结果：%w", setID, err)
 			}
-			if err := target.compareChunk(ctx, clock, plan, loaded, computation); err != nil {
+			if err := target.compareChunk(ctx, clock, plan, loaded, baseline); err != nil {
 				return report, err
 			}
 			chunkStart = chunkEnd
@@ -275,6 +237,29 @@ func Compare(ctx context.Context, cfg *Config, req CompareRequest) (CompareRepor
 	}
 	report.Elapsed = time.Since(started).Round(time.Second).String()
 	return report, nil
+}
+
+// readBaseline 读取结果数据集在 [start, end) 的已有输出，按标的整理成与计算结果相同的形状（列为 data_time、series_tag 与输出列）。
+func readBaseline(ctx context.Context, storage storageio.Store, cfg *Config, set domain.FactorSet, outputs, subjects []string,
+	start, end time.Time) (pipeline.Computation, error) {
+	baseline := pipeline.Computation{Results: map[string]map[string]pipeline.ItemResult{"": {}}}
+	batch := max(1, cfg.Pipeline.ReadBatchSubjects)
+	for lo := 0; lo < len(subjects); lo += batch {
+		hi := min(len(subjects), lo+batch)
+		frames, err := storage.ReadWindow(ctx, storageio.ReadRequest{
+			SpaceID: set.SpaceID, DatasetID: set.ResultDatasetID, Freq: set.Freq, Subjects: subjects[lo:hi],
+			Start: start, End: end, Columns: outputs, PageTimeout: cfg.Pipeline.ReadTimeout,
+		})
+		if err != nil {
+			return pipeline.Computation{}, err
+		}
+		for subject, frame := range frames {
+			if frame != nil {
+				baseline.Results[""][subject] = pipeline.ItemResult{Columns: frame.Columns, Rows: frame.Rows}
+			}
+		}
+	}
+	return baseline, nil
 }
 
 // compareTarget 是一个集合的核对状态。
@@ -489,23 +474,11 @@ func (c *compareTarget) compareChunk(ctx context.Context, clock periodclock.Cloc
 		}
 	}
 	seen := map[string]map[[2]int]bool{}
-	failed := map[string]map[string]bool{} // 输出列 → Python 计算失败的标的（不再计入“Python 缺行”）
 	for name := range c.stats {
 		seen[name] = map[[2]int]bool{}
-		failed[name] = map[string]bool{}
 	}
-	for factorID, bySubject := range computation.Results {
+	for _, bySubject := range computation.Results {
 		for subject, item := range bySubject {
-			if item.Err != nil {
-				for name, owner := range c.owners {
-					if owner == factorID {
-						c.stats[name].PythonFailures++
-						failed[name][subject] = true
-						c.sample(c.stats[name], fmt.Sprintf("%s Python 失败：%v", subject, item.Err))
-					}
-				}
-				continue
-			}
 			subjectColumn := -1
 			if len(item.Columns) > 2 && item.Columns[2] == "subject_id" {
 				subjectColumn = 2
@@ -539,13 +512,10 @@ func (c *compareTarget) compareChunk(ctx context.Context, clock periodclock.Cloc
 	}
 	for name, stats := range c.stats {
 		column := columnIndex[name]
-		for s, key := range result.Series {
-			if failed[name][key.Subject] {
-				continue
-			}
+		for s := range result.Series {
 			for t := start; t <= end; t++ {
 				if result.Present(s, t) && !seen[name][[2]int{s, t}] && !math.IsNaN(result.Value(column, s, t)) {
-					stats.MissingPython++
+					stats.MissingBaseline++
 				}
 			}
 		}
@@ -706,9 +676,9 @@ func parseCompareTime(value any) (time.Time, error) {
 	case string:
 		at, err := time.Parse(time.RFC3339Nano, v)
 		if err != nil {
-			return time.Time{}, fmt.Errorf("解析 Python 结果的 data_time %q：%w", v, err)
+			return time.Time{}, fmt.Errorf("解析基线结果的 data_time %q：%w", v, err)
 		}
 		return at.UTC(), nil
 	}
-	return time.Time{}, fmt.Errorf("Python 结果的 data_time 类型为 %T", value)
+	return time.Time{}, fmt.Errorf("基线结果的 data_time 类型为 %T", value)
 }

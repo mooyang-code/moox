@@ -345,12 +345,7 @@ freq = "1m"
 
 [[factors.definitions]]
 factor_id = "bias"
-factor_type = "timeseries"
-file = "timeseries/bias.py"
-input_columns = ["close"]
-outputs = ["bias_5"]
-params_json = '{"windows":[5]}'
-lookback_periods = 5
+file = "timeseries.yaml"
 
 [[factors.members]]
 source_dataset_id = "dataset_crypto_kline_1m"
@@ -404,9 +399,7 @@ freq = "1m"
 
 [[factors.definitions]]
 factor_id = "Bias"
-factor_type = "timeseries"
-file = "Bias.py"
-lookback_periods = 20
+file = "timeseries.yaml"
 
 [[factors.members]]
 source_dataset_id = "dataset_other"
@@ -456,9 +449,7 @@ freq = "1m"
 
 [[factors.definitions]]
 factor_id = "Bias"
-factor_type = "timeseries"
-file = "Bias.py"
-lookback_periods = 20
+file = "timeseries.yaml"
 
 [[factors.members]]
 source_dataset_id = "dataset_crypto_kline_1m"
@@ -482,8 +473,8 @@ func TestLoadDefaultsDisableFactors(t *testing.T) {
 	assert.False(t, snapshot.Manifest.Factors.Enabled)
 }
 
-func TestLoadRejectsInvalidFactorTypeBeforeSetup(t *testing.T) {
-	for _, declaration := range []string{"", "factor_type = \"unknown\""} {
+func TestLoadRejectsRetiredFactorDefinitionFields(t *testing.T) {
+	for _, declaration := range []string{`factor_type = "timeseries"`, `lookback_periods = 20`, `params_json = "{}"`, `name = "Bias"`} {
 		root := t.TempDir()
 		body := validManifest + `
 [factors]
@@ -491,12 +482,25 @@ enabled = true
 source_dir = "examples/factors"
 [[factors.definitions]]
 factor_id = "Bias"
-file = "Bias.py"
-lookback_periods = 20
+file = "timeseries.yaml"
 ` + declaration + "\n"
 		_, err := Load(writeManifest(t, root, body, 0o600), root)
-		require.ErrorContains(t, err, "factor_type")
+		require.ErrorContains(t, err, "accepts only factor_id and file", declaration)
 	}
+}
+
+func TestLoadRejectsNonYAMLFactorFile(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[factors]
+enabled = true
+source_dir = "examples/factors"
+[[factors.definitions]]
+factor_id = "Bias"
+file = "Bias.py"
+`
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.ErrorContains(t, err, "YAML factor library file")
 }
 
 func TestLoadNotificationWebhook(t *testing.T) {

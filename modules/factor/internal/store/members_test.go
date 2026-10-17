@@ -78,12 +78,11 @@ func TestUpdateFactorRejectedWhileEnabledMemberExists(t *testing.T) {
 	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusEnabled)))
 	addTestMember(t, s, "set_prices", "factor_close", domain.MemberStatusEnabled)
 
-	changed := testFactorDef("factor_close")
-	changed.SourceCode = "changed"
+	changed := changedSpec(testFactorDef("factor_close"), "outputs:\n  factor_close: close * 2\n")
 	require.ErrorIs(t, s.UpdateFactor(ctx, changed), ErrConflict)
 	stored, err := s.GetFactor(ctx, "factor_close")
 	require.NoError(t, err)
-	require.NotEqual(t, "changed", stored.SourceCode)
+	require.NotEqual(t, changed.Spec, stored.Spec)
 
 	missing := testFactorDef("missing")
 	require.ErrorIs(t, s.UpdateFactor(ctx, missing), gorm.ErrRecordNotFound)
@@ -95,12 +94,12 @@ func TestUpdateFactorAllowedWhenOnlyDisabledMembers(t *testing.T) {
 	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusEnabled)))
 	addTestMember(t, s, "set_prices", "factor_close", domain.MemberStatusDisabled)
 
-	changed := testFactorDef("factor_close")
-	changed.SourceCode = "changed"
+	changed := changedSpec(testFactorDef("factor_close"), "outputs:\n  factor_close: close * 2\n")
 	require.NoError(t, s.UpdateFactor(ctx, changed))
 	stored, err := s.GetFactor(ctx, "factor_close")
 	require.NoError(t, err)
-	require.Equal(t, "changed", stored.SourceCode)
+	require.Equal(t, changed.Spec, stored.Spec)
+	require.Equal(t, changed.SpecHash, stored.SpecHash)
 }
 
 func TestListUsagesAggregatesAcrossSets(t *testing.T) {

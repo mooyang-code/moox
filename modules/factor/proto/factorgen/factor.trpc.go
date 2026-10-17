@@ -56,6 +56,12 @@ type FactorMgrService interface {
 	CancelRecalcJob(ctx context.Context, req *CancelRecalcJobReq) (*CancelRecalcJobRsp, error)
 
 	GetStatus(ctx context.Context, req *GetStatusReq) (*GetStatusRsp, error)
+
+	ValidateFactorSpec(ctx context.Context, req *ValidateFactorSpecReq) (*ValidateFactorSpecRsp, error)
+
+	PreviewFactor(ctx context.Context, req *PreviewFactorReq) (*PreviewFactorRsp, error)
+
+	ListFactorFunctions(ctx context.Context, req *ListFactorFunctionsReq) (*ListFactorFunctionsRsp, error)
 }
 
 func FactorMgrService_CreateFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -400,6 +406,60 @@ func FactorMgrService_GetStatus_Handler(svr interface{}, ctx context.Context, f 
 	return rsp, nil
 }
 
+func FactorMgrService_ValidateFactorSpec_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ValidateFactorSpecReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).ValidateFactorSpec(ctx, reqbody.(*ValidateFactorSpecReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_PreviewFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PreviewFactorReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).PreviewFactor(ctx, reqbody.(*PreviewFactorReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_ListFactorFunctions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListFactorFunctionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).ListFactorFunctions(ctx, reqbody.(*ListFactorFunctionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // FactorMgrServer_ServiceDesc descriptor for server.RegisterService.
 var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.factor.FactorMgr",
@@ -480,6 +540,18 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.factor.FactorMgr/GetStatus",
 			Func: FactorMgrService_GetStatus_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/ValidateFactorSpec",
+			Func: FactorMgrService_ValidateFactorSpec_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/PreviewFactor",
+			Func: FactorMgrService_PreviewFactor_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/ListFactorFunctions",
+			Func: FactorMgrService_ListFactorFunctions_Handler,
 		},
 	},
 }
@@ -666,6 +738,15 @@ func (s *UnimplementedFactorMgr) CancelRecalcJob(ctx context.Context, req *Cance
 func (s *UnimplementedFactorMgr) GetStatus(ctx context.Context, req *GetStatusReq) (*GetStatusRsp, error) {
 	return nil, errors.New("rpc GetStatus of service FactorMgr is not implemented")
 }
+func (s *UnimplementedFactorMgr) ValidateFactorSpec(ctx context.Context, req *ValidateFactorSpecReq) (*ValidateFactorSpecRsp, error) {
+	return nil, errors.New("rpc ValidateFactorSpec of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) PreviewFactor(ctx context.Context, req *PreviewFactorReq) (*PreviewFactorRsp, error) {
+	return nil, errors.New("rpc PreviewFactor of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) ListFactorFunctions(ctx context.Context, req *ListFactorFunctionsReq) (*ListFactorFunctionsRsp, error) {
+	return nil, errors.New("rpc ListFactorFunctions of service FactorMgr is not implemented")
+}
 
 type UnimplementedFactorEngine struct{}
 
@@ -727,6 +808,12 @@ type FactorMgrClientProxy interface {
 	CancelRecalcJob(ctx context.Context, req *CancelRecalcJobReq, opts ...client.Option) (rsp *CancelRecalcJobRsp, err error)
 
 	GetStatus(ctx context.Context, req *GetStatusReq, opts ...client.Option) (rsp *GetStatusRsp, err error)
+
+	ValidateFactorSpec(ctx context.Context, req *ValidateFactorSpecReq, opts ...client.Option) (rsp *ValidateFactorSpecRsp, err error)
+
+	PreviewFactor(ctx context.Context, req *PreviewFactorReq, opts ...client.Option) (rsp *PreviewFactorRsp, err error)
+
+	ListFactorFunctions(ctx context.Context, req *ListFactorFunctionsReq, opts ...client.Option) (rsp *ListFactorFunctionsRsp, err error)
 }
 
 type FactorMgrClientProxyImpl struct {
@@ -1112,6 +1199,66 @@ func (c *FactorMgrClientProxyImpl) GetStatus(ctx context.Context, req *GetStatus
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetStatusRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) ValidateFactorSpec(ctx context.Context, req *ValidateFactorSpecReq, opts ...client.Option) (*ValidateFactorSpecRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ValidateFactorSpec")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("ValidateFactorSpec")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ValidateFactorSpecRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) PreviewFactor(ctx context.Context, req *PreviewFactorReq, opts ...client.Option) (*PreviewFactorRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/PreviewFactor")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("PreviewFactor")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PreviewFactorRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) ListFactorFunctions(ctx context.Context, req *ListFactorFunctionsReq, opts ...client.Option) (*ListFactorFunctionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ListFactorFunctions")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("ListFactorFunctions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListFactorFunctionsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

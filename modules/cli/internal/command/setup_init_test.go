@@ -65,11 +65,7 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	snapshot.Manifest.Factors.Enabled = true
 	snapshot.Manifest.Factors.SourceDir = "../../../../examples/factors"
-	snapshot.Manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{
-		FactorType: "timeseries",
-		FactorID:   "Bias", File: "timeseries/Bias.py", InputColumns: []string{"close"},
-		Outputs: []string{"bias_5"}, ParamsJSON: `{"windows":[5]}`, LookbackPeriods: 5,
-	}}
+	snapshot.Manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{FactorID: "Bias", File: "timeseries.yaml"}}
 	snapshot.Manifest.Factors.Members = []setupconfig.FactorSetupMember{{
 		SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", FactorID: "Bias",
 	}}

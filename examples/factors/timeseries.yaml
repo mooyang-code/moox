@@ -1,0 +1,33 @@
+# 时序因子示例（表达式写法，语法见 docs/模块/因子.md）。一个文件可以包含多个因子：
+# factor_id 是全局唯一的标识，name 是展示名，spec 是定义；列表参数会展开成多个输出列。
+- factor_id: Bias
+  name: Bias
+  spec: |
+    params: {window: [5, 20]}
+    outputs:
+      bias_{window}: close / ts_mean(close, window) - 1
+
+- factor_id: Cci
+  name: CCI
+  spec: |
+    params: {window: 20}
+    let:
+      tp: (high + low + close) / 3
+      m: ts_mean(tp, window)
+    outputs:
+      cci: (tp - m) / (0.015 * ts_mean(abs(tp - m), window))
+
+- factor_id: ma
+  name: 移动平均
+  spec: |
+    params: {window: [5, 10, 20]}
+    outputs:
+      ma_{window}: ts_mean(close, window)
+
+# 递推平滑移动平均 SMA(close, n, m)：alpha = m / n。递推算子按收敛精度截断回看，SMA(20, 1) 回看 405 期。
+- factor_id: sma
+  name: SMA
+  spec: |
+    params: {window: [20]}
+    outputs:
+      sma_{window}: sma(close, window, 1)

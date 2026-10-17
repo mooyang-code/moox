@@ -66,7 +66,7 @@ func (t *runTracker) record(setID string, periodTime time.Time, status string, o
 			FactorID:       factor.FactorID,
 			Status:         factor.Status,
 			FailedSubjects: factor.FailedSubjects,
-			SourceHash:     factor.SourceHash,
+			SpecHash:       factor.SourceHash,
 			DefinitionHash: factor.DefinitionHash,
 			GapSubjects:    factor.GapSubjects,
 		})

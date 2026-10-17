@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -11,7 +10,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/packages/factorexpr"
 )
@@ -32,8 +30,8 @@ func TestLoadLibraryMatchesCatalog(t *testing.T) {
 	}
 }
 
-// 用构造的窗口与“Python 结果”核对比较逻辑：一致的值、行式滚动跨过空洞（新引擎为 null，原因 gap）、
-// 新上市头部（head）、旧为 null 新有值、Python 失败、Python 缺行。
+// 用构造的窗口与“基线结果”核对比较逻辑：一致的值、行式滚动跨过空洞（新引擎为 null，原因 gap）、
+// 新上市头部（head）、旧为 null 新有值、基线缺行。
 func TestCompareChunkClassifies(t *testing.T) {
 	library, err := LoadLibrary("../../factors")
 	if err != nil {
@@ -51,14 +49,14 @@ func TestCompareChunkClassifies(t *testing.T) {
 	plan := pipeline.Plan{Mode: pipeline.ModeRecalc, Set: set, TargetStart: base.Add(19 * time.Minute), TargetEnd: base.Add(length * time.Minute)}
 	closes := func(subject string, i int) float64 { return 100 + float64(i) + float64(len(subject)) }
 	frames := map[string]*storageio.Frame{}
-	results := map[string]pyexec.ItemResult{}
-	for _, subject := range []string{"BTC", "ETH", "NEW", "BAD"} {
+	results := map[string]pipeline.ItemResult{}
+	for _, subject := range []string{"BTC", "ETH", "NEW"} {
 		frame := &storageio.Frame{SubjectID: subject, Columns: []string{"data_time", "series_tag", "close"}}
 		var rows [][]any
 		var window []float64
 		for i := 0; i < length; i++ {
 			if subject == "ETH" && i == 50 {
-				continue // 空洞：Python 按行滚动跨过它，新引擎在网格上给 null
+				continue // 空洞：旧实现按行滚动跨过它，新引擎在网格上给 null
 			}
 			if subject == "NEW" && i < 30 {
 				continue // 新上市：头部没有数据
@@ -83,23 +81,19 @@ func TestCompareChunkClassifies(t *testing.T) {
 			}
 			row := []any{at.Format(time.RFC3339), "binance", old}
 			if subject == "BTC" && i == 75 {
-				continue // Python 缺这一行
+				continue // 基线缺这一行
 			}
 			rows = append(rows, row)
 		}
 		frames[subject] = frame
-		item := pyexec.ItemResult{FactorID: "Bias", Columns: []string{"data_time", "series_tag", "bias_20"}, Rows: rows}
-		if subject == "BAD" {
-			item = pyexec.ItemResult{FactorID: "Bias", Err: errors.New("worker crashed")}
-		}
-		results[subject] = item
+		results[subject] = pipeline.ItemResult{FactorID: "Bias", Columns: []string{"data_time", "series_tag", "bias_20"}, Rows: rows}
 	}
-	computation := pipeline.Computation{Results: map[string]map[string]pyexec.ItemResult{"Bias": results}}
+	computation := pipeline.Computation{Results: map[string]map[string]pipeline.ItemResult{"Bias": results}}
 	if err := target.compareChunk(context.Background(), clock, plan, pipeline.LoadResult{Frames: frames}, computation); err != nil {
 		t.Fatal(err)
 	}
 	stats := target.stats["bias_20"]
-	if stats.PythonFailures != 1 || stats.OldNullNewValue != 1 || stats.MissingPython != 1 {
+	if stats.OldNullNewValue != 1 || stats.MissingBaseline != 1 {
 		t.Fatalf("stats = %+v", stats)
 	}
 	// 覆盖缺失那根的窗口是 t = 50..69；t = 50 本身没有源行、不参与比较，所以是 19 个。
@@ -113,7 +107,7 @@ func TestCompareChunkClassifies(t *testing.T) {
 		t.Fatalf("stats = %+v", stats)
 	}
 	failures := CompareReport{Outputs: target.outputStats()}.Failures()
-	if len(failures) != 2 || !strings.Contains(strings.Join(failures, ";"), "旧为 null、新有值") {
+	if len(failures) != 1 || !strings.Contains(failures[0], "旧为 null、新有值") {
 		t.Fatalf("failures = %v", failures)
 	}
 }
@@ -170,7 +164,7 @@ func TestCompareAdjudication(t *testing.T) {
 		return []any{base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339), "", v}
 	}
 	stdAt2 := 0.5773502691896258 // [1, 2, 2] 的样本标准差
-	computation := pipeline.Computation{Results: map[string]map[string]pyexec.ItemResult{
+	computation := pipeline.Computation{Results: map[string]map[string]pipeline.ItemResult{
 		"R": {"A": {Columns: []string{"data_time", "series_tag", "r"}, Rows: [][]any{row(2, 0.5), row(3, 0.5), row(4, 1.0)}}},
 		"S": {"A": {Columns: []string{"data_time", "series_tag", "s"}, Rows: [][]any{row(2, stdAt2*(1+1e-6)), row(3, 0.0), row(4, 577349.1)}}},
 		"D": {"A": {Columns: []string{"data_time", "series_tag", "d"}, Rows: [][]any{row(2, 0.33), row(3, 1.0), row(4, 666665.0)}}},

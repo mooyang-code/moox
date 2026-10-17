@@ -60,30 +60,24 @@ type hashedSet struct {
 }
 
 type hashedFactor struct {
-	FactorID             string   `json:"factor_id"`
-	Name                 string   `json:"name"`
-	FactorType           string   `json:"factor_type"`
-	SourceHash           string   `json:"source_hash"`
-	InputColumns         []string `json:"input_columns"`
-	Outputs              []string `json:"outputs"`
-	ParamsJSON           string   `json:"params_json"`
-	LookbackPeriods      int      `json:"lookback_periods"`
-	AllowPartialUniverse bool     `json:"allow_partial_universe"`
+	FactorID             string `json:"factor_id"`
+	Name                 string `json:"name"`
+	SpecHash             string `json:"spec_hash"`
+	DefinitionHash       string `json:"definition_hash"`
+	AllowPartialUniverse bool   `json:"allow_partial_universe"`
 }
 
 // CatalogHash fingerprints everything the engine computes with. Timestamps are
 // excluded so that a write without a semantic change does not force a resync;
-// the source is covered by its content hash.
+// the spec is covered by its content hash and the computation by definition_hash.
 func CatalogHash(sets []domain.EngineSet) (string, error) {
 	hashed := make([]hashedSet, 0, len(sets))
 	for _, set := range sets {
 		factors := make([]hashedFactor, 0, len(set.Factors))
 		for _, factor := range set.Factors {
 			factors = append(factors, hashedFactor{
-				FactorID: factor.FactorID, Name: factor.Name, FactorType: factor.FactorType,
-				SourceHash: factor.SourceHash, InputColumns: factor.InputColumns, Outputs: factor.Outputs,
-				ParamsJSON: factor.ParamsJSON, LookbackPeriods: factor.LookbackPeriods,
-				AllowPartialUniverse: factor.AllowPartialUniverse,
+				FactorID: factor.FactorID, Name: factor.Name, SpecHash: factor.SpecHash,
+				DefinitionHash: domain.DefinitionHash(factor), AllowPartialUniverse: factor.AllowPartialUniverse,
 			})
 		}
 		hashed = append(hashed, hashedSet{

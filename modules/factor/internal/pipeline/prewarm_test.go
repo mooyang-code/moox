@@ -66,7 +66,7 @@ func hourlyPlan(t *testing.T, period time.Time, factors ...domain.FactorDef) Pla
 // 结果整根缺失。主动预热之后，第一期到达时窗口已经载入，这一期照常完整计算，只读窗口之后新增的 K 线。
 func TestPrewarmLoadsWindowsBeforeFirstLivePeriod(t *testing.T) {
 	store := &hourlyStore{}
-	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{BackgroundWarmup: true})
+	runner := NewRunner(store, periodclock.Continuous{}, Config{BackgroundWarmup: true})
 	restart := time.Date(2026, 10, 16, 8, 10, 0, 0, time.UTC)
 
 	// 预热到最近一根已收盘 K 线（07:00Z）的前一根：06:00Z。
@@ -98,7 +98,7 @@ func TestPrewarmLoadsWindowsBeforeFirstLivePeriod(t *testing.T) {
 // 一批后台预热载入窗口后回调（引擎据此立刻补算预热期间跳过的那几期），回调时窗口已经在缓存里。
 func TestWarmupDoneHookRunsAfterWindowsAreLoaded(t *testing.T) {
 	store := &hourlyStore{}
-	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{BackgroundWarmup: true})
+	runner := NewRunner(store, periodclock.Continuous{}, Config{BackgroundWarmup: true})
 	done := make(chan string, 1)
 	runner.OnWarmupDone(func(setID string) {
 		require.Equal(t, WarmupReady, runner.WarmupStatuses()[0].State, "回调时预热状态已经就绪")
@@ -122,7 +122,7 @@ func TestWarmupDoneHookRunsAfterWindowsAreLoaded(t *testing.T) {
 // 只回看一根的集合：预热窗口终点比第一期的窗口起点早一根，落后不多，本期直接读整窗口，不再当作预热中。
 func TestPrewarmConnectsToFirstPeriodWithSingleBarLookback(t *testing.T) {
 	store := &hourlyStore{}
-	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{BackgroundWarmup: true})
+	runner := NewRunner(store, periodclock.Continuous{}, Config{BackgroundWarmup: true})
 	single := domain.FactorDef{FactorID: "rank", FactorType: domain.FactorTypeCrossSection, LookbackPeriods: 1}
 	require.Equal(t, 2, runner.Prewarm(hourlyPlan(t, time.Date(2026, 10, 16, 6, 0, 0, 0, time.UTC), single)))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -144,7 +144,7 @@ func TestPrewarmConnectsToFirstPeriodWithSingleBarLookback(t *testing.T) {
 }
 
 func TestPrewarmNeedsBackgroundWarmup(t *testing.T) {
-	runner := NewRunner(&hourlyStore{}, nil, periodclock.Continuous{}, Config{})
+	runner := NewRunner(&hourlyStore{}, periodclock.Continuous{}, Config{})
 	require.Zero(t, runner.Prewarm(hourlyPlan(t, time.Date(2026, 10, 16, 6, 0, 0, 0, time.UTC))))
 	require.Empty(t, runner.WarmupStatuses())
 }
@@ -153,7 +153,7 @@ func TestPrewarmNeedsBackgroundWarmup(t *testing.T) {
 func TestRunRecordsWarmingSkipsForRecovery(t *testing.T) {
 	sink := &recordingSink{}
 	store := &hourlyStore{}
-	runner := NewRunner(store, &fakeExecutor{}, periodclock.Continuous{}, Config{BackgroundWarmup: true, GapSink: sink})
+	runner := NewRunner(store, periodclock.Continuous{}, Config{BackgroundWarmup: true, GapSink: sink})
 	factors := []domain.FactorDef{
 		testPipelineFactor("mom", domain.FactorTypeTimeSeries, 3, false),
 		testPipelineFactor("rank", domain.FactorTypeCrossSection, 3, false),

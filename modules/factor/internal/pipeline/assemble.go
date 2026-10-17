@@ -10,7 +10,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
 
@@ -278,7 +277,7 @@ func parseDataTime(value any) (time.Time, error) {
 	}
 }
 
-func validateResultColumns(item pyexec.ItemResult, factor domain.FactorDef, cross bool) error {
+func validateResultColumns(item ItemResult, factor domain.FactorDef, cross bool) error {
 	want := []string{"data_time", "series_tag"}
 	if cross {
 		want = append(want, "subject_id")
@@ -416,7 +415,7 @@ func markFactorSubjectFailure(computation Computation, failed map[string]map[str
 	state := computation.FactorStates[factor.FactorID]
 	state.FactorID = factor.FactorID
 	state.Status = "degraded"
-	state.SourceHash = factor.SourceHash
+	state.SourceHash = factor.SpecHash
 	state.FailedSubjects = uniqueSorted(append(state.FailedSubjects, subject))
 	computation.FactorStates[factor.FactorID] = state
 }

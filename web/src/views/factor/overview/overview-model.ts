@@ -22,11 +22,30 @@ export function cardLinks(setId: string) {
 }
 
 export interface StatItem {
-  key: "engine" | "consumer" | "workers" | "queue" | "warmup" | "recalc";
+  key: "engine" | "consumer" | "compute" | "queue" | "warmup" | "recalc";
   label: string;
   value: string;
   hint: string;
   tone: "ok" | "danger" | "muted" | "info";
+}
+
+/** 表达式执行器：计算线程数与 expr 语义版本；引擎与管理端版本不一致时说明二者没有一起升级，需要提示。 */
+export function exprStat(engine: EngineStatus | null): StatItem {
+  if (!engine) return { key: "compute", label: "表达式引擎", value: "-", hint: "计算线程 · expr 版本", tone: "muted" };
+  const engineVersion = engine.engine_expr_version || "";
+  const managerVersion = engine.manager_expr_version || "";
+  const mismatch = Boolean(engineVersion && managerVersion && engineVersion !== managerVersion);
+  return {
+    key: "compute",
+    label: "表达式引擎",
+    value: `${engine.compute_workers ?? "-"} 线程`,
+    hint: mismatch
+      ? `版本不一致：引擎 ${engineVersion}，管理端 ${managerVersion}`
+      : engineVersion
+        ? `expr 版本 ${engineVersion}`
+        : "计算线程",
+    tone: mismatch ? "danger" : "info"
+  };
 }
 
 export function statsStrip(status: EngineStatus | null | undefined, runningRecalc: number): StatItem[] {
@@ -44,13 +63,7 @@ export function statsStrip(status: EngineStatus | null | undefined, runningRecal
       hint: "周期事件消费",
       tone: engine ? (engine.consumer_running ? "ok" : "danger") : "muted"
     },
-    {
-      key: "workers",
-      label: "Python Worker",
-      value: engine ? `${engine.python_busy} / ${engine.python_workers}` : "-",
-      hint: "忙碌 / 总数",
-      tone: engine ? "info" : "muted"
-    },
+    exprStat(engine),
     {
       key: "queue",
       label: "计算队列",

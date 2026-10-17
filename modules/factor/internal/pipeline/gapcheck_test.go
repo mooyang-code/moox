@@ -8,7 +8,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/stretchr/testify/require"
 )
@@ -58,7 +57,7 @@ func (s *earliestStore) EarliestPeriod(context.Context, string, string, string, 
 }
 
 func gapRunner(store storageio.Store) *Runner {
-	return NewRunner(store, &fakeExecutor{}, periodclock.Continuous{}, Config{GapCheck: true})
+	return NewRunner(store, periodclock.Continuous{}, Config{GapCheck: true})
 }
 
 func livePlanAt(target time.Time, factors []domain.FactorDef, subjects ...string) Plan {
@@ -247,14 +246,14 @@ func TestAssembleFillOnlyNeverWritesInvalidationNull(t *testing.T) {
 	require.Equal(t, ItemGap, report.Items[ItemKey{FactorID: "f", Subject: "BTC", Period: minute(11)}])
 }
 
-// 允许部分全集的截面因子：有洞的标的不进 panel 与 available_subjects；严格截面因子实时整因子 skipped。
+// 允许部分全集的截面因子：标的的输入在某个截面时刻不完整时（窗口跨过空洞，严格窗口给 NaN），只在那个时刻不参与截面
+// （设计 7.3）；严格截面因子实时有洞时整因子 skipped。
 func TestComputeCrossSectionExcludesGapSubjects(t *testing.T) {
 	target := minute(10)
 	partial := testPipelineFactor("partial", domain.FactorTypeCrossSection, 3, true)
 	strict := testPipelineFactor("strict", domain.FactorTypeCrossSection, 3, false)
 	plan := livePlanAt(target, []domain.FactorDef{partial, strict}, "BTC", "ETH")
-	exec := &fakeExecutor{}
-	runner := NewRunner(&outputStore{}, exec, periodclock.Continuous{}, Config{GapCheck: true})
+	runner := NewRunner(&outputStore{}, periodclock.Continuous{}, Config{GapCheck: true})
 	frames := map[string]*storageio.Frame{
 		"BTC": gapFrame("BTC", "", 8, 9, 10),
 		"ETH": gapFrame("ETH", "", 8, 10), // 09 缺失
@@ -269,12 +268,12 @@ func TestComputeCrossSectionExcludesGapSubjects(t *testing.T) {
 	require.Equal(t, "degraded", computation.FactorStates["partial"].Status)
 	require.Equal(t, []string{"ETH"}, computation.FactorStates["partial"].GapSubjects)
 	require.Contains(t, computation.FactorStates["partial"].FailedSubjects, "ETH")
-	requests := exec.requests()
-	require.Len(t, requests, 1, "只有部分全集因子会计算")
-	require.Equal(t, []string{"BTC"}, requests[0].Context["available_subjects"], "有洞的标的不进 available_subjects")
-	for _, row := range requests[0].Frame.(storageio.Frame).Rows {
-		require.Equal(t, "BTC", row[2], "panel 里不能有 ETH")
+	require.Empty(t, computation.Results["strict"], "严格截面因子不计算")
+	ranks := map[string]any{}
+	for _, row := range computation.Results["partial"][""].Rows {
+		ranks[row[2].(string)] = row[3]
 	}
+	require.Equal(t, map[string]any{"BTC": 1.0, "ETH": nil}, ranks, "ETH 的窗口跨过空洞：不参与排名，也没有值")
 }
 
 type recordingSink struct {
@@ -294,7 +293,7 @@ func TestRunRecordsGapsAndSaltsCommitIDs(t *testing.T) {
 	factor := testPipelineFactor("f", domain.FactorTypeTimeSeries, 3, false)
 	store := &gapRunStore{frames: map[string]*storageio.Frame{"BTC": gapFrame("BTC", "", 8, 10)}}
 	sink := &recordingSink{}
-	runner := NewRunner(store, &fakeExecutor{}, periodclock.Continuous{}, Config{GapCheck: true, GapSink: sink})
+	runner := NewRunner(store, periodclock.Continuous{}, Config{GapCheck: true, GapSink: sink})
 	set := domain.FactorSet{SetID: "fset", SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "result", Freq: "1m", Status: domain.SetStatusEnabled, SubjectMode: domain.SubjectModeAll}
 	plan, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{Set: set, Factors: []domain.FactorDef{factor}, PeriodTime: minute(10), Universe: []string{"BTC"}, CarryColumns: []string{"close"}, TriggerEventID: "evt-1"})
 	require.NoError(t, err)
@@ -318,7 +317,7 @@ func TestRunRecordsGapsAndSaltsCommitIDs(t *testing.T) {
 	// 没有空洞的实时周期：提交 ID 是内容寻址（重跑相同）。
 	store.frames = map[string]*storageio.Frame{"BTC": gapFrame("BTC", "", 8, 9, 10)}
 	store.writeCalls = nil
-	fresh := NewRunner(store, &fakeExecutor{}, periodclock.Continuous{}, Config{GapCheck: true, GapSink: sink})
+	fresh := NewRunner(store, periodclock.Continuous{}, Config{GapCheck: true, GapSink: sink})
 	_, err = fresh.Run(context.Background(), plan)
 	require.NoError(t, err)
 	_, err = fresh.Run(context.Background(), plan)
@@ -348,8 +347,6 @@ func (s *gapRunStore) ReadWindow(_ context.Context, req storageio.ReadRequest) (
 	return out, nil
 }
 
-var _ = pyexec.ItemResult{}
-
 // 缓存里的窗口一定无洞：有洞的标的不写缓存并标记 dirty，下期整窗口读取（不用缓存前缀），读到完整窗口后恢复正常增量读取。
 func TestLiveWindowCacheNeverKeepsHolesAndRereadsDirtySubjects(t *testing.T) {
 	set := domain.FactorSet{SetID: "fset", SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.SetStatusEnabled, SubjectMode: domain.SubjectModeAll}
@@ -377,7 +374,7 @@ func TestLiveWindowCacheNeverKeepsHolesAndRereadsDirtySubjects(t *testing.T) {
 		}
 		return frames, nil
 	}}
-	runner := NewRunner(store, nil, periodclock.Continuous{}, Config{GapCheck: true})
+	runner := NewRunner(store, periodclock.Continuous{}, Config{GapCheck: true})
 
 	// 10：窗口 08-10 缺 09，不进缓存，标记 dirty。
 	first := livePlan(minute(10))

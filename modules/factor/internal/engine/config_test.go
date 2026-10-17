@@ -44,7 +44,7 @@ func TestEngineConfigDefaultsAndPaths(t *testing.T) {
 	require.Equal(t, "assigned-factor-engine-47", cfg.GatewayClient.KeyID)
 	require.Equal(t, filepath.Join(root, "secrets/storage-primary-auth.secret"), cfg.Storage.AuthSecretFile)
 	require.Equal(t, 500, cfg.Recalc.ChunkPeriods)
-	require.Equal(t, filepath.Join(root, "pyworker/worker.py"), cfg.Python.WorkerPath)
+	require.Equal(t, ByteSize(1<<30), cfg.Compute.MaxMemory)
 }
 
 func TestEngineConfigRejectsDatabaseSection(t *testing.T) {
@@ -75,15 +75,26 @@ func TestEngineConfigEngineIDFromEnvironment(t *testing.T) {
 	require.Equal(t, "factor-engine@mac", cfg.Engine.ID)
 }
 
-func TestEngineConfigResolvesRelativePythonBin(t *testing.T) {
-	path := writeEngineConfig(t, minimalEngineConfig+"python:\n  bin: ./venv/bin/python\n")
-	cfg, err := Load(path)
-	require.NoError(t, err)
-	require.Equal(t, filepath.Join(filepath.Dir(filepath.Dir(path)), "venv/bin/python"), cfg.Python.Bin)
+// 旧配置的 python 段会让启动失败（严格解析），发布时必须同步改配置。
+func TestEngineConfigRejectsRetiredPythonSection(t *testing.T) {
+	_, err := Load(writeEngineConfig(t, minimalEngineConfig+"python:\n  bin: ./venv/bin/python\n"))
+	require.ErrorContains(t, err, "python")
+}
 
-	cfg, err = Load(writeEngineConfig(t, minimalEngineConfig+"python:\n  bin: python3\n"))
+func TestEngineConfigComputeSection(t *testing.T) {
+	cfg, err := Load(writeEngineConfig(t, minimalEngineConfig+"compute:\n  workers: 2\n  max_memory: 512MiB\n"))
 	require.NoError(t, err)
-	require.Equal(t, "python3", cfg.Python.Bin, "a bare command is looked up on PATH")
+	require.Equal(t, 2, cfg.Compute.Workers)
+	require.Equal(t, ByteSize(512<<20), cfg.Compute.MaxMemory)
+	cfg, err = Load(writeEngineConfig(t, minimalEngineConfig+"compute:\n  max_memory: 1073741824\n"))
+	require.NoError(t, err)
+	require.Equal(t, ByteSize(1<<30), cfg.Compute.MaxMemory)
+	for _, bad := range []string{"1.5GiB", "-1MiB", "lots", "1 TB"} {
+		_, err = Load(writeEngineConfig(t, minimalEngineConfig+"compute:\n  max_memory: "+bad+"\n"))
+		require.ErrorContains(t, err, "字节数", bad)
+	}
+	_, err = Load(writeEngineConfig(t, minimalEngineConfig+"compute:\n  workers: -1\n"))
+	require.ErrorContains(t, err, "compute.workers")
 }
 
 // 空洞防护默认关闭，默认值与账本目录按配置根目录解析；不合法的取值被拒绝。

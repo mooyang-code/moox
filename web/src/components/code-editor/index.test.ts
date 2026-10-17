@@ -22,8 +22,8 @@ afterEach(() => {
 
 describe("CodeEditor", () => {
   it("TestCodeEditorRendersModelValue", () => {
-    const wrapper = mountEditor({ modelValue: "def compute(df):\n    return df" });
-    expect(viewOf(wrapper).state.doc.toString()).toBe("def compute(df):\n    return df");
+    const wrapper = mountEditor({ modelValue: "outputs:\n  x: close" });
+    expect(viewOf(wrapper).state.doc.toString()).toBe("outputs:\n  x: close");
     expect(wrapper.find(".cm-content").exists()).toBe(true);
   });
 
@@ -62,6 +62,60 @@ describe("CodeEditor", () => {
     const root = wrapper.find(".code-editor").element as HTMLElement;
     expect(root.style.getPropertyValue("--code-editor-min-lines")).toBe("8");
     expect(root.style.getPropertyValue("--code-editor-max-lines")).toBe("20");
+  });
+
+  it("marks the diagnostic line and clears it", async () => {
+    const wrapper = mountEditor({ modelValue: "outputs:\n  x: nope(close)\n", errorLine: 2 });
+    await nextTick();
+    expect(wrapper.findAll(".cm-error-line")).toHaveLength(1);
+    await wrapper.setProps({ errorLine: 0 });
+    await nextTick();
+    expect(wrapper.findAll(".cm-error-line")).toHaveLength(0);
+    await wrapper.setProps({ errorLine: 99 });
+    await nextTick();
+    expect(wrapper.findAll(".cm-error-line")).toHaveLength(0);
+  });
+
+  it("inserts text at the cursor and refuses when read-only", async () => {
+    const wrapper = mountEditor({ modelValue: "outputs:\n  x: " });
+    const view = viewOf(wrapper);
+    view.dispatch({ selection: { anchor: view.state.doc.length } });
+    const api = wrapper.vm as unknown as { insertAtCursor(text: string): boolean };
+    expect(api.insertAtCursor("ts_mean(close, 20)")).toBe(true);
+    expect(view.state.doc.toString()).toBe("outputs:\n  x: ts_mean(close, 20)");
+    expect(wrapper.emitted("update:modelValue")?.at(-1)).toEqual(["outputs:\n  x: ts_mean(close, 20)"]);
+    await wrapper.setProps({ readOnly: true });
+    expect(api.insertAtCursor("more")).toBe(false);
+  });
+
+  it("highlights YAML keys, comments and expression calls", async () => {
+    const { factorYAML } = await import("./yaml");
+    const { StringStream } = await import("@codemirror/language");
+    const tokens = (line: string) => {
+      const state = factorYAML.startState!(2);
+      const stream = new StringStream(line, 2, 2);
+      const out: string[] = [];
+      while (!stream.eol()) {
+        const style = factorYAML.token(stream, state);
+        if (style) out.push(`${style}:${stream.current()}`);
+        stream.start = stream.pos;
+      }
+      return out;
+    };
+    expect(tokens("  bias_{window}: close / ts_mean(close, window) # 注释")).toEqual([
+      "propertyName:bias_{window}",
+      "punctuation::",
+      "variableName:close",
+      "operator:/",
+      "function:ts_mean",
+      "bracket:(",
+      "variableName:close",
+      "bracket:,",
+      "variableName:window",
+      "bracket:)",
+      "comment:# 注释"
+    ]);
+    expect(tokens("params: {window: [5, 20]}")).toContain("number:20");
   });
 
   it("exposes an async entry so CodeMirror stays out of the main chunk", async () => {

@@ -1,22 +1,16 @@
 package domain
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 var ReservedColumns = []string{"subject_id", "freq", "data_time", "series_tag"}
 
-var (
-	factorIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	columnPattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	reservedColumns = map[string]struct{}{
-		"subject_id": {}, "freq": {}, "data_time": {}, "series_tag": {},
-	}
-)
+var factorIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // ValidateSet checks the stable identity and subject-scope contract of a set.
 func ValidateSet(set FactorSet) error {
@@ -68,77 +62,83 @@ func ValidateSet(set FactorSet) error {
 }
 
 // ValidateDefinition checks the static rules of a definition; it does not depend on any dataset.
-func ValidateDefinition(def FactorDef) error {
+// 编译通过即为合法（设计 9.2）；allow_partial_universe 只用于截面因子。返回填好派生字段的定义。
+func ValidateDefinition(def FactorDef) (FactorDef, error) {
 	if !factorIDPattern.MatchString(def.FactorID) {
-		return fmt.Errorf("factor_id must match [A-Za-z_][A-Za-z0-9_]*")
+		return def, fmt.Errorf("factor_id must match [A-Za-z_][A-Za-z0-9_]*")
 	}
-	// name 同时是落盘的 Python 模块名，必须是合法标识符，否则整个目录快照安装失败。
-	if !factorIDPattern.MatchString(def.Name) {
-		return fmt.Errorf("name must match [A-Za-z_][A-Za-z0-9_]*")
+	if err := validateName(def.Name); err != nil {
+		return def, err
 	}
-	if err := ValidateFactorType(def.FactorType); err != nil {
-		return err
+	if strings.TrimSpace(def.Spec) == "" {
+		return def, fmt.Errorf("spec is required")
 	}
-	if strings.TrimSpace(def.SourceCode) == "" {
-		return fmt.Errorf("source_code is required")
+	if def.SpecHash != SpecHash(def.Spec) {
+		return def, fmt.Errorf("spec_hash does not match spec")
 	}
-	if def.SourceHash != SourceHash(def.SourceCode) {
-		return fmt.Errorf("source_hash does not match source_code")
+	compiled, err := CompileDefinition(def)
+	if err != nil {
+		return def, fmt.Errorf("spec 编译失败：%w", err)
 	}
-	if def.LookbackPeriods < 1 {
-		return fmt.Errorf("lookback_periods must be at least 1")
+	if compiled.AllowPartialUniverse && compiled.FactorType != FactorTypeCrossSection {
+		return def, fmt.Errorf("allow_partial_universe is only valid for %s factors", FactorTypeCrossSection)
 	}
-	if def.AllowPartialUniverse && def.FactorType != FactorTypeCrossSection {
-		return fmt.Errorf("allow_partial_universe is only valid for %s factors", FactorTypeCrossSection)
+	return compiled, nil
+}
+
+// validateName 检查展示名：1～64 个字符，不含控制字符，首尾无空白。
+func validateName(name string) error {
+	if name == "" || name != strings.TrimSpace(name) || utf8.RuneCountInString(name) > 64 {
+		return fmt.Errorf("name 必须是 1～64 个字符，首尾不能有空白")
 	}
-	if err := validateJSONObject(def.ParamsJSON); err != nil {
-		return err
-	}
-	if len(def.InputColumns) == 0 {
-		return fmt.Errorf("input_columns must contain at least one column")
-	}
-	if len(def.Outputs) == 0 {
-		return fmt.Errorf("outputs must contain at least one column")
-	}
-	seenInputs := make(map[string]struct{}, len(def.InputColumns))
-	for _, column := range def.InputColumns {
-		if err := validateColumn(column, "input_columns"); err != nil {
-			return err
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("name 不能包含控制字符")
 		}
-		if _, duplicate := seenInputs[column]; duplicate {
-			return fmt.Errorf("input_columns contains duplicate column %q", column)
-		}
-		seenInputs[column] = struct{}{}
-	}
-	seenOutputs := make(map[string]struct{}, len(def.Outputs))
-	for _, column := range def.Outputs {
-		if err := validateColumn(column, "outputs"); err != nil {
-			return err
-		}
-		if _, reserved := reservedColumns[column]; reserved {
-			return fmt.Errorf("outputs contains reserved column %q", column)
-		}
-		if _, duplicate := seenOutputs[column]; duplicate {
-			return fmt.Errorf("outputs contains duplicate column %q", column)
-		}
-		seenOutputs[column] = struct{}{}
 	}
 	return nil
+}
+
+// SourceColumn 是源数据集的一列：名称与是否为数值类型（Storage 的 int、double）。
+type SourceColumn struct {
+	Name    string
+	Numeric bool
 }
 
 // ValidateMembership checks a definition against one set's source columns, the
 // other members' outputs and the result dataset's existing column origins.
 // resultColumnOrigins maps a result column to the factor that owns it; a column
 // owned by the same factor is reused rather than reported as a conflict.
-func ValidateMembership(set FactorSet, def FactorDef, sourceColumns []string,
+// 输入列必须存在且为数值类型；params 与 let 的名称不能与源列重名（设计 4.2）。
+func ValidateMembership(set FactorSet, def FactorDef, sourceColumns []SourceColumn,
 	siblings []FactorDef, resultColumnOrigins map[string]string) error {
-	sourceSet := make(map[string]struct{}, len(sourceColumns))
+	def, err := CompileDefinition(def)
+	if err != nil {
+		return fmt.Errorf("spec 编译失败：%w", err)
+	}
+	sourceSet := make(map[string]SourceColumn, len(sourceColumns))
 	for _, column := range sourceColumns {
-		sourceSet[strings.TrimSpace(column)] = struct{}{}
+		sourceSet[strings.TrimSpace(column.Name)] = column
 	}
 	for _, column := range def.InputColumns {
-		if _, exists := sourceSet[column]; !exists {
+		source, exists := sourceSet[column]
+		if !exists {
 			return fmt.Errorf("unknown input column %q", column)
+		}
+		if !source.Numeric {
+			return fmt.Errorf("input column %q is not numeric", column)
+		}
+	}
+	if spec := def.compiled.Spec; spec != nil {
+		for _, param := range spec.Params {
+			if _, collision := sourceSet[param.Name]; collision {
+				return fmt.Errorf("参数 %s 与源列重名", param.Name)
+			}
+		}
+		for _, binding := range spec.Lets {
+			if _, collision := sourceSet[binding.Name]; collision {
+				return fmt.Errorf("中间量 %s 与源列重名", binding.Name)
+			}
 		}
 	}
 	for _, column := range def.Outputs {
@@ -153,7 +153,11 @@ func ValidateMembership(set FactorSet, def FactorDef, sourceColumns []string,
 		if sibling.FactorID == def.FactorID {
 			continue
 		}
-		for _, output := range sibling.Outputs {
+		compiledSibling, err := CompileDefinition(sibling)
+		if err != nil {
+			continue // 兄弟定义编译失败时由它自己的校验报错
+		}
+		for _, output := range compiledSibling.Outputs {
 			for _, column := range def.Outputs {
 				if output == column {
 					return fmt.Errorf("duplicate output %q in factor set %s", output, set.SetID)
@@ -182,27 +186,4 @@ func (s FactorSet) InScope(subjectID string) bool {
 		}
 	}
 	return false
-}
-
-func validateColumn(value, field string) error {
-	if value != strings.TrimSpace(value) || !columnPattern.MatchString(value) {
-		return fmt.Errorf("%s contains invalid column %q", field, value)
-	}
-	return nil
-}
-
-func validateJSONObject(raw string) error {
-	if strings.TrimSpace(raw) == "" {
-		return fmt.Errorf("params_json must be a JSON object")
-	}
-	var value map[string]json.RawMessage
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	if err := decoder.Decode(&value); err != nil || value == nil {
-		return fmt.Errorf("params_json must be a JSON object")
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		return fmt.Errorf("params_json must contain exactly one JSON object")
-	}
-	return nil
 }

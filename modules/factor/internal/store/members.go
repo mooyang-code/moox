@@ -34,9 +34,7 @@ type joinedMemberRow struct {
 }
 
 const joinedMemberColumns = `m.c_set_id AS m_set_id, m.c_status AS m_status, m.c_ctime AS m_ctime, m.c_mtime AS m_mtime,
-	 d.c_factor_id, d.c_name, d.c_factor_type, d.c_source_code, d.c_source_hash,
-	 d.c_input_columns_json, d.c_outputs_json, d.c_params_json, d.c_lookback_periods,
-	 d.c_allow_partial_universe, d.c_ctime, d.c_mtime`
+	 d.c_factor_id, d.c_name, d.c_spec, d.c_spec_hash, d.c_allow_partial_universe, d.c_ctime, d.c_mtime`
 
 // AddMember attaches a definition to a factor set as a disabled member.
 func (s *Store) AddMember(ctx context.Context, setID, factorID string) (domain.FactorSetMember, error) {

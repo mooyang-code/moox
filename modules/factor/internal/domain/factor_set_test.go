@@ -3,7 +3,6 @@ package domain
 import (
 	"encoding/json"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -40,13 +39,6 @@ func TestSetIDAndResultDatasetID(t *testing.T) {
 			require.Equal(t, tt.resultID, ResultDatasetID(tt.datasetID, tt.freq))
 		})
 	}
-}
-
-func TestSourceHash(t *testing.T) {
-	got := SourceHash("def compute(df, params):\n    return df")
-	require.True(t, strings.HasPrefix(got, "sha256:"))
-	require.Equal(t, got, SourceHash("def compute(df, params):\n    return df"))
-	require.NotEqual(t, got, SourceHash("different source"))
 }
 
 func TestFactorDefUsesDatasetPipelineFields(t *testing.T) {
@@ -93,107 +85,60 @@ func TestValidateSetRequiresCanonicalIdentityAndScope(t *testing.T) {
 	require.ErrorContains(t, ValidateSet(set), "duplicate subject")
 }
 
-func TestValidateDefinitionRejectsReservedOutput(t *testing.T) {
-	for _, name := range []string{"series_tag", "data_time", "subject_id", "freq"} {
-		factor := validFactor()
-		factor.Outputs = []string{name}
-		require.ErrorContains(t, ValidateDefinition(factor), "reserved", name)
-	}
-}
-
-func TestValidateDefinitionRequiresIdentifierName(t *testing.T) {
-	for _, name := range []string{"", "中文因子", "my-factor", "1bias", "has space"} {
-		factor := validFactor()
-		factor.Name = name
-		require.ErrorContains(t, ValidateDefinition(factor), "name must match", name)
-	}
-	factor := validFactor()
-	factor.Name = "Bias_20"
-	require.NoError(t, ValidateDefinition(factor))
-}
-
-func TestValidateDefinitionRejectsDuplicateInputsAndOutputs(t *testing.T) {
-	factor := validFactor()
-	factor.InputColumns = []string{"close", "close"}
-	require.ErrorContains(t, ValidateDefinition(factor), "duplicate")
-	factor = validFactor()
-	factor.Outputs = []string{"value", "value"}
-	require.ErrorContains(t, ValidateDefinition(factor), "duplicate")
-}
-
-func TestValidateDefinitionRequiresNonEmptyInputsAndOutputs(t *testing.T) {
-	factor := validFactor()
-	factor.InputColumns = nil
-	require.ErrorContains(t, ValidateDefinition(factor), "input_columns")
-	factor = validFactor()
-	factor.Outputs = nil
-	require.ErrorContains(t, ValidateDefinition(factor), "outputs")
-}
-
-func TestValidateDefinitionParamsMustBeJSONObject(t *testing.T) {
-	for _, raw := range []string{"", "[]", "null", `"text"`, "1", `{"window":`, `{} {}`} {
-		t.Run(raw, func(t *testing.T) {
-			factor := validFactor()
-			factor.ParamsJSON = raw
-			require.ErrorContains(t, ValidateDefinition(factor), "params_json")
-		})
-	}
-	valid := validFactor()
-	valid.ParamsJSON = `{"window": 20}`
-	require.NoError(t, ValidateDefinition(valid))
-}
-
-func TestValidateDefinitionLookbackAtLeastOne(t *testing.T) {
-	factor := validFactor()
-	factor.LookbackPeriods = 0
-	require.ErrorContains(t, ValidateDefinition(factor), "lookback_periods")
-}
-
 func TestValidateDefinitionPartialUniverseOnlyForCrossSection(t *testing.T) {
-	factor := validFactor()
+	factor := validFactor(t)
 	factor.AllowPartialUniverse = true
-	require.ErrorContains(t, ValidateDefinition(factor), "allow_partial_universe")
-	factor.FactorType = FactorTypeCrossSection
-	require.NoError(t, ValidateDefinition(factor))
+	_, err := ValidateDefinition(factor)
+	require.ErrorContains(t, err, "allow_partial_universe")
+	cross := compiledFactor(t, "cross", "outputs: {cs_value: cs_rank(close)}")
+	cross.AllowPartialUniverse = true
+	_, err = ValidateDefinition(cross)
+	require.NoError(t, err)
 }
 
 func TestValidateDefinitionDoesNotNeedSourceColumns(t *testing.T) {
-	factor := validFactor()
-	factor.InputColumns = []string{"any_column_name"}
-	require.NoError(t, ValidateDefinition(factor))
+	factor := compiledFactor(t, "f", "outputs: {value: any_column_name}")
+	_, err := ValidateDefinition(factor)
+	require.NoError(t, err)
 }
 
-func TestValidateMembershipRejectsUnknownInput(t *testing.T) {
-	factor := validFactor()
-	factor.InputColumns = []string{"missing"}
-	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, []string{"close"}, nil, nil), "unknown input")
+var closeColumns = []SourceColumn{{Name: "close", Numeric: true}, {Name: "symbol_name", Numeric: false}}
+
+func TestValidateMembershipRejectsUnknownOrNonNumericInput(t *testing.T) {
+	factor := compiledFactor(t, "f", "outputs: {value: missing}")
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, closeColumns, nil, nil), "unknown input")
+	factor = compiledFactor(t, "f", "outputs: {value: symbol_name}")
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, closeColumns, nil, nil), "not numeric")
 }
 
 func TestValidateMembershipRejectsOutputCollidingWithSourceColumn(t *testing.T) {
-	factor := validFactor()
-	factor.Outputs = []string{"close"}
-	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, []string{"close"}, nil, nil), "source column")
+	factor := compiledFactor(t, "f", "outputs: {close: close * 2}")
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, closeColumns, nil, nil), "source column")
+}
+
+func TestValidateMembershipRejectsNamesShadowingSourceColumns(t *testing.T) {
+	param := compiledFactor(t, "f", "params: {close: 3}\noutputs:\n  value: ts_mean(open, close)\n")
+	columns := append([]SourceColumn{{Name: "open", Numeric: true}}, closeColumns...)
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, param, columns, nil, nil), "参数 close")
 }
 
 func TestValidateMembershipRejectsDuplicateOutputInSetExcludingSelf(t *testing.T) {
-	factor := validFactor()
-	sibling := validFactor()
-	sibling.FactorID = "sibling"
-	sibling.Outputs = []string{"value"}
-	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, []string{"close"}, []FactorDef{sibling}, nil), "duplicate output")
+	factor := validFactor(t)
+	sibling := compiledFactor(t, "sibling", "outputs: {value: close + 1}")
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, closeColumns, []FactorDef{sibling}, nil), "duplicate output")
 	// A definition never conflicts with itself.
-	require.NoError(t, ValidateMembership(FactorSet{}, factor, []string{"close"}, []FactorDef{factor}, nil))
+	require.NoError(t, ValidateMembership(FactorSet{}, factor, closeColumns, []FactorDef{factor}, nil))
 }
 
 func TestValidateMembershipRejectsOutputOwnedByOtherFactor(t *testing.T) {
-	factor := validFactor()
-	err := ValidateMembership(FactorSet{}, factor, []string{"close"}, nil, map[string]string{"value": "Other"})
+	factor := validFactor(t)
+	err := ValidateMembership(FactorSet{}, factor, closeColumns, nil, map[string]string{"value": "Other"})
 	require.ErrorContains(t, err, "already owned")
 }
 
 func TestValidateMembershipAllowsReaddOfSameFactor(t *testing.T) {
-	factor := validFactor()
-	require.NoError(t, ValidateMembership(FactorSet{}, factor, []string{"close"}, nil,
+	factor := validFactor(t)
+	require.NoError(t, ValidateMembership(FactorSet{}, factor, closeColumns, nil,
 		map[string]string{"value": factor.FactorID}))
 }
 
@@ -208,16 +153,14 @@ func TestSetInScope(t *testing.T) {
 	require.False(t, include.InScope(" "))
 }
 
-func validFactor() FactorDef {
-	return FactorDef{
-		FactorID:        "close_mean",
-		Name:            "CloseMean",
-		FactorType:      FactorTypeTimeSeries,
-		SourceCode:      "def compute(df, params):\n    return df['close']",
-		SourceHash:      SourceHash("def compute(df, params):\n    return df['close']"),
-		InputColumns:    []string{"close"},
-		Outputs:         []string{"value"},
-		ParamsJSON:      `{}`,
-		LookbackPeriods: 1,
-	}
+func compiledFactor(t *testing.T, factorID, spec string) FactorDef {
+	t.Helper()
+	def, err := NormalizeFactorDefinition(FactorDef{FactorID: factorID, Name: factorID, Spec: spec})
+	require.NoError(t, err)
+	return def
+}
+
+func validFactor(t *testing.T) FactorDef {
+	t.Helper()
+	return compiledFactor(t, "close_mean", "outputs: {value: close}")
 }

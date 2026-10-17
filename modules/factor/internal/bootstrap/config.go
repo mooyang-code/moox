@@ -19,18 +19,11 @@ type Config struct {
 	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
 	sourcePath    string                   `yaml:"-"`
 	Database      DatabaseConfig           `yaml:"database"`
-	Python        PythonConfig             `yaml:"python"`
 	Engine        EngineConfig             `yaml:"engine"`
 }
 
 type DatabaseConfig struct {
 	Path string `yaml:"path"`
-}
-
-// PythonConfig names the interpreter that test-loads factor sources when a
-// definition is created or edited; it needs pandas and numpy.
-type PythonConfig struct {
-	Bin string `yaml:"bin"`
 }
 
 // EngineConfig bounds the compute engine's leases.
@@ -71,7 +64,6 @@ func Default() *Config {
 	return &Config{
 		Database:      DatabaseConfig{Path: "./data/factor/factor.db"},
 		GatewayClient: gatewayclient.FileConfig{Caller: "factor-mgr", KeyFile: "../../secrets/caller-factor-mgr.key"},
-		Python:        PythonConfig{Bin: "python3"},
 		Engine:        EngineConfig{LeaseTTL: enginehub.DefaultEngineLeaseTTL, JobLeaseTTL: enginehub.DefaultJobLeaseTTL},
 	}
 }
@@ -80,9 +72,6 @@ func (c *Config) applyDefaults() {
 	defaults := Default()
 	if c.Database.Path == "" {
 		c.Database.Path = defaults.Database.Path
-	}
-	if c.Python.Bin == "" {
-		c.Python.Bin = defaults.Python.Bin
 	}
 	if c.Engine.LeaseTTL == 0 {
 		c.Engine.LeaseTTL = defaults.Engine.LeaseTTL
@@ -95,9 +84,6 @@ func (c *Config) applyDefaults() {
 func (c *Config) applyEnv() {
 	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_DB_PATH")); value != "" {
 		c.Database.Path = value
-	}
-	if value := strings.TrimSpace(os.Getenv("MOOX_FACTOR_PYTHON_BIN")); value != "" {
-		c.Python.Bin = value
 	}
 }
 
@@ -113,9 +99,6 @@ func (c *Config) Validate() error {
 	}
 	if err := c.GatewayClient.Validate(); err != nil {
 		return err
-	}
-	if strings.TrimSpace(c.Python.Bin) == "" {
-		return fmt.Errorf("python.bin is required")
 	}
 	if c.Engine.LeaseTTL < 10*time.Second {
 		return fmt.Errorf("engine.lease_ttl must be at least 10s")

@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/artifacts"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
@@ -23,7 +22,6 @@ import (
 // while the manager is unreachable, and keeps serving the last snapshot when
 // syncs fail (computing with a stale snapshot is safe, see the split design).
 type CatalogCache struct {
-	artifacts artifacts.Artifacts
 	stateFile string
 	registry  *events.Registry
 	now       func() time.Time
@@ -43,12 +41,12 @@ type catalogState struct {
 	Sets     []domain.EngineSet `json:"sets"`
 }
 
-func NewCatalogCache(factorsDir, stateFile string) (*CatalogCache, error) {
+func NewCatalogCache(stateFile string) (*CatalogCache, error) {
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return nil, err
 	}
-	return &CatalogCache{artifacts: artifacts.Artifacts{FactorsDir: factorsDir}, stateFile: stateFile, registry: registry, now: time.Now}, nil
+	return &CatalogCache{stateFile: stateFile, registry: registry, now: time.Now}, nil
 }
 
 // Load restores the snapshot saved by the last successful sync. It reports
@@ -65,18 +63,15 @@ func (c *CatalogCache) Load() (bool, error) {
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return false, fmt.Errorf("decode engine catalog %s: %w", c.stateFile, err)
 	}
-	if err := c.materialize(state.Sets); err != nil {
-		return false, err
-	}
 	c.mu.Lock()
-	c.loaded, c.hash, c.sets, c.syncedAt = true, state.Hash, sortSets(state.Sets), state.SyncedAt
+	c.loaded, c.hash, c.sets, c.syncedAt = true, state.Hash, compileSets(sortSets(state.Sets)), state.SyncedAt
 	c.mu.Unlock()
 	return true, nil
 }
 
-// Apply installs a sync result. Sources are materialized and the snapshot is
-// persisted before it becomes visible, so a failure leaves the previous
-// snapshot in place. changed reports whether the set of factor sets changed.
+// Apply installs a sync result. The snapshot is persisted before it becomes
+// visible, so a failure leaves the previous snapshot in place; definitions are
+// compiled when the snapshot is installed (设计 8). changed reports whether the set of factor sets changed.
 func (c *CatalogCache) Apply(snapshot CatalogSnapshot) (bool, error) {
 	now := c.now().UTC()
 	if snapshot.NotModified {
@@ -86,12 +81,10 @@ func (c *CatalogCache) Apply(snapshot CatalogSnapshot) (bool, error) {
 		return false, nil
 	}
 	sets := sortSets(snapshot.Sets)
-	if err := c.materialize(sets); err != nil {
-		return false, err
-	}
 	if err := c.persist(catalogState{Hash: snapshot.Hash, SyncedAt: now, Sets: sets}); err != nil {
 		return false, err
 	}
+	sets = compileSets(sets)
 	c.mu.Lock()
 	changed := !sameSetIDs(c.sets, sets)
 	c.loaded, c.hash, c.sets = true, snapshot.Hash, sets
@@ -179,16 +172,6 @@ const (
 	SetGone
 )
 
-// Materialize 把给定因子的源码落盘到因子目录（幂等）。
-func (c *CatalogCache) Materialize(factors []domain.FactorDef) error {
-	for _, factor := range factors {
-		if _, err := c.artifacts.Materialize(factor); err != nil {
-			return fmt.Errorf("factor %q: %w", factor.FactorID, err)
-		}
-	}
-	return nil
-}
-
 // SetByID 按集合 ID 取快照里的集合（含因子）。空洞恢复用它在集合锁内重新取得最新的集合与因子定义。
 func (c *CatalogCache) SetByID(setID string) (domain.EngineSet, SetLookup) {
 	c.mu.RLock()
@@ -225,15 +208,28 @@ func (c *CatalogCache) FilterSubjects(context.Context) ([]string, error) {
 	return trigger.NormalizeFilters(filters), nil
 }
 
-func (c *CatalogCache) materialize(sets []domain.EngineSet) error {
-	for _, set := range sets {
-		for _, factor := range set.Factors {
-			if _, err := c.artifacts.Materialize(factor); err != nil {
-				return fmt.Errorf("materialize factor %s of set %s: %w", factor.FactorID, set.Set.SetID, err)
-			}
+// compileSets 编译快照里的全部定义，填充派生字段（类型、输入列、输出列、回看）。编译失败（mgr 与引擎的 expr
+// 版本不一致时才会出现）的定义原样保留，由流水线在计算时按该因子失败处理（设计 7.6），不影响同集合的其他因子。
+func compileSets(sets []domain.EngineSet) []domain.EngineSet {
+	out := make([]domain.EngineSet, len(sets))
+	for i, set := range sets {
+		out[i] = set
+		out[i].Factors = CompileFactors(set.Factors)
+	}
+	return out
+}
+
+// CompileFactors 编译一组定义；编译失败的定义原样返回。
+func CompileFactors(factors []domain.FactorDef) []domain.FactorDef {
+	out := make([]domain.FactorDef, len(factors))
+	for i, factor := range factors {
+		if compiled, err := domain.CompileDefinition(factor); err == nil {
+			out[i] = compiled
+		} else {
+			out[i] = factor
 		}
 	}
-	return nil
+	return out
 }
 
 func (c *CatalogCache) persist(state catalogState) error {

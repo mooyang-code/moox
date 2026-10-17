@@ -19,11 +19,11 @@ const factorSet = {
 const baseDef = {
   name: "Bias",
   factor_type: "timeseries",
-  source_code: "def compute(df, params, context): return df",
-  source_hash: "sha256:abcd",
+  spec: "outputs:\n  bias: close / ts_mean(close, 5)\n",
+  spec_hash: "sha256:abcd",
   input_columns: ["close"],
-  params_json: "{}",
   lookback_periods: 5,
+  definition_hash: "sha256:definition",
   allow_partial_universe: false,
   created_at: "2026-10-01T00:00:00Z",
   updated_at: "2026-10-01T00:00:00Z"
@@ -232,8 +232,9 @@ async function mockGateway(route: Route) {
     return route.fulfill({
       json: ok({
         consumer_running: true,
-        python_workers: 0,
-        python_busy: 0,
+        compute_workers: 4,
+        engine_expr_version: "expr/1",
+        manager_expr_version: "expr/1",
         lanes: [],
         recent_runs: []
       })

@@ -82,7 +82,7 @@ Factor 消费 `CollectorPeriodCompleted`，durable 名为 `factor_collector_peri
 Storage 的计算输入读取走 PrimaryStore，不读取 View。先看该 durable 的 pending 与
 redelivery，再按 `set` 查看 `factor_period_lag_seconds`、`factor_last_period_time`、
 `factor_lane_backlog` 和 `factor_period_total`。检查 `factor_failures_total` 中的失败因子
-与原因，`factor_python_busy` 用于判断 Python 槽位是否持续饱和。
+与原因；`factor_compile_errors_total` 非零说明管理端与引擎的 expr 版本不一致。
 
 | 现象 | 判断 | 动作 |
 |---|---|---|

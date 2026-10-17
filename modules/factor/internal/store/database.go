@@ -94,9 +94,7 @@ func (s *Store) factorSchemaTables() ([]string, error) {
 func (s *Store) validateSchemaTables(tables []string) error {
 	expected := map[string][]string{
 		"t_factor_defs": {
-			"c_factor_id", "c_name", "c_factor_type", "c_source_code", "c_source_hash",
-			"c_input_columns_json", "c_outputs_json", "c_params_json", "c_lookback_periods",
-			"c_allow_partial_universe", "c_ctime", "c_mtime",
+			"c_factor_id", "c_name", "c_spec", "c_spec_hash", "c_allow_partial_universe", "c_ctime", "c_mtime",
 		},
 		"t_factor_set_members": {
 			"c_set_id", "c_factor_id", "c_status", "c_ctime", "c_mtime",
@@ -125,6 +123,9 @@ func (s *Store) validateSchemaTables(tables []string) error {
 			return fmt.Errorf("inspect factor schema table %s: %w", table, err)
 		}
 		if strings.Join(columns, "\x00") != strings.Join(want, "\x00") {
+			if table == "t_factor_defs" && contains(columns, "c_source_code") {
+				return fmt.Errorf("因子定义表仍是 Python 源码的旧结构：请先停止 factor-mgr，运行 moox-factor-mgr-cli migrate-expr --library <因子库目录> 迁移")
+			}
 			return fmt.Errorf("factor database table %s uses an obsolete schema; create a fresh database", table)
 		}
 	}

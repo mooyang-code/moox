@@ -24,7 +24,7 @@ func TestEvaluateAcceptsAWellEquippedLinuxMachine(t *testing.T) {
 	if !report.OK || report.OS != "linux" {
 		t.Fatalf("report = %+v", report)
 	}
-	for _, name := range []string{"系统", "CPU", "内存", "磁盘", "Python", "源码编译"} {
+	for _, name := range []string{"系统", "CPU", "内存", "磁盘", "源码编译"} {
 		if status, detail := statusOf(report, name); status != CheckOK {
 			t.Fatalf("%s 应通过，实际 %s %s", name, status, detail)
 		}
@@ -37,9 +37,12 @@ func TestEvaluateAcceptsAWellEquippedLinuxMachine(t *testing.T) {
 func TestEvaluateWarnsBelowTheRecommendationButOnlyFailsWhenItCannotInstall(t *testing.T) {
 	report := evaluate(parseFacts("os=Darwin\narch=arm64\nosname=macOS 15.1\ncpu=4\nmem_bytes=8589934592\ndisk_kb=10485760\npython=3.9.6\nuv=1\n"), true)
 	if !report.OK {
-		t.Fatalf("只是低于建议配置、有 uv 时应通过: %+v", report)
+		t.Fatalf("只是低于建议配置时应通过: %+v", report)
 	}
-	for name, want := range map[string]string{"CPU": CheckWarn, "内存": CheckWarn, "磁盘": CheckWarn, "Python": CheckOK} {
+	if status, _ := statusOf(report, "Python"); status != "" {
+		t.Fatal("因子用表达式计算，不再检查 Python")
+	}
+	for name, want := range map[string]string{"CPU": CheckWarn, "内存": CheckWarn, "磁盘": CheckWarn} {
 		if status, detail := statusOf(report, name); status != want {
 			t.Fatalf("%s 应为 %s，实际 %s %s", name, want, status, detail)
 		}
@@ -49,12 +52,8 @@ func TestEvaluateWarnsBelowTheRecommendationButOnlyFailsWhenItCannotInstall(t *t
 	}
 
 	noPython := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\n"), true)
-	if noPython.OK {
-		t.Fatal("没有 Python 也没有 uv 时应失败")
-	}
-	oldPython := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\npython=3.8.10\n"), true)
-	if status, _ := statusOf(oldPython, "Python"); status != CheckFail {
-		t.Fatal("Python 3.8 应失败")
+	if !noPython.OK {
+		t.Fatal("没有 Python 不影响通过")
 	}
 	tinyDisk := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=1048576\npython=3.12.1\n"), true)
 	if tinyDisk.OK {

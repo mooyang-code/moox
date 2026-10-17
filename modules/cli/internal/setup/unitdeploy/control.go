@@ -12,7 +12,6 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -26,8 +25,7 @@ import (
 
 type ControlOptions struct {
 	CoreOptions
-	ProxyCA      unitbootstrap.ProxyCAAuthorization
-	FactorPython string // Prepared target interpreter; empty uses python3.
+	ProxyCA unitbootstrap.ProxyCAAuthorization
 }
 
 // BootstrapControl promotes the original core software to every control
@@ -54,13 +52,6 @@ func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.
 	if err := checkControlDependencies(ctx, snapshot, root, components, options.CoreOptions); err != nil {
 		return request, nil, err
 	}
-	python := ""
-	if slices.Contains(components, "factor-mgr") {
-		python, err = checkFactorPython(ctx, transport, options.FactorPython)
-		if err != nil {
-			return request, nil, err
-		}
-	}
 	temporary, err := os.MkdirTemp(root.Name(), "control-templates-")
 	if err != nil {
 		return request, nil, err
@@ -70,7 +61,7 @@ func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.
 	if err != nil {
 		return request, nil, err
 	}
-	overrides, err := controlConfigurations(snapshot, extraction.Directory, components, python)
+	overrides, err := controlConfigurations(snapshot, extraction.Directory, components)
 	return request, overrides, err
 }
 
@@ -87,12 +78,12 @@ func consoleTLSMode(host setupconfig.Host) string {
 
 // Templates come from the independently verified original package, never
 // from files that may have changed in the worktree after the core build.
-func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, components []string, python string) (map[string][]byte, error) {
+func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, components []string) (map[string][]byte, error) {
 	result := map[string][]byte{}
 	control := snapshot.Manifest.ControlHost()
 	mode := consoleTLSMode(control)
 	for _, id := range components {
-		if !slices.Contains([]string{"console-proxy", "monitor", "collector", "factor-mgr"}, id) {
+		if !slices.Contains([]string{"console-proxy", "monitor", "collector"}, id) {
 			continue
 		}
 		name := id + "/config/app.yaml"
@@ -160,15 +151,6 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 			}
 			// 与 unit.go 里 Storage 节点的固定 ID 一致（元数据种子也使用该 ID）。
 			storage["result_data_node_id"] = storageNodeID
-		case "factor-mgr":
-			if python == "" || !path.IsAbs(python) || path.Clean(python) != python || strings.ContainsAny(python, "\x00\r\n") {
-				return nil, errors.New("Factor requires a verified prepared target Python interpreter")
-			}
-			config, err := mapping("python")
-			if err != nil {
-				return nil, err
-			}
-			config["bin"] = python
 		}
 		result[name], err = yaml.Marshal(configuration)
 		if err != nil {
@@ -178,34 +160,6 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 	return result, nil
 }
 
-func checkFactorPython(ctx context.Context, transport setupssh.Client, executable string) (string, error) {
-	if executable == "" {
-		executable = "python3"
-	}
-	if executable != "python3" && (!path.IsAbs(executable) || path.Clean(executable) != executable) || strings.ContainsAny(executable, "\x00\r\n") {
-		return "", errors.New("Factor Python must select python3 or a clean absolute prepared interpreter")
-	}
-	code := "import json,sys,pandas,numpy; print(json.dumps({'executable':sys.executable,'pandas':pandas.__version__,'numpy':numpy.__version__}))"
-	output, err := transport.Run(ctx, []string{executable, "-I", "-c", code}, nil)
-	if err != nil {
-		return "", errors.New("Factor requires prepared Python with pandas 2.2+ and numpy 2; private preflight output omitted")
-	}
-	var metadata struct{ Executable, Pandas, Numpy string }
-	decoder := json.NewDecoder(strings.NewReader(output.Stdout))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&metadata) != nil || decoder.Decode(new(any)) != io.EOF || !path.IsAbs(metadata.Executable) || path.Clean(metadata.Executable) != metadata.Executable || strings.ContainsAny(metadata.Executable, "\x00\r\n") || !strings.HasPrefix(metadata.Numpy, "2.") {
-		return "", errors.New("Factor Python returned invalid public runtime metadata")
-	}
-	version := strings.Split(metadata.Pandas, ".")
-	if len(version) < 2 || version[0] != "2" {
-		return "", errors.New("Factor requires pandas 2.2 or newer within major version 2")
-	}
-	minor, err := strconv.Atoi(version[1])
-	if err != nil || minor < 2 {
-		return "", errors.New("Factor requires pandas 2.2 or newer within major version 2")
-	}
-	return metadata.Executable, nil
-}
 
 func persistPrivateBytes(root *os.Root, name string, raw []byte) error {
 	if _, err := root.Lstat(name); err == nil {

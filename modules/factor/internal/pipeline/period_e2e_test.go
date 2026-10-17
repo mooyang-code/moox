@@ -3,9 +3,6 @@ package pipeline
 import (
 	"context"
 	"errors"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"sync"
 	"testing"
@@ -13,21 +10,8 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
-	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"github.com/stretchr/testify/require"
-)
-
-const (
-	e2eMeanSource = `def compute(df, params, context):
-    out = df[["data_time", "series_tag"]].copy()
-    out["mean3"] = df.groupby("series_tag", sort=False)["close"].transform(lambda s: s.rolling(3, min_periods=1).mean())
-    return out
-`
-	e2eBrokenSource = `def compute(df, params, context):
-    raise ValueError("boom")
-`
 )
 
 // memoryStorage is an in-memory Storage that keeps the same idempotency
@@ -42,6 +26,7 @@ type memoryStorage struct {
 	markers []storageio.PeriodMarker
 	// commitDatasets records which result dataset each commit was written to.
 	commitDatasets map[string]string
+	reads          int
 }
 
 func newMemoryStorage(subjects []string, target time.Time, periods int) *memoryStorage {
@@ -65,6 +50,9 @@ func (*memoryStorage) DatasetColumns(context.Context, string, string) ([]string,
 }
 
 func (s *memoryStorage) ReadWindow(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
+	s.mu.Lock()
+	s.reads++
+	s.mu.Unlock()
 	frames := make(map[string]*storageio.Frame, len(req.Subjects))
 	for _, subject := range req.Subjects {
 		frame := &storageio.Frame{SubjectID: subject, Columns: append([]string{"data_time", "series_tag"}, req.Columns...)}
@@ -109,35 +97,14 @@ func (*memoryStorage) ComputedExists(context.Context, string, string, string, in
 
 var errCommitConflict = errors.New("commit_id replayed with different rows")
 
-func e2eExecutor(t *testing.T, factorsDir string) *pyexec.Pool {
-	t.Helper()
-	if err := exec.Command("python3", "-c", "import pandas").Run(); err != nil {
-		t.Skipf("python3 with pandas is required: %v", err)
-	}
-	worker, err := filepath.Abs("../../pyworker/worker.py")
-	require.NoError(t, err)
-	pool, err := pyexec.New(context.Background(), 1, process.Config{
-		PythonBin: "python3", WorkerPath: worker, Args: []string{"--factors-dir", factorsDir}, TaskTimeout: 30 * time.Second,
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pool.Close()) })
-	return pool
+// e2eMean 是三期均值；e2eBroken 模拟 mgr 与引擎 expr 版本不一致：派生字段来自 mgr，引擎编译不了 spec。
+func e2eMean() domain.FactorDef {
+	return domain.MustDefinition("mean", "mean", "outputs:\n  mean3: ts_mean(close, 3)\n")
 }
 
-func e2eFactor(t *testing.T, factorsDir, id, source string) domain.FactorDef {
-	t.Helper()
-	factor := domain.FactorDef{
-		FactorID: id, Name: id, FactorType: domain.FactorTypeTimeSeries, SourceCode: source,
-		SourceHash: domain.SourceHash(source), InputColumns: []string{"close"}, Outputs: []string{id + "_out"},
-		ParamsJSON: "{}", LookbackPeriods: 3,
-	}
-	if id == "mean" {
-		factor.Outputs = []string{"mean3"}
-	}
-	dir := filepath.Join(factorsDir, factor.Name)
-	require.NoError(t, os.MkdirAll(dir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, factor.SourceHash+".py"), []byte(source), 0o644))
-	return factor
+func e2eBroken() domain.FactorDef {
+	return domain.FactorDef{FactorID: "broken", Name: "broken", Spec: "outputs:\n  broken_out: newer_function(close)\n",
+		FactorType: domain.FactorTypeTimeSeries, InputColumns: []string{"close"}, Outputs: []string{"broken_out"}, LookbackPeriods: 3}
 }
 
 func e2eLiveInput(target time.Time, subjects []string, factors []domain.FactorDef) LiveInput {
@@ -159,19 +126,17 @@ func sortedRows(store *memoryStorage) []storageio.ResultRow {
 	return rows
 }
 
-// TestLivePeriodEndToEnd drives plan -> load -> real Python compute -> assemble
+// TestLivePeriodEndToEnd drives plan -> load -> expression compute -> assemble
 // -> write -> report for one live period against in-memory Storage.
 func TestLivePeriodEndToEnd(t *testing.T) {
-	factorsDir := t.TempDir()
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	subjects := []string{"BTC", "ETH", "SOL"}
-	mean := e2eFactor(t, factorsDir, "mean", e2eMeanSource)
-	broken := e2eFactor(t, factorsDir, "broken", e2eBrokenSource)
+	mean, broken := e2eMean(), e2eBroken()
 	clock := periodclock.Continuous{}
 
 	t.Run("writes result rows and complete marker", func(t *testing.T) {
 		store := newMemoryStorage(subjects, target, 10)
-		runner := NewRunner(store, e2eExecutor(t, factorsDir), clock, Config{FactorsDir: factorsDir})
+		runner := NewRunner(store, clock, Config{ComputeWorkers: 2})
 		plan, err := BuildLivePlan(clock, e2eLiveInput(target, subjects, []domain.FactorDef{mean}))
 		require.NoError(t, err)
 
@@ -203,7 +168,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 
 	t.Run("duplicate delivery is idempotent", func(t *testing.T) {
 		store := newMemoryStorage(subjects, target, 10)
-		runner := NewRunner(store, e2eExecutor(t, factorsDir), clock, Config{FactorsDir: factorsDir})
+		runner := NewRunner(store, clock, Config{ComputeWorkers: 2})
 		plan, err := BuildLivePlan(clock, e2eLiveInput(target, subjects, []domain.FactorDef{mean}))
 		require.NoError(t, err)
 
@@ -218,7 +183,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 
 	t.Run("upstream failed subject degrades the period", func(t *testing.T) {
 		store := newMemoryStorage(subjects, target, 10)
-		runner := NewRunner(store, e2eExecutor(t, factorsDir), clock, Config{FactorsDir: factorsDir})
+		runner := NewRunner(store, clock, Config{ComputeWorkers: 2})
 		input := e2eLiveInput(target, subjects, []domain.FactorDef{mean})
 		input.UpstreamFailed = []string{"SOL"}
 		plan, err := BuildLivePlan(clock, input)
@@ -235,7 +200,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 
 	t.Run("failing factor writes null column and degrades", func(t *testing.T) {
 		store := newMemoryStorage(subjects, target, 10)
-		runner := NewRunner(store, e2eExecutor(t, factorsDir), clock, Config{FactorsDir: factorsDir})
+		runner := NewRunner(store, clock, Config{ComputeWorkers: 2})
 		plan, err := BuildLivePlan(clock, e2eLiveInput(target, subjects, []domain.FactorDef{broken, mean}))
 		require.NoError(t, err)
 
@@ -257,7 +222,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 
 	t.Run("no enabled member still reports the period", func(t *testing.T) {
 		store := newMemoryStorage(subjects, target, 10)
-		runner := NewRunner(store, e2eExecutor(t, factorsDir), clock, Config{FactorsDir: factorsDir})
+		runner := NewRunner(store, clock, Config{ComputeWorkers: 2})
 		plan, err := BuildLivePlan(clock, e2eLiveInput(target, subjects, []domain.FactorDef{}))
 		require.NoError(t, err)
 
@@ -273,13 +238,12 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 // definition used by two sets is written to each set's own result dataset with
 // its own commit id and marker.
 func TestSameDefinitionInTwoSetsComputesIntoEachResultDataset(t *testing.T) {
-	factorsDir := t.TempDir()
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	subjects := []string{"BTC", "ETH"}
-	mean := e2eFactor(t, factorsDir, "mean", e2eMeanSource)
+	mean := e2eMean()
 	clock := periodclock.Continuous{}
 	store := newMemoryStorage(subjects, target, 10)
-	runner := NewRunner(store, e2eExecutor(t, factorsDir), clock, Config{FactorsDir: factorsDir})
+	runner := NewRunner(store, clock, Config{ComputeWorkers: 2})
 
 	for _, set := range []domain.FactorSet{
 		{SetID: "set_1m", ResultDatasetID: "dataset_factor_bars_1m"},

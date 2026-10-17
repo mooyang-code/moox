@@ -11,7 +11,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/gapledger"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
 )
 
@@ -39,7 +38,7 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	cache, err := NewCatalogCache(cfg.Python.FactorsDir, cfg.CatalogSync.StateFile)
+	cache, err := NewCatalogCache(cfg.CatalogSync.StateFile)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
@@ -65,11 +64,6 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	pool, err := pyexec.New(ctx, cfg.Python.Workers, cfg.Python.processConfig())
-	if err != nil {
-		return pipeline.Outcome{}, err
-	}
-	defer pool.Close()
 	clock := periodclock.Continuous{}
 	start, err := clock.Align(req.Period, set.Set.Freq)
 	if err != nil {
@@ -84,7 +78,7 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 		ReadTimeout:     cfg.Pipeline.ReadTimeout,
 		BulkReadWorkers: cfg.Pipeline.BulkReadWorkers, ReadRetryBackoff: cfg.Pipeline.ReadRetryBackoff, ReadBreakerFailures: cfg.Pipeline.ReadBreakerFailures,
 		WarmupBatchSubjects: cfg.Pipeline.WarmupBatchSubjects, WarmupWorkers: cfg.Pipeline.WarmupWorkers, WarmupBatchPause: cfg.Pipeline.WarmupBatchPause, WriteBatchRows: cfg.Pipeline.WriteBatchRows,
-		PythonWorkers: cfg.Python.Workers, FactorsDir: cfg.Python.FactorsDir,
+		ComputeWorkers: cfg.Compute.Workers, MaxMemory: int64(cfg.Compute.MaxMemory),
 	}
 	// 与引擎同样执行空洞检查并记账本：这个入口同样会写因子结果，不能绕过空洞防护。
 	if cfg.Gap.Enabled {
@@ -95,7 +89,7 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 		defer ledger.Close()
 		pipelineConfig.GapCheck, pipelineConfig.MassRatio, pipelineConfig.GapSink = true, cfg.Gap.MassRatio, ledger
 	}
-	runner := pipeline.NewRunner(storage, pool, clock, pipelineConfig)
+	runner := pipeline.NewRunner(storage, clock, pipelineConfig)
 	return recalcexec.NewExecutor(runner, recalcexec.WithClock(clock)).RunChunk(ctx, recalcexec.Selection{
 		Set: set.Set, Factors: factors, Subjects: subjects, Columns: columns,
 	}, start, start.Add(duration))

@@ -56,11 +56,10 @@ func DefToPB(factor domain.FactorDef) *factorpb.FactorDef {
 		FactorId:             factor.FactorID,
 		Name:                 factor.Name,
 		FactorType:           factor.FactorType,
-		SourceCode:           factor.SourceCode,
-		SourceHash:           factor.SourceHash,
+		Spec:                 factor.Spec,
+		SpecHash:             factor.SpecHash,
 		InputColumns:         CloneStrings(factor.InputColumns),
 		Outputs:              CloneStrings(factor.Outputs),
-		ParamsJson:           factor.ParamsJSON,
 		LookbackPeriods:      int32(factor.LookbackPeriods),
 		AllowPartialUniverse: factor.AllowPartialUniverse,
 		DefinitionHash:       domain.DefinitionHash(factor),
@@ -81,20 +80,25 @@ func DefFromPB(pb *factorpb.FactorDef) (domain.FactorDef, error) {
 	if err != nil {
 		return domain.FactorDef{}, fmt.Errorf("updated_at: %w", err)
 	}
-	return domain.FactorDef{
+	// 派生字段（类型、输入、输出、回看）不从请求读取，由接收方编译 Spec 得到。
+	def := domain.FactorDef{
 		FactorID:             pb.GetFactorId(),
 		Name:                 pb.GetName(),
-		FactorType:           pb.GetFactorType(),
-		SourceCode:           pb.GetSourceCode(),
-		SourceHash:           pb.GetSourceHash(),
-		InputColumns:         CloneStrings(pb.GetInputColumns()),
-		Outputs:              CloneStrings(pb.GetOutputs()),
-		ParamsJSON:           pb.GetParamsJson(),
-		LookbackPeriods:      int(pb.GetLookbackPeriods()),
+		Spec:                 pb.GetSpec(),
+		SpecHash:             pb.GetSpecHash(),
 		AllowPartialUniverse: pb.GetAllowPartialUniverse(),
 		CreatedAt:            createdAt,
 		UpdatedAt:            updatedAt,
-	}, nil
+	}
+	if compiled, err := domain.CompileDefinition(def); err == nil {
+		def = compiled
+	} else {
+		// 接收方编译不了（管理端与引擎的 expr 版本不一致）时保留发送方推导的派生字段：计算仍按失败处理，
+		// 但组装能据输出列清掉这些列上的旧值，而不是留下陈旧结果。
+		def.FactorType, def.LookbackPeriods = pb.GetFactorType(), int(pb.GetLookbackPeriods())
+		def.InputColumns, def.Outputs = CloneStrings(pb.GetInputColumns()), CloneStrings(pb.GetOutputs())
+	}
+	return def, nil
 }
 
 func RunSummaryToPB(summary domain.SetRunSummary) *factorpb.SetRunSummary {
@@ -104,7 +108,7 @@ func RunSummaryToPB(summary domain.SetRunSummary) *factorpb.SetRunSummary {
 			FactorId:       factor.FactorID,
 			Status:         factor.Status,
 			FailedSubjects: CloneStrings(factor.FailedSubjects),
-			SourceHash:     factor.SourceHash,
+			SpecHash:       factor.SpecHash,
 			DefinitionHash: factor.DefinitionHash,
 			GapSubjects:    CloneStrings(factor.GapSubjects),
 		})
@@ -124,7 +128,7 @@ func RunSummaryFromPB(pb *factorpb.SetRunSummary) domain.SetRunSummary {
 	for _, factor := range pb.GetFactors() {
 		factors = append(factors, domain.FactorPeriodState{
 			FactorID: factor.GetFactorId(), Status: factor.GetStatus(),
-			FailedSubjects: CloneStrings(factor.GetFailedSubjects()), SourceHash: factor.GetSourceHash(),
+			FailedSubjects: CloneStrings(factor.GetFailedSubjects()), SpecHash: factor.GetSpecHash(),
 			DefinitionHash: factor.GetDefinitionHash(), GapSubjects: CloneStrings(factor.GetGapSubjects()),
 		})
 	}
@@ -171,7 +175,7 @@ func EngineStatusToPB(status domain.EngineStatus) *factorpb.EngineRuntimeStatus 
 		runs = append(runs, RunSummaryToPB(run))
 	}
 	return &factorpb.EngineRuntimeStatus{
-		ConsumerRunning: status.ConsumerRunning, PythonWorkers: status.PythonWorkers, PythonBusy: status.PythonBusy,
+		ConsumerRunning: status.ConsumerRunning, ComputeWorkers: status.ComputeWorkers, ExprVersion: status.ExprVersion,
 		Lanes: LanesToPB(status.Lanes), RecentRuns: runs,
 		CatalogHash: status.CatalogHash, CatalogSyncedAt: FormatTime(status.CatalogSyncedAt),
 	}
@@ -187,12 +191,12 @@ func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, 
 		runs = append(runs, RunSummaryFromPB(run))
 	}
 	return domain.EngineStatus{
-		ConsumerRunning: pb.GetConsumerRunning(), PythonWorkers: pb.GetPythonWorkers(), PythonBusy: pb.GetPythonBusy(),
+		ConsumerRunning: pb.GetConsumerRunning(), ComputeWorkers: pb.GetComputeWorkers(), ExprVersion: pb.GetExprVersion(),
 		Lanes: LanesFromPB(pb.GetLanes()), RecentRuns: runs, CatalogHash: pb.GetCatalogHash(), CatalogSyncedAt: syncedAt,
 	}, nil
 }
 
-// EngineSetToPB includes each factor's source code: the engine materializes it.
+// EngineSetToPB includes each factor's spec: the engine compiles it.
 func EngineSetToPB(set domain.EngineSet) *factorpb.EngineSet {
 	factors := make([]*factorpb.FactorDef, 0, len(set.Factors))
 	for _, factor := range set.Factors {

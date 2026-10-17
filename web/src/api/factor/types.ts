@@ -20,28 +20,96 @@ export interface FactorSet {
   updated_at?: string;
 }
 
+/** 因子定义：spec 是 YAML 表达式定义；类型、输入列、输出列与回看由服务端编译得到，只读。 */
 export interface FactorDef {
   factor_id: string;
   name: string;
+  /** 列表类响应默认缺省；GetFactor 始终带。 */
+  spec?: string;
+  spec_hash: string;
   factor_type: FactorType;
-  /** 列表类响应默认缺省（D24）；GetFactor 始终带。 */
-  source_code?: string;
-  source_hash: string;
   input_columns: string[];
   outputs: string[];
-  params_json: string;
   lookback_periods: number;
   allow_partial_universe: boolean;
+  /** 计算契约指纹：只改注释、格式不变，影响结果的改动都会变。 */
+  definition_hash?: string;
   created_at: string;
   updated_at: string;
 }
 
-/** createFactor / updateFactor 的提交体：服务端生成 source_hash 与时间戳，定义不带 set_id 与状态。 */
-export type FactorInput = Pick<
-  FactorDef,
-  "factor_id" | "name" | "factor_type" | "input_columns" | "outputs" | "params_json" | "lookback_periods"
-> &
-  Partial<Pick<FactorDef, "allow_partial_universe">> & { source_code: string };
+/** createFactor / updateFactor 的提交体：派生字段与时间戳由服务端生成，定义不带 set_id 与状态。 */
+export type FactorInput = Pick<FactorDef, "factor_id" | "name"> &
+  Partial<Pick<FactorDef, "allow_partial_universe">> & { spec: string };
+
+/** 编译诊断：path 是字段路径（如 outputs.bias_20），line/column 是 spec 内的行列（从 1 开始）。 */
+export interface FactorSpecDiagnostic {
+  path?: string;
+  doc_line?: number;
+  line?: number;
+  column?: number;
+  message: string;
+}
+
+export interface ValidateFactorSpecRsp {
+  ret_info: RetInfo;
+  valid: boolean;
+  diagnostic?: FactorSpecDiagnostic;
+  factor_type?: FactorType;
+  input_columns?: string[];
+  outputs?: string[];
+  lookback_periods?: number;
+  canonical?: string;
+  definition_hash?: string;
+}
+
+export interface PreviewFactorReq {
+  set_id: string;
+  spec: string;
+  subjects?: string[];
+  periods?: number;
+  allow_partial_universe?: boolean;
+}
+
+export interface PreviewRow {
+  subject_id: string;
+  series_tag: string;
+  data_time: string;
+  values: number[];
+  nulls: boolean[];
+}
+
+export interface PreviewFactorRsp {
+  ret_info: RetInfo;
+  columns: string[];
+  rows: PreviewRow[];
+}
+
+export interface FactorFunctionArg {
+  name: string;
+  kind: string;
+  min?: number;
+  max?: number;
+  optional?: boolean;
+  default_value?: number;
+}
+
+export interface FactorFunction {
+  name: string;
+  category: "elementwise" | "timeseries" | "cross_section";
+  signature: string;
+  result: string;
+  args?: FactorFunctionArg[];
+  lookback?: string;
+  doc: string;
+  example?: string;
+}
+
+export interface ListFactorFunctionsRsp {
+  ret_info: RetInfo;
+  functions: FactorFunction[];
+  expr_version: string;
+}
 
 export interface FactorUsage {
   set_id: string;
@@ -66,7 +134,7 @@ export interface FactorPeriodState {
   factor_id: string;
   status: PeriodFactorStatus;
   failed_subjects?: string[];
-  source_hash?: string;
+  spec_hash?: string;
 }
 
 export interface SetRunSummary {
@@ -112,8 +180,11 @@ export interface EngineInfo {
 export interface EngineStatus {
   ret_info: RetInfo;
   consumer_running: boolean;
-  python_workers: number;
-  python_busy: number;
+  /** 引擎表达式执行器的并行度。 */
+  compute_workers?: number;
+  /** 引擎与管理端内置的表达式语义版本；不一致时说明二者没有一起升级。 */
+  engine_expr_version?: string;
+  manager_expr_version?: string;
   lanes: FactorLaneStatus[];
   recent_runs: SetRunSummary[];
   engine?: EngineInfo;
@@ -160,7 +231,7 @@ export interface ListFactorSetsRsp {
 export interface ListFactorsReq {
   set_id?: string;
   status?: MemberStatus;
-  include_source?: boolean;
+  include_spec?: boolean;
   page?: Page;
 }
 

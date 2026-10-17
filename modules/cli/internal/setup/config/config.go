@@ -265,8 +265,8 @@ type SCFCloudAccountConfig struct {
 	COSBucket          string `toml:"cos_bucket"`
 }
 
-// FactorSetup describes the local Python factors, the dataset-backed sets and
-// which sets each factor joins, imported by `moox-cli setup init` or
+// FactorSetup describes the factor definitions (YAML factor library files),
+// the dataset-backed sets and which sets each factor joins, imported by `moox-cli setup init` or
 // `setup factors`. Definitions are global; members bind a definition to a set.
 type FactorSetup struct {
 	Enabled     bool                    `toml:"enabled"`
@@ -286,18 +286,11 @@ type FactorSetupSet struct {
 	Subjects        []string `toml:"subjects"`
 }
 
-// FactorSetupDefinition is intentionally declarative: the source file remains
-// the source of truth while this block supplies the runtime contract required
-// by FactorMgr. A definition carries no dataset, frequency or status.
+// FactorSetupDefinition 引用 YAML 因子库文件里的一个定义（docs/计划/因子表达式引擎详细设计.md 9.5）：
+// 展示名、表达式都来自库文件，类型、输入列、输出列与回看由 FactorMgr 编译得到。定义不含数据集、频率和状态。
 type FactorSetupDefinition struct {
-	FactorType      string   `toml:"factor_type"`
-	FactorID        string   `toml:"factor_id"`
-	File            string   `toml:"file"`
-	Name            string   `toml:"name"`
-	InputColumns    []string `toml:"input_columns"`
-	Outputs         []string `toml:"outputs"`
-	ParamsJSON      string   `toml:"params_json"`
-	LookbackPeriods int      `toml:"lookback_periods"`
+	FactorID string `toml:"factor_id"`
+	File     string `toml:"file"`
 }
 
 // FactorSetupMember adds one definition to one set (identified by
@@ -452,6 +445,9 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		return fmt.Errorf("config_invalid: decode moox.toml")
 	}
 	if keys := md.Undecoded(); len(keys) != 0 {
+		if first := keys[0].String(); strings.HasPrefix(first, "factors.definitions.") {
+			return fmt.Errorf("config_invalid: %s is no longer supported; [[factors.definitions]] accepts only factor_id and file (a YAML factor library file); name, spec and the derived fields come from the library", first)
+		}
 		if first := keys[0].String(); first == "factors.items" || strings.HasPrefix(first, "factors.items.") {
 			return fmt.Errorf("config_invalid: factors.items is no longer supported; split it into [[factors.definitions]] (factor contract) and [[factors.members]] (source_dataset_id, freq, factor_id, status)")
 		}
@@ -846,14 +842,9 @@ func validateFactorSetup(cfg *FactorSetup) error {
 	for index := range cfg.Definitions {
 		item := &cfg.Definitions[index]
 		path := fmt.Sprintf("factors.definitions[%d]", index)
-		item.FactorType = strings.TrimSpace(item.FactorType)
-		if item.FactorType != "timeseries" && item.FactorType != "cross_section" {
-			return fmt.Errorf("config_invalid: %s.factor_type must be timeseries or cross_section", path)
-		}
 		item.FactorID = strings.TrimSpace(item.FactorID)
 		item.File = filepath.ToSlash(filepath.Clean(strings.TrimSpace(item.File)))
-		item.Name = strings.TrimSpace(item.Name)
-		if item.FactorID == "" || item.File == "" {
+		if item.FactorID == "" || item.File == "" || item.File == "." {
 			return fmt.Errorf("config_invalid: %s requires factor_id and file", path)
 		}
 		if filepath.IsAbs(item.File) || item.File == ".." || strings.HasPrefix(item.File, "../") {
@@ -863,14 +854,8 @@ func validateFactorSetup(cfg *FactorSetup) error {
 			return fmt.Errorf("config_invalid: factors definition %q is duplicated", item.FactorID)
 		}
 		seen[item.FactorID] = struct{}{}
-		if item.Name == "" {
-			item.Name = item.FactorID
-		}
-		if item.ParamsJSON == "" {
-			item.ParamsJSON = "{}"
-		}
-		if item.LookbackPeriods < 1 {
-			return fmt.Errorf("config_invalid: %s.lookback_periods must be at least 1", path)
+		if strings.ToLower(filepath.Ext(item.File)) != ".yaml" {
+			return fmt.Errorf("config_invalid: %s.file must be a YAML factor library file (*.yaml)", path)
 		}
 	}
 	memberKeys := make(map[string]struct{}, len(cfg.Members))

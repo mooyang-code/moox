@@ -1,12 +1,12 @@
 package pipeline
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
 
@@ -70,8 +70,13 @@ type Config struct {
 	WriteBatchRows      int
 	WriteRetries        int
 	WriteRetryBackoff   time.Duration
-	PythonWorkers       int
-	FactorsDir          string
+	// ComputeWorkers 是一次程序执行的并行度（设计 7.2）。
+	ComputeWorkers int
+	// MaxMemory 是一次计算估算峰值内存的上限（字节，设计 7.5）；超限时本期全部因子按计算失败处理。0 表示不检查。
+	// 补算分块在读取之前已按同一估算收窄（recalcexec.WithMemoryBudget）。
+	MaxMemory int64
+	// OnCompileError 在引擎侧编译定义失败时调用（指标 factor_compile_errors_total）；nil 不记录。
+	OnCompileError func(setID, factorID string)
 	// BackgroundWarmup leaves live subjects without a loaded lookback window
 	// out of their period and loads it in RunWarmup; without it such a subject
 	// is read in full inside the period.
@@ -86,7 +91,6 @@ type Config struct {
 
 type Runner struct {
 	store   storageio.Store
-	exec    pyexec.Executor
 	clock   periodclock.Clock
 	cfg     Config
 	windows *liveWindowCache
@@ -94,9 +98,11 @@ type Runner struct {
 	firstBars firstBarCache
 	// warmed 在一批后台预热载入窗口后调用，见 OnWarmupDone。
 	warmed atomic.Pointer[func(setID string)]
+	// compiled 缓存引擎侧编译好的定义，键为 (factor_id, spec)。
+	compiled sync.Map
 }
 
-func NewRunner(store storageio.Store, exec pyexec.Executor, clock periodclock.Clock, cfg Config) *Runner {
+func NewRunner(store storageio.Store, clock periodclock.Clock, cfg Config) *Runner {
 	if cfg.ReadBatchSubjects <= 0 {
 		cfg.ReadBatchSubjects = 100
 	}
@@ -133,10 +139,10 @@ func NewRunner(store storageio.Store, exec pyexec.Executor, clock periodclock.Cl
 	if cfg.WriteRetries <= 0 {
 		cfg.WriteRetries = 3
 	}
-	if cfg.PythonWorkers <= 0 {
-		cfg.PythonWorkers = 1
+	if cfg.ComputeWorkers <= 0 {
+		cfg.ComputeWorkers = 1
 	}
-	return &Runner{store: store, exec: exec, clock: clock, cfg: cfg, windows: newLiveWindowCache(cfg.BackgroundWarmup)}
+	return &Runner{store: store, clock: clock, cfg: cfg, windows: newLiveWindowCache(cfg.BackgroundWarmup)}
 }
 
 type LoadResult struct {
@@ -153,9 +159,18 @@ type LoadResult struct {
 type Computation struct {
 	// CrossPeriods 记录截面因子每个目标周期的结果：补算一次计算多个周期，块级的失败名单推不出各周期的结果。
 	CrossPeriods map[string]map[int64]periodOutcome
-	Results      map[string]map[string]pyexec.ItemResult
+	Results      map[string]map[string]ItemResult
 	FactorStates map[string]storageio.FactorState
 	BudgetHit    bool
+}
+
+// ItemResult 是一个因子在一个标的（截面因子为空串）上的逐行结果：列为 data_time、series_tag、
+// （截面因子）subject_id 与各输出列，值为 null 或 float64；Err 非空表示计算失败。
+type ItemResult struct {
+	FactorID string
+	Columns  []string
+	Rows     [][]any
+	Err      error
 }
 
 // periodOutcome 是截面因子一个目标周期的结果。

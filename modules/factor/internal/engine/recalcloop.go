@@ -46,8 +46,6 @@ type recalcLoop struct {
 	source   SourceDataset
 	active   func() bool
 	poll     time.Duration
-	// materialize 把任务携带的因子源码落盘；目录同步每分钟一次，新启用的补算可能先于它到达。
-	materialize func([]domain.FactorDef) error
 }
 
 // RunOnce pulls and runs at most one job; it reports whether a job was found.
@@ -82,11 +80,8 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 // report carries the progress the manager already holds.
 func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 	set := job.Set
-	if l.materialize != nil {
-		if err := l.materialize(set.Factors); err != nil {
-			return fmt.Errorf("materialize recalc factor sources: %w", err)
-		}
-	}
+	// 补算任务自带定义，领取时现场编译（设计 8）。
+	set.Factors = CompileFactors(set.Factors)
 	lastNote := ""
 	report := func(ctx context.Context, progress time.Time, outcome pipeline.Outcome) (bool, error) {
 		status := jobStatusRunning

@@ -43,7 +43,7 @@ func TestSetupBootstrapCoreUsesOneSnapshotAndExplicitStage(t *testing.T) {
 	require.NotContains(t, output.String(), "admin-test-password")
 }
 
-func TestSetupBootstrapControlCarriesOriginalAuthorizationAndPreparedPython(t *testing.T) {
+func TestSetupBootstrapControlCarriesOriginalAuthorization(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	loaded, called := 0, 0
 	command := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) {
@@ -53,16 +53,15 @@ func TestSetupBootstrapControlCarriesOriginalAuthorizationAndPreparedPython(t *t
 		called++
 		require.Same(t, snapshot, got)
 		require.True(t, options.ProxyCA.Create)
-		require.Equal(t, "/prepared/bin/python", options.FactorPython)
 		require.True(t, filepath.IsAbs(options.StateDirectory))
 		return unitdeploy.CoreResult{Stage: "control-ready"}, nil
 	}})
 	var output bytes.Buffer
 	command.SetOut(&output)
 	command.SetArgs([]string{"bootstrap", "--stage", "core", "--create-proxy-ca"})
-	require.ErrorContains(t, command.Execute(), "belong to --stage control")
+	require.ErrorContains(t, command.Execute(), "belongs to --stage control")
 	require.Zero(t, loaded)
-	command.SetArgs([]string{"bootstrap", "--stage", "control", "--create-proxy-ca", "--factor-python", "/prepared/bin/python", "--state-dir", t.TempDir(), "--operator-dir", t.TempDir()})
+	command.SetArgs([]string{"bootstrap", "--stage", "control", "--create-proxy-ca", "--state-dir", t.TempDir(), "--operator-dir", t.TempDir()})
 	require.NoError(t, command.Execute())
 	require.Equal(t, 1, loaded)
 	require.Equal(t, 1, called)

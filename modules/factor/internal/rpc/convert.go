@@ -7,11 +7,11 @@ import (
 )
 
 // factorDefToPBListed is factorDefToPB for list responses: unless the caller
-// asked for it, source_code is left out and only source_hash identifies the code.
-func factorDefToPBListed(factor domain.FactorDef, includeSource bool) *factorpb.FactorDef {
+// asked for it, spec is left out and only spec_hash identifies the definition.
+func factorDefToPBListed(factor domain.FactorDef, includeSpec bool) *factorpb.FactorDef {
 	pb := factorwire.DefToPB(factor)
-	if !includeSource {
-		pb.SourceCode = ""
+	if !includeSpec {
+		pb.Spec = ""
 	}
 	return pb
 }
@@ -24,28 +24,28 @@ func usagesToPB(usages []domain.FactorUsage) []*factorpb.FactorUsage {
 	return out
 }
 
-func factorInfosToPB(infos []domain.FactorInfo, includeSource bool) []*factorpb.FactorInfo {
+func factorInfosToPB(infos []domain.FactorInfo, includeSpec bool) []*factorpb.FactorInfo {
 	out := make([]*factorpb.FactorInfo, 0, len(infos))
 	for _, info := range infos {
 		out = append(out, &factorpb.FactorInfo{
-			Factor: factorDefToPBListed(info.Factor, includeSource), Usages: usagesToPB(info.Usages),
+			Factor: factorDefToPBListed(info.Factor, includeSpec), Usages: usagesToPB(info.Usages),
 		})
 	}
 	return out
 }
 
-func memberToPB(member domain.SetMember, includeSource bool) *factorpb.FactorMember {
+func memberToPB(member domain.SetMember, includeSpec bool) *factorpb.FactorMember {
 	return &factorpb.FactorMember{
 		SetId:     member.SetID,
 		FactorId:  member.FactorID,
 		Status:    member.Status,
-		Factor:    factorDefToPBListed(member.Factor, includeSource),
+		Factor:    factorDefToPBListed(member.Factor, includeSpec),
 		CreatedAt: factorwire.FormatTime(member.CreatedAt),
 		UpdatedAt: factorwire.FormatTime(member.UpdatedAt),
 	}
 }
 
-// membersToPB renders a set's members without source code (list-style response).
+// membersToPB renders a set's members without spec (list-style response).
 func membersToPB(members []domain.SetMember) []*factorpb.FactorMember {
 	out := make([]*factorpb.FactorMember, 0, len(members))
 	for _, member := range members {

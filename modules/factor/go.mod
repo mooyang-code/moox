@@ -12,7 +12,6 @@ require (
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/pyruntime v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepolicy v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
@@ -64,8 +63,6 @@ replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
-replace github.com/mooyang-code/moox/packages/pyruntime => ../../packages/pyruntime
-
 replace github.com/mooyang-code/moox/packages/factorexpr => ../../packages/factorexpr
 
 require (
@@ -75,7 +72,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
-	github.com/glebarez/go-sqlite v1.21.2 // indirect
+	github.com/glebarez/go-sqlite v1.21.2
 	github.com/go-playground/form/v4 v4.2.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect

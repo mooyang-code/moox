@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Runner computes one pipeline plan.
@@ -62,6 +63,7 @@ const maxChunkRetryBackoff = 2 * time.Minute
 
 type config struct {
 	chunkPeriods int
+	memoryBudget int64
 	chunkRetries int
 	retryBackoff time.Duration
 	clock        periodclock.Clock
@@ -71,6 +73,10 @@ type config struct {
 type Option func(*config)
 
 func WithChunkPeriods(n int) Option { return func(cfg *config) { cfg.chunkPeriods = n } }
+
+// WithMemoryBudget 让分块在读取之前按估算峰值内存收窄（设计 7.5）：取配置的分块周期数与“估算不超过 budget 的最大周期数”
+// 中较小的一个；1 个周期也超限时该补算以资源错误失败，不尝试执行。budget ≤ 0 表示不限制。
+func WithMemoryBudget(budget int64) Option { return func(cfg *config) { cfg.memoryBudget = budget } }
 func WithChunkRetry(attempts int, backoff time.Duration) Option {
 	return func(cfg *config) { cfg.chunkRetries, cfg.retryBackoff = attempts, backoff }
 }
@@ -84,6 +90,7 @@ type Executor struct {
 	locks        SetLocker
 	clock        periodclock.Clock
 	chunkPeriods int
+	memoryBudget int64
 	chunkRetries int
 	retryBackoff time.Duration
 }
@@ -103,7 +110,7 @@ func NewExecutor(runner Runner, options ...Option) *Executor {
 	}
 	return &Executor{
 		runner: runner, locks: cfg.locks, clock: cfg.clock,
-		chunkPeriods: cfg.chunkPeriods, chunkRetries: cfg.chunkRetries, retryBackoff: cfg.retryBackoff,
+		chunkPeriods: cfg.chunkPeriods, memoryBudget: cfg.memoryBudget, chunkRetries: cfg.chunkRetries, retryBackoff: cfg.retryBackoff,
 	}
 }
 
@@ -232,10 +239,6 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	if len(selection.Subjects) == 0 {
 		return windowEnd, pipeline.Outcome{}, true, nil
 	}
-	chunkEnd, err := e.chunkEnd(selection.Set, start, windowEnd)
-	if err != nil {
-		return time.Time{}, pipeline.Outcome{}, false, err
-	}
 	unlock, err := e.lock(ctx, selection.Set.SetID)
 	if err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
@@ -250,11 +253,20 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	if err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
 	}
+	if len(selection.Subjects) == 0 {
+		return windowEnd, pipeline.Outcome{}, true, nil
+	}
+	// 分块大小按锁内重读的选择计算：等锁期间标的或成员可能变化，内存预算要按实际要算的范围收窄。
+	chunkEnd, err := e.chunkEnd(selection, start, windowEnd)
+	if err != nil {
+		return time.Time{}, pipeline.Outcome{}, false, err
+	}
 	outcome, err := e.runner.Run(ctx, plan(selection, start, chunkEnd))
 	return chunkEnd, outcome, false, err
 }
 
-func (e *Executor) chunkEnd(set domain.FactorSet, start, windowEnd time.Time) (time.Time, error) {
+func (e *Executor) chunkEnd(selection Selection, start, windowEnd time.Time) (time.Time, error) {
+	set := selection.Set
 	clock := e.clock
 	if clock == nil {
 		var err error
@@ -266,10 +278,22 @@ func (e *Executor) chunkEnd(set domain.FactorSet, start, windowEnd time.Time) (t
 	if err != nil {
 		return time.Time{}, err
 	}
-	if int64(e.chunkPeriods) > math.MaxInt64/int64(duration) {
+	periods := e.chunkPeriods
+	if e.memoryBudget > 0 {
+		// 序列数按标的数估计（crypto 每个标的一个 series_tag）。
+		fit, err := pipeline.MaxPeriodsWithin(selection.Factors, len(selection.Subjects), len(selection.Columns), periods, e.memoryBudget)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if fit < periods {
+			log.Infof("factor_recalc_chunk_narrowed set_id=%s periods=%d configured=%d budget=%d", set.SetID, fit, periods, e.memoryBudget)
+			periods = fit
+		}
+	}
+	if int64(periods) > math.MaxInt64/int64(duration) {
 		return time.Time{}, errors.New("recalc chunk duration overflows")
 	}
-	end := start.Add(time.Duration(e.chunkPeriods) * duration)
+	end := start.Add(time.Duration(periods) * duration)
 	if end.After(windowEnd) {
 		end = windowEnd
 	}

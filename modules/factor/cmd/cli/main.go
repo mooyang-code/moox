@@ -12,24 +12,20 @@ import (
 )
 
 type cliConfig struct {
-	Command         string
-	ConfigPath      string
-	DBPath          string
-	SetID           string
-	File            string
-	CatalogDir      string
-	FactorID        string
-	FactorType      string
-	InputColumns    []string
-	Outputs         []string
-	ParamsJSON      string
-	LookbackPeriods int
-	StartTime       time.Time
-	EndTime         time.Time
-	FactorIDs       []string
-	Subjects        []string
-	RequestID       string
-	RPCTarget       string
+	Command    string
+	ConfigPath string
+	DBPath     string
+	SetID      string
+	File       string
+	CatalogDir string
+	FactorID   string
+	NoBackup   bool
+	StartTime  time.Time
+	EndTime    time.Time
+	FactorIDs  []string
+	Subjects   []string
+	RequestID  string
+	RPCTarget  string
 }
 
 func main() {
@@ -51,6 +47,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return runImport(ctx, cfg, out)
 	case "import-catalog":
 		return runImportCatalog(ctx, cfg, out)
+	case "migrate-expr":
+		return runMigrateExpr(ctx, cfg, out)
 	case "recalc":
 		return runRecalc(ctx, cfg, out)
 	case "status":
@@ -67,10 +65,8 @@ func parseArgs(args []string) (cliConfig, error) {
 	cfg := cliConfig{
 		Command: args[0], DBPath: "./data/factor/factor.db",
 		CatalogDir: "./factors", ConfigPath: "./config/app.yaml",
-		FactorType: "timeseries", ParamsJSON: "{}",
 	}
 	fs := newFlagSet(cfg.Command)
-	var inputs, outputs string
 	var start, end string
 	switch cfg.Command {
 	case "init":
@@ -80,19 +76,18 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
 		fs.StringVar(&cfg.SetID, "set", "", "also add the definition to this factor set as a disabled member")
-		fs.StringVar(&cfg.File, "file", "", "Python factor source file")
-		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id")
-		fs.StringVar(&cfg.FactorType, "factor-type", cfg.FactorType, "timeseries or cross_section")
-		fs.StringVar(&inputs, "inputs", "", "comma-separated input columns")
-		fs.StringVar(&outputs, "outputs", "", "comma-separated output columns")
-		fs.IntVar(&cfg.LookbackPeriods, "lookback", 0, "input lookback periods")
-		fs.StringVar(&cfg.ParamsJSON, "params", cfg.ParamsJSON, "factor parameter JSON object")
+		fs.StringVar(&cfg.File, "file", "", "YAML factor library file ([{factor_id, name, spec}])")
+		fs.StringVar(&cfg.FactorID, "factor-id", "", "factor id to import (required when the file has several)")
 	case "import-catalog":
 		cfg.DBPath = ""
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
-		fs.StringVar(&cfg.CatalogDir, "dir", cfg.CatalogDir, "directory containing catalog.json and Python sources")
+		fs.StringVar(&cfg.CatalogDir, "dir", cfg.CatalogDir, "YAML factor library directory (*.yaml)")
 		fs.StringVar(&cfg.SetID, "set", "", "also add the definitions to this factor set as disabled members")
+	case "migrate-expr":
+		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "Factor SQLite database (factor-mgr must be stopped)")
+		fs.StringVar(&cfg.CatalogDir, "library", "", "YAML factor library directory holding every existing factor")
+		fs.BoolVar(&cfg.NoBackup, "no-backup", false, "skip the automatic <db>.bak-<time> copy")
 	case "recalc":
 		cfg.DBPath = ""
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
@@ -113,17 +108,6 @@ func parseArgs(args []string) (cliConfig, error) {
 	}
 	if fs.NArg() > 0 {
 		return cliConfig{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
-	}
-	if cfg.Command == "import" {
-		var err error
-		cfg.InputColumns, err = parseCSV("--inputs", inputs)
-		if err != nil {
-			return cliConfig{}, err
-		}
-		cfg.Outputs, err = parseCSV("--outputs", outputs)
-		if err != nil {
-			return cliConfig{}, err
-		}
 	}
 	if cfg.Command == "recalc" {
 		if strings.TrimSpace(cfg.SetID) == "" {

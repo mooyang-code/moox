@@ -15,11 +15,11 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/observability"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
+	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
@@ -38,7 +38,6 @@ type Runtime struct {
 	storage  *storageio.Client
 	manager  *ManagerClient
 	catalog  *CatalogCache
-	python   *pyexec.Pool
 	pipeline *pipeline.Runner
 	runner   *measuredRunner
 	runs     *runTracker
@@ -99,17 +98,13 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if r.manager, err = NewManagerClient(r.gateway, cfg.Manager.Timeout, r.identity); err != nil {
 		return nil, err
 	}
-	if r.catalog, err = NewCatalogCache(cfg.Python.FactorsDir, cfg.CatalogSync.StateFile); err != nil {
+	if r.catalog, err = NewCatalogCache(cfg.CatalogSync.StateFile); err != nil {
 		return nil, err
 	}
 	if loaded, loadErr := r.catalog.Load(); loadErr != nil {
 		log.ErrorContextf(ctx, "factor_engine_catalog_load_failed error=%v", loadErr)
 	} else if loaded {
 		log.InfoContextf(ctx, "factor_engine_catalog_loaded hash=%s", r.catalog.Status().Hash)
-	}
-	r.python, err = pyexec.New(appCtx, cfg.Python.Workers, cfg.Python.processConfig())
-	if err != nil {
-		return nil, fmt.Errorf("start factor Python pool: %w", err)
 	}
 	if r.metrics, err = observability.NewMetrics(prometheus.DefaultRegisterer); err != nil {
 		return nil, fmt.Errorf("register factor pipeline metrics: %w", err)
@@ -120,7 +115,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		ReadTimeout:     cfg.Pipeline.ReadTimeout,
 		BulkReadWorkers: cfg.Pipeline.BulkReadWorkers, ReadRetryBackoff: cfg.Pipeline.ReadRetryBackoff, ReadBreakerFailures: cfg.Pipeline.ReadBreakerFailures,
 		WarmupBatchSubjects: cfg.Pipeline.WarmupBatchSubjects, WarmupWorkers: cfg.Pipeline.WarmupWorkers, WarmupBatchPause: cfg.Pipeline.WarmupBatchPause, WriteBatchRows: cfg.Pipeline.WriteBatchRows,
-		WriteRetryBackoff: 300 * time.Millisecond, PythonWorkers: cfg.Python.Workers, FactorsDir: cfg.Python.FactorsDir,
+		WriteRetryBackoff: 300 * time.Millisecond, ComputeWorkers: cfg.Compute.Workers, MaxMemory: int64(cfg.Compute.MaxMemory),
+		OnCompileError:   func(setID, factorID string) { r.metrics.CompileErrors.WithLabelValues(setID, factorID).Inc() },
 		BackgroundWarmup: true,
 	}
 	// 跳过账本与恢复始终开启：预热中被跳过的周期也靠它补算。gap.enabled 只控制回看窗口的空洞检查。
@@ -144,7 +140,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if cfg.Gap.Enabled {
 		pipelineConfig.GapCheck, pipelineConfig.MassRatio = true, cfg.Gap.MassRatio
 	}
-	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, r.python, clock, pipelineConfig)
+	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, clock, pipelineConfig)
 	r.pipeline = base
 	r.runner = &measuredRunner{inner: base, metrics: r.metrics, health: r.monitor, runs: r.runs}
 	r.prewarm = newPrewarmer(r.catalog, r.storage, base, r.active)
@@ -171,8 +167,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.reconcileConsumer()
 
 	executor := recalcexec.NewExecutor(r.runner,
-		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks), recalcexec.WithClock(clock))
-	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval, materialize: r.catalog.Materialize}
+		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks), recalcexec.WithClock(clock),
+		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)))
+	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval}
 	filler := &gapFiller{
 		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
 		active: r.active, cfg: cfg.Gap, now: time.Now, onGaveUp: func(n int) { r.metrics.GapGaveUp.Add(float64(n)) },
@@ -276,11 +273,8 @@ func (r *Runtime) currentConsumer() *eventconsumer.Consumer {
 func (r *Runtime) engineStatus() domain.EngineStatus {
 	catalog := r.catalog.Status()
 	status := domain.EngineStatus{
-		PythonWorkers: int32(r.cfg.Python.Workers), RecentRuns: r.runs.all(time.Now()),
+		ComputeWorkers: int32(r.cfg.Compute.Workers), ExprVersion: factorexpr.ExprVersion, RecentRuns: r.runs.all(time.Now()),
 		CatalogHash: catalog.Hash, CatalogSyncedAt: catalog.SyncedAt,
-	}
-	if r.python != nil {
-		status.PythonBusy = int32(r.python.Busy())
 	}
 	if consumer := r.currentConsumer(); consumer != nil {
 		status.ConsumerRunning = consumer.Ready()
@@ -302,7 +296,6 @@ func (r *Runtime) reportMetrics(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			r.metrics.PythonBusy.Set(float64(r.python.Busy()))
 			r.reportGapMetrics(&gapSkipped)
 			currentSets := make(map[string]struct{})
 			if consumer := r.currentConsumer(); consumer != nil {
@@ -340,9 +333,7 @@ func (r *Runtime) healthSnapshot(context.Context) healthz.Response {
 	lease := r.lease.snapshot()
 	consumer := r.currentConsumer()
 	consumerReady := consumer != nil && consumer.Ready()
-	pythonReady := r.python != nil && r.python.Ready()
 	r.monitor.SetDependency("catalog", catalog.Loaded)
-	r.monitor.SetDependency("python", pythonReady)
 	r.monitor.SetDependency("eventbus", consumerReady)
 	r.monitor.SetDependency("lease", !lease.Conflict)
 	// 账本写盘失败：账本可能不完整，健康检查降级（周期推进不受影响）。
@@ -371,9 +362,6 @@ func (r *Runtime) healthSnapshot(context.Context) healthz.Response {
 	}
 	if lease.LastError != "" {
 		details["heartbeat_error"] = lease.LastError
-	}
-	if r.python != nil {
-		details["python_busy"] = r.python.Busy()
 	}
 	return healthz.Response{Module: "factor-engine", Ready: check.Healthy, Status: state, Time: time.Now().UTC(), Details: details}
 }
@@ -404,9 +392,6 @@ func (r *Runtime) Close() error {
 			r.err = errors.Join(r.err, consumer.Close())
 		}
 		r.reconcileMu.Unlock()
-		if r.python != nil {
-			r.err = errors.Join(r.err, r.python.Close())
-		}
 		if r.gap != nil {
 			r.err = errors.Join(r.err, r.gap.Close())
 		}

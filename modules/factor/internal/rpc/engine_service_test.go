@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,17 +56,13 @@ var testEngine = &factorpb.EngineIdentity{EngineId: "factor-engine@mac", BootId:
 
 func engineSetFixture() domain.EngineSet {
 	return domain.EngineSet{
-		Set: domain.FactorSet{SetID: "fset_a", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m", Status: domain.SetStatusEnabled},
-		Factors: []domain.FactorDef{{
-			FactorID: "bias", Name: "bias", FactorType: domain.FactorTypeTimeSeries,
-			SourceCode: "def compute(): pass", SourceHash: "h", InputColumns: []string{"close"}, Outputs: []string{"bias"},
-			ParamsJSON: "{}", LookbackPeriods: 5,
-		}},
+		Set:         domain.FactorSet{SetID: "fset_a", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m", Status: domain.SetStatusEnabled},
+		Factors:     []domain.FactorDef{domain.MustDefinition("bias", "bias", "outputs:\n  bias: close / ts_mean(close, 5)\n")},
 		ResultReady: true,
 	}
 }
 
-func TestSyncEngineCatalogReturnsSetsWithSource(t *testing.T) {
+func TestSyncEngineCatalogReturnsSetsWithSpec(t *testing.T) {
 	hub := &hubFake{hash: "hash-1", sets: []domain.EngineSet{engineSetFixture()}}
 	svc := NewEngineService(hub)
 
@@ -77,7 +74,7 @@ func TestSyncEngineCatalogReturnsSetsWithSource(t *testing.T) {
 	require.False(t, rsp.GetNotModified())
 	require.Len(t, rsp.GetSets(), 1)
 	require.True(t, rsp.GetSets()[0].GetResultReady())
-	require.Equal(t, "def compute(): pass", rsp.GetSets()[0].GetFactors()[0].GetSourceCode())
+	require.Contains(t, rsp.GetSets()[0].GetFactors()[0].GetSpec(), "ts_mean(close, 5)")
 }
 
 func TestSyncEngineCatalogNotModified(t *testing.T) {
@@ -105,7 +102,7 @@ func TestEngineHeartbeatPassesStatus(t *testing.T) {
 	syncedAt := time.Unix(1000, 0).UTC()
 
 	rsp, err := svc.EngineHeartbeat(context.Background(), &factorpb.EngineHeartbeatReq{Engine: testEngine, Status: &factorpb.EngineRuntimeStatus{
-		ConsumerRunning: true, PythonWorkers: 8, PythonBusy: 2, CatalogHash: "hash-1",
+		ConsumerRunning: true, ComputeWorkers: 8, ExprVersion: "expr/1", CatalogHash: "hash-1",
 		CatalogSyncedAt: syncedAt.Format(time.RFC3339Nano),
 		Lanes:           []*factorpb.FactorLaneStatus{{SetId: "fset_a", Queued: 1, Active: true}},
 		RecentRuns:      []*factorpb.SetRunSummary{{SetId: "fset_a", LastPeriodTime: 900, LastStatus: "complete"}},
@@ -116,6 +113,8 @@ func TestEngineHeartbeatPassesStatus(t *testing.T) {
 	require.Equal(t, int64(45), rsp.GetLeaseTtlSeconds())
 	require.Equal(t, "factor-engine@mac", hub.identity.EngineID)
 	require.True(t, hub.status.ConsumerRunning)
+	require.Equal(t, int32(8), hub.status.ComputeWorkers)
+	require.Equal(t, "expr/1", hub.status.ExprVersion)
 	require.Equal(t, syncedAt, hub.status.CatalogSyncedAt)
 	require.Equal(t, []domain.LaneStatus{{SetID: "fset_a", Queued: 1, Active: true}}, hub.status.Lanes)
 	require.Equal(t, "complete", hub.status.RecentRuns[0].LastStatus)
@@ -221,7 +220,7 @@ func TestGetStatusReadsEngineHeartbeat(t *testing.T) {
 			EngineIdentity: domain.EngineIdentity{EngineID: "factor-engine@mac", BootID: "boot", Version: "v1"},
 			Online:         true, LastHeartbeatAt: heartbeat, CatalogHash: "hash-1", CatalogInSync: true,
 		},
-		status: domain.EngineStatus{ConsumerRunning: true, PythonWorkers: 8, PythonBusy: 3,
+		status: domain.EngineStatus{ConsumerRunning: true, ComputeWorkers: 8, ExprVersion: "expr/0",
 			Lanes:      []domain.LaneStatus{{SetID: "fset_a", Queued: 2}},
 			RecentRuns: []domain.SetRunSummary{{SetID: "fset_a", LastPeriodTime: 1900, LastStatus: "complete", LagSeconds: 100}}},
 	}))
@@ -230,8 +229,9 @@ func TestGetStatusReadsEngineHeartbeat(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, rsp.GetConsumerRunning())
-	require.Equal(t, int32(8), rsp.GetPythonWorkers())
-	require.Equal(t, int32(3), rsp.GetPythonBusy())
+	require.Equal(t, int32(8), rsp.GetComputeWorkers())
+	require.Equal(t, "expr/0", rsp.GetEngineExprVersion())
+	require.Equal(t, factorexpr.ExprVersion, rsp.GetManagerExprVersion(), "版本不一致时由控制台提示")
 	require.Len(t, rsp.GetLanes(), 1)
 	require.Equal(t, int64(100), rsp.GetRecentRuns()[0].GetLagSeconds())
 	require.Equal(t, "factor-engine@mac", rsp.GetEngine().GetEngineId())

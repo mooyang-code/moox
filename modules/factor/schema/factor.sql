@@ -17,22 +17,16 @@ CREATE TABLE IF NOT EXISTS t_factor_sets (
     UNIQUE (c_result_dataset_id)
 );
 
--- 因子定义：只描述算法，与因子集无关，无运行状态
+-- 因子定义：只描述算法，与因子集无关，无运行状态。c_spec 是表达式定义文本（YAML），
+-- 因子类型、输入列、输出列与回看由编译 c_spec 派生，不落库
 CREATE TABLE IF NOT EXISTS t_factor_defs (
     c_factor_id TEXT NOT NULL PRIMARY KEY,
     c_name TEXT NOT NULL,
-    c_factor_type TEXT NOT NULL,
-    c_source_code TEXT NOT NULL,
-    c_source_hash TEXT NOT NULL,
-    c_input_columns_json TEXT NOT NULL,
-    c_outputs_json TEXT NOT NULL,
-    c_params_json TEXT NOT NULL DEFAULT '{}',
-    c_lookback_periods INTEGER NOT NULL,
+    c_spec TEXT NOT NULL,
+    c_spec_hash TEXT NOT NULL,
     c_allow_partial_universe INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_factor_type IN ('timeseries', 'cross_section')),
-    CHECK (c_lookback_periods >= 1),
     CHECK (c_allow_partial_universe IN (0, 1))
 );
 

@@ -39,8 +39,11 @@ func adminOnlyWriteService(serviceID string) bool {
 
 // adminOnlyService 的全部方法（含读）只允许全局管理员：主机的 SSH 配置、会话和文件传输等价于登录这些主机，
 // 普通用户不能看到、也不能间接使用。
-// adminOnlyMethods 是会让服务端执行用户提供代码的方法：因子源码保存前会被 Python 子进程导入校验，子进程继承 factor-mgr 的
-// 系统用户权限和服务凭据，所以空间管理员也不能调用，只允许全局管理员。
+// adminOnlyMethods 是空间管理员也不能调用、只允许全局管理员的方法。
+//
+// 因子定义没有空间归属（按全局 factor_id 定位，可以被多个空间的因子集引用），空间管理员改定义会影响其他空间：
+// 创建与修改只允许全局管理员。校验表达式（ValidateFactorSpec）与函数清单是无副作用的读；试算（PreviewFactor）
+// 按因子集的空间授权，只读该空间的源数据。
 //
 // 云账户没有空间归属（表里没有 space 字段，按 account_id 全局定位），创建是 UPSERT，空间管理员改它会影响其他空间共用的账户，
 // 所以写方法同样只允许全局管理员。

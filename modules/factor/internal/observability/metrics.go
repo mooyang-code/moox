@@ -8,7 +8,7 @@ type Metrics struct {
 	PeriodTotal    *prometheus.CounterVec
 	Failures       *prometheus.CounterVec
 	LaneBacklog    *prometheus.GaugeVec
-	PythonBusy     prometheus.Gauge
+	CompileErrors  *prometheus.CounterVec
 	LastPeriodTime *prometheus.GaugeVec
 	// K 线空洞账本：待恢复条目数、累计跳过与累计放弃（交给人工）的条目数、账本是否写盘失败。
 	GapPending        prometheus.Gauge
@@ -38,9 +38,9 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 		LaneBacklog: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "factor_lane_backlog", Help: "Number of queued periods for each factor set lane.",
 		}, []string{"set"}),
-		PythonBusy: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "factor_python_busy", Help: "Number of busy Python workers.",
-		}),
+		CompileErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "factor_compile_errors_total", Help: "引擎侧编译因子定义失败的次数（mgr 与引擎的 expr 版本不一致时出现）。",
+		}, []string{"set_id", "factor_id"}),
 		LastPeriodTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "factor_last_period_time", Help: "Unix timestamp of the most recently computed period.",
 		}, []string{"set"}),
@@ -61,7 +61,7 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 		return nil, err
 	}
 	collectors := []prometheus.Collector{
-		metrics.PeriodLag, metrics.PeriodTotal, metrics.Failures, metrics.LaneBacklog, metrics.PythonBusy, metrics.LastPeriodTime,
+		metrics.PeriodLag, metrics.PeriodTotal, metrics.Failures, metrics.LaneBacklog, metrics.CompileErrors, metrics.LastPeriodTime,
 		metrics.GapPending, metrics.GapSkipped, metrics.GapGaveUp, metrics.GapLedgerDegraded,
 	}
 	for _, collector := range collectors {

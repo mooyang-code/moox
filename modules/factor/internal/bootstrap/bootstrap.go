@@ -13,7 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/enginehub"
 	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
+	"github.com/mooyang-code/moox/modules/factor/internal/preview"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalc"
 	factorrpc "github.com/mooyang-code/moox/modules/factor/internal/rpc"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
@@ -83,7 +83,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	recalcService := recalc.NewService(db, recalc.WithSubjectProvider(storage))
 	catalogService := catalog.NewService(db, storage,
 		catalog.WithLockDir(cfg.Database.Path+".locks"),
-		catalog.WithSourceChecker(sourceChecker{python: cfg.Python}),
 		catalog.WithRecalcSubmitter(recalcSubmitter{service: recalcService}),
 		catalog.WithEarliestPeriodProvider(datasetEarliestPeriodProvider{storage: storage}),
 		catalog.WithReadyRecorder(hub.SetResultReady),
@@ -98,7 +97,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	runtime.stopCatalog = stopCatalog
 
-	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub))
+	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub),
+		factorrpc.WithPreviewer(preview.New(storage, previewWorkers)))
 	factorpb.RegisterFactorMgrService(s.Service(factorMgrService), factorService)
 	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub))
 
@@ -159,6 +159,8 @@ func (r *Runtime) healthSnapshot(db *store.Store) healthz.SnapshotFunc {
 const (
 	startupReconcileAttempts = 5
 	startupReconcileBackoff  = 2 * time.Second
+	// previewWorkers 是 PreviewFactor 试算的并行度：只算少量标的，管理端所在的 control 主机核数少。
+	previewWorkers = 2
 )
 
 // reconcileAtStartup tolerates a Storage that is still coming up: a set is
@@ -211,12 +213,6 @@ func startCatalogReconciler(ctx context.Context, service *catalog.Service, inter
 		<-done
 		return nil
 	}, nil
-}
-
-type sourceChecker struct{ python PythonConfig }
-
-func (s sourceChecker) CheckSource(ctx context.Context, _ domain.FactorDef, sourcePath string) error {
-	return pyexec.ValidateSource(ctx, s.python.Bin, sourcePath)
 }
 
 type recalcSubmitter struct{ service *recalc.Service }
@@ -288,6 +284,5 @@ func (p datasetEarliestPeriodProvider) EarliestDatasetPeriod(ctx context.Context
 	return p.storage.EarliestPeriod(ctx, spaceID, datasetID, freq, subjects, columns)
 }
 
-var _ catalog.SourceChecker = sourceChecker{}
 var _ catalog.RecalcSubmitter = recalcSubmitter{}
 var _ factorrpc.RecalcAPI = recalcRPCAdapter{}

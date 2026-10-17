@@ -32,7 +32,7 @@ func TestHeartbeatLeaseConflictStopsAndRecovers(t *testing.T) {
 		nil, fmt.Errorf("%w: held by factor-engine@other", ErrLeaseConflict), errors.New("dial tcp: timeout"), nil,
 	}}
 	beat := &heartbeater{client: client, lease: lease, status: func() domain.EngineStatus {
-		return domain.EngineStatus{CatalogHash: "hash-1", PythonWorkers: 8}
+		return domain.EngineStatus{CatalogHash: "hash-1", ComputeWorkers: 8}
 	}, onChange: func() { changes++ }, now: time.Now}
 
 	require.NoError(t, beat.BeatOnce(context.Background()))
@@ -187,7 +187,7 @@ func TestRecalcLoopAbandonsWhenManagerUnreachable(t *testing.T) {
 
 func TestRecalcLoopReportsFailedWithError(t *testing.T) {
 	client := &jobClientFake{job: testJob("BTC"), found: true}
-	runner := &planRecorder{err: errors.New("python factor raised")}
+	runner := &planRecorder{err: errors.New("factor compute failed")}
 	loop := newTestLoop(client, runner, &sourceFake{})
 
 	_, err := loop.RunOnce(context.Background())
@@ -195,7 +195,7 @@ func TestRecalcLoopReportsFailedWithError(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, client.reports, 1)
 	require.Equal(t, jobStatusFailed, client.reports[0].status)
-	require.Contains(t, client.reports[0].errText, "python factor raised")
+	require.Contains(t, client.reports[0].errText, "factor compute failed")
 }
 
 func TestRecalcLoopResolvesSubjectsWhenEmpty(t *testing.T) {
@@ -242,7 +242,7 @@ func TestRecalcLoopReportsFailedWithLatestProgress(t *testing.T) {
 	loop.executor = recalcexec.NewExecutor(runnerFunc(func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
 		calls++
 		if calls > 1 {
-			return pipeline.Outcome{}, errors.New("python factor raised")
+			return pipeline.Outcome{}, errors.New("factor compute failed")
 		}
 		return pipeline.Outcome{Status: "complete"}, nil
 	}), recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond))
@@ -280,38 +280,23 @@ func (f runnerFunc) Run(ctx context.Context, plan pipeline.Plan) (pipeline.Outco
 	return f(ctx, plan)
 }
 
-func TestRecalcLoopMaterializesFactorSourcesBeforeRunning(t *testing.T) {
-	client := &jobClientFake{job: testJob("BTC"), found: true}
+// 补算任务自带定义（JSON，没有编译结果），领取时现场编译后再交给流水线。
+func TestRecalcLoopCompilesJobDefinitions(t *testing.T) {
+	job := testJob("BTC")
+	job.Set = uncompiled(job.Set)
+	require.Nil(t, job.Set.Factors[0].Compiled())
+	client := &jobClientFake{job: job, found: true}
 	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
 	loop := newTestLoop(client, runner, &sourceFake{})
-	var materialized []string
-	loop.materialize = func(factors []domain.FactorDef) error {
-		for _, factor := range factors {
-			materialized = append(materialized, factor.FactorID)
-		}
-		return nil
-	}
 
 	_, err := loop.RunOnce(context.Background())
 
 	require.NoError(t, err)
-	require.Equal(t, []string{"bias"}, materialized)
 	require.Len(t, runner.plans, 3)
-}
-
-func TestRecalcLoopFailsJobWhenSourceCannotBeMaterialized(t *testing.T) {
-	client := &jobClientFake{job: testJob("BTC"), found: true}
-	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
-	loop := newTestLoop(client, runner, &sourceFake{})
-	loop.materialize = func([]domain.FactorDef) error { return errors.New("disk full") }
-
-	_, err := loop.RunOnce(context.Background())
-
-	require.NoError(t, err)
-	require.Empty(t, runner.plans, "no period may be computed without the factor source")
-	require.Len(t, client.reports, 1)
-	require.Equal(t, jobStatusFailed, client.reports[0].status)
-	require.Contains(t, client.reports[0].errText, "disk full")
+	for _, plan := range runner.plans {
+		require.NotNil(t, plan.Factors[0].Compiled())
+		require.Equal(t, 2, plan.Factors[0].LookbackPeriods)
+	}
 }
 
 // beatRecorder 记录每次心跳，供并发的心跳循环测试使用。

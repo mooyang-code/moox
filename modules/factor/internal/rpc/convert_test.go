@@ -14,35 +14,64 @@ import (
 func TestConvertFactorDefRoundTrip(t *testing.T) {
 	createdAt := time.Date(2026, time.October, 4, 10, 11, 12, 0, time.UTC)
 	updatedAt := createdAt.Add(time.Minute)
-	want := domain.FactorDef{
-		FactorID:             "rolling_mean",
-		Name:                 "Rolling mean",
-		FactorType:           domain.FactorTypeTimeSeries,
-		SourceCode:           "def calculate(frame, context): return frame",
-		SourceHash:           domain.SourceHash("def calculate(frame, context): return frame"),
-		InputColumns:         []string{"close", "open"},
-		Outputs:              []string{"mean_close"},
-		ParamsJSON:           `{"window":3}`,
-		LookbackPeriods:      3,
-		AllowPartialUniverse: true,
-		CreatedAt:            createdAt,
-		UpdatedAt:            updatedAt,
-	}
+	want := domain.MustDefinition("rolling_mean", "Rolling mean", "params: {window: 3}\noutputs:\n  mean_close: cs_rank(ts_mean(close - open, window))\n")
+	want.AllowPartialUniverse, want.CreatedAt, want.UpdatedAt = true, createdAt, updatedAt
 
-	got, err := factorwire.DefFromPB(factorwire.DefToPB(want))
+	pb := factorwire.DefToPB(want)
+	require.Equal(t, domain.FactorTypeCrossSection, pb.GetFactorType(), "派生字段只读地带给调用方")
+	require.Equal(t, []string{"close", "open"}, pb.GetInputColumns())
+	require.Equal(t, int32(3), pb.GetLookbackPeriods())
+	require.Equal(t, domain.DefinitionHash(want), pb.GetDefinitionHash())
+	got, err := factorwire.DefFromPB(pb)
 
 	require.NoError(t, err)
-	require.Equal(t, want, got)
+	requireSameDefinition(t, want, got)
+}
+
+// 派生字段不从请求读取：调用方伪造的类型、输入列、回看会被编译结果覆盖。
+func TestDefFromPBIgnoresClientDerivedFields(t *testing.T) {
+	pb := factorwire.DefToPB(domain.MustDefinition("f", "F", "outputs:\n  f: ts_mean(close, 5)\n"))
+	pb.FactorType, pb.InputColumns, pb.LookbackPeriods, pb.Outputs = "cross_section", []string{"volume"}, 99, []string{"x"}
+	got, err := factorwire.DefFromPB(pb)
+	require.NoError(t, err)
+	require.Equal(t, domain.FactorTypeTimeSeries, got.FactorType)
+	require.Equal(t, []string{"close"}, got.InputColumns)
+	require.Equal(t, []string{"f"}, got.Outputs)
+	require.Equal(t, 5, got.LookbackPeriods)
+}
+
+// 接收方编译不了时保留发送方的派生字段，组装才能清掉这些输出列上的旧值。
+func TestDefFromPBKeepsSenderDerivedFieldsWhenUncompilable(t *testing.T) {
+	pb := &factorpb.FactorDef{FactorId: "f", Name: "F", Spec: "outputs:\n  f: future_op(close)\n",
+		FactorType: "timeseries", InputColumns: []string{"close"}, Outputs: []string{"f"}, LookbackPeriods: 7}
+	got, err := factorwire.DefFromPB(pb)
+	require.NoError(t, err)
+	require.Nil(t, got.Compiled())
+	require.Equal(t, []string{"f"}, got.Outputs)
+	require.Equal(t, 7, got.LookbackPeriods)
+	require.Equal(t, domain.FactorTypeTimeSeries, got.FactorType)
+}
+
+// requireSameDefinition 比较定义的全部导出字段（编译结果是内部指针，不参与比较）。
+func requireSameDefinition(t *testing.T, want, got domain.FactorDef) {
+	t.Helper()
+	require.Equal(t, want.FactorID, got.FactorID)
+	require.Equal(t, want.Name, got.Name)
+	require.Equal(t, want.Spec, got.Spec)
+	require.Equal(t, want.SpecHash, got.SpecHash)
+	require.Equal(t, want.AllowPartialUniverse, got.AllowPartialUniverse)
+	require.True(t, want.CreatedAt.Equal(got.CreatedAt) && want.UpdatedAt.Equal(got.UpdatedAt))
+	require.Equal(t, want.FactorType, got.FactorType)
+	require.Equal(t, want.InputColumns, got.InputColumns)
+	require.Equal(t, want.Outputs, got.Outputs)
+	require.Equal(t, want.LookbackPeriods, got.LookbackPeriods)
+	require.NotNil(t, got.Compiled())
 }
 
 func TestConvertMemberRoundTrip(t *testing.T) {
 	createdAt := time.Date(2026, time.October, 4, 10, 11, 12, 0, time.UTC)
-	def := domain.FactorDef{
-		FactorID: "rolling_mean", Name: "Rolling mean", FactorType: domain.FactorTypeCrossSection,
-		SourceCode: "code", SourceHash: domain.SourceHash("code"), InputColumns: []string{"close"},
-		Outputs: []string{"mean_close"}, ParamsJSON: "{}", LookbackPeriods: 3, AllowPartialUniverse: true,
-		CreatedAt: createdAt, UpdatedAt: createdAt,
-	}
+	def := domain.MustDefinition("rolling_mean", "Rolling mean", "outputs:\n  mean_close: cs_rank(ts_mean(close, 3))\n")
+	def.AllowPartialUniverse, def.CreatedAt, def.UpdatedAt = true, createdAt, createdAt
 	member := domain.SetMember{
 		FactorSetMember: domain.FactorSetMember{
 			SetID: "fset_a", FactorID: "rolling_mean", Status: domain.MemberStatusEnabled,
@@ -56,14 +85,15 @@ func TestConvertMemberRoundTrip(t *testing.T) {
 	require.Equal(t, "rolling_mean", full.GetFactorId())
 	require.Equal(t, domain.MemberStatusEnabled, full.GetStatus())
 	require.Equal(t, "2026-10-04T10:12:12Z", full.GetUpdatedAt())
-	require.Equal(t, "code", full.GetFactor().GetSourceCode())
+	require.Equal(t, def.Spec, full.GetFactor().GetSpec())
 	got, err := factorwire.DefFromPB(full.GetFactor())
 	require.NoError(t, err)
-	require.Equal(t, def, got)
+	requireSameDefinition(t, def, got)
 
 	listed := memberToPB(member, false)
-	require.Empty(t, listed.GetFactor().GetSourceCode())
-	require.Equal(t, domain.SourceHash("code"), listed.GetFactor().GetSourceHash())
+	require.Empty(t, listed.GetFactor().GetSpec())
+	require.Equal(t, def.SpecHash, listed.GetFactor().GetSpecHash())
+	require.Equal(t, []string{"mean_close"}, listed.GetFactor().GetOutputs(), "列表里仍带派生字段")
 }
 
 func TestConvertFactorSetRoundTrip(t *testing.T) {

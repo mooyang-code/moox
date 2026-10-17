@@ -48,12 +48,7 @@ func seedSet(t *testing.T, db *store.Store, setID string, members map[string]str
 }
 
 func testFactor(factorID string) domain.FactorDef {
-	source := "def compute(frame, params, context): return frame # " + factorID
-	return domain.FactorDef{
-		FactorID: factorID, Name: factorID, FactorType: domain.FactorTypeTimeSeries,
-		SourceCode: source, SourceHash: domain.SourceHash(source),
-		InputColumns: []string{"close"}, Outputs: []string{factorID + "_value"}, ParamsJSON: "{}", LookbackPeriods: 1,
-	}
+	return domain.MustDefinition(factorID, factorID, "outputs:\n  "+factorID+"_value: close\n")
 }
 
 var engineA = domain.EngineIdentity{EngineID: "factor-engine@a", BootID: "boot-a", Version: "v1"}
@@ -113,7 +108,7 @@ func TestHeartbeatAcceptsNewEngineAfterExpiry(t *testing.T) {
 
 func TestEngineOfflineAfterTTL(t *testing.T) {
 	hub, _, clock := newTestHub(t)
-	_, err := hub.Heartbeat(context.Background(), engineA, domain.EngineStatus{PythonWorkers: 8})
+	_, err := hub.Heartbeat(context.Background(), engineA, domain.EngineStatus{ComputeWorkers: 8, ExprVersion: "expr/1"})
 	require.NoError(t, err)
 	clock.Advance(time.Minute)
 
@@ -122,7 +117,8 @@ func TestEngineOfflineAfterTTL(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.False(t, info.Online)
-	require.Equal(t, int32(8), status.PythonWorkers, "the last status is kept while offline")
+	require.Equal(t, int32(8), status.ComputeWorkers, "the last status is kept while offline")
+	require.Equal(t, "expr/1", status.ExprVersion)
 }
 
 func TestEngineBeforeFirstHeartbeat(t *testing.T) {

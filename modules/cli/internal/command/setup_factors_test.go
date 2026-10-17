@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -13,7 +14,7 @@ import (
 
 type fakeFactorJSONClient struct {
 	calls         []string
-	createdTypes  []string
+	createdIDs    []string
 	createdSetIDs []string
 	updatedSetIDs []string
 	addedMembers  []string
@@ -24,6 +25,9 @@ type fakeFactorJSONClient struct {
 	existingSet   *setupFactorSet
 	setStatus     string
 }
+
+// fakeDefinitionHash 模拟 FactorMgr 编译后的 definition_hash：忽略首尾空白。
+func fakeDefinitionHash(spec string) string { return "dh:" + strings.TrimSpace(spec) }
 
 func (f *fakeFactorJSONClient) CallGatewayJSON(_ context.Context, service string, method string, body, response any) error {
 	path := service + "/" + method
@@ -60,20 +64,17 @@ func (f *fakeFactorJSONClient) CallGatewayJSON(_ context.Context, service string
 		if f.existing == nil {
 			result.RetInfo.Code, result.RetInfo.Msg = 9, "not found"
 		} else {
-			result.Factor.FactorType = f.existing.FactorType
 			result.Factor.FactorID = f.existing.FactorID
 			result.Factor.Name = f.existing.Name
-			result.Factor.SourceHash = f.existing.SourceHash
-			result.Factor.InputColumns = append([]string(nil), f.existing.InputColumns...)
-			result.Factor.Outputs = append([]string(nil), f.existing.Outputs...)
-			result.Factor.ParamsJSON = f.existing.ParamsJSON
-			result.Factor.LookbackPeriods = f.existing.LookbackPeriods
+			result.Factor.DefinitionHash = fakeDefinitionHash(f.existing.Spec)
 			result.Usages = append([]factorAPIUsage(nil), f.usages...)
 		}
+	case "trpc.moox.factor.FactorMgr/ValidateFactorSpec":
+		result.Valid, result.DefinitionHash = true, fakeDefinitionHash(request["spec"].(string))
 	case "trpc.moox.factor.FactorMgr/CreateFactor":
 		factor := request["factor"].(map[string]any)
 		f.createdBodies = append(f.createdBodies, factor)
-		f.createdTypes = append(f.createdTypes, factor["factor_type"].(string))
+		f.createdIDs = append(f.createdIDs, factor["factor_id"].(string))
 	case "trpc.moox.factor.FactorMgr/AddFactorToSet":
 		f.addedMembers = append(f.addedMembers, request["set_id"].(string)+"/"+request["factor_id"].(string))
 	case "trpc.moox.factor.FactorMgr/SetFactorMemberStatus":
@@ -82,59 +83,81 @@ func (f *fakeFactorJSONClient) CallGatewayJSON(_ context.Context, service string
 	return nil
 }
 
-func TestLoadSetupFactorsReadsConfiguredPythonSources(t *testing.T) {
+const testLibrary = `- factor_id: bias
+  name: Bias 偏离
+  spec: |
+    params: {window: 5}
+    outputs:
+      bias_{window}: close / ts_mean(close, window)
+- factor_id: Cci
+  name: CCI
+  spec: |
+    outputs:
+      cci: close
+`
+
+func writeLibrary(t *testing.T, dir, name string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(testLibrary), 0o600))
+}
+
+func TestLoadSetupFactorsReadsYAMLLibrary(t *testing.T) {
 	root := t.TempDir()
-	factorsDir := filepath.Join(root, "examples", "factors")
-	require.NoError(t, os.MkdirAll(filepath.Join(factorsDir, "timeseries"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "timeseries", "bias.py"), []byte("def compute(df, params):\n    return df\n"), 0o600))
+	writeLibrary(t, filepath.Join(root, "examples", "factors"), "lib.yaml")
 	plan, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "./examples/factors",
-		Sets: []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m"}},
-		Definitions: []setupconfig.FactorSetupDefinition{{
-			FactorType: "timeseries", FactorID: "bias", File: "timeseries/bias.py", InputColumns: []string{"close"}, Outputs: []string{"bias_5"},
-			ParamsJSON: `{"windows":[5]}`,
-		}},
-		Members: []setupconfig.FactorSetupMember{{SourceDatasetID: "dataset_prices", Freq: "1m", FactorID: "bias"}},
+		Sets:        []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m"}},
+		Definitions: []setupconfig.FactorSetupDefinition{{FactorID: "bias", File: "lib.yaml"}},
+		Members:     []setupconfig.FactorSetupMember{{SourceDatasetID: "dataset_prices", Freq: "1m", FactorID: "bias"}},
 	}}, root)
 	require.NoError(t, err)
 	require.Len(t, plan.Definitions, 1)
 	require.Equal(t, "bias", plan.Definitions[0].FactorID)
-	require.Equal(t, "timeseries", plan.Definitions[0].FactorType)
-	require.Equal(t, "bias", plan.Definitions[0].Name)
-	require.NotEmpty(t, plan.Definitions[0].SourceHash)
+	require.Equal(t, "Bias 偏离", plan.Definitions[0].Name)
+	require.Contains(t, plan.Definitions[0].Spec, "ts_mean(close, window)")
 	require.Len(t, plan.Sets, 1)
 	require.Equal(t, "crypto", plan.Sets[0].SpaceID)
 	require.Equal(t, "fset_prices_1m", plan.Sets[0].SetID)
 	require.Equal(t, []setupFactorMember{{SetID: "fset_prices_1m", FactorID: "bias", Status: "enabled"}}, plan.Members)
 }
 
+func TestLoadSetupFactorsRejectsUnknownFactorAndBadLibrary(t *testing.T) {
+	root := t.TempDir()
+	writeLibrary(t, filepath.Join(root, "factors"), "lib.yaml")
+	manifest := setupconfig.Manifest{Factors: setupconfig.FactorSetup{
+		Enabled: true, SourceDir: "factors",
+		Sets:        []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m"}},
+		Definitions: []setupconfig.FactorSetupDefinition{{FactorID: "Missing", File: "lib.yaml"}},
+	}}
+	_, err := loadSetupFactors(manifest, root)
+	require.ErrorContains(t, err, `has no factor "Missing"`)
+	bad := "- factor_id: X\n  name: X\n  spec: x\n  factor_type: timeseries\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "factors", "bad.yaml"), []byte(bad), 0o600))
+	manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{FactorID: "X", File: "bad.yaml"}}
+	_, err = loadSetupFactors(manifest, root)
+	require.ErrorContains(t, err, "factor_type", "unknown library fields are rejected")
+}
+
 func TestLoadSetupFactorsRequiresMatchingSet(t *testing.T) {
 	root := t.TempDir()
-	factorsDir := filepath.Join(root, "factors")
-	require.NoError(t, os.MkdirAll(factorsDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "Bias.py"), []byte("def compute(df, params):\n    return df\n"), 0o600))
+	writeLibrary(t, filepath.Join(root, "factors"), "lib.yaml")
 	_, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "factors",
-		Definitions: []setupconfig.FactorSetupDefinition{{
-			FactorType: "timeseries", FactorID: "Bias", File: "Bias.py", InputColumns: []string{"close"}, Outputs: []string{"bias"},
-		}},
-		Members: []setupconfig.FactorSetupMember{{SourceDatasetID: "dataset_prices", Freq: "1m", FactorID: "Bias"}},
+		Definitions: []setupconfig.FactorSetupDefinition{{FactorID: "Cci", File: "lib.yaml"}},
+		Members:     []setupconfig.FactorSetupMember{{SourceDatasetID: "dataset_prices", Freq: "1m", FactorID: "Cci"}},
 	}}, root)
 	require.ErrorContains(t, err, "no matching set")
 }
 
 func TestLoadSetupFactorsMatchesFrequencyExactly(t *testing.T) {
 	root := t.TempDir()
-	factorsDir := filepath.Join(root, "factors")
-	require.NoError(t, os.MkdirAll(factorsDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(factorsDir, "Bias.py"), []byte("def compute(df, params):\n    return df\n"), 0o600))
+	writeLibrary(t, filepath.Join(root, "factors"), "lib.yaml")
 	_, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "factors",
-		Sets: []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1mo"}},
-		Definitions: []setupconfig.FactorSetupDefinition{{
-			FactorType: "timeseries", FactorID: "Bias", File: "Bias.py", InputColumns: []string{"close"}, Outputs: []string{"bias"},
-		}},
-		Members: []setupconfig.FactorSetupMember{{SourceDatasetID: "dataset_prices", Freq: "1m", FactorID: "Bias"}},
+		Sets:        []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1mo"}},
+		Definitions: []setupconfig.FactorSetupDefinition{{FactorID: "Cci", File: "lib.yaml"}},
+		Members:     []setupconfig.FactorSetupMember{{SourceDatasetID: "dataset_prices", Freq: "1m", FactorID: "Cci"}},
 	}}, root)
 	require.ErrorContains(t, err, "no matching set")
 }
@@ -149,10 +172,8 @@ func TestLoadSetupFactorsRequiresExplicitSetup(t *testing.T) {
 func TestLoadSetupFactorsRejectsSourcePathEscape(t *testing.T) {
 	_, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "./examples/factors",
-		Sets: []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m"}},
-		Definitions: []setupconfig.FactorSetupDefinition{{
-			FactorType: "timeseries", FactorID: "bias", File: "../bias.py", InputColumns: []string{"close"}, Outputs: []string{"bias"},
-		}},
+		Sets:        []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m"}},
+		Definitions: []setupconfig.FactorSetupDefinition{{FactorID: "bias", File: "../bias.yaml"}},
 	}}, t.TempDir())
 	require.Error(t, err)
 }
@@ -161,56 +182,32 @@ func TestLoadSetupFactorsRejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	factorsDir := filepath.Join(root, "examples", "factors")
 	require.NoError(t, os.MkdirAll(factorsDir, 0o755))
-	outside := filepath.Join(t.TempDir(), "outside.py")
-	require.NoError(t, os.WriteFile(outside, []byte("print('outside')"), 0o600))
-	link := filepath.Join(factorsDir, "outside.py")
+	outside := filepath.Join(t.TempDir(), "outside.yaml")
+	require.NoError(t, os.WriteFile(outside, []byte(testLibrary), 0o600))
+	link := filepath.Join(factorsDir, "outside.yaml")
 	if err := os.Symlink(outside, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	_, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
 		Enabled: true, SourceDir: "./examples/factors",
-		Sets: []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m"}},
-		Definitions: []setupconfig.FactorSetupDefinition{{
-			FactorType: "timeseries", FactorID: "outside", File: "outside.py", InputColumns: []string{"close"}, Outputs: []string{"value"},
-		}},
+		Sets:        []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m"}},
+		Definitions: []setupconfig.FactorSetupDefinition{{FactorID: "bias", File: "outside.yaml"}},
 	}}, root)
 	require.Error(t, err)
 }
 
-func TestLoadSetupFactorsRejectsMissingOrUnknownType(t *testing.T) {
-	for _, factorType := range []string{"", "unknown"} {
-		_, err := loadSetupFactors(setupconfig.Manifest{Factors: setupconfig.FactorSetup{
-			Enabled: true, SourceDir: "factors", Definitions: []setupconfig.FactorSetupDefinition{{FactorID: "Bias", FactorType: factorType}},
-		}}, t.TempDir())
-		require.ErrorContains(t, err, "factor_type")
-	}
-}
-
-func TestSameFactorContractIgnoresSetAndStatus(t *testing.T) {
-	var response factorAPIResponse
-	response.Factor.FactorType = "timeseries"
-	want := setupFactorDefinition{FactorType: "timeseries"}
-	require.True(t, sameFactorContract(response.Factor, want))
-	response.Usages = []factorAPIUsage{{SetID: "fset_other_1m", Status: "enabled"}}
-	require.True(t, sameFactorContract(response.Factor, want))
-	want.FactorType = "cross_section"
-	require.False(t, sameFactorContract(response.Factor, want))
-}
-
 func testSetupPlan() setupFactorPlan {
 	return setupFactorPlan{
-		Sets: []setupFactorSet{{SetID: "fset_prices_1m", SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m", SubjectMode: "all"}},
-		Definitions: []setupFactorDefinition{{
-			FactorType: "timeseries", FactorID: "Bias", Name: "Bias", SourceCode: "def compute(df, params):\n    return df\n", SourceHash: "hash",
-			InputColumns: []string{"close"}, Outputs: []string{"bias_5"}, ParamsJSON: "{}", LookbackPeriods: 1,
-		}},
-		Members: []setupFactorMember{{SetID: "fset_prices_1m", FactorID: "Bias", Status: "enabled"}},
+		Sets:        []setupFactorSet{{SetID: "fset_prices_1m", SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m", SubjectMode: "all"}},
+		Definitions: []setupFactorDefinition{{FactorID: "Bias", Name: "Bias", Spec: "outputs:\n  bias: close / ts_mean(close, 5)\n"}},
+		Members:     []setupFactorMember{{SetID: "fset_prices_1m", FactorID: "Bias", Status: "enabled"}},
 	}
 }
 
 func TestApplyCreatesSetsThenDefinitionsThenMembers(t *testing.T) {
 	client := &fakeFactorJSONClient{}
-	result, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), testSetupPlan())
+	plan := testSetupPlan()
+	result, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, setupFactorSummary{Enabled: true, Definitions: 1, Members: 1, SetsCreated: 1, Imported: 1, MembersAdded: 1, MembersEnabled: 1}, result)
 	require.Equal(t, []string{
@@ -227,6 +224,8 @@ func TestApplyCreatesSetsThenDefinitionsThenMembers(t *testing.T) {
 	require.Len(t, client.createdBodies, 1)
 	require.NotContains(t, client.createdBodies[0], "set_id")
 	require.NotContains(t, client.createdBodies[0], "status")
+	require.NotContains(t, client.createdBodies[0], "source_code")
+	require.Equal(t, plan.Definitions[0].Spec, client.createdBodies[0]["spec"])
 }
 
 func TestApplyIsIdempotentWhenNothingChanged(t *testing.T) {
@@ -238,7 +237,8 @@ func TestApplyIsIdempotentWhenNothingChanged(t *testing.T) {
 	result, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
 	require.NoError(t, err)
 	require.Equal(t, setupFactorSummary{Enabled: true, Definitions: 1, Members: 1, Unchanged: 1, MembersUnchanged: 1}, result)
-	require.Equal(t, []string{"trpc.moox.factor.FactorMgr/GetFactorSet", "trpc.moox.factor.FactorMgr/GetFactor"}, client.calls)
+	require.Equal(t, []string{"trpc.moox.factor.FactorMgr/GetFactorSet", "trpc.moox.factor.FactorMgr/GetFactor",
+		"trpc.moox.factor.FactorMgr/ValidateFactorSpec"}, client.calls)
 }
 
 func TestApplyResumesPendingFactorSet(t *testing.T) {
@@ -249,7 +249,8 @@ func TestApplyResumesPendingFactorSet(t *testing.T) {
 	}
 	_, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
 	require.NoError(t, err)
-	require.Equal(t, []string{"trpc.moox.factor.FactorMgr/GetFactorSet", "trpc.moox.factor.FactorMgr/CreateFactorSet", "trpc.moox.factor.FactorMgr/GetFactor"}, client.calls,
+	require.Equal(t, []string{"trpc.moox.factor.FactorMgr/GetFactorSet", "trpc.moox.factor.FactorMgr/CreateFactorSet",
+		"trpc.moox.factor.FactorMgr/GetFactor", "trpc.moox.factor.FactorMgr/ValidateFactorSpec"}, client.calls,
 		"a set left pending by an interrupted creation must be resumed before members are added")
 }
 
@@ -260,17 +261,26 @@ func TestApplySkipsIdenticalDefinition(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, result.Imported)
 	require.Equal(t, 1, result.Unchanged)
-	require.Empty(t, client.createdTypes)
+	require.Empty(t, client.createdIDs)
 	require.Equal(t, []string{"fset_prices_1m/Bias"}, client.addedMembers)
 }
 
-func TestApplyRejectsDifferentExistingDefinition(t *testing.T) {
+func TestApplyComparesDefinitionHashAndName(t *testing.T) {
 	plan := testSetupPlan()
 	got := plan.Definitions[0]
-	got.SourceHash = "other"
+	got.Spec = "outputs:\n  bias: close / ts_mean(close, 10)\n"
 	client := &fakeFactorJSONClient{existingSet: &plan.Sets[0], existing: &got}
 	_, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
 	require.ErrorContains(t, err, "different definition")
+	got = plan.Definitions[0]
+	got.Name = "Other"
+	_, err = (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
+	require.ErrorContains(t, err, "different definition")
+	// 只差格式（编译后 definition_hash 相同）不算不同。
+	got = plan.Definitions[0]
+	got.Spec = "\n" + plan.Definitions[0].Spec + "\n\n"
+	_, err = (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
+	require.NoError(t, err)
 }
 
 func TestApplyDoesNotPruneExtraMembers(t *testing.T) {
@@ -303,10 +313,15 @@ func TestApplyUpdatesExistingSetSubjectScope(t *testing.T) {
 // reads against what protobuf JSON emits for FactorMgr.
 func TestFactorAPIResponseMatchesFactorProtoJSON(t *testing.T) {
 	var get factorAPIResponse
-	require.NoError(t, json.Unmarshal([]byte(`{"ret_info":{"code":0},"factor":{"factor_id":"Bias","factor_type":"timeseries","name":"Bias","source_hash":"sha256:x","input_columns":["close"],"outputs":["bias"],"params_json":"{}","lookback_periods":20},"usages":[{"set_id":"fset_a_1m","status":"enabled"}]}`), &get))
+	require.NoError(t, json.Unmarshal([]byte(`{"ret_info":{"code":0},"factor":{"factor_id":"Bias","factor_type":"timeseries","name":"Bias","spec":"outputs: {}","spec_hash":"sha256:x","input_columns":["close"],"outputs":["bias"],"lookback_periods":20,"definition_hash":"sha256:d"},"usages":[{"set_id":"fset_a_1m","status":"enabled"}]}`), &get))
 	require.Equal(t, "Bias", get.Factor.FactorID)
-	require.Equal(t, 20, get.Factor.LookbackPeriods)
+	require.Equal(t, "sha256:d", get.Factor.DefinitionHash)
 	require.Equal(t, []factorAPIUsage{{SetID: "fset_a_1m", Status: "enabled"}}, get.Usages)
+
+	var validated factorAPIResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"ret_info":{"code":0},"valid":false,"diagnostic":{"path":"outputs.bias","line":1,"column":3,"message":"未知函数"}}`), &validated))
+	require.False(t, validated.Valid)
+	require.Equal(t, "未知函数", validated.Diagnostic.Message)
 
 	var list factorAPIResponse
 	require.NoError(t, json.Unmarshal([]byte(`{"ret_info":{"code":0},"factors":[{"factor":{"factor_id":"Cci"},"usages":[{"set_id":"fset_a_1m","status":"disabled"}]}]}`), &list))

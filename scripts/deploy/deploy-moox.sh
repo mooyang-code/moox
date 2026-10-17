@@ -1916,13 +1916,12 @@ COLLECTOR_ENV=(
   "MOOX_COLLECTOR_ADMIN_GATEWAY_URL=${MOOX_COLLECTOR_ADMIN_GATEWAY_URL:-http://127.0.0.1:11002}"
 )
 
-# moox-factor-mgr keeps the factor catalog; it neither consumes EventBus nor
-# runs factor code (moox-factor-engine does, on the operator machine).
+# moox-factor-mgr keeps the factor catalog and previews definitions; it does not
+# consume EventBus (moox-factor-engine computes periods, on the operator machine).
 FACTOR_ENV=(
   "MOOX_FACTOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}"
   "MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}"
   "MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor-mgr/factor.db}"
-  "MOOX_FACTOR_PYTHON_BIN=${MOOX_FACTOR_PYTHON_BIN:-python3}"
   "MOOX_STORAGE_PRIMARY_AUTH_SECRET=${MOOX_STORAGE_PRIMARY_AUTH_SECRET:-}"
   "MOOX_STORAGE_VIEW_AUTH_SECRET=${MOOX_STORAGE_VIEW_AUTH_SECRET:-}"
 )
@@ -2574,12 +2573,6 @@ start_factor_mgr() {
   }
   local factor_db="${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor-mgr/factor.db}"
   mkdir -p "$(dirname "${factor_db}")"
-  # Creating or editing a definition test-loads its source, which imports
-  # pandas and numpy (modules/factor/pyworker/runtime-requirements.txt).
-  "${MOOX_FACTOR_PYTHON_BIN:-python3}" -c 'import pandas, numpy' >/dev/null 2>&1 || {
-    echo "moox-factor-mgr requires ${MOOX_FACTOR_PYTHON_BIN:-python3} with pandas and numpy; install modules/factor/pyworker/runtime-requirements.txt" >&2
-    exit 1
-  }
   gateway_service_env_for factor
   runtime_identity_env factor-mgr "${ROOT}/factor-mgr/config/app.yaml"
   start_service "factor-mgr" "${ROOT}/factor-mgr" \

@@ -1,54 +1,29 @@
-# Factor Run-Once Verification
+# 单周期诊断（run-once）
 
-> 以下命令使用当前 scalar `series_tag` 与 `lookback_periods` 契约；真实远端 E2E
-> 验收由发布流程单独执行。
+`moox-factor-engine run-once` 按引擎配置读取一个因子集的一个周期、用表达式引擎计算并写回结果，用于排查单个周期。
+它与常驻引擎走同一条流水线（读取、空洞检查、计算、组装、写入），并同样记入跳过账本；不消费 EventBus。
 
-Storage Gateway、source Dataset 与 Factor target Dataset 需要已经可用。Python 环境需安装
-`pyworker/requirements.txt`。下面使用非 K 线 `nav/benchmark_return` 因子；Bias/CCI
-只是可选模板。
+前提：引擎的 `config/engine.yaml` 与凭据可用；目录快照 `data/engine/catalog.json` 存在，或管理端可达（启动时会尝试同步一次）。
 
 ```bash
-cd modules/factor
-go run ./cmd/cli init --db ./data/factor/factor.db
-go run ./cmd/cli import \
-  --factor-type timeseries \
-  --db ./data/factor/factor.db \
-  --factors-dir ./factors \
-  --file ./factors/ExcessReturn.py \
-  --factor-id excess-return \
-  --input-columns nav,benchmark_return \
-  --outputs excess_return,rolling_rank \
-  --params-json '{"window":2}' \
-  --lookback-periods 2
-go run ./cmd/cli run-once \
-  --config ./config/app.yaml \
-  --space quant \
-  --dataset portfolio_nav \
-  --subject fund-a \
-  --freq 1m \
-  --start-time 2026-07-26T00:00:00Z \
-  --end-time 2026-07-27T00:00:00Z
+cd ~/moox/factor-engine
+./bin/moox-factor-engine run-once \
+  --config config/engine.yaml \
+  --set fset_binance_kline_1m \
+  --period 2026-10-17T08:00:00Z \
+  --factor Bias --factor Cci \
+  --subject BTC-USDT
 ```
 
-命令按当前 subject 匹配 enabled binding，并按 binding 的目标 Dataset 分组，同步完成整个
-`[start_time,end_time)` 范围。范围查询不设置 `series_tag`，因此同一时间点的全部 tag
-会进入 Factor；超过 2000 个不同目标时间点自动分块，且不拆开同一时间点的 tag
-cohort。Python 输出用 `data_time + series_tag` 指定 target Dataset 的完整行身份。
-terminal JSON 的 `elapsed_ms` 是完整读取、计算和写回耗时。
-
-`--config` 提供 DB、Python、worker、factors、Storage Gateway、task timeout 和 retry。
-显式 `--db`、`--factors-dir` 只在调试时覆盖配置。部署包从任意目录运行：
+- `--factor`、`--subject` 可以重复，不写时分别取集合的全部启用成员与全部标的。
+- 结果写入集合的结果数据集；输出里的 `null` 是显式清除，会覆盖该键已有的值。
+- 只想核对数值而不写入时，用 `compare` 子命令：它用新引擎重算一段历史，与结果数据集里已写入的值逐值比较，不写任何结果。
 
 ```bash
-/absolute/deploy/root/bin/moox-factor-run-once \
-  --space quant \
-  --dataset portfolio_nav \
-  --subject fund-a \
-  --freq 1m \
-  --start-time 2026-07-26T00:00:00Z \
-  --end-time 2026-07-27T00:00:00Z \
-  --factors excess-return
+./bin/moox-factor-engine compare \
+  --config config/engine.yaml \
+  --set-file data/engine/catalog.json \
+  --set fset_binance_kline_1m \
+  --start 2026-10-14T00:00:00Z --end 2026-10-17T00:00:00Z \
+  --output report.json
 ```
-
-wrapper 校验部署文件，从部署根解析绝对路径，并只给子进程导出 Factor Gateway 凭证。
-计算结果的 `null` 是显式清除：重跑后 Storage 中同一因子列的旧 double 不再可读。

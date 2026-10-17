@@ -19,7 +19,10 @@ import {
   setFactorMemberStatus,
   setFactorSetStatus,
   updateFactor,
-  updateFactorSet
+  updateFactorSet,
+  validateFactorSpec,
+  previewFactor,
+  listFactorFunctions
 } from "./index";
 
 const call = vi.mocked(callFactor);
@@ -52,23 +55,26 @@ describe("FactorMgr factor-set API", () => {
     expect(rsp.factors[0].factor.factor_id).toBe("f1");
   });
 
-  it("listFactors can request source explicitly", async () => {
+  it("listFactors can request the spec explicitly", async () => {
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factors: [] });
-    await listFactors({ include_source: true });
-    expect(call).toHaveBeenLastCalledWith("ListFactors", { include_source: true });
+    await listFactors({ include_spec: true });
+    expect(call).toHaveBeenLastCalledWith("ListFactors", { include_spec: true });
+  });
+
+  it("validates, previews and lists functions through FactorMgr", async () => {
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, valid: true });
+    await validateFactorSpec("outputs:\n  x: close\n", true);
+    expect(call).toHaveBeenLastCalledWith("ValidateFactorSpec", { spec: "outputs:\n  x: close\n", allow_partial_universe: true });
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, columns: [], rows: [] });
+    await previewFactor({ set_id: "fset_a", spec: "outputs:\n  x: close\n", periods: 10 });
+    expect(call).toHaveBeenLastCalledWith("PreviewFactor", { set_id: "fset_a", spec: "outputs:\n  x: close\n", periods: 10 });
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, functions: [], expr_version: "expr/1" });
+    await listFactorFunctions();
+    expect(call).toHaveBeenLastCalledWith("ListFactorFunctions", {});
   });
 
   it("createFactor payload has no set_id or status", async () => {
-    const factor = {
-      factor_id: "f1",
-      name: "F1",
-      factor_type: "timeseries" as const,
-      source_code: "def compute(df, params, context):\n    return df",
-      input_columns: ["close"],
-      outputs: ["f1"],
-      params_json: "{}",
-      lookback_periods: 1
-    };
+    const factor = { factor_id: "f1", name: "F1", spec: "outputs:\n  f1: close\n" };
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor });
     await createFactor(factor);
     const payload = call.mock.calls.at(-1)?.[1] as { factor: Record<string, unknown> };

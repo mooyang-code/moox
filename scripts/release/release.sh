@@ -65,7 +65,6 @@ mkdir -p \
   "${RELEASE_ROOT}/modules/factor/bin" \
   "${RELEASE_ROOT}/modules/factor/config" \
   "${RELEASE_ROOT}/modules/factor/factors" \
-  "${RELEASE_ROOT}/modules/factor/python-runtime" \
   "${RELEASE_ROOT}/modules/archive/bin" \
   "${RELEASE_ROOT}/modules/archive/config" \
   "${RELEASE_ROOT}/modules/strategy/bin" \
@@ -150,15 +149,11 @@ cp -R "${ROOT}/modules/cloudnode/config/." "${RELEASE_ROOT}/modules/cloudnode/co
 cp -R "${ROOT}/modules/collector/config/." "${RELEASE_ROOT}/modules/collector/config/"
 cp -R "${ROOT}/modules/factor/config/." "${RELEASE_ROOT}/modules/factor/config/"
 cp -R "${ROOT}/modules/factor/factors/." "${RELEASE_ROOT}/modules/factor/factors/"
-cp -R "${ROOT}/packages/pyruntime/python/." "${RELEASE_ROOT}/modules/factor/python-runtime/"
 cp -R "${ROOT}/modules/archive/config/." "${RELEASE_ROOT}/modules/archive/config/"
 cp -R "${ROOT}/modules/strategy/config/." "${RELEASE_ROOT}/modules/strategy/config/"
 find "${RELEASE_ROOT}/modules/strategy" -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
 find "${RELEASE_ROOT}/modules/strategy" -type f \( -name '*.pyc' -o -name '*.sqlite' -o -name '*.db' \) -delete
 cp -R "${ROOT}/modules/trade/config/." "${RELEASE_ROOT}/modules/trade/config/"
-cp -R "${ROOT}/modules/factor/pyworker" "${RELEASE_ROOT}/modules/factor/pyworker"
-find "${RELEASE_ROOT}/modules/factor" -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
-find "${RELEASE_ROOT}/modules/factor" -type f -name '*.pyc' -delete
 cp "${ROOT}/modules/storage/config/trpc_go.primary.yaml" "${RELEASE_ROOT}/modules/storage-primary/config/trpc_go.yaml"
 printf '\n' >> "${RELEASE_ROOT}/modules/storage-primary/config/trpc_go.yaml"
 cat "${ROOT}/modules/storage/config/storage.primary.yaml" >> "${RELEASE_ROOT}/modules/storage-primary/config/trpc_go.yaml"

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -25,7 +24,7 @@ func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
 	for _, factor := range plan.Factors {
 		state, ok := computation.FactorStates[factor.FactorID]
 		if !ok {
-			state = storageio.FactorState{FactorID: factor.FactorID, Status: "degraded", SourceHash: factor.SourceHash, DefinitionHash: domain.DefinitionHash(factor)}
+			state = storageio.FactorState{FactorID: factor.FactorID, Status: "degraded", SourceHash: factor.SpecHash, DefinitionHash: domain.DefinitionHash(factor)}
 		}
 		state.FailedSubjects = uniqueSorted(state.FailedSubjects)
 		outcome.Factors = append(outcome.Factors, state)
@@ -88,10 +87,10 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	}
 	outcome.StageDurations["plan"] = time.Since(planStarted)
 	loaded := LoadResult{Frames: map[string]*storageio.Frame{}, Available: append([]string(nil), plan.Available...)}
-	computation := Computation{Results: map[string]map[string]pyexec.ItemResult{}, FactorStates: map[string]storageio.FactorState{}}
+	computation := Computation{Results: map[string]map[string]ItemResult{}, FactorStates: map[string]storageio.FactorState{}}
 	for _, factor := range plan.Factors {
 		computation.FactorStates[factor.FactorID] = storageio.FactorState{
-			FactorID: factor.FactorID, Status: "complete", SourceHash: factor.SourceHash,
+			FactorID: factor.FactorID, Status: "complete", SourceHash: factor.SpecHash,
 			DefinitionHash: domain.DefinitionHash(factor),
 		}
 	}
@@ -100,6 +99,16 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	if len(plan.Factors) > 0 {
 		stage := time.Now()
 		var err error
+		// 读取之前做内存预检（设计 7.5）：补算超限以资源错误失败；实时周期本期全部因子按计算失败上报，不读取。
+		budgetErr := r.precheckMemory(plan)
+		if budgetErr != nil && plan.Mode == ModeRecalc {
+			return Outcome{StageDurations: outcome.StageDurations}, budgetErr
+		}
+		if budgetErr != nil {
+			log.ErrorContextf(ctx, "factor_memory_budget_exceeded set_id=%s error=%v", plan.Set.SetID, budgetErr)
+			computation = r.failAll(plan, budgetErr)
+			goto assemble
+		}
 		loaded, err = r.Load(ctx, plan)
 		outcome.StageDurations["load"] = time.Since(stage)
 		if err != nil {
@@ -121,6 +130,7 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 		if err != nil {
 			return Outcome{StageDurations: outcome.StageDurations}, err
 		}
+	assemble:
 		stage = time.Now()
 		rows, assembled, assemblyErr := r.AssembleWithReport(plan, loaded, computation)
 		outcome.StageDurations["assemble"] = time.Since(stage)

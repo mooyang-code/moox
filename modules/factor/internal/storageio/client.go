@@ -76,7 +76,7 @@ type FactorState struct {
 	FactorID       string
 	Status         string
 	FailedSubjects []string
-	SourceHash     string
+	SourceHash     string // 填因子定义的 spec_hash；Storage 协议里这个字段仍叫 source_hash
 	DefinitionHash string
 	// GapSubjects 是 FailedSubjects 中因回看窗口 K 线空洞而失败的标的（子集）。
 	GapSubjects []string

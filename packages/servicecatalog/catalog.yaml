@@ -873,6 +873,9 @@ components:
           - GetRecalcJob
           - CancelRecalcJob
           - GetStatus
+          - ValidateFactorSpec
+          - PreviewFactor
+          - ListFactorFunctions
         read_only_methods:
           - GetFactorSet
           - ListFactorSets
@@ -881,6 +884,9 @@ components:
           - ListRecalcJobs
           - GetRecalcJob
           - GetStatus
+          - ValidateFactorSpec
+          - PreviewFactor
+          - ListFactorFunctions
         acl:
           - methods:
               - CreateFactorSet
@@ -902,6 +908,9 @@ components:
               - GetRecalcJob
               - CancelRecalcJob
               - GetStatus
+              - ValidateFactorSpec
+              - PreviewFactor
+              - ListFactorFunctions
             callers:
               - console
               - moox-cli

@@ -7,7 +7,7 @@ type FactorPeriodState struct {
 	FactorID       string
 	Status         string
 	FailedSubjects []string
-	SourceHash     string
+	SpecHash       string
 	DefinitionHash string
 	// GapSubjects 是 FailedSubjects 中因回看窗口 K 线空洞而失败的标的（子集）。
 	GapSubjects []string
@@ -50,8 +50,9 @@ type EngineIdentity struct {
 // EngineStatus is the runtime state an engine reports with each heartbeat.
 type EngineStatus struct {
 	ConsumerRunning bool
-	PythonWorkers   int32
-	PythonBusy      int32
+	ComputeWorkers  int32
+	// ExprVersion 是引擎内置的 expr 语义版本；与管理端不同时两边算出的 definition_hash 不一致。
+	ExprVersion     string
 	Lanes           []LaneStatus
 	RecentRuns      []SetRunSummary
 	CatalogHash     string
