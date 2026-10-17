@@ -59,24 +59,6 @@ func (q *QueryService) ListLatestByViewScopes(ctx context.Context, metricName st
 	return q.messageStore.ListLatestByViewScopes(ctx, metricName, scopes, limit)
 }
 
-func (q *QueryService) History(ctx context.Context, seriesID, serviceName, metricName, labelsJSON string, start, end time.Time, desc bool, limit int) ([]HistoryPoint, error) {
-	if q == nil || q.catalog == nil || q.storage == nil {
-		return nil, ErrMetricsStoreUnavailable
-	}
-	series, err := q.catalog.FindSeries(ctx, seriesID, serviceName, metricName, labelsJSON, 500)
-	if err != nil {
-		return nil, err
-	}
-	if len(series) == 0 {
-		return []HistoryPoint{}, nil
-	}
-	selectors := make([]HistorySelector, 0, len(series))
-	for _, s := range series {
-		selectors = append(selectors, HistorySelectorForSeries(s))
-	}
-	return q.storage.QueryHistorySelectors(ctx, selectors, start, end, desc, limit)
-}
-
 func (q *QueryService) ActiveDatasetSubjects(ctx context.Context, spaceID, datasetID string) (map[string]struct{}, error) {
 	if q == nil || q.storage == nil {
 		// Unit-level metric evaluation can operate on its explicit observations;

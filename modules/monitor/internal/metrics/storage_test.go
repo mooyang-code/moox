@@ -2,13 +2,14 @@ package metrics
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -48,19 +49,13 @@ func (f *fakeMetadata) ListTags(context.Context, *storagepb.ListTagsReq, ...clie
 }
 
 type fakeAccess struct {
-	writes  []*storagepb.RowFieldUpsert
-	readReq *storagepb.ReadTimeSeriesRowsReq
+	writes []*storagepb.RowFieldUpsert
 }
 
 func (f *fakeAccess) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	f.writes = append(f.writes, req.GetRows()...)
 	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
-func (f *fakeAccess) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
-	f.readReq = req
-	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
-}
-
 func metricsStorageConfig() monconfig.MetricsStorageConfig {
 	return monconfig.MetricsStorageConfig{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", WriteBatchSize: 1}
 }
@@ -91,35 +86,6 @@ func TestStorageAdapterValidatesReadOnlySchemaAndWritesBoundedRows(t *testing.T)
 	}
 	if len(a.writes[0].GetAttributes()) != 4 {
 		t.Fatalf("write attributes=%v, want complete metric identity", a.writes[0].GetAttributes())
-	}
-}
-
-func TestStorageAdapterQueryHistorySelectorsUseSeriesIdentity(t *testing.T) {
-	a := &fakeAccess{}
-	adapter := NewStorageAdapter(a, &fakeMetadata{}, metricsStorageConfig())
-	_, err := adapter.QueryHistorySelectors(
-		context.Background(),
-		[]HistorySelector{{SeriesID: "series-1"}},
-		time.Time{},
-		time.Time{},
-		true,
-		10,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(a.readReq.GetSelectors()) != 1 {
-		t.Fatalf("selectors=%d, want 1", len(a.readReq.GetSelectors()))
-	}
-	if a.readReq.GetSpaceId() != "mooxsys" || a.readReq.GetDatasetId() != "dataset_mooxsys_service_metrics" {
-		t.Fatalf("request scope=%s/%s", a.readReq.GetSpaceId(), a.readReq.GetDatasetId())
-	}
-	key := a.readReq.GetSelectors()[0]
-	if key.GetSubjectId() != "series-1" {
-		t.Fatalf("query key=%+v, want series subject", key)
-	}
-	if key.SeriesTag != nil {
-		t.Fatal("metrics history selector must omit series_tag")
 	}
 }
 
@@ -167,13 +133,6 @@ func TestStorageHelpers(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, sortedKeys(map[string]columnContract{"b": {}, "a": {}}))
 	require.NoError(t, storageOK("action", &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}))
 	require.Error(t, storageOK("action", &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "fail"}))
-}
-
-func TestHistorySelectorForSeries(t *testing.T) {
-	selector := HistorySelectorForSeries(MetricSeries{
-		SeriesID: "s1", ServiceName: "svc", InstanceID: "i", MetricName: "cpu", MetricType: "gauge",
-	})
-	assert.Equal(t, "s1", selector.SeriesID)
 }
 
 func TestSchemaStatusNilAdapter(t *testing.T) {

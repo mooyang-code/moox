@@ -1366,24 +1366,20 @@ components:
           - RegisterSeriesSnapshot
           - CommitTimeSeriesBatch
           - WriteFactorRows
-          - ReadFields
+          - ReadRows
           - DeleteDatasetRows
           - RestoreDatasetRows
           - ReadTimeSeriesRows
           - CountTimeSeriesRows
-          - ListHistorySubjects
-          - ReadRecordRows
           - ReportCollectorPeriodCompleted
           - ReportFactorPeriodComputed
           - AppendDatasetSyncPoint
           - GetFactorPeriodComputed
           - WaitViewSyncPoint
         read_only_methods:
-          - ReadFields
+          - ReadRows
           - ReadTimeSeriesRows
           - CountTimeSeriesRows
-          - ListHistorySubjects
-          - ReadRecordRows
           - GetFactorPeriodComputed
         acl:
           - methods:
@@ -1394,13 +1390,11 @@ components:
               - UpsertFields
               - CommitTimeSeriesBatch
               - WriteFactorRows
-              - ReadFields
+              - ReadRows
               - DeleteDatasetRows
               - RestoreDatasetRows
               - ReadTimeSeriesRows
               - CountTimeSeriesRows
-              - ListHistorySubjects
-              - ReadRecordRows
               - ReportCollectorPeriodCompleted
               - ReportFactorPeriodComputed
               - AppendDatasetSyncPoint
@@ -1419,11 +1413,9 @@ components:
             callers:
               - collector
           - methods:
-              - ReadFields
-              - ReadRecordRows
+              - ReadRows
               - ReadTimeSeriesRows
               - CountTimeSeriesRows
-              - ListHistorySubjects
               - WaitViewSyncPoint
               - GetFactorPeriodComputed
             callers:

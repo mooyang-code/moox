@@ -568,3 +568,20 @@ Monitor 的系统指标照常写入；暂停窗口内 crypto 的行与因子结�
 ## 15. 实施记录
 
 （按阶段记录与计划的差异、benchmark 结果和线上验收结果。）
+
+### 阶段 1（2026-10-17，已提交，未发布）
+
+已完成：协议（`ReadTimeSeriesRows` 两种形态 + 游标、`ReadRows`、`RowsCursor`、DataView 的 `pin` / `index` / `min_data_time` / `max_data_time` / `retained_rows_per_series`）、
+DataNode 重写（时间索引读、序列索引归并读、最近 N 根、计数、前缀扫描的 `ReadRows`）、PrimaryStore 统一校验与转发（删除按身份分流、View 解析器、
+`ListHistorySubjects`、`ReadRecordRows`）、View 重建改为按页读取最近 N 根、保留行数记入 DuckDB 索引元数据（`view_meta.rows_per_series`，旧索引补列）、
+删除 `rows_per_series` 模式。`go test ./modules/storage/...` 全部通过，新增测试见 `rows_read_test.go`、`range_read_test.go`。
+
+阶段 4 中随之完成的部分（为了让整个仓库可编译）：Strategy、Monitor（含删除指标历史死代码）、因子（selector 分批 + 游标）、Collector、CLI（`data kline get` 无时间范围取最新
+limit 根，有范围按升序取最早 limit 根；`data rows export` 需要 `--columns`、`--start-time`、`--end-time`）、服务目录方法名与 ACL、旧归档模块的最小适配、模块文档。
+
+与计划的差异：
+- DuckDB 索引内部的 `__moox_attributes` 列没有删除：View 已经不再写入和返回行属性，这一列留空，随下次重建自然不再使用；删除它要同时改引擎的写入、查询、补列与测试，收益很小，推迟。
+- `view_bars` → `view_rows_per_series` 的配置改名没有做（涉及 `moox.toml`、CLI 配置编辑器、skills 文档，纯改名），随阶段 4 的配置清理一起做。
+- 旧归档实现（`modules/archive`、`t_archive_files`、部署脚本与前端运维页）还没有删除，只做了最小适配；删除放在阶段 4 的收尾提交。
+- 事件应用不再带行属性；Bleve 记录型 View 之前只在属性名恰好是已声明列时才会索引属性，没有任何现有 View 依赖它。
+- 没有跑 benchmark（任务 2.5 的 pebble 前后对比），需要在合适的数据量上单独跑。

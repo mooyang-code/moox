@@ -638,11 +638,10 @@ func (f *fakeStoragePrimaryAPI) UpsertFields(_ context.Context, req *storagepb.P
 	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: storageOK(), Keys: []*storagepb.RowKey{f.row.GetKey()}}, nil
 }
 
-func (f *fakeStoragePrimaryAPI) ReadFields(_ context.Context, req *storagepb.PrimaryReadFieldsReq) (*storagepb.PrimaryReadFieldsRsp, error) {
+func (f *fakeStoragePrimaryAPI) ReadRows(_ context.Context, req *storagepb.PrimaryReadRowsReq) (*storagepb.PrimaryReadRowsRsp, error) {
 	f.auth = req.GetAuthInfo()
-	return &storagepb.PrimaryReadFieldsRsp{
-		RetInfo:      storageOK(),
-		Rows:         []*storagepb.RowFieldValues{{Key: f.row.GetKey(), Fields: f.row.GetFields()}},
-		ExistingKeys: []*storagepb.RowKey{f.row.GetKey()},
+	return &storagepb.PrimaryReadRowsRsp{
+		RetInfo: storageOK(),
+		Rows:    []*storagepb.RowFieldValues{{Key: f.row.GetKey(), Fields: f.row.GetFields()}},
 	}, nil
 }

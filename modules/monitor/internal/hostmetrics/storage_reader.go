@@ -115,24 +115,38 @@ func (r *StorageReader) HistoryAt(ctx context.Context, agentID string, start, en
 	return out, nil
 }
 
+// hostDatasetColumns 是各主机数据集读取的字段（与 mergeRow 一致）。区间读取必须指定列。
+func hostDatasetColumns(dataset string, cfg monconfig.HostStorageConfig) []string {
+	switch dataset {
+	case cfg.ResourceDatasetID:
+		return []string{"logical_cores", "cpu_usage_percent", "cpu_usage_available", "memory_total_bytes", "memory_used_bytes", "memory_available_bytes", "memory_usage_percent"}
+	case cfg.FilesystemDatasetID:
+		return []string{"device", "mountpoint", "fs_type", "total_bytes", "used_bytes", "available_bytes", "usage_percent", "read_only"}
+	case cfg.DiskDatasetID:
+		return []string{"device", "read_bytes_total", "write_bytes_total", "read_ops_total", "write_ops_total", "io_time_ms_total", "rate_available", "read_bytes_per_second", "write_bytes_per_second", "read_iops", "write_iops", "utilization_percent"}
+	case cfg.NetworkDatasetID:
+		return []string{"device", "operstate", "receive_bytes_total", "transmit_bytes_total", "receive_errors_total", "transmit_errors_total", "receive_dropped_total", "transmit_dropped_total", "rate_available", "receive_bytes_per_second", "transmit_bytes_per_second", "receive_errors_per_second", "transmit_errors_per_second", "error_rate_available"}
+	}
+	return nil
+}
+
+// scan 按时间升序用游标顺序读完区间，内存中只保留最新的 limit 行。
 func (r *StorageReader) scan(ctx context.Context, dataset, agentID string, start, end time.Time, limit int) ([]*storagepb.TimeSeriesRow, error) {
 	if dataset == "" {
 		return nil, nil
 	}
-	rows := make([]*storagepb.TimeSeriesRow, 0)
-	pageSize := limit
-	if pageSize > maxHistoryPageSize {
-		pageSize = maxHistoryPageSize
-	}
-	for pageNo := uint32(1); ; pageNo++ {
+	columns := hostDatasetColumns(dataset, r.cfg)
+	rows := make([]*storagepb.TimeSeriesRow, 0, min(limit, maxHistoryPageSize))
+	cursor := ""
+	for {
 		rsp, err := r.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-			AuthInfo:  r.auth,
-			SpaceId:   r.cfg.SpaceID,
-			DatasetId: dataset,
-			Selectors: []*storagepb.TimeSeriesSelector{{SpaceId: r.cfg.SpaceID, DatasetId: dataset, SubjectId: agentID, Freq: r.cfg.Frequency}},
-			TimeRange: &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)},
-			Order:     storagepb.SortOrder_SORT_ORDER_DESC,
-			Page:      &commonpb.Page{Page: pageNo, Size: uint32(pageSize)},
+			AuthInfo:    r.auth,
+			SpaceId:     r.cfg.SpaceID,
+			DatasetId:   dataset,
+			Selectors:   []*storagepb.TimeSeriesSelector{{SpaceId: r.cfg.SpaceID, DatasetId: dataset, SubjectId: agentID, Freq: r.cfg.Frequency}},
+			TimeRange:   &storagepb.TimeRange{StartTime: start.UTC().Format(time.RFC3339Nano), EndTime: end.UTC().Format(time.RFC3339Nano)},
+			ColumnNames: columns,
+			Page:        &commonpb.Page{Size: maxHistoryPageSize, Cursor: cursor},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("read host dataset %q: %w", dataset, err)
@@ -144,12 +158,12 @@ func (r *StorageReader) scan(ctx context.Context, dataset, agentID string, start
 			return nil, fmt.Errorf("read host dataset %q: %s", dataset, rsp.GetRetInfo().GetMsg())
 		}
 		rows = append(rows, rsp.GetRows()...)
-		page := rsp.GetPageResult()
-		if page == nil || !page.GetHasMore() {
-			break
+		if len(rows) > limit {
+			rows = append(rows[:0], rows[len(rows)-limit:]...)
 		}
-		if pageNo == ^uint32(0) {
-			return nil, fmt.Errorf("host dataset %q pagination overflow", dataset)
+		cursor = rsp.GetPageResult().GetNextCursor()
+		if cursor == "" {
+			break
 		}
 	}
 	return rows, nil

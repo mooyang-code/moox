@@ -808,15 +808,11 @@ func storageImportUpserts(rows []*pb.TimeSeriesRow) []*pb.RowFieldUpsert {
 			continue
 		}
 		key := row.GetKey()
-		attributes := make(map[string]*pb.TypedValue, len(row.GetAttributes()))
-		for name, value := range row.GetAttributes() {
-			attributes[name] = &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}}
-		}
 		out = append(out, &pb.RowFieldUpsert{
 			Key: &pb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 				SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag(),
 			}}},
-			Fields: row.GetFields(), Attributes: attributes,
+			Fields: row.GetFields(),
 		})
 	}
 	return out

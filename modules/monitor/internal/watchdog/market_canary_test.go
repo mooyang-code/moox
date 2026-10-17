@@ -18,34 +18,44 @@ import (
 
 type canaryReader struct {
 	rows    []*storagepb.TimeSeriesRow
-	request *storagepb.ReadTimeSeriesRowsReq
+	request *storagepb.PrimaryReadRowsReq
 	retInfo *storagepb.RetInfo
 }
 
 type tagFilteringCanaryReader struct {
 	rows    []*storagepb.TimeSeriesRow
-	request *storagepb.ReadTimeSeriesRowsReq
+	request *storagepb.PrimaryReadRowsReq
 }
 
-func (r *tagFilteringCanaryReader) ReadTimeSeriesRows(_ context.Context, request *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+func rowFieldValues(row *storagepb.TimeSeriesRow) *storagepb.RowFieldValues {
+	key := row.GetKey()
+	return &storagepb.RowFieldValues{
+		Key: &storagepb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+			SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag(),
+		}}},
+		Fields: row.GetFields(),
+	}
+}
+
+func (r *tagFilteringCanaryReader) ReadRows(_ context.Context, request *storagepb.PrimaryReadRowsReq, _ ...client.Option) (*storagepb.PrimaryReadRowsRsp, error) {
 	r.request = request
 	wanted := make(map[string]struct{}, len(request.GetKeys()))
 	for _, key := range request.GetKeys() {
-		wanted[key.GetDataTime()+"\n"+key.GetSeriesTag()] = struct{}{}
+		wanted[key.GetTimeSeries().GetDataTime()+"\n"+key.GetTimeSeries().GetSeriesTag()] = struct{}{}
 	}
-	rows := make([]*storagepb.TimeSeriesRow, 0, len(r.rows))
+	rows := make([]*storagepb.RowFieldValues, 0, len(r.rows))
 	for _, row := range r.rows {
 		if _, ok := wanted[row.GetKey().GetDataTime()+"\n"+row.GetKey().GetSeriesTag()]; ok {
-			rows = append(rows, row)
+			rows = append(rows, rowFieldValues(row))
 		}
 	}
-	return &storagepb.ReadTimeSeriesRowsRsp{
+	return &storagepb.PrimaryReadRowsRsp{
 		RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
 		Rows:    rows,
 	}, nil
 }
 
-func (r *canaryReader) ReadTimeSeriesRows(_ context.Context, request *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+func (r *canaryReader) ReadRows(_ context.Context, request *storagepb.PrimaryReadRowsReq, _ ...client.Option) (*storagepb.PrimaryReadRowsRsp, error) {
 	r.request = request
 	retInfo := r.retInfo
 	if retInfo == nil {
@@ -53,15 +63,15 @@ func (r *canaryReader) ReadTimeSeriesRows(_ context.Context, request *storagepb.
 	}
 	wanted := make(map[string]struct{}, len(request.GetKeys()))
 	for _, key := range request.GetKeys() {
-		wanted[key.GetDataTime()] = struct{}{}
+		wanted[key.GetTimeSeries().GetDataTime()] = struct{}{}
 	}
-	rows := make([]*storagepb.TimeSeriesRow, 0, len(r.rows))
+	rows := make([]*storagepb.RowFieldValues, 0, len(r.rows))
 	for _, row := range r.rows {
 		if _, ok := wanted[row.GetKey().GetDataTime()]; ok {
-			rows = append(rows, row)
+			rows = append(rows, rowFieldValues(row))
 		}
 	}
-	return &storagepb.ReadTimeSeriesRowsRsp{
+	return &storagepb.PrimaryReadRowsRsp{
 		RetInfo: retInfo,
 		Rows:    rows,
 	}, nil
@@ -83,16 +93,15 @@ func TestMarketCanaryReadsRealStorageScopeAndEvaluatesClosedBars(t *testing.T) {
 	require.True(t, result.Success)
 	require.Equal(t, "market_canary:market_kline:BTC-USDT:1m:venue:binance", result.CheckID)
 	require.Equal(t, "crypto/market_kline/BTC-USDT/1m/venue:binance", MarketCanaryTarget(config))
-	require.Equal(t, "crypto", reader.request.GetSpaceId())
-	require.Equal(t, "market_kline", reader.request.GetDatasetId())
-	require.Equal(t, "BTC-USDT", reader.request.GetKeys()[0].GetSubjectId())
-	require.Equal(t, "1m", reader.request.GetKeys()[0].GetFreq())
-	require.Equal(t, "venue:binance", reader.request.GetKeys()[0].GetSeriesTag())
+	require.Equal(t, "crypto", reader.request.GetKeys()[0].GetSpaceId())
+	require.Equal(t, "market_kline", reader.request.GetKeys()[0].GetDatasetId())
+	require.Equal(t, "BTC-USDT", reader.request.GetKeys()[0].GetTimeSeries().GetSubjectId())
+	require.Equal(t, "1m", reader.request.GetKeys()[0].GetTimeSeries().GetFreq())
+	require.Equal(t, "venue:binance", reader.request.GetKeys()[0].GetTimeSeries().GetSeriesTag())
 	require.Len(t, reader.request.GetKeys(), 24)
-	require.Equal(t, now.Format(time.RFC3339Nano), reader.request.GetKeys()[0].GetDataTime())
-	require.Equal(t, now.Add(-23*time.Minute).Format(time.RFC3339Nano), reader.request.GetKeys()[23].GetDataTime())
+	require.Equal(t, now.Format(time.RFC3339Nano), reader.request.GetKeys()[0].GetTimeSeries().GetDataTime())
+	require.Equal(t, now.Add(-23*time.Minute).Format(time.RFC3339Nano), reader.request.GetKeys()[23].GetTimeSeries().GetDataTime())
 	require.Equal(t, []string{"close"}, reader.request.GetColumnNames())
-	require.Nil(t, reader.request.GetTimeRange())
 	require.Equal(t, auth, reader.request.GetAuthInfo())
 
 	reader.rows = []*storagepb.TimeSeriesRow{
@@ -142,7 +151,7 @@ func TestMarketCanaryPageDoesNotMixVenuesAtSameTimestamp(t *testing.T) {
 	result := (MarketCanary{Reader: reader, Config: config, Now: func() time.Time { return now }}).Run(t.Context())
 	require.True(t, result.Success)
 	require.Len(t, reader.request.GetKeys(), 24)
-	require.Equal(t, "venue:binance", reader.request.GetKeys()[0].GetSeriesTag())
+	require.Equal(t, "venue:binance", reader.request.GetKeys()[0].GetTimeSeries().GetSeriesTag())
 }
 
 func TestMarketCanaryPreservesStorageRejectionDetail(t *testing.T) {
@@ -265,7 +274,7 @@ func TestMarketCanaryStockCNChecksLatestClosedBucketsAndOHLCV(t *testing.T) {
 	require.True(t, result.Success)
 	require.Equal(t, []string{"open", "high", "low", "close", "volume", "amount", "source_provider"}, reader.request.GetColumnNames())
 	require.Len(t, reader.request.GetKeys(), 3)
-	require.Equal(t, "default", reader.request.GetKeys()[0].GetSeriesTag())
+	require.Equal(t, "default", reader.request.GetKeys()[0].GetTimeSeries().GetSeriesTag())
 }
 
 func TestMarketCanaryStockCNChecksFinalBarDuringPostCloseGrace(t *testing.T) {
@@ -289,7 +298,7 @@ func TestMarketCanaryStockCNChecksFinalBarDuringPostCloseGrace(t *testing.T) {
 	require.NotNil(t, reader.request)
 	foundFinalBar := false
 	for _, key := range reader.request.GetKeys() {
-		if key.GetDataTime() == "2026-08-28T06:59:00Z" && key.GetSeriesTag() == "default" {
+		if key.GetTimeSeries().GetDataTime() == "2026-08-28T06:59:00Z" && key.GetTimeSeries().GetSeriesTag() == "default" {
 			foundFinalBar = true
 			break
 		}

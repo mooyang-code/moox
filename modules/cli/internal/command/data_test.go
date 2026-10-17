@@ -115,7 +115,7 @@ func TestExportRowsRemotePropagatesGatewayError(t *testing.T) {
 		w.Write([]byte("fail"))
 	})}
 	defer server.Close()
-	_, err := exportRowsRemote(context.Background(), server, &pb.ReadTimeSeriesRowsReq{})
+	_, err := exportRowsPaged(context.Background(), server, &pb.ReadTimeSeriesRowsReq{}, 10)
 	require.Error(t, err)
 }
 

@@ -251,8 +251,8 @@ func TestDeployedArchiveConsumesRealStorageOutbox(t *testing.T) {
 		keys = append(keys, row.GetKey())
 	}
 	require.Eventually(t, func() bool {
-		readRsp, readErr := invokeArchiveStorage[storagepb.PrimaryReadFieldsRsp](t.Context(), gateway, "trpc.moox.storage.PrimaryStore", "ReadFields", &storagepb.PrimaryReadFieldsReq{
-			AuthInfo: auth, Keys: keys, FieldIds: []string{"open", "high", "low", "close", "volume"},
+		readRsp, readErr := invokeArchiveStorage[storagepb.PrimaryReadRowsRsp](t.Context(), gateway, "trpc.moox.storage.PrimaryStore", "ReadRows", &storagepb.PrimaryReadRowsReq{
+			AuthInfo: auth, Keys: keys, ColumnNames: []string{"open", "high", "low", "close", "volume"},
 		})
 		if readErr != nil || readRsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return false

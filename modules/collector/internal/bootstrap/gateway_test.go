@@ -271,11 +271,11 @@ func (w *collectorGatewayWire) ReportCollectorPeriodCompleted(ctx context.Contex
 	return &storagepb.ReportCollectorPeriodCompletedRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (w *collectorGatewayWire) ReadFields(ctx context.Context, request *storagepb.PrimaryReadFieldsReq) (*storagepb.PrimaryReadFieldsRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "ReadFields", request); err != nil {
+func (w *collectorGatewayWire) ReadRows(ctx context.Context, request *storagepb.PrimaryReadRowsReq) (*storagepb.PrimaryReadRowsRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.storage.PrimaryStore", "ReadRows", request); err != nil {
 		return nil, err
 	}
-	return &storagepb.PrimaryReadFieldsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
+	return &storagepb.PrimaryReadRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
 func (w *collectorGatewayWire) WaitViewSyncPoint(ctx context.Context, request *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error) {
@@ -448,8 +448,8 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 		_, err := adapter.ReportCollectorPeriodCompleted(t.Context(), &storagepb.ReportCollectorPeriodCompletedReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
-	t.Run("ReadFields", func(t *testing.T) {
-		_, err := adapter.ReadFields(t.Context(), &storagepb.PrimaryReadFieldsReq{AuthInfo: auth})
+	t.Run("ReadRows", func(t *testing.T) {
+		_, err := adapter.ReadRows(t.Context(), &storagepb.PrimaryReadRowsReq{AuthInfo: auth})
 		require.NoError(t, err)
 	})
 	t.Run("WaitViewSyncPoint", func(t *testing.T) {

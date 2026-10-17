@@ -32,7 +32,7 @@ type periodStorageAccess interface {
 // derived-kline worker. It lives beside the common market writer so resampling
 // does not need to import a particular exchange package.
 type ResampleStorage interface {
-	ReadFields(context.Context, []*storagepb.RowKey, []string, []string) ([]*storagepb.RowFieldValues, error)
+	ReadRows(context.Context, []*storagepb.RowKey, []string, []string) ([]*storagepb.RowFieldValues, error)
 	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
 }
 
@@ -158,15 +158,15 @@ func (w *storageWriter) ReportCollectorPeriodCompleted(ctx context.Context, spac
 	})
 }
 
-func (w *storageWriter) ReadFields(ctx context.Context, keys []*storagepb.RowKey, fieldIDs, attributeKeys []string) ([]*storagepb.RowFieldValues, error) {
+func (w *storageWriter) ReadRows(ctx context.Context, keys []*storagepb.RowKey, fieldIDs, attributeKeys []string) ([]*storagepb.RowFieldValues, error) {
 	if len(keys) == 0 {
 		return nil, fmt.Errorf("read fields: keys are required")
 	}
 	fieldIDs = expandResampleFieldIDs(keys, fieldIDs)
-	var response *storagepb.PrimaryReadFieldsRsp
+	var response *storagepb.PrimaryReadRowsRsp
 	err := w.runRPC(ctx, func() error {
 		var err error
-		response, err = w.access.ReadFields(ctx, &storagepb.PrimaryReadFieldsReq{AuthInfo: w.authInfo, Keys: keys, FieldIds: fieldIDs, AttributeKeys: attributeKeys})
+		response, err = w.access.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{AuthInfo: w.authInfo, Keys: keys, ColumnNames: fieldIDs, AttributeKeys: attributeKeys})
 		if err != nil {
 			return fmt.Errorf("read fields: %w", err)
 		}

@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -16,12 +17,31 @@ type retInfoResponse interface {
 	GetRetInfo() *pb.RetInfo
 }
 
-func exportRowsRemote(ctx context.Context, gateway gatewayclient.Invoker, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
-	rsp := &pb.ReadTimeSeriesRowsRsp{}
-	if err := postStorage(ctx, gateway, accessServiceName, "ReadTimeSeriesRows", req, rsp); err != nil {
-		return nil, err
+// exportRowsPaged 按游标顺序读完时间区间，最多导出 maxRows 行；达到上限时停止并在标准错误提示还有更多数据。
+func exportRowsPaged(ctx context.Context, gateway gatewayclient.Invoker, req *pb.ReadTimeSeriesRowsReq, maxRows uint32) (*pb.ReadTimeSeriesRowsRsp, error) {
+	if maxRows == 0 {
+		maxRows = 1000
 	}
-	return rsp, nil
+	out := &pb.ReadTimeSeriesRowsRsp{}
+	cursor := ""
+	for {
+		page := proto.Clone(req).(*pb.ReadTimeSeriesRowsReq)
+		page.Page = &pb.Page{Size: min(maxRows-uint32(len(out.Rows)), 2000), Cursor: cursor}
+		rsp := &pb.ReadTimeSeriesRowsRsp{}
+		if err := postStorage(ctx, gateway, accessServiceName, "ReadTimeSeriesRows", page, rsp); err != nil {
+			return nil, err
+		}
+		out.Rows = append(out.Rows, rsp.GetRows()...)
+		cursor = rsp.GetPageResult().GetNextCursor()
+		if cursor == "" {
+			return out, nil
+		}
+		if uint32(len(out.Rows)) >= maxRows {
+			fmt.Fprintf(os.Stderr, "已导出 %d 行，达到 --page-size 上限，区间内还有更多数据\n", len(out.Rows))
+			out.PageResult = &pb.PageResult{HasMore: true, NextCursor: cursor}
+			return out, nil
+		}
+	}
 }
 
 func postStorage(ctx context.Context, gateway gatewayclient.Invoker, service string, method string, req proto.Message, rsp proto.Message) error {

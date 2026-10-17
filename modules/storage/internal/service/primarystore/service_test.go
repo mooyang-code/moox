@@ -645,7 +645,7 @@ func TestPrimaryReadPreservesRequestOrderAcrossDatasets(t *testing.T) {
 	}
 }
 
-func TestPrimaryReadFieldsUsesOneSnapshotAcrossDatasetGroups(t *testing.T) {
+func TestPrimaryReadRowsUsesOneSnapshotAcrossDatasetGroups(t *testing.T) {
 	provider := &mutableSnapshotProvider{current: &testRequestSnapshot{generation: "generation-a"}}
 	var generations []string
 	node := &recordingNode{
@@ -712,7 +712,7 @@ func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 	}
 }
 
-func TestPrimaryReadFieldsReturnsResolvedLatestRecordVersion(t *testing.T) {
+func TestPrimaryReadRowsReturnsResolvedLatestRecordVersion(t *testing.T) {
 	node, err := datanode.NewService(datanode.Options{
 		NodeID: "node-a", AuthSecret: "node-secret",
 		Pebble: pebble.Options{NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node")},

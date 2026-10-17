@@ -39,7 +39,7 @@ type MarketCanaryConfig struct {
 }
 
 type TimeSeriesReader interface {
-	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
+	ReadRows(context.Context, *storagepb.PrimaryReadRowsReq, ...client.Option) (*storagepb.PrimaryReadRowsRsp, error)
 }
 
 type MarketCanary struct {
@@ -183,9 +183,8 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		return result
 	}
 	startedAt := time.Now()
-	rsp, err := c.Reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-		AuthInfo: c.AuthInfo,
-		SpaceId:  config.SpaceID, DatasetId: config.DatasetID,
+	rsp, err := c.Reader.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{
+		AuthInfo:    c.AuthInfo,
 		Keys:        recentMarketCanaryKeys(config, storageFrequency, candidateTimes),
 		ColumnNames: []string{"close"},
 	})
@@ -198,7 +197,7 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		result.ErrorMessage = storageRejectionError(rsp.GetRetInfo())
 		return result
 	}
-	bars, err := decodeMarketBars(rsp.GetRows(), *config.SeriesTag)
+	bars, err := decodeMarketBars(timeSeriesRows(rsp.GetRows()), *config.SeriesTag)
 	if err != nil {
 		result.ErrorMessage = err.Error()
 		return result
@@ -300,8 +299,8 @@ func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult,
 		return healthyIdleResult(result)
 	}
 	startedAt := time.Now()
-	rsp, err := c.Reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-		AuthInfo: c.AuthInfo, SpaceId: config.SpaceID, DatasetId: config.DatasetID,
+	rsp, err := c.Reader.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{
+		AuthInfo:    c.AuthInfo,
 		Keys:        recentMarketCanaryKeys(config, "1m", expected),
 		ColumnNames: []string{"open", "high", "low", "close", "volume", "amount", "source_provider"},
 	})
@@ -314,7 +313,7 @@ func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult,
 		result.ErrorMessage = storageRejectionError(rsp.GetRetInfo())
 		return result
 	}
-	bars, err := decodeStockMarketBars(rsp.GetRows(), *config.SeriesTag)
+	bars, err := decodeStockMarketBars(timeSeriesRows(rsp.GetRows()), *config.SeriesTag)
 	if err != nil {
 		result.ErrorMessage = err.Error()
 		return result
@@ -483,9 +482,8 @@ func (c MarketCanary) ProbeStorageAuth(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("invalid market canary time window: %w", err)
 	}
-	rsp, err := c.Reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-		AuthInfo: c.AuthInfo,
-		SpaceId:  config.SpaceID, DatasetId: config.DatasetID,
+	rsp, err := c.Reader.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{
+		AuthInfo:    c.AuthInfo,
 		Keys:        recentMarketCanaryKeys(config, frequency, times),
 		ColumnNames: []string{"close"},
 	})
@@ -523,16 +521,35 @@ func marketCanaryThresholdDetails(previous, current marketBar, priceReturn float
 	return string(raw)
 }
 
-func recentMarketCanaryKeys(config MarketCanaryConfig, frequency string, times []time.Time) []*storagepb.TimeSeriesKey {
-	keys := make([]*storagepb.TimeSeriesKey, 0, len(times))
+func recentMarketCanaryKeys(config MarketCanaryConfig, frequency string, times []time.Time) []*storagepb.RowKey {
+	keys := make([]*storagepb.RowKey, 0, len(times))
 	for _, at := range times {
-		keys = append(keys, &storagepb.TimeSeriesKey{
+		keys = append(keys, &storagepb.RowKey{
 			SpaceId: config.SpaceID, DatasetId: config.DatasetID,
-			SubjectId: config.SubjectID, Freq: frequency,
-			DataTime: at.Format(time.RFC3339Nano), SeriesTag: *config.SeriesTag,
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+				SubjectId: config.SubjectID, Freq: frequency,
+				DataTime: at.Format(time.RFC3339Nano), SeriesTag: *config.SeriesTag,
+			}},
 		})
 	}
 	return keys
+}
+
+// timeSeriesRows 把精确读取返回的行（只含存在的行）转成解码用的时序行。
+func timeSeriesRows(rows []*storagepb.RowFieldValues) []*storagepb.TimeSeriesRow {
+	out := make([]*storagepb.TimeSeriesRow, 0, len(rows))
+	for _, row := range rows {
+		key := row.GetKey().GetTimeSeries()
+		if key == nil {
+			out = append(out, &storagepb.TimeSeriesRow{Fields: row.GetFields()})
+			continue
+		}
+		out = append(out, &storagepb.TimeSeriesRow{
+			Key:    &storagepb.TimeSeriesKey{SpaceId: row.GetKey().GetSpaceId(), DatasetId: row.GetKey().GetDatasetId(), SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag()},
+			Fields: row.GetFields(),
+		})
+	}
+	return out
 }
 
 func marketCanaryCandidateCount(freshness, interval time.Duration) (int, error) {

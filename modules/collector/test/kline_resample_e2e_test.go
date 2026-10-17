@@ -41,7 +41,7 @@ type resampleE2EPrimary struct {
 	writes  int
 }
 
-func (p *resampleE2EPrimary) ReadFields(_ context.Context, keys []*storagepb.RowKey, _ []string, attrs []string) ([]*storagepb.RowFieldValues, error) {
+func (p *resampleE2EPrimary) ReadRows(_ context.Context, keys []*storagepb.RowKey, _ []string, attrs []string) ([]*storagepb.RowFieldValues, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	result := make([]*storagepb.RowFieldValues, 0, len(keys))

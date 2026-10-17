@@ -59,6 +59,7 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 		endTime    string
 		timeout    time.Duration
 		output     string
+		columns    []string
 	)
 	cmd := &cobra.Command{
 		Use:          "get",
@@ -113,11 +114,24 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 					Freq:      selection.Interval,
 					SeriesTag: &seriesTag,
 				}},
-				TimeRange: &pb.TimeRange{StartTime: startTime, EndTime: endTime},
-				Order:     pb.SortOrder_SORT_ORDER_DESC,
-				Page:      &pb.Page{Page: 1, Size: limit},
-				SpaceId:   selection.SpaceID,
-				DatasetId: selection.DatasetID,
+				ColumnNames: klineColumns(columns),
+				Page:        &pb.Page{Size: limit},
+				SpaceId:     selection.SpaceID,
+				DatasetId:   selection.DatasetID,
+			}
+			if startTime == "" && endTime == "" {
+				// 没有给时间范围：返回该序列最新的 limit 根（从新到旧）。
+				req.LatestPerSeries = limit
+			} else {
+				// 给了时间范围：从起点起按时间升序返回最多 limit 根；缺省的一端分别取最早和当前时间。
+				start, end := startTime, endTime
+				if start == "" {
+					start = "1970-01-01T00:00:00Z"
+				}
+				if end == "" {
+					end = time.Now().UTC().Format(time.RFC3339)
+				}
+				req.TimeRange = &pb.TimeRange{StartTime: start, EndTime: end}
 			}
 			rpcCtx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
@@ -149,10 +163,11 @@ func newDataKlineGetCmd(deps dataKlineDeps) *cobra.Command {
 	cmd.Flags().StringVar(&exchange, "exchange", "", "交易所；省略时使用数据类型配置的默认值")
 	cmd.Flags().StringVar(&symbol, "symbol", "", "交易标的，例如 BTC-USDT")
 	cmd.Flags().StringVar(&interval, "interval", "1m", "K 线周期")
-	cmd.Flags().Uint32Var(&limit, "limit", 100, "返回条数，范围 1..1000")
+	cmd.Flags().Uint32Var(&limit, "limit", 100, "返回条数，范围 1..1000；不给时间范围时是最新的 limit 根，给了时间范围时是范围内最早的 limit 根")
 	cmd.Flags().StringVar(&startTime, "start-time", "", "RFC3339 起始时间")
 	cmd.Flags().StringVar(&endTime, "end-time", "", "RFC3339 结束时间")
 	cmd.Flags().DurationVar(&timeout, "timeout", 15*time.Second, "RPC 超时时间，必须大于 0")
+	cmd.Flags().StringSliceVar(&columns, "columns", nil, "返回的列，逗号分隔；默认 open,high,low,close,volume")
 	cmd.Flags().StringVar(&output, "output", "", "输出 JSON 文件；为空则输出到 stdout")
 	_ = cmd.MarkFlagRequired("data-type")
 	_ = cmd.MarkFlagRequired("symbol")
@@ -264,4 +279,12 @@ func defaultSkillDataKlineDeps() dataKlineDeps {
 		}
 		return storageGateway{gateway: gateway}, gateway, nil
 	}}
+}
+
+// klineColumns 返回 K 线读取的列：用户没有指定时用标准行情列。
+func klineColumns(columns []string) []string {
+	if len(columns) > 0 {
+		return columns
+	}
+	return []string{"open", "high", "low", "close", "volume"}
 }

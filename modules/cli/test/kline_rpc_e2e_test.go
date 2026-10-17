@@ -61,7 +61,6 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 	require.Len(t, response.GetRows(), 1)
 	require.Equal(t, "BTC-USDT", response.GetRows()[0].GetKey().GetSubjectId())
 	require.Equal(t, "2026-08-28T12:34:00Z", response.GetRows()[0].GetKey().GetDataTime())
-	require.True(t, response.GetComplete())
 
 	select {
 	case req := <-storage.requests:
@@ -144,7 +143,6 @@ func (stub *klineStorageStub) ReadTimeSeriesRows(_ context.Context, req *pb.Read
 			SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", SubjectId: "BTC-USDT",
 			Freq: "1m", SeriesTag: "venue:binance", DataTime: "2026-08-28T12:34:00Z",
 		}}},
-		Complete: true,
 	}, nil
 }
 

@@ -91,9 +91,9 @@ func TestHostMetricDirectStorageRoundTrip(t *testing.T) {
 			DataTime: observed.Format(time.RFC3339Nano),
 		}},
 	}
-	rawRsp, err := primary.ReadFields(ctx, &storagepb.PrimaryReadFieldsReq{
+	rawRsp, err := primary.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{
 		AuthInfo: auth, Keys: []*storagepb.RowKey{resourceKey},
-		FieldIds: []string{
+		ColumnNames: []string{
 			"agent_id", "logical_cores", "cpu_usage_percent", "cpu_usage_available",
 			"memory_total_bytes", "memory_used_bytes", "memory_available_bytes", "memory_usage_percent",
 		},

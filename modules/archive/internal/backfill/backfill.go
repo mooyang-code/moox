@@ -69,6 +69,7 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 	}
 	selector := &storagepb.TimeSeriesSelector{SpaceId: plan.SpaceID, DatasetId: plan.DatasetID, SubjectId: plan.SubjectID, Freq: plan.Freq, SeriesTag: plan.SeriesTag}
 	page := uint32(1)
+	cursor := ""
 	total := 0
 	for {
 		rsp := &storagepb.ReadTimeSeriesRowsRsp{}
@@ -79,21 +80,15 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 				StartTime: start.UTC().Format(time.RFC3339Nano),
 				EndTime:   end.UTC().Format(time.RFC3339Nano),
 			},
-			Order: storagepb.SortOrder_SORT_ORDER_ASC,
-			Page:  &commonpb.Page{Page: page, Size: 500},
+			// 旧实现随归档重做一起删除；这里只保证按新的游标接口可编译、可运行。
+			ColumnNames: backfillColumns,
+			Page:        &commonpb.Page{Size: 500, Cursor: cursor},
 		}, rsp)
 		if err != nil {
 			return total, err
 		}
 		if rsp == nil || rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 			return total, fmt.Errorf("storage read failed")
-		}
-		if !rsp.GetComplete() {
-			return total, fmt.Errorf(
-				"source view is incomplete for %s/%s subject=%s freq=%s tag=%q coverage=[%s,%s)",
-				plan.SpaceID, plan.DatasetID, plan.SubjectID, plan.Freq, valueOrWildcard(plan.SeriesTag),
-				rsp.GetServedIndexedFrom(), rsp.GetServedIndexedTo(),
-			)
 		}
 		patches, err := rowsToPatches(rsp.GetRows(), BackfillWrittenAt)
 		if err != nil {
@@ -109,7 +104,8 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 				total += len(patches)
 			}
 		}
-		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() {
+		cursor = rsp.GetPageResult().GetNextCursor()
+		if cursor == "" {
 			break
 		}
 		page++
@@ -123,6 +119,9 @@ func (b *Backfiller) Run(ctx context.Context, plan Plan) (int, error) {
 // BackfillWrittenAt 是回填补丁的字段版本：回填只是低优先级补缺。异步 View 可能仍返回旧值，
 // 用当前时间做版本会盖掉已归档的较新真实数据，并让之后重投的真实事件因“更早”而被忽略。
 // 取最小的非零时间：只填补缺失字段，保留已有字段版本与删除墓碑，后到的真实事件可以覆盖回填值。
+// backfillColumns 是旧归档补全读取的 K 线列（Storage 区间读取必须指定列）。
+var backfillColumns = []string{"open", "high", "low", "close", "volume"}
+
 var BackfillWrittenAt = time.Unix(0, 1).UTC()
 
 func valueOrWildcard(value *string) string {
@@ -175,9 +174,6 @@ func rowsToPatches(rows []*storagepb.TimeSeriesRow, writtenAt time.Time) ([]doma
 			columns[field.GetFieldId()] = scalar
 		}
 		attrs := map[string]string{}
-		for k, v := range row.GetAttributes() {
-			attrs[k] = v
-		}
 		out = append(out, domain.RowPatch{Partition: domain.PartitionKey{SpaceID: key.GetSpaceId(), DatasetID: key.GetDatasetId(), SubjectID: key.GetSubjectId(), Freq: key.GetFreq(), SeriesTag: key.GetSeriesTag(), Month: domain.MonthOf(t)}, DataTime: t.UTC(), Attributes: attrs, WrittenAt: writtenAt, Columns: columns})
 	}
 	return out, nil

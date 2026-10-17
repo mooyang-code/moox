@@ -65,7 +65,7 @@ func (*storageOperationsWire) ReadTimeSeriesRows(ctx context.Context, req *pb.Re
 	if err := storageOperationAuth(ctx, req.GetAuthInfo(), "moox-cli-data-export"); err != nil {
 		return nil, err
 	}
-	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{}, Complete: true, Rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "prices", SubjectId: "BTC-USDT"}}}}, nil
+	return &pb.ReadTimeSeriesRowsRsp{RetInfo: &pb.RetInfo{}, Rows: []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{SpaceId: "crypto", DatasetId: "prices", SubjectId: "BTC-USDT"}}}}, nil
 }
 
 func (w *storageOperationsWire) UpsertFields(ctx context.Context, req *pb.PrimaryUpsertFieldsReq) (*pb.PrimaryUpsertFieldsRsp, error) {
@@ -137,7 +137,7 @@ func TestStorageOperationsUseSSHNativeGatewayAndIndependentRoleAuth(t *testing.T
 	require.NoError(t, json.Unmarshal(run("metadata", "import", "--file", seed, "--manifest", manifest), &imported))
 	require.Equal(t, float64(1), imported["applied"])
 	var exported map[string]any
-	require.NoError(t, json.Unmarshal(run("data", "rows", "export", "--file", manifest, "--space", "crypto", "--dataset", "prices", "--subject", "BTC-USDT"), &exported))
+	require.NoError(t, json.Unmarshal(run("data", "rows", "export", "--file", manifest, "--space", "crypto", "--dataset", "prices", "--subject", "BTC-USDT", "--columns", "close", "--start-time", "2026-10-01T00:00:00Z", "--end-time", "2026-10-02T00:00:00Z"), &exported))
 	require.Len(t, exported["rows"], 1)
 	csv := filepath.Join(dir, "prices.csv")
 	require.NoError(t, os.WriteFile(csv, []byte("time,close\n2026-10-09T00:00:00Z,12.5\n"), 0600))

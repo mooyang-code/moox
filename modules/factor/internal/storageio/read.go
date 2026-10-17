@@ -9,12 +9,14 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"google.golang.org/protobuf/proto"
 )
 
 const readPageSize = 2000
 
-const earliestPeriodSelectorBatchSize = 128
+// readSelectorBatchSize 是 Storage 单次读取允许的 selector 上限。
+const readSelectorBatchSize = 100
+
+const earliestPeriodSelectorBatchSize = readSelectorBatchSize
 
 func (c *Client) EarliestPeriod(ctx context.Context, spaceID, datasetID, freq string, subjects, columns []string) (time.Time, bool, error) {
 	if err := c.primaryReady("read earliest dataset period"); err != nil {
@@ -48,9 +50,9 @@ func (c *Client) EarliestPeriod(ctx context.Context, spaceID, datasetID, freq st
 		}
 		rsp, callErr := c.primary.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
 			AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, Selectors: selectors,
-			TimeRange: &storagepb.TimeRange{StartTime: "0001-01-01T00:00:00Z", EndTime: end.Format(time.RFC3339Nano)},
-			Order:     storagepb.SortOrder_SORT_ORDER_ASC, ColumnNames: columns,
-			Page: &commonpb.Page{Page: 1, Size: 1},
+			TimeRange:   &storagepb.TimeRange{StartTime: "0001-01-01T00:00:00Z", EndTime: end.Format(time.RFC3339Nano)},
+			ColumnNames: columns,
+			Page:        &commonpb.Page{Size: 1},
 		})
 		if callErr != nil {
 			return time.Time{}, false, rpcError("read earliest dataset period", callErr)
@@ -110,81 +112,69 @@ func (c *Client) ReadWindow(ctx context.Context, req ReadRequest) (map[string]*F
 		return frames, nil
 	}
 
-	selectors := make([]*storagepb.TimeSeriesSelector, 0, len(subjects))
-	for _, subject := range subjects {
-		selectors = append(selectors, &storagepb.TimeSeriesSelector{
-			SpaceId: req.SpaceID, DatasetId: req.DatasetID, SubjectId: subject, Freq: req.Freq,
-		})
-	}
 	timeRange := &storagepb.TimeRange{
 		StartTime: req.Start.UTC().Format(time.RFC3339Nano),
 		EndTime:   req.End.UTC().Format(time.RFC3339Nano),
 	}
-	var afterKey []byte
-	for page := 1; ; page++ {
-		pageCtx, cancel := ctx, context.CancelFunc(func() {})
-		if req.PageTimeout > 0 {
-			pageCtx, cancel = context.WithTimeout(ctx, req.PageTimeout)
+	// Storage 单次最多 100 个 selector：按批顺序读取，每批用游标翻页读完。
+	for offset := 0; offset < len(subjects); offset += readSelectorBatchSize {
+		batch := subjects[offset:min(offset+readSelectorBatchSize, len(subjects))]
+		selectors := make([]*storagepb.TimeSeriesSelector, 0, len(batch))
+		for _, subject := range batch {
+			selectors = append(selectors, &storagepb.TimeSeriesSelector{
+				SpaceId: req.SpaceID, DatasetId: req.DatasetID, SubjectId: subject, Freq: req.Freq,
+			})
 		}
-		rsp, callErr := c.primary.ReadTimeSeriesRows(pageCtx, &storagepb.ReadTimeSeriesRowsReq{
-			AuthInfo: c.auth, SpaceId: req.SpaceID, DatasetId: req.DatasetID,
-			Selectors: selectors, TimeRange: timeRange, Order: storagepb.SortOrder_SORT_ORDER_ASC,
-			ColumnNames: columns, Page: &commonpb.Page{Page: 1, Size: readPageSize},
-			AfterKey: append([]byte(nil), afterKey...),
-		})
-		cancel()
-		if callErr != nil {
-			return nil, rpcError("read time-series window", callErr)
-		}
-		if rsp == nil {
-			return nil, fmt.Errorf("%w: read time-series window returned an empty response", ErrInfra)
-		}
-		if retErr := readResponseError("read time-series window", rsp.GetRetInfo()); retErr != nil {
-			return nil, retErr
-		}
-		rows := rsp.GetRows()
-		for _, row := range rows {
-			if row == nil || row.GetKey() == nil {
-				return nil, fmt.Errorf("read time-series window returned a row without identity")
+		cursor := ""
+		for page := 1; ; page++ {
+			pageCtx, cancel := ctx, context.CancelFunc(func() {})
+			if req.PageTimeout > 0 {
+				pageCtx, cancel = context.WithTimeout(ctx, req.PageTimeout)
 			}
-			frame, ok := frames[row.GetKey().GetSubjectId()]
-			if !ok {
-				return nil, fmt.Errorf("read time-series window returned unexpected subject %q", row.GetKey().GetSubjectId())
+			rsp, callErr := c.primary.ReadTimeSeriesRows(pageCtx, &storagepb.ReadTimeSeriesRowsReq{
+				AuthInfo: c.auth, SpaceId: req.SpaceID, DatasetId: req.DatasetID,
+				Selectors: selectors, TimeRange: timeRange,
+				ColumnNames: columns, Page: &commonpb.Page{Size: readPageSize, Cursor: cursor},
+			})
+			cancel()
+			if callErr != nil {
+				return nil, rpcError("read time-series window", callErr)
 			}
-			dataTime, parseErr := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
-			if parseErr != nil {
-				return nil, fmt.Errorf("parse row data_time %q: %w", row.GetKey().GetDataTime(), parseErr)
+			if rsp == nil {
+				return nil, fmt.Errorf("%w: read time-series window returned an empty response", ErrInfra)
 			}
-			values, decodeErr := decodeFields(row.GetFields(), columns)
-			if decodeErr != nil {
-				return nil, decodeErr
+			if retErr := readResponseError("read time-series window", rsp.GetRetInfo()); retErr != nil {
+				return nil, retErr
 			}
-			frame.Rows = append(frame.Rows, append([]any{dataTime.UTC(), row.GetKey().GetSeriesTag()}, values...))
-		}
-		pageResult := rsp.GetPageResult()
-		if pageResult == nil || !pageResult.GetHasMore() {
-			break
-		}
-		if len(rows) == 0 {
-			return nil, fmt.Errorf("%w: Storage reported another page without returning rows", ErrInfra)
-		}
-		last := rows[len(rows)-1]
-		key, keyErr := proto.Marshal(&storagepb.RowKey{
-			SpaceId: req.SpaceID, DatasetId: req.DatasetID,
-			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-				SubjectId: last.GetKey().GetSubjectId(), Freq: last.GetKey().GetFreq(),
-				DataTime: last.GetKey().GetDataTime(), SeriesTag: last.GetKey().GetSeriesTag(),
-			}},
-		})
-		if keyErr != nil {
-			return nil, fmt.Errorf("encode time-series page cursor: %w", keyErr)
-		}
-		if string(key) == string(afterKey) {
-			return nil, fmt.Errorf("%w: Storage repeated the time-series page cursor", ErrInfra)
-		}
-		afterKey = key
-		if page > 100000 {
-			return nil, fmt.Errorf("%w: Storage pagination exceeded the page limit", ErrInfra)
+			for _, row := range rsp.GetRows() {
+				if row == nil || row.GetKey() == nil {
+					return nil, fmt.Errorf("read time-series window returned a row without identity")
+				}
+				frame, ok := frames[row.GetKey().GetSubjectId()]
+				if !ok {
+					return nil, fmt.Errorf("read time-series window returned unexpected subject %q", row.GetKey().GetSubjectId())
+				}
+				dataTime, parseErr := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime())
+				if parseErr != nil {
+					return nil, fmt.Errorf("parse row data_time %q: %w", row.GetKey().GetDataTime(), parseErr)
+				}
+				values, decodeErr := decodeFields(row.GetFields(), columns)
+				if decodeErr != nil {
+					return nil, decodeErr
+				}
+				frame.Rows = append(frame.Rows, append([]any{dataTime.UTC(), row.GetKey().GetSeriesTag()}, values...))
+			}
+			next := rsp.GetPageResult().GetNextCursor()
+			if next == "" {
+				break
+			}
+			if next == cursor {
+				return nil, fmt.Errorf("%w: Storage repeated the time-series page cursor", ErrInfra)
+			}
+			cursor = next
+			if page > 100000 {
+				return nil, fmt.Errorf("%w: Storage pagination exceeded the page limit", ErrInfra)
+			}
 		}
 	}
 	for _, frame := range frames {

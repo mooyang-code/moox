@@ -35,7 +35,6 @@ func TestRowsToPatches(t *testing.T) {
 			SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC", Freq: "1m",
 			DataTime: "2026-01-02T03:04:05Z", SeriesTag: "venue:okx",
 		},
-		Attributes: map[string]string{"source": "live"},
 		Fields: []*storagepb.FieldValue{{
 			FieldId: "close",
 			Value:   &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 1.25}},
@@ -132,51 +131,6 @@ func TestBackfillerAbsentSeriesTagUsesWildcardSelector(t *testing.T) {
 	require.Nil(t, access.request.GetSelectors()[0].SeriesTag)
 }
 
-func TestBackfillerRejectsIncompleteViewBeforeJournalAppend(t *testing.T) {
-	store, err := journal.Open(t.TempDir())
-	require.NoError(t, err)
-	defer store.Close()
-	root := t.TempDir()
-	w := writer.New(store, root, 1024)
-	row := &storagepb.TimeSeriesRow{
-		Key: &storagepb.TimeSeriesKey{
-			SpaceId: "crypto", DatasetId: "kline", SubjectId: "BTC", Freq: "1h",
-			DataTime: "2026-01-02T00:00:00Z", SeriesTag: "venue:binance",
-		},
-		Fields: []*storagepb.FieldValue{{
-			FieldId: "close",
-			Value:   &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: 1.25}},
-		}},
-	}
-	access := staticAccess{response: &storagepb.ReadTimeSeriesRowsRsp{
-		RetInfo:           &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS},
-		Rows:              []*storagepb.TimeSeriesRow{row},
-		PageResult:        &commonpb.PageResult{},
-		Complete:          false,
-		ServedIndexedFrom: "2026-01-01T00:00:00Z",
-		ServedIndexedTo:   "2026-01-01T01:00:00Z",
-	}}
-	plan := Plan{
-		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1h",
-		Start: "2026-01-01T00:00:00Z", End: "2026-02-01T00:00:00Z", Confirm: true,
-	}
-
-	total, err := New(access, nil, store, w).Run(t.Context(), plan)
-
-	require.ErrorContains(t, err, "source view is incomplete")
-	require.Zero(t, total)
-	dirty, err := store.DirtyPartitions(t.Context(), 10)
-	require.NoError(t, err)
-	require.Empty(t, dirty)
-	key := domain.PartitionKey{
-		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1h",
-		SeriesTag: "venue:binance", Month: "202601",
-	}
-	path, err := key.AbsolutePath(root)
-	require.NoError(t, err)
-	require.NoFileExists(t, path)
-}
-
 type staticAccess struct {
 	row      *storagepb.TimeSeriesRow
 	response *storagepb.ReadTimeSeriesRowsRsp
@@ -189,7 +143,7 @@ func (s staticAccess) Invoke(_ context.Context, service, method string, _, outpu
 	response := s.response
 	if response == nil {
 		response = &storagepb.ReadTimeSeriesRowsRsp{
-			RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Rows: []*storagepb.TimeSeriesRow{s.row}, PageResult: &commonpb.PageResult{}, Complete: true,
+			RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Rows: []*storagepb.TimeSeriesRow{s.row}, PageResult: &commonpb.PageResult{},
 		}
 	}
 	proto.Merge(output.(*storagepb.ReadTimeSeriesRowsRsp), response)

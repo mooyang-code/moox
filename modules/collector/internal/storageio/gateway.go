@@ -44,7 +44,7 @@ type Primary interface {
 	CommitTimeSeriesBatch(context.Context, *storagepb.PrimaryCommitTimeSeriesBatchReq, ...client.Option) (*storagepb.PrimaryCommitTimeSeriesBatchRsp, error)
 	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
 	ReportCollectorPeriodCompleted(context.Context, *storagepb.ReportCollectorPeriodCompletedReq, ...client.Option) (*storagepb.ReportCollectorPeriodCompletedRsp, error)
-	ReadFields(context.Context, *storagepb.PrimaryReadFieldsReq, ...client.Option) (*storagepb.PrimaryReadFieldsRsp, error)
+	ReadRows(context.Context, *storagepb.PrimaryReadRowsReq, ...client.Option) (*storagepb.PrimaryReadRowsRsp, error)
 	WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq, ...client.Option) (*storagepb.WaitViewSyncPointRsp, error)
 	DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq, ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error)
 	RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq, ...client.Option) (*storagepb.PrimaryRestoreDatasetRowsRsp, error)
@@ -186,8 +186,8 @@ func (c *Client) ReportCollectorPeriodCompleted(ctx context.Context, request *st
 	return invoke[storagepb.ReportCollectorPeriodCompletedRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "ReportCollectorPeriodCompleted", request, options)
 }
 
-func (c *Client) ReadFields(ctx context.Context, request *storagepb.PrimaryReadFieldsReq, options ...client.Option) (*storagepb.PrimaryReadFieldsRsp, error) {
-	return invoke[storagepb.PrimaryReadFieldsRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "ReadFields", request, options)
+func (c *Client) ReadRows(ctx context.Context, request *storagepb.PrimaryReadRowsReq, options ...client.Option) (*storagepb.PrimaryReadRowsRsp, error) {
+	return invoke[storagepb.PrimaryReadRowsRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "ReadRows", request, options)
 }
 
 func (c *Client) WaitViewSyncPoint(ctx context.Context, request *storagepb.WaitViewSyncPointReq, options ...client.Option) (*storagepb.WaitViewSyncPointRsp, error) {

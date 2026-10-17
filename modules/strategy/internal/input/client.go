@@ -142,7 +142,7 @@ func (c *RPCClient) ViewCoverage(ctx context.Context, spaceID string, view ViewI
 			AuthInfo: auth, SpaceId: spaceID, ViewId: view.ViewID,
 			TimeRange: &storagepb.TimeRange{StartTime: epoch.Format(time.RFC3339Nano), EndTime: epoch.Add(time.Nanosecond).Format(time.RFC3339Nano)},
 			Page:      &commonpb.Page{Page: 1, Size: 1}, Limit: 1, TotalMode: mode,
-			ExpectedActiveIndexId: view.ActiveIndexID,
+			Pin: &storagepb.IndexVersion{IndexId: view.ActiveIndexID},
 		})
 		if err != nil {
 			return Coverage{}, transport("读取 View "+view.ViewID+" 的覆盖范围", err)
@@ -150,9 +150,9 @@ func (c *RPCClient) ViewCoverage(ctx context.Context, spaceID string, view ViewI
 		if err := viewRetError("读取 View "+view.ViewID+" 的覆盖范围", view.ViewID, nil, rsp.GetRetInfo()); err != nil {
 			return Coverage{}, err
 		}
-		coverage.SeriesBars = int(min(rsp.GetServedSeriesBars(), uint64(math.MaxInt32)))
-		from, fromErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(rsp.GetServedIndexedFrom()))
-		to, toErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(rsp.GetServedIndexedTo()))
+		coverage.SeriesBars = int(min(rsp.GetRetainedRowsPerSeries(), uint64(math.MaxInt32)))
+		from, fromErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(rsp.GetMinDataTime()))
+		to, toErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(rsp.GetMaxDataTime()))
 		if fromErr == nil && toErr == nil && !to.Before(from) {
 			coverage.IndexedFrom, coverage.IndexedTo = from.UTC(), to.UTC()
 			return coverage, nil
@@ -343,7 +343,7 @@ func (c *RPCClient) QueryRows(ctx context.Context, spaceID string, query Query) 
 			AuthInfo: auth, SpaceId: spaceID, ViewId: query.ViewID, Selectors: selectors,
 			TimeRange:   &storagepb.TimeRange{StartTime: query.Start.UTC().Format(time.RFC3339Nano), EndTime: query.End.UTC().Format(time.RFC3339Nano)},
 			ColumnNames: query.Columns, Page: &commonpb.Page{Page: page, Size: size}, TotalMode: commonpb.TotalMode_NONE,
-			ExpectedActiveIndexId: query.ExpectedIndexID, ExpectedActiveIndexRevision: revision,
+			Pin: &storagepb.IndexVersion{IndexId: query.ExpectedIndexID, Revision: revision},
 		})
 		if err != nil {
 			return nil, 0, transport("读取 View "+query.ViewID+" 的行", err)
@@ -351,13 +351,13 @@ func (c *RPCClient) QueryRows(ctx context.Context, spaceID string, query Query) 
 		if err := viewRetError("读取 View "+query.ViewID+" 的行", query.ViewID, query.Columns, rsp.GetRetInfo()); err != nil {
 			return nil, 0, err
 		}
-		if served := rsp.GetServedActiveIndexRevision(); served != 0 {
+		if served := rsp.GetIndex().GetRevision(); served != 0 {
 			if revision != 0 && revision != served {
 				return nil, 0, &staleError{message: fmt.Sprintf("View %s 在读取期间有新的写入（索引修订号从 %d 变为 %d）", query.ViewID, revision, served)}
 			}
 			revision = served
 		}
-		if servedIndex := strings.TrimSpace(rsp.GetServedActiveIndexId()); servedIndex != "" && servedIndex != query.ExpectedIndexID {
+		if servedIndex := strings.TrimSpace(rsp.GetIndex().GetIndexId()); servedIndex != "" && servedIndex != query.ExpectedIndexID {
 			return nil, 0, &staleError{message: fmt.Sprintf("View %s 的活动索引在读取期间从 %s 变为 %s", query.ViewID, query.ExpectedIndexID, servedIndex)}
 		}
 		for _, row := range rsp.GetRows() {

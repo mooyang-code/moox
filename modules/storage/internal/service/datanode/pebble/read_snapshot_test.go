@@ -12,7 +12,7 @@ import (
 )
 
 // 同一行的多个字段由一次 UpsertFields 原子写入；并发读取必须总是读到同一次提交的值，不能读到旧 high、新 close 这类混合值。
-func TestReadFieldsReturnsOneCommitUnderConcurrentUpdates(t *testing.T) {
+func TestReadRowsReturnsOneCommitUnderConcurrentUpdates(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
 	if err != nil {
 		t.Fatal(err)

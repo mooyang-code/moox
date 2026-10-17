@@ -18,7 +18,6 @@ import (
 
 type AccessClient interface {
 	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
-	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 }
 type MetadataClient interface {
 	GetSpace(context.Context, *storagepb.GetSpaceReq, ...client.Option) (*storagepb.GetSpaceRsp, error)
@@ -191,22 +190,6 @@ func storageOK(action string, ret *commonpb.RetInfo) error {
 	return nil
 }
 
-type HistoryPoint struct {
-	SeriesID   string
-	Value      float64
-	ObservedAt time.Time
-	LabelsJSON string
-	MessageID  string
-}
-
-type HistorySelector struct {
-	SeriesID string
-}
-
-func HistorySelectorForSeries(series MetricSeries) HistorySelector {
-	return HistorySelector{SeriesID: series.SeriesID}
-}
-
 func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) error {
 	if a == nil || a.access == nil {
 		return errors.New("metrics storage-primary client is not initialized")
@@ -252,79 +235,6 @@ func sampleRow(cfg monconfig.MetricsStorageConfig, s Sample) *storagepb.RowField
 			{FieldId: "message_id", Value: metricStringValue(s.MessageID)},
 		},
 	}
-}
-
-func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []HistorySelector, start, end time.Time, desc bool, limit int) ([]HistoryPoint, error) {
-	if a == nil || a.access == nil {
-		return nil, errors.New("metrics storage-primary client is not initialized")
-	}
-	if limit <= 0 {
-		limit = 500
-	}
-	if limit > 500 {
-		limit = 500
-	}
-	keys := make([]*storagepb.TimeSeriesSelector, 0, len(selectors))
-	for _, selector := range selectors {
-		if selector.SeriesID != "" {
-			key := &storagepb.TimeSeriesSelector{SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID, SubjectId: selector.SeriesID, Freq: a.cfg.Frequency}
-			keys = append(keys, key)
-		}
-	}
-	if len(keys) == 0 {
-		return nil, nil
-	}
-	order := storagepb.SortOrder_SORT_ORDER_ASC
-	if desc {
-		order = storagepb.SortOrder_SORT_ORDER_DESC
-	}
-	tr := &storagepb.TimeRange{}
-	if !start.IsZero() {
-		tr.StartTime = start.UTC().Format(time.RFC3339Nano)
-	}
-	if !end.IsZero() {
-		tr.EndTime = end.UTC().Format(time.RFC3339Nano)
-	}
-	rsp, err := a.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-		AuthInfo: a.auth, SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID,
-		Selectors: keys, TimeRange: tr, Order: order,
-		ColumnNames: []string{"value", "labels_json", "message_id"},
-		Page:        &commonpb.Page{Page: 1, Size: uint32(limit)},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("read metrics history: %w", err)
-	}
-	if err := storageOK("read metrics history", rsp.GetRetInfo()); err != nil {
-		return nil, err
-	}
-	out := make([]HistoryPoint, 0, len(rsp.GetRows()))
-	for _, row := range rsp.GetRows() {
-		if row == nil || row.GetKey() == nil {
-			continue
-		}
-		p := HistoryPoint{SeriesID: row.GetKey().GetSubjectId()}
-		if t, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime()); err == nil {
-			p.ObservedAt = t
-		}
-		for _, field := range row.GetFields() {
-			switch field.GetFieldId() {
-			case "value":
-				p.Value = field.GetValue().GetDoubleValue()
-			case "labels_json":
-				p.LabelsJSON = field.GetValue().GetJsonValue()
-			case "message_id":
-				p.MessageID = field.GetValue().GetStringValue()
-			}
-		}
-		out = append(out, p)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if desc {
-			return out[i].ObservedAt.After(out[j].ObservedAt)
-		}
-		return out[i].ObservedAt.Before(out[j].ObservedAt)
-	})
-	return out, nil
 }
 
 // ListActiveDatasetSubjects returns the authoritative active subject set for a

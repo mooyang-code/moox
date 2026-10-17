@@ -147,7 +147,7 @@ func (c *storageAdminSpaceProxy) ListSpaces(ctx context.Context, req *adminpb.Li
 
 type storagePrimaryAPI interface {
 	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq) (*storagepb.PrimaryUpsertFieldsRsp, error)
-	ReadFields(context.Context, *storagepb.PrimaryReadFieldsReq) (*storagepb.PrimaryReadFieldsRsp, error)
+	ReadRows(context.Context, *storagepb.PrimaryReadRowsReq) (*storagepb.PrimaryReadRowsRsp, error)
 }
 
 type storageRuntimeAPI interface {
@@ -289,9 +289,9 @@ func (c *storagePrimaryProxy) UpsertFields(ctx context.Context, req *storagepb.P
 	return rsp, err
 }
 
-func (c *storagePrimaryProxy) ReadFields(ctx context.Context, req *storagepb.PrimaryReadFieldsReq) (*storagepb.PrimaryReadFieldsRsp, error) {
-	rsp := &storagepb.PrimaryReadFieldsRsp{}
-	err := postStorageRaw(ctx, c.gateway, accessServiceName, "ReadFields", req, rsp)
+func (c *storagePrimaryProxy) ReadRows(ctx context.Context, req *storagepb.PrimaryReadRowsReq) (*storagepb.PrimaryReadRowsRsp, error) {
+	rsp := &storagepb.PrimaryReadRowsRsp{}
+	err := postStorageRaw(ctx, c.gateway, accessServiceName, "ReadRows", req, rsp)
 	return rsp, err
 }
 
@@ -1030,7 +1030,7 @@ func runStorageLifecycle(ctx context.Context, session *remoteStorageSession, nam
 		return result, errors.New("storage_e2e_write_failed")
 	}
 	result.Assertions = append(result.Assertions, "row_written")
-	readResponse, err := session.primary.ReadFields(ctx, &storagepb.PrimaryReadFieldsReq{AuthInfo: session.primaryAuth, Keys: []*storagepb.RowKey{rowKey}, FieldIds: []string{"value"}})
+	readResponse, err := session.primary.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{AuthInfo: session.primaryAuth, Keys: []*storagepb.RowKey{rowKey}, ColumnNames: []string{"value"}})
 	if err != nil || readResponse == nil || readResponse.GetRetInfo() == nil || readResponse.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || len(readResponse.GetRows()) != 1 || len(readResponse.GetRows()[0].GetFields()) != 1 || readResponse.GetRows()[0].GetFields()[0].GetValue().GetStringValue() != "row-value" {
 		return result, errors.New("storage_e2e_read_failed")
 	}

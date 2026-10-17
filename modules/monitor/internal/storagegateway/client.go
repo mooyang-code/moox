@@ -36,8 +36,8 @@ func (c *Client) ReadTimeSeriesRows(ctx context.Context, request *storagepb.Read
 	return invoke[storagepb.ReadTimeSeriesRowsRsp](ctx, c, "PrimaryStore", "ReadTimeSeriesRows", request, options)
 }
 
-func (c *Client) ReadFields(ctx context.Context, request *storagepb.PrimaryReadFieldsReq, options ...client.Option) (*storagepb.PrimaryReadFieldsRsp, error) {
-	return invoke[storagepb.PrimaryReadFieldsRsp](ctx, c, "PrimaryStore", "ReadFields", request, options)
+func (c *Client) ReadRows(ctx context.Context, request *storagepb.PrimaryReadRowsReq, options ...client.Option) (*storagepb.PrimaryReadRowsRsp, error) {
+	return invoke[storagepb.PrimaryReadRowsRsp](ctx, c, "PrimaryStore", "ReadRows", request, options)
 }
 
 func (c *Client) GetSpace(ctx context.Context, request *storagepb.GetSpaceReq, options ...client.Option) (*storagepb.GetSpaceRsp, error) {

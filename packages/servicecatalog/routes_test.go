@@ -111,7 +111,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		hash    string
 	}{
 		"control":   {163, []string{"access", "admin", "cloudnode", "collector", "console", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "10bc22f7ecbb79835f5c3630ed6ab0eb532eaaf5d13df8e92ca1e522fc47a3b7"},
-		"storage":   {99, []string{"access", "archive", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "d6969025e51675276f70b81e76502b7f79634cced961ea446febb919f433bd10"},
+		"storage":   {97, []string{"access", "archive", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "0abb4404e1581f2d213bc360dc327730dc2dbeb7d72d71957960054053e20d7f"},
 		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "cf0c78e6614510d464b9500c4459f5a0fa8392684a0347f6b02346ab49ea4c91"},
 	}
 	for _, host := range p.Hosts {
@@ -300,15 +300,15 @@ func TestRouteTimeoutUsesMethodOverride(t *testing.T) {
 	}
 	got := map[string]int64{}
 	for _, route := range compiled.Routes {
-		if route.ServicePath == "trpc.moox.storage.PrimaryStore" && (route.Method == "WaitViewSyncPoint" || route.Method == "ReadFields") {
+		if route.ServicePath == "trpc.moox.storage.PrimaryStore" && (route.Method == "WaitViewSyncPoint" || route.Method == "ReadRows") {
 			got[route.Method] = route.TimeoutMS
 		}
 	}
-	if got["WaitViewSyncPoint"] != 35000 || got["ReadFields"] != 5000 {
+	if got["WaitViewSyncPoint"] != 35000 || got["ReadRows"] != 5000 {
 		t.Fatalf("unexpected route timeouts: %v", got)
 	}
 	service, _ := c.Service("trpc.moox.storage.PrimaryStore")
-	if service.TimeoutFor("WaitViewSyncPoint") != 35000 || service.TimeoutFor("ReadFields") != 5000 {
+	if service.TimeoutFor("WaitViewSyncPoint") != 35000 || service.TimeoutFor("ReadRows") != 5000 {
 		t.Fatal("TimeoutFor does not honor the method override")
 	}
 }

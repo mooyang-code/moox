@@ -15,7 +15,7 @@ type fakePrimary struct {
 	writes []*storagepb.RowFieldUpsert
 }
 
-func (f *fakePrimary) ReadFields(_ context.Context, keys []*storagepb.RowKey, _ []string, attrs []string) ([]*storagepb.RowFieldValues, error) {
+func (f *fakePrimary) ReadRows(_ context.Context, keys []*storagepb.RowKey, _ []string, attrs []string) ([]*storagepb.RowFieldValues, error) {
 	if len(attrs) > 0 {
 		for _, key := range keys {
 			// 返回最近一次写入，与 Storage 的最新值语义一致

@@ -33,7 +33,7 @@ const (
 // local resample worker. The interface is intentionally small for deterministic
 // unit tests and to keep the remote adapter independent of control-plane state.
 type PrimaryStorage interface {
-	ReadFields(context.Context, []*storagepb.RowKey, []string, []string) ([]*storagepb.RowFieldValues, error)
+	ReadRows(context.Context, []*storagepb.RowKey, []string, []string) ([]*storagepb.RowFieldValues, error)
 	UpsertFieldsWithSource(context.Context, []*storagepb.RowFieldUpsert, string) error
 }
 
@@ -69,7 +69,7 @@ func (s BucketStorage) ProcessBucket(ctx context.Context, spec TaskSpec, subject
 	for _, at := range times {
 		keys = append(keys, rowKey(spec.SpaceID, spec.SourceDatasetID, subjectID, spec.SourceFrequency.Storage, at, spec.SourceSeriesTag))
 	}
-	rows, err := s.Primary.ReadFields(ctx, keys, []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume, fieldQuoteVolume, fieldTradeNum}, nil)
+	rows, err := s.Primary.ReadRows(ctx, keys, []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume, fieldQuoteVolume, fieldTradeNum}, nil)
 	if err != nil {
 		return Result{}, false, err
 	}
@@ -92,7 +92,7 @@ func (s BucketStorage) ProcessBucket(ctx context.Context, spec TaskSpec, subject
 	// PrimaryStore requires at least one field ID even when only an attribute
 	// is needed. Request the canonical K-line fields alongside source_hash;
 	// this remains a single bounded read and keeps the idempotency check valid.
-	existing, err := s.Primary.ReadFields(ctx, []*storagepb.RowKey{targetKey}, []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume, fieldQuoteVolume, fieldTradeNum}, []string{"source_hash", "resample_revision", attrOutputFields})
+	existing, err := s.Primary.ReadRows(ctx, []*storagepb.RowKey{targetKey}, []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume, fieldQuoteVolume, fieldTradeNum}, []string{"source_hash", "resample_revision", attrOutputFields})
 	if err != nil {
 		return Result{}, false, err
 	}

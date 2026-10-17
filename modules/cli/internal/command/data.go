@@ -23,6 +23,7 @@ var (
 	dataStartTime       string
 	dataEndTime         string
 	dataPageSize        uint32
+	dataColumns         []string
 	dataStorageAuthFile string
 )
 
@@ -53,13 +54,19 @@ var dataRowsExportCmd = &cobra.Command{
 			return err
 		}
 		defer gateway.Close()
+		if len(dataColumns) == 0 {
+			return fmt.Errorf("必须用 --columns 指定要导出的列")
+		}
+		if dataStartTime == "" || dataEndTime == "" {
+			return fmt.Errorf("必须同时指定 --start-time 与 --end-time")
+		}
 		selector := timeSeriesSelectorForExport(datasetID, cmd.Flags().Changed("series-tag"))
-		rsp, err := exportRowsRemote(cmd.Context(), gateway, &pb.ReadTimeSeriesRowsReq{
+		rsp, err := exportRowsPaged(cmd.Context(), gateway, &pb.ReadTimeSeriesRowsReq{
 			AuthInfo: auth, SpaceId: defaultFlag(dataSpaceID, "default"), DatasetId: datasetID,
-			Selectors: []*pb.TimeSeriesSelector{selector},
-			TimeRange: &pb.TimeRange{StartTime: dataStartTime, EndTime: dataEndTime},
-			Page:      &pb.Page{Page: 1, Size: dataPageSize},
-		})
+			Selectors:   []*pb.TimeSeriesSelector{selector},
+			TimeRange:   &pb.TimeRange{StartTime: dataStartTime, EndTime: dataEndTime},
+			ColumnNames: dataColumns,
+		}, dataPageSize)
 		if err != nil {
 			return err
 		}
@@ -92,7 +99,8 @@ func init() {
 	dataRowsExportCmd.Flags().StringVar(&dataSeriesTag, "series-tag", "", "精确序列标签；省略表示全部序列，显式空值表示默认序列")
 	dataRowsExportCmd.Flags().StringVar(&dataStartTime, "start-time", "", "起始时间")
 	dataRowsExportCmd.Flags().StringVar(&dataEndTime, "end-time", "", "结束时间")
-	dataRowsExportCmd.Flags().Uint32Var(&dataPageSize, "page-size", 1000, "最多导出行数")
+	dataRowsExportCmd.Flags().Uint32Var(&dataPageSize, "page-size", 1000, "最多导出行数；达到上限时停止并提示")
+	dataRowsExportCmd.Flags().StringSliceVar(&dataColumns, "columns", nil, "要导出的列，逗号分隔（必填）")
 	dataRowsExportCmd.Flags().StringVar(&dataOutputFile, "output", "", "输出 JSON 文件；为空则输出到 stdout")
 }
 

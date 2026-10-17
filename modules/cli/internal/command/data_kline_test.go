@@ -90,8 +90,10 @@ func TestDataKlineBuildsCatalogBackedRPCRequest(t *testing.T) {
 	require.NotNil(t, reader.request)
 	assert.Equal(t, "moox-skill", reader.request.GetAuthInfo().GetAppId())
 	assert.Equal(t, "storage-key", reader.request.GetAuthInfo().GetAppKey())
-	assert.Equal(t, pb.SortOrder_SORT_ORDER_DESC, reader.request.GetOrder())
 	assert.Equal(t, uint32(5), reader.request.GetPage().GetSize())
+	assert.Equal(t, uint32(0), reader.request.GetLatestPerSeries(), "给了时间范围时按区间读取")
+	assert.Equal(t, "2026-08-28T00:00:00Z", reader.request.GetTimeRange().GetStartTime())
+	assert.Equal(t, []string{"open", "high", "low", "close", "volume"}, reader.request.GetColumnNames())
 	require.Len(t, reader.request.GetSelectors(), 1)
 	selector := reader.request.GetSelectors()[0]
 	assert.Equal(t, "crypto", selector.GetSpaceId())
@@ -121,6 +123,8 @@ func TestDataKlineBuildsStockCNCatalogBackedRPCRequest(t *testing.T) {
 	assert.Equal(t, "default", selector.GetSeriesTag())
 	assert.Equal(t, "stockcn", reader.request.GetSpaceId())
 	assert.Equal(t, "dataset_stockcn_equity_kline_1m", reader.request.GetDatasetId())
+	assert.Equal(t, uint32(100), reader.request.GetLatestPerSeries(), "没有时间范围时取最新的 limit 根")
+	assert.Nil(t, reader.request.GetTimeRange())
 }
 
 func TestDataKlineValidatesRequiredFlagsAndRange(t *testing.T) {
@@ -199,7 +203,6 @@ func TestDataKlineEmitsIncompleteViewState(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	var rsp pb.ReadTimeSeriesRowsRsp
 	require.NoError(t, protojson.Unmarshal(stdout.Bytes(), &rsp))
-	assert.False(t, rsp.GetComplete())
 }
 
 func TestDataKlineRejectsConfigAsOutput(t *testing.T) {

@@ -59,9 +59,9 @@ type coverageStub struct {
 
 func (s *coverageStub) QueryTimeSeriesRows(_ context.Context, req *storagepb.QueryTimeSeriesRowsReq, _ ...client.Option) (*storagepb.QueryTimeSeriesRowsRsp, error) {
 	s.requests = append(s.requests, req)
-	rsp := &storagepb.QueryTimeSeriesRowsRsp{RetInfo: success(), PageResult: &commonpb.PageResult{}, ServedSeriesBars: 5000}
+	rsp := &storagepb.QueryTimeSeriesRowsRsp{RetInfo: success(), PageResult: &commonpb.PageResult{}, RetainedRowsPerSeries: 5000}
 	if s.cached || req.GetTotalMode() == commonpb.TotalMode_FORCE_EXACT {
-		rsp.ServedIndexedFrom, rsp.ServedIndexedTo = "2026-09-01T00:00:00.000000000Z", "2026-09-30T23:00:00.000000000Z"
+		rsp.MinDataTime, rsp.MaxDataTime = "2026-09-01T00:00:00.000000000Z", "2026-09-30T23:00:00.000000000Z"
 	}
 	return rsp, nil
 }
@@ -88,7 +88,7 @@ func TestViewCoverageProbesDataViewOnDemand(t *testing.T) {
 		t.Fatalf("覆盖范围与保留根数应取 DataView 的统计：%+v", coverage)
 	}
 	probe := cached.requests[0]
-	if len(cached.requests) != 1 || probe.GetExpectedActiveIndexId() != "idx_a" || probe.GetLimit() != 1 || probe.GetTimeRange() == nil || len(probe.GetSelectors()) != 0 || probe.GetTotalMode() != commonpb.TotalMode_NONE {
+	if len(cached.requests) != 1 || probe.GetPin().GetIndexId() != "idx_a" || probe.GetLimit() != 1 || probe.GetTimeRange() == nil || len(probe.GetSelectors()) != 0 || probe.GetTotalMode() != commonpb.TotalMode_NONE {
 		t.Fatalf("已缓存时只发一次不触发全量统计的探测：%v", cached.requests)
 	}
 

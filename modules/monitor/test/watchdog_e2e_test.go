@@ -13,23 +13,29 @@ import (
 )
 
 type storageCanaryFixture struct {
-	request *storagepb.ReadTimeSeriesRowsReq
+	request *storagepb.PrimaryReadRowsReq
 	rows    []*storagepb.TimeSeriesRow
 }
 
-func (f *storageCanaryFixture) ReadTimeSeriesRows(_ context.Context, request *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+func (f *storageCanaryFixture) ReadRows(_ context.Context, request *storagepb.PrimaryReadRowsReq, _ ...client.Option) (*storagepb.PrimaryReadRowsRsp, error) {
 	f.request = request
 	wanted := make(map[string]struct{}, len(request.GetKeys()))
 	for _, key := range request.GetKeys() {
-		wanted[key.GetDataTime()] = struct{}{}
+		wanted[key.GetTimeSeries().GetDataTime()] = struct{}{}
 	}
-	rows := make([]*storagepb.TimeSeriesRow, 0, len(f.rows))
+	rows := make([]*storagepb.RowFieldValues, 0, len(f.rows))
 	for _, row := range f.rows {
 		if _, ok := wanted[row.GetKey().GetDataTime()]; ok {
-			rows = append(rows, row)
+			key := row.GetKey()
+			rows = append(rows, &storagepb.RowFieldValues{
+				Key: &storagepb.RowKey{SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(), Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+					SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag(),
+				}}},
+				Fields: row.GetFields(),
+			})
 		}
 	}
-	return &storagepb.ReadTimeSeriesRowsRsp{
+	return &storagepb.PrimaryReadRowsRsp{
 		RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS},
 		Rows:    rows,
 	}, nil
@@ -55,13 +61,12 @@ func TestMarketCanaryUsesStoragePrimaryReadContract(t *testing.T) {
 	require.NotNil(t, fixture.request)
 	require.Equal(t, []string{"close"}, fixture.request.GetColumnNames())
 	require.Len(t, fixture.request.GetKeys(), 24)
-	require.Nil(t, fixture.request.GetTimeRange())
 	require.Equal(t, "crypto", fixture.request.GetKeys()[0].GetSpaceId())
 	require.Equal(t, "market_kline", fixture.request.GetKeys()[0].GetDatasetId())
-	require.Equal(t, "BTC-USDT", fixture.request.GetKeys()[0].GetSubjectId())
-	require.Equal(t, "1m", fixture.request.GetKeys()[0].GetFreq())
-	require.Equal(t, "venue:binance", fixture.request.GetKeys()[0].GetSeriesTag())
-	require.Equal(t, now.Format(time.RFC3339Nano), fixture.request.GetKeys()[0].GetDataTime())
+	require.Equal(t, "BTC-USDT", fixture.request.GetKeys()[0].GetTimeSeries().GetSubjectId())
+	require.Equal(t, "1m", fixture.request.GetKeys()[0].GetTimeSeries().GetFreq())
+	require.Equal(t, "venue:binance", fixture.request.GetKeys()[0].GetTimeSeries().GetSeriesTag())
+	require.Equal(t, now.Format(time.RFC3339Nano), fixture.request.GetKeys()[0].GetTimeSeries().GetDataTime())
 	require.Equal(t, "monitor-market-canary", fixture.request.GetAuthInfo().GetAppId())
 	require.NotEmpty(t, fixture.request.GetAuthInfo().GetAppKey())
 }

@@ -29,7 +29,7 @@ func (s *dataViewStub) QueryTimeSeriesRows(_ context.Context, req *storagepb.Que
 }
 
 func page(hasMore bool, revision uint64, indexID string, rows ...*storagepb.TimeSeriesRow) *storagepb.QueryTimeSeriesRowsRsp {
-	return &storagepb.QueryTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Rows: rows, PageResult: &commonpb.PageResult{HasMore: hasMore}, ServedActiveIndexRevision: revision, ServedActiveIndexId: indexID}
+	return &storagepb.QueryTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}, Rows: rows, PageResult: &commonpb.PageResult{HasMore: hasMore}, Index: &storagepb.IndexVersion{IndexId: indexID, Revision: revision}}
 }
 
 func tsRow(subjectID string, at time.Time, value *storagepb.TypedValue) *storagepb.TimeSeriesRow {
@@ -54,7 +54,7 @@ func TestQueryRowsDetectsRevisionAndIndexChanges(t *testing.T) {
 	if _, _, err := rpc.QueryRows(context.Background(), "space", baseQuery()); !errors.Is(err, ErrStale) {
 		t.Fatalf("修订号变化应返回 ErrStale：%v", err)
 	}
-	if stub.requests[1].GetExpectedActiveIndexRevision() != 5 || stub.requests[0].GetExpectedActiveIndexId() != "idx_a" {
+	if stub.requests[1].GetPin().GetRevision() != 5 || stub.requests[0].GetPin().GetIndexId() != "idx_a" {
 		t.Fatalf("第二页应固定第一页的修订号：%+v", stub.requests[1])
 	}
 	stub = &dataViewStub{pages: []*storagepb.QueryTimeSeriesRowsRsp{page(false, 5, "idx_b", tsRow("BTC-USDT", barStart, double(1)))}}

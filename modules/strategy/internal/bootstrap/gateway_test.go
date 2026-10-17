@@ -177,10 +177,10 @@ func (w *strategyGatewayWire) QueryTimeSeriesRows(ctx context.Context, req *stor
 	if err := w.verifyStorage(ctx, "DataView", "QueryTimeSeriesRows", req); err != nil {
 		return nil, err
 	}
-	if req.GetExpectedActiveIndexId() != "index-1" || len(req.GetSelectors()) != 1 || req.GetSelectors()[0].GetSubjectId() != "BTC" {
+	if req.GetPin().GetIndexId() != "index-1" || len(req.GetSelectors()) != 1 || req.GetSelectors()[0].GetSubjectId() != "BTC" {
 		return nil, errors.New("Storage 的 View 索引或选择器发生了变化")
 	}
-	return &storagepb.QueryTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{}, Complete: true, ServedActiveIndexId: "index-1", ServedActiveIndexRevision: 7,
+	return &storagepb.QueryTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{}, Complete: true, Index: &storagepb.IndexVersion{IndexId: "index-1", Revision: 7},
 		Rows: []*storagepb.TimeSeriesRow{{Key: &storagepb.TimeSeriesKey{SubjectId: "BTC", DataTime: req.GetTimeRange().GetStartTime()}, Fields: []*storagepb.FieldValue{{FieldId: "close", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: "123.45"}}}}}}}, nil
 }
 

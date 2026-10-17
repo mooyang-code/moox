@@ -25,7 +25,7 @@ func TestReadWindowPagesUntilExhausted(t *testing.T) {
 		{Rows: []*storagepb.TimeSeriesRow{
 			readRow("ETH", base, "", map[string]*storagepb.TypedValue{"close": double(3)}),
 			readRow("BTC", base.Add(time.Minute), "venue:b", map[string]*storagepb.TypedValue{"close": double(2)}),
-		}, PageResult: &commonpb.PageResult{HasMore: true}},
+		}, PageResult: &commonpb.PageResult{HasMore: true, NextCursor: "cursor-1"}},
 		{Rows: []*storagepb.TimeSeriesRow{
 			readRow("BTC", base, "venue:a", map[string]*storagepb.TypedValue{"close": double(1)}),
 		}, PageResult: &commonpb.PageResult{HasMore: false}},
@@ -36,10 +36,8 @@ func TestReadWindowPagesUntilExhausted(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, primary.readRequests, 2)
-	require.NotEmpty(t, primary.readRequests[1].GetAfterKey())
-	key := &storagepb.RowKey{}
-	require.NoError(t, proto.Unmarshal(primary.readRequests[1].GetAfterKey(), key))
-	require.Equal(t, "venue:b", key.GetTimeSeries().GetSeriesTag())
+	require.Empty(t, primary.readRequests[0].GetPage().GetCursor())
+	require.Equal(t, "cursor-1", primary.readRequests[1].GetPage().GetCursor(), "游标原样传回，不自行编码")
 	require.Equal(t, []string{"data_time", "series_tag", "close"}, got["BTC"].Columns)
 	require.Equal(t, []any{base, "venue:a", float64(1)}, got["BTC"].Rows[0])
 	require.Equal(t, []any{base.Add(time.Minute), "venue:b", float64(2)}, got["BTC"].Rows[1])
@@ -49,7 +47,7 @@ func TestReadWindowPagesUntilExhausted(t *testing.T) {
 func TestReadWindowBoundsEachPageWithPageTimeout(t *testing.T) {
 	base := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	primary := &primaryFake{pages: []*storagepb.ReadTimeSeriesRowsRsp{
-		{Rows: []*storagepb.TimeSeriesRow{readRow("BTC", base, "", map[string]*storagepb.TypedValue{"close": double(1)})}, PageResult: &commonpb.PageResult{HasMore: true}},
+		{Rows: []*storagepb.TimeSeriesRow{readRow("BTC", base, "", map[string]*storagepb.TypedValue{"close": double(1)})}, PageResult: &commonpb.PageResult{HasMore: true, NextCursor: "cursor-1"}},
 		{Rows: []*storagepb.TimeSeriesRow{readRow("BTC", base.Add(time.Minute), "", map[string]*storagepb.TypedValue{"close": double(2)})}, PageResult: &commonpb.PageResult{HasMore: false}},
 	}}
 	_, err := NewClient(primary, nil, nil).ReadWindow(context.Background(), ReadRequest{
@@ -82,13 +80,34 @@ func TestEarliestPeriodUsesBoundedAscendingSubjectBatches(t *testing.T) {
 	require.Equal(t, earlier, got)
 	require.Len(t, primary.readRequests, 2)
 	for _, request := range primary.readRequests {
-		require.Equal(t, storagepb.SortOrder_SORT_ORDER_ASC, request.GetOrder())
 		require.Equal(t, uint32(1), request.GetPage().GetSize())
 		require.Equal(t, "0001-01-01T00:00:00Z", request.GetTimeRange().GetStartTime())
 		require.Equal(t, "1m", request.GetSelectors()[0].GetFreq())
 	}
 	require.Len(t, primary.readRequests[0].GetSelectors(), earliestPeriodSelectorBatchSize)
-	require.Len(t, primary.readRequests[1].GetSelectors(), 1)
+	require.Len(t, primary.readRequests[1].GetSelectors(), 29)
+}
+
+func TestReadWindowSplitsSubjectsIntoSelectorBatches(t *testing.T) {
+	base := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	primary := &primaryFake{pages: []*storagepb.ReadTimeSeriesRowsRsp{
+		{PageResult: &commonpb.PageResult{}}, {PageResult: &commonpb.PageResult{}}, {PageResult: &commonpb.PageResult{}},
+	}}
+	subjects := make([]string, 250)
+	for i := range subjects {
+		subjects[i] = fmt.Sprintf("subject-%03d", i)
+	}
+	frames, err := NewClient(primary, nil, nil).ReadWindow(context.Background(), ReadRequest{
+		SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Subjects: subjects,
+		Start: base, End: base.Add(time.Minute), Columns: []string{"close"},
+	})
+	require.NoError(t, err)
+	require.Len(t, frames, 250)
+	require.Len(t, primary.readRequests, 3)
+	for i, want := range []int{100, 100, 50} {
+		require.Len(t, primary.readRequests[i].GetSelectors(), want)
+		require.LessOrEqual(t, want, readSelectorBatchSize)
+	}
 }
 
 func TestReadWindowRequestsAllSelectorsWithoutSeriesTag(t *testing.T) {

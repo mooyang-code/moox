@@ -170,10 +170,6 @@ func (a *metricsE2EAccess) UpsertFields(_ context.Context, req *storagepb.Primar
 	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 
-func (a *metricsE2EAccess) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
-	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
-}
-
 func fetchMetricsEventually(ctx context.Context, consumer *observabilityconsumer.Consumer, timeout time.Duration) ([]*jetstream.Delivery, error) {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
