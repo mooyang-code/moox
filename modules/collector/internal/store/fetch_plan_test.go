@@ -244,3 +244,23 @@ func TestFetchPlanSpacesListsEverySpaceThatEverHadAPlan(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"crypto", "stockcn"}, spaces)
 }
+
+func TestFetchPlanPauseSwitchIsPersistedPerSpace(t *testing.T) {
+	ctx := context.Background()
+	repo := openPlanTestStore(t).FetchPlans()
+	paused, err := repo.PausedSpaces(ctx)
+	require.NoError(t, err)
+	require.Empty(t, paused)
+
+	require.NoError(t, repo.SetPaused(ctx, "Crypto", true))
+	require.NoError(t, repo.SetPaused(ctx, "crypto", true), "重复保存没有副作用")
+	require.NoError(t, repo.SetPaused(ctx, "stockcn", true))
+	paused, err = repo.PausedSpaces(ctx)
+	require.NoError(t, err)
+	require.Equal(t, map[string]bool{"crypto": true, "stockcn": true}, paused)
+
+	require.NoError(t, repo.SetPaused(ctx, "crypto", false))
+	paused, _ = repo.PausedSpaces(ctx)
+	require.Equal(t, map[string]bool{"stockcn": true}, paused)
+	require.Error(t, repo.SetPaused(ctx, " ", true))
+}

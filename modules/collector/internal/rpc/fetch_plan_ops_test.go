@@ -211,3 +211,40 @@ func TestPlanFunctionsListSubjectsPerDataset(t *testing.T) {
 	require.ElementsMatch(t, []string{"BTC-USDT", "ETH-USDT"}, detail.GetSubjects())
 	require.Equal(t, base.Format(time.RFC3339), detail.GetEffectiveFrom())
 }
+
+type fakeFetchPlanControl struct{ disabled map[string]bool }
+
+func (f fakeFetchPlanControl) TimersDisabled(space string) bool { return f.disabled[space] }
+
+func TestSetFetchPlanPausedSavesSwitchAndReportsTimerState(t *testing.T) {
+	service, db := newReregisterFixture(t)
+	ctx := context.Background()
+
+	rsp, err := service.SetFetchPlanPaused(ctx, &pb.SetFetchPlanPausedReq{SpaceId: "crypto", Paused: true})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_NOT_FOUND, rsp.GetRetInfo().GetCode(), "没有启用采集计划时不能暂停")
+
+	control := fakeFetchPlanControl{disabled: map[string]bool{}}
+	service.SetFetchPlanControl(control)
+	rsp, err = service.SetFetchPlanPaused(ctx, &pb.SetFetchPlanPausedReq{SpaceId: "crypto", Paused: true})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.True(t, rsp.GetPaused())
+	require.False(t, rsp.GetTimersDisabled(), "管理器还没确认停用")
+	paused, err := db.FetchPlans().PausedSpaces(ctx)
+	require.NoError(t, err)
+	require.Equal(t, map[string]bool{"crypto": true}, paused)
+
+	control.disabled["crypto"] = true
+	rsp, _ = service.SetFetchPlanPaused(ctx, &pb.SetFetchPlanPausedReq{SpaceId: "crypto", Paused: true})
+	require.True(t, rsp.GetTimersDisabled(), "相同取值重复调用只返回当前状态")
+
+	rsp, _ = service.SetFetchPlanPaused(ctx, &pb.SetFetchPlanPausedReq{SpaceId: "crypto", Paused: false})
+	require.False(t, rsp.GetPaused())
+	require.False(t, rsp.GetTimersDisabled())
+	paused, _ = db.FetchPlans().PausedSpaces(ctx)
+	require.Empty(t, paused)
+
+	bad, _ := service.SetFetchPlanPaused(ctx, &pb.SetFetchPlanPausedReq{})
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
+}

@@ -75,9 +75,14 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			if err != nil {
 				return nil, err
 			}
+			// 暂停的空间不在运行集合里：管理器会先停用它的定时器再退出协程，恢复后重新启用。
+			paused, err := dbm.FetchPlans().PausedSpaces(ctx)
+			if err != nil {
+				return nil, err
+			}
 			running := make([]string, 0, len(spaces))
 			for _, space := range spaces {
-				if _, ok := active[strings.ToLower(space)]; ok {
+				if _, ok := active[strings.ToLower(space)]; ok && !paused[strings.ToLower(space)] {
 					running = append(running, space)
 				}
 			}
@@ -134,6 +139,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			return nil
 		},
 	}
+	svc.SetFetchPlanControl(manager)
 	if !process.launch(func() { manager.Run(process.ctx) }) {
 		return fmt.Errorf("collector runtime is closing")
 	}

@@ -144,9 +144,41 @@ var collectorFetchPlanReregisterCmd = &cobra.Command{
 	},
 }
 
+var fetchPlanPauseFlags struct {
+	klineRangeFlags
+	Wait time.Duration
+}
+
+var collectorFetchPlanPauseCmd = &cobra.Command{
+	Use:   "pause",
+	Short: "暂停空间的采集：停用全部 SCF 定时器，并停止采集计划对账与补采",
+	Long: "保存暂停开关（重启后保持），并等 Collector 在下一轮同步（约 1 分钟内）停用该空间全部函数的定时器，云端读回确认后返回。\n" +
+		"定时器停用只保证不再触发新的采集调用，已经触发、仍在执行的调用不在其内：返回后还要再等过 SCF 函数的执行超时，\n" +
+		"并确认 Storage 不再有该空间的写入，才能认为采集已经静默。暂停期间产生的周期不会进入账本，也没有完成事件，\n" +
+		"恢复后行由自动补采补齐，因子结果需要用因子管理 CLI 的 recalc 补算。",
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return runFetchPlanPause(cmd.Context(), cmd.OutOrStdout(), fetchPlanPauseFlags.klineRangeFlags, true, fetchPlanPauseFlags.Wait)
+	},
+}
+
+var collectorFetchPlanResumeCmd = &cobra.Command{
+	Use:   "resume",
+	Short: "恢复空间的采集：重新启用 SCF 定时器并继续采集计划对账与补采",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return runFetchPlanPause(cmd.Context(), cmd.OutOrStdout(), fetchPlanPauseFlags.klineRangeFlags, false, 0)
+	},
+}
+
 func init() {
 	collectorCmd.AddCommand(collectorKlineCmd, collectorFetchPlanCmd, collectorStatusCmd)
-	collectorFetchPlanCmd.AddCommand(collectorFetchPlanReregisterCmd)
+	collectorFetchPlanCmd.AddCommand(collectorFetchPlanReregisterCmd, collectorFetchPlanPauseCmd, collectorFetchPlanResumeCmd)
+	for _, c := range []*cobra.Command{collectorFetchPlanPauseCmd, collectorFetchPlanResumeCmd} {
+		c.Flags().StringVar(&fetchPlanPauseFlags.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
+		c.Flags().StringVar(&fetchPlanPauseFlags.SpaceID, "space-id", "", "空间 ID")
+	}
+	collectorFetchPlanPauseCmd.Flags().DurationVar(&fetchPlanPauseFlags.Wait, "wait", 5*time.Minute, "等待云端确认定时器全部停用的最长时间；0 表示只保存开关不等待")
 	collectorFetchPlanReregisterCmd.Flags().StringVar(&fetchPlanReregisterFlags.File, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
 	collectorFetchPlanReregisterCmd.Flags().StringVar(&fetchPlanReregisterFlags.SpaceID, "space-id", "", "空间 ID")
 	collectorFetchPlanReregisterCmd.Flags().BoolVar(&fetchPlanReregisterFlags.Yes, "yes", false, "确认清空补采作业并让采集计划重新登记")
@@ -522,4 +554,48 @@ func runFetchPlanReregister(ctx context.Context, out io.Writer, flags klineRange
 		return err
 	}
 	return printJSON(out, map[string]any{"status": "marked", "space_id": flags.SpaceID, "datasets": rsp.GetDatasets(), "backfill_jobs_removed": rsp.GetBackfillJobs()})
+}
+
+// runFetchPlanPause 保存暂停（或恢复）开关；暂停时轮询到云端确认定时器全部停用或超时。
+func runFetchPlanPause(ctx context.Context, out io.Writer, flags klineRangeFlags, paused bool, wait time.Duration) error {
+	if strings.TrimSpace(flags.SpaceID) == "" {
+		return errors.New("--space-id is required")
+	}
+	gateway, err := openCommandGateway(ctx, flags.File, nil)
+	if err != nil {
+		return err
+	}
+	defer gateway.Close()
+	call := func() (*collectorpb.SetFetchPlanPausedRsp, error) {
+		rsp := &collectorpb.SetFetchPlanPausedRsp{}
+		if err := gateway.Invoke(ctx, "trpc.moox.collector.CollectMgr", "SetFetchPlanPaused", &collectorpb.SetFetchPlanPausedReq{SpaceId: flags.SpaceID, Paused: paused}, rsp); err != nil {
+			return nil, fmt.Errorf("set fetch plan paused: %w", err)
+		}
+		return rsp, collectorRetError("set fetch plan paused", rsp.GetRetInfo())
+	}
+	rsp, err := call()
+	if err != nil {
+		return err
+	}
+	if !paused {
+		return printJSON(out, map[string]any{"status": "resumed", "space_id": flags.SpaceID})
+	}
+	deadline := time.Now().Add(wait)
+	for wait > 0 && !rsp.GetTimersDisabled() {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("已保存暂停开关，但 %s 内没有确认定时器全部停用；稍后重新执行 pause 查看状态", wait)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+		if rsp, err = call(); err != nil {
+			return err
+		}
+	}
+	return printJSON(out, map[string]any{
+		"status": "paused", "space_id": flags.SpaceID, "timers_disabled": rsp.GetTimersDisabled(),
+		"note": "已触发、仍在执行的采集调用不在其内：再等过 SCF 函数的执行超时，并确认 Storage 不再有该空间的写入",
+	})
 }

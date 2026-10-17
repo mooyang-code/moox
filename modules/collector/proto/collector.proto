@@ -555,6 +555,22 @@ message ReregisterFetchPlanReq {
   string space_id = 1;
 }
 
+// SetFetchPlanPaused 暂停或恢复空间的采集：暂停时 Collector 停用该空间全部 SCF 函数的定时器，并停止采集计划对账、
+// 补采推进与自动补采扫描；暂停状态保存在 Collector 库里，重启后保持。相同取值重复调用不改变状态，只返回当前状态，
+// 可用来轮询 timers_disabled。停用定时器只保证不再触发新的采集调用，已经触发、仍在执行的调用不在其内，
+// 调用方还需要再等过 SCF 函数的执行超时。
+message SetFetchPlanPausedReq {
+  string space_id = 1;
+  bool paused = 2;
+}
+
+message SetFetchPlanPausedRsp {
+  common.RetInfo ret_info = 1;
+  bool paused = 2;
+  // timers_disabled 表示云端已确认该空间全部函数的定时器已停用（未暂停时恒为 false）。
+  bool timers_disabled = 3;
+}
+
 message ReregisterFetchPlanRsp {
   common.RetInfo ret_info = 1;
   // datasets 是被标记为需要重新登记快照的“数据集|频率”。
@@ -595,4 +611,5 @@ service CollectMgr {
   // ----- 运行状态与采集计划 -----
   rpc GetCollectorStatus(GetCollectorStatusReq) returns (GetCollectorStatusRsp);
   rpc ReregisterFetchPlan(ReregisterFetchPlanReq) returns (ReregisterFetchPlanRsp);
+  rpc SetFetchPlanPaused(SetFetchPlanPausedReq) returns (SetFetchPlanPausedRsp);
 }

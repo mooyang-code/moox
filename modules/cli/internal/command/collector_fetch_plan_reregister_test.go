@@ -26,3 +26,16 @@ func TestFetchPlanReregisterIsRegisteredUnderFetchPlan(t *testing.T) {
 	require.NotNil(t, found.Flags().Lookup("yes"))
 	require.NotNil(t, found.Flags().Lookup("space-id"))
 }
+
+func TestFetchPlanPauseAndResumeAreRegisteredUnderFetchPlan(t *testing.T) {
+	for _, name := range []string{"pause", "resume"} {
+		found, _, err := collectorCmd.Find([]string{"fetch-plan", name})
+		require.NoError(t, err)
+		require.Equal(t, name, found.Name())
+		require.NotNil(t, found.Flags().Lookup("space-id"))
+	}
+	pause, _, _ := collectorCmd.Find([]string{"fetch-plan", "pause"})
+	require.NotNil(t, pause.Flags().Lookup("wait"))
+	var out bytes.Buffer
+	require.Error(t, runFetchPlanPause(context.Background(), &out, klineRangeFlags{File: "/nonexistent/moox.toml"}, true, 0), "缺少 --space-id")
+}

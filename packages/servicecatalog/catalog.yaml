@@ -651,6 +651,7 @@ components:
           - ClearSourceAbsences
           - GetCollectorStatus
           - ReregisterFetchPlan
+          - SetFetchPlanPaused
         read_only_methods:
           - GetTaskList
           - GetTaskDetail
@@ -691,6 +692,7 @@ components:
           - methods:
               - SyncSubjects
               - ReregisterFetchPlan
+              - SetFetchPlanPaused
             callers:
               - moox-cli
           - methods:

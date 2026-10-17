@@ -195,3 +195,42 @@ func (r *FetchPlanRepository) ListAll(ctx context.Context, spaceID string) ([]*F
 	}
 	return records, nil
 }
+
+type fetchPlanPauseRow struct {
+	ID      int64  `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID string `gorm:"column:c_space_id"`
+	Paused  bool   `gorm:"column:c_paused"`
+}
+
+func (fetchPlanPauseRow) TableName() string { return "t_collector_fetch_plan_pauses" }
+
+// PausedSpaces 返回当前处于暂停状态的空间。
+func (r *FetchPlanRepository) PausedSpaces(ctx context.Context) (map[string]bool, error) {
+	if r == nil || r.db == nil {
+		return nil, fmt.Errorf("fetch plan repository is not initialized")
+	}
+	var rows []fetchPlanPauseRow
+	if err := r.db.WithContext(ctx).Where("c_paused = ?", true).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		out[strings.ToLower(row.SpaceID)] = true
+	}
+	return out, nil
+}
+
+// SetPaused 保存空间的暂停开关；相同取值重复保存没有副作用。
+func (r *FetchPlanRepository) SetPaused(ctx context.Context, spaceID string, paused bool) error {
+	if r == nil || r.db == nil {
+		return fmt.Errorf("fetch plan repository is not initialized")
+	}
+	spaceID = strings.ToLower(strings.TrimSpace(spaceID))
+	if spaceID == "" {
+		return errors.New("space_id is required")
+	}
+	return r.db.WithContext(ctx).Exec(`
+		INSERT INTO t_collector_fetch_plan_pauses (c_space_id, c_paused) VALUES (?, ?)
+		ON CONFLICT(c_space_id) DO UPDATE SET c_paused = excluded.c_paused
+	`, spaceID, paused).Error
+}

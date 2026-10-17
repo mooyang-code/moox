@@ -65,6 +65,8 @@ type CollectMgrService interface {
 	GetCollectorStatus(ctx context.Context, req *GetCollectorStatusReq) (*GetCollectorStatusRsp, error)
 
 	ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq) (*ReregisterFetchPlanRsp, error)
+
+	SetFetchPlanPaused(ctx context.Context, req *SetFetchPlanPausedReq) (*SetFetchPlanPausedRsp, error)
 }
 
 func CollectMgrService_GetTaskList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -481,6 +483,24 @@ func CollectMgrService_ReregisterFetchPlan_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
+func CollectMgrService_SetFetchPlanPaused_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetFetchPlanPausedReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).SetFetchPlanPaused(ctx, reqbody.(*SetFetchPlanPausedReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CollectMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.collector.CollectMgr",
@@ -578,6 +598,10 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.collector.CollectMgr/ReregisterFetchPlan",
 			Func: CollectMgrService_ReregisterFetchPlan_Handler,
 		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/SetFetchPlanPaused",
+			Func: CollectMgrService_SetFetchPlanPaused_Handler,
+		},
 	},
 }
 
@@ -670,6 +694,9 @@ func (s *UnimplementedCollectMgr) GetCollectorStatus(ctx context.Context, req *G
 func (s *UnimplementedCollectMgr) ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq) (*ReregisterFetchPlanRsp, error) {
 	return nil, errors.New("rpc ReregisterFetchPlan of service CollectMgr is not implemented")
 }
+func (s *UnimplementedCollectMgr) SetFetchPlanPaused(ctx context.Context, req *SetFetchPlanPausedReq) (*SetFetchPlanPausedRsp, error) {
+	return nil, errors.New("rpc SetFetchPlanPaused of service CollectMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -725,6 +752,8 @@ type CollectMgrClientProxy interface {
 	GetCollectorStatus(ctx context.Context, req *GetCollectorStatusReq, opts ...client.Option) (rsp *GetCollectorStatusRsp, err error)
 
 	ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq, opts ...client.Option) (rsp *ReregisterFetchPlanRsp, err error)
+
+	SetFetchPlanPaused(ctx context.Context, req *SetFetchPlanPausedReq, opts ...client.Option) (rsp *SetFetchPlanPausedRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -1190,6 +1219,26 @@ func (c *CollectMgrClientProxyImpl) ReregisterFetchPlan(ctx context.Context, req
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReregisterFetchPlanRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) SetFetchPlanPaused(ctx context.Context, req *SetFetchPlanPausedReq, opts ...client.Option) (*SetFetchPlanPausedRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/SetFetchPlanPaused")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("SetFetchPlanPaused")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SetFetchPlanPausedRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

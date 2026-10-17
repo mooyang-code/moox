@@ -3,6 +3,7 @@ package marketfetch
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -176,6 +177,19 @@ type planWorker struct {
 	done   chan struct{}
 	// disabled 在协程因停用收尾完成而退出时置位（done 关闭后读取）。
 	disabled bool
+}
+
+// TimersDisabled 报告空间的对账协程是否已在停用收尾确认后退出：此时云端已确认该空间全部函数的定时器停用，
+// 并且不会再启动，直到空间重新出现在 Spaces 里。
+func (m *PlanManager) TimersDisabled(space string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, disabled := range m.disabled {
+		if disabled && strings.EqualFold(name, space) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *PlanManager) interval() time.Duration {

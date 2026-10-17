@@ -1269,3 +1269,48 @@ func TestBackfillFunctionIsNeverDowngradedByAStaleCaller(t *testing.T) {
 func testSCFAccessEnvironment(string) (map[string]string, error) {
 	return map[string]string{"MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER": "scf-collector", "MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 64)}, nil
 }
+
+// 暂停：空间从运行集合里移出后，管理器先停用全部定时器再退出协程，TimersDisabled 随之为真（大小写不敏感）；
+// 恢复后重新启动协程并清掉该状态。
+func TestPlanManagerReportsTimersDisabledAfterPauseAndRestartsOnResume(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	var mu sync.Mutex
+	paused := false
+	manager := &PlanManager{
+		Spaces: func(context.Context) ([]string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if paused {
+				return nil, nil
+			}
+			return []string{"crypto"}, nil
+		},
+		Configured: []string{"crypto"},
+		Factory: func(string) (*PlanReconciler, error) {
+			r := h.reconciler()
+			r.Now = time.Now
+			return r, nil
+		},
+		Interval: 40 * time.Millisecond, Offset: 5 * time.Millisecond, Timeout: time.Second,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan struct{})
+	go func() { manager.Run(ctx); close(finished) }()
+	defer func() { cancel(); <-finished }()
+
+	require.Eventually(t, func() bool { record, _ := h.store.Open(context.Background(), "crypto"); return record != nil }, 5*time.Second, 10*time.Millisecond)
+	require.False(t, manager.TimersDisabled("crypto"), "运行中的空间不是停用状态")
+
+	mu.Lock()
+	paused = true
+	mu.Unlock()
+	require.Eventually(t, func() bool { return manager.TimersDisabled("CRYPTO") }, 5*time.Second, 10*time.Millisecond, "停用确认后报告定时器已停用")
+	for _, patch := range h.cloud.patches {
+		require.False(t, patch.GetTimerEnabled(), "全部函数的定时器已停用")
+	}
+
+	mu.Lock()
+	paused = false
+	mu.Unlock()
+	require.Eventually(t, func() bool { return !manager.TimersDisabled("crypto") }, 5*time.Second, 10*time.Millisecond, "恢复后重新运行")
+}

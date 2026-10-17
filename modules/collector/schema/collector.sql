@@ -276,6 +276,23 @@ BEGIN
     UPDATE t_collector_fetch_plans SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
+-- 空间的采集暂停开关：暂停期间 Collector 不对账、不推进补采，并已停用该空间的 SCF 定时器；重启后保持。
+CREATE TABLE IF NOT EXISTS t_collector_fetch_plan_pauses (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL UNIQUE,
+    c_paused INTEGER NOT NULL DEFAULT 0 CHECK (c_paused IN (0, 1)),
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_fetch_plan_pauses_mtime
+AFTER UPDATE ON t_collector_fetch_plan_pauses
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_collector_fetch_plan_pauses SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+END;
+
 -- 旧版补采表：范围存成 JSON、缺少缺失判定列，改名重建；作业是可重建的运行状态，直接删除。
 DROP TABLE IF EXISTS t_collector_backfill_chunks;
 DROP TABLE IF EXISTS t_collector_backfill_jobs;
