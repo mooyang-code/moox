@@ -15,7 +15,6 @@ var (
 	_ MetadataClient           = (*gatewayMetadataClient)(nil)
 	_ PeriodMetadataClient     = (*gatewayMetadataClient)(nil)
 	_ ViewInventoryClient      = (*gatewayMetadataClient)(nil)
-	_ subjectCatalogClient     = (*gatewayMetadataClient)(nil)
 	_ rebuildLogMetadataClient = (*gatewayMetadataClient)(nil)
 )
 

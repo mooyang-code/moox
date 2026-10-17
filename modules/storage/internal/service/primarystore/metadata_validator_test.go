@@ -133,9 +133,9 @@ func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
 			writes++
 			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
 		},
-		read: func(_ context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+		read: func(_ context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 			reads++
-			return &pb.ReadFieldsRsp{RetInfo: successRetInfo(), Rows: []*pb.RowFieldValues{{Key: req.GetKeys()[0]}}}, nil
+			return &pb.ReadRowsRsp{RetInfo: successRetInfo(), Rows: []*pb.RowFieldValues{{Key: req.GetKeys()[0]}}}, nil
 		},
 	}
 	validator := NewMetadataValidator(&snapshotOnlyMetadataReader{snapshot: validatorSnapshot{}})
@@ -151,7 +151,7 @@ func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
 	if err != nil || write.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || writes != 1 {
 		t.Fatalf("write=%v err=%v writes=%d", write, err, writes)
 	}
-	read, err := svc.ReadFields(context.Background(), &pb.PrimaryReadFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Keys: []*pb.RowKey{key}})
+	read, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Keys: []*pb.RowKey{key}, ColumnNames: []string{"close"}})
 	if err != nil || read.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || reads != 1 {
 		t.Fatalf("read=%v err=%v reads=%d", read, err, reads)
 	}

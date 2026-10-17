@@ -21,7 +21,7 @@ func (*commitMetricsNode) UpsertFields(context.Context, *pb.UpsertFieldsReq) (*p
 	return nil, errors.New("unexpected ordinary upsert")
 }
 
-func (*commitMetricsNode) ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+func (*commitMetricsNode) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 	return nil, errors.New("unexpected ordinary read")
 }
 

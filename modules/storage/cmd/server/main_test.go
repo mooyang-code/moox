@@ -44,7 +44,7 @@ type cleanupNode struct {
 func (*cleanupNode) UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 	return nil, nil
 }
-func (*cleanupNode) ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+func (*cleanupNode) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 	return nil, nil
 }
 func (*cleanupNode) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
@@ -428,9 +428,9 @@ func (r *resolverRuntime) UpsertFields(context.Context, *pb.UpsertFieldsReq) (*p
 	r.writes++
 	return &pb.UpsertFieldsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
-func (r *resolverRuntime) ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+func (r *resolverRuntime) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 	r.reads++
-	return &pb.ReadFieldsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
+	return &pb.ReadRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
 }
 func (*resolverRuntime) GetNodeState(context.Context, *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	return &pb.GetNodeStateRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}}, nil
@@ -450,7 +450,7 @@ func TestDataNodeClientTimeoutCoversMaintenanceRPCs(t *testing.T) {
 
 func TestDataNodeProxyAdapterIncludesPeriodRuntime(t *testing.T) {
 	proxy := newDataNodeProxyAdapter()
-	if proxy.proxy == nil || proxy.adminProxy == nil || proxy.markerProxy == nil || proxy.periodProxy == nil || proxy.historyProxy == nil {
+	if proxy.proxy == nil || proxy.adminProxy == nil || proxy.markerProxy == nil || proxy.periodProxy == nil || proxy.rangeProxy == nil {
 		t.Fatalf("data node proxy adapter is missing a runtime proxy: %+v", proxy)
 	}
 }
@@ -577,7 +577,7 @@ func TestPrimaryReadWriteUsePublishedSnapshotAndFakeRuntime(t *testing.T) {
 	if err != nil || write.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write=%v err=%v", write, err)
 	}
-	read, err := svc.ReadFields(context.Background(), &pb.PrimaryReadFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Keys: []*pb.RowKey{key}})
+	read, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Keys: []*pb.RowKey{key}, ColumnNames: []string{"close"}})
 	if err != nil || read.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("read=%v err=%v", read, err)
 	}

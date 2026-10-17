@@ -37,7 +37,7 @@ func ensureLayout(path string) error {
 		case "2\n":
 			// Version 4 adds derived history namespaces. The legacy field
 			// namespace remains readable, so upgrade the marker in place and
-			// let ensureHistoryIndex lazily materialize markers per dataset.
+			// keep existing indexes valid.
 			if err := upgradeLayoutMarker(path, markerPath); err != nil {
 				return err
 			}

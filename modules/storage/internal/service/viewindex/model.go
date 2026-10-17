@@ -107,6 +107,8 @@ type ViewIndexSchema struct {
 	Engine           string
 	Columns          []*pb.ViewColumn
 	SchemaHash       string
+	// RowsPerSeries 是建立索引时使用的每序列保留行数，写入索引自身的元数据；0 表示未知。不参与 schema 哈希。
+	RowsPerSeries uint64
 }
 
 type ViewIndexStats struct {
@@ -121,6 +123,8 @@ type ViewIndexStats struct {
 	FreeDiskBytes uint64
 	IndexedFrom   string
 	IndexedTo     string
+	// RowsPerSeries 是索引建立时记录的每序列保留行数；0 表示未知（旧索引）。
+	RowsPerSeries uint64
 }
 
 type Filter struct {
@@ -146,21 +150,20 @@ type TimeSeriesSelector struct {
 }
 
 type QuerySpec struct {
-	RowsPerSeries int
-	Keys          []*pb.RowKey
-	Selectors     []TimeSeriesSelector
-	TimeRange     *pb.TimeRange
-	VersionRange  *pb.VersionRange
-	TextQuery     string
-	Groups        []FilterGroup
-	GroupLogical  pb.FilterLogical
-	Sorts         []*pb.SortSpec
-	Order         pb.SortOrder
-	Includes      []string
-	AfterKey      *pb.RowKey
-	Offset        int
-	Limit         int
-	TotalMode     pb.TotalMode
+	Keys         []*pb.RowKey
+	Selectors    []TimeSeriesSelector
+	TimeRange    *pb.TimeRange
+	VersionRange *pb.VersionRange
+	TextQuery    string
+	Groups       []FilterGroup
+	GroupLogical pb.FilterLogical
+	Sorts        []*pb.SortSpec
+	Order        pb.SortOrder
+	Includes     []string
+	AfterKey     *pb.RowKey
+	Offset       int
+	Limit        int
+	TotalMode    pb.TotalMode
 }
 
 // Engine is the single physical View index contract. Index existence is owned

@@ -27,11 +27,6 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 	if beforeBucket.IsZero() {
 		return 0, invalid("before bucket is required")
 	}
-	// History materialization and TTL deletion must not interleave. Otherwise
-	// an old field snapshot can republish markers after cleanup and the
-	// completion marker would permanently bless stale history.
-	s.historyBackfillMu.Lock()
-	defer s.historyBackfillMu.Unlock()
 	s.datasetWriteMu.Lock()
 	defer s.datasetWriteMu.Unlock()
 	before := beforeBucket.UTC().Format(canonicalTimeLayout)
@@ -86,7 +81,7 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 			continue
 		}
 		series := key.GetTimeSeries()
-		tagPrefix := seriesHistoryPrefix(spaceID, datasetID, historySelector{
+		tagPrefix := seriesHistoryPrefix(spaceID, datasetID, seriesSelector{
 			subject: series.GetSubjectId(),
 			freq:    series.GetFreq(),
 			tag:     series.GetSeriesTag(),
@@ -153,11 +148,9 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 		return 0, err
 	}
 	defer unlockPublication()
-	// Stop history backfill and all writes while the dataset ranges are
+	// Stop all writes while the dataset ranges are
 	// removed. Otherwise a concurrent write could repopulate the result after
 	// the metadata object has been deleted.
-	s.historyBackfillMu.Lock()
-	defer s.historyBackfillMu.Unlock()
 	s.datasetWriteMu.Lock()
 	defer s.datasetWriteMu.Unlock()
 	s.periodMu.Lock()
@@ -237,9 +230,6 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 		if err := processedTimeIter.Close(); err != nil {
 			return 0, err
 		}
-	}
-	if err := batch.Delete(historyMaterializedMarker(spaceID, datasetID), s.writeOptions); err != nil {
-		return 0, err
 	}
 	periodRanges, err := s.stageDatasetPeriodCleanup(batch, spaceID, datasetID)
 	if err != nil {
@@ -439,8 +429,6 @@ func (s *Store) RestoreDatasetRows(ctx context.Context, spaceID, datasetID strin
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	s.historyBackfillMu.Lock()
-	defer s.historyBackfillMu.Unlock()
 	s.datasetWriteMu.Lock()
 	defer s.datasetWriteMu.Unlock()
 	s.periodMu.Lock()

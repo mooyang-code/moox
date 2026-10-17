@@ -6,6 +6,7 @@ import (
 	"context"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,12 +43,12 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 	}
 
 	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	columns := closeColumns()
 	viewSchema := viewindex.ViewIndexSchema{
 		SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "prices",
-		ViewVersion: 1, Engine: "duckdb",
+		ViewVersion: 1, Engine: "duckdb", Columns: columns,
 	}
 	schemaHash := viewindex.HashViewIndexSchema(viewSchema)
-	columns := []*pb.ViewColumn(nil)
 	prepare := func(indexID string) {
 		t.Helper()
 		rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{
@@ -217,37 +218,48 @@ type capacitySubjectRangeReader struct {
 }
 
 func (r *capacitySubjectRangeReader) ReadTimeSeriesRows(_ context.Context, req *pb.ReadTimeSeriesRowsReq, _ ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error) {
-	if len(req.GetSelectors()) != 1 {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: successRetInfo()}, nil
-	}
-	selector := req.GetSelectors()[0]
-	rows := make([]*pb.TimeSeriesRow, 0)
+	// 不指定标的：按 (subject_id, series_tag) 分组、每个序列从新到旧取最近 N 根，按游标分页。
+	rows := make([]*pb.TimeSeriesRow, 0, len(r.rows))
 	for _, row := range r.rows {
 		key := row.GetKey()
-		if key.GetSpaceId() == selector.GetSpaceId() && key.GetDatasetId() == selector.GetDatasetId() && key.GetSubjectId() == selector.GetSubjectId() && key.GetFreq() == selector.GetFreq() {
+		if key.GetSpaceId() == req.GetSpaceId() && key.GetDatasetId() == req.GetDatasetId() {
 			rows = append(rows, row)
 		}
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].GetKey().GetDataTime() > rows[j].GetKey().GetDataTime()
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i].GetKey(), rows[j].GetKey()
+		if a.GetSubjectId() != b.GetSubjectId() {
+			return a.GetSubjectId() < b.GetSubjectId()
+		}
+		if a.GetSeriesTag() != b.GetSeriesTag() {
+			return a.GetSeriesTag() < b.GetSeriesTag()
+		}
+		return a.GetDataTime() > b.GetDataTime()
 	})
 	if perSeries := int(req.GetLatestPerSeries()); perSeries > 0 {
 		kept := make(map[string]int)
-		latest := rows[:0]
+		latest := make([]*pb.TimeSeriesRow, 0, len(rows))
 		for _, row := range rows {
-			if kept[row.GetKey().GetSeriesTag()] < perSeries {
-				kept[row.GetKey().GetSeriesTag()]++
+			id := row.GetKey().GetSubjectId() + "|" + row.GetKey().GetSeriesTag()
+			if kept[id] < perSeries {
+				kept[id]++
 				latest = append(latest, row)
 			}
 		}
 		rows = latest
 	}
-	limit := int(req.GetPage().GetSize())
-	if limit > 0 && len(rows) > limit {
-		rows = rows[:limit]
+	offset := 0
+	if cursor := req.GetPage().GetCursor(); cursor != "" {
+		offset, _ = strconv.Atoi(cursor)
 	}
-	return &pb.ReadTimeSeriesRowsRsp{
-		RetInfo: successRetInfo(), Rows: rows,
-		PageResult: &pb.PageResult{Page: 1, Size: uint32(limit), Total: uint32(len(rows)), HasMore: false},
-	}, nil
+	size := int(req.GetPage().GetSize())
+	if size <= 0 {
+		size = len(rows)
+	}
+	end := min(offset+size, len(rows))
+	rsp := &pb.ReadTimeSeriesRowsRsp{RetInfo: successRetInfo(), Rows: rows[offset:end], PageResult: &pb.PageResult{}}
+	if end < len(rows) {
+		rsp.PageResult.HasMore, rsp.PageResult.NextCursor = true, strconv.Itoa(end)
+	}
+	return rsp, nil
 }

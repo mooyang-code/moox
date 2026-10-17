@@ -156,8 +156,8 @@ func TestDataNodeManagementLifecycle(t *testing.T) {
 	if got := primaryWriteResponse.GetRetInfo().GetCode(); got != pb.ErrorCode_SUCCESS {
 		t.Fatalf("active Dataset write code=%s, want SUCCESS", got)
 	}
-	primaryReadResponse, err := primary.ReadFields(ctx, &pb.PrimaryReadFieldsReq{
-		AuthInfo: writeAuth, Keys: []*pb.RowKey{row.GetKey()}, FieldIds: []string{"value"},
+	primaryReadResponse, err := primary.ReadRows(ctx, &pb.PrimaryReadRowsReq{
+		AuthInfo: writeAuth, Keys: []*pb.RowKey{row.GetKey()}, ColumnNames: []string{"value"},
 	})
 	if err != nil || primaryReadResponse.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("snapshot-only read response=%v err=%v", primaryReadResponse, err)

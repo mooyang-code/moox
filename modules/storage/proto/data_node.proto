@@ -117,19 +117,31 @@ message UpsertFieldsRsp {
   repeated RowKey keys = 2;
 }
 
-message ReadFieldsReq {
+message ReadRowsReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
   string dataset_id = 3;
   repeated RowKey keys = 4;
-  repeated string field_ids = 5;
+  repeated string column_names = 5;
   repeated string attribute_keys = 6;
 }
 
-message ReadFieldsRsp {
+// ReadRowsRsp 只返回存在的行，顺序与请求一致。
+message ReadRowsRsp {
   common.RetInfo ret_info = 1;
   repeated RowFieldValues rows = 2;
-  repeated RowKey existing_keys = 3;
+}
+
+// RowsCursor 是 ReadTimeSeriesRows 游标的内容，只在服务端编码与解码，不出现在公开请求中。
+message RowsCursor {
+  // 区间读取：最后一行的键。
+  TimeSeriesRowKey last = 1;
+  // 最近 N 根：当前序列（subject_id、freq、series_tag）、续读位置（该序列已返回的最早一根的 data_time）及该序列已返回的根数。
+  string subject_id = 2;
+  string freq = 3;
+  string series_tag = 4;
+  string resume_before = 5;
+  uint32 returned = 6;
 }
 
 message GetNodeStateReq {
@@ -237,7 +249,7 @@ service DataNodeRuntime {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
   rpc UpsertFields(UpsertFieldsReq) returns (UpsertFieldsRsp);
   rpc WriteFactorRows(WriteFactorRowsReq) returns (WriteFactorRowsRsp);
-	rpc ReadFields(ReadFieldsReq) returns (ReadFieldsRsp);
+	rpc ReadRows(ReadRowsReq) returns (ReadRowsRsp);
 	rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
 	rpc CleanupExpiredBuckets(CleanupExpiredBucketsReq) returns (CleanupExpiredBucketsRsp);
 }
@@ -267,11 +279,8 @@ service DataNodeMarkerRuntime {
   rpc GetFactorPeriodComputedMarker(GetFactorPeriodComputedMarkerReq) returns (GetFactorPeriodComputedMarkerRsp);
 }
 
-// DataNodeHistoryRuntime is an internal range-scan surface used only when a
-// View is initialized from Primary history. It is kept separate from the
-// point-read/write service so existing runtime fakes and callers remain
-// narrow, while the View can rebuild after its physical indexes are removed.
-service DataNodeHistoryRuntime {
+// DataNodeRangeRuntime 是 DataNode 的区间读取与计数入口，PrimaryStore 对所有调用方转发到这里。
+service DataNodeRangeRuntime {
 	 rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
-	 rpc ListHistorySubjects(ListHistorySubjectsReq) returns (ListHistorySubjectsRsp);
+	 rpc CountTimeSeriesRows(CountTimeSeriesRowsReq) returns (CountTimeSeriesRowsRsp);
 }

@@ -65,12 +65,10 @@ type rebuildLogMetadataClient interface {
 }
 
 type FieldReader interface {
-	ReadFields(context.Context, *pb.PrimaryReadFieldsReq, ...client.Option) (*pb.PrimaryReadFieldsRsp, error)
+	ReadRows(context.Context, *pb.PrimaryReadRowsReq, ...client.Option) (*pb.PrimaryReadRowsRsp, error)
 }
 
-// TimeSeriesRangeReader is the internal Primary history path used when a View
-// has no readable active index. It must enumerate the Primary dataset rather
-// than routing a range read back through the View being rebuilt.
+// TimeSeriesRangeReader 读取 Primary 的时序事实（PrimaryStore 对所有调用方都由 DataNode 回答），View 重建用它按页取每个序列最近 N 根。
 type TimeSeriesRangeReader interface {
 	ReadTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq, ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error)
 }
@@ -896,15 +894,6 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, gateBlockReason, stats, stats.PhysicalBytes, pending, ackPending, capacityDetails)
 		return nil
 	}
-	if capacityMaintenanceOnly {
-		if ready, reason := s.capacityMaintenanceSubjectsReady(ctx, opts.PrimaryRange, s.primaryAuthSnapshot(), view); !ready {
-			// Capacity maintenance is optional. Never claim a build and fall back
-			// to the unbounded Primary history walk when the subject universe is
-			// unavailable; the active index remains safe to serve in the meantime.
-			s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, reason, stats, stats.PhysicalBytes, pending, ackPending, capacityDetails)
-			return nil
-		}
-	}
 	if capacityMaintenanceOnly && !s.tryAcquireRebuild() {
 		s.recordSkippedRebuild(ctx, opts, auth, view, triggerReason, "another_rebuild_running", stats, stats.PhysicalBytes, pending, ackPending, capacityDetails)
 		return nil
@@ -942,7 +931,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	s.mu.Unlock()
 	schema := viewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: view.GetDesiredViewRevision(),
-		PrimaryDatasetID: view.GetDatasetId(), Engine: strings.ToLower(view.GetEngine()), Columns: columns,
+		PrimaryDatasetID: view.GetDatasetId(), Engine: strings.ToLower(view.GetEngine()), Columns: columns, RowsPerSeries: bars,
 	}
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 	indexID := viewindex.InactiveViewIndexID(view.GetSpaceId(), view.GetViewId(), view.GetActiveIndexId())

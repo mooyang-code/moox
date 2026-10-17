@@ -145,7 +145,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		createColumns = append(createColumns, quote(name)+" "+duckType(valueType))
 	}
 	statement := fmt.Sprintf(`
-		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, indexed_from VARCHAR NOT NULL DEFAULT '', indexed_to VARCHAR NOT NULL DEFAULT '');
+		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, indexed_from VARCHAR NOT NULL DEFAULT '', indexed_to VARCHAR NOT NULL DEFAULT '', rows_per_series UBIGINT NOT NULL DEFAULT 0);
 		CREATE TABLE view_columns (column_name VARCHAR PRIMARY KEY, value_type INTEGER NOT NULL);
 		CREATE TABLE view_series_counts (subject_id VARCHAR NOT NULL, freq VARCHAR NOT NULL, series_tag VARCHAR NOT NULL, row_count UBIGINT NOT NULL, PRIMARY KEY (subject_id, freq, series_tag));
 		CREATE TABLE view_rows (%s, PRIMARY KEY (subject_id, freq, data_time, series_tag));
@@ -154,7 +154,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		cleanupTemp()
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO view_meta (singleton, view_version, schema_hash, primary_dataset_id, space_id, updated_at) VALUES (1, ?, ?, ?, ?, ?)`, schema.ViewVersion, schema.SchemaHash, schema.PrimaryDatasetID, schema.SpaceID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO view_meta (singleton, view_version, schema_hash, primary_dataset_id, space_id, updated_at, rows_per_series) VALUES (1, ?, ?, ?, ?, ?, ?)`, schema.ViewVersion, schema.SchemaHash, schema.PrimaryDatasetID, schema.SpaceID, time.Now().UTC().Format(time.RFC3339Nano), schema.RowsPerSeries); err != nil {
 		cleanupTemp()
 		return err
 	}
@@ -936,9 +936,6 @@ func normalizeColumnValue(value any, valueType pb.FieldValueType, mode viewindex
 }
 
 func (m *IndexManager) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
-	if spec.RowsPerSeries < 0 || (spec.RowsPerSeries > 0 && (spec.Limit != 0 || spec.Offset != 0 || len(spec.Sorts) != 0 || spec.Order == pb.SortOrder_SORT_ORDER_DESC || spec.AfterKey != nil || spec.TotalMode != pb.TotalMode_NONE)) {
-		return nil, 0, fmt.Errorf("series window requires positive row count and no pagination, custom sort or exact total")
-	}
 	var err error
 	if ctx, err = duckDBContext(ctx); err != nil {
 		return nil, 0, err
@@ -1020,21 +1017,16 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 		}
 	}
 	query := "SELECT " + strings.Join(projections, ",") + " FROM view_rows" + where
-	if spec.RowsPerSeries > 0 {
-		query += " QUALIFY ROW_NUMBER() OVER (PARTITION BY subject_id, freq, series_tag ORDER BY data_time DESC) <= ? ORDER BY subject_id, freq, series_tag, data_time ASC"
-		args = append(args, spec.RowsPerSeries)
-	} else {
-		query += orderSQL(spec.Sorts, spec.Order, columns)
-		limit := spec.Limit
-		if limit <= 0 {
-			limit = 1000
-		}
-		if spec.Offset < 0 {
-			spec.Offset = 0
-		}
-		query += " LIMIT ? OFFSET ?"
-		args = append(args, limit, spec.Offset)
+	query += orderSQL(spec.Sorts, spec.Order, columns)
+	limit := spec.Limit
+	if limit <= 0 {
+		limit = 1000
 	}
+	if spec.Offset < 0 {
+		spec.Offset = 0
+	}
+	query += " LIMIT ? OFFSET ?"
+	args = append(args, limit, spec.Offset)
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -1066,7 +1058,7 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 				continue
 			}
 			if value == nil {
-				if len(spec.Includes) == 0 && spec.RowsPerSeries == 0 {
+				if len(spec.Includes) == 0 {
 					continue
 				}
 				row.Fields = append(row.Fields, &pb.FieldValue{FieldId: name, Value: &pb.TypedValue{
@@ -1130,7 +1122,7 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 		return viewindex.ViewIndexStats{}, err
 	}
 	var stats viewindex.ViewIndexStats
-	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries); err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM view_rows`).Scan(&stats.EntryCount); err != nil {
@@ -1233,7 +1225,7 @@ func (m *IndexManager) StatMetadata(ctx context.Context, id string) (viewindex.V
 		return viewindex.ViewIndexStats{}, err
 	}
 	var stats viewindex.ViewIndexStats
-	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries); err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	stats.Exists = true
@@ -1399,7 +1391,7 @@ func (m *IndexManager) ensureCoverageColumns(ctx context.Context, db *sql.DB) er
 	}
 	m.coverageMu.Lock()
 	defer m.coverageMu.Unlock()
-	for _, column := range []string{"indexed_from", "indexed_to"} {
+	for _, column := range []string{"indexed_from", "indexed_to", "rows_per_series"} {
 		var count int
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'view_meta' AND column_name = ?`, column).Scan(&count); err != nil {
 			return err
@@ -1407,7 +1399,7 @@ func (m *IndexManager) ensureCoverageColumns(ctx context.Context, db *sql.DB) er
 		if count != 0 {
 			continue
 		}
-		if _, err := db.ExecContext(ctx, `ALTER TABLE view_meta ADD COLUMN `+column+` VARCHAR DEFAULT ''`); err != nil {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE view_meta ADD COLUMN `+column+` `+viewMetaColumnType(column)); err != nil {
 			return fmt.Errorf("add view_meta coverage column %s: %w", column, err)
 		}
 	}
@@ -1975,4 +1967,12 @@ func orderSQL(sorts []*pb.SortSpec, order pb.SortOrder, columns map[string]pb.Fi
 		}
 	}
 	return " ORDER BY " + strings.Join(parts, ", ")
+}
+
+// viewMetaColumnType 返回给旧索引补加的 view_meta 列的类型和默认值。
+func viewMetaColumnType(column string) string {
+	if column == "rows_per_series" {
+		return "UBIGINT DEFAULT 0"
+	}
+	return "VARCHAR DEFAULT ''"
 }

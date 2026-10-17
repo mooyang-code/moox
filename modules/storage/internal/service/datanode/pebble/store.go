@@ -82,13 +82,8 @@ type Store struct {
 	outboxOldestEventNanos  atomic.Int64
 	maintenanceMu           sync.Mutex
 	maintenanceWG           sync.WaitGroup
-	historyWG               sync.WaitGroup
-	historyMu               sync.Mutex
-	historyBackfillMu       sync.Mutex
-	historyCtx              context.Context
-	historyCancel           context.CancelFunc
-	historyBackfilled       map[string]bool
-	historyBackfillStarted  map[string]bool
+	backgroundCtx           context.Context
+	backgroundCancel        context.CancelFunc
 	closing                 bool
 	blockCacheBytes         int64
 	// statsStop 通知缓存用量日志协程退出，由 Close 关闭。
@@ -133,8 +128,8 @@ func Open(opts Options) (*Store, error) {
 	if opts.DisableSyncWrites {
 		writeOptions = cpebble.NoSync
 	}
-	historyCtx, historyCancel := context.WithCancel(context.Background())
-	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, periodNow: opts.PeriodNow, historyCtx: historyCtx, historyCancel: historyCancel, historyBackfilled: make(map[string]bool), historyBackfillStarted: make(map[string]bool), blockCacheBytes: cacheBytes, statsStop: make(chan struct{})}
+	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
+	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{})}
 	store.startPeriodFinalizer()
 	store.startCacheStats(cacheStatsFirstDelay, cacheStatsInterval)
 	return store, nil
@@ -161,11 +156,10 @@ func (s *Store) Close() error {
 			close(s.statsStop)
 		}
 	})
-	if s.historyCancel != nil {
-		s.historyCancel()
+	if s.backgroundCancel != nil {
+		s.backgroundCancel()
 	}
 	s.maintenanceWG.Wait()
-	s.historyWG.Wait()
 	return s.db.Close()
 }
 
@@ -586,127 +580,10 @@ func groupRowsByDataset(rows []*pb.RowFieldUpsert) map[datasetGroup][]*pb.RowFie
 	return out
 }
 
-func (s *Store) ReadFields(ctx context.Context, keys []*pb.RowKey, fieldIDs, attributeKeys []string) ([]*pb.RowFieldValues, error) {
-	rows, _, err := s.ReadFieldsWithPresence(ctx, keys, fieldIDs, attributeKeys)
-	return rows, err
-}
-
-func (s *Store) ReadFieldsWithPresence(ctx context.Context, keys []*pb.RowKey, fieldIDs, attributeKeys []string) ([]*pb.RowFieldValues, []*pb.RowKey, error) {
-	if s == nil || s.db == nil {
-		return nil, nil, errors.New("pebble store is closed")
-	}
-	if len(keys) == 0 {
-		return nil, nil, invalid("keys are required")
-	}
-	if len(fieldIDs) == 0 && len(attributeKeys) == 0 {
-		return nil, nil, invalid("field_ids or attribute_keys are required")
-	}
-	if len(keys) > 10000 || (len(keys)*(len(fieldIDs)+len(attributeKeys))) > 100000 {
-		return nil, nil, invalid("read request exceeds key/field limit")
-	}
-	// 一次读取使用同一个快照：成组字段（如 open/high/low/close）由一次提交原子写入，逐字段用各自当时的可见序号
-	// 读取会读到不属于任何一次提交的混合值。版本解析、存在性检查、字段与属性读取都走这个快照。
-	snapshot := s.db.NewSnapshot()
-	defer snapshot.Close()
-	result := make([]*pb.RowFieldValues, 0, len(keys))
-	existing := make([]*pb.RowKey, 0, len(keys))
-	for _, key := range keys {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
-		}
-		resolved := key
-		if key != nil {
-			if rec := key.GetRecord(); rec != nil && rec.GetVersion() == "" {
-				var err error
-				resolved, err = s.resolveMaxRecordVersion(snapshot, key)
-				if err != nil {
-					return nil, nil, err
-				}
-			}
-		}
-		present, err := s.rowExists(snapshot, resolved)
-		if err != nil {
-			return nil, nil, err
-		}
-		if present {
-			existing = append(existing, resolved)
-		}
-		row := &pb.RowFieldValues{Key: resolved}
-		for _, id := range fieldIDs {
-			physical, err := encodeFieldKey(resolved, id, s.bucketDuration)
-			if err != nil {
-				return nil, nil, err
-			}
-			data, closer, err := snapshot.Get(physical)
-			if errors.Is(err, cpebble.ErrNotFound) {
-				continue
-			}
-			if err != nil {
-				return nil, nil, err
-			}
-			value := &pb.TypedValue{}
-			err = proto.Unmarshal(data, value)
-			_ = closer.Close()
-			if err != nil {
-				return nil, nil, err
-			}
-			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: id, Value: value})
-		}
-		for _, name := range attributeKeys {
-			physical, err := encodeAttributeKey(resolved, name, s.bucketDuration)
-			if err != nil {
-				return nil, nil, err
-			}
-			data, closer, err := snapshot.Get(physical)
-			if errors.Is(err, cpebble.ErrNotFound) {
-				continue
-			}
-			if err != nil {
-				return nil, nil, err
-			}
-			value := &pb.TypedValue{}
-			err = proto.Unmarshal(data, value)
-			_ = closer.Close()
-			if err != nil {
-				return nil, nil, err
-			}
-			if row.Attributes == nil {
-				row.Attributes = make(map[string]*pb.TypedValue)
-			}
-			row.Attributes[name] = value
-		}
-		result = append(result, row)
-	}
-	return result, existing, nil
-}
-
 // pebbleReader 是 *pebble.DB 与 *pebble.Snapshot 共有的只读接口。
 type pebbleReader interface {
 	Get(key []byte) ([]byte, io.Closer, error)
 	NewIter(o *cpebble.IterOptions) (*cpebble.Iterator, error)
-}
-
-func (s *Store) rowExists(reader pebbleReader, key *pb.RowKey) (bool, error) {
-	for _, namespace := range []byte{fieldNamespace, attributeNamespace} {
-		prefix, err := encodeNamespacePrefix(namespace, key, s.bucketDuration)
-		if err != nil {
-			return false, err
-		}
-		iter, err := reader.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: nextPrefix(prefix)})
-		if err != nil {
-			return false, err
-		}
-		found := iter.First()
-		iterErr := iter.Error()
-		_ = iter.Close()
-		if iterErr != nil {
-			return false, iterErr
-		}
-		if found {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func (s *Store) resolveMaxRecordVersion(reader pebbleReader, key *pb.RowKey) (*pb.RowKey, error) {

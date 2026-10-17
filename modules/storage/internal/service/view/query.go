@@ -52,16 +52,14 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	if err := s.authorize(req.GetAuthInfo()); err != nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	if req.GetRowsPerSeries() > 0 {
-		return s.querySeriesWindow(ctx, req)
-	}
 	if len(req.GetSelectors()) == 0 && req.GetTimeRange() == nil && req.GetFilter() == nil {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("query predicate is required"))}, nil
 	}
 	queryStarted := time.Now()
 	indexID, runtime := s.activeIndex(req.GetSpaceId(), req.GetViewId())
 	resolvedAt := time.Now()
-	if expected := strings.TrimSpace(req.GetExpectedActiveIndexId()); expected != "" && expected != indexID {
+	pin := req.GetPin()
+	if expected := strings.TrimSpace(pin.GetIndexId()); expected != "" && expected != indexID {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index changed: expected=%s actual=%s", expected, indexID))}, nil
 	}
 	startRevision, revisionErr := s.readIndexRevision(ctx, indexID, nil)
@@ -69,7 +67,7 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(queryErrorCode(revisionErr), revisionErr)}, nil
 	}
 	startRevisionAt := time.Now()
-	if expected := req.GetExpectedActiveIndexRevision(); expected != 0 && expected != startRevision {
+	if expected := pin.GetRevision(); expected != 0 && expected != startRevision {
 		return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_VIEW_NOT_READY, fmt.Errorf("active View index revision changed: expected=%d actual=%d", expected, startRevision))}, nil
 	}
 	selectors, err := s.timeSeriesSelectors(indexID, req)
@@ -111,7 +109,7 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	}
 	out := make([]*pb.TimeSeriesRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, &pb.TimeSeriesRow{Key: rowToTimeSeriesKey(row.GetKey()), Fields: row.GetFields(), Attributes: rowAttributesToStrings(row.GetAttributes())})
+		out = append(out, &pb.TimeSeriesRow{Key: rowToTimeSeriesKey(row.GetKey()), Fields: row.GetFields()})
 	}
 	stats, hasStats := cachedActiveIndexStats(runtime, indexID)
 	if req.GetTotalMode() != pb.TotalMode_NONE {
@@ -131,18 +129,30 @@ func (s *Service) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeri
 	// trailing page after an exact page-size multiple); treating that page as
 	// incomplete makes clients reject an otherwise ready View.
 	complete := hasStats && runtimeCoverageComplete(runtime, req.GetTimeRange(), stats)
-	indexedFrom, indexedTo := "", ""
+	minDataTime, maxDataTime := "", ""
 	if hasStats {
-		indexedFrom, indexedTo = stats.IndexedFrom, stats.IndexedTo
+		minDataTime, maxDataTime = stats.IndexedFrom, stats.IndexedTo
 	}
-	return &pb.QueryTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Rows: out, PageResult: makePageResult(pageNo, pageSize, len(out), total), ServedIndexedFrom: indexedFrom, ServedIndexedTo: indexedTo, Complete: complete, ServedActiveIndexRevision: startRevision, ServedSeriesBars: s.servedSeriesBars()}, nil
+	return &pb.QueryTimeSeriesRowsRsp{
+		RetInfo: retinfo.Success("success"), Rows: out, PageResult: makePageResult(pageNo, pageSize, len(out), total),
+		MinDataTime: minDataTime, MaxDataTime: maxDataTime, Complete: complete,
+		Index: &pb.IndexVersion{IndexId: indexID, Revision: startRevision}, RetainedRowsPerSeries: s.retainedRowsPerSeries(stats, hasStats),
+	}, nil
 }
 
-// servedSeriesBars 返回时序 View 每个序列保留的根数（启动时由 SetSeriesBars 按配置设置）；未设置时为 0（未知）。
-func (s *Service) servedSeriesBars() uint64 {
+// retainedRowsPerSeries 返回活动索引每个序列至少保留的最近行数：索引建立时记录的行数与当前配置中较小的一个。
+// 调大配置要等重建成功（新索引记录新值）后才变大，调小配置立即生效；索引没有记录（旧索引）时为 0（未知）。
+func (s *Service) retainedRowsPerSeries(stats viewindex.ViewIndexStats, hasStats bool) uint64 {
+	if !hasStats || stats.RowsPerSeries == 0 {
+		return 0
+	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.seriesBars
+	configured := s.seriesBars
+	s.mu.RUnlock()
+	if configured == 0 || stats.RowsPerSeries < configured {
+		return stats.RowsPerSeries
+	}
+	return configured
 }
 
 func (s *Service) readIndexRevision(ctx context.Context, indexID string, engine viewindex.Engine) (uint64, error) {
@@ -167,33 +177,6 @@ func (s *Service) readIndexRevision(ctx context.Context, indexID string, engine 
 		}
 	}
 	return s.indexRevisionOf(indexID), nil
-}
-
-func rowAttributesToStrings(attributes map[string]*pb.TypedValue) map[string]string {
-	if len(attributes) == 0 {
-		return nil
-	}
-	result := make(map[string]string, len(attributes))
-	for name, value := range attributes {
-		if value == nil {
-			continue
-		}
-		switch typed := value.GetValue().(type) {
-		case *pb.TypedValue_StringValue:
-			result[name] = typed.StringValue
-		case *pb.TypedValue_IntValue:
-			result[name] = fmt.Sprintf("%d", typed.IntValue)
-		case *pb.TypedValue_DoubleValue:
-			result[name] = fmt.Sprintf("%g", typed.DoubleValue)
-		case *pb.TypedValue_BoolValue:
-			result[name] = fmt.Sprintf("%t", typed.BoolValue)
-		case *pb.TypedValue_TimeValue:
-			result[name] = typed.TimeValue
-		case *pb.TypedValue_JsonValue:
-			result[name] = typed.JsonValue
-		}
-	}
-	return result
 }
 
 // SearchRecordRows pushes full-text, structured filters, sorting, and paging

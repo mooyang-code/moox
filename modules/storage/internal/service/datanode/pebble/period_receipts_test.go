@@ -294,7 +294,7 @@ func TestPeriodCommitRejectsPhysicalIdentityAliases(t *testing.T) {
 					require.Equal(t, 0, countOutboxEvent(t, store, events.DatasetRowsUpserted.Name()))
 					require.Equal(t, 0, countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()))
 					if _, err := NormalizeRowKey(bad.Key); err == nil {
-						_, existing, err := store.ReadFieldsWithPresence(ctx, []*pb.RowKey{rows[0].Key, bad.Key}, []string{"close"}, nil)
+						existing, err := store.ReadRows(ctx, []*pb.RowKey{rows[0].Key, bad.Key}, []string{"close"}, nil)
 						require.NoError(t, err)
 						require.Empty(t, existing, "the valid portion of an invalid request must not be persisted")
 					}
@@ -317,7 +317,7 @@ func TestPeriodCommitAcceptedIndexesPreservesHistoricalBars(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "waiting", result.Status)
 	require.Empty(t, result.AcceptedSeriesIndexes)
-	_, existing, err := store.ReadFieldsWithPresence(ctx, []*pb.RowKey{historical.Key}, []string{"close"}, nil)
+	existing, err := store.ReadRows(ctx, []*pb.RowKey{historical.Key}, []string{"close"}, nil)
 	require.NoError(t, err)
 	require.Len(t, existing, 1, "legal historical bars remain physically writable")
 	progress, err := store.GetDatasetPeriodProgress(ctx, exp)

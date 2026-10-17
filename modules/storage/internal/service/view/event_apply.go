@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"time"
 
@@ -614,16 +613,15 @@ func (s *Service) recoverMissingRows(ctx context.Context, schema viewindex.ViewI
 		key.DatasetId = datasetID
 		keys = append(keys, key)
 	}
-	attributeKeys := factorAttributeKeys(schema.Columns)
 	values := make(map[string]*pb.RowFieldValues)
 	present := make(map[string]struct{})
-	chunkSize := primaryPointReadChunkSize(len(fieldIDs)+len(attributeKeys), len(keys))
+	chunkSize := primaryPointReadChunkSize(len(fieldIDs), len(keys))
 	for chunkStart := 0; chunkStart < len(keys); chunkStart += chunkSize {
 		chunkEnd := chunkStart + chunkSize
 		if chunkEnd > len(keys) {
 			chunkEnd = len(keys)
 		}
-		rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys[chunkStart:chunkEnd], FieldIds: fieldIDs, AttributeKeys: attributeKeys})
+		rsp, err := reader.ReadRows(ctx, &pb.PrimaryReadRowsReq{AuthInfo: auth, Keys: keys[chunkStart:chunkEnd], ColumnNames: fieldIDs})
 		if err != nil {
 			return nil, err
 		}
@@ -631,14 +629,10 @@ func (s *Service) recoverMissingRows(ctx context.Context, schema viewindex.ViewI
 			return nil, err
 		}
 		for _, row := range rsp.GetRows() {
-			if row != nil && row.GetKey() != nil && (len(row.GetFields()) != 0 || len(row.GetAttributes()) != 0) {
+			// ReadRows 只返回存在的行：返回即存在，存在但没有请求的列时只有键。
+			if row != nil && row.GetKey() != nil {
 				values[viewindex.RowKeyID(row.GetKey())] = row
 				present[viewindex.RowKeyID(row.GetKey())] = struct{}{}
-			}
-		}
-		for _, key := range rsp.GetExistingKeys() {
-			if key != nil {
-				present[viewindex.RowKeyID(key)] = struct{}{}
 			}
 		}
 	}
@@ -652,18 +646,10 @@ func (s *Service) recoverMissingRows(ctx context.Context, schema viewindex.ViewI
 		var fields []*pb.FieldValue
 		if row := values[primaryID]; row != nil {
 			fields = append(fields, row.GetFields()...)
-			if len(row.GetAttributes()) > 0 {
-				complete.Attributes = make(map[string]*pb.TypedValue, len(row.GetAttributes()))
-			}
-			mergeRowAttributes(complete.Attributes, row.GetAttributes())
 		}
 		// 事件带的是最新的值，所以在 Primary 行之后应用，两者都有的字段以事件为准。
 		if event := eventRows[primaryID]; event != nil {
 			fields = append(fields, event.GetFields()...)
-			if complete.Attributes == nil && len(event.GetAttributes()) > 0 {
-				complete.Attributes = make(map[string]*pb.TypedValue, len(event.GetAttributes()))
-			}
-			mergeRowAttributes(complete.Attributes, event.GetAttributes())
 		}
 		for _, fieldID := range fieldIDs {
 			complete.Fields = appendMatchingField(complete.Fields, fields, fieldID)
@@ -671,31 +657,6 @@ func (s *Service) recoverMissingRows(ctx context.Context, schema viewindex.ViewI
 		result = append(result, complete)
 	}
 	return result, nil
-}
-
-// factorAttributeKeys 返回固定的来源属性，加上受管理的结果 View 投影的每个因子的源哈希键。Primary 的属性读取是
-// 按确切的键读取，所以这些键必须从 View 的列元数据里枚举出来，不能用前缀通配符请求。
-func factorAttributeKeys(columns []*pb.ViewColumn) []string {
-	seen := map[string]struct{}{
-		"factor.source_hash":    {},
-		"factor.id":             {},
-		"factor.parent_task_id": {},
-		"factor.computed_at":    {},
-	}
-	for _, column := range columns {
-		if viewColumnField(column) == "" {
-			continue
-		}
-		if factorID := strings.TrimSpace(column.GetAttributes()["origin_factor_id"]); factorID != "" {
-			seen["factor.source_hash."+factorID] = struct{}{}
-		}
-	}
-	result := make([]string, 0, len(seen))
-	for key := range seen {
-		result = append(result, key)
-	}
-	sort.Strings(result)
-	return result
 }
 
 func appendMatchingField(dst, fields []*pb.FieldValue, fieldID string) []*pb.FieldValue {
@@ -754,10 +715,10 @@ func eventWrites(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.
 				fields = append(fields, &pb.FieldValue{FieldId: field.GetFieldId(), Value: field.GetValue()})
 			}
 		}
-		if len(fields) != 0 || len(row.GetAttributes()) != 0 {
+		if len(fields) != 0 {
 			key := proto.Clone(row.GetKey()).(*pb.RowKey)
 			key.DatasetId = owned
-			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: key}, Fields: fields, Attributes: row.GetAttributes()})
+			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: key}, Fields: fields})
 		}
 	}
 	return writes

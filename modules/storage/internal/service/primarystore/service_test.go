@@ -51,7 +51,7 @@ func (n emptyPeriodNode) CommitTimeSeriesBatch(context.Context, *pb.CommitTimeSe
 
 type recordingNode struct {
 	write func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error)
-	read  func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error)
+	read  func(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error)
 }
 
 type recordingMarkerNode struct {
@@ -59,31 +59,11 @@ type recordingMarkerNode struct {
 	markerCalls []string
 }
 
-type recordingView struct {
-	query func(context.Context, *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error)
-	count func(context.Context, *pb.CountTimeSeriesViewRowsReq) (*pb.CountTimeSeriesRowsRsp, error)
-}
-
-func (v *recordingView) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesViewRowsReq) (*pb.CountTimeSeriesRowsRsp, error) {
-	if v.count == nil {
-		return nil, errors.New("unexpected count")
-	}
-	return v.count(ctx, req)
-}
-
-func (v *recordingView) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
-	return v.query(ctx, req)
-}
-
-func (*recordingView) SearchRecordRows(context.Context, *pb.SearchRecordRowsReq) (*pb.SearchRecordRowsRsp, error) {
-	return nil, errors.New("unexpected record query")
-}
-
 func (n *recordingNode) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 	return n.write(ctx, req)
 }
 
-func (n *recordingNode) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+func (n *recordingNode) ReadRows(ctx context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 	return n.read(ctx, req)
 }
 
@@ -157,8 +137,8 @@ func TestPrimaryWriteMethodsStillAllowInternalCallers(t *testing.T) {
 		write: func(_ context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
 		},
-		read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
-			return &pb.ReadFieldsRsp{RetInfo: successRetInfo()}, nil
+		read: func(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
+			return &pb.ReadRowsRsp{RetInfo: successRetInfo()}, nil
 		},
 	}}
 	svc, err := New(Options{Node: node, Snapshot: func() metadata.RequestSnapshot { return markerRoutingSnapshot{} }})
@@ -280,284 +260,6 @@ func (factorResultSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.
 	return nil, &pb.PageResult{}, nil
 }
 
-func TestPrimaryRangeReadsRequireCallerAuthorization(t *testing.T) {
-	svc, err := New(Options{
-		Node: &recordingNode{
-			write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-				return &pb.UpsertFieldsRsp{}, nil
-			},
-			read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
-				return &pb.ReadFieldsRsp{}, nil
-			},
-		},
-		Authorizer: func(*pb.AuthInfo) error { return errors.New("denied") },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	records, err := svc.ReadRecordRows(context.Background(), &pb.ReadRecordRowsReq{
-		Keys:         []*pb.RecordKey{{SpaceId: "space", DatasetId: "dataset", RecordId: "record"}},
-		VersionRange: &pb.VersionRange{},
-	})
-	if err != nil || records.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
-		t.Fatalf("record range read rsp=%v err=%v", records, err)
-	}
-	timeSeries, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
-		SpaceId:   "space",
-		DatasetId: "dataset",
-		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "dataset", SubjectId: "subject", Freq: "1m"}},
-		TimeRange: &pb.TimeRange{},
-	})
-	if err != nil || timeSeries.GetRetInfo().GetCode() != pb.ErrorCode_NO_PERMISSION {
-		t.Fatalf("time-series range read rsp=%v err=%v", timeSeries, err)
-	}
-}
-
-func TestReadTimeSeriesRowsUsesSelectorsAndCopiesViewCompleteness(t *testing.T) {
-	var captured *pb.QueryTimeSeriesRowsReq
-	view := &recordingView{query: func(_ context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
-		captured = req
-		return &pb.QueryTimeSeriesRowsRsp{
-			RetInfo:           successRetInfo(),
-			Rows:              []*pb.TimeSeriesRow{{Key: &pb.TimeSeriesKey{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-07-29T00:00:00Z", SeriesTag: "venue:okx"}}},
-			ServedIndexedFrom: "2026-07-29T00:00:00Z",
-			ServedIndexedTo:   "2026-07-29T00:01:00Z",
-			Complete:          true,
-		}, nil
-	}}
-	node := &recordingNode{
-		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-			return nil, errors.New("unexpected write")
-		},
-		read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
-			return nil, errors.New("ReadTimeSeriesRows must not use point ReadFields")
-		},
-	}
-	svc, err := New(Options{
-		Node: node,
-		View: func(_ context.Context, spaceID, datasetID string) (pb.DataViewService, string, error) {
-			if spaceID != "space" || datasetID != "market" {
-				t.Fatalf("resolved scope=%s/%s", spaceID, datasetID)
-			}
-			return view, "prices", nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	empty := ""
-	okx := "venue:okx"
-	selectors := []*pb.TimeSeriesSelector{
-		{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"},
-		{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &empty},
-		{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m", SeriesTag: &okx},
-	}
-	rsp, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
-		SpaceId:  "space", DatasetId: "market", Selectors: selectors,
-		Order: pb.SortOrder_SORT_ORDER_DESC,
-	})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("rsp=%v err=%v", rsp, err)
-	}
-	if rsp.GetServedIndexedFrom() != "2026-07-29T00:00:00Z" ||
-		rsp.GetServedIndexedTo() != "2026-07-29T00:01:00Z" || !rsp.GetComplete() {
-		t.Fatalf("view completeness was not copied: %v", rsp)
-	}
-	if captured == nil || len(captured.GetSelectors()) != 3 {
-		t.Fatalf("selectors not forwarded: %v", captured)
-	}
-	for i := range selectors {
-		if (captured.GetSelectors()[i].SeriesTag == nil) != (selectors[i].SeriesTag == nil) ||
-			captured.GetSelectors()[i].GetSeriesTag() != selectors[i].GetSeriesTag() {
-			t.Fatalf("selector %d presence changed: got=%v want=%v", i, captured.GetSelectors()[i], selectors[i])
-		}
-	}
-	wantSorts := []string{"subject_id", "freq", "data_time", "series_tag"}
-	if len(captured.GetSorts()) != len(wantSorts) {
-		t.Fatalf("sorts=%v", captured.GetSorts())
-	}
-	for i, field := range wantSorts {
-		if captured.GetSorts()[i].GetFieldName() != field || !captured.GetSorts()[i].GetDesc() {
-			t.Fatalf("sort %d=%v", i, captured.GetSorts()[i])
-		}
-	}
-	if len(rsp.GetRows()) != 1 || rsp.GetRows()[0].GetKey().GetSeriesTag() != "venue:okx" {
-		t.Fatalf("exact result tag lost: %v", rsp.GetRows())
-	}
-}
-
-func TestStockReadForwardsExactDefaultSeriesToView(t *testing.T) {
-	var captured *pb.QueryTimeSeriesRowsReq
-	view := &recordingView{query: func(_ context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
-		captured = req
-		return &pb.QueryTimeSeriesRowsRsp{RetInfo: successRetInfo()}, nil
-	}}
-	svc, err := New(Options{
-		Node: &recordingNode{},
-		View: func(_ context.Context, spaceID, datasetID string) (pb.DataViewService, string, error) {
-			if spaceID != "stockcn" || datasetID != "dataset_stockcn_equity_kline_1m" {
-				t.Fatalf("resolved scope=%s/%s", spaceID, datasetID)
-			}
-			return view, "view_stockcn_equity_kline_1m", nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defaultTag := "default"
-	rsp, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "moox-skill"},
-		SpaceId:  "stockcn", DatasetId: "dataset_stockcn_equity_kline_1m", Order: pb.SortOrder_SORT_ORDER_DESC,
-		Selectors: []*pb.TimeSeriesSelector{{
-			SpaceId: "stockcn", DatasetId: "dataset_stockcn_equity_kline_1m", SubjectId: "600000.SH", Freq: "1m", SeriesTag: &defaultTag,
-		}},
-	})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("rsp=%v err=%v", rsp, err)
-	}
-	if captured == nil || len(captured.GetSelectors()) != 1 || captured.GetSelectors()[0].SeriesTag == nil || captured.GetSelectors()[0].GetSeriesTag() != defaultTag {
-		t.Fatalf("exact default series_tag was not forwarded: %v", captured)
-	}
-}
-
-func TestPrimaryExactTimeSeriesReadOmitsMissingRows(t *testing.T) {
-	var existing *pb.RowKey
-	node := &recordingNode{
-		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-			return &pb.UpsertFieldsRsp{}, nil
-		},
-		read: func(_ context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
-			rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
-			for _, key := range req.GetKeys() {
-				rows = append(rows, &pb.RowFieldValues{Key: key})
-			}
-			existing = req.GetKeys()[1]
-			rows[1].Fields = []*pb.FieldValue{{
-				FieldId: "close",
-				Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}},
-			}}
-			return &pb.ReadFieldsRsp{
-				RetInfo:      successRetInfo(),
-				Rows:         rows,
-				ExistingKeys: []*pb.RowKey{existing},
-			}, nil
-		},
-	}
-	svc, err := New(Options{Node: node})
-	if err != nil {
-		t.Fatal(err)
-	}
-	keys := []*pb.TimeSeriesKey{
-		{SpaceId: "space", DatasetId: "dataset", SubjectId: "subject", Freq: "1h", DataTime: "2026-07-29T16:00:00Z", SeriesTag: "venue:okx"},
-		{SpaceId: "space", DatasetId: "dataset", SubjectId: "subject", Freq: "1h", DataTime: "2026-07-29T15:00:00Z", SeriesTag: "venue:binance"},
-	}
-	rsp, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
-		AuthInfo:    &pb.AuthInfo{AppId: "caller", AppKey: "key"},
-		SpaceId:     "space",
-		DatasetId:   "dataset",
-		Keys:        keys,
-		ColumnNames: []string{"close"},
-	})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("read rsp=%v err=%v", rsp, err)
-	}
-	if len(rsp.GetRows()) != 1 || rsp.GetRows()[0].GetKey().GetDataTime() != keys[1].GetDataTime() ||
-		rsp.GetRows()[0].GetKey().GetSeriesTag() != "venue:binance" {
-		t.Fatalf("rows=%v want only existing key %v", rsp.GetRows(), existing)
-	}
-}
-
-func TestPrimaryTimeSeriesReadRejectsAmbiguousOrMismatchedScope(t *testing.T) {
-	svc, err := New(Options{Node: &recordingNode{
-		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-			return nil, errors.New("unexpected write")
-		},
-		read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
-			return nil, errors.New("invalid request reached DataNode")
-		},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := &pb.TimeSeriesKey{
-		SpaceId: "space", DatasetId: "dataset", SubjectId: "subject", Freq: "1m",
-		DataTime: "2026-07-29T15:00:00Z", SeriesTag: "venue:binance",
-	}
-	selector := &pb.TimeSeriesSelector{
-		SpaceId: "space", DatasetId: "dataset", SubjectId: "subject", Freq: "1m",
-	}
-	for _, tc := range []struct {
-		name string
-		req  *pb.ReadTimeSeriesRowsReq
-	}{
-		{
-			name: "keys and selectors",
-			req: &pb.ReadTimeSeriesRowsReq{
-				SpaceId: "space", DatasetId: "dataset", Keys: []*pb.TimeSeriesKey{key},
-				Selectors: []*pb.TimeSeriesSelector{selector}, ColumnNames: []string{"close"},
-			},
-		},
-		{
-			name: "key outside top-level scope",
-			req: &pb.ReadTimeSeriesRowsReq{
-				SpaceId: "other", DatasetId: "dataset", Keys: []*pb.TimeSeriesKey{key},
-				ColumnNames: []string{"close"},
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.req.AuthInfo = &pb.AuthInfo{AppId: "caller", AppKey: "key"}
-			rsp, readErr := svc.ReadTimeSeriesRows(context.Background(), tc.req)
-			if readErr != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
-				t.Fatalf("rsp=%v err=%v", rsp, readErr)
-			}
-		})
-	}
-}
-
-func TestPrimaryExactRecordReadOmitsMissingRows(t *testing.T) {
-	node := &recordingNode{
-		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-			return &pb.UpsertFieldsRsp{}, nil
-		},
-		read: func(_ context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
-			rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
-			for _, key := range req.GetKeys() {
-				rows = append(rows, &pb.RowFieldValues{Key: key})
-			}
-			rows[1].Fields = []*pb.FieldValue{{
-				FieldId: "value",
-				Value:   &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "present"}},
-			}}
-			return &pb.ReadFieldsRsp{
-				RetInfo:      successRetInfo(),
-				Rows:         rows,
-				ExistingKeys: []*pb.RowKey{req.GetKeys()[1]},
-			}, nil
-		},
-	}
-	svc, err := New(Options{Node: node})
-	if err != nil {
-		t.Fatal(err)
-	}
-	keys := []*pb.RecordKey{
-		{SpaceId: "space", DatasetId: "dataset", RecordId: "missing", Version: "1"},
-		{SpaceId: "space", DatasetId: "dataset", RecordId: "present", Version: "1"},
-	}
-	rsp, err := svc.ReadRecordRows(context.Background(), &pb.ReadRecordRowsReq{
-		AuthInfo:    &pb.AuthInfo{AppId: "caller", AppKey: "key"},
-		Keys:        keys,
-		ColumnNames: []string{"value"},
-	})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-		t.Fatalf("read rsp=%v err=%v", rsp, err)
-	}
-	if len(rsp.GetRows()) != 1 || rsp.GetRows()[0].GetKey().GetRecordId() != keys[1].GetRecordId() {
-		t.Fatalf("rows=%v want only existing key %v", rsp.GetRows(), keys[1])
-	}
-}
-
 func TestPrimaryRejectsWritesFromSCFMarketCanaryCredential(t *testing.T) {
 	svc, err := New(Options{
 		Node: &recordingNode{
@@ -565,8 +267,8 @@ func TestPrimaryRejectsWritesFromSCFMarketCanaryCredential(t *testing.T) {
 				t.Fatal("read-only SCF credential reached DataNode")
 				return nil, nil
 			},
-			read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
-				return &pb.ReadFieldsRsp{}, nil
+			read: func(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
+				return &pb.ReadRowsRsp{}, nil
 			},
 		},
 	})
@@ -595,7 +297,7 @@ func (*periodAuthorizationNode) UpsertFields(context.Context, *pb.UpsertFieldsRe
 	return nil, errors.New("unexpected ordinary upsert")
 }
 
-func (*periodAuthorizationNode) ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+func (*periodAuthorizationNode) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 	return nil, errors.New("unexpected ordinary read")
 }
 
@@ -747,12 +449,12 @@ func TestPrimaryRoutesSameDatasetInDifferentSpacesSeparately(t *testing.T) {
 			}
 			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: keys}, nil
 		},
-		read: func(_ context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+		read: func(_ context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 			rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
 			for _, key := range req.GetKeys() {
 				rows = append(rows, &pb.RowFieldValues{Key: key})
 			}
-			return &pb.ReadFieldsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
+			return &pb.ReadRowsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
 		},
 	}
 	svc, err := New(Options{
@@ -912,12 +614,12 @@ func TestPrimaryReadPreservesRequestOrderAcrossDatasets(t *testing.T) {
 		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo()}, nil
 		},
-		read: func(_ context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+		read: func(_ context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 			rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
 			for _, key := range req.GetKeys() {
 				rows = append(rows, &pb.RowFieldValues{Key: key})
 			}
-			return &pb.ReadFieldsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
+			return &pb.ReadRowsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
 		},
 	}
 	svc, err := New(Options{Node: node})
@@ -928,10 +630,10 @@ func TestPrimaryReadPreservesRequestOrderAcrossDatasets(t *testing.T) {
 		return &pb.RowKey{SpaceId: "s", DatasetId: dataset, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: record, Version: "1"}}}
 	}
 	keys := []*pb.RowKey{key("b", "first"), key("a", "second"), key("b", "third")}
-	rsp, err := svc.ReadFields(context.Background(), &pb.PrimaryReadFieldsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
-		Keys:     keys,
-		FieldIds: []string{"value"},
+	rsp, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{
+		AuthInfo:    &pb.AuthInfo{AppId: "caller", AppKey: "key"},
+		Keys:        keys,
+		ColumnNames: []string{"value"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("read rsp=%v err=%v", rsp, err)
@@ -950,13 +652,13 @@ func TestPrimaryReadFieldsUsesOneSnapshotAcrossDatasetGroups(t *testing.T) {
 		write: func(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
 			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo()}, nil
 		},
-		read: func(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+		read: func(ctx context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 			snapshot, ok := metadata.RequestSnapshotFromContext(ctx).(*testRequestSnapshot)
 			if !ok || snapshot == nil {
 				t.Fatalf("request snapshot missing for %s", req.GetDatasetId())
 			}
 			generations = append(generations, snapshot.generation)
-			return &pb.ReadFieldsRsp{RetInfo: successRetInfo(), Rows: []*pb.RowFieldValues{{Key: req.GetKeys()[0]}}}, nil
+			return &pb.ReadRowsRsp{RetInfo: successRetInfo(), Rows: []*pb.RowFieldValues{{Key: req.GetKeys()[0]}}}, nil
 		},
 	}
 	svc, err := New(Options{
@@ -969,9 +671,9 @@ func TestPrimaryReadFieldsUsesOneSnapshotAcrossDatasetGroups(t *testing.T) {
 	key := func(dataset, record string) *pb.RowKey {
 		return &pb.RowKey{SpaceId: "space", DatasetId: dataset, Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: record, Version: "1"}}}
 	}
-	rsp, err := svc.ReadFields(context.Background(), &pb.PrimaryReadFieldsReq{
+	rsp, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
-		Keys:     []*pb.RowKey{key("dataset-a", "a"), key("dataset-b", "b")},
+		Keys:     []*pb.RowKey{key("dataset-a", "a"), key("dataset-b", "b")}, ColumnNames: []string{"value"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("read rsp=%v err=%v", rsp, err)
@@ -990,7 +692,7 @@ func TestPrimaryRejectsRecordWriteWithoutVersion(t *testing.T) {
 			t.Fatal("write should not reach DataNode")
 			return nil, nil
 		},
-		read: func(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+		read: func(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 			return nil, nil
 		},
 	}
@@ -1043,20 +745,20 @@ func TestPrimaryReadFieldsReturnsResolvedLatestRecordVersion(t *testing.T) {
 			t.Fatalf("write version=%s rsp=%v err=%v", version, rsp, err)
 		}
 	}
-	rsp, err := svc.ReadFields(context.Background(), &pb.PrimaryReadFieldsReq{
+	rsp, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
 		Keys: []*pb.RowKey{{
 			SpaceId: "space", DatasetId: "records",
 			Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r"}},
 		}},
-		FieldIds: []string{"value"},
+		ColumnNames: []string{"value"},
 	})
 	if err != nil || len(rsp.GetRows()) != 1 || rsp.GetRows()[0].GetKey().GetRecord().GetVersion() != "2" {
 		t.Fatalf("rsp=%v err=%v", rsp, err)
 	}
 }
 
-func TestPrimaryExactTimeSeriesReadCrossesDataNodePebble(t *testing.T) {
+func TestPrimaryReadRowsCrossesDataNodePebble(t *testing.T) {
 	node, err := datanode.NewService(datanode.Options{
 		NodeID: "node-a", AuthSecret: "node-secret",
 		Pebble: pebble.Options{NodeID: "node-a", Path: filepath.Join(t.TempDir(), "node")},
@@ -1091,13 +793,12 @@ func TestPrimaryExactTimeSeriesReadCrossesDataNodePebble(t *testing.T) {
 	if err != nil || writeRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("write rsp=%v err=%v", writeRsp, err)
 	}
-	readRsp, err := svc.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
+	readRsp, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{
 		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"},
-		SpaceId:  "crypto", DatasetId: "dataset_spot_kline_1h",
-		Keys: []*pb.TimeSeriesKey{key}, ColumnNames: []string{"close"},
+		Keys:     []*pb.RowKey{rowKey}, ColumnNames: []string{"close"},
 	})
 	if err != nil || readRsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS ||
-		len(readRsp.GetRows()) != 1 || readRsp.GetRows()[0].GetKey().GetSeriesTag() != "venue:binance" ||
+		len(readRsp.GetRows()) != 1 || readRsp.GetRows()[0].GetKey().GetTimeSeries().GetSeriesTag() != "venue:binance" ||
 		len(readRsp.GetRows()[0].GetFields()) != 1 ||
 		readRsp.GetRows()[0].GetFields()[0].GetValue().GetDoubleValue() != 101.25 {
 		t.Fatalf("read rsp=%v err=%v", readRsp, err)
@@ -1174,38 +875,11 @@ func TestCollectorIdentityWritesOnlyCollectorOwnedDatasets(t *testing.T) {
 	require.NoError(t, validateDatasetWriteOwner(ctx, &pb.AuthInfo{AppId: "collector"}, record), "record rows such as task results are not time-series writes")
 }
 
-func TestCountTimeSeriesRowsRoutesToTheActiveView(t *testing.T) {
-	var captured *pb.CountTimeSeriesViewRowsReq
-	view := &recordingView{count: func(_ context.Context, req *pb.CountTimeSeriesViewRowsReq) (*pb.CountTimeSeriesRowsRsp, error) {
-		captured = req
-		return &pb.CountTimeSeriesRowsRsp{RetInfo: successRetInfo(), Counts: []*pb.SubjectRowCount{{SubjectId: "BTC-USDT", Rows: 60}}}, nil
-	}}
-	svc, err := New(Options{
-		Node: &recordingNode{},
-		View: func(_ context.Context, spaceID, datasetID string) (pb.DataViewService, string, error) {
-			if spaceID != "space" || datasetID != "market" {
-				t.Fatalf("resolved scope=%s/%s", spaceID, datasetID)
-			}
-			return view, "prices", nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	timeRange := &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T01:00:00Z"}
-	rsp, err := svc.CountTimeSeriesRows(context.Background(), &pb.CountTimeSeriesRowsReq{
-		AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"}, SpaceId: "space", DatasetId: "market",
-		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
-		TimeRange: timeRange,
-	})
-	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetCounts()) != 1 || rsp.GetCounts()[0].GetRows() != 60 {
-		t.Fatalf("rsp=%v err=%v", rsp, err)
-	}
-	if captured.GetViewId() != "prices" || captured.GetSpaceId() != "space" || len(captured.GetSelectors()) != 1 || captured.GetTimeRange().GetEndTime() != timeRange.GetEndTime() {
-		t.Fatalf("view request=%v", captured)
-	}
-	invalid, err := svc.CountTimeSeriesRows(context.Background(), &pb.CountTimeSeriesRowsReq{AuthInfo: &pb.AuthInfo{AppId: "caller", AppKey: "key"}, SpaceId: "space", DatasetId: "market"})
-	if err != nil || invalid.GetRetInfo().GetCode() != pb.ErrorCode_INVALID_PARAM {
-		t.Fatalf("missing selectors rsp=%v err=%v", invalid, err)
+func timeSeriesRowKey(key *pb.TimeSeriesKey) *pb.RowKey {
+	return &pb.RowKey{
+		SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
+		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+			SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag(),
+		}},
 	}
 }

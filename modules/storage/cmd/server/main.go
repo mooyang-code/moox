@@ -98,34 +98,10 @@ func runPrimaryRole() error {
 	if primarySecret == "" {
 		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for primary role")
 	}
-	viewSecret := os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET")
-	if viewSecret == "" {
-		return errors.New("MOOX_STORAGE_VIEW_AUTH_SECRET is required for primary role")
-	}
 	resolver := newDataNodeResolver(cached.RequestSnapshot, func(target string) pb.DataNodeRuntimeService {
 		opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport)}
 		return newDataNodeProxyAdapter(opts...)
 	})
-	viewTarget := os.Getenv("MOOX_STORAGE_VIEW_TARGET")
-	if viewTarget == "" {
-		viewTarget = "ip://127.0.0.1:20103"
-	}
-	viewProxy := &dataViewProxyAdapter{
-		proxy: pb.NewDataViewClientProxy(client.WithTarget(viewTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport)),
-		auth:  &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey(viewSecret, "storage-primary")},
-	}
-	viewResolver := func(ctx context.Context, spaceID, datasetID string) (pb.DataViewService, string, error) {
-		views, err := cached.ListViewsByDataset(ctx, spaceID, datasetID)
-		if err != nil {
-			return nil, "", err
-		}
-		for _, view := range views {
-			if view != nil && view.GetDatasetId() == datasetID && view.GetActiveIndexId() != "" {
-				return viewProxy, view.GetViewId(), nil
-			}
-		}
-		return nil, "", fmt.Errorf("dataset %s/%s has no active view", spaceID, datasetID)
-	}
 	datasetMetrics, err := observability.NewDatasetMetrics(prometheus.DefaultRegisterer)
 	if err != nil {
 		return fmt.Errorf("initialize storage dataset metrics: %w", err)
@@ -148,7 +124,7 @@ func runPrimaryRole() error {
 		}
 		return "", fmt.Errorf("factor result dataset for source view %s/%s is not found", spaceID, sourceViewID)
 	}
-	svc, err := primarystore.New(primarystore.Options{Resolver: resolver, View: viewResolver, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, ResultDataset: resultDatasetResolver, SyncPoints: meta, Authorizer: func(auth *pb.AuthInfo) error {
+	svc, err := primarystore.New(primarystore.Options{Resolver: resolver, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, ResultDataset: resultDatasetResolver, SyncPoints: meta, Authorizer: func(auth *pb.AuthInfo) error {
 		if auth == nil || auth.GetAppId() == "" ||
 			!hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(datanode.ServiceAuthKey(primarySecret, auth.GetAppId()))) {
 			return errors.New("invalid primary auth")
@@ -1028,23 +1004,23 @@ func normalizeServiceTarget(raw string) (string, error) {
 }
 
 type dataNodeProxyAdapter struct {
-	proxy        pb.DataNodeRuntimeClientProxy
-	adminProxy   pb.DataNodeDatasetAdminRuntimeClientProxy
-	markerProxy  pb.DataNodeMarkerRuntimeClientProxy
-	periodProxy  pb.DataNodePeriodRuntimeClientProxy
-	historyProxy pb.DataNodeHistoryRuntimeClientProxy
-	nodeID       string
+	proxy       pb.DataNodeRuntimeClientProxy
+	adminProxy  pb.DataNodeDatasetAdminRuntimeClientProxy
+	markerProxy pb.DataNodeMarkerRuntimeClientProxy
+	periodProxy pb.DataNodePeriodRuntimeClientProxy
+	rangeProxy  pb.DataNodeRangeRuntimeClientProxy
+	nodeID      string
 }
 
 var _ pb.DataNodePeriodRuntimeService = (*dataNodeProxyAdapter)(nil)
 
 func newDataNodeProxyAdapter(opts ...client.Option) *dataNodeProxyAdapter {
 	return &dataNodeProxyAdapter{
-		proxy:        pb.NewDataNodeRuntimeClientProxy(opts...),
-		adminProxy:   pb.NewDataNodeDatasetAdminRuntimeClientProxy(opts...),
-		markerProxy:  pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
-		periodProxy:  pb.NewDataNodePeriodRuntimeClientProxy(opts...),
-		historyProxy: pb.NewDataNodeHistoryRuntimeClientProxy(opts...),
+		proxy:       pb.NewDataNodeRuntimeClientProxy(opts...),
+		adminProxy:  pb.NewDataNodeDatasetAdminRuntimeClientProxy(opts...),
+		markerProxy: pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
+		periodProxy: pb.NewDataNodePeriodRuntimeClientProxy(opts...),
+		rangeProxy:  pb.NewDataNodeRangeRuntimeClientProxy(opts...),
 	}
 }
 
@@ -1077,22 +1053,17 @@ func (a *dataNodeProxyAdapter) CommitTimeSeriesBatch(ctx context.Context, req *p
 }
 
 func (a *dataNodeProxyAdapter) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
-	if a == nil || a.historyProxy == nil {
-		return nil, errors.New("DataNode history runtime is unavailable")
+	if a == nil || a.rangeProxy == nil {
+		return nil, errors.New("DataNode range runtime is unavailable")
 	}
-	return a.historyProxy.ReadTimeSeriesRows(ctx, req)
+	return a.rangeProxy.ReadTimeSeriesRows(ctx, req)
 }
 
-func (a *dataNodeProxyAdapter) ListHistorySubjects(ctx context.Context, req *pb.ListHistorySubjectsReq) (*pb.ListHistorySubjectsRsp, error) {
-	if a == nil || a.historyProxy == nil {
-		return nil, errors.New("DataNode history runtime is unavailable")
+func (a *dataNodeProxyAdapter) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesRowsReq) (*pb.CountTimeSeriesRowsRsp, error) {
+	if a == nil || a.rangeProxy == nil {
+		return nil, errors.New("DataNode range runtime is unavailable")
 	}
-	return a.historyProxy.ListHistorySubjects(ctx, req)
-}
-
-type dataViewProxyAdapter struct {
-	proxy pb.DataViewClientProxy
-	auth  *pb.AuthInfo
+	return a.rangeProxy.CountTimeSeriesRows(ctx, req)
 }
 
 func (a *dataNodeProxyAdapter) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
@@ -1101,8 +1072,8 @@ func (a *dataNodeProxyAdapter) UpsertFields(ctx context.Context, req *pb.UpsertF
 func (a *dataNodeProxyAdapter) WriteFactorRows(ctx context.Context, req *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
 	return a.proxy.WriteFactorRows(ctx, req)
 }
-func (a *dataNodeProxyAdapter) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
-	return a.proxy.ReadFields(ctx, req)
+func (a *dataNodeProxyAdapter) ReadRows(ctx context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
+	return a.proxy.ReadRows(ctx, req)
 }
 func (a *dataNodeProxyAdapter) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	return a.proxy.GetNodeState(ctx, req)
@@ -1133,23 +1104,6 @@ func (a *dataNodeProxyAdapter) AppendDatasetSyncPointMarker(ctx context.Context,
 }
 func (a *dataNodeProxyAdapter) GetFactorPeriodComputedMarker(ctx context.Context, req *pb.GetFactorPeriodComputedMarkerReq) (*pb.GetFactorPeriodComputedMarkerRsp, error) {
 	return a.markerProxy.GetFactorPeriodComputedMarker(ctx, req)
-}
-func (a *dataViewProxyAdapter) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
-	clone := proto.Clone(req).(*pb.QueryTimeSeriesRowsReq)
-	clone.AuthInfo = proto.Clone(a.auth).(*pb.AuthInfo)
-	return a.proxy.QueryTimeSeriesRows(ctx, clone)
-}
-
-func (a *dataViewProxyAdapter) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesViewRowsReq) (*pb.CountTimeSeriesRowsRsp, error) {
-	clone := proto.Clone(req).(*pb.CountTimeSeriesViewRowsReq)
-	clone.AuthInfo = proto.Clone(a.auth).(*pb.AuthInfo)
-	return a.proxy.CountTimeSeriesRows(ctx, clone)
-}
-
-func (a *dataViewProxyAdapter) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRowsReq) (*pb.SearchRecordRowsRsp, error) {
-	clone := proto.Clone(req).(*pb.SearchRecordRowsReq)
-	clone.AuthInfo = proto.Clone(a.auth).(*pb.AuthInfo)
-	return a.proxy.SearchRecordRows(ctx, clone)
 }
 
 // This small role entrypoint intentionally keeps the DataNode process
@@ -1208,7 +1162,7 @@ func runDataNodeRole() error {
 	pb.RegisterDataNodePeriodRuntimeService(listener, svc)
 	pb.RegisterDataNodeDatasetAdminRuntimeService(listener, svc)
 	pb.RegisterDataNodeMarkerRuntimeService(listener, svc)
-	pb.RegisterDataNodeHistoryRuntimeService(listener, svc)
+	pb.RegisterDataNodeRangeRuntimeService(listener, svc)
 	if err := storagebootstrap.RegisterMetricsReporter(s, "node"); err != nil {
 		return err
 	}

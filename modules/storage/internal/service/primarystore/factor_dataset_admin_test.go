@@ -23,7 +23,7 @@ func (*factorDatasetAdminNode) WriteFactorRows(context.Context, *pb.WriteFactorR
 	return nil, nil
 }
 
-func (n *factorDatasetAdminNode) ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+func (n *factorDatasetAdminNode) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 	return nil, nil
 }
 

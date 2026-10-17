@@ -17,7 +17,7 @@ func (n *factorRowsNode) UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb
 	return nil, nil
 }
 
-func (n *factorRowsNode) ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+func (n *factorRowsNode) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 	return nil, nil
 }
 

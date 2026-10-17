@@ -47,7 +47,7 @@ func TestReadFieldsReturnsOneCommitUnderConcurrentUpdates(t *testing.T) {
 		go func() {
 			defer readers.Done()
 			for i := 0; i < 400; i++ {
-				rows, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"high", "close", "low"}, nil)
+				rows, err := store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"high", "close", "low"}, nil)
 				if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 3 {
 					failures.Add(1)
 					continue

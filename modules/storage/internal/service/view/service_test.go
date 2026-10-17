@@ -45,7 +45,7 @@ func TestAttachActiveViewRefreshesContractWhenIndexChanges(t *testing.T) {
 
 type extraFieldReader struct{}
 
-func (extraFieldReader) ReadFields(_ context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
+func (extraFieldReader) ReadRows(_ context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
 	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
 	for _, key := range req.GetKeys() {
 		rows = append(rows, &pb.RowFieldValues{
@@ -56,7 +56,7 @@ func (extraFieldReader) ReadFields(_ context.Context, req *pb.PrimaryReadFieldsR
 			}},
 		})
 	}
-	return &pb.PrimaryReadFieldsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
+	return &pb.PrimaryReadRowsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
 }
 
 type blockingFieldReader struct {
@@ -64,7 +64,7 @@ type blockingFieldReader struct {
 	release chan struct{}
 }
 
-func (r *blockingFieldReader) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
+func (r *blockingFieldReader) ReadRows(ctx context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
 	select {
 	case <-r.started:
 	default:
@@ -85,12 +85,12 @@ func (r *blockingFieldReader) ReadFields(ctx context.Context, req *pb.PrimaryRea
 			}},
 		})
 	}
-	return &pb.PrimaryReadFieldsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
+	return &pb.PrimaryReadRowsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
 }
 
 type recoveryFieldReader struct{ primaryPresent bool }
 
-func (r recoveryFieldReader) ReadFields(_ context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
+func (r recoveryFieldReader) ReadRows(_ context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
 	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
 	for _, key := range req.GetKeys() {
 		row := &pb.RowFieldValues{Key: key}
@@ -100,7 +100,7 @@ func (r recoveryFieldReader) ReadFields(_ context.Context, req *pb.PrimaryReadFi
 		}
 		rows = append(rows, row)
 	}
-	return &pb.PrimaryReadFieldsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
+	return &pb.PrimaryReadRowsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
 }
 
 func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {

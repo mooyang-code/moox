@@ -497,7 +497,7 @@ func TestQueryTimeSeriesRowsCompletenessRequiresRowsStatsCoverageAndActiveView(t
 			if rsp.GetComplete() != tc.complete {
 				t.Fatalf("complete=%v want=%v rsp=%v", rsp.GetComplete(), tc.complete, rsp)
 			}
-			if tc.name == "valid coverage" && (rsp.GetServedIndexedFrom() != validStats.IndexedFrom || rsp.GetServedIndexedTo() != validStats.IndexedTo) {
+			if tc.name == "valid coverage" && (rsp.GetMinDataTime() != validStats.IndexedFrom || rsp.GetMaxDataTime() != validStats.IndexedTo) {
 				t.Fatalf("coverage fields not returned: %v", rsp)
 			}
 		})
@@ -508,7 +508,7 @@ func TestQueryTimeSeriesRowsRejectsActiveIndexMismatchBeforeQuery(t *testing.T) 
 	engine := &queryEngine{}
 	svc, auth := queryTestService(engine, true)
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: "space", ViewId: "prices", ExpectedActiveIndexId: "prices-old",
+		AuthInfo: auth, SpaceId: "space", ViewId: "prices", Pin: &pb.IndexVersion{IndexId: "prices-old"},
 		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
@@ -525,7 +525,7 @@ func TestQueryTimeSeriesRowsRejectsInPlaceRevisionMismatch(t *testing.T) {
 	svc, auth := queryTestService(engine, true)
 	svc.indexRevision = map[string]uint64{"prices-index": 7}
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: "space", ViewId: "prices", ExpectedActiveIndexId: "prices-index", ExpectedActiveIndexRevision: 6,
+		AuthInfo: auth, SpaceId: "space", ViewId: "prices", Pin: &pb.IndexVersion{IndexId: "prices-index", Revision: 6},
 		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
@@ -560,7 +560,7 @@ func TestQueryTimeSeriesRowsUsesRuntimeStatsForNoTotal(t *testing.T) {
 	if engine.statCalls != 0 {
 		t.Fatalf("total_mode=NONE called Stat %d times", engine.statCalls)
 	}
-	if !rsp.GetComplete() || rsp.GetServedIndexedTo() != stats.IndexedTo {
+	if !rsp.GetComplete() || rsp.GetMaxDataTime() != stats.IndexedTo {
 		t.Fatalf("runtime stats were not returned: %v", rsp)
 	}
 }
@@ -589,7 +589,7 @@ func TestQueryTimeSeriesRowsRefreshesStatsWhenCompletenessIsRequested(t *testing
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("rsp=%v err=%v", rsp, err)
 	}
-	if engine.statCalls != 1 || rsp.GetComplete() || rsp.GetServedIndexedTo() != "" {
+	if engine.statCalls != 1 || rsp.GetComplete() || rsp.GetMaxDataTime() != "" {
 		t.Fatalf("completeness query used stale runtime stats: %v", rsp)
 	}
 }
@@ -726,7 +726,7 @@ func sameOptionalString(left, right *string) bool {
 // 策略用“只带时间范围、不命中任何行”的查询读取覆盖范围与每序列保留根数：TotalMode=NONE 只返回已缓存的统计，
 // FORCE_EXACT 现算并缓存，之后的 NONE 查询也能拿到。
 func TestQueryTimeSeriesRowsServesCoverageProbe(t *testing.T) {
-	engine := &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, EntryCount: 1, IndexedFrom: "2026-07-29T00:00:00Z", IndexedTo: "2026-07-29T00:01:00Z"}}
+	engine := &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, EntryCount: 1, IndexedFrom: "2026-07-29T00:00:00Z", IndexedTo: "2026-07-29T00:01:00Z", RowsPerSeries: 5000}}
 	svc, auth := queryTestService(engine, true)
 	svc.seriesBars = 5000
 	probe := func(mode pb.TotalMode) *pb.QueryTimeSeriesRowsRsp {
@@ -738,18 +738,29 @@ func TestQueryTimeSeriesRowsServesCoverageProbe(t *testing.T) {
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			t.Fatalf("rsp=%v err=%v", rsp, err)
 		}
-		if rsp.GetServedSeriesBars() != 5000 {
-			t.Fatalf("应返回每序列保留根数：%v", rsp)
-		}
 		return rsp
 	}
-	if rsp := probe(pb.TotalMode_NONE); rsp.GetServedIndexedFrom() != "" {
-		t.Fatalf("统计未缓存时 NONE 不应现算覆盖范围：%v", rsp)
+	if rsp := probe(pb.TotalMode_NONE); rsp.GetMinDataTime() != "" || rsp.GetRetainedRowsPerSeries() != 0 {
+		t.Fatalf("统计未缓存时 NONE 不应现算覆盖范围，保留行数为未知(0)：%v", rsp)
 	}
-	if rsp := probe(pb.TotalMode_FORCE_EXACT); rsp.GetServedIndexedFrom() != "2026-07-29T00:00:00Z" || rsp.GetServedIndexedTo() != "2026-07-29T00:01:00Z" {
-		t.Fatalf("FORCE_EXACT 应现算覆盖范围：%v", rsp)
+	if rsp := probe(pb.TotalMode_FORCE_EXACT); rsp.GetMinDataTime() != "2026-07-29T00:00:00Z" || rsp.GetMaxDataTime() != "2026-07-29T00:01:00Z" || rsp.GetRetainedRowsPerSeries() != 5000 {
+		t.Fatalf("FORCE_EXACT 应现算覆盖范围与保留行数：%v", rsp)
 	}
-	if rsp := probe(pb.TotalMode_NONE); rsp.GetServedIndexedFrom() != "2026-07-29T00:00:00Z" {
+	if rsp := probe(pb.TotalMode_NONE); rsp.GetMinDataTime() != "2026-07-29T00:00:00Z" || rsp.GetRetainedRowsPerSeries() != 5000 {
 		t.Fatalf("现算后的统计应被缓存：%v", rsp)
+	}
+	// 调小配置立即生效；调大配置在索引重建之前不会提高对外承诺；旧索引（没有记录）为未知。
+	svc.seriesBars = 3000
+	if rsp := probe(pb.TotalMode_NONE); rsp.GetRetainedRowsPerSeries() != 3000 {
+		t.Fatalf("调小配置应立即生效：%v", rsp)
+	}
+	svc.seriesBars = 8000
+	if rsp := probe(pb.TotalMode_NONE); rsp.GetRetainedRowsPerSeries() != 5000 {
+		t.Fatalf("调大配置在索引重建前不应提高保留行数：%v", rsp)
+	}
+	engine.stats.RowsPerSeries = 0
+	svc.cacheActiveIndexStats(svc.views[viewRef{spaceID: "space", viewID: "prices"}], "prices-index", engine.stats)
+	if rsp := probe(pb.TotalMode_NONE); rsp.GetRetainedRowsPerSeries() != 0 {
+		t.Fatalf("旧索引没有记录保留行数时应为未知：%v", rsp)
 	}
 }

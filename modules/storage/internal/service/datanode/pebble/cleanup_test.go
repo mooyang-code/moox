@@ -26,21 +26,21 @@ func TestDeleteDatasetRowsRemovesRowsAndHistoryWithoutTouchingOtherDataset(t *te
 	if err := store.UpsertFields(context.Background(), rows); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "delete-me", Page: &pb.Page{Page: 1, Size: 10}}); err != nil {
+	if _, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "delete-me", ColumnNames: []string{"close"}, TimeRange: &pb.TimeRange{StartTime: "2026-08-15T00:00:00Z", EndTime: "2026-08-17T00:00:00Z"}, Page: &pb.Page{Size: 10}}); err != nil {
 		t.Fatal(err)
 	}
 	if deleted, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil || deleted == 0 {
 		t.Fatalf("deleted ranges=%d err=%v", deleted, err)
 	}
-	removed, err := store.ReadFields(context.Background(), []*pb.RowKey{rows[0].GetKey()}, []string{"close"}, nil)
-	if err != nil || len(removed) != 1 || len(removed[0].GetFields()) != 0 {
+	removed, err := store.ReadRows(context.Background(), []*pb.RowKey{rows[0].GetKey()}, []string{"close"}, nil)
+	if err != nil || len(removed) != 0 {
 		t.Fatalf("deleted dataset still has fields: rows=%v err=%v", removed, err)
 	}
-	remaining, err := store.ReadFields(context.Background(), []*pb.RowKey{rows[1].GetKey()}, []string{"close"}, nil)
+	remaining, err := store.ReadRows(context.Background(), []*pb.RowKey{rows[1].GetKey()}, []string{"close"}, nil)
 	if err != nil || len(remaining) != 1 || len(remaining[0].GetFields()) != 1 {
 		t.Fatalf("other dataset was removed: rows=%v err=%v", remaining, err)
 	}
-	history, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "delete-me", Page: &pb.Page{Page: 1, Size: 10}})
+	history, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "delete-me", ColumnNames: []string{"close"}, TimeRange: &pb.TimeRange{StartTime: "2026-08-15T00:00:00Z", EndTime: "2026-08-17T00:00:00Z"}, Page: &pb.Page{Size: 10}})
 	if err != nil || len(history.GetRows()) != 0 {
 		t.Fatalf("deleted dataset still has history: rows=%v err=%v", history, err)
 	}
@@ -253,7 +253,7 @@ func TestDeleteDatasetRowsWaitingForPublicationLockHonorsCancellation(t *testing
 	}
 	unlock()
 	// 超时的删除不能在锁释放后迟到执行
-	rows, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"close"}, nil)
+	rows, err := store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"close"}, nil)
 	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 {
 		t.Fatalf("超时的删除不应改动数据: rows=%v err=%v", rows, err)
 	}

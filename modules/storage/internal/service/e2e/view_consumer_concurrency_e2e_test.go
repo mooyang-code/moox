@@ -22,14 +22,14 @@ import (
 
 type concurrencyPrimaryReader struct{}
 
-func (concurrencyPrimaryReader) ReadFields(_ context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
+func (concurrencyPrimaryReader) ReadRows(_ context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
 	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
 	for _, key := range req.GetKeys() {
 		rows = append(rows, &pb.RowFieldValues{Key: key, Fields: []*pb.FieldValue{{
 			FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}},
 		}}})
 	}
-	return &pb.PrimaryReadFieldsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}, Rows: rows}, nil
+	return &pb.PrimaryReadRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}, Rows: rows}, nil
 }
 
 func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {

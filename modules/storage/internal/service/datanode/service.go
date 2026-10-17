@@ -40,7 +40,7 @@ func ServiceAuthKey(secret, appID string) string {
 var _ pb.DataNodeRuntimeService = (*Service)(nil)
 var _ pb.DataNodePeriodRuntimeService = (*Service)(nil)
 var _ pb.DataNodeDatasetAdminRuntimeService = (*Service)(nil)
-var _ pb.DataNodeHistoryRuntimeService = (*Service)(nil)
+var _ pb.DataNodeRangeRuntimeService = (*Service)(nil)
 
 func NewService(opts Options) (*Service, error) {
 	store := opts.Store
@@ -136,33 +136,31 @@ func (s *Service) WriteFactorRows(ctx context.Context, req *pb.WriteFactorRowsRe
 	return &pb.WriteFactorRowsRsp{RetInfo: retinfo.Success("success"), RowsWritten: rowsWritten}, nil
 }
 
-func (s *Service) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+func (s *Service) ReadRows(ctx context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 	if req == nil || len(req.GetKeys()) == 0 {
-		return &pb.ReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("keys are required"))}, nil
+		return &pb.ReadRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("keys are required"))}, nil
 	}
 	if req.GetNodeId() != "" && req.GetNodeId() != s.nodeID {
-		return &pb.ReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
+		return &pb.ReadRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("node_id does not match DataNode"))}, nil
 	}
 	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
-		return &pb.ReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.ReadRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	if req.GetDatasetId() != "" {
 		for _, key := range req.GetKeys() {
 			if key.GetDatasetId() != req.GetDatasetId() {
-				return &pb.ReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id does not match row key"))}, nil
+				return &pb.ReadRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset_id does not match row key"))}, nil
 			}
 		}
 	}
-	rows, existing, err := s.store.ReadFieldsWithPresence(ctx, req.GetKeys(), req.GetFieldIds(), req.GetAttributeKeys())
+	rows, err := s.store.ReadRows(ctx, req.GetKeys(), req.GetColumnNames(), req.GetAttributeKeys())
 	if err != nil {
-		return &pb.ReadFieldsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+		return &pb.ReadRowsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
-	return &pb.ReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, ExistingKeys: existing}, nil
+	return &pb.ReadRowsRsp{RetInfo: retinfo.Success("success"), Rows: rows}, nil
 }
 
-// ReadTimeSeriesRows is intentionally exposed on the narrow history runtime
-// service, not on DataNodeRuntime. Primary uses it only for View backfill;
-// normal callers continue to use point reads through PrimaryStore.
+// ReadTimeSeriesRows 读取时序事实（时间区间或每个序列最近 N 根），由 PrimaryStore 对所有调用方转发到这里。
 func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
 	if req == nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
@@ -178,20 +176,19 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	return rows, nil
 }
 
-// ListHistorySubjects lists the subjects with rows at one frequency in a
-// Dataset. It shares the narrow history runtime with ReadTimeSeriesRows.
-func (s *Service) ListHistorySubjects(ctx context.Context, req *pb.ListHistorySubjectsReq) (*pb.ListHistorySubjectsRsp, error) {
-	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" || req.GetFreq() == "" {
-		return &pb.ListHistorySubjectsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and freq are required"))}, nil
+// CountTimeSeriesRows 按标的统计时间范围内已存在的时间点数，只在序列索引上扫描键。
+func (s *Service) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesRowsReq) (*pb.CountTimeSeriesRowsRsp, error) {
+	if req == nil {
+		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
 	}
 	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
-		return &pb.ListHistorySubjectsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
-	subjects, err := s.store.ListHistorySubjects(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetFreq())
+	counts, err := s.store.CountTimeSeriesRows(ctx, req)
 	if err != nil {
-		return &pb.ListHistorySubjectsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
 	}
-	return &pb.ListHistorySubjectsRsp{RetInfo: retinfo.Success("success"), SubjectIds: subjects}, nil
+	return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Counts: counts}, nil
 }
 
 func (s *Service) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {

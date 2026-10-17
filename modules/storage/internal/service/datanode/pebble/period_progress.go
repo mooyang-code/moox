@@ -600,7 +600,7 @@ func (s *Store) finalizePeriodBaseLocked(ctx context.Context, base string, now t
 }
 
 func (s *Store) startPeriodFinalizer() {
-	if s == nil || s.historyCtx == nil {
+	if s == nil || s.backgroundCtx == nil {
 		return
 	}
 	s.maintenanceWG.Add(1)
@@ -610,10 +610,10 @@ func (s *Store) startPeriodFinalizer() {
 		defer ticker.Stop()
 		for {
 			select {
-			case <-s.historyCtx.Done():
+			case <-s.backgroundCtx.Done():
 				return
 			case <-ticker.C:
-				if _, err := s.FinalizeWaitingDatasetPeriods(s.historyCtx, s.periodNow().UTC(), periodFinalizeBatch); err != nil {
+				if _, err := s.FinalizeWaitingDatasetPeriods(s.backgroundCtx, s.periodNow().UTC(), periodFinalizeBatch); err != nil {
 					s.logPeriodFinalizeError(err)
 				} else {
 					s.clearPeriodFinalizeError()

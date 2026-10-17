@@ -43,8 +43,8 @@ func exactDatasetEventSubjects(t *testing.T, registry *events.Registry, spaceID,
 	return filters
 }
 
-func (r primaryFieldReader) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
-	return r.service.ReadFields(ctx, req)
+func (r primaryFieldReader) ReadRows(ctx context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
+	return r.service.ReadRows(ctx, req)
 }
 
 func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
@@ -88,7 +88,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	if rsp, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: writes, WriteSource: "scf:e2e-fetcher"}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 3 {
 		t.Fatalf("primary write: rsp=%v err=%v", rsp, err)
 	}
-	read, err := primary.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys, FieldIds: []string{"close", "volume"}})
+	read, err := primary.ReadRows(ctx, &pb.PrimaryReadRowsReq{AuthInfo: auth, Keys: keys, ColumnNames: []string{"close", "volume"}})
 	if err != nil || read.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(read.GetRows()) != 3 {
 		t.Fatalf("primary read: rsp=%v err=%v", read, err)
 	}

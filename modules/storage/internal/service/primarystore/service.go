@@ -20,15 +20,13 @@ type Validator interface {
 }
 type DataNodeClient interface {
 	UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error)
-	ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error)
+	ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error)
 }
 
-type historyDataNodeClient interface {
+// rangeDataNodeClient 是 DataNode 的区间读取与计数入口；PrimaryStore 对所有调用方都转给它。
+type rangeDataNodeClient interface {
 	ReadTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
-}
-
-type historySubjectLister interface {
-	ListHistorySubjects(context.Context, *pb.ListHistorySubjectsReq) (*pb.ListHistorySubjectsRsp, error)
+	CountTimeSeriesRows(context.Context, *pb.CountTimeSeriesRowsReq) (*pb.CountTimeSeriesRowsRsp, error)
 }
 
 // NodeResolver is the legacy resolver shape used by the server and existing
@@ -37,7 +35,6 @@ type historySubjectLister interface {
 // new methods.
 type NodeResolver func(context.Context, string, string) (pb.DataNodeRuntimeService, error)
 type dataNodeResolver func(context.Context, string, string) (DataNodeClient, error)
-type ViewResolver func(context.Context, string, string) (pb.DataViewService, string, error)
 type AuthSigner func(*pb.AuthInfo) (*pb.AuthInfo, error)
 type Authorizer func(*pb.AuthInfo) error
 type SnapshotProvider func() metadata.RequestSnapshot
@@ -55,7 +52,6 @@ type Service struct {
 	validate  Validator
 	sign      AuthSigner
 	authorize Authorizer
-	view      ViewResolver
 	snapshot  SnapshotProvider
 	metrics   DatasetRunObserver
 	result    ResultDatasetResolver
@@ -71,7 +67,6 @@ type Options struct {
 	Validator      Validator
 	AuthSigner     AuthSigner
 	Authorizer     Authorizer
-	View           ViewResolver
 	Snapshot       SnapshotProvider
 	DatasetMetrics DatasetRunObserver
 	ResultDataset  ResultDatasetResolver
@@ -104,7 +99,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{
 		resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer,
-		view: opts.View, snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, result: opts.ResultDataset, syncPoint: opts.SyncPoints,
+		snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, result: opts.ResultDataset, syncPoint: opts.SyncPoints,
 	}, nil
 }
 
@@ -360,19 +355,26 @@ func (s *Service) observeTimeSeriesRows(ctx context.Context, rows []*pb.RowField
 	}
 }
 
-func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) (*pb.PrimaryReadFieldsRsp, error) {
+// ReadRows 按精确键读取，是唯一的精确读取入口。只返回存在的行，顺序与请求一致（跳过不存在的），调用方按键匹配。
+func (s *Service) ReadRows(ctx context.Context, req *pb.PrimaryReadRowsReq) (*pb.PrimaryReadRowsRsp, error) {
 	if req == nil || len(req.GetKeys()) == 0 {
-		return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("keys are required"))}, nil
+		return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("keys are required"))}, nil
+	}
+	if len(req.GetKeys()) > maxReadRowsKeys {
+		return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, fmt.Errorf("keys exceed the limit of %d", maxReadRowsKeys))}, nil
+	}
+	if len(req.GetColumnNames()) == 0 && len(req.GetAttributeKeys()) == 0 {
+		return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("column_names or attribute_keys are required"))}, nil
 	}
 	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
-		return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	ctx = s.requestContext(ctx)
 	groups := make(map[routeKey][]*pb.RowKey)
 	order := make([]routeKey, 0)
 	for _, key := range req.GetKeys() {
 		if key == nil || key.GetSpaceId() == "" || key.GetDatasetId() == "" {
-			return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("row key is invalid"))}, nil
+			return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("row key is invalid"))}, nil
 		}
 		group := routeKey{spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
 		if _, ok := groups[group]; !ok {
@@ -381,8 +383,6 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 		groups[group] = append(groups[group], key)
 	}
 	rowsByKey := make(map[string][]*pb.RowFieldValues, len(req.GetKeys()))
-	existingByKey := make(map[string]bool, len(req.GetKeys()))
-	existingLatest := make(map[string]bool, len(req.GetKeys()))
 	latestRecordRows := make(map[string][]*pb.RowFieldValues)
 	for _, group := range order {
 		keys := groups[group]
@@ -392,14 +392,14 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 		}
 		auth, err := s.signAuth(req.GetAuthInfo())
 		if err != nil {
-			return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+			return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 		}
-		rsp, err := node.ReadFields(ctx, &pb.ReadFieldsReq{AuthInfo: auth, DatasetId: group.datasetID, Keys: keys, FieldIds: req.GetFieldIds(), AttributeKeys: req.GetAttributeKeys()})
+		rsp, err := node.ReadRows(ctx, &pb.ReadRowsReq{AuthInfo: auth, DatasetId: group.datasetID, Keys: keys, ColumnNames: req.GetColumnNames(), AttributeKeys: req.GetAttributeKeys()})
 		if err != nil {
 			return nil, err
 		}
 		if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-			return &pb.PrimaryReadFieldsRsp{RetInfo: rsp.GetRetInfo()}, nil
+			return &pb.PrimaryReadRowsRsp{RetInfo: rsp.GetRetInfo()}, nil
 		}
 		for _, row := range rsp.GetRows() {
 			id := rowKeyIdentity(row.GetKey())
@@ -407,12 +407,6 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 			if row.GetKey().GetRecord() != nil {
 				latestID := latestRecordIdentity(row.GetKey())
 				latestRecordRows[latestID] = append(latestRecordRows[latestID], row)
-			}
-		}
-		for _, key := range rsp.GetExistingKeys() {
-			existingByKey[rowKeyIdentity(key)] = true
-			if key.GetRecord() != nil {
-				existingLatest[latestRecordIdentity(key)] = true
 			}
 		}
 	}
@@ -435,14 +429,10 @@ func (s *Service) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq) 
 		rows = append(rows, matches[0])
 		rowsByKey[id] = matches[1:]
 	}
-	existing := make([]*pb.RowKey, 0, len(existingByKey))
-	for _, key := range req.GetKeys() {
-		if existingByKey[rowKeyIdentity(key)] || (key.GetRecord() != nil && existingLatest[latestRecordIdentity(key)]) {
-			existing = append(existing, key)
-		}
-	}
-	return &pb.PrimaryReadFieldsRsp{RetInfo: retinfo.Success("success"), Rows: rows, ExistingKeys: existing}, nil
+	return &pb.PrimaryReadRowsRsp{RetInfo: retinfo.Success("success"), Rows: rows}, nil
 }
+
+const maxReadRowsKeys = 10000
 
 func latestRecordIdentity(key *pb.RowKey) string {
 	if key == nil || key.GetRecord() == nil {
