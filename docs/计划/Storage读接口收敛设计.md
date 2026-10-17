@@ -1,6 +1,6 @@
 # Storage 读接口收敛设计
 
-状态：设计稿 v1（2026-10-16），尚未编码。由[数据归档设计](数据归档设计.md)的讨论引出，归档依赖本设计；实现后以[存储](../模块/存储.md)为准。
+状态：设计稿 v2（2026-10-16），尚未编码。项目尚未上线，接口与协议直接修改，不考虑兼容。由[数据归档设计](数据归档设计.md)的讨论引出，归档依赖本设计；实现后以[存储](../模块/存储.md)为准。
 
 ## 0. 原则
 
@@ -16,12 +16,33 @@
 | 问题 | 位置 | 后果 |
 | --- | --- | --- |
 | `PrimaryStore.ReadTimeSeriesRows` 按调用方身份分流 | `primarystore/rows_read.go`：`storage-view` 和因子身份的范围读取走 DataNode，其余调用方转给 View | 同一个请求，不同调用方读到的数据范围不同；非因子调用方读超出 View 覆盖（每个序列最近 5000 根）的区间时拿到的是残缺结果，只能靠响应里的 `complete` / `served_indexed_*` 自己发现。CLI 的数据导出、Collector 的读行都属于这种情况 |
-| `PrimaryStore.CountTimeSeriesRows` 由 View 回答 | 同上 | 同样受 View 覆盖范围和消费滞后限制。Collector 的历史缺口扫描用它统计「最早生效点之前 500 根」，1m 数据集这一段通常早于 View 覆盖范围，计数为 0 时被当作「没有历史」，**很可能根本扫不到缺口**（需要用线上 `t_collector_history_scans` 的结果核实） |
+| `PrimaryStore.CountTimeSeriesRows` 由 View 回答 | 同上 | 同样受 View 覆盖范围和消费滞后限制。Collector 的历史缺口扫描用它统计「最早生效点之前 500 根」，计数为 0 的标的直接当作「没有历史」跳过，读行也走 View；扫描区间早于 View 覆盖范围时，它什么都看不见。线上核查结果见 1.1 |
+| 同一个接口，不同路由返回的格式不同 | DataNode 路径与 View 路径 | 2026-10-17 实测：同一段数据，DataNode 路径的 `data_time` 是 `2026-10-16T12:00:00.000000000Z`，View 路径是 `2026-10-16T12:00:00Z`；DataNode 路径即使数据完整也返回 `complete=false`、覆盖范围为空 |
 | 为特定调用方开的接口和参数 | `ListHistorySubjects` 只给 `storage-view`；`latest_per_series` 只能单个标的、只能 View 重建用；因子读取有专门的参数校验 | 每多一个调用方就多一个特例（归档的 v5 设计又要加一个「归档身份」） |
 | 自定义游标 | `ReadTimeSeriesRowsReq.after_key`：调用方自己把最后一行的键编码成 `RowKey` 再传回（因子 `storageio/read.go`、View `build.go` 的 `marshalTimeSeriesHistoryCursor`） | 调用方要理解内部键结构；公共分页里已有 `cursor` / `next_cursor` 却没用 |
 | 区间读取仍保留页码分页 | DataNode `pageHistory`：页码偏移超过 1 万直接拒绝 | 两种分页并存，页码分页在大区间上不可用 |
 | 「先取键、再补字段」两次往返 | View 重建：`latest_per_series` 不带列，只拿键，再调 `ReadFields` 补字段 | 多一次往返，多一个概念 |
 | 「history」概念外露 | `ListHistorySubjects`、`readHistoricalTimeSeriesRows`、注释与文档中的「历史读取」 | 调用方需要知道 Storage 内部有「历史索引」 |
+
+### 1.1 线上核查（2026-10-17，只读）
+
+在编译机上用因子引擎的凭据，对同一组请求分别走因子路由（DataNode）和普通路由（View），结合 Collector 库的 `t_collector_history_scans`：
+
+| 数据集 | 历史扫描区间（UTC） | DataNode 行数 | View 行数 | View 覆盖范围 |
+| --- | --- | --- | --- | --- |
+| crypto 现货 1m | 10-11 22:40 ～ 10-12 07:00 | 0 | 0 | 10-14 11:11 ～ 10-17 03:57 |
+| crypto 现货 1h | 09-21 12:00 ～ 10-12 08:00 | 0 | 0 | 10-14 12:00 ～ 10-17 02:00 |
+| 对照：crypto 现货 1m 最近 1 小时 | 10-16 12:00 ～ 13:00 | 60 | 60 | 同上 |
+
+（每组抽查 BTC-USDT、ETH-USDT、ADA-USDT，结果一致。线上只有这 4 个 crypto 数据集做过历史扫描，缺口都是 0。）
+
+结论：
+
+- **目前没有表现出问题**：Storage 大约在 10-14 11:00（UTC）清空后重新积累，扫描区间在 Pebble 里本来就没有数据，「0 缺口」碰巧是对的；
+- **扫描逻辑本身看不见 View 之外的数据**：1m 数据集积累超过 View 保留的根数（5000 根约 3.5 天，超过 1.2 倍才整理）之后，大约从 10-18 起，
+  Pebble 里会有比 View 更早的数据。之后凡是经默认路由读取这段数据（CLI 导出、Collector 读行与计数），都会静默地拿到空结果；
+- **另一个与此无关的问题**：清库后，Collector 的「最早生效点」仍取清库前的计划记录（10-12 07:00），历史扫描一直在扫清库前的空区间，
+  检查与补采也把 10-12 ～ 10-14 当作计划覆盖期。这属于 Collector 的计划时间线，不在本设计范围内，单独处理。
 
 ## 2. 收敛后的接口
 
@@ -52,7 +73,9 @@
 响应删除 `served_indexed_from`、`served_indexed_to`、`complete`：它们描述的是 View 的覆盖范围，PrimaryStore 的结果总是完整的；
 DataView 的响应中保留这三个字段。
 
-游标由服务端生成，内容是不透明的字符串（内部为最后一行的键或下一个标的），调用方原样传回即可。
+游标由服务端生成，内容是不透明的字符串（内部为最后一行的键或下一个标的），调用方原样传回即可；只能顺序向后翻页，不能跳页。
+
+`data_time` 统一按 RFC3339 输出，没有小数秒时不带小数部分（Go 的 `time.RFC3339Nano` 格式，如 `2026-10-16T12:00:00Z`），与 DataView 一致。
 
 ### 2.2 `PrimaryStore.CountTimeSeriesRows`：数事实
 
@@ -76,8 +99,8 @@ DataNode 只在序列索引上按标的扫描键，不读字段值，代价与�
 （`0x04`，标的优先，用于最近 N 根与计数）；本次改动涉及的文件（`pebble/history.go`、`primarystore/rows_read.go`）中的函数与类型同步改名，
 例如 `readHistoricalTimeSeriesRows` → `readDataNodeRows`、`historySelector` → `seriesSelector`。物理键布局与命名空间字节不变，不需要迁移数据。
 
-`ensureHistoryIndex` / `backfillHistoryIndex` 是为「索引命名空间引入之前写入的数据」补建索引的兼容逻辑。线上如果每个数据集都已经有补建完成的标记，
-可以一并删除；这需要先在 storage-node 上只读核对，本次不做。
+`ensureHistoryIndex` / `backfillHistoryIndex` 是为「索引命名空间引入之前写入的数据」补建索引的兼容逻辑。两个索引分别在 10-04 和 10-08 引入，
+线上 Storage 在 10-14 清空后重新积累，现存数据写入时都已带索引，本次直接删除这段逻辑和对应的补建标记。
 
 ## 3. 调用方迁移
 
@@ -87,7 +110,8 @@ DataNode 只在序列索引上按标的扫描键，不读字段值，代价与�
 | storage-view 重建（`view/build.go`） | `ListHistorySubjects` 列标的，再逐个标的取最近 N 根（只取键），再 `ReadFields` 补字段 | 不带 selector 的最近 N 根，带上列，按 `next_cursor` 逐页读取，一次拿到值；删除 `marshalTimeSeriesHistoryCursor` 和补字段步骤 |
 | Collector 检查与补采（`klinecheck`） | 计数与读行都由 View 回答 | 接口不变，改由 DataNode 回答；超出 View 覆盖范围的历史扫描从此有效。读行改用 `page.cursor` |
 | CLI 数据导出与 K 线查询 | 由 View 回答，可能残缺 | 由 DataNode 回答，总是完整；删除对 `complete` 的判断，改用游标翻页 |
-| Monitor 指标曲线与主机指标（`metrics/storage.go`、`hostmetrics/storage_reader.go`） | 倒序、页码、可以不给起点，由 View 回答 | 改调 `DataView.QueryTimeSeriesRows`（服务目录已允许 Monitor 调用）；View 按数据集从 Metadata 查得 |
+| Monitor 指标曲线（`metrics/storage.go`） | 倒序、页码、可以不给起点，由 View 回答 | 改用最近 N 根：每条曲线取最近 N 个点，由 DataNode 回答 |
+| Monitor 主机指标（`hostmetrics/storage_reader.go`） | 倒序、按页码逐页读，由 View 回答 | 改用时间区间读取，按游标顺序翻页（不跳页），由 DataNode 回答 |
 | Monitor 行情巡检（`watchdog/market_canary.go`） | 精确键读取 | 不变 |
 | 归档 worker | — | 最近 N 根不带 selector；补读与回补用时间区间 |
 
@@ -117,14 +141,12 @@ DataNode 只在序列索引上按标的扫描键，不读字段值，代价与�
 
 ## 6. 发布
 
-协议有删除的字段（`after_key`、`order`、响应中的 View 覆盖字段）和删除的方法（`ListHistorySubjects`），服务目录随之变化，
-因此需要一次协调发布，同一个提交构建：
+项目尚未上线，不考虑兼容：协议、服务目录和所有调用方在同一个提交里改完，一起构建、一起发布。
 
-1. 先发布 Storage：storage-node → storage-primary → 至少等 30 秒 → storage-view；
-2. 紧接着发布调用方：因子引擎（编译机，`systemctl --user restart moox-factor-engine`）、factor-mgr、Collector、Monitor；
-3. 服务目录变化要求 Admin、Monitor、各主机 host-gateway、Access 一起换；本机 `moox-cli` 重新构建。
+1. Storage：storage-node → storage-primary → 至少等 30 秒 → storage-view；
+2. 调用方：因子引擎（编译机）、factor-mgr、Collector、Monitor；
+3. 服务目录随之变化：Admin、Monitor、各主机 host-gateway、Access 一起换；本机 `moox-cli` 重新构建。
 
-时间选在整点后 :05～:20、分钟中段：避开 1h 因子计算和整点任务。Storage 与因子引擎之间的几分钟里，旧引擎的 `after_key` 翻页不可用，
-这几期的 1m 因子可能计算失败；发布后核对因子运行摘要，必要时用因子管理 CLI 的 `recalc` 补算。
+时间选在整点后 :05～:20、分钟中段，避开整点任务；发布后核对因子运行摘要和 View 水位。
 
-归档（[数据归档设计](数据归档设计.md)）在这次发布之后单独发布，它的服务目录改动是第二次协调发布。
+归档（[数据归档设计](数据归档设计.md)）依赖本设计，可以随后发布，也可以合在同一次发布里。
