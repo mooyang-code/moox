@@ -31,7 +31,7 @@ pacing:
   max_bytes_per_second: 512KB
   max_concurrent_runs: 4
   max_runs_per_data_node: 2
-  page_rows: 2000
+  page_rows: 500
 
 health:
   addr: 127.0.0.1:11418

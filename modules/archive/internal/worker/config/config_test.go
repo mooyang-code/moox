@@ -35,7 +35,7 @@ func TestLoadAppliesTheDocumentedDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Pacing.RequestSeconds != [2]int{25, 55} || cfg.Pacing.HourQuiet != [2]string{"58:00", "04:00"} || cfg.Pacing.RequestInterval != 200*time.Millisecond ||
-		cfg.Pacing.MaxBytesPerSecond != 512<<10 || cfg.Pacing.MaxConcurrentRuns != 4 || cfg.Pacing.MaxRunsPerDataNode != 2 || cfg.Pacing.PageRows != 2000 {
+		cfg.Pacing.MaxBytesPerSecond != 512<<10 || cfg.Pacing.MaxConcurrentRuns != 4 || cfg.Pacing.MaxRunsPerDataNode != 2 || cfg.Pacing.PageRows != 500 {
 		t.Fatalf("pacing = %+v", cfg.Pacing)
 	}
 	if cfg.Worker.MinFreeBytes != 5<<30 || cfg.Worker.HeartbeatInterval != 10*time.Second || cfg.Worker.PullInterval != 5*time.Second ||

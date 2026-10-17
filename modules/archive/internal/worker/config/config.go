@@ -121,7 +121,7 @@ func Default() *Config {
 		Staging: StagingSection{MemoryLimit: "1GB", Threads: 2, RebuildRatio: 2},
 		Pacing: PacingSection{
 			RequestSeconds: [2]int{25, 55}, HourQuiet: [2]string{"58:00", "04:00"}, RequestInterval: 200 * time.Millisecond,
-			MaxBytesPerSecond: ByteSize(512 << 10), MaxConcurrentRuns: 4, MaxRunsPerDataNode: 2, PageRows: 2000,
+			MaxBytesPerSecond: ByteSize(512 << 10), MaxConcurrentRuns: 4, MaxRunsPerDataNode: 2, PageRows: 500,
 		},
 		Health:      HealthSection{Addr: "127.0.0.1:11418"},
 		Maintenance: MaintenanceSection{At: "04:17:43"},

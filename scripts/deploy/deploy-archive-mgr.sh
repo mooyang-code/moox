@@ -104,7 +104,7 @@ log "upload binary, configuration and signing key"
 rsync -az -e "ssh ${ssh_opts[*]}" "${STAGE_DIR}/tree/bin/moox-archive-mgr" "${TARGET}:${REMOTE_DIR}/bin/.moox-archive-mgr.new"
 rsync -az -e "ssh ${ssh_opts[*]}" "${STAGE_DIR}/tree/archive-mgr/config/" "${TARGET}:${REMOTE_DIR}/archive-mgr/config/"
 rsync -az -e "ssh ${ssh_opts[*]}" "${STAGE_DIR}/moox-archive-mgr.service" "${TARGET}:.config/systemd/user/moox-archive-mgr.service"
-(umask 077; rsync -az --chmod=F600 -e "ssh ${ssh_opts[*]}" "${KEY_FILE}" "${TARGET}:${REMOTE_DIR}/secrets/caller-archive-mgr.key")
+ssh "${ssh_opts[@]}" "${TARGET}" "umask 077; cat > '${REMOTE_DIR}/secrets/caller-archive-mgr.key'" <"${KEY_FILE}"
 
 log "write the service environment (shared health credentials and Storage auth secret, never printed)"
 run_ssh "set -eu; umask 077; python3 - <<'PY'

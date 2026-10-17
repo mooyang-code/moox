@@ -55,6 +55,8 @@ func run(args []string) error {
 			return nil
 		case "health":
 			return health(args[1:])
+		case "probe":
+			return probe(args[1:])
 		}
 	}
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
