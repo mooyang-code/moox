@@ -84,7 +84,7 @@ type unitComponentSpec struct {
 
 var unitProfiles = map[string][]string{
 	"host":         {"host-gateway", "host-agent"},
-	"control":      {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"},
+	"control":      {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "archive-mgr", "strategy"},
 	"storage":      {"storage-primary", "storage-node", "storage-view"},
 	"access":       {"access"},
 	"egress-proxy": {"egress-proxy"},
@@ -124,6 +124,10 @@ var unitSpecs = map[string]unitComponentSpec{
 		{"modules/factor/config/trpc_go.yaml", "factor-mgr/config/trpc_go.yaml", false},
 		schemaAsset("factor", "factor-mgr"),
 		{"modules/factor/factors", "factor-mgr/factors", true},
+	}},
+	"archive-mgr": {assets: []unitAsset{
+		{"modules/archive/config/app.yaml", "archive-mgr/config/app.yaml", false},
+		{"modules/archive/config/trpc_go.yaml", "archive-mgr/config/trpc_go.yaml", false},
 	}},
 	"strategy": {[]string{"moox-strategy-cli"}, []unitAsset{configAsset("strategy", "strategy"), schemaAsset("strategy", "strategy")}},
 	"storage-primary": {[]string{"moox-storage-cli"}, []unitAsset{

@@ -56,7 +56,7 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 	for _, id := range components {
 		values := maps.Clone(health)
 		environment[id] = values
-		if slices.Contains([]string{"monitor", "collector", "factor-mgr", "strategy", "admin"}, id) {
+		if slices.Contains([]string{"monitor", "collector", "factor-mgr", "archive-mgr", "strategy", "admin"}, id) {
 			if len(identity.StoragePrimarySecret) < 32 || (id == "strategy" || id == "admin") && len(identity.StorageViewSecret) < 32 {
 				return nil, errors.New("control Storage clients require the original persistent role secrets")
 			}

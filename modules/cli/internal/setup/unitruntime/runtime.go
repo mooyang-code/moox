@@ -338,7 +338,7 @@ func componentArguments(id string) []string {
 	switch id {
 	case "console-proxy":
 		return []string{"serve", "-config=config/app.yaml"}
-	case "host-gateway", "access", "egress-proxy", "factor-mgr":
+	case "host-gateway", "access", "egress-proxy", "factor-mgr", "archive-mgr":
 		return []string{"-config=config/app.yaml", "-conf=config/trpc_go.yaml"}
 	case "web-host":
 		return nil

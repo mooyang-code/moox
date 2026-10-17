@@ -1,0 +1,38 @@
+database:
+  path: ./data/archive-mgr/archive.db
+
+gateway_client:
+  caller: archive-mgr
+  key_id: ""
+  key_file: ../../secrets/caller-archive-mgr.key
+
+run:
+  lease_ttl: 10m
+
+worker:
+  # 旧 worker 停止心跳多久之后新 worker 才能接管。
+  takeover_wait: 45s
+
+schedule:
+  min_interval: 5m
+  min_lookback: 15m
+
+retention:
+  scheduled_success: 720h
+  other: 2160h
+
+# worker 暂存区保留最近多久的数据，之后分区定稿。
+staging_retention: 72h
+
+spaces:
+  crypto:
+    tz: UTC
+  stockcn:
+    tz: Asia/Shanghai
+    local_close: "15:00"
+  stockhk:
+    tz: Asia/Hong_Kong
+    local_close: "16:10"
+  stockus:
+    tz: America/New_York
+    local_close: "16:00"

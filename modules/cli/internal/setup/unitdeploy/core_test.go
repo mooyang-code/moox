@@ -107,7 +107,7 @@ func TestCoreBuildUsesOnlyLocalPureGoAndFrontendTools(t *testing.T) {
 	raw, err := os.ReadFile(log)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	require.Len(t, lines, 14)
+	require.Len(t, lines, 15)
 	for _, line := range lines {
 		require.Contains(t, line, "|0|linux|arm64|unset|")
 		require.NotContains(t, line, "storage")

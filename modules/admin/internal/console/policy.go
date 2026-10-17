@@ -14,7 +14,7 @@ const globalAdminRole = 2
 // 也有全局运维接口，请求里没有空间时按全局运维处理。
 func requiresSpaceHeader(serviceID string) bool {
 	switch serviceID {
-	case "trade", "strategy", "collector", "cloudnode":
+	case "trade", "strategy", "collector", "cloudnode", "archive":
 		return true
 	}
 	return false

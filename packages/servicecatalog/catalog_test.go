@@ -42,7 +42,7 @@ func servicePtr(c *Catalog, path string) *Service {
 
 func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 	c := mustCatalog(t)
-	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "console-proxy": 19528, "web-host": 19527, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "cloudnode": 11411, "factor-mgr": 11414, "strategy": 11431, "storage-primary": 20210, "storage-node": 20212, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210}
+	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "console-proxy": 19528, "web-host": 19527, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "cloudnode": 11411, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-node": 20212, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210}
 	if len(c.Components) != len(want) {
 		t.Fatalf("components = %d", len(c.Components))
 	}
@@ -180,9 +180,10 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 func TestExternalPrincipalWhitelistIsExact(t *testing.T) {
 	c := mustCatalog(t)
 	want := map[string][]Permission{
-		"scf-collector": {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"CommitTimeSeriesBatch", "UpsertFields"}}},
-		"factor-engine": {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows", "WriteFactorRows", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"}}, {Service: "trpc.moox.storage.Metadata", Methods: []string{"GetDataset", "ListDatasetColumns", "ListDatasetSubjects"}}, {Service: "trpc.moox.factor.FactorEngine", Methods: []string{"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress"}}},
-		"moox-skill":    {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows"}}},
+		"scf-collector":  {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"CommitTimeSeriesBatch", "UpsertFields"}}},
+		"factor-engine":  {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows", "WriteFactorRows", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"}}, {Service: "trpc.moox.storage.Metadata", Methods: []string{"GetDataset", "ListDatasetColumns", "ListDatasetSubjects"}}, {Service: "trpc.moox.factor.FactorEngine", Methods: []string{"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress"}}},
+		"archive-worker": {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows"}}, {Service: "trpc.moox.storage.Metadata", Methods: []string{"GetDataset", "ListDatasetColumns"}}, {Service: "trpc.moox.archive.ArchiveWorker", Methods: []string{"ArchiveWorkerHeartbeat", "PullArchiveRun", "ReportArchiveRunProgress", "CompleteArchiveRun"}}},
+		"moox-skill":     {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows"}}},
 	}
 	if len(c.Principals) != len(want) {
 		t.Fatal("unexpected principal")

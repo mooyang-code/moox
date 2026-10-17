@@ -1,0 +1,472 @@
+syntax = "proto3";
+
+package trpc.moox.archive;
+
+import "moox_common.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/archive/proto/archivegen;archivepb";
+
+// 时间字段统一为 RFC3339（UTC）字符串；空串表示没有。
+
+// ArchiveRun 是一次定时、手动或补拉区间的执行。
+message ArchiveRun {
+  string run_id = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  // kind：scheduled、manual、range。
+  string kind = 4;
+  string range_start = 5;
+  string range_end = 6;
+  // status：queued、running、succeeded、failed、canceled。
+  string status = 7;
+  string scheduled_at = 8;
+  string started_at = 9;
+  string finished_at = 10;
+  string worker_id = 11;
+  string lease_until = 12;
+  uint64 subjects_total = 13;
+  uint64 subjects_done = 14;
+  uint64 request_count = 15;
+  uint64 bytes_read = 16;
+  uint64 rows_read = 17;
+  uint64 rows_added = 18;
+  uint64 rows_changed = 19;
+  uint32 partitions_exported = 20;
+  uint32 partitions_finalized = 21;
+  repeated UnrecoverableRange unrecoverable = 22;
+  string message = 23;
+}
+
+// UnrecoverableRange 是超出线上保留期、无法补齐的区间（按序列合并）。
+message UnrecoverableRange {
+  string subject_id = 1;
+  string series_tag = 2;
+  string start_time = 3;
+  string end_time = 4;
+}
+
+// ArchiveTask 是一个时序数据集的归档任务。
+message ArchiveTask {
+  string space_id = 1;
+  string dataset_id = 2;
+  string freq = 3;
+  // partition_unit：day、month。
+  string partition_unit = 4;
+  string data_node_id = 5;
+  string retention = 6;
+  string schedule_cron = 7;
+  string schedule_tz = 8;
+  uint32 interval_seconds = 9;
+  string start_at = 10;
+  string backfill_from = 11;
+  // status：enabled、paused。
+  string status = 12;
+  string next_run_at = 13;
+  uint32 consecutive_skips = 14;
+  string last_success_at = 15;
+  string final_until = 16;
+  string creator = 17;
+  string created_at = 18;
+  string updated_at = 19;
+  // health：ok、warning、error、paused（第 13 节的健康等级）。
+  string health = 20;
+  string health_reason = 21;
+  // 汇总（来自分区登记）。
+  uint32 partition_count = 22;
+  uint32 file_count = 23;
+  uint64 total_rows = 24;
+  uint64 total_file_bytes = 25;
+  string min_data_time = 26;
+  string max_data_time = 27;
+  ArchiveRun last_run = 28;
+}
+
+// ArchivePartition 是一个任务的一个分区（本地日；1d 及以上为月）。
+message ArchivePartition {
+  string space_id = 1;
+  string dataset_id = 2;
+  string partition_key = 3;
+  string range_start = 4;
+  string range_end = 5;
+  // status：open、exported、final。
+  string status = 6;
+  string worker_id = 7;
+  uint64 row_count = 8;
+  uint64 subject_count = 9;
+  string min_data_time = 10;
+  string max_data_time = 11;
+  string file_path = 12;
+  uint64 file_bytes = 13;
+  string file_sha256 = 14;
+  repeated string columns = 15;
+  string preview = 16;
+  uint32 export_count = 17;
+  string last_changed_at = 18;
+  string exported_at = 19;
+  string finalized_at = 20;
+  string last_run_id = 21;
+}
+
+// ArchiveWorkerInfo 是 worker 最近一次心跳的状态。
+message ArchiveWorkerInfo {
+  string worker_id = 1;
+  string instance_id = 2;
+  string version = 3;
+  string root_dir = 4;
+  uint64 disk_total_bytes = 5;
+  uint64 disk_free_bytes = 6;
+  uint64 staging_bytes = 7;
+  bool maintaining = 8;
+  string pacing_json = 9;
+  repeated string running_run_ids = 10;
+  string lease_until = 11;
+  string last_heartbeat_at = 12;
+  // active：租约未过期。
+  bool active = 13;
+}
+
+message TaskRef {
+  string space_id = 1;
+  string dataset_id = 2;
+}
+
+// ---- ArchiveMgr ----
+
+message GetArchiveOverviewReq {}
+message GetArchiveOverviewRsp {
+  common.RetInfo ret_info = 1;
+  ArchiveWorkerInfo worker = 2;
+  // 其他曾经心跳过但租约已过期的 worker。
+  repeated ArchiveWorkerInfo stale_workers = 3;
+  repeated ArchiveRun running_runs = 4;
+  uint32 task_count = 5;
+  uint32 enabled_task_count = 6;
+  uint32 queued_run_count = 7;
+  repeated string alerts = 8;
+}
+
+message ListArchiveTasksReq {
+  common.Page page = 1;
+  // 内部调用方（CLI）可以指定空间；经 Console 的调用以请求头里的空间为准。
+  string space_id = 2;
+}
+message ListArchiveTasksRsp {
+  common.RetInfo ret_info = 1;
+  repeated ArchiveTask tasks = 2;
+  common.PageResult page_result = 3;
+}
+
+message PrepareArchiveTaskReq {
+  string space_id = 1;
+  string dataset_id = 2;
+}
+message PrepareArchiveTaskRsp {
+  common.RetInfo ret_info = 1;
+  string freq = 2;
+  string partition_unit = 3;
+  string retention = 4;
+  string earliest_backfill_from = 5;
+  string data_node_id = 6;
+  string recommended_cron = 7;
+  string recommended_tz = 8;
+  bool exists = 9;
+}
+
+message PreviewArchiveScheduleReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string schedule_cron = 3;
+  string schedule_tz = 4;
+  // start_mode：immediate 或 at。
+  string start_mode = 5;
+  string start_at = 6;
+}
+message PreviewArchiveScheduleRsp {
+  common.RetInfo ret_info = 1;
+  repeated string next_runs = 2;
+  uint32 interval_seconds = 3;
+  // 每次读取区间的长度（秒）：执行间隔 + 最少回看 + 一根 K 线的最大跨度。
+  uint32 read_span_seconds = 4;
+  // 前几次运行的分区预计导出时间（空间时区的本地收盘 + 回看）。
+  repeated string partition_export_estimates = 5;
+  repeated string warnings = 6;
+}
+
+message CreateArchiveTaskReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string schedule_cron = 3;
+  string schedule_tz = 4;
+  string start_mode = 5;
+  string start_at = 6;
+  string backfill_from = 7;
+  // 创建后是否启用；默认启用。
+  bool paused = 8;
+}
+message CreateArchiveTaskRsp {
+  common.RetInfo ret_info = 1;
+  ArchiveTask task = 2;
+}
+
+message UpdateArchiveTaskReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string schedule_cron = 3;
+  string schedule_tz = 4;
+  string start_mode = 5;
+  string start_at = 6;
+  string backfill_from = 7;
+  // status：enabled、paused。
+  string status = 8;
+  // 停用后重新启用时是否立即运行一次。
+  bool run_now = 9;
+}
+message UpdateArchiveTaskRsp {
+  common.RetInfo ret_info = 1;
+  ArchiveTask task = 2;
+}
+
+message DeleteArchiveTaskReq {
+  string space_id = 1;
+  string dataset_id = 2;
+}
+message DeleteArchiveTaskRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message RunArchiveTaskNowReq {
+  string space_id = 1;
+  string dataset_id = 2;
+}
+message RunArchiveTaskNowRsp {
+  common.RetInfo ret_info = 1;
+  ArchiveRun run = 2;
+}
+
+message BackfillArchiveRangeReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string range_start = 3;
+  string range_end = 4;
+}
+message BackfillArchiveRangeRsp {
+  common.RetInfo ret_info = 1;
+  ArchiveRun run = 2;
+}
+
+message CancelArchiveRunReq {
+  string run_id = 1;
+}
+message CancelArchiveRunRsp {
+  common.RetInfo ret_info = 1;
+  ArchiveRun run = 2;
+}
+
+message ListArchiveRunsReq {
+  // 为空表示当前空间的全部任务。
+  string dataset_id = 1;
+  // 为空表示全部状态。
+  string status = 2;
+  common.Page page = 3;
+  string space_id = 4;
+}
+message ListArchiveRunsRsp {
+  common.RetInfo ret_info = 1;
+  repeated ArchiveRun runs = 2;
+  common.PageResult page_result = 3;
+}
+
+message GetArchiveRunReq {
+  string run_id = 1;
+}
+message GetArchiveRunRsp {
+  common.RetInfo ret_info = 1;
+  ArchiveRun run = 2;
+}
+
+message ListArchivePartitionsReq {
+  string dataset_id = 1;
+  // 起止月份（YYYY-MM，含）；为空表示不限。
+  string from_month = 2;
+  string to_month = 3;
+  common.Page page = 4;
+  string space_id = 5;
+}
+message ListArchivePartitionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated ArchivePartition partitions = 2;
+  common.PageResult page_result = 3;
+}
+
+message GetArchivePartitionReq {
+  string dataset_id = 1;
+  string partition_key = 2;
+  string space_id = 3;
+}
+message GetArchivePartitionRsp {
+  common.RetInfo ret_info = 1;
+  ArchivePartition partition = 2;
+}
+
+service ArchiveMgr {
+  rpc GetArchiveOverview(GetArchiveOverviewReq) returns (GetArchiveOverviewRsp);
+  rpc ListArchiveTasks(ListArchiveTasksReq) returns (ListArchiveTasksRsp);
+  rpc PrepareArchiveTask(PrepareArchiveTaskReq) returns (PrepareArchiveTaskRsp);
+  rpc PreviewArchiveSchedule(PreviewArchiveScheduleReq) returns (PreviewArchiveScheduleRsp);
+  rpc CreateArchiveTask(CreateArchiveTaskReq) returns (CreateArchiveTaskRsp);
+  rpc UpdateArchiveTask(UpdateArchiveTaskReq) returns (UpdateArchiveTaskRsp);
+  rpc DeleteArchiveTask(DeleteArchiveTaskReq) returns (DeleteArchiveTaskRsp);
+  rpc RunArchiveTaskNow(RunArchiveTaskNowReq) returns (RunArchiveTaskNowRsp);
+  rpc BackfillArchiveRange(BackfillArchiveRangeReq) returns (BackfillArchiveRangeRsp);
+  rpc CancelArchiveRun(CancelArchiveRunReq) returns (CancelArchiveRunRsp);
+  rpc ListArchiveRuns(ListArchiveRunsReq) returns (ListArchiveRunsRsp);
+  rpc GetArchiveRun(GetArchiveRunReq) returns (GetArchiveRunRsp);
+  rpc ListArchivePartitions(ListArchivePartitionsReq) returns (ListArchivePartitionsRsp);
+  rpc GetArchivePartition(GetArchivePartitionReq) returns (GetArchivePartitionRsp);
+}
+
+// ---- ArchiveWorker：mgr 与 worker 之间的内部契约，只有外部身份 archive-worker 可以调用 ----
+
+message ArchiveWorkerHeartbeatReq {
+  string worker_id = 1;
+  string instance_id = 2;
+  string version = 3;
+  string root_dir = 4;
+  uint64 disk_total_bytes = 5;
+  uint64 disk_free_bytes = 6;
+  uint64 staging_bytes = 7;
+  bool maintaining = 8;
+  bool disk_low = 9;
+  string pacing_json = 10;
+  repeated string running_run_ids = 11;
+}
+message ArchiveWorkerHeartbeatRsp {
+  common.RetInfo ret_info = 1;
+  // active：本实例持有活动租约。
+  bool active = 2;
+  uint32 lease_ttl_seconds = 3;
+  // 需要取消的运行（用户取消，或租约已不属于本 worker）。
+  repeated string cancel_run_ids = 4;
+  // 已删除的任务：worker 在下次维护时清理它们的暂存表和序列状态。
+  repeated TaskRef deleted_tasks = 5;
+}
+
+// DataNodeLoad 是 worker 当前在某个 DataNode 上占用的运行数。
+message DataNodeLoad {
+  string data_node_id = 1;
+  uint32 running = 2;
+}
+
+message PullArchiveRunReq {
+  string worker_id = 1;
+  string instance_id = 2;
+  // 空闲的并发槽数，最多返回这么多个运行。
+  uint32 free_slots = 3;
+  // 每个 DataNode 允许同时运行的上限。
+  uint32 max_runs_per_data_node = 4;
+  repeated DataNodeLoad busy_data_nodes = 5;
+}
+
+// RunAssignment 是下发给 worker 的一次运行的全部参数。
+message RunAssignment {
+  string run_id = 1;
+  string lease_token = 2;
+  string kind = 3;
+  string space_id = 4;
+  string dataset_id = 5;
+  string freq = 6;
+  string partition_unit = 7;
+  string data_node_id = 8;
+  string retention = 9;
+  uint32 interval_seconds = 10;
+  // 最少回看时长 L（秒）。
+  uint32 min_lookback_seconds = 11;
+  // 空间时区与本地收盘时刻（"15:00"；空串表示全天交易）。
+  string space_tz = 12;
+  string local_close = 13;
+  // 暂存保留期（秒）。
+  uint32 staging_retention_seconds = 14;
+  string scheduled_at = 15;
+  // 本次运行开始（读取区间的终点）。
+  string started_at = 16;
+  // 补拉区间（kind=range 时有值）。
+  string range_start = 17;
+  string range_end = 18;
+  // 回补起点（任务设置，首次运行使用）。
+  string backfill_from = 19;
+  uint32 lease_ttl_seconds = 20;
+}
+message PullArchiveRunRsp {
+  common.RetInfo ret_info = 1;
+  repeated RunAssignment runs = 2;
+}
+
+message ReportArchiveRunProgressReq {
+  string worker_id = 1;
+  string run_id = 2;
+  string lease_token = 3;
+  uint64 subjects_total = 4;
+  uint64 subjects_done = 5;
+  uint64 request_count = 6;
+  uint64 bytes_read = 7;
+  uint64 rows_read = 8;
+}
+message ReportArchiveRunProgressRsp {
+  common.RetInfo ret_info = 1;
+  // canceled：运行已被取消或租约已丢失，worker 应停止。
+  bool canceled = 2;
+}
+
+// PartitionReport 是本次运行涉及的一个分区的登记信息。
+message PartitionReport {
+  string partition_key = 1;
+  string range_start = 2;
+  string range_end = 3;
+  // status：open、exported、final。
+  string status = 4;
+  uint64 row_count = 5;
+  uint64 subject_count = 6;
+  string min_data_time = 7;
+  string max_data_time = 8;
+  string file_path = 9;
+  uint64 file_bytes = 10;
+  string file_sha256 = 11;
+  repeated string columns = 12;
+  string preview = 13;
+  uint32 export_count = 14;
+  string last_changed_at = 15;
+  string exported_at = 16;
+  string finalized_at = 17;
+}
+
+message CompleteArchiveRunReq {
+  string worker_id = 1;
+  string run_id = 2;
+  string lease_token = 3;
+  // status：succeeded、failed、canceled。
+  string status = 4;
+  string message = 5;
+  uint64 subjects_total = 6;
+  uint64 subjects_done = 7;
+  uint64 request_count = 8;
+  uint64 bytes_read = 9;
+  uint64 rows_read = 10;
+  uint64 rows_added = 11;
+  uint64 rows_changed = 12;
+  uint32 partitions_exported = 13;
+  uint32 partitions_finalized = 14;
+  repeated UnrecoverableRange unrecoverable = 15;
+  repeated PartitionReport partitions = 16;
+  // 定稿边界：此时间之前的分区均已定稿；空串表示不更新。
+  string final_until = 17;
+}
+message CompleteArchiveRunRsp {
+  common.RetInfo ret_info = 1;
+}
+
+service ArchiveWorker {
+  rpc ArchiveWorkerHeartbeat(ArchiveWorkerHeartbeatReq) returns (ArchiveWorkerHeartbeatRsp);
+  rpc PullArchiveRun(PullArchiveRunReq) returns (PullArchiveRunRsp);
+  rpc ReportArchiveRunProgress(ReportArchiveRunProgressReq) returns (ReportArchiveRunProgressRsp);
+  rpc CompleteArchiveRun(CompleteArchiveRunReq) returns (CompleteArchiveRunRsp);
+}

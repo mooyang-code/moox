@@ -257,7 +257,7 @@ func activeControlStatus(ctx context.Context, transport setupssh.Client, helper,
 func checkControlDependencies(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.Root, components []string, options CoreOptions) error {
 	profiles := []string{}
 	if slices.ContainsFunc(components, func(id string) bool {
-		return slices.Contains([]string{"monitor", "collector", "factor-mgr", "strategy"}, id)
+		return slices.Contains([]string{"monitor", "collector", "factor-mgr", "archive-mgr", "strategy"}, id)
 	}) {
 		profiles = append(profiles, "storage")
 	}

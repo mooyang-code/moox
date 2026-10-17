@@ -111,7 +111,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		hash    string
 	}{
 		"control":   {164, []string{"access", "admin", "cloudnode", "collector", "console", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "ed92291342c07d78a482ea9335d90de09ce0eb2786610fff56d12cb863be050a"},
-		"storage":   {95, []string{"access", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "8966aea90fa324260d3384be19de91b656613796a9426c24ff6d86d039287934"},
+		"storage":   {95, []string{"access", "archive-mgr", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "831ac2ac0ed1db7003f84b1ee3c9c1e9b4868ccee88114e33193a8af28fe900c"},
 		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "cf0c78e6614510d464b9500c4459f5a0fa8392684a0347f6b02346ab49ea4c91"},
 	}
 	for _, host := range p.Hosts {
@@ -156,7 +156,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 			}
 		}
 		for _, caller := range compiled.VerificationCallers {
-			if strings.Contains(caller, "*") || slices.Contains([]string{"scf-collector", "factor-engine", "moox-skill"}, caller) {
+			if strings.Contains(caller, "*") || slices.Contains([]string{"scf-collector", "factor-engine", "archive-worker", "moox-skill"}, caller) {
 				t.Fatalf("unexpanded or external verification scope %q", caller)
 			}
 		}
@@ -310,5 +310,45 @@ func TestRouteTimeoutUsesMethodOverride(t *testing.T) {
 	service, _ := c.Service("trpc.moox.storage.PrimaryStore")
 	if service.TimeoutFor("WaitViewSyncPoint") != 35000 || service.TimeoutFor("ReadRows") != 5000 {
 		t.Fatal("TimeoutFor does not honor the method override")
+	}
+}
+
+func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	p.Placements = append(p.Placements, Placement{HostID: "control", ComponentID: "archive-mgr", Status: Enabled})
+	if err := c.ValidateTopology(p); err != nil {
+		t.Fatal(err)
+	}
+	control, err := c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := map[string]Route{}
+	for _, route := range control.Routes {
+		if route.ComponentID == "archive-mgr" {
+			routes[route.ServicePath+"/"+route.Method] = route
+		}
+	}
+	if len(routes) != 14+4 {
+		t.Fatalf("archive-mgr routes = %d, want 18", len(routes))
+	}
+	create := routes["trpc.moox.archive.ArchiveMgr/CreateArchiveTask"]
+	if !slices.Equal(create.Callers, []string{"console", "moox-cli"}) || create.ReadOnly {
+		t.Fatalf("CreateArchiveTask route = %+v", create)
+	}
+	list := routes["trpc.moox.archive.ArchiveMgr/ListArchiveTasks"]
+	if !slices.Equal(list.Callers, []string{"console", "monitor", "moox-cli"}) || !list.ReadOnly {
+		t.Fatalf("ListArchiveTasks 只读方法允许 monitor: %+v", list)
+	}
+	// ArchiveWorker 的 acl 为空：只有外部身份 archive-worker（经 Access 白名单）能调用。
+	pull := routes["trpc.moox.archive.ArchiveWorker/PullArchiveRun"]
+	if !slices.Equal(pull.Callers, []string{"access"}) {
+		t.Fatalf("PullArchiveRun callers = %v", pull.Callers)
+	}
+	if !c.PrincipalAllowed("archive-worker", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") ||
+		c.PrincipalAllowed("archive-worker", "trpc.moox.archive.ArchiveMgr", "CreateArchiveTask") ||
+		c.PrincipalAllowed("archive-worker", "trpc.moox.storage.PrimaryStore", "WriteFactorRows") ||
+		c.PrincipalAllowed("factor-engine", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") {
+		t.Fatal("archive-worker 的外部白名单边界不对")
 	}
 }

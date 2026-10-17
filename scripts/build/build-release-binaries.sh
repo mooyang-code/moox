@@ -121,6 +121,7 @@ binary_names=(
   moox-cloudnode moox-cloudnode-cli
   moox-collector moox-collector-cli
   moox-factor-mgr moox-factor-mgr-cli
+  moox-archive-mgr
   moox-strategy moox-strategy-cli
   moox-trade moox-trade-cli
   moox-monitor moox-monitor-cli

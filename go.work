@@ -3,6 +3,8 @@ go 1.26.9
 use (
 	./modules/access
 	./modules/admin
+	./modules/archive
+	./modules/archive/proto/archivegen
 	./modules/admin/proto/admingen
 	./modules/cli
 	./modules/cloudnode

@@ -947,6 +947,108 @@ components:
         - replay_factor_window_manually
         - restart_service_manually
       required_in_default_profile: true
+  - id: archive-mgr
+    name: 数据归档管理服务
+    binary: moox-archive-mgr
+    scope: any
+    replicas: single
+    protected: false
+    health:
+      kind: readyz
+      port: 11416
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.archive.ArchiveMgr
+        port: 11406
+        console_name: archive
+        timeout_ms: 30000
+        max_body_bytes: 4194304
+        methods:
+          - GetArchiveOverview
+          - ListArchiveTasks
+          - PrepareArchiveTask
+          - PreviewArchiveSchedule
+          - CreateArchiveTask
+          - UpdateArchiveTask
+          - DeleteArchiveTask
+          - RunArchiveTaskNow
+          - BackfillArchiveRange
+          - CancelArchiveRun
+          - ListArchiveRuns
+          - GetArchiveRun
+          - ListArchivePartitions
+          - GetArchivePartition
+        read_only_methods:
+          - GetArchiveOverview
+          - ListArchiveTasks
+          - PrepareArchiveTask
+          - PreviewArchiveSchedule
+          - ListArchiveRuns
+          - GetArchiveRun
+          - ListArchivePartitions
+          - GetArchivePartition
+        acl:
+          - methods:
+              - GetArchiveOverview
+              - ListArchiveTasks
+              - PrepareArchiveTask
+              - PreviewArchiveSchedule
+              - CreateArchiveTask
+              - UpdateArchiveTask
+              - DeleteArchiveTask
+              - RunArchiveTaskNow
+              - BackfillArchiveRange
+              - CancelArchiveRun
+              - ListArchiveRuns
+              - GetArchiveRun
+              - ListArchivePartitions
+              - GetArchivePartition
+            callers:
+              - console
+              - moox-cli
+          - methods:
+              - GetArchiveOverview
+              - ListArchiveTasks
+              - PrepareArchiveTask
+              - PreviewArchiveSchedule
+              - ListArchiveRuns
+              - GetArchiveRun
+              - ListArchivePartitions
+              - GetArchivePartition
+            callers:
+              - monitor
+      - path: trpc.moox.archive.ArchiveWorker
+        port: 11408
+        timeout_ms: 60000
+        max_body_bytes: 4194304
+        methods:
+          - ArchiveWorkerHeartbeat
+          - PullArchiveRun
+          - ReportArchiveRunProgress
+          - CompleteArchiveRun
+        acl: []
+    doctor:
+      role: archive-mgr
+      description: Archive task manager scheduling runs and registering partitions for the archive worker
+      duties:
+        - schedule archive runs
+        - register archive partitions
+      inputs:
+        - archive tasks and worker reports
+      outputs:
+        - archive runs and partition registry
+      dependencies:
+        - storage-primary
+      transport: health_only
+      functional_observability: deferred
+      config_paths:
+        - archive-mgr/config/app.yaml
+        - archive-mgr/config/trpc_go.yaml
+      writable_paths:
+        - data/archive-mgr
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: false
   - id: strategy
     name: 策略服务
     binary: moox-strategy
@@ -1314,6 +1416,10 @@ components:
             callers:
               - factor-mgr
               - collector
+          - methods:
+              - GetDataset
+            callers:
+              - archive-mgr
       - path: trpc.moox.storage.PrimaryStore
         port: 20102
         console_name: storage
@@ -1754,6 +1860,21 @@ principals:
           - EngineHeartbeat
           - PullRecalcJob
           - ReportRecalcProgress
+  - id: archive-worker
+    allow:
+      - service: trpc.moox.storage.PrimaryStore
+        methods:
+          - ReadTimeSeriesRows
+      - service: trpc.moox.storage.Metadata
+        methods:
+          - GetDataset
+          - ListDatasetColumns
+      - service: trpc.moox.archive.ArchiveWorker
+        methods:
+          - ArchiveWorkerHeartbeat
+          - PullArchiveRun
+          - ReportArchiveRunProgress
+          - CompleteArchiveRun
   - id: moox-skill
     allow:
       - service: trpc.moox.storage.PrimaryStore
