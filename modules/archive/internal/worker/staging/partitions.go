@@ -379,3 +379,19 @@ func (s *Store) DropIfUnbound(ctx context.Context, spaceID, datasetID string) er
 	// 没有 task_state 记录也算未绑定：可能留有只补拉过或首次回补中途失败的暂存表和分区状态。
 	return s.DropTask(ctx, spaceID, datasetID)
 }
+
+// DropDeleted 按删除通知清理任务状态：通知带着被删任务的实例标识，只清理属于该实例（或尚未绑定实例）的状态；
+// 状态已经属于另一个实例（任务已重建并绑定）时，迟到的通知不能删掉它。通知没带实例标识时按旧行为清理。
+func (s *Store) DropDeleted(ctx context.Context, spaceID, datasetID, epoch string) error {
+	if epoch != "" {
+		var stored sql.NullString
+		err := s.db.QueryRowContext(ctx, `SELECT task_epoch FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&stored)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil && stored.Valid && stored.String != "" && stored.String != epoch {
+			return nil
+		}
+	}
+	return s.DropTask(ctx, spaceID, datasetID)
+}

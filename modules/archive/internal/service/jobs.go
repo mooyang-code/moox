@@ -16,11 +16,17 @@ const (
 	deletedTaskKeep     = 24 * time.Hour
 )
 
-// markDeleted 记下被删除的任务，下次 worker 心跳时通知它清理暂存表。
-func (s *Service) markDeleted(space, dataset string) {
+// deletedTask 是一条待通知 worker 的已删除任务。
+type deletedTask struct {
+	space, dataset, epoch string
+	at                    time.Time
+}
+
+// markDeleted 记下被删除的任务（含它的实例标识），下次 worker 心跳时通知它清理暂存表。
+func (s *Service) markDeleted(space, dataset, epoch string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.deletedTasks[space+"/"+dataset] = s.clock()
+	s.deletedTasks[space+"/"+dataset] = deletedTask{space: space, dataset: dataset, epoch: epoch, at: s.clock()}
 }
 
 // clearDeleted 在数据集重新创建任务时撤销之前的「已删除」通知，避免 worker 稍后清掉新任务的暂存数据。
@@ -31,24 +37,17 @@ func (s *Service) clearDeleted(space, dataset string) {
 }
 
 // deletedTaskRefs 返回仍需通知 worker 的已删除任务，并清理过期条目。
-func (s *Service) deletedTaskRefs() [][2]string {
+func (s *Service) deletedTaskRefs() []deletedTask {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.clock()
-	var out [][2]string
-	for key, at := range s.deletedTasks {
-		if now.Sub(at) > deletedTaskKeep {
+	var out []deletedTask
+	for key, d := range s.deletedTasks {
+		if now.Sub(d.at) > deletedTaskKeep {
 			delete(s.deletedTasks, key)
 			continue
 		}
-		var space, dataset string
-		for i := 0; i < len(key); i++ {
-			if key[i] == '/' {
-				space, dataset = key[:i], key[i+1:]
-				break
-			}
-		}
-		out = append(out, [2]string{space, dataset})
+		out = append(out, d)
 	}
 	return out
 }

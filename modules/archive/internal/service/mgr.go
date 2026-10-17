@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -254,6 +255,10 @@ func (m *MgrService) DeleteArchiveTask(ctx context.Context, req *archivepb.Delet
 	if err != nil {
 		return &archivepb.DeleteArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
+	epoch := ""
+	if old, gerr := s.store.GetTask(ctx, space, req.GetDatasetId()); gerr == nil {
+		epoch = strconv.FormatInt(old.ID, 10)
+	}
 	if err := s.store.DeleteTask(ctx, space, req.GetDatasetId()); err != nil {
 		if errors.Is(err, store.ErrHasPartitions) {
 			return &archivepb.DeleteArchiveTaskRsp{RetInfo: conflict(errors.New("任务已有归档分区，不能删除，只能停用"))}, nil
@@ -263,7 +268,7 @@ func (m *MgrService) DeleteArchiveTask(ctx context.Context, req *archivepb.Delet
 		}
 		return &archivepb.DeleteArchiveTaskRsp{RetInfo: fail(err)}, nil
 	}
-	s.markDeleted(space, req.GetDatasetId())
+	s.markDeleted(space, req.GetDatasetId(), epoch)
 	return &archivepb.DeleteArchiveTaskRsp{RetInfo: success()}, nil
 }
 

@@ -128,6 +128,8 @@ message ArchiveWorkerInfo {
 message TaskRef {
   string space_id = 1;
   string dataset_id = 2;
+  // 被删除任务的实例标识；worker 只清理属于该实例（或尚未绑定实例）的状态。
+  string task_epoch = 3;
 }
 
 // ---- ArchiveMgr ----
@@ -395,7 +397,7 @@ message RunAssignment {
   // 回补起点（任务设置，首次运行使用）。
   string backfill_from = 19;
   uint32 lease_ttl_seconds = 20;
-  // 任务实例标识（任务创建时间）。任务被删除后重建会得到新的值，worker 据此丢弃旧任务遗留的水位和暂存数据。
+  // 任务实例标识（任务自增 ID，不复用）。任务被删除后重建会得到新的值，worker 据此丢弃旧任务遗留的水位和暂存数据。
   string task_epoch = 21;
 }
 message PullArchiveRunRsp {

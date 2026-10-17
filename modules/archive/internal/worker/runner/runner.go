@@ -123,13 +123,12 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 		out.Progress = s.progress
 		out.RowsAdded, out.RowsChanged = s.added, s.changed
 		// 任务实例确认之前（绑定失败）暂存库里可能还是旧任务的状态，不能把它的分区报给新任务。
-		if !s.bound {
-			return
-		}
-		if reports, rerr := s.partitionReports(context.WithoutCancel(ctx), out); rerr == nil {
-			out.Partitions = reports
-			for _, p := range reports {
-				out.ReportedKeys = append(out.ReportedKeys, p.GetPartitionKey())
+		if s.bound {
+			if reports, rerr := s.partitionReports(context.WithoutCancel(ctx), out); rerr == nil {
+				out.Partitions = reports
+				for _, p := range reports {
+					out.ReportedKeys = append(out.ReportedKeys, p.GetPartitionKey())
+				}
 			}
 		}
 		switch {
@@ -144,7 +143,6 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	if _, err = r.Staging.BindEpoch(ctx, a.GetSpaceId(), a.GetDatasetId(), a.GetTaskEpoch()); err != nil {
 		return out, err
 	}
-	s.bound = true
 	ranges, unrecoverable, err := s.readRanges(ctx)
 	if err != nil {
 		return out, err
@@ -155,6 +153,7 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 		return out, err
 	}
 	s.task.Columns = columns
+	s.bound = true // 实例已确认且列信息齐全，才能收集分区报告
 	if err := r.Staging.EnsureTable(ctx, s.task); err != nil {
 		return out, err
 	}

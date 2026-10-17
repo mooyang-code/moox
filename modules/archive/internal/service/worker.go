@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -42,7 +43,7 @@ func (w *WorkerService) ArchiveWorkerHeartbeat(ctx context.Context, req *archive
 	rsp.CancelRunIds = canceled
 	if result.Active {
 		for _, ref := range s.deletedTaskRefs() {
-			rsp.DeletedTasks = append(rsp.DeletedTasks, &archivepb.TaskRef{SpaceId: ref[0], DatasetId: ref[1]})
+			rsp.DeletedTasks = append(rsp.DeletedTasks, &archivepb.TaskRef{SpaceId: ref.space, DatasetId: ref.dataset, TaskEpoch: ref.epoch})
 		}
 	}
 	return rsp, nil
@@ -89,7 +90,7 @@ func (s *Service) assignment(c store.Claimed) *archivepb.RunAssignment {
 		IntervalSeconds: uint32(c.Task.IntervalSeconds), MinLookbackSeconds: uint32(s.cfg.Schedule.MinLookback / time.Second),
 		SpaceTz: spaceCfg.TZ, LocalClose: spaceCfg.LocalClose, StagingRetentionSeconds: uint32(s.cfg.StagingRetention / time.Second),
 		ScheduledAt: fmtRFC(c.Run.ScheduledAt), StartedAt: fmtRFC(c.Run.StartedAt), RangeStart: fmtRFC(c.Run.RangeStart), RangeEnd: fmtRFC(c.Run.RangeEnd),
-		BackfillFrom: fmtRFC(c.Task.BackfillFrom), TaskEpoch: fmtRFC(c.Task.CreatedAt), LeaseTtlSeconds: uint32(s.cfg.Run.LeaseTTL / time.Second),
+		BackfillFrom: fmtRFC(c.Task.BackfillFrom), TaskEpoch: strconv.FormatInt(c.Task.ID, 10), LeaseTtlSeconds: uint32(s.cfg.Run.LeaseTTL / time.Second),
 	}
 }
 

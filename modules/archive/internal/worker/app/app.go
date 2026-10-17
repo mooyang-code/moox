@@ -47,7 +47,7 @@ type Options struct {
 	DiskUsage  DiskUsage
 }
 
-type taskRef struct{ space, dataset string }
+type taskRef struct{ space, dataset, epoch string }
 
 type activeRun struct {
 	assignment *archivepb.RunAssignment
@@ -228,7 +228,7 @@ func (a *App) heartbeatOnce(ctx context.Context) {
 		}
 	}
 	for _, ref := range rsp.GetDeletedTasks() {
-		a.deleted[ref.GetSpaceId()+"/"+ref.GetDatasetId()] = taskRef{space: ref.GetSpaceId(), dataset: ref.GetDatasetId()}
+		a.deleted[ref.GetSpaceId()+"/"+ref.GetDatasetId()] = taskRef{space: ref.GetSpaceId(), dataset: ref.GetDatasetId(), epoch: ref.GetTaskEpoch()}
 	}
 }
 
@@ -522,7 +522,7 @@ func (a *App) maintainOnce(ctx context.Context) {
 	}
 	a.mu.Unlock()
 	for _, ref := range pending {
-		if err := a.opts.Staging.DropTask(ctx, ref.space, ref.dataset); err != nil {
+		if err := a.opts.Staging.DropDeleted(ctx, ref.space, ref.dataset, ref.epoch); err != nil {
 			log.Warnf("archive worker drop deleted task %s/%s: %v", ref.space, ref.dataset, err)
 			continue
 		}

@@ -636,3 +636,24 @@ func TestDropIfUnboundAlsoClearsStagedDataWithoutTaskState(t *testing.T) {
 		t.Fatalf("没有 task_state 的旧暂存表也应清理: %v", tables)
 	}
 }
+
+func TestDropDeletedIgnoresALateNoticeForAnOlderTaskInstance(t *testing.T) {
+	s, ctx, task := openTest(t), context.Background(), klineTask()
+	_ = s.EnsureTable(ctx, task)
+	_, _ = s.BindEpoch(ctx, "crypto", "ds_1m", "7")
+	_ = s.Finalize(ctx, task, nil, now0, now0, true)
+	// 迟到的、属于旧实例 3 的删除通知：新实例 7 的状态保留。
+	if err := s.DropDeleted(ctx, "crypto", "ds_1m", "3"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); !ok {
+		t.Fatal("旧实例的删除通知不能清掉新实例的状态")
+	}
+	// 属于当前实例的删除通知照常清理。
+	if err := s.DropDeleted(ctx, "crypto", "ds_1m", "7"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("当前实例被删除后应清理")
+	}
+}

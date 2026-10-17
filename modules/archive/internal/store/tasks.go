@@ -10,6 +10,8 @@ import (
 
 // Task 是一个归档任务。
 type Task struct {
+	// ID 是自增主键，删除后不复用，用作任务实例标识。
+	ID               int64
 	SpaceID          string
 	DatasetID        string
 	Freq             string
@@ -31,7 +33,7 @@ type Task struct {
 	UpdatedAt        time.Time
 }
 
-const taskColumns = `c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_schedule_cron, c_schedule_tz,
+const taskColumns = `c_id, c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_schedule_cron, c_schedule_tz,
 c_interval_seconds, c_start_at, c_backfill_from, c_status, c_next_run_at, c_consecutive_skips, c_last_success_at, c_final_until,
 c_creator, c_ctime, c_mtime`
 
@@ -40,7 +42,7 @@ type rowScanner interface{ Scan(dest ...any) error }
 func scanTask(row rowScanner) (Task, error) {
 	var t Task
 	var start, backfill, next, lastSuccess, finalUntil, created, updated timeValue
-	err := row.Scan(&t.SpaceID, &t.DatasetID, &t.Freq, &t.PartitionUnit, &t.DataNodeID, &t.Retention, &t.ScheduleCron, &t.ScheduleTZ,
+	err := row.Scan(&t.ID, &t.SpaceID, &t.DatasetID, &t.Freq, &t.PartitionUnit, &t.DataNodeID, &t.Retention, &t.ScheduleCron, &t.ScheduleTZ,
 		&t.IntervalSeconds, &start, &backfill, &t.Status, &next, &t.ConsecutiveSkips, &lastSuccess, &finalUntil,
 		&t.Creator, &created, &updated)
 	if err != nil {

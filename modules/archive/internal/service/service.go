@@ -46,7 +46,7 @@ type Service struct {
 
 	mu            sync.Mutex
 	plans         map[string]*schedule.Plan
-	deletedTasks  map[string]time.Time
+	deletedTasks  map[string]deletedTask
 	lastRefresh   time.Time
 	lastCleanup   time.Time
 	lastVacuum    time.Time
@@ -65,7 +65,7 @@ func New(db *store.Store, cfg *config.Config, datasets DatasetProvider, opts ...
 		return nil, errors.New("archive service requires a store, config and dataset provider")
 	}
 	s := &Service{store: db, cfg: cfg, datasets: datasets, now: func() time.Time { return time.Now().UTC() },
-		plans: map[string]*schedule.Plan{}, deletedTasks: map[string]time.Time{}}
+		plans: map[string]*schedule.Plan{}, deletedTasks: map[string]deletedTask{}}
 	for _, opt := range opts {
 		opt(s)
 	}
