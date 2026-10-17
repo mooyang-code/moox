@@ -1314,3 +1314,64 @@ func TestPlanManagerReportsTimersDisabledAfterPauseAndRestartsOnResume(t *testin
 	mu.Unlock()
 	require.Eventually(t, func() bool { return !manager.TimersDisabled("crypto") }, 5*time.Second, 10*time.Millisecond, "恢复后重新运行")
 }
+
+func TestEnableAllReenablesTimersAfterDisableWithoutWaitingForRounds(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	require.Nil(t, h.open(), "计划已收尾，进入已生效状态")
+
+	done, err := r.DisableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	for name, patch := range h.cloud.patches {
+		require.False(t, patch.GetTimerEnabled(), name)
+	}
+
+	// 恢复：一次调用就让全部函数的定时器重新启用，并让下一轮对账立即读回校验。
+	done, err = r.EnableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	for name, patch := range h.cloud.patches {
+		require.True(t, patch.GetTimerEnabled(), name)
+	}
+	require.True(t, r.lastVerified.IsZero())
+
+	// 已经全部启用时再次调用不再提交，也算完成。
+	done, err = r.EnableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+}
+
+func TestEnableAllWaitsForInFlightJobs(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	done, err := r.DisableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+
+	var target string
+	for name := range h.cloud.patches {
+		target = name
+		break
+	}
+	h.cloud.running = map[string]bool{"job": true}
+	r.pending = []pendingPlanJob{{id: "job", kind: planJobKindTransition, functions: []string{target}, at: r.now()}}
+	done, err = r.EnableAll(context.Background())
+	require.NoError(t, err)
+	require.False(t, done, "仍有在途作业的函数不提交，也不能算完成")
+	require.False(t, h.cloud.patches[target].GetTimerEnabled())
+
+	h.cloud.running["job"] = false
+	done, err = r.EnableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	require.True(t, h.cloud.patches[target].GetTimerEnabled())
+}

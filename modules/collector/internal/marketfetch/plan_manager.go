@@ -3,6 +3,7 @@ package marketfetch
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -115,6 +116,101 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 	}
 	r.releaseLease(ctx)
 	return r.finishDisable(deferred)
+}
+
+// EnableAll 启用已生效计划里全部函数的定时器，与 DisableAll 对称：恢复采集或进程重启后立即核对云端并补推，
+// 不等对账逐轮刷新读回（读回过期的函数在对账里会被跳过，恢复会拖很多轮）。
+// 返回 true 表示没有遗留项：没有在途作业，且需要启用的函数都已提交并确认。
+func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
+	if !r.mu.TryLock() {
+		return false, fmt.Errorf("plan reconciliation already running")
+	}
+	defer r.mu.Unlock()
+	applied, err := r.Store.LatestApplied(ctx, r.SpaceID)
+	if err != nil {
+		return false, err
+	}
+	if applied == nil {
+		return true, nil
+	}
+	content, err := decodeFetchPlanContent(applied.Plan)
+	if err != nil {
+		return false, err
+	}
+	functions, _ := content.Applied()
+	if len(functions) == 0 {
+		return true, nil
+	}
+	release, err := r.acquireOperation(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	busy := r.busyFunctions(ctx, true)
+	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
+	if err != nil {
+		return false, err
+	}
+	exists := map[string]scfinvoker.Node{}
+	for _, node := range nodes {
+		exists[node.NodeID] = node
+	}
+	names := make([]string, 0, len(functions))
+	for name := range functions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	deferred := 0
+	var patches []*cloudnodepb.NodeRuntimeConfigPatch
+	for _, name := range names {
+		function := functions[name]
+		if function.Cron == "" {
+			continue
+		}
+		if _, inFlight := busy[name]; inFlight {
+			deferred++
+			continue
+		}
+		node, ok := exists[name]
+		if !ok || !timerNeedsRepair(node.Metadata, function.Cron) {
+			continue // 缺失的函数交给对账重建
+		}
+		patches = append(patches, &cloudnodepb.NodeRuntimeConfigPatch{NodeId: name, TimerEnabled: true, TimerCron: function.Cron})
+	}
+	if len(patches) == 0 {
+		r.lastVerified = time.Time{}
+		return deferred == 0, nil
+	}
+	lease, err := r.ensureLease(ctx)
+	if err != nil {
+		return false, err
+	}
+	allOK := deferred == 0
+	for start := 0; start < len(patches); start += runtimeConfigBatchSize {
+		batch := patches[start:min(start+runtimeConfigBatchSize, len(patches))]
+		batchNames := make([]string, 0, len(batch))
+		for _, patch := range batch {
+			patch.CollectorPublishLeaseId, patch.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
+			batchNames = append(batchNames, patch.GetNodeId())
+		}
+		jobID, err := r.Cloud.SubmitRuntimeConfigs(ctx, r.SpaceID, batch)
+		if err != nil {
+			return false, err
+		}
+		items, terminal, err := r.waitAux(ctx, auxJobKindRepair, batchNames, jobID)
+		if err != nil || !terminal {
+			return false, err
+		}
+		for _, item := range items {
+			if !item.Success {
+				allOK = false
+				log.WarnContextf(ctx, "collector fetch plan enable timer of %s failed: %s", item.NodeID, item.Message)
+			}
+		}
+	}
+	r.releaseLease(ctx)
+	r.lastVerified = time.Time{} // 启用之后让下一轮对账立即读回校验
+	return allOK, nil
 }
 
 // invalidateConfirmations 作废未完成计划里的下发与收尾确认（保留 Created/Registered 与原 P）：停用之后这些确认不再代表云端状态，
@@ -310,6 +406,8 @@ func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *Pl
 	defer m.wg.Done()
 	defer close(worker.done)
 	stopping := false
+	// 对账协程每次启动（恢复采集、进程重启）后先把已生效计划里的定时器全部启用，成功前每轮重试。
+	enabling := true
 	for {
 		timer := time.NewTimer(untilNext(time.Now(), m.interval(), m.offset()))
 		select {
@@ -335,6 +433,14 @@ func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *Pl
 				return
 			}
 			continue
+		}
+		if enabling {
+			done, err := reconciler.EnableAll(tickCtx)
+			if err != nil {
+				log.WarnContextf(ctx, "collector fetch plan enabling timers space=%s failed: %v", space, err)
+			} else if done {
+				enabling = false
+			}
 		}
 		if err := reconciler.Reconcile(tickCtx); err != nil {
 			log.WarnContextf(ctx, "collector fetch plan reconciliation failed space=%s: %v", space, err)
