@@ -13,7 +13,6 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
-	"github.com/mooyang-code/moox/packages/pyruntime/process"
 )
 
 // RunOnceRequest computes one period of one set for diagnosis.
@@ -66,11 +65,7 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	pool, err := pyexec.New(ctx, cfg.Python.Workers, process.Config{
-		PythonBin: cfg.Python.Bin, WorkerPath: cfg.Python.WorkerPath,
-		Args: []string{"--factors-dir", cfg.Python.FactorsDir}, TaskTimeout: cfg.Python.TaskTimeout,
-		Limits: process.DefaultLimits(),
-	})
+	pool, err := pyexec.New(ctx, cfg.Python.Workers, cfg.Python.processConfig())
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}

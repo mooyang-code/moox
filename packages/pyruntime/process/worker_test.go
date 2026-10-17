@@ -370,3 +370,76 @@ func TestCaptureStderrKeepsDrainingAfterLimit(t *testing.T) {
 	assert.True(t, record.Truncated)
 	assert.Len(t, record.Message, 1024)
 }
+
+// worker 子进程必须拿到 Config.Env，同时保留继承的父进程环境；同名变量以 Config.Env 为准。
+func TestNewStdioWorkerPassesEnvToChild(t *testing.T) {
+	t.Setenv("MOOX_PYRUNTIME_INHERITED", "parent")
+	t.Setenv("OMP_NUM_THREADS", "8")
+	unsetenvForTest(t, "OPENBLAS_NUM_THREADS")
+	unsetenvForTest(t, "MKL_NUM_THREADS")
+
+	env := startEnvDumpWorker(t, Config{Env: []string{
+		"OPENBLAS_NUM_THREADS=1", "OMP_NUM_THREADS=1", "MKL_NUM_THREADS=1",
+	}})
+	assert.Equal(t, "1", env["OPENBLAS_NUM_THREADS"])
+	assert.Equal(t, "1", env["OMP_NUM_THREADS"], "Config.Env 应覆盖继承的同名变量")
+	assert.Equal(t, "1", env["MKL_NUM_THREADS"])
+	assert.Equal(t, "parent", env["MOOX_PYRUNTIME_INHERITED"], "继承的父进程环境不能丢")
+}
+
+// SingleThreadBLASEnv 默认把三个线程池变量设为 1，父进程环境显式设置的值原样传给子进程。
+func TestNewStdioWorkerSingleThreadBLASEnvKeepsExplicitValues(t *testing.T) {
+	t.Setenv("OMP_NUM_THREADS", "4")
+	unsetenvForTest(t, "OPENBLAS_NUM_THREADS")
+	unsetenvForTest(t, "MKL_NUM_THREADS")
+
+	env := startEnvDumpWorker(t, Config{Env: SingleThreadBLASEnv()})
+	assert.Equal(t, "1", env["OPENBLAS_NUM_THREADS"])
+	assert.Equal(t, "4", env["OMP_NUM_THREADS"])
+	assert.Equal(t, "1", env["MKL_NUM_THREADS"])
+}
+
+// startEnvDumpWorker 启动一个把关心的环境变量写进文件后完成握手的 worker，返回子进程看到的值（未设置的键不出现）。
+func startEnvDumpWorker(t *testing.T, cfg Config) map[string]string {
+	t.Helper()
+	dump := filepath.Join(t.TempDir(), "env.json")
+	script := writeWorkerScript(t, `
+import json
+import os
+import struct
+import sys
+import time
+
+keys = ["OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "MOOX_PYRUNTIME_INHERITED"]
+with open(sys.argv[1], "w") as f:
+    json.dump({k: os.environ[k] for k in keys if k in os.environ}, f)
+
+meta = json.dumps({
+    "protocol_version": "moox.py/v1",
+    "worker_version": "test",
+    "python_version": sys.version.split()[0],
+    "runtime_env_hash": "",
+    "encodings": ["json"],
+}).encode()
+sys.stdout.buffer.write(b"MX" + bytes([1]) + struct.pack(">I", len(meta)) + meta + struct.pack(">Q", 0))
+sys.stdout.buffer.flush()
+time.sleep(60)
+`)
+	cfg.PythonBin, cfg.WorkerPath, cfg.Args, cfg.TaskTimeout = "python3", script, []string{dump}, 5*time.Second
+	worker, err := NewStdioWorker(context.Background(), cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = worker.Close() })
+
+	raw, err := os.ReadFile(dump)
+	require.NoError(t, err)
+	env := map[string]string{}
+	require.NoError(t, json.Unmarshal(raw, &env))
+	return env
+}
+
+// unsetenvForTest 在测试期间删除环境变量，结束后恢复原值。
+func unsetenvForTest(t *testing.T, key string) {
+	t.Helper()
+	t.Setenv(key, "") // 由 t.Setenv 负责结束后恢复原值
+	require.NoError(t, os.Unsetenv(key))
+}

@@ -23,6 +23,13 @@ func (s *Service) markDeleted(space, dataset string) {
 	s.deletedTasks[space+"/"+dataset] = s.clock()
 }
 
+// clearDeleted 在数据集重新创建任务时撤销之前的「已删除」通知，避免 worker 稍后清掉新任务的暂存数据。
+func (s *Service) clearDeleted(space, dataset string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.deletedTasks, space+"/"+dataset)
+}
+
 // deletedTaskRefs 返回仍需通知 worker 的已删除任务，并清理过期条目。
 func (s *Service) deletedTaskRefs() [][2]string {
 	s.mu.Lock()

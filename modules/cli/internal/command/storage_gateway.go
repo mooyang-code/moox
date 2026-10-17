@@ -24,10 +24,6 @@ func (s storageGateway) ReadTimeSeriesRows(ctx context.Context, request *pb.Read
 	return response, err
 }
 
-
-
-
-
 func (s storageGateway) QueryTimeSeriesRows(ctx context.Context, request *pb.QueryTimeSeriesRowsReq, options ...client.Option) (*pb.QueryTimeSeriesRowsRsp, error) {
 	response := &pb.QueryTimeSeriesRowsRsp{}
 	err := s.invoke(ctx, "trpc.moox.storage.DataView", "QueryTimeSeriesRows", request, response, options)

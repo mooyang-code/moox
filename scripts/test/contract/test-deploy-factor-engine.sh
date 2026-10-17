@@ -46,6 +46,14 @@ grep -Fq "${DIR}/bin/moox-factor-engine" "${service}"
 # The worker imports moox_pyruntime from the shipped runtime directory.
 [[ -s "${DIR}/python-runtime/moox_pyruntime/protocol.py" ]]
 grep -Fq "${DIR}/python-runtime" "${service}"
+# Python worker 以单线程 BLAS 运行，服务环境兜底。
+for key in OPENBLAS_NUM_THREADS OMP_NUM_THREADS MKL_NUM_THREADS; do
+  if [[ "$(uname -s)" == Darwin ]]; then
+    [[ "$(plutil -extract "EnvironmentVariables.${key}" raw "${service}")" == 1 ]]
+  else
+    grep -Eq "^Environment=(.*[[:space:]])?${key}=1([[:space:]]|$)" "${service}"
+  fi
+done
 if grep -Eq '(HTTPS?_PROXY|https?_proxy)[^ ]*=|<key>HTTPS?_PROXY' "${service}"; then
   echo "the engine service must not carry proxy variables" >&2
   exit 1

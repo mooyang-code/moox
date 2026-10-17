@@ -23,7 +23,6 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
-	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -108,11 +107,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	} else if loaded {
 		log.InfoContextf(ctx, "factor_engine_catalog_loaded hash=%s", r.catalog.Status().Hash)
 	}
-	r.python, err = pyexec.New(appCtx, cfg.Python.Workers, process.Config{
-		PythonBin: cfg.Python.Bin, WorkerPath: cfg.Python.WorkerPath,
-		Args: []string{"--factors-dir", cfg.Python.FactorsDir}, TaskTimeout: cfg.Python.TaskTimeout,
-		Limits: process.DefaultLimits(),
-	})
+	r.python, err = pyexec.New(appCtx, cfg.Python.Workers, cfg.Python.processConfig())
 	if err != nil {
 		return nil, fmt.Errorf("start factor Python pool: %w", err)
 	}

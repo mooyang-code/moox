@@ -203,12 +203,14 @@ func AvoidanceWarnings(times []time.Time) []string {
 }
 
 // PartitionOf 返回数据时间所属的分区：日分区按空间时区的本地日切分，月分区按「data_time + 12 小时」的 UTC 日期归月。
-// 返回分区键（日 2006-01-02、月 2006-01）与 [start, end) 范围（UTC）。
+// 返回分区键（日 2006-01-02、月 2006-01）与 data_time 上的 [start, end) 范围（UTC）。
 func PartitionOf(unit string, loc *time.Location, dataTime time.Time) (key string, start, end time.Time) {
 	if unit == "month" {
+		// 归月用的是 data_time + 12 小时的 UTC 日期；分区在 data_time 上的范围要把这 12 小时减回去：
+		// [当月 1 日 UTC 零点 − 12 小时, 下月 1 日 UTC 零点 − 12 小时)。
 		shifted := dataTime.UTC().Add(12 * time.Hour)
-		start = time.Date(shifted.Year(), shifted.Month(), 1, 0, 0, 0, 0, time.UTC)
-		return start.Format("2006-01"), start, start.AddDate(0, 1, 0)
+		first := time.Date(shifted.Year(), shifted.Month(), 1, 0, 0, 0, 0, time.UTC)
+		return first.Format("2006-01"), first.Add(-12 * time.Hour), first.AddDate(0, 1, 0).Add(-12 * time.Hour)
 	}
 	local := dataTime.In(loc)
 	day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)

@@ -10,6 +10,8 @@ WorkingDirectory=__ROOT__
 EnvironmentFile=__SECRETS__/health-auth.env
 UnsetEnvironment=HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
 Environment=MOOX_PYTHON_RUNTIME_PATH=__ROOT__/python-runtime
+# Python worker 以单线程 BLAS 运行（引擎启动 worker 时也会注入，这里兜底）。
+Environment=OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 ExecStart=__ROOT__/bin/moox-factor-engine serve -config __ROOT__/config/engine.yaml -conf __ROOT__/config/trpc_go.engine.yaml
 Restart=always
 RestartSec=10

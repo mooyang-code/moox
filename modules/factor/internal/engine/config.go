@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/pyruntime/process"
 	"gopkg.in/yaml.v3"
 )
 
@@ -70,6 +71,16 @@ type PythonConfig struct {
 	FactorsDir  string        `yaml:"factors_dir"`
 	Workers     int           `yaml:"workers"`
 	TaskTimeout time.Duration `yaml:"task_timeout"`
+}
+
+// processConfig 是常驻服务与 run-once 共用的 Python worker 启动配置。
+// 因子只做逐元素与滚动运算，不调用 BLAS，worker 以单线程 BLAS 启动，免得每个进程按核数各开一个线程池。
+func (c PythonConfig) processConfig() process.Config {
+	return process.Config{
+		PythonBin: c.Bin, WorkerPath: c.WorkerPath,
+		Args: []string{"--factors-dir", c.FactorsDir}, Env: process.SingleThreadBLASEnv(),
+		TaskTimeout: c.TaskTimeout, Limits: process.DefaultLimits(),
+	}
 }
 
 type PipelineConfig struct {
@@ -276,9 +287,10 @@ func setDuration(target *time.Duration, fallback time.Duration) {
 }
 
 // autoPythonWorkers 按目标机器核数选择 Python 因子进程数（配置里 workers 不写或为 0 时）：
-// 取核数的 3/4（计算只在每分钟周期里突发，其余时间空闲），留出余量给 Go 进程与同机其他服务，范围 [4, 64]。
+// 取核数的四分之一，范围 [4, 16]。计算只在每分钟周期里突发，周期时延的大头是读取而不是计算，
+// 常驻进程再多也只是空占内存与调度开销，留出余量给 Go 进程与同机其他服务。
 func autoPythonWorkers(cpus int) int {
-	return min(64, max(4, cpus*3/4))
+	return min(16, max(4, cpus/4))
 }
 
 // autoReadWorkers 按核数选择读取并发（read_workers 不写或为 0 时），范围 [4, 16]。

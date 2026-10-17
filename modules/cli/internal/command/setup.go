@@ -86,6 +86,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupInitCommand(deps),
 		newSetupFactorsCommand(deps),
 		newSetupHostsCommand(deps),
+		newSetupSyncPlacementsCommand(deps),
 		newSetupValidateCommand(deps),
 		newSetupTrustHostCommand(deps),
 		newSetupTrustBrowserCommand(deps),

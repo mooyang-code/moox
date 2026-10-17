@@ -196,6 +196,10 @@ case "${TARGET_MODULE}" in
   archive-mgr)
     build_go modules/archive ./cmd/mgr moox-archive-mgr 0
     ;;
+  archive-worker)
+    # worker 依赖 DuckDB，必须开启 CGO；Linux 版在 Linux 上构建（build-storage-linux.sh，MOOX_LINUX_CGO_TARGET=archive-worker）。
+    build_go modules/archive ./cmd/worker moox-archive-worker 1
+    ;;
   strategy)
     build_go modules/strategy ./cmd/server moox-strategy 0
     build_go modules/strategy ./cmd/cli moox-strategy-cli 0

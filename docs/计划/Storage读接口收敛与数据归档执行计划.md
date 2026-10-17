@@ -615,3 +615,28 @@ limit 根，有范围按升序取最早 limit 根；`data rows export` 需要 `-
 - 实现：`modules/archive`（schema 四张表、`ArchiveMgr` 14 个方法、`ArchiveWorker` 4 个方法、执行计划校验、每秒全局触发器与每分钟维护、worker 租约、运行租约与取消、完成上报、健康等级）；服务目录新增 `archive-mgr` 组件（可选，`required_in_default_profile: false`）、外部身份 `archive-worker`、`Metadata.GetDataset` 对 `archive-mgr` 放行；Admin 空间头策略、CLI 部署单元（顺序、打包、运行参数、Storage 密钥、核心构建）、`build.sh archive-mgr` 与发行脚本已登记。本机 `go test -race` 通过（store、service、schedule、config、bootstrap、health、schema）。
 - Codex 审查 5 处，核实后全部修复：停用后重新启用并「立即运行」会与已有运行并行（现在已有排队 / 运行中的运行时不再生成）；取消的运行可被重复完成上报覆盖后来的分区登记（完成后令牌作废）；worker 接管与领取之间的竞态（领取事务内再核对实例与租约）；`release.sh` 没有创建 `modules/archive/bin`；被取消的运行即使上报成功也推进了任务的最近成功时间（现在不推进，且最近成功时间只前进）。
 - 未做：真实进程联调（mgr 需要 Admin 分配的网关密钥）、`moox-archive-cli`、Monitor 指标与告警（doctor 暂为 `health_only`）；worker 是阶段 7。
+
+### 15.z 阶段 7（archive-worker）实现记录（2026-10-17）
+
+- 实现：`modules/archive/cmd/worker` 与 `internal/worker/{config,pacing,source,staging,export,runner,manager,app}`——DuckDB 暂存区（水位、永久的分区状态、按任务的暂存表、`ALTER TABLE ADD COLUMN`、批量比对写入、导出、读回已定稿文件、定稿与水位同一事务、库重建）、
+  节奏控制（时间窗、请求间隔、共享令牌桶）、区间读取（按分区切块、游标、重试、保留期截断）、心跳 / 领取 / 进度 / 完成上报与每日维护。
+- 过程中修正了一个 mgr 侧的分区范围错误：月分区在 `data_time` 上的范围是 `[当月 1 日 − 12h, 下月 1 日 − 12h)`（`schedule.PartitionOf` 之前直接返回了加 12 小时之后的范围）。
+- 验证：`go test -race` 通过（含 `internal/e2e`：真实 mgr（SQLite）与真实 worker（DuckDB）在同一进程里走完「建任务 → 触发 → 领取 → 读取 → 暂存 → 导出 → 登记 → 定稿 → 补拉区间读回重写」）；`deploy-archive-worker.sh` 契约测试；Linux 版在编译机上构建成功并能启动。
+- 构建与部署：`build.sh archive-worker`、`build-storage-linux.sh` 与 `moox-cli setup build-linux` 增加 `archive-worker`；`scripts/deploy/deploy-archive-worker.sh` 与 systemd / launchd 模板。
+- 未做：线上联调（需要发布 B 先发布 mgr 与服务目录）、`moox-archive-cli`、Monitor 指标与告警。
+- Codex 审查 6 处，核实后全部修复并补了测试：
+  1. 首次运行失败后重试会漏读（起点随运行开始时间后移）→ 首次运行算出的起点记进暂存库（`task_state.first_start`），水位前进之前沿用更早的；
+  2. mgr 取消运行后立刻允许新运行，旧运行还在写同一个暂存表 → worker 内同一数据集的运行串行（排队期间照常续租），并且导出时间取 COPY 开始之前的时刻；
+  3. 在途的领取调用不在维护屏障内，重建库会漏页 → 领取在加锁时登记 `pulling`，维护等 `pulling` 与 `running` 都清零；
+  4. 重复的「已删除」通知会清掉重建任务的暂存数据 → mgr 在重新创建任务时撤销通知，worker 收到该数据集的新运行时丢弃对应的待清理项；
+  5. 定稿后完成上报失败会永久漏登分区 → 分区状态带 `report_pending`，定稿时把行数、标的数、数据时间范围记进分区状态，每次运行都上报全部待上报分区，mgr 确认之后才清除；
+  6. 续租只在读完一页时发生 → 续租与进度改由独立的定时器负责（导出、定稿、排队、避让等待期间都续租），并响应取消。
+
+### 15.aa 发布 B 执行与生产验收记录（2026-10-17）
+
+- 发布顺序教训：必须按"密钥（新版 admin-cli `keys ensure`）→ 各网关 → archive-mgr → `setup sync-placements` → Access"执行。网关就绪规则要求 Access 授予的每个服务都在目录中，顺序错会导致 Storage 网关约 7 分钟、Access 约 10 分钟不可用（12:05–12:24Z），期间 crypto 采集有缺口，已由自动补采重试补齐，并对 12:00–12:30Z 的 1m 因子执行 recalc（两个因子集均 ok）。
+- 首次生产运行失败：单页 2000 行（约 530KB）读取在 Storage 负载下偶发 3.8–5s，触及 PrimaryStore 5s 路由超时。用 `moox-archive-worker probe` 实测：2000 行/页 1.5–5s 抖动，500 行/页稳定约 0.5s。默认 `pacing.page_rows` 改为 500。
+- 验收结果（crypto 1m 现货，511 个标的）：手动运行成功，85 次请求、11.25MB、8.7 分钟（平均约 21KB/s，远低于 512KB/s）；改为每 5 分钟（`43 4-59/5 * * * *`）后，12:54:43Z、12:59:43Z 触发，2 秒内被领取，单次约 3 分钟完成。
+- 追赶验证：13:15:50Z 停 worker 约 9 分钟（错过 13:19:43、13:24:43 两个触发点），13:25:10 重启后 13:19:43 的运行 5 秒内领取并补读缺口（21462 行）成功，13:24:43 合并未单独补跑，13:29:43 起恢复正常节奏；停机/重启时在途运行记为 canceled，属预期。
+- 避让验证（编译机上每 200ms 采样 worker 到存储网关连接的 bytes_received，不依赖 Storage 日志）：每分钟 00–24 秒无 ≥20KB 的读取响应；13:57–14:04:15 整点窗口内无读取响应，最早的读取在 14:04:42。
+- 尚未验证：次日分区导出文件（2026-10-16/17）、存储节点 CPU 对比。
