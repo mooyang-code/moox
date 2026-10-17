@@ -1,6 +1,6 @@
 # Storage 读接口收敛设计
 
-状态：设计稿 v4（2026-10-17），尚未编码。v4：精确读取合并为 `ReadRows`（只返回存在的行），`ReadTimeSeriesRows` 只剩时间区间与最近 N 根；删除 DataView 的按序列取根数模式；DataView 响应字段改名。项目尚未上线，接口与协议直接修改，不考虑兼容。由[数据归档设计](数据归档设计.md)的讨论引出，归档依赖本设计；实现后以[存储](../模块/存储.md)为准。
+状态：设计稿 v5（2026-10-17），尚未编码。v4：精确读取合并为 `ReadRows`（只返回存在的行），`ReadTimeSeriesRows` 只剩时间区间与最近 N 根；删除 DataView 的按序列取根数模式；DataView 响应字段改名。v5（吸收 Codex 第二轮评审）：覆盖范围改为闭区间的最早 / 最晚行时间；保留行数改为活动索引实际建立的目标；删除 `ReadRecordRows`；服务目录与 ACL 中的方法同步改名。项目尚未上线，接口与协议直接修改，不考虑兼容。由[数据归档设计](数据归档设计.md)的讨论引出，归档依赖本设计；实现后以[存储](../模块/存储.md)为准。
 
 ## 0. 原则
 
@@ -27,6 +27,7 @@
 | 配置了 gzip 也常常不压缩 | `packages/gatewayclient/trpc.go:125`：请求体不足 1KB 时不设压缩，响应跟随请求 | 「小请求、大响应」的读取（如不带 selector 的最近 N 根、单标的区间读取）在公网上不压缩 |
 | 「history」概念外露 | `ListHistorySubjects`、`readHistoricalTimeSeriesRows`、注释与文档中的「历史读取」 | 调用方需要知道 Storage 内部有「历史索引」 |
 | 精确读取有两个入口，「存在性」单独返回 | `PrimaryStore.ReadFields` 与 `ReadTimeSeriesRows` 的 `keys` 形态（后者内部就是调前者）；DataNode `ReadFieldsWithPresence` 另外返回 `existing_keys` | 两个入口做同一件事；调用方要同时看行和存在列表才知道一行在不在 |
+| 记录数据还有第三个读取入口，且会读 View | `PrimaryStore.ReadRecordRows`（`primarystore/rows_read.go:137`）：版本为空、未指定列或按版本范围读取时转给 View | 又一个 Primary 读 View 的旁路；仓库里没有生产调用方，只有实现和测试 |
 | DataView 有一个没人用的按序列取根数模式 | `QueryTimeSeriesRowsReq.rows_per_series` 及配套的 `expected_input_contract_version` / `served_input_contract_version`（`view/series_window_query.go`） | Storage 以外没有调用方 |
 | DataView 响应字段命名冗长、含义分散 | `served_indexed_from/to`、`served_active_index_id/revision`、`served_series_bars`，请求里的 `expected_active_index_id/revision` | 「served / expected / active」修饰重复；`bars` 是 K 线的说法 |
 
@@ -112,18 +113,26 @@ DataNode 只在序列索引上按标的扫描键，不读字段值，代价与�
 - 删除 `rows_per_series` 模式及配套的 `expected_input_contract_version` / `served_input_contract_version`（`view/series_window_query.go` 与测试），
   Storage 以外没有调用方；
 - 响应字段改名，复用已有消息：
-  - `served_indexed_from` / `served_indexed_to` → `coverage`（复用 `TimeRange`：`coverage.start_time` / `coverage.end_time`），
-    表示回答本次查询的索引覆盖的时间范围；`complete` 保留，表示请求区间是否完全落在 `coverage` 内；
+  - `served_indexed_from` / `served_indexed_to` → `min_data_time` / `max_data_time`：回答本次查询的索引中最早、最晚一行的 `data_time`，
+    **两端都包含**，是真实存在的行键（Strategy 用 `max_data_time` 判断最后一根，例如 A 股日线是否为上海零点）。不复用 `TimeRange`：
+    `TimeRange` 的终点不包含，把最晚行键搬进去，只有一行的索引会变成空区间。`complete` 保留，表示请求区间是否完全落在这两个时间之间；
   - `served_active_index_id`、`served_active_index_revision` → `index`（新消息 `IndexVersion { index_id, revision }`）；
     请求中的 `expected_active_index_id`、`expected_active_index_revision` → `pin`（同一消息），用于多页读取时钉住同一版索引；
-  - `served_series_bars` → `retained_rows_per_series`：View 每个序列至少保留的最近行数（即配置的保留行数）；
-    Strategy 用它与 `coverage.start_time` 一起判断活跃序列可回溯的深度。配置项 `[storage_retention] view_bars` 同步改名为 `view_rows_per_series`；
-- `SearchRecordRowsRsp` 的覆盖字段同样改为 `coverage`。
+  - `served_series_bars` → `retained_rows_per_series`：**活动索引**每个序列至少保留的最近行数。现在返回的是进程配置
+    （`view/query.go:141`），调大配置后、重建完成前会偏大，Strategy 可能误判回溯深度足够。改为：索引自己记录建立时使用的保留行数
+    （DuckDB 索引的 `view_meta` 增加 `rows_per_series`，与 `indexed_from` / `indexed_to` 放在一起；打开旧索引时补列，默认 0 表示未知），
+    响应返回 `min(索引的保留行数, 当前配置)`——调小配置后维护立即按新值裁剪，调大要等重建成功才提高。不改元数据库的 schema。
+    Strategy 用它与 `min_data_time` 一起判断活跃序列可回溯的深度。配置项 `[storage_retention] view_bars` 同步改名为 `view_rows_per_series`；
+- `SearchRecordRowsRsp` 的覆盖字段同样改为 `min_data_time` / `max_data_time`。
 
 ### 2.5 删除的接口
 
 - `PrimaryStore.ListHistorySubjects`：由「不带 selector 的最近 N 根」覆盖（返回的就是有数据的标的及其最近数据）。
 - `PrimaryStore.ReadFields`（改名为 `ReadRows`）及 `ReadTimeSeriesRows` 的 `keys` 形态。
+- `PrimaryStore.ReadRecordRows` 及其协议消息、转发 View 的逻辑和测试：记录数据的精确读取用 `ReadRows`，搜索用 `DataView.SearchRecordRows`。
+- 服务目录（`packages/servicecatalog/catalog.yaml`）中 PrimaryStore 的方法列表、只读方法列表和各调用方 ACL 同步改名、删除
+  （`ReadFields` → `ReadRows`，删除 `ListHistorySubjects`、`ReadRecordRows`）；按字符串调用方法名的客户端（Monitor `storagegateway/client.go`、
+  Collector `storageio/gateway.go`、CLI `setup_storage.go`）一起改。
 - Primary 中按调用方身份分流的逻辑（`storage-view`、因子身份）和因子读取的专门校验：所有调用方使用 2.1 的同一套校验。
 
 ### 2.6 内部命名
@@ -147,7 +156,7 @@ DataNode 只在序列索引上按标的扫描键，不读字段值，代价与�
 | Monitor 主机指标（`hostmetrics/storage_reader.go`） | 倒序、按页码逐页读，由 View 回答 | 改用时间区间读取，按游标顺序翻页（不跳页），由 DataNode 回答 |
 | Monitor 行情巡检（`watchdog/market_canary.go`） | `ReadTimeSeriesRows` 的 `keys` 形态 | 改调 `ReadRows`，按键匹配结果 |
 | `ReadFields` 的其他调用方（Collector `resample/storage.go`、`marketstorage/storage.go`，Monitor `storagegateway`，CLI `setup_storage.go`，View `event_apply.go`） | `ReadFields`，部分读 `existing_keys` | 改调 `ReadRows`；不再读 `existing_keys`，按「返回即存在」处理；按键匹配，不依赖位置 |
-| Strategy（`strategy/internal/input/client.go`） | 读 DataView 的 `served_indexed_*`、`served_series_bars` 等 | 改读 `coverage`、`index`、`retained_rows_per_series`；多页读取用 `pin` |
+| Strategy（`strategy/internal/input/client.go`、`depth.go`） | 读 DataView 的 `served_indexed_*`、`served_series_bars` 等 | 改读 `min_data_time` / `max_data_time`（含义与原字段相同，最后行键的判断不变）、`index`、`retained_rows_per_series`；多页读取用 `pin` |
 | 归档 worker | — | 只用时间区间读取：区间由归档按执行计划算出（见[数据归档设计](数据归档设计.md)） |
 
 ## 4. 一并完成的读路径修复
@@ -164,6 +173,7 @@ DataNode 只在序列索引上按标的扫描键，不读字段值，代价与�
 | S-9 | 网关客户端：配置 gzip 后总是压缩，不再按请求体大小判断（`packages/gatewayclient/trpc.go`），补「小请求、大响应」的链路测试 |
 | S-10 | 带 selector 的区间读取走序列索引（见 2.1） |
 | S-11 | 读取返回有类型的属性（见 2.1） |
+| S-13 | 删除 `ReadRecordRows` 这个读 View 的旁路（见 2.5） |
 
 最近 N 根不带 selector 时，DataNode 从游标位置开始在序列索引上逐个标的、逐个序列读取，凑满一页后把续读位置写进游标；
 每个序列之间检查 `ctx`。读到的键直接用 S-2 的方式补全字段和属性，不再需要调用方二次读取。
@@ -178,7 +188,10 @@ DataNode 只在序列索引上按标的扫描键，不读字段值，代价与�
 - 带 selector 的区间读取（走序列索引）与不带 selector 再过滤的结果逐行一致，包括多个 `series_tag`、游标翻页；
 - 读取返回的属性与改造前 `ReadFields` 的结果一致，类型不丢失；View 重建后因子来源属性仍在；
 - `ReadRows` 只返回存在的行：存在但请求的列都为空时返回只有键的行，不存在的键不返回；View 事件应用的行为与改造前一致；
-- DataView 改名后的字段与 Strategy 的覆盖范围判断一致；
+- DataView 改名后的字段与 Strategy 的覆盖范围判断一致：只有一行的索引、查询最后一根、A 股日线（上海零点）；
+- 调大保留行数配置、活动索引还是旧的时，`retained_rows_per_series` 仍是旧值，Strategy 不会误判历史深度足够；重建切换后才变大；调小配置立即变小；
+- 经 host-gateway 与 Access 的真实 `ReadRows` 调用成功（方法名、只读分类、ACL 都已改名）；`ReadRecordRows`、`ListHistorySubjects` 调用被拒；
+- Strategy 跨多页读取 DataView 时用 `pin` 钉住同一版索引，中途切换索引时返回冲突并重读；
 - 配置 gzip 时，小请求、大响应的调用在链路上被压缩；
 - 过期清理期间，其他数据集的写入不被阻塞；截止桶未推进时不发起删除与 compaction；
 - 计数与按行读取后去重计数一致，包括多个 `series_tag` 的情况；
@@ -190,9 +203,10 @@ DataNode 只在序列索引上按标的扫描键，不读字段值，代价与�
 项目尚未上线，不考虑兼容：协议、服务目录和所有调用方在同一个提交里改完，一起构建、一起发布。
 
 1. Storage：storage-node → storage-primary → 至少等 30 秒 → storage-view；
-2. 调用方：因子引擎（编译机）、factor-mgr、Collector、Monitor（S-9 的网关客户端改动随各调用方一起生效）；
+2. 调用方：因子引擎（编译机）、factor-mgr、Collector、Monitor、Strategy（S-9 的网关客户端改动随各调用方一起生效；Strategy 依赖 DataView 改名后的响应，
+   旧二进制不能继续用）；
 3. 服务目录随之变化：Admin、Monitor、各主机 host-gateway、Access 一起换；本机 `moox-cli` 重新构建。
 
-时间选在整点后 :05～:20、分钟中段，避开整点任务；发布后核对因子运行摘要和 View 水位。
+时间选在整点后 :05～:20、分钟中段，避开整点任务；发布后核对因子运行摘要、View 水位和 Strategy 按期触发。
 
 归档（[数据归档设计](数据归档设计.md)）依赖本设计，可以随后发布，也可以合在同一次发布里。

@@ -1,6 +1,6 @@
 # Storage 读接口收敛与数据归档执行计划
 
-状态：执行计划 v2（2026-10-17），尚未编码。v2：读接口收敛设计 v4（`ReadRows`、DataView 清理与改名）、归档设计 v8（按区间读取），新增发布 C（Storage 去业务耦合）。
+状态：执行计划 v3（2026-10-17），尚未编码。v2：读接口收敛设计 v4（`ReadRows`、DataView 清理与改名）、归档设计 v8（按区间读取），新增发布 C（Storage 去业务耦合）。v3（吸收 Codex 第二轮评审）：对齐收敛设计 v5、归档设计 v9、去耦合设计 v2；发布 A 加入 Strategy 与方法改名；删除归档中 N 的残留；发布 C 改为有状态切换。
 
 依据（下称「设计」）：
 
@@ -36,18 +36,18 @@
 
 | 阶段 | 内容 | 依赖 | 发布 |
 | --- | --- | --- | --- |
-| 1 | Storage 协议与读路径：统一读事实、游标、不指定标的、属性、计数、序列索引区间读、`ReadRows`、DataView 清理与改名、S-1、S-2，删除分流与 `ListHistorySubjects` | 无 | 发布 A |
+| 1 | Storage 协议与读路径：统一读事实、游标、不指定标的、属性、计数、序列索引区间读、`ReadRows`、DataView 清理与改名、S-1、S-2，删除分流、`ListHistorySubjects` 与 `ReadRecordRows` | 无 | 发布 A |
 | 2 | Storage 资源：S-3 元数据快照、S-4 Outbox、S-8 过期清理 | 无 | 发布 A |
 | 3 | 网关客户端：S-9 配置 gzip 后总是压缩 | 无 | 发布 A |
-| 4 | 调用方迁移与清理：View 重建、因子、Collector、Monitor、CLI；删除旧归档实现；服务目录 | 1 | 发布 A |
+| 4 | 调用方迁移与清理：View 重建、因子、Collector、Monitor、Strategy、CLI；删除旧归档实现；服务目录与 ACL 改名 | 1 | 发布 A |
 | 5 | 发布 A 与线上验收 | 1～4 | — |
 | 6 | archive-mgr：表、协议、执行计划与全局触发器、运行与租约、接口、维护；服务目录、Access 白名单、部署单元 | 4 | 发布 B |
 | 7 | archive-worker：按区间读取、DuckDB 暂存、导出与定稿、节奏与并发、维护、CLI、部署脚本 | 5、6 | 发布 B |
 | 8 | 前端：数据归档页 | 6 | 发布 B |
 | 9 | Monitor 告警与文档 | 6、7 | 发布 B |
 | 10 | 发布 B 与线上验收 | 5～9 | — |
-| 11 | Storage 去业务耦合：写入方、幂等写入、周期完成、就绪事件、View 资源与投递、元数据校验 | 5 | 发布 C |
-| 12 | 上层模块随去耦合迁移：factor-mgr、因子引擎、Collector、Strategy、Monitor、`packages/events`、`packages/factorpb` | 11 | 发布 C |
+| 11 | Storage 去业务耦合：写入方与元数据权限、幂等写入、周期完成、就绪事件、数据集列来源、View 资源与投递、元数据校验、保留策略包 | 5 | 发布 C |
+| 12 | 上层模块随去耦合迁移：factor-mgr、因子引擎、Collector、Strategy、Monitor、归档、`packages/events`、`packages/factorpb` | 11 | 发布 C |
 | 13 | 发布 C 与线上验收 | 11、12 | — |
 
 阶段 1、2、3 可以并行开发；阶段 4 依赖阶段 1 的协议；阶段 6、8 可以与阶段 4、5 并行；阶段 7 要用到发布 A 之后的线上 Storage 做联调。
@@ -55,7 +55,7 @@
 
 ## 2. 阶段 1：Storage 协议与读路径
 
-对应收敛设计第 2 节、审查 S-1、S-2、S-7、S-10、S-11。
+对应收敛设计第 2 节、审查 S-1、S-2、S-7、S-10、S-11、S-13。
 
 ### 2.1 协议（`modules/storage/proto`）
 
@@ -64,10 +64,10 @@
 | `rows.proto` | `ReadTimeSeriesRowsReq`：删除 `keys`、`order`、`after_key`；新增 `attribute_keys`（`repeated string`）；`latest_per_series` 的注释改为新语义（可不指定标的、按页返回）。`page` 只用 `size` 与 `cursor` |
 | `rows.proto` | `ReadTimeSeriesRowsRsp`：删除 `served_indexed_from`、`served_indexed_to`、`complete` |
 | `rows.proto` | `TimeSeriesRow.attributes` 改为 `map<string, TypedValue>`（DataView 的查询响应复用这个消息，一起变化） |
-| `rows.proto` | 删除 `ListHistorySubjectsReq` / `ListHistorySubjectsRsp` |
-| `primary_store.proto` | 删除 `rpc ListHistorySubjects`；`rpc ReadFields` 改名为 `ReadRows`（请求、响应消息同步改名），响应删除 `existing_keys` |
+| `rows.proto` | 删除 `ListHistorySubjectsReq` / `ListHistorySubjectsRsp`、`ReadRecordRowsReq` / `ReadRecordRowsRsp` |
+| `primary_store.proto` | 删除 `rpc ListHistorySubjects`、`rpc ReadRecordRows`；`rpc ReadFields` 改名为 `ReadRows`（请求、响应消息同步改名），响应删除 `existing_keys` |
 | `data_node.proto` | 删除 `rpc ListHistorySubjects`；`rpc ReadFields` 改名为 `ReadRows`，响应删除 `existing_keys`；新增 `rpc CountTimeSeriesRows`（Primary 转给 DataNode）；新增内部消息 `RowsCursor`（区间读取：最后一行的键；最近 N 根：标的、频率、序列、续读时间、该序列已返回根数），只用于编码游标，不出现在公开请求中 |
-| `view.proto` | `QueryTimeSeriesRowsReq`：删除 `rows_per_series`、`expected_input_contract_version`；`expected_active_index_id/revision` 合为 `pin`（新消息 `IndexVersion { index_id, revision }`）。`QueryTimeSeriesRowsRsp`：`served_indexed_from/to` 合为 `coverage`（`TimeRange`），`served_active_index_id/revision` 合为 `index`（`IndexVersion`），`served_series_bars` 改为 `retained_rows_per_series`，删除 `served_input_contract_version`；`SearchRecordRowsRsp` 的覆盖字段同样改为 `coverage` |
+| `view.proto` | `QueryTimeSeriesRowsReq`：删除 `rows_per_series`、`expected_input_contract_version`；`expected_active_index_id/revision` 合为 `pin`（新消息 `IndexVersion { index_id, revision }`）。`QueryTimeSeriesRowsRsp`：`served_indexed_from/to` 改名为 `min_data_time` / `max_data_time`（`string`，两端包含，不复用 `TimeRange`），`served_active_index_id/revision` 合为 `index`（`IndexVersion`），`served_series_bars` 改为 `retained_rows_per_series`，删除 `served_input_contract_version`；`SearchRecordRowsRsp` 的覆盖字段同样改为 `min_data_time` / `max_data_time` |
 | 配置 | `[storage_retention] view_bars` 改名为 `view_rows_per_series`：`packages/storagepolicy`、`moox.toml.example`、CLI 的策略渲染与 Storage 配置加载同步 |
 
 生成：`make -C modules/storage/proto`，提交 `storagegen` 的变化。
@@ -80,9 +80,9 @@
   - 新增统一校验 `validateTimeSeriesRead`：`column_names` 必填；`time_range` / `latest_per_series` 二选一；selector 0–100 个，
     每个带 `subject_id` 与等于数据集频率的 `freq`；区间必须有起止；区间页大小 1–2000、最近 N 根页大小 1–20000；N 为 1–10000；拒绝页码；
   - `CountTimeSeriesRows` 改为转给 DataNode，不再依赖 View；
-  - 删除 `ListHistorySubjects`；`readHistoricalTimeSeriesRows` 改名为 `readDataNodeRows`。
+  - 删除 `ListHistorySubjects`、`ReadRecordRows`（含转给 View 的记录读取）；`readHistoricalTimeSeriesRows` 改名为 `readDataNodeRows`。
 - `service.go`：删除 `isFactorAppID` 中只为读取分流存在的用法（写入归属校验仍用它，保留）。
-- 如果 PrimaryStore 的 View 解析器（`Options.View`）只剩范围读取和计数两个用途，一并删除，`cmd/server/main.go` 同步去掉注入。
+- PrimaryStore 的 View 解析器（`Options.View`）在删除范围读取、计数与 `ReadRecordRows` 的 View 路径后如果没有其他用途，一并删除，`cmd/server/main.go` 同步去掉注入。
 
 ### 2.3 DataNode（`internal/service/datanode`、`pebble/`）
 
@@ -108,6 +108,9 @@
 ### 2.4 View（`internal/service/view`、`viewindex`）
 
 - `view/query.go`：行属性不再转成字符串（删除 `rowAttributesToStrings`），直接返回有类型的属性；响应字段按 2.1 改名。
+- 保留行数（收敛设计 2.4）：DuckDB 索引的 `view_meta` 增加 `rows_per_series`，建立索引时写入本次使用的保留行数；打开旧索引时按现有方式
+  （`index_manager.go` 中给 `view_meta` 补列的逻辑）补列，默认 0 表示未知。`retained_rows_per_series` 返回 `min(索引的保留行数, 当前配置)`，
+  索引为 0 时返回 0；删除 `SetSeriesBars` / `servedSeriesBars` 中直接返回配置的做法。不改元数据库的 schema。
 - 删除 `view/series_window_query.go`（`rows_per_series` 模式）及其测试、`viewindex` 中只为它服务的部分。
 - `view/event_apply.go`：改调 `ReadRows`，按「返回即存在」判断行是否存在，删除对 `existing_keys` 的处理。
 - View 重建的 Primary 读取点（`build.go`、`primary_retry.go`、`maintenance.go`）改用统一接口，逐个点核对：
@@ -120,7 +123,7 @@
 ### 2.5 测试
 
 - PrimaryStore：任何身份的区间读取、最近 N 根、计数都到达 DataNode；不合规请求被拒绝（无列、区间缺起止、页大小超限、
-  selector 超过 100、N 超过 10000、多种形态同时出现、使用页码）。
+  selector 超过 100、N 超过 10000、多种形态同时出现、使用页码）；`ReadRecordRows`、`ListHistorySubjects` 不再注册。
 - DataNode：
   - 区间读取用游标逐页读完，与一次性读取结果一致，无重复、无遗漏；带 selector（序列索引归并）与不带 selector 再过滤的结果逐行一致，
     包括多个 `series_tag`、区间边界、游标恰好落在页尾；
@@ -129,6 +132,8 @@
   - 读取 1 万行以上、只请求少量列时成功（S-1）；
   - 前缀扫描与原逐字段点查结果逐行一致，包括只有属性没有字段的行、记录型数据集取最大版本的行（S-2）；属性类型不丢失（S-11）；
 - View：重建出的索引与改造前逐行一致（同一份 Pebble 数据分别用新旧代码重建后比较）；因子来源属性仍在。
+  - 覆盖范围：只有一行的索引 `min_data_time = max_data_time` 且查询该行 `complete = true`；查询最后一根；A 股日线的 `max_data_time` 为上海零点；
+  - 保留行数：调大配置、索引未重建时返回旧值，重建切换后返回新值；调小配置立即返回新值；旧索引补列后返回 0。
 - benchmark（`pebble` 包）：构造 500 个标的 × 3000 根 × 8 列的数据，比较改造前后「最近 N 根（不指定标的）」「50 个标的的一天区间」
   「单标的窗口」三种读取的耗时与分配。
 
@@ -194,7 +199,7 @@
 | CLI | `modules/cli/internal/command/data.go`、`data_kline.go`、`data_remote.go` 及测试 | 删除对 `complete` 的判断；游标翻页；导出达到 `--page-size` 上限时停止并提示 |
 | 主机网关 e2e 辅助程序 | `modules/hostgateway/cmd/e2e-helper/main.go` | 按新请求形态调整 |
 | `ReadFields` 的调用方 | Collector `resample/storage.go`、`marketstorage/storage.go`；Monitor `storagegateway/client.go`、`watchdog/market_canary.go`（原 `keys` 形态）；CLI `setup_storage.go` | 改调 `ReadRows`；按键匹配结果，不依赖位置；不再读 `existing_keys` |
-| Strategy | `modules/strategy/internal/input/client.go` | DataView 字段改名：`coverage`、`index`、`retained_rows_per_series`；多页读取用 `pin` |
+| Strategy | `modules/strategy/internal/input/client.go`、`depth.go`、`resolve.go`、`range.go` | DataView 字段改名：`min_data_time` / `max_data_time`（含义不变，最后行键的判断不变）、`index`、`retained_rows_per_series`（为 0 时跳过「永远无法满足」的预检，与现在一致）；多页读取用 `pin` |
 | 前端 | `web/src/api/storage/types.ts` 及使用行属性、DataView 覆盖字段的页面（如 `views/factor/results/results-model.ts`） | 行属性改为有类型的值，展示时按类型转成文本；覆盖字段改名；放在阶段 8 一起构建 |
 
 ### 5.2 删除旧归档实现
@@ -205,6 +210,7 @@
   配置与测试）；`scripts/build/build.sh` 中的 `archive` 目标暂时移除，阶段 6 换成新目标；
 - Storage：`metadata.proto` 的 `RegisterArchiveFile` / `ListArchiveFiles`，`metadata` 服务、`cache/store.go`、`sqlite/crud_store.go`、
   `catalog/metadata_infra.go` 中的实现，`schema/metadata.sql` 的 `t_archive_files` 表与索引、触发器（同步核对 `metadata_schema_version_test`）；
+  schema 版本号不变（只删表，不改其他表），线上库里留下的这张空表不再被引用，下次重置元数据库时自然消失；
 - Admin：`console/policy.go` 的 `storageGlobalMethods` 去掉两个归档方法；`archive-eventbus` 凭据角色从 `eventbus-credentials` 中删除；
 - 部署与安装：`modules/cli/internal/setup` 中对旧 `archive` 组件的引用（`unitbootstrap/request.go`、`unitinstall/eventbus.go`、`unitinstall/prepare.go`、
   `unitpackage/package.go`、`command/setup_storage.go`），`setup/deploy/deploy.go` 的 `--no-archive`，`scripts/deploy/deploy-moox.sh` 及测试脚本中的引用；
@@ -212,7 +218,9 @@
 
 ### 5.3 服务目录（`packages/servicecatalog/catalog.yaml`）
 
-- PrimaryStore：删除 `ListHistorySubjects`（`methods`、`read_only_methods`、`acl`）；
+- PrimaryStore：`ReadFields` 改名为 `ReadRows`，删除 `ListHistorySubjects`、`ReadRecordRows`；`methods`、`read_only_methods` 和每一条 `acl`
+  （moox-cli、collector、factor 等内部调用方，以及外部身份白名单）都要改；
+- 按字符串调用方法名的客户端同步改：Monitor `storagegateway/client.go`、Collector `storageio/gateway.go`、CLI `setup_storage.go`；
 - Metadata：删除两个归档方法；
 - 删除组件 `archive`；
 - `catalog_test.go`、`packages/gatewayroute` 的相关测试同步调整。
@@ -224,20 +232,20 @@
 
 ### 5.5 验收
 
-- 全仓 `go build ./...` 与各模块 `go test -count=1 ./...` 通过；`rg 'ListHistorySubjects|after_key|AfterKey|GetComplete|ServedIndexed|archive-eventbus|RegisterArchiveFile'`
-  在代码中没有残留（生成代码以外）。
+- 全仓 `go build ./...` 与各模块 `go test -count=1 ./...` 通过；`rg 'ListHistorySubjects|ReadRecordRows|"ReadFields"|- ReadFields|after_key|AfterKey|GetComplete|ServedIndexed|ServedSeriesBars|archive-eventbus|RegisterArchiveFile'`
+  在代码与服务目录中没有残留（生成代码以外）。
 
 ## 6. 阶段 5：发布 A 与线上验收
 
 ### 6.1 构建
 
 同一个提交构建：Storage 三个角色（CGO，`build-storage-linux.sh`）、`moox-storage-cli`、Admin、Monitor、host-gateway、Access、Collector、
-factor-mgr、因子引擎、`moox-cli`。前端（行属性类型变化）随阶段 8 的前端一起构建；如果发布 A 先于阶段 8，本次单独构建一次前端和 web-host。
+factor-mgr、Strategy、因子引擎、`moox-cli`。Strategy 依赖 DataView 改名后的响应，旧二进制不能继续用。前端（行属性类型变化）随阶段 8 的前端一起构建；如果发布 A 先于阶段 8，本次单独构建一次前端和 web-host。
 
 ### 6.2 顺序（整点后 :05～:20、分钟中段）
 
 1. storage 主机：storage-node → storage-primary → 至少等 30 秒 → storage-view；
-2. control 主机：Admin → control 的 host-gateway → Monitor（服务目录变化，三者紧接着换）→ Collector → factor-mgr；
+2. control 主机：Admin → control 的 host-gateway → Monitor（服务目录变化，三者紧接着换）→ Collector → factor-mgr → Strategy；
 3. 其他主机的 host-gateway 与 Access；
 4. 编译机：因子引擎（`systemctl --user restart moox-factor-engine`）；
 5. 本机重新构建 `moox-cli`。
@@ -248,6 +256,8 @@ factor-mgr、因子引擎、`moox-cli`。前端（行属性类型变化）随阶
 - 因子：发布后的 1m、1h 周期正常产出，运行摘要无连续失败；必要时用 `recalc` 补发布期间失败的几期。
 - View：各 View 水位跟上；挑一个小 View 执行一次 `repair-view`，重建成功、行数与重建前一致、因子来源属性仍在。
 - Collector：运行状态页正常；对一个数据集执行一次 `CheckKline`。
+- `ReadRows`：经 host-gateway 的调用（Collector 重采样或 Monitor 行情巡检）与经 Access 的调用（`moox-cli` 远程读）都成功，网关观测里没有方法未注册的拒绝。
+- Strategy：发布后各运行中实例按期触发；一个需要多页读取的实例跨页时 `index` 不变；覆盖与回溯深度判断与发布前一致。
 - CLI：`moox-cli data rows export` 导出一段早于 View 覆盖范围、仍在保留期内的数据，返回完整行（发布 A 晚于 10-18 时可以直接验证）。
 - 压缩：Access 指标或抓包确认最近 N 根等「小请求、大响应」的调用已压缩。
 - 资源：观察 storage-node CPU（因子预热、View 重建期间）与过期清理日志；对比发布前的基线。
@@ -273,7 +283,7 @@ config/worker/           app.yaml、trpc_go.yaml（阶段 7）
 internal/mgr/
   config/                配置加载与校验
   store/                 任务、运行、分区、worker 的 SQLite 读写
-  schedule/              执行计划解析（复用 robfig/cron v1 的 6 段带秒解析）、时区、最小间隔、预览、N 推荐值
+  schedule/              执行计划解析（复用 robfig/cron v1 的 6 段带秒解析）、时区、最小间隔、预览
   trigger/               每秒一次的全局触发器
   runs/                  领取、租约、进度、完成、取消
   service/               ArchiveMgr 接口
@@ -288,12 +298,13 @@ internal/mgr/
 - `schema/archive.sql`：按归档设计第 10 节建表（`t_archive_tasks`、`t_archive_runs`、`t_archive_partitions`、`t_archive_workers`），
   库以 `auto_vacuum = INCREMENTAL` 创建。
 - `proto/archive.proto`：`ArchiveMgr` 的 11 个方法、`ArchiveWorker` 的 4 个方法（归档设计第 11 节）。下发给 worker 的运行参数包含：
-  数据集、频率、列与属性键、N、最少回看时长、收盘时刻、暂存保留期、区间、回补起点。序列水位、扫描水位、分区状态由 worker 在暂存库中维护，不下发。
+  数据集、频率、列（发布 B 只有字段列）、执行间隔、最少回看时长、空间时区与本地收盘时刻、暂存保留期、补拉区间、回补起点。
+  读取水位 `W` 与分区状态由 worker 在暂存库中维护，不下发。
 
 ### 7.3 关键逻辑
 
 - **执行计划**：保存时解析 cron 与时区，计算相邻计划时刻的最小间隔（展开未来 14 天的计划时刻取最小差值），小于 300 秒拒绝；
-  `PreviewArchiveSchedule` 返回接下来 5 次时刻、执行间隔、推荐 N（`B + L`，B 按空间交易时长计算）、分区预计导出时间、落在避让区间的提示。
+  `PreviewArchiveSchedule` 返回接下来 5 次时刻、执行间隔、每次读取区间的长度（执行间隔 + L + 一根 K 线的最大跨度）、分区预计导出时间、落在避让区间的提示。
 - **全局触发器**：`trpc.moox.archive.mgr.trigger.timer`（`* * * * * *`，超时 900ms，`timerjob` 防重叠）。每次查询到点的启用任务，
   逐个在事务内：有排队中或运行中的运行则累加连续跳过次数，否则生成 `scheduled` 运行并清零；把 `c_next_run_at` 推进到当前时刻之后的下一个计划时刻。
 - **立即开始**：保存（或重新启用）的同一事务内生成 `manual` 运行。
@@ -317,7 +328,7 @@ internal/mgr/
 ### 7.5 测试
 
 - schema：载入空 SQLite、格式校验、约束（执行间隔下限、补拉区间必须有起止、有分区的任务不能删除）。
-- 执行计划：最小间隔计算（不均匀 cron、跨夏令时时区）、预览、推荐 N（crypto / stockcn、间隔不到 1 天与 1 天以上）。
+- 执行计划：最小间隔计算（不均匀 cron、跨夏令时时区）、预览（读取区间长度、分区预计导出时间按空间时区与本地收盘时刻计算）。
 - 触发器：到点生成、撞上未结束运行时累加跳过、错过的多个计划时刻合并、立即开始、停用后不触发。
 - 租约：单一活动 worker、45 秒接管、重复实例冲突、运行租约过期回收、取消。
 - 领取：DataNode 并发上限、按计划时刻排序、分区归属 worker 不同时不派发。
@@ -340,9 +351,9 @@ internal/worker/
   client/        经 Access 的网关客户端（caller archive-worker）、Storage 角色认证（AppId archive）
   lease/         心跳、worker 租约、领取运行、进度与完成上报
   pacing/        避让窗口（每分钟 25–55 秒、整点 :58～:04）、请求间隔、全局带宽令牌桶、每 DataNode 并发
-  reader/        读取区间的计算（包含 W − L 的那根 K 线起，到本次运行开始）、区间读取（游标翻页）、保留期截断
+  reader/        读取区间的计算（[W − L − S, 本次运行开始)）、区间读取（游标翻页）、保留期截断
   staging/       DuckDB 暂存：建表与增列、批量比对写入、task_state / partition_state
-  export/        分区收盘时间（复用 packages/frequency 的 BarEnd）、导出、重写、定稿、补拉读回、_dataset.json、预览
+  export/        按空间时区切分区、分区收盘时间（packages/frequency 的 BarEnd 与本地收盘时刻）、导出、重写、定稿、已定稿分区读回、_dataset.json、预览
   backfill/      首次回补（按分区推进）
   maintain/      每天的维护：CHECKPOINT、重建 DuckDB 文件、清理已删除任务、临时目录
   disk/          可用空间检查
@@ -353,12 +364,12 @@ cmd/cli/         export、verify、reindex、status
 
 | 逻辑 | 要点 | 设计 |
 | --- | --- | --- |
-| 读取区间 | 起点 = 包含 `W − L` 的那根 K 线的开盘时间（复用 `packages/frequency`）；首次运行取回补起点或「本次开始 − 执行间隔」；终点 = 本次运行开始；保留期截止处截断并上报无法补齐 | 归档设计第 4 节第 1 步 |
+| 读取区间 | 起点 = `W − L − S`（`S`：1mo 31 天、1w 7 天，其余为频率时长），不需要市场对齐；首次运行取回补起点或「本次开始 − 执行间隔 − L − S」；终点 = 本次运行开始；保留期截止处截断并上报无法补齐 | 归档设计第 4 节第 1 步 |
 | 写入暂存 | Appender 写临时表 → 与暂存表按主键比对（`IS DISTINCT FROM`）→ 只写新增和变化的行 → 同一事务更新 `last_changed_at` | 第 8.2 节 |
 | 导出与重写 | 运行开始 ≥ 分区收盘时间 + L，且「到时间未导出」或 `last_changed_at > exported_at`；`COPY ... TO '<文件>.partial'` → fsync → rename → fsync 目录 → sha256 | 第 8.3 节 |
-| 定稿 | 运行开始 ≥ 分区收盘时间 + L + 暂存保留期，且无待导出变化；删除暂存行 | 第 8.3 节 |
-| 补拉读回 | `read_csv(..., union_by_name = true, allow_quoted_nulls = false)` | 第 8.3 节 |
-| 读取水位 | 定时或立即运行完整成功后，`W` 推进到本次运行的开始时间；补拉区间不推进 | 第 4 节第 4 步 |
+| 定稿与水位 | 运行开始 ≥ 分区收盘时间 + L + 暂存保留期，且无待导出变化；删除暂存行与把 `W` 推进到本次运行开始在**同一个 DuckDB 事务**里提交（定时或立即运行；补拉区间不推进） | 第 4 节第 4 步、第 8.3 节 |
+| 写入已定稿分区 | 任何一行要写入 `final` 分区时，先用 `read_csv(..., union_by_name = true, allow_quoted_nulls = false)` 把原文件读回暂存表、标回 `open`，再写入 | 第 4 节 |
+| 分区时区 | 按空间时区的本地日 / 月切分；有交易时段的空间，日分区的收盘取本地收盘时刻（夏令时由时区库换算） | 第 8.1、8.3 节 |
 | 节奏 | 请求只在允许的时间窗发起；全部并发运行共享 512KB/s 令牌桶；同一运行请求间隔 ≥ 200ms；每 DataNode ≤ 2 个运行 | 第 6 节 |
 | 磁盘保护 | 可用空间低于 5GB 停止领取，心跳上报 | 第 6.1 节 |
 
@@ -375,9 +386,13 @@ cmd/cli/         export、verify、reindex、status
   - 5 分钟任务，一次运行因整点避让推迟到 :04，推迟期间补写的行仍在下一次的区间内被读到；
   - worker 停机 4 小时期间新增标的，恢复后的区间覆盖它的早期数据；
   - 另有：每根 K 线最后一次被读到时距收盘至少 L（随机生成计划时刻与推迟、失败，逐根验证）；中途失败后从同一起点重读且不重复写入；
-    首次运行有 / 无回补起点；停更标的不再被读到；1h、1d、1w、1mo 等频率下「包含 W − L 的那根」的开盘时间；超出保留期截断。
+    首次运行有 / 无回补起点；停更标的不再被读到；超出保留期截断；
+  - 区间起点 `W − L − S` 覆盖所有收盘晚于 `W − L` 的 K 线：1h、1d（含 A 股日线上海零点、日内运行）、1w、1mo（含 2 月与 31 天的月）的边界。
 - 导出与定稿：8 月最后一根周线（08-31 开盘）不会在 09-07 之前定稿；导出前失败留下的变化在下一次运行导出；
-  首次回补遇到月分区时，同一个月的多天不会互相覆盖；当前分区不会被提前定稿。
+  首次回补遇到月分区时，同一个月的多天不会互相覆盖；当前分区不会被提前定稿；
+  - 定稿与推进 `W` 的事务失败（注入错误）后，暂存行与 `W` 都没变，重跑后导出的文件与一次成功运行的结果逐字节一致；
+  - 晚到的行落进已定稿分区时，先读回原文件再写入，重新导出的文件包含原有的全部行；1mo 区间起点落进上一个已定稿的月时不产生写入、不重新打开分区。
+- 分区时区：A 股日线中每月第一个交易日落在当月文件；stockcn 1m 按上海本地日成文件；stockus 跨夏令时切换的那天收盘时刻正确；crypto 仍按 UTC 日。
 - CSV：导出 → 读回 → 再导出逐字节一致（含默认序列的 `""`、缺失值、增列后的旧文件）。
 - 节奏：用可控时钟验证请求只在允许的时间窗发起；令牌桶在并发运行下不超限。
 - 暂存：值没变不写入；增列 `ALTER TABLE`；每天维护的重建在没有运行时执行、执行期间不领取。
@@ -396,7 +411,7 @@ cmd/cli/         export、verify、reindex、status
 - API：新增 `web/src/api/archive/index.ts`（`callControl("archive", ...)`，类型与 `archive.proto` 一致）。
 - 页面：`web/src/views/collector/archive/` 下：
   - `index.vue`（两个 Tab：归档任务、运行记录）；
-  - `task-dialog.vue`（新建 / 编辑：采集任务选择、执行计划预设与 cron、开始时间、N、回补起点）；
+  - `task-dialog.vue`（新建 / 编辑：采集任务选择、执行计划预设与 cron、开始时间、回补起点；预览中显示每次读取区间的长度）；
   - `task-detail-drawer.vue`（汇总、月历、分区详情、运行记录）；
   - `archive-model.ts` 与单测。
 - 复用：`views/collector/runtime-status/runtime-status-model.ts` 的 `cronText` 与 `views/data/subjects/tag-form.ts` 的 `nextRuns` 移到
@@ -442,9 +457,9 @@ cmd/cli/         export、verify、reindex、status
   - Access 日志中归档请求的时间分布：没有落在每分钟第 0–25 秒和整点 :58～:04 的请求；
   - 读取速率不超过 512KB/s，响应已压缩；
   - 过 UTC 0 点后，下一次运行（次日 00:34 UTC）导出前一天的文件；文件行数与 DataNode 读取一致；3 天后定稿。
-- 建一个每 5 分钟的任务：计划时刻误差在几秒内；撞上整点避让而推迟的那次运行之后，下一次运行的读取区间仍从推迟那次的开始时间往前 15 分钟起（看运行记录的读取区间）。
+- 建一个每 5 分钟的任务：计划时刻误差在几秒内；撞上整点避让而推迟的那次运行之后，下一次运行的读取区间仍从推迟那次的开始时间往前「15 分钟 + 一根」起（看运行记录的读取区间）。
 - 停 worker 超过一个执行间隔后恢复：恢复后第一次运行的读取区间从停机前最后一次成功运行算起，中间的数据全部读到。
-- stockcn 1m 每天任务：17:04 运行，当天文件约 17:25 可用。
+- stockcn 1m 每天任务：17:04 运行，当天文件约 17:25 可用，文件名是上海本地日期；stockcn 1d 任务：每月第一个交易日在当月文件里。
 - Monitor：停 worker 30 分钟，`archive:worker` 告警触发；恢复后自动恢复。
 
 ### 11.4 回退
@@ -460,13 +475,17 @@ Admin、Monitor、各 host-gateway 与 Access。归档目录与暂存库保留�
 
 | 范围 | 文件 | 改动 |
 | --- | --- | --- |
-| 写入方 | `primarystore/service.go`、`period.go`、`marker.go` | 删除 `isFactorAppID`、`isOwnedAppID`、`collectorWritableDataset`、`validateCollectorPeriodDataset`、`rejectCollectorPeriodWriteCredential` 与按 `dataset_role` / `owner_module` 的分支；统一为「调用方 AppId ∈ 数据集 `write_owner`」 |
-| 幂等写入 | `primary_store.proto`、`data_node.proto`、`pebble/factor_rows.go`、`pebble/store.go` | `UpsertFields`、`CommitTimeSeriesBatch` 增加 `commit_id`（复用现有提交回执机制）；删除 `WriteFactorRows`、`source_event_id` 与已处理来源事件标记、`write_kind` |
-| 周期完成 | `primary_store.proto`、`data_node.proto`、`dataset_markers.proto`、`packages/storagepb`、`pebble/marker_*.go`、`datanode/marker.go`、`primarystore/marker.go` | 新增 `ReportDatasetPeriodCompleted`、`GetDatasetPeriodCompleted` 与事件 `DatasetPeriodCompleted`；账本判定改发新事件（`source = ledger`）；删除两种旧事件与五个旧接口 |
+| 写入方 | `primarystore/service.go`、`period.go`、`marker.go` | 删除 `isFactorAppID`、`isOwnedAppID`、`collectorWritableDataset`、`validateCollectorPeriodDataset`、`rejectCollectorPeriodWriteCredential` 与按 `dataset_role` / `owner_module` 的分支；统一为「调用方 AppId ∈ 数据集 `write_owner`」；强制校验由配置开关控制（发布 C 第 4 步才打开） |
+| 元数据权限 | `metadata/dataset_attributes.go`、`catalog/metadata_catalog.go` | 删除业务属性的不可变约束；`write_owner` 只能由当前所有者或全局管理员修改；`CreateDataset` 中 `data_source_id` 对所有数据集可选（填写时校验引用）；`DeleteDataset`、删除 / 恢复行改为通用的 `write_owner` 授权 |
+| 幂等写入 | `primary_store.proto`、`data_node.proto`、`pebble/commit_receipts.go`、`pebble/factor_rows.go`、`pebble/store.go`、`primarystore/service.go` | `UpsertFields` 收为单数据集请求；`UpsertFields`、`CommitTimeSeriesBatch` 增加 `commit_id`；回执重做：键为 `(space_id, dataset_id, commit_id)`，指纹含操作类型与完整载荷，记录写入时间、7 天后清理，与写入、outbox 同一批次提交；删除 `WriteFactorRows`、`source_event_id` 与已处理来源事件标记、`write_kind` |
+| 周期完成 | `primary_store.proto`、`data_node.proto`、`dataset_markers.proto`、`packages/storagepb`、`pebble/marker_*.go`、`datanode/marker.go`、`primarystore/marker.go`、`cmd/cli` | 新增 `ReportDatasetPeriodCompleted`、`GetDatasetPeriodCompleted` 与事件 `DatasetPeriodCompleted`；账本判定改发新事件（`source = ledger`）；删除两种旧事件与五个旧接口；`moox-storage-cli` 增加按时间清除周期标记与 outbox 记录的维护命令（发布 C 回退用） |
 | 就绪事件 | `view/period_event_apply.go`、`view/event_apply.go`、`view/data_ready.go` | `ViewDataReady` 的 `completion_kind` 改为 `source`，`factors[]` 改为透传 `detail_type` / `detail` |
-| View 资源 | `catalog/factor_result_view.go`、`catalog/metadata_catalog.go`、`metadata/sqlite/crud_dataset.go`、`view/maintenance_schema_extension.go`、`view/event_apply.go` | 删除托管默认 View；View 列支持「来源为属性」；`follow_dataset_columns` 驱动原地扩展；删除 `factorAttributeKeys` |
+| 数据集列来源 | `common.proto`、`metadata.proto`、`schema/metadata.sql`、`metadata/sqlite`、`bootstrap/metadata/seed.go`、`catalog/validate.go`、`catalog/metadata_catalog.go`、`view/build.go`、`view/event_apply.go`、`cmd/cli` | `DatasetColumnOriginType` 的 `FACTOR` 改名为 `CUSTOM`、新增 `ATTRIBUTE`（`origin_id` 为属性键）；`t_dataset_columns` 的 `CHECK` 改为 `('field', 'custom', 'attribute', 'system')`，schema 升到 v14（同步 `metadata_schema_version_test`、`TestMetadataSchemaVersionIsExact`）；`moox-storage-cli` 增加一次性的 v13 → v14 迁移命令（事务内重建该表、`factor` 改为 `custom`、写版本号），发布 C 后删除；删除因子输出列的专门校验；View 重建与事件应用按数据集列的来源读取值或属性；删除 `factorAttributeKeys` |
+| View 资源 | `catalog/factor_result_view.go`、`catalog/metadata_catalog.go`、`metadata/sqlite/crud_dataset.go`、`metadata/sqlite/crud_view_index.go`、`view/maintenance_schema_extension.go`、`view/event_apply.go` | 删除托管默认 View 与删除数据集时自动删 View；数据集加列在同一元数据事务里更新所有 `follow_dataset_columns = true` 的 View 的投影与期望版本；扩展提交条件（`crud_view_index.go:279`）与消费屏障（`validateFactorResultEventColumns`）改为按 `follow_dataset_columns` 判断 |
 | 投递 | `view/inventory_reconciler.go`、`view/eventconsumer/delivery_policy.go`、`config/loader.go`、`config/storage.yaml` | 按数据集属性 `view_delivery` 选择 `parallel` / `serial` 模板；删除 `dataset_factor_` 前缀规则；分区名改为 `parallel`、`serial`、`metrics` |
 | 元数据校验 | `catalog/validate.go` | 删除 `dataset_role` 取值、`dataset_factor_` 前缀、`factor_output` 显示名规则；新增 `write_owner` 非空与 `view_delivery`、`follow_dataset_columns` 取值校验 |
+| 保留策略包 | `packages/storagepolicy/policy.go`、`moox.toml.example`、`configinit/moox.toml.example`、CLI 策略渲染 | 各市场默认保留期移到部署配置；删除按市场交易分钟数估算根数的校验 |
+| 初始化配置 | `config/setup/metadata.yaml` | 五个系统数据集补 `write_owner = moox-monitor` |
 | 数据规范 | `primarystore/service.go` | 删除 `normalizeStockCNSeriesTags` |
 | 其他 | `observability/view_metrics.go`、`cmd/cli` | 标签与维护命令去掉业务命名和分支 |
 
@@ -478,21 +497,34 @@ Admin、Monitor、各 host-gateway 与 Access。归档目录与暂存库保留�
 | --- | --- | --- |
 | `packages/factorpb`（新建） | `period_detail.proto` | `PeriodDetail`（原 `FactorPeriodState` 列表）与校验，从 `packages/events` 移来 |
 | `packages/events` | 事件注册表 | 换成 `DatasetPeriodCompleted`；删除因子状态校验 |
-| factor-mgr | 数据集与 View 维护 | `write_owner = moox-factor`、`view_delivery = serial`；自己建默认 View（`follow_dataset_columns = true`、属性列）；启动对账补齐已有数据集与 View |
-| 因子引擎 | `internal/storageio`、触发与上报 | `UpsertFields(commit_id)`；`ReportDatasetPeriodCompleted` 带 `PeriodDetail`；`GetDatasetPeriodCompleted`；订阅 `DatasetPeriodCompleted`（`source = ledger`） |
-| Collector | 任务结果、`marketstorage`、`resample`、SCF 写入 | `write_owner = moox-collector`；重采样报告改为 `ReportDatasetPeriodCompleted`；A 股默认 `series_tag` 在写入方填写；去重用 `commit_id` |
-| Strategy | `internal/trigger`、`internal/readiness` | `completion_kind` 改为 `source`；因子状态从 `detail` 解码 |
-| Monitor | `hostmetrics/storage_writer.go` | 去重用 `commit_id` |
+| factor-mgr | 数据集与 View 维护、`internal/storageio/metadata.go`、`internal/catalog` | 因子输出列的来源改为 `CUSTOM`（`ColumnOriginFactor` 改名）；`write_owner = moox-factor`、`view_delivery = serial`；来源哈希等定义为来源为属性的数据集列；自己建、改、删默认 View（`follow_dataset_columns = true`）；删除因子结果数据集：检查额外引用 → 删默认 View → 清理行 → 删数据集，可重试；启动对账补齐已有数据集与 View |
+| 因子引擎 | `internal/storageio`、触发与上报 | `UpsertFields(commit_id)`；`ReportDatasetPeriodCompleted` 带 `PeriodDetail`；`GetDatasetPeriodCompleted`；订阅 `DatasetPeriodCompleted`，按因子集绑定的源数据集与频率筛选，`ledger`、`producer` 都接受 |
+| Collector | 任务结果、`marketstorage`、`resample`、SCF 写入 | `write_owner = moox-collector`；`UpsertFields` 按数据集拆分请求；重采样报告改为 `ReportDatasetPeriodCompleted`；A 股默认 `series_tag` 在写入方填写；去重用 `commit_id` |
+| Strategy | `internal/trigger`、`internal/readiness`、`internal/input` | 按绑定的 View 与数据集判断就绪事件是否相关，不按来源区分；`detail_type` 为因子明细时解码；删除按数据集角色选择完成类型的逻辑及 `TestResolveCompletionKindByDatasetRole` |
+| Monitor | `hostmetrics/storage_writer.go`、系统数据集对账 | 去重用 `commit_id`；启动对账为系统数据集补齐 `write_owner = moox-monitor` |
+| 归档 | `internal/worker/reader`、`export` | 发布 B 已上线时：来源为属性的数据集列作为 `attribute_keys` 读取并按列导出；新列出现时按增列处理 |
 | 服务目录 | `catalog.yaml` | PrimaryStore 方法改名与删除；`factor-engine`、`scf-collector` 等外部身份白名单同步 |
 
 ### 12.3 阶段 13：发布 C 与验收
 
-- 同一提交构建：Storage 三个角色、Admin、各主机 host-gateway、Monitor、Access、Collector（SCF 代码包随 Collector 自动滚动升级）、factor-mgr、因子引擎、Strategy。
-- 顺序：storage-node → storage-primary → 至少等 30 秒 → storage-view → Admin → control 的 host-gateway → Monitor → 其他组件；
-  发布时清除 EventBus 中两种旧周期事件的主题，View 消费者按新事件重建（参照 `reset-view-consumers` 的流程，必要时 `repair-view`）。
-- 验收：采集周期按期完成（`DatasetPeriodCompleted`，`source = ledger`）；因子按期产出并报告（`source = producer`）；
-  View 就绪事件正常，Strategy 按期触发；factor-mgr 接管的默认 View 加列后原地扩展；非 `write_owner` 的写入被拒。
-- 回退：同一提交的全部组件换回备份；EventBus 主题已清除，回退后由旧代码重新产生旧事件。
+发布 C 改元数据属性，旧事件也持久化在 DataNode（周期标记与 outbox，`pebble/marker_store.go`）和 View（待发布就绪队列，`view/data_ready.go`）里，
+是一次**有状态切换**（去耦合设计第 6 节），按停写、切换、恢复执行：
+
+1. 演练：先在隔离环境（`moox-e2e` 与 `moox.sandbox.toml`）完整走一遍下面的步骤和回退；
+2. 停写：暂停 Collector 的计划对账与补采、停因子引擎与 Strategy；确认 DataNode outbox 排空、各 View 水位追平、待发布就绪队列为空；
+3. 备份：Storage 元数据库、Collector 与 factor-mgr 的库，以及各组件二进制；
+4. 同一提交构建、发布：storage-node → 停 storage-primary、用新版 `moox-storage-cli` 把元数据库迁移到 v14、启动新的 storage-primary → 至少等 30 秒 → storage-view → Admin → control 的 host-gateway → Monitor → Access 与其他主机的 host-gateway
+   → Collector（SCF 代码包随之滚动升级）→ factor-mgr → 因子引擎 → Strategy；此时 `write_owner` 强制校验关闭；
+5. 各业务模块启动对账补齐属性与默认 View 后，核对每个数据集的 `write_owner`，再打开强制校验；清除 EventBus 中两种旧周期事件的主题，
+   View 消费者按新事件重建（参照 `reset-view-consumers`，必要时 `repair-view`）；
+6. 恢复 Collector 的计划对账与补采、因子引擎、Strategy。
+
+验收：采集周期按期完成（`source = ledger`）；重采样结果（`source = producer`）触发因子，因子按期产出并报告；View 就绪事件正常，Strategy 按期触发；
+factor-mgr 接管的默认 View 加列后原地扩展、新列不丢；删除一个测试用因子结果数据集成功；非 `write_owner` 的写入被拒。
+
+回退：先停写并等 outbox 排空；用新版 `moox-storage-cli` 清除 DataNode 中切换后写入的新格式周期标记与 outbox 记录（阶段 11 提供这个维护命令，
+旧代码读不了新格式），用 `purge-dataset-events` 清除新事件的主题；然后换回全部组件的旧二进制、恢复第 3 步备份的数据库，View 重建，再恢复各模块。
+不能只换回二进制。
 
 ## 13. 风险与检查点
 
@@ -506,7 +538,10 @@ Admin、Monitor、各 host-gateway 与 Access。归档目录与暂存库保留�
 | worker 时钟偏差导致避让失效 | 部署脚本检查 NTP 同步状态；发布 B 验收看 Access 日志时间分布 |
 | 编译机断电断网超过线上保留期 | 「接近保留期」告警（任务异常）；crypto 1m 保留 7 天，提前 2 天告警 |
 | 服务目录三次协调发布（A、B、C） | 每次都按 Admin → host-gateway → Monitor 的顺序紧接着换，并核对网关观测中的 hash |
-| 去耦合后事件协议整体替换 | 发布 C 前在隔离环境演练「清除旧主题 → View 按新事件重建 → 因子与策略按期运行」 |
+| 去耦合后事件协议整体替换 | 发布 C 前在隔离环境演练「停写 → 切换 → 清除旧主题 → View 按新事件重建 → 因子与策略按期运行」以及回退 |
+| 发布 C 是有状态切换（元数据属性、持久化的旧事件） | 停写后再切换；先备份数据库；`write_owner` 强制校验在属性补齐、核对后才打开；回退同时恢复数据库与事件状态 |
+| 元数据 schema 从 v13 迁移到 v14（重建 `t_dataset_columns`） | 迁移命令在事务内完成，失败时库保持 v13；隔离环境先演练；迁移前备份；迁移后核对表结构与新建库一致 |
+| 重采样数据集的完成事件是 `producer`，下游误按来源过滤 | 因子与 Strategy 按绑定的数据集与 View 判断相关性；「重采样 → 因子 → Strategy」端到端用例 |
 | factor-mgr 接管默认 View 时与 Storage 原有托管状态冲突 | 对账逻辑先读取现有 View 属性再改写；发布 C 的验收中检查每个因子结果数据集的默认 View |
 
 ## 14. 交付物清单
