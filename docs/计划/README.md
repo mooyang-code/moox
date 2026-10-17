@@ -12,6 +12,7 @@
 | [网关与服务部署重构设计](网关与服务部署重构设计.md) | 架构决策依据；实际调用方、原生部署及剩余边界见当前文档 |
 | [网关与服务部署重构执行计划](网关与服务部署重构执行计划.md) | 历史阶段与现场切换方案；A/B/C 后的内部调用、Access、Monitor、页面及多个部署阶段也已实现 |
 | [秘密管理与初始化录入设计](秘密管理与初始化录入设计.md) | 设计稿第二版（决策已确认，尚未编码；已吸收 Codex 审查并按单用户个人项目收敛）：`moox.toml` 去秘密、本机一次性录入页、SSH 只用密钥、导入 Admin 后本机删除；实现后以[部署与运维](../部署与运维.md)为准 |
+| [数据归档设计](数据归档设计.md) | 设计稿 v1（方向已确认，尚未编码）：拉取式替换事件式 archive，archive-mgr 在 control、worker 只出站部署在可配置机器上，按 UTC 日/月写 gzip CSV，避开整点和每分钟写入高峰；实现后以[归档](../模块/归档.md)为准 |
 | [Console Proxy 内嵌 Caddy 执行计划](../2026-10-09-console-proxy-embedded-caddy-execution-plan.md) | 保留原路径便于已有引用；代理、Monitor 探针及 control bootstrap 已接通，历史验收记录仍按其原范围解读 |
 | [Timer 模式 Storage 写入压测报告](Timer模式Storage写入压测报告.md) | 特定配置、数据规模和环境下的历史观测，不能外推为当前版本或全部拓扑的容量保证 |
 | [Console Proxy 依赖审计数据](console-proxy-dependency-audit.json) | 历史源码基线的模块差异，不能替代当前 go.work/go.sum 或制品依赖清单 |
