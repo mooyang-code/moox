@@ -1,0 +1,183 @@
+# Storage 去业务耦合设计
+
+状态：设计稿 v1（2026-10-17），尚未编码。项目尚未上线，接口、事件、元数据直接修改，不考虑兼容。
+与 [Storage 读接口收敛设计](Storage读接口收敛设计.md) 互补：那份收敛读接口，本设计处理写入、周期、事件、View 和元数据中的业务概念。
+实施排在 [执行计划](Storage读接口收敛与数据归档执行计划.md) 的发布 C。
+
+## 0. 原则
+
+1. **Storage 只提供通用能力**：空间、数据集、行、周期、视图、事件。它不认识因子、采集、K 线、某个市场或某个数据集。
+2. **权限只看「写入方」**：数据集声明 `write_owner`（允许写入的 AppId 列表），写入与周期报告只校验调用方是否在其中，精确匹配，没有别名。
+3. **业务语义由业务模块定义和解释**：Storage 对业务数据只透传（不透明的字节或属性），不做校验、不做分支。
+4. **同一能力一套接口**：幂等写入一套，周期完成一套，就绪事件一套。
+5. **业务模块自己维护自己的资源**：默认 View、列、属性由创建数据集的模块通过 Metadata 接口维护，Storage 不替任何模块「托管」。
+
+## 1. 现状盘点
+
+### 1.1 身份与权限
+
+| 位置 | 现在 | 问题 |
+| --- | --- | --- |
+| `primarystore/service.go` `isFactorAppID`、`isOwnedAppID` | `factor` 与 `moox-factor` 互为别名；`moox-<owner>` 视同 `<owner>` | 因子特例；别名规则让同一个身份有多个名字 |
+| `primarystore/service.go` `validateDatasetWriteOwner` | `dataset_role = factor_result` 的数据集只许因子写；采集身份只能写 `collectorWritableDataset` 认可的数据集 | 写入权限按业务角色分支 |
+| `primarystore/service.go` `collectorWritableDataset` | `owner_module = collector` 且 `dataset_role ∈ {raw_collection, kline_resample_result}` | 同上 |
+| `primarystore/period.go` `validateCollectorPeriodDataset`、`rejectCollectorPeriodWriteCredential` | 周期账本只许采集身份、只许 `raw_collection` 数据集；写死拒绝 `scf-market-canary` | 账本是通用能力，却只给采集用；只读身份靠写死的名字拦截 |
+| `primarystore/marker.go` `ownedDatasetNodeID`、`validateMarkerCaller` | 采集标记要求 `collector` + 两种角色；因子标记要求 `factor` + `factor_result` + `write_owner = factor` | 两套周期标记各有一套业务校验 |
+
+### 1.2 写入
+
+| 位置 | 现在 | 问题 |
+| --- | --- | --- |
+| `PrimaryStore.WriteFactorRows` → `DataNode.WriteFactorRows`（`pebble/factor_rows.go`） | 带 `commit_id` 的幂等批量写入：同一提交内容相同返回成功、不同返回冲突；一次写入只占一个 outbox 位置；事件带 `write_kind = factor_result` | 本质是通用的幂等写入，却只给因子用，名字也是因子的 |
+| `UpsertFields`、`CommitTimeSeriesBatch` 的 `source_event_id` | 另一套去重：按来源事件 ID 记标记，保留 7 天 | 两套幂等机制并存 |
+| `DatasetRowsUpserted.write_kind` | 只有因子写入会带，没有消费方读取 | 无用字段 |
+| `primarystore/service.go` `normalizeStockCNSeriesTags` | 写死 `stockcn` 空间、`dataset_stockcn_equity_kline_1m` 数据集，把空的 `series_tag` 改写成默认值 | Storage 在改写某个业务数据集的数据 |
+
+### 1.3 周期与事件
+
+| 位置 | 现在 | 问题 |
+| --- | --- | --- |
+| 周期账本：`RegisterSeriesSnapshot`、`CommitTimeSeriesBatch`，DataNode 按快照与截止时间判定 complete / degraded | 判定结果发 `CollectorPeriodCompleted`（`collector.period.completed`），字段有 `batch_id`、`config_snapshot_id`、`collected_at` | 通用能力，事件却以采集命名 |
+| `PrimaryStore.ReportCollectorPeriodCompleted` | 采集的本地重采样直接报告某周期完成 | 与因子的周期报告是同一件事 |
+| `PrimaryStore.ReportFactorPeriodComputed` / `GetFactorPeriodComputed` | 因子报告某周期算完；事件 `FactorPeriodComputed`（`dataset.factor_period.computed`）带 `source_dataset_id`、`trigger_event_id`、`factors[]`（每个因子的状态、`source_hash`、`definition_hash`、`gap_subjects`） | 因子内部状态进入了 Storage 协议；`packages/events` 还替因子校验这些状态 |
+| `ViewDataReady` | `completion_kind`（collector / factor）、`factors[]` | View 就绪事件携带因子结构；Strategy 按 `completion_kind` 区分触发来源 |
+
+### 1.4 View
+
+| 位置 | 现在 | 问题 |
+| --- | --- | --- |
+| `catalog/factor_result_view.go`、`metadata/sqlite/crud_dataset.go` | 因子结果数据集激活时，Storage 自动建并「托管」默认 View（`managed_by = storage`、`view_role = factor_result`）；加列前要求默认 View 已激活 | Storage 替因子模块维护资源；Collector 自己建 View，两种做法并存 |
+| `view/maintenance_schema_extension.go` | 只有 `primary_dataset_role = factor_result` 的 View 才能在数据集加列后原地扩展 | 通用能力只给因子用 |
+| `view/event_apply.go` `factorAttributeKeys` | 写死 `factor.source_hash` 等属性键，并按列属性 `origin_factor_id` 拼出 `factor.source_hash.<因子>` | View 认识因子的属性命名 |
+| `view/inventory_reconciler.go`、`config/loader.go`、`eventconsumer/delivery_policy.go` | 数据集 ID 以 `dataset_factor_` 开头的走「factor」消费分区（单并发、`max_ack_pending = 1`）；配置校验写死三个分区名 | 按数据集 ID 前缀决定投递方式 |
+
+### 1.5 元数据
+
+| 位置 | 现在 | 问题 |
+| --- | --- | --- |
+| `catalog/validate.go` | `dataset_role` 取值校验（`merged_factor` 已退役提示、`factor_result` 必须以 `dataset_factor_` 开头）；列属性 `factor_output` 必须与显示名一致 | 元数据校验按业务角色分支 |
+| 数据集属性 `dataset_role`、`owner_module`、`write_owner`、`source_dataset_id`；View 属性 `view_role`、`managed_by`、`primary_dataset_role` | Storage 代码中按这些属性分支约 140 处 | 业务属性被当成 Storage 的语义 |
+
+### 1.6 其他
+
+- `observability/view_metrics.go` 的部分标签以 collector 命名；
+- `cmd/cli` 中有按因子结果数据集分支的维护逻辑。
+
+## 2. 通用模型
+
+### 2.1 写入方
+
+- 数据集属性 `write_owner`：允许写入的 AppId 列表（逗号分隔），由创建数据集的模块填写。例如采集结果为 `moox-collector`，因子结果为 `moox-factor`。
+- 以下操作要求调用方 AppId 在 `write_owner` 中：`UpsertFields`、`CommitTimeSeriesBatch`、`RegisterSeriesSnapshot`、`ReportDatasetPeriodCompleted`、`DeleteDatasetRows`、
+  `RestoreDatasetRows`。读取不受限制。
+- 每个模块只用一个 AppId，删除所有别名规则。只读身份（如 SCF 行情巡检）不在任何数据集的 `write_owner` 里，自然不能写，不再写死名字。
+- `dataset_role`、`owner_module`、`source_dataset_id` 等属性仍可由业务模块写入，但只供业务模块自己使用，Storage 不读取、不校验。
+
+### 2.2 幂等写入
+
+- `UpsertFields` 增加 `commit_id`（可选）：同一数据集内，同一 `commit_id` 内容相同返回成功、内容不同返回冲突；一次写入只占一个 outbox 位置。
+  回执保留期沿用现在的 7 天。
+- `CommitTimeSeriesBatch` 同样使用 `commit_id`。
+- 删除 `WriteFactorRows`（两层）、`source_event_id` 与「已处理来源事件」标记、`DatasetRowsUpserted.write_kind`。
+- 因子按期写结果改为 `UpsertFields(commit_id = <期的提交 ID>)`。
+
+### 2.3 周期完成
+
+一个周期完成有两种来源，统一成一种事件、一套接口：
+
+| 来源 | 谁判定 | 接口 |
+| --- | --- | --- |
+| `ledger` | DataNode 按登记的序列快照与截止时间判定（现在的采集周期账本） | `RegisterSeriesSnapshot`、`CommitTimeSeriesBatch`（不变） |
+| `producer` | 写入方自己报告（现在的重采样与因子） | `ReportDatasetPeriodCompleted`；查询用 `GetDatasetPeriodCompleted` |
+
+事件 `DatasetPeriodCompleted`（主题 `moox.event.storage.dataset.period.completed.v1.<空间>.<数据集>`）：
+
+| 字段 | 说明 |
+| --- | --- |
+| `dataset_id`、`frequency`、`period_time` | 哪个数据集的哪一期 |
+| `status` | `complete` / `degraded` |
+| `source` | `ledger` / `producer` |
+| `universe_subject_ids`、`failed_subjects` | 本期应有的标的与失败的标的 |
+| `committed_positions` | 本期写入在 outbox 中的位置，View 用来确认数据已进入索引 |
+| `snapshot_ref` | `ledger` 来源时为登记的序列快照引用（替代 `batch_id`、`config_snapshot_id`、`expected_scope_ref`） |
+| `cause_event_id` | `producer` 来源时为触发本次计算的事件 ID（替代 `trigger_event_id`），用于幂等查询 |
+| `completed_at` | 完成时间 |
+| `detail_type`、`detail` | 写入方自定义的明细（不透明字节），Storage 原样保存并透传，不解析 |
+
+- 删除 `CollectorPeriodCompleted`、`FactorPeriodComputed` 两种事件，`ReportCollectorPeriodCompleted`、`ReportFactorPeriodComputed`、`GetFactorPeriodComputed`
+  三个接口，以及 DataNode 的 `AppendCollectorPeriodCompleted`、`AppendFactorPeriodComputed`、`GetFactorPeriodComputedMarker`（合并为
+  `AppendDatasetPeriodCompleted`、`GetDatasetPeriodCompleted`）。
+- 因子把每个因子的状态（现在的 `FactorPeriodState`）放进 `detail`，`detail_type` 为 `moox.factor.PeriodDetail.v1`。这个 proto 移到因子自己的包
+  （新建 `packages/factorpb`），由因子写入、Strategy 读取；`packages/events` 中针对因子状态的校验一并移过去。
+
+### 2.4 View 就绪事件
+
+`ViewDataReady` 只描述「这一期的数据已进入这个 View」：
+
+- `completion_kind` 改为 `source`（`ledger` / `producer`），取自对应的周期完成事件；
+- `factors[]` 改为原样透传周期完成事件的 `detail_type` 与 `detail`；
+- 其余字段（View、数据集、期、状态、可见范围、失败范围、写入位置、就绪时间、`universe_subject_ids`）不变。
+- Strategy 按 `source` 区分触发来源（原来的 collector → `ledger`，factor → `producer`），需要因子状态时自己解码 `detail`。
+
+### 2.5 View 的资源与投递
+
+- **默认 View 由业务模块自己建**：删除 `catalog/factor_result_view.go` 和数据集激活、加列时对默认 View 的检查。factor-mgr 与 Collector 一样，
+  通过 `CreateView`、`UpsertViewColumn` 建和维护自己的 View。
+- **View 列可以取行属性**：View 列定义增加「来源」：字段（默认）或属性（给出属性键）。View 重建和事件应用都按列定义读取属性，
+  删除 `factorAttributeKeys` 中写死的 `factor.` 键。因子的来源哈希等由 factor-mgr 定义为属性列。
+- **View 跟随数据集加列**：View 属性 `follow_dataset_columns = true` 时，数据集新增列后原地扩展 View 的列（复用现有的 schema 扩展机制），
+  删除对 `primary_dataset_role = factor_result` 的判断。
+- **投递方式由数据集声明**：数据集属性 `view_delivery`：`parallel`（默认）或 `serial`。`serial` 使用单并发、`max_ack_pending = 1` 的消费模板，
+  适合事件大、要求严格串行的数据集。删除按 `dataset_factor_` 前缀分配消费分区的逻辑；配置中的分区模板改为 `parallel`、`serial`、`metrics` 三个，
+  名称与业务无关。factor-mgr 为因子结果数据集设置 `serial`。
+
+### 2.6 元数据校验
+
+- 删除 `dataset_role` 取值校验、`dataset_factor_` 前缀规则、`factor_output` 显示名规则。
+- `write_owner` 必须非空；`view_delivery`、`follow_dataset_columns` 的取值校验保留在 Storage（它们是 Storage 自己的语义）。
+
+### 2.7 写入方负责的数据规范
+
+`normalizeStockCNSeriesTags` 移到 Collector：A 股 1m 写入时由 Collector（SCF 与补采）自己填写默认 `series_tag`。Storage 只校验 `series_tag` 的格式。
+
+## 3. 上层模块的改动
+
+| 模块 | 改动 |
+| --- | --- |
+| factor-mgr | 创建因子结果数据集时设置 `write_owner = moox-factor`、`view_delivery = serial`；自己建默认 View（`follow_dataset_columns = true`，来源哈希等为属性列）；启动对账时为已有数据集补齐属性与 View |
+| 因子引擎 | 写结果改为 `UpsertFields(commit_id)`；报告改为 `ReportDatasetPeriodCompleted`（`detail` 为 `factorpb.PeriodDetail`）；幂等查询改为 `GetDatasetPeriodCompleted`；触发改为订阅 `DatasetPeriodCompleted`（`source = ledger`）|
+| Collector | 数据集设置 `write_owner = moox-collector`；重采样的周期报告改为 `ReportDatasetPeriodCompleted`；A 股默认 `series_tag` 在写入方填写；去重改用 `commit_id` |
+| Strategy | `ViewDataReady` 的 `completion_kind` 改为 `source`；因子状态从 `detail` 解码（依赖 `packages/factorpb`）|
+| Monitor | 主机指标写入的去重改用 `commit_id` |
+| packages | `packages/events`：事件注册表换成 `DatasetPeriodCompleted`，删除因子状态校验；新建 `packages/factorpb`；`packages/storagepb` 同步 |
+| 服务目录 | PrimaryStore 方法改名与删除；`factor-engine`、`scf-collector` 等外部身份的白名单同步 |
+
+## 4. 数据处理
+
+项目尚未上线，不写迁移层：
+
+- 现有数据集的属性由 factor-mgr、Collector 启动对账时补齐（`write_owner`、`view_delivery`）；
+- Storage 托管的因子默认 View 改由 factor-mgr 接管：对账时把 View 属性 `managed_by` 改为 `factor-mgr`，补上 `follow_dataset_columns` 与属性列定义；
+- EventBus 中残留的旧事件（两种周期完成事件）在发布时清除对应主题，View 消费者按新事件重建（参照 `reset-view-consumers` 的流程，
+  必要时 `repair-view`）。
+
+## 5. 测试
+
+- 写入权限：只有 `write_owner` 中的 AppId 能写；不再有别名；只读身份写入被拒。
+- 幂等写入：同一 `commit_id` 相同内容成功、不同内容冲突；一次写入一个 outbox 位置；回执过期后可以再次写入。
+- 周期：`ledger` 判定与现在的账本行为一致；`producer` 报告与查询一致；`detail` 原样透传到 `ViewDataReady`。
+- View：属性列的读取；`follow_dataset_columns` 的原地扩展；`serial` / `parallel` 投递按数据集属性生效。
+- 端到端：采集 → 账本完成 → 因子触发 → 因子写结果与报告 → View 就绪 → Strategy 触发，全链路通过。
+
+## 6. 发布
+
+协议、事件、服务目录都有变化，同一个提交构建，一起发布：Storage（storage-node → storage-primary → 至少等 30 秒 → storage-view）、
+Admin、各主机 host-gateway、Monitor、Access、Collector、SCF 代码包（经 Collector 自动滚动升级）、factor-mgr、因子引擎、Strategy。
+发布时清除 EventBus 中旧事件的主题，View 按新事件重建；发布后核对：采集周期完成、因子按期产出、Strategy 按期触发。
+
+## 7. 待确认
+
+- `write_owner` 是否用网关验证过的调用方身份取代请求体里的 AppId：现在 Storage 的角色认证是「AppId + Primary 共享密钥的 HMAC」，
+  持有密钥的人可以声明任何 AppId，因此 `write_owner` 只能防误写、不能防伪造。改用网关身份更可靠，但涉及 Access 转发时如何传递原始调用方，
+  本设计先不做，单独评估。
+- `view_delivery = serial` 是否还有必要：如果把「单个事件的大小上限」作为通用的消费参数，因子结果也许可以走默认投递，届时这个属性可以删除。

@@ -1,6 +1,6 @@
 # Storage 读接口收敛设计
 
-状态：设计稿 v3（2026-10-17，吸收 Codex 评审），尚未编码。项目尚未上线，接口与协议直接修改，不考虑兼容。由[数据归档设计](数据归档设计.md)的讨论引出，归档依赖本设计；实现后以[存储](../模块/存储.md)为准。
+状态：设计稿 v4（2026-10-17），尚未编码。v4：精确读取合并为 `ReadRows`（只返回存在的行），`ReadTimeSeriesRows` 只剩时间区间与最近 N 根；删除 DataView 的按序列取根数模式；DataView 响应字段改名。项目尚未上线，接口与协议直接修改，不考虑兼容。由[数据归档设计](数据归档设计.md)的讨论引出，归档依赖本设计；实现后以[存储](../模块/存储.md)为准。
 
 ## 0. 原则
 
@@ -26,6 +26,9 @@
 | 带 selector 的区间读取扫描整个数据集的时间索引 | `pebble/history.go:244`：只要带时间范围就用时间索引，逐行过滤 selector | Collector 每批 50 个标的，5000 个标的的数据集检查一轮，同一时间范围的索引要遍历约 100 遍 |
 | 配置了 gzip 也常常不压缩 | `packages/gatewayclient/trpc.go:125`：请求体不足 1KB 时不设压缩，响应跟随请求 | 「小请求、大响应」的读取（如不带 selector 的最近 N 根、单标的区间读取）在公网上不压缩 |
 | 「history」概念外露 | `ListHistorySubjects`、`readHistoricalTimeSeriesRows`、注释与文档中的「历史读取」 | 调用方需要知道 Storage 内部有「历史索引」 |
+| 精确读取有两个入口，「存在性」单独返回 | `PrimaryStore.ReadFields` 与 `ReadTimeSeriesRows` 的 `keys` 形态（后者内部就是调前者）；DataNode `ReadFieldsWithPresence` 另外返回 `existing_keys` | 两个入口做同一件事；调用方要同时看行和存在列表才知道一行在不在 |
+| DataView 有一个没人用的按序列取根数模式 | `QueryTimeSeriesRowsReq.rows_per_series` 及配套的 `expected_input_contract_version` / `served_input_contract_version`（`view/series_window_query.go`） | Storage 以外没有调用方 |
+| DataView 响应字段命名冗长、含义分散 | `served_indexed_from/to`、`served_active_index_id/revision`、`served_series_bars`，请求里的 `expected_active_index_id/revision` | 「served / expected / active」修饰重复；`bars` 是 K 线的说法 |
 
 ### 1.1 线上核查（2026-10-17，只读）
 
@@ -58,22 +61,20 @@
 | `space_id`、`dataset_id` | 必填 |
 | `selectors` | 0–100 个；每个必须带 `subject_id` 和 `freq`（等于数据集频率），`series_tag` 可选（不带表示该标的全部序列）。**不带 selector 表示数据集的全部标的** |
 | `column_names` | 必填；返回这些列的值 |
-| `attribute_keys` | 可选；返回这些属性的值，与 `ReadFields` 的同名参数一致。View 重建按 View 的列取属性键，归档按数据集的列取 |
-| 以下三选一 | |
-| `keys` | 精确键读取，最多 1 万个（现有能力，不变） |
+| `attribute_keys` | 可选；返回这些属性的值，与 `ReadRows` 的同名参数一致。View 重建按 View 的列取属性键，归档按数据集的列取 |
+| 以下二选一 | |
 | `time_range` | 时间区间，左闭右开，起止都必须给出 |
-| `latest_per_series` | 每个序列最近 N 根，N 为 1–10000 |
+| `latest_per_series` | 每个序列最近 N 根，N 为 1–10000。按「根数」取，不需要知道时间范围；交易时段、停牌、稀疏序列下无法换算成固定时间段。目前只有 View 重建使用（View 本身就是每个序列最近若干行）；能由调用方算出时间范围的场景（归档、Monitor）一律用 `time_range` |
 | `page` | `size` 与 `cursor`；不使用页码 |
 
 返回：
 
 | 形态 | 顺序 | 分页 |
 | --- | --- | --- |
-| 精确键 | 与请求顺序一致，只返回存在的行 | 无 |
 | 时间区间 | `data_time, subject_id, series_tag` 升序 | `page.size` 1–2000（默认 1000）；`page_result.next_cursor` 非空时用它作为下一次的 `page.cursor` |
 | 每序列最近 N 根 | 按 `subject_id` 升序分组，每个序列内从新到旧 | `page.size` 1–20000（默认 20000），且一页不超过 20 万个值（行数 × (列数 + 属性数)），服务端按两者中较小的截断；同一标的可以跨页；`next_cursor` 同上 |
 
-删除：`order`（区间只有升序；最近 N 根的顺序固定）、`after_key`（由 `page.cursor` 取代）、区间读取的页码。
+删除：`keys`（精确读取统一用 2.2 的 `ReadRows`）、`order`（区间只有升序；最近 N 根的顺序固定）、`after_key`（由 `page.cursor` 取代）、区间读取的页码。
 响应删除 `served_indexed_from`、`served_indexed_to`、`complete`：它们描述的是 View 的覆盖范围，PrimaryStore 的结果总是完整的；
 DataView 的响应中保留这三个字段。
 
@@ -81,29 +82,51 @@ DataView 的响应中保留这三个字段。
 调用方原样传回即可；只能顺序向后翻页，不能跳页。
 
 区间读取的执行方式由 DataNode 决定，调用方无感：带 selector 时，在序列索引上逐个序列定位到区间起点，再按 `data_time, subject_id, series_tag` 归并输出，
-只扫描所选标的的键；不带 selector 时用时间索引。计数（2.2）复用同一段按序列遍历的代码。
+只扫描所选标的的键；不带 selector 时用时间索引。计数（2.3）复用同一段按序列遍历的代码。
 
 响应中的行（`TimeSeriesRow`）的 `attributes` 改为有类型的 `map<string, TypedValue>`，与 `RowFieldValues` 一致。
 
 `data_time` 统一按 RFC3339 输出，没有小数秒时不带小数部分（Go 的 `time.RFC3339Nano` 格式，如 `2026-10-16T12:00:00Z`），与 DataView 一致。
 
-### 2.2 `PrimaryStore.CountTimeSeriesRows`：数事实
+### 2.2 `PrimaryStore.ReadRows`：按精确键读
+
+由 `ReadFields` 改名而来，时序与记录数据都用它，是唯一的精确读取入口：
+
+- 请求：`keys`（最多 1 万个）、`column_names`、`attribute_keys`；
+- 只返回**存在的行**：一行有任意字段或属性即为存在；存在但请求的列都没有值时，返回只有键的行；不存在的键不返回。
+  「返回了就是存在」，删除响应中的 `existing_keys`；
+- 返回顺序与请求中键的顺序一致（跳过不存在的），调用方按键匹配，不依赖位置；
+- DataNode 内部对应的函数为 `ReadRows`（替代 `ReadFieldsWithPresence` 与 `ReadFields`）。
+
+### 2.3 `PrimaryStore.CountTimeSeriesRows`：数事实
 
 同样由 DataNode 回答：按标的统计区间内的时间点数（同一时间点多个 `series_tag` 只计一次，与现在的口径相同），一次最多 2000 个标的。
 DataNode 只在序列索引上按标的扫描键，不读字段值，代价与行数成正比、与列数无关。
 
 `DataView.CountTimeSeriesRows` 保留，供需要按 View 统计的场景使用。
 
-### 2.3 `DataView.QueryTimeSeriesRows`：读视图
+### 2.4 `DataView.QueryTimeSeriesRows`：读视图
 
-不变。需要「最近一段时间、倒序、按页码翻页」这类看板查询的调用方，直接调用 DataView。
+查询能力不变（过滤、排序、页码、TopN），给控制台与 Strategy 这类看板、分析查询用。调整：
 
-### 2.4 删除的接口
+- 删除 `rows_per_series` 模式及配套的 `expected_input_contract_version` / `served_input_contract_version`（`view/series_window_query.go` 与测试），
+  Storage 以外没有调用方；
+- 响应字段改名，复用已有消息：
+  - `served_indexed_from` / `served_indexed_to` → `coverage`（复用 `TimeRange`：`coverage.start_time` / `coverage.end_time`），
+    表示回答本次查询的索引覆盖的时间范围；`complete` 保留，表示请求区间是否完全落在 `coverage` 内；
+  - `served_active_index_id`、`served_active_index_revision` → `index`（新消息 `IndexVersion { index_id, revision }`）；
+    请求中的 `expected_active_index_id`、`expected_active_index_revision` → `pin`（同一消息），用于多页读取时钉住同一版索引；
+  - `served_series_bars` → `retained_rows_per_series`：View 每个序列至少保留的最近行数（即配置的保留行数）；
+    Strategy 用它与 `coverage.start_time` 一起判断活跃序列可回溯的深度。配置项 `[storage_retention] view_bars` 同步改名为 `view_rows_per_series`；
+- `SearchRecordRowsRsp` 的覆盖字段同样改为 `coverage`。
+
+### 2.5 删除的接口
 
 - `PrimaryStore.ListHistorySubjects`：由「不带 selector 的最近 N 根」覆盖（返回的就是有数据的标的及其最近数据）。
+- `PrimaryStore.ReadFields`（改名为 `ReadRows`）及 `ReadTimeSeriesRows` 的 `keys` 形态。
 - Primary 中按调用方身份分流的逻辑（`storage-view`、因子身份）和因子读取的专门校验：所有调用方使用 2.1 的同一套校验。
 
-### 2.5 内部命名
+### 2.6 内部命名
 
 对外不再出现「history」。DataNode 内部的两个索引改称**时间索引**（`0x03`，时间优先，用于区间读取与翻页）和**序列索引**
 （`0x04`，标的优先，用于最近 N 根与计数）；本次改动涉及的文件（`pebble/history.go`、`primarystore/rows_read.go`）中的函数与类型同步改名，
@@ -122,8 +145,10 @@ DataNode 只在序列索引上按标的扫描键，不读字段值，代价与�
 | CLI 数据导出与 K 线查询 | 由 View 回答，可能残缺 | 由 DataNode 回答，总是完整；删除对 `complete` 的判断，改用游标翻页 |
 | Monitor 指标曲线（`metrics/query.go` 的 `QueryService.History` → `metrics/storage.go` 的 `QueryHistorySelectors`） | 没有任何生产调用方 | 删除这条读取链，以及只为它存在的类型、依赖和测试 |
 | Monitor 主机指标（`hostmetrics/storage_reader.go`） | 倒序、按页码逐页读，由 View 回答 | 改用时间区间读取，按游标顺序翻页（不跳页），由 DataNode 回答 |
-| Monitor 行情巡检（`watchdog/market_canary.go`） | 精确键读取 | 不变 |
-| 归档 worker | — | 最近 N 根不带 selector；补读与回补用时间区间 |
+| Monitor 行情巡检（`watchdog/market_canary.go`） | `ReadTimeSeriesRows` 的 `keys` 形态 | 改调 `ReadRows`，按键匹配结果 |
+| `ReadFields` 的其他调用方（Collector `resample/storage.go`、`marketstorage/storage.go`，Monitor `storagegateway`，CLI `setup_storage.go`，View `event_apply.go`） | `ReadFields`，部分读 `existing_keys` | 改调 `ReadRows`；不再读 `existing_keys`，按「返回即存在」处理；按键匹配，不依赖位置 |
+| Strategy（`strategy/internal/input/client.go`） | 读 DataView 的 `served_indexed_*`、`served_series_bars` 等 | 改读 `coverage`、`index`、`retained_rows_per_series`；多页读取用 `pin` |
+| 归档 worker | — | 只用时间区间读取：区间由归档按执行计划算出（见[数据归档设计](数据归档设计.md)） |
 
 ## 4. 一并完成的读路径修复
 
@@ -132,7 +157,7 @@ DataNode 只在序列索引上按标的扫描键，不读字段值，代价与�
 | 编号 | 改动 |
 | --- | --- |
 | S-1 | 字段补全分块大小改为 `min(10000, 100000 / 字段数)`；最近 N 根一页 2 万行，不修必然失败 |
-| S-2 | DataNode 读字段：整个请求共用一个快照迭代器，按物理编码排序后每行一次定位、顺序读出各字段并得到存在性；属性命名空间按需查询 |
+| S-2 | DataNode `ReadRows`：整个请求共用一个快照迭代器，按物理编码排序后每行一次定位、顺序读出各字段并得到存在性；属性命名空间按需查询 |
 | S-3 | Primary 元数据快照按代共享、只读，不再每个请求深拷贝；写入校验同一数据集只查一次列映射 |
 | S-4 | Outbox 中继用列表读到的数据确定数据集范围，加锁后只确认该条仍在，去掉重复的完整解码校验 |
 | S-8 | 过期清理：由节点级写锁改为数据集级互斥；截止桶没有推进时跳过（每小时一次的清理实际每天才有活干）；后台 compaction 串行执行，不再每次起一个 goroutine。删除 `ensureHistoryIndex` 后，与之配套的 `historyBackfillMu` 一并删除 |
@@ -151,7 +176,9 @@ DataNode 只在序列索引上按标的扫描键，不读字段值，代价与�
 - 不带 selector 的最近 N 根逐页读完，覆盖数据集全部有数据的标的；多个 `series_tag` 的标的每个序列各取 N 根；一个标的跨页时既不重复也不遗漏，
   页大小与值数量上限都生效；
 - 带 selector 的区间读取（走序列索引）与不带 selector 再过滤的结果逐行一致，包括多个 `series_tag`、游标翻页；
-- 读取返回的属性与 `ReadFields` 一致，类型不丢失；View 重建后因子来源属性仍在；
+- 读取返回的属性与改造前 `ReadFields` 的结果一致，类型不丢失；View 重建后因子来源属性仍在；
+- `ReadRows` 只返回存在的行：存在但请求的列都为空时返回只有键的行，不存在的键不返回；View 事件应用的行为与改造前一致；
+- DataView 改名后的字段与 Strategy 的覆盖范围判断一致；
 - 配置 gzip 时，小请求、大响应的调用在链路上被压缩；
 - 过期清理期间，其他数据集的写入不被阻塞；截止桶未推进时不发起删除与 compaction；
 - 计数与按行读取后去重计数一致，包括多个 `series_tag` 的情况；

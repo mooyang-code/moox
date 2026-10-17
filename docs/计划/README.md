@@ -12,9 +12,10 @@
 | [网关与服务部署重构设计](网关与服务部署重构设计.md) | 架构决策依据；实际调用方、原生部署及剩余边界见当前文档 |
 | [网关与服务部署重构执行计划](网关与服务部署重构执行计划.md) | 历史阶段与现场切换方案；A/B/C 后的内部调用、Access、Monitor、页面及多个部署阶段也已实现 |
 | [秘密管理与初始化录入设计](秘密管理与初始化录入设计.md) | 设计稿第二版（决策已确认，尚未编码；已吸收 Codex 审查并按单用户个人项目收敛）：`moox.toml` 去秘密、本机一次性录入页、SSH 只用密钥、导入 Admin 后本机删除；实现后以[部署与运维](../部署与运维.md)为准 |
-| [数据归档设计](数据归档设计.md) | 设计稿 v7（尚未编码，已吸收 Codex 评审）：定时拉取替换事件式 archive；用户为数据集设定执行计划（最短 5 分钟，mgr 每秒一次的全局触发器）与开始时间（可立即开始），每次拉每个序列最近 N 根（一个间隔 + 回看 15 分钟），数据集间并发；DuckDB 暂存，分区到时间即导出、变化时重写、3 天后定稿；archive-mgr 在 control、worker 只出站部署在可配置机器上；Storage 不为归档开特例，依赖下一行的读接口收敛；实现后以[归档](../模块/归档.md)为准 |
-| [Storage 读接口收敛设计](Storage读接口收敛设计.md) | 设计稿 v3（尚未编码，含 2026-10-17 线上只读核查与 Codex 评审）：PrimaryStore 对所有调用方都读事实、数事实，DataView 读视图；删除按调用方分流、`ListHistorySubjects` 与 `after_key`，复用公共游标；一并完成[读写路径审查](../审查/2026-10-16-Storage读写路径审查.md)的 S-1～S-4、S-8～S-12；实现后以[存储](../模块/存储.md)为准 |
-| [Storage 读接口收敛与数据归档执行计划](Storage读接口收敛与数据归档执行计划.md) | 执行计划 v1（尚未编码）：分 10 个阶段，发布 A 为 Storage 读接口收敛与调用方迁移（含 S-1～S-4、S-8～S-12、删除旧归档），发布 B 为 archive-mgr、archive-worker、前端与 Monitor；逐阶段列出改动文件、测试、验收与回退 |
+| [数据归档设计](数据归档设计.md) | 设计稿 v8（尚未编码）：定时拉取替换事件式 archive；用户为数据集设定执行计划（最短 5 分钟，mgr 每秒一次的全局触发器）与开始时间（可立即开始），每次运行读取由归档算出的时间区间（上次成功运行开始前 15 分钟所在那根 K 线起，到本次运行开始），数据集间并发；DuckDB 暂存，分区到时间即导出、变化时重写、3 天后定稿；archive-mgr 在 control、worker 只出站部署在可配置机器上；Storage 不为归档开特例，依赖下一行的读接口收敛；实现后以[归档](../模块/归档.md)为准 |
+| [Storage 读接口收敛设计](Storage读接口收敛设计.md) | 设计稿 v4（尚未编码，含 2026-10-17 线上只读核查与 Codex 评审）：PrimaryStore 对所有调用方都读事实、数事实，DataView 读视图；删除按调用方分流、`ListHistorySubjects` 与 `after_key`，复用公共游标；精确读取合并为只返回存在行的 `ReadRows`；DataView 字段改名；一并完成[读写路径审查](../审查/2026-10-16-Storage读写路径审查.md)的 S-1～S-4、S-8～S-12；实现后以[存储](../模块/存储.md)为准 |
+| [Storage 去业务耦合设计](Storage去业务耦合设计.md) | 设计稿 v1（尚未编码）：Storage 不认识因子、采集与具体市场；写入权限只看 `write_owner`；`commit_id` 统一幂等写入；两种周期标记合为 `DatasetPeriodCompleted`（明细透传）；默认 View 由业务模块自己维护；投递方式由数据集属性声明 |
+| [Storage 读接口收敛与数据归档执行计划](Storage读接口收敛与数据归档执行计划.md) | 执行计划 v2（尚未编码）：分 13 个阶段，发布 A 为 Storage 读接口收敛与调用方迁移（含 S-1～S-4、S-8～S-12、删除旧归档），发布 B 为归档（mgr、worker、前端、Monitor），发布 C 为 Storage 去业务耦合；逐阶段列出改动文件、测试、验收与回退 |
 | [Console Proxy 内嵌 Caddy 执行计划](../2026-10-09-console-proxy-embedded-caddy-execution-plan.md) | 保留原路径便于已有引用；代理、Monitor 探针及 control bootstrap 已接通，历史验收记录仍按其原范围解读 |
 | [Timer 模式 Storage 写入压测报告](Timer模式Storage写入压测报告.md) | 特定配置、数据规模和环境下的历史观测，不能外推为当前版本或全部拓扑的容量保证 |
 | [Console Proxy 依赖审计数据](console-proxy-dependency-audit.json) | 历史源码基线的模块差异，不能替代当前 go.work/go.sum 或制品依赖清单 |

@@ -1,11 +1,12 @@
 # Storage 读接口收敛与数据归档执行计划
 
-状态：执行计划 v1（2026-10-17），尚未编码。
+状态：执行计划 v2（2026-10-17），尚未编码。v2：读接口收敛设计 v4（`ReadRows`、DataView 清理与改名）、归档设计 v8（按区间读取），新增发布 C（Storage 去业务耦合）。
 
 依据（下称「设计」）：
 
-- [Storage 读接口收敛设计](Storage读接口收敛设计.md) v3（下称「收敛设计」）；
-- [数据归档设计](数据归档设计.md) v7（下称「归档设计」）；
+- [Storage 读接口收敛设计](Storage读接口收敛设计.md) v4（下称「收敛设计」）；
+- [数据归档设计](数据归档设计.md) v8（下称「归档设计」）；
+- [Storage 去业务耦合设计](Storage去业务耦合设计.md) v1（下称「去耦合设计」）；
 - [Storage 读写路径审查](../审查/2026-10-16-Storage读写路径审查.md) S-1～S-12（下称「审查」）。
 
 设计中已经说明的理由不再重复，本文只写：做什么、改哪里、怎么验收、出问题怎么退。
@@ -29,24 +30,28 @@
 - **审查**：每个阶段编码完成后，用 Codex 只读审查本阶段的改动（只报实质问题），逐条核实后再修，修完补测试。
 - **生产**：发布之前对生产只做只读查询。发布按既有流程执行：备份到 `backups/<名称>/old/` → 替换二进制或配置 → `restart.sh -components <组件>` →
   用 `status.sh` 核对 ready 与 `binary_sha256`。
-- **文档**：每个阶段完成时同步更新涉及的模块文档；发布后在本文第 14 节记录与计划的差异。
+- **文档**：每个阶段完成时同步更新涉及的模块文档；发布后在本文第 15 节记录与计划的差异。
 
 ## 1. 阶段总览
 
 | 阶段 | 内容 | 依赖 | 发布 |
 | --- | --- | --- | --- |
-| 1 | Storage 协议与读路径：统一读事实、游标、不指定标的、属性、计数、序列索引区间读、S-1、S-2，删除分流与 `ListHistorySubjects` | 无 | 发布 A |
+| 1 | Storage 协议与读路径：统一读事实、游标、不指定标的、属性、计数、序列索引区间读、`ReadRows`、DataView 清理与改名、S-1、S-2，删除分流与 `ListHistorySubjects` | 无 | 发布 A |
 | 2 | Storage 资源：S-3 元数据快照、S-4 Outbox、S-8 过期清理 | 无 | 发布 A |
 | 3 | 网关客户端：S-9 配置 gzip 后总是压缩 | 无 | 发布 A |
 | 4 | 调用方迁移与清理：View 重建、因子、Collector、Monitor、CLI；删除旧归档实现；服务目录 | 1 | 发布 A |
 | 5 | 发布 A 与线上验收 | 1～4 | — |
 | 6 | archive-mgr：表、协议、执行计划与全局触发器、运行与租约、接口、维护；服务目录、Access 白名单、部署单元 | 4 | 发布 B |
-| 7 | archive-worker：读取与覆盖检查、DuckDB 暂存、导出与定稿、节奏与并发、维护、CLI、部署脚本 | 5、6 | 发布 B |
+| 7 | archive-worker：按区间读取、DuckDB 暂存、导出与定稿、节奏与并发、维护、CLI、部署脚本 | 5、6 | 发布 B |
 | 8 | 前端：数据归档页 | 6 | 发布 B |
 | 9 | Monitor 告警与文档 | 6、7 | 发布 B |
 | 10 | 发布 B 与线上验收 | 5～9 | — |
+| 11 | Storage 去业务耦合：写入方、幂等写入、周期完成、就绪事件、View 资源与投递、元数据校验 | 5 | 发布 C |
+| 12 | 上层模块随去耦合迁移：factor-mgr、因子引擎、Collector、Strategy、Monitor、`packages/events`、`packages/factorpb` | 11 | 发布 C |
+| 13 | 发布 C 与线上验收 | 11、12 | — |
 
 阶段 1、2、3 可以并行开发；阶段 4 依赖阶段 1 的协议；阶段 6、8 可以与阶段 4、5 并行；阶段 7 要用到发布 A 之后的线上 Storage 做联调。
+发布 C 与发布 B 互不依赖，可以在发布 A 之后任选先后；两者都改服务目录，各自做一次协调发布。
 
 ## 2. 阶段 1：Storage 协议与读路径
 
@@ -56,22 +61,23 @@
 
 | 文件 | 改动 |
 | --- | --- |
-| `rows.proto` | `ReadTimeSeriesRowsReq`：删除 `order`、`after_key`；新增 `attribute_keys`（`repeated string`）；`latest_per_series` 的注释改为新语义（可不指定标的、按页返回）。`page` 只用 `size` 与 `cursor` |
+| `rows.proto` | `ReadTimeSeriesRowsReq`：删除 `keys`、`order`、`after_key`；新增 `attribute_keys`（`repeated string`）；`latest_per_series` 的注释改为新语义（可不指定标的、按页返回）。`page` 只用 `size` 与 `cursor` |
 | `rows.proto` | `ReadTimeSeriesRowsRsp`：删除 `served_indexed_from`、`served_indexed_to`、`complete` |
 | `rows.proto` | `TimeSeriesRow.attributes` 改为 `map<string, TypedValue>`（DataView 的查询响应复用这个消息，一起变化） |
 | `rows.proto` | 删除 `ListHistorySubjectsReq` / `ListHistorySubjectsRsp` |
-| `primary_store.proto` | 删除 `rpc ListHistorySubjects` |
-| `data_node.proto` | 删除 `rpc ListHistorySubjects`；新增 `rpc CountTimeSeriesRows`（Primary 转给 DataNode）；新增内部消息 `RowsCursor`（区间读取：最后一行的键；最近 N 根：标的、频率、序列、续读时间、该序列已返回根数），只用于编码游标，不出现在公开请求中 |
-| `view.proto` | 不改：`QueryTimeSeriesRowsRsp` 自带 `served_indexed_from`、`served_indexed_to`、`complete` 等覆盖范围字段，只随 `TimeSeriesRow` 的属性类型一起变化 |
+| `primary_store.proto` | 删除 `rpc ListHistorySubjects`；`rpc ReadFields` 改名为 `ReadRows`（请求、响应消息同步改名），响应删除 `existing_keys` |
+| `data_node.proto` | 删除 `rpc ListHistorySubjects`；`rpc ReadFields` 改名为 `ReadRows`，响应删除 `existing_keys`；新增 `rpc CountTimeSeriesRows`（Primary 转给 DataNode）；新增内部消息 `RowsCursor`（区间读取：最后一行的键；最近 N 根：标的、频率、序列、续读时间、该序列已返回根数），只用于编码游标，不出现在公开请求中 |
+| `view.proto` | `QueryTimeSeriesRowsReq`：删除 `rows_per_series`、`expected_input_contract_version`；`expected_active_index_id/revision` 合为 `pin`（新消息 `IndexVersion { index_id, revision }`）。`QueryTimeSeriesRowsRsp`：`served_indexed_from/to` 合为 `coverage`（`TimeRange`），`served_active_index_id/revision` 合为 `index`（`IndexVersion`），`served_series_bars` 改为 `retained_rows_per_series`，删除 `served_input_contract_version`；`SearchRecordRowsRsp` 的覆盖字段同样改为 `coverage` |
+| 配置 | `[storage_retention] view_bars` 改名为 `view_rows_per_series`：`packages/storagepolicy`、`moox.toml.example`、CLI 的策略渲染与 Storage 配置加载同步 |
 
 生成：`make -C modules/storage/proto`，提交 `storagegen` 的变化。
 
 ### 2.2 PrimaryStore（`internal/service/primarystore`）
 
 - `rows_read.go`：
-  - `ReadTimeSeriesRows` 只保留两条路：带 `keys` 的走现有精确读取（`ReadFields`），其余全部转给 DataNode；
+  - `ReadTimeSeriesRows` 全部转给 DataNode；精确读取由 `ReadRows`（原 `ReadFields`）负责，只返回存在的行；
     删除 `storage-view` 和因子身份的分流、`isFactorHistoryRead` / `validateFactorHistoryRead`、转给 View 的 `readTimeSeriesView`；
-  - 新增统一校验 `validateTimeSeriesRead`：`column_names` 必填；`keys` / `time_range` / `latest_per_series` 三选一；selector 0–100 个，
+  - 新增统一校验 `validateTimeSeriesRead`：`column_names` 必填；`time_range` / `latest_per_series` 二选一；selector 0–100 个，
     每个带 `subject_id` 与等于数据集频率的 `freq`；区间必须有起止；区间页大小 1–2000、最近 N 根页大小 1–20000；N 为 1–10000；拒绝页码；
   - `CountTimeSeriesRows` 改为转给 DataNode，不再依赖 View；
   - 删除 `ListHistorySubjects`；`readHistoricalTimeSeriesRows` 改名为 `readDataNodeRows`。
@@ -90,8 +96,8 @@
   一页不超过 `page.size` 行，也不超过 20 万个值（行数 × (列数 + 属性数)），先到为止；同一标的可以跨页，续读位置写入 `RowsCursor`；
 - **计数**：在序列索引上按标的扫描键，同一时间点多个 `series_tag` 只计一次（同一标的的各序列按时间归并去重），不读值；
 - **字段与属性补全（S-1、S-2、S-11）**：
-  - 重写 `ReadFieldsWithPresence`：整个请求用一个快照、一个迭代器；键按物理编码排序后逐行 `SeekGE` 行前缀，顺序 `Next` 取字段并得到存在性；
-    请求了 `attribute_keys` 或这一行没有字段时，再定位属性命名空间；最后按原顺序返回；
+  - `ReadFieldsWithPresence` 与 `ReadFields` 合并重写为 `ReadRows`：整个请求用一个快照、一个迭代器；键按物理编码排序后逐行 `SeekGE` 行前缀，
+    顺序 `Next` 取字段并得到存在性；请求了 `attribute_keys` 或这一行没有字段时，再定位属性命名空间；只返回存在的行，按请求顺序；
   - 分块大小改为 `min(10000, 100000 / (字段数 + 属性数))`；
   - 组装响应时带上有类型的属性；
 - **删除**：`ListHistorySubjects`、`ensureHistoryIndex`、`backfillHistoryIndex`、`backfillHistoryIndexSync`、`historyMaterializedMarker` 与
@@ -101,7 +107,9 @@
 
 ### 2.4 View（`internal/service/view`、`viewindex`）
 
-- `view/query.go`：行属性不再转成字符串（删除 `rowAttributesToStrings`），直接返回有类型的属性。
+- `view/query.go`：行属性不再转成字符串（删除 `rowAttributesToStrings`），直接返回有类型的属性；响应字段按 2.1 改名。
+- 删除 `view/series_window_query.go`（`rows_per_series` 模式）及其测试、`viewindex` 中只为它服务的部分。
+- `view/event_apply.go`：改调 `ReadRows`，按「返回即存在」判断行是否存在，删除对 `existing_keys` 的处理。
 - View 重建的 Primary 读取点（`build.go`、`primary_retry.go`、`maintenance.go`）改用统一接口，逐个点核对：
   - 按标的的最近 N 根：改为不带 selector、带列和 `attribute_keys`（`factorAttributeKeys` 的结果）的最近 N 根，按 `next_cursor` 逐页读取，
     一次拿到值和属性；删除 `listBackfillSubjects` 中仅为 `ListHistorySubjects` 服务的部分、`enrichBackfillRows` 的补字段步骤、
@@ -126,7 +134,7 @@
 
 ### 2.6 验收
 
-- `go test -count=1 ./modules/storage/...` 全部通过；benchmark 结果记入第 14 节。
+- `go test -count=1 ./modules/storage/...` 全部通过；benchmark 结果记入第 15 节。
 - 本阶段不单独发布，随发布 A 一起上线。
 
 ## 3. 阶段 2：Storage 资源
@@ -163,7 +171,7 @@
 
 ### 3.4 验收
 
-- `go test -count=1 -race ./modules/storage/...` 通过；benchmark 结果记入第 14 节。随发布 A 一起上线。
+- `go test -count=1 -race ./modules/storage/...` 通过；benchmark 结果记入第 15 节。随发布 A 一起上线。
 
 ## 4. 阶段 3：网关客户端压缩
 
@@ -185,7 +193,9 @@
 | Monitor 主机指标 | `modules/monitor/internal/hostmetrics/storage_reader.go` | 改为区间升序读取、游标顺序翻页，在内存中保留区间内最后 `limit` 条，返回顺序与现在一致 |
 | CLI | `modules/cli/internal/command/data.go`、`data_kline.go`、`data_remote.go` 及测试 | 删除对 `complete` 的判断；游标翻页；导出达到 `--page-size` 上限时停止并提示 |
 | 主机网关 e2e 辅助程序 | `modules/hostgateway/cmd/e2e-helper/main.go` | 按新请求形态调整 |
-| 前端 | `web/src/api/storage/types.ts` 及使用行属性的页面（如 `views/factor/results/results-model.ts`） | 行属性改为有类型的值，展示时按类型转成文本；放在阶段 8 一起构建 |
+| `ReadFields` 的调用方 | Collector `resample/storage.go`、`marketstorage/storage.go`；Monitor `storagegateway/client.go`、`watchdog/market_canary.go`（原 `keys` 形态）；CLI `setup_storage.go` | 改调 `ReadRows`；按键匹配结果，不依赖位置；不再读 `existing_keys` |
+| Strategy | `modules/strategy/internal/input/client.go` | DataView 字段改名：`coverage`、`index`、`retained_rows_per_series`；多页读取用 `pin` |
+| 前端 | `web/src/api/storage/types.ts` 及使用行属性、DataView 覆盖字段的页面（如 `views/factor/results/results-model.ts`） | 行属性改为有类型的值，展示时按类型转成文本；覆盖字段改名；放在阶段 8 一起构建 |
 
 ### 5.2 删除旧归档实现
 
@@ -330,8 +340,8 @@ internal/worker/
   client/        经 Access 的网关客户端（caller archive-worker）、Storage 角色认证（AppId archive）
   lease/         心跳、worker 租约、领取运行、进度与完成上报
   pacing/        避让窗口（每分钟 25–55 秒、整点 :58～:04）、请求间隔、全局带宽令牌桶、每 DataNode 并发
-  reader/        最近 N 根与区间读取（游标翻页）、覆盖检查与补读、保留期截断
-  staging/       DuckDB 暂存：建表与增列、批量比对写入、series_state / task_state / partition_state
+  reader/        读取区间的计算（包含 W − L 的那根 K 线起，到本次运行开始）、区间读取（游标翻页）、保留期截断
+  staging/       DuckDB 暂存：建表与增列、批量比对写入、task_state / partition_state
   export/        分区收盘时间（复用 packages/frequency 的 BarEnd）、导出、重写、定稿、补拉读回、_dataset.json、预览
   backfill/      首次回补（按分区推进）
   maintain/      每天的维护：CHECKPOINT、重建 DuckDB 文件、清理已删除任务、临时目录
@@ -343,12 +353,12 @@ cmd/cli/         export、verify、reindex、status
 
 | 逻辑 | 要点 | 设计 |
 | --- | --- | --- |
-| 覆盖检查 | 要求起点 = `last_time − L`，无 `last_time` 时用 `W − L`；满 N 根且最早一根晚于要求起点就补读；同批合并读取、按需切段；保留期截止处截断并上报无法补齐 | 归档设计第 4 节第 4 步 |
-| 写入暂存 | Appender 写临时表 → 与暂存表按主键比对（`IS DISTINCT FROM`）→ 只写新增和变化的行 → 同一事务更新 `last_time` 与 `last_changed_at` | 第 8.2 节 |
+| 读取区间 | 起点 = 包含 `W − L` 的那根 K 线的开盘时间（复用 `packages/frequency`）；首次运行取回补起点或「本次开始 − 执行间隔」；终点 = 本次运行开始；保留期截止处截断并上报无法补齐 | 归档设计第 4 节第 1 步 |
+| 写入暂存 | Appender 写临时表 → 与暂存表按主键比对（`IS DISTINCT FROM`）→ 只写新增和变化的行 → 同一事务更新 `last_changed_at` | 第 8.2 节 |
 | 导出与重写 | 运行开始 ≥ 分区收盘时间 + L，且「到时间未导出」或 `last_changed_at > exported_at`；`COPY ... TO '<文件>.partial'` → fsync → rename → fsync 目录 → sha256 | 第 8.3 节 |
-| 定稿 | 运行开始 ≥ 分区收盘时间 + L + 暂存保留期，且无待导出变化；删除暂存行；定稿边界之前的行在定时运行中丢弃 | 第 8.3 节 |
+| 定稿 | 运行开始 ≥ 分区收盘时间 + L + 暂存保留期，且无待导出变化；删除暂存行 | 第 8.3 节 |
 | 补拉读回 | `read_csv(..., union_by_name = true, allow_quoted_nulls = false)` | 第 8.3 节 |
-| 扫描水位 | 一次运行完整成功后，`W` 推进到本次运行的开始时间 | 第 4 节第 6 步 |
+| 读取水位 | 定时或立即运行完整成功后，`W` 推进到本次运行的开始时间；补拉区间不推进 | 第 4 节第 4 步 |
 | 节奏 | 请求只在允许的时间窗发起；全部并发运行共享 512KB/s 令牌桶；同一运行请求间隔 ≥ 200ms；每 DataNode ≤ 2 个运行 | 第 6 节 |
 | 磁盘保护 | 可用空间低于 5GB 停止领取，心跳上报 | 第 6.1 节 |
 
@@ -361,10 +371,11 @@ cmd/cli/         export、verify、reindex、status
 
 ### 8.4 测试
 
-- 覆盖检查：评审中的两个场景必须有用例：
-  - 5 分钟任务、N = 20，一次运行因整点避让推迟到 :04，推迟期间补写的行仍被读到；
-  - worker 停机 4 小时期间新增标的，恢复后从 `W − L` 补读到它的早期数据；
-  - 另有：中途失败后续跑、首次运行有 / 无回补起点、超出保留期截断。
+- 读取区间：评审中的两个场景必须有用例：
+  - 5 分钟任务，一次运行因整点避让推迟到 :04，推迟期间补写的行仍在下一次的区间内被读到；
+  - worker 停机 4 小时期间新增标的，恢复后的区间覆盖它的早期数据；
+  - 另有：每根 K 线最后一次被读到时距收盘至少 L（随机生成计划时刻与推迟、失败，逐根验证）；中途失败后从同一起点重读且不重复写入；
+    首次运行有 / 无回补起点；停更标的不再被读到；1h、1d、1w、1mo 等频率下「包含 W − L 的那根」的开盘时间；超出保留期截断。
 - 导出与定稿：8 月最后一根周线（08-31 开盘）不会在 09-07 之前定稿；导出前失败留下的变化在下一次运行导出；
   首次回补遇到月分区时，同一个月的多天不会互相覆盖；当前分区不会被提前定稿。
 - CSV：导出 → 读回 → 再导出逐字节一致（含默认序列的 `""`、缺失值、增列后的旧文件）。
@@ -431,8 +442,8 @@ cmd/cli/         export、verify、reindex、status
   - Access 日志中归档请求的时间分布：没有落在每分钟第 0–25 秒和整点 :58～:04 的请求；
   - 读取速率不超过 512KB/s，响应已压缩；
   - 过 UTC 0 点后，下一次运行（次日 00:34 UTC）导出前一天的文件；文件行数与 DataNode 读取一致；3 天后定稿。
-- 建一个每 5 分钟的任务：计划时刻误差在几秒内；撞上整点避让的那次推迟后，回看区间被补读（看运行记录的补读标的数）。
-- 停 worker 超过一个执行间隔后恢复：覆盖检查补齐中间的数据，运行记录显示补读。
+- 建一个每 5 分钟的任务：计划时刻误差在几秒内；撞上整点避让而推迟的那次运行之后，下一次运行的读取区间仍从推迟那次的开始时间往前 15 分钟起（看运行记录的读取区间）。
+- 停 worker 超过一个执行间隔后恢复：恢复后第一次运行的读取区间从停机前最后一次成功运行算起，中间的数据全部读到。
 - stockcn 1m 每天任务：17:04 运行，当天文件约 17:25 可用。
 - Monitor：停 worker 30 分钟，`archive:worker` 告警触发；恢复后自动恢复。
 
@@ -441,7 +452,49 @@ cmd/cli/         export、verify、reindex、status
 归档是新增模块：出问题时先停用任务、停掉 worker，不影响其他模块。需要撤下 archive-mgr 时，服务目录要用回退后的同一提交重新发布
 Admin、Monitor、各 host-gateway 与 Access。归档目录与暂存库保留，不删除数据。
 
-## 12. 风险与检查点
+## 12. 阶段 11～13：发布 C（Storage 去业务耦合）
+
+对应去耦合设计第 2～6 节。
+
+### 12.1 阶段 11：Storage
+
+| 范围 | 文件 | 改动 |
+| --- | --- | --- |
+| 写入方 | `primarystore/service.go`、`period.go`、`marker.go` | 删除 `isFactorAppID`、`isOwnedAppID`、`collectorWritableDataset`、`validateCollectorPeriodDataset`、`rejectCollectorPeriodWriteCredential` 与按 `dataset_role` / `owner_module` 的分支；统一为「调用方 AppId ∈ 数据集 `write_owner`」 |
+| 幂等写入 | `primary_store.proto`、`data_node.proto`、`pebble/factor_rows.go`、`pebble/store.go` | `UpsertFields`、`CommitTimeSeriesBatch` 增加 `commit_id`（复用现有提交回执机制）；删除 `WriteFactorRows`、`source_event_id` 与已处理来源事件标记、`write_kind` |
+| 周期完成 | `primary_store.proto`、`data_node.proto`、`dataset_markers.proto`、`packages/storagepb`、`pebble/marker_*.go`、`datanode/marker.go`、`primarystore/marker.go` | 新增 `ReportDatasetPeriodCompleted`、`GetDatasetPeriodCompleted` 与事件 `DatasetPeriodCompleted`；账本判定改发新事件（`source = ledger`）；删除两种旧事件与五个旧接口 |
+| 就绪事件 | `view/period_event_apply.go`、`view/event_apply.go`、`view/data_ready.go` | `ViewDataReady` 的 `completion_kind` 改为 `source`，`factors[]` 改为透传 `detail_type` / `detail` |
+| View 资源 | `catalog/factor_result_view.go`、`catalog/metadata_catalog.go`、`metadata/sqlite/crud_dataset.go`、`view/maintenance_schema_extension.go`、`view/event_apply.go` | 删除托管默认 View；View 列支持「来源为属性」；`follow_dataset_columns` 驱动原地扩展；删除 `factorAttributeKeys` |
+| 投递 | `view/inventory_reconciler.go`、`view/eventconsumer/delivery_policy.go`、`config/loader.go`、`config/storage.yaml` | 按数据集属性 `view_delivery` 选择 `parallel` / `serial` 模板；删除 `dataset_factor_` 前缀规则；分区名改为 `parallel`、`serial`、`metrics` |
+| 元数据校验 | `catalog/validate.go` | 删除 `dataset_role` 取值、`dataset_factor_` 前缀、`factor_output` 显示名规则；新增 `write_owner` 非空与 `view_delivery`、`follow_dataset_columns` 取值校验 |
+| 数据规范 | `primarystore/service.go` | 删除 `normalizeStockCNSeriesTags` |
+| 其他 | `observability/view_metrics.go`、`cmd/cli` | 标签与维护命令去掉业务命名和分支 |
+
+测试见去耦合设计第 5 节；另外全仓 `rg -i 'factor|collector|stockcn|raw_collection|kline'` 在 `modules/storage` 的非测试代码中只剩通用含义（如注释中的举例），逐条核对。
+
+### 12.2 阶段 12：上层模块
+
+| 模块 | 文件（主要） | 改动 |
+| --- | --- | --- |
+| `packages/factorpb`（新建） | `period_detail.proto` | `PeriodDetail`（原 `FactorPeriodState` 列表）与校验，从 `packages/events` 移来 |
+| `packages/events` | 事件注册表 | 换成 `DatasetPeriodCompleted`；删除因子状态校验 |
+| factor-mgr | 数据集与 View 维护 | `write_owner = moox-factor`、`view_delivery = serial`；自己建默认 View（`follow_dataset_columns = true`、属性列）；启动对账补齐已有数据集与 View |
+| 因子引擎 | `internal/storageio`、触发与上报 | `UpsertFields(commit_id)`；`ReportDatasetPeriodCompleted` 带 `PeriodDetail`；`GetDatasetPeriodCompleted`；订阅 `DatasetPeriodCompleted`（`source = ledger`） |
+| Collector | 任务结果、`marketstorage`、`resample`、SCF 写入 | `write_owner = moox-collector`；重采样报告改为 `ReportDatasetPeriodCompleted`；A 股默认 `series_tag` 在写入方填写；去重用 `commit_id` |
+| Strategy | `internal/trigger`、`internal/readiness` | `completion_kind` 改为 `source`；因子状态从 `detail` 解码 |
+| Monitor | `hostmetrics/storage_writer.go` | 去重用 `commit_id` |
+| 服务目录 | `catalog.yaml` | PrimaryStore 方法改名与删除；`factor-engine`、`scf-collector` 等外部身份白名单同步 |
+
+### 12.3 阶段 13：发布 C 与验收
+
+- 同一提交构建：Storage 三个角色、Admin、各主机 host-gateway、Monitor、Access、Collector（SCF 代码包随 Collector 自动滚动升级）、factor-mgr、因子引擎、Strategy。
+- 顺序：storage-node → storage-primary → 至少等 30 秒 → storage-view → Admin → control 的 host-gateway → Monitor → 其他组件；
+  发布时清除 EventBus 中两种旧周期事件的主题，View 消费者按新事件重建（参照 `reset-view-consumers` 的流程，必要时 `repair-view`）。
+- 验收：采集周期按期完成（`DatasetPeriodCompleted`，`source = ledger`）；因子按期产出并报告（`source = producer`）；
+  View 就绪事件正常，Strategy 按期触发；factor-mgr 接管的默认 View 加列后原地扩展；非 `write_owner` 的写入被拒。
+- 回退：同一提交的全部组件换回备份；EventBus 主题已清除，回退后由旧代码重新产生旧事件。
+
+## 13. 风险与检查点
 
 | 风险 | 检查点 |
 | --- | --- |
@@ -452,15 +505,17 @@ Admin、Monitor、各 host-gateway 与 Access。归档目录与暂存库保留�
 | DuckDB 资源占用（暂存库、临时目录） | 专用临时目录与内存上限；心跳上报暂存库大小；每天维护重建 |
 | worker 时钟偏差导致避让失效 | 部署脚本检查 NTP 同步状态；发布 B 验收看 Access 日志时间分布 |
 | 编译机断电断网超过线上保留期 | 「接近保留期」告警（任务异常）；crypto 1m 保留 7 天，提前 2 天告警 |
-| 服务目录两次协调发布 | 每次都按 Admin → host-gateway → Monitor 的顺序紧接着换，并核对网关观测中的 hash |
+| 服务目录三次协调发布（A、B、C） | 每次都按 Admin → host-gateway → Monitor 的顺序紧接着换，并核对网关观测中的 hash |
+| 去耦合后事件协议整体替换 | 发布 C 前在隔离环境演练「清除旧主题 → View 按新事件重建 → 因子与策略按期运行」 |
+| factor-mgr 接管默认 View 时与 Storage 原有托管状态冲突 | 对账逻辑先读取现有 View 属性再改写；发布 C 的验收中检查每个因子结果数据集的默认 View |
 
-## 13. 交付物清单
+## 14. 交付物清单
 
-- 代码：阶段 1～9 各自的提交；生成代码；schema 变更通过格式校验。
-- 测试与基线：阶段 1、2 的 benchmark 结果（改造前后对比）记入第 14 节。
+- 代码：阶段 1～12 各自的提交；生成代码；schema 变更通过格式校验。
+- 测试与基线：阶段 1、2 的 benchmark 结果（改造前后对比）记入第 15 节。
 - 文档：第 5.4 节与第 10 节列出的模块文档；设计文档的状态改为「已实施」并补充与设计的差异。
 - 运维：`deploy-archive-worker.sh`；发布 A、B 的备份目录与 sha256 记录。
 
-## 14. 实施记录
+## 15. 实施记录
 
 （按阶段记录与计划的差异、benchmark 结果和线上验收结果。）
