@@ -32,6 +32,8 @@ const (
 	DefaultViewBars = 5000
 
 	maxBars = 1_000_000
+	// maxViewBars 是 View 每序列保留行数的上限，与读接口单次 latest_per_series 的上限一致，重建回填才能兑现配置。
+	maxViewBars = 10_000
 )
 
 // Policy is the content of storage-policy.json.
@@ -267,8 +269,8 @@ func (p Policy) normalized() (Policy, error) {
 }
 
 func (v View) validate() error {
-	if v.Bars == 0 || v.Bars > maxBars {
-		return fmt.Errorf("view.bars must be between 1 and %d", maxBars)
+	if v.Bars == 0 || v.Bars > maxViewBars {
+		return fmt.Errorf("view.bars must be between 1 and %d", maxViewBars)
 	}
 	if v.TrimBars <= v.Bars || v.TrimBars > maxBars {
 		return fmt.Errorf("view.trim_bars must be greater than view.bars and at most %d", maxBars)
