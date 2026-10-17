@@ -1337,6 +1337,8 @@ func TestEnableAllReenablesTimersAfterDisableWithoutWaitingForRounds(t *testing.
 	require.True(t, done)
 	for name, patch := range h.cloud.patches {
 		require.True(t, patch.GetTimerEnabled(), name)
+		// 云端要求启用定时器的配置带受管环境变量，否则提交被拒绝。
+		require.NotEmpty(t, patch.GetManagedEnvironment()["MOOX_FETCH_TIMEOUT_SECONDS"], name)
 	}
 	require.True(t, r.lastVerified.IsZero())
 

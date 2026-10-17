@@ -175,7 +175,12 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 		if !ok || !timerNeedsRepair(node.Metadata, function.Cron) {
 			continue // 缺失的函数交给对账重建
 		}
-		patches = append(patches, &cloudnodepb.NodeRuntimeConfigPatch{NodeId: name, TimerEnabled: true, TimerCron: function.Cron})
+		// 启用定时器的配置必须带受管环境变量（云端校验 MOOX_FETCH_TIMEOUT_SECONDS 等），与对账修复用同一份。
+		environment, envErr := r.functionEnvironment(function.Region, function.Plan)
+		if envErr != nil {
+			return false, fmt.Errorf("function %s: %w", name, envErr)
+		}
+		patches = append(patches, &cloudnodepb.NodeRuntimeConfigPatch{NodeId: name, ManagedEnvironment: environment, TimerEnabled: true, TimerCron: function.Cron})
 	}
 	if len(patches) == 0 {
 		r.lastVerified = time.Time{}
