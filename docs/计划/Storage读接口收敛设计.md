@@ -1,6 +1,6 @@
 # Storage 读接口收敛设计
 
-状态：设计稿 v2（2026-10-16），尚未编码。项目尚未上线，接口与协议直接修改，不考虑兼容。由[数据归档设计](数据归档设计.md)的讨论引出，归档依赖本设计；实现后以[存储](../模块/存储.md)为准。
+状态：设计稿 v3（2026-10-17，吸收 Codex 评审），尚未编码。项目尚未上线，接口与协议直接修改，不考虑兼容。由[数据归档设计](数据归档设计.md)的讨论引出，归档依赖本设计；实现后以[存储](../模块/存储.md)为准。
 
 ## 0. 原则
 
@@ -22,6 +22,9 @@
 | 自定义游标 | `ReadTimeSeriesRowsReq.after_key`：调用方自己把最后一行的键编码成 `RowKey` 再传回（因子 `storageio/read.go`、View `build.go` 的 `marshalTimeSeriesHistoryCursor`） | 调用方要理解内部键结构；公共分页里已有 `cursor` / `next_cursor` 却没用 |
 | 区间读取仍保留页码分页 | DataNode `pageHistory`：页码偏移超过 1 万直接拒绝 | 两种分页并存，页码分页在大区间上不可用 |
 | 「先取键、再补字段」两次往返 | View 重建：`latest_per_series` 不带列，只拿键，再调 `ReadFields` 补字段 | 多一次往返，多一个概念 |
+| 读取丢失属性、属性类型退化 | DataNode 历史读取补字段时不读属性（`pebble/history.go:140`）；`TimeSeriesRow.attributes` 是字符串映射（`rows.proto:91`）；View 重建靠第二步 `ReadFields` 带 `AttributeKeys` 补回因子来源属性（`view/build.go:847`） | 合并成一次读取时必须同时返回有类型的属性，否则 View 重建会丢掉来源属性 |
+| 带 selector 的区间读取扫描整个数据集的时间索引 | `pebble/history.go:244`：只要带时间范围就用时间索引，逐行过滤 selector | Collector 每批 50 个标的，5000 个标的的数据集检查一轮，同一时间范围的索引要遍历约 100 遍 |
+| 配置了 gzip 也常常不压缩 | `packages/gatewayclient/trpc.go:125`：请求体不足 1KB 时不设压缩，响应跟随请求 | 「小请求、大响应」的读取（如不带 selector 的最近 N 根、单标的区间读取）在公网上不压缩 |
 | 「history」概念外露 | `ListHistorySubjects`、`readHistoricalTimeSeriesRows`、注释与文档中的「历史读取」 | 调用方需要知道 Storage 内部有「历史索引」 |
 
 ### 1.1 线上核查（2026-10-17，只读）
@@ -55,6 +58,7 @@
 | `space_id`、`dataset_id` | 必填 |
 | `selectors` | 0–100 个；每个必须带 `subject_id` 和 `freq`（等于数据集频率），`series_tag` 可选（不带表示该标的全部序列）。**不带 selector 表示数据集的全部标的** |
 | `column_names` | 必填；返回这些列的值 |
+| `attribute_keys` | 可选；返回这些属性的值，与 `ReadFields` 的同名参数一致。View 重建按 View 的列取属性键，归档按数据集的列取 |
 | 以下三选一 | |
 | `keys` | 精确键读取，最多 1 万个（现有能力，不变） |
 | `time_range` | 时间区间，左闭右开，起止都必须给出 |
@@ -67,13 +71,19 @@
 | --- | --- | --- |
 | 精确键 | 与请求顺序一致，只返回存在的行 | 无 |
 | 时间区间 | `data_time, subject_id, series_tag` 升序 | `page.size` 1–2000（默认 1000）；`page_result.next_cursor` 非空时用它作为下一次的 `page.cursor` |
-| 每序列最近 N 根 | 按 `subject_id` 升序分组，每个序列内从新到旧 | 按标的分页：一页最多 2 万行，同一标的不拆到两页；`next_cursor` 同上 |
+| 每序列最近 N 根 | 按 `subject_id` 升序分组，每个序列内从新到旧 | `page.size` 1–20000（默认 20000），且一页不超过 20 万个值（行数 × (列数 + 属性数)），服务端按两者中较小的截断；同一标的可以跨页；`next_cursor` 同上 |
 
 删除：`order`（区间只有升序；最近 N 根的顺序固定）、`after_key`（由 `page.cursor` 取代）、区间读取的页码。
 响应删除 `served_indexed_from`、`served_indexed_to`、`complete`：它们描述的是 View 的覆盖范围，PrimaryStore 的结果总是完整的；
 DataView 的响应中保留这三个字段。
 
-游标由服务端生成，内容是不透明的字符串（内部为最后一行的键或下一个标的），调用方原样传回即可；只能顺序向后翻页，不能跳页。
+游标由服务端生成，内容是不透明的字符串（区间读取为最后一行的键；最近 N 根为当前标的、序列、续读位置和该序列已返回的根数），
+调用方原样传回即可；只能顺序向后翻页，不能跳页。
+
+区间读取的执行方式由 DataNode 决定，调用方无感：带 selector 时，在序列索引上逐个序列定位到区间起点，再按 `data_time, subject_id, series_tag` 归并输出，
+只扫描所选标的的键；不带 selector 时用时间索引。计数（2.2）复用同一段按序列遍历的代码。
+
+响应中的行（`TimeSeriesRow`）的 `attributes` 改为有类型的 `map<string, TypedValue>`，与 `RowFieldValues` 一致。
 
 `data_time` 统一按 RFC3339 输出，没有小数秒时不带小数部分（Go 的 `time.RFC3339Nano` 格式，如 `2026-10-16T12:00:00Z`），与 DataView 一致。
 
@@ -107,10 +117,10 @@ DataNode 只在序列索引上按标的扫描键，不读字段值，代价与�
 | 调用方 | 现在 | 改为 |
 | --- | --- | --- |
 | 因子引擎、factor-mgr（`factor/internal/storageio`） | 区间读取 + `after_key`，走因子专用分流 | 同一个接口，`page.cursor` 翻页；行为不变 |
-| storage-view 重建（`view/build.go`） | `ListHistorySubjects` 列标的，再逐个标的取最近 N 根（只取键），再 `ReadFields` 补字段 | 不带 selector 的最近 N 根，带上列，按 `next_cursor` 逐页读取，一次拿到值；删除 `marshalTimeSeriesHistoryCursor` 和补字段步骤 |
+| storage-view 重建（`view/build.go`） | `ListHistorySubjects` 列标的，再逐个标的取最近 N 根（只取键），再 `ReadFields` 补字段和来源属性 | 不带 selector 的最近 N 根，带上列和 `attribute_keys`（`factorAttributeKeys` 的结果），按 `next_cursor` 逐页读取，一次拿到值和属性；删除 `marshalTimeSeriesHistoryCursor` 和补字段步骤 |
 | Collector 检查与补采（`klinecheck`） | 计数与读行都由 View 回答 | 接口不变，改由 DataNode 回答；超出 View 覆盖范围的历史扫描从此有效。读行改用 `page.cursor` |
 | CLI 数据导出与 K 线查询 | 由 View 回答，可能残缺 | 由 DataNode 回答，总是完整；删除对 `complete` 的判断，改用游标翻页 |
-| Monitor 指标曲线（`metrics/storage.go`） | 倒序、页码、可以不给起点，由 View 回答 | 改用最近 N 根：每条曲线取最近 N 个点，由 DataNode 回答 |
+| Monitor 指标曲线（`metrics/query.go` 的 `QueryService.History` → `metrics/storage.go` 的 `QueryHistorySelectors`） | 没有任何生产调用方 | 删除这条读取链，以及只为它存在的类型、依赖和测试 |
 | Monitor 主机指标（`hostmetrics/storage_reader.go`） | 倒序、按页码逐页读，由 View 回答 | 改用时间区间读取，按游标顺序翻页（不跳页），由 DataNode 回答 |
 | Monitor 行情巡检（`watchdog/market_canary.go`） | 精确键读取 | 不变 |
 | 归档 worker | — | 最近 N 根不带 selector；补读与回补用时间区间 |
@@ -125,26 +135,35 @@ DataNode 只在序列索引上按标的扫描键，不读字段值，代价与�
 | S-2 | DataNode 读字段：整个请求共用一个快照迭代器，按物理编码排序后每行一次定位、顺序读出各字段并得到存在性；属性命名空间按需查询 |
 | S-3 | Primary 元数据快照按代共享、只读，不再每个请求深拷贝；写入校验同一数据集只查一次列映射 |
 | S-4 | Outbox 中继用列表读到的数据确定数据集范围，加锁后只确认该条仍在，去掉重复的完整解码校验 |
+| S-8 | 过期清理：由节点级写锁改为数据集级互斥；截止桶没有推进时跳过（每小时一次的清理实际每天才有活干）；后台 compaction 串行执行，不再每次起一个 goroutine。删除 `ensureHistoryIndex` 后，与之配套的 `historyBackfillMu` 一并删除 |
+| S-9 | 网关客户端：配置 gzip 后总是压缩，不再按请求体大小判断（`packages/gatewayclient/trpc.go`），补「小请求、大响应」的链路测试 |
+| S-10 | 带 selector 的区间读取走序列索引（见 2.1） |
+| S-11 | 读取返回有类型的属性（见 2.1） |
 
-最近 N 根不带 selector 时，DataNode 从游标指向的标的开始在序列索引上逐个标的读取，凑满一页（最多 2 万行，单个标的不拆页）后返回下一个标的作为游标；
-每个标的之间检查 `ctx`。读到的键直接用 S-2 的方式补全字段，不再需要调用方二次读取。
+最近 N 根不带 selector 时，DataNode 从游标位置开始在序列索引上逐个标的、逐个序列读取，凑满一页后把续读位置写进游标；
+每个序列之间检查 `ctx`。读到的键直接用 S-2 的方式补全字段和属性，不再需要调用方二次读取。
 
 ## 5. 测试
 
 - 任何调用方身份的区间读取、最近 N 根、计数都到达 DataNode；结果与 DataNode 直接读取一致；
 - 不合规的请求被拒绝：无列、区间缺起止、页大小超限、selector 超过 100、N 超过 10000、同时给出多种形态、使用页码；
 - 区间读取用 `next_cursor` 逐页读完的结果，与一次性读取的结果一致，且没有重复和遗漏；
-- 不带 selector 的最近 N 根逐页读完，覆盖数据集全部有数据的标的；多个 `series_tag` 的标的每个序列各取 N 根；单个标的超过一页上限时整页只含这一个标的；
+- 不带 selector 的最近 N 根逐页读完，覆盖数据集全部有数据的标的；多个 `series_tag` 的标的每个序列各取 N 根；一个标的跨页时既不重复也不遗漏，
+  页大小与值数量上限都生效；
+- 带 selector 的区间读取（走序列索引）与不带 selector 再过滤的结果逐行一致，包括多个 `series_tag`、游标翻页；
+- 读取返回的属性与 `ReadFields` 一致，类型不丢失；View 重建后因子来源属性仍在；
+- 配置 gzip 时，小请求、大响应的调用在链路上被压缩；
+- 过期清理期间，其他数据集的写入不被阻塞；截止桶未推进时不发起删除与 compaction；
 - 计数与按行读取后去重计数一致，包括多个 `series_tag` 的情况；
 - View 重建改造后，重建出的索引与改造前逐行一致；
-- S-1、S-2、S-3、S-4 的用例见审查文档；回填场景、写入请求的前后对比 benchmark。
+- S-1～S-4、S-8～S-11 的用例见审查文档；回填场景、写入请求的前后对比 benchmark。
 
 ## 6. 发布
 
 项目尚未上线，不考虑兼容：协议、服务目录和所有调用方在同一个提交里改完，一起构建、一起发布。
 
 1. Storage：storage-node → storage-primary → 至少等 30 秒 → storage-view；
-2. 调用方：因子引擎（编译机）、factor-mgr、Collector、Monitor；
+2. 调用方：因子引擎（编译机）、factor-mgr、Collector、Monitor（S-9 的网关客户端改动随各调用方一起生效）；
 3. 服务目录随之变化：Admin、Monitor、各主机 host-gateway、Access 一起换；本机 `moox-cli` 重新构建。
 
 时间选在整点后 :05～:20、分钟中段，避开整点任务；发布后核对因子运行摘要和 View 水位。
