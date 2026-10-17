@@ -16,6 +16,7 @@
 | [Storage 读接口收敛设计](Storage读接口收敛设计.md) | 设计稿 v6（尚未编码，含 2026-10-17 线上只读核查与三轮 Codex 评审）：PrimaryStore 对所有调用方都读事实、数事实，DataView 读视图；删除按调用方分流、`ListHistorySubjects`、`ReadRecordRows` 与 `after_key`，复用公共游标；精确读取合并为只返回存在行的 `ReadRows`；DataView 字段改名，覆盖范围为闭区间的最早 / 最晚行时间，保留行数取活动索引实际建立的值；区间读取与 View 不处理行属性；一并完成[读写路径审查](../审查/2026-10-16-Storage读写路径审查.md)的 S-1～S-4、S-8～S-13；实现后以[存储](../模块/存储.md)为准 |
 | [Storage 去业务耦合设计](Storage去业务耦合设计.md) | 设计稿 v4（尚未编码）：Storage 不认识因子、采集与具体市场；写入权限只看 `write_owner`；`commit_id` 统一单数据集的幂等写入；两种周期标记合为 `DatasetPeriodCompleted`（`source` 只表示完成机制，明细透传）；默认 View 由业务模块自己建、删；数据集列来源为「字段 / 自定义 / 系统」；投递方式由数据集属性声明；发布在全部停机的静默点上切换（Storage 事件全部升版本、消费者换新 durable），回退即恢复快照 |
 | [Storage 读接口收敛与数据归档执行计划](Storage读接口收敛与数据归档执行计划.md) | 执行计划 v5（尚未编码）：分 13 个阶段，发布 A 为 Storage 读接口收敛与调用方迁移（含 S-1～S-4、S-8～S-13、删除旧归档），发布 B 为归档（mgr、worker、前端、Monitor），发布 C 为 Storage 去业务耦合（暂停采集、静默点快照、元数据迁移到 v14）；逐阶段列出改动文件、测试、验收与回退 |
+| [日线时间键约定](日线时间键约定.md) | 设计稿 v1（尚未编码，待用户决定）：盘点日线、周线、月线 `data_time` 的写法——采集、重采样、因子、CLI 按 UTC 网格，Strategy `cn_stock` 与 Monitor 交易所时钟按市场本地零点，周、月线另有多种起点；线上没有日线及以上的数据；推荐统一为「交易日期的 UTC 零点」（周线为 ISO 周一、月线为 1 日），不选市场本地零点；列出两种方案的改动范围及与读接口收敛、归档、去耦合的关系 |
 | [Console Proxy 内嵌 Caddy 执行计划](../2026-10-09-console-proxy-embedded-caddy-execution-plan.md) | 保留原路径便于已有引用；代理、Monitor 探针及 control bootstrap 已接通，历史验收记录仍按其原范围解读 |
 | [Timer 模式 Storage 写入压测报告](Timer模式Storage写入压测报告.md) | 特定配置、数据规模和环境下的历史观测，不能外推为当前版本或全部拓扑的容量保证 |
 | [Console Proxy 依赖审计数据](console-proxy-dependency-audit.json) | 历史源码基线的模块差异，不能替代当前 go.work/go.sum 或制品依赖清单 |
