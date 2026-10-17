@@ -103,6 +103,16 @@ func (p *Panel) MarkPresent(series, t int) {
 	p.present[series*p.length+t] = true
 }
 
+// Value 返回一个输入值（没有源行或源数据为 null 时是 NaN）。
+func (p *Panel) Value(column, series, t int) float64 {
+	return p.data[column][series*p.length+t]
+}
+
+// Present 报告网格下标 t 上该序列是否有源行。
+func (p *Panel) Present(series, t int) bool {
+	return p.present[series*p.length+t]
+}
+
 func (p *Panel) bytes() int64 {
 	return int64(len(p.columns))*int64(len(p.series))*int64(p.length)*8 + int64(len(p.present))
 }

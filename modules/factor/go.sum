@@ -266,3 +266,5 @@ trpc.group/trpc-go/trpc-metrics-runtime v1.0.0 h1:KHrlvzlzaGP4F2hcUQrtaeq3hM9cHy
 trpc.group/trpc-go/trpc-metrics-runtime v1.0.0/go.mod h1:IjJWQfdTnQfLDK50bgK+ZMMqZqlN3C7OVZIeQ8YLrG4=
 trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 h1:xSqncQDYiUeNQSCz8RMdF7pVJWZImJ/RK+FgtSMFjss=
 trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1/go.mod h1:BasNP/F0p0Y/fcbQMMw4TJzhYKv+dVPlnxiQaWZUpWs=
+github.com/expr-lang/expr v1.17.8 h1:W1loDTT+0PQf5YteHSTpju2qfUfNoBt4yw9+wOEU9VM=
+github.com/expr-lang/expr v1.17.8/go.mod h1:8/vRC7+7HBzESEqt5kKpYXxrxkr31SaO8r40VO/1IT4=

@@ -8,6 +8,7 @@ require (
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/factorexpr v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
@@ -37,6 +38,7 @@ require (
 
 require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
@@ -63,6 +65,8 @@ replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
 replace github.com/mooyang-code/moox/packages/pyruntime => ../../packages/pyruntime
+
+replace github.com/mooyang-code/moox/packages/factorexpr => ../../packages/factorexpr
 
 require (
 	github.com/BurntSushi/toml v1.3.2 // indirect

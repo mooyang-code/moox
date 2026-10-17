@@ -55,6 +55,8 @@ func run(args []string, out io.Writer) error {
 		return serve(args)
 	case "run-once":
 		return runOnce(args, out)
+	case "compare":
+		return compare(args, out)
 	case "health":
 		return health(args, out)
 	case "reset-gap-ledger":
@@ -63,7 +65,7 @@ func run(args []string, out io.Writer) error {
 		_, err := fmt.Fprintf(out, "moox-factor-engine %s %s %s\n", Version, GitCommit, BuildTime)
 		return err
 	default:
-		return fmt.Errorf("unknown command %q (serve, run-once, health, reset-gap-ledger, version)", command)
+		return fmt.Errorf("unknown command %q (serve, run-once, compare, health, reset-gap-ledger, version)", command)
 	}
 }
 
@@ -136,6 +138,75 @@ func runOnce(args []string, out io.Writer) error {
 		"ok": true, "set_id": *setID, "period": at.UTC().Format(time.RFC3339),
 		"status": outcome.Status, "rows_written": outcome.RowsWritten, "factors": outcome.Factors,
 	})
+}
+
+// compare 是因子表达式引擎的一致性验收（只读）：同一份窗口分别交给现有的 Python 计算与 factorexpr，逐值比较。
+func compare(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
+	app := fs.String("config", "config/engine.yaml", "factor engine config")
+	setFile := fs.String("set-file", "", "copy of data/engine/catalog.json")
+	library := fs.String("library", "", "YAML factor library directory")
+	workDir := fs.String("work-dir", "", "scratch directory for materialized Python sources")
+	startText := fs.String("start", "", "start timestamp RFC3339 (inclusive)")
+	endText := fs.String("end", "", "end timestamp RFC3339 (exclusive)")
+	worker := fs.String("worker", "", "override python.worker_path")
+	output := fs.String("output", "", "write the JSON report to this file")
+	pythonWorkers := fs.Int("python-workers", 4, "Python worker processes")
+	computeWorkers := fs.Int("compute-workers", 4, "factorexpr goroutines")
+	chunk := fs.Int("chunk-periods", 0, "periods per chunk (0 uses recalc.chunk_periods)")
+	var sets, factors, subjects listFlag
+	fs.Var(&sets, "set", "factor set id (repeatable)")
+	fs.Var(&factors, "factor", "factor id (repeatable)")
+	fs.Var(&subjects, "subject", "subject id (repeatable)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(sets) == 0 {
+		return errors.New("--set is required")
+	}
+	start, err := time.Parse(time.RFC3339Nano, *startText)
+	if err != nil {
+		return fmt.Errorf("--start must be an RFC3339 timestamp: %w", err)
+	}
+	end, err := time.Parse(time.RFC3339Nano, *endText)
+	if err != nil {
+		return fmt.Errorf("--end must be an RFC3339 timestamp: %w", err)
+	}
+	cfg, err := engine.Load(*app)
+	if err != nil {
+		return err
+	}
+	report, err := engine.Compare(context.Background(), cfg, engine.CompareRequest{
+		SetFile: *setFile, Library: *library, WorkDir: *workDir, SetIDs: sets, Start: start, End: end,
+		Factors: factors, Subjects: subjects, PythonWorkers: *pythonWorkers, ComputeWorkers: *computeWorkers,
+		ChunkPeriods: *chunk, WorkerPath: *worker,
+	})
+	if err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	if *output != "" {
+		if err := os.WriteFile(*output, append(encoded, '\n'), 0o644); err != nil {
+			return err
+		}
+	}
+	for _, stats := range report.Outputs {
+		fmt.Fprintf(out, "%s %-24s compared=%d both_value=%d both_null=%d max_rel=%.3g outliers=%v flips=%d(tie=%d,verified=%d,float=%d,unexplained=%d) old_value_new_null=%v old_null_new_value=%d python_failures=%d missing_python=%d\n",
+			stats.Set, stats.Output, stats.Compared, stats.BothValue, stats.BothNull, stats.MaxRelError, stats.ContinuousOutliers,
+			stats.DiscreteFlips, stats.TieFlips, stats.VerifiedFlips, stats.FloatLimitedFlips, stats.UnexplainedFlips, stats.OldValueNewNull, stats.OldNullNewValue,
+			stats.PythonFailures, stats.MissingPython)
+	}
+	if failures := report.Failures(); len(failures) > 0 {
+		for _, failure := range failures {
+			fmt.Fprintln(out, "FAIL", failure)
+		}
+		return fmt.Errorf("一致性验收不通过：%d 项", len(failures))
+	}
+	fmt.Fprintf(out, "PASS（耗时 %s）\n", report.Elapsed)
+	return nil
 }
 
 // health asks the local engine for readiness, signing the request with the
