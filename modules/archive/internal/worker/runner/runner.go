@@ -72,6 +72,7 @@ type Runner struct {
 var errStopped = errors.New("archive run stopped")
 
 type runState struct {
+	bound    bool // 任务实例已确认，暂存状态属于当前任务
 	r        *Runner
 	a        *archivepb.RunAssignment
 	task     staging.Task
@@ -121,6 +122,10 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 		// 不论成功、失败还是取消，都带上本次涉及的分区的当前登记。
 		out.Progress = s.progress
 		out.RowsAdded, out.RowsChanged = s.added, s.changed
+		// 任务实例确认之前（绑定失败）暂存库里可能还是旧任务的状态，不能把它的分区报给新任务。
+		if !s.bound {
+			return
+		}
 		if reports, rerr := s.partitionReports(context.WithoutCancel(ctx), out); rerr == nil {
 			out.Partitions = reports
 			for _, p := range reports {
@@ -139,6 +144,7 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	if _, err = r.Staging.BindEpoch(ctx, a.GetSpaceId(), a.GetDatasetId(), a.GetTaskEpoch()); err != nil {
 		return out, err
 	}
+	s.bound = true
 	ranges, unrecoverable, err := s.readRanges(ctx)
 	if err != nil {
 		return out, err

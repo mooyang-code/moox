@@ -54,6 +54,8 @@ type activeRun struct {
 	cancel     context.CancelFunc
 	ctx        context.Context
 	stop       atomic.Bool
+	// recreated：领取时数据集还有未处理的删除通知，说明任务被删除后重建，旧状态须在运行前清掉。
+	recreated bool
 }
 
 // App 是 worker。
@@ -286,7 +288,11 @@ func (a *App) pullOnce(ctx context.Context) {
 		run := &activeRun{assignment: assignment, cancel: cancel, ctx: runCtx}
 		a.running[assignment.GetRunId()] = run
 		// 数据集重新创建了任务：之前记下的「已删除」通知作废，不能再清掉它的暂存数据。
-		delete(a.deleted, assignment.GetSpaceId()+"/"+assignment.GetDatasetId())
+		key := assignment.GetSpaceId() + "/" + assignment.GetDatasetId()
+		if _, ok := a.deleted[key]; ok {
+			run.recreated = true
+		}
+		delete(a.deleted, key)
 		runs = append(runs, run)
 	}
 	a.pulling--
@@ -387,12 +393,24 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 	req := &archivepb.CompleteArchiveRunReq{WorkerId: a.opts.Config.Worker.WorkerID, RunId: assignment.GetRunId(), LeaseToken: assignment.GetLeaseToken()}
 	var reported []string
 	// 同数据集的串行保护延续到完成上报和确认清理之后：否则取消的旧运行的迟到上报可能覆盖新运行刚登记的分区。
+	var dropErr error
 	release, err := a.acquireDataset(ctx, run, send)
 	if err == nil {
 		defer release()
+		if run.recreated {
+			// 在串行保护内清掉旧任务遗留的状态；失败则本次运行失败，并把删除通知放回去等待重试。
+			if derr := a.opts.Staging.DropTask(ctx, assignment.GetSpaceId(), assignment.GetDatasetId()); derr != nil {
+				a.mu.Lock()
+				a.deleted[assignment.GetSpaceId()+"/"+assignment.GetDatasetId()] = taskRef{space: assignment.GetSpaceId(), dataset: assignment.GetDatasetId()}
+				a.mu.Unlock()
+				err, dropErr = nil, derr
+			}
+		}
 	}
 	if err != nil {
 		req.Status, req.Message = "canceled", "运行在等待同一数据集的上一个运行时被取消"
+	} else if dropErr != nil {
+		req.Status, req.Message = "failed", fmt.Sprintf("清理重建任务遗留的旧状态失败: %v", dropErr)
 	} else {
 		report := func(p runner.Progress) bool {
 			cp := p
