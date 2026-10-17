@@ -52,6 +52,7 @@ type taskRef struct{ space, dataset string }
 type activeRun struct {
 	assignment *archivepb.RunAssignment
 	cancel     context.CancelFunc
+	ctx        context.Context
 	stop       atomic.Bool
 }
 
@@ -70,7 +71,13 @@ type App struct {
 	diskTotal       uint64
 	running         map[string]*activeRun
 	deleted         map[string]taskRef
-	wg              sync.WaitGroup
+	// pulling 是正在进行中的领取调用数：维护要等它们登记完运行之后再开始，否则重建暂存库时会漏掉在途的运行。
+	pulling int
+	// datasetSlots 让同一个数据集的运行在本地串行：mgr 取消一个运行后会立刻允许创建新运行，
+	// 但旧运行要等下一次心跳才知道被取消，两个运行同时改写同一个暂存表和分区文件会丢行。
+	datasetSlots  map[string]chan struct{}
+	progressEvery time.Duration
+	wg            sync.WaitGroup
 }
 
 // New 创建 App。
@@ -90,7 +97,7 @@ func New(opts Options) *App {
 			}
 		}
 	}
-	return &App{opts: opts, running: map[string]*activeRun{}, deleted: map[string]taskRef{}, leaseTTL: 45 * time.Second}
+	return &App{opts: opts, running: map[string]*activeRun{}, deleted: map[string]taskRef{}, datasetSlots: map[string]chan struct{}{}, leaseTTL: 45 * time.Second, progressEvery: progressEvery}
 }
 
 // Start 启动时的清理：残留的 .partial 文件和 DuckDB 临时目录。
@@ -147,6 +154,13 @@ func (a *App) cancelAll() {
 }
 
 // ---- 心跳 ----
+
+// busy 报告是否还有进行中的运行或在途的领取。
+func (a *App) busy() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.running) > 0 || a.pulling > 0
+}
 
 func (a *App) runningIDs() []string {
 	a.mu.Lock()
@@ -228,16 +242,28 @@ func (a *App) leaseValid() bool {
 func (a *App) pullOnce(ctx context.Context) {
 	cfg := a.opts.Config
 	a.mu.Lock()
-	free := cfg.Pacing.MaxConcurrentRuns - len(a.running)
+	free := cfg.Pacing.MaxConcurrentRuns - len(a.running) - a.pulling
 	blocked := a.maintaining || a.diskLow
 	busy := map[string]uint32{}
 	for _, r := range a.running {
 		busy[r.assignment.GetDataNodeId()]++
 	}
-	a.mu.Unlock()
-	if free <= 0 || blocked || !a.leaseValid() {
+	if free > 0 && !blocked && a.active && !a.lastHeartbeatOK.IsZero() && a.opts.Now().Sub(a.lastHeartbeatOK) < a.leaseTTL {
+		// 与维护的「开始」在同一把锁里决定：登记了 pulling 之后，维护会等这次领取登记完运行才继续。
+		a.pulling++
+	} else {
+		a.mu.Unlock()
 		return
 	}
+	a.mu.Unlock()
+	registered := false
+	defer func() {
+		if !registered {
+			a.mu.Lock()
+			a.pulling--
+			a.mu.Unlock()
+		}
+	}()
 	var loads []*archivepb.DataNodeLoad
 	for node, n := range busy {
 		loads = append(loads, &archivepb.DataNodeLoad{DataNodeId: node, Running: n})
@@ -252,96 +278,175 @@ func (a *App) pullOnce(ctx context.Context) {
 		log.Warnf("archive worker pull failed: %v", err)
 		return
 	}
+	// 先把全部运行登记进 running，再释放 pulling，维护才不会在两者之间看到「空闲」。
+	a.mu.Lock()
+	runs := make([]*activeRun, 0, len(rsp.GetRuns()))
 	for _, assignment := range rsp.GetRuns() {
-		a.start(ctx, assignment)
+		runCtx, cancel := context.WithCancel(ctx)
+		run := &activeRun{assignment: assignment, cancel: cancel, ctx: runCtx}
+		a.running[assignment.GetRunId()] = run
+		// 数据集重新创建了任务：之前记下的「已删除」通知作废，不能再清掉它的暂存数据。
+		delete(a.deleted, assignment.GetSpaceId()+"/"+assignment.GetDatasetId())
+		runs = append(runs, run)
+	}
+	a.pulling--
+	registered = true
+	a.mu.Unlock()
+	for _, run := range runs {
+		a.launch(run)
 	}
 }
 
-func (a *App) start(ctx context.Context, assignment *archivepb.RunAssignment) {
-	runCtx, cancel := context.WithCancel(ctx)
-	run := &activeRun{assignment: assignment, cancel: cancel}
-	a.mu.Lock()
-	a.running[assignment.GetRunId()] = run
-	a.mu.Unlock()
+func (a *App) launch(run *activeRun) {
 	a.wg.Add(1)
 	go func() {
 		defer a.wg.Done()
-		defer cancel()
-		a.execute(runCtx, run)
+		defer run.cancel()
+		a.execute(run.ctx, run)
 		a.mu.Lock()
-		delete(a.running, assignment.GetRunId())
+		delete(a.running, run.assignment.GetRunId())
 		a.mu.Unlock()
 	}()
+}
+
+// acquireDataset 等到同一个数据集没有其他运行在本地执行；等待期间照常续租（上报零进度），否则排队的运行会因租约过期被判失联。
+func (a *App) acquireDataset(ctx context.Context, run *activeRun, progress func()) (release func(), err error) {
+	key := run.assignment.GetSpaceId() + "/" + run.assignment.GetDatasetId()
+	a.mu.Lock()
+	slot, ok := a.datasetSlots[key]
+	if !ok {
+		slot = make(chan struct{}, 1)
+		a.datasetSlots[key] = slot
+	}
+	a.mu.Unlock()
+	for {
+		select {
+		case slot <- struct{}{}:
+			return func() { <-slot }, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Second):
+			if run.stop.Load() {
+				return nil, context.Canceled
+			}
+			progress()
+		}
+	}
 }
 
 // execute 执行一次运行并上报结果。
 func (a *App) execute(ctx context.Context, run *activeRun) {
 	assignment := run.assignment
-	var lastReport time.Time
-	report := func(p runner.Progress) bool {
-		if run.stop.Load() {
-			return true
+	var latest atomic.Pointer[runner.Progress]
+	latest.Store(&runner.Progress{})
+	var lastSent atomic.Int64
+	send := func() {
+		p := latest.Load()
+		callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
+		rsp, err := a.opts.Manager.Progress(callCtx, &archivepb.ReportArchiveRunProgressReq{
+			WorkerId: a.opts.Config.Worker.WorkerID, RunId: assignment.GetRunId(), LeaseToken: assignment.GetLeaseToken(),
+			SubjectsDone: p.SubjectsDone, RequestCount: p.RequestCount, BytesRead: p.BytesRead, RowsRead: p.RowsRead,
+		})
+		cancel()
+		lastSent.Store(a.opts.Now().UnixNano())
+		switch {
+		case err != nil:
+			log.Warnf("archive worker progress report failed run=%s: %v", assignment.GetRunId(), err)
+		case rsp.GetCanceled():
+			run.stop.Store(true)
+			run.cancel()
 		}
-		if now := a.opts.Now(); now.Sub(lastReport) >= progressEvery {
-			lastReport = now
-			callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
-			rsp, err := a.opts.Manager.Progress(callCtx, &archivepb.ReportArchiveRunProgressReq{
-				WorkerId: a.opts.Config.Worker.WorkerID, RunId: assignment.GetRunId(), LeaseToken: assignment.GetLeaseToken(),
-				SubjectsDone: p.SubjectsDone, RequestCount: p.RequestCount, BytesRead: p.BytesRead, RowsRead: p.RowsRead,
-			})
-			cancel()
-			switch {
-			case err != nil:
-				log.Warnf("archive worker progress report failed run=%s: %v", assignment.GetRunId(), err)
-			case rsp.GetCanceled():
-				run.stop.Store(true)
+	}
+	// 续租与进度由独立的定时器负责，不依赖「读完一页」：导出、定稿和整点避让等待期间也要续租。
+	tickCtx, stopTicker := context.WithCancel(ctx)
+	var ticker sync.WaitGroup
+	ticker.Add(1)
+	go func() {
+		defer ticker.Done()
+		timer := time.NewTicker(a.progressEvery)
+		defer timer.Stop()
+		for {
+			select {
+			case <-tickCtx.Done():
+				return
+			case <-timer.C:
+				send()
 			}
 		}
-		return run.stop.Load()
-	}
-	outcome, err := a.opts.Runner.Execute(ctx, assignment, report)
-	req := &archivepb.CompleteArchiveRunReq{WorkerId: a.opts.Config.Worker.WorkerID, RunId: assignment.GetRunId(), LeaseToken: assignment.GetLeaseToken()}
-	if err != nil || outcome == nil {
-		req.Status, req.Message = "failed", fmt.Sprintf("%v", err)
-	} else {
-		req.Status, req.Message = outcome.Status, outcome.Message
-		req.SubjectsDone, req.RequestCount, req.BytesRead, req.RowsRead = outcome.Progress.SubjectsDone, outcome.Progress.RequestCount, outcome.Progress.BytesRead, outcome.Progress.RowsRead
-		req.RowsAdded, req.RowsChanged = outcome.RowsAdded, outcome.RowsChanged
-		req.PartitionsExported, req.PartitionsFinalized = outcome.Exported, outcome.Finalized
-		req.Partitions, req.Unrecoverable = outcome.Partitions, outcome.Unrecoverable
-		if !outcome.FinalUntil.IsZero() {
-			req.FinalUntil = outcome.FinalUntil.UTC().Format(time.RFC3339)
+	}()
+	stopped := false
+	stopTick := func() {
+		if !stopped {
+			stopped = true
+			stopTicker()
+			ticker.Wait()
 		}
 	}
-	a.complete(ctx, req)
+	defer stopTick()
+
+	req := &archivepb.CompleteArchiveRunReq{WorkerId: a.opts.Config.Worker.WorkerID, RunId: assignment.GetRunId(), LeaseToken: assignment.GetLeaseToken()}
+	var reported []string
+	release, err := a.acquireDataset(ctx, run, send)
+	if err != nil {
+		req.Status, req.Message = "canceled", "运行在等待同一数据集的上一个运行时被取消"
+	} else {
+		report := func(p runner.Progress) bool {
+			cp := p
+			latest.Store(&cp)
+			return run.stop.Load()
+		}
+		outcome, execErr := a.opts.Runner.Execute(ctx, assignment, report)
+		release()
+		if execErr != nil || outcome == nil {
+			req.Status, req.Message = "failed", fmt.Sprintf("%v", execErr)
+		} else {
+			req.Status, req.Message = outcome.Status, outcome.Message
+			req.SubjectsDone, req.RequestCount, req.BytesRead, req.RowsRead = outcome.Progress.SubjectsDone, outcome.Progress.RequestCount, outcome.Progress.BytesRead, outcome.Progress.RowsRead
+			req.RowsAdded, req.RowsChanged = outcome.RowsAdded, outcome.RowsChanged
+			req.PartitionsExported, req.PartitionsFinalized = outcome.Exported, outcome.Finalized
+			req.Partitions, req.Unrecoverable = outcome.Partitions, outcome.Unrecoverable
+			reported = outcome.ReportedKeys
+			if !outcome.FinalUntil.IsZero() {
+				req.FinalUntil = outcome.FinalUntil.UTC().Format(time.RFC3339)
+			}
+		}
+	}
+	stopTick()
+	if a.complete(ctx, req) && len(reported) > 0 {
+		// mgr 确认登记之后才清除待上报标记；上报失败时分区留在待上报里，下一次运行会再带上。
+		if err := a.opts.Staging.MarkReported(context.WithoutCancel(ctx), assignment.GetSpaceId(), assignment.GetDatasetId(), reported); err != nil {
+			log.Warnf("archive worker mark reported run=%s: %v", assignment.GetRunId(), err)
+		}
+	}
 }
 
-// complete 上报结果：暂时失败时退避重试；mgr 返回冲突（运行已结束或令牌失效）时放弃。
+// complete 上报结果：暂时失败时退避重试；mgr 返回冲突（运行已结束或令牌失效）时放弃。返回 true 表示 mgr 已确认。
 // 进程退出（ctx 取消）时用一个独立的短超时再试一次，让被取消的运行也能登记已导出的分区。
-func (a *App) complete(ctx context.Context, req *archivepb.CompleteArchiveRunReq) {
+func (a *App) complete(ctx context.Context, req *archivepb.CompleteArchiveRunReq) bool {
 	for attempt := 0; attempt < completeRetries; attempt++ {
 		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rpcTimeout)
 		_, err := a.opts.Manager.Complete(callCtx, req)
 		cancel()
 		if err == nil {
-			return
+			return true
 		}
 		if errors.Is(err, manager.ErrConflict) {
 			log.Warnf("archive worker complete rejected run=%s: %v", req.GetRunId(), err)
-			return
+			return false
 		}
 		log.Warnf("archive worker complete failed run=%s attempt=%d: %v", req.GetRunId(), attempt+1, err)
 		if ctx.Err() != nil && attempt >= 1 {
-			return
+			return false
 		}
 		if attempt+1 < completeRetries {
 			backoff := time.Duration(1<<attempt) * time.Second
 			if a.opts.Sleep(context.WithoutCancel(ctx), backoff) != nil {
-				return
+				return false
 			}
 		}
 	}
-	log.Errorf("archive worker gave up reporting run=%s; the manager will mark it failed when its lease expires", req.GetRunId())
+	log.Errorf("archive worker gave up reporting run=%s; the manager will mark it failed when its lease expires and the partitions stay pending for the next run", req.GetRunId())
+	return false
 }
 
 // ---- 维护 ----
@@ -380,7 +485,7 @@ func (a *App) maintainOnce(ctx context.Context) {
 		a.mu.Unlock()
 	}()
 	deadline := a.opts.Now().Add(maintenanceWait)
-	for len(a.runningIDs()) > 0 {
+	for a.busy() {
 		if a.opts.Now().After(deadline) || ctx.Err() != nil {
 			log.Warnf("archive worker maintenance skipped: runs are still active")
 			return

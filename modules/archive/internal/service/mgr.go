@@ -173,6 +173,7 @@ func (m *MgrService) CreateArchiveTask(ctx context.Context, req *archivepb.Creat
 		}
 		return &archivepb.CreateArchiveTaskRsp{RetInfo: fail(err)}, nil
 	}
+	s.clearDeleted(space, ds.DatasetID)
 	return &archivepb.CreateArchiveTaskRsp{RetInfo: success(), Task: taskToPB(created)}, nil
 }
 

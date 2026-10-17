@@ -740,3 +740,19 @@ func TestOverviewReportsWorkersRunsAndAlerts(t *testing.T) {
 		t.Fatalf("租约过期的 worker 仍应展示但标为不活动: %v", stale.GetWorker())
 	}
 }
+
+func TestRecreatingATaskCancelsThePendingDeletionNotice(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
+	deleted, _ := h.mgr.DeleteArchiveTask(ctx, &archivepb.DeleteArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m"})
+	requireOK(t, deleted.GetRetInfo())
+	h.heartbeat("w1", "i1")
+	if hb := h.heartbeat("w1", "i1"); len(hb.GetDeletedTasks()) != 1 {
+		t.Fatalf("删除后应通知 worker: %v", hb.GetDeletedTasks())
+	}
+	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
+	if hb := h.heartbeat("w1", "i1"); len(hb.GetDeletedTasks()) != 0 {
+		t.Fatalf("重新创建后不能再通知 worker 清理: %v", hb.GetDeletedTasks())
+	}
+}

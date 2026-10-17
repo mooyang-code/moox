@@ -624,3 +624,10 @@ limit 根，有范围按升序取最早 limit 根；`data rows export` 需要 `-
 - 验证：`go test -race` 通过（含 `internal/e2e`：真实 mgr（SQLite）与真实 worker（DuckDB）在同一进程里走完「建任务 → 触发 → 领取 → 读取 → 暂存 → 导出 → 登记 → 定稿 → 补拉区间读回重写」）；`deploy-archive-worker.sh` 契约测试；Linux 版在编译机上构建成功并能启动。
 - 构建与部署：`build.sh archive-worker`、`build-storage-linux.sh` 与 `moox-cli setup build-linux` 增加 `archive-worker`；`scripts/deploy/deploy-archive-worker.sh` 与 systemd / launchd 模板。
 - 未做：线上联调（需要发布 B 先发布 mgr 与服务目录）、`moox-archive-cli`、Monitor 指标与告警。
+- Codex 审查 6 处，核实后全部修复并补了测试：
+  1. 首次运行失败后重试会漏读（起点随运行开始时间后移）→ 首次运行算出的起点记进暂存库（`task_state.first_start`），水位前进之前沿用更早的；
+  2. mgr 取消运行后立刻允许新运行，旧运行还在写同一个暂存表 → worker 内同一数据集的运行串行（排队期间照常续租），并且导出时间取 COPY 开始之前的时刻；
+  3. 在途的领取调用不在维护屏障内，重建库会漏页 → 领取在加锁时登记 `pulling`，维护等 `pulling` 与 `running` 都清零；
+  4. 重复的「已删除」通知会清掉重建任务的暂存数据 → mgr 在重新创建任务时撤销通知，worker 收到该数据集的新运行时丢弃对应的待清理项；
+  5. 定稿后完成上报失败会永久漏登分区 → 分区状态带 `report_pending`，定稿时把行数、标的数、数据时间范围记进分区状态，每次运行都上报全部待上报分区，mgr 确认之后才清除；
+  6. 续租只在读完一页时发生 → 续租与进度改由独立的定时器负责（导出、定稿、排队、避让等待期间都续租），并响应取消。

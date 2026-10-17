@@ -33,6 +33,8 @@ type fakeManager struct {
 	completes     []*archivepb.CompleteArchiveRunReq
 	completeCalls int
 	completed     chan struct{}
+	pullGate      chan struct{} // 非空时 Pull 阻塞到它被关闭
+	pullEntered   chan struct{} // Pull 进入时发出信号
 }
 
 func newFakeManager() *fakeManager {
@@ -47,6 +49,15 @@ func (f *fakeManager) Heartbeat(_ context.Context, req *archivepb.ArchiveWorkerH
 }
 
 func (f *fakeManager) Pull(_ context.Context, req *archivepb.PullArchiveRunReq) (*archivepb.PullArchiveRunRsp, error) {
+	f.mu.Lock()
+	gate, entered := f.pullGate, f.pullEntered
+	f.mu.Unlock()
+	if entered != nil {
+		close(entered)
+	}
+	if gate != nil {
+		<-gate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pulls = append(f.pulls, req)
@@ -81,13 +92,40 @@ func (f *fakeManager) Complete(_ context.Context, req *archivepb.CompleteArchive
 	return &archivepb.CompleteArchiveRunRsp{}, nil
 }
 
-type fakeSource struct{ rows []staging.Row }
+type fakeSource struct {
+	mu     sync.Mutex
+	rows   []staging.Row
+	block  bool          // 读取一直阻塞到运行被取消
+	delay  time.Duration // 每次读取的耗时
+	active int
+	maxAct int
+	calls  int
+}
 
 func (f *fakeSource) Columns(context.Context, string, string) ([]staging.Column, error) {
 	return []staging.Column{{Name: "close", Type: staging.TypeDouble}}, nil
 }
 
-func (f *fakeSource) ReadRange(_ context.Context, req source.Range) (source.Page, error) {
+func (f *fakeSource) ReadRange(ctx context.Context, req source.Range) (source.Page, error) {
+	f.mu.Lock()
+	f.active++
+	f.calls++
+	if f.active > f.maxAct {
+		f.maxAct = f.active
+	}
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.active--
+		f.mu.Unlock()
+	}()
+	if f.block {
+		<-ctx.Done()
+		return source.Page{}, ctx.Err()
+	}
+	if f.delay > 0 {
+		time.Sleep(f.delay)
+	}
 	var out []staging.Row
 	for _, row := range f.rows {
 		if !row.DataTime.Before(req.Start) && row.DataTime.Before(req.End) {
@@ -319,24 +357,126 @@ func TestPulledRunsAreExecutedAndReportedWithStatsAndPartitions(t *testing.T) {
 	}
 }
 
-func TestProgressIsThrottledAndACanceledRunStops(t *testing.T) {
+func TestIndependentProgressTimerRenewsTheLeaseAndHonorsCancellation(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 10; i++ {
-		h.src.rows = append(h.src.rows, staging.Row{SubjectID: "BTC", DataTime: day.Add(time.Duration(i) * time.Minute), Values: []any{float64(i)}})
-	}
+	h.app.progressEvery = 10 * time.Millisecond
+	h.src.block = true // 读取一直不返回：只有独立的续租定时器能让 mgr 知道运行还活着
 	h.mgr.progressStop = true
-	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r1", func(x *archivepb.RunAssignment) { x.StartedAt = "2026-10-17T01:04:43Z" })}
+	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r1", nil)}
 	h.app.heartbeatOnce(ctx)
 	h.app.pullOnce(ctx)
 	req := h.waitComplete()
 	if req.GetStatus() != "canceled" {
 		t.Fatalf("mgr 在进度上报里要求取消时应以 canceled 收尾: %v", req)
 	}
-	if len(h.mgr.progresses) == 0 || h.mgr.progresses[0].GetLeaseToken() != "tok-r1" {
+	h.mgr.mu.Lock()
+	defer h.mgr.mu.Unlock()
+	if len(h.mgr.progresses) == 0 || h.mgr.progresses[0].GetLeaseToken() != "tok-r1" || h.mgr.progresses[0].GetWorkerId() != "w1" {
 		t.Fatalf("progresses = %v", h.mgr.progresses)
 	}
+}
+
+func TestRunsOfTheSameDatasetNeverOverlapLocally(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.app.progressEvery = 10 * time.Millisecond
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		h.src.rows = append(h.src.rows, staging.Row{SubjectID: "BTC", DataTime: day.Add(time.Duration(i) * time.Minute), Values: []any{float64(i)}})
+	}
+	h.src.delay = 150 * time.Millisecond
+	// mgr 取消旧运行后立刻为同一个数据集派发了新运行：两个运行同时在 worker 里，但必须一个接一个执行。
+	h.mgr.assignments = []*archivepb.RunAssignment{assignment("old", nil), assignment("new", nil)}
+	h.app.heartbeatOnce(ctx)
+	h.app.pullOnce(ctx)
+	h.waitComplete()
+	h.waitComplete()
+	h.idle()
+	if h.src.maxAct != 1 {
+		t.Fatalf("同一数据集的运行不能同时读取/写入暂存区: 最大并发 %d", h.src.maxAct)
+	}
+	if len(h.mgr.completes) != 2 {
+		t.Fatalf("completes = %d", len(h.mgr.completes))
+	}
+	// 排队等待期间仍在续租。
+	if len(h.mgr.progresses) == 0 {
+		t.Fatal("排队的运行也要续租")
+	}
+}
+
+func TestMaintenanceWaitsForInFlightPullsAndANewAssignmentCancelsAStaleDeletion(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	for _, ds := range []string{"gone", "ds_1m"} {
+		task := staging.Task{SpaceID: "crypto", DatasetID: ds, Columns: []staging.Column{{Name: "close", Type: staging.TypeDouble}}}
+		if err := h.store.EnsureTable(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 45, DeletedTasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "gone"}, {SpaceId: "crypto", DatasetId: "ds_1m"}}}
+	h.app.heartbeatOnce(ctx)
+	if len(h.app.deleted) != 2 {
+		t.Fatalf("deleted = %v", h.app.deleted)
+	}
+	// 领取调用还在途中（运行还没登记）：维护不能开始，已删除的任务不能被清理。
+	gate := make(chan struct{})
+	entered := make(chan struct{})
+	h.mgr.pullGate, h.mgr.pullEntered = gate, entered
+	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r1", nil)}
+	pulled := make(chan struct{})
+	go func() { h.app.pullOnce(ctx); close(pulled) }()
+	<-entered
+	h.app.maintainOnce(ctx)
+	if tables, _ := h.store.StagedTables(ctx); len(tables) != 2 {
+		t.Fatalf("在途领取期间维护必须等待（最终跳过），不能清理: %v", tables)
+	}
+	close(gate)
+	<-pulled
+	h.waitComplete()
+	h.idle()
+	// 新派发的运行属于「ds_1m」：它的删除通知作废；真正被删除的「gone」照常清理。
+	h.app.maintainOnce(ctx)
+	tables, _ := h.store.StagedTables(ctx)
+	keep := staging.Task{SpaceID: "crypto", DatasetID: "ds_1m"}.Table()
+	if len(tables) != 1 || tables[0] != keep {
+		t.Fatalf("tables = %v, want only %s", tables, keep)
+	}
+}
+
+func TestPartitionsAreMarkedReportedOnlyAfterTheManagerAcknowledges(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 5; i++ {
+		h.src.rows = append(h.src.rows, staging.Row{SubjectID: "BTC", DataTime: day.Add(time.Duration(i) * time.Minute), Values: []any{float64(i)}})
+	}
+	task := staging.Task{SpaceID: "crypto", DatasetID: "ds_1m", Columns: []staging.Column{{Name: "close", Type: staging.TypeDouble}}}
+	// 第一次：mgr 一直不可达，分区留在待上报里。
+	for i := 0; i < completeRetries; i++ {
+		h.mgr.completeErrs = append(h.mgr.completeErrs, errors.New("mgr down"))
+	}
+	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r1", nil)}
+	h.app.heartbeatOnce(ctx)
+	h.app.pullOnce(ctx)
+	h.idle()
+	if pending, _ := h.store.PendingReports(ctx, "crypto", "ds_1m"); len(pending) != 1 {
+		t.Fatalf("上报失败时分区应留在待上报里: %v", pending)
+	}
+	// 第二次：上报成功，随后清除标记。
+	h.now = h.now.Add(time.Hour)
+	h.mgr.assignments = []*archivepb.RunAssignment{assignment("r2", func(a *archivepb.RunAssignment) { a.StartedAt = "2026-10-17T02:04:43Z" })}
+	h.app.heartbeatOnce(ctx)
+	h.app.pullOnce(ctx)
+	req := h.waitComplete()
+	h.idle()
+	if len(req.GetPartitions()) != 1 || req.GetPartitions()[0].GetPartitionKey() != "2026-10-17" {
+		t.Fatalf("partitions = %v", req.GetPartitions())
+	}
+	if pending, _ := h.store.PendingReports(ctx, "crypto", "ds_1m"); len(pending) != 0 {
+		t.Fatalf("mgr 确认登记后应清除待上报标记: %v", pending)
+	}
+	_ = task
 }
 
 func TestCompleteRetriesTransientFailuresAndStopsOnConflict(t *testing.T) {

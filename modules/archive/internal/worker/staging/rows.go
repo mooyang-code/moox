@@ -160,7 +160,7 @@ FROM incoming i LEFT JOIN %s s ON i.subject_id = s.subject_id AND i.data_time = 
 			result.Touched[t.ref.Key] = t.ref
 			if _, err := tx.ExecContext(ctx, `INSERT INTO partition_state (space_id, dataset_id, partition_key, range_start, range_end, status, last_changed_at)
 VALUES (?, ?, ?, ?, ?, 'open', ?)
-ON CONFLICT (space_id, dataset_id, partition_key) DO UPDATE SET last_changed_at = excluded.last_changed_at,
+ON CONFLICT (space_id, dataset_id, partition_key) DO UPDATE SET last_changed_at = excluded.last_changed_at, report_pending = TRUE,
     status = CASE WHEN partition_state.status = 'final' THEN 'open' ELSE partition_state.status END`,
 				task.SpaceID, task.DatasetID, t.ref.Key, t.ref.Start, t.ref.End, now.UTC()); err != nil {
 				return err

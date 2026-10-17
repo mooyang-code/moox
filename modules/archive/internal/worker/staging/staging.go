@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS task_state (
     space_id VARCHAR NOT NULL,
     dataset_id VARCHAR NOT NULL,
     scan_watermark TIMESTAMP,
+    first_start TIMESTAMP,
     PRIMARY KEY (space_id, dataset_id)
 );
 CREATE TABLE IF NOT EXISTS partition_state (
@@ -163,11 +164,32 @@ CREATE TABLE IF NOT EXISTS partition_state (
     exported_at TIMESTAMP,
     file_sha256 VARCHAR NOT NULL DEFAULT '',
     export_count INTEGER NOT NULL DEFAULT 0,
+    row_count BIGINT NOT NULL DEFAULT 0,
+    subject_count BIGINT NOT NULL DEFAULT 0,
+    min_data_time TIMESTAMP,
+    max_data_time TIMESTAMP,
+    finalized_at TIMESTAMP,
+    report_pending BOOLEAN NOT NULL DEFAULT TRUE,
     CHECK (status IN ('open', 'exported', 'final')),
     PRIMARY KEY (space_id, dataset_id, partition_key)
 )`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("create staging state tables: %w", err)
+	}
+	// 旧库补列（IF NOT EXISTS，重复执行无害）。
+	for _, ddl := range []string{
+		`ALTER TABLE task_state ADD COLUMN IF NOT EXISTS first_start TIMESTAMP`,
+		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS row_count BIGINT DEFAULT 0`,
+		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS subject_count BIGINT DEFAULT 0`,
+		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS min_data_time TIMESTAMP`,
+		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS max_data_time TIMESTAMP`,
+		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS finalized_at TIMESTAMP`,
+		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS report_pending BOOLEAN DEFAULT TRUE`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("upgrade staging state tables: %w", err)
+		}
 	}
 	return s, nil
 }

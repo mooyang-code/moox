@@ -42,14 +42,16 @@ type Progress struct {
 
 // Outcome 是一次运行的结果，用来填 CompleteArchiveRun。
 type Outcome struct {
-	Status        string
-	Message       string
-	Progress      Progress
-	RowsAdded     uint64
-	RowsChanged   uint64
-	Exported      uint32
-	Finalized     uint32
-	Partitions    []*archivepb.PartitionReport
+	Status      string
+	Message     string
+	Progress    Progress
+	RowsAdded   uint64
+	RowsChanged uint64
+	Exported    uint32
+	Finalized   uint32
+	Partitions  []*archivepb.PartitionReport
+	// ReportedKeys 是 Partitions 里的分区键；mgr 确认登记之后调用方据此清除待上报标记。
+	ReportedKeys  []string
 	Unrecoverable []*archivepb.UnrecoverableRange
 	FinalUntil    time.Time
 }
@@ -83,11 +85,8 @@ type runState struct {
 	subjects map[string]struct{}
 	added    uint64
 	changed  uint64
-	touched  map[string]bool
 	reopened map[string]bool
 	previews map[string]string
-	// reported 为真表示 finalize 已经生成了最终的分区登记（定稿分区的暂存行已删除，不能再统计）。
-	reported bool
 }
 
 func (r *Runner) now() time.Time {
@@ -118,7 +117,7 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	s := &runState{
 		r: r, a: a, loc: loc, unit: a.GetPartitionUnit(), started: started.UTC(),
 		lookback: time.Duration(a.GetMinLookbackSeconds()) * time.Second, hold: time.Duration(a.GetStagingRetentionSeconds()) * time.Second,
-		report: report, subjects: map[string]struct{}{}, touched: map[string]bool{}, reopened: map[string]bool{}, previews: map[string]string{},
+		report: report, subjects: map[string]struct{}{}, reopened: map[string]bool{}, previews: map[string]string{},
 		task: staging.Task{SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), Columns: columns},
 	}
 	if err := r.Staging.EnsureTable(ctx, s.task); err != nil {
@@ -132,9 +131,10 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 		// 不论成功、失败还是取消，都带上本次涉及的分区的当前登记。
 		out.Progress = s.progress
 		out.RowsAdded, out.RowsChanged = s.added, s.changed
-		if !s.reported {
-			if reports, rerr := s.partitionReports(context.WithoutCancel(ctx), out, nil); rerr == nil {
-				out.Partitions = reports
+		if reports, rerr := s.partitionReports(context.WithoutCancel(ctx), out); rerr == nil {
+			out.Partitions = reports
+			for _, p := range reports {
+				out.ReportedKeys = append(out.ReportedKeys, p.GetPartitionKey())
 			}
 		}
 		switch {
@@ -155,11 +155,10 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 			return out, err
 		}
 	}
-	exported, err := s.exportDue(ctx, out)
-	if err != nil {
+	if err := s.exportDue(ctx, out); err != nil {
 		return out, err
 	}
-	if err := s.finalize(ctx, out, exported); err != nil {
+	if err := s.finalize(ctx, out); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -197,7 +196,19 @@ func (s *runState) readRanges(ctx context.Context) ([][2]time.Time, []*archivepb
 			}
 			start = start.UTC()
 		default:
-			start = s.started.Add(-time.Duration(a.GetIntervalSeconds())*time.Second - s.lookback - span)
+			// 首次运行没有水位：起点从本次运行开始往前推。失败后重试必须从同一个起点读起，否则会跳过两次起点之间
+			// 尚未读到的数据，所以第一次算出的起点记在暂存库里，水位前进之前一直沿用更早的那个。
+			derived := s.started.Add(-time.Duration(a.GetIntervalSeconds())*time.Second - s.lookback - span)
+			start = derived
+			persisted, found, err := s.r.Staging.FirstStart(ctx, a.GetSpaceId(), a.GetDatasetId())
+			if err != nil {
+				return nil, nil, err
+			}
+			if found && persisted.Before(derived) {
+				start = persisted
+			} else if err := s.r.Staging.SetFirstStart(ctx, a.GetSpaceId(), a.GetDatasetId(), derived); err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 	var unrecoverable []*archivepb.UnrecoverableRange
@@ -344,9 +355,6 @@ func (s *runState) stage(ctx context.Context, rows []staging.Row) error {
 	}
 	s.added += result.Added
 	s.changed += result.Changed
-	for key := range result.Touched {
-		s.touched[key] = true
-	}
 	return nil
 }
 
@@ -356,11 +364,10 @@ func (s *runState) closeAt(p staging.PartitionState) (time.Time, error) {
 }
 
 // exportDue 导出所有到时间且需要导出的分区：运行开始 ≥ 分区收盘时间 + L。
-func (s *runState) exportDue(ctx context.Context, out *Outcome) (map[string]export.Info, error) {
-	exported := map[string]export.Info{}
+func (s *runState) exportDue(ctx context.Context, out *Outcome) error {
 	parts, err := s.r.Staging.Partitions(ctx, s.task.SpaceID, s.task.DatasetID)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for _, p := range parts {
 		if !p.NeedsExport() {
@@ -368,35 +375,35 @@ func (s *runState) exportDue(ctx context.Context, out *Outcome) (map[string]expo
 		}
 		closeAt, err := s.closeAt(p)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if s.started.Before(closeAt.Add(s.lookback)) {
 			continue
 		}
+		// 导出时间取 COPY 开始之前的时刻：此后（含 COPY 与登记之间）写入的变化，其 last_changed_at 一定晚于它，会触发下一次重写。
+		exportStarted := s.r.now()
 		info, err := s.r.Files.Write(ctx, s.r.Staging, s.task, p)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if err := s.r.Staging.MarkExported(ctx, s.task.SpaceID, s.task.DatasetID, p.Key, s.r.now(), info.SHA256); err != nil {
-			return nil, err
+		if err := s.r.Staging.MarkExported(ctx, s.task.SpaceID, s.task.DatasetID, p.Key, exportStarted, info.SHA256); err != nil {
+			return err
 		}
-		exported[p.Key] = info
 		s.previews[p.Key] = info.Preview
-		s.touched[p.Key] = true
 		out.Exported++
 	}
-	return exported, nil
+	return nil
 }
 
 // finalize 在一个暂存库事务里定稿满足条件的分区并推进读取水位：
 // 运行开始 ≥ 分区收盘时间 + L + 暂存保留期，且没有待导出的变化。补拉区间不推进水位。
-func (s *runState) finalize(ctx context.Context, out *Outcome, exported map[string]export.Info) error {
+// 定稿时分区的统计（行数、标的数、数据时间范围）一起记进分区状态，登记不再依赖已删除的暂存行。
+func (s *runState) finalize(ctx context.Context, out *Outcome) error {
 	parts, err := s.r.Staging.Partitions(ctx, s.task.SpaceID, s.task.DatasetID)
 	if err != nil {
 		return err
 	}
 	var keys []string
-	stats := map[string]staging.PartitionStats{}
 	for _, p := range parts {
 		if p.Status == staging.StatusFinal || p.NeedsExport() || p.ExportedAt.IsZero() {
 			continue
@@ -408,40 +415,23 @@ func (s *runState) finalize(ctx context.Context, out *Outcome, exported map[stri
 		if s.started.Before(closeAt.Add(s.lookback).Add(s.hold)) {
 			continue
 		}
-		st, err := s.r.Staging.Stats(ctx, s.task, p)
-		if err != nil {
-			return err
-		}
-		stats[p.Key] = st
 		keys = append(keys, p.Key)
 	}
 	advance := s.a.GetKind() != "range"
 	if len(keys) == 0 && !advance {
 		return nil
 	}
-	if err := s.r.Staging.Finalize(ctx, s.task, keys, s.started, advance); err != nil {
+	if err := s.r.Staging.Finalize(ctx, s.task, keys, s.started, s.r.now(), advance); err != nil {
 		return err
-	}
-	for _, key := range keys {
-		s.touched[key] = true
 	}
 	out.Finalized = uint32(len(keys))
-	final := map[string]staging.PartitionStats{}
-	for k, v := range stats {
-		final[k] = v
-	}
-	reports, err := s.partitionReports(ctx, out, final)
-	if err != nil {
-		return err
-	}
-	out.Partitions = reports
-	s.reported = true
 	return nil
 }
 
-// partitionReports 为本次涉及的分区生成登记。finalStats 给出刚定稿分区在删除暂存行之前的统计。
-func (s *runState) partitionReports(ctx context.Context, out *Outcome, finalStats map[string]staging.PartitionStats) ([]*archivepb.PartitionReport, error) {
-	parts, err := s.r.Staging.Partitions(ctx, s.task.SpaceID, s.task.DatasetID)
+// partitionReports 为所有「最新状态还没被 mgr 确认」的分区生成登记：本次涉及的，加上之前上报失败而遗留的。
+// 已定稿分区的统计来自定稿时记下的值，未定稿的分区现算。
+func (s *runState) partitionReports(ctx context.Context, out *Outcome) ([]*archivepb.PartitionReport, error) {
+	pending, err := s.r.Staging.PendingReports(ctx, s.task.SpaceID, s.task.DatasetID)
 	if err != nil {
 		return nil, err
 	}
@@ -450,26 +440,22 @@ func (s *runState) partitionReports(ctx context.Context, out *Outcome, finalStat
 		names = append(names, c.Name)
 	}
 	var reports []*archivepb.PartitionReport
-	for _, p := range parts {
-		if !s.touched[p.Key] {
-			continue
-		}
-		st, ok := finalStats[p.Key]
-		if !ok {
-			if st, err = s.r.Staging.Stats(ctx, s.task, p); err != nil {
+	for _, p := range pending {
+		rows, subjects, minTime, maxTime := p.RowCount, p.SubjectCount, p.MinDataTime, p.MaxDataTime
+		if p.Status != staging.StatusFinal {
+			st, err := s.r.Staging.Stats(ctx, s.task, p)
+			if err != nil {
 				return nil, err
 			}
+			rows, subjects, minTime, maxTime = st.Rows, st.Subjects, st.Min, st.Max
 		}
 		report := &archivepb.PartitionReport{
 			PartitionKey: p.Key, RangeStart: p.Start.Format(time.RFC3339), RangeEnd: p.End.Format(time.RFC3339), Status: p.Status,
-			RowCount: st.Rows, SubjectCount: st.Subjects, ExportCount: p.ExportCount,
-			LastChangedAt: formatTime(p.LastChangedAt), ExportedAt: formatTime(p.ExportedAt),
+			RowCount: rows, SubjectCount: subjects, ExportCount: p.ExportCount,
+			LastChangedAt: formatTime(p.LastChangedAt), ExportedAt: formatTime(p.ExportedAt), FinalizedAt: formatTime(p.FinalizedAt),
 		}
-		if !st.Min.IsZero() {
-			report.MinDataTime, report.MaxDataTime = st.Min.Format(time.RFC3339), st.Max.Format(time.RFC3339)
-		}
-		if p.Status == staging.StatusFinal {
-			report.FinalizedAt = formatTime(s.r.now())
+		if !minTime.IsZero() {
+			report.MinDataTime, report.MaxDataTime = minTime.Format(time.RFC3339), maxTime.Format(time.RFC3339)
 		}
 		if !p.ExportedAt.IsZero() {
 			rel, err := export.RelPath(s.task.SpaceID, s.task.DatasetID, p.Key)

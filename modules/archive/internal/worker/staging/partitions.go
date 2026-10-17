@@ -23,6 +23,14 @@ type PartitionState struct {
 	ExportedAt    time.Time
 	SHA256        string
 	ExportCount   uint32
+	// 定稿时记下的统计（定稿后暂存行已删除，登记要靠它）；未定稿的分区用 Stats 现算。
+	RowCount     uint64
+	SubjectCount uint64
+	MinDataTime  time.Time
+	MaxDataTime  time.Time
+	FinalizedAt  time.Time
+	// ReportPending 为真表示分区的最新状态还没有被 mgr 确认登记。
+	ReportPending bool
 }
 
 // NeedsExport 报告分区是否需要导出：从未导出，或导出之后又有变化。
@@ -33,13 +41,21 @@ func (p PartitionState) NeedsExport() bool {
 	return p.ExportedAt.IsZero() || p.LastChangedAt.After(p.ExportedAt)
 }
 
-const partitionColumns = `partition_key, range_start, range_end, status, last_changed_at, exported_at, file_sha256, export_count`
+const partitionColumns = `partition_key, range_start, range_end, status, last_changed_at, exported_at, file_sha256, export_count, row_count, subject_count, min_data_time, max_data_time, finalized_at, report_pending`
 
 func scanPartition(row interface{ Scan(...any) error }) (PartitionState, error) {
 	var p PartitionState
-	var exported sql.NullTime
-	if err := row.Scan(&p.Key, &p.Start, &p.End, &p.Status, &p.LastChangedAt, &exported, &p.SHA256, &p.ExportCount); err != nil {
+	var exported, minTime, maxTime, finalized sql.NullTime
+	var rows, subjects int64
+	if err := row.Scan(&p.Key, &p.Start, &p.End, &p.Status, &p.LastChangedAt, &exported, &p.SHA256, &p.ExportCount, &rows, &subjects, &minTime, &maxTime, &finalized, &p.ReportPending); err != nil {
 		return PartitionState{}, err
+	}
+	p.RowCount, p.SubjectCount = uint64(rows), uint64(subjects)
+	if minTime.Valid {
+		p.MinDataTime, p.MaxDataTime = minTime.Time.UTC(), maxTime.Time.UTC()
+	}
+	if finalized.Valid {
+		p.FinalizedAt = finalized.Time.UTC()
 	}
 	p.Start, p.End, p.LastChangedAt = p.Start.UTC(), p.End.UTC(), p.LastChangedAt.UTC()
 	if exported.Valid {
@@ -150,7 +166,7 @@ func timestampLiteral(t time.Time) string {
 
 // MarkExported 记录分区已导出。
 func (s *Store) MarkExported(ctx context.Context, spaceID, datasetID, key string, exportedAt time.Time, sha string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE partition_state SET status = 'exported', exported_at = ?, file_sha256 = ?, export_count = export_count + 1 WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`,
+	result, err := s.db.ExecContext(ctx, `UPDATE partition_state SET status = 'exported', exported_at = ?, file_sha256 = ?, export_count = export_count + 1, report_pending = TRUE WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`,
 		exportedAt.UTC(), sha, spaceID, datasetID, key)
 	if err != nil {
 		return err
@@ -163,7 +179,7 @@ func (s *Store) MarkExported(ctx context.Context, spaceID, datasetID, key string
 
 // Finalize 在一个事务里把分区定稿（删除它们的暂存行、状态置为 final），并在 setWatermark 为真时把任务的读取水位推进到 watermark。
 // 定稿与推进水位必须一起提交：事务失败时两者都不变。
-func (s *Store) Finalize(ctx context.Context, task Task, keys []string, watermark time.Time, setWatermark bool) error {
+func (s *Store) Finalize(ctx context.Context, task Task, keys []string, watermark, finalizedAt time.Time, setWatermark bool) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		for _, key := range keys {
 			var start, end time.Time
@@ -178,16 +194,29 @@ func (s *Store) Finalize(ctx context.Context, task Task, keys []string, watermar
 			if !exported.Valid || changed.After(exported.Time) {
 				return fmt.Errorf("partition %s has changes that were not exported; refusing to finalize", key)
 			}
+			// 删除暂存行之前把统计记进分区状态：定稿后登记（行数、标的数、数据时间范围）只能靠它。
+			var rows, subjects int64
+			var minTime, maxTime sql.NullTime
+			if err := tx.QueryRowContext(ctx, fmt.Sprintf(`SELECT count(*), count(DISTINCT subject_id), min(data_time), max(data_time) FROM %s WHERE data_time >= ? AND data_time < ?`, quote(task.Table())), start, end).
+				Scan(&rows, &subjects, &minTime, &maxTime); err != nil {
+				return err
+			}
 			if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE data_time >= ? AND data_time < ?`, quote(task.Table())), start, end); err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE partition_state SET status = 'final' WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`, task.SpaceID, task.DatasetID, key); err != nil {
+			var minArg, maxArg any
+			if minTime.Valid {
+				minArg, maxArg = minTime.Time, maxTime.Time
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE partition_state SET status = 'final', row_count = ?, subject_count = ?, min_data_time = ?, max_data_time = ?, finalized_at = ?, report_pending = TRUE
+WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`, rows, subjects, minArg, maxArg, finalizedAt.UTC(), task.SpaceID, task.DatasetID, key); err != nil {
 				return err
 			}
 		}
 		if setWatermark {
-			_, err := tx.ExecContext(ctx, `INSERT INTO task_state (space_id, dataset_id, scan_watermark) VALUES (?, ?, ?)
-ON CONFLICT (space_id, dataset_id) DO UPDATE SET scan_watermark = excluded.scan_watermark`, task.SpaceID, task.DatasetID, watermark.UTC())
+			// 水位一旦前进，首次运行的起点就不再需要。
+			_, err := tx.ExecContext(ctx, `INSERT INTO task_state (space_id, dataset_id, scan_watermark, first_start) VALUES (?, ?, ?, NULL)
+ON CONFLICT (space_id, dataset_id) DO UPDATE SET scan_watermark = excluded.scan_watermark, first_start = NULL`, task.SpaceID, task.DatasetID, watermark.UTC())
 			return err
 		}
 		return nil
@@ -240,7 +269,7 @@ func (s *Store) ReopenFinal(ctx context.Context, task Task, key, path string) er
 		if _, err := tx.ExecContext(ctx, query); err != nil {
 			return fmt.Errorf("read back archive file %s: %w", path, err)
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE partition_state SET status = 'open', last_changed_at = COALESCE(exported_at, last_changed_at) WHERE space_id = ? AND dataset_id = ? AND partition_key = ? AND status = 'final'`,
+		result, err := tx.ExecContext(ctx, `UPDATE partition_state SET status = 'open', report_pending = TRUE, finalized_at = NULL, last_changed_at = COALESCE(exported_at, last_changed_at) WHERE space_id = ? AND dataset_id = ? AND partition_key = ? AND status = 'final'`,
 			task.SpaceID, task.DatasetID, key)
 		if err != nil {
 			return err
@@ -250,4 +279,59 @@ func (s *Store) ReopenFinal(ctx context.Context, task Task, key, path string) er
 		}
 		return nil
 	})
+}
+
+// PendingReports 返回最新状态还没有被 mgr 确认登记的分区（含已定稿的），按分区键升序。
+func (s *Store) PendingReports(ctx context.Context, spaceID, datasetID string) ([]PartitionState, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+partitionColumns+` FROM partition_state WHERE space_id = ? AND dataset_id = ? AND report_pending ORDER BY partition_key`, spaceID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PartitionState
+	for rows.Next() {
+		p, err := scanPartition(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// MarkReported 在 mgr 确认登记之后清除分区的待上报标记。
+func (s *Store) MarkReported(ctx context.Context, spaceID, datasetID string, keys []string) error {
+	return s.tx(ctx, func(tx *sql.Tx) error {
+		for _, key := range keys {
+			if _, err := tx.ExecContext(ctx, `UPDATE partition_state SET report_pending = FALSE WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`, spaceID, datasetID, key); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// FirstStart 返回首次运行（还没有水位）时记下的读取起点。
+func (s *Store) FirstStart(ctx context.Context, spaceID, datasetID string) (time.Time, bool, error) {
+	var v sql.NullTime
+	err := s.db.QueryRowContext(ctx, `SELECT first_start FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if !v.Valid {
+		return time.Time{}, false, nil
+	}
+	return v.Time.UTC(), true, nil
+}
+
+// SetFirstStart 记下首次运行的读取起点；已有更早的起点时保留更早的。首次运行失败后重试必须从同一个起点读起，
+// 否则会跳过两次起点之间尚未读到的数据。
+func (s *Store) SetFirstStart(ctx context.Context, spaceID, datasetID string, start time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO task_state (space_id, dataset_id, first_start) VALUES (?, ?, ?)
+ON CONFLICT (space_id, dataset_id) DO UPDATE SET first_start = CASE WHEN task_state.first_start IS NULL OR excluded.first_start < task_state.first_start THEN excluded.first_start ELSE task_state.first_start END`,
+		spaceID, datasetID, start.UTC())
+	return err
 }

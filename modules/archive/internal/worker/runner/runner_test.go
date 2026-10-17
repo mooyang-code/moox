@@ -27,6 +27,9 @@ type fakeSource struct {
 	failures int // 前几次读取失败
 	failAll  error
 	columns  []staging.Column
+	// failAfter 大于 0 时，成功服务 failAfter 页之后的读取全部失败。
+	failAfter int
+	served    int
 }
 
 func (f *fakeSource) Columns(context.Context, string, string) ([]staging.Column, error) {
@@ -45,6 +48,10 @@ func (f *fakeSource) ReadRange(_ context.Context, req source.Range) (source.Page
 		f.failures--
 		return source.Page{}, errors.New("transient")
 	}
+	if f.failAfter > 0 && f.served >= f.failAfter {
+		return source.Page{}, errors.New("source went away")
+	}
+	f.served++
 	var matched []staging.Row
 	for _, row := range f.rows {
 		if !row.DataTime.Before(req.Start) && row.DataTime.Before(req.End) {
@@ -461,5 +468,63 @@ func TestExecuteRejectsBadAssignmentsAndMissingColumns(t *testing.T) {
 	e.src.columns = []staging.Column{{Name: "Bad-Name", Type: staging.TypeDouble}}
 	if _, err := e.runner(10).Execute(context.Background(), e.assignment(nil), nil); err == nil {
 		t.Fatal("非法列名必须报错")
+	}
+}
+
+func TestFirstRunRetryReadsFromTheSameStartAfterAFailure(t *testing.T) {
+	e := newEnv(t)
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	e.src.rows = rows("BTC", day, 60, 1)
+	// 第一次运行：01:04:43 开始，首页成功后第二页失败（页大小 20，重试 1 次）。
+	e.src.failAfter = 1
+	r := e.runner(20)
+	r.ReadAttempts = 1
+	out, err := r.Execute(context.Background(), e.assignment(nil), nil)
+	if err != nil || out.Status != "failed" {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+	firstStart := e.src.requests[0].Start
+	e.src.requests, e.src.failAfter, e.src.served = nil, 0, 0
+	// 一个小时之后重试：起点必须仍是第一次的起点（而不是重新往前推 1h16m），否则两次起点之间没读到的数据永久漏读。
+	e.now = e.now.Add(time.Hour)
+	out = e.run(20, nil, nil)
+	if out.Status != "succeeded" || !e.src.requests[0].Start.Equal(firstStart) {
+		t.Fatalf("重试起点 = %s, 第一次起点 = %s, out=%+v", e.src.requests[0].Start, firstStart, out)
+	}
+	// 水位前进之后，起点回到「水位 − L − S」。
+	e.src.requests = nil
+	e.now = e.now.Add(time.Hour)
+	e.run(20, nil, nil)
+	if want := time.Date(2026, 10, 17, 1, 4, 43, 0, time.UTC).Add(time.Hour).Add(-16 * time.Minute); !e.src.requests[0].Start.Equal(want) {
+		t.Fatalf("start = %s, want %s", e.src.requests[0].Start, want)
+	}
+}
+
+func TestPartitionsStayPendingUntilAcknowledgedSoALostCompletionIsReportedAgain(t *testing.T) {
+	e := newEnv(t)
+	day := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	e.src.rows = rows("BTC", day.Add(time.Hour), 30, 1)
+	e.now = time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
+	out := e.run(2000, func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-10T00:00:00Z" }, nil)
+	p := report(out, "2026-10-10")
+	if p == nil || p.GetStatus() != "final" || p.GetRowCount() != 30 || len(out.ReportedKeys) != 1 {
+		t.Fatalf("out=%+v", out)
+	}
+	// 上报失败（没有调用 MarkReported）：下一次运行没有触及这个分区，但仍要带着它（行数来自定稿时记下的统计）。
+	e.now = e.now.Add(time.Hour)
+	out = e.run(2000, nil, nil)
+	again := report(out, "2026-10-10")
+	if again == nil || again.GetStatus() != "final" || again.GetRowCount() != 30 || again.GetSubjectCount() != 1 || again.GetFinalizedAt() == "" ||
+		again.GetMinDataTime() != "2026-10-10T01:00:00Z" || again.GetFileSha256() != p.GetFileSha256() || again.GetFilePath() == "" {
+		t.Fatalf("遗留的分区应再次上报: %v", again)
+	}
+	// 确认登记之后不再上报。
+	if err := e.store.MarkReported(context.Background(), "crypto", "ds_1m", out.ReportedKeys); err != nil {
+		t.Fatal(err)
+	}
+	e.now = e.now.Add(time.Hour)
+	out = e.run(2000, nil, nil)
+	if report(out, "2026-10-10") != nil || len(out.ReportedKeys) != 0 {
+		t.Fatalf("已确认的分区不应再上报: %+v", out.Partitions)
 	}
 }

@@ -244,7 +244,7 @@ func TestFinalizeDeletesRowsAndAdvancesTheWatermarkAtomically(t *testing.T) {
 	p, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
 	w := now0.Add(48 * time.Hour)
 	// 有未导出的变化：拒绝定稿，水位也不动。
-	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, w, true); err == nil {
+	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, w, now0, true); err == nil {
 		t.Fatal("有未导出的变化不能定稿")
 	}
 	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok {
@@ -256,7 +256,7 @@ func TestFinalizeDeletesRowsAndAdvancesTheWatermarkAtomically(t *testing.T) {
 	}
 	_ = s.MarkExported(ctx, "crypto", "ds_1m", "2026-10-15", now0.Add(time.Minute), "sha")
 	// 同一事务里有一个不存在的分区：整体回滚，已存在分区仍是 exported、行还在、水位不动。
-	if err := s.Finalize(ctx, task, []string{"2026-10-15", "2026-09-01"}, w, true); err == nil {
+	if err := s.Finalize(ctx, task, []string{"2026-10-15", "2026-09-01"}, w, now0, true); err == nil {
 		t.Fatal("包含不存在的分区应整体失败")
 	}
 	p, _, _ = s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
@@ -267,7 +267,7 @@ func TestFinalizeDeletesRowsAndAdvancesTheWatermarkAtomically(t *testing.T) {
 	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok {
 		t.Fatal("回滚后水位不能推进")
 	}
-	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, w, true); err != nil {
+	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, w, now0, true); err != nil {
 		t.Fatal(err)
 	}
 	p, _, _ = s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
@@ -284,7 +284,7 @@ func TestFinalizeDeletesRowsAndAdvancesTheWatermarkAtomically(t *testing.T) {
 	}
 	// 只推进水位、不定稿任何分区（运行没有可定稿的分区时）。
 	w2 := w.Add(time.Hour)
-	if err := s.Finalize(ctx, task, nil, w2, true); err != nil {
+	if err := s.Finalize(ctx, task, nil, w2, now0, true); err != nil {
 		t.Fatal(err)
 	}
 	if got, _, _ := s.Watermark(ctx, "crypto", "ds_1m"); !got.Equal(w2) {
@@ -306,7 +306,7 @@ func TestReopenFinalReadsTheFileBackSoRepeatedRowsDoNotRewriteIt(t *testing.T) {
 	_ = s.Export(ctx, task, p, file)
 	exportedAt := now0.Add(time.Hour)
 	_ = s.MarkExported(ctx, "crypto", "ds_1m", "2026-10-15", exportedAt, fileSHA(t, file))
-	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, now0, true); err != nil {
+	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, now0, now0, true); err != nil {
 		t.Fatal(err)
 	}
 	// 数据集又加了一列：读回时旧文件没有这一列，补 NULL。
@@ -370,7 +370,7 @@ func TestDropTaskRemovesTablesAndState(t *testing.T) {
 	s, ctx, task := openTest(t), context.Background(), klineTask()
 	_ = s.EnsureTable(ctx, task)
 	_, _ = s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0)
-	_ = s.Finalize(ctx, task, nil, now0, true)
+	_ = s.Finalize(ctx, task, nil, now0, now0, true)
 	tables, _ := s.StagedTables(ctx)
 	if len(tables) != 1 || tables[0] != task.Table() {
 		t.Fatalf("tables = %v", tables)
@@ -435,7 +435,7 @@ func TestCompactShrinksTheFileAfterLargeDeletesAndKeepsTheData(t *testing.T) {
 	if _, err := s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Finalize(ctx, task, nil, now0, true); err != nil {
+	if err := s.Finalize(ctx, task, nil, now0, now0, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Checkpoint(ctx); err != nil {
@@ -482,5 +482,90 @@ func TestCompactShrinksTheFileAfterLargeDeletesAndKeepsTheData(t *testing.T) {
 	}
 	if err := s.CleanTemp(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPendingReportsTrackEveryChangeUntilTheManagerAcknowledges(t *testing.T) {
+	s, ctx, task := openTest(t), context.Background(), klineTask()
+	_ = s.EnsureTable(ctx, task)
+	at := day0.Add(time.Hour)
+	_, _ = s.Stage(ctx, task, []Row{row("BTC", at, "", 1.0, 1.0, nil, nil), row("ETH", at.Add(time.Minute), "", 2.0, 2.0, nil, nil)}, utcDay, now0)
+	pending, err := s.PendingReports(ctx, "crypto", "ds_1m")
+	if err != nil || len(pending) != 1 || pending[0].Key != "2026-10-15" || !pending[0].ReportPending {
+		t.Fatalf("pending = %+v err=%v", pending, err)
+	}
+	if err := s.MarkReported(ctx, "crypto", "ds_1m", []string{"2026-10-15"}); err != nil {
+		t.Fatal(err)
+	}
+	if pending, _ = s.PendingReports(ctx, "crypto", "ds_1m"); len(pending) != 0 {
+		t.Fatalf("确认登记后不应再待上报: %+v", pending)
+	}
+	// 值没变：不重新标记。
+	_, _ = s.Stage(ctx, task, []Row{row("BTC", at, "", 1.0, 1.0, nil, nil)}, utcDay, now0.Add(time.Hour))
+	if pending, _ = s.PendingReports(ctx, "crypto", "ds_1m"); len(pending) != 0 {
+		t.Fatalf("没有变化不应待上报: %+v", pending)
+	}
+	// 导出、定稿都会重新标记；定稿后统计存在分区状态里。
+	p, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
+	dest := filepath.Join(t.TempDir(), "p.csv.gz")
+	_ = s.Export(ctx, task, p, dest)
+	_ = s.MarkExported(ctx, "crypto", "ds_1m", "2026-10-15", now0.Add(2*time.Hour), "sha")
+	if pending, _ = s.PendingReports(ctx, "crypto", "ds_1m"); len(pending) != 1 || pending[0].ExportCount != 1 {
+		t.Fatalf("导出后应待上报: %+v", pending)
+	}
+	_ = s.MarkReported(ctx, "crypto", "ds_1m", []string{"2026-10-15"})
+	finalizedAt := now0.Add(72 * time.Hour)
+	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, finalizedAt, finalizedAt, true); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ = s.PendingReports(ctx, "crypto", "ds_1m")
+	if len(pending) != 1 || pending[0].Status != StatusFinal || pending[0].RowCount != 2 || pending[0].SubjectCount != 2 ||
+		!pending[0].MinDataTime.Equal(at) || !pending[0].MaxDataTime.Equal(at.Add(time.Minute)) || !pending[0].FinalizedAt.Equal(finalizedAt) {
+		t.Fatalf("定稿后的登记统计要保存在分区状态里: %+v", pending)
+	}
+	_ = s.MarkReported(ctx, "crypto", "ds_1m", []string{"2026-10-15"})
+	// 重新打开已定稿的分区：待上报，定稿时间清空。
+	if err := s.ReopenFinal(ctx, task, "2026-10-15", dest); err != nil {
+		t.Fatal(err)
+	}
+	pending, _ = s.PendingReports(ctx, "crypto", "ds_1m")
+	if len(pending) != 1 || pending[0].Status != StatusOpen || !pending[0].FinalizedAt.IsZero() {
+		t.Fatalf("重新打开后: %+v", pending)
+	}
+	if err := s.MarkReported(ctx, "crypto", "ds_1m", nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFirstStartIsKeptUntilTheWatermarkAdvances(t *testing.T) {
+	s, ctx, task := openTest(t), context.Background(), klineTask()
+	if _, ok, err := s.FirstStart(ctx, "crypto", "ds_1m"); ok || err != nil {
+		t.Fatalf("初始没有起点: %v %v", ok, err)
+	}
+	first := now0.Add(-2 * time.Hour)
+	if err := s.SetFirstStart(ctx, "crypto", "ds_1m", first); err != nil {
+		t.Fatal(err)
+	}
+	// 更晚的起点不能覆盖；更早的可以。
+	_ = s.SetFirstStart(ctx, "crypto", "ds_1m", first.Add(time.Hour))
+	if got, ok, _ := s.FirstStart(ctx, "crypto", "ds_1m"); !ok || !got.Equal(first) {
+		t.Fatalf("first start = %v %v", got, ok)
+	}
+	_ = s.SetFirstStart(ctx, "crypto", "ds_1m", first.Add(-time.Hour))
+	if got, _, _ := s.FirstStart(ctx, "crypto", "ds_1m"); !got.Equal(first.Add(-time.Hour)) {
+		t.Fatalf("first start = %v", got)
+	}
+	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("只记起点不等于有水位")
+	}
+	_ = s.EnsureTable(ctx, task)
+	if err := s.Finalize(ctx, task, nil, now0, now0, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.FirstStart(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("水位前进后首次起点应清除")
+	}
+	if w, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); !ok || !w.Equal(now0) {
+		t.Fatalf("watermark = %v %v", w, ok)
 	}
 }
