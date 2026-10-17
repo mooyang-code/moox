@@ -19,7 +19,8 @@ import (
 // exportPageSize 是导出时分页读取秘钥的批量。
 const exportPageSize = 200
 
-// ExportSecrets 把全部秘钥（含明文）加密成迁移包，方便迁移到另一套环境。系统秘钥（网关密钥环）与配置备份属于本环境，不导出。
+// ExportSecrets 把全部秘钥（含明文）加密成迁移包，方便迁移到另一套环境。属于本环境的秘钥（系统空间里的网关密钥环、
+// EventBus 内部凭据，以及配置备份，见 model.Secret.EnvironmentBound）不导出。
 // 仅全局管理员可调用（控制台层对 secret 的写方法也只放行全局管理员，这里再校验一次）。
 func (s *Service) ExportSecrets(ctx context.Context, req *pb.ExportSecretsReq) (*pb.ExportSecretsRsp, error) {
 	user, ok := globalAdmin(ctx)
@@ -36,7 +37,7 @@ func (s *Service) ExportSecrets(ctx context.Context, req *pb.ExportSecretsReq) (
 	}
 	items := make([]bundleSecret, 0, len(records))
 	for _, record := range records {
-		if !migratable(record.SecretID, record.SecretType) {
+		if record.EnvironmentBound() {
 			continue
 		}
 		items = append(items, bundleSecret{
@@ -150,11 +151,6 @@ func (s *Service) allSecrets(ctx context.Context) ([]model.Secret, error) {
 	}
 }
 
-// migratable 判断一个秘钥是否随迁移包导出、导入：网关密钥环与配置备份属于本环境。
-func migratable(secretID, secretType string) bool {
-	return secretID != model.ConfigBackupID && secretType != model.GatewayKeyringType && !strings.HasPrefix(secretID, model.GatewayKeyringIDPrefix)
-}
-
 // importRecord 校验迁移包里的一个秘钥并转成待写入的记录；不合法时返回原因。
 func importRecord(item bundleSecret) (*model.Secret, string) {
 	record := &model.Secret{
@@ -179,7 +175,7 @@ func importRecord(item bundleSecret) (*model.Secret, string) {
 	if record.SecretID == "" {
 		record.SecretID = dao.GenerateSecretID()
 	}
-	if !migratable(record.SecretID, record.SecretType) {
+	if record.EnvironmentBound() {
 		return nil, "系统秘钥不导入"
 	}
 	if record.SecretType == "" {

@@ -229,6 +229,7 @@ import {
   type ImportSecretsRsp,
   type Secret
 } from "@/api/admin/secret";
+import { reportControlError } from "@/api/admin/http";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
 import { MIN_PASSPHRASE_LENGTH, exportFileName, importSummary, passphraseError, saveTextFile } from "./secret-transfer";
@@ -393,7 +394,9 @@ async function submit(): Promise<boolean> {
     }
     await load();
     return true;
-  } catch {
+  } catch (error) {
+    // 业务错误（ret_info）不经过全局提示，这里展示；已提示过的网络错误不会重复。
+    reportControlError(error);
     return false;
   }
 }
@@ -464,7 +467,8 @@ async function submitExport(): Promise<boolean> {
     Message.success(`已导出 ${rsp.count || 0} 个秘钥`);
     resetExport();
     return true;
-  } catch {
+  } catch (error) {
+    reportControlError(error);
     return false;
   } finally {
     exporting.value = false;
@@ -518,8 +522,9 @@ async function submitImport(): Promise<boolean> {
     });
     importForm.passphrase = "";
     await load();
-  } catch {
-    // 口令错误、文件不对等由全局错误提示展示，弹窗保持打开以便重试。
+  } catch (error) {
+    // 口令错误、文件不对等是业务错误，不经过全局提示，这里展示；弹窗保持打开以便重试。
+    reportControlError(error);
   } finally {
     importing.value = false;
   }

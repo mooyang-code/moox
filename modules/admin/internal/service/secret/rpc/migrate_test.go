@@ -97,6 +97,8 @@ func TestExportThenImportSecretsKeepsIDsAndValues(t *testing.T) {
 		model.Secret{SecretID: "sec_ssh", Name: "跳板机", Category: "ssh", SecretType: "ssh_key", SecretValue: "-----BEGIN KEY-----", Status: "inactive"},
 		model.Secret{SecretID: model.ConfigBackupID, Name: "MooX 配置备份", Category: "other", SecretValue: "MOOX-CONFIG-BACKUP v1\n..."},
 		model.Secret{SecretID: model.GatewayKeyringIDPrefix + "console", Name: "Gateway", Category: "other", SecretType: model.GatewayKeyringType, SecretValue: "k"},
+		model.Secret{SpaceID: "mooxsys", SecretID: "eb-admin", Name: "EventBus internal-admin", Category: "eventbus", Provider: "moox_eventbus",
+			SecretType: "token", KeyID: "eventbus_internal_admin", SecretValue: "source-env-token"},
 	)
 	exported, err := NewService(source).ExportSecrets(userCtx("2"), &pb.ExportSecretsReq{Passphrase: testPassphrase})
 	require.NoError(t, err)
@@ -104,6 +106,7 @@ func TestExportThenImportSecretsKeepsIDsAndValues(t *testing.T) {
 	require.EqualValues(t, 2, exported.GetCount())
 	require.NotContains(t, exported.GetBundle(), "plain-okx-secret", "迁移包里没有明文")
 	require.NotContains(t, exported.GetBundle(), "OKX")
+	// EventBus 内部凭据由部署工具在 mooxsys 空间生成、按 key_id 读取：带到另一套环境会和那里的同名令牌冲突，不导出。
 	var outer map[string]any
 	require.NoError(t, json.Unmarshal([]byte(exported.GetBundle()), &outer))
 	require.Equal(t, bundleFormat, outer["format"])
@@ -167,13 +170,14 @@ func TestImportSecretsReportsInvalidItems(t *testing.T) {
 		{SecretID: "sec_cat", Name: "BadCategory", Category: "nope", SecretValue: "v"},
 		{SecretID: model.ConfigBackupID, Name: "Backup", Category: "other", SecretValue: "v"},
 		{Name: "NoID", Category: "other", SecretValue: "v"},
+		{SecretID: "eb-admin", Name: "EventBus", Category: "eventbus", Provider: "moox_eventbus", KeyID: "eventbus_internal_admin", SecretValue: "t"},
 	}, testPassphrase, time.Now())
 	require.NoError(t, err)
 	target := newMemSecrets()
 	rsp, err := NewService(target).ImportSecrets(userCtx("2"), &pb.ImportSecretsReq{Bundle: bundle, Passphrase: testPassphrase})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, rsp.GetCreated())
-	require.Equal(t, []string{"Masked：秘钥值是脱敏后的值", "BadCategory：分类无效", "Backup：系统秘钥不导入"}, rsp.GetFailed())
+	require.Equal(t, []string{"Masked：秘钥值是脱敏后的值", "BadCategory：分类无效", "Backup：系统秘钥不导入", "EventBus：系统秘钥不导入"}, rsp.GetFailed())
 	require.Len(t, target.byID, 2)
 	require.Contains(t, target.byID, "sec_ok")
 	for id, record := range target.byID {
