@@ -28,11 +28,15 @@ type fakeSource struct {
 	failAll  error
 	columns  []staging.Column
 	// failAfter 大于 0 时，成功服务 failAfter 页之后的读取全部失败。
-	failAfter int
-	served    int
+	failAfter  int
+	served     int
+	columnsErr error // 非空时 Columns 失败
 }
 
 func (f *fakeSource) Columns(context.Context, string, string) ([]staging.Column, error) {
+	if f.columnsErr != nil {
+		return nil, f.columnsErr
+	}
 	if f.columns != nil {
 		return f.columns, nil
 	}
@@ -466,8 +470,8 @@ func TestExecuteRejectsBadAssignmentsAndMissingColumns(t *testing.T) {
 		}
 	}
 	e.src.columns = []staging.Column{{Name: "Bad-Name", Type: staging.TypeDouble}}
-	if _, err := e.runner(10).Execute(context.Background(), e.assignment(nil), nil); err == nil {
-		t.Fatal("非法列名必须报错")
+	if out, err := e.runner(10).Execute(context.Background(), e.assignment(nil), nil); err == nil && (out == nil || out.Status != "failed") {
+		t.Fatalf("非法列名必须报错: out=%+v", out)
 	}
 }
 
@@ -496,6 +500,24 @@ func TestFirstRunRetryReadsFromTheSameStartAfterAFailure(t *testing.T) {
 	e.now = e.now.Add(time.Hour)
 	e.run(20, nil, nil)
 	if want := time.Date(2026, 10, 17, 1, 4, 43, 0, time.UTC).Add(time.Hour).Add(-16 * time.Minute); !e.src.requests[0].Start.Equal(want) {
+		t.Fatalf("start = %s, want %s", e.src.requests[0].Start, want)
+	}
+}
+
+func TestFirstRunKeepsItsStartWhenColumnsLookupFails(t *testing.T) {
+	e := newEnv(t)
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	e.src.rows = rows("BTC", day, 60, 1)
+	firstRunAt := e.now
+	e.src.columnsErr = errors.New("columns timeout")
+	if out := e.run(20, nil, nil); out.Status != "failed" || len(e.src.requests) != 0 {
+		t.Fatalf("out=%+v", out)
+	}
+	e.src.columnsErr = nil
+	e.now = e.now.Add(time.Hour)
+	e.run(20, nil, nil)
+	// 起点沿用第一次运行算出的（运行开始往前推 1h16m），而不是第二次运行重新推的。
+	if want := firstRunAt.Add(-76 * time.Minute); !e.src.requests[0].Start.Equal(want) {
 		t.Fatalf("start = %s, want %s", e.src.requests[0].Start, want)
 	}
 }

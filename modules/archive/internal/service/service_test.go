@@ -215,6 +215,18 @@ func TestSpaceHeaderScopesTheConsoleAPI(t *testing.T) {
 	requireCode(t, bad.GetRetInfo(), commonpb.ErrorCode_INVALID_PARAM, "冲突")
 }
 
+func TestUpdateArchiveTaskKeepsAnUnfinishedBackfillStartEvenWhenItAgedOutOfRetention(t *testing.T) {
+	h := newHarness(t)
+	requireOK(t, h.create("ds_1m", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom = "2026-10-11T01:00:00Z" }).GetRetInfo())
+	// 时间过去 2 天：回补起点已早于「当前时间 − 保留期 + 1 天」，只停用任务不能把它清空。
+	h.now = h.now.Add(48 * time.Hour)
+	rsp, _ := h.mgr.UpdateArchiveTask(context.Background(), &archivepb.UpdateArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m", Status: "paused"})
+	requireOK(t, rsp.GetRetInfo())
+	if got := rsp.GetTask().GetBackfillFrom(); got != "2026-10-11T01:00:00Z" {
+		t.Fatalf("backfill_from = %q，回补起点被改丢", got)
+	}
+}
+
 func TestUpdateArchiveTaskRecomputesTheScheduleAndHandlesPauseResume(t *testing.T) {
 	h := newHarness(t)
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())

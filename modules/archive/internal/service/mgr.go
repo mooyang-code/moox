@@ -230,6 +230,10 @@ func (m *MgrService) UpdateArchiveTask(ctx context.Context, req *archivepb.Updat
 			return &archivepb.UpdateArchiveTaskRsp{RetInfo: invalid(err)}, nil
 		}
 	}
+	if req.GetBackfillFrom() == "" {
+		// 用户没改回补起点：保留原值（即使它已超出保留期，校验时被忽略），首次回补尚未完成时不能被改丢。
+		built.BackfillFrom = task.BackfillFrom
+	}
 	update := store.TaskUpdate{
 		ScheduleCron: built.Plan.Cron, ScheduleTZ: built.Plan.TZ, IntervalSeconds: int(built.Interval / time.Second), StartAt: built.StartAt,
 		BackfillFrom: built.BackfillFrom, Status: status, NextRunAt: built.NextRunAt, RunNow: req.GetRunNow(),

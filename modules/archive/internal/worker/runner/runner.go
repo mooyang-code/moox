@@ -110,21 +110,11 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	if a.GetPartitionUnit() != "day" && a.GetPartitionUnit() != "month" {
 		return nil, fmt.Errorf("run %s has invalid partition unit %q", a.GetRunId(), a.GetPartitionUnit())
 	}
-	columns, err := r.Source.Columns(ctx, a.GetSpaceId(), a.GetDatasetId())
-	if err != nil {
-		return nil, err
-	}
 	s := &runState{
 		r: r, a: a, loc: loc, unit: a.GetPartitionUnit(), started: started.UTC(),
 		lookback: time.Duration(a.GetMinLookbackSeconds()) * time.Second, hold: time.Duration(a.GetStagingRetentionSeconds()) * time.Second,
 		report: report, subjects: map[string]struct{}{}, reopened: map[string]bool{}, previews: map[string]string{},
-		task: staging.Task{SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), Columns: columns},
-	}
-	if err := r.Staging.EnsureTable(ctx, s.task); err != nil {
-		return nil, err
-	}
-	if err := r.Files.WriteDatasetJSON(a.GetSpaceId(), a.GetDatasetId(), a.GetFreq(), columns, r.now()); err != nil {
-		return nil, fmt.Errorf("write _dataset.json: %w", err)
+		task: staging.Task{SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId()},
 	}
 	out = &Outcome{Status: "succeeded"}
 	defer func() {
@@ -148,6 +138,18 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	ranges, unrecoverable, err := s.readRanges(ctx)
 	if err != nil {
 		return out, err
+	}
+	// 读取起点（含首次运行的起点）已落盘，再去取列信息、建表：这一步失败重试时不会让起点后移而漏读。
+	columns, err := r.Source.Columns(ctx, a.GetSpaceId(), a.GetDatasetId())
+	if err != nil {
+		return out, err
+	}
+	s.task.Columns = columns
+	if err := r.Staging.EnsureTable(ctx, s.task); err != nil {
+		return out, err
+	}
+	if err := r.Files.WriteDatasetJSON(a.GetSpaceId(), a.GetDatasetId(), a.GetFreq(), columns, r.now()); err != nil {
+		return out, fmt.Errorf("write _dataset.json: %w", err)
 	}
 	out.Unrecoverable = unrecoverable
 	for _, rng := range ranges {
