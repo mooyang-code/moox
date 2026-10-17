@@ -3,6 +3,8 @@ package factorexpr
 import "math"
 
 // 标量语义（设计 4.4）：任一输入为 NaN 结果为 NaN；产生 ±Inf 时记为 NaN；布尔值用 1、0 表示，NaN 表示未知。
+// 例外：where 是条件选择，只看条件和被选中的分支，未选分支是不是 NaN 不影响结果（所以 where(v > 0, x / v, 0)
+// 能挡住除以 0）；fill_nan、is_nan 本来就用来处理 NaN。
 // 常量折叠与逐元素内核共用这些函数，保证编译期与运行期的结果一致。
 
 var nan = math.NaN()
@@ -96,7 +98,10 @@ var scalarFuncs = map[string]ScalarFunc{
 	}),
 	"signed_power": binary(func(a, e float64) float64 {
 		if a == 0 {
-			return 0
+			if e < 0 {
+				return nan // 0 的负次幂是无穷大，按规则记为 NaN
+			}
+			return 0 // sign(0) = 0
 		}
 		magnitude := math.Pow(math.Abs(a), e)
 		if a < 0 {

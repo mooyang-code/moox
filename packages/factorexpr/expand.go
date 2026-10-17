@@ -15,7 +15,26 @@ type expandedOutput struct {
 	combo   int
 }
 
-// combinations 按参数声明顺序、列表内顺序生成笛卡尔积；没有列表参数时只有一组。
+// checkExpansionSize 在生成任何组合之前检查展开后的输出数（输出数 × 各列表参数的长度之积）不超过上限，
+// 用除法比较避免溢出；否则少量参数就能让组合数达到千万级，在报错之前耗尽内存。
+func checkExpansionSize(spec *Spec) error {
+	total := len(spec.Outputs)
+	for _, param := range spec.Params {
+		if !param.List {
+			continue
+		}
+		if total > MaxOutputs/len(param.Values) {
+			return errorf("outputs", 0, "展开后的输出超过 %d 个（输出数 × 各列表参数的取值个数）", MaxOutputs)
+		}
+		total *= len(param.Values)
+	}
+	if total > MaxOutputs {
+		return errorf("outputs", 0, "展开后的输出超过 %d 个（输出数 × 各列表参数的取值个数）", MaxOutputs)
+	}
+	return nil
+}
+
+// combinations 按参数声明顺序、列表内顺序生成笛卡尔积；没有列表参数时只有一组。调用前必须先通过 checkExpansionSize。
 func combinations(spec *Spec) []combination {
 	combos := []combination{{}}
 	for _, param := range spec.Params {
@@ -58,8 +77,8 @@ func expandOutputs(spec *Spec, combos []combination) ([]expandedOutput, error) {
 		}
 		for index, combo := range combos {
 			name := renderTemplate(segments, combo)
-			if !columnPattern.MatchString(name) {
-				return nil, errorf(path, binding.Line, "展开后的列名 %q 不合法：只能包含字母、数字和下划线，且不能以数字开头", name)
+			if !validColumnName(name) {
+				return nil, errorf(path, binding.Line, "展开后的列名 %q 不合法：只能包含字母、数字和下划线，不能以数字开头，最长 %d 个字符", name, MaxIdentifierRunes)
 			}
 			if isReservedColumn(name) {
 				return nil, errorf(path, binding.Line, "输出列名 %s 是系统列", name)

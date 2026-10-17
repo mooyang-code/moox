@@ -13,14 +13,18 @@ func nodeByCanonical(t *testing.T, p *Program, canonical string) int {
 	return -1
 }
 
-// programText 按程序节点重建规范文本，便于在测试里定位节点。
+// programText 按程序节点重建子树的规范文本，便于在测试里定位节点。
 func programText(p *Program, index int) string {
+	return programTree(p, index).Canonical()
+}
+
+func programTree(p *Program, index int) *Node {
 	node := p.Nodes[index]
-	n := &Node{Op: node.Op, Kind: node.Kind, Column: node.Column, Value: node.Value, Ints: node.Ints, Floats: node.Floats}
+	tree := &Node{Op: node.Op, Kind: node.Kind, Column: node.Column, Value: node.Value, Ints: node.Ints, Floats: node.Floats}
 	for _, arg := range node.Args {
-		n.Args = append(n.Args, &Node{text: programText(p, arg)})
+		tree.Args = append(tree.Args, programTree(p, arg))
 	}
-	return n.Canonical()
+	return tree
 }
 
 func TestNeedLiveTarget(t *testing.T) {

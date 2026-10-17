@@ -23,6 +23,8 @@ const (
 	MaxOutputs     = 64
 	MaxWindow      = 5000
 	MaxLookback    = 5000
+	// MaxIdentifierRunes 是输入列名与输出列名的长度上限；它与 MaxFactorNodes 一起给规范文本的长度定了上界。
+	MaxIdentifierRunes = 64
 	// maxIntegerParam 保证整数参数能被 float64 精确表示。
 	maxIntegerParam = 1 << 53
 )
@@ -34,6 +36,11 @@ var (
 	namePattern   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 	columnPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
+
+// validColumnName 检查输入列名与输出列名：字母或下划线开头，只含字母、数字、下划线，不超过 MaxIdentifierRunes。
+func validColumnName(name string) bool {
+	return len(name) <= MaxIdentifierRunes && columnPattern.MatchString(name)
+}
 
 func isReservedColumn(name string) bool {
 	for _, reserved := range ReservedColumns {

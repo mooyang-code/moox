@@ -54,36 +54,51 @@ type Node struct {
 	Lookback int
 	cross    bool
 	size     int
-	text     string
 }
 
 // CrossSection 报告该节点的子树里是否有截面算子。
 func (n *Node) CrossSection() bool { return n.cross }
 
 // Canonical 返回节点的规范文本：函数调用形式，常量按数值书写。只改格式、注释或 let 名不会改变它。
+// 文本按展开后的树写出；编译保证一个因子展开后的节点不超过 MaxFactorNodes，标识符不超过 MaxIdentifierRunes，长度有上界。
 func (n *Node) Canonical() string {
-	if n.text != "" {
-		return n.text
-	}
+	var b strings.Builder
+	n.writeCanonical(&b)
+	return b.String()
+}
+
+// writeCanonical 把规范文本直接写进同一个缓冲区，不在节点上缓存子树文本：逐节点缓存会让链式 let 的总占用按平方增长。
+func (n *Node) writeCanonical(b *strings.Builder) {
 	switch n.Op {
 	case OpColumn:
-		n.text = n.Column
+		b.WriteString(n.Column)
+		return
 	case OpConst:
-		n.text = formatConst(n)
-	default:
-		parts := make([]string, 0, len(n.Args)+len(n.Ints)+len(n.Floats))
-		for _, arg := range n.Args {
-			parts = append(parts, arg.Canonical())
-		}
-		for _, value := range n.Ints {
-			parts = append(parts, strconv.Itoa(value))
-		}
-		for _, value := range n.Floats {
-			parts = append(parts, formatFloat(value))
-		}
-		n.text = n.Op + "(" + strings.Join(parts, ",") + ")"
+		b.WriteString(formatConst(n))
+		return
 	}
-	return n.text
+	b.WriteString(n.Op)
+	b.WriteByte('(')
+	first := true
+	separate := func() {
+		if !first {
+			b.WriteByte(',')
+		}
+		first = false
+	}
+	for _, arg := range n.Args {
+		separate()
+		arg.writeCanonical(b)
+	}
+	for _, value := range n.Ints {
+		separate()
+		b.WriteString(strconv.Itoa(value))
+	}
+	for _, value := range n.Floats {
+		separate()
+		b.WriteString(formatFloat(value))
+	}
+	b.WriteByte(')')
 }
 
 func formatConst(n *Node) string {

@@ -17,6 +17,9 @@ type scope struct {
 	lets    map[string]*Node
 	letPos  map[string]int
 	current int // 正在编译的 let 的位置；编译输出时为 len(lets)
+	// memo 按语法树节点缓存编译结果。expr-lang 会让多个父节点共享同一个子节点（例如把 0 < e < 1 改写成两个比较、
+	// 共用 e），不缓存的话嵌套几十层就会指数级重复编译。同一个语法节点只属于一条表达式，在同一组参数取值下结果确定。
+	memo map[ast.Node]*Node
 }
 
 // describe 返回这组参数取值的说明，例如 “window=5”；没有列表参数时为空。
@@ -42,6 +45,18 @@ func (s *scope) annotate(err error) error {
 
 // lower 把语法树编译成规范化的表达式节点：解析名称、检查类型、折叠常量、计算回看。
 func lower(src *exprSource, node ast.Node, sc *scope) (*Node, error) {
+	if cached, ok := sc.memo[node]; ok {
+		return cached, nil
+	}
+	result, err := lowerNode(src, node, sc)
+	if err != nil {
+		return nil, err
+	}
+	sc.memo[node] = result
+	return result, nil
+}
+
+func lowerNode(src *exprSource, node ast.Node, sc *scope) (*Node, error) {
 	switch n := node.(type) {
 	case *ast.IntegerNode:
 		if n.Value > maxIntegerParam || n.Value < -maxIntegerParam {
@@ -126,8 +141,8 @@ func resolveName(src *exprSource, node *ast.IdentifierNode, sc *scope) (*Node, e
 	if isReservedColumn(name) {
 		return nil, src.errAt(node, "%s 是系统列，不能作为输入", name)
 	}
-	if !columnPattern.MatchString(name) {
-		return nil, src.errAt(node, "输入列名 %q 不合法", name)
+	if !validColumnName(name) {
+		return nil, src.errAt(node, "输入列名 %q 不合法：只能包含字母、数字和下划线，不能以数字开头，最长 %d 个字符", name, MaxIdentifierRunes)
 	}
 	return newColumn(name), nil
 }
@@ -329,6 +344,9 @@ func Compile(text string) (*Factor, error) {
 
 // CompileSpec 编译已解析的定义：展开参数，按每组参数取值编译 let 与输出，推导输入列、回看与类型。
 func CompileSpec(spec *Spec) (*Factor, error) {
+	if err := checkExpansionSize(spec); err != nil {
+		return nil, err
+	}
 	combos := combinations(spec)
 	expanded, err := expandOutputs(spec, combos)
 	if err != nil {
@@ -359,7 +377,8 @@ func CompileSpec(spec *Spec) (*Factor, error) {
 		if scopes[index] != nil {
 			return scopes[index], nil
 		}
-		sc := &scope{combo: combos[index], listed: listed, lets: make(map[string]*Node, len(lets)), letPos: letPos}
+		sc := &scope{combo: combos[index], listed: listed, lets: make(map[string]*Node, len(lets)), letPos: letPos,
+			memo: make(map[ast.Node]*Node)}
 		for i, let := range lets {
 			sc.current = i
 			node, err := lower(let.src, let.root, sc)
@@ -449,7 +468,7 @@ func (f *Factor) CanonicalText() string {
 	for _, output := range f.Outputs {
 		b.WriteString(output.Name)
 		b.WriteString(" = ")
-		b.WriteString(output.Root.Canonical())
+		output.Root.writeCanonical(&b)
 		b.WriteByte('\n')
 	}
 	return b.String()
