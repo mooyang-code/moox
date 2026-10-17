@@ -1,6 +1,6 @@
 # Storage 去业务耦合设计
 
-状态：设计稿 v2（2026-10-17），尚未编码。项目尚未上线，接口、事件、元数据直接修改，不考虑兼容。v2（吸收 Codex 评审）：`source` 只表示完成机制，消费方按绑定的数据集筛选；`write_owner` 可授权修改，补上 Monitor 系统数据集；默认 View 的删除也由业务模块负责；`commit_id` 限定单数据集并重做回执；加列期间保留消费屏障；数据集列来源改为「字段 / 自定义 / 属性 / 系统」；补上遗漏的耦合（数据源例外、删除授权、保留策略包）；发布 C 改为有状态切换。
+状态：设计稿 v3（2026-10-17），尚未编码。项目尚未上线，接口、事件、元数据直接修改，不考虑兼容。v2（吸收 Codex 评审）：`source` 只表示完成机制，消费方按绑定的数据集筛选；`write_owner` 可授权修改，补上 Monitor 系统数据集；默认 View 的删除也由业务模块负责；`commit_id` 限定单数据集并重做回执；加列期间保留消费屏障；数据集列来源改为「字段 / 自定义 / 属性 / 系统」；补上遗漏的耦合（数据源例外、删除授权、保留策略包）；发布 C 改为有状态切换。v3（吸收 Codex 第三轮评审）：列来源只留「字段 / 自定义 / 系统」，自定义列不带 `origin_id`、不受来源唯一约束；一次性迁移同时改写列定义 JSON 与 `write_owner`，强制校验不设开关；`ViewDataReady` 升到 v2 并删除 `source`；发布 C 改为「暂停采集 → 全部停机的静默点快照 → 迁移 → 先建新消费者再启动生产者」，回退即恢复静默点快照。
 与 [Storage 读接口收敛设计](Storage读接口收敛设计.md) 互补：那份收敛读接口，本设计处理写入、周期、事件、View 和元数据中的业务概念。
 实施排在 [执行计划](Storage读接口收敛与数据归档执行计划.md) 的发布 C。
 
@@ -48,7 +48,7 @@
 | --- | --- | --- |
 | `catalog/factor_result_view.go`、`metadata/sqlite/crud_dataset.go` | 因子结果数据集激活时，Storage 自动建并「托管」默认 View（`managed_by = storage`、`view_role = factor_result`）；加列前要求默认 View 已激活 | Storage 替因子模块维护资源；Collector 自己建 View，两种做法并存 |
 | `view/maintenance_schema_extension.go` | 只有 `primary_dataset_role = factor_result` 的 View 才能在数据集加列后原地扩展 | 通用能力只给因子用 |
-| `view/event_apply.go` `factorAttributeKeys` | 写死 `factor.source_hash` 等属性键，并按列属性 `origin_factor_id` 拼出 `factor.source_hash.<因子>` | View 认识因子的属性命名 |
+| `view/event_apply.go` `factorAttributeKeys` | 写死 `factor.source_hash` 等属性键，并按列属性 `origin_factor_id` 拼出 `factor.source_hash.<因子>` | View 认识因子的属性命名；而且这些键没有写入方（因子结果写入拒绝行属性）。发布 A 已随读接口收敛删除（收敛设计 2.4），本设计不再处理 |
 | `view/inventory_reconciler.go`、`config/loader.go`、`eventconsumer/delivery_policy.go` | 数据集 ID 以 `dataset_factor_` 开头的走「factor」消费分区（单并发、`max_ack_pending = 1`）；配置校验写死三个分区名 | 按数据集 ID 前缀决定投递方式 |
 
 ### 1.5 元数据
@@ -78,6 +78,9 @@
   Monitor 写入的系统数据集为 `moox-monitor`（`config/setup/metadata.yaml` 同步补上）。
 - `write_owner` 可以修改，但只允许当前 `write_owner` 中的调用方或全局管理员修改；删除 `metadata/dataset_attributes.go` 对业务属性
   （`dataset_role`、`owner_module`、`source_dataset_id`、`collector_task_id`、`resample_task_id`）的不可变约束，它们由业务模块自己维护。
+- 已有数据集的 `write_owner` 由 2.5 的一次性迁移按 `owner_module` 规范（`factor` → `moox-factor`、`collector` → `moox-collector`、
+  `monitor` → `moox-monitor`）：现在因子数据集存的是 `factor`，采集与 Monitor 的数据集没有这个属性，按上一条的授权规则业务模块自己改不了。
+  迁移之后新版本从启动起就强制校验，不设临时放开的开关。
 - 删除数据集、删除行、恢复行同样要求调用方在 `write_owner` 中（或全局管理员），删除 `DeleteDataset` 中按因子、采集分别授权的分支；
   `data_source_id` 对所有数据集都可选，填写时校验引用存在。
 - 以下操作要求调用方 AppId 在 `write_owner` 中：`UpsertFields`、`CommitTimeSeriesBatch`、`RegisterSeriesSnapshot`、`ReportDatasetPeriodCompleted`、`DeleteDatasetRows`、
@@ -131,7 +134,8 @@
 
 `ViewDataReady` 只描述「这一期的数据已进入这个 View」：
 
-- `completion_kind` 改为 `source`（`ledger` / `producer`），取自对应的周期完成事件；
+- 载荷不兼容，事件版本升到 v2（主题随之变为 `moox.event.storage.view.data.ready.v2.…`，见第 6 节）；
+- 删除 `completion_kind`：消费方不按来源区分（见下），事件里不需要来源；
 - `factors[]` 改为原样透传周期完成事件的 `detail_type` 与 `detail`；
 - 其余字段（View、数据集、期、状态、可见范围、失败范围、写入位置、就绪时间、`universe_subject_ids`）不变。
 - Strategy 不再用来源区分触发：它按绑定的 View 与数据集判断事件是否相关，`detail_type` 为 `moox.factor.PeriodDetail.v1` 时解码因子状态。
@@ -143,18 +147,24 @@
   托管默认 View 的逻辑（`metadata/sqlite/crud_dataset.go:189`）。factor-mgr 与 Collector 一样，通过 `CreateView`、`UpsertViewColumn`、`DeleteView`
   维护自己的 View 的完整生命周期。删除因子结果数据集的顺序（可重试）：确认没有默认 View 以外的引用 → 删除默认 View → 物理清理行 → 删除数据集；
   否则数据已清空而元数据被 `t_views` 外键（`RESTRICT`）挡住删不掉。
-- **数据集列的来源统一为「字段 / 自定义 / 属性 / 系统」**：
-  - `FIELD`（字段）：引用 Space 字段目录，`origin_id` 为字段 ID，不变；
-  - `CUSTOM`（自定义，由 `FACTOR` 改名）：数据集自己定义的值列，值与字段列一样按列名存取；`origin_id` 由写入方填写（因子结果填因子 ID），Storage 不解释；
-    原来 `UpsertDatasetColumn` 对因子输出列的 `origin_factor_id`、`factor_output` 校验与显示名特例删除，由 factor-mgr 自己保证；
-  - `ATTRIBUTE`（属性，新增）：值取自行属性，`origin_id` 为属性键；
+- **数据集列的来源统一为「字段 / 自定义 / 系统」**：
+  - `FIELD`（字段）：引用 Space 字段目录，`origin_id` 为字段 ID，不变；同一数据集内同一字段只能出现一次；
+  - `CUSTOM`（自定义，由 `FACTOR` 改名）：数据集自己定义的值列，值与字段列一样按列名存取，列的身份就是列名；**不带 `origin_id`**。
+    生产者信息由写入方放在列属性里（factor-mgr 已有 `origin_factor_id`、`factor_output`），Storage 不解释。现在一个因子的多个输出列都以因子 ID 为
+    `origin_id`，撞上 `UNIQUE (c_space_id, c_dataset_id, c_origin_type, c_origin_id)`（`schema/metadata.sql:630`），多输出因子建不出第二列；
+    改为只对字段列建部分唯一索引（`WHERE c_origin_type = 'field'`）。原来 `UpsertDatasetColumn` 对因子输出列的校验与显示名特例删除；
   - `SYSTEM`（系统），不变。
 
-  View 列引用数据集列，读取时按数据集列的来源取值或属性；归档同样按数据集列导出。删除 `factorAttributeKeys` 中写死的 `factor.` 键，
-  因子的来源哈希等由 factor-mgr 定义为属性列；SQL 与校验中的因子分支一并删除。
-  `t_dataset_columns` 的 `CHECK (c_origin_type IN ('field', 'factor', 'system'))` 要改成 `('field', 'custom', 'attribute', 'system')`，
-  SQLite 改不了 `CHECK`，只能重建表：元数据 schema 升到 v14，发布 C 停写期间用一次性的迁移命令重建这张表（`factor` 改为 `custom`）并写入新版本号，
-  不需要重置元数据库（第 6 节）。
+  不增加「属性」来源：行属性是写入方自己的来源信息，没有按列读取的需求（因子行属性本来就不存在，见 1.4）。SQL 与校验中的因子分支一并删除。
+- **一次性元数据迁移（v13 → v14）**：`t_dataset_columns` 的 `CHECK (c_origin_type IN ('field', 'factor', 'system'))` 要改成 `('field', 'custom', 'system')`，
+  SQLite 改不了 `CHECK`、也删不了表级 `UNIQUE`，只能重建表；schema 版本号升到 v14。迁移命令（`moox-storage-cli migrate-metadata-v14`）在一个事务里：
+  - 重建 `t_dataset_columns`（新的 `CHECK` 与部分唯一索引，索引与触发器照新建库重建）；
+  - `c_origin_type = 'factor'` 的行改为 `custom`、`c_origin_id` 清空，**同时改写 `c_attrs_json`**：列定义整条以 protojson 存在这一列里，枚举按名字序列化
+    （`DATASET_COLUMN_ORIGIN_TYPE_FACTOR`），读取时 `DiscardUnknown` 会把认不出的枚举名静默丢成「未指定」（`metadata/sqlite/crud_helpers.go:37`）；
+  - 按 2.1 规范已有数据集的 `write_owner`；
+  - 写入版本号 14。失败时整体回滚，库保持 v13。
+
+  命令只为这次发布存在，在 storage-primary 停机时执行，发布完成后删除；不需要重置元数据库。
 - **View 跟随数据集加列**：View 属性 `follow_dataset_columns = true` 时，数据集新增列后原地扩展 View 的列（复用现有的 schema 扩展机制）：
   - 数据集加列在同一个元数据事务里，更新所有跟随它的 View 的列投影与期望版本；
   - 消费屏障保留并通用化：事件里出现活动 schema 还没有的列时，暂停该 View 的消费、等待扩展完成（现在只对因子结果 View 生效，见
@@ -185,11 +195,13 @@
 
 | 模块 | 改动 |
 | --- | --- |
-| factor-mgr | 创建因子结果数据集时设置 `write_owner = moox-factor`、`view_delivery = serial`；数据集的来源哈希等定义为属性列；自己建、改、删默认 View（`follow_dataset_columns = true`）；删除因子结果数据集按 2.5 的顺序执行；启动对账时为已有数据集补齐属性与 View |
-| 因子引擎 | 写结果改为 `UpsertFields(commit_id)`；报告改为 `ReportDatasetPeriodCompleted`（`detail` 为 `factorpb.PeriodDetail`）；幂等查询改为 `GetDatasetPeriodCompleted`；触发改为订阅 `DatasetPeriodCompleted`，按因子集绑定的源数据集与频率筛选，`ledger`、`producer` 两种来源都接受（重采样结果是 `producer`）|
-| Collector | 数据集设置 `write_owner = moox-collector`；重采样的周期报告改为 `ReportDatasetPeriodCompleted`；A 股默认 `series_tag` 在写入方填写；去重改用 `commit_id` |
-| Strategy | 按绑定的 View 与数据集判断就绪事件是否相关，不再按来源区分；`detail_type` 为因子明细时解码（依赖 `packages/factorpb`）|
-| Monitor | 主机指标写入的去重改用 `commit_id`；系统数据集的 `write_owner` 为 `moox-monitor`，启动对账时补齐 |
+| factor-mgr | 创建因子结果数据集时设置 `write_owner = moox-factor`、`view_delivery = serial`；因子输出列的来源为 `CUSTOM`、不带 `origin_id`（因子 ID 留在列属性 `origin_factor_id`）；自己建、改、删默认 View（`follow_dataset_columns = true`）；删除因子结果数据集按 2.5 的顺序执行；启动对账时为已有数据集补齐 `view_delivery` 与 View |
+| 因子引擎 | 写结果改为 `UpsertFields(commit_id)`；报告改为 `ReportDatasetPeriodCompleted`（`detail` 为 `factorpb.PeriodDetail`）；幂等查询改为 `GetDatasetPeriodCompleted`；触发改为订阅 `DatasetPeriodCompleted`（新的 durable 名），按因子集绑定的源数据集与频率筛选，`ledger`、`producer` 两种来源都接受（重采样结果是 `producer`）|
+| Collector | 数据集设置 `write_owner = moox-collector`；`UpsertFields` 按数据集拆分请求；重采样的周期报告改为 `ReportDatasetPeriodCompleted`；A 股默认 `series_tag` 在写入方填写；去重改用 `commit_id` |
+| Strategy | 订阅 `ViewDataReady` v2（新的 durable 名）；按绑定的 View 与数据集判断就绪事件是否相关，不再按来源区分；`detail_type` 为因子明细时解码（依赖 `packages/factorpb`）|
+| Monitor | 主机指标写入的去重改用 `commit_id`；系统数据集的 `write_owner` 为 `moox-monitor`（已有库由迁移补上，新建库来自 `config/setup/metadata.yaml`） |
+| CLI | 列来源的解析、元数据导入导出与初始化预检（`metadata_implementation.go:884`、`setup_init.go:523`）改为 `FIELD / CUSTOM / SYSTEM` |
+| 前端 | `api/storage/types.ts` 与用到列来源的页面（因子结果、View 浏览、策略输入表）改为 `CUSTOM` |
 | packages | `packages/events`：事件注册表换成 `DatasetPeriodCompleted`，删除因子状态校验；新建 `packages/factorpb`；`packages/storagepb` 同步 |
 | 服务目录 | PrimaryStore 方法改名与删除；`factor-engine`、`scf-collector` 等外部身份的白名单同步 |
 
@@ -197,43 +209,59 @@
 
 项目尚未上线，不写长期的兼容或迁移层；唯一的例外是 2.5 中重建 `t_dataset_columns` 的一次性迁移命令，发布完成后删除：
 
-- 现有数据集的属性由 factor-mgr、Collector、Monitor 启动对账时补齐（`write_owner`、`view_delivery`）。发布时先放开属性的修改限制、完成补齐，
-  再启用按 `write_owner` 的强制校验（同一次发布内的两个步骤，见执行计划）；
+- 已有数据集的 `write_owner` 与因子输出列由 2.5 的迁移命令处理；`view_delivery` 由 factor-mgr 启动对账时补齐；
 - Storage 托管的因子默认 View 改由 factor-mgr 接管：对账时把 View 属性 `managed_by` 改为 `factor-mgr`、补上 `follow_dataset_columns`；
-  来源哈希等改为来源为属性的数据集列，并加入默认 View；
 - EventBus 中残留的旧事件（两种周期完成事件）在发布时清除对应主题，View 消费者按新事件重建（参照 `reset-view-consumers` 的流程，
   必要时 `repair-view`）。
 
 ## 5. 测试
 
 - 写入权限：只有 `write_owner` 中的 AppId 能写；不再有别名；只读身份写入被拒；`write_owner` 只能由当前所有者或全局管理员修改；
-  全新初始化与已有数据集两条路径都能补齐属性。
+  全新初始化（`metadata.yaml`）与已有数据集（迁移命令，`write_owner` 为旧值 `factor` 与为空两种）都得到正确的所有者。
 - 幂等写入：同一 `commit_id` 相同内容成功、不同内容冲突；跨数据集同一 `commit_id` 互不影响；`UpsertFields` 与 `CommitTimeSeriesBatch` 用同一 `commit_id` 时按冲突处理；
   一次写入一个 outbox 位置；回执过期后可以再次写入；`UpsertFields` 拒绝跨数据集的请求。
 - 删除：只有默认 View 时，因子结果数据集能完整删除；存在其他 View 时拒绝删除且事实保持完整；中途失败可以重试。
 - 加列：加列后立刻写入新列、扩展还没完成时，新列不会被丢弃，也不会提前发出就绪事件。
 - 重采样：重采样结果（`producer`）→ 因子按期计算 → Strategy 触发，端到端通过。
 - 周期：`ledger` 判定与现在的账本行为一致；`producer` 报告与查询一致；`detail` 原样透传到 `ViewDataReady`。
-- View：属性列的读取；`follow_dataset_columns` 的原地扩展；`serial` / `parallel` 投递按数据集属性生效。
+- 列来源：多输出因子的各列都能建立；多个自定义列互不冲突；同一字段在一个数据集里仍只能出现一次；`CUSTOM` 经 CLI 导出后重新导入一致。
+- View：`follow_dataset_columns` 的原地扩展；`serial` / `parallel` 投递按数据集属性生效。
 - 端到端：采集 → 账本完成 → 因子触发 → 因子写结果与报告 → View 就绪 → Strategy 触发，全链路通过。
-- 元数据迁移：v13 的库迁移到 v14 后，表、索引、触发器与按 v14 新建的库一致；原来的 `factor` 列变为 `custom`、其余不变；迁移中途失败时库保持 v13，可以重跑。
+- 元数据迁移：v13 的库迁移到 v14 后，表、索引、触发器与按 v14 新建的库一致；原来的 `factor` 列变为 `custom`、`origin_id` 为空，新版 `Get/ListDatasetColumns`
+  读出的来源正确，再次更新这些列成功；`write_owner` 按 `owner_module` 规范；迁移中途失败时库保持 v13，可以重跑。
+- 切换演练（隔离环境）：静默期内 Storage 写入量与事件量为零；新版本启动后不会收到旧格式的事件；回退后旧版本不会收到新格式的事件，
+  静默点之后的周期由旧版本重新完成。
 
 ## 6. 发布
 
-协议、事件、元数据属性、服务目录都有变化，而且旧事件不只在 EventBus 里：DataNode 的周期标记与 outbox、View 落盘的待发布就绪队列都持久化了原始事件。
-所以发布 C 是一次**有状态的切换**，不是换二进制就能回退：
+协议、事件、元数据都有变化，而且状态不只在 EventBus 里：DataNode 的周期账本、标记与 outbox，View 落盘的待发布就绪队列都持久化了原始事件；
+SCF 定时器不经过 Collector、直接写 Storage（`collector/internal/marketfetch/plan_runtime.go:28`），DataNode 没有写入时也会按截止时间定稿周期并发事件
+（`pebble/period_progress.go:602`）。所以发布 C 不做在线切换，而是在一个**全部停机的静默点**上切换，回退就是回到这个静默点。
 
-1. 停止产生新事件：暂停 Collector 的计划对账与补采、停因子引擎和 Strategy；等 outbox 排空、View 水位追平、待发布就绪队列为空；
-2. 备份 Storage 元数据库、Collector 与 factor-mgr 的库；
-3. 同一提交构建、发布全部组件：Storage（storage-node → 停 storage-primary、用新版 `moox-storage-cli` 把元数据库迁移到 v14（重建 `t_dataset_columns`，见 2.5；
-   迁移命令只为这次发布存在，发布完成后删除）、启动新的 storage-primary → 至少等 30 秒 → storage-view）、Admin、各主机 host-gateway、Monitor、Access、
-   Collector（SCF 代码包随之滚动升级）、factor-mgr、因子引擎、Strategy；
-4. 各业务模块启动对账补齐属性与 View 后，开启 `write_owner` 强制校验；清除 EventBus 中旧事件的主题，View 消费者按新事件重建；
-5. 恢复 Collector、因子引擎、Strategy，核对采集周期完成、因子按期产出、Strategy 按期触发。
+**事件按版本隔离**：事件的主题带版本（`moox.<事件名>.v<版本>.<空间>.<数据集>`，`packages/events/registry.go:205`），解码时名称或版本不符直接拒绝。
+发布 C 中载荷不兼容的事件都换成新主题：周期完成是新事件 `DatasetPeriodCompleted` v1，`ViewDataReady` 升到 v2；因子引擎和 Strategy 为新主题使用新的
+durable 名，旧 durable 不动。这样新版本收不到旧格式的消息，回退后的旧版本也收不到新格式的消息，两个方向都不需要清除主题；
+`MOOX_STORAGE` 流按 72 小时保留（`limits`），旧消息自然过期。View 的消费者照常用 `reset-view-consumers` 重建。
 
-回退：停写并等 outbox 排空后，用新版 `moox-storage-cli` 清除 DataNode 中切换后写入的新格式周期标记与 outbox 记录（旧代码读不了新格式），
-用 `purge-dataset-events` 清除新事件的主题；再换回全部组件的旧二进制、恢复第 2 步备份的数据库，View 重建。
-项目尚未上线，这个切换可以接受短时停写；以后再有同类改动，沿用这个流程。
+步骤：
+
+1. **暂停采集**：`moox-cli collector fetch-plan pause`（发布 A 中加入，复用空间退役时停用定时器的 `DisableAll`，以云端读回确认全部定时器停用、在途调用结束；
+   暂停状态存在 Collector 库里，重启后保持），对每个有采集计划的空间执行；
+2. **停写、排空**：停 Collector、因子引擎、Strategy、Monitor；等 DataNode outbox 排空、各 View 水位追平、待发布就绪队列为空、各消费者没有积压；
+   然后停 Storage 三个角色。此刻为静默点；
+3. **快照**：复制 Storage 数据目录（元数据库、Pebble、View 索引；停机时复制是一致的，Pebble 的 SST 文件不可变，可以用硬链接，其余文件普通复制），
+   以及 Collector、factor-mgr、Strategy 的库；
+4. **迁移**：新版 `moox-storage-cli migrate-metadata-v14`（2.5）；
+5. **先建消费者**：启动新版本的因子引擎与 Strategy，确认它们在新主题上的 durable 已建好（它们读 Storage 失败会退避重试，不影响建消费者）；
+6. **启动生产者**：storage-node → storage-primary → 至少等 30 秒 → storage-view；Admin → 各主机 host-gateway → Monitor → Access；`reset-view-consumers` 重建 View 消费者；
+   factor-mgr；Collector（滚动升级 SCF 代码包）；
+7. **恢复采集**：确认全部 SCF 函数已是新代码包后，`moox-cli collector fetch-plan resume`；自动补采补上暂停期间的缺口。
+
+回退：同样暂停采集、停全部组件，换回旧二进制，恢复第 3 步的快照；用旧版 CLI `reset-view-consumers` 重建 View 消费者；旧的因子引擎、Strategy 沿用旧 durable，
+从静默点的位置继续，只收旧主题。静默点之后的周期由旧版本重新完成；这段时间写入的数据丢弃，由自动补采补回。
+发布 C 稳定后，在 EventBus 主机上删除因子引擎、Strategy 的旧 durable（一次性运维）。
+
+时间选在周末（股票市场都休市），暂停期间只有 crypto 留下需要补采的缺口。
 
 ## 7. 待确认
 
