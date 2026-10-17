@@ -8,6 +8,10 @@ const (
 	GatewayKeyringIDPrefix = "moox:gateway-keyring:"
 )
 
+// ConfigBackupID 是配置备份（moox-cli 用管理员密码加密的 moox.toml）在 t_secrets 里的固定标识；整个系统只有一份，
+// 属于本环境，秘钥迁移不导出也不导入它。
+const ConfigBackupID = "moox-config-backup"
+
 // Secret 秘钥管理表
 type Secret struct {
 	ID int `gorm:"primaryKey;column:c_id;autoIncrement" json:"id"`

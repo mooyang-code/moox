@@ -80,3 +80,31 @@ export function toggleSecretStatus(secretId: string, status: string) {
     status
   });
 }
+
+export interface ExportSecretsRsp {
+  bundle: string;
+  count: number;
+}
+
+export interface ImportSecretsReq {
+  bundle: string;
+  passphrase: string;
+  overwrite?: boolean;
+}
+
+export interface ImportSecretsRsp {
+  created?: number;
+  updated?: number;
+  skipped?: string[];
+  failed?: string[];
+}
+
+/** 导出全部秘钥为口令加密的迁移包（仅全局管理员）。明文只在服务端出现，返回的迁移包里只有密文。 */
+export function exportSecrets(passphrase: string) {
+  return callControl<{ passphrase: string }, ExportSecretsRsp>("secret", "ExportSecrets", { passphrase });
+}
+
+/** 用导出口令导入迁移包（仅全局管理员），按 secret_id 导入；overwrite 为 true 时覆盖同一 secret_id 的已有秘钥。 */
+export function importSecrets(req: ImportSecretsReq) {
+  return callControl<ImportSecretsReq, ImportSecretsRsp>("secret", "ImportSecrets", req);
+}

@@ -272,6 +272,8 @@ components:
           - UpdateSecret
           - DeleteSecret
           - ToggleSecretStatus
+          - ExportSecrets
+          - ImportSecrets
         read_only_methods:
           - ListSecrets
           - GetSecret
@@ -287,6 +289,11 @@ components:
             callers:
               - console
               - moox-cli
+          - methods:
+              - ExportSecrets
+              - ImportSecrets
+            callers:
+              - console
           - methods:
               - ListSecrets
               - GetSecretValue

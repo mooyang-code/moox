@@ -13,7 +13,7 @@ import (
 
 const (
 	// configBackupID 是配置备份在 t_secrets 里的固定标识；整个系统只有一份。
-	configBackupID = "moox-config-backup"
+	configBackupID = secretmodel.ConfigBackupID
 	// configBackupMagic 是 CLI 生成的备份信封的开头。服务端只认格式，不解密（也解不开）。
 	configBackupMagic = "MOOX-CONFIG-BACKUP v1\n"
 	maxConfigBackup   = 512 << 10

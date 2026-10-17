@@ -47,8 +47,12 @@ func adminOnlyWriteService(serviceID string) bool {
 //
 // 推送渠道的 Webhook URL 本身就是推送凭据（拿到即可往群里发消息），列出渠道的接口只给全局管理员；
 // 其他登录用户从监控概览只能看到渠道数量和平台。增删渠道是 monitor 的写方法，本来就只允许全局管理员。
+//
+// 秘钥导出的迁移包里有全部秘钥的明文（用导出口令加密），导入会覆盖秘钥：都只允许全局管理员。secret 的写方法本来就要求
+// 全局管理员，这里显式列出，导出即使以后被标为只读（可重试）也不会放宽。
 var adminOnlyMethods = map[string]bool{
 	"monitor/ListNotificationChannels": true,
+	"secret/ExportSecrets":             true, "secret/ImportSecrets": true,
 	"factor-mgr/CreateFactor": true, "factor-mgr/UpdateFactor": true,
 	// 策略定义没有空间归属（按全局 strategy_id 定位），实例与回放按空间授权：空间管理员改定义会影响其他空间已引用它的实例。
 	"strategy/CreateStrategy": true, "strategy/UpdateStrategy": true, "strategy/DeleteStrategy": true,
