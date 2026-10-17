@@ -1,6 +1,6 @@
 # Storage 读接口收敛与数据归档执行计划
 
-状态：执行计划 v5（2026-10-17），尚未编码。v2：读接口收敛设计 v4（`ReadRows`、DataView 清理与改名）、归档设计 v8（按区间读取），新增发布 C（Storage 去业务耦合）。v3（吸收 Codex 第二轮评审）：对齐收敛设计 v5、归档设计 v9、去耦合设计 v2；发布 A 加入 Strategy 与方法改名；删除归档中 N 的残留；发布 C 改为有状态切换。v4（吸收 Codex 第三轮评审）：对齐收敛设计 v6、归档设计 v10、去耦合设计 v3——区间读取与 View 不再处理行属性；Collector 在发布 A 中加入暂停 / 恢复采集；归档按「`data_time` + 12 小时」归月、分区状态永久保留；列来源只留字段 / 自定义 / 系统，迁移同时改写列定义 JSON 与 `write_owner`；发布 C 在全部停机的静默点上切换。v5（吸收 Codex 第四轮评审）：对齐去耦合设计 v4——发布 C 的 Storage 事件全部升版本、消费者全部换新 durable、EventBus 权限随之更新，不再重置 View 消费者；静默点先停写入方、等下游排空；快照补上 factor-mgr 与因子引擎数据目录；回退补上 SCF 代码包恢复与恢复采集。
+状态：执行计划 v6（2026-10-17），尚未编码。v2：读接口收敛设计 v4（`ReadRows`、DataView 清理与改名）、归档设计 v8（按区间读取），新增发布 C（Storage 去业务耦合）。v3（吸收 Codex 第二轮评审）：对齐收敛设计 v5、归档设计 v9、去耦合设计 v2；发布 A 加入 Strategy 与方法改名；删除归档中 N 的残留；发布 C 改为有状态切换。v4（吸收 Codex 第三轮评审）：对齐收敛设计 v6、归档设计 v10、去耦合设计 v3——区间读取与 View 不再处理行属性；Collector 在发布 A 中加入暂停 / 恢复采集；归档按「`data_time` + 12 小时」归月、分区状态永久保留；列来源只留字段 / 自定义 / 系统，迁移同时改写列定义 JSON 与 `write_owner`；发布 C 在全部停机的静默点上切换。v5（吸收 Codex 第四轮评审）：对齐去耦合设计 v4——发布 C 的 Storage 事件全部升版本、消费者全部换新 durable、EventBus 权限随之更新，不再重置 View 消费者；静默点先停写入方、等下游排空；快照补上 factor-mgr 与因子引擎数据目录；回退补上 SCF 代码包恢复与恢复采集。v6（吸收 Codex 第五轮评审，只有两条、都在发布 C）：一次性迁移扩到 DataNode 的周期完成标记；暂停窗口改为补采后用 recalc 补算因子。
 
 依据（下称「设计」）：
 
@@ -256,7 +256,7 @@ factor-mgr、Strategy、因子引擎、`moox-cli`。Strategy 依赖 DataView 改
 - 各组件 `status.sh` 为 ready，`binary_sha256` 与构建一致；Monitor 库 `t_monitor_gateway_observations` 中各主机的 route_count 与 expected/applied hash 一致。
 - 因子：发布后的 1m、1h 周期正常产出，运行摘要无连续失败；必要时用 `recalc` 补发布期间失败的几期。
 - View：各 View 水位跟上；挑一个小 View 执行一次 `repair-view`，重建成功、行数与重建前一致。
-- Collector：对一个只有 crypto 的测试空间执行 `fetch-plan pause`，确认云端定时器全部停用、之后没有该空间的写入；`resume` 后恢复，缺口由自动补采补上。
+- Collector：对一个只有 crypto 的测试空间执行 `fetch-plan pause`，确认云端定时器全部停用、之后没有该空间的写入；`resume` 后恢复，缺口的行由自动补采补上。
 - Collector：运行状态页正常；对一个数据集执行一次 `CheckKline`。
 - `ReadRows`：经 host-gateway 的调用（Collector 重采样或 Monitor 行情巡检）与经 Access 的调用（`moox-cli` 远程读）都成功，网关观测里没有方法未注册的拒绝。
 - Strategy：发布后各运行中实例按期触发；一个需要多页读取的实例跨页时 `index` 不变；覆盖与回溯深度判断与发布前一致。
@@ -395,7 +395,7 @@ cmd/cli/         export、verify、reindex、status
   首次回补遇到月分区时，同一个月的多天不会互相覆盖；当前分区不会被提前定稿；
   - 定稿与推进 `W` 的事务失败（注入错误）后，暂存行与 `W` 都没变，重跑后导出的文件与一次成功运行的结果逐字节一致；
   - 晚到的行落进已定稿分区时，先读回原文件再写入，重新导出的文件包含原有的全部行；1mo 区间起点落进上一个已定稿的月时不产生写入、不重新打开分区。
-- 分区：A 股日线（上海零点）与美股日线、月线（本地日期的 UTC 零点）的月初一根都落在当月文件；stockcn 1m 按上海本地日成文件；stockus 跨夏令时切换的那天收盘时刻正确；crypto 仍按 UTC 日；月分区的收盘时间不早于其中最后一根的真实收盘。
+- 分区：日线、月线的键无论是「交易日期的 UTC 零点」还是「上海零点」，A 股与美股月初的一根都落在当月文件；stockcn 1m 按上海本地日成文件；stockus 跨夏令时切换的那天收盘时刻正确；crypto 仍按 UTC 日；月分区的收盘时间不早于其中最后一根的真实收盘。
 - 分区状态：把一个分区的状态改到 100 天前定稿（模拟长期运行），再补拉其中一天，重新导出的文件包含原有的全部行。
 - CSV：导出 → 读回 → 再导出逐字节一致（含默认序列的 `""`、缺失值、增列后的旧文件）。
 - 节奏：用可控时钟验证请求只在允许的时间窗发起；令牌桶在并发运行下不超限。
@@ -486,7 +486,7 @@ Admin、Monitor、各 host-gateway 与 Access。归档目录与暂存库保留�
 | 就绪事件 | `view/period_event_apply.go`、`view/event_apply.go`、`view/data_ready.go` | 删除 `completion_kind`；`factors[]` 改为透传 `detail_type` / `detail` |
 | 事件版本 | `packages/events/registry.go` 及各事件的测试 | Storage 发布的事件全部升一个版本：`DatasetPeriodCompleted` v1（新）、`dataset.rows.upserted` v3、`dataset.sync_point` v2、`view.data.ready` v2；载荷没变的也升，保证新旧版本的消息互不可见 |
 | 数据集列来源 | `common.proto`、`metadata.proto`、`schema/metadata.sql`、`metadata/sqlite`、`bootstrap/metadata/seed.go`、`catalog/validate.go`、`catalog/metadata_catalog.go` | `DatasetColumnOriginType` 的 `FACTOR` 改名为 `CUSTOM`，自定义列不带 `origin_id`；`t_dataset_columns` 的 `CHECK` 改为 `('field', 'custom', 'system')`，表级 `UNIQUE (…, c_origin_type, c_origin_id)` 改为只对字段列的部分唯一索引；schema 升到 v14（同步 `metadata_schema_version_test`、`TestMetadataSchemaVersionIsExact`）；删除因子输出列的专门校验 |
-| 一次性迁移 | `cmd/cli`（`migrate-metadata-v14`） | 一个事务内：重建 `t_dataset_columns`；`factor` 行改为 `custom`、清空 `c_origin_id`，并同步改写 `c_attrs_json` 里的枚举名与 `origin_id`；按 `owner_module` 规范 `write_owner`（`factor` → `moox-factor`、`collector` → `moox-collector`、`monitor` → `moox-monitor`；数据集没有 `owner_module` 时取所在空间的，Monitor 的五个系统数据集即如此）；仍确定不了所有者的数据集全部列出并使迁移失败；写版本号 14。测试用旧初始化配置（`config/setup/metadata.yaml`）真实生成的 v13 库。发布 C 后删除 |
+| 一次性迁移 | `cmd/cli`（`migrate-release-c`，两部分，支持 `--dry-run`） | **DataNode 周期完成标记**：把 Pebble 中的 `CollectorPeriodCompleted`、`FactorPeriodComputed` 标记转成 `DatasetPeriodCompleted` 标记（因子的 `cause_event_id` 取原 `trigger_event_id`、`detail` 为 `PeriodDetail`，冻结全集与失败标的原样保留），建好新查询索引、删除旧键，同一批次提交；测试覆盖「切换前有截面补算待办，切换后取到冻结全集并完成」。**元数据库**，一个事务内：重建 `t_dataset_columns`；`factor` 行改为 `custom`、清空 `c_origin_id`，并同步改写 `c_attrs_json` 里的枚举名与 `origin_id`；按 `owner_module` 规范 `write_owner`（`factor` → `moox-factor`、`collector` → `moox-collector`、`monitor` → `moox-monitor`；数据集没有 `owner_module` 时取所在空间的，Monitor 的五个系统数据集即如此）；仍确定不了所有者的数据集全部列出并使迁移失败；写版本号 14。测试用旧初始化配置（`config/setup/metadata.yaml`）真实生成的 v13 库。发布 C 后删除 |
 | View 资源 | `catalog/factor_result_view.go`、`catalog/metadata_catalog.go`、`metadata/sqlite/crud_dataset.go`、`metadata/sqlite/crud_view_index.go`、`view/maintenance_schema_extension.go`、`view/event_apply.go` | 删除托管默认 View 与删除数据集时自动删 View；数据集加列在同一元数据事务里更新所有 `follow_dataset_columns = true` 的 View 的投影与期望版本；扩展提交条件（`crud_view_index.go:279`）与消费屏障（`validateFactorResultEventColumns`）改为按 `follow_dataset_columns` 判断 |
 | 投递 | `view/inventory_reconciler.go`、`view/eventconsumer/delivery_policy.go`、`config/loader.go`、`config/storage.yaml`、`packages/events/storage_consumers.go`、`cmd/cli`（重置与对账命令） | 按数据集属性 `view_delivery` 选择 `parallel` / `serial` 模板；删除 `dataset_factor_` 前缀规则；分区名改为 `parallel`、`serial`、`metrics`；View 的 durable 名改为 `storage_view_<分区>_v2`（按数据集的为 `storage_view_<分区>_v2_<12 位十六进制>`），`IsStorageViewDurable` 与 Admin 的放行规则同步 |
 | 元数据校验 | `catalog/validate.go` | 删除 `dataset_role` 取值、`dataset_factor_` 前缀、`factor_output` 显示名规则；新增 `write_owner` 非空与 `view_delivery`、`follow_dataset_columns` 取值校验 |
@@ -525,19 +525,20 @@ Admin、Monitor、各 host-gateway 与 Access。归档目录与暂存库保留�
    DataNode outbox 为空、各 View 水位追平、待发布就绪队列为空、各 durable 的未投递与待确认数为 0；
 5. 停因子引擎、Strategy、factor-mgr，再停 Storage 三个角色（静默点）；
 6. 快照：Storage 数据目录（元数据库、Pebble、View 索引；SST 文件可用硬链接，其余普通复制），Collector、factor-mgr、Strategy 的库，因子引擎的数据目录（含 `data/gap`），以及各组件二进制；
-7. 迁移：新版 `moox-storage-cli migrate-metadata-v14`，核对 `t_dataset_columns` 的结构与按 v14 新建的库一致、每个数据集的 `write_owner` 正确；
+7. 迁移：新版 `moox-storage-cli migrate-release-c`，核对 `t_dataset_columns` 的结构与按 v14 新建的库一致、每个数据集的 `write_owner` 正确、旧周期完成标记已全部转换；
 8. 先建消费者：同一提交构建后，先启动编译机的因子引擎和 control 的 Strategy，确认新 durable 已建好；
 9. 启动生产者：storage-node → storage-primary → 至少等 30 秒 → storage-view（新 durable 从新主题的第一条开始消费）→ Admin → control 的 host-gateway → Monitor →
    Access 与其他主机的 host-gateway → factor-mgr → Collector（仍在暂停，先滚动升级 SCF 代码包并读回确认）→ web-host；
-10. 恢复采集：确认全部 SCF 函数已是新代码包后，`moox-cli collector fetch-plan resume`。
+10. 恢复采集：确认全部 SCF 函数已是新代码包后，`moox-cli collector fetch-plan resume`；
+11. 补齐暂停窗口：这段时间的周期没有进入账本（补采只写行），等行补齐后用 `moox-factor-mgr-cli recalc` 按窗口为受影响的因子集补算；这些周期不补发就绪事件。
 
 时间选在周末。验收：采集周期按期完成（`source = ledger`）；重采样结果（`source = producer`）触发因子，因子按期产出并报告；View 就绪事件正常，Strategy 按期触发；
 多输出因子的各列建立成功；factor-mgr 接管的默认 View 加列后原地扩展、新列不丢；删除一个测试用因子结果数据集成功；非 `write_owner` 的写入被拒；
-Monitor 的系统指标照常写入；暂停期间 crypto 的缺口由自动补采补上。
+Monitor 的系统指标照常写入；暂停窗口内 crypto 的行与因子结果补齐。
 
 回退：暂停采集并等 SCF 在途调用结束，停全部组件；换回旧二进制，恢复第 6 步的快照；先启动旧版因子引擎与 Strategy（旧 durable 停在静默点），
 再按第 9 步的顺序启动其余组件；旧版 Collector 仍在暂停，先把 SCF 代码包滚动回旧版本并读回确认，再 `fetch-plan resume`；确认旧协议的写入恢复、缺口开始补齐。
-静默点之后写入的数据丢弃，由自动补采补回。发布 C 稳定后：删除 EventBus 权限中的旧主题与旧 durable，并在 EventBus 主机上删除旧 durable。
+静默点之后新版本写入的数据随快照丢弃，这段时间连同暂停窗口按第 11 步补采、补算。发布 C 稳定后：删除 EventBus 权限中的旧主题与旧 durable，并在 EventBus 主机上删除旧 durable。
 
 ## 13. 风险与检查点
 

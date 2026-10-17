@@ -1,6 +1,6 @@
 # Storage 去业务耦合设计
 
-状态：设计稿 v4（2026-10-17），尚未编码。项目尚未上线，接口、事件、元数据直接修改，不考虑兼容。v2（吸收 Codex 评审）：`source` 只表示完成机制，消费方按绑定的数据集筛选；`write_owner` 可授权修改，补上 Monitor 系统数据集；默认 View 的删除也由业务模块负责；`commit_id` 限定单数据集并重做回执；加列期间保留消费屏障；数据集列来源改为「字段 / 自定义 / 属性 / 系统」；补上遗漏的耦合（数据源例外、删除授权、保留策略包）；发布 C 改为有状态切换。v3（吸收 Codex 第三轮评审）：列来源只留「字段 / 自定义 / 系统」，自定义列不带 `origin_id`、不受来源唯一约束；一次性迁移同时改写列定义 JSON 与 `write_owner`，强制校验不设开关；`ViewDataReady` 升到 v2 并删除 `source`；发布 C 改为「暂停采集 → 全部停机的静默点快照 → 迁移 → 先建新消费者再启动生产者」，回退即恢复静默点快照。v4（吸收 Codex 第四轮评审）：Storage 发布的事件全部升版本、所有消费者换新 durable，新旧完全隔离，正向与回退都不再重置 View 消费者；EventBus 权限随之更新；静默点改为先停写入方、让下游排空后再停消费者；快照补上 factor-mgr 与因子引擎的数据目录；`write_owner` 迁移取数据集或所在空间的 `owner_module`；补上 SCF 在途调用的等待与回退时的代码包恢复。
+状态：设计稿 v5（2026-10-17），尚未编码。项目尚未上线，接口、事件、元数据直接修改，不考虑兼容。v2（吸收 Codex 评审）：`source` 只表示完成机制，消费方按绑定的数据集筛选；`write_owner` 可授权修改，补上 Monitor 系统数据集；默认 View 的删除也由业务模块负责；`commit_id` 限定单数据集并重做回执；加列期间保留消费屏障；数据集列来源改为「字段 / 自定义 / 属性 / 系统」；补上遗漏的耦合（数据源例外、删除授权、保留策略包）；发布 C 改为有状态切换。v3（吸收 Codex 第三轮评审）：列来源只留「字段 / 自定义 / 系统」，自定义列不带 `origin_id`、不受来源唯一约束；一次性迁移同时改写列定义 JSON 与 `write_owner`，强制校验不设开关；`ViewDataReady` 升到 v2 并删除 `source`；发布 C 改为「暂停采集 → 全部停机的静默点快照 → 迁移 → 先建新消费者再启动生产者」，回退即恢复静默点快照。v4（吸收 Codex 第四轮评审）：Storage 发布的事件全部升版本、所有消费者换新 durable，新旧完全隔离，正向与回退都不再重置 View 消费者；EventBus 权限随之更新；静默点改为先停写入方、让下游排空后再停消费者；快照补上 factor-mgr 与因子引擎的数据目录；`write_owner` 迁移取数据集或所在空间的 `owner_module`；补上 SCF 在途调用的等待与回退时的代码包恢复。v5（吸收 Codex 第五轮评审）：一次性迁移扩到 DataNode 的周期完成标记（截面补算要从旧标记里取冻结全集）；暂停窗口内的周期不会进入账本，改为「补采补行 + recalc 补算因子」，不再写「自动补采即可恢复」。
 与 [Storage 读接口收敛设计](Storage读接口收敛设计.md) 互补：那份收敛读接口，本设计处理写入、周期、事件、View 和元数据中的业务概念。
 实施排在 [执行计划](Storage读接口收敛与数据归档执行计划.md) 的发布 C。
 
@@ -156,8 +156,9 @@
   - `SYSTEM`（系统），不变。
 
   不增加「属性」来源：行属性是写入方自己的来源信息，没有按列读取的需求（因子行属性本来就不存在，见 1.4）。SQL 与校验中的因子分支一并删除。
-- **一次性元数据迁移（v13 → v14）**：`t_dataset_columns` 的 `CHECK (c_origin_type IN ('field', 'factor', 'system'))` 要改成 `('field', 'custom', 'system')`，
-  SQLite 改不了 `CHECK`、也删不了表级 `UNIQUE`，只能重建表；schema 版本号升到 v14。迁移命令（`moox-storage-cli migrate-metadata-v14`）在一个事务里：
+- **一次性迁移**（`moox-storage-cli migrate-release-c`，Storage 停机时执行，两部分，都先 `--dry-run`）。
+  **元数据库 v13 → v14**：`t_dataset_columns` 的 `CHECK (c_origin_type IN ('field', 'factor', 'system'))` 要改成 `('field', 'custom', 'system')`，
+  SQLite 改不了 `CHECK`、也删不了表级 `UNIQUE`，只能重建表；schema 版本号升到 v14。在一个事务里：
   - 重建 `t_dataset_columns`（新的 `CHECK` 与部分唯一索引，索引与触发器照新建库重建）；
   - `c_origin_type = 'factor'` 的行改为 `custom`、`c_origin_id` 清空，**同时改写 `c_attrs_json`**：列定义整条以 protojson 存在这一列里，枚举按名字序列化
     （`DATASET_COLUMN_ORIGIN_TYPE_FACTOR`），读取时 `DiscardUnknown` 会把认不出的枚举名静默丢成「未指定」（`metadata/sqlite/crud_helpers.go:37`）；
@@ -165,7 +166,14 @@
     `owner_module: monitor` 在 `mooxsys` 空间上，`config/setup/metadata.yaml:40`）；仍确定不了所有者的数据集全部列出，迁移失败、不写任何改动；
   - 写入版本号 14。失败时整体回滚，库保持 v13。
 
-  命令只为这次发布存在，在 storage-primary 停机时执行，发布完成后删除；不需要重置元数据库。
+  **DataNode 周期完成标记**：Pebble 里落盘的 `CollectorPeriodCompleted`、`FactorPeriodComputed` 标记（`pebble/marker_store.go`）新代码读不了，
+  而因子引擎的截面补算要按触发事件从标记里取当期的冻结全集，取不到就直接放弃（`factor/internal/engine/gapfill.go:436`）。迁移把旧标记逐条转成
+  `DatasetPeriodCompleted` 标记：采集的为 `source = ledger`、`snapshot_ref` 取原快照引用；因子的为 `source = producer`、`cause_event_id` 取原
+  `trigger_event_id`、`detail` 为由原因子状态组成的 `PeriodDetail`；冻结全集与失败标的原样保留，并建好 `GetDatasetPeriodCompleted` 用的查询索引，
+  旧键删除；同一个 Pebble 批次提交。账本自己的周期记录格式不变（只换完成事件的类型），不需要迁移；实施时若发现有变化，并入这一步。
+  静默点时 outbox 已排空，不需要处理。
+
+  命令只为这次发布存在，发布完成后删除；不需要重置元数据库或清空 Pebble。
 - **View 跟随数据集加列**：View 属性 `follow_dataset_columns = true` 时，数据集新增列后原地扩展 View 的列（复用现有的 schema 扩展机制）：
   - 数据集加列在同一个元数据事务里，更新所有跟随它的 View 的列投影与期望版本；
   - 消费屏障保留并通用化：事件里出现活动 schema 还没有的列时，暂停该 View 的消费、等待扩展完成（现在只对因子结果 View 生效，见
@@ -232,7 +240,7 @@
   读出的来源正确，再次更新这些列成功；`write_owner` 按 `owner_module` 规范；迁移中途失败时库保持 v13，可以重跑。
 - 切换演练（隔离环境）：静默期内 Storage 写入量与事件量为零；停写时有在途的因子计算与等待中的周期，排空后才进入静默点；
   定时器停用后最后一次采集仍在写回的情况被等到；新版本启动后不会收到旧格式的事件；回退后旧版本不会收到新格式的事件，
-  静默点之后的周期由旧版本重新完成；切换后完成一项原有的因子补算再回退，补算账本与结果一致；各 EventBus 角色用真实凭据完成创建、拉取、确认、发布。
+  切换前留有一项截面补算待办，切换后新版本能取到冻结全集并完成；切换后完成一项原有的因子补算再回退，补算账本与结果一致；暂停窗口内的周期按第 6 节补采、补算后，行与因子结果齐全；各 EventBus 角色用真实凭据完成创建、拉取、确认、发布。
 
 ## 6. 发布
 
@@ -264,11 +272,15 @@ SCF 定时器不经过 Collector、直接写 Storage（`collector/internal/marke
 4. **停消费者与 Storage**：停因子引擎、Strategy、factor-mgr，再停 Storage 三个角色。此刻为静默点；
 5. **快照**：复制 Storage 数据目录（元数据库、Pebble、View 索引；停机时复制是一致的，Pebble 的 SST 文件不可变，可以用硬链接，其余文件普通复制），
    Collector、factor-mgr、Strategy 的库，以及因子引擎的数据目录（含 `data/gap` 补算账本）；
-6. **迁移**：新版 `moox-storage-cli migrate-metadata-v14`（2.5）；
+6. **迁移**：新版 `moox-storage-cli migrate-release-c`（2.5：元数据库到 v14，DataNode 周期完成标记转成新格式）；
 7. **先建消费者**：启动新版本的因子引擎与 Strategy，确认新 durable 已建好（它们读 Storage 失败会退避重试，不影响建消费者）；
 8. **启动生产者**：storage-node → storage-primary → 至少等 30 秒 → storage-view；Admin → 各主机 host-gateway → Monitor → Access；factor-mgr；
    Collector（仍处于暂停，先滚动升级 SCF 代码包并读回确认）；
-9. **恢复采集**：确认全部 SCF 函数已是新代码包后，`moox-cli collector fetch-plan resume`；自动补采补上暂停期间的缺口。
+9. **恢复采集**：确认全部 SCF 函数已是新代码包后，`moox-cli collector fetch-plan resume`；
+10. **补齐暂停窗口**：暂停期间没有 SCF 提交，这些周期不会进入账本，也就没有完成事件；补采只写行、不涉及周期（`klinecheck/backfill.go:442`）。
+    所以记下暂停窗口 `[暂停时刻, 恢复后第一个正常周期)`，等自动补采（或 `moox-cli collector kline backfill`）把行补齐后，
+    用 `moox-factor-mgr-cli recalc --set <集合> --start <窗口起点> --end <窗口终点>` 为每个受影响的因子集补算结果。
+    这些周期不发就绪事件，Strategy 不补触发已经过去的周期；项目尚未上线，可以接受。
 
 回退：
 
@@ -276,7 +288,8 @@ SCF 定时器不经过 Collector、直接写 Storage（`collector/internal/marke
 2. 换回旧二进制，恢复第 5 步的快照（Storage 数据目录、各模块的库、因子引擎的数据目录）；
 3. 先启动旧版因子引擎与 Strategy（沿用旧 durable，停在静默点），再按第 8 步的顺序启动其余组件；旧版 Collector 恢复后仍处于暂停（快照取于暂停之后），
    先把 SCF 代码包滚动回旧版本并读回确认；
-4. `fetch-plan resume`；确认旧协议的写入恢复、暂停期间的缺口开始补齐。静默点之后写入的数据丢弃，由自动补采补回。
+4. `fetch-plan resume`；确认旧协议的写入恢复。静默点之后新版本写入的数据随快照恢复而丢弃，这段时间连同暂停窗口一起，
+   按正向第 10 步补采、补算。
 
 时间选在周末（股票市场都休市），暂停期间只有 crypto 留下需要补采的缺口。
 
