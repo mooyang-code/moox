@@ -267,11 +267,18 @@ func (p *Provider) parseBarTime(raw string, frequency marketdata.Frequency) (tim
 	}
 	providerTime := parsed
 	if frequency == marketdata.FrequencyDay || frequency == marketdata.FrequencyWeek || frequency == marketdata.FrequencyMonth {
+		// 日、周、月线键用本地日期的 UTC 零点编码。
 		local := parsed.In(p.location)
-		if frequency == marketdata.FrequencyMonth {
+		day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+		switch frequency {
+		case marketdata.FrequencyMonth:
 			parsed = time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, time.UTC)
-		} else {
-			parsed = time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+		case marketdata.FrequencyWeek:
+			// 东方财富周线（klt=102）的标签是该周最后一个交易日（周三、周四、周五都有），键取所在 ISO 周的周一，
+			// 与 Truncate 网格、frequencyDue 和 klinecheck 一致。
+			parsed = day.AddDate(0, 0, -((int(day.Weekday()) + 6) % 7))
+		default:
+			parsed = day
 		}
 	}
 	return parsed.UTC(), providerTime.UTC(), nil

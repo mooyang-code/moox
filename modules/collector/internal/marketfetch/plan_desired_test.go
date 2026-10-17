@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
@@ -269,5 +270,45 @@ func TestChoosePeriodStartWithLead(t *testing.T) {
 	}
 	if p, _ := ChoosePeriodStartWithLead("1m", now, planLeadTime); p != time.Date(2026, 10, 12, 9, 2, 0, 0, time.UTC).Unix() {
 		t.Fatalf("1m P=%s", time.Unix(p, 0).UTC())
+	}
+}
+
+func TestNextBoundaryAlignsWithKlineGrid(t *testing.T) {
+	cases := []struct {
+		frequency string
+		at        time.Time
+		want      time.Time
+	}{
+		// 1h、1d 与原先按 Unix 秒取整的结果相同。
+		{"1h", time.Date(2026, 10, 12, 9, 2, 0, 0, time.UTC), time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)},
+		{"1h", time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC), time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)},
+		{"1d", time.Date(2026, 10, 12, 0, 0, 1, 0, time.UTC), time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)},
+		{"1d", time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)},
+		// 1w 落在周一 UTC 零点，而不是 Unix 取模得到的周四。
+		{"1w", time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC), time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)},
+		{"1w", time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)},
+		{"1w", time.Date(2026, 10, 19, 0, 0, 1, 0, time.UTC), time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)},
+		// 非 UTC 输入按同一时刻处理。
+		{"1w", time.Date(2026, 10, 19, 7, 0, 0, 0, time.FixedZone("CST", 8*60*60)), time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)},
+		{"1mo", time.Date(2026, 10, 1, 0, 0, 1, 0, time.UTC), time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, tc := range cases {
+		frequency, err := marketdata.ParseFrequency(tc.frequency)
+		if err != nil {
+			t.Fatalf("parse %s: %v", tc.frequency, err)
+		}
+		got := nextBoundary(frequency, tc.at)
+		if !got.Equal(tc.want) || got.Location() != time.UTC {
+			t.Fatalf("%s at %s: got %s want %s", tc.frequency, tc.at, got, tc.want)
+		}
+		if frequency.Duration() > 0 {
+			// 与采集触发（frequencyDue）、检查（alignUp）用的是同一张网格。
+			if !got.Truncate(frequency.Duration()).Equal(got) {
+				t.Fatalf("%s boundary %s is not on the Truncate grid", tc.frequency, got)
+			}
+		}
+	}
+	if weekday := nextBoundary(marketdata.FrequencyWeek, time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)).Weekday(); weekday != time.Monday {
+		t.Fatalf("1w boundary weekday=%s", weekday)
 	}
 }

@@ -100,8 +100,12 @@ func mustJSON(value any) string {
 func nextBoundary(frequency marketdata.Frequency, at time.Time) time.Time {
 	at = at.UTC()
 	if step := frequency.Duration(); step > 0 {
-		seconds := int64(step / time.Second)
-		return time.Unix((at.Unix()+seconds-1)/seconds*seconds, 0).UTC()
+		// 与 frequencyDue、klinecheck.alignUp 一致用 Truncate（以零时刻为基准）对齐，周线落在周一；Unix 取模会落在周四。
+		start := at.Truncate(step)
+		if start.Before(at) {
+			start = start.Add(step)
+		}
+		return start
 	}
 	first := time.Date(at.Year(), at.Month(), 1, 0, 0, 0, 0, time.UTC)
 	if first.Before(at) {
