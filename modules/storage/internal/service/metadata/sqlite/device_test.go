@@ -48,16 +48,6 @@ func TestDeviceCRUDUsesSchemaV6WithoutNodeBinding(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.RegisterArchiveFile(ctx, &pb.ArchiveFile{
-		SpaceId: "space", ArchiveFileId: "archive-a", DatasetId: "dataset", DeviceId: "device-a",
-		PartitionKey: "date=2026-07-22", FileUri: "file:///data/a/archive.parquet", Columns: []string{"close"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	archives, page, err := store.ListArchiveFiles(ctx, "space", "dataset", &pb.Page{Page: 1, Size: 10})
-	if err != nil || len(archives) != 1 || page.GetTotal() != 1 {
-		t.Fatalf("listed archives=%v page=%v err=%v", archives, page, err)
-	}
 }
 
 func TestDeviceCRUDAcceptsParquetArchiveDevice(t *testing.T) {

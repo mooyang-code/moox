@@ -1,6 +1,5 @@
 import { callStorage as callMetadata, type StorageCallOptions } from "./http";
 import type {
-  ArchiveFile,
   DataNode,
   DataNodeListItem,
   DataSource,
@@ -237,20 +236,6 @@ export async function updateDataNode(params: { node_id: string; name: string; st
 
 export function deleteDataNode(params: { node_id: string }) {
   return callMetadata<typeof params, RetRsp & { node: DataNode }>("DeleteDataNode", params);
-}
-
-export function listArchiveFiles(params: {
-  space_id: string;
-  dataset_id?: string;
-  status?: string;
-  sort_by?: "min_time" | "max_time" | "created_at" | "updated_at";
-  sort_order?: "asc" | "desc";
-  page?: Page;
-}) {
-  return callMetadata<typeof params, RetRsp & { archive_files: ArchiveFile[]; page_result: PageResult }>(
-    "ListArchiveFiles",
-    params
-  );
 }
 
 /** 分页读取空间内全部数据集（最多 20 页 × 500 条）。 */

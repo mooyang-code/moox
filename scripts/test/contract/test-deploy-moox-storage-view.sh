@@ -75,8 +75,6 @@ ensure_required_binary moox-admin
 ensure_required_binary moox-admin-cli
 ensure_required_binary moox-cli
 ensure_required_binary moox-eventbus
-ensure_required_binary moox-archive
-ensure_required_binary moox-archive-cli
 ensure_required_binary moox-host-gateway
 ensure_required_binary moox-host-gateway-cli
 ensure_required_binary moox-storage-primary
@@ -337,8 +335,6 @@ assert_order "${DEPLOY_DIR}/stop.sh" \
   'stop_service "storage-node"'
 
 assert_file "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
-assert_file "${DEPLOY_DIR}/archive/config/app.yaml"
-assert_grep 'credential_file: ~/.config/moox/eventbus/archive-eventbus.yaml' "${DEPLOY_DIR}/archive/config/app.yaml"
 assert_grep 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${DEPLOY_DIR}/storage-view/config/trpc_go.yaml"
 assert_grep 'credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml' "${DEPLOY_DIR}/storage-node/config/storage.yaml"
 [[ $(find "${DEPLOY_DIR}/storage-view/config" -type f -name '*.yaml' | wc -l | tr -d ' ') == 1 ]] || {

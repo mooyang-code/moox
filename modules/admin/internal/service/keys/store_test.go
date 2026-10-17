@@ -135,7 +135,7 @@ func TestEnsureAllAndVerificationIdentityIsolation(t *testing.T) {
 	ctx := context.Background()
 	first, err := store.EnsureAll(ctx)
 	require.NoError(t, err)
-	require.Len(t, first, 24) // 17 components + console/CLI + 3 external + 2 hosts.
+	require.Len(t, first, 23) // 16 components + console/CLI + 3 external + 2 hosts.
 	second, err := store.EnsureAll(ctx)
 	require.NoError(t, err)
 	require.Equal(t, first, second)

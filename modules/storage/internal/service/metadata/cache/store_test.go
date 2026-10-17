@@ -94,9 +94,6 @@ func (stubMetadataReader) GetDevice(context.Context, string) (*pb.Device, error)
 func (stubMetadataReader) ListDevices(context.Context, string, *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
 	return nil, nil, nil
 }
-func (stubMetadataReader) ListArchiveFiles(context.Context, string, string, *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error) {
-	return nil, nil, nil
-}
 
 var _ metadata.Reader = stubMetadataReader{}
 

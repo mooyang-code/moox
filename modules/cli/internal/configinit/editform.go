@@ -45,7 +45,7 @@ type FormHost struct {
 
 // FormRetention 是数据保留期。取值为 <n>h、<n>d 或 forever；空间里留空表示跟随默认。
 type FormRetention struct {
-	ViewBars    uint64            `json:"view_bars"`
+	ViewBars    uint64            `json:"view_rows_per_series"`
 	Frequencies []string          `json:"frequencies,omitempty"`
 	Defaults    map[string]string `json:"defaults"`
 	Spaces      []FormSpace       `json:"spaces"`
@@ -154,7 +154,7 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 		set("hosts."+host.ID, "ssh", ssh+" }")
 	}
 
-	set("storage_retention", "view_bars", strconv.FormatUint(form.Retention.ViewBars, 10))
+	set("storage_retention", "view_rows_per_series", strconv.FormatUint(form.Retention.ViewBars, 10))
 	for freq := range form.Retention.Defaults {
 		if err := retentionCell(freq, ""); err != nil {
 			return nil, err

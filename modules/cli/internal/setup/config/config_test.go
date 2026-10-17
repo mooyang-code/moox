@@ -197,7 +197,7 @@ func TestLoadStorageRetentionFromManifest(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
 [storage_retention]
-view_bars = 777
+view_rows_per_series = 777
 
 [storage_retention.spaces.crypto]
 "1m" = "14d"
@@ -280,7 +280,7 @@ func TestLoadRejectsInvalidStorageRetention(t *testing.T) {
 		body string
 		want string
 	}{
-		{name: "no bars", body: "[storage_retention]\nview_bars = 0", want: "view.bars"},
+		{name: "no bars", body: "[storage_retention]\nview_rows_per_series = 0", want: "view.bars"},
 		{name: "incomplete defaults", body: "[storage_retention.defaults]\n\"1m\" = \"7d\"", want: "must cover every frequency"},
 		{name: "alias frequency", body: "[storage_retention.spaces.crypto]\n\"1H\" = \"7d\"", want: "not a canonical frequency"},
 		{name: "invalid period", body: "[storage_retention.spaces.crypto]\n\"1m\" = \"7 days\"", want: "retention"},

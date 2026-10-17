@@ -313,7 +313,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     root.append(block('服务器登录', 'IP 和用途不能在这里改（需要重新部署）；可以修改 SSH 登录方式。', hosts));
 
     var r = form.retention;
-    ctl.viewBars = input({ type: 'number', min: '1' }, r.view_bars);
+    ctl.viewBars = input({ type: 'number', min: '1' }, r.view_rows_per_series);
     var head = el('tr', {}, [el('th', { text: '频率' }), el('th', { text: '默认' })].concat(r.spaces.map(function (sp) { return el('th', { text: sp.name }); })));
     var rows = r.frequencies.map(function (freq) {
       var cells = [el('td', { class: 'mono', text: freq })];
@@ -350,7 +350,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
       notification: { channel_type: ctl.channel.value, webhook_url: ctl.webhook.value.trim() },
       hosts: ctl.hosts.map(function (h) { return { id: h.id, ssh_user: h.user.value.trim(), ssh_port: num(h.port), ssh_password: h.pass.value }; }),
       retention: {
-        view_bars: num(ctl.viewBars), defaults: defaults,
+        view_rows_per_series: num(ctl.viewBars), defaults: defaults,
         spaces: ctl.spaces.map(function (sp) {
           var values = {};
           Object.keys(sp.cells).forEach(function (freq) { values[freq] = sp.cells[freq].value.trim(); });

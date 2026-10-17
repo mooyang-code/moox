@@ -580,8 +580,23 @@ DataNode 重写（时间索引读、序列索引归并读、最近 N 根、计�
 limit 根，有范围按升序取最早 limit 根；`data rows export` 需要 `--columns`、`--start-time`、`--end-time`）、服务目录方法名与 ACL、旧归档模块的最小适配、模块文档。
 
 与计划的差异：
-- DuckDB 索引内部的 `__moox_attributes` 列没有删除：View 已经不再写入和返回行属性，这一列留空，随下次重建自然不再使用；删除它要同时改引擎的写入、查询、补列与测试，收益很小，推迟。
-- `view_bars` → `view_rows_per_series` 的配置改名没有做（涉及 `moox.toml`、CLI 配置编辑器、skills 文档，纯改名），随阶段 4 的配置清理一起做。
-- 旧归档实现（`modules/archive`、`t_archive_files`、部署脚本与前端运维页）还没有删除，只做了最小适配；删除放在阶段 4 的收尾提交。
+- DuckDB 索引内部的 `__moox_attributes` 列没有删除：View 已经不再写入和返回行属性，这一列留空；删除它要同时改引擎的写入、查询、补列与测试，收益很小，推迟。
 - 事件应用不再带行属性；Bleve 记录型 View 之前只在属性名恰好是已声明列时才会索引属性，没有任何现有 View 依赖它。
-- 没有跑 benchmark（任务 2.5 的 pebble 前后对比），需要在合适的数据量上单独跑。
+
+阶段 4 收尾（2026-10-17）：
+- 已删除 `modules/archive`、Storage 的 `RegisterArchiveFile` / `ListArchiveFiles`（协议、表 `t_archive_files`、缓存、Admin 控制台策略）、服务目录的 `archive` 组件与调用方、
+  `archive-materialize` 健康检查、前端「归档文件」页与 API、构建 / 发布 / 边界检查脚本中的归档目标；`deploy-moox.sh` 默认不部署归档，`--with-archive` 直接报错，`--no-archive` 保留为空操作。
+- 没有删除（新归档的 `archive-mgr` 会改同一批文件，届时一并处理）：`deploy-moox.sh` 里不可达的 `start_archive` 等分支、`modules/cli` 部署工具里的 `archive` 引用、
+  `archive-eventbus` 凭据角色与 EventBus 权限、`skills/` 文档里的归档说明。
+- `[storage_retention] view_bars` 已改名为 `view_rows_per_series`（`moox.toml`、两份示例、CLI 配置编辑器与校验、文档）；配置加载不接受未知键，已有的 `moox.toml` 需要同步改名。
+- 契约测试：`test-deploy-moox-storage-view.sh` 去掉了归档断言但没有跑通（需要完整构建）；`test-deploy-moox-eventbus.sh`、`test-storage-boundary-contract.sh`（本机没有 `rg`）、
+  `test-release-contract.sh`、`test-trpc-plugin-config.sh` 的剩余失败与归档无关（断言本身已过时或缺工具）。
+- pebble 读取前后对比（Apple M4，500 标的 × 3000 根 × 8 列，`-benchtime 5x`，改造前为 `2a2bd8d5`）：
+
+| 读取 | 改造前 | 改造后 |
+| --- | --- | --- |
+| 最近 100 根，整个数据集（重建） | 962 ms，541 MB，1160 万次分配 | 270 ms，194 MB，441 万次分配 |
+| 50 个标的的一天区间（7.2 万行） | 1825 ms，1061 MB，2262 万次分配 | 334 ms，296 MB，672 万次分配 |
+| 单标的最近 500 根 | 10.1 ms，5.5 MB，11.7 万次分配 | 1.9 ms，1.9 MB，4.4 万次分配 |
+
+  对比用的 benchmark 在 `datanode/pebble/read_bench_test.go`，旧版本把「先列标的再逐个读取」和 `after_key` 翻页放进同一数据构造里测。

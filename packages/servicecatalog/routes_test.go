@@ -23,7 +23,7 @@ func productionTopology() Topology {
 	}
 	for host, ids := range map[string][]string{
 		"control":   {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"},
-		"storage":   {"storage-primary", "storage-node", "storage-view", "archive", "access"},
+		"storage":   {"storage-primary", "storage-node", "storage-view", "access"},
 		"compute-1": {"access", "egress-proxy", "trade"},
 	} {
 		for _, id := range ids {
@@ -111,7 +111,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		hash    string
 	}{
 		"control":   {163, []string{"access", "admin", "cloudnode", "collector", "console", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "10bc22f7ecbb79835f5c3630ed6ab0eb532eaaf5d13df8e92ca1e522fc47a3b7"},
-		"storage":   {97, []string{"access", "archive", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "0abb4404e1581f2d213bc360dc327730dc2dbeb7d72d71957960054053e20d7f"},
+		"storage":   {95, []string{"access", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "8966aea90fa324260d3384be19de91b656613796a9426c24ff6d86d039287934"},
 		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "cf0c78e6614510d464b9500c4459f5a0fa8392684a0347f6b02346ab49ea4c91"},
 	}
 	for _, host := range p.Hosts {

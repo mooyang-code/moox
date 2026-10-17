@@ -52,7 +52,7 @@ while IFS= read -r directory; do
 	violations+=("${directory}: generic internal/bus hides the event interaction role")
 done < <(find modules -type d -path '*/internal/bus' -print 2>/dev/null || true)
 
-for path in modules/storage/internal/eventcontract modules/archive/internal/consumer; do
+for path in modules/storage/internal/eventcontract; do
 	[[ ! -e "${path}" ]] || violations+=("${path}: legacy event interaction path is not allowed")
 done
 
@@ -141,7 +141,6 @@ current_event_docs=(
 	docs/模块/存储.md
 	docs/模块/策略.md
 	docs/模块/因子.md
-	modules/archive/README.md
 	modules/factor/README.md
 	modules/trade/README.md
 )

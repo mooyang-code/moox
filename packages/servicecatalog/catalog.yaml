@@ -1043,38 +1043,6 @@ components:
         - inspect_health_check_input
         - restart_service_manually
       required_in_default_profile: true
-  - id: archive
-    name: 归档服务
-    binary: moox-archive
-    scope: any
-    replicas: single
-    protected: false
-    health:
-      kind: readyz
-      port: 11416
-      ready_body: '"ready":true'
-    doctor:
-      role: archive
-      description: Journal archive and materialization service
-      duties:
-        - archive journals and complete materialization
-      inputs:
-        - accepted journals
-      outputs:
-        - archive completions
-      dependencies:
-        - eventbus
-        - storage-primary
-      transport: reporter
-      functional_observability: active
-      config_paths:
-        - archive/config/app.yaml
-        - archive/config/trpc_go.yaml
-      writable_paths:
-        - data/archive
-      recovery_action_ids:
-        - restart_service_manually
-      required_in_default_profile: true
   - id: storage-primary
     name: 存储主服务
     binary: moox-storage-primary
@@ -1170,8 +1138,6 @@ components:
           - UpdateDevice
           - GetDevice
           - ListDevices
-          - RegisterArchiveFile
-          - ListArchiveFiles
         read_only_methods:
           - GetSpace
           - ListSpaces
@@ -1201,7 +1167,6 @@ components:
           - ListDataNodes
           - GetDevice
           - ListDevices
-          - ListArchiveFiles
         acl:
           - methods:
               - CreateSpace
@@ -1260,8 +1225,6 @@ components:
               - GetDataNode
               - ListDataNodes
               - DeleteDataNode
-              - RegisterArchiveFile
-              - ListArchiveFiles
             callers:
               - console
               - moox-cli
@@ -1319,13 +1282,11 @@ components:
               - ListDatasetColumns
               - GetDataNode
               - ListDataNodes
-              - ListArchiveFiles
             callers:
               - collector
               - factor-mgr
               - monitor
               - strategy
-              - archive
               - storage-view
           - methods:
               - CreateDataset
@@ -1343,11 +1304,9 @@ components:
               - UpsertSubject
               - UpsertDatasetColumn
               - UpsertViewColumn
-              - RegisterArchiveFile
             callers:
               - collector
               - factor-mgr
-              - archive
           - methods:
               - ActivateDataset
             callers:
@@ -1423,7 +1382,6 @@ components:
               - factor-mgr
               - monitor
               - strategy
-              - archive
               - storage-view
           - methods:
               - UpsertFields

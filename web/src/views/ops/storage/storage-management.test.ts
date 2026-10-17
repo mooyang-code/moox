@@ -71,17 +71,15 @@ describe("storage configuration workbench", () => {
     mocks.push.mockReset();
   });
 
-  it("keeps DataNode and archive pages in one surface and falls back unknown tabs to nodes", () => {
+  it("keeps the DataNode page behind the storage tab surface and falls back unknown tabs to nodes", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     const normalized = normalizeSource(source);
-    const positions = ["数据节点", "归档文件"].map(label => normalized.indexOf(`label:"${label}"`));
 
     expect(source).toContain("PageTitleTabs");
     expect(source).toContain('aria-label="存储配置"');
-    expect(positions.every(position => position >= 0)).toBe(true);
-    expect(positions).toEqual([...positions].sort((left, right) => left - right));
-    expect(normalized).toContain('typeStorageConfigTab="nodes"|"archive"');
-    expect(normalized).toContain('returnvalue==="archive"?value:"nodes"');
+    expect(normalized).toContain('label:"数据节点"');
+    expect(normalized).not.toContain("归档文件");
+    expect(normalized).toContain('typeStorageConfigTab="nodes"');
     expect(normalized).not.toContain("routes");
   });
 
@@ -145,13 +143,4 @@ describe("storage configuration workbench", () => {
     expect(normalized).not.toContain('path:"/data/datasets"');
   });
 
-  it("exposes sorting arrows for archive time columns", () => {
-    const source = fs.readFileSync(path.resolve(__dirname, "archive.vue"), "utf8");
-    for (const title of ["最小时间", "最大时间", "创建时间", "更新时间"]) {
-      expect(source).toContain(`title="${title}"`);
-    }
-    expect(source.match(/:sortable="\{ sortDirections: \['ascend', 'descend'\], sorter: true \}"/g)).toHaveLength(4);
-    expect(source).toContain('@sorter-change="onSorterChange"');
-    expect(source).toContain("sort_by: sortBy.value || undefined");
-  });
 });

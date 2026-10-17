@@ -370,25 +370,6 @@ export interface DataNodeListItem {
   datasets: DatasetSummary[];
 }
 
-export interface ArchiveFile {
-  space_id: string;
-  archive_file_id: string;
-  dataset_id: string;
-  device_id: string;
-  partition_key?: string;
-  file_uri: string;
-  file_format: string;
-  min_time?: string;
-  max_time?: string;
-  row_count?: number | string;
-  content_hash?: string;
-  columns?: string[];
-  status: string;
-  created_at?: string;
-  updated_at?: string;
-  attributes?: Record<string, string>;
-}
-
 export interface TimeSeriesKey {
   space_id: string;
   dataset_id: string;

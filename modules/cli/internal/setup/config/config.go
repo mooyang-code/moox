@@ -160,7 +160,7 @@ type EgressDNS struct {
 // recommended values from storagepolicy.Default; a given table is used as is,
 // so defaults must cover every frequency.
 type StorageRetention struct {
-	ViewBars uint64                       `toml:"view_bars" json:"view_bars"`
+	ViewBars uint64                       `toml:"view_rows_per_series" json:"view_rows_per_series"`
 	Defaults map[string]string            `toml:"defaults" json:"defaults"`
 	Spaces   map[string]map[string]string `toml:"spaces" json:"spaces"`
 }
@@ -502,7 +502,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		out.Factors.Enabled = false
 	}
 	recommended := storagepolicy.Default()
-	if !md.IsDefined("storage_retention", "view_bars") {
+	if !md.IsDefined("storage_retention", "view_rows_per_series") {
 		out.StorageRetention.ViewBars = recommended.View.Bars
 	}
 	if !md.IsDefined("storage_retention", "defaults") {
@@ -638,7 +638,7 @@ func validate(manifest *Manifest) error {
 		return fmt.Errorf("config_invalid: storage policy: %w", err)
 	}
 	// Session-market estimates are only warnings; `moox-cli config plan`
-	// reports them. A 7×24 retention that cannot hold view_bars is an error.
+	// reports them. A 7×24 retention that cannot hold view_rows_per_series is an error.
 	if errs, _ := policy.Coverage(); len(errs) > 0 {
 		return fmt.Errorf("config_invalid: storage policy: %s", strings.Join(errs, "; "))
 	}

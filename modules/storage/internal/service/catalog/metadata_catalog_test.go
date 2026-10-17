@@ -26,11 +26,6 @@ type activationMetadataStore struct {
 	beforeCommit func()
 }
 
-type registerArchiveFileMetadataStore struct {
-	metadata.Store
-	registered bool
-}
-
 type createSpaceMetadataStore struct {
 	metadata.Store
 	space      *pb.Space
@@ -68,11 +63,6 @@ func (s *manualRebuildMetadataStore) RequestViewRebuild(context.Context, string,
 	s.requestCnt++
 	s.view.DesiredViewRevision++
 	return s.view, nil
-}
-
-func (s *registerArchiveFileMetadataStore) RegisterArchiveFile(_ context.Context, item *pb.ArchiveFile) (*pb.ArchiveFile, error) {
-	s.registered = true
-	return item, nil
 }
 
 func (s *activationMetadataStore) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
@@ -229,21 +219,6 @@ func TestActivateDatasetReportsCommittedPublicationFailureAndRetryIsIdempotent(t
 	require.Equal(t, 3, attempts)
 	require.Equal(t, uint64(8), retry.GetDataset().GetRevision())
 	require.Equal(t, 1, store.commitCalls)
-}
-
-func TestRegisterArchiveFileSucceedsWhenCachePublicationIsUnavailable(t *testing.T) {
-	store := &registerArchiveFileMetadataStore{}
-	service, err := NewMetadataService(store, &metacache.Store{}, Options{AuthSecret: "secret"})
-	require.NoError(t, err)
-
-	rsp, err := service.RegisterArchiveFile(context.Background(), &pb.RegisterArchiveFileReq{
-		ArchiveFile: &pb.ArchiveFile{
-			SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", DeviceId: "parquet-local", FileUri: "file:///tmp/spot.parquet",
-		},
-	})
-	require.NoError(t, err)
-	require.True(t, store.registered)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 }
 
 func TestCreateSpaceSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) {

@@ -22,7 +22,7 @@ MooX 是单用户、自托管系统。唯一的登录用户拥有全部管理能
 | [Trade](docs/模块/交易.md) | `moox-trade` | 账户、目标收敛下单、订单成交持仓、模拟盘 |
 | [Monitor](docs/模块/监控.md) | `moox-monitor` | 健康检查、指标接入、数据新鲜度、告警 |
 | [HostAgent](docs/模块/主机代理.md) | `moox-host-agent` | 主机资源采集 |
-| [Archive](docs/模块/归档.md) | `moox-archive` | 行变更归档为 Parquet |
+| Archive（旧实现已删除，新实现建设中） | — | 定时归档为本地 CSV，见[数据归档设计](docs/计划/数据归档设计.md) |
 | [Web](docs/模块/前端.md) | `moox-web-host` | 管理台前端 |
 | [CLI](docs/模块/命令行工具.md) | `moox-cli` | 初始化、部署、数据导入、诊断 |
 

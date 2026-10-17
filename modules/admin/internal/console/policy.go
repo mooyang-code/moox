@@ -122,7 +122,7 @@ func effectiveSpaceID(header string, body []byte) (string, error) {
 var storageGlobalMethods = map[string]bool{
 	"CreateSpace": true, "UpdateSpace": true, "DeleteSpace": true, "ListSpaces": true,
 	"UpdateDataNode": true, "DeleteDataNode": true, "GetDataNode": true, "ListDataNodes": true,
-	"RebindDatasetDataNode": true, "RegisterArchiveFile": true, "ListArchiveFiles": true,
+	"RebindDatasetDataNode": true,
 }
 
 // requestBodySpace 是空间内 Storage 方法实际作用的空间。请求体声明的空间必须唯一且与请求头一致；

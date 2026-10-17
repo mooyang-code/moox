@@ -38,7 +38,7 @@ assert_loopback_server_services() {
 # 检查用 tRPC 自己的配置加载，按框架默认值和 server 级继承判断最终生效的传输层。
 (cd packages/healthz && go run ./cmd/trpctransportcheck ../../modules) || fail "tcp+trpc server must declare transport: go-net"
 
-modules=(admin archive cloudnode collector eventbus factor hostagent monitor storage strategy trade)
+modules=(admin cloudnode collector eventbus factor hostagent monitor storage strategy trade)
 validation_modules=(admin cloudnode collector eventbus factor hostagent monitor storage strategy trade)
 
 contains() {
@@ -74,13 +74,8 @@ for module in "${modules[@]}"; do
 		require_text "${modfile}" 'trpc.group/trpc-go/trpc-log-cls v1.0.0' "missing CLS dependency for ${module}"
 		require_text "${main}" 'trpc.group/trpc-go/trpc-log-cls' "missing CLS registration for ${module}"
 	fi
-	if [[ "${module}" == archive ]]; then
-		require_text "modules/archive/internal/bootstrap/app.go" 'packages/healthz/trpclog' "missing CLS service identity helper for ${module}"
-		require_text "modules/archive/internal/bootstrap/app.go" "InstallServiceName(\"${module}\")" "missing CLS service identity installation for ${module}"
-	else
-		require_text "${main}" 'packages/healthz/trpclog' "missing CLS service identity helper for ${module}"
-		require_text "${main}" "InstallServiceName(\"${module}\")" "missing CLS service identity installation for ${module}"
-	fi
+	require_text "${main}" 'packages/healthz/trpclog' "missing CLS service identity helper for ${module}"
+	require_text "${main}" "InstallServiceName(\"${module}\")" "missing CLS service identity installation for ${module}"
 
 	for config in "${configs[@]}"; do
 		[[ -f "${config}" ]] || fail "missing tRPC config for ${module}"

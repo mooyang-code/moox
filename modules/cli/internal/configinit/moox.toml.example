@@ -29,12 +29,12 @@ storage_root = "/data/moox/storage"
 max_size_mb = 50
 backup_count = 5
 
-# View 只按根数保留：每个时序序列保留最近 view_bars 根已完成 K 线，历史不足时用已有数据激活，
+# View 只按根数保留：每个时序序列保留最近 view_rows_per_series 根已完成 K 线，历史不足时用已有数据激活，
 # 后续由实时事件补齐。
 # Dataset 原始数据按 (空间, 频率) 保留：空间配置优先，没有时用 defaults；defaults 必须覆盖全部频率。
 # 取值为 <n>h、<n>d 或 forever。保留期缩短会删除数据，发布前用 moox-cli config plan 核对。
 [storage_retention]
-view_bars = 5000   # 每个序列 View 保留最近 N 根；超过 ceil(1.2 × N) 根时整理
+view_rows_per_series = 5000   # 每个序列 View 保留最近 N 根；超过 ceil(1.2 × N) 根时整理
 
 # 7×24 小时交易的空间（crypto 等，以及没有单独配置的空间）
 [storage_retention.defaults]

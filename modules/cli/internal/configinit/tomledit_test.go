@@ -9,7 +9,7 @@ const editSample = `[admin]
 username = "admin"   # 不该保留在字符串值后
 
 [storage_retention]
-view_bars = 5000   # 每个序列 View 保留最近 N 根
+view_rows_per_series = 5000   # 每个序列 View 保留最近 N 根
 
 [storage_retention.defaults]
 "1m" = "7d"
@@ -23,13 +23,13 @@ ssh = { port = 22, username = "ubuntu", password = "pw" }
 
 func TestPutKeyEditsOnlyTheTargetLine(t *testing.T) {
 	lines := strings.Split(editSample, "\n")
-	lines = putKey(lines, "storage_retention", "view_bars", "6000")
+	lines = putKey(lines, "storage_retention", "view_rows_per_series", "6000")
 	lines = putKey(lines, "storage_retention.defaults", "1m", `"14d"`)
 	lines = putKey(lines, "admin", "username", `"owner"`)
 	lines = putKey(lines, "hosts.storage", "ssh", `{ port = 2222, username = "root" }`)
 	got := strings.Join(lines, "\n")
 	for _, want := range []string{
-		"view_bars = 6000   # 每个序列 View 保留最近 N 根", `"1m" = "14d"`, `username = "owner"`, "# 注释行", `"5m" = "30d"`,
+		"view_rows_per_series = 6000   # 每个序列 View 保留最近 N 根", `"1m" = "14d"`, `username = "owner"`, "# 注释行", `"5m" = "30d"`,
 		`ssh = { port = 2222, username = "root" }`, `address = "198.51.100.11"`,
 	} {
 		if !strings.Contains(got, want) {

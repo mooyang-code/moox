@@ -131,7 +131,6 @@ describe("page layout standards", () => {
     const deployments = read("ops/deployments/index.vue");
     const storage = read("ops/storage/index.vue");
     const storageNodes = read("ops/storage/nodes.vue");
-    const storageArchive = read("ops/storage/archive.vue");
     const tradeRecords = read("trading/trade-record/trade-record.vue");
 
     expectMargin(subjects, ".subjects-content", "margin-top", 12);
@@ -147,7 +146,6 @@ describe("page layout standards", () => {
 
     expectMargin(storage, ".storage-config-content", "margin-top", 12);
     expect(storageNodes).toContain(".page-head");
-    expectMargin(storageArchive, ".page-actions", "margin-bottom", 8);
     expect(tradeRecords).not.toContain('import PageTitleTabs from "@/components/page-title-tabs/index.vue";');
     expect(tradeRecords).toContain("<h2>交易记录</h2>");
     expect(tradeRecords).toContain('class="orders-workbench-content"');

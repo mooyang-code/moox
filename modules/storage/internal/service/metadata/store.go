@@ -107,7 +107,6 @@ type Reader interface {
 	ListDataNodes(ctx context.Context, page *pb.Page) ([]*pb.DataNode, *pb.PageResult, error)
 	GetDevice(ctx context.Context, deviceID string) (*pb.Device, error)
 	ListDevices(ctx context.Context, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error)
-	ListArchiveFiles(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error)
 }
 
 // ViewRebuildLogReader is intentionally separate from Reader so the hot-path
@@ -164,7 +163,6 @@ type Writer interface {
 	RebindDatasetDataNode(ctx context.Context, spaceID string, datasetID string, dataNodeID string, expectedRevision uint64) (*pb.Dataset, error)
 	CommitDatasetActivation(ctx context.Context, spaceID string, datasetID string, expectedRevision uint64) (*pb.Dataset, error)
 	UpsertDevice(ctx context.Context, item *pb.Device) (*pb.Device, error)
-	RegisterArchiveFile(ctx context.Context, item *pb.ArchiveFile) (*pb.ArchiveFile, error)
 }
 
 type ViewPeriodStateStore interface {

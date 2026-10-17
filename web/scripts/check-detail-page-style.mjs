@@ -31,8 +31,7 @@ const pageShellFiles = [
   "src/views/trading/position-detail/position-detail.vue",
   "src/views/trading/trade-record/trade-record.vue",
   "src/views/container/ssh-hosts/ssh-hosts.vue",
-  "src/views/ops/storage/nodes.vue",
-  "src/views/ops/storage/archive.vue"
+  "src/views/ops/storage/nodes.vue"
 ];
 
 const tableFiles = [

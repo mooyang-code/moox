@@ -80,8 +80,6 @@ mkdir -p \
   "${RELEASE_ROOT}/modules/storage-view/schema" \
   "${RELEASE_ROOT}/modules/access/bin" \
   "${RELEASE_ROOT}/modules/access/config" \
-  "${RELEASE_ROOT}/modules/archive/bin" \
-  "${RELEASE_ROOT}/modules/archive/config" \
   "${RELEASE_ROOT}/examples" \
   "${RELEASE_ROOT}/docs"
 mkdir -p "${RELEASE_ROOT}/lib" "${RELEASE_ROOT}/config/caddy" "${RELEASE_ROOT}/config/doctor" "${RELEASE_ROOT}/config/servicecatalog" "${RELEASE_ROOT}/config/setup"
@@ -128,8 +126,6 @@ cp "${ROOT}/bin/$(storage_binary_name moox-storage-primary)" "${RELEASE_ROOT}/mo
 cp "${ROOT}/bin/$(storage_binary_name moox-storage-view)" "${RELEASE_ROOT}/modules/storage-view/bin/$(storage_binary_name moox-storage-view)"
 cp "${ROOT}/bin/$(storage_binary_name moox-access)" "${RELEASE_ROOT}/modules/access/bin/$(storage_binary_name moox-access)"
 cp "${ROOT}/bin/$(storage_binary_name moox-storage-cli)" "${RELEASE_ROOT}/modules/storage-primary/bin/$(storage_binary_name moox-storage-primary-cli)"
-copy_binary moox-archive "${RELEASE_ROOT}/modules/archive/bin"
-copy_binary moox-archive-cli "${RELEASE_ROOT}/modules/archive/bin"
 if [[ -d "${RELEASE_ROOT}/modules/hostagent" ]]; then
   copy_binary moox-host-agent "${RELEASE_ROOT}/modules/hostagent/bin"
   copy_binary moox-host-agent-cli "${RELEASE_ROOT}/modules/hostagent/bin"
@@ -167,7 +163,6 @@ cp "${ROOT}/modules/access/config/trpc_go.yaml" "${RELEASE_ROOT}/modules/access/
 cp -R "${ROOT}/modules/monitor/config/." "${RELEASE_ROOT}/modules/monitor/config/"
 cp -R "${ROOT}/modules/storage/schema/." "${RELEASE_ROOT}/modules/storage-primary/schema/"
 cp -R "${ROOT}/modules/storage/schema/." "${RELEASE_ROOT}/modules/storage-view/schema/"
-cp -R "${ROOT}/modules/archive/config/." "${RELEASE_ROOT}/modules/archive/config/"
 perl -pi -e 's#dataset_health_policy_path:.*#dataset_health_policy_path: ../../../config/setup/dataset-health-policy.yaml#' \
   "${RELEASE_ROOT}/modules/monitor/config/app.yaml"
 cp "${ROOT}/scripts/runtime/storage-start.sh" "${RELEASE_ROOT}/modules/storage-primary/start.sh"

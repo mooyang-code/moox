@@ -4,7 +4,6 @@ use (
 	./modules/access
 	./modules/admin
 	./modules/admin/proto/admingen
-	./modules/archive
 	./modules/cli
 	./modules/cloudnode
 	./modules/cloudnode/proto/cloudnodegen

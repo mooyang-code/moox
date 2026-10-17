@@ -19,7 +19,7 @@ func TestReverseReconciliationUsesAllPlacementsAndExactIdentity(t *testing.T) {
 			{ServiceName: "collector", NodeID: "control", InstanceID: "current", BootID: "new", LastSeenAt: now},
 			{ServiceName: "collector", NodeID: "control", InstanceID: "current", BootID: "old", LastSeenAt: now.Add(-time.Hour)},
 			{ServiceName: "collector", NodeID: "disabled-host", InstanceID: "disabled-host", BootID: "1", LastSeenAt: now},
-			{ServiceName: "archive", NodeID: "control", InstanceID: "disabled-placement", BootID: "1", LastSeenAt: now},
+			{ServiceName: "egress-proxy", NodeID: "control", InstanceID: "disabled-placement", BootID: "1", LastSeenAt: now},
 			{ServiceName: "storage-primary", NodeID: "storage", InstanceID: "orphan", BootID: "1", LastSeenAt: now},
 			{ServiceName: "collector-extra", NodeID: "control", InstanceID: "unknown-component", BootID: "1", LastSeenAt: now},
 			{ServiceName: "trade", NodeID: "control", InstanceID: "old-orphan", BootID: "1", LastSeenAt: now.Add(-3 * time.Minute)},
@@ -45,7 +45,7 @@ func TestReverseReconciliationUsesAllPlacementsAndExactIdentity(t *testing.T) {
 			{HostID: "control", ComponentID: "collector", Status: "enabled"},
 			{HostID: "control", ComponentID: "factor-mgr", Status: "enabled"},
 			{HostID: "control", ComponentID: "web-host", Status: "enabled"},
-			{HostID: "control", ComponentID: "archive", Status: "disabled"},
+			{HostID: "control", ComponentID: "egress-proxy", Status: "disabled"},
 			{HostID: "disabled-host", ComponentID: "collector", Status: "enabled"},
 		},
 	}
@@ -71,7 +71,7 @@ func TestReverseReconciliationUsesAllPlacementsAndExactIdentity(t *testing.T) {
 		require.Equal(t, "unchecked", missing.Status, "none never becomes an unknown probe")
 		require.True(t, missing.LastSeenAt.IsZero())
 		require.Equal(t, "unchecked", byKey[placementKey("control", "web-host")].Status)
-		for _, key := range []string{placementKey("control", "archive"), placementKey("disabled-host", "collector")} {
+		for _, key := range []string{placementKey("control", "egress-proxy"), placementKey("disabled-host", "collector")} {
 			require.False(t, byKey[key].Enabled)
 			require.Equal(t, "disabled", byKey[key].Status)
 			require.Equal(t, "healthy", byKey[key].ReporterStatus, "reporter fact survives disabling the deployment")

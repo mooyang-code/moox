@@ -265,7 +265,7 @@ func TestEditorSavesFormChangesLineByLine(t *testing.T) {
 		t.Fatalf("留空的格子应删掉，其余不变: %+v", manifest.StorageRetention.Spaces["stockcn"])
 	}
 	// 只改目标行：注释和没动的设置原样保留。
-	for _, kept := range []string{"# View 只按根数保留", "view_bars = 5500   # 每个序列 View 保留最近 N 根", "[factors]", "maintenance_offset = \"35s\""} {
+	for _, kept := range []string{"# View 只按根数保留", "view_rows_per_series = 5500   # 每个序列 View 保留最近 N 根", "[factors]", "maintenance_offset = \"35s\""} {
 		if !strings.Contains(after, kept) {
 			t.Fatalf("应保留 %q", kept)
 		}

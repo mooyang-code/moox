@@ -36,7 +36,6 @@ const storageReadMethods = new Set([
   "ListViewColumns",
   "ListViewRebuildLogs",
   "ListDataNodes",
-  "ListArchiveFiles",
   "QueryTimeSeriesRows",
   "SearchRecordRows"
 ]);

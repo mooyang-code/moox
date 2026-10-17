@@ -60,10 +60,10 @@
   ],
   "components": [
     {
-      "component_id": "archive",
+      "component_id": "cloudnode",
       "host_id": "control",
       "instances": [],
-      "name": "归档服务",
+      "name": "云节点服务",
       "probe": {
         "checked_at": "",
         "raw_error": "",

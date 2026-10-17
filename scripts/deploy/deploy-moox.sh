@@ -14,7 +14,7 @@ AUTO_GATEWAY_INPUTS=0
 WITH_STORAGE=1
 WITH_STORAGE_NODE=1
 WITH_ACCESS=1
-WITH_ARCHIVE=1
+WITH_ARCHIVE=0
 WITH_EVENTBUS=1
 WITH_WEB_HOST=1
 WITH_WEB_HOST_EXPLICIT=0
@@ -137,8 +137,7 @@ Options:
   --no-access             Do not package/stop/start moox-access.
   --with-access           Package/start moox-access.
   --with-storage-node            Package the optional independent DataNode process.
-  --no-archive                    Do not package/start moox-archive.
-  --with-archive                  Package/start moox-archive (overrides profile default).
+  --no-archive                    兼容旧参数，无作用（旧归档服务已删除，新归档上线前不部署归档）。
   --no-eventbus                   Do not package/stop/start moox-eventbus; preserve existing remote EventBus files.
   --no-web-host                   Do not package/start moox-web-host.
   --with-web-host                 Package/start the browser application without Admin.
@@ -535,8 +534,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --with-archive)
-      WITH_ARCHIVE=1
-      shift
+      fail "旧归档服务已删除；新的定时归档上线前不能部署归档"
       ;;
     --no-eventbus)
       WITH_EVENTBUS=0
@@ -1124,11 +1122,6 @@ build_core_binaries() {
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
       "${ROOT}/scripts/build/build.sh" hostagent
   fi
-  if [[ "${WITH_ARCHIVE}" -eq 1 ]]; then
-    TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
-      "${ROOT}/scripts/build/build.sh" archive
-  fi
-
   if [[ "${WITH_ACCESS}" -eq 1 ]]; then
     TARGET_GOOS="${TARGET_GOOS}" TARGET_GOARCH="${TARGET_GOARCH}" \
       "${ROOT}/scripts/build/build.sh" access

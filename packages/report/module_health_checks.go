@@ -23,7 +23,6 @@ var builtInModuleHealthChecks = []ModuleHealthCheck{
 	{ID: "factor-calculation", Module: "factor", MaxLag: 10 * time.Minute, Enabled: true},
 	{ID: "strategy-targets", Module: "strategy", MaxLag: 10 * time.Minute, Enabled: true},
 	{ID: "trade-rebalance", Module: "trade", MaxLag: 5 * time.Minute, Enabled: true},
-	{ID: "archive-materialize", Module: "archive", MaxLag: 15 * time.Minute, Enabled: true},
 	{
 		ID: "monitor-metrics", Module: "monitor", MaxLag: 2 * time.Minute, Enabled: true,
 		CheckFreshness: true, CheckWatermark: true,

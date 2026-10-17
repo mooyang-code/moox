@@ -500,9 +500,5 @@ func (s *countingPanicStore) ListDevices(ctx context.Context, engine string, pag
 	s.guard("ListDevices")
 	return s.Store.ListDevices(ctx, engine, page)
 }
-func (s *countingPanicStore) ListArchiveFiles(ctx context.Context, space, dataset string, page *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error) {
-	s.guard("ListArchiveFiles")
-	return s.Store.ListArchiveFiles(ctx, space, dataset, page)
-}
 
 var _ coremetadata.Reader = (*countingPanicStore)(nil)

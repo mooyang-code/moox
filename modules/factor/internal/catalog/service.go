@@ -47,7 +47,7 @@ func WithEarliestPeriodProvider(provider EarliestPeriodProvider) Option {
 }
 
 // DefaultMaxBackfillPeriods 是启用成员时默认回填的最大期数。
-// 时序 View 只保留最近 view_bars（默认 5000）根，更早的因子结果没有读取方；
+// 时序 View 只保留最近 view_rows_per_series（默认 5000）根，更早的因子结果没有读取方；
 // 回填一整年（结果数据集的保留期）会让 DataNode 把大量早已无人读取的窗口读一遍，2026-10-14 的 1h 因子集回填就因此打满了 storage-node。
 // 需要更长的历史时，用手工补算（recalc）指定范围。
 const DefaultMaxBackfillPeriods = 5000

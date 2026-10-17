@@ -36,7 +36,6 @@ const (
 	kindDatasetColumn = "dataset_column"
 	kindDataNode      = "data_node"
 	kindDevice        = "device"
-	kindArchiveFile   = "archive_file"
 )
 
 // Options 保存元数据缓存包装器配置。
@@ -523,22 +522,6 @@ func (s *Store) ListDevices(ctx context.Context, engine string, page *pb.Page) (
 	return pageItems(items, page)
 }
 
-func (s *Store) ListArchiveFiles(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error) {
-	var raw []entry
-	if spaceID != "" && datasetID != "" {
-		raw = s.listByIndex(indexDataset, kindArchiveFile, spaceID, datasetID)
-	} else {
-		raw = s.list(kindArchiveFile, func(item entry) bool {
-			return (spaceID == "" || item.SpaceID == spaceID) && (datasetID == "" || item.DatasetID == datasetID)
-		})
-	}
-	items, err := decodeEntries(raw, func() *pb.ArchiveFile { return &pb.ArchiveFile{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
-}
-
 func getProto[T proto.Message](s *Store, ctx context.Context, kind string, spaceID string, id string, newMessage func() T) (T, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
@@ -661,7 +644,7 @@ func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 	if out, err = s.fetchDevices(ctx, out); err != nil {
 		return nil, err
 	}
-	return s.fetchArchiveFiles(ctx, out)
+	return out, nil
 }
 
 func (s *Store) fetchSpaces(ctx context.Context, out []entry) ([]entry, error) {
@@ -833,22 +816,6 @@ func (s *Store) fetchDevices(ctx context.Context, out []entry) ([]entry, error) 
 	}
 	for _, item := range items {
 		out, err = appendEntry(out, entry{Kind: kindDevice, ID: item.GetDeviceId(), Engine: item.GetEngine(), Status: item.GetStatus()}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) fetchArchiveFiles(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error) {
-		return s.base.ListArchiveFiles(ctx, "", "", page)
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindArchiveFile, SpaceID: item.GetSpaceId(), ID: item.GetArchiveFileId(), DatasetID: item.GetDatasetId(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}

@@ -16,7 +16,7 @@ MooX 的业务模块。每个模块是独立的 Go module（由仓库根目录 `
 | [trade](./trade/) | `moox-trade`、`moox-trade-cli` | 交易执行与交易事实 | [交易](../docs/模块/交易.md) |
 | [monitor](./monitor/) | `moox-monitor`、`moox-monitor-cli` | 健康检查与告警 | [监控](../docs/模块/监控.md) |
 | [hostagent](./hostagent/) | `moox-host-agent`、`moox-host-agent-cli` | 主机资源采集 | [主机代理](../docs/模块/主机代理.md) |
-| [archive](./archive/) | `moox-archive`、`moox-archive-cli` | 行变更归档为 Parquet | [归档](../docs/模块/归档.md) |
+| archive（已删除，新实现建设中） | — | 定时归档为本地 CSV | [数据归档设计](../docs/计划/数据归档设计.md) |
 | [cli](./cli/) | `moox-cli` | 运维命令行 | [命令行工具](../docs/模块/命令行工具.md) |
 
 构建单个目标：`./scripts/build/build.sh <target>`（例如 `admin`、`storage`、`collector-scf`、`factor-engine`）；

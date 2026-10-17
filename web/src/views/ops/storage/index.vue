@@ -16,30 +16,21 @@
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
-import ArchiveFiles from "./archive.vue";
 import DataNodes from "./nodes.vue";
 
-type StorageConfigTab = "nodes" | "archive";
+type StorageConfigTab = "nodes";
 
-const tabs = [
-  { key: "nodes", label: "数据节点" },
-  { key: "archive", label: "归档文件" }
-] as const;
+const tabs = [{ key: "nodes", label: "数据节点" }] as const;
 
 const route = useRoute();
 const router = useRouter();
 const activeTab = ref<StorageConfigTab>(normalizeTab(route.query.tab));
 
-const activeComponent = computed(
-  () =>
-    ({
-      nodes: DataNodes,
-      archive: ArchiveFiles
-    })[activeTab.value]
-);
+const activeComponent = computed(() => ({ nodes: DataNodes })[activeTab.value]);
 
-function normalizeTab(value: unknown): StorageConfigTab {
-  return value === "archive" ? value : "nodes";
+// 旧的归档页签已随旧归档实现删除，任何取值都回到数据节点。
+function normalizeTab(_value: unknown): StorageConfigTab {
+  return "nodes";
 }
 
 function onTabChange(value: string | number) {

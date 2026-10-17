@@ -32,7 +32,7 @@ func TestOverviewV2MixedFactsSnapshot(t *testing.T) {
 			{NodeID: "control", ServiceName: "web-host", Enabled: true, Status: "down", Reason: "health check failed", ProbeStatus: "down", ProbeReason: "健康检查失败", ProbeRawError: "dial tcp: connection refused\n原始错误", ProbeCheckedAt: now},
 			{NodeID: "offline", ServiceName: "web-host", Enabled: true, Status: "unknown", Reason: "health not checked", ProbeStatus: "unknown"},
 			{NodeID: "control", ServiceName: "eventbus", Enabled: true, Status: "unchecked", Reason: "不探测", ProbeStatus: "unchecked", ReporterStatus: "missing"},
-			{NodeID: "control", ServiceName: "archive", Status: "disabled", Reason: "部署已停用", ProbeStatus: "disabled"},
+			{NodeID: "control", ServiceName: "cloudnode", Status: "disabled", Reason: "部署已停用", ProbeStatus: "disabled"},
 		},
 		Unregistered:   []observability.ServiceStatus{{NodeID: "control", ServiceName: "unknown-collector-name", Instances: []observability.ReporterInstance{{InstanceID: "orphan", Version: "dev", Status: "healthy", LastSeenAt: now}}}},
 		Hosts:          []observability.HostStatus{{HostID: "offline", AgentID: "PHYSICAL01", Hostname: "offline-host", Status: "down", Reason: "agent unreachable", LastSeenAt: now.Add(-10 * time.Minute)}, {AgentID: "STANDALONE", Hostname: "control", Status: "healthy", Reason: "agent reachable", LastSeenAt: now}},

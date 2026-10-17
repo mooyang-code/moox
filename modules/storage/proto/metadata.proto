@@ -440,40 +440,6 @@ message Device {
   map<string, string> attributes = 9;
 }
 
-// ArchiveFile 表示从 Pebble 主存归档出来的 Parquet 事实文件。
-message ArchiveFile {
-  // space_id 是归档所属 Space。
-  string space_id = 1;
-  // archive_file_id 是归档文件记录 ID。
-  string archive_file_id = 2;
-  // dataset_id 是归档所属数据集 ID。
-  string dataset_id = 3;
-  // device_id 是归档文件所在设备 ID。
-  string device_id = 4;
-  // partition_key 是归档分区键，例如 date=2026-06-15/source=binance。
-  string partition_key = 5;
-  // file_uri 是归档文件 URI。
-  string file_uri = 6;
-  // file_format 是文件格式，当前固定为 parquet。
-  string file_format = 7;
-  // min_time 是文件内最小数据时间。
-  string min_time = 8;
-  // max_time 是文件内最大数据时间。
-  string max_time = 9;
-  // row_count 是文件内事实行数。
-  uint64 row_count = 10;
-  // columns 是该文件包含的事实列名列表。
-  repeated string columns = 12;
-  // status 表示启用、停用、归档、删除或失败等状态。
-  string status = 13;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 14;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 15;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 16;
-}
-
 // CreateSpaceReq 表示创建使用空间的请求。
 message CreateSpaceReq {
   // auth_info 是调用方身份和链路追踪信息。
@@ -1356,54 +1322,6 @@ message ListDevicesRsp {
   common.PageResult page_result = 3;
 }
 
-// RegisterArchiveFileReq 表示登记归档文件的请求。
-message RegisterArchiveFileReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // archive_file 是待登记的归档文件元数据。
-  ArchiveFile archive_file = 2;
-}
-
-// RegisterArchiveFileRsp 表示登记归档文件的响应。
-message RegisterArchiveFileRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // archive_file 是登记后的归档文件元数据。
-  ArchiveFile archive_file = 2;
-}
-
-// ListArchiveFilesReq 表示列出归档文件的请求。
-message ListArchiveFilesReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是可选使用空间 ID 过滤条件。
-  string space_id = 2;
-  // dataset_id 是可选数据集 ID 过滤条件。
-  string dataset_id = 3;
-  // device_id 是可选设备 ID 过滤条件。
-  string device_id = 4;
-  // partition_key 是可选分区键过滤条件。
-  string partition_key = 5;
-  // time_range 是可选数据时间范围过滤条件。
-  TimeRange time_range = 6;
-  // page 是分页参数。
-  common.Page page = 7;
-  // sort_by 是排序字段：min_time、max_time、created_at 或 updated_at。
-  string sort_by = 8;
-  // sort_order 是排序方向：asc 或 desc。
-  string sort_order = 9;
-}
-
-// ListArchiveFilesRsp 表示列出归档文件的响应。
-message ListArchiveFilesRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // archive_files 是归档文件列表。
-  repeated ArchiveFile archive_files = 2;
-  // page_result 是分页结果。
-  common.PageResult page_result = 3;
-}
-
 // ClaimViewIndexBuildReq 尝试声明或接管一个 View 索引构建租约。
 message ClaimViewIndexBuildReq {
   common.AuthInfo auth_info = 1;
@@ -1768,8 +1686,4 @@ service Metadata {
   // 列出设备。
   rpc ListDevices(ListDevicesReq) returns (ListDevicesRsp);
 
-  // 登记 Parquet 归档文件。
-  rpc RegisterArchiveFile(RegisterArchiveFileReq) returns (RegisterArchiveFileRsp);
-  // 列出 Parquet 归档文件。
-  rpc ListArchiveFiles(ListArchiveFilesReq) returns (ListArchiveFilesRsp);
 }
