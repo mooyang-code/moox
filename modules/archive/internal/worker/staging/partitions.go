@@ -364,3 +364,20 @@ ON CONFLICT (space_id, dataset_id) DO UPDATE SET task_epoch = excluded.task_epoc
 	}
 	return dropped, nil
 }
+
+// DropIfUnbound 丢弃还没绑定任务实例的旧状态（升级前留下的）。已绑定实例的状态一律保留：
+// 迟到的删除通知不能清掉新任务的数据，新旧任务的区分交给 BindEpoch。
+func (s *Store) DropIfUnbound(ctx context.Context, spaceID, datasetID string) error {
+	var stored sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT task_epoch FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if stored.Valid && stored.String != "" {
+		return nil
+	}
+	return s.DropTask(ctx, spaceID, datasetID)
+}

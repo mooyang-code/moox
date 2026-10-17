@@ -601,3 +601,26 @@ func TestBindEpochDropsStateOfAPreviousTaskInstance(t *testing.T) {
 		t.Fatal("绑定后再次执行不应再丢弃")
 	}
 }
+
+func TestDropIfUnboundKeepsStateBoundToATaskInstance(t *testing.T) {
+	s, ctx, task := openTest(t), context.Background(), klineTask()
+	_ = s.EnsureTable(ctx, task)
+	_ = s.Finalize(ctx, task, nil, now0, now0, true)
+	// 升级前的状态（没有实例标识）会被丢弃。
+	if err := s.DropIfUnbound(ctx, "crypto", "ds_1m"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("未绑定的旧状态应被丢弃")
+	}
+	// 绑定实例之后，迟到的清理不能删掉它。
+	_ = s.EnsureTable(ctx, task)
+	_, _ = s.BindEpoch(ctx, "crypto", "ds_1m", "e1")
+	_ = s.Finalize(ctx, task, nil, now0, now0, true)
+	if err := s.DropIfUnbound(ctx, "crypto", "ds_1m"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); !ok {
+		t.Fatal("已绑定实例的状态不能被迟到的清理删除")
+	}
+}
