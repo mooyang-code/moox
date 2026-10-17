@@ -66,7 +66,7 @@ func TestHealthLagIsMeasuredFromWhenTheNextBarBecomesScannable(t *testing.T) {
 	base := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
 	content := &marketfetch.FetchPlanContent{Datasets: map[string]*marketfetch.PlanDatasetChange{}, Functions: map[string]*marketfetch.PlanFunctionChange{}}
 	change := &marketfetch.PlanDatasetChange{Changed: true, HashChanged: true, P: base.Unix()}
-	change.DatasetID, change.Frequency, change.LatenessS = "ds", "1h", 60
+	change.DatasetID, change.Frequency, change.LatenessS, change.Hash = "ds", "1h", 60, "hash:BTC-USDT"
 	change.Series = append(change.Series, seriesOf("BTC-USDT"))
 	content.Datasets["ds|1h"] = change
 	plans := fakePlans{[]*store.FetchPlanRecord{{ID: 1, SpaceID: "crypto", Status: store.FetchPlanApplied, Plan: mustJSON(content), Progress: "{}"}}}

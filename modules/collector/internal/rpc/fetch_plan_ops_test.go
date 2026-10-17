@@ -37,8 +37,8 @@ func applyPlan(t *testing.T, db *store.Store, spaceID, plan string) *store.Fetch
 	return record
 }
 
-// 清空 Storage 之后：已生效计划里的数据集 hash 被清空（下一轮对账据此重新登记快照），补采作业与水位被重置，
-// 水位推到现在而不是留空（留空会从最早的计划起点回补历史）。
+// 清空 Storage 之后：已生效计划里的数据集 hash 被清空（下一轮对账据此重新登记快照，时间线从新的生效周期开始），
+// 该空间的补采作业与水位被清掉，自动补采从新的生效周期扫起。
 func TestReregisterFetchPlanClearsSnapshotsAndResetsBackfill(t *testing.T) {
 	service, db := newReregisterFixture(t)
 	ctx := context.Background()
@@ -50,7 +50,6 @@ func TestReregisterFetchPlanClearsSnapshotsAndResetsBackfill(t *testing.T) {
 	require.NoError(t, db.Backfill().CreateJob(ctx, store.BackfillJob{JobID: "job-crypto", SpaceID: "crypto", From: oldWatermark, To: oldWatermark.Add(time.Minute)}, []store.BackfillChunk{{DatasetID: "ds1", Frequency: "1m", SubjectID: "BTC", From: oldWatermark, To: oldWatermark.Add(time.Minute), ChunkID: "c1"}}))
 	require.NoError(t, db.Backfill().CreateJob(ctx, store.BackfillJob{JobID: "job-stockcn", SpaceID: "stockcn", From: oldWatermark, To: oldWatermark.Add(time.Minute)}, []store.BackfillChunk{{DatasetID: "ds1", Frequency: "1m", SubjectID: "600000", From: oldWatermark, To: oldWatermark.Add(time.Minute), ChunkID: "c2"}}))
 
-	before := time.Now().UTC().Add(-time.Second)
 	rsp, err := service.ReregisterFetchPlan(ctx, &pb.ReregisterFetchPlanReq{SpaceId: " crypto "})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
@@ -70,7 +69,7 @@ func TestReregisterFetchPlanClearsSnapshotsAndResetsBackfill(t *testing.T) {
 	for _, key := range [][2]string{{"ds1", "1m"}, {"ds2", "1h"}} {
 		mark, err := db.Backfill().Watermark(ctx, "crypto", key[0], key[1])
 		require.NoError(t, err)
-		require.True(t, mark.After(before), "%s 的水位推到现在", key)
+		require.True(t, mark.IsZero(), "%s 的水位被清掉", key)
 	}
 	job, chunks, err := db.Backfill().GetJob(ctx, "job-crypto")
 	require.NoError(t, err)
@@ -86,6 +85,37 @@ func TestReregisterFetchPlanClearsSnapshotsAndResetsBackfill(t *testing.T) {
 	untouched, err := marketfetch.DecodeFetchPlanContent(other.Plan)
 	require.NoError(t, err)
 	require.Equal(t, "h1", untouched.Datasets["ds1|1m"].Hash)
+}
+
+// 重新登记之后、新快照登记之前，数据集在时间线上没有计划段，数据集健康里看不到它们；
+// 超过 30 分钟仍没有新计划接手（对账建不出计划）时，运行状态报异常。
+func TestCollectorStatusReportsAStalledReregistration(t *testing.T) {
+	service, db := newReregisterFixture(t)
+	ctx := context.Background()
+	applyPlan(t, db, "crypto", reregisterPlan)
+	rsp, err := service.ReregisterFetchPlan(ctx, &pb.ReregisterFetchPlanReq{SpaceId: "crypto"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+
+	status, err := service.GetCollectorStatus(ctx, &pb.GetCollectorStatusReq{SpaceId: "crypto"})
+	require.NoError(t, err)
+	require.Empty(t, status.GetDatasets(), "新快照登记之前数据集没有时间线")
+	require.Equal(t, "ok", status.GetLevel(), "刚重新登记，还在等下一轮对账")
+
+	applied, err := db.FetchPlans().LatestApplied(ctx, "crypto")
+	require.NoError(t, err)
+	reason, err := reregisterStalled(applied, applied.UpdatedAt.Add(pendingPlanWarn))
+	require.NoError(t, err)
+	require.Empty(t, reason)
+	reason, err = reregisterStalled(applied, applied.UpdatedAt.Add(pendingPlanWarn+time.Minute))
+	require.NoError(t, err)
+	require.Contains(t, reason, "2 个数据集不写入实时数据")
+
+	// 新计划生效后已生效计划的 hash 不再为空，不再提示。
+	next := applyPlan(t, db, "crypto", reregisterPlan)
+	reason, err = reregisterStalled(next, next.UpdatedAt.Add(time.Hour))
+	require.NoError(t, err)
+	require.Empty(t, reason)
 }
 
 // 还有未生效的计划时不动手：它生效之前已生效计划不能改写；没有已生效计划同样拒绝。

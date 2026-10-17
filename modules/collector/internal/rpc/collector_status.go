@@ -55,6 +55,15 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 	if open != nil && now.Sub(open.CreatedAt) > pendingPlanWarn {
 		raise(klinecheck.HealthWarn, fmt.Sprintf("采集计划 #%d 已 %s 未生效", open.ID, klinecheck.FormatDuration(now.Sub(open.CreatedAt))))
 	}
+	if open == nil && applied != nil {
+		reason, err := reregisterStalled(applied, now)
+		if err != nil {
+			return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
+		if reason != "" {
+			raise(klinecheck.HealthError, reason)
+		}
+	}
 
 	health, err := klinecheck.Health(ctx, plans, backfill, spaceID, now)
 	if err != nil {
@@ -90,6 +99,21 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 	}
 	rsp.ActiveBackfills, rsp.FailedBackfills_24H = int32(counts.Active), int32(counts.Failed)
 	return rsp, nil
+}
+
+// reregisterStalled 在重新登记之后超过 pendingPlanWarn 仍没有新计划接手时返回原因（没有则返回空串）。
+// 这期间数据集在时间线上没有计划段，数据集健康里看不到它们，实时提交又因快照缺失被拒绝，只能在这里报出来；
+// 通常是对账建不出新计划（例如预检失败、取不到标的）。applied 的更新时间就是重新登记的时间。
+func reregisterStalled(applied *store.FetchPlanRecord, now time.Time) (string, error) {
+	content, err := marketfetch.DecodeFetchPlanContent(applied.Plan)
+	if err != nil {
+		return "", err
+	}
+	waiting := now.Sub(applied.UpdatedAt)
+	if keys := content.ClearedDatasets(); len(keys) > 0 && waiting > pendingPlanWarn {
+		return fmt.Sprintf("重新登记已 %s 仍没有新的采集计划，%d 个数据集不写入实时数据，也不检查、不补采", klinecheck.FormatDuration(waiting), len(keys)), nil
+	}
+	return "", nil
 }
 
 func planSummary(record *store.FetchPlanRecord) *pb.FetchPlanSummary {

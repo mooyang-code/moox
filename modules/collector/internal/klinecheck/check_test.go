@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -62,12 +63,12 @@ func record(t *testing.T, id int64, status string, p int64, subjects ...string) 
 	return recordFor(t, id, "ds", status, p, subjects...)
 }
 
-// recordFor 构造只含一个“数据集|1m”变更的计划记录。
+// recordFor 构造只含一个“数据集|1m”变更的计划记录。hash 和真实计划一样非空（空 hash 表示快照已清空，见 BuildTimeline）。
 func recordFor(t *testing.T, id int64, dataset, status string, p int64, subjects ...string) *store.FetchPlanRecord {
 	t.Helper()
 	content := &marketfetch.FetchPlanContent{Datasets: map[string]*marketfetch.PlanDatasetChange{}, Functions: map[string]*marketfetch.PlanFunctionChange{}}
 	change := &marketfetch.PlanDatasetChange{Changed: true, HashChanged: true, P: p}
-	change.DatasetID, change.Frequency, change.LatenessS = dataset, "1m", 15
+	change.DatasetID, change.Frequency, change.LatenessS, change.Hash = dataset, "1m", 15, "hash:"+strings.Join(subjects, ",")
 	for _, subject := range subjects {
 		change.Series = append(change.Series, seriesOf(subject))
 	}

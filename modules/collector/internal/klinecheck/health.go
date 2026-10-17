@@ -42,7 +42,8 @@ type DatasetHealth struct {
 	DatasetID string
 	Frequency string
 	Subjects  int
-	// EffectiveFrom 是最早一次采集计划生效的周期；InspectedUntil 是自动巡检已查到的时间（不含），没有巡检过为零值。
+	// EffectiveFrom 是时间线的起点（最早一次采集计划生效的周期，重新登记后是重新登记的生效周期）；
+	// InspectedUntil 是自动巡检已查到的时间（不含），没有巡检过为零值。
 	EffectiveFrom  time.Time
 	InspectedUntil time.Time
 	// InspectLag 是自动巡检超出预期的时长（见 Health 里的说明），衡量自动补漏是否跟上，不是数据延迟。

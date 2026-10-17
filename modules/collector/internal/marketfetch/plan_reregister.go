@@ -26,6 +26,7 @@ type PlanReregisterStore interface {
 // Storage 里登记的序列快照被清空后（例如重置全部 Storage 数据），采集函数的周期提交会因“快照缺失”被拒绝，
 // 而对账只在数据集标的集合 hash 变化时才重新登记：hash 清空后，下一轮对账会把全部数据集当作变化，
 // 生成新计划、重新登记快照并选新的生效周期。已退役的数据集（Gone）不动。
+// 被清空的 hash 同时是 K 线检查时间线的重置标记（见 ClearedDatasets 与 klinecheck.BuildTimeline）。
 func ClearRegisteredSnapshots(ctx context.Context, plans PlanReregisterStore, spaceID string) ([]string, error) {
 	open, err := plans.Open(ctx, spaceID)
 	if err != nil {
@@ -45,20 +46,31 @@ func ClearRegisteredSnapshots(ctx context.Context, plans PlanReregisterStore, sp
 	if err != nil {
 		return nil, err
 	}
-	keys := make([]string, 0, len(content.Datasets))
-	for key, change := range content.Datasets {
-		if change == nil || change.Gone {
-			continue
+	for _, change := range content.Datasets {
+		if change != nil && !change.Gone {
+			change.Hash = ""
 		}
-		change.Hash = ""
-		keys = append(keys, key)
 	}
+	keys := content.ClearedDatasets()
 	if len(keys) == 0 {
 		return nil, ErrReregisterNoPlan
 	}
-	sort.Strings(keys)
 	if err := plans.UpdateAppliedPlan(ctx, applied.ID, mustJSON(content)); err != nil {
 		return nil, fmt.Errorf("update applied fetch plan: %w", err)
 	}
 	return keys, nil
+}
+
+// ClearedDatasets 返回这份计划里 hash 被 ClearRegisteredSnapshots 清空、等待重新登记快照的在采数据集（排序）。
+// 非空说明该空间 Storage 里登记的快照（连同数据）已被整体清空：只有之后重新登记的生效周期起的数据是可信的。
+// 真实的标的集合 hash 不会为空（没有标的的数据集不进计划），所以空 hash 只来自 ClearRegisteredSnapshots。
+func (c *FetchPlanContent) ClearedDatasets() []string {
+	var keys []string
+	for key, change := range c.Datasets {
+		if change != nil && !change.Gone && change.Hash == "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
