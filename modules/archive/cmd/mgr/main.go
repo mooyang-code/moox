@@ -28,6 +28,9 @@ func main() {
 }
 
 func run() (err error) {
+	if len(os.Args) > 1 && os.Args[1] == "health" {
+		return health(os.Args[2:])
+	}
 	app := flag.String("config", "config/app.yaml", "archive application config")
 	framework := flag.String("conf", "config/trpc_go.yaml", "archive tRPC config")
 	flag.Parse()
