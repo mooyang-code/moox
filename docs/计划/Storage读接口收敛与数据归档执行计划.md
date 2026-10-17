@@ -600,3 +600,10 @@ limit 根，有范围按升序取最早 limit 根；`data rows export` 需要 `-
 | 单标的最近 500 根 | 10.1 ms，5.5 MB，11.7 万次分配 | 1.9 ms，1.9 MB，4.4 万次分配 |
 
   对比用的 benchmark 在 `datanode/pebble/read_bench_test.go`，旧版本把「先列标的再逐个读取」和 `after_key` 翻页放进同一数据构造里测。
+
+### 15.x 发布 A 上线记录（2026-10-17，提交 5bb915ce）
+
+- Codex 对阶段 1、4 与暂停 / 恢复采集的审查发现 5 处核心问题，核实后全部修复：Collector 缺口读取改游标分页（页大小 2000）；暂停期间补采器不再认领分块；索引重建时 `rows_per_series` 经 `ViewIndexSchema` 传入并写入索引；清理 `verify-event-contracts.sh` 里残留的 archive 测试入口；View 保留行数上限收紧为 10000。
+- 发布顺序与实际耗时（UTC 08:35～08:38）：storage-node → storage-primary → 等 40 秒 → storage-view；control 的 Admin → host-gateway → Monitor → Collector → factor-mgr → Strategy → web-host；storage 与 compute-1 的 host-gateway、Access；编译机因子引擎。备份在各主机 `backups/20261017-releaseA/old/`（编译机为 `moox-factor-engine.bak-20261017-releaseA`）。
+- 验收：各组件 ready 且 `binary_sha256` 与构建一致；三台主机 route_count 为 164（control）、95（storage）、37（compute-1），expected / applied hash 一致；重启期间 16:36 的一根 1m 因子 / 策略检查短暂告警，约 16:41 起全部恢复成功。
+- 尚未做：`repair-view` 实测、`fetch-plan pause / resume` 线上实测（会停生产采集，等用户决定）、`data rows export`（本机缺 Storage 内部鉴权文件）、整点 1h 因子产出核对。
