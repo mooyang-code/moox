@@ -606,4 +606,5 @@ limit 根，有范围按升序取最早 limit 根；`data rows export` 需要 `-
 - Codex 对阶段 1、4 与暂停 / 恢复采集的审查发现 5 处核心问题，核实后全部修复：Collector 缺口读取改游标分页（页大小 2000）；暂停期间补采器不再认领分块；索引重建时 `rows_per_series` 经 `ViewIndexSchema` 传入并写入索引；清理 `verify-event-contracts.sh` 里残留的 archive 测试入口；View 保留行数上限收紧为 10000。
 - 发布顺序与实际耗时（UTC 08:35～08:38）：storage-node → storage-primary → 等 40 秒 → storage-view；control 的 Admin → host-gateway → Monitor → Collector → factor-mgr → Strategy → web-host；storage 与 compute-1 的 host-gateway、Access；编译机因子引擎。备份在各主机 `backups/20261017-releaseA/old/`（编译机为 `moox-factor-engine.bak-20261017-releaseA`）。
 - 验收：各组件 ready 且 `binary_sha256` 与构建一致；三台主机 route_count 为 164（control）、95（storage）、37（compute-1），expected / applied hash 一致；重启期间 16:36 的一根 1m 因子 / 策略检查短暂告警，约 16:41 起全部恢复成功。
-- 尚未做：`repair-view` 实测、`fetch-plan pause / resume` 线上实测（会停生产采集，等用户决定）、`data rows export`（本机缺 Storage 内部鉴权文件）、整点 1h 因子产出核对。
+- `repair-view` 实测（10-17 16:46，`mooxsys/view_mooxsys_host_fs`，consumer `storage_view_metrics`）：A/B 重建成功，版本 11→12，写入 41650 行（10-14 的上一次重建为 2720 行，其后数据持续累积），日志无错误，Monitor 无新增失败。注意 `-package-root` 要用绝对路径，否则找不到 `stop.sh`；该命令会重启整个 storage-view。
+- 尚未做：`fetch-plan pause / resume` 线上实测（会停生产采集，等用户决定）、`data rows export`（本机缺 Storage 内部鉴权文件）、整点 1h 因子产出核对。
