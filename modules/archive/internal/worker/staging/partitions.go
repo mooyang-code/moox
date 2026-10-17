@@ -370,14 +370,12 @@ ON CONFLICT (space_id, dataset_id) DO UPDATE SET task_epoch = excluded.task_epoc
 func (s *Store) DropIfUnbound(ctx context.Context, spaceID, datasetID string) error {
 	var stored sql.NullString
 	err := s.db.QueryRowContext(ctx, `SELECT task_epoch FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&stored)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if stored.Valid && stored.String != "" {
+	if err == nil && stored.Valid && stored.String != "" {
 		return nil
 	}
+	// 没有 task_state 记录也算未绑定：可能留有只补拉过或首次回补中途失败的暂存表和分区状态。
 	return s.DropTask(ctx, spaceID, datasetID)
 }

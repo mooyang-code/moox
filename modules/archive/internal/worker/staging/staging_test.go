@@ -624,3 +624,15 @@ func TestDropIfUnboundKeepsStateBoundToATaskInstance(t *testing.T) {
 		t.Fatal("已绑定实例的状态不能被迟到的清理删除")
 	}
 }
+
+func TestDropIfUnboundAlsoClearsStagedDataWithoutTaskState(t *testing.T) {
+	s, ctx, task := openTest(t), context.Background(), klineTask()
+	_ = s.EnsureTable(ctx, task)
+	_, _ = s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0)
+	if err := s.DropIfUnbound(ctx, "crypto", "ds_1m"); err != nil {
+		t.Fatal(err)
+	}
+	if tables, _ := s.StagedTables(ctx); len(tables) != 0 {
+		t.Fatalf("没有 task_state 的旧暂存表也应清理: %v", tables)
+	}
+}
