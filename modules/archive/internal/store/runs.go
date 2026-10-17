@@ -210,7 +210,9 @@ func (s *Store) CancelRun(ctx context.Context, runID, spaceID string, now time.T
 
 // ClaimRequest 是 worker 领取运行的参数。
 type ClaimRequest struct {
-	WorkerID       string
+	WorkerID string
+	// InstanceID 非空时，领取事务内再核对该实例仍持有未过期的活动租约，避免旧实例在被接管的瞬间继续领取。
+	InstanceID     string
 	FreeSlots      int
 	MaxPerDataNode int
 	BusyByDataNode map[string]int
@@ -232,6 +234,18 @@ func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, err
 	}
 	var claimed []Claimed
 	err := s.tx(ctx, func(tx *sql.Tx) error {
+		if req.InstanceID != "" {
+			worker, err := scanWorker(tx.QueryRowContext(ctx, `SELECT `+workerColumns+` FROM t_archive_workers WHERE c_worker_id = ?`, req.WorkerID))
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if !worker.Active(req.Now) || worker.InstanceID != req.InstanceID {
+				return nil
+			}
+		}
 		rows, err := tx.QueryContext(ctx, `SELECT `+runColumns+` FROM t_archive_runs r WHERE c_status = 'queued'
 AND NOT EXISTS (SELECT 1 FROM t_archive_partitions p WHERE p.c_space_id = r.c_space_id AND p.c_dataset_id = r.c_dataset_id AND p.c_worker_id != ?)
 ORDER BY c_scheduled_at, c_id`, req.WorkerID)

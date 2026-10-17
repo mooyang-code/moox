@@ -67,7 +67,7 @@ func (w *WorkerService) PullArchiveRun(ctx context.Context, req *archivepb.PullA
 		busy[load.GetDataNodeId()] += int(load.GetRunning())
 	}
 	claimed, err := s.store.ClaimRuns(ctx, store.ClaimRequest{
-		WorkerID: req.GetWorkerId(), FreeSlots: int(req.GetFreeSlots()), MaxPerDataNode: int(req.GetMaxRunsPerDataNode()),
+		WorkerID: req.GetWorkerId(), InstanceID: req.GetInstanceId(), FreeSlots: int(req.GetFreeSlots()), MaxPerDataNode: int(req.GetMaxRunsPerDataNode()),
 		BusyByDataNode: busy, Now: now, LeaseTTL: s.cfg.Run.LeaseTTL,
 	})
 	if err != nil {

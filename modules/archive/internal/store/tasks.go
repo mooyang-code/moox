@@ -149,11 +149,19 @@ WHERE c_space_id = ? AND c_dataset_id = ? AND c_status = 'queued'`, fmtTime(now)
 			}
 		}
 		if update.RunNow && update.Status == StatusEnabled {
-			created, err := insertRun(ctx, tx, spaceID, datasetID, KindManual, time.Time{}, time.Time{}, now)
-			if err != nil {
+			// 已有排队中或运行中的运行时不再生成：同一任务同时只能有一个运行，否则会并发改写同一个暂存区。
+			var active int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_archive_runs WHERE c_space_id = ? AND c_dataset_id = ? AND c_status IN ('queued', 'running')`,
+				spaceID, datasetID).Scan(&active); err != nil {
 				return err
 			}
-			run = &created
+			if active == 0 {
+				created, err := insertRun(ctx, tx, spaceID, datasetID, KindManual, time.Time{}, time.Time{}, now)
+				if err != nil {
+					return err
+				}
+				run = &created
+			}
 		}
 		return nil
 	})

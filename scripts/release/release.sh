@@ -66,6 +66,8 @@ mkdir -p \
   "${RELEASE_ROOT}/modules/factor/config" \
   "${RELEASE_ROOT}/modules/factor/factors" \
   "${RELEASE_ROOT}/modules/factor/python-runtime" \
+  "${RELEASE_ROOT}/modules/archive/bin" \
+  "${RELEASE_ROOT}/modules/archive/config" \
   "${RELEASE_ROOT}/modules/strategy/bin" \
   "${RELEASE_ROOT}/modules/strategy/config" \
   "${RELEASE_ROOT}/modules/trade/bin" \
@@ -149,6 +151,7 @@ cp -R "${ROOT}/modules/collector/config/." "${RELEASE_ROOT}/modules/collector/co
 cp -R "${ROOT}/modules/factor/config/." "${RELEASE_ROOT}/modules/factor/config/"
 cp -R "${ROOT}/modules/factor/factors/." "${RELEASE_ROOT}/modules/factor/factors/"
 cp -R "${ROOT}/packages/pyruntime/python/." "${RELEASE_ROOT}/modules/factor/python-runtime/"
+cp -R "${ROOT}/modules/archive/config/." "${RELEASE_ROOT}/modules/archive/config/"
 cp -R "${ROOT}/modules/strategy/config/." "${RELEASE_ROOT}/modules/strategy/config/"
 find "${RELEASE_ROOT}/modules/strategy" -type d \( -name __pycache__ -o -name .pytest_cache \) -prune -exec rm -rf {} +
 find "${RELEASE_ROOT}/modules/strategy" -type f \( -name '*.pyc' -o -name '*.sqlite' -o -name '*.db' \) -delete

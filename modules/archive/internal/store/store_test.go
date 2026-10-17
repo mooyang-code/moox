@@ -630,3 +630,99 @@ func TestUpdateTaskDatasetRefreshesRetentionAndDataNode(t *testing.T) {
 		t.Fatalf("queued = %d err=%v", n, err)
 	}
 }
+
+func TestResumeRunNowDoesNotCreateAParallelRun(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mustTask(t, s, "crypto", "ds1", true)
+	c := mustClaim(t, s, "w1", t0) // 运行中
+	update := TaskUpdate{ScheduleCron: "0 0 * * * *", ScheduleTZ: "UTC", IntervalSeconds: 3600, StartAt: t0, Status: StatusPaused}
+	if _, _, err := s.UpdateTask(ctx, "crypto", "ds1", update, t0); err != nil {
+		t.Fatal(err)
+	}
+	update.Status, update.RunNow, update.NextRunAt = StatusEnabled, true, t0.Add(time.Hour)
+	_, run, err := s.UpdateTask(ctx, "crypto", "ds1", update, t0.Add(time.Minute))
+	if err != nil || run != nil {
+		t.Fatalf("已有运行中的运行，不应再生成: run=%v err=%v", run, err)
+	}
+	if active, _ := s.ListActiveRuns(ctx, "crypto"); len(active) != 1 || active[0].RunID != c.Run.RunID {
+		t.Fatalf("active = %+v", active)
+	}
+}
+
+func TestCanceledRunsAcceptOneCompletionAndNeverAdvanceTheTask(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mustTask(t, s, "crypto", "ds1", true)
+	c := mustClaim(t, s, "w1", t0)
+	if _, err := s.CancelRun(ctx, c.Run.RunID, "crypto", t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	complete := CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(2 * time.Minute),
+		FinalUntil: t0.Add(-time.Hour), Partitions: []Partition{finishedPartition("2026-10-16", PartitionExported)}}
+	if err := s.CompleteRun(ctx, complete); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetTask(ctx, "crypto", "ds1")
+	if !got.LastSuccessAt.IsZero() || !got.FinalUntil.IsZero() {
+		t.Fatalf("取消的运行不能推进任务状态: %+v", got)
+	}
+	if run, _ := s.GetRun(ctx, c.Run.RunID); run.Status != RunCanceled || run.LeaseToken != "" {
+		t.Fatalf("run = %+v", run)
+	}
+	// 重复上报（响应丢失后的重试）必须被拒绝，不能覆盖之后的登记。
+	if err := s.CompleteRun(ctx, complete); !errors.Is(err, ErrConflict) {
+		t.Fatalf("重复完成应返回 ErrConflict: %v", err)
+	}
+}
+
+func TestLastSuccessOnlyMovesForward(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mustTask(t, s, "crypto", "ds1", true)
+	first := mustClaim(t, s, "w1", t0.Add(10*time.Minute))
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", KindRange, t0.Add(-time.Hour), t0, t0); err == nil {
+		t.Fatal("第一条运行还没结束，不能再生成")
+	}
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: first.Run.RunID, WorkerID: "w1", LeaseToken: first.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(11 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	// 一个开始更早的运行迟到完成（例如租约过期后被重新派发的旧令牌）不能让最近成功时间回退。
+	older, _ := s.CreateRun(ctx, "crypto", "ds1", KindManual, time.Time{}, time.Time{}, t0)
+	claimed := mustClaim(t, s, "w1", t0.Add(5*time.Minute))
+	if claimed.Run.RunID != older.RunID {
+		t.Fatal("unexpected run")
+	}
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: older.RunID, WorkerID: "w1", LeaseToken: claimed.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(12 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetTask(ctx, "crypto", "ds1"); !got.LastSuccessAt.Equal(t0.Add(10 * time.Minute)) {
+		t.Fatalf("last_success_at 回退了: %s", got.LastSuccessAt)
+	}
+}
+
+func TestClaimRunsRechecksTheInstanceInsideTheTransaction(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mustTask(t, s, "crypto", "ds1", true)
+	if _, err := s.Heartbeat(ctx, Worker{WorkerID: "w1", InstanceID: "i1"}, t0, 45*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	// 租约过期后 w2 接管；w1 的旧实例还带着已过检查的状态来领取，必须领不到。
+	later := t0.Add(time.Minute)
+	if res, _ := s.Heartbeat(ctx, Worker{WorkerID: "w2", InstanceID: "j1"}, later, 45*time.Second); !res.Active {
+		t.Fatal("w2 应接管")
+	}
+	if claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", InstanceID: "i1", FreeSlots: 1, Now: later, LeaseTTL: time.Minute}); err != nil || len(claimed) != 0 {
+		t.Fatalf("旧实例不应再领取: %v err=%v", claimed, err)
+	}
+	if claimed, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", InstanceID: "stale", FreeSlots: 1, Now: t0, LeaseTTL: time.Minute}); len(claimed) != 0 {
+		t.Fatalf("实例 ID 不匹配不应领取: %v", claimed)
+	}
+	if claimed, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "ghost", InstanceID: "x", FreeSlots: 1, Now: t0, LeaseTTL: time.Minute}); len(claimed) != 0 {
+		t.Fatalf("没有登记的 worker 不应领取: %v", claimed)
+	}
+	if claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w2", InstanceID: "j1", FreeSlots: 1, Now: later, LeaseTTL: time.Minute}); err != nil || len(claimed) != 1 {
+		t.Fatalf("活动实例可以领取: %v err=%v", claimed, err)
+	}
+}

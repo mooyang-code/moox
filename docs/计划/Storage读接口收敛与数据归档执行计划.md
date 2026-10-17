@@ -609,3 +609,9 @@ limit 根，有范围按升序取最早 limit 根；`data rows export` 需要 `-
 - `repair-view` 实测（10-17 16:46，`mooxsys/view_mooxsys_host_fs`，consumer `storage_view_metrics`）：A/B 重建成功，版本 11→12，写入 41650 行（10-14 的上一次重建为 2720 行，其后数据持续累积），日志无错误，Monitor 无新增失败。注意 `-package-root` 要用绝对路径，否则找不到 `stop.sh`；该命令会重启整个 storage-view。
 - `fetch-plan pause / resume` 线上实测（crypto，16:50:04 暂停～16:52:24 恢复，timers_disabled 约 70 秒确认）：暂停有效；恢复却要靠对账逐轮刷新读回，十几轮、近一小时才收敛（期间 25～225 个标的落后，靠自动补采补齐）。已修：恢复 / 进程重启后对账协程先执行 `EnableAll`（对已生效计划全部函数读回并带受管环境变量补推启用，提交 0aca2759）。该路径线上只验证了空操作，没有再暂停验证一次。补采后对 08:36Z～09:52Z 的 1m 因子做了 recalc，均成功，Monitor 无失败项。
 - 尚未做：`data rows export`（本机缺 Storage 内部鉴权文件）、整点 1h 因子产出核对。
+
+### 15.y 阶段 6（archive-mgr）实现记录（2026-10-17，提交 18cef2b3 及其后的修复）
+
+- 实现：`modules/archive`（schema 四张表、`ArchiveMgr` 14 个方法、`ArchiveWorker` 4 个方法、执行计划校验、每秒全局触发器与每分钟维护、worker 租约、运行租约与取消、完成上报、健康等级）；服务目录新增 `archive-mgr` 组件（可选，`required_in_default_profile: false`）、外部身份 `archive-worker`、`Metadata.GetDataset` 对 `archive-mgr` 放行；Admin 空间头策略、CLI 部署单元（顺序、打包、运行参数、Storage 密钥、核心构建）、`build.sh archive-mgr` 与发行脚本已登记。本机 `go test -race` 通过（store、service、schedule、config、bootstrap、health、schema）。
+- Codex 审查 5 处，核实后全部修复：停用后重新启用并「立即运行」会与已有运行并行（现在已有排队 / 运行中的运行时不再生成）；取消的运行可被重复完成上报覆盖后来的分区登记（完成后令牌作废）；worker 接管与领取之间的竞态（领取事务内再核对实例与租约）；`release.sh` 没有创建 `modules/archive/bin`；被取消的运行即使上报成功也推进了任务的最近成功时间（现在不推进，且最近成功时间只前进）。
+- 未做：真实进程联调（mgr 需要 Admin 分配的网关密钥）、`moox-archive-cli`、Monitor 指标与告警（doctor 暂为 `health_only`）；worker 是阶段 7。

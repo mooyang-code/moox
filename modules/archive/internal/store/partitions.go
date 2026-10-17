@@ -167,7 +167,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = ?, c_finished_at = ?, c_message = ?, c_subjects_total = ?, c_subjects_done = ?,
 c_request_count = ?, c_bytes_read = ?, c_rows_read = ?, c_rows_added = ?, c_rows_changed = ?, c_partitions_exported = ?, c_partitions_finalized = ?,
-c_unrecoverable_json = ?, c_lease_until = NULL WHERE c_run_id = ?`, status, fmtTime(req.Now), message,
+c_unrecoverable_json = ?, c_lease_until = NULL, c_lease_token = '' WHERE c_run_id = ?`, status, fmtTime(req.Now), message,
 			req.Stats.SubjectsTotal, req.Stats.SubjectsDone, req.Stats.RequestCount, req.Stats.BytesRead, req.Stats.RowsRead,
 			req.Stats.RowsAdded, req.Stats.RowsChanged, req.Stats.PartitionsExported, req.Stats.PartitionsFinalized,
 			mergeUnrecoverable(req.Unrecoverable), req.RunID); err != nil {
@@ -179,13 +179,14 @@ c_unrecoverable_json = ?, c_lease_until = NULL WHERE c_run_id = ?`, status, fmtT
 				return err
 			}
 		}
-		if req.Status == RunSucceeded && run.Kind != KindRange {
-			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_last_success_at = ? WHERE c_space_id = ? AND c_dataset_id = ?`,
-				fmtTime(run.StartedAt), run.SpaceID, run.DatasetID); err != nil {
+		// 被取消的运行即使 worker 上报成功也不推进任务状态；最近成功时间只前进不回退。
+		if status == RunSucceeded && run.Kind != KindRange {
+			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_last_success_at = ? WHERE c_space_id = ? AND c_dataset_id = ? AND (c_last_success_at IS NULL OR c_last_success_at < ?)`,
+				fmtTime(run.StartedAt), run.SpaceID, run.DatasetID, fmtTime(run.StartedAt)); err != nil {
 				return err
 			}
 		}
-		if req.Status == RunSucceeded && !req.FinalUntil.IsZero() {
+		if status == RunSucceeded && !req.FinalUntil.IsZero() {
 			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_final_until = ? WHERE c_space_id = ? AND c_dataset_id = ? AND (c_final_until IS NULL OR c_final_until < ?)`,
 				fmtTime(req.FinalUntil), run.SpaceID, run.DatasetID, fmtTime(req.FinalUntil)); err != nil {
 				return err
