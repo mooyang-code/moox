@@ -84,6 +84,10 @@ func newStdioWorker(ctx context.Context, cfg Config, observeStarted func(*StdioW
 	// request context only bounds startup/handshake work; task cancellation is
 	// handled by Run and must not tear down a healthy resident process.
 	cmd := exec.Command(cfg.PythonBin, args...)
+	if len(cfg.Env) > 0 {
+		// exec 对重复的键保留最后一个值，cfg.Env 因此覆盖继承的同名变量。
+		cmd.Env = append(os.Environ(), cfg.Env...)
+	}
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
