@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -389,9 +390,17 @@ func (s *Store) DropDeleted(ctx context.Context, spaceID, datasetID, epoch strin
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if err == nil && stored.Valid && stored.String != "" && stored.String != epoch {
+		if err == nil && stored.Valid && stored.String != "" && stored.String != epoch && !epochNewer(epoch, stored.String) {
 			return nil
 		}
 	}
 	return s.DropTask(ctx, spaceID, datasetID)
+}
+
+// epochNewer 报告通知里的实例标识 a 是否比已绑定的 b 更新（实例标识是单调递增的任务 ID）；
+// 删除后又被重建、再删除的任务，最终的通知只剩较新的标识，旧实例遗留的状态仍要清理。
+func epochNewer(a, b string) bool {
+	x, errA := strconv.ParseInt(a, 10, 64)
+	y, errB := strconv.ParseInt(b, 10, 64)
+	return errA == nil && errB == nil && x > y
 }

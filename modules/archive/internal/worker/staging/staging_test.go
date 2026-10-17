@@ -657,3 +657,17 @@ func TestDropDeletedIgnoresALateNoticeForAnOlderTaskInstance(t *testing.T) {
 		t.Fatal("当前实例被删除后应清理")
 	}
 }
+
+func TestDropDeletedCleansOlderInstancesWhenTheNoticeIsForANewerOne(t *testing.T) {
+	s, ctx, task := openTest(t), context.Background(), klineTask()
+	_ = s.EnsureTable(ctx, task)
+	_, _ = s.BindEpoch(ctx, "crypto", "ds_1m", "7")
+	_ = s.Finalize(ctx, task, nil, now0, now0, true)
+	// 删除 7、重建 8、再删除 8：通知只剩 8，仍要清掉 worker 上 7 的遗留状态。
+	if err := s.DropDeleted(ctx, "crypto", "ds_1m", "8"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("更早实例的遗留状态应被清理")
+	}
+}
