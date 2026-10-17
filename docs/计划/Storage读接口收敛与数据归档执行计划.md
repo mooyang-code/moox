@@ -607,4 +607,5 @@ limit 根，有范围按升序取最早 limit 根；`data rows export` 需要 `-
 - 发布顺序与实际耗时（UTC 08:35～08:38）：storage-node → storage-primary → 等 40 秒 → storage-view；control 的 Admin → host-gateway → Monitor → Collector → factor-mgr → Strategy → web-host；storage 与 compute-1 的 host-gateway、Access；编译机因子引擎。备份在各主机 `backups/20261017-releaseA/old/`（编译机为 `moox-factor-engine.bak-20261017-releaseA`）。
 - 验收：各组件 ready 且 `binary_sha256` 与构建一致；三台主机 route_count 为 164（control）、95（storage）、37（compute-1），expected / applied hash 一致；重启期间 16:36 的一根 1m 因子 / 策略检查短暂告警，约 16:41 起全部恢复成功。
 - `repair-view` 实测（10-17 16:46，`mooxsys/view_mooxsys_host_fs`，consumer `storage_view_metrics`）：A/B 重建成功，版本 11→12，写入 41650 行（10-14 的上一次重建为 2720 行，其后数据持续累积），日志无错误，Monitor 无新增失败。注意 `-package-root` 要用绝对路径，否则找不到 `stop.sh`；该命令会重启整个 storage-view。
-- 尚未做：`fetch-plan pause / resume` 线上实测（会停生产采集，等用户决定）、`data rows export`（本机缺 Storage 内部鉴权文件）、整点 1h 因子产出核对。
+- `fetch-plan pause / resume` 线上实测（crypto，16:50:04 暂停～16:52:24 恢复，timers_disabled 约 70 秒确认）：暂停有效；恢复却要靠对账逐轮刷新读回，十几轮、近一小时才收敛（期间 25～225 个标的落后，靠自动补采补齐）。已修：恢复 / 进程重启后对账协程先执行 `EnableAll`（对已生效计划全部函数读回并带受管环境变量补推启用，提交 0aca2759）。该路径线上只验证了空操作，没有再暂停验证一次。补采后对 08:36Z～09:52Z 的 1m 因子做了 recalc，均成功，Monitor 无失败项。
+- 尚未做：`data rows export`（本机缺 Storage 内部鉴权文件）、整点 1h 因子产出核对。
