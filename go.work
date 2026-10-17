@@ -34,6 +34,7 @@ use (
 	./packages/commonpb
 	./packages/doctor
 	./packages/events
+	./packages/factorexpr
 	./packages/frequency
 	./packages/gatewayauth
 	./packages/gatewayclient
