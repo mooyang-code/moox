@@ -37,6 +37,9 @@ func (f *fakeRows) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTime
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reads++
+	if req.GetPage().GetPage() != 0 || req.GetPage().GetSize() > 2000 {
+		panic("区间读取只能用游标分页，且单页不超过 2000 行")
+	}
 	start, _ := time.Parse(time.RFC3339, req.GetTimeRange().GetStartTime())
 	end, _ := time.Parse(time.RFC3339, req.GetTimeRange().GetEndTime())
 	rsp := &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, PageResult: &storagepb.PageResult{}}

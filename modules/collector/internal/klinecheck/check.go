@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	rowPageSize       = 5000
+	rowPageSize       = 2000
 	defaultConcurrent = 8
 	// subjectsPerRead 是一次读取合并的标的数：把逐标的的小请求合成批量请求，减少公网往返与网关压力。
 	subjectsPerRead = 50
@@ -475,12 +475,13 @@ func (c *Checker) readPresent(ctx context.Context, spaceID, datasetID, frequency
 		selectors = append(selectors, &storagepb.TimeSeriesSelector{SpaceId: spaceID, DatasetId: datasetID, SubjectId: subject, Freq: frequency})
 		present[subject] = map[int64]bool{}
 	}
-	for page := uint32(1); ; page++ {
+	cursor := ""
+	for {
 		rsp, err := c.Rows.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
 			AuthInfo: c.Auth, SpaceId: spaceID, DatasetId: datasetID,
 			Selectors:   selectors,
 			TimeRange:   &storagepb.TimeRange{StartTime: from.Format(time.RFC3339), EndTime: to.Format(time.RFC3339)},
-			ColumnNames: columns, Page: &storagepb.Page{Page: page, Size: rowPageSize},
+			ColumnNames: columns, Page: &storagepb.Page{Size: rowPageSize, Cursor: cursor},
 		})
 		if err != nil {
 			return nil, err
@@ -502,6 +503,10 @@ func (c *Checker) readPresent(ctx context.Context, spaceID, datasetID, frequency
 		}
 		if !rsp.GetPageResult().GetHasMore() {
 			return present, nil
+		}
+		cursor = rsp.GetPageResult().GetNextCursor()
+		if cursor == "" {
+			return nil, fmt.Errorf("read rows: 还有后续页但没有返回游标")
 		}
 	}
 }

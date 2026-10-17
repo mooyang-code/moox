@@ -108,6 +108,8 @@ type Backfiller struct {
 	Plans     PlanHistory
 	Invoker   Invoker
 	Functions func(spaceID string) FunctionProvider
+	// Paused 报告空间是否处于采集暂停；暂停期间不再认领分块（含补位），已在执行的分块自然结束。为空表示不暂停。
+	Paused func(ctx context.Context, spaceID string) (bool, error)
 	// BaseCtx 是异步执行分块的上下文（进程生命周期）。
 	BaseCtx     context.Context
 	MaxInFlight int
@@ -296,6 +298,15 @@ func (b *Backfiller) ClearAbsences(ctx context.Context, spaceID, datasetID, freq
 func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 	b.tickMu.Lock()
 	defer b.tickMu.Unlock()
+	if b.Paused != nil {
+		paused, err := b.Paused(ctx, spaceID)
+		if err != nil {
+			return err
+		}
+		if paused {
+			return nil
+		}
+	}
 	jobs, err := b.Store.ActiveJobs(ctx, spaceID)
 	if err != nil {
 		return err

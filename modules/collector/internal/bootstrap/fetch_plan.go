@@ -58,6 +58,10 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	checker.Calendar, checker.CalendarReady = checkCalendar.valid, checkCalendar.ready
 	backfiller := &klinecheck.Backfiller{
 		Checker: checker, Store: dbm.Backfill(), Plans: dbm.FetchPlans(), Invoker: invoker, BaseCtx: process.ctx, Refill: true,
+		Paused: func(ctx context.Context, spaceID string) (bool, error) {
+			paused, err := dbm.FetchPlans().PausedSpaces(ctx)
+			return paused[strings.ToLower(spaceID)], err
+		},
 		Functions: func(spaceID string) klinecheck.FunctionProvider {
 			if value, ok := reconcilers.Load(spaceID); ok {
 				return value.(*marketfetch.PlanReconciler)

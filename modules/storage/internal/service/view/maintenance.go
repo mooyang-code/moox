@@ -929,9 +929,10 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	s.mu.Lock()
 	s.catalogViews[viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}] = proto.Clone(view).(*pb.View)
 	s.mu.Unlock()
+	// 回填单次最多读取 maxLatestPerSeries 行，记录的保留行数不能超过实际回填的行数。
 	schema := viewindex.ViewIndexSchema{
 		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: view.GetDesiredViewRevision(),
-		PrimaryDatasetID: view.GetDatasetId(), Engine: strings.ToLower(view.GetEngine()), Columns: columns, RowsPerSeries: bars,
+		PrimaryDatasetID: view.GetDatasetId(), Engine: strings.ToLower(view.GetEngine()), Columns: columns, RowsPerSeries: min(bars, maxLatestPerSeries),
 	}
 	schema.SchemaHash = viewindex.HashViewIndexSchema(schema)
 	indexID := viewindex.InactiveViewIndexID(view.GetSpaceId(), view.GetViewId(), view.GetActiveIndexId())
@@ -988,6 +989,7 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 		Schema: &pb.ViewIndexSchema{
 			SpaceId: schema.SpaceID, ViewId: schema.ViewID, ViewVersion: schema.ViewVersion,
 			Engine: schema.Engine, Columns: schema.Columns, ViewSchemaHash: schema.SchemaHash, DatasetId: schema.PrimaryDatasetID,
+			RowsPerSeries: schema.RowsPerSeries,
 		},
 	})
 	if err != nil || prepared.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {

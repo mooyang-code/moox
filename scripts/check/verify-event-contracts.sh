@@ -80,9 +80,6 @@ reject '^[[:space:]]+(type|urls|nats_url|stream_name|subject_prefix|max_msgs|max
 reject '^[[:space:]]+(stream|topic):' \
   "Monitor still exposes Registry-owned stream/topic settings" \
   --glob '*.yaml' modules/monitor/config
-reject 'EventBus\.Stream|yaml:"stream"' \
-  "Archive still exposes the Registry-owned stream setting" \
-  --glob '*.go' modules/archive/internal
 # moox-factor-engine reaches the manager through the service gateway's HTTPS
 # entry; its manager.url is a gateway address, not an EventBus setting.
 reject 'NATS\.Stream|NATS\.Consumer|NATS\.URL\b|yaml:"stream"|yaml:"consumer"|yaml:"url"' \
@@ -110,7 +107,7 @@ reject '^[[:space:]]+(consumer|rebalance_consumer|max_ack_pending|ack_wait|ack_w
   --glob '*.yaml' \
   --glob '!modules/storage/config/storage.yaml' \
   --glob '!modules/storage/config/storage_view/trpc_go.yaml' \
-  modules/archive/config modules/monitor/config modules/trade/config modules/storage/config
+  modules/monitor/config modules/trade/config modules/storage/config
 
 (cd packages/events && go test ./...)
 (cd packages/jetstream && go test ./...)
@@ -118,8 +115,6 @@ reject '^[[:space:]]+(consumer|rebalance_consumer|max_ack_pending|ack_wait|ack_w
 (cd modules/collector && go test ./internal/sources/binance)
 (cd modules/storage && CGO_ENABLED=1 go test ./internal/config ./cmd/server ./internal/eventmapper ./internal/service/datanode/... ./internal/service/view/... ./internal/service/e2e)
 (cd modules/monitor && go test ./internal/config ./internal/metrics/... ./internal/hostmetrics/... ./test)
-(cd modules/archive && go test ./internal/config ./internal/eventconsumer)
-(cd modules/archive && go test ./internal/bootstrap -run '^TestAppRunConsumesStorageEventAndBecomesReadyE2E$' -count=1)
 (cd modules/factor && CGO_ENABLED=1 go test ./internal/store ./internal/bootstrap ./internal/catalog ./internal/periodclock ./internal/trigger ./internal/pipeline ./internal/recalc ./internal/storageio)
 (cd modules/cloudnode && CGO_ENABLED=1 go test ./internal/config ./internal/rpc)
 # Strategy E2E tests are build-tagged e2e_external and require deployed services;
