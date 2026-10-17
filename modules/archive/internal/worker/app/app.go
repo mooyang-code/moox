@@ -281,28 +281,17 @@ func (a *App) pullOnce(ctx context.Context) {
 	// 先把全部运行登记进 running，再释放 pulling，维护才不会在两者之间看到「空闲」。
 	a.mu.Lock()
 	runs := make([]*activeRun, 0, len(rsp.GetRuns()))
-	var recreated []taskRef
 	for _, assignment := range rsp.GetRuns() {
 		runCtx, cancel := context.WithCancel(ctx)
 		run := &activeRun{assignment: assignment, cancel: cancel, ctx: runCtx}
 		a.running[assignment.GetRunId()] = run
 		// 数据集重新创建了任务：之前记下的「已删除」通知作废，不能再清掉它的暂存数据。
-		key := assignment.GetSpaceId() + "/" + assignment.GetDatasetId()
-		if ref, ok := a.deleted[key]; ok {
-			recreated = append(recreated, ref)
-		}
-		delete(a.deleted, key)
+		delete(a.deleted, assignment.GetSpaceId()+"/"+assignment.GetDatasetId())
 		runs = append(runs, run)
 	}
 	a.pulling--
 	registered = true
 	a.mu.Unlock()
-	// 重新创建的任务不能继承旧任务遗留的水位和暂存数据（否则新的回补起点不生效）：运行启动前先清掉旧状态。
-	for _, ref := range recreated {
-		if err := a.opts.Staging.DropTask(ctx, ref.space, ref.dataset); err != nil {
-			log.Warnf("archive worker drop stale state of recreated task %s/%s: %v", ref.space, ref.dataset, err)
-		}
-	}
 	for _, run := range runs {
 		a.launch(run)
 	}
@@ -397,7 +386,11 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 
 	req := &archivepb.CompleteArchiveRunReq{WorkerId: a.opts.Config.Worker.WorkerID, RunId: assignment.GetRunId(), LeaseToken: assignment.GetLeaseToken()}
 	var reported []string
+	// 同数据集的串行保护延续到完成上报和确认清理之后：否则取消的旧运行的迟到上报可能覆盖新运行刚登记的分区。
 	release, err := a.acquireDataset(ctx, run, send)
+	if err == nil {
+		defer release()
+	}
 	if err != nil {
 		req.Status, req.Message = "canceled", "运行在等待同一数据集的上一个运行时被取消"
 	} else {
@@ -407,7 +400,6 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 			return run.stop.Load()
 		}
 		outcome, execErr := a.opts.Runner.Execute(ctx, assignment, report)
-		release()
 		if execErr != nil || outcome == nil {
 			req.Status, req.Message = "failed", fmt.Sprintf("%v", execErr)
 		} else {

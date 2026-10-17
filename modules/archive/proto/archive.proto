@@ -395,6 +395,8 @@ message RunAssignment {
   // 回补起点（任务设置，首次运行使用）。
   string backfill_from = 19;
   uint32 lease_ttl_seconds = 20;
+  // 任务实例标识（任务创建时间）。任务被删除后重建会得到新的值，worker 据此丢弃旧任务遗留的水位和暂存数据。
+  string task_epoch = 21;
 }
 message PullArchiveRunRsp {
   common.RetInfo ret_info = 1;

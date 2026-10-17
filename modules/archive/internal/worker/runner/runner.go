@@ -135,6 +135,10 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 			err = nil
 		}
 	}()
+	// 任务被删除后重建时，旧任务的水位和暂存数据不能带到新任务上。
+	if _, err = r.Staging.BindEpoch(ctx, a.GetSpaceId(), a.GetDatasetId(), a.GetTaskEpoch()); err != nil {
+		return out, err
+	}
 	ranges, unrecoverable, err := s.readRanges(ctx)
 	if err != nil {
 		return out, err

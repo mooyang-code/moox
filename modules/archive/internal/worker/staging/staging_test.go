@@ -569,3 +569,35 @@ func TestFirstStartIsKeptUntilTheWatermarkAdvances(t *testing.T) {
 		t.Fatalf("watermark = %v %v", w, ok)
 	}
 }
+
+func TestBindEpochDropsStateOfAPreviousTaskInstance(t *testing.T) {
+	s, ctx, task := openTest(t), context.Background(), klineTask()
+	_ = s.EnsureTable(ctx, task)
+	if dropped, err := s.BindEpoch(ctx, "crypto", "ds_1m", "e1"); err != nil || dropped {
+		t.Fatalf("首次绑定: dropped=%v err=%v", dropped, err)
+	}
+	_ = s.Finalize(ctx, task, nil, now0, now0, true)
+	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); !ok {
+		t.Fatal("应有水位")
+	}
+	// 同一实例再次绑定：保留水位。
+	if dropped, err := s.BindEpoch(ctx, "crypto", "ds_1m", "e1"); err != nil || dropped {
+		t.Fatalf("同实例: dropped=%v err=%v", dropped, err)
+	}
+	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); !ok {
+		t.Fatal("同一实例不应丢水位")
+	}
+	// 任务重建：旧水位和暂存表被丢弃，且新实例已绑定。
+	if dropped, err := s.BindEpoch(ctx, "crypto", "ds_1m", "e2"); err != nil || !dropped {
+		t.Fatalf("新实例: dropped=%v err=%v", dropped, err)
+	}
+	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("旧水位必须被丢弃")
+	}
+	if tables, _ := s.StagedTables(ctx); len(tables) != 0 {
+		t.Fatalf("tables = %v", tables)
+	}
+	if dropped, _ := s.BindEpoch(ctx, "crypto", "ds_1m", "e2"); dropped {
+		t.Fatal("绑定后再次执行不应再丢弃")
+	}
+}

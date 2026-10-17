@@ -179,6 +179,7 @@ CREATE TABLE IF NOT EXISTS partition_state (
 	// 旧库补列（IF NOT EXISTS，重复执行无害）。
 	for _, ddl := range []string{
 		`ALTER TABLE task_state ADD COLUMN IF NOT EXISTS first_start TIMESTAMP`,
+		`ALTER TABLE task_state ADD COLUMN IF NOT EXISTS task_epoch VARCHAR`,
 		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS row_count BIGINT DEFAULT 0`,
 		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS subject_count BIGINT DEFAULT 0`,
 		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS min_data_time TIMESTAMP`,

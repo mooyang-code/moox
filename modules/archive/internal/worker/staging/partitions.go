@@ -335,3 +335,32 @@ ON CONFLICT (space_id, dataset_id) DO UPDATE SET first_start = CASE WHEN task_st
 		spaceID, datasetID, start.UTC())
 	return err
 }
+
+// BindEpoch 把暂存状态绑定到任务实例。已绑定的实例与当前不同，说明任务被删除后重建过：旧任务遗留的水位、
+// 首次起点和暂存数据一律丢弃，新任务从自己的回补设置开始。没有绑定记录（旧版本留下的状态）时直接采用当前实例。
+// 返回 true 表示丢弃了旧状态。
+func (s *Store) BindEpoch(ctx context.Context, spaceID, datasetID, epoch string) (bool, error) {
+	if epoch == "" {
+		return false, nil
+	}
+	var stored sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT task_epoch FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	dropped := false
+	if stored.Valid && stored.String != "" && stored.String != epoch {
+		if err := s.DropTask(ctx, spaceID, datasetID); err != nil {
+			return false, err
+		}
+		dropped = true
+	}
+	if !stored.Valid || stored.String != epoch || dropped {
+		_, err = s.db.ExecContext(ctx, `INSERT INTO task_state (space_id, dataset_id, task_epoch) VALUES (?, ?, ?)
+ON CONFLICT (space_id, dataset_id) DO UPDATE SET task_epoch = excluded.task_epoch`, spaceID, datasetID, epoch)
+		if err != nil {
+			return false, err
+		}
+	}
+	return dropped, nil
+}

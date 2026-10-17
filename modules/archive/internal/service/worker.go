@@ -89,7 +89,7 @@ func (s *Service) assignment(c store.Claimed) *archivepb.RunAssignment {
 		IntervalSeconds: uint32(c.Task.IntervalSeconds), MinLookbackSeconds: uint32(s.cfg.Schedule.MinLookback / time.Second),
 		SpaceTz: spaceCfg.TZ, LocalClose: spaceCfg.LocalClose, StagingRetentionSeconds: uint32(s.cfg.StagingRetention / time.Second),
 		ScheduledAt: fmtRFC(c.Run.ScheduledAt), StartedAt: fmtRFC(c.Run.StartedAt), RangeStart: fmtRFC(c.Run.RangeStart), RangeEnd: fmtRFC(c.Run.RangeEnd),
-		BackfillFrom: fmtRFC(c.Task.BackfillFrom), LeaseTtlSeconds: uint32(s.cfg.Run.LeaseTTL / time.Second),
+		BackfillFrom: fmtRFC(c.Task.BackfillFrom), TaskEpoch: fmtRFC(c.Task.CreatedAt), LeaseTtlSeconds: uint32(s.cfg.Run.LeaseTTL / time.Second),
 	}
 }
 
