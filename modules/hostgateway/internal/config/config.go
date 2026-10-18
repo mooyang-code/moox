@@ -1,5 +1,5 @@
 // Package config loads the shared deployment/runtime contract and private
-// identity. There is no fallback to legacy HTTP or static verifier tables.
+// identity.
 package config
 
 import (

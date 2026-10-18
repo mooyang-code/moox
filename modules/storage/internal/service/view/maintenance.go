@@ -42,7 +42,7 @@ func seriesCapacityDetails(offender viewindex.SeriesCapacityResult, trimBars, ba
 // implementation. A backfill can enumerate the old active index, but it has
 // no range-scan API to discover historical rows that exist only in the new
 // primary dataset. Activating such a build would silently publish an
-// incomplete View, so operators must create a new View for that migration.
+// incomplete View, so operators must create a new View for that change.
 var errPrimaryDatasetChangeUnsupported = errors.New("changing primary dataset requires a new View")
 
 type MetadataClient interface {
