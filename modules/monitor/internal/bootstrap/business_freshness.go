@@ -215,10 +215,8 @@ func buildBusinessFreshnessReporterWithInterval(
 		for _, dataset := range overview.Datasets {
 			if dataset.Producer == "storage" {
 				storageScopes[dataset.SpaceID+"\x00"+dataset.DatasetID+"\x00"+strings.ToLower(dataset.Freq)] = struct{}{}
-			} else if dataset.Producer == "storage_view" {
-				for _, scopeDatasetID := range storageViewDatasetIDs(dataset.SpaceID, dataset.DatasetID, dataset.PrimaryDatasetID) {
-					storageScopes[dataset.SpaceID+"\x00"+scopeDatasetID+"\x00"+strings.ToLower(dataset.Freq)] = struct{}{}
-				}
+			} else if dataset.Producer == "storage_view" && strings.TrimSpace(dataset.PrimaryDatasetID) != "" {
+				storageScopes[dataset.SpaceID+"\x00"+strings.TrimSpace(dataset.PrimaryDatasetID)+"\x00"+strings.ToLower(dataset.Freq)] = struct{}{}
 			}
 		}
 		for _, dataset := range overview.Datasets {
@@ -502,38 +500,6 @@ func klineReportCoversDatasets(report monmetrics.KlineFreshnessReport) bool {
 		return false
 	}
 	return !(report.Skipped && report.Reason == "disabled")
-}
-
-// storageViewDatasetIDs keeps Collector freshness compatible with older View
-// reporters that did not include dataset_id in the watermark labels. New
-// reporters provide the exact primary dataset; the derived candidates cover
-// the repository's historical view_<space>_<dataset> naming convention while
-// the monitor fleet is upgraded one host at a time.
-func storageViewDatasetIDs(spaceID, viewID, primaryDatasetID string) []string {
-	ids := make([]string, 0, 3)
-	add := func(value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return
-		}
-		for _, existing := range ids {
-			if existing == value {
-				return
-			}
-		}
-		ids = append(ids, value)
-	}
-	add(primaryDatasetID)
-	viewID = strings.TrimPrefix(strings.TrimSpace(viewID), "view_")
-	if viewID == "" {
-		return ids
-	}
-	add("dataset_" + viewID)
-	spaceID = strings.TrimSpace(spaceID)
-	if spaceID != "" && strings.HasPrefix(viewID, spaceID+"_") {
-		add("dataset_" + strings.TrimPrefix(viewID, spaceID+"_"))
-	}
-	return ids
 }
 
 func serviceDeploymentExpected(ctx context.Context, topology *store.TopologyRepository, componentID string) (bool, error) {

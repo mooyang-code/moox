@@ -58,8 +58,7 @@ market_canary:
     - space_id: crypto
       # Result Dataset of the Binance spot 1m collection task (dataset_<task_id>).
       dataset_id: dataset_dasftksvjhj2jom4vhd0
-      # Use a liquid, currently listed spot subject. The catalog may still
-      # store the unsuffixed identity; the canary resolver maps either form.
+      # Use a liquid, currently listed spot subject.
       symbol: BTC-USDT
       frequency: 1m
       series_tag: venue:binance|market:spot|source:spot_http

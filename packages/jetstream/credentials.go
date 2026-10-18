@@ -73,9 +73,9 @@ func (c *Config) ApplyCredentialFile(path string) error {
 		caFile = filepath.Join(filepath.Dir(path), caFile)
 	}
 	c.Username, c.Password = file.Username, file.Password
-	// Keep a deployment-wide CA supplied by the environment when a legacy or
-	// externally managed role file omits ca_file. A credential file with an
-	// explicit CA remains authoritative and is resolved relative to itself.
+	// Keep a deployment-wide CA supplied by the environment when an externally
+	// managed role file omits ca_file. A credential file with an explicit CA
+	// remains authoritative and is resolved relative to itself.
 	if caFile != "" {
 		c.TLSCAFile = caFile
 		c.TLSCAPEMBase64 = ""
