@@ -179,30 +179,37 @@ func TestListenerRollbackAndIdentityValidation(t *testing.T) {
 	require.ErrorContains(t, err, "distinct")
 }
 
+// 握手在分流前完成：卡住的握手由服务端在时限内关闭，永远不会交给 tRPC 的 Accept。
 func TestTLSMinimumVersionAndStalledHandshakeBound(t *testing.T) {
 	cfg, material := fixture(t)
 	opened, err := Open(context.Background(), cfg, material)
 	require.NoError(t, err)
 	defer opened.Close()
-	readResult := make(chan error, 1)
+	acceptedStalled := make(chan struct{}, 1)
 	go func() {
-		accepted, err := opened.Remote.Accept()
-		if err != nil {
-			readResult <- err
-			return
+		if accepted, err := opened.Remote.Accept(); err == nil {
+			acceptedStalled <- struct{}{}
+			_ = accepted.Close()
 		}
-		defer accepted.Close()
-		_, err = accepted.Read(make([]byte, 1))
-		readResult <- err
 	}()
 	conn, err := net.Dial("tcp", cfg.Server.RemoteAddr)
 	require.NoError(t, err)
 	defer conn.Close()
+	readResult := make(chan error, 1)
+	go func() {
+		_, err := conn.Read(make([]byte, 1))
+		readResult <- err
+	}()
 	select {
 	case err := <-readResult:
 		require.Error(t, err)
 	case <-time.After(handshakeTimeout + 3*time.Second):
 		t.Fatal("stalled TLS handshake exceeded its time limit")
+	}
+	select {
+	case <-acceptedStalled:
+		t.Fatal("stalled handshake reached tRPC Accept")
+	default:
 	}
 	// Use an actual old TLS client to exercise the server's minimum version.
 	go func() {
@@ -229,27 +236,16 @@ func TestClosingListenersCancelsPendingTLSHandshake(t *testing.T) {
 	opened, err := Open(context.Background(), cfg, material)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = opened.Close() })
-	accepted := make(chan struct{})
-	readResult := make(chan error, 1)
-	go func() {
-		conn, err := opened.Remote.Accept()
-		if err != nil {
-			readResult <- err
-			return
-		}
-		defer conn.Close()
-		close(accepted)
-		_, err = conn.Read(make([]byte, 1))
-		readResult <- err
-	}()
+	go func() { _, _ = opened.Remote.Accept() }()
 	conn, err := net.Dial("tcp", cfg.Server.RemoteAddr)
 	require.NoError(t, err)
 	defer conn.Close()
-	select {
-	case <-accepted:
-	case <-time.After(time.Second):
-		t.Fatal("TLS connection was not accepted")
-	}
+	readResult := make(chan error, 1)
+	go func() {
+		_, err := conn.Read(make([]byte, 1))
+		readResult <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
 	require.NoError(t, opened.Close())
 	select {
 	case err := <-readResult:

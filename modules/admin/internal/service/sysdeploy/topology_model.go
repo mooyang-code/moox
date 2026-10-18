@@ -41,6 +41,8 @@ type HostGatewayStatus struct {
 	ReplacedAt         *time.Time `gorm:"column:c_replaced_at"`
 	ConflictInstanceID string     `gorm:"column:c_conflict_instance_id"`
 	ConflictSeenAt     *time.Time `gorm:"column:c_conflict_seen_at"`
+	// RelaySessions 是 control 网关上报的反向连接会话（JSON 数组），其他主机为空。
+	RelaySessions string `gorm:"column:c_relay_sessions"`
 }
 
 func (HostGatewayStatus) TableName() string { return "t_host_gateway_status" }

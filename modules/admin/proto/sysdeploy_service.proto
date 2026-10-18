@@ -42,6 +42,8 @@ message HostGatewayRuntimeStatus {
   string replaced_at = 9;
   string conflict_instance_id = 10;
   string conflict_seen_at = 11;
+  // control 网关上报的各出站主机反向连接会话。
+  repeated trpc.moox.admin.RelaySessionStatus relay_sessions = 12;
 }
 
 message GetCatalogReq {}

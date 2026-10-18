@@ -363,7 +363,7 @@ func (c Catalog) ValidRelay(r RelayTarget) bool {
 		}
 		seen[port.Port] = true
 		if port.Port != HostGatewayRemotePort {
-			if !slices.Equal(port.Callers, []string{"monitor"}) || !c.healthPort(port.Port) {
+			if !slices.Equal(port.Callers, []string{"monitor"}) || !c.HealthPort(port.Port) {
 				return false
 			}
 			continue
@@ -379,7 +379,8 @@ func (c Catalog) ValidRelay(r RelayTarget) bool {
 	return true
 }
 
-func (c Catalog) healthPort(port int) bool {
+// HealthPort 报告端口是否是服务目录里某个组件的健康端口。
+func (c Catalog) HealthPort(port int) bool {
 	for _, component := range c.Components {
 		if component.Health.Port == port && port > 0 {
 			return true

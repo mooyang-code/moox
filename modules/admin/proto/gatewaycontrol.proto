@@ -61,6 +61,17 @@ message PullSnapshotRsp {
   HostGatewaySnapshot snapshot = 3;
 }
 
+// control 网关上一台出站主机的反向连接会话状态。
+message RelaySessionStatus {
+  string host_id = 1;
+  bool online = 2;
+  string instance_id = 3;
+  // RFC3339，离线时为空。
+  string connected_at = 4;
+  int64 reconnects = 5;
+  int32 streams = 6;
+}
+
 message ReportStatusReq {
   string host_id = 1;
   string instance_id = 2;
@@ -68,6 +79,8 @@ message ReportStatusReq {
   string applied_hash = 4;
   string error = 5;
   int32 route_count = 6;
+  // 只有 control 网关上报。
+  repeated RelaySessionStatus relay_sessions = 7;
 }
 
 message ReportStatusRsp {
