@@ -381,7 +381,7 @@ func (s *runState) exportDue(ctx context.Context, out *Outcome) error {
 		return err
 	}
 	for _, p := range parts {
-		if !p.NeedsExport() {
+		if !p.NeedsExport() && !s.exportedFileMissing(p) {
 			continue
 		}
 		closeAt, err := s.closeAt(p)
@@ -515,4 +515,18 @@ func (s *runState) filePrefix() string {
 		return p
 	}
 	return s.a.GetDatasetId()
+}
+
+// exportedFileMissing 报告已导出但还没定稿的分区在当前命名下没有文件（文件被删除，或升级前用旧的目录/文件名导出）：
+// 它的行还在暂存区，重新导出即可。已定稿分区的行已不在暂存区，不在此列。
+func (s *runState) exportedFileMissing(p staging.PartitionState) bool {
+	if p.Status != staging.StatusExported {
+		return false
+	}
+	rel, err := s.r.Files.RelPath(s.task.SpaceID, s.filePrefix(), p.Key)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(s.r.Files.Abs(rel))
+	return errors.Is(err, os.ErrNotExist)
 }

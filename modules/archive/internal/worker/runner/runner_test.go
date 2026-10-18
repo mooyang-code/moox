@@ -554,3 +554,28 @@ func TestPartitionsStayPendingUntilAcknowledgedSoALostCompletionIsReportedAgain(
 		t.Fatalf("已确认的分区不应再上报: %+v", out.Partitions)
 	}
 }
+
+func TestExportedPartitionWithoutAFileAtTheCurrentPathIsExportedAgain(t *testing.T) {
+	e := newEnv(t)
+	day := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	e.src.rows = rows("BTC", day.Add(time.Hour), 30, 1)
+	e.now = time.Date(2026, 10, 11, 1, 0, 0, 0, time.UTC)
+	out := e.run(2000, func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-10T00:00:00Z" }, nil)
+	p := report(out, "2026-10-10")
+	if p == nil || p.GetStatus() != "exported" {
+		t.Fatalf("out=%+v", out)
+	}
+	// 升级前用旧目录导出、新命名下没有文件：下一次运行重新导出，登记的路径指向真实存在的文件。
+	if err := os.Remove(filepath.Join(e.root, filepath.FromSlash(p.GetFilePath()))); err != nil {
+		t.Fatal(err)
+	}
+	e.now = e.now.Add(time.Hour)
+	out = e.run(2000, nil, nil)
+	again := report(out, "2026-10-10")
+	if again == nil || out.Exported != 1 {
+		t.Fatalf("应重新导出: exported=%d out=%+v", out.Exported, out)
+	}
+	if _, err := os.Stat(filepath.Join(e.root, filepath.FromSlash(again.GetFilePath()))); err != nil {
+		t.Fatalf("重新导出后文件应存在: %v", err)
+	}
+}

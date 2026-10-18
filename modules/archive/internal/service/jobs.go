@@ -141,12 +141,7 @@ func (s *Service) refreshDatasets(ctx context.Context) error {
 			return err
 		}
 		if task.FilePrefix == "" {
-			// 升级前创建的任务没有文件名前缀：补上（之后不再随数据集改名变化）。
-			prefix, err := s.chooseFilePrefix(ctx, task.SpaceID, task.DatasetID, ds.Name)
-			if err != nil {
-				return err
-			}
-			if err := s.store.SetFilePrefixIfEmpty(ctx, task.SpaceID, task.DatasetID, prefix); err != nil {
+			if err := s.fillFilePrefix(ctx, task, ds.Name); err != nil {
 				return err
 			}
 		}

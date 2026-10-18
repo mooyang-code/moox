@@ -175,6 +175,9 @@ func (m *MgrService) CreateArchiveTask(ctx context.Context, req *archivepb.Creat
 	created, _, err := s.store.CreateTask(ctx, task, immediate, now)
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
+			if _, gerr := s.store.GetTask(ctx, space, ds.DatasetID); gerr != nil {
+				return &archivepb.CreateArchiveTaskRsp{RetInfo: conflict(fmt.Errorf("文件名前缀 %q 与同空间其他任务冲突，请重试", prefix))}, nil
+			}
 			return &archivepb.CreateArchiveTaskRsp{RetInfo: conflict(fmt.Errorf("数据集 %s 已经有归档任务", ds.DatasetID))}, nil
 		}
 		return &archivepb.CreateArchiveTaskRsp{RetInfo: fail(err)}, nil

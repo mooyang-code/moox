@@ -733,6 +733,9 @@ func TestOpenAddsTheFilePrefixColumnToAnOlderDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.db.Exec(`DROP INDEX IF EXISTS ux_archive_tasks_file_prefix`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.db.Exec(`ALTER TABLE t_archive_tasks DROP COLUMN c_file_prefix`); err != nil {
 		t.Fatal(err)
 	}

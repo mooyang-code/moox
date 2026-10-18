@@ -282,6 +282,24 @@ ORDER BY c_next_run_at`, fmtTime(now))
 	return result, problems, err
 }
 
+// TasksWithoutFilePrefix 返回还没有文件名前缀的任务（升级前创建的）。
+func (s *Store) TasksWithoutFilePrefix(ctx context.Context) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+taskColumns+` FROM t_archive_tasks WHERE c_file_prefix = ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Task
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, task)
+	}
+	return out, rows.Err()
+}
+
 // SetFilePrefixIfEmpty 给还没有文件名前缀的任务（升级前创建的）补上前缀；已有前缀的不改。
 func (s *Store) SetFilePrefixIfEmpty(ctx context.Context, spaceID, datasetID, prefix string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE t_archive_tasks SET c_file_prefix = ? WHERE c_space_id = ? AND c_dataset_id = ? AND c_file_prefix = ''`, prefix, spaceID, datasetID)

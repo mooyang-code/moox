@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"trpc.group/trpc-go/trpc-go/log"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
@@ -61,6 +62,11 @@ func (w *WorkerService) PullArchiveRun(ctx context.Context, req *archivepb.PullA
 	}
 	if !active {
 		// 备用 worker 或租约已过期的实例什么都领不到，等心跳重新取得租约。
+		return &archivepb.PullArchiveRunRsp{RetInfo: success()}, nil
+	}
+	// 升级前创建的任务要先有文件名前缀才能派发；补不上就本轮不派发，等下一次拉取。
+	if err := s.ensureFilePrefixes(ctx); err != nil {
+		log.WarnContextf(ctx, "archive pull: %v", err)
 		return &archivepb.PullArchiveRunRsp{RetInfo: success()}, nil
 	}
 	busy := map[string]int{}
