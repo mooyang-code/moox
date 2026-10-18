@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo, releasing or deploying MooX binaries to the production hosts (发布, 部署, 上线, rollout, rollback, 回滚, native release, service catalog rollout, host-gateway/Admin/Monitor/Storage/factor-engine release), operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, Tencent Cloud Lighthouse firewall changes, CCN/云联网, CCN 费用, SCF 公网, SCF VPC, restore-scf-public, 内网组网, private-network, storage_private_gateway_host, MOOX_STORAGE_RPC_GATEWAY_TARGET, and control-plane maintenance.
+description: Use when working in the MooX monorepo, releasing or deploying MooX binaries to the production hosts (发布, 部署, 上线, rollout, rollback, 回滚, native release, service catalog rollout, host-gateway/Admin/Monitor/Storage/factor-engine release), operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, factor expression DSL (因子表达式, 因子 DSL), converting legacy Python factors (Python 因子转换, pandas 因子迁移) with offline check/eval/compare and writing them into the system, Tencent Cloud Lighthouse firewall changes, CCN/云联网, CCN 费用, SCF 公网, SCF VPC, restore-scf-public, 内网组网, private-network, storage_private_gateway_host, MOOX_STORAGE_RPC_GATEWAY_TARGET, and control-plane maintenance.
 ---
 
 # MooX Quant Data System
@@ -112,6 +112,15 @@ When crypto K-line or Factor periods stall, read
 Factor separately. Collector completion events drive Factor reads from Storage PrimaryStore;
 the Factor durable is `factor_collector_period_v1`. Use set-labeled period and lane metrics to
 distinguish event backlog, Storage failures, and compute errors (`factor_compile_errors_total`).
+
+### Factor Expressions And Python Factor Conversion
+
+因子用 YAML 表达式（spec）定义，由 Go 表达式引擎计算；旧的 Python 因子（`compute(df, params, context)`）已退役。
+用户要写新因子、或拿原来的 Python 因子来转换时，先读 [`references/factor-dsl.md`](references/factor-dsl.md)，按其中的流程执行：
+对照 pandas → DSL 映射转写，`scripts/factor-expr.sh check` 编译检查，准备真实与合成 K 线，
+`scripts/factor_py_check.py run-python` 运行原因子、`scripts/factor-expr.sh eval` 试算 DSL，`factor_py_check.py compare` 按验收规则逐值比较，
+向用户汇报差异并在用户确认后写入（`moox-cli setup factors` 或控制台），最后做写入后验证。
+不要把不支持的写法悄悄换成近似公式，也不要“修正”原公式；输出列名必须保持不变。
 
 ### Tencent Lighthouse Firewall
 
