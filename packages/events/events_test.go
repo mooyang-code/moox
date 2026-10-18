@@ -18,9 +18,6 @@ func TestBuiltInEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"event.cloudnode.job.execution.requested@1",
-		"event.market.fetch.batch.completed@1",
-		"event.observability.health.check.reported@1",
 		"event.observability.host.snapshot.reported@1",
 		"event.observability.metrics.snapshot.reported@1",
 		"event.storage.collector.period.completed@1",
@@ -31,11 +28,8 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.trade.target.weight_requested@1",
 	}
 	wantOwners := map[string]string{
-		"event.cloudnode.job.execution.requested@1":       "cloudnode",
-		"event.observability.health.check.reported@1":     "watchdog",
 		"event.observability.host.snapshot.reported@1":    "hostagent",
 		"event.observability.metrics.snapshot.reported@1": "service",
-		"event.market.fetch.batch.completed@1":            "collector",
 		"event.storage.collector.period.completed@1":      "storage",
 		"event.storage.dataset.factor_period.computed@1":  "storage",
 		"event.storage.dataset.rows.upserted@2":           "storage",
@@ -145,7 +139,6 @@ func TestObservabilityEventsShareOneStream(t *testing.T) {
 	for _, event := range []Event{
 		ObservabilityMetricsSnapshotReported,
 		ObservabilityHostSnapshotReported,
-		ObservabilityHealthCheckReported,
 	} {
 		require.Equal(t, "MOOX_OBSERVABILITY", event.Stream())
 		family, err := registry.FamilyPattern(event)
@@ -263,7 +256,7 @@ func validFactorPeriodComputed(now *timestamppb.Timestamp) *storagepb.FactorPeri
 	return &storagepb.FactorPeriodComputed{
 		DatasetId: "dataset_result", SourceDatasetId: "dataset", Frequency: "1m", PeriodTime: 1786032000, Status: "complete",
 		UniverseSubjectIds: []string{"BTC-USDT"},
-		Factors:            []*storagepb.FactorPeriodState{{FactorId: "factor-1", Status: "complete", SourceHash: "hash-1"}},
+		Factors:            []*storagepb.FactorPeriodState{{FactorId: "factor-1", Status: "complete", SourceHash: "hash-1", DefinitionHash: "def-1"}},
 		ComputedAt:         now, TriggerEventId: "collector-completed-1",
 	}
 }

@@ -1152,7 +1152,7 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", ExecutionMode: "LIVE",
+			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "LIVE",
 			MarketType: "SWAP", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "test",
 		}); err != nil {
@@ -1172,4 +1172,653 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 			MinExchangeQuantity: "1", PriceTick: "0.1", Status: "TRADING",
 		})
 	}))
+}
+
+type staleSnapshotAdapter struct{ *syncAdapter }
+
+func (staleSnapshotAdapter) GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error) {
+	return exchange.AccountSnapshot{
+		AvailableFunds:    shared.MustDecimal("999"),
+		ExchangeUpdatedAt: time.UnixMilli(1_000), // 早于已采用的快照（2_000）
+	}, nil
+}
+
+// LastSyncAt 是资金预留的抵扣边界：丢弃陈旧余额快照时不能推进它，否则已提交订单的预留会被误认为已反映在余额中。
+func TestStaleSnapshotDoesNotAdvanceReservationBoundary(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	adapter := &syncAdapter{order: exchange.Order{
+		ExchangeOrderID: "exchange-1", ClientOrderID: "manual-1", ExchangeSymbol: "BTC-USDT",
+		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.Zero(), Status: exchange.OrderStatusPartiallyFilled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+	}, fill: exchange.Fill{
+		ExchangeTradeID: "trade-1", ExchangeOrderID: "exchange-1", ClientOrderID: "manual-1",
+		ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("0.5"), Price: shared.MustDecimal("100"),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_500),
+	}}
+	clock := int64(3_000)
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(clock) },
+	}
+	_, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+
+	clock = 5_000
+	service.Adapters = syncAdapterSource{adapter: staleSnapshotAdapter{adapter}}
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, result.AccountSnapshotUpdated)
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Equal(t, int64(3_000), account.LastSyncAt, "陈旧快照被丢弃时抵扣边界保持不变")
+	require.Equal(t, int64(2_000), account.SnapshotSourceTime)
+}
+
+// 实盘私有成交已释放订单预留，但余额快照尚未反映这笔支出：成交后必须关闭准入，直到完整同步确认余额。
+func TestPrivateFillClosesAdmissionUntilFullSync(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	current := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.25"),
+		AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+	}
+	fill := exchange.Fill{
+		ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("0.25"), Price: shared.MustDecimal("100"),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(2_000),
+	}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{order: current, fill: fill}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateTradingAccountReadiness("space-1", "account-1", true, 3_000, "")
+	}))
+	open := current
+	open.FilledQuantity, open.Status = shared.Zero(), exchange.OrderStatusOpen
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", open))
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.True(t, account.Ready, "事件前账户就绪")
+
+	applied, err := service.ApplyFill(context.Background(), "account-1", fill)
+	require.NoError(t, err)
+	require.True(t, applied)
+	account, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready, "成交后在余额同步确认前不得接受新订单")
+
+	_, err = service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	account, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.True(t, account.Ready, "完整同步确认余额后恢复")
+}
+
+type recordingMetrics struct{ errs []error }
+
+func (m *recordingMetrics) Observe(_ string, _ time.Time, _ float64, err error) {
+	m.errs = append(m.errs, err)
+}
+
+type snapshotAtAdapter struct {
+	*syncAdapter
+	at int64
+}
+
+func (a snapshotAtAdapter) GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error) {
+	return exchange.AccountSnapshot{
+		AvailableFunds:    shared.MustDecimal("900"),
+		Equity:            shared.MustDecimal("1000"),
+		ExchangeUpdatedAt: time.UnixMilli(a.at),
+	}, nil
+}
+
+// 成交后必须等到覆盖成交时间的完整余额快照才恢复准入：旧于成交、与已采用快照同时间、介于两者之间的快照都不行。
+func TestAdmissionStaysClosedUntilBalanceSnapshotCoversPrivateFill(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	current := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.25"),
+		AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+	}
+	fill := exchange.Fill{
+		ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("0.25"), Price: shared.MustDecimal("100"),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(2_000),
+	}
+	base := &syncAdapter{order: current, fill: fill}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: base},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	_, err := service.SyncAccount(context.Background(), "account-1") // 余额快照 2_000 已采用
+	require.NoError(t, err)
+
+	newFill := fill
+	newFill.ExchangeTradeID, newFill.TradedAt = "trade-2", time.UnixMilli(3_000)
+	applied, err := service.ApplyFill(context.Background(), "account-1", newFill)
+	require.NoError(t, err)
+	require.True(t, applied)
+	boundary := func() int64 {
+		account, getErr := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+		require.NoError(t, getErr)
+		return account.LastSyncAt
+	}
+	before := boundary()
+
+	metrics := &recordingMetrics{}
+	service.Metrics = metrics
+	for _, at := range []int64{1_500, 2_000, 2_900} { // 旧于已采用快照 / 与已采用快照同时间 / 介于旧余额与成交之间
+		service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, at}}
+		service.Now = func() time.Time { return time.UnixMilli(5_000 + at) }
+		result, syncErr := service.SyncAccount(context.Background(), "account-1")
+		require.NoError(t, syncErr)
+		require.False(t, result.Ready, "快照时间 %d 未覆盖成交 3_000", at)
+		require.True(t, result.BalancePending)
+		account, getErr := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+		require.NoError(t, getErr)
+		require.False(t, account.Ready)
+		require.Equal(t, int64(3_000), account.BalancePendingUntil)
+		require.Equal(t, before, boundary(), "未覆盖成交的快照不能推进预留抵扣边界")
+	}
+
+	require.Len(t, metrics.errs, 3)
+	for _, observed := range metrics.errs {
+		require.Error(t, observed, "余额未确认时监控必须看到失败，而不是同步新鲜")
+	}
+	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 3_000}}
+	service.Now = func() time.Time { return time.UnixMilli(9_000) }
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.True(t, result.Ready)
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.True(t, account.Ready, "覆盖成交的快照恢复准入")
+	require.Zero(t, account.BalancePendingUntil)
+	require.Equal(t, int64(9_000), account.LastSyncAt)
+}
+
+// 私有余额更新（2_500）之后收到更旧的 REST 完整快照（2_200）：旧快照不能覆盖更新的字段，也不能完成余额确认。
+func TestOlderRESTSnapshotDoesNotOverwritePrivateBalanceUpdate(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	base := &syncAdapter{
+		order: exchange.Order{
+			ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+			ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+			Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.25"),
+			AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
+			CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+		},
+		fill: exchange.Fill{
+			ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+			ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("0.25"), Price: shared.MustDecimal("100"),
+			SettlementAsset: "USDT", TradedAt: time.UnixMilli(2_000),
+		},
+	}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: base},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	_, err := service.SyncAccount(context.Background(), "account-1") // 完整快照 2_000，可用资金 900
+	require.NoError(t, err)
+
+	private := exchange.AccountSnapshot{
+		AvailableFunds: shared.MustDecimal("100"), ExchangeUpdatedAt: time.UnixMilli(2_500),
+		Present: exchange.AccountSnapshotPresence{AvailableFunds: true},
+	}
+	require.NoError(t, service.ApplyAccountSnapshot(context.Background(), "account-1", private))
+
+	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 2_200}}
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, result.AccountSnapshotUpdated)
+	require.False(t, result.Ready)
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready)
+	require.Equal(t, "100", account.Snapshot.AvailableFunds, "更旧的 REST 不得把可用资金改回 900")
+}
+
+// REST 首次补录的成交同样会释放预留：同一轮读取的余额若早于成交，不能恢复准入；水位在成交入账的同一事务内抬高。
+func TestRESTBackfilledFillRaisesBalanceWatermarkAtomically(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	base := &syncAdapter{
+		order: exchange.Order{
+			ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+			ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+			Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.25"),
+			AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
+			CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(3_000),
+		},
+		fill: exchange.Fill{
+			ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+			ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("0.25"), Price: shared.MustDecimal("100"),
+			SettlementAsset: "USDT", TradedAt: time.UnixMilli(3_000),
+		},
+	}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: snapshotAtAdapter{base, 2_000}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FillsIngested)
+	require.False(t, result.Ready, "成交之前读到的余额不能恢复准入")
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready)
+	require.Equal(t, int64(3_000), account.BalancePendingUntil)
+
+	// 重放同一成交（已去重）不会丢水位，余额覆盖成交后恢复
+	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 3_000}}
+	result, err = service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.True(t, result.Ready)
+	account, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Zero(t, account.BalancePendingUntil)
+}
+
+type noPositionsAdapter struct{ *syncAdapter }
+
+func (noPositionsAdapter) ListPositionSnapshots(context.Context) ([]exchange.Position, error) {
+	return nil, nil
+}
+
+// 持仓列表先于成交读取、余额快照后于成交读取：本轮补录成交投影出的持仓不能被“空持仓列表”删除。
+func TestFullSyncKeepsPositionProjectedFromFillBackfilledInTheSameRound(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	base := &syncAdapter{
+		order: exchange.Order{
+			ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+			ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+			Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.5"),
+			AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
+			CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_500),
+		},
+		fill: exchange.Fill{
+			ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+			ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("0.5"), Price: shared.MustDecimal("100"),
+			SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_500),
+		},
+	}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: noPositionsAdapter{base}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FillsIngested)
+	var positions int64
+	require.NoError(t, tradeStore.DBForTest().Raw(
+		"SELECT COUNT(*) FROM t_trading_positions WHERE c_space_id = ? AND c_trading_account_id = ?", "space-1", "account-1",
+	).Scan(&positions).Error)
+	require.Equal(t, int64(1), positions, "本轮补录成交投影出的持仓不能被先取的空持仓列表删除")
+}
+
+// 账户锁被长时间占用（例如下单正在做网络调用）时，带期限的入口（断线收尾的 SetReady、私有事件处理）必须按期限返回，
+// 而不是无限等锁：断线时给 SetReady 设置的 2 秒期限靠它才能真正生效。
+func TestAccountLockWaitHonorsCallerDeadline(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	service := Service{Store: tradeStore, Adapters: syncAdapterSource{adapter: &syncAdapter{}}, Fills: &consumer.Reducer{Store: tradeStore}}
+	unlock := tradeStore.LockTradingAccount("account-1")
+	defer unlock()
+
+	for name, call := range map[string]func(context.Context) error{
+		"SetReady": func(ctx context.Context) error { return service.SetReady(ctx, "account-1", false, nil) },
+		"ApplyPosition": func(ctx context.Context) error {
+			return service.ApplyPosition(ctx, "account-1", exchange.Position{ExchangeSymbol: "BTC-USDT", PositionSide: exchange.PositionSideNet, ExchangeUpdatedAt: time.UnixMilli(1_000)})
+		},
+		"ApplyAccountSnapshot": func(ctx context.Context) error {
+			return service.ApplyAccountSnapshot(ctx, "account-1", exchange.AccountSnapshot{ExchangeUpdatedAt: time.UnixMilli(1_000)})
+		},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		done := make(chan error, 1)
+		go func() { done <- call(ctx) }()
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.DeadlineExceeded, name)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s kept waiting for the trading account lock past the deadline", name)
+		}
+		cancel()
+	}
+}
+
+// 终态订单更新先于成交明细到达：订单累计成交领先本地明细时，终态转换会释放预留，但余额还没有反映这些成交——
+// 必须先关闭准入，直到完整同步补录明细且余额覆盖该时间。
+func TestOrderAheadOfFillDetailsClosesAdmissionUntilBalanceCovers(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	open := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.Zero(),
+		Status:    exchange.OrderStatusOpen,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_000),
+	}
+	base := &syncAdapter{order: open}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: base},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", open))
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateTradingAccountReadiness("space-1", "account-1", true, 3_000, "")
+	}))
+
+	// 撤单更新显示已成交 0.5，但本地还没有任何成交明细
+	canceled := open
+	canceled.FilledQuantity, canceled.Status, canceled.UpdatedAt = shared.MustDecimal("0.5"), exchange.OrderStatusCanceled, time.UnixMilli(3_000)
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", canceled))
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready, "订单累计成交领先明细时不得保持可交易")
+	require.Equal(t, int64(3_000), account.BalancePendingUntil)
+}
+
+type noFillsAdapter struct {
+	*syncAdapter
+	at int64
+}
+
+func (a noFillsAdapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
+	return snapshotAtAdapter{a.syncAdapter, a.at}.GetAccountSnapshot(ctx)
+}
+
+func (noFillsAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+	return nil, "", nil
+}
+
+// 订单累计成交领先本地明细时，更新的余额快照也不能恢复准入（余额没有被缺失的成交明细解释）：
+// 明细补齐且余额覆盖水位之后才恢复。
+func TestFillGapKeepsAdmissionClosedEvenWhenBalanceIsNewer(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	open := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.Zero(),
+		Status:    exchange.OrderStatusOpen,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_000),
+	}
+	canceled := open
+	canceled.FilledQuantity, canceled.AveragePrice = shared.MustDecimal("0.5"), shared.MustDecimal("100")
+	canceled.Status, canceled.UpdatedAt = exchange.OrderStatusPartiallyFilled, time.UnixMilli(3_000)
+	fill := exchange.Fill{
+		ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("0.5"), Price: shared.MustDecimal("100"),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(2_900),
+	}
+	base := &syncAdapter{order: canceled, fill: fill}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: noFillsAdapter{base, 4_000}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(5_000) },
+	}
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", open))
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", canceled)) // 累计成交 0.5 领先明细（0）
+
+	// 余额（4_000）比订单更新（3_000）新，但缺失的成交明细还没有返回
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, result.Ready, "成交明细仍缺失时不能恢复准入")
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready)
+	require.NotZero(t, account.BalancePendingUntil)
+
+	// 成交明细补齐后再同步：恢复
+	service.Adapters = syncAdapterSource{adapter: snapshotAtAdapter{base, 4_000}}
+	service.Now = func() time.Time { return time.UnixMilli(6_000) }
+	result, err = service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FillsIngested)
+	require.True(t, result.Ready, "明细补齐且余额覆盖水位后恢复")
+}
+
+type lateFillAdapter struct {
+	*syncAdapter
+	fill  exchange.Fill
+	order exchange.Order
+}
+
+func (lateFillAdapter) ListPositionSnapshots(context.Context) ([]exchange.Position, error) {
+	return nil, nil
+}
+func (a lateFillAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) {
+	return []exchange.Order{a.order}, nil
+}
+func (a lateFillAdapter) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+	return a.order, nil
+}
+func (a lateFillAdapter) GetOrderByExchangeID(_ context.Context, symbol string, exchangeOrderID string) (exchange.Order, error) {
+	current := a.order
+	current.ExchangeSymbol, current.ExchangeOrderID = symbol, exchangeOrderID
+	return current, nil
+}
+func (a lateFillAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+	return []exchange.Fill{a.fill}, "12", nil
+}
+
+// 权威（REST）持仓快照已覆盖到的时间之前的迟到成交，数量已包含在快照里：不能再叠加到持仓上（成交仍入账本）。
+func TestLateFillCoveredByPositionSnapshotDoesNotDoubleCountPosition(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	order := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.5"),
+		AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+	}
+	fill1 := exchange.Fill{
+		ExchangeTradeID: "trade-1", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("0.5"), Price: shared.MustDecimal("100"),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_500),
+	}
+	base := &syncAdapter{order: order, fill: fill1}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: base}, // 持仓快照：数量 0.5，版本时间 2_000
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	_, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+
+	// 迟到的成交（时间 1_800 < 快照覆盖时间 2_000）已包含在持仓快照里
+	late := fill1
+	late.ExchangeTradeID, late.Quantity, late.TradedAt = "trade-2", shared.MustDecimal("0.25"), time.UnixMilli(1_800)
+	orderLate := order
+	orderLate.FilledQuantity = shared.MustDecimal("0.75")
+	service.Adapters = syncAdapterSource{adapter: lateFillAdapter{base, late, orderLate}}
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FillsIngested, "迟到成交仍然入成交账本")
+	var quantity string
+	require.NoError(t, tradeStore.DBForTest().Raw(
+		"SELECT c_signed_quantity FROM t_trading_positions WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?",
+		"space-1", "account-1", "BTC-USDT",
+	).Scan(&quantity).Error)
+	require.Equal(t, "0.5", quantity, "已被权威快照覆盖的迟到成交不能重复叠加持仓")
+}
+
+// 首次导入就是终态且累计成交领先本地明细的外部订单：导入入口同样必须关闭准入（水位原先为零，缺口检查不能依赖水位）。
+func TestFirstImportedTerminalOrderWithMissingFillsKeepsAdmissionClosed(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	imported := exchange.Order{
+		ExchangeOrderID: "ext-1", ClientOrderID: "ext-client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.5"),
+		AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusCanceled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(3_000),
+	}
+	base := &syncAdapter{order: imported}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: noFillsAdapter{base, 4_000}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(5_000) },
+	}
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpdateTradingAccountReadiness("space-1", "account-1", true, 2_000, "")
+	}))
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", imported))
+	account, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, account.Ready, "首次导入的终态外部订单缺成交明细时必须关闭准入")
+
+	// 余额（4_000）比订单更新新，但明细仍缺失：完整同步也不能恢复
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.False(t, result.Ready)
+}
+
+type emptyAdapter struct{ *syncAdapter }
+
+func (emptyAdapter) ListPositionSnapshots(context.Context) ([]exchange.Position, error) {
+	return nil, nil
+}
+func (emptyAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) { return nil, nil }
+func (emptyAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+	return nil, "", nil
+}
+
+// 空仓快照先到、平仓成交后到：快照确认空仓而删除持仓时留下墓碑，迟到的平仓成交（含与快照同毫秒的）不能从零叠加出反向持仓。
+func TestFlatSnapshotThenLateClosingFillDoesNotCreateReversePosition(t *testing.T) {
+	for name, fillAt := range map[string]int64{"earlier than snapshot": 1_500, "same millisecond as snapshot": 2_000} {
+		t.Run(name, func(t *testing.T) { flatSnapshotThenLateClosingFill(t, fillAt) })
+	}
+}
+
+// 本地没有配置该品种杠杆（REST 持仓自带杠杆）时，已被快照覆盖的迟到成交也必须能入账：覆盖检查要先于杠杆查询。
+func TestCoveredLateFillIsLedgeredEvenWithoutConfiguredLeverage(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	require.NoError(t, tradeStore.DBForTest().Exec(
+		"UPDATE t_trading_accounts SET c_leverage_settings_json = '{}' WHERE c_space_id = ? AND c_trading_account_id = ?", "space-1", "account-1").Error)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertPosition(store.PositionRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", ExchangeSymbol: "BTC-USDT", PositionSide: "NET",
+			SignedQuantity: "1", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS",
+			UsedMargin: "0", LiquidationPrice: "0", UnrealizedPnL: "0", RealizedPnL: "0", ExchangeUpdatedAt: 1_000,
+		})
+	}))
+	base := &syncAdapter{}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: emptyAdapter{base}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	_, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	order := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1", ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideSell, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("1"),
+		FilledQuantity: shared.MustDecimal("1"), AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusFilled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_500),
+	}
+	closing := exchange.Fill{
+		ExchangeTradeID: "trade-close", ExchangeOrderID: "order-1", ClientOrderID: "client-1", ExchangeSymbol: "BTC-USDT",
+		Side: exchange.SideSell, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("1"),
+		Price: shared.MustDecimal("100"), SettlementAsset: "USDT", TradedAt: time.UnixMilli(1_500),
+	}
+	service.Adapters = syncAdapterSource{adapter: lateFillAdapter{base, closing, order}}
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FillsIngested)
+}
+
+func flatSnapshotThenLateClosingFill(t *testing.T, fillAt int64) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertPosition(store.PositionRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", ExchangeSymbol: "BTC-USDT", PositionSide: "NET",
+			SignedQuantity: "1", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS",
+			UsedMargin: "0", LiquidationPrice: "0", UnrealizedPnL: "0", RealizedPnL: "0", ExchangeUpdatedAt: 1_000,
+		})
+	}))
+	base := &syncAdapter{}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: emptyAdapter{base}},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(4_000) },
+	}
+	_, err := service.SyncAccount(context.Background(), "account-1") // 交易所已空仓（平仓成交明细延迟）：持仓被删除
+	require.NoError(t, err)
+
+	order := exchange.Order{
+		ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket,
+		Side: exchange.SideSell, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("1"),
+		AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusFilled,
+		CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(1_500),
+	}
+	closing := exchange.Fill{
+		ExchangeTradeID: "trade-close", ExchangeOrderID: "order-1", ClientOrderID: "client-1",
+		ExchangeSymbol: "BTC-USDT", Side: exchange.SideSell, PositionSide: exchange.PositionSideNet,
+		Quantity: shared.MustDecimal("1"), Price: shared.MustDecimal("100"),
+		SettlementAsset: "USDT", TradedAt: time.UnixMilli(fillAt),
+	}
+	service.Adapters = syncAdapterSource{adapter: lateFillAdapter{base, closing, order}}
+	result, err := service.SyncAccount(context.Background(), "account-1") // 迟到的平仓成交补录
+	require.NoError(t, err)
+	require.Equal(t, 1, result.FillsIngested)
+	var count int64
+	require.NoError(t, tradeStore.DBForTest().Raw(
+		"SELECT COUNT(*) FROM t_trading_positions WHERE c_space_id = ? AND c_trading_account_id = ?", "space-1", "account-1",
+	).Scan(&count).Error)
+	require.Zero(t, count, "已被空仓快照覆盖的平仓成交不能生成反向持仓")
 }

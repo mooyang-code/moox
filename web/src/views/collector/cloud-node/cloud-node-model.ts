@@ -24,16 +24,6 @@ export interface RegionInfo {
   max_nodes?: number;
 }
 
-export interface BatchPlanItem {
-  regionCode: string;
-  regionName: string;
-  tag: string;
-  maxNodes: number;
-  usedNodes: number;
-  availableNodes: number;
-  planCount: number;
-}
-
 export function normalizeCloudNodes(items: Array<Partial<CloudNode>>): CloudNode[] {
   return items.map(item => ({
     node_id: String(item.node_id || ""),
@@ -81,12 +71,7 @@ export const getNodeTypeLabel = (value: string) =>
   ({ "scf-event": "云函数（事件型）", "scf-web": "云函数（Web型）", server: "服务器" })[value] || value;
 export const getNodeTypeColor = (value: string) =>
   ({ "scf-event": "blue", "scf-web": "cyan", server: "orange" })[value] || "gray";
-export const getTriggerTypeLabel = (value: string) => ({ timer: "定时器", invoke: "手动调用" })[value] || (value || "-");
-
-export const getCollectorName = (value: string) =>
-  ({ kline: "K线", ticker: "行情", orderbook: "订单簿", trade: "逐笔", news: "资讯", symbol: "标的" })[value] || value;
-export const getCollectorColor = (value: string) =>
-  ({ kline: "blue", ticker: "green", orderbook: "orange", trade: "purple", news: "red", symbol: "cyan" })[value] || "gray";
+export const getTriggerTypeLabel = (value: string) => ({ timer: "定时器", invoke: "手动调用" })[value] || value || "-";
 
 export function getPackageTypeColor(value: number | string) {
   return (

@@ -34,6 +34,9 @@ type IndexManager struct {
 	dataset    map[string]string
 	space      map[string]string
 	coverageMu sync.Mutex
+	// stop 通知后台的用量日志协程退出，由 Close 关闭。
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 // duckDBContext checks cancellation before entering DuckDB, then detaches it
@@ -53,21 +56,23 @@ func duckDBContext(ctx context.Context) (context.Context, error) {
 	return context.WithoutCancel(ctx), nil
 }
 
-var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`)
+var identifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var duckDBMemoryLimitRE = regexp.MustCompile(`^[1-9][0-9]*(?:KB|MB|GB|TB)$`)
+
+// logMemoryLimitOnce 让进程只在第一次打开索引时记录一次生效的内存上限，而不是每个索引各记一次。
+var logMemoryLimitOnce sync.Once
 
 const (
 	duckDBMemoryLimitEnv  = "MOOX_STORAGE_VIEW_DUCKDB_MEMORY_LIMIT"
 	duckDBThreadsEnv      = "MOOX_STORAGE_VIEW_DUCKDB_THREADS"
 	duckDBMaxOpenConnsEnv = "MOOX_STORAGE_VIEW_DUCKDB_MAX_OPEN_CONNS"
-	defaultDuckDBMemory   = "256MB"
 	defaultDuckDBThreads  = 1
 	defaultMaxOpenConns   = 4
 	defaultMaxIdleConns   = 1
-	// DuckDB accepts a large parameter count, but keeping each statement
-	// bounded avoids oversized SQL packets during a 10k-row backfill while
-	// still amortizing per-row Exec overhead for the event consumer.
-	maxWriteRowsPerStatement = 256
+	// 每条 UPSERT 的行数。DuckDB 解析与绑定大 VALUES 列表的代价是超线性的：基准（TestLiveWriteBaseline，
+	// 500 行 × 18 列）中 256 行/条约 1.2–1.4s，32 行/条约 0.2s，1 行/条反而因逐条开销升到 2.7s。
+	// 所有 View（K 线、因子结果）的实时写入、回填与重建都经过这里。
+	maxWriteRowsPerStatement = 32
 	// internalAttributesColumn keeps row attributes that are not part of the
 	// declared View projection (notably factor.source_hash) available to
 	// downstream readers without exposing them as user columns.
@@ -90,11 +95,14 @@ func OpenIndexManager(opts IndexManagerOptions) (*IndexManager, error) {
 			// A process may have been interrupted after creating the temporary
 			// build file. It is never an authoritative slot and is safe to
 			// remove before Metadata restores active indexes.
-			_ = os.Remove(filepath.Join(opts.Root, entry.Name()))
+			// 准备文件专属的临时目录（<文件>.tmp）名称里也含 ".duckdb.prepare-"，一并清掉。
+			_ = os.RemoveAll(filepath.Join(opts.Root, entry.Name()))
 			_ = os.Remove(filepath.Join(opts.Root, entry.Name()+".wal"))
 		}
 	}
-	return &IndexManager{root: opts.Root, dbs: make(map[string]*sql.DB), schema: make(map[string]map[string]pb.FieldValueType), dataset: make(map[string]string), space: make(map[string]string)}, nil
+	m := &IndexManager{root: opts.Root, dbs: make(map[string]*sql.DB), schema: make(map[string]map[string]pb.FieldValueType), dataset: make(map[string]string), space: make(map[string]string), stop: make(chan struct{})}
+	go m.logUsageLoop(m.stop, resourceUsageFirstDelay, resourceUsageInterval)
+	return m, nil
 }
 
 func (m *IndexManager) Engine() string { return "duckdb" }
@@ -120,8 +128,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 	}
 	cleanupTemp := func() {
 		_ = db.Close()
-		_ = os.Remove(tempPath)
-		_ = os.Remove(tempPath + ".wal")
+		removePrepared(tempPath)
 	}
 	columns := schemaColumns(schema.Columns)
 	createColumns := []string{
@@ -138,7 +145,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		createColumns = append(createColumns, quote(name)+" "+duckType(valueType))
 	}
 	statement := fmt.Sprintf(`
-		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, indexed_from VARCHAR NOT NULL DEFAULT '', indexed_to VARCHAR NOT NULL DEFAULT '');
+		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, indexed_from VARCHAR NOT NULL DEFAULT '', indexed_to VARCHAR NOT NULL DEFAULT '', rows_per_series UBIGINT NOT NULL DEFAULT 0);
 		CREATE TABLE view_columns (column_name VARCHAR PRIMARY KEY, value_type INTEGER NOT NULL);
 		CREATE TABLE view_series_counts (subject_id VARCHAR NOT NULL, freq VARCHAR NOT NULL, series_tag VARCHAR NOT NULL, row_count UBIGINT NOT NULL, PRIMARY KEY (subject_id, freq, series_tag));
 		CREATE TABLE view_rows (%s, PRIMARY KEY (subject_id, freq, data_time, series_tag));
@@ -147,7 +154,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		cleanupTemp()
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO view_meta (singleton, view_version, schema_hash, primary_dataset_id, space_id, updated_at) VALUES (1, ?, ?, ?, ?, ?)`, schema.ViewVersion, schema.SchemaHash, schema.PrimaryDatasetID, schema.SpaceID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO view_meta (singleton, view_version, schema_hash, primary_dataset_id, space_id, updated_at, rows_per_series) VALUES (1, ?, ?, ?, ?, ?, ?)`, schema.ViewVersion, schema.SchemaHash, schema.PrimaryDatasetID, schema.SpaceID, time.Now().UTC().Format(time.RFC3339Nano), schema.RowsPerSeries); err != nil {
 		cleanupTemp()
 		return err
 	}
@@ -158,20 +165,19 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		}
 	}
 	if err := db.Close(); err != nil {
-		_ = os.Remove(tempPath)
-		_ = os.Remove(tempPath + ".wal")
+		removePrepared(tempPath)
 		return err
 	}
 	if err := m.closeIndex(id); err != nil {
-		_ = os.Remove(tempPath)
-		_ = os.Remove(tempPath + ".wal")
+		removePrepared(tempPath)
 		return err
 	}
 	if err := os.Rename(tempPath, path); err != nil {
-		_ = os.Remove(tempPath)
-		_ = os.Remove(tempPath + ".wal")
+		removePrepared(tempPath)
 		return err
 	}
+	// 准备文件已改名为正式索引，它的临时目录不再有用；正式索引重新打开后使用自己的临时目录。
+	_ = os.RemoveAll(indexTempDir(tempPath))
 	db, err = open(path)
 	if err != nil {
 		return err
@@ -341,6 +347,8 @@ func matchesAppendOnlyPhysicalPrefix(physical map[string]pb.FieldValueType, targ
 }
 
 func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.ViewIndexWriteBatch) error {
+	writeStart := time.Now()
+	var seriesTook, upsertTook, beginTook time.Duration
 	var err error
 	if ctx, err = duckDBContext(ctx); err != nil {
 		return err
@@ -353,10 +361,12 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	if err != nil {
 		return err
 	}
+	beginStart := time.Now()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
+	beginTook = time.Since(beginStart)
 	defer func() { _ = tx.Rollback() }()
 	var revision uint64
 	var schemaHash string
@@ -369,10 +379,13 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	if schemaHash != batch.ViewSchemaHash {
 		return errors.New("view schema hash conflict")
 	}
+	groupsStart := time.Now()
 	for _, group := range groupRowWrites(batch.RowWrites) {
+		seriesStart := time.Now()
 		if err := ensureSeriesRowsAndCounts(ctx, tx, group.writes); err != nil {
 			return err
 		}
+		seriesTook += time.Since(seriesStart)
 		names := append([]string{"subject_id", "freq", "data_time", "series_tag"}, group.columns...)
 		names = append(names, internalAttributesColumn)
 		for start := 0; start < len(group.writes); start += maxWriteRowsPerStatement {
@@ -410,6 +423,7 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 			}
 		}
 	}
+	upsertTook = time.Since(groupsStart) - seriesTook
 	if from, to, ok := batchCoverage(batch.RowWrites); ok {
 		var currentFrom, currentTo string
 		if err := tx.QueryRowContext(ctx, `SELECT indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&currentFrom, &currentTo); err != nil {
@@ -428,7 +442,17 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET updated_at = ? WHERE singleton = 1`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
-	return tx.Commit()
+	commitStart := time.Now()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if total := time.Since(writeStart); total >= 200*time.Millisecond {
+		// 分段耗时：开事务 = 取连接与 BeginTx；序列行 = view_rows/计数的去重插入；写入 = 行数据 UPSERT；提交 = 事务提交落盘。
+		log.Printf("storage view DuckDB 写入较慢 index=%s 行=%d 开事务=%s 序列行=%s 写入=%s 提交=%s 合计=%s",
+			id, len(batch.RowWrites), beginTook.Round(time.Millisecond), seriesTook.Round(time.Millisecond),
+			upsertTook.Round(time.Millisecond), time.Since(commitStart).Round(time.Millisecond), total.Round(time.Millisecond))
+	}
+	return nil
 }
 
 func ensureSeriesRowsAndCounts(ctx context.Context, tx *sql.Tx, writes []viewindex.RowWrite) error {
@@ -727,22 +751,6 @@ func groupRowWrites(writes []viewindex.RowWrite) []rowWriteGroup {
 	return groups
 }
 
-func upsertColumnNames(columns map[string]pb.FieldValueType) []string {
-	names := []string{"subject_id", "freq", "data_time", "series_tag"}
-	for name := range columns {
-		if isSystemColumn(name) {
-			continue
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names[4:])
-	return names
-}
-
-func upsertSQL(names []string, mode viewindex.WriteMode) string {
-	return upsertSQLBatch(names, mode, 1)
-}
-
 func upsertSQLBatch(names []string, mode viewindex.WriteMode, rowCount int) string {
 	if rowCount < 1 {
 		rowCount = 1
@@ -928,9 +936,6 @@ func normalizeColumnValue(value any, valueType pb.FieldValueType, mode viewindex
 }
 
 func (m *IndexManager) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
-	if spec.RowsPerSeries < 0 || (spec.RowsPerSeries > 0 && (spec.Limit != 0 || spec.Offset != 0 || len(spec.Sorts) != 0 || spec.Order == pb.SortOrder_SORT_ORDER_DESC || spec.AfterKey != nil || spec.TotalMode != pb.TotalMode_NONE)) {
-		return nil, 0, fmt.Errorf("series window requires positive row count and no pagination, custom sort or exact total")
-	}
 	var err error
 	if ctx, err = duckDBContext(ctx); err != nil {
 		return nil, 0, err
@@ -957,6 +962,38 @@ func (m *IndexManager) Query(ctx context.Context, id string, spec viewindex.Quer
 	return rows, -1, err
 }
 
+// CountBySubject 按标的统计谓词范围内不同 data_time 的行数：同一时间点有多个 series_tag 只计一次，
+// 与按行比对“这根 K 线在不在”的口径一致。
+func (m *IndexManager) CountBySubject(ctx context.Context, id string, spec viewindex.QuerySpec) (map[string]int64, error) {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return nil, err
+	}
+	db, columns, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	where, _, err := buildWhere(spec, columns)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, "SELECT subject_id, COUNT(DISTINCT data_time) FROM view_rows"+where.sql+" GROUP BY subject_id", where.args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := map[string]int64{}
+	for rows.Next() {
+		var subject string
+		var count int64
+		if err := rows.Scan(&subject, &count); err != nil {
+			return nil, err
+		}
+		counts[subject] = count
+	}
+	return counts, rows.Err()
+}
+
 type whereClause struct {
 	sql  string
 	args []any
@@ -980,21 +1017,16 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 		}
 	}
 	query := "SELECT " + strings.Join(projections, ",") + " FROM view_rows" + where
-	if spec.RowsPerSeries > 0 {
-		query += " QUALIFY ROW_NUMBER() OVER (PARTITION BY subject_id, freq, series_tag ORDER BY data_time DESC) <= ? ORDER BY subject_id, freq, series_tag, data_time ASC"
-		args = append(args, spec.RowsPerSeries)
-	} else {
-		query += orderSQL(spec.Sorts, spec.Order, columns)
-		limit := spec.Limit
-		if limit <= 0 {
-			limit = 1000
-		}
-		if spec.Offset < 0 {
-			spec.Offset = 0
-		}
-		query += " LIMIT ? OFFSET ?"
-		args = append(args, limit, spec.Offset)
+	query += orderSQL(spec.Sorts, spec.Order, columns)
+	limit := spec.Limit
+	if limit <= 0 {
+		limit = 1000
 	}
+	if spec.Offset < 0 {
+		spec.Offset = 0
+	}
+	query += " LIMIT ? OFFSET ?"
+	args = append(args, limit, spec.Offset)
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -1026,7 +1058,7 @@ func (m *IndexManager) queryRows(ctx context.Context, db *sql.DB, columns map[st
 				continue
 			}
 			if value == nil {
-				if len(spec.Includes) == 0 && spec.RowsPerSeries == 0 {
+				if len(spec.Includes) == 0 {
 					continue
 				}
 				row.Fields = append(row.Fields, &pb.FieldValue{FieldId: name, Value: &pb.TypedValue{
@@ -1057,24 +1089,10 @@ func resolveIncludedColumns(columns map[string]pb.FieldValueType, includes []str
 	}
 	selected := make(map[string]struct{}, len(includes))
 	for _, include := range includes {
-		if _, ok := columns[include]; ok && !isSystemColumn(include) {
-			selected[include] = struct{}{}
-			continue
-		}
-		matches := make([]string, 0, 1)
-		for name := range columns {
-			if !isSystemColumn(name) && strings.HasSuffix(name, "."+include) {
-				matches = append(matches, name)
-			}
-		}
-		if len(matches) == 0 {
+		if _, ok := columns[include]; !ok || isSystemColumn(include) {
 			return nil, fmt.Errorf("View column %q is not projected", include)
 		}
-		if len(matches) > 1 {
-			sort.Strings(matches)
-			return nil, fmt.Errorf("View column %q is ambiguous: %s", include, strings.Join(matches, ", "))
-		}
-		selected[matches[0]] = struct{}{}
+		selected[include] = struct{}{}
 	}
 	result := make([]string, 0, len(selected))
 	for name := range selected {
@@ -1104,7 +1122,7 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 		return viewindex.ViewIndexStats{}, err
 	}
 	var stats viewindex.ViewIndexStats
-	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries); err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM view_rows`).Scan(&stats.EntryCount); err != nil {
@@ -1207,7 +1225,7 @@ func (m *IndexManager) StatMetadata(ctx context.Context, id string) (viewindex.V
 		return viewindex.ViewIndexStats{}, err
 	}
 	var stats viewindex.ViewIndexStats
-	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries); err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	stats.Exists = true
@@ -1242,6 +1260,10 @@ func (m *IndexManager) Remove(_ context.Context, id string) error {
 	// the retired index so an A/B rotation does not strand storage on disk. The
 	// WAL is removed first: if that removal fails, the main managed file remains
 	// discoverable and the cleanup Timer can retry the complete artifact.
+	// 专属临时目录最先删除，原因同上：它删不掉时主文件还在，清理定时器会整体重试。
+	if err := os.RemoveAll(indexTempDir(path)); err != nil {
+		return err
+	}
 	if err := os.Remove(path + ".wal"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -1252,6 +1274,11 @@ func (m *IndexManager) Remove(_ context.Context, id string) error {
 }
 
 func (m *IndexManager) Close() error {
+	m.stopOnce.Do(func() {
+		if m.stop != nil {
+			close(m.stop)
+		}
+	})
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var result error
@@ -1364,7 +1391,7 @@ func (m *IndexManager) ensureCoverageColumns(ctx context.Context, db *sql.DB) er
 	}
 	m.coverageMu.Lock()
 	defer m.coverageMu.Unlock()
-	for _, column := range []string{"indexed_from", "indexed_to"} {
+	for _, column := range []string{"indexed_from", "indexed_to", "rows_per_series"} {
 		var count int
 		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'view_meta' AND column_name = ?`, column).Scan(&count); err != nil {
 			return err
@@ -1372,7 +1399,7 @@ func (m *IndexManager) ensureCoverageColumns(ctx context.Context, db *sql.DB) er
 		if count != 0 {
 			continue
 		}
-		if _, err := db.ExecContext(ctx, `ALTER TABLE view_meta ADD COLUMN `+column+` VARCHAR DEFAULT ''`); err != nil {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE view_meta ADD COLUMN `+column+` `+viewMetaColumnType(column)); err != nil {
 			return fmt.Errorf("add view_meta coverage column %s: %w", column, err)
 		}
 	}
@@ -1423,6 +1450,19 @@ func (m *IndexManager) ListManagedIndexes(ctx context.Context) ([]string, error)
 	return ids, nil
 }
 
+// indexTempDir 是某个索引专属的 DuckDB 临时目录。
+// 多个索引不能共用一个临时目录：DuckDB 的临时文件按实例从头编号（如 duckdb_temp_storage_S32K-0.tmp），
+// 不同实例在同一目录里会重名，一个实例清理时会删掉另一个实例正在用的文件，
+// 随后那个实例提交失败（"Could not remove file ... No such file or directory"），索引之后一直写不进去。
+func indexTempDir(path string) string { return path + ".tmp" }
+
+// removePrepared 删除一个未完成（或已放弃）的准备文件，连同它的 WAL 和专属临时目录。
+func removePrepared(path string) {
+	_ = os.Remove(path)
+	_ = os.Remove(path + ".wal")
+	_ = os.RemoveAll(indexTempDir(path))
+}
+
 func open(path string) (*sql.DB, error) {
 	db, err := sql.Open("duckdb", path)
 	if err != nil {
@@ -1444,10 +1484,7 @@ func open(path string) (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(maxOpenConns)
 	db.SetMaxIdleConns(defaultMaxIdleConns)
-	memoryLimit := strings.TrimSpace(os.Getenv(duckDBMemoryLimitEnv))
-	if memoryLimit == "" {
-		memoryLimit = defaultDuckDBMemory
-	}
+	memoryLimit, memorySource := resolveMemoryLimit()
 	if !duckDBMemoryLimitRE.MatchString(memoryLimit) {
 		_ = db.Close()
 		return nil, fmt.Errorf("invalid %s %q", duckDBMemoryLimitEnv, memoryLimit)
@@ -1463,14 +1500,23 @@ func open(path string) (*sql.DB, error) {
 	// The storage host is intentionally small. Bound every view connection and
 	// spill temporary query state beside the index instead of allowing DuckDB's
 	// host-sized default memory limit to compete with the other services.
+	// 临时状态溢出到索引专属的目录，见 indexTempDir。
+	tempDir := indexTempDir(path)
+	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("create duckdb temp directory: %w", err)
+	}
 	settings := fmt.Sprintf(
 		"SET memory_limit = %s; SET threads = %d; SET temp_directory = %s",
-		sqlStringLiteral(memoryLimit), threads, sqlStringLiteral(filepath.Dir(path)),
+		sqlStringLiteral(memoryLimit), threads, sqlStringLiteral(tempDir),
 	)
 	if _, err := db.Exec(settings); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("configure duckdb resource limits: %w", err)
 	}
+	logMemoryLimitOnce.Do(func() {
+		log.Printf("storage view DuckDB 单个索引内存上限 %s（%s）", memoryLimit, memorySource)
+	})
 	return db, nil
 }
 
@@ -1583,15 +1629,6 @@ func joinQuoted(names []string) string {
 		quoted[i] = quote(name)
 	}
 	return strings.Join(quoted, ", ")
-}
-
-func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func valueString(value any) string {
@@ -1930,4 +1967,12 @@ func orderSQL(sorts []*pb.SortSpec, order pb.SortOrder, columns map[string]pb.Fi
 		}
 	}
 	return " ORDER BY " + strings.Join(parts, ", ")
+}
+
+// viewMetaColumnType 返回给旧索引补加的 view_meta 列的类型和默认值。
+func viewMetaColumnType(column string) string {
+	if column == "rows_per_series" {
+		return "UBIGINT DEFAULT 0"
+	}
+	return "VARCHAR DEFAULT ''"
 }

@@ -25,8 +25,6 @@ export type ColumnOriginType =
   | "COLUMN_ORIGIN_TYPE_EXPRESSION"
   | number;
 
-export type SortOrder = "SORT_ORDER_ASC" | "SORT_ORDER_DESC" | number;
-
 export type TotalMode = "AUTO" | "NONE" | "FORCE_EXACT" | number;
 
 export type TotalState = "UNKNOWN" | "EXACT" | "SKIPPED" | number;
@@ -191,25 +189,20 @@ export interface Dataset {
   name: string;
   description?: string;
   data_kind: DataKind;
-  freqs?: string[];
+  /** 时序 Dataset 的唯一频率；记录型 Dataset 可为空。 */
+  freq?: string;
   status: string;
   data_node_id?: string;
-  keep_duration: string;
+  /** 只读的生效保留期："<n>h" 或 "forever"，由 Storage 策略按空间与频率解析。 */
+  retention?: string;
+  /** 保留期来源：default（全局默认）、space（空间覆盖）、record（记录型不过期）。 */
+  retention_source?: string;
   binding_locked?: boolean;
   revision?: number | string;
   subject_tags?: string[];
   created_at?: string;
   updated_at?: string;
   attributes?: Record<string, string>;
-}
-
-export type DatasetMutation = Omit<Dataset, "status" | "data_node_id" | "binding_locked" | "revision"> & { status?: string };
-
-export interface DatasetSubject {
-  space_id: string;
-  dataset_id: string;
-  subject_id: string;
-  status: string;
 }
 
 export interface Field {
@@ -264,7 +257,8 @@ export interface View {
   description?: string;
   dataset_id: string;
   grain_keys?: string[];
-  filter_json?: string;
+  /** 所属 Dataset 的频率，由 Storage 填写。 */
+  freq?: string;
   engine?: string;
   retention_window?: string;
   active_index_id?: string;
@@ -366,38 +360,14 @@ export interface DatasetSummary {
   dataset_id: string;
   name: string;
   data_kind: DataKind;
-  keep_duration: string;
+  retention?: string;
+  retention_source?: string;
   status: string;
 }
 
 export interface DataNodeListItem {
   node: DataNode;
   datasets: DatasetSummary[];
-}
-
-export interface DatasetActivationCheck {
-  check_id: string;
-  ready: boolean;
-  summary: string;
-}
-
-export interface ArchiveFile {
-  space_id: string;
-  archive_file_id: string;
-  dataset_id: string;
-  device_id: string;
-  partition_key?: string;
-  file_uri: string;
-  file_format: string;
-  min_time?: string;
-  max_time?: string;
-  row_count?: number | string;
-  content_hash?: string;
-  columns?: string[];
-  status: string;
-  created_at?: string;
-  updated_at?: string;
-  attributes?: Record<string, string>;
 }
 
 export interface TimeSeriesKey {

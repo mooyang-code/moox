@@ -68,7 +68,6 @@ type Matcher struct {
 	accountsMu       sync.Mutex
 	accounts         map[string]MatcherState
 	ready            atomic.Bool
-	lastError        atomic.Value
 }
 type MatcherState struct {
 	Ready      bool

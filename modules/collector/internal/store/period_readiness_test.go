@@ -116,7 +116,7 @@ func TestResampleReadinessSuppressesTerminalFailedSource(t *testing.T) {
 	failed.LastError = "source Dataset retention expired"
 	encoded, err := failed.Marshal()
 	require.NoError(t, err)
-	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "task-btc", CollectionTaskID: "rule-5m", DataType: "kline_resample", DatasetID: "dataset_spot_kline_resample_5m", SubjectID: "BTC", Frequency: "5m", Result: encoded}}))
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "task-btc", DataType: "kline_resample", SubjectID: "BTC", Frequency: "5m", Result: encoded}}))
 	reports, err := repo.FinalizeDue(ctx, period.Add(2*time.Minute), 10)
 	require.NoError(t, err)
 	require.Empty(t, reports)
@@ -140,7 +140,7 @@ func TestResampleReadinessSuppressesDeletedSourceTask(t *testing.T) {
 	result := domain.NewResampleTaskResult(period)
 	raw, err := result.Marshal()
 	require.NoError(t, err)
-	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "task-eth", CollectionTaskID: "rule-5m", DataType: "kline_resample", DatasetID: "dataset_spot_kline_resample_5m", SubjectID: "ETH", Frequency: "5m", Result: raw}}))
+	require.NoError(t, s.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "task-eth", DataType: "kline_resample", SubjectID: "ETH", Frequency: "5m", Result: raw}}))
 	require.NoError(t, s.db.Model(&domain.TaskInstance{}).Where("c_space_id = ? AND c_instance_id = ?", "crypto", "task-eth").Update("c_is_deleted", true).Error)
 	reports, err := repo.FinalizeDue(ctx, period.Add(2*time.Minute), 10)
 	require.NoError(t, err)
@@ -245,7 +245,7 @@ func TestDeleteReportedItemsOutsideWindowKeepsNewestPeriods(t *testing.T) {
 	require.Len(t, items, 1)
 	var kept domain.PeriodReadiness
 	require.NoError(t, s.db.First(&kept, "c_id = ?", items[0].ReadinessID).Error)
-	require.Equal(t, base.Add(2*time.Minute), kept.PeriodTime)
+	require.Equal(t, base.Add(2*time.Minute), kept.PeriodTime.UTC())
 }
 
 func TestCleanupReportedRetentionInSpaceBoundsPhysicalRows(t *testing.T) {
@@ -326,7 +326,7 @@ func TestLatestCompletedPeriodUsesExactScopeAndCompletionOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Equal(t, domain.PeriodStatusDegraded, got.Status)
-	require.Equal(t, base.Add(time.Minute), got.PeriodTime)
+	require.Equal(t, base.Add(time.Minute), got.PeriodTime.UTC())
 
 	var plan []struct{ Detail string }
 	require.NoError(t, s.db.Raw(`EXPLAIN QUERY PLAN SELECT c_id FROM t_period_readiness WHERE c_space_id = ? AND c_dataset_id = ? AND c_frequency = ? AND c_status = ? ORDER BY c_period_time DESC, c_id DESC LIMIT 1`, "crypto", "bars", "1m", domain.PeriodStatusComplete).Scan(&plan).Error)

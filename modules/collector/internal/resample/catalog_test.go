@@ -197,7 +197,7 @@ func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, dom
 func TestPrepareTargetCompensatesCreatedDatasetWhenViewCreationFails(t *testing.T) {
 	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("create_view")
 
-	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects, "24h")
+	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 	require.Error(t, err)
 	require.Equal(t, taskresult.ResultIDs(rule.SpaceID, rule.TaskID).DatasetID, params.TargetDatasetID)
 	require.Empty(t, metadata.datasets)
@@ -220,7 +220,7 @@ func TestPrepareTargetCompensatesNewResourcesInReverseOrderAfterLaterFailure(t *
 		t.Run(testCase.failAt, func(t *testing.T) {
 			metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture(testCase.failAt)
 
-			err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects, "24h")
+			err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 			require.Error(t, err)
 			require.Empty(t, metadata.datasets)
 			require.Empty(t, metadata.views)
@@ -234,7 +234,7 @@ func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
 	ids := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
 	metadata.datasets[ids.DatasetID] = &storagepb.Dataset{
 		SpaceId: rule.SpaceID, DatasetId: ids.DatasetID, DataNodeId: source.DataNodeID,
-		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"5m"}, Status: "active",
+		DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "5m", Status: "active",
 		Attributes: map[string]string{
 			"owner_module": "collector", "managed_by": "collector", "collector_task_id": rule.TaskID,
 			"market_type": "spot", "storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
@@ -245,11 +245,11 @@ func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
 	}
 	metadata.views[ids.ViewID] = &storagepb.View{
 		SpaceId: rule.SpaceID, ViewId: ids.ViewID, DatasetId: ids.DatasetID, Engine: "duckdb",
-		FilterJson: `{"freq":"5m"}`, GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Status: "active",
+		Freq: "5m", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Status: "active",
 		Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": rule.TaskID},
 	}
 
-	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects, "24h")
+	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 	require.Error(t, err)
 	require.Empty(t, metadata.deleteOrder)
 	require.Contains(t, metadata.datasets, ids.DatasetID)
@@ -260,7 +260,7 @@ func TestPrepareTargetMergesOriginalAndCompensationErrors(t *testing.T) {
 	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("view_sync")
 	metadata.failCleanup = true
 
-	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects, "24h")
+	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "wait target View sync point")
 	require.ErrorContains(t, err, "cleanup view failed")
@@ -309,7 +309,7 @@ func TestValidateTargetDatasetChecksImmutableLineageAndPlacement(t *testing.T) {
 	dataset := &storagepb.Dataset{
 		DataNodeId: "storage-node-0",
 		DataKind:   storagepb.DataKind_DATA_KIND_TIME_SERIES,
-		Freqs:      []string{"5m"},
+		Freq:       "5m",
 		Attributes: cloneStringMap(want),
 	}
 	require.NoError(t, validateTargetDataset(dataset, want, "5m", "storage-node-0"))
@@ -329,11 +329,11 @@ func TestValidateTargetDatasetChecksImmutableLineageAndPlacement(t *testing.T) {
 	wrongNode.DataNodeId = "storage-node-1"
 	require.ErrorContains(t, validateTargetDataset(wrongNode, want, "5m", "storage-node-0"), "data node")
 	monthly := proto.Clone(dataset).(*storagepb.Dataset)
-	monthly.Freqs = []string{"5M"}
-	require.ErrorContains(t, validateTargetDataset(monthly, want, "5m", "storage-node-0"), "does not enable frequency")
+	monthly.Freq = "1mo"
+	require.ErrorContains(t, validateTargetDataset(monthly, want, "5m", "storage-node-0"), `freq is "1mo", not 5m`)
 }
 
-func TestPrepareTargetViewContractUsesFrequencyFilter(t *testing.T) {
-	view := &storagepb.View{DatasetId: "dataset_spot_kline_derived_5m", FilterJson: `{"freq":"5m"}`, Engine: "duckdb", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}}
+func TestPrepareTargetViewContractUsesDatasetFrequency(t *testing.T) {
+	view := &storagepb.View{DatasetId: "dataset_spot_kline_derived_5m", Freq: "5m", Engine: "duckdb", GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}}
 	require.NoError(t, validateTargetView(view, domain.CollectionTask{}, &domain.CollectParams{TargetDatasetID: "dataset_spot_kline_derived_5m"}, "5m"))
 }

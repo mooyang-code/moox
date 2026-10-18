@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
@@ -17,18 +18,11 @@ const (
 )
 
 type dataAccessConfig struct {
-	Version   int                       `yaml:"version"`
-	Gateway   dataGatewayConfig         `yaml:"gateway"`
-	Storage   dataStorageAuthConfig     `yaml:"storage"`
-	DataTypes map[string]dataTypeConfig `yaml:"data_types"`
-}
-
-type dataGatewayConfig struct {
-	Target     string `yaml:"target"`
-	TargetNode string `yaml:"target_node"`
-	KeyID      string `yaml:"key_id"`
-	Caller     string `yaml:"caller"`
-	Secret     string `yaml:"secret"`
+	GatewayClient *gatewayclient.ExternalFileConfig `yaml:"gateway_client,omitempty"`
+	SigningKey    string                            `yaml:"-"`
+	Version       int                               `yaml:"version"`
+	Storage       dataStorageAuthConfig             `yaml:"storage"`
+	DataTypes     map[string]dataTypeConfig         `yaml:"data_types"`
 }
 
 type dataStorageAuthConfig struct {
@@ -125,8 +119,15 @@ func loadDataAccessConfig(explicitPath string) (dataAccessConfig, error) {
 	}
 	defer file.Close()
 
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) || opened.Mode().Perm() != 0o600 {
+		return dataAccessConfig{}, fmt.Errorf("data access config changed while opening")
+	}
+	if opened.Size() > 1<<20 {
+		return dataAccessConfig{}, fmt.Errorf("data access config exceeds 1 MiB")
+	}
 	var cfg dataAccessConfig
-	decoder := yaml.NewDecoder(file)
+	decoder := yaml.NewDecoder(io.LimitReader(file, (1<<20)+1))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&cfg); err != nil {
 		return dataAccessConfig{}, fmt.Errorf("decode data access config %q (unknown or invalid field): %w", path, err)
@@ -144,7 +145,22 @@ func loadDataAccessConfig(explicitPath string) (dataAccessConfig, error) {
 	return cfg, nil
 }
 
+func (cfg dataAccessConfig) validateSkill() error {
+	if cfg.GatewayClient == nil || cfg.GatewayClient.Caller != "moox-skill" || cfg.Storage.AppID != "moox-skill" {
+		return fmt.Errorf("Skill requires the moox-skill Access and Storage identities")
+	}
+	return cfg.validate()
+}
+
 func (cfg dataAccessConfig) validate() error {
+	if cfg.GatewayClient != nil {
+		if cfg.GatewayClient.Caller != "moox-skill" {
+			return fmt.Errorf("gateway_client.caller must be moox-skill")
+		}
+		if err := cfg.GatewayClient.Validate(); err != nil {
+			return err
+		}
+	}
 	if cfg.Version != 1 {
 		return fmt.Errorf("version must be 1")
 	}
@@ -152,11 +168,6 @@ func (cfg dataAccessConfig) validate() error {
 		name  string
 		value string
 	}{
-		{"gateway.target", cfg.Gateway.Target},
-		{"gateway.target_node", cfg.Gateway.TargetNode},
-		{"gateway.key_id", cfg.Gateway.KeyID},
-		{"gateway.caller", cfg.Gateway.Caller},
-		{"gateway.secret", cfg.Gateway.Secret},
 		{"storage.app_id", cfg.Storage.AppID},
 		{"storage.app_key", cfg.Storage.AppKey},
 	}
@@ -164,9 +175,6 @@ func (cfg dataAccessConfig) validate() error {
 		if strings.TrimSpace(field.value) == "" {
 			return fmt.Errorf("%s is required", field.name)
 		}
-	}
-	if _, err := validateDataGatewayTarget(cfg.Gateway.Target); err != nil {
-		return fmt.Errorf("gateway.target %w", err)
 	}
 	if len(cfg.DataTypes) == 0 {
 		return fmt.Errorf("data_types is required")

@@ -91,7 +91,6 @@ message RecordKey {
 message TimeSeriesRow {
   TimeSeriesKey key = 1;
   repeated FieldValue fields = 2;
-  map<string, string> attributes = 3;
 }
 
 message RecordRow {
@@ -100,46 +99,51 @@ message RecordRow {
   map<string, string> attributes = 3;
 }
 
-// Time-series range reads use selectors and exact reads use keys; exact reads
-// delegate to PrimaryStore.ReadFields. All writes use RowFieldUpsert.
+// ReadTimeSeriesRowsReq 读取时序事实，由 DataNode（Pebble）回答，所有调用方的结果一致。
+// 两种形态二选一：time_range（时间区间，左闭右开）或 latest_per_series（每个序列最近 N 根）。
+// 不带 selector 表示数据集的全部标的。精确键读取用 PrimaryStore.ReadRows。
+// 分页只用 page.size 与 page.cursor（顺序翻页，不能跳页）。
 message ReadTimeSeriesRowsReq {
   common.AuthInfo auth_info = 1;
-  repeated TimeSeriesSelector selectors = 2;
-  TimeRange time_range = 3;
-  SortOrder order = 4;
+  string space_id = 2;
+  string dataset_id = 3;
+  // selectors 最多 100 个；每个带 subject_id 与 freq，series_tag 可选（不带表示该标的全部序列）。
+  repeated TimeSeriesSelector selectors = 4;
+  // column_names 必填，返回这些列的值。
   repeated string column_names = 5;
-  common.Page page = 6;
-  string space_id = 7;
-  string dataset_id = 8;
-  // keys are exact PrimaryStore point reads. Range reads use selectors.
-  repeated TimeSeriesKey keys = 9;
-  // after_key is an opaque RowKey cursor used by internal history backfills.
-  // It keeps paging streaming and avoids rescanning all earlier rows.
-  bytes after_key = 10;
+  // time_range 左闭右开，起止都必须给出。
+  TimeRange time_range = 6;
+  // latest_per_series 为 1–10000 时，返回每个序列最近 N 根（每个序列内从新到旧，序列按 subject_id 升序分组）。
+  uint32 latest_per_series = 7;
+  common.Page page = 8;
+}
+
+// CountTimeSeriesRowsReq 按标的统计时间范围内已存在的行数，不回传行：同一时间点有多个 series_tag 只计一次。
+// Collector 的完整性检查先用它比对“应有根数”，只有根数不够的标的才读行定位缺口，读取量随缺口而不是随标的数增长。
+// 由 DataNode 回答。
+message CountTimeSeriesRowsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  // selectors 需要 subject_id 与 freq，同一请求属于同一数据集。
+  repeated TimeSeriesSelector selectors = 4;
+  TimeRange time_range = 5;
+}
+
+message SubjectRowCount {
+  string subject_id = 1;
+  uint32 rows = 2;
+}
+
+message CountTimeSeriesRowsRsp {
+  common.RetInfo ret_info = 1;
+  // counts 只包含有行的标的；没有出现的标的根数为 0。
+  repeated SubjectRowCount counts = 2;
 }
 
 message ReadTimeSeriesRowsRsp {
   common.RetInfo ret_info = 1;
   repeated TimeSeriesRow rows = 2;
-  common.PageResult page_result = 3;
-  string served_indexed_from = 4;
-  string served_indexed_to = 5;
-  bool complete = 6;
-}
-
-message ReadRecordRowsReq {
-  common.AuthInfo auth_info = 1;
-  repeated RecordKey keys = 2;
-  VersionRange version_range = 3;
-  SortOrder order = 4;
-  repeated string column_names = 5;
-  common.Page page = 6;
-  string space_id = 7;
-  string dataset_id = 8;
-}
-
-message ReadRecordRowsRsp {
-  common.RetInfo ret_info = 1;
-  repeated RecordRow rows = 2;
+  // page_result.next_cursor 非空表示还有下一页，原样放进下一次请求的 page.cursor。
   common.PageResult page_result = 3;
 }

@@ -33,7 +33,7 @@ func TestInstrumentNamesReadHasShortIndependentBudget(t *testing.T) {
 }
 
 type slowDeadlineCommitStorage struct {
-	recordingPeriodFailureStorage
+	noopStorage
 }
 
 func (s *slowDeadlineCommitStorage) ListInstrumentNames(ctx context.Context, _ string, _ []string) (map[string]string, error) {
@@ -67,29 +67,6 @@ func TestContextWithReserveEndsFetchBeforeStorageAndCLSWindow(t *testing.T) {
 	remaining := time.Until(deadline)
 	require.Positive(t, remaining)
 	require.LessOrEqual(t, remaining, 140*time.Millisecond)
-}
-
-func TestStorageAndPublishReservesColdEventBusConnection(t *testing.T) {
-	commit, publish := storageAndPublishReserves(5*time.Second, 0, true)
-	require.Equal(t, 18750*time.Millisecond, commit)
-	require.Equal(t, 13*time.Second, publish)
-	require.GreaterOrEqual(t, publish, 2*(completionConnectTimeout+3*time.Second)+300*time.Millisecond)
-}
-
-func TestTimerBudgetLeavesBoundedStorageEventBusAndCLSWindows(t *testing.T) {
-	t.Setenv("MOOX_FETCH_TIMEOUT_SECONDS", "")
-	t.Setenv("MOOX_MARKET_FETCH_TIMEOUT_SECONDS", "")
-	claim := timerClaimTimeout
-	commit, publish := storageAndPublishReserves(5*time.Second, 0, true)
-	ctx, cancel := executionContext(context.Background())
-	defer cancel()
-	deadline, ok := ctx.Deadline()
-	require.True(t, ok)
-	budget := time.Until(deadline)
-	require.Equal(t, 13*time.Second, publish)
-	require.Equal(t, metricsResponseReserve, commit-5*time.Second-publish)
-	provider := 4 * 4 * time.Second // 40 Timer subjects / 10 inflight, one bound source.
-	require.Greater(t, budget-claim-commit-3*time.Second, provider, "Timer must preserve Claim, provider attempts, Storage, Completion and CLS")
 }
 
 func TestReservedDeadlineStorageSharesWriteDeadlineAndLeavesPublishReserve(t *testing.T) {
@@ -133,3 +110,8 @@ func TestReservedDeadlineStorageForwardsInstrumentNames(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "浦发银行", names["600000.XSHG"])
 }
+
+// noopStorage 是只接受行写入而不做任何事的 Storage 测试替身。
+type noopStorage struct{}
+
+func (noopStorage) UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error { return nil }

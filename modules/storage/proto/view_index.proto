@@ -20,6 +20,8 @@ message ViewIndexSchema {
   string view_schema_hash = 6;
   // dataset_id 是该物理索引所属的唯一数据集。
   string dataset_id = 7;
+  // rows_per_series 是建立索引时每个序列保留的最近行数，0 表示未知；不参与 schema 哈希。
+  uint64 rows_per_series = 8;
 }
 
 enum ViewIndexRowWriteOperation {

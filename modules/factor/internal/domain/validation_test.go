@@ -1,52 +1,43 @@
 package domain
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestNormalizeFactorDefinitionCanonicalizesGenericContract(t *testing.T) {
-	got, err := NormalizeFactorDefinition(FactorDef{FactorType: "timeseries",
-		FactorID: " excess-return ", Name: " ExcessReturn ",
-		SourceCode:      " def compute(df, params, context): return {} ",
-		InputColumns:    []string{" benchmark_return ", "nav", "nav"},
-		Outputs:         []string{"rolling_rank", "excess_return"},
-		ParamsJSON:      ` { "window": 20 } `,
-		LookbackPeriods: 20,
+func TestNormalizeFactorDefinitionDerivesContract(t *testing.T) {
+	got, err := NormalizeFactorDefinition(FactorDef{
+		FactorID: " excess_return ", Name: " 超额收益 ",
+		Spec: "\n\nparams: {window: [5, 20]}\noutputs:\n  er_{window}: ts_mean(nav - benchmark_return, window)\n\n",
 	})
 	require.NoError(t, err)
-	require.Equal(t, "excess-return", got.FactorID)
-	require.Equal(t, "ExcessReturn", got.Name)
+	require.Equal(t, "excess_return", got.FactorID)
+	require.Equal(t, "超额收益", got.Name)
+	require.True(t, strings.HasSuffix(got.Spec, "\n") && !strings.HasPrefix(got.Spec, "\n"), "去掉首尾空白后补一个换行")
+	require.Equal(t, SpecHash(got.Spec), got.SpecHash)
+	require.Equal(t, FactorTypeTimeSeries, got.FactorType)
 	require.Equal(t, []string{"benchmark_return", "nav"}, got.InputColumns)
-	require.Equal(t, []string{"excess_return", "rolling_rank"}, got.Outputs)
-	require.Equal(t, `{"window":20}`, got.ParamsJSON)
-	require.Equal(t, FactorStatusDisabled, got.Status)
+	require.Equal(t, []string{"er_5", "er_20"}, got.Outputs)
+	require.Equal(t, 20, got.LookbackPeriods)
+	require.NotNil(t, got.Compiled())
 }
 
 func TestNormalizeFactorDefinitionRejectsInvalidValues(t *testing.T) {
-	valid := FactorDef{FactorType: "timeseries",
-		FactorID: "f", Name: "F", SourceCode: "x",
-		InputColumns: []string{"close"}, Outputs: []string{"value"},
-		ParamsJSON: `{}`, LookbackPeriods: 1,
-	}
+	valid := FactorDef{FactorID: "f", Name: "F", Spec: "outputs: {value: close}"}
 	tests := map[string]func(*FactorDef){
-		"empty inputs":      func(f *FactorDef) { f.InputColumns = nil },
-		"empty outputs":     func(f *FactorDef) { f.Outputs = nil },
-		"reserved input":    func(f *FactorDef) { f.InputColumns = []string{"data_time"} },
-		"reserved output":   func(f *FactorDef) { f.Outputs = []string{"data_time"} },
-		"tag input":         func(f *FactorDef) { f.InputColumns = []string{"series_tag"} },
-		"tag output":        func(f *FactorDef) { f.Outputs = []string{"series_tag"} },
-		"blank input item":  func(f *FactorDef) { f.InputColumns = []string{"close", " "} },
-		"blank output item": func(f *FactorDef) { f.Outputs = []string{"value", " "} },
-		"invalid lookback":  func(f *FactorDef) { f.LookbackPeriods = 0 },
-		"invalid json":      func(f *FactorDef) { f.ParamsJSON = `{"window":` },
-		"array params":      func(f *FactorDef) { f.ParamsJSON = `[]` },
-		"null params":       func(f *FactorDef) { f.ParamsJSON = `null` },
-		"string params":     func(f *FactorDef) { f.ParamsJSON = `"x"` },
-		"number params":     func(f *FactorDef) { f.ParamsJSON = `1` },
-		"trailing json":     func(f *FactorDef) { f.ParamsJSON = `{} {}` },
-		"invalid status":    func(f *FactorDef) { f.Status = "bad" },
+		"empty id":           func(f *FactorDef) { f.FactorID = " " },
+		"bad id":             func(f *FactorDef) { f.FactorID = "my-factor" },
+		"empty name":         func(f *FactorDef) { f.Name = "" },
+		"long name":          func(f *FactorDef) { f.Name = strings.Repeat("名", 65) },
+		"control in name":    func(f *FactorDef) { f.Name = "a\tb" },
+		"empty spec":         func(f *FactorDef) { f.Spec = " \n" },
+		"syntax error":       func(f *FactorDef) { f.Spec = "outputs: {value: close +}" },
+		"unknown function":   func(f *FactorDef) { f.Spec = "outputs: {value: nope(close)}" },
+		"reserved output":    func(f *FactorDef) { f.Spec = "outputs: {data_time: close}" },
+		"partial timeseries": func(f *FactorDef) { f.AllowPartialUniverse = true },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -56,14 +47,27 @@ func TestNormalizeFactorDefinitionRejectsInvalidValues(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+	cross := valid
+	cross.Spec, cross.AllowPartialUniverse = "outputs: {value: cs_rank(close)}", true
+	got, err := NormalizeFactorDefinition(cross)
+	require.NoError(t, err)
+	require.Equal(t, FactorTypeCrossSection, got.FactorType)
 }
 
-func TestNormalizeFactorDefinitionDefaultsEmptyParamsObject(t *testing.T) {
-	got, err := NormalizeFactorDefinition(FactorDef{FactorType: "timeseries",
-		FactorID: "f", Name: "F", SourceCode: "x",
-		InputColumns: []string{"close"}, Outputs: []string{"value"},
-		LookbackPeriods: 1,
-	})
+func TestValidateDefinitionRequiresMatchingSpecHash(t *testing.T) {
+	def, err := NormalizeFactorDefinition(FactorDef{FactorID: "f", Name: "F", Spec: "outputs: {value: close}"})
 	require.NoError(t, err)
-	require.Equal(t, `{}`, got.ParamsJSON)
+	_, err = ValidateDefinition(def)
+	require.NoError(t, err)
+	def.SpecHash = "sha256:other"
+	_, err = ValidateDefinition(def)
+	require.ErrorContains(t, err, "spec_hash")
+}
+
+func TestFactorDefCarriesNoStatusOrSet(t *testing.T) {
+	typeOf := reflect.TypeOf(FactorDef{})
+	for _, name := range []string{"Status", "SetID", "SourceCode", "ParamsJSON"} {
+		_, has := typeOf.FieldByName(name)
+		require.False(t, has, name)
+	}
 }

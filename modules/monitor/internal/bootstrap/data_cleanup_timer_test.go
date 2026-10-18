@@ -28,9 +28,19 @@ func TestRunMonitorDataCleanupAttemptsEveryStore(t *testing.T) {
 			calls = append(calls, "dedupe")
 			return nil
 		},
+		pruneSeries: func(context.Context, time.Time) error {
+			calls = append(calls, "series")
+			return nil
+		},
+		pruneArrivals: func(_ context.Context, cutoff time.Time) error {
+			calls = append(calls, "arrivals")
+			// 到达记录固定保留 7 天，不跟检查结果的保留天数走。
+			assert.Equal(t, time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), cutoff)
+			return nil
+		},
 	})
 	require.ErrorIs(t, err, wantErr)
-	assert.Equal(t, []string{"results", "alerts", "dedupe"}, calls)
+	assert.Equal(t, []string{"results", "alerts", "dedupe", "series", "arrivals"}, calls)
 }
 
 func TestRunMonitorDataCleanupAllowsUnavailableStores(t *testing.T) {

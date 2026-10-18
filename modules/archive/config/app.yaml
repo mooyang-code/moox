@@ -1,33 +1,38 @@
-archive:
-  root_dir: ../data/archive
-  state_dir: ../data/archive-state
-  device_id: parquet-local
-  sources:
-    stockcn: {datasets: [dataset_stockcn_equity_kline, dataset_stockcn_index_kline, dataset_stockcn_bond_kline]}
-    stockus: {datasets: [equity_kline, etf_kline, index_kline]}
-    crypto: {datasets: [dataset_spot_kline_1h, dataset_perpetual_kline_1h]}
-  eventbus:
-    urls: [nats://127.0.0.1:4222]
-    credential_file: ~/.config/moox/eventbus/archive-eventbus.yaml
-    fetch_batch: 128
-    fetch_max_wait: 1s
-    dedupe_retention: 168h
-  materialize:
-    pending_rows: 10000
-    workers: 2
-    row_group_rows: 65536
-    shutdown_timeout: 2m
-  storage_rpc:
-    gateway_target: ip://127.0.0.1:11003
-    gateway_node_id: ""
-    key_id: archive
-    hmac_key_file: ""
-  cos:
-    enabled: false
-    region: ""
-    bucket: ""
-    prefix: moox/archive
-    sync_open_partitions: false
-    workers: 2
-health:
-  addr: 127.0.0.1:11416
+database:
+  path: ./data/archive-mgr/archive.db
+
+gateway_client:
+  caller: archive-mgr
+  key_id: ""
+  key_file: ../../secrets/caller-archive-mgr.key
+
+run:
+  lease_ttl: 10m
+
+worker:
+  # 旧 worker 停止心跳多久之后新 worker 才能接管。
+  takeover_wait: 45s
+
+schedule:
+  min_interval: 5m
+  min_lookback: 15m
+
+retention:
+  scheduled_success: 720h
+  other: 2160h
+
+# worker 暂存区保留最近多久的数据，之后分区定稿。
+staging_retention: 72h
+
+spaces:
+  crypto:
+    tz: UTC
+  stockcn:
+    tz: Asia/Shanghai
+    local_close: "15:00"
+  stockhk:
+    tz: Asia/Hong_Kong
+    local_close: "16:10"
+  stockus:
+    tz: America/New_York
+    local_close: "16:00"

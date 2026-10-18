@@ -1,0 +1,82 @@
+# 控制台服务配置 - 合并了认证服务配置
+# 配置文件包含：网关服务、认证服务、限流配置
+
+# 缓存配置（认证服务使用BadgerDB）
+cache:
+  data_dir: "./data/badger"   # BadgerDB数据存储目录
+
+# JWT配置（认证服务使用）
+jwt:
+  # JWT 密钥由 MOOX_ADMIN_JWT_SECRET_KEY 注入，至少 32 个字符。
+  secret_key: ""
+  access_expired: "24h"       # 访问令牌过期时间
+
+# 安全配置（认证服务使用）
+security:
+  salt_expired: "5m"          # 登录盐值过期时间
+  max_login_attempt: 5        # 最大登录尝试次数
+  lock_duration: "15m"        # 账户锁定时间
+  session_ttl: "24h"
+  request_clock_skew: "60s"
+  nonce_ttl: "2m"
+  raw_ticket_ttl: "60s"
+
+# 控制台服务配置
+console:
+  # 是否开启调试模式
+  debug: true
+
+  # 不需要鉴权的接口列表
+  no_auth_methods:
+    - "/api/admin/auth/GetLoginSalt"
+    - "/api/admin/auth/Login"
+  # /api/admin/{console_name}/{method} 从共享 servicecatalog 解析服务和 console ACL。
+  # Admin 自身服务进程内调用；其余服务由 gatewayclient 透传原始 JSON。
+  # 目录直接读取 Admin 的主机/部署表，启动不依赖本机网关。
+  # console 签名密钥读取已初始化的加密数据库，不在此配置密钥。
+  # 私有 CA 使用 MOOX_ADMIN_PKI_DIR/ca.crt；默认位于 Admin 主密钥同目录的 pki/。
+
+# CORS 跨域配置（生产环境请配置具体前端域名，避免使用 *）
+cors:
+  allowed_origins:
+    - "*"
+
+# 限流配置
+rate_limit:
+  # 默认限流配置
+  default_qps: 2000      # 默认QPS限制
+  default_burst: 5000    # 默认突发流量
+
+  # 按接口配置限流
+  method_limits:
+    "/api/admin/auth/Login":
+      qps: 1
+      burst: 2
+    "/api/admin/auth/GetLoginSalt":
+      qps: 2
+      burst: 5
+    "/api/admin/auth/GetUserInfo":
+      qps: 2
+      burst: 5
+
+# 配置说明:
+# 时间格式支持: ns, us, ms, s, m, h
+# 例如: "30s" (30秒), "5m" (5分钟), "2h" (2小时), "24h" (24小时)
+#
+# 数据库说明:
+# admin 当前只使用 SQLite，数据库路径由 app.yaml 的 database.path 配置。
+# console.yaml 只保留控制台、认证缓存、JWT、CORS 与限流配置。
+#
+# 缓存目录:
+# 确保应用有权限在指定目录创建和写入文件
+# 数据库文件和缓存目录会自动创建
+#
+# 安全建议:
+# 1. JWT密钥请使用强随机字符串，至少32字符
+# 2. 生产环境建议缩短访问令牌过期时间
+# 3. 根据业务需求调整登录尝试次数和锁定时间
+#
+# 快速开始:
+# 1. 修改JWT密钥
+# 2. 确保 ./data 目录有写入权限
+# 3. 启动服务即可使用

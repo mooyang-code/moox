@@ -22,17 +22,13 @@ type PrimaryStoreService interface {
 	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
 	UpsertFields(ctx context.Context, req *PrimaryUpsertFieldsReq) (*PrimaryUpsertFieldsRsp, error)
 
-	EnsureDatasetPeriod(ctx context.Context, req *PrimaryEnsureDatasetPeriodReq) (*PrimaryEnsureDatasetPeriodRsp, error)
-
-	GetDatasetPeriodStatus(ctx context.Context, req *PrimaryGetDatasetPeriodStatusReq) (*PrimaryGetDatasetPeriodStatusRsp, error)
+	RegisterSeriesSnapshot(ctx context.Context, req *PrimaryRegisterSeriesSnapshotReq) (*PrimaryRegisterSeriesSnapshotRsp, error)
 
 	CommitTimeSeriesBatch(ctx context.Context, req *PrimaryCommitTimeSeriesBatchReq) (*PrimaryCommitTimeSeriesBatchRsp, error)
 
-	RecordDatasetPeriodFailures(ctx context.Context, req *PrimaryRecordDatasetPeriodFailuresReq) (*PrimaryRecordDatasetPeriodFailuresRsp, error)
-
 	WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq) (*PrimaryWriteFactorRowsRsp, error)
 
-	ReadFields(ctx context.Context, req *PrimaryReadFieldsReq) (*PrimaryReadFieldsRsp, error)
+	ReadRows(ctx context.Context, req *PrimaryReadRowsReq) (*PrimaryReadRowsRsp, error)
 
 	DeleteDatasetRows(ctx context.Context, req *PrimaryDeleteDatasetRowsReq) (*PrimaryDeleteDatasetRowsRsp, error)
 
@@ -40,7 +36,7 @@ type PrimaryStoreService interface {
 
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
 
-	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error)
+	CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesRowsReq) (*CountTimeSeriesRowsRsp, error)
 
 	ReportCollectorPeriodCompleted(ctx context.Context, req *ReportCollectorPeriodCompletedReq) (*ReportCollectorPeriodCompletedRsp, error)
 
@@ -71,32 +67,14 @@ func PrimaryStoreService_UpsertFields_Handler(svr interface{}, ctx context.Conte
 	return rsp, nil
 }
 
-func PrimaryStoreService_EnsureDatasetPeriod_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PrimaryEnsureDatasetPeriodReq{}
+func PrimaryStoreService_RegisterSeriesSnapshot_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PrimaryRegisterSeriesSnapshotReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).EnsureDatasetPeriod(ctx, reqbody.(*PrimaryEnsureDatasetPeriodReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func PrimaryStoreService_GetDatasetPeriodStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PrimaryGetDatasetPeriodStatusReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).GetDatasetPeriodStatus(ctx, reqbody.(*PrimaryGetDatasetPeriodStatusReq))
+		return svr.(PrimaryStoreService).RegisterSeriesSnapshot(ctx, reqbody.(*PrimaryRegisterSeriesSnapshotReq))
 	}
 
 	var rsp interface{}
@@ -125,24 +103,6 @@ func PrimaryStoreService_CommitTimeSeriesBatch_Handler(svr interface{}, ctx cont
 	return rsp, nil
 }
 
-func PrimaryStoreService_RecordDatasetPeriodFailures_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PrimaryRecordDatasetPeriodFailuresReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).RecordDatasetPeriodFailures(ctx, reqbody.(*PrimaryRecordDatasetPeriodFailuresReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func PrimaryStoreService_WriteFactorRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &PrimaryWriteFactorRowsReq{}
 	filters, err := f(req)
@@ -161,14 +121,14 @@ func PrimaryStoreService_WriteFactorRows_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
-func PrimaryStoreService_ReadFields_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &PrimaryReadFieldsReq{}
+func PrimaryStoreService_ReadRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PrimaryReadRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).ReadFields(ctx, reqbody.(*PrimaryReadFieldsReq))
+		return svr.(PrimaryStoreService).ReadRows(ctx, reqbody.(*PrimaryReadRowsReq))
 	}
 
 	var rsp interface{}
@@ -233,14 +193,14 @@ func PrimaryStoreService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context
 	return rsp, nil
 }
 
-func PrimaryStoreService_ReadRecordRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ReadRecordRowsReq{}
+func PrimaryStoreService_CountTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CountTimeSeriesRowsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(PrimaryStoreService).ReadRecordRows(ctx, reqbody.(*ReadRecordRowsReq))
+		return svr.(PrimaryStoreService).CountTimeSeriesRows(ctx, reqbody.(*CountTimeSeriesRowsReq))
 	}
 
 	var rsp interface{}
@@ -351,28 +311,20 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_UpsertFields_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.PrimaryStore/EnsureDatasetPeriod",
-			Func: PrimaryStoreService_EnsureDatasetPeriod_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.PrimaryStore/GetDatasetPeriodStatus",
-			Func: PrimaryStoreService_GetDatasetPeriodStatus_Handler,
+			Name: "/trpc.moox.storage.PrimaryStore/RegisterSeriesSnapshot",
+			Func: PrimaryStoreService_RegisterSeriesSnapshot_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch",
 			Func: PrimaryStoreService_CommitTimeSeriesBatch_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.PrimaryStore/RecordDatasetPeriodFailures",
-			Func: PrimaryStoreService_RecordDatasetPeriodFailures_Handler,
-		},
-		{
 			Name: "/trpc.moox.storage.PrimaryStore/WriteFactorRows",
 			Func: PrimaryStoreService_WriteFactorRows_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.PrimaryStore/ReadFields",
-			Func: PrimaryStoreService_ReadFields_Handler,
+			Name: "/trpc.moox.storage.PrimaryStore/ReadRows",
+			Func: PrimaryStoreService_ReadRows_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.PrimaryStore/DeleteDatasetRows",
@@ -387,8 +339,8 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_ReadTimeSeriesRows_Handler,
 		},
 		{
-			Name: "/trpc.moox.storage.PrimaryStore/ReadRecordRows",
-			Func: PrimaryStoreService_ReadRecordRows_Handler,
+			Name: "/trpc.moox.storage.PrimaryStore/CountTimeSeriesRows",
+			Func: PrimaryStoreService_CountTimeSeriesRows_Handler,
 		},
 		{
 			Name: "/trpc.moox.storage.PrimaryStore/ReportCollectorPeriodCompleted",
@@ -428,23 +380,17 @@ type UnimplementedPrimaryStore struct{}
 func (s *UnimplementedPrimaryStore) UpsertFields(ctx context.Context, req *PrimaryUpsertFieldsReq) (*PrimaryUpsertFieldsRsp, error) {
 	return nil, errors.New("rpc UpsertFields of service PrimaryStore is not implemented")
 }
-func (s *UnimplementedPrimaryStore) EnsureDatasetPeriod(ctx context.Context, req *PrimaryEnsureDatasetPeriodReq) (*PrimaryEnsureDatasetPeriodRsp, error) {
-	return nil, errors.New("rpc EnsureDatasetPeriod of service PrimaryStore is not implemented")
-}
-func (s *UnimplementedPrimaryStore) GetDatasetPeriodStatus(ctx context.Context, req *PrimaryGetDatasetPeriodStatusReq) (*PrimaryGetDatasetPeriodStatusRsp, error) {
-	return nil, errors.New("rpc GetDatasetPeriodStatus of service PrimaryStore is not implemented")
+func (s *UnimplementedPrimaryStore) RegisterSeriesSnapshot(ctx context.Context, req *PrimaryRegisterSeriesSnapshotReq) (*PrimaryRegisterSeriesSnapshotRsp, error) {
+	return nil, errors.New("rpc RegisterSeriesSnapshot of service PrimaryStore is not implemented")
 }
 func (s *UnimplementedPrimaryStore) CommitTimeSeriesBatch(ctx context.Context, req *PrimaryCommitTimeSeriesBatchReq) (*PrimaryCommitTimeSeriesBatchRsp, error) {
 	return nil, errors.New("rpc CommitTimeSeriesBatch of service PrimaryStore is not implemented")
 }
-func (s *UnimplementedPrimaryStore) RecordDatasetPeriodFailures(ctx context.Context, req *PrimaryRecordDatasetPeriodFailuresReq) (*PrimaryRecordDatasetPeriodFailuresRsp, error) {
-	return nil, errors.New("rpc RecordDatasetPeriodFailures of service PrimaryStore is not implemented")
-}
 func (s *UnimplementedPrimaryStore) WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq) (*PrimaryWriteFactorRowsRsp, error) {
 	return nil, errors.New("rpc WriteFactorRows of service PrimaryStore is not implemented")
 }
-func (s *UnimplementedPrimaryStore) ReadFields(ctx context.Context, req *PrimaryReadFieldsReq) (*PrimaryReadFieldsRsp, error) {
-	return nil, errors.New("rpc ReadFields of service PrimaryStore is not implemented")
+func (s *UnimplementedPrimaryStore) ReadRows(ctx context.Context, req *PrimaryReadRowsReq) (*PrimaryReadRowsRsp, error) {
+	return nil, errors.New("rpc ReadRows of service PrimaryStore is not implemented")
 }
 func (s *UnimplementedPrimaryStore) DeleteDatasetRows(ctx context.Context, req *PrimaryDeleteDatasetRowsReq) (*PrimaryDeleteDatasetRowsRsp, error) {
 	return nil, errors.New("rpc DeleteDatasetRows of service PrimaryStore is not implemented")
@@ -455,8 +401,8 @@ func (s *UnimplementedPrimaryStore) RestoreDatasetRows(ctx context.Context, req 
 func (s *UnimplementedPrimaryStore) ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error) {
 	return nil, errors.New("rpc ReadTimeSeriesRows of service PrimaryStore is not implemented")
 }
-func (s *UnimplementedPrimaryStore) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq) (*ReadRecordRowsRsp, error) {
-	return nil, errors.New("rpc ReadRecordRows of service PrimaryStore is not implemented")
+func (s *UnimplementedPrimaryStore) CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesRowsReq) (*CountTimeSeriesRowsRsp, error) {
+	return nil, errors.New("rpc CountTimeSeriesRows of service PrimaryStore is not implemented")
 }
 func (s *UnimplementedPrimaryStore) ReportCollectorPeriodCompleted(ctx context.Context, req *ReportCollectorPeriodCompletedReq) (*ReportCollectorPeriodCompletedRsp, error) {
 	return nil, errors.New("rpc ReportCollectorPeriodCompleted of service PrimaryStore is not implemented")
@@ -485,17 +431,13 @@ type PrimaryStoreClientProxy interface {
 	// UpsertFields UpsertFields applies partial updates; omitted fields and attributes are retained.
 	UpsertFields(ctx context.Context, req *PrimaryUpsertFieldsReq, opts ...client.Option) (rsp *PrimaryUpsertFieldsRsp, err error)
 
-	EnsureDatasetPeriod(ctx context.Context, req *PrimaryEnsureDatasetPeriodReq, opts ...client.Option) (rsp *PrimaryEnsureDatasetPeriodRsp, err error)
-
-	GetDatasetPeriodStatus(ctx context.Context, req *PrimaryGetDatasetPeriodStatusReq, opts ...client.Option) (rsp *PrimaryGetDatasetPeriodStatusRsp, err error)
+	RegisterSeriesSnapshot(ctx context.Context, req *PrimaryRegisterSeriesSnapshotReq, opts ...client.Option) (rsp *PrimaryRegisterSeriesSnapshotRsp, err error)
 
 	CommitTimeSeriesBatch(ctx context.Context, req *PrimaryCommitTimeSeriesBatchReq, opts ...client.Option) (rsp *PrimaryCommitTimeSeriesBatchRsp, err error)
 
-	RecordDatasetPeriodFailures(ctx context.Context, req *PrimaryRecordDatasetPeriodFailuresReq, opts ...client.Option) (rsp *PrimaryRecordDatasetPeriodFailuresRsp, err error)
-
 	WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq, opts ...client.Option) (rsp *PrimaryWriteFactorRowsRsp, err error)
 
-	ReadFields(ctx context.Context, req *PrimaryReadFieldsReq, opts ...client.Option) (rsp *PrimaryReadFieldsRsp, err error)
+	ReadRows(ctx context.Context, req *PrimaryReadRowsReq, opts ...client.Option) (rsp *PrimaryReadRowsRsp, err error)
 
 	DeleteDatasetRows(ctx context.Context, req *PrimaryDeleteDatasetRowsReq, opts ...client.Option) (rsp *PrimaryDeleteDatasetRowsRsp, err error)
 
@@ -503,7 +445,7 @@ type PrimaryStoreClientProxy interface {
 
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
 
-	ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (rsp *ReadRecordRowsRsp, err error)
+	CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesRowsReq, opts ...client.Option) (rsp *CountTimeSeriesRowsRsp, err error)
 
 	ReportCollectorPeriodCompleted(ctx context.Context, req *ReportCollectorPeriodCompletedReq, opts ...client.Option) (rsp *ReportCollectorPeriodCompletedRsp, err error)
 
@@ -545,40 +487,20 @@ func (c *PrimaryStoreClientProxyImpl) UpsertFields(ctx context.Context, req *Pri
 	return rsp, nil
 }
 
-func (c *PrimaryStoreClientProxyImpl) EnsureDatasetPeriod(ctx context.Context, req *PrimaryEnsureDatasetPeriodReq, opts ...client.Option) (*PrimaryEnsureDatasetPeriodRsp, error) {
+func (c *PrimaryStoreClientProxyImpl) RegisterSeriesSnapshot(ctx context.Context, req *PrimaryRegisterSeriesSnapshotReq, opts ...client.Option) (*PrimaryRegisterSeriesSnapshotRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/EnsureDatasetPeriod")
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/RegisterSeriesSnapshot")
 	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("PrimaryStore")
-	msg.WithCalleeMethod("EnsureDatasetPeriod")
+	msg.WithCalleeMethod("RegisterSeriesSnapshot")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &PrimaryEnsureDatasetPeriodRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *PrimaryStoreClientProxyImpl) GetDatasetPeriodStatus(ctx context.Context, req *PrimaryGetDatasetPeriodStatusReq, opts ...client.Option) (*PrimaryGetDatasetPeriodStatusRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/GetDatasetPeriodStatus")
-	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStore")
-	msg.WithCalleeMethod("GetDatasetPeriodStatus")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &PrimaryGetDatasetPeriodStatusRsp{}
+	rsp := &PrimaryRegisterSeriesSnapshotRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -605,26 +527,6 @@ func (c *PrimaryStoreClientProxyImpl) CommitTimeSeriesBatch(ctx context.Context,
 	return rsp, nil
 }
 
-func (c *PrimaryStoreClientProxyImpl) RecordDatasetPeriodFailures(ctx context.Context, req *PrimaryRecordDatasetPeriodFailuresReq, opts ...client.Option) (*PrimaryRecordDatasetPeriodFailuresRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/RecordDatasetPeriodFailures")
-	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("PrimaryStore")
-	msg.WithCalleeMethod("RecordDatasetPeriodFailures")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &PrimaryRecordDatasetPeriodFailuresRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *PrimaryStoreClientProxyImpl) WriteFactorRows(ctx context.Context, req *PrimaryWriteFactorRowsReq, opts ...client.Option) (*PrimaryWriteFactorRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -645,20 +547,20 @@ func (c *PrimaryStoreClientProxyImpl) WriteFactorRows(ctx context.Context, req *
 	return rsp, nil
 }
 
-func (c *PrimaryStoreClientProxyImpl) ReadFields(ctx context.Context, req *PrimaryReadFieldsReq, opts ...client.Option) (*PrimaryReadFieldsRsp, error) {
+func (c *PrimaryStoreClientProxyImpl) ReadRows(ctx context.Context, req *PrimaryReadRowsReq, opts ...client.Option) (*PrimaryReadRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ReadFields")
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ReadRows")
 	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("PrimaryStore")
-	msg.WithCalleeMethod("ReadFields")
+	msg.WithCalleeMethod("ReadRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &PrimaryReadFieldsRsp{}
+	rsp := &PrimaryReadRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -725,20 +627,20 @@ func (c *PrimaryStoreClientProxyImpl) ReadTimeSeriesRows(ctx context.Context, re
 	return rsp, nil
 }
 
-func (c *PrimaryStoreClientProxyImpl) ReadRecordRows(ctx context.Context, req *ReadRecordRowsReq, opts ...client.Option) (*ReadRecordRowsRsp, error) {
+func (c *PrimaryStoreClientProxyImpl) CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesRowsReq, opts ...client.Option) (*CountTimeSeriesRowsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ReadRecordRows")
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/CountTimeSeriesRows")
 	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("storage")
 	msg.WithCalleeService("PrimaryStore")
-	msg.WithCalleeMethod("ReadRecordRows")
+	msg.WithCalleeMethod("CountTimeSeriesRows")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ReadRecordRowsRsp{}
+	rsp := &CountTimeSeriesRowsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

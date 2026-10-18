@@ -8,7 +8,6 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
@@ -31,6 +30,9 @@ type MetadataClient interface {
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
 	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq, ...client.Option) (*storagepb.ActivateDatasetRsp, error)
 	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
+	ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
+	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq, ...client.Option) (*storagepb.UpdateDatasetRsp, error)
+	ListDatasetSubjects(context.Context, *storagepb.ListDatasetSubjectsReq, ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error)
 }
 
 type Client struct {
@@ -41,11 +43,6 @@ type Client struct {
 
 func NewClient(primary PrimaryStoreClient, metadata MetadataClient, auth *commonpb.AuthInfo) *Client {
 	return &Client{primary: primary, metadata: metadata, auth: auth}
-}
-
-func NewClientWithCredentials(storageTarget, targetNode string, credentials gatewayauth.Credentials, auth *commonpb.AuthInfo) *Client {
-	options := gatewayauth.NewTRPCClientOptions(storageTarget, targetNode, credentials)
-	return NewClient(storagepb.NewPrimaryStoreClientProxy(options...), storagepb.NewMetadataClientProxy(options...), auth)
 }
 
 type Frame struct {
@@ -79,7 +76,10 @@ type FactorState struct {
 	FactorID       string
 	Status         string
 	FailedSubjects []string
-	SourceHash     string
+	SourceHash     string // 填因子定义的 spec_hash；Storage 协议里这个字段仍叫 source_hash
+	DefinitionHash string
+	// GapSubjects 是 FailedSubjects 中因回看窗口 K 线空洞而失败的标的（子集）。
+	GapSubjects []string
 }
 
 type Store interface {
@@ -98,6 +98,11 @@ type ReadRequest struct {
 	Start     time.Time
 	End       time.Time
 	Columns   []string
+	// PageTimeout bounds each page request separately when positive. A
+	// backfill window spans many pages over a narrow link, so a total
+	// deadline fails slow-but-progressing reads; a page deadline still
+	// catches a stalled one.
+	PageTimeout time.Duration
 }
 
 func (c *Client) primaryReady(action string) error {

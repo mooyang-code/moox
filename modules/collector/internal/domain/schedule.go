@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/frequency"
 )
 
 const day = 24 * time.Hour
@@ -15,7 +17,7 @@ const monthScheduleInterval = 31 * day
 // their actual month-boundary execution semantics.
 func ParseScheduleInterval(raw string) (time.Duration, error) {
 	raw = strings.TrimSpace(raw)
-	if raw == "1M" {
+	if parsed, err := frequency.Parse(raw); err == nil && parsed == frequency.Month1 {
 		return monthScheduleInterval, nil
 	}
 	raw = strings.ToLower(raw)
@@ -47,40 +49,6 @@ func ParseScheduleInterval(raw string) (time.Duration, error) {
 		return 0, fmt.Errorf("schedule interval must be at least 1 minute and use whole minutes")
 	}
 	return interval, nil
-}
-
-// ScheduleDecision returns the next UTC minute only when it aligns with the period.
-func ScheduleDecision(now time.Time, raw string) (time.Time, bool, error) {
-	raw = strings.TrimSpace(raw)
-	interval, err := ParseScheduleInterval(raw)
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	candidate := now.UTC().Truncate(time.Minute).Add(time.Minute)
-	if raw == "1M" {
-		if candidate.Day() != 1 || candidate.Hour() != 0 || candidate.Minute() != 0 {
-			return time.Time{}, false, nil
-		}
-		return candidate, true, nil
-	}
-	if strings.HasSuffix(strings.ToLower(raw), "w") {
-		if candidate.Weekday() != time.Monday || candidate.Hour() != 0 || candidate.Minute() != 0 {
-			return time.Time{}, false, nil
-		}
-		weeks, parseErr := strconv.Atoi(raw[:len(raw)-1])
-		if parseErr != nil || weeks <= 0 {
-			return time.Time{}, false, fmt.Errorf("schedule interval must be a positive duration")
-		}
-		anchor := time.Date(1970, time.January, 5, 0, 0, 0, 0, time.UTC)
-		if int(candidate.Sub(anchor)/(7*day))%weeks != 0 {
-			return time.Time{}, false, nil
-		}
-		return candidate, true, nil
-	}
-	if candidate.UnixNano()%interval.Nanoseconds() != 0 {
-		return time.Time{}, false, nil
-	}
-	return candidate, true, nil
 }
 
 func isPositiveInteger(raw string) bool {

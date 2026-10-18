@@ -177,6 +177,94 @@ func (a *CLSSDKAPI) CreateIndex(ctx context.Context, topicID string) (string, er
 	return stringValue(rsp.Response.RequestId), nil
 }
 
+// mergeIndexFields 把需要的键值索引字段并入规则，返回是否有改动：缺失的字段新增；已有但类型或分析开关不符的字段
+// 改成需要的定义（否则数值统计等能力静默失效）。规则里的其他索引配置原样保留。
+func mergeIndexFields(rule *cls.RuleInfo, fields []CLSIndexField) bool {
+	if rule.KeyValue == nil {
+		rule.KeyValue = &cls.RuleKeyValueInfo{CaseSensitive: common.BoolPtr(false)}
+	}
+	existing := make(map[string]*cls.KeyValueInfo, len(rule.KeyValue.KeyValues))
+	for _, item := range rule.KeyValue.KeyValues {
+		if item != nil && item.Key != nil {
+			existing[*item.Key] = item
+		}
+	}
+	changed := false
+	for _, field := range fields {
+		valueType := "text"
+		if field.Numeric {
+			valueType = "long"
+		}
+		wanted := &cls.ValueInfo{Type: common.StringPtr(valueType), Tokenizer: common.StringPtr(""), SqlFlag: common.BoolPtr(true), ContainZH: common.BoolPtr(false)}
+		current, ok := existing[field.Key]
+		if !ok {
+			item := &cls.KeyValueInfo{Key: common.StringPtr(field.Key), Value: wanted}
+			rule.KeyValue.KeyValues = append(rule.KeyValue.KeyValues, item)
+			existing[field.Key] = item
+			changed = true
+			continue
+		}
+		if current.Value == nil || stringValue(current.Value.Type) != valueType || current.Value.SqlFlag == nil || !*current.Value.SqlFlag {
+			current.Value = wanted
+			changed = true
+		}
+	}
+	return changed
+}
+
+// buildModifyIndex 由当前索引构造 ModifyIndex 请求：补齐字段，并带回读到的全部索引配置
+// （全文、键值、元字段、动态索引与内置字段开关），没有任何字段需要改动时返回 changed=false。
+// CLS 的 ModifyIndex 要求 Tag 与 DynamicIndex 非空，主题没有元字段索引时补一个占位字段（不影响检索）。
+func buildModifyIndex(topicID string, current *cls.DescribeIndexResponseParams, fields []CLSIndexField) (*cls.ModifyIndexRequest, bool) {
+	rule := current.Rule
+	if !mergeIndexFields(rule, fields) {
+		return nil, false
+	}
+	if rule.Tag == nil || len(rule.Tag.KeyValues) == 0 {
+		rule.Tag = &cls.RuleTagInfo{CaseSensitive: common.BoolPtr(false), KeyValues: []*cls.KeyValueInfo{{
+			Key:   common.StringPtr("moox_unused"),
+			Value: &cls.ValueInfo{Type: common.StringPtr("text"), Tokenizer: common.StringPtr(""), SqlFlag: common.BoolPtr(true), ContainZH: common.BoolPtr(false)},
+		}}}
+	}
+	if rule.DynamicIndex == nil {
+		rule.DynamicIndex = &cls.DynamicIndex{Status: common.BoolPtr(false)}
+	}
+	modify := cls.NewModifyIndexRequest()
+	modify.TopicId = common.StringPtr(topicID)
+	modify.Status = common.BoolPtr(true)
+	modify.Rule = rule
+	modify.IncludeInternalFields = current.IncludeInternalFields
+	modify.MetadataFlag = current.MetadataFlag
+	modify.CoverageField = current.CoverageField
+	return modify, true
+}
+
+// EnsureIndexFields 读取主题当前索引，补上缺失的键值索引字段后整体回写；已有的全文、键值、元字段索引原样保留。
+// CLS 的 ModifyIndex 要求 Tag 与 DynamicIndex 非空，所以主题没有元字段索引时补一个占位字段（不影响检索）。
+func (a *CLSSDKAPI) EnsureIndexFields(ctx context.Context, topicID string, fields []CLSIndexField) (bool, string, error) {
+	describe := cls.NewDescribeIndexRequest()
+	describe.TopicId = common.StringPtr(topicID)
+	current, err := a.client.DescribeIndexWithContext(ctx, describe)
+	if err != nil {
+		return false, "", err
+	}
+	if current == nil || current.Response == nil || current.Response.Rule == nil {
+		return false, "", fmt.Errorf("CLS DescribeIndex returned an empty response")
+	}
+	modify, changed := buildModifyIndex(topicID, current.Response, fields)
+	if !changed {
+		return false, "", nil
+	}
+	rsp, err := a.client.ModifyIndexWithContext(ctx, modify)
+	if err != nil {
+		return false, "", err
+	}
+	if rsp == nil || rsp.Response == nil {
+		return false, "", fmt.Errorf("CLS ModifyIndex returned an empty response")
+	}
+	return true, stringValue(rsp.Response.RequestId), nil
+}
+
 func stringValue(value *string) string {
 	if value == nil {
 		return ""

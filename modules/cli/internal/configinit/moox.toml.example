@@ -1,0 +1,277 @@
+[admin]
+username = "admin"
+password = ""
+
+[tencent_cloud]
+secret_id = ""
+secret_key = ""
+region = "ap-guangzhou"
+
+[eventbus]
+port = 4222
+tls_enabled = true
+
+# 只支持 all / new，默认 all。
+[observability]
+# deliver_policy = "all"
+
+# 所有运行时目录使用云磁盘 /data 下的统一根目录。
+[paths]
+deploy_root = "/data/moox"
+control_root = "/data/moox/prod"
+storage_root = "/data/moox/storage"
+
+# 每个本地 .log 文件达到上限后保留尾部并原地截断，避免 stdout/stderr
+# 或框架日志无限占用磁盘。健康检查每分钟执行一次滚动维护。
+[local_logs]
+max_size_mb = 50
+backup_count = 5
+
+# View 只按根数保留：每个时序序列保留最近 view_rows_per_series 根已完成 K 线，历史不足时用已有数据激活，
+# 后续由实时事件补齐。
+# Dataset 原始数据按 (空间, 频率) 保留：空间配置优先，没有时用 defaults；defaults 必须覆盖全部频率。
+# 取值为 <n>h、<n>d 或 forever。保留期缩短会删除数据。
+[storage_retention]
+view_rows_per_series = 5000   # 每个序列 View 保留最近 N 根；超过 ceil(1.2 × N) 根时整理
+
+# 7×24 小时交易的空间（crypto 等，以及没有单独配置的空间）
+[storage_retention.defaults]
+"30s" = "48h"
+"1m" = "7d"
+"5m" = "30d"
+"15m" = "90d"
+"30m" = "180d"
+"1h" = "365d"
+"4h" = "1095d"
+"1d" = "forever"
+"1w" = "forever"
+"1mo" = "forever"
+
+# 有交易时段的市场同样根数需要更多自然日
+[storage_retention.spaces.stockcn]
+"1m" = "45d"
+"5m" = "240d"
+"15m" = "730d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+[storage_retention.spaces.stockhk]
+"1m" = "30d"
+"5m" = "240d"
+"15m" = "730d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+[storage_retention.spaces.stockus]
+"1m" = "30d"
+"5m" = "240d"
+"15m" = "730d"
+"30m" = "forever"
+"1h" = "forever"
+"4h" = "forever"
+
+[storage_retention.spaces.mooxsys]
+"30s" = "48h"
+"1m" = "7d"
+
+# View 维护的检查节奏与单个 View 文件上限。
+[storage_view]
+maintenance_check_interval = "1m"
+capacity_check_interval = "1h"
+capacity_check_jitter = "1h"
+max_view_file_bytes = 1073741824
+
+# Collector 的旧执行明细、terminal retry 和 period snapshot 按独立期限回收。
+# 活动工作以及未获 Storage complete/degraded 确认的 K 线目标不会被删除。
+# 清理在每个周期的 maintenance_offset 处开始，且必须在下一个整点前结束
+# （offset + timeout <= interval），避免与整点的 K 线调度争用 SQLite 连接。
+[collector_retention]
+maintenance_interval = "1m"
+maintenance_offset = "35s"
+maintenance_timeout = "20s"
+max_rows_per_pass = 50000
+
+# 告警推送渠道，初始化前必填：没有推送地址时监控只展示不通知，等于没有告警。
+# channel_type 为 wecom 或 feishu，webhook_url 是对应群机器人的地址；Monitor 首次建库时据此写入。
+[notification]
+channel_type = "wecom"
+webhook_url = ""
+
+# setup init 导入因子：先按源数据集与频率建立因子集，再导入因子定义，最后把定义加入因子集并按 status 启用。
+# 定义（factors.definitions）引用 source_dir 下 YAML 因子库文件里的一个因子（factor_id + file），
+# 展示名与表达式都来自库文件，类型、输入列、输出列与回看由 FactorMgr 编译得到；定义是全局的，不含数据集、
+# 频率和状态。成员（factors.members）用 source_dataset_id + freq 指向因子集，一个定义可加入多个因子集。
+# 输出列名同时作为结果列的 display_name，例如 bias_20。
+# 关闭默认因子导入请设置 factors.enabled = false；也可以在因子库里新增定义，或复制条目改成自己的数据集与频率。
+[factors]
+enabled = false
+source_dir = "./modules/factor/factors"
+
+# 每个采集任务独占一个结果数据集，ID 由任务 ID 派生为 dataset_<task_id>
+# （见 config/setup/collection-tasks.yaml）：下面两个分别是币安现货、合约 1m 任务的结果。
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
+freq = "1m"
+subject_mode = "all"
+
+[[factors.sets]]
+space_id = "crypto"
+source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
+freq = "1m"
+subject_mode = "all"
+
+[[factors.definitions]]
+factor_id = "Bias"
+file = "xbx.yaml"
+
+[[factors.definitions]]
+factor_id = "Cci"
+file = "xbx.yaml"
+
+[[factors.definitions]]
+factor_id = "MinMax"
+file = "xbx.yaml"
+
+[[factors.definitions]]
+factor_id = "QuoteVolumeMean"
+file = "xbx.yaml"
+
+# 短时行情 SCF 按 Space 独立发布、独立消费任务。所有市场复用通用
+# market_data 包目录，但每个 Space 必须声明自己的 Market/Instrument/Source 身份。
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
+freq = "1m"
+factor_id = "Bias"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
+freq = "1m"
+factor_id = "Cci"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
+freq = "1m"
+factor_id = "MinMax"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
+freq = "1m"
+factor_id = "QuoteVolumeMean"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
+freq = "1m"
+factor_id = "Bias"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
+freq = "1m"
+factor_id = "Cci"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
+freq = "1m"
+factor_id = "MinMax"
+status = "enabled"
+
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhdg"
+freq = "1m"
+factor_id = "QuoteVolumeMean"
+status = "enabled"
+
+# SCF 定时触发采集（Timer 模式）：声明哪些空间、市场在哪些地域运行，以及这些地域的函数网络。
+# setup deploy 据此渲染 Collector 的 scf_regions / scf_markets / scf_plan；setup init 登记云账号、开通日志服务（CLS）、
+# 为每个空间上传代码包。函数的数量、标的分配与定时器由 Collector 按任务与标签成员自动创建和维护，
+# 代码包按名称取最新版本：升级时执行 `moox-cli collector function upload`，不需要改配置或重启。
+# 云账号在 [scf_plan.cloud_account] 声明（account_id、account_name、credential_secret_id、app_id、cos_region、cos_bucket）。
+[scf_plan]
+enabled = false
+# memory_mb = 128               # 每个函数内存，默认 128
+# symbols_per_function = 50     # 每个函数负责的标的数，默认 50
+# assumed_egress_ips = 1        # 函数出口 IP 个数的估计（用 moox-cli collector function probe-egress 实测），只用于频控估算与告警
+
+# [scf_plan.cloud_account]
+# account_id = "tencent-scf"
+# account_name = "Tencent SCF"
+# credential_secret_id = "AKID..."
+# app_id = "1255..."
+# cos_region = "ap-guangzhou"
+# cos_bucket = "moox-scf-guangzhou-<app_id>"
+
+# 函数在地域 VPC 内运行，通过同地域主机的私网地址访问 Access：
+# 该地域必须有一台 [hosts.<id>] 配置了 region 与 private_address、并在 [placements] 里带 access 组件。
+# [scf_plan.regions.ap-hongkong]
+# vpc_id = "vpc-xxxxxxxx"
+# subnet_id = "subnet-xxxxxxxx"
+# access_host = "compute-1"   # 同地域有多台带私网地址的 access 主机时必须指定入口主机
+
+# [[scf_plan.spaces]]
+# space_id = "crypto"
+# # package_name 默认 moox-collector-<space>-plan，namespace 默认 moox-<space>-plan，均可覆盖
+# [scf_plan.spaces.markets]
+# spot = ["ap-hongkong"]
+# swap = ["ap-hongkong"]
+
+[hosts.control]
+address = "203.0.113.10"
+region = "ap-guangzhou"
+provider = "tencent"
+tls_mode = "auto"
+ssh = { port = 22, username = "ubuntu" }
+
+[hosts.storage]
+address = "203.0.113.11"
+region = "ap-nanjing"
+provider = "tencent"
+tls_mode = "auto"
+ssh = { port = 22, username = "ubuntu" }
+
+[hosts.compute-1]
+address = "203.0.113.12"
+region = "ap-hongkong"
+provider = "tencent"
+ssh = { port = 22, username = "ubuntu" }
+
+# 因子计算机：运行因子引擎，可以是局域网里的机器。Linux 机器同时作为编译机，
+# 只有 CGO Linux 制品（Storage）使用；纯 Go 交叉编译与前端构建在本机执行。
+# 它只登记登录方式，不加入 MooX 部署拓扑；如需同时部署组件，在 placements 中显式声明。
+[hosts.factor]
+address = "192.0.2.30"
+ssh = { port = 22, username = "builder" }
+
+[compile_host]
+host = "factor"
+
+# 因子引擎所在的机器：local 表示运行 moox-cli 的这台电脑，也可以是上面登记的主机 ID。
+[factor_engine]
+host = "factor"
+
+# host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。
+[placements]
+control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"]
+storage = ["storage-primary", "storage-node", "storage-view", "access"]
+compute-1 = ["trade", "access", "egress-proxy"]
+
+[egress_proxy]
+http_domains = ["*.binance.com", "data-api.binance.vision"]
+
+[egress_proxy.dns]
+refresh_interval_seconds = 300
+request_timeout_ms = 3000
+lookup_timeout_ms = 1500
+probe_timeout_ms = 500
+probe_port = 443
+cache_ttl_seconds = 300
+max_ips_per_domain = 4
+domains = ["data-api.binance.vision", "api.binance.com", "fapi.binance.com"]

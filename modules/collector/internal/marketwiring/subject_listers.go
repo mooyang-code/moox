@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
@@ -23,10 +24,14 @@ func (l fetcherLister) List(ctx context.Context) ([]marketdata.Instrument, error
 	return snapshot.Instruments, nil
 }
 
-func NewSubjectListers() (subjectsync.Listers, error) {
+func NewSubjectListers(clients ...*httpclient.HTTPClient) (subjectsync.Listers, error) {
+	var http *httpclient.HTTPClient
+	if len(clients) > 0 {
+		http = clients[0]
+	}
 	listers := subjectsync.Listers{
-		{Source: "binance", InstrumentType: "spot"}: fetcherLister{fetcher: binance.NewMarketDataAdapter(binance.AdapterConfig{InstrumentType: marketdata.InstrumentSpot}), marketID: "crypto"},
-		{Source: "binance", InstrumentType: "swap"}: fetcherLister{fetcher: binance.NewMarketDataAdapter(binance.AdapterConfig{InstrumentType: marketdata.InstrumentSwap}), marketID: "crypto"},
+		{Source: "binance", InstrumentType: "spot"}: fetcherLister{fetcher: binance.NewMarketDataAdapter(binance.AdapterConfig{HTTPClient: http, InstrumentType: marketdata.InstrumentSpot}), marketID: "crypto"},
+		{Source: "binance", InstrumentType: "swap"}: fetcherLister{fetcher: binance.NewMarketDataAdapter(binance.AdapterConfig{HTTPClient: http, InstrumentType: marketdata.InstrumentSwap}), marketID: "crypto"},
 	}
 	route, err := marketfetch.LoadStockCNRoute()
 	if err != nil {

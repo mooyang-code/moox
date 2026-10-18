@@ -30,16 +30,12 @@ func run(
 	if err != nil {
 		return err
 	}
-	secrets := secretclient.New(secretclient.Config{
-		GatewayBaseURL: cfg.Admin.BaseURL,
-		ServiceAuth: secretclient.ServiceAuthConfig{
-			AccessKey:  cfg.Admin.ServiceAuth.AccessKey,
-			SecretKey:  cfg.Admin.ServiceAuth.SecretKey,
-			TargetNode: cfg.Admin.ServiceAuth.TargetNode,
-			CAFile:     cfg.Admin.ServiceAuth.CAFile,
-			ExpireSecs: cfg.Admin.ServiceAuth.ExpireSeconds,
-		},
-	})
+	gateway, err := cfg.OpenGateway(nil)
+	if err != nil {
+		return err
+	}
+	defer gateway.Close()
+	secrets := secretclient.New(gateway)
 	value, err := secrets.GetExchangeSecret(ctx, options.SecretID)
 	if err != nil {
 		return fmt.Errorf("GetSecretValue(%s): %w", options.SecretID, err)

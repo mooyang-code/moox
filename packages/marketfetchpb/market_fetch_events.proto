@@ -6,8 +6,8 @@ option go_package = "github.com/mooyang-code/moox/packages/marketfetchpb;marketf
 
 import "google/protobuf/timestamp.proto";
 
-// MarketFetchBatchCompleted is the only event emitted by a short-lived
-// market-fetch invocation. It contains storage-acknowledged item outcomes.
+// MarketFetchBatchCompleted 是一次行情函数调用的批次结果（进程内结构，不再作为事件发布），
+// 包含已被 Storage 确认的逐项结果。
 message MarketFetchBatchCompleted {
   string batch_id = 1;
   string schedule_id = 2;

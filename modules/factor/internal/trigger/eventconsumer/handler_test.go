@@ -141,10 +141,8 @@ func TestHandlerTerminatesMalformedEvent(t *testing.T) {
 }
 
 func TestFilterSubjectsFollowEnabledSets(t *testing.T) {
-	sets := &mutableFilterSetSource{sets: []domain.FactorSet{enabledTestSet()}}
-	locator, err := trigger.NewStoreSetLocator(sets)
-	require.NoError(t, err)
-	consumer := &Consumer{sets: locator}
+	sets := &mutableFilterSetSource{t: t, sets: []domain.FactorSet{enabledTestSet()}}
+	consumer := &Consumer{sets: sets}
 	require.NoError(t, consumer.RefreshFilters(context.Background()))
 	barsSubject := collectorPeriodSubject(t, "crypto", "bars")
 	quotesSubject := collectorPeriodSubject(t, "crypto", "quotes")
@@ -161,10 +159,19 @@ func TestFilterSubjectsFollowEnabledSets(t *testing.T) {
 	require.Equal(t, want, consumer.CurrentFilterSubjects())
 }
 
-type mutableFilterSetSource struct{ sets []domain.FactorSet }
+type mutableFilterSetSource struct {
+	t    *testing.T
+	sets []domain.FactorSet
+}
 
-func (s *mutableFilterSetSource) ListSets(context.Context) ([]domain.FactorSet, error) {
-	return append([]domain.FactorSet(nil), s.sets...), nil
+func (s *mutableFilterSetSource) FilterSubjects(context.Context) ([]string, error) {
+	var filters []string
+	for _, set := range s.sets {
+		if set.Status == domain.SetStatusEnabled {
+			filters = append(filters, collectorPeriodSubject(s.t, set.SpaceID, set.SourceDatasetID))
+		}
+	}
+	return trigger.NormalizeFilters(filters), nil
 }
 
 func (s *mutableFilterSetSource) EnabledSetByDataset(_ context.Context, spaceID, datasetID, freq string) (domain.FactorSet, []domain.FactorDef, bool, error) {

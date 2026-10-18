@@ -1,0 +1,40 @@
+# moox-archive-worker 配置。worker 只出站：经固定的 Access 访问 Storage 与 archive-mgr。
+# key_file、storage_auth_file 相对本配置文件；root_dir 必须是绝对路径（不能放在 ~/Documents 下）。
+gateway_client:
+  access_address: access.example.test:11004
+  access_id: access@storage
+  caller: archive-worker
+  key_id: ""                     # 由 Admin 分配（moox-admin-cli keys export --caller archive-worker）
+  key_file: ../secrets/access-archive-worker.key
+  compression: gzip
+
+# 以 AppId archive 签名，只用于 Storage 识别调用方。
+storage_auth_file: ../secrets/storage-primary-auth.secret
+
+worker:
+  worker_id: archive-worker@example-host   # 换机器时整体迁移目录并沿用同一个 worker_id
+  root_dir: /data/moox-archive
+  export_formats: [csv]
+  min_free_bytes: 5GB
+  heartbeat_interval: 10s
+  pull_interval: 5s
+
+staging:
+  cache_size: 256MB
+  rebuild_ratio: 2
+
+pacing:
+  request_seconds: [25, 55]          # 每分钟内允许发起请求的秒区间
+  minute_window: true                # 是否启用上面的每分钟区间；false 则整分钟都可发请求（整点静默仍生效）
+  hour_quiet: ["58:00", "04:00"]     # 每小时内不发起请求的区间
+  request_interval: 200ms
+  max_bytes_per_second: 512KB
+  max_concurrent_runs: 4
+  max_runs_per_data_node: 2
+  page_rows: 500
+
+health:
+  addr: 127.0.0.1:11418
+
+maintenance:
+  at: "04:17:43"                     # 每天维护时刻（本机时区）

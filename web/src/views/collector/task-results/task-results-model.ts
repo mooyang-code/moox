@@ -46,28 +46,6 @@ export function getTaskResultState(task: CollectorTask): TaskResultState {
   return "preparing";
 }
 
-export function resultStateLabel(state: TaskResultState): string {
-  if (state === "ready") return "结果可用";
-  if (state === "error") return "结果异常";
-  if (state === "stale") return "结果状态待刷新";
-  return "结果准备中";
-}
-
-export function taskStateLabel(task: CollectorTask): string {
-  return task.enabled === false || task.enabled === "false" ? "任务已停用" : "任务已启用";
-}
-
-export function lastDataTime(task: CollectorTask): string {
-  return task.result?.last_data_time?.trim() || "-";
-}
-
-export function resultCoverage(task: CollectorTask): { start: string; end: string } {
-  return {
-    start: task.result?.coverage_start?.trim() || "-",
-    end: task.result?.coverage_end?.trim() || "-"
-  };
-}
-
 export function selectTaskIdFromQuery(tasks: CollectorTask[], requestedTaskId: unknown): string {
   const requested = queryString(requestedTaskId);
   const sortedTasks = sortTasksByCreatedAt(tasks);

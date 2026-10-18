@@ -13,11 +13,12 @@ import (
 	"strings"
 	"time"
 
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/report"
-	"github.com/mooyang-code/moox/packages/trpcretry"
 	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -38,7 +39,7 @@ type MarketCanaryConfig struct {
 }
 
 type TimeSeriesReader interface {
-	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
+	ReadRows(context.Context, *storagepb.PrimaryReadRowsReq, ...client.Option) (*storagepb.PrimaryReadRowsRsp, error)
 }
 
 type MarketCanary struct {
@@ -46,11 +47,6 @@ type MarketCanary struct {
 	AuthInfo *commonpb.AuthInfo
 	Config   MarketCanaryConfig
 	Now      func() time.Time
-	// ResolveSubjectID lets the monitor use the authoritative metadata catalog
-	// when a legacy canary config contains a symbol instead of the canonical
-	// dataset subject. The resolver is deliberately injected so watchdog does
-	// not depend on a concrete market/provider implementation.
-	ResolveSubjectID func(context.Context, string, string, string) (string, error)
 }
 
 // ErrStorageUnavailable means the monitor could not reach Primary during its
@@ -141,7 +137,7 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	}
 	config := c.Config
 	result := domain.CheckResult{
-		ResultID:   fmt.Sprintf("%s-%d", MarketCanaryCheckID(config), now.UnixNano()),
+		ResultID:   domain.ScopedResultID(config.SpaceID, MarketCanaryCheckID(config), now),
 		SpaceID:    config.SpaceID,
 		CheckID:    MarketCanaryCheckID(config),
 		InstanceID: "monitor",
@@ -156,25 +152,15 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		result.ErrorMessage = "invalid_config"
 		return result
 	}
-	resolvedConfig, err := c.resolveConfig(ctx, config)
-	if err != nil {
-		result.ErrorMessage = "subject_catalog_unavailable"
-		return result
-	}
-	config = resolvedConfig
 	if strings.EqualFold(strings.TrimSpace(config.MarketID), "stockcn") || strings.EqualFold(strings.TrimSpace(config.SpaceID), "stockcn") {
 		return c.runStockCN(ctx, result, now, config)
 	}
-	storageFrequency, err := canonicalStorageFrequency(config.Frequency)
+	parsedFrequency, err := frequencypkg.Parse(config.Frequency)
 	if err != nil {
 		result.ErrorMessage = "invalid_config"
 		return result
 	}
-	interval, err := report.ParseDatasetFrequency(storageFrequency)
-	if err != nil {
-		result.ErrorMessage = "invalid_config"
-		return result
-	}
+	storageFrequency, interval := string(parsedFrequency), parsedFrequency.NominalDuration()
 	candidateCount, err := marketCanaryCandidateCount(config.Freshness, interval)
 	if err != nil {
 		result.ErrorMessage = "invalid_config"
@@ -186,12 +172,11 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		return result
 	}
 	startedAt := time.Now()
-	rsp, err := c.Reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-		AuthInfo: c.AuthInfo,
-		SpaceId:  config.SpaceID, DatasetId: config.DatasetID,
+	rsp, err := c.Reader.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{
+		AuthInfo:    c.AuthInfo,
 		Keys:        recentMarketCanaryKeys(config, storageFrequency, candidateTimes),
 		ColumnNames: []string{"close"},
-	}, client.WithFilter(trpcretry.ReadOnly()))
+	})
 	result.LatencyMS = time.Since(startedAt).Milliseconds()
 	if err != nil {
 		result.ErrorMessage = "storage_unreachable"
@@ -201,7 +186,7 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		result.ErrorMessage = storageRejectionError(rsp.GetRetInfo())
 		return result
 	}
-	bars, err := decodeMarketBars(rsp.GetRows(), *config.SeriesTag)
+	bars, err := decodeMarketBars(timeSeriesRows(rsp.GetRows()), *config.SeriesTag)
 	if err != nil {
 		result.ErrorMessage = err.Error()
 		return result
@@ -232,18 +217,6 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	result.Connected = true
 	result.Status = domain.CheckStatusOK
 	return result
-}
-
-func (c MarketCanary) resolveConfig(ctx context.Context, config MarketCanaryConfig) (MarketCanaryConfig, error) {
-	if c.ResolveSubjectID == nil {
-		return config, nil
-	}
-	resolved, err := c.ResolveSubjectID(ctx, config.SpaceID, config.DatasetID, config.SubjectID)
-	if err != nil {
-		return MarketCanaryConfig{}, err
-	}
-	config.SubjectID = resolved
-	return config, nil
 }
 
 type stockCalendarFile struct {
@@ -303,11 +276,11 @@ func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult,
 		return healthyIdleResult(result)
 	}
 	startedAt := time.Now()
-	rsp, err := c.Reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-		AuthInfo: c.AuthInfo, SpaceId: config.SpaceID, DatasetId: config.DatasetID,
+	rsp, err := c.Reader.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{
+		AuthInfo:    c.AuthInfo,
 		Keys:        recentMarketCanaryKeys(config, "1m", expected),
 		ColumnNames: []string{"open", "high", "low", "close", "volume", "amount", "source_provider"},
-	}, client.WithFilter(trpcretry.ReadOnly()))
+	})
 	result.LatencyMS = time.Since(startedAt).Milliseconds()
 	if err != nil {
 		result.ErrorMessage = "storage_unreachable"
@@ -317,7 +290,7 @@ func (c MarketCanary) runStockCN(ctx context.Context, result domain.CheckResult,
 		result.ErrorMessage = storageRejectionError(rsp.GetRetInfo())
 		return result
 	}
-	bars, err := decodeStockMarketBars(rsp.GetRows(), *config.SeriesTag)
+	bars, err := decodeStockMarketBars(timeSeriesRows(rsp.GetRows()), *config.SeriesTag)
 	if err != nil {
 		result.ErrorMessage = err.Error()
 		return result
@@ -469,12 +442,7 @@ func (c MarketCanary) ProbeStorageAuth(ctx context.Context) error {
 		strings.TrimSpace(config.SubjectID) == "" || strings.TrimSpace(config.Frequency) == "" || config.SeriesTag == nil {
 		return fmt.Errorf("invalid market canary configuration")
 	}
-	var err error
-	config, err = c.resolveConfig(ctx, config)
-	if err != nil {
-		return fmt.Errorf("resolve market canary subject: %w", err)
-	}
-	frequency, err := canonicalStorageFrequency(config.Frequency)
+	frequency, err := frequencypkg.Normalize(config.Frequency)
 	if err != nil {
 		return fmt.Errorf("invalid market canary frequency: %w", err)
 	}
@@ -486,12 +454,11 @@ func (c MarketCanary) ProbeStorageAuth(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("invalid market canary time window: %w", err)
 	}
-	rsp, err := c.Reader.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-		AuthInfo: c.AuthInfo,
-		SpaceId:  config.SpaceID, DatasetId: config.DatasetID,
+	rsp, err := c.Reader.ReadRows(ctx, &storagepb.PrimaryReadRowsReq{
+		AuthInfo:    c.AuthInfo,
 		Keys:        recentMarketCanaryKeys(config, frequency, times),
 		ColumnNames: []string{"close"},
-	}, client.WithFilter(trpcretry.ReadOnly()))
+	})
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrStorageUnavailable, err)
 	}
@@ -526,16 +493,35 @@ func marketCanaryThresholdDetails(previous, current marketBar, priceReturn float
 	return string(raw)
 }
 
-func recentMarketCanaryKeys(config MarketCanaryConfig, frequency string, times []time.Time) []*storagepb.TimeSeriesKey {
-	keys := make([]*storagepb.TimeSeriesKey, 0, len(times))
+func recentMarketCanaryKeys(config MarketCanaryConfig, frequency string, times []time.Time) []*storagepb.RowKey {
+	keys := make([]*storagepb.RowKey, 0, len(times))
 	for _, at := range times {
-		keys = append(keys, &storagepb.TimeSeriesKey{
+		keys = append(keys, &storagepb.RowKey{
 			SpaceId: config.SpaceID, DatasetId: config.DatasetID,
-			SubjectId: config.SubjectID, Freq: frequency,
-			DataTime: at.Format(time.RFC3339Nano), SeriesTag: *config.SeriesTag,
+			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
+				SubjectId: config.SubjectID, Freq: frequency,
+				DataTime: at.Format(time.RFC3339Nano), SeriesTag: *config.SeriesTag,
+			}},
 		})
 	}
 	return keys
+}
+
+// timeSeriesRows 把精确读取返回的行（只含存在的行）转成解码用的时序行。
+func timeSeriesRows(rows []*storagepb.RowFieldValues) []*storagepb.TimeSeriesRow {
+	out := make([]*storagepb.TimeSeriesRow, 0, len(rows))
+	for _, row := range rows {
+		key := row.GetKey().GetTimeSeries()
+		if key == nil {
+			out = append(out, &storagepb.TimeSeriesRow{Fields: row.GetFields()})
+			continue
+		}
+		out = append(out, &storagepb.TimeSeriesRow{
+			Key:    &storagepb.TimeSeriesKey{SpaceId: row.GetKey().GetSpaceId(), DatasetId: row.GetKey().GetDatasetId(), SubjectId: key.GetSubjectId(), Freq: key.GetFreq(), DataTime: key.GetDataTime(), SeriesTag: key.GetSeriesTag()},
+			Fields: row.GetFields(),
+		})
+	}
+	return out
 }
 
 func marketCanaryCandidateCount(freshness, interval time.Duration) (int, error) {
@@ -548,31 +534,6 @@ func marketCanaryCandidateCount(freshness, interval time.Duration) (int, error) 
 		return 0, fmt.Errorf("market canary freshness requires more than %d exact keys", maxCandidates)
 	}
 	return count, nil
-}
-
-func canonicalStorageFrequency(frequency string) (string, error) {
-	frequency = strings.TrimSpace(frequency)
-	if len(frequency) < 2 {
-		return "", fmt.Errorf("frequency %q is invalid", frequency)
-	}
-	count, err := strconv.ParseUint(frequency[:len(frequency)-1], 10, 64)
-	if err != nil || count == 0 {
-		return "", fmt.Errorf("frequency %q is invalid", frequency)
-	}
-	switch frequency[len(frequency)-1] {
-	case 'h', 'H':
-		return frequency[:len(frequency)-1] + "H", nil
-	case 'd', 'D':
-		return frequency[:len(frequency)-1] + "D", nil
-	case 'w', 'W':
-		return frequency[:len(frequency)-1] + "W", nil
-	case 'y', 'Y':
-		return frequency[:len(frequency)-1] + "Y", nil
-	case 'm', 'M':
-		return frequency, nil
-	default:
-		return "", fmt.Errorf("frequency %q has an unsupported unit", frequency)
-	}
 }
 
 func storageRejectionError(retInfo *storagepb.RetInfo) string {
@@ -620,11 +581,7 @@ func decodeMarketBars(rows []*storagepb.TimeSeriesRow, seriesTag string) ([]mark
 			if field.GetValue() == nil {
 				continue
 			}
-			fieldID := field.GetFieldId()
-			if index := strings.LastIndexByte(fieldID, '.'); index >= 0 {
-				fieldID = fieldID[index+1:]
-			}
-			switch fieldID {
+			switch field.GetFieldId() {
 			case "close":
 				closeValue, haveClose = field.GetValue().GetDoubleValue(), true
 			}
@@ -655,11 +612,7 @@ func decodeStockMarketBars(rows []*storagepb.TimeSeriesRow, seriesTag string) ([
 			if field.GetValue() == nil {
 				continue
 			}
-			fieldID := field.GetFieldId()
-			if index := strings.LastIndexByte(fieldID, '.'); index >= 0 {
-				fieldID = fieldID[index+1:]
-			}
-			values[fieldID] = field.GetValue()
+			values[field.GetFieldId()] = field.GetValue()
 		}
 		required := []string{"open", "high", "low", "close", "volume", "amount", "source_provider"}
 		for _, field := range required {

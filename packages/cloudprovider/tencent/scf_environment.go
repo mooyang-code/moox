@@ -12,47 +12,69 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 const SCFEnvironmentLimitBytes = 4096
 const CollectorTimerTimeoutSeconds = 60
 
-var collectorNodeName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,127}$`)
+var accessInstanceName = regexp.MustCompile(`^access@[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 
 // ValidateCollectorTimerEnvironment is shared by publication and merged
 // CloudNode deployment, so partial deploy patches cannot bypass create gates.
 func ValidateCollectorTimerEnvironment(values map[string]string) error {
-	if err := ValidateCollectorMarketFetchEnvironment(values); err != nil {
-		return err
-	}
-	for _, key := range []string{"MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE"} {
+	return ValidateCollectorMarketFetchEnvironment(values)
+}
+
+// ValidateCollectorAccessEnvironment validates the five fields shared by
+// native Claim and Storage calls, without disclosing credential contents.
+func ValidateCollectorAccessEnvironment(values map[string]string) error {
+	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
 		if strings.TrimSpace(values[key]) == "" {
-			return fmt.Errorf("collector Timer runtime environment requires %s", key)
+			return fmt.Errorf("collector Access environment requires %s", key)
 		}
 	}
-	if err := validateCollectorRuntimeEndpoint("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", values["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"], "ip"); err != nil {
+	if values["MOOX_CALLER"] != "scf-collector" {
+		return fmt.Errorf("collector Access environment requires MOOX_CALLER=scf-collector")
+	}
+	if len(values["MOOX_ACCESS_ID"]) > 135 || !accessInstanceName.MatchString(values["MOOX_ACCESS_ID"]) {
+		return fmt.Errorf("collector Access environment has invalid MOOX_ACCESS_ID")
+	}
+	if err := validateCollectorRuntimeEndpoint("MOOX_ACCESS_ADDRESS", "ip://"+values["MOOX_ACCESS_ADDRESS"], "ip"); err != nil {
 		return err
 	}
-	if !collectorNodeName.MatchString(strings.TrimSpace(values["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"])) {
-		return fmt.Errorf("collector Timer runtime environment has invalid MOOX_COLLECTOR_GATEWAY_TARGET_NODE")
+	if compression := values["MOOX_GATEWAY_COMPRESSION"]; compression != "" && compression != "none" && compression != "gzip" {
+		return fmt.Errorf("collector Access environment has invalid MOOX_GATEWAY_COMPRESSION")
+	}
+	keyID := values["MOOX_CALLER_KEY_ID"]
+	if len(keyID) > 128 || strings.ContainsAny(keyID, "/\\") || strings.ContainsFunc(keyID, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return fmt.Errorf("collector Access environment has invalid MOOX_CALLER_KEY_ID")
+	}
+	key := values["MOOX_CALLER_KEY"]
+	if len(key) < 32 || len(key) > 4096 || strings.ContainsFunc(key, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return fmt.Errorf("collector Access environment has invalid MOOX_CALLER_KEY")
 	}
 	return nil
 }
 
+// collectorPlanEnvironmentKey 是定时触发采集计划的环境变量名，必须与 marketfetch.PlanEnvName 一致。
+const collectorPlanEnvironmentKey = "MOOX_MARKET_FETCH_PLAN"
+
 // ValidateCollectorMarketFetchEnvironment checks common Invoke and Timer
-// dependencies without imposing Timer Claim routes or its independent timeout.
+// dependencies. Claim and Storage use the same Access identity and connection.
 func ValidateCollectorMarketFetchEnvironment(values map[string]string) error {
+	// 采集计划函数与补采函数（MOOX_MARKET_FETCH_MODE=backfill，不带计划）都不连 EventBus。
+	if strings.TrimSpace(values[collectorPlanEnvironmentKey]) != "" || strings.TrimSpace(values["MOOX_MARKET_FETCH_MODE"]) == "backfill" {
+		return validateCollectorPlanEnvironment(values)
+	}
 	if err := ValidateSCFEnvironment(values); err != nil {
 		return err
 	}
 	for _, key := range []string{
 		"MOOX_SPACE_ID", "MOOX_CODE_PACKAGE_ID",
-		"MOOX_GATEWAY_NODE_ID", "MOOX_GATEWAY_TARGET_NODE",
-		"MOOX_GATEWAY_SERVICE_KEY_ID", "MOOX_GATEWAY_SERVICE_SECRET_KEY",
-		"MOOX_GATEWAY_CALLER", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON",
+		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON",
 		"MOOX_CLS_ENABLED", "MOOX_CLS_ENDPOINT", "MOOX_CLS_TOPIC_ID", "MOOX_CLS_TIMEOUT_MS",
 		"MOOX_CLS_SECRET_ID", "MOOX_CLS_SECRET_KEY",
-		"MOOX_STORAGE_RPC_GATEWAY_TARGET",
 		"MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_NATS_USERNAME", "MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_EVENTBUS_NATS_TLS_CA_FILE",
 	} {
 		if strings.TrimSpace(values[key]) == "" {
@@ -62,22 +84,11 @@ func ValidateCollectorMarketFetchEnvironment(values map[string]string) error {
 	if err := validateStorageAppKeys(values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"]); err != nil {
 		return fmt.Errorf("collector market-fetch runtime environment has invalid MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON: %w", err)
 	}
-	if strings.TrimSpace(values["MOOX_GATEWAY_CALLER"]) != "collector" {
-		return fmt.Errorf("collector runtime environment requires MOOX_GATEWAY_CALLER=collector")
+	if err := ValidateCollectorAccessEnvironment(values); err != nil {
+		return err
 	}
-	for _, key := range []string{"MOOX_STORAGE_RPC_GATEWAY_TARGET", "MOOX_EVENTBUS_NATS_URL"} {
-		scheme := "ip"
-		if key == "MOOX_EVENTBUS_NATS_URL" {
-			scheme = "tls"
-		}
-		if err := validateCollectorRuntimeEndpoint(key, values[key], scheme); err != nil {
-			return err
-		}
-	}
-	for _, key := range []string{"MOOX_GATEWAY_NODE_ID", "MOOX_GATEWAY_TARGET_NODE"} {
-		if !collectorNodeName.MatchString(strings.TrimSpace(values[key])) {
-			return fmt.Errorf("collector market-fetch runtime environment has invalid %s", key)
-		}
+	if err := validateCollectorRuntimeEndpoint("MOOX_EVENTBUS_NATS_URL", values["MOOX_EVENTBUS_NATS_URL"], "tls"); err != nil {
+		return err
 	}
 	if enabled, err := strconv.ParseBool(values["MOOX_CLS_ENABLED"]); err != nil || !enabled {
 		return fmt.Errorf("collector market-fetch runtime environment requires MOOX_CLS_ENABLED=true")
@@ -174,4 +185,41 @@ func ValidateSCFEnvironment(values map[string]string) error {
 		lengths = append(lengths, fmt.Sprintf("%s:%d", key, len(values[key])))
 	}
 	return fmt.Errorf("environment is %d bytes; limit is %d (value lengths: %s)", size, SCFEnvironmentLimitBytes, strings.Join(lengths, ", "))
+}
+
+// validateCollectorPlanEnvironment 校验定时触发采集函数的环境：携带采集计划，经 Access 访问
+// Storage，诊断写 CLS，不连接 EventBus，因此不得出现任何 EventBus 变量。
+func validateCollectorPlanEnvironment(values map[string]string) error {
+	for key := range values {
+		if strings.HasPrefix(key, "MOOX_EVENTBUS_") || key == "MOOX_METRICS_EVENTBUS_URL" || key == "MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE" || key == "NATS_URL" {
+			return fmt.Errorf("collector plan environment must not contain EventBus field %s", key)
+		}
+	}
+	if err := ValidateSCFEnvironment(values); err != nil {
+		return err
+	}
+	for _, key := range []string{
+		"MOOX_SPACE_ID", "MOOX_CODE_PACKAGE_ID", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON",
+		"MOOX_CLS_ENABLED", "MOOX_CLS_ENDPOINT", "MOOX_CLS_TOPIC_ID", "MOOX_CLS_TIMEOUT_MS", "MOOX_CLS_SECRET_ID", "MOOX_CLS_SECRET_KEY",
+	} {
+		if strings.TrimSpace(values[key]) == "" {
+			return fmt.Errorf("collector plan environment requires %s", key)
+		}
+	}
+	if err := validateStorageAppKeys(values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"]); err != nil {
+		return fmt.Errorf("collector plan environment has invalid MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON: %w", err)
+	}
+	if err := ValidateCollectorAccessEnvironment(values); err != nil {
+		return err
+	}
+	if enabled, err := strconv.ParseBool(values["MOOX_CLS_ENABLED"]); err != nil || !enabled {
+		return fmt.Errorf("collector plan environment requires MOOX_CLS_ENABLED=true")
+	}
+	if timeout, err := strconv.Atoi(values["MOOX_CLS_TIMEOUT_MS"]); err != nil || timeout <= 0 {
+		return fmt.Errorf("collector plan environment has invalid MOOX_CLS_TIMEOUT_MS")
+	}
+	if len(values[collectorPlanEnvironmentKey]) > 64<<10 {
+		return fmt.Errorf("collector plan environment value exceeds 64 KiB")
+	}
+	return nil
 }

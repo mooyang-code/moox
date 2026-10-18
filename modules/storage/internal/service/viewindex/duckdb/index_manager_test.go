@@ -43,7 +43,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 	current := viewindex.ViewIndexSchema{
 		SpaceID: "space", ViewID: "factor-view", PrimaryDatasetID: "dataset_factor_btc_1m",
 		ViewVersion: 1, Engine: "duckdb", Columns: []*pb.ViewColumn{{
-			ColumnName: "dataset_factor_btc_1m.close", OriginId: "dataset_factor_btc_1m.close",
+			ColumnName: "close", OriginId: "close",
 			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		}},
@@ -57,7 +57,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 		ViewRevision: 1, ViewSchemaHash: current.SchemaHash, WriteMode: viewindex.LiveWrite,
 		RowWrites: []viewindex.RowWrite{{
 			Key: viewindex.RowKey{Key: rowKey},
-			Fields: []*pb.FieldValue{{FieldId: "dataset_factor_btc_1m.close", Value: &pb.TypedValue{
+			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{
 				Value: &pb.TypedValue_DoubleValue{DoubleValue: 1.25},
 			}}},
 		}},
@@ -65,7 +65,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	v2 := proto.Clone(&pb.ViewColumn{ColumnName: "dataset_factor_btc_1m.bias_20", OriginId: "dataset_factor_btc_1m.bias_20",
+	v2 := proto.Clone(&pb.ViewColumn{ColumnName: "bias_20", OriginId: "bias_20",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1}).(*pb.ViewColumn)
 	v2.SpaceId, v2.ViewId = current.SpaceID, current.ViewID
 	version2 := viewindex.ViewIndexSchema{
@@ -88,7 +88,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = manager.Close() }()
-	v3 := proto.Clone(&pb.ViewColumn{ColumnName: "dataset_factor_btc_1m.volume", OriginId: "dataset_factor_btc_1m.volume",
+	v3 := proto.Clone(&pb.ViewColumn{ColumnName: "volume", OriginId: "volume",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 2}).(*pb.ViewColumn)
 	v3.SpaceId, v3.ViewId = current.SpaceID, current.ViewID
 	version3 := viewindex.ViewIndexSchema{
@@ -110,7 +110,7 @@ func TestExtendColumnsAddsNullsAndRecoversAfterRestart(t *testing.T) {
 	}
 	rows, _, err := manager.Query(ctx, "factor-view-a", viewindex.QuerySpec{
 		Selectors: []viewindex.TimeSeriesSelector{{SpaceID: "space", DatasetID: current.PrimaryDatasetID, SubjectID: "BTC-USDT", Freq: "1m"}},
-		Includes:  []string{"dataset_factor_btc_1m.bias_20", "dataset_factor_btc_1m.volume"},
+		Includes:  []string{"bias_20", "volume"},
 	})
 	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 2 {
 		t.Fatalf("query extended row = %v err=%v", rows, err)
@@ -132,7 +132,7 @@ func TestExtendColumnsRejectsCorruptIntermediatePhysicalContract(t *testing.T) {
 	current := viewindex.ViewIndexSchema{
 		SpaceID: "space", ViewID: "factor-view", PrimaryDatasetID: "dataset_factor_btc_1m",
 		ViewVersion: 1, Engine: "duckdb", Columns: []*pb.ViewColumn{{
-			ColumnName: "dataset_factor_btc_1m.close", OriginId: "dataset_factor_btc_1m.close",
+			ColumnName: "close", OriginId: "close",
 			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 			ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 		}},
@@ -142,8 +142,8 @@ func TestExtendColumnsRejectsCorruptIntermediatePhysicalContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	bias := &pb.ViewColumn{
-		SpaceId: current.SpaceID, ViewId: current.ViewID, ColumnName: "dataset_factor_btc_1m.bias_20",
-		OriginId: "dataset_factor_btc_1m.bias_20", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		SpaceId: current.SpaceID, ViewId: current.ViewID, ColumnName: "bias_20",
+		OriginId: "bias_20", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1,
 	}
 	intermediate := viewindex.ViewIndexSchema{
@@ -162,8 +162,8 @@ func TestExtendColumnsRejectsCorruptIntermediatePhysicalContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	volume := &pb.ViewColumn{
-		SpaceId: current.SpaceID, ViewId: current.ViewID, ColumnName: "dataset_factor_btc_1m.volume",
-		OriginId: "dataset_factor_btc_1m.volume", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+		SpaceId: current.SpaceID, ViewId: current.ViewID, ColumnName: "volume",
+		OriginId: "volume", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 2,
 	}
 	target := viewindex.ViewIndexSchema{
@@ -273,6 +273,10 @@ func TestOpenAppliesResourceLimits(t *testing.T) {
 }
 
 func TestOpenUsesDefaultMemoryLimit(t *testing.T) {
+	// 未配置时按主机内存推算：4GB 主机上是 256MB；这里固定主机内存，不依赖运行测试的机器规格。
+	restore := hostMemoryBytes
+	defer func() { hostMemoryBytes = restore }()
+	hostMemoryBytes = func() int64 { return 4 << 30 }
 	t.Setenv(duckDBMemoryLimitEnv, "")
 	t.Setenv(duckDBMaxOpenConnsEnv, "")
 	db, err := open(filepath.Join(t.TempDir(), "view.duckdb"))
@@ -651,23 +655,20 @@ func TestDuckDBAfterCursorIncludesSeriesTag(t *testing.T) {
 	}
 }
 
-func TestResolveIncludedColumnsMapsUniqueLogicalSuffix(t *testing.T) {
+func TestResolveIncludedColumnsRequiresExactProjectedNames(t *testing.T) {
 	columns := map[string]pb.FieldValueType{
-		"prices.close":  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-		"prices.volume": pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"close":     pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"volume":    pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		"data_time": pb.FieldValueType_FIELD_VALUE_TYPE_TIME,
 	}
 	got, err := resolveIncludedColumns(columns, []string{"close"})
-	if err != nil {
-		t.Fatalf("resolve unique suffix: %v", err)
+	if err != nil || !reflect.DeepEqual(got, []string{"close"}) {
+		t.Fatalf("resolve exact name = %v err=%v, want [close]", got, err)
 	}
-	if !reflect.DeepEqual(got, []string{"prices.close"}) {
-		t.Fatalf("resolve unique suffix = %v, want [prices.close]", got)
-	}
-
-	columns["adjusted.close"] = pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
-	_, err = resolveIncludedColumns(columns, []string{"close"})
-	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
-		t.Fatalf("resolve ambiguous suffix error = %v", err)
+	for _, include := range []string{"prices.close", "data_time", "open"} {
+		if _, err := resolveIncludedColumns(columns, []string{include}); err == nil || !strings.Contains(err.Error(), "is not projected") {
+			t.Fatalf("include %q error = %v, want not projected", include, err)
+		}
 	}
 }
 
@@ -887,6 +888,42 @@ func TestDuckDBPrepareWriteAndPushdownQuery(t *testing.T) {
 	}
 }
 
+// 按标的计数：只统计选择器与时间范围内的行，同一时间点多个 series_tag 只计一次，没有行的标的不出现。
+func TestDuckDBCountBySubjectCountsDistinctBarsInRange(t *testing.T) {
+	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices", ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash"}
+	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	row := func(subject, tag string, minute int) viewindex.RowWrite {
+		return viewindex.RowWrite{Key: viewindex.RowKey{Key: duckRowKey("s", "prices", subject, "1m", fmt.Sprintf("2026-07-20T00:%02d:00Z", minute), tag)}}
+	}
+	rows := []viewindex.RowWrite{
+		row("BTC", "", 0), row("BTC", "", 1), row("BTC", "venue:other", 1), row("BTC", "", 2), row("BTC", "", 5),
+		row("ETH", "", 0), row("SOL", "", 1),
+	}
+	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{RowWrites: rows, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite}); err != nil {
+		t.Fatal(err)
+	}
+	selector := func(subject string) viewindex.TimeSeriesSelector {
+		return viewindex.TimeSeriesSelector{SpaceID: "s", DatasetID: "prices", SubjectID: subject, Freq: "1m"}
+	}
+	counts, err := manager.CountBySubject(context.Background(), "idx", viewindex.QuerySpec{
+		Selectors: []viewindex.TimeSeriesSelector{selector("BTC"), selector("ETH"), selector("DOGE")},
+		TimeRange: &pb.TimeRange{StartTime: "2026-07-20T00:00:00Z", EndTime: "2026-07-20T00:03:00Z"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(counts) != 2 || counts["BTC"] != 3 || counts["ETH"] != 1 {
+		t.Fatalf("counts=%v", counts)
+	}
+}
+
 func TestStatMetadataTracksCoverageWithoutScanningRows(t *testing.T) {
 	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
 	if err != nil {
@@ -993,77 +1030,6 @@ func TestMergeCoverageBoundsIsMonotonicAndCanonical(t *testing.T) {
 	)
 	if from != "2026-08-12T00:00:00.100000000Z" || to != "2026-08-12T00:00:00.900000000Z" {
 		t.Fatalf("bounds were not normalized: %s..%s", from, to)
-	}
-}
-
-func TestDuckDBQualifiedViewColumn(t *testing.T) {
-	manager, err := OpenIndexManager(IndexManagerOptions{Root: filepath.Join(t.TempDir(), "duckdb")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer manager.Close()
-	const column = "prices.close"
-	schema := viewindex.ViewIndexSchema{
-		SpaceID: "s", ViewID: "v", PrimaryDatasetID: "prices",
-		ViewVersion: 1, Engine: "duckdb", SchemaHash: "hash",
-		Columns: []*pb.ViewColumn{{ColumnName: column, ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}},
-	}
-	if err := manager.Prepare(context.Background(), "idx", schema); err != nil {
-		t.Fatal(err)
-	}
-	key := &pb.RowKey{
-		SpaceId: "s", DatasetId: "prices",
-		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: "BTC-USDT", Freq: "1h", DataTime: "2026-07-20T00:00:00Z",
-		}},
-	}
-	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
-		RowWrites: []viewindex.RowWrite{{
-			Key: viewindex.RowKey{Key: key},
-			Fields: []*pb.FieldValue{{
-				FieldId: column,
-				Value:   &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 123.5}},
-			}},
-		}},
-		ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	rows, total, err := manager.Query(context.Background(), "idx", viewindex.QuerySpec{
-		Groups: []viewindex.FilterGroup{{Conds: []viewindex.Filter{{
-			Column: column,
-			Op:     pb.FilterOp_FILTER_OP_GTE,
-			Values: []*pb.TypedValue{{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}},
-		}}}},
-		Sorts:    []*pb.SortSpec{{FieldName: column, Desc: true}},
-		Includes: []string{column},
-		Limit:    1, TotalMode: pb.TotalMode_FORCE_EXACT,
-	})
-	if err != nil || total != 1 || len(rows) != 1 {
-		t.Fatalf("qualified query: rows=%v total=%d err=%v", rows, total, err)
-	}
-	fields := rows[0].GetFields()
-	if len(fields) != 1 || fields[0].GetFieldId() != column || fields[0].GetValue().GetDoubleValue() != 123.5 {
-		t.Fatalf("qualified field not retained: %v", fields)
-	}
-	if err := manager.Write(context.Background(), "idx", viewindex.ViewIndexWriteBatch{
-		RowWrites: []viewindex.RowWrite{{
-			Key: viewindex.RowKey{Key: key},
-			Fields: []*pb.FieldValue{{FieldId: column, Value: &pb.TypedValue{
-				Value: &pb.TypedValue_NullValue{NullValue: pb.NullValue_NULL_VALUE_NULL},
-			}}},
-		}},
-		ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	rows, _, err = manager.Query(context.Background(), "idx", viewindex.QuerySpec{
-		Includes: []string{column}, Limit: 1, TotalMode: pb.TotalMode_NONE,
-	})
-	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 ||
-		rows[0].GetFields()[0].GetFieldId() != column ||
-		rows[0].GetFields()[0].GetValue().GetNullValue() != pb.NullValue_NULL_VALUE_NULL {
-		t.Fatalf("qualified NULL field not retained: rows=%v err=%v", rows, err)
 	}
 }
 

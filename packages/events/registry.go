@@ -6,13 +6,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mooyang-code/moox/packages/cloudjobpb"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
-	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
@@ -67,18 +64,12 @@ func declareEvent(name string, version uint32, stream, owner string, newPayload 
 }
 
 var (
-	CloudJobExecutionRequested = declareEvent("event.cloudnode.job.execution.requested", 1, "MOOX_CLOUDNODE_EXEC", "cloudnode", func() proto.Message {
-		return &cloudjobpb.JobExecutionRequested{}
-	}, validateCloudJobExecutionRequested)
 	ObservabilityMetricsSnapshotReported = declareEvent("event.observability.metrics.snapshot.reported", 1, "MOOX_OBSERVABILITY", "service", func() proto.Message {
 		return &metricspb.MetricReport{}
 	}, validateObservabilityMetricsSnapshotReported)
 	ObservabilityHostSnapshotReported = declareEvent("event.observability.host.snapshot.reported", 1, "MOOX_OBSERVABILITY", "hostagent", func() proto.Message {
 		return &hostmetricpb.HostMetric{}
 	}, validateObservabilityHostSnapshotReported)
-	ObservabilityHealthCheckReported = declareEvent("event.observability.health.check.reported", 1, "MOOX_OBSERVABILITY", "watchdog", func() proto.Message {
-		return &observabilitypb.HealthCheckReport{}
-	}, validateObservabilityHealthCheckReported)
 	DatasetRowsUpserted = declareEvent("event.storage.dataset.rows.upserted", 2, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetRowsUpserted{}
 	}, validateDatasetRowsUpserted)
@@ -94,9 +85,6 @@ var (
 	DatasetSyncPoint = declareEvent("event.storage.dataset.sync_point", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.DatasetSyncPoint{}
 	}, validateDatasetSyncPoint)
-	MarketFetchBatchCompleted = declareEvent("event.market.fetch.batch.completed", 1, "MOOX_MARKET_FETCH", "collector", func() proto.Message {
-		return &marketfetchpb.MarketFetchBatchCompleted{}
-	}, validateMarketFetchBatchCompleted)
 	LogicalAccountTargetWeightRequested = declareEvent("event.trade.target.weight_requested", 1, "MOOX_TRADE", "strategy", func() proto.Message {
 		return &tradeeventpb.LogicalAccountTargetWeightRequested{}
 	}, validateLogicalAccountTargetWeightRequested)

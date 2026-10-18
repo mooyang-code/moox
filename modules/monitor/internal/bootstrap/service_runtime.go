@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
@@ -10,10 +11,12 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/modules/monitor/internal/notifier"
+	monitorplacement "github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
-	monitorsysdeploy "github.com/mooyang-code/moox/modules/monitor/internal/sysdeploy"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
+	"github.com/mooyang-code/moox/packages/notification"
 	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -32,22 +35,26 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 		HostStorageReady: hostReady,
 		DoctorContext:    doctorContext,
 		HealthView:       health,
+		HostWatchdog:     cfg.HostPolicy.Watchdog,
 	}))
 }
 
-func buildProbeRunner(cfg *config.Config) probe.MultiRunner {
+func buildProbeRunner(cfg *config.Config, gateway *gatewayclient.Client) probe.MultiRunner {
 	runner := probe.DefaultRunner()
 	if cfg == nil {
 		return runner
 	}
 	runner.HTTP.HealthSigner = &probe.HealthSigner{Version: cfg.HealthAuth.Version, AccessKey: cfg.HealthAuth.AccessKey, SecretKey: cfg.HealthAuth.SecretKey}
+	if gateway != nil {
+		runner.HTTP.Relay = gateway.DialRelay
+	}
 	return runner
 }
 
 func monitorResultHook(runtime *Runtime) func(context.Context, domain.Check, domain.CheckResult) {
 	evaluator := alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{
-		Channel: func(ctx context.Context) (*domain.NotificationChannel, error) {
-			return runtime.Repositories.Notifications.GetGlobal(ctx)
+		Sender: func(ctx context.Context) (notification.Sender, error) {
+			return notifier.Sender(ctx, runtime.Repositories.Notifications)
 		},
 	})
 	return func(ctx context.Context, check domain.Check, result domain.CheckResult) {
@@ -61,11 +68,12 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 	if cfg == nil || runtime == nil {
 		return nil
 	}
-	if !cfg.SysDeploy.Enabled {
+	if !cfg.Placement.Enabled {
 		registerMonitorSyncTimer(s, nil)
 		return nil
 	}
-	syncer := monitorsysdeploy.NewSyncer(runtime.Repositories.Checks, monitorsysdeploy.NewClientSource(cfg.SysDeploy.Target))
+	syncer := monitorplacement.NewSyncer(runtime.Repositories.Topology, monitorplacement.NewClientSource(runtime.Gateway), cfg.Placement.HTTPS, runtime.Repositories.Gateways)
+	syncer.SetLocalHost(cfg.Placement.LocalHostID)
 	syncFunc := serializedMonitorSync(func(syncCtx context.Context) (int, error) {
 		count, err := syncer.Sync(syncCtx)
 		if err != nil {
@@ -89,12 +97,12 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 
 func registerMonitorSyncTimer(s *server.Server, handler func(context.Context) error) {
 	if s == nil {
-		log.Warn("monitor sysdeploy timer server is unavailable, skip register")
+		log.Warn("monitor placement timer server is unavailable, skip register")
 		return
 	}
-	service := s.Service("trpc.moox.monitor.sysdeploy.timer")
+	service := s.Service("trpc.moox.monitor.placement.timer")
 	if service == nil {
-		log.Warn("monitor sysdeploy timer service is not configured, skip register")
+		log.Warn("monitor placement timer service is not configured, skip register")
 		return
 	}
 	if handler == nil {
@@ -120,11 +128,11 @@ func monitorSyncHandler(syncFunc func(context.Context) (int, error)) func(contex
 	return func(ctx context.Context) error {
 		n, err := syncFunc(ctx)
 		if err != nil {
-			log.WarnContextf(ctx, "monitor sysdeploy sync failed: %v", err)
+			log.WarnContextf(ctx, "monitor placement sync failed: %v", err)
 			return err
 		}
 		if n > 0 {
-			log.InfoContextf(ctx, "monitor sysdeploy sync updated %d checks", n)
+			log.InfoContextf(ctx, "monitor placement sync updated %d checks", n)
 		}
 		return nil
 	}

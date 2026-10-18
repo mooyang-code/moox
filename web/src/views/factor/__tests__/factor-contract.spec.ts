@@ -1,28 +1,59 @@
 import { describe, expect, it } from "vitest";
-import type { EngineStatus, FactorDef, FactorSet, ListRecalcJobsReq, RecalcFactorsReq, RecalcJob, SetRunSummary } from "@/api/factor/types";
-import workbenchView from "@/views/factor/workbench/index.vue?raw";
-import factorEditor from "@/views/factor/workbench/factor-editor.vue?raw";
-import factorsTab from "@/views/factor/workbench/tabs/factors.vue?raw";
-import recalcTab from "@/views/factor/workbench/tabs/recalc.vue?raw";
-import resultsTab from "@/views/factor/workbench/tabs/results.vue?raw";
-import setHeader from "@/views/factor/workbench/set-header.vue?raw";
+import type {
+  EngineStatus,
+  FactorDef,
+  FactorInfo,
+  FactorMember,
+  FactorSet,
+  ListRecalcJobsReq,
+  RecalcFactorsReq,
+  RecalcJob,
+  SetRunSummary
+} from "@/api/factor/types";
+import taskHost from "@/views/factor/task-management/index.vue?raw";
+import factorScope from "@/views/factor/shared/use-factor-scope.ts?raw";
+import computeTasks from "@/views/factor/compute-tasks/index.vue?raw";
+import memberSection from "@/views/factor/compute-tasks/member-section.vue?raw";
+import memberModel from "@/views/factor/compute-tasks/compute-tasks-model.ts?raw";
+import addFactorModal from "@/views/factor/compute-tasks/add-factor-modal.vue?raw";
+import definitionsPage from "@/views/factor/definitions/index.vue?raw";
+import factorEditor from "@/views/factor/editor/index.vue?raw";
+import recalcTab from "@/views/factor/recalc/index.vue?raw";
+import recalcModel from "@/views/factor/recalc/recalc-model.ts?raw";
+import resultsTab from "@/views/factor/results/index.vue?raw";
+import resultsModel from "@/views/factor/results/results-model.ts?raw";
+import overviewPage from "@/views/factor/overview/index.vue?raw";
 
 describe("factor API contract", () => {
   it("uses explicit generic time-series fields", () => {
     const factor: FactorDef = {
       factor_id: "Bias",
-      set_id: "factor_set_crypto_1m",
       factor_type: "timeseries",
       name: "Bias",
-      source_code: "def compute(df, params): return {}",
-      input_columns: ["nav", "benchmark_return"],
+      spec: "outputs:\n  excess_return: nav - benchmark_return\n  rolling_rank: ts_rank(nav, 100)\n",
+      spec_hash: "sha256:hash",
+      input_columns: ["benchmark_return", "nav"],
       outputs: ["excess_return", "rolling_rank"],
-      params_json: `{"window":20}`,
       lookback_periods: 100,
-      status: "enabled"
+      definition_hash: "sha256:definition",
+      allow_partial_universe: false,
+      created_at: "2026-10-04T00:00:00Z",
+      updated_at: "2026-10-04T00:00:00Z"
     };
-    expect(factor.input_columns).toEqual(["nav", "benchmark_return"]);
+    const info: FactorInfo = { factor, usages: [{ set_id: "factor_set_crypto_1m", status: "enabled" }] };
+    const member: FactorMember = {
+      set_id: "factor_set_crypto_1m",
+      factor_id: "Bias",
+      status: "enabled",
+      factor,
+      created_at: factor.created_at,
+      updated_at: factor.updated_at
+    };
+    expect(factor.input_columns).toEqual(["benchmark_return", "nav"]);
     expect(factor.lookback_periods).toBe(100);
+    expect(factor).not.toHaveProperty("set_id");
+    expect(factor).not.toHaveProperty("status");
+    expect(info.usages[0].status).toBe(member.status);
   });
 
   it("accepts set-scoped async recalc jobs with a request id", () => {
@@ -74,8 +105,9 @@ describe("factor API contract", () => {
     const engine: EngineStatus = {
       ret_info: { code: 0, msg: "success" },
       consumer_running: true,
-      python_workers: 100,
-      python_busy: 2,
+      compute_workers: 4,
+      engine_expr_version: "expr/1",
+      manager_expr_version: "expr/1",
       lanes: [],
       recent_runs: [run]
     };
@@ -84,44 +116,69 @@ describe("factor API contract", () => {
   });
 });
 
-describe("factor workbench contract", () => {
+describe("factor pages contract", () => {
   it("keeps the selected set and tab in the URL query", () => {
-    expect(workbenchView).toContain("route.query.set");
-    expect(workbenchView).toContain("route.query.tab");
-    expect(workbenchView).toContain("usePolling");
+    expect(taskHost).toContain("route.query.tab");
+    expect(taskHost).toContain("PageTitleTabs");
+    expect(factorScope).toContain("route.query.set");
+    expect(factorScope).toContain("usePolling");
+    expect(overviewPage).toContain("usePolling");
   });
 
-  it("changes status only through SetFactorStatus and surfaces the backfill job", () => {
-    expect(factorsTab).toContain('setFactorStatus(factor.factor_id, "enabled")');
-    expect(factorsTab).toContain("backfill_job");
-    expect(factorsTab).toContain("需要先停用");
-    expect(factorEditor).not.toContain("v-model=\"form.status\"");
+  it("changes member status only through setFactorMemberStatus and surfaces the backfill job", () => {
+    expect(memberSection).toContain("setFactorMemberStatus(member.set_id, member.factor_id, target)");
+    expect(memberSection).toContain("removeFactorFromSet");
+    expect(memberSection).toContain("backfill_job");
+    expect(memberModel).toContain("需要先停用");
+    expect(addFactorModal).toContain("addFactorToSet");
+    expect(addFactorModal).toContain("listDatasetColumns");
+    expect(definitionsPage).not.toContain("setFactorMemberStatus");
+    expect(factorEditor).not.toContain('v-model="form.status"');
   });
 
-  it("limits editor inputs to source dataset columns and shows partial universe only for cross sections", () => {
+  it("lays out the definitions toolbar like the collector task toolbar", () => {
+    const toolbar = definitionsPage.slice(definitionsPage.indexOf('class="task-toolbar"'), definitionsPage.indexOf("<a-table"));
+    const positions = ["新增因子", 'v-model="filters.keyword"', 'v-model="filters.type"', 'v-model="filters.usage"', "查询"].map(
+      text => toolbar.indexOf(text)
+    );
+    expect(positions.every(position => position >= 0)).toBe(true);
+    expect(positions).toEqual([...positions].sort((left, right) => left - right));
+    expect(definitionsPage).toContain('<a-space class="task-toolbar" wrap>');
+    expect(toolbar).not.toContain("a-input-search");
+    expect(toolbar).not.toContain("a-radio-group");
+    expect(definitionsPage).toContain("filterDefinitions(items.value, applied)");
+  });
+
+  it("derives the factor type from the compiled spec and shows partial universe only for cross sections", () => {
     expect(factorEditor).toContain("listDatasetColumns");
-    expect(factorEditor).toContain("form.factor_type === 'cross_section'");
-    expect(factorEditor).toContain('value="timeseries"');
-    expect(factorEditor).toContain('value="cross_section"');
+    expect(factorEditor).toContain("derived.factor_type === 'cross_section'");
+    expect(factorEditor).toContain("insertTemplate('timeseries')");
+    expect(factorEditor).toContain("insertTemplate('cross_section')");
+    expect(factorEditor).not.toContain('v-model="form.factor_type"');
+    expect(factorEditor).not.toContain("createFactorSet");
+    expect(factorEditor).toContain("onBeforeRouteLeave");
   });
 
   it("loads recalc jobs from the backend and renders degraded notes separately from errors", () => {
     expect(recalcTab).toContain("listRecalcJobs");
     expect(recalcTab).toContain("cancelRecalcJob");
-    expect(recalcTab).toContain("splitJobNote");
+    expect(recalcModel).toContain("splitJobNote");
     expect(recalcTab).toContain("部分降级");
     expect(recalcTab).not.toContain("getRecalcJob");
   });
 
-  it("offers lifecycle actions for sets including purge delete", () => {
-    expect(setHeader).toContain("updateFactorSet");
-    expect(setHeader).toContain("deleteFactorSet(current.set_id, purge.value)");
-    expect(setHeader).toContain("setFactorSetStatus");
+  it("offers lifecycle actions for compute tasks including purge delete", () => {
+    expect(computeTasks).toContain("updateFactorSet");
+    expect(computeTasks).toContain("deleteFactorSet(current.set_id, purge.value)");
+    expect(computeTasks).toContain("setFactorSetStatus");
   });
 
   it("scopes results to the factor result view of the selected set", () => {
-    expect(resultsTab).toContain('view.attributes?.view_role === "factor_result"');
-    expect(resultsTab).toContain("result_dataset_id");
+    expect(resultsModel).toContain('view.attributes?.view_role === "factor_result"');
+    expect(resultsModel).toContain("result_dataset_id");
     expect(resultsTab).not.toContain("ViewDefinitions");
+    expect(resultsTab).toContain("result-toolbar");
+    expect(resultsTab).toContain("#status-extra");
+    expect(resultsTab).not.toContain("status-strip");
   });
 });

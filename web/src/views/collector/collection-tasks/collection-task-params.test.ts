@@ -5,6 +5,9 @@ import {
   parseKlineResampleParams,
   collectionSourceMatches,
   collectionTaskNameError,
+  collectionTaskResultLabel,
+  inspectCollectionTaskResults,
+  tasksNeedingResultInspection,
   normalizeCollectionTask,
   parseCollectionTaskInput,
   taskFrequency
@@ -76,12 +79,10 @@ describe("collection task params", () => {
     expect(payload.collect_params).toMatchObject({ provider: "moox", market_type: "spot" });
   });
 
-  it("parses resample routing only from collect_params", () => {
+  it("parses resample routing from collect_params", () => {
     const task = normalizeCollectionTask({
       task_id: "resample-routing",
       data_type: "kline_resample",
-      provider: "legacy-top-level",
-      market_type: "swap",
       collect_params: {
         provider: "moox",
         market_type: "spot",
@@ -147,8 +148,6 @@ describe("collection task params", () => {
       task_name: "任务一",
       data_type: "kline_resample",
       tag_ids: ["source_tag"],
-      provider: "legacy-provider-must-be-ignored",
-      market_type: "swap",
       enabled: "false",
       collect_params: '{"provider":"moox","market_type":"spot","target_frequency":"5m"}',
       result: { view_id: "view-1", status: "ready" }
@@ -170,12 +169,68 @@ describe("collection task params", () => {
       data_source_id: "crypto",
       data_kind: "DATA_KIND_TIME_SERIES",
       attributes: { market_type: "spot" },
-      freqs: ["1H"]
+      freq: "1h"
     };
 
     expect(collectionSourceMatches(source, "binance", "kline", "spot", "1h")).toBe(true);
     expect(collectionSourceMatches(source, "binance", "kline", "swap", "1h")).toBe(false);
     expect(collectionSourceMatches(source, "binance", "kline", "spot", "4h")).toBe(false);
     expect(collectionSourceMatches(source, "binance", "kline_resample", "spot", "1h")).toBe(true);
+  });
+});
+
+describe("collection task result label", () => {
+  const result = (status: string) => ({ view_id: "view_task_kline_1m", status });
+
+  it("treats an uninspected list entry of a prepared task as available", () => {
+    expect(collectionTaskResultLabel({ prepare_state: "ready", result: result("unknown") })).toBe("结果可用");
+  });
+
+  it("keeps tasks that are still preparing in the preparing state", () => {
+    expect(collectionTaskResultLabel({ prepare_state: "pending", result: result("unknown") })).toBe("结果准备中");
+    expect(collectionTaskResultLabel({ prepare_state: "waiting_view", result: result("pending") })).toBe("结果准备中");
+    expect(collectionTaskResultLabel({ prepare_state: "ready", result: { status: "unknown" } })).toBe("结果准备中");
+  });
+
+  it("follows the inspected Storage status from task details", () => {
+    expect(collectionTaskResultLabel({ prepare_state: "ready", result: result("ready") })).toBe("结果可用");
+    expect(collectionTaskResultLabel({ prepare_state: "ready", result: result("pending") })).toBe("结果准备中");
+    expect(collectionTaskResultLabel({ prepare_state: "ready", result: result("error") })).toBe("结果异常");
+    expect(collectionTaskResultLabel({ prepare_state: "error", result: result("unknown") })).toBe("结果异常");
+    expect(collectionTaskResultLabel({ prepare_state: "ready", last_error: "boom", result: result("unknown") })).toBe("结果异常");
+  });
+});
+
+describe("collection task live result inspection", () => {
+  const task = (taskId: string, status: string, viewId = `view_${taskId}`) =>
+    ({ task_id: taskId, prepare_state: "ready", result: { view_id: viewId, status } }) as unknown as Parameters<
+      typeof collectionTaskResultLabel
+    >[0] & { task_id: string };
+
+  it("inspects only rows the list left uninspected", () => {
+    const rows = [task("a", "unknown"), task("b", "ready"), task("c", "unknown", "")];
+    expect(tasksNeedingResultInspection(rows as never).map(row => row.task_id)).toEqual(["a"]);
+  });
+
+  it("applies each live result with bounded concurrency and keeps failed rows", async () => {
+    const rows = ["a", "b", "c", "d", "e"].map(id => task(id, "unknown"));
+    let active = 0;
+    let peak = 0;
+    const applied: string[] = [];
+    await inspectCollectionTaskResults(
+      rows as never,
+      async row => {
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        active--;
+        if (row.task_id === "c") throw new Error("Storage unavailable");
+        return { ...row, result: { view_id: row.result?.view_id, status: "ready" } } as never;
+      },
+      detail => applied.push(detail.task_id),
+      2
+    );
+    expect(peak).toBe(2);
+    expect(applied.sort()).toEqual(["a", "b", "d", "e"]);
   });
 });

@@ -387,3 +387,39 @@ func TestReducerApplyFillRejectsNonPositiveExchangeTimestampWithoutWrites(t *tes
 	require.Equal(t, "0", got.FilledQuantity)
 	require.Zero(t, got.FinishedAt)
 }
+
+// paper 没有独立的交易所权威数据，持仓由撮合器成交直接投影：即使一次同步已把持仓“覆盖时间”标记到某毫秒，
+// 同毫秒的另一笔独立 paper 成交仍必须累加到持仓上（不能被外部快照覆盖检查跳过，也没有后续快照能纠正）。
+func TestPaperMatcherFillAtSnapshotCoveredMillisecondStillProjectsPosition(t *testing.T) {
+	s := openFillStore(t, exchange.MarketTypeSwap)
+	seedFillOrder(t, s, exchange.MarketTypeSwap, order.Open, "2", "20")
+	tradedAt := time.Now().Truncate(time.Millisecond)
+	paperSource := Source{SpaceID: testSpace, TradingAccountID: testAccount, Kind: OriginPaperMatcher}
+	newFill := func(id string) exchange.Fill {
+		return exchange.Fill{
+			ExchangeTradeID: id, ExchangeOrderID: "exchange-order-1", ClientOrderID: "client-1", ExchangeSymbol: testSymbol,
+			Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("1"),
+			Price: shared.MustDecimal("100"), SettlementAsset: "USDT", TradedAt: tradedAt,
+		}
+	}
+	reducer := &Reducer{Store: s}
+	applied, err := reducer.ApplyFill(context.Background(), newFill("paper-1"), paperSource)
+	require.NoError(t, err)
+	require.True(t, applied)
+	// 一次同步把持仓覆盖时间标记到这一毫秒
+	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
+		position, found, getErr := tx.GetPosition(testSpace, testAccount, testSymbol, string(exchange.PositionSideNet))
+		require.NoError(t, getErr)
+		require.True(t, found)
+		position.ExchangeUpdatedAt = tradedAt.UnixMilli()
+		return tx.ReplacePositionsForAccount(testSpace, testAccount, []store.PositionRecord{position}, tradedAt.UnixMilli())
+	}))
+	applied, err = reducer.ApplyFill(context.Background(), newFill("paper-2"), paperSource)
+	require.NoError(t, err)
+	require.True(t, applied)
+	var quantity string
+	require.NoError(t, s.DBForTest().Raw(
+		"SELECT c_signed_quantity FROM t_trading_positions WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?",
+		testSpace, testAccount, testSymbol).Scan(&quantity).Error)
+	require.Equal(t, "2", quantity)
+}

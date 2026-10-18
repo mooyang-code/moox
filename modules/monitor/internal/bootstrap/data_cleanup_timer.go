@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/timerjob"
 	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -20,6 +21,9 @@ type monitorDataCleanupOps struct {
 	deleteResults func(context.Context, time.Time) error
 	deleteAlerts  func(context.Context, time.Time) error
 	pruneDedupe   func(context.Context, time.Time) error
+	pruneSeries   func(context.Context, time.Time) error
+	// pruneArrivals 按 monmetrics.BarArrivalRetention 清理数据链路逐根到达记录（按到达时间）。
+	pruneArrivals func(context.Context, time.Time) error
 }
 
 func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error {
@@ -42,6 +46,16 @@ func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error
 	if ops.pruneDedupe != nil {
 		if err := ops.pruneDedupe(ctx, now); err != nil {
 			errs = append(errs, fmt.Errorf("prune metric message dedupe: %w", err))
+		}
+	}
+	if ops.pruneSeries != nil {
+		if err := ops.pruneSeries(ctx, now); err != nil {
+			errs = append(errs, fmt.Errorf("prune retired metric series: %w", err))
+		}
+	}
+	if ops.pruneArrivals != nil {
+		if err := ops.pruneArrivals(ctx, now.Add(-monmetrics.BarArrivalRetention)); err != nil {
+			errs = append(errs, fmt.Errorf("prune bar arrivals: %w", err))
 		}
 	}
 	return errors.Join(errs...)
@@ -74,6 +88,27 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 	if runtime != nil && runtime.MetricStores != nil && runtime.MetricStores.Messages != nil {
 		ops.pruneDedupe = func(ctx context.Context, now time.Time) error {
 			_, err := runtime.MetricStores.Messages.PruneDedupe(ctx, now)
+			return err
+		}
+		ops.pruneSeries = func(ctx context.Context, now time.Time) error {
+			var registered []monmetrics.ReporterPlacement
+			if runtime.Repositories != nil && runtime.Repositories.Topology != nil {
+				snapshot, err := runtime.Repositories.Topology.Snapshot(ctx)
+				if err != nil {
+					return err
+				}
+				if snapshot != nil {
+					registered = make([]monmetrics.ReporterPlacement, 0, len(snapshot.Placements))
+					for _, placement := range snapshot.Placements {
+						registered = append(registered, monmetrics.ReporterPlacement{NodeID: placement.HostID, ServiceName: placement.ComponentID})
+					}
+				}
+			}
+			_, err := runtime.MetricStores.Messages.PruneRetiredSeries(ctx, now, registered)
+			return err
+		}
+		ops.pruneArrivals = func(ctx context.Context, cutoff time.Time) error {
+			_, err := runtime.MetricStores.Messages.PruneBarArrivals(ctx, cutoff)
 			return err
 		}
 	}

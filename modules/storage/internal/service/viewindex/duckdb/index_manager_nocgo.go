@@ -23,6 +23,9 @@ func (*IndexManager) Write(context.Context, string, viewindex.ViewIndexWriteBatc
 func (*IndexManager) Query(context.Context, string, viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
 	return nil, 0, ErrUnavailable
 }
+func (*IndexManager) CountBySubject(context.Context, string, viewindex.QuerySpec) (map[string]int64, error) {
+	return nil, ErrUnavailable
+}
 func (*IndexManager) Stat(context.Context, string) (viewindex.ViewIndexStats, error) {
 	return viewindex.ViewIndexStats{}, ErrUnavailable
 }

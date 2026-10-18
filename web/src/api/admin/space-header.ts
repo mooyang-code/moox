@@ -1,7 +1,26 @@
 let selectedSpaceIdCache = "";
 
+// 空间代次：每次实际切换空间（含 A→B→A）递增。只比较空间 ID 无法识别“切走又切回”之后的旧请求。
+let spaceGeneration = 0;
+
+export function selectedSpaceGeneration(): number {
+  return spaceGeneration;
+}
+
+const generationListeners = new Set<() => void>();
+
+/** 空间实际切换（代次递增）时同步通知；返回取消订阅函数。 */
+export function onSpaceGenerationChange(listener: () => void): () => void {
+  generationListeners.add(listener);
+  return () => generationListeners.delete(listener);
+}
+
 export function setSelectedSpaceIdCache(spaceId: string): void {
-  selectedSpaceIdCache = spaceId || "";
+  const next = spaceId || "";
+  const changed = next !== readSelectedSpaceId();
+  if (changed) spaceGeneration += 1;
+  selectedSpaceIdCache = next;
+  if (changed) generationListeners.forEach(listener => listener());
 }
 
 export function readSelectedSpaceId(): string {
@@ -15,12 +34,4 @@ export function readSelectedSpaceId(): string {
   } catch {
     return "";
   }
-}
-
-export function withSelectedSpaceHeader(headers: Record<string, string | undefined> = {}): Record<string, string | undefined> {
-  if (headers["X-Space-Id"]) {
-    return headers;
-  }
-  const spaceId = readSelectedSpaceId();
-  return spaceId ? { ...headers, "X-Space-Id": spaceId } : headers;
 }

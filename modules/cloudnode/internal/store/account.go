@@ -43,11 +43,12 @@ func (r *CatalogRepository) UpsertAccount(ctx context.Context, account CloudAcco
 		account.Provider = "tencent"
 	}
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "c_account_id"}, {Name: "c_is_deleted"}},
-		DoUpdates: clause.AssignmentColumns([]string{
+		Columns: []clause.Column{{Name: "c_account_id"}},
+		// 软删除的同名账户重建时复用旧行：字段取新值并恢复为未删除
+		DoUpdates: append(clause.AssignmentColumns([]string{
 			"c_account_name", "c_provider", "c_credential_secret_id", "c_app_id",
 			"c_cos_region", "c_cos_bucket", "c_extra_config", "c_mtime",
-		}),
+		}), clause.Assignment{Column: clause.Column{Name: "c_is_deleted"}, Value: false}),
 	}).Create(&account).Error
 }
 

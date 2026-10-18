@@ -68,7 +68,7 @@ func (f ErrorReporterFunc) Report(err error) {
 
 // ActionReporter observes the actual ACK/NAK/TERM attempt for a delivery.
 // Reporting is best-effort and cannot change transport behavior. Reports may
-// be concurrent when RunnerConfig.IndependentBatch is enabled.
+// be concurrent when RunnerConfig.Concurrent is enabled.
 type ActionReporter interface {
 	ReportAction(context.Context, *Delivery, HandlerResult, error)
 }
@@ -78,7 +78,9 @@ type RunnerConfig struct {
 	InProgressInterval time.Duration
 	ErrorReporter      ErrorReporter
 	ActionReporter     ActionReporter
-	IndependentBatch   bool
+	// Concurrent 让每条投递在独立 goroutine 中处理，最多 BatchSize 条在途；一条完成就立刻腾出名额继续拉取，
+	// 不等同批其他投递。只用于彼此独立的投递（顺序由处理器自己保证）。
+	Concurrent bool
 }
 
 type Runner struct {
@@ -126,6 +128,9 @@ func (r *Runner) Run(ctx context.Context) error {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
+	if r.cfg.Concurrent {
+		return r.runConcurrent(ctx)
+	}
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -148,12 +153,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			continue
 		}
 
-		var batchErr error
-		if r.cfg.IndependentBatch {
-			batchErr = r.handleIndependentBatch(ctx, deliveries)
-		} else {
-			batchErr = r.handleSequentialBatch(ctx, deliveries)
-		}
+		batchErr := r.handleSequentialBatch(ctx, deliveries)
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -175,6 +175,9 @@ func (r *Runner) handleSequentialBatch(ctx context.Context, deliveries []*Delive
 	var batchErr error
 	for index, delivery := range deliveries {
 		if ctx.Err() != nil {
+			for _, pending := range deliveries[index:] {
+				r.releaseOnStop(ctx, pending, HandlerResult{})
+			}
 			return batchErr
 		}
 		result, inProgressErr, actionErr := r.handle(ctx, delivery)
@@ -208,38 +211,100 @@ func (r *Runner) handleSequentialBatch(ctx context.Context, deliveries []*Delive
 	return batchErr
 }
 
-func (r *Runner) handleIndependentBatch(ctx context.Context, deliveries []*Delivery) error {
-	perDeliveryErrs := make([]error, len(deliveries))
-	inProgressErrs := make([]error, len(deliveries))
-	handlers := make([]func() error, len(deliveries))
-	for index, delivery := range deliveries {
-		index, delivery := index, delivery
-		handlers[index] = func() error {
-			_, inProgressErr, actionErr := r.handle(ctx, delivery)
-			inProgressErrs[index] = inProgressErr
-			perDeliveryErrs[index] = actionErr
-			return nil
-		}
+// runConcurrent 是 Concurrent 模式的拉取循环：空闲名额数就是本次最多拉取的条数，
+// 每条投递独立处理，完成后立刻释放名额，所以慢的投递不会拖住后到的投递。
+func (r *Runner) runConcurrent(ctx context.Context) error {
+	slots := make(chan struct{}, r.cfg.BatchSize)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var fatal error
+	setFatal := func(err error) {
+		mu.Lock()
+		fatal = errors.Join(fatal, err)
+		mu.Unlock()
 	}
-
-	waitErr := trpc.GoAndWait(handlers...)
-	var batchErr error
-	for index, deliveryErr := range perDeliveryErrs {
-		if inProgressErrs[index] != nil {
-			r.report(inProgressErrs[index])
-		}
-		if deliveryErr != nil {
-			if isRetryableFetchErr(deliveryErr) {
-				r.report(deliveryErr)
-			} else {
-				batchErr = errors.Join(batchErr, fmt.Errorf("delivery %d: %w", index, deliveryErr))
+	failed := func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		return fatal
+	}
+	loop := func() error {
+		for {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if err := failed(); err != nil {
+				return err
+			}
+			// 至少等到一个空闲名额，再顺带占满其余空闲名额。
+			select {
+			case slots <- struct{}{}:
+			case <-ctx.Done():
+				return nil
+			}
+			free := 1
+			for free < cap(slots) {
+				select {
+				case slots <- struct{}{}:
+					free++
+					continue
+				default:
+				}
+				break
+			}
+			deliveries, fetchErr := r.consumer.Fetch(ctx, free)
+			for i := len(deliveries); i < free; i++ {
+				<-slots
+			}
+			for _, delivery := range deliveries {
+				wg.Add(1)
+				go func(delivery *Delivery) {
+					defer wg.Done()
+					defer func() {
+						select {
+						case <-slots:
+						default:
+						}
+					}()
+					_, inProgressErr, actionErr := r.handle(ctx, delivery)
+					if inProgressErr != nil {
+						r.report(inProgressErr)
+					}
+					if actionErr != nil {
+						if isRetryableFetchErr(actionErr) {
+							r.report(actionErr)
+						} else {
+							setFatal(actionErr)
+						}
+					}
+				}(delivery)
+			}
+			if len(deliveries) == 0 {
+				if isNormalStop(ctx, fetchErr) {
+					return nil
+				}
+				if isRetryableFetchErr(fetchErr) {
+					if waitErr := waitRetryableFetch(ctx, fetchErr); waitErr != nil {
+						return nil
+					}
+					continue
+				}
+				if fetchErr != nil {
+					r.report(fetchErr)
+					return fmt.Errorf("fetch deliveries: %w", fetchErr)
+				}
+				continue
+			}
+			if fetchErr != nil && !isNormalStop(ctx, fetchErr) && !isRetryableFetchErr(fetchErr) {
+				wrapped := fmt.Errorf("fetch deliveries: %w", fetchErr)
+				r.report(wrapped)
+				return wrapped
 			}
 		}
 	}
-	if waitErr != nil {
-		batchErr = errors.Join(batchErr, fmt.Errorf("process independent batch: %w", waitErr))
-	}
-	return batchErr
+	err := loop()
+	wg.Wait()
+	return errors.Join(err, failed())
 }
 
 func (r *Runner) handle(ctx context.Context, delivery *Delivery) (HandlerResult, error, error) {
@@ -266,6 +331,7 @@ func (r *Runner) handle(ctx context.Context, delivery *Delivery) (HandlerResult,
 
 heartbeatDone:
 	if ctx.Err() != nil {
+		r.releaseOnStop(ctx, delivery, result)
 		return result, inProgressErr, nil
 	}
 	if delivery == nil {
@@ -279,6 +345,25 @@ heartbeatDone:
 		actionErr = fmt.Errorf("apply handler result: %w", actionErr)
 	}
 	return result, inProgressErr, actionErr
+}
+
+// releaseOnStop settles a delivery the stopping runner did not finish: it is
+// returned to the stream at once rather than left to wait out AckWait before
+// another process may take it. A decision the handler did reach (ACK or TERM)
+// is still applied. The action uses a context detached from the stopping one.
+func (r *Runner) releaseOnStop(ctx context.Context, delivery *Delivery, result HandlerResult) {
+	if delivery == nil {
+		return
+	}
+	if result.Decision != ACK && result.Decision != TERM {
+		result = HandlerResult{Decision: RETRY, Err: result.Err}
+	}
+	stopCtx := context.WithoutCancel(ctx)
+	err := ApplyHandlerResult(stopCtx, delivery, result)
+	r.reportAction(stopCtx, delivery, result, err)
+	if err != nil {
+		r.report(fmt.Errorf("release delivery on stop: %w", err))
+	}
 }
 
 func (r *Runner) heartbeat(ctx context.Context, delivery *Delivery, stop <-chan struct{}, errs chan<- error, wg *sync.WaitGroup) {

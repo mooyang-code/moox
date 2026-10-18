@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	"trpc.group/trpc-go/trpc-go/errs"
 )
 
 const (
@@ -23,7 +24,6 @@ const (
 )
 
 var errCollectorBatchOutcomeUnknown = errors.New("collector batch outcome is unknown")
-var errCollectorPublishFenceChanged = errors.New("collector publish fence changed")
 
 type collectorPublishLeaseGuard struct {
 	client *adminclient.Client
@@ -122,6 +122,10 @@ func isAmbiguousCollectorPublishOutcome(err error) bool {
 		return false
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	switch errs.Code(err) {
+	case errs.RetClientNetErr, errs.RetClientConnectFail, errs.RetClientTimeout, errs.RetClientFullLinkTimeout, errs.RetClientCanceled, errs.RetClientReadFrameErr, errs.RetClientDecodeFail, errs.RetServerSystemErr, errs.RetServerEncodeFail, errs.RetServerTimeout, errs.RetServerFullLinkTimeout:
 		return true
 	}
 	var timeout net.Error

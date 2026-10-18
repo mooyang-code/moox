@@ -23,6 +23,16 @@
             <template #icon><icon-plus /></template>
             新增秘钥
           </a-button>
+          <template v-if="isAdmin">
+            <a-button @click="openExport">
+              <template #icon><icon-download /></template>
+              导出全部
+            </a-button>
+            <a-button @click="openImport">
+              <template #icon><icon-upload /></template>
+              导入
+            </a-button>
+          </template>
         </a-space>
       </div>
 
@@ -135,6 +145,71 @@
           </a-form-item>
         </a-form>
       </a-modal>
+
+      <!-- 导出：全部秘钥连同明文用口令加密成迁移包，在服务端完成，浏览器只拿到密文 -->
+      <a-modal
+        v-model:visible="exportVisible"
+        width="560px"
+        title="导出全部秘钥"
+        ok-text="导出"
+        :ok-loading="exporting"
+        @before-ok="submitExport"
+        @close="resetExport"
+      >
+        <a-alert type="warning" class="transfer-alert">
+          迁移包包含全部秘钥的明文（系统秘钥与配置备份除外），用下面的口令加密；在新环境“导入”时需要同一口令。
+          口令丢失无法找回，迁移包和口令请分开保管。
+        </a-alert>
+        <a-form :model="exportForm" auto-label-width>
+          <a-form-item field="passphrase" label="导出口令" required :help="`至少 ${MIN_PASSPHRASE_LENGTH} 个字符`">
+            <a-input-password v-model="exportForm.passphrase" autocomplete="new-password" allow-clear />
+          </a-form-item>
+          <a-form-item field="confirm" label="确认口令" required>
+            <a-input-password v-model="exportForm.confirm" autocomplete="new-password" allow-clear />
+          </a-form-item>
+        </a-form>
+      </a-modal>
+
+      <!-- 导入：按 secret_id 导入迁移包，引用这些秘钥的配置迁移后仍然有效 -->
+      <a-modal
+        v-model:visible="importVisible"
+        width="600px"
+        title="导入秘钥"
+        :ok-text="importResult ? '完成' : '导入'"
+        :ok-loading="importing"
+        :hide-cancel="!!importResult"
+        @before-ok="submitImport"
+        @close="resetImport"
+      >
+        <template v-if="importResult">
+          <a-result status="success" :title="importSummary(importResult)" class="transfer-result" />
+          <div v-if="importResult.skipped?.length" class="transfer-list">
+            <strong>已存在、未覆盖：</strong>{{ importResult.skipped.join("、") }}
+          </div>
+          <div v-if="importResult.failed?.length" class="transfer-list is-failed">
+            <strong>导入失败：</strong>
+            <div v-for="item in importResult.failed" :key="item">{{ item }}</div>
+          </div>
+        </template>
+        <a-form v-else :model="importForm" auto-label-width>
+          <a-form-item label="迁移包" required>
+            <a-space>
+              <a-button @click="pickFile">选择文件</a-button>
+              <span class="transfer-file">{{ importForm.fileName || "从秘钥管理“导出全部”得到的 .json 文件" }}</span>
+            </a-space>
+            <input ref="fileInput" type="file" accept=".json,application/json" hidden @change="onFileChange" />
+          </a-form-item>
+          <a-form-item field="passphrase" label="导出口令" required>
+            <a-input-password v-model="importForm.passphrase" autocomplete="off" allow-clear />
+          </a-form-item>
+          <a-form-item field="overwrite" label="已存在时">
+            <a-radio-group v-model="importForm.overwrite">
+              <a-radio :value="false">跳过</a-radio>
+              <a-radio :value="true">用迁移包覆盖</a-radio>
+            </a-radio-group>
+          </a-form-item>
+        </a-form>
+      </a-modal>
     </div>
   </div>
 </template>
@@ -142,8 +217,22 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { listSecrets, createSecret, updateSecret, deleteSecret, toggleSecretStatus, type Secret } from "@/api/admin/secret";
+import { storeToRefs } from "pinia";
+import {
+  listSecrets,
+  createSecret,
+  updateSecret,
+  deleteSecret,
+  toggleSecretStatus,
+  exportSecrets,
+  importSecrets,
+  type ImportSecretsRsp,
+  type Secret
+} from "@/api/admin/secret";
+import { reportControlError } from "@/api/admin/http";
+import { useUserInfoStore } from "@/store/modules/user-info";
 import { defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
+import { MIN_PASSPHRASE_LENGTH, exportFileName, importSummary, passphraseError, saveTextFile } from "./secret-transfer";
 
 defineOptions({ name: "SettingsSecrets" });
 
@@ -305,7 +394,9 @@ async function submit(): Promise<boolean> {
     }
     await load();
     return true;
-  } catch {
+  } catch (error) {
+    // 业务错误（ret_info）不经过全局提示，这里展示；已提示过的网络错误不会重复。
+    reportControlError(error);
     return false;
   }
 }
@@ -346,6 +437,100 @@ function onPageSizeChange(pageSize: number) {
   load();
 }
 
+// 导出、导入只对全局管理员开放（迁移包里有全部秘钥的明文），其他用户不显示入口。
+const { account } = storeToRefs(useUserInfoStore());
+const isAdmin = computed(() => !!account.value.user?.admin);
+
+const exportVisible = ref(false);
+const exporting = ref(false);
+const exportForm = reactive({ passphrase: "", confirm: "" });
+
+function openExport() {
+  resetExport();
+  exportVisible.value = true;
+}
+
+function resetExport() {
+  Object.assign(exportForm, { passphrase: "", confirm: "" });
+}
+
+async function submitExport(): Promise<boolean> {
+  const error = passphraseError(exportForm.passphrase, exportForm.confirm);
+  if (error) {
+    Message.warning(error);
+    return false;
+  }
+  exporting.value = true;
+  try {
+    const rsp = await exportSecrets(exportForm.passphrase);
+    saveTextFile(exportFileName(new Date()), rsp.bundle);
+    Message.success(`已导出 ${rsp.count || 0} 个秘钥`);
+    resetExport();
+    return true;
+  } catch (error) {
+    reportControlError(error);
+    return false;
+  } finally {
+    exporting.value = false;
+  }
+}
+
+const importVisible = ref(false);
+const importing = ref(false);
+const importResult = ref<ImportSecretsRsp | null>(null);
+const fileInput = ref<HTMLInputElement>();
+const importForm = reactive({ fileName: "", bundle: "", passphrase: "", overwrite: false });
+
+function openImport() {
+  resetImport();
+  importVisible.value = true;
+}
+
+function resetImport() {
+  importResult.value = null;
+  Object.assign(importForm, { fileName: "", bundle: "", passphrase: "", overwrite: false });
+  if (fileInput.value) fileInput.value.value = "";
+}
+
+function pickFile() {
+  fileInput.value?.click();
+}
+
+async function onFileChange(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  importForm.fileName = file.name;
+  importForm.bundle = await file.text();
+}
+
+async function submitImport(): Promise<boolean> {
+  if (importResult.value) return true;
+  if (!importForm.bundle) {
+    Message.warning("请选择迁移包文件");
+    return false;
+  }
+  if (!importForm.passphrase) {
+    Message.warning("请输入导出时设置的口令");
+    return false;
+  }
+  importing.value = true;
+  try {
+    importResult.value = await importSecrets({
+      bundle: importForm.bundle,
+      passphrase: importForm.passphrase,
+      overwrite: importForm.overwrite
+    });
+    importForm.passphrase = "";
+    await load();
+  } catch (error) {
+    // 口令错误、文件不对等是业务错误，不经过全局提示，这里展示；弹窗保持打开以便重试。
+    reportControlError(error);
+  } finally {
+    importing.value = false;
+  }
+  return false;
+}
+
 onMounted(load);
 </script>
 
@@ -361,6 +546,28 @@ onMounted(load);
   margin: 0;
   font-size: 20px;
   font-weight: 600;
+}
+
+.transfer-alert {
+  margin-bottom: 16px;
+}
+
+.transfer-file {
+  color: var(--color-text-3);
+}
+
+.transfer-result {
+  padding: 8px 0 16px;
+}
+
+.transfer-list {
+  margin-top: 8px;
+  color: var(--color-text-2);
+  line-height: 1.8;
+}
+
+.transfer-list.is-failed {
+  color: rgb(var(--red-6));
 }
 
 @media (max-width: 900px) {

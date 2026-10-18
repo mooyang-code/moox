@@ -29,9 +29,6 @@ func TestManualAccountRejectsStrategyOwnershipAndAutomation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ControlManual, a.ControlMode)
 	require.NoError(t, a.Validate())
-	a.OwnerRunnerID = "runner"
-	require.Error(t, a.Validate())
-	a.OwnerRunnerID = ""
 	a.AutomationState, a.PauseReason = AutomationActive, ""
 	require.Error(t, a.Validate())
 	a.ControlMode = "invalid"

@@ -3,7 +3,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 SCRIPT="${ROOT}/scripts/build/build-storage-linux.sh"
-DEPLOY_SCRIPT="${ROOT}/scripts/deploy/deploy-moox.sh"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-build-storage-linux.XXXXXX")"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 
@@ -11,14 +10,6 @@ command -v jq >/dev/null 2>&1 || { echo 'jq is required' >&2; exit 1; }
 ! grep -Fq '106.53.107.122' "${SCRIPT}"
 grep -Fq 'REMOTE_ROOT="${REMOTE_ROOT:-moox-build}"' "${SCRIPT}"
 grep -Fq '$(dirname "${BASH_SOURCE[0]}")/../.."' "${SCRIPT}"
-grep -Fq '"${ROOT}/scripts/build/build-storage-linux.sh"' "${DEPLOY_SCRIPT}"
-grep -Fq '"${WITH_STORAGE}" -eq 1 || "${WITH_ADMIN}" -eq 1 || "${WITH_MONITOR}" -eq 1' "${DEPLOY_SCRIPT}"
-grep -Fq '"${TARGET_GOARCH}" == amd64' "${DEPLOY_SCRIPT}"
-grep -Fq 'TARGET_GOOS="${HOST_GOOS}" TARGET_GOARCH="${HOST_GOARCH}"' "${DEPLOY_SCRIPT}"
-if grep -Fq '"${ROOT}/scripts/build/build.sh" all' "${DEPLOY_SCRIPT}"; then
-  echo 'deploy-moox must build only enabled services and use the compile host for cross-platform Storage' >&2
-  exit 1
-fi
 
 FAKE_BIN="${TMP_ROOT}/bin"
 mkdir -p "${FAKE_BIN}"
@@ -37,7 +28,7 @@ cat >"${FAKE_BIN}/rsync" <<'EOF'
 printf '%s\n' "$@" >>"${RSYNC_LOG}"
 if [[ "${!#}" == "${LOCAL_BIN}/" ]]; then
   mkdir -p "${LOCAL_BIN}"
-  for binary in moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli; do
+  for binary in moox-storage-primary moox-storage-node moox-storage-view; do
     printf '%s\n' binary >"${LOCAL_BIN}/${binary}"
   done
 fi
@@ -52,6 +43,7 @@ EOF
 cat >"${FAKE_BIN}/ssh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >>"${SSH_LOG}"
+if [[ "${!#}" == true ]]; then exit "${KEY_PROBE_STATUS:-0}"; fi
 if [[ "$*" == *"stat -c %s"* ]]; then
   printf '7\n'
 elif [[ "$*" == *"sha256sum"* ]]; then
@@ -66,6 +58,23 @@ shift
 exec "$@"
 EOF
 chmod +x "${FAKE_BIN}/moox-cli" "${FAKE_BIN}/rsync" "${FAKE_BIN}/scp" "${FAKE_BIN}/ssh" "${FAKE_BIN}/sshpass"
+
+cat >"${FAKE_BIN}/go" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == 'env GOVERSION' ]]; then printf 'go%s\n' "${TEST_GO_VERSION}"; exit; fi
+[[ "${1:-}" == build ]] || exit 2
+if [[ "${CGO_ENABLED}" != 0 ]]; then
+  [[ "${MOOX_TEST_STORAGE_CGO:-}" == 1 && "${!#}" == ./cmd/server ]] || { echo 'non-CGO target was built with CGO' >&2; exit 3; }
+fi
+if [[ -n "${MOOX_LOCAL_BUILD_LOG:-}" ]]; then printf '%s/%s:%s:%s\n' "${GOOS}" "${GOARCH}" "${CGO_ENABLED}" "${!#}" >>"${MOOX_LOCAL_BUILD_LOG}"; fi
+while (($#)); do
+  if [[ "$1" == -o ]]; then printf '%s\n' binary >"$2"; exit; fi
+  shift
+done
+exit 4
+EOF
+chmod +x "${FAKE_BIN}/go"
 
 REMOTE_SHA256="$(printf '%s\n' binary | shasum -a 256 | awk '{print $1}')"
 export REMOTE_SHA256
@@ -84,6 +93,8 @@ LOCAL_BIN="${TMP_ROOT}/output" \
 REMOTE_ROOT=/tmp/moox-build-contract \
 GIT_COMMIT=test-sha \
 VERSION=test-version \
+TEST_GO_VERSION="$(cat "${ROOT}/.go-version")" \
+KEY_PROBE_STATUS=1 \
 MOOX_STORAGE_BUILD_HOST=storage \
 bash "${SCRIPT}"
 
@@ -104,10 +115,39 @@ grep -Fq -- '2200' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'BatchMode=no' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'GIT_COMMIT=' "${TMP_ROOT}/ssh.log"
 grep -Fq -- 'TARGET_GOARCH=' "${TMP_ROOT}/ssh.log"
-grep -Fq -- 'GOTMPDIR=$PWD/.gotmp' "${TMP_ROOT}/ssh.log"
+grep -Fq -- 'GOTMPDIR="$PWD/.gotmp"' "${TMP_ROOT}/ssh.log"
+grep -Fq -- 'GOTOOLCHAIN=local' "${TMP_ROOT}/ssh.log"
+grep -Fq -- 'check-go-version.sh' "${TMP_ROOT}/ssh.log"
+grep -Fq -- 'storage-cgo' "${TMP_ROOT}/ssh.log"
+! grep -Fq -- 'build.sh access' "${TMP_ROOT}/ssh.log"
+! grep -Fq -- 'moox-storage-cli' "${TMP_ROOT}/scp.log"
 ! grep -Fq -- 'fixture-password' "${TMP_ROOT}/rsync.log" "${TMP_ROOT}/scp.log" "${TMP_ROOT}/ssh.log"
-for binary in moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli; do
+for binary in moox-storage-primary moox-storage-node moox-storage-view moox-storage-cli moox-access; do
   test -s "${TMP_ROOT}/output/${binary}"
 done
+
+RSYNC_LOG="${TMP_ROOT}/key-rsync.log" \
+SCP_LOG="${TMP_ROOT}/key-scp.log" \
+SSH_LOG="${TMP_ROOT}/key-ssh.log" \
+PATH="${FAKE_BIN}:${PATH}" \
+MOOX_CLI="${FAKE_BIN}/moox-cli" \
+MOOX_SSH_PASSWORD=fixture-password \
+MOOX_LINUX_CGO_TARGET=storage-primary \
+CONFIG="${ROOT}/moox.toml.contract-test" \
+KNOWN_HOSTS_PATH="${TMP_ROOT}/known_hosts" \
+BIN_DIR="${TMP_ROOT}/key-output" \
+REMOTE_ROOT=/tmp/moox-build-contract \
+GIT_COMMIT=test-sha VERSION=test-version \
+bash "${SCRIPT}"
+grep -Fq -- 'BatchMode=yes' "${TMP_ROOT}/key-rsync.log"
+! grep -Fq -- 'BatchMode=no' "${TMP_ROOT}/key-rsync.log" "${TMP_ROOT}/key-scp.log"
+
+PATH="${FAKE_BIN}:${PATH}" TEST_GO_VERSION="$(cat "${ROOT}/.go-version")" \
+MOOX_TEST_STORAGE_CGO=1 MOOX_LOCAL_BUILD_LOG="${TMP_ROOT}/cgo-target.log" \
+CGO_ENABLED=1 TARGET_GOOS=linux TARGET_GOARCH=amd64 BIN_DIR="${TMP_ROOT}/cgo-output" \
+bash "${ROOT}/scripts/build/build.sh" storage-cgo
+test "$(wc -l <"${TMP_ROOT}/cgo-target.log" | tr -d ' ')" = 3
+test "$(grep -c '^linux/amd64:1:./cmd/server$' "${TMP_ROOT}/cgo-target.log")" = 3
+test ! -e "${TMP_ROOT}/cgo-output/moox-storage-cli"
 
 echo 'build-storage-linux contract passed'

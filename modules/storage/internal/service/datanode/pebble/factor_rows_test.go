@@ -26,7 +26,7 @@ func TestFactorRowsWholeRowUpsertOverwritesNullFields(t *testing.T) {
 	if _, err := store.WriteFactorRows(context.Background(), "space", "factor_result", "commit-null", []*pb.RowFieldUpsert{row}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"close", "ma"}, nil)
+	got, err := store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"close", "ma"}, nil)
 	if err != nil || len(got) != 1 {
 		t.Fatalf("rows=%v err=%v", got, err)
 	}

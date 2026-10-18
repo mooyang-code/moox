@@ -21,7 +21,7 @@ var (
 	ErrTagInvalid       = errors.New("invalid tag")
 	ErrTagBuiltin       = errors.New("builtin tag cannot be deleted")
 	ErrTagReferenced    = errors.New("tag is referenced by datasets")
-	ErrTagAutoMembers   = errors.New("auto tag members are maintained by moox-collector-subject")
+	ErrTagAutoMembers   = errors.New("auto tag members are maintained by moox-collector")
 	ErrTagSnapshotEmpty = errors.New("auto tag snapshot is empty")
 )
 

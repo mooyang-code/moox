@@ -31,10 +31,10 @@ func (c *Client) WriteRows(ctx context.Context, spaceID, datasetID, commitID str
 	if err != nil {
 		return err
 	}
-	if len(info.Freqs) != 1 || strings.TrimSpace(info.Freqs[0]) == "" {
-		return fmt.Errorf("factor result dataset %q must have exactly one frequency", datasetID)
+	frequency := info.Freq
+	if frequency == "" {
+		return fmt.Errorf("factor result dataset %q has no frequency", datasetID)
 	}
-	frequency := info.Freqs[0]
 	upserts := make([]*storagepb.RowFieldUpsert, 0, len(rows))
 	for index, row := range rows {
 		if strings.TrimSpace(row.SubjectID) == "" || row.DataTime.IsZero() {
@@ -94,6 +94,10 @@ func encodeValue(value any) (*storagepb.TypedValue, error) {
 	switch item := value.(type) {
 	case string:
 		return &storagepb.TypedValue{Value: &storagepb.TypedValue_StringValue{StringValue: item}}, nil
+	case TimeText:
+		return &storagepb.TypedValue{Value: &storagepb.TypedValue_TimeValue{TimeValue: string(item)}}, nil
+	case JSONText:
+		return &storagepb.TypedValue{Value: &storagepb.TypedValue_JsonValue{JsonValue: string(item)}}, nil
 	case bool:
 		return &storagepb.TypedValue{Value: &storagepb.TypedValue_BoolValue{BoolValue: item}}, nil
 	case int:

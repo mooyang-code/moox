@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -396,6 +397,16 @@ func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID, datasetID, sub
 		items = append(items, &pb.DatasetSubject{SpaceId: spaceID, DatasetId: datasetID, SubjectId: id, Status: status})
 	}
 	return items, &pb.PageResult{Page: pageNo, Size: size, Total: uint32(total), HasMore: uint64(offset)+uint64(len(items)) < total}, rows.Err()
+}
+
+// SubjectsRevision 读取空间的标的修订号，由 t_space_revisions 上的触发器维护；没有记录表示从未变化，返回 0。
+func (s *Store) SubjectsRevision(ctx context.Context, spaceID string) (uint64, error) {
+	var revision uint64
+	err := s.queryDB(ctx).QueryRowContext(ctx, `SELECT c_subjects_revision FROM t_space_revisions WHERE c_space_id = ?`, spaceID).Scan(&revision)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return revision, err
 }
 
 func placeholders(count int) string {

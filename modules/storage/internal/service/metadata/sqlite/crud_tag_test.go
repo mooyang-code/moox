@@ -146,7 +146,7 @@ func TestCreateTagAllowsMissingSubjectListingCapabilityFailOpen(t *testing.T) {
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
 
-	// Bootstrap seeds DataSources/Tags before collector-subject has published
+	// Bootstrap seeds DataSources/Tags before Collector has published
 	// subject_listing. Missing capability metadata is therefore fail-open; the
 	// planner/provider still validates the concrete route before dispatch.
 	if _, err := store.CreateTag(ctx, &pb.Tag{

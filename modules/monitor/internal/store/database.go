@@ -3,8 +3,8 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +13,17 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
+
+// gormLogger keeps GORM's slow-query and error logging but drops
+// ErrRecordNotFound, which the repositories return as an ordinary miss, and
+// the terminal colors that clutter the log file.
+var gormLogger = logger.New(log.New(os.Stdout, "", log.LstdFlags), logger.Config{
+	SlowThreshold:             200 * time.Millisecond,
+	LogLevel:                  logger.Warn,
+	IgnoreRecordNotFoundError: true,
+})
 
 type Store struct {
 	db *gorm.DB
@@ -28,7 +38,7 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("create database directory: %w", err)
 		}
 	}
-	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(path), &gorm.Config{Logger: gormLogger})
 	if err != nil {
 		return nil, fmt.Errorf("open monitor database: %w", err)
 	}
@@ -103,6 +113,18 @@ func (m *Store) Ping(ctx context.Context) error {
 	return m.db.WithContext(ctx).Exec("SELECT 1").Error
 }
 
+// TableExists 判断表是否已经存在；用于区分首次建库（例如只在首次建库时写入部署配置里的通知渠道）。
+func (m *Store) TableExists(name string) (bool, error) {
+	if m == nil || m.db == nil {
+		return false, fmt.Errorf("monitor database is not open")
+	}
+	var count int64
+	if err := m.db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (m *Store) ApplySchema(sql string) error {
 	if m == nil || m.db == nil {
 		return fmt.Errorf("monitor database is not open")
@@ -111,74 +133,6 @@ func (m *Store) ApplySchema(sql string) error {
 		return fmt.Errorf("schema sql is empty")
 	}
 	return m.db.Exec(sql).Error
-}
-
-// ResetLegacyMonitorTables detects the pre-global-notification alert schema.
-// The project is greenfield, so an old database is rebuilt rather than
-// attempting an unsafe SQLite ALTER that could leave a required webhook
-// column behind. The caller must apply the current schema afterwards.
-func (m *Store) ResetLegacyMonitorTables() (bool, error) {
-	if m == nil || m.db == nil {
-		return false, fmt.Errorf("monitor database is not open")
-	}
-	rows, err := m.db.Raw("PRAGMA table_info(t_monitor_alert_rules)").Rows()
-	if err != nil {
-		return false, err
-	}
-	legacy := false
-	for rows.Next() {
-		var cid, notNull, pk int
-		var name, columnType sql.NullString
-		var defaultValue sql.NullString
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
-			_ = rows.Close()
-			return false, err
-		}
-		if name.Valid && name.String == "c_webhook_id" {
-			legacy = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return false, err
-	}
-	if err := rows.Close(); err != nil {
-		return false, err
-	}
-	if !legacy {
-		return false, nil
-	}
-	for _, table := range []string{
-		"t_monitor_checks", "t_monitor_check_results", "t_monitor_alert_rules",
-		"t_monitor_alert_states", "t_monitor_alert_events",
-	} {
-		if err := m.db.Exec("DROP TABLE IF EXISTS " + table).Error; err != nil {
-			return false, fmt.Errorf("reset legacy monitor table %s: %w", table, err)
-		}
-	}
-	return true, nil
-}
-
-// DropRetiredTables removes greenfield-era tables that no longer have a
-// runtime owner. This is intentionally destructive: the project has not
-// shipped a compatibility migration and these tables contain no supported
-// user data.
-func (m *Store) DropRetiredTables() error {
-	if m == nil || m.db == nil {
-		return fmt.Errorf("monitor database is not open")
-	}
-	for _, table := range []string{
-		"t_monitor_webhooks",
-		"t_monitor_metric_rules",
-		"t_monitor_metric_rule_states",
-		"t_monitor_metric_rule_evaluations",
-		"t_monitor_metric_rule_channels",
-	} {
-		if err := m.db.Exec("DROP TABLE IF EXISTS " + table).Error; err != nil {
-			return fmt.Errorf("drop retired table %s: %w", table, err)
-		}
-	}
-	return nil
 }
 
 func (m *Store) Close() error {

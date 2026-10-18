@@ -46,6 +46,76 @@ type Handler struct {
 	bootID          string
 	reportErrors    prometheus.Counter
 	reportLastError prometheus.Gauge
+	// flushPending 表示已安排了一次补报（见 FlushOnOutputAdvance）；afterFunc 默认是 time.AfterFunc，测试可替换。
+	flushPending atomic.Bool
+	afterFunc    func(time.Duration, func())
+}
+
+// flushDelay 是补报的合并窗口：输出水位前进后最多等这么久补报一份快照，窗口内的多次前进合并成一次。
+const flushDelay = time.Second
+
+// flushTimeout 是一次补报（采集并发布快照）的最长时间，与定时上报的超时同一量级。
+const flushTimeout = 30 * time.Second
+
+var (
+	advanceSubscribersMu sync.Mutex
+	advanceSubscribers   []*Handler
+)
+
+// FlushOnOutputAdvance 让这个处理器在本进程的数据集输出水位前进时尽快补报一份快照，不等 30 秒的定时上报：
+// Monitor 因此在约 1 秒内看到新写完的那根 K 线。只有常驻服务在注册定时上报时调用；返回的函数取消订阅（测试用）。
+func (h *Handler) FlushOnOutputAdvance() (cancel func()) {
+	advanceSubscribersMu.Lock()
+	defer advanceSubscribersMu.Unlock()
+	advanceSubscribers = append(advanceSubscribers, h)
+	return func() {
+		advanceSubscribersMu.Lock()
+		defer advanceSubscribersMu.Unlock()
+		for i, item := range advanceSubscribers {
+			if item == h {
+				advanceSubscribers = append(advanceSubscribers[:i:i], advanceSubscribers[i+1:]...)
+				return
+			}
+		}
+	}
+}
+
+// NotifyOutputAdvanced 由数据集输出水位前进的地方调用（DatasetMetrics、Storage View），通知已订阅的处理器补报。
+// 系统数据（mooxsys：服务指标、主机指标）不补报：Monitor 把每份快照写进系统数据集，水位因此前进，
+// 若再触发补报就会形成每秒一份快照的循环。
+func NotifyOutputAdvanced(spaceID string) {
+	if spaceID == DefaultSpace {
+		return
+	}
+	advanceSubscribersMu.Lock()
+	handlers := append([]*Handler(nil), advanceSubscribers...)
+	advanceSubscribersMu.Unlock()
+	for _, h := range handlers {
+		h.requestFlush()
+	}
+}
+
+// requestFlush 安排一次补报；已经安排了就合并进去。
+func (h *Handler) requestFlush() {
+	if !h.flushPending.CompareAndSwap(false, true) {
+		return
+	}
+	after := h.afterFunc
+	if after == nil {
+		after = func(delay time.Duration, run func()) { time.AfterFunc(delay, run) }
+	}
+	after(flushDelay, h.flush)
+}
+
+func (h *Handler) flush() {
+	// 先清标记再上报：上报期间又有水位前进时会再安排一次，不会漏掉。
+	h.flushPending.Store(false)
+	ctx, cancel := context.WithTimeout(trpc.BackgroundContext(), flushTimeout)
+	defer cancel()
+	if err := h.Handle(ctx); errors.Is(err, ErrInFlight) {
+		// 定时上报正在进行，它的快照可能是在这次水位前进之前采集的：稍后再补一次。
+		h.requestFlush()
+	}
 }
 
 func NewHandler(cfg Config) (*Handler, error) {
@@ -158,17 +228,6 @@ func (h *Handler) invalidatePublisher(client Publisher) {
 	}
 }
 
-func (h *Handler) EventReporter(ctx context.Context) (*EventReporter, error) {
-	if h == nil {
-		return nil, fmt.Errorf("metrics reporter handler is nil")
-	}
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return nil, err
-	}
-	return &EventReporter{Registry: registry, publisherFn: h.publisher}, nil
-}
-
 func (h *Handler) reportError(ctx context.Context, err error) error {
 	if err != nil {
 		h.reportErrors.Inc()
@@ -218,7 +277,7 @@ func (h *Handler) BuildSnapshot() (*metricspb.MetricSnapshot, error) {
 	familyCount, sampleCount := 0, 0
 	for _, family := range families {
 		name := family.GetName()
-		if !strings.HasPrefix(name, "moox_") {
+		if !IsMonitoredMetric(name) {
 			continue
 		}
 		familyCount++

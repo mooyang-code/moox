@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -21,19 +21,9 @@ type fakeForwarder struct {
 	remote  string
 }
 
-func (f *fakeForwarder) ForwardLocal(ctx context.Context, remote string) (net.Listener, error) {
-	f.remote = remote
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, err
-	}
-	server := &http.Server{Handler: f.handler}
-	go func() { _ = server.Serve(listener) }()
-	go func() {
-		<-ctx.Done()
-		_ = server.Close()
-	}()
-	return listener, nil
+func (f *fakeForwarder) Invoke(ctx context.Context, service, method string, req, rsp any) error {
+	f.remote = service
+	return (testfixture.HandlerGateway{Handler: f.handler}).Invoke(ctx, service, method, req, rsp)
 }
 
 func clientSnapshot(t *testing.T) *setupconfig.Snapshot {
@@ -47,27 +37,32 @@ func clientSnapshotWithPath(t *testing.T) (*setupconfig.Snapshot, string) {
 	body := `[admin]
 username = "admin"
 password = "recognizable-admin-password"
+
 [tencent_cloud]
 secret_id = "recognizable-secret-id"
 secret_key = "recognizable-secret-key"
+
 [eventbus]
-host = "eventbus.example.test"
 port = 4222
 tls_enabled = true
-[hosts."eventbus.example.test"]
+
+[hosts.control]
+address = "eventbus.example.test"
+[hosts.control.ssh]
 port = 22
 username = "ubuntu"
 password = "recognizable-control-password"
-[hosts."192.0.2.11"]
+
+[hosts.compute]
+address = "192.0.2.11"
+[hosts.compute.ssh]
 port = 22
 username = "ubuntu"
 password = "recognizable-compute-password"
-[control_host]
-name = "control"
-host = "eventbus.example.test"
-[[other_hosts]]
-name = "compute"
-host = "192.0.2.11"
+
+[placements]
+control = ["admin", "console-proxy", "web-host", "eventbus"]
+compute = []
 `
 	path := filepath.Join(root, "moox.toml")
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
@@ -76,7 +71,7 @@ host = "192.0.2.11"
 	return snapshot, path
 }
 
-func TestApplyUsesForwardedPrivateSetupEndpoint(t *testing.T) {
+func TestApplyUsesCommandGateway(t *testing.T) {
 	var capturedPath string
 	var capturedRequest pb.ApplySetupReq
 	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -93,7 +88,7 @@ func TestApplyUsesForwardedPrivateSetupEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "created", result.Action)
 	assert.Equal(t, 2, result.Hosts)
-	assert.Equal(t, "127.0.0.1:11110", forwarder.remote)
+	assert.Equal(t, "trpc.moox.admin.Setup", forwarder.remote)
 	assert.Equal(t, "/trpc.moox.admin.Setup/ApplySetup", capturedPath)
 	assert.Equal(t, "recognizable-secret-key", capturedRequest.GetTencentCloud().GetSecretKey())
 	assert.Empty(t, capturedRequest.GetSpaces())
@@ -166,226 +161,6 @@ func TestStatusWithSpacesReturnsSpaceCount(t *testing.T) {
 	require.Len(t, capturedRequest.GetSpaces(), 1)
 	assert.Equal(t, "crypto", capturedRequest.GetSpaces()[0].GetSpaceId())
 	assert.Equal(t, 1, result.Spaces)
-}
-
-func TestApplyStoragePlacementCreatesRemoteLoopbackRoutesAndPublishesGatewayEndpoints(t *testing.T) {
-	t.Parallel()
-	updated := map[string]*pb.ServiceDeployment{}
-	created := map[string]*pb.ServiceDeployment{}
-	var gatewayNode *pb.GatewayNode
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/trpc.moox.ops.SysDeploy/ListGatewayNodes":
-			response, _ := protojson.Marshal(&pb.ListGatewayNodesRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}})
-			_, _ = w.Write(response)
-		case "/trpc.moox.ops.SysDeploy/CreateGatewayNode":
-			var input pb.CreateGatewayNodeReq
-			body, _ := io.ReadAll(request.Body)
-			_ = protojson.Unmarshal(body, &input)
-			gatewayNode = input.GetNode()
-			response, _ := protojson.Marshal(&pb.CreateGatewayNodeRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Node: gatewayNode})
-			_, _ = w.Write(response)
-		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
-			var input pb.GetServiceDeploymentReq
-			body, _ := io.ReadAll(request.Body)
-			_ = protojson.Unmarshal(body, &input)
-			if input.GetNodeId() == "compute-1" {
-				response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_NOT_FOUND}})
-				_, _ = w.Write(response)
-				return
-			}
-			response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{
-				RetInfo:    &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
-				Deployment: &pb.ServiceDeployment{NodeId: "control", ServiceName: input.GetServiceName(), Host: "127.0.0.1", Status: "active", ExtraConfig: `{"health_url":"http://127.0.0.1:20210/readyz","monitor_enabled":true}`},
-			})
-			_, _ = w.Write(response)
-		case "/trpc.moox.ops.SysDeploy/CreateServiceDeployment":
-			var input pb.CreateServiceDeploymentReq
-			body, _ := io.ReadAll(request.Body)
-			_ = protojson.Unmarshal(body, &input)
-			created[input.GetDeployment().GetServiceName()] = input.GetDeployment()
-			response, _ := protojson.Marshal(&pb.CreateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: input.GetDeployment()})
-			_, _ = w.Write(response)
-		case "/trpc.moox.ops.SysDeploy/UpdateServiceDeployment":
-			var input pb.UpdateServiceDeploymentReq
-			body, _ := io.ReadAll(request.Body)
-			_ = protojson.Unmarshal(body, &input)
-			updated[input.GetServiceName()] = input.GetDeployment()
-			response, _ := protojson.Marshal(&pb.UpdateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: input.GetDeployment()})
-			_, _ = w.Write(response)
-		default:
-			http.NotFound(w, request)
-		}
-	})}
-
-	result, err := New(forwarder).ApplyStoragePlacement(context.Background(), "compute-1", "203.0.113.9")
-	require.NoError(t, err)
-	require.Equal(t, len(storageDeploymentNames), result.Deployments)
-	require.Equal(t, "127.0.0.1:11109", forwarder.remote)
-	require.Equal(t, "compute-1", gatewayNode.GetNodeId())
-	require.Equal(t, "https://203.0.113.9:11001", gatewayNode.GetPublicAddress())
-	for _, name := range storageDeploymentNames {
-		require.Equal(t, "compute-1", created[name].GetNodeId(), name)
-		require.Equal(t, "127.0.0.1", created[name].GetHost(), name)
-	}
-	require.Equal(t, "203.0.113.9", updated["service_gateway_native"].GetHost())
-}
-
-func TestActivateStoragePlacementEnablesLocalStorageRoutes(t *testing.T) {
-	updated := map[string]*pb.ServiceDeployment{}
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
-			var input pb.GetServiceDeploymentReq
-			body, _ := io.ReadAll(request.Body)
-			_ = protojson.Unmarshal(body, &input)
-			response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{
-				RetInfo:    &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
-				Deployment: &pb.ServiceDeployment{NodeId: input.GetNodeId(), ServiceName: input.GetServiceName(), Status: "disabled", GatewayEnabled: true},
-			})
-			_, _ = w.Write(response)
-		case "/trpc.moox.ops.SysDeploy/UpdateServiceDeployment":
-			var input pb.UpdateServiceDeploymentReq
-			body, _ := io.ReadAll(request.Body)
-			_ = protojson.Unmarshal(body, &input)
-			updated[input.GetServiceName()] = input.GetDeployment()
-			response, _ := protojson.Marshal(&pb.UpdateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: input.GetDeployment()})
-			_, _ = w.Write(response)
-		default:
-			http.NotFound(w, request)
-		}
-	})}
-
-	result, err := New(forwarder).ActivateStoragePlacement(context.Background(), "control")
-	require.NoError(t, err)
-	require.Equal(t, len(storageDeploymentNames), result.Deployments)
-	for _, name := range storageDeploymentNames {
-		assert.Equal(t, "active", updated[name].GetStatus(), name)
-		assert.True(t, updated[name].GetGatewayEnabled(), name)
-	}
-}
-
-func TestApplyTradeConsolePlacementUpdatesControlRoute(t *testing.T) {
-	var updated *pb.ServiceDeployment
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
-			response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{
-				RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
-				Deployment: &pb.ServiceDeployment{
-					NodeId: "control", ServiceName: "trade_console", ServiceKind: "trade",
-					Protocol: "http", Host: "127.0.0.1", Port: 11200,
-					GatewayPath: "trpc.moox.trade.TradeConsoleService", Scope: "internal",
-					Status: "active",
-				},
-			})
-			_, _ = w.Write(response)
-		case "/trpc.moox.ops.SysDeploy/UpdateServiceDeployment":
-			var input pb.UpdateServiceDeploymentReq
-			body, _ := io.ReadAll(request.Body)
-			_ = protojson.Unmarshal(body, &input)
-			updated = input.GetDeployment()
-			response, _ := protojson.Marshal(&pb.UpdateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: updated})
-			_, _ = w.Write(response)
-		default:
-			http.NotFound(w, request)
-		}
-	})}
-
-	require.NoError(t, New(forwarder).ApplyTradeConsolePlacement(context.Background(), "43.132.204.177"))
-	require.NotNil(t, updated)
-	assert.Equal(t, "control", updated.GetNodeId())
-	assert.Equal(t, "trade_console", updated.GetServiceName())
-	assert.Equal(t, "43.132.204.177", updated.GetHost())
-	assert.Equal(t, int32(11200), updated.GetPort())
-	assert.Equal(t, "trpc.moox.trade.TradeConsoleService", updated.GetGatewayPath())
-	assert.Equal(t, "active", updated.GetStatus())
-}
-
-func TestApplyTradeConsolePlacementRejectsLoopback(t *testing.T) {
-	forwarder := &fakeForwarder{handler: http.NotFoundHandler()}
-	err := New(forwarder).ApplyTradeConsolePlacement(context.Background(), "127.0.0.1")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "trade_placement_invalid")
-}
-
-func TestDisableServiceDeploymentMarksExistingRowDisabled(t *testing.T) {
-	var updated *pb.ServiceDeployment
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
-			_, _ = w.Write([]byte(`{"ret_info":{"code":"SUCCESS"},"deployment":{"node_id":"compute","service_name":"moox_trade","service_kind":"trade","protocol":"http","host":"127.0.0.1","port":11210,"status":"active"}}`))
-		case "/trpc.moox.ops.SysDeploy/UpdateServiceDeployment":
-			var input pb.UpdateServiceDeploymentReq
-			body, _ := io.ReadAll(request.Body)
-			_ = protojson.Unmarshal(body, &input)
-			updated = input.GetDeployment()
-			_, _ = w.Write([]byte(`{"ret_info":{"code":"SUCCESS"}}`))
-		default:
-			http.NotFound(w, request)
-		}
-	})}
-	require.NoError(t, New(forwarder).DisableServiceDeployment(context.Background(), "compute", "trade"))
-	require.NotNil(t, updated)
-	assert.Equal(t, "moox_trade", updated.GetServiceName())
-	assert.Equal(t, "disabled", updated.GetStatus())
-}
-
-func TestRegisterServiceDeploymentCreatesCanonicalMonitorRow(t *testing.T) {
-	var created *pb.ServiceDeployment
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
-			_, _ = w.Write([]byte(`{"ret_info":{"code":"NOT_FOUND"}}`))
-		case "/trpc.moox.ops.SysDeploy/CreateServiceDeployment":
-			var input pb.CreateServiceDeploymentReq
-			body, _ := io.ReadAll(request.Body)
-			_ = protojson.Unmarshal(body, &input)
-			created = input.GetDeployment()
-			response, _ := protojson.Marshal(&pb.CreateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: created})
-			_, _ = w.Write(response)
-		default:
-			http.NotFound(w, request)
-		}
-	})}
-
-	require.NoError(t, New(forwarder).RegisterServiceDeployment(context.Background(), "compute-1", "monitor", "203.0.113.10"))
-	require.NotNil(t, created)
-	assert.Equal(t, "compute-1", created.GetNodeId())
-	assert.Equal(t, "moox_monitor", created.GetServiceName())
-	assert.Equal(t, "203.0.113.10", created.GetHost())
-	assert.Equal(t, int32(11410), created.GetPort())
-	assert.Contains(t, created.GetExtraConfig(), "203.0.113.10:11409/readyz")
-}
-
-func TestRegisterServiceDeploymentPreservesExistingDefinition(t *testing.T) {
-	var updated *pb.ServiceDeployment
-	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/trpc.moox.ops.SysDeploy/GetServiceDeployment":
-			response, _ := protojson.Marshal(&pb.GetServiceDeploymentRsp{
-				RetInfo:    &pb.RetInfo{Code: pb.ErrorCode_SUCCESS},
-				Deployment: &pb.ServiceDeployment{NodeId: "control", ServiceName: "moox_monitor", Host: "127.0.0.1", Port: 11410, Status: "disabled", ExtraConfig: `{"monitor_enabled":false,"operator":"kept"}`},
-			})
-			_, _ = w.Write(response)
-		case "/trpc.moox.ops.SysDeploy/UpdateServiceDeployment":
-			var input pb.UpdateServiceDeploymentReq
-			body, _ := io.ReadAll(request.Body)
-			_ = protojson.Unmarshal(body, &input)
-			updated = input.GetDeployment()
-			response, _ := protojson.Marshal(&pb.UpdateServiceDeploymentRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Deployment: updated})
-			_, _ = w.Write(response)
-		default:
-			http.NotFound(w, request)
-		}
-	})}
-
-	require.NoError(t, New(forwarder).RegisterServiceDeployment(context.Background(), "control", "monitor", "192.0.2.99"))
-	require.NotNil(t, updated)
-	assert.Equal(t, "active", updated.GetStatus())
-	assert.Equal(t, "127.0.0.1", updated.GetHost())
-	assert.Equal(t, int32(11410), updated.GetPort())
-	assert.Contains(t, updated.GetExtraConfig(), "operator")
 }
 
 func TestApplyReturnsStableSecretFreeErrors(t *testing.T) {

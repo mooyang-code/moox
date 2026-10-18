@@ -175,6 +175,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
+import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { formatTimestamp, listTradingAccounts, listHoldings, listPositions, syncTradingAccount } from "@/api/trade";
 import type { TradingAccount, Holding, Position } from "@/api/trade/types";
@@ -186,6 +187,7 @@ const positions = ref<Position[]>([]);
 const holdings = ref<Holding[]>([]);
 const route = useRoute();
 const router = useRouter();
+const spaceStore = useSpaceStore();
 const tradingAccountId = ref(typeof route.query.trading_account_id === "string" ? route.query.trading_account_id : "");
 const instrumentId = ref("");
 const loading = ref(false);
@@ -312,11 +314,14 @@ async function loadPositions() {
 
 async function sync() {
   const accountId = tradingAccountId.value;
+  const spaceAtStart = spaceStore.selectedSpaceId;
   syncing.value = true;
   try {
     const response = await syncTradingAccount(accountId);
+    // 同步期间切换了空间：旧空间的结果不再处理，也不能再触发刷新（会让新空间的账户加载被打断、持仓加载在账户为空时提前结束）。
+    if (spaceStore.selectedSpaceId !== spaceAtStart) return;
     if (tradingAccountId.value === accountId) Message.success(`同步完成：${response.positions_updated} 个仓位`);
-    await Promise.all([loadAccounts(), loadPositions()]);
+    await refresh(); // 先完成账户加载，再按选中的账户加载持仓
   } finally {
     syncing.value = false;
   }
@@ -340,6 +345,26 @@ watch(
   () => route.query.trading_account_id,
   () => {
     void applyRouteAccount();
+  }
+);
+
+// 切换空间：账户属于旧空间，必须清空账户、数据和路由里的账户参数，再加载新空间的账户。
+watch(
+  () => spaceStore.selectedSpaceId,
+  (next, previous) => {
+    if (!next || next === previous) return;
+    accountRequests.invalidate();
+    positionRequests.invalidate();
+    accounts.value = [];
+    accountsLoaded.value = false;
+    tradingAccountId.value = "";
+    positions.value = [];
+    holdings.value = [];
+    loading.value = false;
+    void (async () => {
+      if (route.query.trading_account_id) await router.replace({ query: { ...route.query, trading_account_id: undefined } });
+      await refresh();
+    })();
   }
 );
 

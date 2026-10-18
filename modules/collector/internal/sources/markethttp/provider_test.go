@@ -68,6 +68,80 @@ func TestProviderStripsJSONPAndKeepsCalendarDayInUTC(t *testing.T) {
 	require.Equal(t, time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC), rows[0].BarEnd)
 }
 
+func TestProviderKeysEastMoneyWeeklyRowsByISOMonday(t *testing.T) {
+	var klt string
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		klt = req.URL.Query().Get("klt")
+		recorder := httptest.NewRecorder()
+		// 2026-10-17 实测上证指数周线标签：该周最后一个交易日（周四、周三、周五、周五）。
+		_, _ = recorder.WriteString(`{"data":{"klines":[` +
+			`"2026-09-24,10,10.1,10.2,9.8,12,121.2",` +
+			`"2026-09-30,10,10.1,10.2,9.8,12,121.2",` +
+			`"2026-10-09,10,10.1,10.2,9.8,12,121.2",` +
+			`"2026-10-16,10,10.1,10.2,9.8,12,121.2"]}}`)
+		return recorder.Result(), nil
+	})}
+	shanghai := time.FixedZone("Asia/Shanghai", 8*60*60)
+	provider := New(Config{
+		ProviderID: "eastmoney", SourceID: "index_http", MarketID: "stockcn",
+		InstrumentType: marketdata.InstrumentIndex, Exchanges: []string{"XSHG"},
+		BaseURL: "http://fixture.test", Endpoint: "/kline", Host: "fixture.test",
+		HTTPClient: client, Location: shanghai,
+		SymbolFunc:  func(string) (string, error) { return "1.000001", nil },
+		Frequencies: []string{"1w"}, MaxBarsPerRequest: 100, HasAmount: true,
+		// 周六上午：本周（10-12 那周）的 BarEnd 是 10-19，尚未收盘，应被跳过。
+		Now: func() time.Time { return time.Date(2026, 10, 17, 2, 0, 0, 0, time.UTC) },
+	})
+	rows, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{
+		MarketID: "stockcn", ExchangeID: "XSHG", SubjectID: "000001.XSHG",
+		ProviderSymbol: "000001", Frequency: "1w", Limit: 10, RequestID: "weekly",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "102", klt)
+	want := []time.Time{
+		time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC),
+	}
+	labels := []time.Time{
+		time.Date(2026, 9, 24, 0, 0, 0, 0, shanghai),
+		time.Date(2026, 9, 30, 0, 0, 0, 0, shanghai),
+		time.Date(2026, 10, 9, 0, 0, 0, 0, shanghai),
+	}
+	require.Len(t, rows, len(want))
+	for i, row := range rows {
+		require.Equal(t, want[i], row.BarStart)
+		require.Equal(t, time.Monday, row.BarStart.Weekday())
+		require.Equal(t, want[i].AddDate(0, 0, 7), row.BarEnd)
+		// ProviderTimestamp 保留上游原始标签。
+		require.True(t, labels[i].Equal(row.ProviderTimestamp), "row %d provider time %s", i, row.ProviderTimestamp)
+	}
+}
+
+func TestParseBarTimeWeeklyKeyIsISOMonday(t *testing.T) {
+	provider := New(Config{Location: time.FixedZone("Asia/Shanghai", 8*60*60)})
+	cases := map[string]time.Time{
+		"2026-10-12": time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC), // 周一不变
+		"2026-10-16": time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC), // 周五
+		"2026-10-18": time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC), // 周日仍归本周
+		"2026-12-31": time.Date(2026, 12, 28, 0, 0, 0, 0, time.UTC), // 跨年周（元旦休市，周四收尾）
+		"2027-01-08": time.Date(2027, 1, 4, 0, 0, 0, 0, time.UTC),
+	}
+	for raw, want := range cases {
+		got, _, err := provider.parseBarTime(raw, marketdata.FrequencyWeek)
+		require.NoError(t, err)
+		require.Equal(t, want, got, raw)
+		require.True(t, got.Truncate(marketdata.FrequencyWeek.Duration()).Equal(got), raw)
+	}
+	// 日线、月线不受影响。
+	day, _, err := provider.parseBarTime("2026-10-16", marketdata.FrequencyDay)
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC), day)
+	month, _, err := provider.parseBarTime("2026-10-30", marketdata.FrequencyMonth)
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), month)
+}
+
 func TestProviderRejectsUnsupportedMarketAndMissingAmount(t *testing.T) {
 	provider := New(Config{
 		ProviderID: "csindex", SourceID: "index_http", DisplayName: "CSIndex",

@@ -199,11 +199,36 @@ func (r *Reducer) applyFillTx(
 		return err
 	}
 	if record.MarketType == string(exchange.MarketTypeSwap) {
-		if err := projectSwapPosition(tx, record, fill, priceTick.Scale()); err != nil {
+		if err := projectSwapPosition(tx, record, fill, priceTick.Scale(), source.Kind == OriginPaperMatcher); err != nil {
 			return err
 		}
 	}
-	return tx.UpdateOrder(record, expectedVersion)
+	if err := tx.UpdateOrder(record, expectedVersion); err != nil {
+		return err
+	}
+	return markBalancePendingForLiveFill(tx, source, fill)
+}
+
+// markBalancePendingForLiveFill 在成交入账的同一事务内抬高待余额确认水位并关闭准入：
+// 成交已经释放订单预留，而余额快照还没有反映这笔支出，确认之前同一笔资金不能再被本地下单检查放行。
+// 无论成交来自私有流还是 REST 补录，都与成交入账、预留释放原子完成，重放不会漏掉水位。
+func markBalancePendingForLiveFill(tx *store.Tx, source Source, fill exchange.Fill) error {
+	if source.Kind == OriginPaperMatcher {
+		return nil
+	}
+	account, err := tx.GetTradingAccount(source.SpaceID, source.TradingAccountID)
+	if err != nil {
+		return err
+	}
+	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
+		return nil
+	}
+	if err := tx.RaiseBalancePending(source.SpaceID, source.TradingAccountID, fill.TradedAt.UnixMilli()); err != nil {
+		return err
+	}
+	return tx.UpdateTradingAccountReadiness(
+		source.SpaceID, source.TradingAccountID, false, fill.TradedAt.UnixMilli(), "fill awaiting balance sync",
+	)
 }
 
 func validateFillInput(r *Reducer, fill exchange.Fill, source Source) error {
@@ -342,8 +367,23 @@ func projectSwapPosition(
 	record store.OrderRecord,
 	fill exchange.Fill,
 	priceScale int,
+	fromPaperMatcher bool,
 ) error {
 	exchangeSymbol := record.ExchangeSymbol
+	// 迟到成交：权威持仓快照（含确认为空仓而删除留下的墓碑）已经覆盖到比这笔成交更晚的时间，成交数量已体现在快照里，
+	// 不能再叠加（成交仍照常入账本）。不晚于覆盖时间即跳过（含同毫秒）：持仓版本时间就是最后一次变更（通常正是这笔成交）的时间，同毫秒的成交绝大多数已体现在快照里；
+	// 极少数同毫秒多笔成交的误差由下一次权威快照校正。
+	// paper 没有独立的交易所权威数据：它的持仓快照读的就是这张本地持仓表，成交由撮合器直接投影，
+	// 不能用“外部快照覆盖时间”跳过（否则同毫秒的独立成交会永久漏掉，也没有后续快照能纠正）。
+	if !fromPaperMatcher {
+		covered, coveredErr := tx.PositionSnapshotCoveredUntil(record.SpaceID, record.TradingAccountID, exchangeSymbol, string(exchange.PositionSideNet))
+		if coveredErr != nil {
+			return coveredErr
+		}
+		if covered > 0 && fill.TradedAt.UnixMilli() <= covered {
+			return nil
+		}
+	}
 	positionRecord, found, err := tx.GetPosition(
 		record.SpaceID, record.TradingAccountID, exchangeSymbol, string(exchange.PositionSideNet),
 	)

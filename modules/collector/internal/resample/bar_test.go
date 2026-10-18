@@ -21,24 +21,24 @@ func TestExpectedSourceTimesEnumeratesHalfOpenWindow(t *testing.T) {
 
 func TestBarsAggregatesCompleteSourceWindowAndSortsRows(t *testing.T) {
 	start := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
-	spec := testTaskSpec(t, "1m", "4m")
-	rows := []SourceBar{
-		testSourceBar(start.Add(2*time.Minute), 110, 112, 95, 98, 3, 300, 4),
+	spec := testTaskSpec(t, "15m", "1h")
+	rows := withFrequency("15m",
+		testSourceBar(start.Add(30*time.Minute), 110, 112, 95, 98, 3, 300, 4),
 		testSourceBar(start, 100, 110, 90, 105, 1, 100, 2),
-		testSourceBar(start.Add(3*time.Minute), 98, 120, 97, 119, 4, 400, 5),
-		testSourceBar(start.Add(time.Minute), 105, 115, 100, 110, 2, 210, 3),
-	}
+		testSourceBar(start.Add(45*time.Minute), 98, 120, 97, 119, 4, 400, 5),
+		testSourceBar(start.Add(15*time.Minute), 105, 115, 100, 110, 2, 210, 3),
+	)
 
-	result, err := Bars(spec, "BTC-USDT", start, start.Add(4*time.Minute), rows)
+	result, err := Bars(spec, "BTC-USDT", start, start.Add(time.Hour), rows)
 
 	require.NoError(t, err)
 	assert.Equal(t, "crypto", result.SpaceID)
-	assert.Equal(t, "dataset_spot_kline_derived_4m", result.DatasetID)
+	assert.Equal(t, "dataset_spot_kline_derived_1h", result.DatasetID)
 	assert.Equal(t, "BTC-USDT", result.SubjectID)
-	assert.Equal(t, "4m", result.Frequency)
+	assert.Equal(t, "1h", result.Frequency)
 	assert.Equal(t, "venue:binance", result.SeriesTag)
 	assert.Equal(t, start, result.DataTime)
-	assert.Equal(t, start.Add(4*time.Minute), result.SourceWindowEnd)
+	assert.Equal(t, start.Add(time.Hour), result.SourceWindowEnd)
 	assert.Equal(t, 100.0, result.Open)
 	assert.Equal(t, 120.0, result.High)
 	assert.Equal(t, 90.0, result.Low)
@@ -49,22 +49,19 @@ func TestBarsAggregatesCompleteSourceWindowAndSortsRows(t *testing.T) {
 	assert.Len(t, result.SourceHash, 64)
 }
 
-func TestBarsAggregatesThirtyMinuteBarsIntoNinetyMinutes(t *testing.T) {
+func TestBarsAggregatesFiveMinuteBarsIntoFifteenMinutes(t *testing.T) {
 	start := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
-	spec := testTaskSpec(t, "30m", "90m")
-	rows := []SourceBar{
+	spec := testTaskSpec(t, "5m", "15m")
+	rows := withFrequency("5m",
 		testSourceBar(start, 10, 12, 9, 11, 1, 10, 2),
-		testSourceBar(start.Add(30*time.Minute), 11, 15, 10, 14, 2, 20, 3),
-		testSourceBar(start.Add(60*time.Minute), 14, 16, 8, 9, 3, 30, 4),
-	}
-	for index := range rows {
-		rows[index].Frequency = "30m"
-	}
+		testSourceBar(start.Add(5*time.Minute), 11, 15, 10, 14, 2, 20, 3),
+		testSourceBar(start.Add(10*time.Minute), 14, 16, 8, 9, 3, 30, 4),
+	)
 
-	result, err := Bars(spec, "BTC-USDT", start, start.Add(90*time.Minute), rows)
+	result, err := Bars(spec, "BTC-USDT", start, start.Add(15*time.Minute), rows)
 
 	require.NoError(t, err)
-	assert.Equal(t, "90m", result.Frequency)
+	assert.Equal(t, "15m", result.Frequency)
 	assert.Equal(t, 10.0, result.Open)
 	assert.Equal(t, 16.0, result.High)
 	assert.Equal(t, 8.0, result.Low)
@@ -75,31 +72,34 @@ func TestBarsAggregatesThirtyMinuteBarsIntoNinetyMinutes(t *testing.T) {
 
 func TestBarsSourceHashIsOrderIndependentAndChangesWithSourceValue(t *testing.T) {
 	start := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
-	spec := testTaskSpec(t, "1m", "2m")
-	first := testSourceBar(start, 100, 110, 90, 105, 1, 100, 2)
-	second := testSourceBar(start.Add(time.Minute), 105, 115, 100, 110, 2, 210, 3)
+	spec := testTaskSpec(t, "30m", "1h")
+	rows := withFrequency("30m",
+		testSourceBar(start, 100, 110, 90, 105, 1, 100, 2),
+		testSourceBar(start.Add(30*time.Minute), 105, 115, 100, 110, 2, 210, 3),
+	)
+	first, second := rows[0], rows[1]
 
-	ordered, err := Bars(spec, "BTC-USDT", start, start.Add(2*time.Minute), []SourceBar{first, second})
+	ordered, err := Bars(spec, "BTC-USDT", start, start.Add(time.Hour), []SourceBar{first, second})
 	require.NoError(t, err)
-	reversed, err := Bars(spec, "BTC-USDT", start, start.Add(2*time.Minute), []SourceBar{second, first})
+	reversed, err := Bars(spec, "BTC-USDT", start, start.Add(time.Hour), []SourceBar{second, first})
 	require.NoError(t, err)
 	assert.Equal(t, ordered.SourceHash, reversed.SourceHash)
 
 	revisedSecond := second
 	revisedSecond.Close = floatPtr(111)
-	revised, err := Bars(spec, "BTC-USDT", start, start.Add(2*time.Minute), []SourceBar{first, revisedSecond})
+	revised, err := Bars(spec, "BTC-USDT", start, start.Add(time.Hour), []SourceBar{first, revisedSecond})
 	require.NoError(t, err)
 	assert.NotEqual(t, ordered.SourceHash, revised.SourceHash)
 }
 
 func TestBarsRejectsIncompleteOrMismatchedSourceKeys(t *testing.T) {
 	start := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
-	spec := testTaskSpec(t, "1m", "3m")
-	valid := []SourceBar{
+	spec := testTaskSpec(t, "5m", "15m")
+	valid := withFrequency("5m",
 		testSourceBar(start, 1, 2, 0.5, 1.5, 1, 1, 1),
-		testSourceBar(start.Add(time.Minute), 1.5, 2, 1, 1.8, 1, 1, 1),
-		testSourceBar(start.Add(2*time.Minute), 1.8, 2.1, 1.7, 2, 1, 1, 1),
-	}
+		testSourceBar(start.Add(5*time.Minute), 1.5, 2, 1, 1.8, 1, 1, 1),
+		testSourceBar(start.Add(10*time.Minute), 1.8, 2.1, 1.7, 2, 1, 1, 1),
+	)
 
 	tests := []struct {
 		name string
@@ -111,14 +111,14 @@ func TestBarsRejectsIncompleteOrMismatchedSourceKeys(t *testing.T) {
 		{name: "duplicate time", rows: []SourceBar{valid[0], valid[1], valid[1]}},
 		{name: "wrong subject", rows: replaceBar(valid, 1, func(row *SourceBar) { row.SubjectID = "ETH-USDT" })},
 		{name: "wrong dataset", rows: replaceBar(valid, 1, func(row *SourceBar) { row.DatasetID = "other" })},
-		{name: "wrong frequency", rows: replaceBar(valid, 1, func(row *SourceBar) { row.Frequency = "5m" })},
+		{name: "wrong frequency", rows: replaceBar(valid, 1, func(row *SourceBar) { row.Frequency = "1m" })},
 		{name: "wrong series tag", rows: replaceBar(valid, 1, func(row *SourceBar) { row.SeriesTag = "venue:okx" })},
 		{name: "timestamp not on minute", rows: replaceBar(valid, 1, func(row *SourceBar) { row.DataTime = row.DataTime.Add(time.Second) })},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Bars(spec, "BTC-USDT", start, start.Add(3*time.Minute), tt.rows)
+			_, err := Bars(spec, "BTC-USDT", start, start.Add(15*time.Minute), tt.rows)
 			require.Error(t, err)
 		})
 	}
@@ -126,11 +126,11 @@ func TestBarsRejectsIncompleteOrMismatchedSourceKeys(t *testing.T) {
 
 func TestBarsRejectsMissingInvalidOrOverflowingFields(t *testing.T) {
 	start := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
-	spec := testTaskSpec(t, "1m", "2m")
-	valid := []SourceBar{
+	spec := testTaskSpec(t, "30m", "1h")
+	valid := withFrequency("30m",
 		testSourceBar(start, 1, 2, 0.5, 1.5, 1, 1, 1),
-		testSourceBar(start.Add(time.Minute), 1.5, 2, 1, 1.8, 1, 1, 1),
-	}
+		testSourceBar(start.Add(30*time.Minute), 1.5, 2, 1, 1.8, 1, 1, 1),
+	)
 
 	tests := []struct {
 		name string
@@ -147,7 +147,7 @@ func TestBarsRejectsMissingInvalidOrOverflowingFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Bars(spec, "BTC-USDT", start, start.Add(2*time.Minute), tt.rows)
+			_, err := Bars(spec, "BTC-USDT", start, start.Add(time.Hour), tt.rows)
 			require.Error(t, err)
 		})
 	}
@@ -155,17 +155,17 @@ func TestBarsRejectsMissingInvalidOrOverflowingFields(t *testing.T) {
 
 func TestBarsRejectsWindowThatIsNotOneAlignedTargetBucket(t *testing.T) {
 	start := time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC)
-	spec := testTaskSpec(t, "1m", "4m")
-	rows := []SourceBar{
+	spec := testTaskSpec(t, "15m", "1h")
+	rows := withFrequency("15m",
 		testSourceBar(start, 1, 2, 0.5, 1.5, 1, 1, 1),
-		testSourceBar(start.Add(time.Minute), 1.5, 2, 1, 1.8, 1, 1, 1),
-		testSourceBar(start.Add(2*time.Minute), 1.8, 2, 1, 1.9, 1, 1, 1),
-		testSourceBar(start.Add(3*time.Minute), 1.9, 2.1, 1.8, 2, 1, 1, 1),
-	}
+		testSourceBar(start.Add(15*time.Minute), 1.5, 2, 1, 1.8, 1, 1, 1),
+		testSourceBar(start.Add(30*time.Minute), 1.8, 2, 1, 1.9, 1, 1, 1),
+		testSourceBar(start.Add(45*time.Minute), 1.9, 2.1, 1.8, 2, 1, 1, 1),
+	)
 
-	_, err := Bars(spec, "BTC-USDT", start.Add(time.Minute), start.Add(5*time.Minute), rows)
+	_, err := Bars(spec, "BTC-USDT", start.Add(15*time.Minute), start.Add(75*time.Minute), rows)
 	require.Error(t, err)
-	_, err = Bars(spec, "BTC-USDT", start, start.Add(3*time.Minute), rows[:3])
+	_, err = Bars(spec, "BTC-USDT", start, start.Add(45*time.Minute), rows[:3])
 	require.Error(t, err)
 }
 
@@ -179,7 +179,7 @@ func testTaskSpec(t *testing.T, sourceRaw, targetRaw string) TaskSpec {
 		SourceDatasetID: "dataset_binance_kline_1m",
 		SourceFrequency: source,
 		SourceSeriesTag: "venue:binance",
-		TargetDatasetID: "dataset_spot_kline_derived_" + target.Slug,
+		TargetDatasetID: "dataset_spot_kline_derived_" + target.Storage,
 		TargetFrequency: target,
 		Alignment:       AlignmentEpochUTC,
 	}
@@ -201,6 +201,14 @@ func testSourceBar(at time.Time, open, high, low, close, volume, quoteVolume flo
 		QuoteVolume: floatPtr(quoteVolume),
 		TradeNum:    int64Ptr(tradeNum),
 	}
+}
+
+// withFrequency sets the source frequency of test bars.
+func withFrequency(frequency string, rows ...SourceBar) []SourceBar {
+	for index := range rows {
+		rows[index].Frequency = frequency
+	}
+	return rows
 }
 
 func replaceBar(rows []SourceBar, index int, replace func(*SourceBar)) []SourceBar {

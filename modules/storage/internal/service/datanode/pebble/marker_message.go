@@ -49,7 +49,7 @@ func BuildFactorPeriodComputedMessage(spaceID string, marker *pb.FactorPeriodCom
 		}
 		factors = append(factors, &storageeventpb.FactorPeriodState{
 			FactorId: state.GetFactorId(), Status: state.GetStatus(), FailedSubjects: append([]string(nil), state.GetFailedSubjects()...),
-			SourceHash: state.GetSourceHash(),
+			SourceHash: state.GetSourceHash(), DefinitionHash: state.GetDefinitionHash(), GapSubjects: append([]string(nil), state.GetGapSubjects()...),
 		})
 	}
 	payload := &storageeventpb.FactorPeriodComputed{
@@ -142,7 +142,7 @@ func validateDataNodeMarkerMessage(raw []byte) (*eventpb.EventMessage, error) {
 	}
 	event, ok := registry.Lookup(message.GetEventName(), message.GetEventVersion())
 	if !ok || !isDataNodeOutboxEvent(event) {
-		return nil, fmt.Errorf("%w: %s@%d", ErrUnsupportedOutboxEvent, message.GetEventName(), message.GetEventVersion())
+		return nil, fmt.Errorf("event %s@%d is not a DataNode outbox event", message.GetEventName(), message.GetEventVersion())
 	}
 	subject, err := registry.RenderSubject(event, message.GetSpaceId(), message.GetSubjectId())
 	if err != nil {

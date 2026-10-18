@@ -1,8 +1,9 @@
 package config
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestObservabilityDeliverPolicy(t *testing.T) {
@@ -19,12 +20,10 @@ func TestObservabilityDeliverPolicy(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, tc.value, snapshot.Manifest.Observability.DeliverPolicy)
-			require.True(t, snapshot.Manifest.Observability.DeliverPolicyExplicit)
 		})
 	}
 	root := t.TempDir()
 	snapshot, err := Load(writeManifest(t, root, validManifest, 0600), root)
 	require.NoError(t, err)
 	require.Equal(t, "all", snapshot.Manifest.Observability.DeliverPolicy)
-	require.False(t, snapshot.Manifest.Observability.DeliverPolicyExplicit)
 }

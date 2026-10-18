@@ -28,30 +28,31 @@ message DatasetPeriodExpectation {
   string reservation_id = 9;
 }
 
-message EnsureDatasetPeriodReq {
+// SeriesSnapshotEntry 是快照中一条序列的完整身份，Storage 用它重算 series_hash。
+message SeriesSnapshotEntry {
+  string provider = 1;
+  string source_id = 2;
+  string market_type = 3;
+  string subject_id = 4;
+  string series_tag = 5;
+}
+
+message RegisterSeriesSnapshotReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
-  DatasetPeriodExpectation expectation = 3;
+  string space_id = 3;
+  string dataset_id = 4;
+  string frequency = 5;
+  repeated SeriesSnapshotEntry series = 6;
+  // 生效周期 P：K 线开始时间（Unix 秒）。
+  int64 effective_from = 7;
 }
 
-message EnsureDatasetPeriodRsp {
+message RegisterSeriesSnapshotRsp {
   common.RetInfo ret_info = 1;
-  string status = 2;
-  int64 deadline_at = 3;
-}
-
-message GetDatasetPeriodStatusReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-  DatasetPeriodExpectation expectation = 3;
-}
-
-message GetDatasetPeriodStatusRsp {
-  common.RetInfo ret_info = 1;
-  string status = 2;
-  string series_hash = 3;
-  uint32 expected_count = 4;
-  int64 deadline_at = 5;
+  string series_hash = 2;
+  uint32 expected_count = 3;
+  bool already_registered = 4;
 }
 
 message TimeSeriesBatchRow {
@@ -66,6 +67,8 @@ message CommitTimeSeriesBatchReq {
   repeated TimeSeriesBatchRow items = 4;
   string source_event_id = 5;
   string write_source = 6;
+  // 周期不存在时，按生效表与已登记快照自动建立周期所用的允许迟到时间；由 Primary 从数据集属性带入。
+  int64 allowed_lateness_seconds = 7;
 }
 
 message CommitTimeSeriesBatchRsp {
@@ -73,19 +76,6 @@ message CommitTimeSeriesBatchRsp {
   repeated RowKey keys = 2;
   string period_status = 3;
   repeated uint32 accepted_series_indexes = 4;
-}
-
-message RecordDatasetPeriodFailuresReq {
-  common.AuthInfo auth_info = 1;
-  string node_id = 2;
-  DatasetPeriodExpectation expectation = 3;
-  repeated uint32 series_indexes = 4;
-}
-
-message RecordDatasetPeriodFailuresRsp {
-  common.RetInfo ret_info = 1;
-  string period_status = 2;
-  repeated DatasetPeriodFailureResult results = 3;
 }
 
 enum PeriodFailureDisposition {
@@ -127,19 +117,31 @@ message UpsertFieldsRsp {
   repeated RowKey keys = 2;
 }
 
-message ReadFieldsReq {
+message ReadRowsReq {
   common.AuthInfo auth_info = 1;
   string node_id = 2;
   string dataset_id = 3;
   repeated RowKey keys = 4;
-  repeated string field_ids = 5;
+  repeated string column_names = 5;
   repeated string attribute_keys = 6;
 }
 
-message ReadFieldsRsp {
+// ReadRowsRsp 只返回存在的行，顺序与请求一致。
+message ReadRowsRsp {
   common.RetInfo ret_info = 1;
   repeated RowFieldValues rows = 2;
-  repeated RowKey existing_keys = 3;
+}
+
+// RowsCursor 是 ReadTimeSeriesRows 游标的内容，只在服务端编码与解码，不出现在公开请求中。
+message RowsCursor {
+  // 区间读取：最后一行的键。
+  TimeSeriesRowKey last = 1;
+  // 最近 N 根：当前序列（subject_id、freq、series_tag）、续读位置（该序列已返回的最早一根的 data_time）及该序列已返回的根数。
+  string subject_id = 2;
+  string freq = 3;
+  string series_tag = 4;
+  string resume_before = 5;
+  uint32 returned = 6;
 }
 
 message GetNodeStateReq {
@@ -163,7 +165,8 @@ message CleanupExpiredBucketsReq {
 
 message CleanupExpiredBucketsRsp {
   common.RetInfo ret_info = 1;
-  uint64 deleted_buckets = 2;
+  // deleted_ranges is the number of key ranges the cleanup deleted.
+  uint64 deleted_ranges = 2;
 }
 
 message DeleteDatasetRowsReq {
@@ -246,7 +249,7 @@ service DataNodeRuntime {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
   rpc UpsertFields(UpsertFieldsReq) returns (UpsertFieldsRsp);
   rpc WriteFactorRows(WriteFactorRowsReq) returns (WriteFactorRowsRsp);
-	rpc ReadFields(ReadFieldsReq) returns (ReadFieldsRsp);
+	rpc ReadRows(ReadRowsReq) returns (ReadRowsRsp);
 	rpc GetNodeState(GetNodeStateReq) returns (GetNodeStateRsp);
 	rpc CleanupExpiredBuckets(CleanupExpiredBucketsReq) returns (CleanupExpiredBucketsRsp);
 }
@@ -255,10 +258,8 @@ service DataNodeRuntime {
 // DataNodePeriodRuntime owns Dataset-local collection progress. It is separate
 // from the general row RPC so existing DataNodeRuntime clients remain narrow.
 service DataNodePeriodRuntime {
-  rpc EnsureDatasetPeriod(EnsureDatasetPeriodReq) returns (EnsureDatasetPeriodRsp);
-  rpc GetDatasetPeriodStatus(GetDatasetPeriodStatusReq) returns (GetDatasetPeriodStatusRsp);
+  rpc RegisterSeriesSnapshot(RegisterSeriesSnapshotReq) returns (RegisterSeriesSnapshotRsp);
   rpc CommitTimeSeriesBatch(CommitTimeSeriesBatchReq) returns (CommitTimeSeriesBatchRsp);
-  rpc RecordDatasetPeriodFailures(RecordDatasetPeriodFailuresReq) returns (RecordDatasetPeriodFailuresRsp);
 }
 
 // DataNodeDatasetAdminRuntime is a narrow destructive surface used by
@@ -268,9 +269,7 @@ service DataNodeDatasetAdminRuntime {
   rpc RestoreDatasetRows(RestoreDatasetRowsReq) returns (RestoreDatasetRowsRsp);
 }
 
-// DataNodeMarkerRuntime is kept separate from the legacy DataNodeRuntime
-// surface so existing DataNode clients remain source compatible while marker
-// writes gain an explicit, narrow internal API.
+// DataNodeMarkerRuntime 是周期标记写入的独立内部接口，与行读写的 DataNodeRuntime 分开授权与演进。
 service DataNodeMarkerRuntime {
   rpc AppendCollectorPeriodCompleted(AppendCollectorPeriodCompletedReq) returns (AppendCollectorPeriodCompletedRsp);
   rpc AppendFactorPeriodComputed(AppendFactorPeriodComputedReq) returns (AppendFactorPeriodComputedRsp);
@@ -278,10 +277,8 @@ service DataNodeMarkerRuntime {
   rpc GetFactorPeriodComputedMarker(GetFactorPeriodComputedMarkerReq) returns (GetFactorPeriodComputedMarkerRsp);
 }
 
-// DataNodeHistoryRuntime is an internal range-scan surface used only when a
-// View is initialized from Primary history. It is kept separate from the
-// point-read/write service so existing runtime fakes and callers remain
-// narrow, while the View can rebuild after its physical indexes are removed.
-service DataNodeHistoryRuntime {
+// DataNodeRangeRuntime 是 DataNode 的区间读取与计数入口，PrimaryStore 对所有调用方转发到这里。
+service DataNodeRangeRuntime {
 	 rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
+	 rpc CountTimeSeriesRows(CountTimeSeriesRowsReq) returns (CountTimeSeriesRowsRsp);
 }

@@ -1,8 +1,6 @@
 package rpc
 
 import (
-	"strings"
-
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
@@ -48,8 +46,4 @@ func ResolveExecutionCapabilities(
 	}
 	capabilities.CanPlaceOrder = true
 	return capabilities
-}
-
-func (c ExecutionCapabilities) Valid() bool {
-	return c.CanPlaceOrder || strings.TrimSpace(c.UnavailableReason) != ""
 }

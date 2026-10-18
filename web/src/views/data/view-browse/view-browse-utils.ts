@@ -5,7 +5,6 @@ import type {
   FieldValueType,
   FilterCond,
   FilterSpec,
-  PageResult,
   SortSpec,
   TypedValue,
   View,
@@ -100,11 +99,7 @@ export function buildViewFilterFieldOptions(
   const projected = viewColumns.some(column => column.column_name) ? viewColumns : datasetColumns;
   for (const column of projected) {
     if (!column.column_name) continue;
-    push(
-      column.column_name,
-      labels[column.column_name] || column.column_name,
-      column.value_type || "FIELD_VALUE_TYPE_STRING"
-    );
+    push(column.column_name, labels[column.column_name] || column.column_name, column.value_type || "FIELD_VALUE_TYPE_STRING");
   }
   return options;
 }
@@ -112,10 +107,6 @@ export function buildViewFilterFieldOptions(
 export function viewDisplayName(view?: Pick<View, "view_id" | "name"> | null) {
   if (!view) return "";
   return view.name || view.view_id || "";
-}
-
-export function viewBoundDatasetId(view?: { dataset_id?: string; primary_dataset_id?: string } | null) {
-  return (view?.dataset_id || view?.primary_dataset_id || "").trim();
 }
 
 export function viewModeFromPrimaryDataset(
@@ -128,39 +119,41 @@ export function viewModeFromPrimaryDataset(
   return isTimeSeriesDataKind(dataset.data_kind) ? "time_series" : "record";
 }
 
+// A View indexes one Dataset and names each dataset column after the Dataset
+// column it reads, so origin_id is the bare column name of view.dataset_id.
 export function buildViewColumnLabels(
   viewColumns: ViewColumn[],
   datasetColumns: DatasetColumn[],
   fields: Field[],
-  datasets: Array<Pick<Dataset, "dataset_id" | "name">> = [],
   view?: Pick<View, "dataset_id"> | null
 ) {
   const datasetColumnLabels = buildDatasetColumnLabels(datasetColumns, fields);
-  const datasetColumnByQualifiedName = new Map<string, DatasetColumn>();
+  const datasetId = view?.dataset_id || "";
+  const datasetColumnByName = new Map<string, DatasetColumn>();
   for (const column of datasetColumns) {
-    if (!column.dataset_id || !column.column_name) continue;
-    datasetColumnByQualifiedName.set(`${column.dataset_id}.${column.column_name}`, column);
+    if (!column.column_name || (datasetId && column.dataset_id && column.dataset_id !== datasetId)) continue;
+    datasetColumnByName.set(column.column_name, column);
   }
-  const showDatasetName = viewDatasetCount(view) > 1;
 
   const labels: Record<string, string> = {};
   for (const column of viewColumns) {
     if (!column.column_name) continue;
-    const fromDataset = datasetColumnByQualifiedName.get(column.origin_id);
+    const fromDataset = datasetColumnByName.get(column.origin_id);
     if (fromDataset) {
-      const label =
+      labels[column.column_name] =
         factorOutputName(column.attributes) ||
         factorOutputName(fromDataset.attributes) ||
         displayName(column.attributes) ||
         datasetColumnLabels[qualifiedDatasetColumnName(fromDataset)] ||
         datasetColumnLabels[fromDataset.column_name] ||
         readableViewColumnLabel(column.column_name);
-      labels[column.column_name] = showDatasetName ? appendDatasetName(label, fromDataset.dataset_id, datasets) : label;
       continue;
     }
     labels[column.column_name] =
       factorOutputName(column.attributes) ||
-      displayName(column.attributes) || systemViewLabels[column.origin_id] || readableViewColumnLabel(column.column_name);
+      displayName(column.attributes) ||
+      systemViewLabels[column.origin_id] ||
+      readableViewColumnLabel(column.column_name);
   }
   return labels;
 }
@@ -179,18 +172,6 @@ export function normalizeKlineLimit(value: unknown) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   if (!Number.isFinite(parsed)) return DEFAULT_KLINE_LIMIT;
   return Math.min(MAX_KLINE_LIMIT, Math.max(MIN_KLINE_LIMIT, parsed));
-}
-
-export function isSkippedTotalState(value: unknown) {
-  return value === 2 || value === "SKIPPED" || value === "TOTAL_STATE_SKIPPED";
-}
-
-export function usesPreviewPager(pageResult?: Pick<PageResult, "total_state"> | null) {
-  return isSkippedTotalState(pageResult?.total_state);
-}
-
-export function previewPagerText(limit: number) {
-  return `仅展示前${limit}条数据`;
 }
 
 export function buildViewFilterExprs(filters: ViewFilterState[]): FilterSpec | undefined {
@@ -285,16 +266,6 @@ export function exactSeriesTagFromFilters(filters: ViewFilterState[]) {
 
 function readableViewColumnLabel(columnName: string) {
   return systemViewLabels[columnName] || columnName;
-}
-
-function viewDatasetCount(view?: Pick<View, "dataset_id"> | null) {
-  if (!view?.dataset_id) return 0;
-  return 1;
-}
-
-function appendDatasetName(label: string, datasetId: string, datasets: Array<Pick<Dataset, "dataset_id" | "name">>) {
-  const dataset = datasets.find(item => item.dataset_id === datasetId);
-  return `${label}（${dataset?.name || datasetId}）`;
 }
 
 function buildDatasetColumnLabels(datasetColumns: DatasetColumn[], fields: Field[]) {
@@ -433,10 +404,7 @@ function klineFieldValue(values: Record<string, string>, fieldName: "open" | "hi
     if (exact !== undefined) return exact;
 
     const lowerAlias = alias.toLowerCase();
-    const entry = Object.entries(values).find(([name]) => {
-      const lowerName = name.toLowerCase();
-      return lowerName === lowerAlias || lowerName.endsWith(`.${lowerAlias}`);
-    });
+    const entry = Object.entries(values).find(([name]) => name.toLowerCase() === lowerAlias);
     if (entry) return entry[1];
   }
   return undefined;

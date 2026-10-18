@@ -3,8 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -60,6 +58,11 @@ func (r *CheckRepository) Update(ctx context.Context, check *domain.Check) error
 			"c_group_name":       check.GroupName,
 			"c_kind":             check.Kind,
 			"c_url":              check.URL,
+			"c_connect_address":  check.ConnectAddress,
+			"c_server_name":      check.ServerName,
+			"c_trust_mode":       check.TrustMode,
+			"c_ca_file":          check.CAFile,
+			"c_ca_baseline":      check.CABaseline,
 			"c_method":           check.Method,
 			"c_headers":          check.Headers,
 			"c_body":             check.Body,
@@ -76,33 +79,6 @@ func (r *CheckRepository) Update(ctx context.Context, check *domain.Check) error
 			"c_description":      check.Description,
 			"c_last_checked_at":  check.LastCheckedAt,
 			"c_next_check_at":    check.NextCheckAt,
-		}).Error
-}
-
-// UpdateSysDeployDefinition refreshes the complete system-owned definition.
-// System checks have no user enable/disable override in the greenfield model.
-func (r *CheckRepository) UpdateSysDeployDefinition(ctx context.Context, check *domain.Check) error {
-	return r.db.WithContext(ctx).
-		Model(&domain.Check{}).
-		Where("c_space_id = ? AND c_check_id = ? AND c_source = ?", check.SpaceID, check.CheckID, domain.CheckSourceSysDeploy).
-		Updates(map[string]any{
-			"c_name":             check.Name,
-			"c_group_name":       check.GroupName,
-			"c_kind":             check.Kind,
-			"c_url":              check.URL,
-			"c_method":           check.Method,
-			"c_headers":          check.Headers,
-			"c_body":             check.Body,
-			"c_tcp_host":         check.TCPHost,
-			"c_tcp_port":         check.TCPPort,
-			"c_interval_seconds": check.IntervalSeconds,
-			"c_timeout_ms":       check.TimeoutMS,
-			"c_expected_status":  check.ExpectedStatus,
-			"c_max_response_ms":  check.MaxResponseMS,
-			"c_body_contains":    check.BodyContains,
-			"c_enabled":          check.Enabled,
-			"c_source":           check.Source,
-			"c_description":      check.Description,
 		}).Error
 }
 
@@ -133,36 +109,6 @@ func (r *CheckRepository) Delete(ctx context.Context, spaceID, checkID string) e
 	})
 }
 
-func (r *CheckRepository) DisableSysDeployChecksExcept(ctx context.Context, spaceID string, keepIDs map[string]struct{}) (int64, error) {
-	var disabled int64
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		q := tx.Model(&domain.Check{}).
-			Where("c_space_id = ? AND c_source = ?", spaceID, domain.CheckSourceSysDeploy)
-		if len(keepIDs) > 0 {
-			ids := make([]string, 0, len(keepIDs))
-			for id := range keepIDs {
-				ids = append(ids, id)
-			}
-			slices.Sort(ids)
-			q = q.Where("c_check_id NOT IN ?", ids)
-		}
-		var checks []domain.Check
-		if err := q.Find(&checks).Error; err != nil {
-			return err
-		}
-		for _, check := range checks {
-			disabled++
-			if err := tx.Model(&domain.Check{}).
-				Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).
-				Updates(map[string]any{"c_enabled": false}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	return disabled, err
-}
-
 func (r *CheckRepository) List(ctx context.Context, opts ListChecksOptions) ([]domain.Check, error) {
 	q := r.applyFilters(r.db.WithContext(ctx), opts)
 	var checks []domain.Check
@@ -184,20 +130,6 @@ func (r *CheckRepository) CountEnabled(ctx context.Context) (int64, error) {
 	err := r.db.WithContext(ctx).Model(&domain.Check{}).
 		Where("c_enabled = 1").Count(&total).Error
 	return total, err
-}
-
-// IsSysDeployRegistered reports whether a service instance on a specific node
-// has an enabled check managed by the system deployment controller.
-func (r *CheckRepository) IsSysDeployRegistered(ctx context.Context, serviceName, nodeID string) (bool, error) {
-	if r == nil || r.db == nil {
-		return false, gorm.ErrInvalidDB
-	}
-	var count int64
-	checkID := "sysdeploy:" + strings.TrimSpace(nodeID) + ":" + strings.TrimSpace(serviceName)
-	err := r.db.WithContext(ctx).Model(&domain.Check{}).
-		Where("c_check_id = ? AND c_source = ? AND c_enabled = 1", checkID, domain.CheckSourceSysDeploy).
-		Count(&count).Error
-	return count > 0, err
 }
 
 func (r *CheckRepository) applyFilters(q *gorm.DB, opts ListChecksOptions) *gorm.DB {
@@ -222,7 +154,7 @@ func (r *CheckRepository) ListDue(ctx context.Context, now time.Time, limit int)
 	}
 	var candidates []domain.Check
 	err := r.db.WithContext(ctx).
-		Where("c_enabled = 1 AND c_kind IN ? AND c_source IN ?", []string{domain.CheckKindHTTP, domain.CheckKindTCP}, []string{domain.CheckSourceSysDeploy, domain.CheckSourceObservability}).
+		Where("c_enabled = 1 AND c_kind IN ? AND c_source IN ?", []string{domain.CheckKindHTTP, domain.CheckKindTCP}, []string{domain.CheckSourcePlacement, domain.CheckSourceObservability}).
 		Order("c_next_check_at ASC, c_id ASC").
 		Find(&candidates).Error
 	if err != nil {
@@ -240,42 +172,6 @@ func (r *CheckRepository) ListDue(ctx context.Context, now time.Time, limit int)
 	return checks, nil
 }
 
-// PurgeRetiredChecks removes user-defined checks from a pre-greenfield database.
-// Only SysDeploy and code-owned observability checks are executable now.
-func (r *CheckRepository) PurgeRetiredChecks(ctx context.Context) (int64, error) {
-	if r == nil || r.db == nil {
-		return 0, gorm.ErrInvalidDB
-	}
-	var deleted int64
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var checks []domain.Check
-		if err := tx.Where("c_source NOT IN ? OR c_source IS NULL OR c_source = ''", []string{domain.CheckSourceSysDeploy, domain.CheckSourceObservability}).Find(&checks).Error; err != nil {
-			return err
-		}
-		for _, check := range checks {
-			if err := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.AlertState{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.AlertEvent{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.AlertRule{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.CheckResult{}).Error; err != nil {
-				return err
-			}
-			result := tx.Where("c_space_id = ? AND c_check_id = ?", check.SpaceID, check.CheckID).Delete(&domain.Check{})
-			if result.Error != nil {
-				return result.Error
-			}
-			deleted += result.RowsAffected
-		}
-		return nil
-	})
-	return deleted, err
-}
-
 func (r *CheckRepository) MarkChecked(ctx context.Context, spaceID, checkID string, checkedAt, nextAt time.Time) error {
 	return r.db.WithContext(ctx).
 		Model(&domain.Check{}).
@@ -284,4 +180,15 @@ func (r *CheckRepository) MarkChecked(ctx context.Context, spaceID, checkID stri
 			"c_last_checked_at": checkedAt,
 			"c_next_check_at":   nextAt,
 		}).Error
+}
+
+// ListEnabledKinds filters structured namespaces before the response bound.
+func (r *CheckRepository) ListEnabledKinds(ctx context.Context, spaceID string, kinds []string, limit int) ([]domain.Check, error) {
+	query := r.db.WithContext(ctx).Where("c_enabled = 1 AND substr(c_check_id, 1, instr(c_check_id, ':') - 1) IN ?", kinds)
+	if spaceID != "" {
+		query = query.Where("c_space_id IN ?", []string{spaceID, "", "mooxsys"})
+	}
+	var checks []domain.Check
+	err := query.Order("c_space_id, c_check_id").Limit(limit).Find(&checks).Error
+	return checks, err
 }

@@ -10,17 +10,12 @@ server:
     - prometheus
   timeout: 30000
   service:
-    - name: trpc.moox.strategy.StrategyMgr.trpc
+    - name: trpc.moox.strategy.StrategyMgr
       ip: 127.0.0.1
       port: 11430
       network: tcp
       protocol: trpc
-      timeout: 30000
-    - name: trpc.moox.strategy.StrategyMgr
-      ip: 127.0.0.1
-      port: 11433
-      network: tcp
-      protocol: http
+      transport: go-net
       timeout: 30000
     - name: trpc.moox.strategy.Health
       ip: 127.0.0.1
@@ -46,3 +41,16 @@ plugins:
       port: 12930
       path: /metrics
       enablepush: false
+  log:
+    default:
+      - writer: file
+        level: info
+        writer_config:
+          # 框架日志按大小轮转，单个文件 10MB、保留 5 份、最多 7 天；标准输出/错误主要是崩溃信息和数据库（GORM）日志，由 moox-runtime 启动前按大小轮转，持续报错时仍可能增长。
+          log_path: ./logs
+          filename: trpc.log
+          roll_type: size
+          max_age: 7
+          max_size: 10
+          max_backups: 5
+          compress: false

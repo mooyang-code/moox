@@ -1,87 +1,16 @@
 import { describe, expect, it } from "vitest";
+
 import type { DatasetColumn, ViewColumn } from "@/api/storage/types";
-import {
-  buildSubjectDataIdsFromRows,
-  buildTimeSeriesBrowseSelector,
-  rowsToColumnNames,
-  sortBrowseTableRows,
-  timeSeriesRowsToTableRows
-} from "./browse-utils";
+
+import { rowsToColumnNames } from "./browse-utils";
 import {
   buildKlineChartRecords,
   buildViewColumnLabels,
   buildViewFilterFieldOptions,
   buildViewFilterExprs,
   exactSeriesTagFromFilters,
-  viewBoundDatasetId,
   viewModeFromPrimaryDataset
 } from "../view-browse/view-browse-utils";
-
-describe("timeSeriesRowsToTableRows", () => {
-  it("keeps rows with the same timestamp distinct by series tag", () => {
-    const rows = timeSeriesRowsToTableRows([
-      {
-        key: {
-          space_id: "crypto",
-          dataset_id: "dataset_spot_kline_1h",
-          subject_id: "BTC-USDT",
-          freq: "1H",
-          data_time: "2026-07-29T00:00:00Z",
-          series_tag: "venue:binance"
-        }
-      },
-      {
-        key: {
-          space_id: "crypto",
-          dataset_id: "dataset_spot_kline_1h",
-          subject_id: "BTC-USDT",
-          freq: "1H",
-          data_time: "2026-07-29T00:00:00Z",
-          series_tag: "venue:okx"
-        }
-      }
-    ]);
-
-    expect(rows[0].id).not.toBe(rows[1].id);
-    expect(rows[0].id).toContain("venue:binance");
-    expect(rows[1].id).toContain("venue:okx");
-    expect(rows.map(row => row.seriesTag)).toEqual(["venue:binance", "venue:okx"]);
-    expect(sortBrowseTableRows(rows, "series_tag", "desc").map(row => row.seriesTag)).toEqual(["venue:okx", "venue:binance"]);
-    expect(buildTimeSeriesBrowseSelector("crypto", "dataset_spot_kline_1h", "BTC-USDT", "1H", " venue:okx ", true)).toEqual({
-      space_id: "crypto",
-      dataset_id: "dataset_spot_kline_1h",
-      subject_id: "BTC-USDT",
-      freq: "1H",
-      series_tag: "venue:okx"
-    });
-    expect(buildTimeSeriesBrowseSelector("stockcn", "dataset_stockcn_equity_kline", "sh600000", "1D", "", true)).toEqual({
-      space_id: "stockcn",
-      dataset_id: "dataset_stockcn_equity_kline",
-      subject_id: "sh600000",
-      freq: "1D",
-      series_tag: "default"
-    });
-    expect(buildTimeSeriesBrowseSelector("crypto", "dataset_spot_kline_1h", "BTC-USDT", "1H", "", false)).not.toHaveProperty(
-      "series_tag"
-    );
-  });
-});
-
-describe("buildSubjectDataIdsFromRows", () => {
-  it("discovers real subject IDs when dataset bindings are unavailable", () => {
-    expect(
-      buildSubjectDataIdsFromRows([
-        { key: { subject_id: "BTC-USDT" } },
-        { key: { subject_id: "ETH-USDT" } },
-        { key: { subject_id: "BTC-USDT" } },
-        { key: { subject_id: "" } }
-      ])
-    ).toEqual([
-      { id: "BTC-USDT", name: "BTC-USDT", description: "" },
-      { id: "ETH-USDT", name: "ETH-USDT", description: "" }
-    ]);
-  });
-});
 
 describe("Kline series tag isolation", () => {
   it("requires an exact tag and never overwrites another tag at the same timestamp", () => {
@@ -89,21 +18,21 @@ describe("Kline series tag isolation", () => {
       {
         key: "BTC-USDT",
         version: "2026-07-29T00:00:00Z",
-        freq: "1H",
+        freq: "1h",
         seriesTag: "venue:binance",
         values: { open: "100", high: "110", low: "90", close: "105" }
       },
       {
         key: "BTC-USDT",
         version: "2026-07-29T00:00:00Z",
-        freq: "1H",
+        freq: "1h",
         seriesTag: "venue:okx",
         values: { open: "200", high: "210", low: "190", close: "205" }
       },
       {
         key: "sh600000",
         version: "2026-07-29T00:00:00Z",
-        freq: "1D",
+        freq: "1d",
         seriesTag: "",
         values: { open: "10", high: "11", low: "9", close: "10.5" }
       }
@@ -137,16 +66,12 @@ describe("rowsToColumnNames", () => {
       rowsToColumnNames(
         [
           {
-            fields: [
-              { field_id: "dataset_binance_kline_1m.open" },
-              { field_id: "dataset_binance_kline_1m.bias__bias_20" },
-              { field_id: "dataset_binance_kline_1m.cci__cci" }
-            ]
+            fields: [{ field_id: "open" }, { field_id: "bias_20" }, { field_id: "cci" }]
           }
         ],
-        ["dataset_binance_kline_1m.open", "dataset_binance_kline_1m.close"]
+        ["open", "close"]
       )
-    ).toEqual(["dataset_binance_kline_1m.open", "dataset_binance_kline_1m.close"]);
+    ).toEqual(["open", "close"]);
   });
 
   it("discovers columns from rows only when no projection is declared", () => {
@@ -163,15 +88,15 @@ describe("rowsToColumnNames", () => {
 describe("buildViewFilterFieldOptions", () => {
   it("keeps search fields aligned with the table projection", () => {
     const labels = {
-      "dataset_binance_kline_1m.open": "开盘价",
-      "dataset_binance_kline_1m.close": "收盘价",
+      open: "开盘价",
+      close: "收盘价",
       amount: "成交额"
     };
     const options = buildViewFilterFieldOptions(
       "time_series",
       [
-        { column_name: "dataset_binance_kline_1m.open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
-        { column_name: "dataset_binance_kline_1m.close", value_type: "FIELD_VALUE_TYPE_DOUBLE" }
+        { column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
+        { column_name: "close", value_type: "FIELD_VALUE_TYPE_DOUBLE" }
       ],
       [
         { column_name: "open", value_type: "FIELD_VALUE_TYPE_DOUBLE" },
@@ -181,14 +106,7 @@ describe("buildViewFilterFieldOptions", () => {
       labels
     );
 
-    expect(options.map(item => item.value)).toEqual([
-      "subject_id",
-      "freq",
-      "series_tag",
-      "data_time",
-      "dataset_binance_kline_1m.open",
-      "dataset_binance_kline_1m.close"
-    ]);
+    expect(options.map(item => item.value)).toEqual(["subject_id", "freq", "series_tag", "data_time", "open", "close"]);
     expect(options.map(item => item.label)).not.toContain("成交额");
   });
 
@@ -205,49 +123,46 @@ describe("buildViewFilterFieldOptions", () => {
 
 describe("view factor column labels", () => {
   it("uses the factor output name stored in result metadata", () => {
-    const columnName = "bin_e0a2079753cf4faf.bias__bias_5";
     const labels = buildViewColumnLabels(
       [
         {
-          column_name: columnName,
-          origin_id: columnName,
-          attributes: { display_name: "bias_5", factor_output: "bias_5" }
+          column_name: "bias_5",
+          origin_id: "bias_5",
+          attributes: { display_name: "乖离率", factor_output: "bias_5" }
         } as ViewColumn
       ],
       [
         {
-          dataset_id: "bin_e0a2079753cf4faf",
-          column_name: "bias__bias_5",
+          dataset_id: "dataset_factor_btc_1m",
+          column_name: "bias_5",
           origin_type: 2,
-          origin_id: "bias.bias_5",
+          origin_id: "Bias",
           attributes: { display_name: "bias_5", factor_output: "bias_5" }
         } as DatasetColumn
       ],
       [],
-      [],
-      { dataset_id: "bin_e0a2079753cf4faf" }
+      { dataset_id: "dataset_factor_btc_1m" }
     );
 
-    expect(labels[columnName]).toBe("bias_5");
+    expect(labels.bias_5).toBe("bias_5");
+  });
+
+  it("labels a column from the View's own Dataset only", () => {
+    const labels = buildViewColumnLabels(
+      [{ column_name: "close", origin_id: "close" } as ViewColumn],
+      [
+        { dataset_id: "dataset_other", column_name: "close", attributes: { display_name: "其他收盘" } } as DatasetColumn,
+        { dataset_id: "dataset_kline", column_name: "close", attributes: { display_name: "收盘价" } } as DatasetColumn
+      ],
+      [],
+      { dataset_id: "dataset_kline" }
+    );
+
+    expect(labels.close).toBe("收盘价");
   });
 });
 
 describe("viewBoundDatasetId", () => {
-  it("reads dataset_id from live storage JSON when primary_dataset_id is absent", () => {
-    const view = { dataset_id: "dataset_spot_kline_1h" };
-    expect(viewBoundDatasetId(view)).toBe("dataset_spot_kline_1h");
-    expect(
-      viewModeFromPrimaryDataset(
-        [{ dataset_id: "dataset_spot_kline_1h", data_kind: "DATA_KIND_TIME_SERIES" }],
-        viewBoundDatasetId(view)
-      )
-    ).toBe("time_series");
-  });
-
-  it("falls back to primary_dataset_id for older view payloads", () => {
-    expect(viewBoundDatasetId({ primary_dataset_id: "dataset_binance_kline_1m" })).toBe("dataset_binance_kline_1m");
-  });
-
   it("treats SQL time_series data_kind as a time-series dataset", () => {
     expect(
       viewModeFromPrimaryDataset(

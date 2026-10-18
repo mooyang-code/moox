@@ -45,3 +45,27 @@ func assertEqualTime(t *testing.T, want, got time.Time) {
 		t.Fatalf("time = %s, want %s", got, want)
 	}
 }
+
+func TestEndpointAttemptContextKeepsAMinimumWindow(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	attempt, release := endpointAttemptContext(parent, 7)
+	defer release()
+	deadline, ok := attempt.Deadline()
+	if !ok {
+		t.Fatal("endpoint attempt must have a deadline")
+	}
+	if window := time.Until(deadline); window < time.Second {
+		t.Fatalf("endpoint window %v is shorter than the minimum", window)
+	}
+
+	short, shortCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer shortCancel()
+	limited, limitedRelease := endpointAttemptContext(short, 7)
+	defer limitedRelease()
+	limitedDeadline, _ := limited.Deadline()
+	parentDeadline, _ := short.Deadline()
+	if limitedDeadline.After(parentDeadline) {
+		t.Fatal("an endpoint window must never outlive its parent")
+	}
+}

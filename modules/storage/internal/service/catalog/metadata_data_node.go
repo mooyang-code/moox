@@ -123,13 +123,15 @@ func (s *Service) ListDataNodes(ctx context.Context, req *pb.ListDataNodesReq) (
 			if item == nil {
 				continue
 			}
+			retention, source := s.datasetRetention(dataset)
 			item.Datasets = append(item.Datasets, &pb.DatasetSummary{
-				SpaceId:      dataset.GetSpaceId(),
-				DatasetId:    dataset.GetDatasetId(),
-				Name:         dataset.GetName(),
-				DataKind:     dataset.GetDataKind(),
-				KeepDuration: dataset.GetKeepDuration(),
-				Status:       dataset.GetStatus(),
+				SpaceId:         dataset.GetSpaceId(),
+				DatasetId:       dataset.GetDatasetId(),
+				Name:            dataset.GetName(),
+				DataKind:        dataset.GetDataKind(),
+				Retention:       retention,
+				RetentionSource: source,
+				Status:          dataset.GetStatus(),
 			})
 		}
 	}

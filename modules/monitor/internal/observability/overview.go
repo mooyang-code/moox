@@ -3,17 +3,18 @@ package observability
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
+
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
-	"github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
 )
 
@@ -27,54 +28,107 @@ type ServiceStatus struct {
 	NodeID, ServiceName, InstanceID, Status, Reason string
 	LastSeenAt                                      time.Time
 	ReporterStatus                                  string
+	Enabled                                         bool
+	ProbeStatus, ProbeReason, ProbeRawError         string
+	ProbeCheckedAt                                  time.Time
+	Instances                                       []ReporterInstance
+	ProbeURL                                        string
+	ProbeHistory                                    []domain.CheckResult
 }
 
 type HostStatus struct {
-	AgentID, Hostname, Status, Reason               string
+	HostID, AgentID, Hostname, Status, Reason       string
 	LastSeenAt                                      time.Time
 	CPUPercent, MemoryPercent, FilesystemMaxPercent float64
+	// 资源总量：CPU 逻辑核数、内存总量与已用量；磁盘是使用率最高的文件系统（与 FilesystemMaxPercent 同一个）。
+	CPUCores                                                       uint32
+	MemoryTotalBytes, MemoryUsedBytes                              uint64
+	FilesystemTotalBytes, FilesystemUsedBytes                      uint64
+	FilesystemMountpoint                                           string
+	MemoryAvailable, DiskAvailable, MetricsAvailable, CPUAvailable bool
 }
 
 type DatasetFrequencyStatus struct {
 	Producer, SpaceID, DatasetID, Freq, Status, Reason string
+	// DisplayName 是生产者随期望清单上报的展示名称（moox_<模块>_dataset_info 的 name 标签，例如策略实例名），
+	// 没有上报时为空，由调用方退回 Storage 里的数据集名称或数据集 ID。
+	DisplayName string
 	// PrimaryDatasetID links an independent Storage View fact back to the
 	// dataset whose Collector produces its input. It is empty for other
 	// producers and keeps DatasetID available as the View identity.
-	PrimaryDatasetID                    string
-	LastRunAt, LastSuccessAt            time.Time
+	PrimaryDatasetID         string
+	LastRunAt, LastSuccessAt time.Time
+	// LastPartialAt 是最近一次“按设计只产出部分结果”的运行（数据积累中），见 DatasetReasonWarming。
+	LastPartialAt                       time.Time
 	InputWatermarkAt, OutputWatermarkAt time.Time
 	LastReportedAt                      time.Time
-	LagSeconds                          int64
+	// 最新一根 K 线（由输出水位识别，水位是它在存储里的 data_time）：LatestBarClose 是按市场交易日历算出的收线时间，
+	// OutputArrivedAt 是生产者写完它的时刻。延迟 = 到达 − 收线，在到达那一刻定值，不随当前时间增长；
+	// 生产者没有上报到达时间时 DelayKnown 为 false。
+	LatestBarClose  time.Time
+	OutputArrivedAt time.Time
+	DelaySeconds    int64
+	DelayKnown      bool
+	// ExpectedBarAt、ExpectedBarClose 是预期 K 线：按市场交易日历此刻应已收线的最新一根。ExpectedBarAt 是它的 data_time
+	// （开盘时间），与 OutputWatermarkAt 相同即已到；无法按交易日历判断时为零。
+	ExpectedBarAt, ExpectedBarClose time.Time
+	// WaitingBars 是此刻应已收线却还没到的根数；WaitingSince 是其中最早一根的收线时间（应到时间），
+	// OverdueSeconds 是它已晚多久（当前时间 − 应到时间）。
+	WaitingBars    int
+	WaitingSince   time.Time
+	OverdueSeconds int64
+	// LateConfirmed 表示应到的那根已由生产者的上报确认迟到：上报那一刻它已晚超过允许迟到仍没有（见 evaluateBars）。
+	LateConfirmed bool
+	// LatenessLimitSeconds 是允许迟到的秒数：生产者的上报确认应到的那根超过它仍未到时判为过期并告警；
+	// 已到的根延迟超过它只标为迟到，不影响当前状态。
+	LatenessLimitSeconds int64
+	// ClockIssue 说明无法按交易日历判断的原因，例如“日历未覆盖”“周期对齐未确认”；为空表示已按日历判断。
+	ClockIssue string
+	// Timezone 是市场时区（IANA 名称）：加密货币 UTC，A 股 Asia/Shanghai；没有交易日历时为 UTC。
+	Timezone string
 }
 
 type BusinessStatus struct {
 	SpaceID, Kind, Module, Status, Reason string
+	CheckID, RawError, Name               string
 	LastCheckedAt                         time.Time
 }
 
 type Overview struct {
 	GeneratedAt    time.Time
 	Services       []ServiceStatus
+	Unregistered   []ServiceStatus
+	TopologyKnown  bool
+	Topology       *domain.TopologySnapshot
 	Hosts          []HostStatus
 	Datasets       []DatasetFrequencyStatus
 	BusinessChecks []BusinessStatus
+	GatewaySignals []GatewaySignal
 }
 
 type Builder struct {
 	Metrics                    *monmetrics.QueryService
 	Hosts                      *hostmetrics.Store
 	Checks                     *store.CheckRepository
+	Topology                   *store.TopologyRepository
+	Gateways                   *store.GatewayRepository
 	Results                    *store.ResultRepository
 	Policy                     report.RealtimeTimeSeriesPolicy
 	BalanceDifferenceThreshold float64
 	MarketFetchThresholds      MarketFetchThresholds
-	Now                        func() time.Time
+	// Inventory 是采集任务清单，用来确定每个空间的市场交易日历（市场、日历、时区、交易时段）。
+	Inventory InventorySource
+	Now       func() time.Time
+}
+
+// InventorySource 提供最近一份有效的采集任务清单；monmetrics.TaskResultInventoryCache 实现它。
+type InventorySource interface {
+	GetAllowStale(ctx context.Context, now time.Time) (monmetrics.TaskResultInventorySnapshot, bool, error)
 }
 
 type MarketFetchThresholds struct {
 	CoordinationStaleAfter      time.Duration
 	PendingGrace                time.Duration
-	LowCapacityHeadroom         int
 	FeedFailureRateWindow       time.Duration
 	FeedFailureRateThreshold    float64
 	InstrumentSnapshotMaxAge    time.Duration
@@ -92,10 +146,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 	}
 	out := Overview{GeneratedAt: now}
 	var err error
-	if out.Services, err = b.buildServices(ctx, spaceID); err != nil {
+	if out.Services, out.Unregistered, out.Topology, err = b.buildServices(ctx, now); err != nil {
 		return Overview{}, err
 	}
-	if out.Hosts, err = b.buildHosts(ctx); err != nil {
+	out.TopologyKnown = out.Topology != nil
+	if out.Hosts, err = b.buildHosts(ctx, now); err != nil {
 		return Overview{}, err
 	}
 	if out.Datasets, err = b.buildDatasets(ctx, spaceID, now); err != nil {
@@ -119,6 +174,15 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, delivery...)
+	presence, err := b.buildWorkerPresence(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, presence...)
+	if out.GatewaySignals, err = b.gatewaySignals(ctx, now); err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = uniqueBusinessChecks(out.BusinessChecks)
 	sortOverview(&out)
 	return out, nil
 }
@@ -181,191 +245,11 @@ func (b Builder) buildStorageOutboxHealth(ctx context.Context, spaceID string, n
 	}}, nil
 }
 
-func (b Builder) buildServices(ctx context.Context, spaceID string) ([]ServiceStatus, error) {
-	services := make(map[string]ServiceStatus)
-	reporterServices, err := expectedReporterServices()
-	if err != nil {
-		return nil, err
-	}
-	if b.Metrics != nil && b.Metrics.Catalog() != nil {
-		rows, total, err := b.Metrics.Catalog().ListServices(ctx, spaceID, 0, 500)
-		if err != nil {
-			return nil, err
-		}
-		if total > maxOverviewServices {
-			return nil, fmt.Errorf("observability services exceed limit %d", maxOverviewServices)
-		}
-		if total > int64(len(rows)) {
-			more, _, err := b.Metrics.Catalog().ListServices(ctx, spaceID, len(rows), int(total)-len(rows))
-			if err != nil {
-				return nil, err
-			}
-			rows = append(rows, more...)
-		}
-		for _, row := range rows {
-			key := serviceInstanceKey(row.NodeID, row.ServiceName, row.InstanceID)
-			if current, exists := services[key]; exists && !row.LastSeenAt.After(current.LastSeenAt) {
-				continue
-			}
-			status, reason := "healthy", "reporter fresh"
-			if row.LastSeenAt.IsZero() {
-				status, reason = "unknown", "尚未上报"
-			} else if row.IsStale {
-				status, reason = "stale", "producer stale"
-			}
-			services[key] = ServiceStatus{
-				NodeID: row.NodeID, ServiceName: row.ServiceName, InstanceID: row.InstanceID,
-				Status: status, ReporterStatus: status, Reason: reason, LastSeenAt: row.LastSeenAt.UTC(),
-			}
-		}
-	}
-
-	checks, err := b.listEnabledSysDeployChecks(ctx, spaceID)
-	if err != nil {
-		return nil, err
-	}
-	for _, check := range checks {
-		labels, err := serviceCheckLabels(check.Labels)
-		if err != nil {
-			return nil, fmt.Errorf("sysdeploy check %q labels: %w", check.CheckID, err)
-		}
-		nodeID, serviceName := labels["node_id"], labels["service_name"]
-		matched := make([]string, 0, 1)
-		for key, item := range services {
-			if item.NodeID == nodeID && item.ServiceName == serviceName {
-				matched = append(matched, key)
-			}
-		}
-		if len(matched) == 0 {
-			key := serviceInstanceKey(nodeID, serviceName, "")
-			service := ServiceStatus{NodeID: nodeID, ServiceName: serviceName, Status: "unknown", Reason: "health not checked"}
-			if reporterServices[serviceName] {
-				service.ReporterStatus = "missing"
-				service.Reason = "reporter missing"
-			}
-			services[key] = service
-			matched = append(matched, key)
-		}
-		var latest *domain.CheckResult
-		if b.Results != nil {
-			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
-			if err != nil {
-				return nil, err
-			}
-			if len(results) > 0 {
-				latest = &results[0]
-			}
-		}
-		for _, key := range matched {
-			services[key] = mergeServiceHealth(services[key], latest)
-		}
-	}
-
-	out := make([]ServiceStatus, 0, len(services))
-	for _, item := range services {
-		out = append(out, item)
-	}
-	return out, nil
-}
-
-func expectedReporterServices() (map[string]bool, error) {
-	manifest, err := doctor.LoadEmbeddedManifest()
-	if err != nil {
-		return nil, fmt.Errorf("load observability component manifest: %w", err)
-	}
-	out := make(map[string]bool, len(manifest.Components))
-	for _, component := range manifest.Components {
-		if component.Transport == doctor.TransportReporter {
-			out[component.ServiceName] = true
-		}
-	}
-	return out, nil
-}
-
-func serviceInstanceKey(nodeID, serviceName, instanceID string) string {
-	return strings.Join([]string{nodeID, serviceName, instanceID}, "\x00")
-}
-
-func (b Builder) listEnabledSysDeployChecks(ctx context.Context, spaceID string) ([]domain.Check, error) {
-	if b.Checks == nil {
-		return []domain.Check{}, nil
-	}
-	enabled := true
-	out := make([]domain.Check, 0, 500)
-	for page := 1; len(out) < maxOverviewServices; page++ {
-		rows, err := b.Checks.List(ctx, store.ListChecksOptions{
-			SpaceID: spaceID, Source: domain.CheckSourceSysDeploy, Enabled: &enabled,
-			Page: store.Page{Page: page, PageSize: 500},
-		})
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, rows...)
-		if len(rows) < 500 {
-			break
-		}
-	}
-	if len(out) >= maxOverviewServices {
-		total, err := b.Checks.Count(ctx, store.ListChecksOptions{
-			SpaceID: spaceID, Source: domain.CheckSourceSysDeploy, Enabled: &enabled,
-		})
-		if err != nil {
-			return nil, err
-		}
-		if total > maxOverviewServices {
-			return nil, fmt.Errorf("sysdeploy checks exceed limit %d", maxOverviewServices)
-		}
-	}
-	return out, nil
-}
-
-func serviceCheckLabels(raw string) (map[string]string, error) {
-	labels := map[string]string{}
-	if err := json.Unmarshal([]byte(raw), &labels); err != nil {
-		return nil, err
-	}
-	for _, key := range []string{"node_id", "service_name"} {
-		labels[key] = strings.TrimSpace(labels[key])
-		if labels[key] == "" {
-			return nil, fmt.Errorf("%s is required", key)
-		}
-	}
-	return labels, nil
-}
-
-func mergeServiceHealth(service ServiceStatus, result *domain.CheckResult) ServiceStatus {
-	healthStatus, healthReason := "unknown", "health not checked"
-	if result != nil {
-		service.LastSeenAt = maxTime(service.LastSeenAt, result.CheckedAt.UTC())
-		switch {
-		case !result.Success:
-			healthStatus, healthReason = "down", strings.TrimSpace(result.ErrorMessage)
-			if healthReason == "" {
-				healthReason = "health check failed"
-			}
-		case result.Status == domain.CheckStatusDegraded:
-			healthStatus, healthReason = "degraded", "health check degraded"
-		default:
-			healthStatus, healthReason = "healthy", "health check ok"
-		}
-	}
-	if service.ReporterStatus == "" {
-		service.Status = healthStatus
-		service.Reason = healthReason
-		return service
-	}
-	if statusRank(healthStatus) < statusRank(service.Status) {
-		service.Status = healthStatus
-	}
-	service.Reason = strings.Join([]string{service.Reason, healthReason}, "; ")
-	return service
-}
-
-func (b Builder) buildHosts(ctx context.Context) ([]HostStatus, error) {
+func (b Builder) buildHosts(ctx context.Context, now time.Time) ([]HostStatus, error) {
 	if b.Hosts == nil {
 		return []HostStatus{}, nil
 	}
-	rows, err := b.Hosts.ListAgents(ctx)
+	rows, err := b.Hosts.ListAgentsAt(ctx, now)
 	if err != nil {
 		return nil, err
 	}
@@ -375,17 +259,27 @@ func (b Builder) buildHosts(ctx context.Context) ([]HostStatus, error) {
 		if !row.Reachable {
 			status, reason = "down", "agent unreachable"
 		}
-		item := HostStatus{AgentID: row.AgentID, Hostname: row.Hostname, Status: status, Reason: reason}
+		item := HostStatus{HostID: row.HostID, AgentID: row.AgentID, Hostname: row.Hostname, Status: status, Reason: reason}
 		item.LastSeenAt, _ = time.Parse(time.RFC3339Nano, row.LastSeenAt)
 		if snapshot := row.Snapshot; snapshot != nil {
+			item.MetricsAvailable = true
+			item.CPUCores = snapshot.GetCpu().GetLogicalCores()
 			if snapshot.GetCpu() != nil && snapshot.GetCpu().GetUsageAvailable() {
+				item.CPUAvailable = true
 				item.CPUPercent = snapshot.GetCpu().GetUsagePercent()
 			}
 			if snapshot.GetMemory() != nil {
+				item.MemoryAvailable = true
 				item.MemoryPercent = snapshot.GetMemory().GetUsagePercent()
+				item.MemoryTotalBytes, item.MemoryUsedBytes = snapshot.GetMemory().GetTotalBytes(), snapshot.GetMemory().GetUsedBytes()
 			}
-			for _, filesystem := range snapshot.GetFilesystems() {
-				item.FilesystemMaxPercent = max(item.FilesystemMaxPercent, filesystem.GetUsagePercent())
+			item.DiskAvailable = len(snapshot.GetFilesystems()) > 0
+			for index, filesystem := range snapshot.GetFilesystems() {
+				if index == 0 || filesystem.GetUsagePercent() > item.FilesystemMaxPercent {
+					item.FilesystemMaxPercent = filesystem.GetUsagePercent()
+					item.FilesystemTotalBytes, item.FilesystemUsedBytes = filesystem.GetTotalBytes(), filesystem.GetUsedBytes()
+					item.FilesystemMountpoint = filesystem.GetMountpoint()
+				}
 			}
 		}
 		out = append(out, item)
@@ -398,9 +292,13 @@ type datasetKey struct {
 }
 
 type datasetValues struct {
-	interval, inventory, lastRun, lastSuccess, input, output float64
-	reporterStale                                            bool
-	reportedAt                                               time.Time
+	interval, inventory, lastRun, lastSuccess, lastPartial, input, output float64
+	// arrival 是输出水位最近一次前进时生产者写完的墙上时间。
+	arrival       float64
+	reporterStale bool
+	reportedAt    time.Time
+	// confirmedAt 是能确认最新一根“到此刻还没更新”的时刻，即生产者上报快照的时刻；多个实例合并后见 confirmedUntil。
+	confirmedAt time.Time
 }
 
 func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Time) ([]DatasetFrequencyStatus, error) {
@@ -571,8 +469,12 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 				return nil, err
 			}
 			observed := latest.ObservedAt.UTC().Unix()
+			arrival, err := b.viewArrival(ctx, series)
+			if err != nil {
+				return nil, err
+			}
 			key := datasetKey{service: series.ServiceName, producer: "storage_view", instance: series.InstanceID, spaceID: viewSpaceID, datasetID: viewID, primaryDatasetID: labels["dataset_id"], freq: freq, labels: series.LabelsJSON}
-			values[key] = datasetValues{interval: interval.Seconds(), lastRun: float64(observed), lastSuccess: float64(observed), output: latest.Value, reporterStale: series.IsStale, reportedAt: latest.ObservedAt.UTC()}
+			values[key] = datasetValues{interval: interval.Seconds(), lastRun: float64(observed), lastSuccess: float64(observed), output: latest.Value, arrival: arrival, reporterStale: series.IsStale, reportedAt: latest.ObservedAt.UTC()}
 		}
 	}
 	type aggregatedDataset struct {
@@ -591,23 +493,124 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 				},
 				value: value,
 			}
+			current.value.confirmedAt = value.reportedAt
 		} else {
+			current.value.confirmedAt = confirmedUntil(current.value, value)
 			current.value.interval = minPositive(current.value.interval, value.interval)
 			current.value.inventory = max(current.value.inventory, value.inventory)
 			current.value.lastRun = max(current.value.lastRun, value.lastRun)
 			current.value.lastSuccess = max(current.value.lastSuccess, value.lastSuccess)
+			current.value.lastPartial = max(current.value.lastPartial, value.lastPartial)
 			current.value.input = max(current.value.input, value.input)
+			// 到达时间跟着最新的输出走；多个实例写到同一根时取最早到的那次。
+			switch {
+			case value.output > current.value.output:
+				current.value.arrival = value.arrival
+			case value.output == current.value.output && value.arrival > 0 && (current.value.arrival == 0 || value.arrival < current.value.arrival):
+				current.value.arrival = value.arrival
+			}
 			current.value.output = max(current.value.output, value.output)
 			current.value.reportedAt = maxTime(current.value.reportedAt, value.reportedAt)
 			current.value.reporterStale = current.value.reporterStale && value.reporterStale
 		}
 		aggregated[identity] = current
 	}
+	displayNames := b.datasetDisplayNames(ctx, names, spaceID)
+	clocks := b.spaceClocks(ctx, now)
 	out := make([]DatasetFrequencyStatus, 0, len(aggregated))
-	for _, current := range aggregated {
-		out = append(out, datasetStatus(now, current.key, current.value, b.Policy))
+	for identity, current := range aggregated {
+		clock, ok := clocks[current.key.spaceID]
+		if !ok {
+			clock = spaceClock{err: monmetrics.ErrNoTradingCalendar}
+		}
+		item := datasetStatus(now, current.key, current.value, b.Policy, clock)
+		item.DisplayName = displayNames[identity]
+		out = append(out, item)
 	}
 	return out, nil
+}
+
+// maxDatasetNameSeries 是读取数据集名称序列的总条数上限。名称序列随改名留下历史身份，过期后由指标保留期清理；
+// 超出上限的部分不再读取，对应数据集退回默认名称，不影响状态判断。
+const maxDatasetNameSeries = 4 * MaxDatasetFrequencyStatuses
+
+// datasetDisplayNames 读取生产者上报的数据集展示名称，键与数据集聚合身份一致（生产者、空间、数据集、频率）。
+// 只认仍在上报的序列；同一数据集有多条（刚改名，旧序列还没过期）时取最近上报的那条。名称只用于给检查起名：
+// 读取出错时停止读取、返回已读到的部分，其余数据集退回默认名称，不让概览和业务检查因此失败。
+func (b Builder) datasetDisplayNames(ctx context.Context, names []monmetrics.MetricName, spaceID string) map[string]string {
+	type candidate struct {
+		name   string
+		seenAt time.Time
+	}
+	best := make(map[string]candidate)
+	read := 0
+metrics:
+	for _, metric := range names {
+		if !strings.HasPrefix(metric.MetricName, "moox_") || !strings.HasSuffix(metric.MetricName, "_dataset_info") {
+			continue
+		}
+		producer := datasetModuleFromMetric(metric.MetricName)
+		if producer == "" {
+			continue
+		}
+		for offset := 0; read < maxDatasetNameSeries; {
+			rows, total, err := b.Metrics.Catalog().ListSeries(ctx, metric.ServiceName, metric.MetricName, "", offset, 500)
+			if err != nil {
+				break metrics
+			}
+			read += len(rows)
+			for _, series := range rows {
+				if series.IsStale {
+					continue
+				}
+				labels, err := datasetLabels(series.LabelsJSON)
+				if err != nil {
+					continue
+				}
+				name := strings.TrimSpace(labels["name"])
+				if name == "" || labels["space_id"] == "" || labels["dataset_id"] == "" || labels["freq"] == "" {
+					continue
+				}
+				if spaceID != "" && labels["space_id"] != spaceID {
+					continue
+				}
+				identity := strings.Join([]string{producer, labels["space_id"], labels["dataset_id"], labels["freq"]}, "\x00")
+				current, exists := best[identity]
+				if !exists || series.LastSeenAt.After(current.seenAt) || (series.LastSeenAt.Equal(current.seenAt) && name < current.name) {
+					best[identity] = candidate{name: name, seenAt: series.LastSeenAt}
+				}
+			}
+			offset += len(rows)
+			if len(rows) == 0 || int64(offset) >= total {
+				break
+			}
+		}
+	}
+	out := make(map[string]string, len(best))
+	for identity, item := range best {
+		out[identity] = item.name
+	}
+	return out
+}
+
+// viewArrival 读取与 View 水位同一身份的到达时间（View 水位最近一次前进时提交完成的时刻）；没有上报时为 0。
+func (b Builder) viewArrival(ctx context.Context, watermark monmetrics.MetricSeries) (float64, error) {
+	const viewArrivalMetric = "moox_storage_view_output_arrival_timestamp_seconds"
+	series, err := b.Metrics.Catalog().FindSeries(ctx, "", watermark.ServiceName, viewArrivalMetric, watermark.LabelsJSON, 10)
+	if err != nil {
+		return 0, err
+	}
+	for _, item := range series {
+		if item.InstanceID != watermark.InstanceID {
+			continue
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return 0, err
+		}
+		return latest.Value, nil
+	}
+	return 0, nil
 }
 
 func minPositive(left, right float64) float64 {
@@ -630,6 +633,22 @@ func maxTime(left, right time.Time) time.Time {
 	return left
 }
 
+// confirmedUntil 把又一个实例并入已合并的数据集时，给出能确认最新一根“到此刻还没更新”的时刻。数据集的最新一根取各实例的最大值，
+// 某一根要所有实例都上报过、都还没有它才算确认未到，所以取仍在上报的实例里最早的那次上报；已停止上报的实例不拖住确认
+// （全部停止时由 producer stale 判断）。merged.reporterStale 表示已合并的实例是否全部停止上报。
+func confirmedUntil(merged, next datasetValues) time.Time {
+	switch {
+	case next.reportedAt.IsZero() || next.reporterStale && !merged.reporterStale:
+		return merged.confirmedAt
+	case merged.confirmedAt.IsZero() || merged.reporterStale && !next.reporterStale:
+		return next.reportedAt
+	case next.reportedAt.Before(merged.confirmedAt):
+		return next.reportedAt
+	default:
+		return merged.confirmedAt
+	}
+}
+
 func (b Builder) populateDatasetValues(
 	ctx context.Context,
 	values map[datasetKey]datasetValues,
@@ -641,8 +660,10 @@ func (b Builder) populateDatasetValues(
 			"expected_interval_seconds":          &current.interval,
 			"last_run_timestamp_seconds":         &current.lastRun,
 			"last_success_timestamp_seconds":     &current.lastSuccess,
+			"last_partial_timestamp_seconds":     &current.lastPartial,
 			"input_watermark_timestamp_seconds":  &current.input,
 			"output_watermark_timestamp_seconds": &current.output,
+			"output_arrival_timestamp_seconds":   &current.arrival,
 		} {
 			series, err := b.Metrics.Catalog().FindSeries(ctx, "", key.service, prefix+suffix, key.labels, 500)
 			if err != nil {
@@ -739,22 +760,29 @@ func datasetLimitError() error {
 	return fmt.Errorf("dataset frequency statuses exceed limit %d", MaxDatasetFrequencyStatuses)
 }
 
-func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy report.RealtimeTimeSeriesPolicy) DatasetFrequencyStatus {
+// datasetStatus 判定一个数据集的状态。新鲜度看“最新一根 K 线是否按时到达”：按市场交易日历算出此刻应已收线的最新一根（预期 K 线），
+// 还没到、并且生产者在收线超过允许迟到之后的上报里仍没有它，才判为过期；已经到了的根即使迟到，也只记下延迟，当前状态仍是正常。
+func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy report.RealtimeTimeSeriesPolicy, clock spaceClock) DatasetFrequencyStatus {
 	item := DatasetFrequencyStatus{
 		Producer: key.producer, SpaceID: key.spaceID, DatasetID: key.datasetID, Freq: key.freq,
 		PrimaryDatasetID: key.primaryDatasetID,
-		LastRunAt:        unixTime(value.lastRun), LastSuccessAt: unixTime(value.lastSuccess),
+		LastRunAt:        unixTime(value.lastRun), LastSuccessAt: unixTime(value.lastSuccess), LastPartialAt: unixTime(value.lastPartial),
 		InputWatermarkAt: unixTime(value.input), OutputWatermarkAt: unixTime(value.output),
 		LastReportedAt: value.reportedAt,
 	}
-	reference := item.OutputWatermarkAt
-	if reference.IsZero() {
-		reference = item.LastSuccessAt
+	runLag, successLag, lateness := datasetTolerances(key, value.interval, policy)
+	item.LatenessLimitSeconds = int64(lateness / time.Second)
+	bars := evaluateBars(clock, key.freq, item.OutputWatermarkAt, unixTime(value.arrival), value.confirmedAt, now)
+	item.LatestBarClose, item.OutputArrivedAt = bars.latestClose, unixTime(value.arrival)
+	item.DelaySeconds, item.DelayKnown = int64(bars.delay/time.Second), bars.delayKnown
+	item.ExpectedBarAt, item.ExpectedBarClose = bars.expected.Open, bars.expected.Close
+	item.WaitingBars, item.WaitingSince, item.OverdueSeconds = bars.waiting, bars.waitingSince, int64(bars.overdue/time.Second)
+	item.LateConfirmed = bars.waiting > 0 && lateness > 0 && bars.confirmed && bars.confirmedOverdue > lateness
+	item.ClockIssue = clockIssueText(bars.issue)
+	item.Timezone = time.UTC.String()
+	if clock.err == nil {
+		item.Timezone = clock.clock.Location().String()
 	}
-	if !reference.IsZero() {
-		item.LagSeconds = max(int64(0), int64(now.Sub(reference)/time.Second))
-	}
-	runLag, successLag, watermarkLag := datasetTolerances(key, value.interval, policy)
 	inventoryAt := unixTime(value.inventory)
 	switch {
 	case value.reporterStale:
@@ -765,12 +793,19 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 		item.Status, item.Reason = "unknown", "尚未上报"
 	case runLag > 0 && now.Sub(item.LastRunAt) > runLag:
 		item.Status, item.Reason = "stale", "run stale"
+	case warmingNow(now, item, successLag):
+		// 生产者仍在按设计只产出部分结果（空洞保护、历史不足、预热）：页面显示降级，但不是故障，不告警。
+		item.Status, item.Reason = "degraded", DatasetReasonWarming
 	case item.LastSuccessAt.IsZero():
 		item.Status, item.Reason = "degraded", "尚无成功运行"
 	case successLag > 0 && now.Sub(item.LastSuccessAt) > successLag:
 		item.Status, item.Reason = "degraded", "success stale"
-	case watermarkLag > 0 && item.LagSeconds > int64(watermarkLag/time.Second):
-		item.Status, item.Reason = "stale", datasetWatermarkStaleReason(item, now)
+	case errors.Is(bars.issue, monmetrics.ErrCalendarNotCovered):
+		// 日历覆盖不到就无法判断应收哪一根：不推测，报出来让人更新交易日历。
+		item.Status, item.Reason = "unknown", item.ClockIssue
+	case item.LateConfirmed:
+		item.Status = "stale"
+		item.Reason = waitingReason(item)
 	case item.OutputWatermarkAt.IsZero():
 		item.Status, item.Reason = "healthy", "正常但空结果"
 	default:
@@ -779,52 +814,28 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 	return item
 }
 
+// DatasetReasonWarming 是“数据积累中”的原因码：生产者报告最近一次运行只按设计产出了部分结果（窗口空洞保护、
+// 历史不足、预热中），而且此后没有更新的成功。状态仍是 degraded，页面照常展示；告警检查把它当作通过。
+const DatasetReasonWarming = "warming"
+
+// warmingNow 判断数据集是否处在“积累中”：最近一次产出是部分结果（比最近一次成功更新），并且部分结果仍按期出现——
+// 超过成功容忍时间没有新的部分结果（生产者停了或开始真正失败）就不再算积累，回到原来的成功过期判断。
+func warmingNow(now time.Time, item DatasetFrequencyStatus, successLag time.Duration) bool {
+	if item.LastPartialAt.IsZero() || !item.LastPartialAt.After(item.LastSuccessAt) {
+		return false
+	}
+	return successLag <= 0 || now.Sub(item.LastPartialAt) <= successLag
+}
+
 // datasetWatermarkStaleReason keeps the alert useful without requiring an
 // operator to translate the internal "watermark" term. Timestamps are
 // explicitly UTC so the value can be compared with Collector/Storage logs.
-func datasetWatermarkStaleReason(item DatasetFrequencyStatus, now time.Time) string {
-	lag := formatDatasetLag(item.LagSeconds)
-	latest := "未产生"
-	if !item.OutputWatermarkAt.IsZero() {
-		latest = item.OutputWatermarkAt.UTC().Format("2006-01-02 15:04:05 UTC")
-	}
-	reason := fmt.Sprintf("输出水位已落后 %s，最新输出时间 %s", lag, latest)
-	if !item.InputWatermarkAt.IsZero() {
-		reason += fmt.Sprintf("，输入水位 %s", item.InputWatermarkAt.UTC().Format("2006-01-02 15:04:05 UTC"))
-	}
-	if !now.IsZero() {
-		reason += fmt.Sprintf("（检查时间 %s）", now.UTC().Format("2006-01-02 15:04:05 UTC"))
-	}
-	return reason
-}
-
-func formatDatasetLag(seconds int64) string {
-	if seconds < 60 {
-		return fmt.Sprintf("%d 秒", max(int64(0), seconds))
-	}
-	minutes := seconds / 60
-	remainingSeconds := seconds % 60
-	if minutes < 60 {
-		if remainingSeconds == 0 {
-			return fmt.Sprintf("%d 分钟", minutes)
-		}
-		return fmt.Sprintf("%d 分 %d 秒", minutes, remainingSeconds)
-	}
-	hours := minutes / 60
-	remainingMinutes := minutes % 60
-	if remainingMinutes == 0 {
-		return fmt.Sprintf("%d 小时", hours)
-	}
-	return fmt.Sprintf("%d 小时 %d 分钟", hours, remainingMinutes)
-}
-
 func ownsExpectedDatasetInventory(producer string) bool {
 	return producer == "collector" || producer == "factor"
 }
 
 func datasetTolerances(key datasetKey, interval float64, policy report.RealtimeTimeSeriesPolicy) (time.Duration, time.Duration, time.Duration) {
 	runBase := time.Duration(interval * float64(time.Second))
-	frequency := parseOverviewFrequency(key.freq)
 	defaults := policy.Defaults
 	var runLag, successLag time.Duration
 	if defaults.RunMissedIntervals > 0 && runBase > 0 {
@@ -833,44 +844,40 @@ func datasetTolerances(key datasetKey, interval float64, policy report.RealtimeT
 	if defaults.SuccessMissedIntervals > 0 && runBase > 0 {
 		successLag = time.Duration(defaults.SuccessMissedIntervals)*runBase + 30*time.Second
 	}
-	watermarkLag := max(time.Duration(defaults.WatermarkPeriods)*frequency, defaults.MinimumWatermarkLag)
-	for _, override := range policy.Overrides {
-		if override.SpaceID == key.spaceID && override.DatasetID == key.datasetID && sameDatasetFrequency(override.Freq, key.freq) && override.WatermarkLag > 0 {
-			watermarkLag = override.WatermarkLag
-			break
-		}
-	}
-	return runLag, successLag, watermarkLag
+	// 允许迟到按周期分级（分钟级、小时级、日线及以上），由健康策略统一给出；应收的最新一根已按交易日历确定，周末、长假不需要放大。
+	return runLag, successLag, policy.Lateness(key.spaceID, key.datasetID, key.freq)
 }
 
 func sameDatasetFrequency(left, right string) bool {
-	left, leftErr := report.NormalizeDatasetFrequency(strings.TrimSpace(left))
-	right, rightErr := report.NormalizeDatasetFrequency(strings.TrimSpace(right))
+	left, leftErr := frequencypkg.Normalize(left)
+	right, rightErr := frequencypkg.Normalize(right)
 	return leftErr == nil && rightErr == nil && left == right
 }
 
 func parseOverviewFrequency(raw string) time.Duration {
-	parsed, err := report.ParseDatasetFrequency(strings.TrimSpace(raw))
+	parsed, err := frequencypkg.Parse(raw)
 	if err != nil {
 		return 0
 	}
-	return parsed
+	return parsed.NominalDuration()
 }
 
 func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]BusinessStatus, error) {
 	out := make([]BusinessStatus, 0)
 	if b.Checks != nil && b.Results != nil {
-		enabled := true
-		checks, err := b.Checks.List(ctx, store.ListChecksOptions{SpaceID: spaceID, Enabled: &enabled, Page: store.Page{PageSize: 500}})
+		checks, err := b.Checks.ListEnabledKinds(ctx, spaceID, []string{"market_canary", "subject_tag", "balance", "module", "kline_freshness", "console-page"}, 1501)
 		if err != nil {
 			return nil, err
+		}
+		if len(checks) > 1500 {
+			return nil, fmt.Errorf("business checks exceed 1500 items")
 		}
 		for _, check := range checks {
 			kind := businessKind(check)
 			if kind == "" {
 				continue
 			}
-			item := BusinessStatus{SpaceID: check.SpaceID, Kind: kind, Module: check.Source, Status: "unknown", Reason: "尚未上报"}
+			item := BusinessStatus{CheckID: check.CheckID, SpaceID: check.SpaceID, Name: check.Name, Kind: kind, Module: businessModule(check.CheckID), Status: "unknown", Reason: "尚未上报"}
 			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
 			if err != nil {
 				return nil, err
@@ -879,8 +886,12 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 				item.LastCheckedAt = results[0].CheckedAt.UTC()
 				item.Status = strings.ToLower(string(results[0].Status))
 				item.Reason = results[0].ErrorMessage
+				item.RawError = results[0].RawError
 				if item.Reason == "" {
 					item.Reason = map[bool]string{true: "normal", false: "check failed"}[results[0].Success]
+				}
+				if item.Reason == domain.CheckReasonRetired {
+					item.Status = "disabled"
 				}
 			}
 			out = append(out, item)
@@ -959,21 +970,16 @@ func (b Builder) buildBalanceStatuses(ctx context.Context) ([]BusinessStatus, er
 }
 
 type timerCoordinationState struct {
-	required, active, lastSuccess                                                 float64
-	pending, pendingSince                                                         float64
-	capacityTotal, capacityRequired, capacityActive, capacityHeadroom             float64
-	hasRequired, hasLastSuccess                                                   bool
-	hasPending, hasPendingSince                                                   bool
-	hasCapacityTotal, hasCapacityRequired, hasCapacityActive, hasCapacityHeadroom bool
-	healthy                                                                       float64
-	hasHealth                                                                     bool
-	staleSeries                                                                   bool
-	badNodes                                                                      []string
-	failureReasons                                                                map[string]bool
-	configuredGroupsExpected, configuredGroupsActual                              float64
-	hasConfiguredGroupsExpected, hasConfiguredGroupsActual                        bool
-	configuredGroupIDs                                                            map[int]float64
-	configuredGroupIDObserved                                                     map[int]time.Time
+	lastSuccess     float64
+	pending         float64
+	pendingSince    float64
+	hasLastSuccess  bool
+	hasPending      bool
+	hasPendingSince bool
+	healthy         float64
+	hasHealth       bool
+	staleSeries     bool
+	failureReasons  map[string]bool
 }
 
 type marketFeedHealthState struct {
@@ -1247,11 +1253,6 @@ const timerCoordinationStaleAfter = 15 * time.Minute
 
 const timerCoordinationPendingGrace = 5 * time.Minute
 
-// Keep a small reserve so adding a new symbol or frequency is visible before
-// the next reconciliation hits a hard Timer capacity error. The metric still
-// exposes the exact headroom for operators who need a different threshold.
-const timerCoordinationLowCapacityHeadroom = 2
-
 func (b Builder) marketFetchThresholds() MarketFetchThresholds {
 	thresholds := b.MarketFetchThresholds
 	if thresholds.CoordinationStaleAfter <= 0 {
@@ -1259,9 +1260,6 @@ func (b Builder) marketFetchThresholds() MarketFetchThresholds {
 	}
 	if thresholds.PendingGrace <= 0 {
 		thresholds.PendingGrace = timerCoordinationPendingGrace
-	}
-	if thresholds.LowCapacityHeadroom <= 0 {
-		thresholds.LowCapacityHeadroom = timerCoordinationLowCapacityHeadroom
 	}
 	if thresholds.FeedFailureRateWindow <= 0 {
 		thresholds.FeedFailureRateWindow = 5 * time.Minute
@@ -1296,7 +1294,7 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		return nil, err
 	} else {
 		for _, service := range services {
-			if service.ServiceName == "moox_collector" && !service.IsStale {
+			if service.ServiceName == "collector" && !service.IsStale {
 				collectorReporterFresh = true
 				break
 			}
@@ -1335,17 +1333,6 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 			apply(state, labels, latest.Value)
 		}
 		return nil
-	}
-	if err := load("moox_collector_market_fetch_assignment_required", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		state.required += maxFloat(value, 0)
-		state.hasRequired = true
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_assignment_active", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		state.active += maxFloat(value, 0)
-	}); err != nil {
-		return nil, err
 	}
 	if err := load("moox_collector_market_fetch_assignment_last_success_timestamp_seconds", func(state *timerCoordinationState, _ map[string]string, value float64) {
 		if value > state.lastSuccess {
@@ -1395,235 +1382,46 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 	}); err != nil {
 		return nil, err
 	}
-	if err := load("moox_collector_market_fetch_timer_capacity_total", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		if !state.hasCapacityTotal || value > state.capacityTotal {
-			state.capacityTotal = maxFloat(value, 0)
-		}
-		state.hasCapacityTotal = true
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_timer_capacity_required", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		if !state.hasCapacityRequired || value > state.capacityRequired {
-			state.capacityRequired = maxFloat(value, 0)
-		}
-		state.hasCapacityRequired = true
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_timer_capacity_active", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		if !state.hasCapacityActive || value > state.capacityActive {
-			state.capacityActive = maxFloat(value, 0)
-		}
-		state.hasCapacityActive = true
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_timer_capacity_headroom", func(state *timerCoordinationState, _ map[string]string, value float64) {
-		// During a rolling restart more than one Collector may report the same
-		// space. Use the smallest headroom so one constrained reporter cannot be
-		// hidden by a newer, more optimistic series.
-		if !state.hasCapacityHeadroom || value < state.capacityHeadroom {
-			state.capacityHeadroom = value
-		}
-		state.hasCapacityHeadroom = true
-	}); err != nil {
-		return nil, err
-	}
-	if err := load("moox_collector_market_fetch_timer_available", func(state *timerCoordinationState, labels map[string]string, value float64) {
-		// Disabled SCF assignments are spare capacity, not an expected
-		// trigger. Their readback may legitimately be unavailable while the
-		// Collector is reconciling the fleet; only enabled assignments should
-		// participate in the coordination failure check.
-		if strings.EqualFold(strings.TrimSpace(labels["enabled"]), "false") {
-			return
-		}
-		// CloudNode reports -1 while a provider readback is unknown.  That is a
-		// transient observation, not proof that the trigger is unavailable; the
-		// next reconciliation will either confirm it or publish a real 0.
-		if value != 0 {
-			return
-		}
-		if nodeID := strings.TrimSpace(labels["node_id"]); nodeID != "" {
-			state.badNodes = append(state.badNodes, nodeID)
-		}
-	}); err != nil {
-		return nil, err
-	}
-	configuredGroups, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_collector_market_configured_groups", "", 500, now)
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range configuredGroups {
-		if item.IsStale {
-			continue
-		}
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return nil, fmt.Errorf("configured group labels for %s: %w", item.SeriesID, err)
-		}
-		currentSpace := strings.TrimSpace(labels["market_id"])
-		if currentSpace != "stockcn" || (spaceID != "" && currentSpace != spaceID) {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		state := states[currentSpace]
-		if state == nil {
-			state = &timerCoordinationState{}
-			states[currentSpace] = state
-		}
-		switch strings.TrimSpace(labels["kind"]) {
-		case "expected":
-			if !state.hasConfiguredGroupsExpected || latest.Value > state.configuredGroupsExpected {
-				state.configuredGroupsExpected = maxFloat(latest.Value, 0)
-			}
-			state.hasConfiguredGroupsExpected = true
-		case "actual":
-			if !state.hasConfiguredGroupsActual || latest.Value < state.configuredGroupsActual {
-				state.configuredGroupsActual = maxFloat(latest.Value, 0)
-			}
-			state.hasConfiguredGroupsActual = true
-		}
-	}
-	groupIdentitySeries, err := b.marketMetricSeries(ctx, "moox_collector_market_configured_group_id")
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range groupIdentitySeries {
-		if item.IsStale {
-			continue
-		}
-		labels, err := datasetLabels(item.LabelsJSON)
-		if err != nil {
-			return nil, fmt.Errorf("configured group identity labels for %s: %w", item.SeriesID, err)
-		}
-		currentSpace := strings.TrimSpace(labels["market_id"])
-		if currentSpace != "stockcn" || (spaceID != "" && currentSpace != spaceID) {
-			continue
-		}
-		groupID, parseErr := strconv.Atoi(strings.TrimSpace(labels["group_id"]))
-		if parseErr != nil || groupID < 0 {
-			continue
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		state := states[currentSpace]
-		if state == nil {
-			state = &timerCoordinationState{}
-			states[currentSpace] = state
-		}
-		if state.configuredGroupIDs == nil {
-			state.configuredGroupIDs = make(map[int]float64)
-			state.configuredGroupIDObserved = make(map[int]time.Time)
-		}
-		if state.configuredGroupIDObserved[groupID].Before(latest.ObservedAt.UTC()) {
-			state.configuredGroupIDs[groupID] = maxFloat(latest.Value, 0)
-			state.configuredGroupIDObserved[groupID] = latest.ObservedAt.UTC()
-		}
-	}
 	out := make([]BusinessStatus, 0, len(states))
 	for currentSpace, state := range states {
-		pendingGrace := state.hasRequired && state.hasPending && state.pending > 0 && state.hasPendingSince && state.pendingSince > 0 &&
-			now.Sub(unixTime(state.pendingSince)) >= 0 && now.Sub(unixTime(state.pendingSince)) <= thresholds.PendingGrace &&
-			state.active >= state.required && len(state.badNodes) == 0
+		pendingGrace := state.hasPending && state.pending > 0 && state.hasPendingSince && state.pendingSince > 0 &&
+			now.Sub(unixTime(state.pendingSince)) >= 0 && now.Sub(unixTime(state.pendingSince)) <= thresholds.PendingGrace
 		if pendingGrace {
-			reason := "Timer 配置协调进行中"
+			reason := "采集计划协调进行中"
 			if state.failureReasons["submit_timeout"] {
-				reason = "Timer 配置提交超时，正在自动重试"
+				reason = "采集计划配置提交超时，正在自动重试"
 			}
 			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: reason, LastCheckedAt: now})
 			continue
 		}
-		if state.hasCapacityTotal && state.hasCapacityRequired && state.capacityRequired > state.capacityTotal {
-			shortfall := state.capacityRequired - state.capacityTotal
-			reason := fmt.Sprintf("Timer SCF 容量不足：需要 %.0f 个节点，当前仅有 %.0f 个，缺口 %.0f 个", state.capacityRequired, state.capacityTotal, shortfall)
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
-			continue
-		}
-		if state.hasConfiguredGroupsExpected && state.hasConfiguredGroupsActual &&
-			state.configuredGroupsExpected != state.configuredGroupsActual {
-			reason := fmt.Sprintf("stockcn Group 数量不一致：期望 %.0f，实际 %.0f", state.configuredGroupsExpected, state.configuredGroupsActual)
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
-			continue
-		}
 		if state.hasHealth && state.healthy <= 0 {
-			reason := "Collector Timer 协调失败：请检查 Timer 分片容量、触发器状态和 Collector 日志"
+			reason := "采集计划协调失败：请检查 Collector 日志、CloudNode 和函数网络"
 			switch {
 			case state.failureReasons["submit_timeout"]:
-				reason = "Timer 配置提交持续超时：请检查 CloudNode、网关连接和批处理队列"
+				reason = "采集计划配置提交持续超时：请检查 CloudNode、网关连接和批处理队列"
 			case state.failureReasons["cloudnode"]:
-				reason = "Timer 配置服务调用失败：请检查 CloudNode、网关连接和批处理队列"
+				reason = "采集计划配置服务调用失败：请检查 CloudNode、网关连接和批处理队列"
 			case state.failureReasons["environment"]:
-				reason = "Timer 运行环境生成失败：请检查环境变量大小和 DNS 配置"
+				reason = "函数运行环境生成失败：请检查环境变量大小和 DNS 配置"
 			case state.failureReasons["rules"]:
-				reason = "Timer 采集规则读取失败：请检查 Collector 规则配置和存储连接"
-			case state.failureReasons["task_instances"]:
-				reason = "Timer 任务实例保存失败：请检查 Collector 数据库"
-			case state.failureReasons["capacity"] && state.hasRequired && state.required > state.active:
-				reason = fmt.Sprintf("Timer 分片节点不足：需要 %.0f 个，当前仅分配 %.0f 个", state.required, state.active)
+				reason = "采集规则读取失败：请检查 Collector 规则配置和存储连接"
 			}
 			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
 			continue
 		}
-		if !state.hasRequired || state.required <= 0 {
+		if !state.hasLastSuccess || state.lastSuccess <= 0 {
 			if state.staleSeries && !collectorReporterFresh {
-				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: "Collector Timer 协调指标已停止上报", LastCheckedAt: now})
+				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: "Collector 采集计划指标已停止上报", LastCheckedAt: now})
 			}
 			continue
 		}
-		status, reason := "healthy", "Timer 分配和触发器正常"
-		switch {
-		case state.hasCapacityHeadroom && state.capacityHeadroom >= 0 && state.capacityHeadroom <= float64(thresholds.LowCapacityHeadroom):
-			status, reason = "degraded", fmt.Sprintf("Timer SCF 容量余量仅 %.0f 个节点，当前需要 %.0f/%.0f 个", state.capacityHeadroom, state.capacityRequired, state.capacityTotal)
-		case state.active < state.required:
-			status, reason = "down", fmt.Sprintf("Timer 节点分配不足：已分配 %.0f 个，需要 %.0f 个", state.active, state.required)
-		case !state.hasLastSuccess || state.lastSuccess <= 0:
-			status, reason = "down", "尚未完成 Timer 配置协调"
-		case now.Sub(unixTime(state.lastSuccess)) > thresholds.CoordinationStaleAfter:
-			status, reason = "down", fmt.Sprintf("最近一次 Timer 配置协调已超过允许时间，最后成功时间 %s", unixTime(state.lastSuccess).Format(time.RFC3339))
-		case len(state.badNodes) > 0:
-			sort.Strings(state.badNodes)
-			status, reason = "down", "Timer 触发器不可用：节点 "+strings.Join(state.badNodes, ", ")
-		case currentSpace == "stockcn" && state.hasConfiguredGroupsExpected:
-			status, reason = validateConfiguredGroupIDs(now, state, thresholds.CoordinationStaleAfter)
+		status, reason := "healthy", "采集计划对账正常"
+		if now.Sub(unixTime(state.lastSuccess)) > thresholds.CoordinationStaleAfter {
+			status, reason = "down", fmt.Sprintf("最近一次采集计划对账已超过允许时间，最后成功时间 %s", unixTime(state.lastSuccess).Format(time.RFC3339))
 		}
 		out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: status, Reason: reason, LastCheckedAt: now})
 	}
 	return out, nil
-}
-
-func validateConfiguredGroupIDs(now time.Time, state *timerCoordinationState, staleAfter time.Duration) (string, string) {
-	expected := int(state.configuredGroupsExpected)
-	if expected <= 0 {
-		return "healthy", "Timer 分配和触发器正常"
-	}
-	if len(state.configuredGroupIDs) != expected {
-		return "down", fmt.Sprintf("stockcn Group ID 数量不一致：期望 %d，实际 %d", expected, len(state.configuredGroupIDs))
-	}
-	for groupID := 0; groupID < expected; groupID++ {
-		count, ok := state.configuredGroupIDs[groupID]
-		observed := state.configuredGroupIDObserved[groupID]
-		if !ok {
-			return "down", fmt.Sprintf("stockcn 缺少 Group ID %d", groupID)
-		}
-		if count != 1 {
-			return "down", fmt.Sprintf("stockcn Group ID %d 出现 %.0f 次，期望 1 次", groupID, count)
-		}
-		if !isFreshMetric(now, observed, staleAfter) {
-			return "down", fmt.Sprintf("stockcn Group ID %d 的配置指标已过期", groupID)
-		}
-	}
-	for groupID := range state.configuredGroupIDs {
-		if groupID < 0 || groupID >= expected {
-			return "down", fmt.Sprintf("stockcn 出现越界 Group ID %d，期望范围 0..%d", groupID, expected-1)
-		}
-	}
-	return "healthy", "Timer 分配和触发器正常"
 }
 
 func maxFloat(value, floor float64) float64 {
@@ -1661,15 +1459,54 @@ func (b Builder) balanceMetricValues(ctx context.Context, metricName string) (ma
 }
 
 func businessKind(check domain.Check) string {
-	text := strings.ToLower(strings.Join([]string{check.CheckID, check.Name, check.GroupName, check.Source}, " "))
-	switch {
-	case strings.Contains(text, "canary"):
-		return "canary"
-	case strings.Contains(text, "balance"):
-		return "balance"
+	kind, _, ok := strings.Cut(check.CheckID, ":")
+	if !ok {
+		return ""
+	}
+	switch kind {
+	case "market_canary", "subject_tag", "balance", "module", "kline_freshness", "console-page":
+		return kind
 	default:
 		return ""
 	}
+}
+
+func businessModule(checkID string) string {
+	kind, id, _ := strings.Cut(checkID, ":")
+	switch kind {
+	case "console-page":
+		return "console-proxy"
+	case "market_canary", "subject_tag", "kline_freshness":
+		return "collector"
+	case "balance":
+		return "trade"
+	case "module":
+		for _, check := range report.BuiltInModuleHealthChecks() {
+			if check.ID == id {
+				return check.Module
+			}
+		}
+	}
+	return ""
+}
+
+// Live metric facts supersede the cached external check for the same identity.
+func uniqueBusinessChecks(items []BusinessStatus) []BusinessStatus {
+	indexes := make(map[string]int, len(items))
+	out := make([]BusinessStatus, 0, len(items))
+	for _, item := range items {
+		if item.CheckID == "" {
+			item.CheckID = item.Kind + ":" + item.Module
+		}
+		key := item.SpaceID + "\x00" + item.CheckID
+		if i, exists := indexes[key]; exists {
+			out[i] = item
+			continue
+		}
+		indexes[key] = len(out)
+		out = append(out, item)
+	}
+	return out
 }
 
 func sortOverview(out *Overview) {
@@ -1677,7 +1514,7 @@ func sortOverview(out *Overview) {
 		if statusRank(out.Services[i].Status) != statusRank(out.Services[j].Status) {
 			return statusRank(out.Services[i].Status) < statusRank(out.Services[j].Status)
 		}
-		return out.Services[i].ServiceName < out.Services[j].ServiceName
+		return strings.Join([]string{out.Services[i].ServiceName, out.Services[i].NodeID, out.Services[i].InstanceID}, "\x00") < strings.Join([]string{out.Services[j].ServiceName, out.Services[j].NodeID, out.Services[j].InstanceID}, "\x00")
 	})
 	sort.Slice(out.Hosts, func(i, j int) bool {
 		if statusRank(out.Hosts[i].Status) != statusRank(out.Hosts[j].Status) {

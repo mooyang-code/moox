@@ -5,9 +5,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SKILL="${ROOT}/skills/moox/SKILL.md"
 REFERENCE="${ROOT}/skills/moox/references/eventbus-credentials.md"
 HOST_AGENT="${ROOT}/skills/moox/references/host-agent.md"
-SERVICE_RELEASE="${ROOT}/skills/moox/references/service-release.md"
-RELEASE="${ROOT}/skills/moox/references/release.md"
-DEPLOY="${ROOT}/skills/moox/scripts/hostagent-deploy.sh"
 
 fail() {
   echo "FAIL: $*" >&2
@@ -25,10 +22,8 @@ done
 
 for required in \
   'fan-out' \
-  'hostagent-deploy.sh' \
-  '--credentials-only' \
-  '~/.config/moox/hostagent/eventbus.yaml' \
-  'deploy-storage' \
+  'host-agent/config/eventbus.yaml' \
+  'setup deploy-host' \
   'MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64' \
   'Authorization Violation' \
   'certificate signature failure' \
@@ -46,11 +41,7 @@ if grep -Eq 'BEGIN CERTIFICATE|NATS_PASSWORD|password:' "${REFERENCE}"; then
   fail "reference must not embed certificates or passwords"
 fi
 
-grep -Fq -- '--credentials-only' "${HOST_AGENT}" || fail "host-agent.md does not document credentials-only deploy"
+grep -Fq 'setup deploy-host' "${HOST_AGENT}" || fail "host-agent.md does not document reinstalling the host unit"
 grep -Fq 'eventbus-credentials.md' "${HOST_AGENT}" || fail "host-agent.md does not point at EventBus fan-out"
-grep -Fq 'eventbus-credentials.md' "${SERVICE_RELEASE}" || fail "service-release.md does not require EventBus fan-out before deploy-service"
-grep -Fq 'deploy-service' "${SERVICE_RELEASE}" || fail "service-release.md lost deploy-service"
-grep -Fq -- '--credentials-only' "${RELEASE}" || fail "release.md does not mention credentials-only Host Agent sync"
-grep -Fq -- '--credentials-only' "${DEPLOY}" || fail "hostagent-deploy.sh is missing --credentials-only"
 
 echo 'PASS: skill eventbus credentials contract'

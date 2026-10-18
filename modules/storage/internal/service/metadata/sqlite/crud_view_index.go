@@ -55,6 +55,12 @@ func mergeViewIndexState(existing *pb.View, item *pb.View, shapeChanged bool) {
 		if value := existing.GetAttributes()["moox.columns_explicit"]; value != "" && item.Attributes["moox.columns_explicit"] == "" {
 			item.Attributes["moox.columns_explicit"] = value
 		}
+		// 活动索引的代次只随激活变化：修改 View 定义不能清掉或伪造它。
+		if value := existing.GetAttributes()[metadatastore.ActiveBuildIDAttribute]; value != "" {
+			item.Attributes[metadatastore.ActiveBuildIDAttribute] = value
+		} else {
+			delete(item.Attributes, metadatastore.ActiveBuildIDAttribute)
+		}
 	}
 	item.DesiredViewRevision = existing.GetDesiredViewRevision()
 	if item.DesiredViewRevision == 0 {
@@ -73,7 +79,6 @@ func viewIndexShapeChanged(existing *pb.View, next *pb.View) bool {
 	}
 	return existing.GetDatasetId() != next.GetDatasetId() ||
 		!slices.Equal(existing.GetGrainKeys(), next.GetGrainKeys()) ||
-		existing.GetFilterJson() != next.GetFilterJson() ||
 		existing.GetEngine() != next.GetEngine() ||
 		existingColumnsExplicit != nextColumnsExplicit
 }
@@ -224,6 +229,7 @@ func (s *Store) ActivateViewIndex(ctx context.Context, req *pb.ActivateViewIndex
 	}
 	view.Attributes["moox.active_dataset_id"] = view.GetDatasetId()
 	view.Attributes["moox.active_primary_dataset_id"] = view.GetDatasetId()
+	view.Attributes[metadatastore.ActiveBuildIDAttribute] = build.GetBuildId()
 	view.Columns = nil
 	view.IndexBuild = nil
 	raw, err := marshal(view)
@@ -376,7 +382,7 @@ func activationViewColumns(ctx context.Context, tx *sql.Tx, view *pb.View) ([]*p
 		columns = append(columns, &pb.ViewColumn{
 			SpaceId: view.GetSpaceId(), ViewId: view.GetViewId(), ColumnName: column.GetColumnName(),
 			OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-			OriginId:   view.GetDatasetId() + "." + column.GetColumnName(),
+			OriginId:   column.GetColumnName(),
 			ValueType:  column.GetValueType(),
 		})
 	}

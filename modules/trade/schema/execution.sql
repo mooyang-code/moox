@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS t_trade_orders (
     c_runner_id TEXT,
     c_state TEXT NOT NULL,
     c_filled_quantity TEXT NOT NULL DEFAULT '0',
+    -- 交易所订单更新里观察到的累计成交量（只升不降）：大于本地已入账的成交明细时说明明细还没补齐，余额也就不可信
+    c_observed_filled_quantity TEXT NOT NULL DEFAULT '0',
     c_average_price TEXT NOT NULL DEFAULT '0',
     c_reserved_asset TEXT NOT NULL DEFAULT '',
     c_reserved_quantity TEXT NOT NULL DEFAULT '0',
@@ -144,6 +146,8 @@ CREATE TABLE IF NOT EXISTS t_trading_positions (
     c_unrealized_pnl TEXT NOT NULL DEFAULT '0',
     c_realized_pnl TEXT NOT NULL DEFAULT '0',
     c_exchange_updated_at INTEGER NOT NULL DEFAULT 0,
+    -- 权威（REST 完整）持仓快照已经覆盖到的时间：时间早于它的迟到成交已包含在快照数量里，不能再叠加
+    c_snapshot_covered_until INTEGER NOT NULL DEFAULT 0,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (
         c_space_id,
@@ -151,6 +155,20 @@ CREATE TABLE IF NOT EXISTS t_trading_positions (
         c_exchange_symbol,
         c_position_side
     ),
+    FOREIGN KEY (c_space_id, c_trading_account_id)
+        REFERENCES t_trading_accounts (c_space_id, c_trading_account_id)
+);
+
+
+-- 被权威（REST 完整）持仓快照确认为空仓而删除的持仓墓碑：保留“快照确认空仓”的覆盖时间，
+-- 时间早于它的迟到成交已经体现在空仓里，不能再从零叠加出虚假持仓。
+CREATE TABLE IF NOT EXISTS t_trading_position_tombstones (
+    c_space_id TEXT NOT NULL,
+    c_trading_account_id TEXT NOT NULL,
+    c_exchange_symbol TEXT NOT NULL,
+    c_position_side TEXT NOT NULL,
+    c_covered_until INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (c_space_id, c_trading_account_id, c_exchange_symbol, c_position_side),
     FOREIGN KEY (c_space_id, c_trading_account_id)
         REFERENCES t_trading_accounts (c_space_id, c_trading_account_id)
 );

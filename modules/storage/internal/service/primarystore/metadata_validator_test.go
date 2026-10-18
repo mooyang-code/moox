@@ -133,9 +133,9 @@ func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
 			writes++
 			return &pb.UpsertFieldsRsp{RetInfo: successRetInfo(), Keys: []*pb.RowKey{req.GetRows()[0].GetKey()}}, nil
 		},
-		read: func(_ context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+		read: func(_ context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 			reads++
-			return &pb.ReadFieldsRsp{RetInfo: successRetInfo(), Rows: []*pb.RowFieldValues{{Key: req.GetKeys()[0]}}}, nil
+			return &pb.ReadRowsRsp{RetInfo: successRetInfo(), Rows: []*pb.RowFieldValues{{Key: req.GetKeys()[0]}}}, nil
 		},
 	}
 	validator := NewMetadataValidator(&snapshotOnlyMetadataReader{snapshot: validatorSnapshot{}})
@@ -151,8 +151,38 @@ func TestMetadataValidatorUsesRequestSnapshotWithoutStoreAccess(t *testing.T) {
 	if err != nil || write.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || writes != 1 {
 		t.Fatalf("write=%v err=%v writes=%d", write, err, writes)
 	}
-	read, err := svc.ReadFields(context.Background(), &pb.PrimaryReadFieldsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Keys: []*pb.RowKey{key}})
+	read, err := svc.ReadRows(context.Background(), &pb.PrimaryReadRowsReq{AuthInfo: &pb.AuthInfo{AppId: "caller"}, Keys: []*pb.RowKey{key}, ColumnNames: []string{"close"}})
 	if err != nil || read.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || reads != 1 {
 		t.Fatalf("read=%v err=%v reads=%d", read, err, reads)
+	}
+}
+
+type timeSeriesMetadataReader struct{}
+
+func (timeSeriesMetadataReader) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
+	return &pb.Dataset{DatasetId: "bars", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Status: "active"}, nil
+}
+
+func (timeSeriesMetadataReader) ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	return []*pb.DatasetColumn{{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}}, &pb.PageResult{}, nil
+}
+
+func TestMetadataValidatorRejectsRowFreqOtherThanTheDatasetFreq(t *testing.T) {
+	validator := NewMetadataValidator(timeSeriesMetadataReader{})
+	row := func(freq string) *pb.RowFieldUpsert {
+		return &pb.RowFieldUpsert{
+			Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "bars", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+				SubjectId: "BTC-USDT", Freq: freq, DataTime: "2026-10-08T10:00:00Z",
+			}}},
+			Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
+		}
+	}
+	if err := validator.ValidateRow(context.Background(), row("1h")); err != nil {
+		t.Fatalf("canonical Dataset freq rejected: %v", err)
+	}
+	for _, freq := range []string{"1H", "1m", ""} {
+		if err := validator.ValidateRow(context.Background(), row(freq)); err == nil {
+			t.Fatalf("row freq %q accepted for a 1h Dataset", freq)
+		}
 	}
 }

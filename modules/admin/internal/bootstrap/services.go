@@ -5,8 +5,8 @@ import (
 
 	"github.com/mooyang-code/moox/modules/admin/internal/config"
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/activitylog"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/publishlease"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/secret"
 	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
@@ -15,6 +15,7 @@ import (
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	sshdao "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -41,6 +42,20 @@ type Services struct {
 
 	// Collector 发布租约由 Admin 控制面持久化与校验。
 	CollectorPublishLease *publishlease.Service
+
+	// 全局活动日志：各模块写入、用户可查询的展示日志。
+	ActivityLog *activitylog.Service
+
+	consoleGateway *gatewayclient.Client
+	machineGateway *gatewayclient.Client
+}
+
+func (s *Services) closeGateways() {
+	for _, gateway := range []*gatewayclient.Client{s.consoleGateway, s.machineGateway} {
+		if gateway != nil {
+			_ = gateway.Close()
+		}
+	}
 }
 
 // StartBackgroundServices 启动 admin 本地基础服务。
@@ -94,14 +109,7 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 	// 创建系统服务部署信息服务，并写入缺失的默认部署记录。
 	log.Info("[Bootstrap] 正在创建服务部署信息服务...")
 	sysDeployService := sysdeploy.NewService(dbManager, cfg.AdminNodeID)
-	if err := sysDeployService.SeedDefaults(ctx); err != nil {
-		return nil, err
-	}
 	db := dbManager.GetDB()
-
-	// 初始化DNSProxy实例（全局单例，供定时器使用）
-	log.Info("[Bootstrap] 正在初始化DNSProxy实例...")
-	dnsproxy.InitDNSProxyInstance()
 
 	// 创建 SSH 服务
 	log.Info("[Bootstrap] 正在创建 SSH 服务...")
@@ -129,6 +137,7 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 		Setup:                 setupService,
 		SysDeploy:             sysDeployService,
 		CollectorPublishLease: collectorPublishLease,
+		ActivityLog:           activitylog.NewService(db, spaceService),
 	}
 
 	return services, nil

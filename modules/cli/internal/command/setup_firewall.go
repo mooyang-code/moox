@@ -8,10 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
+	"github.com/mooyang-code/moox/modules/cli/internal/tencenthost"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/spf13/cobra"
 )
 
@@ -62,16 +63,43 @@ func defaultSetupEnsureFirewall(ctx context.Context, snapshot *setupconfig.Snaps
 	if snapshot == nil {
 		return setupFirewallSummary{}, fmt.Errorf("firewall: setup configuration is missing")
 	}
+	return ensureFirewallTargets(ctx, snapshot.Manifest, setupFirewallTargets(snapshot.Manifest))
+}
+
+// setupEnsureRelayFirewall 在部署只能出站的主机之前，经腾讯云接口确认 control 的跨主机端口（反向连接）
+// 与 EventBus 端口（出站主机的 HostAgent 上报）对公网开放；出站主机的出口 IP 会变，只能按 0.0.0.0/0 放行，
+// 认证由 TLS 与签名完成。任何一条规则无法确认都返回错误，不让部署在网络不通的情况下继续。
+func setupEnsureRelayFirewall(ctx context.Context, snapshot *setupconfig.Snapshot) (setupFirewallSummary, error) {
+	if snapshot == nil {
+		return setupFirewallSummary{}, fmt.Errorf("firewall: setup configuration is missing")
+	}
+	summary, err := ensureFirewallTargets(ctx, snapshot.Manifest, []setupFirewallTarget{{Host: snapshot.Manifest.ControlHost(), Rules: setupRelayFirewallRules(snapshot.Manifest.EventBus.Port)}})
+	if err != nil {
+		return summary, err
+	}
+	if summary.Status != "ready" {
+		return summary, fmt.Errorf("firewall: could not confirm control ports %d and %d are open for outbound hosts; check the Tencent Cloud credentials and the control instance", servicecatalog.HostGatewayRemotePort, snapshot.Manifest.EventBus.Port)
+	}
+	return summary, nil
+}
+
+// setupRelayFirewallRules 是出站主机接入 control 需要的端口。
+func setupRelayFirewallRules(eventBusPort int) []cloudtencent.CreateFirewallRulesOptions {
+	return []cloudtencent.CreateFirewallRulesOptions{
+		{Protocol: "TCP", Ports: fmt.Sprint(servicecatalog.HostGatewayRemotePort), CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX service gateway native"},
+		{Protocol: "TCP", Ports: fmt.Sprint(eventBusPort), CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX EventBus TLS"},
+	}
+}
+
+func ensureFirewallTargets(ctx context.Context, manifest setupconfig.Manifest, targets []setupFirewallTarget) (setupFirewallSummary, error) {
 	tencent, err := cloudtencent.NewClient(cloudtencent.ClientOptions{
-		SecretID:  snapshot.Manifest.TencentCloud.SecretID,
-		SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
-		Region:    snapshot.Manifest.TencentCloud.Region,
+		SecretID:  manifest.TencentCloud.SecretID,
+		SecretKey: manifest.TencentCloud.SecretKey,
+		Region:    manifest.TencentCloud.Region,
 	})
 	if err != nil {
 		return setupFirewallSummary{}, fmt.Errorf("firewall: %w", err)
 	}
-
-	targets := setupFirewallTargets(snapshot.Manifest)
 	summary := setupFirewallSummary{Status: "ready", Targets: len(targets)}
 	for _, target := range targets {
 		address, err := setupFirewallAddress(ctx, target.Host.Address)
@@ -88,7 +116,7 @@ func defaultSetupEnsureFirewall(ctx context.Context, snapshot *setupconfig.Snaps
 				// The manifest home region need not be the region of every
 				// configured host. Resolve the actual Tencent region before
 				// falling back to a CVM security group or retrying Lighthouse.
-				created, fallbackErr := ensureFirewallRuleAtDiscoveredRegion(ctx, snapshot.Manifest, address, rule)
+				created, fallbackErr := ensureFirewallRuleAtDiscoveredRegion(ctx, manifest, address, rule)
 				if fallbackErr == nil {
 					summary.Rules++
 					if created {
@@ -140,7 +168,7 @@ func ensureFirewallRuleAtDiscoveredRegion(ctx context.Context, manifest setupcon
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	instance, err := (privatenet.TencentCloud{Network: network, Lighthouse: lighthouse}).LookupHost(
+	instance, err := (tencenthost.TencentCloud{Network: network, Lighthouse: lighthouse}).LookupHost(
 		lookupCtx, address, cloudtencent.ProbeRegions(manifest.TencentCloud.Region),
 	)
 	if err != nil {
@@ -179,7 +207,8 @@ func setupFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
 	byAddress := make(map[string]int)
 	targets := make([]setupFirewallTarget, 0, len(manifest.Hosts()))
 	add := func(host setupconfig.Host, rules []cloudtencent.CreateFirewallRulesOptions) {
-		if strings.TrimSpace(host.Address) == "" || len(rules) == 0 {
+		// 只能出站的主机不接受入站连接，它的地址也不是可放行的公网地址。
+		if strings.TrimSpace(host.Address) == "" || len(rules) == 0 || host.Reachability == servicecatalog.ReachabilityOutbound {
 			return
 		}
 		key := strings.ToLower(strings.TrimSpace(host.Address))
@@ -192,18 +221,18 @@ func setupFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
 	}
 
 	controlRules := append([]cloudtencent.CreateFirewallRulesOptions(nil), setupControlFirewallRulesForTLS(
-		setupdeploy.TLSMode(manifest.ControlHost.TLSMode), manifest.ControlHost.Address,
+		tlstrust.TLSMode(manifest.ControlHost().TLSMode), manifest.ControlHost().Address,
 	)...)
 	controlRules = appendUniqueFirewallRules(controlRules, setupRuntimeFirewallRules(manifest.EventBus.Port)...)
-	add(manifest.ControlHost, controlRules)
+	add(manifest.ControlHost(), controlRules)
 
-	if setupconfigHostConfigured(manifest.StorageHost) {
-		add(manifest.StorageHost, []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
+	if setupconfigHostConfigured(manifest.StorageHost()) {
+		add(manifest.StorageHost(), []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
 	}
-	if setupconfigHostConfigured(manifest.ViewHost) {
-		add(manifest.ViewHost, []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
+	if setupconfigHostConfigured(manifest.ViewHost()) {
+		add(manifest.ViewHost(), []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
 	}
-	tradeNode := strings.TrimSpace(manifest.DNSResolver.TradeNode)
+	tradeNode := strings.TrimSpace(manifest.PlacementHost("trade"))
 	for _, host := range manifest.Hosts() {
 		if strings.EqualFold(strings.TrimSpace(host.Name), tradeNode) {
 			add(host, []cloudtencent.CreateFirewallRulesOptions{
@@ -217,11 +246,6 @@ func setupFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
 
 func setupconfigHostConfigured(host setupconfig.Host) bool {
 	return strings.TrimSpace(host.Name) != "" && strings.TrimSpace(host.Address) != ""
-}
-
-func isStorageFirewallTarget(manifest setupconfig.Manifest, host setupconfig.Host) bool {
-	return strings.EqualFold(strings.TrimSpace(host.Address), strings.TrimSpace(manifest.StorageHost.Address)) ||
-		strings.EqualFold(strings.TrimSpace(host.Address), strings.TrimSpace(manifest.ViewHost.Address))
 }
 
 func appendUniqueFirewallRules(dst []cloudtencent.CreateFirewallRulesOptions, rules ...cloudtencent.CreateFirewallRulesOptions) []cloudtencent.CreateFirewallRulesOptions {

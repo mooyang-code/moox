@@ -156,7 +156,7 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	return &pb.CreateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: created}, nil
+	return &pb.CreateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(created)}, nil
 }
 
 func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (*pb.UpdateDatasetRsp, error) {
@@ -191,7 +191,7 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 	if err := s.refreshMetadataCache(ctx); err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	return &pb.UpdateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: updated}, nil
+	return &pb.UpdateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(updated)}, nil
 }
 
 func (s *Service) DeleteDataset(ctx context.Context, req *pb.DeleteDatasetReq) (*pb.DeleteDatasetRsp, error) {
@@ -258,7 +258,11 @@ func (s *Service) GetDataset(ctx context.Context, req *pb.GetDatasetReq) (*pb.Ge
 	if err != nil {
 		return &pb.GetDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
 	}
-	return &pb.GetDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: item}, nil
+	revision, err := s.metadata.SubjectsRevision(ctx, req.GetSpaceId())
+	if err != nil {
+		return &pb.GetDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	return &pb.GetDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(item), SubjectsRevision: revision}, nil
 }
 
 func (s *Service) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*pb.ListDatasetsRsp, error) {
@@ -274,7 +278,7 @@ func (s *Service) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*p
 	if err != nil {
 		return &pb.ListDatasetsRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	return &pb.ListDatasetsRsp{RetInfo: retinfo.Success("success"), Datasets: items, PageResult: page}, nil
+	return &pb.ListDatasetsRsp{RetInfo: retinfo.Success("success"), Datasets: s.withRetentions(items), PageResult: page}, nil
 }
 
 func (s *Service) RebindDatasetDataNode(ctx context.Context, req *pb.RebindDatasetDataNodeReq) (*pb.RebindDatasetDataNodeRsp, error) {
@@ -293,7 +297,7 @@ func (s *Service) RebindDatasetDataNode(ctx context.Context, req *pb.RebindDatas
 		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	s.refreshMetadataCacheAfterCommit(ctx, "RebindDatasetDataNode")
-	return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Success("success"), Dataset: dataset}, nil
+	return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(dataset)}, nil
 }
 
 func (s *Service) CheckDatasetActivation(ctx context.Context, req *pb.CheckDatasetActivationReq) (*pb.CheckDatasetActivationRsp, error) {
@@ -304,7 +308,7 @@ func (s *Service) CheckDatasetActivation(ctx context.Context, req *pb.CheckDatas
 	if err != nil {
 		return &pb.CheckDatasetActivationRsp{RetInfo: datasetReadRetInfo(err)}, nil
 	}
-	checks := newActivationChecker(s.metadata, s.nodeState, s.nodeAuthSecret).checks(ctx, dataset)
+	checks := newActivationChecker(s.metadata, s.nodeState, s.nodeAuthSecret, s.retention).checks(ctx, dataset)
 	return &pb.CheckDatasetActivationRsp{
 		RetInfo:         retinfo.Success("success"),
 		DatasetRevision: dataset.GetRevision(),
@@ -332,9 +336,16 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 		if err := s.ensureFactorResultDefaultView(ctx, dataset); err != nil {
 			return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset is active but its default factor View is pending; retry activation")), Dataset: dataset}, nil
 		}
-		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: dataset}, nil
+		// 上一次激活可能已提交事务但缓存发布失败：幂等成功前必须确认元数据缓存已发布
+		if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDataset"); err != nil {
+			return &pb.ActivateDatasetRsp{
+				RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset is active but metadata publication is pending; retry activation")),
+				Dataset: s.withRetention(dataset),
+			}, nil
+		}
+		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(dataset)}, nil
 	}
-	checks := newActivationChecker(s.metadata, s.nodeState, s.nodeAuthSecret).checks(ctx, dataset)
+	checks := newActivationChecker(s.metadata, s.nodeState, s.nodeAuthSecret, s.retention).checks(ctx, dataset)
 	if !activationReady(checks) {
 		return &pb.ActivateDatasetRsp{
 			RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("Dataset activation checks failed")),
@@ -351,17 +362,17 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 	if err := s.ensureFactorResultDefaultView(ctx, activated); err != nil {
 		return &pb.ActivateDatasetRsp{
 			RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset activated but its default factor View is pending; retry activation")),
-			Dataset: activated, Checks: checks,
+			Dataset: s.withRetention(activated), Checks: checks,
 		}, nil
 	}
 	if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDataset"); err != nil {
 		return &pb.ActivateDatasetRsp{
 			RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset activated but metadata publication is pending; retry activation")),
-			Dataset: activated,
+			Dataset: s.withRetention(activated),
 			Checks:  checks,
 		}, nil
 	}
-	return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: activated, Checks: checks}, nil
+	return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(activated), Checks: checks}, nil
 }
 
 func datasetReadRetInfo(err error) *pb.RetInfo {

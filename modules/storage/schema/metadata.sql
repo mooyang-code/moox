@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '12')
+VALUES ('schema_version', '13')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -55,9 +55,7 @@ CREATE TABLE IF NOT EXISTS t_views (
     c_description TEXT NOT NULL DEFAULT '',
     c_dataset_id TEXT NOT NULL,
     c_grain_keys_json TEXT NOT NULL DEFAULT '[]',
-    c_filter_json TEXT NOT NULL DEFAULT '{}',
     c_engine TEXT NOT NULL DEFAULT 'duckdb',
-    c_keep_duration TEXT NOT NULL DEFAULT '0',
     c_active_index_id TEXT NOT NULL DEFAULT '',
     c_desired_view_revision INTEGER NOT NULL DEFAULT 1,
     c_active_view_revision INTEGER NOT NULL DEFAULT 0,
@@ -274,7 +272,7 @@ BEGIN
     UPDATE t_subjects SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- 标签：Subject 的分组；auto 标签成员由 moox-collector-subject 按 cron 同步
+-- 标签：Subject 的分组；auto 标签成员由 moox-collector 按 cron 同步
 CREATE TABLE IF NOT EXISTS t_tags (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
@@ -369,8 +367,7 @@ CREATE TABLE IF NOT EXISTS t_datasets (
     c_name TEXT NOT NULL,
     c_description TEXT NOT NULL DEFAULT '',
     c_data_kind TEXT NOT NULL,
-    c_freqs_json TEXT NOT NULL DEFAULT '[]',
-    c_keep_duration TEXT NOT NULL,
+    c_freq TEXT NOT NULL DEFAULT '',
     c_binding_locked INTEGER NOT NULL DEFAULT 0 CHECK (c_binding_locked IN (0, 1)),
     c_revision INTEGER NOT NULL DEFAULT 1 CHECK (c_revision > 0),
     c_status TEXT NOT NULL DEFAULT 'disabled' CHECK (c_status IN ('active', 'disabled')),
@@ -396,6 +393,114 @@ FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_datasets SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+END;
+
+-- ************ 标的修订号 ************
+-- 按空间单调递增：标的、标签成员、标签市场类型、数据集标的范围任一变化都会递增，
+-- 调用方（Strategy）用它判断缓存的标的绑定、标的详情与标签成员是否过期。
+-- 触发器的 UPDATE OF 只列业务列，排除 c_mtime 与标签同步状态，避免 mtime 触发器和同步任务造成多余递增。
+CREATE TABLE IF NOT EXISTS t_space_revisions (
+    c_space_id TEXT NOT NULL PRIMARY KEY,
+    c_subjects_revision INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_subjects_rev_insert
+AFTER INSERT ON t_subjects
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_subjects_rev_update
+AFTER UPDATE OF c_status, c_attrs_json, c_subject_type, c_market ON t_subjects
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_subjects_rev_delete
+AFTER DELETE ON t_subjects
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (OLD.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_subject_tags_rev_insert
+AFTER INSERT ON t_subject_tags
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_subject_tags_rev_update
+AFTER UPDATE OF c_status ON t_subject_tags
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_subject_tags_rev_delete
+AFTER DELETE ON t_subject_tags
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (OLD.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_tags_rev_update
+AFTER UPDATE OF c_market_type ON t_tags
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_tags_rev_delete
+AFTER DELETE ON t_tags
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (OLD.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_datasets_rev_insert
+AFTER INSERT ON t_datasets
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_datasets_rev_update
+AFTER UPDATE OF c_subject_tags_json ON t_datasets
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (NEW.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_datasets_rev_delete
+AFTER DELETE ON t_datasets
+FOR EACH ROW
+BEGIN
+    INSERT INTO t_space_revisions (c_space_id, c_subjects_revision)
+    VALUES (OLD.c_space_id, 1)
+    ON CONFLICT (c_space_id) DO UPDATE SET c_subjects_revision = c_subjects_revision + 1;
 END;
 
 CREATE TABLE IF NOT EXISTS t_field_groups (
@@ -561,42 +666,4 @@ FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_storage_devices SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
-CREATE TABLE IF NOT EXISTS t_archive_files (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_archive_file_id TEXT NOT NULL,
-    c_dataset_id TEXT NOT NULL,
-    c_device_id TEXT NOT NULL,
-    c_partition_key TEXT NOT NULL,
-    c_file_uri TEXT NOT NULL,
-    c_file_format TEXT NOT NULL DEFAULT 'parquet',
-    c_min_time DATETIME NOT NULL DEFAULT '',
-    c_max_time DATETIME NOT NULL DEFAULT '',
-    c_row_count INTEGER NOT NULL DEFAULT 0,
-    c_columns_json TEXT NOT NULL DEFAULT '[]',
-    c_status TEXT NOT NULL DEFAULT 'active',
-    c_attrs_json TEXT NOT NULL DEFAULT '{}',
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_file_format = 'parquet'),
-    CHECK (c_row_count >= 0),
-    CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted', 'failed')),
-    FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (c_device_id) REFERENCES t_storage_devices (c_device_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    UNIQUE (c_space_id, c_archive_file_id),
-    UNIQUE (c_device_id, c_file_uri)
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_archive_files_dataset ON t_archive_files (c_space_id, c_dataset_id, c_partition_key, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_archive_files_time ON t_archive_files (c_space_id, c_dataset_id, c_min_time, c_max_time);
-CREATE INDEX IF NOT EXISTS idx_t_archive_files_device ON t_archive_files (c_device_id, c_status);
-
-CREATE TRIGGER IF NOT EXISTS trg_t_archive_files_mtime
-AFTER UPDATE ON t_archive_files
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_archive_files SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;

@@ -65,7 +65,7 @@ func contextToPB(value monitordoctor.Context) *monitorpb.GetDoctorContextRsp {
 	}
 	for _, host := range value.Hosts {
 		rsp.HostResources = append(rsp.HostResources, &monitorpb.HostAgentInfo{
-			AgentId: host.AgentID, Hostname: host.Hostname, BootId: host.BootID,
+			HostId: host.HostID, AgentId: host.AgentID, Hostname: host.Hostname, BootId: host.BootID,
 			LastSeenAt: host.LastSeenAt, Archived: host.Archived, Snapshot: host.Snapshot,
 			Reachable: host.Reachable, StaleSeconds: host.StaleSeconds,
 		})

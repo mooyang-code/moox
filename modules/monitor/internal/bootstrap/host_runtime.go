@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
@@ -38,15 +37,4 @@ func startHostStorageGate(ctx context.Context, cfg *config.Config, runtime *Runt
 			}
 		}
 	})
-}
-
-func normalizeHostStorageTarget(raw string) string {
-	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
-	if raw == "" {
-		return "ip://127.0.0.1:20102"
-	}
-	if strings.Contains(raw, "://") {
-		return raw
-	}
-	return "ip://" + raw
 }

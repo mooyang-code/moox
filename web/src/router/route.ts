@@ -1,8 +1,6 @@
 import { HOME_PATH } from "@/config/index";
 import Layout from "@/layout/index.vue";
 
-type RedirectLocation = { query: Record<string, unknown> };
-
 export const staticRoutes = [
   {
     path: "/",
@@ -57,40 +55,70 @@ export const staticRoutes = [
         meta: { title: "data-fields" }
       },
       {
-        path: "/factor/workbench",
-        name: "factor-workbench",
-        component: () => import("@/views/factor/workbench/index.vue"),
-        meta: { title: "factor-workbench" }
+        path: "/factor/overview",
+        name: "factor-overview",
+        component: () => import("@/views/factor/overview/index.vue"),
+        meta: { title: "factor-overview" }
+      },
+      {
+        path: "/factor/definitions",
+        name: "factor-definitions",
+        component: () => import("@/views/factor/definitions/index.vue"),
+        meta: { title: "factor-definitions" }
+      },
+      {
+        path: "/factor/tasks",
+        name: "factor-tasks",
+        component: () => import("@/views/factor/task-management/index.vue"),
+        meta: { title: "factor-tasks" }
+      },
+      {
+        path: "/factor/definitions/new",
+        name: "factor-definition-new",
+        component: () => import("@/views/factor/editor/index.vue"),
+        meta: { title: "factor-definition-new", hide: true, activeMenu: "factor-definitions" }
+      },
+      {
+        path: "/factor/definitions/:factorId/edit",
+        name: "factor-definition-edit",
+        component: () => import("@/views/factor/editor/index.vue"),
+        meta: { title: "factor-definition-edit", hide: true, activeMenu: "factor-definitions" }
       },
       {
         path: "/strategy/overview",
         name: "strategy-overview",
         component: () => import("@/views/strategy/overview/index.vue"),
-        meta: { title: "strategy-definitions" }
+        meta: { title: "strategy-overview" }
       },
       {
-        path: "/strategy/running",
-        name: "strategy-running",
-        component: () => import("@/views/strategy/running/index.vue"),
-        meta: { title: "strategy-running" }
+        path: "/strategy/definitions",
+        name: "strategy-definitions",
+        component: () => import("@/views/strategy/definitions/index.vue"),
+        meta: { title: "strategy-definitions", reuseOnQuery: true }
+      },
+      {
+        path: "/strategy/tasks",
+        name: "strategy-tasks",
+        component: () => import("@/views/strategy/workbench/index.vue"),
+        meta: { title: "strategy-tasks", reuseOnQuery: true }
       },
       {
         path: "/strategy/definitions/new",
         name: "strategy-definition-new",
         component: () => import("@/views/strategy/editor/index.vue"),
-        meta: { title: "strategy-definition-new", hide: true }
+        meta: { title: "strategy-definition-new", hide: true, activeMenu: "strategy-definitions" }
       },
       {
         path: "/strategy/definitions/:strategyId/edit",
         name: "strategy-definition-edit",
         component: () => import("@/views/strategy/editor/index.vue"),
-        meta: { title: "strategy-definition-edit", hide: true }
+        meta: { title: "strategy-definition-edit", hide: true, activeMenu: "strategy-definitions" }
       },
       {
         path: "/strategy/detail/:instanceId",
         name: "strategy-detail",
         component: () => import("@/views/strategy/detail/index.vue"),
-        meta: { title: "strategy-detail", hide: true }
+        meta: { title: "strategy-detail", hide: true, activeMenu: "strategy-tasks" }
       },
       {
         path: "/data/import",
@@ -99,13 +127,10 @@ export const staticRoutes = [
         meta: { title: "data-import" }
       },
       {
-        path: "/collector/cloudnodes",
-        name: "collector-cloudnodes",
-        redirect: (to: RedirectLocation) => ({
-          path: "/collector/tasks",
-          query: { ...to.query, tab: "executors" }
-        }),
-        meta: { title: "collector-cloudnodes" }
+        path: "/ops/activity",
+        name: "ops-activity",
+        component: () => import("@/views/ops/activity/index.vue"),
+        meta: { title: "ops-activity" }
       },
       {
         path: "/collector/tasks",
@@ -120,15 +145,6 @@ export const staticRoutes = [
         meta: { title: "trading-accounts" }
       },
       {
-        path: "/trading/logical-accounts",
-        name: "trading-logical-accounts",
-        redirect: (to: RedirectLocation) => ({
-          path: "/trading/accounts",
-          query: { ...to.query, mode: undefined, view: "strategy" }
-        }),
-        meta: { title: "trading-logical-accounts" }
-      },
-      {
         path: "/trading/positions",
         name: "trading-positions",
         component: () => import("@/views/trading/position-detail/position-detail.vue"),
@@ -141,10 +157,16 @@ export const staticRoutes = [
         meta: { title: "trading-orders" }
       },
       {
-        path: "/ops/services",
-        name: "ops-services",
-        component: () => import("@/views/ops/service-management/index.vue"),
-        meta: { title: "ops-services" }
+        path: "/ops/monitor",
+        name: "ops-monitor",
+        component: () => import("@/views/ops/monitor/index.vue"),
+        meta: { title: "ops-monitor" }
+      },
+      {
+        path: "/ops/deployments",
+        name: "ops-deployments",
+        component: () => import("@/views/ops/deployments/index.vue"),
+        meta: { title: "ops-deployments" }
       },
       {
         path: "/ops/hosts",

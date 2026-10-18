@@ -80,6 +80,8 @@ type DatasetPeriodExpectation struct {
 	DeadlineAt     int64
 	ReservationID  string
 	SeriesSnapshot []DatasetPeriodSeries `json:"series_snapshot"`
+	// AllowedLatenessSeconds 只在周期不存在、由提交自动建立时使用，决定新周期的截止时间。
+	AllowedLatenessSeconds int64 `json:"-"`
 }
 
 type TimeSeriesBatchItem struct {
@@ -149,46 +151,57 @@ func (s *Store) EnsureDatasetPeriod(ctx context.Context, exp DatasetPeriodExpect
 	}
 	batch := s.db.NewBatch()
 	defer batch.Close()
-	if err := batch.Set(periodFieldKey(base, "series_hash"), []byte(exp.SeriesHash), s.writeOptions); err != nil {
+	if err := s.writePeriodRecord(batch, base, exp, true); err != nil {
 		return DatasetPeriodResult{}, err
-	}
-	if err := batch.Set(periodFieldKey(base, "expected_count"), uint32Bytes(exp.ExpectedCount), s.writeOptions); err != nil {
-		return DatasetPeriodResult{}, err
-	}
-	seriesSnapshotRaw, err := json.Marshal(exp.SeriesSnapshot)
-	if err != nil {
-		return DatasetPeriodResult{}, err
-	}
-	if err := batch.Set(periodFieldKey(base, "series_snapshot"), seriesSnapshotRaw, s.writeOptions); err != nil {
-		return DatasetPeriodResult{}, err
-	}
-	if err := batch.Set(periodFieldKey(base, "deadline"), int64Bytes(exp.DeadlineAt), s.writeOptions); err != nil {
-		return DatasetPeriodResult{}, err
-	}
-	if err := batch.Set(periodFieldKey(base, "reservation_id"), []byte(exp.ReservationID), s.writeOptions); err != nil {
-		return DatasetPeriodResult{}, err
-	}
-	if err := batch.Set(periodFieldKey(base, "status"), []byte("waiting"), s.writeOptions); err != nil {
-		return DatasetPeriodResult{}, err
-	}
-	if err := batch.Set(periodFieldKey(base, "bitmap"), make([]byte, bitmapSize(exp.ExpectedCount)), s.writeOptions); err != nil {
-		return DatasetPeriodResult{}, err
-	}
-	if err := batch.Set(periodFieldKey(base, "failures"), make([]byte, bitmapSize(exp.ExpectedCount)), s.writeOptions); err != nil {
-		return DatasetPeriodResult{}, err
-	}
-	if err := batch.Set(periodWaitingKey(base), []byte(base), s.writeOptions); err != nil {
-		return DatasetPeriodResult{}, err
-	}
-	if exp.DeadlineAt > 0 {
-		if err := batch.Set(periodDeadlineKey(exp.DeadlineAt, base), []byte(base), s.writeOptions); err != nil {
-			return DatasetPeriodResult{}, err
-		}
 	}
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return DatasetPeriodResult{}, err
 	}
 	return DatasetPeriodResult{Status: "waiting", DeadlineAt: exp.DeadlineAt}, nil
+}
+
+// writePeriodRecord 把一个新周期的全部记录写入 batch。withSnapshot 为 true 时内嵌完整快照
+// （只建周期、不写数据的 EnsureDatasetPeriod）；否则只保存 series_hash 引用，读取时按 hash 到共享快照存储查回。
+func (s *Store) writePeriodRecord(batch *cpebble.Batch, base string, exp DatasetPeriodExpectation, withSnapshot bool) error {
+	if err := batch.Set(periodFieldKey(base, "series_hash"), []byte(exp.SeriesHash), s.writeOptions); err != nil {
+		return err
+	}
+	if err := batch.Set(periodFieldKey(base, "expected_count"), uint32Bytes(exp.ExpectedCount), s.writeOptions); err != nil {
+		return err
+	}
+	if withSnapshot {
+		raw, err := json.Marshal(exp.SeriesSnapshot)
+		if err != nil {
+			return err
+		}
+		if err := batch.Set(periodFieldKey(base, "series_snapshot"), raw, s.writeOptions); err != nil {
+			return err
+		}
+	}
+	if err := batch.Set(periodFieldKey(base, "deadline"), int64Bytes(exp.DeadlineAt), s.writeOptions); err != nil {
+		return err
+	}
+	if err := batch.Set(periodFieldKey(base, "reservation_id"), []byte(exp.ReservationID), s.writeOptions); err != nil {
+		return err
+	}
+	if err := batch.Set(periodFieldKey(base, "status"), []byte("waiting"), s.writeOptions); err != nil {
+		return err
+	}
+	if err := batch.Set(periodFieldKey(base, "bitmap"), make([]byte, bitmapSize(exp.ExpectedCount)), s.writeOptions); err != nil {
+		return err
+	}
+	if err := batch.Set(periodFieldKey(base, "failures"), make([]byte, bitmapSize(exp.ExpectedCount)), s.writeOptions); err != nil {
+		return err
+	}
+	if err := batch.Set(periodWaitingKey(base), []byte(base), s.writeOptions); err != nil {
+		return err
+	}
+	if exp.DeadlineAt > 0 {
+		if err := batch.Set(periodDeadlineKey(exp.DeadlineAt, base), []byte(base), s.writeOptions); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) validatePeriodUniverseSize(exp DatasetPeriodExpectation) error {
@@ -241,19 +254,31 @@ func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpe
 	defer s.datasetWriteMu.RUnlock()
 	s.periodMu.Lock()
 	defer s.periodMu.Unlock()
-	current, err := s.readPeriodExpectation(base)
-	if err != nil {
-		return DatasetPeriodResult{}, err
-	}
 	status, found, err := s.readPeriodStatus(base)
 	if err != nil {
 		return DatasetPeriodResult{}, err
 	}
+	now := s.periodNow().UTC()
+	var current DatasetPeriodExpectation
+	created := false
 	if !found {
-		return DatasetPeriodResult{}, invalid("dataset period is not initialized")
-	}
-	if !samePeriodIdentityForStatus(current, exp, status) {
-		return DatasetPeriodResult{}, PeriodConflictError{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime}
+		// 周期不存在：按生效表与已登记快照自动建立（带来的 hash 必须正是该周期应生效的 hash）。
+		current, err = s.planLazyPeriod(exp, exp.AllowedLatenessSeconds, now)
+		if err != nil {
+			return DatasetPeriodResult{}, err
+		}
+		if err := s.validatePeriodUniverseSize(current); err != nil {
+			return DatasetPeriodResult{}, err
+		}
+		status, created = "waiting", true
+	} else {
+		current, err = s.readPeriodExpectation(base)
+		if err != nil {
+			return DatasetPeriodResult{}, err
+		}
+		if !samePeriodIdentityForStatus(current, exp, status) {
+			return DatasetPeriodResult{}, PeriodConflictError{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTime: exp.PeriodTime}
+		}
 	}
 	exp = current
 	delta := make([]byte, bitmapSize(exp.ExpectedCount))
@@ -266,7 +291,6 @@ func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpe
 			setBitmapBit(delta, item.SeriesIndex)
 		}
 	}
-	now := s.periodNow().UTC()
 	if status != "waiting" || periodDeadlineReached(exp, now) {
 		status, err = s.finalizePeriodBaseLocked(ctx, base, now)
 		if err != nil {
@@ -274,18 +298,21 @@ func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpe
 		}
 		return s.periodCommitReceipt(base, status, exp.DeadlineAt, delta, exp.ExpectedCount)
 	}
-	failures, err := s.readPeriodFailureBitmap(base, exp.ExpectedCount)
-	if err != nil {
-		return DatasetPeriodResult{}, err
+	// 新建的周期还没有位图记录，从全零开始；已存在的周期读取持久化的位图。
+	failures := make([]byte, bitmapSize(exp.ExpectedCount))
+	success := make([]byte, bitmapSize(exp.ExpectedCount))
+	if !created {
+		if failures, err = s.readPeriodFailureBitmap(base, exp.ExpectedCount); err != nil {
+			return DatasetPeriodResult{}, err
+		}
+		if success, err = s.readPeriodBitmap(base); err != nil {
+			return DatasetPeriodResult{}, err
+		}
 	}
 	for _, item := range items {
 		if item.SeriesIndex < exp.ExpectedCount && bitmapBitSet(delta, item.SeriesIndex) {
 			clearBitmapBit(failures, item.SeriesIndex)
 		}
-	}
-	success, err := s.readPeriodBitmap(base)
-	if err != nil {
-		return DatasetPeriodResult{}, err
 	}
 	for index := uint32(0); index < exp.ExpectedCount; index++ {
 		if bitmapBitSet(delta, index) {
@@ -301,6 +328,11 @@ func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpe
 	}
 	s.outboxMu.Lock()
 	_, err = s.writeFieldsEventLocked(ctx, normalizedRows, strings.TrimSpace(sourceEventID), writeEvent, func(batch *cpebble.Batch, _ []*OutboxEntry) error {
+		if created {
+			if err := s.writePeriodRecord(batch, base, exp, false); err != nil {
+				return err
+			}
+		}
 		if err := batch.Merge(periodFieldKey(base, "bitmap"), delta, s.writeOptions); err != nil {
 			return err
 		}
@@ -568,7 +600,7 @@ func (s *Store) finalizePeriodBaseLocked(ctx context.Context, base string, now t
 }
 
 func (s *Store) startPeriodFinalizer() {
-	if s == nil || s.historyCtx == nil {
+	if s == nil || s.backgroundCtx == nil {
 		return
 	}
 	s.maintenanceWG.Add(1)
@@ -578,10 +610,10 @@ func (s *Store) startPeriodFinalizer() {
 		defer ticker.Stop()
 		for {
 			select {
-			case <-s.historyCtx.Done():
+			case <-s.backgroundCtx.Done():
 				return
 			case <-ticker.C:
-				if _, err := s.FinalizeWaitingDatasetPeriods(s.historyCtx, s.periodNow().UTC(), periodFinalizeBatch); err != nil {
+				if _, err := s.FinalizeWaitingDatasetPeriods(s.backgroundCtx, s.periodNow().UTC(), periodFinalizeBatch); err != nil {
 					s.logPeriodFinalizeError(err)
 				} else {
 					s.clearPeriodFinalizeError()
@@ -984,6 +1016,17 @@ func (s *Store) readPeriodExpectation(base string) (DatasetPeriodExpectation, er
 		}
 	} else if !errors.Is(seriesSnapshotErr, cpebble.ErrNotFound) {
 		return DatasetPeriodExpectation{}, seriesSnapshotErr
+	} else {
+		// 新形式的周期只保存 hash 引用，到共享快照存储查回完整列表；旧形式的内嵌快照优先。
+		snapshot, loadErr := s.loadSeriesSnapshot(spaceID, datasetID, frequency, exp.SeriesHash)
+		if loadErr != nil {
+			var missing SeriesSnapshotMissingError
+			if !errors.As(loadErr, &missing) {
+				return DatasetPeriodExpectation{}, loadErr
+			}
+		} else {
+			exp.SeriesSnapshot = snapshot
+		}
 	}
 	reservationRaw, reservationErr := s.readPeriodValue(periodFieldKey(base, "reservation_id"))
 	if reservationErr == nil {
@@ -1093,7 +1136,8 @@ func periodMarkerSubjects(exp DatasetPeriodExpectation, success, failures []byte
 			universe = append(universe, subjectID)
 		}
 		idx := uint32(index)
-		if bitmapBitSet(failures, idx) && !bitmapBitSet(success, idx) {
+		// 缺失 = 没有成功提交的序列（含从未触发、从未上报失败的），不要求调用方另报失败。
+		if !bitmapBitSet(success, idx) {
 			if _, exists := failedSeen[subjectID]; !exists {
 				failedSeen[subjectID] = struct{}{}
 				failed = append(failed, subjectID)

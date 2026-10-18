@@ -1,11 +1,13 @@
 // Package rpc 提供 secret 对外的 trpc 普通 RPC 服务实现，
 // 承载秘钥管理 API（CRUD + 启用/禁用），
-// 由统一 HTTP 转发层（/api/admin/secret/{method}）调度。
+// 由主机网关转发原生 tRPC；控制台通过生成的 handler 在 Admin 进程内调用。
 package rpc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"time"
 
@@ -184,7 +186,12 @@ func (s *Service) UpdateSecret(ctx context.Context, req *pb.UpdateSecretReq) (*p
 		existing.KeyID = keyID
 	}
 	if extraConfig := req.GetExtraConfig(); extraConfig != "" {
-		existing.ExtraConfig = extraConfig
+		// 响应里敏感项（如 OKX passphrase）是脱敏占位，原样提交回来表示保持原值。
+		merged, err := mergeExtraConfig(existing.ExtraConfig, extraConfig)
+		if err != nil {
+			return &pb.UpdateSecretRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		}
+		existing.ExtraConfig = merged
 	}
 	if category := req.GetCategory(); category != "" {
 		if !validCategories[category] {
@@ -293,7 +300,7 @@ func secretModelToPB(s *model.Secret) *pb.Secret {
 		SecretType:  s.SecretType,
 		KeyId:       s.KeyID,
 		SecretValue: maskSecretValue(s.SecretValue),
-		ExtraConfig: s.ExtraConfig,
+		ExtraConfig: redactExtraConfig(s.ExtraConfig),
 		Status:      s.Status,
 		LastUsedAt:  formatTimePtr(s.LastUsedAt),
 		LastUsedBy:  s.LastUsedBy,
@@ -372,4 +379,166 @@ func formatTimePtr(t *time.Time) string {
 		return ""
 	}
 	return t.Format("2006-01-02 15:04:05")
+}
+
+const maskedExtraValue = "******"
+
+var sensitiveExtraKeys = []string{"passphrase", "password", "secret", "token", "private"}
+
+func sensitiveExtraKey(key string) bool {
+	key = strings.ToLower(key)
+	for _, marker := range sensitiveExtraKeys {
+		if strings.Contains(key, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// decodeExtraConfig 解析 extra_config（保留数字原样），顶层必须是 JSON 对象。
+func decodeExtraConfig(raw string) (map[string]any, error) {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	var object map[string]any
+	if err := decoder.Decode(&object); err != nil || object == nil {
+		return nil, errors.New("extra_config 不是 JSON 对象")
+	}
+	return object, nil
+}
+
+// redactExtraConfig 把 extra_config 里敏感项（口令、密码、令牌等，含嵌套对象与数组里的）的值替换为占位，只读接口不回显它们；
+// 交易模块等机器调用方通过受 ACL 保护的 GetSecretValue 读取明文。无法解析为 JSON 对象时整体隐藏。
+func redactExtraConfig(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return raw
+	}
+	object, err := decodeExtraConfig(raw)
+	if err != nil {
+		return maskedExtraValue
+	}
+	redactValue(object)
+	redacted, err := json.Marshal(object)
+	if err != nil {
+		return maskedExtraValue
+	}
+	return string(redacted)
+}
+
+func redactValue(value any) {
+	switch node := value.(type) {
+	case map[string]any:
+		for key, child := range node {
+			if sensitiveExtraKey(key) {
+				node[key] = maskedExtraValue
+				continue
+			}
+			redactValue(child)
+		}
+	case []any:
+		for _, child := range node {
+			redactValue(child)
+		}
+	}
+}
+
+var errUnresolvedMask = errors.New("extra_config 中的敏感项已脱敏且无法确定对应的原值，请重新填写这些凭据")
+
+// mergeExtraConfig 用提交的 extra_config 替换原值；提交值里仍是脱敏占位的敏感项沿用原值，避免保存时把口令改成占位。
+// 数组元素没有稳定标识：只有数组长度不变且元素的非敏感内容与原值逐项一致时才按位置沿用；删除、插入、重排后
+// 无法确定对应关系，返回错误让用户重新填写，不能把别的元素的凭据存进来。
+func mergeExtraConfig(existing, submitted string) (string, error) {
+	next, err := decodeExtraConfig(submitted)
+	if err != nil {
+		return submitted, nil
+	}
+	previous, _ := decodeExtraConfig(existing)
+	if err := mergeValue(next, previous); err != nil {
+		return "", err
+	}
+	merged, err := json.Marshal(next)
+	if err != nil {
+		return submitted, nil
+	}
+	return string(merged), nil
+}
+
+func mergeValue(next, previous any) error {
+	switch node := next.(type) {
+	case map[string]any:
+		old, _ := previous.(map[string]any)
+		for key, child := range node {
+			if sensitiveExtraKey(key) {
+				if text, ok := child.(string); ok && text == maskedExtraValue {
+					value, exists := old[key]
+					if !exists {
+						return errUnresolvedMask
+					}
+					node[key] = value
+				}
+				continue
+			}
+			if err := mergeValue(child, old[key]); err != nil {
+				return err
+			}
+		}
+	case []any:
+		old, _ := previous.([]any)
+		for index, child := range node {
+			if index < len(old) && len(node) == len(old) && reflect.DeepEqual(stripSensitive(child), stripSensitive(old[index])) {
+				if err := mergeValue(child, old[index]); err != nil {
+					return err
+				}
+				continue
+			}
+			if containsMask(child) {
+				return errUnresolvedMask
+			}
+		}
+	}
+	return nil
+}
+
+// stripSensitive 返回去掉敏感项（脱敏占位或明文）后的值，用来判断数组元素是否与原值是同一个元素。
+func stripSensitive(value any) any {
+	switch node := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(node))
+		for key, child := range node {
+			if !sensitiveExtraKey(key) {
+				out[key] = stripSensitive(child)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(node))
+		for index, child := range node {
+			out[index] = stripSensitive(child)
+		}
+		return out
+	}
+	return value
+}
+
+func containsMask(value any) bool {
+	switch node := value.(type) {
+	case map[string]any:
+		for key, child := range node {
+			if sensitiveExtraKey(key) {
+				if text, ok := child.(string); ok && text == maskedExtraValue {
+					return true
+				}
+				continue
+			}
+			if containsMask(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range node {
+			if containsMask(child) {
+				return true
+			}
+		}
+	}
+	return false
 }

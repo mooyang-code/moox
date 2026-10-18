@@ -41,10 +41,6 @@ type SshService interface {
 	SftpMkdir(ctx context.Context, req *SftpMkdirReq) (*SftpMkdirRsp, error)
 
 	SftpDelete(ctx context.Context, req *SftpDeleteReq) (*SftpDeleteRsp, error)
-	// GetOnlineSessions 会话管理
-	GetOnlineSessions(ctx context.Context, req *GetOnlineSessionsReq) (*GetOnlineSessionsRsp, error)
-
-	ForceDisconnect(ctx context.Context, req *ForceDisconnectReq) (*ForceDisconnectRsp, error)
 }
 
 func SshService_ListHosts_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -245,42 +241,6 @@ func SshService_SftpDelete_Handler(svr interface{}, ctx context.Context, f serve
 	return rsp, nil
 }
 
-func SshService_GetOnlineSessions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetOnlineSessionsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SshService).GetOnlineSessions(ctx, reqbody.(*GetOnlineSessionsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func SshService_ForceDisconnect_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ForceDisconnectReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SshService).ForceDisconnect(ctx, reqbody.(*ForceDisconnectReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // SshServer_ServiceDesc descriptor for server.RegisterService.
 var SshServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.ops.Ssh",
@@ -329,14 +289,6 @@ var SshServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.ops.Ssh/SftpDelete",
 			Func: SshService_SftpDelete_Handler,
-		},
-		{
-			Name: "/trpc.moox.ops.Ssh/GetOnlineSessions",
-			Func: SshService_GetOnlineSessions_Handler,
-		},
-		{
-			Name: "/trpc.moox.ops.Ssh/ForceDisconnect",
-			Func: SshService_ForceDisconnect_Handler,
 		},
 	},
 }
@@ -391,14 +343,6 @@ func (s *UnimplementedSsh) SftpDelete(ctx context.Context, req *SftpDeleteReq) (
 	return nil, errors.New("rpc SftpDelete of service Ssh is not implemented")
 }
 
-// GetOnlineSessions 会话管理
-func (s *UnimplementedSsh) GetOnlineSessions(ctx context.Context, req *GetOnlineSessionsReq) (*GetOnlineSessionsRsp, error) {
-	return nil, errors.New("rpc GetOnlineSessions of service Ssh is not implemented")
-}
-func (s *UnimplementedSsh) ForceDisconnect(ctx context.Context, req *ForceDisconnectReq) (*ForceDisconnectRsp, error) {
-	return nil, errors.New("rpc ForceDisconnect of service Ssh is not implemented")
-}
-
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
 // END ======================================= Server Service Definition ======================================= END
@@ -429,10 +373,6 @@ type SshClientProxy interface {
 	SftpMkdir(ctx context.Context, req *SftpMkdirReq, opts ...client.Option) (rsp *SftpMkdirRsp, err error)
 
 	SftpDelete(ctx context.Context, req *SftpDeleteReq, opts ...client.Option) (rsp *SftpDeleteRsp, err error)
-	// GetOnlineSessions 会话管理
-	GetOnlineSessions(ctx context.Context, req *GetOnlineSessionsReq, opts ...client.Option) (rsp *GetOnlineSessionsRsp, err error)
-
-	ForceDisconnect(ctx context.Context, req *ForceDisconnectReq, opts ...client.Option) (rsp *ForceDisconnectRsp, err error)
 }
 
 type SshClientProxyImpl struct {
@@ -658,46 +598,6 @@ func (c *SshClientProxyImpl) SftpDelete(ctx context.Context, req *SftpDeleteReq,
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SftpDeleteRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *SshClientProxyImpl) GetOnlineSessions(ctx context.Context, req *GetOnlineSessionsReq, opts ...client.Option) (*GetOnlineSessionsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Ssh/GetOnlineSessions")
-	msg.WithCalleeServiceName(SshServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Ssh")
-	msg.WithCalleeMethod("GetOnlineSessions")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetOnlineSessionsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *SshClientProxyImpl) ForceDisconnect(ctx context.Context, req *ForceDisconnectReq, opts ...client.Option) (*ForceDisconnectRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Ssh/ForceDisconnect")
-	msg.WithCalleeServiceName(SshServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Ssh")
-	msg.WithCalleeMethod("ForceDisconnect")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ForceDisconnectRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

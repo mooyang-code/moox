@@ -34,17 +34,18 @@ go.work.sum
 
 # env file
 .env
-skills/dev-helper/.env.local
 
 # User-owned initialization manifest. Keep the checked-in example only.
 /moox.toml
+# 改名备份的旧配置同样含明文凭据（示例文件除外）
+/moox.toml.*
+!/moox.toml.example
 
 # Local Cursor MCP config contains the remote bearer token.
 .cursor/mcp.json
 
 # Local skill credentials and production live probes. Never commit.
 skills/moox/config/data-access.yaml
-modules/cli/internal/command/live_collector_read_test.go
 modules/cli/internal/command/live_factor_read_test.go
 
 # infra 真实部署值覆盖文件（唯一存放真实 IP/凭证处），不入库
@@ -110,3 +111,6 @@ node_modules/
 /.pnpm-store/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# local build toolchain cache
+/.toolchain/

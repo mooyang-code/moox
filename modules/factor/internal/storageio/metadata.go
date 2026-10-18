@@ -10,6 +10,7 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -39,12 +40,14 @@ type DatasetInfo struct {
 	Name         string
 	Description  string
 	DataKind     string
-	Freqs        []string
-	KeepDuration string
-	Status       string
-	SubjectTags  []string
-	Attributes   map[string]string
-	Revision     uint64
+	Freq         string
+	// Retention is the read-only effective retention from the Storage
+	// policy: "<n>h" or "forever".
+	Retention   string
+	Status      string
+	SubjectTags []string
+	Attributes  map[string]string
+	Revision    uint64
 }
 
 type ColumnInfo struct {
@@ -68,7 +71,6 @@ type ResultDatasetSpec struct {
 	DataNodeID      string
 	DataKind        string
 	Frequency       string
-	KeepDuration    string
 	SubjectTags     []string
 	Attributes      map[string]string
 	Columns         []ColumnInfo
@@ -81,6 +83,7 @@ type Metadata interface {
 	UpsertColumns(ctx context.Context, spaceID, datasetID string, cols []ColumnInfo) error
 	ActivateDataset(ctx context.Context, spaceID, datasetID string) error
 	DeleteDataset(ctx context.Context, spaceID, datasetID string) error
+	SetDatasetSubjectTags(ctx context.Context, spaceID, datasetID string, tags []string) error
 }
 
 func (c *Client) GetDataset(ctx context.Context, spaceID, datasetID string) (DatasetInfo, error) {
@@ -222,6 +225,35 @@ func (c *Client) CreateResultDataset(ctx context.Context, spec ResultDatasetSpec
 	return c.UpsertColumns(ctx, spec.SpaceID, spec.DatasetID, spec.Columns)
 }
 
+// SetDatasetSubjectTags replaces a dataset's subject tags and keeps every other
+// field; the update carries the revision it read, so a concurrent edit fails
+// instead of being overwritten.
+func (c *Client) SetDatasetSubjectTags(ctx context.Context, spaceID, datasetID string, tags []string) error {
+	if err := c.metadataReady("set dataset subject tags"); err != nil {
+		return err
+	}
+	current, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil {
+		return rpcError("read dataset before setting subject tags", err)
+	}
+	if current == nil {
+		return fmt.Errorf("%w: read dataset before setting subject tags returned an empty response", ErrInfra)
+	}
+	if err := responseError("read dataset before setting subject tags", current.GetRetInfo()); err != nil {
+		return err
+	}
+	dataset := proto.Clone(current.GetDataset()).(*storagepb.Dataset)
+	dataset.SubjectTags = append([]string(nil), tags...)
+	updated, err := c.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: c.auth, Dataset: dataset})
+	if err != nil {
+		return rpcError("set dataset subject tags", err)
+	}
+	if updated == nil {
+		return fmt.Errorf("%w: set dataset subject tags returned an empty response", ErrInfra)
+	}
+	return responseError("set dataset subject tags", updated.GetRetInfo())
+}
+
 func (c *Client) UpsertColumns(ctx context.Context, spaceID, datasetID string, columns []ColumnInfo) error {
 	if err := c.metadataReady("upsert dataset columns"); err != nil {
 		return err
@@ -336,6 +368,10 @@ func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) e
 	}
 	purgeRows := current.GetDataset().GetAttributes()["dataset_role"] == DatasetRoleFactorResult
 	if purgeRows {
+		// 物理清理不可逆：先确认没有默认 View 之外的引用，否则数据清空后元数据删除会被外键拒绝
+		if err := c.ensureNoExtraViews(ctx, spaceID, datasetID); err != nil {
+			return err
+		}
 		if err := c.primaryReady("delete factor result rows"); err != nil {
 			return err
 		}
@@ -362,6 +398,30 @@ func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) e
 	}
 	if err := responseError("delete dataset", rsp.GetRetInfo()); err != nil {
 		return err
+	}
+	return nil
+}
+
+// ensureNoExtraViews 拒绝删除仍被默认 View 之外的 View 引用的结果 Dataset，此时数据必须完整保留。
+func (c *Client) ensureNoExtraViews(ctx context.Context, spaceID, datasetID string) error {
+	rsp, err := c.metadata.ListViews(ctx, &storagepb.ListViewsReq{
+		AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID,
+		Page: &commonpb.Page{Page: 1, Size: 200},
+	})
+	if err != nil {
+		return rpcError("list dataset views before delete", err)
+	}
+	if rsp == nil {
+		return fmt.Errorf("%w: list dataset views before delete returned an empty response", ErrInfra)
+	}
+	if err := responseError("list dataset views before delete", rsp.GetRetInfo()); err != nil {
+		return err
+	}
+	defaultViewID := "view_" + strings.TrimPrefix(datasetID, "dataset_")
+	for _, view := range rsp.GetViews() {
+		if view.GetViewId() != defaultViewID {
+			return fmt.Errorf("结果 Dataset %s 仍被 View %s 引用，请先删除该 View 后重试", datasetID, view.GetViewId())
+		}
 	}
 	return nil
 }
@@ -393,8 +453,8 @@ func datasetFromResultSpec(spec ResultDatasetSpec) *storagepb.Dataset {
 	return &storagepb.Dataset{
 		SpaceId: spec.SpaceID, DatasetId: spec.DatasetID, DataSourceId: spec.DataSourceID,
 		Name: spec.Name, Description: spec.Description, DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-		Freqs: []string{spec.Frequency}, Status: DatasetStatusDisabled, Attributes: attributes,
-		DataNodeId: spec.DataNodeID, KeepDuration: spec.KeepDuration,
+		Freq: spec.Frequency, Status: DatasetStatusDisabled, Attributes: attributes,
+		DataNodeId:  spec.DataNodeID,
 		SubjectTags: append([]string(nil), spec.SubjectTags...),
 	}
 }
@@ -405,11 +465,11 @@ func validateExistingResultDataset(expected, actual *storagepb.Dataset) error {
 	}
 	if actual.GetSpaceId() != expected.GetSpaceId() || actual.GetDatasetId() != expected.GetDatasetId() ||
 		actual.GetDataSourceId() != expected.GetDataSourceId() || actual.GetDataNodeId() != expected.GetDataNodeId() ||
-		actual.GetKeepDuration() != expected.GetKeepDuration() || actual.GetDataKind() != expected.GetDataKind() ||
+		actual.GetDataKind() != expected.GetDataKind() ||
 		actual.GetName() != expected.GetName() || actual.GetDescription() != expected.GetDescription() ||
 		actual.GetAttributes()["dataset_role"] != DatasetRoleFactorResult ||
 		actual.GetAttributes()["source_dataset_id"] != expected.GetAttributes()["source_dataset_id"] ||
-		len(actual.GetFreqs()) != 1 || actual.GetFreqs()[0] != expected.GetFreqs()[0] ||
+		actual.GetFreq() != expected.GetFreq() ||
 		!equalStrings(actual.GetSubjectTags(), expected.GetSubjectTags()) ||
 		!containsAttributes(actual.GetAttributes(), expected.GetAttributes()) {
 		return fmt.Errorf("result dataset %s conflicts with the requested factor result contract", expected.GetDatasetId())
@@ -422,7 +482,7 @@ func datasetInfoFromProto(item *storagepb.Dataset) DatasetInfo {
 		SpaceID: item.GetSpaceId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(),
 		DataNodeID: item.GetDataNodeId(), Name: item.GetName(), Description: item.GetDescription(),
 		DataKind: dataKindFromProto(item.GetDataKind()),
-		Freqs:    append([]string(nil), item.GetFreqs()...), KeepDuration: item.GetKeepDuration(),
+		Freq:     item.GetFreq(), Retention: item.GetRetention(),
 		Status: item.GetStatus(), SubjectTags: append([]string(nil), item.GetSubjectTags()...),
 		Attributes: cloneStringMap(item.GetAttributes()), Revision: item.GetRevision(),
 	}

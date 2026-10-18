@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -19,21 +21,13 @@ import (
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/requestauth"
-	"github.com/nats-io/nats.go"
 	_ "modernc.org/sqlite"
 )
 
-// JetStream management APIs on a busy MOOX_STORAGE stream can exceed the
-// client default 5s request timeout. Purge and consumer delete must share this
-// longer bound so a reset cannot stop Storage and then fail with deadline
-// exceeded before the queue is cleared.
-const resetJetStreamRequestTimeout = 2 * time.Minute
-
 type resetViewConsumersOptions struct {
-	storageConf, packageRoot, stream, credentialFile, eventBusURL  string
-	timeout, lookback                                              time.Duration
+	storageConf, packageRoot, stream                               string
+	timeout                                                        time.Duration
 	yes, dryRun, resetAllStorageData, restart, maintenanceLockHeld bool
 }
 
@@ -47,7 +41,6 @@ type resetViewConsumersSummary struct {
 	QueuePurged        bool     `json:"queue_purged"`
 	ViewMetadataReset  bool     `json:"view_metadata_reset"`
 	DryRun             bool     `json:"dry_run"`
-	Lookback           string   `json:"rebuild_lookback,omitempty"`
 }
 
 type resetViewRecord struct {
@@ -64,16 +57,10 @@ type resetIndexMove struct {
 func runResetViewConsumers(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("reset-view-consumers", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	// Keep destructive resets aligned with the bounded View rebuild window.
-	// Operators can still opt into a longer, explicit lookback when they have
-	// a deliberate historical-rebuild use case.
-	opts := resetViewConsumersOptions{stream: events.StorageViewConsumerStream, lookback: 24 * time.Hour, timeout: 5 * time.Minute, restart: true}
+	opts := resetViewConsumersOptions{stream: events.StorageViewConsumerStream, timeout: 5 * time.Minute, restart: true}
 	fs.StringVar(&opts.storageConf, "storage-conf", defaultRepairStorageConfigPath(), "storage.yaml path")
 	fs.StringVar(&opts.packageRoot, "package-root", "", "storage package root containing start.sh/stop.sh")
 	fs.StringVar(&opts.stream, "stream", opts.stream, "JetStream stream to purge")
-	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential YAML")
-	fs.StringVar(&opts.eventBusURL, "eventbus-url", "", "NATS URL override")
-	fs.DurationVar(&opts.lookback, "lookback", opts.lookback, "preferred history to backfill for every rebuilt View; shortage does not block activation")
 	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "overall operation timeout")
 	fs.BoolVar(&opts.yes, "yes", false, "confirm permanent consumer, queue and View index deletion")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "inspect the operation without mutating state")
@@ -100,8 +87,8 @@ func validateResetViewConsumersOptions(opts resetViewConsumersOptions) error {
 	if strings.TrimSpace(opts.stream) != events.StorageViewConsumerStream {
 		return fmt.Errorf("--stream must be %s for destructive reset", events.StorageViewConsumerStream)
 	}
-	if opts.lookback <= 0 || opts.timeout <= 0 {
-		return errors.New("--lookback and --timeout must be positive")
+	if opts.timeout <= 0 {
+		return errors.New("--timeout must be positive")
 	}
 	if !opts.dryRun && !opts.yes {
 		return errors.New("reset-view-consumers permanently deletes View indexes and the EventBus stream; re-run with --yes, or use --dry-run")
@@ -132,16 +119,8 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 		return err
 	}
 	summary := resetViewConsumersSummary{
-		Stream: opts.stream, Consumers: append([]string{
-			events.StorageViewLegacyBroadConsumer,
-			events.StorageViewLegacyConsumer,
-			events.StorageViewLegacyOtherConsumer,
-			events.StorageViewLegacyKlineConsumer,
-			events.StorageViewLegacyFactorConsumer,
-			events.StorageViewLegacyMetricsConsumer,
-			events.StorageViewLegacyMiscConsumer,
-		}, events.StorageViewConsumerDurables...),
-		Views: len(views), DryRun: opts.dryRun, Lookback: opts.lookback.String(),
+		Stream: opts.stream, Consumers: append([]string(nil), events.StorageViewConsumerDurables...),
+		Views: len(views), DryRun: opts.dryRun,
 	}
 	for _, view := range views {
 		if strings.EqualFold(strings.TrimSpace(view.Engine), "bleve") {
@@ -153,20 +132,27 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 			summary.Indexes = append(summary.Indexes, id)
 		}
 	}
+	// EventBus 的删除与清除经网关交给 Admin 执行（管理员令牌只在 Admin 的数据库里）。
+	// 在动手前就打开通道：dry-run 与真正执行用同一条路径做预检。
+	admin, err := openEventBusAdmin(opts.storageConf, packageRoot)
+	if err != nil {
+		return err
+	}
+	defer admin.Close()
 	if opts.dryRun {
 		// Dry-run is the normal preflight for the higher-level rebuild workflow.
-		// Validate the credential, broker connection, stream and purge subjects
+		// Validate the gateway path to Admin, the stream and the purge subjects
 		// before reporting an executable plan so a later destructive run cannot
 		// fail only after writers have been quiesced.
-		if err := preflightResetEventBus(ctx, opts, storage.View, views); err != nil {
+		if err := preflightResetEventBus(ctx, admin, opts, storage.View, views); err != nil {
 			return fmt.Errorf("preflight EventBus reset: %w", err)
 		}
 		return writeOperationResult(stdout, operationResult{Module: "storage", Action: "reset-view-consumers", Status: "dry_run", Summary: summary})
 	}
 	// Complete all non-destructive EventBus checks before touching local
-	// metadata or index files. A missing credential, invalid URL, unavailable
-	// stream, or failed NATS connection must remain fully recoverable.
-	if err := preflightResetEventBus(ctx, opts, storage.View, views); err != nil {
+	// metadata or index files. An unreachable Admin, an unavailable stream or a
+	// failed broker connection must remain fully recoverable.
+	if err := preflightResetEventBus(ctx, admin, opts, storage.View, views); err != nil {
 		return fmt.Errorf("preflight EventBus reset: %w", err)
 	}
 	// Metadata and Primary/DataNode share the same deployment transaction as
@@ -175,7 +161,7 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 	// handle. This also serializes with the storage watchdog via the lifecycle
 	// maintenance lock acquired below.
 	lifecycleService := "storage"
-	if err := runStorageComponentLifecycle(ctx, packageRoot, "stop", lifecycleService, opts.lookback, stderr); err != nil {
+	if err := runStorageComponentLifecycle(ctx, packageRoot, "stop", lifecycleService, stderr); err != nil {
 		return fmt.Errorf("stop storage-view: %w", err)
 	}
 	stopped := true
@@ -191,7 +177,7 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 			}
 		}
 		if stopped && !started && !resetCommitted && recoveryOK {
-			_ = runStorageComponentLifecycle(context.Background(), packageRoot, "start", lifecycleService, opts.lookback, stderr)
+			_ = runStorageComponentLifecycle(context.Background(), packageRoot, "start", lifecycleService, stderr)
 		}
 	}()
 	backupPath, err = backupRepairDB(dbPath)
@@ -225,7 +211,7 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 	summary.ViewMetadataReset = true
 	// Purge the EventBus only after local metadata and physical files have been
 	// staged/reset successfully.
-	mutationStarted, err := resetStorageViewConsumers(ctx, opts, storage.View, views)
+	mutationStarted, err := resetStorageViewConsumers(ctx, admin, opts, storage.View, views)
 	if err != nil {
 		// Once a broker mutation may have happened, the old local incarnation
 		// cannot be restored safely because its pending events are gone. Keep the
@@ -257,22 +243,41 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 		summary.PrimaryDataRemoved = true
 	}
 	if opts.restart {
-		if err := runStorageComponentLifecycle(ctx, packageRoot, "start", lifecycleService, opts.lookback, stderr); err != nil {
+		if err := runStorageComponentLifecycle(ctx, packageRoot, "start", lifecycleService, stderr); err != nil {
 			return fmt.Errorf("start storage-view: %w", err)
 		}
 		started = true
-		readyLookback := opts.lookback
-		if opts.resetAllStorageData {
-			// A full Primary reset recreates metadata from an empty store; there
-			// is no pre-existing View coverage to validate yet.
-			readyLookback = 0
-		}
-		if err := waitResetViewReady(ctx, dbPath, readyLookback, packageRoot); err != nil {
-			return fmt.Errorf("wait storage-view lookback ready: %w", err)
+		// A full Primary reset recreates metadata from an empty store; there
+		// are no Views to wait for yet.
+		if err := waitResetViewReady(ctx, dbPath, !opts.resetAllStorageData, packageRoot); err != nil {
+			return resetReadyWaitError(err, !opts.resetAllStorageData, opts.timeout)
 		}
 	}
 	stopped = false
 	return writeOperationResult(stdout, operationResult{Module: "storage", Action: "reset-view-consumers", Status: "ok", Summary: summary})
+}
+
+// recommendedResetTimeout 是 View 有历史数据时建议给 reset-view-consumers 的 --timeout：
+// 重建要从 Primary 回溯每个序列最近的 K 线并写入 DuckDB，线上 19 个 View 实测约 26 分钟，留出一倍余量。
+const recommendedResetTimeout = "60m"
+
+// resetReadyWaitError 说明等待 storage-view 就绪失败的原因。走到这里时重置已经提交：View 元数据与索引、消费者、事件都已清除，
+// Storage 也已重启，所以等待超时只表示 View 还在后台重建，不是重置失败，不能重复执行。
+func resetReadyWaitError(err error, waitedForViews bool, timeout time.Duration) error {
+	deadline := errors.Is(err, context.DeadlineExceeded)
+	if !deadline && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("wait storage-view ready: %w", err)
+	}
+	reason := "等待被中断"
+	if deadline {
+		reason = fmt.Sprintf("在 --timeout（%s）内没有等到", timeout)
+	}
+	if waitedForViews {
+		return fmt.Errorf("重置已完成（View 元数据与索引、消费者、事件都已清除，Storage 已重启），但%s全部 View 重建出活动索引：View 仍在后台从 Primary 回溯重建，"+
+			"不需要也不应该重新执行重置；可用包根目录的 healthcheck.sh 和元数据库 t_views 的 c_active_index_id 观察进度。"+
+			"有历史数据时重建通常要 30 分钟以上，下次请把 --timeout 设为 %s 或更长", reason, recommendedResetTimeout)
+	}
+	return fmt.Errorf("重置已完成（元数据与索引、消费者、事件、Primary 数据都已清除，Storage 已重启），但%s storage-view 就绪：请检查 storage-view 的日志和包根目录的 healthcheck.sh，不要重复执行重置", reason)
 }
 
 func resetViewIndexPaths(root, engine, id string) []string {
@@ -438,7 +443,35 @@ func validateResetPrimaryPath(path, packageRoot string) (string, error) {
 	return cleanPath, nil
 }
 
-func waitResetViewReady(ctx context.Context, dbPath string, lookback time.Duration, packageRoot string) error {
+// waitResetViewReady waits for storage-view to be ready and, when
+// requireActive is set, for every active View to have an active index.
+// nativeStorageViewReady 用原生部署的 healthcheck.sh 判断 storage-view 是否就绪：健康检查需要认证，凭据由运行助手持有，
+// 自己拼 HTTP 请求在原生部署里只会一直得到 401。脚本不存在（非原生布局）时 available 为 false。
+func nativeStorageViewReady(ctx context.Context, packageRoot string) (ready, available bool) {
+	script := filepath.Join(strings.TrimSpace(packageRoot), "healthcheck.sh")
+	if info, err := os.Stat(script); err != nil || info.IsDir() {
+		return false, false
+	}
+	// 就绪与否看输出里的 ready 字段；未就绪时脚本可能以非零退出，不能把退出码当成“不可用”。
+	output, _ := exec.CommandContext(ctx, script, "--components", "storage-view").Output()
+	var status struct {
+		Components []struct {
+			ID    string `json:"id"`
+			Ready bool   `json:"ready"`
+		} `json:"components"`
+	}
+	if json.Unmarshal(output, &status) != nil {
+		return false, true
+	}
+	for _, component := range status.Components {
+		if component.ID == "storage-view" {
+			return component.Ready, true
+		}
+	}
+	return false, true
+}
+
+func waitResetViewReady(ctx context.Context, dbPath string, requireActive bool, packageRoot string) error {
 	url := strings.TrimSpace(os.Getenv("MOOX_STORAGE_VIEW_HEALTH_URL"))
 	if url == "" {
 		url = "http://127.0.0.1:20211/readyz"
@@ -447,26 +480,31 @@ func waitResetViewReady(ctx context.Context, dbPath string, lookback time.Durati
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return err
+		healthy := false
+		if native, available := nativeStorageViewReady(ctx, packageRoot); available {
+			healthy = native
+		} else {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return err
+			}
+			if header, authErr := resetHealthAuthHeader(req.URL, packageRoot); authErr == nil && header != "" {
+				req.Header.Set("X-Moox-Health-Auth", header)
+			} else if authErr != nil {
+				return fmt.Errorf("build health authentication: %w", authErr)
+			}
+			if resp, requestErr := client.Do(req); requestErr == nil {
+				_ = resp.Body.Close()
+				healthy = resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
+			}
 		}
-		if header, authErr := resetHealthAuthHeader(req.URL, packageRoot); authErr == nil && header != "" {
-			req.Header.Set("X-Moox-Health-Auth", header)
-		} else if authErr != nil {
-			return fmt.Errorf("build health authentication: %w", authErr)
-		}
-		resp, requestErr := client.Do(req)
-		if requestErr == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-				if lookback <= 0 {
-					return nil
-				}
-				ready, err := resetViewsLookbackReady(ctx, dbPath, lookback)
-				if err == nil && ready {
-					return nil
-				}
+		if healthy {
+			if !requireActive {
+				return nil
+			}
+			ready, err := resetViewsActive(ctx, dbPath)
+			if err == nil && ready {
+				return nil
 			}
 		}
 		select {
@@ -522,41 +560,20 @@ func resetHealthAuthHeader(target *url.URL, packageRoot string) (string, error) 
 	return fmt.Sprintf("%s/%s/%d/%s/%s", values["MOOX_HEALTH_AUTH_VERSION"], values["MOOX_HEALTH_AUTH_ACCESS_KEY"], timestamp, nonce, signature), nil
 }
 
-func resetViewsLookbackReady(ctx context.Context, dbPath string, lookback time.Duration) (bool, error) {
+// resetViewsActive reports whether every active View has an active index.
+func resetViewsActive(ctx context.Context, dbPath string) (bool, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return false, err
 	}
 	defer db.Close()
-	rows, err := db.QueryContext(ctx, `SELECT c_engine, c_active_index_id, c_indexed_from FROM t_views WHERE c_status = 'active' OR c_status = ''`)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	cutoff := time.Now().UTC().Add(-lookback).Truncate(time.Minute)
-	for rows.Next() {
-		var engine, activeID, indexedFrom string
-		if err := rows.Scan(&engine, &activeID, &indexedFrom); err != nil {
-			return false, err
-		}
-		if strings.TrimSpace(activeID) == "" {
-			return false, nil
-		}
-		if strings.EqualFold(strings.TrimSpace(engine), "bleve") || lookback <= 0 {
-			continue
-		}
-		from, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(indexedFrom))
-		if err != nil || from.After(cutoff) {
-			return false, nil
-		}
-	}
-	if err := rows.Err(); err != nil {
+	var pending int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(1) FROM t_views WHERE (c_status = 'active' OR c_status = '') AND c_active_index_id = ''`).Scan(&pending); err != nil {
 		return false, err
 	}
 	// A deployment may contain only disabled/archived Views. They do not need
-	// an active index before the reset command can complete; returning true
-	// here avoids waiting forever for a View that is intentionally not running.
-	return true, nil
+	// an active index before the reset command can complete.
+	return pending == 0, nil
 }
 
 func listResetViewRecords(ctx context.Context, dbPath string) ([]resetViewRecord, error) {
@@ -590,120 +607,50 @@ func listResetViewRecords(ctx context.Context, dbPath string) ([]resetViewRecord
 	return result, rows.Err()
 }
 
-func preflightResetEventBus(ctx context.Context, opts resetViewConsumersOptions, viewConfig storageconfig.StorageView, views []resetViewRecord) error {
-	credentialPath := resolveRepairCredentialFile(opts.credentialFile)
-	if credentialPath == "" {
-		return errors.New("NATS admin credential is required; pass --credential-file or MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE")
-	}
-	cred, err := jetstream.LoadCredentialFile(credentialPath)
-	if err != nil {
-		return err
-	}
-	urls := cred.URLs
-	if strings.TrimSpace(opts.eventBusURL) != "" {
-		urls = []string{strings.TrimSpace(opts.eventBusURL)}
-	}
-	if err := validatePurgeEventBusURLs(urls, cred.CAFile); err != nil {
-		return err
-	}
-	natsOpts := []nats.Option{nats.Name("moox-storage-cli-reset-view-consumers"), nats.UserInfo(cred.Username, cred.Password), nats.Timeout(15 * time.Second)}
-	if cred.CAFile != "" {
-		caPath := jetstream.ExpandCredentialPath(cred.CAFile)
-		if !filepath.IsAbs(caPath) {
-			caPath = filepath.Join(filepath.Dir(credentialPath), caPath)
-		}
-		if err := appendNATSTLSOptions(&natsOpts, caPath); err != nil {
-			return err
-		}
-	}
-	nc, err := nats.Connect(strings.Join(urls, ","), natsOpts...)
-	if err != nil {
-		return err
-	}
-	defer nc.Close()
-	js, err := nc.JetStream(nats.MaxWait(resetJetStreamRequestTimeout))
-	if err != nil {
-		return err
-	}
-	if _, err := js.StreamInfo(opts.stream, nats.Context(ctx)); err != nil {
+// preflightResetEventBus 在不改动任何状态的前提下确认：经网关能到 Admin、Admin 能连上 EventBus、流存在，并且清除主题能渲染出来。
+// preflightResetEventBus 在不改动任何状态的前提下确认：经网关能到 Admin、Admin 能连上 EventBus、流存在，
+// 并且要清除的主题都能渲染、都在 Admin 会接受的范围内（否则会在本地状态已经重置之后才被拒绝）。
+func preflightResetEventBus(ctx context.Context, admin eventBusAdmin, opts resetViewConsumersOptions, viewConfig storageconfig.StorageView, views []resetViewRecord) error {
+	if _, err := admin.Inspect(ctx, opts.stream, events.StorageViewConsumerDurables); err != nil {
 		return fmt.Errorf("inspect stream %s: %w", opts.stream, err)
 	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return err
 	}
-	if _, err := resetEventSubjects(registry, viewConfig, views); err != nil {
+	subjects, err := resetEventSubjects(registry, viewConfig, views)
+	if err != nil {
 		return err
+	}
+	for _, subject := range subjects {
+		if !events.IsStorageDatasetSubject(subject) {
+			return fmt.Errorf("主题 %q 不在 Admin 允许清除的范围内", subject)
+		}
 	}
 	return nil
 }
 
-func resetStorageViewConsumers(ctx context.Context, opts resetViewConsumersOptions, viewConfig storageconfig.StorageView, views []resetViewRecord) (mutationStarted bool, err error) {
-	credentialPath := resolveRepairCredentialFile(opts.credentialFile)
-	if credentialPath == "" {
-		return false, errors.New("NATS admin credential is required; pass --credential-file or MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE")
-	}
-	cred, err := jetstream.LoadCredentialFile(credentialPath)
-	if err != nil {
-		return false, err
-	}
-	urls := cred.URLs
-	if strings.TrimSpace(opts.eventBusURL) != "" {
-		urls = []string{strings.TrimSpace(opts.eventBusURL)}
-	}
-	if err := validatePurgeEventBusURLs(urls, cred.CAFile); err != nil {
-		return false, err
-	}
-	natsOpts := []nats.Option{nats.Name("moox-storage-cli-reset-view-consumers"), nats.UserInfo(cred.Username, cred.Password), nats.Timeout(15 * time.Second)}
-	if cred.CAFile != "" {
-		caPath := jetstream.ExpandCredentialPath(cred.CAFile)
-		if !filepath.IsAbs(caPath) {
-			caPath = filepath.Join(filepath.Dir(credentialPath), caPath)
-		}
-		if err := appendNATSTLSOptions(&natsOpts, caPath); err != nil {
-			return false, err
-		}
-	}
-	nc, err := nats.Connect(strings.Join(urls, ","), natsOpts...)
-	if err != nil {
-		return false, err
-	}
-	defer nc.Close()
-	js, err := nc.JetStream(nats.MaxWait(resetJetStreamRequestTimeout))
-	if err != nil {
-		return false, err
-	}
-	for _, durable := range []string{
-		events.StorageViewLegacyBroadConsumer,
-		events.StorageViewLegacyConsumer,
-		events.StorageViewLegacyOtherConsumer,
-		events.StorageViewLegacyKlineConsumer,
-		events.StorageViewLegacyFactorConsumer,
-		events.StorageViewLegacyMetricsConsumer,
-		events.StorageViewLegacyMiscConsumer,
-		events.StorageViewKlineConsumer,
-		events.StorageViewFactorConsumer,
-		events.StorageViewMetricsConsumer,
-		events.StorageViewMiscConsumer,
-	} {
-		mutationStarted = true
-		if err := js.DeleteConsumer(opts.stream, durable, nats.Context(ctx)); err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
-			return mutationStarted, fmt.Errorf("delete consumer %s: %w", durable, err)
-		}
-	}
+// resetStorageViewConsumers 删除 View 消费者并清除数据集事件。mutationStarted 表示 EventBus 是否可能已被改动：
+// 为 false 时失败发生在任何改动之前（Admin 连不上 EventBus 等），本地状态还能安全恢复；为 true 时旧事件可能已经丢失，
+// 旧的本地状态不能再恢复，调用方要保留已重置的状态并让操作员重试。
+func resetStorageViewConsumers(ctx context.Context, admin eventBusAdmin, opts resetViewConsumersOptions, viewConfig storageconfig.StorageView, views []resetViewRecord) (mutationStarted bool, err error) {
 	registry, err := events.DefaultRegistry()
 	if err != nil {
-		return mutationStarted, err
+		return false, err
 	}
 	ordered, err := resetEventSubjects(registry, viewConfig, views)
 	if err != nil {
-		return mutationStarted, err
+		return false, err
 	}
-	for _, subject := range ordered {
-		mutationStarted = true
-		if err := js.PurgeStream(opts.stream, &nats.StreamPurgeRequest{Subject: subject}, nats.Context(ctx)); err != nil {
-			return mutationStarted, fmt.Errorf("purge stream %s subject %s: %w", opts.stream, subject, err)
-		}
+	_, attempted, err := admin.DeleteConsumers(ctx, opts.stream, events.StorageViewConsumerDurables)
+	mutationStarted = attempted
+	if err != nil {
+		return mutationStarted, fmt.Errorf("delete consumers: %w", err)
+	}
+	attempted, err = purgeSubjects(ctx, admin, opts.stream, ordered)
+	mutationStarted = mutationStarted || attempted
+	if err != nil {
+		return mutationStarted, fmt.Errorf("purge stream %s: %w", opts.stream, err)
 	}
 	return mutationStarted, nil
 }
@@ -712,7 +659,6 @@ func resetEventSubjects(registry *events.Registry, viewConfig storageconfig.Stor
 	// This command is intentionally destructive: all View histories, including
 	// record/Bleve histories, are discarded and recreated from the post-reset
 	// stream. There is no compatibility-preservation exception.
-	eventsToPurge := []events.Event{events.DatasetRowsUpserted, events.CollectorPeriodCompleted, events.FactorPeriodComputed, events.DatasetSyncPoint}
 	subjects := make(map[string]struct{})
 	for _, partition := range viewConfig.ConsumerPartitions {
 		for _, dataset := range partition.Datasets() {
@@ -724,7 +670,7 @@ func resetEventSubjects(registry *events.Registry, viewConfig storageconfig.Stor
 				}
 			}
 			for _, datasetID := range datasetIDs {
-				for _, event := range eventsToPurge {
+				for _, event := range events.StorageDatasetEvents {
 					subject, renderErr := registry.RenderSubject(event, dataset.SpaceID, datasetID)
 					if renderErr != nil {
 						return nil, fmt.Errorf("render purge subject %s/%s: %w", dataset.SpaceID, datasetID, renderErr)

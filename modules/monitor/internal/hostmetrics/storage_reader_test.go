@@ -2,13 +2,13 @@ package hostmetrics
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
-	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -35,18 +35,22 @@ func (f *readerAccessFake) ReadTimeSeriesRows(_ context.Context, req *storagepb.
 			rows = append(rows, row)
 		}
 	}
-	pageNo := int(req.GetPage().GetPage())
-	if pageNo <= 0 {
-		pageNo = 1
+	if len(req.GetColumnNames()) == 0 || req.GetPage().GetPage() != 0 {
+		panic("host history must name its columns and page by cursor")
 	}
-	start, end := pageNo-1, len(rows)
+	// 每页 1 行，游标是下一行的序号。
+	start := 0
+	if cursor := req.GetPage().GetCursor(); cursor != "" {
+		start, _ = strconv.Atoi(cursor)
+	}
 	if start >= len(rows) {
 		return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 	}
-	if end > start+1 {
-		end = start + 1
+	end := start + 1
+	page := &storagepb.PageResult{Size: 1}
+	if end < len(rows) {
+		page.HasMore, page.NextCursor = true, strconv.Itoa(end)
 	}
-	page := &storagepb.PageResult{Page: uint32(pageNo), Size: 1, HasMore: end < len(rows)}
 	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Rows: rows[start:end], PageResult: page}, nil
 }
 
@@ -98,34 +102,13 @@ func TestStorageReaderDoesNotTruncateLongMultiEntityHistory(t *testing.T) {
 	}
 }
 
-func TestStorageReaderIncludesLegacyRowsForCompactAgentID(t *testing.T) {
-	cfg := monconfig.Default().Metrics.HostStorage
-	at := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
-	legacyID := "550e8400-e29b-41d4-a716-446655440000"
-	fake := &readerAccessFake{rows: []*storagepb.TimeSeriesRow{
-		readRow(resourceRow(SpaceID, cfg.ResourceDatasetID, "1m", at, &hostmetricpb.HostSnapshot{Cpu: &hostmetricpb.CpuMetric{LogicalCores: 4}, Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100}}, legacyID)),
-	}}
-	reader := NewStorageReader(fake, cfg)
-	reader.SetAgentAliases(func(context.Context, string) ([]string, error) {
-		return []string{"aB3x", legacyID}, nil
-	})
-	points, err := reader.History(context.Background(), "aB3x", time.Unix(0, 0), time.Now().UTC(), 10)
-	require.NoError(t, err)
-	require.Len(t, points, 1)
-	require.Equal(t, "aB3x", points[0].AgentID)
-}
-
 func readRow(row *storagepb.RowFieldUpsert) *storagepb.TimeSeriesRow {
 	key := row.GetKey()
-	attributes := make(map[string]string, len(row.GetAttributes()))
-	for name, value := range row.GetAttributes() {
-		attributes[name] = value.GetStringValue()
-	}
 	return &storagepb.TimeSeriesRow{
 		Key: &storagepb.TimeSeriesKey{
 			SpaceId: key.GetSpaceId(), DatasetId: key.GetDatasetId(),
 			SubjectId: key.GetTimeSeries().GetSubjectId(), Freq: key.GetTimeSeries().GetFreq(), DataTime: key.GetTimeSeries().GetDataTime(), SeriesTag: key.GetTimeSeries().GetSeriesTag(),
 		},
-		Fields: row.GetFields(), Attributes: attributes,
+		Fields: row.GetFields(),
 	}
 }

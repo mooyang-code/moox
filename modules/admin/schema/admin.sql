@@ -153,83 +153,79 @@ CREATE TABLE IF NOT EXISTS t_ssh_host (
     c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
 );
 
--- ************ 网关节点表 ************
-CREATE TABLE IF NOT EXISTS t_gateway_nodes (
-    c_node_id TEXT NOT NULL PRIMARY KEY,
-    c_host_id INTEGER,
-    c_name TEXT NOT NULL,
-    c_public_address TEXT NOT NULL,
-    c_status TEXT NOT NULL DEFAULT 'enabled' CHECK (c_status IN ('enabled', 'disabled')),
-    c_route_hash TEXT NOT NULL DEFAULT '',
-    c_applied_route_hash TEXT NOT NULL DEFAULT '',
+-- 部署配置与网关运行状态分表，SSH 主机仅通过地址关联。
+CREATE TABLE IF NOT EXISTS t_hosts (
+    c_host_id TEXT NOT NULL PRIMARY KEY,
+    c_address TEXT NOT NULL,
+    c_private_address TEXT NOT NULL DEFAULT '',
+    c_region TEXT NOT NULL DEFAULT '',
+    c_status TEXT NOT NULL DEFAULT 'enabled',
+    -- direct：可直达；outbound：只能出站，经 control 网关反向连接中转
+    c_reachability TEXT NOT NULL DEFAULT 'direct',
+    c_description TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('enabled', 'disabled')),
+    CHECK (c_reachability IN ('direct', 'outbound')),
+    UNIQUE (c_address)
+);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_hosts_mtime
+AFTER UPDATE ON t_hosts
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_hosts SET c_mtime = CURRENT_TIMESTAMP WHERE c_host_id = OLD.c_host_id;
+END;
+
+CREATE TABLE IF NOT EXISTS t_placements (
+    c_host_id TEXT NOT NULL,
+    c_component_id TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'enabled',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('enabled', 'disabled')),
+    FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id),
+    PRIMARY KEY (c_host_id, c_component_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_placements_component ON t_placements (c_component_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_placements_mtime
+AFTER UPDATE ON t_placements
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_placements SET c_mtime = CURRENT_TIMESTAMP
+    WHERE c_host_id = OLD.c_host_id AND c_component_id = OLD.c_component_id;
+END;
+
+CREATE TABLE IF NOT EXISTS t_host_gateway_status (
+    c_host_id TEXT NOT NULL PRIMARY KEY,
+    c_instance_id TEXT NOT NULL DEFAULT '',
+    c_version TEXT NOT NULL DEFAULT '',
+    c_expected_hash TEXT NOT NULL DEFAULT '',
+    c_applied_hash TEXT NOT NULL DEFAULT '',
     c_route_count INTEGER NOT NULL DEFAULT 0,
     c_last_seen_at DATETIME,
     c_last_error TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (c_host_id) REFERENCES t_ssh_host (c_id)
+    c_previous_instance_id TEXT NOT NULL DEFAULT '',
+    c_replaced_at DATETIME,
+    c_conflict_instance_id TEXT NOT NULL DEFAULT '',
+    c_conflict_seen_at DATETIME,
+    -- control 网关上报的反向连接会话（JSON 数组），其他主机为空
+    c_relay_sessions TEXT NOT NULL DEFAULT '',
+    CHECK (c_route_count >= 0),
+    FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_gateway_nodes_host_id
-ON t_gateway_nodes (c_host_id);
-CREATE INDEX IF NOT EXISTS idx_gateway_nodes_status
-ON t_gateway_nodes (c_status);
-CREATE INDEX IF NOT EXISTS idx_gateway_nodes_last_seen_at
-ON t_gateway_nodes (c_last_seen_at);
-
-DROP TRIGGER IF EXISTS update_gateway_nodes_mtime;
-CREATE TRIGGER IF NOT EXISTS update_gateway_nodes_mtime
-AFTER UPDATE ON t_gateway_nodes
-BEGIN
-    UPDATE t_gateway_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
-END;
-
--- ************ 系统服务部署信息表 ************
-CREATE TABLE IF NOT EXISTS t_service_deployments (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_node_id TEXT NOT NULL,
-    c_service_name TEXT NOT NULL,
-    c_service_kind TEXT NOT NULL DEFAULT '',
-    c_protocol TEXT NOT NULL DEFAULT 'http',
-    c_host TEXT NOT NULL DEFAULT '',
-    c_port INTEGER NOT NULL DEFAULT 0,
-    c_gateway_path TEXT NOT NULL DEFAULT '',
-    c_gateway_service_id TEXT NOT NULL DEFAULT '',
-    c_gateway_enabled INTEGER NOT NULL DEFAULT 0 CHECK (c_gateway_enabled IN (0, 1)),
-    c_scope TEXT NOT NULL DEFAULT 'public',
-    c_status TEXT NOT NULL DEFAULT 'active',
-    c_description TEXT NOT NULL DEFAULT '',
-    c_extra_config TEXT NOT NULL DEFAULT '{}',
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_gateway_enabled = 0 OR length(trim(c_gateway_service_id)) > 0),
-    FOREIGN KEY (c_node_id) REFERENCES t_gateway_nodes (c_node_id)
+-- ************ SSH 主机密钥指纹（首次连接记录，之后固定） ************
+CREATE TABLE IF NOT EXISTS t_ssh_host_key (
+    c_host_id INTEGER NOT NULL PRIMARY KEY,                    -- 关联主机ID
+    c_address TEXT NOT NULL,                                    -- 记录指纹时的 地址:端口
+    c_fingerprint TEXT NOT NULL,                                -- SHA256 指纹
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP        -- 记录时间
 );
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_service_deployments_node_name
-ON t_service_deployments (c_node_id, c_service_name);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_service_deployments_node_gateway_service
-ON t_service_deployments (c_node_id, c_gateway_service_id)
-WHERE c_gateway_enabled = 1 AND c_gateway_service_id <> '';
-CREATE INDEX IF NOT EXISTS idx_service_deployments_node_id
-ON t_service_deployments (c_node_id);
-CREATE INDEX IF NOT EXISTS idx_service_deployments_gateway_enabled
-ON t_service_deployments (c_gateway_enabled);
-CREATE INDEX IF NOT EXISTS idx_service_deployments_gateway_service_id
-ON t_service_deployments (c_gateway_service_id);
-CREATE INDEX IF NOT EXISTS idx_service_deployments_kind
-ON t_service_deployments (c_service_kind);
-CREATE INDEX IF NOT EXISTS idx_service_deployments_scope
-ON t_service_deployments (c_scope);
-CREATE INDEX IF NOT EXISTS idx_service_deployments_status
-ON t_service_deployments (c_status);
-
-DROP TRIGGER IF EXISTS update_service_deployments_mtime;
-CREATE TRIGGER IF NOT EXISTS update_service_deployments_mtime
-AFTER UPDATE ON t_service_deployments
-BEGIN
-    UPDATE t_service_deployments SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
-END;
 
 -- ************ SSH 会话表（用于会话管理） ************
 CREATE TABLE IF NOT EXISTS t_ssh_session (
@@ -315,3 +311,24 @@ AFTER UPDATE ON t_secrets
 BEGIN
     UPDATE t_secrets SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
 END;
+
+-- 活动日志：各模块写入的、需要展示给用户的事件；永久保存，不清理
+CREATE TABLE IF NOT EXISTS t_activity_logs (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL DEFAULT '',
+    c_source TEXT NOT NULL,
+    c_category TEXT NOT NULL,
+    c_level TEXT NOT NULL DEFAULT 'info',
+    c_title TEXT NOT NULL,
+    c_detail TEXT NOT NULL DEFAULT '{}',
+    c_ref_id TEXT NOT NULL DEFAULT '',
+    c_dedup_key TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_level IN ('info', 'warning', 'error'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_t_activity_logs_dedup
+ON t_activity_logs (c_dedup_key)
+WHERE c_dedup_key <> '';
+CREATE INDEX IF NOT EXISTS idx_t_activity_logs_space_time ON t_activity_logs (c_space_id, c_ctime);
+CREATE INDEX IF NOT EXISTS idx_t_activity_logs_category_time ON t_activity_logs (c_category, c_ctime);

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,17 +26,7 @@ func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.
 	if space.Name == "" {
 		space.Name = space.GetSpaceId()
 	}
-	var created *pb.Space
-	var err error
-	if creator, ok := s.metadata.(interface {
-		CreateSpace(context.Context, *pb.Space) (*pb.Space, error)
-	}); ok {
-		created, err = creator.CreateSpace(ctx, space)
-	} else {
-		// Non-SQLite test/compatibility stores may only expose the historical
-		// Writer contract. Production SQLite always takes the atomic path above.
-		created, err = s.metadata.UpsertSpace(ctx, space)
-	}
+	created, err := s.metadata.CreateSpace(ctx, space)
 	if err != nil {
 		return &pb.CreateSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
@@ -257,58 +246,57 @@ func (s *Service) normalizeAndValidateViewDatasets(ctx context.Context, view *pb
 	if spaceID == "" || datasetID == "" {
 		return errors.New("space_id and dataset_id are required")
 	}
-	if err := validateViewReferencesSingleDataset(view); err != nil {
-		return err
-	}
 	dataset, err := s.metadata.GetDataset(ctx, spaceID, datasetID)
 	if err != nil {
 		return fmt.Errorf("view dataset %s not found: %w", datasetID, err)
 	}
-	if dataset.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES {
-		freq, normalizedFilterJSON, err := normalizeTimeSeriesViewFilterJSON(view.GetFilterJson())
-		if err != nil {
-			return err
-		}
-		if !datasetSupportsFreq(dataset, freq) {
-			return fmt.Errorf("view dataset %s does not support freq %q", dataset.GetDatasetId(), freq)
-		}
-		view.FilterJson = normalizedFilterJSON
+	if err := s.validateViewColumnsInDataset(ctx, spaceID, datasetID, view.GetColumns()); err != nil {
+		return err
 	}
+	if freq := strings.TrimSpace(view.GetFreq()); freq != "" && freq != dataset.GetFreq() {
+		return fmt.Errorf("view freq %q differs from dataset %s freq %q; a View takes its Dataset's freq", freq, dataset.GetDatasetId(), dataset.GetFreq())
+	}
+	view.Freq = dataset.GetFreq()
 	view.DatasetId = datasetID
 	view.GrainKeys = defaultViewGrainKeys(dataset.GetDataKind())
 	view.Engine = defaultViewEngine(dataset.GetDataKind())
 	return nil
 }
 
-func normalizeTimeSeriesViewFilterJSON(raw string) (string, string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", "", errors.New("time series view filter_json.freq is required")
-	}
-	fields := make(map[string]json.RawMessage)
-	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
-		return "", "", fmt.Errorf("invalid time series view filter_json: %w", err)
-	}
-	var freq string
-	if rawFreq, ok := fields["freq"]; ok {
-		if err := json.Unmarshal(rawFreq, &freq); err != nil {
-			return "", "", errors.New("time series view filter_json.freq must be a string")
+// validateViewColumnsInDataset requires every dataset column of a View to
+// name an active column of the View's Dataset. View column names carry no
+// Dataset prefix, so this is what binds a column to its source.
+func (s *Service) validateViewColumnsInDataset(ctx context.Context, spaceID, datasetID string, columns []*pb.ViewColumn) error {
+	var wanted []string
+	for _, column := range columns {
+		if isDatasetViewColumn(column) {
+			wanted = append(wanted, strings.TrimSpace(column.GetOriginId()))
 		}
 	}
-	freq = strings.TrimSpace(freq)
-	if freq == "" {
-		return "", "", errors.New("time series view filter_json.freq is required")
+	if len(wanted) == 0 {
+		return nil
 	}
-	encodedFreq, err := json.Marshal(freq)
-	if err != nil {
-		return "", "", err
+	active := make(map[string]struct{})
+	for pageNo := uint32(1); ; pageNo++ {
+		items, page, err := s.metadata.ListDatasetColumns(ctx, spaceID, datasetID, &pb.Page{Page: pageNo, Size: 1000})
+		if err != nil {
+			return fmt.Errorf("list view dataset %s columns: %w", datasetID, err)
+		}
+		for _, item := range items {
+			if item != nil && (item.GetStatus() == "" || item.GetStatus() == "active") {
+				active[item.GetColumnName()] = struct{}{}
+			}
+		}
+		if page == nil || !page.GetHasMore() || len(items) == 0 {
+			break
+		}
 	}
-	fields["freq"] = encodedFreq
-	normalized, err := json.Marshal(fields)
-	if err != nil {
-		return "", "", err
+	for _, name := range wanted {
+		if _, ok := active[name]; !ok {
+			return fmt.Errorf("view column %q is not an active column of dataset %s", name, datasetID)
+		}
 	}
-	return freq, string(normalized), nil
+	return nil
 }
 
 func (s *Service) GetView(ctx context.Context, req *pb.GetViewReq) (*pb.GetViewRsp, error) {
@@ -380,6 +368,13 @@ func (s *Service) UpsertViewColumn(ctx context.Context, req *pb.UpsertViewColumn
 		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	if err := validateViewColumnName(column); err != nil {
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	view, err := s.metadata.GetView(ctx, column.GetSpaceId(), column.GetViewId())
+	if err != nil {
+		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	}
+	if err := s.validateViewColumnsInDataset(ctx, column.GetSpaceId(), view.GetDatasetId(), []*pb.ViewColumn{column}); err != nil {
 		return &pb.UpsertViewColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
 	created, err := s.metadata.UpsertViewColumn(ctx, column)

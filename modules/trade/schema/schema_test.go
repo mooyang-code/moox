@@ -26,6 +26,7 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 	want := []string{
 		"t_trading_accounts",
 		"t_trade_instruments",
+		"t_trading_position_tombstones",
 		"t_trading_positions",
 		"t_logical_account_members",
 		"t_logical_account_targets",
@@ -39,7 +40,6 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 		"t_account_equity_points",
 		"t_logical_account_equity_points",
 		"t_logical_account_target_receipts",
-		"t_logical_account_owner_rebinds",
 	}
 	sort.Strings(want)
 	require.Equal(t, want, tables)
@@ -138,7 +138,7 @@ func TestAllSQLDefinesApprovedIdentityScopes(t *testing.T) {
 		{"t_trading_positions", []string{"c_space_id", "c_trading_account_id", "c_exchange_symbol", "c_position_side"}},
 		{"t_logical_accounts", []string{"c_space_id", "c_logical_account_id"}},
 		{"t_logical_accounts", []string{"c_space_id", "c_name"}},
-		{"t_logical_accounts", []string{"c_space_id", "c_owner_runner_id"}},
+		{"t_logical_accounts", []string{"c_space_id", "c_owner_instance_id"}},
 		{"t_logical_account_members", []string{"c_space_id", "c_logical_account_id", "c_trading_account_id"}},
 		{"t_logical_account_members", []string{"c_space_id", "c_trading_account_id"}},
 		{"t_logical_account_targets", []string{"c_space_id", "c_logical_account_id"}},

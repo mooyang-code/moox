@@ -1,6 +1,7 @@
 package config
 
 import (
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +11,39 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+func TestHTTPSProbeConfigurationResolvesTrustRelativeToModuleConfig(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "app.yaml")
+	raw := "placement:\n  enabled: false\n  https:\n    console-proxy:\n      url: https://console.example.test:9527/\n      connect_address: 127.0.0.1:9527\n      server_name: console.example.test\n      trust_mode: internal\n      ca_file: ../../certs/caddy/root.crt\n      ca_baseline: ../../certs/caddy/root.sha256\n"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := cfg.Placement.HTTPS["console-proxy"]
+	if target.CAFile != filepath.Clean(filepath.Join(directory, "../../certs/caddy/root.crt")) || !filepath.IsAbs(target.CABaseline) {
+		t.Fatalf("unresolved HTTPS trust files: %+v", target)
+	}
+}
+
+func TestHTTPSProbeConfigurationRejectsAmbiguousTrust(t *testing.T) {
+	for _, target := range []domain.HTTPSConfig{
+		{URL: "http://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public"},
+		{URL: "https://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "wrong.example.test", TrustMode: "public"},
+		{URL: "https://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "internal", CAFile: "root.crt"},
+		{URL: "https://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public", CAFile: "root.crt", CABaseline: "root.sha256"},
+	} {
+		cfg := Default()
+		cfg.Placement.Enabled = false
+		cfg.Placement.HTTPS = map[string]domain.HTTPSConfig{"console-proxy": target}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("invalid HTTPS configuration accepted: %+v", target)
+		}
+	}
+}
 
 func TestMonitorConfigDefaults(t *testing.T) {
 	cfg := Default()
@@ -23,17 +57,14 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Instance.InstanceID == "" {
 		t.Fatal("instance id must not be empty")
 	}
-	if cfg.KlineFreshness.CollectorGatewayTarget != "ip://127.0.0.1:11003" {
-		t.Fatalf("collector gateway target default = %q", cfg.KlineFreshness.CollectorGatewayTarget)
-	}
 	if cfg.Scheduler.ResultRetentionDays != 14 {
 		t.Fatalf("retention days = %d", cfg.Scheduler.ResultRetentionDays)
 	}
 	if cfg.Scheduler.MaxConcurrency != 16 {
 		t.Fatalf("max concurrency = %d", cfg.Scheduler.MaxConcurrency)
 	}
-	if !cfg.SysDeploy.Enabled || cfg.SysDeploy.Target != "ip://127.0.0.1:11109" {
-		t.Fatalf("sysdeploy = %+v", cfg.SysDeploy)
+	if !cfg.Placement.Enabled {
+		t.Fatalf("placement = %+v", cfg.Placement)
 	}
 	if cfg.Alert.SendTimeoutSeconds != 10 {
 		t.Fatalf("alert send timeout = %d", cfg.Alert.SendTimeoutSeconds)
@@ -50,12 +81,11 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.MarketCanary.ClosedBarMinCoverage != 0.99 {
 		t.Fatalf("closed bar minimum coverage = %v", cfg.MarketCanary.ClosedBarMinCoverage)
 	}
-	if len(cfg.MarketCanary.Subjects) != 1 || cfg.MarketCanary.Subjects[0].SeriesTag == nil || *cfg.MarketCanary.Subjects[0].SeriesTag != "venue:binance|market:spot|source:spot_http" {
-		t.Fatalf("market canary default series tag = %+v", cfg.MarketCanary.Subjects)
+	if cfg.MarketCanary.Enabled || len(cfg.MarketCanary.Subjects) != 0 {
+		t.Fatalf("market canary must come from deployment config, defaults = %+v", cfg.MarketCanary)
 	}
 	if cfg.MarketHealth.TimerCoordinationStaleAfter != 15*time.Minute ||
-		cfg.MarketHealth.TimerCoordinationPendingGrace != 5*time.Minute ||
-		cfg.MarketHealth.LowCapacityHeadroom != 2 {
+		cfg.MarketHealth.TimerCoordinationPendingGrace != 5*time.Minute {
 		t.Fatalf("market health defaults = %+v", cfg.MarketHealth)
 	}
 }
@@ -68,8 +98,10 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	var cfg struct {
 		Server struct {
 			Service []struct {
-				Name string `yaml:"name"`
-				Port int    `yaml:"port"`
+				Name     string `yaml:"name"`
+				Protocol string `yaml:"protocol"`
+				IP       string `yaml:"ip"`
+				Port     int    `yaml:"port"`
 			} `yaml:"service"`
 		} `yaml:"server"`
 	}
@@ -79,7 +111,7 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	if len(cfg.Server.Service) != 7 {
 		t.Fatalf("service count = %d", len(cfg.Server.Service))
 	}
-	if cfg.Server.Service[0].Name != "trpc.moox.monitor.MonitorMgr" || cfg.Server.Service[0].Port != 11410 {
+	if cfg.Server.Service[0].Name != "trpc.moox.monitor.MonitorMgr" || cfg.Server.Service[0].Port != 11410 || cfg.Server.Service[0].Protocol != "trpc" || cfg.Server.Service[0].IP != "127.0.0.1" {
 		t.Fatalf("service = %+v", cfg.Server.Service[0])
 	}
 	if cfg.Server.Service[1].Name != "trpc.moox.monitor.Health" || cfg.Server.Service[1].Port != 11409 {
@@ -88,8 +120,8 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	if cfg.Server.Service[2].Name != "trpc.moox.monitor.metrics.timer" || cfg.Server.Service[2].Port != 11415 {
 		t.Fatalf("metrics timer service = %+v", cfg.Server.Service[2])
 	}
-	if cfg.Server.Service[3].Name != "trpc.moox.monitor.sysdeploy.timer" || cfg.Server.Service[3].Port != 11416 {
-		t.Fatalf("sysdeploy timer service = %+v", cfg.Server.Service[3])
+	if cfg.Server.Service[3].Name != "trpc.moox.monitor.placement.timer" || cfg.Server.Service[3].Port != 11416 {
+		t.Fatalf("placement timer service = %+v", cfg.Server.Service[3])
 	}
 }
 
@@ -122,53 +154,53 @@ func TestMonitorConfigKeepsExplicitEmptyObservabilityCredential(t *testing.T) {
 	}
 }
 
-func TestMonitorGatewayAuthEnvironment(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-hk-177")
-	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "monitor-key")
-	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "monitor-secret")
-	t.Setenv("MOOX_GATEWAY_CA_FILE", "/tmp/peers.pem")
-	cfg := Default()
-	cfg.applyEnv()
-	if cfg.SysDeploy.ServiceAuth.TargetNode != "gateway-hk-177" || cfg.SysDeploy.ServiceAuth.KeyID != "monitor-key" || cfg.SysDeploy.ServiceAuth.SecretKey != "monitor-secret" || cfg.SysDeploy.ServiceAuth.CAFile != "/tmp/peers.pem" {
-		t.Fatalf("gateway auth = %#v", cfg.SysDeploy.ServiceAuth)
-	}
-	if cfg.Metrics.Storage.GatewayNodeID != "gateway-hk-177" || cfg.Metrics.HostStorage.GatewayNodeID != "gateway-hk-177" {
-		t.Fatalf("metrics gateway nodes = storage %q host %q", cfg.Metrics.Storage.GatewayNodeID, cfg.Metrics.HostStorage.GatewayNodeID)
-	}
-}
-
-func TestMonitorStorageGatewayEnvironmentOverridesMetricsOnly(t *testing.T) {
+func TestMonitorStorageUsesConfiguredIdentityInsteadOfLegacyEnvironment(t *testing.T) {
 	t.Setenv("MOOX_GATEWAY_NODE_ID", "control")
-	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://10.0.0.8:11003")
-	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "compute-1")
-	cfg := Default()
-	cfg.applyEnv()
+	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://192.0.2.99:11003")
+	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "wrong-host")
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "fixture-health-secret")
+	cfg, err := Load(writeConfig(t, `gateway_client:
+  caller: monitor
+  key_id: admin-assigned-monitor-key
+  key_file: ../../secrets/caller-monitor.key
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GatewayClient.Caller != "monitor" || cfg.GatewayClient.KeyID != "admin-assigned-monitor-key" || cfg.GatewayClient.KeyFile != "../../secrets/caller-monitor.key" {
+		t.Fatalf("gateway identity was overridden: %+v", cfg.GatewayClient)
+	}
 
-	if cfg.SysDeploy.ServiceAuth.TargetNode != "control" {
-		t.Fatalf("sysdeploy target = %q, want control", cfg.SysDeploy.ServiceAuth.TargetNode)
+}
+
+func TestMonitorRejectsOldAndInvalidGatewayConfiguration(t *testing.T) {
+	for _, raw := range []string{
+		"metrics:\n  storage:\n    gateway_target: ip://127.0.0.1:11003\n",
+		"metrics:\n  host_storage:\n    hmac_key_file: legacy.key\n",
+		"gateway_client:\n  target: ip://127.0.0.1:11003\n",
+		"gateway_client:\n  key_id: first\n  key_id: second\n",
+		"gateway_client:\n  caller: archive\n",
+		"gateway_client:\n  caller: monitor\n---\ngateway_client:\n  caller: archive\n",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+			t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "fixture-health-secret")
+			if _, err := Load(writeConfig(t, raw)); err == nil {
+				t.Fatal("invalid gateway configuration was accepted")
+			}
+		})
 	}
-	if cfg.Metrics.Storage.GatewayTarget != "ip://10.0.0.8:11003" || cfg.Metrics.HostStorage.GatewayTarget != "ip://10.0.0.8:11003" {
-		t.Fatalf("storage targets = %q, %q", cfg.Metrics.Storage.GatewayTarget, cfg.Metrics.HostStorage.GatewayTarget)
-	}
-	if cfg.Metrics.Storage.GatewayNodeID != "compute-1" || cfg.Metrics.HostStorage.GatewayNodeID != "compute-1" {
-		t.Fatalf("storage nodes = %q, %q", cfg.Metrics.Storage.GatewayNodeID, cfg.Metrics.HostStorage.GatewayNodeID)
+	if _, err := Default().OpenGateway(nil); err == nil {
+		t.Fatal("opening without a loaded config must fail")
 	}
 }
 
-func TestMonitorCollectorGatewayEnvironmentIsIndependentFromStorageRoute(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_TARGET_NODE", "control")
-	t.Setenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "ip://collector-gateway:11003")
-	t.Setenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "collector-node")
-	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET", "ip://storage-gateway:11003")
-	t.Setenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID", "storage-node")
-	cfg := Default()
-	cfg.applyEnv()
-
-	if cfg.KlineFreshness.CollectorGatewayTarget != "ip://collector-gateway:11003" || cfg.KlineFreshness.CollectorGatewayNodeID != "collector-node" {
-		t.Fatalf("collector route = %q/%q", cfg.KlineFreshness.CollectorGatewayTarget, cfg.KlineFreshness.CollectorGatewayNodeID)
-	}
-	if cfg.Metrics.Storage.GatewayTarget != "ip://storage-gateway:11003" || cfg.Metrics.Storage.GatewayNodeID != "storage-node" {
-		t.Fatalf("storage route = %q/%q", cfg.Metrics.Storage.GatewayTarget, cfg.Metrics.Storage.GatewayNodeID)
+func TestMonitorRejectsOldCollectorGatewayConfiguration(t *testing.T) {
+	for _, old := range []string{"collector_gateway_url: http://127.0.0.1:11002", "collector_gateway_node_id: control"} {
+		if _, err := Load(writeConfig(t, "kline_freshness:\n  "+old+"\n")); err == nil {
+			t.Fatalf("old Collector route was accepted: %s", old)
+		}
 	}
 }
 
@@ -185,14 +217,14 @@ func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
 	}
 }
 
-func TestMonitorConfigRequiresHealthCredentialsWhenSysDeployEnabled(t *testing.T) {
+func TestMonitorConfigRequiresHealthCredentialsWhenPlacementEnabled(t *testing.T) {
 	cfg := Default()
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want health credential error")
 	}
-	cfg.SysDeploy.Enabled = false
+	cfg.Placement.Enabled = false
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("Validate() with SysDeploy disabled = %v", err)
+		t.Fatalf("Validate() with placement disabled = %v", err)
 	}
 }
 
@@ -240,21 +272,6 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 	if err := yaml.Unmarshal(raw, &app); err != nil {
 		t.Fatal(err)
 	}
-	metrics, ok := app["metrics"].(map[string]any)
-	if !ok {
-		t.Fatal("metrics config is missing")
-	}
-	keyPath := filepath.Join(t.TempDir(), "gateway-monitor.key")
-	if err := os.WriteFile(keyPath, []byte("test-gateway-secret\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"storage", "host_storage"} {
-		storage, ok := metrics[name].(map[string]any)
-		if !ok {
-			t.Fatalf("metrics.%s config is missing", name)
-		}
-		storage["hmac_key_file"] = keyPath
-	}
 	fixture, err := yaml.Marshal(app)
 	if err != nil {
 		t.Fatal(err)
@@ -271,14 +288,14 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 		t.Fatalf("kline freshness = %+v", cfg.KlineFreshness)
 	}
 	freshness, ok := app["kline_freshness"].(map[string]any)
-	if !ok || freshness["collector_gateway_target"] != "ip://127.0.0.1:11003" {
-		t.Fatalf("kline freshness Collector gateway target = %v", freshness["collector_gateway_target"])
+	if !ok {
+		t.Fatal("kline freshness configuration is missing")
 	}
-	if cfg.KlineFreshness.CollectorGatewayTarget != "ip://127.0.0.1:11003" {
-		t.Fatalf("loaded collector gateway target = %q", cfg.KlineFreshness.CollectorGatewayTarget)
+	if _, exists := freshness["collector_gateway_url"]; exists {
+		t.Fatal("obsolete Collector HTTP route remains")
 	}
 	if cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
-		cfg.KlineFreshness.InventoryMaxEntries != 1000 || cfg.KlineFreshness.StaleAfter != 5*time.Minute {
+		cfg.KlineFreshness.InventoryMaxEntries != 1000 {
 		t.Fatalf("dynamic kline freshness inventory = %+v", cfg.KlineFreshness)
 	}
 	if !reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
@@ -330,8 +347,9 @@ func TestMonitorConfigValidatesHostStorageContract(t *testing.T) {
 
 func TestMonitorConfigRequiresPresenceAwareMarketCanarySeriesTag(t *testing.T) {
 	cfg := Default()
-	cfg.SysDeploy.Enabled = false
-	cfg.MarketCanary.Subjects[0].SeriesTag = nil
+	cfg.Placement.Enabled = false
+	cfg.MarketCanary.Enabled = true
+	cfg.MarketCanary.Subjects = []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "dataset_task", Symbol: "BTC-USDT", Frequency: "1m"}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires series_tag") {
 		t.Fatalf("Validate() error = %v, want missing series_tag error", err)
 	}
@@ -347,11 +365,11 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 	cfg := Default()
 	if cfg.KlineFreshness.EvaluationInterval != 30*time.Second || cfg.KlineFreshness.MaxSubjectsPerAlert != 20 ||
 		cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
-		cfg.KlineFreshness.InventoryMaxEntries != 1000 || cfg.KlineFreshness.StaleAfter != 5*time.Minute ||
+		cfg.KlineFreshness.InventoryMaxEntries != 1000 ||
 		!reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
 		t.Fatalf("kline freshness defaults = %+v", cfg.KlineFreshness)
 	}
-	cfg.SysDeploy.Enabled = false
+	cfg.Placement.Enabled = false
 	cfg.KlineFreshness.Enabled = true
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid kline freshness config rejected: %v", err)
@@ -367,7 +385,6 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 		{"refresh interval unbounded", func(c *Config) { c.KlineFreshness.InventoryRefreshInterval = 11 * time.Minute }},
 		{"page size out of range", func(c *Config) { c.KlineFreshness.InventoryPageSize = 101 }},
 		{"inventory cap out of range", func(c *Config) { c.KlineFreshness.InventoryMaxEntries = 1001 }},
-		{"stale after too short", func(c *Config) { c.KlineFreshness.StaleAfter = 30 * time.Second }},
 		{"subjects out of range", func(c *Config) { c.KlineFreshness.MaxSubjectsPerAlert = 101 }},
 	}
 	for _, test := range cases {
@@ -392,24 +409,18 @@ func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
 
 func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
 	cfg := Default()
-	cfg.SysDeploy.Enabled = false
+	cfg.Placement.Enabled = false
+	cfg.MarketCanary.Enabled = true
 	cfg.MarketCanary.ClosedBarMinCoverage = 1.01
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "closed_bar_min_coverage") {
 		t.Fatalf("Validate() error = %v, want closed_bar_min_coverage error", err)
 	}
 
 	cfg = Default()
-	cfg.SysDeploy.Enabled = false
+	cfg.Placement.Enabled = false
 	cfg.MarketHealth.TimerCoordinationStaleAfter = -time.Second
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "timer_coordination_stale_after") {
 		t.Fatalf("Validate() error = %v, want timer coordination threshold error", err)
-	}
-
-	cfg = Default()
-	cfg.SysDeploy.Enabled = false
-	cfg.MarketHealth.LowCapacityHeadroom = -1
-	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "low_capacity_headroom") {
-		t.Fatalf("Validate() error = %v, want low capacity headroom error", err)
 	}
 }
 

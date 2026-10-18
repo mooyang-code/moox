@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"time"
 
@@ -19,15 +18,12 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// liveIndexWriteTimeout is the dedicated budget for one DuckDB live upsert.
-// JetStream deliveries often arrive with a short remaining deadline after a
-// previous index held the write gate; inheriting that deadline turns a healthy
-// write into a NAK loop and leaves View minutes behind Primary.
+// liveIndexWriteTimeout 是单次 DuckDB 实时写入专用的时间预算。JetStream 投递到达时，常因前一个索引占着写入闸门而只剩
+// 很短的截止时间；继承这个截止时间会让健康的写入变成不断 NAK 的循环，并让 View 落后 Primary 数分钟。
 const liveIndexWriteTimeout = 30 * time.Second
 
-// primaryPointReadChunkSize keeps live enrichment under the DataNode
-// 10k-key / 100k key-field point-read budget. Full-market 1m batches
-// otherwise fail the whole delivery with "read request exceeds key/field limit".
+// primaryPointReadChunkSize 让实时补全留在 DataNode 的点读预算之内（1 万个键、10 万个键字段）。全市场 1m 的批次
+// 否则会因为“read request exceeds key/field limit”让整条投递失败。
 func primaryPointReadChunkSize(fieldCount, keyCount int) int {
 	chunkSize := keyCount
 	if fieldCount > 0 && chunkSize > 100000/fieldCount {
@@ -59,7 +55,7 @@ func liveIndexWriteContext(ctx context.Context) (context.Context, context.Cancel
 
 func (s *Service) HandleDatasetRows(ctx context.Context, message *eventpb.EventMessage, payload *storagepb.DatasetRowsUpserted) error {
 	if message == nil || payload == nil {
-		return eventconsumer.Permanent(errors.New("storage dataset event is empty"))
+		return eventconsumer.Permanent(errors.New("数据集行事件为空"))
 	}
 	rowEvent, err := eventmapper.ToStorageRows(payload)
 	if err != nil {
@@ -69,31 +65,41 @@ func (s *Service) HandleDatasetRows(ctx context.Context, message *eventpb.EventM
 		return err
 	}
 	s.noteAppliedFromPayload(message.GetSpaceId(), payload)
-	return s.FlushViewDataReady(ctx, message.GetSpaceId(), "")
+	if err := s.makeAppliedDurableBeforeAck(); err != nil {
+		return fmt.Errorf("View 写入围栏落盘失败，行事件稍后重投：%w", err)
+	}
+	s.flushReadyAfterRows(ctx, message.GetSpaceId())
+	return nil
 }
 
-// HandleDatasetRowsBatch merges contiguous rows events for one Dataset before
-// entering the per-index write gate. Markers are never included in this batch,
-// so the Dataset ordering fence remains unchanged while DuckDB receives one
-// larger transaction for multiple subjects.
+// flushReadyAfterRows 在行写入后顺带刷新就绪队列。行已经写入，就绪事件发布失败时留在落盘的队列里由后续刷新与
+// 后台重试补发，不能让行事件因此失败重投。
+func (s *Service) flushReadyAfterRows(ctx context.Context, spaceID string) {
+	if err := s.FlushViewDataReady(ctx, spaceID, ""); err != nil {
+		log.Printf("行写入后刷新 View 就绪队列失败（空间 %s），稍后重试：%v", spaceID, err)
+	}
+}
+
+// HandleDatasetRowsBatch 在进入按索引的写入闸门之前，把同一个数据集连续的行事件合并成一批。标记事件从不并入
+// 这个批次，所以数据集的顺序围栏保持不变，而 DuckDB 能用一个更大的事务写入多个标的。
 func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsumer.DatasetRowsBatchItem) error {
 	if len(items) == 0 {
-		return eventconsumer.Permanent(errors.New("storage dataset rows batch is empty"))
+		return eventconsumer.Permanent(errors.New("数据集行事件批次为空"))
 	}
 	spaceID, datasetID := "", ""
 	rows := make([]*pb.RowFieldUpsert, 0)
 	for index, item := range items {
 		if item.Message == nil || item.Payload == nil {
-			return eventconsumer.Permanent(fmt.Errorf("storage dataset rows batch item %d is empty", index))
+			return eventconsumer.Permanent(fmt.Errorf("数据集行事件批次的第 %d 条为空", index))
 		}
 		if index == 0 {
 			spaceID, datasetID = item.Message.GetSpaceId(), item.Message.GetSubjectId()
 		}
 		if item.Message.GetSpaceId() != spaceID || item.Message.GetSubjectId() != datasetID {
-			return eventconsumer.Permanent(errors.New("storage dataset rows batch crosses Dataset queues"))
+			return eventconsumer.Permanent(errors.New("数据集行事件批次跨越了不同数据集的队列"))
 		}
 		if item.Payload.GetSpaceId() != spaceID || item.Payload.GetDatasetId() != datasetID {
-			return eventconsumer.Permanent(errors.New("storage dataset rows batch payload identity mismatch"))
+			return eventconsumer.Permanent(errors.New("数据集行事件批次的载荷与消息的空间或数据集不一致"))
 		}
 		rowEvent, err := eventmapper.ToStorageRows(item.Payload)
 		if err != nil {
@@ -102,16 +108,32 @@ func (s *Service) HandleDatasetRowsBatch(ctx context.Context, items []eventconsu
 		rows = append(rows, rowEvent.GetRows()...)
 	}
 	if len(rows) == 0 {
-		return eventconsumer.Permanent(errors.New("storage dataset rows batch has no rows"))
+		return eventconsumer.Permanent(errors.New("数据集行事件批次没有任何行"))
 	}
+	batchStart := time.Now()
 	if err := s.applyDatasetEvent(ctx, spaceID, datasetID, rows); err != nil {
 		return err
 	}
+	applied := time.Since(batchStart)
 	for _, item := range items {
 		s.noteAppliedFromPayload(spaceID, item.Payload)
 	}
-	return s.FlushViewDataReady(ctx, spaceID, "")
+	fenceStart := time.Now()
+	if err := s.makeAppliedDurableBeforeAck(); err != nil {
+		return fmt.Errorf("View 写入围栏落盘失败，行事件稍后重投：%w", err)
+	}
+	flushStart := time.Now()
+	s.flushReadyAfterRows(ctx, spaceID)
+	if total := time.Since(batchStart); total >= slowIndexApplyLog {
+		log.Printf("storage view 行事件批次较慢 dataset=%s 事件=%d 行=%d 写索引=%s 围栏落盘=%s 刷新就绪=%s 合计=%s",
+			datasetID, len(items), len(rows), applied.Round(time.Millisecond), flushStart.Sub(fenceStart).Round(time.Millisecond),
+			time.Since(flushStart).Round(time.Millisecond), total.Round(time.Millisecond))
+	}
+	return nil
 }
+
+// slowIndexApplyLog 是行写入分段耗时日志的阈值：只记录达到该耗时的写入，避免高频小写入刷屏。
+const slowIndexApplyLog = 200 * time.Millisecond
 
 func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID string, rows []*pb.RowFieldUpsert) error {
 	s.mu.RLock()
@@ -127,16 +149,14 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 	}
 	s.mu.RUnlock()
 	if len(viewKeys) == 0 && len(standalone) == 0 {
-		// Startup/recovery may not have attached the active or first-build index
-		// yet. Keep managed Dataset deliveries pending instead of ACKing a row
-		// that cannot be recovered by a later range scan. An unrelated Dataset
-		// is safe to ACK after discovery confirms no active View projects it.
+		// 启动或恢复期间，活动索引或首次构建的索引可能还没有挂载。受管理的数据集的投递保持未确认，不能确认一行之后的
+		// 范围扫描无法找回的数据；与任何活动 View 都无关的数据集，在发现流程确认没有活动 View 投影它之后可以安全确认。
 		managed, err := s.datasetHasActiveView(ctx, spaceID, datasetID)
 		if err != nil {
 			return err
 		}
 		if managed {
-			return errors.New("storage view index mapping is pending")
+			return errors.New("View 索引映射尚未就绪")
 		}
 		return nil
 	}
@@ -149,15 +169,12 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			continue
 		}
 		runtime.mu.Lock()
-		// A previous B write may have failed while the metadata Fail RPC was
-		// temporarily unavailable. Keep the Dataset delivery pending and retry
-		// persisting the failure before attempting another write. Otherwise a
-		// later successful redelivery could leave buildFailed set forever and
-		// block activation without ever converging the metadata state.
+		// 上一次写 B 索引可能失败了，而元数据的 Fail 调用当时暂时不可用。数据集的投递保持未确认，先重试持久化这次失败，
+		// 再尝试下一次写入；否则之后一次成功的重投会让 buildFailed 一直置位，卡住激活，元数据状态也永远无法收敛。
 		if runtime.buildFailed && runtime.next != "" {
 			failedID := runtime.next
 			failedGeneration := s.indexGenerationOf(failedID)
-			if failErr := s.failRuntimeBuild(ctx, viewKey, runtime, errors.New("retrying failed replacement build")); failErr != nil {
+			if failErr := s.failRuntimeBuild(ctx, viewKey, runtime, errors.New("重试已失败的替换构建")); failErr != nil {
 				runtime.mu.Unlock()
 				return failErr
 			}
@@ -175,16 +192,14 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			}
 			runtime.mu.Unlock()
 			s.removeFailedBuildAtGeneration(ctx, failedID, failedGeneration)
-			return errors.New("replacement view build failed")
+			return errors.New("View 的替换构建已失败")
 		}
 		activeID, nextID := runtime.active, runtime.next
 		activeReady, activeErr := s.liveIndexReady(ctx, activeID)
 		var activeFailure error
 		if activeErr != nil && activeID != "" {
-			// Stat is inconclusive, so make one write attempt before deciding
-			// whether the active pointer is stale. If the write itself fails and
-			// a replacement is healthy, keep the delivery pending until the
-			// replacement is READY and activation can make it authoritative.
+			// 索引统计不能下结论，所以先做一次写入尝试，再判断活动指针是否已失效。如果写入本身失败而替换索引是健康的，
+			// 投递保持未确认，直到替换索引就绪、激活后成为权威索引。
 			writtenRows, err := s.applyEventToIndex(ctx, activeID, datasetID, rows)
 			if err == nil {
 				activeReady, activeErr = true, nil
@@ -192,7 +207,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 					activeWatermarkRows[activeID] = append(activeWatermarkRows[activeID], writtenRows...)
 				}
 			} else if nextID != "" {
-				log.Printf("storage view active index failed while replacement is ready; routing to replacement space=%s view=%s index=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, err)
+				log.Printf("storage view 活动索引不可用而替换索引已就绪，改写替换索引 space=%s view=%s index=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, err)
 				activeFailure = err
 				activeReady, activeErr = false, nil
 			} else {
@@ -206,35 +221,29 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		}
 		if activeErr == nil && !activeReady && nextID == "" {
 			runtime.mu.Unlock()
-			return fmt.Errorf("storage view active index %q is unavailable", activeID)
+			return fmt.Errorf("View 的活动索引 %q 不可用", activeID)
 		}
 		if activeErr == nil && activeReady {
 			writtenRows, err := s.applyEventToIndex(ctx, activeID, datasetID, rows)
 			if err != nil {
-				log.Printf("storage view active index write failed space=%s view=%s index=%s dataset=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, datasetID, err)
+				log.Printf("storage view 活动索引写入失败 space=%s view=%s index=%s dataset=%s: %v", viewKey.spaceID, viewKey.viewID, activeID, datasetID, err)
 				if nextID == "" {
 					runtime.mu.Unlock()
 					return err
 				}
-				// A lightweight existence check only proves that the index path is
-				// present. If the active index is corrupt or otherwise unwritable,
-				// preserve the row in the replacement before keeping this delivery
-				// pending for activation.
+				// 轻量的存在检查只能证明索引目录在；活动索引损坏或不可写时，先把这一行写进替换索引，
+				// 本次投递保持未确认，等替换索引激活。
 				activeFailure = err
 				activeReady = false
 			} else if len(writtenRows) > 0 {
 				activeWatermarkRows[activeID] = append(activeWatermarkRows[activeID], writtenRows...)
 			}
 		} else if activeErr == nil {
-			// A stale active pointer can survive a crash while the replacement
-			// index is being prepared. Do not ACK the row by writing nowhere;
-			// continue with the healthy replacement so activation can drain the
-			// consumer and preserve the row-before-marker fence.
-			log.Printf("storage view active index unavailable; applying live row to replacement space=%s view=%s index=%s", viewKey.spaceID, viewKey.viewID, nextID)
+			// 准备替换索引期间崩溃，可能留下失效的活动指针。不能什么都没写就确认这一行：继续写健康的替换索引，
+			// 激活时排空消费者，保持“先行后标记”的顺序。
+			log.Printf("storage view 活动索引不可用，实时行写入替换索引 space=%s view=%s index=%s", viewKey.spaceID, viewKey.viewID, nextID)
 		}
-		// Publish the successful active-index watermark before touching the
-		// replacement. A replacement failure must not hide data already committed
-		// by the authoritative index from freshness monitoring.
+		// 先发布活动索引已写成功的水位，再处理替换索引：替换索引失败不能让新鲜度监控看不到权威索引已提交的数据。
 		for indexID, writtenRows := range activeWatermarkRows {
 			s.observeViewWatermark(indexID, datasetID, writtenRows, false)
 		}
@@ -243,22 +252,15 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 			if err := nextWriteErr; err != nil {
 				failedID := nextID
 				failedGeneration := s.indexGenerationOf(failedID)
-				// A live delivery has a short deadline. A timeout while the
-				// replacement is holding its per-index write gate is backpressure,
-				// not evidence that the B index is corrupt. Keep the delivery pending
-				// and let the next attempt retry the write; marking the whole build
-				// FAILED here would make every large backfill self-cancel.
+				// 实时投递的截止时间很短。替换索引占着它的写入闸门时发生的超时是背压，不能证明 B 索引已损坏。投递保持未确认，
+				// 下一次尝试再重试写入；在这里把整个构建标记为 FAILED，会让每一次大批量回填自我取消。
 				if isTransientBuildWriteError(err) {
 					runtime.mu.Unlock()
 					return err
 				}
 				if activeErr != nil || !activeReady {
-					// A first build has no authoritative A. Persist the failed
-					// state before returning; the delivery itself must remain
-					// pending so the replacement build can receive this row. Once
-					// the FAILED state is durable, remove this inactive slot now
-					// instead of waiting for the periodic maintainer. This also
-					// makes a lost Fail RPC response converge on the next retry.
+					// 首次构建没有权威的 A 索引。先持久化失败状态再返回；投递本身保持未确认，好让替换构建收到这一行。失败状态
+					// 落盘之后，立即删掉这个未启用的槽位，不等周期性的维护器；这也让丢失了 Fail 响应的情形在下一次重试时收敛。
 					if failErr := s.failRuntimeBuild(ctx, viewKey, runtime, err); failErr != nil {
 						runtime.mu.Unlock()
 						return errors.Join(err, failErr)
@@ -286,26 +288,22 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 				continue
 			}
 			if activeFailure != nil {
-				// The replacement received the row, but the active Stat was
-				// inconclusive and its write failed. Keep the delivery pending;
-				// the activation fence can switch to the READY replacement.
+				// 替换索引收到了这一行，但活动索引的统计不能下结论、它的写入失败了。投递保持未确认；激活围栏可以切到
+				// 已就绪的替换索引。
 				runtime.mu.Unlock()
 				return activeFailure
 			}
 			if !activeReady && runtime.active == "" {
-				// A from-scratch rebuild writes B from the durable stream.
-				// ACK after the replacement write. Rebuilds never journal or
-				// emit subject-ready; later live writes on the activated index
-				// publish directly.
+				// 从零开始的重建从持久化的消息流写 B 索引。替换索引写入后确认投递。重建从不记录日志、也不发出 subject-ready；
+				// 激活之后的实时写入直接发布。
 				runtime.mu.Unlock()
 				continue
 			}
 			if !activeReady && runtime.status != "active" {
-				// The row is present in the replacement, but it is not yet a
-				// durable READY/active index. Keep the source delivery pending so
-				// a crash before build metadata reaches READY cannot lose the row.
+				// 这一行已经在替换索引里，但它还不是持久化的就绪或活动索引。源投递保持未确认，这样构建元数据到达就绪之前
+				// 崩溃也不会丢掉这一行。
 				runtime.mu.Unlock()
-				return fmt.Errorf("replacement view index %q awaits activation", nextID)
+				return fmt.Errorf("View 的替换索引 %q 等待激活", nextID)
 			}
 		}
 		runtime.mu.Unlock()
@@ -329,18 +327,14 @@ func isTransientBuildWriteError(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return true
 	}
-	// tRPC transport errors may wrap the context error in a framework error
-	// whose Unwrap chain is not preserved. Keep a conservative textual check so
-	// a short delivery deadline cannot mark a healthy, merely busy B index as
-	// permanently failed.
+	// tRPC 的传输错误可能把 context 错误包在框架错误里，Unwrap 链没有保留。保守地做一次文本检查，免得很短的
+	// 投递截止时间把健康、只是繁忙的 B 索引标成永久失败。
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "context deadline exceeded") || strings.Contains(message, "context canceled")
 }
 
-// liveIndexReady verifies that an index pointer still names a physical
-// index. Maintenance can briefly retain a stale active pointer while preparing
-// its replacement; callers use this to route rows to the replacement rather
-// than silently dropping them.
+// liveIndexReady 确认一个索引指针仍然指向物理索引。维护在准备替换索引期间，活动指针可能短暂保留着已失效的值；
+// 调用方据此把行路由到替换索引，而不是悄悄丢掉。
 func (s *Service) liveIndexReady(ctx context.Context, indexID string) (bool, error) {
 	if indexID == "" {
 		return false, nil
@@ -378,6 +372,7 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	if id == "" {
 		return nil, nil
 	}
+	applyStart := time.Now()
 	writeCtx, cancel, err := liveIndexWriteContext(ctx)
 	if err != nil {
 		return nil, err
@@ -404,8 +399,9 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 		return nil, nil
 	}
 	complete, incomplete := partitionCompleteWrites(schema, writes)
+	recoverStart := time.Now()
 	if len(incomplete) > 0 {
-		recovered, err := s.recoverMissingRows(ctx, engine, id, schema, datasetID, rows, incomplete)
+		recovered, err := s.recoverMissingRows(ctx, schema, rows, incomplete)
 		if err != nil {
 			return nil, err
 		}
@@ -414,8 +410,15 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	if len(complete) == 0 {
 		return nil, nil
 	}
+	writeStart := time.Now()
 	if err := s.writeIndex(ctx, id, engine, viewindex.ViewIndexWriteBatch{RowWrites: complete, ViewRevision: schema.ViewVersion, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite}); err != nil {
 		return nil, err
+	}
+	if total := time.Since(applyStart); total >= slowIndexApplyLog {
+		// 分段耗时：准备 = 校验与构造写入；补读 = 从 Primary 补全缺列的行；写入 = 索引写入闸门与 DuckDB 事务。
+		log.Printf("storage view 行写入索引较慢 index=%s dataset=%s 开始于=%s 行=%d 写入行=%d 补读行=%d 准备=%s 补读=%s 写入=%s 合计=%s",
+			id, datasetID, applyStart.Format("15:04:05.000"), len(rows), len(complete), len(incomplete), recoverStart.Sub(applyStart).Round(time.Millisecond),
+			writeStart.Sub(recoverStart).Round(time.Millisecond), time.Since(writeStart).Round(time.Millisecond), total.Round(time.Millisecond))
 	}
 	return rowsWrittenByIndexKeys(rows, complete, schema.PrimaryDatasetID), nil
 }
@@ -427,11 +430,8 @@ func validateFactorResultEventColumns(view *pb.View, schema viewindex.ViewIndexS
 	}
 	known := make(map[string]struct{}, len(schema.Columns))
 	for _, column := range schema.Columns {
-		if column == nil || viewColumnDataset(column) != datasetID {
-			continue
-		}
-		if source := viewColumnSource(column, datasetID); source != "" {
-			known[source] = struct{}{}
+		if field := viewColumnField(column); field != "" {
+			known[field] = struct{}{}
 		}
 	}
 	for _, row := range rows {
@@ -443,7 +443,7 @@ func validateFactorResultEventColumns(view *pb.View, schema viewindex.ViewIndexS
 				continue
 			}
 			if _, ok := known[field.GetFieldId()]; !ok {
-				return fmt.Errorf("factor result field %q is not in the active View schema; retry after schema maintenance", field.GetFieldId())
+				return fmt.Errorf("因子结果字段 %q 不在活动 View 的 schema 中，等 schema 维护完成后重试", field.GetFieldId())
 			}
 		}
 	}
@@ -507,7 +507,7 @@ func (s *Service) observeViewWatermark(indexID, datasetID string, rows []*pb.Row
 	if spaceID == "" || viewID == "" {
 		return
 	}
-	frequency := viewFrequencyValue(view)
+	frequency := view.GetFreq()
 	var watermark time.Time
 	type datasetKey struct {
 		subjectID, frequency, seriesTag string
@@ -547,7 +547,7 @@ func (s *Service) observeViewWatermark(indexID, datasetID string, rows []*pb.Row
 			SpaceID: spaceID, ViewID: viewID, DatasetID: datasetID, SubjectID: key.subjectID,
 			Frequency: key.frequency, SeriesTag: key.seriesTag, DataTime: dataTime,
 		}); err != nil {
-			log.Printf("storage view dataset output observation failed space=%s view=%s dataset=%s subject=%s freq=%s series_tag=%s: %v", spaceID, viewID, datasetID, key.subjectID, key.frequency, key.seriesTag, err)
+			log.Printf("storage view 数据集输出观测失败 space=%s view=%s dataset=%s subject=%s freq=%s series_tag=%s: %v", spaceID, viewID, datasetID, key.subjectID, key.frequency, key.seriesTag, err)
 		}
 	}
 }
@@ -582,7 +582,7 @@ func partitionCompleteWrites(schema viewindex.ViewIndexSchema, writes []viewinde
 	return complete, incomplete
 }
 
-func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ string, schema viewindex.ViewIndexSchema, datasetID string, eventRowsInput []*pb.RowFieldUpsert, writes []viewindex.RowWrite) ([]viewindex.RowWrite, error) {
+func (s *Service) recoverMissingRows(ctx context.Context, schema viewindex.ViewIndexSchema, eventRowsInput []*pb.RowFieldUpsert, writes []viewindex.RowWrite) ([]viewindex.RowWrite, error) {
 	s.mu.RLock()
 	reader := s.primary
 	auth := s.primaryAuth
@@ -591,35 +591,12 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ 
 	}
 	s.mu.RUnlock()
 	if reader == nil || auth == nil {
-		return nil, errors.New("primary reader and auth are required to recover a missing view row")
+		return nil, errors.New("恢复缺失的 View 行需要 Primary 读取客户端与鉴权")
 	}
-	type sourceField struct{ dataset, source, target string }
-	var sources []sourceField
-	byDataset := make(map[string][]string)
-	seen := make(map[string]map[string]struct{})
-	for _, column := range schema.Columns {
-		if column == nil {
-			continue
-		}
-		sourceDataset := viewColumnDataset(column)
-		origin := column.GetOriginId()
-		if sourceDataset == "" || origin == "" {
-			continue
-		}
-		if owned := strings.TrimSpace(schema.PrimaryDatasetID); owned != "" && sourceDataset != owned {
-			continue
-		}
-		if index := strings.LastIndexByte(origin, '.'); index >= 0 && index+1 < len(origin) {
-			origin = origin[index+1:]
-		}
-		sources = append(sources, sourceField{dataset: sourceDataset, source: origin, target: column.GetColumnName()})
-		if seen[sourceDataset] == nil {
-			seen[sourceDataset] = make(map[string]struct{})
-		}
-		if _, ok := seen[sourceDataset][origin]; !ok {
-			seen[sourceDataset][origin] = struct{}{}
-			byDataset[sourceDataset] = append(byDataset[sourceDataset], origin)
-		}
+	datasetID := strings.TrimSpace(schema.PrimaryDatasetID)
+	fieldIDs := viewColumnFields(schema.Columns)
+	if datasetID == "" || len(fieldIDs) == 0 {
+		return nil, nil
 	}
 	eventRows := make(map[string]*pb.RowFieldUpsert, len(eventRowsInput))
 	for _, event := range eventRowsInput {
@@ -627,130 +604,67 @@ func (s *Service) recoverMissingRows(ctx context.Context, _ viewindex.Engine, _ 
 			continue
 		}
 		key := proto.Clone(event.GetKey()).(*pb.RowKey)
-		key.DatasetId = schema.PrimaryDatasetID
+		key.DatasetId = datasetID
 		eventRows[viewindex.RowKeyID(key)] = event
 	}
-	type sourceRows struct {
-		values  map[string]*pb.RowFieldValues
-		present map[string]struct{}
+	keys := make([]*pb.RowKey, 0, len(writes))
+	for _, write := range writes {
+		key := proto.Clone(write.Key.Key).(*pb.RowKey)
+		key.DatasetId = datasetID
+		keys = append(keys, key)
 	}
-	rowsByDataset := make(map[string]sourceRows)
-	for sourceDataset, fieldIDs := range byDataset {
-		keys := make([]*pb.RowKey, 0, len(writes))
-		for _, write := range writes {
-			key := proto.Clone(write.Key.Key).(*pb.RowKey)
-			key.DatasetId = sourceDataset
-			keys = append(keys, key)
+	values := make(map[string]*pb.RowFieldValues)
+	present := make(map[string]struct{})
+	chunkSize := primaryPointReadChunkSize(len(fieldIDs), len(keys))
+	for chunkStart := 0; chunkStart < len(keys); chunkStart += chunkSize {
+		chunkEnd := chunkStart + chunkSize
+		if chunkEnd > len(keys) {
+			chunkEnd = len(keys)
 		}
-		attributeKeys := factorAttributeKeys(schema.Columns, sourceDataset)
-		loaded := sourceRows{values: make(map[string]*pb.RowFieldValues), present: make(map[string]struct{})}
-		chunkSize := primaryPointReadChunkSize(len(fieldIDs)+len(attributeKeys), len(keys))
-		for chunkStart := 0; chunkStart < len(keys); chunkStart += chunkSize {
-			chunkEnd := chunkStart + chunkSize
-			if chunkEnd > len(keys) {
-				chunkEnd = len(keys)
-			}
-			rsp, err := reader.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys[chunkStart:chunkEnd], FieldIds: fieldIDs, AttributeKeys: attributeKeys})
-			if err != nil {
-				return nil, err
-			}
-			if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-				return nil, err
-			}
-			for _, row := range rsp.GetRows() {
-				if row != nil && row.GetKey() != nil && (len(row.GetFields()) != 0 || len(row.GetAttributes()) != 0) {
-					loaded.values[viewindex.RowKeyID(row.GetKey())] = row
-					loaded.present[viewindex.RowKeyID(row.GetKey())] = struct{}{}
-				}
-			}
-			for _, key := range rsp.GetExistingKeys() {
-				if key != nil {
-					loaded.present[viewindex.RowKeyID(key)] = struct{}{}
-				}
+		rsp, err := reader.ReadRows(ctx, &pb.PrimaryReadRowsReq{AuthInfo: auth, Keys: keys[chunkStart:chunkEnd], ColumnNames: fieldIDs})
+		if err != nil {
+			return nil, err
+		}
+		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		for _, row := range rsp.GetRows() {
+			// ReadRows 只返回存在的行：返回即存在，存在但没有请求的列时只有键。
+			if row != nil && row.GetKey() != nil {
+				values[viewindex.RowKeyID(row.GetKey())] = row
+				present[viewindex.RowKeyID(row.GetKey())] = struct{}{}
 			}
 		}
-		rowsByDataset[sourceDataset] = loaded
 	}
 	result := make([]viewindex.RowWrite, 0, len(writes))
-	for _, write := range writes {
-		primaryKey := proto.Clone(write.Key.Key).(*pb.RowKey)
-		primaryKey.DatasetId = schema.PrimaryDatasetID
-		primaryID := viewindex.RowKeyID(primaryKey)
-		if _, ok := rowsByDataset[schema.PrimaryDatasetID].present[primaryID]; !ok {
+	for index, write := range writes {
+		primaryID := viewindex.RowKeyID(keys[index])
+		if _, ok := present[primaryID]; !ok {
 			continue
 		}
 		complete := viewindex.RowWrite{Key: write.Key}
-		for _, source := range sources {
-			var fields []*pb.FieldValue
-			if row := rowsByDataset[source.dataset].values[viewindex.RowKeyID(withDataset(write.Key.Key, source.dataset))]; row != nil {
-				fields = append(fields, row.GetFields()...)
-				if complete.Attributes == nil && len(row.GetAttributes()) > 0 {
-					complete.Attributes = make(map[string]*pb.TypedValue, len(row.GetAttributes()))
-				}
-				mergeRowAttributes(complete.Attributes, row.GetAttributes())
-			}
-			if source.dataset == datasetID {
-				if event := eventRows[primaryID]; event != nil {
-					fields = append(fields, event.GetFields()...)
-					if complete.Attributes == nil && len(event.GetAttributes()) > 0 {
-						complete.Attributes = make(map[string]*pb.TypedValue, len(event.GetAttributes()))
-					}
-					mergeRowAttributes(complete.Attributes, event.GetAttributes())
-				}
-			}
-			complete.Fields = appendMatchingField(complete.Fields, fields, source.source, source.target)
+		var fields []*pb.FieldValue
+		if row := values[primaryID]; row != nil {
+			fields = append(fields, row.GetFields()...)
+		}
+		// 事件带的是最新的值，所以在 Primary 行之后应用，两者都有的字段以事件为准。
+		if event := eventRows[primaryID]; event != nil {
+			fields = append(fields, event.GetFields()...)
+		}
+		for _, fieldID := range fieldIDs {
+			complete.Fields = appendMatchingField(complete.Fields, fields, fieldID)
 		}
 		result = append(result, complete)
 	}
 	return result, nil
 }
 
-// factorAttributeKeys returns the fixed provenance attributes plus the
-// per-factor source-hash keys projected by a managed result View. Primary
-// attribute reads are exact-key reads, so these keys must be enumerated from
-// View column metadata rather than requested with a prefix wildcard.
-func factorAttributeKeys(columns []*pb.ViewColumn, datasetID string) []string {
-	seen := map[string]struct{}{
-		"factor.source_hash":    {},
-		"factor.id":             {},
-		"factor.parent_task_id": {},
-		"factor.computed_at":    {},
-	}
-	for _, column := range columns {
-		if column == nil || viewColumnDataset(column) != datasetID {
-			continue
-		}
-		factorID := strings.TrimSpace(column.GetAttributes()["origin_factor_id"])
-		if factorID == "" {
-			source := viewColumnSource(column, datasetID)
-			if index := strings.Index(source, "__"); index > 0 {
-				factorID = strings.TrimSpace(source[:index])
-			}
-		}
-		if factorID != "" {
-			seen["factor.source_hash."+factorID] = struct{}{}
-		}
-	}
-	result := make([]string, 0, len(seen))
-	for key := range seen {
-		result = append(result, key)
-	}
-	sort.Strings(result)
-	return result
-}
-
-func withDataset(key *pb.RowKey, datasetID string) *pb.RowKey {
-	clone := proto.Clone(key).(*pb.RowKey)
-	clone.DatasetId = datasetID
-	return clone
-}
-
-func appendMatchingField(dst, fields []*pb.FieldValue, source, target string) []*pb.FieldValue {
+func appendMatchingField(dst, fields []*pb.FieldValue, fieldID string) []*pb.FieldValue {
 	for _, field := range fields {
-		if field != nil && field.GetFieldId() == source {
-			value := &pb.FieldValue{FieldId: target, Value: field.GetValue()}
+		if field != nil && field.GetFieldId() == fieldID {
+			value := &pb.FieldValue{FieldId: fieldID, Value: field.GetValue()}
 			for index, existing := range dst {
-				if existing != nil && existing.GetFieldId() == target {
+				if existing != nil && existing.GetFieldId() == fieldID {
 					dst[index] = value
 					value = nil
 					break
@@ -779,18 +693,13 @@ func mergeRowAttributes(dst, src map[string]*pb.TypedValue) {
 }
 
 func eventWrites(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.RowFieldUpsert) []viewindex.RowWrite {
-	if owned := strings.TrimSpace(schema.PrimaryDatasetID); owned != "" && datasetID != owned {
+	owned := strings.TrimSpace(schema.PrimaryDatasetID)
+	if owned == "" || datasetID != owned {
 		return nil
 	}
-	columns := make(map[string]string)
-	for _, column := range schema.Columns {
-		if column == nil || viewColumnDataset(column) != datasetID {
-			continue
-		}
-		source := viewColumnSource(column, datasetID)
-		if source != "" {
-			columns[source] = column.GetColumnName()
-		}
+	columns := make(map[string]struct{}, len(schema.Columns))
+	for _, field := range viewColumnFields(schema.Columns) {
+		columns[field] = struct{}{}
 	}
 	if len(columns) == 0 {
 		return nil
@@ -802,43 +711,46 @@ func eventWrites(schema viewindex.ViewIndexSchema, datasetID string, rows []*pb.
 		}
 		fields := make([]*pb.FieldValue, 0, len(row.GetFields()))
 		for _, field := range row.GetFields() {
-			if name := columns[field.GetFieldId()]; name != "" {
-				fields = append(fields, &pb.FieldValue{FieldId: name, Value: field.GetValue()})
+			if _, ok := columns[field.GetFieldId()]; ok {
+				fields = append(fields, &pb.FieldValue{FieldId: field.GetFieldId(), Value: field.GetValue()})
 			}
 		}
-		if len(fields) != 0 || len(row.GetAttributes()) != 0 {
+		if len(fields) != 0 {
 			key := proto.Clone(row.GetKey()).(*pb.RowKey)
-			if schema.PrimaryDatasetID != "" {
-				key.DatasetId = schema.PrimaryDatasetID
-			}
-			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: key}, Fields: fields, Attributes: row.GetAttributes()})
+			key.DatasetId = owned
+			writes = append(writes, viewindex.RowWrite{Key: viewindex.RowKey{Key: key}, Fields: fields})
 		}
 	}
 	return writes
 }
 
-func viewColumnSource(column *pb.ViewColumn, datasetID string) string {
+// viewColumnField 返回 View 的一列物化的数据集字段。一个 View 只索引一个数据集，所以数据集列以它读取的字段命名：
+// column_name 与 origin_id 都是字段名本身。元数据把未指定的来源类型当作数据集列。
+func viewColumnField(column *pb.ViewColumn) string {
 	if column == nil {
 		return ""
 	}
-	origin := column.GetOriginId()
-	prefix := datasetID + "."
-	if strings.HasPrefix(origin, prefix) {
-		return strings.TrimPrefix(origin, prefix)
+	switch column.GetOriginType() {
+	case pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM, pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_EXPRESSION:
+		return ""
 	}
-	if idx := strings.LastIndexByte(origin, '.'); idx >= 0 && idx+1 < len(origin) {
-		return origin[idx+1:]
-	}
-	return ""
+	return strings.TrimSpace(column.GetOriginId())
 }
 
-func viewColumnDataset(column *pb.ViewColumn) string {
-	if column == nil {
-		return ""
+// viewColumnFields 按顺序列出各列对应的、去重后的数据集字段。
+func viewColumnFields(columns []*pb.ViewColumn) []string {
+	seen := make(map[string]struct{}, len(columns))
+	fields := make([]string, 0, len(columns))
+	for _, column := range columns {
+		field := viewColumnField(column)
+		if field == "" {
+			continue
+		}
+		if _, ok := seen[field]; ok {
+			continue
+		}
+		seen[field] = struct{}{}
+		fields = append(fields, field)
 	}
-	origin := column.GetOriginId()
-	if idx := strings.LastIndexByte(origin, '.'); idx > 0 {
-		return origin[:idx]
-	}
-	return ""
+	return fields
 }

@@ -146,6 +146,7 @@
 </template>
 
 <script setup lang="ts">
+import { createSubmitScope } from "@/utils/submit-scope";
 import { ref, watch, reactive } from "vue";
 import { Message } from "@arco-design/web-vue";
 import {
@@ -349,6 +350,7 @@ const handleFormOk = async () => {
     }
   }
 
+  const submission = accountScope.begin();
   try {
     if (isEdit.value) {
       const updateData: any = {
@@ -378,6 +380,7 @@ const handleFormOk = async () => {
     }
 
     Message.success(isEdit.value ? "编辑成功" : "新增成功");
+    if (!submission.isCurrent()) return;
     formVisible.value = false;
     await loadAccountList();
     emit("refresh");
@@ -422,6 +425,12 @@ const formatTime = (time: string | undefined) => {
     second: "2-digit"
   });
 };
+
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：formVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const accountScope = createSubmitScope({ global: true });
+watch(formVisible, open => {
+  if (open) accountScope.invalidate();
+});
 </script>
 
 <style scoped>

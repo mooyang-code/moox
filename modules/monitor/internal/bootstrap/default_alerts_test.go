@@ -25,7 +25,7 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 	repositories := manager.Repositories()
 	ctx := context.Background()
 	for _, check := range []domain.Check{
-		{CheckID: "sysdeploy:node-a:moox_collector", Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, Enabled: true},
+		{CheckID: "placement:node-a:collector", Kind: domain.CheckKindHTTP, Source: domain.CheckSourcePlacement, Enabled: true},
 		{SpaceID: "crypto", CheckID: "market_canary:kline:BTC-USDT:1m", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
 		{SpaceID: "crypto", CheckID: "kline_freshness:crypto:view:1m", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
 	} {
@@ -42,7 +42,7 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	serviceRule, err := repositories.Alerts.GetRule(ctx, "", "default:sysdeploy:node-a:moox_collector")
+	serviceRule, err := repositories.Alerts.GetRule(ctx, "", "default:placement:node-a:collector")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,14 +53,14 @@ func TestEnsureDefaultCheckAlertRulesIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if canaryRule.FailureThreshold != 1 || canaryRule.SuccessThreshold != 1 {
+	if canaryRule.FailureThreshold != 3 || canaryRule.SuccessThreshold != 1 {
 		t.Fatalf("canary rule = %+v", canaryRule)
 	}
 	klineRule, err := repositories.Alerts.GetRule(ctx, "crypto", "default:kline_freshness:crypto:view:1m")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if klineRule.FailureThreshold != 2 || klineRule.SuccessThreshold != 2 || klineRule.MinimumReminderIntervalSeconds != 300 || !klineRule.SendOnResolved {
+	if klineRule.FailureThreshold != 3 || klineRule.SuccessThreshold != 2 || klineRule.MinimumReminderIntervalSeconds != 300 || !klineRule.SendOnResolved {
 		t.Fatalf("kline rule = %+v", klineRule)
 	}
 }
@@ -97,25 +97,30 @@ func TestEnsureDefaultHostAlertRulesCoversRegisteredAgent(t *testing.T) {
 		if _, _, ok := hostmetrics.ParseHostRuleKey(rule.CheckID); ok {
 			hostRules++
 			_, metric, _ := hostmetrics.ParseHostRuleKey(rule.CheckID)
-			wantFailureThreshold := 20
-			if metric == hostmetrics.HostMetricFilesystemUsage {
-				wantFailureThreshold = 3
-			}
+			// HostAgent 每分钟采样：CPU、磁盘约 3 分钟，内存约 5 分钟。
+			wantFailureThreshold := map[string]int{hostmetrics.HostMetricCPU: 3, hostmetrics.HostMetricMemory: 5, hostmetrics.HostMetricFilesystemUsage: 3}[metric]
 			if rule.FailureThreshold != wantFailureThreshold {
 				t.Fatalf("host %s failure threshold = %d, want %d", metric, rule.FailureThreshold, wantFailureThreshold)
 			}
 			if metric == hostmetrics.HostMetricFilesystemUsage && rule.Description != `{"threshold":85,"recovery_threshold":80}` {
 				t.Fatalf("filesystem alert definition = %s", rule.Description)
 			}
+			// CPU 的阈值要能抓住“某个进程把几核主机吃到八九成”这种持续高负载：80%、约 3 分钟。
+			if metric == hostmetrics.HostMetricCPU && rule.Description != `{"threshold":80,"recovery_threshold":70}` {
+				t.Fatalf("cpu alert definition = %s", rule.Description)
+			}
+			if metric == hostmetrics.HostMetricMemory && rule.Description != `{"threshold":90,"recovery_threshold":80}` {
+				t.Fatalf("memory alert definition = %s", rule.Description)
+			}
 		}
 	}
-	if hostRules != 5 {
-		t.Fatalf("host rules = %d, want 5", hostRules)
+	if hostRules != 3 {
+		t.Fatalf("host rules = %d, want 3 (cpu, memory, filesystem_usage)", hostRules)
 	}
 }
 
-func TestEnsureDefaultCheckAlertRulesDisablesPersistedDefaultsWhenWebhookCleared(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old")
+// 部署配置里的推送地址只写入一次（启动时只在首次建库调用）；没有配置地址时不写入渠道。
+func TestSeedNotificationChannelAddsDeploymentChannel(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -125,66 +130,33 @@ func TestEnsureDefaultCheckAlertRulesDisablesPersistedDefaultsWhenWebhookCleared
 		t.Fatal(err)
 	}
 	repositories := manager.Repositories()
-	check := domain.Check{
-		SpaceID: "crypto", CheckID: "market_canary:kline:BTC-USDT:1m",
-		Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true,
-	}
-	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureDefaultCheckAlertRules(t.Context(), repositories); err != nil {
-		t.Fatal(err)
-	}
-
 	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
-	if err := ensureDefaultCheckAlertRules(t.Context(), repositories); err != nil {
+	if err := seedNotificationChannel(t.Context(), repositories); err != nil {
 		t.Fatal(err)
 	}
-	rule, err := repositories.Alerts.GetRule(t.Context(), "crypto", "default:"+check.CheckID)
-	if err != nil {
+	if channels, err := repositories.Notifications.List(t.Context()); err != nil || len(channels) != 0 {
+		t.Fatalf("empty deployment URL must not add a channel: %+v err=%v", channels, err)
+	}
+	const url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=seed"
+	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", url)
+	if err := seedNotificationChannel(t.Context(), repositories); err != nil {
 		t.Fatal(err)
 	}
-	if !rule.Enabled {
-		t.Fatal("default rule was disabled after webhook was cleared")
+	channels, err := repositories.Notifications.List(t.Context())
+	if err != nil || len(channels) != 1 || channels[0].ChannelType != "wecom" || channels[0].WebhookURL != url {
+		t.Fatalf("channels = %+v err=%v", channels, err)
 	}
-	channel, err := repositories.Notifications.GetGlobal(t.Context())
-	if err != nil || channel.WebhookURL != "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old" {
-		t.Fatalf("global channel = %+v err=%v", channel, err)
+	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "https://not-approved.example/hook")
+	if err := seedNotificationChannel(t.Context(), repositories); err == nil {
+		t.Fatal("an invalid deployment URL must fail the first start")
 	}
 }
 
-func TestEnsureDefaultCheckAlertRulesRotatesPersistedWebhook(t *testing.T) {
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old")
-	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = manager.Close() })
-	if err := manager.ApplySchema(schema.SQL()); err != nil {
-		t.Fatal(err)
-	}
-	repositories := manager.Repositories()
-	check := domain.Check{
-		SpaceID: "crypto", CheckID: "market_canary:kline:BTC-USDT:1m",
-		Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true,
-	}
-	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureDefaultCheckAlertRules(t.Context(), repositories); err != nil {
-		t.Fatal(err)
-	}
-
-	const rotated = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=new"
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", rotated)
-	if err := ensureDefaultCheckAlertRules(t.Context(), repositories); err != nil {
-		t.Fatal(err)
-	}
-	channel, err := repositories.Notifications.GetGlobal(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if channel.WebhookURL != "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=old" {
-		t.Fatalf("seeded global channel was overwritten on restart: %+v", channel)
+// 外部检查持续失败满 60 秒才告警：首次失败之后还要再失败覆盖整个宽限时间。
+func TestExternalFailureThresholdCoversGracePeriod(t *testing.T) {
+	for interval, want := range map[int]int{30: 3, 10: 7, 60: 2, 45: 3, 120: 2, 0: 3} {
+		if got := externalFailureThreshold(interval); got != want {
+			t.Fatalf("externalFailureThreshold(%d) = %d, want %d", interval, got, want)
+		}
 	}
 }

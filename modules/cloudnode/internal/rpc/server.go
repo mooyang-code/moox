@@ -3,11 +3,10 @@ package rpc
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobhistory"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobqueue"
-	"github.com/mooyang-code/moox/modules/cloudnode/internal/jobstate"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/clsprovision"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -18,10 +17,8 @@ import (
 // Service is the independent cloudnode service implementation.
 type Service struct {
 	pb.UnimplementedCloudNodeMgr
-	jobState           jobstate.Store
-	history            *jobhistory.Store
-	executionQueue     jobqueue.ExecutionQueue
 	catalog            *store.CatalogRepository
+	clsEnvironment     clsEnvironment
 	credentialResolver interface {
 		Resolve(context.Context, store.CloudAccount) (cloudcredential.TencentCredential, error)
 	}
@@ -30,6 +27,8 @@ type Service struct {
 	nodeBatchTakenHook    func([]store.NodeBatchItem)
 	moduleMetrics         *report.ModuleMetrics
 	publishLeaseValidator CollectorPublishLeaseValidator
+	packageObjectsFactory func(store.CloudAccount, cloudcredential.TencentCredential) packageObjectStore
+	nodeBatchWorkers      sync.WaitGroup
 }
 
 type scfProvisioner interface {
@@ -47,24 +46,22 @@ type scfProvisioner interface {
 
 type Option func(*Service)
 
-func WithExecutionQueue(queue jobqueue.ExecutionQueue) Option {
-	return func(s *Service) { s.executionQueue = queue }
-}
-
-func WithJobStateStore(store jobstate.Store) Option {
-	return func(s *Service) { s.jobState = store }
-}
-
-func WithJobHistoryStore(store *jobhistory.Store) Option {
-	return func(s *Service) { s.history = store }
-}
-
 func WithModuleMetrics(metrics *report.ModuleMetrics) Option {
 	return func(s *Service) { s.moduleMetrics = metrics }
 }
 
 func WithCollectorPublishLeaseValidator(validator CollectorPublishLeaseValidator) Option {
 	return func(s *Service) { s.publishLeaseValidator = validator }
+}
+
+// WithCLSEnvironment 让 CloudNode 在创建与更新 SCF 采集函数时自动补齐日志服务（CLS）上报环境。
+func WithCLSEnvironment(provisioner clsEnvironment) Option {
+	return func(s *Service) { s.clsEnvironment = provisioner }
+}
+
+// clsEnvironment 把 CLS 上报环境补进函数环境，返回是否有改动；实现保证失败时不阻断调用方。
+type clsEnvironment interface {
+	Apply(ctx context.Context, accountID string, credential clsprovision.Credential, environment map[string]string) bool
 }
 
 func WithCredentialResolver(resolver interface {
@@ -76,8 +73,9 @@ func WithCredentialResolver(resolver interface {
 // New creates a cloudnode RPC service.
 func New(dbm *store.Store, opts ...Option) *Service {
 	svc := &Service{
-		catalog:          dbm.Catalog(),
-		scfClientFactory: defaultSCFClientFactory,
+		catalog:               dbm.Catalog(),
+		scfClientFactory:      defaultSCFClientFactory,
+		packageObjectsFactory: defaultPackageObjectsFactory,
 	}
 	for _, opt := range opts {
 		opt(svc)
@@ -101,12 +99,6 @@ func retFromError(err error) *pb.RetInfo {
 	switch {
 	case errors.Is(err, store.ErrPollingNodeNotFound):
 		return retErr(pb.ErrorCode_NOT_FOUND, "cloud node not found")
-	case errors.Is(err, jobstate.ErrConflict):
-		return retErr(pb.ErrorCode_INVALID_PARAM, "conflict: job item state does not allow this operation")
-	case errors.Is(err, jobstate.ErrNotFound):
-		return retErr(pb.ErrorCode_NOT_FOUND, "job item not found")
-	case errors.Is(err, jobstate.ErrInvalid):
-		return retErr(pb.ErrorCode_INVALID_PARAM, "invalid job item")
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		return retErr(pb.ErrorCode_NOT_FOUND, "resource not found")
 	default:

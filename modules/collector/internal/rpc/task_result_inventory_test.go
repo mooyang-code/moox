@@ -31,9 +31,9 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	ctx := context.Background()
 	db := openCollectorTestStore(t)
 	now := time.Date(2026, 10, 3, 10, 5, 0, 0, time.UTC)
-	activeIDs := taskresult.ResultIDsForTask("crypto", "task-active", "", "kline", "1m")
-	resampleIDs := taskresult.ResultIDsForTask("crypto", "task-resample", "", "kline_resample", "5m")
-	disabledIDs := taskresult.ResultIDsForTask("crypto", "task-disabled", "", "kline", "1m")
+	activeIDs := taskresult.ResultIDsForTask("crypto", "task-active", "kline", "1m")
+	resampleIDs := taskresult.ResultIDsForTask("crypto", "task-resample", "kline_resample", "5m")
+	disabledIDs := taskresult.ResultIDsForTask("crypto", "task-disabled", "kline", "1m")
 	tasks := []domain.CollectionTask{
 		{SpaceID: "crypto", TaskID: "task-active", TaskName: "active", DataType: "kline", Enabled: true, PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","target_dataset_id":"bars","frequency":"1m","output_fields":["open","high"]}`, ResultDatasetID: activeIDs.DatasetID, ResultViewID: activeIDs.ViewID},
 		{SpaceID: "crypto", TaskID: "task-resample", TaskName: "resample", DataType: "kline_resample", Enabled: true, PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"derived","target_frequency":"5m","alignment":"epoch_utc"}`, ResultDatasetID: resampleIDs.DatasetID, ResultViewID: resampleIDs.ViewID},
@@ -70,11 +70,6 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 		metadata.views[ids.ViewID] = owned.views[ids.ViewID]
 	}
 	periodTime := now.Add(-time.Minute)
-	require.NoError(t, db.PeriodStorageStates().ObservePeriodStorageState(ctx, domain.PeriodStorageState{
-		Key:        domain.PeriodKey{SpaceID: "crypto", DatasetID: activeIDs.DatasetID, Frequency: "1m", PeriodTime: periodTime},
-		SeriesHash: "storage-series-hash", ExpectedCount: 1, DeadlineAt: now,
-		Status: domain.PeriodStatusComplete, ConfirmedAt: now,
-	}))
 	// A newer local resample-readiness row is not authoritative for a direct
 	// market-fetch task and must not advance its inventory watermark.
 	legacyPeriodTime := periodTime.Add(time.Minute)
@@ -105,8 +100,10 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	require.Equal(t, activeIDs.ViewID, entry.GetViewId())
 	require.True(t, entry.GetOwnershipVerified())
 	require.Equal(t, "1m", entry.GetFrequency())
-	require.Equal(t, periodTime.Format(time.RFC3339), entry.GetLatestCompletedPeriod())
-	require.Equal(t, domain.PeriodStatusComplete, entry.GetLatestCompletedStatus())
+	// 直接行情任务的周期由 Storage 裁决：清单不再带最近终结周期，只带允许迟到时间。
+	require.Empty(t, entry.GetLatestCompletedPeriod())
+	require.Empty(t, entry.GetLatestCompletedStatus())
+	require.EqualValues(t, 15, entry.GetAllowedLatenessSeconds())
 	require.Equal(t, now.Add(-time.Minute).Format(time.RFC3339), entry.GetViewLastDataTime())
 	require.NotEmpty(t, entry.GetObservedAt())
 	require.True(t, entry.GetCanaryCandidateAvailable())
@@ -153,56 +150,10 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 	require.Equal(t, uint32(2), updated.GetPage().GetTotal())
 }
 
-func TestGetTaskResultInventoryIncludesAllowlistedSharedBinanceTasks(t *testing.T) {
-	ctx := context.Background()
-	db := openCollectorTestStore(t)
-	sharedIDs := taskresult.IDs{DatasetID: taskresult.BinanceKline1mDatasetID, ViewID: taskresult.BinanceKline1mViewID}
-	for _, spec := range []struct {
-		taskID     string
-		tagID      string
-		marketType string
-	}{
-		{taskID: taskresult.BinanceSpotKline1mTaskID, tagID: "binance_spot", marketType: "spot"},
-		{taskID: taskresult.BinanceSwapKline1mTaskID, tagID: "binance_swap", marketType: "swap"},
-	} {
-		task := domain.CollectionTask{
-			SpaceID: "crypto", TaskID: spec.taskID, TaskName: spec.taskID, DataType: "kline", TagIDs: []string{spec.tagID},
-			PrepareState: domain.PrepareStateReady, Enabled: true,
-			CollectParams:   fmt.Sprintf(`{"provider":"binance","market_type":%q,"target_dataset_id":"dataset_binance_kline_1m","frequency":"1m","market_id":"crypto","output_fields":["open"]}`, spec.marketType),
-			ResultDatasetID: sharedIDs.DatasetID, ResultViewID: sharedIDs.ViewID,
-		}
-		require.NoError(t, db.Tasks().Create(ctx, task))
-	}
-	baseMetadata := &taskResultMetadataFake{
-		datasets: map[string]*storagepb.Dataset{
-			sharedIDs.DatasetID: {SpaceId: "crypto", DatasetId: sharedIDs.DatasetID, Status: "active", Attributes: map[string]string{"dataset_role": "raw_collection"}},
-		},
-		views: map[string]*storagepb.View{
-			sharedIDs.ViewID: {SpaceId: "crypto", ViewId: sharedIDs.ViewID, DatasetId: sharedIDs.DatasetID, Status: "active"},
-		},
-	}
-	metadata := &taskResultInventoryConcurrentMetadataFake{taskResultMetadataFake: baseMetadata}
-	service := &Service{
-		persistence: db, taskRepo: db.Tasks(),
-		resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"}),
-	}
-
-	response, err := service.GetTaskResultInventory(ctx, &pb.GetTaskResultInventoryReq{SpaceId: "crypto", Page: &commonpb.Page{Page: 1, Size: 10}})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
-	require.Len(t, response.GetEntries(), 2)
-	for _, entry := range response.GetEntries() {
-		require.Equal(t, sharedIDs.DatasetID, entry.GetDatasetId())
-		require.Equal(t, sharedIDs.ViewID, entry.GetViewId())
-		require.Equal(t, "ready", entry.GetResultStatus())
-		require.True(t, entry.GetOwnershipVerified(), "allowlisted shared metadata is verified by canonical identity and raw_collection role")
-	}
-}
-
 func TestGetTaskResultInventoryCapacityIsPerSpaceAndRejectsBeforeMetadataFanout(t *testing.T) {
 	ctx := context.Background()
 	db := openCollectorTestStore(t)
-	ids := taskresult.ResultIDsForTask("crypto", "task-owned", "", "kline", "1m")
+	ids := taskresult.ResultIDsForTask("crypto", "task-owned", "kline", "1m")
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-owned", TaskName: "owned", DataType: "kline", Enabled: true,
 		PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","frequency":"1m"}`,
@@ -230,7 +181,7 @@ func TestGetTaskResultInventoryCapacityIsPerSpaceAndRejectsBeforeMetadataFanout(
 	require.Zero(t, metadata.getViews, "full snapshot capacity must be rejected before Storage metadata inspection")
 
 	// Exhausting one Space's allowance cannot block another Space.
-	stockIDs := taskresult.ResultIDsForTask("stockcn", "task-stock", "", "kline", "1d")
+	stockIDs := taskresult.ResultIDsForTask("stockcn", "task-stock", "kline", "1d")
 	stockTask := domain.CollectionTask{
 		SpaceID: "stockcn", TaskID: "task-stock", TaskName: "stock", DataType: "kline", Enabled: true,
 		PrepareState: domain.PrepareStatePending, CollectParams: `{"provider":"tdx","market_type":"stock","market_id":"stockcn","frequency":"1d"}`,
@@ -247,7 +198,7 @@ func TestGetTaskResultInventoryCapacityIsPerSpaceAndRejectsBeforeMetadataFanout(
 func TestGetTaskResultInventoryRejectsUnownedResultsAndMismatchedSnapshot(t *testing.T) {
 	ctx := context.Background()
 	db := openCollectorTestStore(t)
-	ids := taskresult.ResultIDsForTask("crypto", "task-owned", "", "kline", "1m")
+	ids := taskresult.ResultIDsForTask("crypto", "task-owned", "kline", "1m")
 	task := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "task-owned", TaskName: "owned", DataType: "kline", Enabled: true,
 		PrepareState: domain.PrepareStateReady, CollectParams: `{"provider":"binance","market_type":"spot","market_id":"crypto","frequency":"1m"}`,
@@ -371,7 +322,7 @@ func newTaskResultInventoryConcurrentService(t *testing.T, taskCount int, delay 
 	expected := make([]string, 0, taskCount)
 	for index := 0; index < taskCount; index++ {
 		taskID := fmt.Sprintf("task-%03d", index)
-		ids := taskresult.ResultIDsForTask("crypto", taskID, "", "kline", "1m")
+		ids := taskresult.ResultIDsForTask("crypto", taskID, "kline", "1m")
 		task := domain.CollectionTask{
 			SpaceID: "crypto", TaskID: taskID, TaskName: taskID, DataType: "kline", Enabled: true,
 			PrepareState:    domain.PrepareStateReady,

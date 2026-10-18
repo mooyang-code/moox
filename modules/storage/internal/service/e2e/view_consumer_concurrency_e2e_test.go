@@ -22,14 +22,14 @@ import (
 
 type concurrencyPrimaryReader struct{}
 
-func (concurrencyPrimaryReader) ReadFields(_ context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
+func (concurrencyPrimaryReader) ReadRows(_ context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
 	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
 	for _, key := range req.GetKeys() {
 		rows = append(rows, &pb.RowFieldValues{Key: key, Fields: []*pb.FieldValue{{
 			FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}},
 		}}})
 	}
-	return &pb.PrimaryReadFieldsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}, Rows: rows}, nil
+	return &pb.PrimaryReadRowsRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"}, Rows: rows}, nil
 }
 
 func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
@@ -86,7 +86,7 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	releaseBlocked := make(chan struct{})
 	var blockOnce sync.Once
 	stop, err := service.StartEventConsumer(ctx, client, viewservice.EventConsumerOptions{
-		PartitionID: "kline", Consumer: events.StorageViewKlineConsumer, FilterSubjects: append(exactDatasetEventSubjects(t, registry, "quant", "prices_a"), exactDatasetEventSubjects(t, registry, "quant", "prices_b")...), FetchBatch: 2, MaxWorkers: 2, MaxAckPending: 8,
+		PartitionID: "misc", Consumer: events.StorageViewMiscConsumer, FilterSubjects: append(exactDatasetEventSubjects(t, registry, "quant", "prices_a"), exactDatasetEventSubjects(t, registry, "quant", "prices_b")...), FetchBatch: 2, MaxWorkers: 2, MaxAckPending: 8,
 		BeforeProcess: func(hookCtx context.Context, delivery *jetstream.Delivery) error {
 			_, payload, err := events.DecodeDatasetRowsUpsertedWithContentType(
 				registry,
@@ -138,26 +138,6 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	waitForConcurrencyRows(t, ctx, service, auth, "prices_a")
 }
 
-func waitForEitherConcurrencyRows(t *testing.T, ctx context.Context, service *viewservice.Service, auth *pb.AuthInfo) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, dataset := range []string{"prices_a", "prices_b"} {
-			if concurrencyRowsReady(ctx, service, auth, dataset) {
-				return
-			}
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatal("the non-blocked dataset lane did not complete while another lane was blocked")
-}
-
-func concurrencyRowsReady(ctx context.Context, service *viewservice.Service, auth *pb.AuthInfo, dataset string) bool {
-	viewID := dataset + "-view"
-	result, err := service.QueryTimeSeriesRows(ctx, &pb.QueryTimeSeriesRowsReq{AuthInfo: auth, SpaceId: "quant", ViewId: viewID, TimeRange: &pb.TimeRange{StartTime: "2026-07-20T00:00:00Z", EndTime: "2026-07-20T00:01:00Z"}, Page: &pb.Page{Page: 1, Size: 10}})
-	return err == nil && result.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS && len(result.GetRows()) == 1
-}
-
 func waitForConcurrencyRows(t *testing.T, ctx context.Context, service *viewservice.Service, auth *pb.AuthInfo, dataset string) {
 	t.Helper()
 	viewID := dataset + "-view"
@@ -175,10 +155,10 @@ func waitForConcurrencyRows(t *testing.T, ctx context.Context, service *viewserv
 func prepareConcurrencyView(t *testing.T, ctx context.Context, service *viewservice.Service, auth *pb.AuthInfo, dataset string) {
 	t.Helper()
 	viewID := dataset + "-view"
-	if rsp, err := service.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: viewID, Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: viewID, DatasetId: dataset, ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: []*pb.ViewColumn{{ColumnName: "close", OriginId: dataset + ".close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+	if rsp, err := service.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: viewID, Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: viewID, DatasetId: dataset, ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: []*pb.ViewColumn{{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare %s: rsp=%v err=%v", dataset, rsp, err)
 	}
-	if err := service.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: viewID, DatasetId: dataset, Engine: "duckdb", ActiveIndexId: viewID, ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", ActiveColumns: []*pb.ViewColumn{{ColumnName: "close", OriginId: dataset + ".close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}, Status: "active"}); err != nil {
+	if err := service.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: viewID, DatasetId: dataset, Engine: "duckdb", ActiveIndexId: viewID, ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", ActiveColumns: []*pb.ViewColumn{{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}, Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 }

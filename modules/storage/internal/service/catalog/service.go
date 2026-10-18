@@ -9,30 +9,37 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/mooyang-code/snapshotcache"
+	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type Service struct {
 	pb.UnimplementedMetadata
-	metadata       metadata.Store
-	metadataCache  *metacache.Store
-	nodeAuthSecret string
-	operatorSecret string
-	viewAuthSecret string
-	nodeState      NodeStateChecker
+	metadata      metadata.Store
+	metadataCache *metacache.Store
+	// refreshOverride 仅供测试替换缓存刷新实现
+	refreshOverride func(context.Context) error
+	nodeAuthSecret  string
+	operatorSecret  string
+	viewAuthSecret  string
+	nodeState       NodeStateChecker
+	retention       storagepolicy.Retention
 }
 
 type Options struct {
 	AuthSecret string
 	// OperatorAuthSecret authenticates expensive admin/CLI metadata actions.
 	// It is separate from the DataNode registration secret used by the
-	// storage-primary role, while tests and legacy callers may use AuthSecret
-	// as a fallback.
+	// storage-primary role.
 	OperatorAuthSecret string
 	// ViewAuthSecret authenticates the View role's append-only active-schema CAS.
 	ViewAuthSecret   string
 	NodeStateChecker NodeStateChecker
+	// Retention resolves the read-only Dataset retention. Tools and tests
+	// without a policy file get the recommended defaults.
+	Retention storagepolicy.Retention
 }
 
 func NewMetadataService(store metadata.Store, cache *metacache.Store, options Options) (*Service, error) {
@@ -47,9 +54,6 @@ func NewMetadataService(store metadata.Store, cache *metacache.Store, options Op
 	if operatorSecret == "" {
 		operatorSecret = os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
 	}
-	if operatorSecret == "" {
-		operatorSecret = secret
-	}
 	viewSecret := options.ViewAuthSecret
 	if viewSecret == "" {
 		viewSecret = os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET")
@@ -57,24 +61,66 @@ func NewMetadataService(store metadata.Store, cache *metacache.Store, options Op
 	if options.NodeStateChecker == nil {
 		options.NodeStateChecker = rpcNodeStateChecker{}
 	}
-	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret, operatorSecret: operatorSecret, viewAuthSecret: viewSecret, nodeState: options.NodeStateChecker}, nil
+	if options.Retention.Defaults == nil {
+		options.Retention = storagepolicy.Default().Retention
+	}
+	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret, operatorSecret: operatorSecret, viewAuthSecret: viewSecret, nodeState: options.NodeStateChecker, retention: options.Retention}, nil
+}
+
+// withRetention returns a copy of dataset carrying its effective retention.
+func (s *Service) withRetention(dataset *pb.Dataset) *pb.Dataset {
+	if dataset == nil {
+		return nil
+	}
+	out := proto.Clone(dataset).(*pb.Dataset)
+	out.Retention, out.RetentionSource = s.datasetRetention(dataset)
+	return out
+}
+
+func (s *Service) withRetentions(items []*pb.Dataset) []*pb.Dataset {
+	out := make([]*pb.Dataset, len(items))
+	for i, item := range items {
+		out[i] = s.withRetention(item)
+	}
+	return out
+}
+
+// datasetRetention resolves a Dataset's retention from the Storage policy. A
+// record Dataset is never trimmed; a time-series Dataset whose frequency the
+// policy cannot resolve reports no retention.
+func (s *Service) datasetRetention(dataset *pb.Dataset) (string, string) {
+	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
+		return storagepolicy.Forever, storagepolicy.SourceRecord
+	}
+	period, source, err := s.retention.Resolve(dataset.GetSpaceId(), dataset.GetFreq())
+	if err != nil {
+		return "", ""
+	}
+	return period.String(), source
 }
 
 func (s *Service) refreshMetadataCache(ctx context.Context) error {
-	if s == nil || s.metadataCache == nil {
-		return nil
-	}
-	if err := s.metadataCache.Refresh(ctx); err != nil {
+	err := s.refreshMetadataCacheStrict(ctx)
+	if errors.Is(err, snapshotcache.ErrRefreshInProgress) {
 		// A committed mutation can race with the cache's periodic full refresh.
 		// The in-flight refresh will publish the latest committed metadata (or
 		// the next tick will retry it), so it must not turn a successful write
 		// into a false failure.
-		if errors.Is(err, snapshotcache.ErrRefreshInProgress) {
-			return nil
-		}
-		return err
+		return nil
 	}
-	return nil
+	return err
+}
+
+// refreshMetadataCacheStrict 不吞掉 ErrRefreshInProgress：进行中的刷新可能读取的是提交前的快照，
+// 需要同步发布点的调用方必须等它结束后重新刷新。
+func (s *Service) refreshMetadataCacheStrict(ctx context.Context) error {
+	if s != nil && s.refreshOverride != nil {
+		return s.refreshOverride(ctx)
+	}
+	if s == nil || s.metadataCache == nil {
+		return nil
+	}
+	return s.metadataCache.Refresh(ctx)
 }
 
 func (s *Service) refreshMetadataCacheAfterCommit(ctx context.Context, operation string) {
@@ -89,12 +135,13 @@ func (s *Service) refreshMetadataCacheAfterCommit(ctx context.Context, operation
 // active+locked terminal state is idempotent.
 func (s *Service) refreshMetadataCacheSynchronously(ctx context.Context, operation string) error {
 	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		if err = s.refreshMetadataCache(ctx); err == nil {
+	const attempts = 5
+	for attempt := 0; attempt < attempts; attempt++ {
+		if err = s.refreshMetadataCacheStrict(ctx); err == nil {
 			return nil
 		}
-		if attempt < 2 {
-			timer := time.NewTimer(25 * time.Millisecond)
+		if attempt < attempts-1 {
+			timer := time.NewTimer(time.Duration(25<<attempt) * time.Millisecond)
 			select {
 			case <-ctx.Done():
 				timer.Stop()

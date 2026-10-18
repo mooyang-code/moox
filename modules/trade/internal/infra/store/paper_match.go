@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
 

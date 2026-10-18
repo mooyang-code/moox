@@ -35,11 +35,15 @@ type FactorMgrService interface {
 
 	UpdateFactor(ctx context.Context, req *UpdateFactorReq) (*UpdateFactorRsp, error)
 
-	SetFactorStatus(ctx context.Context, req *SetFactorStatusReq) (*SetFactorStatusRsp, error)
-
 	DeleteFactor(ctx context.Context, req *DeleteFactorReq) (*DeleteFactorRsp, error)
 
 	GetFactor(ctx context.Context, req *GetFactorReq) (*GetFactorRsp, error)
+
+	AddFactorToSet(ctx context.Context, req *AddFactorToSetReq) (*AddFactorToSetRsp, error)
+
+	RemoveFactorFromSet(ctx context.Context, req *RemoveFactorFromSetReq) (*RemoveFactorFromSetRsp, error)
+
+	SetFactorMemberStatus(ctx context.Context, req *SetFactorMemberStatusReq) (*SetFactorMemberStatusRsp, error)
 
 	ListFactors(ctx context.Context, req *ListFactorsReq) (*ListFactorsRsp, error)
 
@@ -52,6 +56,12 @@ type FactorMgrService interface {
 	CancelRecalcJob(ctx context.Context, req *CancelRecalcJobReq) (*CancelRecalcJobRsp, error)
 
 	GetStatus(ctx context.Context, req *GetStatusReq) (*GetStatusRsp, error)
+
+	ValidateFactorSpec(ctx context.Context, req *ValidateFactorSpecReq) (*ValidateFactorSpecRsp, error)
+
+	PreviewFactor(ctx context.Context, req *PreviewFactorReq) (*PreviewFactorRsp, error)
+
+	ListFactorFunctions(ctx context.Context, req *ListFactorFunctionsReq) (*ListFactorFunctionsRsp, error)
 }
 
 func FactorMgrService_CreateFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -198,24 +208,6 @@ func FactorMgrService_UpdateFactor_Handler(svr interface{}, ctx context.Context,
 	return rsp, nil
 }
 
-func FactorMgrService_SetFactorStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &SetFactorStatusReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).SetFactorStatus(ctx, reqbody.(*SetFactorStatusReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func FactorMgrService_DeleteFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &DeleteFactorReq{}
 	filters, err := f(req)
@@ -242,6 +234,60 @@ func FactorMgrService_GetFactor_Handler(svr interface{}, ctx context.Context, f 
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(FactorMgrService).GetFactor(ctx, reqbody.(*GetFactorReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_AddFactorToSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &AddFactorToSetReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).AddFactorToSet(ctx, reqbody.(*AddFactorToSetReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_RemoveFactorFromSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RemoveFactorFromSetReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).RemoveFactorFromSet(ctx, reqbody.(*RemoveFactorFromSetReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_SetFactorMemberStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetFactorMemberStatusReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).SetFactorMemberStatus(ctx, reqbody.(*SetFactorMemberStatusReq))
 	}
 
 	var rsp interface{}
@@ -360,6 +406,60 @@ func FactorMgrService_GetStatus_Handler(svr interface{}, ctx context.Context, f 
 	return rsp, nil
 }
 
+func FactorMgrService_ValidateFactorSpec_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ValidateFactorSpecReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).ValidateFactorSpec(ctx, reqbody.(*ValidateFactorSpecReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_PreviewFactor_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PreviewFactorReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).PreviewFactor(ctx, reqbody.(*PreviewFactorReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_ListFactorFunctions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListFactorFunctionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).ListFactorFunctions(ctx, reqbody.(*ListFactorFunctionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // FactorMgrServer_ServiceDesc descriptor for server.RegisterService.
 var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.factor.FactorMgr",
@@ -398,16 +498,24 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: FactorMgrService_UpdateFactor_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/SetFactorStatus",
-			Func: FactorMgrService_SetFactorStatus_Handler,
-		},
-		{
 			Name: "/trpc.moox.factor.FactorMgr/DeleteFactor",
 			Func: FactorMgrService_DeleteFactor_Handler,
 		},
 		{
 			Name: "/trpc.moox.factor.FactorMgr/GetFactor",
 			Func: FactorMgrService_GetFactor_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/AddFactorToSet",
+			Func: FactorMgrService_AddFactorToSet_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/RemoveFactorFromSet",
+			Func: FactorMgrService_RemoveFactorFromSet_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/SetFactorMemberStatus",
+			Func: FactorMgrService_SetFactorMemberStatus_Handler,
 		},
 		{
 			Name: "/trpc.moox.factor.FactorMgr/ListFactors",
@@ -433,6 +541,18 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.factor.FactorMgr/GetStatus",
 			Func: FactorMgrService_GetStatus_Handler,
 		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/ValidateFactorSpec",
+			Func: FactorMgrService_ValidateFactorSpec_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/PreviewFactor",
+			Func: FactorMgrService_PreviewFactor_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/ListFactorFunctions",
+			Func: FactorMgrService_ListFactorFunctions_Handler,
+		},
 	},
 }
 
@@ -440,6 +560,120 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 func RegisterFactorMgrService(s server.Service, svr FactorMgrService) {
 	if err := s.Register(&FactorMgrServer_ServiceDesc, svr); err != nil {
 		panic(fmt.Sprintf("FactorMgr register error:%v", err))
+	}
+}
+
+// FactorEngineService defines service.
+type FactorEngineService interface {
+	SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq) (*SyncEngineCatalogRsp, error)
+
+	EngineHeartbeat(ctx context.Context, req *EngineHeartbeatReq) (*EngineHeartbeatRsp, error)
+
+	PullRecalcJob(ctx context.Context, req *PullRecalcJobReq) (*PullRecalcJobRsp, error)
+
+	ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq) (*ReportRecalcProgressRsp, error)
+}
+
+func FactorEngineService_SyncEngineCatalog_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SyncEngineCatalogReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorEngineService).SyncEngineCatalog(ctx, reqbody.(*SyncEngineCatalogReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorEngineService_EngineHeartbeat_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &EngineHeartbeatReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorEngineService).EngineHeartbeat(ctx, reqbody.(*EngineHeartbeatReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorEngineService_PullRecalcJob_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PullRecalcJobReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorEngineService).PullRecalcJob(ctx, reqbody.(*PullRecalcJobReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorEngineService_ReportRecalcProgress_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReportRecalcProgressReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorEngineService).ReportRecalcProgress(ctx, reqbody.(*ReportRecalcProgressReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// FactorEngineServer_ServiceDesc descriptor for server.RegisterService.
+var FactorEngineServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.factor.FactorEngine",
+	HandlerType: ((*FactorEngineService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.factor.FactorEngine/SyncEngineCatalog",
+			Func: FactorEngineService_SyncEngineCatalog_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorEngine/EngineHeartbeat",
+			Func: FactorEngineService_EngineHeartbeat_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorEngine/PullRecalcJob",
+			Func: FactorEngineService_PullRecalcJob_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorEngine/ReportRecalcProgress",
+			Func: FactorEngineService_ReportRecalcProgress_Handler,
+		},
+	},
+}
+
+// RegisterFactorEngineService registers service.
+func RegisterFactorEngineService(s server.Service, svr FactorEngineService) {
+	if err := s.Register(&FactorEngineServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("FactorEngine register error:%v", err))
 	}
 }
 
@@ -471,14 +705,20 @@ func (s *UnimplementedFactorMgr) CreateFactor(ctx context.Context, req *CreateFa
 func (s *UnimplementedFactorMgr) UpdateFactor(ctx context.Context, req *UpdateFactorReq) (*UpdateFactorRsp, error) {
 	return nil, errors.New("rpc UpdateFactor of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) SetFactorStatus(ctx context.Context, req *SetFactorStatusReq) (*SetFactorStatusRsp, error) {
-	return nil, errors.New("rpc SetFactorStatus of service FactorMgr is not implemented")
-}
 func (s *UnimplementedFactorMgr) DeleteFactor(ctx context.Context, req *DeleteFactorReq) (*DeleteFactorRsp, error) {
 	return nil, errors.New("rpc DeleteFactor of service FactorMgr is not implemented")
 }
 func (s *UnimplementedFactorMgr) GetFactor(ctx context.Context, req *GetFactorReq) (*GetFactorRsp, error) {
 	return nil, errors.New("rpc GetFactor of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) AddFactorToSet(ctx context.Context, req *AddFactorToSetReq) (*AddFactorToSetRsp, error) {
+	return nil, errors.New("rpc AddFactorToSet of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) RemoveFactorFromSet(ctx context.Context, req *RemoveFactorFromSetReq) (*RemoveFactorFromSetRsp, error) {
+	return nil, errors.New("rpc RemoveFactorFromSet of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) SetFactorMemberStatus(ctx context.Context, req *SetFactorMemberStatusReq) (*SetFactorMemberStatusRsp, error) {
+	return nil, errors.New("rpc SetFactorMemberStatus of service FactorMgr is not implemented")
 }
 func (s *UnimplementedFactorMgr) ListFactors(ctx context.Context, req *ListFactorsReq) (*ListFactorsRsp, error) {
 	return nil, errors.New("rpc ListFactors of service FactorMgr is not implemented")
@@ -497,6 +737,30 @@ func (s *UnimplementedFactorMgr) CancelRecalcJob(ctx context.Context, req *Cance
 }
 func (s *UnimplementedFactorMgr) GetStatus(ctx context.Context, req *GetStatusReq) (*GetStatusRsp, error) {
 	return nil, errors.New("rpc GetStatus of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) ValidateFactorSpec(ctx context.Context, req *ValidateFactorSpecReq) (*ValidateFactorSpecRsp, error) {
+	return nil, errors.New("rpc ValidateFactorSpec of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) PreviewFactor(ctx context.Context, req *PreviewFactorReq) (*PreviewFactorRsp, error) {
+	return nil, errors.New("rpc PreviewFactor of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) ListFactorFunctions(ctx context.Context, req *ListFactorFunctionsReq) (*ListFactorFunctionsRsp, error) {
+	return nil, errors.New("rpc ListFactorFunctions of service FactorMgr is not implemented")
+}
+
+type UnimplementedFactorEngine struct{}
+
+func (s *UnimplementedFactorEngine) SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq) (*SyncEngineCatalogRsp, error) {
+	return nil, errors.New("rpc SyncEngineCatalog of service FactorEngine is not implemented")
+}
+func (s *UnimplementedFactorEngine) EngineHeartbeat(ctx context.Context, req *EngineHeartbeatReq) (*EngineHeartbeatRsp, error) {
+	return nil, errors.New("rpc EngineHeartbeat of service FactorEngine is not implemented")
+}
+func (s *UnimplementedFactorEngine) PullRecalcJob(ctx context.Context, req *PullRecalcJobReq) (*PullRecalcJobRsp, error) {
+	return nil, errors.New("rpc PullRecalcJob of service FactorEngine is not implemented")
+}
+func (s *UnimplementedFactorEngine) ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq) (*ReportRecalcProgressRsp, error) {
+	return nil, errors.New("rpc ReportRecalcProgress of service FactorEngine is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -523,11 +787,15 @@ type FactorMgrClientProxy interface {
 
 	UpdateFactor(ctx context.Context, req *UpdateFactorReq, opts ...client.Option) (rsp *UpdateFactorRsp, err error)
 
-	SetFactorStatus(ctx context.Context, req *SetFactorStatusReq, opts ...client.Option) (rsp *SetFactorStatusRsp, err error)
-
 	DeleteFactor(ctx context.Context, req *DeleteFactorReq, opts ...client.Option) (rsp *DeleteFactorRsp, err error)
 
 	GetFactor(ctx context.Context, req *GetFactorReq, opts ...client.Option) (rsp *GetFactorRsp, err error)
+
+	AddFactorToSet(ctx context.Context, req *AddFactorToSetReq, opts ...client.Option) (rsp *AddFactorToSetRsp, err error)
+
+	RemoveFactorFromSet(ctx context.Context, req *RemoveFactorFromSetReq, opts ...client.Option) (rsp *RemoveFactorFromSetRsp, err error)
+
+	SetFactorMemberStatus(ctx context.Context, req *SetFactorMemberStatusReq, opts ...client.Option) (rsp *SetFactorMemberStatusRsp, err error)
 
 	ListFactors(ctx context.Context, req *ListFactorsReq, opts ...client.Option) (rsp *ListFactorsRsp, err error)
 
@@ -540,6 +808,12 @@ type FactorMgrClientProxy interface {
 	CancelRecalcJob(ctx context.Context, req *CancelRecalcJobReq, opts ...client.Option) (rsp *CancelRecalcJobRsp, err error)
 
 	GetStatus(ctx context.Context, req *GetStatusReq, opts ...client.Option) (rsp *GetStatusRsp, err error)
+
+	ValidateFactorSpec(ctx context.Context, req *ValidateFactorSpecReq, opts ...client.Option) (rsp *ValidateFactorSpecRsp, err error)
+
+	PreviewFactor(ctx context.Context, req *PreviewFactorReq, opts ...client.Option) (rsp *PreviewFactorRsp, err error)
+
+	ListFactorFunctions(ctx context.Context, req *ListFactorFunctionsReq, opts ...client.Option) (rsp *ListFactorFunctionsRsp, err error)
 }
 
 type FactorMgrClientProxyImpl struct {
@@ -711,26 +985,6 @@ func (c *FactorMgrClientProxyImpl) UpdateFactor(ctx context.Context, req *Update
 	return rsp, nil
 }
 
-func (c *FactorMgrClientProxyImpl) SetFactorStatus(ctx context.Context, req *SetFactorStatusReq, opts ...client.Option) (*SetFactorStatusRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/SetFactorStatus")
-	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("SetFactorStatus")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &SetFactorStatusRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (c *FactorMgrClientProxyImpl) DeleteFactor(ctx context.Context, req *DeleteFactorReq, opts ...client.Option) (*DeleteFactorRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -765,6 +1019,66 @@ func (c *FactorMgrClientProxyImpl) GetFactor(ctx context.Context, req *GetFactor
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetFactorRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) AddFactorToSet(ctx context.Context, req *AddFactorToSetReq, opts ...client.Option) (*AddFactorToSetRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/AddFactorToSet")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("AddFactorToSet")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &AddFactorToSetRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) RemoveFactorFromSet(ctx context.Context, req *RemoveFactorFromSetReq, opts ...client.Option) (*RemoveFactorFromSetRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/RemoveFactorFromSet")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("RemoveFactorFromSet")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RemoveFactorFromSetRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) SetFactorMemberStatus(ctx context.Context, req *SetFactorMemberStatusReq, opts ...client.Option) (*SetFactorMemberStatusRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/SetFactorMemberStatus")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("SetFactorMemberStatus")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SetFactorMemberStatusRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -885,6 +1199,166 @@ func (c *FactorMgrClientProxyImpl) GetStatus(ctx context.Context, req *GetStatus
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetStatusRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) ValidateFactorSpec(ctx context.Context, req *ValidateFactorSpecReq, opts ...client.Option) (*ValidateFactorSpecRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ValidateFactorSpec")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("ValidateFactorSpec")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ValidateFactorSpecRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) PreviewFactor(ctx context.Context, req *PreviewFactorReq, opts ...client.Option) (*PreviewFactorRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/PreviewFactor")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("PreviewFactor")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PreviewFactorRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) ListFactorFunctions(ctx context.Context, req *ListFactorFunctionsReq, opts ...client.Option) (*ListFactorFunctionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ListFactorFunctions")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("ListFactorFunctions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListFactorFunctionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// FactorEngineClientProxy defines service client proxy
+type FactorEngineClientProxy interface {
+	SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq, opts ...client.Option) (rsp *SyncEngineCatalogRsp, err error)
+
+	EngineHeartbeat(ctx context.Context, req *EngineHeartbeatReq, opts ...client.Option) (rsp *EngineHeartbeatRsp, err error)
+
+	PullRecalcJob(ctx context.Context, req *PullRecalcJobReq, opts ...client.Option) (rsp *PullRecalcJobRsp, err error)
+
+	ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq, opts ...client.Option) (rsp *ReportRecalcProgressRsp, err error)
+}
+
+type FactorEngineClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewFactorEngineClientProxy = func(opts ...client.Option) FactorEngineClientProxy {
+	return &FactorEngineClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *FactorEngineClientProxyImpl) SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq, opts ...client.Option) (*SyncEngineCatalogRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/SyncEngineCatalog")
+	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorEngine")
+	msg.WithCalleeMethod("SyncEngineCatalog")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SyncEngineCatalogRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorEngineClientProxyImpl) EngineHeartbeat(ctx context.Context, req *EngineHeartbeatReq, opts ...client.Option) (*EngineHeartbeatRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/EngineHeartbeat")
+	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorEngine")
+	msg.WithCalleeMethod("EngineHeartbeat")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &EngineHeartbeatRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorEngineClientProxyImpl) PullRecalcJob(ctx context.Context, req *PullRecalcJobReq, opts ...client.Option) (*PullRecalcJobRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/PullRecalcJob")
+	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorEngine")
+	msg.WithCalleeMethod("PullRecalcJob")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PullRecalcJobRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorEngineClientProxyImpl) ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq, opts ...client.Option) (*ReportRecalcProgressRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/ReportRecalcProgress")
+	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorEngine")
+	msg.WithCalleeMethod("ReportRecalcProgress")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReportRecalcProgressRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

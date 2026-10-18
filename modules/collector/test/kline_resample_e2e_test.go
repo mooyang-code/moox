@@ -21,8 +21,8 @@ type resampleE2ESource struct{}
 func (resampleE2ESource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
 	return storagesource.DatasetInfo{
 		DataSourceID: "binance", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-		Status: "active", Freqs: []string{"1m"},
-		Attributes: map[string]string{"market_type": "spot"}, KeepDuration: "4320h",
+		Status: "active", Freq: "1m",
+		Attributes: map[string]string{"market_type": "spot"},
 	}, nil
 }
 
@@ -41,7 +41,7 @@ type resampleE2EPrimary struct {
 	writes  int
 }
 
-func (p *resampleE2EPrimary) ReadFields(_ context.Context, keys []*storagepb.RowKey, _ []string, attrs []string) ([]*storagepb.RowFieldValues, error) {
+func (p *resampleE2EPrimary) ReadRows(_ context.Context, keys []*storagepb.RowKey, _ []string, attrs []string) ([]*storagepb.RowFieldValues, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	result := make([]*storagepb.RowFieldValues, 0, len(keys))

@@ -1,5 +1,11 @@
+gateway_client:
+  caller: storage-view
+  key_id: "" # Admin 分配，部署时填入。
+  key_file: ../../secrets/caller-storage-view.key
 storage:
   root: ./var/storage
+  # Dataset retention and View limits rendered by moox-cli from moox.toml.
+  policy_file: config/storage-policy.json
   roles:
     - primary
     - view
@@ -10,7 +16,6 @@ storage:
     view_index_root: ./var/storage/view-indexes
   eventbus:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
-    max_ack_pending: 8
   primary:
     service_name: ""
     node_id: storage-node-0
@@ -24,38 +29,12 @@ storage:
       backoff_base_ms: 200
       backoff_max_ms: 30000
   view:
-    maintenance_policy_file: config/maintenance.json
-    storage_rpc:
-      gateway_target: ip://127.0.0.1:11003
-      gateway_node_id: ""
-      key_id: storage-view
-      hmac_key_file: ""
-    metadata_service_name: trpc.moox.storage.Metadata
-    primary_store_service_name: trpc.moox.storage.PrimaryStore
-    index_service_name: trpc.moox.storage.ViewIndex
     batch_size: 500
     batch_wait_ms: 200
     fetch_batch: 1
     max_workers: 1
     ordering: dataset
     consumer_partitions:
-      - id: kline
-        durable: storage_view_kline
-        routes:
-          - space_id: crypto
-            dataset_ids:
-              - dataset_binance_kline_1m
-              - dataset_spot_kline_1h
-              - dataset_perpetual_kline_1h
-        # Full-market 1m streams need more than one worker per Dataset so
-        # live upserts do not sit behind a 64-message ack window.
-        fetch_batch: 32
-        max_workers: 8
-        max_ack_pending: 256
-        ack_wait_ms: 120000
-        ordering: dataset
-        deliver_policy: new
-        max_retry_attempts: -1
       - id: system_metrics
         durable: storage_view_metrics
         routes:
@@ -74,9 +53,8 @@ storage:
         max_retry_attempts: -1
       - id: factor
         durable: storage_view_factor
-        routes:
-          - space_id: crypto
-            dataset_ids: [dataset_factor_binance_kline_1m]
+        # Factor result Datasets are bound dynamically, one durable per result;
+        # this partition has no static routes and only supplies the template.
         # Keep JetStream delivery serialized across process restarts: while a
         # result-row event is unacked, the following FactorPeriodComputed
         # marker must not be delivered to the View consumer.
@@ -92,27 +70,14 @@ storage:
         routes:
           - space_id: crypto
             dataset_ids: ["*"]
-          # Keep legacy crypto_market Views on isolated dynamic durables while
-          # the canonical crypto datasets remain on the static partitions.
-          - space_id: crypto_market
-            dataset_ids: ["*"]
           - space_id: mooxsys
             dataset_ids: [dataset_mooxsys_host_disk, dataset_mooxsys_host_filesystem, dataset_mooxsys_host_network, dataset_mooxsys_host_resource]
-          # Older installations used moox_system for the same host datasets.
-          - space_id: moox_system
-            dataset_ids: ["*"]
           - space_id: stockcn
             dataset_ids: ["*"]
-          - space_id: stockcn
-            dataset_ids: [dataset_stockcn_financial_statement_metric, dataset_stockcn_financial_summary, dataset_stockcn_bond_kline, dataset_stockcn_index_kline, dataset_stockcn_equity_kline]
           - space_id: stockhk
             dataset_ids: ["*"]
-          - space_id: stockhk
-            dataset_ids: [dataset_stockhk_equity_kline]
           - space_id: stockus
             dataset_ids: ["*"]
-          - space_id: stockus
-            dataset_ids: [dataset_stockus_equity_kline]
         fetch_batch: 4
         max_workers: 2
         max_ack_pending: 16
@@ -120,28 +85,11 @@ storage:
         ordering: dataset
         deliver_policy: new
         max_retry_attempts: -1
-    maintenance_check_interval: 1m
     # Keep history pages and Primary requests serialized during a View rebuild
     # so a large repair does not burst against Storage.
     backfill_page_size: 2000
     backfill_request_interval: 100ms
-    # Time-series Views use the completed-bar targets below. Keep this global
-    # duration only as a compatibility fallback for legacy Views without freq.
-    rebuild_lookback: 24h
-    rebuild_lookback_periods:
-      1m: 5000
-      1h: 5000
-      1d: 5000
-      default: 5000
-    max_view_file_bytes: 1073741824
     rebuild_max_pending: 32
     rebuild_idle_checks: 3
-  maintenance:
-    host_metrics_cleanup:
-      enabled: true
-      dataset_ids: [dataset_mooxsys_host_resource, dataset_mooxsys_host_filesystem, dataset_mooxsys_host_disk, dataset_mooxsys_host_network]
-      max_age: 48h
-      batch_size: 1000
-      max_batches_per_run: 10
   health:
     addr: ":20210"

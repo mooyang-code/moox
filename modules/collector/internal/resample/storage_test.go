@@ -2,6 +2,7 @@ package resample
 
 import (
 	"context"
+	"github.com/stretchr/testify/require"
 	"strings"
 	"testing"
 	"time"
@@ -14,12 +15,13 @@ type fakePrimary struct {
 	writes []*storagepb.RowFieldUpsert
 }
 
-func (f *fakePrimary) ReadFields(_ context.Context, keys []*storagepb.RowKey, _ []string, attrs []string) ([]*storagepb.RowFieldValues, error) {
+func (f *fakePrimary) ReadRows(_ context.Context, keys []*storagepb.RowKey, _ []string, attrs []string) ([]*storagepb.RowFieldValues, error) {
 	if len(attrs) > 0 {
 		for _, key := range keys {
-			for _, row := range f.writes {
-				if sameKey(key, row.GetKey()) {
-					return []*storagepb.RowFieldValues{{Key: key, Attributes: row.GetAttributes()}}, nil
+			// 返回最近一次写入，与 Storage 的最新值语义一致
+			for i := len(f.writes) - 1; i >= 0; i-- {
+				if sameKey(key, f.writes[i].GetKey()) {
+					return []*storagepb.RowFieldValues{{Key: key, Attributes: f.writes[i].GetAttributes()}}, nil
 				}
 			}
 		}
@@ -105,4 +107,59 @@ func TestBucketStorageRejectsOversizedSourceWindow(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "max_source_keys=4") {
 		t.Fatalf("expected max_source_keys error, got %v", err)
 	}
+}
+
+// 源数据 A→B→A 时第三次写入必须得到新的事件 ID（否则被 Storage 的去重记录吞掉，目标行停在 B）；
+// 同一次修订（同一个旧版本、同一个新哈希）的崩溃重试 ID 不变，仍然幂等。
+func TestSourceEventIDDistinguishesRevisionsThatRestoreAnEarlierValue(t *testing.T) {
+	key := rowKey("crypto", "target", "BTC-USDT", "5m", time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC), "")
+	first := sourceEventID("task", key, "0", "A")
+	second := sourceEventID("task", key, "1", "B")
+	third := sourceEventID("task", key, "2", "A")
+	require.NotEqual(t, first, third, "A→B→A 的第三次不能与第一次相同")
+	require.NotEqual(t, first, second)
+	require.NotEqual(t, second, third)
+	require.Equal(t, third, sourceEventID("task", key, "2", "A"), "同一次修订的重试 ID 必须稳定")
+}
+
+func TestBucketStorageBackfillsNewlyAddedOutputFieldsWithoutRewritingUnchangedBucket(t *testing.T) {
+	freq1, _ := ParseFixedFrequency("1m")
+	freq5, _ := ParseFixedFrequency("5m")
+	start := time.Unix(300, 0).UTC()
+	rows := make([]*storagepb.RowFieldValues, 0, 5)
+	for i := 0; i < 5; i++ {
+		at := start.Add(time.Duration(i) * time.Minute)
+		fields := []*storagepb.FieldValue{}
+		for _, item := range []struct {
+			name  string
+			value float64
+		}{{"open", 1}, {"high", 2}, {"low", 0}, {"close", 1}, {"volume", 1}, {"quote_volume", 2}} {
+			fields = append(fields, &storagepb.FieldValue{FieldId: item.name, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: item.value}}})
+		}
+		fields = append(fields, &storagepb.FieldValue{FieldId: "trade_num", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: 1}}})
+		rows = append(rows, &storagepb.RowFieldValues{Key: rowKey("s", "src", "BTC", "1m", at, "venue:binance"), Fields: fields})
+	}
+	fake := &fakePrimary{rows: rows}
+	spec := TaskSpec{InstanceID: "r", SpaceID: "s", SourceDatasetID: "src", SourceFrequency: freq1, TargetDatasetID: "dataset_target", TargetFrequency: freq5, Alignment: AlignmentEpochUTC, SourceSeriesTag: "venue:binance", OutputFields: []string{"close"}}
+	storage := &BucketStorage{Primary: fake}
+	end := start.Add(freq5.Duration)
+	_, wrote, err := storage.ProcessBucket(context.Background(), spec, "BTC", start, end)
+	require.NoError(t, err)
+	require.True(t, wrote)
+
+	// 任务扩大输出字段（源数据没变）：必须补写新增字段
+	spec.OutputFields = []string{"close", "Volume"}
+	_, wrote, err = storage.ProcessBucket(context.Background(), spec, "BTC", start, end)
+	require.NoError(t, err)
+	require.True(t, wrote, "扩大输出字段后必须补齐历史桶")
+	require.Len(t, fake.writes, 2)
+	require.Len(t, fake.writes[1].GetFields(), 2)
+	require.NotEqual(t, fake.writes[0].GetAttributes()[attrOutputFields], fake.writes[1].GetAttributes()[attrOutputFields])
+
+	// 字段集合不变（顺序/大小写不同）时再次执行不重复写入
+	spec.OutputFields = []string{"volume", "CLOSE"}
+	_, wrote, err = storage.ProcessBucket(context.Background(), spec, "BTC", start, end)
+	require.NoError(t, err)
+	require.False(t, wrote)
+	require.Len(t, fake.writes, 2)
 }

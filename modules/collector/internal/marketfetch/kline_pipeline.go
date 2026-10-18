@@ -2,6 +2,9 @@ package marketfetch
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,11 +19,12 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"google.golang.org/protobuf/proto"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
 	StockCNSpaceID   = "stockcn"
-	StockCNDatasetID = "dataset_stockcn_equity_kline"
+	StockCNDatasetID = "dataset_stockcn_equity_kline_1m"
 	StockCNRouteID   = "stockcn_equity_kline_1m_v4"
 	// Each provider gets three attempts before the next provider in the route.
 	klineProviderAttemptBudget = 3
@@ -44,6 +48,9 @@ type KlinePipeline struct {
 	Now            func() time.Time
 	Calendar       *stockmarket.Calendar
 	Metrics        *Metrics
+	// Reporter 非空时，把失败项明细与批次摘要上报 CLS；FunctionName 是上报用的函数名。
+	Reporter     ItemReporter
+	FunctionName string
 }
 
 func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchpb.MarketFetchBatchCompleted, error) {
@@ -110,6 +117,12 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	results := make([]domain.ItemResult, len(req.Items))
 	rows := make([]*storagepb.RowFieldUpsert, 0, len(req.Items)*MaxRealtimeRows)
 	routerSession := p.Router.NewSession()
+	marketdata.TakeUsedWeight() // 丢弃上一批次残留，批次结束时读到的就是本批次内的最大值
+	if deadline, ok := ctx.Deadline(); ok {
+		// 记录本次取数窗口，便于判断行情源延迟尖峰是否吃光了预算。
+		log.InfoContextf(ctx, "market_fetch_pipeline_budget frequency=%s items=%d window_ms=%d chain=%d attempts_per_provider=%d request_timeout_ms=%d",
+			req.Frequency, len(req.Items), time.Until(deadline).Milliseconds(), len(chain), RuntimeKlineProviderAttemptBudget(), attemptTimeoutFloor().Milliseconds())
+	}
 	concurrency := req.Concurrency
 	if concurrency <= 0 {
 		concurrency = DefaultConcurrency
@@ -200,11 +213,13 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 					dnsRoutes[host] = append([]string(nil), route.IPs...)
 				}
 			}
-			fetched, selectedProvider, nextCandidateIndex, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
+			fetchStarted := time.Now()
+			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
 			if err != nil {
 				item.CandidateIndex = nextCandidateIndex
 				p.observeFeed(req, selectedProvider, "kline", metricKlineResult(err))
 				results[index] = failureResult(item, classifyError(err), errorType(err), err)
+				p.reportItemFailure(req, results[index], selectedProvider, attempts, time.Since(fetchStarted), coverageStart, coverageEnd, err)
 				return
 			}
 			if err := bindKlineSource(fetched, selectedProvider, ""); err != nil {
@@ -313,6 +328,16 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 		}()
 	}
 	wg.Wait()
+	if deadline, ok := ctx.Deadline(); ok {
+		failed := 0
+		for _, result := range results {
+			if result.Outcome != domain.ItemOutcomeSuccess {
+				failed++
+			}
+		}
+		log.WarnContextf(ctx, "market_fetch_pipeline_fetched frequency=%s items=%d failed=%d fetch_ms=%d window_left_ms=%d", req.Frequency, len(req.Items), failed, time.Since(started).Milliseconds(), time.Until(deadline).Milliseconds())
+		p.reportBatch(req, len(req.Items), failed, time.Since(started), time.Until(deadline))
+	}
 	sort.Slice(rows, func(i, j int) bool {
 		left, right := rows[i].GetKey().GetTimeSeries(), rows[j].GetKey().GetTimeSeries()
 		if left.GetSubjectId() == right.GetSubjectId() {
@@ -342,10 +367,10 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				if !ok {
 					err = fmt.Errorf("dataset %s requires CommitTimeSeriesBatch but storage client does not support period commits", datasetID)
 				} else {
-					err = storage.CommitTimeSeriesBatch(ctx, expectation, periodItems, sourceEventID(req))
+					err = storage.CommitTimeSeriesBatch(ctx, expectation, periodItems, writeEventID(req, datasetRows))
 				}
 			} else if storage, ok := p.Storage.(sourceStorage); ok {
-				err = storage.UpsertFieldsWithSource(ctx, datasetRows, sourceEventID(req))
+				err = storage.UpsertFieldsWithSource(ctx, datasetRows, writeEventID(req, datasetRows))
 			} else {
 				err = p.Storage.UpsertFields(ctx, datasetRows)
 			}
@@ -480,11 +505,11 @@ func periodRowBindingKey(datasetID, subjectID, seriesTag string) string {
 	return strings.Join([]string{strings.TrimSpace(datasetID), strings.ToUpper(strings.TrimSpace(subjectID)), strings.TrimSpace(seriesTag)}, "\x00")
 }
 
-func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession, req marketdata.KlineRequest, chain []string, startIndex int) ([]marketdata.NormalizedKline, string, int, error) {
+func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession, req marketdata.KlineRequest, chain []string, startIndex int) ([]marketdata.NormalizedKline, string, int, int, error) {
 	var lastErr error
 	lastProvider := "none"
 	if len(chain) == 0 {
-		return nil, lastProvider, 0, fmt.Errorf("kline candidate chain is empty")
+		return nil, lastProvider, 0, 0, fmt.Errorf("kline candidate chain is empty")
 	}
 	startIndex %= len(chain)
 	if startIndex < 0 {
@@ -503,9 +528,15 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 				remaining := time.Until(deadline)
 				attemptsLeft := (len(chain)-index-1)*attemptBudget + attemptBudget - retry
 				if remaining <= 0 {
-					return nil, provider, (startIndex + attempts) % len(chain), ctx.Err()
+					return nil, provider, (startIndex + attempts) % len(chain), attempts, ctx.Err()
 				}
-				attemptCtx, cancel = context.WithTimeout(ctx, remaining/time.Duration(attemptsLeft))
+				// 每次尝试至少有一个完整的请求超时：行情源在整分钟、整五分钟前后常有数百毫秒到数秒的延迟尖峰，
+				// 按剩余预算平均切成零点几秒会把本来能成功的慢响应全部掐断。
+				attemptTimeout := remaining / time.Duration(attemptsLeft)
+				if floor := min(remaining, attemptTimeoutFloor()); attemptTimeout < floor {
+					attemptTimeout = floor
+				}
+				attemptCtx, cancel = context.WithTimeout(ctx, attemptTimeout)
 			}
 			rows, err := session.FetchKlines(attemptCtx, req, []string{provider})
 			cancel()
@@ -524,7 +555,7 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 					lastErr = fmt.Errorf("%w: provider %s returned no bars inside requested interval", marketdata.ErrHistoryCoverage, provider)
 					break
 				}
-				return rows, provider, startIndex, nil
+				return rows, provider, startIndex, attempts, nil
 			}
 			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 				err = fmt.Errorf("%w: provider %s attempt budget exhausted", marketdata.ErrTimeout, provider)
@@ -534,7 +565,7 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 				break
 			}
 			if !marketdata.CanFallback(ctx, err) {
-				return nil, provider, (startIndex + attempts) % len(chain), err
+				return nil, provider, (startIndex + attempts) % len(chain), attempts, err
 			}
 			lastErr = err
 		}
@@ -542,11 +573,11 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 	if lastErr == nil {
 		lastErr = fmt.Errorf("kline provider chain exhausted")
 	}
-	return nil, lastProvider, (startIndex + attempts) % len(chain), lastErr
+	return nil, lastProvider, (startIndex + attempts) % len(chain), attempts, lastErr
 }
 
 // selectOutputFields keeps the canonical row field order while dropping fields
-// not selected by the task. Empty selection deliberately preserves legacy rows.
+// not selected by the task. An empty selection keeps every field.
 func selectOutputFields(fields []*storagepb.FieldValue, selected []string) []*storagepb.FieldValue {
 	if len(selected) == 0 {
 		return fields
@@ -668,6 +699,39 @@ func metricKlineResult(err error) string {
 	}
 }
 
+// writeEventID 返回写入使用的来源 ID。WriteIDByContent 时附加本次内容的摘要，
+// 使同一内容的重试幂等、内容变化的重新提交不会被整组跳过。
+func writeEventID(req Request, rows []*storagepb.RowFieldUpsert) string {
+	base := sourceEventID(req)
+	if !req.WriteIDByContent {
+		return base
+	}
+	digest := sha256.New()
+	marshal := proto.MarshalOptions{Deterministic: true}
+	ordered := append([]*storagepb.RowFieldUpsert(nil), rows...)
+	sort.Slice(ordered, func(i, j int) bool {
+		left, right := ordered[i].GetKey().GetTimeSeries(), ordered[j].GetKey().GetTimeSeries()
+		if left.GetSubjectId() != right.GetSubjectId() {
+			return left.GetSubjectId() < right.GetSubjectId()
+		}
+		if left.GetSeriesTag() != right.GetSeriesTag() {
+			return left.GetSeriesTag() < right.GetSeriesTag()
+		}
+		return left.GetDataTime() < right.GetDataTime()
+	})
+	for _, row := range ordered {
+		raw, err := marshal.Marshal(row)
+		if err != nil {
+			continue
+		}
+		var size [8]byte
+		binary.BigEndian.PutUint64(size[:], uint64(len(raw)))
+		_, _ = digest.Write(size[:])
+		_, _ = digest.Write(raw)
+	}
+	return base + "#" + hex.EncodeToString(digest.Sum(nil)[:8])
+}
+
 func sourceEventID(req Request) string {
 	if strings.TrimSpace(req.SyncPointID) != "" {
 		return strings.TrimSpace(req.SyncPointID)
@@ -730,7 +794,8 @@ func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, rout
 	if strings.EqualFold(firstNonEmptyString(p.MarketID, req.SpaceID), "crypto") {
 		fields = append(fields, doubleValue("quote_volume", bar.AmountCNY), intValue("trade_num", bar.TradeCount))
 	} else {
-		fields = append(fields, doubleValue("amount", bar.AmountCNY))
+		// 估算成交额（close × volume）不是真实成交额：显式写 NULL，也覆盖该行之前写入过的估算值。
+		fields = append(fields, amountField(bar))
 		if p.InstrumentType == marketdata.InstrumentIndex {
 			fields = append(fields, stringValue("index_code", bar.ProviderSymbol))
 		}
@@ -822,7 +887,7 @@ func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, ro
 	}
 	fields := []*storagepb.FieldValue{
 		doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
-		doubleValue("volume", bar.VolumeShares), doubleValue("amount", bar.AmountCNY),
+		doubleValue("volume", bar.VolumeShares),
 		stringValue("instrument_name", instrumentName),
 		timeValue("trade_date", tradeDateUTC(bar.BarStart)), timeValue("close_time", bar.BarEnd),
 		stringValue("volume_unit", "shares"), stringValue("amount_unit", amountUnit(bar)),
@@ -832,6 +897,8 @@ func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, ro
 		stringValue("source_provider", bar.ProviderID),
 		stringValue("quality_status", qualityStatus), stringValue("amount_quality", amountQuality),
 	}
+	// 上游缺成交额时按 close × volume 估算的值不是真实成交额：amount 显式写 NULL，只在 amount_quality 里留痕。
+	fields = append(fields, amountField(bar))
 	if strings.TrimSpace(bar.SourceID) != "" {
 		fields = append(fields, stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID))
 	}
@@ -920,6 +987,14 @@ func tradeDateUTC(value time.Time) time.Time {
 
 func amountUnit(bar marketdata.NormalizedKline) string {
 	return "cny"
+}
+
+// amountField 返回成交额字段；估算值（close × volume）不当作真实成交额，写显式 NULL（覆盖该行此前写入的估算值）。
+func amountField(bar marketdata.NormalizedKline) *storagepb.FieldValue {
+	if bar.AmountEstimated {
+		return &storagepb.FieldValue{FieldId: "amount", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_NullValue{NullValue: storagepb.NullValue_NULL_VALUE_NULL}}}
+	}
+	return doubleValue("amount", bar.AmountCNY)
 }
 
 func doubleValue(field string, value float64) *storagepb.FieldValue {

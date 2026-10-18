@@ -32,6 +32,10 @@ type SecretMgrService interface {
 	DeleteSecret(ctx context.Context, req *DeleteSecretReq) (*DeleteSecretRsp, error)
 
 	ToggleSecretStatus(ctx context.Context, req *ToggleSecretStatusReq) (*ToggleSecretStatusRsp, error)
+
+	ExportSecrets(ctx context.Context, req *ExportSecretsReq) (*ExportSecretsRsp, error)
+
+	ImportSecrets(ctx context.Context, req *ImportSecretsReq) (*ImportSecretsRsp, error)
 }
 
 func SecretMgrService_ListSecrets_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -160,6 +164,42 @@ func SecretMgrService_ToggleSecretStatus_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
+func SecretMgrService_ExportSecrets_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ExportSecretsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SecretMgrService).ExportSecrets(ctx, reqbody.(*ExportSecretsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func SecretMgrService_ImportSecrets_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ImportSecretsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SecretMgrService).ImportSecrets(ctx, reqbody.(*ImportSecretsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // SecretMgrServer_ServiceDesc descriptor for server.RegisterService.
 var SecretMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.ops.SecretMgr",
@@ -192,6 +232,14 @@ var SecretMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.ops.SecretMgr/ToggleSecretStatus",
 			Func: SecretMgrService_ToggleSecretStatus_Handler,
+		},
+		{
+			Name: "/trpc.moox.ops.SecretMgr/ExportSecrets",
+			Func: SecretMgrService_ExportSecrets_Handler,
+		},
+		{
+			Name: "/trpc.moox.ops.SecretMgr/ImportSecrets",
+			Func: SecretMgrService_ImportSecrets_Handler,
 		},
 	},
 }
@@ -228,6 +276,12 @@ func (s *UnimplementedSecretMgr) DeleteSecret(ctx context.Context, req *DeleteSe
 func (s *UnimplementedSecretMgr) ToggleSecretStatus(ctx context.Context, req *ToggleSecretStatusReq) (*ToggleSecretStatusRsp, error) {
 	return nil, errors.New("rpc ToggleSecretStatus of service SecretMgr is not implemented")
 }
+func (s *UnimplementedSecretMgr) ExportSecrets(ctx context.Context, req *ExportSecretsReq) (*ExportSecretsRsp, error) {
+	return nil, errors.New("rpc ExportSecrets of service SecretMgr is not implemented")
+}
+func (s *UnimplementedSecretMgr) ImportSecrets(ctx context.Context, req *ImportSecretsReq) (*ImportSecretsRsp, error) {
+	return nil, errors.New("rpc ImportSecrets of service SecretMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -250,6 +304,10 @@ type SecretMgrClientProxy interface {
 	DeleteSecret(ctx context.Context, req *DeleteSecretReq, opts ...client.Option) (rsp *DeleteSecretRsp, err error)
 
 	ToggleSecretStatus(ctx context.Context, req *ToggleSecretStatusReq, opts ...client.Option) (rsp *ToggleSecretStatusRsp, err error)
+
+	ExportSecrets(ctx context.Context, req *ExportSecretsReq, opts ...client.Option) (rsp *ExportSecretsRsp, err error)
+
+	ImportSecrets(ctx context.Context, req *ImportSecretsReq, opts ...client.Option) (rsp *ImportSecretsRsp, err error)
 }
 
 type SecretMgrClientProxyImpl struct {
@@ -395,6 +453,46 @@ func (c *SecretMgrClientProxyImpl) ToggleSecretStatus(ctx context.Context, req *
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ToggleSecretStatusRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SecretMgrClientProxyImpl) ExportSecrets(ctx context.Context, req *ExportSecretsReq, opts ...client.Option) (*ExportSecretsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SecretMgr/ExportSecrets")
+	msg.WithCalleeServiceName(SecretMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SecretMgr")
+	msg.WithCalleeMethod("ExportSecrets")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ExportSecretsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SecretMgrClientProxyImpl) ImportSecrets(ctx context.Context, req *ImportSecretsReq, opts ...client.Option) (*ImportSecretsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.ops.SecretMgr/ImportSecrets")
+	msg.WithCalleeServiceName(SecretMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("ops")
+	msg.WithCalleeService("SecretMgr")
+	msg.WithCalleeMethod("ImportSecrets")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ImportSecretsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

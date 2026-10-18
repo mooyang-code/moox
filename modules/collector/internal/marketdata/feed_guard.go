@@ -223,12 +223,6 @@ func (s *InvocationBreakerSession) Admit(ctx context.Context, providerID string)
 	}
 }
 
-func (s *InvocationBreakerSession) ShouldSkip(providerID string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.streaks[providerID] >= s.threshold
-}
-
 func (s *InvocationBreakerSession) Observe(providerID string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -313,10 +307,6 @@ func NewRouter(registry *Registry, breakerThreshold int, clock Clock, sleep Slee
 		breaker:        NewInvocationBreaker(breakerThreshold),
 		feedGuardsByID: make(map[string]*FeedGuard),
 	}, nil
-}
-
-func (r *Router) FetchKlines(ctx context.Context, req KlineRequest, candidateChain []string) ([]NormalizedKline, error) {
-	return r.NewSession().FetchKlines(ctx, req, candidateChain)
 }
 
 // RouterSession scopes breaker observations to one function invocation while

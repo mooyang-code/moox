@@ -15,11 +15,11 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	core "github.com/mooyang-code/moox/packages/doctor"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/security"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
-	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type doctorExitError struct{ code int }
@@ -29,8 +29,8 @@ func (e doctorExitError) ExitCode() int { return e.code }
 
 type doctorCommandDeps struct {
 	loadConfig        func() (*config.Config, error)
-	newClient         func(string, string) *doctorcli.Client
-	newMetadataClient func(string, string) doctorcli.StorageActivationClient
+	newClient         func(gatewayclient.Invoker) *doctorcli.Client
+	newMetadataClient func(gatewayclient.Invoker, string) doctorcli.StorageActivationClient
 }
 
 func init() {
@@ -62,7 +62,7 @@ func newDoctorViewConsumerRepairCommand() *cobra.Command {
 }
 
 func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
-	var nodeID, format, output string
+	var nodeID, format, output, file string
 	var checks []string
 	cmd := &cobra.Command{
 		Use:          mode,
@@ -75,18 +75,26 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := deps.loadConfig()
 			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
 				cfg = &config.Config{}
 			}
 			doctorCfg := cfg.EffectiveDoctor()
 			if nodeID == "" {
 				nodeID = doctorCfg.NodeID
 			}
-			client := deps.newClient(doctorCfg.MonitorTarget, doctorCfg.SysDeployTarget)
+			gateway, err := openCommandGateway(cmd.Context(), file, nil)
+			if err != nil {
+				return err
+			}
+			defer gateway.Close()
+			client := deps.newClient(gateway)
 			metadataClientFactory := deps.newMetadataClient
 			if metadataClientFactory == nil {
 				metadataClientFactory = newSignedStorageMetadataClient
 			}
-			storageActivation := metadataClientFactory(defaultMetadataImportURL(""), os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET"))
+			storageActivation := metadataClientFactory(gateway, os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET"))
 			auth, err := loadDoctorHealthAuth(doctorCfg.ReleaseRoot)
 			if err != nil {
 				return err
@@ -97,7 +105,6 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			case "bootstrap":
 				reportValue, err = doctorcli.RunBootstrap(cmd.Context(), doctorcli.BootstrapOptions{
 					NodeID: nodeID, LocalNodeID: doctorCfg.NodeID, ReleaseRoot: doctorCfg.ReleaseRoot,
-					SeedPath:                resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.SeedPath),
 					DatasetHealthPolicyPath: resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.DatasetHealthPolicyPath),
 					CheckIDs:                checks, Client: client, MonitorClient: client, StorageActivation: storageActivation, Prober: prober,
 				})
@@ -127,6 +134,7 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&file, "file", "./moox.toml", "deployment manifest for the operator SSH gateway")
 	cmd.Flags().StringVar(&nodeID, "node", "", "target node ID")
 	cmd.Flags().StringSliceVar(&checks, "check", nil, "specific bounded check ID")
 	cmd.Flags().StringVar(&format, "format", "json", "report format: json, text, or markdown")
@@ -135,19 +143,19 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 }
 
 type signedStorageMetadataClient struct {
-	proxy pb.MetadataClientProxy
-	auth  *commonpb.AuthInfo
+	gateway gatewayclient.Invoker
+	auth    *commonpb.AuthInfo
 }
 
-func newSignedStorageMetadataClient(target, secret string) doctorcli.StorageActivationClient {
+func newSignedStorageMetadataClient(gateway gatewayclient.Invoker, secret string) doctorcli.StorageActivationClient {
 	return &signedStorageMetadataClient{
-		proxy: pb.NewMetadataClientProxy(client.WithTarget(target), client.WithProtocol("http"), client.WithNetwork("tcp")),
-		auth:  &commonpb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
+		gateway: gateway,
+		auth:    &commonpb.AuthInfo{AppId: "storage-metadata", AppKey: security.HMACSHA256Hex(secret, []byte("storage-metadata"))},
 	}
 }
 
 func (c *signedStorageMetadataClient) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*pb.ListDatasetsRsp, error) {
-	if c == nil || c.proxy == nil {
+	if c == nil || c.gateway == nil {
 		return nil, errors.New("storage metadata client is unavailable")
 	}
 	request := &pb.ListDatasetsReq{}
@@ -155,11 +163,13 @@ func (c *signedStorageMetadataClient) ListDatasets(ctx context.Context, req *pb.
 		request = proto.Clone(req).(*pb.ListDatasetsReq)
 	}
 	request.AuthInfo = c.auth
-	return c.proxy.ListDatasets(ctx, request)
+	rsp := &pb.ListDatasetsRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "ListDatasets", request, rsp)
+	return rsp, err
 }
 
 func (c *signedStorageMetadataClient) CheckDatasetActivation(ctx context.Context, req *pb.CheckDatasetActivationReq) (*pb.CheckDatasetActivationRsp, error) {
-	if c == nil || c.proxy == nil {
+	if c == nil || c.gateway == nil {
 		return nil, errors.New("storage metadata client is unavailable")
 	}
 	request := &pb.CheckDatasetActivationReq{}
@@ -167,7 +177,9 @@ func (c *signedStorageMetadataClient) CheckDatasetActivation(ctx context.Context
 		request = proto.Clone(req).(*pb.CheckDatasetActivationReq)
 	}
 	request.AuthInfo = c.auth
-	return c.proxy.CheckDatasetActivation(ctx, request)
+	rsp := &pb.CheckDatasetActivationRsp{}
+	err := postStorageRaw(ctx, c.gateway, metadataServiceName, "CheckDatasetActivation", request, rsp)
+	return rsp, err
 }
 
 func validateDoctorFlags(format, output string, checks []string) error {

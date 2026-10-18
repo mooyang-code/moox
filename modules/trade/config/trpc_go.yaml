@@ -27,16 +27,9 @@ server:
       ip: 127.0.0.1
       port: 11200
       network: tcp
-      protocol: http
-      timeout: 15000
-
-      ######## DNS Resolver RPC ########
-    - name: trpc.moox.trade.TradeDNSResolverService.trpc
-      ip: 127.0.0.1
-      port: 11203
-      network: tcp
       protocol: trpc
-      timeout: 5000
+      transport: go-net
+      timeout: 15000
 
     - name: trpc.moox.trade.metrics.timer
       port: 11210
@@ -46,7 +39,7 @@ server:
 
     - name: trpc.moox.trade.equity.timer
       port: 11211
-      network: "0 * * * * *"
+      network: "*/20 * * * * *"
       protocol: timer
       timeout: 10000
 

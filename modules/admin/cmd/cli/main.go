@@ -6,6 +6,41 @@ import (
 )
 
 func main() {
+	if isHostBundleCommand(os.Args) {
+		if err := runHostBundleCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if isBootstrapCommand(os.Args) {
+		if err := runBootstrapCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if isTopologyRecoveryCommand(os.Args) {
+		if err := runTopologyRecoveryCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if isPKICommand(os.Args) {
+		if err := runPKICommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if isKeysCommand(os.Args) {
+		if err := runKeysCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			printInitError(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if isAdminUserCommand(os.Args) {
 		if err := runAdminUserCommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 			printInitError(os.Stderr, err)
@@ -27,15 +62,9 @@ func main() {
 		}
 		return
 	}
-	if isServiceDeploymentsCommand(os.Args) {
-		if err := runServiceDeploymentsCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-			printInitError(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
+
 	if !isInitCommand(os.Args) {
-		printInitError(os.Stderr, fmt.Errorf("unknown command: use init, user, random-secret, eventbus-credentials, or service-deployments"))
+		printInitError(os.Stderr, fmt.Errorf("unknown command: use bootstrap, host-bundle, host, placement, init, user, random-secret, eventbus-credentials, keys, pki"))
 		os.Exit(2)
 	}
 	if err := runInitCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {

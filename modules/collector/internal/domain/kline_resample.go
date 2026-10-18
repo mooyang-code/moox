@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/frequency"
 )
 
 const (
@@ -56,39 +57,6 @@ func (p *CollectParams) CanonicalJSON() (string, error) {
 	return string(raw), nil
 }
 
-// ValidateSameResampleIdentity allows operational changes such as settle delay
-// while locking every field that determines the source or target row identity.
-func ValidateSameResampleIdentity(existing, desired *CollectParams) error {
-	if existing == nil || desired == nil {
-		return fmt.Errorf("resample collect params are required")
-	}
-	fields := []struct {
-		name      string
-		existing  string
-		desired   string
-		equalFold bool
-	}{
-		{name: "provider", existing: existing.Provider, desired: desired.Provider, equalFold: true},
-		{name: "market_type", existing: existing.MarketType, desired: desired.MarketType, equalFold: true},
-		{name: "source_dataset_id", existing: existing.SourceDatasetID, desired: desired.SourceDatasetID},
-		{name: "source_frequency", existing: existing.SourceFrequency, desired: desired.SourceFrequency},
-		{name: "source_series_tag", existing: existing.SourceSeriesTag, desired: desired.SourceSeriesTag},
-		{name: "target_dataset_id", existing: existing.TargetDatasetID, desired: desired.TargetDatasetID},
-		{name: "target_frequency", existing: existing.TargetFrequency, desired: desired.TargetFrequency},
-		{name: "alignment", existing: existing.Alignment, desired: desired.Alignment},
-	}
-	for _, field := range fields {
-		equal := field.existing == field.desired
-		if field.equalFold {
-			equal = strings.EqualFold(field.existing, field.desired)
-		}
-		if !equal {
-			return fmt.Errorf("immutable resample field %s cannot change", field.name)
-		}
-	}
-	return nil
-}
-
 // ValidateKlineResample validates the immutable resample task contract.
 func (p *CollectParams) ValidateKlineResample() error {
 	if p.SourceDatasetID == "" {
@@ -112,27 +80,18 @@ func (p *CollectParams) ValidateKlineResample() error {
 	if p.SettleDelayMS != nil && *p.SettleDelayMS > int64(MaxResampleSettleDelay/time.Millisecond) {
 		return fmt.Errorf("settle_delay_ms must not exceed %d", int64(MaxResampleSettleDelay/time.Millisecond))
 	}
-	source, err := parseFixedFrequencyDuration(p.SourceFrequency)
+	source, err := ResampleFrequencyDuration(p.SourceFrequency)
 	if err != nil {
 		return fmt.Errorf("source_frequency: %w", err)
 	}
-	target, err := parseFixedFrequencyDuration(p.TargetFrequency)
+	target, err := ResampleFrequencyDuration(p.TargetFrequency)
 	if err != nil {
 		return fmt.Errorf("target_frequency: %w", err)
 	}
 	if target <= source {
 		return fmt.Errorf("target_frequency must be greater than source_frequency")
 	}
-	if target%source != 0 {
-		return fmt.Errorf("target_frequency must be a multiple of source_frequency")
-	}
-	if target > 30*24*time.Hour {
-		return fmt.Errorf("target_frequency must not exceed 30 days")
-	}
-	if target/source > 10080 {
-		return fmt.Errorf("target bucket must not contain more than 10080 source bars")
-	}
-	if err := validateResampleTargetDatasetID(p.TargetDatasetID, normalizeFixedFrequency(p.TargetFrequency)); err != nil {
+	if err := validateResampleTargetDatasetID(p.TargetDatasetID, normalizeFrequency(p.TargetFrequency)); err != nil {
 		return err
 	}
 	return nil
@@ -170,50 +129,28 @@ func isLowerSnakeID(value string) bool {
 	return true
 }
 
-func normalizeFixedFrequency(raw string) string {
-	duration, err := parseFixedFrequencyDuration(raw)
+// normalizeFrequency returns the canonical frequency for raw, or raw itself
+// so validation can report an unsupported value.
+func normalizeFrequency(raw string) string {
+	parsed, err := frequency.Parse(raw)
 	if err != nil {
 		return strings.TrimSpace(raw)
 	}
-	minutes := int64(duration / time.Minute)
-	if minutes%(24*60) == 0 {
-		return strconv.FormatInt(minutes/(24*60), 10) + "D"
-	}
-	if minutes%60 == 0 {
-		return strconv.FormatInt(minutes/60, 10) + "H"
-	}
-	return strconv.FormatInt(minutes, 10) + "m"
+	return string(parsed)
 }
 
-func parseFixedFrequencyDuration(raw string) (time.Duration, error) {
-	raw = strings.TrimSpace(raw)
-	if len(raw) < 2 {
-		return 0, fmt.Errorf("frequency must be a positive integer followed by m, h, or d")
+// ResampleFrequencyDuration returns the bar length of a frequency that can be
+// resampled: a fixed whole-minute bar from 1m to 1d. Weeks and months are
+// calendar-aligned, and epoch_utc buckets cannot represent them.
+func ResampleFrequencyDuration(raw string) (time.Duration, error) {
+	parsed, err := frequency.Parse(raw)
+	if err != nil {
+		return 0, err
 	}
-	unit := raw[len(raw)-1]
-	if unit == 'M' || unit == 'W' || unit == 'Y' || unit == 'w' || unit == 'y' {
-		return 0, fmt.Errorf("calendar frequency is not supported")
+	if parsed.Duration() < time.Minute || parsed.Duration() > 24*time.Hour {
+		return 0, fmt.Errorf("frequency %q cannot be resampled; use 1m to 1d", raw)
 	}
-	count, err := strconv.ParseInt(raw[:len(raw)-1], 10, 64)
-	if err != nil || count <= 0 {
-		return 0, fmt.Errorf("frequency must be a positive integer followed by m, h, or d")
-	}
-	var multiplier time.Duration
-	switch unit {
-	case 'm':
-		multiplier = time.Minute
-	case 'h', 'H':
-		multiplier = time.Hour
-	case 'd', 'D':
-		multiplier = 24 * time.Hour
-	default:
-		return 0, fmt.Errorf("frequency must use m, h, or d")
-	}
-	maxCount := int64((30 * 24 * time.Hour) / multiplier)
-	if count > maxCount {
-		return 0, fmt.Errorf("frequency must not exceed 30 days")
-	}
-	return time.Duration(count) * multiplier, nil
+	return parsed.Duration(), nil
 }
 
 type ResampleTaskState string

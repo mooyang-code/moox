@@ -4,16 +4,11 @@ package store
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
-	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
-	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"gorm.io/gorm"
 )
 
@@ -55,6 +50,24 @@ func (r *TaskRepository) List(ctx context.Context, filter TaskFilter) ([]domain.
 		return nil, 0, err
 	}
 	return tasks, total, nil
+}
+
+// ResultDatasetNames 返回空间内每个任务结果数据集的展示名（即任务名），键为结果数据集 ID。
+func (r *TaskRepository) ResultDatasetNames(ctx context.Context, spaceID string) (map[string]string, error) {
+	type row struct {
+		DatasetID string `gorm:"column:c_result_dataset_id"`
+		Name      string `gorm:"column:c_task_name"`
+	}
+	var rows []row
+	if err := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).Select("c_result_dataset_id, c_task_name").
+		Where("c_space_id = ? AND c_result_dataset_id <> ''", spaceID).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	names := make(map[string]string, len(rows))
+	for _, item := range rows {
+		names[item.DatasetID] = item.Name
+	}
+	return names, nil
 }
 
 // ListEnabled returns enabled tasks in one space.
@@ -194,15 +207,12 @@ func (r *TaskRepository) Create(ctx context.Context, task domain.CollectionTask)
 	if task.PrepareState == "" {
 		task.PrepareState = domain.PrepareStateReady
 	}
-	if err := applyCollectionTaskCoverageStart(&task, now, task.Enabled); err != nil {
-		return err
-	}
 	task.CreateTime = now
 	task.ModifyTime = now
 	tags := normalizeTaskTagIDs(task.TagIDs)
 	task.TagIDs = nil
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := validateTaskResultIdentityConflict(ctx, tx, task, tags, ""); err != nil {
+		if err := validateTaskResultIdentityConflict(ctx, tx, task, ""); err != nil {
 			return err
 		}
 		if err := tx.Create(&task).Error; err != nil {
@@ -356,24 +366,20 @@ func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, tas
 		}
 	}
 	now := time.Now().UTC()
-	if err := applyCollectionTaskCoverageStart(&task, now, task.Enabled); err != nil {
-		return nil, err
-	}
 	updates := map[string]any{
-		"c_space_id":            task.SpaceID,
-		"c_task_name":           task.TaskName,
-		"c_description":         task.Description,
-		"c_data_type":           task.DataType,
-		"c_collect_params":      task.CollectParams,
-		"c_enabled":             task.Enabled,
-		"c_creator":             task.Creator,
-		"c_result_dataset_id":   task.ResultDatasetID,
-		"c_result_view_id":      task.ResultViewID,
-		"c_coverage_start_time": task.CoverageStartTime,
-		"c_mtime":               now,
+		"c_space_id":          task.SpaceID,
+		"c_task_name":         task.TaskName,
+		"c_description":       task.Description,
+		"c_data_type":         task.DataType,
+		"c_collect_params":    task.CollectParams,
+		"c_enabled":           task.Enabled,
+		"c_creator":           task.Creator,
+		"c_result_dataset_id": task.ResultDatasetID,
+		"c_result_view_id":    task.ResultViewID,
+		"c_mtime":             now,
 	}
 	if err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := validateTaskResultIdentityConflict(ctx, tx, task, task.TagIDs, taskID); err != nil {
+		if err := validateTaskResultIdentityConflict(ctx, tx, task, taskID); err != nil {
 			return err
 		}
 		q := tx.Model(&domain.CollectionTask{}).Where("c_task_id = ?", taskID)
@@ -387,20 +393,9 @@ func (r *TaskRepository) UpdateByTaskID(ctx context.Context, spaceID string, tas
 	return r.GetByTaskID(ctx, spaceID, taskID)
 }
 
-func validateTaskResultIdentityConflict(ctx context.Context, tx *gorm.DB, task domain.CollectionTask, tagIDs []string, excludeTaskID string) error {
-	candidateTags := normalizeTaskTagIDs(tagIDs)
-	if taskresult.IsBuiltinSharedResultTask(task.SpaceID, task.TaskID) {
-		if len(candidateTags) == 0 && strings.TrimSpace(excludeTaskID) != "" {
-			var err error
-			candidateTags, err = queryTaskTagIDs(ctx, tx, task.SpaceID, excludeTaskID)
-			if err != nil {
-				return err
-			}
-		}
-		if err := validateBuiltinSharedResultTask(task, candidateTags); err != nil {
-			return err
-		}
-	}
+// validateTaskResultIdentityConflict enforces that a collection task owns its
+// result exclusively: no other task may write the same Dataset or View.
+func validateTaskResultIdentityConflict(ctx context.Context, tx *gorm.DB, task domain.CollectionTask, excludeTaskID string) error {
 	datasetID, viewID := strings.TrimSpace(task.ResultDatasetID), strings.TrimSpace(task.ResultViewID)
 	if datasetID == "" && viewID == "" {
 		return nil
@@ -412,71 +407,15 @@ func validateTaskResultIdentityConflict(ctx context.Context, tx *gorm.DB, task d
 	if strings.TrimSpace(excludeTaskID) != "" {
 		query = query.Where("c_task_id <> ?", strings.TrimSpace(excludeTaskID))
 	}
-	query = query.Where("(c_result_dataset_id = ? OR c_result_view_id = ?)", datasetID, viewID)
-	var conflicts []domain.CollectionTask
-	if err := query.Find(&conflicts).Error; err != nil {
+	var conflict domain.CollectionTask
+	err := query.Where("(c_result_dataset_id = ? OR c_result_view_id = ?)", datasetID, viewID).Limit(1).Find(&conflict).Error
+	if err != nil {
 		return fmt.Errorf("check task result identity: %w", err)
 	}
-	if len(conflicts) == 0 {
-		return nil
-	}
-	for _, conflict := range conflicts {
-		conflictTags, err := queryTaskTagIDs(ctx, tx, conflict.SpaceID, conflict.TaskID)
-		if err != nil {
-			return err
-		}
-		if !canShareBuiltinBinanceResult(task, candidateTags, conflict, conflictTags) {
-			return fmt.Errorf("task result identity %s/%s conflicts with task %s/%s", datasetID, viewID, conflict.SpaceID, conflict.TaskID)
-		}
+	if conflict.TaskID != "" {
+		return fmt.Errorf("task result identity %s/%s conflicts with task %s/%s", datasetID, viewID, conflict.SpaceID, conflict.TaskID)
 	}
 	return nil
-}
-
-func validateBuiltinSharedResultTask(task domain.CollectionTask, tagIDs []string) error {
-	if !taskresult.IsBuiltinSharedResultTask(task.SpaceID, task.TaskID) {
-		return nil
-	}
-	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
-	if err != nil {
-		return fmt.Errorf("parse shared result task %s/%s parameters: %w", task.SpaceID, task.TaskID, err)
-	}
-	ids, allowed := taskresult.BuiltinSharedResultIDsForRoute(
-		task.SpaceID, task.TaskID, task.DataType, params.Frequency, params.Provider, params.MarketType, tagIDs,
-	)
-	if !allowed || ids.DatasetID != strings.TrimSpace(task.ResultDatasetID) || ids.ViewID != strings.TrimSpace(task.ResultViewID) || params.TargetDatasetID != ids.DatasetID {
-		return fmt.Errorf("shared result task %s/%s has an invalid provider, market_type, tag, or result target", task.SpaceID, task.TaskID)
-	}
-	return nil
-}
-
-func queryTaskTagIDs(ctx context.Context, tx *gorm.DB, spaceID, taskID string) ([]string, error) {
-	var tagIDs []string
-	if err := tx.WithContext(ctx).Table("t_collector_task_tags").
-		Where("c_space_id = ? AND c_task_id = ?", strings.TrimSpace(spaceID), strings.TrimSpace(taskID)).
-		Order("c_tag_id ASC").Pluck("c_tag_id", &tagIDs).Error; err != nil {
-		return nil, fmt.Errorf("load tags for task %s/%s: %w", spaceID, taskID, err)
-	}
-	return tagIDs, nil
-}
-
-func canShareBuiltinBinanceResult(left domain.CollectionTask, leftTags []string, right domain.CollectionTask, rightTags []string) bool {
-	if left.SpaceID != right.SpaceID || left.TaskID == right.TaskID {
-		return false
-	}
-	leftParams, err := domain.ParseCollectParams(left.CollectParams, "", "", left.DataType)
-	if err != nil {
-		return false
-	}
-	rightParams, err := domain.ParseCollectParams(right.CollectParams, "", "", right.DataType)
-	if err != nil {
-		return false
-	}
-	leftIDs, leftOK := taskresult.BuiltinSharedResultIDsForRoute(left.SpaceID, left.TaskID, left.DataType, leftParams.Frequency, leftParams.Provider, leftParams.MarketType, leftTags)
-	rightIDs, rightOK := taskresult.BuiltinSharedResultIDsForRoute(right.SpaceID, right.TaskID, right.DataType, rightParams.Frequency, rightParams.Provider, rightParams.MarketType, rightTags)
-	return leftOK && rightOK && leftIDs == rightIDs && leftParams.TargetDatasetID == leftIDs.DatasetID &&
-		rightParams.TargetDatasetID == rightIDs.DatasetID && leftIDs.DatasetID == strings.TrimSpace(left.ResultDatasetID) &&
-		leftIDs.ViewID == strings.TrimSpace(left.ResultViewID) && rightIDs.DatasetID == strings.TrimSpace(right.ResultDatasetID) &&
-		rightIDs.ViewID == strings.TrimSpace(right.ResultViewID)
 }
 
 // UpdateMutableByTaskID updates only public mutable task fields. Task identity,
@@ -487,9 +426,8 @@ func (r *TaskRepository) UpdateMutableByTaskID(ctx context.Context, spaceID, tas
 }
 
 // UpdateValidatedTaskByTaskID is used after the RPC layer has validated that
-// the collection definition is semantically unchanged. It persists the
-// canonical collect_params in the same SQL update, allowing legacy kline
-// provider/market keys to be removed without exposing them as task identity.
+// the collection definition is semantically unchanged. It also persists the
+// canonical collect_params in the same SQL update.
 func (r *TaskRepository) UpdateValidatedTaskByTaskID(ctx context.Context, spaceID, taskID string, task domain.CollectionTask) (*domain.CollectionTask, error) {
 	return r.updateMutableByTaskID(ctx, spaceID, taskID, task, true)
 }
@@ -502,16 +440,12 @@ func (r *TaskRepository) updateMutableByTaskID(ctx context.Context, spaceID, tas
 	if !domain.CollectionTaskPrepareState(task.PrepareState).Valid() {
 		return nil, fmt.Errorf("invalid collection task prepare state: %s", task.PrepareState)
 	}
-	if !task.Enabled {
-		task.CoverageStartTime = nil
-	}
 	now := time.Now().UTC()
 	updates := map[string]any{
-		"c_task_name":           task.TaskName,
-		"c_description":         task.Description,
-		"c_enabled":             task.Enabled,
-		"c_coverage_start_time": task.CoverageStartTime,
-		"c_mtime":               now,
+		"c_task_name":   task.TaskName,
+		"c_description": task.Description,
+		"c_enabled":     task.Enabled,
+		"c_mtime":       now,
 	}
 	if persistCollectParams {
 		updates["c_collect_params"] = task.CollectParams
@@ -532,22 +466,6 @@ func (r *TaskRepository) updateMutableByTaskID(ctx context.Context, spaceID, tas
 // SetEnabled changes a task enabled flag.
 func (r *TaskRepository) SetEnabled(ctx context.Context, spaceID, taskID string, enabled bool) error {
 	updates := map[string]any{"c_enabled": enabled, "c_mtime": time.Now().UTC()}
-	if enabled {
-		task, err := r.GetByTaskID(ctx, spaceID, taskID)
-		if err != nil {
-			return err
-		}
-		now := time.Now().UTC()
-		// Re-enabling is a new coverage decision. Do not preserve the old
-		// timestamp from the previous enable period, otherwise live_only rules
-		// silently replay stale history and lookback rules never move forward.
-		task.CoverageStartTime = nil
-		if err := applyCollectionTaskCoverageStart(task, now, true); err != nil {
-			return err
-		}
-		updates["c_coverage_start_time"] = task.CoverageStartTime
-		updates["c_mtime"] = now
-	}
 	q := r.db.WithContext(ctx).Model(&domain.CollectionTask{}).Where("c_task_id = ?", taskID)
 	if strings.TrimSpace(spaceID) != "" {
 		q = q.Where("c_space_id = ?", strings.TrimSpace(spaceID))
@@ -581,98 +499,4 @@ func (r *TaskRepository) applyFilter(q *gorm.DB, filter TaskFilter) *gorm.DB {
 		q = q.Where("c_task_id = ?", v)
 	}
 	return q
-}
-
-func applyCollectionTaskCoverageStart(task *domain.CollectionTask, now time.Time, enabled bool) error {
-	if task == nil {
-		return nil
-	}
-	if !enabled {
-		task.CoverageStartTime = nil
-		return nil
-	}
-	start, err := resolveCollectionTaskCoverageStart(task, now)
-	if err != nil {
-		return err
-	}
-	if start == nil {
-		return nil
-	}
-	task.CoverageStartTime = start
-	return nil
-}
-
-func resolveCollectionTaskCoverageStart(task *domain.CollectionTask, now time.Time) (*time.Time, error) {
-	if task == nil {
-		return nil, nil
-	}
-	if task.CoverageStartTime != nil && !task.CoverageStartTime.IsZero() {
-		at := task.CoverageStartTime.UTC()
-		return &at, nil
-	}
-	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
-	if err != nil || params == nil || params.HistoryPolicy == nil {
-		at := now.UTC().Truncate(time.Minute)
-		return &at, nil
-	}
-	policy := params.HistoryPolicy
-	var start time.Time
-	switch policy.Mode {
-	case domain.HistoryModeSince:
-		at, parseErr := time.Parse(time.RFC3339Nano, policy.Since)
-		if parseErr != nil {
-			at = now
-		}
-		start = at.UTC()
-	case domain.HistoryModeLookback:
-		if isStockCNTask(task) {
-			calendar, calendarErr := loadStockCNCalendarForTask()
-			if calendarErr != nil {
-				return nil, calendarErr
-			}
-			start, err = calendar.LookbackStart(now.UTC(), policy.Lookback)
-			if err != nil {
-				return nil, fmt.Errorf("resolve stockcn history lookback: %w", err)
-			}
-		} else {
-			start = now.UTC().Add(-time.Duration(policy.Lookback) * 24 * time.Hour).Truncate(time.Minute)
-		}
-	default:
-		start = now.UTC().Truncate(time.Minute)
-	}
-	return &start, nil
-}
-
-func isStockCNTask(task *domain.CollectionTask) bool {
-	if task == nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(task.SpaceID), "stockcn")
-}
-
-func loadStockCNCalendarForTask() (*stockmarket.Calendar, error) {
-	_, sourceFile, _, _ := runtime.Caller(0)
-	sourceRelative := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "..", "..", "config", "markets", "stockcn", "calendar.yaml"))
-	candidates := []string{
-		strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_CALENDAR_PATH")),
-		"markets/stockcn/calendar.yaml",
-		"config/markets/stockcn/calendar.yaml",
-		"modules/collector/config/markets/stockcn/calendar.yaml",
-		sourceRelative,
-	}
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		candidate = filepath.Clean(candidate)
-		if _, err := os.Stat(candidate); err != nil {
-			continue
-		}
-		calendar, err := stockmarket.LoadCalendar(candidate)
-		if err != nil {
-			return nil, fmt.Errorf("load stockcn calendar %s: %w", candidate, err)
-		}
-		return calendar, nil
-	}
-	return nil, fmt.Errorf("stockcn calendar config was not found")
 }

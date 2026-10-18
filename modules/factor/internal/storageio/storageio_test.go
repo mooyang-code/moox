@@ -25,7 +25,7 @@ func TestReadWindowPagesUntilExhausted(t *testing.T) {
 		{Rows: []*storagepb.TimeSeriesRow{
 			readRow("ETH", base, "", map[string]*storagepb.TypedValue{"close": double(3)}),
 			readRow("BTC", base.Add(time.Minute), "venue:b", map[string]*storagepb.TypedValue{"close": double(2)}),
-		}, PageResult: &commonpb.PageResult{HasMore: true}},
+		}, PageResult: &commonpb.PageResult{HasMore: true, NextCursor: "cursor-1"}},
 		{Rows: []*storagepb.TimeSeriesRow{
 			readRow("BTC", base, "venue:a", map[string]*storagepb.TypedValue{"close": double(1)}),
 		}, PageResult: &commonpb.PageResult{HasMore: false}},
@@ -36,14 +36,30 @@ func TestReadWindowPagesUntilExhausted(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, primary.readRequests, 2)
-	require.NotEmpty(t, primary.readRequests[1].GetAfterKey())
-	key := &storagepb.RowKey{}
-	require.NoError(t, proto.Unmarshal(primary.readRequests[1].GetAfterKey(), key))
-	require.Equal(t, "venue:b", key.GetTimeSeries().GetSeriesTag())
+	require.Empty(t, primary.readRequests[0].GetPage().GetCursor())
+	require.Equal(t, "cursor-1", primary.readRequests[1].GetPage().GetCursor(), "游标原样传回，不自行编码")
 	require.Equal(t, []string{"data_time", "series_tag", "close"}, got["BTC"].Columns)
 	require.Equal(t, []any{base, "venue:a", float64(1)}, got["BTC"].Rows[0])
 	require.Equal(t, []any{base.Add(time.Minute), "venue:b", float64(2)}, got["BTC"].Rows[1])
 	require.Equal(t, []any{base, "", float64(3)}, got["ETH"].Rows[0])
+}
+
+func TestReadWindowBoundsEachPageWithPageTimeout(t *testing.T) {
+	base := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	primary := &primaryFake{pages: []*storagepb.ReadTimeSeriesRowsRsp{
+		{Rows: []*storagepb.TimeSeriesRow{readRow("BTC", base, "", map[string]*storagepb.TypedValue{"close": double(1)})}, PageResult: &commonpb.PageResult{HasMore: true, NextCursor: "cursor-1"}},
+		{Rows: []*storagepb.TimeSeriesRow{readRow("BTC", base.Add(time.Minute), "", map[string]*storagepb.TypedValue{"close": double(2)})}, PageResult: &commonpb.PageResult{HasMore: false}},
+	}}
+	_, err := NewClient(primary, nil, nil).ReadWindow(context.Background(), ReadRequest{
+		SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Subjects: []string{"BTC"},
+		Start: base, End: base.Add(2 * time.Minute), Columns: []string{"close"}, PageTimeout: 7 * time.Second,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, primary.readDeadlines, 2, "every page carries its own deadline")
+	for _, remaining := range primary.readDeadlines {
+		require.InDelta(t, float64(7*time.Second), float64(remaining), float64(time.Second))
+	}
 }
 
 func TestEarliestPeriodUsesBoundedAscendingSubjectBatches(t *testing.T) {
@@ -64,13 +80,34 @@ func TestEarliestPeriodUsesBoundedAscendingSubjectBatches(t *testing.T) {
 	require.Equal(t, earlier, got)
 	require.Len(t, primary.readRequests, 2)
 	for _, request := range primary.readRequests {
-		require.Equal(t, storagepb.SortOrder_SORT_ORDER_ASC, request.GetOrder())
 		require.Equal(t, uint32(1), request.GetPage().GetSize())
 		require.Equal(t, "0001-01-01T00:00:00Z", request.GetTimeRange().GetStartTime())
 		require.Equal(t, "1m", request.GetSelectors()[0].GetFreq())
 	}
 	require.Len(t, primary.readRequests[0].GetSelectors(), earliestPeriodSelectorBatchSize)
-	require.Len(t, primary.readRequests[1].GetSelectors(), 1)
+	require.Len(t, primary.readRequests[1].GetSelectors(), 29)
+}
+
+func TestReadWindowSplitsSubjectsIntoSelectorBatches(t *testing.T) {
+	base := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	primary := &primaryFake{pages: []*storagepb.ReadTimeSeriesRowsRsp{
+		{PageResult: &commonpb.PageResult{}}, {PageResult: &commonpb.PageResult{}}, {PageResult: &commonpb.PageResult{}},
+	}}
+	subjects := make([]string, 250)
+	for i := range subjects {
+		subjects[i] = fmt.Sprintf("subject-%03d", i)
+	}
+	frames, err := NewClient(primary, nil, nil).ReadWindow(context.Background(), ReadRequest{
+		SpaceID: "crypto", DatasetID: "bars", Freq: "1m", Subjects: subjects,
+		Start: base, End: base.Add(time.Minute), Columns: []string{"close"},
+	})
+	require.NoError(t, err)
+	require.Len(t, frames, 250)
+	require.Len(t, primary.readRequests, 3)
+	for i, want := range []int{100, 100, 50} {
+		require.Len(t, primary.readRequests[i].GetSelectors(), want)
+		require.LessOrEqual(t, want, readSelectorBatchSize)
+	}
 }
 
 func TestReadWindowRequestsAllSelectorsWithoutSeriesTag(t *testing.T) {
@@ -95,7 +132,7 @@ func TestReadWindowRequestsAllSelectorsWithoutSeriesTag(t *testing.T) {
 func TestWriteRowsEncodesNullFields(t *testing.T) {
 	primary := &primaryFake{}
 	metadata := &metadataFake{dataset: &storagepb.Dataset{
-		SpaceId: "crypto", DatasetId: "factor_result", Freqs: []string{"1m"}, Status: "active",
+		SpaceId: "crypto", DatasetId: "factor_result", Freq: "1m", Status: "active",
 	}}
 	store := NewClient(primary, metadata, nil)
 	err := store.WriteRows(context.Background(), "crypto", "factor_result", "commit-1", []ResultRow{{
@@ -210,8 +247,7 @@ func TestCreateResultDatasetUsesSourceOwnershipAndRetention(t *testing.T) {
 	dataset := metadata.createRequests[0].GetDataset()
 	require.Equal(t, spec.DataSourceID, dataset.GetDataSourceId())
 	require.Equal(t, spec.DataNodeID, dataset.GetDataNodeId())
-	require.Equal(t, spec.KeepDuration, dataset.GetKeepDuration())
-	require.Equal(t, []string{spec.Frequency}, dataset.GetFreqs())
+	require.Equal(t, spec.Frequency, dataset.GetFreq())
 	require.Equal(t, []string{"tag-b", "tag-a"}, dataset.GetSubjectTags())
 	require.Equal(t, DatasetRoleFactorResult, dataset.GetAttributes()["dataset_role"])
 	require.Equal(t, spec.SourceDatasetID, dataset.GetAttributes()["source_dataset_id"])
@@ -285,6 +321,20 @@ func TestActivateDatasetUsesCurrentRevision(t *testing.T) {
 	require.Equal(t, uint64(12), metadata.activateRequests[0].GetExpectedRevision())
 }
 
+func TestSetDatasetSubjectTagsKeepsOtherFieldsAndRevision(t *testing.T) {
+	metadata := &metadataFake{dataset: &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "factor_result", Name: "因子结果", Revision: 7, Status: "active",
+		Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
+	}}
+	require.NoError(t, NewClient(nil, metadata, nil).SetDatasetSubjectTags(context.Background(), "crypto", "factor_result", []string{"binance_spot"}))
+	require.Len(t, metadata.updateRequests, 1)
+	updated := metadata.updateRequests[0].GetDataset()
+	require.Equal(t, []string{"binance_spot"}, updated.GetSubjectTags())
+	require.Equal(t, uint64(7), updated.GetRevision(), "the update carries the revision it read")
+	require.Equal(t, "因子结果", updated.GetName())
+	require.Empty(t, metadata.dataset.GetSubjectTags(), "the read dataset is not mutated in place")
+}
+
 func TestActivateFactorResultClearsDeletionTombstone(t *testing.T) {
 	metadata := &metadataFake{dataset: &storagepb.Dataset{
 		SpaceId: "crypto", DatasetId: "factor_result", Revision: 12, Status: "disabled",
@@ -305,7 +355,7 @@ func resultDatasetSpec() ResultDatasetSpec {
 	return ResultDatasetSpec{
 		SpaceID: "crypto", DatasetID: "factor_result", SourceDatasetID: "bars", Name: "因子结果",
 		Description: "derived factors", DataSourceID: "binance", DataNodeID: "storage-node-0",
-		DataKind: DataKindTimeSeries, Frequency: "1m", KeepDuration: "720h",
+		DataKind: DataKindTimeSeries, Frequency: "1m",
 		SubjectTags: []string{"tag-b", "tag-a"}, Attributes: map[string]string{"owner": "factor"},
 		Columns: []ColumnInfo{{ColumnName: "close", OriginType: ColumnOriginField, OriginID: "close", ValueType: ColumnTypeDouble}},
 	}
@@ -324,6 +374,7 @@ type primaryFake struct {
 	computedReq         *storagepb.GetFactorPeriodComputedReq
 	deleteRowsRequests  []*storagepb.PrimaryDeleteDatasetRowsReq
 	restoreRowsRequests []*storagepb.PrimaryRestoreDatasetRowsReq
+	readDeadlines       []time.Duration
 }
 
 type metadataFake struct {
@@ -338,6 +389,22 @@ type metadataFake struct {
 	deleteRequests   []*storagepb.DeleteDatasetReq
 	deleteRsp        *storagepb.DeleteDatasetRsp
 	deleteRsps       []*storagepb.DeleteDatasetRsp
+	subjectPages     []*storagepb.ListDatasetSubjectsRsp
+	updateRequests   []*storagepb.UpdateDatasetReq
+	views            []*storagepb.View
+}
+
+func (f *metadataFake) UpdateDataset(_ context.Context, req *storagepb.UpdateDatasetReq, _ ...client.Option) (*storagepb.UpdateDatasetRsp, error) {
+	f.updateRequests = append(f.updateRequests, req)
+	return &storagepb.UpdateDatasetRsp{RetInfo: successRet(), Dataset: req.GetDataset()}, nil
+}
+
+func (f *metadataFake) ListDatasetSubjects(_ context.Context, req *storagepb.ListDatasetSubjectsReq, _ ...client.Option) (*storagepb.ListDatasetSubjectsRsp, error) {
+	page := int(req.GetPage().GetPage()) - 1
+	if page < 0 || page >= len(f.subjectPages) {
+		return &storagepb.ListDatasetSubjectsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
+	}
+	return f.subjectPages[page], nil
 }
 
 func (f *metadataFake) GetDataset(_ context.Context, req *storagepb.GetDatasetReq, _ ...client.Option) (*storagepb.GetDatasetRsp, error) {
@@ -399,8 +466,11 @@ func (f *metadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDat
 	return &storagepb.DeleteDatasetRsp{RetInfo: successRet()}, nil
 }
 
-func (f *primaryFake) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
+func (f *primaryFake) ReadTimeSeriesRows(ctx context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
 	f.readRequests = append(f.readRequests, proto.Clone(req).(*storagepb.ReadTimeSeriesRowsReq))
+	if deadline, ok := ctx.Deadline(); ok {
+		f.readDeadlines = append(f.readDeadlines, time.Until(deadline))
+	}
 	if f.readErr != nil {
 		return nil, f.readErr
 	}
@@ -480,4 +550,62 @@ func successRet() *commonpb.RetInfo {
 func shortHash(parts ...string) string {
 	hash := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return hex.EncodeToString(hash[:16])
+}
+
+func TestListDatasetSubjectsPagesActiveSubjects(t *testing.T) {
+	ok := &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}
+	meta := &metadataFake{subjectPages: []*storagepb.ListDatasetSubjectsRsp{
+		{RetInfo: ok, DatasetSubjects: []*storagepb.DatasetSubject{{SubjectId: "ETH", Status: "active"}, {SubjectId: "OLD", Status: "inactive"}},
+			PageResult: &commonpb.PageResult{HasMore: true}},
+		{RetInfo: ok, DatasetSubjects: []*storagepb.DatasetSubject{{SubjectId: "BTC", Status: "active"}, {SubjectId: "ETH", Status: "active"}}},
+	}}
+	c := NewClient(nil, meta, AuthInfo("req"))
+
+	subjects, err := c.ListDatasetSubjects(context.Background(), "crypto", "dataset_bars")
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"BTC", "ETH"}, subjects)
+}
+
+func (f *metadataFake) ListViews(_ context.Context, _ *storagepb.ListViewsReq, _ ...client.Option) (*storagepb.ListViewsRsp, error) {
+	return &storagepb.ListViewsRsp{RetInfo: successRet(), Views: f.views}, nil
+}
+
+func TestDeleteFactorResultDatasetRefusesExtraViewsAndKeepsRows(t *testing.T) {
+	dataset := &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "dataset_x", Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
+	}
+	metadata := &metadataFake{
+		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: successRet(), Dataset: dataset}},
+		views:          []*storagepb.View{{ViewId: "view_x"}, {ViewId: "manual-view"}},
+	}
+	primary := &primaryFake{}
+	c := NewClient(primary, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+
+	err := c.DeleteDataset(context.Background(), "crypto", "dataset_x")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "manual-view")
+	require.Empty(t, primary.deleteRowsRequests, "存在额外 View 时不得物理清理数据")
+	require.Empty(t, metadata.deleteRequests)
+}
+
+func TestMarkerToProtoCarriesGapSubjects(t *testing.T) {
+	marker := PeriodMarker{
+		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m", PeriodTime: 1791115200, Status: "degraded",
+		Factors: []FactorState{{FactorID: "momentum", Status: "degraded", FailedSubjects: []string{"ETH", "BTC"}, GapSubjects: []string{"ETH", "ETH"}, SourceHash: "s", DefinitionHash: "d"}},
+	}
+	got := markerToProto(marker).GetFactors()
+	require.Len(t, got, 1)
+	require.Equal(t, []string{"BTC", "ETH"}, got[0].GetFailedSubjects())
+	require.Equal(t, []string{"ETH"}, got[0].GetGapSubjects(), "gap_subjects 与 failed_subjects 一样去重排序")
+}
+
+func TestCarriedTimeAndJSONFieldsKeepTheirStorageType(t *testing.T) {
+	timeValue, err := encodeValue(typedValueToAny(&storagepb.TypedValue{Value: &storagepb.TypedValue_TimeValue{TimeValue: "2026-10-04T00:00:00Z"}}))
+	require.NoError(t, err)
+	require.Equal(t, "2026-10-04T00:00:00Z", timeValue.GetTimeValue())
+
+	jsonValue, err := encodeValue(typedValueToAny(&storagepb.TypedValue{Value: &storagepb.TypedValue_JsonValue{JsonValue: `{"a":1}`}}))
+	require.NoError(t, err)
+	require.Equal(t, `{"a":1}`, jsonValue.GetJsonValue())
 }

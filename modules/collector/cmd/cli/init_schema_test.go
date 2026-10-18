@@ -9,10 +9,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/stretchr/testify/assert"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	_ "modernc.org/sqlite"
 )
 
 func TestIsInitCommand(t *testing.T) {
@@ -79,7 +80,7 @@ func TestRunInitCommandSeedsBuiltInTasks(t *testing.T) {
 
 func assertTableExists(t *testing.T, dbPath string, tableName string) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: dbPath + "?_time_format=sqlite"}, &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -94,7 +95,7 @@ func assertTableExists(t *testing.T, dbPath string, tableName string) {
 
 func assertTableNotExists(t *testing.T, dbPath string, tableName string) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Dialector{DriverName: "sqlite", DSN: dbPath + "?_time_format=sqlite"}, &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

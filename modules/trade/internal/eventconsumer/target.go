@@ -119,8 +119,7 @@ func HandleTarget(
 	// already been superseded. The transactional accept path remains the
 	// authority, but this read-only fast path prevents stale redeliveries from
 	// blocking a durable consumer on unavailable market data.
-	// The historical target table still stores a sequence for ordering and
-	// migration queries. For the modern contract it is derived from the
+	// The target table stores a sequence for ordering. It is derived from the
 	// immutable bar timestamp, never supplied as an authorization fallback.
 	barEnd := request.GetBarEndTime().AsTime().UnixMilli()
 	sequence := uint64(barEnd)
@@ -139,7 +138,18 @@ func HandleTarget(
 	// venue selection through receipt acceptance. Otherwise a concurrent member
 	// removal can leave an immutable receipt pointing at a venue that no longer
 	// belongs to the logical account.
-	unlockAccount := opts.Store.LockLogicalAccount(message.GetSpaceId(), request.GetLogicalAccountId())
+	// 拿锁阶段也受处理预算约束：完整同步等长时间持锁的操作不能让串行消费的目标消息一直卡在这里，
+	// 超时按可重试处理，其他账户的消息才能继续。
+	lockBudget := opts.ResolveTimeout
+	if lockBudget <= 0 {
+		lockBudget = 10 * time.Second
+	}
+	lockCtx, cancelLock := context.WithTimeout(ctx, lockBudget)
+	unlockAccount, lockErr := opts.Store.LockLogicalAccountContext(lockCtx, message.GetSpaceId(), request.GetLogicalAccountId())
+	cancelLock()
+	if lockErr != nil {
+		return retryTarget(lockErr)
+	}
 	defer unlockAccount()
 	unsupportedInstrument, membersReady, err := unsupportedLogicalTargetInstrument(
 		ctx, opts.Store, message.GetSpaceId(), request,
@@ -303,6 +313,10 @@ func unsupportedLogicalTargetInstrument(
 	// that it can become the eventual eligible execution venue.
 	membersReady = enabledMemberCount > 0 && readyMemberCount == enabledMemberCount
 	for _, target := range request.GetTargets() {
+		// 保持标的不会被下单，不能因为它暂时不受支持（例如已下架的持仓）而拒绝整个目标。
+		if target.GetHold() {
+			continue
+		}
 		if _, ok := supportedIDs[target.GetInstrumentId()]; !ok {
 			return target.GetInstrumentId(), membersReady, nil
 		}

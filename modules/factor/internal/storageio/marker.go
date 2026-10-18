@@ -50,29 +50,48 @@ func (c *Client) ReportComputed(ctx context.Context, marker PeriodMarker) error 
 }
 
 func (c *Client) ComputedExists(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (bool, error) {
-	if err := c.primaryReady("get factor period computed"); err != nil {
+	rsp, err := c.getComputed(ctx, spaceID, datasetID, triggerEventID, periodTime)
+	if err != nil {
 		return false, err
 	}
+	return rsp != nil && rsp.GetFound(), nil
+}
+
+// ComputedUniverse 返回周期 marker 里冻结的全集（universe_subject_ids）；marker 不存在时 found 为 false。
+// 截面因子的恢复用它：按目标周期冻结的全集重算，不用当前标的池，也不把单个标的当作完整截面。
+func (c *Client) ComputedUniverse(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) ([]string, bool, error) {
+	rsp, err := c.getComputed(ctx, spaceID, datasetID, triggerEventID, periodTime)
+	if err != nil || rsp == nil || !rsp.GetFound() {
+		return nil, false, err
+	}
+	return append([]string(nil), rsp.GetMarker().GetUniverseSubjectIds()...), true, nil
+}
+
+// getComputed 读取周期 marker；NOT_FOUND 返回 (nil, nil)。
+func (c *Client) getComputed(ctx context.Context, spaceID, datasetID, triggerEventID string, periodTime int64) (*storagepb.GetFactorPeriodComputedRsp, error) {
+	if err := c.primaryReady("get factor period computed"); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" || strings.TrimSpace(triggerEventID) == "" || periodTime <= 0 {
-		return false, errors.New("space_id, dataset_id, trigger_event_id and positive period_time are required")
+		return nil, errors.New("space_id, dataset_id, trigger_event_id and positive period_time are required")
 	}
 	rsp, err := c.primary.GetFactorPeriodComputed(ctx, &storagepb.GetFactorPeriodComputedReq{
 		AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, TriggerEventId: triggerEventID, PeriodTime: periodTime,
 	})
 	if err != nil {
-		return false, rpcError("get factor period computed", err)
+		return nil, rpcError("get factor period computed", err)
 	}
 	if rsp == nil {
-		return false, fmt.Errorf("%w: get factor period computed returned an empty response", ErrInfra)
+		return nil, fmt.Errorf("%w: get factor period computed returned an empty response", ErrInfra)
 	}
 	ret := rsp.GetRetInfo()
 	if ret != nil && ret.GetCode() == commonpb.ErrorCode_NOT_FOUND {
-		return false, nil
+		return nil, nil
 	}
 	if err := responseError("get factor period computed", ret); err != nil {
-		return false, err
+		return nil, err
 	}
-	return rsp.GetFound(), nil
+	return rsp, nil
 }
 
 func markerToProto(marker PeriodMarker) *storagepb.FactorPeriodComputedMarker {
@@ -83,6 +102,7 @@ func markerToProto(marker PeriodMarker) *storagepb.FactorPeriodComputedMarker {
 		protoFactors = append(protoFactors, &storagepb.FactorPeriodState{
 			FactorId: factor.FactorID, Status: factor.Status,
 			FailedSubjects: normalizedSorted(factor.FailedSubjects), SourceHash: factor.SourceHash,
+			DefinitionHash: factor.DefinitionHash, GapSubjects: normalizedSorted(factor.GapSubjects),
 		})
 	}
 	return &storagepb.FactorPeriodComputedMarker{

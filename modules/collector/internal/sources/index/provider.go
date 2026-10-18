@@ -15,7 +15,7 @@ func NewHTTPProvider(providerID, sourceID, displayName, baseURL, host string, sy
 		Exchanges: []string{"XSHG", "XSHE", "XBSE"}, BaseURL: baseURL,
 		Endpoint: "/api/qt/stock/kline/get", Host: host, HTTPClient: client,
 		Location: mustLocation("Asia/Shanghai"), SymbolFunc: symbolFunc,
-		Frequencies: []string{"1d", "1w", "1M"}, MaxBarsPerRequest: 1200,
+		Frequencies: []string{"1d", "1w", "1mo"}, MaxBarsPerRequest: 1200,
 		TimestampMode: marketdata.TimestampModeOpen, CompleteOHLCV: true,
 		HasAmount: true, Status: status, Now: now,
 	})

@@ -24,13 +24,9 @@ func BuildTaskSpecs(params *domain.CollectParams, subjects []domain.DatasetSubje
 				continue
 			}
 			specs = append(specs, domain.TaskSpec{
-				Exchange:  params.Collector.Exchange,
-				Market:    params.Collector.Market,
 				DataType:  params.Collector.DataType,
 				DatasetID: params.Target.DatasetID,
 				SubjectID: subjectID,
-				Symbol:    symbol,
-				Interval:  interval,
 				Params: map[string]any{
 					"exchange":          params.Collector.Exchange,
 					"market":            params.Collector.Market,

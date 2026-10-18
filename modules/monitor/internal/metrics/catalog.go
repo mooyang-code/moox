@@ -32,6 +32,10 @@ func (c *MetricCatalog) NoDataAfter() time.Duration {
 }
 
 func (c *MetricCatalog) ListServices(ctx context.Context, spaceID string, offset, limit int) ([]MetricService, int64, error) {
+	return c.ListServicesAt(ctx, spaceID, offset, limit, time.Now().UTC())
+}
+
+func (c *MetricCatalog) ListServicesAt(ctx context.Context, spaceID string, offset, limit int, now time.Time) ([]MetricService, int64, error) {
 	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
 		return nil, 0, ErrMetricsStoreUnavailable
 	}
@@ -56,7 +60,7 @@ func (c *MetricCatalog) ListServices(ctx context.Context, spaceID string, offset
 	var rows []MetricService
 	listSQL := rankedSQL + `
 		SELECT c_id, c_service_name, c_instance_id, c_boot_id, c_node_id, c_version,
-			c_last_seen_at, c_is_stale, c_ctime, c_mtime
+			c_last_seen_at, c_ctime, c_mtime
 		FROM ranked_services
 		WHERE logical_rank = 1
 		ORDER BY c_service_name ASC, c_instance_id ASC, c_node_id ASC
@@ -64,7 +68,7 @@ func (c *MetricCatalog) ListServices(ctx context.Context, spaceID string, offset
 	if err := c.messageStore.db.WithContext(ctx).Raw(listSQL, limit, offset).Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
-	c.markServicesStale(rows)
+	c.markServicesStaleAt(rows, now)
 	return rows, total, nil
 }
 
@@ -112,7 +116,7 @@ func (c *MetricCatalog) ListServicesForAt(ctx context.Context, serviceNames []st
 	var rows []MetricService
 	listSQL := rankedSQL + `
 		SELECT c_id, c_service_name, c_instance_id, c_boot_id, c_node_id, c_version,
-			c_last_seen_at, c_is_stale, c_ctime, c_mtime
+			c_last_seen_at, c_ctime, c_mtime
 		FROM ranked_services
 		WHERE logical_rank = 1
 		ORDER BY c_service_name ASC, c_instance_id ASC, c_node_id ASC
@@ -161,10 +165,6 @@ func (c *MetricCatalog) CurrentBootIDs(ctx context.Context, now time.Time) (map[
 		out[key] = bootID
 	}
 	return out, nil
-}
-
-func (c *MetricCatalog) markServicesStale(rows []MetricService) {
-	c.markServicesStaleAt(rows, time.Now().UTC())
 }
 
 func (c *MetricCatalog) markServicesStaleAt(rows []MetricService, now time.Time) {

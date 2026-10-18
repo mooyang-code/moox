@@ -83,8 +83,8 @@ func (g *StorageGate) Validate(ctx context.Context) error {
 			}
 			return g.setStatus(err)
 		}
-		if datasetMetadata.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES || !containsFreq(datasetMetadata.GetFreqs(), g.cfg.Frequency) {
-			return g.setStatus(fmt.Errorf("dataset %q does not support time-series frequency %q", dataset, g.cfg.Frequency))
+		if datasetMetadata.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES || datasetMetadata.GetFreq() != g.cfg.Frequency {
+			return g.setStatus(fmt.Errorf("dataset %q is not a %q time series", dataset, g.cfg.Frequency))
 		}
 		columns, callErr := g.metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{SpaceId: g.cfg.SpaceID, DatasetId: dataset, Page: &commonpb.Page{Page: 1, Size: 100}})
 		if callErr != nil {
@@ -168,13 +168,4 @@ func checkRet(ret *commonpb.RetInfo) error {
 		return fmt.Errorf("storage returned %s", ret.GetMsg())
 	}
 	return nil
-}
-
-func containsFreq(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
 }

@@ -25,77 +25,12 @@ func TestResultIDsUseReadableTaskSlug(t *testing.T) {
 }
 
 func TestResultIDsUseTagTaskTypeFrequencyViewIdentity(t *testing.T) {
-	ids := ResultIDsForTask("crypto", "task-one", "binance_spot", "kline", "1m")
+	ids := ResultIDsForTask("crypto", "task-one", "kline", "1m")
 	require.Equal(t, "dataset_task_one", ids.DatasetID)
 	require.Equal(t, "view_task_one_kline_1m", ids.ViewID)
-	require.NotEqual(t, ids.ViewID, ResultIDsForTask("crypto", "task-two", "binance_spot", "kline", "1m").ViewID)
-	require.NotEqual(t, ids.ViewID, ResultIDsForTask("crypto", "task-two", "binance_spot", "kline", "5m").ViewID)
-	require.Equal(t, "view_task_one_kline_1m", ResultIDsForTask("crypto", "task-one", "", "kline", "1m").ViewID)
-}
-
-func TestBuiltinSharedResultIDsAreRestrictedToSeededBinanceOneMinuteTasks(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		taskID string
-		tagID  string
-	}{
-		{name: "spot", taskID: BinanceSpotKline1mTaskID, tagID: "binance_spot"},
-		{name: "swap", taskID: BinanceSwapKline1mTaskID, tagID: "binance_swap"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			ids, ok := BuiltinSharedResultIDs("crypto", test.taskID, "kline", "1m", []string{test.tagID})
-			require.True(t, ok)
-			require.Equal(t, IDs{DatasetID: BinanceKline1mDatasetID, ViewID: BinanceKline1mViewID}, ids)
-		})
-	}
-
-	for _, test := range []struct {
-		name      string
-		spaceID   string
-		taskID    string
-		taskType  string
-		frequency string
-		tagIDs    []string
-	}{
-		{name: "other space", spaceID: "other", taskID: BinanceSpotKline1mTaskID, taskType: "kline", frequency: "1m", tagIDs: []string{"binance_spot"}},
-		{name: "other task", spaceID: "crypto", taskID: "custom-task", taskType: "kline", frequency: "1m", tagIDs: []string{"binance_spot"}},
-		{name: "other data type", spaceID: "crypto", taskID: BinanceSpotKline1mTaskID, taskType: "kline_resample", frequency: "1m", tagIDs: []string{"binance_spot"}},
-		{name: "other frequency", spaceID: "crypto", taskID: BinanceSpotKline1mTaskID, taskType: "kline", frequency: "1h", tagIDs: []string{"binance_spot"}},
-		{name: "other tag", spaceID: "crypto", taskID: BinanceSpotKline1mTaskID, taskType: "kline", frequency: "1m", tagIDs: []string{"binance_swap"}},
-		{name: "multiple tags", spaceID: "crypto", taskID: BinanceSpotKline1mTaskID, taskType: "kline", frequency: "1m", tagIDs: []string{"binance_spot", "other"}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			_, ok := BuiltinSharedResultIDs(test.spaceID, test.taskID, test.taskType, test.frequency, test.tagIDs)
-			require.False(t, ok)
-		})
-	}
-}
-
-func TestBuiltinSharedResultRouteMustMatchReservedTask(t *testing.T) {
-	tests := []struct {
-		name       string
-		taskID     string
-		provider   string
-		marketType string
-		tagID      string
-		want       bool
-	}{
-		{name: "spot", taskID: BinanceSpotKline1mTaskID, provider: "binance", marketType: "spot", tagID: "binance_spot", want: true},
-		{name: "swap", taskID: BinanceSwapKline1mTaskID, provider: "binance", marketType: "swap", tagID: "binance_swap", want: true},
-		{name: "spot task with swap route", taskID: BinanceSpotKline1mTaskID, provider: "binance", marketType: "swap", tagID: "binance_spot"},
-		{name: "swap task with spot route", taskID: BinanceSwapKline1mTaskID, provider: "binance", marketType: "spot", tagID: "binance_swap"},
-		{name: "other provider", taskID: BinanceSpotKline1mTaskID, provider: "other", marketType: "spot", tagID: "binance_spot"},
-		{name: "missing route", taskID: BinanceSpotKline1mTaskID, tagID: "binance_spot"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			ids, allowed := BuiltinSharedResultIDsForRoute("crypto", test.taskID, "kline", "1m", test.provider, test.marketType, []string{test.tagID})
-			require.Equal(t, test.want, allowed)
-			if test.want {
-				require.Equal(t, IDs{DatasetID: BinanceKline1mDatasetID, ViewID: BinanceKline1mViewID}, ids)
-			}
-		})
-	}
+	require.NotEqual(t, ids.ViewID, ResultIDsForTask("crypto", "task-two", "kline", "1m").ViewID)
+	require.NotEqual(t, ids.ViewID, ResultIDsForTask("crypto", "task-two", "kline", "5m").ViewID)
+	require.Equal(t, "view_task_one_kline_1m", ResultIDsForTask("crypto", "task-one", "kline", "1m").ViewID)
 }
 
 func TestBuiltinResultIDsRemainTaskOwnedAndDoNotReuseCatalogIDs(t *testing.T) {
@@ -110,65 +45,11 @@ func TestBuiltinResultIDsRemainTaskOwnedAndDoNotReuseCatalogIDs(t *testing.T) {
 	require.NotEqual(t, "dataset_perpetual_kline_1h", swap.DatasetID)
 }
 
-func TestInspectBuiltinSharedResultRequiresAllowlistedTaskAndRawDataset(t *testing.T) {
-	ids := IDs{DatasetID: BinanceKline1mDatasetID, ViewID: BinanceKline1mViewID}
-	fake := newResultMetadataFake()
-	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
-		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active",
-		Attributes: map[string]string{"dataset_role": "raw_collection"},
-	}
-	fake.views[ids.ViewID] = &storagepb.View{SpaceId: "crypto", ViewId: ids.ViewID, DatasetId: ids.DatasetID, Status: "active"}
-	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
-
-	inspection, err := manager.InspectBuiltinSharedIDs(context.Background(), "crypto", BinanceSpotKline1mTaskID, "kline", "1m", []string{"binance_spot"}, ids)
-	require.NoError(t, err)
-	require.Equal(t, ResultStatusReady, inspection.Status)
-	require.NotNil(t, inspection.Dataset)
-	require.NotNil(t, inspection.View)
-
-	for name, input := range []struct {
-		spaceID  string
-		taskID   string
-		taskType string
-		freq     string
-		tags     []string
-		ids      IDs
-	}{
-		{spaceID: "crypto", taskID: "custom-task", taskType: "kline", freq: "1m", tags: []string{"binance_spot"}, ids: ids},
-		{spaceID: "other", taskID: BinanceSpotKline1mTaskID, taskType: "kline", freq: "1m", tags: []string{"binance_spot"}, ids: ids},
-		{spaceID: "crypto", taskID: BinanceSpotKline1mTaskID, taskType: "kline", freq: "1m", tags: []string{"binance_swap"}, ids: ids},
-		{spaceID: "crypto", taskID: BinanceSpotKline1mTaskID, taskType: "kline", freq: "1m", tags: []string{"binance_spot"}, ids: IDs{DatasetID: "dataset_other", ViewID: "view_other"}},
-	} {
-		_, err := manager.InspectBuiltinSharedIDs(context.Background(), input.spaceID, input.taskID, input.taskType, input.freq, input.tags, input.ids)
-		require.Error(t, err, "case %d", name)
-		require.ErrorIs(t, err, ErrResultContract)
-	}
-
-	fake.datasets[ids.DatasetID].Attributes["dataset_role"] = "factor_result"
-	_, err = manager.InspectBuiltinSharedIDs(context.Background(), "crypto", BinanceSpotKline1mTaskID, "kline", "1m", []string{"binance_spot"}, ids)
-	require.ErrorIs(t, err, ErrResultContract)
-	fake.datasets[ids.DatasetID].Attributes["dataset_role"] = "raw_collection"
-	fake.views[ids.ViewID].DatasetId = "dataset_other"
-	_, err = manager.InspectBuiltinSharedIDs(context.Background(), "crypto", BinanceSpotKline1mTaskID, "kline", "1m", []string{"binance_spot"}, ids)
-	require.ErrorIs(t, err, ErrResultContract)
-}
-
-func TestValidateBuiltinSharedOutputFieldsDoesNotExpandSetupSchema(t *testing.T) {
-	require.NoError(t, ValidateBuiltinSharedOutputFields([]string{"open", "close", "trade_num"}))
-	require.ErrorIs(t, ValidateBuiltinSharedOutputFields([]string{"new_dynamic_field"}), ErrUnsupportedOutputFields)
-	require.Error(t, ValidateBuiltinSharedOutputFields(nil))
-}
-
 func TestResultDisplayNameUsesShortChinese(t *testing.T) {
 	require.Equal(t, "合约小时K线", resultDisplayName(Config{Name: "Binance 合约 K 线 1H"}, "builtin-binance-swap-kline-1h"))
 	require.Equal(t, "采集结果", resultDisplayName(Config{Name: "too long english name"}, "custom-task"))
 	require.True(t, isChineseDisplayName("现货分钟K线"))
 	require.False(t, isChineseDisplayName("Binance 现货 K 线 1m"))
-}
-
-func TestIsLegacyHashedIDs(t *testing.T) {
-	require.True(t, IsLegacyHashedIDs(IDs{DatasetID: "dataset_collector_df4b3afb3ff5547c", ViewID: "view_collector_df4b3afb3ff5547c"}))
-	require.False(t, IsLegacyHashedIDs(ResultIDs("crypto", "builtin-binance-spot-kline-1m")))
 }
 
 type resultMetadataFake struct {
@@ -305,8 +186,8 @@ func TestEnsureOutputFieldsReplacesExplicitViewProjection(t *testing.T) {
 		SpaceId: "crypto", ViewId: ids.ViewID, Name: "任务结果", DatasetId: ids.DatasetID, Status: "active",
 		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "task-projection", "moox.columns_explicit": "true"},
 		Columns: []*storagepb.ViewColumn{
-			{ColumnName: ids.DatasetID + ".close", OriginId: ids.DatasetID + ".close"},
-			{ColumnName: ids.DatasetID + ".provider_id", OriginId: ids.DatasetID + ".provider_id"},
+			{ColumnName: "close", OriginId: "close"},
+			{ColumnName: "provider_id", OriginId: "provider_id"},
 		},
 	}
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
@@ -314,8 +195,8 @@ func TestEnsureOutputFieldsReplacesExplicitViewProjection(t *testing.T) {
 
 	got := fake.views[ids.ViewID].GetColumns()
 	require.Len(t, got, 2)
-	require.Equal(t, ids.DatasetID+".close", got[0].GetColumnName())
-	require.Equal(t, ids.DatasetID+".open", got[1].GetColumnName())
+	require.Equal(t, "close", got[0].GetColumnName())
+	require.Equal(t, "open", got[1].GetColumnName())
 	for _, column := range got {
 		require.NotContains(t, column.GetColumnName(), "provider_id")
 	}
@@ -355,30 +236,17 @@ func TestEnsureUpdatesExistingSubjectTagsWithRequestedScope(t *testing.T) {
 	require.Equal(t, []string{"new_tag"}, fake.datasets[ids.DatasetID].GetSubjectTags())
 }
 
-func TestEnsureDeclaresAllCollectionFrequencies(t *testing.T) {
+func TestEnsureDeclaresTheTaskFrequency(t *testing.T) {
 	fake := newResultMetadataFake()
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
-	ids, err := manager.Ensure(context.Background(), "crypto", "task-multi-frequency", "kline", "spot", Config{
-		DataNodeID: "node-1", Frequency: "1m", Frequencies: []string{"1m", "5m", "1m"},
-	})
+	ids, err := manager.Ensure(context.Background(), "crypto", "task-5m", "kline", "spot", Config{DataNodeID: "node-1", Frequency: "5m"})
 	require.NoError(t, err)
-	require.Equal(t, []string{"1m", "5m"}, fake.datasets[ids.DatasetID].GetFreqs())
-	require.Equal(t, `{"freq":"1m"}`, fake.views[ids.ViewID].GetFilterJson())
-}
+	require.Equal(t, "5m", fake.datasets[ids.DatasetID].GetFreq())
+	require.Empty(t, fake.views[ids.ViewID].GetFreq(), "Storage fills the View freq from its Dataset")
 
-func TestNormalizeKeepDurationAcceptsDaysAndWeeks(t *testing.T) {
-	require.Equal(t, "720h0m0s", mustNormalizeKeepDuration(t, "30d"))
-	require.Equal(t, "168h0m0s", mustNormalizeKeepDuration(t, "1w"))
-	require.Equal(t, "0", mustNormalizeKeepDuration(t, "0"))
-	_, err := normalizeKeepDuration("invalid")
-	require.Error(t, err)
-}
-
-func mustNormalizeKeepDuration(t *testing.T, raw string) string {
-	t.Helper()
-	value, err := normalizeKeepDuration(raw)
+	ids, err = manager.Ensure(context.Background(), "crypto", "task-1h", "kline", "spot", Config{DataNodeID: "node-1", Frequency: "1H"})
 	require.NoError(t, err)
-	return value
+	require.Equal(t, "1h", fake.datasets[ids.DatasetID].GetFreq(), "a frequency alias is declared in canonical form")
 }
 
 func TestEnsureCompensatesDatasetWhenViewCreationFails(t *testing.T) {
@@ -558,4 +426,78 @@ func TestDeleteRemovesTaskOwnedDatasetAndView(t *testing.T) {
 	require.False(t, datasetExists)
 	_, viewExists := fake.views[ids.ViewID]
 	require.False(t, viewExists)
+}
+
+// taggedResultMetadataFake also serves Tags, like the production proxy.
+type taggedResultMetadataFake struct {
+	*resultMetadataFake
+	tagSources map[string]string
+}
+
+func (f taggedResultMetadataFake) GetTag(_ context.Context, req *storagepb.GetTagReq) (*storagepb.GetTagRsp, error) {
+	source, ok := f.tagSources[req.GetTagId()]
+	if !ok {
+		return &storagepb.GetTagRsp{RetInfo: resultNotFound()}, nil
+	}
+	return &storagepb.GetTagRsp{RetInfo: resultOK(), Tag: &storagepb.Tag{SpaceId: req.GetSpaceId(), TagId: req.GetTagId(), Source: source}}, nil
+}
+
+func TestEnsureRecordsTheTagsSharedDataSource(t *testing.T) {
+	fake := taggedResultMetadataFake{newResultMetadataFake(), map[string]string{"binance_spot": "binance", "binance_swap": "binance", "okx_spot": "okx"}}
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	ensure := func(taskID string, tags ...string) *storagepb.Dataset {
+		_, err := manager.Ensure(context.Background(), "crypto", taskID, "kline", "", Config{DataNodeID: "node-1", Frequency: "1m", SubjectTags: tags})
+		require.NoError(t, err)
+		return fake.datasets[ResultIDs("crypto", taskID).DatasetID]
+	}
+	require.Equal(t, "binance", ensure("single-source", "binance_spot").GetDataSourceId())
+	require.Equal(t, "binance", ensure("same-source", "binance_spot", "binance_swap").GetDataSourceId())
+	require.Empty(t, ensure("mixed-source", "binance_spot", "okx_spot").GetDataSourceId(), "a result spanning sources has no single data source")
+
+	ids := ResultIDs("crypto", "unsourced")
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", SubjectTags: []string{"binance_swap"},
+		Attributes: map[string]string{"owner_module": "collector", "collector_task_id": "unsourced"},
+	}
+	require.Equal(t, "binance", ensure("unsourced", "binance_swap").GetDataSourceId(), "an existing result without a data source gets it assigned")
+
+	_, err := manager.Ensure(context.Background(), "crypto", "missing-tag", "kline", "", Config{DataNodeID: "node-1", Frequency: "1m", SubjectTags: []string{"unknown"}})
+	require.Error(t, err)
+}
+
+func (f *resultMetadataFake) ListViews(_ context.Context, req *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error) {
+	rsp := &storagepb.ListViewsRsp{RetInfo: resultOK()}
+	for _, view := range f.views {
+		if view.GetDatasetId() == req.GetDatasetId() {
+			rsp.Views = append(rsp.Views, view)
+		}
+	}
+	return rsp, nil
+}
+
+func TestDeleteRefusesWhenExtraViewReferencesResultDatasetAndKeepsData(t *testing.T) {
+	fake := newResultMetadataFake()
+	taskID := "builtin-binance-spot-kline-1m"
+	ids := ResultIDs("crypto", taskID)
+	attrs := map[string]string{"owner_module": "collector", "collector_task_id": taskID}
+	fake.datasets[ids.DatasetID] = &storagepb.Dataset{SpaceId: "crypto", DatasetId: ids.DatasetID, Status: "active", Attributes: attrs}
+	fake.views[ids.ViewID] = &storagepb.View{ViewId: ids.ViewID, DatasetId: ids.DatasetID, Attributes: attrs}
+	fake.views["manual-view"] = &storagepb.View{ViewId: "manual-view", DatasetId: ids.DatasetID}
+	cleaner := &countingCleaner{}
+	manager := &Manager{metadata: fake, cleaner: cleaner, auth: &storagepb.AuthInfo{AppId: "collector"}}
+	err := manager.Delete(context.Background(), "crypto", ids)
+	require.ErrorIs(t, err, ErrResultContract)
+	require.Contains(t, err.Error(), "manual-view")
+	require.Zero(t, cleaner.calls, "存在额外 View 时不得物理清理数据")
+}
+
+type countingCleaner struct{ calls int }
+
+func (c *countingCleaner) DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
+	c.calls++
+	return &storagepb.PrimaryDeleteDatasetRowsRsp{RetInfo: resultOK()}, nil
+}
+
+func (c *countingCleaner) RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq) (*storagepb.PrimaryRestoreDatasetRowsRsp, error) {
+	return &storagepb.PrimaryRestoreDatasetRowsRsp{RetInfo: resultOK()}, nil
 }

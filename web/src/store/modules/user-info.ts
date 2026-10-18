@@ -1,3 +1,4 @@
+import { ref } from "vue";
 import { defineStore } from "pinia";
 import persistedstateConfig from "@/store/config/index";
 import { getUserInfoAPI } from "@/api/modules/user/index";
@@ -48,6 +49,14 @@ const isAdminRole = (roleValue: number): boolean => {
  * @methods setToken 设置token
  * @methods logOut 退出登录
  */
+export const STALE_ACCOUNT_REQUEST = "StaleAccountRequestError";
+
+function staleAccountRequestError(): Error {
+  const error = new Error("用户信息请求所属的登录会话已变化");
+  error.name = STALE_ACCOUNT_REQUEST;
+  return error;
+}
+
 const userInfoStore = () => {
   // 账号信息
   const account = ref<Account>({
@@ -62,6 +71,10 @@ const userInfoStore = () => {
 
   // 设置账号信息
   async function setAccount() {
+    // 固定发起时的会话：等待期间用户重新登录后，旧请求的成功/失败回写都不能影响新会话
+    const requestSession = sessionId.value;
+    const requestToken = token.value;
+    const isStale = () => sessionId.value !== requestSession || token.value !== requestToken;
     try {
       // 使用当前存储的token获取用户信息
       if (!token.value) {
@@ -69,7 +82,8 @@ const userInfoStore = () => {
         throw new Error("未找到访问令牌，请重新登录");
       }
 
-      const data = await getUserInfoAPI(token.value);
+      const data = await getUserInfoAPI(requestToken);
+      if (isStale()) throw staleAccountRequestError();
 
       // 添加安全检查
       if (!data) {
@@ -111,6 +125,10 @@ const userInfoStore = () => {
         throw new Error(errorMessage);
       }
     } catch (error: any) {
+      if (error?.name === STALE_ACCOUNT_REQUEST || isStale()) {
+        // 旧会话的迟到结果：既不覆盖也不清除当前会话，由调用方识别后重新进入当前会话的流程
+        throw staleAccountRequestError();
+      }
       console.error("setAccount: 获取用户信息失败", error);
 
       // 清空用户信息，避免死循环

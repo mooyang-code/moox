@@ -96,36 +96,36 @@
           </a-radio-group>
         </a-form-item>
         <a-form-item field="source" label="数据源" required>
-            <a-select v-model="form.source" :disabled="editing" allow-search placeholder="选择标的列表数据源">
-              <a-option v-for="source in listingSources" :key="source.data_source_id" :value="source.data_source_id">
-                {{ source.name || source.data_source_id }}（{{ source.data_source_id }}）
-              </a-option>
-            </a-select>
-          </a-form-item>
+          <a-select v-model="form.source" :disabled="editing" allow-search placeholder="选择标的列表数据源">
+            <a-option v-for="source in listingSources" :key="source.data_source_id" :value="source.data_source_id">
+              {{ source.name || source.data_source_id }}（{{ source.data_source_id }}）
+            </a-option>
+          </a-select>
+        </a-form-item>
         <a-form-item field="market_type" label="市场类型" required>
-            <a-select v-model="form.market_type" :disabled="editing" placeholder="选择市场类型">
-              <a-option v-for="type in instrumentTypes" :key="type" :value="type">{{ type }}</a-option>
-            </a-select>
-          </a-form-item>
-          <a-row :gutter="16">
-            <a-col :span="12">
-              <a-form-item field="cron" label="定时更新" required>
-                <a-input v-model="form.cron" placeholder="0 * * * *" />
-              </a-form-item>
-            </a-col>
-            <a-col :span="12">
-              <a-form-item field="timezone" label="时区" required>
-                <a-select v-model="form.timezone" allow-search allow-create>
-                  <a-option v-for="timezone in timezoneOptions" :key="timezone" :value="timezone">{{ timezone }}</a-option>
-                </a-select>
-              </a-form-item>
-            </a-col>
-          </a-row>
-          <div class="next-runs">
-            <span class="muted">接下来运行</span>
-            <a-tag v-for="run in previewRuns" :key="run" size="small">{{ formatTime(run) }}</a-tag>
-            <span v-if="!previewRuns.length" class="run-status--failed">定时更新表达式无效</span>
-          </div>
+          <a-select v-model="form.market_type" :disabled="editing" placeholder="选择市场类型">
+            <a-option v-for="type in instrumentTypes" :key="type" :value="type">{{ type }}</a-option>
+          </a-select>
+        </a-form-item>
+        <a-row :gutter="16">
+          <a-col :span="12">
+            <a-form-item field="cron" label="定时更新" required>
+              <a-input v-model="form.cron" placeholder="0 * * * *" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-item field="timezone" label="时区" required>
+              <a-select v-model="form.timezone" allow-search allow-create>
+                <a-option v-for="timezone in timezoneOptions" :key="timezone" :value="timezone">{{ timezone }}</a-option>
+              </a-select>
+            </a-form-item>
+          </a-col>
+        </a-row>
+        <div class="next-runs">
+          <span class="muted">接下来运行</span>
+          <a-tag v-for="run in previewRuns" :key="run" size="small">{{ formatTime(run) }}</a-tag>
+          <span v-if="!previewRuns.length" class="run-status--failed">定时更新表达式无效</span>
+        </div>
       </a-form>
     </a-modal>
 
@@ -143,6 +143,8 @@
 </template>
 
 <script setup lang="ts">
+import { createSubmitScope } from "@/utils/submit-scope";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { deleteTag, listDataSources, listTags, upsertTag } from "@/api/storage/metadata";
@@ -196,19 +198,26 @@ function parseListing(source: DataSource): string[] {
   }
 }
 
+// 空间切换后，旧空间迟到的响应不能覆盖新空间的列表；编辑/删除都固定在打开时的空间，提交前再校验。
+const loadRequests = createLatestRequestGuard();
+let editSpaceId = "";
+
 async function load() {
   if (!props.spaceId) return;
+  const request = loadRequests.begin();
+  const spaceId = props.spaceId;
   loading.value = true;
   try {
     const [tagRsp, sourceRsp] = await Promise.all([
-      listTags(props.spaceId, { page: pagination.current, size: 200 }),
-      listDataSources({ space_id: props.spaceId, page: { page: 1, size: 200 } })
+      listTags(spaceId, { page: pagination.current, size: 200 }),
+      listDataSources({ space_id: spaceId, page: { page: 1, size: 200 } })
     ]);
+    if (!request.isLatest() || spaceId !== props.spaceId) return;
     rows.value = tagRsp.tags || [];
     dataSources.value = sourceRsp.data_sources || [];
     pagination.total = tagRsp.page_result?.total ?? rows.value.length;
   } finally {
-    loading.value = false;
+    if (request.isLatest()) loading.value = false;
   }
 }
 
@@ -217,6 +226,7 @@ function openMembers(tag: Tag) {
 }
 
 function openCreate() {
+  editSpaceId = props.spaceId;
   editing.value = false;
   activeTag.value = undefined;
   Object.assign(form, emptyForm());
@@ -224,6 +234,7 @@ function openCreate() {
 }
 
 function openEdit(tag: Tag) {
+  editSpaceId = props.spaceId;
   editing.value = true;
   activeTag.value = tag;
   Object.assign(form, tagToFormState(tag));
@@ -231,16 +242,27 @@ function openEdit(tag: Tag) {
 }
 
 async function submit(): Promise<boolean> {
-  const error = validateTagForm(form, !editing.value);
+  // 首次 await（重复 ID 检查）之前固定作用域与提交快照：检查期间取消并重新打开表单后，旧提交不能读取新表单
+  const submission = tagScope.begin();
+  const isEditing = editing.value;
+  const formSnapshot = { ...form };
+  const spaceId = props.spaceId;
+  if (editSpaceId && editSpaceId !== spaceId) {
+    Message.warning("空间已切换，请重新打开编辑窗口");
+    visible.value = false;
+    return false;
+  }
+  const error = validateTagForm(form, !isEditing);
   if (error) {
     Message.warning(error);
     return false;
   }
-  if (!editing.value) {
-    const tagId = form.tag_id.trim().toLowerCase();
+  if (!isEditing) {
+    const tagId = formSnapshot.tag_id.trim().toLowerCase();
     try {
       for (let page = 1; ; page += 1) {
-        const response = await listTags(props.spaceId, { page, size: 500 });
+        const response = await listTags(spaceId, { page, size: 500 });
+        if (!submission.isCurrent()) return false;
         if ((response.tags || []).some(tag => tag.tag_id.trim().toLowerCase() === tagId)) {
           Message.warning(`标签 ID “${tagId}”已存在，请使用其他 ID`);
           return false;
@@ -248,37 +270,44 @@ async function submit(): Promise<boolean> {
         if (!response.page_result?.has_more || !(response.tags || []).length) break;
       }
     } catch (error) {
+      if (!submission.isCurrent()) return false;
       Message.error(error instanceof Error ? error.message : "检查标签 ID 是否重复失败");
       return false;
     }
   }
   try {
-    await upsertTag(toTagPayload(props.spaceId, form), !editing.value);
+    await upsertTag(toTagPayload(spaceId, formSnapshot), !isEditing);
   } catch (error) {
     const message = error instanceof Error ? error.message : "标签保存失败";
-    if (!editing.value && /tag name .* already exists/i.test(message)) {
+    if (!isEditing && /tag name .* already exists/i.test(message)) {
       Message.warning("标签名称已存在，请使用其他名称");
       return false;
     }
-    if (!editing.value && /tag .* already exists|tag_id already exists|already exists/i.test(message)) {
-      Message.warning(`标签 ID “${form.tag_id.trim().toLowerCase()}”已存在，请使用其他 ID`);
+    if (!isEditing && /tag .* already exists|tag_id already exists|already exists/i.test(message)) {
+      Message.warning(`标签 ID “${formSnapshot.tag_id.trim().toLowerCase()}”已存在，请使用其他 ID`);
       return false;
     }
     throw error;
   }
   Message.success("标签已保存");
+  if (!submission.isCurrent()) return false; // 已保存，但表单已被关闭/重新打开或空间已切换：不操作当前表单
   visible.value = false;
   await load();
   return true;
 }
 
 function confirmDelete(tag: Tag) {
+  const spaceId = props.spaceId;
   Modal.confirm({
     title: `删除标签“${tag.tag_name}”？`,
     content: "删除后标签成员关系也会被移除，且无法恢复。",
     onOk: async () => {
+      if (spaceId !== props.spaceId) {
+        Message.warning("空间已切换，已取消删除");
+        return;
+      }
       try {
-        await deleteTag(props.spaceId, tag.tag_id);
+        await deleteTag(spaceId, tag.tag_id);
         Message.success("标签已删除");
         await load();
       } catch (error) {
@@ -295,6 +324,10 @@ function confirmDelete(tag: Tag) {
 watch(
   () => props.spaceId,
   () => {
+    loadRequests.invalidate();
+    rows.value = [];
+    visible.value = false;
+    activeTag.value = undefined;
     pagination.current = 1;
     void load();
   },
@@ -302,6 +335,11 @@ watch(
 );
 
 onMounted(() => void load());
+
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const tagScope = createSubmitScope();
+// 该弹窗使用 @before-ok（等待提交完成后才关闭）：打开与关闭都使进行中的提交失效，取消但不重新打开也不能继续写入
+watch(visible, () => tagScope.invalidate());
 </script>
 
 <style scoped>

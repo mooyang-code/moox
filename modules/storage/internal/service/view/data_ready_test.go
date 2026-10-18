@@ -72,12 +72,12 @@ func TestViewDataReadyFenceRequiresEveryPartition(t *testing.T) {
 	}
 }
 
-func TestViewDataReadyFenceFilteredViewPublishesOwnScope(t *testing.T) {
+func TestViewDataReadyFenceTimeSeriesViewPublishesOwnScope(t *testing.T) {
 	metadata := newPeriodMetadataFake()
 	publisher := newReadyPublisherFake()
 	service := newPeriodTestService(metadata, publisher,
-		&pb.View{SpaceId: "quant", ViewId: "spot-view", DatasetId: "prices", ActiveIndexId: "spot-a", FilterJson: `{"market":"spot"}`},
-		&pb.View{SpaceId: "quant", ViewId: "swap-view", DatasetId: "prices", ActiveIndexId: "swap-a", FilterJson: `{"market":"swap"}`},
+		&pb.View{SpaceId: "quant", ViewId: "spot-view", DatasetId: "prices", ActiveIndexId: "spot-a", Freq: "1m"},
+		&pb.View{SpaceId: "quant", ViewId: "swap-view", DatasetId: "prices", ActiveIndexId: "swap-a", Freq: "1m"},
 	)
 	service.NoteAppliedPosition("quant", "spot-view", "spot-a", "node-a", "store-a", 1)
 	service.NoteAppliedPosition("quant", "swap-view", "swap-a", "node-a", "store-a", 1)
@@ -87,7 +87,7 @@ func TestViewDataReadyFenceFilteredViewPublishesOwnScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(publisher.byID) != 2 {
-		t.Fatalf("filtered views unique ready=%d", len(publisher.byID))
+		t.Fatalf("views unique ready=%d", len(publisher.byID))
 	}
 	scopes := map[string]string{}
 	for _, item := range publisher.attempts {
@@ -95,7 +95,7 @@ func TestViewDataReadyFenceFilteredViewPublishesOwnScope(t *testing.T) {
 		scopes[ready.GetViewId()] = ready.GetVisibleScope()
 	}
 	if scopes["spot-view"] == scopes["swap-view"] || scopes["spot-view"] == payload.GetExpectedScopeRef() {
-		t.Fatalf("filtered views must publish their own visible_scope: %v", scopes)
+		t.Fatalf("time-series views must publish their own visible_scope: %v", scopes)
 	}
 }
 
@@ -156,7 +156,7 @@ func TestViewDataReadySurvivesRestart(t *testing.T) {
 	first := newPeriodTestService(metadata, firstPublisher, &pb.View{
 		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
 	})
-	if err := first.OpenReadyFence(dir); err != nil {
+	if err := first.openReadyFence(dir); err != nil {
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 9, 13, 16, 5, 0, 0, time.UTC)
@@ -173,7 +173,7 @@ func TestViewDataReadySurvivesRestart(t *testing.T) {
 	second := newPeriodTestService(metadata, secondPublisher, &pb.View{
 		SpaceId: "quant", ViewId: "source-view", DatasetId: "prices", ActiveIndexId: "source-view-a",
 	})
-	if err := second.OpenReadyFence(dir); err != nil {
+	if err := second.openReadyFence(dir); err != nil {
 		t.Fatal(err)
 	}
 	second.NoteAppliedPosition("quant", "source-view", "source-view-a", "node-a", "store-a", 12)

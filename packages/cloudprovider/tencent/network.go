@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -44,6 +43,10 @@ type CloudInstance struct {
 	PublicIPs        []string `json:"public_ips,omitempty"`
 	PrivateIPs       []string `json:"private_ips,omitempty"`
 	SecurityGroupIDs []string `json:"security_group_ids,omitempty"`
+	// CPU、MemoryGB、DiskGB 是实例规格；接口没返回时为 0。DiskGB 是系统盘与数据盘之和。
+	CPU      int `json:"cpu,omitempty"`
+	MemoryGB int `json:"memory_gb,omitempty"`
+	DiskGB   int `json:"disk_gb,omitempty"`
 }
 
 type VpcInfo struct {
@@ -75,37 +78,6 @@ type CCNAttachment struct {
 	CidrBlock      string   `json:"cidr_block,omitempty"`
 	CidrBlocks     []string `json:"cidr_blocks,omitempty"`
 	State          string   `json:"state,omitempty"`
-}
-
-type flexibleCIDRs struct {
-	first string
-	all   []string
-}
-
-func (c *flexibleCIDRs) UnmarshalJSON(raw []byte) error {
-	if string(raw) == "null" || len(raw) == 0 {
-		return nil
-	}
-	if raw[0] == '"' {
-		var value string
-		if err := json.Unmarshal(raw, &value); err != nil {
-			return err
-		}
-		c.first = value
-		if value != "" {
-			c.all = []string{value}
-		}
-		return nil
-	}
-	var values []string
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return err
-	}
-	c.all = uniqueNonEmpty(values)
-	if len(c.all) > 0 {
-		c.first = c.all[0]
-	}
-	return nil
 }
 
 type SCFFunction struct {
@@ -255,6 +227,14 @@ type cvmInstance struct {
 		SubnetID           string   `json:"SubnetId"`
 		PrivateIPAddresses []string `json:"PrivateIpAddresses"`
 	} `json:"VirtualPrivateCloud"`
+	CPU        int        `json:"CPU"`
+	Memory     int        `json:"Memory"`
+	SystemDisk diskSize   `json:"SystemDisk"`
+	DataDisks  []diskSize `json:"DataDisks"`
+}
+
+type diskSize struct {
+	DiskSize int `json:"DiskSize"`
 }
 
 func cloudInstanceFromCVM(region string, item cvmInstance) CloudInstance {
@@ -265,35 +245,16 @@ func cloudInstanceFromCVM(region string, item cvmInstance) CloudInstance {
 		VpcID: item.VirtualPrivateCloud.VpcID, SubnetID: item.VirtualPrivateCloud.SubnetID,
 		PublicIPs: uniqueNonEmpty(item.PublicIPAddresses), PrivateIPs: privateIPs,
 		SecurityGroupIDs: uniqueNonEmpty(item.SecurityGroupIDs),
+		CPU:              item.CPU, MemoryGB: item.Memory, DiskGB: totalDisk(item.SystemDisk, item.DataDisks),
 	}
 }
 
-func (c *NetworkClient) DescribeVpc(ctx context.Context, vpcID string) (VpcInfo, error) {
-	vpcID = strings.TrimSpace(vpcID)
-	if vpcID == "" {
-		return VpcInfo{}, fmt.Errorf("vpc id is required")
+func totalDisk(system diskSize, data []diskSize) int {
+	total := system.DiskSize
+	for _, disk := range data {
+		total += disk.DiskSize
 	}
-	var resp struct {
-		Response struct {
-			Error  *apiError `json:"Error,omitempty"`
-			VpcSet []struct {
-				VpcID     string `json:"VpcId"`
-				VpcName   string `json:"VpcName"`
-				CidrBlock string `json:"CidrBlock"`
-			} `json:"VpcSet"`
-		} `json:"Response"`
-	}
-	if err := c.do(ctx, "vpc", vpcVersion, "DescribeVpcs", map[string]any{"VpcIds": []string{vpcID}}, &resp); err != nil {
-		return VpcInfo{}, err
-	}
-	if err := apiCodeMessage(resp.Response.Error); err != nil {
-		return VpcInfo{}, err
-	}
-	if len(resp.Response.VpcSet) == 0 {
-		return VpcInfo{}, fmt.Errorf("vpc %s not found", vpcID)
-	}
-	item := resp.Response.VpcSet[0]
-	return VpcInfo{VpcID: item.VpcID, Name: item.VpcName, CidrBlock: item.CidrBlock, Region: c.region}, nil
+	return total
 }
 
 func (c *NetworkClient) FindVpcByName(ctx context.Context, name string) (VpcInfo, bool, error) {
@@ -344,27 +305,6 @@ func (c *NetworkClient) CreateVpc(ctx context.Context, name, cidr string) (VpcIn
 	}
 	item := resp.Response.Vpc
 	return VpcInfo{VpcID: item.VpcID, Name: item.VpcName, CidrBlock: item.CidrBlock, Region: c.region}, nil
-}
-
-func (c *NetworkClient) EnsureVpc(ctx context.Context, name, cidr string) (VpcInfo, bool, error) {
-	existing, found, err := c.FindVpcByName(ctx, name)
-	if err != nil {
-		return VpcInfo{}, false, err
-	}
-	if found {
-		return existing, false, nil
-	}
-	created, err := c.CreateVpc(ctx, name, cidr)
-	if err != nil {
-		if isAlreadyDoneAPIError(err) {
-			existing, found, findErr := c.FindVpcByName(ctx, name)
-			if findErr == nil && found {
-				return existing, false, nil
-			}
-		}
-		return VpcInfo{}, false, err
-	}
-	return created, true, nil
 }
 
 func (c *NetworkClient) FindSubnetByName(ctx context.Context, vpcID, name string) (SubnetInfo, bool, error) {
@@ -423,46 +363,6 @@ func (c *NetworkClient) CreateSubnet(ctx context.Context, vpcID, name, cidr, zon
 	return SubnetInfo{SubnetID: item.SubnetID, VpcID: item.VpcID, Name: item.SubnetName, CidrBlock: item.CidrBlock, Zone: item.Zone}, nil
 }
 
-func (c *NetworkClient) EnsureSubnet(ctx context.Context, vpcID, name, cidr, zone string) (SubnetInfo, bool, error) {
-	existing, found, err := c.FindSubnetByName(ctx, vpcID, name)
-	if err != nil {
-		return SubnetInfo{}, false, err
-	}
-	if found {
-		return existing, false, nil
-	}
-	created, err := c.CreateSubnet(ctx, vpcID, name, cidr, zone)
-	if err != nil {
-		return SubnetInfo{}, false, err
-	}
-	return created, true, nil
-}
-
-func (c *NetworkClient) DescribeAvailableZones(ctx context.Context) ([]string, error) {
-	var resp struct {
-		Response struct {
-			Error   *apiError `json:"Error,omitempty"`
-			ZoneSet []struct {
-				Zone      string `json:"Zone"`
-				ZoneState string `json:"ZoneState"`
-			} `json:"ZoneSet"`
-		} `json:"Response"`
-	}
-	if err := c.do(ctx, "cvm", cvmVersion, "DescribeZones", map[string]any{}, &resp); err != nil {
-		return nil, err
-	}
-	if err := apiCodeMessage(resp.Response.Error); err != nil {
-		return nil, err
-	}
-	zones := make([]string, 0, len(resp.Response.ZoneSet))
-	for _, zone := range resp.Response.ZoneSet {
-		if strings.EqualFold(zone.ZoneState, "AVAILABLE") && strings.TrimSpace(zone.Zone) != "" {
-			zones = append(zones, zone.Zone)
-		}
-	}
-	return zones, nil
-}
-
 func (c *NetworkClient) FindCCNByName(ctx context.Context, name string) (CCNInfo, bool, error) {
 	var resp struct {
 		Response struct {
@@ -510,251 +410,6 @@ func (c *NetworkClient) CreateCCN(ctx context.Context, name string) (CCNInfo, er
 	}
 	item := resp.Response.Ccn
 	return CCNInfo{CcnID: item.CcnID, Name: item.CcnName, State: item.State}, nil
-}
-
-func (c *NetworkClient) EnsureCCN(ctx context.Context, name string) (CCNInfo, bool, error) {
-	existing, found, err := c.FindCCNByName(ctx, name)
-	if err != nil {
-		return CCNInfo{}, false, err
-	}
-	if found {
-		return existing, false, nil
-	}
-	created, err := c.CreateCCN(ctx, name)
-	if err != nil {
-		if isAlreadyDoneAPIError(err) {
-			existing, found, findErr := c.FindCCNByName(ctx, name)
-			if findErr == nil && found {
-				return existing, false, nil
-			}
-		}
-		return CCNInfo{}, false, err
-	}
-	return created, true, nil
-}
-
-type ccnAttachedInstanceJSON struct {
-	CcnID          string        `json:"CcnId"`
-	InstanceID     string        `json:"InstanceId"`
-	InstanceRegion string        `json:"InstanceRegion"`
-	InstanceType   string        `json:"InstanceType"`
-	CidrBlock      flexibleCIDRs `json:"CidrBlock"`
-	State          string        `json:"State"`
-}
-
-func (item ccnAttachedInstanceJSON) attachment() CCNAttachment {
-	return CCNAttachment{
-		CcnID: item.CcnID, InstanceID: item.InstanceID,
-		InstanceRegion: item.InstanceRegion, InstanceType: item.InstanceType,
-		CidrBlock: item.CidrBlock.first, CidrBlocks: item.CidrBlock.all, State: item.State,
-	}
-}
-
-func (c *NetworkClient) ListCCNAttachments(ctx context.Context, ccnID string) ([]CCNAttachment, error) {
-	attachments := make([]CCNAttachment, 0)
-	for offset := 0; ; offset += 100 {
-		var resp struct {
-			Response struct {
-				Error                  *apiError                 `json:"Error,omitempty"`
-				TotalCount             int                       `json:"TotalCount"`
-				InstanceSet            []ccnAttachedInstanceJSON `json:"InstanceSet"`
-				CcnAttachedInstanceSet []ccnAttachedInstanceJSON `json:"CcnAttachedInstanceSet"`
-			} `json:"Response"`
-		}
-		if err := c.do(ctx, "vpc", vpcVersion, "DescribeCcnAttachedInstances", map[string]any{
-			"CcnId": ccnID, "Offset": offset, "Limit": 100,
-		}, &resp); err != nil {
-			return nil, err
-		}
-		if err := apiCodeMessage(resp.Response.Error); err != nil {
-			return nil, err
-		}
-		page := resp.Response.InstanceSet
-		if len(page) == 0 {
-			page = resp.Response.CcnAttachedInstanceSet
-		}
-		for _, item := range page {
-			attachments = append(attachments, item.attachment())
-		}
-		if len(page) < 100 || (resp.Response.TotalCount > 0 && len(attachments) >= resp.Response.TotalCount) {
-			return attachments, nil
-		}
-	}
-}
-
-func (c *NetworkClient) AttachVPCToCCN(ctx context.Context, ccnID, vpcRegion, vpcID string) error {
-	var resp struct {
-		Response struct {
-			Error *apiError `json:"Error,omitempty"`
-		} `json:"Response"`
-	}
-	if err := c.do(ctx, "vpc", vpcVersion, "AttachCcnInstances", map[string]any{
-		"CcnId": ccnID,
-		"Instances": []map[string]string{{
-			"InstanceId": vpcID, "InstanceRegion": vpcRegion, "InstanceType": "VPC",
-		}},
-	}, &resp); err != nil {
-		if isAlreadyDoneAPIError(err) {
-			return nil
-		}
-		return err
-	}
-	if err := apiCodeMessage(resp.Response.Error); err != nil {
-		if isAlreadyDoneAPIError(err) {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
-func (c *NetworkClient) DetachVPCFromCCN(ctx context.Context, ccnID, vpcRegion, vpcID string) error {
-	var resp struct {
-		Response struct {
-			Error *apiError `json:"Error,omitempty"`
-		} `json:"Response"`
-	}
-	if err := c.do(ctx, "vpc", vpcVersion, "DetachCcnInstances", map[string]any{
-		"CcnId": ccnID,
-		"Instances": []map[string]string{{
-			"InstanceId": vpcID, "InstanceRegion": vpcRegion, "InstanceType": "VPC",
-		}},
-	}, &resp); err != nil {
-		if isAlreadyDoneAPIError(err) {
-			return nil
-		}
-		return err
-	}
-	if err := apiCodeMessage(resp.Response.Error); err != nil {
-		if isAlreadyDoneAPIError(err) {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
-func (c *NetworkClient) AcceptCCNAttach(ctx context.Context, ccnID, instanceRegion, instanceType, instanceID string) error {
-	var resp struct {
-		Response struct {
-			Error *apiError `json:"Error,omitempty"`
-		} `json:"Response"`
-	}
-	if err := c.do(ctx, "vpc", vpcVersion, "AcceptAttachCcnInstances", map[string]any{
-		"CcnId": ccnID,
-		"Instances": []map[string]string{{
-			"InstanceId": instanceID, "InstanceRegion": instanceRegion, "InstanceType": instanceType,
-		}},
-	}, &resp); err != nil {
-		if isAlreadyDoneAPIError(err) {
-			return nil
-		}
-		return err
-	}
-	if err := apiCodeMessage(resp.Response.Error); err != nil {
-		if isAlreadyDoneAPIError(err) {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
-func (c *NetworkClient) EnsureSecurityGroupIngress(ctx context.Context, groupIDs []string, opts CreateFirewallRulesOptions) (created bool, err error) {
-	if len(groupIDs) == 0 {
-		return false, fmt.Errorf("security group is required")
-	}
-	rule, err := NewCreateFirewallRulesRequest(CreateFirewallRulesOptions{
-		InstanceID: "cvm", Protocol: opts.Protocol, Ports: opts.Ports,
-		CidrBlock: opts.CidrBlock, IPv6CidrBlock: opts.IPv6CidrBlock,
-		Action: opts.Action, Description: opts.Description,
-	})
-	if err != nil {
-		return false, err
-	}
-	wanted := vpcSecurityGroupPolicy{
-		Protocol: rule.FirewallRules[0].Protocol, Port: rule.FirewallRules[0].Port,
-		CidrBlock: rule.FirewallRules[0].CidrBlock, Action: rule.FirewallRules[0].Action,
-		PolicyDescription: rule.FirewallRules[0].FirewallRuleDescription,
-	}
-	for _, groupID := range groupIDs {
-		var policies vpcDescribePoliciesResponse
-		if err := c.do(ctx, "vpc", vpcVersion, "DescribeSecurityGroupPolicies", map[string]any{
-			"SecurityGroupId": groupID,
-		}, &policies); err != nil {
-			return false, err
-		}
-		if err := apiCodeMessage(policies.Response.Error); err != nil {
-			return false, err
-		}
-		for _, existing := range policies.Response.SecurityGroupPolicySet.Ingress {
-			if coversCVMRule(existing, wanted) {
-				return false, nil
-			}
-		}
-	}
-	var createdResp struct {
-		Response struct {
-			Error *apiError `json:"Error,omitempty"`
-		} `json:"Response"`
-	}
-	if err := c.do(ctx, "vpc", vpcVersion, "CreateSecurityGroupPolicies", vpcCreatePoliciesRequest{
-		SecurityGroupID: groupIDs[0],
-		SecurityGroupPolicySet: struct {
-			Ingress []vpcSecurityGroupPolicy `json:"Ingress"`
-		}{Ingress: []vpcSecurityGroupPolicy{wanted}},
-	}, &createdResp); err != nil {
-		return false, err
-	}
-	if err := apiCodeMessage(createdResp.Response.Error); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func (c *NetworkClient) ListSCFFunctions(ctx context.Context, namespace string, prefixes []string) ([]SCFFunction, error) {
-	namespace = strings.TrimSpace(namespace)
-	if namespace == "" {
-		namespace = "default"
-	}
-	functions := make([]SCFFunction, 0)
-	for offset := 0; ; offset += 100 {
-		var resp struct {
-			Response struct {
-				Error      *apiError `json:"Error,omitempty"`
-				TotalCount int       `json:"TotalCount"`
-				Functions  []struct {
-					FunctionName string `json:"FunctionName"`
-					Status       string `json:"Status"`
-					Namespace    string `json:"Namespace"`
-				} `json:"Functions"`
-			} `json:"Response"`
-		}
-		if err := c.do(ctx, "scf", scfVersion, "ListFunctions", map[string]any{
-			"Namespace": namespace, "Limit": 100, "Offset": offset,
-			"Order": "ASC", "Orderby": "FunctionName",
-		}, &resp); err != nil {
-			return nil, err
-		}
-		if err := apiCodeMessage(resp.Response.Error); err != nil {
-			return nil, err
-		}
-		for _, item := range resp.Response.Functions {
-			if !matchAnyPrefix(item.FunctionName, prefixes) {
-				continue
-			}
-			ns := item.Namespace
-			if ns == "" {
-				ns = namespace
-			}
-			functions = append(functions, SCFFunction{
-				Region: c.region, Namespace: ns, FunctionName: item.FunctionName, Status: item.Status,
-			})
-		}
-		if len(resp.Response.Functions) < 100 {
-			return functions, nil
-		}
-	}
 }
 
 func (c *NetworkClient) GetSCFFunction(ctx context.Context, namespace, name string) (SCFFunction, error) {
@@ -899,20 +554,6 @@ func rawJSONString(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func matchAnyPrefix(name string, prefixes []string) bool {
-	if len(prefixes) == 0 {
-		return true
-	}
-	name = strings.TrimSpace(name)
-	for _, prefix := range prefixes {
-		prefix = strings.TrimSpace(prefix)
-		if prefix != "" && strings.HasPrefix(name, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 func uniqueNonEmpty(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	out := make([]string, 0, len(values))
@@ -939,53 +580,6 @@ func CIDRsOverlap(left, right string) bool {
 	return leftNet.Contains(rightNet.IP) || rightNet.Contains(leftNet.IP)
 }
 
-func FirstNonOverlappingCIDR(preferred string, used []string, start, count int) (string, error) {
-	candidates := make([]string, 0, count+1)
-	if strings.TrimSpace(preferred) != "" {
-		candidates = append(candidates, preferred)
-	}
-	for i := 0; i < count; i++ {
-		candidates = append(candidates, fmt.Sprintf("10.%d.0.0/16", start+i))
-	}
-	for _, candidate := range uniqueNonEmpty(candidates) {
-		overlap := false
-		for _, existing := range used {
-			if CIDRsOverlap(candidate, existing) {
-				overlap = true
-				break
-			}
-		}
-		if !overlap {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf("no non-overlapping vpc cidr available")
-}
-
-func SubnetCIDRFromVPC(vpcCIDR string) string {
-	_, ipNet, err := net.ParseCIDR(strings.TrimSpace(vpcCIDR))
-	if err != nil {
-		return vpcCIDR
-	}
-	ones, bits := ipNet.Mask.Size()
-	if bits != 32 || ones > 20 {
-		return vpcCIDR
-	}
-	return ipNet.IP.String() + "/20"
-}
-
-func InferPrivateCIDR(privateIP string) string {
-	ip := net.ParseIP(strings.TrimSpace(privateIP))
-	if ip == nil {
-		return ""
-	}
-	v4 := ip.To4()
-	if v4 == nil {
-		return ""
-	}
-	return fmt.Sprintf("%d.%d.0.0/16", v4[0], v4[1])
-}
-
 func ProbeRegions(preferred string, extra ...string) []string {
 	regions := make([]string, 0, len(DefaultProbeRegions)+len(extra)+1)
 	regions = append(regions, preferred)
@@ -999,19 +593,4 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 		timeout = 30 * time.Second
 	}
 	return &http.Client{Timeout: timeout}
-}
-
-func ParseEndpoint(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", fmt.Errorf("endpoint is required")
-	}
-	if !strings.Contains(raw, "://") {
-		raw = "https://" + raw
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" {
-		return "", fmt.Errorf("parse endpoint")
-	}
-	return raw, nil
 }

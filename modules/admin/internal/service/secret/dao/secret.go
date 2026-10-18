@@ -22,6 +22,8 @@ var ErrSecretNotFound = errors.New("secret not found or already deleted")
 // ErrMaskedValue 秘钥值包含脱敏字符，拒绝加密
 var ErrMaskedValue = errors.New("secret_value is a masked value, refusing to encrypt")
 
+var ErrSystemSecret = errors.New("system secret is managed by its owning service")
+
 // SecretDAO 秘钥数据访问层
 type SecretDAO struct {
 	db *gorm.DB
@@ -34,6 +36,9 @@ func NewSecretDAO(db *gorm.DB) *SecretDAO {
 
 // Create 创建秘钥
 func (d *SecretDAO) Create(ctx context.Context, secret *model.Secret) error {
+	if isSystemSecret(secret) {
+		return ErrSystemSecret
+	}
 	if err := d.encryptSensitiveFields(secret); err != nil {
 		return err
 	}
@@ -44,11 +49,14 @@ func (d *SecretDAO) Create(ctx context.Context, secret *model.Secret) error {
 
 // Update 更新秘钥
 func (d *SecretDAO) Update(ctx context.Context, secret *model.Secret) error {
+	if isSystemSecret(secret) {
+		return ErrSystemSecret
+	}
 	if err := d.encryptSensitiveFields(secret); err != nil {
 		return err
 	}
 	secret.ModifyTime = time.Now()
-	result := d.db.WithContext(ctx).Model(secret).Where("c_secret_id = ? AND c_is_deleted = ?", secret.SecretID, softdelete.IsDeletedFalse).
+	result := d.db.WithContext(ctx).Scopes(userSecrets).Model(secret).Where("c_secret_id = ? AND c_is_deleted = ?", secret.SecretID, softdelete.IsDeletedFalse).
 		Select("*").Omit("c_id", "c_ctime", "c_secret_id", "c_space_id").Updates(secret)
 	if result.Error != nil {
 		return result.Error
@@ -61,7 +69,7 @@ func (d *SecretDAO) Update(ctx context.Context, secret *model.Secret) error {
 
 // Delete 软删除秘钥
 func (d *SecretDAO) Delete(ctx context.Context, secretID string) error {
-	result := d.db.WithContext(ctx).Model(&model.Secret{}).
+	result := d.db.WithContext(ctx).Scopes(userSecrets).Model(&model.Secret{}).
 		Where("c_secret_id = ? AND c_is_deleted = ?", secretID, softdelete.IsDeletedFalse).
 		Update("c_is_deleted", softdelete.IsDeletedTrue)
 	if result.Error != nil {
@@ -76,7 +84,7 @@ func (d *SecretDAO) Delete(ctx context.Context, secretID string) error {
 // FindByID 根据唯一标识查询
 func (d *SecretDAO) FindByID(ctx context.Context, secretID string) (*model.Secret, error) {
 	var secret model.Secret
-	err := d.db.WithContext(ctx).Where("c_secret_id = ? AND c_is_deleted = ?", secretID, softdelete.IsDeletedFalse).First(&secret).Error
+	err := d.db.WithContext(ctx).Scopes(userSecrets).Where("c_secret_id = ? AND c_is_deleted = ?", secretID, softdelete.IsDeletedFalse).First(&secret).Error
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +99,7 @@ func (d *SecretDAO) List(ctx context.Context, offset, limit int, filters *Secret
 	var secrets []model.Secret
 	var total int64
 
-	db := d.db.WithContext(ctx).Model(&model.Secret{}).Where("c_is_deleted = ?", softdelete.IsDeletedFalse)
+	db := d.db.WithContext(ctx).Scopes(userSecrets).Model(&model.Secret{}).Where("c_is_deleted = ?", softdelete.IsDeletedFalse)
 	db = d.applyFilters(db, filters)
 
 	if err := db.Count(&total).Error; err != nil {
@@ -141,7 +149,7 @@ func (d *SecretDAO) applyFilters(db *gorm.DB, f *SecretFilters) *gorm.DB {
 
 // UpdateStatus 更新秘钥状态
 func (d *SecretDAO) UpdateStatus(ctx context.Context, secretID, status string) error {
-	result := d.db.WithContext(ctx).Model(&model.Secret{}).
+	result := d.db.WithContext(ctx).Scopes(userSecrets).Model(&model.Secret{}).
 		Where("c_secret_id = ? AND c_is_deleted = ?", secretID, softdelete.IsDeletedFalse).
 		Update("c_status", status)
 	if result.Error != nil {
@@ -155,7 +163,7 @@ func (d *SecretDAO) UpdateStatus(ctx context.Context, secretID, status string) e
 
 // UpdateLastUsed 更新最后使用信息
 func (d *SecretDAO) UpdateLastUsed(ctx context.Context, secretID, usedBy string) error {
-	result := d.db.WithContext(ctx).Model(&model.Secret{}).
+	result := d.db.WithContext(ctx).Scopes(userSecrets).Model(&model.Secret{}).
 		Where("c_secret_id = ? AND c_is_deleted = ?", secretID, softdelete.IsDeletedFalse).
 		Updates(map[string]interface{}{
 			"c_last_used_at": time.Now(),
@@ -211,4 +219,12 @@ func (d *SecretDAO) decryptSensitiveFields(secret *model.Secret) error {
 // GenerateSecretID 生成秘钥唯一标识
 func GenerateSecretID() string {
 	return uuid.New().String()
+}
+
+func isSystemSecret(secret *model.Secret) bool {
+	return secret != nil && (secret.SecretType == model.GatewayKeyringType || strings.HasPrefix(secret.SecretID, model.GatewayKeyringIDPrefix))
+}
+
+func userSecrets(db *gorm.DB) *gorm.DB {
+	return db.Where("c_secret_type <> ? AND substr(c_secret_id, 1, ?) <> ?", model.GatewayKeyringType, len(model.GatewayKeyringIDPrefix), model.GatewayKeyringIDPrefix)
 }

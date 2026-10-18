@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestStrategyProtoUsesRunnerAndResultVocabulary(t *testing.T) {
+func TestStrategyProtoUsesInstanceAndResultVocabulary(t *testing.T) {
 	raw, err := os.ReadFile("strategy.proto")
 	if err != nil {
 		t.Fatal(err)
@@ -15,24 +15,20 @@ func TestStrategyProtoUsesRunnerAndResultVocabulary(t *testing.T) {
 	source := string(raw)
 	for _, required := range []string{
 		"message Strategy ",
-		"message StrategyRunner ",
 		"message StrategyResult ",
 		"message InstrumentTarget ",
-		"optional int64 command_sequence",
 		"rpc CreateStrategy",
 		"rpc GetStrategy",
 		"rpc ListStrategies",
-		"rpc CreateRunner",
-		"rpc GetRunner",
-		"rpc ListRunners",
-		"rpc UpdateRunner",
-		"rpc SetRunnerStatus",
+		"message StrategyInstance ",
+		"rpc CreateStrategyInstance",
+		"rpc SetStrategyInstanceEnabled",
 		"rpc ListStrategyResults",
 		"rpc GetStrategyResult",
 		"rpc ListStrategyTargets",
 	} {
 		if !strings.Contains(source, required) {
-			t.Errorf("strategy.proto does not contain %q", required)
+			t.Errorf("strategy.proto 缺少 %q", required)
 		}
 	}
 	for _, obsolete := range []string{
@@ -41,7 +37,7 @@ func TestStrategyProtoUsesRunnerAndResultVocabulary(t *testing.T) {
 		`\bTargetPosition\b`, `\btarget_quantity\b`,
 	} {
 		if regexp.MustCompile(obsolete).MatchString(source) {
-			t.Errorf("strategy.proto still contains obsolete symbol %q", obsolete)
+			t.Errorf("strategy.proto 仍包含已废弃的符号 %q", obsolete)
 		}
 	}
 }

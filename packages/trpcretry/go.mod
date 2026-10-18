@@ -4,8 +4,9 @@ go 1.25.0
 
 require (
 	github.com/stretchr/testify v1.11.1
-	trpc.group/trpc-go/trpc-filter/slime v1.0.0
+	google.golang.org/protobuf v1.36.11
 	trpc.group/trpc-go/trpc-go v1.0.4
+	trpc.group/trpc-go/trpc-utils v0.0.0-20230828093641-986b15ee523f
 )
 
 require (
@@ -26,8 +27,6 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/prometheus/client_golang v1.23.2 // indirect
-	github.com/prometheus/common v0.67.5 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
 	github.com/valyala/fasthttp v1.48.0 // indirect
@@ -40,10 +39,8 @@ require (
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/tnet v1.0.1 // indirect
-	trpc.group/trpc-go/trpc-utils v0.0.0-20230828093641-986b15ee523f // indirect
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )

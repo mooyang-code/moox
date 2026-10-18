@@ -67,3 +67,20 @@ func TestExecutionModeValidation(t *testing.T) {
 	assert.True(t, ExecutionModeCollectorLocal.Valid())
 	assert.False(t, ExecutionMode("unknown").Valid())
 }
+
+func TestJobDefinition_Matches_RestrictsFrequencies(t *testing.T) {
+	def := JobDefinition{
+		Supports: []Support{
+			{Exchange: "eastmoney", Market: "equity", DataType: "kline", SourceKind: "dataset", Frequencies: []string{"1m"}},
+		},
+	}
+	params := func(intervals ...string) *domain.CollectParams {
+		return &domain.CollectParams{
+			Source:    domain.CollectSource{Kind: "dataset"},
+			Collector: domain.CollectorSpec{Exchange: "eastmoney", Market: "equity", DataType: "kline", Intervals: intervals},
+		}
+	}
+	assert.True(t, def.Matches(params("1m")))
+	assert.False(t, def.Matches(params("5m")))
+	assert.False(t, def.Matches(params("1m", "1d")))
+}

@@ -170,7 +170,9 @@ func TestDeployBatchReconcilesAfterSuccessfulCodeMutationAndLaterFailure(t *test
 			if failureStage == "configuration" {
 				fake.configurationErr = providerFailure
 			} else {
+				// 函数还没有定时器：部署后要补建，补建失败才会进入待对账。
 				fake.timerErr = providerFailure
+				fake.timerInfoSet = true
 			}
 			svc := newNodeItemTestService(catalog, fake)
 

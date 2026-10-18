@@ -71,9 +71,13 @@ describe("page layout standards", () => {
     expect(staticMenuSource.match(/\/trading\/accounts/g)?.length).toBe(2);
     expect(staticMenuSource).not.toContain('"0504"');
     expect(staticMenuSource).not.toContain("/trading/logical-accounts");
-    const strategyDefinitionsPos = staticMenuSource.indexOf('menu("025002",');
-    const strategyRunningPos = staticMenuSource.indexOf('menu("025001",');
-    expect(strategyDefinitionsPos).toBeLessThan(strategyRunningPos);
+    // 策略菜单与因子计算一致：总览 → 定义 → 运行（实例 / 结果 / 回放 工作台）。
+    const strategyOverviewPos = staticMenuSource.indexOf('"/strategy/overview", "strategy-overview"', staticMenuSource.indexOf('directory("0250"'));
+    const strategyDefinitionsPos = staticMenuSource.indexOf('"/strategy/definitions"');
+    const strategyTasksPos = staticMenuSource.indexOf('"/strategy/tasks"');
+    expect(strategyOverviewPos).toBeGreaterThan(-1);
+    expect(strategyOverviewPos).toBeLessThan(strategyDefinitionsPos);
+    expect(strategyDefinitionsPos).toBeLessThan(strategyTasksPos);
 
     expect(secrets).not.toContain('class="filter-bar"');
     expect(secrets.indexOf('placeholder="搜索名称或描述"')).toBeLessThan(secrets.indexOf('placeholder="分类"'));
@@ -82,47 +86,66 @@ describe("page layout standards", () => {
     expectMargin(secrets, ".page-head", "margin-bottom", 5);
   });
 
-  it("keeps the factor workbench set list and tabs in one layout", () => {
-    const workbench = read("factor/workbench/index.vue");
-    const setList = read("factor/workbench/set-list.vue");
-    const factors = read("factor/workbench/tabs/factors.vue");
+  it("keeps the compute task host and its tabs in one layout", () => {
+    const host = read("factor/task-management/index.vue");
+    const computeTasks = read("factor/compute-tasks/index.vue");
+    const definitions = read("factor/definitions/index.vue");
 
-    expect(workbench).toContain('class="workbench__sets"');
-    expect(workbench).toContain("<a-tabs");
-    expect(setList).toContain("新建");
-    expect(factors).toContain("新增因子");
-    expect(factors).not.toContain('class="filters"');
+    expect(host).toContain("PageTitleTabs");
+    expect(host).toContain("<keep-alive>");
+    expect(computeTasks).toContain("新建计算任务");
+    expect(definitions).toContain("新增因子");
+    expect(definitions).not.toContain('class="filters"');
+  });
+
+  it("keeps the strategy run host, its tabs and the results tab aligned with the factor workbench", () => {
+    const host = read("strategy/workbench/index.vue");
+    const results = read("strategy/results/index.vue");
+    const running = read("strategy/running/index.vue");
+
+    expect(host).toContain("PageTitleTabs");
+    expect(host).toContain('label: "运行实例"');
+    expect(host).toContain('label: "运行结果"');
+    expect(host).toContain('label: "策略回放"');
+    expect(results).toContain('type="rounded"');
+    expect(results).toContain("InstanceResults");
+    expect(running).toContain("新建实例");
+    expect(running).not.toContain('class="filters"');
+  });
+
+  it("keeps factor tab explanations in info tips instead of rows under the tabs", () => {
+    for (const file of ["factor/compute-tasks/index.vue", "factor/recalc/index.vue", "factor/definitions/index.vue"]) {
+      const source = read(file);
+      expect(source).toContain("InfoTip");
+      expect(source).not.toContain('class="tab-hint"');
+    }
+    expect(read("factor/task-management/index.vue")).not.toContain("<a-alert");
   });
 
   it("uses the multi-tab spacing standard", () => {
     const subjects = read("data/subjects/index.vue");
     const taskManagement = read("collector/task-management/index.vue");
-    const taskInstances = read("collector/task-instances/task-instances.vue");
+    const runtimeStatus = read("collector/runtime-status/runtime-status.vue");
     const collectorTasks = read("collector/collection-tasks/collection-tasks.vue");
     const taskResults = read("collector/task-results/index.vue");
-    const gatewayNodes = read("ops/service-management/gateway-nodes.vue");
-    const serviceInstances = read("settings/service-deployments/index.vue");
+    const deployments = read("ops/deployments/index.vue");
     const storage = read("ops/storage/index.vue");
     const storageNodes = read("ops/storage/nodes.vue");
-    const storageArchive = read("ops/storage/archive.vue");
     const tradeRecords = read("trading/trade-record/trade-record.vue");
 
     expectMargin(subjects, ".subjects-content", "margin-top", 12);
     expectMargin(taskManagement, ".task-management-content", "margin-top", 12);
-    expectMargin(taskInstances, ".task-toolbar", "margin-bottom", 8);
+    expectMargin(runtimeStatus, ".block-header", "margin-bottom", 8);
     expect(collectorTasks).toContain('class="task-toolbar"');
     expectMargin(collectorTasks, ".task-toolbar", "margin-bottom", 5);
     expect(taskResults).toContain('class="moox-page task-results-page"');
     expect(taskResults).toContain('class="moox-inner"');
 
-    expectMargin(gatewayNodes, ".toolbar", "margin-bottom", 8);
-    expect(serviceInstances).not.toContain('class="page-head"');
-    expect(serviceInstances.indexOf("新增实例")).toBeLessThan(serviceInstances.indexOf('placeholder="网关节点"'));
-    expectMargin(serviceInstances, ".filters", "margin-bottom", 8);
+    expectMargin(deployments, ".deployments-content", "margin-top", 12);
+    expectMargin(deployments, ".filters", "margin-bottom", 8);
 
     expectMargin(storage, ".storage-config-content", "margin-top", 12);
     expect(storageNodes).toContain(".page-head");
-    expectMargin(storageArchive, ".page-actions", "margin-bottom", 8);
     expect(tradeRecords).not.toContain('import PageTitleTabs from "@/components/page-title-tabs/index.vue";');
     expect(tradeRecords).toContain("<h2>交易记录</h2>");
     expect(tradeRecords).toContain('class="orders-workbench-content"');
@@ -146,20 +169,13 @@ describe("page layout standards", () => {
 
   it("normalizes special list workbenches", () => {
     const cloudNodes = read("collector/cloud-node/cloud-node.vue");
-    const factorResults = read("factor/workbench/tabs/results.vue");
+    const factorResults = read("factor/results/index.vue");
     const positions = read("trading/position-detail/position-detail.vue");
-    const viewDefinitions = read("data/views/index.vue");
-    const datasetDefinitions = read("data/datasets/index.vue");
-    const datasetBrowse = read("data/browse/index.vue");
     const viewBrowse = read("data/view-browse/index.vue");
 
     const cloudNodeActions = extractBlock(cloudNodes, '<a-space class="cloud-node-action-bar" wrap>', "</a-space>");
     const cloudNodeFilters = extractBlock(cloudNodes, '<a-space class="cloud-node-filter-bar" wrap>', "</a-space>");
     expectStrictOrder(cloudNodeActions, [
-      '<a-button type="primary" status="success" @click="onBatchAdd" :disabled="batchChangeProcessing">',
-      "<span>批量新增</span>",
-      '<a-button type="primary" status="warning" @click="batchDeploy" :disabled="batchChangeProcessing">',
-      "<span>批量部署</span>",
       '<a-button type="primary" status="danger" @click="batchDelete" :disabled="batchChangeProcessing">',
       "<span>批量删除</span>",
       '<a-button type="outline" @click="onCloudAccountManage">',
@@ -203,8 +219,9 @@ describe("page layout standards", () => {
     expect(cloudNodes).not.toMatch(/\.cloud-node-toolbar\s*\{[^}]*justify-content:\s*flex-end;/);
     expect(cloudNodes).not.toMatch(/@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*?\.page-head\s*\{[^}]*flex-direction:\s*column;/);
 
-    expect(factorResults).toContain('class="status-strip"');
-    expect(factorResults).toContain("结果 View");
+    expect(factorResults).toContain('class="result-toolbar"');
+    expect(factorResults).toContain("#status-extra");
+    expect(factorResults).not.toContain("status-strip");
     expect(factorResults).toContain(':embedded="true"');
     expect(factorResults).not.toContain("ViewDefinitions");
 
@@ -212,18 +229,15 @@ describe("page layout standards", () => {
     expect(positions).not.toContain('<a-button @click="loadPositions">');
     expect(positions).toMatch(/\.position-filter-bar\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-tight\);/);
 
-    for (const source of [viewDefinitions, datasetDefinitions, datasetBrowse, viewBrowse]) {
-      expectMargin(source, ".page-head", "margin-bottom", 8);
-    }
+    expectMargin(viewBrowse, ".page-head", "margin-bottom", 8);
   });
 
   it("keeps dashboard page boundaries on the compact spacing rhythm", () => {
     const theme = readStyle("var/global-theme.scss");
     const globalStyle = readStyle("index.scss");
-    const healthMonitor = read("ops/health-monitor/index.vue");
-    const resourceMonitor = read("container/resource-monitor/resource-monitor.vue");
+    const healthMonitor = read("ops/monitor/index.vue");
     const dataImport = read("data/import/index.vue");
-    const strategyOverview = read("strategy/overview/index.vue");
+    const strategyDefinitions = read("strategy/definitions/index.vue");
     const hostMonitor = read("ops/host-workbench/host-monitor.vue");
     const packageManage = read("collector/cloud-node/function-package-manage.vue");
 
@@ -231,19 +245,13 @@ describe("page layout standards", () => {
     expect(theme).toMatch(/\$space-4:\s*16px;/);
     expect(globalStyle).toContain("--moox-space-2: #{$space-2};");
     expect(globalStyle).toContain("--moox-space-4: #{$space-4};");
-    expect(healthMonitor).toContain("健康监控");
+    expect(healthMonitor).toContain("监控告警");
     expect(healthMonitor).toMatch(/\.health-section\s*\{[\s\S]*?margin-top:\s*24px;/);
-
-    expect(resourceMonitor).toMatch(/\.resource-monitor-page\s*\{\s*padding:\s*var\(--moox-space-4\);\s*\}/);
-    expect(resourceMonitor).toMatch(/\.page-header\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
-    expect(resourceMonitor).toMatch(/\.page-header h2\s*\{[\s\S]*?font-size:\s*20px;/);
-    expect(resourceMonitor).toMatch(/\.summary-band\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
-    expect(resourceMonitor).toMatch(/\.page-alert,\s*\.history-alert\s*\{\s*margin-bottom:\s*var\(--moox-space-2\);\s*\}/);
 
     expect(dataImport).toMatch(/\.page-head,\s*\.preview-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
     expect(dataImport).toMatch(/\.sync-alert\s*\{\s*margin:\s*var\(--moox-space-2\) 0;\s*\}/);
-    expectMargin(strategyOverview, ".page-head", "margin-bottom", 8);
-    expectMargin(strategyOverview, ".top-alert", "margin-bottom", 8);
+    expectMargin(strategyDefinitions, ".page-head", "margin-bottom", 8);
+    expectMargin(strategyDefinitions, ".top-alert", "margin-bottom", 8);
     expect(hostMonitor).toMatch(/\.host-monitor-page\s*\{[\s\S]*?padding:\s*0 0 var\(--moox-space-5\);/);
     expectMargin(hostMonitor, ".monitor-toolbar", "margin-bottom", 8);
     expectMargin(hostMonitor, ".monitor-summary", "margin-bottom", 8);

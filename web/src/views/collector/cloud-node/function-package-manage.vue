@@ -119,7 +119,7 @@
                   size="mini"
                   status="success"
                   @click="onDownload(record)"
-                  :disabled="record.status !== 1"
+                  :disabled="Number(record.status) !== PACKAGE_STATUS_AVAILABLE"
                   :loading="downloadProgress[record.package_id] !== undefined && downloadProgress[record.package_id] < 100"
                 >
                   <template #icon>
@@ -320,7 +320,7 @@
               type="primary"
               status="success"
               @click="onDownload(packageDetail)"
-              :disabled="packageDetail.status !== 1"
+              :disabled="Number(packageDetail.status) !== PACKAGE_STATUS_AVAILABLE"
               :loading="
                 downloadProgress[packageDetail.package_id] !== undefined && downloadProgress[packageDetail.package_id] < 100
               "
@@ -349,6 +349,8 @@
 </template>
 
 <script setup lang="ts">
+// PackageStatus 枚举：2 = 可用（已上传完成）。
+const PACKAGE_STATUS_AVAILABLE = 2;
 import { ref, watch, reactive, computed, onMounted } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
@@ -367,6 +369,10 @@ import {
   type PackageListRequest
 } from "@/api/function-package";
 import { getCloudAccountList, type CloudAccount } from "@/api/cloud-account";
+import { useSpaceStore } from "@/store/modules/space";
+import { selectedSpaceGeneration } from "@/api/admin/space-header";
+import { createLatestRequestGuard } from "@/utils/latest-request";
+import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 
 // Props
 const props = defineProps<{
@@ -383,6 +389,10 @@ const emit = defineEmits<{
 }>();
 
 // 响应式数据
+const spaceStore = useSpaceStore();
+const listGuard = createLatestRequestGuard();
+// 上传提交序号：取消/关闭/重新打开上传弹窗、切换空间都会使进行中的提交失效
+let uploadSubmitToken = 0;
 const packageManageMode = computed(() => props.mode || "page");
 const standalone = computed(() => packageManageMode.value === "page");
 const visible = ref(standalone.value ? true : props.modelValue);
@@ -468,8 +478,32 @@ watch(
 watch(visible, newVal => {
   if (!standalone.value) {
     emit("update:modelValue", newVal);
+    if (!newVal) resetForSpace();
   }
 });
+
+// 关闭弹窗或切换空间：作废在途请求，清空列表与详情，避免组件常驻时重新打开看到其他空间的数据
+function resetForSpace() {
+  uploadSubmitToken += 1;
+  uploading.value = false;
+  listGuard.invalidate();
+  detailGuard.invalidate();
+  loading.value = false;
+  packageList.value = [];
+  total.value = 0;
+  detailVisible.value = false;
+  packageDetail.value = null;
+}
+
+watch(
+  () => spaceStore.selectedSpaceId,
+  (spaceId, oldSpaceId) => {
+    if (spaceId === oldSpaceId) return;
+    resetForSpace();
+    searchForm.page = 1;
+    if (standalone.value || visible.value) void loadPackageList();
+  }
+);
 
 const handlePackageManageVisibleChange = (newVal: boolean) => {
   visible.value = newVal;
@@ -490,12 +524,16 @@ const initializePackageManage = async () => {
 
 // 加载代码包列表
 const loadPackageList = async () => {
+  const spaceId = spaceStore.selectedSpaceId;
+  const request = listGuard.begin();
   loading.value = true;
   try {
     // 构建查询参数，排除 package_type
     const queryParams = { ...searchForm };
     delete queryParams.package_type;
     const response = await getFunctionPackageList(queryParams);
+    // 弹窗关闭、空间切换或有更新的请求后，旧响应丢弃
+    if (!request.isLatest() || spaceId !== spaceStore.selectedSpaceId) return;
 
     if (response?.items) {
       packageList.value = response.items || [];
@@ -505,13 +543,14 @@ const loadPackageList = async () => {
       total.value = 0;
     }
   } catch (error) {
+    if (!request.isLatest()) return;
     console.error("加载代码包列表失败:", error);
     Message.error({
       content: "加载代码包列表失败",
       duration: 5000
     });
   } finally {
-    loading.value = false;
+    if (request.isLatest()) loading.value = false;
   }
 };
 
@@ -554,6 +593,8 @@ const onAdd = () => {
   // 清除版本验证状态
   versionValidationStatus.value = undefined;
   versionFeedback.value = "";
+  uploadSubmitToken += 1; // 重新打开视为新的提交，旧提交作废
+  uploading.value = false;
   uploadVisible.value = true;
 };
 
@@ -696,6 +737,8 @@ const onFileChange = (fileItemList: any[], fileItem: any) => {
 
 // 上传取消
 const handleUploadCancel = () => {
+  uploadSubmitToken += 1; // 取消即作废进行中的提交（版本检查、表单校验返回后不得再继续上传）
+  uploading.value = false;
   // 清除版本验证状态
   versionValidationStatus.value = undefined;
   versionFeedback.value = "";
@@ -775,6 +818,14 @@ const validateUploadForm = () => {
 
 // 上传确认
 const handleUploadOk = async () => {
+  // 点击时固定发起空间与代次：之后任何一步 await 返回时若空间已切换（含 A→B→A），整个提交作废，不能改传到新空间
+  const submitSpaceId = spaceStore.selectedSpaceId;
+  const submitGeneration = selectedSpaceGeneration();
+  const submitToken = ++uploadSubmitToken;
+  const submitStale = () =>
+    submitToken !== uploadSubmitToken ||
+    spaceStore.selectedSpaceId !== submitSpaceId ||
+    selectedSpaceGeneration() !== submitGeneration;
   // 检查版本是否重复
   if (versionValidationStatus.value === "error") {
     Message.error({
@@ -787,6 +838,7 @@ const handleUploadOk = async () => {
   // 如果还没有检查过版本，先检查一下
   if (uploadForm.version && !versionValidationStatus.value) {
     await checkVersionExists();
+    if (submitStale()) return;
     // 检查后如果发现重复，阻止提交
     if (versionValidationStatus.value === "error") {
       Message.error({
@@ -799,6 +851,7 @@ const handleUploadOk = async () => {
 
   // 表单验证
   const errors = await uploadFormRef.value?.validate();
+  if (submitStale()) return;
   if (errors) {
     return; // 有验证错误，不继续执行
   }
@@ -816,21 +869,24 @@ const handleUploadOk = async () => {
   uploading.value = true;
 
   try {
-    await handleUpload();
+    await handleUpload(submitSpaceId, submitStale);
   } catch (error: any) {
-    console.error("上传代码包失败:", error);
-    Message.error({
-      content: error?.message || "上传代码包失败",
-      duration: 5000 // 错误消息显示5秒
-    });
+    if (!submitStale()) {
+      console.error("上传代码包失败:", error);
+      Message.error({
+        content: error?.message || "上传代码包失败",
+        duration: 5000 // 错误消息显示5秒
+      });
+    }
     // 出错时不关闭弹窗，让用户可以修改后重新提交
   } finally {
-    uploading.value = false;
+    // 已作废的提交（取消/重新打开/切换空间）不回写新弹窗的 loading；这几处自己会重置 uploading
+    if (!submitStale()) uploading.value = false;
   }
 };
 
 // 统一上传处理（独立 cloudnode 服务）
-const handleUpload = async () => {
+const handleUpload = async (spaceId: string, isStale: () => boolean) => {
   try {
     const originalFilename = fileList.value[0]?.file?.name || "";
     await uploadFunctionPackage(
@@ -838,14 +894,17 @@ const handleUpload = async () => {
         ...uploadForm,
         original_filename: originalFilename
       },
-      fileList.value[0].file
+      fileList.value[0].file,
+      spaceId
     );
 
     Message.success("上传成功！");
-    uploadVisible.value = false;
+    // 上传已经成功；只有提交仍然有效时才操作当前弹窗，已作废的提交不能关闭用户重新打开、正在填写的新弹窗
+    if (!isStale()) uploadVisible.value = false;
     await loadPackageList();
     emit("refresh");
   } catch (error: any) {
+    if (isStale()) return;
     console.error("上传代码包失败:", error);
 
     const errorMessage = error?.message || "上传代码包失败";
@@ -910,18 +969,23 @@ const handleCancel = () => {
 };
 
 // 显示代码包详情
+const detailGuard = createLatestRequestGuard();
 const onShowDetail = async (record: FunctionPackage) => {
+  const request = detailGuard.begin();
   packageDetail.value = null;
   detailVisible.value = true;
 
   try {
     const detail = await getFunctionPackageDetail(record.package_id);
+    if (!request.isLatest()) return;
     if (detail) {
       packageDetail.value = detail;
     } else {
       throw new Error("获取详情失败");
     }
   } catch (error) {
+    // 切换空间造成的取消、或已被新的详情请求取代：不弹失败提示，也不关闭新的详情
+    if (error instanceof StaleSpaceRequestError || !request.isLatest()) return;
     console.error("获取代码包详情失败:", error);
     Message.error({
       content: "获取代码包详情失败",
@@ -933,6 +997,7 @@ const onShowDetail = async (record: FunctionPackage) => {
 
 // 关闭详情弹窗
 const handleDetailCancel = () => {
+  detailGuard.invalidate();
   detailVisible.value = false;
   packageDetail.value = null;
 };

@@ -2,10 +2,15 @@ package alerting
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
+	"github.com/mooyang-code/moox/modules/monitor/internal/notifier"
+	"trpc.group/trpc-go/trpc-go/log"
 
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -26,14 +31,15 @@ type Event struct {
 }
 
 type Options struct {
-	Channel func(context.Context) (*domain.NotificationChannel, error)
-	Now     func() time.Time
+	// Sender 返回发给全部通知渠道的发送器；返回 nil 表示没有渠道，只记录告警、不推送。
+	Sender func(context.Context) (notification.Sender, error)
+	Now    func() time.Time
 }
 
 type Evaluator struct {
-	alerts  *store.AlertRepository
-	channel func(context.Context) (*domain.NotificationChannel, error)
-	now     func() time.Time
+	alerts *store.AlertRepository
+	sender func(context.Context) (notification.Sender, error)
+	now    func() time.Time
 }
 
 func NewEvaluator(alerts *store.AlertRepository, opts Options) *Evaluator {
@@ -42,9 +48,9 @@ func NewEvaluator(alerts *store.AlertRepository, opts Options) *Evaluator {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Evaluator{
-		alerts:  alerts,
-		channel: opts.Channel,
-		now:     now,
+		alerts: alerts,
+		sender: opts.Sender,
+		now:    now,
 	}
 }
 
@@ -100,8 +106,7 @@ func (e *Evaluator) evaluateFailure(ctx context.Context, check domain.Check, res
 			// failure. A nil reminder timestamp makes the next firing result a
 			// retry instead of waiting for the normal five-minute reminder.
 			state.LastReminderAt = nil
-			_ = e.alerts.UpsertState(ctx, state)
-			return err
+			return errors.Join(err, e.persistRetryState(ctx, state))
 		}
 	} else if state.Status == domain.AlertStatusFiring && reminderDue(state.LastReminderAt, now, rule.MinimumReminderIntervalSeconds) {
 		state.LastReminderAt = &now
@@ -110,8 +115,7 @@ func (e *Evaluator) evaluateFailure(ctx context.Context, check domain.Check, res
 		}
 		if err := e.recordAndSend(ctx, check, result, rule, state, domain.AlertEventReminder); err != nil {
 			state.LastReminderAt = nil
-			_ = e.alerts.UpsertState(ctx, state)
-			return err
+			return errors.Join(err, e.persistRetryState(ctx, state))
 		}
 	}
 	return e.alerts.UpsertState(ctx, state)
@@ -146,12 +150,20 @@ func (e *Evaluator) evaluateSuccess(ctx context.Context, check domain.Check, res
 	return e.alerts.UpsertState(ctx, state)
 }
 
+// persistRetryState 把“待重试”标记（LastReminderAt=nil）落库。发送失败常常正是因为父 context 到期，
+// 此时必须用不受取消影响的短期限 context 落库，并把落库失败带回给调用方，否则未送达的通知会被抑制一个提醒间隔。
+func (e *Evaluator) persistRetryState(ctx context.Context, state *domain.AlertState) error {
+	retryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return e.alerts.UpsertState(retryCtx, state)
+}
+
 func (e *Evaluator) recordAndSend(ctx context.Context, check domain.Check, result domain.CheckResult, rule domain.AlertRule, state *domain.AlertState, eventType string) error {
 	event := Event{
 		EventID:   newEventID(),
 		EventType: eventType,
 		Status:    state.Status,
-		Message:   eventMessage(eventType, check, result),
+		Message:   eventMessage(eventType, check, result, state),
 		Check:     check,
 		Result:    result,
 		Rule:      rule,
@@ -160,20 +172,26 @@ func (e *Evaluator) recordAndSend(ctx context.Context, check domain.Check, resul
 	if err := e.recordEventObject(ctx, event); err != nil {
 		return err
 	}
-	var sendErr error
-	if e.channel != nil {
-		channel, err := e.channel(ctx)
-		if err != nil {
-			return e.recordSendFailure(ctx, check, result, rule, state, err)
+	if e.sender == nil {
+		return nil
+	}
+	sender, err := e.sender(ctx)
+	if err != nil {
+		return e.recordSendFailure(ctx, check, result, rule, state, err)
+	}
+	if sender == nil {
+		return nil
+	}
+	sendErr := sender.Send(ctx, notification.Message{Key: event.DedupeKey, Severity: notificationSeverity(eventType), Title: event.Check.Name, Body: event.Message})
+	if notifier.IsPartial(sendErr) {
+		// 已有渠道送达：只记录失败的渠道，不按未送达重试，免得已收到的群重复收到。发送可能已耗尽父 context，
+		// 记录用不受取消影响的短期限 context；记录失败也只写日志，不能让调用方把这条通知当成未送达而整体重发。
+		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := e.recordEvent(recordCtx, check, result, rule, state, domain.AlertEventSendFailed, "通知发送失败："+sendErr.Error()); err != nil {
+			log.WarnContextf(ctx, "record partial notification failure check=%s: %v", check.CheckID, err)
 		}
-		if channel == nil || strings.TrimSpace(channel.WebhookURL) == "" {
-			return nil
-		}
-		sender, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channel.ChannelType), WebhookURL: channel.WebhookURL})
-		if err != nil {
-			return e.recordSendFailure(ctx, check, result, rule, state, err)
-		}
-		sendErr = sender.Send(ctx, notification.Message{Key: event.DedupeKey, Severity: notificationSeverity(eventType), Title: event.Check.Name, Body: event.Message})
+		return nil
 	}
 	if sendErr != nil {
 		return e.recordSendFailure(ctx, check, result, rule, state, fmt.Errorf("send alert notification: %w", sendErr))
@@ -204,7 +222,7 @@ func notificationSeverity(eventType string) notification.Severity {
 
 func (e *Evaluator) recordEvent(ctx context.Context, check domain.Check, result domain.CheckResult, rule domain.AlertRule, state *domain.AlertState, eventType, message string) error {
 	if message == "" {
-		message = eventMessage(eventType, check, result)
+		message = eventMessage(eventType, check, result, state)
 	}
 	return e.recordEventObject(ctx, Event{
 		EventID:   newEventID(),
@@ -219,6 +237,11 @@ func (e *Evaluator) recordEvent(ctx context.Context, check domain.Check, result 
 }
 
 func (e *Evaluator) recordEventObject(ctx context.Context, event Event) error {
+	// payload 记录结构化的问题描述，概览按它展示告警经过，不再解析推送正文。
+	payload, err := json.Marshal(map[string]string{"reason": alerttext.Reason(strings.TrimSpace(event.Result.ErrorMessage))})
+	if err != nil {
+		return err
+	}
 	return e.alerts.CreateEvent(ctx, &domain.AlertEvent{
 		EventID:   event.EventID,
 		SpaceID:   event.Rule.SpaceID,
@@ -227,7 +250,7 @@ func (e *Evaluator) recordEventObject(ctx context.Context, event Event) error {
 		EventType: event.EventType,
 		Status:    event.Status,
 		Message:   event.Message,
-		Payload:   "{}",
+		Payload:   string(payload),
 		CreatedAt: e.now(),
 	})
 }
@@ -246,31 +269,57 @@ func dedupeKey(rule domain.AlertRule, check domain.Check) string {
 	return rule.RuleID + ":" + check.CheckID
 }
 
-func eventMessage(eventType string, check domain.Check, result domain.CheckResult) string {
-	name := strings.TrimSpace(check.Name)
-	if name == "" {
-		name = check.CheckID
-	}
-	status := map[string]string{
-		domain.AlertEventTriggered:  "触发告警",
-		domain.AlertEventReminder:   "告警提醒",
-		domain.AlertEventResolved:   "告警恢复",
-		domain.AlertEventSendFailed: "通知发送失败",
-	}[eventType]
-	if status == "" {
-		status = eventType
-	}
-	parts := []string{fmt.Sprintf("监控项：%s", name), fmt.Sprintf("状态：%s", status)}
-	if result.ErrorMessage != "" {
-		parts = append(parts, "原因："+result.ErrorMessage)
+// eventMessage is the notification body: one short line per fact, in the
+// order people need them. The check's name is the title.
+func eventMessage(eventType string, check domain.Check, result domain.CheckResult, state *domain.AlertState) string {
+	reason := alerttext.Reason(strings.TrimSpace(result.ErrorMessage))
+	var lines []string
+	switch eventType {
+	case domain.AlertEventResolved:
+		line := "状态：已恢复"
+		if since := alertDuration(state, result.CheckedAt); since != "" {
+			line += "（持续了 " + since + "）"
+		}
+		lines = append(lines, line)
+		if reason != "" {
+			lines = append(lines, "当前："+reason)
+		}
+	case domain.AlertEventReminder:
+		line := "状态：仍未恢复"
+		if since := alertDuration(state, result.CheckedAt); since != "" {
+			line += "（已持续 " + since + "）"
+		}
+		lines = append(lines, line)
+		if reason != "" {
+			lines = append(lines, "问题："+reason)
+		}
+	case domain.AlertEventSendFailed:
+		lines = append(lines, "状态：告警通知发送失败")
+		if reason != "" {
+			lines = append(lines, "问题："+reason)
+		}
+	default:
+		lines = append(lines, "状态：新告警")
+		if reason != "" {
+			lines = append(lines, "问题："+reason)
+		}
 	}
 	if !result.CheckedAt.IsZero() {
-		parts = append(parts, "检查时间："+result.CheckedAt.UTC().Format(time.RFC3339))
+		lines = append(lines, "时间："+alerttext.Time(result.CheckedAt)+"（北京时间）")
 	}
-	if check.Description != "" {
-		parts = append(parts, "建议："+strings.TrimSpace(check.Description))
+	if description := strings.TrimSpace(check.Description); description != "" && eventType != domain.AlertEventResolved {
+		lines = append(lines, "建议："+description)
 	}
-	return strings.Join(parts, "；")
+	return strings.Join(lines, "\n")
+}
+
+// alertDuration renders how long an alert has been firing, such as
+// "1 小时 5 分钟"; empty when it is not known.
+func alertDuration(state *domain.AlertState, now time.Time) string {
+	if state == nil || state.TriggeredAt == nil || now.IsZero() || now.Before(*state.TriggeredAt) {
+		return ""
+	}
+	return alerttext.Duration(now.Sub(*state.TriggeredAt))
 }
 
 func newEventID() string { return uuid.NewString() }

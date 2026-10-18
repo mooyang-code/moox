@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/eventbus/internal/config"
@@ -22,7 +21,6 @@ import (
 type Server struct {
 	cfg *config.Config
 	ns  *natsserver.Server
-	mu  sync.RWMutex
 }
 
 type usersFile struct {
@@ -51,8 +49,6 @@ type subjectPermission struct {
 	Deny  []string `yaml:"deny"`
 }
 
-const kvStoreHeadroomBytes = 256 << 20
-
 func New(cfg *config.Config) (*Server, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("broker config is nil")
@@ -72,11 +68,6 @@ func New(cfg *config.Config) (*Server, error) {
 		if stream.MaxBytes > 0 {
 			maxStore += stream.MaxBytes
 		}
-	}
-	if maxStore > 0 {
-		// Key-value buckets have no max_bytes and each reserves one byte; keep
-		// headroom so the exact sum of declared streams never blocks them.
-		maxStore += kvStoreHeadroomBytes
 	}
 	opts, err := jetStreamBaseOptions(cfg.Broker.StoreDir, maxStore)
 	if err != nil {

@@ -25,12 +25,12 @@ func TestAttachActiveViewRefreshesContractWhenIndexChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := &pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "prices", ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1, ActiveViewSchemaHash: "a", Engine: "bleve", Status: "active"}
-	if err := svc.AttachActiveView(old); err != nil {
+	if err := svc.AttachActiveView(context.Background(), old); err != nil {
 		t.Fatal(err)
 	}
 	activeIDs, _ := json.Marshal([]string{"prices"})
 	updated := &pb.View{SpaceId: "space", ViewId: "prices", DatasetId: "prices", ActiveIndexId: "prices-b", ActiveViewRevision: 2, DesiredViewRevision: 2, ActiveViewSchemaHash: "b", Engine: "bleve", Status: "active", Attributes: map[string]string{activeDatasetIDsAttr: string(activeIDs), activePrimaryDatasetAttr: "prices"}}
-	if err := svc.AttachActiveView(updated); err != nil {
+	if err := svc.AttachActiveView(context.Background(), updated); err != nil {
 		t.Fatal(err)
 	}
 	svc.mu.RLock()
@@ -45,7 +45,7 @@ func TestAttachActiveViewRefreshesContractWhenIndexChanges(t *testing.T) {
 
 type extraFieldReader struct{}
 
-func (extraFieldReader) ReadFields(_ context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
+func (extraFieldReader) ReadRows(_ context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
 	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
 	for _, key := range req.GetKeys() {
 		rows = append(rows, &pb.RowFieldValues{
@@ -56,7 +56,7 @@ func (extraFieldReader) ReadFields(_ context.Context, req *pb.PrimaryReadFieldsR
 			}},
 		})
 	}
-	return &pb.PrimaryReadFieldsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
+	return &pb.PrimaryReadRowsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
 }
 
 type blockingFieldReader struct {
@@ -64,7 +64,7 @@ type blockingFieldReader struct {
 	release chan struct{}
 }
 
-func (r *blockingFieldReader) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
+func (r *blockingFieldReader) ReadRows(ctx context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
 	select {
 	case <-r.started:
 	default:
@@ -85,12 +85,12 @@ func (r *blockingFieldReader) ReadFields(ctx context.Context, req *pb.PrimaryRea
 			}},
 		})
 	}
-	return &pb.PrimaryReadFieldsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
+	return &pb.PrimaryReadRowsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
 }
 
 type recoveryFieldReader struct{ primaryPresent bool }
 
-func (r recoveryFieldReader) ReadFields(_ context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
+func (r recoveryFieldReader) ReadRows(_ context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
 	rows := make([]*pb.RowFieldValues, 0, len(req.GetKeys()))
 	for _, key := range req.GetKeys() {
 		row := &pb.RowFieldValues{Key: key}
@@ -100,7 +100,7 @@ func (r recoveryFieldReader) ReadFields(_ context.Context, req *pb.PrimaryReadFi
 		}
 		rows = append(rows, row)
 	}
-	return &pb.PrimaryReadFieldsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
+	return &pb.PrimaryReadRowsRsp{RetInfo: successRetInfo(), Rows: rows}, nil
 }
 
 func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
@@ -114,7 +114,7 @@ func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "prices-view", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: columns}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare: rsp=%v err=%v", rsp, err)
 	}
-	if err := svc.AttachActiveView(&pb.View{
+	if err := svc.AttachActiveView(context.Background(), &pb.View{
 		SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices",
 		ActiveIndexId: "prices-view", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1",
 		Engine: "duckdb", ActiveColumns: columns, Status: "active",
@@ -174,7 +174,7 @@ func TestDuckDBABSwitchKeepsActiveReadableUntilCollectorDeletesOldFile(t *testin
 	}
 	attach := func(indexID string, version uint64) {
 		t.Helper()
-		if err := svc.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ActiveIndexId: indexID, ActiveViewRevision: version, ActiveViewSchemaHash: fmt.Sprintf("schema-%d", version), Engine: "duckdb", ActiveColumns: columns, Status: "active"}); err != nil {
+		if err := svc.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ActiveIndexId: indexID, ActiveViewRevision: version, ActiveViewSchemaHash: fmt.Sprintf("schema-%d", version), Engine: "duckdb", ActiveColumns: columns, Status: "active"}); err != nil {
 			t.Fatalf("attach %s: %v", indexID, err)
 		}
 	}
@@ -203,7 +203,7 @@ func TestDuckDBABSwitchKeepsActiveReadableUntilCollectorDeletesOldFile(t *testin
 	apply(oldID, 1, "LIVE_WRITE", key("2026-08-11T00:01:00Z", 101))
 	apply(newID, 2, "LIVE_WRITE", key("2026-08-11T00:01:00Z", 101))
 	query(2, 101)
-	if err := svc.SwitchView(ctx, "quant", "prices-view", 0); err != nil {
+	if err := svc.SwitchView(ctx, "quant", "prices-view"); err != nil {
 		t.Fatal(err)
 	}
 	oldPath := filepath.Join(root, "duckdb", oldID+".duckdb")
@@ -256,8 +256,8 @@ func TestDuckDBBackfillDoesNotBlockActiveLiveWrite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
-	aColumns := []*pb.ViewColumn{{SpaceId: "quant", ViewId: "prices-view", OriginId: "prices.close", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
-	bColumns := append(append([]*pb.ViewColumn(nil), aColumns...), &pb.ViewColumn{SpaceId: "quant", ViewId: "prices-view", OriginId: "prices.extra", ColumnName: "extra", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
+	aColumns := []*pb.ViewColumn{{SpaceId: "quant", ViewId: "prices-view", OriginId: "close", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
+	bColumns := append(append([]*pb.ViewColumn(nil), aColumns...), &pb.ViewColumn{SpaceId: "quant", ViewId: "prices-view", OriginId: "extra", ColumnName: "extra", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
 	schema := func(version uint64, columns []*pb.ViewColumn) *pb.ViewIndexSchema {
 		return &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ViewVersion: version, Engine: "duckdb", ViewSchemaHash: fmt.Sprintf("schema-%d", version), Columns: columns}
 	}
@@ -279,7 +279,7 @@ func TestDuckDBBackfillDoesNotBlockActiveLiveWrite(t *testing.T) {
 		}
 	}
 	prepare("prices-a", 1, aColumns)
-	if err := svc.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", Engine: "duckdb", ActiveColumns: aColumns, Status: "active"}); err != nil {
+	if err := svc.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", Engine: "duckdb", ActiveColumns: aColumns, Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 	apply("prices-a", 1, []*pb.ViewIndexRowWrite{{
@@ -317,7 +317,7 @@ func TestDuckDBBackfillDoesNotBlockActiveLiveWrite(t *testing.T) {
 	if err := <-backfillErr; err != nil {
 		t.Fatalf("backfill: %v", err)
 	}
-	if err := svc.SwitchView(ctx, "quant", "prices-view", 0); err != nil {
+	if err := svc.SwitchView(ctx, "quant", "prices-view"); err != nil {
 		t.Fatalf("switch: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -402,7 +402,7 @@ func TestDataViewSupportsTimeRangeAndTextOnlyQueries(t *testing.T) {
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 			t.Fatalf("prepare rsp=%v err=%v", rsp, err)
 		}
-		if err := svc.AttachActiveView(&pb.View{SpaceId: "space", ViewId: id, DatasetId: map[string]string{"times": "prices", "records": "records"}[id], ActiveIndexId: id, ActiveViewRevision: 1, ActiveViewSchemaHash: "hash", Engine: map[string]string{"times": "duckdb", "records": "bleve"}[id], ActiveColumns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}, Status: "active"}); err != nil {
+		if err := svc.AttachActiveView(context.Background(), &pb.View{SpaceId: "space", ViewId: id, DatasetId: map[string]string{"times": "prices", "records": "records"}[id], ActiveIndexId: id, ActiveViewRevision: 1, ActiveViewSchemaHash: "hash", Engine: map[string]string{"times": "duckdb", "records": "bleve"}[id], ActiveColumns: []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}, {ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING}}, Status: "active"}); err != nil {
 			t.Fatalf("attach %s: %v", id, err)
 		}
 	}
@@ -456,7 +456,7 @@ func TestViewDatasetMappingIncludesSpace(t *testing.T) {
 				ViewVersion:    1,
 				Engine:         "bleve",
 				ViewSchemaHash: "hash",
-				Columns:        []*pb.ViewColumn{{OriginId: "shared.value", ColumnName: "value"}},
+				Columns:        []*pb.ViewColumn{{OriginId: "value", ColumnName: "value"}},
 			},
 		})
 		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -473,7 +473,7 @@ func TestForeignDatasetEventDoesNotMapToOwnedViewGrain(t *testing.T) {
 	writes := eventWrites(viewindex.ViewIndexSchema{
 		PrimaryDatasetID: "primary",
 		Columns: []*pb.ViewColumn{{
-			OriginId: "primary.factor", ColumnName: "primary.factor",
+			OriginId: "factor", ColumnName: "factor",
 		}},
 	}, "secondary", []*pb.RowFieldUpsert{{
 		Key: &pb.RowKey{SpaceId: "space", DatasetId: "secondary", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}},
@@ -495,7 +495,7 @@ func TestOwnedDatasetEventRecoversMissingColumn(t *testing.T) {
 	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
 	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "owned", Schema: &pb.ViewIndexSchema{
 		SpaceId: "space", ViewId: "owned", DatasetId: "primary", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash",
-		Columns: []*pb.ViewColumn{{OriginId: "primary.base", ColumnName: "base"}, {OriginId: "primary.factor", ColumnName: "factor"}},
+		Columns: []*pb.ViewColumn{{OriginId: "base", ColumnName: "base"}, {OriginId: "factor", ColumnName: "factor"}},
 	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare rsp=%v err=%v", rsp, err)
 	}
@@ -510,13 +510,9 @@ func TestOwnedDatasetEventRecoversMissingColumn(t *testing.T) {
 		Key:    &pb.RowKey{SpaceId: "space", DatasetId: "primary", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}},
 		Fields: []*pb.FieldValue{{FieldId: "base", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}},
 	}
-	engine, err := svc.engineFor("owned")
-	if err != nil {
-		t.Fatal(err)
-	}
 	schema := svc.schemas["owned"]
 	initial := eventWrites(schema, "primary", []*pb.RowFieldUpsert{event})
-	recovered, err := svc.recoverMissingRows(ctx, engine, "owned", schema, "primary", []*pb.RowFieldUpsert{event}, initial)
+	recovered, err := svc.recoverMissingRows(ctx, schema, []*pb.RowFieldUpsert{event}, initial)
 	if err != nil || len(recovered) != 1 || len(recovered[0].Fields) < 1 {
 		t.Fatalf("recover failed recovered=%v err=%v", recovered, err)
 	}
@@ -539,7 +535,7 @@ func TestCompleteEventCreatesMissingViewRowWithoutRecovery(t *testing.T) {
 	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
 	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "single", Schema: &pb.ViewIndexSchema{
 		SpaceId: "space", ViewId: "single", DatasetId: "market", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash",
-		Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}},
+		Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}},
 	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare rsp=%v err=%v", rsp, err)
 	}
@@ -595,7 +591,7 @@ func TestInitialPrimingBuildAcksRowsAfterWritingReplacement(t *testing.T) {
 	}
 	ctx := context.Background()
 	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
-	columns := []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
+	columns := []*pb.ViewColumn{{OriginId: "close", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "priming-view", Schema: &pb.ViewIndexSchema{
 		SpaceId: "space", ViewId: "priming", DatasetId: "market", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash", Columns: columns,
 	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
@@ -624,7 +620,7 @@ func TestExplicitEmptyViewRoutesDatasetEventsWithoutBlocking(t *testing.T) {
 		t.Fatalf("prepare empty view: rsp=%v err=%v", rsp, err)
 	}
 	view := &pb.View{SpaceId: "space", ViewId: "empty", DatasetId: "market", ActiveIndexId: "empty-view", ActiveViewRevision: 1, DesiredViewRevision: 1, ActiveViewSchemaHash: "hash", Engine: "bleve", Status: "active", Attributes: map[string]string{viewColumnsExplicitAttr: "true"}}
-	if err := svc.AttachActiveView(view); err != nil {
+	if err := svc.AttachActiveView(context.Background(), view); err != nil {
 		t.Fatal(err)
 	}
 	row := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}}
@@ -642,7 +638,7 @@ func TestLiveRowUsesHealthyReplacementWhenActiveIndexIsMissing(t *testing.T) {
 	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
 	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "replacement", Schema: &pb.ViewIndexSchema{
 		SpaceId: "space", ViewId: "prices", DatasetId: "market", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash",
-		Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}},
+		Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}},
 	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare replacement: rsp=%v err=%v", rsp, err)
 	}
@@ -682,17 +678,6 @@ func TestLiveRowUsesHealthyReplacementWhenActiveIndexIsMissing(t *testing.T) {
 	}
 }
 
-func TestViewEventUsesDatasetDots(t *testing.T) {
-	schema := viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "dots", PrimaryDatasetID: "market.v2", ViewVersion: 1, SchemaHash: "hash", Columns: []*pb.ViewColumn{
-		{OriginId: "market.v2.close", ColumnName: "close"},
-	}}
-	event := &pb.RowFieldUpsert{Key: &pb.RowKey{SpaceId: "space", DatasetId: "market.v2", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 3}}}}}
-	writes := eventWrites(schema, "market.v2", []*pb.RowFieldUpsert{event})
-	if len(writes) != 1 || len(writes[0].Fields) != 1 || writes[0].Fields[0].GetFieldId() != "close" || writes[0].Key.Key.GetDatasetId() != "market.v2" {
-		t.Fatalf("dataset with dot was not mapped: %v", writes)
-	}
-}
-
 func TestViewBuildBackfillDoesNotOverwriteLiveAndSwitchesAtomically(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
@@ -703,7 +688,7 @@ func TestViewBuildBackfillDoesNotOverwriteLiveAndSwitchesAtomically(t *testing.T
 	schema := func() *pb.ViewIndexSchema {
 		return &pb.ViewIndexSchema{
 			SpaceId: "space", ViewId: "logical", DatasetId: "shared", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash",
-			Columns: []*pb.ViewColumn{{OriginId: "shared.value", ColumnName: "shared.value"}},
+			Columns: []*pb.ViewColumn{{OriginId: "value", ColumnName: "value"}},
 		}
 	}
 	prepare := func(id string) {
@@ -722,7 +707,7 @@ func TestViewBuildBackfillDoesNotOverwriteLiveAndSwitchesAtomically(t *testing.T
 				ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: mode,
 				RowWrites: []*pb.ViewIndexRowWrite{{
 					Key:    &pb.ViewIndexRowKey{RowKey: key},
-					Fields: []*pb.FieldValue{{FieldId: "shared.value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}}}},
+					Fields: []*pb.FieldValue{{FieldId: "value", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: value}}}},
 				}},
 			},
 		})
@@ -737,13 +722,13 @@ func TestViewBuildBackfillDoesNotOverwriteLiveAndSwitchesAtomically(t *testing.T
 	if err := svc.BackfillView(ctx, "space", "logical", 100); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.SwitchView(ctx, "space", "logical", time.Hour); err != nil {
+	if err := svc.SwitchView(ctx, "space", "logical"); err != nil {
 		t.Fatal(err)
 	}
 	rsp, err := svc.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{
 		AuthInfo: auth, SpaceId: "space", ViewId: "logical",
 		Keys:        []*pb.RecordKey{{SpaceId: "space", DatasetId: "shared", RecordId: "r", Version: "1"}},
-		ColumnNames: []string{"shared.value"},
+		ColumnNames: []string{"value"},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetRows()) != 1 ||
 		rsp.GetRows()[0].GetFields()[0].GetValue().GetStringValue() != "live" {
@@ -772,8 +757,8 @@ func TestBackfillReadsNewDatasetColumnsByExistingGrain(t *testing.T) {
 			t.Fatalf("prepare %s rsp=%v err=%v", id, rsp, err)
 		}
 	}
-	primaryColumn := &pb.ViewColumn{OriginId: "primary.close", ColumnName: "primary.close"}
-	extraColumn := &pb.ViewColumn{OriginId: "primary.extra", ColumnName: "primary.extra"}
+	primaryColumn := &pb.ViewColumn{OriginId: "close", ColumnName: "close"}
+	extraColumn := &pb.ViewColumn{OriginId: "extra", ColumnName: "extra"}
 	prepare("join-a", primaryColumn)
 	key := &pb.RowKey{SpaceId: "space", DatasetId: "primary", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r", Version: "1"}}}
 	rsp, err := svc.ApplyViewIndex(ctx, &pb.ApplyViewIndexReq{
@@ -782,27 +767,27 @@ func TestBackfillReadsNewDatasetColumnsByExistingGrain(t *testing.T) {
 			ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: "LIVE_WRITE",
 			RowWrites: []*pb.ViewIndexRowWrite{{
 				Key:    &pb.ViewIndexRowKey{RowKey: key},
-				Fields: []*pb.FieldValue{{FieldId: "primary.close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}},
+				Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 100}}}},
 			}},
 		},
 	})
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("apply rsp=%v err=%v", rsp, err)
 	}
-	if err := svc.AttachActiveView(&pb.View{SpaceId: "space", ViewId: "joined", DatasetId: "primary", ActiveIndexId: "join-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "hash", Engine: "bleve", ActiveColumns: []*pb.ViewColumn{primaryColumn}, Status: "active"}); err != nil {
+	if err := svc.AttachActiveView(context.Background(), &pb.View{SpaceId: "space", ViewId: "joined", DatasetId: "primary", ActiveIndexId: "join-a", ActiveViewRevision: 1, ActiveViewSchemaHash: "hash", Engine: "bleve", ActiveColumns: []*pb.ViewColumn{primaryColumn}, Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 	prepare("join-b", primaryColumn, extraColumn)
 	if err := svc.BackfillViewWithReader(ctx, "space", "joined", 100, extraFieldReader{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.SwitchView(ctx, "space", "joined", time.Hour); err != nil {
+	if err := svc.SwitchView(ctx, "space", "joined"); err != nil {
 		t.Fatal(err)
 	}
 	result, err := svc.SearchRecordRows(ctx, &pb.SearchRecordRowsReq{
 		AuthInfo: auth, SpaceId: "space", ViewId: "joined",
 		Keys:        []*pb.RecordKey{{SpaceId: "space", DatasetId: "primary", RecordId: "r", Version: "1"}},
-		ColumnNames: []string{"primary.close", "primary.extra"},
+		ColumnNames: []string{"close", "extra"},
 	})
 	if err != nil || result.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(result.GetRows()) != 1 || len(result.GetRows()[0].GetFields()) != 2 {
 		t.Fatalf("result=%v err=%v", result, err)

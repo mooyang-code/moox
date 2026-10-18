@@ -80,26 +80,25 @@ reject '^[[:space:]]+(type|urls|nats_url|stream_name|subject_prefix|max_msgs|max
 reject '^[[:space:]]+(stream|topic):' \
   "Monitor still exposes Registry-owned stream/topic settings" \
   --glob '*.yaml' modules/monitor/config
-reject 'EventBus\.Stream|yaml:"stream"' \
-  "Archive still exposes the Registry-owned stream setting" \
-  --glob '*.go' modules/archive/internal
+# moox-factor-engine reaches the manager through the service gateway's HTTPS
+# entry; its manager.url is a gateway address, not an EventBus setting.
 reject 'NATS\.Stream|NATS\.Consumer|NATS\.URL\b|yaml:"stream"|yaml:"consumer"|yaml:"url"' \
   "Factor still exposes duplicate or fixed live EventBus settings" \
-  --glob '*.go' modules/factor/internal
+  --glob '*.go' --glob '!modules/factor/internal/engine/config.go' modules/factor/internal
 reject '^[[:space:]]+(stream|consumer|url):' \
   "Factor YAML still exposes duplicate or fixed live EventBus settings" \
-  --glob '*.yaml' modules/factor/config
+  --glob '*.yaml' --glob '!modules/factor/config/engine.yaml' modules/factor/config
 # FactorTypeCrossSection remains a supported calculation type; only its retired
 # persistence and recalculation APIs belong in this removal guard.
 reject 'NewDurableEventBatcher|PendingEventStore|t_factor_event_inbox|arrow_mmap|GetRecalcProgress|ListFactorRuns' \
   "removed Factor capability remains" \
-  --glob '*.go' --glob '*.proto' --glob '*.py' --glob '!**/*_test.go' \
-  modules/factor/internal modules/factor/proto modules/factor/cmd modules/factor/pyworker
+  --glob '*.go' --glob '*.proto' --glob '!**/*_test.go' \
+  modules/factor/internal modules/factor/proto modules/factor/cmd
 reject 'KLineColumns|DependsFromSource|DefaultLookback|signal_multi_params|c_periods_json|c_depends_json' \
   "legacy OHLCV/period Factor contract remains" \
-  --glob '*.go' --glob '*.proto' --glob '*.py' --glob '*.sql' --glob '!**/*_test.go' \
+  --glob '*.go' --glob '*.proto' --glob '*.yaml' --glob '*.sql' --glob '!**/*_test.go' \
   examples/factors modules/factor/internal modules/factor/proto modules/factor/schema \
-  modules/factor/cmd modules/factor/pyworker
+  modules/factor/cmd modules/factor/factors
 reject 'NATSURL|EmbeddedJetStreamConfig|yaml:"nats_url"|yaml:"embedded"' \
   "CloudNode still exposes duplicate or embedded JetStream settings" \
   --glob '*.go' modules/cloudnode/internal
@@ -108,17 +107,7 @@ reject '^[[:space:]]+(consumer|rebalance_consumer|max_ack_pending|ack_wait|ack_w
   --glob '*.yaml' \
   --glob '!modules/storage/config/storage.yaml' \
   --glob '!modules/storage/config/storage_view/trpc_go.yaml' \
-  modules/archive/config modules/monitor/config modules/trade/config modules/storage/config
-
-for permission in \
-  '$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>' \
-  '$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>' \
-  '$JS.ACK.MOOX_CLOUDNODE_EXEC.>'; do
-  rg -Fq "$permission" modules/admin/cmd/cli/eventbus_credentials.go || {
-    echo "cloudnode-worker ACL is missing ${permission}" >&2
-    exit 1
-  }
-done
+  modules/monitor/config modules/trade/config modules/storage/config
 
 (cd packages/events && go test ./...)
 (cd packages/jetstream && go test ./...)
@@ -126,10 +115,8 @@ done
 (cd modules/collector && go test ./internal/sources/binance)
 (cd modules/storage && CGO_ENABLED=1 go test ./internal/config ./cmd/server ./internal/eventmapper ./internal/service/datanode/... ./internal/service/view/... ./internal/service/e2e)
 (cd modules/monitor && go test ./internal/config ./internal/metrics/... ./internal/hostmetrics/... ./test)
-(cd modules/archive && go test ./internal/config ./internal/eventconsumer)
-(cd modules/archive && go test ./internal/bootstrap -run '^TestAppRunConsumesStorageEventAndBecomesReadyE2E$' -count=1)
 (cd modules/factor && CGO_ENABLED=1 go test ./internal/store ./internal/bootstrap ./internal/catalog ./internal/periodclock ./internal/trigger ./internal/pipeline ./internal/recalc ./internal/storageio)
-(cd modules/cloudnode && CGO_ENABLED=1 go test ./internal/config ./internal/jobqueue ./internal/jobstate ./internal/rpc)
+(cd modules/cloudnode && CGO_ENABLED=1 go test ./internal/config ./internal/rpc)
 # Strategy E2E tests are build-tagged e2e_external and require deployed services;
 # this local contract gate covers the package-level storage and outbox tests.
 (cd modules/strategy && CGO_ENABLED=1 go test ./internal/store ./internal/outbox)

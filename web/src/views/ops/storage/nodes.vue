@@ -174,8 +174,15 @@
               <a-table-column title="名称" :width="150">
                 <template #cell="{ record }">{{ record.name || record.dataset_id }}</template>
               </a-table-column>
-              <a-table-column title="数据类型" :width="150" data-index="data_kind" />
-              <a-table-column title="保留时长" :width="120" data-index="keep_duration" />
+              <a-table-column title="数据类型" :width="150">
+                <template #cell="{ record }">{{ optionLabel(dataKindOptions, record.data_kind) }}</template>
+              </a-table-column>
+              <a-table-column title="保留期" :width="150">
+                <template #cell="{ record }">
+                  {{ formatRetention(record.retention) }}
+                  <span class="retention-source">{{ retentionSourceLabel(record.retention_source) }}</span>
+                </template>
+              </a-table-column>
               <a-table-column title="状态" :width="90">
                 <template #cell="{ record }">
                   <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
@@ -206,15 +213,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { createSubmitScope } from "@/utils/submit-scope";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { useRouter } from "vue-router";
 import { deleteDataNode, listDataNodes, updateDataNode } from "@/api/storage/metadata";
 import type { DataNodeListItem, DatasetSummary } from "@/api/storage/types";
+import { formatRetention, retentionSourceLabel } from "@/utils/retention";
 import {
   applyPageResult,
+  dataKindOptions,
   defaultPagination,
   formatTime,
+  optionLabel,
   statusColor,
   statusLabel,
   statusOptions
@@ -290,14 +301,16 @@ async function submit() {
     Message.warning("名称不能为空");
     return;
   }
+  const submission = nodeScope.begin();
   submitting.value = true;
   try {
     await updateDataNode({ node_id: form.node_id, name: form.name.trim(), status: form.status });
     Message.success("数据节点已保存");
+    if (!submission.isCurrent()) return;
     visible.value = false;
     await load();
   } finally {
-    submitting.value = false;
+    if (submission.isCurrent()) submitting.value = false;
   }
 }
 
@@ -327,9 +340,24 @@ function onPageSizeChange(pageSize: number) {
 }
 
 onMounted(load);
+
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const nodeScope = createSubmitScope({ global: true });
+watch(visible, open => {
+  if (open) {
+    nodeScope.invalidate();
+    submitting.value = false; // 重新打开时旧提交的 loading 不能遗留
+  }
+});
 </script>
 
 <style scoped>
+.retention-source {
+  margin-left: 6px;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
 .page-head {
   display: flex;
   align-items: center;

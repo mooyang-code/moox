@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/strategy
 
-go 1.25.0
+go 1.26.9
 
 require (
 	github.com/expr-lang/expr v1.17.8
@@ -10,11 +10,17 @@ require (
 	github.com/mooyang-code/moox/modules/strategy/proto/strategygen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/trade/proto/tradegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketcalendar v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/pyruntime v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats-server/v2 v2.11.17
 	github.com/nats-io/nats.go v1.51.0
 	github.com/prometheus/client_golang v1.23.2
@@ -32,6 +38,8 @@ require (
 )
 
 require (
+	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 )
 
@@ -106,8 +114,6 @@ require (
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
 
-replace github.com/mooyang-code/moox/packages/pyruntime => ../../packages/pyruntime
-
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
@@ -115,6 +121,7 @@ replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 
 replace github.com/mooyang-code/moox/packages/events => ../../packages/events
+
 replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 
 replace github.com/mooyang-code/moox/packages/security => ../../packages/security
@@ -125,6 +132,8 @@ replace github.com/mooyang-code/moox/modules/trade/proto/tradegen => ../trade/pr
 
 replace github.com/mooyang-code/moox/packages/report => ../../packages/report
 
+replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
+
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 
 replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
@@ -132,3 +141,19 @@ replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/m
 replace github.com/mooyang-code/moox/modules/factor/proto/factorgen => ../factor/proto/factorgen
 
 replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../storage/proto/storagegen
+
+replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/gatewayclient
+
+replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
+
+replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
+
+replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen
+
+replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
+
+replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
+
+replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
+
+replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb

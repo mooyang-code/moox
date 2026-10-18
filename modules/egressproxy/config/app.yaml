@@ -1,0 +1,9 @@
+# HTTP 出口与 DNS 快照使用各自的域名白名单。
+domains: ["*.binance.com", "data-api.binance.vision"]
+dns:
+  domains: ["api.binance.com", "fapi.binance.com", "data-api.binance.vision"]
+  lookup_timeout_ms: 1500
+  probe_timeout_ms: 500
+  probe_port: 443
+  cache_ttl_seconds: 300
+  max_ips_per_domain: 4

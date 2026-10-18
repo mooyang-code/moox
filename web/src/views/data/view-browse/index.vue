@@ -28,6 +28,8 @@
           <section v-if="!props.hideTechnicalIdentity" class="view-status-line">
             <span>View: {{ activeView?.view_id || "-" }}</span>
             <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
+            <span v-if="activeView?.freq">频率: {{ activeView.freq }}</span>
+            <span v-if="currentDatasetRetention">保留期: {{ currentDatasetRetention }}</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
             <a-tag size="small" :color="activeView?.active_index_id ? 'green' : 'orange'">
               {{ activeView?.active_index_id ? "已构建" : "未构建" }}
@@ -401,12 +403,12 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
+  listAllDatasets,
+  listAllViews,
   listDatasetColumns,
-  listDatasets,
   listFields,
   listViewColumns,
   listViewRebuildLogs,
-  listViews,
   requestViewRebuild as requestViewRebuildTask
 } from "@/api/storage/metadata";
 import { queryTimeSeriesRows, searchRecordRows } from "@/api/storage/view";
@@ -421,7 +423,9 @@ import type {
   ViewColumn,
   ViewRebuildLog
 } from "@/api/storage/types";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { useSpaceStore } from "@/store/modules/space";
+import { formatRetention, retentionSourceLabel } from "@/utils/retention";
 import {
   adaptiveColumnWidth,
   recordRowsToTableRows,
@@ -639,6 +643,11 @@ const currentDatasetName = computed(() => {
   return dataset.name || dataset.dataset_id;
 });
 const currentDatasetId = computed(() => activeView.value?.dataset_id || "-");
+const currentDatasetRetention = computed(() => {
+  const dataset = primaryDataset.value;
+  if (!dataset?.retention) return "";
+  return `${formatRetention(dataset.retention)}（${retentionSourceLabel(dataset.retention_source)}）`;
+});
 
 const mode = computed(() => viewModeFromPrimaryDataset(datasets.value, activeView.value?.dataset_id));
 const modeText = computed(() => {
@@ -656,19 +665,12 @@ const klineColumnNames = computed(() => {
   const names = preferredColumnNames.value;
   const out: string[] = [];
   for (const basename of KLINE_COLUMN_BASENAMES) {
-    const matched = names.find(name => name === basename || name.endsWith(`.${basename}`));
-    if (matched) out.push(matched);
+    if (names.includes(basename)) out.push(basename);
   }
   return out;
 });
 const columnLabels = computed(() => {
-  const labels = buildViewColumnLabels(
-    viewColumns.value,
-    datasetColumns.value,
-    fields.value,
-    datasets.value,
-    activeView.value
-  );
+  const labels = buildViewColumnLabels(viewColumns.value, datasetColumns.value, fields.value, activeView.value);
   for (const column of datasetColumns.value) {
     if (!column.column_name || labels[column.column_name]) continue;
     labels[column.column_name] = column.attributes?.display_name?.trim() || column.column_name;
@@ -772,7 +774,7 @@ function rebuildLogDetail(log: ViewRebuildLog) {
         return `${series}：${observed} / ${max} 根，重建后保留 ${lookback} 根`;
       }
     } catch {
-      // Keep the generic phase/error text for legacy or malformed details.
+      // 详情无法解析时沿用通用的阶段/错误文本。
     }
   }
   if (log.error_summary) return log.error_summary;
@@ -958,30 +960,6 @@ async function loadMeta() {
   }
 }
 
-async function listAllViews(spaceId: string) {
-  const views: View[] = [];
-  const size = 500;
-  for (let pageNo = 1; ; pageNo += 1) {
-    const rsp = await listViews({ space_id: spaceId, page: { page: pageNo, size } });
-    views.push(...(rsp.views || []));
-    if (!rsp.page_result?.has_more || (rsp.views || []).length === 0) {
-      return views;
-    }
-  }
-}
-
-async function listAllDatasets(spaceId: string) {
-  const datasets: Dataset[] = [];
-  const size = 500;
-  for (let pageNo = 1; ; pageNo += 1) {
-    const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size } });
-    datasets.push(...(rsp.datasets || []));
-    if (!rsp.page_result?.has_more || (rsp.datasets || []).length === 0) {
-      return datasets;
-    }
-  }
-}
-
 function viewUsesLikelyFactorDataset(view: View) {
   const dataset = datasetById.value.get(view.dataset_id);
   if (dataset) {
@@ -1039,20 +1017,20 @@ watch(
   }
 );
 
-watch(() => props.refreshKey, () => {
-  void refreshRowsInBackground();
-});
+watch(
+  () => props.refreshKey,
+  () => {
+    void refreshRowsInBackground();
+  }
+);
 
 // Coalesce requests during a query/context load into a follow-up read instead
 // of silently dropping the user's refresh while the browser is busy.
-watch(
-  [pendingRowsRefresh, loading, contextLoading, metaLoading, () => activeView.value?.view_id],
-  () => {
-    if (!pendingRowsRefresh.value || !activeView.value || loading.value || contextLoading.value || metaLoading.value) return;
-    pendingRowsRefresh.value = false;
-    void reloadRows(true);
-  }
-);
+watch([pendingRowsRefresh, loading, contextLoading, metaLoading, () => activeView.value?.view_id], () => {
+  if (!pendingRowsRefresh.value || !activeView.value || loading.value || contextLoading.value || metaLoading.value) return;
+  pendingRowsRefresh.value = false;
+  void reloadRows(true);
+});
 
 async function onViewChange() {
   clearViewState();
@@ -1294,7 +1272,7 @@ function resetFilterRows() {
 }
 
 function createFilterState(option?: ViewFilterFieldOption): ViewFilterState {
-  const isStockCNKline = activeView.value?.dataset_id === "dataset_stockcn_equity_kline";
+  const isStockCNKline = activeView.value?.dataset_id === "dataset_stockcn_equity_kline_1m";
   return {
     fieldName: option?.value || "",
     operator: option?.value === "series_tag" ? "eq" : "contains",
@@ -1460,12 +1438,24 @@ async function reloadKlineRecords() {
   await loadKlineRecords(subjectId, seriesTag);
 }
 
+// K 线加载只服务于发起时的 View：切换 View/空间、关闭弹窗或卸载都会使在途请求失效，迟到的响应不能重新打开弹窗或写入旧数据
+const klineRequestGuard = createLatestRequestGuard();
+
 async function loadKlineRecords(subjectId: string, seriesTag: string) {
   const view = activeView.value;
   if (!view) return false;
+  const request = klineRequestGuard.begin();
+  // 发起时固定整次查询的筛选、投影列、排序与数量：加载期间修改筛选框不能让后续分页读取另一套条件
+  const query = {
+    filter: activeFilterExprs(),
+    columnNames: [...klineColumnNames.value],
+    sorts: buildKlineQuerySorts(),
+    limit: normalizedKlineLimit.value
+  };
   klineLoading.value = true;
   try {
-    const rows = await fetchKlineTableRows(view.view_id);
+    const rows = await fetchKlineTableRows(view.view_id, query, () => request.isLatest());
+    if (!request.isLatest()) return false;
     if (!klineRowsHaveFreq(rows)) {
       Message.warning("当前查询结果缺少 freq 字段，无法展示K线");
       return false;
@@ -1477,35 +1467,48 @@ async function loadKlineRecords(subjectId: string, seriesTag: string) {
       return false;
     }
 
-    klineLimit.value = normalizedKlineLimit.value;
+    klineLimit.value = query.limit;
     klineFreq.value = firstKlineFreq(subjectId, rows);
     klineRecords.value = records;
     return true;
   } catch (error) {
+    if (!request.isLatest()) return false;
     Message.error(error instanceof Error ? error.message : "加载K线数据失败");
     return false;
   } finally {
-    klineLoading.value = false;
+    if (request.isLatest()) klineLoading.value = false;
   }
 }
 
-async function fetchKlineTableRows(viewId: string): Promise<ViewBrowseTableRow[]> {
+interface KlineQuerySnapshot {
+  filter: ReturnType<typeof activeFilterExprs>;
+  columnNames: string[];
+  sorts: ReturnType<typeof buildKlineQuerySorts>;
+  limit: number;
+}
+
+async function fetchKlineTableRows(
+  viewId: string,
+  query: KlineQuerySnapshot,
+  isCurrent: () => boolean = () => true
+): Promise<ViewBrowseTableRow[]> {
   const space_id = spaceStore.requireSpaceId();
   const timeRange = defaultTimeSeriesPreviewRange();
   const rows: TimeSeriesRow[] = [];
-  const limit = normalizedKlineLimit.value;
+  const limit = query.limit;
   for (let pageNo = 1; rows.length < limit; pageNo += 1) {
     const rsp = await queryTimeSeriesRows({
       space_id,
       view_id: viewId,
       ...(timeRange ? { time_range: timeRange } : {}),
-      ...(klineColumnNames.value.length > 0 ? { column_names: klineColumnNames.value } : {}),
-      filter: activeFilterExprs(),
-      sorts: buildKlineQuerySorts(),
+      ...(query.columnNames.length > 0 ? { column_names: query.columnNames } : {}),
+      filter: query.filter,
+      sorts: query.sorts,
       limit,
       page: { page: pageNo, size: DEFAULT_VIEW_PAGE_SIZE },
       total_mode: "NONE"
     });
+    if (!isCurrent()) break; // 已失效：不再翻页
     const pageRows = rsp.rows || [];
     rows.push(...pageRows);
     if (!rsp.page_result?.has_more || pageRows.length === 0) break;
@@ -1525,6 +1528,8 @@ function firstKlineFreq(subjectId: string, rows = tableRows.value) {
 }
 
 function closeKlineModal() {
+  klineRequestGuard.invalidate();
+  klineLoading.value = false;
   klineVisible.value = false;
   klineRecords.value = [];
   klineSubjectId.value = "";
@@ -1551,6 +1556,7 @@ onMounted(() => {
   }
 });
 onBeforeUnmount(() => {
+  klineRequestGuard.invalidate();
   stopRebuildPolling();
   if (autoRefreshTimer) {
     clearInterval(autoRefreshTimer);

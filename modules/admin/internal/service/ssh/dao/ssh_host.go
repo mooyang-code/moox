@@ -1,6 +1,7 @@
 package dao
 
 import (
+	"errors"
 	"time"
 
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
@@ -40,9 +41,30 @@ func (d *SSHHostDAO) Update(host *model.SSHHost) error {
 		Select("*").Omit("c_id", "c_ctime").Updates(host).Error
 }
 
-// Delete 删除主机配置
+// Delete 删除主机配置，并清掉它记录的主机密钥。
 func (d *SSHHostDAO) Delete(id int) error {
+	if err := d.db.Exec("DELETE FROM t_ssh_host_key WHERE c_host_id = ?", id).Error; err != nil {
+		return err
+	}
 	return d.db.Unscoped().Delete(&model.SSHHost{}, "c_id = ?", id).Error
+}
+
+// PinHostKey 原子地确定主机在该地址上受信任的指纹：同一主机同一地址已有记录时保持不变，没有记录或地址已变化时记录新的指纹，
+// 返回生效的指纹。单条 UPSERT 带条件，并发的首次连接只有一个会写入，其余读到的是它写入的值。
+func (d *SSHHostDAO) PinHostKey(hostID int, address, fingerprint string) (string, error) {
+	if err := d.db.Exec(`INSERT INTO t_ssh_host_key(c_host_id, c_address, c_fingerprint, c_ctime) VALUES(?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(c_host_id) DO UPDATE SET c_address = excluded.c_address, c_fingerprint = excluded.c_fingerprint, c_ctime = CURRENT_TIMESTAMP
+		WHERE t_ssh_host_key.c_address <> excluded.c_address`, hostID, address, fingerprint).Error; err != nil {
+		return "", err
+	}
+	var rows []struct{ Fingerprint string }
+	if err := d.db.Raw("SELECT c_fingerprint AS fingerprint FROM t_ssh_host_key WHERE c_host_id = ? AND c_address = ?", hostID, address).Scan(&rows).Error; err != nil {
+		return "", err
+	}
+	if len(rows) == 0 {
+		return "", errors.New("host key pin was not recorded")
+	}
+	return rows[0].Fingerprint, nil
 }
 
 // FindByID 根据 ID 查询

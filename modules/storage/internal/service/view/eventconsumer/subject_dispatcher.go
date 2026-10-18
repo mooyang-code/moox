@@ -59,14 +59,6 @@ type subjectDispatcher struct {
 	wg            sync.WaitGroup
 }
 
-func newSubjectDispatcher(parent context.Context, maxWorkers, maxPending int, handler subjectDeliveryHandler, reporter jetstream.ErrorReporter, hooks ...subjectDispatcherMetricsHooks) *subjectDispatcher {
-	return newSubjectDispatcherWithKey(parent, maxWorkers, maxPending, handler, reporter, nil, hooks...)
-}
-
-func newSubjectDispatcherWithKey(parent context.Context, maxWorkers, maxPending int, handler subjectDeliveryHandler, reporter jetstream.ErrorReporter, queueKey deliveryQueueKey, hooks ...subjectDispatcherMetricsHooks) *subjectDispatcher {
-	return newSubjectDispatcherWithKeyAndBatch(parent, maxWorkers, maxPending, handler, nil, 1, nil, reporter, queueKey, hooks...)
-}
-
 func newSubjectDispatcherWithKeyAndBatch(parent context.Context, maxWorkers, maxPending int, handler subjectDeliveryHandler, batch subjectDeliveryBatchHandler, batchSize int, batchEligible deliveryBatchEligible, reporter jetstream.ErrorReporter, queueKey deliveryQueueKey, hooks ...subjectDispatcherMetricsHooks) *subjectDispatcher {
 	if maxWorkers < 1 {
 		maxWorkers = 1

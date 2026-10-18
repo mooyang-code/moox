@@ -18,7 +18,7 @@ func TestCategoryForFrequencyCoversSupportedA股Bars(t *testing.T) {
 		"60m": tdxwire.Category60Min,
 		"1d":  tdxwire.CategoryDay,
 		"1w":  tdxwire.CategoryWeek,
-		"1M":  tdxwire.CategoryMonth,
+		"1mo": tdxwire.CategoryMonth,
 	}
 	for frequency, want := range tests {
 		t.Run(frequency, func(t *testing.T) {

@@ -29,18 +29,6 @@ export interface SSHHost {
   modify_time?: string;
 }
 
-export interface SessionInfo {
-  session_id: string;
-  host_id: number;
-  host_name: string;
-  address: string;
-  port: number;
-  user: string;
-  client_ip: string;
-  last_active_time: string;
-  start_time: string;
-}
-
 export interface SftpFileItem {
   path: string;
   name: string;
@@ -122,11 +110,3 @@ export const getSSHWebSocketUrl = async (sessionId: string, w: number, h: number
     `/api/admin/ssh/WsConnect?ticket=${encodeURIComponent(ticket)}&session_id=${sessionId}&w=${w}&h=${h}`
   );
 };
-
-// ========== 会话管理 ==========
-
-export const getOnlineSessions = () =>
-  callControl<Record<string, never>, { sessions?: SessionInfo[] }>("ssh", "GetOnlineSessions", {});
-
-export const forceDisconnect = (sessionId: string) =>
-  callControl<{ session_id: string }, Record<string, never>>("ssh", "ForceDisconnect", { session_id: sessionId });

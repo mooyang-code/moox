@@ -13,7 +13,7 @@
           <keep-alive :include="cacheRouteNames">
             <Suspense>
               <template #default>
-                <component :is="Component" :key="route.fullPath" v-if="refreshPage" />
+                <component :is="Component" :key="routeViewKey(route)" v-if="refreshPage" />
               </template>
               <template #fallback>
                 <div class="loading-container">
@@ -31,6 +31,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import Tabs from "@/layout/components/Tabs/index.vue";
+import { routeViewKey } from "./route-view-key";
 import MainTransition from "@/components/main-transition/index.vue";
 import { storeToRefs } from "pinia";
 import { useThemeConfig } from "@/store/modules/theme-config";

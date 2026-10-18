@@ -27,25 +27,24 @@ func (s CollectionTaskPrepareState) Valid() bool {
 
 // CollectionTask is the Collector-owned collection task.
 type CollectionTask struct {
-	ID                int                        `gorm:"column:c_id;primaryKey;autoIncrement"`
-	SpaceID           string                     `gorm:"column:c_space_id"`
-	TaskID            string                     `gorm:"column:c_task_id"`
-	TaskName          string                     `gorm:"column:c_task_name"`
-	Description       string                     `gorm:"column:c_description"`
-	DataType          string                     `gorm:"column:c_data_type"`
-	TagIDs            []string                   `gorm:"-"`
-	DefinitionHash    string                     `gorm:"column:c_definition_hash"`
-	SeriesHash        string                     `gorm:"column:c_series_hash"`
-	CollectParams     string                     `gorm:"column:c_collect_params"`
-	Enabled           bool                       `gorm:"column:c_enabled"`
-	Creator           string                     `gorm:"column:c_creator"`
-	PrepareState      CollectionTaskPrepareState `gorm:"column:c_prepare_state"`
-	LastError         string                     `gorm:"column:c_last_error"`
-	ResultDatasetID   string                     `gorm:"column:c_result_dataset_id"`
-	ResultViewID      string                     `gorm:"column:c_result_view_id"`
-	CoverageStartTime *time.Time                 `gorm:"column:c_coverage_start_time"`
-	CreateTime        time.Time                  `gorm:"column:c_ctime"`
-	ModifyTime        time.Time                  `gorm:"column:c_mtime"`
+	ID              int                        `gorm:"column:c_id;primaryKey;autoIncrement"`
+	SpaceID         string                     `gorm:"column:c_space_id"`
+	TaskID          string                     `gorm:"column:c_task_id"`
+	TaskName        string                     `gorm:"column:c_task_name"`
+	Description     string                     `gorm:"column:c_description"`
+	DataType        string                     `gorm:"column:c_data_type"`
+	TagIDs          []string                   `gorm:"-"`
+	DefinitionHash  string                     `gorm:"column:c_definition_hash"`
+	SeriesHash      string                     `gorm:"column:c_series_hash"`
+	CollectParams   string                     `gorm:"column:c_collect_params"`
+	Enabled         bool                       `gorm:"column:c_enabled"`
+	Creator         string                     `gorm:"column:c_creator"`
+	PrepareState    CollectionTaskPrepareState `gorm:"column:c_prepare_state"`
+	LastError       string                     `gorm:"column:c_last_error"`
+	ResultDatasetID string                     `gorm:"column:c_result_dataset_id"`
+	ResultViewID    string                     `gorm:"column:c_result_view_id"`
+	CreateTime      time.Time                  `gorm:"column:c_ctime"`
+	ModifyTime      time.Time                  `gorm:"column:c_mtime"`
 }
 
 // NormalizeCollectionTaskName removes the presentation whitespace from a task

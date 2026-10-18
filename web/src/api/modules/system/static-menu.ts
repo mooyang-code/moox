@@ -60,12 +60,23 @@ export const systemMenu = [
   menu("0308", "03", "/data/fields", "data-fields", "data-fields", "data/fields/index", 3),
   menu("0303", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-management/index", 4),
 
-  directory("0240", "0", "/factor/workbench", "factor-compute", "factor-compute", 3, { svgIcon: "experiment", icon: "" }),
-  menu("024001", "0240", "/factor/workbench", "factor-workbench", "factor-workbench", "factor/workbench/index", 1),
+  directory("0240", "0", "/factor/overview", "factor-compute", "factor-compute", 3, { svgIcon: "experiment", icon: "" }),
+  menu("024001", "0240", "/factor/overview", "factor-overview", "factor-overview", "factor/overview/index", 1),
+  menu("024002", "0240", "/factor/definitions", "factor-definitions", "factor-definitions", "factor/definitions/index", 2),
+  menu("024003", "0240", "/factor/tasks", "factor-tasks", "factor-tasks", "factor/task-management/index", 3),
 
-  directory("0250", "0", "/strategy/running", "strategy", "strategy", 4, { svgIcon: "mind-mapping", icon: "" }),
-  menu("025002", "0250", "/strategy/overview", "strategy-overview", "strategy-definitions", "strategy/overview/index", 1),
-  menu("025001", "0250", "/strategy/running", "strategy-running", "strategy-running", "strategy/running/index", 2),
+  directory("0250", "0", "/strategy/overview", "strategy", "strategy", 4, { svgIcon: "mind-mapping", icon: "" }),
+  menu("025001", "0250", "/strategy/overview", "strategy-overview", "strategy-overview", "strategy/overview/index", 1),
+  menu(
+    "025002",
+    "0250",
+    "/strategy/definitions",
+    "strategy-definitions",
+    "strategy-definitions",
+    "strategy/definitions/index",
+    2
+  ),
+  menu("025003", "0250", "/strategy/tasks", "strategy-tasks", "strategy-tasks", "strategy/workbench/index", 3),
 
   directory("05", "0", "/trading/accounts", "trading", "trading", 5, { svgIcon: "balance-inquiry", icon: "" }),
   menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-workbench/index", 1),
@@ -80,10 +91,12 @@ export const systemMenu = [
   ),
   menu("0503", "05", "/trading/orders", "trading-orders", "trading-orders", "trading/trade-record/trade-record", 4),
 
-  directory("06", "0", "/ops/hosts", "ops", "ops", 6, { svgIcon: "defend", icon: "" }),
-  menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 1),
-  menu("0600", "06", "/ops/services", "ops-services", "ops-services", "ops/service-management/index", 2),
-  menu("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", "ops/storage/index", 3),
+  directory("06", "0", "/ops/monitor", "ops", "ops", 6, { svgIcon: "defend", icon: "" }),
+  menu("0607", "06", "/ops/monitor", "ops-monitor", "ops-monitor", "ops/monitor/index", 1),
+  menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 3),
+  menu("0600", "06", "/ops/deployments", "ops-deployments", "ops-deployments", "ops/deployments/index", 2),
+  menu("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", "ops/storage/index", 4),
+  menu("0608", "06", "/ops/activity", "ops-activity", "ops-activity", "ops/activity/index", 5),
 
   directory("07", "0", "/settings/spaces", "settings", "settings", 7, { svgIcon: "set", icon: "" }),
   menu("0701", "07", "/settings/spaces", "settings-spaces", "settings-spaces", "settings/spaces/index", 1),

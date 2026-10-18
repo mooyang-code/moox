@@ -2,58 +2,24 @@
 package secretclient
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
 
-// Config 是 SecretMgr 后台服务调用配置。
-type Config struct {
-	GatewayBaseURL string
-	ServiceAuth    ServiceAuthConfig
-	Timeout        time.Duration
+// Gateway is borrowed from the process-owned native gateway client.
+type Gateway interface {
+	Forward(context.Context, string, string, int, []byte) ([]byte, error)
 }
 
-// ServiceAuthConfig 与 admin gateway service_auth 配置保持一致。
-type ServiceAuthConfig struct {
-	AccessKey  string
-	SecretKey  string
-	TargetNode string
-	CAFile     string
-	ExpireSecs int64
-}
+type Client struct{ gateway Gateway }
 
-// Client 调用 admin SecretMgr。
-type Client struct {
-	baseURL   string
-	auth      ServiceAuthConfig
-	client    *http.Client
-	clientErr error
-}
-
-// New 创建 SecretMgr client。
-func New(cfg Config) *Client {
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = 10 * time.Second
-	}
-	client, clientErr := gatewayauth.NewHTTPClient(gatewayauth.ClientOptions{Timeout: timeout, CAFile: cfg.ServiceAuth.CAFile})
-	return &Client{
-		baseURL: strings.TrimRight(cfg.GatewayBaseURL, "/"),
-		auth:    cfg.ServiceAuth,
-		// 目标网关来自本服务可信配置，不接受用户输入；这里使用固定超时 HTTP client。
-		client:    client,
-		clientErr: clientErr,
-	}
-}
+func New(gateway Gateway) *Client { return &Client{gateway: gateway} }
 
 // GetExchangeSecret returns the configured credential and its trusted metadata.
 func (c *Client) GetExchangeSecret(
@@ -95,58 +61,24 @@ func (c *Client) GetExchangeSecret(
 }
 
 func (c *Client) post(ctx context.Context, method string, req any, rsp responseWithRetInfo) error {
-	if c.clientErr != nil {
-		return c.clientErr
-	}
-	if c.baseURL == "" {
-		return fmt.Errorf("secret client gateway base url is empty")
+	if c == nil || c.gateway == nil {
+		return fmt.Errorf("secret client requires the process gateway client")
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/service/secret/"+method, bytes.NewReader(body))
+	raw, err := c.gateway.Forward(ctx, "trpc.moox.ops.SecretMgr", method, codec.SerializationTypeJSON, body)
 	if err != nil {
 		return err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	auth, err := c.authHeader(http.MethodPost, httpReq.URL.EscapedPath(), body, time.Now())
-	if err != nil {
-		return err
-	}
-	for name, values := range auth {
-		httpReq.Header[name] = append([]string(nil), values...)
-	}
-	httpRsp, err := c.client.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer httpRsp.Body.Close()
-	if httpRsp.StatusCode < 200 || httpRsp.StatusCode >= 300 {
-		return fmt.Errorf("secret %s HTTP %d", method, httpRsp.StatusCode)
-	}
-	if err := json.NewDecoder(httpRsp.Body).Decode(rsp); err != nil {
+	if err := json.Unmarshal(raw, rsp); err != nil {
 		return err
 	}
 	if !rsp.retOK() {
 		return fmt.Errorf("secret %s failed: %s", method, rsp.retMessage())
 	}
 	return nil
-}
-
-func (c ServiceAuthConfig) normalized() ServiceAuthConfig {
-	if c.ExpireSecs <= 0 {
-		c.ExpireSecs = 60
-	}
-	return c
-}
-
-func (c *Client) authHeader(method, path string, body []byte, now time.Time) (http.Header, error) {
-	auth := c.auth.normalized()
-	if auth.AccessKey == "" || auth.SecretKey == "" || auth.TargetNode == "" {
-		return nil, fmt.Errorf("gateway service key_id, secret_key and target_node are required")
-	}
-	return gatewayauth.Sign(gatewayauth.Credentials{KeyID: auth.AccessKey, Secret: auth.SecretKey, Expire: time.Duration(auth.ExpireSecs) * time.Second}, gatewayauth.Request{Method: method, Path: path, Body: body, TargetNode: auth.TargetNode}, now)
 }
 
 type responseWithRetInfo interface {

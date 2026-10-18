@@ -11,28 +11,23 @@ import (
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/report"
 	"gorm.io/gorm"
 )
 
 type businessFreshnessItem struct {
-	spaceID, checkID, name, reason, diagnostic string
-	success                                    bool
+	spaceID, checkID, name, reason, diagnostic, rawError string
+	success                                              bool
 }
+
+// maxFreshnessChecks 覆盖 1024 台主机各自的网关/上报检查（每台数条）及业务检查。
+const maxFreshnessChecks = 1024 * 8
 
 func unixSeconds(value time.Time) float64 {
 	if value.IsZero() {
 		return 0
 	}
 	return float64(value.Unix())
-}
-
-func buildBusinessFreshnessReporter(
-	builder *monitorobservability.Builder,
-	repositories *store.Repositories,
-	hook func(context.Context, domain.Check, domain.CheckResult),
-	klineEvaluators ...*monmetrics.KlineFreshnessEvaluator,
-) func(context.Context) error {
-	return buildBusinessFreshnessReporterWithInterval(builder, repositories, hook, 30*time.Second, klineEvaluators...)
 }
 
 func buildBusinessFreshnessReporterWithInterval(
@@ -49,6 +44,11 @@ func buildBusinessFreshnessReporterWithInterval(
 		klineInterval = 30 * time.Second
 	}
 	var lastKlineEvaluation time.Time
+	// 各出站主机反向连接首次被观察到断开的时间：断开持续 relayAlertAfter 才判定失败，避免出口 IP 变化等短暂重连误报。
+	relayDownSince := map[string]time.Time{}
+	// 上一次成功评估时被 K 线新鲜度覆盖的结果数据集与视图（键：空间\x00ID\x00频率）。评估按自己的间隔进行，
+	// 没到评估时间的轮次沿用它；评估失败或没有评估器时清空，dataset 新鲜度检查恢复兜底。
+	var lastCoveredDatasets, lastCoveredViews map[string]struct{}
 	return func(ctx context.Context) error {
 		klineIntervalSeconds := 30
 		if seconds := int(klineInterval.Round(time.Second) / time.Second); seconds > 0 {
@@ -58,48 +58,132 @@ func buildBusinessFreshnessReporterWithInterval(
 		if err != nil {
 			return err
 		}
+		if overview.TopologyKnown {
+			states := make([]domain.ComponentHealthState, 0, len(overview.Services))
+			for _, item := range overview.Services {
+				states = append(states, domain.ComponentHealthState{HostID: item.NodeID, ComponentID: item.ServiceName, Status: domain.HealthStatus(item.Status)})
+			}
+			if err := repositories.ComponentHealth.Reconcile(ctx, states, overview.GeneratedAt); err != nil {
+				return err
+			}
+		}
 		items := make(map[string]businessFreshnessItem, len(overview.Services)+len(overview.Datasets)+len(overview.BusinessChecks)+1)
 		suppressed := make(map[string]struct{})
+		retired := make(map[string]struct{})
+		frozenGateway := make(map[string]bool)
+		// 每台主机的网关三项信号（心跳、实例冲突、路由同步）合并成一条检查：任何一项异常都要处理，没必要分三处告警。
+		type gatewayHost struct {
+			unknown, unhealthy bool
+			reasons, raws      []string
+		}
+		gatewayHosts := make(map[string]*gatewayHost)
+		gatewayNames := map[string]string{"heartbeat": "心跳", "instance_conflict": "实例", "route_sync": "路由同步"}
+		relaySeen := map[string]bool{}
+		for _, signal := range overview.GatewaySignals {
+			if signal.Kind == monitorobservability.RelaySignalKind {
+				relaySeen[signal.HostID] = true
+				key := monmetrics.InternalMetricSpaceID + "\x00" + relayCheckID(signal.HostID)
+				item, frozen := relayItem(signal, relayDownSince, overview.GeneratedAt)
+				if frozen {
+					frozenGateway[key] = true
+				} else {
+					items[key] = item
+				}
+				continue
+			}
+			host := gatewayHosts[signal.HostID]
+			if host == nil {
+				host = &gatewayHost{}
+				gatewayHosts[signal.HostID] = host
+			}
+			switch {
+			case signal.Status == "unknown":
+				host.unknown = true
+			case signal.Status != "healthy":
+				host.unhealthy = true
+				host.reasons = append(host.reasons, gatewayNames[signal.Kind]+"："+signal.Reason)
+				if signal.RawError != "" {
+					host.raws = append(host.raws, signal.RawError)
+				}
+			}
+		}
+		for hostID := range relayDownSince {
+			if !relaySeen[hostID] {
+				delete(relayDownSince, hostID)
+			}
+		}
+		for hostID, host := range gatewayHosts {
+			checkID := "gateway:" + hostID + ":status"
+			key := monmetrics.InternalMetricSpaceID + "\x00" + checkID
+			// 没有任何异常信号、但有信号无法确认时保持原状态，不伪造成功去恢复既有告警。
+			if host.unknown && !host.unhealthy {
+				frozenGateway[key] = true
+				continue
+			}
+			reason := "网关心跳、实例与路由同步正常"
+			if host.unhealthy {
+				reason = strings.Join(host.reasons, "；")
+			}
+			items[key] = businessFreshnessItem{spaceID: monmetrics.InternalMetricSpaceID, checkID: checkID, name: "主机网关（" + hostID + "）", success: !host.unhealthy, reason: reason, rawError: strings.Join(host.raws, "；")}
+		}
 		klineEvaluationRan := len(klineEvaluators) == 0 || klineEvaluators[0] == nil
 		klineEvaluated := make(map[string]struct{})
+		// K 线新鲜度已覆盖的结果数据集/视图：同一条数据链路（Storage 写入水位、View 水位）不再各自生成 dataset 新鲜度检查。
+		coveredKey := func(spaceID, id, freq string) string {
+			return spaceID + "\x00" + id + "\x00" + strings.ToLower(freq)
+		}
+		coveredDatasets, coveredViews := lastCoveredDatasets, lastCoveredViews
+		if len(klineEvaluators) == 0 || klineEvaluators[0] == nil {
+			coveredDatasets, coveredViews = nil, nil
+		}
 		if len(klineEvaluators) > 0 && klineEvaluators[0] != nil &&
 			(lastKlineEvaluation.IsZero() || overview.GeneratedAt.Sub(lastKlineEvaluation) >= klineInterval) {
 			lastKlineEvaluation = overview.GeneratedAt
 			klineEvaluationRan = true
+			coveredDatasets, coveredViews = map[string]struct{}{}, map[string]struct{}{}
 			reports, err := klineEvaluators[0].Evaluate(ctx, overview.GeneratedAt)
 			if err != nil {
 				var inventoryErr *monmetrics.TaskResultInventoryRefreshError
 				if !errors.As(err, &inventoryErr) {
+					// K 线评估没有成功：清空覆盖集合，下一轮 dataset 新鲜度检查恢复兜底（评估时间已推进，不会在间隔内重试）。
+					lastCoveredDatasets, lastCoveredViews = nil, nil
 					return err
 				}
 				klineEvaluationRan = false
+				coveredDatasets, coveredViews = nil, nil
 				state := inventoryErr.State
 				diagnostic := fmt.Sprintf("cache_available=%t cache_age_seconds=%.0f last_success_timestamp_seconds=%.0f error=%s", state.Available, state.Age.Seconds(), unixSeconds(state.LastSuccess), inventoryErr.Cause)
 				items[monmetrics.InternalMetricSpaceID+"\x00"+monmetrics.TaskResultInventoryCheckID] = businessFreshnessItem{
 					spaceID: monmetrics.InternalMetricSpaceID, checkID: monmetrics.TaskResultInventoryCheckID,
-					name: "Collector task-result inventory", success: false,
-					reason: "inventory_refresh_failed", diagnostic: diagnostic,
+					name: "采集任务清单", success: false,
+					reason: "无法获取采集任务清单：采集服务接口异常，K线结果检查暂停", diagnostic: diagnostic,
 				}
 			} else {
 				for _, report := range reports {
 					klineEvaluated[report.CheckID] = struct{}{}
+					if klineReportCoversDatasets(report) {
+						coveredDatasets[coveredKey(report.Rule.SpaceID, report.Rule.DatasetID, report.Rule.Frequency)] = struct{}{}
+						coveredViews[coveredKey(report.Rule.SpaceID, report.Rule.ViewID, report.Rule.Frequency)] = struct{}{}
+					}
+					name := "采集任务清单"
+					if report.CheckID != monmetrics.TaskResultInventoryCheckID {
+						name = klineCheckName(datasetSubject(builder.Metrics.DatasetDisplayName(ctx, report.Rule.SpaceID, report.Rule.DatasetID), report.Rule.ViewID, report.Rule.Frequency))
+					}
 					if report.Skipped {
 						if report.Reason == "disabled" {
 							items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
-								spaceID: report.Rule.SpaceID, checkID: report.CheckID,
-								name:    fmt.Sprintf("K线新鲜度 %s %s %s", report.Rule.SpaceID, report.Rule.ViewID, report.Rule.Frequency),
-								success: true, reason: "no_longer_expected",
+								spaceID: report.Rule.SpaceID, checkID: report.CheckID, name: name,
+								success: true, reason: noLongerExpected,
 							}
 						}
 						continue
 					}
-					reason := report.Reason
-					if report.Diagnostic != "" {
-						reason += "; " + report.Diagnostic
-					}
-					name := fmt.Sprintf("K线新鲜度 %s %s %s", report.Rule.SpaceID, report.Rule.ViewID, report.Rule.Frequency)
+					reason := klineReasonText(report, overview.GeneratedAt)
 					if report.CheckID == monmetrics.TaskResultInventoryCheckID {
-						name = "Collector task-result inventory"
+						reason = "采集任务清单正常"
+						if !report.Success {
+							reason = "控制面数据过期：采集服务暂不可用，K线检查沿用最后一份有效的任务清单"
+						}
 					}
 					items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
 						spaceID: report.Rule.SpaceID, checkID: report.CheckID, name: name,
@@ -108,26 +192,21 @@ func buildBusinessFreshnessReporterWithInterval(
 				}
 			}
 		}
+		lastCoveredDatasets, lastCoveredViews = coveredDatasets, coveredViews
 		for _, service := range overview.Services {
 			if service.ReporterStatus == "" {
 				continue
 			}
-			expected, err := reporterDeploymentExpected(ctx, repositories.Checks, service)
-			if err != nil {
-				return err
-			}
-			if !expected {
+			if !service.Enabled {
 				continue
 			}
-			checkID := strings.Join([]string{
-				"reporter", service.NodeID, service.ServiceName, service.InstanceID,
-			}, ":")
+			checkID := strings.Join([]string{"reporter", service.NodeID, service.ServiceName}, ":")
 			item := businessFreshnessItem{
 				spaceID: monmetrics.InternalMetricSpaceID,
 				checkID: checkID,
-				name:    strings.Join([]string{"Reporter", service.ServiceName, service.NodeID, service.InstanceID}, " "),
+				name:    reporterCheckName(service.ServiceName, service.NodeID),
 				success: service.ReporterStatus == "healthy",
-				reason:  serviceReporterReason(service.ReporterStatus),
+				reason:  reporterReasonText(service.ReporterStatus),
 			}
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
@@ -136,10 +215,8 @@ func buildBusinessFreshnessReporterWithInterval(
 		for _, dataset := range overview.Datasets {
 			if dataset.Producer == "storage" {
 				storageScopes[dataset.SpaceID+"\x00"+dataset.DatasetID+"\x00"+strings.ToLower(dataset.Freq)] = struct{}{}
-			} else if dataset.Producer == "storage_view" {
-				for _, scopeDatasetID := range storageViewDatasetIDs(dataset.SpaceID, dataset.DatasetID, dataset.PrimaryDatasetID) {
-					storageScopes[dataset.SpaceID+"\x00"+scopeDatasetID+"\x00"+strings.ToLower(dataset.Freq)] = struct{}{}
-				}
+			} else if dataset.Producer == "storage_view" && strings.TrimSpace(dataset.PrimaryDatasetID) != "" {
+				storageScopes[dataset.SpaceID+"\x00"+strings.TrimSpace(dataset.PrimaryDatasetID)+"\x00"+strings.ToLower(dataset.Freq)] = struct{}{}
 			}
 		}
 		for _, dataset := range overview.Datasets {
@@ -153,13 +230,27 @@ func buildBusinessFreshnessReporterWithInterval(
 					continue
 				}
 			}
+			if hostMonitoringDataset(dataset) {
+				// Host samples land in these datasets; host presence and the host
+				// threshold rules already alert when a host stops reporting.
+				continue
+			}
 			checkID := strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":")
-			if retiredDatasetCheckID(checkID) {
+			// Storage 写入水位按结果数据集匹配，View 水位按确切的视图 ID 匹配：同一主数据集上另有独立视图时，它仍要自己的检查。
+			covered := false
+			switch dataset.Producer {
+			case "storage":
+				_, covered = coveredDatasets[coveredKey(dataset.SpaceID, dataset.DatasetID, dataset.Freq)]
+			case "storage_view":
+				_, covered = coveredViews[coveredKey(dataset.SpaceID, dataset.DatasetID, dataset.Freq)]
+			}
+			if covered {
+				retired[dataset.SpaceID+"\x00"+checkID] = struct{}{}
 				continue
 			}
 			if dataset.Producer == "factor" {
 				if !factorExpectedKnown {
-					factorExpected, err = serviceDeploymentExpected(ctx, repositories.Checks, "moox_factor")
+					factorExpected, err = serviceDeploymentExpected(ctx, repositories.Topology, "factor-mgr")
 					if err != nil {
 						return err
 					}
@@ -173,35 +264,53 @@ func buildBusinessFreshnessReporterWithInterval(
 				suppressed[dataset.SpaceID+"\x00"+checkID] = struct{}{}
 				continue
 			}
+			// 名称优先取生产者随清单上报的（策略实例名等），再取 Storage 里登记的数据集名称，都没有时用数据集 ID。
+			displayName := dataset.DisplayName
+			if displayName == "" {
+				nameDatasetID := dataset.DatasetID
+				if dataset.Producer == "storage_view" && dataset.PrimaryDatasetID != "" {
+					nameDatasetID = dataset.PrimaryDatasetID
+				}
+				displayName = builder.Metrics.DatasetDisplayName(ctx, dataset.SpaceID, nameDatasetID)
+			}
 			item := businessFreshnessItem{
 				spaceID: dataset.SpaceID,
 				checkID: checkID,
-				name:    strings.Join([]string{"Dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, " "),
-				success: dataset.Status == "healthy",
-				reason:  dataset.Reason,
+				name:    datasetCheckName(dataset.Producer, datasetSubject(displayName, dataset.DatasetID, dataset.Freq)),
+				success: datasetCheckPasses(dataset),
+				reason:  datasetReasonText(dataset, overview.GeneratedAt),
 			}
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		for _, business := range overview.BusinessChecks {
-			if business.Kind != "balance" && business.Kind != "market_fetch" && business.Kind != "data_delivery" {
+			if business.Kind != "balance" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "worker_presence" {
 				continue
 			}
 			spaceID := business.SpaceID
 			if spaceID == "" {
 				spaceID = "crypto"
 			}
-			checkID, name := "balance:"+business.Module, "Balance freshness "+business.Module
+			checkID, name := "balance:"+business.Module, "账户余额同步 "+business.Module
 			if business.Kind == "market_fetch" {
 				checkID, name = "market_fetch:"+business.Module, "行情采集 "+business.Module+" 协调"
 			} else if business.Kind == "data_delivery" {
 				checkID, name = "data_delivery:"+business.Module, "数据投递队列"
+			} else if business.Kind == "worker_presence" {
+				checkID, name = "worker_presence:"+business.Module, monitorobservability.WorkerPresenceName(business.Module)
 			}
 			item := businessFreshnessItem{spaceID: spaceID, checkID: checkID, name: name, success: business.Status == "healthy", reason: business.Reason}
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
+		moduleItems, err := moduleHealthItems(ctx, builder.Metrics, report.BuiltInModuleHealthChecks(), overview.GeneratedAt)
+		if err != nil {
+			return err
+		}
+		for _, item := range moduleItems {
+			items[item.spaceID+"\x00"+item.checkID] = item
+		}
 		enabled := true
 		existing := make([]domain.Check, 0, 500)
-		for page := 1; len(existing) < 1000; page++ {
+		for page := 1; len(existing) < maxFreshnessChecks; page++ {
 			batch, err := repositories.Checks.List(ctx, store.ListChecksOptions{
 				Source: domain.CheckSourceObservability, Enabled: &enabled,
 				Page: store.Page{Page: page, PageSize: 500},
@@ -214,26 +323,24 @@ func buildBusinessFreshnessReporterWithInterval(
 				break
 			}
 		}
-		if len(existing) >= 1000 {
+		if len(existing) >= maxFreshnessChecks {
 			total, err := repositories.Checks.Count(ctx, store.ListChecksOptions{
 				Source: domain.CheckSourceObservability, Enabled: &enabled,
 			})
 			if err != nil {
 				return err
 			}
-			if total > 1000 {
-				return fmt.Errorf("business freshness checks exceed limit 1000")
+			if total > maxFreshnessChecks {
+				return fmt.Errorf("business freshness checks exceed limit %d", maxFreshnessChecks)
 			}
 		}
 		for _, check := range existing {
-			if retiredDatasetCheckID(check.CheckID) {
-				continue
-			}
 			// Market canaries are evaluated by the dedicated watchdog below the
 			// scheduler. Business freshness must not synthesize a success for an
 			// absent overview item, otherwise a real canary failure is immediately
 			// resolved by a concurrent no_longer_expected result.
-			if strings.HasPrefix(check.CheckID, "market_canary:") {
+			// 标签检查（subject_tag:）同样由行情探针独占其状态更新。
+			if strings.HasPrefix(check.CheckID, "market_canary:") || strings.HasPrefix(check.CheckID, tagCheckPrefix) {
 				continue
 			}
 			if strings.HasPrefix(check.CheckID, "kline_freshness:") {
@@ -244,31 +351,48 @@ func buildBusinessFreshnessReporterWithInterval(
 					key := check.SpaceID + "\x00" + check.CheckID
 					items[key] = businessFreshnessItem{
 						spaceID: check.SpaceID, checkID: check.CheckID, name: check.Name,
-						success: true, reason: "no_longer_expected",
+						success: true, reason: noLongerExpected,
 					}
 				}
 				continue
 			}
 			key := check.SpaceID + "\x00" + check.CheckID
+			if frozenGateway[key] {
+				continue
+			}
+			if _, covered := retired[key]; covered {
+				if err := disableCheckAndDeleteRules(ctx, repositories, &check); err != nil {
+					return err
+				}
+				continue
+			}
+			if strings.HasPrefix(check.CheckID, "gateway:") || strings.HasPrefix(check.CheckID, "reporter:") {
+				if _, expected := items[key]; !expected {
+					if err := disableCheckAndDeleteRules(ctx, repositories, &check); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			if _, frozen := suppressed[key]; frozen {
 				// Suppression avoids duplicating a producer-stale signal, but the
 				// old business check still needs a successful result so its alert
 				// state can resolve instead of remaining permanently firing.
 				items[key] = businessFreshnessItem{
 					spaceID: check.SpaceID, checkID: check.CheckID, name: check.Name,
-					success: true, reason: "no_longer_expected",
+					success: true, reason: noLongerExpected,
 				}
 				continue
 			}
 			if _, ok := items[key]; !ok {
 				items[key] = businessFreshnessItem{
 					spaceID: check.SpaceID, checkID: check.CheckID, name: check.Name,
-					success: true, reason: "no_longer_expected",
+					success: true, reason: noLongerExpected,
 				}
 			}
 		}
-		if len(items) > 1000 {
-			return fmt.Errorf("business freshness checks exceed limit 1000")
+		if len(items) > maxFreshnessChecks {
+			return fmt.Errorf("business freshness checks exceed limit %d", maxFreshnessChecks)
 		}
 
 		checks := make(map[string]domain.Check, len(items))
@@ -277,8 +401,25 @@ func buildBusinessFreshnessReporterWithInterval(
 			switch {
 			case err == nil:
 				if !check.Enabled {
-					delete(items, key)
-					continue
+					// K 线检查曾因关闭新鲜度监控而退役：重新开启后，当前任务清单仍期望的检查必须恢复启用（规则随后重建）
+					reenableKline := strings.HasPrefix(item.checkID, "kline_freshness:") && item.reason != noLongerExpected
+					// 数据集新鲜度检查因被 K 线新鲜度覆盖而停用，覆盖解除（K 线评估失败、规则移除）后需要恢复兜底。
+					reenableDataset := strings.HasPrefix(item.checkID, "dataset:") && item.reason != noLongerExpected
+					if strings.HasPrefix(item.checkID, "gateway:") || strings.HasPrefix(item.checkID, "reporter:") || reenableKline || reenableDataset {
+						check.Enabled = true
+						if err := repositories.Checks.Update(ctx, check); err != nil {
+							return err
+						}
+					} else {
+						delete(items, key)
+						continue
+					}
+				}
+				if item.name != "" && check.Name != item.name {
+					check.Name = item.name
+					if err := repositories.Checks.Update(ctx, check); err != nil {
+						return err
+					}
 				}
 				checks[key] = *check
 			case errors.Is(err, gorm.ErrRecordNotFound):
@@ -319,10 +460,10 @@ func buildBusinessFreshnessReporterWithInterval(
 				status = domain.CheckStatusOK
 			}
 			result := domain.CheckResult{
-				ResultID: fmt.Sprintf("%s-%d", item.checkID, now.UnixNano()),
+				ResultID: domain.ScopedResultID(item.spaceID, item.checkID, now),
 				SpaceID:  item.spaceID, CheckID: item.checkID, InstanceID: "monitor",
 				Success: item.success, Connected: item.success, Status: status,
-				ErrorMessage: item.reason, BodyExcerpt: item.diagnostic, CheckedAt: now, CreatedAt: now,
+				ErrorMessage: item.reason, RawError: item.rawError, BodyExcerpt: item.diagnostic, CheckedAt: now, CreatedAt: now,
 			}
 			inserted, err := repositories.Results.InsertIfAbsent(ctx, &result)
 			if err != nil {
@@ -345,110 +486,82 @@ func buildBusinessFreshnessReporterWithInterval(
 	}
 }
 
-// storageViewDatasetIDs keeps Collector freshness compatible with older View
-// reporters that did not include dataset_id in the watermark labels. New
-// reporters provide the exact primary dataset; the derived candidates cover
-// the repository's historical view_<space>_<dataset> naming convention while
-// the monitor fleet is upgraded one host at a time.
-func storageViewDatasetIDs(spaceID, viewID, primaryDatasetID string) []string {
-	ids := make([]string, 0, 3)
-	add := func(value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return
-		}
-		for _, existing := range ids {
-			if existing == value {
-				return
-			}
-		}
-		ids = append(ids, value)
-	}
-	add(primaryDatasetID)
-	viewID = strings.TrimPrefix(strings.TrimSpace(viewID), "view_")
-	if viewID == "" {
-		return ids
-	}
-	add("dataset_" + viewID)
-	spaceID = strings.TrimSpace(spaceID)
-	if spaceID != "" && strings.HasPrefix(viewID, spaceID+"_") {
-		add("dataset_" + strings.TrimPrefix(viewID, spaceID+"_"))
-	}
-	return ids
+// datasetCheckPasses 决定数据集新鲜度检查按通过还是失败记录。数据积累中（warming）页面显示降级，但生产者在正常工作、
+// 只是数据还没攒够，不是需要有人处理的故障：按通过记录，不触发也不延续告警；其余非健康状态仍按失败记录。
+func datasetCheckPasses(dataset monitorobservability.DatasetFrequencyStatus) bool {
+	return dataset.Status == "healthy" || dataset.Reason == monitorobservability.DatasetReasonWarming
 }
 
-func serviceDeploymentExpected(
-	ctx context.Context,
-	checks *store.CheckRepository,
-	serviceName string,
-) (bool, error) {
-	if checks == nil || strings.TrimSpace(serviceName) == "" {
-		return true, nil
+// klineReportCoversDatasets 判断一条 K 线新鲜度报告是否让对应结果的 dataset 新鲜度检查成为重复：
+// 规则仍在评估（含休市、预热等正常的日历跳过，此时 dataset 的固定周期水位判断反而会误报）就算覆盖；
+// 任务清单自身的报告、以及规则已停用（disabled）的不算。
+func klineReportCoversDatasets(report monmetrics.KlineFreshnessReport) bool {
+	if report.CheckID == monmetrics.TaskResultInventoryCheckID {
+		return false
 	}
-	const (
-		pageSize  = 500
-		maxChecks = 1500
-	)
-	opts := store.ListChecksOptions{Source: domain.CheckSourceSysDeploy}
-	total, err := checks.Count(ctx, opts)
-	if err != nil {
+	return !(report.Skipped && report.Reason == "disabled")
+}
+
+func serviceDeploymentExpected(ctx context.Context, topology *store.TopologyRepository, componentID string) (bool, error) {
+	if topology == nil {
+		return false, nil
+	}
+	snapshot, err := topology.Snapshot(ctx)
+	if err != nil || snapshot == nil {
 		return false, err
 	}
-	if total > maxChecks {
-		return false, fmt.Errorf("sysdeploy checks exceed limit %d", maxChecks)
+	hosts := make(map[string]bool, len(snapshot.Hosts))
+	for _, host := range snapshot.Hosts {
+		hosts[host.HostID] = host.Status == "enabled"
 	}
-	found := false
-	for page := 1; int64((page-1)*pageSize) < total; page++ {
-		opts.Page = store.Page{Page: page, PageSize: pageSize}
-		rows, err := checks.List(ctx, opts)
-		if err != nil {
-			return false, err
-		}
-		for _, check := range rows {
-			if strings.HasSuffix(check.CheckID, ":"+serviceName) {
-				found = true
-				if check.Enabled {
-					return true, nil
-				}
-			}
-		}
-		if len(rows) < pageSize {
-			return !found, nil
+	for _, placement := range snapshot.Placements {
+		if placement.ComponentID == componentID && placement.Status == "enabled" && hosts[placement.HostID] {
+			return true, nil
 		}
 	}
-	return !found, nil
+	return false, nil
 }
 
-func reporterDeploymentExpected(
-	ctx context.Context,
-	checks *store.CheckRepository,
-	service monitorobservability.ServiceStatus,
-) (bool, error) {
-	if checks == nil || strings.TrimSpace(service.NodeID) == "" || strings.TrimSpace(service.ServiceName) == "" {
-		return true, nil
+// noLongerExpected resolves a check whose subject was disabled or removed.
+const noLongerExpected = domain.CheckReasonRetired
+
+func hostMonitoringDataset(dataset monitorobservability.DatasetFrequencyStatus) bool {
+	for _, id := range []string{dataset.DatasetID, dataset.PrimaryDatasetID} {
+		id = strings.ToLower(strings.TrimSpace(id))
+		if strings.HasPrefix(id, "dataset_mooxsys_host_") || strings.HasPrefix(id, "view_mooxsys_host_") {
+			return true
+		}
 	}
-	checkID := strings.Join([]string{"sysdeploy", service.NodeID, service.ServiceName}, ":")
-	check, err := checks.Get(ctx, "", checkID)
-	switch {
-	case err == nil:
-		return check.Enabled, nil
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		// External reporters, such as SCF nodes, do not have SysDeploy checks.
-		return true, nil
-	default:
-		return false, err
-	}
+	return false
 }
 
-func serviceReporterReason(status string) string {
-	switch status {
+// relayAlertAfter 是反向连接断开多久后告警。
+const relayAlertAfter = 3 * time.Minute
+
+// relayCheckID 沿用 gateway: 前缀，主机不再是出站主机时检查随之退役。
+func relayCheckID(hostID string) string { return "gateway:" + hostID + ":relay" }
+
+// relayItem 把一台出站主机的反向连接信号转换成检查结果；frozen 表示保持原状态（无法确认，或断开还没到告警时长）。
+func relayItem(signal monitorobservability.GatewaySignal, downSince map[string]time.Time, now time.Time) (businessFreshnessItem, bool) {
+	item := businessFreshnessItem{spaceID: monmetrics.InternalMetricSpaceID, checkID: relayCheckID(signal.HostID), name: "主机网关反向连接（" + signal.HostID + "）"}
+	switch signal.Status {
 	case "healthy":
-		return "reporter fresh"
-	case "stale":
-		return "producer stale"
-	case "missing":
-		return "reporter missing"
-	default:
-		return "reporter has not reported"
+		delete(downSince, signal.HostID)
+		item.success, item.reason = true, signal.Reason
+		return item, false
+	case "down":
+		since, ok := downSince[signal.HostID]
+		if !ok {
+			since = now
+			downSince[signal.HostID] = since
+		}
+		if now.Sub(since) < relayAlertAfter {
+			return item, true
+		}
+		item.reason = fmt.Sprintf("%s，已持续 %d 分钟。若该主机的 host-agent 仍在上报，说明主机在线、只是反向连接断开（检查它的出口网络与 host-gateway 日志）；"+
+			"若 host-agent 也停止上报，按主机失联处理", signal.Reason, int(now.Sub(since)/time.Minute))
+		item.rawError = signal.RawError
+		return item, false
 	}
+	return item, true
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	metacache "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/cache"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/snapshotcache"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -23,11 +24,6 @@ type activationMetadataStore struct {
 	commitErr    error
 	lastExpected uint64
 	beforeCommit func()
-}
-
-type registerArchiveFileMetadataStore struct {
-	metadata.Store
-	registered bool
 }
 
 type createSpaceMetadataStore struct {
@@ -67,11 +63,6 @@ func (s *manualRebuildMetadataStore) RequestViewRebuild(context.Context, string,
 	s.requestCnt++
 	s.view.DesiredViewRevision++
 	return s.view, nil
-}
-
-func (s *registerArchiveFileMetadataStore) RegisterArchiveFile(_ context.Context, item *pb.ArchiveFile) (*pb.ArchiveFile, error) {
-	s.registered = true
-	return item, nil
 }
 
 func (s *activationMetadataStore) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
@@ -137,7 +128,7 @@ func TestRequestViewRebuildReturnsImmediatelyAndPreservesActiveView(t *testing.T
 		Status:        "active",
 		ActiveIndexId: "index-a", ActiveViewRevision: 4, DesiredViewRevision: 4,
 	}}
-	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
+	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret", OperatorAuthSecret: "secret"})
 	require.NoError(t, err)
 
 	rsp, err := svc.RequestViewRebuild(context.Background(), &pb.RequestViewRebuildReq{
@@ -208,26 +199,26 @@ func TestActivateDatasetReportsCommittedPublicationFailureAndRetryIsIdempotent(t
 	require.True(t, first.GetDataset().GetBindingLocked())
 	require.Equal(t, uint64(8), first.GetDataset().GetRevision())
 
+	// 发布仍失败时，重试不能直接返回成功
+	stillPending, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a", ExpectedRevision: 7})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, stillPending.GetRetInfo().GetCode())
+
+	// 进行中的刷新（ErrRefreshInProgress）不算发布完成，需等待后重新刷新
+	attempts := 0
+	svc.refreshOverride = func(context.Context) error {
+		attempts++
+		if attempts < 3 {
+			return snapshotcache.ErrRefreshInProgress
+		}
+		return nil
+	}
 	retry, err := svc.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a", ExpectedRevision: 7})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, retry.GetRetInfo().GetCode())
+	require.Equal(t, 3, attempts)
 	require.Equal(t, uint64(8), retry.GetDataset().GetRevision())
 	require.Equal(t, 1, store.commitCalls)
-}
-
-func TestRegisterArchiveFileSucceedsWhenCachePublicationIsUnavailable(t *testing.T) {
-	store := &registerArchiveFileMetadataStore{}
-	service, err := NewMetadataService(store, &metacache.Store{}, Options{AuthSecret: "secret"})
-	require.NoError(t, err)
-
-	rsp, err := service.RegisterArchiveFile(context.Background(), &pb.RegisterArchiveFileReq{
-		ArchiveFile: &pb.ArchiveFile{
-			SpaceId: "crypto", DatasetId: "dataset_spot_kline_1h", DeviceId: "parquet-local", FileUri: "file:///tmp/spot.parquet",
-		},
-	})
-	require.NoError(t, err)
-	require.True(t, store.registered)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 }
 
 func TestCreateSpaceSucceedsWhenCacheRefreshFailsAfterCommit(t *testing.T) {

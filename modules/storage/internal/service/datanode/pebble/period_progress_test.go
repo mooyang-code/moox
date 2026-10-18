@@ -375,17 +375,11 @@ func TestDatasetPeriodExpectationSeriesSnapshotIsValidatedAndImmutable(t *testin
 	var persisted []DatasetPeriodSeries
 	require.NoError(t, json.Unmarshal(raw, &persisted))
 	require.Equal(t, exp.SeriesSnapshot, persisted)
-	_, err = store.readPeriodValue(periodFieldKey(base, "roster"))
-	require.ErrorIs(t, err, cpebble.ErrNotFound, "the renamed persisted field must not also write the old name")
 	encoded, err := json.Marshal(exp)
 	require.NoError(t, err)
 	var fields map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(encoded, &fields))
 	require.Contains(t, fields, "series_snapshot")
-	require.NotContains(t, fields, "Roster")
-	require.NotContains(t, fields, "roster")
-	field := (&pb.DatasetPeriodExpectation{}).ProtoReflect().Descriptor().Fields().ByNumber(8)
-	require.Equal(t, "series_snapshot", string(field.Name()), "the snapshot rename preserves Proto field number 8")
 
 	changed := exp
 	changed.SeriesSnapshot = append([]DatasetPeriodSeries(nil), exp.SeriesSnapshot...)
@@ -399,25 +393,6 @@ func TestDatasetPeriodExpectationSeriesSnapshotIsValidatedAndImmutable(t *testin
 	invalid.SeriesSnapshot[1].SeriesIndex = 2
 	_, err = newPeriodTestStore(t).EnsureDatasetPeriod(ctx, invalid)
 	require.Error(t, err)
-}
-
-func TestDatasetPeriodExpectationDoesNotReadOldSnapshotField(t *testing.T) {
-	store := newPeriodTestStore(t)
-	exp := periodExpectationForTest(time.Date(2026, 9, 28, 4, 4, 0, 0, time.UTC), 2)
-	_, err := store.EnsureDatasetPeriod(context.Background(), exp)
-	require.NoError(t, err)
-	base := periodBase(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime)
-	raw, err := json.Marshal(exp.SeriesSnapshot)
-	require.NoError(t, err)
-	batch := store.db.NewBatch()
-	defer batch.Close()
-	require.NoError(t, batch.Set(periodFieldKey(base, "roster"), raw, store.writeOptions))
-	require.NoError(t, batch.Delete(periodFieldKey(base, "series_snapshot"), store.writeOptions))
-	require.NoError(t, batch.Commit(store.writeOptions))
-
-	loaded, err := store.readPeriodExpectation(base)
-	require.NoError(t, err)
-	require.Empty(t, loaded.SeriesSnapshot, "old snapshot fields are not an implicit compatibility source")
 }
 
 func TestDatasetPeriodFailureWaitsForDeadlineAndEmitsOneDegradedMarker(t *testing.T) {
@@ -462,7 +437,8 @@ func TestDatasetPeriodFailureWaitsForDeadlineAndEmitsOneDegradedMarker(t *testin
 	require.Len(t, exp.SeriesSnapshot, 3)
 	require.Len(t, marker.GetUniverseSubjectIds(), 2)
 	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, marker.GetUniverseSubjectIds(), "universe must deduplicate provider series")
-	require.Equal(t, []string{"ETH-USDT"}, marker.GetFailedSubjects())
+	// 缺失 = 全集减成功位图：从未提交成功的 BTC-USDT 同样列为缺失，不要求另行上报失败。
+	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, marker.GetFailedSubjects())
 }
 
 func TestDatasetPeriodDeadlineWinsAgainstConcurrentLateCommit(t *testing.T) {

@@ -91,16 +91,16 @@ type InventoryReconciler struct {
 // reconciler ready to run alongside the static exact-route consumers.
 func (s *Service) NewInventoryReconciler(opts InventoryReconcilerOptions) (*InventoryReconciler, error) {
 	if s == nil {
-		return nil, errors.New("storage view service is nil")
+		return nil, errors.New("View 服务未初始化")
 	}
 	if opts.Metadata == nil {
-		return nil, errors.New("storage view inventory metadata client is required")
+		return nil, errors.New("View 清单对账缺少 Metadata 客户端")
 	}
 	if opts.Primary == nil {
-		return nil, errors.New("storage view route-ready Primary client is required")
+		return nil, errors.New("View 路由就绪同步缺少 Primary 客户端")
 	}
 	if opts.EventClient == nil {
-		return nil, errors.New("storage view inventory EventBus client is required")
+		return nil, errors.New("View 清单对账缺少 EventBus 客户端")
 	}
 	factor, misc, exact, dynamicExact, allowedSpaces, err := dynamicConsumerTemplate(opts.Consumer)
 	if err != nil {
@@ -112,7 +112,7 @@ func (s *Service) NewInventoryReconciler(opts InventoryReconcilerOptions) (*Inve
 	}
 	auth := s.primaryAuthSnapshot()
 	if auth == nil {
-		return nil, errors.New("storage view Primary auth is required for route-ready")
+		return nil, errors.New("View 路由就绪同步缺少 Primary 鉴权")
 	}
 	r := &InventoryReconciler{
 		service: s, metadata: opts.Metadata, primary: opts.Primary, auth: auth,
@@ -130,10 +130,10 @@ func (s *Service) NewInventoryReconciler(opts InventoryReconcilerOptions) (*Inve
 // already-running static consumers.
 func (r *InventoryReconciler) Start(ctx context.Context) (func(), error) {
 	if r == nil {
-		return nil, errors.New("storage view inventory reconciler is nil")
+		return nil, errors.New("View 清单对账器未初始化")
 	}
 	if ctx == nil {
-		return nil, errors.New("storage view inventory context is required")
+		return nil, errors.New("View 清单对账缺少上下文")
 	}
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -141,7 +141,7 @@ func (r *InventoryReconciler) Start(ctx context.Context) (func(), error) {
 		defer close(done)
 		run := func() {
 			if err := r.Reconcile(loopCtx); err != nil && loopCtx.Err() == nil {
-				log.Printf("storage view inventory reconcile failed: %v", err)
+				log.Printf("View 清单对账失败：%v", err)
 			}
 		}
 		run()
@@ -169,10 +169,10 @@ func (r *InventoryReconciler) Start(ctx context.Context) (func(), error) {
 // Reconcile performs one metadata-to-consumer reconciliation pass.
 func (r *InventoryReconciler) Reconcile(ctx context.Context) error {
 	if r == nil {
-		return errors.New("storage view inventory reconciler is nil")
+		return errors.New("View 清单对账器未初始化")
 	}
 	if ctx == nil {
-		return errors.New("storage view inventory context is required")
+		return errors.New("View 清单对账缺少上下文")
 	}
 	r.reconcileMu.Lock()
 	defer r.reconcileMu.Unlock()
@@ -214,11 +214,11 @@ func (r *InventoryReconciler) Reconcile(ctx context.Context) error {
 			}
 			binding, err = r.bind(ctx, spec)
 			if err != nil {
-				result = errors.Join(result, fmt.Errorf("bind dynamic View consumer %s/%s: %w", ref.spaceID, ref.datasetID, err))
+				result = errors.Join(result, fmt.Errorf("绑定数据集 %s/%s 的动态 View 消费者失败：%w", ref.spaceID, ref.datasetID, err))
 				continue
 			}
 			if binding == nil {
-				result = errors.Join(result, fmt.Errorf("bind dynamic View consumer %s/%s returned nil binding", ref.spaceID, ref.datasetID))
+				result = errors.Join(result, fmt.Errorf("绑定数据集 %s/%s 的动态 View 消费者没有返回绑定", ref.spaceID, ref.datasetID))
 				continue
 			}
 			if binding.routeReady == nil {
@@ -256,13 +256,13 @@ func (r *InventoryReconciler) loadDesired(ctx context.Context) (map[datasetRef]d
 	for pageNo := uint32(1); ; pageNo++ {
 		rsp, err := r.metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: r.metadataAuth(), Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
 		if err != nil {
-			return nil, fmt.Errorf("list active Views for dynamic consumers: %w", err)
+			return nil, fmt.Errorf("为动态消费者列出活动 View 失败：%w", err)
 		}
 		if rsp == nil {
-			return nil, errors.New("list active Views for dynamic consumers returned nil response")
+			return nil, errors.New("为动态消费者列出活动 View 时返回为空")
 		}
 		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-			return nil, fmt.Errorf("list active Views for dynamic consumers: %w", err)
+			return nil, fmt.Errorf("为动态消费者列出活动 View 失败：%w", err)
 		}
 		for _, view := range rsp.GetViews() {
 			if view == nil {
@@ -270,7 +270,7 @@ func (r *InventoryReconciler) loadDesired(ctx context.Context) (map[datasetRef]d
 			}
 			primaryID := strings.TrimSpace(view.GetDatasetId())
 			requestID := strings.TrimSpace(view.GetAttributes()[routeReadyRequestIDAttribute])
-			for _, datasetID := range viewConsumerDatasetIDs(view) {
+			for _, datasetID := range viewDatasetIDs(view) {
 				ref := datasetRef{spaceID: strings.TrimSpace(view.GetSpaceId()), datasetID: datasetID}
 				if ref.spaceID == "" || ref.datasetID == "" {
 					continue
@@ -315,7 +315,7 @@ func (r *InventoryReconciler) consumerSpec(ref datasetRef) (dynamicDatasetConsum
 	for _, event := range []events.Event{events.DatasetRowsUpserted, events.CollectorPeriodCompleted, events.FactorPeriodComputed, events.DatasetSyncPoint} {
 		filter, renderErr := registry.RenderSubject(event, ref.spaceID, ref.datasetID)
 		if renderErr != nil {
-			return dynamicDatasetConsumerSpec{}, fmt.Errorf("render dynamic View consumer filter: %w", renderErr)
+			return dynamicDatasetConsumerSpec{}, fmt.Errorf("生成动态 View 消费者的过滤主题失败：%w", renderErr)
 		}
 		filters = append(filters, filter)
 	}
@@ -324,9 +324,8 @@ func (r *InventoryReconciler) consumerSpec(ref datasetRef) (dynamicDatasetConsum
 	config.PartitionID = partitionID
 	config.Consumer = durable
 	// A per-Dataset durable is created after the View may already have emitted
-	// historical rows. Replay the complete stream slice so replacing the legacy
-	// catch-all durable cannot strand its pending sequence. The durable keeps
-	// this policy on subsequent restarts, making the migration idempotent.
+	// historical rows. Replay the complete stream slice so no pending sequence
+	// is stranded; the durable keeps this policy on subsequent restarts.
 	config.DeliverPolicy = "all"
 	config.FilterSubjects = append([]string(nil), filters...)
 	config.DatasetRoutes = []DatasetRoute{{SpaceID: ref.spaceID, DatasetID: ref.datasetID}}
@@ -344,13 +343,13 @@ func (r *InventoryReconciler) appendRouteReady(ctx context.Context, ref datasetR
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("append route-ready sync point for %s/%s request %q: %w", ref.spaceID, ref.datasetID, requestID, err)
+		return fmt.Errorf("为数据集 %s/%s 追加路由就绪同步点（请求 %q）失败：%w", ref.spaceID, ref.datasetID, requestID, err)
 	}
 	if rsp == nil {
-		return fmt.Errorf("append route-ready sync point for %s/%s request %q returned nil response", ref.spaceID, ref.datasetID, requestID)
+		return fmt.Errorf("为数据集 %s/%s 追加路由就绪同步点（请求 %q）时返回为空", ref.spaceID, ref.datasetID, requestID)
 	}
 	if err := requireSuccess(rsp.GetRetInfo()); err != nil {
-		return fmt.Errorf("append route-ready sync point for %s/%s request %q: %w", ref.spaceID, ref.datasetID, requestID, err)
+		return fmt.Errorf("为数据集 %s/%s 追加路由就绪同步点（请求 %q）失败：%w", ref.spaceID, ref.datasetID, requestID, err)
 	}
 	return nil
 }
@@ -373,25 +372,9 @@ func (r *InventoryReconciler) stopAll() {
 	}
 }
 
-func (r *InventoryReconciler) bindingRefs() []datasetRef {
-	r.reconcileMu.Lock()
-	defer r.reconcileMu.Unlock()
-	refs := make([]datasetRef, 0, len(r.bindings))
-	for ref := range r.bindings {
-		refs = append(refs, ref)
-	}
-	sort.Slice(refs, func(i, j int) bool {
-		if refs[i].spaceID != refs[j].spaceID {
-			return refs[i].spaceID < refs[j].spaceID
-		}
-		return refs[i].datasetID < refs[j].datasetID
-	})
-	return refs
-}
-
 func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions, EventConsumerOptions, map[datasetRef]struct{}, map[datasetRef]struct{}, map[string]struct{}, error) {
 	if len(options.PartitionConfigs) == 0 {
-		return EventConsumerOptions{}, EventConsumerOptions{}, nil, nil, nil, errors.New("storage view dynamic consumers require partition configuration")
+		return EventConsumerOptions{}, EventConsumerOptions{}, nil, nil, nil, errors.New("View 动态消费者缺少分区配置")
 	}
 	exact := make(map[datasetRef]struct{})
 	dynamicExact := make(map[datasetRef]struct{})
@@ -428,8 +411,8 @@ func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions
 				}
 			}
 			// Every route in the misc partition is reconciled dynamically, including
-			// its non-wildcard legacy routes. Only partitions that remain static
-			// are excluded from dynamic bindings.
+			// its non-wildcard routes. Only partitions that remain static are
+			// excluded from dynamic bindings.
 			continue
 		}
 		for _, route := range partition.DatasetRoutes {
@@ -441,28 +424,12 @@ func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions
 		}
 	}
 	if strings.TrimSpace(misc.Consumer) == "" {
-		return EventConsumerOptions{}, EventConsumerOptions{}, nil, nil, nil, errors.New("storage view misc consumer partition is required")
+		return EventConsumerOptions{}, EventConsumerOptions{}, nil, nil, nil, errors.New("View 缺少 misc 消费分区配置")
 	}
 	if strings.TrimSpace(factor.Consumer) == "" {
-		return EventConsumerOptions{}, EventConsumerOptions{}, nil, nil, nil, errors.New("storage view factor consumer partition is required")
+		return EventConsumerOptions{}, EventConsumerOptions{}, nil, nil, nil, errors.New("View 缺少 factor 消费分区配置")
 	}
 	return factor, misc, exact, dynamicExact, allowedSpaces, nil
-}
-
-func datasetRouteSet(routes []DatasetRoute) map[datasetRef]struct{} {
-	set := make(map[datasetRef]struct{}, len(routes))
-	for _, route := range routes {
-		spaceID := strings.TrimSpace(route.SpaceID)
-		datasetID := strings.TrimSpace(route.DatasetID)
-		if spaceID != "" && datasetID != "" && datasetID != "*" {
-			set[datasetRef{spaceID: spaceID, datasetID: datasetID}] = struct{}{}
-		}
-	}
-	return set
-}
-
-func dynamicDatasetConsumerIdentity(miscDurable string, ref datasetRef) (string, string) {
-	return dynamicDatasetConsumerIdentityForPartition("misc", miscDurable, ref)
 }
 
 func dynamicDatasetConsumerIdentityForPartition(partitionPrefix, durablePrefix string, ref datasetRef) (string, string) {
@@ -474,29 +441,6 @@ func dynamicDatasetConsumerIdentityForPartition(partitionPrefix, durablePrefix s
 	// historical 32-character durable limit.
 	durableToken := token[:12]
 	return strings.TrimSpace(partitionPrefix) + "_" + token, strings.TrimSpace(durablePrefix) + "_" + durableToken
-}
-
-func viewConsumerDatasetIDs(view *pb.View) []string {
-	if view == nil {
-		return nil
-	}
-	set := make(map[string]struct{})
-	for _, datasetID := range viewDatasetIDs(view) {
-		if datasetID = strings.TrimSpace(datasetID); datasetID != "" {
-			set[datasetID] = struct{}{}
-		}
-	}
-	for _, column := range view.GetColumns() {
-		if column == nil {
-			continue
-		}
-		if datasetID, _, ok := strings.Cut(strings.TrimSpace(column.GetOriginId()), "."); ok {
-			if datasetID = strings.TrimSpace(datasetID); datasetID != "" {
-				set[datasetID] = struct{}{}
-			}
-		}
-	}
-	return sortedStringSet(set)
 }
 
 func sortedStringSet(set map[string]struct{}) []string {

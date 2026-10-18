@@ -25,8 +25,12 @@ const (
 
 var managedEnvironmentKeys = map[string]struct{}{
 	"MOOX_MARKET_FETCH_BINDING_HASH":        {},
-	"MOOX_COLLECTOR_RPC_GATEWAY_TARGET":     {},
-	"MOOX_COLLECTOR_GATEWAY_TARGET_NODE":    {},
+	"MOOX_ACCESS_ADDRESS":                   {},
+	"MOOX_ACCESS_ID":                        {},
+	"MOOX_CALLER":                           {},
+	"MOOX_CALLER_KEY_ID":                    {},
+	"MOOX_CALLER_KEY":                       {},
+	"MOOX_GATEWAY_COMPRESSION":              {},
 	"MOOX_FETCH_TIMEOUT_SECONDS":            {},
 	"MOOX_MARKET_FETCH_PROVIDER":            {},
 	"MOOX_MARKET_FETCH_MARKET_TYPE":         {},
@@ -49,6 +53,7 @@ var managedEnvironmentKeys = map[string]struct{}{
 	"MOOX_MARKET_FETCH_GROUP_ID":            {},
 	"MOOX_MARKET_FETCH_GROUP_COUNT":         {},
 	"MOOX_MARKET_FETCH_MODE":                {},
+	"MOOX_MARKET_FETCH_PLAN":                {},
 	"MOOX_METRICS_EVENTBUS_URL":             {},
 	"MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE": {},
 }
@@ -77,7 +82,7 @@ func (s *Service) SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *pb.Ba
 			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "nodes contains duplicate node_id")}, nil
 		}
 		seen[nodeID] = struct{}{}
-		lifecycleID, err := s.catalog.EnsureNodeLifecycleID(ctx, spaceID, nodeID)
+		lifecycleID, err := s.catalog.NodeLifecycleID(ctx, spaceID, nodeID)
 		if err != nil {
 			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
 		}
@@ -221,18 +226,10 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 	for key, value := range item.GetManagedEnvironment() {
 		environment[key] = value
 	}
-	if environment["MOOX_MARKET_FETCH_BINDING_HASH"] != "" {
-		_, oldSubjects := environment["MOOX_MARKET_FETCH_SUBJECTS"]
-		_, oldSymbols := environment["MOOX_MARKET_FETCH_SYMBOLS_JSON"]
-		needsEnvironmentUpdate = needsEnvironmentUpdate || oldSubjects || oldSymbols
-		delete(environment, "MOOX_MARKET_FETCH_SUBJECTS")
-		delete(environment, "MOOX_MARKET_FETCH_SYMBOLS_JSON")
-	}
-	if strings.TrimSpace(environment["MOOX_EVENTBUS_NATS_TLS_CA_FILE"]) != "" {
-		if _, hasLegacyPEM := environment["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"]; hasLegacyPEM {
-			delete(environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
-			needsEnvironmentUpdate = true
-		}
+	// 缺少日志上报配置的采集函数（例如日志服务开通之前创建的）在这次更新里补齐。
+	// 停用定时器的更新不顺带开通日志服务：停用必须能在任何情况下完成。
+	if item.GetTimerEnabled() {
+		needsEnvironmentUpdate = s.applyCLSEnvironment(ctx, *account, node, environment) || needsEnvironmentUpdate
 	}
 	if item.GetTimerEnabled() {
 		if environment["MOOX_FETCH_TIMEOUT_SECONDS"] != strconv.Itoa(tencent.CollectorTimerTimeoutSeconds) {
@@ -284,7 +281,7 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 		return "", mutationError(fmt.Errorf("ensure timer trigger for %s: %w", ref.FunctionName, err))
 	}
 	providerMutationStarted = true
-	metadata := map[string]any{"collector_rpc_gateway_target": environment["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"], "collector_gateway_target_node": environment["MOOX_COLLECTOR_GATEWAY_TARGET_NODE"], "fetch_timeout_seconds": environment["MOOX_FETCH_TIMEOUT_SECONDS"], "dns_hash": environment["MOOX_MARKET_FETCH_DNS_HASH"], "dns_updated_at": environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"], "timer_trigger_name": timerTriggerName, "timer_cron": item.GetTimerCron(), "timer_enabled": item.GetTimerEnabled(), "timer_actual_type": trigger.Type, "timer_actual_enabled": trigger.Enabled, "timer_actual_cron": trigger.Cron, "timer_actual_qualifier": trigger.Qualifier, "timer_actual_message": trigger.Message, "timer_available_status": trigger.AvailableStatus, "timer_status_error": nil, "managed_environment_budget_bytes": scfManagedEnvironmentBudget(verified.Environment), "runtime_config_reconciled_at": time.Now().UTC().Format(time.RFC3339Nano)}
+	metadata := map[string]any{"access_address": environment["MOOX_ACCESS_ADDRESS"], "access_id": environment["MOOX_ACCESS_ID"], "access_caller": environment["MOOX_CALLER"], "access_key_id": environment["MOOX_CALLER_KEY_ID"], "gateway_compression": environment["MOOX_GATEWAY_COMPRESSION"], "fetch_timeout_seconds": environment["MOOX_FETCH_TIMEOUT_SECONDS"], "dns_hash": environment["MOOX_MARKET_FETCH_DNS_HASH"], "dns_updated_at": environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"], "timer_trigger_name": timerTriggerName, "timer_cron": item.GetTimerCron(), "timer_enabled": item.GetTimerEnabled(), "timer_actual_type": trigger.Type, "timer_actual_enabled": trigger.Enabled, "timer_actual_cron": trigger.Cron, "timer_actual_qualifier": trigger.Qualifier, "timer_actual_message": trigger.Message, "timer_available_status": trigger.AvailableStatus, "timer_status_error": nil, "managed_environment_budget_bytes": scfManagedEnvironmentBudget(verified.Environment), "runtime_config_reconciled_at": time.Now().UTC().Format(time.RFC3339Nano)}
 	assignmentMetadata, err := assignmentRuntimeMetadata(item.GetManagedEnvironment())
 	if err != nil {
 		return "", mutationError(err)
@@ -346,11 +343,4 @@ func managedEnvironmentMatches(current, desired map[string]string) bool {
 		}
 	}
 	return true
-}
-
-func boolToInt(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
 }

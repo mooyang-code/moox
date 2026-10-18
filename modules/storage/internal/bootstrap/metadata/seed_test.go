@@ -40,9 +40,6 @@ func TestDefaultViewInventory(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"crypto/view_binance_kline_1m",
-		"crypto/view_crypto_swap_kline_1h",
-		"crypto/view_crypto_spot_kline_1h",
 		"mooxsys/view_mooxsys_host_disk",
 		"mooxsys/view_mooxsys_host_fs",
 		"mooxsys/view_mooxsys_host_net",
@@ -58,6 +55,30 @@ func TestDefaultViewInventory(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+func TestDefaultSeedImportsIntoEmptyStoreWithDatasetFrequencies(t *testing.T) {
+	ctx := context.Background()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "config", "setup", "metadata.yaml"))
+	require.NoError(t, err)
+	var seed seedFile
+	require.NoError(t, yaml.UnmarshalStrict(raw, &seed))
+	store := openSeedTestStore(t)
+	_, err = store.RegisterDataNode(ctx, "storage-node-0", "ip://127.0.0.1:20107", "local node")
+	require.NoError(t, err)
+
+	result, err := importEntities(ctx, store, seed)
+	require.NoError(t, err)
+	require.Equal(t, len(seed.Datasets), result.Datasets)
+	require.Equal(t, len(seed.Views), result.Views)
+	for _, item := range seed.Views {
+		view, err := store.GetView(ctx, item.SpaceID, item.ViewID)
+		require.NoError(t, err)
+		dataset, err := store.GetDataset(ctx, item.SpaceID, item.PrimaryDatasetID)
+		require.NoError(t, err)
+		require.NotEmpty(t, view.GetFreq(), "%s/%s", item.SpaceID, item.ViewID)
+		require.Equal(t, dataset.GetFreq(), view.GetFreq(), "%s/%s takes its Dataset freq", item.SpaceID, item.ViewID)
+	}
+}
+
 func TestImportEntitiesRequiresDeploymentRegisteredDataNode(t *testing.T) {
 	ctx := context.Background()
 	store := openSeedTestStore(t)
@@ -66,7 +87,7 @@ func TestImportEntitiesRequiresDeploymentRegisteredDataNode(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "space", DataSourceID: "source", Name: "Source", Kind: "internal", Status: "active"}},
 		Datasets: []seedDataset{{
 			SpaceID: "space", DatasetID: "dataset", DataSourceID: "source", Name: "Dataset",
-			DataKind: "time_series", DataNodeID: "storage-node-0", KeepDuration: "1h", Status: "active",
+			DataKind: "time_series", Freq: "1m", DataNodeID: "storage-node-0", Status: "active",
 		}},
 	}
 
@@ -86,7 +107,6 @@ func TestImportEntitiesRequiresDeploymentRegisteredDataNode(t *testing.T) {
 	dataset, err := store.GetDataset(ctx, "space", "dataset")
 	require.NoError(t, err)
 	require.Equal(t, "storage-node-0", dataset.GetDataNodeId())
-	require.Equal(t, "1h0m0s", dataset.GetKeepDuration())
 	require.Equal(t, "disabled", dataset.GetStatus(), "seed status must not activate a Dataset")
 }
 
@@ -97,11 +117,11 @@ func TestImportEntitiesValidatesDatasetBindingBeforeWrites(t *testing.T) {
 	require.NoError(t, err)
 	seed := seedFile{
 		Spaces:   []seedSpace{{SpaceID: "space", Name: "Space"}},
-		Datasets: []seedDataset{{SpaceID: "space", DatasetID: "dataset", DataNodeID: "storage-node-0"}},
+		Datasets: []seedDataset{{SpaceID: "space", DatasetID: "dataset", DataNodeID: "storage-node-1"}},
 	}
 
 	_, err = importEntities(ctx, store, seed)
-	require.ErrorContains(t, err, "keep_duration is required")
+	require.ErrorIs(t, err, sql.ErrNoRows, "a Dataset on an unregistered DataNode is rejected before any write")
 	_, err = store.GetSpace(ctx, "space")
 	require.ErrorIs(t, err, sql.ErrNoRows)
 }

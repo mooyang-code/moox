@@ -16,7 +16,6 @@ import (
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
-	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -39,7 +38,7 @@ func registerMetricsReporter(s *server.Server, runtime *Runtime) *report.ModuleM
 		}
 		return nil
 	}
-	h, err := report.NewHandler(report.DefaultConfig("monitor", "moox_monitor"))
+	h, err := report.NewHandler(report.DefaultConfig("monitor", "monitor"))
 	if err != nil {
 		if runtime != nil {
 			runtime.setMetricsReporterState(false, err)
@@ -120,7 +119,7 @@ func startObservabilityConsumer(
 		return
 	}
 	if cfg.Metrics.Enabled && storage == nil {
-		storage = monmetrics.NewStorageAdapterFromConfig(cfg.Metrics.Storage)
+		storage = monmetrics.NewStorageAdapter(runtime.StorageGateway, runtime.StorageGateway, cfg.Metrics.Storage)
 	}
 	var messageStore *monmetrics.MetricMessageStore
 	if runtime.MetricStores != nil {
@@ -135,29 +134,8 @@ func startObservabilityConsumer(
 		return
 	}
 	routes := observabilityconsumer.Routes{
-		Metrics: metricsObservabilityRoute(storage, messageStore, monmetrics.CheckProducerAuthorizer{
-			Checks: runtime.Repositories.Checks,
-			ExternalProducers: map[string]struct{}{
-				"moox_collector_scf": {},
-				// Storage and gateway metrics are emitted by internal releases that
-				// may be deployed on a separate host. Their sysdeploy health checks
-				// can be intentionally absent (for example while a remote gateway
-				// is being migrated), but their EventBus credentials are still scoped
-				// to this control plane and must not be dropped from observability.
-				"storage-view": {},
-				"storage-node": {},
-				"moox_gateway": {},
-			},
-		}, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled, func() []monmetrics.ViewMetricScope {
-			return klineViewMetricScopes(klineInventory, time.Now().UTC())
-		}),
-		Host: hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
-		Health: func(routeCtx context.Context, message *eventpb.EventMessage, health *observabilitypb.HealthCheckReport) error {
-			if runtime.ObservabilityHealthRoute == nil {
-				return nil
-			}
-			return runtime.ObservabilityHealthRoute(routeCtx, message, health)
-		},
+		Metrics: metricsObservabilityRoute(storage, messageStore, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
+		Host:    hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
 	}
 	runtime.Go(func() {
 		for ctx.Err() == nil {
@@ -230,11 +208,9 @@ func startObservabilityConsumer(
 func metricsObservabilityRoute(
 	storage *monmetrics.StorageAdapter,
 	messageStore *monmetrics.MetricMessageStore,
-	authorizer monmetrics.ProducerAuthorizer,
 	moduleMetrics *report.ModuleMetrics,
 	runtime *Runtime,
 	enabled bool,
-	klineScopes func() []monmetrics.ViewMetricScope,
 ) func(context.Context, *eventpb.EventMessage, *metricspb.MetricReport) error {
 	return func(ctx context.Context, message *eventpb.EventMessage, metricReport *metricspb.MetricReport) error {
 		if !enabled {
@@ -246,15 +222,6 @@ func metricsObservabilityRoute(
 		if message.GetSpaceId() != monmetrics.InternalMetricSpaceID {
 			return observabilityconsumer.Permanent(fmt.Errorf("unsupported metric space %q", message.GetSpaceId()))
 		}
-		if authorizer != nil {
-			registered, err := authorizer.IsRegistered(ctx, metricReport.GetServiceName(), metricReport.GetNodeId())
-			if err != nil {
-				return fmt.Errorf("authorize metric producer: %w", err)
-			}
-			if !registered {
-				return observabilityconsumer.Permanent(fmt.Errorf("unregistered metric producer %s/%s", metricReport.GetServiceName(), metricReport.GetNodeId()))
-			}
-		}
 		observed := message.GetOccurredAt().AsTime()
 		samples, err := monmetrics.ParseSnapshot(metricReport.GetSnapshot(), monmetrics.Envelope{
 			ServiceName: metricReport.GetServiceName(), InstanceID: metricReport.GetInstanceId(),
@@ -265,24 +232,25 @@ func metricsObservabilityRoute(
 			monmetrics.RecordIngest(moduleMetrics, "rejected", time.Time{})
 			return observabilityconsumer.Permanent(err)
 		}
-		var activeKlineScopes []monmetrics.ViewMetricScope
-		if klineScopes != nil {
-			activeKlineScopes = klineScopes()
-		}
-		samples = monmetrics.FilterHealthSamplesForKlineViews(samples, activeKlineScopes)
+		samples = monmetrics.FilterHealthSamples(samples)
 		duplicate, err := messageStore.IsDuplicate(ctx, message.GetEventId())
 		if err != nil || duplicate {
 			return err
 		}
+		// 先记录上报方在线，再写 Storage 历史：Storage 不可用时上报方不会被误判为停止上报。
+		if err := messageStore.TouchService(ctx, message, metricReport); err != nil {
+			runtime.recordObservabilityWriteFailure(reasonMetricsCatalog, err)
+			return err
+		}
 		if err := storage.WriteSamples(ctx, samples); err != nil {
 			monmetrics.RecordIngest(moduleMetrics, "error", time.Time{})
-			runtime.recordObservabilityWriteFailure(err)
+			runtime.recordObservabilityWriteFailure(reasonMetricsHistory, err)
 			return err
 		}
 		duplicate, err = messageStore.CommitIngest(ctx, message, metricReport, samples)
 		if err != nil || duplicate {
 			if err != nil {
-				runtime.recordObservabilityWriteFailure(err)
+				runtime.recordObservabilityWriteFailure(reasonMetricsCatalog, err)
 			}
 			return err
 		}
@@ -290,23 +258,6 @@ func metricsObservabilityRoute(
 		monmetrics.RecordIngest(moduleMetrics, "success", observed)
 		return nil
 	}
-}
-
-func klineViewMetricScopes(inventory *monmetrics.TaskResultInventoryCache, now time.Time) []monmetrics.ViewMetricScope {
-	snapshot, ok := inventory.Current(now)
-	if !ok {
-		return nil
-	}
-	scopes := make([]monmetrics.ViewMetricScope, 0, len(snapshot.Entries))
-	for _, entry := range snapshot.Entries {
-		if !entry.Enabled || !entry.OwnershipVerified || (entry.ResultStatus != "ready" && entry.ResultStatus != "error") {
-			continue
-		}
-		scopes = append(scopes, monmetrics.ViewMetricScope{
-			SpaceID: entry.SpaceID, ViewID: entry.ViewID, DatasetID: entry.DatasetID, Frequency: entry.Frequency,
-		})
-	}
-	return scopes
 }
 
 func hostObservabilityRoute(store *hostmetrics.Store, runtime *Runtime, enabled bool) func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error {
@@ -342,15 +293,25 @@ func waitObservabilityRetry(ctx context.Context) bool {
 	}
 }
 
-func sanitizedMetricsError(err error) string {
+// 健康原因按出错环节区分，不带原始错误文本（可能含地址或凭据）。
+const (
+	reasonEventbus       = "eventbus connection unavailable"
+	reasonMetricsHistory = "metrics history write to Storage failed"
+	reasonMetricsCatalog = "metrics catalog write failed"
+	reasonHostMetrics    = "host metrics write failed"
+	reasonAuthSuffix     = ": authentication failed"
+)
+
+// failureReason 返回环节原因；凭据类错误追加认证失败说明。
+func failureReason(reason string, err error) string {
 	if err == nil {
 		return ""
 	}
 	message := strings.ToLower(err.Error())
 	for _, secretTerm := range []string{"credential", "authorization", "authentication", "password", "token"} {
 		if strings.Contains(message, secretTerm) {
-			return "eventbus authentication unavailable"
+			return reason + reasonAuthSuffix
 		}
 	}
-	return "eventbus connection unavailable"
+	return reason
 }

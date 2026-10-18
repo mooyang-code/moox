@@ -36,7 +36,6 @@ const (
 	kindDatasetColumn = "dataset_column"
 	kindDataNode      = "data_node"
 	kindDevice        = "device"
-	kindArchiveFile   = "archive_file"
 )
 
 // Options 保存元数据缓存包装器配置。
@@ -72,8 +71,7 @@ type entry struct {
 	ParentGroupID  string   `json:"parent_group_id,omitempty"`
 	DatasetIDs     []string `json:"dataset_ids,omitempty"`
 	DataKind       int32    `json:"data_kind,omitempty"`
-	Freqs          []string `json:"freqs,omitempty"`
-	KeepDuration   string   `json:"keep_duration,omitempty"`
+	Freq           string   `json:"freq,omitempty"`
 	DataNodeID     string   `json:"data_node_id,omitempty"`
 	BindingLocked  bool     `json:"binding_locked,omitempty"`
 	Revision       uint64   `json:"revision,omitempty"`
@@ -103,7 +101,6 @@ func (s *Store) Snapshot() *MetadataSnapshot {
 		items[i] = item
 		items[i].Payload = append([]byte(nil), item.Payload...)
 		items[i].DatasetIDs = append([]string(nil), item.DatasetIDs...)
-		items[i].Freqs = append([]string(nil), item.Freqs...)
 	}
 	return &MetadataSnapshot{items: items}
 }
@@ -374,7 +371,7 @@ func (s *Store) ListDatasets(ctx context.Context, query metadata.DatasetQuery) (
 			return false
 		}
 		return (query.DataKind == pb.DataKind_DATA_KIND_UNSPECIFIED || item.DataKind == int32(query.DataKind)) &&
-			(query.Freq == "" || containsString(item.Freqs, query.Freq))
+			(query.Freq == "" || item.Freq == query.Freq)
 	}), func() *pb.Dataset { return &pb.Dataset{} })
 	if err != nil {
 		return nil, nil, err
@@ -384,6 +381,11 @@ func (s *Store) ListDatasets(ctx context.Context, query metadata.DatasetQuery) (
 
 func (s *Store) ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
 	return s.base.ListDatasetSubjects(ctx, spaceID, datasetID, subjectID, page)
+}
+
+// SubjectsRevision 直读底层存储，修订号必须与实时读取的标的数据一致，不进快照。
+func (s *Store) SubjectsRevision(ctx context.Context, spaceID string) (uint64, error) {
+	return s.base.SubjectsRevision(ctx, spaceID)
 }
 
 func (s *Store) GetField(ctx context.Context, spaceID string, fieldID string) (*pb.Field, error) {
@@ -520,22 +522,6 @@ func (s *Store) ListDevices(ctx context.Context, engine string, page *pb.Page) (
 	return pageItems(items, page)
 }
 
-func (s *Store) ListArchiveFiles(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error) {
-	var raw []entry
-	if spaceID != "" && datasetID != "" {
-		raw = s.listByIndex(indexDataset, kindArchiveFile, spaceID, datasetID)
-	} else {
-		raw = s.list(kindArchiveFile, func(item entry) bool {
-			return (spaceID == "" || item.SpaceID == spaceID) && (datasetID == "" || item.DatasetID == datasetID)
-		})
-	}
-	items, err := decodeEntries(raw, func() *pb.ArchiveFile { return &pb.ArchiveFile{} })
-	if err != nil {
-		return nil, nil, err
-	}
-	return pageItems(items, page)
-}
-
 func getProto[T proto.Message](s *Store, ctx context.Context, kind string, spaceID string, id string, newMessage func() T) (T, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
@@ -658,7 +644,7 @@ func (s *Store) fetchEntriesFrom(ctx context.Context) ([]entry, error) {
 	if out, err = s.fetchDevices(ctx, out); err != nil {
 		return nil, err
 	}
-	return s.fetchArchiveFiles(ctx, out)
+	return out, nil
 }
 
 func (s *Store) fetchSpaces(ctx context.Context, out []entry) ([]entry, error) {
@@ -717,7 +703,7 @@ func (s *Store) fetchDatasets(ctx context.Context, out []entry) ([]entry, error)
 		return nil, err
 	}
 	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freqs: item.GetFreqs(), KeepDuration: item.GetKeepDuration(), DataNodeID: item.GetDataNodeId(), BindingLocked: item.GetBindingLocked(), Revision: item.GetRevision(), Status: item.GetStatus()}, item)
+		out, err = appendEntry(out, entry{Kind: kindDataset, SpaceID: item.GetSpaceId(), ID: item.GetDatasetId(), DatasetID: item.GetDatasetId(), DataSourceID: item.GetDataSourceId(), DataKind: int32(item.GetDataKind()), Freq: item.GetFreq(), DataNodeID: item.GetDataNodeId(), BindingLocked: item.GetBindingLocked(), Revision: item.GetRevision(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}
@@ -830,22 +816,6 @@ func (s *Store) fetchDevices(ctx context.Context, out []entry) ([]entry, error) 
 	}
 	for _, item := range items {
 		out, err = appendEntry(out, entry{Kind: kindDevice, ID: item.GetDeviceId(), Engine: item.GetEngine(), Status: item.GetStatus()}, item)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func (s *Store) fetchArchiveFiles(ctx context.Context, out []entry) ([]entry, error) {
-	items, err := collectPages(ctx, func(page *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error) {
-		return s.base.ListArchiveFiles(ctx, "", "", page)
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range items {
-		out, err = appendEntry(out, entry{Kind: kindArchiveFile, SpaceID: item.GetSpaceId(), ID: item.GetArchiveFileId(), DatasetID: item.GetDatasetId(), Status: item.GetStatus()}, item)
 		if err != nil {
 			return nil, err
 		}

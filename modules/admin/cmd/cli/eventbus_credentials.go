@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -30,17 +32,15 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer", "storage-eventbus", "archive-eventbus", "cloudnode-eventbus", "cloudnode-worker", "market-fetch-publisher", "collector-market-fetch-consumer", "factor-eventbus", "strategy-eventbus", "trade-eventbus"}
-var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-observability-consumer": "eventbus_monitor_observability_consumer", "storage-eventbus": "eventbus_storage", "archive-eventbus": "eventbus_archive", "cloudnode-eventbus": "eventbus_cloudnode", "cloudnode-worker": "eventbus_cloudnode_worker", "market-fetch-publisher": "eventbus_market_fetch_publisher", "collector-market-fetch-consumer": "eventbus_collector_market_fetch_consumer", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy", "trade-eventbus": "eventbus_trade"}
+var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer", "storage-eventbus", "archive-eventbus", "factor-eventbus", "strategy-eventbus", "trade-eventbus"}
+var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-observability-consumer": "eventbus_monitor_observability_consumer", "storage-eventbus": "eventbus_storage", "archive-eventbus": "eventbus_archive", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy", "trade-eventbus": "eventbus_trade"}
 var localEventBusRoles = map[string]bool{
-	"eventbus-internal-admin":         true,
-	"metrics-publisher":               true,
-	"monitor-observability-consumer":  true,
-	"cloudnode-eventbus":              true,
-	"collector-market-fetch-consumer": true,
-	"factor-eventbus":                 true,
-	"strategy-eventbus":               true,
-	"trade-eventbus":                  true,
+	"eventbus-internal-admin":        true,
+	"metrics-publisher":              true,
+	"monitor-observability-consumer": true,
+	"factor-eventbus":                true,
+	"strategy-eventbus":              true,
+	"trade-eventbus":                 true,
 }
 
 type eventbusBundle struct {
@@ -60,17 +60,21 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	}
 	fs := flag.NewFlagSet("eventbus-credentials", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dbPath, keyFile, nodeID, outputDir, credential := "./data/admin.db", "", "", "", ""
+	dbPath, keyFile, nodeID, outputDir, credential, roles := "./data/admin.db", "", "", "", "", ""
 	confirm := false
 	fs.StringVar(&dbPath, "db-path", dbPath, "SQLite database path")
 	fs.StringVar(&keyFile, "encryption-key-file", "", "0600 encryption key file")
-	fs.StringVar(&nodeID, "node-id", "", "gateway node ID containing the EventBus deployment")
+	fs.StringVar(&nodeID, "node-id", "", "registered control host containing the EventBus deployment")
 	fs.StringVar(&outputDir, "output-dir", "", "credential output directory")
 	fs.StringVar(&credential, "credential", "", "role token to rotate")
+	fs.StringVar(&roles, "roles", "", "comma-separated canonical client roles for export-clients")
 	fs.BoolVar(&confirm, "confirm", false, "confirm rotation and immediate invalidation")
 	sub := args[1]
 	if err := fs.Parse(args[2:]); err != nil {
 		return err
+	}
+	if roles != "" && sub != "export-clients" {
+		return errors.New("--roles is only valid for export-clients")
 	}
 	// A control-plane reset removes admin.db, while an externally managed
 	// EventBus keeps its role files. Reconcile only users.yaml from those
@@ -92,12 +96,21 @@ func runEventBusCredentialsCommand(args []string, stdout, stderr io.Writer) erro
 	defer closeAdminCLIDB(db)
 	secretDAO := dao.NewSecretDAO(db)
 	switch sub {
+	case "export-clients":
+		return exportEventBusClients(context.Background(), db, nodeID, outputDir, roles, stdout)
 	case "ensure":
 		natsURL, err := eventBusNATSURL(db, nodeID)
 		if err != nil {
 			return err
 		}
-		return ensureEventBus(secretDAO, natsURL, stdout)
+		var metadata bytes.Buffer
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			return ensureEventBus(dao.NewSecretDAO(tx), natsURL, &metadata)
+		}); err != nil {
+			return err
+		}
+		_, err = stdout.Write(metadata.Bytes())
+		return err
 	case "export":
 		if outputDir == "" {
 			return errors.New("--output-dir is required")
@@ -147,34 +160,17 @@ func parseCredentialToken(raw string) string {
 	return ""
 }
 
-func eventBusNATSURL(db *gorm.DB, nodeID string) (string, error) {
-	if nodeID == "" || nodeID != strings.TrimSpace(nodeID) {
-		return "", errors.New("--node-id is required and must not contain surrounding whitespace")
-	}
-	var deployment sysdeploy.Deployment
-	result := db.Where("c_node_id = ? AND c_service_name = ? AND c_status = ?", nodeID, "eventbus", "active").Find(&deployment)
-	if result.Error != nil {
-		return "", fmt.Errorf("query EventBus service deployment: %w", result.Error)
-	}
-	if result.RowsAffected != 1 {
-		return "", fmt.Errorf("active EventBus service deployment for node %q not found", nodeID)
-	}
-	var extra map[string]any
-	if err := json.Unmarshal([]byte(deployment.ExtraConfig), &extra); err != nil {
-		return "", fmt.Errorf("decode EventBus extra_config: %w", err)
-	}
-	raw, _ := extra["nats_url"].(string)
-	if _, err := validateEventBusNATSURL(raw); err != nil {
-		return "", fmt.Errorf("EventBus service deployment nats_url: %w", err)
-	}
-	return raw, nil
+// EventBus 的地址跟随组件放置（可能在与 Admin 不同的主机上）；签发凭据不改动拓扑。
+func eventBusNATSURL(db *gorm.DB, controlHostID string) (string, error) {
+	endpoint, err := sysdeploy.ResolveEventBusEndpoint(context.Background(), db, controlHostID)
+	return endpoint.URL, err
 }
 
 func openAdminCLIDB(path string) (*gorm.DB, error) {
 	if path == "" {
 		return nil, errors.New("db path is required")
 	}
-	return gorm.Open(sqlite.Open(path), &gorm.Config{})
+	return gorm.Open(sqlite.Open(initSQLiteDSN(path)), &gorm.Config{})
 }
 func closeAdminCLIDB(db *gorm.DB) {
 	if db != nil {
@@ -225,14 +221,27 @@ func loadCLIKey(dbPath, keyFile string) error {
 
 func ensureEventBus(d *dao.SecretDAO, natsURL string, out io.Writer) error {
 	ctx := trpc.BackgroundContext()
+	existing, err := listEventbus(d, ctx)
+	if err != nil {
+		return err
+	}
+	_, hasCA := existing["eventbus_tls_ca"]
+	_, hasServer := existing["eventbus_tls_server"]
+	if hasCA != hasServer {
+		return errors.New("EventBus TLS identity is incomplete; restore the original paired state")
+	}
+	if hasCA {
+		if err := validateEventBusTLS(existing, natsURL); err != nil {
+			return err
+		}
+	}
 	for _, role := range eventBusRoles {
 		key := eventBusKeys[role]
 		if _, err := ensureToken(ctx, d, key, role); err != nil {
 			return err
 		}
 	}
-	existing, _ := listEventbus(d, ctx)
-	if _, ok := existing["eventbus_tls_ca"]; !ok {
+	if !hasCA {
 		bundle, err := makeTLSBundle(natsURL)
 		if err != nil {
 			return err
@@ -244,11 +253,6 @@ func ensureEventBus(d *dao.SecretDAO, natsURL string, out io.Writer) error {
 		serverValue, _ := json.Marshal(map[string]string{"cert": bundle.Cert, "key": bundle.Key})
 		if err := d.Create(ctx, &model.Secret{SpaceID: "mooxsys", SecretID: uuid.New().String(), Name: "EventBus TLS server", Description: "private EventBus server bundle", Category: "eventbus", Provider: "moox_eventbus", SecretType: "certificate", KeyID: "eventbus_tls_server", SecretValue: string(serverValue), ExtraConfig: string(extra)}); err != nil {
 			return err
-		}
-	} else {
-		var extra map[string]string
-		if err := json.Unmarshal([]byte(existing["eventbus_tls_ca"].ExtraConfig), &extra); err != nil || extra["nats_url"] != natsURL {
-			return errors.New("EventBus TLS certificate host differs from the service directory; use --reset-data to rebuild")
 		}
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "roles": eventBusRoles, "tls": true})
@@ -285,6 +289,9 @@ func exportEventBus(d *dao.SecretDAO, dir, natsURL string, out io.Writer) error 
 	ctx := trpc.BackgroundContext()
 	rows, err := listEventbus(d, ctx)
 	if err != nil {
+		return err
+	}
+	if err := validateEventBusTLS(rows, natsURL); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -335,32 +342,67 @@ func exportEventBus(d *dao.SecretDAO, dir, natsURL string, out io.Writer) error 
 	if err := json.Unmarshal([]byte(server.SecretValue), &serverParts); err != nil {
 		return fmt.Errorf("decode EventBus TLS server bundle: %w", err)
 	}
-	if serverParts["cert"] != "" && serverParts["key"] != "" {
-		if err := atomicSecretFile(filepath.Join(dir, "server.pem"), []byte(serverParts["cert"])); err != nil {
-			return err
-		}
-		if err := atomicSecretFile(filepath.Join(dir, "server-key.pem"), []byte(serverParts["key"])); err != nil {
-			return err
-		}
+	if serverParts["cert"] == "" || serverParts["key"] == "" {
+		return errors.New("EventBus TLS server identity is incomplete")
+	}
+	if err := atomicSecretFile(filepath.Join(dir, "server.pem"), []byte(serverParts["cert"])); err != nil {
+		return err
+	}
+	if err := atomicSecretFile(filepath.Join(dir, "server-key.pem"), []byte(serverParts["key"])); err != nil {
+		return err
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "output_dir": dir, "roles": eventBusRoles})
 }
 
+func validateEventBusTLS(rows map[string]model.Secret, natsURL string) error {
+	ca, hasCA := rows["eventbus_tls_ca"]
+	server, hasServer := rows["eventbus_tls_server"]
+	if !hasCA || !hasServer {
+		return errors.New("EventBus TLS identity is incomplete; restore the original paired state")
+	}
+	var extra map[string]string
+	if json.Unmarshal([]byte(ca.ExtraConfig), &extra) != nil || extra["nats_url"] != natsURL {
+		return errors.New("EventBus TLS certificate host differs from the service directory; explicit identity rotation is required")
+	}
+	var parts struct {
+		Cert string `json:"cert"`
+		Key  string `json:"key"`
+	}
+	if json.Unmarshal([]byte(server.SecretValue), &parts) != nil {
+		return errors.New("EventBus TLS server identity is invalid")
+	}
+	pair, err := tls.X509KeyPair([]byte(parts.Cert), []byte(parts.Key))
+	if err != nil {
+		return errors.New("EventBus TLS server identity is invalid")
+	}
+	certificate, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return errors.New("EventBus TLS server certificate is invalid")
+	}
+	trust := x509.NewCertPool()
+	endpoint, err := validateEventBusNATSURL(natsURL)
+	if err != nil || !trust.AppendCertsFromPEM([]byte(ca.SecretValue)) {
+		return errors.New("EventBus TLS trust or endpoint is invalid")
+	}
+	for _, host := range []string{endpoint.Hostname(), "127.0.0.1"} {
+		if _, err := certificate.Verify(x509.VerifyOptions{Roots: trust, DNSName: host}); err != nil {
+			return errors.New("EventBus TLS server certificate does not verify for its endpoints")
+		}
+	}
+	return nil
+}
+
 func eventBusRoleFiles() map[string]string {
 	return map[string]string{
-		"eventbus-internal-admin":         "internal-admin.yaml",
-		"hostagent-publisher":             "hostagent-publisher.yaml",
-		"metrics-publisher":               "metrics-publisher.yaml",
-		"monitor-observability-consumer":  "monitor-observability.yaml",
-		"storage-eventbus":                "storage-eventbus.yaml",
-		"archive-eventbus":                "archive-eventbus.yaml",
-		"cloudnode-eventbus":              "cloudnode-eventbus.yaml",
-		"cloudnode-worker":                "cloudnode-worker.yaml",
-		"market-fetch-publisher":          "market-fetch-publisher.yaml",
-		"collector-market-fetch-consumer": "collector-market-fetch-consumer.yaml",
-		"factor-eventbus":                 "factor-eventbus.yaml",
-		"strategy-eventbus":               "strategy-eventbus.yaml",
-		"trade-eventbus":                  "trade-eventbus.yaml",
+		"eventbus-internal-admin":        "internal-admin.yaml",
+		"hostagent-publisher":            "hostagent-publisher.yaml",
+		"metrics-publisher":              "metrics-publisher.yaml",
+		"monitor-observability-consumer": "monitor-observability.yaml",
+		"storage-eventbus":               "storage-eventbus.yaml",
+		"archive-eventbus":               "archive-eventbus.yaml",
+		"factor-eventbus":                "factor-eventbus.yaml",
+		"strategy-eventbus":              "strategy-eventbus.yaml",
+		"trade-eventbus":                 "trade-eventbus.yaml",
 	}
 }
 
@@ -379,18 +421,14 @@ func usersYAML(tokens map[string]string) string { // ACLs are deliberately subje
 	return fmt.Sprintf("users:\n"+
 		"  - username: eventbus-internal-admin\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"$JS.EVENT.ADVISORY.API\"]}\n"+
 		"  - username: hostagent-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.observability.host.snapshot.reported.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: metrics-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.observability.metrics.snapshot.reported.v1.>\", \"moox.event.observability.health.check.reported.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: monitor-observability-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.DELETE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.ACK.MOOX_OBSERVABILITY.monitor_observability_ingest_v1.>\", \"$JS.API.CONSUMER.INFO.*.monitor-market-fetch-v1\", \"$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.monitor-market-fetch-v1\", \"$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.monitor-market-fetch-v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_MARKET_FETCH.monitor-market-fetch-v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_MARKET_FETCH.monitor-market-fetch-v1\", \"$JS.ACK.MOOX_MARKET_FETCH.monitor-market-fetch-v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: storage-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.storage.dataset.rows.upserted.v2.>\", \"moox.event.storage.collector.period.completed.v1.>\", \"moox.event.storage.dataset.factor_period.computed.v1.>\", \"moox.event.storage.view.data.ready.v1.>\", \"moox.event.storage.view.source_subject.ready.v1.>\", \"moox.event.storage.dataset.sync_point.v1.>\", \"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.storage_view_kline\", \"$JS.API.CONSUMER.INFO.*.storage_view_factor\", \"$JS.API.CONSUMER.INFO.*.storage_view_metrics\", \"$JS.API.CONSUMER.INFO.*.storage_view_misc\", \"$JS.API.CONSUMER.INFO.*.storage_view_misc.>\", \"$JS.API.CONSUMER.INFO.*.*\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_kline\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_kline.>\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_factor\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_factor.>\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_metrics\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_metrics.>\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_misc\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_misc.>\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view_kline\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view_misc.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view_factor\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view_metrics\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view_misc\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.>\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_kline\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_factor\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_metrics\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_misc\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_misc.>\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.>\", \"$JS.ACK.MOOX_STORAGE.storage_view_kline.>\", \"$JS.ACK.MOOX_STORAGE.storage_view_factor.>\", \"$JS.ACK.MOOX_STORAGE.storage_view_metrics.>\", \"$JS.ACK.MOOX_STORAGE.storage_view_misc.>\", \"$JS.ACK.MOOX_STORAGE.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
+		"  - username: metrics-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.observability.metrics.snapshot.reported.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
+		"  - username: monitor-observability-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.DELETE.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_OBSERVABILITY.monitor_observability_ingest_v1\", \"$JS.ACK.MOOX_OBSERVABILITY.monitor_observability_ingest_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
+		"  - username: storage-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.storage.dataset.rows.upserted.v2.>\", \"moox.event.storage.collector.period.completed.v1.>\", \"moox.event.storage.dataset.factor_period.computed.v1.>\", \"moox.event.storage.view.data.ready.v1.>\", \"moox.event.storage.dataset.sync_point.v1.>\", \"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.storage_view_factor\", \"$JS.API.CONSUMER.INFO.*.storage_view_metrics\", \"$JS.API.CONSUMER.INFO.*.storage_view_misc\", \"$JS.API.CONSUMER.INFO.*.storage_view_misc.>\", \"$JS.API.CONSUMER.INFO.*.*\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_factor\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_factor.>\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_metrics\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_metrics.>\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_misc\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.storage_view_misc.>\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view_misc.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view_factor\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view_metrics\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.storage_view_misc\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.>\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_factor\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_metrics\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_misc\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.storage_view_misc.>\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.>\", \"$JS.ACK.MOOX_STORAGE.storage_view_factor.>\", \"$JS.ACK.MOOX_STORAGE.storage_view_metrics.>\", \"$JS.ACK.MOOX_STORAGE.storage_view_misc.>\", \"$JS.ACK.MOOX_STORAGE.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: archive-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.moox_archive_kline_v2\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.moox_archive_kline_v2\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.moox_archive_kline_v2.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.moox_archive_kline_v2\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.moox_archive_kline_v2\", \"$JS.ACK.MOOX_STORAGE.moox_archive_kline_v2.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: cloudnode-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.cloudnode.job.execution.requested.v1.>\", \"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.>\", \"$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>\", \"$JS.API.CONSUMER.CREATE.MOOX_CLOUDNODE_EXEC.>\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>\", \"$JS.ACK.MOOX_CLOUDNODE_EXEC.>\", \"$JS.API.STREAM.INFO.KV_MOOX_CLOUDNODE_JOB_ACTIVE\", \"$JS.API.STREAM.MSG.GET.KV_MOOX_CLOUDNODE_JOB_ACTIVE\", \"$JS.API.DIRECT.GET.KV_MOOX_CLOUDNODE_JOB_ACTIVE.>\", \"$JS.API.CONSUMER.CREATE.KV_MOOX_CLOUDNODE_JOB_ACTIVE.>\", \"$JS.API.CONSUMER.DELETE.KV_MOOX_CLOUDNODE_JOB_ACTIVE.>\", \"$KV.MOOX_CLOUDNODE_JOB_ACTIVE.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: cloudnode-worker\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.observability.metrics.snapshot.reported.v1.>\", \"moox.event.observability.health.check.reported.v1.>\", \"$JS.API.CONSUMER.INFO.MOOX_CLOUDNODE_EXEC.>\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_CLOUDNODE_EXEC.>\", \"$JS.ACK.MOOX_CLOUDNODE_EXEC.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: market-fetch-publisher\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.market.fetch.batch.completed.v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
-		"  - username: collector-market-fetch-consumer\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.*\", \"$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.*\", \"$JS.API.CONSUMER.CREATE.MOOX_MARKET_FETCH.*.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_MARKET_FETCH.*\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_MARKET_FETCH.*\", \"$JS.ACK.MOOX_MARKET_FETCH.*.>\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.>\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.>\", \"$JS.ACK.MOOX_STORAGE.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: factor-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.factor_collector_period_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.factor_collector_period_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_collector_period_v1\", \"$JS.ACK.MOOX_STORAGE.factor_collector_period_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"moox.event.storage.collector.period.completed.v1.>\"]}\n      responses: {max_messages: 1, expires: 10s}\n"+
 		"  - username: strategy-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.trade.target.weight_requested.v1.>\", \"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.strategy_view_data_ready_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_data_ready_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_data_ready_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.strategy_view_data_ready_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.strategy_view_data_ready_v1\", \"$JS.ACK.MOOX_STORAGE.strategy_view_data_ready_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"moox.event.storage.view.data.ready.v1.>\"]}\n"+
 		"  - username: trade-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.trade_target_weight_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_TRADE.trade_target_weight_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_weight_v1\", \"$JS.ACK.MOOX_TRADE.trade_target_weight_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n",
-		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-observability-consumer"], tokens["storage-eventbus"], tokens["archive-eventbus"], tokens["cloudnode-eventbus"], tokens["cloudnode-worker"], tokens["market-fetch-publisher"], tokens["collector-market-fetch-consumer"], tokens["factor-eventbus"], tokens["strategy-eventbus"], tokens["trade-eventbus"])
+		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-observability-consumer"], tokens["storage-eventbus"], tokens["archive-eventbus"], tokens["factor-eventbus"], tokens["strategy-eventbus"], tokens["trade-eventbus"])
 }
 func atomicSecretFile(path string, data []byte) error {
 	dir := filepath.Dir(path)
@@ -478,4 +516,8 @@ func rotateEventBus(d *dao.SecretDAO, credential string, confirm bool, out io.Wr
 		return err
 	}
 	return writeJSON(out, map[string]any{"status": "ok", "rotated": credential, "warning": "redeploy affected clients now; old token is invalid"})
+}
+
+func validateEventBusNATSURL(raw string) (*url.URL, error) {
+	return sysdeploy.ValidateEventBusNATSURL(raw)
 }

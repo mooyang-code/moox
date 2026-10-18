@@ -2,109 +2,26 @@ package pipeline
 
 import (
 	"context"
-	"sync"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
-	"github.com/mooyang-code/moox/modules/factor/internal/pyexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/stretchr/testify/require"
 )
 
-func TestComputeTimeSeriesOneCallPerSubject(t *testing.T) {
-	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	factors := make([]domain.FactorDef, 4)
-	for i := range factors {
-		factors[i] = testPipelineFactor("factor_"+string(rune('a'+i)), domain.FactorTypeTimeSeries, 3, false)
-	}
-	executor := &fakeExecutor{exec: func(_ context.Context, req pyexec.Request) ([]pyexec.ItemResult, error) {
-		frame, ok := req.Frame.(storageio.Frame)
-		if !ok || len(req.Factors) != 4 || req.Context["subject_id"] != frame.SubjectID {
-			t.Errorf("unexpected timeseries request: frame=%T factors=%d context=%v", req.Frame, len(req.Factors), req.Context)
-		}
-		return successfulItems(req.Factors), nil
-	}}
-	plan := computePlan(target, factors, []string{"BTC", "ETH", "SOL"})
-	loaded := framesFor(plan.Available, target)
-	computation, err := NewRunner(&fakeStore{}, executor, periodclock.Continuous{}, Config{PythonWorkers: 2}).Compute(context.Background(), plan, loaded)
-	require.NoError(t, err)
-	require.Len(t, executor.requests(), 3)
-	for _, factor := range factors {
-		require.Equal(t, "complete", computation.FactorStates[factor.FactorID].Status)
-		require.Len(t, computation.Results[factor.FactorID], 3)
-	}
-}
-
-func TestComputeCrossSectionSkipsWhenPartialUniverseNotAllowed(t *testing.T) {
-	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	factor := testPipelineFactor("spread", domain.FactorTypeCrossSection, 2, false)
-	executor := &fakeExecutor{}
-	plan := computePlan(target, []domain.FactorDef{factor}, []string{"BTC", "ETH"})
-	loaded := framesFor([]string{"BTC"}, target)
-	loaded.Available = []string{"BTC"}
-	loaded.FailedSubjects = []string{"ETH"}
-	computation, err := NewRunner(&fakeStore{}, executor, periodclock.Continuous{}, Config{}).Compute(context.Background(), plan, loaded)
-	require.NoError(t, err)
-	require.Empty(t, executor.requests())
-	require.Equal(t, "skipped", computation.FactorStates[factor.FactorID].Status)
-}
-
-func TestComputeCrossSectionRunsOnAvailableWhenAllowed(t *testing.T) {
-	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	factor := testPipelineFactor("spread", domain.FactorTypeCrossSection, 2, true)
-	executor := &fakeExecutor{exec: func(_ context.Context, req pyexec.Request) ([]pyexec.ItemResult, error) {
-		frame, ok := req.Frame.(storageio.Frame)
-		if !ok || len(frame.Rows) != 1 || len(frame.Columns) != 4 || frame.Columns[2] != "subject_id" || frame.Rows[0][2] != "BTC" {
-			t.Errorf("unexpected cross-section panel: %#v", req.Frame)
-		}
-		return successfulItems(req.Factors), nil
-	}}
-	plan := computePlan(target, []domain.FactorDef{factor}, []string{"BTC", "ETH"})
-	loaded := framesFor([]string{"BTC"}, target)
-	loaded.Available = []string{"BTC"}
-	loaded.FailedSubjects = []string{"ETH"}
-	computation, err := NewRunner(&fakeStore{}, executor, periodclock.Continuous{}, Config{}).Compute(context.Background(), plan, loaded)
-	require.NoError(t, err)
-	require.Len(t, executor.requests(), 1)
-	require.Equal(t, "degraded", computation.FactorStates[factor.FactorID].Status)
-	require.Equal(t, []string{"ETH"}, computation.FactorStates[factor.FactorID].FailedSubjects)
-}
-
-func TestComputeBudgetExceededCancelsRemaining(t *testing.T) {
-	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	factor := testPipelineFactor("momentum", domain.FactorTypeTimeSeries, 2, false)
-	var calls atomic.Int32
-	executor := &fakeExecutor{exec: func(ctx context.Context, req pyexec.Request) ([]pyexec.ItemResult, error) {
-		calls.Add(1)
-		frame := req.Frame.(storageio.Frame)
-		if frame.SubjectID == "B" {
-			<-ctx.Done()
-			return nil, ctx.Err()
-		}
-		return successfulItems(req.Factors), nil
-	}}
-	plan := computePlan(target, []domain.FactorDef{factor}, []string{"A", "B", "C"})
-	plan.Budget = 20 * time.Millisecond
-	loaded := framesFor(plan.Available, target)
-	computation, err := NewRunner(&fakeStore{}, executor, periodclock.Continuous{}, Config{PythonWorkers: 1}).Compute(context.Background(), plan, loaded)
-	require.NoError(t, err)
-	require.True(t, computation.BudgetHit)
-	require.EqualValues(t, 2, calls.Load())
-	require.Empty(t, computation.Results[factor.FactorID]["A"].Err)
-	require.Error(t, computation.Results[factor.FactorID]["B"].Err)
-	require.Error(t, computation.Results[factor.FactorID]["C"].Err)
-}
-
+// testPipelineFactor 返回回看为 lookback 的定义：时序因子是 ts_mean(close, lookback)，截面因子是对它做 cs_rank。
 func testPipelineFactor(id, factorType string, lookback int, partial bool) domain.FactorDef {
-	code := "def compute(df, params, context): return df"
-	return domain.FactorDef{
-		FactorID: id, Name: id, FactorType: factorType, SourceCode: code, SourceHash: domain.SourceHash(code),
-		InputColumns: []string{"close"}, Outputs: []string{id + "_value"}, ParamsJSON: "{}",
-		LookbackPeriods: lookback, AllowPartialUniverse: partial, Status: domain.FactorStatusEnabled,
+	expression := fmt.Sprintf("ts_mean(close, %d)", lookback)
+	if factorType == domain.FactorTypeCrossSection {
+		expression = "cs_rank(" + expression + ")"
 	}
+	def := domain.MustDefinition(id, id, "outputs:\n  "+id+"_value: "+expression+"\n")
+	def.AllowPartialUniverse = partial
+	return def
 }
 
 func computePlan(target time.Time, factors []domain.FactorDef, subjects []string) Plan {
@@ -115,6 +32,21 @@ func computePlan(target time.Time, factors []domain.FactorDef, subjects []string
 	}
 }
 
+// framesForBars 为每个标的造到 target 为止的 bars 根 K 线，close = 标的序号 * 100 + 分钟序号。
+func framesForBars(subjects []string, target time.Time, bars int) LoadResult {
+	frames := make(map[string]*storageio.Frame, len(subjects))
+	for s, subject := range subjects {
+		frame := &storageio.Frame{SubjectID: subject, Columns: []string{"data_time", "series_tag", "close"}}
+		for i := bars - 1; i >= 0; i-- {
+			at := target.Add(-time.Duration(i) * time.Minute)
+			frame.Rows = append(frame.Rows, []any{at, "venue:binance", float64((s+1)*100 + bars - 1 - i)})
+		}
+		frames[subject] = frame
+	}
+	return LoadResult{Frames: frames, Available: append([]string(nil), subjects...)}
+}
+
+// framesFor 为每个标的造目标时刻的一根 K 线，close = 10。
 func framesFor(subjects []string, target time.Time) LoadResult {
 	frames := make(map[string]*storageio.Frame, len(subjects))
 	for _, subject := range subjects {
@@ -126,35 +58,219 @@ func framesFor(subjects []string, target time.Time) LoadResult {
 	return LoadResult{Frames: frames, Available: append([]string(nil), subjects...)}
 }
 
-func successfulItems(factors []pyexec.FactorCall) []pyexec.ItemResult {
-	items := make([]pyexec.ItemResult, len(factors))
-	for i, factor := range factors {
-		items[i] = pyexec.ItemResult{FactorID: factor.FactorID, Columns: []string{"data_time", "series_tag", factor.Outputs[0]}, Rows: [][]any{}}
+func newComputeRunner(cfg Config) *Runner {
+	return NewRunner(&fakeStore{}, periodclock.Continuous{}, cfg)
+}
+
+// valueAt 取某个结果在某个时刻的第一个输出值。
+func valueAt(t *testing.T, item ItemResult, at time.Time) any {
+	t.Helper()
+	require.NoError(t, item.Err)
+	for _, row := range item.Rows {
+		if row[0].(time.Time).Equal(at) {
+			return row[len(row)-1]
+		}
 	}
-	return items
+	t.Fatalf("没有 %s 的结果行：%v", at, item.Rows)
+	return nil
 }
 
-type fakeExecutor struct {
-	mu    sync.Mutex
-	calls []pyexec.Request
-	exec  func(context.Context, pyexec.Request) ([]pyexec.ItemResult, error)
-}
+func TestComputeTimeSeriesComputesTargetRowsOnly(t *testing.T) {
+	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	mean := testPipelineFactor("mean", domain.FactorTypeTimeSeries, 3, false)
+	double := domain.MustDefinition("double", "double", "outputs:\n  double_value: close * 2\n")
+	plan := computePlan(target, []domain.FactorDef{mean, double}, []string{"BTC", "ETH"})
+	loaded := framesForBars(plan.Available, target, 3)
+	loaded.Frames["ETH"].Rows = loaded.Frames["ETH"].Rows[1:] // ETH 只有 2 根：窗口不完整
 
-func (f *fakeExecutor) Exec(ctx context.Context, req pyexec.Request) ([]pyexec.ItemResult, error) {
-	f.mu.Lock()
-	f.calls = append(f.calls, req)
-	f.mu.Unlock()
-	if f.exec != nil {
-		return f.exec(ctx, req)
+	computation, err := newComputeRunner(Config{ComputeWorkers: 2}).Compute(context.Background(), plan, loaded)
+
+	require.NoError(t, err)
+	for _, factor := range []domain.FactorDef{mean, double} {
+		require.Equal(t, "complete", computation.FactorStates[factor.FactorID].Status)
+		require.Equal(t, factor.SpecHash, computation.FactorStates[factor.FactorID].SourceHash)
+		require.Equal(t, domain.DefinitionHash(factor), computation.FactorStates[factor.FactorID].DefinitionHash)
+		require.Len(t, computation.Results[factor.FactorID], 2)
 	}
-	return successfulItems(req.Factors), nil
+	btc := computation.Results["mean"]["BTC"]
+	require.Equal(t, []string{"data_time", "series_tag", "mean_value"}, btc.Columns)
+	require.Len(t, btc.Rows, 1, "实时周期只输出目标时刻")
+	require.Equal(t, []any{target, "venue:binance", 101.0}, btc.Rows[0])
+	require.Nil(t, valueAt(t, computation.Results["mean"]["ETH"], target), "严格窗口：不完整时为 null")
+	require.Equal(t, 404.0, valueAt(t, computation.Results["double"]["ETH"], target))
 }
 
-func (f *fakeExecutor) Busy() int    { return 0 }
-func (f *fakeExecutor) Close() error { return nil }
+func TestComputeCrossSectionSkipsWhenPartialUniverseNotAllowed(t *testing.T) {
+	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	factor := testPipelineFactor("spread", domain.FactorTypeCrossSection, 2, false)
+	plan := computePlan(target, []domain.FactorDef{factor}, []string{"BTC", "ETH"})
+	loaded := framesForBars([]string{"BTC"}, target, 2)
+	loaded.FailedSubjects = []string{"ETH"}
+	computation, err := newComputeRunner(Config{}).Compute(context.Background(), plan, loaded)
+	require.NoError(t, err)
+	require.Equal(t, "skipped", computation.FactorStates[factor.FactorID].Status)
+	require.Empty(t, computation.Results[factor.FactorID])
+}
 
-func (f *fakeExecutor) requests() []pyexec.Request {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]pyexec.Request(nil), f.calls...)
+func TestComputeCrossSectionRunsOnAvailableWhenAllowed(t *testing.T) {
+	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	factor := testPipelineFactor("spread", domain.FactorTypeCrossSection, 2, true)
+	plan := computePlan(target, []domain.FactorDef{factor}, []string{"BTC", "ETH", "SOL"})
+	loaded := framesForBars([]string{"BTC", "SOL"}, target, 2)
+	loaded.FailedSubjects = []string{"ETH"}
+	computation, err := newComputeRunner(Config{}).Compute(context.Background(), plan, loaded)
+	require.NoError(t, err)
+	require.Equal(t, "degraded", computation.FactorStates[factor.FactorID].Status)
+	require.Equal(t, []string{"ETH"}, computation.FactorStates[factor.FactorID].FailedSubjects)
+	item := computation.Results[factor.FactorID][""]
+	require.Equal(t, []string{"data_time", "series_tag", "subject_id", "spread_value"}, item.Columns)
+	require.Len(t, item.Rows, 2)
+	ranks := map[string]any{}
+	for _, row := range item.Rows {
+		ranks[row[2].(string)] = row[3]
+	}
+	require.Equal(t, map[string]any{"BTC": 0.5, "SOL": 1.0}, ranks, "只在可用的标的里排名")
+	require.Equal(t, periodOK, computation.CrossPeriods[factor.FactorID][target.Unix()])
+}
+
+func TestComputeRecalcOutputsEveryTargetPeriod(t *testing.T) {
+	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	factor := testPipelineFactor("momentum", domain.FactorTypeTimeSeries, 2, false)
+	plan := recalcPlan(start, []domain.FactorDef{factor}, []string{"BTC", "ETH"})
+	loaded := recalcFrames(plan.Available, start, 3)
+	computation, err := newComputeRunner(Config{ComputeWorkers: 2}).Compute(context.Background(), plan, loaded)
+	require.NoError(t, err)
+	btc := computation.Results[factor.FactorID]["BTC"]
+	require.Len(t, btc.Rows, 3)
+	// close 依次为 1, 2, 3, 4（index -1..2）；目标期的两期均值是 1.5, 2.5, 3.5。
+	for i, want := range []float64{1.5, 2.5, 3.5} {
+		require.Equal(t, want, valueAt(t, btc, start.Add(time.Duration(i)*time.Minute)))
+	}
+}
+
+// 严格截面因子在补算块里只跳过有标的有洞的那个周期，其余周期照常计算。
+func TestComputeRecalcCrossSectionSkipsOnlyGapPeriods(t *testing.T) {
+	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	factor := testPipelineFactor("spread", domain.FactorTypeCrossSection, 2, false)
+	plan := recalcPlan(start, []domain.FactorDef{factor}, []string{"BTC", "ETH"})
+	loaded := recalcFrames(plan.Available, start, 3)
+	gapPeriod := start.Add(time.Minute)
+	loaded.Gaps.add(GapKey{FactorID: factor.FactorID, Subject: "ETH", Period: gapPeriod}, []time.Time{start}, "venue:binance")
+
+	computation, err := newComputeRunner(Config{}).Compute(context.Background(), plan, loaded)
+
+	require.NoError(t, err)
+	periods := computation.CrossPeriods[factor.FactorID]
+	require.Equal(t, periodOK, periods[start.Unix()])
+	require.Equal(t, periodGap, periods[gapPeriod.Unix()])
+	require.Equal(t, periodOK, periods[start.Add(2*time.Minute).Unix()])
+	item := computation.Results[factor.FactorID][""]
+	require.Len(t, item.Rows, 4, "两个周期 × 两个标的")
+	for _, row := range item.Rows {
+		require.False(t, row[0].(time.Time).Equal(gapPeriod))
+	}
+}
+
+// 引擎侧编译失败只影响该因子：对全部标的失败并计数，其他因子照常（设计 7.6）。
+func TestComputeEngineCompileFailureFailsOnlyThatFactor(t *testing.T) {
+	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	good := testPipelineFactor("good", domain.FactorTypeTimeSeries, 1, false)
+	broken := domain.FactorDef{FactorID: "broken", Name: "broken", Spec: "outputs:\n  broken_value: from_the_future(close)\n",
+		Outputs: []string{"broken_value"}, LookbackPeriods: 1, FactorType: domain.FactorTypeTimeSeries}
+	var counted atomic.Int32
+	plan := computePlan(target, []domain.FactorDef{good, broken}, []string{"BTC", "ETH"})
+	runner := newComputeRunner(Config{OnCompileError: func(setID, factorID string) {
+		require.Equal(t, "broken", factorID)
+		counted.Add(1)
+	}})
+
+	computation, err := runner.Compute(context.Background(), plan, framesFor(plan.Available, target))
+
+	require.NoError(t, err)
+	require.EqualValues(t, 1, counted.Load())
+	require.Equal(t, "degraded", computation.FactorStates["broken"].Status)
+	require.Equal(t, []string{"BTC", "ETH"}, computation.FactorStates["broken"].FailedSubjects)
+	require.ErrorContains(t, computation.Results["broken"]["BTC"].Err, "编译失败")
+	require.Equal(t, "complete", computation.FactorStates["good"].Status)
+	require.Equal(t, 10.0, valueAt(t, computation.Results["good"]["BTC"], target))
+}
+
+// 非数值的源值让整个程序失败：本期全部因子按计算失败处理。
+func TestComputeRejectsNonNumericSourceValues(t *testing.T) {
+	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	factor := testPipelineFactor("mean", domain.FactorTypeTimeSeries, 1, false)
+	plan := computePlan(target, []domain.FactorDef{factor}, []string{"BTC"})
+	loaded := framesFor(plan.Available, target)
+	loaded.Frames["BTC"].Rows[0][2] = "n/a"
+	computation, err := newComputeRunner(Config{}).Compute(context.Background(), plan, loaded)
+	require.NoError(t, err)
+	require.ErrorContains(t, computation.Results[factor.FactorID]["BTC"].Err, "不是数值")
+	require.Equal(t, "degraded", computation.FactorStates[factor.FactorID].Status)
+}
+
+func TestComputeBudgetExceededFailsThePeriod(t *testing.T) {
+	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	factor := testPipelineFactor("momentum", domain.FactorTypeTimeSeries, 2, false)
+	plan := computePlan(target, []domain.FactorDef{factor}, []string{"A", "B"})
+	plan.Budget = time.Nanosecond
+	time.Sleep(time.Millisecond)
+	computation, err := newComputeRunner(Config{}).Compute(context.Background(), plan, framesForBars(plan.Available, target, 2))
+	require.NoError(t, err)
+	require.True(t, computation.BudgetHit)
+	require.ErrorIs(t, computation.Results[factor.FactorID]["A"].Err, context.DeadlineExceeded)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = newComputeRunner(Config{}).Compute(cancelled, computePlan(target, []domain.FactorDef{factor}, []string{"A"}), framesFor([]string{"A"}, target))
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+// 结果与并行度无关，逐位相同（实时写入的提交 ID 依赖它）；一个标的的多个 series_tag 各是一条序列。
+func TestComputeIsDeterministicAcrossWorkersAndTags(t *testing.T) {
+	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	factors := []domain.FactorDef{
+		testPipelineFactor("mean", domain.FactorTypeTimeSeries, 3, false),
+		testPipelineFactor("rank", domain.FactorTypeCrossSection, 2, true),
+	}
+	subjects := make([]string, 40)
+	for i := range subjects {
+		subjects[i] = fmt.Sprintf("S%02d", i)
+	}
+	plan := recalcPlan(start, factors, subjects)
+	plan.TargetEnd = start.Add(20 * time.Minute)
+	loaded := recalcFrames(subjects, start, 20)
+	for s, subject := range subjects {
+		frame := loaded.Frames[subject]
+		rows := len(frame.Rows)
+		for i := 0; i < rows; i++ {
+			row := frame.Rows[i]
+			frame.Rows = append(frame.Rows, []any{row[0], "venue:okx", float64(s*7%13) + float64(i)/3})
+		}
+	}
+	single, err := newComputeRunner(Config{ComputeWorkers: 1}).Compute(context.Background(), plan, loaded)
+	require.NoError(t, err)
+	parallel, err := newComputeRunner(Config{ComputeWorkers: 8}).Compute(context.Background(), plan, loaded)
+	require.NoError(t, err)
+	require.Equal(t, single.Results, parallel.Results)
+	require.Len(t, single.Results["mean"]["S01"].Rows, 40, "两个标签 × 20 期")
+}
+
+func recalcPlan(start time.Time, factors []domain.FactorDef, subjects []string) Plan {
+	return Plan{
+		Mode: ModeRecalc, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"},
+		Factors: factors, TargetStart: start, TargetEnd: start.Add(3 * time.Minute),
+		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), CarryColumns: []string{"close"}, WriteCarry: true,
+	}
+}
+
+func recalcFrames(subjects []string, start time.Time, targetPeriods int) LoadResult {
+	frames := make(map[string]*storageio.Frame, len(subjects))
+	for _, subject := range subjects {
+		frame := &storageio.Frame{SubjectID: subject, Columns: []string{"data_time", "series_tag", "close"}}
+		for index := -1; index < targetPeriods; index++ {
+			frame.Rows = append(frame.Rows, []any{start.Add(time.Duration(index) * time.Minute), "venue:binance", float64(index + 2)})
+		}
+		frames[subject] = frame
+	}
+	return LoadResult{Frames: frames, Available: append([]string(nil), subjects...)}
 }

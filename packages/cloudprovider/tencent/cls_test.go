@@ -4,6 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	cls "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/cls/v20201016"
+	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 )
 
 type fakeCLSAPI struct {
@@ -11,6 +14,15 @@ type fakeCLSAPI struct {
 	logset      CLSLogset
 	topic       CLSTopic
 	calls       []string
+	// fieldsChanged 控制 EnsureIndexFields 是否报告有改动；fields 记录收到的字段。
+	fieldsChanged bool
+	fields        []CLSIndexField
+}
+
+func (f *fakeCLSAPI) EnsureIndexFields(_ context.Context, topicID string, fields []CLSIndexField) (bool, string, error) {
+	f.calls = append(f.calls, "ensure-index-fields:"+topicID)
+	f.fields = fields
+	return f.fieldsChanged, "request-fields", nil
 }
 
 func (f *fakeCLSAPI) GetService(context.Context) (bool, error) {
@@ -143,5 +155,70 @@ func TestBootstrapCLSRejectsUnsafeResourceSettings(t *testing.T) {
 				t.Fatal("BootstrapCLS() error = nil")
 			}
 		})
+	}
+}
+
+func TestBootstrapCLSEnsuresIndexFieldsAfterTheTopicIsReady(t *testing.T) {
+	api := &fakeCLSAPI{serviceOpen: true, logset: CLSLogset{ID: "logset-1", Name: "moox"}, topic: CLSTopic{ID: "topic-1", LogsetID: "logset-1", Name: "moox-application", IndexEnabled: true}, fieldsChanged: true}
+	result, err := BootstrapCLS(context.Background(), api, CLSBootstrapOptions{
+		LogsetName: "moox", TopicName: "moox-application", RetentionDays: 2, Partitions: 1,
+		IndexFields: []CLSIndexField{{Key: "log_type"}, {Key: "fetch_ms", Numeric: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IndexFieldsChanged {
+		t.Fatal("index fields change should be reported")
+	}
+	if !strings.Contains(strings.Join(api.calls, ","), "ensure-index-fields:topic-1") {
+		t.Fatalf("index fields were not ensured: %v", api.calls)
+	}
+	if len(api.fields) != 2 || api.fields[0].Key != "log_type" || !api.fields[1].Numeric {
+		t.Fatalf("unexpected fields: %+v", api.fields)
+	}
+
+	// 没有声明字段时不触碰索引。
+	api.calls, api.fields = nil, nil
+	if _, err := BootstrapCLS(context.Background(), api, CLSBootstrapOptions{LogsetName: "moox", TopicName: "moox-application", RetentionDays: 2, Partitions: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(api.calls, ","), "ensure-index-fields") {
+		t.Fatalf("index must not be touched without declared fields: %v", api.calls)
+	}
+}
+
+func TestBuildModifyIndexKeepsEverythingAndRepairsConflictingFields(t *testing.T) {
+	text := func(key string) *cls.KeyValueInfo {
+		return &cls.KeyValueInfo{Key: common.StringPtr(key), Value: &cls.ValueInfo{Type: common.StringPtr("text"), SqlFlag: common.BoolPtr(true)}}
+	}
+	current := &cls.DescribeIndexResponseParams{
+		IncludeInternalFields: common.BoolPtr(true), MetadataFlag: common.Uint64Ptr(1), CoverageField: common.StringPtr("__parse_failed__"),
+		Rule: &cls.RuleInfo{
+			FullText: &cls.FullTextInfo{CaseSensitive: common.BoolPtr(false), Tokenizer: common.StringPtr(", ")},
+			KeyValue: &cls.RuleKeyValueInfo{CaseSensitive: common.BoolPtr(false), KeyValues: []*cls.KeyValueInfo{text("SCF_FunctionName"), text("fetch_ms")}},
+			Tag:      &cls.RuleTagInfo{CaseSensitive: common.BoolPtr(false), KeyValues: []*cls.KeyValueInfo{text("region")}},
+		},
+	}
+	fields := []CLSIndexField{{Key: "log_type"}, {Key: "fetch_ms", Numeric: true}}
+	modify, changed := buildModifyIndex("topic-1", current, fields)
+	if !changed || modify == nil {
+		t.Fatal("new field and conflicting type should require a modification")
+	}
+	if *modify.CoverageField != "__parse_failed__" || *modify.MetadataFlag != 1 || !*modify.IncludeInternalFields {
+		t.Fatalf("index switches must be carried over: %+v", modify)
+	}
+	if modify.Rule.FullText == nil || modify.Rule.Tag == nil || len(modify.Rule.Tag.KeyValues) != 1 || *modify.Rule.Tag.KeyValues[0].Key != "region" {
+		t.Fatalf("existing full-text and tag indexes must be preserved: %+v", modify.Rule)
+	}
+	types := map[string]string{}
+	for _, item := range modify.Rule.KeyValue.KeyValues {
+		types[*item.Key] = *item.Value.Type
+	}
+	if types["SCF_FunctionName"] != "text" || types["log_type"] != "text" || types["fetch_ms"] != "long" {
+		t.Fatalf("unexpected key-value indexes: %v", types)
+	}
+	// 已经满足要求时不产生修改。
+	if _, changed := buildModifyIndex("topic-1", &cls.DescribeIndexResponseParams{Rule: modify.Rule}, fields); changed {
+		t.Fatal("idempotent merge should not modify again")
 	}
 }

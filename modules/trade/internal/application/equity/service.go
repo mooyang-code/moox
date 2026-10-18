@@ -49,7 +49,20 @@ func (s *Service) sourceMaxAge() time.Duration {
 	if s != nil && s.SourceMaxAge > 0 {
 		return s.SourceMaxAge
 	}
-	return 30 * time.Second
+	// 完整同步间隔默认 30s、权益采样每 20s：有效期必须覆盖“同步间隔 + 采样间隔”并留出执行余量，
+	// 否则健康账户会在两次采样之间出现策略目标因权益过期而无法转换的固定空档。
+	return 90 * time.Second
+}
+
+// confirmedSnapshot 把余额快照的新鲜度来源换成“最近一次被确认的完整余额同步”的时间：
+// 交易所给的余额时间（如 Binance 的资产 updateTime）是最后变更时间，余额长期不变时会很旧，
+// 但完整同步持续成功就说明余额仍然准确。LastSyncAt 只在被采用且覆盖待确认水位的快照上推进。
+func confirmedSnapshot(account store.TradingAccountRecord) store.TradingAccountSnapshot {
+	snapshot := account.Snapshot
+	if account.LastSyncAt > snapshot.ExchangeUpdatedAt {
+		snapshot.ExchangeUpdatedAt = account.LastSyncAt
+	}
+	return snapshot
 }
 
 func (s *Service) sourceFresh(sourceMillis int64) bool {
@@ -95,7 +108,7 @@ func (s *Service) SampleAccount(ctx context.Context, accountID string) error {
 	if err != nil {
 		return err
 	}
-	snapshot := account.Snapshot
+	snapshot := confirmedSnapshot(account)
 	if account.MarketType == string(exchange.MarketTypeSpot) {
 		valued, valueErr := s.valueSpotSnapshot(ctx, account, snapshot)
 		if valueErr != nil {
@@ -258,7 +271,7 @@ func (s *Service) sampleLogicalAccounts(ctx context.Context, spaceID, accountID 
 				continue
 			}
 			seenCapitalSources[capitalKey] = struct{}{}
-			memberSnapshot := memberAccount.Snapshot
+			memberSnapshot := confirmedSnapshot(memberAccount)
 			if member.TradingAccountID == accountID && sampled != nil {
 				memberSnapshot = *sampled
 			} else if memberAccount.MarketType == string(exchange.MarketTypeSpot) {

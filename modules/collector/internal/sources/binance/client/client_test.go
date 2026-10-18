@@ -55,11 +55,6 @@ func TestFormatSymbol_HyphenatedSymbol_ShouldRemoveSeparator(t *testing.T) {
 	assert.Equal(t, "BTCUSDT", FormatSymbol("BTC-USDT"))
 }
 
-func TestParseSymbol_BinanceSymbol_ShouldReturnHyphenated(t *testing.T) {
-	assert.Equal(t, "BTC-USDT", ParseSymbol("BTCUSDT", "USDT"))
-	assert.Equal(t, "BTC-USDT", ParseSymbol("BTCUSDT", ""))
-}
-
 func TestClient_SetSpotBaseURL_ValidURL_ShouldUpdateDomain(t *testing.T) {
 	c := NewClient()
 	require.NoError(t, c.SetSpotBaseURL("https://testnet.binance.vision"))

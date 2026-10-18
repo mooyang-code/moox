@@ -4,15 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/spf13/cobra"
 )
 
@@ -105,7 +102,7 @@ func init() {
 	flags.StringVar(&collectorTimerInventoryFlags.AccessToken, "access-token", "", "Control access token; defaults to MOOX_ACCESS_TOKEN")
 	flags.StringVar(&collectorTimerInventoryFlags.ServiceAccessKey, "service-access-key", "", "后台服务签名 access key")
 	flags.StringVar(&collectorTimerInventoryFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名 secret key")
-	flags.StringVar(&collectorTimerInventoryFlags.File, "file", "", "moox.toml; supplies Control host and service-auth trust material")
+	flags.StringVar(&collectorTimerInventoryFlags.File, "file", "", "可信 SSH 主机配置")
 	flags.StringVar(&collectorTimerInventoryFlags.SpaceID, "space-id", "", "required space id")
 	flags.StringVar(&collectorTimerInventoryFlags.CloudAccountID, "cloud-account-id", "", "required SCF cloud account id")
 	flags.StringVar(&collectorTimerInventoryFlags.Namespace, "namespace", "", "required SCF namespace")
@@ -308,59 +305,12 @@ func timerInventoryAvailable(status string) bool {
 
 func newCollectorTimerInventoryClient(ctx context.Context, opts collectorTimerInventoryOptions) (*adminclient.Client, func(), error) {
 	cleanup := func() {}
-	if strings.TrimSpace(opts.ControlURL) == "" || strings.TrimSpace(opts.SpaceID) == "" {
-		return nil, cleanup, fmt.Errorf("--control-url and --space-id are required")
+	if strings.TrimSpace(opts.SpaceID) == "" {
+		return nil, cleanup, fmt.Errorf("--space-id is required")
 	}
-	accessToken := defaultFlag(opts.AccessToken, os.Getenv("MOOX_ACCESS_TOKEN"))
-	accessKey := defaultFlag(opts.ServiceAccessKey, os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"))
-	secretKey := defaultFlag(opts.ServiceSecretKey, os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))
-	caller := defaultFlag(os.Getenv("MOOX_GATEWAY_CALLER"), "moox-cli")
-	targetNode := defaultFlag(os.Getenv("MOOX_GATEWAY_TARGET_NODE"), os.Getenv("MOOX_GATEWAY_NODE_ID"))
-	serviceCAFile := os.Getenv("MOOX_GATEWAY_CA_FILE")
-	var manifest *setupconfig.Snapshot
-	if strings.TrimSpace(opts.File) != "" {
-		_, loadedManifest, err := loadCollectorSCFFetcherConfigSnapshot(opts.File, opts.SpaceID)
-		if err != nil {
-			return nil, cleanup, err
-		}
-		manifest = loadedManifest
-		if manifest != nil && accessToken == "" && accessKey == "" {
-			trustMaterial, trustErr := resolveCollectorSCFTrustMaterial(ctx, manifest.Manifest.ControlHost, manifest.Manifest.Paths.Resolved().ControlRoot)
-			if trustErr != nil {
-				return nil, cleanup, trustErr
-			}
-			accessKey, secretKey = "moox-cli", trustMaterial.CLIServiceKey
-			caller, targetNode = "moox-cli", manifest.Manifest.ControlHost.Name
-			if len(trustMaterial.ServiceGatewayCAPEM) > 0 {
-				file, writeErr := os.CreateTemp("", "moox-collector-timer-inventory-ca-")
-				if writeErr != nil {
-					return nil, cleanup, fmt.Errorf("create Control service CA: %w", writeErr)
-				}
-				serviceCAFile = file.Name()
-				if writeErr = file.Chmod(0o600); writeErr == nil {
-					_, writeErr = file.Write(trustMaterial.ServiceGatewayCAPEM)
-				}
-				closeErr := file.Close()
-				if writeErr == nil {
-					writeErr = closeErr
-				}
-				if writeErr != nil {
-					_ = os.Remove(serviceCAFile)
-					return nil, cleanup, fmt.Errorf("write Control service CA: %w", writeErr)
-				}
-				cleanup = func() { _ = os.Remove(serviceCAFile) }
-			}
-		}
+	gateway, err := openCommandGateway(ctx, opts.File, nil)
+	if err != nil {
+		return nil, cleanup, err
 	}
-	if accessToken == "" && (strings.TrimSpace(accessKey) == "" || strings.TrimSpace(secretKey) == "") {
-		return nil, cleanup, fmt.Errorf("Control authentication is required; provide --file, MOOX_ACCESS_TOKEN, or service-auth credentials")
-	}
-	client := newControlClient(opts.ControlURL, accessToken, accessKey, secretKey, opts.SpaceID)
-	client.HTTPClient = &http.Client{Timeout: 2 * time.Minute}
-	if client.ServiceAuth != nil {
-		client.ServiceAuth.Caller = caller
-		client.ServiceAuth.TargetNode = targetNode
-		client.ServiceAuth.CAFile = serviceCAFile
-	}
-	return client, cleanup, nil
+	return &adminclient.Client{Gateway: gateway, SpaceID: opts.SpaceID}, func() { _ = gateway.Close() }, nil
 }

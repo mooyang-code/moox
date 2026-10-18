@@ -2,14 +2,15 @@ package command
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
-	"os"
-	"path/filepath"
-	"testing"
 )
 
 func TestGetFullVersionInfoDefaultsToDev(t *testing.T) {
@@ -38,7 +39,7 @@ func TestBuildMetadataImportCallsFromSeed(t *testing.T) {
 		}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "spot_kline", DataSourceID: "binance",
-			Name: "Spot Kline", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", KeepDuration: "1h", Freqs: []string{"1m"},
+			Name: "Spot Kline", DataKind: "TIME_SERIES", DataNodeID: "storage-node-0", Freq: "1m",
 		}},
 	}
 	calls, err := buildMetadataImportCalls(seed)
@@ -62,14 +63,6 @@ func TestMetadataNotFound(t *testing.T) {
 	assert.True(t, metadataNotFound(&pb.RetInfo{Code: pb.ErrorCode_DATASET_NOT_FOUND}))
 	assert.True(t, metadataNotFound(&pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: "dataset not found"}))
 	assert.False(t, metadataNotFound(&pb.RetInfo{Code: pb.ErrorCode_SUCCESS}))
-}
-
-func TestDefaultMetadataImportURL(t *testing.T) {
-	t.Setenv("MOOX_METADATA_URL", "")
-	assert.Equal(t, "http://127.0.0.1:20200", defaultMetadataImportURL(""))
-	assert.Equal(t, "http://meta:20200", defaultMetadataImportURL("meta:20200"))
-	t.Setenv("MOOX_METADATA_URL", "http://env-meta:20200")
-	assert.Equal(t, "http://env-meta:20200", defaultMetadataImportURL(""))
 }
 
 func TestCountMetadataCalls(t *testing.T) {
@@ -114,7 +107,7 @@ func TestSeedToPBHelpers(t *testing.T) {
 }
 
 func TestRunMetadataImportWithNoCalls(t *testing.T) {
-	summary, err := runMetadataImport(context.Background(), "http://unused", nil, false)
+	summary, err := runMetadataImport(context.Background(), nil, nil, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, summary.Applied)
 }
@@ -141,48 +134,12 @@ func (b *bytesBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func TestParseCollectorOverridesAndSetDefaultEnv(t *testing.T) {
-	got := parseCollectorOverrides([]string{" A = 1 ", "bad", "B=2"})
-	assert.Equal(t, map[string]string{"A": "1", "B": "2"}, got)
-	env := map[string]string{}
-	setDefaultEnv(env, "K", "v")
-	setDefaultEnv(env, "EMPTY", " ")
-	assert.Equal(t, "v", env["K"])
-}
-
-func TestCollectorFunctionEnvironmentOmitsEmptyCA(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_CA_FILE", "")
-	t.Setenv("MOOX_GATEWAY_CA_PEM_B64", "")
-	t.Setenv("TENCENTCLOUD_SECRET_ID", "test-cls-id")
-	t.Setenv("TENCENTCLOUD_SECRET_KEY", "test-cls-key")
-	env, err := collectorFunctionEnvironment(collectorPublishOptions{})
-	require.NoError(t, err)
-	assert.NotContains(t, env, "MOOX_GATEWAY_CA_FILE")
-	assert.NotContains(t, env, "MOOX_GATEWAY_CA_PEM_B64")
-}
-
-func TestNewControlClientSetsServiceAuth(t *testing.T) {
-	t.Setenv("MOOX_GATEWAY_NODE_ID", "gateway-gz-122")
-	t.Setenv("MOOX_GATEWAY_SERVICE_KEY_ID", "ak")
-	t.Setenv("MOOX_GATEWAY_SERVICE_SECRET_KEY", "sk")
-	client := newControlClient("http://control", "", "", "", "crypto")
-	require.NotNil(t, client.ServiceAuth)
-	assert.Equal(t, "ak", client.ServiceAuth.AccessKey)
-	assert.Equal(t, "gateway-gz-122", client.ServiceAuth.TargetNode)
-}
-
-func TestDeployCollectorFunctionValidatesRequiredFields(t *testing.T) {
-	_, err := deployCollectorFunction(context.Background(), collectorDeployOptions{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "control-url")
-}
-
 func TestRunStorageImportDryRunPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.csv")
 	content := "meta\nignore\nopen_time,close\n2026-01-02T03:04:05Z,1.25\n"
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	meta := fakeStorageImportMeta{
-		dataset: &pb.Dataset{DatasetId: "kline", Freqs: []string{"1m"}, Status: "active"},
+		dataset: &pb.Dataset{DatasetId: "kline", Freq: "1m", Status: "active"},
 		subject: &pb.Subject{SubjectId: "BTC", Status: "active"},
 		columns: []*pb.DatasetColumn{
 			{ColumnName: "open_time", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_TIME, Required: true, Status: "active"},
@@ -190,7 +147,7 @@ func TestRunStorageImportDryRunPath(t *testing.T) {
 		},
 	}
 	summary, err := runStorageImport(context.Background(), storageImportOptions{
-		Format: "csv", File: path, MetadataURL: "http://meta", AccessURL: "http://access",
+		Format: "csv", File: path,
 		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", TimeColumn: "open_time",
 		DryRun: true,
 	}, meta, fakeStorageWriter{})

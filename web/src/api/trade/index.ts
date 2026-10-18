@@ -130,13 +130,6 @@ export function listLogicalAccounts(page: Page = {}) {
   );
 }
 
-export function updateLogicalAccount(logical_account_id: string, name: string) {
-  return callTrade<{ logical_account_id: string; name: string }, LogicalAccountResponse>("console", "UpdateLogicalAccount", {
-    logical_account_id,
-    name
-  });
-}
-
 export function addLogicalAccountMember(req: AddLogicalAccountMemberReq) {
   return callTrade<AddLogicalAccountMemberReq, LogicalAccountResponse>("console", "AddLogicalAccountMember", req);
 }
@@ -222,10 +215,6 @@ export function listPositions(req: ListPositionsReq) {
 
 export const exchangeLabels: Record<number, string> = { 0: "-", 1: "Binance", 2: "OKX" };
 export const marketTypeLabels: Record<number, string> = { 0: "-", 1: "SPOT", 2: "SWAP" };
-export const executionModeLabels: Record<number, string> = { 0: "-", 1: "Paper", 2: "Live" };
-export const environmentLabels: Record<number, string> = { 0: "-", 1: "Testnet", 2: "Production" };
-export const orderTypeLabels: Record<number, string> = { 0: "-", 1: "MARKET", 2: "LIMIT" };
-export const fillPolicyLabels: Record<number, string> = { 0: "-", 1: "GTC", 2: "IOC", 3: "FOK" };
 export const orderSideLabels: Record<number, string> = { 0: "-", 1: "买入", 2: "卖出" };
 export const orderSideColors: Record<number, string> = { 0: "gray", 1: "red", 2: "green" };
 export const logicalAutomationStateLabels: Record<string, string> = {

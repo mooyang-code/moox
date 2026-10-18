@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"net/url"
+	"time"
+)
 
 const (
 	CheckStatusOK       = "ok"
@@ -20,6 +24,7 @@ type CheckResult struct {
 	Connected    bool      `gorm:"column:c_connected"`
 	LatencyMS    int64     `gorm:"column:c_latency_ms"`
 	ErrorMessage string    `gorm:"column:c_error_message"`
+	RawError     string    `gorm:"column:c_raw_error"`
 	BodyExcerpt  string    `gorm:"column:c_body_excerpt"`
 	CheckedAt    time.Time `gorm:"column:c_checked_at"`
 	CreatedAt    time.Time `gorm:"column:c_ctime"`
@@ -27,4 +32,10 @@ type CheckResult struct {
 
 func (CheckResult) TableName() string {
 	return "t_monitor_check_results"
+}
+
+// ScopedResultID 生成采样结果 ID。c_result_id 全局唯一而检查 ID 不含空间：
+// 两个空间的同名检查在同一轮采样里共用同一时刻，必须把空间编码进 ID，否则后插入者会被静默忽略。
+func ScopedResultID(spaceID, checkID string, at time.Time) string {
+	return fmt.Sprintf("%s/%s-%d", url.PathEscape(spaceID), checkID, at.UnixNano())
 }

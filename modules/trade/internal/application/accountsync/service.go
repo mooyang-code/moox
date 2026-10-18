@@ -50,7 +50,9 @@ type Result struct {
 	UnknownOrdersResolved  int
 	ExternalFactsImported  bool
 	Ready                  bool
-	Warnings               []string
+	// BalancePending 表示本轮完整同步没有确认待确认水位（成交或私有余额更新之后的余额）：同步请求本身成功，但余额尚未确认。
+	BalancePending bool
+	Warnings       []string
 }
 
 type Snapshot struct {
@@ -95,7 +97,12 @@ func (s *Service) SyncAccount(
 	maxDifference := 0.0
 	defer func() {
 		if s.Metrics != nil {
-			s.Metrics.Observe(tradingAccountID, s.now(), maxDifference, err)
+			observed := err
+			if observed == nil && result.BalancePending {
+				// 同步请求执行成功不等于余额已确认：余额长期未追上待确认水位时，监控必须看到失败而不是“同步新鲜”
+				observed = errBalanceNotConfirmed
+			}
+			s.Metrics.Observe(tradingAccountID, s.now(), maxDifference, observed)
 		}
 	}()
 	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
@@ -281,13 +288,21 @@ func (s *Service) ApplySnapshot(
 	if err := s.validate(); err != nil {
 		return Result{}, err
 	}
-	unlockMembership := s.Store.LockLogicalAccountMembership()
+	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
+	if err != nil {
+		return Result{}, err
+	}
 	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
 	if err != nil {
 		unlockMembership()
 		return Result{}, err
 	}
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if err != nil {
+		unlockExecution()
+		unlockMembership()
+		return Result{}, err
+	}
 	result, err := s.applySnapshot(ctx, tradingAccountID, snapshot)
 	unlock()
 	if err == nil && result.ExternalFactsImported {
@@ -370,21 +385,38 @@ func (s *Service) applySnapshot(
 		}
 		positionRecords = append(positionRecords, positionRecord(account, position))
 	}
+	// 空持仓/缺失持仓的删除边界：持仓列表是先于本轮成交读取的，不能用后取的余额时间当边界，
+	// 否则刚补录成交投影出的持仓会被当作“交易所没有”而删除。边界不晚于本轮最早成交之前。
+	positionDeleteBefore := snapshot.Account.ExchangeUpdatedAt.UnixMilli()
+	for _, fill := range snapshot.Fills {
+		if earliest := fill.TradedAt.UnixMilli() - 1; earliest < positionDeleteBefore {
+			positionDeleteBefore = earliest
+		}
+	}
+	if positionDeleteBefore <= 0 {
+		positionDeleteBefore = 1
+	}
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.ReplacePositionsForAccount(
 			account.SpaceID,
 			account.TradingAccountID,
 			positionRecords,
-			snapshot.Account.ExchangeUpdatedAt.UnixMilli(),
+			positionDeleteBefore,
 		)
 	}); err != nil {
 		return s.fail(ctx, account, err)
 	}
 	result.PositionsUpdated = len(positionRecords)
 
-	if snapshot.Account.ExchangeUpdatedAt.UnixMilli() >= account.SnapshotSourceTime {
+	// 完整快照既不能早于已采用的完整快照，也不能早于私有余额更新已合并进来的时间：旧 REST 不得覆盖更新的字段。
+	snapshotTime := snapshot.Account.ExchangeUpdatedAt.UnixMilli()
+	freshness := account.SnapshotSourceTime
+	if account.Snapshot.ExchangeUpdatedAt > freshness {
+		freshness = account.Snapshot.ExchangeUpdatedAt
+	}
+	if snapshotTime >= freshness {
 		account.Snapshot = snapshotRecord(snapshot.Account)
-		account.SnapshotSourceTime = snapshot.Account.ExchangeUpdatedAt.UnixMilli()
+		account.SnapshotSourceTime = snapshotTime
 		result.AccountSnapshotUpdated = true
 	} else {
 		result.Warnings = append(
@@ -397,6 +429,40 @@ func (s *Service) applySnapshot(
 	if snapshot.FillCursors == nil {
 		snapshot.FillCursors = account.FillCursors
 	}
+	// 待确认水位：只有被采用且覆盖水位的完整余额快照才能清零并恢复准入；
+	// 否则余额仍是成交/私有更新之前的值，沿用旧的 LastSyncAt 抵扣边界并保持未就绪。
+	// 本轮刚补录的成交已在入账事务内抬高了水位（account 是处理成交之前读取的），这里重新读取，
+	// 避免成交之前读到的余额快照误清零水位。
+	latest, latestErr := s.Store.GetTradingAccountByID(ctx, account.TradingAccountID)
+	if latestErr != nil {
+		return Result{}, latestErr
+	}
+	pending := latest.BalancePendingUntil
+	// 订单累计成交仍领先本地成交明细时，余额没有被这些成交的明细解释，不能恢复准入（与水位是否为零无关：
+	// 首次导入的终态外部订单、由首笔成交触发的导入都可能在水位为零时留下缺口）。
+	gaps, gapErr := s.Store.CountOrdersWithFillGap(ctx, account.SpaceID, account.TradingAccountID)
+	if gapErr != nil {
+		return Result{}, gapErr
+	}
+	hasGap := gaps > 0
+	if hasGap {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("%d 个订单的累计成交仍领先已入账的成交明细", gaps))
+	}
+	clearPending := result.AccountSnapshotUpdated && snapshotTime >= pending && !hasGap
+	readinessCause := ""
+	if (pending > 0 || hasGap) && !clearPending {
+		snapshot.Ready = false
+		result.Ready = false
+		result.BalancePending = true
+		readinessCause = awaitingBalanceReason
+		result.Warnings = append(result.Warnings, "balance snapshot does not cover the pending fill or private update; admission stays closed")
+	}
+	// LastSyncAt 同时是资金预留的抵扣边界：只有余额快照真正被采用且没有遗留待确认水位时才能推进；
+	// 否则已提交订单的预留会被误认为已反映在余额中，导致可用资金被高估。
+	syncBoundary := now
+	if (!result.AccountSnapshotUpdated || ((pending > 0 || hasGap) && !clearPending)) && account.LastSyncAt > 0 {
+		syncBoundary = account.LastSyncAt
+	}
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.UpdateTradingAccountFacts(
 			account.SpaceID,
@@ -404,16 +470,21 @@ func (s *Service) applySnapshot(
 			snapshot.FillCursors,
 			account.Snapshot,
 			account.SnapshotSourceTime,
-			now,
+			syncBoundary,
 		); err != nil {
 			return err
+		}
+		if clearPending && pending > 0 {
+			if err := tx.ClearBalancePendingThrough(account.SpaceID, account.TradingAccountID, snapshotTime); err != nil {
+				return err
+			}
 		}
 		return tx.UpdateTradingAccountReadiness(
 			account.SpaceID,
 			account.TradingAccountID,
 			snapshot.Ready,
 			now,
-			"",
+			readinessCause,
 		)
 	})
 	if err != nil {
@@ -467,6 +538,11 @@ func (s *Service) resolveUnknownOrders(
 	return result, nil
 }
 
+// awaitingBalanceReason 是私有成交释放预留后、余额快照尚未确认期间持久化的未就绪原因。
+var errBalanceNotConfirmed = errors.New("trade account sync: balance snapshot does not cover the pending fill or private update")
+
+const awaitingBalanceReason = "private fill awaiting balance sync"
+
 func (s *Service) ApplyFill(
 	ctx context.Context,
 	tradingAccountID string,
@@ -475,14 +551,20 @@ func (s *Service) ApplyFill(
 	if err := s.validate(); err != nil {
 		return false, err
 	}
-	unlockMembership := s.Store.LockLogicalAccountMembership()
+	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
+	if err != nil {
+		return false, err
+	}
 	defer unlockMembership()
 	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
 	if err != nil {
 		return false, err
 	}
 	defer unlockExecution()
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
@@ -513,14 +595,20 @@ func (s *Service) ApplyOrder(
 	if err := s.validate(); err != nil {
 		return err
 	}
-	unlockMembership := s.Store.LockLogicalAccountMembership()
+	unlockMembership, err := s.Store.LockLogicalAccountMembershipContext(ctx)
+	if err != nil {
+		return err
+	}
 	defer unlockMembership()
 	unlockExecution, err := s.lockLogicalAccountExecution(ctx, tradingAccountID)
 	if err != nil {
 		return err
 	}
 	defer unlockExecution()
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, err := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if err != nil {
+		return err
+	}
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
@@ -545,7 +633,10 @@ func (s *Service) ApplyPosition(
 	if err := s.validate(); err != nil {
 		return err
 	}
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, lockErr := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if lockErr != nil {
+		return lockErr
+	}
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
@@ -604,7 +695,10 @@ func (s *Service) ApplyAccountSnapshot(
 	if err := s.validate(); err != nil {
 		return err
 	}
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, lockErr := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if lockErr != nil {
+		return lockErr
+	}
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
@@ -625,6 +719,10 @@ func (s *Service) ApplyAccountSnapshot(
 			account.TradingAccountID,
 			merged,
 		); err != nil {
+			return err
+		}
+		// 私有更新只合并了部分字段：完整余额快照覆盖这个时间之前，不能恢复准入
+		if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, snapshot.ExchangeUpdatedAt.UnixMilli()); err != nil {
 			return err
 		}
 		return tx.UpdateTradingAccountReadiness(
@@ -651,7 +749,10 @@ func (s *Service) SetReady(
 	if s == nil || s.Store == nil {
 		return ErrServiceConfig
 	}
-	unlock := s.Store.LockTradingAccount(tradingAccountID)
+	unlock, lockErr := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
+	if lockErr != nil {
+		return lockErr
+	}
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
 		unlock()
@@ -675,6 +776,10 @@ func (s *Service) setReady(
 	lastError := ""
 	if cause != nil && !errors.Is(cause, context.Canceled) {
 		lastError = cause.Error()
+	}
+	if ready && account.BalancePendingUntil > 0 {
+		// 还有未被完整余额快照覆盖的成交或私有更新：不能仅凭会话就绪恢复准入
+		ready, lastError = false, awaitingBalanceReason
 	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpdateTradingAccountReadiness(
@@ -777,8 +882,14 @@ func (s *Service) ensureOrderForFill(
 	// lookup adapters return a cached order without the requested symbol (or
 	// with a stale one); never let that collapse fills from two instruments.
 	current.ExchangeSymbol = fill.ExchangeSymbol
-	_, err = s.importExternalOrder(ctx, account, current)
-	return err == nil, err
+	imported, err := s.importExternalOrder(ctx, account, current)
+	if err != nil {
+		return false, err
+	}
+	if err := s.observeOrderFills(ctx, account, imported, current); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func fillBatchKey(fill exchange.Fill) string {
@@ -824,10 +935,16 @@ func (s *Service) applyOrder(
 		if err != nil {
 			return false, false, "", err
 		}
+		if observeErr := s.observeOrderFills(ctx, account, record, current); observeErr != nil {
+			return false, false, "", observeErr
+		}
 		return true, true, "", s.applyOrderState(ctx, record, current)
 	}
 	if err != nil {
 		return false, false, "", err
+	}
+	if observeErr := s.observeOrderFills(ctx, account, record, current); observeErr != nil {
+		return false, false, "", observeErr
 	}
 	storedFilled := shared.MustDecimal(record.FilledQuantity)
 	externalChanged := record.OwnerType == string(orderdomain.OwnerExternal) &&
@@ -846,6 +963,40 @@ func (s *Service) applyOrder(
 		), s.applyOrderState(ctx, record, current)
 	}
 	return true, externalChanged, "", s.applyOrderState(ctx, record, current)
+}
+
+// observeOrderFills 在所有订单入口（已有订单更新、首次导入、由成交触发的导入）统一记录交易所观察到的累计成交量；
+// 累计成交领先本地成交明细时，终态转换会释放预留，而余额还没有反映这些成交，所以先抬高待确认水位并关闭准入，
+// 明细补齐且余额覆盖该时间后才由完整同步恢复。
+func (s *Service) observeOrderFills(
+	ctx context.Context,
+	account store.TradingAccountRecord,
+	record store.OrderRecord,
+	current exchange.Order,
+) error {
+	stored, parseErr := shared.ParseDecimal(record.FilledQuantity)
+	if parseErr != nil {
+		return parseErr
+	}
+	ahead := current.FilledQuantity.Cmp(stored) > 0 && account.ExecutionMode != string(exchange.ExecutionModePaper)
+	until := current.UpdatedAt.UnixMilli()
+	if until <= 0 {
+		until = s.now().UnixMilli()
+	}
+	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.RaiseObservedFilledQuantity(record.SpaceID, record.OrderID, current.FilledQuantity); err != nil {
+			return err
+		}
+		if !ahead {
+			return nil
+		}
+		if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, until); err != nil {
+			return err
+		}
+		return tx.UpdateTradingAccountReadiness(
+			account.SpaceID, account.TradingAccountID, false, s.now().UnixMilli(), awaitingBalanceReason,
+		)
+	})
 }
 
 func (s *Service) applyOrderState(

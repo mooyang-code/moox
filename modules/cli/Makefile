@@ -1,7 +1,7 @@
 ROOT := ../..
 APP_NAME := moox-cli
 
-.PHONY: help build build-linux build-darwin build-windows build-all clean deps lint install release linux darwin windows
+.PHONY: help build build-linux build-darwin build-windows build-all clean deps lint install linux darwin windows
 
 help:
 	@echo "MooX CLI module"
@@ -9,7 +9,6 @@ help:
 	@echo "Targets proxy to repository-level scripts:"
 	@echo "  make build        - build moox-cli for local platform"
 	@echo "  make build-linux  - build moox-cli for linux/amd64"
-	@echo "  make release      - create repository release package"
 	@echo "  make clean        - remove local build artifacts"
 
 build:
@@ -38,9 +37,6 @@ lint:
 install: build
 	@mkdir -p $(ROOT)/bin
 	@cp bin/$(APP_NAME) $(ROOT)/bin/$(APP_NAME) 2>/dev/null || true
-
-release:
-	@cd $(ROOT) && ./scripts/release/release.sh
 
 linux: build-linux
 darwin: build-darwin

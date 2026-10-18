@@ -19,7 +19,7 @@ server:
     read_timeout: 3000
     write_timeout: 960000
   service:
-    - name: trpc.moox.gateway.control
+    - name: trpc.moox.admin.Console
       ip: 127.0.0.1
       port: 11000
       network: tcp
@@ -37,60 +37,66 @@ server:
       ip: 127.0.0.1
       port: 11100
       network: tcp
-      protocol: http
-      timeout: 10000
-    - name: trpc.moox.infra.Dns
-      ip: 127.0.0.1
-      port: 11101
-      network: tcp
-      protocol: http
+      protocol: trpc
+      transport: go-net
       timeout: 10000
     - name: trpc.moox.ops.Ssh
       ip: 127.0.0.1
       port: 11106
       network: tcp
-      protocol: http
+      protocol: trpc
+      transport: go-net
       timeout: 30000
     - name: trpc.moox.admin.SpaceMgr
       ip: 127.0.0.1
       port: 11107
       network: tcp
-      protocol: http
+      protocol: trpc
+      transport: go-net
       timeout: 10000
     - name: trpc.moox.ops.SecretMgr
       ip: 127.0.0.1
       port: 11108
       network: tcp
-      protocol: http
+      protocol: trpc
+      transport: go-net
       timeout: 10000
     - name: trpc.moox.ops.SysDeploy
       ip: 127.0.0.1
       port: 11109
       network: tcp
-      protocol: http
-      timeout: 10000
+      protocol: trpc
+      transport: go-net
+      # EventBus 维护（清除主题等）单次最多等 5 分钟，要不小于服务目录里的方法超时。
+      timeout: 300000
     - name: trpc.moox.admin.Setup
       ip: 127.0.0.1
       port: 11110
       network: tcp
-      protocol: http
+      protocol: trpc
+      transport: go-net
       timeout: 30000
     - name: trpc.moox.admin.CollectorPublishLease
       ip: 127.0.0.1
       port: 11111
       network: tcp
-      protocol: http
+      protocol: trpc
+      transport: go-net
       timeout: 10000
-    - name: trpc.dnsproxy.timer
-      port: 11301
-      network: "0 */5 * * * *?scheduler=dnsproxySchedule"
-      protocol: timer
-      timeout: 60000
-    - name: trpc.dnsprobe.timer
-      port: 11302
-      network: "0 */5 * * * *?scheduler=dnsProbeSchedule"
-      protocol: timer
-      timeout: 60000
+    - name: trpc.moox.admin.ActivityLog
+      ip: 127.0.0.1
+      port: 11113
+      network: tcp
+      protocol: trpc
+      transport: go-net
+      timeout: 10000
+    - name: trpc.moox.admin.GatewayControl
+      ip: 127.0.0.1
+      port: 11112
+      network: tcp
+      protocol: trpc
+      transport: go-net
+      timeout: 5000
     - name: trpc.moox.admin.metrics.timer
       port: 11305
       network: "*/30 * * * * *"
@@ -105,7 +111,13 @@ server:
       port: 11307
       network: "0 0 0 * * *"
       protocol: timer
-      timeout: 10000
+      timeout: 30000
+    # Daily system garbage collection, offset from midnight jobs and the top of the hour.
+    - name: trpc.moox.admin.garbage_collection.timer
+      port: 11308
+      network: "0 47 3 * * *"
+      protocol: timer
+      timeout: 900000
 
 client:
   filter:
@@ -125,5 +137,14 @@ plugins:
       client_validate_err_code: 100102
   log:
     default:
-      - writer: console
+      - writer: file
         level: info
+        writer_config:
+          # 框架日志按大小轮转，单个文件 10MB、保留 5 份、最多 7 天；标准输出/错误主要是崩溃信息和数据库（GORM）日志，由 moox-runtime 启动前按大小轮转，持续报错时仍可能增长。
+          log_path: ./logs
+          filename: trpc.log
+          roll_type: size
+          max_age: 7
+          max_size: 10
+          max_backups: 5
+          compress: false

@@ -39,13 +39,6 @@ func TestDatasetEventSubjectsAreExactAndDatasetScoped(t *testing.T) {
 	require.NotEqual(t, subjects, other)
 }
 
-func TestValidatePurgeEventBusURLsRejectsPlaintextRemoteAdminCredential(t *testing.T) {
-	require.Error(t, validatePurgeEventBusURLs([]string{"nats://203.0.113.10:4222"}, ""))
-	require.Error(t, validatePurgeEventBusURLs([]string{"tls://203.0.113.10:4222"}, ""))
-	require.NoError(t, validatePurgeEventBusURLs([]string{"nats://127.0.0.1:4222"}, ""))
-	require.NoError(t, validatePurgeEventBusURLs([]string{"tls://203.0.113.10:4222"}, "ca.pem"))
-}
-
 func TestPurgeDatasetEventsCallsPurgeAfterConfirmation(t *testing.T) {
 	original := purgeDatasetEventSubjects
 	t.Cleanup(func() { purgeDatasetEventSubjects = original })

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by scripts/deploy/deploy-archive-worker.sh. The environment is
+     explicit: no HTTP(S)_PROXY reaches the worker. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.moox.archive-worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__ROOT__/bin/moox-archive-worker</string>
+    <string>-config</string>
+    <string>__ROOT__/config/app.yaml</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__ROOT__</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>MOOX_HEALTH_AUTH_VERSION</key>
+    <string>moox-health-v1</string>
+    <key>MOOX_HEALTH_AUTH_ACCESS_KEY</key>
+    <string>__HEALTH_ACCESS_KEY__</string>
+    <key>MOOX_HEALTH_AUTH_SECRET_KEY</key>
+    <string>__HEALTH_SECRET_KEY__</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>__ROOT__/logs/archive-worker.log</string>
+  <key>StandardErrorPath</key>
+  <string>__ROOT__/logs/archive-worker.log</string>
+</dict>
+</plist>

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/x509"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -22,37 +21,34 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/nats-io/nats.go"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
 const (
-	defaultRepairJSName   = events.StorageViewConsumerStream
-	defaultRepairConsumer = events.StorageViewKlineConsumer
+	defaultRepairJSName = events.StorageViewConsumerStream
+	// Each View has its own durable, so the consumer to reset is named
+	// explicitly with --consumer.
+	defaultRepairConsumer = ""
 	defaultRepairTimeout  = 2 * time.Minute
 )
 
 type repairViewOptions struct {
-	action         string
-	spaceID        string
-	viewID         string
-	storageConf    string
-	packageRoot    string
-	stream         string
-	consumer       string
-	credentialFile string
-	eventBusURL    string
-	deliverPolicy  string
-	lookback       time.Duration
-	timeout        time.Duration
-	yes            bool
-	dryRun         bool
-	resetConsumer  bool
-	forceRebuild   bool
-	restart        bool
-	purgeInactive  bool
-	resetView      bool
+	action        string
+	spaceID       string
+	viewID        string
+	storageConf   string
+	packageRoot   string
+	stream        string
+	consumer      string
+	deliverPolicy string
+	timeout       time.Duration
+	yes           bool
+	dryRun        bool
+	resetConsumer bool
+	forceRebuild  bool
+	restart       bool
+	purgeInactive bool
+	resetView     bool
 }
 
 type repairViewSummary struct {
@@ -69,7 +65,6 @@ type repairViewSummary struct {
 	InactiveIndexesRemoved  []string `json:"inactive_indexes_removed,omitempty"`
 	ViewIndexesRemoved      []string `json:"view_indexes_removed,omitempty"`
 	ViewReset               bool     `json:"view_reset"`
-	RebuildLookback         string   `json:"rebuild_lookback,omitempty"`
 	Restarted               bool     `json:"restarted"`
 	DryRun                  bool     `json:"dry_run"`
 	Warnings                []string `json:"warnings,omitempty"`
@@ -110,19 +105,16 @@ func runRepairView(args []string, stdout io.Writer, stderr io.Writer) error {
 }
 
 type forceRebuildViewOptions struct {
-	spaceID        string
-	viewID         string
-	storageConf    string
-	packageRoot    string
-	stream         string
-	consumer       string
-	credentialFile string
-	eventBusURL    string
-	lookback       time.Duration
-	timeout        time.Duration
-	yes            bool
-	dryRun         bool
-	restart        bool
+	spaceID     string
+	viewID      string
+	storageConf string
+	packageRoot string
+	stream      string
+	consumer    string
+	timeout     time.Duration
+	yes         bool
+	dryRun      bool
+	restart     bool
 }
 
 func runForceRebuildView(args []string, stdout io.Writer, stderr io.Writer) error {
@@ -135,9 +127,6 @@ func runForceRebuildView(args []string, stdout io.Writer, stderr io.Writer) erro
 	fs.StringVar(&opts.packageRoot, "package-root", "", "storage package root containing start.sh/stop.sh")
 	fs.StringVar(&opts.stream, "stream", opts.stream, "JetStream stream")
 	fs.StringVar(&opts.consumer, "consumer", opts.consumer, "durable storage View consumer")
-	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential file")
-	fs.StringVar(&opts.eventBusURL, "eventbus-url", "", "NATS URL override")
-	fs.DurationVar(&opts.lookback, "lookback", 0, "preferred history to backfill; shortage does not block activation")
 	fs.DurationVar(&opts.timeout, "timeout", opts.timeout, "overall operation timeout")
 	fs.BoolVar(&opts.yes, "yes", false, "confirm permanent View/index/consumer deletion")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "inspect the View without changing state")
@@ -158,23 +147,20 @@ func runForceRebuildView(args []string, stdout io.Writer, stderr io.Writer) erro
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 	return runRepairViewOperation(ctx, repairViewOptions{
-		action:         "force-rebuild-view",
-		spaceID:        opts.spaceID,
-		viewID:         opts.viewID,
-		storageConf:    opts.storageConf,
-		packageRoot:    opts.packageRoot,
-		stream:         opts.stream,
-		consumer:       opts.consumer,
-		credentialFile: opts.credentialFile,
-		eventBusURL:    opts.eventBusURL,
-		deliverPolicy:  "all",
-		lookback:       opts.lookback,
-		timeout:        opts.timeout,
-		yes:            opts.yes,
-		dryRun:         opts.dryRun,
-		resetConsumer:  true,
-		restart:        opts.restart,
-		resetView:      true,
+		action:        "force-rebuild-view",
+		spaceID:       opts.spaceID,
+		viewID:        opts.viewID,
+		storageConf:   opts.storageConf,
+		packageRoot:   opts.packageRoot,
+		stream:        opts.stream,
+		consumer:      opts.consumer,
+		deliverPolicy: "all",
+		timeout:       opts.timeout,
+		yes:           opts.yes,
+		dryRun:        opts.dryRun,
+		resetConsumer: true,
+		restart:       opts.restart,
+		resetView:     true,
 	}, stdout, stderr)
 }
 
@@ -182,14 +168,14 @@ func validateForceRebuildViewOptions(opts forceRebuildViewOptions) error {
 	if strings.TrimSpace(opts.spaceID) == "" || strings.TrimSpace(opts.viewID) == "" {
 		return errors.New("--space-id and --view-id are required")
 	}
-	if opts.lookback <= 0 {
-		return errors.New("--lookback must be a positive duration")
-	}
 	if opts.timeout <= 0 {
 		return errors.New("--timeout must be positive")
 	}
 	if strings.TrimSpace(opts.stream) == "" || strings.TrimSpace(opts.consumer) == "" {
 		return errors.New("--stream and --consumer must not be empty")
+	}
+	if err := checkViewConsumers(opts.consumer); err != nil {
+		return fmt.Errorf("--consumer: %w", err)
 	}
 	if !opts.yes && !opts.dryRun {
 		return errors.New("force-rebuild-view permanently deletes the View indexes and consumer; re-run with --yes, or use --dry-run")
@@ -201,7 +187,7 @@ func writeForceRebuildViewUsage(fs *flag.FlagSet, stdout io.Writer) {
 	if stdout == nil {
 		stdout = io.Discard
 	}
-	fmt.Fprintln(stdout, "用法: moox-cli storage force-rebuild-view --space-id <space> --view-id <view> --lookback <duration> --yes")
+	fmt.Fprintln(stdout, "用法: moox-cli storage force-rebuild-view --space-id <space> --view-id <view> --yes")
 	fmt.Fprintln(stdout, "操作: 停止 storage-view、删除 durable consumer、删除旧 View 索引和运行时指针，从可重放事件重新创建 View")
 	fs.SetOutput(stdout)
 	fs.PrintDefaults()
@@ -232,9 +218,6 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 		DesiredRevision:         nextViewRevision(record.DesiredRevision),
 		DryRun:                  opts.dryRun,
 	}
-	if opts.lookback > 0 {
-		summary.RebuildLookback = opts.lookback.String()
-	}
 	if summary.ActiveIndexID != "" {
 		summary.Warnings = append(summary.Warnings, "active view index is preserved; the rebuild uses the normal A/B switch path")
 	}
@@ -244,6 +227,13 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 	if opts.resetView {
 		summary.Warnings = append(summary.Warnings, "reset-view-indexes deletes both physical slots and requires replayable source events")
 	}
+	// 要删消费者时，在停止任何服务之前先确认网关、Admin 与 EventBus 都可用、流存在：
+	// 否则可能 View 已被停止才发现连不上。dry-run 也走这一步，让它真正成为预检。
+	if opts.resetConsumer {
+		if err := preflightRepairConsumer(ctx, opts.storageConf, packageRoot, opts.stream, opts.consumer); err != nil {
+			return fmt.Errorf("preflight EventBus: %w", err)
+		}
+	}
 	if opts.dryRun {
 		return writeOperationResult(stdout, operationResult{Module: "storage", Action: opts.action, Status: "dry_run", Summary: summary})
 	}
@@ -251,14 +241,14 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 		return errors.New("repair-view changes the durable consumer and metadata; re-run with --yes, or use --dry-run")
 	}
 
-	if err := runRepairLifecycle(ctx, packageRoot, "stop", opts.deliverPolicy, opts.lookback, stderr); err != nil {
+	if err := runRepairLifecycle(ctx, packageRoot, "stop", opts.deliverPolicy, stderr); err != nil {
 		return fmt.Errorf("stop storage-view: %w", err)
 	}
 	stopped := true
 	started := false
 	defer func() {
 		if stopped && !started && opts.restart {
-			_ = runRepairLifecycle(context.Background(), packageRoot, "start", opts.deliverPolicy, opts.lookback, stderr)
+			_ = runRepairLifecycle(context.Background(), packageRoot, "start", opts.deliverPolicy, stderr)
 		}
 	}()
 
@@ -268,12 +258,7 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 	}
 	summary.BackupPath = backupPath
 	if opts.resetConsumer {
-		deleted, err := deleteRepairConsumer(ctx, repairConsumerOptions{
-			Stream:         opts.stream,
-			Consumer:       opts.consumer,
-			CredentialFile: opts.credentialFile,
-			EventBusURL:    opts.eventBusURL,
-		})
+		deleted, err := deleteRepairConsumer(ctx, opts.storageConf, packageRoot, opts.stream, opts.consumer)
 		if err != nil {
 			return fmt.Errorf("reset storage view consumer: %w", err)
 		}
@@ -311,7 +296,7 @@ func runRepairViewOperation(ctx context.Context, opts repairViewOptions, stdout,
 		summary.InactiveIndexesRemoved = removed
 	}
 	if opts.restart {
-		if err := runRepairLifecycle(ctx, packageRoot, "start", opts.deliverPolicy, opts.lookback, stderr); err != nil {
+		if err := runRepairLifecycle(ctx, packageRoot, "start", opts.deliverPolicy, stderr); err != nil {
 			return fmt.Errorf("start storage-view: %w", err)
 		}
 		started = true
@@ -334,10 +319,7 @@ func bindRepairViewFlags(fs *flag.FlagSet, opts *repairViewOptions) {
 	fs.StringVar(&opts.packageRoot, "package-root", "", "storage package root containing start.sh/stop.sh")
 	fs.StringVar(&opts.stream, "stream", defaultRepairJSName, "JetStream stream")
 	fs.StringVar(&opts.consumer, "consumer", defaultRepairConsumer, "durable storage View consumer")
-	fs.StringVar(&opts.credentialFile, "credential-file", "", "NATS admin credential file")
-	fs.StringVar(&opts.eventBusURL, "eventbus-url", "", "NATS URL override")
 	fs.StringVar(&opts.deliverPolicy, "deliver-policy", "new", "consumer policy after reset: new or all")
-	fs.DurationVar(&opts.lookback, "lookback", 0, "preferred history for every rebuilt View; shortage does not block activation")
 	fs.DurationVar(&opts.timeout, "timeout", defaultRepairTimeout, "overall operation timeout")
 	fs.BoolVar(&opts.yes, "yes", false, "confirm the maintenance operation")
 	fs.BoolVar(&opts.dryRun, "dry-run", false, "inspect the View without stopping services or changing state")
@@ -383,6 +365,11 @@ func validateRepairViewOptions(opts *repairViewOptions) error {
 	if strings.TrimSpace(opts.stream) == "" || strings.TrimSpace(opts.consumer) == "" {
 		return errors.New("--stream and --consumer must not be empty")
 	}
+	if opts.resetConsumer {
+		if err := checkViewConsumers(opts.consumer); err != nil {
+			return fmt.Errorf("--consumer: %w", err)
+		}
+	}
 	policy := strings.ToLower(strings.TrimSpace(opts.deliverPolicy))
 	if policy != "new" && policy != "all" {
 		return fmt.Errorf("--deliver-policy %q is unsupported; want new or all", opts.deliverPolicy)
@@ -396,9 +383,6 @@ func validateRepairViewOptions(opts *repairViewOptions) error {
 	}
 	if opts.resetView && opts.deliverPolicy != "all" {
 		return errors.New("--reset-view-indexes requires --deliver-policy=all so retained source events can replay")
-	}
-	if opts.resetView && opts.lookback <= 0 {
-		return errors.New("--reset-view-indexes requires a positive --lookback")
 	}
 	return nil
 }
@@ -432,7 +416,45 @@ func findLifecycleRoot(candidate string) string {
 	}
 }
 
+// nativeComponentDirs 返回原生部署里 storage-primary、storage-node、storage-view 三个组件的目录（都存在才算原生布局）。
+func nativeComponentDirs(packageRoot string) (primary, node, view string, ok bool) {
+	root := strings.TrimSpace(packageRoot)
+	if root == "" {
+		return "", "", "", false
+	}
+	dirs := [3]string{filepath.Join(root, "storage-primary"), filepath.Join(root, "storage-node"), filepath.Join(root, "storage-view")}
+	for _, dir := range dirs {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			return "", "", "", false
+		}
+	}
+	return dirs[0], dirs[1], dirs[2], true
+}
+
+// resolveRepairStoragePaths 把配置里的相对数据路径解析成绝对路径。
+//
+// 原生部署里三个角色各有目录与配置（<包根>/<组件>/config/storage.yaml），配置里的数据路径（./var/storage/...）
+// 相对于所属组件的目录，而不是相对于被读取的那一份配置：元数据库在 storage-primary，Pebble 在 storage-node，
+// View 索引在 storage-view。只按被读取配置所在的组件目录解析，会把 Pebble、索引指到不存在的目录，
+// “重置全部数据”删不到真正的数据却照样清空事件流。没有这三个组件目录时（单目录布局）按配置所在目录解析。
 func resolveRepairStoragePaths(storage storageconfig.StorageConfig, packageRoot, configPath string) storageconfig.StorageConfig {
+	if primary, node, view, ok := nativeComponentDirs(packageRoot); ok {
+		join := func(dir, path string) string {
+			if strings.TrimSpace(path) == "" || filepath.IsAbs(path) {
+				return path
+			}
+			return filepath.Clean(filepath.Join(dir, path))
+		}
+		storage.Root = join(primary, storage.Root)
+		storage.Metadata.Path = join(primary, storage.Metadata.Path)
+		storage.Devices.PebblePath = join(node, storage.Devices.PebblePath)
+		storage.Devices.ViewIndexRoot = join(view, storage.Devices.ViewIndexRoot)
+		return storage
+	}
+	return resolveSingleDirStoragePaths(storage, packageRoot, configPath)
+}
+
+func resolveSingleDirStoragePaths(storage storageconfig.StorageConfig, packageRoot, configPath string) storageconfig.StorageConfig {
 	// Runtime configs use paths relative to their component directory while
 	// lifecycle scripts live at the deployment root. Keep those bases separate:
 	// <deploy>/storage/config/storage.yaml with root ../data/storage resolves to
@@ -750,100 +772,53 @@ func purgeRepairViewIndexes(root, engine string, indexIDs ...string) ([]string, 
 	return removed, nil
 }
 
-type repairConsumerOptions struct {
-	Stream, Consumer, CredentialFile, EventBusURL string
-}
-
-func deleteJetStreamConsumer(ctx context.Context, opts repairConsumerOptions) (bool, error) {
-	credentialPath := resolveRepairCredentialFile(opts.CredentialFile)
-	if credentialPath == "" {
-		return false, errors.New("NATS admin credential is required; pass --credential-file or MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE")
+// preflightRepairConsumer 不改动任何状态，确认能经 Admin 访问 EventBus 且流存在。
+var preflightRepairConsumer = func(ctx context.Context, storageConf, packageRoot, stream, consumer string) error {
+	if err := checkViewConsumers(consumer); err != nil {
+		return err
 	}
-	cred, err := jetstream.LoadCredentialFile(credentialPath)
-	if err != nil {
-		return false, err
-	}
-	urls := cred.URLs
-	if strings.TrimSpace(opts.EventBusURL) != "" {
-		urls = []string{strings.TrimSpace(opts.EventBusURL)}
-	}
-	if len(urls) == 0 {
-		urls = []string{"tls://127.0.0.1:4222"}
-	}
-	natsOpts := []nats.Option{nats.Name("moox-storage-cli-repair-view"), nats.UserInfo(cred.Username, cred.Password)}
-	if cred.CAFile != "" {
-		caPath := jetstream.ExpandCredentialPath(cred.CAFile)
-		if !filepath.IsAbs(caPath) {
-			caPath = filepath.Join(filepath.Dir(credentialPath), caPath)
-		}
-		if err := appendNATSTLSOptions(&natsOpts, caPath); err != nil {
-			return false, err
-		}
-	}
-	// nats.Connect has its own dial timeout; keep consumer reset from consuming
-	// the entire maintenance deadline when the local broker is unavailable.
-	natsOpts = append(natsOpts, nats.Timeout(15*time.Second))
-	nc, err := nats.Connect(strings.Join(urls, ","), natsOpts...)
-	if err != nil {
-		return false, err
-	}
-	defer nc.Close()
-	js, err := nc.JetStream()
-	if err != nil {
-		return false, err
-	}
-	err = js.DeleteConsumer(opts.Stream, opts.Consumer)
-	if errors.Is(err, nats.ErrConsumerNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func appendNATSTLSOptions(opts *[]nats.Option, caPath string) error {
-	caPath = jetstream.ExpandCredentialPath(caPath)
-	ca, err := os.ReadFile(caPath)
+	admin, err := openEventBusAdmin(storageConf, packageRoot)
 	if err != nil {
 		return err
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(ca) {
-		return errors.New("NATS CA file contains no certificates")
+	defer admin.Close()
+	_, err = admin.Inspect(ctx, stream, []string{consumer})
+	return err
+}
+
+// deleteJetStreamConsumer 经 Admin 删除 View 消费者；消费者本来就不存在时返回 false。
+func deleteJetStreamConsumer(ctx context.Context, storageConf, packageRoot, stream, consumer string) (bool, error) {
+	if err := checkViewConsumers(consumer); err != nil {
+		return false, err
 	}
-	*opts = append(*opts, nats.RootCAs(caPath), nats.Secure(), nats.TLSHandshakeFirst())
-	return nil
-}
-
-func resolveRepairCredentialFile(configured string) string {
-	for _, value := range []string{
-		configured,
-		os.Getenv("MOOX_STORAGE_EVENTBUS_ADMIN_CREDENTIAL_FILE"),
-		os.Getenv("MOOX_EVENTBUS_INTERNAL_ADMIN_CREDENTIAL_FILE"),
-		os.Getenv("MOOX_EVENTBUS_INTERNAL_CREDENTIAL_FILE"),
-		"~/.config/moox/eventbus/internal-admin.yaml",
-	} {
-		if value = strings.TrimSpace(value); value != "" {
-			return jetstream.ExpandCredentialPath(value)
-		}
+	admin, err := openEventBusAdmin(storageConf, packageRoot)
+	if err != nil {
+		return false, err
 	}
-	return ""
+	defer admin.Close()
+	deleted, _, err := admin.DeleteConsumers(ctx, stream, []string{consumer})
+	return len(deleted) > 0, err
 }
 
-func runStorageViewLifecycle(ctx context.Context, packageRoot, action, deliverPolicy string, lookback time.Duration, stderr io.Writer) error {
-	return runStorageComponentLifecycle(ctx, packageRoot, action, "storage-view", lookback, stderr)
+// lifecycleScriptArgs 是传给 start.sh / stop.sh 的参数。原生部署的脚本转给 moox-runtime，它不接受位置参数：
+// 整个 Storage 单元（serviceName 为 "storage"）不带参数，单个组件用 --components 选择。
+func lifecycleScriptArgs(serviceName string) []string {
+	serviceName = strings.TrimSpace(serviceName)
+	if serviceName == "" || serviceName == "storage" {
+		return nil
+	}
+	return []string{"--components", serviceName}
 }
 
-func runStorageComponentLifecycle(ctx context.Context, packageRoot, action, serviceName string, lookback time.Duration, stderr io.Writer) error {
-	return runStorageComponentLifecycleWithOptions(ctx, packageRoot, action, serviceName, lookback, false, stderr)
+func runStorageViewLifecycle(ctx context.Context, packageRoot, action, deliverPolicy string, stderr io.Writer) error {
+	return runStorageComponentLifecycle(ctx, packageRoot, action, "storage-view", stderr)
 }
 
-func runStorageComponentLifecycleWithReplay(ctx context.Context, packageRoot, action, serviceName string, lookback time.Duration, stderr io.Writer) error {
-	return runStorageComponentLifecycleWithOptions(ctx, packageRoot, action, serviceName, lookback, true, stderr)
+func runStorageComponentLifecycle(ctx context.Context, packageRoot, action, serviceName string, stderr io.Writer) error {
+	return runStorageComponentLifecycleWithOptions(ctx, packageRoot, action, serviceName, false, stderr)
 }
 
-func runStorageComponentLifecycleWithOptions(ctx context.Context, packageRoot, action, serviceName string, lookback time.Duration, replayPending bool, stderr io.Writer) error {
+func runStorageComponentLifecycleWithOptions(ctx context.Context, packageRoot, action, serviceName string, replayPending bool, stderr io.Writer) error {
 	packageRoot = strings.TrimSpace(packageRoot)
 	if packageRoot == "" {
 		return errors.New("storage package root is empty; pass --package-root")
@@ -852,15 +827,11 @@ func runStorageComponentLifecycleWithOptions(ctx context.Context, packageRoot, a
 	if info, err := os.Stat(script); err != nil || info.IsDir() {
 		return fmt.Errorf("storage package %s is unavailable", packageRoot)
 	}
-	cmd := exec.CommandContext(ctx, script, serviceName)
+	cmd := exec.CommandContext(ctx, script, lifecycleScriptArgs(serviceName)...)
 	cmd.Dir = packageRoot
 	cmd.Stderr = stderr
 	cmd.Stdout = stderr
 	env := append([]string(nil), os.Environ()...)
-	// Rebuild lookback is owned by storage-view/config/maintenance.json. The
-	// lifecycle helper keeps the argument for readiness validation but never
-	// mutates the service's policy through an ad-hoc environment override.
-	_ = lookback
 	if replayPending {
 		env = append(env, "MOOX_STORAGE_VIEW_REPLAY_PENDING=1")
 	}

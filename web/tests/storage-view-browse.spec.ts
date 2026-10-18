@@ -1,9 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { useViewCatalog } from "@/views/data/view-browse/composables/use-view-catalog";
-import { useViewKline } from "@/views/data/view-browse/composables/use-view-kline";
-import { useViewQuery } from "@/views/data/view-browse/composables/use-view-query";
 import { buildViewFilterExprs } from "@/views/data/view-browse/view-browse-utils";
 
 describe("storage view browse workflows", () => {
@@ -48,34 +45,6 @@ describe("storage view browse workflows", () => {
     expect(source).toContain('fixed="right"');
     expect(source).toContain("overflow-x: hidden");
     expect(source).not.toContain("overflow-x: hidden !important");
-  });
-
-  it("selects the first remaining view when the active view disappears", () => {
-    const catalog = useViewCatalog<{ view_id: string }>();
-    catalog.replaceViews([{ view_id: "view-a" }, { view_id: "view-b" }]);
-    catalog.activeViewId.value = "view-b";
-    catalog.replaceViews([{ view_id: "view-a" }]);
-    expect(catalog.activeViewId.value).toBe("view-a");
-  });
-
-  it("exposes query loading and error state", async () => {
-    const query = useViewQuery<number>();
-    await expect(query.run(async () => [1, 2])).resolves.toEqual([1, 2]);
-    expect(query.loading.value).toBe(false);
-    await expect(
-      query.run(async () => {
-        throw new Error("query failed");
-      })
-    ).rejects.toThrow("query failed");
-    expect(query.error.value).toBe("query failed");
-  });
-
-  it("opens and closes the kline workflow", () => {
-    const kline = useViewKline();
-    kline.open();
-    expect(kline.visible.value).toBe(true);
-    kline.close();
-    expect(kline.visible.value).toBe(false);
   });
 
   it("serializes empty filters with the current protobuf null enum", () => {

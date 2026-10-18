@@ -360,3 +360,38 @@ func validSpec() OrderSpec {
 		},
 	}
 }
+
+// 订单状态同步可能先看到 EXPIRED、成交回报后到：迟到的真实成交必须被接收（去重与超量检查保持），不能让整个成交事务回滚。
+func TestExpiredOrderStillAcceptsLateFills(t *testing.T) {
+	order, _, err := New("order-1", validSpec())
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	for _, step := range []func() ([]Event, error){
+		order.BeginSubmit,
+		func() ([]Event, error) { return order.Acknowledge("exchange-1") },
+		order.Expire,
+	} {
+		if _, err := step(); err != nil {
+			t.Fatalf("setup error = %v", err)
+		}
+	}
+	if _, err := order.ApplyFill(Fill{ID: "fill-1", Quantity: shared.MustDecimal("0.4")}); err != nil {
+		t.Fatalf("late partial fill error = %v", err)
+	}
+	if order.State != Expired || order.FilledQuantity.Cmp(shared.MustDecimal("0.4")) != 0 {
+		t.Fatalf("after partial fill state = %s filled = %s", order.State, order.FilledQuantity)
+	}
+	if events, err := order.ApplyFill(Fill{ID: "fill-1", Quantity: shared.MustDecimal("0.4")}); err != nil || len(events) != 0 {
+		t.Fatalf("duplicate fill = %v, %v", events, err)
+	}
+	if _, err := order.ApplyFill(Fill{ID: "fill-big", Quantity: shared.MustDecimal("0.7")}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("over-quantity fill error = %v", err)
+	}
+	if _, err := order.ApplyFill(Fill{ID: "fill-2", Quantity: shared.MustDecimal("0.6")}); err != nil {
+		t.Fatalf("late final fill error = %v", err)
+	}
+	if order.State != Filled {
+		t.Fatalf("state = %s, want %s", order.State, Filled)
+	}
+}

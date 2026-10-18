@@ -30,7 +30,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/health"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	tradeobservability "github.com/mooyang-code/moox/modules/trade/internal/observability"
-	tradeResolver "github.com/mooyang-code/moox/modules/trade/internal/resolver"
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
@@ -71,16 +70,16 @@ func initialize(
 		}
 	}()
 
-	secrets := secretclient.New(secretclient.Config{
-		GatewayBaseURL: cfg.Admin.BaseURL,
-		ServiceAuth: secretclient.ServiceAuthConfig{
-			AccessKey:  cfg.Admin.ServiceAuth.AccessKey,
-			SecretKey:  cfg.Admin.ServiceAuth.SecretKey,
-			TargetNode: cfg.Admin.ServiceAuth.TargetNode,
-			CAFile:     cfg.Admin.ServiceAuth.CAFile,
-			ExpireSecs: cfg.Admin.ServiceAuth.ExpireSeconds,
-		},
-	})
+	gateway, err := cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "trade gateway directory refresh failed: %v", err) })
+	if err != nil {
+		return nil, fmt.Errorf("initialize trade gateway: %w", err)
+	}
+	defer func() {
+		if cleanupStore {
+			_ = gateway.Close()
+		}
+	}()
+	secrets := secretclient.New(gateway)
 	registry := execution.NewRegistry()
 	registerBuiltins(registry)
 	tradeStore.SetModuleMetrics(registerMetricsReporter(serverInstance))
@@ -259,23 +258,6 @@ func initialize(
 		}, nil
 	}
 
-	var dnsResolver *tradeResolver.Resolver
-	if cfg.DNSResolver.Enabled {
-		dnsMetrics, metricsErr := tradeResolver.NewMetrics(prometheus.DefaultRegisterer)
-		if metricsErr != nil {
-			return nil, fmt.Errorf("register Trade DNS resolver metrics: %w", metricsErr)
-		}
-		dnsResolver = tradeResolver.New(tradeResolver.Config{
-			Domains:         cfg.DNSResolver.Domains,
-			LookupTimeout:   time.Duration(cfg.DNSResolver.LookupTimeoutMS) * time.Millisecond,
-			ProbeTimeout:    time.Duration(cfg.DNSResolver.ProbeTimeoutMS) * time.Millisecond,
-			ProbePort:       cfg.DNSResolver.ProbePort,
-			CacheTTL:        time.Duration(cfg.DNSResolver.CacheTTLSeconds) * time.Second,
-			MaxIPsPerDomain: cfg.DNSResolver.MaxIPsPerDomain,
-			Metrics:         dnsMetrics,
-		})
-	}
-
 	var eventBus *jetstream.Client
 	var targetConsumerReady atomic.Bool
 	if cfg.EventBus.Enabled {
@@ -397,7 +379,7 @@ func initialize(
 				return result.Action, result.Order, cancelErr
 			},
 		},
-		&rpc.DNSResolverServer{Resolver: dnsResolver},
+
 		rpc.ConsoleOptions{
 			Paper:              &papersimulation.Service{Store: tradeStore},
 			LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
@@ -432,6 +414,7 @@ func initialize(
 			eventBus.Close()
 		}
 		workers.Wait()
+		_ = gateway.Close()
 		_ = tradeStore.Close()
 	})
 	cleanupStore = false
@@ -679,7 +662,7 @@ func registerMetricsReporter(serverInstance *server.Server) *report.ModuleMetric
 		log.Warnf("trade module metrics disabled: %v", err)
 		return nil
 	}
-	handler, err := report.NewHandler(report.DefaultConfig("trade", "moox_trade"))
+	handler, err := report.NewHandler(report.DefaultConfig("trade", "trade"))
 	if err != nil {
 		log.Warnf("trade metrics reporter disabled: %v", err)
 		return moduleMetrics

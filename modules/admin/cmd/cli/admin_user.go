@@ -75,11 +75,10 @@ func runAdminUserCommand(args []string, stdin io.Reader, stdout, stderr io.Write
 	}
 	defer closeAdminCLIDB(db)
 
+	// 管理员密码设定后不能修改（配置备份用它加密）；需要别的账号时用新用户名再 ensure 一个管理员。
 	switch args[1] {
 	case "ensure":
 		return ensureAdminUser(db, username, password, stdout)
-	case "reset-password":
-		return resetAdminUserPassword(db, username, password, stdout)
 	default:
 		return fmt.Errorf("unknown user subcommand %q", args[1])
 	}
@@ -119,23 +118,6 @@ func ensureAdminUser(db *gorm.DB, username, password string, stdout io.Writer) e
 	}
 	return json.NewEncoder(stdout).Encode(map[string]any{
 		"status": "ok", "command": "user.ensure", "action": action, "username": username,
-	})
-}
-
-func resetAdminUserPassword(db *gorm.DB, username, password string, stdout io.Writer) error {
-	hash, err := mooxsecurity.HashPassword(password)
-	if err != nil {
-		return err
-	}
-	result := db.Table("t_users").Where("c_username = ? AND c_is_deleted = 0", username).UpdateColumn("c_password_hash", hash)
-	if result.Error != nil {
-		return fmt.Errorf("reset admin password: %w", result.Error)
-	}
-	if result.RowsAffected != 1 {
-		return fmt.Errorf("user %q not found", username)
-	}
-	return json.NewEncoder(stdout).Encode(map[string]any{
-		"status": "ok", "command": "user.reset-password", "action": "password_reset", "username": username,
 	})
 }
 

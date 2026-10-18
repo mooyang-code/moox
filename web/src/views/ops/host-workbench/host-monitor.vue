@@ -60,6 +60,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
 import { listSSHHosts, type SSHHost } from "@/api/modules/ssh";
 import HostMonitorCardGrid from "./host-monitor-card-grid.vue";
@@ -67,6 +68,9 @@ import HostMonitorMasterDetail from "./host-monitor-master-detail.vue";
 import HostMonitorDetail from "./host-monitor-detail.vue";
 import { buildHostMonitorRows, normalizeMonitorViewMode, type MonitorViewMode } from "./host-monitor-mapping";
 
+const route = useRoute();
+const requestedAgentID = computed(() => (typeof route.query.agent_id === "string" ? route.query.agent_id : ""));
+const requestedHostID = computed(() => (typeof route.query.host_id === "string" ? route.query.host_id : ""));
 const AUTO_REFRESH_MS = 15_000;
 const VIEW_MODE_KEY = "moox.host-monitor.view-mode";
 const loading = ref(false);
@@ -124,8 +128,15 @@ function stopAutoRefresh() {
 function manualRefresh() {
   return refreshData(true);
 }
-watch(rows, value => {
-  if (!value.length) selectedKey.value = "";
+watch([rows, requestedAgentID, requestedHostID], ([value, agentID, hostID]) => {
+  const requested = agentID
+    ? value.find(row => row.monitor?.host_id === agentID)
+    : hostID
+      ? value.find(row => row.monitor?.deployment_host_id === hostID)
+      : undefined;
+  if (requested) selectedKey.value = requested.key;
+  else if (agentID || hostID) selectedKey.value = "";
+  else if (!value.length) selectedKey.value = "";
   else if (!value.some(row => row.key === selectedKey.value)) selectedKey.value = value[0].key;
 });
 watch(viewMode, value => localStorage.setItem(VIEW_MODE_KEY, value));

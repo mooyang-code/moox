@@ -14,17 +14,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/strategy/internal/compiler"
-	"github.com/mooyang-code/moox/modules/strategy/internal/domain"
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/outbox"
-	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
@@ -32,13 +33,23 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Only the upstream market-data read is substituted. Processor evaluates the
-// persisted DSL, commits Result/Outbox atomically, and Relay publishes to NATS.
+const externalDSL = `name: external_e2e
+rules:
+  - id: r
+    type: rank
+    score: "bias"
+    select: {top: 1}
+    weight: {total: 0.5}
+portfolio:
+  max_missing: 1
+`
+
+// 只替换上游行情读取：处理器求值固化的 DSL，原子写入结果与待投递事件，再由 Relay 发布到 NATS。
 func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	natsURL := os.Getenv("MOOX_STRATEGY_TRADE_E2E_NATS_URL")
 	u, err := url.Parse(natsURL)
 	require.NoError(t, err)
-	require.Equal(t, "127.0.0.1", u.Hostname(), "external E2E requires its isolated local NATS")
+	require.Equal(t, "127.0.0.1", u.Hostname(), "外部端到端测试只连接隔离的本机 NATS")
 	nc, err := nats.Connect(natsURL)
 	require.NoError(t, err)
 	defer nc.Close()
@@ -46,75 +57,47 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	require.NoError(t, err)
 	_, err = js.AddStream(&nats.StreamConfig{Name: "MOOX_TRADE", Subjects: []string{"moox.event.trade.target.weight_requested.v1.>"}, Storage: nats.MemoryStorage})
 	require.NoError(t, err)
-	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.db"))
+	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = repo.Close() })
 	require.NoError(t, repo.ApplySchema(schema.AllSQL()))
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	bar := now.Truncate(time.Hour)
-	dsl := `name: external-e2e
-triggers:
-  event: {name: ViewDataReady}
-data: {bar: 1h, calendar: crypto_24x7}
-rules:
-  rank:
-    pool: [BTC-USDT, ETH-USDT]
-    score: bias
-    select: {top: 1}
-    weight: "0.5"
-`
-	require.NoError(t, repo.SaveStrategyDefinition(ctx, store.StrategyDefinition{StrategyID: "strategy-e2e", StrategyName: "external-e2e", DSLYaml: dsl, CreatedAt: now, UpdatedAt: now}))
-	logicalRaw, err := os.ReadFile(filepath.Join(os.Getenv("MOOX_STRATEGY_TRADE_E2E_COORD_DIR"), "logical-id"))
+	barStart := now.Truncate(time.Hour).Add(-time.Hour)
+	coord := os.Getenv("MOOX_STRATEGY_TRADE_E2E_COORD_DIR")
+	logicalRaw, err := os.ReadFile(filepath.Join(coord, "logical-id"))
 	require.NoError(t, err)
 	logical, session := string(logicalRaw), "session-e2e"
 	require.NotEmpty(t, logical)
-	require.NoError(t, repo.CreateInstance(ctx, store.StrategyInstance{InstanceID: "instance-e2e", StrategyID: "strategy-e2e", SpaceID: "space-e2e", LogicalAccountID: &logical, InputBindingsJSON: json.RawMessage(`{"source_view_id":"source","frequency":"1h"}`), Enabled: true, SessionID: &session, CreatedAt: now, UpdatedAt: now}))
-	endpoint, err := os.ReadFile(filepath.Join(os.Getenv("MOOX_STRATEGY_TRADE_E2E_COORD_DIR"), "trade-ready"))
+	hash := dsl.Hash([]byte(externalDSL))
+	require.NoError(t, repo.CreateDefinition(ctx, store.Definition{StrategyID: "strategy-e2e", Name: "external_e2e", DSLYaml: externalDSL, DSLHash: hash, CreatedAt: now}))
+	require.NoError(t, repo.CreateInstance(ctx, store.Instance{InstanceID: "instance-e2e", StrategyID: "strategy-e2e", SpaceID: "space-e2e", ViewID: "factor_view", LogicalAccountID: &logical, CreatedAt: now}))
+	resolved := input.Resolved{CompletionKind: events.FactorPeriodComputed.Name(), ViewID: "factor_view", DatasetID: "factor_ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias"}, ViewColumns: []string{"bias", "close"}}
+	resolvedJSON, err := json.Marshal(resolved)
+	require.NoError(t, err)
+	require.NoError(t, repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "instance-e2e", DSLHash: hash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, externalDSL))
+	require.NoError(t, repo.SetInstanceEnabled(ctx, "instance-e2e", false, &session, resolvedJSON, now))
+	require.NoError(t, repo.SetInstanceEnabled(ctx, "instance-e2e", true, &session, resolvedJSON, now))
+
+	// 启用时与进程启动时，Strategy 都要求 Trade 的账户所有者就是本实例本会话。
+	endpoint, err := os.ReadFile(filepath.Join(coord, "trade-ready"))
 	require.NoError(t, err)
 	tradeURL, err := url.Parse(string(endpoint))
 	require.NoError(t, err)
 	require.Equal(t, "127.0.0.1", tradeURL.Hostname())
-	var authorizationReads int
-	processor := &trigger.Processor{Store: repo, Loader: externalStrategyInput{}, Now: func() time.Time { return now }, Diagnostic: func(err error) { t.Logf("processor diagnostic: %v", err) },
-		SessionGeneration: func(ctx context.Context, space, account, instance, session string) (int64, error) {
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, string(endpoint)+"/logical-account?"+url.Values{"space_id": {space}, "logical_account_id": {account}}.Encode(), nil)
-			if err != nil {
-				return 0, err
-			}
-			response, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
-			if err != nil {
-				return 0, err
-			}
-			defer response.Body.Close()
-			body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-			if err != nil {
-				return 0, err
-			}
-			if response.StatusCode != http.StatusOK {
-				return 0, fmt.Errorf("Trade authorization HTTP %d: %s", response.StatusCode, body)
-			}
-			var result tradepb.GetLogicalAccountRsp
-			if err := protojson.Unmarshal(body, &result); err != nil {
-				return 0, err
-			}
-			logical := result.GetLogicalAccount()
-			if result.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS || logical.GetOwnerInstanceId() != instance || logical.GetOwnerSessionId() != session || logical.GetAutomationState() != "ACTIVE" || logical.GetControlMode() != tradepb.ControlMode_CONTROL_MODE_STRATEGY {
-				return 0, fmt.Errorf("Trade did not authorize instance %s session %s: %s", instance, session, body)
-			}
-			authorizationReads++
-			return 0, nil
-		},
-	}
-	event := trigger.PeriodReady{MessageID: "external-ready", EventName: "ViewDataReady", SpaceID: "space-e2e", ViewID: "factor", Frequency: "1h", PeriodTime: bar, BarEndTime: bar, Status: "complete"}
-	require.NoError(t, processor.Handle(ctx, event))
-	require.Equal(t, 1, authorizationReads)
-	result, err := repo.LatestResult(ctx, "instance-e2e", session)
+	require.NoError(t, requireTradeAuthorization(ctx, string(endpoint), "space-e2e", logical, "instance-e2e", session))
+
+	handler := &trigger.Handler{Store: repo, Loader: externalInput{}, Now: func() time.Time { return now }, Logf: t.Logf}
+	message := &eventpb.EventMessage{EventId: "external-ready", EventName: "event.storage.view.data_ready", SpaceId: "space-e2e"}
+	payload := &storagepb.ViewDataReady{CompletionKind: events.FactorPeriodComputed.Name(), ViewId: "factor_view", Frequency: "1h", PeriodTime: barStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, Factors: []*storagepb.FactorPeriodState{{FactorId: "bias", Status: "complete", DefinitionHash: "sha256:bias"}}}
+	require.NoError(t, handler.Handle(ctx, message, payload))
+	result, found, err := repo.LatestOk(ctx, "instance-e2e", session)
 	require.NoError(t, err)
+	require.True(t, found)
 	require.Equal(t, store.PublishPending, result.PublishStatus)
 	require.JSONEq(t, `[{"instrument_id":"BTC-USDT","target_weight":"0.5"}]`, string(result.TargetsJSON))
-	require.NoError(t, processor.Handle(ctx, event), "input redelivery must not create a second result")
+	require.NoError(t, handler.Handle(ctx, message, payload), "重复投递不能产生第二个结果")
 	client, err := jetstream.Connect(ctx, jetstream.Config{URLs: []string{natsURL}, Name: "strategy-e2e-publisher"})
 	require.NoError(t, err)
 	managed, err := outbox.NewManagedClient(client)
@@ -130,26 +113,63 @@ rules:
 	require.NoError(t, err)
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	message, err := registry.UnmarshalMessage(raw.Data)
+	decoded, err := registry.UnmarshalMessage(raw.Data)
 	require.NoError(t, err)
-	payload := new(tradeeventpb.LogicalAccountTargetWeightRequested)
-	require.NoError(t, proto.Unmarshal(message.GetPayload(), payload))
-	require.Equal(t, result.ResultID, payload.GetTargetId())
-	require.Equal(t, "instance-e2e", payload.GetInstanceId())
-	require.Equal(t, session, payload.GetSessionId())
-	require.Equal(t, "strategy-e2e", payload.GetStrategyId())
-	require.Equal(t, logical, payload.GetLogicalAccountId())
-	require.True(t, payload.GetBarEndTime().AsTime().Equal(bar))
-	require.True(t, payload.GetEffectiveAt().AsTime().Equal(bar))
-	require.True(t, payload.GetValidUntil().AsTime().After(now))
-	t.Logf("modern Processor -> Result -> Relay -> NATS: target=%s instance=%s session=%s weights=%s", result.ResultID, payload.GetInstanceId(), payload.GetSessionId(), result.TargetsJSON)
+	target := new(tradeeventpb.LogicalAccountTargetWeightRequested)
+	require.NoError(t, proto.Unmarshal(decoded.GetPayload(), target))
+	barEnd := barStart.Add(time.Hour)
+	require.Equal(t, result.ResultID, target.GetTargetId())
+	require.Equal(t, "instance-e2e", target.GetInstanceId())
+	require.Equal(t, session, target.GetSessionId())
+	require.Equal(t, "strategy-e2e", target.GetStrategyId())
+	require.Equal(t, logical, target.GetLogicalAccountId())
+	require.True(t, target.GetBarEndTime().AsTime().Equal(barEnd))
+	require.True(t, target.GetEffectiveAt().AsTime().Equal(barEnd))
+	require.True(t, target.GetValidUntil().AsTime().Equal(barEnd.Add(2*time.Hour)))
+	t.Logf("Handler → Result → Relay → NATS：target=%s instance=%s session=%s weights=%s", result.ResultID, target.GetInstanceId(), target.GetSessionId(), result.TargetsJSON)
 }
 
-type externalStrategyInput struct{}
+func requireTradeAuthorization(ctx context.Context, endpoint, space, account, instance, session string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/logical-account?"+url.Values{"space_id": {space}, "logical_account_id": {account}}.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	response, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("Trade 授权查询返回 HTTP %d：%s", response.StatusCode, body)
+	}
+	var result tradepb.GetLogicalAccountRsp
+	if err := protojson.Unmarshal(body, &result); err != nil {
+		return err
+	}
+	logical := result.GetLogicalAccount()
+	if result.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS || logical.GetOwnerInstanceId() != instance || logical.GetOwnerSessionId() != session || logical.GetAutomationState() != "ACTIVE" || logical.GetControlMode() != tradepb.ControlMode_CONTROL_MODE_STRATEGY {
+		return fmt.Errorf("Trade 没有授权实例 %s 的会话 %s：%s", instance, session, body)
+	}
+	return nil
+}
 
-func (externalStrategyInput) Load(_ context.Context, _ domain.StrategyRunner, _ compiler.CompiledStrategy, period time.Time) (input.EvaluationInput, error) {
-	return input.EvaluationInput{SpaceID: "space-e2e", StrategyID: "strategy-e2e", PeriodEnd: period.Format(time.RFC3339Nano), SourceViewID: "source", DataFrequency: "1h", Items: []input.InstrumentInput{
-		{PoolItem: input.PoolItem{InstrumentID: "BTC-USDT", SubjectID: "btc"}, Values: map[string]quant.Decimal{"bias": quant.Must("2")}},
-		{PoolItem: input.PoolItem{InstrumentID: "ETH-USDT", SubjectID: "eth"}, Values: map[string]quant.Decimal{"bias": quant.Must("1")}},
-	}}, nil
+// externalInput 是行情读取的替身：BTC 的 bias 高于 ETH。
+type externalInput struct{}
+
+func (externalInput) LoadBar(_ context.Context, _ string, resolved input.Resolved, _ *dsl.Program, bar input.Bar) (input.Loaded, error) {
+	boundary, err := input.FromStorageStart(resolved.Calendar, resolved.Bar, bar.BarStart)
+	if err != nil {
+		return input.Loaded{}, err
+	}
+	ids := []string{"BTC-USDT", "ETH-USDT"}
+	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Spot: true, Universe: ids, Expected: map[string][]string{"r": ids}, AgedOut: map[string][]string{}, Rows: map[string]engine.Row{
+		"BTC-USDT": {Values: map[string]float64{"bias": 2, "close": 100}},
+		"ETH-USDT": {Values: map[string]float64{"bias": 1, "close": 10}},
+	}}
+	subjects := map[string]input.Subject{"BTC-USDT": {SubjectID: "BTC-USDT", Active: true}, "ETH-USDT": {SubjectID: "ETH-USDT", Active: true}}
+	return input.Loaded{Frame: frame, Sets: input.Sets{Universe: ids, Expected: frame.Expected, AgedOut: frame.AgedOut, Subjects: subjects}, Boundary: boundary}, nil
 }

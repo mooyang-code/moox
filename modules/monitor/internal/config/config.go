@@ -3,27 +3,33 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Database       DatabaseConfig       `yaml:"database"`
-	Health         HealthConfig         `yaml:"health"`
-	HealthAuth     HealthAuthConfig     `yaml:"health_auth"`
-	Instance       InstanceConfig       `yaml:"instance"`
-	Scheduler      SchedulerConfig      `yaml:"scheduler"`
-	SysDeploy      SysDeployConfig      `yaml:"sysdeploy"`
-	Alert          AlertConfig          `yaml:"alert"`
-	Observability  ObservabilityConfig  `yaml:"observability"`
-	Metrics        MetricsConfig        `yaml:"metrics"`
-	MarketCanary   MarketCanaryConfig   `yaml:"market_canary"`
-	MarketHealth   MarketHealthConfig   `yaml:"market_health"`
-	KlineFreshness KlineFreshnessConfig `yaml:"kline_freshness"`
+	GatewayClient  gatewayclient.FileConfig `yaml:"gateway_client"`
+	sourcePath     string                   `yaml:"-"`
+	Database       DatabaseConfig           `yaml:"database"`
+	Health         HealthConfig             `yaml:"health"`
+	HealthAuth     HealthAuthConfig         `yaml:"health_auth"`
+	Instance       InstanceConfig           `yaml:"instance"`
+	Scheduler      SchedulerConfig          `yaml:"scheduler"`
+	Placement      PlacementConfig          `yaml:"placement"`
+	Alert          AlertConfig              `yaml:"alert"`
+	Observability  ObservabilityConfig      `yaml:"observability"`
+	Metrics        MetricsConfig            `yaml:"metrics"`
+	MarketCanary   MarketCanaryConfig       `yaml:"market_canary"`
+	MarketHealth   MarketHealthConfig       `yaml:"market_health"`
+	KlineFreshness KlineFreshnessConfig     `yaml:"kline_freshness"`
+	HostPolicy     HostPolicyConfig         `yaml:"host_policy"`
 }
 
 type DatabaseConfig struct {
@@ -54,17 +60,29 @@ type SchedulerConfig struct {
 	MaxConcurrency      int `yaml:"max_concurrency"`
 }
 
-type SysDeployConfig struct {
-	Enabled     bool              `yaml:"enabled"`
-	Target      string            `yaml:"target"`
-	ServiceAuth ServiceAuthConfig `yaml:"service_auth"`
+type PlacementConfig struct {
+	Enabled bool                          `yaml:"enabled"`
+	HTTPS   map[string]domain.HTTPSConfig `yaml:"https"`
+	// LocalHostID 是 Monitor 自己所在的部署主机 ID；该主机上的组件健康检查直接连 127.0.0.1。
+	// 主机没有私网地址时对外地址从本机访问常常不通（云厂商不回环公网 IP），会把健康的服务误报为超时。
+	LocalHostID string `yaml:"local_host_id"`
 }
 
-type ServiceAuthConfig struct {
-	KeyID      string `yaml:"key_id"`
-	SecretKey  string `yaml:"secret_key"`
-	TargetNode string `yaml:"target_node"`
-	CAFile     string `yaml:"ca_file"`
+// HostPolicyConfig 是经 GetHostPolicy 下发给各主机的主机策略里，除告警渠道以外的部分。
+type HostPolicyConfig struct {
+	Watchdog HostWatchdogConfig `yaml:"watchdog"`
+}
+
+// HostWatchdogConfig 是主机守护（moox-runtime watch）参数；零值表示各主机用守护自己的默认值。
+type HostWatchdogConfig struct {
+	Disabled          bool          `yaml:"disabled"`
+	MergeWindow       time.Duration `yaml:"merge_window"`
+	CrashLoopFailures int           `yaml:"crash_loop_failures"`
+	CrashLoopWindow   time.Duration `yaml:"crash_loop_window"`
+	CrashLoopRetry    time.Duration `yaml:"crash_loop_retry"`
+	CrashLoopSlow     time.Duration `yaml:"crash_loop_slow"`
+	StableAfter       time.Duration `yaml:"stable_after"`
+	NotReadyAlert     time.Duration `yaml:"not_ready_alert"`
 }
 
 type AlertConfig struct {
@@ -102,7 +120,6 @@ type MarketCanaryConfig struct {
 type MarketHealthConfig struct {
 	TimerCoordinationStaleAfter   time.Duration `yaml:"timer_coordination_stale_after"`
 	TimerCoordinationPendingGrace time.Duration `yaml:"timer_coordination_pending_grace"`
-	LowCapacityHeadroom           int           `yaml:"low_capacity_headroom"`
 	FeedFailureRateWindow         time.Duration `yaml:"feed_failure_rate_window"`
 	FeedFailureRateThreshold      float64       `yaml:"feed_failure_rate_threshold"`
 	InstrumentSnapshotMaxAge      time.Duration `yaml:"instrument_snapshot_max_age"`
@@ -113,13 +130,10 @@ type MarketHealthConfig struct {
 type KlineFreshnessConfig struct {
 	Enabled                  bool          `yaml:"enabled"`
 	SpaceIDs                 []string      `yaml:"space_ids"`
-	CollectorGatewayTarget   string        `yaml:"collector_gateway_target"`
-	CollectorGatewayNodeID   string        `yaml:"collector_gateway_node_id"`
 	EvaluationInterval       time.Duration `yaml:"evaluation_interval"`
 	InventoryRefreshInterval time.Duration `yaml:"inventory_refresh_interval"`
 	InventoryPageSize        int           `yaml:"inventory_page_size"`
 	InventoryMaxEntries      int           `yaml:"inventory_max_entries"`
-	StaleAfter               time.Duration `yaml:"stale_after"`
 	MaxSubjectsPerAlert      int           `yaml:"max_subjects_per_alert"`
 }
 
@@ -135,10 +149,6 @@ type MarketCanarySubject struct {
 }
 
 type MetricsStorageConfig struct {
-	GatewayTarget              string        `yaml:"gateway_target"`
-	GatewayNodeID              string        `yaml:"gateway_node_id"`
-	KeyID                      string        `yaml:"key_id"`
-	HMACKeyFile                string        `yaml:"hmac_key_file"`
 	SpaceID                    string        `yaml:"space_id"`
 	DatasetID                  string        `yaml:"dataset_id"`
 	Frequency                  string        `yaml:"frequency"`
@@ -146,13 +156,9 @@ type MetricsStorageConfig struct {
 	WriteBatchSize             int           `yaml:"write_batch_size"`
 }
 
-// HostStorageConfig controls the direct Storage path for host snapshots.
+// HostStorageConfig controls the Storage datasets for host snapshots.
 type HostStorageConfig struct {
 	Enabled                 bool          `yaml:"enabled"`
-	GatewayTarget           string        `yaml:"gateway_target"`
-	GatewayNodeID           string        `yaml:"gateway_node_id"`
-	KeyID                   string        `yaml:"key_id"`
-	HMACKeyFile             string        `yaml:"hmac_key_file"`
 	SpaceID                 string        `yaml:"space_id"`
 	Frequency               string        `yaml:"frequency"`
 	WriteTimeout            time.Duration `yaml:"write_timeout"`
@@ -170,14 +176,31 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve monitor config: %w", err)
+	}
 	cfg := Default()
+	cfg.sourcePath = absolutePath
 	decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("monitor config must contain exactly one YAML document")
+	}
 	cfg.applyDefaults()
 	cfg.applyEnv()
+	for id, target := range cfg.Placement.HTTPS {
+		for _, path := range []*string{&target.CAFile, &target.CABaseline} {
+			if *path != "" && !filepath.IsAbs(*path) {
+				*path = filepath.Join(filepath.Dir(absolutePath), *path)
+			}
+		}
+		cfg.Placement.HTTPS[id] = target
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -186,6 +209,7 @@ func Load(path string) (*Config, error) {
 
 func Default() *Config {
 	return &Config{
+		GatewayClient: gatewayclient.FileConfig{Caller: "monitor", KeyFile: "../../secrets/caller-monitor.key"},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
 			Path:            "./data/monitor/monitor.db",
@@ -205,22 +229,20 @@ func Default() *Config {
 			ResultRetentionDays: 14,
 			MaxConcurrency:      16,
 		},
-		SysDeploy: SysDeployConfig{
-			Enabled:     true,
-			Target:      "ip://127.0.0.1:11109",
-			ServiceAuth: ServiceAuthConfig{},
-		},
+		Placement: PlacementConfig{Enabled: true},
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
 		Observability: ObservabilityConfig{Enabled: true, DeliverPolicy: "all", EventBusURLs: []string{"nats://127.0.0.1:4222"}, BalanceDifferenceThreshold: 0.05},
-		MarketCanary:  MarketCanaryConfig{Enabled: true, Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99, Subjects: []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m", Symbol: "BTC-USDT", Frequency: "1m", SeriesTag: stringPointer("venue:binance|market:spot|source:spot_http")}}},
-		MarketHealth:  MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, LowCapacityHeadroom: 2, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
+		// Canary subjects name concrete collection results, so they come only
+		// from deployment config; without subjects the canary stays disabled.
+		MarketCanary: MarketCanaryConfig{Freshness: 3 * time.Minute, ReturnThreshold: 0.05, SettleDelay: 5 * time.Second, PostCloseDelay: time.Minute, CalendarWarningLead: 14 * 24 * time.Hour, ClosedBarCount: 3, ClosedBarMinCoverage: 0.99},
+		MarketHealth: MarketHealthConfig{TimerCoordinationStaleAfter: 15 * time.Minute, TimerCoordinationPendingGrace: 5 * time.Minute, FeedFailureRateWindow: 5 * time.Minute, FeedFailureRateThreshold: 0.2, InstrumentSnapshotMaxAge: 36 * time.Hour, InstrumentMinimumCount: 4000, InstrumentRequiredExchanges: []string{"XSHG", "XSHE", "XBSE"}},
 		KlineFreshness: KlineFreshnessConfig{
-			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, CollectorGatewayTarget: "ip://127.0.0.1:11003", EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
-			InventoryPageSize: 100, InventoryMaxEntries: 1000, StaleAfter: 5 * time.Minute, MaxSubjectsPerAlert: 20,
+			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
+			InventoryPageSize: 100, InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
 		},
-		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, GatewayTarget: "ip://127.0.0.1:11003", KeyID: "monitor", SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
+		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
 	}
 }
 
@@ -259,9 +281,6 @@ func (c *Config) applyDefaults() {
 	if c.Scheduler.MaxConcurrency == 0 {
 		c.Scheduler.MaxConcurrency = defaults.Scheduler.MaxConcurrency
 	}
-	if c.SysDeploy.Target == "" {
-		c.SysDeploy.Target = defaults.SysDeploy.Target
-	}
 	if c.Alert.SendTimeoutSeconds == 0 {
 		c.Alert.SendTimeoutSeconds = defaults.Alert.SendTimeoutSeconds
 	}
@@ -287,9 +306,6 @@ func (c *Config) applyDefaults() {
 	if c.MarketCanary.PostCloseDelay == 0 {
 		c.MarketCanary.PostCloseDelay = canaryDefaults.PostCloseDelay
 	}
-	if len(c.MarketCanary.Subjects) == 0 {
-		c.MarketCanary.Subjects = canaryDefaults.Subjects
-	}
 	if c.MarketCanary.ClosedBarMinCoverage == 0 {
 		c.MarketCanary.ClosedBarMinCoverage = canaryDefaults.ClosedBarMinCoverage
 	}
@@ -299,9 +315,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MarketHealth.TimerCoordinationPendingGrace == 0 {
 		c.MarketHealth.TimerCoordinationPendingGrace = marketHealthDefaults.TimerCoordinationPendingGrace
-	}
-	if c.MarketHealth.LowCapacityHeadroom == 0 {
-		c.MarketHealth.LowCapacityHeadroom = marketHealthDefaults.LowCapacityHeadroom
 	}
 	if c.MarketHealth.FeedFailureRateWindow == 0 {
 		c.MarketHealth.FeedFailureRateWindow = marketHealthDefaults.FeedFailureRateWindow
@@ -322,9 +335,6 @@ func (c *Config) applyDefaults() {
 	if c.KlineFreshness.EvaluationInterval == 0 {
 		c.KlineFreshness.EvaluationInterval = klineDefaults.EvaluationInterval
 	}
-	if c.KlineFreshness.CollectorGatewayTarget == "" {
-		c.KlineFreshness.CollectorGatewayTarget = klineDefaults.CollectorGatewayTarget
-	}
 	if len(c.KlineFreshness.SpaceIDs) == 0 {
 		c.KlineFreshness.SpaceIDs = append([]string(nil), klineDefaults.SpaceIDs...)
 	}
@@ -337,9 +347,6 @@ func (c *Config) applyDefaults() {
 	if c.KlineFreshness.InventoryMaxEntries == 0 {
 		c.KlineFreshness.InventoryMaxEntries = klineDefaults.InventoryMaxEntries
 	}
-	if c.KlineFreshness.StaleAfter == 0 {
-		c.KlineFreshness.StaleAfter = klineDefaults.StaleAfter
-	}
 	if c.KlineFreshness.MaxSubjectsPerAlert == 0 {
 		c.KlineFreshness.MaxSubjectsPerAlert = klineDefaults.MaxSubjectsPerAlert
 	}
@@ -348,12 +355,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Metrics.NoDataIntervals == 0 {
 		c.Metrics.NoDataIntervals = metricsDefaults.NoDataIntervals
-	}
-	if c.Metrics.Storage.GatewayTarget == "" {
-		c.Metrics.Storage.GatewayTarget = metricsDefaults.Storage.GatewayTarget
-	}
-	if c.Metrics.Storage.KeyID == "" {
-		c.Metrics.Storage.KeyID = metricsDefaults.Storage.KeyID
 	}
 	if c.Metrics.Storage.SpaceID == "" {
 		c.Metrics.Storage.SpaceID = metricsDefaults.Storage.SpaceID
@@ -369,12 +370,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Metrics.Storage.WriteBatchSize == 0 {
 		c.Metrics.Storage.WriteBatchSize = metricsDefaults.Storage.WriteBatchSize
-	}
-	if c.Metrics.HostStorage.GatewayTarget == "" {
-		c.Metrics.HostStorage.GatewayTarget = metricsDefaults.HostStorage.GatewayTarget
-	}
-	if c.Metrics.HostStorage.KeyID == "" {
-		c.Metrics.HostStorage.KeyID = metricsDefaults.HostStorage.KeyID
 	}
 	if c.Metrics.HostStorage.SpaceID == "" {
 		c.Metrics.HostStorage.SpaceID = metricsDefaults.HostStorage.SpaceID
@@ -427,9 +422,6 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("MOOX_MONITOR_INSTANCE_ID"); v != "" {
 		c.Instance.InstanceID = v
 	}
-	if v := os.Getenv("MOOX_MONITOR_SYSDEPLOY_TARGET"); v != "" {
-		c.SysDeploy.Target = v
-	}
 	if v := firstEnv("MOOX_OBSERVABILITY_EVENTBUS_URL", "MOOX_EVENTBUS_NATS_URL", "MOOX_EVENTBUS_URL"); v != "" {
 		c.Observability.EventBusURLs = strings.Split(v, ",")
 	}
@@ -442,36 +434,7 @@ func (c *Config) applyEnv() {
 	if v := strings.TrimSpace(os.Getenv("MOOX_DATASET_HEALTH_POLICY")); v != "" {
 		c.Metrics.DatasetHealthPolicyPath = v
 	}
-	if v := os.Getenv("MOOX_GATEWAY_NODE_ID"); v != "" {
-		c.SysDeploy.ServiceAuth.TargetNode = v
-		c.Metrics.Storage.GatewayNodeID = v
-		c.Metrics.HostStorage.GatewayNodeID = v
-	}
-	// SysDeploy authenticates through the local control gateway, while Storage
-	// may live behind a different gateway node. Keep these overrides separate.
-	if v := strings.TrimSpace(os.Getenv("MOOX_MONITOR_STORAGE_GATEWAY_TARGET")); v != "" {
-		c.Metrics.Storage.GatewayTarget = v
-		c.Metrics.HostStorage.GatewayTarget = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_MONITOR_STORAGE_GATEWAY_NODE_ID")); v != "" {
-		c.Metrics.Storage.GatewayNodeID = v
-		c.Metrics.HostStorage.GatewayNodeID = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_RPC_GATEWAY_TARGET")); v != "" {
-		c.KlineFreshness.CollectorGatewayTarget = v
-	}
-	if v := strings.TrimSpace(os.Getenv("MOOX_COLLECTOR_GATEWAY_TARGET_NODE")); v != "" {
-		c.KlineFreshness.CollectorGatewayNodeID = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID"); v != "" {
-		c.SysDeploy.ServiceAuth.KeyID = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"); v != "" {
-		c.SysDeploy.ServiceAuth.SecretKey = v
-	}
-	if v := os.Getenv("MOOX_GATEWAY_CA_FILE"); v != "" {
-		c.SysDeploy.ServiceAuth.CAFile = v
-	}
+
 }
 
 func (c *Config) Validate() error {
@@ -483,6 +446,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Alert.SendTimeoutSeconds <= 0 || c.Alert.SendTimeoutSeconds > 300 {
 		return fmt.Errorf("alert.send_timeout_seconds must be between 1 and 300")
+	}
+	watchdog := c.HostPolicy.Watchdog
+	if watchdog.CrashLoopFailures < 0 {
+		return fmt.Errorf("host_policy.watchdog.crash_loop_failures must not be negative")
+	}
+	for _, d := range []time.Duration{watchdog.MergeWindow, watchdog.CrashLoopWindow, watchdog.CrashLoopRetry, watchdog.CrashLoopSlow, watchdog.StableAfter, watchdog.NotReadyAlert} {
+		if d < 0 {
+			return fmt.Errorf("host_policy.watchdog durations must not be negative")
+		}
 	}
 	if c.Observability.Enabled {
 		if len(c.Observability.EventBusURLs) == 0 {
@@ -529,9 +501,6 @@ func (c *Config) Validate() error {
 	if c.MarketHealth.TimerCoordinationPendingGrace <= 0 {
 		return fmt.Errorf("market_health.timer_coordination_pending_grace must be positive")
 	}
-	if c.MarketHealth.LowCapacityHeadroom < 0 {
-		return fmt.Errorf("market_health.low_capacity_headroom must not be negative")
-	}
 	if c.MarketHealth.FeedFailureRateWindow <= 0 || c.MarketHealth.FeedFailureRateThreshold <= 0 || c.MarketHealth.FeedFailureRateThreshold > 1 {
 		return fmt.Errorf("market_health feed failure window and threshold are invalid")
 	}
@@ -541,8 +510,13 @@ func (c *Config) Validate() error {
 	if len(c.MarketHealth.InstrumentRequiredExchanges) == 0 {
 		return fmt.Errorf("market_health.instrument_required_exchanges must not be empty")
 	}
-	if c.SysDeploy.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
-		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when sysdeploy monitoring is enabled")
+	for id, target := range c.Placement.HTTPS {
+		if err := target.Validate(); err != nil {
+			return fmt.Errorf("placement.https.%s: %w", id, err)
+		}
+	}
+	if c.Placement.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
+		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when placement monitoring is enabled")
 	}
 	if c.Metrics.HostStorage.Enabled {
 		h := c.Metrics.HostStorage
@@ -561,16 +535,13 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	for name, values := range map[string][2]string{
-		"metrics.storage":      {c.Metrics.Storage.KeyID, c.Metrics.Storage.HMACKeyFile},
-		"metrics.host_storage": {c.Metrics.HostStorage.KeyID, c.Metrics.HostStorage.HMACKeyFile},
-	} {
-		if strings.TrimSpace(values[1]) != "" {
-			if _, err := gatewayauth.CredentialsFromKeyFile(values[0], values[1]); err != nil {
-				return fmt.Errorf("%s hmac credentials: %w", name, err)
-			}
-		}
+	if c.GatewayClient.Caller != "monitor" {
+		return fmt.Errorf("gateway_client.caller must be monitor")
 	}
+	if err := c.GatewayClient.Validate(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -602,17 +573,10 @@ func (c *Config) validateKlineFreshness() error {
 	if kline.InventoryMaxEntries < 1 || kline.InventoryMaxEntries > 1000 {
 		return fmt.Errorf("kline_freshness.inventory_max_entries must be between 1 and 1000")
 	}
-	if kline.StaleAfter < 2*kline.EvaluationInterval {
-		return fmt.Errorf("kline_freshness.stale_after must be at least twice evaluation_interval")
-	}
 	if kline.MaxSubjectsPerAlert < 1 || kline.MaxSubjectsPerAlert > 100 {
 		return fmt.Errorf("kline_freshness.max_subjects_per_alert must be between 1 and 100")
 	}
 	return nil
-}
-
-func stringPointer(value string) *string {
-	return &value
 }
 
 func defaultInstanceID() string {
@@ -630,4 +594,15 @@ func firstEnv(names ...string) string {
 		}
 	}
 	return ""
+}
+
+// OpenGateway owns the client shared by Storage, Collector and Admin consumers.
+func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	if c == nil || c.sourcePath == "" {
+		return nil, fmt.Errorf("monitor gateway client requires a loaded module configuration")
+	}
+	if c.GatewayClient.Caller != "monitor" {
+		return nil, fmt.Errorf("gateway_client.caller must be monitor")
+	}
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
 }

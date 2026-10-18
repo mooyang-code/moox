@@ -86,8 +86,10 @@ func (dm *Manager) GetCache() *badger.DB {
 
 func buildSQLiteDSN(dbPath string) string {
 	pragmas := []string{
+		"_pragma=foreign_keys(1)",
 		"_pragma=journal_mode(WAL)",
-		"_pragma=synchronous(OFF)",
+		// Topology and encrypted signing keys must survive a committed write.
+		"_pragma=synchronous(FULL)",
 		// SQLite has one writer. Keep a bounded wait for short lock
 		// contention, while the application-level retry handles the few
 		// bookkeeping updates that race with route/health writes.

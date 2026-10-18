@@ -126,7 +126,6 @@ message LogicalAccount {
   string logical_account_id = 1;
   string space_id = 2;
   string name = 3;
-  string owner_runner_id = 4;
   ExecutionMode execution_mode = 5;
   MarketType market_type = 6;
   string settlement_asset = 7;
@@ -138,8 +137,7 @@ message LogicalAccount {
   int64 created_at = 13;
   int64 updated_at = 14;
   int64 owner_generation = 15;
-  // New strategy lifecycle identity. The legacy owner_runner_id and
-  // owner_generation fields remain only for source compatibility.
+  // Strategy lifecycle identity of the current owner.
   string owner_instance_id = 16;
   string owner_session_id = 17;
   // Opaque compare-and-set token used by Strategy lifecycle calls. It is
@@ -229,6 +227,8 @@ message Position {
 message InstrumentTarget {
   string instrument_id = 1;
   string quantity = 2;
+  // hold 为 true 表示保持当前持仓数量不动，此时 quantity 为空。
+  bool hold = 3;
 }
 
 message BlockedTarget {
@@ -403,7 +403,6 @@ message RemoveLogicalAccountMemberRsp {
 
 message ClaimLogicalAccountOwnerReq {
   string logical_account_id = 1;
-  string runner_id = 2;
   string instance_id = 3;
   string session_id = 4;
   string expected_auth_fence = 5;
@@ -415,7 +414,6 @@ message ClaimLogicalAccountOwnerRsp {
 
 message ReleaseLogicalAccountOwnerReq {
   string logical_account_id = 1;
-  string runner_id = 2;
   string instance_id = 3;
   string session_id = 4;
   string expected_auth_fence = 5;
@@ -427,8 +425,6 @@ message ReleaseLogicalAccountOwnerRsp {
 
 message RebindLogicalAccountOwnerReq {
   string logical_account_id = 1;
-  string runner_id = 2;
-  string rebind_key = 3;
   string instance_id = 4;
   string session_id = 5;
   string expected_auth_fence = 6;
@@ -588,27 +584,6 @@ message ListPositionsRsp {
   repeated Position positions = 2;
 }
 
-message ResolveDomainsReq {
-  repeated string domains = 1;
-  uint32 max_ips_per_domain = 2;
-}
-
-message ResolvedIP {
-  string ip = 1;
-  uint32 tcp_connect_latency_ms = 2;
-}
-
-message DomainResolution {
-  string domain = 1;
-  repeated ResolvedIP ips = 2;
-}
-
-message ResolveDomainsRsp {
-  common.RetInfo ret_info = 1;
-  repeated DomainResolution resolutions = 2;
-  repeated string unresolved_domains = 3;
-}
-
 message CreatePaperSimulationReq {
   string account_name = 1;
   string logical_account_name = 2;
@@ -698,10 +673,6 @@ message ListHoldingsReq {
 message ListHoldingsRsp {
   common.RetInfo ret_info = 1;
   repeated Holding holdings = 2;
-}
-
-service TradeDNSResolverService {
-  rpc ResolveDomains(ResolveDomainsReq) returns (ResolveDomainsRsp);
 }
 
 service TradeConsoleService {

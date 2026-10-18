@@ -25,7 +25,7 @@ func TestCommitViewSchemaExtensionRequiresViewRoleHMAC(t *testing.T) {
 	req := &pb.CommitViewSchemaExtensionReq{
 		SpaceId: "space", ViewId: "view", ActiveIndexId: "index", ExpectedActiveRevision: 1,
 		ExpectedDesiredRevision: 2, ExpectedActiveSchemaHash: "active", ViewSchemaHash: "desired",
-		Columns: []*pb.ViewColumn{{ColumnName: "dataset.column"}},
+		Columns: []*pb.ViewColumn{{ColumnName: "column"}},
 	}
 	rejected, err := service.CommitViewSchemaExtension(ctx, req)
 	require.NoError(t, err)

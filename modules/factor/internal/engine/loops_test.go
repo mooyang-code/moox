@@ -1,0 +1,339 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
+	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
+	"github.com/stretchr/testify/require"
+)
+
+type heartbeatClientFake struct {
+	errs     []error
+	statuses []domain.EngineStatus
+}
+
+func (f *heartbeatClientFake) Heartbeat(_ context.Context, status domain.EngineStatus) (time.Duration, error) {
+	f.statuses = append(f.statuses, status)
+	err := f.errs[0]
+	f.errs = f.errs[1:]
+	return 45 * time.Second, err
+}
+
+func TestHeartbeatLeaseConflictStopsAndRecovers(t *testing.T) {
+	lease := &leaseState{}
+	changes := 0
+	client := &heartbeatClientFake{errs: []error{
+		nil, fmt.Errorf("%w: held by factor-engine@other", ErrLeaseConflict), errors.New("dial tcp: timeout"), nil,
+	}}
+	beat := &heartbeater{client: client, lease: lease, status: func() domain.EngineStatus {
+		return domain.EngineStatus{CatalogHash: "hash-1", ComputeWorkers: 8}
+	}, onChange: func() { changes++ }, now: time.Now}
+
+	require.NoError(t, beat.BeatOnce(context.Background()))
+	require.False(t, lease.Conflict())
+
+	require.Error(t, beat.BeatOnce(context.Background()))
+	require.True(t, lease.Conflict(), "an explicit conflict stops the engine")
+
+	require.Error(t, beat.BeatOnce(context.Background()))
+	require.True(t, lease.Conflict(), "an unreachable manager keeps the last lease state")
+
+	require.NoError(t, beat.BeatOnce(context.Background()))
+	require.False(t, lease.Conflict())
+	require.Equal(t, 2, changes)
+	require.Equal(t, "hash-1", client.statuses[0].CatalogHash)
+}
+
+func TestHeartbeatUnreachableManagerKeepsRunning(t *testing.T) {
+	lease := &leaseState{}
+	beat := &heartbeater{client: &heartbeatClientFake{errs: []error{errors.New("connection refused")}}, lease: lease,
+		status: func() domain.EngineStatus { return domain.EngineStatus{} }, now: time.Now}
+
+	require.Error(t, beat.BeatOnce(context.Background()))
+
+	require.False(t, lease.Conflict())
+	require.Equal(t, "connection refused", lease.snapshot().LastError)
+}
+
+type reportCall struct {
+	progress time.Time
+	status   string
+	errText  string
+}
+
+type jobClientFake struct {
+	job      PulledJob
+	found    bool
+	pulled   int
+	reports  []reportCall
+	statuses []string
+	err      error
+}
+
+func (f *jobClientFake) PullRecalcJob(context.Context) (PulledJob, bool, error) {
+	f.pulled++
+	found := f.found
+	f.found = false
+	return f.job, found, nil
+}
+
+func (f *jobClientFake) ReportRecalcProgress(_ context.Context, _, _ string, progress time.Time, status, errText string) (string, error) {
+	f.reports = append(f.reports, reportCall{progress: progress, status: status, errText: errText})
+	if f.err != nil {
+		return "", f.err
+	}
+	if len(f.statuses) > 0 {
+		next := f.statuses[0]
+		f.statuses = f.statuses[1:]
+		return next, nil
+	}
+	return status, nil
+}
+
+type sourceFake struct {
+	subjects []string
+	listed   int
+}
+
+func (f *sourceFake) DatasetColumns(context.Context, string, string) ([]string, error) {
+	return []string{"close"}, nil
+}
+
+func (f *sourceFake) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	f.listed++
+	return f.subjects, nil
+}
+
+type planRecorder struct {
+	plans []pipeline.Plan
+	err   error
+	out   pipeline.Outcome
+}
+
+func (r *planRecorder) Run(_ context.Context, plan pipeline.Plan) (pipeline.Outcome, error) {
+	r.plans = append(r.plans, plan)
+	return r.out, r.err
+}
+
+func testJob(subjects ...string) PulledJob {
+	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+	return PulledJob{
+		JobID: "job-1", LeaseToken: "token", Subjects: subjects,
+		Window: recalcexec.Window{Start: start, End: start.Add(6 * time.Minute), Progress: start},
+		Set:    engineSet("fset_a", "dataset_a", true, "bias"),
+	}
+}
+
+func newTestLoop(client *jobClientFake, runner *planRecorder, source *sourceFake) *recalcLoop {
+	executor := recalcexec.NewExecutor(runner, recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond))
+	return &recalcLoop{client: client, executor: executor, source: source, poll: time.Millisecond}
+}
+
+func TestRecalcLoopPullsRunsAndReportsSucceeded(t *testing.T) {
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	loop := newTestLoop(client, runner, &sourceFake{})
+
+	found, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, runner.plans, 3)
+	require.Len(t, client.reports, 3)
+	require.Equal(t, jobStatusRunning, client.reports[0].status)
+	require.Equal(t, jobStatusSucceeded, client.reports[2].status)
+	require.Equal(t, client.job.Window.End, client.reports[2].progress)
+	require.Equal(t, []string{"BTC"}, runner.plans[0].Expected)
+}
+
+func TestRecalcLoopStopsOnCancelled(t *testing.T) {
+	client := &jobClientFake{job: testJob("BTC"), found: true, statuses: []string{"cancelled"}}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	loop := newTestLoop(client, runner, &sourceFake{})
+
+	_, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, runner.plans, 1)
+	require.Len(t, client.reports, 1)
+}
+
+func TestRecalcLoopAbandonsOnConflict(t *testing.T) {
+	client := &jobClientFake{job: testJob("BTC"), found: true, err: fmt.Errorf("%w: stale token", ErrLeaseConflict)}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	loop := newTestLoop(client, runner, &sourceFake{})
+
+	_, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, client.reports, 1, "no failed report after losing the lease")
+}
+
+func TestRecalcLoopAbandonsWhenManagerUnreachable(t *testing.T) {
+	client := &jobClientFake{job: testJob("BTC"), found: true, err: errors.New("dial tcp: i/o timeout")}
+	loop := newTestLoop(client, &planRecorder{out: pipeline.Outcome{Status: "complete"}}, &sourceFake{})
+
+	_, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, client.reports, 1, "the job is left to expire and resume, never marked failed")
+}
+
+func TestRecalcLoopReportsFailedWithError(t *testing.T) {
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	runner := &planRecorder{err: errors.New("factor compute failed")}
+	loop := newTestLoop(client, runner, &sourceFake{})
+
+	_, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, client.reports, 1)
+	require.Equal(t, jobStatusFailed, client.reports[0].status)
+	require.Contains(t, client.reports[0].errText, "factor compute failed")
+}
+
+func TestRecalcLoopResolvesSubjectsWhenEmpty(t *testing.T) {
+	client := &jobClientFake{job: testJob(), found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	source := &sourceFake{subjects: []string{"BTC", "ETH"}}
+	loop := newTestLoop(client, runner, source)
+
+	_, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Positive(t, source.listed)
+	require.Equal(t, []string{"BTC", "ETH"}, runner.plans[0].Expected)
+}
+
+func TestRecalcLoopKeepsDegradedNote(t *testing.T) {
+	client := &jobClientFake{job: testJob("BTC", "ETH"), found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "degraded", FailedSubjects: []string{"ETH"}}}
+	loop := newTestLoop(client, runner, &sourceFake{})
+
+	_, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, "degraded: failed_subjects=1", client.reports[2].errText)
+}
+
+func TestRecalcLoopPausesWhileInactive(t *testing.T) {
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	loop := newTestLoop(client, &planRecorder{}, &sourceFake{})
+	loop.active = func() bool { return false }
+
+	found, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.False(t, found)
+	require.Zero(t, client.pulled)
+}
+
+func TestRecalcLoopReportsFailedWithLatestProgress(t *testing.T) {
+	calls := 0
+	runner := &planRecorder{}
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	loop := newTestLoop(client, runner, &sourceFake{})
+	loop.executor = recalcexec.NewExecutor(runnerFunc(func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
+		calls++
+		if calls > 1 {
+			return pipeline.Outcome{}, errors.New("factor compute failed")
+		}
+		return pipeline.Outcome{Status: "complete"}, nil
+	}), recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond))
+
+	_, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, client.reports, 2)
+	require.Equal(t, jobStatusFailed, client.reports[1].status)
+	require.Equal(t, client.reports[0].progress, client.reports[1].progress, "the failure carries the progress already reported")
+}
+
+func TestRecalcLoopStopsWhenLeaseLost(t *testing.T) {
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	loop := newTestLoop(client, runner, &sourceFake{})
+	pulled := false
+	loop.active = func() bool {
+		if !pulled {
+			pulled = true
+			return true
+		}
+		return false
+	}
+
+	_, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, runner.plans, 1, "the job stops at the first chunk boundary after losing the lease")
+}
+
+type runnerFunc func(context.Context, pipeline.Plan) (pipeline.Outcome, error)
+
+func (f runnerFunc) Run(ctx context.Context, plan pipeline.Plan) (pipeline.Outcome, error) {
+	return f(ctx, plan)
+}
+
+// 补算任务自带定义（JSON，没有编译结果），领取时现场编译后再交给流水线。
+func TestRecalcLoopCompilesJobDefinitions(t *testing.T) {
+	job := testJob("BTC")
+	job.Set = uncompiled(job.Set)
+	require.Nil(t, job.Set.Factors[0].Compiled())
+	client := &jobClientFake{job: job, found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	loop := newTestLoop(client, runner, &sourceFake{})
+
+	_, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, runner.plans, 3)
+	for _, plan := range runner.plans {
+		require.NotNil(t, plan.Factors[0].Compiled())
+		require.Equal(t, 2, plan.Factors[0].LookbackPeriods)
+	}
+}
+
+// beatRecorder 记录每次心跳，供并发的心跳循环测试使用。
+type beatRecorder struct{ beats chan domain.EngineStatus }
+
+func (r *beatRecorder) Heartbeat(_ context.Context, status domain.EngineStatus) (time.Duration, error) {
+	r.beats <- status
+	return 45 * time.Second, nil
+}
+
+// 每算完一期就唤醒心跳循环：不等 10 秒的定时器，立刻把这一期的完成时刻报给因子管理服务。
+func TestHeartbeatWakeSendsWithoutWaitingForTheTicker(t *testing.T) {
+	recorder := &beatRecorder{beats: make(chan domain.EngineStatus, 4)}
+	beat := &heartbeater{client: recorder, lease: &leaseState{}, status: func() domain.EngineStatus { return domain.EngineStatus{} },
+		interval: time.Hour, now: time.Now, wake: make(chan struct{}, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go beat.Run(ctx)
+
+	runs := newRunTracker()
+	runs.setOnRecord(beat.Wake)
+	period := time.Date(2026, 10, 16, 15, 45, 0, 0, time.UTC)
+	runs.record("set_a", period, "complete", pipeline.Outcome{}, period.Add(66*time.Second))
+	select {
+	case <-recorder.beats:
+	case <-time.After(5 * time.Second):
+		t.Fatal("recording a period must send a heartbeat right away")
+	}
+	// 比已记录的更早的一期不覆盖，也不唤醒。
+	runs.record("set_a", period.Add(-time.Minute), "complete", pipeline.Outcome{}, period)
+	select {
+	case <-recorder.beats:
+		t.Fatal("an older period must not wake the heartbeat")
+	case <-time.After(200 * time.Millisecond):
+	}
+	// 多次唤醒在发出前合并成一次。
+	beat.Wake()
+	beat.Wake()
+	(&heartbeater{}).Wake()
+}

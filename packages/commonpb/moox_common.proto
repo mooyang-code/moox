@@ -36,7 +36,7 @@ enum TotalMode {
 
 // TotalState 表示 PageResult.total 的可信状态。
 enum TotalState {
-  // UNKNOWN 表示旧接口或未设置 total 状态。
+  // UNKNOWN 表示未设置 total 状态。
   UNKNOWN = 0;
   // EXACT 表示 total 是精确总数。
   EXACT = 1;

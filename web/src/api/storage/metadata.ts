@@ -1,14 +1,10 @@
-import { callStorage as callMetadata } from "./http";
+import { callStorage as callMetadata, type StorageCallOptions } from "./http";
 import type {
-  ArchiveFile,
   DataNode,
   DataNodeListItem,
   DataSource,
   Dataset,
-  DatasetActivationCheck,
   DatasetColumn,
-  DatasetSubject,
-  DatasetMutation,
   Field,
   FieldGroup,
   Page,
@@ -40,10 +36,6 @@ export async function updateDataSource(data_source: DataSource) {
   return rsp.data_source;
 }
 
-export function getDataSource(params: { space_id: string; data_source_id: string }) {
-  return callMetadata<typeof params, RetRsp & { data_source: DataSource }>("GetDataSource", params);
-}
-
 export function listDataSources(params: { space_id: string; kind?: string; status?: string; keyword?: string; page?: Page }) {
   return callMetadata<typeof params, RetRsp & { data_sources: DataSource[]; page_result: PageResult }>("ListDataSources", params);
 }
@@ -51,10 +43,6 @@ export function listDataSources(params: { space_id: string; kind?: string; statu
 export async function upsertSubject(subject: Subject) {
   const rsp = await callMetadata<{ subject: Subject }, RetRsp & { subject: Subject }>("UpsertSubject", { subject });
   return rsp.subject;
-}
-
-export function getSubject(params: { space_id: string; subject_id: string }) {
-  return callMetadata<typeof params, RetRsp & { subject: Subject }>("GetSubject", params);
 }
 
 export function listSubjects(params: {
@@ -69,7 +57,10 @@ export function listSubjects(params: {
 }
 
 export async function upsertTag(tag: Tag, createOnly = false) {
-  const rsp = await callMetadata<{ tag: Tag; create_only?: boolean }, RetRsp & { tag: Tag }>("UpsertTag", { tag, ...(createOnly ? { create_only: true } : {}) });
+  const rsp = await callMetadata<{ tag: Tag; create_only?: boolean }, RetRsp & { tag: Tag }>("UpsertTag", {
+    tag,
+    ...(createOnly ? { create_only: true } : {})
+  });
   return rsp.tag;
 }
 
@@ -87,13 +78,7 @@ export function deleteTag(spaceId: string, tagId: string) {
   });
 }
 
-export function listTagMembers(params: {
-  space_id: string;
-  tag_id?: string;
-  status?: string;
-  keyword?: string;
-  page: Page;
-}) {
+export function listTagMembers(params: { space_id: string; tag_id?: string; status?: string; keyword?: string; page: Page }) {
   return callMetadata<typeof params, RetRsp & { members: TagMember[]; page_result: PageResult }>("ListTagMembers", params);
 }
 
@@ -109,35 +94,21 @@ export function setTagMemberStatus(spaceId: string, tagId: string, subjectIds: s
   return callMetadata("SetTagMemberStatus", { space_id: spaceId, tag_id: tagId, subject_ids: subjectIds, status });
 }
 
-export async function createDataset(dataset: Dataset) {
-  const rsp = await callMetadata<{ dataset: Dataset }, RetRsp & { dataset: Dataset }>("CreateDataset", { dataset });
-  return rsp.dataset;
-}
-
-export async function updateDataset(dataset: DatasetMutation) {
-  const rsp = await callMetadata<{ dataset: DatasetMutation }, RetRsp & { dataset: Dataset }>("UpdateDataset", { dataset });
-  return rsp.dataset;
-}
-
 export function getDataset(params: { space_id: string; dataset_id: string }) {
   return callMetadata<typeof params, RetRsp & { dataset: Dataset }>("GetDataset", params);
 }
 
-export function listDatasets(params: {
-  space_id: string;
-  data_source_id?: string;
-  data_kind?: string;
-  data_node_id?: string;
-  page?: Page;
-}) {
-  return callMetadata<typeof params, RetRsp & { datasets: Dataset[]; page_result: PageResult }>("ListDatasets", params);
-}
-
-export function listDatasetSubjects(params: { space_id: string; dataset_id?: string; subject_id?: string; page?: Page }) {
-  return callMetadata<typeof params, RetRsp & { dataset_subjects: DatasetSubject[]; page_result: PageResult }>(
-    "ListDatasetSubjects",
-    params
-  );
+export function listDatasets(
+  params: {
+    space_id: string;
+    data_source_id?: string;
+    data_kind?: string;
+    data_node_id?: string;
+    page?: Page;
+  },
+  options?: StorageCallOptions
+) {
+  return callMetadata<typeof params, RetRsp & { datasets: Dataset[]; page_result: PageResult }>("ListDatasets", params, options);
 }
 
 export async function createField(field: Field) {
@@ -177,10 +148,6 @@ export async function updateField(field: Field) {
   return rsp.field;
 }
 
-export function getField(params: { space_id: string; field_id: string }) {
-  return callMetadata<typeof params, RetRsp & { field: Field }>("GetField", params);
-}
-
 export function listFields(params: {
   space_id: string;
   group_id?: string;
@@ -209,13 +176,6 @@ export function deleteFieldGroup(params: { space_id: string; group_id: string })
   return callMetadata<typeof params, RetRsp>("DeleteFieldGroup", params);
 }
 
-export async function upsertDatasetColumn(dataset_column: DatasetColumn) {
-  const rsp = await callMetadata<{ column: DatasetColumn }, RetRsp & { column: DatasetColumn }>("UpsertDatasetColumn", {
-    column: dataset_column
-  });
-  return rsp.column;
-}
-
 export function listDatasetColumns(params: { space_id: string; dataset_id: string; page?: Page }) {
   return callMetadata<typeof params, RetRsp & { columns: DatasetColumn[]; page_result: PageResult }>(
     "ListDatasetColumns",
@@ -228,11 +188,6 @@ export async function createView(view: View) {
   return rsp.view;
 }
 
-export async function updateView(view: View) {
-  const rsp = await callMetadata<{ view: View }, RetRsp & { view: View }>("UpdateView", { view });
-  return rsp.view;
-}
-
 export function requestViewRebuild(params: { space_id: string; view_id: string }) {
   return callMetadata<typeof params, RetRsp & { view: View }>("RequestViewRebuild", params);
 }
@@ -241,25 +196,25 @@ export function getView(params: { space_id: string; view_id: string }) {
   return callMetadata<typeof params, RetRsp & { view: View }>("GetView", params);
 }
 
-export function listViews(params: {
-  space_id: string;
-  dataset_id?: string;
-  primary_dataset_id?: string;
-  status?: string;
-  page?: Page;
-}) {
+export function listViews(
+  params: {
+    space_id: string;
+    dataset_id?: string;
+    primary_dataset_id?: string;
+    status?: string;
+    page?: Page;
+  },
+  options?: StorageCallOptions
+) {
   const { primary_dataset_id, dataset_id, ...rest } = params;
-  return callMetadata<typeof rest & { dataset_id?: string }, RetRsp & { views: View[]; page_result: PageResult }>("ListViews", {
-    ...rest,
-    ...(dataset_id || primary_dataset_id ? { dataset_id: dataset_id || primary_dataset_id } : {})
-  });
-}
-
-export async function upsertViewColumn(view_column: ViewColumn) {
-  const rsp = await callMetadata<{ column: ViewColumn }, RetRsp & { column: ViewColumn }>("UpsertViewColumn", {
-    column: view_column
-  });
-  return rsp.column;
+  return callMetadata<typeof rest & { dataset_id?: string }, RetRsp & { views: View[]; page_result: PageResult }>(
+    "ListViews",
+    {
+      ...rest,
+      ...(dataset_id || primary_dataset_id ? { dataset_id: dataset_id || primary_dataset_id } : {})
+    },
+    options
+  );
 }
 
 export function listViewColumns(params: { space_id: string; view_id: string; page?: Page }) {
@@ -268,10 +223,6 @@ export function listViewColumns(params: { space_id: string; view_id: string; pag
 
 export function listViewRebuildLogs(params: { space_id: string; view_id: string; result?: number; page?: Page }) {
   return callMetadata<typeof params, RetRsp & { logs: ViewRebuildLog[]; page_result: PageResult }>("ListViewRebuildLogs", params);
-}
-
-export function getDataNode(params: { node_id: string }) {
-  return callMetadata<typeof params, RetRsp & { node: DataNode }>("GetDataNode", params);
 }
 
 export function listDataNodes(params: { status?: string; page?: Page }) {
@@ -287,43 +238,24 @@ export function deleteDataNode(params: { node_id: string }) {
   return callMetadata<typeof params, RetRsp & { node: DataNode }>("DeleteDataNode", params);
 }
 
-export function checkDatasetActivation(params: { space_id: string; dataset_id: string }) {
-  return callMetadata<
-    typeof params,
-    RetRsp & { dataset_revision: number | string; checks: DatasetActivationCheck[]; ready: boolean }
-  >("CheckDatasetActivation", params);
+/** 分页读取空间内全部数据集（最多 20 页 × 500 条）。 */
+export async function listAllDatasets(spaceId: string, options?: StorageCallOptions) {
+  const items: Dataset[] = [];
+  for (let pageNo = 1; pageNo <= 20; pageNo += 1) {
+    const rsp = await listDatasets({ space_id: spaceId, page: { page: pageNo, size: 500 } }, options);
+    items.push(...(rsp.datasets || []));
+    if (!rsp.page_result?.has_more || !(rsp.datasets || []).length) break;
+  }
+  return items;
 }
 
-export function activateDataset(params: { space_id: string; dataset_id: string; expected_revision: number | string }) {
-  return callMetadata<typeof params, RetRsp & { dataset: Dataset; checks: DatasetActivationCheck[] }>("ActivateDataset", params);
-}
-
-export function rebindDatasetDataNode(params: {
-  space_id: string;
-  dataset_id: string;
-  data_node_id: string;
-  expected_revision: number | string;
-}) {
-  return callMetadata<typeof params, RetRsp & { dataset: Dataset }>("RebindDatasetDataNode", params);
-}
-
-export async function registerArchiveFile(archive_file: ArchiveFile) {
-  const rsp = await callMetadata<{ archive_file: ArchiveFile }, RetRsp & { archive_file: ArchiveFile }>("RegisterArchiveFile", {
-    archive_file
-  });
-  return rsp.archive_file;
-}
-
-export function listArchiveFiles(params: {
-  space_id: string;
-  dataset_id?: string;
-  status?: string;
-  sort_by?: "min_time" | "max_time" | "created_at" | "updated_at";
-  sort_order?: "asc" | "desc";
-  page?: Page;
-}) {
-  return callMetadata<typeof params, RetRsp & { archive_files: ArchiveFile[]; page_result: PageResult }>(
-    "ListArchiveFiles",
-    params
-  );
+/** 分页读取空间内全部 View（最多 20 页 × 500 条）。 */
+export async function listAllViews(spaceId: string, options?: StorageCallOptions) {
+  const items: View[] = [];
+  for (let pageNo = 1; pageNo <= 20; pageNo += 1) {
+    const rsp = await listViews({ space_id: spaceId, page: { page: pageNo, size: 500 } }, options);
+    items.push(...(rsp.views || []));
+    if (!rsp.page_result?.has_more || !(rsp.views || []).length) break;
+  }
+  return items;
 }

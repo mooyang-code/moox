@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -14,14 +13,11 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/trpcretry"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
 type AccessClient interface {
 	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
-	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
 }
 type MetadataClient interface {
 	GetSpace(context.Context, *storagepb.GetSpaceReq, ...client.Option) (*storagepb.GetSpaceRsp, error)
@@ -42,12 +38,20 @@ type StorageAdapter struct {
 	subjectMu        sync.Mutex
 	subjectRefreshMu sync.Mutex
 	subjects         map[string]cachedSubjectCatalog
+	nameMu           sync.Mutex
+	datasetNames     map[string]cachedDatasetName
+}
+
+type cachedDatasetName struct {
+	loadedAt time.Time
+	name     string
 }
 
 const (
 	datasetSubjectPageSize = 1000
 	maxDatasetSubjects     = 100000
 	subjectCatalogTTL      = time.Minute
+	datasetNameTTL         = 10 * time.Minute
 )
 
 type cachedSubjectCatalog struct {
@@ -56,42 +60,7 @@ type cachedSubjectCatalog struct {
 }
 
 func NewStorageAdapter(access AccessClient, metadata MetadataClient, cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	return &StorageAdapter{access: access, metadata: metadata, auth: storageauth.Primary(cfg.KeyID), cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}, subjects: make(map[string]cachedSubjectCatalog)}
-}
-func NewStorageAdapterFromConfig(cfg monconfig.MetricsStorageConfig) *StorageAdapter {
-	// Monitor's Storage target is a dedicated dependency setting. Do not let the
-	// process-local gateway default redirect it back to the control node.
-	target := cfg.GatewayTarget
-	credentials, err := gatewayauth.ResolveCredentials(cfg.KeyID, cfg.HMACKeyFile)
-	if err != nil {
-		return NewStorageAdapter(nil, nil, cfg)
-	}
-	nodeID := cfg.GatewayNodeID
-	if strings.TrimSpace(nodeID) == "" {
-		nodeID = gatewayauth.ServiceGatewayNodeID()
-	}
-	options := gatewayauth.NewTRPCClientOptions(normalizeTarget(target, "11003"), nodeID, credentials)
-	return NewStorageAdapter(storagepb.NewPrimaryStoreClientProxy(options...), storagepb.NewMetadataClientProxy(options...), cfg)
-}
-
-func normalizeTarget(raw, port string) string {
-	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
-	if raw == "" {
-		return "ip://127.0.0.1:" + port
-	}
-	if strings.HasPrefix(raw, "ip://") {
-		return raw
-	}
-	if u, err := url.Parse(raw); err == nil && u.Scheme != "" {
-		if u.Scheme == "http" || u.Scheme == "https" {
-			return raw
-		}
-		return raw
-	}
-	if !strings.Contains(raw, ":") {
-		return raw
-	}
-	return "ip://" + raw
+	return &StorageAdapter{access: access, metadata: metadata, auth: storageauth.Primary("monitor"), cfg: cfg, schema: SchemaStatus{Error: "metrics schema has not been checked"}, subjects: make(map[string]cachedSubjectCatalog), datasetNames: make(map[string]cachedDatasetName)}
 }
 
 type SchemaStatus struct {
@@ -178,8 +147,8 @@ func (a *StorageAdapter) validateSchema(ctx context.Context) error {
 	if dataset.GetDataKind() != storagepb.DataKind_DATA_KIND_TIME_SERIES {
 		return fmt.Errorf("metrics dataset kind is %s, want TIME_SERIES", dataset.GetDataKind())
 	}
-	if !contains(dataset.GetFreqs(), a.cfg.Frequency) {
-		return fmt.Errorf("metrics dataset does not support frequency %q", a.cfg.Frequency)
+	if dataset.GetFreq() != a.cfg.Frequency {
+		return fmt.Errorf("metrics dataset freq is %q, not %q", dataset.GetFreq(), a.cfg.Frequency)
 	}
 	columnsRsp, err := a.metadata.ListDatasetColumns(ctx, &storagepb.ListDatasetColumnsReq{SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID, Page: &commonpb.Page{Page: 1, Size: 500}})
 	if err != nil {
@@ -203,14 +172,6 @@ func (a *StorageAdapter) validateSchema(ctx context.Context) error {
 	return nil
 }
 func isActive(status string) bool { return strings.EqualFold(strings.TrimSpace(status), "active") }
-func contains(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
-}
 func sortedKeys(m map[string]columnContract) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -227,22 +188,6 @@ func storageOK(action string, ret *commonpb.RetInfo) error {
 		return fmt.Errorf("%s: %s", action, ret.GetMsg())
 	}
 	return nil
-}
-
-type HistoryPoint struct {
-	SeriesID   string
-	Value      float64
-	ObservedAt time.Time
-	LabelsJSON string
-	MessageID  string
-}
-
-type HistorySelector struct {
-	SeriesID string
-}
-
-func HistorySelectorForSeries(series MetricSeries) HistorySelector {
-	return HistorySelector{SeriesID: series.SeriesID}
 }
 
 func (a *StorageAdapter) WriteSamples(ctx context.Context, samples []Sample) error {
@@ -292,80 +237,6 @@ func sampleRow(cfg monconfig.MetricsStorageConfig, s Sample) *storagepb.RowField
 	}
 }
 
-func (a *StorageAdapter) QueryHistorySelectors(ctx context.Context, selectors []HistorySelector, start, end time.Time, desc bool, limit int) ([]HistoryPoint, error) {
-	if a == nil || a.access == nil {
-		return nil, errors.New("metrics storage-primary client is not initialized")
-	}
-	if limit <= 0 {
-		limit = 500
-	}
-	if limit > 500 {
-		limit = 500
-	}
-	keys := make([]*storagepb.TimeSeriesSelector, 0, len(selectors))
-	for _, selector := range selectors {
-		if selector.SeriesID != "" {
-			key := &storagepb.TimeSeriesSelector{SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID, SubjectId: selector.SeriesID, Freq: a.cfg.Frequency}
-			keys = append(keys, key)
-		}
-	}
-	if len(keys) == 0 {
-		return nil, nil
-	}
-	order := storagepb.SortOrder_SORT_ORDER_ASC
-	if desc {
-		order = storagepb.SortOrder_SORT_ORDER_DESC
-	}
-	tr := &storagepb.TimeRange{}
-	if !start.IsZero() {
-		tr.StartTime = start.UTC().Format(time.RFC3339Nano)
-	}
-	if !end.IsZero() {
-		tr.EndTime = end.UTC().Format(time.RFC3339Nano)
-	}
-	columnPrefix := a.cfg.DatasetID + "."
-	rsp, err := a.access.ReadTimeSeriesRows(ctx, &storagepb.ReadTimeSeriesRowsReq{
-		AuthInfo: a.auth, SpaceId: a.cfg.SpaceID, DatasetId: a.cfg.DatasetID,
-		Selectors: keys, TimeRange: tr, Order: order,
-		ColumnNames: []string{columnPrefix + "value", columnPrefix + "labels_json", columnPrefix + "message_id"},
-		Page:        &commonpb.Page{Page: 1, Size: uint32(limit)},
-	}, client.WithFilter(trpcretry.ReadOnly()))
-	if err != nil {
-		return nil, fmt.Errorf("read metrics history: %w", err)
-	}
-	if err := storageOK("read metrics history", rsp.GetRetInfo()); err != nil {
-		return nil, err
-	}
-	out := make([]HistoryPoint, 0, len(rsp.GetRows()))
-	for _, row := range rsp.GetRows() {
-		if row == nil || row.GetKey() == nil {
-			continue
-		}
-		p := HistoryPoint{SeriesID: row.GetKey().GetSubjectId()}
-		if t, err := time.Parse(time.RFC3339Nano, row.GetKey().GetDataTime()); err == nil {
-			p.ObservedAt = t
-		}
-		for _, field := range row.GetFields() {
-			switch strings.TrimPrefix(field.GetFieldId(), columnPrefix) {
-			case "value":
-				p.Value = field.GetValue().GetDoubleValue()
-			case "labels_json":
-				p.LabelsJSON = field.GetValue().GetJsonValue()
-			case "message_id":
-				p.MessageID = field.GetValue().GetStringValue()
-			}
-		}
-		out = append(out, p)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if desc {
-			return out[i].ObservedAt.After(out[j].ObservedAt)
-		}
-		return out[i].ObservedAt.Before(out[j].ObservedAt)
-	})
-	return out, nil
-}
-
 // ListActiveDatasetSubjects returns the authoritative active subject set for a
 // monitored dataset. Monitor uses this to ignore metric series left behind by
 // retired instruments instead of treating their old watermarks as failures.
@@ -393,7 +264,7 @@ func (a *StorageAdapter) ListActiveDatasetSubjects(ctx context.Context, spaceID,
 		rsp, err := a.metadata.ListDatasetSubjects(ctx, &storagepb.ListDatasetSubjectsReq{
 			AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID,
 			Page: &commonpb.Page{Page: page, Size: datasetSubjectPageSize},
-		}, client.WithFilter(trpcretry.ReadOnly()))
+		})
 		if err != nil {
 			return nil, fmt.Errorf("list monitored dataset subjects: %w", err)
 		}
@@ -427,6 +298,32 @@ func (a *StorageAdapter) ListActiveDatasetSubjects(ctx context.Context, spaceID,
 	return ids, nil
 }
 
+// DatasetDisplayName returns the name people gave a dataset, such as
+// "现货小时K线", for alert text. It returns "" when the name is unknown, and
+// caches names for datasetNameTTL.
+func (a *StorageAdapter) DatasetDisplayName(ctx context.Context, spaceID, datasetID string) string {
+	if a == nil || a.metadata == nil || strings.TrimSpace(datasetID) == "" {
+		return ""
+	}
+	key := strings.TrimSpace(spaceID) + "\x00" + strings.TrimSpace(datasetID)
+	now := time.Now()
+	a.nameMu.Lock()
+	cached, ok := a.datasetNames[key]
+	a.nameMu.Unlock()
+	if ok && now.Sub(cached.loadedAt) < datasetNameTTL {
+		return cached.name
+	}
+	rsp, err := a.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil || storageOK("get dataset name", rsp.GetRetInfo()) != nil {
+		return cached.name
+	}
+	name := strings.TrimSpace(rsp.GetDataset().GetName())
+	a.nameMu.Lock()
+	a.datasetNames[key] = cachedDatasetName{loadedAt: now, name: name}
+	a.nameMu.Unlock()
+	return name
+}
+
 // ListTags returns the tag definitions and live member counters used by the
 // market canary. Tags are deliberately read through Metadata rather than
 // inferred from collector configuration so Monitor observes the same state as
@@ -441,7 +338,7 @@ func (a *StorageAdapter) ListTags(ctx context.Context, spaceID string) ([]*stora
 			AuthInfo: a.auth,
 			SpaceId:  strings.TrimSpace(spaceID),
 			Page:     &commonpb.Page{Page: page, Size: datasetSubjectPageSize},
-		}, client.WithFilter(trpcretry.ReadOnly()))
+		})
 		if err != nil {
 			return nil, fmt.Errorf("list monitored tags: %w", err)
 		}

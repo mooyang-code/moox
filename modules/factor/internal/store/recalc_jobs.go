@@ -35,9 +35,18 @@ type RecalcJob struct {
 	Status          string    `json:"status"`
 	ProgressTime    int64     `json:"progress_time"`
 	Error           string    `json:"error"`
+	EngineID        string    `json:"engine_id"`
+	LeaseToken      string    `json:"-"`
+	LeaseExpiresAt  int64     `json:"-"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
+
+// recalcJobColumns is the column list every recalc job read selects, in the
+// order of recalcJobRow.
+const recalcJobColumns = `c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
+	 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error,
+	 c_engine_id, c_lease_token, c_lease_expires_at, c_ctime, c_mtime`
 
 type recalcJobRow struct {
 	JobID           string    `gorm:"column:c_job_id"`
@@ -52,6 +61,9 @@ type recalcJobRow struct {
 	Status          string    `gorm:"column:c_status"`
 	ProgressTime    int64     `gorm:"column:c_progress_time"`
 	Error           string    `gorm:"column:c_error"`
+	EngineID        string    `gorm:"column:c_engine_id"`
+	LeaseToken      string    `gorm:"column:c_lease_token"`
+	LeaseExpiresAt  int64     `gorm:"column:c_lease_expires_at"`
 	CreatedAt       time.Time `gorm:"column:c_ctime"`
 	UpdatedAt       time.Time `gorm:"column:c_mtime"`
 }
@@ -70,7 +82,8 @@ func (r recalcJobRow) job() (RecalcJob, error) {
 		FactorIDs: factorIDs, Subjects: subjects,
 		FactorsOmitted: r.FactorsOmitted, SubjectsOmitted: r.SubjectsOmitted, StartTime: r.StartTime,
 		EndTime: r.EndTime, Status: r.Status, ProgressTime: r.ProgressTime,
-		Error: r.Error, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		Error: r.Error, EngineID: r.EngineID, LeaseToken: r.LeaseToken, LeaseExpiresAt: r.LeaseExpiresAt,
+		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}, nil
 }
 
@@ -100,14 +113,16 @@ func (s *Store) CreateRecalcJob(ctx context.Context, job RecalcJob) (RecalcJob, 
 	return stored, nil
 }
 
-// EnableFactorWithRecalcJob atomically accepts a factor's initial backfill and
-// makes the factor visible to live trigger selection.
-func (s *Store) EnableFactorWithRecalcJob(ctx context.Context, factorID, expectedStatus string, job RecalcJob) (RecalcJob, error) {
+// EnableMemberWithRecalcJob atomically accepts a member's initial backfill and
+// makes the member visible to live trigger selection.
+func (s *Store) EnableMemberWithRecalcJob(ctx context.Context, setID, factorID, expectedStatus string, job RecalcJob) (RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return RecalcJob{}, fmt.Errorf("factor database is not open")
 	}
+	setID = strings.TrimSpace(setID)
 	factorID = strings.TrimSpace(factorID)
-	if factorID == "" || expectedStatus != domain.FactorStatusDisabled || job.Status != RecalcStatusAccepted {
+	if setID == "" || factorID == "" || setID != strings.TrimSpace(job.SetID) ||
+		expectedStatus != domain.MemberStatusDisabled || job.Status != RecalcStatusAccepted {
 		return RecalcJob{}, fmt.Errorf("factor activation request is invalid")
 	}
 	job, factorIDsJSON, subjectsJSON, err := normalizeRecalcJob(job)
@@ -119,19 +134,29 @@ func (s *Store) EnableFactorWithRecalcJob(ctx context.Context, factorID, expecte
 	}
 	var stored RecalcJob
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 同一个因子集连续启用多个成员时，只保留一个还没开始跑的回填任务，把新成员并进去：
+		// 每个成员各建一个全量回填任务，会让同一个窗口被重复读 N 遍（11 个因子就是 11 遍）。
+		merged, mergeErr := mergeQueuedEnableBackfill(tx, job, factorID)
+		if mergeErr != nil {
+			return mergeErr
+		}
 		var created bool
 		var insertErr error
-		stored, created, insertErr = insertRecalcJob(tx, job, factorIDsJSON, subjectsJSON)
-		if insertErr != nil {
-			return insertErr
-		}
-		if !created && !sameRecalcRequest(stored, job) {
-			return fmt.Errorf("%w: request_id %q belongs to a different recalc request", ErrConflict, job.RequestID)
+		if merged != nil {
+			stored, created = *merged, true
+		} else {
+			stored, created, insertErr = insertRecalcJob(tx, job, factorIDsJSON, subjectsJSON)
+			if insertErr != nil {
+				return insertErr
+			}
+			if !created && !sameRecalcRequest(stored, job) {
+				return fmt.Errorf("%w: request_id %q belongs to a different recalc request", ErrConflict, job.RequestID)
+			}
 		}
 		result := tx.Exec(`
-			UPDATE t_factor_defs SET c_status = ?, c_mtime = ?
-			WHERE c_factor_id = ? AND c_set_id = ? AND c_status = ?
-		`, domain.FactorStatusEnabled, time.Now().UTC(), factorID, job.SetID, expectedStatus)
+			UPDATE t_factor_set_members SET c_status = ?, c_mtime = ?
+			WHERE c_set_id = ? AND c_factor_id = ? AND c_status = ?
+		`, domain.MemberStatusEnabled, time.Now().UTC(), setID, factorID, expectedStatus)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -140,24 +165,74 @@ func (s *Store) EnableFactorWithRecalcJob(ctx context.Context, factorID, expecte
 		}
 		var current struct {
 			Status string `gorm:"column:c_status"`
-			SetID  string `gorm:"column:c_set_id"`
 		}
-		lookup := tx.Raw(`SELECT c_status, c_set_id FROM t_factor_defs WHERE c_factor_id = ?`, factorID).Scan(&current)
+		lookup := tx.Raw(`SELECT c_status FROM t_factor_set_members WHERE c_set_id = ? AND c_factor_id = ?`, setID, factorID).Scan(&current)
 		if lookup.Error != nil {
 			return lookup.Error
 		}
 		if lookup.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
 		}
-		if !created && current.SetID == job.SetID && current.Status == domain.FactorStatusEnabled {
+		if !created && current.Status == domain.MemberStatusEnabled {
 			return nil
 		}
-		return fmt.Errorf("%w: factor %q status is %q, expected %q", ErrConflict, factorID, current.Status, expectedStatus)
+		return fmt.Errorf("%w: member %q of set %q status is %q, expected %q", ErrConflict, factorID, setID, current.Status, expectedStatus)
 	})
 	if err != nil {
 		return RecalcJob{}, err
 	}
 	return stored, nil
+}
+
+// enableBackfillRequestPrefix 是启用成员时生成的回填任务的请求号前缀，只有这类任务才会被合并。
+const enableBackfillRequestPrefix = "factor-enable-"
+
+// mergeQueuedEnableBackfill 把新启用的成员并进同一因子集里排队中、尚未被引擎领取的回填任务，窗口取两者的并集；
+// 没有可合并的任务时返回 nil，由调用方新建。手工补算（请求号不是 factor-enable- 开头）、已领取或已结束的任务不合并。
+func mergeQueuedEnableBackfill(tx *gorm.DB, job RecalcJob, factorID string) (*RecalcJob, error) {
+	var row recalcJobRow
+	lookup := tx.Raw(`
+		SELECT `+recalcJobColumns+`
+		FROM t_factor_recalc_jobs
+		WHERE c_set_id = ? AND c_status = ? AND c_engine_id = '' AND c_lease_token = '' AND c_request_id LIKE ?
+		  AND c_subjects_omitted = 0 AND c_factors_omitted = 0
+		ORDER BY c_ctime, c_job_id LIMIT 1
+	`, job.SetID, RecalcStatusAccepted, enableBackfillRequestPrefix+"%").Scan(&row)
+	if lookup.Error != nil {
+		return nil, lookup.Error
+	}
+	if lookup.RowsAffected == 0 {
+		return nil, nil
+	}
+	existing, err := row.job()
+	if err != nil {
+		return nil, err
+	}
+	if len(existing.Subjects) != len(job.Subjects) {
+		return nil, nil
+	}
+	factors := append([]string(nil), existing.FactorIDs...)
+	if !containsString(factors, factorID) {
+		factors = append(factors, factorID)
+	}
+	sort.Strings(factors)
+	factorsJSON, err := marshalStringSlice(factors)
+	if err != nil {
+		return nil, err
+	}
+	start, end := min(existing.StartTime, job.StartTime), max(existing.EndTime, job.EndTime)
+	result := tx.Exec(`
+		UPDATE t_factor_recalc_jobs SET c_factor_ids_json = ?, c_start_time = ?, c_end_time = ?, c_mtime = ?
+		WHERE c_job_id = ? AND c_status = ? AND c_engine_id = '' AND c_lease_token = ''
+	`, factorsJSON, start, end, time.Now().UTC(), existing.JobID, RecalcStatusAccepted)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, nil
+	}
+	existing.FactorIDs, existing.StartTime, existing.EndTime = factors, start, end
+	return &existing, nil
 }
 
 func normalizeRecalcJob(job RecalcJob) (RecalcJob, string, string, error) {
@@ -206,9 +281,7 @@ func insertRecalcJob(tx *gorm.DB, job RecalcJob, factorIDsJSON, subjectsJSON str
 	}
 	var existing recalcJobRow
 	lookup := tx.Raw(`
-		SELECT c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
-		 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status,
-		 c_progress_time, c_error, c_ctime, c_mtime
+		SELECT `+recalcJobColumns+`
 		FROM t_factor_recalc_jobs WHERE c_request_id = ?
 	`, job.RequestID).Scan(&existing)
 	if lookup.Error != nil {
@@ -273,8 +346,7 @@ func (s *Store) UpdateRecalcJob(ctx context.Context, jobID string, mutate func(*
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var row recalcJobRow
 		result := tx.Raw(`
-			SELECT c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
-			 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error, c_ctime, c_mtime
+			SELECT `+recalcJobColumns+`
 			FROM t_factor_recalc_jobs WHERE c_job_id = ?
 		`, jobID).Scan(&row)
 		if result.Error != nil {
@@ -314,8 +386,7 @@ func (s *Store) UpdateRecalcJob(ctx context.Context, jobID string, mutate func(*
 		}
 		var fresh recalcJobRow
 		result = tx.Raw(`
-			SELECT c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
-			 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error, c_ctime, c_mtime
+			SELECT `+recalcJobColumns+`
 			FROM t_factor_recalc_jobs WHERE c_job_id = ?
 		`, jobID).Scan(&fresh)
 		if result.Error != nil {
@@ -366,8 +437,7 @@ func (s *Store) ListRecalcJobs(ctx context.Context, filter RecalcJobFilter) ([]R
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
 	}
-	query := `SELECT c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
-	 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error, c_ctime, c_mtime
+	query := `SELECT ` + recalcJobColumns + `
 	 FROM t_factor_recalc_jobs`
 	var conditions []string
 	var args []any
@@ -412,8 +482,7 @@ func (s *Store) getRecalcJobRow(ctx context.Context, key, value string) (recalcJ
 	}
 	var row recalcJobRow
 	result := s.db.WithContext(ctx).Raw(`
-		SELECT c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
-		 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error, c_ctime, c_mtime
+		SELECT `+recalcJobColumns+`
 		FROM t_factor_recalc_jobs WHERE `+key+` = ?
 	`, value).Scan(&row)
 	if result.Error != nil {

@@ -1,3 +1,10 @@
+-- 完整部署快照与系统探测定义在同一事务内更新。
+CREATE TABLE IF NOT EXISTS t_monitor_topology (
+    c_id INTEGER NOT NULL PRIMARY KEY,
+    c_snapshot_json TEXT NOT NULL,
+    CHECK (c_id = 1)
+);
+
 CREATE TABLE IF NOT EXISTS t_monitor_checks (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL DEFAULT '',
@@ -6,6 +13,11 @@ CREATE TABLE IF NOT EXISTS t_monitor_checks (
     c_group_name TEXT NOT NULL DEFAULT '',
     c_kind TEXT NOT NULL,
     c_url TEXT NOT NULL DEFAULT '',
+    c_connect_address TEXT NOT NULL DEFAULT '',
+    c_server_name TEXT NOT NULL DEFAULT '',
+    c_trust_mode TEXT NOT NULL DEFAULT '',
+    c_ca_file TEXT NOT NULL DEFAULT '',
+    c_ca_baseline TEXT NOT NULL DEFAULT '',
     c_method TEXT NOT NULL DEFAULT 'GET',
     c_headers TEXT NOT NULL DEFAULT '{}',
     c_body TEXT NOT NULL DEFAULT '',
@@ -43,6 +55,7 @@ CREATE TABLE IF NOT EXISTS t_monitor_check_results (
     c_connected INTEGER NOT NULL DEFAULT 0,
     c_latency_ms INTEGER NOT NULL DEFAULT 0,
     c_error_message TEXT NOT NULL DEFAULT '',
+    c_raw_error TEXT NOT NULL DEFAULT '',
     c_body_excerpt TEXT NOT NULL DEFAULT '',
     c_checked_at DATETIME NOT NULL,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -52,9 +65,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_results_id
 ON t_monitor_check_results (c_result_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_results_recent
 ON t_monitor_check_results (c_space_id, c_check_id, c_checked_at DESC);
+CREATE INDEX IF NOT EXISTS idx_monitor_results_checked_at ON t_monitor_check_results (c_checked_at);
+
+-- Non-secret gateway status and durable route convergence deadlines.
+CREATE TABLE IF NOT EXISTS t_monitor_gateway_observations (
+    c_host_id TEXT NOT NULL PRIMARY KEY,
+    c_host_enabled_at DATETIME NOT NULL,
+    c_first_observed_at DATETIME NOT NULL,
+    c_observed_at DATETIME,
+    c_last_attempt_at DATETIME NOT NULL,
+    c_status_json TEXT NOT NULL DEFAULT '',
+    c_expected_hash TEXT NOT NULL DEFAULT '',
+    c_applied_hash TEXT NOT NULL DEFAULT '',
+    c_hash_mismatch_since DATETIME,
+    c_read_error TEXT NOT NULL DEFAULT ''
+);
 
 CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
     c_agent_id TEXT PRIMARY KEY,
+    c_host_id TEXT NOT NULL DEFAULT '',
     c_hostname TEXT NOT NULL,
     c_boot_id TEXT NOT NULL,
     c_last_seen_at DATETIME NOT NULL,
@@ -64,23 +93,18 @@ CREATE TABLE IF NOT EXISTS t_monitor_host_agents (
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Legacy UUID subjects are retained as aliases so existing Storage history
--- remains queryable after HostAgent rotates to a compact four-character ID.
-CREATE TABLE IF NOT EXISTS t_monitor_host_agent_aliases (
-    c_alias_id TEXT PRIMARY KEY,
-    c_agent_id TEXT NOT NULL,
-    c_created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_monitor_host_agent_aliases_agent
-ON t_monitor_host_agent_aliases (c_agent_id);
-
+-- 告警推送渠道（企业微信或飞书群机器人），告警发给全部渠道；首次建库时按部署配置写入一个，之后在监控页增删
 CREATE TABLE IF NOT EXISTS t_monitor_notification_channels (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    c_channel_id TEXT NOT NULL UNIQUE CHECK (c_channel_id = 'global'),
-    c_channel_type TEXT NOT NULL DEFAULT 'wecom' CHECK (c_channel_type IN ('wecom', 'feishu')),
-    c_webhook_url TEXT NOT NULL DEFAULT '',
+    c_channel_id TEXT NOT NULL,
+    c_channel_type TEXT NOT NULL,
+    c_webhook_url TEXT NOT NULL,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_channel_type IN ('wecom', 'feishu')),
+    CHECK (c_webhook_url <> ''),
+    UNIQUE (c_channel_id),
+    UNIQUE (c_webhook_url)
 );
 
 CREATE TABLE IF NOT EXISTS t_monitor_alert_rules (
@@ -139,6 +163,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_alert_events_id
 ON t_monitor_alert_events (c_event_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_alert_events_recent
 ON t_monitor_alert_events (c_space_id, c_created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_monitor_alert_events_created_at ON t_monitor_alert_events (c_created_at);
 
 CREATE TRIGGER IF NOT EXISTS trg_monitor_checks_mtime
 AFTER UPDATE ON t_monitor_checks
@@ -174,7 +199,6 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_services (
     c_node_id TEXT NOT NULL DEFAULT '',
     c_version TEXT NOT NULL DEFAULT '',
     c_last_seen_at DATETIME NOT NULL,
-    c_is_stale INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -191,7 +215,6 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_series (
     c_metric_type TEXT NOT NULL,
     c_labels_json TEXT NOT NULL DEFAULT '{}',
     c_last_seen_at DATETIME NOT NULL,
-    c_is_stale INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -199,7 +222,7 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_series (
 CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_series_key
 ON t_monitor_metric_series (c_service_name, c_instance_id, c_series_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_metric_series_name
-ON t_monitor_metric_series (c_service_name, c_metric_name, c_is_stale);
+ON t_monitor_metric_series (c_service_name, c_metric_name);
 
 CREATE TABLE IF NOT EXISTS t_monitor_metric_latest (
     c_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,6 +258,29 @@ CREATE TABLE IF NOT EXISTS t_monitor_metric_ingest_messages (
 CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_metric_ingest_message ON t_monitor_metric_ingest_messages (c_message_id);
 CREATE INDEX IF NOT EXISTS idx_monitor_metric_ingest_expiry ON t_monitor_metric_ingest_messages (c_expires_at);
 
+-- 数据链路逐根到达记录：生产者的输出水位每前进一次记一行（新的最新一根；一批写完的更早几根不单独记），
+-- 与指标入库在同一事务里写入；按空间、周期与开盘时间查询，按到达时间清理（保留 7 天）。时间均为 UTC。
+CREATE TABLE IF NOT EXISTS t_monitor_bar_arrivals (
+    c_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    c_producer TEXT NOT NULL,
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_primary_dataset_id TEXT NOT NULL DEFAULT '',
+    c_freq TEXT NOT NULL,
+    c_bar_at DATETIME NOT NULL,
+    c_previous_bar_at DATETIME,
+    c_arrived_at DATETIME NOT NULL,
+    c_reported_at DATETIME NOT NULL,
+    c_service_name TEXT NOT NULL DEFAULT '',
+    c_instance_id TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uk_monitor_bar_arrival
+ON t_monitor_bar_arrivals (c_producer, c_space_id, c_dataset_id, c_freq, c_bar_at);
+CREATE INDEX IF NOT EXISTS idx_monitor_bar_arrival_space_bar ON t_monitor_bar_arrivals (c_space_id, c_freq, c_bar_at);
+CREATE INDEX IF NOT EXISTS idx_monitor_bar_arrival_arrived ON t_monitor_bar_arrivals (c_arrived_at);
+
 CREATE TRIGGER IF NOT EXISTS trg_monitor_metric_services_mtime
 AFTER UPDATE ON t_monitor_metric_services
 FOR EACH ROW
@@ -258,3 +304,22 @@ WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_monitor_metric_latest SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
+
+CREATE TABLE IF NOT EXISTS t_monitor_component_health (
+    c_host_id TEXT NOT NULL,
+    c_component_id TEXT NOT NULL,
+    c_status TEXT NOT NULL,
+    c_since_at DATETIME NOT NULL,
+    c_observed_at DATETIME NOT NULL,
+    PRIMARY KEY (c_host_id, c_component_id),
+    CHECK (c_status IN ('healthy', 'degraded', 'down', 'unknown', 'disabled', 'unchecked'))
+);
+
+-- 最后一份有效的采集任务清单：采集服务不可用或 Monitor 重启后继续用它检查 K 线新鲜度
+CREATE TABLE IF NOT EXISTS t_monitor_task_inventory (
+    c_id INTEGER NOT NULL PRIMARY KEY,
+    c_snapshot TEXT NOT NULL,
+    c_fetched_at DATETIME NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_id = 1)
+);

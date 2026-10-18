@@ -22,6 +22,10 @@ type SetupService interface {
 	ApplySetup(ctx context.Context, req *ApplySetupReq) (*ApplySetupRsp, error)
 
 	GetSetupStatus(ctx context.Context, req *GetSetupStatusReq) (*GetSetupStatusRsp, error)
+
+	PutConfigBackup(ctx context.Context, req *PutConfigBackupReq) (*PutConfigBackupRsp, error)
+
+	GetConfigBackup(ctx context.Context, req *GetConfigBackupReq) (*GetConfigBackupRsp, error)
 }
 
 func SetupService_ApplySetup_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -60,6 +64,42 @@ func SetupService_GetSetupStatus_Handler(svr interface{}, ctx context.Context, f
 	return rsp, nil
 }
 
+func SetupService_PutConfigBackup_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PutConfigBackupReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SetupService).PutConfigBackup(ctx, reqbody.(*PutConfigBackupReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func SetupService_GetConfigBackup_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetConfigBackupReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(SetupService).GetConfigBackup(ctx, reqbody.(*GetConfigBackupReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // SetupServer_ServiceDesc descriptor for server.RegisterService.
 var SetupServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.admin.Setup",
@@ -72,6 +112,14 @@ var SetupServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.admin.Setup/GetSetupStatus",
 			Func: SetupService_GetSetupStatus_Handler,
+		},
+		{
+			Name: "/trpc.moox.admin.Setup/PutConfigBackup",
+			Func: SetupService_PutConfigBackup_Handler,
+		},
+		{
+			Name: "/trpc.moox.admin.Setup/GetConfigBackup",
+			Func: SetupService_GetConfigBackup_Handler,
 		},
 	},
 }
@@ -93,6 +141,12 @@ func (s *UnimplementedSetup) ApplySetup(ctx context.Context, req *ApplySetupReq)
 func (s *UnimplementedSetup) GetSetupStatus(ctx context.Context, req *GetSetupStatusReq) (*GetSetupStatusRsp, error) {
 	return nil, errors.New("rpc GetSetupStatus of service Setup is not implemented")
 }
+func (s *UnimplementedSetup) PutConfigBackup(ctx context.Context, req *PutConfigBackupReq) (*PutConfigBackupRsp, error) {
+	return nil, errors.New("rpc PutConfigBackup of service Setup is not implemented")
+}
+func (s *UnimplementedSetup) GetConfigBackup(ctx context.Context, req *GetConfigBackupReq) (*GetConfigBackupRsp, error) {
+	return nil, errors.New("rpc GetConfigBackup of service Setup is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -105,6 +159,10 @@ type SetupClientProxy interface {
 	ApplySetup(ctx context.Context, req *ApplySetupReq, opts ...client.Option) (rsp *ApplySetupRsp, err error)
 
 	GetSetupStatus(ctx context.Context, req *GetSetupStatusReq, opts ...client.Option) (rsp *GetSetupStatusRsp, err error)
+
+	PutConfigBackup(ctx context.Context, req *PutConfigBackupReq, opts ...client.Option) (rsp *PutConfigBackupRsp, err error)
+
+	GetConfigBackup(ctx context.Context, req *GetConfigBackupReq, opts ...client.Option) (rsp *GetConfigBackupRsp, err error)
 }
 
 type SetupClientProxyImpl struct {
@@ -150,6 +208,46 @@ func (c *SetupClientProxyImpl) GetSetupStatus(ctx context.Context, req *GetSetup
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetSetupStatusRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SetupClientProxyImpl) PutConfigBackup(ctx context.Context, req *PutConfigBackupReq, opts ...client.Option) (*PutConfigBackupRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.admin.Setup/PutConfigBackup")
+	msg.WithCalleeServiceName(SetupServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("admin")
+	msg.WithCalleeService("Setup")
+	msg.WithCalleeMethod("PutConfigBackup")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PutConfigBackupRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *SetupClientProxyImpl) GetConfigBackup(ctx context.Context, req *GetConfigBackupReq, opts ...client.Option) (*GetConfigBackupRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.admin.Setup/GetConfigBackup")
+	msg.WithCalleeServiceName(SetupServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("admin")
+	msg.WithCalleeService("Setup")
+	msg.WithCalleeMethod("GetConfigBackup")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetConfigBackupRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -1,5 +1,5 @@
 import { callControl } from "./http";
-import type { PageReq, PageResult, Space, SpaceMember } from "./types";
+import type { PageReq, PageResult, Space } from "./types";
 
 export interface ListSpacesReq {
   owner?: string;
@@ -22,8 +22,4 @@ export function createSpace(space: Space) {
 
 export function updateSpace(space: Space) {
   return callControl<{ space: Space }, { space: Space }>("space", "UpdateSpace", { space });
-}
-
-export function listSpaceMembers(req: { space_id: string; page?: PageReq }) {
-  return callControl<typeof req, { members: SpaceMember[]; page_result?: PageResult }>("space", "ListSpaceMembers", req);
 }

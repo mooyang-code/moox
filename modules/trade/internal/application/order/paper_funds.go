@@ -35,6 +35,11 @@ func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validati
 }
 
 func checkPaperFunds(tx *store.Tx, validation Validation, marginAdjustment, required shared.Decimal, oldAsset, oldQuantity string) error {
+	if validation.ReduceOnly {
+		// 减仓单不占用新保证金：已占用的保证金会在平仓时释放，只需现金覆盖手续费预留。
+		// 若仍扣除已占用保证金，接近满保证金的仓位会因“可用资金不足”而无法平仓（需要先平仓才能释放保证金）。
+		marginAdjustment = shared.Zero()
+	}
 	if oldAsset == "" && oldQuantity == "" {
 		available, err := availableReservationFunds(tx, validation, marginAdjustment)
 		if err != nil {

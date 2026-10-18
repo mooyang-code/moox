@@ -8,18 +8,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseFixedFrequencyCanonicalizesWholeMinutePeriods(t *testing.T) {
+func TestParseFixedFrequencyReturnsCanonicalFrequencies(t *testing.T) {
 	tests := []struct {
 		raw  string
 		want FixedFrequency
 	}{
-		{raw: "1m", want: FixedFrequency{Storage: "1m", Slug: "1m", Duration: time.Minute}},
-		{raw: "90m", want: FixedFrequency{Storage: "90m", Slug: "90m", Duration: 90 * time.Minute}},
-		{raw: "240m", want: FixedFrequency{Storage: "4H", Slug: "4h", Duration: 4 * time.Hour}},
-		{raw: "4H", want: FixedFrequency{Storage: "4H", Slug: "4h", Duration: 4 * time.Hour}},
-		{raw: "24h", want: FixedFrequency{Storage: "1D", Slug: "1d", Duration: 24 * time.Hour}},
-		{raw: "1440m", want: FixedFrequency{Storage: "1D", Slug: "1d", Duration: 24 * time.Hour}},
-		{raw: "30d", want: FixedFrequency{Storage: "30D", Slug: "30d", Duration: 30 * 24 * time.Hour}},
+		{raw: "1m", want: FixedFrequency{Storage: "1m", Duration: time.Minute}},
+		{raw: "15m", want: FixedFrequency{Storage: "15m", Duration: 15 * time.Minute}},
+		{raw: "240m", want: FixedFrequency{Storage: "4h", Duration: 4 * time.Hour}},
+		{raw: "4H", want: FixedFrequency{Storage: "4h", Duration: 4 * time.Hour}},
+		{raw: "1d", want: FixedFrequency{Storage: "1d", Duration: 24 * time.Hour}},
 	}
 
 	for _, tt := range tests {
@@ -32,7 +30,7 @@ func TestParseFixedFrequencyCanonicalizesWholeMinutePeriods(t *testing.T) {
 }
 
 func TestParseFixedFrequencyRejectsNonFixedOrOutOfRangePeriods(t *testing.T) {
-	for _, raw := range []string{"", "0m", "-1m", "1.5h", "30s", "1M", "1w", "31d", "999999999999999999999m"} {
+	for _, raw := range []string{"", "0m", "-1m", "1.5h", "30s", "90m", "24h", "1M", "1mo", "1w", "30d", "999999999999999999999m"} {
 		t.Run(raw, func(t *testing.T) {
 			_, err := ParseFixedFrequency(raw)
 			require.Error(t, err)
@@ -40,19 +38,17 @@ func TestParseFixedFrequencyRejectsNonFixedOrOutOfRangePeriods(t *testing.T) {
 	}
 }
 
-func TestValidateResamplePairRequiresAnIntegralBoundedExpansion(t *testing.T) {
+func TestValidateResamplePairRequiresALargerTarget(t *testing.T) {
 	tests := []struct {
 		name   string
 		source string
 		target string
 		ok     bool
 	}{
-		{name: "one minute to four hours", source: "1m", target: "4H", ok: true},
-		{name: "thirty to ninety minutes", source: "30m", target: "90m", ok: true},
-		{name: "target not multiple", source: "1H", target: "90m"},
-		{name: "same period", source: "1H", target: "1H"},
-		{name: "target shorter", source: "4H", target: "1H"},
-		{name: "too many source rows", source: "1m", target: "30D"},
+		{name: "one minute to four hours", source: "1m", target: "4h", ok: true},
+		{name: "one minute to one day", source: "1m", target: "1d", ok: true},
+		{name: "same period", source: "1h", target: "1h"},
+		{name: "target shorter", source: "4h", target: "1h"},
 	}
 
 	for _, tt := range tests {
@@ -72,7 +68,7 @@ func TestValidateResamplePairRequiresAnIntegralBoundedExpansion(t *testing.T) {
 }
 
 func TestBucketAtUsesTheLatestClosedEpochAlignedBucket(t *testing.T) {
-	target, err := ParseFixedFrequency("4H")
+	target, err := ParseFixedFrequency("4h")
 	require.NoError(t, err)
 	origin := time.Unix(0, 0).UTC()
 
@@ -86,15 +82,15 @@ func TestBucketAtUsesTheLatestClosedEpochAlignedBucket(t *testing.T) {
 }
 
 func TestBucketAtUsesDurationGridInsteadOfWallClockModulo(t *testing.T) {
-	target, err := ParseFixedFrequency("7m")
+	target, err := ParseFixedFrequency("15m")
 	require.NoError(t, err)
-	origin := time.Unix(0, 0).UTC()
+	origin := time.Unix(0, 0).UTC().Add(5 * time.Minute)
 
-	start, end := BucketAt(origin.Add(10*time.Minute), origin, target)
-	assert.Equal(t, origin, start)
-	assert.Equal(t, origin.Add(7*time.Minute), end)
+	start, end := BucketAt(origin.Add(40*time.Minute), origin, target)
+	assert.Equal(t, origin.Add(15*time.Minute), start)
+	assert.Equal(t, origin.Add(30*time.Minute), end)
 
 	start, end = BucketAt(origin.Add(-time.Minute), origin, target)
-	assert.Equal(t, origin.Add(-14*time.Minute), start)
-	assert.Equal(t, origin.Add(-7*time.Minute), end)
+	assert.Equal(t, origin.Add(-30*time.Minute), start)
+	assert.Equal(t, origin.Add(-15*time.Minute), end)
 }

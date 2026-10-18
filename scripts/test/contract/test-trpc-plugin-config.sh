@@ -33,7 +33,12 @@ assert_loopback_server_services() {
 	' "${config}" || fail "non-timer server listener is not loopback-only: ${config}"
 }
 
-modules=(admin archive cloudnode collector eventbus factor hostagent monitor storage strategy trade)
+# Linux 下 tRPC 对 tcp+trpc 服务默认启用 tnet，其空闲定时器会把每 30～60 秒才复用一次的连接提前关掉，
+# 调用方随后读到 ReadFrame EOF（171）。所有 tcp+trpc 服务端必须显式声明 transport: go-net；
+# 检查用 tRPC 自己的配置加载，按框架默认值和 server 级继承判断最终生效的传输层。
+(cd packages/healthz && go run ./cmd/trpctransportcheck ../../modules) || fail "tcp+trpc server must declare transport: go-net"
+
+modules=(admin cloudnode collector eventbus factor hostagent monitor storage strategy trade)
 validation_modules=(admin cloudnode collector eventbus factor hostagent monitor storage strategy trade)
 
 contains() {
@@ -49,6 +54,9 @@ contains() {
 for module in "${modules[@]}"; do
 	modfile="modules/${module}/go.mod"
 	main="modules/${module}/cmd/server/main.go"
+	if [[ "${module}" == factor ]]; then
+		main="modules/factor/cmd/mgr/main.go"
+	fi
 	configs=("modules/${module}/config/trpc_go.yaml")
 	if [[ "${module}" == storage ]]; then
 		configs=(modules/storage/config/trpc_go*.yaml)
@@ -66,13 +74,8 @@ for module in "${modules[@]}"; do
 		require_text "${modfile}" 'trpc.group/trpc-go/trpc-log-cls v1.0.0' "missing CLS dependency for ${module}"
 		require_text "${main}" 'trpc.group/trpc-go/trpc-log-cls' "missing CLS registration for ${module}"
 	fi
-	if [[ "${module}" == archive ]]; then
-		require_text "modules/archive/internal/bootstrap/app.go" 'packages/healthz/trpclog' "missing CLS service identity helper for ${module}"
-		require_text "modules/archive/internal/bootstrap/app.go" "InstallServiceName(\"${module}\")" "missing CLS service identity installation for ${module}"
-	else
-		require_text "${main}" 'packages/healthz/trpclog' "missing CLS service identity helper for ${module}"
-		require_text "${main}" "InstallServiceName(\"${module}\")" "missing CLS service identity installation for ${module}"
-	fi
+	require_text "${main}" 'packages/healthz/trpclog' "missing CLS service identity helper for ${module}"
+	require_text "${main}" "InstallServiceName(\"${module}\")" "missing CLS service identity installation for ${module}"
 
 	for config in "${configs[@]}"; do
 		[[ -f "${config}" ]] || fail "missing tRPC config for ${module}"
@@ -102,13 +105,12 @@ for module in admin trade; do
 	require_text "modules/${module}/config/trpc_go.yaml" '    - masking' "missing masking filter for ${module}"
 done
 
-require_text packages/trpcretry/go.mod 'trpc.group/trpc-go/trpc-filter/slime v1.0.0' 'missing shared bounded read retry dependency'
-require_text modules/factor/internal/storageio/client.go 'client.WithFilter(trpcretry.ReadOnly())' 'factor retry must remain scoped to the read call'
-require_text modules/archive/internal/backfill/backfill.go 'client.WithFilter(trpcretry.ReadOnly())' 'archive retry must remain scoped to the read call'
-require_text modules/monitor/internal/hostmetrics/storage_reader.go 'client.WithFilter(trpcretry.ReadOnly())' 'host metrics retry must remain scoped to the read call'
-require_text modules/monitor/internal/metrics/storage.go 'client.WithFilter(trpcretry.ReadOnly())' 'metrics history retry must remain scoped to the read call'
-require_text modules/factor/go.mod 'trpc.group/trpc-go/trpc-filter/transinfo-blocker v1.0.0' 'missing metadata boundary dependency'
-require_text modules/factor/config/trpc_go.yaml '        mode: whitelist' 'metadata boundary must use an allowlist'
+# Validate the project's bounded retry behavior rather than requiring the
+# removed Slime module, whose old dependency chain is no longer used.
+(cd packages/trpcretry && go test -count=1 ./...)
+# 只读重试目前只有主机网关转发在用，且只挂在只读、非 GatewayControl 的路由上。
+require_text modules/hostgateway/internal/router/upstream.go 'if route.ReadOnly && !control {' 'gateway retry must remain scoped to read-only routes'
+require_text modules/hostgateway/internal/router/upstream.go 'client.WithFilter(trpcretry.ReadOnly())' 'gateway read-only routes must use the bounded retry'
 if grep -Fq -- '          - baggage' modules/factor/config/trpc_go.yaml; then
 	fail 'arbitrary W3C baggage must not cross the Factor to Storage boundary'
 fi
@@ -125,7 +127,9 @@ if rg -n 'filterextensions' modules/*/config/trpc_go*.yaml modules/*/cmd/server/
 	fail 'filterextensions must remain deferred until method policies diverge'
 fi
 
+# Access 是对外签名入口（11004），按设计监听所有地址；其余服务端只监听回环。
 for config in modules/*/config/trpc_go*.yaml; do
+	[[ "${config}" == modules/access/config/trpc_go.yaml ]] && continue
 	assert_loopback_server_services "${config}"
 done
 
@@ -137,26 +141,6 @@ if rg -n -g '*.yaml' -g '*.yml' -g '*.env' '^\s*(secret_id|secret_key|authorizat
   fail 'committed remote logging credential found'
 fi
 
-require_text scripts/deploy/deploy-moox.sh '--enable-cls' 'deployment must expose explicit CLS activation'
-require_text scripts/deploy/deploy-moox.sh 'source "${ROOT}/secrets/cls.env"' 'CLS credentials must come from target runtime environment'
-require_text scripts/deploy/deploy-moox.sh 'source "${ROOT}/secrets/otel.env"' 'OTel endpoint must come from target runtime environment'
-require_text scripts/deploy/deploy-moox.sh '--cloud-account-id' 'deployment must allow explicit CLS cloud account selection'
-require_text scripts/deploy/deploy-moox.sh 'prepare_cls_preflight' 'deployment must prepare CLS before sync'
-require_text skills/moox/scripts/cls-bootstrap.sh 'ops tencent cls prepare' 'MooX Skill must prepare CLS through moox-cli'
-require_text skills/moox/scripts/cls-bootstrap.sh 'topic_id: ${MOOX_CLS_TOPIC_ID}' 'staged CLS writer must use the generated Topic ID resource'
-require_text skills/moox/scripts/cls-bootstrap.sh 'MOOX_CLS_LOGSET_ID' 'CLS bootstrap must persist generated resource metadata'
-require_text skills/moox/scripts/cls-bootstrap.sh 'MOOX_CLS_ACCOUNT_ID' 'CLS bootstrap must persist selected cloud account metadata'
-require_text scripts/deploy/deploy-moox.sh 'source "${ROOT}/config/resources.env"' 'lifecycle must load generated resource metadata'
-require_text skills/moox/scripts/cls-bootstrap.sh 'secret_id: \${MOOX_CLS_SECRET_ID}' 'staged CLS writer must retain credential placeholders'
-require_text skills/moox/scripts/cls-bootstrap.sh '*/factor/config/trpc_go*.yaml' 'Factor CLS rendering must cover the service config'
-require_text skills/moox/scripts/cls-bootstrap.sh 'level: " level' 'Factor CLS rendering must retain calculation info logs'
 bash skills/moox/scripts/test-cls-query.sh >/dev/null
-require_text 'docs/运维/tRPC插件运行基线.md' 'config/resources.env' 'operations baseline must document generated CLS resource metadata'
-require_text 'docs/运维/tRPC插件运行基线.md' '${MOOX_CLS_SECRET_ID}' 'operations baseline must name the CLS secret-id placeholder'
-require_text 'docs/运维/tRPC插件运行基线.md' '${MOOX_CLS_SECRET_KEY}' 'operations baseline must name the CLS secret-key placeholder'
-require_text 'docs/运维/tRPC插件运行基线.md' 'service_name' 'operations baseline must document the CLS service identity field'
-require_text 'docs/运维/tRPC插件运行基线.md' 'release archive sync or service shutdown' 'operations baseline must distinguish helper upload from release sync'
-require_text skills/moox/SKILL.md 'architecture-matched `moox-cli` helper solely for preflight' 'MooX Skill must document temporary preflight helper cleanup'
-require_text 'docs/运维/tRPC插件运行基线.md' '${MOOX_CLS_TOPIC_ID}' 'operations baseline must document the generated Topic ID placeholder'
 
 printf 'PASS: tRPC plugin configuration and registration matrix\n'

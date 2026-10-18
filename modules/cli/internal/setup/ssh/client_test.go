@@ -32,7 +32,7 @@ type sshFixture struct {
 	connections sync.WaitGroup
 }
 
-func startSSHFixture(t *testing.T) *sshFixture {
+func startSSHFixture(t *testing.T, allowedKeys ...xssh.PublicKey) *sshFixture {
 	t.Helper()
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -52,6 +52,16 @@ func startSSHFixture(t *testing.T) *sshFixture {
 		done:      make(chan struct{}),
 	}
 	serverConfig := &xssh.ServerConfig{
+		PublicKeyCallback: func(metadata xssh.ConnMetadata, key xssh.PublicKey) (*xssh.Permissions, error) {
+			if metadata.User() == f.target.Username {
+				for _, allowed := range allowedKeys {
+					if string(allowed.Marshal()) == string(key.Marshal()) {
+						return nil, nil
+					}
+				}
+			}
+			return nil, fmt.Errorf("denied")
+		},
 		PasswordCallback: func(metadata xssh.ConnMetadata, password []byte) (*xssh.Permissions, error) {
 			if metadata.User() != f.target.Username || string(password) != f.password {
 				return nil, fmt.Errorf("denied")
@@ -144,7 +154,7 @@ func handleFixtureSession(channel xssh.Channel, requests <-chan *xssh.Request) {
 		switch request.Type {
 		case "exec":
 			var execReq struct{ Command string }
-			if xssh.Unmarshal(request.Payload, &execReq) != nil || !strings.HasPrefix(execReq.Command, "'mv' '-f' ") {
+			if xssh.Unmarshal(request.Payload, &execReq) != nil || !(strings.HasPrefix(execReq.Command, "'mv' '-f' ") || strings.HasPrefix(execReq.Command, "'python3' ")) {
 				_ = request.Reply(false, nil)
 				continue
 			}
@@ -179,6 +189,26 @@ func handleFixtureSession(channel xssh.Channel, requests <-chan *xssh.Request) {
 			_ = request.Reply(false, nil)
 		}
 	}
+}
+
+func TestRunBoundsBothSSHOutputStreamsAndDrainsRemoteExit(t *testing.T) {
+	fixture := startSSHFixture(t)
+	knownHosts := knownHostsFile(t)
+	require.NoError(t, TrustHost(t.Context(), fixture.target, xssh.FingerprintSHA256(fixture.publicKey), Options{KnownHostsPath: knownHosts}))
+	client, err := Dial(t.Context(), fixture.target, fixture.password, Options{KnownHostsPath: knownHosts, OutputLimit: 128})
+	require.NoError(t, err)
+	defer client.Close()
+	for _, stream := range []string{"stdout", "stderr"} {
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		result, err := client.Run(ctx, []string{"python3", "-c", "import sys;sys." + stream + ".write('x'*100000)"}, nil)
+		cancel()
+		require.ErrorContains(t, err, "output_exceeded_limit")
+		require.Empty(t, result.Stdout)
+		require.Empty(t, result.Stderr)
+	}
+	result, err := client.Run(t.Context(), []string{"python3", "-c", "print('still usable')"}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "still usable\n", result.Stdout)
 }
 
 func knownHostsFile(t *testing.T) string {

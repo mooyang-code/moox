@@ -12,18 +12,26 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-func main() {
+func run() error {
 	ctx := trpc.BackgroundContext()
 	s := trpc.NewServer()
 	trpclog.InstallServiceName("collector")
 
 	server, err := bootstrap.Initialize(ctx, s)
 	if err != nil {
-		log.Fatalf("moox-collector 初始化失败: %v", err)
+		return err
 	}
 
+	defer server.Close()
 	log.Info("启动 moox-collector tRPC 服务器...")
 	if err := server.Serve(); err != nil {
-		log.Fatalf("moox-collector 服务器出错: %v", err)
+		return err
+	}
+	return nil
+}
+
+func main() {
+	if err := run(); err != nil {
+		log.Fatalf("moox-collector 运行失败: %v", err)
 	}
 }

@@ -26,6 +26,7 @@ var (
 )
 
 type AdapterConfig struct {
+	HTTPClient      *httpclient.HTTPClient
 	InstrumentType  marketdata.InstrumentType
 	KlineCollector  *KlineCollector
 	SymbolCollector *SymbolCollector
@@ -47,10 +48,10 @@ func NewMarketDataAdapter(cfg AdapterConfig) *MarketDataAdapter {
 		cfg.InstrumentType = marketdata.InstrumentSpot
 	}
 	if cfg.KlineCollector == nil {
-		cfg.KlineCollector = NewKlineCollector()
+		cfg.KlineCollector = NewKlineCollector(newConfiguredClient(cfg.HTTPClient))
 	}
 	if cfg.SymbolCollector == nil {
-		cfg.SymbolCollector = NewSymbolCollector()
+		cfg.SymbolCollector = NewSymbolCollector(newConfiguredClient(cfg.HTTPClient))
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -93,7 +94,7 @@ func (a *MarketDataAdapter) KlineSpec() marketdata.KlineSpec {
 			string(marketdata.FrequencyMinute), string(marketdata.Frequency5Min),
 			string(marketdata.Frequency15Min), string(marketdata.Frequency30Min),
 			string(marketdata.FrequencyHour), string(marketdata.FrequencyDay),
-			string(marketdata.FrequencyWeek),
+			string(marketdata.FrequencyWeek), string(marketdata.FrequencyMonth),
 		},
 		CompleteOHLCV:     true,
 		HasAmount:         true,
@@ -102,13 +103,27 @@ func (a *MarketDataAdapter) KlineSpec() marketdata.KlineSpec {
 		TimestampMode:     marketdata.TimestampModeOpen,
 		History:           marketdata.KlineHistoryCapability{SupportsArbitraryRange: true},
 		RateLimit: marketdata.RateLimitPolicy{
-			RequestsPerSecond: 5,
-			Burst:             5,
-			MaxConcurrent:     1,
+			RequestsPerSecond: configuredFeedLimit("MOOX_FETCH_RPS", 5),
+			Burst:             int(configuredFeedLimit("MOOX_FETCH_BURST", 5)),
+			MaxConcurrent:     int(configuredFeedLimit("MOOX_FETCH_FEED_CONCURRENCY", 1)),
 			Cooldown:          time.Second,
 			RequestTimeout:    configuredKlineRequestTimeout(),
 		},
 	}
+}
+
+// configuredFeedLimit 读取限流参数（速率、突发、并发）。默认值保持保守；SCF 的计划按数据源下发更大的值，
+// 每个函数有自己的出口，币安限流按出口每分钟计权重，单函数每分钟几十个请求远低于上限。
+func configuredFeedLimit(name string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value <= 0 || value > 1000 {
+		return fallback
+	}
+	return value
 }
 
 func configuredKlineRequestTimeout() time.Duration {
@@ -167,11 +182,10 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 	if err := validateInstrumentType(productType, req.InstrumentType); err != nil {
 		return nil, err
 	}
-	// Binance interval tokens are case-sensitive. The catalog keeps the
-	// historical 1H spelling for the hourly Spot dataset, while Binance
-	// expects 1h on the wire. Keep the catalog frequency on the persisted row
-	// and normalize only the provider request.
-	providerInterval := normalizeBinanceInterval(req.Frequency)
+	providerInterval, err := binanceInterval(req.Frequency)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", marketdata.ErrInvalidRequest, err)
+	}
 
 	params := &sources.CollectParams{
 		InstType:  instType,
@@ -207,13 +221,17 @@ func (a *MarketDataAdapter) FetchKlines(ctx context.Context, req marketdata.Klin
 	return rows, nil
 }
 
-func normalizeBinanceInterval(frequency string) string {
-	raw := strings.TrimSpace(frequency)
+// binanceInterval maps a canonical frequency to the case-sensitive Binance
+// interval token; they differ only for a month ("1M" on the wire).
+func binanceInterval(raw string) (string, error) {
 	parsed, err := marketdata.ParseFrequency(raw)
 	if err != nil {
-		return raw
+		return "", err
 	}
-	return string(parsed)
+	if parsed == marketdata.FrequencyMonth {
+		return "1M", nil
+	}
+	return string(parsed), nil
 }
 
 func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req marketdata.InstrumentRequest) (marketdata.InstrumentSnapshot, error) {
@@ -388,7 +406,7 @@ func normalizeMarketDataKline(req marketdata.KlineRequest, kline *market.Kline, 
 		ProviderID:        "binance",
 		SourceID:          sourceID,
 		ProviderSymbol:    req.ProviderSymbol,
-		Frequency:         req.Frequency,
+		Frequency:         string(frequency),
 		BarStart:          barStart,
 		BarEnd:            frequency.BarEnd(barStart),
 		Open:              openValue,
@@ -452,7 +470,7 @@ func classifyProviderError(err error) error {
 	}
 	var statusErr *httpclient.StatusError
 	if errors.As(err, &statusErr) {
-		if statusErr.StatusCode == http.StatusTooManyRequests {
+		if statusErr.StatusCode == http.StatusTooManyRequests || statusErr.StatusCode == http.StatusTeapot {
 			return fmt.Errorf("%w: %v", marketdata.ErrRateLimited, err)
 		}
 		return fmt.Errorf("%w: %v", marketdata.ErrHTTPStatus, err)

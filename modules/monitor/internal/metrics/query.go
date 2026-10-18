@@ -3,7 +3,6 @@ package metrics
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 )
 
@@ -14,6 +13,14 @@ type QueryService struct {
 	storage      *StorageAdapter
 	messageStore *MetricMessageStore
 	noDataAfter  time.Duration
+}
+
+// ListBarArrivals 读取一条数据链路在 [from, to) 内开盘的逐根到达记录。
+func (q *QueryService) ListBarArrivals(ctx context.Context, chain BarArrivalChain, from, to time.Time) ([]BarArrival, bool, error) {
+	if q == nil {
+		return nil, false, ErrMetricsStoreUnavailable
+	}
+	return q.messageStore.ListBarArrivals(ctx, chain, from, to)
 }
 
 func NewQueryService(messageStore *MetricMessageStore, storage *StorageAdapter) *QueryService {
@@ -52,24 +59,6 @@ func (q *QueryService) ListLatestByViewScopes(ctx context.Context, metricName st
 	return q.messageStore.ListLatestByViewScopes(ctx, metricName, scopes, limit)
 }
 
-func (q *QueryService) History(ctx context.Context, seriesID, serviceName, metricName, labelsJSON string, start, end time.Time, desc bool, limit int) ([]HistoryPoint, error) {
-	if q == nil || q.catalog == nil || q.storage == nil {
-		return nil, ErrMetricsStoreUnavailable
-	}
-	series, err := q.catalog.FindSeries(ctx, seriesID, serviceName, metricName, labelsJSON, 500)
-	if err != nil {
-		return nil, err
-	}
-	if len(series) == 0 {
-		return []HistoryPoint{}, nil
-	}
-	selectors := make([]HistorySelector, 0, len(series))
-	for _, s := range series {
-		selectors = append(selectors, HistorySelectorForSeries(s))
-	}
-	return q.storage.QueryHistorySelectors(ctx, selectors, start, end, desc, limit)
-}
-
 func (q *QueryService) ActiveDatasetSubjects(ctx context.Context, spaceID, datasetID string) (map[string]struct{}, error) {
 	if q == nil || q.storage == nil {
 		// Unit-level metric evaluation can operate on its explicit observations;
@@ -80,14 +69,10 @@ func (q *QueryService) ActiveDatasetSubjects(ctx context.Context, spaceID, datas
 	return q.storage.ListActiveDatasetSubjects(ctx, spaceID, datasetID)
 }
 
-func parseTimeValue(raw string) (time.Time, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return time.Time{}, nil
+// DatasetDisplayName returns a dataset's human name, or "" when unknown.
+func (q *QueryService) DatasetDisplayName(ctx context.Context, spaceID, datasetID string) string {
+	if q == nil || q.storage == nil {
+		return ""
 	}
-	return time.Parse(time.RFC3339Nano, raw)
+	return q.storage.DatasetDisplayName(ctx, spaceID, datasetID)
 }
-
-// ParseTime accepts the RFC3339 form used on the wire and is exported for RPC
-// handlers that need to keep parsing semantics identical to history queries.
-func ParseTime(raw string) (time.Time, error) { return parseTimeValue(raw) }

@@ -3,7 +3,7 @@ package impl
 import (
 	"fmt"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/gateway"
+	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/config"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/database"
@@ -46,6 +46,6 @@ func InitAuthServiceImpl(cfg *config.Config, dbManager *database.Manager) (*Auth
 
 	// 初始化DAO
 	imp.userDAO = dao.NewUserDAO(db, cache)
-	gateway.SetRequestAuthStore(imp.userDAO)
+	console.SetRequestAuthStore(imp.userDAO)
 	return imp, nil
 }

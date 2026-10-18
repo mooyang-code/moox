@@ -31,10 +31,12 @@ import (
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/protobuf/proto"
 	_ "trpc.group/trpc-go/trpc-database/timer"
@@ -43,6 +45,7 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/server"
+	"trpc.group/trpc-go/trpc-go/transport"
 	_ "trpc.group/trpc-go/trpc-log-cls"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
@@ -95,34 +98,10 @@ func runPrimaryRole() error {
 	if primarySecret == "" {
 		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for primary role")
 	}
-	viewSecret := os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET")
-	if viewSecret == "" {
-		return errors.New("MOOX_STORAGE_VIEW_AUTH_SECRET is required for primary role")
-	}
 	resolver := newDataNodeResolver(cached.RequestSnapshot, func(target string) pb.DataNodeRuntimeService {
-		opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc")}
+		opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport)}
 		return newDataNodeProxyAdapter(opts...)
 	})
-	viewTarget := os.Getenv("MOOX_STORAGE_VIEW_TARGET")
-	if viewTarget == "" {
-		viewTarget = "ip://127.0.0.1:20103"
-	}
-	viewProxy := &dataViewProxyAdapter{
-		proxy: pb.NewDataViewClientProxy(client.WithTarget(viewTarget), client.WithNetwork("tcp"), client.WithProtocol("trpc")),
-		auth:  &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey(viewSecret, "storage-primary")},
-	}
-	viewResolver := func(ctx context.Context, spaceID, datasetID string) (pb.DataViewService, string, error) {
-		views, err := cached.ListViewsByDataset(ctx, spaceID, datasetID)
-		if err != nil {
-			return nil, "", err
-		}
-		for _, view := range views {
-			if view != nil && view.GetDatasetId() == datasetID && view.GetActiveIndexId() != "" {
-				return viewProxy, view.GetViewId(), nil
-			}
-		}
-		return nil, "", fmt.Errorf("dataset %s/%s has no active view", spaceID, datasetID)
-	}
 	datasetMetrics, err := observability.NewDatasetMetrics(prometheus.DefaultRegisterer)
 	if err != nil {
 		return fmt.Errorf("initialize storage dataset metrics: %w", err)
@@ -145,7 +124,7 @@ func runPrimaryRole() error {
 		}
 		return "", fmt.Errorf("factor result dataset for source view %s/%s is not found", spaceID, sourceViewID)
 	}
-	svc, err := primarystore.New(primarystore.Options{Resolver: resolver, View: viewResolver, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, ResultDataset: resultDatasetResolver, SyncPoints: meta, Authorizer: func(auth *pb.AuthInfo) error {
+	svc, err := primarystore.New(primarystore.Options{Resolver: resolver.primaryStore(), Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, ResultDataset: resultDatasetResolver, SyncPoints: meta, Authorizer: func(auth *pb.AuthInfo) error {
 		if auth == nil || auth.GetAppId() == "" ||
 			!hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(datanode.ServiceAuthKey(primarySecret, auth.GetAppId()))) {
 			return errors.New("invalid primary auth")
@@ -162,22 +141,30 @@ func runPrimaryRole() error {
 	if err != nil {
 		return err
 	}
-	metadataSvc, err := metadataservice.NewMetadataService(meta, cached, metadataservice.Options{AuthSecret: secret, OperatorAuthSecret: primarySecret})
+	policy, err := loadStoragePolicy()
+	if err != nil {
+		return err
+	}
+	metadataSvc, err := metadataservice.NewMetadataService(meta, cached, metadataservice.Options{AuthSecret: secret, OperatorAuthSecret: primarySecret, Retention: policy.Retention})
+	if err != nil {
+		return err
+	}
+	cleanupMetrics, err := observability.NewCleanupMetrics(prometheus.DefaultRegisterer)
 	if err != nil {
 		return err
 	}
 	cleanupCtx, stopCleanup := context.WithCancel(trpc.BackgroundContext())
 	defer stopCleanup()
 	cleanupAuth := &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey(secret, "storage-primary")}
-	go runCleanupLoop(cleanupCtx, cached, resolver, cleanupAuth, time.Hour)
+	go runCleanupLoop(cleanupCtx, datasetCleanup{reader: cached, resolver: resolver, auth: cleanupAuth, retention: policy.Retention, metrics: cleanupMetrics}, time.Hour)
 	go runViewPeriodCleanupLoop(cleanupCtx, meta, time.Hour, storageViewPeriodRetention())
 	s := trpc.NewServer()
-	for _, name := range []string{"trpc.moox.storage.PrimaryStore", "trpc.moox.storage.PrimaryStore.trpc", "trpc.moox.storage.PrimaryStore.http"} {
+	for _, name := range []string{"trpc.moox.storage.PrimaryStore", "trpc.moox.storage.PrimaryStore.trpc"} {
 		if listener := s.Service(name); listener != nil {
 			pb.RegisterPrimaryStoreService(listener, svc)
 		}
 	}
-	for _, name := range []string{"trpc.moox.storage.Metadata", "trpc.moox.storage.Metadata.trpc", "trpc.moox.storage.Metadata.http"} {
+	for _, name := range []string{"trpc.moox.storage.Metadata", "trpc.moox.storage.Metadata.trpc"} {
 		if listener := s.Service(name); listener != nil {
 			pb.RegisterMetadataService(listener, metadataSvc)
 		}
@@ -195,11 +182,11 @@ type datasetReader interface {
 	ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error)
 }
 
-func runCleanupLoop(ctx context.Context, reader datasetReader, resolver primarystore.NodeResolver, auth *pb.AuthInfo, interval time.Duration) {
+func runCleanupLoop(ctx context.Context, cleanup datasetCleanup, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Hour
 	}
-	if err := cleanupDatasets(ctx, reader, resolver, auth, time.Now().UTC()); err != nil {
+	if err := cleanup.run(ctx, time.Now().UTC()); err != nil {
 		log.Printf("storage cleanup initial run failed: %v", err)
 	}
 	ticker := time.NewTicker(interval)
@@ -209,7 +196,7 @@ func runCleanupLoop(ctx context.Context, reader datasetReader, resolver primarys
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			if err := cleanupDatasets(ctx, reader, resolver, auth, now.UTC()); err != nil {
+			if err := cleanup.run(ctx, now.UTC()); err != nil {
 				log.Printf("storage cleanup run failed: %v", err)
 			}
 		}
@@ -258,43 +245,68 @@ func storageViewPeriodRetention() time.Duration {
 	return 7 * 24 * time.Hour
 }
 
-func cleanupDatasets(ctx context.Context, reader datasetReader, resolver primarystore.NodeResolver, auth *pb.AuthInfo, now time.Time) error {
+// datasetCleanup deletes the rows of each active time-series Dataset that
+// are older than its retention in the Storage policy.
+type datasetCleanup struct {
+	reader    datasetReader
+	resolver  dataNodeResolver
+	auth      *pb.AuthInfo
+	retention storagepolicy.Retention
+	metrics   *observability.CleanupMetrics
+}
+
+func (c datasetCleanup) run(ctx context.Context, now time.Time) error {
 	var result error
 	for pageNo := uint32(1); ; pageNo++ {
-		datasets, page, err := reader.ListDatasets(ctx, metadata.DatasetQuery{DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Page: &pb.Page{Page: pageNo, Size: 1000}})
+		datasets, page, err := c.reader.ListDatasets(ctx, metadata.DatasetQuery{DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Page: &pb.Page{Page: pageNo, Size: 1000}})
 		if err != nil {
 			return err
 		}
 		for _, dataset := range datasets {
-			if dataset == nil || (dataset.GetStatus() != "" && dataset.GetStatus() != "active") || dataset.GetKeepDuration() == "0" {
+			if dataset == nil || (dataset.GetStatus() != "" && dataset.GetStatus() != "active") {
 				continue
 			}
-			keep, err := time.ParseDuration(dataset.GetKeepDuration())
-			if err != nil || keep <= 0 {
-				result = errors.Join(result, fmt.Errorf("dataset %s/%s has invalid keep_duration %q", dataset.GetSpaceId(), dataset.GetDatasetId(), dataset.GetKeepDuration()))
-				continue
-			}
-			node, err := resolver(ctx, dataset.GetSpaceId(), dataset.GetDatasetId())
-			if err != nil {
-				result = errors.Join(result, err)
-				continue
-			}
-			before := now.UTC().Add(-keep).Truncate(cleanupBucketDuration()).Format("2006-01-02T15:04:05.000000000Z")
-			rsp, err := node.CleanupExpiredBuckets(ctx, &pb.CleanupExpiredBucketsReq{
-				AuthInfo: auth, SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), BeforeBucketStart: before,
-			})
-			if err != nil {
-				result = errors.Join(result, err)
-				continue
-			}
-			if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
-				result = errors.Join(result, errors.New(rsp.GetRetInfo().GetMsg()))
+			if err := c.cleanupDataset(ctx, dataset, now); err != nil {
+				c.metrics.ObserveFailure(dataset.GetSpaceId(), dataset.GetDatasetId())
+				result = errors.Join(result, fmt.Errorf("dataset %s/%s: %w", dataset.GetSpaceId(), dataset.GetDatasetId(), err))
 			}
 		}
 		if page == nil || !page.GetHasMore() || len(datasets) == 0 {
 			return result
 		}
 	}
+}
+
+func (c datasetCleanup) cleanupDataset(ctx context.Context, dataset *pb.Dataset, now time.Time) error {
+	period, _, err := c.retention.Resolve(dataset.GetSpaceId(), dataset.GetFreq())
+	if err != nil {
+		return err
+	}
+	if period.Forever {
+		return nil
+	}
+	node, err := c.resolver(ctx, dataset.GetSpaceId(), dataset.GetDatasetId())
+	if err != nil {
+		return err
+	}
+	// Rows are deleted by whole day buckets, so a Dataset keeps between its
+	// retention and one more bucket of history.
+	cutoff := now.UTC().Add(-period.Duration).Truncate(cleanupBucketDuration())
+	started := time.Now()
+	rsp, err := node.CleanupExpiredBuckets(ctx, &pb.CleanupExpiredBucketsReq{
+		AuthInfo: c.auth, SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), BeforeBucketStart: cutoff.Format("2006-01-02T15:04:05.000000000Z"),
+	})
+	if err != nil {
+		return err
+	}
+	if rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+		return errors.New(rsp.GetRetInfo().GetMsg())
+	}
+	elapsed := time.Since(started)
+	c.metrics.ObserveCleanup(dataset.GetSpaceId(), dataset.GetDatasetId(), cutoff, elapsed, rsp.GetDeletedRanges())
+	log.Printf("storage cleanup space=%s dataset=%s freq=%s retention=%s cutoff=%s deleted_ranges=%d elapsed=%s",
+		dataset.GetSpaceId(), dataset.GetDatasetId(), dataset.GetFreq(), period, cutoff.Format(time.RFC3339), rsp.GetDeletedRanges(), elapsed.Round(time.Millisecond))
+	return nil
 }
 
 func cleanupBucketDuration() time.Duration {
@@ -328,13 +340,13 @@ func runViewRole() error {
 	if rawURL == "" {
 		return errors.New("MOOX_STORAGE_EVENTBUS_URL is required for view role")
 	}
-	metadataTarget := envOrDefault("MOOX_STORAGE_METADATA_TARGET", "ip://127.0.0.1:20200")
-	metadataNetwork := envOrDefault("MOOX_STORAGE_METADATA_NETWORK", "tcp")
-	metadataProtocol := envOrDefault("MOOX_STORAGE_METADATA_PROTOCOL", "http")
-	metadataProxy := pb.NewMetadataClientProxy(client.WithTarget(metadataTarget), client.WithNetwork(metadataNetwork), client.WithProtocol(metadataProtocol))
-	primaryTarget := envOrDefault("MOOX_STORAGE_PRIMARY_TARGET", "ip://127.0.0.1:20201")
-	primaryNetwork := envOrDefault("MOOX_STORAGE_PRIMARY_NETWORK", "tcp")
-	primaryProtocol := envOrDefault("MOOX_STORAGE_PRIMARY_PROTOCOL", "http")
+	gateway, err := openStorageViewGateway(root)
+	if err != nil {
+		return err
+	}
+	defer gateway.Close()
+	metadataProxy := viewservice.NewGatewayMetadataClient(gateway)
+	primaryTarget := envOrDefault("MOOX_STORAGE_PRIMARY_TARGET", "ip://127.0.0.1:20102")
 	primarySecret := os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
 	if primarySecret == "" {
 		return errors.New("MOOX_STORAGE_PRIMARY_AUTH_SECRET is required for view role")
@@ -346,13 +358,14 @@ func runViewRole() error {
 	// service timeout.
 	primaryProxy := pb.NewPrimaryStoreClientProxy(
 		client.WithTarget(primaryTarget),
-		client.WithNetwork(primaryNetwork),
-		client.WithProtocol(primaryProtocol),
+		client.WithNetwork("tcp"),
+		client.WithProtocol("trpc"),
+		client.WithTransport(transport.DefaultClientTransport),
 		client.WithTimeout(5*time.Minute),
 	)
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey(primarySecret, "storage-view")})
 	svc.SetPrimaryReader(primaryProxy)
-	rebuildCheckInterval, rebuildLookback, _, rebuildMaxPending, rebuildIdleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
+	rebuildMaxPending, rebuildIdleChecks, maxPendingConfigured, idleChecksConfigured, err := storageViewRebuildSettings()
 	if err != nil {
 		return err
 	}
@@ -360,34 +373,31 @@ func runViewRole() error {
 	if err != nil {
 		return err
 	}
-	maintenancePolicy, err := storageViewMaintenancePolicy()
+	policy, err := loadStoragePolicy()
 	if err != nil {
 		return err
 	}
-	if policyInterval, parseErr := time.ParseDuration(strings.TrimSpace(maintenancePolicy.MaintenanceCheckInterval)); parseErr != nil || policyInterval < 30*time.Second {
-		return fmt.Errorf("storage view maintenance_check_interval must be at least 30s")
-	} else {
-		rebuildCheckInterval = policyInterval
-	}
-	if maintenancePolicy.MaxViewFileBytes <= 0 || maintenancePolicy.MaxPeriodsPerSeries <= maintenancePolicy.RebuildLookbackPeriods {
-		return errors.New("storage view maintenance policy limits are invalid")
-	}
+	// The policy is validated on load, so its durations parse.
+	rebuildCheckInterval, _ := time.ParseDuration(policy.View.MaintenanceCheckInterval)
+	capacityCheckInterval, _ := time.ParseDuration(policy.View.CapacityCheckInterval)
+	capacityCheckJitter, _ := time.ParseDuration(policy.View.CapacityCheckJitter)
+	// 每序列保留根数随 DataView 查询响应告知调用方：不依赖维护器是否启动。
+	svc.SetSeriesBars(policy.View.Bars)
 	maintenanceOptions := viewservice.MaintenanceOptions{
 		Metadata:                    metadataProxy,
 		Primary:                     primaryProxy,
 		PrimaryRange:                primaryProxy,
 		OwnerID:                     "storage-view",
 		Interval:                    rebuildCheckInterval,
-		RebuildLookback:             rebuildLookback,
-		RebuildLookbackPeriods:      map[string]uint64{"default": maintenancePolicy.RebuildLookbackPeriods},
-		Grace:                       time.Minute,
-		MaxViewFileBytes:            maintenancePolicy.MaxViewFileBytes,
+		Bars:                        policy.View.Bars,
+		TrimBars:                    policy.View.TrimBars,
+		MaxViewFileBytes:            policy.View.MaxViewFileBytes,
+		CapacityCheckInterval:       capacityCheckInterval,
+		CapacityCheckJitter:         capacityCheckJitter,
 		RebuildMaxPending:           rebuildMaxPending,
 		RebuildIdleChecks:           rebuildIdleChecks,
 		RebuildMaxPendingConfigured: maxPendingConfigured,
 		RebuildIdleChecksConfigured: idleChecksConfigured,
-		Policy:                      maintenancePolicy,
-		MaxPeriodsPerSeries:         maintenancePolicy.MaxPeriodsPerSeries,
 		BackfillPageSize:            backfillPageSize,
 		BackfillRequestInterval:     backfillRequestInterval,
 	}
@@ -401,7 +411,7 @@ func runViewRole() error {
 		return errors.New("ViewIndex listener is not configured")
 	}
 	pb.RegisterViewIndexService(indexListener, svc)
-	for _, name := range []string{"trpc.moox.storage.DataView", "trpc.moox.storage.DataView.trpc", "trpc.moox.storage.DataView.http"} {
+	for _, name := range []string{"trpc.moox.storage.DataView", "trpc.moox.storage.DataView.trpc"} {
 		if listener := s.Service(name); listener != nil {
 			pb.RegisterDataViewService(listener, svc)
 		}
@@ -452,11 +462,10 @@ func runViewRole() error {
 	}
 	staticConsumerOptions := cloneViewConsumerOptions(consumerOptions)
 	stripWildcardConsumerRoutes(&staticConsumerOptions)
-	// The legacy misc durable previously held an inventory-expanded wildcard
-	// filter. Reusing that durable with a newly discovered View would violate
-	// JetStream's immutable filter contract. Static consumers therefore keep
-	// only the exact, latency-sensitive partitions; the reconciler owns every
-	// misc Dataset with a stable per-Dataset durable instead.
+	// A durable's filter is immutable in JetStream, so a wildcard partition
+	// cannot follow newly discovered Datasets. Static consumers keep only the
+	// exact, latency-sensitive partitions; the reconciler owns every misc
+	// Dataset with a stable per-Dataset durable instead.
 	stripMiscConsumerPartition(&staticConsumerOptions)
 	dynamicConsumerOptions := cloneViewConsumerOptions(consumerOptions)
 	stopConsumer, err := svc.StartEventConsumer(trpc.BackgroundContext(), eventClient, staticConsumerOptions)
@@ -470,10 +479,7 @@ func runViewRole() error {
 	if err != nil {
 		return fmt.Errorf("create storage view dynamic inventory reconciler: %w", err)
 	}
-	// Bind the current inventory before starting the periodic reconciler. The
-	// legacy catch-all durable is intentionally retained during this rollout;
-	// its pending sequence is a rollback/replay safety net and must not be
-	// deleted until operators have verified the per-Dataset consumers.
+	// Bind the current inventory before starting the periodic reconciler.
 	if err := dynamicReconciler.Reconcile(trpc.BackgroundContext()); err != nil {
 		return fmt.Errorf("initial storage view dynamic inventory reconcile: %w", err)
 	}
@@ -495,6 +501,24 @@ func runViewRole() error {
 		defer stopViewMaintainer()
 	}
 	return <-serveErr
+}
+
+// openStorageViewGateway uses the module's public signing identity and canonical
+// host gateway configuration. Storage-internal data-plane calls remain direct.
+func openStorageViewGateway(dataDirectory string) (*gatewayclient.Client, error) {
+	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
+	if path == "" {
+		return nil, errors.New("MOOX_STORAGE_CONFIG is required for the storage-view gateway client")
+	}
+	var config storageconfig.RuntimeConfig
+	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
+	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &config, config.ApplyDefaults); err != nil {
+		return nil, err
+	}
+	if config.GatewayClient.Caller != "storage-view" {
+		return nil, errors.New("storage-view gateway_client.caller must be storage-view")
+	}
+	return config.GatewayClient.OpenInternal(path, dataDirectory, func(err error) { log.Printf("storage-view gateway directory refresh: %v", err) })
 }
 
 // connectStorageViewEventBus keeps the process alive across a transient
@@ -592,38 +616,32 @@ func cloneViewConsumerOptions(options viewservice.EventConsumerOptions) viewserv
 	return clone
 }
 
-func storageViewMaintenancePolicy() (storageconfig.ViewMaintenancePolicy, error) {
-	policy := storageconfig.ViewMaintenancePolicy{
-		MaintenanceCheckInterval: "1m",
-		CapacityCheckInterval:    "1h",
-		CapacityCheckJitter:      "1h",
-		RebuildLookbackPeriods:   5000,
-		MaxPeriodsPerSeries:      6000,
-		MaxViewFileBytes:         1 << 30,
-	}
+// loadStoragePolicy loads storage-policy.json named by storage.policy_file.
+// Without MOOX_STORAGE_CONFIG (tests and local tools) the recommended policy
+// applies; a configured role refuses to start without a valid file.
+func loadStoragePolicy() (storagepolicy.Policy, error) {
 	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
 	if path == "" {
-		return policy, nil
+		return storagepolicy.Default(), nil
 	}
 	var runtimeConfig storageconfig.RuntimeConfig
 	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
 	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-		return policy, fmt.Errorf("load storage view maintenance config: %w", err)
+		return storagepolicy.Policy{}, fmt.Errorf("load storage config: %w", err)
 	}
-	policyPath := strings.TrimSpace(runtimeConfig.Storage.View.MaintenancePolicyFile)
+	policyPath := strings.TrimSpace(runtimeConfig.Storage.PolicyFile)
 	if policyPath == "" {
-		return policy, nil
+		return storagepolicy.Policy{}, errors.New("storage.policy_file is required")
 	}
 	if !filepath.IsAbs(policyPath) {
 		// MOOX_STORAGE_CONFIG points at <package>/config/*.yaml while the
-		// deployed policy path is expressed from the package root.
-		packageRoot := filepath.Dir(filepath.Dir(path))
-		policyPath = filepath.Join(packageRoot, policyPath)
+		// policy path is expressed from the package root.
+		policyPath = filepath.Join(filepath.Dir(filepath.Dir(path)), policyPath)
 	}
-	return storageconfig.LoadViewMaintenancePolicy(policyPath)
+	return storagepolicy.Load(policyPath)
 }
 
-func validateStorageViewConsumerPartitions(ctx context.Context, metadataProxy pb.MetadataClientProxy, auth *pb.AuthInfo, options *viewservice.EventConsumerOptions) error {
+func validateStorageViewConsumerPartitions(ctx context.Context, metadataProxy viewservice.ViewInventoryClient, auth *pb.AuthInfo, options *viewservice.EventConsumerOptions) error {
 	if options == nil {
 		return errors.New("storage view consumer options are required")
 	}
@@ -647,28 +665,16 @@ func validateStorageViewConsumerPartitions(ctx context.Context, metadataProxy pb
 			if view == nil {
 				continue
 			}
-			ids := []string{}
-			if view.GetDatasetId() != "" {
-				ids = []string{view.GetDatasetId()}
+			datasetID := strings.TrimSpace(view.GetDatasetId())
+			if datasetID == "" {
+				continue
 			}
-			for _, column := range view.GetColumns() {
-				origin := strings.TrimSpace(column.GetOriginId())
-				if datasetID, _, ok := strings.Cut(origin, "."); ok && datasetID != "" {
-					ids = append(ids, datasetID)
-				}
+			key := view.GetSpaceId() + "\x00" + datasetID
+			if _, ok := seen[key]; ok {
+				continue
 			}
-			for _, datasetID := range ids {
-				datasetID = strings.TrimSpace(datasetID)
-				if datasetID == "" {
-					continue
-				}
-				key := view.GetSpaceId() + "\x00" + datasetID
-				if _, ok := seen[key]; ok {
-					continue
-				}
-				seen[key] = struct{}{}
-				managed = append(managed, storageconfig.StorageViewConsumerDataset{SpaceID: view.GetSpaceId(), DatasetID: datasetID})
-			}
+			seen[key] = struct{}{}
+			managed = append(managed, storageconfig.StorageViewConsumerDataset{SpaceID: view.GetSpaceId(), DatasetID: datasetID})
 		}
 		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
 			break
@@ -853,37 +859,22 @@ func storageViewDeliverPolicy(configured string) string {
 	return configured
 }
 
-func storageViewRebuildSettings() (time.Duration, time.Duration, int64, uint64, uint32, bool, bool, error) {
-	const defaultInterval = time.Minute
+func storageViewRebuildSettings() (uint64, uint32, bool, bool, error) {
 	path := strings.TrimSpace(os.Getenv("MOOX_STORAGE_CONFIG"))
 	if path == "" {
-		return defaultInterval, 24 * time.Hour, 1 << 30, 32, 3, false, false, nil
+		return 32, 3, false, false, nil
 	}
 	var runtimeConfig storageconfig.RuntimeConfig
 	loader := storageconfig.NewConfigLoader(filepath.Dir(path))
 	if err := loader.LoadConfigWithDefaults(filepath.Base(path), &runtimeConfig, runtimeConfig.ApplyDefaults); err != nil {
-		return 0, 0, 0, 0, 0, false, false, fmt.Errorf("load storage view rebuild config: %w", err)
-	}
-	interval, err := time.ParseDuration(strings.TrimSpace(runtimeConfig.Storage.View.MaintenanceCheckInterval))
-	if err != nil || interval <= 0 {
-		return 0, 0, 0, 0, 0, false, false, fmt.Errorf("storage view maintenance_check_interval must be a positive duration")
-	}
-	if interval < 30*time.Second {
-		return 0, 0, 0, 0, 0, false, false, errors.New("storage view maintenance_check_interval must be at least 30s")
-	}
-	lookback, err := time.ParseDuration(strings.TrimSpace(runtimeConfig.Storage.View.RebuildLookback))
-	if err != nil || lookback <= 0 {
-		return 0, 0, 0, 0, 0, false, false, errors.New("storage view rebuild_lookback must be a positive duration")
-	}
-	if runtimeConfig.Storage.View.MaxViewFileBytes <= 0 {
-		return 0, 0, 0, 0, 0, false, false, errors.New("storage view max_view_file_bytes must be positive")
+		return 0, 0, false, false, fmt.Errorf("load storage view rebuild config: %w", err)
 	}
 	maxPendingConfigured := runtimeConfig.Storage.View.HasRebuildMaxPendingSetting()
 	idleChecksConfigured := runtimeConfig.Storage.View.HasRebuildIdleChecksSetting()
 	if idleChecksConfigured && runtimeConfig.Storage.View.RebuildIdleChecks == 0 {
-		return 0, 0, 0, 0, 0, false, false, errors.New("storage view rebuild_idle_checks must be greater than zero")
+		return 0, 0, false, false, errors.New("storage view rebuild_idle_checks must be greater than zero")
 	}
-	return interval, lookback, runtimeConfig.Storage.View.MaxViewFileBytes, runtimeConfig.Storage.View.RebuildMaxPending, runtimeConfig.Storage.View.RebuildIdleChecks,
+	return runtimeConfig.Storage.View.RebuildMaxPending, runtimeConfig.Storage.View.RebuildIdleChecks,
 		maxPendingConfigured, idleChecksConfigured, nil
 }
 
@@ -926,10 +917,13 @@ type dataNodeProxyKey struct {
 	ServiceTarget string
 }
 
-func newDataNodeResolver(snapshotProvider func() metadata.RequestSnapshot, newProxy func(string) pb.DataNodeRuntimeService) primarystore.NodeResolver {
+// dataNodeResolver 按空间与数据集找到负责的 DataNode 完整服务（清理等维护任务需要全部接口）。
+type dataNodeResolver func(ctx context.Context, spaceID, datasetID string) (pb.DataNodeRuntimeService, error)
+
+func newDataNodeResolver(snapshotProvider func() metadata.RequestSnapshot, newProxy func(string) pb.DataNodeRuntimeService) dataNodeResolver {
 	if newProxy == nil {
 		newProxy = func(target string) pb.DataNodeRuntimeService {
-			opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(dataNodeClientTimeout)}
+			opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport), client.WithTimeout(dataNodeClientTimeout)}
 			return newDataNodeProxyAdapter(opts...)
 		}
 	}
@@ -1013,23 +1007,23 @@ func normalizeServiceTarget(raw string) (string, error) {
 }
 
 type dataNodeProxyAdapter struct {
-	proxy        pb.DataNodeRuntimeClientProxy
-	adminProxy   pb.DataNodeDatasetAdminRuntimeClientProxy
-	markerProxy  pb.DataNodeMarkerRuntimeClientProxy
-	periodProxy  pb.DataNodePeriodRuntimeClientProxy
-	historyProxy pb.DataNodeHistoryRuntimeClientProxy
-	nodeID       string
+	proxy       pb.DataNodeRuntimeClientProxy
+	adminProxy  pb.DataNodeDatasetAdminRuntimeClientProxy
+	markerProxy pb.DataNodeMarkerRuntimeClientProxy
+	periodProxy pb.DataNodePeriodRuntimeClientProxy
+	rangeProxy  pb.DataNodeRangeRuntimeClientProxy
+	nodeID      string
 }
 
 var _ pb.DataNodePeriodRuntimeService = (*dataNodeProxyAdapter)(nil)
 
 func newDataNodeProxyAdapter(opts ...client.Option) *dataNodeProxyAdapter {
 	return &dataNodeProxyAdapter{
-		proxy:        pb.NewDataNodeRuntimeClientProxy(opts...),
-		adminProxy:   pb.NewDataNodeDatasetAdminRuntimeClientProxy(opts...),
-		markerProxy:  pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
-		periodProxy:  pb.NewDataNodePeriodRuntimeClientProxy(opts...),
-		historyProxy: pb.NewDataNodeHistoryRuntimeClientProxy(opts...),
+		proxy:       pb.NewDataNodeRuntimeClientProxy(opts...),
+		adminProxy:  pb.NewDataNodeDatasetAdminRuntimeClientProxy(opts...),
+		markerProxy: pb.NewDataNodeMarkerRuntimeClientProxy(opts...),
+		periodProxy: pb.NewDataNodePeriodRuntimeClientProxy(opts...),
+		rangeProxy:  pb.NewDataNodeRangeRuntimeClientProxy(opts...),
 	}
 }
 
@@ -1037,39 +1031,18 @@ func (a *dataNodeProxyAdapter) bindNodeID(nodeID string) {
 	a.nodeID = nodeID
 }
 
-func (a *dataNodeProxyAdapter) EnsureDatasetPeriod(ctx context.Context, req *pb.EnsureDatasetPeriodReq) (*pb.EnsureDatasetPeriodRsp, error) {
+func (a *dataNodeProxyAdapter) RegisterSeriesSnapshot(ctx context.Context, req *pb.RegisterSeriesSnapshotReq) (*pb.RegisterSeriesSnapshotRsp, error) {
 	if a == nil || a.periodProxy == nil {
 		return nil, errors.New("DataNode period runtime is unavailable")
 	}
 	if req != nil {
-		bound := proto.Clone(req).(*pb.EnsureDatasetPeriodReq)
+		bound := proto.Clone(req).(*pb.RegisterSeriesSnapshotReq)
 		bound.NodeId = a.nodeID
 		req = bound
 	}
-	return a.periodProxy.EnsureDatasetPeriod(ctx, req)
+	return a.periodProxy.RegisterSeriesSnapshot(ctx, req)
 }
-func (a *dataNodeProxyAdapter) GetDatasetPeriodStatus(ctx context.Context, req *pb.GetDatasetPeriodStatusReq) (*pb.GetDatasetPeriodStatusRsp, error) {
-	if a == nil || a.periodProxy == nil {
-		return nil, errors.New("DataNode period runtime is unavailable")
-	}
-	if req != nil {
-		bound := proto.Clone(req).(*pb.GetDatasetPeriodStatusReq)
-		bound.NodeId = a.nodeID
-		req = bound
-	}
-	return a.periodProxy.GetDatasetPeriodStatus(ctx, req)
-}
-func (a *dataNodeProxyAdapter) RecordDatasetPeriodFailures(ctx context.Context, req *pb.RecordDatasetPeriodFailuresReq) (*pb.RecordDatasetPeriodFailuresRsp, error) {
-	if a == nil || a.periodProxy == nil {
-		return nil, errors.New("DataNode period runtime is unavailable")
-	}
-	if req != nil {
-		bound := proto.Clone(req).(*pb.RecordDatasetPeriodFailuresReq)
-		bound.NodeId = a.nodeID
-		req = bound
-	}
-	return a.periodProxy.RecordDatasetPeriodFailures(ctx, req)
-}
+
 func (a *dataNodeProxyAdapter) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
 	if a == nil || a.periodProxy == nil {
 		return nil, errors.New("DataNode period runtime is unavailable")
@@ -1083,15 +1056,17 @@ func (a *dataNodeProxyAdapter) CommitTimeSeriesBatch(ctx context.Context, req *p
 }
 
 func (a *dataNodeProxyAdapter) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
-	if a == nil || a.historyProxy == nil {
-		return nil, errors.New("DataNode history runtime is unavailable")
+	if a == nil || a.rangeProxy == nil {
+		return nil, errors.New("DataNode range runtime is unavailable")
 	}
-	return a.historyProxy.ReadTimeSeriesRows(ctx, req)
+	return a.rangeProxy.ReadTimeSeriesRows(ctx, req)
 }
 
-type dataViewProxyAdapter struct {
-	proxy pb.DataViewClientProxy
-	auth  *pb.AuthInfo
+func (a *dataNodeProxyAdapter) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesRowsReq) (*pb.CountTimeSeriesRowsRsp, error) {
+	if a == nil || a.rangeProxy == nil {
+		return nil, errors.New("DataNode range runtime is unavailable")
+	}
+	return a.rangeProxy.CountTimeSeriesRows(ctx, req)
 }
 
 func (a *dataNodeProxyAdapter) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
@@ -1100,8 +1075,8 @@ func (a *dataNodeProxyAdapter) UpsertFields(ctx context.Context, req *pb.UpsertF
 func (a *dataNodeProxyAdapter) WriteFactorRows(ctx context.Context, req *pb.WriteFactorRowsReq) (*pb.WriteFactorRowsRsp, error) {
 	return a.proxy.WriteFactorRows(ctx, req)
 }
-func (a *dataNodeProxyAdapter) ReadFields(ctx context.Context, req *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
-	return a.proxy.ReadFields(ctx, req)
+func (a *dataNodeProxyAdapter) ReadRows(ctx context.Context, req *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
+	return a.proxy.ReadRows(ctx, req)
 }
 func (a *dataNodeProxyAdapter) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	return a.proxy.GetNodeState(ctx, req)
@@ -1132,17 +1107,6 @@ func (a *dataNodeProxyAdapter) AppendDatasetSyncPointMarker(ctx context.Context,
 }
 func (a *dataNodeProxyAdapter) GetFactorPeriodComputedMarker(ctx context.Context, req *pb.GetFactorPeriodComputedMarkerReq) (*pb.GetFactorPeriodComputedMarkerRsp, error) {
 	return a.markerProxy.GetFactorPeriodComputedMarker(ctx, req)
-}
-func (a *dataViewProxyAdapter) QueryTimeSeriesRows(ctx context.Context, req *pb.QueryTimeSeriesRowsReq) (*pb.QueryTimeSeriesRowsRsp, error) {
-	clone := proto.Clone(req).(*pb.QueryTimeSeriesRowsReq)
-	clone.AuthInfo = proto.Clone(a.auth).(*pb.AuthInfo)
-	return a.proxy.QueryTimeSeriesRows(ctx, clone)
-}
-
-func (a *dataViewProxyAdapter) SearchRecordRows(ctx context.Context, req *pb.SearchRecordRowsReq) (*pb.SearchRecordRowsRsp, error) {
-	clone := proto.Clone(req).(*pb.SearchRecordRowsReq)
-	clone.AuthInfo = proto.Clone(a.auth).(*pb.AuthInfo)
-	return a.proxy.SearchRecordRows(ctx, clone)
 }
 
 // This small role entrypoint intentionally keeps the DataNode process
@@ -1177,6 +1141,9 @@ func runDataNodeRole() error {
 		return err
 	}
 	defer svc.Close()
+	if err := observability.RegisterPebbleDiskUsage(prometheus.DefaultRegisterer, nodeID, svc.Store().DiskSpaceUsage); err != nil {
+		return err
+	}
 	client, err := jetstream.Connect(trpc.BackgroundContext(), eventConfig)
 	if err != nil {
 		return err
@@ -1198,7 +1165,7 @@ func runDataNodeRole() error {
 	pb.RegisterDataNodePeriodRuntimeService(listener, svc)
 	pb.RegisterDataNodeDatasetAdminRuntimeService(listener, svc)
 	pb.RegisterDataNodeMarkerRuntimeService(listener, svc)
-	pb.RegisterDataNodeHistoryRuntimeService(listener, svc)
+	pb.RegisterDataNodeRangeRuntimeService(listener, svc)
 	if err := storagebootstrap.RegisterMetricsReporter(s, "node"); err != nil {
 		return err
 	}
@@ -1270,4 +1237,11 @@ func registerRoleHealth(s *server.Server, instance string) error {
 		return fmt.Errorf("register storage health: %w", err)
 	}
 	return nil
+}
+
+// primaryStore 把完整服务解析器交给 PrimaryStore 使用。
+func (r dataNodeResolver) primaryStore() primarystore.Resolver {
+	return func(ctx context.Context, spaceID, datasetID string) (primarystore.DataNodeClient, error) {
+		return r(ctx, spaceID, datasetID)
+	}
 }

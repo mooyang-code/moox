@@ -164,7 +164,20 @@ func TestHandleLogicalAccountTargetRejectsDelayedEventFromPreviousOwnerLifecycle
 	seedLogicalTargetAccount(t, tradeStore, true, true)
 	claimAt := time.Now().UTC()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountOwnerAt("space-1", "logical-1", "runner-1", claimAt)
+		// 释放后重新认领：归属代数推进，前一个生命周期的延迟目标必须被拒绝。
+		account, err := tx.GetLogicalAccount("space-1", "logical-1")
+		if err != nil {
+			return err
+		}
+		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", account.OwnerInstanceID, account.OwnerSessionID, account.AuthFence); err != nil {
+			return err
+		}
+		account, err = tx.GetLogicalAccount("space-1", "logical-1")
+		if err != nil {
+			return err
+		}
+		_, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "runner-1", "session-2", account.AuthFence)
+		return err
 	}))
 	oldEventAt := claimAt.Add(-time.Second)
 	result := HandleTarget(context.Background(), logicalTargetDelivery(
@@ -177,7 +190,7 @@ func TestHandleLogicalAccountTargetRejectsDelayedEventFromPreviousOwnerLifecycle
 	require.Error(t, err)
 }
 
-func TestHandleModernTargetUsesSessionFenceWithoutLegacyGeneration(t *testing.T) {
+func TestHandleTargetUsesSessionFenceAcrossReclaim(t *testing.T) {
 	db := openTargetStore(t)
 	seedLogicalTargetAccount(t, db, true, true)
 	ctx := context.Background()
@@ -187,10 +200,6 @@ func TestHandleModernTargetUsesSessionFenceWithoutLegacyGeneration(t *testing.T)
 			return err
 		}
 		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", "runner-1", "session-1", account.AuthFence); err != nil {
-			return err
-		}
-		// A prior legacy lifecycle remains in the audit column after session authorization.
-		if err := tx.SetLogicalAccountOwnerGeneration("space-1", "logical-1", ""); err != nil {
 			return err
 		}
 		account, err = tx.GetLogicalAccount("space-1", "logical-1")
@@ -394,7 +403,7 @@ func TestHandleLogicalAccountTargetRetriesUntilMemberExists(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
 			MarketType: "SPOT", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		})
@@ -425,7 +434,7 @@ func TestHandleLogicalAccountTargetAcceptsOKXLiveInstrument(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
 			MarketType: "SWAP", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -593,7 +602,7 @@ func seedLogicalTargetAccount(
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
+			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
 			MarketType: "SPOT", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {

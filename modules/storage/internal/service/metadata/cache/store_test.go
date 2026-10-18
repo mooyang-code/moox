@@ -63,6 +63,7 @@ func (stubMetadataReader) ListDatasets(context.Context, metadata.DatasetQuery) (
 func (stubMetadataReader) ListDatasetSubjects(context.Context, string, string, string, *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error) {
 	return nil, nil, nil
 }
+func (stubMetadataReader) SubjectsRevision(context.Context, string) (uint64, error) { return 0, nil }
 func (stubMetadataReader) GetFieldGroup(context.Context, string, string) (*pb.FieldGroup, error) {
 	return nil, nil
 }
@@ -91,9 +92,6 @@ func (stubMetadataReader) GetDevice(context.Context, string) (*pb.Device, error)
 	return nil, nil
 }
 func (stubMetadataReader) ListDevices(context.Context, string, *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
-	return nil, nil, nil
-}
-func (stubMetadataReader) ListArchiveFiles(context.Context, string, string, *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error) {
 	return nil, nil, nil
 }
 

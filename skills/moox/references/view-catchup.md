@@ -16,7 +16,7 @@
 
 `c_period_time` 是 unix 秒。`t_views.c_mtime` 不是 K 线水位。
 
-初始化的 Binance 1m 行情使用 `dataset_binance_kline_1m` 与 `view_binance_kline_1m`；Spot/Swap 通过 `series_tag` 区分。一个因子集的结果 View 由 Storage 按结果 Dataset 自动维护。
+每个采集任务独占一个结果 Dataset/View：初始化的 Binance 现货 1m 任务写 `dataset_dasftksvjhj2jom4vhd0` 与 `view_dasftksvjhj2jom4vhd0_kline_1m`，合约 1m 任务写 `dataset_dasftksvjhj2jom4vhdg` 与 `view_dasftksvjhj2jom4vhdg_kline_1m`。一个因子集的结果 View 由 Storage 按结果 Dataset 自动维护。
 
 ## 生产路径（不要混用）
 
@@ -27,7 +27,7 @@
 - 分区 durable 在 **View** 的 `trpc_go.yaml`：`storage_view_kline` / `storage_view_metrics` / `storage_view_factor` / `storage_view_misc*`
 - Primary 的 `storage.yaml` 可以很短、没有 `consumer_partitions`，这不代表 View 没用分区
 
-控制面：`/data/moox/prod`。Trade 可能在 `/home/ubuntu/moox/trade-move`，不要往香港机发 Storage。
+控制面：`/data/moox/prod`；Storage 单元在 Storage 主机的 `/data/moox/storage/current`，不要往其他主机发 Storage。
 
 ## Storage View 容量检查
 
@@ -39,7 +39,7 @@
 
 - 对行情 / 交易 / 因子 Dataset 执行 `purge-dataset-events`
 - 不 dry-run 就 `--yes`；不带 `--yes` 的修改命令
-- 把 EventBus token、HMAC、`internal-admin.yaml` 打进命令行、日志或聊天
+- 把 EventBus token、HMAC 打进命令行、日志或聊天（Storage 维护命令不需要 EventBus 凭据，见 [`cli-operations.md`](cli-operations.md)）
 - 用 `--reset-view-indexes` / `force-rebuild-view` 当常规追平
 - 只重启 View 就宣布 kline 已追平（InProgress 心跳僵尸重启后仍可能立刻再占满 ACK 窗口）
 - 给重建补发行级就绪事件或往 `pending-subjects` 落 journal。from-scratch 重建曾把每行 fsync 到该目录，拖死同进程全部 View（含 kline）。Factor 的实时入口是 Collector 周期完成事件，源数据从 Storage PrimaryStore 读取；重建窗口漏掉的周期使用显式 Recalc
@@ -54,7 +54,7 @@
 - ACK 计数不涨，但 `in_progress` 仍在增加
 - misc / metrics 分区仍在刷 `mooxsys`。分区隔离挡不住同进程的 `pending-subjects` fsync；旧二进制 from-scratch 重建 metrics 时会把 kline ACK 窗口一起占满
 
-这是 durable 被未完成投递占满，不是“没数据”。三个 crypto kline View **共用** `storage_view_kline`；Binance 现货与永续 1m 共用 `view_binance_kline_1m`。
+这是 durable 被未完成投递占满，不是“没数据”。静态路由的 crypto kline View 共用 `storage_view_kline`；采集任务结果各自使用动态的按 Dataset durable。
 
 在 Storage 主机、用**该机同版本** `moox-cli`：
 
@@ -64,18 +64,17 @@ moox-cli storage repair-view \
   --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_binance_kline_1m \
-  --consumer storage_view_kline \
-  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
-  --eventbus-url tls://<EventBus公网IP>:4222 \
+  --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
+  --consumer <View 消费者名> \
   --dry-run
 ```
 
-执行时：第一个 View 删除 kline durable 并 bump revision；其余三个 `--reset-consumer=false` 只 bump；最后一次再 `--restart=true`。用 `trap` 保证失败后仍 `start.sh storage-view`。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`rebuild_lookback_periods`，默认 5000 根），不要为了追平改成 `--reset-view-indexes`。
+执行时：第一个 View 删除 kline durable 并 bump revision；其余三个 `--reset-consumer=false` 只 bump；最后一次再 `--restart=true`。用 `trap` 保证失败后仍 `start.sh --components storage-view`。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`[storage_retention] view_rows_per_series`，默认 5000 根），不要为了追平改成 `--reset-view-indexes`。
 
-### EventBus admin 地址
+### EventBus 管理权限
 
-控制机上的 `internal-admin.yaml` 的 `urls` 是 `tls://127.0.0.1:4222`。拷到 Storage 后若不覆盖地址，删除 consumer 会 `nats: no servers available for connection`，而 View 可能已被 stop。必须加 `--eventbus-url tls://<EventBus公网IP>:4222`，CA 用 Storage 上已有的 `ca.pem`。凭据 mode `0600`，只打印字节数和权限。
+删除 consumer 等 EventBus 管理操作由 Admin 代为执行：`moox-cli storage ...` 用 storage-view 的网关身份调用 Admin，Storage 主机上不需要 EventBus 管理员凭据，也就没有“凭据里的地址是控制机回环”这类陷阱。
+命令在停止 View 之前就会通过 `InspectEventBus` 确认网关、Admin 与 EventBus 都可用（`--dry-run` 同样会走一遍），不会出现 View 已被停止才发现连不上。
 
 ## Factor 周期诊断
 
@@ -83,7 +82,7 @@ Factor 消费 `CollectorPeriodCompleted`，durable 名为 `factor_collector_peri
 Storage 的计算输入读取走 PrimaryStore，不读取 View。先看该 durable 的 pending 与
 redelivery，再按 `set` 查看 `factor_period_lag_seconds`、`factor_last_period_time`、
 `factor_lane_backlog` 和 `factor_period_total`。检查 `factor_failures_total` 中的失败因子
-与原因，`factor_python_busy` 用于判断 Python 槽位是否持续饱和。
+与原因；`factor_compile_errors_total` 非零说明管理端与引擎的 expr 版本不一致。
 
 | 现象 | 判断 | 动作 |
 |---|---|---|
@@ -92,11 +91,10 @@ redelivery，再按 `set` 查看 `factor_period_lag_seconds`、`factor_last_peri
 | `factor_failures_total` 增长 | 因子或标的数据失败 | 检查对应因子错误、输入列和上游缺失 subject；基础设施错误会重试，业务失败会进入周期终态 |
 | 实时已追平但历史值需修正 | 历史补算 | 提交有界 Recalc 范围；已完成分块不会回滚 |
 
-控制面连本机 EventBus，一般不必 `--eventbus-url`。
 
 ## 验收
 
 - 1m：View `output_watermark` 与 Primary 相差分钟级；`c_updated_at` 继续前进
 - 1h：对齐到**已收盘**小时（与 Primary 1h 相同），不要用当前未结束小时当缺口
 - Factor：每个 enabled set 的 `factor_last_period_time` 接近最新已收盘周期；`factor_period_total` 持续增长且 lag 回落
-- 不要只看 `storage-view` / `moox-factor` 的 pid
+- 不要只看 `storage-view` / `moox-factor-mgr` 的 pid

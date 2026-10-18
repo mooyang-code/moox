@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/setup"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
@@ -11,6 +12,8 @@ import (
 type setupDomain interface {
 	Apply(context.Context, setup.Manifest) (setup.Result, error)
 	Inspect(context.Context, setup.Manifest) (setup.Status, error)
+	PutBackup(context.Context, string) (time.Time, error)
+	GetBackup(context.Context) (setup.Backup, error)
 }
 
 type Service struct {
@@ -55,6 +58,32 @@ func (s *Service) GetSetupStatus(ctx context.Context, request *pb.GetSetupStatus
 		Users: int32(status.Users), Secrets: int32(status.Secrets), Hosts: int32(status.Hosts),
 		Missing: int32(status.Missing), Conflicts: int32(status.Conflicts), Spaces: int32(status.Spaces),
 	}, nil
+}
+
+// PutConfigBackup 保存 CLI 加密好的配置备份（服务端解不开）。
+func (s *Service) PutConfigBackup(ctx context.Context, request *pb.PutConfigBackupReq) (*pb.PutConfigBackupRsp, error) {
+	if s.domain == nil {
+		return &pb.PutConfigBackupRsp{RetInfo: setupRetError(pb.ErrorCode_INNER_ERR, "setup_storage_failed")}, nil
+	}
+	updated, err := s.domain.PutBackup(ctx, request.GetEnvelope())
+	if err != nil {
+		code, message := mapSetupError(err)
+		return &pb.PutConfigBackupRsp{RetInfo: setupRetError(code, message)}, nil
+	}
+	return &pb.PutConfigBackupRsp{RetInfo: setupRetOK(), UpdatedAt: updated.Unix()}, nil
+}
+
+// GetConfigBackup 取回配置备份，由 CLI 在本机用管理员密码解开。
+func (s *Service) GetConfigBackup(ctx context.Context, _ *pb.GetConfigBackupReq) (*pb.GetConfigBackupRsp, error) {
+	if s.domain == nil {
+		return &pb.GetConfigBackupRsp{RetInfo: setupRetError(pb.ErrorCode_INNER_ERR, "setup_storage_failed")}, nil
+	}
+	backup, err := s.domain.GetBackup(ctx)
+	if err != nil {
+		code, message := mapSetupError(err)
+		return &pb.GetConfigBackupRsp{RetInfo: setupRetError(code, message)}, nil
+	}
+	return &pb.GetConfigBackupRsp{RetInfo: setupRetOK(), Envelope: backup.Envelope, UpdatedAt: backup.UpdatedAt.Unix()}, nil
 }
 
 func applyManifest(request *pb.ApplySetupReq) (setup.Manifest, error) {
@@ -130,6 +159,10 @@ func mapSetupError(err error) (pb.ErrorCode, string) {
 		return pb.ErrorCode_INVALID_PARAM, "setup_conflict"
 	case errors.Is(err, setup.ErrInvalid):
 		return pb.ErrorCode_INVALID_PARAM, "setup_invalid"
+	case errors.Is(err, setup.ErrBackupInvalid):
+		return pb.ErrorCode_INVALID_PARAM, "config_backup_invalid"
+	case errors.Is(err, setup.ErrBackupMissing):
+		return pb.ErrorCode_NOT_FOUND, "config_backup_missing"
 	default:
 		return pb.ErrorCode_INNER_ERR, "setup_storage_failed"
 	}

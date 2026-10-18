@@ -80,7 +80,7 @@ func (f *fakePublisher) Close() error {
 
 func TestBuildSnapshotPreservesFamiliesAndLimits(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_reporter_test", Help: "reporter help"}, []string{"kind"})
+	gauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_reporter_last_success_timestamp_seconds", Help: "reporter help"}, []string{"kind"})
 	if err := registry.Register(gauge); err != nil {
 		t.Fatal(err)
 	}
@@ -109,14 +109,14 @@ func TestBuildSnapshotPreservesFamiliesAndLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "# HELP moox_reporter_test reporter help") || !strings.Contains(string(raw), "# TYPE moox_reporter_test gauge") {
+	if !strings.Contains(string(raw), "# HELP moox_reporter_last_success_timestamp_seconds reporter help") || !strings.Contains(string(raw), "# TYPE moox_reporter_last_success_timestamp_seconds gauge") {
 		t.Fatalf("family metadata missing: %s", raw)
 	}
 }
 
 func TestBuildSnapshotFiltersAndRejectsOversize(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	for _, name := range []string{"moox_included_metric", "go_excluded_metric"} {
+	for _, name := range []string{"moox_included_last_success_timestamp_seconds", "go_excluded_metric"} {
 		g := prometheus.NewGauge(prometheus.GaugeOpts{Name: name, Help: name})
 		if err := registry.Register(g); err != nil {
 			t.Fatal(err)
@@ -136,7 +136,7 @@ func TestBuildSnapshotFiltersAndRejectsOversize(t *testing.T) {
 
 func TestBuildSnapshotCountsFlattenedHistogramSamples(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	hist := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "moox_reporter_histogram", Help: "histogram", Buckets: []float64{1, 2}})
+	hist := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "moox_reporter_dataset_runs_total", Help: "histogram", Buckets: []float64{1, 2}})
 	if err := registry.Register(hist); err != nil {
 		t.Fatal(err)
 	}
@@ -151,6 +151,28 @@ func TestBuildSnapshotCountsFlattenedHistogramSamples(t *testing.T) {
 	}
 	if snapshot.GetSampleCount() != 5 { // sum, count, two finite buckets, and +Inf
 		t.Fatalf("sample count = %d, want 5", snapshot.GetSampleCount())
+	}
+}
+
+func TestBuildSnapshotSendsOnlyMonitoredFamilies(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	for _, name := range []string{"moox_demo_last_success_timestamp_seconds", "moox_demo_request_duration_seconds", "moox_timer_job_runs_total"} {
+		g := prometheus.NewGauge(prometheus.GaugeOpts{Name: name, Help: name})
+		if err := registry.Register(g); err != nil {
+			t.Fatal(err)
+		}
+		g.Set(1)
+	}
+	h, err := NewHandlerWithPublisher(validConfig("monitor"), nil, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := h.BuildSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.GetMetricFamilyCount() != 1 {
+		t.Fatalf("families = %d, want only the monitored one", snapshot.GetMetricFamilyCount())
 	}
 }
 

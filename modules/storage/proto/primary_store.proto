@@ -11,28 +11,20 @@ import "dataset_markers.proto";
 import "data_node.proto";
 
 
-message PrimaryEnsureDatasetPeriodReq {
+message PrimaryRegisterSeriesSnapshotReq {
   common.AuthInfo auth_info = 1;
-  DatasetPeriodExpectation expectation = 2;
+  string space_id = 2;
+  string dataset_id = 3;
+  string frequency = 4;
+  repeated SeriesSnapshotEntry series = 5;
+  int64 effective_from = 6;
 }
 
-message PrimaryEnsureDatasetPeriodRsp {
+message PrimaryRegisterSeriesSnapshotRsp {
   common.RetInfo ret_info = 1;
-  string status = 2;
-  int64 deadline_at = 3;
-}
-
-message PrimaryGetDatasetPeriodStatusReq {
-  common.AuthInfo auth_info = 1;
-  DatasetPeriodExpectation expectation = 2;
-}
-
-message PrimaryGetDatasetPeriodStatusRsp {
-  common.RetInfo ret_info = 1;
-  string status = 2;
-  string series_hash = 3;
-  uint32 expected_count = 4;
-  int64 deadline_at = 5;
+  string series_hash = 2;
+  uint32 expected_count = 3;
+  bool already_registered = 4;
 }
 
 message PrimaryCommitTimeSeriesBatchReq {
@@ -48,18 +40,6 @@ message PrimaryCommitTimeSeriesBatchRsp {
   repeated RowKey keys = 2;
   string period_status = 3;
   repeated uint32 accepted_series_indexes = 4;
-}
-
-message PrimaryRecordDatasetPeriodFailuresReq {
-  common.AuthInfo auth_info = 1;
-  DatasetPeriodExpectation expectation = 2;
-  repeated uint32 series_indexes = 3;
-}
-
-message PrimaryRecordDatasetPeriodFailuresRsp {
-  common.RetInfo ret_info = 1;
-  string period_status = 2;
-  repeated DatasetPeriodFailureResult results = 3;
 }
 
 message PrimaryWriteFactorRowsReq {
@@ -87,17 +67,19 @@ message PrimaryUpsertFieldsRsp {
   repeated RowKey keys = 2;
 }
 
-message PrimaryReadFieldsReq {
+// PrimaryReadRowsReq 按精确键读取，是唯一的精确读取入口。keys 最多 1 万个。
+message PrimaryReadRowsReq {
   common.AuthInfo auth_info = 1;
   repeated RowKey keys = 2;
-  repeated string field_ids = 3;
+  repeated string column_names = 3;
   repeated string attribute_keys = 4;
 }
 
-message PrimaryReadFieldsRsp {
+// PrimaryReadRowsRsp 只返回存在的行（有任意字段或属性）：存在但请求的列都没有值时返回只有键的行，
+// 不存在的键不返回；顺序与请求一致，调用方按键匹配。
+message PrimaryReadRowsRsp {
   common.RetInfo ret_info = 1;
   repeated RowFieldValues rows = 2;
-  repeated RowKey existing_keys = 3;
 }
 
 message PrimaryDeleteDatasetRowsReq {
@@ -189,16 +171,14 @@ message WaitViewSyncPointRsp {
 service PrimaryStore {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
   rpc UpsertFields(PrimaryUpsertFieldsReq) returns (PrimaryUpsertFieldsRsp);
-  rpc EnsureDatasetPeriod(PrimaryEnsureDatasetPeriodReq) returns (PrimaryEnsureDatasetPeriodRsp);
-  rpc GetDatasetPeriodStatus(PrimaryGetDatasetPeriodStatusReq) returns (PrimaryGetDatasetPeriodStatusRsp);
+  rpc RegisterSeriesSnapshot(PrimaryRegisterSeriesSnapshotReq) returns (PrimaryRegisterSeriesSnapshotRsp);
   rpc CommitTimeSeriesBatch(PrimaryCommitTimeSeriesBatchReq) returns (PrimaryCommitTimeSeriesBatchRsp);
-  rpc RecordDatasetPeriodFailures(PrimaryRecordDatasetPeriodFailuresReq) returns (PrimaryRecordDatasetPeriodFailuresRsp);
   rpc WriteFactorRows(PrimaryWriteFactorRowsReq) returns (PrimaryWriteFactorRowsRsp);
-  rpc ReadFields(PrimaryReadFieldsReq) returns (PrimaryReadFieldsRsp);
+  rpc ReadRows(PrimaryReadRowsReq) returns (PrimaryReadRowsRsp);
   rpc DeleteDatasetRows(PrimaryDeleteDatasetRowsReq) returns (PrimaryDeleteDatasetRowsRsp);
   rpc RestoreDatasetRows(PrimaryRestoreDatasetRowsReq) returns (PrimaryRestoreDatasetRowsRsp);
   rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
-  rpc ReadRecordRows(ReadRecordRowsReq) returns (ReadRecordRowsRsp);
+  rpc CountTimeSeriesRows(CountTimeSeriesRowsReq) returns (CountTimeSeriesRowsRsp);
   rpc ReportCollectorPeriodCompleted(ReportCollectorPeriodCompletedReq) returns (ReportCollectorPeriodCompletedRsp);
   rpc ReportFactorPeriodComputed(ReportFactorPeriodComputedReq) returns (ReportFactorPeriodComputedRsp);
   rpc AppendDatasetSyncPoint(AppendDatasetSyncPointReq) returns (AppendDatasetSyncPointRsp);

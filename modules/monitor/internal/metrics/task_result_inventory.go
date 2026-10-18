@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -35,12 +37,14 @@ type TaskResultInventoryEntry struct {
 	Timezone              string
 	Sessions              []string
 	LatestCompletedPeriod time.Time
-	LatestCompletedStatus string
-	ViewLastDataTime      time.Time
-	ObservedAt            time.Time
-	Enabled               bool
-	OwnershipVerified     bool
-	ResultStatus          string
+	// AllowedLatenessSeconds 来自 Collector 清单；0 表示没有提供。
+	AllowedLatenessSeconds int
+	LatestCompletedStatus  string
+	ViewLastDataTime       time.Time
+	ObservedAt             time.Time
+	Enabled                bool
+	OwnershipVerified      bool
+	ResultStatus           string
 }
 
 type TaskResultInventorySnapshot struct {
@@ -219,6 +223,7 @@ func taskResultInventoryEntryFromProto(raw *collectorpb.TaskResultInventoryEntry
 		CalendarID: strings.TrimSpace(raw.GetCalendarId()), Timezone: strings.TrimSpace(raw.GetTimezone()),
 		Sessions: append([]string(nil), raw.GetSessions()...), LatestCompletedStatus: strings.TrimSpace(raw.GetLatestCompletedStatus()),
 		Enabled: raw.GetEnabled(), OwnershipVerified: raw.GetOwnershipVerified(), ResultStatus: strings.TrimSpace(raw.GetResultStatus()),
+		AllowedLatenessSeconds: int(raw.GetAllowedLatenessSeconds()),
 	}
 	var err error
 	if entry.ObservedAt, err = parseInventoryTimestamp(raw.GetObservedAt()); err != nil {
@@ -259,6 +264,63 @@ type TaskResultInventoryCache struct {
 	fetched     time.Time
 	lastAttempt time.Time
 	lastError   string
+	store       InventoryStore
+}
+
+// InventoryStore 持久化最后一份有效的任务结果清单：Collector 不可用时仍可继续检查，重启后也可用。
+type InventoryStore interface {
+	SaveInventory(ctx context.Context, snapshot []byte, fetchedAt time.Time) error
+	LoadInventory(ctx context.Context) ([]byte, time.Time, error)
+}
+
+// SetStore 设置持久化存储。
+func (c *TaskResultInventoryCache) SetStore(store InventoryStore) {
+	c.mu.Lock()
+	c.store = store
+	c.mu.Unlock()
+}
+
+// GetAllowStale 返回最近一份有效的清单：新鲜时直接返回；刷新失败时返回内存或持久化的旧清单并标记 stale；
+// 只有从未取到过清单时才返回错误。
+func (c *TaskResultInventoryCache) GetAllowStale(ctx context.Context, now time.Time) (TaskResultInventorySnapshot, bool, error) {
+	snapshot, err := c.Get(ctx, now)
+	if err == nil {
+		return snapshot, false, nil
+	}
+	if stale, ok := c.lastKnown(ctx); ok {
+		return stale, true, nil
+	}
+	return TaskResultInventorySnapshot{}, false, err
+}
+
+// lastKnown 返回内存里的旧清单；内存没有时从持久化存储恢复一次。
+func (c *TaskResultInventoryCache) lastKnown(ctx context.Context) (TaskResultInventorySnapshot, bool) {
+	c.mu.RLock()
+	snapshot, store := c.snapshot, c.store
+	c.mu.RUnlock()
+	if snapshot.ID != "" {
+		return cloneTaskResultInventorySnapshot(snapshot), true
+	}
+	if store == nil {
+		return TaskResultInventorySnapshot{}, false
+	}
+	raw, fetchedAt, err := store.LoadInventory(ctx)
+	if err != nil || len(raw) == 0 {
+		return TaskResultInventorySnapshot{}, false
+	}
+	var restored TaskResultInventorySnapshot
+	if err := json.Unmarshal(raw, &restored); err != nil || validateTaskResultInventorySnapshot(restored, c.maxItems) != nil {
+		return TaskResultInventorySnapshot{}, false
+	}
+	c.mu.Lock()
+	if c.snapshot.ID == "" {
+		c.snapshot = cloneTaskResultInventorySnapshot(restored)
+		if c.fetched.IsZero() {
+			c.fetched = fetchedAt
+		}
+	}
+	c.mu.Unlock()
+	return restored, true
 }
 
 type TaskResultInventoryCacheState struct {
@@ -333,7 +395,25 @@ func (c *TaskResultInventoryCache) Get(ctx context.Context, nowValues ...time.Ti
 		return TaskResultInventorySnapshot{}, err
 	}
 	c.recordRefresh(now, snapshot, nil)
+	c.persist(ctx, snapshot, now)
 	return cloneTaskResultInventorySnapshot(snapshot), nil
+}
+
+// persist 保存最后一份有效清单；失败只记录日志，不影响检查。
+func (c *TaskResultInventoryCache) persist(ctx context.Context, snapshot TaskResultInventorySnapshot, now time.Time) {
+	c.mu.RLock()
+	store := c.store
+	c.mu.RUnlock()
+	if store == nil {
+		return
+	}
+	raw, err := json.Marshal(snapshot)
+	if err == nil {
+		err = store.SaveInventory(ctx, raw, now)
+	}
+	if err != nil {
+		log.WarnContextf(ctx, "monitor task-result inventory persistence failed: %v", err)
+	}
 }
 
 func (c *TaskResultInventoryCache) recordRefresh(now time.Time, snapshot TaskResultInventorySnapshot, refreshErr error) {
@@ -378,25 +458,6 @@ func (c *TaskResultInventoryCache) stateLocked(now time.Time) TaskResultInventor
 }
 
 func (c *TaskResultInventoryCache) freshSnapshot(now time.Time) (TaskResultInventorySnapshot, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	age := now.UTC().Sub(c.fetched)
-	if c.snapshot.ID == "" || age < 0 || age >= c.ttl {
-		return TaskResultInventorySnapshot{}, false
-	}
-	return cloneTaskResultInventorySnapshot(c.snapshot), true
-}
-
-// Current returns the latest complete cache snapshot only while it remains
-// within its configured TTL. Ingestion uses this non-blocking view to avoid
-// storing per-subject metrics before a Collector inventory has been verified.
-func (c *TaskResultInventoryCache) Current(now time.Time) (TaskResultInventorySnapshot, bool) {
-	if c == nil {
-		return TaskResultInventorySnapshot{}, false
-	}
-	if now.IsZero() {
-		now = c.now()
-	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	age := now.UTC().Sub(c.fetched)

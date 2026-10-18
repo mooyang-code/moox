@@ -11,158 +11,159 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RenderTradeDNSResolverConfig replaces only the Trade-owned dns_resolver
-// mapping. The caller supplies the existing app.yaml bytes so unrelated
-// runtime configuration remains untouched.
-func RenderTradeDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
-	return RenderTradeDNSResolverConfigForNode(snapshot, "", existing)
-}
-
-// RenderTradeDNSResolverConfigForNode disables the resolver on Trade nodes
-// other than the single node selected by moox.toml. This prevents a
-// control profile from advertising a second resolver endpoint.
-func RenderTradeDNSResolverConfigForNode(snapshot *Snapshot, nodeID string, existing []byte) ([]byte, error) {
+// RenderEgressConfig writes the independent HTTP and DNS upstream policy.
+func RenderEgressConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
 	if snapshot == nil {
 		return nil, fmt.Errorf("runtime_config: snapshot is required")
 	}
-	resolver := snapshot.Manifest.DNSResolver
-	if nodeID = strings.TrimSpace(nodeID); nodeID != "" && resolver.Enabled && !strings.EqualFold(nodeID, resolver.TradeNode) {
-		resolver.Enabled = false
-		resolver.Domains = nil
-	}
-	fields := orderedMapping(
-		mappingField{"enabled", resolver.Enabled},
-		mappingField{"domains", normalizedDomains(resolver.Domains)},
-		mappingField{"lookup_timeout_ms", resolver.LookupTimeoutMS},
-		mappingField{"probe_timeout_ms", resolver.ProbeTimeoutMS},
-		mappingField{"probe_port", resolver.ProbePort},
-		mappingField{"cache_ttl_seconds", resolver.CacheTTLSeconds},
-		mappingField{"max_ips_per_domain", resolver.MaxIPsPerDomain},
-	)
-	return replaceYAMLMapping(existing, "dns_resolver", fields)
-}
-
-// RenderCollectorDNSResolverConfig replaces only the Collector-owned
-// dns_resolver mapping. The target is derived from the selected other_hosts
-// entry, whose endpoint itself comes from the shared hosts catalog.
-func RenderCollectorDNSResolverConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
-	if snapshot == nil {
-		return nil, fmt.Errorf("runtime_config: snapshot is required")
-	}
-	resolver := snapshot.Manifest.DNSResolver
-	nodeID, target, err := DNSResolverRuntimeTarget(snapshot)
+	cfg := snapshot.Manifest.EgressProxy
+	dns := cfg.DNS
+	raw, err := replaceYAMLMapping(existing, "domains", valueNode(normalizedDomains(cfg.HTTPDomains)))
 	if err != nil {
 		return nil, err
 	}
-	fields := orderedMapping(
-		mappingField{"enabled", resolver.Enabled},
-		mappingField{"target", target},
-		mappingField{"node_id", nodeID},
-		mappingField{"domains", normalizedDomains(resolver.Domains)},
-		mappingField{"refresh_interval", durationSeconds(resolver.RefreshIntervalSeconds)},
-		mappingField{"request_timeout", durationMilliseconds(resolver.RequestTimeoutMS)},
-		mappingField{"cache_ttl", durationSeconds(resolver.CacheTTLSeconds)},
-	)
-	rendered, err := replaceYAMLMapping(existing, "dns_resolver", fields)
-	if err != nil {
-		return nil, err
-	}
-	blacklists := make([]mappingField, 0, len(snapshot.Manifest.SCFFetcher.Spaces))
-	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
-		blacklists = append(blacklists, mappingField{space.SpaceID, append([]string{}, space.RegionBlacklist...)})
-	}
-	rendered, err = replaceYAMLMapping(rendered, "scf_region_blacklists", orderedMapping(blacklists...))
-	if err != nil {
-		return nil, err
-	}
-	collectorTarget, collectorNode, err := CollectorRuntimeTarget(&snapshot.Manifest.SCFFetcher)
-	if err != nil {
-		return nil, err
-	}
-	rendered, err = replaceYAMLMapping(rendered, "collector_runtime", orderedMapping(
-		mappingField{"gateway_target", collectorTarget}, mappingField{"node_id", collectorNode},
+	return replaceYAMLMapping(raw, "dns", orderedMapping(
+		mappingField{"domains", normalizedDomains(dns.Domains)},
+		mappingField{"lookup_timeout_ms", dns.LookupTimeoutMS},
+		mappingField{"probe_timeout_ms", dns.ProbeTimeoutMS},
+		mappingField{"probe_port", dns.ProbePort},
+		mappingField{"cache_ttl_seconds", dns.CacheTTLSeconds},
+		mappingField{"max_ips_per_domain", dns.MaxIPsPerDomain},
 	))
+}
+
+// RenderCollectorRuntimeConfig also preserves the Admin-assigned SCF identity.
+func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
+	if snapshot == nil {
+		return nil, fmt.Errorf("runtime_config: snapshot is required")
+	}
+	cfg := snapshot.Manifest.EgressProxy
+	dns := cfg.DNS
+	rendered, err := replaceYAMLMapping(existing, "egress_proxy", orderedMapping(
+		mappingField{"domains", normalizedDomains(cfg.HTTPDomains)},
+		mappingField{"dns", orderedMapping(
+			mappingField{"domains", normalizedDomains(dns.Domains)},
+			mappingField{"refresh_interval", durationSeconds(dns.RefreshIntervalSeconds)},
+			mappingField{"request_timeout", durationMilliseconds(dns.RequestTimeoutMS)},
+			mappingField{"cache_ttl", durationSeconds(dns.CacheTTLSeconds)},
+		)},
+	))
+	if err != nil {
+		return nil, err
+	}
+	rendered, err = replaceYAMLMapping(rendered, "dns_resolver", nil)
+	if err != nil {
+		return nil, err
+	}
+	rendered, err = replaceYAMLMapping(rendered, "scf_region_blacklists", nil)
+	if err != nil {
+		return nil, err
+	}
+	access := SCFAccessIdentity(snapshot)
+	var prior map[string]any
+	if len(existing) > 0 {
+		if err := yaml.Unmarshal(existing, &prior); err != nil {
+			return nil, err
+		}
+	}
+	if values, ok := prior["scf_access"].(map[string]any); ok {
+		if keyID, ok := values["key_id"].(string); ok {
+			access["key_id"] = keyID
+		}
+	}
+	rendered, err = replaceYAMLMapping(rendered, "collector_runtime", nil)
+	if err != nil {
+		return nil, err
+	}
+	if storage, ok := prior["storage"].(map[string]any); ok {
+		delete(storage, "gateway_target")
+		rendered, err = replaceYAMLMapping(rendered, "storage", valueNode(storage))
+		if err != nil {
+			return nil, err
+		}
+	}
+	rendered, err = replaceYAMLMapping(rendered, "scf_access", valueNode(access))
+	if err != nil {
+		return nil, err
+	}
+	rendered, err = replaceYAMLMapping(rendered, "scf_access_routes", nil)
+	if err != nil {
+		return nil, err
+	}
+	rendered, err = renderSCFPlanBlocks(snapshot.Manifest, rendered)
 	if err != nil {
 		return nil, err
 	}
 	retention := snapshot.Manifest.CollectorRetention
 	rendered, err = replaceYAMLMapping(rendered, "collector_retention", orderedMapping(
 		mappingField{"maintenance_interval", retention.MaintenanceInterval},
+		mappingField{"maintenance_offset", retention.MaintenanceOffset},
 		mappingField{"maintenance_timeout", retention.MaintenanceTimeout},
 		mappingField{"max_rows_per_pass", retention.MaxRowsPerPass},
-		mappingField{"execution_detail_retention", retention.ExecutionDetailRetention},
-		mappingField{"scheduled_run_summary_retention", retention.ScheduledRunSummaryRetention},
-		mappingField{"terminal_retry_retention", retention.TerminalRetryRetention},
-		mappingField{"period_snapshot_retention", retention.PeriodSnapshotRetention},
 	))
 	if err != nil {
 		return nil, err
 	}
-	for _, space := range snapshot.Manifest.SCFFetcher.Spaces {
-		if !strings.EqualFold(strings.TrimSpace(space.SpaceID), "stockcn") {
-			continue
-		}
-		stockFields := orderedMapping(
-			mappingField{"expected_timer_function_count", space.TimerFunctionCount},
-			mappingField{"measured_safe_group_size", space.MeasuredSafeGroupSize},
-			mappingField{"stagger_start_second", space.StaggerStartSecond},
-			mappingField{"stagger_window_seconds", space.StaggerWindowSeconds},
-			mappingField{"stagger_max_starts_per_second", space.StaggerMaxStartsPerSecond},
-		)
-		return replaceYAMLMapping(rendered, "stockcn", stockFields)
-	}
 	return rendered, nil
 }
 
-// DNSResolverRuntimeTarget returns the non-secret node identity and native
-// Gateway target used by Collector. It is also emitted by the CLI so deploy
-// can register a route for a resolver hosted on a different node.
-func DNSResolverRuntimeTarget(snapshot *Snapshot) (string, string, error) {
-	if snapshot == nil {
-		return "", "", fmt.Errorf("runtime_config: snapshot is required")
+// renderSCFPlanBlocks 渲染 Timer 采集计划的 Collector 配置：scf_regions（地域网络）、scf_markets（空间与市场的运行地域）、
+// scf_plan（云账号、代码包名称、命名空间、各地域 Access 私网入口）。未启用时三块一并移除，保证关闭后配置不残留。
+// 代码包只写名称：Collector 总是使用该名称的最新可用版本，上传新版本后不需要改配置或重启。
+func renderSCFPlanBlocks(manifest Manifest, rendered []byte) ([]byte, error) {
+	plan := manifest.SCFPlan
+	var err error
+	if !plan.Enabled {
+		for _, key := range []string{"scf_regions", "scf_markets", "scf_plan"} {
+			if rendered, err = replaceYAMLMapping(rendered, key, nil); err != nil {
+				return nil, err
+			}
+		}
+		return rendered, nil
 	}
-	if !snapshot.Manifest.DNSResolver.Enabled {
-		return "", "ip://127.0.0.1:11003", nil
+	regions := map[string]map[string]string{}
+	access := map[string]map[string]string{}
+	for _, region := range manifest.SCFPlanRegionNames() {
+		network := plan.Regions[region]
+		regions[region] = map[string]string{"vpc_id": network.VPCID, "subnet_id": network.SubnetID}
+		address, id, accessErr := manifest.SCFPlanAccess(region)
+		if accessErr != nil {
+			return nil, accessErr
+		}
+		access[region] = map[string]string{"access_address": address, "access_id": id}
 	}
-	host, err := findDNSResolverHost(snapshot.Manifest)
-	if err != nil {
-		return "", "", err
+	markets := map[string]map[string][]string{}
+	spaces := map[string]map[string]any{}
+	for _, space := range plan.Spaces {
+		markets[space.SpaceID] = space.Markets
+		override := map[string]any{"package_name": space.PackageName, "namespace": space.Namespace}
+		if space.SymbolsPerFunction > 0 {
+			override["symbols_per_function"] = space.SymbolsPerFunction
+		}
+		spaces[space.SpaceID] = override
 	}
-	return strings.TrimSpace(host.Name), "ip://" + net.JoinHostPort(strings.TrimSpace(host.Address), "11003"), nil
+	account := manifest.SCFCloudAccount()
+	if rendered, err = replaceYAMLMapping(rendered, "scf_regions", valueNode(regions)); err != nil {
+		return nil, err
+	}
+	if rendered, err = replaceYAMLMapping(rendered, "scf_markets", valueNode(markets)); err != nil {
+		return nil, err
+	}
+	fields := []mappingField{
+		{"cloud_account_id", account.AccountID},
+		{"memory_mb", plan.MemoryMB},
+		{"symbols_per_function", plan.SymbolsPerFunction},
+	}
+	if plan.AssumedEgressIPs > 0 {
+		fields = append(fields, mappingField{"assumed_egress_ips", plan.AssumedEgressIPs})
+	}
+	fields = append(fields, mappingField{"access_routes", access}, mappingField{"spaces", spaces})
+	return replaceYAMLMapping(rendered, "scf_plan", orderedMapping(fields...))
 }
 
-// WriteTradeDNSResolverConfig atomically writes a rendered Trade app.yaml.
-func WriteTradeDNSResolverConfig(snapshot *Snapshot, path string) error {
-	return writeRenderedConfig(path, func(existing []byte) ([]byte, error) {
-		return RenderTradeDNSResolverConfig(snapshot, existing)
-	})
-}
-
-// WriteCollectorDNSResolverConfig atomically writes a rendered Collector app.yaml.
-func WriteCollectorDNSResolverConfig(snapshot *Snapshot, path string) error {
-	return writeRenderedConfig(path, func(existing []byte) ([]byte, error) {
-		return RenderCollectorDNSResolverConfig(snapshot, existing)
-	})
-}
-
-// WriteRenderedRuntimeConfig atomically writes already-rendered YAML. It is
-// used by the CLI after both Trade and Collector render operations have
-// succeeded, so neither service is restarted with a half-rendered snapshot.
+// WriteRenderedRuntimeConfig atomically writes already-rendered YAML.
 func WriteRenderedRuntimeConfig(path string, rendered []byte) error {
 	return writeRenderedBytes(path, rendered)
-}
-
-func findDNSResolverHost(manifest Manifest) (Host, error) {
-	name := strings.TrimSpace(manifest.DNSResolver.TradeNode)
-	for _, host := range manifest.OtherHosts {
-		if strings.EqualFold(strings.TrimSpace(host.Name), name) {
-			if strings.TrimSpace(host.Address) == "" {
-				return Host{}, fmt.Errorf("runtime_config: dns_resolver host %q has no address", name)
-			}
-			return host, nil
-		}
-	}
-	return Host{}, fmt.Errorf("runtime_config: dns_resolver host %q was not found", name)
 }
 
 func normalizedDomains(domains []string) []string {
@@ -207,11 +208,17 @@ func replaceYAMLMapping(existing []byte, key string, value *yaml.Node) ([]byte, 
 	root := document.Content[0]
 	for index := 0; index+1 < len(root.Content); index += 2 {
 		if root.Content[index].Value == key {
-			root.Content[index+1] = value
+			if value == nil {
+				root.Content = append(root.Content[:index], root.Content[index+2:]...)
+			} else {
+				root.Content[index+1] = value
+			}
 			return encodeYAML(document)
 		}
 	}
-	root.Content = append(root.Content, scalarNode(key), value)
+	if value != nil {
+		root.Content = append(root.Content, scalarNode(key), value)
+	}
 	return encodeYAML(document)
 }
 
@@ -242,22 +249,6 @@ func valueNode(value any) *yaml.Node {
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"}
 	}
 	return document.Content[0]
-}
-
-func writeRenderedConfig(path string, render func([]byte) ([]byte, error)) error {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return fmt.Errorf("runtime_config: output path is required")
-	}
-	existing, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("runtime_config: read %s: %w", path, err)
-	}
-	rendered, err := render(existing)
-	if err != nil {
-		return err
-	}
-	return writeRenderedBytes(path, rendered)
 }
 
 func writeRenderedBytes(path string, rendered []byte) error {
@@ -298,4 +289,19 @@ func writeRenderedBytes(path string, rendered []byte) error {
 		return fmt.Errorf("runtime_config: replace %s: %w", path, err)
 	}
 	return nil
+}
+
+// SCFAccessIdentity 返回函数调用 Access 的固定身份与默认入口（Storage 主机的 Access，缺省为控制机）；
+// 各地域的私网入口由 [scf_plan] 渲染到 scf_plan.access_routes。
+func SCFAccessIdentity(snapshot *Snapshot) map[string]string {
+	base := map[string]string{"caller": "scf-collector", "key_id": "", "key_file": "../../secrets/caller-scf-collector.key"}
+	host := snapshot.Manifest.StorageHost()
+	if host.Address == "" {
+		host = snapshot.Manifest.ControlHost()
+	}
+	if host.Address != "" {
+		base["access_address"] = net.JoinHostPort(host.Address, "11004")
+		base["access_id"] = "access@" + host.Name
+	}
+	return base
 }

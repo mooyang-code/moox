@@ -27,12 +27,18 @@ grep -Fq 'uses: docker://ghcr.io/gitleaks/gitleaks:v8.30.1' "$GITHUB_CI"
 grep -Fq 'github.event.pull_request.base.sha' "$GITHUB_CI"
 grep -Fq 'github.event.pull_request.head.sha' "$GITHUB_CI"
 
+# Report/Doctor 不再使用旧 Pipeline 健康实体。Monitor v2 的 pipeline
+# 是结构化数据链路阶段，禁止的是旧实体/API，而不是这个已定义的字段。
 if rg -n -i '\bpipelines?\b' \
   "${ROOT}/packages/report" \
-  "${ROOT}/modules/monitor" \
   "${ROOT}/modules/cli/internal/doctor"; then
-  echo 'legacy Pipeline health vocabulary remains' >&2
+  echo 'legacy Pipeline health vocabulary remains outside overview v2' >&2
   exit 1
 fi
+if rg -n -i '\b(PipelineHealth|PipelineStatus|ListPipelineHealth|QueryPipelineHealth)\b|pipeline_health|pipeline_status|\bpipelines\b' "${ROOT}/modules/monitor"; then
+  echo 'legacy Pipeline health entity/API remains' >&2
+  exit 1
+fi
+grep -Fq 'repeated HealthPipelineStage pipeline = 6;' "${ROOT}/modules/monitor/proto/monitor.proto"
 
 echo 'secret scan contract passed'

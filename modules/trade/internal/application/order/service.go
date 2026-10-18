@@ -278,10 +278,17 @@ func (s *Service) Submit(
 		unlockExecution := func() {}
 		if record.OwnerType == string(orderdomain.OwnerTarget) &&
 			record.LogicalAccountID != "" {
-			unlockExecution = s.Store.LockLogicalAccountExecution(
+			// 完整同步可能长时间占着执行锁：等待必须响应调用方的期限，超时后返回可重试错误，
+			// 否则串行的目标 worker 会被一个账户卡住，后面的健康账户也得不到处理。
+			unlock, lockErr := s.Store.LockLogicalAccountExecutionContext(
+				ctx,
 				record.SpaceID,
 				record.LogicalAccountID,
 			)
+			if lockErr != nil {
+				return &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "submit_execution_lock", Err: lockErr}
+			}
+			unlockExecution = unlock
 		}
 		defer unlockExecution()
 
@@ -395,11 +402,7 @@ func (s *Service) authorizeTargetSubmit(
 	if logicalAccount.AutomationState != "ACTIVE" {
 		return ErrAutomationPaused
 	}
-	if logicalAccount.OwnerInstanceID != "" {
-		if logicalAccount.OwnerInstanceID != record.RunnerID {
-			return ErrTargetOwnerConflict
-		}
-	} else if logicalAccount.OwnerRunnerID == "" || logicalAccount.OwnerRunnerID != record.RunnerID {
+	if logicalAccount.OwnerInstanceID == "" || logicalAccount.OwnerInstanceID != record.RunnerID {
 		return ErrTargetOwnerConflict
 	}
 	// A target order may be prepared long before Submit. Resolve the current
@@ -790,6 +793,36 @@ func (s *Service) resolveUnknown(
 	return current, nil
 }
 
+// freshReference 取交易所新鲜报价并刷新订单的参考价；取不到或已过期都返回可重试错误。
+func (s *Service) freshReference(
+	ctx context.Context,
+	record store.OrderRecord,
+	spec orderdomain.OrderSpec,
+	maxAge time.Duration,
+) (orderdomain.OrderSpec, error) {
+	adapter, err := s.Adapters.Adapter(record.TradingAccountID)
+	if err != nil {
+		return spec, accountExecutionError(record.TradingAccountID, "adapter", err)
+	}
+	marketData, ok := adapter.(execution.MarketDataSource)
+	if !ok {
+		return spec, accountExecutionError(record.TradingAccountID, "quote", orderdomain.ErrReferencePriceStale)
+	}
+	quote, err := marketData.GetQuote(ctx, shared.ExchangeSymbol(record.ExchangeSymbol))
+	if err != nil {
+		return spec, accountExecutionError(record.TradingAccountID, "quote", err)
+	}
+	if !paperQuoteFresh(quote, s.now(), maxAge) {
+		return spec, accountExecutionError(record.TradingAccountID, "quote", orderdomain.ErrReferencePriceStale)
+	}
+	price, err := paperExecutablePrice(spec.Side, quote)
+	if err != nil {
+		return spec, accountExecutionError(record.TradingAccountID, "quote", err)
+	}
+	spec.ReferencePrice, spec.ReferencePriceAt = price, quote.SourceTime
+	return spec, nil
+}
+
 func (s *Service) resolveUnknownFound(
 	ctx context.Context,
 	record store.OrderRecord,
@@ -826,15 +859,36 @@ func (s *Service) submit(
 		return orderdomain.Order{}, false, err
 	}
 	validator := s.Validator
+	retryRepriced := false
+	originalReference, originalReferenceAt := aggregate.Spec.ReferencePrice, aggregate.Spec.ReferencePriceAt
 	if record.SubmittedAt > 0 {
-		// A confirmed-absent retry reuses the already validated server quote.
-		// Revalidate account and instrument safety without making the unknown
-		// lookup window itself turn every controlled retry into a stale quote.
-		now := s.now()
-		validator.Now = func() time.Time { return now }
-		validator.MaxReferenceAge = now.Sub(aggregate.Spec.ReferencePriceAt) + time.Second
+		if aggregate.Spec.Type == exchange.OrderTypeMarket {
+			// 确认不存在后的重试：订单身份（参考价、数量）保持不变，但限额与资金预留都按报价折算，旧报价可能已大幅偏离。
+			// 取新鲜报价（取不到就不提交，保持待重试），校验与预留按新旧报价中较高者保守计算；
+			// 持久化的参考价仍是原值，只有预留金额按需增大。
+			fresh, freshErr := s.freshReference(ctx, record, aggregate.Spec, validator.MaxReferenceAge)
+			if freshErr != nil {
+				return aggregate, false, freshErr
+			}
+			if fresh.ReferencePrice.Cmp(originalReference) < 0 {
+				fresh.ReferencePrice = originalReference
+			}
+			aggregate.Spec = fresh
+			retryRepriced = true
+			// 校验时间取报价返回之后：报价请求期间产生的时间戳不能比冻结的校验时间更新。
+			now := s.now()
+			validator.Now = func() time.Time { return now }
+		} else {
+			// 限价单的名义金额来自限价而非报价：沿用已校验的报价，避免未知查询窗口让每次受控重试都变成过期报价。
+			now := s.now()
+			validator.Now = func() time.Time { return now }
+			validator.MaxReferenceAge = now.Sub(aggregate.Spec.ReferencePriceAt) + time.Second
+		}
 	}
 	validation, err := validator.validate(ctx, record.SpaceID, aggregate.Spec, true)
+	if retryRepriced {
+		aggregate.Spec.ReferencePrice, aggregate.Spec.ReferencePriceAt = originalReference, originalReferenceAt
+	}
 	refreshedReference := false
 	if errors.Is(err, orderdomain.ErrReferencePriceStale) && record.SubmittedAt == 0 &&
 		aggregate.Spec.Owner.Type == orderdomain.OwnerOperator {
@@ -927,7 +981,7 @@ func (s *Service) submit(
 			validation.ReservedQuantity = withFeeBuffer(notional, feeRate)
 		}
 	}
-	if releaseReservationForReduction || refreshedReference {
+	if releaseReservationForReduction || refreshedReference || retryRepriced {
 		record.ReservedAsset = validation.ReservedAsset
 		record.ReservedQuantity = validation.ReservedQuantity.String()
 		record.RemainingReservedQuantity = validation.ReservedQuantity.String()
@@ -945,8 +999,8 @@ func (s *Service) submit(
 					return err
 				}
 			}
-		} else if refreshedReference {
-			unreflected, err := tx.GetUnreflectedReservation(record.SpaceID, record.TradingAccountID, validation.ReservedAsset, validation.Account.LastSyncAt.UnixMilli())
+		} else if refreshedReference || retryRepriced {
+			unreflected, err := tx.GetUnreflectedReservation(record.SpaceID, record.TradingAccountID, validation.ReservedAsset, validation.Account.SnapshotSourceTime.UnixMilli())
 			if err != nil {
 				return err
 			}

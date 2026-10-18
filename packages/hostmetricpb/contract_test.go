@@ -7,10 +7,10 @@ import (
 
 func TestHostMetricContract(t *testing.T) {
 	d := (&HostMetric{}).ProtoReflect().Descriptor()
-	if d.Fields().Len() != 5 || d.Fields().ByName("snapshot").Number() != 5 {
+	if d.Fields().Len() != 6 || d.Fields().ByName("snapshot").Number() != 5 {
 		t.Fatalf("HostMetric contract changed")
 	}
-	for name, number := range map[string]protoreflect.FieldNumber{"agent_id": 1, "hostname": 2, "boot_id": 3, "agent_version": 4} {
+	for name, number := range map[string]protoreflect.FieldNumber{"agent_id": 1, "hostname": 2, "boot_id": 3, "agent_version": 4, "host_id": 6} {
 		if field := d.Fields().ByName(protoreflect.Name(name)); field == nil || field.Number() != number {
 			t.Fatalf("field %s = %v, want %d", name, field, number)
 		}

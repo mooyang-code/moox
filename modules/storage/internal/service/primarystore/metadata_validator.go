@@ -9,8 +9,8 @@ import (
 )
 
 // MetadataValidator enforces the deliberately small write contract at the
-// PrimaryStore boundary: Dataset must be active, RowKey kind must match it,
-// and every field must already be registered. Required-field semantics are
+// PrimaryStore boundary: Dataset must be active, RowKey kind and freq must
+// match it, and every field must already be registered. Required-field semantics are
 // intentionally absent; partial field upserts are valid.
 type MetadataValidator struct {
 	reader metadataReader
@@ -105,6 +105,10 @@ func (v *MetadataValidator) validateRow(ctx context.Context, row *pb.RowFieldUps
 	}
 	if dataset.GetDataKind() == pb.DataKind_DATA_KIND_RECORD && key.GetRecord() == nil {
 		return fmt.Errorf("dataset %q requires record row key", key.GetDatasetId())
+	}
+	// 每个 Dataset 只有一个规范频率，频率不同（含 1H 这类别名）的行一律拒绝。
+	if series := key.GetTimeSeries(); series != nil && series.GetFreq() != dataset.GetFreq() {
+		return fmt.Errorf("row freq %q does not match dataset %q freq %q", series.GetFreq(), key.GetDatasetId(), dataset.GetFreq())
 	}
 	const pageSize = uint32(1000)
 	var columns []*pb.DatasetColumn

@@ -1,19 +1,24 @@
-go 1.25.0
+go 1.26.9
 
 use (
+	./modules/access
 	./modules/admin
-	./modules/admin/proto/admingen
 	./modules/archive
+	./modules/archive/proto/archivegen
+	./modules/admin/proto/admingen
 	./modules/cli
 	./modules/cloudnode
 	./modules/cloudnode/proto/cloudnodegen
 	./modules/collector
 	./modules/collector/proto/collectorgen
+	./modules/consoleproxy
+	./modules/egressproxy
+	./modules/egressproxy/proto/egressgen
 	./modules/eventbus
 	./modules/eventbus/proto/eventbusgen
 	./modules/factor
 	./modules/factor/proto/factorgen
-	./modules/gateway
+	./modules/hostgateway
 	./modules/hostagent
 	./modules/hostagent/proto/hostagentgen
 	./modules/monitor
@@ -24,30 +29,33 @@ use (
 	./modules/strategy/proto/strategygen
 	./modules/trade
 	./modules/trade/proto/tradegen
-	./packages/cloudjobpb
-	./packages/cloudjobqueue
 	./packages/cloudprovider
-	./packages/cloudruntime
 	./packages/clsreporter
 	./packages/commonpb
 	./packages/doctor
 	./packages/events
+	./packages/factorexpr
+	./packages/frequency
 	./packages/gatewayauth
-	./packages/gatewayproxy
+	./packages/gatewayclient
+	./packages/gatewayroute
+	./packages/gatewayroute/proto/gatewayroutegen
 	./packages/healthz
 	./packages/hostmetricpb
+	./packages/hostpolicy
 	./packages/jetstream
 	./packages/marketcalendar
 	./packages/marketfetchpb
-	./packages/marketmanifest
 	./packages/metricspb
 	./packages/notification
-	./packages/observabilitypb
-	./packages/pyruntime
 	./packages/report
 	./packages/requestauth
+	./packages/seriesset
 	./packages/routeprobe
 	./packages/security
+	./packages/servicehost
+	./packages/servicecatalog
+	./packages/storagepolicy
 	./packages/storagepb
 	./packages/tdx
 	./packages/timerjob

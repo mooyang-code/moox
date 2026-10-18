@@ -10,25 +10,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
-	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
-	"google.golang.org/protobuf/proto"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // Handler is the short-lived SCF action handler. Dependencies are built per
 // invocation so there is no resident worker, timer, or job lease in SCF.
 type Handler struct {
-	NewStorage         func(string, string, string) (Storage, error)
-	Publish            func(context.Context, Request, proto.Message) error
-	TimerRuntimeClient TimerRuntimeClient
+	NewStorage func(string, string) (Storage, error)
 	// Execute is a test seam for the timer entrypoint. Production leaves it nil
 	// and uses the market-specific common pipeline; tests can prove the Timer
 	// contract without making an external exchange request.
@@ -39,10 +34,12 @@ type Handler struct {
 	ResolveSourceID        func(string, string) string
 	ResolveSymbol          SymbolResolver
 	Now                    func() time.Time
-	Reporter               ItemReporter
-	CLSReserve             time.Duration
-	Metrics                *Metrics
-	MetricsReporter        MetricsReporter
+	// PlanPeriodValid 判断采集计划里某个频率的目标周期是否需要执行（stockcn 用交易日历跳过非交易周期）；nil 表示总是执行。
+	PlanPeriodValid func(market PlanMarket, frequency string, period time.Time) bool
+	Reporter        ItemReporter
+	CLSReserve      time.Duration
+	Metrics         *Metrics
+	MetricsReporter MetricsReporter
 }
 
 // MetricsReporter is the common one-shot observability sink used by long-lived
@@ -53,88 +50,63 @@ type MetricsReporter interface {
 }
 
 const (
-	// A fresh SCF invocation establishes a TLS connection to EventBus before
-	// publishing the only completion fact. The first connection can take
-	// several seconds on a cold path, so leave a bounded reserve for one
-	// reconnect attempt after the initial connection attempt.
-	// Two cold connects and ACKs (3s each), plus a 300ms retry backoff.
-	completionPublishReserve   = 13 * time.Second
-	completionConnectTimeout   = 3 * time.Second
-	completionConnectAttempts  = 2
 	defaultStorageTimeout      = 5 * time.Second
 	instrumentNamesReadTimeout = 250 * time.Millisecond
 	metricsResponseReserve     = 750 * time.Millisecond
 )
 
-func NewHandler() *Handler {
-	return &Handler{NewStorage: func(target, market, writeSource string) (Storage, error) {
-		return NewMarketStorageForMarket(target, market, writeSource)
-	}, Publish: publishCompletion}
+func NewHandler() *Handler { return &Handler{} }
+
+// prepareInvocation 为这次调用建立一条到 Access 的连接给 Storage 适配器使用；注入的适配器由调用方负责。
+func (h *Handler) prepareInvocation() (*Handler, func(), error) {
+	invocation := *h
+	if invocation.NewStorage != nil {
+		return &invocation, func() {}, nil
+	}
+	gateway, err := newSCFAccessClient()
+	if err != nil {
+		return nil, nil, err
+	}
+	invocation.NewStorage = func(market, source string) (Storage, error) {
+		return NewMarketStorageForMarket(gateway, market, source)
+	}
+	return &invocation, func() { _ = gateway.Close() }, nil
 }
 
-func (h *Handler) Handle(ctx context.Context, event model.CloudFunctionEvent) (*model.Response, error) {
-	return h.handleWithFunctionName(ctx, event, true, "")
+// MarketFetchEvent 构造调用行情函数的事件（手动与补采调用使用）。
+func MarketFetchEvent(req Request) (map[string]any, error) {
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	data := map[string]any{}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return nil, err
+	}
+	event := map[string]any{
+		"action":     "market_fetch",
+		"request_id": req.BatchID,
+		"timestamp":  time.Now().UTC().Format(time.RFC3339Nano),
+		"data":       data,
+	}
+	// 校验的是实际作为 ClientContext 发送的整个事件，并给 SCF 的 128KB 上限留出余量。
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		return nil, err
+	}
+	if len(encoded) > 120*1024 {
+		return nil, fmt.Errorf("market_fetch client context exceeds 120KB")
+	}
+	return event, nil
 }
 
-// HandleWithFunctionName binds an Invoke request to the function identity
-// supplied by the Tencent runtime. Payload function_name is only a hint.
+// HandleWithFunctionName 处理手动调用与补采：只写行，不涉及周期状态。请求里的函数名只是提示，
+// 以腾讯云运行时提供的函数身份为准。
 func (h *Handler) HandleWithFunctionName(ctx context.Context, event model.CloudFunctionEvent, functionName string) (*model.Response, error) {
-	return h.handleWithFunctionName(ctx, event, true, functionName)
+	return h.handleWithFunctionName(ctx, event, functionName)
 }
 
-// HandleWithFunctionNameWithoutCompletion handles a direct validation or
-// diagnostic invocation without publishing a scheduler completion event.
-func (h *Handler) HandleWithFunctionNameWithoutCompletion(ctx context.Context, event model.CloudFunctionEvent, functionName string) (*model.Response, error) {
-	return h.handleWithFunctionName(ctx, event, false, functionName)
-}
-
-// HandleTimer executes one durable batch claimed from the Collector runtime.
-func (h *Handler) HandleTimer(ctx context.Context, requestID, nodeID string) (*model.Response, error) {
-	now := time.Now().UTC()
-	if h != nil && h.Now != nil {
-		now = h.Now().UTC()
-	}
-	return h.HandleTimerAt(ctx, requestID, nodeID, now)
-}
-
-func (h *Handler) HandleTimerAt(ctx context.Context, requestID, nodeID string, now time.Time) (*model.Response, error) {
-	if h == nil {
-		return nil, fmt.Errorf("market fetch handler is nil")
-	}
-	budgetCtx, cancel := executionContext(ctx)
-	defer func() {
-		h.reportMetrics(budgetCtx)
-		cancel()
-	}()
-	invocation, err := TimerRequestFromEnv(requestID, nodeID, now)
-	if err != nil {
-		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
-	}
-	runtimeClient := h.TimerRuntimeClient
-	if runtimeClient == nil {
-		runtimeClient = newTimerRuntimeRPCClient(invocation.RuntimeGatewayTarget, invocation.RuntimeGatewayNodeID)
-	}
-	req, claimed, err := claimTimerRequest(budgetCtx, runtimeClient, invocation)
-	if err != nil {
-		return &model.Response{Success: false, Message: err.Error(), RequestID: requestID, Timestamp: time.Now().UTC()}, nil
-	}
-	if !claimed {
-		return &model.Response{Success: true, Message: "no_work", RequestID: requestID, Timestamp: time.Now().UTC()}, nil
-	}
-	if invocation.StorageGatewayTarget == "" {
-		return &model.Response{Success: false, Message: "storage_rpc_gateway_target is required", RequestID: requestID, Timestamp: time.Now().UTC()}, nil
-	}
-	if h.Publish == nil {
-		return &model.Response{Success: false, Message: "completion publisher is not configured", RequestID: requestID, Timestamp: time.Now().UTC()}, nil
-	}
-	return h.handleRequest(budgetCtx, req, invocation.StorageGatewayTarget, true)
-}
-
-func (h *Handler) handle(ctx context.Context, event model.CloudFunctionEvent, publish bool) (*model.Response, error) {
-	return h.handleWithFunctionName(ctx, event, publish, "")
-}
-
-func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudFunctionEvent, publish bool, runtimeFunctionName string) (*model.Response, error) {
+func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudFunctionEvent, runtimeFunctionName string) (*model.Response, error) {
 	if h == nil {
 		return nil, fmt.Errorf("market fetch handler is nil")
 	}
@@ -170,12 +142,14 @@ func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudF
 	if req.Concurrency == 0 {
 		req.Concurrency = envInt("MOOX_FETCH_MAX_INFLIGHT_REQUESTS", envInt("MOOX_MARKET_FETCH_MAX_INFLIGHT", DefaultConcurrency))
 	}
-	storageTarget := strings.TrimSpace(event.StorageRPCGatewayTarget)
-	if storageTarget == "" {
-		return nil, fmt.Errorf("storage_rpc_gateway_target is required")
+	invocationHandler, closeGateway, err := h.prepareInvocation()
+	if err != nil {
+		return nil, err
 	}
+	defer closeGateway()
+	ctx = gatewayclient.WithCallMetadata(ctx, gatewayclient.CallMetadata{SpaceID: req.SpaceID, TraceID: req.RequestID})
 	defer h.reportMetrics(ctx)
-	return h.handleRequest(ctx, req, storageTarget, publish)
+	return invocationHandler.handleRequest(ctx, req)
 }
 
 // mergeDNSRoutes puts the preferred route map first and appends unique
@@ -222,22 +196,18 @@ func mergeDNSRoutes(preferred, fallback map[string]sources.DNSResolution) map[st
 	return merged
 }
 
-func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget string, publish bool) (*model.Response, error) {
-	storageTarget = strings.TrimSpace(storageTarget)
-	if storageTarget == "" {
-		return nil, fmt.Errorf("storage_rpc_gateway_target is required")
-	}
-	if publish && h.Publish == nil {
-		return nil, fmt.Errorf("completion publisher is not configured")
+func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Response, error) {
+	if h.NewStorage == nil {
+		return nil, fmt.Errorf("market Storage factory is required")
 	}
 	budgetCtx, cancel := executionContext(ctx)
 	defer cancel()
-	storage, err := h.NewStorage(storageTarget, req.MarketType, writeSourceForFunctionName(req.FunctionName))
+	storage, err := h.NewStorage(req.MarketType, writeSourceForFunctionName(req.FunctionName))
 	if err != nil {
 		return nil, err
 	}
 	storageTimeout := time.Duration(envInt("MOOX_FETCH_STORAGE_TIMEOUT_MS", int(defaultStorageTimeout/time.Millisecond))) * time.Millisecond
-	commitReserve, publishReserve := storageAndPublishReserves(storageTimeout, h.CLSReserve, publish)
+	commitReserve := storageCommitReserve(storageTimeout, h.CLSReserve)
 	writeCtx, writeCancel := contextWithReserve(budgetCtx, commitReserve-storageTimeout)
 	defer writeCancel()
 	storage = &reservedDeadlineStorage{Storage: storage, parent: writeCtx, timeout: storageTimeout}
@@ -259,6 +229,8 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		pipeline.DatasetID = strings.TrimSpace(req.DatasetID)
 		pipeline.Now = h.Now
 		pipeline.Metrics = h.Metrics
+		pipeline.Reporter = h.Reporter
+		pipeline.FunctionName = req.FunctionName
 		payload, err = pipeline.Execute(workCtx, req)
 	} else {
 		marketID := firstNonEmptyString(req.MarketID, req.SpaceID)
@@ -285,6 +257,8 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 		pipeline.DatasetID = strings.TrimSpace(req.DatasetID)
 		pipeline.Now = h.Now
 		pipeline.Metrics = h.Metrics
+		pipeline.Reporter = h.Reporter
+		pipeline.FunctionName = req.FunctionName
 		workCtx, workCancel := contextWithReserve(budgetCtx, commitReserve)
 		defer workCancel()
 		payload, err = pipeline.Execute(workCtx, req)
@@ -292,36 +266,45 @@ func (h *Handler) handleRequest(ctx context.Context, req Request, storageTarget 
 	if err != nil {
 		return nil, err
 	}
-	if publish {
-		publishCtx, publishCancel := context.WithTimeout(budgetCtx, publishReserve)
-		defer publishCancel()
-		if err := h.Publish(publishCtx, req, payload); err != nil {
-			return nil, fmt.Errorf("publish market fetch completion: %w", err)
-		}
-	}
 	return &model.Response{Success: payload.GetStatus() == "succeeded" || payload.GetStatus() == "partial_failed", Message: payload.GetStatus(), Data: payload, RequestID: req.RequestID, Timestamp: time.Now().UTC()}, nil
 }
 
+// reportMetrics 在调用结束前发出两类观测数据：CLS 失败明细与指标。两者共享同一个上报预算（CLSReserve，至少 750ms，
+// 且不超过距函数截止时间的剩余时间），CLS 先占约六成、指标用剩下的，所以慢上报不会吃掉函数返回需要的时间。
 func (h *Handler) reportMetrics(parent context.Context) {
-	if h == nil || h.MetricsReporter == nil {
+	if h == nil || (h.Reporter == nil && h.MetricsReporter == nil) {
 		return
 	}
 	reserve := h.CLSReserve
 	if reserve < metricsResponseReserve {
 		reserve = metricsResponseReserve
 	}
-	timeout := time.Duration(envInt("MOOX_METRICS_REPORT_TIMEOUT_MS", int(reserve/time.Millisecond))) * time.Millisecond
-	if timeout > reserve {
-		timeout = reserve
-	}
+	// 两类上报共用同一个绝对截止时间：不超过预算，也不超过“函数截止时间减返回余量”——
+	// 慢上报不能把已经成功写入的调用拖到平台超时。余量不足就直接跳过上报。
+	end := time.Now().Add(reserve)
 	if deadline, ok := parent.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return
+		if latest := deadline.Add(-reportReturnMargin); latest.Before(end) {
+			end = latest
 		}
-		if remaining < timeout {
-			timeout = remaining
+	}
+	total := time.Until(end)
+	if total <= 0 {
+		return
+	}
+	if h.Reporter != nil {
+		share := total
+		if h.MetricsReporter != nil {
+			share = total * 3 / 5
 		}
+		h.flushReports(parent, min(share, clsFlushTimeout))
+	}
+	if h.MetricsReporter == nil {
+		return
+	}
+	timeout := time.Duration(envInt("MOOX_METRICS_REPORT_TIMEOUT_MS", int(reserve/time.Millisecond))) * time.Millisecond
+	timeout = min(timeout, time.Until(end))
+	if timeout <= 0 {
+		return
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -329,6 +312,24 @@ func (h *Handler) reportMetrics(parent context.Context) {
 		log.WarnContextf(parent, "market_fetch_metrics_report_failed: %v", err)
 	}
 }
+
+// flushReports 把本次调用积累的失败明细与批次摘要一次性发往 CLS：同步、有界（budget），失败只记日志，不影响采集结果。
+func (h *Handler) flushReports(parent context.Context, budget time.Duration) {
+	if h == nil || h.Reporter == nil || budget <= 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), budget)
+	defer cancel()
+	if err := h.Reporter.Flush(ctx); err != nil {
+		log.WarnContextf(parent, "market_fetch_cls_report_failed: %v", err)
+	}
+}
+
+// reportReturnMargin 是上报结束到函数截止时间之间必须留出的返回余量。
+const reportReturnMargin = 200 * time.Millisecond
+
+// clsFlushTimeout 是 CLS 单次上报的时间上限。
+const clsFlushTimeout = 1500 * time.Millisecond
 
 func contextWithReserve(parent context.Context, reserve time.Duration) (context.Context, context.CancelFunc) {
 	if reserve <= 0 {
@@ -369,16 +370,6 @@ func (s *reservedDeadlineStorage) UpsertFieldsWithSource(_ context.Context, rows
 	return s.Storage.UpsertFields(ctx, rows)
 }
 
-func (s *reservedDeadlineStorage) EnsureDatasetPeriod(_ context.Context, expectation *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
-	storage, err := s.periodStorage("EnsureDatasetPeriod")
-	if err != nil {
-		return domain.PeriodStorageState{}, err
-	}
-	ctx, cancel := s.storageContext()
-	defer cancel()
-	return storage.EnsureDatasetPeriod(ctx, expectation)
-}
-
 func (s *reservedDeadlineStorage) CommitTimeSeriesBatch(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, rows []*storagepb.TimeSeriesBatchRow, sourceEventID string) error {
 	storage, err := s.periodStorage("CommitTimeSeriesBatch")
 	if err != nil {
@@ -387,26 +378,6 @@ func (s *reservedDeadlineStorage) CommitTimeSeriesBatch(_ context.Context, expec
 	ctx, cancel := s.storageContext()
 	defer cancel()
 	return storage.CommitTimeSeriesBatch(ctx, expectation, rows, sourceEventID)
-}
-
-func (s *reservedDeadlineStorage) RecordDatasetPeriodFailures(_ context.Context, expectation *storagepb.DatasetPeriodExpectation, indexes []uint32) ([]*storagepb.DatasetPeriodFailureResult, error) {
-	storage, err := s.periodStorage("RecordDatasetPeriodFailures")
-	if err != nil {
-		return nil, err
-	}
-	ctx, cancel := s.storageContext()
-	defer cancel()
-	return storage.RecordDatasetPeriodFailures(ctx, expectation, indexes)
-}
-
-func (s *reservedDeadlineStorage) GetDatasetPeriodStatus(_ context.Context, expectation *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error) {
-	storage, err := s.periodStorage("GetDatasetPeriodStatus")
-	if err != nil {
-		return domain.PeriodStorageState{}, err
-	}
-	ctx, cancel := s.storageContext()
-	defer cancel()
-	return storage.GetDatasetPeriodStatus(ctx, expectation)
 }
 
 func (s *reservedDeadlineStorage) periodStorage(method string) (periodStorage, error) {
@@ -446,21 +417,16 @@ func (s *reservedDeadlineStorage) storageContext() (context.Context, context.Can
 	return context.WithDeadline(parent, deadline)
 }
 
-// storageAndPublishReserves keeps the Storage RPC's full configured timeout,
-// then reserves a small fixed window to publish the completion event. Storage
-// crosses SCF -> Gateway -> Storage Primary, so it must not share a timeout
-// budget with EventBus publication.
-func storageAndPublishReserves(storage time.Duration, cls time.Duration, completion bool) (commit, publish time.Duration) {
+// storageCommitReserve 给 Storage 写入保留完整的配置超时，再加上上报（CLS 与指标）的预算：
+// Storage 经 SCF -> 网关 -> Storage Primary，不能与上报共用一个超时。
+func storageCommitReserve(storage, cls time.Duration) time.Duration {
 	if storage <= 0 {
 		storage = defaultStorageTimeout
 	}
 	if cls < metricsResponseReserve {
 		cls = metricsResponseReserve
 	}
-	if !completion {
-		return storage + cls, 0
-	}
-	return storage + completionPublishReserve + cls, completionPublishReserve
+	return storage + cls
 }
 
 func executionContext(parent context.Context) (context.Context, context.CancelFunc) {
@@ -490,18 +456,6 @@ func envInt(name string, fallback int) int {
 	return parsed
 }
 
-func envIntAllowZero(name string, fallback int) int {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < 0 {
-		return fallback
-	}
-	return parsed
-}
-
 func decodeRequest(data map[string]interface{}, request *Request) error {
 	if len(data) == 0 {
 		return fmt.Errorf("market_fetch data is required")
@@ -519,67 +473,6 @@ func decodeRequest(data map[string]interface{}, request *Request) error {
 		return fmt.Errorf("decode market_fetch data: %w", err)
 	}
 	return request.validate()
-}
-
-func publishCompletion(ctx context.Context, req Request, payload proto.Message) error {
-	return publishCompletionWithClient(ctx, req, payload, func(ctx context.Context, config jetstream.Config) (completionClient, error) {
-		return jetstream.Connect(ctx, config)
-	}, 2*completionConnectTimeout, 300*time.Millisecond)
-}
-
-type completionClient interface {
-	events.RawPublisher
-	Close() error
-}
-
-func publishCompletionWithClient(ctx context.Context, req Request, payload proto.Message, connect func(context.Context, jetstream.Config) (completionClient, error), attemptTimeout, backoff time.Duration) error {
-	if strings.TrimSpace(req.SpaceID) == "" {
-		return fmt.Errorf("space_id is required")
-	}
-	registry, err := events.DefaultRegistry()
-	if err != nil {
-		return err
-	}
-	subjectID := strings.TrimSpace(req.DatasetID)
-	if subjectID == "" {
-		subjectID = req.BatchID
-	}
-	config := marketFetchEventBusConfig("moox-collector-market-fetch")
-	config.ConnectTimeout = completionConnectTimeout
-	var lastErr error
-	for attempt := 1; attempt <= completionConnectAttempts; attempt++ {
-		attemptCtx, cancelAttempt := context.WithTimeout(ctx, attemptTimeout)
-		client, connectErr := connect(attemptCtx, config)
-		if connectErr == nil {
-			publisher, publisherErr := events.NewPublisher(client, registry)
-			if publisherErr == nil {
-				_, lastErr = publisher.Publish(attemptCtx, events.MarketFetchBatchCompleted, payload, events.PublishOptions{EventID: req.BatchID, OccurredAt: time.Now().UTC(), SpaceID: req.SpaceID, SubjectID: subjectID})
-			} else {
-				lastErr = publisherErr
-			}
-			_ = client.Close()
-			if lastErr == nil {
-				cancelAttempt()
-				return nil
-			}
-		} else {
-			lastErr = connectErr
-		}
-		cancelAttempt()
-		if attempt < completionConnectAttempts {
-			timer := time.NewTimer(backoff)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			case <-timer.C:
-			}
-		}
-	}
-	if lastErr != nil {
-		log.ErrorContextf(ctx, "publish market fetch completion failed: batch_id=%s err=%v", req.BatchID, lastErr)
-	}
-	return lastErr
 }
 
 func alignCryptoRequest(req *Request, product marketdata.InstrumentType) {

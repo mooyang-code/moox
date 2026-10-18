@@ -1,0 +1,37 @@
+global:
+  namespace: Production
+  env_name: egress-proxy
+
+server:
+  # 停止时等待已接纳的请求完成（毫秒），小于运行器的 2 分钟停止预算。
+  max_close_wait_time: 100000
+  filter: [recovery]
+  timeout: 120000
+  service:
+    - name: trpc.moox.egress.Proxy
+      ip: 127.0.0.1
+      port: 11440
+      network: tcp
+      protocol: trpc
+      transport: go-net
+      timeout: 120000
+    - name: trpc.moox.egress.Health
+      ip: 127.0.0.1
+      port: 11441
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
+
+plugins:
+  log:
+    default:
+      - writer: file
+        level: info
+        writer_config:
+          log_path: ./logs
+          filename: trpc.log
+          roll_type: size
+          max_age: 7
+          max_size: 10
+          max_backups: 5
+          compress: false

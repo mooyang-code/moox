@@ -1,0 +1,64 @@
+# moox-factor-engine 配置：引擎只做出站连接，相对路径相对于安装根目录（config 的上一级）
+engine:
+  # 稳定的引擎 ID；为空时取 factor-engine@<主机名>
+  id: ""
+  heartbeat_interval: 10s
+
+# Storage 与 Factor Manager 共用同一固定 Access 及外部身份。
+# key_file 相对本配置文件；其余运行文件相对安装根目录。
+gateway_client:
+  access_address: access.example.test:11004
+  access_id: access@storage
+  caller: factor-engine
+  key_id: ""
+  key_file: ../secrets/access-factor-engine.key
+
+manager:
+  timeout: 30s
+
+# 按 UTC 对齐：每 interval 的第 offset 拉取一次目录
+catalog_sync:
+  interval: 1m
+  offset: 45s
+  state_file: ./data/engine/catalog.json
+
+# Storage 请求体内的角色签名独立于 Access 身份。
+storage:
+  auth_secret_file: ./secrets/storage-primary-auth.secret
+
+eventbus:
+  urls:
+    - tls://127.0.0.1:4222
+  credential_file: ./secrets/factor-eventbus.yaml
+  fetch_max_wait: 10s
+
+# 表达式执行器：workers 是一次程序执行的并行度（默认 min(4, 核数)）；
+# max_memory 是一个计算分块估算峰值内存的上限（默认 1GiB）。
+compute:
+  workers: 4
+  max_memory: 1GiB
+
+pipeline:
+  read_batch_subjects: 100
+  read_workers: 4
+  read_timeout: 60s
+  write_batch_rows: 1000
+  period_budget_min: 60s
+  period_budget_max: 15m
+
+recalc:
+  chunk_periods: 500
+  poll_interval: 5s
+
+# 跳过账本与恢复（始终开启）：回看窗口有空洞、或实时周期里标的还在预热而跳过的结果，账本永久记录，定时只填充重算。
+# enabled 只控制 K 线空洞检查：有空洞的因子对该标的当期失败（按失败标的上报并带 gap_subjects）。
+# 默认关闭：Storage、策略、Trade 都升级到支持 gap_subjects 与保持标记之后才打开。
+gap:
+  enabled: false
+  ledger_dir: ./data/gap        # 账本目录（按月一个 JSONL，永不自动删除），纳入备份
+  sweep_interval: 5m
+  settle: 5m                    # 发现后至少等这么久再尝试恢复，给自动补采留时间
+  give_up_after: 6h             # 超过它仍补不上：记 gave_up 并告警，交给人工补采与补算
+  max_groups_per_sweep: 20      # 每轮最多运行的恢复批数（区间相同的时序分组合并成一批，每批最多 100 个标的）
+  max_span: 60                  # 每组一次最多处理的周期数，避免长时间占住集合锁
+  mass_ratio: 0.2               # 有空洞或上游失败的标的占预期的比例达到它时输出 ERROR（整期大面积缺失）

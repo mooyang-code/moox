@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sort"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/clsprovision"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
@@ -51,14 +51,15 @@ func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.
 		at    time.Time
 	}
 	candidates := make([]timerRefreshCandidate, 0)
-	if shouldRefreshTimerReadback(ctx, req) {
+	explicitRefresh := req.GetRefreshReadback()
+	if explicitRefresh || shouldRefreshTimerReadback(ctx, req) {
 		now := time.Now().UTC()
 		for index := range nodes {
 			if nodes[index].TriggerType != "timer" {
 				continue
 			}
 			last, _ := time.Parse(time.RFC3339Nano, metadataString(parseJSONMap(nodes[index].Metadata), "timer_last_readback_at"))
-			if !last.IsZero() && now.Sub(last) < timerReadbackInterval {
+			if !explicitRefresh && !last.IsZero() && now.Sub(last) < timerReadbackInterval {
 				continue
 			}
 			candidates = append(candidates, timerRefreshCandidate{index: index, at: last})
@@ -72,12 +73,13 @@ func (s *Service) GetNodeList(ctx context.Context, req *pb.GetNodeListReq) (*pb.
 			}
 			return candidates[i].at.Before(candidates[j].at)
 		})
-		if len(candidates) > timerReadbackBatchSize {
+		// 显式要求读回时不截断：调用方要对本页每个节点都拿到新的云端状态。
+		if !explicitRefresh && len(candidates) > timerReadbackBatchSize {
 			candidates = candidates[:timerReadbackBatchSize]
 		}
 	}
 	var refreshWG sync.WaitGroup
-	refreshSlots := make(chan struct{}, timerReadbackBatchSize)
+	refreshSlots := make(chan struct{}, timerReadbackBatchSize*2)
 	for _, candidate := range candidates {
 		index := candidate.index
 		refreshWG.Add(1)
@@ -130,7 +132,6 @@ func (s *Service) refreshTimerTriggerMetadata(ctx context.Context, spaceID strin
 		return nil
 	}
 	metadata := parseJSONMap(node.Metadata)
-	removeDeprecatedNodeMetadata(metadata)
 	readbackAt := time.Now().UTC().Format(time.RFC3339Nano)
 	patch := map[string]any{"timer_available_status": "Unknown", "timer_actual_type": nil, "timer_actual_enabled": nil, "timer_actual_cron": nil, "timer_actual_qualifier": nil, "timer_actual_message": nil, "timer_last_readback_at": readbackAt}
 	if strings.TrimSpace(node.PackageID) == "" || (strings.TrimSpace(node.DeploymentID) == "" && !metadataBool(metadata, "deployment_ready")) {
@@ -182,6 +183,11 @@ func (s *Service) refreshTimerTriggerMetadata(ctx context.Context, spaceID strin
 				patch["timer_status_error"] = functionErr.Error()
 			} else {
 				patch["managed_environment_budget_bytes"] = scfManagedEnvironmentBudget(function.Environment)
+				// 记录云端函数环境里实际生效的分配与访问入口，供 Collector 比对环境是否被手工改动。
+				patch["actual_assignment_hash"] = function.Environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"]
+				patch["actual_access_address"] = function.Environment["MOOX_ACCESS_ADDRESS"]
+				patch["actual_access_id"] = function.Environment["MOOX_ACCESS_ID"]
+				patch["actual_access_key_id"] = function.Environment["MOOX_CALLER_KEY_ID"]
 				if lookupErr != nil {
 					err = lookupErr
 					patch["timer_status_error"] = lookupErr.Error()
@@ -575,7 +581,7 @@ func (s *Service) executeDeployNodeItem(
 	if node == nil || node.IsDeleted {
 		return "", fmt.Errorf("node not found: %s", item.GetNodeId())
 	}
-	lifecycleID, err := s.catalog.EnsureNodeLifecycleID(ctx, spaceID, node.NodeID)
+	lifecycleID, err := s.catalog.NodeLifecycleID(ctx, spaceID, node.NodeID)
 	if err != nil {
 		return "", err
 	}
@@ -642,6 +648,11 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		return fmt.Errorf("create reservation identity is required")
 	}
 	node.PackageVersion = pkg.Version
+	// 日志服务（CLS）环境必须在环境校验之前补齐：Timer 采集函数的环境校验要求带 CLS 配置，
+	// 之后的校验、创建与读回比对都基于补齐后的环境。
+	if environment := copyStringMap(item.GetEnvironment()); s.applyCLSEnvironment(ctx, *account, node, environment) {
+		item.Environment = environment
+	}
 	metadata := parseJSONMap(node.Metadata)
 	config := item.GetConfig()
 	memorySize := configInt64(config, "memory_size", 256)
@@ -678,9 +689,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 			return err
 		}
 	}
-	// Keep the submitted Timer timeout authoritative from initial creation.
+	// 行情定时函数内存默认 64MB，可由 config.memory_size 指定。
 	if isMarketFetchNode(node) && node.TriggerType == "timer" {
-		memorySize = 64
+		memorySize = configInt64(config, "memory_size", 64)
 	}
 	metadata["runtime"] = firstString(item.GetRuntime(), pkg.Runtime, metadataString(metadata, "runtime"))
 	metadata["handler"] = firstString(item.GetHandler(), metadataString(metadata, "handler"), "main")
@@ -736,6 +747,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(node)); err != nil {
 			return err
 		}
+		if err := ensureReservedConcurrency(ctx, client, ref, effectiveConfig); err != nil {
+			return err
+		}
 		if err := ensureInitialTimerTrigger(ctx, client, node, ref); err != nil {
 			return err
 		}
@@ -752,6 +766,7 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	}
 	environment["MOOX_CODE_PACKAGE_ID"] = pkg.PackageID
 	environment["MOOX_CREATE_RESERVATION_ID"] = reservationID
+	s.applyCLSEnvironment(ctx, *account, node, environment)
 	if err := tencent.ValidateSCFEnvironment(environment); err != nil {
 		return fmt.Errorf("scf function %s %w", ref.FunctionName, err)
 	}
@@ -821,6 +836,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 		if err := ensureSCFAsyncRetryConfig(reconcileCtx, client, ref, isMarketFetchNode(node)); err != nil {
 			return err
 		}
+		if err := ensureReservedConcurrency(reconcileCtx, client, ref, effectiveConfig); err != nil {
+			return err
+		}
 		if err := ensureInitialTimerTrigger(reconcileCtx, client, node, ref); err != nil {
 			return err
 		}
@@ -842,6 +860,9 @@ func (s *Service) ensureSCFFunction(ctx context.Context, node *store.CloudNode, 
 	if err := ensureSCFAsyncRetryConfig(ctx, client, ref, isMarketFetchNode(node)); err != nil {
 		return err
 	}
+	if err := ensureReservedConcurrency(ctx, client, ref, effectiveConfig); err != nil {
+		return err
+	}
 	if err := ensureInitialTimerTrigger(ctx, client, node, ref); err != nil {
 		return err
 	}
@@ -852,9 +873,36 @@ func ensureInitialTimerTrigger(ctx context.Context, client scfProvisioner, node 
 	if node == nil || node.TriggerType != "timer" {
 		return nil
 	}
-	_, err := client.EnsureTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: ref, Name: timerTriggerName, Cron: "0 * * * * * *", Enabled: false, Qualifier: timerTriggerQualifier, Message: timerTriggerMessage})
-	if err != nil {
+	// 已存在的定时器保持原样：部署新代码时不能把正在运行的定时器重置为停用，
+	// 只有函数还没有定时器时才创建一个停用状态的初始定时器，由运行时配置再启用。
+	existing, err := client.GetTimerTrigger(ctx, ref, timerTriggerName)
+	if err != nil && !isSCFNotFound(err) {
+		return fmt.Errorf("read timer trigger for %s: %w", ref.FunctionName, err)
+	}
+	if err == nil && existing != nil {
+		return nil
+	}
+	if _, err := client.EnsureTimerTrigger(ctx, tencentscf.TimerTriggerRequest{FunctionRef: ref, Name: timerTriggerName, Cron: "0 * * * * * *", Enabled: false, Qualifier: timerTriggerQualifier, Message: timerTriggerMessage}); err != nil {
 		return fmt.Errorf("ensure initial timer trigger for %s: %w", ref.FunctionName, err)
+	}
+	return nil
+}
+
+// ensureReservedConcurrency 按 config.reserved_concurrency_mem 设置函数的预留并发配额；未配置时不处理。
+// 预留配额同时是该函数的并发上限，补采函数借此由平台硬性限制实际并发实例数。
+func ensureReservedConcurrency(ctx context.Context, client scfProvisioner, ref tencentscf.FunctionRef, config map[string]string) error {
+	quota := configInt64(config, "reserved_concurrency_mem", 0)
+	if quota <= 0 {
+		return nil
+	}
+	configurer, ok := client.(interface {
+		PutReservedConcurrencyConfig(context.Context, tencentscf.PutReservedConcurrencyConfigRequest) error
+	})
+	if !ok {
+		return nil
+	}
+	if err := configurer.PutReservedConcurrencyConfig(ctx, tencentscf.PutReservedConcurrencyConfigRequest{FunctionRef: ref, ReservedConcurrencyMem: quota}); err != nil {
+		return fmt.Errorf("configure reserved concurrency for %s: %w", ref.FunctionName, err)
 	}
 	return nil
 }
@@ -877,9 +925,9 @@ func ensureSCFAsyncRetryConfig(ctx context.Context, client scfProvisioner, ref t
 	return nil
 }
 
-// ensureLocalPackage makes the local E2E/runtime profile independent of Tencent
-// credentials and COS. Local nodes execute through the durable JobItem queue,
-// so they only need an available package descriptor, not a remote SCF function.
+// ensureLocalPackage lets local-region nodes (used by E2E tests) run without
+// Tencent credentials or COS: they need only an available package descriptor,
+// not a remote SCF function.
 func (s *Service) ensureLocalPackage(ctx context.Context, node *store.CloudNode, item *pb.NodeCreateItem) error {
 	pkg, err := s.catalog.GetPackage(ctx, node.SpaceID, node.PackageID)
 	if err != nil {
@@ -1229,6 +1277,35 @@ func (s *Service) scfClient(ctx context.Context, account store.CloudAccount) (sc
 	return factory(credential), nil
 }
 
+// applyCLSEnvironment 在采集函数的环境里补齐日志服务（CLS）上报配置，返回是否有改动。
+// 首次使用时幂等开通 CLS。这是尽力而为的附加动作：开通失败、补齐后环境超过平台上限、凭证取不到，
+// 都只记日志并保持环境原样，绝不让它影响函数的创建、升级或停用。
+func (s *Service) applyCLSEnvironment(ctx context.Context, account store.CloudAccount, node *store.CloudNode, environment map[string]string) bool {
+	if s.clsEnvironment == nil || !isMarketFetchNode(node) {
+		return false
+	}
+	credential, err := s.resolveCloudCredential(ctx, account)
+	if err != nil {
+		return false
+	}
+	// 在副本上补齐并校验容量：放不下就放弃注入，原环境不变。
+	candidate := copyStringMap(environment)
+	if candidate == nil {
+		candidate = make(map[string]string)
+	}
+	if !s.clsEnvironment.Apply(ctx, account.AccountID, clsprovision.Credential{SecretID: credential.SecretID, SecretKey: credential.SecretKey}, candidate) {
+		return false
+	}
+	if err := tencent.ValidateSCFEnvironment(candidate); err != nil {
+		log.WarnContextf(ctx, "cloudnode skip cls environment for node %s: %v", node.NodeID, err)
+		return false
+	}
+	for key, value := range candidate {
+		environment[key] = value
+	}
+	return true
+}
+
 func (s *Service) resolveCloudCredential(ctx context.Context, account store.CloudAccount) (cloudcredential.TencentCredential, error) {
 	if s.credentialResolver == nil {
 		return cloudcredential.TencentCredential{}, fmt.Errorf("cloud credential resolver is not configured")
@@ -1345,28 +1422,6 @@ func cloudNodeFromCreateItem(spaceID string, item *pb.NodeCreateItem, index int)
 	}
 }
 
-func sanitizeSCFFunctionToken(value string) string {
-	raw := strings.TrimSpace(value)
-	if raw == "" {
-		raw = "space"
-	}
-	var b strings.Builder
-	for _, r := range raw {
-		// Tencent SCF function names permit letters, digits, and hyphens only.
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' {
-			b.WriteRune(r)
-			continue
-		}
-		b.WriteByte('-')
-	}
-	token := strings.Trim(b.String(), "-_")
-	if token == "" {
-		token = "space"
-	}
-	sum := sha256.Sum256([]byte(raw))
-	return fmt.Sprintf("%s-%x", token, sum[:4])
-}
-
 func mergeNodeUpdate(existing store.CloudNode, node *pb.CloudNode) store.CloudNode {
 	next := existing
 	if node.GetCloudAccountId() != "" {
@@ -1405,11 +1460,9 @@ func mergeNodeUpdate(existing store.CloudNode, node *pb.CloudNode) store.CloudNo
 		if parseJSONMap(existing.Metadata)["collector_publish_fenced"] == true {
 			merged["collector_publish_fenced"] = true
 		}
-		removeDeprecatedNodeMetadata(merged)
 		next.Metadata = jsonString(merged)
 	} else {
 		merged := parseJSONMap(existing.Metadata)
-		removeDeprecatedNodeMetadata(merged)
 		next.Metadata = jsonString(merged)
 	}
 	next.IsDeleted = node.GetIsDeleted()
@@ -1481,10 +1534,4 @@ func nodeMetadataFromPB(node *pb.CloudNode) map[string]any {
 		metadata["ip_address"] = node.GetIpAddress()
 	}
 	return metadata
-}
-
-func removeDeprecatedNodeMetadata(metadata map[string]any) {
-	delete(metadata, "timeout_threshold")
-	delete(metadata, "probe_enabled")
-	delete(metadata, "probe_url")
 }

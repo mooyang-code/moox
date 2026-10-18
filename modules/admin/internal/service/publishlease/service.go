@@ -158,7 +158,7 @@ func (s *Service) authorizeUser(ctx context.Context, spaceID string) error {
 	if s.authorizer == nil {
 		return fmt.Errorf("space authorizer is unavailable")
 	}
-	return s.authorizer.AuthorizeTradeRequest(ctx, userID, strings.TrimSpace(spaceID), "CollectorPublishLease", role)
+	return s.authorizer.AuthorizeSpaceRequest(ctx, userID, strings.TrimSpace(spaceID), true, role)
 }
 
 func leaseRsp(record *leaseRecord) *pb.CollectorPublishLeaseRsp {

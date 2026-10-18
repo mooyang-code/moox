@@ -32,10 +32,6 @@ type Service interface {
 	SftpDelete(ctx context.Context, sessionID, path string) error
 	SftpMkdir(ctx context.Context, sessionID, path string) error
 
-	// 会话管理
-	GetOnlineSessions(ctx context.Context) []conn.SessionInfo
-	ForceDisconnect(ctx context.Context, sessionID string) error
-
 	// 获取会话管理器（供 WebSocket handler 使用）
 	GetSessionManager() *conn.SessionManager
 }

@@ -57,7 +57,7 @@ func (m *Metrics) observe(status Status) {
 	}
 	m.Routes.Set(float64(status.RouteCount))
 	m.Age.Set(status.RouteAgeSeconds)
-	for _, source := range []string{"trade", "local", "hybrid", "retained", "none", "unavailable"} {
+	for _, source := range []string{"egress", "local", "hybrid", "retained", "none", "unavailable"} {
 		value := 0.0
 		if source == status.Source {
 			value = 1

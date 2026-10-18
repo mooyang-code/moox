@@ -6,6 +6,7 @@ import (
 	"context"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,12 +43,12 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 	}
 
 	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	columns := closeColumns()
 	viewSchema := viewindex.ViewIndexSchema{
 		SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "prices",
-		ViewVersion: 1, Engine: "duckdb",
+		ViewVersion: 1, Engine: "duckdb", Columns: columns,
 	}
 	schemaHash := viewindex.HashViewIndexSchema(viewSchema)
-	columns := []*pb.ViewColumn(nil)
 	prepare := func(indexID string) {
 		t.Helper()
 		rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{
@@ -63,7 +64,7 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 		}
 	}
 	prepare("prices-a")
-	if err := svc.AttachActiveView(&pb.View{
+	if err := svc.AttachActiveView(context.Background(), &pb.View{
 		SpaceId: "space", ViewId: "prices", DatasetId: "prices",
 		Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, ActiveViewSchemaHash: schemaHash,
 		Status: "active",
@@ -116,7 +117,7 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 	metadata := &capacityMaintenanceMetadata{maintenanceMetadata: maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "prices", DatasetId: "prices",
 		Engine: "duckdb", ActiveIndexId: "prices-a", ActiveViewRevision: 1, DesiredViewRevision: 1,
-		ActiveViewSchemaHash: schemaHash, ActiveColumns: columns, Columns: columns, FilterJson: `{"freq":"1m"}`, KeepDuration: "365d", Status: "active",
+		ActiveViewSchemaHash: schemaHash, ActiveColumns: columns, Columns: columns, Freq: "1m", Status: "active",
 	}}}
 	primaryRows := make([]*pb.TimeSeriesRow, 0, 6002)
 	for index := 0; index < 4; index++ {
@@ -139,9 +140,9 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 	svc.consumerState = func(context.Context) (jetstream.ConsumerState, error) { return jetstream.ConsumerState{}, nil }
 	checkNow := base.Add(24 * time.Hour)
 	maintainOpts := MaintenanceOptions{
-		Metadata: metadata, Primary: &primaryHistoryFieldReader{}, PrimaryRange: primary, OwnerID: "owner", Grace: 0,
-		BackfillPageSize:    10000,
-		MaxPeriodsPerSeries: 6000, RebuildLookbackPeriods: map[string]uint64{"default": 5000},
+		Metadata: metadata, Primary: &primaryHistoryFieldReader{}, PrimaryRange: primary, OwnerID: "owner",
+		BackfillPageSize: 10000,
+		TrimBars:         6000, Bars: 5000,
 		CapacityCheckInterval: time.Hour, CapacityCheckJitter: time.Hour,
 		capacityCheckJitterSource:   func(time.Duration) time.Duration { return 30 * time.Minute },
 		capacityCheckNow:            func() time.Time { return checkNow },
@@ -160,7 +161,7 @@ func TestSeriesCapacityMaintainerRebuildsWhenOneSeriesExceedsLimit(t *testing.T)
 	if metadata.created == nil || metadata.created.GetTriggerReason() != pb.ViewRebuildTriggerReason_VIEW_REBUILD_TRIGGER_SERIES_CAPACITY {
 		t.Fatalf("audit log=%v, want SERIES_CAPACITY", metadata.created)
 	}
-	for _, want := range []string{`"subject_id":"A"`, `"frequency":"1m"`, `"series_tag":"venue:test"`, `"observed_periods":6001`, `"max_periods_per_series":6000`, `"rebuild_lookback_periods":5000`} {
+	for _, want := range []string{`"subject_id":"A"`, `"frequency":"1m"`, `"series_tag":"venue:test"`, `"observed_bars":6001`, `"trim_bars":6000`, `"bars":5000`} {
 		if !strings.Contains(metadata.created.GetDetailsJson(), want) {
 			t.Fatalf("capacity audit details missing %s: %s", want, metadata.created.GetDetailsJson())
 		}
@@ -217,26 +218,48 @@ type capacitySubjectRangeReader struct {
 }
 
 func (r *capacitySubjectRangeReader) ReadTimeSeriesRows(_ context.Context, req *pb.ReadTimeSeriesRowsReq, _ ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error) {
-	if len(req.GetSelectors()) != 1 {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: successRetInfo()}, nil
-	}
-	selector := req.GetSelectors()[0]
-	rows := make([]*pb.TimeSeriesRow, 0)
+	// 不指定标的：按 (subject_id, series_tag) 分组、每个序列从新到旧取最近 N 根，按游标分页。
+	rows := make([]*pb.TimeSeriesRow, 0, len(r.rows))
 	for _, row := range r.rows {
 		key := row.GetKey()
-		if key.GetSpaceId() == selector.GetSpaceId() && key.GetDatasetId() == selector.GetDatasetId() && key.GetSubjectId() == selector.GetSubjectId() && key.GetFreq() == selector.GetFreq() {
+		if key.GetSpaceId() == req.GetSpaceId() && key.GetDatasetId() == req.GetDatasetId() {
 			rows = append(rows, row)
 		}
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].GetKey().GetDataTime() > rows[j].GetKey().GetDataTime()
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i].GetKey(), rows[j].GetKey()
+		if a.GetSubjectId() != b.GetSubjectId() {
+			return a.GetSubjectId() < b.GetSubjectId()
+		}
+		if a.GetSeriesTag() != b.GetSeriesTag() {
+			return a.GetSeriesTag() < b.GetSeriesTag()
+		}
+		return a.GetDataTime() > b.GetDataTime()
 	})
-	limit := int(req.GetPage().GetSize())
-	if limit > 0 && len(rows) > limit {
-		rows = rows[:limit]
+	if perSeries := int(req.GetLatestPerSeries()); perSeries > 0 {
+		kept := make(map[string]int)
+		latest := make([]*pb.TimeSeriesRow, 0, len(rows))
+		for _, row := range rows {
+			id := row.GetKey().GetSubjectId() + "|" + row.GetKey().GetSeriesTag()
+			if kept[id] < perSeries {
+				kept[id]++
+				latest = append(latest, row)
+			}
+		}
+		rows = latest
 	}
-	return &pb.ReadTimeSeriesRowsRsp{
-		RetInfo: successRetInfo(), Rows: rows,
-		PageResult: &pb.PageResult{Page: 1, Size: uint32(limit), Total: uint32(len(rows)), HasMore: false},
-	}, nil
+	offset := 0
+	if cursor := req.GetPage().GetCursor(); cursor != "" {
+		offset, _ = strconv.Atoi(cursor)
+	}
+	size := int(req.GetPage().GetSize())
+	if size <= 0 {
+		size = len(rows)
+	}
+	end := min(offset+size, len(rows))
+	rsp := &pb.ReadTimeSeriesRowsRsp{RetInfo: successRetInfo(), Rows: rows[offset:end], PageResult: &pb.PageResult{}}
+	if end < len(rows) {
+		rsp.PageResult.HasMore, rsp.PageResult.NextCursor = true, strconv.Itoa(end)
+	}
+	return rsp, nil
 }

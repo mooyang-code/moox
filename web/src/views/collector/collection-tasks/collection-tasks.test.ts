@@ -23,7 +23,7 @@ describe("collector task workbench", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
     expect(source).toContain('header="高级设置"');
     expect(source).toContain("resultConfig.data_node_id");
-    expect(source).toContain("resultConfig.keep_duration");
+    expect(source).not.toContain("keep_duration");
     expect(source).toContain("resultConfig.description");
     expect(source).toContain("result_config:");
     expect(source).toContain("delete_result_data:");
@@ -34,7 +34,17 @@ describe("collector task workbench", () => {
 
   it("renders the task list with operational result columns and no rule terminology", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
-    for (const label of ["任务名称", "数据类型", "数据范围标签", "来源 / 市场", "频率", "结果状态", "最近数据时间", "启用状态", "操作"]) {
+    for (const label of [
+      "任务名称",
+      "数据类型",
+      "数据范围标签",
+      "来源 / 市场",
+      "频率",
+      "结果状态",
+      "最近数据时间",
+      "启用状态",
+      "操作"
+    ]) {
       expect(source).toContain(`title="${label}"`);
     }
     expect(source).toContain("新建采集任务");
@@ -48,12 +58,17 @@ describe("collector task workbench", () => {
     expect(source).not.toContain(["数据集", "管理"].join(""));
   });
 
+  it("lets the wide task table fill the spin wrapper so the fixed action column is not clipped", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8").replace(/\s+/g, "");
+    expect(source).toContain(".moox-page:deep(.arco-spin){display:block;width:100%;min-width:0;}");
+  });
+
   it("keeps resample backfill in the task surface", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
     const backfill = fs.readFileSync(path.resolve(__dirname, "resample-backfill.vue"), "utf8");
     expect(source).toContain("kline_resample");
     expect(source).toContain("ResampleBackfillDialog");
-    expect(source).toContain("sourceKeepDuration");
+    expect(source).toContain("sourceRetention");
     expect(backfill).toContain("开始回填");
     expect(backfill).toContain("内部行情 `crypto`");
     expect(backfill).not.toContain("ruleId");
@@ -68,4 +83,16 @@ describe("collector task workbench", () => {
     expect(source).toContain("outputFields: selectedOutputFields.value");
   });
 
+  it("clears source-derived tags on switch and waits for the backfill before saving", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
+    const loader = source.slice(
+      source.indexOf("function loadSourceSubjectTags"),
+      source.indexOf("async function fetchSourceSubjectTags")
+    );
+    expect(loader).toContain("subjectTagIds.value = []");
+    expect(loader).toContain("sourceTagsPending = task");
+    const submit = source.slice(source.indexOf("async function handleOk"));
+    expect(submit.indexOf("await sourceTagsPending")).toBeGreaterThan(-1);
+    expect(submit.indexOf("await sourceTagsPending")).toBeLessThan(submit.indexOf("currentTaskInput()"));
+  });
 });

@@ -102,3 +102,23 @@ func TestSSHSessionDAO_ListConnected_ReturnsOnlyConnected(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Equal(t, "sess-3", rows[0].SessionID)
 }
+
+// 主机密钥指纹：首次记录、之后固定（不被覆盖）、地址变化后重新信任、删除主机时一并清掉。
+func TestSSHHostDAO_PinHostKeyLifecycle(t *testing.T) {
+	d := NewSSHHostDAO(setupSSHDAOTestDB(t))
+	host := &model.SSHHost{Name: "a", Address: "1.1.1.1", Port: 22, User: "u"}
+	require.NoError(t, d.Create(host))
+	pin, err := d.PinHostKey(host.ID, "1.1.1.1:22", "SHA256:first")
+	require.NoError(t, err)
+	assert.Equal(t, "SHA256:first", pin)
+	pin, err = d.PinHostKey(host.ID, "1.1.1.1:22", "SHA256:second")
+	require.NoError(t, err)
+	assert.Equal(t, "SHA256:first", pin, "已记录的指纹不能被后来的连接覆盖")
+	pin, err = d.PinHostKey(host.ID, "2.2.2.2:22", "SHA256:moved")
+	require.NoError(t, err)
+	assert.Equal(t, "SHA256:moved", pin, "地址变化后重新信任")
+	require.NoError(t, d.Delete(host.ID))
+	pin, err = d.PinHostKey(host.ID, "2.2.2.2:22", "SHA256:again")
+	require.NoError(t, err)
+	assert.Equal(t, "SHA256:again", pin, "删除主机后记录被清掉")
+}

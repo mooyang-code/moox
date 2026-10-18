@@ -2,10 +2,10 @@ package observability
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
+
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
@@ -62,35 +62,9 @@ func (m *DatasetMetrics) ObserveRun(observation report.DatasetObservation) error
 }
 
 func parseDatasetFrequency(freq string) (time.Duration, error) {
-	freq = strings.TrimSpace(freq)
-	if len(freq) < 2 {
+	parsed, err := frequencypkg.Parse(freq)
+	if err != nil {
 		return 0, fmt.Errorf("storage dataset freq %q is invalid", freq)
 	}
-	count, err := strconv.ParseUint(freq[:len(freq)-1], 10, 64)
-	if err != nil || count == 0 {
-		return 0, fmt.Errorf("storage dataset freq %q is invalid", freq)
-	}
-	var unit time.Duration
-	switch freq[len(freq)-1] {
-	case 's':
-		unit = time.Second
-	case 'm':
-		unit = time.Minute
-	case 'h', 'H':
-		unit = time.Hour
-	case 'd', 'D':
-		unit = 24 * time.Hour
-	case 'w', 'W':
-		unit = 7 * 24 * time.Hour
-	case 'M':
-		unit = 30 * 24 * time.Hour
-	case 'y', 'Y':
-		unit = 365 * 24 * time.Hour
-	default:
-		return 0, fmt.Errorf("storage dataset freq %q is invalid", freq)
-	}
-	if count > uint64((1<<63-1)/unit) {
-		return 0, fmt.Errorf("storage dataset freq %q overflows duration", freq)
-	}
-	return time.Duration(count) * unit, nil
+	return parsed.NominalDuration(), nil
 }

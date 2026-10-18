@@ -1,0 +1,51 @@
+gateway_client:
+  caller: collector
+  key_file: ./caller-collector.key
+egress_proxy:
+  domains:
+    - '*.binance.com'
+  dns:
+    domains:
+      - fapi.binance.com
+    refresh_interval: 300s
+    request_timeout: 3000ms
+    cache_ttl: 300s
+scf_access:
+  access_address: 2.2.2.2:11004
+  access_id: access@storage
+  caller: scf-collector
+  key_file: ../../secrets/caller-scf-collector.key
+  key_id: ""
+scf_regions:
+  ap-hongkong:
+    subnet_id: subnet-hk
+    vpc_id: vpc-hk
+scf_markets:
+  crypto:
+    spot:
+      - ap-hongkong
+    swap:
+      - ap-hongkong
+  stockcn:
+    equity:
+      - ap-hongkong
+scf_plan:
+  cloud_account_id: tencent-scf
+  memory_mb: 128
+  symbols_per_function: 50
+  access_routes:
+    ap-hongkong:
+      access_address: 172.19.32.13:11004
+      access_id: access@compute-1
+  spaces:
+    crypto:
+      namespace: moox-crypto-plan
+      package_name: moox-collector-crypto-plan
+    stockcn:
+      namespace: moox-stockcn-plan
+      package_name: moox-collector-stockcn-plan
+collector_retention:
+  maintenance_interval: 1m
+  maintenance_offset: 35s
+  maintenance_timeout: 20s
+  max_rows_per_pass: 50000

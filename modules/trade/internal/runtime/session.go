@@ -508,7 +508,14 @@ func (s *ExchangeSession) applyEvent(ctx context.Context, event privateEvent) er
 	case privateOrder:
 		return s.Sync.ApplyOrder(ctx, s.Account.TradingAccountID, event.order)
 	case privateFill:
-		_, err := s.Sync.ApplyFill(ctx, s.Account.TradingAccountID, event.fill)
+		applied, err := s.Sync.ApplyFill(ctx, s.Account.TradingAccountID, event.fill)
+		if err == nil && applied && s.syncRequested != nil {
+			// 成交已使准入关闭，请求完整同步以确认余额后恢复
+			select {
+			case s.syncRequested <- struct{}{}:
+			default:
+			}
+		}
 		return err
 	case privatePosition:
 		err := s.Sync.ApplyPosition(ctx, s.Account.TradingAccountID, event.position)
@@ -567,6 +574,9 @@ type sessionHandler struct {
 	closing   bool
 	activated bool
 	inflight  int
+	// dirty：激活前处理过会使持久化就绪置为“等待完整同步”的事件（成交、持仓）。此时不能再把就绪写回 true，
+	// 必须等排队的完整同步确认。
+	dirty bool
 }
 
 func newSessionHandler(
@@ -652,6 +662,7 @@ func (h *sessionHandler) activate(
 		pending := append([]privateEvent(nil), h.pending...)
 		h.pending = h.pending[:0]
 		h.mu.Unlock()
+		h.markDirty(pending)
 		for _, event := range pending {
 			if err := h.apply(ctx, event); err != nil {
 				h.gateMu.Lock()
@@ -661,6 +672,17 @@ func (h *sessionHandler) activate(
 				h.gateMu.Unlock()
 				return err
 			}
+		}
+	}
+}
+
+func (h *sessionHandler) markDirty(events []privateEvent) {
+	for _, event := range events {
+		if event.kind == privateFill || event.kind == privatePosition || event.kind == privateAccount {
+			h.mu.Lock()
+			h.dirty = true
+			h.mu.Unlock()
+			return
 		}
 	}
 }
@@ -685,9 +707,10 @@ func (h *sessionHandler) finishActivation(ctx context.Context) error {
 		h.mu.Lock()
 		if len(h.pending) == 0 {
 			setReady := h.setReady
+			dirty := h.dirty
 			h.buffering = false
 			h.mu.Unlock()
-			if setReady != nil {
+			if setReady != nil && !dirty {
 				return setReady()
 			}
 			return nil
@@ -695,6 +718,7 @@ func (h *sessionHandler) finishActivation(ctx context.Context) error {
 		pending := append([]privateEvent(nil), h.pending...)
 		h.pending = h.pending[:0]
 		h.mu.Unlock()
+		h.markDirty(pending)
 		for _, event := range pending {
 			if err := h.apply(ctx, event); err != nil {
 				return err

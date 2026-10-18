@@ -180,11 +180,18 @@ func TestTargetExecutorDiscardsPendingChildWhenAutomationChangesBeforeSubmit(t *
 func TestTargetExecutorDiscardsPendingChildWhenSessionChangesAfterPlace(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.now = time.Now().UTC()
-	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
 	var fence string
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		var err error
+		logical, err := tx.GetLogicalAccount("space-1", "logical-1")
+		if err != nil {
+			return err
+		}
+		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", logical.OwnerInstanceID, logical.OwnerSessionID, logical.AuthFence); err != nil {
+			return err
+		}
+		if logical, err = tx.GetLogicalAccount("space-1", "logical-1"); err != nil {
+			return err
+		}
 		fence, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", logical.AuthFence)
 		return err
 	}))
@@ -235,40 +242,6 @@ func TestTargetExecutorWaitsWithoutPausingWhenAccountTurnsNotReady(t *testing.T)
 	)
 	require.NoError(t, err)
 	require.Equal(t, StatusPending, target.Status)
-}
-
-func TestTargetExecutorPausedOwnerReleaseCancelsOwnedOrderWithoutError(t *testing.T) {
-	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
-	fixture.target(t, []store.InstrumentTarget{{
-		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
-	}})
-	fixture.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "target-open",
-		TradingAccountID: "account-a", ClientOrderID: "target-open",
-		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
-		OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
-		Quantity: "1", ReferencePrice: "100", ReferencePriceAt: 2_000,
-		OwnerType: "TARGET", OwnerID: "target-current",
-		LogicalAccountID: "logical-1", RunnerID: "runner-1",
-		State: "OPEN", Version: 1,
-	})
-	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation(
-			"space-1", "logical-1", "PAUSED", "runner ownership released",
-		); err != nil {
-			return err
-		}
-		return tx.SetLogicalAccountOwner("space-1", "logical-1", "")
-	}))
-
-	result, err := fixture.executor().Converge(
-		context.Background(), "space-1", "logical-1",
-	)
-
-	require.NoError(t, err)
-	require.Equal(t, StatusPaused, result.Status)
-	require.Equal(t, "cancel", result.Action)
-	require.Equal(t, []string{"target-open"}, fixture.orders.canceled)
 }
 
 func TestTargetExecutorClosesOpposingBeforeOpening(t *testing.T) {
@@ -463,6 +436,32 @@ func TestTargetExecutorRetriesQuoteAgainstCurrentMemberPriorityWithoutRevaluatio
 	current, err := fixture.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "2", current.Targets[0].Quantity)
+}
+
+// 保持标的既不加仓也不减仓：已有持仓不动，目标视为已完成。
+func TestTargetExecutorHoldTargetLeavesPositionUntouched(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "3")
+	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Hold: true}})
+
+	result, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverged, result.Status)
+	require.Empty(t, fixture.orders.specs, "保持标的不能产生任何订单")
+}
+
+// 对照：同样的持仓，目标里省略该标的会被平仓，所以保持必须显式标记。
+func TestTargetExecutorOmittedTargetStillClosesPosition(t *testing.T) {
+	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
+	fixture.position(t, "account-a", "BTCUSDT", "3")
+	fixture.target(t, nil)
+
+	_, err := fixture.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, exchange.SideSell, fixture.orders.specs[0].Side)
 }
 
 func TestTargetExecutorFullOmissionCancelsOldTargetBeforeClosing(t *testing.T) {
@@ -724,7 +723,7 @@ func newTargetFixture(t *testing.T, market exchange.MarketType) *targetFixture {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", ExecutionMode: "PAPER",
+			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
 			MarketType: string(market), SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -808,9 +807,9 @@ func (f *targetFixture) target(t *testing.T, targets []store.InstrumentTarget) {
 		context.Background(),
 		store.LogicalAccountTargetRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			TargetID: "target-current", RunnerID: "runner-1",
-			CommandSequence: 1, Targets: targets, Status: StatusPending,
-			AcceptedAt: f.now.UnixMilli(),
+			TargetID: "target-current", InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
+			BarEndTime: f.now.UnixMilli(), EffectiveAt: f.now.UnixMilli(), ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
+			Targets: targets, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
 		},
 	)
 	require.NoError(t, err)
@@ -907,5 +906,27 @@ func (f *targetFixture) executor() *Executor {
 		Store: f.store, Orders: f.orders,
 		Prices: targetPriceStub{price: shared.MustDecimal("100")},
 		Now:    func() time.Time { return f.now },
+	}
+}
+
+// 逻辑账户锁被占用（例如完整同步正在持有）时，收敛必须按调用方的期限返回可重试错误，
+// 不能无限等待——目标 worker 串行处理账户，一个账户卡住会让后面的健康账户也得不到处理。
+func TestConvergeLockWaitHonorsDeadline(t *testing.T) {
+	f := newTargetFixture(t, exchange.MarketTypeSwap)
+	unlock := f.store.LockLogicalAccount("space-1", "logical-1")
+	defer unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.executor().Converge(ctx, "space-1", "logical-1")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Converge kept waiting for the logical account lock past the deadline")
 	}
 }

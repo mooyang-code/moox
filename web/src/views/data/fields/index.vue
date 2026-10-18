@@ -130,6 +130,7 @@
 </template>
 
 <script setup lang="ts">
+import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
@@ -313,15 +314,24 @@ function changeSort(sort: "sort_order" | "field_id" | "updated_at", order: "asc"
   void commitState({ sort, order, page: 1 });
 }
 
+// 编辑器打开序号：每次打开/关闭都会递增，进行中的保存只能收尾它自己打开的那一次编辑器
+let fieldDrawerToken = 0;
+let groupDialogToken = 0;
 function openCreateField() {
+  fieldDrawerToken += 1;
+  fieldSaving.value = false;
   editingField.value = null;
   fieldDrawerVisible.value = true;
 }
 function openEditField(field: Field) {
+  fieldDrawerToken += 1;
+  fieldSaving.value = false;
   editingField.value = field;
   fieldDrawerVisible.value = true;
 }
 function closeFieldDrawer() {
+  fieldDrawerToken += 1;
+  fieldSaving.value = false;
   fieldDrawerVisible.value = false;
   editingField.value = null;
 }
@@ -330,6 +340,8 @@ async function resetForSpace() {
   fieldGate.next();
   groupGate.next();
   closeFieldDrawer();
+  groupDialogToken += 1;
+  groupSaving.value = false;
   groupDialogVisible.value = false;
   groups.value = [];
   rows.value = [];
@@ -341,26 +353,37 @@ async function resetForSpace() {
 }
 
 async function saveField(field: Field) {
+  const token = fieldDrawerToken;
+  const submitSpaceId = selectedSpaceId.value;
+  const submitGeneration = selectedSpaceGeneration();
+  const stale = () =>
+    token !== fieldDrawerToken || selectedSpaceId.value !== submitSpaceId || selectedSpaceGeneration() !== submitGeneration;
   fieldSaving.value = true;
   try {
     if (editingField.value) await updateField(field);
     else await createField(field);
     Message.success("字段已保存");
+    // 编辑器已被关闭/重新打开或空间已切换：字段已经保存，但不能关闭用户正在编辑的新编辑器，也不刷新新空间之外的状态
+    if (stale()) return;
     closeFieldDrawer();
     selectedKeys.value = [];
     await loadAll();
   } finally {
-    fieldSaving.value = false;
+    if (!stale()) fieldSaving.value = false;
   }
 }
 
 function openCreateGroup(parentID = "") {
+  groupDialogToken += 1;
+  groupSaving.value = false;
   editingGroup.value = null;
   newGroupParentID.value = parentID;
   groupDialogVisible.value = true;
   mobileGroupVisible.value = false;
 }
 function openEditGroup(group: FieldGroup) {
+  groupDialogToken += 1;
+  groupSaving.value = false;
   editingGroup.value = group;
   newGroupParentID.value = "";
   groupDialogVisible.value = true;
@@ -368,15 +391,21 @@ function openEditGroup(group: FieldGroup) {
 }
 
 async function saveGroup(group: FieldGroup) {
+  const token = groupDialogToken;
+  const submitSpaceId = selectedSpaceId.value;
+  const submitGeneration = selectedSpaceGeneration();
+  const stale = () =>
+    token !== groupDialogToken || selectedSpaceId.value !== submitSpaceId || selectedSpaceGeneration() !== submitGeneration;
   groupSaving.value = true;
   try {
     if (editingGroup.value) await updateFieldGroup(group);
     else await createFieldGroup(group);
     Message.success("字段组已保存");
+    if (stale()) return;
     groupDialogVisible.value = false;
     await loadGroups();
   } finally {
-    groupSaving.value = false;
+    if (!stale()) groupSaving.value = false;
   }
 }
 

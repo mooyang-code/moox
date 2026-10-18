@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
@@ -119,16 +120,19 @@ func (c *Consumer) processDeliveryBatchWithPolicy(ctx context.Context, deliverie
 	}
 	retryCount := 0
 	for ctx.Err() == nil {
-		if c.config.Lease != nil {
-			if err := c.config.Lease.Acquire(ctx); err != nil {
-				return errors.Join(err, batchHeartbeatError(heartbeats))
-			}
-		}
+		applyStart := time.Now()
 		err := apply(ctx)
-		if c.config.Lease != nil {
-			c.config.Lease.Release()
-		}
 		if err == nil {
+			// 行事件批次的分段耗时：排队 = 最早一条入流到开始处理（含拉取与前面批次的处理）；处理 = apply 本身。
+			var oldest time.Time
+			for _, delivery := range deliveries {
+				if delivery != nil && !delivery.StoredAt.IsZero() && (oldest.IsZero() || delivery.StoredAt.Before(oldest)) {
+					oldest = delivery.StoredAt
+				}
+			}
+			if wait, took := applyStart.Sub(oldest), time.Since(applyStart); !oldest.IsZero() && (wait >= time.Second || took >= 200*time.Millisecond) {
+				log.Printf("storage view 行事件批次 事件=%d 最早入流至开始处理=%s 处理=%s", len(deliveries), wait.Round(time.Millisecond), took.Round(time.Millisecond))
+			}
 			settled = true
 			acked := make([]bool, len(deliveries))
 			for ctx.Err() == nil {
@@ -267,14 +271,14 @@ func (c *Consumer) processDeliveryWithApplyAndActions(ctx context.Context, deliv
 	defer func() { heartbeat.stop() }()
 	retryCount := 0
 	for ctx.Err() == nil {
-		if c.config.Lease != nil {
-			if err := c.config.Lease.Acquire(ctx); err != nil {
-				return errors.Join(err, heartbeat.err())
-			}
-		}
+		applyStart := time.Now()
 		err := apply(ctx, delivery)
-		if c.config.Lease != nil {
-			c.config.Lease.Release()
+		if wait, took := applyStart.Sub(delivery.StoredAt), time.Since(applyStart); err == nil && !delivery.StoredAt.IsZero() &&
+			(strings.Contains(delivery.Subject, "period") || wait >= time.Second || took >= 200*time.Millisecond) {
+			// 分段耗时：入流到开始处理是消费者排队与拉取的时间，处理是 apply 本身。周期事件总是记录，
+			// 其余事件（如行写入）只记录排队或处理较久的。
+			log.Printf("storage view 事件 consumer=%s subject=%s 入流至开始处理=%s 处理=%s 开始于=%s",
+				delivery.Consumer, delivery.Subject, wait.Round(time.Millisecond), took.Round(time.Millisecond), applyStart.Format("15:04:05.000"))
 		}
 		if err == nil || IsDeferred(err) {
 			settled = true

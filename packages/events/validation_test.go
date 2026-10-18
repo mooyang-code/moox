@@ -6,11 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/cloudjobpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
-	"github.com/mooyang-code/moox/packages/observabilitypb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -192,6 +190,25 @@ func (p *semanticValidationPublisher) PublishRaw(context.Context, string, string
 	return &jetstream.PublishAck{}, nil
 }
 
+func validationOptions(eventID, spaceID, subjectID string) PublishOptions {
+	return PublishOptions{
+		EventID: eventID, OccurredAt: time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC),
+		SpaceID: spaceID, SubjectID: subjectID,
+	}
+}
+
+func validRowsEvent() *storagepb.DatasetRowsUpserted {
+	return &storagepb.DatasetRowsUpserted{SourceNodeId: "node", SourceStoreId: "store", SourceSequence: 1,
+		SpaceId: "space", DatasetId: "dataset",
+		Rows: []*storagepb.RowUpsert{{
+			Key: &storagepb.RowKey{
+				SpaceId: "space", DatasetId: "dataset",
+				Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}},
+			},
+		}},
+	}
+}
+
 func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -200,18 +217,6 @@ func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 		opts    PublishOptions
 		mutate  func(proto.Message)
 	}{
-		{
-			name: "cloud job route", event: CloudJobExecutionRequested,
-			payload: &cloudjobpb.JobExecutionRequested{JobId: "job-1", JobItemId: "item-1", JobType: "collect"},
-			opts:    validationOptions("item-1", "space", "collect"),
-			mutate:  func(value proto.Message) { value.(*cloudjobpb.JobExecutionRequested).JobType = "other" },
-		},
-		{
-			name: "cloud job event id", event: CloudJobExecutionRequested,
-			payload: &cloudjobpb.JobExecutionRequested{JobId: "job-1", JobItemId: "item-1", JobType: "collect"},
-			opts:    validationOptions("item-1", "space", "collect"),
-			mutate:  func(value proto.Message) { value.(*cloudjobpb.JobExecutionRequested).JobItemId = "other" },
-		},
 		{
 			name: "host agent", event: ObservabilityHostSnapshotReported,
 			payload: &hostmetricpb.HostMetric{AgentId: "aB3x", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}},
@@ -263,77 +268,21 @@ func TestEncodeRejectsEveryBuiltInEventIdentityMismatch(t *testing.T) {
 	}
 }
 
-func TestHealthCheckReportValidation(t *testing.T) {
-	occurredAt := time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC)
-	valid := &observabilitypb.HealthCheckReport{
-		ObserverId: "scf-watchdog",
-		NodeId:     "scf-node-a",
-		CheckId:    "storage-health",
-		Target:     "http://storage:8080/healthz",
-		Kind:       "http",
-		Success:    true,
-		LatencyMs:  12,
-		CheckedAt:  timestamppb.New(occurredAt),
-	}
-	opts := validationOptions("health-event-1", "mooxsys", "storage-health")
-	registry, err := DefaultRegistry()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := registry.Encode(ObservabilityHealthCheckReported, valid, opts); err != nil {
-		t.Fatalf("valid health check rejected: %v", err)
-	}
-
-	tests := map[string]func(*observabilitypb.HealthCheckReport){
-		"observer required":   func(v *observabilitypb.HealthCheckReport) { v.ObserverId = "" },
-		"node too long":       func(v *observabilitypb.HealthCheckReport) { v.NodeId = string(make([]byte, 257)) },
-		"check required":      func(v *observabilitypb.HealthCheckReport) { v.CheckId = "" },
-		"kind required":       func(v *observabilitypb.HealthCheckReport) { v.Kind = "" },
-		"target too long":     func(v *observabilitypb.HealthCheckReport) { v.Target = string(make([]byte, 513)) },
-		"error code too long": func(v *observabilitypb.HealthCheckReport) { v.ErrorCode = string(make([]byte, 65)) },
-		"error summary too long": func(v *observabilitypb.HealthCheckReport) {
-			v.ErrorSummary = string(make([]byte, 257))
-		},
-		"negative latency":   func(v *observabilitypb.HealthCheckReport) { v.LatencyMs = -1 },
-		"checked at missing": func(v *observabilitypb.HealthCheckReport) { v.CheckedAt = nil },
-		"checked at invalid": func(v *observabilitypb.HealthCheckReport) {
-			v.CheckedAt = &timestamppb.Timestamp{Seconds: 253402300800}
-		},
-		"checked at too early": func(v *observabilitypb.HealthCheckReport) {
-			v.CheckedAt = timestamppb.New(occurredAt.Add(-5*time.Minute - time.Nanosecond))
-		},
-		"checked at too late": func(v *observabilitypb.HealthCheckReport) {
-			v.CheckedAt = timestamppb.New(occurredAt.Add(5*time.Minute + time.Nanosecond))
-		},
-	}
-	for name, mutate := range tests {
-		t.Run(name, func(t *testing.T) {
-			invalid := proto.Clone(valid).(*observabilitypb.HealthCheckReport)
-			mutate(invalid)
-			if _, err := registry.Encode(ObservabilityHealthCheckReported, invalid, opts); err == nil {
-				t.Fatal("invalid health check was accepted")
-			}
-		})
-	}
-}
-
 func TestDecodeAndPublishMessageRejectSemanticIdentityMismatch(t *testing.T) {
 	registry, err := DefaultRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := &cloudjobpb.JobExecutionRequested{
-		JobId: "job-1", JobItemId: "item-1", JobType: "collect",
-	}
+	payload := &hostmetricpb.HostMetric{AgentId: "aB3x", Hostname: "host-1", Snapshot: &hostmetricpb.HostSnapshot{}}
 	encoded, err := registry.Encode(
-		CloudJobExecutionRequested,
+		ObservabilityHostSnapshotReported,
 		payload,
-		validationOptions("item-1", "space", "collect"),
+		validationOptions("host-event-1", "mooxsys", "aB3x"),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload.JobType = "other"
+	payload.AgentId = "bC4y"
 	encoded.Message.Payload, err = proto.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -342,7 +291,7 @@ func TestDecodeAndPublishMessageRejectSemanticIdentityMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := DecodeRaw(registry, raw, encoded.Subject, "item-1", ContentType); err == nil {
+	if _, _, err := DecodeRaw(registry, raw, encoded.Subject, "host-event-1", ContentType); err == nil {
 		t.Fatal("DecodeRaw accepted mismatched payload identity")
 	}
 	if _, err := registry.SubjectForMessage(encoded.Message); err == nil {
@@ -358,24 +307,5 @@ func TestDecodeAndPublishMessageRejectSemanticIdentityMismatch(t *testing.T) {
 	}
 	if rawPublisher.calls != 0 {
 		t.Fatalf("invalid message reached raw publisher %d times", rawPublisher.calls)
-	}
-}
-
-func validationOptions(eventID, spaceID, subjectID string) PublishOptions {
-	return PublishOptions{
-		EventID: eventID, OccurredAt: time.Date(2026, 7, 25, 0, 0, 0, 0, time.UTC),
-		SpaceID: spaceID, SubjectID: subjectID,
-	}
-}
-
-func validRowsEvent() *storagepb.DatasetRowsUpserted {
-	return &storagepb.DatasetRowsUpserted{SourceNodeId: "node", SourceStoreId: "store", SourceSequence: 1,
-		SpaceId: "space", DatasetId: "dataset",
-		Rows: []*storagepb.RowUpsert{{
-			Key: &storagepb.RowKey{
-				SpaceId: "space", DatasetId: "dataset",
-				Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}},
-			},
-		}},
 	}
 }

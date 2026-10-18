@@ -9,6 +9,9 @@ option go_package = "github.com/mooyang-code/moox/packages/tradeeventpb;tradeeve
 message InstrumentWeightTarget {
   string instrument_id = 1;
   string target_weight = 2;
+  // hold 为 true 表示保持该标的当前持仓数量不动（策略因数据空洞暂时无法决策）；
+  // target_weight 是预留的预算占用，不用于换算数量。
+  bool hold = 3;
 }
 
 message LogicalAccountTargetWeightRequested {

@@ -1,0 +1,407 @@
+package gatewayclient
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/errs"
+)
+
+const secretService = "trpc.moox.ops.SecretMgr"
+
+type sourceStub struct {
+	mu        sync.Mutex
+	directory servicecatalog.Directory
+	err       error
+	calls     int
+}
+
+func (s *sourceStub) Fetch(_ context.Context, version string) (DirectoryUpdate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if s.err != nil {
+		return DirectoryUpdate{}, s.err
+	}
+	return DirectoryUpdate{Changed: version != s.directory.Version, Directory: s.directory.Clone()}, nil
+}
+
+type tunnelFunc func(context.Context, string) (string, error)
+
+func (f tunnelFunc) Resolve(ctx context.Context, id string) (string, error) { return f(ctx, id) }
+
+func testDirectory(t *testing.T, hosts ...string) servicecatalog.Directory {
+	t.Helper()
+	d := servicecatalog.Directory{Services: map[string][]string{secretService: hosts}, Hosts: map[string]servicecatalog.DirectoryHost{}}
+	for _, host := range hosts {
+		d.Hosts[host] = servicecatalog.DirectoryHost{Address: host + ".example.test"}
+	}
+	var err error
+	d.Version, err = d.VersionHash()
+	require.NoError(t, err)
+	return d
+}
+
+func tunnelConfig(source DirectorySource) Config {
+	return Config{Mode: Tunnel, Credentials: gatewayauth.Credentials{Caller: "moox-cli", KeyID: "test", Secret: "test-secret"},
+		Source: source, RefreshInterval: time.Hour, Tunnels: tunnelFunc(func(context.Context, string) (string, error) { return "127.0.0.1:12345", nil })}
+}
+
+func newTestClient(t *testing.T, config Config) *Client {
+	t.Helper()
+	c, err := New(config)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	return c
+}
+
+func TestRefreshCacheFallbackAndRejectsInvalidSnapshot(t *testing.T) {
+	source := &sourceStub{directory: testDirectory(t, "b", "a")}
+	config := tunnelConfig(source)
+	config.CachePath = filepath.Join(t.TempDir(), "gatewayclient", "directory.json")
+	c := newTestClient(t, config)
+	cached, err := readCache(config.CachePath)
+	require.NoError(t, err)
+	require.Equal(t, c.Directory(), cached)
+	stat, err := os.Stat(config.CachePath)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), stat.Mode().Perm())
+	owned := c.Directory()
+	owned.Services[secretService][0] = "modified"
+	require.Equal(t, "b", c.Directory().Services[secretService][0])
+	source.directory.Version = "invalid"
+	require.Error(t, c.Refresh(context.Background()))
+	require.Equal(t, cached, c.Directory())
+	source.err = errors.New("local gateway offline")
+	offline := newTestClient(t, config)
+	require.Equal(t, cached, offline.Directory())
+	require.NoError(t, os.WriteFile(config.CachePath, []byte(`{"version":"invalid"}`), 0o600))
+	_, err = New(config)
+	require.ErrorContains(t, err, "initial directory unavailable")
+}
+
+func TestReadRetryMovesHostAndResignsWhileWritesRunOnce(t *testing.T) {
+	for _, method := range []string{"GetSecret", "UpdateSecret"} {
+		t.Run(method, func(t *testing.T) {
+			source := &sourceStub{directory: testDirectory(t, "b", "a")}
+			c := newTestClient(t, tunnelConfig(source))
+			calls := 0
+			var nonce string
+			body := []byte(" {\"key\": \"value\"} \n")
+			c.invoke = func(_ context.Context, ep endpoint, service, method string, serialization int, raw []byte, headers http.Header) ([]byte, error) {
+				calls++
+				require.Equal(t, body, raw)
+				require.Equal(t, codec.SerializationTypeJSON, serialization)
+				claims, err := gatewayauth.Verify(c.config.Credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method, TargetNode: ep.target, Callee: service, Func: method, Body: raw}, headers, time.Now())
+				require.NoError(t, err)
+				if calls == 1 {
+					require.Equal(t, "a", ep.target)
+					nonce = claims.Nonce
+					return nil, errs.NewFrameError(errs.RetServerNoService, "service moved")
+				}
+				require.Equal(t, "b", ep.target)
+				require.NotEqual(t, nonce, claims.Nonce)
+				return raw, nil
+			}
+			response, err := c.Forward(context.Background(), secretService, method, codec.SerializationTypeJSON, body)
+			if method == "GetSecret" {
+				require.NoError(t, err)
+				require.Equal(t, body, response)
+				require.Equal(t, 2, calls)
+			} else {
+				require.Error(t, err)
+				require.Equal(t, 1, calls)
+			}
+			require.GreaterOrEqual(t, source.calls, 2, "route failure refreshes even for a write")
+		})
+	}
+}
+
+func TestInternalSelectsLocalOtherwiseTLSWithPrivateCA(t *testing.T) {
+	ca, _, _ := testCertificates(t)
+	source := &sourceStub{directory: testDirectory(t, "b", "a")}
+	config := tunnelConfig(source)
+	config.Mode = Internal
+	config.LocalHostID = "b"
+	config.Tunnels = nil
+	config.CAFile = ca
+	c := newTestClient(t, config)
+	ep, err := c.endpoint(context.Background(), secretService, "")
+	require.NoError(t, err)
+	require.Equal(t, endpoint{address: "127.0.0.1:11002", target: "b"}, ep)
+	ep, err = c.endpoint(context.Background(), secretService, "b")
+	require.NoError(t, err)
+	require.Equal(t, endpoint{address: "a.example.test:11003", target: "a", caFile: ca, serverName: "a"}, ep)
+	for _, invalid := range []string{"", "none", "root"} {
+		config.CAFile = invalid
+		_, err = New(config)
+		require.Error(t, err)
+	}
+}
+
+func TestExternalWhitelistAndTunnelLoopbackBoundary(t *testing.T) {
+	config := Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: "moox-skill", KeyID: "skill", Secret: "secret"}, AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"}
+	c := newTestClient(t, config)
+	c.invoke = func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error) {
+		t.Fatal("forbidden call reached transport")
+		return nil, nil
+	}
+	_, err := c.Forward(context.Background(), secretService, "GetSecretValue", codec.SerializationTypePB, nil)
+	require.ErrorContains(t, err, "not allowed")
+	config.AccessInstanceID = "storage"
+	_, err = New(config)
+	require.Error(t, err)
+	config.AccessInstanceID = "access@storage"
+	config.Source = &sourceStub{}
+	_, err = New(config)
+	require.ErrorContains(t, err, "does not use directory")
+	tunnel := tunnelConfig(&sourceStub{directory: testDirectory(t, "a")})
+	tunnel.Tunnels = tunnelFunc(func(context.Context, string) (string, error) { return "192.0.2.1:11002", nil })
+	c = newTestClient(t, tunnel)
+	_, err = c.Forward(context.Background(), secretService, "GetSecret", codec.SerializationTypeJSON, nil)
+	require.ErrorContains(t, err, "non-loopback")
+	_, err = NewLocalDirectorySource("192.0.2.1:11002", time.Second)
+	require.Error(t, err)
+}
+
+func TestExternalReadsResignRetriesAndWritesRunOnce(t *testing.T) {
+	for _, call := range []struct {
+		caller, service, method string
+		attempts                int
+	}{
+		{"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", 2},
+		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", 1},
+		{"scf-collector", "trpc.moox.storage.PrimaryStore", "UpsertFields", 1},
+	} {
+		t.Run(call.method, func(t *testing.T) {
+			config := Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: call.caller, KeyID: "assigned-scf-key-71", Secret: "fixture-key"},
+				AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"}
+			client := newTestClient(t, config)
+			body := []byte{0x0a, 1, 'a', 0x0a, 1, 'b'}
+			attempts := 0
+			nonces := map[string]bool{}
+			client.invoke = func(_ context.Context, ep endpoint, service, method string, serialization int, raw []byte, headers http.Header) ([]byte, error) {
+				attempts++
+				require.Equal(t, endpoint{address: config.AccessAddress, target: config.AccessInstanceID}, ep)
+				require.Equal(t, codec.SerializationTypePB, serialization)
+				require.Equal(t, body, raw)
+				claims, err := gatewayauth.Verify(config.Credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method,
+					TargetNode: config.AccessInstanceID, Callee: service, Func: method, Body: raw}, headers, time.Now())
+				require.NoError(t, err)
+				require.False(t, nonces[claims.Nonce], "every send must use a fresh nonce")
+				nonces[claims.Nonce] = true
+				if attempts == 1 {
+					return nil, errs.NewFrameError(errs.RetClientNetErr, "unknown remote outcome")
+				}
+				return raw, nil
+			}
+			response, err := client.Forward(context.Background(), call.service, call.method, codec.SerializationTypePB, body)
+			if call.attempts == 1 {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, body, response)
+			}
+			require.Equal(t, call.attempts, attempts)
+		})
+	}
+}
+
+type sourceFunc func(context.Context, string) (DirectoryUpdate, error)
+
+func (f sourceFunc) Fetch(ctx context.Context, version string) (DirectoryUpdate, error) {
+	return f(ctx, version)
+}
+
+func TestRefreshWaitingOnAnotherFetchHonorsContext(t *testing.T) {
+	c := newTestClient(t, tunnelConfig(&sourceStub{directory: testDirectory(t, "a")}))
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	done := make(chan error, 1)
+	c.config.Source = sourceFunc(func(ctx context.Context, _ string) (DirectoryUpdate, error) {
+		close(started)
+		select {
+		case <-finish:
+			return DirectoryUpdate{}, errors.New("done")
+		case <-ctx.Done():
+			return DirectoryUpdate{}, ctx.Err()
+		}
+	})
+	go func() { done <- c.Refresh(context.Background()) }()
+	<-started
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, c.Refresh(ctx), context.DeadlineExceeded)
+	close(finish)
+	require.Error(t, <-done)
+}
+
+func TestWithdrawalAppliesWhenCacheCannotBeReplaced(t *testing.T) {
+	source := &sourceStub{directory: testDirectory(t, "a", "b")}
+	config := tunnelConfig(source)
+	config.CachePath = filepath.Join(t.TempDir(), "directory.json")
+	c := newTestClient(t, config)
+	// Simulate a persist failure after a valid directory has been accepted.
+	require.NoError(t, os.Remove(config.CachePath))
+	require.NoError(t, os.Mkdir(config.CachePath, 0o700))
+	source.directory = testDirectory(t, "b")
+	require.ErrorContains(t, c.Refresh(context.Background()), "persist directory")
+	ep, err := c.endpoint(context.Background(), secretService, "")
+	require.NoError(t, err)
+	require.Equal(t, "b", ep.target, "a withdrawn host must not remain active after a disk failure")
+	require.NoError(t, c.Close())
+	_, err = c.Forward(context.Background(), secretService, "GetSecret", codec.SerializationTypePB, nil)
+	require.ErrorIs(t, err, net.ErrClosed)
+	require.ErrorIs(t, c.Refresh(context.Background()), net.ErrClosed)
+}
+
+func TestBusinessErrorsDoNotRetryOrRefresh(t *testing.T) {
+	source := &sourceStub{directory: testDirectory(t, "a", "b")}
+	c := newTestClient(t, tunnelConfig(source))
+	calls, fetches := 0, source.calls
+	c.invoke = func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error) {
+		calls++
+		return nil, errs.New(12345, "business error")
+	}
+	_, err := c.Forward(context.Background(), secretService, "GetSecret", codec.SerializationTypePB, nil)
+	require.EqualValues(t, 12345, errs.Code(err))
+	require.Equal(t, 1, calls)
+	require.Equal(t, fetches, source.calls)
+}
+
+func TestInvokeSanitizesMalformedResponseAndDoesNotRetryDecode(t *testing.T) {
+	source := &sourceStub{directory: testDirectory(t, "a")}
+	config := tunnelConfig(source)
+	config.Serialization = codec.SerializationTypeJSON
+	c := newTestClient(t, config)
+	calls, fetches := 0, source.calls
+	c.invoke = func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error) {
+		calls++
+		return []byte("recognizable-secret-response"), nil
+	}
+	err := c.Invoke(t.Context(), secretService, "GetSecret", &emptypb.Empty{}, &emptypb.Empty{})
+	require.EqualValues(t, errs.RetClientDecodeFail, errs.Code(err))
+	require.NotContains(t, err.Error(), "recognizable-secret-response")
+	require.Equal(t, 1, calls)
+	require.Equal(t, fetches, source.calls)
+}
+
+// 目录已应用到内存但落盘失败后，即使版本不再变化，也要在磁盘恢复后补写缓存。
+func TestRefreshRetriesPersistingUnchangedDirectoryAfterCacheWriteFailure(t *testing.T) {
+	source := &sourceStub{directory: testDirectory(t, "a")}
+	config := tunnelConfig(source)
+	dir := filepath.Join(t.TempDir(), "gatewayclient")
+	config.CachePath = filepath.Join(dir, "directory.json")
+	c := newTestClient(t, config)
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if _, err := os.Create(filepath.Join(dir, "probe")); err == nil {
+		t.Skip("目录权限不能阻止写入（可能以 root 运行）")
+	}
+	source.directory = testDirectory(t, "a", "b")
+	require.ErrorContains(t, c.Refresh(context.Background()), "persist directory")
+	require.Equal(t, source.directory.Version, c.Directory().Version, "新目录必须已生效")
+	require.NoError(t, os.Chmod(dir, 0o700))
+	require.NoError(t, c.Refresh(context.Background()))
+	cached, err := readCache(config.CachePath)
+	require.NoError(t, err)
+	require.Equal(t, source.directory.Version, cached.Version, "磁盘恢复后缓存应补写为当前目录")
+}
+
+// 主机网关验签失败（服务撤离同时撤销了调用方密钥）时，只读调用刷新目录并改投新主机。
+func TestReadRetryRefreshesOnGatewayAuthFailure(t *testing.T) {
+	source := &sourceStub{directory: testDirectory(t, "b", "a")}
+	c := newTestClient(t, tunnelConfig(source))
+	calls := 0
+	c.invoke = func(_ context.Context, ep endpoint, _, _ string, _ int, raw []byte, _ http.Header) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return nil, errs.NewFrameError(errs.RetServerAuthFail, "host gateway authentication failed")
+		}
+		require.NotEqual(t, "a", ep.target)
+		return raw, nil
+	}
+	_, err := c.Forward(context.Background(), secretService, "GetSecret", codec.SerializationTypeJSON, []byte(`{}`))
+	require.NoError(t, err)
+	require.Equal(t, 2, calls)
+	require.GreaterOrEqual(t, source.calls, 2)
+}
+
+func TestWithoutRetryLeavesRetriesToTheCaller(t *testing.T) {
+	source := &sourceStub{directory: testDirectory(t, "b", "a")}
+	c := newTestClient(t, tunnelConfig(source))
+	calls := 0
+	c.invoke = func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error) {
+		calls++
+		return nil, errs.NewFrameError(errs.RetClientNetErr, "boom")
+	}
+	body := []byte(`{}`)
+	_, err := c.Forward(WithoutRetry(context.Background()), secretService, "GetSecret", codec.SerializationTypeJSON, body)
+	require.Error(t, err)
+	require.Equal(t, 1, calls, "只读调用在 WithoutRetry 下也只发一次")
+	calls = 0
+	_, err = c.Forward(context.Background(), secretService, "GetSecret", codec.SerializationTypeJSON, body)
+	require.Error(t, err)
+	require.Equal(t, 2, calls, "默认仍会重试一次")
+}
+
+type relayTunnelStub struct{ tunnelFunc }
+
+func (relayTunnelStub) ResolveRelay(_ context.Context, control string) (string, error) {
+	return "127.0.0.1:23456", nil
+}
+
+// 只能出站的主机经 control 中转：其他主机连 control 的公网端口，control 上的调用方连本机端口，
+// 隧道模式经 SSH 转发到 control；缺 CA 或隧道不支持中转时拒绝。目标主机自己仍走本机网关。
+func TestRelayEndpointForOutboundHost(t *testing.T) {
+	ca, _, _ := testCertificates(t)
+	directory := testDirectory(t, "home")
+	directory.Hosts["control"] = servicecatalog.DirectoryHost{Address: "control.example.test"}
+	directory.Hosts["home"] = servicecatalog.DirectoryHost{Address: "192.168.0.103", Relay: "control"}
+	var err error
+	directory.Version, err = directory.VersionHash()
+	require.NoError(t, err)
+	config := tunnelConfig(&sourceStub{directory: directory})
+	config.Mode, config.Tunnels, config.CAFile, config.LocalHostID = Internal, nil, ca, "storage"
+	route := func(config Config) (endpoint, error) {
+		return newTestClient(t, config).endpoint(context.Background(), secretService, "")
+	}
+	ep, err := route(config)
+	require.NoError(t, err)
+	require.Equal(t, "home.moox-relay:11003", ep.address)
+	require.Equal(t, "home", ep.serverName)
+	require.Equal(t, &relayRoute{controlAddress: "control.example.test:11003", controlHost: "control", target: "home", caFile: ca, credentials: config.Credentials}, ep.relay)
+
+	config.LocalHostID = "control"
+	ep, err = route(config)
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:11003", ep.relay.controlAddress)
+
+	config.LocalHostID = "home"
+	ep, err = route(config)
+	require.NoError(t, err)
+	require.Nil(t, ep.relay, "目标主机自己走本机网关")
+
+	tunnel := tunnelConfig(&sourceStub{directory: directory})
+	_, err = route(tunnel)
+	require.ErrorContains(t, err, "CA")
+	tunnel.CAFile = ca
+	_, err = route(tunnel)
+	require.ErrorContains(t, err, "relay")
+	tunnel.Tunnels = relayTunnelStub{tunnelFunc(func(context.Context, string) (string, error) { return "", errors.New("no direct tunnel") })}
+	ep, err = route(tunnel)
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:23456", ep.relay.controlAddress)
+}

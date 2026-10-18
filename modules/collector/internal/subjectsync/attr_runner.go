@@ -2,6 +2,8 @@ package subjectsync
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -22,41 +24,57 @@ type AttributeRunner struct {
 	FetchTimeout time.Duration
 	Now          func() time.Time
 	Metrics      *Metrics
-	next         []time.Time
 }
 
-func (r *AttributeRunner) RunOnce(ctx context.Context) {
-	now := time.Now().UTC()
+// Current 返回调度判断使用的当前时间。
+func (r *AttributeRunner) Current() time.Time {
 	if r.Now != nil {
-		now = r.Now().UTC()
+		return r.Now().UTC()
 	}
-	if len(r.next) != len(r.Jobs) {
-		r.next = make([]time.Time, len(r.Jobs))
-	}
-	for i, job := range r.Jobs {
+	return time.Now().UTC()
+}
+
+func (r *AttributeRunner) RunOnce(ctx context.Context) error {
+	return r.RunOnceAt(ctx, r.Current())
+}
+
+// RunOnceAt 以给定的触发时间判断任务是否到期。定时回调应在等待共享同步锁之前固定触发时间，
+// 否则锁被手动同步占用跨过计划分钟时，获得锁后再取时间会让当次任务落在窗口之外被跳过。
+func (r *AttributeRunner) RunOnceAt(ctx context.Context, now time.Time) error {
+	now = now.UTC()
+	var failures error
+	for _, job := range r.Jobs {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(failures, err)
+		}
 		schedule, err := cron.ParseStandard(job.Cron)
 		if err != nil {
 			log.ErrorContextf(ctx, "attribute job %s cron: %v", job.SpaceID, err)
+			failures = errors.Join(failures, err)
 			continue
 		}
 		loc, err := time.LoadLocation(job.Timezone)
 		if err != nil {
 			log.ErrorContextf(ctx, "attribute job %s timezone: %v", job.SpaceID, err)
+			failures = errors.Join(failures, err)
 			continue
 		}
-		if r.next[i].IsZero() {
-			r.next[i] = schedule.Next(now.In(loc))
+		// Adjacent windows (trigger - 1m, trigger] do not overlap. Scheduling
+		// depends on the job timezone, independently of process uptime.
+		next := schedule.Next(now.Add(-time.Minute).In(loc))
+		if next.IsZero() {
+			failures = errors.Join(failures, fmt.Errorf("attribute job %s has no scheduled occurrence", job.SpaceID))
 			continue
 		}
-		if now.Before(r.next[i]) {
+		if next.After(now) {
 			continue
 		}
-		r.runJob(ctx, job)
-		r.next[i] = schedule.Next(now.In(loc))
+		failures = errors.Join(failures, r.runJob(ctx, job))
 	}
+	return failures
 }
 
-func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) {
+func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) error {
 	instrumentType := job.InstrumentType
 	if instrumentType == "" {
 		if job.SpaceID == "crypto" {
@@ -77,7 +95,7 @@ func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) {
 		if r.Metrics != nil {
 			r.Metrics.observeAttributeFailure(job.SpaceID)
 		}
-		return
+		return err
 	}
 	items := make([]*pb.SubjectAttributes, 0, len(instruments))
 	for _, instrument := range instruments {
@@ -88,7 +106,9 @@ func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) {
 		if r.Metrics != nil {
 			r.Metrics.observeAttributeFailure(job.SpaceID)
 		}
+		return fmt.Errorf("update subject attributes %s: %w", job.SpaceID, err)
 	}
+	return nil
 }
 
 func attributes(spaceID string, item marketdata.Instrument) map[string]string {
@@ -100,4 +120,23 @@ func attributes(spaceID string, item marketdata.Instrument) map[string]string {
 	default:
 		return nil
 	}
+}
+
+// SyncAttributes refreshes the matching attribute jobs right now, ignoring
+// their cron windows. An empty filter space matches every job.
+func (r *AttributeRunner) SyncAttributes(ctx context.Context, filter Filter) []AttributeResult {
+	var results []AttributeResult
+	for _, job := range r.Jobs {
+		if filter.SpaceID != "" && filter.SpaceID != job.SpaceID {
+			continue
+		}
+		result := AttributeResult{SpaceID: job.SpaceID, Status: StatusSuccess}
+		if err := ctx.Err(); err != nil {
+			result.Status, result.Message = StatusFailed, err.Error()
+		} else if err := r.runJob(ctx, job); err != nil {
+			result.Status, result.Message = StatusFailed, err.Error()
+		}
+		results = append(results, result)
+	}
+	return results
 }

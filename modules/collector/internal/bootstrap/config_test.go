@@ -1,23 +1,19 @@
 package bootstrap
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
+	"github.com/mooyang-code/moox/packages/security"
+
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
-
-func TestLoadSCFRegionBlacklists(t *testing.T) {
-	cfg, err := Load(writeCollectorConfig(t, "scf_region_blacklists:\n  crypto: [ap-guangzhou]\n  stockcn: [ap-tokyo]\n"))
-	require.NoError(t, err)
-	require.Equal(t, map[string][]string{"crypto": {"ap-guangzhou"}, "stockcn": {"ap-tokyo"}}, cfg.SCFRegionBlacklists)
-}
 
 func TestDefaultHealthConfigAndEnvOverride(t *testing.T) {
 	t.Setenv("MOOX_COLLECTOR_HEALTH_ADDR", "127.0.0.1:16012")
@@ -43,45 +39,26 @@ func TestLoadReadsYAMLAndAppliesEnvOverrides(t *testing.T) {
 database:
   path: ./original/collector.db
 storage:
-  gateway_target: ip://127.0.0.1:20100
+  result_data_node_id: result-test
 `)
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "./override/collector.db", cfg.Database.Path)
 	assert.Equal(t, "127.0.0.1:16012", cfg.Health.Addr)
-	assert.Equal(t, "ip://127.0.0.1:30100", cfg.Storage.GatewayTarget)
-	assert.Equal(t, "collector", cfg.SysDeploy.ServiceAuth.Caller)
+	assert.Equal(t, "result-test", cfg.Storage.ResultDataNodeID)
+	assert.Equal(t, "collector", cfg.GatewayClient.Caller)
 }
 
-func TestCollectorRuntimeGatewayConfigIsExplicitPair(t *testing.T) {
-	t.Setenv("MOOX_COLLECTOR_RUNTIME_GATEWAY_TARGET", "")
-	t.Setenv("MOOX_COLLECTOR_RUNTIME_NODE_ID", "")
-	cfg, err := Load(writeCollectorConfig(t, `collector_runtime:
-  gateway_target: ip://10.0.0.5:11003
-  node_id: collector-2
-`))
-	require.NoError(t, err)
-	assert.Equal(t, "ip://10.0.0.5:11003", cfg.CollectorRuntime.GatewayTarget)
-	assert.Equal(t, "collector-2", cfg.CollectorRuntime.NodeID)
-
-	t.Setenv("MOOX_COLLECTOR_RUNTIME_GATEWAY_TARGET", "collector-gw.example.com:11003")
-	t.Setenv("MOOX_COLLECTOR_RUNTIME_NODE_ID", "collector-3")
-	cfg, err = Load(writeCollectorConfig(t, "database:\n  path: ./collector.db\n"))
-	require.NoError(t, err)
-	assert.Equal(t, "collector-gw.example.com:11003", cfg.CollectorRuntime.GatewayTarget)
-	assert.Equal(t, "collector-3", cfg.CollectorRuntime.NodeID)
-}
-
-func TestLoadRejectsPartialCollectorRuntimeGatewayConfig(t *testing.T) {
+func TestLoadRejectsRemovedCollectorRuntimeGatewayConfig(t *testing.T) {
 	_, err := Load(writeCollectorConfig(t, `collector_runtime:
-  gateway_target: collector-gw.example.com:11003
+  gateway_target: collector.example:11003
+  node_id: control
 `))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "collector_runtime.node_id")
 }
 
-func TestMarketFetchRuntimeHasSeparateLoopbackHTTPAndNativeListeners(t *testing.T) {
+func TestCollectorRPCListenersUseNativeLoopbackOnly(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "trpc_go.yaml"))
 	require.NoError(t, err)
 	var config struct {
@@ -95,42 +72,18 @@ func TestMarketFetchRuntimeHasSeparateLoopbackHTTPAndNativeListeners(t *testing.
 		} `yaml:"server"`
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &config))
-	listeners := make(map[string]struct {
-		ip       string
-		port     int
-		protocol string
-	})
+	foundCollectMgr := false
 	for _, service := range config.Server.Service {
-		if strings.Contains(service.Name, "MarketFetchRuntime") {
-			listeners[service.Protocol] = struct {
-				ip       string
-				port     int
-				protocol string
-			}{service.IP, service.Port, service.Protocol}
+		require.NotEqual(t, 11418, service.Port)
+		require.NotContains(t, service.Name, "MarketFetchRuntime")
+		if service.Name == "trpc.moox.collector.CollectMgr" {
+			foundCollectMgr = true
+			require.Equal(t, "127.0.0.1", service.IP)
+			require.Equal(t, 11402, service.Port)
+			require.Equal(t, "trpc", service.Protocol)
 		}
 	}
-	assert.Equal(t, struct {
-		ip       string
-		port     int
-		protocol string
-	}{"127.0.0.1", 11418, "http"}, listeners["http"])
-	assert.Equal(t, struct {
-		ip       string
-		port     int
-		protocol string
-	}{"127.0.0.1", 11422, "trpc"}, listeners["trpc"])
-}
-
-func TestStockCNTargetDataTimeValidatorUsesConfiguredCalendar(t *testing.T) {
-	calendar, err := stockmarket.LoadCalendar(filepath.Join("..", "..", "config", "markets", "stockcn", "calendar.yaml"))
-	require.NoError(t, err)
-	current := time.Date(2026, 9, 30, 2, 1, 10, 0, time.UTC)
-	valid := stockCNTargetDataTimeValidator(calendar, 10*time.Second, func() time.Time { return current })
-	assert.True(t, valid("1m", time.Date(2026, 9, 30, 2, 0, 0, 0, time.UTC)), "latest closed session minute")
-	assert.False(t, valid("1m", time.Date(2026, 9, 30, 4, 0, 0, 0, time.UTC)), "lunch period")
-	current = time.Date(2026, 10, 1, 2, 1, 10, 0, time.UTC)
-	assert.False(t, valid("1m", time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC)), "configured holiday")
-	assert.False(t, valid("5m", time.Date(2026, 9, 30, 2, 0, 0, 0, time.UTC)), "non-1m frequency")
+	require.True(t, foundCollectMgr)
 }
 
 func TestMarketFetchSpaceIDUsesConfiguredMarketForScheduler(t *testing.T) {
@@ -165,41 +118,24 @@ func TestLoadKlineResampleConfig(t *testing.T) {
 	assert.Equal(t, 20, cfg.KlineResample.WorkerSubjectBatchSize)
 }
 
-func TestLoadStockCNRuntimeCapacityConfig(t *testing.T) {
-	cfg, err := Load(writeCollectorConfig(t, `stockcn:
-  expected_timer_function_count: 200
-  measured_safe_group_size: 30
-  stagger_start_second: 5
-  stagger_window_seconds: 35
-  stagger_max_starts_per_second: 6
-`))
-	require.NoError(t, err)
-	assert.Equal(t, 200, cfg.StockCN.ExpectedTimerFunctionCount)
-	assert.Equal(t, 30, cfg.StockCN.MeasuredSafeGroupSize)
-	assert.Equal(t, 5, cfg.StockCN.StaggerStartSecond)
-	assert.Equal(t, 35, cfg.StockCN.StaggerWindowSeconds)
-	assert.Equal(t, 6, cfg.StockCN.StaggerMaxStartsPerSecond)
-}
-
 func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {
-	cfg, err := Load(writeCollectorConfig(t, "collector_retention:\n  max_rows_per_pass: 25000\n  terminal_retry_retention: 336h\n"))
+	cfg, err := Load(writeCollectorConfig(t, "collector_retention:\n  max_rows_per_pass: 25000\n"))
 	require.NoError(t, err)
 	assert.Equal(t, "1m", cfg.CollectorRetention.MaintenanceInterval)
-	assert.Equal(t, "45s", cfg.CollectorRetention.MaintenanceTimeout)
+	assert.Equal(t, "35s", cfg.CollectorRetention.MaintenanceOffset)
+	assert.Equal(t, "20s", cfg.CollectorRetention.MaintenanceTimeout)
 	assert.Equal(t, 25000, cfg.CollectorRetention.MaxRowsPerPass)
-	assert.Equal(t, "24h", cfg.CollectorRetention.ExecutionDetailRetention)
-	assert.Equal(t, "720h", cfg.CollectorRetention.ScheduledRunSummaryRetention)
-	assert.Equal(t, "336h", cfg.CollectorRetention.TerminalRetryRetention)
-	assert.Equal(t, "720h", cfg.CollectorRetention.PeriodSnapshotRetention)
 }
 
 func TestLoadRejectsInvalidCollectorRetention(t *testing.T) {
 	for _, body := range []string{
 		"collector_retention:\n  max_rows_per_pass: 0\n",
-		"collector_retention:\n  max_rows_per_pass: 8\n",
 		"collector_retention:\n  max_rows_per_pass: 50001\n",
 		"collector_retention:\n  maintenance_interval: 1m\n  maintenance_timeout: 2m\n",
-		"collector_retention:\n  execution_detail_retention: 9000h\n",
+		// A pass must end before the next minute boundary owned by the market tick.
+		"collector_retention:\n  maintenance_offset: 35s\n  maintenance_timeout: 30s\n",
+		"collector_retention:\n  maintenance_offset: 1m\n",
+		"collector_retention:\n  maintenance_offset: -1s\n",
 	} {
 		_, err := Load(writeCollectorConfig(t, body))
 		require.Error(t, err, body)
@@ -208,9 +144,9 @@ func TestLoadRejectsInvalidCollectorRetention(t *testing.T) {
 }
 
 func TestLoadAcceptsMinimumCollectorRetentionBudget(t *testing.T) {
-	cfg, err := Load(writeCollectorConfig(t, "collector_retention:\n  max_rows_per_pass: 9\n"))
+	cfg, err := Load(writeCollectorConfig(t, "collector_retention:\n  max_rows_per_pass: 1\n"))
 	require.NoError(t, err)
-	assert.Equal(t, 9, cfg.CollectorRetention.MaxRowsPerPass)
+	assert.Equal(t, 1, cfg.CollectorRetention.MaxRowsPerPass)
 }
 
 func TestLoadRejectsInvalidPeriodReadinessRetention(t *testing.T) {
@@ -264,41 +200,31 @@ func TestLoadRejectsMissingFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "read config")
 }
 
-func TestLoadDNSResolverConfigAndEnvironment(t *testing.T) {
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_ENABLED", "true")
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_TARGET", "ip://43.132.204.177:11003")
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_NODE_ID", "compute-1")
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_DOMAINS", "fapi.binance.com,api.binance.com")
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_REFRESH_INTERVAL", "5m")
-	t.Setenv("MOOX_COLLECTOR_DNS_RESOLVER_TIMEOUT", "3s")
-
-	cfg, err := Load(writeCollectorConfig(t, "database:\n  path: ./collector.db\n"))
-	require.NoError(t, err)
-	assert.True(t, cfg.DNSResolver.Enabled)
-	assert.Equal(t, "compute-1", cfg.DNSResolver.NodeID)
-	assert.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, cfg.DNSResolver.Domains)
-}
-
-func TestLoadRejectsEnabledDNSResolverWithoutNode(t *testing.T) {
-	_, err := Load(writeCollectorConfig(t, `dns_resolver:
-  enabled: true
-  target: ip://43.132.204.177:11003
-  domains: [fapi.binance.com]
-  refresh_interval: 5m
-  request_timeout: 3s
-  cache_ttl: 5m
+func TestLoadEgressProxyUsesSharedGateway(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, `egress_proxy:
+  domains: ["*.binance.com", "data-api.binance.vision"]
+  dns:
+    domains: [FAPI.BINANCE.COM., api.binance.com]
+    request_timeout: 2s
 `))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "dns_resolver.node_id")
+	require.NoError(t, err)
+	require.True(t, cfg.EgressProxy.DNS.Enabled())
+	require.Equal(t, []string{"fapi.binance.com", "api.binance.com"}, cfg.EgressProxy.DNS.Domains)
+	require.Equal(t, 2*time.Second, cfg.EgressProxy.DNS.RequestTimeout)
 }
-
-func TestLoadRejectsNonPublicDNSResolverTargets(t *testing.T) {
-	for _, target := range []string{"ip://127.0.0.1:11003", "ip://10.0.0.5:11003", "ip://localhost:11003", "ip://not-a-public-host:11003", "http://43.132.204.177:11003"} {
-		t.Run(target, func(t *testing.T) {
-			_, err := Load(writeCollectorConfig(t, "dns_resolver:\n  enabled: true\n  target: "+target+"\n  node_id: compute-1\n  domains: [fapi.binance.com]\n  refresh_interval: 5m\n  request_timeout: 3s\n  cache_ttl: 5m\n"))
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "dns_resolver.target")
-		})
+func TestLoadRejectsInvalidEgressProxy(t *testing.T) {
+	for _, raw := range []string{
+		"dns_resolver: {enabled: true}",
+		"egress_proxy: {target: 'ip://old.example:11003'}",
+		"egress_proxy: {domains: [binance.com.evil/path]}",
+		"egress_proxy: {dns: {domains: ['*.binance.com']}}",
+		"egress_proxy: {dns: {domains: [api.binance.com, API.BINANCE.COM.]}}",
+		"egress_proxy: {dns: {request_timeout: 0s}}",
+		"egress_proxy: {dns: {request_timeout: 61s}}",
+		"egress_proxy: {dns: {node_id: old}}",
+	} {
+		_, err := Load(writeCollectorConfig(t, raw))
+		require.Error(t, err, raw)
 	}
 }
 
@@ -307,4 +233,249 @@ func writeCollectorConfig(t *testing.T, content string) string {
 	path := filepath.Join(t.TempDir(), "app.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 	return path
+}
+
+func TestCollectorGatewayIdentityUsesStrictConfiguration(t *testing.T) {
+	t.Setenv("MOOX_GATEWAY_CALLER", "wrong-legacy-caller")
+	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_KEY_ID", "obsolete-key")
+	t.Setenv("MOOX_COLLECTOR_STORAGE_RPC_HMAC_KEY_FILE", "/nonexistent/obsolete-key")
+	cfg, err := Load(writeCollectorConfig(t, "gateway_client:\n  key_id: admin-assigned-collector-key\n"))
+	require.NoError(t, err)
+	require.Equal(t, "collector", cfg.GatewayClient.Caller)
+	require.Equal(t, "admin-assigned-collector-key", cfg.GatewayClient.KeyID)
+	require.Equal(t, "../../secrets/caller-collector.key", cfg.GatewayClient.KeyFile)
+	for _, raw := range []string{
+		"gateway_client: {caller: monitor}\n",
+		"gateway_client: {key_id: 'bad key'}\n",
+		"gateway_client: {target: 'ip://127.0.0.1:11003'}\n",
+		"gateway_client: {key_file: ''}\n",
+		"storage: {key_id: old}\n",
+		"storage: {hmac_key_file: old}\n",
+		"gateway_client: {caller: collector, caller: monitor}\n",
+		"{}\n---\n{}\n",
+	} {
+		_, err := Load(writeCollectorConfig(t, raw))
+		require.Error(t, err, raw)
+	}
+	_, err = Default().OpenGateway(nil)
+	require.Error(t, err, "an in-memory default must not manufacture a deployment identity")
+}
+
+func TestLoadSubjectSyncFromCollectorConfig(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, "subject_sync: {fetch_timeout: 3m, attributes: [{space_id: crypto, sources: [' BINANCE '], cron: '10 8 * * *', timezone: Asia/Shanghai}]}"))
+	require.NoError(t, err)
+	require.Equal(t, 3*time.Minute, cfg.SubjectSync.FetchTimeout)
+	require.Equal(t, []string{"binance"}, cfg.SubjectSync.Attributes[0].Sources)
+	defaults, err := Load(writeCollectorConfig(t, "{}"))
+	require.NoError(t, err)
+	require.Len(t, defaults.SubjectSync.Attributes, 2)
+	for _, job := range defaults.SubjectSync.Attributes {
+		require.Equal(t, "10 8 * * *", job.Cron)
+		require.Equal(t, "Asia/Shanghai", job.Timezone)
+	}
+	for _, raw := range []string{
+		"subject_sync: {fetch_timeout: 0s}", "subject_sync: {fetch_timeout: 11m}",
+		"subject_sync: {poll_interval: 1m}", "subject_sync: {health_addr: ':11413'}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance], cron: bad}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance], cron: '0 0 31 2 *'}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance], cron: '@every 2m'}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance], timezone: Invalid/Zone}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [' ']}]}",
+		"subject_sync: {attributes: [{space_id: crypto, sources: [binance, BINANCE]}]}",
+		"subject_sync: {attributes: [{space_id: '', sources: [binance]}]}",
+	} {
+		_, err = Load(writeCollectorConfig(t, raw))
+		require.Error(t, err, raw)
+	}
+}
+
+func TestSCFPlanConfigValidation(t *testing.T) {
+	valid := func() *Config {
+		cfg := Default()
+		cfg.SCFRegions = map[string]marketfetch.PlanNetwork{"ap-nanjing": {VPCID: "vpc-1", SubnetID: "subnet-1"}}
+		cfg.SCFPlan.AccessRoutes = map[string]SCFAccessEndpoint{"ap-nanjing": {Address: "10.0.0.5:11004", InstanceID: "access@storage"}}
+		cfg.SCFMarkets = map[string]map[string][]string{"crypto": {"spot": {"ap-nanjing"}}}
+		cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageID, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "scf-env.json"
+		return cfg
+	}
+	require.NoError(t, valid().validateSCFPlan())
+	require.Equal(t, []string{"crypto"}, valid().fetchPlanSpaces())
+	multi := valid()
+	multi.SCFMarkets["stockcn"] = map[string][]string{"equity": {"ap-nanjing"}}
+	require.Equal(t, []string{"crypto", "stockcn"}, multi.fetchPlanSpaces(), "空间集合以 scf_markets 为准，与旧调度的空间环境变量无关")
+	onlyStock := valid()
+	onlyStock.SCFMarkets = map[string]map[string][]string{"stockcn": {"equity": {"ap-nanjing"}}}
+	require.Equal(t, []string{"stockcn"}, onlyStock.fetchPlanSpaces())
+	require.Equal(t, []string{"crypto", "stockcn"}, withStoredSpaces([]string{"stockcn"}, []string{"crypto", "", "STOCKCN"}))
+
+	noRoute := valid()
+	noRoute.SCFPlan.AccessRoutes = nil
+	require.ErrorContains(t, noRoute.validateSCFPlan(), "same-region Access route")
+	noNetwork := valid()
+	noNetwork.SCFRegions = nil
+	require.ErrorContains(t, noNetwork.validateSCFPlan(), "VPC and subnet")
+	noDeploy := valid()
+	noDeploy.SCFPlan.PackageID = ""
+	require.ErrorContains(t, noDeploy.validateSCFPlan(), "package_id")
+	require.NoError(t, Default().validateSCFPlan(), "spaces without scf_markets keep the Invoke scheduler only")
+
+	shared := valid()
+	shared.SCFMarkets["stockcn"] = map[string][]string{"stock": {"ap-nanjing"}}
+	require.ErrorContains(t, shared.validateSCFPlan(), "share code package")
+	own := valid()
+	own.SCFMarkets["stockcn"] = map[string][]string{"stock": {"ap-nanjing"}}
+	own.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageID: "pkg-stockcn"}}
+	require.NoError(t, own.validateSCFPlan())
+}
+
+func TestFetchPlanDeployForcesTheSpaceIdentity(t *testing.T) {
+	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "env.json"), []byte(`{"MOOX_SPACE_ID":"crypto","OTHER":"x"}`), 0o600))
+	cfg := Default()
+	cfg.sourcePath = filepath.Join(dir, "app.yaml")
+	cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageID, cfg.SCFPlan.BaseEnvironmentFile = "acct", "pkg", "env.json"
+	cfg.SCFPlan.Spaces = map[string]SCFPlanSpaceConfig{"stockcn": {PackageID: "pkg-stockcn"}}
+	deploy, err := cfg.fetchPlanDeploy("stockcn")
+	require.NoError(t, err)
+	require.Equal(t, "stockcn", deploy.BaseEnvironment["MOOX_SPACE_ID"])
+	require.Equal(t, "pkg-stockcn", deploy.PackageID)
+	cryptoDeploy, err := cfg.fetchPlanDeploy("crypto")
+	require.NoError(t, err)
+	require.Equal(t, "crypto", cryptoDeploy.BaseEnvironment["MOOX_SPACE_ID"])
+	require.Equal(t, "pkg", cryptoDeploy.PackageID)
+}
+
+func TestFetchPlanDeployBuildsTheBaseEnvironmentWithoutAFile(t *testing.T) {
+	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
+	cfg := Default()
+	cfg.sourcePath = filepath.Join(t.TempDir(), "app.yaml")
+	cfg.SCFPlan.CloudAccountID, cfg.SCFPlan.PackageName = "acct", "moox-collector-crypto-plan"
+	deploy, err := cfg.fetchPlanDeploy("crypto")
+	require.NoError(t, err)
+	require.Equal(t, "crypto", deploy.BaseEnvironment["MOOX_SPACE_ID"])
+	require.Equal(t, "moox-collector-crypto-plan", deploy.PackageName)
+	require.Empty(t, deploy.PackageID)
+	// Storage 应用密钥由主密钥按应用 ID 派生，密钥本身不进入配置文件。
+	var keys map[string]string
+	require.NoError(t, json.Unmarshal([]byte(deploy.BaseEnvironment["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"]), &keys))
+	require.Equal(t, security.HMACSHA256Hex("test-storage-primary-secret", []byte("moox-collector")), keys["moox-collector"])
+	require.Len(t, keys, 1)
+
+	// 主密钥缺失时明确报错，不下发没有密钥的函数。
+	t.Setenv(storageAuthSecretEnv, "")
+	_, err = cfg.fetchPlanDeploy("crypto")
+	require.ErrorContains(t, err, storageAuthSecretEnv)
+}
+
+func TestSCFPlanPackageSelectionRequiresExactlyOneOfNameAndID(t *testing.T) {
+	plan := SCFPlanConfig{PackageName: "pkg-name", Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {PackageID: "pkg-id"}}}
+	key, err := plan.packageKeyFor("crypto")
+	require.NoError(t, err)
+	require.Equal(t, "name:pkg-name", key)
+	key, err = plan.packageKeyFor("stockcn")
+	require.NoError(t, err)
+	require.Equal(t, "id:pkg-id", key)
+
+	_, err = (SCFPlanConfig{PackageName: "a", PackageID: "b"}).packageKeyFor("crypto")
+	require.ErrorContains(t, err, "both")
+	_, err = (SCFPlanConfig{}).packageKeyFor("crypto")
+	require.ErrorContains(t, err, "needs package_name")
+}
+
+// 部署渲染出的 Timer 配置经真实 Load（含 validateSCFPlan）：覆盖 crypto、仅 stockcn、多空间与关闭状态。
+const renderedTimerRegions = `scf_regions:
+  ap-nanjing: {vpc_id: vpc-1, subnet_id: subnet-1}
+`
+
+func renderedTimerPlan(markets, spaces string) string {
+	return renderedTimerRegions + "scf_markets:\n" + markets + `scf_plan:
+  cloud_account_id: acct
+  memory_mb: 128
+  symbols_per_function: 50
+  access_routes:
+    ap-nanjing: {access_address: "10.0.0.5:11004", access_id: access@storage}
+  spaces:
+` + spaces
+}
+
+func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
+	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
+	t.Run("crypto only", func(t *testing.T) {
+		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing], swap: [ap-nanjing]}\n", "    crypto: {package_name: pkg-crypto, namespace: ns-crypto}\n")))
+		require.NoError(t, err)
+		require.Equal(t, []string{"crypto"}, cfg.fetchPlanSpaces())
+		deploy, err := cfg.fetchPlanDeploy("crypto")
+		require.NoError(t, err)
+		require.Equal(t, "pkg-crypto", deploy.PackageName)
+		require.Equal(t, "ns-crypto", deploy.Namespace)
+		require.Equal(t, "crypto", deploy.BaseEnvironment["MOOX_SPACE_ID"])
+		require.Equal(t, 50, cfg.SCFPlan.symbolsPerFunction("crypto"))
+	})
+	t.Run("only stockcn keeps its own defaults", func(t *testing.T) {
+		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  stockcn: {equity: [ap-nanjing]}\n", "    stockcn: {package_name: pkg-stock, namespace: ns-stock}\n")))
+		require.NoError(t, err)
+		require.Equal(t, []string{"stockcn"}, cfg.fetchPlanSpaces(), "只配置 stockcn 也要启动管理器")
+		require.Equal(t, 40, cfg.SCFPlan.symbolsPerFunction("stockcn"))
+		require.Equal(t, 8, cfg.SCFPlan.fetchFor("stockcn").Concurrency)
+		require.Equal(t, 35000, cfg.SCFPlan.fetchFor("stockcn").StaggerMS)
+	})
+	t.Run("several spaces", func(t *testing.T) {
+		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
+			"    crypto: {package_name: pkg-crypto, namespace: ns-crypto}\n    stockcn: {package_name: pkg-stock, namespace: ns-stock}\n")))
+		require.NoError(t, err)
+		require.Equal(t, []string{"crypto", "stockcn"}, cfg.fetchPlanSpaces())
+	})
+	t.Run("two spaces sharing one package are rejected", func(t *testing.T) {
+		_, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
+			"    crypto: {package_name: shared}\n    stockcn: {package_name: shared}\n")))
+		require.ErrorContains(t, err, "share code package")
+	})
+	t.Run("disabled renders nothing", func(t *testing.T) {
+		cfg, err := Load(writeCollectorConfig(t, "database: {path: ./c.db}\n"))
+		require.NoError(t, err)
+		require.Empty(t, cfg.fetchPlanSpaces())
+	})
+}
+
+func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
+	defaults := defaultSCFPlan()
+	// 只写了 rps：并发、错峰等沿用 stockcn 的默认值，不会变成零。
+	plan := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {Fetch: &SCFPlanFetchConfig{RPS: 10}}}}
+	plan.mergeSpaceDefaults(defaults.Spaces)
+	fetch := plan.fetchFor("stockcn")
+	require.Equal(t, 10, fetch.RPS)
+	require.Equal(t, 8, fetch.Concurrency)
+	require.Equal(t, 35000, fetch.StaggerMS)
+	require.Positive(t, fetch.Concurrency)
+	require.Positive(t, fetch.Burst)
+	require.Positive(t, fetch.RequestTimeoutMS)
+
+	// 没有内置默认的空间只写部分字段：从全局默认补齐。
+	other := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"futures": {Fetch: &SCFPlanFetchConfig{Concurrency: 4}}}}
+	other.mergeSpaceDefaults(defaults.Spaces)
+	got := other.fetchFor("futures")
+	require.Equal(t, 4, got.Concurrency)
+	require.Equal(t, defaults.Fetch.RPS, got.RPS)
+	require.Equal(t, defaults.Fetch.RequestTimeoutMS, got.RequestTimeoutMS)
+}
+
+// CLI 渲染测试生成的真实产物（modules/cli/.../testdata/scf_plan_rendered.yaml）必须能被 Collector 真实加载并通过校验。
+func TestLoadTheConfigRenderedByTheCLI(t *testing.T) {
+	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
+	raw, err := os.ReadFile("../../../cli/internal/setup/config/testdata/scf_plan_rendered.yaml")
+	require.NoError(t, err)
+	cfg, err := Load(writeCollectorConfig(t, string(raw)))
+	require.NoError(t, err)
+	require.Equal(t, []string{"crypto", "stockcn"}, cfg.fetchPlanSpaces())
+	for _, space := range cfg.fetchPlanSpaces() {
+		deploy, deployErr := cfg.fetchPlanDeploy(space)
+		require.NoError(t, deployErr, space)
+		require.NotEmpty(t, deploy.PackageName, space)
+		require.Contains(t, deploy.Networks, "ap-hongkong")
+	}
+	require.Equal(t, 40, cfg.SCFPlan.symbolsPerFunction("stockcn"), "渲染产物里只有包名与命名空间，stockcn 默认值仍应补回")
+	route, err := cfg.scfPlanAccessEnvironmentRoute("ap-hongkong")
+	require.NoError(t, err)
+	require.Equal(t, "172.19.32.13:11004", route.Address)
 }

@@ -13,7 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/report"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -65,7 +65,7 @@ var klineFields = []struct {
 // PrepareTarget creates or validates the target Dataset, columns, subject
 // bindings and View. Existing resources with a mismatched immutable contract
 // are rejected instead of being silently overwritten.
-func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, source storagesource.DatasetInfo, subjects []domain.Subject, keepDuration string) error {
+func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask, params *domain.CollectParams, source storagesource.DatasetInfo, subjects []domain.Subject) error {
 	if c == nil || c.Metadata == nil || c.Auth == nil {
 		return errors.New("resample catalog dependencies are required")
 	}
@@ -110,7 +110,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			// display text. Derive a short stable suffix from the target ID so
 			// independent resample targets do not collide on metadata creation.
 			Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-			Freqs: []string{targetFreq.Storage}, Status: "draft", Attributes: attrs, SubjectTags: append([]string(nil), source.SubjectTags...), KeepDuration: keepDuration,
+			Freq: targetFreq.Storage, Status: "draft", Attributes: attrs, SubjectTags: append([]string(nil), source.SubjectTags...),
 		}})
 		if createErr != nil {
 			return fmt.Errorf("create target Dataset: %w", createErr)
@@ -175,7 +175,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_VIEW_NOT_FOUND || viewResp.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := c.Metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: c.Auth, CreateOnly: true, View: &storagepb.View{
 			SpaceId: task.SpaceID, ViewId: targetViewID, Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样查询视图", DatasetId: targetDatasetID,
-			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb", FilterJson: fmt.Sprintf(`{"freq":%q}`, targetFreq.Storage), KeepDuration: keepDuration, Status: "active",
+			GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"}, Engine: "duckdb", Status: "active",
 			Attributes: map[string]string{"owner_module": "collector", "managed_by": "collector", "collector_task_id": task.TaskID, "view_role": "collection_browse", "route_ready_request_id": "kline-resample-route:" + task.TaskID + ":" + fmt.Sprint(target.GetDataset().GetRevision())},
 		}})
 		if createErr != nil {
@@ -211,10 +211,9 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			continue
 		}
 		viewColumnIndex++
-		originID := targetDatasetID + "." + field.name
 		resp, callErr := c.Metadata.UpsertViewColumn(ctx, &storagepb.UpsertViewColumnReq{AuthInfo: c.Auth, Column: &storagepb.ViewColumn{
-			SpaceId: task.SpaceID, ViewId: targetViewID, ColumnName: originID, OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-			OriginId: originID, ValueType: field.type_, SortOrder: uint32(viewColumnIndex), Attributes: map[string]string{"display_name": field.label},
+			SpaceId: task.SpaceID, ViewId: targetViewID, ColumnName: field.name, OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
+			OriginId: field.name, ValueType: field.type_, SortOrder: uint32(viewColumnIndex), Attributes: map[string]string{"display_name": field.label},
 		}})
 		if callErr != nil {
 			return compensate(fmt.Errorf("upsert target View column %s: %w", field.name, callErr))
@@ -400,7 +399,7 @@ func validateTargetView(view *storagepb.View, task domain.CollectionTask, params
 	if view.GetDatasetId() != params.TargetDatasetID {
 		return errors.New("target View immutable Dataset contract does not match task")
 	}
-	if view.GetFilterJson() != fmt.Sprintf(`{"freq":%q}`, frequency) || view.GetEngine() != "duckdb" {
+	if view.GetFreq() != frequency || view.GetEngine() != "duckdb" {
 		return errors.New("target View immutable frequency contract does not match task")
 	}
 	wantGrain := []string{"subject_id", "freq", "data_time", "series_tag"}
@@ -444,20 +443,12 @@ func validateTargetDataset(dataset *storagepb.Dataset, want map[string]string, f
 			return fmt.Errorf("target Dataset immutable lineage attribute %s does not match task", key)
 		}
 	}
-	wantedFrequency, err := report.NormalizeDatasetFrequency(strings.TrimSpace(frequency))
+	wantedFrequency, err := frequencypkg.Normalize(frequency)
 	if err != nil {
 		return fmt.Errorf("target Dataset frequency %q is invalid: %w", frequency, err)
 	}
-	found := false
-	for _, freq := range dataset.GetFreqs() {
-		actualFrequency, normalizeErr := report.NormalizeDatasetFrequency(strings.TrimSpace(freq))
-		if normalizeErr == nil && actualFrequency == wantedFrequency {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("target Dataset does not enable frequency %s", frequency)
+	if dataset.GetFreq() != wantedFrequency {
+		return fmt.Errorf("target Dataset freq is %q, not %s", dataset.GetFreq(), frequency)
 	}
 	return nil
 }

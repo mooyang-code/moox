@@ -4,9 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
+
+	_ "github.com/mooyang-code/moox/packages/gatewayauth/nativewire"
 
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
@@ -74,18 +75,3 @@ func NewTRPCClientOptions(target, targetNode string, credentials Credentials) []
 		client.WithFilter(NewTRPCClientFilter(credentials, strings.TrimSpace(targetNode), nil)),
 	}
 }
-
-// CredentialsFromEnv reads the per-process service credential material used by
-// the native gateway. Missing credentials intentionally fail on the first RPC.
-func CredentialsFromEnv() Credentials {
-	return Credentials{KeyID: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_KEY_ID")), Caller: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_CALLER")), Secret: strings.TrimSpace(os.Getenv("MOOX_GATEWAY_SERVICE_SECRET_KEY"))}
-}
-
-func ServiceGatewayTarget(raw string) string {
-	if target := strings.TrimSpace(os.Getenv("MOOX_SERVICE_GATEWAY_TARGET")); target != "" {
-		return target
-	}
-	return raw
-}
-
-func ServiceGatewayNodeID() string { return strings.TrimSpace(os.Getenv("MOOX_GATEWAY_TARGET_NODE")) }

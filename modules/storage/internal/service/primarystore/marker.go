@@ -21,9 +21,6 @@ type markerDataNodeClient interface {
 }
 
 func (s *Service) ReportCollectorPeriodCompleted(ctx context.Context, req *pb.ReportCollectorPeriodCompletedReq) (*pb.ReportCollectorPeriodCompletedRsp, error) {
-	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
-		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "collector"); err != nil {
 		return &pb.ReportCollectorPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
@@ -52,9 +49,6 @@ func (s *Service) ReportCollectorPeriodCompleted(ctx context.Context, req *pb.Re
 }
 
 func (s *Service) ReportFactorPeriodComputed(ctx context.Context, req *pb.ReportFactorPeriodComputedReq) (*pb.ReportFactorPeriodComputedRsp, error) {
-	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
-		return &pb.ReportFactorPeriodComputedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId(), "factor"); err != nil {
 		return &pb.ReportFactorPeriodComputedRsp{RetInfo: markerError(err)}, nil
 	}
@@ -83,9 +77,6 @@ func (s *Service) ReportFactorPeriodComputed(ctx context.Context, req *pb.Report
 }
 
 func (s *Service) AppendDatasetSyncPoint(ctx context.Context, req *pb.AppendDatasetSyncPointReq) (*pb.AppendDatasetSyncPointRsp, error) {
-	if err := rejectMooxSkillWrite(req.GetAuthInfo()); err != nil {
-		return &pb.AppendDatasetSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
-	}
 	marker := req.GetSyncPoint()
 	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), marker.GetDatasetId(), ""); err != nil {
 		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(err)}, nil
@@ -172,8 +163,10 @@ func ownedDatasetNodeID(ctx context.Context, spaceID, datasetID, owner string) (
 	validOwner := false
 	switch owner {
 	case "collector":
+		// Collector 的原始采集结果与重采样结果都由它自己上报周期完成标记。
+		role := strings.ToLower(strings.TrimSpace(attrs["dataset_role"]))
 		validOwner = strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "collector") &&
-			strings.EqualFold(strings.TrimSpace(attrs["dataset_role"]), "raw_collection")
+			(role == "raw_collection" || role == "kline_resample_result")
 	case "factor":
 		validOwner = strings.EqualFold(strings.TrimSpace(attrs["owner_module"]), "factor") &&
 			strings.EqualFold(strings.TrimSpace(attrs["dataset_role"]), "factor_result") &&

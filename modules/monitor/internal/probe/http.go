@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/requestauth"
 )
 
@@ -22,6 +24,8 @@ type HTTPRunner struct {
 	HealthSigner *HealthSigner
 	Client       *http.Client
 	Now          func() time.Time
+	// Relay 经 control 中转连接只能出站主机的本机端口；URL 主机名为 <主机 ID>.moox-relay 的检查使用它。
+	Relay func(ctx context.Context, hostID string, port int) (net.Conn, error)
 }
 
 type HealthSigner struct {
@@ -50,7 +54,7 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	for k, v := range parseHeaders(check.Headers) {
 		req.Header.Set(k, v)
 	}
-	if r.HealthSigner != nil && check.Source == domain.CheckSourceSysDeploy && isHealthPath(req.URL) {
+	if r.HealthSigner != nil && check.Source == domain.CheckSourcePlacement && check.TrustMode == "" && isHealthPath(req.URL) {
 		now := time.Now
 		if r.Now != nil {
 			now = r.Now
@@ -72,14 +76,31 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	if client == nil {
 		client = &http.Client{Timeout: timeout}
 	}
-	resp, err := client.Do(req)
+	if check.TrustMode != "" {
+		var closeClient func()
+		client, closeClient, err = httpsClient(check, timeout)
+		if err != nil {
+			return failResult(check, 0, err.Error())
+		}
+		defer closeClient()
+	} else if relayHost, ok := strings.CutSuffix(req.URL.Hostname(), gatewayclient.RelayHostSuffix); ok {
+		if r.Relay == nil {
+			return failResult(check, 0, "该主机只能经控制主机中转访问，但 Monitor 没有可用的网关客户端")
+		}
+		client = relayClient(r.Relay, relayHost, timeout)
+	}
+	owned := *client
+	owned.CheckRedirect = stopRedirect
+	resp, err := owned.Do(req)
 	latency := time.Since(start)
 	if err != nil {
-		return failResult(check, latency, err.Error())
+		result := failResult(check, latency, connectFailureText(err, timeout))
+		result.RawError = err.Error()
+		return result
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyExcerptBytes+1))
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxBodyExcerptBytes+1))
 	excerpt := string(body)
 	if len(body) > maxBodyExcerptBytes {
 		excerpt = string(body[:maxBodyExcerptBytes])
@@ -88,11 +109,17 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	result.HTTPStatus = resp.StatusCode
 	result.Connected = true
 	result.BodyExcerpt = excerpt
+	if readErr != nil {
+		result.ErrorMessage = "读取健康接口响应失败"
+		result.RawError = readErr.Error()
+		return result
+	}
 
 	if !matchStatus(resp.StatusCode) {
 		result.Success = false
 		result.Status = domain.CheckStatusDown
-		result.ErrorMessage = fmt.Sprintf("unexpected HTTP status %d", resp.StatusCode)
+		result.ErrorMessage = fmt.Sprintf("健康接口返回异常状态码 %d：服务未就绪或出错", resp.StatusCode)
+		result.RawError = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, excerpt)
 		if reason := healthFailureReason(req.URL, excerpt); reason != "" {
 			result.ErrorMessage = reason
 		}
@@ -101,13 +128,14 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	if check.MaxResponseMS > 0 && latency.Milliseconds() > int64(check.MaxResponseMS) {
 		result.Success = false
 		result.Status = domain.CheckStatusDegraded
-		result.ErrorMessage = fmt.Sprintf("response time %dms exceeds %dms", latency.Milliseconds(), check.MaxResponseMS)
+		result.ErrorMessage = fmt.Sprintf("响应过慢：%dms，超过阈值 %dms", latency.Milliseconds(), check.MaxResponseMS)
 		return result
 	}
 	if check.BodyContains != "" && !strings.Contains(excerpt, check.BodyContains) {
 		result.Success = false
 		result.Status = domain.CheckStatusDown
-		result.ErrorMessage = "response body does not contain expected text"
+		result.ErrorMessage = "健康接口返回内容表明服务未就绪"
+		result.RawError = "expected response body to contain " + check.BodyContains + ": " + excerpt
 		return result
 	}
 	result.Success = true
@@ -202,4 +230,22 @@ func parseHeaders(raw string) map[string]string {
 		return nil
 	}
 	return out
+}
+
+// relayClient 为一次探测建立经 control 中转的 HTTP 客户端，不复用连接（每次探测都验证中转链路）。
+func relayClient(dial func(context.Context, string, int) (net.Conn, error), hostID string, timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, Transport: &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			n, err := strconv.Atoi(port)
+			if err != nil {
+				return nil, err
+			}
+			return dial(ctx, hostID, n)
+		},
+	}}
 }

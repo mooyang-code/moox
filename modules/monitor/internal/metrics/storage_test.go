@@ -2,13 +2,14 @@ package metrics
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -48,24 +49,18 @@ func (f *fakeMetadata) ListTags(context.Context, *storagepb.ListTagsReq, ...clie
 }
 
 type fakeAccess struct {
-	writes  []*storagepb.RowFieldUpsert
-	readReq *storagepb.ReadTimeSeriesRowsReq
+	writes []*storagepb.RowFieldUpsert
 }
 
 func (f *fakeAccess) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	f.writes = append(f.writes, req.GetRows()...)
 	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
-func (f *fakeAccess) ReadTimeSeriesRows(_ context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
-	f.readReq = req
-	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
-}
-
 func metricsStorageConfig() monconfig.MetricsStorageConfig {
 	return monconfig.MetricsStorageConfig{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", WriteBatchSize: 1}
 }
 func TestStorageAdapterValidatesReadOnlySchemaAndWritesBoundedRows(t *testing.T) {
-	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "mooxsys", Status: "active"}, dataset: &storagepb.Dataset{SpaceId: "mooxsys", DatasetId: "dataset_mooxsys_service_metrics", Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
+	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "mooxsys", Status: "active"}, dataset: &storagepb.Dataset{SpaceId: "mooxsys", DatasetId: "dataset_mooxsys_service_metrics", Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "30s"}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
 	for _, c := range []struct {
 		name     string
 		typ      storagepb.FieldValueType
@@ -94,35 +89,6 @@ func TestStorageAdapterValidatesReadOnlySchemaAndWritesBoundedRows(t *testing.T)
 	}
 }
 
-func TestStorageAdapterQueryHistorySelectorsUseSeriesIdentity(t *testing.T) {
-	a := &fakeAccess{}
-	adapter := NewStorageAdapter(a, &fakeMetadata{}, metricsStorageConfig())
-	_, err := adapter.QueryHistorySelectors(
-		context.Background(),
-		[]HistorySelector{{SeriesID: "series-1"}},
-		time.Time{},
-		time.Time{},
-		true,
-		10,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(a.readReq.GetSelectors()) != 1 {
-		t.Fatalf("selectors=%d, want 1", len(a.readReq.GetSelectors()))
-	}
-	if a.readReq.GetSpaceId() != "mooxsys" || a.readReq.GetDatasetId() != "dataset_mooxsys_service_metrics" {
-		t.Fatalf("request scope=%s/%s", a.readReq.GetSpaceId(), a.readReq.GetDatasetId())
-	}
-	key := a.readReq.GetSelectors()[0]
-	if key.GetSubjectId() != "series-1" {
-		t.Fatalf("query key=%+v, want series subject", key)
-	}
-	if key.SeriesTag != nil {
-		t.Fatal("metrics history selector must omit series_tag")
-	}
-}
-
 func TestStorageAdapterListsAndCachesActiveDatasetSubjects(t *testing.T) {
 	f := &fakeMetadata{subjects: []*storagepb.DatasetSubject{
 		{SubjectId: "BTC", Status: "active"},
@@ -139,7 +105,7 @@ func TestStorageAdapterListsAndCachesActiveDatasetSubjects(t *testing.T) {
 	assert.Equal(t, 1, f.subjectCalls)
 }
 func TestStorageAdapterRejectsUnreadyDataNode(t *testing.T) {
-	f := &fakeMetadata{space: &storagepb.Space{Status: "active"}, dataset: &storagepb.Dataset{Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}}
+	f := &fakeMetadata{space: &storagepb.Space{Status: "active"}, dataset: &storagepb.Dataset{Status: "active", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "30s"}}
 	adapter := NewStorageAdapter(&fakeAccess{}, f, metricsStorageConfig())
 	if err := adapter.ValidateSchema(context.Background()); err == nil {
 		t.Fatal("expected missing binding error")
@@ -147,7 +113,7 @@ func TestStorageAdapterRejectsUnreadyDataNode(t *testing.T) {
 }
 
 func TestStorageAdapterResolvesDataNodeWithoutRouteRPC(t *testing.T) {
-	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "mooxsys", Status: "active"}, dataset: &storagepb.Dataset{Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freqs: []string{"30s"}}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
+	f := &fakeMetadata{space: &storagepb.Space{SpaceId: "mooxsys", Status: "active"}, dataset: &storagepb.Dataset{Status: "active", BindingLocked: true, DataNodeId: "storage-node-0", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Freq: "30s"}, node: &storagepb.DataNode{NodeId: "storage-node-0", Status: "active"}}
 	for _, c := range []struct {
 		name     string
 		typ      storagepb.FieldValueType
@@ -161,26 +127,12 @@ func TestStorageAdapterResolvesDataNodeWithoutRouteRPC(t *testing.T) {
 	assert.Equal(t, 1, f.nodeCalls)
 }
 
-func TestNormalizeTarget(t *testing.T) {
-	assert.Equal(t, "ip://127.0.0.1:20102", normalizeTarget("", "20102"))
-	assert.Equal(t, "ip://127.0.0.1:20102", normalizeTarget("127.0.0.1:20102", "20102"))
-	assert.Equal(t, "http://storage:20102", normalizeTarget("http://storage:20102", "20102"))
-}
-
 func TestStorageHelpers(t *testing.T) {
 	assert.True(t, isActive(" active "))
 	assert.False(t, isActive("deleted"))
-	assert.True(t, contains([]string{"30s", "1m"}, "30s"))
 	assert.Equal(t, []string{"a", "b"}, sortedKeys(map[string]columnContract{"b": {}, "a": {}}))
 	require.NoError(t, storageOK("action", &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}))
 	require.Error(t, storageOK("action", &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "fail"}))
-}
-
-func TestHistorySelectorForSeries(t *testing.T) {
-	selector := HistorySelectorForSeries(MetricSeries{
-		SeriesID: "s1", ServiceName: "svc", InstanceID: "i", MetricName: "cpu", MetricType: "gauge",
-	})
-	assert.Equal(t, "s1", selector.SeriesID)
 }
 
 func TestSchemaStatusNilAdapter(t *testing.T) {

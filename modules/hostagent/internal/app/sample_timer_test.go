@@ -114,7 +114,7 @@ func TestSampleTimerConfig(t *testing.T) {
 	for _, want := range []string{
 		"name: " + sampleTimerService,
 		"port: 11427",
-		"network: \"*/15 * * * * *?startAtOnce=1\"",
+		"network: \"0 * * * * *?startAtOnce=1\"",
 		"protocol: timer",
 		"timeout: 30000",
 	} {

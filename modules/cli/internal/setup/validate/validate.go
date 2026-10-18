@@ -54,19 +54,6 @@ func Run(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies)
 	return appendHostChecks(ctx, snapshot, deps.SSH, result, snapshot.Manifest.Hosts())
 }
 
-// RunSSHHosts validates only the supplied deployment targets. Deployment
-// commands should not be blocked by an unrelated host in the manifest.
-func RunSSHHosts(ctx context.Context, snapshot *setupconfig.Snapshot, deps Dependencies, hosts []setupconfig.Host) (Result, error) {
-	if snapshot == nil || deps.SSH == nil {
-		return Result{}, fmt.Errorf("%w: dependencies_invalid", ErrValidationFailed)
-	}
-	result, err := configResult(snapshot)
-	if err != nil {
-		return result, err
-	}
-	return appendHostChecks(ctx, snapshot, deps.SSH, result, hosts)
-}
-
 func configResult(snapshot *setupconfig.Snapshot) (Result, error) {
 	result := Result{}
 	if err := snapshot.VerifyUnchanged(); err != nil {

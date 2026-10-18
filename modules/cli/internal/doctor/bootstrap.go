@@ -13,15 +13,13 @@ import (
 	"syscall"
 	"time"
 
-	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
-	"gopkg.in/yaml.v3"
 )
 
 type DeploymentClient interface {
-	ListDeployments(context.Context, string) ([]*adminpb.ServiceDeployment, error)
+	ListPlacements(context.Context, string) ([]Placement, error)
 }
 
 type DoctorContextClient interface {
@@ -29,24 +27,22 @@ type DoctorContextClient interface {
 }
 
 type BootstrapOptions struct {
-	NodeID, LocalNodeID, ReleaseRoot, SeedPath, DatasetHealthPolicyPath string
-	CheckIDs                                                            []string
-	Client                                                              DeploymentClient
-	MonitorClient                                                       DoctorContextClient
-	StorageActivation                                                   StorageActivationClient
-	Prober                                                              HTTPProber
-	Now                                                                 func() time.Time
-	ProbeWritable                                                       func(context.Context, string, string) error
-	ProcessAlive                                                        func(string) bool
+	NodeID, LocalNodeID, ReleaseRoot, DatasetHealthPolicyPath string
+	CheckIDs                                                  []string
+	Client                                                    DeploymentClient
+	MonitorClient                                             DoctorContextClient
+	StorageActivation                                         StorageActivationClient
+	Prober                                                    HTTPProber
+	Now                                                       func() time.Time
+	ProbeWritable                                             func(context.Context, string, string) error
+	ProcessAlive                                              func(string) bool
 }
 
 type bootstrapRunner struct {
 	options                BootstrapOptions
 	manifest               core.Manifest
-	deployments            map[string]*adminpb.ServiceDeployment
+	deployments            map[string]Placement
 	loadErr                error
-	seedServices           map[string]seedService
-	seedErr                error
 	datasetHealthPolicy    report.DatasetHealthPolicy
 	datasetHealthPolicyErr error
 	healthChecks           []report.ModuleHealthCheck
@@ -66,31 +62,28 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 	if err != nil {
 		return core.Report{}, err
 	}
-	runner := &bootstrapRunner{options: options, manifest: manifest, deployments: map[string]*adminpb.ServiceDeployment{}}
+	runner := &bootstrapRunner{options: options, manifest: manifest, deployments: map[string]Placement{}}
 	if options.ReleaseRoot == "" {
 		runner.manifestErr = fmt.Errorf("release root is required")
 	} else {
-		releaseManifest, manifestErr := core.LoadManifestFile(filepath.Join(options.ReleaseRoot, "config", "doctor", "components.yaml"))
+		releaseManifest, manifestErr := core.LoadManifestFile(filepath.Join(options.ReleaseRoot, "config", "servicecatalog", "catalog.yaml"))
 		runner.manifestErr = manifestErr
 		if manifestErr == nil && releaseManifest.Checksum != manifest.Checksum {
 			runner.manifestErr = fmt.Errorf("release manifest checksum %s does not match embedded checksum %s", releaseManifest.Checksum, manifest.Checksum)
 		}
 		if runner.manifestErr == nil {
-			runner.manifestErr = validateManifestChecksumFile(filepath.Join(options.ReleaseRoot, "config", "doctor", "components.yaml.sha256"), manifest.Checksum)
+			runner.manifestErr = validateManifestChecksumFile(filepath.Join(options.ReleaseRoot, "config", "servicecatalog", "catalog.yaml.sha256"), manifest.Checksum)
 		}
 	}
 	if options.Client == nil {
 		runner.loadErr = fmt.Errorf("SysDeploy client is unavailable")
 	} else {
-		rows, loadErr := options.Client.ListDeployments(ctx, options.NodeID)
+		rows, loadErr := options.Client.ListPlacements(ctx, options.NodeID)
 		runner.loadErr = loadErr
 		for _, row := range rows {
-			if row != nil {
-				runner.deployments[row.GetServiceName()] = row
-			}
+			runner.deployments[row.ComponentID] = row
 		}
 	}
-	runner.seedServices, runner.seedErr = loadSeedServices(options.SeedPath)
 	runner.healthChecks = report.BuiltInModuleHealthChecks()
 	runner.datasetHealthPolicy, runner.datasetHealthPolicyErr = report.LoadDatasetHealthPolicy(options.DatasetHealthPolicyPath)
 	specs := bootstrapSpecs(manifest, options.NodeID)
@@ -139,7 +132,7 @@ func bootstrapSpecs(manifest core.Manifest, nodeID string) []core.CheckSpec {
 		healthChecks[component.ComponentID] = "service.health:" + scope
 	}
 	metricsDeps := []string{}
-	for _, id := range []string{"eventbus", "moox_monitor"} {
+	for _, id := range []string{"eventbus", "monitor"} {
 		if healthChecks[id] != "" {
 			metricsDeps = append(metricsDeps, healthChecks[id])
 		}
@@ -157,33 +150,30 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 	case "bootstrap.release_contract":
 		contractErr := r.manifestErr
 		if contractErr == nil {
-			contractErr = r.seedErr
-		}
-		if contractErr == nil {
 			contractErr = r.datasetHealthPolicyErr
 		}
 		if contractErr != nil {
-			return checkResult(spec.ID, core.StatusFail, "release contract is incomplete", contractErr, "apply_service_deployments_seed")
+			return checkResult(spec.ID, core.StatusFail, "release contract is incomplete", contractErr, "sync_host_placements")
 		}
-		if err := validateSeedAgainstManifest(r.manifest, r.seedServices); err != nil {
-			return checkResult(spec.ID, core.StatusFail, "deployment seed does not match the Manifest", err, "apply_service_deployments_seed")
-		}
-		return checkResult(spec.ID, core.StatusPass, "release Manifest, checksum, deployment seed, and Dataset health policy are available", nil)
+		return checkResult(spec.ID, core.StatusPass, "release catalog, checksum, and Dataset health policy are available", nil)
 	case "bootstrap.inventory":
 		if r.loadErr != nil {
-			return checkResult(spec.ID, core.StatusFail, "SysDeploy inventory is unavailable", r.loadErr, "apply_service_deployments_seed")
+			return checkResult(spec.ID, core.StatusFail, "SysDeploy inventory is unavailable", r.loadErr, "sync_host_placements")
 		}
 		missing := []string{}
-		for _, component := range r.manifest.Components {
-			seed, seeded := r.seedServices[component.ServiceName]
-			if component.RequiredInDefaultProfile && (r.deployments[component.ServiceName] == nil || !seeded || seed.Status != "active" || seed.DeploymentMode != "process") {
-				missing = append(missing, component.ServiceName)
+		required := []string{"host-gateway", "host-agent"}
+		if _, control := r.deployments["admin"]; control {
+			required = append(required, "admin", "console-proxy", "web-host")
+		}
+		for _, id := range required {
+			if _, exists := r.deployments[id]; !exists {
+				missing = append(missing, id)
 			}
 		}
 		if len(missing) > 0 {
-			return checkResult(spec.ID, core.StatusFail, "required deployment inventory is missing: "+strings.Join(missing, ", "), nil, "apply_service_deployments_seed")
+			return checkResult(spec.ID, core.StatusFail, "required deployment inventory is missing: "+strings.Join(missing, ", "), nil, "sync_host_placements")
 		}
-		return checkResult(spec.ID, core.StatusPass, "deployment inventory matches the V1 Manifest", nil)
+		return checkResult(spec.ID, core.StatusPass, "host placements match the component catalog", nil)
 	}
 	if spec.ID == "monitor.metrics_delivery" {
 		if r.deliveryErr != nil || r.delivery == nil {
@@ -194,12 +184,12 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			return checkResult(spec.ID, core.StatusUnknown, "Reporter delivery cannot be confirmed without a bounded Monitor context", err, "run_bootstrap")
 		}
 		for _, observation := range append(append([]*monitorpb.DoctorObservation{}, r.delivery.GetReporterObservations()...), r.delivery.GetMissingObservations()...) {
-			if observation.GetComponentId() == "moox_monitor" && (observation.GetConflict() || observation.GetStatus() == "FAIL" || observation.GetStale()) {
+			if observation.GetComponentId() == "monitor" && (observation.GetConflict() || observation.GetStatus() == "FAIL" || observation.GetStale()) {
 				return checkResult(spec.ID, core.StatusFail, "Monitor Reporter delivery fact is stale or conflicting", nil, "verify_eventbus_credentials")
 			}
 		}
 		for _, observation := range r.delivery.GetReporterObservations() {
-			if observation.GetComponentId() == "moox_monitor" && observation.GetStatus() == "FRESH" && !observation.GetStale() {
+			if observation.GetComponentId() == "monitor" && observation.GetStatus() == "FRESH" && !observation.GetStale() {
 				return checkResult(spec.ID, core.StatusPass, "Monitor Reporter delivery fact is current", nil)
 			}
 		}
@@ -212,8 +202,8 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 	if !ok {
 		return checkResult(spec.ID, core.StatusFail, "unknown bootstrap check", nil)
 	}
-	deployment := r.deployments[component.ServiceName]
-	if deployment == nil || deployment.GetStatus() != "active" {
+	deployment, placed := r.deployments[component.ComponentID]
+	if !placed || deployment.Status != "enabled" {
 		return checkResult(spec.ID, core.StatusSkipped, "component is disabled or not expected on this node", nil)
 	}
 	switch kind {
@@ -240,7 +230,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			identity.InstanceID != want ||
 			identity.NodeID != r.options.NodeID ||
 			identity.BootID == ""
-		policyMismatch := component.ServiceName == "moox_monitor" &&
+		policyMismatch := component.ServiceName == "monitor" &&
 			r.datasetHealthPolicy.Checksum != "" &&
 			identity.DatasetHealthPolicyHash != r.datasetHealthPolicy.Checksum
 		if identityMismatch || policyMismatch {
@@ -272,7 +262,7 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		}
 		return checkResult(spec.ID, core.StatusPass, "declared writable paths accept bounded temporary probes", nil)
 	case "service_autostart":
-		pidPath := filepath.Join(r.options.ReleaseRoot, "run", processPIDName(component.ServiceName)+".pid")
+		pidPath := filepath.Join(r.options.ReleaseRoot, "run", component.ComponentID+".pid")
 		isAlive := r.options.ProcessAlive
 		if isAlive == nil {
 			isAlive = processAlive
@@ -358,61 +348,6 @@ func (r *bootstrapRunner) componentForCheck(id string) (core.Component, string, 
 	return core.Component{}, "", false
 }
 
-type seedService struct {
-	Name           string `yaml:"name"`
-	DeploymentMode string `yaml:"deployment_mode"`
-	Status         string `yaml:"status"`
-}
-
-func loadSeedServices(path string) (map[string]seedService, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	if len(raw) > 2<<20 {
-		return nil, fmt.Errorf("deployment seed exceeds 2 MiB")
-	}
-	var seed struct {
-		Version  int           `yaml:"version"`
-		Services []seedService `yaml:"services"`
-	}
-	decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
-	if err := decoder.Decode(&seed); err != nil {
-		return nil, err
-	}
-	if seed.Version != 1 {
-		return nil, fmt.Errorf("unsupported deployment seed version %d", seed.Version)
-	}
-	services := map[string]seedService{}
-	for _, service := range seed.Services {
-		if service.Name == "" {
-			return nil, fmt.Errorf("deployment seed contains an empty service name")
-		}
-		if _, exists := services[service.Name]; exists {
-			return nil, fmt.Errorf("deployment seed contains duplicate service %q", service.Name)
-		}
-		services[service.Name] = service
-	}
-	return services, nil
-}
-
-func validateSeedAgainstManifest(manifest core.Manifest, services map[string]seedService) error {
-	known := make(map[string]bool, len(manifest.Components))
-	for _, component := range manifest.Components {
-		known[component.ServiceName] = true
-		seed, ok := services[component.ServiceName]
-		if component.RequiredInDefaultProfile && (!ok || seed.DeploymentMode != "process" || seed.Status != "active") {
-			return fmt.Errorf("required service %q must be an active process in the deployment seed", component.ServiceName)
-		}
-	}
-	for name, service := range services {
-		if service.Status == "active" && service.DeploymentMode == "process" && !known[name] {
-			return fmt.Errorf("active process %q is missing from the Manifest", name)
-		}
-	}
-	return nil
-}
-
 func validateManifestChecksumFile(path, want string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -425,19 +360,7 @@ func validateManifestChecksumFile(path, want string) error {
 	return nil
 }
 
-func healthURL(deployment *adminpb.ServiceDeployment, path string) string {
-	var extra struct {
-		HealthURL string `json:"health_url"`
-	}
-	_ = json.Unmarshal([]byte(deployment.GetExtraConfig()), &extra)
-	if extra.HealthURL != "" {
-		if path == "/metrics" {
-			return strings.TrimSuffix(strings.TrimSuffix(extra.HealthURL, "/readyz"), "/healthz") + path
-		}
-		return extra.HealthURL
-	}
-	return "http://" + deployment.GetHost() + ":" + strconv.Itoa(int(deployment.GetPort())) + path
-}
+func healthURL(placement Placement, path string) string { return placement.HealthAddress + path }
 
 func checkResult(id string, status core.CheckStatus, summary string, err error, actions ...string) core.CheckResult {
 	result := core.CheckResult{ID: id, Status: status, Summary: summary, RecoveryActionIDs: actions}
@@ -445,10 +368,6 @@ func checkResult(id string, status core.CheckStatus, summary string, err error, 
 		result.Error = err.Error()
 	}
 	return result
-}
-
-func processPIDName(service string) string {
-	return map[string]string{"admin_gateway": "admin", "web_host": "web-host", "storage-primary": "storage-primary", "storage-view": "storage-view", "eventbus": "eventbus", "moox_gateway": "gateway", "moox_monitor": "monitor", "moox_collector": "collector", "moox_cloudnode": "cloudnode", "moox_factor": "factor", "moox_strategy": "strategy", "moox_trade": "trade", "moox_archive": "archive", "moox_hostagent": "host-agent"}[service]
 }
 
 func processAlive(path string) bool {

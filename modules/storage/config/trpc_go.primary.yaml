@@ -9,8 +9,8 @@ server:
     - opentelemetry
     - prometheus
   # History backfill requests are key-only and bounded by the configured
-  # lookback, but a cold legacy history index can take several minutes. The
-  # view client applies its own 5-minute timeout for this path.
+  # lookback, but a cold history index can take several minutes. The view
+  # client applies its own 5-minute timeout for this path.
   timeout: 300000
   admin:
     ip: 127.0.0.1
@@ -29,32 +29,25 @@ server:
       port: 20102
       network: tcp
       protocol: trpc
+      transport: go-net
     - name: trpc.moox.storage.PrimaryStore
       ip: 127.0.0.1
       port: 20101
       network: tcp
       protocol: trpc
+      transport: go-net
     - name: trpc.moox.storage.DataNode
       ip: 127.0.0.1
       port: 20106
       network: tcp
       protocol: trpc
+      transport: go-net
     - name: trpc.moox.storage.Metadata.trpc
       ip: 127.0.0.1
       port: 20100
       network: tcp
       protocol: trpc
       transport: go-net
-    - name: trpc.moox.storage.PrimaryStore.http
-      ip: 127.0.0.1
-      port: 20201
-      network: tcp
-      protocol: http
-    - name: trpc.moox.storage.Metadata.http
-      ip: 127.0.0.1
-      port: 20200
-      network: tcp
-      protocol: http
     - name: trpc.moox.storage.primary.metrics.timer
       port: 20303
       network: "*/30 * * * * *"

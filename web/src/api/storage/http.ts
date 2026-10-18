@@ -5,7 +5,8 @@ import { isRetInfoSuccess } from "../ret-info";
 import { getStorageAuthInfo } from "./auth";
 import type { RetInfo } from "./types";
 import { installSpaceAwareSignedClient, readPersistedAuth } from "../admin/signed-client";
-import { readSelectedSpaceId } from "../admin/space-header";
+import { StaleSpaceRequestError } from "../admin/stale-space";
+import { onSpaceGenerationChange, readSelectedSpaceId, selectedSpaceGeneration } from "../admin/space-header";
 
 const storageClient = axios.create({
   baseURL: gatewayOrigin(),
@@ -21,31 +22,20 @@ let storageReadGeneration = 0;
 // Only idempotent metadata/data reads are cached. Mutation responses invalidate
 // the short cache so a newly created View or Dataset is visible immediately.
 const storageReadMethods = new Set([
-  "GetDataSource",
   "ListDataSources",
-  "GetSubject",
   "ListSubjects",
   "ListTags",
   "ListTagMembers",
   "GetDataset",
   "ListDatasets",
-  "ListDatasetSubjects",
-  "GetFieldGroup",
   "ListFieldGroups",
-  "GetField",
   "ListFields",
   "ListDatasetColumns",
   "GetView",
   "ListViews",
   "ListViewColumns",
   "ListViewRebuildLogs",
-  "GetDataNode",
   "ListDataNodes",
-  "CheckDatasetActivation",
-  "ListArchiveFiles",
-  "ReadFields",
-  "ReadTimeSeriesRows",
-  "ReadRecordRows",
   "QueryTimeSeriesRows",
   "SearchRecordRows"
 ]);
@@ -58,7 +48,9 @@ function storageCacheKey(method: string, req: object): string {
     req,
     sessionID: auth.sessionId || "",
     token: auth.token || "",
-    spaceID: spaceID || ""
+    spaceID: spaceID || "",
+    // 切走又切回同一空间后，旧代次被丢弃的在途请求不能再被复用
+    spaceGeneration: selectedSpaceGeneration()
   });
 }
 
@@ -81,12 +73,21 @@ function assertSuccess(retInfo?: RetInfo) {
   }
 }
 
-async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo }>(method: string, req: TReq): Promise<TRsp> {
+/** 调用选项：spaceId 显式指定请求所属空间（X-Space-Id），用于读取当前所选空间以外的元数据。 */
+export interface StorageCallOptions {
+  spaceId?: string;
+}
+
+async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo }>(
+  method: string,
+  req: TReq,
+  options: StorageCallOptions = {}
+): Promise<TRsp> {
   const readOnly = storageReadMethods.has(method);
   if (!readOnly) {
     invalidateStorageReadCache();
   }
-  const key = readOnly ? storageCacheKey(method, req) : "";
+  const key = readOnly ? storageCacheKey(method, { ...req, explicit_space_id: options.spaceId || "" }) : "";
   if (readOnly) {
     const cached = storageReadCache.get(key);
     if (cached && cached.expiresAt > Date.now()) {
@@ -101,10 +102,12 @@ async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo
 
   const generation = storageReadGeneration;
   const request = (async () => {
-    const rsp = await storageClient.post<TRsp>(`/api/admin/storage/${method}`, {
-      auth_info: getStorageAuthInfo(),
-      ...req
-    });
+    const url = `/api/admin/storage/${method}`;
+    const body = { auth_info: getStorageAuthInfo(), ...req };
+    // 显式空间的请求带上自己的 X-Space-Id，签名客户端不再注入当前所选空间。
+    const rsp = options.spaceId
+      ? await storageClient.post<TRsp>(url, body, { headers: { "X-Space-Id": options.spaceId } })
+      : await storageClient.post<TRsp>(url, body);
     try {
       assertSuccess(rsp.data.ret_info);
     } catch (error) {
@@ -139,6 +142,8 @@ async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo
 export { callStorage };
 
 installSpaceAwareSignedClient(storageClient);
+// 切换空间后旧代次的缓存与在途条目不会再被命中，立即回收，避免随浏览累计。
+onSpaceGenerationChange(invalidateStorageReadCache);
 
 storageClient.interceptors.response.use(
   rsp => {
@@ -151,6 +156,7 @@ storageClient.interceptors.response.use(
     return rsp;
   },
   error => {
+    if (error instanceof StaleSpaceRequestError) return Promise.reject(error);
     Message.error(error?.message || "Storage 请求失败");
     return Promise.reject(error);
   }

@@ -87,11 +87,13 @@
 </template>
 
 <script setup lang="ts">
+import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createDataSource, listDataSources, updateDataSource } from "@/api/storage/metadata";
 import type { DataSource } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
   applyPageResult,
   defaultPagination,
@@ -126,22 +128,28 @@ const form = reactive<DataSource>({
 
 const modalTitle = computed(() => (editing.value ? "编辑数据源" : "新增数据源"));
 
+const loadRequests = createLatestRequestGuard();
+
 async function load() {
   if (!selectedSpaceId.value) {
     rows.value = [];
     return;
   }
+  const request = loadRequests.begin();
+  const spaceId = selectedSpaceId.value;
   loading.value = true;
   try {
     const rsp = await listDataSources({
-      space_id: selectedSpaceId.value,
+      space_id: spaceId,
       keyword: searchKeyword.value.trim() || undefined,
       page: { page: pagination.current, size: pagination.pageSize }
     });
+    // 空间切换后旧空间迟到的响应不能覆盖新空间的列表，否则编辑保存会把旧空间的数据当成当前空间的写入。
+    if (!request.isLatest() || spaceId !== selectedSpaceId.value) return;
     rows.value = rsp.data_sources || [];
     applyPageResult(pagination, rsp.page_result);
   } finally {
-    loading.value = false;
+    if (request.isLatest()) loading.value = false;
   }
 }
 
@@ -180,14 +188,22 @@ function openEdit(record: DataSource) {
 
 async function submit() {
   const spaceId = spaceStore.requireSpaceId();
+  // 表单属于打开它时的空间：切换空间后不能把它写进新空间（会覆盖新空间里相同 ID 的数据源）。
+  if (form.space_id && form.space_id !== spaceId) {
+    Message.warning("空间已切换，请重新打开编辑窗口");
+    visible.value = false;
+    return;
+  }
   if (!form.data_source_id || !form.name || !form.kind) {
     Message.warning("请补全来源ID、名称和类型");
     return;
   }
   const payload = { ...form, space_id: spaceId, config_json: jsonText(form.config_json) };
+  const submission = sourceScope.begin();
   if (editing.value) await updateDataSource(payload);
   else await createDataSource(payload);
   Message.success("数据源已保存");
+  if (!submission.isCurrent()) return;
   visible.value = false;
   await load();
 }
@@ -204,10 +220,17 @@ function onPageSizeChange(pageSize: number) {
 }
 
 watch(selectedSpaceId, () => {
+  loadRequests.invalidate();
   pagination.current = 1;
   load();
 });
 onMounted(load);
+
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const sourceScope = createSubmitScope();
+watch(visible, open => {
+  if (open) sourceScope.invalidate();
+});
 </script>
 
 <style scoped>

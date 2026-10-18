@@ -102,7 +102,7 @@ func availableReservationFunds(tx *store.Tx, validation Validation, adjustment s
 		}
 		return balances.Totals[validation.ReservedAsset].Add(adjustment).Sub(balances.Reserved[validation.ReservedAsset]), nil
 	}
-	unreflected, err := tx.GetUnreflectedReservation(validation.Account.SpaceID, validation.Account.ID, validation.ReservedAsset, validation.Account.LastSyncAt.UnixMilli())
+	unreflected, err := tx.GetUnreflectedReservation(validation.Account.SpaceID, validation.Account.ID, validation.ReservedAsset, validation.Account.SnapshotSourceTime.UnixMilli())
 	if err != nil {
 		return shared.Zero(), err
 	}

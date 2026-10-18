@@ -3,7 +3,6 @@ package stockcn
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"slices"
 	"strings"
 	"time"
@@ -101,22 +100,6 @@ type ProbeReport struct {
 	GeneratedAt string       `json:"generated_at"`
 	Subjects    []string     `json:"subjects"`
 	Entries     []ProbeEntry `json:"entries"`
-}
-
-func DecodeProbeReport(reader io.Reader) (ProbeReport, error) {
-	var report ProbeReport
-	decoder := json.NewDecoder(reader)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&report); err != nil {
-		return ProbeReport{}, err
-	}
-	if decoder.More() {
-		return ProbeReport{}, fmt.Errorf("probe report must contain a single JSON document")
-	}
-	if err := report.Validate(); err != nil {
-		return ProbeReport{}, err
-	}
-	return report, nil
 }
 
 func (r ProbeReport) Validate() error {
@@ -301,33 +284,6 @@ func displayValue(value, fallback string) string {
 		return fallback
 	}
 	return trimmed
-}
-
-func NewInstrumentNotSupportedEntry(providerID string) ProbeEntry {
-	return ProbeEntry{
-		ProviderID:       strings.TrimSpace(providerID),
-		FeedKind:         ProbeFeedInstrument,
-		Exchange:         "ALL",
-		SubjectID:        "",
-		Symbol:           "",
-		HTTPStatus:       0,
-		LatencyMS:        0,
-		Result:           ProbeResultNotSupported,
-		ErrorKind:        "not_supported",
-		Error:            "instrument probe is not implemented",
-		BarCount:         0,
-		LatestBarStart:   "",
-		LatestBarEnd:     "",
-		EarliestBarStart: "",
-		SupportsRange:    false,
-		HasOHLCV:         false,
-		VolumeUnit:       "",
-		AmountUnit:       "",
-		PageCount:        0,
-		InstrumentCount:  0,
-		Complete:         false,
-		ExchangeCoverage: []string{},
-	}
 }
 
 func SortEntries(entries []ProbeEntry) {

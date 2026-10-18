@@ -8,6 +8,7 @@ import (
 
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -171,18 +172,6 @@ type fakeTaskResultInventoryProvider struct {
 	calls    int
 }
 
-type blockingTaskResultInventoryProvider struct {
-	snapshot TaskResultInventorySnapshot
-	entered  chan struct{}
-	release  chan struct{}
-}
-
-func (p *blockingTaskResultInventoryProvider) FetchTaskResultInventory(context.Context) (TaskResultInventorySnapshot, error) {
-	close(p.entered)
-	<-p.release
-	return p.snapshot, nil
-}
-
 func (p *fakeTaskResultInventoryProvider) FetchTaskResultInventory(context.Context) (TaskResultInventorySnapshot, error) {
 	p.calls++
 	if p.err != nil {
@@ -297,38 +286,6 @@ func TestTaskResultInventoryRefreshMetricsExposeLowCardinalityOutcomes(t *testin
 	require.True(t, found["moox_monitor_task_result_inventory_cache_available"])
 }
 
-func TestTaskResultInventoryCurrentDoesNotWaitForRefreshNetworkCall(t *testing.T) {
-	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
-	provider := &blockingTaskResultInventoryProvider{
-		snapshot: TaskResultInventorySnapshot{ID: "snapshot-1", ObservedAt: now},
-		entered:  make(chan struct{}), release: make(chan struct{}),
-	}
-	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
-	require.NoError(t, err)
-	refreshDone := make(chan error, 1)
-	go func() {
-		_, err := cache.Get(context.Background(), now)
-		refreshDone <- err
-	}()
-	<-provider.entered
-
-	currentDone := make(chan bool, 1)
-	go func() {
-		_, ok := cache.Current(now.Add(time.Minute))
-		currentDone <- ok
-	}()
-	select {
-	case ok := <-currentDone:
-		require.False(t, ok)
-	case <-time.After(100 * time.Millisecond):
-		close(provider.release)
-		<-refreshDone
-		t.Fatal("Current blocked behind inventory network refresh")
-	}
-	close(provider.release)
-	require.NoError(t, <-refreshDone)
-}
-
 func TestKlineFreshnessEvaluatorUsesDynamicTaskInventoryAndReportsStaleAge(t *testing.T) {
 	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
 	provider := &fakeTaskResultInventoryProvider{snapshot: TaskResultInventorySnapshot{
@@ -342,11 +299,13 @@ func TestKlineFreshnessEvaluatorUsesDynamicTaskInventoryAndReportsStaleAge(t *te
 	}}
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
-	query := newViewDatasetQuery(t, []viewDatasetTestSample{{
-		SpaceID: "crypto", ViewID: "view-dynamic", DatasetID: "dataset-dynamic", Subject: "BTC-USDT",
-		Output: now.Add(-3 * time.Minute), Commit: now,
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		ViewID: "view-dynamic", DatasetID: "dataset-dynamic", Subjects: 1, ObservedAt: now,
+		// After the 1m bar starting five minutes ago, the next bar was due three
+		// minutes ago.
+		Latest: now.Add(-5 * time.Minute),
 	}})
-	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20)
+	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(2*time.Minute), 20)
 	reports, err := evaluator.Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 2)
@@ -374,17 +333,18 @@ func TestKlineFreshnessEvaluatorDetectsViewBehindCompletedPeriodWithinStaleWindo
 		Entries: []TaskResultInventoryEntry{{
 			SpaceID: "crypto", TaskID: "task-private", DatasetID: "dataset-dynamic", ViewID: "view-dynamic", Frequency: "1m",
 			MarketID: "crypto", Enabled: true, OwnershipVerified: true, ResultStatus: "ready",
-			LatestCompletedPeriod: now.Add(-time.Minute), LatestCompletedStatus: "complete",
-			ViewLastDataTime: now.Add(-2 * time.Minute), ObservedAt: now,
+			LatestCompletedPeriod: now.Add(-2 * time.Minute), LatestCompletedStatus: "complete",
+			ViewLastDataTime: now.Add(-3 * time.Minute), ObservedAt: now,
 		}},
 	}}
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
-	query := newViewDatasetQuery(t, []viewDatasetTestSample{{
-		SpaceID: "crypto", ViewID: "view-dynamic", DatasetID: "dataset-dynamic", Subject: "BTC-USDT",
-		Output: now.Add(-2 * time.Minute), Commit: now,
+	// 采集已完成 now-2m 那一期（now-1m 收线），视图只到 now-3m：缺的那根已过收线 1 分钟。
+	query := newViewSummaryQuery(t, []viewSummaryTestSample{{
+		ViewID: "view-dynamic", DatasetID: "dataset-dynamic", Subjects: 1, ObservedAt: now,
+		Latest: now.Add(-3 * time.Minute),
 	}})
-	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, 10*time.Minute, 20)
+	evaluator := NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(10*time.Minute), 20)
 	reports, err := evaluator.Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 2)
@@ -412,8 +372,8 @@ func TestKlineFreshnessEvaluatorIgnoresShortPendingTaskBacklog(t *testing.T) {
 	}}
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
-	query := newViewDatasetQuery(t, nil)
-	reports, err := NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20).Evaluate(context.Background(), now)
+	query := newViewSummaryQuery(t, nil)
+	reports, err := NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(2*time.Minute), 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 2)
 	require.Equal(t, TaskResultInventoryCheckID, reports[1].CheckID)
@@ -431,8 +391,8 @@ func TestKlineFreshnessEvaluatorPreservesUnownedErrorAndPendingTaskStates(t *tes
 	}}
 	cache, err := NewTaskResultInventoryCache(provider, time.Minute, 10)
 	require.NoError(t, err)
-	query := newViewDatasetQuery(t, nil)
-	reports, err := NewKlineFreshnessEvaluatorWithInventory(query, cache, 2*time.Minute, 20).Evaluate(context.Background(), now)
+	query := newViewSummaryQuery(t, nil)
+	reports, err := NewKlineFreshnessEvaluatorWithInventory(query, cache, latenessPolicy(2*time.Minute), 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 3)
 
@@ -451,4 +411,11 @@ func TestKlineFreshnessEvaluatorPreservesUnownedErrorAndPendingTaskStates(t *tes
 	require.True(t, ok)
 	require.True(t, pendingReport.Skipped)
 	require.Equal(t, "task_result_not_ready", pendingReport.Reason)
+}
+
+// latenessPolicy 是所有周期都允许迟到 lateness 的健康策略。
+func latenessPolicy(lateness time.Duration) report.RealtimeTimeSeriesPolicy {
+	return report.RealtimeTimeSeriesPolicy{Defaults: report.RealtimeTimeSeriesDefaults{
+		RunMissedIntervals: 2, SuccessMissedIntervals: 3, MinuteLateness: lateness, HourLateness: lateness,
+	}}
 }

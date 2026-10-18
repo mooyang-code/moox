@@ -51,38 +51,14 @@ streams:
     # retention guardrail.
     max_bytes: 8589934592
   - name: MOOX_OBSERVABILITY
-    # Keep the legacy subject while upgrading an existing JetStream store.
-    # NATS refuses to remove a subject that still has persisted messages;
-    # retaining it lets the broker start and expire the old data naturally.
     subjects:
       - "moox.event.observability.>"
-      - "moox.observability.>"
     retention: limits
     discard: old
     storage: file
     replicas: 1
     max_age: 24h
     duplicates: 2m
-    max_bytes: 134217728
-  - name: MOOX_CLOUDNODE_EXEC
-    subjects: ["moox.event.cloudnode.job.execution.requested.v1.>"]
-    retention: work_queue
-    discard: old
-    storage: file
-    replicas: 1
-    max_age: 72h
-    duplicates: 2m
-    max_bytes: 134217728
-  - name: MOOX_MARKET_FETCH
-    subjects: ["moox.event.market.fetch.batch.completed.v1.>"]
-    # Collector and Monitor both observe the completion; work_queue would let
-    # the first durable consumer steal the message from the other one.
-    retention: limits
-    discard: old
-    storage: file
-    replicas: 1
-    max_age: 24h
-    duplicates: 10m
     max_bytes: 134217728
   - name: MOOX_TRADE
     # Automatic execution consumes only the session-scoped weight contract.
@@ -96,10 +72,3 @@ streams:
     max_age: 168h
     duplicates: 2m
     max_bytes: 134217728
-
-kv:
-  - bucket: MOOX_CLOUDNODE_JOB_ACTIVE
-    max_age: 48h
-    history: 1
-    storage: file
-    replicas: 1

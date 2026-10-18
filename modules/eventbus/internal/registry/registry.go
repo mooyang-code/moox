@@ -22,7 +22,6 @@ type Registry struct {
 
 type Result struct {
 	Streams int
-	KV      int
 	Topics  int
 }
 
@@ -51,12 +50,8 @@ func (r *Registry) Reconcile(ctx context.Context) (Result, error) {
 	if err := r.rejectOverlappingUnmanagedStreams(ctx); err != nil {
 		return Result{}, err
 	}
-	for i := range r.cfg.KV {
-		if err := reconcileKV(r.js, &r.cfg.KV[i], r.cfg); err != nil {
-			return Result{}, err
-		}
-	}
-	return Result{Streams: len(r.cfg.Streams), KV: len(r.cfg.KV), Topics: enabledTopics(r.cfg)}, nil
+
+	return Result{Streams: len(r.cfg.Streams), Topics: enabledTopics(r.cfg)}, nil
 }
 
 func (r *Registry) rejectOverlappingUnmanagedStreams(ctx context.Context) error {
@@ -65,7 +60,7 @@ func (r *Registry) rejectOverlappingUnmanagedStreams(ctx context.Context) error 
 		configured[stream.Name] = struct{}{}
 	}
 	for name := range r.js.StreamNames(nats.Context(ctx)) {
-		if _, ok := configured[name]; ok || strings.HasPrefix(name, "KV_") {
+		if _, ok := configured[name]; ok {
 			continue
 		}
 		info, err := r.js.StreamInfo(name, nats.Context(ctx))
@@ -159,8 +154,16 @@ func reconcileStream(ctx context.Context, js nats.JetStreamContext, spec *config
 	if got.Config.Storage != want.Storage {
 		return fmt.Errorf("stream %q storage change is forbidden", spec.Name)
 	}
-	if subjectRemoved(got.Config.Subjects, want.Subjects) && got.State.Msgs > 0 {
-		return fmt.Errorf("stream %q subject removal with stored messages is forbidden", spec.Name)
+	if removed := removedSubjects(got.Config.Subjects, want.Subjects); len(removed) > 0 {
+		// Removing a subject strands the messages stored under it, so it is
+		// allowed only once none remain; other subjects' messages are kept.
+		stored, err := storedSubjectMessages(ctx, js, spec.Name, removed)
+		if err != nil {
+			return fmt.Errorf("count stored messages of removed subjects of stream %q: %w", spec.Name, err)
+		}
+		if stored > 0 {
+			return fmt.Errorf("stream %q subject removal of %v with %d stored messages is forbidden", spec.Name, removed, stored)
+		}
 	}
 	if equalStreamConfig(&got.Config, want) {
 		return nil
@@ -169,50 +172,6 @@ func reconcileStream(ctx context.Context, js nats.JetStreamContext, spec *config
 		return fmt.Errorf("update stream %q: %w", spec.Name, err)
 	}
 	return nil
-}
-
-func reconcileKV(js nats.JetStreamContext, spec *config.KVConfig, cfg *config.Config) error {
-	if spec.Replicas > 1 && (!cfg.Broker.Cluster.Enabled || spec.Replicas > len(cfg.Broker.Cluster.Routes)+1) {
-		return fmt.Errorf("kv %q replicas=%d exceed reachable cluster size", spec.Bucket, spec.Replicas)
-	}
-	want := &nats.KeyValueConfig{Bucket: spec.Bucket, History: uint8(spec.History), TTL: spec.MaxAge, Storage: storageType(spec.Storage), Replicas: spec.Replicas, Description: spec.Description}
-	if _, err := js.KeyValue(spec.Bucket); errors.Is(err, nats.ErrBucketNotFound) {
-		if _, err := js.CreateKeyValue(want); err != nil {
-			return fmt.Errorf("create kv %q: %w", spec.Bucket, err)
-		}
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("inspect kv %q: %w", spec.Bucket, err)
-	}
-	// The NATS KV API does not expose an atomic update operation. Inspect the
-	// backing stream and update only fields that are safe to reconcile.
-	streamName := "KV_" + spec.Bucket
-	info, err := js.StreamInfo(streamName)
-	if err != nil {
-		return fmt.Errorf("inspect kv backing stream %q: %w", spec.Bucket, err)
-	}
-	if info.Config.Retention != nats.LimitsPolicy || info.Config.MaxMsgsPerSubject < 1 {
-		return fmt.Errorf("kv %q backing stream is invalid", spec.Bucket)
-	}
-	if info.Config.Storage != storageType(spec.Storage) {
-		return fmt.Errorf("kv %q storage change is forbidden", spec.Bucket)
-	}
-	if info.Config.MaxMsgsPerSubject != int64(spec.History) {
-		return fmt.Errorf("kv %q history change is forbidden", spec.Bucket)
-	}
-	if info.Config.MaxAge != spec.MaxAge || info.Config.Replicas != spec.Replicas || info.Config.Description != spec.Description {
-		if _, err := js.UpdateStream(&nats.StreamConfig{Name: info.Config.Name, Subjects: info.Config.Subjects, Retention: info.Config.Retention, Storage: info.Config.Storage, Replicas: info.Config.Replicas, MaxAge: spec.MaxAge, MaxMsgsPerSubject: int64(spec.History), MaxBytes: info.Config.MaxBytes, MaxMsgs: info.Config.MaxMsgs, Discard: info.Config.Discard, DenyDelete: info.Config.DenyDelete, DenyPurge: info.Config.DenyPurge, AllowRollup: info.Config.AllowRollup, Description: spec.Description}); err != nil {
-			return fmt.Errorf("update kv %q: %w", spec.Bucket, err)
-		}
-	}
-	return nil
-}
-
-func storageType(value string) nats.StorageType {
-	if value == "memory" {
-		return nats.MemoryStorage
-	}
-	return nats.FileStorage
 }
 
 func equalStreamConfig(a, b *nats.StreamConfig) bool {
@@ -235,7 +194,10 @@ func sameStrings(a, b []string) bool {
 	}
 	return true
 }
-func subjectRemoved(old, next []string) bool {
+
+// removedSubjects lists the subjects in old that next no longer has.
+func removedSubjects(old, next []string) []string {
+	var removed []string
 	for _, value := range old {
 		found := false
 		for _, candidate := range next {
@@ -245,10 +207,25 @@ func subjectRemoved(old, next []string) bool {
 			}
 		}
 		if !found {
-			return true
+			removed = append(removed, value)
 		}
 	}
-	return false
+	return removed
+}
+
+// storedSubjectMessages counts a stream's messages stored under subjects.
+func storedSubjectMessages(ctx context.Context, js nats.JetStreamContext, stream string, subjects []string) (uint64, error) {
+	var total uint64
+	for _, subject := range subjects {
+		info, err := js.StreamInfo(stream, &nats.StreamInfoRequest{SubjectsFilter: subject}, nats.Context(ctx))
+		if err != nil {
+			return 0, err
+		}
+		for _, count := range info.State.Subjects {
+			total += count
+		}
+	}
+	return total, nil
 }
 
 type Topic struct {

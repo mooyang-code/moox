@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -34,6 +35,19 @@ type Scheduler struct {
 	onResult   ResultHook
 	dueBatch   int
 	watchdog   *watchdog.Metrics
+	// lastRound 是最近一次完整成功的评估（全部到期检查都已执行并落库）的 Unix 纳秒，就绪检查据此判断评估是否停滞。
+	lastRound atomic.Int64
+}
+
+// LastSuccessfulRound 返回最近一次完整成功的评估时间；还没有成功过时为零值。
+func (s *Scheduler) LastSuccessfulRound() time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	if nanos := s.lastRound.Load(); nanos > 0 {
+		return time.Unix(0, nanos).UTC()
+	}
+	return time.Time{}
 }
 
 func New(repos *store.Repositories, opts Options) *Scheduler {
@@ -92,6 +106,9 @@ func (s *Scheduler) RunDueOnce(ctx context.Context) (int, error) {
 		}()
 	}
 	wg.Wait()
+	if joined == nil {
+		s.lastRound.Store(time.Now().UnixNano())
+	}
 	return len(checks), joined
 }
 

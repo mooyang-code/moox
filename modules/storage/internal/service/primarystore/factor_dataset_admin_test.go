@@ -23,7 +23,7 @@ func (*factorDatasetAdminNode) WriteFactorRows(context.Context, *pb.WriteFactorR
 	return nil, nil
 }
 
-func (n *factorDatasetAdminNode) ReadFields(context.Context, *pb.ReadFieldsReq) (*pb.ReadFieldsRsp, error) {
+func (n *factorDatasetAdminNode) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
 	return nil, nil
 }
 
@@ -70,7 +70,7 @@ func newFactorDatasetAdminService(t *testing.T, node *factorDatasetAdminNode, ap
 		Attributes: map[string]string{"dataset_role": "factor_result", "write_owner": "factor"},
 	}
 	service, err := New(Options{
-		Resolver: func(_ context.Context, spaceID, datasetID string) (pb.DataNodeRuntimeService, error) {
+		Resolver: func(_ context.Context, spaceID, datasetID string) (DataNodeClient, error) {
 			if spaceID != "crypto" || datasetID != "dataset_factor_prices_1m" {
 				t.Errorf("resolved unexpected dataset %s/%s", spaceID, datasetID)
 			}

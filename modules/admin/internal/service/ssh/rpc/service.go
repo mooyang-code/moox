@@ -14,7 +14,6 @@ import (
 
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/conn"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
@@ -71,6 +70,22 @@ func (s *Service) UpdateHost(ctx context.Context, req *pb.UpdateHostReq) (*pb.Up
 	host := sshHostPBToModel(req.GetHost())
 	if host == nil || host.ID == 0 {
 		return &pb.UpdateHostRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "主机ID不能为空")}, nil
+	}
+	// 凭据不会回显给前端，留空表示保持原值：先用已存的凭据补齐，避免保存时把它们清空。
+	existing, err := s.svc.GetHost(ctx, host.ID)
+	if err != nil {
+		log.ErrorContextf(ctx, "[SSH] UpdateHost load existing failed: %v", err)
+		return &pb.UpdateHostRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "更新主机失败")}, nil
+	}
+	if host.Password == "" {
+		host.Password = existing.Password
+	}
+	if host.CertData == "" {
+		host.CertData = existing.CertData
+	}
+	// 口令属于私钥：提交了新私钥就以新私钥为准（口令留空表示它没有口令），不能沿用旧私钥的口令。
+	if host.CertPwd == "" && req.GetHost().GetCertData() == "" {
+		host.CertPwd = existing.CertPwd
 	}
 	if err := s.svc.UpdateHost(ctx, host); err != nil {
 		log.ErrorContextf(ctx, "[SSH] UpdateHost failed: %v", err)
@@ -187,30 +202,6 @@ func (s *Service) SftpDelete(ctx context.Context, req *pb.SftpDeleteReq) (*pb.Sf
 	return &pb.SftpDeleteRsp{RetInfo: retOK()}, nil
 }
 
-// ========== 会话管理 ==========
-
-// GetOnlineSessions 获取在线会话列表。
-func (s *Service) GetOnlineSessions(ctx context.Context, req *pb.GetOnlineSessionsReq) (*pb.GetOnlineSessionsRsp, error) {
-	sessions := s.svc.GetOnlineSessions(ctx)
-	pbSessions := make([]*pb.SessionInfo, 0, len(sessions))
-	for i := range sessions {
-		pbSessions = append(pbSessions, sessionInfoToPB(&sessions[i]))
-	}
-	return &pb.GetOnlineSessionsRsp{RetInfo: retOK(), Sessions: pbSessions}, nil
-}
-
-// ForceDisconnect 强制断开会话。
-func (s *Service) ForceDisconnect(ctx context.Context, req *pb.ForceDisconnectReq) (*pb.ForceDisconnectRsp, error) {
-	if req.GetSessionId() == "" {
-		return &pb.ForceDisconnectRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "session_id不能为空")}, nil
-	}
-	if err := s.svc.ForceDisconnect(ctx, req.GetSessionId()); err != nil {
-		log.ErrorContextf(ctx, "[SSH] ForceDisconnect failed: %v", err)
-		return &pb.ForceDisconnectRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "强制断开失败")}, nil
-	}
-	return &pb.ForceDisconnectRsp{RetInfo: retOK()}, nil
-}
-
 // ========== 辅助 ==========
 
 // retOK 成功 RetInfo。
@@ -235,16 +226,14 @@ func sshHostModelToPB(h *model.SSHHost) *pb.SSHHost {
 		return nil
 	}
 	return &pb.SSHHost{
-		Id:          int32(h.ID),
-		Name:        h.Name,
-		Address:     h.Address,
-		Port:        int32(h.Port),
-		User:        h.User,
-		Password:    h.Password,
+		Id:      int32(h.ID),
+		Name:    h.Name,
+		Address: h.Address,
+		Port:    int32(h.Port),
+		User:    h.User,
+		// 密码、私钥、私钥口令不随响应返回；更新时留空表示保持原值。
 		AuthType:    h.AuthType,
 		NetType:     h.NetType,
-		CertData:    h.CertData,
-		CertPwd:     h.CertPwd,
 		FontSize:    int32(h.FontSize),
 		Background:  h.Background,
 		Foreground:  h.Foreground,
@@ -285,24 +274,6 @@ func sshHostPBToModel(h *pb.SSHHost) *model.SSHHost {
 		Shell:       h.GetShell(),
 		PtyType:     h.GetPtyType(),
 		InitCmd:     h.GetInitCmd(),
-	}
-}
-
-// sessionInfoToPB conn.SessionInfo → pb.SessionInfo。
-func sessionInfoToPB(s *conn.SessionInfo) *pb.SessionInfo {
-	if s == nil {
-		return nil
-	}
-	return &pb.SessionInfo{
-		SessionId:      s.SessionID,
-		HostId:         int32(s.HostID),
-		HostName:       s.HostName,
-		Address:        s.Address,
-		Port:           int32(s.Port),
-		User:           s.User,
-		ClientIp:       s.ClientIP,
-		StartTime:      s.StartTime,
-		LastActiveTime: s.LastActiveTime,
 	}
 }
 

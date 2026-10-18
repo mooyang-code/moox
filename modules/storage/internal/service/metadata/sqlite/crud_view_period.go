@@ -36,17 +36,17 @@ func (s *Store) UpsertViewPeriodDatasetState(ctx context.Context, item *pb.ViewP
 	if err != nil {
 		return nil, err
 	}
-	changed, err := result.RowsAffected()
-	if err != nil {
+	if _, err := result.RowsAffected(); err != nil {
 		return nil, err
 	}
 	existing, err := s.getViewPeriodDatasetState(ctx, next.GetSpaceId(), next.GetViewId(), next.GetDatasetId(), next.GetFrequency(), next.GetPeriodTime())
 	if err != nil {
 		return nil, err
 	}
-	if changed == 0 && !sameViewPeriodDatasetState(existing, next) {
-		return nil, errors.New("view period dataset state conflict")
-	}
+	// The first report decides a period. A later report for the same period
+	// (Collector re-reports after a restart or recovery) returns the recorded
+	// state so callers can recognize the duplicate instead of retrying a
+	// conflict that can never resolve.
 	return existing, nil
 }
 
@@ -205,13 +205,6 @@ func scanViewPeriodDatasetState(row interface{ Scan(...any) error }) (*pb.ViewPe
 		return nil, err
 	}
 	return item, nil
-}
-
-func sameViewPeriodDatasetState(left, right *pb.ViewPeriodDatasetState) bool {
-	return left != nil && right != nil && left.GetEventId() == right.GetEventId() && left.GetStatus() == right.GetStatus() &&
-		strings.Join(left.GetSubjectIds(), "\x00") == strings.Join(right.GetSubjectIds(), "\x00") &&
-		strings.Join(left.GetFailedSubjects(), "\x00") == strings.Join(right.GetFailedSubjects(), "\x00") &&
-		left.GetOccurredAt().AsTime().Equal(right.GetOccurredAt().AsTime())
 }
 
 func cloneViewPeriodDatasetState(item *pb.ViewPeriodDatasetState) *pb.ViewPeriodDatasetState {

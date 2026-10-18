@@ -22,9 +22,10 @@ type credentialRegistryFile struct {
 	} `json:"credentials"`
 }
 
+// NewCredentialRegistry indexes by KeyID. A caller may have both its current
+// and retiring key during a controlled rotation; KeyIDs are globally unique.
 func NewCredentialRegistry(credentials []Credentials) (*CredentialRegistry, error) {
 	entries := make(map[string]Credentials, len(credentials))
-	callers := make(map[string]string, len(credentials))
 	for _, credential := range credentials {
 		if _, _, err := validateCredentials(credential); err != nil {
 			return nil, err
@@ -32,14 +33,10 @@ func NewCredentialRegistry(credentials []Credentials) (*CredentialRegistry, erro
 		if !validIdentifier(credential.Caller) {
 			return nil, fmt.Errorf("credential caller %q is invalid", credential.Caller)
 		}
-		if previous, exists := callers[credential.Caller]; exists {
-			return nil, fmt.Errorf("duplicate gateway caller %q for key IDs %q and %q", credential.Caller, previous, credential.KeyID)
-		}
 		if _, exists := entries[credential.KeyID]; exists {
 			return nil, fmt.Errorf("duplicate gateway key_id %q", credential.KeyID)
 		}
 		entries[credential.KeyID] = credential
-		callers[credential.Caller] = credential.KeyID
 	}
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("gateway credential registry is empty")
@@ -128,20 +125,4 @@ func CredentialsFromKeyFile(keyID, path string) (Credentials, error) {
 		return Credentials{}, fmt.Errorf("gateway hmac key file %s is empty", path)
 	}
 	return Credentials{KeyID: keyID, Secret: secretText}, nil
-}
-
-// ResolveCredentials prefers an explicitly configured key file and otherwise
-// uses the process-injected credential pair for local and SCF runtimes.
-func ResolveCredentials(keyID, keyFile string) (Credentials, error) {
-	if strings.TrimSpace(keyFile) != "" {
-		return CredentialsFromKeyFile(keyID, keyFile)
-	}
-	credentials := CredentialsFromEnv()
-	if strings.TrimSpace(credentials.KeyID) == "" && strings.TrimSpace(keyID) != "" {
-		credentials.KeyID = strings.TrimSpace(keyID)
-	}
-	if _, _, err := validateCredentials(credentials); err != nil {
-		return Credentials{}, fmt.Errorf("gateway credentials are required: %w", err)
-	}
-	return credentials, nil
 }

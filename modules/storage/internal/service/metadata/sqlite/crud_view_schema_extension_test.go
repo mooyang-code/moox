@@ -24,7 +24,7 @@ func TestCommitViewSchemaExtensionCASAndRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	closeColumn := &pb.ViewColumn{
-		SpaceId: "space", ViewId: "source-view", ColumnName: "prices.close", OriginId: "prices.close",
+		SpaceId: "space", ViewId: "source-view", ColumnName: "close", OriginId: "close",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 	}
@@ -60,7 +60,7 @@ func TestCommitViewSchemaExtensionCASAndRetry(t *testing.T) {
 	}
 
 	biasColumn := &pb.ViewColumn{
-		SpaceId: "space", ViewId: "source-view", ColumnName: "prices.bias_20", OriginId: "prices.bias_20",
+		SpaceId: "space", ViewId: "source-view", ColumnName: "bias_20", OriginId: "bias_20",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 		ValueType:  pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, SortOrder: 1,
 	}

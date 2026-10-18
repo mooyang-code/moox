@@ -26,9 +26,6 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 			"ListPositions", "CreatePaperSimulation", "ClosePaperSimulation",
 			"GetExecutionCapabilities", "QueryEquityCurve", "ListHoldings",
 		},
-		"trpc.moox.trade.TradeDNSResolverService": {
-			"ResolveDomains",
-		},
 	}
 	services := File_trade_service_proto.Services()
 	if services.Len() != len(want) {

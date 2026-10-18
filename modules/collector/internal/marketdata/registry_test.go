@@ -51,12 +51,8 @@ func TestProviderRegistryReturnsStronglyTypedFetchers(t *testing.T) {
 	gotKline, err := registry.KlineFetcher("kline")
 	require.NoError(t, err)
 	assert.Same(t, kline, gotKline)
-	_, err = registry.InstrumentFetcher("kline")
+	_, err = registry.KlineFetcher("instrument")
 	assert.ErrorIs(t, err, ErrFetcherNotSupported)
-
-	gotInstrument, err := registry.InstrumentFetcher("instrument")
-	require.NoError(t, err)
-	assert.Same(t, instrument, gotInstrument)
 	_, err = registry.KlineFetcher("missing")
 	assert.ErrorIs(t, err, ErrProviderNotFound)
 }

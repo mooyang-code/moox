@@ -1,129 +1,41 @@
 # moox-admin
 
-MooX 管理入口：统一 HTTP 网关 + 认证、Space、运维等**本地基础服务**。采集规则、云节点、云账户等业务已拆到 `modules/collector` 与 `modules/cloudnode`，admin 仅做网关转发。
+控制面：登录认证、业务空间、服务目录、密钥、SSH、系统初始化和采集发布租约；管理台 API 的唯一入口，并为各节点网关下发路由。
 
-## 职责
+设计文档：[管理后台](../../docs/模块/管理后台.md)
 
-| 类别 | 内容 |
-|------|------|
-| 网关 | JWT 鉴权、限流、CORS、`/api/admin/*` 浏览器控制路由与 `/api/gateway-control/*` 节点控制接口 |
-| 本进程服务 | Auth、SpaceMgr、Dns、Ssh、SecretMgr、SysDeploy |
-| 转发目标 | collectmgr、cloudnode、storage、trade 等独立进程 |
-| 定时任务 | DNS 代理/探测、Admin 自身指标上报、Badger Auth 缓存 value-log 清理 |
-
-## 目录结构
-
-```text
-cmd/server/               服务入口
-cmd/cli/                  模块 CLI（init）
-config/
-  trpc_go.yaml            tRPC 服务与定时器端口
-  gateway.yaml            管理网关 JWT、限流、CORS 与免鉴权配置
-  app.yaml                应用级配置
-internal/
-  bootstrap/              启动编排、TRPC 注册
-  gateway/                HTTP 网关（forward / rawhandler）
-  service/                本进程业务实现（见下文「本进程服务」）
-proto/                    admin/infra/ops/secret/sysdeploy proto
-schema/admin.sql          admin 本地 SQLite 表
-```
-
-## 构建
+## 构建与测试
 
 ```bash
-# 模块目录
-make build          # → ../../scripts/build/build.sh admin
-make build-linux
-make release        # 仓库级发布包
-
-# 仓库根目录
 ./scripts/build/build.sh admin
-make deploy ARGS="--target localhost --dir /data/moox/dev"
+./scripts/build/build.sh admin-cli
+go test -count=1 ./modules/admin/...
 ```
 
-admin 单独部署时可排除其他服务：
+## 配置
 
-```bash
-make deploy SERVER=user@host   # 等价于 deploy-moox.sh --no-storage --no-web-host --no-cloudnode --no-collector
-```
+`config/trpc_go.yaml`（服务与端口）、`config/app.yaml`、`config/console.yaml`（控制台）；schema 在 `schema/admin.sql`。
 
-## 端口
+## 离线初始化与恢复
 
-| 端口 | 服务 | 网关路径示例 |
-|------|------|--------------|
-| 11000 | HTTP 网关 | `/api/admin/*` |
-| 11100 | Auth | `/api/admin/auth/*` |
-| 11101 | Dns | `/api/admin/dnsproxy/*` |
-| 11106 | Ssh | `/api/admin/ssh/*`（WebSocket/SFTP 走 rawhandler） |
-| 11107 | SpaceMgr | `/api/admin/space/*` |
-| 11108 | SecretMgr | `/api/admin/secret/*` |
-| 11109 | SysDeploy | `/api/admin/sysdeploy/*` |
-| 11401 | moox-cloudnode（转发） | `/api/admin/cloudnode/*` |
-| 11402 | moox-collector（转发） | `/api/admin/collectmgr/*` |
-| 20200-20202 | moox-storage（转发） | `/api/admin/storage_*/*` |
-| 11200 | moox-trade ExchangeAccountService（内部） | 默认不暴露 Admin Gateway |
-| 11201 | moox-trade TradeExecutionService（内部） | 默认不暴露 Admin Gateway |
-| 11202 | moox-trade LogicalAccountService（内部） | 默认不暴露 Admin Gateway |
-| 11001 | `trpc.moox.api.stdhttp` | 保留 HTTP service，当前不作为主网关入口 |
-| 11301 / 11302 / 11305 / 11306 | 定时器 | dnsproxy / dnsprobe / Admin metrics / Auth cache cleanup |
+`moox-admin-cli bootstrap` 不依赖运行中的服务，参数为 `--topology-file`、`--db-path`、`--encryption-key-file`、`--pki-dir`、`--output-dir`。拓扑输入是部署 CLI 提取的 0600 JSON（版本 1），只含 `control_host_id` 和 `hosts`；每台主机包含 `host_id`、`address`、可选的 `private_address`、`region`、`description` 及完整业务 `components` 列表。主机组件由 DAO 自动维护，不能出现在该列表中。
 
-`trpc.moox.admin.auth_cache_cleanup.timer` 每 5 分钟执行一次，单次超时 60 秒；Handler 同步返回真实错误并跳过同进程重入。Badger `ErrNoRewrite` 表示当前无需 GC，按成功处理。该 Timer 使用本地 `DefaultScheduler`，不提供跨进程互斥。
+命令建立 schema，按与在线 API 相同的校验在一个事务内写入拓扑和全部调用方密钥，验证或生成 MooX CA，提交后发布完整的 control 网关配置、证书与签名文件。输出只有包目录、相对路径、KeyID、证书摘要和逐文件摘要等元数据，包中的 `bundle.json` 保存同一份清单。配置路径统一为 `host-gateway/config/app.yaml`。主密钥与 CA 始终留在持久目录；输出中的 `operator/caller-moox-cli.key` 及 `operator/gateway-client.yaml` 只供部署端取回，配置记录实际分配的 KeyID 与相对密钥路径。Admin 启动时将 `MOOX_ADMIN_ENCRYPTION_KEY_FILE` 指向同一份持久主密钥。
 
-转发映射以 `t_service_deployments` 中的 active 部署记录为准，`config/gateway.yaml` 不再维护服务地址。
+重跑复用 CA、主密钥和调用方密钥，保留主机与组件启停状态；每次部署重新签发叶证书。已存在加密记录却丢失主密钥，或已有网关密钥却丢失 CA 时，必须恢复原件。数据库提交后的输出错误可直接重跑，失败暂存目录不会成为可安装包。
 
-### SysDeploy 定位与限制
+后续主机部署先通过 `SyncHostPlacements` 登记，再经 control 的可信 SSH 执行 `moox-admin-cli host-bundle --host-id <目标主机> --control-host-id <控制主机> --db-path <现有数据库> --encryption-key-file <持久主密钥> --pki-dir <持久CA目录> --output-dir <私密输出父目录>`。该命令只使用现有数据库、主密钥和 CA，从持久拓扑读取目标地址与完整放置，事务性地生成缺少的调用方密钥、复用已有 KeyID，再为本次部署重签叶证书并发布新的 0700 包；所有文件为 0600。停用主机和组件的材料也可导出，启停状态保持不变。未登记主机、错误控制主机、丢失或损坏的身份材料均拒绝继续。
 
-SysDeploy 是面向 MooX 单机部署的静态服务目录，不是类似 Polaris、Consul 或 etcd 的动态注册中心：
+普通主机包只包含目标主机和它所放置组件的签名身份；control 才包含 `console`，正常重部署不导出操作员身份。包含 Access 的主机另有 `secrets/access/access-verification.json` 及外部调用方验证文件，保留轮换重叠期，退役后下次导出移除旧项；内部身份不进入该表。CA 私钥和 Admin 主密钥不进入任何输出包。`bundle.json` 的 `files` 覆盖全部载荷文件（自身除外），记录 SHA256 与长度，供部署端传输时核对。
 
-- 每个 `service_name` 只保存一个当前入口地址，适合一台主机上按模块拆分多个进程。
-- `active` 表示配置已启用，不等价于服务健康；实际可用性由 Monitor 独立探测。
-- 服务不会自行注册或续约，地址变化由部署脚本或管理员显式更新。
-- 当前不支持同一服务多实例、实例心跳、自动摘除和负载均衡。
-- Admin 网关和后台服务发现都读取同一份 active 部署记录，避免在多个配置文件中重复维护地址。
+离线恢复使用 `host set-status` 或 `placement set-status`，两者均要求 `--db-path`、`--control-host-id`、`--host-id`、`--status enabled|disabled`；后者还要求 `--component-id`。数据库必须是已有的 0600 普通文件，恢复命令不会建表。受保护对象及目录校验规则与在线 API 相同。
 
-如果未来需要同服务多实例，应单独引入服务实例模型和明确的负载均衡策略，不在当前表中用重复 `service_name` 模拟。
+共享客户端已使用规范主机网关路径；SSH 取回、安装配置注入、操作员身份本机安装和实际五步首次部署仍由执行计划 G/J 验收。
 
-## 配置与数据
+## 证书巡检
 
-- 主配置：`config/trpc_go.yaml`、`config/gateway.yaml`
-- SQLite：`./data/admin.db`（部署目录下为 `<deploy-dir>/data/admin.db`）
-- Badger 缓存：`./data/badger`（登录盐值等）
-- 日志：`./log/`
+Admin 启动时及每天检查 MooX CA 和数据库中全部主机的公有证书清单（包括停用主机），检查有效期、CA 签名、服务端用途及主机 ID/公网/私网 SAN。证书在 90 天内到期时发出 warning；缺失、损坏、过期或不匹配时发出 critical，同轮发现按级别汇总。EventBus CA 仍独立检查。
 
-开发模式：
+`MOOX_ADMIN_PKI_DIR` 指向 bootstrap 的持久 `--pki-dir`；未设置时使用 Admin 主密钥文件同目录下的 `pki/`，未提供主密钥文件路径时默认为 `../secrets/pki`。巡检只读取 `ca.crt` 与 `hosts/<host-id>.crt`，不读取私钥或签名密钥，不创建或修复文件。首次初始化时其他主机可能尚未签发证书，这类发现会告警并保留定时巡检，允许控制面启动，以便后续部署和换发证书。
 
-```bash
-go run ./cmd/server -conf=config/trpc_go.yaml
-```
-
-## 本进程服务
-
-`internal/service/` 内实现的 RPC 服务。CollectMgr、CloudNodeMgr 已迁移到独立模块，不在此目录。
-
-| 目录 | RPC 服务 | 说明 |
-|------|----------|------|
-| `auth/` | `trpc.moox.infra.Auth` | 注册、登录、JWT、改密、用户信息 |
-| `space/` | `trpc.moox.admin.SpaceMgr` | Space 元数据管理 |
-| `dnsproxy/` | `trpc.moox.infra.Dns` | 交易所 DNS 代理与探测 |
-| `ssh/` | `trpc.moox.ops.Ssh` | SSH 主机、会话、WebSocket 终端、SFTP |
-| `secret/` | `trpc.moox.ops.SecretMgr` | 密钥/凭证管理 |
-| `sysdeploy/` | `trpc.moox.ops.SysDeploy` | 各服务部署信息与网关解析 |
-| `database/` | — | 共享 SQLite + GORM 初始化 |
-
-各业务包通常包含 `service.go` / `impl*.go`、`dao/`、`model/`、`rpc/`（部分服务）、`config/`（auth）。注册入口：`internal/bootstrap/trpc.go` → `RegisterTRPCServices`。
-
-主机资源监控由 `moox-host-agent`、EventBus、`moox-monitor` 和 MooX Storage 提供。Admin 只通过统一网关转发 Monitor API，不采集或保存主机指标。
-
-**认证要点**：客户端用「盐值 + 时间戳」派生 AES 密钥加密密码后提交；用户信息存 SQLite，盐值与登录尝试等存 BadgerDB。`/api/admin/auth/Register`、`GetLoginSalt`、`Login` 等路径免 JWT（见 `gateway.yaml` 的 `no_auth_methods`）。API 形态以 `proto/infra_service.proto` 为准。
-
-**扩展新服务**：优先作为独立模块部署，并在 `t_service_deployments` 中登记 serviceID、地址和 tRPC 服务名；只有 admin 本地基础能力才放入 `internal/service/`、`bootstrap/services.go`、`bootstrap/trpc.go` 和 `trpc_go.yaml`。
-
-初始化阶段也可以使用
-`moox-admin-cli service-deployments import --file <seed.yaml> --node-id <node> --public-host <host> --eventbus-nats-url tls://<host>:4222`
-导入
-`config/setup/service-deployments.yaml`。该清单按节点和服务名幂等更新部署地址、网关
-路由及健康检查元数据；Admin 启动时的默认 seed 与其保持一致。
-
-## 相关文档
-
-- 架构总览：[docs/架构总览.md](../../docs/架构总览.md)
+Admin 的 Auth、Ssh、SpaceMgr、SecretMgr、SysDeploy、Setup 与 CollectorPublishLease 七个内部服务仅在 loopback 提供原生 tRPC，沿用 11100、11106～11111 端口；Setup 启动预检同时校验此协议。Console 与健康接口继续使用 HTTP。浏览器调用由生成的 handler 在进程内分派，机器调用经主机网关校验各自身份。

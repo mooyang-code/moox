@@ -121,8 +121,6 @@ func TestNodeMetadataBranches(t *testing.T) {
 		Metadata: metadata, BizType: "market_fetcher", Tag: "prod", IpAddress: "10.0.0.1",
 	})
 	assert.Equal(t, "market_fetcher", got["biz_type"])
-	assert.NotContains(t, got, "timeout_threshold")
-	assert.NotContains(t, got, "probe_enabled")
 	assert.NotContains(t, got, "probe_url")
 	assert.Empty(t, nodeMetadataFromPB(nil))
 }
@@ -461,7 +459,8 @@ func TestExecuteCreateExistingTimerNodeEnsuresTrigger(t *testing.T) {
 	environment := completeTimerEnvironment()
 	environment["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
 	environment["MOOX_CREATE_RESERVATION_ID"] = "timer-create-reservation"
-	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 60, Environment: environment}}}}
+	// 函数已存在但还没有定时器：补建一个停用状态的初始定时器。
+	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 60, Environment: environment}}}, timerInfoSet: true}
 	svc := &Service{
 		catalog:            catalog,
 		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
@@ -478,6 +477,30 @@ func TestExecuteCreateExistingTimerNodeEnsuresTrigger(t *testing.T) {
 	require.Equal(t, 1, fake.timerEnsures)
 }
 
+func TestExecuteCreateExistingTimerNodeKeepsAnExistingTrigger(t *testing.T) {
+	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	seedSCFAccountAndPackage(t, catalog)
+	environment := completeTimerEnvironment()
+	environment["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+	environment["MOOX_CREATE_RESERVATION_ID"] = "timer-create-reservation"
+	// 默认的假客户端返回一个已启用的定时器：部署或续建不能把它重置成停用。
+	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 60, Environment: environment}}}}
+	svc := &Service{
+		catalog:            catalog,
+		credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory:   func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+	}
+	metadata, err := structpb.NewStruct(map[string]any{"biz_type": "market_fetcher", "function_name_prefix": "moox-fetcher-crypto-market"})
+	require.NoError(t, err)
+	_, err = svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{
+		CloudAccountId: "account-a", Region: "ap-singapore", Namespace: "collector", PackageId: "moox-collector_dev", Runtime: "CustomRuntime", Handler: "main",
+		TriggerType: "timer", Config: map[string]string{"memory_size": "64", "timeout": "60"}, Environment: environment, Metadata: metadata,
+		CreateReservationId: "timer-create-reservation",
+	}, 0)
+	require.NoError(t, err)
+	require.Zero(t, fake.timerEnsures)
+}
+
 func TestExecuteDeployNodeItemUpdatesConfiguration(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
@@ -486,10 +509,6 @@ func TestExecuteDeployNodeItemUpdatesConfiguration(t *testing.T) {
 		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-0", Metadata: `{"biz_type":"market_fetcher","handler":"main"}`,
 	}))
 	remote := completeInvokeEnvironment("15")
-	remote["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] = "ip://collector.example:11004"
-	remote["MOOX_COLLECTOR_NODE_ID"] = "collector-node"
-	remote["MOOX_RPC_SERVICE_ID"] = "moox-collector"
-	remote["MOOX_RPC_SERVICE_SECRET"] = "private-test-secret"
 	fake := &fakeSCFClient{currentEnvironment: remote}
 	svc := &Service{
 		catalog:            catalog,
@@ -552,8 +571,6 @@ func TestExecuteRuntimeConfigSkipsUnchangedEnvironmentUpdate(t *testing.T) {
 	environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"] = "1"
 	environment["MOOX_MARKET_FETCH_DNS_HASH"] = "dns"
 	environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"] = "2026-08-04T01:00:00Z"
-	environment["MOOX_MARKET_FETCH_SUBJECTS"] = "BTC-USDT"
-	environment["MOOX_MARKET_FETCH_SYMBOLS_JSON"] = `{"BTC-USDT":"BTCUSDT"}`
 	environment["MOOX_MARKET_FETCH_PROVIDER"] = "binance"
 	environment["MOOX_MARKET_FETCH_MARKET_TYPE"] = "spot"
 	environment["MOOX_MARKET_FETCH_DATASET_ID"] = "bars"
@@ -580,7 +597,7 @@ func TestExecuteRuntimeConfigDoesNotEnableTimerWithIncompleteDependencies(t *tes
 		Region: "ap-singapore", Namespace: "collector", FunctionName: "fetcher-timer", Metadata: `{"biz_type":"market_fetcher"}`,
 	}))
 	environment := completeTimerEnvironment()
-	delete(environment, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
+	delete(environment, "MOOX_ACCESS_ADDRESS")
 	fake := &fakeSCFClient{currentEnvironment: environment}
 	svc := &Service{
 		catalog:            catalog,
@@ -591,12 +608,12 @@ func TestExecuteRuntimeConfigDoesNotEnableTimerWithIncompleteDependencies(t *tes
 		NodeId: "timer-node", ManagedEnvironment: map[string]string{"MOOX_MARKET_FETCH_BINDING_HASH": "binding"},
 		TimerCron: "0 * * * * * *", TimerEnabled: true,
 	})
-	require.ErrorContains(t, err, "MOOX_STORAGE_RPC_GATEWAY_TARGET")
+	require.ErrorContains(t, err, "MOOX_ACCESS_ADDRESS")
 	require.Empty(t, fake.configured, "invalid runtime dependencies must be rejected before updating configuration")
 	require.Zero(t, fake.timerEnsures, "invalid runtime dependencies must not enable the Timer trigger")
 }
 
-func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
+func TestExecuteRuntimeConfigAppliesClaimRoutingAndTimeout(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
 	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
@@ -607,13 +624,11 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	environment["MOOX_SPACE_ID"] = "stockcn"
 	environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] = "assignment"
 	environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"] = "80"
-	environment["MOOX_MARKET_FETCH_SUBJECTS"] = strings.Repeat("old-subject|", 80)
 	environment["MOOX_EVENTBUS_NATS_PASSWORD"] = "keep-password"
-	environment["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = "cGVt"
 	fake := &fakeSCFClient{currentEnvironment: environment}
 	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
 	patch := &pb.NodeRuntimeConfigPatch{NodeId: "timer-node", TimerCron: "5 * * * * * *", TimerEnabled: true, ManagedEnvironment: map[string]string{
-		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment", "MOOX_MARKET_FETCH_SUBJECT_COUNT": "80", "MOOX_MARKET_FETCH_BINDING_HASH": "binding", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector.example:11002", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE": "control-a", "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+		"MOOX_MARKET_FETCH_ASSIGNMENT_HASH": "assignment", "MOOX_MARKET_FETCH_SUBJECT_COUNT": "80", "MOOX_MARKET_FETCH_BINDING_HASH": "binding", "MOOX_ACCESS_ADDRESS": "access.example:11004", "MOOX_ACCESS_ID": "access@control-a", "MOOX_CALLER": "scf-collector", "MOOX_CALLER_KEY_ID": "assigned-scf-key-18", "MOOX_CALLER_KEY": strings.Repeat("b", 64), "MOOX_FETCH_TIMEOUT_SECONDS": "60",
 	}}
 	require.Nil(t, svc.preflightRuntimeConfig(context.Background(), "stockcn", patch))
 	_, err := svc.executeRuntimeConfigItem(context.Background(), "stockcn", patch)
@@ -621,13 +636,12 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	require.Len(t, fake.configured, 1)
 	require.EqualValues(t, 60, fake.configured[0].Timeout)
 	require.Equal(t, "keep-password", fake.currentEnvironment["MOOX_EVENTBUS_NATS_PASSWORD"])
-	require.NotContains(t, fake.currentEnvironment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
-	require.NotContains(t, fake.configured[0].Environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
-	require.NotContains(t, fake.currentEnvironment, "MOOX_MARKET_FETCH_SUBJECTS")
 	node, err := catalog.GetNode(context.Background(), "stockcn", "timer-node")
 	require.NoError(t, err)
-	require.Contains(t, node.Metadata, "collector_rpc_gateway_target")
-	require.Contains(t, node.Metadata, `"timeout_seconds":60`, "later redeploys must not restore the legacy catalog timeout")
+	require.Contains(t, node.Metadata, `"access_address":"access.example:11004"`)
+	require.Contains(t, node.Metadata, `"access_key_id":"assigned-scf-key-18"`)
+	require.NotContains(t, node.Metadata, strings.Repeat("b", 64))
+	require.Contains(t, node.Metadata, `"timeout_seconds":60`)
 	require.Contains(t, node.Metadata, `"assignment_count":80`, "the assignment readback must persist the verified subject count")
 }
 
@@ -767,11 +781,11 @@ func (f *fakeSCFClient) EnsureTimerTrigger(_ context.Context, req tencentscf.Tim
 func (f *fakeSCFClient) GetTimerTrigger(_ context.Context, _ tencentscf.FunctionRef, _ string) (*tencentscf.TimerTriggerInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.timerErr != nil {
-		return nil, f.timerErr
-	}
 	if f.timerInfoSet {
 		return f.timerInfo, nil
+	}
+	if f.timerErr != nil {
+		return nil, f.timerErr
 	}
 	return &tencentscf.TimerTriggerInfo{Name: timerTriggerName, Type: "timer", Cron: "0 * * * * * *", Enabled: true, AvailableStatus: "Available", Qualifier: timerTriggerQualifier, Message: timerTriggerMessage}, nil
 }

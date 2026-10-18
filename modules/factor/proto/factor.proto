@@ -21,26 +21,50 @@ message FactorSet {
 
 message FactorDef {
   string factor_id = 1;
-  string set_id = 2;
   string name = 3;
+  // factor_type、input_columns、outputs、lookback_periods 由编译 spec 派生，只读：写请求中忽略。
   string factor_type = 4;
-  string source_code = 5;
-  string source_hash = 6;
   repeated string input_columns = 7;
   repeated string outputs = 8;
-  string params_json = 9;
   int32 lookback_periods = 10;
   bool allow_partial_universe = 11;
-  string status = 12;
   string created_at = 13;
   string updated_at = 14;
+  // definition_hash 是完整计算契约的指纹：expr 语义版本、规范程序文本与 allow_partial_universe；
+  // 由管理端在读取时派生计算，不持久化。
+  string definition_hash = 15;
+  // spec 是因子定义文本（YAML：params / let / outputs），spec_hash 是它原文的 sha256。
+  string spec = 16;
+  string spec_hash = 17;
+}
+
+message FactorUsage {
+  string set_id = 1;
+  string status = 2;
+}
+
+message FactorInfo {
+  FactorDef factor = 1;
+  repeated FactorUsage usages = 2;
+}
+
+message FactorMember {
+  string set_id = 1;
+  string factor_id = 2;
+  string status = 3;
+  FactorDef factor = 4;
+  string created_at = 5;
+  string updated_at = 6;
 }
 
 message FactorPeriodState {
   string factor_id = 1;
   string status = 2;
   repeated string failed_subjects = 3;
-  string source_hash = 4;
+  string spec_hash = 4;
+  string definition_hash = 5;
+  // gap_subjects 是 failed_subjects 中因回看窗口 K 线空洞而失败的标的（子集）。
+  repeated string gap_subjects = 6;
 }
 
 message SetRunSummary {
@@ -50,11 +74,16 @@ message SetRunSummary {
   int64 lag_seconds = 4;
   repeated FactorPeriodState factors = 5;
   repeated string failed_subjects = 6;
+  // warming_subjects were left out of the period while their lookback window
+  // loads; their results are not formal.
+  int32 warming_subjects = 7;
+  // completed_at 是引擎写完 last_period_time 这一期的 Unix 秒；0 表示未知。
+  int64 completed_at = 8;
 }
 
 message FactorSetInfo {
   FactorSet factor_set = 1;
-  repeated FactorDef factors = 2;
+  repeated FactorMember members = 2;
   SetRunSummary last_run = 3;
 }
 
@@ -71,6 +100,7 @@ message RecalcJob {
   string error = 10;
   string created_at = 11;
   string updated_at = 12;
+  string engine_id = 13;
 }
 
 message CreateFactorSetReq { FactorSet factor_set = 1; }
@@ -108,7 +138,7 @@ message GetFactorSetReq { string set_id = 1; }
 message GetFactorSetRsp {
   common.RetInfo ret_info = 1;
   FactorSet factor_set = 2;
-  repeated FactorDef factors = 3;
+  repeated FactorMember members = 3;
   SetRunSummary last_run = 4;
 }
 
@@ -134,13 +164,29 @@ message UpdateFactorRsp {
   FactorDef factor = 2;
 }
 
-message SetFactorStatusReq {
-  string factor_id = 1;
-  string status = 2;
+message AddFactorToSetReq {
+  string set_id = 1;
+  string factor_id = 2;
 }
-message SetFactorStatusRsp {
+message AddFactorToSetRsp {
   common.RetInfo ret_info = 1;
-  FactorDef factor = 2;
+  FactorMember member = 2;
+}
+
+message RemoveFactorFromSetReq {
+  string set_id = 1;
+  string factor_id = 2;
+}
+message RemoveFactorFromSetRsp { common.RetInfo ret_info = 1; }
+
+message SetFactorMemberStatusReq {
+  string set_id = 1;
+  string factor_id = 2;
+  string status = 3;
+}
+message SetFactorMemberStatusRsp {
+  common.RetInfo ret_info = 1;
+  FactorMember member = 2;
   RecalcJob backfill_job = 3;
 }
 
@@ -151,16 +197,18 @@ message GetFactorReq { string factor_id = 1; }
 message GetFactorRsp {
   common.RetInfo ret_info = 1;
   FactorDef factor = 2;
+  repeated FactorUsage usages = 3;
 }
 
 message ListFactorsReq {
   string set_id = 1;
   string status = 2;
   common.Page page = 3;
+  bool include_spec = 4;
 }
 message ListFactorsRsp {
   common.RetInfo ret_info = 1;
-  repeated FactorDef factors = 2;
+  repeated FactorInfo factors = 2;
   common.PageResult page_result = 3;
 }
 
@@ -204,16 +252,108 @@ message FactorLaneStatus {
   string set_id = 1;
   int32 queued = 2;
   bool active = 3;
+  // warmup_state is warming while some subjects lack a loaded lookback window
+  // (after the engine starts or the set changes); their period results are
+  // reported as failed subjects and are not consumed by strategies.
+  string warmup_state = 4; // warming | ready
+  int32 warm_subjects = 5;
+  int32 expected_subjects = 6;
+}
+
+// EngineInfo describes the compute engine as last seen by moox-factor-mgr.
+message EngineInfo {
+  string engine_id = 1;
+  string boot_id = 2;
+  string version = 3;
+  bool online = 4;
+  string last_heartbeat_at = 5;
+  string catalog_hash = 6;
+  string catalog_synced_at = 7;
+  bool catalog_in_sync = 8;
 }
 
 message GetStatusReq {}
 message GetStatusRsp {
   common.RetInfo ret_info = 1;
   bool consumer_running = 2;
-  int32 python_workers = 3;
-  int32 python_busy = 4;
   repeated FactorLaneStatus lanes = 5;
   repeated SetRunSummary recent_runs = 6;
+  EngineInfo engine = 7;
+  int32 compute_workers = 8;
+  // engine_expr_version 是引擎上报的 expr 语义版本，manager_expr_version 是管理端自己的；两者不同时
+  // 引擎与管理端算出的 definition_hash 不一致，策略会跳过。
+  string engine_expr_version = 9;
+  string manager_expr_version = 10;
+}
+
+// 编译一份 spec，返回派生的元数据与诊断信息；控制台编辑器边写边校验。
+message ValidateFactorSpecReq {
+  string spec = 1;
+  bool allow_partial_universe = 2;
+}
+message FactorSpecDiagnostic {
+  string path = 1;
+  int32 doc_line = 2;
+  int32 line = 3;
+  int32 column = 4;
+  string message = 5;
+}
+message ValidateFactorSpecRsp {
+  common.RetInfo ret_info = 1;
+  bool valid = 2;
+  FactorSpecDiagnostic diagnostic = 3;
+  string factor_type = 4;
+  repeated string input_columns = 5;
+  repeated string outputs = 6;
+  int32 lookback_periods = 7;
+  string canonical = 8;
+  string definition_hash = 9;
+}
+
+// 在指定因子集的源数据上试算：少量标的、最近若干期。管理端直接读 Storage 计算，不经过引擎。
+message PreviewFactorReq {
+  string set_id = 1;
+  string spec = 2;
+  repeated string subjects = 3; // 为空时取源数据集的前几个标的
+  int32 periods = 4;            // 输出最近多少期，默认 20，最多 500
+  bool allow_partial_universe = 5;
+}
+message PreviewRow {
+  string subject_id = 1;
+  string series_tag = 2;
+  string data_time = 3;
+  repeated double values = 4; // 与 columns 一一对应；null 时为 0，并在 nulls 中标为 true
+  repeated bool nulls = 5;
+}
+message PreviewFactorRsp {
+  common.RetInfo ret_info = 1;
+  repeated string columns = 2;
+  repeated PreviewRow rows = 3;
+}
+
+message FactorFunctionArg {
+  string name = 1;
+  string kind = 2; // number、series、bool、bool_series、window、integer、constant
+  double min = 3;
+  double max = 4;
+  bool optional = 5;
+  double default_value = 6;
+}
+message FactorFunction {
+  string name = 1;
+  string category = 2; // elementwise、timeseries、cross_section
+  string signature = 3;
+  string result = 4; // number 或 bool
+  repeated FactorFunctionArg args = 5;
+  string lookback = 6;
+  string doc = 7;
+  string example = 8;
+}
+message ListFactorFunctionsReq {}
+message ListFactorFunctionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated FactorFunction functions = 2;
+  string expr_version = 3;
 }
 
 service FactorMgr {
@@ -225,13 +365,91 @@ service FactorMgr {
   rpc ListFactorSets(ListFactorSetsReq) returns (ListFactorSetsRsp);
   rpc CreateFactor(CreateFactorReq) returns (CreateFactorRsp);
   rpc UpdateFactor(UpdateFactorReq) returns (UpdateFactorRsp);
-  rpc SetFactorStatus(SetFactorStatusReq) returns (SetFactorStatusRsp);
   rpc DeleteFactor(DeleteFactorReq) returns (DeleteFactorRsp);
   rpc GetFactor(GetFactorReq) returns (GetFactorRsp);
+  rpc AddFactorToSet(AddFactorToSetReq) returns (AddFactorToSetRsp);
+  rpc RemoveFactorFromSet(RemoveFactorFromSetReq) returns (RemoveFactorFromSetRsp);
+  rpc SetFactorMemberStatus(SetFactorMemberStatusReq) returns (SetFactorMemberStatusRsp);
   rpc ListFactors(ListFactorsReq) returns (ListFactorsRsp);
   rpc RecalcFactors(RecalcFactorsReq) returns (RecalcFactorsRsp);
   rpc ListRecalcJobs(ListRecalcJobsReq) returns (ListRecalcJobsRsp);
   rpc GetRecalcJob(GetRecalcJobReq) returns (GetRecalcJobRsp);
   rpc CancelRecalcJob(CancelRecalcJobReq) returns (CancelRecalcJobRsp);
   rpc GetStatus(GetStatusReq) returns (GetStatusRsp);
+  rpc ValidateFactorSpec(ValidateFactorSpecReq) returns (ValidateFactorSpecRsp);
+  rpc PreviewFactor(PreviewFactorReq) returns (PreviewFactorRsp);
+  rpc ListFactorFunctions(ListFactorFunctionsReq) returns (ListFactorFunctionsRsp);
+}
+
+// FactorEngine is the internal contract between moox-factor-mgr and the
+// outbound-only moox-factor-engine; only the factor-engine caller may use it.
+message EngineIdentity {
+  string engine_id = 1;
+  string boot_id = 2;
+  string version = 3;
+}
+
+message EngineSet {
+  FactorSet factor_set = 1;
+  repeated FactorDef factors = 2;
+  bool result_ready = 3;
+}
+
+message SyncEngineCatalogReq {
+  EngineIdentity engine = 1;
+  string known_hash = 2;
+}
+message SyncEngineCatalogRsp {
+  common.RetInfo ret_info = 1;
+  string catalog_hash = 2;
+  bool not_modified = 3;
+  repeated EngineSet sets = 4;
+}
+
+message EngineRuntimeStatus {
+  bool consumer_running = 1;
+  repeated FactorLaneStatus lanes = 4;
+  repeated SetRunSummary recent_runs = 5;
+  string catalog_hash = 6;
+  string catalog_synced_at = 7;
+  int32 compute_workers = 8;
+  string expr_version = 9;
+}
+
+message EngineHeartbeatReq {
+  EngineIdentity engine = 1;
+  EngineRuntimeStatus status = 2;
+}
+message EngineHeartbeatRsp {
+  common.RetInfo ret_info = 1;
+  int64 lease_ttl_seconds = 2;
+}
+
+message PullRecalcJobReq { EngineIdentity engine = 1; }
+message PullRecalcJobRsp {
+  common.RetInfo ret_info = 1;
+  bool found = 2;
+  RecalcJob job = 3;
+  string lease_token = 4;
+  EngineSet set = 5;
+}
+
+message ReportRecalcProgressReq {
+  EngineIdentity engine = 1;
+  string job_id = 2;
+  string lease_token = 3;
+  string progress_time = 4;
+  string status = 5;
+  string error = 6;
+}
+message ReportRecalcProgressRsp {
+  common.RetInfo ret_info = 1;
+  string job_status = 2;
+}
+
+service FactorEngine {
+  rpc SyncEngineCatalog(SyncEngineCatalogReq) returns (SyncEngineCatalogRsp);
+  rpc EngineHeartbeat(EngineHeartbeatReq) returns (EngineHeartbeatRsp);
+  rpc PullRecalcJob(PullRecalcJobReq) returns (PullRecalcJobRsp);
+  rpc ReportRecalcProgress(ReportRecalcProgressReq) returns (ReportRecalcProgressRsp);
 }

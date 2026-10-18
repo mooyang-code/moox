@@ -97,7 +97,7 @@ func (r *PeriodReadinessRepository) MarkSubjectSuccess(ctx context.Context, key 
 
 // MarkSubjectSuccessWithFields advances a period item only when its immutable
 // required-field snapshot is satisfied by the storage row. A nil field list
-// preserves the legacy caller contract for providers without a field schema.
+// means the provider has no field schema.
 func (r *PeriodReadinessRepository) MarkSubjectSuccessWithFields(ctx context.Context, key domain.PeriodKey, subjectID, functionName, writeSource string, fields []string, at time.Time) error {
 	if r == nil || r.db == nil {
 		return fmt.Errorf("period readiness repository is not initialized")

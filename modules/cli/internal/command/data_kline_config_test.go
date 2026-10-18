@@ -3,7 +3,6 @@ package command
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,12 +10,6 @@ import (
 )
 
 const validDataAccessYAML = `version: 1
-gateway:
-  target: ip://127.0.0.1:11003
-  target_node: storage
-  key_id: moox-skill
-  caller: moox-skill
-  secret: gateway-secret
 storage:
   app_id: moox-skill
   app_key: storage-key
@@ -36,7 +29,7 @@ data_types:
         space_id: stockcn
         series_tag: default
         kline_datasets:
-          1m: dataset_stockcn_equity_kline
+          1m: dataset_stockcn_equity_kline_1m
 `
 
 func writeDataAccessConfig(t *testing.T, content string, mode os.FileMode) string {
@@ -58,7 +51,6 @@ func TestDataAccessConfigLoadsStrictCatalog(t *testing.T) {
 	path := writeDataAccessConfig(t, validDataAccessYAML, 0o600)
 	cfg, err := loadDataAccessConfig(path)
 	require.NoError(t, err)
-	assert.Equal(t, "ip://127.0.0.1:11003", cfg.Gateway.Target)
 	selection, err := cfg.resolveKline(" CRYPTO ", "", " 1M ")
 	require.NoError(t, err)
 	assert.Equal(t, "binance", selection.Exchange)
@@ -70,7 +62,7 @@ func TestDataAccessConfigLoadsStrictCatalog(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "stockcn", selection.Exchange)
 	assert.Equal(t, "stockcn", selection.SpaceID)
-	assert.Equal(t, "dataset_stockcn_equity_kline", selection.DatasetID)
+	assert.Equal(t, "dataset_stockcn_equity_kline_1m", selection.DatasetID)
 	assert.Equal(t, "default", selection.SeriesTag)
 }
 
@@ -86,24 +78,9 @@ func TestDataAccessConfigRejectsUnknownFieldAndVersion(t *testing.T) {
 	assert.Contains(t, err.Error(), "version")
 }
 
-func TestDataAccessConfigRejectsNonNativeGatewayTarget(t *testing.T) {
-	for _, target := range []string{
-		"http://127.0.0.1:11003",
-		"ip://127.0.0.1:0",
-		"ip://127.0.0.1:not-a-port",
-	} {
-		t.Run(target, func(t *testing.T) {
-			content := strings.Replace(validDataAccessYAML, "ip://127.0.0.1:11003", target, 1)
-			_, err := loadDataAccessConfig(writeDataAccessConfig(t, content, 0o600))
-			require.ErrorContains(t, err, "gateway.target")
-		})
-	}
-}
-
-func TestDataAccessConfigAllowsConfiguredNativeGatewayPort(t *testing.T) {
-	content := strings.Replace(validDataAccessYAML, "ip://127.0.0.1:11003", "ip://127.0.0.1:39123", 1)
-	_, err := loadDataAccessConfig(writeDataAccessConfig(t, content, 0o600))
-	require.NoError(t, err)
+func TestDataAccessConfigRejectsObsoleteGatewayConfiguration(t *testing.T) {
+	_, err := loadDataAccessConfig(writeDataAccessConfig(t, validDataAccessYAML+"gateway:\n  target: ip://127.0.0.1:11003\n", 0o600))
+	require.ErrorContains(t, err, "field gateway not found")
 }
 
 func TestDataAccessConfigRejectsUnsafeFiles(t *testing.T) {

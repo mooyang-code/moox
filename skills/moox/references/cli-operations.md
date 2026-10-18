@@ -4,11 +4,10 @@
 
 ## 前置条件
 
-- `moox-cli`、`moox-factor-cli` 和 `moox-storage-cli` 必须来自同一版本发布包。
-- 操作主机需要能访问本机或配置的 EventBus，并能读取 EventBus internal-admin 凭据。
-- 不要把凭据写进命令、脚本、日志或 Skill。优先使用环境变量：
-  `MOOX_EVENTBUS_INTERNAL_ADMIN_CREDENTIAL_FILE`，也可以使用命令的
-  `--credential-file`。
+- `moox-cli`、`moox-factor-mgr-cli` 和 `moox-storage-cli` 必须来自同一版本发布包。
+- Storage 维护命令（`repair-view`、`force-rebuild-view`、`reconcile-view-consumers`、`reset-view-consumers`、`purge-dataset-events`）不需要任何 EventBus 凭据：
+  它们用 `--storage-conf` 指向的 storage-view 配置里的网关身份调用 Admin，由 Admin 代为连接 EventBus 执行；Storage 主机上不要放 EventBus 管理员凭据，也没有 `--credential-file`、`--eventbus-url` 参数。
+- 不要把任何 token、HMAC 写进命令、脚本、日志或 Skill。
 - `--yes` 才会执行修改；没有 `--yes` 的命令只能用于查看帮助或失败退出。
 - 所有命令输出 sanitized JSON；应保留 `backup_path`、`pending_before` 和 `deleted` 等字段用于运维记录。
 
@@ -21,12 +20,17 @@ Factor 的实时入口是 durable `factor_collector_period_v1`。积压时查看
 来丢弃尚未处理的周期；恢复服务后由 JetStream 重投，历史修正通过显式 Recalc job 完成。
 
 ```bash
-moox-factor-cli recalc --set fset_binance_kline_1m \
+moox-factor-mgr-cli recalc --set fset_dasftksvjhj2jom4vhd0_1m \
   --start 2026-10-04T00:00:00Z --end 2026-10-04T01:00:00Z
 ```
 
 Recalc 范围为左闭右开，会按最多 2000 个完整周期分块执行。查看或提交任务请使用
-FactorMgr 接口；Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、
+FactorMgr 接口。因子定义与因子集解耦：`moox-factor-mgr-cli import` 只创建定义，加 `--set` 才会
+把它作为 disabled 成员加入因子集；启用成员走 FactorMgr `SetFactorMemberStatus`，不是
+CLI 离线操作。`moox-cli setup factors` 从 `moox.toml` 的 `[[factors.sets]]`、
+`[[factors.definitions]]`、`[[factors.members]]` 依次补齐因子集、定义和成员，重复执行只补缺
+不删除；旧的 `[[factors.items]]` 已移除。
+Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、
 `run-once` 和 `status`。
 
 ## 清理 Storage View 积压并触发 A/B 重建
@@ -38,14 +42,12 @@ moox-cli storage repair-view \
   --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_binance_kline_1m \
-  --consumer storage_view_kline \
-  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
-  --eventbus-url tls://<EventBus公网IP>:4222 \
+  --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
+  --consumer <View 消费者名> \
   --yes
 ```
 
-独立 Storage 主机用上面的 `storage.yaml` 和包根，不要传 `storage-view/config/trpc_go.yaml`。控制机上的 `internal-admin.yaml` 默认 `tls://127.0.0.1:4222`，在 Storage 上必须 `--eventbus-url` 指到 EventBus 公网。三个 crypto kline View 共用 `storage_view_kline`：只在第一个 View 删除 durable，其余 `--reset-consumer=false`。因子 View 用 `--consumer storage_view_factor`。
+独立 Storage 主机用上面的 `storage.yaml` 和包根，不要传 `storage-view/config/trpc_go.yaml`。`--consumer` 只接受 Storage View 的消费者：固定的 `storage_view_factor`、`storage_view_metrics`、`storage_view_misc`，以及按数据集动态创建的 `storage_view_misc_<12 位十六进制>`、`storage_view_factor_<12 位十六进制>`（其他名称在发出请求前就会被拒绝）。多个 View 共用同一个消费者时，只在第一个 View 删除 durable，其余 `--reset-consumer=false`。
 
 默认流程：
 
@@ -64,10 +66,8 @@ moox-cli storage repair-view \
   --storage-conf /data/moox/storage/storage/config/storage.yaml \
   --package-root /data/moox/storage \
   --space-id crypto \
-  --view-id view_binance_kline_1m \
-  --consumer storage_view_kline \
-  --credential-file ~/.config/moox/eventbus/internal-admin.yaml \
-  --eventbus-url tls://<EventBus公网IP>:4222 \
+  --view-id view_dasftksvjhj2jom4vhd0_kline_1m \
+  --consumer <View 消费者名> \
   --dry-run
 ```
 
@@ -80,10 +80,8 @@ moox-cli storage repair-view \
 | `--storage-conf` | `MOOX_STORAGE_CONFIG` 或 `config/storage.yaml` | Storage 配置 |
 | `--package-root` | `MOOX_STORAGE_PACKAGE_ROOT` 或配置路径推导值 | `start.sh`/`stop.sh` 所在根目录 |
 | `--stream` | `MOOX_STORAGE` | JetStream stream |
-| `--consumer` | `storage_view_kline` | 分区 durable；kline 三个行情 View 共用，因子 View 用 `storage_view_factor` |
+| `--consumer` | 无，必填 | View 的 durable 消费者名（见上文允许的名称） |
 | `--deliver-policy` | `new` | 重建 consumer 的投递策略；重放时才使用 `all` |
-| `--credential-file` | Storage/EventBus admin 环境变量 | NATS admin 凭据 |
-| `--eventbus-url` | 凭据文件/环境配置 | 覆盖 EventBus 地址 |
 | `--timeout` | `2m` | 总操作超时 |
 | `--reset-consumer` | `true` | 删除 durable consumer |
 | `--force-rebuild` | `true` | 递增 desired revision |
@@ -113,7 +111,7 @@ moox-cli storage repair-view ... \
 /home/<user>/moox/storage/bin/moox-storage-cli purge-dataset-events \
   --space mooxsys \
   --dataset dataset_mooxsys_service_metrics \
-  --credential-file /home/<user>/.config/moox/eventbus/internal-admin.yaml \
+  --storage-conf /home/<user>/moox/storage/config/storage.yaml \
   --dry-run
 ```
 
@@ -132,14 +130,13 @@ moox-cli storage force-rebuild-view \
   --package-root /home/<user>/moox/storage \
   --space-id crypto \
 	--view-id view_factor_binance_kline_1m \
-  --lookback 72h \
   --dry-run
 ```
 
 确认目标后再执行同样命令并增加 `--yes`。该命令会停止整个 Storage 生命周期、备份 Metadata、
 删除 durable consumer、清空 View active/build/period/sync 状态、删除 A/B 物理索引，并以 `DeliverAll`
-重新消费 Source 事件；原 View 历史数据不可恢复。`--lookback` 是本次重建的最低历史覆盖要求，
-新索引未覆盖该时长前不会被激活。
+重新消费 Source 事件；原 View 历史数据不可恢复。重建按 `view_rows_per_series` 从 Primary 回填每个序列最近的
+K 线，历史不足时以现有数据激活。
 
 ## 收敛默认 View 集合
 
@@ -150,7 +147,7 @@ moox-cli storage force-rebuild-view \
 /home/<user>/moox/storage/bin/moox-storage-cli retain-views \
   --metadata-db /home/<user>/moox/storage/data/storage/metadata/storage_metadata.db \
   --package-root /home/<user>/moox/storage \
-  --keep-view crypto/view_binance_kline_1m \
+  --keep-view crypto/view_dasftksvjhj2jom4vhd0_kline_1m \
   --keep-view crypto/view_crypto_swap_kline_1h \
   --keep-view crypto/view_crypto_spot_kline_1h \
   --keep-view mooxsys/view_mooxsys_host_resource \
@@ -165,12 +162,13 @@ moox-cli storage force-rebuild-view \
 中的非保留 View、列、构建和日志记录，输出待清理的 `engine/index_id`；不会直接删除
 物理 A/B 文件。随后由 Storage View 的 Cleanup Timer 在确认无引用后清理文件。
 
-Storage 服务的时序 View 默认按所有频率回溯 `5000` 根；任一序列超过 `6000` 根时触发安全重建。
+Storage 服务的时序 View 默认按所有频率回溯 `5000` 根；任一序列超过 `6000`（ceil(1.2 × 5000)）根时触发安全重建。
 昂贵的序列容量扫描默认每个 Storage View 进程、View 和 active index 每小时至多执行一次，首次扫描
 在一小时范围内随机错峰；轻量 View Maintainer 仍按 `maintenance_check_interval` 默认每分钟运行。可在根目录
-`moox.toml` 的 `[storage_view] rebuild_lookback_periods` 统一调整，适用于自动 A/B、启动恢复和手动
-重建。无 frequency 的旧 View 才使用 `storage.view.rebuild_lookback`（默认 `24h`）兜底；若 Source
-历史不足配置根数，构建会保持未完成状态，不会发布一个短历史 View。
+`moox.toml` 的 `[storage_retention] view_rows_per_series` 统一调整，适用于自动 A/B、启动恢复和手动
+重建。回填对每个标的只读一次：DataNode 在每个序列内倒序读到目标根数即跳到下一个序列，耗时只与
+「标的数 × 根数」有关、与历史长度无关。Primary 历史不足配置根数时以现有数据激活，之后由实时事件补齐。
+记录型 View（Bleve）不按根数，整体重建。
 
 ## Agent 处理顺序
 

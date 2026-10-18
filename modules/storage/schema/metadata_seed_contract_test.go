@@ -3,8 +3,10 @@ package schema
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v2"
 )
@@ -14,7 +16,7 @@ type metadataSeedGrainContract struct {
 		SpaceID    string            `yaml:"space_id"`
 		DatasetID  string            `yaml:"dataset_id"`
 		DataKind   string            `yaml:"data_kind"`
-		Freqs      []string          `yaml:"freqs"`
+		Freq       string            `yaml:"freq"`
 		Attributes map[string]string `yaml:"attributes"`
 	} `yaml:"datasets"`
 	DatasetColumns []struct {
@@ -37,66 +39,6 @@ type metadataSeedGrainContract struct {
 		DeviceID string `yaml:"device_id"`
 		Engine   string `yaml:"engine"`
 	} `yaml:"devices"`
-}
-
-func TestBinanceOneMinuteTaskOutputFieldsExistInSeededDatasetAndView(t *testing.T) {
-	root := filepath.Join("..", "..", "..")
-	metadataPath := filepath.Join(root, "config", "setup", "metadata.yaml")
-	metadataRaw, err := os.ReadFile(metadataPath)
-	require.NoError(t, err)
-	var metadata metadataSeedGrainContract
-	require.NoError(t, yaml.Unmarshal(metadataRaw, &metadata))
-
-	var datasetFields, viewFields = map[string]struct{}{}, map[string]struct{}{}
-	for _, column := range metadata.DatasetColumns {
-		if column.SpaceID == "crypto" && column.DatasetID == "dataset_binance_kline_1m" {
-			datasetFields[column.ColumnName] = struct{}{}
-		}
-	}
-	for _, column := range metadata.ViewColumns {
-		if column.SpaceID == "crypto" && column.ViewID == "view_binance_kline_1m" {
-			viewFields[column.ColumnName] = struct{}{}
-		}
-	}
-
-	tasksPath := filepath.Join(root, "config", "setup", "collection-tasks.yaml")
-	tasksRaw, err := os.ReadFile(tasksPath)
-	require.NoError(t, err)
-	var tasks struct {
-		Tasks []struct {
-			SpaceID       string `yaml:"space_id"`
-			DataType      string `yaml:"data_type"`
-			ResultDataset string `yaml:"result_dataset_id"`
-			ResultView    string `yaml:"result_view_id"`
-			CollectParams struct {
-				Provider     string   `yaml:"provider"`
-				MarketType   string   `yaml:"market_type"`
-				Frequency    string   `yaml:"frequency"`
-				OutputFields []string `yaml:"output_fields"`
-			} `yaml:"collect_params"`
-		} `yaml:"tasks"`
-	}
-	require.NoError(t, yaml.Unmarshal(tasksRaw, &tasks))
-
-	seenMarkets := make(map[string]struct{})
-	for _, task := range tasks.Tasks {
-		params := task.CollectParams
-		if task.SpaceID != "crypto" || task.DataType != "kline" || params.Provider != "binance" || params.Frequency != "1m" {
-			continue
-		}
-		if params.MarketType != "spot" && params.MarketType != "swap" {
-			continue
-		}
-		seenMarkets[params.MarketType] = struct{}{}
-		require.Equal(t, "dataset_binance_kline_1m", task.ResultDataset, "%s task Dataset", params.MarketType)
-		require.Equal(t, "view_binance_kline_1m", task.ResultView, "%s task View", params.MarketType)
-		require.NotEmpty(t, params.OutputFields, "%s task output_fields", params.MarketType)
-		for _, field := range params.OutputFields {
-			require.Contains(t, datasetFields, field, "%s output field missing from Dataset", field)
-			require.Contains(t, viewFields, task.ResultDataset+"."+field, "%s output field missing from View", field)
-		}
-	}
-	require.Equal(t, map[string]struct{}{"spot": {}, "swap": {}}, seenMarkets, "1m tasks must share the canonical Dataset and View")
 }
 
 func TestActiveMetadataSeedsUseCanonicalTimeSeriesViewGrain(t *testing.T) {
@@ -128,6 +70,18 @@ func TestActiveMetadataSeedsUseCanonicalTimeSeriesViewGrain(t *testing.T) {
 	}
 }
 
+func TestDefaultSetupSeedTimeSeriesDatasetsDeclareCanonicalFreq(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml"))
+	require.NoError(t, err)
+	var seed metadataSeedGrainContract
+	require.NoError(t, yaml.Unmarshal(raw, &seed))
+	for _, dataset := range seed.Datasets {
+		if dataset.DataKind == "time_series" {
+			require.True(t, frequencypkg.IsCanonical(dataset.Freq), "%s/%s freq %q", dataset.SpaceID, dataset.DatasetID, dataset.Freq)
+		}
+	}
+}
+
 func TestDefaultSetupSeedDeclaresArchiveDevice(t *testing.T) {
 	path := filepath.Join("..", "..", "..", "config", "setup", "metadata.yaml")
 	raw, err := os.ReadFile(path)
@@ -155,23 +109,20 @@ func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {
 		require.NotContains(t, indexes, key, "duplicate Dataset identity")
 		indexes[key] = i
 	}
-	owners := map[string][]string{
-		"stockcn/dataset_stockcn_equity_kline": {"1m"},
-		"stockcn/dataset_stockcn_index_kline":  {"1H", "1d"},
-		"stockcn/dataset_stockcn_bond_kline":   {"1m", "1d"},
-		"stockhk/dataset_stockhk_equity_kline": {"1m", "1d", "1w", "1M"},
-		"stockus/dataset_stockus_equity_kline": {"1m", "1d", "1w", "1M"},
-		"crypto/dataset_binance_kline_1m":      {"1m"},
-		"crypto/dataset_spot_kline_1h":         {"1H"},
-		"crypto/dataset_perpetual_kline_1h":    {"1H"},
+	owners := []string{
+		"stockcn/dataset_stockcn_equity_kline_1m",
+		"stockcn/dataset_stockcn_index_kline_1d",
+		"stockcn/dataset_stockcn_bond_kline_1m",
+		"stockhk/dataset_stockhk_equity_kline_1d",
+		"stockus/dataset_stockus_equity_kline_1d",
 	}
-	for key, freqs := range owners {
+	for _, key := range owners {
 		t.Run(key, func(t *testing.T) {
 			index, found := indexes[key]
 			require.True(t, found, "raw market Dataset is missing")
 			dataset := seed.Datasets[index]
 			require.Equal(t, "time_series", dataset.DataKind)
-			require.Equal(t, freqs, dataset.Freqs)
+			require.True(t, strings.HasSuffix(dataset.DatasetID, "_"+dataset.Freq), "market Dataset ID must end with its freq %q", dataset.Freq)
 			require.Equal(t, "collector", dataset.Attributes["owner_module"])
 			require.Equal(t, "raw_collection", dataset.Attributes["dataset_role"])
 		})

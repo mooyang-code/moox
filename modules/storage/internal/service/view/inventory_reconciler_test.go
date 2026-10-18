@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -284,7 +285,7 @@ func TestInventoryReconcilerKeepsExactRouteOutsideWildcardSpace(t *testing.T) {
 
 func TestDynamicConsumerTemplateTreatsMiscExactRoutesAsDynamic(t *testing.T) {
 	opts := EventConsumerOptions{PartitionConfigs: []EventConsumerOptions{
-		{PartitionID: "kline", Consumer: "storage_view_kline", DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m"}}},
+		{PartitionID: "system_metrics", Consumer: "storage_view_metrics", DatasetRoutes: []DatasetRoute{{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics"}}},
 		{PartitionID: "factor", Consumer: "storage_view_factor", DatasetRoutes: []DatasetRoute{{SpaceID: "crypto", DatasetID: "dataset_factor_binance_kline_1m"}}},
 		{PartitionID: "misc", Consumer: "storage_view_misc", DatasetRoutes: []DatasetRoute{{SpaceID: "stockcn", DatasetID: "stock_kline"}, {SpaceID: "crypto", DatasetID: "*"}}},
 	}}
@@ -292,8 +293,8 @@ func TestDynamicConsumerTemplateTreatsMiscExactRoutesAsDynamic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := exact[datasetRef{spaceID: "crypto", datasetID: "dataset_binance_kline_1m"}]; !ok {
-		t.Fatalf("static kline route missing from exact set: %#v", exact)
+	if _, ok := exact[datasetRef{spaceID: "mooxsys", datasetID: "dataset_mooxsys_service_metrics"}]; !ok {
+		t.Fatalf("static metrics route missing from exact set: %#v", exact)
 	}
 	if _, ok := exact[datasetRef{spaceID: "stockcn", datasetID: "stock_kline"}]; ok {
 		t.Fatalf("misc exact route incorrectly excluded from dynamic set: %#v", exact)
@@ -378,4 +379,36 @@ func newInventoryReconcilerForTest(metadata ViewInventoryClient, primary Dataset
 		bindings: make(map[datasetRef]*dynamicDatasetConsumerBinding),
 		bind:     bind,
 	}
+}
+
+func dynamicDatasetConsumerIdentity(miscDurable string, ref datasetRef) (string, string) {
+	return dynamicDatasetConsumerIdentityForPartition("misc", miscDurable, ref)
+}
+
+func datasetRouteSet(routes []DatasetRoute) map[datasetRef]struct{} {
+	set := make(map[datasetRef]struct{}, len(routes))
+	for _, route := range routes {
+		spaceID := strings.TrimSpace(route.SpaceID)
+		datasetID := strings.TrimSpace(route.DatasetID)
+		if spaceID != "" && datasetID != "" && datasetID != "*" {
+			set[datasetRef{spaceID: spaceID, datasetID: datasetID}] = struct{}{}
+		}
+	}
+	return set
+}
+
+func (r *InventoryReconciler) bindingRefs() []datasetRef {
+	r.reconcileMu.Lock()
+	defer r.reconcileMu.Unlock()
+	refs := make([]datasetRef, 0, len(r.bindings))
+	for ref := range r.bindings {
+		refs = append(refs, ref)
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].spaceID != refs[j].spaceID {
+			return refs[i].spaceID < refs[j].spaceID
+		}
+		return refs[i].datasetID < refs[j].datasetID
+	})
+	return refs
 }

@@ -29,6 +29,10 @@ type ConsumerConfig struct {
 	ReadColumnTimeout  time.Duration
 }
 
+// ackWaitHeartbeats is how many InProgress heartbeats may be missed before a
+// delivery is handed out again.
+const ackWaitHeartbeats = 4
+
 func (cfg *ConsumerConfig) applyDefaults() {
 	if len(cfg.URLs) == 0 {
 		cfg.URLs = []string{"nats://127.0.0.1:4222"}
@@ -112,7 +116,11 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 	if err != nil {
 		return nil, err
 	}
-	ackWait := cfg.PeriodBudgetMax + time.Minute
+	// The runner reports InProgress every InProgressInterval while a period is
+	// queued or computing, which keeps extending the ack deadline however long
+	// the period takes. AckWait therefore only bounds how long a delivery held
+	// by a process that died without releasing it stays stuck.
+	ackWait := ackWaitHeartbeats * cfg.InProgressInterval
 	consumer, err := events.NewConsumer(ctx, client, registry, events.ConsumerConfig{
 		Name: ConsumerName, Event: events.CollectorPeriodCompleted,
 		AckWait: ackWait, MaxDeliver: -1, MaxAckPending: cfg.MaxAckPending,
@@ -130,7 +138,7 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 	runCtx, cancel := context.WithCancel(ctx)
 	c.client, c.consumer, c.handler, c.cancel = client, consumer, handler, cancel
 	c.runner = jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{
-		BatchSize: cfg.MaxAckPending, IndependentBatch: true,
+		BatchSize: cfg.MaxAckPending, Concurrent: true,
 		InProgressInterval: cfg.InProgressInterval,
 		ErrorReporter: jetstream.ErrorReporterFunc(func(err error) {
 			log.ErrorContextf(runCtx, "factor period consumer error: %v", err)
@@ -146,18 +154,6 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 }
 
 func (c *Consumer) Ready() bool { return c != nil && c.ready.Load() }
-
-func (c *Consumer) Status() ConsumerStatus {
-	if c == nil {
-		return ConsumerStatus{}
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return ConsumerStatus{
-		Ready: c.ready.Load(), FilterSubjects: append([]string(nil), c.filters...),
-		FilterRefreshError: c.filterRefreshError,
-	}
-}
 
 func (c *Consumer) CurrentFilterSubjects() []string {
 	if c == nil {

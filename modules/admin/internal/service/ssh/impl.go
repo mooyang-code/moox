@@ -79,6 +79,7 @@ func (s *ServiceImpl) CreateSession(ctx context.Context, hostID int, clientIP, u
 	sessionID := idgen.GenerateID(16)
 	sshConn := &conn.SSHConn{
 		Host:      host,
+		HostKeys:  s.hostDAO,
 		SessionID: sessionID,
 		UserID:    userID,
 	}
@@ -201,26 +202,18 @@ func (s *ServiceImpl) SftpUpload(ctx context.Context, sessionID string, dstPath 
 	}
 
 	var uploaded []string
+	var failed []string
 	for _, file := range files {
-		srcFile, err := file.Open()
-		if err != nil {
-			log.WarnContextf(ctx, "[SSH SFTP] 打开上传文件失败: %v", err)
-			continue
-		}
-		dstFile, err := sftpClient.Create(path.Join(dstPath, file.Filename))
-		if err != nil {
-			srcFile.Close()
-			log.WarnContextf(ctx, "[SSH SFTP] 创建远程文件失败: %v", err)
-			continue
-		}
-		_, err = io.Copy(dstFile, srcFile)
-		srcFile.Close()
-		dstFile.Close()
-		if err != nil {
-			log.WarnContextf(ctx, "[SSH SFTP] 上传文件失败: %v", err)
+		if err := uploadOneFile(ctx, sftpCreator{sftpClient}, dstPath, file); err != nil {
+			log.WarnContextf(ctx, "[SSH SFTP] 上传 %s 失败: %v", file.Filename, err)
+			failed = append(failed, file.Filename)
 			continue
 		}
 		uploaded = append(uploaded, file.Filename)
+	}
+	if len(failed) > 0 {
+		// 部分或全部失败必须让调用方知道：返回已成功的文件名，同时返回错误，前端据此显示失败而不是“上传成功”。
+		return uploaded, fmt.Errorf("以下文件上传失败: %s", strings.Join(failed, ", "))
 	}
 
 	return uploaded, nil
@@ -282,16 +275,6 @@ func (s *ServiceImpl) SftpMkdir(ctx context.Context, sessionID, dirPath string) 
 	return sftpClient.MkdirAll(dirPath)
 }
 
-// ========== 会话管理 ==========
-
-func (s *ServiceImpl) GetOnlineSessions(ctx context.Context) []conn.SessionInfo {
-	return s.sessionMgr.GetAllSessions()
-}
-
-func (s *ServiceImpl) ForceDisconnect(ctx context.Context, sessionID string) error {
-	return s.DisconnectSession(ctx, sessionID)
-}
-
 // ========== 内部工具 ==========
 
 func parsePaths(dirPath string) []map[string]string {
@@ -316,4 +299,34 @@ func parsePaths(dirPath string) []map[string]string {
 		})
 	}
 	return paths
+}
+
+// remoteCreator 是上传需要的远端文件创建能力（*sftp.Client 通过适配器提供），便于在没有 SFTP 服务的测试里注入失败。
+type remoteCreator interface {
+	Create(path string) (io.WriteCloser, error)
+}
+
+type sftpCreator struct{ client *sftp.Client }
+
+func (c sftpCreator) Create(path string) (io.WriteCloser, error) { return c.client.Create(path) }
+
+// uploadOneFile 上传单个文件；写入或关闭远端文件出错都算失败（关闭时才会 flush 的错误也要检查）。
+func uploadOneFile(ctx context.Context, client remoteCreator, dstPath string, file *multipart.FileHeader) error {
+	src, err := file.Open()
+	if err != nil {
+		return fmt.Errorf("打开上传文件: %w", err)
+	}
+	defer src.Close()
+	dst, err := client.Create(path.Join(dstPath, file.Filename))
+	if err != nil {
+		return fmt.Errorf("创建远程文件: %w", err)
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		return fmt.Errorf("写入远程文件: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		return fmt.Errorf("关闭远程文件: %w", err)
+	}
+	return nil
 }

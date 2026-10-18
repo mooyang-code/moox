@@ -10,20 +10,22 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/jobcontext"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // HTTPClient issues HTTPS requests using the platform DNS resolver and TLS SNI.
 type HTTPClient struct {
-	httpClient *http.Client
-	ipMu       sync.Mutex
-	ipClients  map[string]*http.Client
-	ipOrder    []string
+	// ResponseObserver 在每次收到响应（含非 200）后同步调用，用于读取限流相关的响应头。
+	ResponseObserver func(domain string, status int, header http.Header)
+	httpClient       *http.Client
+	ipMu             sync.Mutex
+	ipClients        map[string]*http.Client
+	ipOrder          []string
 }
 
 const maxIPClients = 32
@@ -36,9 +38,22 @@ const defaultRequestTimeout = 5 * time.Second
 const hostnameFallbackReserve = time.Second
 
 // StatusError reports a non-success HTTP response.
-type StatusError struct{ StatusCode int }
+type StatusError struct {
+	StatusCode int
+	// RetryAfter 是响应头 Retry-After 给出的等待时间，没有则为 0。
+	RetryAfter time.Duration
+}
 
 func (e *StatusError) Error() string { return fmt.Sprintf("HTTP status %d", e.StatusCode) }
+
+// retryAfterOf 解析 Retry-After（秒数）。
+func retryAfterOf(header http.Header) time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(header.Get("Retry-After")))
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
 
 func NewHTTPClient(base ...*http.Client) *HTTPClient {
 	if len(base) > 0 && base[0] != nil {
@@ -53,16 +68,6 @@ func NewHTTPClient(base ...*http.Client) *HTTPClient {
 			IdleConnTimeout:     90 * time.Second,
 		},
 	}}
-}
-
-// NewHTTPClientWithTimeout keeps the standard transport and route-probing
-// behavior while applying a caller-owned per-request timeout.
-func NewHTTPClientWithTimeout(timeout time.Duration) *HTTPClient {
-	client := NewHTTPClient()
-	if timeout > 0 {
-		client.httpClient.Timeout = timeout
-	}
-	return client
 }
 
 func (c *HTTPClient) Get(ctx context.Context, domain, path string, query url.Values, result interface{}) error {
@@ -107,7 +112,8 @@ func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string
 		ctx = context.Background()
 	}
 	candidates := uniqueIPs(ips)
-	if skipControlPlaneIPs(domain) {
+	proxy, proxied := c.httpClient.Transport.(*EgressTransport)
+	if skipControlPlaneIPs(domain) || proxied && proxy.domains.Allows(domain) {
 		candidates = nil
 	}
 	ipDeadline, hasIPDeadline := ipAttemptDeadline(ctx)
@@ -129,7 +135,10 @@ func (c *HTTPClient) getWithIPs(ctx context.Context, domain string, ips []string
 		}
 		log.WarnContextf(ctx, "collector_http_resolved_ip_failed domain=%s ip=%s dns_source=%s dns_hash=%s dns_route_age_seconds=%s error=%v", domain, ip, source, dnsHash(), dnsRouteAge(), err)
 	}
-	log.InfoContextf(ctx, "collector_http_resolved_ip_fallback domain=%s ips=%d dns_source=system dns_snapshot_candidates=%d dns_hash=%s dns_route_age_seconds=%s", domain, len(candidates), len(candidates), dnsHash(), dnsRouteAge())
+	// 没有 DNS 快照时直接走系统解析是常态，不记日志；有快照却全部失败才值得记录。
+	if len(candidates) > 0 {
+		log.InfoContextf(ctx, "collector_http_resolved_ip_fallback domain=%s ips=%d dns_source=system dns_snapshot_candidates=%d dns_hash=%s dns_route_age_seconds=%s", domain, len(candidates), len(candidates), dnsHash(), dnsRouteAge())
+	}
 	return c.getWithClient(ctx, c.httpClient, domain, path, query, consume)
 }
 
@@ -213,7 +222,11 @@ func (c *HTTPClient) clientForIP(ip string) *http.Client {
 	if c == nil || c.httpClient == nil {
 		return nil
 	}
-	base, ok := c.httpClient.Transport.(*http.Transport)
+	roundTripper := c.httpClient.Transport
+	if proxy, ok := roundTripper.(*EgressTransport); ok {
+		roundTripper = proxy.direct
+	}
+	base, ok := roundTripper.(*http.Transport)
 	if !ok || base == nil {
 		return nil
 	}
@@ -281,16 +294,25 @@ func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, dom
 		return fmt.Errorf("请求 %s 失败: %w", domain, err)
 	}
 	defer resp.Body.Close()
+	if c.ResponseObserver != nil {
+		c.ResponseObserver(domain, resp.StatusCode, resp.Header)
+	}
 	if resp.StatusCode != http.StatusOK {
-		log.WarnContextf(ctx, "collector_http_failed domain=%s status=%d duration_ms=%d job_item_id=%q", domain, resp.StatusCode, time.Since(started).Milliseconds(), jobcontext.JobItemID(ctx))
-		return &StatusError{StatusCode: resp.StatusCode}
+		log.WarnContextf(ctx, "collector_http_failed domain=%s status=%d duration_ms=%d", domain, resp.StatusCode, time.Since(started).Milliseconds())
+		return &StatusError{StatusCode: resp.StatusCode, RetryAfter: retryAfterOf(resp.Header)}
 	}
 	if err := consume(resp.Body); err != nil {
 		return fmt.Errorf("JSON 解析失败: %w", err)
 	}
-	log.InfoContextf(ctx, "collector_http_completed domain=%s status=%d duration_ms=%d job_item_id=%q", domain, resp.StatusCode, time.Since(started).Milliseconds(), jobcontext.JobItemID(ctx))
+	// 正常请求只有几十毫秒，逐条记录只会淹没日志；只记录偏慢的请求，用于定位行情源的延迟尖峰。
+	if elapsed := time.Since(started); elapsed >= slowRequestLogThreshold {
+		log.InfoContextf(ctx, "collector_http_completed domain=%s status=%d duration_ms=%d", domain, resp.StatusCode, elapsed.Milliseconds())
+	}
 	return nil
 }
+
+// slowRequestLogThreshold 是需要记录成功请求耗时的下限。
+const slowRequestLogThreshold = 500 * time.Millisecond
 
 func uniqueIPs(ips []string) []string {
 	seen := make(map[string]struct{}, len(ips))

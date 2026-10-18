@@ -20,7 +20,7 @@ func TestFeishuSenderSendsInteractiveMessage(t *testing.T) {
 		}
 		content := payload["content"].(map[string]any)
 		text, _ := content["text"].(string)
-		if !strings.Contains(text, "告警标识: test-key") || !strings.Contains(text, "agent_id=AB12") || !strings.Contains(text, "[critical]") {
+		if !strings.Contains(text, "告警标识: test-key") || !strings.Contains(text, "agent_id=AB12") || !strings.Contains(text, "[严重]") {
 			t.Fatalf("text lost notification metadata: %q", text)
 		}
 		w.Header().Set("Content-Type", "application/json")

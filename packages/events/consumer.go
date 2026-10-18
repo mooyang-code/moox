@@ -56,12 +56,6 @@ type ConsumerConfig struct {
 	DeliverDecodeErrors bool
 }
 
-type SubjectConsumerConfig struct {
-	ConsumerConfig
-	SpaceID   string
-	SubjectID string
-}
-
 // SpaceConsumerConfig binds every subject route for one event family and one
 // space. It deliberately does not consume the same event from another space.
 type SpaceConsumerConfig struct {
@@ -83,49 +77,6 @@ func NewSpaceConsumer(ctx context.Context, client *jetstream.Client, registry *R
 		return nil, err
 	}
 	return newConsumer(ctx, client, registry, cfg.ConsumerConfig, cfg.Event.Stream(), []string{filter})
-}
-
-func EnsureSubjectConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg SubjectConsumerConfig) (*jetstream.ConsumerInfo, error) {
-	filter, err := subjectConsumerFilter(registry, cfg)
-	if err != nil {
-		return nil, err
-	}
-	if client == nil {
-		return nil, fmt.Errorf("event consumer client is nil")
-	}
-	return client.EnsureConsumer(ctx, jetstreamConsumerConfig(cfg.ConsumerConfig, cfg.Event.Stream(), []string{filter}))
-}
-
-func BindSubjectConsumer(ctx context.Context, client *jetstream.Client, registry *Registry, cfg SubjectConsumerConfig) (*Consumer, error) {
-	filter, err := subjectConsumerFilter(registry, cfg)
-	if err != nil {
-		return nil, err
-	}
-	if client == nil {
-		return nil, fmt.Errorf("event consumer client is nil")
-	}
-	consumer, err := client.BindConsumer(ctx, jetstreamConsumerConfig(cfg.ConsumerConfig, cfg.Event.Stream(), []string{filter}))
-	if err != nil {
-		return nil, err
-	}
-	return &Consumer{consumer: consumer, registry: registry}, nil
-}
-
-func subjectConsumerFilter(registry *Registry, cfg SubjectConsumerConfig) (string, error) {
-	if strings.TrimSpace(cfg.SpaceID) == "" {
-		return "", fmt.Errorf("event subject consumer space_id is required")
-	}
-	if strings.TrimSpace(cfg.SubjectID) == "" {
-		return "", fmt.Errorf("event subject consumer subject_id is required")
-	}
-	if err := registry.Validate(); err != nil {
-		return "", err
-	}
-	event, err := singleConsumerEvent(cfg.ConsumerConfig)
-	if err != nil {
-		return "", err
-	}
-	return registry.RenderSubject(event, cfg.SpaceID, cfg.SubjectID)
 }
 
 func spaceConsumerFilter(registry *Registry, cfg SpaceConsumerConfig) (string, error) {

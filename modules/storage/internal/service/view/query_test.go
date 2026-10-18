@@ -126,7 +126,7 @@ func TestLiveIndexWriteUsesDedicatedBudgetAfterDeliveryDeadline(t *testing.T) {
 	key := viewRef{spaceID: "space", viewID: "prices"}
 	svc.schemas["prices-index"] = viewindex.ViewIndexSchema{
 		SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market",
-		Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}},
+		Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}},
 	}
 	svc.indexView = map[string]viewRef{"prices-index": key}
 	svc.byData = map[datasetRef]map[string]struct{}{
@@ -165,7 +165,7 @@ func TestLiveWritePreservesRowInReplacementWhenExistingActiveIsUnwritable(t *tes
 	svc.indexEngine["prices-next"] = "query-test"
 	svc.schemas["prices-index"] = viewindex.ViewIndexSchema{
 		SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market",
-		Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}},
+		Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}},
 	}
 	svc.schemas["prices-next"] = svc.schemas["prices-index"]
 	svc.indexView = map[string]viewRef{"prices-index": key, "prices-next": key}
@@ -202,18 +202,21 @@ func TestActiveViewDatasetFreshnessTracksSubjectsAndDoesNotRollback(t *testing.T
 	rows := []*pb.RowFieldUpsert{
 		viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:04:00Z"),
 		viewFreshnessRow("BTC-USDT", "1m", "venue:binance", newer),
+		viewFreshnessRow("SOL-USDT", "1m", "venue:binance", "2026-09-08T09:50:00Z"),
 		viewFreshnessRow("ETH-USDT", "5m", "", newer),
 	}
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", rows); err != nil {
 		t.Fatal(err)
 	}
-	assertViewDatasetMetric(t, registry, "BTC-USDT", "1m", "venue:binance", newer)
-	assertViewDatasetMetric(t, registry, "ETH-USDT", "5m", "default", newer)
+	// SOL trails the View's latest 1m bar by more than one bar plus the lag
+	// tolerance; BTC is current.
+	assertViewSubjects(t, registry, "1m", 2, map[string]string{"SOL-USDT": "2026-09-08T09:50:00Z"})
+	assertViewSubjects(t, registry, "5m", 1, map[string]string{})
 
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:03:00Z")}); err != nil {
 		t.Fatal(err)
 	}
-	assertViewDatasetMetric(t, registry, "BTC-USDT", "1m", "venue:binance", newer)
+	assertViewSubjects(t, registry, "1m", 2, map[string]string{"SOL-USDT": "2026-09-08T09:50:00Z"})
 }
 
 func TestViewDatasetFreshnessIgnoresReplacementFailuresAndMissingIdentity(t *testing.T) {
@@ -228,30 +231,27 @@ func TestViewDatasetFreshnessIgnoresReplacementFailuresAndMissingIdentity(t *tes
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
 		t.Fatal("replacement write unexpectedly succeeded")
 	}
-	assertNoViewDatasetMetric(t, registry)
-	assertNoViewDatasetOutputMetric(t, registry)
+	assertNoViewSubjects(t, registry)
 
-	engine.writeErrs = nil
 	engine.writeErrs = map[string]error{"prices-index": errors.New("active failed")}
 	configureDatasetFreshnessView(svc, metrics, "prices-index", "")
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("BTC-USDT", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err == nil {
 		t.Fatal("active write unexpectedly succeeded")
 	}
-	assertNoViewDatasetMetric(t, registry)
-	assertNoViewDatasetOutputMetric(t, registry)
+	assertNoViewSubjects(t, registry)
 
 	engine.writeErrs = nil
 	configureDatasetFreshnessView(svc, metrics, "prices-index", "")
 	if err := svc.applyDatasetEvent(context.Background(), "space", "market_prices", []*pb.RowFieldUpsert{viewFreshnessRow("", "1m", "venue:binance", "2026-09-08T10:05:00Z")}); err != nil {
 		t.Fatal(err)
 	}
-	assertNoEmptySubjectDatasetMetric(t, registry)
+	assertNoViewSubjects(t, registry)
 }
 
 func configureDatasetFreshnessView(svc *Service, metrics *observability.ViewMetrics, indexID, nextID string) {
 	key := viewRef{spaceID: "space", viewID: "prices_view"}
 	svc.metrics = metrics
-	svc.catalogViews = map[viewRef]*pb.View{key: {SpaceId: "space", ViewId: "prices_view", FilterJson: `{"freq":"1m"}`}}
+	svc.catalogViews = map[viewRef]*pb.View{key: {SpaceId: "space", ViewId: "prices_view", Freq: "1m"}}
 	svc.views[key] = &viewRuntime{active: "prices-index", next: nextID, status: "active"}
 	if indexID == nextID {
 		svc.views[key].active = ""
@@ -259,7 +259,7 @@ func configureDatasetFreshnessView(svc *Service, metrics *observability.ViewMetr
 	}
 	svc.indexView = map[string]viewRef{"prices-index": key, indexID: key}
 	svc.indexEngine[indexID] = "query-test"
-	svc.schemas[indexID] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices_view", PrimaryDatasetID: "market_prices", Columns: []*pb.ViewColumn{{OriginId: "market_prices.close", ColumnName: "close"}}}
+	svc.schemas[indexID] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices_view", PrimaryDatasetID: "market_prices", Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}}}
 	svc.byData = map[datasetRef]map[string]struct{}{{spaceID: "space", datasetID: "market_prices"}: {indexID: {}}}
 }
 
@@ -270,68 +270,44 @@ func viewFreshnessRow(subject, frequency, seriesTag, dataTime string) *pb.RowFie
 	}
 }
 
-func assertViewDatasetMetric(t *testing.T, registry *prometheus.Registry, subject, frequency, seriesTag, dataTime string) {
+// assertViewSubjects checks the prices_view summary for one frequency: the
+// tracked subject count and the named lagging subjects with their last bar.
+func assertViewSubjects(t *testing.T, registry *prometheus.Registry, frequency string, subjects int, lagging map[string]string) {
 	t.Helper()
-	want := map[string]string{"space_id": "space", "view_id": "prices_view", "dataset_id": "market_prices", "subject_id": subject, "freq": frequency, "series_tag": seriesTag}
-	families, err := registry.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, family := range families {
-		if family.GetName() != "moox_storage_view_dataset_output_last_data_time_seconds" {
-			continue
-		}
+	scope := map[string]string{"space_id": "space", "view_id": "prices_view", "dataset_id": "market_prices", "freq": frequency}
+	gotSubjects, gotLagging := -1.0, -1.0
+	gotNames := map[string]string{}
+	for _, family := range mustGather(t, registry) {
 		for _, metric := range family.GetMetric() {
 			labels := make(map[string]string, len(metric.GetLabel()))
 			for _, label := range metric.GetLabel() {
 				labels[label.GetName()] = label.GetValue()
 			}
-			if reflect.DeepEqual(labels, want) {
-				got := time.Unix(int64(metric.GetGauge().GetValue()), 0).UTC().Format(time.RFC3339)
-				if got != dataTime {
-					t.Fatalf("subject=%s freshness=%s, want %s", subject, got, dataTime)
-				}
-				return
+			subject := labels["subject_id"]
+			delete(labels, "subject_id")
+			if !reflect.DeepEqual(labels, scope) {
+				continue
+			}
+			switch family.GetName() {
+			case "moox_storage_view_output_subjects":
+				gotSubjects = metric.GetGauge().GetValue()
+			case "moox_storage_view_output_lagging_subjects":
+				gotLagging = metric.GetGauge().GetValue()
+			case "moox_storage_view_output_lagging_subject_data_time_seconds":
+				gotNames[subject] = time.Unix(int64(metric.GetGauge().GetValue()), 0).UTC().Format(time.RFC3339)
 			}
 		}
 	}
-	t.Fatalf("view dataset metric labels=%v not found", want)
-}
-
-func assertNoViewDatasetMetric(t *testing.T, registry *prometheus.Registry) {
-	t.Helper()
-	families, err := registry.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, family := range families {
-		if family.GetName() == "moox_storage_view_dataset_output_last_data_time_seconds" && len(family.GetMetric()) != 0 {
-			t.Fatalf("unexpected view dataset metrics: %v", family)
-		}
+	if gotSubjects != float64(subjects) || gotLagging != float64(len(lagging)) || !reflect.DeepEqual(gotNames, lagging) {
+		t.Fatalf("freq=%s subjects=%v lagging=%v names=%v, want %d %d %v", frequency, gotSubjects, gotLagging, gotNames, subjects, len(lagging), lagging)
 	}
 }
 
-func assertNoViewDatasetOutputMetric(t *testing.T, registry *prometheus.Registry) {
+func assertNoViewSubjects(t *testing.T, registry *prometheus.Registry) {
 	t.Helper()
 	for _, family := range mustGather(t, registry) {
-		if family.GetName() == "moox_storage_view_dataset_output_last_data_time_seconds" && len(family.GetMetric()) != 0 {
-			t.Fatalf("unexpected view dataset output metrics: %v", family)
-		}
-	}
-}
-
-func assertNoEmptySubjectDatasetMetric(t *testing.T, registry *prometheus.Registry) {
-	t.Helper()
-	for _, family := range mustGather(t, registry) {
-		if family.GetName() != "moox_storage_view_dataset_output_last_data_time_seconds" {
-			continue
-		}
-		for _, metric := range family.GetMetric() {
-			for _, label := range metric.GetLabel() {
-				if label.GetName() == "subject_id" && label.GetValue() == "" {
-					t.Fatalf("unexpected empty subject metric: %v", family)
-				}
-			}
+		if family.GetName() == "moox_storage_view_output_subjects" && len(family.GetMetric()) != 0 {
+			t.Fatalf("unexpected view subject summary: %v", family)
 		}
 	}
 }
@@ -353,7 +329,7 @@ func TestReplacementFailurePersistenceRetriesBeforeAcknowledgingRedelivery(t *te
 	svc.views[key] = &viewRuntime{}
 	svc.indexView = map[string]viewRef{"prices-a": key, "prices-b": key}
 	svc.indexEngine = map[string]string{"prices-a": "query-test", "prices-b": "query-test"}
-	svc.schemas["prices-a"] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market", Columns: []*pb.ViewColumn{{OriginId: "market.close", ColumnName: "close"}}}
+	svc.schemas["prices-a"] = viewindex.ViewIndexSchema{SpaceID: "space", ViewID: "prices", PrimaryDatasetID: "market", Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}}}
 	svc.schemas["prices-b"] = svc.schemas["prices-a"]
 	svc.byData = map[datasetRef]map[string]struct{}{
 		{spaceID: "space", datasetID: "market"}: {"prices-a": {}, "prices-b": {}},
@@ -521,7 +497,7 @@ func TestQueryTimeSeriesRowsCompletenessRequiresRowsStatsCoverageAndActiveView(t
 			if rsp.GetComplete() != tc.complete {
 				t.Fatalf("complete=%v want=%v rsp=%v", rsp.GetComplete(), tc.complete, rsp)
 			}
-			if tc.name == "valid coverage" && (rsp.GetServedIndexedFrom() != validStats.IndexedFrom || rsp.GetServedIndexedTo() != validStats.IndexedTo) {
+			if tc.name == "valid coverage" && (rsp.GetMinDataTime() != validStats.IndexedFrom || rsp.GetMaxDataTime() != validStats.IndexedTo) {
 				t.Fatalf("coverage fields not returned: %v", rsp)
 			}
 		})
@@ -532,7 +508,7 @@ func TestQueryTimeSeriesRowsRejectsActiveIndexMismatchBeforeQuery(t *testing.T) 
 	engine := &queryEngine{}
 	svc, auth := queryTestService(engine, true)
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: "space", ViewId: "prices", ExpectedActiveIndexId: "prices-old",
+		AuthInfo: auth, SpaceId: "space", ViewId: "prices", Pin: &pb.IndexVersion{IndexId: "prices-old"},
 		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
@@ -549,7 +525,7 @@ func TestQueryTimeSeriesRowsRejectsInPlaceRevisionMismatch(t *testing.T) {
 	svc, auth := queryTestService(engine, true)
 	svc.indexRevision = map[string]uint64{"prices-index": 7}
 	rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: "space", ViewId: "prices", ExpectedActiveIndexId: "prices-index", ExpectedActiveIndexRevision: 6,
+		AuthInfo: auth, SpaceId: "space", ViewId: "prices", Pin: &pb.IndexVersion{IndexId: "prices-index", Revision: 6},
 		Selectors: []*pb.TimeSeriesSelector{{SpaceId: "space", DatasetId: "market", SubjectId: "BTC-USDT", Freq: "1m"}},
 		TimeRange: &pb.TimeRange{StartTime: "2026-07-29T00:00:00Z", EndTime: "2026-07-29T00:01:00Z"},
 	})
@@ -584,7 +560,7 @@ func TestQueryTimeSeriesRowsUsesRuntimeStatsForNoTotal(t *testing.T) {
 	if engine.statCalls != 0 {
 		t.Fatalf("total_mode=NONE called Stat %d times", engine.statCalls)
 	}
-	if !rsp.GetComplete() || rsp.GetServedIndexedTo() != stats.IndexedTo {
+	if !rsp.GetComplete() || rsp.GetMaxDataTime() != stats.IndexedTo {
 		t.Fatalf("runtime stats were not returned: %v", rsp)
 	}
 }
@@ -613,7 +589,7 @@ func TestQueryTimeSeriesRowsRefreshesStatsWhenCompletenessIsRequested(t *testing
 	if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("rsp=%v err=%v", rsp, err)
 	}
-	if engine.statCalls != 1 || rsp.GetComplete() || rsp.GetServedIndexedTo() != "" {
+	if engine.statCalls != 1 || rsp.GetComplete() || rsp.GetMaxDataTime() != "" {
 		t.Fatalf("completeness query used stale runtime stats: %v", rsp)
 	}
 }
@@ -745,4 +721,46 @@ func stringPointer(value string) *string { return &value }
 func sameOptionalString(left, right *string) bool {
 	return (left == nil && right == nil) ||
 		(left != nil && right != nil && reflect.DeepEqual(*left, *right))
+}
+
+// 策略用“只带时间范围、不命中任何行”的查询读取覆盖范围与每序列保留根数：TotalMode=NONE 只返回已缓存的统计，
+// FORCE_EXACT 现算并缓存，之后的 NONE 查询也能拿到。
+func TestQueryTimeSeriesRowsServesCoverageProbe(t *testing.T) {
+	engine := &queryEngine{stats: viewindex.ViewIndexStats{Exists: true, EntryCount: 1, IndexedFrom: "2026-07-29T00:00:00Z", IndexedTo: "2026-07-29T00:01:00Z", RowsPerSeries: 5000}}
+	svc, auth := queryTestService(engine, true)
+	svc.seriesBars = 5000
+	probe := func(mode pb.TotalMode) *pb.QueryTimeSeriesRowsRsp {
+		t.Helper()
+		rsp, err := svc.QueryTimeSeriesRows(context.Background(), &pb.QueryTimeSeriesRowsReq{
+			AuthInfo: auth, SpaceId: "space", ViewId: "prices", Limit: 1, TotalMode: mode,
+			TimeRange: &pb.TimeRange{StartTime: "1970-01-01T00:00:00Z", EndTime: "1970-01-01T00:00:00.000000001Z"},
+		})
+		if err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
+			t.Fatalf("rsp=%v err=%v", rsp, err)
+		}
+		return rsp
+	}
+	if rsp := probe(pb.TotalMode_NONE); rsp.GetMinDataTime() != "" || rsp.GetRetainedRowsPerSeries() != 0 {
+		t.Fatalf("统计未缓存时 NONE 不应现算覆盖范围，保留行数为未知(0)：%v", rsp)
+	}
+	if rsp := probe(pb.TotalMode_FORCE_EXACT); rsp.GetMinDataTime() != "2026-07-29T00:00:00Z" || rsp.GetMaxDataTime() != "2026-07-29T00:01:00Z" || rsp.GetRetainedRowsPerSeries() != 5000 {
+		t.Fatalf("FORCE_EXACT 应现算覆盖范围与保留行数：%v", rsp)
+	}
+	if rsp := probe(pb.TotalMode_NONE); rsp.GetMinDataTime() != "2026-07-29T00:00:00Z" || rsp.GetRetainedRowsPerSeries() != 5000 {
+		t.Fatalf("现算后的统计应被缓存：%v", rsp)
+	}
+	// 调小配置立即生效；调大配置在索引重建之前不会提高对外承诺；旧索引（没有记录）为未知。
+	svc.seriesBars = 3000
+	if rsp := probe(pb.TotalMode_NONE); rsp.GetRetainedRowsPerSeries() != 3000 {
+		t.Fatalf("调小配置应立即生效：%v", rsp)
+	}
+	svc.seriesBars = 8000
+	if rsp := probe(pb.TotalMode_NONE); rsp.GetRetainedRowsPerSeries() != 5000 {
+		t.Fatalf("调大配置在索引重建前不应提高保留行数：%v", rsp)
+	}
+	engine.stats.RowsPerSeries = 0
+	svc.cacheActiveIndexStats(svc.views[viewRef{spaceID: "space", viewID: "prices"}], "prices-index", engine.stats)
+	if rsp := probe(pb.TotalMode_NONE); rsp.GetRetainedRowsPerSeries() != 0 {
+		t.Fatalf("旧索引没有记录保留行数时应为未知：%v", rsp)
+	}
 }

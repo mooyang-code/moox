@@ -1,7 +1,36 @@
 import type { CollectorTask, CollectionTaskPayload } from "@/api/collector";
+import { normalizeFrequency } from "@/utils/frequency";
 
 export type CollectionTaskDataType = "kline" | "kline_resample";
-export type CollectionTaskMarket = "spot" | "swap";
+// K 线采集结果后端（taskresult.ensureColumns 的时序数据集）支持的全部输出字段；字段目录里的其他字段选了会被拒绝。
+export const KLINE_OUTPUT_FIELD_IDS: ReadonlySet<string> = new Set([
+  "open",
+  "high",
+  "low",
+  "close",
+  "volume",
+  "quote_volume",
+  "trade_num",
+  "amount",
+  "instrument_name",
+  "provider_id",
+  "source_id",
+  "provider_symbol",
+  "volume_unit",
+  "amount_unit",
+  "trade_date",
+  "close_time",
+  "provider_timestamp",
+  "fetched_at",
+  "request_id",
+  "route_id",
+  "route_rank",
+  "source_provider",
+  "quality_status",
+  "amount_quality"
+]);
+
+export type CollectionTaskMarket = "spot" | "swap" | "equity";
 
 export interface CollectionSourceOption {
   source_id: string;
@@ -9,8 +38,8 @@ export interface CollectionSourceOption {
   data_source_id: string;
   data_kind: string | number;
   attributes?: Record<string, string>;
-  freqs?: string[];
-  keep_duration?: string;
+  freq?: string;
+  retention?: string;
 }
 
 export interface CollectionTaskInput {
@@ -236,12 +265,7 @@ export function collectionSourceMatches(
   if (!expectedKinds.includes(source.data_kind)) return false;
   if (market && source.attributes?.market_type?.toLowerCase() !== market.toLowerCase()) return false;
   if (normalizedType === "kline_resample" && source.attributes?.dataset_role === "kline_resample_result") return false;
-  if (frequency) {
-    const requested = normalizeStorageFrequency(frequency);
-    if (!requested) return false;
-    const supported = (source.freqs || []).map(normalizeStorageFrequency).filter((value): value is string => Boolean(value));
-    if (!supported.includes(requested)) return false;
-  }
+  if (frequency && normalizeFrequency(source.freq || "") !== normalizeFrequency(frequency)) return false;
   return true;
 }
 
@@ -250,36 +274,8 @@ function normalizeDataType(value: string): CollectionTaskDataType {
   return "kline";
 }
 
-function normalizeMarket(value: string): CollectionTaskMarket {
-  return value === "swap" ? "swap" : "spot";
-}
-
-function normalizeStorageFrequency(value: string): string | undefined {
-  const match = value.trim().match(/^(\d+)([smhdwHDWMyY])$/);
-  if (!match || Number(match[1]) <= 0) return undefined;
-  const count = match[1];
-  switch (match[2]) {
-    case "s":
-      return `${count}s`;
-    case "m":
-      return `${count}m`;
-    case "h":
-    case "H":
-      return `${count}H`;
-    case "d":
-    case "D":
-      return `${count}D`;
-    case "w":
-    case "W":
-      return `${count}W`;
-    case "M":
-      return `${count}M`;
-    case "y":
-    case "Y":
-      return `${count}Y`;
-    default:
-      return undefined;
-  }
+export function normalizeMarket(value: string): CollectionTaskMarket {
+  return value === "swap" || value === "equity" ? value : "spot";
 }
 
 function normalizeResult(value: unknown): CollectorTask["result"] | undefined {
@@ -329,4 +325,54 @@ function normalizeSubjectTags(tags?: string[]): string[] {
 
 function stringArrayValue(value: unknown): string[] {
   return Array.isArray(value) ? value.map(item => stringValue(item)).filter(Boolean) : [];
+}
+
+export type CollectionTaskResultLabel = "结果可用" | "结果准备中" | "结果异常";
+
+/**
+ * Result label for a task. The task list does not inspect Storage per task, so
+ * it reports result status "unknown"; the label then follows the Collector's
+ * own preparation state, where "ready" means the result is provisioned and
+ * active. Task details carry the inspected Storage status.
+ */
+export function collectionTaskResultLabel(
+  task: Pick<CollectionTaskRecord, "prepare_state" | "last_error" | "result">
+): CollectionTaskResultLabel {
+  const status = String(task.result?.status || "").toLowerCase();
+  const prepareState = String(task.prepare_state || "").toLowerCase();
+  if (status === "error" || prepareState === "error" || task.last_error) return "结果异常";
+  if (!task.result?.view_id) return "结果准备中";
+  if (["active", "ready", "succeeded"].includes(status)) return "结果可用";
+  if (status === "unknown" && prepareState === "ready") return "结果可用";
+  return "结果准备中";
+}
+
+/** Rows whose result status the list left uninspected. */
+export function tasksNeedingResultInspection(tasks: CollectionTaskRecord[]): CollectionTaskRecord[] {
+  return tasks.filter(task => task.result?.view_id && String(task.result.status || "").toLowerCase() === "unknown");
+}
+
+/**
+ * Inspects the live result status of a page of tasks with bounded
+ * concurrency. Each detail is applied as soon as it arrives; a failed lookup
+ * leaves that row unchanged.
+ */
+export async function inspectCollectionTaskResults(
+  tasks: CollectionTaskRecord[],
+  fetchDetail: (task: CollectionTaskRecord) => Promise<CollectionTaskRecord | undefined>,
+  apply: (detail: CollectionTaskRecord) => void,
+  concurrency = 4
+): Promise<void> {
+  const queue = tasksNeedingResultInspection(tasks);
+  const worker = async () => {
+    for (let task = queue.shift(); task; task = queue.shift()) {
+      try {
+        const detail = await fetchDetail(task);
+        if (detail) apply(detail);
+      } catch {
+        // Keep the preparation-state label for this row.
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(concurrency, 1), queue.length) }, worker));
 }

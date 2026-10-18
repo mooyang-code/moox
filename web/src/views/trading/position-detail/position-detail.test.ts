@@ -11,7 +11,8 @@ const mocks = vi.hoisted(() => ({
   syncTradingAccount: vi.fn(),
   routerReplace: vi.fn(),
   routerPush: vi.fn(),
-  routeQuery: { trading_account_id: "ta-demo-1" } as Record<string, unknown>
+  routeQuery: { trading_account_id: "ta-demo-1" } as Record<string, unknown>,
+  spaceState: undefined as { selectedSpaceId: string } | undefined
 }));
 
 vi.mock("@/api/trade", async () => {
@@ -23,6 +24,12 @@ vi.mock("@/api/trade", async () => {
     listPositions: mocks.listPositions,
     syncTradingAccount: mocks.syncTradingAccount
   };
+});
+vi.mock("@/store/modules/space", async () => {
+  const { reactive } = await import("vue");
+  const state = reactive({ selectedSpaceId: "space-1" });
+  mocks.spaceState = state;
+  return { useSpaceStore: () => state };
 });
 vi.mock("vue-router", () => ({
   useRouter: () => ({ replace: mocks.routerReplace, push: mocks.routerPush }),
@@ -97,6 +104,7 @@ describe("持仓页面", () => {
     mocks.routerReplace.mockReset();
     mocks.routerPush.mockReset();
     mocks.routeQuery = { trading_account_id: "ta-demo-1" };
+    if (mocks.spaceState) mocks.spaceState.selectedSpaceId = "space-1";
   });
 
   it("renders an inline filter bar and keeps action/filter controls in the page structure", () => {
@@ -142,5 +150,44 @@ describe("持仓页面", () => {
     expect(wrapper.text()).toContain("执行账户加载失败，请检查交易服务后重试。");
     const retryButton = wrapper.findAll("button").find(button => button.text().includes("重新加载"));
     expect(retryButton).toBeDefined();
+  });
+
+  it("clears the old Space account and reloads accounts when the Space switches", async () => {
+    const wrapper = mount(PositionDetail, {
+      global: { plugins: [ArcoVue], stubs: { "icon-refresh": true, "icon-sync": true, "icon-search": true } }
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain("ETH-USDT-SPOT");
+    const accountCalls = mocks.listTradingAccounts.mock.calls.length;
+    mocks.listTradingAccounts.mockResolvedValue({ accounts: [] });
+    mocks.spaceState!.selectedSpaceId = "space-2";
+    await flushPromises();
+    expect(mocks.listTradingAccounts.mock.calls.length).toBeGreaterThan(accountCalls);
+    expect(mocks.routerReplace).toHaveBeenCalledWith({ query: { trading_account_id: undefined } });
+    expect(wrapper.text()).not.toContain("ETH-USDT-SPOT");
+  });
+
+  it("ignores a sync result that returns after the Space switched", async () => {
+    let finishSync!: (value: { positions_updated: number }) => void;
+    mocks.syncTradingAccount.mockReset().mockReturnValue(
+      new Promise(resolve => {
+        finishSync = resolve;
+      })
+    );
+    const wrapper = mount(PositionDetail, {
+      global: { plugins: [ArcoVue], stubs: { "icon-refresh": true, "icon-sync": true, "icon-search": true } }
+    });
+    await flushPromises();
+    const syncButton = wrapper.findAll("button").find(button => button.text().includes("同步"));
+    expect(syncButton).toBeDefined();
+    await syncButton?.trigger("click");
+    mocks.spaceState!.selectedSpaceId = "space-2";
+    await flushPromises();
+    const accountCalls = mocks.listTradingAccounts.mock.calls.length;
+    const holdingCalls = mocks.listHoldings.mock.calls.length;
+    finishSync({ positions_updated: 3 });
+    await flushPromises();
+    expect(mocks.listTradingAccounts.mock.calls.length).toBe(accountCalls);
+    expect(mocks.listHoldings.mock.calls.length).toBe(holdingCalls);
   });
 });

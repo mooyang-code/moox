@@ -20,7 +20,6 @@ import (
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
-	"github.com/mooyang-code/moox/packages/observabilitypb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -101,8 +100,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 			_, commitErr := messageStore.CommitIngest(routeCtx, message, report, samples)
 			return commitErr
 		},
-		Host:   func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error { return nil },
-		Health: func(context.Context, *eventpb.EventMessage, *observabilitypb.HealthCheckReport) error { return nil },
+		Host: func(context.Context, *eventpb.EventMessage, *hostmetricpb.HostMetric) error { return nil },
 	}
 	consumer, err := observabilityconsumer.NewConsumer(ctx, eventClient, registry, observabilityconsumer.DefaultConfig(), routes)
 	if err != nil {
@@ -112,10 +110,11 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 
 	observed := time.Now().UTC().Truncate(time.Millisecond)
 	dataTime := observed.Add(-time.Minute)
-	labels := `space_id="crypto",view_id="view_crypto_kline_1m",dataset_id="dataset_binance_kline_1m",subject_id="OPG-USDT-SPOT",freq="1m",series_tag="venue:binance"`
+	labels := `space_id="crypto",view_id="view_crypto_kline_1m",dataset_id="dataset_binance_kline_1m",freq="1m"`
 	raw := []byte(fmt.Sprintf("# HELP moox_e2e_requests Requests handled.\n# TYPE moox_e2e_requests counter\nmoox_e2e_requests{route=\"read\"} 7\n"+
-		"moox_storage_view_dataset_output_last_data_time_seconds{%s} %d\n", labels, dataTime.Unix()))
-	snapshot := &metricspb.MetricSnapshot{SchemaVersion: 1, CollectionIntervalSeconds: 30, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_NONE, Data: raw, MetricFamilyCount: 2, SampleCount: 2}
+		"moox_storage_view_output_latest_data_time_seconds{%s} %d\n"+
+		"moox_storage_view_output_subjects{%s} 1\n", labels, dataTime.Unix(), labels))
+	snapshot := &metricspb.MetricSnapshot{SchemaVersion: 1, CollectionIntervalSeconds: 30, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_NONE, Data: raw, MetricFamilyCount: 3, SampleCount: 3}
 	publisher, err := events.NewPublisher(eventClient, registry)
 	if err != nil {
 		t.Fatal(err)
@@ -149,13 +148,13 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	if latest.Value != 7 || latest.MessageID != messageID {
 		t.Fatalf("latest=%+v, want value=7 and message=%q", latest, messageID)
 	}
-	if len(access.rows) != 2 {
-		t.Fatalf("storage rows=%d, want two reporter samples", len(access.rows))
+	if len(access.rows) != 3 {
+		t.Fatalf("storage rows=%d, want three reporter samples", len(access.rows))
 	}
 	query := metrics.NewQueryService(messageStore, nil)
 	reports, err := metrics.NewKlineFreshnessEvaluator(query, []metrics.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
-		ViewID: "view_crypto_kline_1m", Frequency: "1m", MarketID: "crypto", StaleAfter: 5 * time.Minute,
+		ViewID: "view_crypto_kline_1m", Frequency: "1m", MarketID: "crypto", Lateness: 5 * time.Minute,
 	}}, 20).Evaluate(ctx, observed)
 	if err != nil || len(reports) != 1 || !reports[0].Success || reports[0].ObservedCount != 1 {
 		t.Fatalf("kline freshness reports=%+v err=%v", reports, err)
@@ -169,10 +168,6 @@ type metricsE2EAccess struct {
 func (a *metricsE2EAccess) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
 	a.rows = append(a.rows, req.GetRows()...)
 	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
-}
-
-func (a *metricsE2EAccess) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
-	return &storagepb.ReadTimeSeriesRowsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 
 func fetchMetricsEventually(ctx context.Context, consumer *observabilityconsumer.Consumer, timeout time.Duration) ([]*jetstream.Delivery, error) {

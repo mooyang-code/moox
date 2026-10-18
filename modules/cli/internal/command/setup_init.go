@@ -2,20 +2,22 @@ package command
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+	"time"
+
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
+	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
 )
 
@@ -60,13 +62,14 @@ type setupInitSummary struct {
 	BusinessSpaceIDs []string                      `json:"business_space_ids"`
 	Admin            setupclient.ApplyResult       `json:"admin"`
 	CloudAccounts    *setupCloudAccountSummary     `json:"cloud_accounts,omitempty"`
+	CLS              *setupCLSSummary              `json:"cls,omitempty"`
+	SCFPlan          *setupSCFPlanSummary          `json:"scf_plan,omitempty"`
 	AdminState       string                        `json:"admin_state"`
 	LoginAPI         string                        `json:"login_api"`
 	Metadata         setupInitMetadataCounts       `json:"metadata"`
 	Datasets         setupDatasetActivationSummary `json:"datasets"`
 	Verification     setupInitMetadataCounts       `json:"verification"`
 	Factors          *setupFactorSummary           `json:"factors,omitempty"`
-	SCFRoutes        *privatenet.SCFRoutePlan      `json:"scf_routes,omitempty"`
 }
 
 func newSetupInitCommand(deps setupDeps) *cobra.Command {
@@ -105,17 +108,8 @@ func runSetupInit(
 	file, configDir, storageHost string,
 	bundle setupInitBundle,
 ) (setupInitSummary, error) {
-	// Resolve the Storage placement before mutating Admin/metadata. This is a
-	// read-only preflight: collector publication later consumes the same plan
-	// and applies private routing only to SCF functions in Storage's Tencent
-	// region.
-	var scfRoutes *privatenet.SCFRoutePlan
-	if snapshot.Manifest.SCFFetcher.Enabled && snapshot.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(snapshot.Manifest.StorageHost.Provider), "tencent") {
-		plan, routeErr := deps.resolveSCFRoutes(ctx, snapshot, "")
-		if routeErr != nil {
-			return setupInitSummary{}, fmt.Errorf("scf-network: %w", routeErr)
-		}
-		scfRoutes = &plan
+	if err := snapshot.Manifest.RequireNotification(); err != nil {
+		return setupInitSummary{}, err
 	}
 	// Open the cloud ingress required by every configured public runtime endpoint
 	// before the first Admin/Storage mutation.
@@ -142,6 +136,18 @@ func runSetupInit(
 		return setupInitSummary{}, fmt.Errorf("setup_incomplete")
 	}
 	cloudAccounts, err := deps.registerCloudAccounts(ctx, snapshot)
+	if err != nil {
+		return setupInitSummary{}, err
+	}
+	// 日志服务（CLS）开箱即用：幂等开通服务、日志集、主题与采集日志字段索引。它只影响排障可观测性，
+	// 失败不阻断初始化，结果记入摘要，修复后重跑 init 即可。
+	cls, err := deps.provisionCLS(ctx, snapshot)
+	if err != nil {
+		return setupInitSummary{}, err
+	}
+	// Timer 采集计划：保证每个空间有可用代码包（没有则构建上传）。Collector 的采集计划配置由部署渲染，
+	// 代码包按名称取最新版本，所以这里不需要改任何配置；失败不阻断，记入摘要。
+	scfPlan, err := deps.ensureSCFPlan(ctx, snapshot)
 	if err != nil {
 		return setupInitSummary{}, err
 	}
@@ -173,17 +179,17 @@ func runSetupInit(
 	if verification.Applied != 0 || verification.Unchanged != len(bundle.Calls) {
 		return setupInitSummary{}, fmt.Errorf("metadata_verification_failed")
 	}
-	factorItems, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
+	factorPlan, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
 	if err != nil {
 		return setupInitSummary{}, err
 	}
 	var factorSummary *setupFactorSummary
-	if len(factorItems) > 0 {
+	if !factorPlan.empty() {
 		factorService, openErr := deps.openInitFactor(ctx, snapshot)
 		if openErr != nil {
 			return setupInitSummary{}, openErr
 		}
-		appliedSummary, applyErr := factorService.Apply(ctx, sortedFactorItems(factorItems))
+		appliedSummary, applyErr := factorService.Apply(ctx, factorPlan)
 		closeErr := factorService.Close()
 		if applyErr != nil {
 			return setupInitSummary{}, applyErr
@@ -205,7 +211,7 @@ func runSetupInit(
 	}
 	return setupInitSummary{
 		Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.Spaces), BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
-		Admin: admin, CloudAccounts: cloudAccounts, AdminState: adminStatus.State, LoginAPI: login.LoginAPI,
+		Admin: admin, CloudAccounts: cloudAccounts, CLS: cls, SCFPlan: scfPlan, AdminState: adminStatus.State, LoginAPI: login.LoginAPI,
 		Metadata: setupInitMetadataCounts{
 			Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,
 		},
@@ -213,8 +219,58 @@ func runSetupInit(
 		Verification: setupInitMetadataCounts{
 			Planned: verification.Planned, Unchanged: verification.Unchanged,
 		},
-		Factors: factorSummary, SCFRoutes: scfRoutes,
+		Factors: factorSummary,
 	}, nil
+}
+
+type setupCLSSummary struct {
+	Enabled            bool   `json:"enabled"`
+	Status             string `json:"status"`
+	Region             string `json:"region,omitempty"`
+	LogsetID           string `json:"logset_id,omitempty"`
+	TopicID            string `json:"topic_id,omitempty"`
+	ServiceOpened      bool   `json:"service_opened,omitempty"`
+	LogsetCreated      bool   `json:"logset_created,omitempty"`
+	TopicCreated       bool   `json:"topic_created,omitempty"`
+	IndexFieldsChanged bool   `json:"index_fields_changed,omitempty"`
+	Warning            string `json:"warning,omitempty"`
+}
+
+// defaultSetupProvisionCLS 用已登记的腾讯云账号幂等开通 CLS。账号凭证由 Admin 持有，这里只取用不落盘。
+// SCF 采集未启用时不做任何事；开通失败返回 status=failed 与脱敏的原因，不中断初始化。
+func defaultSetupProvisionCLS(ctx context.Context, snapshot *setupconfig.Snapshot) (*setupCLSSummary, error) {
+	if snapshot == nil {
+		return nil, fmt.Errorf("cls: setup configuration is missing")
+	}
+	if !snapshot.Manifest.SCFEnabled() {
+		return nil, nil
+	}
+	gateway, err := openCommandGateway(ctx, "", snapshot)
+	if err != nil {
+		return &setupCLSSummary{Enabled: true, Status: "failed", Warning: "open gateway failed"}, nil
+	}
+	defer gateway.Close()
+	client := &adminclient.Client{Gateway: gateway}
+	return provisionSetupCLS(ctx, client, defaultCLSFactory, snapshot.Manifest.SCFCloudAccount().AccountID), nil
+}
+
+func defaultCLSFactory(secretID, secretKey string) (tencent.CLSAPI, error) {
+	return tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{SecretID: secretID, SecretKey: secretKey, Region: clsprepare.Region, Endpoint: "cls.tencentcloudapi.com"})
+}
+
+func provisionSetupCLS(ctx context.Context, source clsprepare.AccountSource, factory clsprepare.Factory, accountID string) *setupCLSSummary {
+	provisionCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	result, err := clsprepare.Provision(provisionCtx, source, factory, accountID)
+	if err != nil {
+		// 错误文本已由 clsprepare 脱敏，只带操作名。
+		return &setupCLSSummary{Enabled: true, Status: "failed", Region: clsprepare.Region, Warning: err.Error()}
+	}
+	return &setupCLSSummary{
+		Enabled: true, Status: "ready", Region: result.Region, LogsetID: result.LogsetID, TopicID: result.TopicID,
+		ServiceOpened: result.ServiceOpened, LogsetCreated: result.LogsetCreated, TopicCreated: result.TopicCreated,
+		IndexFieldsChanged: result.IndexFieldsChanged,
+	}
 }
 
 // defaultSetupRegisterCloudAccounts makes the single declarative SCF account
@@ -226,39 +282,16 @@ func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfi
 	if snapshot == nil {
 		return nil, fmt.Errorf("cloud_accounts: setup configuration is missing")
 	}
-	if !snapshot.Manifest.SCFFetcher.Enabled {
+	if !snapshot.Manifest.SCFEnabled() {
 		return nil, nil
 	}
 
-	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost)
+	gateway, err := openCommandGateway(ctx, "", snapshot)
 	if err != nil {
-		return nil, fmt.Errorf("cloud_accounts: connect control host: %w", err)
+		return nil, fmt.Errorf("cloud_accounts: open gateway: %w", err)
 	}
-	defer control.Close()
-
-	paths := snapshot.Manifest.Paths.Resolved()
-	serviceKeyRaw, err := readRemoteControlFile(ctx, control, filepath.Join(paths.ControlRoot, "secrets/gateway-moox-cli.key"))
-	if err != nil {
-		return nil, fmt.Errorf("cloud_accounts: read CLI service credential: %w", err)
-	}
-	serviceKey, err := normalizeCollectorServiceKey(serviceKeyRaw)
-	if err != nil {
-		return nil, fmt.Errorf("cloud_accounts: validate CLI service credential: %w", err)
-	}
-
-	client := newControlClient(
-		fmt.Sprintf("https://%s:11001", snapshot.Manifest.ControlHost.Address),
-		"", "moox-cli", serviceKey, "",
-	)
-	if client.ServiceAuth == nil {
-		return nil, fmt.Errorf("cloud_accounts: service authentication is unavailable")
-	}
-	client.ServiceAuth.Caller = "moox-cli"
-	client.ServiceAuth.TargetNode = snapshot.Manifest.ControlHost.Name
-	if setupdeploy.RequiresLocalCATrust(setupdeploy.TLSMode(snapshot.Manifest.ControlHost.TLSMode), snapshot.Manifest.ControlHost.Address) {
-		client.ServiceAuth.CAFile = setupdeploy.CAPath(snapshot.Manifest.ControlHost.Address)
-	}
-
+	defer gateway.Close()
+	client := &adminclient.Client{Gateway: gateway}
 	existingAccounts, err := client.ListCloudAccounts(ctx, "tencent")
 	if err != nil {
 		return nil, fmt.Errorf("cloud_accounts: list Tencent cloud accounts: %w", err)
@@ -270,14 +303,14 @@ func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfi
 		}
 	}
 
-	account := snapshot.Manifest.SCFFetcher.CloudAccount
+	account := snapshot.Manifest.SCFCloudAccount()
 	input := adminclient.CloudAccountInput{
 		AccountID: account.AccountID, AccountName: account.AccountName,
 		Provider: "tencent", CredentialSecretID: account.CredentialSecretID,
 		AppID: account.AppID, COSRegion: account.COSRegion, COSBucket: account.COSBucket,
 	}
 	if strings.TrimSpace(input.AccountID) == "" || strings.TrimSpace(input.AccountName) == "" || strings.TrimSpace(input.CredentialSecretID) == "" || strings.TrimSpace(input.AppID) == "" || strings.TrimSpace(input.COSRegion) == "" || strings.TrimSpace(input.COSBucket) == "" {
-		return nil, fmt.Errorf("cloud_accounts: incomplete Tencent account in scf_fetcher.cloud_account")
+		return nil, fmt.Errorf("cloud_accounts: incomplete Tencent account in scf_plan.cloud_account")
 	}
 
 	summary := &setupCloudAccountSummary{Enabled: true, Planned: 1}
@@ -301,7 +334,7 @@ func sameSetupCloudAccount(account adminclient.CloudAccount, input adminclient.C
 		account.AppID == input.AppID && account.COSRegion == input.COSRegion && account.COSBucket == input.COSBucket
 }
 
-// newSetupFactorsCommand imports the repository's Python factor definitions
+// newSetupFactorsCommand imports the repository's YAML factor library definitions
 // without touching Storage metadata.  It is useful when metadata has already
 // been initialized (possibly from an older seed) and a full setup init would
 // correctly refuse to overwrite that existing contract.
@@ -309,24 +342,24 @@ func newSetupFactorsCommand(deps setupDeps) *cobra.Command {
 	var file string
 	cmd := &cobra.Command{
 		Use:   "factors",
-		Short: "导入本地 Python 因子并建立默认 View 绑定",
+		Short: "导入本地 YAML 因子库并建立默认 View 绑定",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			snapshot, err := deps.load(file)
 			if err != nil {
 				return err
 			}
 			defer clearSetupSecrets(snapshot)
-			items, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
+			plan, err := loadSetupFactors(snapshot.Manifest, filepath.Dir(file))
 			if err != nil {
 				return err
 			}
-			summary := setupFactorSummary{Enabled: len(items) > 0, Planned: len(items)}
-			if len(items) > 0 {
+			summary := setupFactorSummary{Enabled: !plan.empty(), Definitions: len(plan.Definitions), Members: len(plan.Members)}
+			if !plan.empty() {
 				service, openErr := deps.openInitFactor(cmd.Context(), snapshot)
 				if openErr != nil {
 					return openErr
 				}
-				summary, err = service.Apply(cmd.Context(), sortedFactorItems(items))
+				summary, err = service.Apply(cmd.Context(), plan)
 				closeErr := service.Close()
 				if err != nil {
 					return err
@@ -424,6 +457,11 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		if err := addSetupMetadataKey(datasets, setupMetadataKey(item.SpaceID, item.DatasetID), "dataset"); err != nil {
 			return err
 		}
+		if kind, kindErr := parseDataKind(item.DataKind); kindErr == nil && kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
+			if !frequencypkg.IsCanonical(item.Freq) {
+				return fmt.Errorf("dataset %s/%s freq %q is not canonical; use one of %s", item.SpaceID, item.DatasetID, item.Freq, strings.Join(frequencypkg.Strings(), ", "))
+			}
+		}
 		datasetDefinitions[setupMetadataKey(item.SpaceID, item.DatasetID)] = item
 	}
 	groups := make(map[string]struct{}, len(seed.FieldGroups))
@@ -478,7 +516,7 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		}
 	}
 	views := make(map[string]struct{}, len(seed.Views))
-	viewDatasets := make(map[string]map[string]struct{}, len(seed.Views))
+	viewDatasets := make(map[string]string, len(seed.Views))
 	for _, item := range seed.Views {
 		if err := requireSpace("view", item.SpaceID); err != nil {
 			return err
@@ -492,7 +530,6 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 			)
 		}
 		viewKey := setupMetadataKey(item.SpaceID, item.ViewID)
-		allowedDatasets := map[string]struct{}{primaryDatasetID: {}}
 		if _, ok := datasets[setupMetadataKey(item.SpaceID, primaryDatasetID)]; !ok {
 			return fmt.Errorf("view %s/%s references undefined dataset %q", item.SpaceID, item.ViewID, primaryDatasetID)
 		}
@@ -502,7 +539,7 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		if err := addSetupMetadataKey(views, viewKey, "view"); err != nil {
 			return err
 		}
-		viewDatasets[viewKey] = allowedDatasets
+		viewDatasets[viewKey] = primaryDatasetID
 	}
 	viewColumns := make(map[string]struct{}, len(seed.ViewColumns))
 	for _, item := range seed.ViewColumns {
@@ -526,26 +563,20 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		if originType != storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN {
 			continue
 		}
-		originParts := strings.Split(strings.TrimSpace(item.OriginID), ".")
-		if len(originParts) != 2 {
+		// A View indexes exactly one Dataset, so a dataset column is the bare
+		// column name of the View's Dataset.
+		origin := strings.TrimSpace(item.OriginID)
+		if origin == "" || strings.Contains(origin, ".") || origin != strings.TrimSpace(item.ColumnName) {
 			return fmt.Errorf(
-				"view_column %s/%s/%s has invalid dataset_column origin %q",
+				"view_column %s/%s/%s has invalid dataset_column origin %q; use the bare column name",
 				item.SpaceID,
 				item.ViewID,
 				item.ColumnName,
 				item.OriginID,
 			)
 		}
-		if _, ok := viewDatasets[setupMetadataKey(item.SpaceID, item.ViewID)][originParts[0]]; !ok {
-			return fmt.Errorf(
-				"view_column %s/%s/%s references dataset %q not declared by view",
-				item.SpaceID,
-				item.ViewID,
-				item.ColumnName,
-				originParts[0],
-			)
-		}
-		if _, ok := datasetColumns[setupMetadataColumnKey(item.SpaceID, originParts[0], originParts[1])]; !ok {
+		datasetID := viewDatasets[setupMetadataKey(item.SpaceID, item.ViewID)]
+		if _, ok := datasetColumns[setupMetadataColumnKey(item.SpaceID, datasetID, origin)]; !ok {
 			return fmt.Errorf(
 				"view_column %s/%s/%s references undefined dataset_column %q",
 				item.SpaceID,
@@ -611,9 +642,6 @@ func validateCanonicalSetupView(view seedView, datasets map[string]seedDataset) 
 			normalized.Engine,
 		)
 	}
-	if view.FilterJSON != normalized.FilterJSON {
-		return fmt.Errorf("view %s/%s filter_json must be canonical", view.SpaceID, view.ViewID)
-	}
 	return nil
 }
 
@@ -641,64 +669,10 @@ func canonicalMetadataView(view seedView, datasets map[string]seedDataset) (seed
 		grainKeys = []string{"subject_id", "freq", "data_time", "series_tag"}
 		engine = "duckdb"
 	}
-	filterJSON := view.FilterJSON
-	if dataKind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
-		freq, normalizedFilter, err := canonicalSetupTimeSeriesFilter(view.FilterJSON)
-		if err != nil {
-			return seedView{}, fmt.Errorf("view %s/%s: %w", view.SpaceID, view.ViewID, err)
-		}
-		if !setupDatasetSupportsFreq(primary.Freqs, freq) {
-			return seedView{}, fmt.Errorf(
-				"view %s/%s dataset %s does not support freq %q",
-				view.SpaceID,
-				view.ViewID,
-				primaryDatasetID,
-				freq,
-			)
-		}
-		filterJSON = normalizedFilter
-	}
 	view.PrimaryDatasetID = primaryDatasetID
 	view.GrainKeys = grainKeys
 	view.Engine = engine
-	view.FilterJSON = filterJSON
 	return view, nil
-}
-
-func setupDatasetSupportsFreq(freqs []string, freq string) bool {
-	for _, item := range freqs {
-		if strings.TrimSpace(item) == freq {
-			return true
-		}
-	}
-	return false
-}
-
-func canonicalSetupTimeSeriesFilter(raw string) (string, string, error) {
-	fields := make(map[string]json.RawMessage)
-	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &fields); err != nil {
-		return "", "", fmt.Errorf("invalid time series filter_json: %w", err)
-	}
-	var freq string
-	if encoded, ok := fields["freq"]; ok {
-		if err := json.Unmarshal(encoded, &freq); err != nil {
-			return "", "", fmt.Errorf("filter_json.freq must be a string")
-		}
-	}
-	freq = strings.TrimSpace(freq)
-	if freq == "" {
-		return "", "", fmt.Errorf("filter_json.freq is required")
-	}
-	encodedFreq, err := json.Marshal(freq)
-	if err != nil {
-		return "", "", err
-	}
-	fields["freq"] = encodedFreq
-	normalized, err := json.Marshal(fields)
-	if err != nil {
-		return "", "", err
-	}
-	return freq, string(normalized), nil
 }
 
 type remoteSetupInitStorage struct {
@@ -719,10 +693,10 @@ func defaultOpenSetupInitStorage(
 }
 
 func (s *remoteSetupInitStorage) Apply(ctx context.Context, calls []metadataImportCall) (metadataImportSummary, error) {
-	if s == nil || s.session == nil || s.session.listener == nil {
+	if s == nil || s.session == nil || s.session.gateway == nil {
 		return metadataImportSummary{}, fmt.Errorf("storage_not_reachable")
 	}
-	return runMetadataApply(ctx, "http://"+s.session.listener.Addr().String(), calls)
+	return runMetadataApply(ctx, s.session.gateway, calls)
 }
 
 func (s *remoteSetupInitStorage) Activate(ctx context.Context, datasets []seedDataset) (setupDatasetActivationSummary, error) {

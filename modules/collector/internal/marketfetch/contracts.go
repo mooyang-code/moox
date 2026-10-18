@@ -21,6 +21,8 @@ const (
 	// MaxRealtimeItems bounds the work accepted by one short-lived SCF. The
 	// assignment planner keeps each non-stock function at or below this limit.
 	MaxRealtimeItems = 40
+	// MaxPlanItems 是由采集计划构造的请求的条目上限；Collector 按容量校验每函数标的数。
+	MaxPlanItems = 200
 	// MaxRealtimeRows is the fixed number of latest K-lines fetched for each
 	// symbol in one realtime SCF request.
 	MaxRealtimeRows = 10
@@ -62,6 +64,9 @@ type Request struct {
 	// Targets are the destinations attached to a shared acquisition instance.
 	// When present, one fetched result is fanned out to every target.
 	Targets []domain.WriteTarget `json:"targets,omitempty"`
+	// WriteIDByContent 让写入 ID 带上本次提交内容的摘要：同一内容的重试复用同一个 ID，
+	// 内容变化（例如重复触发时多拿到了标的）则换新 ID，避免被 Storage 当成重复整组跳过。
+	WriteIDByContent bool `json:"write_id_by_content,omitempty"`
 }
 
 func bindRequestTargetPeriodIdentity(request *Request) {
@@ -156,24 +161,21 @@ func (r *Request) validate() error {
 			if err != nil || target.IsZero() {
 				return fmt.Errorf("items[%d] target_data_time is required for period commit", index)
 			}
-			if strings.TrimSpace(item.SeriesHash) == "" || item.ExpectedCount == 0 || item.SeriesIndex >= item.ExpectedCount {
-				return fmt.Errorf("items[%d] series index/hash/count are required for period commit", index)
-			}
 			itemByID[instanceID] = item
 			periods[instanceID] = target.UTC()
 		}
 		boundInstances := make(map[string]struct{}, len(r.Items))
 		for index, target := range r.Targets {
 			instanceID := strings.TrimSpace(target.InstanceID)
-			item, ok := itemByID[instanceID]
+			_, ok := itemByID[instanceID]
 			if !ok || strings.TrimSpace(target.ID) == "" || strings.TrimSpace(target.TaskID) == "" || strings.TrimSpace(target.DatasetID) == "" {
 				return fmt.Errorf("targets[%d] write target identity is required for period commit", index)
 			}
 			if strings.TrimSpace(target.SpaceID) != strings.TrimSpace(r.SpaceID) {
 				return fmt.Errorf("targets[%d] space_id differs from period request", index)
 			}
-			if strings.TrimSpace(target.SeriesHash) == "" || target.ExpectedCount == 0 || target.SeriesIndex >= target.ExpectedCount ||
-				target.SeriesIndex != item.SeriesIndex || target.SeriesHash != item.SeriesHash || target.ExpectedCount != item.ExpectedCount {
+			// 序号、hash、总数属于各个写入目标（数据集）：同一标的写入不同数据集时各自编号。
+			if strings.TrimSpace(target.SeriesHash) == "" || target.ExpectedCount == 0 || target.SeriesIndex >= target.ExpectedCount {
 				return fmt.Errorf("targets[%d] series index/hash/count are required for period commit", index)
 			}
 			if strings.TrimSpace(target.Frequency) != strings.TrimSpace(r.Frequency) {
@@ -195,6 +197,9 @@ func (r *Request) validate() error {
 		r.BatchKind = domain.BatchKindRealtime
 	}
 	maxItems := MaxRealtimeItems
+	if r.WriteIDByContent {
+		maxItems = MaxPlanItems
+	}
 	switch r.BatchKind {
 	case domain.BatchKindRealtime:
 	case domain.BatchKindCatchup, domain.BatchKindBackfill, domain.BatchKindGapRepair:
@@ -278,12 +283,12 @@ type sourceStorage interface {
 }
 
 type periodStorage interface {
-	EnsureDatasetPeriod(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error)
-	GetDatasetPeriodStatus(context.Context, *storagepb.DatasetPeriodExpectation) (domain.PeriodStorageState, error)
 	CommitTimeSeriesBatch(context.Context, *storagepb.DatasetPeriodExpectation, []*storagepb.TimeSeriesBatchRow, string) error
-	RecordDatasetPeriodFailures(context.Context, *storagepb.DatasetPeriodExpectation, []uint32) ([]*storagepb.DatasetPeriodFailureResult, error)
 }
 
 // ItemReporter receives final per-item outcomes from the common invocation
 // handler. It is deliberately small so CLS remains an optional boundary.
-type ItemReporter interface{ Report(clsreporter.Entry) }
+type ItemReporter interface {
+	Report(clsreporter.Entry)
+	Flush(context.Context) error
+}

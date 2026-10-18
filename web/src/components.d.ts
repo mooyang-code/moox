@@ -7,7 +7,9 @@ export {}
 
 declare module 'vue' {
   export interface GlobalComponents {
+    ActivityLog: typeof import('./components/activity-log/index.vue')['default']
     CodeBlock: typeof import('./components/code-block/index.vue')['default']
+    CodeEditor: typeof import('./components/code-editor/index.vue')['default']
     LangProvider: typeof import('./components/lang-provider/index.vue')['default']
     MainTransition: typeof import('./components/main-transition/index.vue')['default']
     PageTitleTabs: typeof import('./components/page-title-tabs/index.vue')['default']

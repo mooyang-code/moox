@@ -1,0 +1,50 @@
+// 因子页面共用的页头 / 结果工具栏样式。采集页里这两块是各页 scoped 样式，这里按同样的结构与数值自备：
+// 页面里 `@use "../shared/factor-page.scss";`（位于 <style scoped lang="scss"> 内，随该页 scoped 编译）。
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--moox-space-2);
+  margin-bottom: var(--moox-space-2);
+}
+
+.page-head__title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 6px;
+}
+
+.page-head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.result-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--moox-space-3);
+  margin-bottom: var(--moox-space-2);
+}
+
+.result-count {
+  color: var(--color-text-2);
+}
+
+@media (max-width: 600px) {
+  .page-head {
+    align-items: flex-start;
+  }
+
+  .page-head__title {
+    flex: 1 1 100%;
+  }
+
+  .page-head > :last-child {
+    flex: 0 0 auto;
+  }
+}

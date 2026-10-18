@@ -3,12 +3,10 @@ package pebble
 import (
 	"context"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
@@ -28,164 +26,16 @@ func TestCleanupExpiredBucketsRemovesOnlyOldTimeSeries(t *testing.T) {
 		t.Fatal(err)
 	}
 	deleted, err := s.CleanupExpiredBuckets(context.Background(), "s", "d", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
-	if err != nil || deleted != 1 {
-		t.Fatalf("cleanup deleted=%d err=%v", deleted, err)
+	if err != nil || deleted == 0 {
+		t.Fatalf("cleanup deleted_ranges=%d err=%v", deleted, err)
 	}
-	removed, err := s.ReadFields(context.Background(), []*pb.RowKey{rows[0].GetKey(), rows[1].GetKey()}, []string{"f"}, nil)
-	if err != nil || len(removed) != 2 || len(removed[0].GetFields()) != 0 || len(removed[1].GetFields()) != 0 {
+	removed, err := s.ReadRows(context.Background(), []*pb.RowKey{rows[0].GetKey(), rows[1].GetKey()}, []string{"f"}, nil)
+	if err != nil || len(removed) != 0 {
 		t.Fatalf("old bucket series were not removed: rows=%v err=%v", removed, err)
 	}
-	remaining, err := s.ReadFields(context.Background(), []*pb.RowKey{rows[2].GetKey()}, []string{"f"}, nil)
+	remaining, err := s.ReadRows(context.Background(), []*pb.RowKey{rows[2].GetKey()}, []string{"f"}, nil)
 	if err != nil || len(remaining) != 1 || len(remaining[0].GetFields()) != 1 {
 		t.Fatalf("newer bucket was removed: rows=%v err=%v", remaining, err)
-	}
-}
-
-func TestReadTimeSeriesRowsScansPrimaryHistoryWithoutView(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	rows := []*pb.RowFieldUpsert{
-		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-16T00:00:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 10}}}}},
-		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-16T00:01:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 11}}}}},
-	}
-	if err := store.UpsertFields(context.Background(), rows); err != nil {
-		t.Fatal(err)
-	}
-	rsp, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
-		SpaceId: "s", DatasetId: "d", TimeRange: &pb.TimeRange{StartTime: "2026-08-16T00:00:00Z", EndTime: "2026-08-16T00:02:00Z"},
-		ColumnNames: []string{"close"}, Page: &pb.Page{Page: 1, Size: 10},
-	})
-	if err != nil || len(rsp.GetRows()) != 2 || rsp.GetRows()[1].GetKey().GetDataTime() != "2026-08-16T00:01:00.000000000Z" {
-		t.Fatalf("scan rsp=%v err=%v", rsp, err)
-	}
-}
-
-func TestReadTimeSeriesRowsUsesSubjectSeriesIndex(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	for i := 0; i < 3; i++ {
-		for _, tag := range []string{"venue:a", "venue:b"} {
-			key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-				SubjectId: "BTC-USDT", Freq: "1m", DataTime: time.Date(2026, 8, 16, 0, i, 0, 0, time.UTC).Format(time.RFC3339), SeriesTag: tag,
-			}}}
-			if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(i)}}}}}}); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	rsp, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
-		SpaceId: "s", DatasetId: "d", Selectors: []*pb.TimeSeriesSelector{{SpaceId: "s", DatasetId: "d", SubjectId: "BTC-USDT", Freq: "1m"}},
-		Order: pb.SortOrder_SORT_ORDER_DESC, Page: &pb.Page{Page: 1, Size: 100},
-	})
-	if err != nil || len(rsp.GetRows()) != 6 || rsp.GetRows()[0].GetKey().GetSubjectId() != "BTC-USDT" {
-		t.Fatalf("subject-index rsp=%v err=%v", rsp, err)
-	}
-}
-
-func TestReadTimeSeriesRowsBackfillsHistoryFromLegacyFieldKeys(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	key := &pb.RowKey{SpaceId: "s", DatasetId: "legacy", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-		SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-14T00:00:00Z",
-	}}}
-	if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{{
-		Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 10}}}},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	historyKey, err := encodeHistoryKey(key, store.bucketDuration)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.db.Delete(historyKey, store.writeOptions); err != nil {
-		t.Fatal(err)
-	}
-	rsp, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
-		SpaceId: "s", DatasetId: "legacy", TimeRange: &pb.TimeRange{StartTime: "2026-08-14T00:00:00Z", EndTime: "2026-08-14T00:01:00Z"},
-		ColumnNames: []string{"close"}, Page: &pb.Page{Page: 1, Size: 10},
-	})
-	if err != nil || len(rsp.GetRows()) != 1 || rsp.GetRows()[0].GetKey().GetDataTime() != "2026-08-14T00:00:00.000000000Z" {
-		t.Fatalf("legacy history rsp=%v err=%v", rsp, err)
-	}
-}
-
-func TestReadTimeSeriesRowsUsesCursorWithoutRepeatingPage(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	for i := 0; i < 3; i++ {
-		key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: time.Date(2026, 8, 16, 0, i, 0, 0, time.UTC).Format(time.RFC3339)}}}
-		if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: float64(i)}}}}}}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	first, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "d", TimeRange: &pb.TimeRange{StartTime: "2026-08-16T00:00:00Z", EndTime: "2026-08-16T00:03:00Z"}, ColumnNames: []string{"close"}, Page: &pb.Page{Page: 1, Size: 1}})
-	if err != nil || len(first.GetRows()) != 1 {
-		t.Fatalf("first page=%v err=%v", first, err)
-	}
-	firstKey := first.GetRows()[0].GetKey()
-	cursor, err := proto.Marshal(&pb.RowKey{SpaceId: firstKey.GetSpaceId(), DatasetId: firstKey.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: firstKey.GetSubjectId(), Freq: firstKey.GetFreq(), DataTime: firstKey.GetDataTime(), SeriesTag: firstKey.GetSeriesTag()}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "d", AfterKey: cursor, TimeRange: &pb.TimeRange{StartTime: "2026-08-16T00:00:00Z", EndTime: "2026-08-16T00:03:00Z"}, ColumnNames: []string{"close"}, Page: &pb.Page{Page: 1, Size: 2}})
-	if err != nil || len(second.GetRows()) != 2 || second.GetRows()[0].GetKey().GetDataTime() != "2026-08-16T00:01:00Z" && second.GetRows()[0].GetKey().GetDataTime() != "2026-08-16T00:01:00.000000000Z" {
-		t.Fatalf("cursor page=%v err=%v", second, err)
-	}
-}
-
-func TestReadTimeSeriesRowsCursorUsesLogicalTimeAcrossSubjects(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	// Physical keys sort by subject before data_time. The second row is later
-	// in the logical time order but physically precedes the cursor subject.
-	rows := []*pb.RowFieldUpsert{
-		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "Z", Freq: "1m", DataTime: "2026-08-16T00:00:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}},
-		{Key: &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "A", Freq: "1m", DataTime: "2026-08-16T00:01:00Z"}}}, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 2}}}}},
-	}
-	if err := store.UpsertFields(context.Background(), rows); err != nil {
-		t.Fatal(err)
-	}
-	first, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "d", TimeRange: &pb.TimeRange{StartTime: "2026-08-16T00:00:00Z", EndTime: "2026-08-16T00:02:00Z"}, Page: &pb.Page{Page: 1, Size: 1}})
-	if err != nil || len(first.GetRows()) != 1 {
-		t.Fatalf("first page=%v err=%v", first, err)
-	}
-	row := first.GetRows()[0].GetKey()
-	cursor, err := proto.Marshal(&pb.RowKey{SpaceId: row.GetSpaceId(), DatasetId: row.GetDatasetId(), Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: row.GetSubjectId(), Freq: row.GetFreq(), DataTime: row.GetDataTime(), SeriesTag: row.GetSeriesTag()}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "d", AfterKey: cursor, TimeRange: &pb.TimeRange{StartTime: "2026-08-16T00:00:00Z", EndTime: "2026-08-16T00:02:00Z"}, Page: &pb.Page{Page: 1, Size: 1}})
-	if err != nil || len(second.GetRows()) != 1 || second.GetRows()[0].GetKey().GetSubjectId() != "A" {
-		t.Fatalf("logical cursor page=%v err=%v", second, err)
-	}
-}
-
-func TestReadTimeSeriesRowsRejectsLargePageOffset(t *testing.T) {
-	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	_, err = store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{
-		SpaceId: "s", DatasetId: "d", Page: &pb.Page{Page: 1001, Size: 1000},
-	})
-	if err == nil || !strings.Contains(err.Error(), "after_key") {
-		t.Fatalf("large page offset error = %v, want cursor guidance", err)
 	}
 }
 
@@ -217,8 +67,8 @@ func TestCleanupExpiredBucketsDoesNotCreateOutboxEvent(t *testing.T) {
 	}
 
 	deleted, err := store.CleanupExpiredBuckets(ctx, "s", "d", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
-	if err != nil || deleted != 1 {
-		t.Fatalf("cleanup deleted=%d err=%v", deleted, err)
+	if err != nil || deleted == 0 {
+		t.Fatalf("cleanup deleted_ranges=%d err=%v", deleted, err)
 	}
 	after, err := store.ListOutbox(ctx, 0, 10)
 	if err != nil {
@@ -245,10 +95,10 @@ func TestCleanupExpiredBucketsIsolatedBySpace(t *testing.T) {
 		t.Fatal(err)
 	}
 	deleted, err := s.CleanupExpiredBuckets(context.Background(), "a", "shared", time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC))
-	if err != nil || deleted != 1 {
-		t.Fatalf("cleanup deleted=%d err=%v", deleted, err)
+	if err != nil || deleted == 0 {
+		t.Fatalf("cleanup deleted_ranges=%d err=%v", deleted, err)
 	}
-	rows, err := s.ReadFields(context.Background(), []*pb.RowKey{row("b").GetKey()}, []string{"f"}, nil)
+	rows, err := s.ReadRows(context.Background(), []*pb.RowKey{row("b").GetKey()}, []string{"f"}, nil)
 	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 {
 		t.Fatalf("space b row removed: rows=%v err=%v", rows, err)
 	}
@@ -269,7 +119,7 @@ func TestUpsertFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.
 	if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{row}); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"close", "volume", "missing"}, nil)
+	rows, err := store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"close", "volume", "missing"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +130,7 @@ func TestUpsertFieldsUpsertsIndependentlyAndReadsOnlyRequestedFields(t *testing.
 	if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{row}); err != nil {
 		t.Fatal(err)
 	}
-	rows, err = store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"close"}, nil)
+	rows, err = store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"close"}, nil)
 	if err != nil || len(rows) != 1 || rows[0].GetFields()[0].GetValue().GetDoubleValue() != 2 {
 		t.Fatalf("updated rows=%v err=%v", rows, err)
 	}
@@ -309,7 +159,7 @@ func TestUpsertFieldsExplicitNullReplacesStoredValue(t *testing.T) {
 	write(&pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}})
 	write(&pb.TypedValue{Value: &pb.TypedValue_NullValue{NullValue: pb.NullValue_NULL_VALUE_NULL}})
 
-	rows, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"close"}, nil)
+	rows, err := store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"close"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +198,7 @@ func TestSeriesTagsKeepSameTimestampRowsDistinct(t *testing.T) {
 	if err := store.UpsertFields(context.Background(), rows); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.ReadFields(context.Background(), []*pb.RowKey{key(""), key("venue:binance"), key("venue:okx")}, []string{"venue"}, []string{"source"})
+	got, err := store.ReadRows(context.Background(), []*pb.RowKey{key(""), key("venue:binance"), key("venue:okx")}, []string{"venue"}, []string{"source"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +227,7 @@ func TestSeriesTagSymbolsRoundTripWithoutRewriting(t *testing.T) {
 		}}); err != nil {
 			t.Fatal(err)
 		}
-		got, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"tag"}, nil)
+		got, err := store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"tag"}, nil)
 		if err != nil || len(got) != 1 || got[0].GetKey().GetTimeSeries().GetSeriesTag() != tag ||
 			got[0].GetFields()[0].GetValue().GetStringValue() != tag {
 			t.Fatalf("tag %q round trip: rows=%v err=%v", tag, got, err)
@@ -385,7 +235,7 @@ func TestSeriesTagSymbolsRoundTripWithoutRewriting(t *testing.T) {
 	}
 }
 
-func TestReadFieldsReportsPhysicalRowPresenceWithoutRequestedField(t *testing.T) {
+func TestReadRowsReturnsOnlyExistingRowsEvenWithoutRequestedField(t *testing.T) {
 	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
 	if err != nil {
 		t.Fatal(err)
@@ -396,9 +246,9 @@ func TestReadFieldsReportsPhysicalRowPresenceWithoutRequestedField(t *testing.T)
 	if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{{Key: present, Fields: []*pb.FieldValue{{FieldId: "stored", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "v"}}}}}}); err != nil {
 		t.Fatal(err)
 	}
-	rows, existing, err := store.ReadFieldsWithPresence(context.Background(), []*pb.RowKey{present, missing}, []string{"not_stored"}, nil)
-	if err != nil || len(rows) != 2 || len(existing) != 1 || existing[0].GetRecord().GetRecordId() != "present" {
-		t.Fatalf("rows=%v existing=%v err=%v", rows, existing, err)
+	rows, err := store.ReadRows(context.Background(), []*pb.RowKey{present, missing}, []string{"not_stored"}, nil)
+	if err != nil || len(rows) != 1 || rows[0].GetKey().GetRecord().GetRecordId() != "present" || len(rows[0].GetFields()) != 0 {
+		t.Fatalf("rows=%v err=%v", rows, err)
 	}
 }
 
@@ -416,7 +266,7 @@ func TestRecordEmptyVersionResolvesCharacterMaximum(t *testing.T) {
 		}
 	}
 	key := &pb.RowKey{SpaceId: "s", DatasetId: "d", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r"}}}
-	rows, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"value"}, nil)
+	rows, err := store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"value"}, nil)
 	if err != nil || len(rows) != 1 || rows[0].GetKey().GetRecord().GetVersion() != "2" {
 		t.Fatalf("rows=%v err=%v", rows, err)
 	}
@@ -435,11 +285,11 @@ func TestWriteRejectsEventLargerThanPublisherLimitBeforeCommit(t *testing.T) {
 	}); err == nil {
 		t.Fatal("expected oversized event to be rejected")
 	}
-	rows, err := store.ReadFields(context.Background(), []*pb.RowKey{key}, []string{"value"}, nil)
+	rows, err := store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"value"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || len(rows[0].GetFields()) != 0 {
+	if len(rows) != 0 {
 		t.Fatalf("fact committed despite oversized event: %v", rows)
 	}
 }

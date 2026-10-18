@@ -530,14 +530,8 @@ func validateOrderOwnership(tx *Tx, record OrderRecord) error {
 	if err != nil {
 		return err
 	}
-	if owner.Type == orderdomain.OwnerTarget {
-		if account.OwnerInstanceID != "" {
-			if account.OwnerInstanceID != record.RunnerID {
-				return fmt.Errorf("%w: TARGET instance does not own logical account", ErrConflict)
-			}
-		} else if account.OwnerRunnerID != record.RunnerID {
-			return fmt.Errorf("%w: TARGET runner does not own logical account", ErrConflict)
-		}
+	if owner.Type == orderdomain.OwnerTarget && (account.OwnerInstanceID == "" || account.OwnerInstanceID != record.RunnerID) {
+		return fmt.Errorf("%w: TARGET instance does not own logical account", ErrConflict)
 	}
 	var membership int64
 	if err := tx.db.Raw(`
@@ -1309,9 +1303,11 @@ func (tx *Tx) ReplacePositionsForAccount(
 		if err := tx.UpsertPosition(record); err != nil {
 			return err
 		}
+		if err := tx.markPositionSnapshotCovered(record); err != nil {
+			return err
+		}
 	}
-	query := `
-		DELETE FROM t_trading_positions
+	where := `
 		WHERE c_space_id = ? AND c_trading_account_id = ?
 			AND c_exchange_updated_at <= ?
 	`
@@ -1327,12 +1323,58 @@ func (tx *Tx) ReplacePositionsForAccount(
 			args = append(args, record.ExchangeSymbol, record.PositionSide)
 		}
 		retained.WriteString(")")
-		query += retained.String()
+		where += retained.String()
 	}
+	// 被删除的持仓留下墓碑：覆盖时间取这次快照的边界（含已有行的覆盖时间），迟到的平仓成交不能从零叠加出反向持仓
+	tombstoneArgs := append([]any{snapshotAt}, args...)
+	if err := tx.db.Exec(`
+		INSERT INTO t_trading_position_tombstones (c_space_id, c_trading_account_id, c_exchange_symbol, c_position_side, c_covered_until)
+		SELECT c_space_id, c_trading_account_id, c_exchange_symbol, c_position_side, MAX(c_snapshot_covered_until, ?)
+		FROM t_trading_positions`+where+`
+		ON CONFLICT(c_space_id, c_trading_account_id, c_exchange_symbol, c_position_side)
+		DO UPDATE SET c_covered_until = MAX(c_covered_until, excluded.c_covered_until)
+	`, tombstoneArgs...).Error; err != nil {
+		return writeError(err)
+	}
+	// 快照里仍然存在的持仓不再需要墓碑
+	for _, record := range records {
+		if err := tx.db.Exec(`
+			DELETE FROM t_trading_position_tombstones
+			WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ? AND c_position_side = ?
+		`, record.SpaceID, record.TradingAccountID, record.ExchangeSymbol, record.PositionSide).Error; err != nil {
+			return writeError(err)
+		}
+	}
+	query := `DELETE FROM t_trading_positions` + where
 	if err := tx.db.Exec(query, args...).Error; err != nil {
 		return writeError(err)
 	}
 	return nil
+}
+
+// markPositionSnapshotCovered 记录权威持仓快照已覆盖到的时间（只升不降）。
+func (tx *Tx) markPositionSnapshotCovered(record PositionRecord) error {
+	return writeError(tx.db.Exec(`
+		UPDATE t_trading_positions
+		SET c_snapshot_covered_until = MAX(c_snapshot_covered_until, ?)
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ? AND c_position_side = ?
+	`, record.ExchangeUpdatedAt, record.SpaceID, record.TradingAccountID, record.ExchangeSymbol, record.PositionSide).Error)
+}
+
+// PositionSnapshotCoveredUntil 返回权威持仓快照已覆盖到的时间；没有快照覆盖过返回 0。
+func (tx *Tx) PositionSnapshotCoveredUntil(spaceID, tradingAccountID, symbol, positionSide string) (int64, error) {
+	var covered int64
+	if err := tx.db.Raw(`
+		SELECT MAX(
+			COALESCE((SELECT MAX(c_snapshot_covered_until) FROM t_trading_positions
+				WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ? AND c_position_side = ?), 0),
+			COALESCE((SELECT MAX(c_covered_until) FROM t_trading_position_tombstones
+				WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ? AND c_position_side = ?), 0)
+		)
+	`, spaceID, tradingAccountID, symbol, positionSide, spaceID, tradingAccountID, symbol, positionSide).Scan(&covered).Error; err != nil {
+		return 0, err
+	}
+	return covered, nil
 }
 
 func (tx *Tx) GetPosition(

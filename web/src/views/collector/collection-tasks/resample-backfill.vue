@@ -30,7 +30,9 @@
     </a-form>
     <a-descriptions :column="1" size="small" bordered>
       <a-descriptions-item label="预计桶数">{{ bucketCount || "-" }}</a-descriptions-item>
-      <a-descriptions-item label="源数据保留期">{{ sourceKeepDuration || "未提供，由服务端校验" }}</a-descriptions-item>
+      <a-descriptions-item label="源数据保留期">{{
+        sourceRetention ? formatRetention(sourceRetention) : "未提供，由服务端校验"
+      }}</a-descriptions-item>
       <a-descriptions-item label="目标写入空间">内部行情 `crypto`</a-descriptions-item>
     </a-descriptions>
     <a-alert v-if="errorMessage" class="dialog-error" type="error" :show-icon="true" :closable="false">
@@ -50,11 +52,13 @@
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { cancelKlineResampleBackfill, startKlineResampleBackfill } from "@/api/collector";
+import { formatRetention } from "@/utils/retention";
 import {
   countBackfillBuckets,
   defaultClosedEnd,
   formatUtcInput,
   parseFixedFrequencyMinutes,
+  parseUtcInput,
   type ResampleBackfillSummary
 } from "./resample-backfill";
 
@@ -64,10 +68,10 @@ const props = withDefaults(
     spaceId: string;
     taskId: string;
     targetFrequency: string;
-    sourceKeepDuration?: string;
+    sourceRetention?: string;
     activeBackfill?: ResampleBackfillSummary | null;
   }>(),
-  { sourceKeepDuration: "", activeBackfill: null }
+  { sourceRetention: "", activeBackfill: null }
 );
 
 const emit = defineEmits<{
@@ -119,8 +123,8 @@ async function start() {
       space_id: props.spaceId,
       task_id: props.taskId,
       request_id: `resample-${Date.now()}`,
-      start: new Date(form.start).toISOString(),
-      end: new Date(form.end).toISOString()
+      start: parseUtcInput(form.start).toISOString(),
+      end: parseUtcInput(form.end).toISOString()
     });
     Message.success("回填已提交");
     emit("started");

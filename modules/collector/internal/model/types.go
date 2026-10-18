@@ -9,10 +9,8 @@ const (
 	EventActionMarketFetch EventAction = "market_fetch"
 	EventActionEgressProbe EventAction = "egress_probe"
 
-	// EventSourceCollectorScheduler marks a durable Collector-planned invoke.
-	// It must publish MarketFetchBatchCompleted even when the SCF node also has
-	// timer-mode environment from an older/static assignment.
-	EventSourceCollectorScheduler = "collector_scheduler"
+	// EventSourceCollectorBackfill 标记 Collector 补采分块的同步调用。
+	EventSourceCollectorBackfill = "collector_backfill"
 )
 
 // CloudFunctionEvent is the complete invocation contract for a short-lived SCF.
@@ -23,13 +21,12 @@ type CloudFunctionEvent struct {
 	// Tencent Timer events use capitalized fields. They remain separate from
 	// the MooX one-shot envelope so the timer timestamp can make the batch ID
 	// idempotent without a configuration request.
-	Type                    string `json:"Type,omitempty"`
-	TriggerName             string `json:"TriggerName,omitempty"`
-	Time                    string `json:"Time,omitempty"`
-	Message                 string `json:"Message,omitempty"`
-	RequestID               string `json:"request_id,omitempty"`
-	Source                  string `json:"source,omitempty"`
-	StorageRPCGatewayTarget string `json:"storage_rpc_gateway_target,omitempty"`
+	Type        string `json:"Type,omitempty"`
+	TriggerName string `json:"TriggerName,omitempty"`
+	Time        string `json:"Time,omitempty"`
+	Message     string `json:"Message,omitempty"`
+	RequestID   string `json:"request_id,omitempty"`
+	Source      string `json:"source,omitempty"`
 }
 
 // Response is the function response returned to CloudNode.

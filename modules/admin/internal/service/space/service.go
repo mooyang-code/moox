@@ -13,7 +13,7 @@ import (
 // DAO 层保留 GORM model（Space/SpaceMember），service 内完成 model→PB 映射。
 type Service interface {
 	pb.SpaceMgrService
-	AuthorizeTradeRequest(ctx context.Context, userID, spaceID, method string, globalRole int32) error
+	AuthorizeSpaceRequest(ctx context.Context, userID, spaceID string, mutates bool, globalRole int32) error
 }
 
 type service struct {
@@ -25,11 +25,11 @@ func NewService(dbManager *database.Manager) Service {
 	return &service{dao: NewDAO(dbManager.GetDB())}
 }
 
-// AuthorizeTradeRequest is deliberately exposed separately from the Space RPC
+// AuthorizeSpaceRequest is deliberately exposed separately from the Space RPC
 // surface so the Admin HTTP BFF can enforce the same membership boundary
-// before forwarding a browser Trade request.
-func (s *service) AuthorizeTradeRequest(ctx context.Context, userID, spaceID, method string, globalRole int32) error {
-	return s.dao.AuthorizeTradeRequest(ctx, userID, spaceID, method, globalRole)
+// before forwarding a browser request.
+func (s *service) AuthorizeSpaceRequest(ctx context.Context, userID, spaceID string, mutates bool, globalRole int32) error {
+	return s.dao.AuthorizeSpaceRequest(ctx, userID, spaceID, mutates, globalRole)
 }
 
 func normalizePage(page *pb.Page) (int, int, int) {

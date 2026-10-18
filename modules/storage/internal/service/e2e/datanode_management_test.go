@@ -72,7 +72,7 @@ func TestDataNodeManagementLifecycle(t *testing.T) {
 
 	primary, err := primarystore.New(primarystore.Options{
 		Validator: primarystore.NewMetadataValidator(cache),
-		Resolver: func(ctx context.Context, spaceID, datasetID string) (pb.DataNodeRuntimeService, error) {
+		Resolver: func(ctx context.Context, spaceID, datasetID string) (primarystore.DataNodeClient, error) {
 			snapshot := coremetadata.RequestSnapshotFromContext(ctx)
 			if snapshot == nil {
 				snapshot = cache.RequestSnapshot()
@@ -156,8 +156,8 @@ func TestDataNodeManagementLifecycle(t *testing.T) {
 	if got := primaryWriteResponse.GetRetInfo().GetCode(); got != pb.ErrorCode_SUCCESS {
 		t.Fatalf("active Dataset write code=%s, want SUCCESS", got)
 	}
-	primaryReadResponse, err := primary.ReadFields(ctx, &pb.PrimaryReadFieldsReq{
-		AuthInfo: writeAuth, Keys: []*pb.RowKey{row.GetKey()}, FieldIds: []string{"value"},
+	primaryReadResponse, err := primary.ReadRows(ctx, &pb.PrimaryReadRowsReq{
+		AuthInfo: writeAuth, Keys: []*pb.RowKey{row.GetKey()}, ColumnNames: []string{"value"},
 	})
 	if err != nil || primaryReadResponse.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("snapshot-only read response=%v err=%v", primaryReadResponse, err)
@@ -499,10 +499,6 @@ func (s *countingPanicStore) GetDevice(ctx context.Context, device string) (*pb.
 func (s *countingPanicStore) ListDevices(ctx context.Context, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error) {
 	s.guard("ListDevices")
 	return s.Store.ListDevices(ctx, engine, page)
-}
-func (s *countingPanicStore) ListArchiveFiles(ctx context.Context, space, dataset string, page *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error) {
-	s.guard("ListArchiveFiles")
-	return s.Store.ListArchiveFiles(ctx, space, dataset, page)
 }
 
 var _ coremetadata.Reader = (*countingPanicStore)(nil)

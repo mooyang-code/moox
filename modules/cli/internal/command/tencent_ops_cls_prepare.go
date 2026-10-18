@@ -7,12 +7,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
 )
 
 type clsPrepareOptions struct {
+	File              string
 	ControlURL        string
 	CloudAccountID    string
 	ServiceAccessKey  string
@@ -53,6 +56,7 @@ func newCLSPrepareCommand() *cobra.Command {
 		},
 	}
 	f := cmd.Flags()
+	f.StringVar(&opts.File, "file", "./moox.toml", "可信 SSH 主机配置")
 	f.StringVar(&opts.ControlURL, "control-url", "", "目标机 Admin service gateway 地址")
 	f.StringVar(&opts.CloudAccountID, "cloud-account-id", "", "腾讯云账户 ID；缺省选择列表第一项")
 	f.StringVar(&opts.ServiceAccessKey, "service-access-key", "", "后台服务鉴权 AccessKey")
@@ -71,10 +75,12 @@ func runCLSPrepare(cmd *cobra.Command, opts clsPrepareOptions) error {
 		return fmt.Errorf("--control-url and --credentials-output are required")
 	}
 
-	client := newControlClient(opts.ControlURL, "", opts.ServiceAccessKey, opts.ServiceSecretKey, "")
-	if client.ServiceAuth == nil {
-		return fmt.Errorf("service authentication is required for CLS account reveal")
+	gateway, gatewayErr := openCommandGateway(cmd.Context(), opts.File, nil)
+	if gatewayErr != nil {
+		return gatewayErr
 	}
+	defer gateway.Close()
+	client := &adminclient.Client{Gateway: gateway}
 	factory := func(secretID, secretKey string) (tencent.CLSAPI, error) {
 		return tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{
 			SecretID:  secretID,

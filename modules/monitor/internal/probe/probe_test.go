@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func TestHTTPProbeSignsSysDeployHealthPathsWithFreshNonce(t *testing.T) {
+func TestHTTPProbeSignsPlacementHealthPathsWithFreshNonce(t *testing.T) {
 	authenticator, err := healthz.NewAuthenticator(healthz.AuthConfig{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"})
 	require.NoError(t, err)
 	var headers []string
@@ -29,7 +29,7 @@ func TestHTTPProbeSignsSysDeployHealthPathsWithFreshNonce(t *testing.T) {
 	runner := HTTPRunner{HealthSigner: &HealthSigner{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"}}
 
 	for i := 0; i < 2; i++ {
-		result := runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, URL: srv.URL + "/readyz?full=1", Headers: `{"X-Custom":"keep"}`})
+		result := runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourcePlacement, URL: srv.URL + "/readyz?full=1", Headers: `{"X-Custom":"keep"}`})
 		require.True(t, result.Success, result.ErrorMessage)
 	}
 	require.Len(t, headers, 2)
@@ -45,7 +45,7 @@ func TestHTTPProbeLeavesManualAndNonHealthChecksUnsigned(t *testing.T) {
 	runner := HTTPRunner{HealthSigner: &HealthSigner{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"}}
 
 	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceObservability, URL: srv.URL + "/readyz"})
-	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy, URL: srv.URL + "/status"})
+	runner.Run(context.Background(), domain.Check{Kind: domain.CheckKindHTTP, Source: domain.CheckSourcePlacement, URL: srv.URL + "/status"})
 	require.Equal(t, []string{"", ""}, headers)
 }
 
@@ -104,7 +104,7 @@ func TestHTTPProbe(t *testing.T) {
 		defer srv.Close()
 
 		result := HTTPRunner{}.Run(context.Background(), domain.Check{
-			Kind: domain.CheckKindHTTP, Source: domain.CheckSourceSysDeploy,
+			Kind: domain.CheckKindHTTP, Source: domain.CheckSourcePlacement,
 			URL: srv.URL + "/readyz", ExpectedStatus: "200-299",
 		})
 		require.False(t, result.Success)
@@ -270,4 +270,22 @@ func TestFailResult(t *testing.T) {
 	assert.Equal(t, "boom", got.ErrorMessage)
 	assert.Equal(t, int64(12), got.LatencyMS)
 	require.NotEmpty(t, got.ResultID)
+}
+
+// URL 主机名为 <主机>.moox-relay 的检查经 Relay 拨号；没有网关客户端时直接失败。
+func TestHTTPRunnerDialsOutboundHostThroughRelay(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ready")) }))
+	defer server.Close()
+	var dialedHost string
+	var dialedPort int
+	runner := HTTPRunner{Relay: func(ctx context.Context, host string, port int) (net.Conn, error) {
+		dialedHost, dialedPort = host, port
+		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}}
+	check := domain.Check{CheckID: "placement:home:host-agent", Kind: domain.CheckKindHTTP, URL: "http://home.moox-relay:11426/readyz", ExpectedStatus: "200-299", TimeoutMS: 2000}
+	result := runner.Run(context.Background(), check)
+	require.True(t, result.Success, result.ErrorMessage)
+	require.Equal(t, "home", dialedHost)
+	require.Equal(t, 11426, dialedPort)
+	require.False(t, HTTPRunner{}.Run(context.Background(), check).Success)
 }

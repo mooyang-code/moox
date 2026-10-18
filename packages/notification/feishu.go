@@ -101,12 +101,9 @@ func (s *FeishuSender) Send(ctx context.Context, message Message) error {
 }
 
 func renderText(message Message) string {
-	text := "[" + string(message.Severity) + "]"
+	text := "[" + localizedSeverity(message.Severity) + "]"
 	if message.Title != "" {
 		text += " " + message.Title
-	}
-	if message.Key != "" {
-		text += "\n告警标识: " + message.Key
 	}
 	if message.Body != "" {
 		text += "\n" + message.Body
@@ -122,6 +119,9 @@ func renderText(message Message) string {
 			labels = append(labels, key+"="+message.Labels[key])
 		}
 		text += "\n" + strings.Join(labels, ", ")
+	}
+	if message.Key != "" {
+		text += "\n告警标识: " + message.Key
 	}
 	return text
 }

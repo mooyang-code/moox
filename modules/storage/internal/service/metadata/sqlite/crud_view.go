@@ -75,11 +75,6 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 	next.Columns = nil
 	next.IndexBuild = nil
 	next.Status = defaultStatus(next.GetStatus())
-	keepDuration, err := normalizeKeepDuration(next.GetKeepDuration(), s.viewDataKind(ctx, next.GetSpaceId(), next.GetDatasetId()))
-	if err != nil {
-		return nil, err
-	}
-	next.KeepDuration = keepDuration
 	if strings.TrimSpace(next.Engine) == "" {
 		next.Engine = s.defaultViewEngine(ctx, next.GetSpaceId(), next.GetDatasetId())
 	} else {
@@ -101,14 +96,7 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := validateViewKeepDuration(
-		ctx,
-		tx,
-		next.GetSpaceId(),
-		next.GetViewId(),
-		next.GetKeepDuration(),
-		next.GetDatasetId(),
-	); err != nil {
+	if err := deriveViewFreq(ctx, tx, next); err != nil {
 		return nil, err
 	}
 	var existing *pb.View
@@ -133,8 +121,8 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 		return nil, err
 	}
 	insertSQL := `
-		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_dataset_id, c_grain_keys_json, c_filter_json, c_engine, c_keep_duration, c_active_index_id, c_desired_view_revision, c_active_view_revision, c_active_columns_json, c_active_view_schema_hash, c_active_slot, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		INSERT INTO t_views (c_space_id, c_view_id, c_name, c_description, c_dataset_id, c_grain_keys_json, c_engine, c_active_index_id, c_desired_view_revision, c_active_view_revision, c_active_columns_json, c_active_view_schema_hash, c_active_slot, c_indexed_from, c_indexed_to, c_status, c_attrs_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if !createOnly {
 		insertSQL += `
 		ON CONFLICT(c_space_id, c_view_id) DO UPDATE SET
@@ -142,9 +130,7 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 			c_description = excluded.c_description,
 			c_dataset_id = excluded.c_dataset_id,
 			c_grain_keys_json = excluded.c_grain_keys_json,
-			c_filter_json = excluded.c_filter_json,
 			c_engine = excluded.c_engine,
-			c_keep_duration = excluded.c_keep_duration,
 			c_active_index_id = excluded.c_active_index_id,
 			c_desired_view_revision = excluded.c_desired_view_revision,
 			c_active_view_revision = excluded.c_active_view_revision,
@@ -156,7 +142,7 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 			c_status = excluded.c_status,
 			c_attrs_json = excluded.c_attrs_json`
 	}
-	_, err = tx.ExecContext(ctx, insertSQL, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetDatasetId(), grainKeys, defaultJSON(next.GetFilterJson()), next.GetEngine(), next.GetKeepDuration(), next.GetActiveIndexId(), next.GetDesiredViewRevision(), next.GetActiveViewRevision(), activeColumns, next.GetActiveViewSchemaHash(), next.GetActiveSlot(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
+	_, err = tx.ExecContext(ctx, insertSQL, next.GetSpaceId(), next.GetViewId(), next.GetName(), next.GetDescription(), next.GetDatasetId(), grainKeys, next.GetEngine(), next.GetActiveIndexId(), next.GetDesiredViewRevision(), next.GetActiveViewRevision(), activeColumns, next.GetActiveViewSchemaHash(), next.GetActiveSlot(), next.GetIndexedFrom(), next.GetIndexedTo(), next.GetStatus(), raw)
 	if err != nil {
 		var sqliteErr *sqlite.Error
 		if createOnly && errors.As(err, &sqliteErr) && (sqliteErr.Code() == 2067 || sqliteErr.Code() == 1555) {
@@ -202,12 +188,18 @@ func (s *Store) upsertView(ctx context.Context, item *pb.View, replaceColumns, c
 		}
 	}
 	for _, column := range columns {
-		if column.GetSpaceId() == "" {
-			column.SpaceId = next.GetSpaceId()
+		if column == nil {
+			continue
 		}
-		if column.GetViewId() == "" {
-			column.ViewId = next.GetViewId()
+		// 子列必须归属父 View：非空且不一致的身份不能被写入，否则会改动另一个 View 且不更新其版本
+		if column.GetSpaceId() != "" && column.GetSpaceId() != next.GetSpaceId() {
+			return nil, fmt.Errorf("视图列 %q 的 space_id %q 与视图 %q 不一致", column.GetColumnName(), column.GetSpaceId(), next.GetSpaceId())
 		}
+		if column.GetViewId() != "" && column.GetViewId() != next.GetViewId() {
+			return nil, fmt.Errorf("视图列 %q 的 view_id %q 与视图 %q 不一致", column.GetColumnName(), column.GetViewId(), next.GetViewId())
+		}
+		column.SpaceId = next.GetSpaceId()
+		column.ViewId = next.GetViewId()
 		if column.GetColumnName() != "" {
 			changed, err := upsertViewColumn(ctx, tx, column)
 			if err != nil {
@@ -235,12 +227,23 @@ func (s *Store) defaultViewEngine(ctx context.Context, spaceID string, datasetID
 	return "duckdb"
 }
 
-func (s *Store) viewDataKind(ctx context.Context, spaceID, datasetID string) pb.DataKind {
-	dataset, err := s.GetDataset(ctx, spaceID, datasetID)
-	if err != nil {
-		return pb.DataKind_DATA_KIND_UNSPECIFIED
+// deriveViewFreq copies the Dataset frequency onto the View. A View has no
+// frequency of its own; a caller-supplied value must match the Dataset's.
+func deriveViewFreq(ctx context.Context, tx *sql.Tx, view *pb.View) error {
+	var freq string
+	err := tx.QueryRowContext(ctx, `SELECT c_freq FROM t_datasets WHERE c_space_id = ? AND c_dataset_id = ?`,
+		view.GetSpaceId(), view.GetDatasetId()).Scan(&freq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("dataset %s/%s does not exist", view.GetSpaceId(), view.GetDatasetId())
 	}
-	return dataset.GetDataKind()
+	if err != nil {
+		return err
+	}
+	if candidate := strings.TrimSpace(view.GetFreq()); candidate != "" && candidate != freq {
+		return fmt.Errorf("view freq %q differs from dataset %s freq %q; a View takes its Dataset's freq", candidate, view.GetDatasetId(), freq)
+	}
+	view.Freq = freq
+	return nil
 }
 
 func (s *Store) GetView(ctx context.Context, spaceID string, viewID string) (*pb.View, error) {

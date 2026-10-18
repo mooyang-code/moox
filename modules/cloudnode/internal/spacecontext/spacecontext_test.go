@@ -2,66 +2,42 @@ package spacecontext
 
 import (
 	"context"
-	"net/http"
 	"testing"
 
-	thttp "trpc.group/trpc-go/trpc-go/http"
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
 
-func TestFromContextReadsExplicitSpaceID(t *testing.T) {
-	got, ok := FromContext(WithSpaceID(context.Background(), "crypto"))
-	if !ok {
-		t.Fatal("FromContext ok = false, want true")
-	}
-	if got != "crypto" {
-		t.Fatalf("FromContext = %q, want crypto", got)
-	}
-}
-
-func TestFromContextReadsHTTPHeaderWhenFilterDidNotInject(t *testing.T) {
-	req, err := http.NewRequest(http.MethodPost, "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set(SpaceIDHeader, "crypto")
-	ctx := thttp.WithHeader(context.Background(), &thttp.Header{Request: req})
-
-	got, ok := FromContext(ctx)
-	if !ok {
-		t.Fatal("FromContext ok = false, want true")
-	}
-	if got != "crypto" {
-		t.Fatalf("FromContext = %q, want crypto", got)
+func TestFromContextReadsNativeMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		metadata map[string][]byte
+		want     string
+	}{
+		{name: "canonical", metadata: map[string][]byte{SpaceIDHeader: []byte("crypto")}, want: "crypto"},
+		{name: "lowercase and whitespace", metadata: map[string][]byte{"x-space-id": []byte(" crypto ")}, want: "crypto"},
+		{name: "missing"},
+		{name: "blank", metadata: map[string][]byte{SpaceIDHeader: []byte("   ")}},
+		{name: "conflicting keys", metadata: map[string][]byte{SpaceIDHeader: []byte("crypto"), "x-space-id": []byte("stock")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, message := codec.WithNewMessage(context.Background())
+			defer codec.PutBackMessage(message)
+			message.WithServerMetaData(tc.metadata)
+			got, ok := FromContext(ctx)
+			require.Equal(t, tc.want, got)
+			require.Equal(t, tc.want != "", ok)
+		})
 	}
 }
 
-func TestFromContextPrefersExplicitSpaceIDOverHTTPHeader(t *testing.T) {
-	req, err := http.NewRequest(http.MethodPost, "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set(SpaceIDHeader, "wrong")
-	ctx := thttp.WithHeader(WithSpaceID(context.Background(), "crypto"), &thttp.Header{Request: req})
-
-	got, ok := FromContext(ctx)
-	if !ok {
-		t.Fatal("FromContext ok = false, want true")
-	}
-	if got != "crypto" {
-		t.Fatalf("FromContext = %q, want explicit crypto", got)
-	}
-}
-
-func TestFromContextRejectsBlankHTTPHeader(t *testing.T) {
-	req, err := http.NewRequest(http.MethodPost, "/trpc.moox.cloudnode.CloudNodeMgr/GetNodeList", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set(SpaceIDHeader, "   ")
-	ctx := thttp.WithHeader(context.Background(), &thttp.Header{Request: req})
-
-	got, ok := FromContext(ctx)
-	if ok {
-		t.Fatalf("FromContext ok = true, want false with value %q", got)
-	}
+func TestFromContextPrefersExplicitSpaceID(t *testing.T) {
+	ctx, message := codec.WithNewMessage(context.Background())
+	defer codec.PutBackMessage(message)
+	message.WithServerMetaData(map[string][]byte{SpaceIDHeader: []byte("wrong")})
+	got, ok := FromContext(WithSpaceID(ctx, " crypto "))
+	require.True(t, ok)
+	require.Equal(t, "crypto", got)
+	_, err := MustFromContext(context.Background())
+	require.Error(t, err)
 }

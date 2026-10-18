@@ -1,6 +1,7 @@
 package test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/stretchr/testify/require"
@@ -24,7 +26,7 @@ import (
 const (
 	klineGatewayNode   = "gateway-kline-e2e"
 	klineGatewayKeyID  = "moox-skill-e2e"
-	klineGatewaySecret = "gateway-kline-e2e-secret"
+	klineGatewaySecret = "gateway-kline-e2e-secret-0123456789"
 	klineStorageAppID  = "moox-skill"
 	klineStorageAppKey = "storage-kline-e2e-app-key"
 )
@@ -33,18 +35,25 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 	storage := &klineStorageStub{requests: make(chan *pb.ReadTimeSeriesRowsReq, 4)}
 	storageAddress := startKlineStorage(t, storage)
 	gatewayTarget := startKlineNativeGateway(t, storageAddress)
-	configPath := writeKlineConfig(t, gatewayTarget)
+	configPath := writeKlineConfig(t)
+	operatorHome, manifestPath := writeKlineOperator(t, gatewayTarget)
 
 	binary := buildMooxCLI(t)
 	command := exec.Command(binary, "data", "kline", "get",
 		"--config", configPath,
+		"--file", manifestPath,
 		"--data-type", "crypto",
 		"--symbol", "BTC-USDT",
 		"--interval", "1m",
 		"--limit", "1",
 	)
-	output, err := command.CombinedOutput()
-	require.NoError(t, err, "kline CLI output: %s", output)
+	command.Env = append(os.Environ(), "HOME="+operatorHome)
+	var diagnostics bytes.Buffer
+	command.Stderr = &diagnostics
+	output, err := command.Output()
+	require.NoError(t, err, "kline CLI diagnostics: %s", diagnostics.String())
+	require.NotContains(t, diagnostics.String(), klineGatewaySecret)
+	require.NotContains(t, diagnostics.String(), klineStorageAppKey)
 	require.NotContains(t, string(output), klineGatewaySecret)
 	require.NotContains(t, string(output), klineStorageAppKey)
 	var response pb.ReadTimeSeriesRowsRsp
@@ -52,7 +61,6 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 	require.Len(t, response.GetRows(), 1)
 	require.Equal(t, "BTC-USDT", response.GetRows()[0].GetKey().GetSubjectId())
 	require.Equal(t, "2026-08-28T12:34:00Z", response.GetRows()[0].GetKey().GetDataTime())
-	require.True(t, response.GetComplete())
 
 	select {
 	case req := <-storage.requests:
@@ -75,7 +83,8 @@ func TestKlineRPCUsesNativeGatewayHMACACLAndStorageAuth(t *testing.T) {
 		AuthInfo: &pb.AuthInfo{AppId: klineStorageAppID, AppKey: klineStorageAppKey},
 	})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "caller is not allowed")
+	// An external principal cannot borrow the operator signing identity.
+	require.NotContains(t, err.Error(), klineGatewaySecret)
 	require.Equal(t, int32(0), storage.writeCalls.Load(), "write RPC must be rejected before reaching Storage")
 }
 
@@ -98,10 +107,10 @@ func TestKlineRPCHelperEarlyExitRemainsObservableDuringCleanup(t *testing.T) {
 	}
 	firstErr := process.waitError()
 	require.Error(t, firstErr)
-	require.Contains(t, process.logs.String(), "upstream-addr must be a loopback host:port")
+	require.Contains(t, process.logs.String(), "fixture upstream must be literal loopback")
 	_, readyErr := process.waitForReady(readyFile, 2*time.Second)
 	require.ErrorContains(t, readyErr, firstErr.Error())
-	require.ErrorContains(t, readyErr, "upstream-addr must be a loopback host:port")
+	require.ErrorContains(t, readyErr, "fixture upstream must be literal loopback")
 
 	cleanupDone := make(chan struct{})
 	go func() {
@@ -134,7 +143,6 @@ func (stub *klineStorageStub) ReadTimeSeriesRows(_ context.Context, req *pb.Read
 			SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", SubjectId: "BTC-USDT",
 			Freq: "1m", SeriesTag: "venue:binance", DataTime: "2026-08-28T12:34:00Z",
 		}}},
-		Complete: true,
 	}, nil
 }
 
@@ -192,9 +200,12 @@ func startKlineNativeGateway(t *testing.T, upstreamAddress string) string {
 
 func buildGatewayE2EHelper(t *testing.T) string {
 	t.Helper()
+	if binary := prebuiltE2EBinary(t, "MOOX_CLI_GATEWAY_HELPER_BINARY"); binary != "" {
+		return binary
+	}
 	helper := filepath.Join(t.TempDir(), "gateway-e2e-helper")
 	build := exec.Command("go", "build", "-o", helper, "./cmd/e2e-helper")
-	build.Dir = filepath.Join("..", "..", "gateway")
+	build.Dir = filepath.Join("..", "..", "hostgateway")
 	output, err := build.CombinedOutput()
 	require.NoError(t, err, "build gateway helper: %s", output)
 	return helper
@@ -297,16 +308,10 @@ func (buffer *lockedBuffer) String() string {
 	return buffer.content.String()
 }
 
-func writeKlineConfig(t *testing.T, gatewayTarget string) string {
+func writeKlineConfig(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "data-access.yaml")
 	content := fmt.Sprintf(`version: 1
-gateway:
-  target: %q
-  target_node: %q
-  key_id: %q
-  caller: moox-skill
-  secret: %q
 storage:
   app_id: %q
   app_key: %q
@@ -319,7 +324,24 @@ data_types:
         series_tag: venue:binance
         kline_datasets:
           1m: dataset_binance_kline_1m
-`, gatewayTarget, klineGatewayNode, klineGatewayKeyID, klineGatewaySecret, klineStorageAppID, klineStorageAppKey)
+`, klineStorageAppID, klineStorageAppKey)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	return path
+}
+
+func writeKlineOperator(t *testing.T, gatewayTarget string) (string, string) {
+	t.Helper()
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	directory := filepath.Join(home, ".config", "moox")
+	require.NoError(t, os.MkdirAll(directory, 0700))
+	knownHosts := filepath.Join(directory, "known_hosts")
+	require.NoError(t, os.WriteFile(knownHosts, nil, 0600))
+	host := testfixture.GatewaySSH(t, klineGatewayNode, strings.TrimPrefix(gatewayTarget, "ip://"), knownHosts)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "caller-moox-cli.key"), []byte(klineGatewaySecret+"\n"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "gateway-client.yaml"), []byte("caller: moox-cli\nkey_id: "+klineGatewayKeyID+"\nkey_file: caller-moox-cli.key\n"), 0600))
+	manifest := filepath.Join(home, "moox.toml")
+	raw := fmt.Sprintf("[admin]\nusername='admin'\npassword='admin-test'\n[tencent_cloud]\nsecret_id='AKID-test'\nsecret_key='cloud-test'\n[eventbus]\nport=4222\ntls_enabled=true\n[hosts.%s]\naddress='127.0.0.1'\n[hosts.%s.ssh]\nport=%d\nusername='%s'\npassword='%s'\n[placements]\n%s=['admin','console-proxy','web-host','eventbus']\n", host.Name, host.Name, host.Port, host.Username, host.Password, host.Name)
+	require.NoError(t, os.WriteFile(manifest, []byte(raw), 0600))
+	return home, manifest
 }

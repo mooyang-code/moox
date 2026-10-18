@@ -153,3 +153,29 @@ func TestCatalogRepository_PackageCRUD(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, deleted)
 }
+
+func TestCatalogRepository_AccountRecreateAfterDeleteCanBeDeletedAgain(t *testing.T) {
+	repo := newTestCatalog(t)
+	ctx := context.Background()
+	account := CloudAccount{AccountID: "acct-1", AccountName: "old", Provider: "tencent", CredentialSecretID: "secret-1"}
+
+	require.NoError(t, repo.UpsertAccount(ctx, account))
+	require.NoError(t, repo.DeleteAccount(ctx, "acct-1"))
+	account.AccountName = "new"
+	account.CredentialSecretID = "secret-2"
+	require.NoError(t, repo.UpsertAccount(ctx, account)) // 同名重建复用旧行
+
+	got, err := repo.GetAccount(ctx, "acct-1")
+	require.NoError(t, err)
+	require.NotNil(t, got, "重建后账户应恢复为有效")
+	assert.Equal(t, "new", got.AccountName)
+	assert.Equal(t, "secret-2", got.CredentialSecretID)
+
+	require.NoError(t, repo.DeleteAccount(ctx, "acct-1"), "再次删除不能违反唯一约束")
+	missing, err := repo.GetAccount(ctx, "acct-1")
+	require.NoError(t, err)
+	assert.Nil(t, missing)
+	_, total, err := repo.ListAccounts(ctx, "")
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), total)
+}

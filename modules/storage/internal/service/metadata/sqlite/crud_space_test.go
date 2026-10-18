@@ -49,8 +49,8 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 		INSERT INTO t_field_groups(c_space_id,c_group_id,c_name) VALUES ('target','root','Root');
 		INSERT INTO t_field_groups(c_space_id,c_group_id,c_name,c_parent_group_id) VALUES ('target','child','Child','root');
 		INSERT INTO t_fields(c_space_id,c_field_id,c_group_id,c_name,c_value_type) VALUES ('target','value','child','Value','double');
-		INSERT INTO t_datasets(c_space_id,c_dataset_id,c_data_source_id,c_data_node_id,c_name,c_data_kind,c_keep_duration)
-			VALUES ('target','dataset','source','node','Dataset','time_series','24h');
+		INSERT INTO t_datasets(c_space_id,c_dataset_id,c_data_source_id,c_data_node_id,c_name,c_data_kind,c_freq)
+			VALUES ('target','dataset','source','node','Dataset','time_series','1m');
 		UPDATE t_datasets SET c_subject_tags_json = '["tag"]' WHERE c_space_id = 'target' AND c_dataset_id = 'dataset';
 		INSERT INTO t_dataset_columns(c_space_id,c_dataset_id,c_column_name,c_origin_type,c_origin_id,c_value_type)
 			VALUES ('target','dataset','value','field','value','double');
@@ -61,8 +61,6 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 			c_space_id,c_view_id,c_build_id,c_index_id,c_engine,c_target_view_version,c_state,
 			c_owner_id,c_new_slot,c_status,c_started_at,c_updated_at
 		) VALUES ('target','view','build','index','duckdb',1,1,'owner','slot-b','building','now','now');
-		INSERT INTO t_archive_files(c_space_id,c_archive_file_id,c_dataset_id,c_device_id,c_partition_key,c_file_uri)
-			VALUES ('target','archive','dataset','device','2026-07-28','file:///archive.parquet');
 	`)
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +72,6 @@ func TestDeleteSpaceCascadesRichMetadataGraph(t *testing.T) {
 		"t_spaces", "t_data_sources", "t_subjects", "t_tags", "t_subject_tags",
 		"t_field_groups", "t_fields", "t_datasets",
 		"t_dataset_columns", "t_views", "t_view_columns", "t_view_index_builds",
-		"t_archive_files",
 	} {
 		var count int
 		if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+" WHERE c_space_id = 'target'").Scan(&count); err != nil {

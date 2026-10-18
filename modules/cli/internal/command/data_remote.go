@@ -1,70 +1,65 @@
 package command
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"net/http"
+	"os"
 	"strings"
-	"time"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"google.golang.org/protobuf/encoding/protojson"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
-
-const remoteWriteBatchSize = 1000
 
 // retInfoResponse 定义远端接口响应中读取 RetInfo 的公共能力。
 type retInfoResponse interface {
 	GetRetInfo() *pb.RetInfo
 }
 
-func exportRowsRemote(ctx context.Context, storageURL string, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
-	rsp := &pb.ReadTimeSeriesRowsRsp{}
-	if err := postStorage(ctx, storageURL, accessServiceName, "ReadTimeSeriesRows", req, rsp); err != nil {
-		return nil, err
+// exportRowsPaged 按游标顺序读完时间区间，最多导出 maxRows 行；达到上限时停止并在标准错误提示还有更多数据。
+func exportRowsPaged(ctx context.Context, gateway gatewayclient.Invoker, req *pb.ReadTimeSeriesRowsReq, maxRows uint32) (*pb.ReadTimeSeriesRowsRsp, error) {
+	if maxRows == 0 {
+		maxRows = 1000
 	}
-	return rsp, nil
+	out := &pb.ReadTimeSeriesRowsRsp{}
+	cursor := ""
+	for {
+		page := proto.Clone(req).(*pb.ReadTimeSeriesRowsReq)
+		page.Page = &pb.Page{Size: min(maxRows-uint32(len(out.Rows)), 2000), Cursor: cursor}
+		rsp := &pb.ReadTimeSeriesRowsRsp{}
+		if err := postStorage(ctx, gateway, accessServiceName, "ReadTimeSeriesRows", page, rsp); err != nil {
+			return nil, err
+		}
+		out.Rows = append(out.Rows, rsp.GetRows()...)
+		cursor = rsp.GetPageResult().GetNextCursor()
+		if cursor == "" {
+			return out, nil
+		}
+		if uint32(len(out.Rows)) >= maxRows {
+			fmt.Fprintf(os.Stderr, "已导出 %d 行，达到 --page-size 上限，区间内还有更多数据\n", len(out.Rows))
+			out.PageResult = &pb.PageResult{HasMore: true, NextCursor: cursor}
+			return out, nil
+		}
+	}
 }
 
-func postStorage(ctx context.Context, storageURL string, service string, method string, req proto.Message, rsp proto.Message) error {
-	if err := postStorageRaw(ctx, storageURL, service, method, req, rsp); err != nil {
+func postStorage(ctx context.Context, gateway gatewayclient.Invoker, service string, method string, req proto.Message, rsp proto.Message) error {
+	if err := postStorageRaw(ctx, gateway, service, method, req, rsp); err != nil {
 		return err
 	}
 	return checkStorageRetInfo(service, method, rsp)
 }
 
-func postStorageRaw(ctx context.Context, storageURL string, service string, method string, req proto.Message, rsp proto.Message) error {
-	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(req)
-	if err != nil {
-		return err
+func postStorageRaw(ctx context.Context, gateway gatewayclient.Invoker, service string, method string, req proto.Message, rsp proto.Message) error {
+	if gateway == nil || req == nil || rsp == nil {
+		return fmt.Errorf("Storage call requires the operator SSH gateway and request/response")
 	}
-	url := strings.TrimRight(storageURL, "/") + "/" + service + "/" + method
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
+	metadata := gatewayclient.CallMetadataFromContext(ctx)
 	if spaceID := protoMessageSpaceID(req.ProtoReflect()); spaceID != "" {
-		httpReq.Header.Set("X-Space-Id", spaceID)
+		metadata.SpaceID = spaceID
 	}
-	client := &http.Client{Timeout: 60 * time.Second}
-	httpRsp, err := client.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer httpRsp.Body.Close()
-	body, _ := io.ReadAll(httpRsp.Body)
-	if httpRsp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s/%s HTTP %d: %s", service, method, httpRsp.StatusCode, string(body))
-	}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(body, rsp); err != nil {
-		return err
-	}
-	return nil
+	return gateway.Invoke(gatewayclient.WithCallMetadata(ctx, metadata), service, method, req, rsp)
 }
 
 func protoMessageSpaceID(message protoreflect.Message) string {

@@ -26,9 +26,9 @@ func (r *UpsertFieldsReq) Validate() error {
 	return nil
 }
 
-func (r *ReadFieldsReq) Validate() error {
-	if r == nil || len(r.Keys) == 0 || len(r.FieldIds) == 0 {
-		return fmt.Errorf("keys and field_ids must not be empty")
+func (r *ReadRowsReq) Validate() error {
+	if r == nil || len(r.Keys) == 0 || (len(r.ColumnNames) == 0 && len(r.AttributeKeys) == 0) {
+		return fmt.Errorf("keys and column_names must not be empty")
 	}
 	return nil
 }

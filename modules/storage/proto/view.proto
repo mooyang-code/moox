@@ -26,6 +26,16 @@ message ResultColumn {
 // 该接口查询 DuckDB 中当前 active View 索引。
 // View 索引是可重建的近期派生结果，不是完整事实存储。
 // 完整历史以 PrimaryStore KV/Pebble 为准。
+// CountTimeSeriesViewRowsReq 按标的统计 active View 索引里时间范围内的行数（同一时间点多个 series_tag 只计一次）。
+message CountTimeSeriesViewRowsReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  string view_id = 3;
+  // selectors 需要 subject_id 与 freq；time_range 是左闭右开时间范围。
+  repeated TimeSeriesSelector selectors = 4;
+  TimeRange time_range = 5;
+}
+
 message QueryTimeSeriesRowsReq {
   // auth_info 是调用方身份和链路追踪信息。
   common.AuthInfo auth_info = 1;
@@ -38,9 +48,6 @@ message QueryTimeSeriesRowsReq {
   // time_range 是左闭右开时间范围。
   TimeRange time_range = 5;
   // column_names 是要返回的列名；为空时返回 View 默认列。
-  // In rows_per_series mode, empty means every business column with explicit
-  // NULL values; response columns contains the locked source schema and TS keys.
-  // All series windows are bounded to 500000 cells including four TS key columns.
   repeated string column_names = 6;
   // filter 是结构化过滤条件。
   FilterSpec filter = 7;
@@ -52,18 +59,15 @@ message QueryTimeSeriesRowsReq {
   uint32 limit = 10;
   // total_mode 控制是否计算精确总数。
   common.TotalMode total_mode = 11;
-  // expected_active_index_id pins a multi-page read to the index observed by
-  // the caller. A mismatch means the A/B active index switched and the caller
-  // must restart the complete read instead of mixing pages from both indexes.
-  string expected_active_index_id = 12;
-  // expected_active_index_revision pins a read to the write revision observed
-  // by the caller. A mismatch means the same active index was updated in
-  // place, so the caller must restart instead of mixing generations.
-  uint64 expected_active_index_revision = 13;
-  // Nonzero selects a single-snapshot window per explicit subject/frequency/tag.
-  // Requires selectors, an end time, and no paging, limit, sorting or exact total.
-  uint32 rows_per_series = 14;
-  string expected_input_contract_version = 15;
+  // pin 钉住多页读取使用的索引版本：与当前活动索引不一致（A/B 切换或原地更新）表示索引已变化，
+  // 调用方必须从头重读，不能混用两个版本的页。
+  IndexVersion pin = 12;
+}
+
+// IndexVersion 标识一版活动索引。
+message IndexVersion {
+  string index_id = 1;
+  uint64 revision = 2;
 }
 
 // QueryTimeSeriesRowsRsp 表示时序 View 数据查询结果。
@@ -76,13 +80,17 @@ message QueryTimeSeriesRowsRsp {
   repeated TimeSeriesRow rows = 3;
   // page_result 是分页结果。
   common.PageResult page_result = 4;
-  string served_indexed_from = 5;
-  string served_indexed_to = 6;
+  // min_data_time、max_data_time 是回答本次查询的索引中最早、最晚一行的 data_time，两端都包含，是真实存在的行键。
+  string min_data_time = 5;
+  string max_data_time = 6;
+  // complete 表示请求区间是否完全落在 [min_data_time, max_data_time] 内。
   bool complete = 7;
-  // served_active_index_revision is the write revision used for this page.
-  uint64 served_active_index_revision = 8;
-  string served_active_index_id = 9;
-  string served_input_contract_version = 10;
+  // index 是回答本次查询的活动索引版本。
+  IndexVersion index = 8;
+  // retained_rows_per_series 是活动索引每个 (标的, 周期, 序列标签) 至少保留的最近行数，0 表示未知。
+  // 取活动索引建立时使用的保留行数与当前配置中较小的一个：调大配置要等重建成功后才变大，调小立即生效。
+  // 调用方用它与 min_data_time 一起判断活跃序列可回溯的深度。
+  uint64 retained_rows_per_series = 9;
 }
 
 // SearchRecordRowsReq 表示搜索记录 View 数据。
@@ -122,8 +130,8 @@ message SearchRecordRowsRsp {
   repeated RecordRow rows = 3;
   // page_result 是分页结果。
   common.PageResult page_result = 4;
-  string served_indexed_from = 5;
-  string served_indexed_to = 6;
+  string min_data_time = 5;
+  string max_data_time = 6;
   bool complete = 7;
 }
 
@@ -137,6 +145,8 @@ service DataView {
   // View 索引是可重建的近期派生结果，不是完整事实存储。
   // 完整历史以 PrimaryStore KV/Pebble 为准。
   rpc QueryTimeSeriesRows(QueryTimeSeriesRowsReq) returns (QueryTimeSeriesRowsRsp);
+  // CountTimeSeriesRows 按标的统计 active View 索引里的行数，只回传计数，供完整性检查先比对根数。
+  rpc CountTimeSeriesRows(CountTimeSeriesViewRowsReq) returns (CountTimeSeriesRowsRsp);
   // SearchRecordRows 搜索 Bleve 中当前 active View 索引。
   // View 索引是可重建的近期派生结果，不是完整事实存储。
   // 完整历史以 PrimaryStore KV/Pebble 为准。

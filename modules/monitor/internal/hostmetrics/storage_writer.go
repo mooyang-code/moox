@@ -32,7 +32,7 @@ type StorageWriter struct {
 }
 
 func NewStorageWriter(access hostStorageAccess, cfg monconfig.HostStorageConfig) *StorageWriter {
-	return &StorageWriter{access: access, auth: storageauth.Primary(cfg.KeyID), cfg: cfg}
+	return &StorageWriter{access: access, auth: storageauth.Primary("monitor"), cfg: cfg}
 }
 
 func (w *StorageWriter) WriteSnapshot(ctx context.Context, snapshot *hostmetricpb.HostSnapshot, agentID string, observedAt time.Time, messageID string) error {

@@ -20,22 +20,6 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	}
 	var reconcileErrors []error
 	for _, set := range sets {
-		factors, err := s.db.ListFactors(ctx, set.SetID, "")
-		if err != nil {
-			reconcileErrors = append(reconcileErrors, fmt.Errorf("list factors for set %q: %w", set.SetID, err))
-		} else {
-			unlock, lockErr := s.locks.LockContext(ctx, set.SetID)
-			if lockErr != nil {
-				reconcileErrors = append(reconcileErrors, fmt.Errorf("lock factor set %q: %w", set.SetID, lockErr))
-				continue
-			}
-			for _, factor := range factors {
-				if _, err := s.artifacts.Materialize(factor); err != nil {
-					reconcileErrors = append(reconcileErrors, fmt.Errorf("restore factor source %q: %w", factor.FactorID, err))
-				}
-			}
-			unlock()
-		}
 		if set.Status == domain.SetStatusDeleting {
 			if err := s.DeleteSet(ctx, set.SetID, true); err != nil {
 				reconcileErrors = append(reconcileErrors, fmt.Errorf("resume factor set purge %q: %w", set.SetID, err))
@@ -69,13 +53,31 @@ func (s *Service) ReconcileSet(ctx context.Context, setID string) error {
 }
 
 func (s *Service) reconcileSetUnlocked(ctx context.Context, set domain.FactorSet) error {
+	err := s.reconcileResultColumns(ctx, set)
+	switch {
+	case err == nil:
+		s.markReady(set.SetID, true)
+	case errors.Is(err, storageio.ErrInfra):
+		// A transient Storage failure says nothing about the result dataset;
+		// keep the engine computing with the last known readiness.
+	default:
+		s.markReady(set.SetID, false)
+	}
+	return err
+}
+
+func (s *Service) reconcileResultColumns(ctx context.Context, set domain.FactorSet) error {
 	source, columns, err := s.sourceDataset(ctx, set)
 	if err != nil {
 		return err
 	}
-	factors, err := s.db.ListFactors(ctx, set.SetID, domain.FactorStatusEnabled)
+	members, err := s.db.ListMembers(ctx, set.SetID, domain.MemberStatusEnabled)
 	if err != nil {
-		return fmt.Errorf("list enabled factors: %w", err)
+		return fmt.Errorf("list enabled members: %w", err)
+	}
+	factors := make([]domain.FactorDef, 0, len(members))
+	for _, member := range members {
+		factors = append(factors, member.Factor)
 	}
 	return s.ensureResultColumns(ctx, set, source, columns, factors...)
 }
@@ -90,11 +92,18 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet,
 	}
 	if result.SpaceID != set.SpaceID || result.DatasetID != set.ResultDatasetID ||
 		result.DataSourceID != source.DataSourceID || result.DataNodeID != source.DataNodeID ||
-		result.KeepDuration != source.KeepDuration || result.DataKind != storageio.DataKindTimeSeries ||
-		!equalStrings(result.Freqs, []string{set.Freq}) || !equalStrings(result.SubjectTags, source.SubjectTags) ||
+		result.DataKind != storageio.DataKindTimeSeries ||
+		result.Freq != set.Freq ||
 		result.Attributes["owner_module"] != "factor" || result.Attributes["dataset_role"] != storageio.DatasetRoleFactorResult ||
 		result.Attributes["source_dataset_id"] != set.SourceDatasetID || result.Attributes["write_owner"] != "factor" {
 		return fmt.Errorf("result dataset %q does not match the factor result contract", set.ResultDatasetID)
+	}
+	// The result dataset mirrors its source's subject scope; follow a source
+	// tag change instead of halting the set.
+	if !equalStrings(result.SubjectTags, source.SubjectTags) {
+		if err := s.metadata.SetDatasetSubjectTags(ctx, set.SpaceID, set.ResultDatasetID, source.SubjectTags); err != nil {
+			return fmt.Errorf("sync factor result subject tags: %w", err)
+		}
 	}
 	if result.Status != storageio.DatasetStatusActive {
 		return fmt.Errorf("factor result dataset %q is not active", set.ResultDatasetID)
@@ -174,15 +183,8 @@ func (s *Service) sourceDataset(ctx context.Context, set domain.FactorSet) (stor
 	if source.DataKind != storageio.DataKindTimeSeries {
 		return storageio.DatasetInfo{}, nil, errors.New("factor sets require a time_series source dataset")
 	}
-	frequencyDeclared := false
-	for _, frequency := range source.Freqs {
-		if strings.EqualFold(strings.TrimSpace(frequency), set.Freq) {
-			frequencyDeclared = true
-			break
-		}
-	}
-	if !frequencyDeclared {
-		return storageio.DatasetInfo{}, nil, fmt.Errorf("source dataset does not declare frequency %q", set.Freq)
+	if source.Freq != set.Freq {
+		return storageio.DatasetInfo{}, nil, fmt.Errorf("source dataset freq is %q, not %q", source.Freq, set.Freq)
 	}
 	if source.SpaceID != set.SpaceID || source.DatasetID != set.SourceDatasetID || source.DataNodeID == "" || source.DataSourceID == "" {
 		return storageio.DatasetInfo{}, nil, errors.New("source dataset identity or DataNode is invalid")

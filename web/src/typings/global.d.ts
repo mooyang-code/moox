@@ -24,6 +24,10 @@ declare namespace Menu {
     svgIcon?: string;
     sort?: number;
     type?: number;
+    /** 隐藏路由进入时侧栏高亮的菜单 name */
+    activeMenu?: string;
+    /** 同一路径仅 query 变化时复用页面组件（不重建、不闪全局加载态），页面自己监听 query。 */
+    reuseOnQuery?: boolean;
   }
 }
 /* tabs菜单 */
@@ -41,8 +45,5 @@ declare namespace TabsMenu {
 /* viteEnv */
 interface ViteEnv {
   VITE_GLOB_APP_TITLE: string;
-  VITE_IMG_BASE_URL: string;
-  VITE_USER_NODE_ENV: "development" | "production" | "test";
-  VITE_PUBLIC_PATH: string;
-  VITE_APP_BASE_URL: string;
+  VITE_ADMIN_ORIGIN?: string;
 }

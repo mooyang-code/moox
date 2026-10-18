@@ -13,6 +13,12 @@ func TestProviderResponseErrorsRemainRetryableForLaterCandidateWindow(t *testing
 		outcome := classifyError(err)
 		require.Equal(t, domain.ItemOutcomeProviderError, outcome, "error=%v", err)
 		require.True(t, isRetryable(outcome), "error=%v", err)
-		require.True(t, isRetryOutcome(string(outcome)), "error=%v", err)
 	}
+}
+
+func TestRuntimeKlineBreakerThresholdScalesWithFeedConcurrency(t *testing.T) {
+	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "")
+	require.Equal(t, RuntimeKlineProviderAttemptBudget(), RuntimeKlineBreakerThreshold())
+	t.Setenv("MOOX_FETCH_FEED_CONCURRENCY", "50")
+	require.Equal(t, 50*RuntimeKlineProviderAttemptBudget(), RuntimeKlineBreakerThreshold())
 }

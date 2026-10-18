@@ -1,3 +1,4 @@
+import { installStaleSpaceToastFilter } from "@/api/admin/stale-space";
 import { createApp } from "vue";
 import "@/style.css";
 import App from "@/App.vue";
@@ -36,6 +37,7 @@ async function initVChartTheme() {
 // 在路由准备好后初始化图表主题
 router.isReady().then(initVChartTheme);
 
+installStaleSpaceToastFilter();
 const app = createApp(App);
 
 // 全局错误处理

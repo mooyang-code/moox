@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -75,9 +74,8 @@ func (r *TaskInstanceRepository) ClaimDueResampleTasksWithSettleDelay(ctx contex
 	return r.claimDueResampleTasks(ctx, "", now, origin, limit, leaseDuration, false, defaultSettleDelay)
 }
 
-// ClaimDueResampleTasksInSpace limits claims to one Collector space. The
-// compatibility wrapper above is retained for repository callers that need a
-// whole-database maintenance sweep.
+// ClaimDueResampleTasksInSpace limits claims to one Collector space;
+// ClaimDueResampleTasks above sweeps the whole database.
 func (r *TaskInstanceRepository) ClaimDueResampleTasksInSpace(
 	ctx context.Context,
 	spaceID string,
@@ -177,29 +175,7 @@ func (r *TaskInstanceRepository) claimDueResampleTasks(
 }
 
 func parseTaskFrequency(raw string) (time.Duration, error) {
-	// Keep the store independent of the resample worker package while applying
-	// the same fixed-minute closure rule to realtime claims.
-	if strings.TrimSpace(raw) == "" {
-		return 0, errors.New("task frequency is required")
-	}
-	value := strings.TrimSpace(raw)
-	unit := value[len(value)-1]
-	count, err := strconv.ParseInt(value[:len(value)-1], 10, 64)
-	if err != nil || count <= 0 {
-		return 0, errors.New("task frequency is invalid")
-	}
-	var multiplier time.Duration
-	switch unit {
-	case 'm':
-		multiplier = time.Minute
-	case 'h', 'H':
-		multiplier = time.Hour
-	case 'd', 'D':
-		multiplier = 24 * time.Hour
-	default:
-		return 0, errors.New("task frequency is invalid")
-	}
-	return time.Duration(count) * multiplier, nil
+	return domain.ResampleFrequencyDuration(raw)
 }
 
 func latestClosedRealtimeBucket(now time.Time, target time.Duration) time.Time {

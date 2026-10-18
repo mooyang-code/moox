@@ -43,7 +43,7 @@ func TestMonotonicMetricRecognizesCanonicalModuleNames(t *testing.T) {
 		"moox_strategy_input_watermark_timestamp_seconds",
 		"moox_trade_metrics_errors_total",
 		"moox_archive_metrics_last_error_timestamp_seconds",
-		ViewDatasetOutputLastDataTimeMetric,
+		ViewOutputLatestMetric,
 	} {
 		require.True(t, monotonicMetric(name), name)
 	}
@@ -58,7 +58,7 @@ func TestMetricMessageStoreViewDatasetTimestampsIgnoreOutOfOrderSnapshot(t *test
 	r := metricMessageStoreForTest(t, mgr)
 	newer := time.Unix(200, 0).UTC()
 	report := &metricspb.MetricReport{ServiceName: "storage", InstanceId: "storage@node-a", BootId: "boot-a"}
-	for index, name := range []string{ViewDatasetOutputLastDataTimeMetric} {
+	for index, name := range []string{ViewOutputLatestMetric} {
 		seriesID := fmt.Sprintf("kline-series-%d", index)
 		_, err := r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: fmt.Sprintf("new-%d", index)}, report, []Sample{{
 			SeriesID: seriesID, ServiceName: report.ServiceName, InstanceID: report.InstanceId, MetricName: name,
@@ -85,7 +85,7 @@ func TestMetricMessageStoreListLatestByMetricNamesIsBoundedAndStable(t *testing.
 		rows := make([]MetricLatest, 0, 5003)
 		for index := 0; index < 5000; index++ {
 			rows = append(rows, MetricLatest{
-				SeriesID: fmt.Sprintf("view-%05d", index), MetricName: ViewDatasetOutputLastDataTimeMetric,
+				SeriesID: fmt.Sprintf("view-%05d", index), MetricName: ViewOutputLaggingSubjectMetric,
 				LabelsJSON: fmt.Sprintf(`{"space_id":"crypto","view_id":"view","dataset_id":"dataset","freq":"1m","series_tag":"default","subject_id":"%05d"}`, index),
 				Value:      float64(index + 1), ObservedAt: time.Unix(int64(index+1), 0).UTC(),
 			})
@@ -98,7 +98,7 @@ func TestMetricMessageStoreListLatestByMetricNamesIsBoundedAndStable(t *testing.
 	require.NoError(t, err)
 	r := metricMessageStoreForTest(t, mgr)
 	rows, err := r.ListLatestByMetricNames(context.Background(), []string{
-		ViewDatasetOutputLastDataTimeMetric,
+		ViewOutputLaggingSubjectMetric,
 	}, 0)
 	require.NoError(t, err)
 	require.Len(t, rows, 5000)
@@ -115,11 +115,11 @@ func TestMetricMessageStoreListLatestByMetricNamesIsBoundedAndStable(t *testing.
 	}
 	_, err = r.ListLatestByMetricNames(context.Background(), []string{"not_a_view_dataset_metric"}, 1)
 	require.Error(t, err)
-	_, err = r.ListLatestByMetricNames(context.Background(), []string{ViewDatasetOutputLastDataTimeMetric}, 500001)
+	_, err = r.ListLatestByMetricNames(context.Background(), []string{ViewOutputLaggingSubjectMetric}, 500001)
 	require.Error(t, err)
 
 	query := NewQueryService(r, nil)
-	rows, err = query.ListLatestByMetricNames(context.Background(), []string{ViewDatasetOutputLastDataTimeMetric}, 1)
+	rows, err = query.ListLatestByMetricNames(context.Background(), []string{ViewOutputLaggingSubjectMetric}, 1)
 	require.Error(t, err)
 }
 
@@ -130,13 +130,13 @@ func TestMetricMessageStoreListLatestByViewScopesFiltersBeforeRead(t *testing.T)
 	require.NoError(t, mgr.ApplySchema(schema.SQL()))
 	_, err = store.WithDatabase(mgr, func(db *gorm.DB) error {
 		return db.Create([]MetricLatest{
-			{SeriesID: "configured", MetricName: ViewDatasetOutputLastDataTimeMetric, LabelsJSON: `{"space_id":"crypto","view_id":"kline","dataset_id":"binance","subject_id":"BTC","freq":"1m","series_tag":"default"}`, Value: 10, ObservedAt: time.Unix(10, 0).UTC()},
-			{SeriesID: "unconfigured", MetricName: ViewDatasetOutputLastDataTimeMetric, LabelsJSON: `{"space_id":"mooxsys","view_id":"service","dataset_id":"metrics","subject_id":"cpu","freq":"30s","series_tag":"default"}`, Value: 10, ObservedAt: time.Unix(10, 0).UTC()},
+			{SeriesID: "configured", MetricName: ViewOutputLaggingSubjectMetric, LabelsJSON: `{"space_id":"crypto","view_id":"kline","dataset_id":"binance","subject_id":"BTC","freq":"1m","series_tag":"default"}`, Value: 10, ObservedAt: time.Unix(10, 0).UTC()},
+			{SeriesID: "unconfigured", MetricName: ViewOutputLaggingSubjectMetric, LabelsJSON: `{"space_id":"mooxsys","view_id":"service","dataset_id":"metrics","subject_id":"cpu","freq":"30s","series_tag":"default"}`, Value: 10, ObservedAt: time.Unix(10, 0).UTC()},
 		}).Error
 	})
 	require.NoError(t, err)
 	r := metricMessageStoreForTest(t, mgr)
-	rows, err := r.ListLatestByViewScopes(context.Background(), ViewDatasetOutputLastDataTimeMetric, []ViewMetricScope{{
+	rows, err := r.ListLatestByViewScopes(context.Background(), ViewOutputLaggingSubjectMetric, []ViewMetricScope{{
 		SpaceID: "crypto", ViewID: "kline", DatasetID: "binance", Frequency: "1m",
 	}}, 0)
 	require.NoError(t, err)
@@ -151,4 +151,131 @@ func metricMessageStoreForTest(t *testing.T, db *store.Store) *MetricMessageStor
 		t.Fatal(err)
 	}
 	return result
+}
+
+func TestMetricMessageStoreCommitsLargeReportInBatches(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	r := metricMessageStoreForTest(t, mgr)
+	report := &metricspb.MetricReport{ServiceName: "storage-view", InstanceId: "storage-view@a", BootId: "b"}
+	at := time.Unix(1000, 0).UTC()
+	samples := func(message string, observed time.Time, value float64) []Sample {
+		out := make([]Sample, 0, 2*ingestBatchRows+3)
+		for i := 0; i < 2*ingestBatchRows+3; i++ {
+			name := "moox_storage_view_rows_total"
+			if i%2 == 0 {
+				name = ViewOutputLatestMetric
+			}
+			out = append(out, Sample{
+				SeriesID: fmt.Sprintf("s-%04d", i), ServiceName: report.ServiceName, InstanceID: report.InstanceId,
+				MetricName: name, MetricType: "gauge", Value: value, ObservedAt: observed, MessageID: message,
+			})
+		}
+		return out
+	}
+	_, err = r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: "m1"}, report, samples("m1", at, 50))
+	require.NoError(t, err)
+	// A newer report with smaller values: plain gauges follow it, monotonic
+	// watermarks keep their committed value.
+	_, err = r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: "m2"}, report, samples("m2", at.Add(time.Second), 40))
+	require.NoError(t, err)
+
+	var seriesCount, latestCount int64
+	require.NoError(t, r.db.Model(&MetricSeries{}).Count(&seriesCount).Error)
+	require.NoError(t, r.db.Model(&MetricLatest{}).Count(&latestCount).Error)
+	require.EqualValues(t, 2*ingestBatchRows+3, seriesCount)
+	require.EqualValues(t, 2*ingestBatchRows+3, latestCount)
+	monotonic, err := r.GetLatest(context.Background(), "s-1002")
+	require.NoError(t, err)
+	require.Equal(t, float64(50), monotonic.Value)
+	plain, err := r.GetLatest(context.Background(), "s-1001")
+	require.NoError(t, err)
+	require.Equal(t, float64(40), plain.Value)
+	require.Equal(t, "m2", plain.MessageID)
+	require.True(t, plain.ObservedAt.Equal(at.Add(time.Second)))
+}
+
+func TestMetricMessageStorePrunesRetiredSeriesAndReporters(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	r := metricMessageStoreForTest(t, mgr)
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	report := &metricspb.MetricReport{ServiceName: "storage-view", InstanceId: "storage-view@a", BootId: "b"}
+	for _, item := range []struct {
+		id string
+		at time.Time
+	}{{"retired", now.Add(-RetiredSeriesAfter - time.Minute)}, {"live", now.Add(-time.Minute)}} {
+		_, err := r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: item.id}, report, []Sample{{
+			SeriesID: item.id, ServiceName: report.ServiceName, InstanceID: report.InstanceId,
+			MetricName: "g", MetricType: "gauge", Value: 1, ObservedAt: item.at, MessageID: item.id,
+		}})
+		require.NoError(t, err)
+	}
+	retiredReport := &metricspb.MetricReport{ServiceName: "renamed-service", InstanceId: "renamed-service@a", BootId: "b"}
+	_, err = r.CommitIngest(context.Background(), &eventpb.EventMessage{EventId: "renamed"}, retiredReport, nil)
+	require.NoError(t, err)
+	require.NoError(t, r.db.Model(&MetricService{}).Where("c_service_name = ?", retiredReport.ServiceName).
+		Update("c_last_seen_at", now.Add(-RetiredSeriesAfter-time.Minute)).Error)
+	require.NoError(t, r.db.Model(&MetricService{}).Where("c_service_name = ?", report.ServiceName).
+		Update("c_last_seen_at", now.Add(-time.Minute)).Error)
+	pruned, err := r.PruneRetiredSeries(context.Background(), now, []ReporterPlacement{})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, pruned)
+	var services []MetricService
+	require.NoError(t, r.db.Order("c_service_name").Find(&services).Error)
+	require.Len(t, services, 1)
+	require.Equal(t, report.ServiceName, services[0].ServiceName)
+	_, err = r.GetLatest(context.Background(), "retired")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	_, err = r.GetLatest(context.Background(), "live")
+	require.NoError(t, err)
+	series, err := r.ListSeries(context.Background(), report.ServiceName, "g", 10)
+	require.NoError(t, err)
+	require.Len(t, series, 1)
+	require.Equal(t, "live", series[0].SeriesID)
+}
+
+func TestMetricCleanupKeepsLastReportOfEveryRegisteredPlacement(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	r := metricMessageStoreForTest(t, mgr)
+	now := time.Now().UTC()
+	for _, row := range []MetricService{
+		{ServiceName: "collector", NodeID: "control", InstanceID: "current", BootID: "old", LastSeenAt: now.Add(-4 * RetiredSeriesAfter)},
+		{ServiceName: "collector", NodeID: "control", InstanceID: "current", BootID: "new", LastSeenAt: now.Add(-2 * RetiredSeriesAfter)},
+		{ServiceName: "collector", NodeID: "control", InstanceID: "retired-instance", BootID: "1", LastSeenAt: now.Add(-3 * RetiredSeriesAfter)},
+		{ServiceName: "collector", NodeID: "other-host", InstanceID: "unregistered", BootID: "1", LastSeenAt: now.Add(-2 * RetiredSeriesAfter)},
+		{ServiceName: "admin", NodeID: "other-host", InstanceID: "disabled", BootID: "1", LastSeenAt: now.Add(-5 * RetiredSeriesAfter)},
+	} {
+		require.NoError(t, r.db.Create(&row).Error)
+	}
+	_, err = r.PruneRetiredSeries(t.Context(), now, nil)
+	require.NoError(t, err)
+	var count int64
+	require.NoError(t, r.db.Model(&MetricService{}).Count(&count).Error)
+	require.EqualValues(t, 5, count, "unknown discovery cannot discard reporter history")
+	_, err = r.PruneRetiredSeries(t.Context(), now, []ReporterPlacement{{NodeID: "control", ServiceName: "collector"}, {NodeID: "other-host", ServiceName: "admin"}})
+	require.NoError(t, err)
+	rows, _, err := NewCatalog(r).ListServicesAt(t.Context(), "", 0, 10, now)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.NoError(t, r.db.Model(&MetricService{}).Count(&count).Error)
+	require.EqualValues(t, 2, count, "redundant boots and unregistered retired reporters are removed")
+	for _, row := range rows {
+		require.True(t, row.IsStale, "last reporting time is retained without inventing recovery")
+		if row.ServiceName == "collector" {
+			require.Equal(t, "new", row.BootID)
+			require.WithinDuration(t, now.Add(-2*RetiredSeriesAfter), row.LastSeenAt, time.Millisecond)
+		}
+	}
+	_, err = r.PruneRetiredSeries(t.Context(), now, []ReporterPlacement{})
+	require.NoError(t, err)
+	require.NoError(t, r.db.Model(&MetricService{}).Count(&count).Error)
+	require.Zero(t, count, "a successfully discovered empty deployment set removes retired history")
 }

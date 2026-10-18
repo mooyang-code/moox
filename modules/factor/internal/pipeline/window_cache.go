@@ -1,0 +1,321 @@
+package pipeline
+
+import (
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+)
+
+// Warm-up states of a live factor set.
+const (
+	WarmupWarming = "warming"
+	WarmupReady   = "ready"
+)
+
+// liveCatchUpBars bounds how many missed bars a warm subject may read inline;
+// a subject further behind its cached window is warmed up again in the
+// background instead of slowing the live period down.
+const liveCatchUpBars = 5
+
+// WarmupStatus reports how much of a live set's universe has its lookback
+// window loaded. Results of warming subjects are not formal: they are reported
+// as failed subjects, so strategies holding them do not evaluate the period.
+type WarmupStatus struct {
+	SetID            string
+	State            string
+	WarmSubjects     int
+	ExpectedSubjects int
+}
+
+// liveWindowCache keeps the source window each live set loaded. Consecutive
+// live periods share all but one bar of their lookback, so a warm subject reads
+// only the bars from its target period on and takes the rest from here.
+type liveWindowCache struct {
+	mu   sync.Mutex
+	sets map[string]*cachedSetWindow
+	// wake signals RunWarmup and is nil without background warm-up, in which
+	// case a subject that is not warm is read in full inside the period.
+	wake chan struct{}
+}
+
+type cachedSetWindow struct {
+	source   string
+	subjects map[string]cachedSubjectWindow
+	// dirty 是最近一次读到的窗口有 K 线空洞的标的（值是标记时的窗口结束时间）：它们的窗口不进缓存，也不进后台预热，
+	// 每期在本期内整窗口读取，直到读到的窗口完整为止。
+	dirty map[string]time.Time
+
+	// warmup is the latest live plan that found subjects not warm; pending
+	// subjects wait for the warm-up worker and inflight ones are being read.
+	warmup   Plan
+	pending  map[string]struct{}
+	inflight map[string]struct{}
+	warm     int
+	expected int
+}
+
+// cachedSubjectWindow holds the rows of [start, end) for one subject, ordered
+// by data_time.
+type cachedSubjectWindow struct {
+	start time.Time
+	end   time.Time
+	rows  [][]any
+}
+
+// subjectRead is where one subject's live read begins and the cached rows
+// that precede it.
+type subjectRead struct {
+	start  time.Time
+	prefix [][]any
+}
+
+func newLiveWindowCache(backgroundWarmup bool) *liveWindowCache {
+	cache := &liveWindowCache{sets: make(map[string]*cachedSetWindow)}
+	if backgroundWarmup {
+		cache.wake = make(chan struct{}, 1)
+	}
+	return cache
+}
+
+func windowSource(plan Plan) string {
+	return plan.Set.SpaceID + "|" + plan.Set.SourceDatasetID + "|" + plan.Set.Freq + "|" + strings.Join(plan.CarryColumns, ",")
+}
+
+func (c *liveWindowCache) setFor(plan Plan) *cachedSetWindow {
+	source := windowSource(plan)
+	set := c.sets[plan.Set.SetID]
+	if set == nil || set.source != source {
+		set = &cachedSetWindow{
+			source: source, subjects: make(map[string]cachedSubjectWindow), dirty: make(map[string]time.Time),
+			pending: make(map[string]struct{}), inflight: make(map[string]struct{}),
+		}
+		c.sets[plan.Set.SetID] = set
+	}
+	return set
+}
+
+// plan splits a live period's subjects into reads and warming subjects. A warm
+// subject re-reads from its target period, so a retried period still picks up
+// a late target bar. With background warm-up a subject that is not warm is
+// queued for it and left out of the period; otherwise it is read in full.
+func (c *liveWindowCache) plan(plan Plan, subjects []string) (map[string]subjectRead, []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	set := c.setFor(plan)
+	period := plan.TargetEnd.Sub(plan.PeriodTime)
+	reads := make(map[string]subjectRead, len(subjects))
+	var warming []string
+	for _, subject := range subjects {
+		if _, bad := set.dirty[subject]; bad {
+			// 窗口有洞的标的整窗口读取，不用缓存前缀、不进预热：失败原因由空洞检查决定，不能退化成普通的预热失败。
+			reads[subject] = subjectRead{start: plan.TargetStart}
+			continue
+		}
+		cached, ok := set.subjects[subject]
+		// 缓存是 [start, end)：回看 1 个周期时，下一周期的 TargetStart 恰好等于缓存的 end，也算相邻覆盖（不必有重叠行）。
+		covered := ok && !cached.start.After(plan.TargetStart) && !cached.end.Before(plan.TargetStart)
+		if covered && c.wake != nil && period > 0 && plan.PeriodTime.Sub(cached.end) > liveCatchUpBars*period {
+			covered = false
+		}
+		if covered {
+			start := cached.end
+			if plan.PeriodTime.Before(start) {
+				start = plan.PeriodTime
+			}
+			reads[subject] = subjectRead{start: start, prefix: rowsBetween(cached.rows, plan.TargetStart, start)}
+			continue
+		}
+		// 缓存终点早于窗口起点、但落后不超过 liveCatchUpBars 根（回看很短，或中间漏了几期）：本期直接读整窗口。
+		// 这时窗口不超过 liveCatchUpBars 根，代价与增量读取相同；否则只回看一根的集合永远接不上主动预热的窗口。
+		behind := ok && period > 0 && cached.end.Before(plan.TargetStart) && plan.PeriodTime.Sub(cached.end) <= liveCatchUpBars*period
+		if c.wake == nil || behind {
+			reads[subject] = subjectRead{start: plan.TargetStart}
+			continue
+		}
+		warming = append(warming, subject)
+		if _, busy := set.inflight[subject]; !busy {
+			set.pending[subject] = struct{}{}
+		}
+	}
+	set.expected, set.warm = len(subjects), len(subjects)-len(warming)
+	if len(warming) > 0 {
+		if set.warmup.TargetEnd.Before(plan.TargetEnd) {
+			set.warmup = plan
+		}
+		select {
+		case c.wake <- struct{}{}:
+		default:
+		}
+	}
+	return reads, warming
+}
+
+// prewarm 为缓存里还没有的因子集排队预热全部标的，返回排队的标的数。已经有记录（实时周期到过或已经预热过）的集合不处理：
+// 之后哪些标的需要再预热由实时周期自己判断。没有后台预热时不处理。
+func (c *liveWindowCache) prewarm(plan Plan, subjects []string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.wake == nil || len(subjects) == 0 {
+		return 0
+	}
+	if _, seen := c.sets[plan.Set.SetID]; seen {
+		return 0
+	}
+	set := c.setFor(plan)
+	for _, subject := range subjects {
+		set.pending[subject] = struct{}{}
+	}
+	set.warmup = plan
+	set.expected, set.warm = len(subjects), 0
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+	return len(subjects)
+}
+
+// store merges loaded windows into the cache; subjects without a frame keep
+// their previous window. Periods may finish out of order, so a window only
+// extends the cached one it overlaps and never replaces a newer disjoint one.
+func (c *liveWindowCache) store(plan Plan, frames map[string]*storageio.Frame) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	set := c.setFor(plan)
+	retain := 2 * plan.TargetEnd.Sub(plan.TargetStart)
+	for subject, frame := range frames {
+		loaded := cachedSubjectWindow{
+			start: plan.TargetStart, end: plan.TargetEnd,
+			rows: rowsBetween(frame.Rows, plan.TargetStart, plan.TargetEnd),
+		}
+		cached, ok := set.subjects[subject]
+		set.subjects[subject] = mergeWindow(cached, ok, loaded, retain)
+	}
+}
+
+func mergeWindow(cached cachedSubjectWindow, ok bool, loaded cachedSubjectWindow, retain time.Duration) cachedSubjectWindow {
+	if !ok || loaded.start.After(cached.end) || cached.start.After(loaded.end) {
+		if ok && cached.end.After(loaded.end) {
+			return cached
+		}
+		return loaded
+	}
+	merged := cachedSubjectWindow{start: cached.start, end: cached.end}
+	if loaded.start.Before(merged.start) {
+		merged.start = loaded.start
+	}
+	if loaded.end.After(merged.end) {
+		merged.end = loaded.end
+	}
+	merged.rows = append(merged.rows, rowsBetween(cached.rows, merged.start, loaded.start)...)
+	merged.rows = append(merged.rows, loaded.rows...)
+	merged.rows = append(merged.rows, rowsBetween(cached.rows, loaded.end, merged.end)...)
+	if retain > 0 && merged.end.Sub(merged.start) > retain {
+		merged.start = merged.end.Add(-retain)
+		merged.rows = rowsBetween(merged.rows, merged.start, merged.end)
+	}
+	return merged
+}
+
+// nextWarmup hands the warm-up worker the pending subjects of one set and the
+// latest window they were requested for.
+func (c *liveWindowCache) nextWarmup() (Plan, []string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	setIDs := make([]string, 0, len(c.sets))
+	for setID := range c.sets {
+		setIDs = append(setIDs, setID)
+	}
+	sort.Strings(setIDs)
+	for _, setID := range setIDs {
+		set := c.sets[setID]
+		if len(set.pending) == 0 {
+			continue
+		}
+		subjects := make([]string, 0, len(set.pending))
+		for subject := range set.pending {
+			subjects = append(subjects, subject)
+			set.inflight[subject] = struct{}{}
+		}
+		set.pending = make(map[string]struct{})
+		sort.Strings(subjects)
+		return set.warmup, subjects, true
+	}
+	return Plan{}, nil, false
+}
+
+// finishWarmup 结束一批预热，并把窗口已载入到本次目标的标的计入已预热数：预热中的标的在排队时都没有计入，
+// 不在这里计入的话，状态要等下一个实时周期才会变成 ready（主动预热的 1h 集合要等将近一个小时）。
+func (c *liveWindowCache) finishWarmup(plan Plan, subjects []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	set := c.sets[plan.Set.SetID]
+	if set == nil {
+		return
+	}
+	warmed := 0
+	for _, subject := range subjects {
+		delete(set.inflight, subject)
+		if cached, ok := set.subjects[subject]; ok && !cached.end.Before(plan.TargetEnd) {
+			warmed++
+		}
+	}
+	set.warm = min(set.expected, set.warm+warmed)
+}
+
+func (c *liveWindowCache) statuses() []WarmupStatus {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]WarmupStatus, 0, len(c.sets))
+	for setID, set := range c.sets {
+		state := WarmupReady
+		if set.warm < set.expected || len(set.pending) > 0 || len(set.inflight) > 0 {
+			state = WarmupWarming
+		}
+		out = append(out, WarmupStatus{SetID: setID, State: state, WarmSubjects: set.warm, ExpectedSubjects: set.expected})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].SetID < out[j].SetID })
+	return out
+}
+
+// rowsBetween returns the rows with start <= data_time < end; rows are ordered
+// by data_time and their values are never mutated, so they are shared.
+func rowsBetween(rows [][]any, start, end time.Time) [][]any {
+	out := make([][]any, 0, len(rows))
+	for _, row := range rows {
+		at, ok := row[0].(time.Time)
+		if !ok || at.Before(start) || !at.Before(end) {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// markDirty 标记窗口有洞的标的并把它移出预热队列；cleared 是读到完整窗口的标的，窗口结束时间不早于标记时才解除，
+// 迟到的较旧窗口不能解除较新的标记。
+func (c *liveWindowCache) markDirty(plan Plan, holes map[string]struct{}, cleared []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	set := c.setFor(plan)
+	for subject := range holes {
+		if since, bad := set.dirty[subject]; !bad || plan.TargetEnd.After(since) {
+			set.dirty[subject] = plan.TargetEnd
+		}
+		delete(set.pending, subject)
+	}
+	for _, subject := range cleared {
+		if since, bad := set.dirty[subject]; bad && !plan.TargetEnd.Before(since) {
+			delete(set.dirty, subject)
+		}
+	}
+}
+
+// dirtyCount 返回集合里窗口有洞的标的数（测试与指标用）。
+func (c *liveWindowCache) dirtyCount(plan Plan) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.setFor(plan).dirty)
+}

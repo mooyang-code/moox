@@ -1,61 +1,20 @@
-# MooX Factor
+# moox-factor
 
-`moox-factor` manages factor sets and definitions and runs the dataset-driven factor period
-pipeline in one process. It consumes `CollectorPeriodCompleted`, reads source rows through
-Storage PrimaryStore, writes carried source values plus factor outputs to a `factor_result`
-Dataset, and reports `FactorPeriodComputed`. Storage maintains the default result View;
-View is a query index, not an input to Factor computation.
+因子管理端（`moox-factor-mgr`）与计算引擎（`moox-factor-engine`）：因子定义、计算任务、补算，以及按采集周期计算表达式因子并写回 Storage。
 
-The architecture and RPC/data contracts are documented in
-[`docs/因子计算模块设计.md`](../../docs/因子计算模块设计.md) and the canonical
-[design](../../docs/superpowers/specs/2026-10-04-factor-dataset-period-pipeline-design.md).
+设计文档：[因子](../../docs/模块/因子.md)
 
-## Build And Run
+## 构建与测试
 
 ```bash
-./scripts/build/build.sh factor
-./bin/moox-factor
+./scripts/build/build.sh factor-mgr
+./scripts/build/build.sh factor-engine
+scripts/deploy/deploy-factor-engine.sh --help
+go test -count=1 ./modules/factor/...
 ```
 
-The service reads `./config/app.yaml`. The config sections are `database`, `storage`,
-`eventbus`, `python`, `pipeline`, and `recalc`. Python defaults are in
-`modules/factor/config/app.yaml`; deployment supplies Storage gateway and EventBus credentials.
+## 配置
 
-## CLI
+管理端 `config/app.yaml`、`config/trpc_go.yaml`；引擎 `config/engine.yaml`、`config/trpc_go.engine.yaml`；因子库在 `factors/`（YAML 表达式定义），表达式语言在 `packages/factorexpr`。
 
-```bash
-./bin/moox-factor-cli init --db ./data/factor/factor.db
-./bin/moox-factor-cli import \
-  --config ./config/app.yaml --set fset_binance_kline_1m \
-  --file ./factors/Bias.py --factor-id bias \
-  --inputs close --outputs bias_20 --params '{"window":20}' --lookback 20
-./bin/moox-factor-cli import-catalog --set fset_binance_kline_1m --dir ./factors
-./bin/moox-factor-cli recalc --set fset_binance_kline_1m \
-  --start 2026-10-04T00:00:00Z --end 2026-10-04T01:00:00Z
-./bin/moox-factor-cli run-once --set fset_binance_kline_1m \
-  --period 2026-10-04T00:10:00Z
-./bin/moox-factor-cli status --target ip://127.0.0.1:11004
-```
-
-`import` creates or updates a disabled definition. Enabling is done via FactorMgr after the
-result Dataset schema has been reconciled. `recalc` submits an asynchronous range job;
-`run-once` invokes one period directly for local diagnosis. Supported commands are `init`,
-`import`, `import-catalog`, `recalc`, `run-once`, and `status`.
-
-## XBX Factor Catalog
-
-The catalog manifest and ordinary Python factors live under `modules/factor/factors/`.
-`import-catalog` imports the definitions for a factor set; they remain disabled until explicitly
-enabled. Every definition states its complete input columns, outputs, params, and maximum
-lookback. Factor does not infer OHLCV dependencies or depend on another Factor's output.
-
-## Operational Signals
-
-The JetStream durable consumer is `factor_collector_period_v1`. Its lag represents unprocessed
-Collector periods; restart recovery is provided by JetStream redelivery. Inspect Factor's
-Prometheus metrics: `factor_period_total`, `factor_period_duration_seconds`,
-`factor_period_lag_seconds`, `factor_failures_total`, `factor_lane_backlog`,
-`factor_python_busy`, and `factor_last_period_time`.
-
-Do not clear a Factor consumer to recover it. Diagnose durable lag, set-lane backlog, Storage
-errors, and Python worker saturation; use an explicit Recalc job for historical correction.
+FactorMgr 仅监听 loopback 原生 tRPC 11403；控制台与 CLI 经主机网关访问。FactorEngine 的 11405 调用迁移留到外部客户端阶段。

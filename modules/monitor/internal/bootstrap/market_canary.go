@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
@@ -14,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/robfig/cron"
 	"gorm.io/gorm"
 )
@@ -70,6 +70,50 @@ func subjectTagCheckID(spaceID, tagID string) string {
 	return tagCheckPrefix + strings.TrimSpace(spaceID) + ":" + strings.TrimSpace(tagID)
 }
 
+// marketCanaryCheckKey 是行情探针检查的完整身份：MarketCanaryCheckID 不含空间。
+type marketCanaryCheckKey struct{ spaceID, checkID string }
+
+// retireUnconfiguredMarketCanaries 退役不在当前配置中的探针检查（按 空间+CheckID 匹配）。
+func retireUnconfiguredMarketCanaries(ctx context.Context, repositories *store.Repositories, configured map[marketCanaryCheckKey]struct{}) error {
+	// Canary identity includes the symbol. When configuration moves from an
+	// inactive symbol to an active one, leave no enabled check behind for the
+	// old identity; otherwise its last failed result remains visible forever in
+	// the business overview and can continue to drive a stale alert.
+	checks, err := repositories.Checks.List(ctx, store.ListChecksOptions{
+		Source: domain.CheckSourceObservability,
+		Page:   store.Page{PageSize: 500},
+	})
+	if err != nil {
+		return err
+	}
+	for index := range checks {
+		check := &checks[index]
+		if !strings.HasPrefix(check.CheckID, "market_canary:") {
+			continue
+		}
+		if _, keep := configured[marketCanaryCheckKey{check.SpaceID, check.CheckID}]; keep {
+			continue
+		}
+		rules, err := repositories.Alerts.ListRulesForCheck(ctx, check.SpaceID, check.CheckID)
+		if err != nil {
+			return err
+		}
+		// Remove obsolete rules instead of merely disabling them. DeleteRule also
+		// removes a previously firing AlertState, so a retired symbol cannot keep
+		// contributing a stale alert to the availability overview.
+		for index := range rules {
+			if err := repositories.Alerts.DeleteRule(ctx, rules[index].SpaceID, rules[index].RuleID); err != nil {
+				return err
+			}
+		}
+		check.Enabled = false
+		if err := repositories.Checks.Update(ctx, check); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func buildMonitorMarketCanary(
 	ctx context.Context,
 	cfg *config.Config,
@@ -83,19 +127,15 @@ func buildMonitorMarketCanary(
 	if runtime == nil || runtime.Repositories == nil {
 		return nil, nil, fmt.Errorf("monitor market canary requires repositories")
 	}
-	credentials, err := gatewayauth.ResolveCredentials(cfg.Metrics.Storage.KeyID, cfg.Metrics.Storage.HMACKeyFile)
-	if err != nil {
-		return nil, nil, fmt.Errorf("monitor market canary credentials: %w", err)
+	if runtime.StorageGateway == nil {
+		return nil, nil, fmt.Errorf("monitor market canary requires the shared Storage gateway client")
 	}
-	reader := storagepb.NewPrimaryStoreClientProxy(gatewayauth.NewTRPCClientOptions(
-		cfg.Metrics.Storage.GatewayTarget,
-		firstNonEmptyString(cfg.Metrics.Storage.GatewayNodeID, gatewayauth.ServiceGatewayNodeID()),
-		credentials,
-	)...)
+	reader := runtime.StorageGateway
 	canaries := make([]watchdog.MarketCanary, 0, len(cfg.MarketCanary.Subjects))
 	tagSpaces := make([]string, 0, len(cfg.MarketCanary.Subjects))
 	seenTagSpaces := make(map[string]struct{})
-	configuredCheckIDs := make(map[string]struct{}, len(cfg.MarketCanary.Subjects))
+	// 检查身份是 (空间, CheckID)：MarketCanaryCheckID 不含空间，把探针从 A 空间迁到 B 空间时旧空间的检查必须被退役
+	configuredCheckIDs := make(map[marketCanaryCheckKey]struct{}, len(cfg.MarketCanary.Subjects))
 	for _, subject := range cfg.MarketCanary.Subjects {
 		if spaceID := strings.TrimSpace(subject.SpaceID); spaceID != "" {
 			if _, ok := seenTagSpaces[spaceID]; !ok {
@@ -114,11 +154,11 @@ func buildMonitorMarketCanary(
 		}
 		check := domain.Check{
 			SpaceID: canaryConfig.SpaceID, CheckID: watchdog.MarketCanaryCheckID(canaryConfig),
-			Name:      "Market canary " + watchdog.MarketCanaryTarget(canaryConfig),
+			Name:      "行情探针 · " + canaryConfig.SubjectID + " " + alerttext.Frequency(canaryConfig.Frequency) + "K线",
 			GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability,
 			Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000,
 		}
-		configuredCheckIDs[check.CheckID] = struct{}{}
+		configuredCheckIDs[marketCanaryCheckKey{check.SpaceID, check.CheckID}] = struct{}{}
 		existing, getErr := runtime.Repositories.Checks.Get(ctx, check.SpaceID, check.CheckID)
 		switch {
 		case getErr == nil:
@@ -137,41 +177,8 @@ func buildMonitorMarketCanary(
 			Reader: reader, AuthInfo: storageauth.Primary("monitor-market-canary"), Config: canaryConfig,
 		})
 	}
-	// Canary identity includes the symbol. When configuration moves from an
-	// inactive symbol to an active one, leave no enabled check behind for the
-	// old identity; otherwise its last failed result remains visible forever in
-	// the business overview and can continue to drive a stale alert.
-	checks, err := runtime.Repositories.Checks.List(ctx, store.ListChecksOptions{
-		Source: domain.CheckSourceObservability,
-		Page:   store.Page{PageSize: 500},
-	})
-	if err != nil {
+	if err := retireUnconfiguredMarketCanaries(ctx, runtime.Repositories, configuredCheckIDs); err != nil {
 		return nil, nil, err
-	}
-	for index := range checks {
-		check := &checks[index]
-		if !strings.HasPrefix(check.CheckID, "market_canary:") {
-			continue
-		}
-		if _, keep := configuredCheckIDs[check.CheckID]; keep {
-			continue
-		}
-		rules, err := runtime.Repositories.Alerts.ListRulesForCheck(ctx, check.SpaceID, check.CheckID)
-		if err != nil {
-			return nil, nil, err
-		}
-		// Remove obsolete rules instead of merely disabling them. DeleteRule also
-		// removes a previously firing AlertState, so a retired symbol cannot keep
-		// contributing a stale alert to the availability overview.
-		for index := range rules {
-			if err := runtime.Repositories.Alerts.DeleteRule(ctx, rules[index].SpaceID, rules[index].RuleID); err != nil {
-				return nil, nil, err
-			}
-		}
-		check.Enabled = false
-		if err := runtime.Repositories.Checks.Update(ctx, check); err != nil {
-			return nil, nil, err
-		}
 	}
 	run := func(runCtx context.Context) error {
 		var errs []error
@@ -225,20 +232,13 @@ func buildMonitorMarketCanary(
 						continue
 					}
 					checkID := subjectTagCheckID(spaceID, tag.GetTagId())
-					check, getErr := runtime.Repositories.Checks.Get(runCtx, spaceID, checkID)
-					if errors.Is(getErr, gorm.ErrRecordNotFound) {
-						check = &domain.Check{SpaceID: spaceID, CheckID: checkID, Name: "Subject tag " + tag.GetTagName(), GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}
-						getErr = runtime.Repositories.Checks.Create(runCtx, check)
-					} else if getErr == nil && check.Name != "Subject tag "+tag.GetTagName() {
-						check.Name = "Subject tag " + tag.GetTagName()
-						getErr = runtime.Repositories.Checks.Update(runCtx, check)
-					}
+					check, getErr := ensureSubjectTagCheck(runCtx, runtime.Repositories, spaceID, tag)
 					if getErr != nil {
 						err = errors.Join(err, getErr)
 						continue
 					}
 					reasons := checkTag(tag, now)
-					result := domain.CheckResult{ResultID: fmt.Sprintf("%s-%d", checkID, now.UnixNano()), SpaceID: spaceID, CheckID: checkID, InstanceID: "monitor", Success: len(reasons) == 0, Connected: true, Status: domain.CheckStatusOK, ErrorMessage: strings.Join(reasons, ","), CheckedAt: now, CreatedAt: now}
+					result := domain.CheckResult{ResultID: domain.ScopedResultID(spaceID, checkID, now), SpaceID: spaceID, CheckID: checkID, InstanceID: "monitor", Success: len(reasons) == 0, Connected: true, Status: domain.CheckStatusOK, ErrorMessage: tagReasonText(reasons), CheckedAt: now, CreatedAt: now}
 					if !result.Success {
 						result.Status = domain.CheckStatusDown
 					}
@@ -263,6 +263,26 @@ func buildMonitorMarketCanary(
 	return run, probe, nil
 }
 
+// ensureSubjectTagCheck 创建或修复标签检查：探针曾被关闭而退役（Enabled=false）后重新启用，必须恢复检查，
+// 默认告警规则随周期同步重建。
+func ensureSubjectTagCheck(ctx context.Context, repositories *store.Repositories, spaceID string, tag *storagepb.Tag) (*domain.Check, error) {
+	checkID := subjectTagCheckID(spaceID, tag.GetTagId())
+	check, err := repositories.Checks.Get(ctx, spaceID, checkID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		check = &domain.Check{SpaceID: spaceID, CheckID: checkID, Name: "采集对象标签 · " + tag.GetTagName(), GroupName: "business", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000}
+		return check, repositories.Checks.Create(ctx, check)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if check.Name != "Subject tag "+tag.GetTagName() || !check.Enabled {
+		check.Name = "Subject tag " + tag.GetTagName()
+		check.Enabled = true
+		return check, repositories.Checks.Update(ctx, check)
+	}
+	return check, nil
+}
+
 func firstNonEmptyString(values ...string) string {
 	for _, value := range values {
 		if value = strings.TrimSpace(value); value != "" {
@@ -270,4 +290,23 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// tagReasonText explains a subject tag's problems to people.
+func tagReasonText(reasons []string) string {
+	text := map[string]string{
+		"missing":           "标签不存在",
+		"failed":            "最近一次刷新失败",
+		"no_active_members": "标签下没有可用的采集对象",
+		"stale":             "标签长时间没有刷新",
+	}
+	parts := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		if value := text[reason]; value != "" {
+			parts = append(parts, value)
+		} else {
+			parts = append(parts, reason)
+		}
+	}
+	return strings.Join(parts, "；")
 }

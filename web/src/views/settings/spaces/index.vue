@@ -44,7 +44,8 @@
                 <a-button
                   size="mini"
                   type="text"
-                  :disabled="record.status !== 'active'"
+                  :disabled="record.status !== 'active' || isSystemSpace(record.space_id)"
+                  :title="isSystemSpace(record.space_id) ? '系统内部空间，不是交易市场，不能设为当前' : ''"
                   @click="spaceStore.setSelectedSpace(record.space_id)"
                 >
                   设为当前
@@ -88,11 +89,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { createSubmitScope } from "@/utils/submit-scope";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createSpace, listSpaces, updateSpace } from "@/api/admin/spaces";
 import type { Space } from "@/api/admin/types";
-import { useSpaceStore } from "@/store/modules/space";
+import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
 import {
   applyPageResult,
   defaultPagination,
@@ -172,16 +174,20 @@ async function submit() {
     Message.warning("请填写空间ID和名称");
     return;
   }
+  // 固定提交快照：保存期间表单可能被关闭并重新打开去编辑另一个空间，旧提交只能用自己提交的数据
+  const submission = spaceScope.begin();
+  const submitted = { ...form };
   if (editing.value) {
-    await updateSpace({ ...form });
+    await updateSpace(submitted);
   } else {
-    await createSpace({ ...form });
+    await createSpace(submitted);
   }
   Message.success("空间已保存");
+  if (!submission.isCurrent()) return;
   visible.value = false;
   await load();
-  if (form.status === "active") {
-    spaceStore.setSelectedSpace(form.space_id);
+  if (submitted.status === "active" && submission.isCurrent()) {
+    spaceStore.setSelectedSpace(submitted.space_id);
   }
 }
 
@@ -197,6 +203,12 @@ function onPageSizeChange(pageSize: number) {
 }
 
 onMounted(load);
+
+// 空间是全局资源：提交作用域只受弹窗打开序号约束
+const spaceScope = createSubmitScope({ global: true });
+watch(visible, open => {
+  if (open) spaceScope.invalidate();
+});
 </script>
 
 <style scoped>

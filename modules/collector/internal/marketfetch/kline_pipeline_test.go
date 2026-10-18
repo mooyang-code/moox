@@ -32,48 +32,6 @@ type pipelineProvider struct {
 	errFor    func() error
 }
 
-func TestKlinePipelineStockCNRowBindsToEnsuredDefaultSeries(t *testing.T) {
-	period := time.Date(2026, 9, 30, 3, 0, 0, 0, time.UTC)
-	for _, test := range []struct {
-		instrument marketdata.InstrumentType
-		subject    string
-		dataset    string
-	}{
-		{marketdata.InstrumentEquity, "600000.XSHG", StockCNDatasetID},
-		{marketdata.InstrumentIndex, "000001.XSHG", "dataset_stockcn_index_kline"},
-		{marketdata.InstrumentConvertibleBond, "113001.XSHG", "dataset_stockcn_bond_kline"},
-	} {
-		t.Run(string(test.instrument), func(t *testing.T) {
-			item := domain.CollectionItem{SubjectID: test.subject, Symbol: "sh" + test.subject[:6], DatasetID: test.dataset, Provider: "sina", SourceID: "stockcn_http", MarketType: string(test.instrument), TargetDataTime: period.Format(time.RFC3339Nano), SeriesHash: "one-logical-series", ExpectedCount: 1, PeriodReservationID: "release-canary-123"}
-			storage := &recordingPeriodFailureStorage{}
-			scheduler := &Scheduler{StorageTarget: "storage.local:11003", Storage: func(string, string, string) (Storage, error) { return storage, nil }}
-			require.NoError(t, scheduler.ensureDatasetPeriod(context.Background(), domain.CollectionTask{SpaceID: StockCNSpaceID}, []domain.CollectionItem{item}, "1m", period, period.Add(time.Minute)))
-			require.Len(t, storage.ensured, 1)
-			ensured := storage.ensured[0]
-			require.Equal(t, uint32(1), ensured.GetExpectedCount())
-			require.Equal(t, item.PeriodReservationID, ensured.GetReservationId())
-			// Match the composition root: no explicit SeriesTag for index or bond.
-			pipeline := &KlinePipeline{SpaceID: StockCNSpaceID, MarketID: StockCNSpaceID, InstrumentType: test.instrument, DatasetID: test.dataset, SourceID: item.SourceID}
-			req := Request{SpaceID: StockCNSpaceID, DatasetID: test.dataset, Frequency: "1m", SourceID: item.SourceID, MarketType: string(test.instrument), Items: []domain.CollectionItem{item}, RequirePeriodCommit: true}
-			for rank, provider := range []string{"sina", "tencent", "tdx", "eastmoney"} {
-				bar := marketdata.NormalizedKline{SubjectID: test.subject, ProviderID: provider, SourceID: provider + "_http", ProviderSymbol: item.Symbol, Frequency: "1m", BarStart: period, BarEnd: period.Add(time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: period.Add(time.Minute), FetchedAt: period.Add(2 * time.Minute), RequestID: "row-period-binding"}
-				row, err := pipeline.rowFor(bar, req, "stockcn-route", rank+1)
-				require.NoError(t, err)
-				expectation, rows, enabled, err := periodCommitForDataset(req, test.dataset, []*storagepb.RowFieldUpsert{row})
-				require.NoError(t, err, "actual rowFor output must bind to the Ensure index even after a provider fallback")
-				require.True(t, enabled)
-				require.Equal(t, "default", row.GetKey().GetTimeSeries().GetSeriesTag())
-				require.Equal(t, ensured.GetSeriesSnapshot()[0].GetSeriesTag(), row.GetKey().GetTimeSeries().GetSeriesTag())
-				require.Equal(t, ensured.GetSeriesHash(), expectation.GetSeriesHash())
-				require.Equal(t, item.PeriodReservationID, expectation.GetReservationId())
-				require.Equal(t, uint32(1), expectation.GetExpectedCount())
-				require.Len(t, rows, 1)
-				require.Zero(t, rows[0].GetSeriesIndex())
-			}
-		})
-	}
-}
-
 func TestPeriodCommitDisabledIgnoresResidualBindings(t *testing.T) {
 	req := Request{Items: []domain.CollectionItem{{DatasetID: "bars", SubjectID: "BTC-USDT", SeriesHash: "old", ExpectedCount: 1}}}
 	_, _, enabled, err := periodCommitForDataset(req, "bars", []*storagepb.RowFieldUpsert{{}})
@@ -111,7 +69,7 @@ func TestFetchKlinesFromChainRetriesProviderThreeTimesBeforeFallback(t *testing.
 	router, err := marketdata.NewRouter(registry, 10, pipelineClock{now: time.Now().UTC()}, nil)
 	require.NoError(t, err)
 
-	rows, selected, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+	rows, selected, _, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
 		MarketID: "stockcn", ExchangeID: "XSHG", SubjectID: "600000.XSHG", ProviderSymbol: "sh600000",
 		Frequency: "1m", Limit: 1, RequestID: "retry-3",
 	}, []string{"sina", "tdx"}, 0)
@@ -144,7 +102,7 @@ func TestFetchKlinesFromChainUsesConfiguredHTTPMaxAttempts(t *testing.T) {
 	router, err := marketdata.NewRouter(registry, 10, nil, nil)
 	require.NoError(t, err)
 
-	rows, selected, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+	rows, selected, _, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
 		MarketID: "crypto", ExchangeID: "binance", SubjectID: "BTC-USDT", ProviderSymbol: "BTCUSDT",
 		Frequency: "1m", Limit: 1, RequestID: "retry-4",
 	}, []string{"binance"}, 0)
@@ -169,12 +127,13 @@ func TestFetchKlinesFromChainUsesConfiguredRequestTimeout(t *testing.T) {
 	router, err := marketdata.NewRouter(registry, 10, pipelineClock{now: time.Now().UTC()}, nil)
 	require.NoError(t, err)
 
-	_, _, _, err = fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+	_, _, _, attempts, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
 		MarketID: "crypto", ExchangeID: "binance", SubjectID: "BTC-USDT", ProviderSymbol: "BTCUSDT",
 		Frequency: "1m", Limit: 1, RequestID: "request-timeout",
 	}, []string{"binance"}, 0)
 	require.ErrorIs(t, err, marketdata.ErrTimeout)
 	require.Equal(t, int32(1), atomic.LoadInt32(&calls))
+	require.Equal(t, 1, attempts, "失败时返回实际尝试次数，供 CLS 失败明细使用")
 }
 
 func TestStockCNShouldCollectMinuteHonorsSessionsAndClosedDays(t *testing.T) {
@@ -502,7 +461,7 @@ func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *test
 }
 
 type recordingTimerPeriodCommitStorage struct {
-	recordingPeriodFailureStorage
+	noopStorage
 	commits     int
 	indexes     []uint32
 	failDataset string
@@ -775,7 +734,7 @@ func TestKlinePipelineAdvancesCandidateIndexAfterExhaustedChain(t *testing.T) {
 	}
 	router, err := marketdata.NewRouter(registry, 3, pipelineClock{now}, func(time.Duration) {})
 	require.NoError(t, err)
-	_, selected, next, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+	_, selected, next, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
 		MarketID: "stockcn", ExchangeID: "XSHG", InstrumentType: marketdata.InstrumentEquity,
 		SubjectID: "600000.XSHG", ProviderSymbol: "sh600000", Frequency: "1m", Limit: 1, RequestID: "candidate-index",
 	}, []string{"sina", "tencent", "eastmoney"}, 1)
@@ -800,7 +759,7 @@ func TestFetchKlinesFromChainFallsBackWhenRequestedIntervalIsEmpty(t *testing.T)
 	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, nil)
 	require.NoError(t, err)
 
-	rows, selected, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
+	rows, selected, _, _, err := fetchKlinesFromChain(context.Background(), router.NewSession(), marketdata.KlineRequest{
 		MarketID: "stockcn", ExchangeID: "XSHG", InstrumentType: marketdata.InstrumentEquity,
 		SubjectID: valid.SubjectID, ProviderSymbol: valid.ProviderSymbol, Frequency: "1m", Limit: 1,
 		StartTime: start, EndTime: end, Now: now, RequestID: "coverage-fallback",

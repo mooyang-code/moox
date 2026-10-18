@@ -1,12 +1,14 @@
 package store
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"gorm.io/gorm"
 )
 
 func openNotificationTestDB(t *testing.T) *Store {
@@ -23,55 +25,61 @@ func openNotificationTestDB(t *testing.T) *Store {
 	return mgr
 }
 
-func TestNotificationChannelSeedDoesNotOverwriteUserValue(t *testing.T) {
-	repos := openNotificationTestDB(t).Repositories()
-	ctx := t.Context()
-	if err := repos.Notifications.SeedIfAbsent(ctx, domain.NotificationChannel{ChannelID: domain.GlobalNotificationChannelID, ChannelType: "wecom", WebhookURL: "https://example.com/seed"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := repos.Notifications.UpdateGlobal(ctx, "feishu", "https://example.com/user"); err != nil {
-		t.Fatal(err)
-	}
-	if err := repos.Notifications.SeedIfAbsent(ctx, domain.NotificationChannel{ChannelID: domain.GlobalNotificationChannelID, ChannelType: "wecom", WebhookURL: "https://example.com/restart"}); err != nil {
-		t.Fatal(err)
-	}
-	got, err := repos.Notifications.GetGlobal(ctx)
+// TableExists 让启动流程分辨首次建库：只有首次建库才写入部署配置里的推送渠道。
+func TestTableExistsDistinguishesFreshDatabase(t *testing.T) {
+	mgr, err := Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ChannelType != "feishu" || got.WebhookURL != "https://example.com/user" {
-		t.Fatalf("channel overwritten: %+v", got)
-	}
-}
-
-func TestNotificationChannelRejectsNonGlobalAndUnknownType(t *testing.T) {
-	repos := openNotificationTestDB(t).Repositories()
-	ctx := t.Context()
-	if err := repos.Notifications.SeedIfAbsent(ctx, domain.NotificationChannel{ChannelID: "other", ChannelType: "wecom"}); err == nil {
-		t.Fatal("non-global channel accepted")
-	}
-	if err := repos.Notifications.SeedIfAbsent(ctx, domain.NotificationChannel{ChannelID: domain.GlobalNotificationChannelID, ChannelType: "sms"}); err == nil {
-		t.Fatal("unknown channel accepted")
-	}
-}
-
-func TestResetLegacyMonitorTablesRebuildsWebhookAlertSchema(t *testing.T) {
-	mgr := openNotificationTestDB(t)
-	if err := mgr.db.Exec("DROP TABLE t_monitor_alert_rules").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := mgr.db.Exec(`CREATE TABLE t_monitor_alert_rules (c_id INTEGER PRIMARY KEY, c_space_id TEXT, c_rule_id TEXT, c_check_id TEXT, c_webhook_id TEXT NOT NULL)`).Error; err != nil {
-		t.Fatal(err)
-	}
-	reset, err := mgr.ResetLegacyMonitorTables()
-	if err != nil || !reset {
-		t.Fatalf("reset = %v, err = %v", reset, err)
+	t.Cleanup(func() { _ = mgr.Close() })
+	table := domain.NotificationChannel{}.TableName()
+	if exists, err := mgr.TableExists(table); err != nil || exists {
+		t.Fatalf("fresh database reports %s exists=%t err=%v", table, exists, err)
 	}
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
 		t.Fatal(err)
 	}
-	if mgr.db.Migrator().HasColumn(&domain.AlertRule{}, "c_webhook_id") {
-		t.Fatal("legacy webhook column still exists")
+	if exists, err := mgr.TableExists(table); err != nil || !exists {
+		t.Fatalf("after schema %s exists=%t err=%v", table, exists, err)
+	}
+}
+
+func TestNotificationChannelsAddListDelete(t *testing.T) {
+	repos := openNotificationTestDB(t).Repositories()
+	ctx := t.Context()
+	first, err := repos.Notifications.Add(ctx, "wecom", "https://example.com/first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repos.Notifications.Add(ctx, "feishu", " https://example.com/second ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ChannelID == "" || first.ChannelID == second.ChannelID {
+		t.Fatalf("channels need distinct ids: %q %q", first.ChannelID, second.ChannelID)
+	}
+	if _, err := repos.Notifications.Add(ctx, "feishu", "https://example.com/first"); !errors.Is(err, ErrNotificationChannelExists) {
+		t.Fatalf("duplicate URL accepted: %v", err)
+	}
+	if _, err := repos.Notifications.Add(ctx, "sms", "https://example.com/third"); err == nil {
+		t.Fatal("unknown channel type accepted")
+	}
+	channels, err := repos.Notifications.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(channels) != 2 || channels[0].ChannelID != first.ChannelID || channels[1].WebhookURL != "https://example.com/second" {
+		t.Fatalf("channels = %+v", channels)
+	}
+	if err := repos.Notifications.Delete(ctx, first.ChannelID); err != nil {
+		t.Fatal(err)
+	}
+	if err := repos.Notifications.Delete(ctx, first.ChannelID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("deleting a missing channel = %v", err)
+	}
+	channels, err = repos.Notifications.List(ctx)
+	if err != nil || len(channels) != 1 || channels[0].ChannelID != second.ChannelID {
+		t.Fatalf("channels after delete = %+v err=%v", channels, err)
 	}
 }
 

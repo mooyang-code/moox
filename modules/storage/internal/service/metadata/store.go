@@ -93,6 +93,8 @@ type Reader interface {
 	GetDataset(ctx context.Context, spaceID string, datasetID string) (*pb.Dataset, error)
 	ListDatasets(ctx context.Context, query DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error)
 	ListDatasetSubjects(ctx context.Context, spaceID string, datasetID string, subjectID string, page *pb.Page) ([]*pb.DatasetSubject, *pb.PageResult, error)
+	// SubjectsRevision 返回空间的标的修订号；标的、标签成员或数据集标的范围变化时递增，未变化过返回 0。
+	SubjectsRevision(ctx context.Context, spaceID string) (uint64, error)
 
 	GetFieldGroup(ctx context.Context, spaceID string, groupID string) (*pb.FieldGroup, error)
 	ListFieldGroups(ctx context.Context, spaceID string, parentGroupID string, page *pb.Page) ([]*pb.FieldGroup, *pb.PageResult, error)
@@ -105,7 +107,6 @@ type Reader interface {
 	ListDataNodes(ctx context.Context, page *pb.Page) ([]*pb.DataNode, *pb.PageResult, error)
 	GetDevice(ctx context.Context, deviceID string) (*pb.Device, error)
 	ListDevices(ctx context.Context, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error)
-	ListArchiveFiles(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.ArchiveFile, *pb.PageResult, error)
 }
 
 // ViewRebuildLogReader is intentionally separate from Reader so the hot-path
@@ -120,9 +121,15 @@ type ViewRebuildLogReader interface {
 // being active automatically once that revision is activated.
 const ManualRebuildRevisionAttribute = "moox.manual_rebuild_revision"
 
+// ActiveBuildIDAttribute 记录激活当前活动索引的构建 ID。A/B 槽位名在每次重建时交替复用，不能区分索引代次；
+// 构建 ID 每次重建都不同，调用方（例如策略回放）据此判断活动索引是否换过一代、旧的行是否可能已被裁掉。
+const ActiveBuildIDAttribute = "moox.active_build_id"
+
 // Writer 定义元数据存储的写入与状态变更接口。
 type Writer interface {
 	UpsertSpace(ctx context.Context, space *pb.Space) (*pb.Space, error)
+	// CreateSpace 原子地创建空间，已存在时返回冲突。
+	CreateSpace(ctx context.Context, space *pb.Space) (*pb.Space, error)
 	DeleteSpace(ctx context.Context, spaceID string) error
 	UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 	CreateView(ctx context.Context, item *pb.View) (*pb.View, error)
@@ -158,7 +165,6 @@ type Writer interface {
 	RebindDatasetDataNode(ctx context.Context, spaceID string, datasetID string, dataNodeID string, expectedRevision uint64) (*pb.Dataset, error)
 	CommitDatasetActivation(ctx context.Context, spaceID string, datasetID string, expectedRevision uint64) (*pb.Dataset, error)
 	UpsertDevice(ctx context.Context, item *pb.Device) (*pb.Device, error)
-	RegisterArchiveFile(ctx context.Context, item *pb.ArchiveFile) (*pb.ArchiveFile, error)
 }
 
 type ViewPeriodStateStore interface {

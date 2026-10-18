@@ -6,14 +6,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"sync"
+	"time"
+
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
-	"sort"
-	"sync"
-	"time"
 )
 
 type FactStore interface {
@@ -48,11 +49,6 @@ func (a *Adapter) now() time.Time {
 func paperOrderID(account, client string) string {
 	sum := sha256.Sum256([]byte(account + "\x00" + client))
 	return "paper-order-" + hex.EncodeToString(sum[:12])
-}
-func PaperIDs(account, client string) (string, string, string) {
-	sum := sha256.Sum256([]byte(account + "\x00" + client))
-	suffix := hex.EncodeToString(sum[:12])
-	return "paper-order-" + suffix, "paper-trade-" + suffix, "paper-fill-" + suffix
 }
 func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
 	if a.Store == nil {
@@ -265,13 +261,6 @@ func (a *Adapter) GetReferencePrice(ctx context.Context, symbol string) (exchang
 	return exchange.ReferencePrice{Price: price, UpdatedAt: quote.SourceTime}, nil
 }
 
-func (a *Adapter) referencePrice(ctx context.Context, symbol string) (shared.Decimal, error) {
-	quote, err := a.GetReferencePrice(ctx, symbol)
-	if err != nil {
-		return shared.Zero(), err
-	}
-	return quote.Price, nil
-}
 func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {
 	if a.Store == nil {
 		return nil, nil

@@ -21,15 +21,21 @@ import (
 type MonitorMgrService interface {
 	GetHealthOverview(ctx context.Context, req *GetHealthOverviewReq) (*GetHealthOverviewRsp, error)
 
-	GetNotificationChannel(ctx context.Context, req *GetNotificationChannelReq) (*GetNotificationChannelRsp, error)
+	ListNotificationChannels(ctx context.Context, req *ListNotificationChannelsReq) (*ListNotificationChannelsRsp, error)
 
-	UpdateNotificationChannel(ctx context.Context, req *UpdateNotificationChannelReq) (*UpdateNotificationChannelRsp, error)
+	AddNotificationChannel(ctx context.Context, req *AddNotificationChannelReq) (*AddNotificationChannelRsp, error)
+
+	DeleteNotificationChannel(ctx context.Context, req *DeleteNotificationChannelReq) (*DeleteNotificationChannelRsp, error)
 
 	ListHostAgents(ctx context.Context, req *ListHostAgentsReq) (*ListHostAgentsRsp, error)
 
 	QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq) (*QueryHostMetricHistoryRsp, error)
 
+	QueryPipelineArrivalHistory(ctx context.Context, req *QueryPipelineArrivalHistoryReq) (*QueryPipelineArrivalHistoryRsp, error)
+
 	GetDoctorContext(ctx context.Context, req *GetDoctorContextReq) (*GetDoctorContextRsp, error)
+
+	GetHostPolicy(ctx context.Context, req *GetHostPolicyReq) (*GetHostPolicyRsp, error)
 }
 
 func MonitorMgrService_GetHealthOverview_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -50,14 +56,14 @@ func MonitorMgrService_GetHealthOverview_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
-func MonitorMgrService_GetNotificationChannel_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetNotificationChannelReq{}
+func MonitorMgrService_ListNotificationChannels_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListNotificationChannelsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MonitorMgrService).GetNotificationChannel(ctx, reqbody.(*GetNotificationChannelReq))
+		return svr.(MonitorMgrService).ListNotificationChannels(ctx, reqbody.(*ListNotificationChannelsReq))
 	}
 
 	var rsp interface{}
@@ -68,14 +74,32 @@ func MonitorMgrService_GetNotificationChannel_Handler(svr interface{}, ctx conte
 	return rsp, nil
 }
 
-func MonitorMgrService_UpdateNotificationChannel_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateNotificationChannelReq{}
+func MonitorMgrService_AddNotificationChannel_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &AddNotificationChannelReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MonitorMgrService).UpdateNotificationChannel(ctx, reqbody.(*UpdateNotificationChannelReq))
+		return svr.(MonitorMgrService).AddNotificationChannel(ctx, reqbody.(*AddNotificationChannelReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_DeleteNotificationChannel_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteNotificationChannelReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).DeleteNotificationChannel(ctx, reqbody.(*DeleteNotificationChannelReq))
 	}
 
 	var rsp interface{}
@@ -122,6 +146,24 @@ func MonitorMgrService_QueryHostMetricHistory_Handler(svr interface{}, ctx conte
 	return rsp, nil
 }
 
+func MonitorMgrService_QueryPipelineArrivalHistory_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &QueryPipelineArrivalHistoryReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).QueryPipelineArrivalHistory(ctx, reqbody.(*QueryPipelineArrivalHistoryReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func MonitorMgrService_GetDoctorContext_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &GetDoctorContextReq{}
 	filters, err := f(req)
@@ -130,6 +172,24 @@ func MonitorMgrService_GetDoctorContext_Handler(svr interface{}, ctx context.Con
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(MonitorMgrService).GetDoctorContext(ctx, reqbody.(*GetDoctorContextReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func MonitorMgrService_GetHostPolicy_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetHostPolicyReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).GetHostPolicy(ctx, reqbody.(*GetHostPolicyReq))
 	}
 
 	var rsp interface{}
@@ -150,12 +210,16 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: MonitorMgrService_GetHealthOverview_Handler,
 		},
 		{
-			Name: "/trpc.moox.monitor.MonitorMgr/GetNotificationChannel",
-			Func: MonitorMgrService_GetNotificationChannel_Handler,
+			Name: "/trpc.moox.monitor.MonitorMgr/ListNotificationChannels",
+			Func: MonitorMgrService_ListNotificationChannels_Handler,
 		},
 		{
-			Name: "/trpc.moox.monitor.MonitorMgr/UpdateNotificationChannel",
-			Func: MonitorMgrService_UpdateNotificationChannel_Handler,
+			Name: "/trpc.moox.monitor.MonitorMgr/AddNotificationChannel",
+			Func: MonitorMgrService_AddNotificationChannel_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel",
+			Func: MonitorMgrService_DeleteNotificationChannel_Handler,
 		},
 		{
 			Name: "/trpc.moox.monitor.MonitorMgr/ListHostAgents",
@@ -166,8 +230,16 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: MonitorMgrService_QueryHostMetricHistory_Handler,
 		},
 		{
+			Name: "/trpc.moox.monitor.MonitorMgr/QueryPipelineArrivalHistory",
+			Func: MonitorMgrService_QueryPipelineArrivalHistory_Handler,
+		},
+		{
 			Name: "/trpc.moox.monitor.MonitorMgr/GetDoctorContext",
 			Func: MonitorMgrService_GetDoctorContext_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/GetHostPolicy",
+			Func: MonitorMgrService_GetHostPolicy_Handler,
 		},
 	},
 }
@@ -186,11 +258,14 @@ type UnimplementedMonitorMgr struct{}
 func (s *UnimplementedMonitorMgr) GetHealthOverview(ctx context.Context, req *GetHealthOverviewReq) (*GetHealthOverviewRsp, error) {
 	return nil, errors.New("rpc GetHealthOverview of service MonitorMgr is not implemented")
 }
-func (s *UnimplementedMonitorMgr) GetNotificationChannel(ctx context.Context, req *GetNotificationChannelReq) (*GetNotificationChannelRsp, error) {
-	return nil, errors.New("rpc GetNotificationChannel of service MonitorMgr is not implemented")
+func (s *UnimplementedMonitorMgr) ListNotificationChannels(ctx context.Context, req *ListNotificationChannelsReq) (*ListNotificationChannelsRsp, error) {
+	return nil, errors.New("rpc ListNotificationChannels of service MonitorMgr is not implemented")
 }
-func (s *UnimplementedMonitorMgr) UpdateNotificationChannel(ctx context.Context, req *UpdateNotificationChannelReq) (*UpdateNotificationChannelRsp, error) {
-	return nil, errors.New("rpc UpdateNotificationChannel of service MonitorMgr is not implemented")
+func (s *UnimplementedMonitorMgr) AddNotificationChannel(ctx context.Context, req *AddNotificationChannelReq) (*AddNotificationChannelRsp, error) {
+	return nil, errors.New("rpc AddNotificationChannel of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) DeleteNotificationChannel(ctx context.Context, req *DeleteNotificationChannelReq) (*DeleteNotificationChannelRsp, error) {
+	return nil, errors.New("rpc DeleteNotificationChannel of service MonitorMgr is not implemented")
 }
 func (s *UnimplementedMonitorMgr) ListHostAgents(ctx context.Context, req *ListHostAgentsReq) (*ListHostAgentsRsp, error) {
 	return nil, errors.New("rpc ListHostAgents of service MonitorMgr is not implemented")
@@ -198,8 +273,14 @@ func (s *UnimplementedMonitorMgr) ListHostAgents(ctx context.Context, req *ListH
 func (s *UnimplementedMonitorMgr) QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq) (*QueryHostMetricHistoryRsp, error) {
 	return nil, errors.New("rpc QueryHostMetricHistory of service MonitorMgr is not implemented")
 }
+func (s *UnimplementedMonitorMgr) QueryPipelineArrivalHistory(ctx context.Context, req *QueryPipelineArrivalHistoryReq) (*QueryPipelineArrivalHistoryRsp, error) {
+	return nil, errors.New("rpc QueryPipelineArrivalHistory of service MonitorMgr is not implemented")
+}
 func (s *UnimplementedMonitorMgr) GetDoctorContext(ctx context.Context, req *GetDoctorContextReq) (*GetDoctorContextRsp, error) {
 	return nil, errors.New("rpc GetDoctorContext of service MonitorMgr is not implemented")
+}
+func (s *UnimplementedMonitorMgr) GetHostPolicy(ctx context.Context, req *GetHostPolicyReq) (*GetHostPolicyRsp, error) {
+	return nil, errors.New("rpc GetHostPolicy of service MonitorMgr is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -212,15 +293,21 @@ func (s *UnimplementedMonitorMgr) GetDoctorContext(ctx context.Context, req *Get
 type MonitorMgrClientProxy interface {
 	GetHealthOverview(ctx context.Context, req *GetHealthOverviewReq, opts ...client.Option) (rsp *GetHealthOverviewRsp, err error)
 
-	GetNotificationChannel(ctx context.Context, req *GetNotificationChannelReq, opts ...client.Option) (rsp *GetNotificationChannelRsp, err error)
+	ListNotificationChannels(ctx context.Context, req *ListNotificationChannelsReq, opts ...client.Option) (rsp *ListNotificationChannelsRsp, err error)
 
-	UpdateNotificationChannel(ctx context.Context, req *UpdateNotificationChannelReq, opts ...client.Option) (rsp *UpdateNotificationChannelRsp, err error)
+	AddNotificationChannel(ctx context.Context, req *AddNotificationChannelReq, opts ...client.Option) (rsp *AddNotificationChannelRsp, err error)
+
+	DeleteNotificationChannel(ctx context.Context, req *DeleteNotificationChannelReq, opts ...client.Option) (rsp *DeleteNotificationChannelRsp, err error)
 
 	ListHostAgents(ctx context.Context, req *ListHostAgentsReq, opts ...client.Option) (rsp *ListHostAgentsRsp, err error)
 
 	QueryHostMetricHistory(ctx context.Context, req *QueryHostMetricHistoryReq, opts ...client.Option) (rsp *QueryHostMetricHistoryRsp, err error)
 
+	QueryPipelineArrivalHistory(ctx context.Context, req *QueryPipelineArrivalHistoryReq, opts ...client.Option) (rsp *QueryPipelineArrivalHistoryRsp, err error)
+
 	GetDoctorContext(ctx context.Context, req *GetDoctorContextReq, opts ...client.Option) (rsp *GetDoctorContextRsp, err error)
+
+	GetHostPolicy(ctx context.Context, req *GetHostPolicyReq, opts ...client.Option) (rsp *GetHostPolicyRsp, err error)
 }
 
 type MonitorMgrClientProxyImpl struct {
@@ -252,40 +339,60 @@ func (c *MonitorMgrClientProxyImpl) GetHealthOverview(ctx context.Context, req *
 	return rsp, nil
 }
 
-func (c *MonitorMgrClientProxyImpl) GetNotificationChannel(ctx context.Context, req *GetNotificationChannelReq, opts ...client.Option) (*GetNotificationChannelRsp, error) {
+func (c *MonitorMgrClientProxyImpl) ListNotificationChannels(ctx context.Context, req *ListNotificationChannelsReq, opts ...client.Option) (*ListNotificationChannelsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetNotificationChannel")
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/ListNotificationChannels")
 	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("monitor")
 	msg.WithCalleeService("MonitorMgr")
-	msg.WithCalleeMethod("GetNotificationChannel")
+	msg.WithCalleeMethod("ListNotificationChannels")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetNotificationChannelRsp{}
+	rsp := &ListNotificationChannelsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *MonitorMgrClientProxyImpl) UpdateNotificationChannel(ctx context.Context, req *UpdateNotificationChannelReq, opts ...client.Option) (*UpdateNotificationChannelRsp, error) {
+func (c *MonitorMgrClientProxyImpl) AddNotificationChannel(ctx context.Context, req *AddNotificationChannelReq, opts ...client.Option) (*AddNotificationChannelRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/UpdateNotificationChannel")
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/AddNotificationChannel")
 	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("monitor")
 	msg.WithCalleeService("MonitorMgr")
-	msg.WithCalleeMethod("UpdateNotificationChannel")
+	msg.WithCalleeMethod("AddNotificationChannel")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &UpdateNotificationChannelRsp{}
+	rsp := &AddNotificationChannelRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) DeleteNotificationChannel(ctx context.Context, req *DeleteNotificationChannelReq, opts ...client.Option) (*DeleteNotificationChannelRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/DeleteNotificationChannel")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("DeleteNotificationChannel")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteNotificationChannelRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -332,6 +439,26 @@ func (c *MonitorMgrClientProxyImpl) QueryHostMetricHistory(ctx context.Context, 
 	return rsp, nil
 }
 
+func (c *MonitorMgrClientProxyImpl) QueryPipelineArrivalHistory(ctx context.Context, req *QueryPipelineArrivalHistoryReq, opts ...client.Option) (*QueryPipelineArrivalHistoryRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/QueryPipelineArrivalHistory")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("QueryPipelineArrivalHistory")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &QueryPipelineArrivalHistoryRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func (c *MonitorMgrClientProxyImpl) GetDoctorContext(ctx context.Context, req *GetDoctorContextReq, opts ...client.Option) (*GetDoctorContextRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
@@ -346,6 +473,26 @@ func (c *MonitorMgrClientProxyImpl) GetDoctorContext(ctx context.Context, req *G
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetDoctorContextRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) GetHostPolicy(ctx context.Context, req *GetHostPolicyReq, opts ...client.Option) (*GetHostPolicyRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetHostPolicy")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("GetHostPolicy")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetHostPolicyRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

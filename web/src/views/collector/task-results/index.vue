@@ -33,7 +33,10 @@
           <a-alert v-if="activeState === 'error'" type="error" show-icon>
             {{ activeTask?.last_error || "结果视图不可用，请检查任务配置或稍后重试。" }}
           </a-alert>
-          <a-empty v-else-if="!detailError && (!activeViewReadable || activeViewIds.length === 0)" description="结果准备中，请稍后刷新">
+          <a-empty
+            v-else-if="!detailError && (!activeViewReadable || activeViewIds.length === 0)"
+            description="结果准备中，请稍后刷新"
+          >
             <template #extra>
               <a-button type="outline" @click="goToTaskDetail">查看任务详情</a-button>
             </template>
@@ -65,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onActivated, onDeactivated, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { ControlRequestError } from "@/api/admin/http";
 import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
@@ -100,6 +103,7 @@ const pagination = reactive({ current: 1, pageSize: 100, total: 0 });
 let loadSequence = 0;
 let detailSequence = 0;
 let loadedSpaceId = "";
+let pageActive = true;
 
 const permanentTaskDetailErrorCodes = new Set<unknown>([2, 3, 5, "2", "3", "5", "NO_AUTH", "NO_PERMISSION", "NOT_FOUND"]);
 class TaskDetailIdentityError extends Error {}
@@ -109,8 +113,11 @@ const activeTask = computed(() => resolveActiveTask(tasks.value, taskDetails.val
 const activeViewIds = computed(() => (activeTask.value ? buildTaskResultTabs([activeTask.value])[0]?.viewIds || [] : []));
 const activeState = computed<TaskResultState>(() => (activeTask.value ? getTaskResultState(activeTask.value) : "preparing"));
 const activeLastStatusReadAt = computed(() => lastStatusReadAtByTask.value[activeTaskId.value] || "");
-const activeViewReadable = computed(() => (activeState.value === "ready" || activeState.value === "stale") &&
-  readableViewIdsByTask.value[activeTaskId.value] === activeViewIds.value.join("\u0000"));
+const activeViewReadable = computed(
+  () =>
+    (activeState.value === "ready" || activeState.value === "stale") &&
+    readableViewIdsByTask.value[activeTaskId.value] === activeViewIds.value.join("\u0000")
+);
 
 function queryTaskId(value: unknown) {
   return Array.isArray(value) ? String(value[0] || "") : String(value || "");
@@ -176,11 +183,12 @@ async function load(page = 1, options: { preserveSelection?: boolean; honorQuery
     const requestedTaskId = queryTaskId(route.query.resultTask);
     const currentTaskIsOnPage = listTasks.some(task => task.task_id === activeTaskId.value);
     const requestedTaskIsOnPage = listTasks.some(task => task.task_id === requestedTaskId);
-    const nextTaskId = options.preserveSelection && currentTaskIsOnPage
-      ? activeTaskId.value
-      : options.honorQuery !== false && requestedTaskId && !requestedTaskIsOnPage
-        ? requestedTaskId
-        : selectTaskIdFromQuery(listTasks, options.honorQuery === false ? "" : requestedTaskId);
+    const nextTaskId =
+      options.preserveSelection && currentTaskIsOnPage
+        ? activeTaskId.value
+        : options.honorQuery !== false && requestedTaskId && !requestedTaskIsOnPage
+          ? requestedTaskId
+          : selectTaskIdFromQuery(listTasks, options.honorQuery === false ? "" : requestedTaskId);
     activeTaskId.value = nextTaskId;
     await keepResultSelection(nextTaskId);
     if (nextTaskId) {
@@ -226,7 +234,7 @@ async function loadTaskDetail(taskId: string, options: { includeInTabs?: boolean
     if (options.includeInTabs && !tasks.value.some(item => item.task_id === taskId)) {
       tasks.value = [...tasks.value, task];
     } else {
-      tasks.value = tasks.value.map(item => item.task_id === taskId ? task : item);
+      tasks.value = tasks.value.map(item => (item.task_id === taskId ? task : item));
     }
     lastStatusReadAtByTask.value = { ...lastStatusReadAtByTask.value, [taskId]: new Date().toLocaleTimeString() };
     return state === "ready";
@@ -242,6 +250,8 @@ async function loadTaskDetail(taskId: string, options: { includeInTabs?: boolean
 }
 
 async function keepResultSelection(taskId: string) {
+  // 页面被缓存（停用）后，在途请求返回也不能再把路由写回结果页。
+  if (!pageActive) return;
   const requestedTaskId = queryTaskId(route.query.resultTask);
   if (requestedTaskId === taskId && route.query.tab === "results") return;
   await router.replace({ path: "/collector/tasks", query: buildResultsQuery(taskId) });
@@ -277,9 +287,19 @@ function goToTaskDetail() {
   });
 }
 
+// 页面被 keep-alive 缓存、停用期间不响应空间切换，否则会把路由写回结果页；重新激活时再补载。
+onActivated(() => {
+  pageActive = true;
+  if (selectedSpaceId.value && loadedSpaceId !== selectedSpaceId.value) void load();
+});
+onDeactivated(() => {
+  pageActive = false;
+});
+
 watch(
   selectedSpaceId,
   () => {
+    if (!pageActive) return;
     void load();
   },
   { immediate: true }

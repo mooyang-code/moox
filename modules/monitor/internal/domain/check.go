@@ -7,8 +7,11 @@ const (
 	CheckKindTCP      = "tcp"
 	CheckKindExternal = "external"
 
-	CheckSourceSysDeploy     = "sysdeploy"
+	CheckSourcePlacement     = "placement"
 	CheckSourceObservability = "observability"
+
+	// CheckReasonRetired 是检查对象已停用或移除时写入的通过结果原因：让既有告警恢复，概览按“已停用”展示。
+	CheckReasonRetired = "已停用或移除，不再检查"
 )
 
 type Check struct {
@@ -19,6 +22,11 @@ type Check struct {
 	GroupName       string     `gorm:"column:c_group_name"`
 	Kind            string     `gorm:"column:c_kind"`
 	URL             string     `gorm:"column:c_url"`
+	ConnectAddress  string     `gorm:"column:c_connect_address"`
+	ServerName      string     `gorm:"column:c_server_name"`
+	TrustMode       string     `gorm:"column:c_trust_mode"`
+	CAFile          string     `gorm:"column:c_ca_file"`
+	CABaseline      string     `gorm:"column:c_ca_baseline"`
 	Method          string     `gorm:"column:c_method"`
 	Headers         string     `gorm:"column:c_headers"`
 	Body            string     `gorm:"column:c_body"`

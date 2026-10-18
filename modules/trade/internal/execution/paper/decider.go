@@ -143,7 +143,17 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	if accountErr != nil {
 		return Decision{}, storageError(accountErr)
 	}
-	if account.SettlementAsset != "" {
+	if account.MarketType == string(exchange.MarketTypeSpot) {
+		// 现货手续费按成交额（报价币）计价：扣费币种必须是交易对的报价币，而不是账户结算币，
+		// 否则 USDT 结算账户在 ETH/BTC 上会把 BTC 计价的手续费记成 USDT。
+		instrument, instrumentErr := d.Store.GetInstrumentByIDForAccount(ctx, account.SpaceID, account.TradingAccountID, candidate.InstrumentID)
+		if instrumentErr != nil {
+			return Decision{}, storageError(instrumentErr)
+		}
+		if instrument.QuoteAsset != "" {
+			feeAsset = instrument.QuoteAsset
+		}
+	} else if account.SettlementAsset != "" {
 		feeAsset = account.SettlementAsset
 	}
 	if !candidate.ReduceOnly {

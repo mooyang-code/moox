@@ -45,20 +45,32 @@ func TestFactorResultDatasetRecognitionUsesRole(t *testing.T) {
 }
 
 func TestFactorViewColumnIdentity(t *testing.T) {
-	attrs := map[string]string{"display_name": "bias_20", "factor_output": "bias_20", "origin_factor_id": "bias"}
+	attrs := map[string]string{"display_name": "bias_20", "factor_output": "bias_20", "origin_factor_id": "Bias"}
 	viewColumn := &pb.ViewColumn{
-		ColumnName: "result.bias__bias_20",
+		ColumnName: "bias_20",
 		OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-		OriginId:   "result.bias__bias_20",
+		OriginId:   "bias_20",
 		Attributes: attrs,
 	}
 	require.True(t, isFactorViewColumn(viewColumn))
-	viewColumn.ColumnName = "result.bias__bias_20"
-	viewColumn.OriginId = "result.bias__bias_20"
-	viewColumn.Attributes["origin_factor_id"] = "Bias"
-	require.True(t, isFactorViewColumn(viewColumn))
-	viewColumn.OriginId = "result.other__bias_20"
+	viewColumn.OriginId = "bias_q_20"
+	require.False(t, isFactorViewColumn(viewColumn), "column_name must equal origin_id")
+	viewColumn.ColumnName, viewColumn.OriginId = "bias_q_20", "bias_q_20"
+	require.False(t, isFactorViewColumn(viewColumn), "the column must be named after factor_output")
+	viewColumn.OriginType = pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_SYSTEM
+	viewColumn.ColumnName, viewColumn.OriginId = "bias_20", "bias_20"
 	require.False(t, isFactorViewColumn(viewColumn))
+}
+
+func TestDatasetViewColumnUsesTheBareColumnName(t *testing.T) {
+	column := &pb.ViewColumn{ColumnName: "close", OriginType: pb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN, OriginId: "close"}
+	require.NoError(t, validateViewColumnName(column))
+	column.ColumnName, column.OriginId = "dataset_prices.close", "dataset_prices.close"
+	require.ErrorContains(t, validateViewColumnName(column), "bare Dataset column name")
+	column.ColumnName, column.OriginId = "close", "open"
+	require.ErrorContains(t, validateViewColumnName(column), "column_name must equal origin_id")
+	column.ColumnName, column.OriginId = "data_time", "data_time"
+	require.ErrorContains(t, validateViewColumnName(column), "reserved system column")
 }
 
 func TestNormalizeDatasetRoleCanonicalisesAndEnforcesContract(t *testing.T) {

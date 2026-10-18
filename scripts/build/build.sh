@@ -2,10 +2,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+bash "${ROOT}/scripts/ci/check-go-version.sh"
+export GOTOOLCHAIN=local
 VERSION="${VERSION:-dev}"
 BUILD_TIME="$(date +"%Y-%m-%d_%H:%M:%S")"
 GIT_COMMIT="${GIT_COMMIT:-$(git -C "${ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
-BIN_DIR="${ROOT}/bin"
+BIN_DIR="${BIN_DIR:-${ROOT}/bin}"
 TARGET_GOOS="${TARGET_GOOS:-${GOOS:-$(go env GOOS)}}"
 TARGET_GOARCH="${TARGET_GOARCH:-${GOARCH:-$(go env GOARCH)}}"
 TARGET_MODULE="${1:-all}"
@@ -66,15 +68,6 @@ build_storage() {
 	          -o "${BIN_DIR}/$(binary_name moox-storage-${role})" ./cmd/server
 	      fi
 	    done
-	    if ((${#tags[@]})); then
-	      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=0 go build "${tags[@]}" \
-	        -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-	        -o "${BIN_DIR}/$(binary_name moox-storage-access)" ./cmd/access
-	    else
-	      GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=0 go build \
-        -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-        -o "${BIN_DIR}/$(binary_name moox-storage-access)" ./cmd/access
-	    fi
 	  )
 }
 
@@ -89,8 +82,7 @@ build_storage_node() {
 }
 
 build_storage_cli() {
-  local storage_cgo="${STORAGE_CGO_ENABLED:-${CGO_ENABLED:-1}}"
-  build_go modules/storage ./cmd/cli moox-storage-cli "${storage_cgo}"
+  build_go modules/storage ./cmd/cli moox-storage-cli 0
 }
 
 build_web_host() {
@@ -101,11 +93,6 @@ build_web_host() {
       -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
       -o "${BIN_DIR}/$(binary_name moox-web-host)" .
   )
-}
-
-build_archive() {
-  build_go modules/archive ./cmd/server moox-archive 0
-  build_go modules/archive ./cmd/cli moox-archive-cli 0
 }
 
 build_hostagent() {
@@ -126,19 +113,23 @@ build_collector_market_data_scf() {
 case "${TARGET_MODULE}" in
   all)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
+    if [[ "${TARGET_GOOS}" == "linux" ]]; then build_go modules/cli ./cmd/moox-runtime moox-runtime 0; fi
     build_go modules/admin ./cmd/server moox-admin 0
     build_go modules/admin ./cmd/cli moox-admin-cli 0
-    build_go modules/gateway ./cmd/server moox-gateway 0
-    build_go modules/gateway ./cmd/cli moox-gateway-cli 0
+    build_go modules/hostgateway ./cmd/server moox-host-gateway 0
+    build_go modules/hostgateway ./cmd/cli moox-host-gateway-cli 0
     build_go modules/eventbus ./cmd/server moox-eventbus 0
+    build_go modules/consoleproxy ./cmd/server moox-console-proxy 0
+    build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
     build_web_host
     build_go modules/cloudnode ./cmd/server moox-cloudnode 0
     build_go modules/cloudnode ./cmd/cli moox-cloudnode-cli 0
     build_go modules/collector ./cmd/server moox-collector 0
     build_go modules/collector ./cmd/cli moox-collector-cli 0
-    build_go modules/collector ./cmd/subject moox-collector-subject 0
-    build_go modules/factor ./cmd/server moox-factor 1
-    build_go modules/factor ./cmd/cli moox-factor-cli 1
+    build_go modules/factor ./cmd/mgr moox-factor-mgr 0
+    build_go modules/factor ./cmd/cli moox-factor-mgr-cli 0
+    build_go modules/factor ./cmd/engine moox-factor-engine 0
+    build_go modules/archive ./cmd/mgr moox-archive-mgr 0
     build_go modules/strategy ./cmd/server moox-strategy 0
     build_go modules/strategy ./cmd/cli moox-strategy-cli 0
     build_go modules/trade ./cmd/server moox-trade 0
@@ -148,10 +139,14 @@ case "${TARGET_MODULE}" in
     if [[ "${TARGET_GOOS}" == "linux" ]]; then build_hostagent; fi
     build_storage
     build_storage_cli
-    build_archive
+    build_go modules/access ./cmd/server moox-access 0
     ;;
   cli)
     build_go modules/cli ./cmd/moox-cli moox-cli 0
+    ;;
+  runtime)
+    [[ "${TARGET_GOOS}" == "linux" ]] || { echo "moox-runtime supports linux only" >&2; exit 1; }
+    build_go modules/cli ./cmd/moox-runtime moox-runtime 0
     ;;
   admin)
     build_go modules/admin ./cmd/server moox-admin 0
@@ -160,12 +155,19 @@ case "${TARGET_MODULE}" in
   admin-cli)
     build_go modules/admin ./cmd/cli moox-admin-cli 0
     ;;
-  gateway)
-    build_go modules/gateway ./cmd/server moox-gateway 0
-    build_go modules/gateway ./cmd/cli moox-gateway-cli 0
+  host-gateway)
+    build_go modules/hostgateway ./cmd/server moox-host-gateway 0
+    build_go modules/hostgateway ./cmd/cli moox-host-gateway-cli 0
+    if [[ "${TARGET_GOOS}" == "linux" ]]; then build_go modules/cli ./cmd/moox-runtime moox-runtime 0; fi
     ;;
   eventbus)
     build_go modules/eventbus ./cmd/server moox-eventbus 0
+    ;;
+  egress-proxy)
+    build_go modules/egressproxy ./cmd/server moox-egress-proxy 0
+    ;;
+  console-proxy)
+    build_go modules/consoleproxy ./cmd/server moox-console-proxy 0
     ;;
   cloudnode)
     build_go modules/cloudnode ./cmd/server moox-cloudnode 0
@@ -177,10 +179,6 @@ case "${TARGET_MODULE}" in
   collector)
     build_go modules/collector ./cmd/server moox-collector 0
     build_go modules/collector ./cmd/cli moox-collector-cli 0
-    build_go modules/collector ./cmd/subject moox-collector-subject 0
-    ;;
-  collector-subject)
-    build_go modules/collector ./cmd/subject moox-collector-subject 0
     ;;
   collector-cli)
     build_go modules/collector ./cmd/cli moox-collector-cli 0
@@ -188,9 +186,19 @@ case "${TARGET_MODULE}" in
   collector-scf)
     build_collector_market_data_scf
     ;;
-  factor)
-    build_go modules/factor ./cmd/server moox-factor 1
-    build_go modules/factor ./cmd/cli moox-factor-cli 1
+  factor-mgr)
+    build_go modules/factor ./cmd/mgr moox-factor-mgr 0
+    build_go modules/factor ./cmd/cli moox-factor-mgr-cli 0
+    ;;
+  factor-engine)
+    build_go modules/factor ./cmd/engine moox-factor-engine 0
+    ;;
+  archive-mgr)
+    build_go modules/archive ./cmd/mgr moox-archive-mgr 0
+    ;;
+  archive-worker)
+    # 纯 Go（暂存库是 SQLite），可在任意平台交叉编译 Linux / macOS / Windows 版本。
+    build_go modules/archive ./cmd/worker moox-archive-worker 0
     ;;
   strategy)
     build_go modules/strategy ./cmd/server moox-strategy 0
@@ -210,6 +218,12 @@ case "${TARGET_MODULE}" in
     build_storage
     build_storage_cli
     ;;
+  storage-cgo)
+    build_storage
+    ;;
+  access)
+    build_go modules/access ./cmd/server moox-access 0
+    ;;
   storage-primary)
     build_go modules/storage ./cmd/server moox-storage-primary 1
     ;;
@@ -218,9 +232,6 @@ case "${TARGET_MODULE}" in
     ;;
   storage-cli)
     build_storage_cli
-    ;;
-  archive)
-    build_archive
     ;;
   monitor)
     build_go modules/monitor ./cmd/server moox-monitor 0

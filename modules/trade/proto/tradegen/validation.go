@@ -148,28 +148,6 @@ func (r *ListHoldingsReq) Validate() error {
 	}), "trading_account_id")
 }
 
-// Validate enforces the transport-level bounds for the batch DNS resolver
-// request. Domain syntax and the configured allowlist are checked by the
-// resolver service after normalization; this keeps generated RPC validation
-// aligned with the public request contract without duplicating resolver state.
-func (r *ResolveDomainsReq) Validate() error {
-	if r == nil || len(r.Domains) == 0 {
-		return fmt.Errorf("domains are required")
-	}
-	if len(r.Domains) > 16 {
-		return fmt.Errorf("at most 16 domains are allowed")
-	}
-	if r.MaxIpsPerDomain > 4 {
-		return fmt.Errorf("max_ips_per_domain must be at most 4")
-	}
-	for _, domain := range r.Domains {
-		if strings.TrimSpace(domain) == "" {
-			return fmt.Errorf("domain must not be empty")
-		}
-	}
-	return nil
-}
-
 func (r *CreateLogicalAccountReq) Validate() error {
 	if r == nil || strings.TrimSpace(r.Name) == "" ||
 		!validExecutionMode(r.ExecutionMode) ||
@@ -234,67 +212,22 @@ func (r *RemoveLogicalAccountMemberReq) Validate() error {
 }
 
 func (r *ClaimLogicalAccountOwnerReq) Validate() error {
-	if r != nil && strings.TrimSpace(r.InstanceId) != "" {
-		if strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" {
-			return fmt.Errorf("logical_account_id, instance_id, session_id and expected_auth_fence are required")
-		}
-		return nil
+	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.InstanceId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" {
+		return fmt.Errorf("logical_account_id, instance_id, session_id and expected_auth_fence are required")
 	}
-	return validateLogicalOwner(r != nil, value(func() string {
-		if r == nil {
-			return ""
-		}
-		return r.LogicalAccountId
-	}), value(func() string {
-		if r == nil {
-			return ""
-		}
-		return r.RunnerId
-	}))
+	return nil
 }
 
 func (r *ReleaseLogicalAccountOwnerReq) Validate() error {
-	if r != nil && strings.TrimSpace(r.InstanceId) != "" {
-		if strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" {
-			return fmt.Errorf("logical_account_id, instance_id, session_id and expected_auth_fence are required")
-		}
-		return nil
+	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.InstanceId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" {
+		return fmt.Errorf("logical_account_id, instance_id, session_id and expected_auth_fence are required")
 	}
-	return validateLogicalOwner(r != nil, value(func() string {
-		if r == nil {
-			return ""
-		}
-		return r.LogicalAccountId
-	}), value(func() string {
-		if r == nil {
-			return ""
-		}
-		return r.RunnerId
-	}))
+	return nil
 }
 
 func (r *RebindLogicalAccountOwnerReq) Validate() error {
-	if r != nil && strings.TrimSpace(r.InstanceId) != "" {
-		if strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" || strings.TrimSpace(r.NewInstanceId) == "" || strings.TrimSpace(r.NewSessionId) == "" {
-			return fmt.Errorf("logical_account_id, expected_auth_fence, old/new instance_id and old/new session_id are required")
-		}
-		return nil
-	}
-	if err := validateLogicalOwner(r != nil, value(func() string {
-		if r == nil {
-			return ""
-		}
-		return r.LogicalAccountId
-	}), value(func() string {
-		if r == nil {
-			return ""
-		}
-		return r.RunnerId
-	})); err != nil {
-		return err
-	}
-	if strings.TrimSpace(r.RebindKey) == "" {
-		return fmt.Errorf("rebind_key is required")
+	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.InstanceId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" || strings.TrimSpace(r.NewInstanceId) == "" || strings.TrimSpace(r.NewSessionId) == "" {
+		return fmt.Errorf("logical_account_id, expected_auth_fence, old/new instance_id and old/new session_id are required")
 	}
 	return nil
 }
@@ -495,19 +428,6 @@ func validPositionSide(value PositionSide) bool {
 func validOrderSide(value OrderSide) bool {
 	return value == OrderSide_ORDER_SIDE_BUY ||
 		value == OrderSide_ORDER_SIDE_SELL
-}
-
-func validateLogicalOwner(
-	present bool,
-	logicalAccountID string,
-	runnerID string,
-) error {
-	if !present ||
-		strings.TrimSpace(logicalAccountID) == "" ||
-		strings.TrimSpace(runnerID) == "" {
-		return fmt.Errorf("logical_account_id and runner_id are required")
-	}
-	return nil
 }
 
 func validatePage(page *Page) error {

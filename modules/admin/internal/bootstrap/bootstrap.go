@@ -6,7 +6,7 @@ import (
 	"time"
 
 	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/dnsproxy"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/garbage"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -33,6 +33,12 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		log.ErrorContextf(ctx, "启动后台服务失败: %v", err)
 		return nil, err
 	}
+	initialized := false
+	defer func() {
+		if !initialized {
+			services.closeGateways()
+		}
+	}()
 
 	// 3. 注册TRPC服务
 	if err := RegisterTRPCServices(s, cfg, services); err != nil {
@@ -46,28 +52,24 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := registerAuthCacheCleanupTimer(s, cache); err != nil {
 		return nil, err
 	}
-	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment()); err != nil {
+	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.DBManager.GetDB())); err != nil {
+		return nil, err
+	}
+	collector, err := garbage.NewCollector(services.DBManager.GetDB(), services.machineGateway)
+	if err != nil {
+		return nil, err
+	}
+	if err := registerGarbageCollectionTimer(s, collector); err != nil {
 		return nil, err
 	}
 
 	// 4. 注册定时器
-	// DNS探测定时器（本地DNS解析）
-	timer.RegisterScheduler("dnsproxySchedule", &timer.DefaultScheduler{})
-	if service := s.Service("trpc.dnsproxy.timer"); service != nil {
-		timer.RegisterHandlerService(service, func(ctx context.Context) error {
-			return dnsproxy.HandleSchedule(ctx, "")
-		})
-	}
-	// DNS探测定时器（合并终端+本地DNS并探测）
-	timer.RegisterScheduler("dnsProbeSchedule", &timer.DefaultScheduler{})
-	if service := s.Service("trpc.dnsprobe.timer"); service != nil {
-		timer.RegisterHandlerService(service, func(ctx context.Context) error {
-			return dnsproxy.HandleDNSProbeSchedule(ctx, "")
-		})
-	}
+
 	registerMetricsReporter(s)
 
 	log.InfoContextf(ctx, "应用初始化完成")
+	s.RegisterOnShutdown(services.closeGateways)
+	initialized = true
 	return s, nil
 }
 
@@ -93,11 +95,33 @@ func registerAuthCacheCleanupTimer(s *server.Server, cleaner authCacheCleaner) e
 	return nil
 }
 
+const garbageCollectionTimerService = "trpc.moox.admin.garbage_collection.timer"
+
+// garbageCollectionTimeout bounds one daily run, which lists and deletes COS
+// objects through CloudNode.
+const garbageCollectionTimeout = 15 * time.Minute
+
+func registerGarbageCollectionTimer(s *server.Server, collector *garbage.Collector) error {
+	if s == nil || collector == nil {
+		return fmt.Errorf("garbage collection timer requires server and collector")
+	}
+	service := s.Service(garbageCollectionTimerService)
+	if service == nil {
+		return fmt.Errorf("garbage collection timer service %q is not configured", garbageCollectionTimerService)
+	}
+	job, err := timerjob.New("admin_garbage_collection", garbageCollectionTimeout, collector.Run)
+	if err != nil {
+		return err
+	}
+	timer.RegisterHandlerService(service, job.Handle)
+	return nil
+}
+
 func registerMetricsReporter(s *server.Server) {
 	if s == nil {
 		return
 	}
-	h, err := report.NewHandler(report.DefaultConfig("admin", "admin_gateway"))
+	h, err := report.NewHandler(report.DefaultConfig("admin", "admin"))
 	if err != nil {
 		log.Warnf("admin metrics reporter disabled: %v", err)
 		return
@@ -118,9 +142,19 @@ func registerCertificateWatchTimer(ctx context.Context, s *server.Server, watch 
 	if service == nil {
 		return fmt.Errorf("certificate watch timer service %q is not configured", certificateWatchTimerService)
 	}
-	if err := watch.Validate(ctx); err != nil {
+	job, err := timerjob.New("admin_certificate_watch", certificateWatchTimeout, watch.Validate)
+	if err != nil {
 		return err
 	}
-	timer.RegisterHandlerService(service, watch.Validate)
+	// Other registered hosts may not have completed their first deployment yet.
+	// Report findings while allowing the control plane to start so deployment
+	// and certificate renewal can proceed.
+	if err := job.Handle(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		log.WarnContextf(ctx, "initial certificate watch reported a problem: %v", err)
+	}
+	timer.RegisterHandlerService(service, job.Handle)
 	return nil
 }

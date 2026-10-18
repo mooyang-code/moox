@@ -335,7 +335,6 @@ func logicalAccountToPB(
 		LogicalAccountId: value.LogicalAccountID,
 		SpaceId:          value.SpaceID,
 		Name:             value.Name,
-		OwnerRunnerId:    value.OwnerRunnerID,
 		OwnerGeneration:  value.OwnerGeneration,
 		OwnerInstanceId:  value.OwnerInstanceID,
 		OwnerSessionId:   value.OwnerSessionID,
@@ -420,6 +419,7 @@ func logicalAccountTargetToPB(
 		targets = append(targets, &tradepb.InstrumentTarget{
 			InstrumentId: target.InstrumentID,
 			Quantity:     target.Quantity,
+			Hold:         target.Hold,
 		})
 	}
 	blocked := make([]*tradepb.BlockedTarget, 0, len(value.BlockedTargets))

@@ -47,7 +47,14 @@ import TaskResultsPage from "./index.vue";
 describe("collector task result page deep links", () => {
   beforeEach(() => {
     mocks.getTaskList.mockReset().mockResolvedValue({
-      tasks: [{ task_id: "known", task_name: "Known task", create_time: "2026-10-01T00:00:00Z", result: { view_id: "view-known", status: "active" } }],
+      tasks: [
+        {
+          task_id: "known",
+          task_name: "Known task",
+          create_time: "2026-10-01T00:00:00Z",
+          result: { view_id: "view-known", status: "active" }
+        }
+      ],
       page: { page: 1, size: 100, total: 1 }
     });
     mocks.getTaskDetail.mockReset();
@@ -232,16 +239,18 @@ describe("collector task result page deep links", () => {
 
   it.each(["stale", "unknown"])("keeps an already displayed View mounted when refreshed metadata is %s", async status => {
     mocks.routeQuery.resultTask = "known";
-    mocks.getTaskDetail.mockResolvedValueOnce({
-      task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
-    }).mockResolvedValueOnce({
-      task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status } }
-    });
+    mocks.getTaskDetail
+      .mockResolvedValueOnce({
+        task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+      })
+      .mockResolvedValueOnce({
+        task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status } }
+      });
     const wrapper = mount(TaskResultsPage, {
       global: {
         stubs: {
           "a-alert": { template: "<div><slot /></div>" },
-          "a-button": { emits: ["click"], template: '<button @click="$emit(\'click\')"><slot /></button>' },
+          "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
           "a-empty": true,
           "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
@@ -257,7 +266,10 @@ describe("collector task result page deep links", () => {
     await flushPromises();
     const initialView = wrapper.get("[data-testid='view-browse']").element;
     expect(wrapper.get("[data-testid='view-browse']").text()).toBe("0");
-    await wrapper.findAll("button").find(button => button.text().includes("刷新结果"))?.trigger("click");
+    await wrapper
+      .findAll("button")
+      .find(button => button.text().includes("刷新结果"))
+      ?.trigger("click");
     await flushPromises();
     expect(wrapper.get("[data-testid='view-browse']").element).toBe(initialView);
     expect(wrapper.get("[data-testid='view-browse']").text()).toBe("0");
@@ -272,14 +284,16 @@ describe("collector task result page deep links", () => {
       tasks: [{ task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }],
       page: { page: 1, size: 100, total: 1 }
     });
-    mocks.getTaskDetail.mockResolvedValueOnce({
-      task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
-    }).mockRejectedValueOnce(new Error("Storage is temporarily unavailable"));
+    mocks.getTaskDetail
+      .mockResolvedValueOnce({
+        task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+      })
+      .mockRejectedValueOnce(new Error("Storage is temporarily unavailable"));
     const wrapper = mount(TaskResultsPage, {
       global: {
         stubs: {
           "a-alert": { template: "<div><slot /></div>" },
-          "a-button": { emits: ["click"], template: '<button @click="$emit(\'click\')"><slot /></button>' },
+          "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
           "a-empty": true,
           "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
@@ -291,7 +305,10 @@ describe("collector task result page deep links", () => {
     });
     await flushPromises();
     const initialView = wrapper.get("[data-testid='view-browse']").element;
-    await wrapper.findAll("button").find(button => button.text().includes("刷新结果"))?.trigger("click");
+    await wrapper
+      .findAll("button")
+      .find(button => button.text().includes("刷新结果"))
+      ?.trigger("click");
     await flushPromises();
 
     expect(wrapper.get("[data-testid='view-browse']").element).toBe(initialView);
@@ -305,16 +322,20 @@ describe("collector task result page deep links", () => {
       tasks: [{ task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }],
       page: { page: 1, size: 100, total: 1 }
     });
-    mocks.getTaskDetail.mockResolvedValueOnce({
-      task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
-    }).mockRejectedValueOnce(new ControlRequestError("task no longer exists", {
-      ret_info: { code: 5, msg: "task no longer exists" }
-    }));
+    mocks.getTaskDetail
+      .mockResolvedValueOnce({
+        task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+      })
+      .mockRejectedValueOnce(
+        new ControlRequestError("task no longer exists", {
+          ret_info: { code: 5, msg: "task no longer exists" }
+        })
+      );
     const wrapper = mount(TaskResultsPage, {
       global: {
         stubs: {
           "a-alert": { template: "<div><slot /></div>" },
-          "a-button": { emits: ["click"], template: '<button @click="$emit(\'click\')"><slot /></button>' },
+          "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
           "a-empty": true,
           "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
@@ -327,7 +348,10 @@ describe("collector task result page deep links", () => {
     await flushPromises();
     expect(wrapper.find("[data-testid='view-browse']").exists()).toBe(true);
 
-    await wrapper.findAll("button").find(button => button.text().includes("刷新结果"))?.trigger("click");
+    await wrapper
+      .findAll("button")
+      .find(button => button.text().includes("刷新结果"))
+      ?.trigger("click");
     await flushPromises();
 
     expect(wrapper.find("[data-testid='view-browse']").exists()).toBe(false);
@@ -341,14 +365,16 @@ describe("collector task result page deep links", () => {
       tasks: [{ task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }],
       page: { page: 1, size: 100, total: 1 }
     });
-    mocks.getTaskDetail.mockResolvedValueOnce({
-      task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
-    }).mockRejectedValueOnce(new AuthSessionExpiredError());
+    mocks.getTaskDetail
+      .mockResolvedValueOnce({
+        task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+      })
+      .mockRejectedValueOnce(new AuthSessionExpiredError());
     const wrapper = mount(TaskResultsPage, {
       global: {
         stubs: {
           "a-alert": { template: "<div><slot /></div>" },
-          "a-button": { emits: ["click"], template: '<button @click="$emit(\'click\')"><slot /></button>' },
+          "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
           "a-empty": true,
           "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
@@ -361,7 +387,10 @@ describe("collector task result page deep links", () => {
     await flushPromises();
     expect(wrapper.find("[data-testid='view-browse']").exists()).toBe(true);
 
-    await wrapper.findAll("button").find(button => button.text().includes("刷新结果"))?.trigger("click");
+    await wrapper
+      .findAll("button")
+      .find(button => button.text().includes("刷新结果"))
+      ?.trigger("click");
     await flushPromises();
 
     expect(wrapper.find("[data-testid='view-browse']").exists()).toBe(false);
@@ -375,16 +404,18 @@ describe("collector task result page deep links", () => {
       tasks: [{ task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }],
       page: { page: 1, size: 100, total: 1 }
     });
-    mocks.getTaskDetail.mockResolvedValueOnce({
-      task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
-    }).mockResolvedValueOnce({
-      task: { task_id: "other", task_name: "Other task", result: { view_id: "view-other", status: "ready" } }
-    });
+    mocks.getTaskDetail
+      .mockResolvedValueOnce({
+        task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+      })
+      .mockResolvedValueOnce({
+        task: { task_id: "other", task_name: "Other task", result: { view_id: "view-other", status: "ready" } }
+      });
     const wrapper = mount(TaskResultsPage, {
       global: {
         stubs: {
           "a-alert": { template: "<div><slot /></div>" },
-          "a-button": { emits: ["click"], template: '<button @click="$emit(\'click\')"><slot /></button>' },
+          "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
           "a-empty": true,
           "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
@@ -396,7 +427,10 @@ describe("collector task result page deep links", () => {
     });
     await flushPromises();
 
-    await wrapper.findAll("button").find(button => button.text().includes("刷新结果"))?.trigger("click");
+    await wrapper
+      .findAll("button")
+      .find(button => button.text().includes("刷新结果"))
+      ?.trigger("click");
     await flushPromises();
 
     expect(wrapper.find("[data-testid='view-browse']").exists()).toBe(false);

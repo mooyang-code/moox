@@ -60,24 +60,34 @@ func TestDAO_ListSpaceMembers_EmptySpace_ShouldReturnZero(t *testing.T) {
 	assert.Empty(t, rows)
 }
 
-func TestDAO_AuthorizeTradeRequest_RequiresActiveMembershipForOrdinaryUser(t *testing.T) {
+func TestDAO_AuthorizeSpaceRequest_RequiresActiveMembershipForOrdinaryUser(t *testing.T) {
 	db := setupSpaceTestDB(t)
 	d := NewDAO(db)
 	require.NoError(t, d.CreateSpace(context.Background(), &Space{SpaceID: "crypto", Name: "Crypto", Status: "active"}))
-	err := d.AuthorizeTradeRequest(context.Background(), "user-1", "crypto", "ListOrders", 1)
+	err := d.AuthorizeSpaceRequest(context.Background(), "user-1", "crypto", false, 1)
 	assert.Error(t, err)
 	require.NoError(t, db.Create(&SpaceMember{SpaceID: "crypto", UserID: "user-1", Role: "member", Status: "active"}).Error)
-	require.NoError(t, d.AuthorizeTradeRequest(context.Background(), "user-1", "crypto", "ListOrders", 1))
-	assert.Error(t, d.AuthorizeTradeRequest(context.Background(), "user-1", "crypto", "PlaceManualOrder", 1))
+	require.NoError(t, d.AuthorizeSpaceRequest(context.Background(), "user-1", "crypto", false, 1))
+	assert.Error(t, d.AuthorizeSpaceRequest(context.Background(), "user-1", "crypto", true, 1))
 }
 
-func TestDAO_AuthorizeTradeRequest_GlobalAdminAndInactiveSpace(t *testing.T) {
+// 空间成员只能读，写操作要空间 owner / admin。
+func TestDAO_AuthorizeSpaceRequest_MemberCanReadButNotMutate(t *testing.T) {
 	db := setupSpaceTestDB(t)
 	d := NewDAO(db)
 	require.NoError(t, d.CreateSpace(context.Background(), &Space{SpaceID: "crypto", Name: "Crypto", Status: "active"}))
-	require.NoError(t, d.AuthorizeTradeRequest(context.Background(), "admin-1", "crypto", "PlaceManualOrder", 2))
+	require.NoError(t, db.Create(&SpaceMember{SpaceID: "crypto", UserID: "user-1", Role: "member", Status: "active"}).Error)
+	require.NoError(t, d.AuthorizeSpaceRequest(context.Background(), "user-1", "crypto", false, 1))
+	assert.Error(t, d.AuthorizeSpaceRequest(context.Background(), "user-1", "crypto", true, 1))
+}
+
+func TestDAO_AuthorizeSpaceRequest_GlobalAdminAndInactiveSpace(t *testing.T) {
+	db := setupSpaceTestDB(t)
+	d := NewDAO(db)
+	require.NoError(t, d.CreateSpace(context.Background(), &Space{SpaceID: "crypto", Name: "Crypto", Status: "active"}))
+	require.NoError(t, d.AuthorizeSpaceRequest(context.Background(), "admin-1", "crypto", true, 2))
 	require.NoError(t, db.Model(&Space{}).Where("c_space_id = ?", "crypto").Update("c_status", "disabled").Error)
-	assert.Error(t, d.AuthorizeTradeRequest(context.Background(), "admin-1", "crypto", "ListOrders", 2))
+	assert.Error(t, d.AuthorizeSpaceRequest(context.Background(), "admin-1", "crypto", false, 2))
 }
 
 func TestService_CreateSpace_MissingRequired_ShouldError(t *testing.T) {

@@ -23,11 +23,14 @@ func (f datasetRowsHandlerFunc) HandleDatasetRows(ctx context.Context, message *
 }
 
 func TestConfigDefaults(t *testing.T) {
-	config, err := (Config{}).withDefaults()
+	if _, err := (Config{}).withDefaults(); err == nil {
+		t.Fatal("a consumer without a durable name was accepted")
+	}
+	config, err := (Config{Consumer: events.StorageViewMiscConsumer}).withDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Consumer != events.StorageViewKlineConsumer || config.AckWaitMS != 120000 || config.FetchBatch != 1 || config.MaxWorkers != 1 || config.MaxAckPending != 1 || config.MaxRetryAttempts != -1 || config.Ordering != "dataset" || config.DeliverPolicy != "all" {
+	if config.Consumer != events.StorageViewMiscConsumer || config.AckWaitMS != 120000 || config.FetchBatch != 1 || config.MaxWorkers != 1 || config.MaxAckPending != 1 || config.MaxRetryAttempts != -1 || config.Ordering != "dataset" || config.DeliverPolicy != "all" {
 		t.Fatalf("config = %+v", config)
 	}
 }
@@ -52,20 +55,21 @@ func TestViewConsumerIgnoresUnknownMergeSubject(t *testing.T) {
 }
 
 func TestConfigNormalizesDeliverPolicy(t *testing.T) {
-	config, err := (Config{DeliverPolicy: " NEW "}).withDefaults()
+	config, err := (Config{Consumer: events.StorageViewMiscConsumer, DeliverPolicy: " NEW "}).withDefaults()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if config.DeliverPolicy != "new" {
 		t.Fatalf("deliver policy = %q, want new", config.DeliverPolicy)
 	}
-	if _, err := (Config{DeliverPolicy: "last"}).withDefaults(); err == nil {
+	if _, err := (Config{Consumer: events.StorageViewMiscConsumer, DeliverPolicy: "last"}).withDefaults(); err == nil {
 		t.Fatal("unsupported deliver policy was accepted")
 	}
 }
 
 func TestConfigAcceptsExactPartitionFilters(t *testing.T) {
 	config, err := (Config{
+		Consumer:       events.StorageViewMiscConsumer,
 		PartitionID:    "kline",
 		FilterSubjects: []string{"moox.event.storage.dataset.rows.upserted.v2.crypto.binance"},
 	}).withDefaults()
@@ -78,10 +82,10 @@ func TestConfigAcceptsExactPartitionFilters(t *testing.T) {
 }
 
 func TestConfigAcceptsUnlimitedRetryAttempts(t *testing.T) {
-	if config, err := (Config{MaxRetryAttempts: -1}).withDefaults(); err != nil || config.MaxRetryAttempts != -1 {
+	if config, err := (Config{Consumer: events.StorageViewMiscConsumer, MaxRetryAttempts: -1}).withDefaults(); err != nil || config.MaxRetryAttempts != -1 {
 		t.Fatalf("unlimited MaxRetryAttempts = %+v, err=%v", config, err)
 	}
-	if _, err := (Config{MaxRetryAttempts: -2}).withDefaults(); err == nil {
+	if _, err := (Config{Consumer: events.StorageViewMiscConsumer, MaxRetryAttempts: -2}).withDefaults(); err == nil {
 		t.Fatal("invalid negative MaxRetryAttempts was accepted")
 	}
 }

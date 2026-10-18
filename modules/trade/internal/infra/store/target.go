@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -15,7 +18,10 @@ import (
 
 type InstrumentTarget struct {
 	InstrumentID string `json:"instrument_id"`
-	Quantity     string `json:"quantity"`
+	// Quantity 在 Hold 为 true 时为空：保持标的不换算数量。
+	Quantity string `json:"quantity,omitempty"`
+	// Hold 为 true 表示保持该标的当前持仓数量不动（策略因数据空洞暂时无法决策），执行器对它既不加仓也不减仓。
+	Hold bool `json:"hold,omitempty"`
 }
 
 type BlockedTarget struct {
@@ -30,8 +36,8 @@ type LogicalAccountTargetRecord struct {
 	TargetID         string
 	RunnerID         string
 	CommandSequence  uint64
-	// Strategy target identity. The fields are authoritative when populated;
-	// RunnerID/CommandSequence are retained for older console fixtures.
+	// Strategy target identity; RunnerID mirrors InstanceID and CommandSequence
+	// mirrors BarEndTime.
 	InstanceID     string
 	SessionID      string
 	StrategyID     string
@@ -117,39 +123,27 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	if account.ControlMode != "STRATEGY" {
 		return LogicalAccountTargetRecord{}, false, ErrTargetAuthorization
 	}
-	newIdentity := record.InstanceID != "" || record.SessionID != "" || record.BarEndTime != 0 || record.ValidUntil != 0
-	if newIdentity {
-		if blank(record.InstanceID) || blank(record.SessionID) || blank(record.StrategyID) ||
-			record.BarEndTime <= 0 || record.EffectiveAt != record.BarEndTime || record.ValidUntil <= record.EffectiveAt {
-			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete target session contract", ErrInvalidRecord)
-		}
-		if record.CommandSequence == 0 {
-			record.CommandSequence = uint64(record.BarEndTime)
-		}
-		if record.RunnerID == "" {
-			record.RunnerID = record.InstanceID
-		}
-		if account.OwnerInstanceID != record.InstanceID || account.OwnerSessionID != record.SessionID {
-			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: logical account target session authorization", ErrTargetAuthorization)
-		}
-		now := time.Now().UTC().UnixMilli()
-		if now >= record.ValidUntil {
-			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: target validity window", ErrTargetExpired)
-		}
-	} else {
-		if blank(record.RunnerID) {
-			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete logical account target", ErrInvalidRecord)
-		}
-		if record.CommandSequence == 0 {
-			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete logical account target", ErrInvalidRecord)
-		}
-		if account.OwnerRunnerID != record.RunnerID {
-			return LogicalAccountTargetRecord{}, false,
-				fmt.Errorf("%w: logical account target runner ownership", ErrConflict)
-		}
+	if blank(record.InstanceID) || blank(record.SessionID) || blank(record.StrategyID) ||
+		record.BarEndTime <= 0 || record.EffectiveAt != record.BarEndTime || record.ValidUntil <= record.EffectiveAt {
+		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete target session contract", ErrInvalidRecord)
+	}
+	if record.CommandSequence == 0 {
+		record.CommandSequence = uint64(record.BarEndTime)
+	}
+	if record.RunnerID == "" {
+		record.RunnerID = record.InstanceID
+	}
+	if account.OwnerInstanceID != record.InstanceID || account.OwnerSessionID != record.SessionID {
+		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: logical account target session authorization", ErrTargetAuthorization)
+	}
+	if time.Now().UTC().UnixMilli() >= record.ValidUntil {
+		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: target validity window", ErrTargetExpired)
 	}
 	if account.MarketType == "SPOT" {
 		for _, target := range record.Targets {
+			if target.Hold {
+				continue
+			}
 			quantity, parseErr := shared.ParseDecimal(target.Quantity)
 			if parseErr != nil || quantity.Cmp(shared.Zero()) < 0 {
 				return LogicalAccountTargetRecord{}, false, fmt.Errorf(
@@ -173,15 +167,13 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 		}
 		same := current.TargetID == record.TargetID &&
 			current.RunnerID == record.RunnerID &&
-			((newIdentity && current.InstanceID == record.InstanceID && current.SessionID == record.SessionID && current.BarEndTime == record.BarEndTime) ||
-				(!newIdentity && current.CommandSequence == record.CommandSequence)) &&
+			current.InstanceID == record.InstanceID && current.SessionID == record.SessionID && current.BarEndTime == record.BarEndTime &&
 			row.TargetsJSON == targetsJSON
 		if same {
 			return current, false, nil
 		}
 		if record.TargetID == current.TargetID ||
-			(newIdentity && current.InstanceID == record.InstanceID && current.SessionID == record.SessionID && record.BarEndTime <= current.BarEndTime) ||
-			(!newIdentity && record.CommandSequence <= current.CommandSequence) {
+			(current.InstanceID == record.InstanceID && current.SessionID == record.SessionID && record.BarEndTime <= current.BarEndTime) {
 			return current, false, fmt.Errorf("%w: stale or conflicting logical account target", ErrConflict)
 		}
 	case query.Error != nil && !errors.Is(query.Error, gorm.ErrRecordNotFound):
@@ -352,7 +344,7 @@ func (s *Store) UpdateLogicalAccountTargetState(
 func logicalAccountTargetRecord(
 	row logicalAccountTargetRow,
 ) (LogicalAccountTargetRecord, error) {
-	targets, _, err := decodeCurrentTargets(row.TargetsJSON, false)
+	targets, err := decodeCurrentTargets(row.TargetsJSON)
 	if err != nil {
 		return LogicalAccountTargetRecord{}, fmt.Errorf("%w: target JSON: %v", ErrInvalidRecord, err)
 	}
@@ -395,6 +387,14 @@ func encodeInstrumentTargets(targets []InstrumentTarget) (string, error) {
 				ErrInvalidRecord, target.InstrumentID)
 		}
 		seen[target.InstrumentID] = struct{}{}
+		if target.Hold {
+			// 保持标的不带数量。
+			if !blank(target.Quantity) {
+				return "", fmt.Errorf("%w: hold target must not carry a quantity", ErrInvalidRecord)
+			}
+			target.Quantity = ""
+			continue
+		}
 		quantity, err := shared.ParseDecimal(target.Quantity)
 		if err != nil {
 			return "", fmt.Errorf("%w: target quantity", ErrInvalidRecord)
@@ -439,4 +439,67 @@ func encodeBlockedTargets(targets []BlockedTarget) (string, error) {
 		return "", fmt.Errorf("%w: encode blocked targets: %v", ErrInvalidRecord, err)
 	}
 	return string(data), nil
+}
+
+// Current executable targets are not receipts: unknown fields must never
+// silently disappear when a worker reads them.
+func decodeCurrentTargets(raw string) ([]InstrumentTarget, error) {
+	d := json.NewDecoder(strings.NewReader(raw))
+	tok, err := d.Token()
+	if err != nil || tok != json.Delim('[') {
+		return nil, fmt.Errorf("%w: target must be an array", ErrInvalidRecord)
+	}
+	targets := []InstrumentTarget{}
+	for d.More() {
+		tok, err = d.Token()
+		if err != nil || tok != json.Delim('{') {
+			return nil, fmt.Errorf("%w: target must be an object", ErrInvalidRecord)
+		}
+		fields := map[string]string{}
+		for d.More() {
+			key, err := d.Token()
+			if err != nil {
+				return nil, err
+			}
+			name, ok := key.(string)
+			if !ok {
+				return nil, ErrInvalidRecord
+			}
+			if _, duplicate := fields[name]; duplicate {
+				return nil, fmt.Errorf("%w: duplicate target field", ErrInvalidRecord)
+			}
+			switch name {
+			case "instrument_id", "quantity", "hold":
+			default:
+				return nil, fmt.Errorf("%w: unknown target field %s", ErrInvalidRecord, name)
+			}
+			if name == "hold" {
+				var hold bool
+				if err := d.Decode(&hold); err != nil {
+					return nil, fmt.Errorf("%w: invalid target field %s", ErrInvalidRecord, name)
+				}
+				fields[name] = strconv.FormatBool(hold)
+				continue
+			}
+			var value string
+			if err := d.Decode(&value); err != nil || blank(value) {
+				return nil, fmt.Errorf("%w: invalid target field %s", ErrInvalidRecord, name)
+			}
+			fields[name] = value
+		}
+		if _, err := d.Token(); err != nil {
+			return nil, err
+		}
+		targets = append(targets, InstrumentTarget{InstrumentID: fields["instrument_id"], Quantity: fields["quantity"], Hold: fields["hold"] == "true"})
+	}
+	if _, err := d.Token(); err != nil {
+		return nil, err
+	}
+	if _, err := d.Token(); err != io.EOF {
+		return nil, fmt.Errorf("%w: trailing target JSON", ErrInvalidRecord)
+	}
+	if _, err := encodeInstrumentTargets(targets); err != nil {
+		return nil, err
+	}
+	return targets, nil
 }

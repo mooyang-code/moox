@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,7 +49,7 @@ func TestListCloudNodesPaginatesAndParsesMetadata(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(server.URL)
+	client := collectorTestClient(server)
 	nodes, err := client.ListCloudNodes(context.Background(), CloudNodeListFilter{
 		CloudAccountID: "account-a",
 		Region:         "ap-guangzhou",
@@ -77,7 +78,7 @@ func TestListCloudNodesPassesScopedTimerReadbackFilters(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := New(server.URL).ListCloudNodes(context.Background(), CloudNodeListFilter{
+	_, err := collectorTestClient(server).ListCloudNodes(context.Background(), CloudNodeListFilter{
 		CloudAccountID: "account-a",
 		Namespace:      "default",
 		Region:         "ap-singapore",
@@ -96,7 +97,7 @@ func TestListCloudAccounts_ParsesSuccessResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(server.URL)
+	client := collectorTestClient(server)
 	accounts, err := client.ListCloudAccounts(context.Background(), "tencent")
 	require.NoError(t, err)
 	require.Len(t, accounts, 1)
@@ -117,7 +118,7 @@ func TestCreateCloudAccount_RegistersRegionLocalBucket(t *testing.T) {
 	}))
 	defer server.Close()
 
-	account, err := New(server.URL).CreateCloudAccount(context.Background(), CloudAccountInput{
+	account, err := collectorTestClient(server).CreateCloudAccount(context.Background(), CloudAccountInput{
 		AccountID: "tencent-scf-singapore", AccountName: "Tencent SCF Singapore", Provider: "tencent",
 		CredentialSecretID: "tencent-default", AppID: "1255382561", COSRegion: "ap-singapore", COSBucket: "moox-scf-singapore-1255382561",
 	})
@@ -130,11 +131,11 @@ func TestEnableCollectionTaskPreservesCanonicalDefinition(t *testing.T) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		switch r.URL.Path {
-		case "/api/admin/collectmgr/GetTaskDetail":
+		case "/api/admin/collector/GetTaskDetail":
 			assert.Equal(t, "stockcn", body["space_id"])
 			assert.Equal(t, "d5v5n3p8r7c9m2k4j6h1", body["task_id"])
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"task":{"space_id":"stockcn","task_id":"d5v5n3p8r7c9m2k4j6h1","task_name":"A 股 K 线 1m","data_type":"kline","tag_ids":["cn_a_share"],"enabled":false,"collect_params":{"frequency":"1m","target_dataset_id":"dataset_d5v5n3p8r7c9m2k4j6h1"}}}`))
-		case "/api/admin/collectmgr/UpdateTask":
+		case "/api/admin/collector/UpdateTask":
 			task, ok := body["task"].(map[string]any)
 			require.True(t, ok)
 			assert.Equal(t, true, task["enabled"])
@@ -146,12 +147,12 @@ func TestEnableCollectionTaskPreservesCanonicalDefinition(t *testing.T) {
 	}))
 	defer server.Close()
 
-	require.NoError(t, New(server.URL).EnableCollectionTask(context.Background(), "stockcn", "d5v5n3p8r7c9m2k4j6h1"))
+	require.NoError(t, collectorTestClient(server).EnableCollectionTask(context.Background(), "stockcn", "d5v5n3p8r7c9m2k4j6h1"))
 }
 
 func TestCreateTaskStartsDisabled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/admin/collectmgr/CreateTask", r.URL.Path)
+		assert.Equal(t, "/api/admin/collector/CreateTask", r.URL.Path)
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		task, ok := body["task"].(map[string]any)
@@ -166,21 +167,21 @@ func TestCreateTaskStartsDisabled(t *testing.T) {
 		resultConfig, ok := body["result_config"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, "node-1", resultConfig["data_node_id"])
-		assert.Equal(t, "30d", resultConfig["keep_duration"])
+		assert.NotContains(t, resultConfig, "keep_duration")
 		assert.Equal(t, "A 股 K 线结果", resultConfig["description"])
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"task_id":"d5v5n3p8r7c9m2k4j6h1"}`))
 	}))
 	defer server.Close()
 
-	taskID, err := New(server.URL).CreateTask(context.Background(), "stockcn", "A 股 K 线 1m", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
+	taskID, err := collectorTestClient(server).CreateTask(context.Background(), "stockcn", "A 股 K 线 1m", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
 		"frequency": "1m",
-	}, &ResultConfig{DataNodeID: "node-1", KeepDuration: "30d", Description: "A 股 K 线结果"})
+	}, &ResultConfig{DataNodeID: "node-1", Description: "A 股 K 线结果"})
 	require.NoError(t, err)
 	assert.Equal(t, "d5v5n3p8r7c9m2k4j6h1", taskID)
 }
 
 func TestCreateTaskRejectsUserSelectedResultDatasetID(t *testing.T) {
-	_, err := New("http://127.0.0.1").CreateTask(context.Background(), "stockcn", "任务一", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
+	_, err := (&Client{}).CreateTask(context.Background(), "stockcn", "任务一", "kline", "moox-cli", []string{"cn_a_share"}, map[string]any{
 		"target_dataset_id": "dataset-user-selected",
 		"frequency":         "1m",
 	}, nil)
@@ -189,7 +190,7 @@ func TestCreateTaskRejectsUserSelectedResultDatasetID(t *testing.T) {
 
 func TestListEnabledTasksDecodesTaskNameAndResultSummary(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/admin/collectmgr/GetTaskList", r.URL.Path)
+		assert.Equal(t, "/api/admin/collector/GetTaskList", r.URL.Path)
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, true, body["enabled"])
@@ -216,7 +217,7 @@ func TestListEnabledTasksDecodesTaskNameAndResultSummary(t *testing.T) {
 	}))
 	defer server.Close()
 
-	tasks, err := New(server.URL).ListEnabledTasks(context.Background(), "stockcn")
+	tasks, err := collectorTestClient(server).ListEnabledTasks(context.Background(), "stockcn")
 	require.NoError(t, err)
 	require.Len(t, tasks, 1)
 	assert.Equal(t, "A 股 K 线 1m", tasks[0].TaskName)
@@ -235,4 +236,55 @@ func TestResolvePackageType_MapsKnownAliases(t *testing.T) {
 	assert.Equal(t, 2, ResolvePackageType("factor"))
 	assert.Equal(t, 3, ResolvePackageType("custom"))
 	assert.Equal(t, 1, ResolvePackageType("unknown"))
+}
+
+func collectorTestClient(server *httptest.Server) *Client {
+	return &Client{Gateway: testfixture.HandlerGateway{Handler: server.Config.Handler}}
+}
+
+// 名称是服务端模糊匹配：更新的、名称更长的包会把精确匹配挤到第二页，必须翻页找。
+func TestLatestPackageWalksPagesToFindTheExactName(t *testing.T) {
+	var pages []int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/admin/cloudnode/GetPackageList", r.URL.Path)
+		var body struct {
+			PackageName string `json:"package_name"`
+			Page        struct {
+				Page int `json:"page"`
+			} `json:"page"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "moox-collector-crypto-plan", body.PackageName)
+		pages = append(pages, body.Page.Page)
+		items := []map[string]any{{"package_id": "other-1", "package_name": "moox-collector-crypto-plan-experimental"}}
+		if body.Page.Page == 2 {
+			items = []map[string]any{{"package_id": "exact-1", "package_name": "moox-collector-crypto-plan"}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0, "msg": "ok"},
+			"items":    items,
+			"page":     map[string]any{"page": body.Page.Page, "has_more": body.Page.Page == 1},
+		})
+	}))
+	defer server.Close()
+	client := collectorTestClient(server)
+	id, found, err := client.LatestPackage(context.Background(), "moox-collector-crypto-plan")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "exact-1", id)
+	require.Equal(t, []int{1, 2}, pages)
+}
+
+func TestLatestPackageReportsMissingWhenNoPageHasTheExactName(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ret_info": map[string]any{"code": 0, "msg": "ok"},
+			"items":    []map[string]any{{"package_id": "other", "package_name": "moox-collector-crypto-plan-experimental"}},
+			"page":     map[string]any{"has_more": false},
+		})
+	}))
+	defer server.Close()
+	_, found, err := collectorTestClient(server).LatestPackage(context.Background(), "moox-collector-crypto-plan")
+	require.NoError(t, err)
+	require.False(t, found)
 }

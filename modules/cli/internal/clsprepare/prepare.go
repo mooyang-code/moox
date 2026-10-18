@@ -43,59 +43,76 @@ type Result struct {
 	LogsetCreated bool   `json:"logset_created"`
 	TopicCreated  bool   `json:"topic_created"`
 	IndexCreated  bool   `json:"index_created"`
+	// IndexFieldsChanged 表示这次补齐了采集日志字段的键值索引。
+	IndexFieldsChanged bool `json:"index_fields_changed"`
 }
 
+// Prepare 幂等开通 CLS（服务、日志集、主题、索引字段）并把云账号凭证写入 CredentialsOutput，供打包 SCF 代码时使用。
 func Prepare(ctx context.Context, source AccountSource, factory Factory, opts Options) (Result, error) {
-	if source == nil {
-		return Result{}, fmt.Errorf("account source is required")
-	}
-	if factory == nil {
-		return Result{}, fmt.Errorf("CLS factory is required")
-	}
 	if strings.TrimSpace(opts.CredentialsOutput) == "" {
 		return Result{}, fmt.Errorf("credentials output is required")
 	}
-
-	accounts, err := source.ListCloudAccounts(ctx, "tencent")
-	if err != nil {
-		return Result{}, safeUpstreamError("list Tencent cloud accounts", err)
-	}
-	account, err := selectAccount(accounts, opts.CloudAccountID)
+	result, secret, err := provision(ctx, source, factory, opts.CloudAccountID)
 	if err != nil {
 		return Result{}, err
-	}
-	secret, err := source.GetSecretValue(ctx, account.CredentialSecretID)
-	if err != nil {
-		return Result{}, safeUpstreamError(fmt.Sprintf("reveal cloud account %q", account.AccountID), err)
-	}
-	if secret == nil || account.CredentialSecretID == "" {
-		return Result{}, fmt.Errorf("cloud account %q returned incomplete Tencent credentials", account.AccountID)
-	}
-	if secret.Provider != "tencent" || secret.Category != "cloud" || secret.Status != "active" ||
-		strings.TrimSpace(secret.KeyID) == "" || strings.TrimSpace(secret.SecretValue) == "" {
-		return Result{}, fmt.Errorf("cloud account %q returned incomplete Tencent credentials", account.AccountID)
-	}
-
-	api, err := factory(secret.KeyID, secret.SecretValue)
-	if err != nil {
-		return Result{}, safeUpstreamError("create CLS client", err)
-	}
-	resources, err := tencent.BootstrapCLS(ctx, api, tencent.CLSBootstrapOptions{
-		LogsetName: LogsetName, TopicName: TopicName, RetentionDays: RetentionDays, Partitions: Partitions,
-	})
-	if err != nil {
-		return Result{}, safeUpstreamError("prepare fixed CLS resources", err)
 	}
 	if err := writeCredentials(opts.CredentialsOutput, secret.KeyID, secret.SecretValue); err != nil {
 		return Result{}, err
 	}
+	return result, nil
+}
 
+// Provision 幂等开通 CLS（服务、日志集、主题、索引字段），不写任何凭证文件：系统初始化用它保证日志服务开箱可用。
+func Provision(ctx context.Context, source AccountSource, factory Factory, cloudAccountID string) (Result, error) {
+	result, _, err := provision(ctx, source, factory, cloudAccountID)
+	return result, err
+}
+
+func provision(ctx context.Context, source AccountSource, factory Factory, cloudAccountID string) (Result, *adminclient.SecretMaterial, error) {
+	if source == nil {
+		return Result{}, nil, fmt.Errorf("account source is required")
+	}
+	if factory == nil {
+		return Result{}, nil, fmt.Errorf("CLS factory is required")
+	}
+
+	accounts, err := source.ListCloudAccounts(ctx, "tencent")
+	if err != nil {
+		return Result{}, nil, safeUpstreamError("list Tencent cloud accounts", err)
+	}
+	account, err := selectAccount(accounts, cloudAccountID)
+	if err != nil {
+		return Result{}, nil, err
+	}
+	secret, err := source.GetSecretValue(ctx, account.CredentialSecretID)
+	if err != nil {
+		return Result{}, nil, safeUpstreamError(fmt.Sprintf("reveal cloud account %q", account.AccountID), err)
+	}
+	if secret == nil || account.CredentialSecretID == "" {
+		return Result{}, nil, fmt.Errorf("cloud account %q returned incomplete Tencent credentials", account.AccountID)
+	}
+	if secret.Provider != "tencent" || secret.Category != "cloud" || secret.Status != "active" ||
+		strings.TrimSpace(secret.KeyID) == "" || strings.TrimSpace(secret.SecretValue) == "" {
+		return Result{}, nil, fmt.Errorf("cloud account %q returned incomplete Tencent credentials", account.AccountID)
+	}
+
+	api, err := factory(secret.KeyID, secret.SecretValue)
+	if err != nil {
+		return Result{}, nil, safeUpstreamError("create CLS client", err)
+	}
+	resources, err := tencent.BootstrapCLS(ctx, api, tencent.CLSBootstrapOptions{
+		LogsetName: LogsetName, TopicName: TopicName, RetentionDays: RetentionDays, Partitions: Partitions,
+		IndexFields: tencent.MarketFetchLogIndexFields,
+	})
+	if err != nil {
+		return Result{}, nil, safeUpstreamError("prepare fixed CLS resources", err)
+	}
 	return Result{
 		AccountID: account.AccountID, Region: Region, Host: Host,
 		LogsetID: resources.LogsetID, TopicID: resources.TopicID,
 		ServiceOpened: resources.ServiceOpened, LogsetCreated: resources.LogsetCreated,
-		TopicCreated: resources.TopicCreated, IndexCreated: resources.IndexCreated,
-	}, nil
+		TopicCreated: resources.TopicCreated, IndexCreated: resources.IndexCreated, IndexFieldsChanged: resources.IndexFieldsChanged,
+	}, secret, nil
 }
 
 type sanitizedUpstreamError struct {

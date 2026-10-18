@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
@@ -44,4 +45,8 @@ func TestResolveExecutionCapabilitiesPaperRequiresMatcher(t *testing.T) {
 	if !ready.CanPlaceOrder || !ready.CanClosePaperSimulation || !ready.Valid() {
 		t.Fatalf("ready paper capabilities = %+v", ready)
 	}
+}
+
+func (c ExecutionCapabilities) Valid() bool {
+	return c.CanPlaceOrder || strings.TrimSpace(c.UnavailableReason) != ""
 }

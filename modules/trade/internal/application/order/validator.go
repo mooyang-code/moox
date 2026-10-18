@@ -53,6 +53,8 @@ type Validation struct {
 	Leverage         shared.Decimal
 	ReservedAsset    string
 	ReservedQuantity shared.Decimal
+	// ReduceOnly：减仓单只预留手续费，不占用新保证金。
+	ReduceOnly bool
 }
 
 type Validator struct {
@@ -207,6 +209,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 			if err := v.validateReduceOnly(ctx, spec); err != nil {
 				return Validation{}, err
 			}
+			result.ReduceOnly = true
 			if account.ExecutionMode == exchange.ExecutionModePaper {
 				result.ReservedQuantity = reserveNotional.Mul(feeRate)
 			}

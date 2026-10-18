@@ -6,9 +6,11 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,12 +21,12 @@ type fakeSetupInitStorage struct {
 }
 
 type fakeSetupInitFactor struct {
-	items []setupFactorItem
+	plan setupFactorPlan
 }
 
-func (f *fakeSetupInitFactor) Apply(_ context.Context, items []setupFactorItem) (setupFactorSummary, error) {
-	f.items = append([]setupFactorItem(nil), items...)
-	return setupFactorSummary{Enabled: true, Planned: len(items), Imported: len(items), Associated: len(items)}, nil
+func (f *fakeSetupInitFactor) Apply(_ context.Context, plan setupFactorPlan) (setupFactorSummary, error) {
+	f.plan = plan
+	return setupFactorSummary{Enabled: true, Definitions: len(plan.Definitions), Members: len(plan.Members), Imported: len(plan.Definitions), MembersAdded: len(plan.Members)}, nil
 }
 
 func (f *fakeSetupInitFactor) Close() error { return nil }
@@ -63,11 +65,9 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	snapshot.Manifest.Factors.Enabled = true
 	snapshot.Manifest.Factors.SourceDir = "../../../../examples/factors"
-	snapshot.Manifest.Factors.Items = []setupconfig.FactorSetupItem{{
-		FactorType: "timeseries",
-		FactorID:   "bias", File: "timeseries/bias.py", InputColumns: []string{"close"},
-		Outputs: []string{"bias_5"}, ParamsJSON: `{"windows":[5]}`, LookbackPeriods: 5,
-		SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m",
+	snapshot.Manifest.Factors.Definitions = []setupconfig.FactorSetupDefinition{{FactorID: "Bias", File: "timeseries.yaml"}}
+	snapshot.Manifest.Factors.Members = []setupconfig.FactorSetupMember{{
+		SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m", FactorID: "Bias",
 	}}
 	snapshot.Manifest.Factors.Sets = []setupconfig.FactorSetupSet{{SpaceID: "crypto", SourceDatasetID: "dataset_binance_kline_1m", Freq: "1m"}}
 	factor := &fakeSetupInitFactor{}
@@ -79,8 +79,10 @@ func TestSetupFactorsCommandLoadsConfiguredSources(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"factors", "--file", "moox.toml"})
 	require.NoError(t, cmd.Execute())
-	require.Len(t, factor.items, 1)
-	assert.Equal(t, "bias", factor.items[0].FactorID)
+	require.Len(t, factor.plan.Definitions, 1)
+	require.Len(t, factor.plan.Members, 1)
+	assert.Equal(t, "Bias", factor.plan.Definitions[0].FactorID)
+	assert.Equal(t, "fset_binance_kline_1m", factor.plan.Members[0].SetID)
 	assert.Contains(t, output.String(), `"status":"ready"`)
 }
 
@@ -89,7 +91,7 @@ func TestLoadSetupInitBundleUsesDefaultMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, bundle.Spaces, 4)
 	require.NotEmpty(t, bundle.Calls)
-	require.Len(t, bundle.Datasets, 15)
+	require.Len(t, bundle.Datasets, 12)
 	assert.Equal(t, "crypto", bundle.Spaces[0].SpaceID)
 	assert.Equal(t, "stockcn", bundle.Spaces[1].SpaceID)
 	assert.Equal(t, "stockhk", bundle.Spaces[2].SpaceID)
@@ -323,7 +325,7 @@ func TestSetupInitRejectsMissingDatasetColumnOrigin(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freqs: []string{"1H"},
+			DataKind: "time_series", Freq: "1h",
 		}},
 	}
 	tests := []struct {
@@ -357,7 +359,7 @@ func TestSetupInitAllowsRawDatasetFieldColumnOrigin(t *testing.T) {
 		Datasets: []seedDataset{
 			{
 				SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
-				DataSourceID: "binance", DataKind: "time_series", Freqs: []string{"1m"},
+				DataSourceID: "binance", DataKind: "time_series", Freq: "1m",
 			},
 		},
 		Fields: []seedField{{SpaceID: "crypto", FieldID: "open"}},
@@ -382,7 +384,7 @@ func TestSetupInitAllowsFactorColumnOriginWithoutStorageFactorMetadata(t *testin
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "binance"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "dataset_factor_prices_1m", DataSourceID: "binance",
-			DataKind: "time_series", Freqs: []string{"1m"},
+			DataKind: "time_series", Freq: "1m",
 		}},
 		DatasetColumns: []seedDatasetColumn{{
 			SpaceID: "crypto", DatasetID: "dataset_factor_prices_1m", ColumnName: "bias_20",
@@ -398,7 +400,7 @@ func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freqs: []string{"1H"},
+			DataKind: "time_series", Freq: "1h",
 		}},
 		Fields: []seedField{{SpaceID: "crypto", FieldID: "close"}},
 		DatasetColumns: []seedDatasetColumn{
@@ -409,10 +411,10 @@ func TestSetupInitRejectsDuplicateDatasetAndViewColumns(t *testing.T) {
 	require.ErrorContains(t, validateSetupMetadataDependencies(base), "duplicate metadata dataset_column")
 
 	base.DatasetColumns = base.DatasetColumns[:1]
-	base.Views = []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1H")}
+	base.Views = []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline")}
 	base.ViewColumns = []seedViewColumn{
-		{SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close", OriginType: "dataset_column", OriginID: "kline.close"},
-		{SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close", OriginType: "dataset_column", OriginID: "kline.close"},
+		{SpaceID: "crypto", ViewID: "kline", ColumnName: "close", OriginType: "dataset_column", OriginID: "close"},
+		{SpaceID: "crypto", ViewID: "kline", ColumnName: "close", OriginType: "dataset_column", OriginID: "close"},
 	}
 	require.ErrorContains(t, validateSetupMetadataDependencies(base), "duplicate metadata view_column")
 }
@@ -423,37 +425,37 @@ func TestSetupInitRejectsMissingViewColumnOrigin(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freqs: []string{"1H"},
+			DataKind: "time_series", Freq: "1h",
 		}},
-		Views: []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline", "1H")},
+		Views: []seedView{testCanonicalTimeSeriesView("crypto", "kline", "kline")},
 		ViewColumns: []seedViewColumn{{
-			SpaceID: "crypto", ViewID: "kline", ColumnName: "kline.close",
-			OriginType: "dataset_column", OriginID: "kline.close",
+			SpaceID: "crypto", ViewID: "kline", ColumnName: "close",
+			OriginType: "dataset_column", OriginID: "close",
 		}},
 	})
-	require.ErrorContains(t, err, `references undefined dataset_column "kline.close"`)
+	require.ErrorContains(t, err, `references undefined dataset_column "close"`)
 }
 
-func TestSetupInitRejectsViewColumnFromUndeclaredDataset(t *testing.T) {
+func TestSetupInitRejectsDatasetPrefixedViewColumn(t *testing.T) {
 	err := validateSetupMetadataDependencies(metadataSeed{
 		Spaces:      []seedSpace{{SpaceID: "crypto"}},
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{
-			{SpaceID: "crypto", DatasetID: "spot", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1H"}},
-			{SpaceID: "crypto", DatasetID: "perpetual", DataSourceID: "market", DataKind: "time_series", Freqs: []string{"1H"}},
+			{SpaceID: "crypto", DatasetID: "spot", DataSourceID: "market", DataKind: "time_series", Freq: "1h"},
+			{SpaceID: "crypto", DatasetID: "perpetual", DataSourceID: "market", DataKind: "time_series", Freq: "1h"},
 		},
 		Fields: []seedField{{SpaceID: "crypto", FieldID: "close"}},
 		DatasetColumns: []seedDatasetColumn{
 			{SpaceID: "crypto", DatasetID: "spot", ColumnName: "close", OriginType: "field", OriginID: "close"},
 			{SpaceID: "crypto", DatasetID: "perpetual", ColumnName: "close", OriginType: "field", OriginID: "close"},
 		},
-		Views: []seedView{testCanonicalTimeSeriesView("crypto", "spot_view", "spot", "1H")},
+		Views: []seedView{testCanonicalTimeSeriesView("crypto", "spot_view", "spot")},
 		ViewColumns: []seedViewColumn{{
 			SpaceID: "crypto", ViewID: "spot_view", ColumnName: "perpetual.close",
 			OriginType: "dataset_column", OriginID: "perpetual.close",
 		}},
 	})
-	require.ErrorContains(t, err, `references dataset "perpetual" not declared by view`)
+	require.ErrorContains(t, err, `invalid dataset_column origin "perpetual.close"; use the bare column name`)
 }
 
 func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
@@ -462,14 +464,13 @@ func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "crypto", DataSourceID: "market"}},
 		Datasets: []seedDataset{{
 			SpaceID: "crypto", DatasetID: "kline", DataSourceID: "market",
-			DataKind: "time_series", Freqs: []string{"1H"},
+			DataKind: "time_series", Freq: "1h",
 		}},
 	}
 	canonical := seedView{
 		SpaceID: "crypto", ViewID: "kline_view", PrimaryDatasetID: "kline",
-		GrainKeys:  []string{"subject_id", "freq", "data_time", "series_tag"},
-		FilterJSON: `{"freq":"1H"}`,
-		Engine:     "duckdb",
+		GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
+		Engine:    "duckdb",
 	}
 	tests := []struct {
 		name string
@@ -503,15 +504,6 @@ func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
 			}(),
 			want: `engine must be "duckdb"`,
 		},
-		{
-			name: "filter json",
-			view: func() seedView {
-				item := canonical
-				item.FilterJSON = `{ "freq": "1H" }`
-				return item
-			}(),
-			want: "filter_json must be canonical",
-		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -524,16 +516,15 @@ func TestSetupInitRejectsViewsThatStorageWouldNormalize(t *testing.T) {
 	seed.Views = []seedView{canonical}
 	require.NoError(t, validateSetupMetadataDependencies(seed))
 
-	seed.Datasets[0].Freqs = []string{" 1H "}
-	require.NoError(t, validateSetupMetadataDependencies(seed))
+	seed.Datasets[0].Freq = "1H"
+	require.ErrorContains(t, validateSetupMetadataDependencies(seed), `freq "1H" is not canonical`)
 }
 
-func testCanonicalTimeSeriesView(spaceID, viewID, datasetID, freq string) seedView {
+func testCanonicalTimeSeriesView(spaceID, viewID, datasetID string) seedView {
 	return seedView{
 		SpaceID: spaceID, ViewID: viewID, PrimaryDatasetID: datasetID,
-		GrainKeys:  []string{"subject_id", "freq", "data_time", "series_tag"},
-		FilterJSON: `{"freq":"` + freq + `"}`,
-		Engine:     "duckdb",
+		GrainKeys: []string{"subject_id", "freq", "data_time", "series_tag"},
+		Engine:    "duckdb",
 	}
 }
 
@@ -570,4 +561,46 @@ func TestSetupInitJSONDoesNotExposeSecrets(t *testing.T) {
 	} {
 		assert.NotContains(t, output.String(), secret)
 	}
+}
+
+func TestProvisionSetupCLSReportsReadyAndNeverBlocksInit(t *testing.T) {
+	ready := provisionSetupCLS(context.Background(), clsAccountSource{}, func(string, string) (tencent.CLSAPI, error) { return clsReadyAPI{}, nil }, "")
+	require.Equal(t, "ready", ready.Status)
+	require.Equal(t, "topic-1", ready.TopicID)
+	require.True(t, ready.IndexFieldsChanged)
+
+	failed := provisionSetupCLS(context.Background(), clsAccountSource{}, func(string, string) (tencent.CLSAPI, error) { return nil, errors.New("boom SecretKey=leak") }, "")
+	require.Equal(t, "failed", failed.Status)
+	require.NotContains(t, failed.Warning, "leak")
+}
+
+type clsAccountSource struct{}
+
+func (clsAccountSource) ListCloudAccounts(context.Context, string) ([]adminclient.CloudAccount, error) {
+	return []adminclient.CloudAccount{{AccountID: "a", Provider: "tencent", CredentialSecretID: "s"}}, nil
+}
+
+func (clsAccountSource) GetSecretValue(context.Context, string) (*adminclient.SecretMaterial, error) {
+	return &adminclient.SecretMaterial{Category: "cloud", Provider: "tencent", Status: "active", KeyID: "id", SecretValue: "key"}, nil
+}
+
+type clsReadyAPI struct{}
+
+func (clsReadyAPI) GetService(context.Context) (bool, error)    { return true, nil }
+func (clsReadyAPI) OpenService(context.Context) (string, error) { return "", nil }
+func (clsReadyAPI) FindLogset(context.Context, string) (tencent.CLSLogset, bool, error) {
+	return tencent.CLSLogset{ID: "logset-1"}, true, nil
+}
+func (clsReadyAPI) CreateLogset(context.Context, string) (tencent.CLSLogset, string, error) {
+	return tencent.CLSLogset{}, "", nil
+}
+func (clsReadyAPI) FindTopic(context.Context, string, string) (tencent.CLSTopic, bool, error) {
+	return tencent.CLSTopic{ID: "topic-1", LogsetID: "logset-1", IndexEnabled: true}, true, nil
+}
+func (clsReadyAPI) CreateTopic(context.Context, tencent.CLSCreateTopicOptions) (tencent.CLSTopic, string, error) {
+	return tencent.CLSTopic{}, "", nil
+}
+func (clsReadyAPI) CreateIndex(context.Context, string) (string, error) { return "", nil }
+func (clsReadyAPI) EnsureIndexFields(context.Context, string, []tencent.CLSIndexField) (bool, string, error) {
+	return true, "r", nil
 }

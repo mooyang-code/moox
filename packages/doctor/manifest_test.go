@@ -2,10 +2,12 @@ package doctor
 
 import (
 	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
-	"gopkg.in/yaml.v3"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
 func TestEmbeddedManifestIsValid(t *testing.T) {
@@ -25,44 +27,72 @@ func TestEmbeddedManifestIsValid(t *testing.T) {
 	}
 }
 
-func TestEmbeddedManifestMatchesDefaultSeed(t *testing.T) {
+func TestEmbeddedManifestMatchesSharedCatalog(t *testing.T) {
 	t.Parallel()
 
 	manifest, err := LoadEmbeddedManifest()
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile("../../config/setup/service-deployments.yaml")
+	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var seed struct {
-		Services []struct {
-			Name           string `yaml:"name"`
-			DeploymentMode string `yaml:"deployment_mode"`
-		} `yaml:"services"`
-	}
-	if err := yaml.Unmarshal(data, &seed); err != nil {
-		t.Fatal(err)
+	if len(manifest.Components) != len(catalog.Components) {
+		t.Fatalf("Doctor components %d, catalog components %d", len(manifest.Components), len(catalog.Components))
 	}
 	manifestServices := make(map[string]Component, len(manifest.Components))
 	for _, component := range manifest.Components {
 		manifestServices[component.ServiceName] = component
 	}
-	seedProcesses := map[string]bool{}
-	for _, service := range seed.Services {
-		if service.DeploymentMode != "process" {
-			continue
+	for _, component := range catalog.Components {
+		got, ok := manifestServices[component.ID]
+		if !ok || got.ComponentID != component.ID {
+			t.Fatalf("canonical component %q is missing", component.ID)
 		}
-		seedProcesses[service.Name] = true
-		if _, ok := manifestServices[service.Name]; !ok {
-			t.Errorf("seed process %q has no manifest component", service.Name)
+		if got.Role != component.Doctor.Role || got.RequiredInDefaultProfile != component.Doctor.RequiredInDefaultProfile ||
+			string(got.Transport) != component.Doctor.Transport || string(got.FunctionalObservability) != component.Doctor.FunctionalObservability ||
+			!reflect.DeepEqual(got.Dependencies, component.Doctor.Dependencies) || !reflect.DeepEqual(got.ConfigPaths, component.Doctor.ConfigPaths) ||
+			!reflect.DeepEqual(got.WritablePaths, component.Doctor.WritablePaths) || !reflect.DeepEqual(got.RecoveryActionIDs, component.Doctor.RecoveryActionIDs) {
+			t.Errorf("Doctor metadata differs from catalog for %s", component.ID)
 		}
 	}
-	for _, component := range manifest.Components {
-		if component.RequiredInDefaultProfile && !seedProcesses[component.ServiceName] {
-			t.Errorf("required manifest service %q is missing from seed", component.ServiceName)
-		}
+	if got := manifestServices["console-proxy"]; got.HealthPath != "/readyz" || got.Transport != TransportHealthOnly {
+		t.Fatalf("console proxy health contract: %+v", got)
+	}
+}
+
+func TestReleaseCatalogChecksumAndStrictValidation(t *testing.T) {
+	manifest, err := LoadEmbeddedManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	filename := filepath.Join(t.TempDir(), "catalog.yaml")
+	raw := servicecatalog.EmbeddedYAML()
+	for _, tc := range []struct {
+		name         string
+		raw          []byte
+		valid        bool
+		sameChecksum bool
+	}{
+		{name: "exact release copy", raw: raw, valid: true, sameChecksum: true},
+		{name: "changed bytes", raw: append([]byte("# release change\n"), raw...), valid: true},
+		{name: "unknown fields", raw: append(append([]byte{}, raw...), []byte("unknown: true\n")...)},
+		{name: "multiple documents", raw: append(append([]byte{}, raw...), []byte("\n---\nversion: 1\n")...)},
+		{name: "oversize", raw: []byte(strings.Repeat(" ", (2<<20)+1))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(filename, tc.raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := LoadManifestFile(filename)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, err=%v", tc.valid, err)
+			}
+			if tc.valid && (got.Checksum == manifest.Checksum) != tc.sameChecksum {
+				t.Fatalf("unexpected checksum %s", got.Checksum)
+			}
+		})
 	}
 }
 

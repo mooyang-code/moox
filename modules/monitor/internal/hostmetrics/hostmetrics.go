@@ -102,7 +102,7 @@ func ValidateMessage(msg *eventpb.EventMessage) (*hostmetricpb.HostMetric, error
 	if occurred.Before(now.Add(-15*time.Minute)) || occurred.After(now.Add(2*time.Minute)) {
 		return nil, errors.New("host metric occurred_at is outside the accepted clock-skew window")
 	}
-	if !hostmetricpb.IsCompatibleAgentID(msg.GetSubjectId()) {
+	if !hostmetricpb.IsAgentID(msg.GetSubjectId()) {
 		return nil, errors.New("host metric producer identity is invalid")
 	}
 	metric := new(hostmetricpb.HostMetric)
@@ -243,7 +243,7 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 	canonicalAgentID := metric.GetAgentId()
 	if s.registry != nil {
 		result, err := s.registry.Observe(ctx, HostObservation{
-			AgentID: metric.GetAgentId(), Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
+			HostID: metric.GetHostId(), AgentID: metric.GetAgentId(), Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
 			OccurredAt: occurredAt, EventID: msg.GetEventId(),
 		})
 		if err != nil {
@@ -273,7 +273,7 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 		return fmt.Errorf("write host metric snapshot: %w", err)
 	}
 	view := AgentView{
-		AgentID: canonicalAgentID, Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
+		HostID: metric.GetHostId(), AgentID: canonicalAgentID, Hostname: metric.GetHostname(), BootID: metric.GetBootId(),
 		LastSeenAt: occurredAt.Format(time.RFC3339Nano), Reachable: true,
 		Snapshot: cloneSnapshot(metric.GetSnapshot()),
 	}
@@ -288,12 +288,13 @@ func (s *Store) Persist(ctx context.Context, msg *eventpb.EventMessage, metric *
 	}
 	s.mu.Unlock()
 	if s.alert != nil {
-		_ = s.alert.Evaluate(ctx, canonicalAgentID, msg.GetEventId(), metric.GetSnapshot(), occurredAt)
+		_ = s.alert.Evaluate(ctx, canonicalAgentID, metric.GetHostname(), msg.GetEventId(), metric.GetSnapshot(), occurredAt)
 	}
 	return nil
 }
 
 type AgentView struct {
+	HostID                                string
 	AgentID, Hostname, BootID, LastSeenAt string
 	Archived                              bool
 	Reachable                             bool
@@ -307,6 +308,10 @@ type HistoryPoint struct {
 }
 
 func (s *Store) ListAgents(ctx context.Context) ([]AgentView, error) {
+	return s.ListAgentsAt(ctx, time.Now().UTC())
+}
+
+func (s *Store) ListAgentsAt(ctx context.Context, now time.Time) ([]AgentView, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -314,7 +319,7 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentView, error) {
 		return nil, errors.New("host metric store is nil")
 	}
 	if s.registry != nil {
-		presence, err := s.registry.List(ctx, time.Now().UTC())
+		presence, err := s.registry.List(ctx, now)
 		if err != nil {
 			return nil, err
 		}
@@ -322,7 +327,7 @@ func (s *Store) ListAgents(ctx context.Context) ([]AgentView, error) {
 		out := make([]AgentView, 0, len(presence))
 		for _, agent := range presence {
 			view := AgentView{
-				AgentID: agent.AgentID, Hostname: agent.Hostname, BootID: agent.BootID,
+				HostID: agent.HostID, AgentID: agent.AgentID, Hostname: agent.Hostname, BootID: agent.BootID,
 				LastSeenAt: agent.LastSeenAt.Format(time.RFC3339Nano),
 				Reachable:  agent.Reachable, StaleSeconds: agent.StaleSeconds,
 			}

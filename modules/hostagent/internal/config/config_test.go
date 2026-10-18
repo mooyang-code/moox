@@ -48,12 +48,13 @@ func TestLoadRejectsApplicationOwnedSamplingFrequency(t *testing.T) {
 
 func TestLoad_HostNameOverride_ShouldTrimValue(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hostagent.yaml")
-	content := "host_name: '  腾讯云-香港  '\nidentity_path: ~/.local/state/moox/hostagent/identity.yaml\neventbus_config: ~/.config/moox/hostagent/eventbus.yaml\n"
+	content := "host_id: '  control  '\nhost_name: '  腾讯云-香港  '\nidentity_path: ~/.local/state/moox/hostagent/identity.yaml\neventbus_config: ~/.config/moox/hostagent/eventbus.yaml\n"
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "腾讯云-香港", cfg.HostName)
+	assert.Equal(t, "control", cfg.HostID)
 }
 
 func TestLoad_HealthAddressEnvironmentOverride(t *testing.T) {

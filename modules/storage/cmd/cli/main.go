@@ -18,6 +18,7 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
 type cliResult struct {
@@ -90,6 +91,7 @@ var newMetadataDeploymentClient = func(target string) metadataDeploymentClient {
 		client.WithTarget(target),
 		client.WithNetwork("tcp"),
 		client.WithProtocol("trpc"),
+		client.WithTransport(transport.DefaultClientTransport),
 	}
 	return &metadataDeploymentProxy{
 		proxy:   storagepb.NewMetadataClientProxy(options...),
@@ -102,6 +104,7 @@ var newDataNodeRuntimeClient = func(target string) dataNodeRuntimeClient {
 		client.WithTarget(target),
 		client.WithNetwork("tcp"),
 		client.WithProtocol("trpc"),
+		client.WithTransport(transport.DefaultClientTransport),
 	}
 	return &dataNodeRuntimeProxy{
 		proxy:   storagepb.NewDataNodeRuntimeClientProxy(options...),
@@ -586,15 +589,9 @@ func registerCommonFlags(fs *flag.FlagSet, opts *commandOptions) {
 }
 
 func loadStorage(configPath string) (storageconfig.StorageConfig, error) {
-	var cfg storageconfig.RuntimeConfig
-	if configPath != "" {
-		dir := filepath.Dir(configPath)
-		file := filepath.Base(configPath)
-		if err := storageconfig.NewConfigLoader(dir).LoadConfigWithDefaults(file, &cfg, cfg.ApplyDefaults); err != nil {
-			return cfg.Storage, fmt.Errorf("load storage config %s: %w", configPath, err)
-		}
-	} else {
-		cfg.ApplyDefaults()
+	cfg, err := loadRuntimeConfig(configPath)
+	if err != nil {
+		return cfg.Storage, err
 	}
 	if root := os.Getenv("MOOX_STORAGE_HOME"); root != "" {
 		cfg.Storage.ApplyHomeRoot(root)

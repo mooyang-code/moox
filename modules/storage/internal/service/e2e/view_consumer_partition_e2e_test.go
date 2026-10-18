@@ -88,7 +88,7 @@ func TestViewConsumerPartitionsKeepKlineIndependentFromMetrics(t *testing.T) {
 	}
 	stop, err := service.StartEventConsumer(ctx, client, viewservice.EventConsumerOptions{
 		PartitionConfigs: []viewservice.EventConsumerOptions{
-			{PartitionID: "kline", Consumer: events.StorageViewKlineConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "dataset_binance_kline_1m"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, BeforeProcess: before},
+			{PartitionID: "factor", Consumer: events.StorageViewFactorConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "dataset_binance_kline_1m"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, BeforeProcess: before},
 			{PartitionID: "system_metrics", Consumer: events.StorageViewMetricsConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "dataset_mooxsys_service_metrics"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, BeforeProcess: before},
 			{PartitionID: "misc", Consumer: events.StorageViewMiscConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "other_dataset"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1, BeforeProcess: before},
 		},
@@ -108,13 +108,13 @@ func TestViewConsumerPartitionsKeepKlineIndependentFromMetrics(t *testing.T) {
 	waitForConcurrencyRows(t, ctx, service, auth, "dataset_binance_kline_1m")
 	publishPartitionRow(t, ctx, publisher, "quant", "other_dataset", "other-1")
 	waitForConcurrencyRows(t, ctx, service, auth, "other_dataset")
-	for _, durable := range []string{events.StorageViewKlineConsumer, events.StorageViewMiscConsumer} {
+	for _, durable := range []string{events.StorageViewFactorConsumer, events.StorageViewMiscConsumer} {
 		state, stateErr := client.ConsumerState(ctx, events.StorageViewConsumerStream, durable)
 		if stateErr != nil {
 			t.Fatalf("read %s consumer state: %v", durable, stateErr)
 		}
-		if durable == events.StorageViewKlineConsumer && state.NumPending != 0 {
-			t.Fatalf("other Dataset leaked into Kline durable: pending=%d", state.NumPending)
+		if durable == events.StorageViewFactorConsumer && state.NumPending != 0 {
+			t.Fatalf("other Dataset leaked into the factor durable: pending=%d", state.NumPending)
 		}
 	}
 	close(releaseMetrics)

@@ -2,8 +2,8 @@ package store
 
 import (
 	"context"
-	"fmt"
-	"strings"
+	"errors"
+	"slices"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -57,7 +57,7 @@ func (r *AlertRepository) ListEnabledFiringStates(ctx context.Context, spaceID s
 		Where("s.c_check_id LIKE ? OR EXISTS (SELECT 1 FROM t_monitor_checks AS c WHERE c.c_space_id = s.c_space_id AND c.c_check_id = s.c_check_id AND c.c_enabled = 1)", "host:%").
 		Order("s.c_triggered_at DESC, s.c_id DESC")
 	if spaceID != "" {
-		query = query.Where("s.c_space_id = ?", spaceID)
+		query = query.Where("s.c_space_id IN ?", []string{spaceID, "", "mooxsys"})
 	}
 	if limit > 0 {
 		query = query.Limit(limit)
@@ -129,35 +129,6 @@ func (r *AlertRepository) ListEnabledRulesForCheck(ctx context.Context, spaceID,
 	return rules, err
 }
 
-// PurgeRetiredRules removes user-created rules from a pre-greenfield database.
-func (r *AlertRepository) PurgeRetiredRules(ctx context.Context) (int64, error) {
-	if r == nil || r.db == nil {
-		return 0, gorm.ErrInvalidDB
-	}
-	var deleted int64
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var rules []domain.AlertRule
-		if err := tx.Where("c_rule_id NOT LIKE ?", "default:%").Find(&rules).Error; err != nil {
-			return err
-		}
-		for _, rule := range rules {
-			if err := tx.Where("c_space_id = ? AND c_rule_id = ? AND c_check_id = ?", rule.SpaceID, rule.RuleID, rule.CheckID).Delete(&domain.AlertState{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("c_space_id = ? AND c_rule_id = ? AND c_check_id = ?", rule.SpaceID, rule.RuleID, rule.CheckID).Delete(&domain.AlertEvent{}).Error; err != nil {
-				return err
-			}
-			result := tx.Where("c_space_id = ? AND c_rule_id = ?", rule.SpaceID, rule.RuleID).Delete(&domain.AlertRule{})
-			if result.Error != nil {
-				return result.Error
-			}
-			deleted += result.RowsAffected
-		}
-		return nil
-	})
-	return deleted, err
-}
-
 func (r *AlertRepository) DeleteRule(ctx context.Context, spaceID, ruleID string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var rule domain.AlertRule
@@ -181,37 +152,6 @@ func (r *AlertRepository) GetRuleByID(ctx context.Context, ruleID string) (*doma
 		return nil, err
 	}
 	return &rule, nil
-}
-
-func validateAlertRuleReferences(tx *gorm.DB, rule *domain.AlertRule) error {
-	if rule == nil {
-		return fmt.Errorf("alert rule is required")
-	}
-	if !isHostMetricRuleKey(rule.CheckID) {
-		var enabledChecks int64
-		if err := tx.Model(&domain.Check{}).
-			Where("c_space_id = ? AND c_check_id = ? AND c_enabled = 1", rule.SpaceID, rule.CheckID).
-			Count(&enabledChecks).Error; err != nil {
-			return err
-		}
-		if enabledChecks != 1 {
-			return fmt.Errorf("%w: check %q", ErrInvalidReference, rule.CheckID)
-		}
-	}
-	return nil
-}
-
-func isHostMetricRuleKey(checkID string) bool {
-	parts := strings.Split(checkID, ":")
-	if len(parts) != 3 || parts[0] != "host" || strings.TrimSpace(parts[1]) == "" {
-		return false
-	}
-	switch parts[2] {
-	case "cpu", "memory", "filesystem_usage", "disk_utilization", "network_errors":
-		return true
-	default:
-		return false
-	}
 }
 
 func (r *AlertRepository) UpsertState(ctx context.Context, state *domain.AlertState) error {
@@ -279,9 +219,46 @@ func (r *AlertRepository) ListRecentEvents(ctx context.Context, limit int) ([]do
 	return events, err
 }
 
+// ListEventsSince 返回 since 之后（含）的告警事件，按时间升序；超过 limit 条时只保留最新的 limit 条。
+// spaces 为空表示不限空间。
+func (r *AlertRepository) ListEventsSince(ctx context.Context, spaces []string, since time.Time, limit int) ([]domain.AlertEvent, error) {
+	query := r.db.WithContext(ctx).Where("c_created_at >= ?", since.UTC())
+	if len(spaces) > 0 {
+		query = query.Where("c_space_id IN ?", spaces)
+	}
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	var events []domain.AlertEvent
+	if err := query.Order("c_created_at DESC, c_id DESC").Find(&events).Error; err != nil {
+		return nil, err
+	}
+	slices.Reverse(events)
+	return events, nil
+}
+
+// LatestTriggeredEventBefore 返回某个检查在 before 之前最近一次触发事件；没有时返回 nil。
+func (r *AlertRepository) LatestTriggeredEventBefore(ctx context.Context, spaceID, checkID string, before time.Time) (*domain.AlertEvent, error) {
+	var event domain.AlertEvent
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_check_id = ? AND c_event_type = ? AND c_created_at < ?", spaceID, checkID, domain.AlertEventTriggered, before.UTC()).
+		Order("c_created_at DESC, c_id DESC").
+		First(&event).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &event, err
+}
+
 func (r *AlertRepository) DeleteEventsOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
-	tx := r.db.WithContext(ctx).
-		Where("c_created_at < ?", cutoff).
-		Delete(&domain.AlertEvent{})
-	return tx.RowsAffected, tx.Error
+	return DeleteBefore(ctx, r.db, "t_monitor_alert_events", "c_created_at", cutoff)
+}
+
+func (r *AlertRepository) LatestFiringEvent(ctx context.Context, spaceID, ruleID, checkID string) (*domain.AlertEvent, error) {
+	var event domain.AlertEvent
+	err := r.db.WithContext(ctx).Where("c_space_id = ? AND c_rule_id = ? AND c_check_id = ? AND c_event_type IN ?", spaceID, ruleID, checkID, []string{domain.AlertEventTriggered, domain.AlertEventReminder}).Order("c_created_at DESC, c_id DESC").First(&event).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &event, err
 }

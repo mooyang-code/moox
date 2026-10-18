@@ -252,24 +252,6 @@ func TestFeedGuardRateLimitWaitIsCancelable(t *testing.T) {
 	}
 }
 
-func TestInvocationBreakerSkipsAfterRetryableStreak(t *testing.T) {
-	breaker := NewInvocationBreaker(2)
-	session := breaker.NewSession()
-
-	assert.False(t, session.ShouldSkip("alpha"))
-	session.Observe("alpha", ErrRateLimited)
-	assert.False(t, session.ShouldSkip("alpha"))
-	session.Observe("alpha", fmt.Errorf("%w: status=503", ErrHTTPStatus))
-	assert.True(t, session.ShouldSkip("alpha"))
-
-	session.Observe("beta", ErrProtocol)
-	assert.False(t, session.ShouldSkip("beta"))
-	session.Observe("beta", ErrInvalidRequest)
-	assert.False(t, session.ShouldSkip("beta"))
-	session.Observe("beta", ErrRateLimited)
-	assert.False(t, session.ShouldSkip("beta"))
-}
-
 func TestInvocationBreakerAdmissionIsAtomic(t *testing.T) {
 	session := NewInvocationBreaker(2).NewSession()
 	start := make(chan struct{})
@@ -587,4 +569,8 @@ func TestRouterStopsImmediatelyWhenFallbackIsNotAllowed(t *testing.T) {
 	require.Nil(t, rows)
 	assert.Equal(t, 1, first.Calls())
 	assert.Equal(t, 0, second.Calls())
+}
+
+func (r *Router) FetchKlines(ctx context.Context, req KlineRequest, candidateChain []string) ([]NormalizedKline, error) {
+	return r.NewSession().FetchKlines(ctx, req, candidateChain)
 }

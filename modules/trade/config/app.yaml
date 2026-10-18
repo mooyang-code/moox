@@ -4,14 +4,10 @@
 database:
   path: ./data/moox_trade.db
 
-admin:
-  base_url: "https://106.53.107.122:11001"
-  service_auth:
-    target_node: ""
-    ca_file: ""
-    access_key: "moox-service"
-    secret_key: ""
-    expire_seconds: 60
+gateway_client:
+  caller: trade
+  key_id: ""
+  key_file: ../../secrets/caller-trade.key
 
 eventbus:
   enabled: true
@@ -22,12 +18,3 @@ runtime:
   # Production order submission is disabled unless explicitly enabled.
   # TESTNET and account synchronization are unaffected.
   live_trading_enabled: false
-
-dns_resolver:
-  enabled: false
-  domains: []
-  lookup_timeout_ms: 1500
-  probe_timeout_ms: 500
-  probe_port: 443
-  cache_ttl_seconds: 300
-  max_ips_per_domain: 4

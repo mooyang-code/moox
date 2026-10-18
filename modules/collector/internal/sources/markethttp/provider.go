@@ -84,7 +84,7 @@ func New(cfg Config) *Provider {
 		cfg.Location = time.UTC
 	}
 	if len(cfg.Frequencies) == 0 {
-		cfg.Frequencies = []string{"1m", "5m", "15m", "30m", "60m", "1d", "1w", "1M"}
+		cfg.Frequencies = []string{"1m", "5m", "15m", "30m", "1h", "1d", "1w", "1mo"}
 	}
 	if cfg.MaxBarsPerRequest <= 0 {
 		cfg.MaxBarsPerRequest = 1200
@@ -162,7 +162,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", marketdata.ErrUnsupportedFrequency, err)
 	}
-	if !containsFrequency(p.frequencies, string(frequency)) {
+	if !containsFrequency(p.frequencies, frequency) {
 		return nil, fmt.Errorf("%w: %s does not support %s", marketdata.ErrUnsupportedFrequency, p.sourceID, frequency)
 	}
 	symbol, err := p.symbolFunc(req.SubjectID)
@@ -267,11 +267,18 @@ func (p *Provider) parseBarTime(raw string, frequency marketdata.Frequency) (tim
 	}
 	providerTime := parsed
 	if frequency == marketdata.FrequencyDay || frequency == marketdata.FrequencyWeek || frequency == marketdata.FrequencyMonth {
+		// 日、周、月线键用本地日期的 UTC 零点编码。
 		local := parsed.In(p.location)
-		if frequency == marketdata.FrequencyMonth {
+		day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+		switch frequency {
+		case marketdata.FrequencyMonth:
 			parsed = time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, time.UTC)
-		} else {
-			parsed = time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+		case marketdata.FrequencyWeek:
+			// 东方财富周线（klt=102）的标签是该周最后一个交易日（周三、周四、周五都有），键取所在 ISO 周的周一，
+			// 与 Truncate 网格、frequencyDue 和 klinecheck 一致。
+			parsed = day.AddDate(0, 0, -((int(day.Weekday()) + 6) % 7))
+		default:
+			parsed = day
 		}
 	}
 	return parsed.UTC(), providerTime.UTC(), nil
@@ -281,10 +288,9 @@ func parseNumber(value string) (float64, error) {
 	return strconv.ParseFloat(strings.TrimSpace(strings.ReplaceAll(value, ",", "")), 64)
 }
 
-func containsFrequency(values []string, want string) bool {
+func containsFrequency(values []string, want marketdata.Frequency) bool {
 	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == want || (value != string(marketdata.FrequencyMinute) && value != string(marketdata.FrequencyMonth) && strings.EqualFold(value, want)) {
+		if strings.TrimSpace(value) == string(want) {
 			return true
 		}
 	}

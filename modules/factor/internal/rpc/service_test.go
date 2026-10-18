@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
 	"time"
 
@@ -10,20 +11,182 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go/client"
+	"trpc.group/trpc-go/trpc-go/codec"
+	"trpc.group/trpc-go/trpc-go/server"
+	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-func TestCreateFactorRequiresSetID(t *testing.T) {
+func TestCreateFactorWithoutSetSucceeds(t *testing.T) {
+	catalog := &catalogFake{}
+	svc := nativeFactorManager(t, NewService(catalog, &recalcFake{}))
+
+	for i, serialization := range []int{codec.SerializationTypePB, codec.SerializationTypeJSON} {
+		rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{
+			Factor: &factorpb.FactorDef{FactorId: "rolling_mean", Name: "Rolling mean"},
+		}, client.WithSerializationType(serialization))
+		require.NoError(t, err)
+		require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+		require.Equal(t, i+1, catalog.createFactorCalls)
+		require.Equal(t, "rolling_mean", rsp.GetFactor().GetFactorId())
+	}
+}
+
+func nativeFactorManager(t *testing.T, service *Service) factorpb.FactorMgrClientProxy {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	rpc := server.New(server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"), server.WithTransport(transport.NewServerTransport()))
+	factorpb.RegisterFactorMgrService(rpc, service)
+	done := make(chan error, 1)
+	go func() { done <- rpc.Serve() }()
+	t.Cleanup(func() {
+		require.NoError(t, rpc.Close(nil))
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("FactorMgr native listener did not stop")
+		}
+	})
+	return factorpb.NewFactorMgrClientProxy(client.WithTarget("ip://"+listener.Addr().String()), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTimeout(3*time.Second), client.WithTransport(transport.NewClientTransport()), client.WithDisableConnectionPool())
+}
+
+func TestCreateFactorRequiresFactorID(t *testing.T) {
+	catalog := &catalogFake{}
+	svc := NewService(catalog, &recalcFake{})
+	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{Factor: &factorpb.FactorDef{Name: "x"}})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Zero(t, catalog.createFactorCalls)
+}
+
+func TestUpdateFactorAndDeleteFactorSurfaceCatalogConflicts(t *testing.T) {
+	catalog := &catalogFake{err: errors.New("factor is enabled in set fset_a; disable it before updating its definition")}
+	svc := NewService(catalog, &recalcFake{})
+
+	updated, err := svc.UpdateFactor(context.Background(), &factorpb.UpdateFactorReq{Factor: &factorpb.FactorDef{FactorId: "f"}})
+	require.NoError(t, err)
+	require.NotEqual(t, commonpb.ErrorCode_SUCCESS, updated.GetRetInfo().GetCode())
+	require.Contains(t, updated.GetRetInfo().GetMsg(), "disable it")
+
+	catalog.err = errors.New("factor \"f\" is still used by factor set \"fset_a\"")
+	deleted, err := svc.DeleteFactor(context.Background(), &factorpb.DeleteFactorReq{FactorId: "f"})
+	require.NoError(t, err)
+	require.NotEqual(t, commonpb.ErrorCode_SUCCESS, deleted.GetRetInfo().GetCode())
+	require.Contains(t, deleted.GetRetInfo().GetMsg(), "still used")
+}
+
+func TestListFactorsWithoutSetReturnsAllWithUsages(t *testing.T) {
+	catalog := &catalogFake{infos: []domain.FactorInfo{
+		{Factor: domain.FactorDef{FactorID: "a", Spec: "src-a", SpecHash: "h-a"}, Usages: []domain.FactorUsage{{SetID: "s1", Status: "enabled"}, {SetID: "s2", Status: "disabled"}}},
+		{Factor: domain.FactorDef{FactorID: "b", Spec: "src-b", SpecHash: "h-b"}},
+	}}
+	svc := NewService(catalog, &recalcFake{})
+
+	rsp, err := svc.ListFactors(context.Background(), &factorpb.ListFactorsReq{})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, "", catalog.listSetID)
+	require.Len(t, rsp.GetFactors(), 2)
+	require.Equal(t, "a", rsp.GetFactors()[0].GetFactor().GetFactorId())
+	require.Len(t, rsp.GetFactors()[0].GetUsages(), 2)
+	require.Equal(t, "s2", rsp.GetFactors()[0].GetUsages()[1].GetSetId())
+	require.Empty(t, rsp.GetFactors()[1].GetUsages())
+}
+
+func TestListFactorsWithSetFiltersByMemberStatus(t *testing.T) {
 	catalog := &catalogFake{}
 	svc := NewService(catalog, &recalcFake{})
 
-	rsp, err := svc.CreateFactor(context.Background(), &factorpb.CreateFactorReq{
-		Factor: &factorpb.FactorDef{FactorId: "rolling_mean", Name: "Rolling mean"},
-	})
-
+	_, err := svc.ListFactors(context.Background(), &factorpb.ListFactorsReq{SetId: "fset_a", Status: "enabled"})
 	require.NoError(t, err)
-	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-	require.Contains(t, rsp.GetRetInfo().GetMsg(), "set_id")
-	require.Zero(t, catalog.createFactorCalls)
+	require.Equal(t, "fset_a", catalog.listSetID)
+	require.Equal(t, "enabled", catalog.listStatus)
+}
+
+func TestListFactorsOmitsSourceByDefault(t *testing.T) {
+	catalog := &catalogFake{infos: []domain.FactorInfo{{Factor: domain.FactorDef{FactorID: "a", Spec: "src-a", SpecHash: "h-a"}}}}
+	svc := NewService(catalog, &recalcFake{})
+
+	rsp, err := svc.ListFactors(context.Background(), &factorpb.ListFactorsReq{})
+	require.NoError(t, err)
+	require.Empty(t, rsp.GetFactors()[0].GetFactor().GetSpec())
+	require.Equal(t, "h-a", rsp.GetFactors()[0].GetFactor().GetSpecHash())
+}
+
+func TestListFactorsIncludeSpecWhenRequested(t *testing.T) {
+	catalog := &catalogFake{infos: []domain.FactorInfo{{Factor: domain.FactorDef{FactorID: "a", Spec: "src-a"}}}}
+	svc := NewService(catalog, &recalcFake{})
+
+	rsp, err := svc.ListFactors(context.Background(), &factorpb.ListFactorsReq{IncludeSpec: true})
+	require.NoError(t, err)
+	require.Equal(t, "src-a", rsp.GetFactors()[0].GetFactor().GetSpec())
+}
+
+func TestGetFactorAlwaysIncludesSourceAndUsages(t *testing.T) {
+	catalog := &catalogFake{infos: []domain.FactorInfo{{
+		Factor: domain.FactorDef{FactorID: "a", Spec: "src-a", SpecHash: "h-a"},
+		Usages: []domain.FactorUsage{{SetID: "s1", Status: "enabled"}},
+	}}}
+	svc := NewService(catalog, &recalcFake{})
+
+	rsp, err := svc.GetFactor(context.Background(), &factorpb.GetFactorReq{FactorId: "a"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, "src-a", rsp.GetFactor().GetSpec())
+	require.Len(t, rsp.GetUsages(), 1)
+	require.Equal(t, "enabled", rsp.GetUsages()[0].GetStatus())
+}
+
+func TestListFactorSetsMembersOmitSource(t *testing.T) {
+	catalog := &catalogFake{
+		set: domain.FactorSet{SetID: "fset_a", Status: domain.SetStatusEnabled},
+		members: []domain.SetMember{{
+			FactorSetMember: domain.FactorSetMember{SetID: "fset_a", FactorID: "a", Status: domain.MemberStatusEnabled},
+			Factor:          domain.FactorDef{FactorID: "a", Spec: "src-a", SpecHash: "h-a"},
+		}},
+		sets: []domain.FactorSet{{SetID: "fset_a", Status: domain.SetStatusEnabled}},
+	}
+	svc := NewService(catalog, &recalcFake{})
+
+	list, err := svc.ListFactorSets(context.Background(), &factorpb.ListFactorSetsReq{})
+	require.NoError(t, err)
+	require.Len(t, list.GetFactorSets()[0].GetMembers(), 1)
+	member := list.GetFactorSets()[0].GetMembers()[0]
+	require.Equal(t, "enabled", member.GetStatus())
+	require.Empty(t, member.GetFactor().GetSpec())
+	require.Equal(t, "h-a", member.GetFactor().GetSpecHash())
+
+	got, err := svc.GetFactorSet(context.Background(), &factorpb.GetFactorSetReq{SetId: "fset_a"})
+	require.NoError(t, err)
+	require.Len(t, got.GetMembers(), 1)
+	require.Empty(t, got.GetMembers()[0].GetFactor().GetSpec())
+}
+
+func TestAddFactorToSetAndRemoveSurfaceCatalogErrors(t *testing.T) {
+	catalog := &catalogFake{err: errors.New("factor set is not ready")}
+	svc := NewService(catalog, &recalcFake{})
+
+	added, err := svc.AddFactorToSet(context.Background(), &factorpb.AddFactorToSetReq{SetId: "fset_a", FactorId: "a"})
+	require.NoError(t, err)
+	require.NotEqual(t, commonpb.ErrorCode_SUCCESS, added.GetRetInfo().GetCode())
+	require.Contains(t, added.GetRetInfo().GetMsg(), "not ready")
+
+	missing, err := svc.AddFactorToSet(context.Background(), &factorpb.AddFactorToSetReq{SetId: "fset_a"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, missing.GetRetInfo().GetCode())
+
+	catalog.err = errors.New("member is enabled; disable it before removal")
+	removed, err := svc.RemoveFactorFromSet(context.Background(), &factorpb.RemoveFactorFromSetReq{SetId: "fset_a", FactorId: "a"})
+	require.NoError(t, err)
+	require.NotEqual(t, commonpb.ErrorCode_SUCCESS, removed.GetRetInfo().GetCode())
+
+	catalog.err = nil
+	ok, err := svc.AddFactorToSet(context.Background(), &factorpb.AddFactorToSetReq{SetId: "fset_a", FactorId: "a"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, ok.GetRetInfo().GetCode())
+	require.Equal(t, "fset_a", ok.GetMember().GetSetId())
+	require.Equal(t, "disabled", ok.GetMember().GetStatus())
 }
 
 func TestRecalcFactorsValidatesTimeRange(t *testing.T) {
@@ -111,8 +274,10 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 
 	want := []string{
 		"CreateFactorSet", "UpdateFactorSet", "SetFactorSetStatus", "DeleteFactorSet", "GetFactorSet", "ListFactorSets",
-		"CreateFactor", "UpdateFactor", "SetFactorStatus", "DeleteFactor", "GetFactor", "ListFactors",
+		"CreateFactor", "UpdateFactor", "DeleteFactor", "GetFactor", "ListFactors",
+		"AddFactorToSet", "RemoveFactorFromSet", "SetFactorMemberStatus",
 		"RecalcFactors", "ListRecalcJobs", "GetRecalcJob", "CancelRecalcJob", "GetStatus",
+		"ValidateFactorSpec", "PreviewFactor", "ListFactorFunctions",
 	}
 	got := make([]string, 0, service.Methods().Len())
 	for i := 0; i < service.Methods().Len(); i++ {
@@ -123,8 +288,13 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 
 type catalogFake struct {
 	set               domain.FactorSet
-	factors           []domain.FactorDef
+	sets              []domain.FactorSet
+	members           []domain.SetMember
+	infos             []domain.FactorInfo
 	createFactorCalls int
+	listSetID         string
+	listStatus        string
+	err               error
 }
 
 func (f *catalogFake) CreateSet(_ context.Context, in domain.FactorSet) (domain.FactorSet, error) {
@@ -140,32 +310,50 @@ func (f *catalogFake) SetSetStatus(_ context.Context, _, status string) (domain.
 	return f.set, nil
 }
 func (f *catalogFake) DeleteSet(context.Context, string, bool) error { return nil }
-func (f *catalogFake) GetSet(context.Context, string) (domain.FactorSet, []domain.FactorDef, error) {
+func (f *catalogFake) GetSet(context.Context, string) (domain.FactorSet, []domain.SetMember, error) {
 	if f.set.SetID == "" {
 		return domain.FactorSet{}, nil, errors.New("set not found")
 	}
-	return f.set, f.factors, nil
+	return f.set, f.members, nil
 }
-func (f *catalogFake) ListSets(context.Context) ([]domain.FactorSet, error) { return nil, nil }
+func (f *catalogFake) ListSets(context.Context) ([]domain.FactorSet, error) { return f.sets, nil }
 func (f *catalogFake) CreateFactor(_ context.Context, in domain.FactorDef) (domain.FactorDef, error) {
 	f.createFactorCalls++
-	return in, nil
+	return in, f.err
 }
 func (f *catalogFake) UpdateFactor(_ context.Context, in domain.FactorDef) (domain.FactorDef, error) {
-	return in, nil
+	return in, f.err
 }
-func (f *catalogFake) SetFactorStatus(_ context.Context, factorID, status string) (domain.FactorDef, string, error) {
-	if status == domain.FactorStatusEnabled {
-		return domain.FactorDef{FactorID: factorID, Status: status}, "factor-enable-" + factorID, nil
+func (f *catalogFake) DeleteFactor(context.Context, string) error { return f.err }
+func (f *catalogFake) GetFactor(context.Context, string) (domain.FactorInfo, error) {
+	if len(f.infos) == 0 {
+		return domain.FactorInfo{}, errors.New("factor not found")
 	}
-	return domain.FactorDef{FactorID: factorID, Status: status}, "", nil
+	return f.infos[0], nil
 }
-func (f *catalogFake) DeleteFactor(context.Context, string) error { return nil }
-func (f *catalogFake) GetFactor(context.Context, string) (domain.FactorDef, error) {
-	return domain.FactorDef{}, errors.New("factor not found")
+func (f *catalogFake) ListFactors(_ context.Context, setID, status string) ([]domain.FactorInfo, error) {
+	f.listSetID, f.listStatus = setID, status
+	return f.infos, nil
 }
-func (f *catalogFake) ListFactors(context.Context, string, string) ([]domain.FactorDef, error) {
-	return f.factors, nil
+func (f *catalogFake) AddFactorToSet(_ context.Context, setID, factorID string) (domain.SetMember, error) {
+	if f.err != nil {
+		return domain.SetMember{}, f.err
+	}
+	return domain.SetMember{
+		FactorSetMember: domain.FactorSetMember{SetID: setID, FactorID: factorID, Status: domain.MemberStatusDisabled},
+		Factor:          domain.FactorDef{FactorID: factorID},
+	}, nil
+}
+func (f *catalogFake) RemoveFactorFromSet(context.Context, string, string) error { return f.err }
+func (f *catalogFake) SetFactorMemberStatus(_ context.Context, setID, factorID, status string) (domain.SetMember, string, error) {
+	member := domain.SetMember{
+		FactorSetMember: domain.FactorSetMember{SetID: setID, FactorID: factorID, Status: status},
+		Factor:          domain.FactorDef{FactorID: factorID},
+	}
+	if status == domain.MemberStatusEnabled {
+		return member, "factor-enable-" + factorID, nil
+	}
+	return member, "", nil
 }
 
 type recalcFake struct {
@@ -202,17 +390,23 @@ func (f *recalcFake) Cancel(context.Context, string) (RecalcJob, error) {
 	return f.job, nil
 }
 
-func TestSetFactorStatusReturnsBackfillJobOnEnable(t *testing.T) {
+func TestSetFactorMemberStatusReturnsBackfillJobOnEnable(t *testing.T) {
 	svc := NewService(&catalogFake{}, &recalcFake{})
 
-	enabled, err := svc.SetFactorStatus(context.Background(), &factorpb.SetFactorStatusReq{FactorId: "momentum", Status: domain.FactorStatusEnabled})
+	enabled, err := svc.SetFactorMemberStatus(context.Background(), &factorpb.SetFactorMemberStatusReq{SetId: "fset_a", FactorId: "momentum", Status: domain.MemberStatusEnabled})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, enabled.GetRetInfo().GetCode())
 	require.Equal(t, "factor-enable-momentum", enabled.GetBackfillJob().GetJobId())
+	require.Equal(t, "enabled", enabled.GetMember().GetStatus())
+	require.Equal(t, "fset_a", enabled.GetMember().GetSetId())
 
-	disabled, err := svc.SetFactorStatus(context.Background(), &factorpb.SetFactorStatusReq{FactorId: "momentum", Status: domain.FactorStatusDisabled})
+	disabled, err := svc.SetFactorMemberStatus(context.Background(), &factorpb.SetFactorMemberStatusReq{SetId: "fset_a", FactorId: "momentum", Status: domain.MemberStatusDisabled})
 	require.NoError(t, err)
 	require.Nil(t, disabled.GetBackfillJob())
+
+	invalid, err := svc.SetFactorMemberStatus(context.Background(), &factorpb.SetFactorMemberStatusReq{SetId: "fset_a", FactorId: "momentum", Status: "bogus"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, invalid.GetRetInfo().GetCode())
 }
 
 func TestListRecalcJobsFiltersBySetAndPaginates(t *testing.T) {

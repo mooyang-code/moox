@@ -1,264 +1,184 @@
+// Package config loads and validates the moox-archive-mgr configuration.
 package config
 
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
 
-var consumerPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-var sourcePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+// Caller 是 mgr 经网关访问 Storage 的内部调用方身份。
+const Caller = "archive-mgr"
 
+// Config 是 mgr 的应用配置（config/app.yaml）。
 type Config struct {
-	Archive ArchiveConfig `yaml:"archive"`
-	Health  HealthConfig  `yaml:"health"`
+	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
+	sourcePath    string                   `yaml:"-"`
+	Database      DatabaseConfig           `yaml:"database"`
+	Run           RunConfig                `yaml:"run"`
+	Worker        WorkerConfig             `yaml:"worker"`
+	Schedule      ScheduleConfig           `yaml:"schedule"`
+	Retention     RetentionConfig          `yaml:"retention"`
+	// StagingRetention 是 worker 暂存区保留最近多久的数据，之后分区定稿。
+	StagingRetention time.Duration `yaml:"staging_retention"`
+	// Spaces 是各空间的时区与本地收盘时刻；没有配置的空间按 UTC、全天交易处理。
+	Spaces map[string]SpaceConfig `yaml:"spaces"`
 }
 
-type ArchiveConfig struct {
-	RootDir     string                  `yaml:"root_dir"`
-	StateDir    string                  `yaml:"state_dir"`
-	DeviceID    string                  `yaml:"device_id"`
-	Sources     map[string]SourceConfig `yaml:"sources"`
-	EventBus    EventBusConfig          `yaml:"eventbus"`
-	Materialize MaterializeConfig       `yaml:"materialize"`
-	StorageRPC  StorageRPCConfig        `yaml:"storage_rpc"`
-	COS         COSConfig               `yaml:"cos"`
+type DatabaseConfig struct {
+	Path string `yaml:"path"`
 }
 
-type SourceConfig struct {
-	Datasets []string `yaml:"datasets"`
+// RunConfig 控制运行的租约。
+type RunConfig struct {
+	// LeaseTTL 是运行租约的有效期，进度上报时续租。
+	LeaseTTL time.Duration `yaml:"lease_ttl"`
 }
 
-type EventBusConfig struct {
-	URLs            []string      `yaml:"urls"`
-	CredentialFile  string        `yaml:"credential_file"`
-	Consumer        string        `yaml:"-"`
-	FetchBatch      int           `yaml:"fetch_batch"`
-	FetchMaxWait    time.Duration `yaml:"fetch_max_wait"`
-	DedupeRetention time.Duration `yaml:"dedupe_retention"`
+// WorkerConfig 控制 worker 的租约。
+type WorkerConfig struct {
+	// TakeoverWait 是旧 worker 停止心跳多久之后新 worker 才能接管，同时也是心跳续租的有效期。
+	TakeoverWait time.Duration `yaml:"takeover_wait"`
 }
 
-const ArchiveConsumer = "moox_archive_kline_v2"
-
-type MaterializeConfig struct {
-	PendingRows     int           `yaml:"pending_rows"`
-	Workers         int           `yaml:"workers"`
-	RowGroupRows    int64         `yaml:"row_group_rows"`
-	ShutdownTimeout time.Duration `yaml:"shutdown_timeout"`
+// ScheduleConfig 是执行计划的规则。
+type ScheduleConfig struct {
+	MinInterval time.Duration `yaml:"min_interval"`
+	MinLookback time.Duration `yaml:"min_lookback"`
 }
 
-type StorageRPCConfig struct {
-	GatewayTarget string `yaml:"gateway_target"`
-	GatewayNodeID string `yaml:"gateway_node_id"`
-	KeyID         string `yaml:"key_id"`
-	HMACKeyFile   string `yaml:"hmac_key_file"`
+// RetentionConfig 是 mgr 库中运行记录的保留期。
+type RetentionConfig struct {
+	ScheduledSuccess time.Duration `yaml:"scheduled_success"`
+	Other            time.Duration `yaml:"other"`
 }
 
-func (c StorageRPCConfig) TargetNodeID() string {
-	if nodeID := strings.TrimSpace(c.GatewayNodeID); nodeID != "" {
-		return nodeID
-	}
-	return gatewayauth.ServiceGatewayNodeID()
+// SpaceConfig 描述一个空间的交易日历属性。
+type SpaceConfig struct {
+	TZ         string `yaml:"tz"`
+	LocalClose string `yaml:"local_close"`
 }
 
-type COSConfig struct {
-	Enabled            bool   `yaml:"enabled"`
-	Region             string `yaml:"region"`
-	Bucket             string `yaml:"bucket"`
-	Prefix             string `yaml:"prefix"`
-	SyncOpenPartitions bool   `yaml:"sync_open_partitions"`
-	Workers            int    `yaml:"workers"`
-}
-
-type HealthConfig struct {
-	Addr string `yaml:"addr"`
-}
-
-func Default() *Config {
-	return &Config{
-		Archive: ArchiveConfig{
-			RootDir:  "../data/archive",
-			StateDir: "../data/archive-state",
-			DeviceID: "parquet-local",
-			Sources: map[string]SourceConfig{
-				"stockcn": {Datasets: []string{"dataset_stockcn_equity_kline", "dataset_stockcn_index_kline", "dataset_stockcn_bond_kline"}},
-				"stockus": {Datasets: []string{"equity_kline", "etf_kline", "index_kline"}},
-				"crypto":  {Datasets: []string{"dataset_spot_kline_1h", "dataset_perpetual_kline_1h"}},
-			},
-			EventBus: EventBusConfig{
-				URLs:     []string{"nats://127.0.0.1:4222"},
-				Consumer: ArchiveConsumer, FetchBatch: 128, FetchMaxWait: time.Second,
-				DedupeRetention: 168 * time.Hour,
-			},
-			Materialize: MaterializeConfig{PendingRows: 10000, Workers: 2, RowGroupRows: 65536, ShutdownTimeout: 2 * time.Minute},
-			StorageRPC:  StorageRPCConfig{GatewayTarget: "ip://127.0.0.1:11003", KeyID: "archive"},
-			COS:         COSConfig{Prefix: "moox/archive", Workers: 2},
-		},
-		Health: HealthConfig{Addr: "127.0.0.1:11416"},
-	}
-}
-
+// Load 读取并校验配置文件；未知字段与多文档都会被拒绝。
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read archive config %s: %w", path, err)
+		return nil, fmt.Errorf("读取归档配置 %s 失败: %w", path, err)
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("解析归档配置路径失败: %w", err)
 	}
 	cfg := Default()
+	cfg.sourcePath = absolute
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
-		return nil, fmt.Errorf("parse archive config %s: %w", path, err)
+		return nil, fmt.Errorf("解析归档配置 %s 失败: %w", path, err)
 	}
-	cfg.applyDefaults()
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("归档配置只能包含一个 YAML 文档")
+	}
+	cfg.applyEnv()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
 }
 
-func (c *Config) applyDefaults() {
-	d := Default()
-	if c.Archive.RootDir == "" {
-		c.Archive.RootDir = d.Archive.RootDir
-	}
-	if c.Archive.StateDir == "" {
-		c.Archive.StateDir = d.Archive.StateDir
-	}
-	if c.Archive.DeviceID == "" {
-		c.Archive.DeviceID = d.Archive.DeviceID
-	}
-	if len(c.Archive.Sources) == 0 {
-		c.Archive.Sources = d.Archive.Sources
-	}
-	if len(c.Archive.EventBus.URLs) == 0 {
-		c.Archive.EventBus.URLs = d.Archive.EventBus.URLs
-	}
-	if c.Archive.EventBus.Consumer == "" {
-		c.Archive.EventBus.Consumer = d.Archive.EventBus.Consumer
-	}
-	if c.Archive.EventBus.FetchBatch == 0 {
-		c.Archive.EventBus.FetchBatch = d.Archive.EventBus.FetchBatch
-	}
-	if c.Archive.EventBus.FetchMaxWait == 0 {
-		c.Archive.EventBus.FetchMaxWait = d.Archive.EventBus.FetchMaxWait
-	}
-	if c.Archive.EventBus.DedupeRetention == 0 {
-		c.Archive.EventBus.DedupeRetention = d.Archive.EventBus.DedupeRetention
-	}
-	if c.Archive.Materialize.PendingRows == 0 {
-		c.Archive.Materialize.PendingRows = d.Archive.Materialize.PendingRows
-	}
-	if c.Archive.Materialize.Workers == 0 {
-		c.Archive.Materialize.Workers = d.Archive.Materialize.Workers
-	}
-	if c.Archive.Materialize.RowGroupRows == 0 {
-		c.Archive.Materialize.RowGroupRows = d.Archive.Materialize.RowGroupRows
-	}
-	if c.Archive.Materialize.ShutdownTimeout == 0 {
-		c.Archive.Materialize.ShutdownTimeout = d.Archive.Materialize.ShutdownTimeout
-	}
-	if c.Archive.COS.Prefix == "" {
-		c.Archive.COS.Prefix = d.Archive.COS.Prefix
-	}
-	if c.Archive.COS.Workers == 0 {
-		c.Archive.COS.Workers = d.Archive.COS.Workers
-	}
-	if c.Health.Addr == "" {
-		c.Health.Addr = d.Health.Addr
-	}
-	if c.Archive.StorageRPC.GatewayTarget == "" {
-		c.Archive.StorageRPC.GatewayTarget = d.Archive.StorageRPC.GatewayTarget
-	}
-	if c.Archive.StorageRPC.KeyID == "" {
-		c.Archive.StorageRPC.KeyID = d.Archive.StorageRPC.KeyID
+// Default 返回带默认值的配置。
+func Default() *Config {
+	return &Config{
+		GatewayClient:    gatewayclient.FileConfig{Caller: Caller, KeyFile: "../../secrets/caller-archive-mgr.key"},
+		Database:         DatabaseConfig{Path: "./data/archive-mgr/archive.db"},
+		Run:              RunConfig{LeaseTTL: 10 * time.Minute},
+		Worker:           WorkerConfig{TakeoverWait: 45 * time.Second},
+		Schedule:         ScheduleConfig{MinInterval: 5 * time.Minute, MinLookback: 15 * time.Minute},
+		Retention:        RetentionConfig{ScheduledSuccess: 30 * 24 * time.Hour, Other: 90 * 24 * time.Hour},
+		StagingRetention: 72 * time.Hour,
+		Spaces: map[string]SpaceConfig{
+			"crypto":  {TZ: "UTC"},
+			"stockcn": {TZ: "Asia/Shanghai", LocalClose: "15:00"},
+			"stockhk": {TZ: "Asia/Hong_Kong", LocalClose: "16:10"},
+			"stockus": {TZ: "America/New_York", LocalClose: "16:00"},
+		},
 	}
 }
 
-func (c *Config) SourceSpaceIDs() []string {
-	ids := make([]string, 0, len(c.Archive.Sources))
-	for id := range c.Archive.Sources {
-		ids = append(ids, id)
+func (c *Config) applyEnv() {
+	if value := strings.TrimSpace(os.Getenv("MOOX_ARCHIVE_DB_PATH")); value != "" {
+		c.Database.Path = value
 	}
-	sort.Strings(ids)
-	return ids
 }
 
+// Validate 校验配置。
 func (c *Config) Validate() error {
-	if strings.TrimSpace(c.Archive.DeviceID) == "" {
-		return fmt.Errorf("archive device_id is required")
+	if c == nil {
+		return fmt.Errorf("归档配置不能为空")
 	}
-	root, err := filepath.Abs(filepath.Clean(c.Archive.RootDir))
-	if err != nil {
+	if strings.TrimSpace(c.Database.Path) == "" {
+		return fmt.Errorf("database.path 不能为空")
+	}
+	if c.GatewayClient.Caller != Caller {
+		return fmt.Errorf("gateway_client.caller 必须是 %s", Caller)
+	}
+	if err := c.GatewayClient.Validate(); err != nil {
 		return err
 	}
-	state, err := filepath.Abs(filepath.Clean(c.Archive.StateDir))
-	if err != nil {
-		return err
+	if c.Run.LeaseTTL < time.Minute {
+		return fmt.Errorf("run.lease_ttl 不能小于 1 分钟")
 	}
-	if root == state || pathContains(root, state) || pathContains(state, root) {
-		return fmt.Errorf("archive root_dir and state_dir must not overlap")
+	if c.Worker.TakeoverWait < 15*time.Second {
+		return fmt.Errorf("worker.takeover_wait 不能小于 15 秒")
 	}
-	for _, p := range []string{root, state} {
-		if info, statErr := os.Lstat(p); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("archive directory %s must not be a symlink", p)
+	if c.Schedule.MinInterval < 5*time.Minute {
+		return fmt.Errorf("schedule.min_interval 不能小于 5 分钟")
+	}
+	if c.Schedule.MinLookback < 15*time.Minute {
+		return fmt.Errorf("schedule.min_lookback 不能小于 15 分钟")
+	}
+	if c.Retention.ScheduledSuccess < 24*time.Hour || c.Retention.Other < c.Retention.ScheduledSuccess {
+		return fmt.Errorf("retention.scheduled_success 至少 1 天，retention.other 不能小于它")
+	}
+	if c.StagingRetention < 24*time.Hour {
+		return fmt.Errorf("staging_retention 不能小于 1 天")
+	}
+	for space, cfg := range c.Spaces {
+		if strings.TrimSpace(space) != strings.ToLower(strings.TrimSpace(space)) || space == "" {
+			return fmt.Errorf("spaces 的键必须是小写空间 ID: %q", space)
 		}
-	}
-	allowed := map[string]bool{"stockcn": true, "stockhk": true, "stockus": true, "crypto": true}
-	if len(c.Archive.Sources) == 0 {
-		return fmt.Errorf("archive sources are required")
-	}
-	for space, source := range c.Archive.Sources {
-		if !allowed[space] || !sourcePattern.MatchString(space) {
-			return fmt.Errorf("unknown archive space %q", space)
+		if _, err := time.LoadLocation(cfg.TZ); err != nil || cfg.TZ == "" {
+			return fmt.Errorf("spaces.%s.tz %q 无效", space, cfg.TZ)
 		}
-		seen := make(map[string]bool)
-		for _, dataset := range source.Datasets {
-			if strings.TrimSpace(dataset) == "" || seen[dataset] {
-				return fmt.Errorf("duplicate or empty dataset in %s", space)
+		if cfg.LocalClose != "" {
+			if _, err := time.Parse("15:04", cfg.LocalClose); err != nil {
+				return fmt.Errorf("spaces.%s.local_close %q 必须是 HH:MM", space, cfg.LocalClose)
 			}
-			seen[dataset] = true
-		}
-		if len(source.Datasets) == 0 {
-			return fmt.Errorf("archive datasets are required for %s", space)
-		}
-	}
-	e := c.Archive.EventBus
-	if len(e.URLs) == 0 || strings.TrimSpace(strings.Join(e.URLs, ",")) == "" {
-		return fmt.Errorf("archive eventbus urls are required")
-	}
-	if !consumerPattern.MatchString(e.Consumer) {
-		return fmt.Errorf("invalid archive eventbus consumer %q", e.Consumer)
-	}
-	if e.FetchBatch <= 0 || e.FetchMaxWait <= 0 {
-		return fmt.Errorf("archive eventbus settings are invalid")
-	}
-	if e.DedupeRetention < 168*time.Hour {
-		return fmt.Errorf("archive dedupe_retention must be at least 168h")
-	}
-	m := c.Archive.Materialize
-	if m.PendingRows <= 0 || m.Workers < 1 || m.Workers > 32 || m.RowGroupRows <= 0 || m.ShutdownTimeout <= 0 {
-		return fmt.Errorf("archive materialize settings are invalid")
-	}
-	if c.Archive.COS.Enabled && (strings.TrimSpace(c.Archive.COS.Region) == "" || strings.TrimSpace(c.Archive.COS.Bucket) == "") {
-		return fmt.Errorf("archive cos region and bucket are required")
-	}
-	if strings.TrimSpace(c.Archive.StorageRPC.HMACKeyFile) != "" {
-		if _, err := gatewayauth.CredentialsFromKeyFile(c.Archive.StorageRPC.KeyID, c.Archive.StorageRPC.HMACKeyFile); err != nil {
-			return fmt.Errorf("archive storage hmac credentials: %w", err)
 		}
 	}
 	return nil
 }
 
-func pathContains(parent, child string) bool {
-	rel, err := filepath.Rel(parent, child)
-	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+// Space 返回空间的时区与本地收盘时刻；没有配置时按 UTC、全天交易。
+func (c *Config) Space(spaceID string) SpaceConfig {
+	if cfg, ok := c.Spaces[strings.ToLower(strings.TrimSpace(spaceID))]; ok {
+		return cfg
+	}
+	return SpaceConfig{TZ: "UTC"}
+}
+
+// OpenGateway 载入 mgr 的进程级签名身份与服务目录。
+func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	if c == nil || c.sourcePath == "" {
+		return nil, fmt.Errorf("归档网关客户端需要先载入配置文件")
+	}
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
 }

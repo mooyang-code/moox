@@ -134,7 +134,7 @@ func TestStartEventConsumerDiscardsLegacyPendingSubjectsWithoutPublishing(t *tes
 	}))
 	filter, err := registry.RenderSubject(events.DatasetRowsUpserted, "space", "market_prices")
 	require.NoError(t, err)
-	stop, err := svc.StartEventConsumer(ctx, client, EventConsumerOptions{Consumer: events.StorageViewKlineConsumer, FilterSubjects: []string{filter}, FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1})
+	stop, err := svc.StartEventConsumer(ctx, client, EventConsumerOptions{Consumer: events.StorageViewMiscConsumer, FilterSubjects: []string{filter}, FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1})
 	require.NoError(t, err)
 	defer stop()
 	_, err = sub.NextMsg(300 * time.Millisecond)
@@ -171,7 +171,7 @@ func TestSystemMetricsFromScratchDoesNotJournalPendingSubjects(t *testing.T) {
 	svc.schemas[indexID] = viewindex.ViewIndexSchema{
 		SpaceID: "mooxsys", ViewID: "view_mooxsys_service_metrics", PrimaryDatasetID: "dataset_mooxsys_service_metrics",
 		SchemaHash: "schema", ViewVersion: 1,
-		Columns: []*pb.ViewColumn{{OriginId: "dataset_mooxsys_service_metrics.cpu", ColumnName: "cpu"}},
+		Columns: []*pb.ViewColumn{{OriginId: "cpu", ColumnName: "cpu"}},
 	}
 	svc.byData = map[datasetRef]map[string]struct{}{{spaceID: "mooxsys", datasetID: "dataset_mooxsys_service_metrics"}: {indexID: {}}}
 	svc.pendingSubjectsDir = filepath.Join(t.TempDir(), "pending")

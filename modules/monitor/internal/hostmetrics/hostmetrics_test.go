@@ -16,7 +16,7 @@ import (
 )
 
 func validHostMetric() *hostmetricpb.HostMetric {
-	return &hostmetricpb.HostMetric{AgentId: "0190f4d0-7b1c-4f45-9a3e-7c28f6479a73", Hostname: "host", BootId: "boot", AgentVersion: "test", Snapshot: &hostmetricpb.HostSnapshot{
+	return &hostmetricpb.HostMetric{AgentId: "aB3x", Hostname: "host", BootId: "boot", AgentVersion: "test", Snapshot: &hostmetricpb.HostSnapshot{
 		Cpu:    &hostmetricpb.CpuMetric{LogicalCores: 4, UsageAvailable: true, UsagePercent: 25},
 		Memory: &hostmetricpb.MemoryMetric{TotalBytes: 100, UsedBytes: 50, AvailableBytes: 50, UsagePercent: 50},
 	}}
@@ -123,9 +123,12 @@ func TestHostHelpers(t *testing.T) {
 	first := deterministicEventID("msg-1", "rule-1", domain.AlertEventTriggered)
 	assert.Equal(t, first, deterministicEventID("msg-1", "rule-1", domain.AlertEventTriggered))
 	assert.NotEqual(t, first, deterministicEventID("msg-2", "rule-1", domain.AlertEventTriggered))
-	threshold, recovery := hostThresholds(domain.AlertRule{CheckID: HostMetricNetworkErrors}, HostMetricNetworkErrors)
-	assert.Equal(t, 1.0, threshold)
-	assert.Equal(t, 1.0, recovery)
+	threshold, recovery := RuleThresholds(domain.AlertRule{})
+	assert.Equal(t, 80.0, threshold)
+	assert.Equal(t, 80.0, recovery)
+	threshold, recovery = RuleThresholds(domain.AlertRule{Description: `{"threshold":90,"recovery_threshold":85}`})
+	assert.Equal(t, 90.0, threshold)
+	assert.Equal(t, 85.0, recovery)
 }
 
 func validCPUMetric() *hostmetricpb.CpuMetric {

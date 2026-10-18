@@ -40,7 +40,6 @@ type Config struct {
 	ErrorReporter        jetstream.ErrorReporter
 	Metrics              *observability.ViewMetrics
 	BeforeProcess        func(context.Context, *jetstream.Delivery) error
-	Lease                DeliveryLease
 	BoundReporter        func(bool)
 }
 
@@ -66,7 +65,7 @@ func (c Config) withDefaults() (Config, error) {
 	}
 	c.FilterSubjects = filters
 	if strings.TrimSpace(c.Consumer) == "" {
-		c.Consumer = events.StorageViewKlineConsumer
+		return c, fmt.Errorf("storage view consumer durable is required")
 	}
 	if c.AckWaitMS == 0 {
 		c.AckWaitMS = 120000
@@ -228,8 +227,8 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 		return nil, err
 	}
 	// Multi-partition Storage View owns the aggregate bound state in
-	// StartEventConsumer. Keep the legacy single-consumer metric behavior when
-	// no partition callback is supplied, but do not let one partition overwrite
+	// StartEventConsumer. A single consumer without a partition callback reports
+	// the aggregate itself, but do not let one partition overwrite
 	// the aggregate with its own state.
 	if opts.BoundReporter == nil {
 		opts.Metrics.SetConsumerBound(true)

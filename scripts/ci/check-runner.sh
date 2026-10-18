@@ -9,18 +9,10 @@ for command_name in "${required_commands[@]}"; do
   }
 done
 
-go version
+bash "$(dirname "${BASH_SOURCE[0]}")/check-go-version.sh"
 node --version
 pnpm --version
 gh --version | head -1
-
-python3 - <<'PY'
-import importlib
-
-for name in ("numpy", "pandas"):
-    importlib.import_module(name)
-print("python runtime: numpy and pandas available")
-PY
 
 available_kb="$(df -Pk "${GITHUB_WORKSPACE:-.}" | awk 'NR == 2 { print $4 }')"
 if [[ -z "${available_kb}" || "${available_kb}" -lt 524288 ]]; then

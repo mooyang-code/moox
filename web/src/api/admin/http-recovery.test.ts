@@ -2,12 +2,16 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { AuthSessionExpiredError } from "./auth-errors";
 
 const transport = vi.hoisted(() => ({ post: vi.fn(), responseUse: vi.fn() }));
-vi.mock("axios", () => ({ default: { create: () => ({ post: transport.post, interceptors: { response: { use: transport.responseUse } } }) } }));
+vi.mock("axios", () => ({
+  default: { create: () => ({ post: transport.post, interceptors: { response: { use: transport.responseUse } } }) }
+}));
 vi.mock("./signed-client", async () => {
   const { AuthSessionExpiredError } = await import("./auth-errors");
   return {
     installSpaceAwareSignedClient: vi.fn(),
-    expireBrowserSession: async (message?: string) => { throw new AuthSessionExpiredError(message); }
+    expireBrowserSession: async (message?: string) => {
+      throw new AuthSessionExpiredError(message);
+    }
   };
 });
 vi.mock("@arco-design/web-vue", () => ({ Message: { error: vi.fn() } }));
@@ -20,9 +24,14 @@ beforeEach(() => {
 });
 
 it("preserves durable instance identity on a business failure", async () => {
-  const response = { ret_info: { code: 1, msg: "state unavailable" }, instance: { instance_id: "instance-1", space_id: "space-1", strategy_id: "strategy-1" } };
+  const response = {
+    ret_info: { code: 1, msg: "state unavailable" },
+    instance: { instance_id: "instance-1", space_id: "space-1", strategy_id: "strategy-1" }
+  };
   transport.post.mockResolvedValue({ data: response });
-  const error = await callControl("strategy", "CreateStrategyInstance", {}, { headers: { Authorization: "fixture" } }).catch(error => error);
+  const error = await callControl("strategy", "CreateStrategyInstance", {}, { headers: { Authorization: "fixture" } }).catch(
+    error => error
+  );
   expect(error).toBeInstanceOf(Error);
   expect(error.message).toBe("state unavailable");
   expect(error.response).toEqual(response);

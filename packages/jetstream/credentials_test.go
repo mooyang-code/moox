@@ -3,6 +3,7 @@ package jetstream
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -21,6 +22,9 @@ func TestExpandCredentialPathExpandsEnvironment(t *testing.T) {
 }
 
 func TestLoadCredentialFileRequiresPrivateRegularFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 按 ACL 判断私密文件，见 packages/security 的 Windows 测试")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "eventbus.yaml")
 	if err := os.WriteFile(path, []byte("username: monitor\ntoken: secret\n"), 0o644); err != nil {

@@ -138,3 +138,54 @@ func TestSampleLogicalAccountCountsSharedLiveCredentialOnce(t *testing.T) {
 		t.Fatalf("logical equity points = %+v, want one shared-capital snapshot", points)
 	}
 }
+
+// 交易所给的余额时间是“最后变更时间”：余额长期不变时它很旧，但完整同步持续成功（LastSyncAt 持续推进）就说明余额仍然准确，
+// 权益不能因此被判为过期；权益有效期也要覆盖采样周期，让两次采样之间的策略目标仍能转换。
+func TestEquityFreshnessFollowsConfirmedSyncNotBalanceChangeTime(t *testing.T) {
+	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tradeStore.Close()
+
+	const syncedAt = int64(1_700_000_000_000)
+	changedAt := syncedAt - int64(10*time.Minute/time.Millisecond) // 余额 10 分钟前最后一次变更
+	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "live",
+			Exchange: string(exchange.ExchangeBinance), MarketType: string(exchange.MarketTypeSpot),
+			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet), CredentialSecretID: "secret-1", SettlementAsset: "USDT",
+			Status: string(exchange.AccountStatusEnabled), Ready: true, LastSyncAt: syncedAt,
+			Snapshot: store.TradingAccountSnapshot{
+				Balances:          []store.AssetBalance{{Asset: "USDT", Available: "500", Total: "500"}},
+				ExchangeUpdatedAt: changedAt,
+			},
+		}); err != nil {
+			return err
+		}
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
+			ExecutionMode: string(exchange.ExecutionModeLive), MarketType: string(exchange.MarketTypeSpot),
+			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test",
+		}); err != nil {
+			return err
+		}
+		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true,
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.UnixMilli(syncedAt + 40_000) // 上一次采样之后 40 秒，已超过旧的 30 秒有效期
+	service := &Service{Store: tradeStore, Now: func() time.Time { return now }}
+	if err := service.SampleAccount(context.Background(), "account-1"); err != nil {
+		t.Fatal(err)
+	}
+	equity, sourceTime, err := service.ResolveLogicalAccountEquity(context.Background(), "space-1", "logical-1")
+	if err != nil {
+		t.Fatalf("equity must stay usable while full syncs keep confirming the balance: %v", err)
+	}
+	if equity.String() != "500" || sourceTime != syncedAt {
+		t.Fatalf("equity = %s source = %d", equity.String(), sourceTime)
+	}
+}

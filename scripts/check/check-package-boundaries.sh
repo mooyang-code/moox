@@ -52,7 +52,7 @@ while IFS= read -r directory; do
 	violations+=("${directory}: generic internal/bus hides the event interaction role")
 done < <(find modules -type d -path '*/internal/bus' -print 2>/dev/null || true)
 
-for path in modules/storage/internal/eventcontract modules/archive/internal/consumer; do
+for path in modules/storage/internal/eventcontract; do
 	[[ ! -e "${path}" ]] || violations+=("${path}: legacy event interaction path is not allowed")
 done
 
@@ -88,10 +88,10 @@ done < <(rg -n 'capital_amount|channel_id|target_quantity' \
 # as a Strategy target-budget field by the typed TargetIntent contract.
 current_trade_docs=(
 	modules/trade/README.md
-	modules/trade/DESIGN.md
 	modules/trade/docs/exchange-apis.md
-	docs/架构总览.md
-	docs/策略模块架构设计.md
+	docs/总体设计.md
+	docs/模块/交易.md
+	docs/模块/策略.md
 )
 while IFS= read -r match; do
 	violations+=("${match}: current Trade documentation references removed architecture")
@@ -136,12 +136,11 @@ while IFS= read -r match; do
 done < <(rg -n "${event_legacy_symbols}" modules --glob '*.go' || true)
 
 current_event_docs=(
-	docs/架构总览.md
-	docs/协议设计.md
-	docs/存储层架构.md
-	docs/策略模块架构设计.md
-	docs/因子计算模块设计.md
-	modules/archive/README.md
+	docs/总体设计.md
+	docs/模块/事件总线.md
+	docs/模块/存储.md
+	docs/模块/策略.md
+	docs/模块/因子.md
 	modules/factor/README.md
 	modules/trade/README.md
 )
@@ -170,9 +169,7 @@ if [[ -d packages/doctor ]]; then
 fi
 
 required_timer_services=(
-	"modules/admin/config/trpc_go.yaml:trpc.dnsproxy.timer"
-	"modules/admin/config/trpc_go.yaml:trpc.dnsprobe.timer"
-	"modules/collector/config/trpc_go.yaml:trpc.moox.collector.schedule.timer"
+	"modules/collector/config/trpc_go.yaml:trpc.moox.collector.kline_resample.timer"
 )
 for required in "${required_timer_services[@]}"; do
 	file="${required%%:*}"

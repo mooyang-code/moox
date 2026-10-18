@@ -14,10 +14,10 @@ import (
 )
 
 func newFactorResultActivationFixture(t *testing.T, role string) (*sqlite.Store, *Service, *pb.Dataset) {
-	return newFactorResultActivationFixtureWithSchema(t, role, pb.DataKind_DATA_KIND_TIME_SERIES, []string{"1m"})
+	return newFactorResultActivationFixtureWithSchema(t, role, pb.DataKind_DATA_KIND_TIME_SERIES, "1m")
 }
 
-func newFactorResultActivationFixtureWithSchema(t *testing.T, role string, kind pb.DataKind, freqs []string) (*sqlite.Store, *Service, *pb.Dataset) {
+func newFactorResultActivationFixtureWithSchema(t *testing.T, role string, kind pb.DataKind, freq string) (*sqlite.Store, *Service, *pb.Dataset) {
 	t.Helper()
 	ctx := context.Background()
 	store, err := sqlite.Open(ctx, sqlite.Options{
@@ -33,13 +33,9 @@ func newFactorResultActivationFixtureWithSchema(t *testing.T, role string, kind 
 	require.NoError(t, err)
 	_, err = store.RegisterDataNode(ctx, "factor-node", "ip://127.0.0.1:19090", "因子节点")
 	require.NoError(t, err)
-	keepDuration := "720h"
-	if kind == pb.DataKind_DATA_KIND_RECORD {
-		keepDuration = "0"
-	}
 	dataset, err := store.CreateDataset(ctx, &pb.Dataset{
 		SpaceId: "factor-space", DatasetId: "dataset_factor_btc_1m", DataSourceId: "factor", DataNodeId: "factor-node",
-		Name: "BTC 因子", DataKind: kind, Freqs: freqs, KeepDuration: keepDuration,
+		Name: "BTC 因子", DataKind: kind, Freq: freq,
 		Attributes: map[string]string{"dataset_role": role, "owner_module": "factor"},
 	})
 	require.NoError(t, err)
@@ -78,17 +74,14 @@ func TestActivateFactorResultDatasetCreatesDefaultView(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, dataset.GetDatasetId(), view.GetDatasetId())
 	require.Equal(t, dataset.GetName(), view.GetName())
-	require.Equal(t, dataset.GetKeepDuration(), view.GetKeepDuration())
 	require.Equal(t, []string{"subject_id", "freq", "data_time", "series_tag"}, view.GetGrainKeys())
-	require.Equal(t, `{"freq":"1m"}`, view.GetFilterJson())
+	require.Equal(t, "1m", view.GetFreq())
 	require.Equal(t, "duckdb", view.GetEngine())
 	require.Equal(t, "factor_result", view.GetAttributes()["primary_dataset_role"])
 
 	columns, _, err := store.ListViewColumns(context.Background(), view.GetSpaceId(), view.GetViewId(), nil)
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{
-		dataset.GetDatasetId() + ".close", dataset.GetDatasetId() + ".bias_20",
-	}, viewColumnNames(columns))
+	require.ElementsMatch(t, []string{"close", "bias_20"}, viewColumnNames(columns))
 }
 
 func TestActivateFactorResultDatasetIsIdempotent(t *testing.T) {
@@ -126,7 +119,7 @@ func TestNewFactorResultColumnExtendsDefaultViewDesiredSchema(t *testing.T) {
 	view, err = store.GetView(ctx, dataset.GetSpaceId(), view.GetViewId())
 	require.NoError(t, err)
 	require.Equal(t, beforeRevision+1, view.GetDesiredViewRevision())
-	require.Contains(t, viewColumnNames(view.GetColumns()), dataset.GetDatasetId()+".momentum_5")
+	require.Contains(t, viewColumnNames(view.GetColumns()), "momentum_5")
 
 	_, err = store.UpsertDatasetColumn(ctx, column)
 	require.NoError(t, err)
@@ -181,31 +174,17 @@ func TestFactorResultFactorColumnRequiresOriginMetadata(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }
 
-func TestActivateFactorResultDatasetRejectsInvalidSchemaBeforeCommit(t *testing.T) {
-	cases := []struct {
-		name  string
-		kind  pb.DataKind
-		freqs []string
-	}{
-		{name: "record dataset", kind: pb.DataKind_DATA_KIND_RECORD, freqs: []string{"1m"}},
-		{name: "no frequency", kind: pb.DataKind_DATA_KIND_TIME_SERIES},
-		{name: "multiple frequencies", kind: pb.DataKind_DATA_KIND_TIME_SERIES, freqs: []string{"1m", "5m"}},
-		{name: "blank frequency", kind: pb.DataKind_DATA_KIND_TIME_SERIES, freqs: []string{" "}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			store, service, dataset := newFactorResultActivationFixtureWithSchema(t, "factor_result", tc.kind, tc.freqs)
-			rsp, err := service.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{
-				SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ExpectedRevision: dataset.GetRevision(),
-			})
-			require.NoError(t, err)
-			require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-			persisted, err := store.GetDataset(context.Background(), dataset.GetSpaceId(), dataset.GetDatasetId())
-			require.NoError(t, err)
-			require.Equal(t, "disabled", persisted.GetStatus())
-			require.False(t, persisted.GetBindingLocked())
-		})
-	}
+func TestActivateFactorResultDatasetRejectsRecordDatasetBeforeCommit(t *testing.T) {
+	store, service, dataset := newFactorResultActivationFixtureWithSchema(t, "factor_result", pb.DataKind_DATA_KIND_RECORD, "1m")
+	rsp, err := service.ActivateDataset(context.Background(), &pb.ActivateDatasetReq{
+		SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ExpectedRevision: dataset.GetRevision(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	persisted, err := store.GetDataset(context.Background(), dataset.GetSpaceId(), dataset.GetDatasetId())
+	require.NoError(t, err)
+	require.Equal(t, "disabled", persisted.GetStatus())
+	require.False(t, persisted.GetBindingLocked())
 }
 
 func TestEnsureFactorResultDefaultViewRejectsManagedContractConflicts(t *testing.T) {
@@ -220,8 +199,6 @@ func TestEnsureFactorResultDefaultViewRejectsManagedContractConflicts(t *testing
 		{name: "engine", mutate: func(view *pb.View) { view.Engine = "bleve" }},
 		{name: "status", mutate: func(view *pb.View) { view.Status = "disabled" }},
 		{name: "grain", mutate: func(view *pb.View) { view.GrainKeys = []string{"subject_id"} }},
-		{name: "frequency", mutate: func(view *pb.View) { view.FilterJson = `{"freq":"5m"}` }},
-		{name: "retention", mutate: func(view *pb.View) { view.KeepDuration = "24h" }},
 		{name: "columns", mutate: func(view *pb.View) { view.Columns[0].ValueType = pb.FieldValueType_FIELD_VALUE_TYPE_STRING }},
 	}
 	for _, tc := range cases {
@@ -282,4 +259,40 @@ func viewColumnNames(columns []*pb.ViewColumn) []string {
 		}
 	}
 	return names
+}
+
+func TestMetadataReturnsDatasetRetentionFromPolicy(t *testing.T) {
+	_, service, dataset := newFactorResultActivationFixture(t, "factor_result")
+	ctx := context.Background()
+	got, err := service.GetDataset(ctx, &pb.GetDatasetReq{SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, got.GetRetInfo().GetCode(), got.GetRetInfo().GetMsg())
+	require.Equal(t, "168h", got.GetDataset().GetRetention(), "a 1m Dataset in a space without overrides keeps 7 days")
+	require.Equal(t, "default", got.GetDataset().GetRetentionSource())
+
+	listed, err := service.ListDatasets(ctx, &pb.ListDatasetsReq{SpaceId: dataset.GetSpaceId()})
+	require.NoError(t, err)
+	require.Len(t, listed.GetDatasets(), 1)
+	require.Equal(t, "168h", listed.GetDatasets()[0].GetRetention())
+
+	retention, source := service.datasetRetention(&pb.Dataset{DataKind: pb.DataKind_DATA_KIND_RECORD})
+	require.Equal(t, "forever", retention)
+	require.Equal(t, "record", source)
+	retention, source = service.datasetRetention(&pb.Dataset{SpaceId: "stockcn", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m"})
+	require.Equal(t, "1080h", retention)
+	require.Equal(t, "space", source)
+}
+
+func TestGetDatasetReturnsLiveSubjectsRevision(t *testing.T) {
+	store, service, dataset := newFactorResultActivationFixture(t, "factor_result")
+	ctx := context.Background()
+	first, err := service.GetDataset(ctx, &pb.GetDatasetReq{SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, first.GetRetInfo().GetCode(), first.GetRetInfo().GetMsg())
+
+	_, err = store.UpsertSubject(ctx, &pb.Subject{SpaceId: dataset.GetSpaceId(), SubjectId: "REV-USDT", SubjectType: "crypto", Name: "REV"})
+	require.NoError(t, err)
+	second, err := service.GetDataset(ctx, &pb.GetDatasetReq{SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()})
+	require.NoError(t, err)
+	require.Greater(t, second.GetSubjectsRevision(), first.GetSubjectsRevision(), "新增标的后 GetDataset 返回的修订号必须递增")
 }

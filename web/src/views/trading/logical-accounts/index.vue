@@ -92,7 +92,7 @@
             </template>
           </a-table-column>
           <a-table-column title="策略实例" :width="180" :ellipsis="true" :tooltip="true">
-            <template #cell="{ record }">{{ record.owner_instance_id || record.owner_runner_id || "-" }}</template>
+            <template #cell="{ record }">{{ record.owner_instance_id || "-" }}</template>
           </a-table-column>
           <a-table-column title="成员数" :width="80">
             <template #cell="{ record }">{{ record.members?.length || 0 }}</template>
@@ -175,7 +175,7 @@
             }}</a-descriptions-item>
             <a-descriptions-item label="就绪状态">{{ selected.ready ? "就绪" : "未就绪" }}</a-descriptions-item>
             <a-descriptions-item label="策略实例">{{
-              selected.owner_instance_id || selected.owner_runner_id || "-"
+              selected.owner_instance_id || "-"
             }}</a-descriptions-item>
             <a-descriptions-item label="运行会话">{{
               target?.session_id || selected.owner_session_id || "-"
@@ -370,10 +370,13 @@
 </template>
 
 <script setup lang="ts">
+import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onUnmounted, reactive, ref, watch } from "vue";
 import { useWindowSize } from "@vueuse/core";
 import { Message, Modal } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
+import { useSpaceStore } from "@/store/modules/space";
+import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { createClientId } from "@/utils/client-id";
 import {
   addLogicalAccountMember,
@@ -525,15 +528,20 @@ const eligibleAccounts = computed(() =>
   )
 );
 
+// 空间切换后，旧空间迟到的响应不能覆盖新空间的列表：只有最新一次请求可以更新页面。
+const listRequests = createLatestRequestGuard();
+
 async function load() {
+  const request = listRequests.begin();
   loading.value = true;
   try {
     const rsp = await listLogicalAccounts({ page: pagination.current, size: pagination.pageSize });
+    if (!request.isLatest()) return;
     rows.value = rsp.logical_accounts || [];
     pagination.total = rsp.page_result?.total || 0;
     await openRouteDetail();
   } finally {
-    loading.value = false;
+    if (request.isLatest()) loading.value = false;
   }
 }
 function changePage(page: number) {
@@ -545,11 +553,13 @@ async function create() {
     Message.warning("请填写所有必填字段");
     return false;
   }
+  const submission = createScope.begin();
   await createLogicalAccount({
     ...createForm,
     name: createForm.name.trim(),
     settlement_asset: createForm.settlement_asset.trim().toUpperCase()
   });
+  if (!submission.isCurrent()) return false;
   createVisible.value = false;
   await load();
   return true;
@@ -632,35 +642,56 @@ watch(
     void openRouteDetail();
   }
 );
+// 原因弹窗的打开序号：过期提交的收尾只能关闭自己打开的那一次弹窗，不能关掉用户在新空间/新账户上重新打开的弹窗
+let reasonOpenToken = 0;
 function requestPause() {
+  reasonOpenToken += 1;
   reasonMode.value = "pause";
   reasonForm.reason = "";
   reasonVisible.value = true;
 }
 function openFlatten() {
+  reasonOpenToken += 1;
   reasonMode.value = "flatten";
   reasonForm.action_id = createClientId();
   reasonForm.reason = "";
   reasonVisible.value = true;
+}
+function abandonedReasonSubmit(openToken: number) {
+  Message.info("操作已提交到原空间的组合账户，当前空间或账户已切换；请切回原空间确认操作结果");
+  if (openToken === reasonOpenToken) reasonVisible.value = false;
+  return true;
 }
 async function submitReason() {
   if (!selected.value || !reasonForm.reason.trim() || (reasonMode.value === "flatten" && !reasonForm.action_id.trim())) {
     Message.warning("请填写原因和操作编号");
     return false;
   }
+  const openToken = reasonOpenToken;
+  const submitSpaceId = spaceStore.selectedSpaceId;
+  const submitGeneration = selectedSpaceGeneration();
+  const submitAccountId = selected.value.logical_account_id;
+  const stale = () =>
+    spaceStore.selectedSpaceId !== submitSpaceId ||
+    selectedSpaceGeneration() !== submitGeneration ||
+    selected.value?.logical_account_id !== submitAccountId;
   if (reasonMode.value === "pause") {
     await pauseLogicalAccount(selected.value.logical_account_id, reasonForm.reason.trim());
+    if (stale()) return abandonedReasonSubmit(openToken);
   } else {
     const rsp = await flattenLogicalAccount(
       reasonForm.action_id.trim(),
       selected.value.logical_account_id,
       reasonForm.reason.trim()
     );
+    // 请求已经发出但空间或所选组合账户已变化：不覆盖新对象的操作状态，也不用新空间轮询原空间的操作
+    if (stale()) return abandonedReasonSubmit(openToken);
     action.value = rsp.action;
     submittedOrder.value = null;
     startActionPolling(rsp.action.action_id);
   }
-  reasonVisible.value = false;
+  // 同一空间同一账户重新打开了弹窗：操作本身仍然有效（状态与轮询照常更新），但不能关闭新打开的弹窗
+  if (openToken === reasonOpenToken) reasonVisible.value = false;
   await reloadDetail();
   await load();
   return true;
@@ -689,7 +720,10 @@ async function addMember() {
     Message.warning("请选择执行账户");
     return false;
   }
-  await addLogicalAccountMember({ logical_account_id: selected.value.logical_account_id, ...memberForm });
+  const submission = memberScope.begin();
+  const memberAccountId = selected.value.logical_account_id;
+  await addLogicalAccountMember({ logical_account_id: memberAccountId, ...memberForm });
+  if (!submission.isCurrent() || selected.value?.logical_account_id !== memberAccountId) return false;
   memberVisible.value = false;
   await reloadDetail();
   await load();
@@ -887,6 +921,32 @@ function stopActionPolling() {
 }
 onUnmounted(stopActionPolling);
 load();
+// 切换空间后重新加载，丢弃旧空间的列表与进行中的操作轮询。
+const spaceStore = useSpaceStore();
+watch(
+  () => spaceStore.selectedSpaceId,
+  (next, previous) => {
+    if (!next || next === previous) return;
+    stopActionPolling();
+    listRequests.invalidate();
+    pagination.current = 1;
+    rows.value = [];
+    selected.value = null;
+    void load();
+  }
+);
+
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：createVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const createScope = createSubmitScope();
+watch(createVisible, open => {
+  if (open) createScope.invalidate();
+});
+
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：memberVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const memberScope = createSubmitScope();
+watch(memberVisible, open => {
+  if (open) memberScope.invalidate();
+});
 </script>
 
 <style scoped>

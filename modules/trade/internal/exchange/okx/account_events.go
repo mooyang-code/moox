@@ -13,19 +13,21 @@ import (
 	"golang.org/x/net/websocket"
 )
 
+// privateHandshakeTimeout 是私有流拨号、登录与订阅确认阶段的统一期限。
+var privateHandshakeTimeout = 15 * time.Second
+
 func (a *Adapter) Subscribe(ctx context.Context, handler execution.AccountEventHandler) error {
 	if handler == nil {
 		return rejected("private event handler is required", nil)
 	}
-	config, err := websocket.NewConfig(
-		privateStreamEndpoint(a.config.Environment),
-		"https://moox.local",
-	)
+	// 拨号（含 HTTP Upgrade）、登录与订阅确认共用一个继承调用方取消的期限
+	handshakeCtx, cancelHandshake := context.WithTimeout(ctx, privateHandshakeTimeout)
+	defer cancelHandshake()
+	connection, err := dialPrivateStream(handshakeCtx, privateStreamEndpoint(a.config.Environment))
 	if err != nil {
-		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
-	}
-	connection, err := websocket.DialConfig(config)
-	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
 	defer connection.Close()
@@ -34,27 +36,11 @@ func (a *Adapter) Subscribe(ctx context.Context, handler execution.AccountEventH
 		_ = connection.Close()
 	}()
 
-	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
-	login := map[string]any{"op": "login", "args": []map[string]string{{
-		"apiKey": a.credential.APIKey, "passphrase": a.credential.Passphrase,
-		"timestamp": timestamp,
-		"sign":      signature(a.credential.APISecret, timestamp, "GET", "/users/self/verify", ""),
-	}}}
-	if err := websocket.JSON.Send(connection, login); err != nil {
-		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
-	}
-	if err := expectOKXAck(connection, "login"); err != nil {
-		return err
-	}
-	channels := a.privateChannels()
-	subscribe := map[string]any{"op": "subscribe", "args": channels}
-	if err := websocket.JSON.Send(connection, subscribe); err != nil {
-		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
-	}
-	pending, err := expectOKXSubscribeAcks(connection, channels)
+	pending, err := a.privateHandshake(connection)
 	if err != nil {
 		return err
 	}
+	_ = connection.SetDeadline(time.Time{})
 	handler.OnSubscribed()
 	for _, payload := range pending {
 		if err := a.dispatchPrivate(ctx, payload, handler); err != nil {
@@ -67,6 +53,40 @@ func (a *Adapter) Subscribe(ctx context.Context, handler execution.AccountEventH
 			return err
 		}
 	}
+}
+
+// dialPrivateStream 建立私有流连接；ctx 同时约束 TCP/TLS 建连与 HTTP Upgrade 响应。
+func dialPrivateStream(ctx context.Context, endpoint string) (*websocket.Conn, error) {
+	config, err := websocket.NewConfig(endpoint, "https://moox.local")
+	if err != nil {
+		return nil, err
+	}
+	return config.DialContext(ctx)
+}
+
+// privateHandshake 完成登录与订阅确认，整个过程受 privateHandshakeTimeout 约束，返回确认前缓冲的数据帧。
+func (a *Adapter) privateHandshake(connection *websocket.Conn) ([][]byte, error) {
+	// 登录与订阅确认阶段设置统一期限：服务端保持连接但不应答时返回错误，由上层重连
+	handshakeDeadline := time.Now().Add(privateHandshakeTimeout)
+	_ = connection.SetDeadline(handshakeDeadline)
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	login := map[string]any{"op": "login", "args": []map[string]string{{
+		"apiKey": a.credential.APIKey, "passphrase": a.credential.Passphrase,
+		"timestamp": timestamp,
+		"sign":      signature(a.credential.APISecret, timestamp, "GET", "/users/self/verify", ""),
+	}}}
+	if err := websocket.JSON.Send(connection, login); err != nil {
+		return nil, &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	if err := expectOKXAck(connection, "login"); err != nil {
+		return nil, err
+	}
+	channels := a.privateChannels()
+	subscribe := map[string]any{"op": "subscribe", "args": channels}
+	if err := websocket.JSON.Send(connection, subscribe); err != nil {
+		return nil, &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	return expectOKXSubscribeAcks(connection, channels)
 }
 
 func (a *Adapter) receivePrivateMessage(

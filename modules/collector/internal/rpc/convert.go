@@ -38,14 +38,6 @@ func toPBTask(task domain.CollectionTask) *pb.CollectionTask {
 	}
 }
 
-func parseStringSlice(raw string) []string {
-	var values []string
-	if err := json.Unmarshal([]byte(raw), &values); err != nil {
-		return nil
-	}
-	return values
-}
-
 func redactTaskResultDatasetID(raw string) string {
 	values := map[string]any{}
 	if err := json.Unmarshal([]byte(raw), &values); err != nil {
@@ -106,74 +98,11 @@ func taskResultDataKind(dataType string) string {
 	return "time_series"
 }
 
-func toPBInstance(instance domain.TaskInstance) *pb.TaskInstance {
-	return &pb.TaskInstance{
-		SpaceId:        instance.SpaceID,
-		RunId:          instance.RunID,
-		InstanceId:     instance.InstanceID,
-		Provider:       instance.Provider,
-		ProviderSymbol: instance.ProviderSymbol,
-		MarketType:     instance.MarketType,
-		DataType:       instance.DataType,
-		RequestKey:     instance.RequestKey,
-		SubjectId:      instance.SubjectID,
-		Frequency:      instance.Frequency,
-		TargetDataTime: formatPtrTime(instance.TargetDataTime),
-		SourceId:       instance.SourceID,
-		SeriesTag:      instance.SeriesTag,
-		FunctionName:   instance.FunctionName,
-		TaskParams:     structFromJSONString(instance.TaskParams),
-		LastExecStatus: toPBStatus(instance.LastExecStatus),
-		LastExecTime:   formatPtrTime(instance.LastExecTime),
-		Result:         structFromJSONString(instance.Result),
-		IsDeleted:      instance.IsDeleted,
-		CreateTime:     formatTime(instance.CreateTime),
-		ModifyTime:     formatTime(instance.ModifyTime),
-	}
-}
-
-func toPBWriteTarget(target domain.WriteTarget) *pb.TaskWriteTarget {
-	return &pb.TaskWriteTarget{WriteTargetId: target.ID, TaskId: target.TaskID, DatasetId: target.DatasetID, ViewId: target.ViewID, OutputFields: parseStringSlice(target.OutputFields), Status: target.Status, LastError: target.LastError}
-}
-
-func toPBStatus(status int) pb.TaskInstanceStatus {
-	switch status {
-	case domain.InstanceStatusPending:
-		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PENDING
-	case domain.InstanceStatusSuccess:
-		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS
-	case domain.InstanceStatusFailed:
-		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_FAILED
-	default:
-		return pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_UNSPECIFIED
-	}
-}
-
-func fromPBStatus(status pb.TaskInstanceStatus) int {
-	switch status {
-	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_PENDING:
-		return domain.InstanceStatusPending
-	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_SUCCESS:
-		return domain.InstanceStatusSuccess
-	case pb.TaskInstanceStatus_TASK_INSTANCE_STATUS_FAILED:
-		return domain.InstanceStatusFailed
-	default:
-		return 0
-	}
-}
-
 func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339)
-}
-
-func formatPtrTime(t *time.Time) string {
-	if t == nil {
-		return ""
-	}
-	return formatTime(*t)
 }
 
 func structFromJSONString(raw string) *structpb.Struct {

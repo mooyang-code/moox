@@ -39,14 +39,6 @@ func (key SourceKey) Validate() error {
 	return nil
 }
 
-func NewSourceKey(providerID, sourceID string) (SourceKey, error) {
-	key := SourceKey{ProviderID: strings.ToLower(strings.TrimSpace(providerID)), SourceID: strings.ToLower(strings.TrimSpace(sourceID))}
-	if err := key.Validate(); err != nil {
-		return SourceKey{}, err
-	}
-	return key, nil
-}
-
 type SourceStatus string
 
 const (
@@ -68,40 +60,6 @@ type SourceSpec struct {
 	TimestampMode   TimestampMode
 	CompleteOHLCV   bool
 	HasAmount       bool
-}
-
-func (spec SourceSpec) Validate() error {
-	if strings.TrimSpace(spec.Key.SourceID) == "" {
-		return fmt.Errorf("source_id is required")
-	}
-	if err := spec.Key.Validate(); err != nil {
-		return err
-	}
-	switch spec.Status {
-	case SourceEnabled, SourceShadow, SourceCatalogOnly:
-	default:
-		return fmt.Errorf("invalid source status %q", spec.Status)
-	}
-	if strings.TrimSpace(spec.ProtocolVariant) == "" || strings.TrimSpace(spec.Transport) == "" || strings.TrimSpace(spec.Host) == "" {
-		return fmt.Errorf("protocol_variant, transport and host are required")
-	}
-	if spec.Port < 1 || spec.Port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535")
-	}
-	if len(spec.Markets) == 0 || len(spec.Instruments) == 0 || len(spec.Frequencies) == 0 {
-		return fmt.Errorf("markets, instruments and frequencies are required")
-	}
-	for _, frequency := range spec.Frequencies {
-		if _, err := ParseFrequency(frequency); err != nil {
-			return err
-		}
-	}
-	switch spec.TimestampMode {
-	case TimestampModeOpen, TimestampModeClose:
-	default:
-		return fmt.Errorf("unsupported timestamp mode %q", spec.TimestampMode)
-	}
-	return nil
 }
 
 const (
@@ -361,8 +319,8 @@ type KlineRequest struct {
 	HistoryAsOf time.Time
 	RequestID   string
 	DNSRoutes   map[string][]string
-	// RateBudgetRatio applies the HistoryPolicy budget to this invocation's
-	// provider limiter. Zero means the normal provider budget (1.0).
+	// RateBudgetRatio limits this invocation's share of the
+	// provider limiter budget. Zero means the normal provider budget (1.0).
 	RateBudgetRatio float64
 }
 

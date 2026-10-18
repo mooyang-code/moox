@@ -21,6 +21,7 @@ vi.mock("@/api/trade", async () => {
     syncTradingAccount: mocks.syncTradingAccount
   };
 });
+vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => ({ selectedSpaceId: "crypto" }) }));
 vi.mock("vue-router", () => ({
   useRouter: () => ({ push: mocks.routerPush, replace: mocks.routerPush }),
   useRoute: () => ({ query: mocks.routeQuery })

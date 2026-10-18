@@ -76,12 +76,10 @@ message View {
   string dataset_id = 5;
   // grain_keys 表示视图行粒度键，例如 subject_id、data_time 或 freq。
   repeated string grain_keys = 7;
-  // filter_json 是构建视图物化结果时使用的固定过滤条件。
-  string filter_json = 8;
+  // freq 是所属 Dataset 的频率，由 Storage 按 Dataset 填写，调用方不能指定；记录型 View 为空。
+  string freq = 8;
   // engine 是视图查询执行引擎标识，由控制面配置。
   string engine = 9;
-  // keep_duration 是 TimeSeries View 保留 RowKey 的时间窗口；0 表示永久保存。
-  string keep_duration = 10;
   // active_index_id 是当前生效的 a/b 物理索引标识。
   string active_index_id = 11;
   // status 表示启用、停用、构建中、归档或删除等状态。
@@ -118,11 +116,11 @@ message ViewColumn {
   string space_id = 1;
   // view_id 是查询视图 ID。
   string view_id = 2;
-  // column_name 是视图内稳定技术列名；DatasetColumn 来源必须使用 dataset_id.column_name。
+  // column_name 是视图内稳定技术列名；DatasetColumn 来源直接使用 Dataset 列名，不带数据集前缀。
   string column_name = 3;
   // origin_type 表示列来源，可为 DatasetColumn、表达式或系统列。
   ColumnOriginType origin_type = 4;
-  // origin_id 是来源 ID；DatasetColumn 必须使用 dataset_id.column_name，并与 column_name 保持一致。
+  // origin_id 是来源 ID；DatasetColumn 为 View 所属 Dataset 的列名，并与 column_name 保持一致。
   string origin_id = 5;
   // value_type 是列值的逻辑类型。
   FieldValueType value_type = 6;
@@ -164,7 +162,7 @@ message DataSource {
   map<string, string> attributes = 11;
 }
 
-// Tag 是 Subject 的分组；auto 标签成员由 moox-collector-subject 同步。
+// Tag 是 Subject 的分组；auto 标签成员由 moox-collector 同步。
 message Tag {
   string space_id = 1;
   string tag_id = 2;
@@ -258,8 +256,9 @@ message Dataset {
   string description = 5;
   // data_kind 是数据集的结构形态。
   DataKind data_kind = 6;
-  // freqs 是该数据集支持的数据频率列表。
-  repeated string freqs = 7;
+  // freq 是时序 Dataset 的唯一频率，必须是规范值（见 packages/frequency），创建后不可修改；
+  // 记录型 Dataset 可以为空或使用描述性取值。
+  string freq = 7;
   // status 表示启用、停用、构建中、归档或删除等状态。
   string status = 8;
   // created_at 是创建时间，使用项目统一时间字符串格式。
@@ -270,14 +269,17 @@ message Dataset {
   map<string, string> attributes = 11;
   // data_node_id 是该 Dataset 的唯一 DataNode owner。
   string data_node_id = 17;
-  // keep_duration 是 TimeSeries Pebble 数据的保留时长；0 表示永久保存。
-  string keep_duration = 18;
+  // retention 是只读的生效保留期，由 Storage 策略文件按 (space_id, freq) 解析，取值为 "<n>h" 或
+  // "forever"；记录型 Dataset 为 "forever"。写接口忽略该字段。
+  string retention = 18;
   // binding_locked 表示 Dataset 首次激活后是否永久锁定 DataNode 绑定。
   bool binding_locked = 19;
   // revision 是 Dataset 元数据的单调递增修订号，用于并发控制。
   uint64 revision = 20;
   // subject_tags 是数据集标的范围，取值为 tag_id。
   repeated string subject_tags = 21;
+  // retention_source 是 retention 的来源（只读）：default、space 或 record。
+  string retention_source = 22;
 }
 
 // DatasetSubject 表示 Dataset 覆盖的 Subject 集合。
@@ -397,8 +399,10 @@ message DatasetSummary {
   string dataset_id = 2;
   string name = 3;
   DataKind data_kind = 4;
-  string keep_duration = 5;
+  // retention 与 retention_source 同 Dataset 中的只读字段。
+  string retention = 5;
   string status = 6;
+  string retention_source = 7;
 }
 
 // DataNodeListItem 是 DataNode 及其全部 Dataset 摘要的组合视图。
@@ -434,40 +438,6 @@ message Device {
   string updated_at = 8;
   // attributes 是扩展属性，默认不作为索引字段使用。
   map<string, string> attributes = 9;
-}
-
-// ArchiveFile 表示从 Pebble 主存归档出来的 Parquet 事实文件。
-message ArchiveFile {
-  // space_id 是归档所属 Space。
-  string space_id = 1;
-  // archive_file_id 是归档文件记录 ID。
-  string archive_file_id = 2;
-  // dataset_id 是归档所属数据集 ID。
-  string dataset_id = 3;
-  // device_id 是归档文件所在设备 ID。
-  string device_id = 4;
-  // partition_key 是归档分区键，例如 date=2026-06-15/source=binance。
-  string partition_key = 5;
-  // file_uri 是归档文件 URI。
-  string file_uri = 6;
-  // file_format 是文件格式，当前固定为 parquet。
-  string file_format = 7;
-  // min_time 是文件内最小数据时间。
-  string min_time = 8;
-  // max_time 是文件内最大数据时间。
-  string max_time = 9;
-  // row_count 是文件内事实行数。
-  uint64 row_count = 10;
-  // columns 是该文件包含的事实列名列表。
-  repeated string columns = 12;
-  // status 表示启用、停用、归档、删除或失败等状态。
-  string status = 13;
-  // created_at 是创建时间，使用项目统一时间字符串格式。
-  string created_at = 14;
-  // updated_at 是最后更新时间，使用项目统一时间字符串格式。
-  string updated_at = 15;
-  // attributes 是扩展属性，默认不作为索引字段使用。
-  map<string, string> attributes = 16;
 }
 
 // CreateSpaceReq 表示创建使用空间的请求。
@@ -931,6 +901,8 @@ message GetDatasetRsp {
   common.RetInfo ret_info = 1;
   // dataset 是数据集元数据。
   Dataset dataset = 2;
+  // subjects_revision 是所属空间的标的修订号：标的、标签成员、标签市场类型或数据集标的范围变化时递增。
+  uint64 subjects_revision = 3;
 }
 
 // ListDatasetsReq 表示列出数据集的请求。
@@ -1350,54 +1322,6 @@ message ListDevicesRsp {
   common.PageResult page_result = 3;
 }
 
-// RegisterArchiveFileReq 表示登记归档文件的请求。
-message RegisterArchiveFileReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // archive_file 是待登记的归档文件元数据。
-  ArchiveFile archive_file = 2;
-}
-
-// RegisterArchiveFileRsp 表示登记归档文件的响应。
-message RegisterArchiveFileRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // archive_file 是登记后的归档文件元数据。
-  ArchiveFile archive_file = 2;
-}
-
-// ListArchiveFilesReq 表示列出归档文件的请求。
-message ListArchiveFilesReq {
-  // auth_info 是调用方身份和链路追踪信息。
-  common.AuthInfo auth_info = 1;
-  // space_id 是可选使用空间 ID 过滤条件。
-  string space_id = 2;
-  // dataset_id 是可选数据集 ID 过滤条件。
-  string dataset_id = 3;
-  // device_id 是可选设备 ID 过滤条件。
-  string device_id = 4;
-  // partition_key 是可选分区键过滤条件。
-  string partition_key = 5;
-  // time_range 是可选数据时间范围过滤条件。
-  TimeRange time_range = 6;
-  // page 是分页参数。
-  common.Page page = 7;
-  // sort_by 是排序字段：min_time、max_time、created_at 或 updated_at。
-  string sort_by = 8;
-  // sort_order 是排序方向：asc 或 desc。
-  string sort_order = 9;
-}
-
-// ListArchiveFilesRsp 表示列出归档文件的响应。
-message ListArchiveFilesRsp {
-  // ret_info 是接口返回状态。
-  common.RetInfo ret_info = 1;
-  // archive_files 是归档文件列表。
-  repeated ArchiveFile archive_files = 2;
-  // page_result 是分页结果。
-  common.PageResult page_result = 3;
-}
-
 // ClaimViewIndexBuildReq 尝试声明或接管一个 View 索引构建租约。
 message ClaimViewIndexBuildReq {
   common.AuthInfo auth_info = 1;
@@ -1762,8 +1686,4 @@ service Metadata {
   // 列出设备。
   rpc ListDevices(ListDevicesReq) returns (ListDevicesRsp);
 
-  // 登记 Parquet 归档文件。
-  rpc RegisterArchiveFile(RegisterArchiveFileReq) returns (RegisterArchiveFileRsp);
-  // 列出 Parquet 归档文件。
-  rpc ListArchiveFiles(ListArchiveFilesReq) returns (ListArchiveFilesRsp);
 }

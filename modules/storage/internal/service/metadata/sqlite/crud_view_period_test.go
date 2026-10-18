@@ -20,7 +20,7 @@ func TestCreateViewIsAtomicAndDoesNotReplaceExistingIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.CreateView(ctx, &pb.View{SpaceId: "space", ViewId: "source-view", Name: "替代视图", DatasetId: "fundamentals", Engine: "duckdb", KeepDuration: "24h"})
+	_, err = store.CreateView(ctx, &pb.View{SpaceId: "space", ViewId: "source-view", Name: "替代视图", DatasetId: "fundamentals", Engine: "duckdb"})
 	if !errors.Is(err, metadatastore.ErrViewExists) {
 		t.Fatalf("CreateView error = %v, want ErrViewExists", err)
 	}
@@ -34,8 +34,8 @@ func TestCreateViewIsAtomicAndDoesNotReplaceExistingIdentity(t *testing.T) {
 }
 
 func TestViewKeepDurationChangeDoesNotRequireABRebuild(t *testing.T) {
-	existing := &pb.View{DatasetId: "prices", Engine: "duckdb", KeepDuration: "24h"}
-	next := &pb.View{DatasetId: "prices", Engine: "duckdb", KeepDuration: "168h"}
+	existing := &pb.View{DatasetId: "prices", Engine: "duckdb"}
+	next := &pb.View{DatasetId: "prices", Engine: "duckdb"}
 	if viewIndexShapeChanged(existing, next) {
 		t.Fatal("keep_duration-only change must not trigger an A/B rebuild")
 	}
@@ -119,10 +119,17 @@ func TestViewPeriodDatasetStateInsertIdempotencyAndConflict(t *testing.T) {
 		t.Fatalf("idempotent state changed: first=%v second=%v", created, idempotent)
 	}
 
-	conflict := cloneViewPeriodDatasetState(item)
-	conflict.EventId = "period-prices-2"
-	if _, err := store.UpsertViewPeriodDatasetState(ctx, conflict); err == nil || !strings.Contains(err.Error(), "conflict") {
-		t.Fatalf("conflicting upsert error = %v", err)
+	// A later report for the same period keeps the first decision instead of
+	// failing forever: Collector re-reports periods after restarts.
+	reReport := cloneViewPeriodDatasetState(item)
+	reReport.EventId = "period-prices-2"
+	reReport.Status = "degraded"
+	recorded, err := store.UpsertViewPeriodDatasetState(ctx, reReport)
+	if err != nil {
+		t.Fatalf("re-reported period: %v", err)
+	}
+	if recorded.GetEventId() != created.GetEventId() || recorded.GetStatus() != created.GetStatus() {
+		t.Fatalf("re-report replaced the first decision: %v", recorded)
 	}
 }
 
@@ -155,11 +162,11 @@ func TestUpsertViewMergesPartialColumnsAndReplaceViewColumnsReplaces(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	view.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "source-view", ColumnName: "prices.close"}, {SpaceId: "space", ViewId: "source-view", ColumnName: "prices.old"}}
+	view.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "source-view", ColumnName: "close"}, {SpaceId: "space", ViewId: "source-view", ColumnName: "old"}}
 	if _, err := store.UpsertView(ctx, view); err != nil {
 		t.Fatal(err)
 	}
-	view.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "source-view", ColumnName: "prices.close"}}
+	view.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "source-view", ColumnName: "close"}}
 	if _, err := store.UpsertView(ctx, view); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +185,7 @@ func TestUpsertViewMergesPartialColumnsAndReplaceViewColumnsReplaces(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(columns) != 1 || columns[0].GetColumnName() != "prices.close" {
+	if len(columns) != 1 || columns[0].GetColumnName() != "close" {
 		t.Fatalf("columns after replacement = %v", columns)
 	}
 	view.Columns = []*pb.ViewColumn{}
@@ -366,9 +373,42 @@ func openViewPeriodTestStore(t *testing.T, ctx context.Context) *Store {
 	createTestDataset(t, ctx, store, "prices", "node")
 	createTestDataset(t, ctx, store, "fundamentals", "node")
 	if _, err := store.UpsertView(ctx, &pb.View{
-		SpaceId: "space", ViewId: "source-view", Name: "Source view", DatasetId: "prices", KeepDuration: "24h",
+		SpaceId: "space", ViewId: "source-view", Name: "Source view", DatasetId: "prices",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	return store
+}
+
+func TestUpsertViewRejectsColumnsOwnedByAnotherView(t *testing.T) {
+	ctx := context.Background()
+	store := openViewPeriodTestStore(t, ctx)
+	if _, err := store.UpsertView(ctx, &pb.View{
+		SpaceId: "space", ViewId: "other-view", Name: "Other view", DatasetId: "prices",
+		Columns: []*pb.ViewColumn{{ColumnName: "close"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetView(ctx, "space", "other-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.GetView(ctx, "space", "source-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Columns = []*pb.ViewColumn{{SpaceId: "space", ViewId: "other-view", ColumnName: "close", SortOrder: 99}}
+	if _, err := store.UpsertView(ctx, source); err == nil {
+		t.Fatal("期望拒绝携带其他 view_id 的列")
+	}
+	if _, err := store.ReplaceViewColumns(ctx, source); err == nil {
+		t.Fatal("ReplaceViewColumns 期望拒绝携带其他 view_id 的列")
+	}
+	after, err := store.GetView(ctx, "space", "other-view")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.GetColumns()[0].GetSortOrder() == 99 || after.GetDesiredViewRevision() != before.GetDesiredViewRevision() {
+		t.Fatalf("另一个 View 被改动: before=%v after=%v", before, after)
+	}
 }

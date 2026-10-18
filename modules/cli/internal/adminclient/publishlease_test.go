@@ -26,7 +26,7 @@ func TestCollectorPublishLeaseLifecycleAndFencePropagation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(server.URL)
+	client := collectorTestClient(server)
 	lease, err := client.AcquireCollectorPublishLease(context.Background(), "crypto", "publisher-1")
 	require.NoError(t, err)
 	require.EqualValues(t, 7, lease.FencingToken)
@@ -60,7 +60,7 @@ func TestSubmitDeleteNodesCarriesPublishFence(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(server.URL)
+	client := collectorTestClient(server)
 	client.SetCollectorPublishLease(&CollectorPublishLease{SpaceID: "crypto", LeaseID: "lease-1", FencingToken: 17})
 	response, err := client.SubmitDeleteNodes(context.Background(), []string{"node-1"})
 	require.NoError(t, err)

@@ -3,213 +3,193 @@ syntax = "proto3";
 package trpc.moox.ops;
 
 import "moox_common.proto";
+import "directory.proto";
+import "gatewaycontrol.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
-// SysDeploy 管理系统服务部署信息。
-// 管理台通过 /api/admin/sysdeploy/{method} 访问；后台服务通过网关读取 active 部署信息。
-message ServiceDeployment {
-  int64 id = 1;
-  // service_name is the stable deployment key (for example, "eventbus").
-  string service_name = 2;
-  string service_kind = 3;
-  string protocol = 4;
-  string host = 5;
-  int32 port = 6;
-  string base_url = 7;
-  string rpc_address = 8;
-  string gateway_path = 9;
-  string scope = 10;
-  string status = 11;
-  string description = 12;
-  string extra_config = 13;
-  string created_at = 14;
-  string updated_at = 15;
-  string node_id = 16;
-  string gateway_service_id = 17;
-  bool gateway_enabled = 18;
-}
-
-message ServiceDeploymentEndpoint {
-  string service_name = 1;
-  string service_kind = 2;
-  string protocol = 3;
-  string host = 4;
-  int32 port = 5;
-  string base_url = 6;
-  string rpc_address = 7;
-  string gateway_path = 8;
-  string scope = 9;
-  string status = 10;
-  string node_id = 11;
-  string gateway_service_id = 12;
-  bool gateway_enabled = 13;
-}
-
-message ServiceDeploymentWarning {
-  string code = 1;
-  string message = 2;
-  string service_name = 3;
-  string related_endpoint = 4;
-}
-
-message ListServiceDeploymentsReq {
-  string service_name = 1;
-  string service_kind = 2;
-  string scope = 3;
-  string status = 4;
-  trpc.moox.common.Page page = 5;
-  string node_id = 6;
-  optional bool gateway_enabled = 7;
-}
-
-message ListServiceDeploymentsRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-  repeated ServiceDeployment deployments = 2;
-  trpc.moox.common.PageResult page_result = 3;
-  repeated ServiceDeploymentWarning warnings = 4;
-}
-
-message GetServiceDeploymentReq {
-  string service_name = 1;
-  string node_id = 2;
-}
-
-message GetServiceDeploymentRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-  ServiceDeployment deployment = 2;
-  repeated ServiceDeploymentWarning warnings = 3;
-}
-
-message CreateServiceDeploymentReq {
-  ServiceDeployment deployment = 1;
-}
-
-message CreateServiceDeploymentRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-  ServiceDeployment deployment = 2;
-  repeated ServiceDeploymentWarning warnings = 3;
-}
-
-message UpdateServiceDeploymentReq {
-  string service_name = 1;
-  ServiceDeployment deployment = 2;
-  string node_id = 3;
-}
-
-message UpdateServiceDeploymentRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-  ServiceDeployment deployment = 2;
-  repeated ServiceDeploymentWarning warnings = 3;
-}
-
-message DeleteServiceDeploymentReq {
-  string service_name = 1;
-  string node_id = 2;
-}
-
-message DeleteServiceDeploymentRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-  repeated ServiceDeploymentWarning warnings = 2;
-}
-
-message ListActiveServiceDeploymentsReq {
-  string node_id = 1;
-}
-
-message ListActiveServiceDeploymentsRsp {
-  trpc.moox.common.RetInfo ret_info = 1;
-  repeated ServiceDeployment deployments = 2;
-  map<string, ServiceDeploymentEndpoint> deployment_map = 3;
-}
-
-message GatewayNode {
-  string node_id = 1;
-  int64 host_id = 2;
-  string name = 3;
-  string public_address = 4;
+// SysDeploy 管理规范主机和组件放置。
+message DeploymentHost {
+  string host_id = 1;
+  string address = 2;
+  string private_address = 3;
+  string region = 4;
   string status = 5;
-  string route_hash = 6;
-  string applied_route_hash = 7;
-  int32 route_count = 8;
-  string last_seen_at = 9;
-  string last_error = 10;
-  string created_at = 11;
-  string updated_at = 12;
+  string description = 6;
+  string created_at = 7;
+  string updated_at = 8;
+  // direct 或 outbound（只能出站，经 control 网关反向连接中转）。
+  string reachability = 9;
 }
 
-message ListGatewayNodesReq {
-  string node_id = 1;
+message ComponentPlacement {
+  string host_id = 1;
+  string component_id = 2;
+  string status = 3;
+  string created_at = 4;
+  string updated_at = 5;
+}
+
+message HostGatewayRuntimeStatus {
+  string instance_id = 1;
+  string version = 2;
+  string expected_hash = 3;
+  string applied_hash = 4;
+  int64 route_count = 5;
+  string last_seen_at = 6;
+  string last_error = 7;
+  string previous_instance_id = 8;
+  string replaced_at = 9;
+  string conflict_instance_id = 10;
+  string conflict_seen_at = 11;
+  // control 网关上报的各出站主机反向连接会话。
+  repeated trpc.moox.admin.RelaySessionStatus relay_sessions = 12;
+}
+
+message GetCatalogReq {}
+message GetCatalogRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  // Exact embedded shared catalog bytes, including Doctor metadata.
+  string catalog_yaml = 2;
+  string sha256 = 3;
+  // Authoritative protected host; browsers must not infer it from its name.
+  string control_host_id = 4;
+}
+
+// ListHostsReq/Rsp already belong to Ssh in this protobuf package.
+message ListDeploymentHostsReq {
+  string host_id = 1;
   string status = 2;
   trpc.moox.common.Page page = 3;
 }
-
-message ListGatewayNodesRsp {
+message ListDeploymentHostsRsp {
   trpc.moox.common.RetInfo ret_info = 1;
-  repeated GatewayNode nodes = 2;
+  repeated DeploymentHost hosts = 2;
   trpc.moox.common.PageResult page_result = 3;
 }
 
-message CreateGatewayNodeReq {
-  GatewayNode node = 1;
+message ListPlacementsReq {
+  string host_id = 1;
+  string component_id = 2;
+  string status = 3;
+  trpc.moox.common.Page page = 4;
 }
-
-message CreateGatewayNodeRsp {
+message ListPlacementsRsp {
   trpc.moox.common.RetInfo ret_info = 1;
-  GatewayNode node = 2;
+  repeated ComponentPlacement placements = 2;
+  trpc.moox.common.PageResult page_result = 3;
 }
 
-message UpdateGatewayNodeReq {
-  string node_id = 1;
-  GatewayNode node = 2;
+message GetHostRoutesReq {
+  string host_id = 1;
 }
-
-message UpdateGatewayNodeRsp {
+message GetHostRoutesRsp {
   trpc.moox.common.RetInfo ret_info = 1;
-  GatewayNode node = 2;
+  string host_id = 2;
+  // Definition hash excludes keys; the final snapshot hash is in gateway_status.
+  string definition_hash = 3;
+  repeated trpc.moox.admin.HostGatewayRoute routes = 4;
+  HostGatewayRuntimeStatus gateway_status = 5;
+  uint32 snapshot_schema_version = 6;
+  // Time this response's desired snapshot was actually compiled, not a
+  // gateway application time or a persisted configuration revision time.
+  string compiled_at = 7;
 }
 
-message DeleteGatewayNodeReq {
-  string node_id = 1;
+message GetDirectoryReq {}
+message GetDirectoryRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  trpc.moox.hostgateway.ServiceDirectory directory = 2;
 }
 
-message DeleteGatewayNodeRsp {
+message SetHostStatusReq {
+  string host_id = 1;
+  string status = 2;
+}
+message SetHostStatusRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+}
+message SetPlacementStatusReq {
+  string host_id = 1;
+  string component_id = 2;
+  string status = 3;
+}
+message SetPlacementStatusRsp {
   trpc.moox.common.RetInfo ret_info = 1;
 }
 
-message GatewayRoute {
-  string service_id = 1;
+message SyncHostPlacementsReq {
+  string host_id = 1;
   string address = 2;
-  string service_path = 3;
-  int32 timeout_ms = 4;
-  int64 max_body_bytes = 5;
-  repeated string allowed_methods = 6;
-  repeated string allowed_callers = 7;
+  string private_address = 3;
+  string region = 4;
+  string description = 5;
+  // Complete business component list. Host-scope components are automatic.
+  repeated string component_ids = 6;
+  // 空或 direct 表示可直达，outbound 表示只能出站。
+  string reachability = 7;
 }
-
-message GetGatewayNodeRoutesReq {
-  string node_id = 1;
-}
-
-message GetGatewayNodeRoutesRsp {
+message SyncHostPlacementsRsp {
   trpc.moox.common.RetInfo ret_info = 1;
-  string node_id = 2;
-  string route_hash = 3;
-  string generated_at = 4;
-  bool disabled = 5;
-  repeated GatewayRoute routes = 6;
+}
+
+message DeleteDeploymentHostReq {
+  string host_id = 1;
+}
+message DeleteDeploymentHostRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+}
+
+// EventBus 维护：由 Admin 持管理员令牌代为执行，调用方不需要在本机放管理员凭据文件。
+// 只允许 Storage View 的流、消费者和数据事件主题（服务端另有白名单校验）。
+message EventBusConsumerState {
+  string durable = 1;
+  bool exists = 2;
+  // 多主题过滤；旧式单主题过滤放在 filter_subject。
+  repeated string filter_subjects = 3;
+  string filter_subject = 4;
+}
+message InspectEventBusReq {
+  string stream = 1;
+  repeated string durables = 2;
+}
+message InspectEventBusRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  repeated EventBusConsumerState consumers = 2;
+}
+message DeleteEventBusConsumersReq {
+  string stream = 1;
+  repeated string durables = 2;
+}
+message DeleteEventBusConsumersRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  // 实际删除的消费者；本来就不存在的不计入。
+  repeated string deleted = 2;
+  // 是否已向 EventBus 发出过删除请求。为 false 表示失败发生在发出之前（参数不合规、连不上 EventBus），EventBus 上没有任何改动；
+  // 为 true 时即使出错，也可能已经改动，调用方不能当作“什么都没发生”。
+  bool attempted = 3;
+}
+message PurgeEventBusSubjectsReq {
+  string stream = 1;
+  repeated string subjects = 2;
+}
+message PurgeEventBusSubjectsRsp {
+  trpc.moox.common.RetInfo ret_info = 1;
+  // 是否已向 EventBus 发出过清除请求，含义同 DeleteEventBusConsumersRsp.attempted。
+  bool attempted = 2;
 }
 
 service SysDeploy {
-  rpc ListServiceDeployments(ListServiceDeploymentsReq) returns (ListServiceDeploymentsRsp);
-  rpc GetServiceDeployment(GetServiceDeploymentReq) returns (GetServiceDeploymentRsp);
-  rpc CreateServiceDeployment(CreateServiceDeploymentReq) returns (CreateServiceDeploymentRsp);
-  rpc UpdateServiceDeployment(UpdateServiceDeploymentReq) returns (UpdateServiceDeploymentRsp);
-  rpc DeleteServiceDeployment(DeleteServiceDeploymentReq) returns (DeleteServiceDeploymentRsp);
-  rpc ListActiveServiceDeployments(ListActiveServiceDeploymentsReq) returns (ListActiveServiceDeploymentsRsp);
-  rpc ListGatewayNodes(ListGatewayNodesReq) returns (ListGatewayNodesRsp);
-  rpc CreateGatewayNode(CreateGatewayNodeReq) returns (CreateGatewayNodeRsp);
-  rpc UpdateGatewayNode(UpdateGatewayNodeReq) returns (UpdateGatewayNodeRsp);
-  rpc DeleteGatewayNode(DeleteGatewayNodeReq) returns (DeleteGatewayNodeRsp);
-  rpc GetGatewayNodeRoutes(GetGatewayNodeRoutesReq) returns (GetGatewayNodeRoutesRsp);
+  rpc GetCatalog(GetCatalogReq) returns (GetCatalogRsp);
+  rpc ListHosts(ListDeploymentHostsReq) returns (ListDeploymentHostsRsp);
+  rpc ListPlacements(ListPlacementsReq) returns (ListPlacementsRsp);
+  rpc GetHostRoutes(GetHostRoutesReq) returns (GetHostRoutesRsp);
+  rpc GetDirectory(GetDirectoryReq) returns (GetDirectoryRsp);
+  rpc SetHostStatus(SetHostStatusReq) returns (SetHostStatusRsp);
+  rpc SetPlacementStatus(SetPlacementStatusReq) returns (SetPlacementStatusRsp);
+  rpc SyncHostPlacements(SyncHostPlacementsReq) returns (SyncHostPlacementsRsp);
+  rpc DeleteHost(DeleteDeploymentHostReq) returns (DeleteDeploymentHostRsp);
+  rpc InspectEventBus(InspectEventBusReq) returns (InspectEventBusRsp);
+  rpc DeleteEventBusConsumers(DeleteEventBusConsumersReq) returns (DeleteEventBusConsumersRsp);
+  rpc PurgeEventBusSubjects(PurgeEventBusSubjectsReq) returns (PurgeEventBusSubjectsRsp);
 }

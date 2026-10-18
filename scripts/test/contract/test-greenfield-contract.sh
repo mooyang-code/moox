@@ -44,8 +44,6 @@ check_absent "single-value row operation contract remains" \
   --glob '*.proto' --glob '*.go' --glob '*.ts' --glob '*.vue' \
   modules/storage packages/storagepb web/src
 
-node scripts/check/check-collector-planned-node-removal.mjs
-
 # Do not gate the greenfield contract on x/tools/deadcode. MooX exposes
 # package-internal APIs through tRPC registration and retains bounded manual
 # catch-up/E2E helpers alongside the Timer runtime; deadcode's Go 1.25 roots

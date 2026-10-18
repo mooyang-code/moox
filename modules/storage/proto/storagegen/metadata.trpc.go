@@ -169,10 +169,6 @@ type MetadataService interface {
 	GetDevice(ctx context.Context, req *GetDeviceReq) (*GetDeviceRsp, error)
 	// ListDevices 列出设备。
 	ListDevices(ctx context.Context, req *ListDevicesReq) (*ListDevicesRsp, error)
-	// RegisterArchiveFile 登记 Parquet 归档文件。
-	RegisterArchiveFile(ctx context.Context, req *RegisterArchiveFileReq) (*RegisterArchiveFileRsp, error)
-	// ListArchiveFiles 列出 Parquet 归档文件。
-	ListArchiveFiles(ctx context.Context, req *ListArchiveFilesReq) (*ListArchiveFilesRsp, error)
 }
 
 func MetadataService_CreateSpace_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -1525,42 +1521,6 @@ func MetadataService_ListDevices_Handler(svr interface{}, ctx context.Context, f
 	return rsp, nil
 }
 
-func MetadataService_RegisterArchiveFile_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &RegisterArchiveFileReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).RegisterArchiveFile(ctx, reqbody.(*RegisterArchiveFileReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func MetadataService_ListArchiveFiles_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListArchiveFilesReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(MetadataService).ListArchiveFiles(ctx, reqbody.(*ListArchiveFilesReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // MetadataServer_ServiceDesc descriptor for server.RegisterService.
 var MetadataServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.Metadata",
@@ -1865,14 +1825,6 @@ var MetadataServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.Metadata/ListDevices",
 			Func: MetadataService_ListDevices_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/RegisterArchiveFile",
-			Func: MetadataService_RegisterArchiveFile_Handler,
-		},
-		{
-			Name: "/trpc.moox.storage.Metadata/ListArchiveFiles",
-			Func: MetadataService_ListArchiveFiles_Handler,
 		},
 	},
 }
@@ -2229,16 +2181,6 @@ func (s *UnimplementedMetadata) ListDevices(ctx context.Context, req *ListDevice
 	return nil, errors.New("rpc ListDevices of service Metadata is not implemented")
 }
 
-// RegisterArchiveFile 登记 Parquet 归档文件。
-func (s *UnimplementedMetadata) RegisterArchiveFile(ctx context.Context, req *RegisterArchiveFileReq) (*RegisterArchiveFileRsp, error) {
-	return nil, errors.New("rpc RegisterArchiveFile of service Metadata is not implemented")
-}
-
-// ListArchiveFiles 列出 Parquet 归档文件。
-func (s *UnimplementedMetadata) ListArchiveFiles(ctx context.Context, req *ListArchiveFilesReq) (*ListArchiveFilesRsp, error) {
-	return nil, errors.New("rpc ListArchiveFiles of service Metadata is not implemented")
-}
-
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
 // END ======================================= Server Service Definition ======================================= END
@@ -2397,10 +2339,6 @@ type MetadataClientProxy interface {
 	GetDevice(ctx context.Context, req *GetDeviceReq, opts ...client.Option) (rsp *GetDeviceRsp, err error)
 	// ListDevices 列出设备。
 	ListDevices(ctx context.Context, req *ListDevicesReq, opts ...client.Option) (rsp *ListDevicesRsp, err error)
-	// RegisterArchiveFile 登记 Parquet 归档文件。
-	RegisterArchiveFile(ctx context.Context, req *RegisterArchiveFileReq, opts ...client.Option) (rsp *RegisterArchiveFileRsp, err error)
-	// ListArchiveFiles 列出 Parquet 归档文件。
-	ListArchiveFiles(ctx context.Context, req *ListArchiveFilesReq, opts ...client.Option) (rsp *ListArchiveFilesRsp, err error)
 }
 
 type MetadataClientProxyImpl struct {
@@ -3906,46 +3844,6 @@ func (c *MetadataClientProxyImpl) ListDevices(ctx context.Context, req *ListDevi
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListDevicesRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) RegisterArchiveFile(ctx context.Context, req *RegisterArchiveFileReq, opts ...client.Option) (*RegisterArchiveFileRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/RegisterArchiveFile")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("RegisterArchiveFile")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &RegisterArchiveFileRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *MetadataClientProxyImpl) ListArchiveFiles(ctx context.Context, req *ListArchiveFilesReq, opts ...client.Option) (*ListArchiveFilesRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.storage.Metadata/ListArchiveFiles")
-	msg.WithCalleeServiceName(MetadataServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("storage")
-	msg.WithCalleeService("Metadata")
-	msg.WithCalleeMethod("ListArchiveFiles")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListArchiveFilesRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

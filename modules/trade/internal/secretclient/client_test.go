@@ -4,113 +4,62 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-go/codec"
 )
 
-func TestGetExchangeSecretReadsOnlyConfiguredSecretWithServiceAuth(t *testing.T) {
-	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(
-		writer http.ResponseWriter,
-		request *http.Request,
-	) {
-		calls.Add(1)
-		if request.URL.Path != "/api/service/secret/GetSecretValue" {
-			t.Fatalf("path = %q", request.URL.Path)
-		}
-		if request.Header.Get("X-Moox-Signature") == "" ||
-			request.Header.Get("X-Moox-Target-Node") != "gateway-gz-122" {
-			t.Fatal("missing node-targeted gateway auth")
-		}
-		var body getSecretValueReq
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		if body.SecretID != "sec_1" {
-			t.Fatalf("secret_id = %q", body.SecretID)
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"ret_info": map[string]any{"code": 0, "msg": "success"},
-			"secret": map[string]any{
-				"secret_id":     "sec_1",
-				"name":          "Binance",
-				"category":      "exchange",
-				"pro" + "vider": "binance",
-				"secret_type":   "api_key",
-				"key_id":        "api-key",
-				"secret_value":  "plain-secret",
-				"status":        "active",
-				"extra_config":  `{"market_type":"swap"}`,
-			},
-		})
-	}))
-	defer server.Close()
+type gatewayFunc func(context.Context, string, string, int, []byte) ([]byte, error)
 
-	client := New(Config{
-		GatewayBaseURL: server.URL,
-		ServiceAuth: ServiceAuthConfig{
-			AccessKey: "access", SecretKey: "secret",
-			TargetNode: "gateway-gz-122",
-		},
-	})
-	secret, err := client.GetExchangeSecret(context.Background(), "sec_1")
-	if err != nil {
-		t.Fatalf("GetExchangeSecret() error = %v", err)
-	}
-	if calls.Load() != 1 {
-		t.Fatalf("HTTP calls = %d, want 1", calls.Load())
-	}
-	if secret.SecretValue != "plain-secret" ||
-		secret.KeyID != "api-key" ||
-		secret.Exchange != exchange.ExchangeBinance {
-		t.Fatalf("secret = %+v", secret)
-	}
+func (f gatewayFunc) Forward(ctx context.Context, service, method string, serialization int, body []byte) ([]byte, error) {
+	return f(ctx, service, method, serialization, body)
+}
+
+func TestGetExchangeSecretReadsConfiguredSecretThroughNativeGateway(t *testing.T) {
+	calls := 0
+	client := New(gatewayFunc(func(_ context.Context, service, method string, serialization int, body []byte) ([]byte, error) {
+		calls++
+		require.Equal(t, "trpc.moox.ops.SecretMgr", service)
+		require.Equal(t, "GetSecretValue", method)
+		require.Equal(t, codec.SerializationTypeJSON, serialization)
+		var request getSecretValueReq
+		require.NoError(t, json.Unmarshal(body, &request))
+		require.Equal(t, "sec_1", request.SecretID)
+		return json.Marshal(map[string]any{"ret_info": map[string]any{"code": 0}, "secret": map[string]any{
+			"secret_id": "sec_1", "name": "Binance", "category": "exchange", "pro" + "vider": "binance",
+			"key_id": "api-key", "secret_value": "plain-secret", "status": "active", "extra_config": `{}`,
+		}})
+	}))
+	secret, err := client.GetExchangeSecret(t.Context(), "sec_1")
+	require.NoError(t, err)
+	require.Equal(t, "plain-secret", secret.SecretValue)
+	require.Equal(t, "api-key", secret.KeyID)
+	require.Equal(t, exchange.ExchangeBinance, secret.Exchange)
+	require.Equal(t, 1, calls)
 }
 
 func TestGetExchangeSecretRejectsInvalidInputAndMetadata(t *testing.T) {
-	client := New(Config{})
-	if _, err := client.GetExchangeSecret(context.Background(), " "); !errors.Is(
-		err,
-		account.ErrInvalidCredential,
-	) {
-		t.Fatalf("empty secret ID error = %v", err)
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(
-		writer http.ResponseWriter,
-		_ *http.Request,
-	) {
-		writer.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(writer).Encode(map[string]any{
-			"ret_info": map[string]any{"code": 0},
-			"secret": map[string]any{
-				"secret_id":     "different",
-				"category":      "cloud",
-				"pro" + "vider": "binance",
-				"status":        "active",
-				"key_id":        "key",
-				"secret_value":  "value",
-			},
-		})
+	_, err := New(nil).GetExchangeSecret(t.Context(), " ")
+	require.ErrorIs(t, err, account.ErrInvalidCredential)
+	client := New(gatewayFunc(func(context.Context, string, string, int, []byte) ([]byte, error) {
+		return json.Marshal(map[string]any{"ret_info": map[string]any{"code": 0}, "secret": map[string]any{
+			"secret_id": "different", "category": "cloud", "pro" + "vider": "binance", "status": "active", "key_id": "key", "secret_value": "value",
+		}})
 	}))
-	defer server.Close()
+	_, err = client.GetExchangeSecret(t.Context(), "secret-1")
+	require.ErrorIs(t, err, account.ErrInvalidCredential)
+}
 
-	client = New(Config{
-		GatewayBaseURL: server.URL,
-		ServiceAuth: ServiceAuthConfig{
-			AccessKey: "access", SecretKey: "secret", TargetNode: "gateway-test",
-		},
-	})
-	if _, err := client.GetExchangeSecret(
-		context.Background(),
-		"secret-1",
-	); !errors.Is(err, account.ErrInvalidCredential) {
-		t.Fatalf("metadata error = %v, want ErrInvalidCredential", err)
-	}
+func TestGetExchangeSecretLeavesRetryToSharedGateway(t *testing.T) {
+	calls := 0
+	transportErr := errors.New("response lost")
+	client := New(gatewayFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { calls++; return nil, transportErr }))
+	_, err := client.GetExchangeSecret(t.Context(), "secret-1")
+	require.ErrorIs(t, err, transportErr)
+	require.Equal(t, 1, calls)
+	_, err = New(nil).GetExchangeSecret(t.Context(), "secret-1")
+	require.Error(t, err)
 }

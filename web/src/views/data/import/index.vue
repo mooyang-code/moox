@@ -134,7 +134,9 @@ import { upsertFields } from "@/api/storage/access";
 import { listDatasetColumns, listDatasets } from "@/api/storage/metadata";
 import type { Dataset, DatasetColumn, FieldValue, FieldValueType, RowFieldUpsert, TypedValue } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
+import { parseInt64 } from "./int64";
 
 defineOptions({ name: "DataImport" });
 
@@ -169,25 +171,36 @@ const isTimeSeriesDataset = computed(() => isTimeSeriesDataKind(selectedDataset.
 const canImport = computed(() => parsedRows.value.length > 0 && errors.value.length === 0 && !!form.dataset_id);
 const previewRows = computed(() => parsedRows.value.slice(0, 50).map((row, index) => ({ id: String(index), ...row })));
 
+const datasetsGuard = createLatestRequestGuard();
+const columnsGuard = createLatestRequestGuard();
+
 async function loadDatasets() {
-  if (!selectedSpaceId.value) {
+  const spaceId = selectedSpaceId.value;
+  const request = datasetsGuard.begin();
+  if (!spaceId) {
     datasets.value = [];
     return;
   }
-  const rsp = await listDatasets({ space_id: selectedSpaceId.value, page: { page: 1, size: 500 } });
+  const rsp = await listDatasets({ space_id: spaceId, page: { page: 1, size: 500 } });
+  if (!request.isLatest() || spaceId !== selectedSpaceId.value) return;
   datasets.value = rsp.datasets || [];
 }
 
 async function loadColumns() {
-  if (!selectedSpaceId.value || !form.dataset_id) {
+  const spaceId = selectedSpaceId.value;
+  const datasetId = form.dataset_id;
+  const request = columnsGuard.begin();
+  if (!spaceId || !datasetId) {
     columns.value = [];
     return;
   }
   const rsp = await listDatasetColumns({
-    space_id: selectedSpaceId.value,
-    dataset_id: form.dataset_id,
+    space_id: spaceId,
+    dataset_id: datasetId,
     page: { page: 1, size: 1000 }
   });
+  // 同一空间内快速切换 Dataset 时，旧 Dataset 的列不能覆盖新选择
+  if (!request.isLatest() || spaceId !== selectedSpaceId.value || datasetId !== form.dataset_id) return;
   columns.value = rsp.columns || [];
 }
 
@@ -197,14 +210,24 @@ async function onDatasetChange() {
   await loadColumns();
 }
 
+// 文件读取序号：连续改选文件时读取可能乱序完成，只有最新一次选择的读取结果才能写入
+let fileReadToken = 0;
+
 async function onFileChange(event: Event) {
   const input = event.target as HTMLInputElement;
-  file.value = input.files?.[0] || undefined;
-  fileText.value = file.value ? await file.value.text() : "";
+  const token = ++fileReadToken;
+  const selected = input.files?.[0] || undefined;
+  // 选择文件的同一时刻就清空旧内容与校验结果：读取期间不能拿上一个文件的内容去校验或导入
+  file.value = selected;
+  fileText.value = "";
   headers.value = [];
   parsedRows.value = [];
   errors.value = [];
   dryRunSummary.value = "";
+  if (!selected) return;
+  const text = await selected.text();
+  if (token !== fileReadToken) return;
+  fileText.value = text;
 }
 
 function parseCsvLine(line: string) {
@@ -290,7 +313,7 @@ function validateHeaders() {
 }
 
 function typedValue(valueType: FieldValueType, raw: string): TypedValue {
-  if (valueType === "FIELD_VALUE_TYPE_INT" || valueType === 2) return { int_value: raw ? Number(raw) : 0 };
+  if (valueType === "FIELD_VALUE_TYPE_INT" || valueType === 2) return { int_value: parseInt64(raw) };
   if (valueType === "FIELD_VALUE_TYPE_DOUBLE" || valueType === 3) return { double_value: raw ? Number(raw) : 0 };
   if (valueType === "FIELD_VALUE_TYPE_BOOL" || valueType === 4) return { bool_value: raw === "true" || raw === "1" };
   if (valueType === "FIELD_VALUE_TYPE_TIME" || valueType === 5) return { time_value: raw };
@@ -317,30 +340,50 @@ function rowFields(row: CsvRow): FieldValue[] {
 async function dryRun() {
   errors.value = [];
   dryRunSummary.value = "";
+  // 固定本次校验的文件序号与内容：等待 loadColumns 期间用户可能改选了别的文件，旧校验不能解析或写入新文件的状态
+  const readToken = fileReadToken;
+  const text = fileText.value;
   try {
-    if (!fileText.value) throw new Error("请选择本地 CSV 文件");
+    if (!text) throw new Error("请选择本地 CSV 文件");
     if (!form.dataset_id) throw new Error("请选择 Dataset");
     if (form.format !== "auto" && form.format !== "csv") throw new Error(`暂不支持格式：${form.format}`);
     if (isTimeSeriesDataset.value && (!form.subject_id || !form.freq)) throw new Error("TimeSeries 导入需要填写 Subject 和 Freq");
     await loadColumns();
-    const parsed = parseCsv(fileText.value);
+    if (readToken !== fileReadToken) return; // 已改选文件：这次校验作废，不写入任何结果
+    const parsed = parseCsv(text);
     headers.value = parsed.headers;
     parsedRows.value = parsed.rows;
     errors.value = validateHeaders();
     if (errors.value.length === 0) {
+      // 逐行转换一次：整数格式或 INT64 范围错误在校验阶段暴露，而不是导入时才失败
+      try {
+        parsedRows.value.forEach(row => rowFields(row));
+      } catch (error) {
+        errors.value = [error instanceof Error ? error.message : "CSV 值转换失败"];
+      }
+    }
+    if (errors.value.length === 0) {
       dryRunSummary.value = `校验通过：${parsedRows.value.length} 行，${headers.value.length} 列`;
     }
   } catch (error) {
+    if (readToken !== fileReadToken) return;
     errors.value = [error instanceof Error ? error.message : "CSV 校验失败"];
   }
 }
 
 async function importRows() {
+  // 导入固定在发起时的空间与 Dataset：校验期间切换空间不能把原来的 CSV 写进新空间。
+  const space_id = spaceStore.requireSpaceId();
+  const datasetId = form.dataset_id;
+  const importFileToken = fileReadToken;
   await dryRun();
+  if (spaceStore.selectedSpaceId !== space_id || form.dataset_id !== datasetId || importFileToken !== fileReadToken) {
+    Message.warning("空间、Dataset 或文件已变化，已取消导入，请重新校验后再导入");
+    return;
+  }
   if (!canImport.value) return;
   loading.value = true;
   try {
-    const space_id = spaceStore.requireSpaceId();
     if (isTimeSeriesDataset.value) {
       const rows: RowFieldUpsert[] = parsedRows.value.map(row => ({
         key: {
@@ -376,7 +419,19 @@ async function importRows() {
   }
 }
 
-watch(selectedSpaceId, loadDatasets);
+// 切换空间：旧空间的 Dataset、字段映射与已解析的 CSV 都不再有效，清空后重新加载。
+watch(selectedSpaceId, () => {
+  datasetsGuard.invalidate();
+  columnsGuard.invalidate();
+  datasets.value = [];
+  form.dataset_id = "";
+  columns.value = [];
+  parsedRows.value = [];
+  headers.value = [];
+  errors.value = [];
+  dryRunSummary.value = "";
+  void loadDatasets();
+});
 onMounted(loadDatasets);
 </script>
 

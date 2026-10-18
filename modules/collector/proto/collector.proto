@@ -7,7 +7,7 @@ import "google/protobuf/struct.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/collector/proto/collectorgen;collectorpb";
 
-// CollectMgr 管理采集任务、任务实例和任务结果。
+// CollectMgr 管理采集任务、采集计划、K 线检查与补采。
 // 纯 RPC 服务，由统一 HTTP 转发层调度：
 //   - /api/admin/collectmgr/{method}（JWT，面向前端）
 //
@@ -15,13 +15,6 @@ option go_package = "github.com/mooyang-code/moox/modules/collector/proto/collec
 // code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。
 //
 // space_id 由请求参数显式传入；服务端按 space_id 做租户隔离。
-
-enum TaskInstanceStatus {
-  TASK_INSTANCE_STATUS_UNSPECIFIED = 0;
-  TASK_INSTANCE_STATUS_PENDING = 1;
-  TASK_INSTANCE_STATUS_SUCCESS = 2;
-  TASK_INSTANCE_STATUS_FAILED = 3;
-}
 
 // CollectionTask 是用户可见的采集任务。
 message CollectionTask {
@@ -56,7 +49,6 @@ message TaskResult {
 // ResultConfig 是结果存储的高级配置，不允许指定既有结果。
 message ResultConfig {
   string data_node_id = 1;
-  string keep_duration = 2;
   string description = 3;
 }
 
@@ -119,6 +111,8 @@ message TaskResultInventoryEntry {
   string series_hash = 25;
   uint32 expected_count = 26;
   repeated string output_fields = 27;
+  // allowed_lateness_seconds 是该结果数据集周期的允许迟到时间；Monitor 据此判断新鲜度。
+  int32 allowed_lateness_seconds = 28;
 }
 
 message GetTaskResultInventoryReq {
@@ -180,71 +174,6 @@ message DeleteTaskRsp {
   common.RetInfo ret_info = 1;
 }
 
-// TaskInstance 任务实例。
-message TaskInstance {
-  string space_id = 1;
-  string run_id = 2;
-  string instance_id = 3;
-  string provider = 4;
-  string market_type = 5;
-  string data_type = 6;
-  string request_key = 7;
-  string subject_id = 8;
-  string frequency = 9;
-  google.protobuf.Struct task_params = 11;
-  TaskInstanceStatus last_exec_status = 13;
-  string last_exec_time = 14;  // RFC3339，可为空
-  google.protobuf.Struct result = 15;
-  bool is_deleted = 16;
-  string create_time = 17;     // RFC3339
-  string modify_time = 18;     // RFC3339
-  string function_name = 19;   // 当前绑定的 SCF 函数名
-  string source_id = 20;       // 当前绑定的 Provider 来源
-  repeated TaskWriteTarget targets = 21;
-  string provider_symbol = 22; // Provider 实际请求 symbol
-  string target_data_time = 23; // RFC3339，当前原子请求目标数据时间
-  string series_tag = 24;      // Storage/readiness 共享的 series identity
-}
-
-message TaskWriteTarget {
-  string write_target_id = 1;
-  string task_id = 2;
-  string dataset_id = 3;
-  string view_id = 4;
-  repeated string output_fields = 5;
-  string status = 6;
-  string last_error = 7;
-}
-
-// TaskInstanceFilter 任务实例筛选条件。
-message TaskInstanceFilter {
-  string space_id = 1;
-  string task_id = 2;
-  string instance_id = 3;
-  string provider = 4;
-  string market_type = 5;
-  string data_type = 6;
-  string dataset_id = 7;
-  string subject_id = 8;
-  string frequency = 9;
-  TaskInstanceStatus last_exec_status = 11;
-  bool include_deleted = 13;
-  common.Page page = 14;
-  string function_name = 15; // 当前绑定的 SCF 函数名
-  string source_id = 16;     // 当前绑定的 Provider 来源
-}
-
-message GetTaskInstanceListReq {
-  TaskInstanceFilter filter = 1;
-}
-
-message GetTaskInstanceListRsp {
-  common.RetInfo ret_info = 1;
-  repeated TaskInstance instances = 2;
-  common.PageResult page = 3;
-}
-
-// ReportInstanceStatusReq 上报任务状态请求。
 // DataTypeConfig 数据类型配置。
 message DataTypeConfig {
   int32 id = 1;
@@ -341,24 +270,313 @@ message GetKlineResampleBackfillRsp {
   uint64 canceled = 14;
 }
 
-// ClaimTimerBatchReq binds one Timer invocation to its durable period batch.
-// Work membership is derived from Collector's persisted manifest, never from
-// client-submitted items or tag names.
-message ClaimTimerBatchReq {
+message SyncSubjectsReq {
+  // 为空表示所有空间。
   string space_id = 1;
-  string function_name = 2;
-  string request_id = 3;
-  uint32 group_id = 4;
-  uint32 group_count = 5;
-  string binding_hash = 6;
-  int64 tick_time = 7;
+  // 为空表示所选空间内的所有标签；指定时必须同时指定 space_id。
+  string tag_id = 2;
+  // 同时刷新标的属性（忽略各任务的 cron 窗口）。
+  bool include_attributes = 3;
 }
 
-message ClaimTimerBatchRsp {
+message SubjectTagSyncResult {
+  string space_id = 1;
+  string tag_id = 2;
+  // success / failed / skipped（非自动同步的标签）。
+  string status = 3;
+  uint32 subjects = 4;
+  // failed / skipped 时的原因。
+  string message = 5;
+}
+
+message SubjectAttributeSyncResult {
+  string space_id = 1;
+  string status = 2;
+  string message = 3;
+}
+
+message SyncSubjectsRsp {
   common.RetInfo ret_info = 1;
-  bool claimed = 2;
-  bytes request_json = 3;
-  int64 period_deadline_at = 4;
+  repeated SubjectTagSyncResult tags = 2;
+  repeated SubjectAttributeSyncResult attributes = 3;
+}
+
+// ===== K 线完整性检查与补采 =====
+
+message CheckKlineReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string subject_id = 3;
+  // from 含、to 不含，RFC3339。
+  string from = 4;
+  string to = 5;
+  // deep 为 true 时额外校验每根 K 线的字段齐全。
+  bool deep = 6;
+}
+
+message KlineGap {
+  string dataset_id = 1;
+  string frequency = 2;
+  string subject_id = 3;
+  string from = 4;
+  // to 是缺失区间的右开端点。
+  string to = 5;
+  int32 missing = 6;
+}
+
+message CheckKlineRsp {
+  common.RetInfo ret_info = 1;
+  repeated KlineGap gaps = 2;
+  int32 expected = 3;
+  int32 missing = 4;
+  bool truncated = 5;
+  // absent 是已扣除的、确认行情源没有的根数，不计入 missing。
+  int32 absent = 6;
+}
+
+message SubmitKlineBackfillReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string subject_id = 3;
+  string from = 4;
+  string to = 5;
+  // force 为 true 时不检查缺口，范围内应有的 K 线全部重拉。
+  bool force = 6;
+}
+
+message SubmitKlineBackfillRsp {
+  common.RetInfo ret_info = 1;
+  // job_id 为空表示范围内没有缺口。
+  string job_id = 2;
+  int32 chunks = 3;
+}
+
+message KlineBackfillChunk {
+  string dataset_id = 1;
+  string frequency = 2;
+  string subject_id = 3;
+  string from = 4;
+  string to = 5;
+  string status = 6;
+  int32 attempts = 7;
+  string last_error = 8;
+  int32 rows = 9;
+  // dataset_name 是数据集的展示名（所属采集任务名），任务已删除时为空。
+  string dataset_name = 10;
+}
+
+message KlineBackfillJob {
+  string job_id = 1;
+  string space_id = 2;
+  // source 取值 manual、auto；kind 取值 gap（按缺口）、force（整段重拉）、history（确认历史缺口）。
+  string source = 3;
+  string kind = 4;
+  // dataset_id、frequency、subject_id 为空表示全部。
+  string dataset_id = 5;
+  string frequency = 6;
+  string subject_id = 7;
+  string from = 8;
+  string to = 9;
+  string status = 10;
+  string last_error = 11;
+  string created_at = 12;
+  string updated_at = 13;
+  int32 pending = 14;
+  int32 running = 15;
+  int32 succeeded = 16;
+  int32 failed = 17;
+  int32 canceled = 18;
+  // dataset_name 是数据集的展示名（所属采集任务名），不限数据集或任务已删除时为空。
+  string dataset_name = 19;
+}
+
+message GetKlineBackfillReq {
+  string job_id = 1;
+  string space_id = 2;
+}
+
+message GetKlineBackfillRsp {
+  common.RetInfo ret_info = 1;
+  KlineBackfillJob job = 2;
+  // failed_chunks 至多 50 个。
+  repeated KlineBackfillChunk failed_chunks = 3;
+}
+
+message ListKlineBackfillsReq {
+  string space_id = 1;
+  common.Page page = 2;
+  // source 为空表示全部来源；attention 只返回未结束或有失败的作业；dataset_id 包含不限数据集的作业。
+  string source = 3;
+  bool attention = 4;
+  string dataset_id = 5;
+}
+
+message ListKlineBackfillsRsp {
+  common.RetInfo ret_info = 1;
+  repeated KlineBackfillJob items = 2;
+  common.PageResult page = 3;
+}
+
+message CancelKlineBackfillReq {
+  string job_id = 1;
+  string space_id = 2;
+}
+
+message CancelKlineBackfillRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// RetryKlineBackfill 把已失败作业的失败分块退回待执行（尝试次数清零），作业改回等待中。
+message RetryKlineBackfillReq {
+  string job_id = 1;
+  string space_id = 2;
+}
+
+message RetryKlineBackfillRsp {
+  common.RetInfo ret_info = 1;
+  int32 chunks = 2;
+}
+
+// ConfirmHistoryGaps 按最近一次历史扫描记下的缺口建立补采作业；补完后行情源没有的部分自动确认，不再报告。
+message ConfirmHistoryGapsReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string frequency = 3;
+}
+
+message ConfirmHistoryGapsRsp {
+  common.RetInfo ret_info = 1;
+  // job_id 为空表示没有待确认的历史缺口。
+  string job_id = 2;
+  int32 chunks = 3;
+}
+
+// ClearSourceAbsences 清掉一个数据集已确认的“行情源缺失”，并让历史缺口扫描重新进行。
+message ClearSourceAbsencesReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string frequency = 3;
+}
+
+message ClearSourceAbsencesRsp {
+  common.RetInfo ret_info = 1;
+  // cleared 是清掉的缺失区间数。
+  int64 cleared = 2;
+}
+
+// ===== 运行状态 =====
+
+message GetCollectorStatusReq {
+  string space_id = 1;
+}
+
+message FetchPlanSummary {
+  int64 id = 1;
+  string status = 2;
+  string last_error = 3;
+  string created_at = 4;
+  string updated_at = 5;
+}
+
+// CollectorDatasetStatus 是一个正在采集的数据集（某个频率）的健康度。
+message CollectorDatasetStatus {
+  string dataset_id = 1;
+  string frequency = 2;
+  int32 subject_count = 3;
+  int32 function_count = 4;
+  // effective_from 是最早一次采集计划生效的周期；inspected_until 是自动巡检已查到的时间（不含），没有巡检过为空。
+  string effective_from = 5;
+  string inspected_until = 6;
+  // inspect_lag_seconds 是自动巡检超出预期的秒数：水位之后的下一根 K 线进入巡检范围后仍未被检查的时长。
+  // 它衡量的是“自动补漏是否跟上”，不是数据本身的延迟；正常在 0 到几分钟之间。
+  int64 inspect_lag_seconds = 7;
+  // gap_bars_24h、gap_subjects_24h 是 24 小时内自动补采发现的实时缺口（实时采集漏掉的 K 线）。
+  int32 gap_bars_24h = 8;
+  int32 gap_subjects_24h = 9;
+  int32 failed_chunks_24h = 10;
+  // history_* 是最近一次历史缺口扫描的结果（扣除已确认缺失）；没有扫描过时 history_scanned_at 为空。
+  string history_scanned_at = 11;
+  int32 history_gap_bars = 12;
+  int32 history_gap_subjects = 13;
+  string history_error = 14;
+  // absent_bars 是已确认行情源没有的根数，不影响健康等级。
+  int32 absent_bars = 15;
+  // level 取值 ok、warn、error。
+  string level = 16;
+  repeated string reasons = 17;
+  // dataset_name 是数据集的展示名（所属采集任务名），任务已删除时为空。
+  string dataset_name = 18;
+}
+
+// CollectorFunctionDataset 是函数在一个数据集上负责的标的（取当前生效的那份快照）。
+message CollectorFunctionDataset {
+  // dataset 是“数据集|频率”。
+  string dataset = 1;
+  repeated string subjects = 2;
+  // effective_from 是这份快照的生效周期（RFC3339）。
+  string effective_from = 3;
+}
+
+message CollectorFunctionStatus {
+  string name = 1;
+  string region = 2;
+  string market = 3;
+  string cron = 4;
+  int32 subject_count = 5;
+  // datasets 是该函数服务的“数据集|频率”。
+  repeated string datasets = 6;
+  // state 取值 applied（已生效）、pending（正在下发）、retiring（退役中）。
+  string state = 7;
+  // dataset_subjects 是每个数据集上本函数负责的标的，供详情查看。
+  repeated CollectorFunctionDataset dataset_subjects = 8;
+}
+
+message GetCollectorStatusRsp {
+  common.RetInfo ret_info = 1;
+  // level 是空间总体健康等级（ok、warn、error），reasons 是计划层面与各数据集的问题。
+  string level = 2;
+  repeated string reasons = 3;
+  // open 是未生效的计划，没有则为空；applied 是最近一份已生效的计划。
+  FetchPlanSummary open = 4;
+  FetchPlanSummary applied = 5;
+  // datasets 异常排前；functions 下发中的排前。
+  repeated CollectorDatasetStatus datasets = 6;
+  repeated CollectorFunctionStatus functions = 7;
+  int32 active_backfills = 8;
+  int32 failed_backfills_24h = 9;
+  string generated_at = 10;
+}
+
+// ReregisterFetchPlan 在 Storage 数据被清空后让采集计划重新生效：把最近一份已生效计划里各数据集标记为
+// “快照未登记”，下一轮对账会生成新计划、重新登记序列快照并选新的生效周期；同时清掉该空间的补采作业、
+// 自动补采水位与历史扫描记录。此后数据集的时间线（检查、自动补采与历史扫描的范围）从新的生效周期开始，
+// 清库前的计划段不再参与。
+message ReregisterFetchPlanReq {
+  string space_id = 1;
+}
+
+// SetFetchPlanPaused 暂停或恢复空间的采集：暂停时 Collector 停用该空间全部 SCF 函数的定时器，并停止采集计划对账、
+// 补采推进与自动补采扫描；暂停状态保存在 Collector 库里，重启后保持。相同取值重复调用不改变状态，只返回当前状态，
+// 可用来轮询 timers_disabled。停用定时器只保证不再触发新的采集调用，已经触发、仍在执行的调用不在其内，
+// 调用方还需要再等过 SCF 函数的执行超时。
+message SetFetchPlanPausedReq {
+  string space_id = 1;
+  bool paused = 2;
+}
+
+message SetFetchPlanPausedRsp {
+  common.RetInfo ret_info = 1;
+  bool paused = 2;
+  // timers_disabled 表示云端已确认该空间全部函数的定时器已停用（未暂停时恒为 false）。
+  bool timers_disabled = 3;
+}
+
+message ReregisterFetchPlanRsp {
+  common.RetInfo ret_info = 1;
+  // datasets 是被标记为需要重新登记快照的“数据集|频率”。
+  repeated string datasets = 2;
+  // backfill_jobs 是被清掉的补采作业数。
+  int32 backfill_jobs = 3;
 }
 
 service CollectMgr {
@@ -371,17 +589,27 @@ service CollectMgr {
   rpc DisableTask(DisableTaskReq) returns (DisableTaskRsp);
   rpc DeleteTask(DeleteTaskReq) returns (DeleteTaskRsp);
 
-  // ----- 任务实例 -----
-  rpc GetTaskInstanceList(GetTaskInstanceListReq) returns (GetTaskInstanceListRsp);
-
   // ----- 数据类型配置 -----
   rpc GetDataTypeConfigs(GetDataTypeConfigsReq) returns (GetDataTypeConfigsRsp);
   rpc GetDataTypeConfigWithFields(GetDataTypeConfigWithFieldsReq) returns (GetDataTypeConfigWithFieldsRsp);
   rpc StartKlineResampleBackfill(StartKlineResampleBackfillReq) returns (StartKlineResampleBackfillRsp);
   rpc CancelKlineResampleBackfill(CancelKlineResampleBackfillReq) returns (CancelKlineResampleBackfillRsp);
   rpc GetKlineResampleBackfill(GetKlineResampleBackfillReq) returns (GetKlineResampleBackfillRsp);
-}
+  // 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
+  rpc SyncSubjects(SyncSubjectsReq) returns (SyncSubjectsRsp);
 
-service MarketFetchRuntime {
-  rpc ClaimTimerBatch(ClaimTimerBatchReq) returns (ClaimTimerBatchRsp);
+  // ----- K 线完整性检查与补采 -----
+  rpc CheckKline(CheckKlineReq) returns (CheckKlineRsp);
+  rpc SubmitKlineBackfill(SubmitKlineBackfillReq) returns (SubmitKlineBackfillRsp);
+  rpc GetKlineBackfill(GetKlineBackfillReq) returns (GetKlineBackfillRsp);
+  rpc ListKlineBackfills(ListKlineBackfillsReq) returns (ListKlineBackfillsRsp);
+  rpc CancelKlineBackfill(CancelKlineBackfillReq) returns (CancelKlineBackfillRsp);
+  rpc RetryKlineBackfill(RetryKlineBackfillReq) returns (RetryKlineBackfillRsp);
+  rpc ConfirmHistoryGaps(ConfirmHistoryGapsReq) returns (ConfirmHistoryGapsRsp);
+  rpc ClearSourceAbsences(ClearSourceAbsencesReq) returns (ClearSourceAbsencesRsp);
+
+  // ----- 运行状态与采集计划 -----
+  rpc GetCollectorStatus(GetCollectorStatusReq) returns (GetCollectorStatusRsp);
+  rpc ReregisterFetchPlan(ReregisterFetchPlanReq) returns (ReregisterFetchPlanRsp);
+  rpc SetFetchPlanPaused(SetFetchPlanPausedReq) returns (SetFetchPlanPausedRsp);
 }

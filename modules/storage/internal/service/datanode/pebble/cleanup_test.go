@@ -26,21 +26,21 @@ func TestDeleteDatasetRowsRemovesRowsAndHistoryWithoutTouchingOtherDataset(t *te
 	if err := store.UpsertFields(context.Background(), rows); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "delete-me", Page: &pb.Page{Page: 1, Size: 10}}); err != nil {
+	if _, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "delete-me", ColumnNames: []string{"close"}, TimeRange: &pb.TimeRange{StartTime: "2026-08-15T00:00:00Z", EndTime: "2026-08-17T00:00:00Z"}, Page: &pb.Page{Size: 10}}); err != nil {
 		t.Fatal(err)
 	}
 	if deleted, err := store.DeleteDatasetRows(context.Background(), "s", "delete-me"); err != nil || deleted == 0 {
 		t.Fatalf("deleted ranges=%d err=%v", deleted, err)
 	}
-	removed, err := store.ReadFields(context.Background(), []*pb.RowKey{rows[0].GetKey()}, []string{"close"}, nil)
-	if err != nil || len(removed) != 1 || len(removed[0].GetFields()) != 0 {
+	removed, err := store.ReadRows(context.Background(), []*pb.RowKey{rows[0].GetKey()}, []string{"close"}, nil)
+	if err != nil || len(removed) != 0 {
 		t.Fatalf("deleted dataset still has fields: rows=%v err=%v", removed, err)
 	}
-	remaining, err := store.ReadFields(context.Background(), []*pb.RowKey{rows[1].GetKey()}, []string{"close"}, nil)
+	remaining, err := store.ReadRows(context.Background(), []*pb.RowKey{rows[1].GetKey()}, []string{"close"}, nil)
 	if err != nil || len(remaining) != 1 || len(remaining[0].GetFields()) != 1 {
 		t.Fatalf("other dataset was removed: rows=%v err=%v", remaining, err)
 	}
-	history, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "delete-me", Page: &pb.Page{Page: 1, Size: 10}})
+	history, err := store.ReadTimeSeriesRows(context.Background(), &pb.ReadTimeSeriesRowsReq{SpaceId: "s", DatasetId: "delete-me", ColumnNames: []string{"close"}, TimeRange: &pb.TimeRange{StartTime: "2026-08-15T00:00:00Z", EndTime: "2026-08-17T00:00:00Z"}, Page: &pb.Page{Size: 10}})
 	if err != nil || len(history.GetRows()) != 0 {
 		t.Fatalf("deleted dataset still has history: rows=%v err=%v", history, err)
 	}
@@ -224,5 +224,40 @@ func TestRestoreDatasetRowsWithoutTombstonePreservesPeriodProgress(t *testing.T)
 	}
 	if got := countOutboxEvent(t, store, events.CollectorPeriodCompleted.Name()); got != 1 {
 		t.Fatalf("collector period markers=%d after no-op restore, want 1", got)
+	}
+}
+
+func TestDeleteDatasetRowsWaitingForPublicationLockHonorsCancellation(t *testing.T) {
+	store, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	key := &pb.RowKey{SpaceId: "s", DatasetId: "busy", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{SubjectId: "BTC-USDT", Freq: "1m", DataTime: "2026-08-16T00:00:00Z"}}}
+	if err := store.UpsertFields(context.Background(), []*pb.RowFieldUpsert{{Key: key, Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}}}}); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟 Outbox 正持有同 Dataset 的发布锁等待远端 ACK
+	unlock, err := store.lockOutboxDatasetPublication(context.Background(), "s", "busy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := store.DeleteDatasetRows(ctx, "s", "busy"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("delete error = %v, want deadline exceeded", err)
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Fatalf("删除等待发布锁未响应取消：%s", time.Since(started))
+	}
+	unlock()
+	// 超时的删除不能在锁释放后迟到执行
+	rows, err := store.ReadRows(context.Background(), []*pb.RowKey{key}, []string{"close"}, nil)
+	if err != nil || len(rows) != 1 || len(rows[0].GetFields()) != 1 {
+		t.Fatalf("超时的删除不应改动数据: rows=%v err=%v", rows, err)
+	}
+	if len(store.outboxPublicationLocks) != 0 {
+		t.Fatalf("发布锁引用未回收: %d", len(store.outboxPublicationLocks))
 	}
 }

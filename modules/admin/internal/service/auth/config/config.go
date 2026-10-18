@@ -39,8 +39,8 @@ type SecurityConfig struct {
 
 // LoadConfig 加载配置文件
 func LoadConfig() (*Config, error) {
-	// 读取配置文件（认证服务配置已合并到gateway.yaml）
-	configPath := "./config/gateway.yaml"
+	// 读取配置文件（认证服务配置已合并到console.yaml）
+	configPath := "./config/console.yaml"
 	yamlFile, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("读取配置文件失败: %+v", err)
@@ -64,6 +64,10 @@ func LoadConfig() (*Config, error) {
 	}
 	if config.Security.SessionTTL <= 0 || config.Security.RequestClockSkew <= 0 || config.Security.NonceTTL <= 0 || config.Security.RawTicketTTL <= 0 {
 		return nil, fmt.Errorf("security durations must be positive")
+	}
+	// nonce 必须保存到签名时间窗口结束（前后各 skew），否则窗口内的已执行请求可被重放。
+	if config.Security.NonceTTL < 2*config.Security.RequestClockSkew {
+		return nil, fmt.Errorf("security nonce_ttl must be at least twice request_clock_skew")
 	}
 	if config.JWT.AccessExpired != config.Security.SessionTTL {
 		return nil, fmt.Errorf("jwt access_expired must equal security session_ttl")

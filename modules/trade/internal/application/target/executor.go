@@ -90,7 +90,11 @@ func (e *Executor) Converge(
 	if e == nil || e.Store == nil || e.Orders == nil || e.Prices == nil {
 		return Result{}, ErrExecutorConfig
 	}
-	unlock := e.Store.LockLogicalAccount(spaceID, logicalAccountID)
+	// 等待逻辑账户锁必须响应期限：被占用的账户超时后返回可重试错误，不能卡住后面的账户
+	unlock, lockErr := e.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return Result{}, lockErr
+	}
 	defer unlock()
 
 	logicalAccount, err := e.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
@@ -152,11 +156,6 @@ func (e *Executor) Converge(
 		return Result{Status: StatusPaused}, err
 	}
 	if logicalAccount.AutomationState != "ACTIVE" {
-		// Reclaiming ownership and accepting a new target do not authorize
-		// cancellation of pre-upgrade orders while the cutover is still paused.
-		if logicalAccount.PauseReason == store.TargetPinMigrationPauseReason {
-			return Result{Status: StatusPaused}, nil
-		}
 		orders, _, listErr := e.Store.ListOrders(
 			ctx,
 			spaceID,
@@ -184,11 +183,7 @@ func (e *Executor) Converge(
 		}
 		return Result{Status: StatusPaused}, nil
 	}
-	if target.InstanceID == "" {
-		if logicalAccount.OwnerRunnerID != target.RunnerID {
-			return Result{}, fmt.Errorf("%w: target runner no longer owns logical account", ErrInvalidTarget)
-		}
-	} else if logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
+	if target.InstanceID == "" || logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
 		return Result{}, ErrTargetSession
 	}
 
@@ -557,6 +552,8 @@ func (e *Executor) activeOrders(
 
 type desiredTarget struct {
 	Quantity shared.Decimal
+	// Hold 为 true 时该标的保持当前持仓数量不动，nextLaneAction 视为已完成。
+	Hold bool
 }
 
 func desiredTargets(
@@ -564,6 +561,10 @@ func desiredTargets(
 ) (map[string]desiredTarget, error) {
 	desired := make(map[string]desiredTarget, len(target.Targets))
 	for _, current := range target.Targets {
+		if current.Hold {
+			desired[current.InstrumentID] = desiredTarget{Hold: true}
+			continue
+		}
 		quantity, err := shared.ParseDecimal(current.Quantity)
 		if err != nil {
 			return nil, err
@@ -603,6 +604,10 @@ func nextLaneAction(
 	desired desiredTarget,
 	members []memberState,
 ) (laneAction, bool, string, error) {
+	// 保持标的：既不加仓也不减仓。
+	if desired.Hold {
+		return laneAction{}, true, "", nil
+	}
 	confirmed := shared.Zero()
 	for _, member := range members {
 		confirmed = confirmed.Add(member.positions[instrumentID])
@@ -847,12 +852,6 @@ func (e *Executor) checkTargetExecutable(
 	logicalAccount store.LogicalAccountRecord,
 	target store.LogicalAccountTargetRecord,
 ) error {
-	if target.InstanceID == "" && target.SessionID == "" && target.ValidUntil == 0 {
-		if logicalAccount.OwnerRunnerID != "" && target.RunnerID != logicalAccount.OwnerRunnerID {
-			return ErrTargetSession
-		}
-		return nil
-	}
 	if target.InstanceID == "" || target.SessionID == "" || target.StrategyID == "" ||
 		target.BarEndTime <= 0 || target.EffectiveAt != target.BarEndTime || target.ValidUntil <= target.EffectiveAt {
 		return ErrInvalidTarget

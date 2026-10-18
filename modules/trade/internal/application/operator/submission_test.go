@@ -63,7 +63,7 @@ func (a *submissionAdapter) ListRecentFills(context.Context, shared.ExchangeSymb
 
 func realSubmissionService(t *testing.T) (*operatorFixture, *Service, *submissionAdapter) {
 	f := newOperatorFixture(t, exchange.MarketTypeSpot)
-	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='MANUAL',c_owner_runner_id='',c_automation_state='PAUSED',c_pause_reason='manual' WHERE c_logical_account_id='logical-1'").Error)
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='MANUAL',c_owner_instance_id=NULL,c_owner_session_id=NULL,c_automation_state='PAUSED',c_pause_reason='manual' WHERE c_logical_account_id='logical-1'").Error)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trading_accounts SET c_execution_mode='LIVE',c_live_environment='TESTNET',c_credential_secret_id='test-only'").Error)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_environment='TESTNET'").Error)
 	source := submissionSources{f: f}
@@ -194,7 +194,7 @@ func TestSubmitOrderPendingExpiredOrModeChangedReleasesReservation(t *testing.T)
 
 func TestSubmitOrderAcceptsWithoutTakeoverOrPost(t *testing.T) {
 	f := newOperatorFixture(t, exchange.MarketTypeSpot)
-	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='MANUAL',c_owner_runner_id='',c_automation_state='PAUSED',c_pause_reason='manual' WHERE c_logical_account_id='logical-1'").Error)
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='MANUAL',c_owner_instance_id=NULL,c_owner_session_id=NULL,c_automation_state='PAUSED',c_pause_reason='manual' WHERE c_logical_account_id='logical-1'").Error)
 	got, err := f.service().SubmitOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
 	require.Equal(t, "RUNNING", got.Action.Status)
@@ -205,7 +205,7 @@ func TestSubmitOrderAcceptsWithoutTakeoverOrPost(t *testing.T) {
 
 func TestSubmitOrderStrategyWithoutOwnerRejectedBeforeWrites(t *testing.T) {
 	f := newOperatorFixture(t, exchange.MarketTypeSpot)
-	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_owner_runner_id='',c_automation_state='PAUSED',c_pause_reason='unbound' WHERE c_logical_account_id='logical-1'").Error)
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_owner_instance_id=NULL,c_owner_session_id=NULL,c_automation_state='PAUSED',c_pause_reason='unbound' WHERE c_logical_account_id='logical-1'").Error)
 	_, err := f.service().SubmitOrder(context.Background(), submissionCommand(f))
 	require.ErrorIs(t, err, ErrInvalidCommand)
 	var count int64

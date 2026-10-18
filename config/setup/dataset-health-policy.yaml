@@ -3,6 +3,7 @@ realtime_timeseries:
   defaults:
     run_missed_intervals: 2
     success_missed_intervals: 3
-    watermark_periods: 3
-    minimum_watermark_lag: 10m
+    # 应收的最新一根 K 线收线后允许迟到多久：分钟级（30s～30m 周期）与小时级（1h、4h）；日线及以上允许迟到 1 个周期
+    minute_lateness: 10s
+    hour_lateness: 20s
   overrides: []

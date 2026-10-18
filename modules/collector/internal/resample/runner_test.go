@@ -19,12 +19,12 @@ import (
 )
 
 type runnerSource struct {
-	subjects     []domain.Subject
-	keepDuration string
+	subjects  []domain.Subject
+	retention string
 }
 
 func (s runnerSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
-	return storagesource.DatasetInfo{DataSourceID: "crypto", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freqs: []string{"1m"}, SubjectTags: []string{"test"}, Attributes: map[string]string{"market_type": "spot"}, KeepDuration: s.keepDuration}, nil
+	return storagesource.DatasetInfo{DataSourceID: "crypto", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m", Retention: s.retention, SubjectTags: []string{"test"}, Attributes: map[string]string{"market_type": "spot"}}, nil
 }
 func (s runnerSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
 	return s.subjects, nil
@@ -97,7 +97,7 @@ func TestEnsureReadinessForClaimsUsesClaimedCursor(t *testing.T) {
 	encoded, err := result.Marshal()
 	require.NoError(t, err)
 	resultIDs := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
-	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-btc", CollectionTaskID: rule.TaskID, Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: resultIDs.DatasetID, SubjectID: "BTC", Frequency: "5m", TaskParams: params, Result: encoded}
+	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-btc", Provider: "moox", MarketType: "spot", DataType: "kline_resample", SubjectID: "BTC", Frequency: "5m", TaskParams: params, Result: encoded}
 	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{instance}))
 	require.NoError(t, db.TaskInstances().UpsertWriteTargets(context.Background(), []domain.WriteTarget{{ID: "wt-task-btc", SpaceID: "crypto", InstanceID: "task-btc", TaskID: rule.TaskID, DatasetID: resultIDs.DatasetID, ViewID: resultIDs.ViewID, Status: "pending"}}))
 	stored, err := db.TaskInstances().Get(context.Background(), "crypto", "task-btc")
@@ -112,7 +112,7 @@ func TestEnsureReadinessForClaimsUsesClaimedCursor(t *testing.T) {
 	reports, err := db.PeriodReadiness().FinalizeDue(context.Background(), time.Now().UTC(), 10)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
-	require.Equal(t, cursor, reports[0].Readiness.PeriodTime)
+	require.Equal(t, cursor, reports[0].Readiness.PeriodTime.UTC())
 }
 
 func TestResampleBackfillSyncIgnoresSubjectAddedAfterRequestStart(t *testing.T) {
@@ -158,7 +158,7 @@ func TestCompleteBackfillWaitsForViewFenceBeforeSyncing(t *testing.T) {
 	encoded, err := result.Marshal()
 	require.NoError(t, err)
 	resultIDs := taskresult.ResultIDs("crypto", "rule-5m")
-	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "task-btc", CollectionTaskID: "rule-5m", Provider: "moox", MarketType: "spot", DataType: "kline_resample", DatasetID: resultIDs.DatasetID, SubjectID: "BTC", Frequency: "5m", Result: encoded}}))
+	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "task-btc", Provider: "moox", MarketType: "spot", DataType: "kline_resample", SubjectID: "BTC", Frequency: "5m", Result: encoded}}))
 	require.NoError(t, db.TaskInstances().UpsertWriteTargets(context.Background(), []domain.WriteTarget{{ID: "wt-task-btc", SpaceID: "crypto", InstanceID: "task-btc", TaskID: "rule-5m", DatasetID: resultIDs.DatasetID, ViewID: resultIDs.ViewID, Status: "pending"}}))
 	primary := &syncPointPrimary{}
 	runner := &Runner{Instances: db.TaskInstances(), Primary: primary}
@@ -177,10 +177,12 @@ func TestCompleteBackfillWaitsForViewFenceBeforeSyncing(t *testing.T) {
 }
 
 func TestSourceRetentionExpiredIsTerminal(t *testing.T) {
-	source := runnerSource{keepDuration: "1h"}
+	source := runnerSource{retention: "1h"}
 	expired, reason := sourceRetentionExpired(context.Background(), source, "crypto", "source", time.Now().UTC().Add(-2*time.Hour))
 	require.True(t, expired)
 	require.Contains(t, reason, "retention expired")
+	expired, _ = sourceRetentionExpired(context.Background(), runnerSource{retention: "forever"}, "crypto", "source", time.Unix(0, 0).UTC())
+	require.False(t, expired, "a Dataset kept forever never expires a bucket")
 }
 
 func TestChooseRepairBucketUsesDurableWindowCursor(t *testing.T) {

@@ -15,16 +15,16 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/dnscache"
-	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 )
 
 type Coordinator struct {
-	Local    *dnscache.Cache
-	Remote   DomainResolver
-	Domains  []string
-	Interval time.Duration
-	CacheTTL time.Duration
+	Local         *dnscache.Cache
+	Remote        DomainResolver
+	Domains       []string
+	RemoteDomains []string
+	Interval      time.Duration
+	CacheTTL      time.Duration
 
 	mu              sync.RWMutex
 	refreshMu       sync.Mutex
@@ -43,7 +43,6 @@ type Coordinator struct {
 type Status struct {
 	Source            string
 	Hash              string
-	ManagedHash       string
 	RouteCount        int
 	RouteAgeSeconds   float64
 	LastRefreshAt     time.Time
@@ -51,45 +50,35 @@ type Status struct {
 	LastErrorCategory string
 }
 
-func NewCoordinator(local *dnscache.Cache, remote DomainResolver, domains []string, interval time.Duration) *Coordinator {
-	// Legacy/local-only callers retain the dnscache contract: a last-good
-	// snapshot is kept until a newer refresh replaces it.
-	return NewCoordinatorWithTTL(local, remote, domains, interval, 0)
+// CoordinatorConfig wires a Coordinator. A non-positive CacheTTL keeps the
+// last-good route until a newer refresh replaces it; deployments with a remote
+// resolver pass a positive TTL so failed refreshes cannot keep an expired
+// address alive. PersistencePath stores the last-known-good snapshot used only
+// as a fallback across restarts; it is never sent to the resolver or exposed in
+// the SCF payload directly.
+type CoordinatorConfig struct {
+	Local           *dnscache.Cache
+	Remote          DomainResolver
+	Domains         []string
+	RemoteDomains   []string
+	Interval        time.Duration
+	CacheTTL        time.Duration
+	Metrics         *Metrics
+	PersistencePath string
 }
 
-// NewCoordinatorWithTTL keeps refresh cadence separate from route freshness.
-// A non-positive cacheTTL disables expiry, which is useful for the legacy
-// local-DNS fallback. Enabled remote resolver deployments always pass a
-// positive TTL so failed refreshes cannot keep an expired address alive.
-func NewCoordinatorWithTTL(local *dnscache.Cache, remote DomainResolver, domains []string, interval, cacheTTL time.Duration) *Coordinator {
-	if interval <= 0 {
-		interval = 5 * time.Minute
+func NewCoordinator(cfg CoordinatorConfig) *Coordinator {
+	if cfg.Interval <= 0 {
+		cfg.Interval = 5 * time.Minute
 	}
 	return &Coordinator{
-		Local: local, Remote: remote, Domains: normalizeDomains(domains),
-		Interval: interval, CacheTTL: cacheTTL, routes: make(map[string]sources.DNSResolution), routeSource: make(map[string]string),
+		Local: cfg.Local, Remote: cfg.Remote, Domains: normalizeDomains(cfg.Domains), RemoteDomains: normalizeDomains(cfg.RemoteDomains),
+		Interval: cfg.Interval, CacheTTL: cfg.CacheTTL, routes: make(map[string]sources.DNSResolution), routeSource: make(map[string]string),
+		metrics: cfg.Metrics, persistencePath: strings.TrimSpace(cfg.PersistencePath),
 	}
 }
 
-// NewCoordinatorWithMetrics is the bootstrap constructor for the production
-// coordinator. The legacy constructors remain useful for small tests and
-// callers that do not need Prometheus instrumentation.
-func NewCoordinatorWithMetrics(local *dnscache.Cache, remote DomainResolver, domains []string, interval, cacheTTL time.Duration, metrics *Metrics) *Coordinator {
-	coordinator := NewCoordinatorWithTTL(local, remote, domains, interval, cacheTTL)
-	coordinator.metrics = metrics
-	return coordinator
-}
-
-// NewCoordinatorWithMetricsAndPersistence is the production constructor. The
-// persisted snapshot is only a last-known-good fallback for process restarts;
-// it is never sent to the resolver or exposed in the SCF payload directly.
-func NewCoordinatorWithMetricsAndPersistence(local *dnscache.Cache, remote DomainResolver, domains []string, interval, cacheTTL time.Duration, metrics *Metrics, persistencePath string) *Coordinator {
-	coordinator := NewCoordinatorWithMetrics(local, remote, domains, interval, cacheTTL, metrics)
-	coordinator.persistencePath = strings.TrimSpace(persistencePath)
-	return coordinator
-}
-
-// RestoreLastGoodSnapshot loads the last successful Trade snapshot, if one is
+// RestoreLastGoodSnapshot loads the last successful Egress snapshot, if one is
 // present. A restored route has no local receipt time so a restart does not
 // discard the route before the first bounded remote refresh can complete.
 func (c *Coordinator) RestoreLastGoodSnapshot() error {
@@ -108,8 +97,12 @@ func (c *Coordinator) RestoreLastGoodSnapshot() error {
 		return fmt.Errorf("decode DNS snapshot %s: %w", c.persistencePath, err)
 	}
 	now := time.Now().UTC()
-	allowed := make(map[string]struct{}, len(c.Domains))
-	for _, domain := range c.Domains {
+	allowedDomains := c.Domains
+	if c.Remote != nil {
+		allowedDomains = c.RemoteDomains
+	}
+	allowed := make(map[string]struct{}, len(allowedDomains))
+	for _, domain := range allowedDomains {
 		allowed[normalizeDomain(domain)] = struct{}{}
 	}
 	routes := make(map[string]sources.DNSResolution, len(persisted.Routes))
@@ -158,7 +151,7 @@ func (c *Coordinator) RestoreLastGoodSnapshot() error {
 	c.routes = routes
 	c.routeSource = make(map[string]string, len(routes))
 	for host := range routes {
-		c.routeSource[host] = "trade"
+		c.routeSource[host] = "egress"
 	}
 	c.status = buildStatus(now, routes, c.routeSource, c.status, nil, nil, false)
 	c.mu.Unlock()
@@ -198,8 +191,8 @@ func (c *Coordinator) Refresh(ctx context.Context) error {
 	}
 	var remoteRoutes map[string]sources.DNSResolution
 	var remoteErr error
-	if c.Remote != nil && len(domains) > 0 {
-		remoteRoutes, remoteErr = c.Remote.ResolveDomains(ctx, domains)
+	if c.Remote != nil && len(c.RemoteDomains) > 0 {
+		remoteRoutes, remoteErr = c.Remote.ResolveDomains(ctx, append([]string(nil), c.RemoteDomains...))
 		receiptAt := time.Now().UTC()
 		for host, route := range remoteRoutes {
 			route.ResolvedAt = receiptAt
@@ -235,7 +228,7 @@ func (c *Coordinator) Refresh(ctx context.Context) error {
 	}
 	for host, route := range remoteRoutes {
 		merged[host] = route
-		mergedSources[host] = "trade"
+		mergedSources[host] = "egress"
 	}
 	status := buildStatus(now, merged, mergedSources, previousStatus, remoteErr, localErr, len(remoteRoutes) > 0 || len(localRoutes) > 0)
 	c.mu.Lock()
@@ -245,7 +238,7 @@ func (c *Coordinator) Refresh(ctx context.Context) error {
 	c.status = status
 	c.mu.Unlock()
 	if len(remoteRoutes) > 0 && c.persistencePath != "" {
-		if err := c.persistTradeSnapshot(merged, mergedSources); err != nil {
+		if err := c.persistEgressSnapshot(merged, mergedSources); err != nil {
 			// The in-memory/SCF update is still valid. Surface persistence failure
 			// to the caller so health logs expose that restart protection is at risk.
 			status.LastErrorCategory = "snapshot_persist"
@@ -279,18 +272,18 @@ type persistedSnapshot struct {
 	SavedAt time.Time                        `json:"saved_at"`
 }
 
-func (c *Coordinator) persistTradeSnapshot(routes map[string]sources.DNSResolution, routeSource map[string]string) error {
-	tradeRoutes := make(map[string]sources.DNSResolution)
+func (c *Coordinator) persistEgressSnapshot(routes map[string]sources.DNSResolution, routeSource map[string]string) error {
+	egressRoutes := make(map[string]sources.DNSResolution)
 	for host, route := range routes {
-		if routeSource[host] != "trade" || len(route.IPs) == 0 {
+		if routeSource[host] != "egress" || len(route.IPs) == 0 {
 			continue
 		}
-		tradeRoutes[normalizeDomain(host)] = route
+		egressRoutes[normalizeDomain(host)] = route
 	}
-	if len(tradeRoutes) == 0 {
+	if len(egressRoutes) == 0 {
 		return nil
 	}
-	raw, err := json.Marshal(persistedSnapshot{Routes: tradeRoutes, SavedAt: time.Now().UTC()})
+	raw, err := json.Marshal(persistedSnapshot{Routes: egressRoutes, SavedAt: time.Now().UTC()})
 	if err != nil {
 		return fmt.Errorf("encode DNS snapshot: %w", err)
 	}
@@ -378,7 +371,7 @@ func (c *Coordinator) Status() Status {
 }
 
 func buildStatus(now time.Time, routes map[string]sources.DNSResolution, routeSource map[string]string, previous Status, remoteErr, localErr error, refreshed bool) Status {
-	status := Status{RouteCount: len(routes), LastRefreshAt: now, Hash: routeHash(routes), ManagedHash: marketfetch.ManagedDNSHash(routes), LastSuccessAt: previous.LastSuccessAt}
+	status := Status{RouteCount: len(routes), LastRefreshAt: now, Hash: routeHash(routes), LastSuccessAt: previous.LastSuccessAt}
 	if refreshed {
 		status.LastSuccessAt = now
 	}
@@ -413,9 +406,9 @@ func buildStatus(now time.Time, routes map[string]sources.DNSResolution, routeSo
 	}
 	switch {
 	case remoteErr != nil && localErr != nil:
-		status.LastErrorCategory = "trade_and_local_dns"
+		status.LastErrorCategory = "egress_and_local_dns"
 	case remoteErr != nil:
-		status.LastErrorCategory = "trade_rpc"
+		status.LastErrorCategory = "egress_rpc"
 	case localErr != nil:
 		status.LastErrorCategory = "local_dns"
 	}

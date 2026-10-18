@@ -43,8 +43,8 @@ func exactDatasetEventSubjects(t *testing.T, registry *events.Registry, spaceID,
 	return filters
 }
 
-func (r primaryFieldReader) ReadFields(ctx context.Context, req *pb.PrimaryReadFieldsReq, _ ...client.Option) (*pb.PrimaryReadFieldsRsp, error) {
-	return r.service.ReadFields(ctx, req)
+func (r primaryFieldReader) ReadRows(ctx context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
+	return r.service.ReadRows(ctx, req)
 }
 
 func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
@@ -60,7 +60,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	}
 	defer node.Close()
 	primary, err := primarystore.New(primarystore.Options{
-		Resolver: func(_ context.Context, _, dataset string) (pb.DataNodeRuntimeService, error) {
+		Resolver: func(_ context.Context, _, dataset string) (primarystore.DataNodeClient, error) {
 			return node, nil
 		},
 		AuthSigner: func(in *pb.AuthInfo) (*pb.AuthInfo, error) {
@@ -88,7 +88,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	if rsp, err := primary.UpsertFields(ctx, &pb.PrimaryUpsertFieldsReq{AuthInfo: auth, Rows: writes, WriteSource: "scf:e2e-fetcher"}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(rsp.GetKeys()) != 3 {
 		t.Fatalf("primary write: rsp=%v err=%v", rsp, err)
 	}
-	read, err := primary.ReadFields(ctx, &pb.PrimaryReadFieldsReq{AuthInfo: auth, Keys: keys, FieldIds: []string{"close", "volume"}})
+	read, err := primary.ReadRows(ctx, &pb.PrimaryReadRowsReq{AuthInfo: auth, Keys: keys, ColumnNames: []string{"close", "volume"}})
 	if err != nil || read.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS || len(read.GetRows()) != 3 {
 		t.Fatalf("primary read: rsp=%v err=%v", read, err)
 	}
@@ -131,13 +131,13 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	view.SetPrimaryAuth(auth)
 	view.SetPrimaryReader(primaryFieldReader{service: primary})
 	columns := []*pb.ViewColumn{
-		{ColumnName: "close", OriginId: "prices.close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
-		{ColumnName: "volume", OriginId: "prices.volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
+		{ColumnName: "volume", OriginId: "volume", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE},
 	}
 	if rsp, err := view.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: viewAuth, IndexId: "prices-view", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: columns}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("view prepare: rsp=%v err=%v", rsp, err)
 	}
-	if err := view.AttachActiveView(&pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", ActiveIndexId: "prices-view", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", ActiveColumns: columns, Status: "active"}); err != nil {
+	if err := view.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", ActiveIndexId: "prices-view", ActiveViewRevision: 1, ActiveViewSchemaHash: "schema-1", ActiveColumns: columns, Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -185,13 +185,13 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	}
 	defer eventClient.Close()
 	stopConsumer, err := view.StartEventConsumer(ctx, eventClient, viewservice.EventConsumerOptions{
-		PartitionID: "kline", Consumer: events.StorageViewKlineConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "prices"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1,
+		PartitionID: "misc", Consumer: events.StorageViewMiscConsumer, FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "prices"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer stopConsumer()
-	consumerInfo, err := js.ConsumerInfo("MOOX_STORAGE", events.StorageViewKlineConsumer)
+	consumerInfo, err := js.ConsumerInfo("MOOX_STORAGE", events.StorageViewMiscConsumer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	if err := view.BackfillViewWithReader(ctx, "quant", "prices-view", 2, primaryFieldReader{service: primary}); err != nil {
 		t.Fatalf("backfill replacement view: %v", err)
 	}
-	if err := view.SwitchView(ctx, "quant", "prices-view", time.Hour); err != nil {
+	if err := view.SwitchView(ctx, "quant", "prices-view"); err != nil {
 		t.Fatalf("switch replacement view: %v", err)
 	}
 	assertSelectorStates(t, ctx, view, viewAuth, closes)

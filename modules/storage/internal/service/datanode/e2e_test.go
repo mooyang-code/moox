@@ -33,7 +33,7 @@ func TestTwoDataNodesHostIndependentDatasets(t *testing.T) {
 	if rsp, _ := nodeB.UpsertFields(ctx, &pb.UpsertFieldsReq{AuthInfo: authB, NodeId: "node-b", Rows: []*pb.RowFieldUpsert{row("factors", "momentum", "1.2")}}); rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("node B write: %v", rsp.GetRetInfo())
 	}
-	read, err := nodeA.ReadFields(ctx, &pb.ReadFieldsReq{AuthInfo: authA, NodeId: "node-a", DatasetId: "prices", Keys: []*pb.RowKey{row("prices", "close", "100").GetKey()}, FieldIds: []string{"close"}})
+	read, err := nodeA.ReadRows(ctx, &pb.ReadRowsReq{AuthInfo: authA, NodeId: "node-a", DatasetId: "prices", Keys: []*pb.RowKey{row("prices", "close", "100").GetKey()}, ColumnNames: []string{"close"}})
 	if err != nil || len(read.GetRows()) != 1 || len(read.GetRows()[0].GetFields()) != 1 {
 		t.Fatalf("read node A rows=%v err=%v", read, err)
 	}

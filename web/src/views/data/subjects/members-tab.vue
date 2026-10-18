@@ -170,6 +170,8 @@
 </template>
 
 <script setup lang="ts">
+import { createSubmitScope } from "@/utils/submit-scope";
+import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import {
@@ -234,28 +236,39 @@ function emptySubject(): Subject {
   };
 }
 
+// 空间切换后，旧空间迟到的响应不能覆盖新空间的标签与成员列表；对象表单固定在打开时的空间，提交前再校验。
+const tagRequests = createLatestRequestGuard();
+const memberRequests = createLatestRequestGuard();
+let subjectFormSpaceId = "";
+
 async function loadTags() {
-  const rsp = await listTags(props.spaceId);
+  const request = tagRequests.begin();
+  const spaceId = props.spaceId;
+  const rsp = await listTags(spaceId);
+  if (!request.isLatest() || spaceId !== props.spaceId) return;
   tags.value = rsp.tags || [];
   if (selectedTagId.value && !tags.value.some(tag => tag.tag_id === selectedTagId.value)) selectedTagId.value = "";
 }
 
 async function reload() {
   if (!props.spaceId) return;
+  const request = memberRequests.begin();
+  const spaceId = props.spaceId;
   loading.value = true;
   selectedKeys.value = [];
   try {
     const rsp = await listTagMembers({
-      space_id: props.spaceId,
+      space_id: spaceId,
       tag_id: selectedTagId.value || undefined,
       status: statusFilter.value || undefined,
       keyword: keyword.value.trim() || undefined,
       page: { page: pagination.current, size: pagination.pageSize }
     });
+    if (!request.isLatest() || spaceId !== props.spaceId) return;
     rows.value = rsp.members || [];
     applyPageResult(pagination, rsp.page_result);
   } finally {
-    loading.value = false;
+    if (request.isLatest()) loading.value = false;
   }
 }
 
@@ -305,8 +318,10 @@ async function submitBatchAdd(): Promise<boolean> {
     Message.warning("请输入至少一个对象 ID");
     return false;
   }
+  const submission = batchScope.begin();
   await addTagMembers(props.spaceId, selectedTagId.value, ids);
   Message.success(`已加入 ${ids.length} 个对象`);
+  if (!submission.isCurrent()) return false;
   batchVisible.value = false;
   await load();
   return true;
@@ -350,32 +365,43 @@ async function submitSelectedAdd(): Promise<boolean> {
     Message.warning("请选择标签");
     return false;
   }
+  const submission = selectedAddScope.begin();
   await addTagMembers(props.spaceId, selectedAddTagId.value, ids);
   Message.success("对象已加入标签");
+  if (!submission.isCurrent()) return false;
   selectedAddVisible.value = false;
   await load();
   return true;
 }
 
 function openSubjectCreate() {
+  subjectFormSpaceId = props.spaceId;
   subjectEditing.value = false;
   Object.assign(subjectForm, emptySubject(), { space_id: props.spaceId });
   subjectVisible.value = true;
 }
 
 function openSubjectEdit(subject: Subject) {
+  subjectFormSpaceId = props.spaceId;
   subjectEditing.value = true;
   Object.assign(subjectForm, subject, { timezone: subject.timezone || "Asia/Shanghai" });
   subjectVisible.value = true;
 }
 
 async function submitSubject(): Promise<boolean> {
+  if (subjectFormSpaceId && subjectFormSpaceId !== props.spaceId) {
+    Message.warning("空间已切换，请重新打开编辑窗口");
+    subjectVisible.value = false;
+    return false;
+  }
   if (!subjectForm.subject_id || !subjectForm.subject_type || !subjectForm.name) {
     Message.warning("请补全对象 ID、对象类型和名称");
     return false;
   }
+  const submission = subjectScope.begin();
   await upsertSubject({ ...subjectForm, space_id: props.spaceId });
   Message.success("数据对象已保存");
+  if (!submission.isCurrent()) return false;
   subjectVisible.value = false;
   await reload();
   return true;
@@ -407,6 +433,13 @@ watch(
 watch(
   () => props.spaceId,
   () => {
+    tagRequests.invalidate();
+    memberRequests.invalidate();
+    rows.value = [];
+    tags.value = [];
+    selectedKeys.value = [];
+    subjectVisible.value = false;
+    selectedAddVisible.value = false;
     selectedTagId.value = props.initialTagId || "";
     statusFilter.value = "";
     pagination.current = 1;
@@ -414,6 +447,23 @@ watch(
   },
   { immediate: true }
 );
+
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：batchVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const batchScope = createSubmitScope();
+watch(batchVisible, open => {
+  if (open) batchScope.invalidate();
+});
+
+// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：subjectVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+const subjectScope = createSubmitScope();
+watch(subjectVisible, open => {
+  if (open) subjectScope.invalidate();
+});
+
+const selectedAddScope = createSubmitScope();
+watch(selectedAddVisible, open => {
+  if (open) selectedAddScope.invalidate();
+});
 </script>
 
 <style scoped>

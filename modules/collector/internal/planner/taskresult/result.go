@@ -2,17 +2,18 @@ package taskresult
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
+	"trpc.group/trpc-go/trpc-go/client"
 	"unicode"
 	"unicode/utf8"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/commonpb"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -29,95 +30,27 @@ type IDs struct {
 	ViewID    string
 }
 
-const (
-	BinanceSpotKline1mTaskID = "dasftksvjhj2jom4vhd0"
-	BinanceSwapKline1mTaskID = "dasftksvjhj2jom4vhdg"
-	BinanceKline1mDatasetID  = "dataset_binance_kline_1m"
-	BinanceKline1mViewID     = "view_binance_kline_1m"
-)
-
-// IsBuiltinSharedResultTask reports whether taskID is reserved for one of the
-// built-in Binance 1m market collection tasks. The task IDs are fixed setup
-// identities, not a general mechanism for assigning shared task results.
-func IsBuiltinSharedResultTask(spaceID, taskID string) bool {
-	return strings.TrimSpace(spaceID) == "crypto" &&
-		(strings.TrimSpace(taskID) == BinanceSpotKline1mTaskID || strings.TrimSpace(taskID) == BinanceSwapKline1mTaskID)
-}
-
-// BuiltinSharedResultIDs returns the only task-scoped identity override
-// allowed to share a Dataset: the seeded Binance spot and swap 1m tasks.
-// Requiring the exact scope, data type, frequency, and tag prevents arbitrary
-// task YAML from routing writes into another task's Dataset.
-func BuiltinSharedResultIDs(spaceID, taskID, taskType, frequency string, tagIDs []string) (IDs, bool) {
-	if !IsBuiltinSharedResultTask(spaceID, taskID) ||
-		!strings.EqualFold(strings.TrimSpace(taskType), "kline") ||
-		!strings.EqualFold(strings.TrimSpace(frequency), "1m") || len(tagIDs) != 1 {
-		return IDs{}, false
-	}
-	expectedTag := "binance_spot"
-	if strings.TrimSpace(taskID) == BinanceSwapKline1mTaskID {
-		expectedTag = "binance_swap"
-	}
-	if strings.TrimSpace(tagIDs[0]) != expectedTag {
-		return IDs{}, false
-	}
-	return IDs{DatasetID: BinanceKline1mDatasetID, ViewID: BinanceKline1mViewID}, true
-}
-
-// BuiltinSharedResultIDsForRoute additionally binds a shared result task to
-// its immutable Binance provider and market route. Call this before creating,
-// updating, bootstrapping, or scheduling a shared-result task; read-only
-// metadata inspection may use BuiltinSharedResultIDs when route details are
-// not part of the read contract.
-func BuiltinSharedResultIDsForRoute(spaceID, taskID, taskType, frequency, provider, marketType string, tagIDs []string) (IDs, bool) {
-	ids, allowed := BuiltinSharedResultIDs(spaceID, taskID, taskType, frequency, tagIDs)
-	if !allowed || !BuiltinSharedResultRouteMatches(spaceID, taskID, provider, marketType) {
-		return IDs{}, false
-	}
-	return ids, true
-}
-
-// BuiltinSharedResultRouteMatches reports whether provider and marketType are
-// the fixed route represented by a reserved shared-result task ID.
-func BuiltinSharedResultRouteMatches(spaceID, taskID, provider, marketType string) bool {
-	if !IsBuiltinSharedResultTask(spaceID, taskID) || !strings.EqualFold(strings.TrimSpace(provider), "binance") {
-		return false
-	}
-	wantMarket := "spot"
-	if strings.TrimSpace(taskID) == BinanceSwapKline1mTaskID {
-		wantMarket = "swap"
-	}
-	return strings.EqualFold(strings.TrimSpace(marketType), wantMarket)
-}
-
 func resultIDs(_ string, taskID string) IDs {
 	slug := resultSlug(taskID)
 	return IDs{DatasetID: "dataset_" + slug, ViewID: "view_" + slug}
 }
 
 // ResultIDsForTask derives both result identities exclusively from the task.
-// tagID is retained in the call signature for planner compatibility but never
-// participates in Dataset/View identity.
-func ResultIDsForTask(spaceID, taskID, tagID, taskType, frequency string) IDs {
+func ResultIDsForTask(spaceID, taskID, taskType, frequency string) IDs {
 	ids := resultIDs(spaceID, taskID)
 	if strings.TrimSpace(taskType) == "" {
 		return ids
 	}
-	_ = tagID // retained in the call signature for planner compatibility
 	viewSlug := resultSlugForFields(taskID, taskType, frequency)
 	ids.ViewID = "view_" + viewSlug
 	return ids
 }
 
 func resultIDsForConfig(spaceID, taskID, taskType string, cfg Config) IDs {
-	frequency := strings.TrimSpace(cfg.Frequency)
-	if frequency == "" && len(cfg.Frequencies) > 0 {
-		frequency = strings.TrimSpace(cfg.Frequencies[0])
-	}
 	if strings.TrimSpace(taskType) == "" {
 		return resultIDs(spaceID, taskID)
 	}
-	return ResultIDsForTask(spaceID, taskID, "", taskType, frequency)
+	return ResultIDsForTask(spaceID, taskID, taskType, strings.TrimSpace(cfg.Frequency))
 }
 
 func resultSlug(taskID string) string {
@@ -161,30 +94,11 @@ func resultSlugForFields(parts ...string) string {
 	return resultSlug(strings.Join(values, "_"))
 }
 
-// IsLegacyHashedIDs reports the previous hash-suffixed collector result identity.
-func IsLegacyHashedIDs(ids IDs) bool {
-	return isLegacyHashedID(ids.DatasetID, "dataset_collector_") &&
-		(strings.TrimSpace(ids.ViewID) == "" || isLegacyHashedID(ids.ViewID, "view_collector_"))
-}
-
-func isLegacyHashedID(id, prefix string) bool {
-	rest := strings.TrimPrefix(strings.TrimSpace(id), prefix)
-	if rest == strings.TrimSpace(id) || len(rest) != 16 {
-		return false
-	}
-	for _, char := range rest {
-		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 // ResultIDs returns the stable metadata identities for a task result.
 func ResultIDs(spaceID, taskID string) IDs { return resultIDs(spaceID, taskID) }
 
 // PersistedResultIDs prefers identities already committed to a Collector task
-// row and falls back to the legacy task-derived identity for old callers.
+// row and falls back to the task-derived identity before the first commit.
 func PersistedResultIDs(spaceID, taskID, datasetID, viewID string) IDs {
 	if strings.TrimSpace(datasetID) != "" && strings.TrimSpace(viewID) != "" {
 		return IDs{DatasetID: strings.TrimSpace(datasetID), ViewID: strings.TrimSpace(viewID)}
@@ -201,13 +115,44 @@ type metadataAPI interface {
 	CreateView(context.Context, *storagepb.CreateViewReq) (*storagepb.CreateViewRsp, error)
 	UpdateView(context.Context, *storagepb.UpdateViewReq) (*storagepb.UpdateViewRsp, error)
 	DeleteView(context.Context, *storagepb.DeleteViewReq) (*storagepb.DeleteViewRsp, error)
+	ListViews(context.Context, *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error)
 	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error)
 	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq) (*storagepb.UpsertViewColumnRsp, error)
 	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error)
 	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error)
 }
 
-type metadataProxy struct{ client storagepb.MetadataClientProxy }
+type MetadataClient interface {
+	GetTag(context.Context, *storagepb.GetTagReq, ...client.Option) (*storagepb.GetTagRsp, error)
+	GetDataset(context.Context, *storagepb.GetDatasetReq, ...client.Option) (*storagepb.GetDatasetRsp, error)
+	CreateDataset(context.Context, *storagepb.CreateDatasetReq, ...client.Option) (*storagepb.CreateDatasetRsp, error)
+	UpdateDataset(context.Context, *storagepb.UpdateDatasetReq, ...client.Option) (*storagepb.UpdateDatasetRsp, error)
+	DeleteDataset(context.Context, *storagepb.DeleteDatasetReq, ...client.Option) (*storagepb.DeleteDatasetRsp, error)
+	GetView(context.Context, *storagepb.GetViewReq, ...client.Option) (*storagepb.GetViewRsp, error)
+	CreateView(context.Context, *storagepb.CreateViewReq, ...client.Option) (*storagepb.CreateViewRsp, error)
+	UpdateView(context.Context, *storagepb.UpdateViewReq, ...client.Option) (*storagepb.UpdateViewRsp, error)
+	DeleteView(context.Context, *storagepb.DeleteViewReq, ...client.Option) (*storagepb.DeleteViewRsp, error)
+	ListViews(context.Context, *storagepb.ListViewsReq, ...client.Option) (*storagepb.ListViewsRsp, error)
+	UpsertDatasetColumn(context.Context, *storagepb.UpsertDatasetColumnReq, ...client.Option) (*storagepb.UpsertDatasetColumnRsp, error)
+	UpsertViewColumn(context.Context, *storagepb.UpsertViewColumnReq, ...client.Option) (*storagepb.UpsertViewColumnRsp, error)
+	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq, ...client.Option) (*storagepb.CheckDatasetActivationRsp, error)
+	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq, ...client.Option) (*storagepb.ActivateDatasetRsp, error)
+}
+
+type PrimaryCleaner interface {
+	DeleteDatasetRows(context.Context, *storagepb.PrimaryDeleteDatasetRowsReq, ...client.Option) (*storagepb.PrimaryDeleteDatasetRowsRsp, error)
+	RestoreDatasetRows(context.Context, *storagepb.PrimaryRestoreDatasetRowsReq, ...client.Option) (*storagepb.PrimaryRestoreDatasetRowsRsp, error)
+}
+
+type metadataProxy struct{ client MetadataClient }
+
+func (p metadataProxy) GetTag(ctx context.Context, req *storagepb.GetTagReq) (*storagepb.GetTagRsp, error) {
+	return p.client.GetTag(ctx, req)
+}
+
+func (p metadataProxy) ListViews(ctx context.Context, req *storagepb.ListViewsReq) (*storagepb.ListViewsRsp, error) {
+	return p.client.ListViews(ctx, req)
+}
 
 func (p metadataProxy) GetDataset(ctx context.Context, req *storagepb.GetDatasetReq) (*storagepb.GetDatasetRsp, error) {
 	return p.client.GetDataset(ctx, req)
@@ -258,7 +203,7 @@ type datasetRowsCleaner interface {
 }
 
 type primaryDatasetRowsCleaner struct {
-	client storagepb.PrimaryStoreClientProxy
+	client PrimaryCleaner
 }
 
 func (c primaryDatasetRowsCleaner) DeleteDatasetRows(ctx context.Context, req *storagepb.PrimaryDeleteDatasetRowsReq) (*storagepb.PrimaryDeleteDatasetRowsRsp, error) {
@@ -269,14 +214,7 @@ func (c primaryDatasetRowsCleaner) RestoreDatasetRows(ctx context.Context, req *
 	return c.client.RestoreDatasetRows(ctx, req)
 }
 
-func NewManager(client storagepb.MetadataClientProxy, auth *storagepb.AuthInfo) *Manager {
-	if client == nil || auth == nil {
-		return nil
-	}
-	return &Manager{metadata: metadataProxy{client: client}, auth: auth}
-}
-
-func NewManagerWithCleaner(client storagepb.MetadataClientProxy, cleaner storagepb.PrimaryStoreClientProxy, auth *storagepb.AuthInfo) *Manager {
+func NewManagerWithCleaner(client MetadataClient, cleaner PrimaryCleaner, auth *storagepb.AuthInfo) *Manager {
 	if client == nil || cleaner == nil || auth == nil {
 		return nil
 	}
@@ -293,11 +231,9 @@ func NewManagerWithAPI(metadata metadataAPI, auth *storagepb.AuthInfo) *Manager 
 type Config struct {
 	ViewID       string
 	DataNodeID   string
-	KeepDuration string
 	Name         string
 	Description  string
 	Frequency    string
-	Frequencies  []string
 	SubjectTags  []string
 	OutputFields []string
 }
@@ -348,23 +284,34 @@ const (
 	ResultStatusUnknown = "unknown"
 )
 
-// ValidateBuiltinSharedOutputFields validates projections without changing
-// the setup-owned shared Dataset/View schema.
-func ValidateBuiltinSharedOutputFields(outputFields []string) error {
-	if len(outputFields) == 0 {
-		return fmt.Errorf("at least one output field is required")
+type tagReader interface {
+	GetTag(context.Context, *storagepb.GetTagReq) (*storagepb.GetTagRsp, error)
+}
+
+// resultDataSource 返回任务全部标签共享的数据源与市场类型；标签间不一致时返回空值。
+func (m *Manager) resultDataSource(ctx context.Context, spaceID string, subjectTags []string) (source, marketType string, err error) {
+	reader, ok := m.metadata.(tagReader)
+	if !ok || len(subjectTags) == 0 {
+		return "", "", nil
 	}
-	allowed := map[string]struct{}{
-		"open": {}, "high": {}, "low": {}, "close": {}, "volume": {},
-		"amount": {}, "quote_volume": {}, "trade_num": {},
-	}
-	for _, field := range outputFields {
-		field = strings.ToLower(strings.TrimSpace(field))
-		if _, ok := allowed[field]; !ok {
-			return fmt.Errorf("%w: %q", ErrUnsupportedOutputFields, field)
+	for i, tagID := range subjectTags {
+		rsp, getErr := reader.GetTag(ctx, &storagepb.GetTagReq{AuthInfo: m.auth, SpaceId: spaceID, TagId: tagID})
+		if getErr != nil || rsp == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || rsp.GetTag() == nil {
+			return "", "", metadataError("get result subject tag", getErr, func() *storagepb.RetInfo {
+				if rsp == nil {
+					return nil
+				}
+				return rsp.GetRetInfo()
+			}())
 		}
+		tagSource := strings.TrimSpace(rsp.GetTag().GetSource())
+		tagMarket := strings.ToLower(strings.TrimSpace(rsp.GetTag().GetMarketType()))
+		if i > 0 && (tagSource != source || tagMarket != marketType) {
+			return "", "", nil
+		}
+		source, marketType = tagSource, tagMarket
 	}
-	return nil
+	return source, marketType, nil
 }
 
 // Inspection is the read-only result metadata snapshot for one task.
@@ -392,23 +339,6 @@ func (m *Manager) Inspect(ctx context.Context, spaceID, taskID string) (Inspecti
 // InspectIDs inspects an explicitly persisted result identity while keeping
 // its metadata ownership tied to the collector task.
 func (m *Manager) InspectIDs(ctx context.Context, spaceID, taskID string, ids IDs) (Inspection, error) {
-	return m.inspectIDs(ctx, spaceID, taskID, ids, true)
-}
-
-// InspectBuiltinSharedIDs reads the setup-owned Binance raw Dataset/View for
-// one of its two allowlisted 1m collection tasks. It intentionally skips
-// collector_task_id ownership and instead requires the canonical task scope
-// and raw_collection role.
-func (m *Manager) InspectBuiltinSharedIDs(ctx context.Context, spaceID, taskID, taskType, frequency string, tagIDs []string, ids IDs) (Inspection, error) {
-	inspection := Inspection{IDs: ids, Status: ResultStatusPending}
-	expected, allowed := BuiltinSharedResultIDs(spaceID, taskID, taskType, frequency, tagIDs)
-	if !allowed || ids != expected {
-		return inspectionWithError(inspection, fmt.Errorf("%w: task is not allowed to inspect the shared Binance result", ErrResultContract))
-	}
-	return m.inspectIDs(ctx, spaceID, taskID, expected, false)
-}
-
-func (m *Manager) inspectIDs(ctx context.Context, spaceID, taskID string, ids IDs, requireTaskOwner bool) (Inspection, error) {
 	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
 	inspection := Inspection{IDs: ids, Status: ResultStatusPending}
 	if m == nil || m.metadata == nil || m.auth == nil {
@@ -438,11 +368,8 @@ func (m *Manager) inspectIDs(ctx context.Context, spaceID, taskID string, ids ID
 		if dataset.GetSpaceId() != spaceID || dataset.GetDatasetId() != inspection.IDs.DatasetID {
 			return inspectionWithError(inspection, fmt.Errorf("%w: result dataset identity does not match requested space/dataset", ErrResultContract))
 		}
-		if requireTaskOwner && !ownedByTask(dataset.GetAttributes(), taskID) {
+		if !ownedByTask(dataset.GetAttributes(), taskID) {
 			return inspectionWithError(inspection, fmt.Errorf("%w: result dataset %s is owned by another task", ErrResultContract, inspection.IDs.DatasetID))
-		}
-		if !requireTaskOwner && strings.TrimSpace(dataset.GetAttributes()["dataset_role"]) != "raw_collection" {
-			return inspectionWithError(inspection, fmt.Errorf("%w: shared result dataset %s is not a raw_collection Dataset", ErrResultContract, inspection.IDs.DatasetID))
 		}
 		inspection.Dataset = dataset
 		datasetExists = true
@@ -471,7 +398,7 @@ func (m *Manager) inspectIDs(ctx context.Context, spaceID, taskID string, ids ID
 		if view.GetSpaceId() != spaceID || view.GetViewId() != inspection.IDs.ViewID {
 			return inspectionWithError(inspection, fmt.Errorf("%w: result view identity does not match requested space/view", ErrResultContract))
 		}
-		if requireTaskOwner && !ownedByTask(view.GetAttributes(), taskID) {
+		if !ownedByTask(view.GetAttributes(), taskID) {
 			return inspectionWithError(inspection, fmt.Errorf("%w: result view %s is owned by another task", ErrResultContract, inspection.IDs.ViewID))
 		}
 		if view.GetDatasetId() != inspection.IDs.DatasetID {
@@ -603,19 +530,19 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	if strings.EqualFold(strings.TrimSpace(dataType), "instrument") || strings.EqualFold(strings.TrimSpace(dataType), "symbol") {
 		kind = storagepb.DataKind_DATA_KIND_RECORD
 	}
-	keep := strings.TrimSpace(cfg.KeepDuration)
-	if keep == "" {
-		keep = "0"
-	}
-	keep, err := normalizeKeepDuration(keep)
+	subjectTags := normalizeSubjectTags(cfg.SubjectTags)
+	dataSourceID, tagMarketType, err := m.resultDataSource(ctx, spaceID, subjectTags)
 	if err != nil {
 		return IDs{}, err
 	}
+	// 未显式指定市场类型时，取标签共享的市场类型；重采样等下游据此校验来源数据集。
 	attrs := map[string]string{"owner_module": "collector", "dataset_role": "raw_collection", "collector_task_id": taskID}
-	if marketType = strings.TrimSpace(marketType); marketType != "" {
+	if marketType = strings.TrimSpace(marketType); marketType == "" {
+		marketType = tagMarketType
+	}
+	if marketType != "" {
 		attrs["market_type"] = marketType
 	}
-	subjectTags := normalizeSubjectTags(cfg.SubjectTags)
 	get, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil {
 		return IDs{}, fmt.Errorf("get result dataset: %w", err)
@@ -626,8 +553,8 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 	}
 	if get.GetRetInfo().GetCode() == storagepb.ErrorCode_DATASET_NOT_FOUND || get.GetRetInfo().GetCode() == storagepb.ErrorCode_NOT_FOUND {
 		created, createErr := m.metadata.CreateDataset(ctx, &storagepb.CreateDatasetReq{AuthInfo: m.auth, Dataset: &storagepb.Dataset{
-			SpaceId: spaceID, DatasetId: ids.DatasetID, DataNodeId: cfg.DataNodeID,
-			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Status: "draft", KeepDuration: keep, Freqs: nonEmptyFrequency(kind, cfg.Frequency, cfg.Frequencies), Attributes: attrs, SubjectTags: subjectTags,
+			SpaceId: spaceID, DatasetId: ids.DatasetID, DataSourceId: dataSourceID, DataNodeId: cfg.DataNodeID,
+			Name: resultDisplayName(cfg, taskID), Description: cfg.Description, DataKind: kind, Status: "draft", Freq: datasetFrequency(kind, cfg.Frequency), Attributes: attrs, SubjectTags: subjectTags,
 		}})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return IDs{}, metadataError("create result dataset", createErr, retInfoDataset(created))
@@ -644,12 +571,23 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 		if len(subjectTags) == 0 {
 			subjectTags = normalizeSubjectTags(get.GetDataset().GetSubjectTags())
 		}
-		if !sameSubjectTags(get.GetDataset().GetSubjectTags(), subjectTags) {
+		assignSource := dataSourceID != "" && get.GetDataset().GetDataSourceId() == ""
+		assignMarket := marketType != "" && get.GetDataset().GetAttributes()["market_type"] == ""
+		if !sameSubjectTags(get.GetDataset().GetSubjectTags(), subjectTags) || assignSource || assignMarket {
 			updated := proto.Clone(get.GetDataset()).(*storagepb.Dataset)
 			updated.SubjectTags = subjectTags
+			if assignSource {
+				updated.DataSourceId = dataSourceID
+			}
+			if assignMarket {
+				if updated.Attributes == nil {
+					updated.Attributes = map[string]string{}
+				}
+				updated.Attributes["market_type"] = marketType
+			}
 			response, updateErr := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: m.auth, Dataset: updated})
 			if updateErr != nil || response == nil || response.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
-				return IDs{}, metadataError("update result dataset subject tags", updateErr, func() *storagepb.RetInfo {
+				return IDs{}, metadataError("update result dataset subject tags or data source", updateErr, func() *storagepb.RetInfo {
 					if response == nil {
 						return nil
 					}
@@ -706,11 +644,7 @@ func (m *Manager) Ensure(ctx context.Context, spaceID, taskID, dataType, marketT
 			}()))
 		}
 	}
-	viewKeep := keep
-	if datasetKeep := strings.TrimSpace(get.GetDataset().GetKeepDuration()); datasetKeep != "" && datasetKeep != "0" && (keep == "" || keep == "0") {
-		viewKeep = datasetKeep
-	}
-	if err := m.ensureView(ctx, spaceID, taskID, ids, kind, viewKeep, cfg); err != nil {
+	if err := m.ensureView(ctx, spaceID, taskID, ids, kind, cfg); err != nil {
 		return cleanupCreated(err)
 	}
 	if err := m.ensureViewColumns(ctx, spaceID, ids, cfg.OutputFields); err != nil {
@@ -753,6 +687,51 @@ func (m *Manager) UpdateSubjectTags(ctx context.Context, spaceID, datasetID stri
 			}
 			return result.GetRetInfo()
 		}())
+	}
+	return nil
+}
+
+// AllowedLatenessAttribute 是数据集属性名：周期的允许迟到时间（秒），由 Storage 在建立周期时读取。
+const AllowedLatenessAttribute = "allowed_lateness_seconds"
+
+// EnsureAllowedLateness 保证结果数据集的允许迟到时间属性与任务设置一致；没有变化时不更新。
+func (m *Manager) EnsureAllowedLateness(ctx context.Context, spaceID, datasetID string, seconds int) error {
+	if m == nil || m.metadata == nil || m.auth == nil {
+		return fmt.Errorf("task result metadata manager is not configured")
+	}
+	if seconds <= 0 {
+		return fmt.Errorf("allowed lateness must be positive")
+	}
+	rsp, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil {
+		return fmt.Errorf("get result dataset for allowed lateness: %w", err)
+	}
+	if rsp == nil || rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS || rsp.GetDataset() == nil {
+		var ret *storagepb.RetInfo
+		if rsp != nil {
+			ret = rsp.GetRetInfo()
+		}
+		return metadataError("get result dataset for allowed lateness", nil, ret)
+	}
+	value := strconv.Itoa(seconds)
+	if rsp.GetDataset().GetAttributes()[AllowedLatenessAttribute] == value {
+		return nil
+	}
+	updated := proto.Clone(rsp.GetDataset()).(*storagepb.Dataset)
+	if updated.Attributes == nil {
+		updated.Attributes = map[string]string{}
+	}
+	updated.Attributes[AllowedLatenessAttribute] = value
+	result, err := m.metadata.UpdateDataset(ctx, &storagepb.UpdateDatasetReq{AuthInfo: m.auth, Dataset: updated})
+	if err != nil {
+		return fmt.Errorf("update result dataset allowed lateness: %w", err)
+	}
+	if result == nil || result.GetRetInfo() == nil || result.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		var ret *storagepb.RetInfo
+		if result != nil {
+			ret = result.GetRetInfo()
+		}
+		return metadataError("update result dataset allowed lateness", nil, ret)
 	}
 	return nil
 }
@@ -1131,11 +1110,10 @@ func resultViewColumns(spaceID string, ids IDs, outputFields []string) ([]*stora
 	columns := make([]*storagepb.ViewColumn, 0, len(ordered))
 	for i, name := range ordered {
 		valueType, _ := resultViewColumnType(name)
-		originID := ids.DatasetID + "." + name
 		columns = append(columns, &storagepb.ViewColumn{
-			SpaceId: spaceID, ViewId: ids.ViewID, ColumnName: originID,
+			SpaceId: spaceID, ViewId: ids.ViewID, ColumnName: name,
 			OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
-			OriginId:   originID, ValueType: valueType, SortOrder: uint32(i + 1),
+			OriginId:   name, ValueType: valueType, SortOrder: uint32(i + 1),
 			Attributes: map[string]string{"display_name": resultColumnDisplayName(name)},
 		})
 	}
@@ -1167,7 +1145,7 @@ func resultColumnDisplayName(name string) string {
 	return "结果字段"
 }
 
-func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids IDs, kind storagepb.DataKind, keep string, cfg Config) error {
+func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids IDs, kind storagepb.DataKind, cfg Config) error {
 	get, err := m.metadata.GetView(ctx, &storagepb.GetViewReq{AuthInfo: m.auth, SpaceId: spaceID, ViewId: ids.ViewID})
 	if err != nil {
 		return fmt.Errorf("get result view: %w", err)
@@ -1181,16 +1159,7 @@ func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids ID
 		if kind == storagepb.DataKind_DATA_KIND_RECORD {
 			engine, grain = "bleve", []string{"subject_id", "version"}
 		}
-		filterJSON := ""
-		resultFrequencies := normalizeFrequencies(cfg.Frequencies, cfg.Frequency)
-		if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES && len(resultFrequencies) > 0 {
-			encoded, _ := json.Marshal(map[string]string{"freq": strings.TrimSpace(cfg.Frequency)})
-			if strings.TrimSpace(cfg.Frequency) == "" {
-				encoded, _ = json.Marshal(map[string]string{"freq": resultFrequencies[0]})
-			}
-			filterJSON = string(encoded)
-		}
-		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, FilterJson: filterJSON, KeepDuration: keep, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": taskID}}, CreateOnly: true})
+		created, createErr := m.metadata.CreateView(ctx, &storagepb.CreateViewReq{AuthInfo: m.auth, View: &storagepb.View{SpaceId: spaceID, ViewId: ids.ViewID, Name: resultDisplayName(cfg, taskID), Description: "Collector任务结果视图", DatasetId: ids.DatasetID, GrainKeys: grain, Engine: engine, Status: "active", Attributes: map[string]string{"owner_module": "collector", "view_role": "collection_browse", "collector_task_id": taskID}}, CreateOnly: true})
 		if createErr != nil || created == nil || created.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return metadataError("create result view", createErr, retInfoView(created))
 		}
@@ -1203,32 +1172,6 @@ func (m *Manager) ensureView(ctx context.Context, spaceID, taskID string, ids ID
 		return fmt.Errorf("result view %s is owned by another task", ids.ViewID)
 	}
 	return nil
-}
-
-func normalizeKeepDuration(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "0" {
-		return "0", nil
-	}
-	duration, err := time.ParseDuration(raw)
-	if err != nil && len(raw) > 1 {
-		unit := raw[len(raw)-1]
-		if unit == 'd' || unit == 'D' || unit == 'w' || unit == 'W' {
-			count, parseErr := strconv.ParseInt(raw[:len(raw)-1], 10, 64)
-			if parseErr == nil && count > 0 {
-				multiplier := 24 * time.Hour
-				if unit == 'w' || unit == 'W' {
-					multiplier *= 7
-				}
-				duration = time.Duration(count) * multiplier
-				err = nil
-			}
-		}
-	}
-	if err != nil || duration <= 0 {
-		return "", fmt.Errorf("keep_duration must be 0 or a positive duration: %q", raw)
-	}
-	return duration.String(), nil
 }
 
 func resultDisplayName(cfg Config, taskID string) string {
@@ -1311,6 +1254,10 @@ func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 	if _, err := m.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID}); err != nil {
 		return fmt.Errorf("get result dataset: %w", err)
 	}
+	// 物理清理不可逆：先确认没有结果自身 View 之外的引用，否则数据清空后元数据删除会被外键拒绝
+	if err := m.ensureNoExtraViews(ctx, spaceID, ids); err != nil {
+		return err
+	}
 	if m.cleaner != nil {
 		physical, err := m.cleaner.DeleteDatasetRows(ctx, &storagepb.PrimaryDeleteDatasetRowsReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 		if err != nil || physical == nil || !resultDeleteAccepted(physical.GetRetInfo()) {
@@ -1329,6 +1276,23 @@ func (m *Manager) Delete(ctx context.Context, spaceID string, ids IDs) error {
 	removed, err := m.metadata.DeleteDataset(ctx, &storagepb.DeleteDatasetReq{AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID})
 	if err != nil || !resultDeleteAccepted(retInfoDatasetDelete(removed)) {
 		return metadataError("delete result dataset", err, retInfoDatasetDelete(removed))
+	}
+	return nil
+}
+
+// ensureNoExtraViews 拒绝删除仍被其他 View 引用的结果 Dataset，此时数据必须完整保留。
+func (m *Manager) ensureNoExtraViews(ctx context.Context, spaceID string, ids IDs) error {
+	rsp, err := m.metadata.ListViews(ctx, &storagepb.ListViewsReq{
+		AuthInfo: m.auth, SpaceId: spaceID, DatasetId: ids.DatasetID,
+		Page: &commonpb.Page{Page: 1, Size: 200},
+	})
+	if err != nil || rsp == nil || rsp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
+		return metadataError("list result dataset views", err, rsp.GetRetInfo())
+	}
+	for _, view := range rsp.GetViews() {
+		if view.GetViewId() != ids.ViewID {
+			return fmt.Errorf("%w: 结果 Dataset %s 仍被 View %s 引用，请先删除该 View 后重试", ErrResultContract, ids.DatasetID, view.GetViewId())
+		}
 	}
 	return nil
 }
@@ -1414,28 +1378,17 @@ func (m *Manager) ValidateOwnedForTask(ctx context.Context, spaceID, taskID stri
 	return nil
 }
 
-func nonEmptyFrequency(kind storagepb.DataKind, frequency string, frequencies ...[]string) []string {
-	if kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
-		if len(frequencies) > 0 {
-			return normalizeFrequencies(frequencies[0], frequency)
-		}
-		return normalizeFrequencies(nil, frequency)
+// datasetFrequency returns the Dataset freq: a time-series result has the
+// task's one frequency in canonical form ("1H" becomes "1h"), a record result
+// has none. An unknown frequency is passed through for Storage to reject.
+func datasetFrequency(kind storagepb.DataKind, frequency string) string {
+	if kind != storagepb.DataKind_DATA_KIND_TIME_SERIES {
+		return ""
 	}
-	return nil
-}
-
-func normalizeFrequencies(frequencies []string, fallback string) []string {
-	values := make([]string, 0, len(frequencies)+1)
-	for _, frequency := range frequencies {
-		frequency = strings.TrimSpace(frequency)
-		if frequency != "" && !containsString(values, frequency) {
-			values = append(values, frequency)
-		}
+	if canonical, err := frequencypkg.Normalize(frequency); err == nil {
+		return canonical
 	}
-	if len(values) == 0 && strings.TrimSpace(fallback) != "" {
-		values = append(values, strings.TrimSpace(fallback))
-	}
-	return values
+	return strings.TrimSpace(frequency)
 }
 
 func containsString(values []string, target string) bool {

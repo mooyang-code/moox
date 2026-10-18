@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -42,6 +43,8 @@ type Options struct {
 	ProcessedEventRetention time.Duration
 	DisableSyncWrites       bool
 	PeriodNow               func() time.Time
+	// BlockCacheBytes 是 Pebble 块缓存大小；为 0 时由环境变量或主机内存推算，见 resolveBlockCache。
+	BlockCacheBytes int64
 }
 
 type OutboxEntry struct {
@@ -79,14 +82,13 @@ type Store struct {
 	outboxOldestEventNanos  atomic.Int64
 	maintenanceMu           sync.Mutex
 	maintenanceWG           sync.WaitGroup
-	historyWG               sync.WaitGroup
-	historyMu               sync.Mutex
-	historyBackfillMu       sync.Mutex
-	historyCtx              context.Context
-	historyCancel           context.CancelFunc
-	historyBackfilled       map[string]bool
-	historyBackfillStarted  map[string]bool
+	backgroundCtx           context.Context
+	backgroundCancel        context.CancelFunc
 	closing                 bool
+	blockCacheBytes         int64
+	// statsStop 通知缓存用量日志协程退出，由 Close 关闭。
+	statsStop chan struct{}
+	statsOnce sync.Once
 }
 
 func Open(opts Options) (*Store, error) {
@@ -108,10 +110,15 @@ func Open(opts Options) (*Store, error) {
 	if err := ensureLayout(opts.Path); err != nil {
 		return nil, err
 	}
-	db, err := cpebble.Open(opts.Path, &cpebble.Options{Merger: BitmapORMerger})
+	cacheBytes, cacheSource := resolveBlockCache(opts.BlockCacheBytes)
+	cache := cpebble.NewCache(cacheBytes)
+	// Open 会自己持有一份引用；这里放掉创建时的那份，DB 关闭时缓存随之释放。
+	defer cache.Unref()
+	db, err := cpebble.Open(opts.Path, &cpebble.Options{Merger: BitmapORMerger, Cache: cache})
 	if err != nil {
 		return nil, err
 	}
+	cacheLogf("storage node Pebble 块缓存 %dMB（%s）", cacheBytes>>20, cacheSource)
 	sourceStoreID, err := bindSourceStore(db, opts.NodeID)
 	if err != nil {
 		_ = db.Close()
@@ -121,10 +128,20 @@ func Open(opts Options) (*Store, error) {
 	if opts.DisableSyncWrites {
 		writeOptions = cpebble.NoSync
 	}
-	historyCtx, historyCancel := context.WithCancel(context.Background())
-	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, periodNow: opts.PeriodNow, historyCtx: historyCtx, historyCancel: historyCancel, historyBackfilled: make(map[string]bool), historyBackfillStarted: make(map[string]bool)}
+	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
+	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{})}
 	store.startPeriodFinalizer()
+	store.startCacheStats(cacheStatsFirstDelay, cacheStatsInterval)
 	return store, nil
+}
+
+// DiskSpaceUsage returns the on-disk size of the store, including files that
+// compaction has made obsolete but not yet deleted.
+func (s *Store) DiskSpaceUsage() uint64 {
+	if s == nil || s.db == nil {
+		return 0
+	}
+	return s.db.Metrics().DiskSpaceUsage()
 }
 
 func (s *Store) Close() error {
@@ -134,11 +151,15 @@ func (s *Store) Close() error {
 	s.maintenanceMu.Lock()
 	s.closing = true
 	s.maintenanceMu.Unlock()
-	if s.historyCancel != nil {
-		s.historyCancel()
+	s.statsOnce.Do(func() {
+		if s.statsStop != nil {
+			close(s.statsStop)
+		}
+	})
+	if s.backgroundCancel != nil {
+		s.backgroundCancel()
 	}
 	s.maintenanceWG.Wait()
-	s.historyWG.Wait()
 	return s.db.Close()
 }
 
@@ -559,120 +580,13 @@ func groupRowsByDataset(rows []*pb.RowFieldUpsert) map[datasetGroup][]*pb.RowFie
 	return out
 }
 
-func (s *Store) ReadFields(ctx context.Context, keys []*pb.RowKey, fieldIDs, attributeKeys []string) ([]*pb.RowFieldValues, error) {
-	rows, _, err := s.ReadFieldsWithPresence(ctx, keys, fieldIDs, attributeKeys)
-	return rows, err
+// pebbleReader 是 *pebble.DB 与 *pebble.Snapshot 共有的只读接口。
+type pebbleReader interface {
+	Get(key []byte) ([]byte, io.Closer, error)
+	NewIter(o *cpebble.IterOptions) (*cpebble.Iterator, error)
 }
 
-func (s *Store) ReadFieldsWithPresence(ctx context.Context, keys []*pb.RowKey, fieldIDs, attributeKeys []string) ([]*pb.RowFieldValues, []*pb.RowKey, error) {
-	if s == nil || s.db == nil {
-		return nil, nil, errors.New("pebble store is closed")
-	}
-	if len(keys) == 0 {
-		return nil, nil, invalid("keys are required")
-	}
-	if len(fieldIDs) == 0 && len(attributeKeys) == 0 {
-		return nil, nil, invalid("field_ids or attribute_keys are required")
-	}
-	if len(keys) > 10000 || (len(keys)*(len(fieldIDs)+len(attributeKeys))) > 100000 {
-		return nil, nil, invalid("read request exceeds key/field limit")
-	}
-	result := make([]*pb.RowFieldValues, 0, len(keys))
-	existing := make([]*pb.RowKey, 0, len(keys))
-	for _, key := range keys {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
-		}
-		resolved := key
-		if key != nil {
-			if rec := key.GetRecord(); rec != nil && rec.GetVersion() == "" {
-				var err error
-				resolved, err = s.resolveMaxRecordVersion(key)
-				if err != nil {
-					return nil, nil, err
-				}
-			}
-		}
-		present, err := s.rowExists(resolved)
-		if err != nil {
-			return nil, nil, err
-		}
-		if present {
-			existing = append(existing, resolved)
-		}
-		row := &pb.RowFieldValues{Key: resolved}
-		for _, id := range fieldIDs {
-			physical, err := encodeFieldKey(resolved, id, s.bucketDuration)
-			if err != nil {
-				return nil, nil, err
-			}
-			data, closer, err := s.db.Get(physical)
-			if errors.Is(err, cpebble.ErrNotFound) {
-				continue
-			}
-			if err != nil {
-				return nil, nil, err
-			}
-			value := &pb.TypedValue{}
-			err = proto.Unmarshal(data, value)
-			_ = closer.Close()
-			if err != nil {
-				return nil, nil, err
-			}
-			row.Fields = append(row.Fields, &pb.FieldValue{FieldId: id, Value: value})
-		}
-		for _, name := range attributeKeys {
-			physical, err := encodeAttributeKey(resolved, name, s.bucketDuration)
-			if err != nil {
-				return nil, nil, err
-			}
-			data, closer, err := s.db.Get(physical)
-			if errors.Is(err, cpebble.ErrNotFound) {
-				continue
-			}
-			if err != nil {
-				return nil, nil, err
-			}
-			value := &pb.TypedValue{}
-			err = proto.Unmarshal(data, value)
-			_ = closer.Close()
-			if err != nil {
-				return nil, nil, err
-			}
-			if row.Attributes == nil {
-				row.Attributes = make(map[string]*pb.TypedValue)
-			}
-			row.Attributes[name] = value
-		}
-		result = append(result, row)
-	}
-	return result, existing, nil
-}
-
-func (s *Store) rowExists(key *pb.RowKey) (bool, error) {
-	for _, namespace := range []byte{fieldNamespace, attributeNamespace} {
-		prefix, err := encodeNamespacePrefix(namespace, key, s.bucketDuration)
-		if err != nil {
-			return false, err
-		}
-		iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: prefix, UpperBound: nextPrefix(prefix)})
-		if err != nil {
-			return false, err
-		}
-		found := iter.First()
-		iterErr := iter.Error()
-		_ = iter.Close()
-		if iterErr != nil {
-			return false, iterErr
-		}
-		if found {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func (s *Store) resolveMaxRecordVersion(key *pb.RowKey) (*pb.RowKey, error) {
+func (s *Store) resolveMaxRecordVersion(reader pebbleReader, key *pb.RowKey) (*pb.RowKey, error) {
 	// The tuple codec preserves UTF-8 byte order, so the last key under each
 	// namespace prefix contains that namespace's largest record version.
 	base, err := recordBasePrefix(key)
@@ -681,7 +595,7 @@ func (s *Store) resolveMaxRecordVersion(key *pb.RowKey) (*pb.RowKey, error) {
 	}
 	max := ""
 	for _, namespace := range []byte{fieldNamespace, attributeNamespace} {
-		iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: append([]byte{namespace}, base...), UpperBound: nextPrefix(append([]byte{namespace}, base...))})
+		iter, err := reader.NewIter(&cpebble.IterOptions{LowerBound: append([]byte{namespace}, base...), UpperBound: nextPrefix(append([]byte{namespace}, base...))})
 		if err != nil {
 			return nil, err
 		}
@@ -807,7 +721,10 @@ func (s *Store) PublishOutboxPublication(ctx context.Context, id uint64, publish
 	if spaceID == "" || datasetID == "" {
 		return fmt.Errorf("outbox entry %d has no dataset scope", id)
 	}
-	unlock := s.lockOutboxDatasetPublication(spaceID, datasetID)
+	unlock, err := s.lockOutboxDatasetPublication(ctx, spaceID, datasetID)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	data, err = s.PrepareOutboxPublication(ctx, id, time.Time{})
 	if err != nil {
@@ -819,11 +736,13 @@ func (s *Store) PublishOutboxPublication(ctx context.Context, id uint64, publish
 type outboxDatasetScope struct{ spaceID, datasetID string }
 
 type outboxPublicationLock struct {
-	mu   sync.Mutex
+	// slot 容量为 1 的信号量：与 sync.Mutex 不同，等待者可以响应 context 取消
+	slot chan struct{}
 	refs int
 }
 
-func (s *Store) lockOutboxDatasetPublication(spaceID, datasetID string) func() {
+// lockOutboxDatasetPublication 获取 Dataset 级发布锁；等待期间 ctx 取消立即返回并回收引用。
+func (s *Store) lockOutboxDatasetPublication(ctx context.Context, spaceID, datasetID string) (func(), error) {
 	scope := outboxDatasetScope{spaceID: spaceID, datasetID: datasetID}
 	s.outboxPublicationMu.Lock()
 	if s.outboxPublicationLocks == nil {
@@ -831,15 +750,13 @@ func (s *Store) lockOutboxDatasetPublication(spaceID, datasetID string) func() {
 	}
 	lock := s.outboxPublicationLocks[scope]
 	if lock == nil {
-		lock = &outboxPublicationLock{}
+		lock = &outboxPublicationLock{slot: make(chan struct{}, 1)}
 		s.outboxPublicationLocks[scope] = lock
 	}
 	lock.refs++
 	s.outboxPublicationMu.Unlock()
 
-	lock.mu.Lock()
-	return func() {
-		lock.mu.Unlock()
+	release := func() {
 		s.outboxPublicationMu.Lock()
 		lock.refs--
 		if lock.refs == 0 {
@@ -847,6 +764,16 @@ func (s *Store) lockOutboxDatasetPublication(spaceID, datasetID string) func() {
 		}
 		s.outboxPublicationMu.Unlock()
 	}
+	select {
+	case lock.slot <- struct{}{}:
+	case <-ctx.Done():
+		release()
+		return nil, ctx.Err()
+	}
+	return func() {
+		<-lock.slot
+		release()
+	}, nil
 }
 
 func (s *Store) prepareOutboxPublicationLocked(ctx context.Context, id uint64) ([]byte, error) {
@@ -869,7 +796,7 @@ func (s *Store) prepareOutboxPublicationLocked(ctx context.Context, id uint64) (
 		return nil, fmt.Errorf("unmarshal outbox entry %d: %w", id, err)
 	}
 	if _, err := validateDataNodeMarkerMessage(raw); err != nil {
-		return nil, fmt.Errorf("validate outbox event %d: %w", id, err)
+		return nil, fmt.Errorf("%w %d: %v", ErrInvalidOutboxEvent, id, err)
 	}
 	return raw, nil
 }
@@ -911,11 +838,9 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, max int) ([]*Outbo
 		return nil, err
 	}
 	// Keep the relay's hot path on a cheap atomic hint. A full scan is still
-	// used to discover legacy entries after restart, but it must not be repeated
-	// every poll when the outbox is empty. Do not overwrite a concurrent write.
-	if revision == s.outboxRevision.Load() {
-		s.setOutboxHintFromList(len(result), len(result) == max, oldestEventAt)
-	}
+	// used to discover entries that existed before a restart, but it must not be
+	// repeated every poll when the outbox is empty. Do not overwrite a concurrent write.
+	s.applyOutboxHintIfUnchanged(revision, func() { s.setOutboxHintFromList(len(result), len(result) == max, oldestEventAt) })
 	return result, nil
 }
 
@@ -953,9 +878,7 @@ func (s *Store) OutboxStats(ctx context.Context) (OutboxStats, error) {
 	if err := iter.Error(); err != nil {
 		return OutboxStats{}, err
 	}
-	if revision == s.outboxRevision.Load() {
-		s.setOutboxHintFromStats(stats)
-	}
+	s.applyOutboxHintIfUnchanged(revision, func() { s.setOutboxHintFromStats(stats) })
 	return stats, nil
 }
 
@@ -995,22 +918,43 @@ func (s *Store) DeleteOutbox(ctx context.Context, ids []uint64) error {
 	}
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
-	sorted := append([]uint64(nil), ids...)
+	// 只统计实际存在、去重后的删除项：同一批 id 可能已被并发的数据集清理删除，或被 relay 重复删除；按 len(ids) 扣减会把其他
+	// 事件的待发计数扣成零，hint 误判队列为空后 relay 不再扫描，新事件一直滞留。
+	sorted := make([]uint64, 0, len(ids))
+	seen := make(map[uint64]struct{}, len(ids))
+	for _, id := range ids {
+		if _, duplicate := seen[id]; duplicate || id == 0 {
+			continue
+		}
+		seen[id] = struct{}{}
+		sorted = append(sorted, id)
+	}
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
 	batch := s.db.NewBatch()
 	defer batch.Close()
+	existing := 0
 	for _, id := range sorted {
-		if id == 0 {
+		key := []byte(outboxKey(id))
+		_, closer, err := s.db.Get(key)
+		if errors.Is(err, cpebble.ErrNotFound) {
 			continue
 		}
-		if err := batch.Delete([]byte(outboxKey(id)), s.writeOptions); err != nil {
+		if err != nil {
 			return err
 		}
+		_ = closer.Close()
+		existing++
+		if err := batch.Delete(key, s.writeOptions); err != nil {
+			return err
+		}
+	}
+	if existing == 0 {
+		return nil
 	}
 	if err := batch.Commit(s.writeOptions); err != nil {
 		return err
 	}
-	s.noteOutboxDeleted(len(sorted))
+	s.noteOutboxDeleted(existing)
 	return nil
 }
 
@@ -1024,13 +968,24 @@ func (s *Store) OutboxPendingHint() (pending int, known, mayHaveMore bool, oldes
 	return int(maxInt64(s.outboxPending.Load(), 0)), s.outboxHintKnown.Load(), s.outboxHintMayHaveMore.Load(), unixNanoTime(s.outboxOldestEventNanos.Load())
 }
 
+// applyOutboxHintIfUnchanged 在与写入/删除共用的 outboxMu 下复核 revision 并回写缓存：扫描读到“空”之后、回写之前，
+// 并发写入可能已经提交事件并推进 revision；不加锁的“先检查再回写”会用过期的“空队列”覆盖掉它，relay 之后一直
+// 跳过扫描，已提交的事件不再发布。写入在持有 outboxMu 的情况下提交并推进 revision，所以在这里复核是原子的。
+func (s *Store) applyOutboxHintIfUnchanged(revision uint64, apply func()) {
+	s.outboxMu.Lock()
+	defer s.outboxMu.Unlock()
+	if revision == s.outboxRevision.Load() {
+		apply()
+	}
+}
+
 func (s *Store) noteOutboxCommitted(count int, oldest time.Time) {
 	if count <= 0 {
 		return
 	}
 	// Keep the hint unknown until the first bounded scan after a restart. A
-	// newly committed event must not hide legacy entries that may already exist
-	// in the database.
+	// newly committed event must not hide entries that already existed in the
+	// database before the restart.
 	s.outboxPending.Add(int64(count))
 	if !oldest.IsZero() {
 		oldestNanos := oldest.UTC().UnixNano()

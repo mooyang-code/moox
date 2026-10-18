@@ -33,55 +33,246 @@ message AlertEvent {
   string created_at = 10;
 }
 
+// Health overview v2: identities are explicit; status has six canonical values.
+message HealthObject {
+  string type = 1;
+  string host_id = 2;
+  string component_id = 3;
+  string dataset_id = 4;
+  string freq = 5;
+  string agent_id = 6;
+  string kind = 7;
+  string space_id = 8;
+  string producer = 9;
+}
+// severity：critical 表示服务不可用或数据中断，warning 表示资源吃紧、指标上报中断等需要关注的风险。
 message HealthAlert {
   string id = 1;
-  string title = 2;
-  string status = 3;
-  string reason = 4;
-  string checked_at = 5;
-  string severity = 6;
+  string severity = 2;
+  HealthObject object = 3;
+  string title = 4;
+  string reason = 5;
+  string raw_error = 6;
+  string triggered_at = 7;
+  string last_checked_at = 8;
+  // 最近一次检查已经通过，正在等待连续成功确认恢复。
+  bool recovering = 9;
+  // 数据集告警对应的数据集事实（水位、最近成功、允许落后）。
+  HealthDataset dataset = 10;
 }
-message HealthInstance {
-  string name = 1;
-  string node_id = 2;
-  string instance_id = 3;
+message HealthSignal {
+  string status = 1;
+  string reason = 2;
+  string raw_error = 3;
+  string checked_at = 4;
+}
+message HealthReporter {
+  string instance_id = 1;
+  string boot_id = 2;
+  string version = 3;
   string status = 4;
-  string conclusion = 5;
-  string last_checked_at = 6;
+  string last_reported_at = 5;
 }
-message HealthItem {
-  string id = 1;
-  string group = 2;
+message HealthComponent {
+  string host_id = 1;
+  string component_id = 2;
   string name = 3;
-  string description = 4;
+  string status = 4;
+  string reason = 5;
+  HealthSignal probe = 6;
+  HealthSignal reporter = 7;
+  repeated HealthReporter instances = 8;
+  string status_since = 9;
+  string probe_url = 10;
+  repeated HealthSignal recent_probes = 11;
+}
+message HealthDataset {
+  string producer = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  string freq = 4;
   string status = 5;
   string reason = 6;
-  string checked_at = 7;
-  int32 omitted_instance_count = 8;
-  repeated HealthInstance instances = 9;
+  string raw_error = 7;
+  string input_watermark_at = 8;
+  string output_watermark_at = 9;
+  string last_success_at = 10;
+  string last_run_at = 11;
+  string last_reported_at = 12;
+  // 生产者随期望清单上报的展示名称（例如策略实例名）；为空时由页面按 Storage 名称或数据集 ID 展示。
+  string display_name = 13;
+  // 最新一根 K 线：output_watermark_at 是它的 data_time（开盘时间），latest_bar_close_at 是按市场交易日历算出的收线时间，
+  // arrived_at 是生产者写完它的时刻。延迟 = 到达 − 收线，到达那一刻定值；生产者没上报到达时间时 delay_known 为 false。
+  string latest_bar_close_at = 14;
+  string arrived_at = 15;
+  int64 delay_seconds = 16;
+  bool delay_known = 17;
+  // 此刻应已收线却还没到的根数；waiting_since 是其中最早一根的收线时间（应到时间），overdue_seconds 是它已晚多久
+  // （当前时间 − 应到时间，持续增长）。
+  int32 waiting_bars = 18;
+  string waiting_since = 19;
+  int64 overdue_seconds = 20;
+  // 允许迟到的秒数：生产者的上报确认应到的那根超过它仍未到时判为过期并告警（生产者每 30 秒上报一次，最多晚一次上报才判定）；
+  // 已到的根延迟超过它只标为迟到，不影响当前状态。
+  int64 lateness_limit_seconds = 21;
+  // 无法按交易日历判断的原因，例如“日历未覆盖”“周期对齐未确认”；为空表示已按日历判断。
+  string clock_issue = 22;
+  // 预期 K 线：按市场交易日历此刻应已收线的最新一根。expected_bar_at 是它的 data_time（开盘时间，与 output_watermark_at 同一口径，
+  // 两者相同即已到），expected_bar_close_at 是收线时间；无法按交易日历判断时为空。
+  string expected_bar_at = 23;
+  string expected_bar_close_at = 24;
+  // 应到的那根已由生产者的上报确认迟到：上报那一刻它已晚超过允许迟到仍没有，数据集据此判为过期并告警。
+  bool late_confirmed = 25;
+  // 市场时区（IANA 名称）：加密货币 UTC，A 股 Asia/Shanghai；没有交易日历的系统数据为 UTC。页面按它显示 K 线时间并标注时区。
+  string timezone = 26;
+}
+message HealthPipelineStage {
+  string id = 1;
+  string name = 2;
+  string status = 3;
+  repeated HealthDataset datasets = 4;
+}
+message HealthBusinessCheck {
+  string check_id = 1;
+  string kind = 2;
+  string module = 3;
+  string space_id = 4;
+  string status = 5;
+  string reason = 6;
+  string raw_error = 7;
+  string checked_at = 8;
+  // 检查名称，与推送标题一致。
+  string name = 9;
+}
+message HealthGatewaySignal {
+  string kind = 1;
+  HealthSignal signal = 2;
+  // Persisted first observation of the current desired/applied mismatch.
+  string pending_since = 3;
+  string expected_hash = 4;
+  string applied_hash = 5;
+}
+message HealthHost {
+  string host_id = 1;
+  string agent_id = 2;
+  string hostname = 3;
+  string address = 4;
+  string status = 5;
+  string reason = 6;
+  double cpu_percent = 7;
+  double memory_percent = 8;
+  double disk_percent = 9;
+  bool metrics_available = 10;
+  bool cpu_available = 11;
+  string last_reported_at = 12;
+  repeated HealthGatewaySignal gateway_signals = 13;
+  bool memory_available = 14;
+  bool disk_available = 15;
+  // 告警阈值（百分比）；0 表示没有对应的告警规则。
+  double cpu_threshold = 16;
+  double memory_threshold = 17;
+  double disk_threshold = 18;
+  // 资源总量：CPU 逻辑核数、内存总量与已用量；磁盘取使用率最高的那个文件系统（与 disk_percent 同一个）。
+  uint32 cpu_cores = 19;
+  uint64 memory_total_bytes = 20;
+  uint64 memory_used_bytes = 21;
+  uint64 disk_total_bytes = 22;
+  uint64 disk_used_bytes = 23;
+  string disk_mountpoint = 24;
+}
+message HealthCounts {
+  int32 healthy_count = 1;
+  int32 attention_count = 2;
+  int32 unknown_count = 3;
+  int32 disabled_count = 4;
+  int32 unchecked_count = 5;
+}
+message HealthSummary {
+  int32 alert_count = 1;
+  int32 healthy_count = 2;
+  int32 attention_count = 3;
+  int32 unknown_count = 4;
+  int32 unregistered_count = 5;
+  HealthCounts components = 6;
 }
 message HealthOverview {
   string generated_at = 1;
-  repeated HealthAlert alerts = 2;
-  repeated HealthItem business_items = 3;
-  repeated HealthItem service_items = 4;
-  string notification_channel_type = 5;
-  bool notification_configured = 6;
-  string notification_webhook_masked = 7;
+  bool topology_known = 2;
+  HealthSummary summary = 3;
+  repeated HealthAlert alerts = 4;
+  repeated HealthComponent components = 5;
+  repeated HealthPipelineStage pipeline = 6;
+  repeated HealthBusinessCheck business_checks = 7;
+  repeated HealthHost hosts = 8;
+  repeated HealthComponent unregistered = 9;
+  // 概览对所有登录用户可见，只带渠道数量和平台；完整 Webhook URL 只由仅管理员可调的 ListNotificationChannels 返回。
+  NotificationSummary notification = 10;
+  // 最近 incident_window_hours 小时内的告警经过（触发到恢复为一条），按触发时间倒序。
+  repeated AlertIncident incidents = 11;
+  int32 incident_window_hours = 12;
+}
+message AlertIncident {
+  string id = 1;
+  string severity = 2;
+  HealthObject object = 3;
+  string title = 4;
+  string reason = 5;
+  // 触发时间早于窗口且找不到触发记录时为空。
+  string triggered_at = 6;
+  // 为空表示尚未收到恢复记录。
+  string resolved_at = 7;
+  // 告警是否仍在进行；检查被停用或删除时告警直接撤销，没有恢复记录，active 为 false。
+  bool active = 8;
+  int32 reminder_count = 9;
+  bool notify_failed = 10;
 }
 message GetHealthOverviewReq { string space_id = 1; }
 message GetHealthOverviewRsp { common.RetInfo ret_info = 1; HealthOverview overview = 2; }
 
-message NotificationChannelSetting {
-  string channel_type = 1;
-  bool configured = 2;
-  string masked_url = 3;
-  string updated_at = 4;
+// NotificationSummary 是告警推送的概况：配置了几个渠道、各是什么平台（按添加顺序，可重复）。
+message NotificationSummary {
+  int32 channel_count = 1;
+  repeated string channel_types = 2;
 }
-message GetNotificationChannelReq {}
-message GetNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationChannelSetting channel = 2; }
-message UpdateNotificationChannelReq { string channel_type = 1; string webhook_url = 2; }
-message UpdateNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationChannelSetting channel = 2; }
+// NotificationChannel 是一个告警推送渠道（企业微信或飞书群机器人）。告警发给全部渠道。
+// Webhook URL 本身就是推送凭据，控制台只允许全局管理员列出渠道。
+message NotificationChannel {
+  string channel_id = 1;
+  string channel_type = 2;
+  string webhook_url = 3;
+  string created_at = 4;
+}
+message ListNotificationChannelsReq {}
+message ListNotificationChannelsRsp { common.RetInfo ret_info = 1; repeated NotificationChannel channels = 2; }
+message AddNotificationChannelReq { string channel_type = 1; string webhook_url = 2; }
+message AddNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationChannel channel = 2; }
+message DeleteNotificationChannelReq { string channel_id = 1; }
+message DeleteNotificationChannelRsp { common.RetInfo ret_info = 1; }
+
+// GetHostPolicyReq 由每台主机的 HostAgent 定期调用，拉取主机策略并缓存到 <部署根>/run/host-policy.json，
+// 供主机守护（moox-runtime watch）与证书巡检直接推送告警。只允许调用方 host-agent。
+message GetHostPolicyReq {}
+// HostPolicyChannel 是一个告警渠道；Webhook URL 本身就是推送凭据。
+message HostPolicyChannel {
+  string channel_type = 1;
+  string webhook_url = 2;
+}
+// HostWatchdogPolicy 是主机守护参数，空值表示各主机使用守护自己的默认值；时长用 Go 的写法，例如 "10m"。
+message HostWatchdogPolicy {
+  bool disabled = 1;
+  string merge_window = 2;
+  int32 crash_loop_failures = 3;
+  string crash_loop_window = 4;
+  string crash_loop_retry = 5;
+  string crash_loop_slow = 6;
+  string stable_after = 7;
+  string not_ready_alert = 8;
+}
+message GetHostPolicyRsp {
+  common.RetInfo ret_info = 1;
+  repeated HostPolicyChannel channels = 2;
+  HostWatchdogPolicy watchdog = 3;
+}
 
 message HostAgentInfo {
   string agent_id = 1;
@@ -92,6 +283,7 @@ message HostAgentInfo {
   trpc.moox.hostagent.HostSnapshot snapshot = 6;
   bool reachable = 7;
   int64 stale_seconds = 8;
+  string host_id = 9;
 }
 message ListHostAgentsReq {}
 message ListHostAgentsRsp { common.RetInfo ret_info = 1; repeated HostAgentInfo agents = 2; bool storage_available = 3; bool data_gap = 4; }
@@ -102,6 +294,48 @@ message HostMetricHistoryPoint {
 }
 message QueryHostMetricHistoryReq { string agent_id = 1; string start_at = 2; string end_at = 3; uint32 limit = 4; }
 message QueryHostMetricHistoryRsp { common.RetInfo ret_info = 1; repeated HostMetricHistoryPoint points = 2; bool storage_available = 3; bool data_gap = 4; }
+
+// 数据链路逐根到达历史：一条链路（源数据集 + 周期）某一天每个环节每一根 K 线的到达延迟。
+message QueryPipelineArrivalHistoryReq {
+  string space_id = 1;
+  // 链路的源数据集（入库的数据集）与周期。
+  string dataset_id = 2;
+  string freq = 3;
+  // YYYY-MM-DD，按市场时区（加密货币 UTC，A 股 Asia/Shanghai）的自然日；为空取市场时区的今天。
+  string day = 4;
+}
+message ArrivalHistoryPoint {
+  // 收线时间（UTC，RFC3339）。
+  string close_at = 1;
+  // 到达 − 收线（秒），在到达那一刻定值。
+  int64 delay_seconds = 2;
+  // 和上一份快照里的水位之间跳过的根数：补数据时一批写完，中间几根不单独记录；0 表示连续。
+  int32 skipped_bars = 3;
+}
+message ArrivalHistorySeries {
+  // 环节：storage（入库）、view（视图）、factor（因子）、factor_view（因子视图）、strategy（策略计算，按同空间同周期列出）。
+  string stage = 1;
+  string producer = 2;
+  // 数据集 ID；View 为 view_id，primary_dataset_id 是它服务的数据集。
+  string dataset_id = 3;
+  string primary_dataset_id = 4;
+  int64 lateness_limit_seconds = 5;
+  repeated ArrivalHistoryPoint points = 6;
+}
+message QueryPipelineArrivalHistoryRsp {
+  common.RetInfo ret_info = 1;
+  // 市场时区（IANA 名称），day 按它切分。
+  string timezone = 2;
+  string day = 3;
+  // 这一天的起止（UTC，RFC3339，左闭右开），时间点按收线时间落在其中。
+  string start_at = 4;
+  string end_at = 5;
+  repeated ArrivalHistorySeries series = 6;
+  // 记录只保留 7 天：这一天的开头早于保留期时为 true，曲线可能不完整。
+  bool retention_truncated = 7;
+  // 记录超过一次查询的上限，曲线只含这一天前面的部分。
+  bool truncated = 8;
+}
 
 message DoctorExpectedComponent {
   string component_id = 1;
@@ -170,9 +404,12 @@ message GetDoctorContextRsp {
 
 service MonitorMgr {
   rpc GetHealthOverview(GetHealthOverviewReq) returns (GetHealthOverviewRsp);
-  rpc GetNotificationChannel(GetNotificationChannelReq) returns (GetNotificationChannelRsp);
-  rpc UpdateNotificationChannel(UpdateNotificationChannelReq) returns (UpdateNotificationChannelRsp);
+  rpc ListNotificationChannels(ListNotificationChannelsReq) returns (ListNotificationChannelsRsp);
+  rpc AddNotificationChannel(AddNotificationChannelReq) returns (AddNotificationChannelRsp);
+  rpc DeleteNotificationChannel(DeleteNotificationChannelReq) returns (DeleteNotificationChannelRsp);
   rpc ListHostAgents(ListHostAgentsReq) returns (ListHostAgentsRsp);
   rpc QueryHostMetricHistory(QueryHostMetricHistoryReq) returns (QueryHostMetricHistoryRsp);
+  rpc QueryPipelineArrivalHistory(QueryPipelineArrivalHistoryReq) returns (QueryPipelineArrivalHistoryRsp);
   rpc GetDoctorContext(GetDoctorContextReq) returns (GetDoctorContextRsp);
+  rpc GetHostPolicy(GetHostPolicyReq) returns (GetHostPolicyRsp);
 }

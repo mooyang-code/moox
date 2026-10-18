@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/cloudcredential"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/clsprovision"
 	tencentscf "github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -17,12 +18,10 @@ import (
 
 func completeTimerEnvironment() map[string]string {
 	return map[string]string{
-		"MOOX_GATEWAY_CALLER":                     "collector",
 		"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON": `{"moox-collector":"` + strings.Repeat("a", 64) + `"}`,
-		"MOOX_SPACE_ID":                           "crypto", "MOOX_CODE_PACKAGE_ID": "old-package", "MOOX_FETCH_TIMEOUT_SECONDS": "60",
-		"MOOX_STORAGE_RPC_GATEWAY_TARGET": "ip://storage.example:11003", "MOOX_GATEWAY_NODE_ID": "storage-node", "MOOX_GATEWAY_TARGET_NODE": "storage-node",
-		"MOOX_GATEWAY_SERVICE_KEY_ID": "collector", "MOOX_GATEWAY_SERVICE_SECRET_KEY": "private-test-secret",
-		"MOOX_COLLECTOR_RPC_GATEWAY_TARGET": "ip://collector.example:11004", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE": "collector-node",
+		"MOOX_SPACE_ID": "crypto", "MOOX_CODE_PACKAGE_ID": "old-package", "MOOX_FETCH_TIMEOUT_SECONDS": "60",
+		"MOOX_ACCESS_ADDRESS": "storage.example:11004", "MOOX_ACCESS_ID": "access@storage", "MOOX_CALLER": "scf-collector",
+		"MOOX_CALLER_KEY_ID": "assigned-scf-key-17", "MOOX_CALLER_KEY": strings.Repeat("a", 64),
 		"MOOX_CLS_ENABLED": "true", "MOOX_CLS_ENDPOINT": "ap-guangzhou.cls.tencentcs.com", "MOOX_CLS_TOPIC_ID": "topic",
 		"MOOX_CLS_TIMEOUT_MS": "3000", "MOOX_CLS_SECRET_ID": "cls-id", "MOOX_CLS_SECRET_KEY": "cls-secret",
 		"MOOX_EVENTBUS_NATS_URL": "tls://eventbus.example:4222", "MOOX_EVENTBUS_NATS_USERNAME": "collector", "MOOX_EVENTBUS_NATS_PASSWORD": "bus-secret",
@@ -90,8 +89,8 @@ func TestMarketFetcherTimerDeployValidatesFinalContractBeforeCodeUpdate(t *testi
 		downgrade     bool
 		wantSuccess   bool
 	}{
-		{"timeout downgrade", "", true, false}, {"Storage route", "MOOX_STORAGE_RPC_GATEWAY_TARGET", false, false},
-		{"Collector route", "MOOX_COLLECTOR_RPC_GATEWAY_TARGET", false, false}, {"Gateway identity", "MOOX_GATEWAY_SERVICE_SECRET_KEY", false, false},
+		{"timeout downgrade", "", true, false}, {"Access address", "MOOX_ACCESS_ADDRESS", false, false},
+		{"Access identity", "MOOX_ACCESS_ID", false, false}, {"Access credential", "MOOX_CALLER_KEY", false, false},
 		{"CLS credential", "MOOX_CLS_SECRET_KEY", false, false}, {"EventBus credential", "MOOX_EVENTBUS_NATS_PASSWORD", false, false},
 		{"complete remote patch", "", false, true},
 		{"Storage app keys", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", false, false},
@@ -129,17 +128,44 @@ func TestMarketFetcherTimerDeployValidatesFinalContractBeforeCodeUpdate(t *testi
 	}
 }
 
-func TestMarketFetcherTimerDeployRemovesLegacyEmbeddedCA(t *testing.T) {
+// 上线时发现：环境里不带 CLS 配置的 Timer 函数创建被环境校验拒绝，因为 CloudNode 的自动补齐发生在校验之后。
+// 补齐必须先于校验：提交的环境没有 CLS 变量也能创建，且创建出的函数带齐 CLS 配置。
+func TestMarketFetcherTimerCreateWithoutCLSEnvironmentGetsItInjectedBeforeValidation(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
-	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "timer", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "timer", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "timer", CreateTime: time.Now(), Metadata: `{}`}))
-	env := completeTimerEnvironment()
-	env["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = "cGVt"
-	fake := &fakeSCFClient{currentEnvironment: env, currentTimeout: 60}
-	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
-
-	_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{NodeId: "timer", PackageId: "moox-collector_dev", Environment: map[string]string{"MOOX_SPACE_ID": "crypto"}})
+	submitted := completeTimerEnvironment()
+	submitted["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+	for key := range submitted {
+		if strings.HasPrefix(key, "MOOX_CLS_") {
+			delete(submitted, key)
+		}
+	}
+	readback := completeTimerEnvironment()
+	readback["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
+	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{err: errors.New("ResourceNotFound.FunctionName")}, {info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 60, Environment: readback}}}}
+	svc := &Service{
+		catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}},
+		scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake },
+		clsEnvironment:   clsSettingsEnvironment{},
+	}
+	metadata := &structpb.Struct{}
+	require.NoError(t, metadata.UnmarshalJSON([]byte(`{"biz_type":"market_fetcher","function_mode":"kline"}`)))
+	_, err := svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "timer", Config: map[string]string{"memory_size": "64"}, Environment: submitted, Metadata: metadata}, 0)
 	require.NoError(t, err)
-	require.Len(t, fake.configured, 1)
-	require.NotContains(t, fake.configured[0].Environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
+	require.Len(t, fake.created, 1)
+	require.Equal(t, "true", fake.created[0].Environment["MOOX_CLS_ENABLED"])
+	require.Equal(t, "topic", fake.created[0].Environment["MOOX_CLS_TOPIC_ID"])
+}
+
+// clsSettingsEnvironment 补齐 Timer 环境校验要求的 CLS 变量。
+type clsSettingsEnvironment struct{}
+
+func (clsSettingsEnvironment) Apply(_ context.Context, _ string, _ clsprovision.Credential, environment map[string]string) bool {
+	environment["MOOX_CLS_ENABLED"] = "true"
+	environment["MOOX_CLS_ENDPOINT"] = "ap-guangzhou.cls.tencentcs.com"
+	environment["MOOX_CLS_TOPIC_ID"] = "topic"
+	environment["MOOX_CLS_TIMEOUT_MS"] = "3000"
+	environment["MOOX_CLS_SECRET_ID"] = "cls-id"
+	environment["MOOX_CLS_SECRET_KEY"] = "cls-secret"
+	return true
 }
