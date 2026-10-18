@@ -111,8 +111,13 @@ type RelayHandler interface {
 	HandleOpen(*tls.Conn)
 }
 
-// maxPendingPerIP 限制单个来源 IP 同时未完成握手的连接数，防止慢速握手占满 control 的公网端口。
-const maxPendingPerIP = 64
+// 跨主机端口对公网开放，认证发生在握手之后（tRPC 每个请求验签、反向连接验前导），所以连接数必须在接受时就限制：
+// 每个连接在整个生命周期内占用来源 IP 与全局的配额，关闭时归还；握手阶段另有更小的单 IP 上限，防止慢速握手。
+const (
+	maxPendingPerIP = 64
+	maxConnsPerIP   = 256
+	maxConns        = 8192
+)
 
 // remoteListener 在各自的 goroutine 里完成 TLS 握手（不串行化 Accept），再按 ALPN 分流：
 // 普通连接交给 tRPC 的 Accept，反向连接交给 RelayHandler。tRPC 处理器接管不了 socket，所以分流必须在这一层。
@@ -128,10 +133,12 @@ type remoteListener struct {
 	relay   atomic.Pointer[RelayHandler]
 	mu      sync.Mutex
 	pending map[string]int
+	open    map[string]int
+	total   int
 }
 
 func newRemoteListener(raw net.Listener, config *tls.Config, ctx context.Context) *remoteListener {
-	return &remoteListener{Listener: raw, config: config, ctx: ctx, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[string]int{}}
+	return &remoteListener{Listener: raw, config: config, ctx: ctx, conns: make(chan net.Conn), done: make(chan struct{}), pending: map[string]int{}, open: map[string]int{}}
 }
 
 // SetRelay 必须在开始服务之前调用。
@@ -177,7 +184,7 @@ func (l *remoteListener) acceptLoop() {
 			_ = raw.Close()
 			continue
 		}
-		go l.dispatch(raw, ip)
+		go l.dispatch(&quotaConn{Conn: raw, release: func() { l.releaseConn(ip) }}, ip)
 	}
 }
 
@@ -192,19 +199,44 @@ func remoteIP(conn net.Conn) string {
 func (l *remoteListener) reserve(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.pending[ip] >= maxPendingPerIP {
+	if l.pending[ip] >= maxPendingPerIP || l.open[ip] >= maxConnsPerIP || l.total >= maxConns {
 		return false
 	}
 	l.pending[ip]++
+	l.open[ip]++
+	l.total++
 	return true
 }
 
+// release 在握手结束时归还握手配额；连接配额由 releaseConn 在关闭时归还。
 func (l *remoteListener) release(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.pending[ip]--; l.pending[ip] <= 0 {
 		delete(l.pending, ip)
 	}
+}
+
+func (l *remoteListener) releaseConn(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.total--
+	if l.open[ip]--; l.open[ip] <= 0 {
+		delete(l.open, ip)
+	}
+}
+
+// quotaConn 在第一次关闭时归还连接配额；TLS、tRPC 与中转关闭连接都会落到这里。
+type quotaConn struct {
+	net.Conn
+	once    sync.Once
+	release func()
+}
+
+func (c *quotaConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(c.release)
+	return err
 }
 
 func (l *remoteListener) dispatch(raw net.Conn, ip string) {

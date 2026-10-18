@@ -254,3 +254,45 @@ func TestClosingListenersCancelsPendingTLSHandshake(t *testing.T) {
 		t.Fatal("listener shutdown did not cancel the TLS handshake")
 	}
 }
+
+// 连接配额覆盖整个连接生命周期：握手完成后仍计数，关闭后归还；单 IP 与全局上限在接受时就拒绝。
+func TestRemoteConnectionQuotaLastsUntilClose(t *testing.T) {
+	cfg, material := fixture(t)
+	opened, err := Open(context.Background(), cfg, material)
+	require.NoError(t, err)
+	defer opened.Close()
+	remote := opened.Remote.(*remoteListener)
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if conn, err := opened.Remote.Accept(); err == nil {
+			accepted <- conn
+		}
+	}()
+	clientConfig, err := material.Client("storage")
+	require.NoError(t, err)
+	client, err := tls.Dial("tcp", cfg.Server.RemoteAddr, clientConfig)
+	require.NoError(t, err)
+	defer client.Close()
+	conn := <-accepted
+	count := func() (int, int) {
+		remote.mu.Lock()
+		defer remote.mu.Unlock()
+		return remote.open["127.0.0.1"], remote.pending["127.0.0.1"]
+	}
+	open, pending := count()
+	require.Equal(t, 1, open, "握手完成后连接仍占用配额")
+	require.Zero(t, pending)
+	require.NoError(t, conn.Close())
+	open, _ = count()
+	require.Zero(t, open)
+
+	quota := newRemoteListener(nil, nil, context.Background())
+	for range maxConnsPerIP {
+		require.True(t, quota.reserve("192.0.2.9"))
+		quota.release("192.0.2.9")
+	}
+	require.False(t, quota.reserve("192.0.2.9"), "单个来源 IP 的连接上限")
+	require.True(t, quota.reserve("192.0.2.10"))
+	quota.releaseConn("192.0.2.9")
+	require.True(t, quota.reserve("192.0.2.9"))
+}
