@@ -779,3 +779,28 @@ func TestLoadDecryptsAnEncryptedManifest(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config_invalid")
 }
+
+// 主机可达性：outbound 进入拓扑；未知取值拒绝；未填写视为可直达。
+func TestLoadHostReachability(t *testing.T) {
+	root := t.TempDir()
+	body := validManifest + `
+[hosts.home]
+address = "192.168.0.103"
+reachability = " Outbound "
+ssh = { username = "mooyang" }
+`
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	require.Equal(t, "outbound", snapshot.Manifest.HostByID("home").Reachability)
+	require.Empty(t, snapshot.Manifest.ControlHost().Reachability)
+	topology, err := snapshot.Manifest.Topology()
+	require.NoError(t, err)
+	for _, host := range topology.Hosts {
+		if host.ID == "home" {
+			require.Equal(t, "outbound", host.Reachability)
+		}
+	}
+	other := t.TempDir()
+	_, err = Load(writeManifest(t, other, strings.Replace(body, "Outbound", "inbound", 1), 0o600), other)
+	require.ErrorContains(t, err, "reachability")
+}

@@ -123,7 +123,8 @@ func exportHostBundle(ctx context.Context, opts hostBundleOptions, stdout io.Wri
 			return errors.New("host-bundle requires registered target and control hosts; sync placements first")
 		}
 		h := hosts[target]
-		material.host = hostbundle.Host{HostID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress}
+		reachability, _ := servicecatalog.ParseReachability(h.Reachability)
+		material.host = hostbundle.Host{HostID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Reachability: reachability}
 		material.control = hostbundle.Host{HostID: hosts[control].HostID, Address: hosts[control].Address}
 		for _, placement := range placements {
 			if placement.HostID == h.HostID {

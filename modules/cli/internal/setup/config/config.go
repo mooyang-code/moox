@@ -224,6 +224,8 @@ type Host struct {
 	Password       string `json:"-"`
 	Provider       string
 	TLSMode        string
+	// Reachability 为空表示可直达，outbound 表示只能出站。
+	Reachability string
 }
 
 type SSHConfig struct {
@@ -233,12 +235,14 @@ type SSHConfig struct {
 }
 
 type HostDefinition struct {
-	Address        string    `toml:"address"`
-	PrivateAddress string    `toml:"private_address"`
-	Region         string    `toml:"region"`
-	Provider       string    `toml:"provider"`
-	TLSMode        string    `toml:"tls_mode"`
-	SSH            SSHConfig `toml:"ssh"`
+	Address        string `toml:"address"`
+	PrivateAddress string `toml:"private_address"`
+	Region         string `toml:"region"`
+	Provider       string `toml:"provider"`
+	TLSMode        string `toml:"tls_mode"`
+	// Reachability：direct（默认）或 outbound（只能出站，例如家庭网络，经 control 网关反向连接）。
+	Reachability string    `toml:"reachability"`
+	SSH          SSHConfig `toml:"ssh"`
 }
 
 // FactorEngineLocal 表示因子引擎运行在执行 moox-cli 的这台电脑上。
@@ -485,6 +489,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		definition.Region = strings.ToLower(strings.TrimSpace(definition.Region))
 		definition.Provider = strings.ToLower(strings.TrimSpace(definition.Provider))
 		definition.TLSMode = strings.ToLower(strings.TrimSpace(definition.TLSMode))
+		definition.Reachability = strings.ToLower(strings.TrimSpace(definition.Reachability))
 		definition.SSH.Username = strings.TrimSpace(definition.SSH.Username)
 		if !md.IsDefined("hosts", id, "ssh", "port") {
 			definition.SSH.Port = 22

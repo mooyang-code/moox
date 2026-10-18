@@ -29,9 +29,11 @@ const maxMetadata = 128 << 10
 
 type Options struct {
 	HostID, ControlHostID, Address, PrivateAddress, ControlAddress string
-	Components                                                     []string
-	ExpectedCA, ExpectedHash                                       string
-	AllowOperator                                                  bool
+	// Outbound 表示目标是只能出站的主机：网关证书必须同时带 ClientAuth，用来与 control 建立反向连接。
+	Outbound                 bool
+	Components               []string
+	ExpectedCA, ExpectedHash string
+	AllowOperator            bool
 }
 
 // Material retains private bytes without exporting them through JSON or fmt.

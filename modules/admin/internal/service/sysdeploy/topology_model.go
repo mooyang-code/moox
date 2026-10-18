@@ -10,6 +10,7 @@ type HostRecord struct {
 	PrivateAddress string    `gorm:"column:c_private_address"`
 	Region         string    `gorm:"column:c_region"`
 	Status         string    `gorm:"column:c_status"`
+	Reachability   string    `gorm:"column:c_reachability"`
 	Description    string    `gorm:"column:c_description"`
 	CreatedAt      time.Time `gorm:"column:c_ctime;autoCreateTime"`
 	UpdatedAt      time.Time `gorm:"column:c_mtime;autoUpdateTime"`
@@ -58,7 +59,9 @@ type HostSpec struct {
 	HostID         string
 	Address        string
 	PrivateAddress string
-	Region         string
-	Description    string
-	Components     []string
+	// Reachability 为空或 direct 表示可直达，outbound 表示只能出站。
+	Reachability string
+	Region       string
+	Description  string
+	Components   []string
 }

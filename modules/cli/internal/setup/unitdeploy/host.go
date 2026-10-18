@@ -170,7 +170,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		return result, errors.New("unit deployment requires its original operator bootstrap pin")
 	}
 	host := manifest.HostByID(options.HostID)
-	material := unitbundle.Options{HostID: host.Name, ControlHostID: control.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, ControlAddress: control.Address, Components: slices.Clone(manifest.Placements[host.Name]), ExpectedCA: pin.CA}
+	material := unitbundle.Options{HostID: host.Name, ControlHostID: control.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, ControlAddress: control.Address, Outbound: host.Reachability != "", Components: slices.Clone(manifest.Placements[host.Name]), ExpectedCA: pin.CA}
 	slices.Sort(material.Components)
 	request := unitbootstrap.ExportRequest{Version: 1, DeploymentRoot: manifest.Paths.DeployRoot, ControlUnitRoot: manifest.Paths.ControlRoot, RuntimeSHA256: runtimeBinding(identity), Target: material, Roles: unitinstall.EventBusRoles(components)}
 	stateDirectory := filepath.Join(root.Name(), "units", host.Name, options.Profile)

@@ -70,7 +70,7 @@ func (s *ServiceImpl) ListHosts(ctx context.Context, req *pb.ListDeploymentHosts
 	response.PageResult = page
 	hosts = hosts[start:end]
 	for _, h := range hosts {
-		response.Hosts = append(response.Hosts, &pb.DeploymentHost{HostId: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Description: h.Description, CreatedAt: h.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: h.UpdatedAt.UTC().Format(time.RFC3339Nano)})
+		response.Hosts = append(response.Hosts, &pb.DeploymentHost{HostId: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Reachability: servicecatalog.ReachabilityName(h.Reachability), Description: h.Description, CreatedAt: h.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: h.UpdatedAt.UTC().Format(time.RFC3339Nano)})
 	}
 	return response, nil
 }
@@ -146,7 +146,7 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 func (s *ServiceImpl) SyncHostPlacements(ctx context.Context, req *pb.SyncHostPlacementsReq) (*pb.SyncHostPlacementsRsp, error) {
 	dao, err := s.topologyDAO()
 	if err == nil {
-		err = dao.SyncHostPlacements(ctx, HostSpec{HostID: req.GetHostId(), Address: req.GetAddress(), PrivateAddress: req.GetPrivateAddress(), Region: req.GetRegion(), Description: req.GetDescription(), Components: req.GetComponentIds()})
+		err = dao.SyncHostPlacements(ctx, HostSpec{HostID: req.GetHostId(), Address: req.GetAddress(), PrivateAddress: req.GetPrivateAddress(), Region: req.GetRegion(), Reachability: req.GetReachability(), Description: req.GetDescription(), Components: req.GetComponentIds()})
 	}
 	return &pb.SyncHostPlacementsRsp{RetInfo: topologyRet(err)}, nil
 }

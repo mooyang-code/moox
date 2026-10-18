@@ -142,7 +142,7 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 	}
 	topology := servicecatalog.Topology{ControlHostID: request.Topology.ControlHostID}
 	for _, host := range request.Topology.Hosts {
-		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: host.HostID, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Status: servicecatalog.Enabled})
+		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: host.HostID, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Status: servicecatalog.Enabled, Reachability: host.Reachability})
 		for _, id := range []string{"host-gateway", "host-agent"} {
 			topology.Placements = append(topology.Placements, servicecatalog.Placement{HostID: host.HostID, ComponentID: id, Status: servicecatalog.Enabled})
 		}

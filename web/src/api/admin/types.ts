@@ -37,6 +37,8 @@ export interface DeploymentHost {
   private_address?: string;
   region?: string;
   status: DeploymentStatus;
+  /** direct：可直达；outbound：只能出站，经控制主机网关反向连接中转 */
+  reachability?: "direct" | "outbound";
   description?: string;
   created_at?: string;
   updated_at?: string;
@@ -118,5 +120,5 @@ export interface HostRoutesResponse {
 export interface ServiceDirectory {
   version?: string;
   services?: Record<string, { host_ids?: string[] }>;
-  hosts?: Record<string, { address?: string; private_address?: string; region?: string }>;
+  hosts?: Record<string, { address?: string; private_address?: string; region?: string; relay?: string }>;
 }

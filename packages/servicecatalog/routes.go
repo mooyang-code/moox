@@ -26,6 +26,28 @@ type Host struct {
 // ReachabilityOutbound 标记只能出站的主机：它的网关主动与 control 网关保持反向连接。
 const ReachabilityOutbound = "outbound"
 
+// ReachabilityDirect 是配置与 Admin 登记里“可直达”的写法，拓扑里对应空值。
+const ReachabilityDirect = "direct"
+
+// ParseReachability 把配置或登记里的可达性（空、direct、outbound）转换成拓扑取值（空或 outbound）。
+func ParseReachability(value string) (string, bool) {
+	switch value {
+	case "", ReachabilityDirect:
+		return "", true
+	case ReachabilityOutbound:
+		return ReachabilityOutbound, true
+	}
+	return "", false
+}
+
+// ReachabilityName 返回拓扑取值在配置与登记里的写法。
+func ReachabilityName(value string) string {
+	if value == ReachabilityOutbound {
+		return ReachabilityOutbound
+	}
+	return ReachabilityDirect
+}
+
 // HostGatewayRemotePort 是主机网关的跨主机 TLS 端口。
 const HostGatewayRemotePort = 11003
 

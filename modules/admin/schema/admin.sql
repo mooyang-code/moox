@@ -160,10 +160,13 @@ CREATE TABLE IF NOT EXISTS t_hosts (
     c_private_address TEXT NOT NULL DEFAULT '',
     c_region TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'enabled',
+    -- direct：可直达；outbound：只能出站，经 control 网关反向连接中转
+    c_reachability TEXT NOT NULL DEFAULT 'direct',
     c_description TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('enabled', 'disabled')),
+    CHECK (c_reachability IN ('direct', 'outbound')),
     UNIQUE (c_address)
 );
 

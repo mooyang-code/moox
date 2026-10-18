@@ -27,7 +27,8 @@
               <div>
                 <h3>
                   {{ group.host.host_id }} <a-tag v-if="group.host.host_id === controlHostId">控制主机 · 受保护</a-tag
-                  ><a-tag v-if="group.host.status === 'disabled'">已停用</a-tag>
+                  ><a-tag v-if="group.host.status === 'disabled'">已停用</a-tag
+                  ><a-tag v-if="group.host.reachability === 'outbound'">只能出站 · 经控制主机中转</a-tag>
                 </h3>
                 <p>
                   {{ group.host.address }}

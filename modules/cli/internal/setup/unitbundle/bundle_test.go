@@ -517,3 +517,21 @@ func TestHostMaterialPublicationPreservesExistingObjectsAndConcurrentWinner(t *t
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 }
+
+// 证书用途必须与主机可达性一致：出站主机需要 ClientAuth，直达主机不能带 ClientAuth。
+func TestHostMaterialCertificateUsageFollowsReachability(t *testing.T) {
+	f := newFixture(t, "compute1", []string{"trade"}, false)
+	f.options.Outbound = true
+	_, err := Load(t.Context(), f.write(t), f.options)
+	require.ErrorContains(t, err, "key usage")
+
+	f = newFixture(t, "compute1", []string{"trade"}, false)
+	f.leaf.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+	f.signLeaf(t)
+	f.inventory()
+	_, err = Load(t.Context(), f.write(t), f.options)
+	require.ErrorContains(t, err, "key usage")
+	f.options.Outbound = true
+	_, err = Load(t.Context(), f.write(t), f.options)
+	require.NoError(t, err)
+}

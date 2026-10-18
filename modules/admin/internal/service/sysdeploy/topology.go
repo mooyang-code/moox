@@ -48,7 +48,8 @@ func (d *TopologyDAO) records(tx *gorm.DB) ([]HostRecord, []PlacementRecord, err
 func (d *TopologyDAO) topology(hosts []HostRecord, placements []PlacementRecord) servicecatalog.Topology {
 	t := servicecatalog.Topology{ControlHostID: d.controlHostID}
 	for _, h := range hosts {
-		t.Hosts = append(t.Hosts, servicecatalog.Host{ID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status})
+		reachability, _ := servicecatalog.ParseReachability(h.Reachability)
+		t.Hosts = append(t.Hosts, servicecatalog.Host{ID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Reachability: reachability})
 	}
 	for _, p := range placements {
 		t.Placements = append(t.Placements, servicecatalog.Placement{HostID: p.HostID, ComponentID: p.ComponentID, Status: p.Status})
@@ -134,7 +135,7 @@ func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 			}
 			host.UpdatedAt = time.Now().UTC()
 			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_host_id"}}, DoUpdates: clause.AssignmentColumns([]string{
-				"c_address", "c_private_address", "c_region", "c_description", "c_mtime",
+				"c_address", "c_private_address", "c_region", "c_reachability", "c_description", "c_mtime",
 			})}).Create(&host).Error; err != nil {
 				return err
 			}
@@ -160,6 +161,10 @@ func (d *TopologyDAO) propose(hosts []HostRecord, placements []PlacementRecord, 
 	if len(spec.Description) > 4096 || len(spec.Components) > len(d.catalog.Components) {
 		return nil, nil, fmt.Errorf("%w: host description or component list exceeds limit", ErrInvalidTopology)
 	}
+	reachability, ok := servicecatalog.ParseReachability(spec.Reachability)
+	if !ok {
+		return nil, nil, fmt.Errorf("%w: unknown host reachability %q", ErrInvalidTopology, spec.Reachability)
+	}
 	wanted := map[string]bool{}
 	for _, id := range spec.Components {
 		component, ok := d.catalog.Component(id)
@@ -173,7 +178,7 @@ func (d *TopologyDAO) propose(hosts []HostRecord, placements []PlacementRecord, 
 			wanted[component.ID] = true
 		}
 	}
-	host := HostRecord{HostID: spec.HostID, Address: spec.Address, PrivateAddress: spec.PrivateAddress, Region: spec.Region, Description: spec.Description, Status: servicecatalog.Enabled}
+	host := HostRecord{HostID: spec.HostID, Address: spec.Address, PrivateAddress: spec.PrivateAddress, Region: spec.Region, Reachability: servicecatalog.ReachabilityName(reachability), Description: spec.Description, Status: servicecatalog.Enabled}
 	if i := slices.IndexFunc(hosts, func(h HostRecord) bool { return h.HostID == spec.HostID }); i >= 0 {
 		host.Status, host.CreatedAt = hosts[i].Status, hosts[i].CreatedAt
 		hosts[i] = host

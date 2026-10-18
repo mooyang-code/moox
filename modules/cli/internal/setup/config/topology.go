@@ -15,7 +15,8 @@ func (m Manifest) HostByID(id string) Host {
 	if !ok {
 		return Host{}
 	}
-	return Host{Name: id, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region, Port: definition.SSH.Port, Username: definition.SSH.Username, Password: definition.SSH.Password, Provider: definition.Provider, TLSMode: definition.TLSMode}
+	reachability, _ := servicecatalog.ParseReachability(definition.Reachability)
+	return Host{Name: id, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region, Port: definition.SSH.Port, Username: definition.SSH.Username, Password: definition.SSH.Password, Provider: definition.Provider, TLSMode: definition.TLSMode, Reachability: reachability}
 }
 func (m Manifest) ControlHost() Host    { return m.HostByID(m.PlacementHost("admin")) }
 func (m Manifest) CompileHost() Host    { return m.HostByID(m.CompileHostRef.Host) }
@@ -74,7 +75,7 @@ func (m Manifest) Topology() (servicecatalog.Topology, error) {
 	}
 	topology := servicecatalog.Topology{ControlHostID: m.PlacementHost("admin")}
 	for _, host := range m.Hosts() {
-		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: host.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Status: servicecatalog.Enabled})
+		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: host.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Status: servicecatalog.Enabled, Reachability: host.Reachability})
 		for _, component := range catalog.Components {
 			if component.Scope == servicecatalog.ScopeHost {
 				topology.Placements = append(topology.Placements, servicecatalog.Placement{HostID: host.Name, ComponentID: component.ID, Status: servicecatalog.Enabled})
@@ -111,6 +112,9 @@ func validateHostCatalog(catalog map[string]HostDefinition) error {
 		}
 		if len(definition.Region) > 128 {
 			return fmt.Errorf("config_invalid: %s.region exceeds 128 bytes", path)
+		}
+		if _, ok := servicecatalog.ParseReachability(definition.Reachability); !ok {
+			return fmt.Errorf("config_invalid: %s.reachability must be direct or outbound", path)
 		}
 		address := strings.ToLower(strings.TrimSuffix(definition.Address, "."))
 		if ip := net.ParseIP(address); ip != nil {

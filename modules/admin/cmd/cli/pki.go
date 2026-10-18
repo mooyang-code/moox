@@ -27,6 +27,7 @@ func runPKICommand(args []string, stdout, stderr io.Writer) error {
 	hostID := fs.String("host-id", "", "canonical host identity")
 	address := fs.String("address", "", "bare public IP or DNS host")
 	privateAddress := fs.String("private-address", "", "bare private IP or DNS host")
+	outbound := fs.Bool("outbound", false, "issue a gateway certificate that can also attach as a TLS client (outbound-only host)")
 	outputDir := fs.String("output-dir", "", "private output directory; must be new for issue")
 	if err := fs.Parse(args[2:]); err != nil {
 		return err
@@ -63,7 +64,7 @@ func runPKICommand(args []string, stdout, stderr io.Writer) error {
 		}
 		return writeJSON(stdout, info)
 	case "issue":
-		issued, err := store.Issue(pki.HostIdentity{HostID: *hostID, Address: *address, PrivateAddress: *privateAddress}, *outputDir)
+		issued, err := store.Issue(pki.HostIdentity{HostID: *hostID, Address: *address, PrivateAddress: *privateAddress, Outbound: *outbound}, *outputDir)
 		if err != nil {
 			return err
 		}

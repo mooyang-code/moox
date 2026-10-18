@@ -138,7 +138,7 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 		}
 		specs := make([]sysdeploy.HostSpec, 0, len(topology.Hosts))
 		for _, h := range topology.Hosts {
-			specs = append(specs, sysdeploy.HostSpec{HostID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Description: h.Description, Components: h.Components})
+			specs = append(specs, sysdeploy.HostSpec{HostID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Reachability: h.Reachability, Description: h.Description, Components: h.Components})
 		}
 		// This also reserves SQLite's writer before validating the full fleet.
 		if err := dao.SyncHosts(ctx, specs); err != nil {
