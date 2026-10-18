@@ -1056,7 +1056,7 @@ components:
         - archive runs and partition registry
       dependencies:
         - storage-primary
-      transport: reporter
+      transport: health_only
       functional_observability: deferred
       config_paths:
         - archive-mgr/config/app.yaml
