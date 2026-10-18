@@ -1,0 +1,113 @@
+package configinit
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+)
+
+// legacyText 把当前格式的示例配置改回旧格式：因子定义带旧字段、没有中文名、海外机叫 compute-1。
+func legacyText(t *testing.T) string {
+	t.Helper()
+	text := sampleText(t)
+	require.Contains(t, text, "[hosts.overseas]")
+	text = strings.ReplaceAll(text, "[hosts.overseas]", "[hosts.compute-1]")
+	text = regexp.MustCompile(`(?m)^overseas = `).ReplaceAllString(text, "compute-1 = ")
+	text = regexp.MustCompile(`(?m)^label = .*\n`).ReplaceAllString(text, "")
+	text = regexp.MustCompile(`(?m)^factor_id = "(\w+)"\nfile = "xbx.yaml"\n`).ReplaceAllString(text,
+		"factor_id = \"$1\"\nfactor_type = \"timeseries\"\nfile = \"$1.py\"\nname = \"$1\"\noutputs = [\n  \"x_5\",\n  \"x_20\",\n]\nparams_json = '{\"window\":20}'\nlookback_periods = 20\n")
+	_, err := setupconfig.Parse([]byte(text))
+	require.ErrorContains(t, err, "no longer supported", "夹具必须是旧格式")
+	return text
+}
+
+func migrateFixture(t *testing.T, text string) (path, root string, keys *configcrypt.MemoryStore) {
+	t.Helper()
+	root = t.TempDir()
+	library := filepath.Join(root, "modules", "factor", "factors")
+	require.NoError(t, os.MkdirAll(library, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(library, "xbx.yaml"), []byte("- factor_id: Bias\n  spec: x\n- factor_id: Cci\n  spec: x\n- factor_id: MinMax\n  spec: x\n- factor_id: QuoteVolumeMean\n  spec: x\n"), 0o644))
+	keys = &configcrypt.MemoryStore{}
+	sealed, err := configcrypt.Encrypt([]byte(text), keys)
+	require.NoError(t, err)
+	path = filepath.Join(root, "moox.toml")
+	require.NoError(t, os.WriteFile(path, sealed, 0o600))
+	return path, root, keys
+}
+
+func TestMigratePreviewsWithoutWritingAndReportsNoValues(t *testing.T) {
+	path, root, keys := migrateFixture(t, legacyText(t))
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "compute-1", RenameTo: "overseas"})
+	require.NoError(t, err)
+	require.True(t, report.Encrypted && report.Changed && report.Valid)
+	require.False(t, report.Written)
+	require.Len(t, report.Factors, 4)
+	require.Equal(t, FactorMigration{FactorID: "Bias", File: "xbx.yaml", RemovedKeys: []string{"factor_type", "lookback_periods", "name", "outputs", "params_json"}}, report.Factors[0])
+	require.Equal(t, []HostLabelMigration{{"control", "控制机"}, {"storage", "存储机"}, {"overseas", "海外机"}}, report.Labels)
+	require.Equal(t, &HostRename{From: "compute-1", To: "overseas", Changes: 2}, report.Rename)
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "预览不能改动文件")
+}
+
+func TestMigrateWritesBackupAndReencryptsCurrentFormat(t *testing.T) {
+	path, root, keys := migrateFixture(t, legacyText(t))
+	original, err := os.ReadFile(path)
+	require.NoError(t, err)
+	now := func() time.Time { return time.Date(2026, 10, 18, 9, 30, 0, 0, time.UTC) }
+
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "compute-1", RenameTo: "overseas", Write: true, Now: now})
+	require.NoError(t, err)
+	require.True(t, report.Written)
+	require.Equal(t, path+".bak-20261018093000", report.Backup)
+	backup, err := os.ReadFile(report.Backup)
+	require.NoError(t, err)
+	require.Equal(t, original, backup)
+
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.True(t, configcrypt.IsEncrypted(sealed))
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	manifest, err := setupconfig.Parse(plain)
+	require.NoError(t, err)
+	require.Equal(t, "海外机", manifest.HostByID("overseas").Label)
+	require.Equal(t, []string{"trade", "access", "egress-proxy"}, manifest.Placements["overseas"])
+	require.NotContains(t, string(plain), "compute-1")
+	require.NotContains(t, string(plain), "factor_type")
+	require.Contains(t, string(plain), "# 主机命名", "注释保持不动")
+
+	// 再跑一次没有改动。
+	again, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true})
+	require.NoError(t, err)
+	require.False(t, again.Changed || again.Written)
+}
+
+func TestMigrateRejectsUnknownFactorsAndBadRenames(t *testing.T) {
+	text := legacyText(t)
+	path, root, keys := migrateFixture(t, strings.Replace(text, `factor_id = "Cci"`, `factor_id = "Missing"`, 1))
+	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys})
+	require.ErrorContains(t, err, "因子库里没有因子 Missing")
+
+	path, root, keys = migrateFixture(t, text)
+	for _, rename := range [][2]string{{"nope", "overseas"}, {"compute-1", "storage"}, {"compute-1", "Bad ID"}} {
+		_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: rename[0], RenameTo: rename[1]})
+		require.Error(t, err, rename)
+	}
+	// 不改名时 compute-1 不在命名表里，不补中文名，但仍能通过校验。
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys})
+	require.NoError(t, err)
+	require.Nil(t, report.Rename)
+	require.Len(t, report.Labels, 2)
+}

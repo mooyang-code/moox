@@ -1,0 +1,441 @@
+package configinit
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
+)
+
+// 按角色命名的主机 ID 对应的中文名（docs/部署与运维.md「主机命名」）。
+var hostLabels = map[string]string{"control": "控制机", "storage": "存储机", "overseas": "海外机", "factor": "因子机"}
+
+const defaultFactorSourceDir = "modules/factor/factors"
+
+// MigrateOptions 控制 config migrate 的行为。
+type MigrateOptions struct {
+	// RepoRoot 是解析 factors.source_dir 的仓库根目录。
+	RepoRoot string
+	// RenameFrom / RenameTo 非空时把主机 ID 改名（--rename-host old=new）。
+	RenameFrom, RenameTo string
+	// Write 为 true 时校验通过后写回（备份原文件并重新加密）；否则只预览。
+	Write bool
+	Keys  configcrypt.KeyStore
+	// Now 用于备份文件名，测试可替换。
+	Now func() time.Time
+}
+
+// FactorMigration 是一条因子定义的改写：只保留 factor_id，file 指向包含它的因子库文件。
+type FactorMigration struct {
+	FactorID    string   `json:"factor_id"`
+	File        string   `json:"file"`
+	RemovedKeys []string `json:"removed_keys,omitempty"`
+}
+
+// HostLabelMigration 是给主机补上的中文名。
+type HostLabelMigration struct {
+	Host  string `json:"host"`
+	Label string `json:"label"`
+}
+
+// HostRename 记录主机 ID 改名涉及的位置数。
+type HostRename struct {
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Changes int    `json:"changes"`
+}
+
+// MigrateReport 只包含键名、因子 ID、文件名、主机 ID 与中文名，不含任何配置值。
+type MigrateReport struct {
+	Path       string               `json:"path"`
+	Encrypted  bool                 `json:"encrypted"`
+	Factors    []FactorMigration    `json:"factors,omitempty"`
+	Labels     []HostLabelMigration `json:"labels,omitempty"`
+	Rename     *HostRename          `json:"rename,omitempty"`
+	Changed    bool                 `json:"changed"`
+	Valid      bool                 `json:"valid"`
+	Written    bool                 `json:"written"`
+	Backup     string               `json:"backup,omitempty"`
+	NextAction string               `json:"next_action,omitempty"`
+}
+
+// MigrateFile 在本机解密 moox.toml，把它改写成当前格式并校验；Write 时备份原文件、重新加密写回。
+// 任何错误信息与报告都不包含配置值。
+func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
+	report := MigrateReport{Path: path}
+	if opts.Keys == nil {
+		opts.Keys = configcrypt.Default()
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	raw, err := readConfigFile(path)
+	if err != nil {
+		return report, err
+	}
+	plain := raw
+	if configcrypt.IsEncrypted(raw) {
+		report.Encrypted = true
+		if plain, err = configcrypt.Decrypt(raw, opts.Keys); err != nil {
+			return report, fmt.Errorf("解不开 %s：%w", path, err)
+		}
+	}
+	library, err := loadFactorLibrary(filepath.Join(opts.RepoRoot, filepath.FromSlash(factorSourceDir(plain))))
+	if err != nil {
+		return report, err
+	}
+	migrated, err := migrateManifestText(plain, library, opts.RenameFrom, opts.RenameTo, &report)
+	if err != nil {
+		return report, err
+	}
+	report.Changed = !bytes.Equal(migrated, plain)
+	if _, err := setupconfig.Parse(migrated); err != nil {
+		return report, fmt.Errorf("改写后的配置校验没有通过，未写回：%w", err)
+	}
+	report.Valid = true
+	if !opts.Write || !report.Changed {
+		if report.Changed {
+			report.NextAction = "确认无误后加 --yes 写回"
+		}
+		return report, nil
+	}
+	current, err := readConfigFile(path)
+	if err != nil {
+		return report, err
+	}
+	if sha256.Sum256(current) != sha256.Sum256(raw) {
+		return report, errors.New("moox.toml 在迁移过程中被改动过，未写回；请重新运行")
+	}
+	backup := fmt.Sprintf("%s.bak-%s", path, opts.Now().Format("20060102150405"))
+	if err := writeExclusive(backup, raw); err != nil {
+		return report, err
+	}
+	report.Backup = backup
+	sealed, err := configcrypt.Encrypt(migrated, opts.Keys)
+	if err != nil {
+		return report, fmt.Errorf("加密失败：%w", err)
+	}
+	if err := replaceFile(path, sealed); err != nil {
+		return report, err
+	}
+	report.Written = true
+	report.NextAction = "运行一次 moox-cli config backup 更新管理后台的备份"
+	return report, nil
+}
+
+// writeExclusive 以 0600 新建文件，已存在时拒绝覆盖。
+func writeExclusive(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("无法创建备份 %s：%w", path, err)
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("写备份 %s 失败：%w", path, err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("写备份 %s 失败：%w", path, err)
+	}
+	return file.Close()
+}
+
+// factorSourceDir 读出 [factors] source_dir，没有时用默认目录。
+func factorSourceDir(plain []byte) string {
+	section := ""
+	for _, line := range strings.Split(string(plain), "\n") {
+		if name, _, ok := tableHeader(line); ok {
+			section = name
+			continue
+		}
+		if section == "factors" {
+			if key, value, ok := keyValue(line); ok && key == "source_dir" {
+				if dir := strings.Trim(strings.TrimSpace(value), `"'`); dir != "" {
+					return strings.TrimPrefix(filepath.ToSlash(filepath.Clean(dir)), "./")
+				}
+			}
+		}
+	}
+	return defaultFactorSourceDir
+}
+
+// loadFactorLibrary 扫描因子库目录，返回 factor_id → 相对文件路径。同一个因子出现在多个文件里视为歧义。
+func loadFactorLibrary(root string) (map[string]string, error) {
+	out := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !(strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml")) {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var items []struct {
+			FactorID string `yaml:"factor_id"`
+		}
+		if err := yaml.Unmarshal(raw, &items); err != nil {
+			return fmt.Errorf("因子库 %s 不是因子列表：%w", path, err)
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		for _, item := range items {
+			id := strings.TrimSpace(item.FactorID)
+			if id == "" {
+				continue
+			}
+			if previous, exists := out[id]; exists {
+				return fmt.Errorf("因子 %s 同时出现在 %s 和 %s", id, previous, filepath.ToSlash(rel))
+			}
+			out[id] = filepath.ToSlash(rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("读取因子库目录失败：%w", err)
+	}
+	return out, nil
+}
+
+var (
+	headerPattern = regexp.MustCompile(`^\s*(\[\[?)\s*([^\[\]]+?)\s*(\]\]?)\s*(#.*)?$`)
+	keyPattern2   = regexp.MustCompile(`^\s*([A-Za-z0-9_-]+|"[^"]*")\s*=\s*(.*)$`)
+)
+
+// tableHeader 识别 [name] 或 [[name]]。
+func tableHeader(line string) (name string, array bool, ok bool) {
+	m := headerPattern.FindStringSubmatch(line)
+	if m == nil || len(m[1]) != len(m[3]) {
+		return "", false, false
+	}
+	return m[2], m[1] == "[[", true
+}
+
+func keyValue(line string) (key, value string, ok bool) {
+	m := keyPattern2.FindStringSubmatch(line)
+	if m == nil {
+		return "", "", false
+	}
+	return strings.Trim(m[1], `"`), m[2], true
+}
+
+// valueEnd 返回从第 i 行开始的键值占用到的最后一行（多行数组与多行字符串）。
+func valueEnd(lines []string, i int) int {
+	_, value, ok := keyValue(lines[i])
+	if !ok {
+		return i
+	}
+	value = strings.TrimSpace(value)
+	for _, quote := range []string{`"""`, `'''`} {
+		if strings.HasPrefix(value, quote) && strings.Count(value, quote) < 2 {
+			for j := i + 1; j < len(lines); j++ {
+				if strings.Contains(lines[j], quote) {
+					return j
+				}
+			}
+			return len(lines) - 1
+		}
+	}
+	if strings.HasPrefix(value, "[") {
+		depth := strings.Count(value, "[") - strings.Count(value, "]")
+		for j := i + 1; depth > 0 && j < len(lines); j++ {
+			depth += strings.Count(lines[j], "[") - strings.Count(lines[j], "]")
+			if depth <= 0 {
+				return j
+			}
+		}
+	}
+	return i
+}
+
+func quotedValue(value string) string {
+	value = strings.TrimSpace(value)
+	if i := strings.Index(value, "#"); i > 0 && !strings.HasPrefix(value, `"`) && !strings.HasPrefix(value, "'") {
+		value = strings.TrimSpace(value[:i])
+	}
+	if len(value) >= 2 && (value[0] == '"' || value[0] == '\'') {
+		if end := strings.IndexByte(value[1:], value[0]); end >= 0 {
+			return value[1 : end+1]
+		}
+	}
+	return value
+}
+
+type block struct {
+	header string // 表名；文件开头没有表头的部分为空
+	array  bool
+	lines  []string
+}
+
+func splitBlocks(lines []string) []block {
+	blocks := []block{{}}
+	for _, line := range lines {
+		if name, array, ok := tableHeader(line); ok {
+			blocks = append(blocks, block{header: name, array: array})
+		}
+		blocks[len(blocks)-1].lines = append(blocks[len(blocks)-1].lines, line)
+	}
+	return blocks
+}
+
+// migrateManifestText 是纯文本改写：保留注释与其余内容，只改因子定义、主机名与中文名。
+func migrateManifestText(plain []byte, library map[string]string, renameFrom, renameTo string, report *MigrateReport) ([]byte, error) {
+	blocks := splitBlocks(strings.Split(string(plain), "\n"))
+	for _, b := range blocks {
+		if b.header == "factors.items" {
+			return nil, errors.New("[[factors.items]] 是更早的格式，需要先手工拆成 [[factors.definitions]] 与 [[factors.members]]")
+		}
+	}
+	if renameFrom != "" || renameTo != "" {
+		if err := renameHost(blocks, renameFrom, renameTo, report); err != nil {
+			return nil, err
+		}
+	}
+	for i := range blocks {
+		if blocks[i].header == "factors.definitions" && blocks[i].array {
+			change, err := migrateFactorBlock(&blocks[i], library)
+			if err != nil {
+				return nil, err
+			}
+			if change != nil {
+				report.Factors = append(report.Factors, *change)
+			}
+		}
+	}
+	for i := range blocks {
+		id, ok := strings.CutPrefix(blocks[i].header, "hosts.")
+		if !ok || blocks[i].array || strings.Contains(id, ".") {
+			continue
+		}
+		label, known := hostLabels[id]
+		if !known || blockHasKey(blocks[i], "label") {
+			continue
+		}
+		b := &blocks[i]
+		b.lines = append([]string{b.lines[0], fmt.Sprintf("label = %q", label)}, b.lines[1:]...)
+		report.Labels = append(report.Labels, HostLabelMigration{Host: id, Label: label})
+	}
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.lines...)
+	}
+	return []byte(strings.Join(out, "\n")), nil
+}
+
+func blockHasKey(b block, key string) bool {
+	for _, line := range b.lines[1:] {
+		if k, _, ok := keyValue(line); ok && k == key {
+			return true
+		}
+	}
+	return false
+}
+
+// migrateFactorBlock 把一个 [[factors.definitions]] 改成只有 factor_id 与 file；已经是新格式时不改。
+func migrateFactorBlock(b *block, library map[string]string) (*FactorMigration, error) {
+	factorID, currentFile := "", ""
+	var removed []string
+	for _, line := range b.lines[1:] {
+		key, value, ok := keyValue(line)
+		if !ok {
+			continue
+		}
+		switch key {
+		case "factor_id":
+			factorID = strings.TrimSpace(quotedValue(value))
+		case "file":
+			currentFile = strings.TrimSpace(quotedValue(value))
+		default:
+			removed = append(removed, key)
+		}
+	}
+	if factorID == "" {
+		return nil, errors.New("有一个 [[factors.definitions]] 缺少 factor_id")
+	}
+	file, ok := library[factorID]
+	if !ok {
+		return nil, fmt.Errorf("因子库里没有因子 %s：先在因子库（YAML）里写好它，或从 moox.toml 删掉这条定义", factorID)
+	}
+	if len(removed) == 0 && currentFile == file {
+		return nil, nil
+	}
+	kept := []string{b.lines[0]}
+	for i := 1; i < len(b.lines); i++ {
+		key, _, ok := keyValue(b.lines[i])
+		if !ok {
+			kept = append(kept, b.lines[i])
+			continue
+		}
+		end := valueEnd(b.lines, i)
+		if key == "factor_id" {
+			kept = append(kept, b.lines[i:end+1]...)
+			kept = append(kept, fmt.Sprintf("file = %q", file))
+		}
+		i = end
+	}
+	b.lines = kept
+	sort.Strings(removed)
+	return &FactorMigration{FactorID: factorID, File: file, RemovedKeys: removed}, nil
+}
+
+// renameHost 改主机表名、[placements] 键以及 access_host / host 引用。
+func renameHost(blocks []block, from, to string, report *MigrateReport) error {
+	if !servicecatalog.ValidHostID(from) || !servicecatalog.ValidHostID(to) || from == to {
+		return errors.New("--rename-host 需要写成 旧ID=新ID，两者都是合法且不同的主机 ID")
+	}
+	found := false
+	for _, b := range blocks {
+		switch b.header {
+		case "hosts." + from:
+			found = true
+		case "hosts." + to:
+			return fmt.Errorf("已经有主机 %s，不能把 %s 改成它", to, from)
+		}
+	}
+	if !found {
+		return fmt.Errorf("moox.toml 里没有主机 %s", from)
+	}
+	rename := &HostRename{From: from, To: to}
+	for i := range blocks {
+		b := &blocks[i]
+		if b.header == "hosts."+from || strings.HasPrefix(b.header, "hosts."+from+".") {
+			newHeader := "hosts." + to + strings.TrimPrefix(b.header, "hosts."+from)
+			b.lines[0] = strings.Replace(b.lines[0], b.header, newHeader, 1)
+			b.header = newHeader
+			rename.Changes++
+		}
+		for j := 1; j < len(b.lines); j++ {
+			key, value, ok := keyValue(b.lines[j])
+			if !ok {
+				continue
+			}
+			switch {
+			case b.header == "placements" && key == from:
+				b.lines[j] = strings.Replace(b.lines[j], from, to, 1)
+				rename.Changes++
+			case (key == "access_host" || key == "host") && quotedValue(value) == from:
+				b.lines[j] = strings.Replace(b.lines[j], `"`+from+`"`, `"`+to+`"`, 1)
+				rename.Changes++
+			}
+		}
+	}
+	report.Rename = rename
+	return nil
+}
