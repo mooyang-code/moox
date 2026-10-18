@@ -61,11 +61,10 @@ func (a AdminUser) Validate() error {
 	return nil
 }
 
-// ProxyCAAuthorization is consumed outside release snapshots. ImportDirectory
-// names a normalized, closed snapshot containing console-proxy/data and certs.
+// ProxyCAAuthorization is consumed outside release snapshots: Create authorizes
+// the one-time internal CA creation of the first internal proxy install.
 type ProxyCAAuthorization struct {
-	Create          bool   `json:"create"`
-	ImportDirectory string `json:"import_directory"`
+	Create bool `json:"create"`
 }
 
 func (Request) String() string     { return "MooXBootstrapRequest{private inputs omitted}" }
@@ -126,16 +125,6 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 	if err := fsutil.ValidateUnitRoots(request.DeploymentRoot, request.Host.UnitRoot, request.Control.UnitRoot); err != nil {
 		return result, err
 	}
-	if request.ProxyCA.Create && request.ProxyCA.ImportDirectory != "" {
-		return result, errors.New("proxy CA creation and trusted import are mutually exclusive")
-	}
-	if request.ProxyCA.ImportDirectory != "" {
-		root, err := fsutil.OpenPhysicalRoot(request.ProxyCA.ImportDirectory, true)
-		if err != nil {
-			return result, err
-		}
-		root.Close()
-	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return result, err
@@ -174,7 +163,7 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 	if !slices.Contains(result.components, "admin") || !slices.Contains(result.components, "eventbus") {
 		return result, errors.New("control bootstrap requires Admin and EventBus on the control host")
 	}
-	if !slices.Contains(result.components, "console-proxy") && (request.ProxyCA.Create || request.ProxyCA.ImportDirectory != "") {
+	if !slices.Contains(result.components, "console-proxy") && request.ProxyCA.Create {
 		return result, errors.New("proxy CA authorization requires a selected console-proxy")
 	}
 	for _, name := range []string{request.DeploymentRoot, request.Host.UnitRoot, request.Control.UnitRoot} {

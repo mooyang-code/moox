@@ -19,11 +19,11 @@ func TestOfflineInitializationUsesOnlyPKIAndNeverReplacesState(t *testing.T) {
 		}
 		defer listener.Close()
 	}
-	ca, err := InitializeState(context.Background(), c, false)
+	ca, err := InitializeState(context.Background(), c)
 	if err != nil || ca == "" {
 		t.Fatalf("offline initialization failed: %v", err)
 	}
-	if _, err := InitializeState(context.Background(), c, false); err == nil {
+	if _, err := InitializeState(context.Background(), c); err == nil {
 		t.Fatal("creation accepted an existing CA")
 	}
 	if _, err := os.Stat(filepath.Join(c.TLS.StorageRoot, "certificates")); !os.IsNotExist(err) {
@@ -33,29 +33,16 @@ func TestOfflineInitializationUsesOnlyPKIAndNeverReplacesState(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := prepareCA(c); err == nil {
-		t.Fatal("serving imported a legacy baseline implicitly")
+		t.Fatal("serving accepted CA state without its baseline")
 	}
-	imported, err := InitializeState(context.Background(), c, true)
-	if err != nil || imported != ca {
-		t.Fatalf("explicit trusted import changed CA: %v", err)
-	}
-	if err := os.Remove(c.TLS.CABaseline); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(c.TLS.CAPublishDir, "root.sha256")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := InitializeState(context.Background(), c, true); err == nil {
-		t.Fatal("legacy import accepted missing original published fingerprint")
-	}
-	if _, err := os.Stat(c.TLS.CABaseline); !os.IsNotExist(err) {
-		t.Fatal("rejected import wrote a new trust baseline")
+	if _, err := InitializeState(context.Background(), c); err == nil {
+		t.Fatal("initialization replaced CA state that lost its baseline")
 	}
 }
 
 func TestCAStateRefusesAdditionalCertificatesInTrustFiles(t *testing.T) {
 	c := testConfig(t, "http://127.0.0.1:11000", "http://127.0.0.1:9528")
-	if _, err := InitializeState(context.Background(), c, false); err != nil {
+	if _, err := InitializeState(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}
 	rootFile := filepath.Join(caDir(c), "root.crt")
@@ -68,8 +55,8 @@ func TestCAStateRefusesAdditionalCertificatesInTrustFiles(t *testing.T) {
 		if err := os.WriteFile(file, append(append([]byte(nil), root...), root...), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := CheckImportState(c); err == nil {
-			t.Fatal("import accepted an additional PEM certificate in a trust file")
+		if _, err := CheckState(c); err == nil {
+			t.Fatal("state check accepted an additional PEM certificate in a trust file")
 		}
 		if err := os.WriteFile(file, root, 0600); err != nil {
 			t.Fatal(err)

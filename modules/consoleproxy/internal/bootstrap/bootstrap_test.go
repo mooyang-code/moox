@@ -83,7 +83,7 @@ func TestAuthenticatedDiagnosticsReadinessAndServeDrain(t *testing.T) {
 	cfg.TLS.StorageRoot = filepath.Join(dir, "data", "caddy", "caddy")
 	cfg.TLS.CABaseline = filepath.Join(dir, "data", "caddy", "internal-ca.sha256")
 	cfg.TLS.CAPublishDir = filepath.Join(dir, "certs", "caddy")
-	if _, err := engine.InitializeState(context.Background(), cfg, false); err != nil {
+	if _, err := engine.InitializeState(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
 	cfg.Lifecycle.DrainTimeout, cfg.Lifecycle.EngineStopTimeout = 3*time.Second, 2*time.Second

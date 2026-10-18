@@ -1,7 +1,7 @@
 storage:
   root: ./var/storage
   # Dataset retention and View limits rendered by moox-cli from moox.toml.
-  policy_file: ../config/storage-policy.json
+  policy_file: config/storage-policy.json
   roles:
     - primary
   metadata:

@@ -35,7 +35,7 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 			if stage != "core" && stage != "control" {
 				return errors.New("bootstrap requires --stage core or --stage control")
 			}
-			if stage == "core" && (control.ProxyCA.Create || control.ProxyCA.ImportDirectory != "") {
+			if stage == "core" && control.ProxyCA.Create {
 				return errors.New("proxy authorization belongs to --stage control")
 			}
 			if stage == "core" && control.Release != "" {
@@ -73,7 +73,6 @@ func newSetupBootstrapCommand(deps setupDeps) *cobra.Command {
 	command.Flags().StringVar(&options.StateDirectory, "state-dir", "", "持久私有部署状态目录；重试必须使用原目录")
 	command.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
 	command.Flags().BoolVar(&control.ProxyCA.Create, "create-proxy-ca", false, "首次 internal 代理安装的一次性 CA 创建授权")
-	command.Flags().StringVar(&control.ProxyCA.ImportDirectory, "proxy-ca-import-dir", "", "目标机上已关闭并核验原信任证明的规范代理状态快照")
 	command.Flags().StringVar(&control.Release, "release", "", "仅 --stage control：用该版本升级 control 上的 host 与 control 单元（会按顺序重启 control 上的服务）")
 	return command
 }

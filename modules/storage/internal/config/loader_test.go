@@ -41,8 +41,8 @@ func TestCheckedInStorageRoleConfigsShareThePolicyFile(t *testing.T) {
 			if err := loader.LoadConfigWithDefaults(file, &cfg, cfg.ApplyDefaults); err != nil {
 				t.Fatalf("LoadConfigWithDefaults(%s): %v", file, err)
 			}
-			if got := cfg.Storage.PolicyFile; got != "../config/storage-policy.json" {
-				t.Fatalf("%s policy_file = %q, want the shared ../config/storage-policy.json", file, got)
+			if got := cfg.Storage.PolicyFile; got != "config/storage-policy.json" {
+				t.Fatalf("%s policy_file = %q, want the component-owned config/storage-policy.json", file, got)
 			}
 		})
 	}

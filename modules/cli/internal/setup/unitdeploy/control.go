@@ -49,7 +49,7 @@ func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.
 	}
 	request.Control.Environment["admin"]["MOOX_ADMIN_JWT_SECRET_KEY"] = identity.JWTSecret
 	request.ProxyCA = options.ProxyCA
-	if request.ProxyCA.Create && request.ProxyCA.ImportDirectory != "" || request.ProxyCA.Create && consoleTLSMode(snapshot.Manifest.ControlHost()) == "public" {
+	if request.ProxyCA.Create && consoleTLSMode(snapshot.Manifest.ControlHost()) == "public" {
 		return request, nil, errors.New("proxy CA creation requires internal TLS and cannot be combined with trusted import")
 	}
 	if options.Release != "" {

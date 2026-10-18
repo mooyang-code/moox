@@ -16,7 +16,7 @@ import (
 // staging directory. The deployment coordinator durably consumes authorization
 // before calling it and publishes the completed state before any service starts.
 // Only the PKI app is provisioned: no listeners, ACME or OS trust installation.
-func InitializeState(ctx context.Context, cfg config.Config, importExisting bool) (string, error) {
+func InitializeState(ctx context.Context, cfg config.Config) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -28,47 +28,34 @@ func InitializeState(ctx context.Context, cfg config.Config, importExisting bool
 	if ownership.current != nil {
 		return "", errors.New("offline initialization requires the process Caddy engine to be stopped")
 	}
-	if importExisting {
-		if _, err := CheckImportState(cfg); err != nil {
-			return "", err
-		}
-		cert, err := verifyCA(cfg, true)
+	// Public installations need no internal CA. Checking in public mode also
+	// rejects remnants before a fresh internal installation is authorized.
+	empty := cfg
+	empty.TLS.Mode = "public"
+	cert, err := verifyCA(empty)
+	if err != nil {
+		return "", err
+	}
+	if cert != nil {
+		return "", errors.New("initialization never replaces existing CA state")
+	}
+	if cfg.TLS.Mode == "internal" {
+		type obj = map[string]any
+		raw, err := json.Marshal(obj{
+			"admin":   obj{"disabled": true, "config": obj{"persist": false}},
+			"storage": obj{"module": "file_system", "root": cfg.TLS.StorageRoot},
+			"apps":    obj{"pki": obj{"certificate_authorities": obj{"local": obj{"install_trust": false}}}},
+		})
 		if err != nil {
 			return "", err
 		}
-		if cert == nil {
-			return "", errors.New("import requires existing trusted CA state")
-		}
-	} else {
-		// Public installations need no internal CA. Checking in public mode also
-		// rejects remnants before a fresh internal installation is authorized.
-		empty := cfg
-		empty.TLS.Mode = "public"
-		cert, err := verifyCA(empty, false)
-		if err != nil {
+		loadErr := caddy.Load(raw, true)
+		stopErr := caddy.Stop()
+		if err := errors.Join(loadErr, stopErr); err != nil {
 			return "", err
 		}
-		if cert != nil {
-			return "", errors.New("initialization never replaces existing CA state; use explicit import")
-		}
-		if cfg.TLS.Mode == "internal" {
-			type obj = map[string]any
-			raw, err := json.Marshal(obj{
-				"admin":   obj{"disabled": true, "config": obj{"persist": false}},
-				"storage": obj{"module": "file_system", "root": cfg.TLS.StorageRoot},
-				"apps":    obj{"pki": obj{"certificate_authorities": obj{"local": obj{"install_trust": false}}}},
-			})
-			if err != nil {
-				return "", err
-			}
-			loadErr := caddy.Load(raw, true)
-			stopErr := caddy.Stop()
-			if err := errors.Join(loadErr, stopErr); err != nil {
-				return "", err
-			}
-			if _, err := publishCA(cfg, nil); err != nil {
-				return "", err
-			}
+		if _, err := publishCA(cfg, nil); err != nil {
+			return "", err
 		}
 	}
 	// Caddy's generated key files and all newly created directories must reach

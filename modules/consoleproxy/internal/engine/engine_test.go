@@ -55,7 +55,7 @@ func testConfig(t *testing.T, admin, web string) config.Config {
 func start(t *testing.T, c config.Config) (*Engine, *http.Client, string) {
 	t.Helper()
 	if _, err := os.Stat(filepath.Join(caDir(c), "root.crt")); os.IsNotExist(err) {
-		if _, err := InitializeState(context.Background(), c, false); err != nil {
+		if _, err := InitializeState(context.Background(), c); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -138,13 +138,6 @@ func TestStateCheckDoesNotProvisionOrWriteLegacyBaseline(t *testing.T) {
 	}
 	if _, err := CheckState(c); err == nil {
 		t.Fatal("serving-state check accepted a missing persistent baseline")
-	}
-	got, err := CheckImportState(c)
-	if err != nil || got != want {
-		t.Fatalf("trusted legacy state failed read-only check: %v", err)
-	}
-	if _, err := os.Stat(c.TLS.CABaseline); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("read-only check wrote a legacy baseline")
 	}
 }
 
@@ -403,7 +396,7 @@ func TestPublicOnlyStateRemainsWithoutInternalCA(t *testing.T) {
 
 func TestFailedStartupReleasesListenerAndOwnership(t *testing.T) {
 	c := testConfig(t, "http://127.0.0.1:11000", "http://127.0.0.1:9528")
-	if _, err := InitializeState(context.Background(), c, false); err != nil {
+	if _, err := InitializeState(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}
 	occupied, err := net.Listen("tcp", net.JoinHostPort(c.Public.Bind, strconv.Itoa(c.Public.Port)))

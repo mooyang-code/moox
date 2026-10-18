@@ -97,7 +97,7 @@ func caDir(c config.Config) string {
 // prepareCA is called before Caddy Load, so corrupt/missing existing state
 // cannot be silently replaced by Caddy's automatic CA creation.
 func prepareCA(c config.Config) (*x509.Certificate, error) {
-	cert, err := verifyCA(c, false)
+	cert, err := verifyCA(c)
 	if err == nil && cert != nil {
 		err = checkFingerprint(c.TLS.CABaseline, cert)
 	}
@@ -120,23 +120,7 @@ func CheckState(c config.Config) (string, error) {
 	return strings.TrimSpace(fingerprint(cert)), nil
 }
 
-// CheckImportState requires the original published certificate and fingerprint
-// even when a copied baseline exists. It never writes the closed source tree.
-func CheckImportState(c config.Config) (string, error) {
-	cert, err := verifyCA(c, false)
-	if err != nil {
-		return "", err
-	}
-	if cert == nil {
-		return "", errors.New("trusted import requires existing CA state")
-	}
-	if err := checkPublishedCA(c, cert); err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(fingerprint(cert)), nil
-}
-
-func verifyCA(c config.Config, allowImport bool) (*x509.Certificate, error) {
+func verifyCA(c config.Config) (*x509.Certificate, error) {
 	dir := caDir(c)
 	_, err := os.Stat(filepath.Join(dir, "root.crt"))
 	if errors.Is(err, os.ErrNotExist) {
@@ -147,7 +131,7 @@ func verifyCA(c config.Config, allowImport bool) (*x509.Certificate, error) {
 			}
 		}
 		if c.TLS.Mode == "internal" {
-			return nil, errors.New("CA is missing; initialize or import state offline before serving")
+			return nil, errors.New("CA is missing; initialize state offline before serving")
 		}
 		return nil, nil
 	}
@@ -175,19 +159,7 @@ func verifyCA(c config.Config, allowImport bool) (*x509.Certificate, error) {
 	// Caddy may renew an expired intermediate using the validated root. The
 	// root's identity, not the short-lived intermediate's expiry, is frozen.
 	if err := checkFingerprint(c.TLS.CABaseline, cert); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-		// Initial legacy import requires the trusted published certificate AND
-		// its existing OpenSSL fingerprint, not a newly computed self-baseline.
-		if err := checkPublishedCA(c, cert); err != nil {
-			return nil, fmt.Errorf("trusted legacy CA import: %w", err)
-		}
-		if allowImport {
-			if err := atomicWrite(c.TLS.CABaseline, []byte(fingerprint(cert)), 0600); err != nil {
-				return nil, err
-			}
-		}
+		return nil, err
 	}
 	for _, name := range []string{"root.crt", "root.sha256"} {
 		if _, err := os.Stat(filepath.Join(c.TLS.CAPublishDir, name)); err == nil {

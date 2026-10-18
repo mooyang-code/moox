@@ -30,7 +30,7 @@ type proxyReceipt struct {
 	CA      string `json:"ca_sha256"`
 }
 
-func proxyOperation(ctx context.Context, binary, configFile, source, mode, operation string, importExisting bool, lock unitruntime.Options) (string, error) {
+func proxyOperation(ctx context.Context, binary, configFile, source, mode, operation string, lock unitruntime.Options) (string, error) {
 	configuration := map[string]any{"tls": map[string]string{
 		"mode": mode, "storage_root": filepath.Join(source, "console-proxy/data/caddy/caddy"),
 		"ca_baseline":    filepath.Join(source, "console-proxy/data/caddy/internal-ca.sha256"),
@@ -50,13 +50,6 @@ func proxyOperation(ctx context.Context, binary, configFile, source, mode, opera
 		return "", err
 	}
 	args := []string{operation, "--config", configFile}
-	if importExisting {
-		if operation == "check-state" {
-			args = append(args, "--for-import")
-		} else {
-			args = append(args, "--import-existing")
-		}
-	}
 	raw, err = runOffline(ctx, exec.CommandContext(ctx, binary, args...), configFile, lock)
 	if err != nil {
 		return "", err
@@ -90,7 +83,7 @@ func validProxyFingerprint(value string) bool {
 // snapshots: deleting a candidate never authorizes creating a replacement CA.
 func proxyCheckpoint(ctx context.Context, input inputs, j *journal, prepared unitinstall.Prepared, attempt *os.Root, lock unitruntime.Options) (string, error) {
 	if !slices.Contains(prepared.Components, "console-proxy") {
-		if input.request.ProxyCA.Create || input.request.ProxyCA.ImportDirectory != "" {
+		if input.request.ProxyCA.Create {
 			return "", errors.New("proxy CA authorization requires a selected console-proxy")
 		}
 		return "", nil
@@ -128,14 +121,13 @@ func proxyCheckpoint(ctx context.Context, input inputs, j *journal, prepared uni
 	defer root.Close()
 	binary := filepath.Join(prepared.Directory, "bin/moox-console-proxy")
 	configFile := filepath.Join(attempt.Name(), "proxy-state.yaml")
-	operation := func(source, operation string, imported bool) (string, error) {
-		return proxyOperation(ctx, binary, configFile, source, mode, operation, imported, lock)
+	operation := func(source, operation string) (string, error) {
+		return proxyOperation(ctx, binary, configFile, source, mode, operation, lock)
 	}
 	material := filepath.Join(root.Name(), "material")
 	var receipt proxyReceipt
 	if _, err := root.Lstat("receipt.json"); os.IsNotExist(err) {
-		// Never infer authorization from missing data or an older release. An
-		// explicit closed legacy snapshot must carry its original trust proof.
+		// Never infer authorization from missing data or an older release.
 		for _, name := range []string{"material", ".staging", ".publish"} {
 			if _, err := root.Lstat(name); !os.IsNotExist(err) {
 				return "", errors.New("proxy receipt is missing beside existing initialization material")
@@ -143,20 +135,14 @@ func proxyCheckpoint(ctx context.Context, input inputs, j *journal, prepared uni
 		}
 		authorization := input.request.ProxyCA
 		receipt = proxyReceipt{Version: 1, HostID: j.HostID, Phase: "pending", Origin: "public", Mode: mode}
-		if authorization.ImportDirectory != "" {
-			receipt.Origin = "imported"
-			receipt.CA, err = operation(authorization.ImportDirectory, "check-state", true)
-			if err != nil || receipt.CA == "" {
-				return "", errors.New("legacy import requires valid CA keys, certificate and original published trust proof")
-			}
-		} else if mode == "internal" {
+		if mode == "internal" {
 			if !authorization.Create {
-				return "", errors.New("first internal proxy install requires explicit one-time CA creation or trusted import")
+				return "", errors.New("first internal proxy install requires explicit one-time CA creation")
 			}
 			if j.Control.Previous != "" {
 				old, err := unitinstall.ReadInstalled(ctx, j.Control.Previous)
 				if err != nil || slices.Contains(old.Components, "console-proxy") {
-					return "", errors.New("existing proxy identity requires trusted import; creation is refused")
+					return "", errors.New("an existing proxy identity is never replaced; creation is refused")
 				}
 			}
 			receipt.Origin = "generated"
@@ -187,23 +173,14 @@ func proxyCheckpoint(ctx context.Context, input inputs, j *journal, prepared uni
 			}
 		}
 		stage := filepath.Join(root.Name(), ".staging")
-		if receipt.Origin == "imported" {
-			if input.request.ProxyCA.ImportDirectory == "" {
-				return "", errors.New("pending proxy import requires its explicitly authorized closed source")
-			}
-			if err := unitinstall.CopyOfflineState(ctx, input.request.ProxyCA.ImportDirectory, stage, proxyPaths); err != nil {
+		for _, name := range proxyPaths {
+			if err := root.MkdirAll(filepath.Join(".staging", name), 0o700); err != nil {
 				return "", err
 			}
-		} else {
-			for _, name := range proxyPaths {
-				if err := root.MkdirAll(filepath.Join(".staging", name), 0o700); err != nil {
-					return "", err
-				}
-			}
 		}
-		ca, err := operation(stage, "initialize-state", receipt.Origin == "imported")
+		ca, err := operation(stage, "initialize-state")
 		if err != nil || receipt.CA != "" && ca != receipt.CA {
-			return "", errors.New("offline proxy initialization/import failed its authorized identity check")
+			return "", errors.New("offline proxy initialization failed its authorized identity check")
 		}
 		publication := filepath.Join(root.Name(), ".publish")
 		if err := unitinstall.CopyOfflineState(ctx, stage, publication, proxyPaths); err != nil {
@@ -236,7 +213,7 @@ func proxyCheckpoint(ctx context.Context, input inputs, j *journal, prepared uni
 		return "", errors.New("consumed proxy CA material is missing; automatic regeneration is refused")
 	}
 	materialRoot.Close()
-	ca, err := operation(material, "check-state", false)
+	ca, err := operation(material, "check-state")
 	if err != nil || receipt.CA != "" && ca != receipt.CA || receipt.Origin == "public" && ca != "" {
 		return "", errors.New("consumed proxy CA material is missing or changed; automatic regeneration is refused")
 	}
@@ -259,7 +236,7 @@ func proxyCheckpoint(ctx context.Context, input inputs, j *journal, prepared uni
 			return "", err
 		}
 		if slices.Contains(old.Components, "console-proxy") {
-			oldCA, err := operation(old.Directory, "check-state", false)
+			oldCA, err := operation(old.Directory, "check-state")
 			if err != nil || oldCA != receipt.CA {
 				return "", errors.New("closed proxy release no longer matches its persistent CA identity")
 			}
@@ -276,8 +253,6 @@ func (r proxyReceipt) valid(hostID, mode string) bool {
 	switch r.Origin {
 	case "generated":
 		return r.Mode == "internal" && (r.Phase == "pending" && r.CA == "" || r.Phase == "ready" && r.CA != "")
-	case "imported":
-		return r.CA != ""
 	case "public":
 		return r.Mode == "public" && r.CA == ""
 	default:
