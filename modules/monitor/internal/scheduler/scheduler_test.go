@@ -188,3 +188,32 @@ func openSchedulerDB(t *testing.T) *store.Store {
 	}
 	return mgr
 }
+
+// 完整成功的一轮评估才记下时间；落库失败（这里关掉数据库模拟）的一轮不更新，就绪检查据此发现评估停滞。
+func TestSchedulerRecordsLastSuccessfulRound(t *testing.T) {
+	ctx := context.Background()
+	mgr := openSchedulerDB(t)
+	dueAt := time.Now().Add(-time.Second)
+	createCheck(t, mgr.Repositories().Checks, domain.Check{CheckID: "enabled", Enabled: true, NextCheckAt: &dueAt})
+	s := New(mgr.Repositories(), Options{Runner: runnerFunc(func(ctx context.Context, check domain.Check) domain.CheckResult {
+		return okResult(check)
+	})})
+	if !s.LastSuccessfulRound().IsZero() {
+		t.Fatal("还没有评估过")
+	}
+	before := time.Now()
+	if _, err := s.RunDueOnce(ctx); err != nil {
+		t.Fatalf("RunDueOnce: %v", err)
+	}
+	first := s.LastSuccessfulRound()
+	if first.Before(before) {
+		t.Fatalf("last round %v before %v", first, before)
+	}
+	_ = mgr.Close()
+	if _, err := s.RunDueOnce(ctx); err == nil {
+		t.Fatal("数据库关闭后评估应失败")
+	}
+	if !s.LastSuccessfulRound().Equal(first) {
+		t.Fatal("失败的一轮不能更新最近成功时间")
+	}
+}

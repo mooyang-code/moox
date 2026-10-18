@@ -97,7 +97,12 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage 
 		if runtime != nil && runtime.observabilityIngestErrorMessage() != "" {
 			rsp.Details["observability_ingest_error"] = runtime.observabilityIngestErrorMessage()
 		}
-		ready = databaseReady && schedulerReady && metricsReady && hostStorageReady && ingestReady && reporterReady
+		evaluationReady, evaluationReason := evaluationFresh(runtime, time.Now().UTC())
+		rsp.Details["evaluation_ready"] = evaluationReady
+		if evaluationReason != "" {
+			rsp.Details["evaluation_error"] = evaluationReason
+		}
+		ready = databaseReady && schedulerReady && metricsReady && hostStorageReady && ingestReady && reporterReady && evaluationReady
 		rsp.Ready = ready
 		if ready {
 			rsp.Status = "ok"
@@ -111,4 +116,26 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage 
 		rsp.Details["scheduler_ready"] = schedulerReady
 		return rsp
 	}
+}
+
+// evaluationStaleAfter 内没有一次完整成功的评估（检查结果写库失败、调度卡住），就判为未就绪：
+// 这时 Monitor 进程活着、/healthz 正常，但所有告警都会静默失效，主机守护据此推送“组件持续未就绪”。
+// 检查调度每 30 秒一轮，3 分钟相当于连续 6 轮失败；刚启动的 3 分钟内不判断。
+const evaluationStaleAfter = 3 * time.Minute
+
+func evaluationFresh(runtime *Runtime, now time.Time) (bool, string) {
+	if runtime == nil || runtime.Scheduler == nil {
+		return false, "scheduler is not running"
+	}
+	if now.Sub(runtime.StartedAt) < evaluationStaleAfter {
+		return true, ""
+	}
+	last := runtime.Scheduler.LastSuccessfulRound()
+	if last.IsZero() {
+		return false, "no check evaluation has completed since startup"
+	}
+	if age := now.Sub(last); age > evaluationStaleAfter {
+		return false, fmt.Sprintf("last complete check evaluation was %s ago", age.Truncate(time.Second))
+	}
+	return true, ""
 }

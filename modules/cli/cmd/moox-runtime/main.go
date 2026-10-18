@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitinstall"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitwatch"
 )
 
 var Version = "dev"
@@ -119,6 +120,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		return json.NewEncoder(stdout).Encode(prepared)
 	}
+	if len(args) > 0 && args[0] == "watch" {
+		return watch(ctx, args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "prepare" {
 		return prepare(ctx, args[1:], stdout, stderr)
 	}
@@ -205,6 +209,26 @@ func installOperation(ctx context.Context, operation string, args []string, stdo
 		return err
 	}
 	return json.NewEncoder(stdout).Encode(result)
+}
+
+// watch 是 crontab 每分钟调用的主机级守护：遍历部署根下全部单元，按依赖顺序执行 healthcheck，输出一行 JSON 汇总。
+func watch(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("moox-runtime watch", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var options unitwatch.Options
+	flags.StringVar(&options.Root, "root", "", "deployment root, e.g. /data/moox")
+	flags.BoolVar(&options.DryRun, "dry-run", false, "report component states without starting or restarting anything")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if options.Root == "" || flags.NArg() != 0 {
+		return errors.New("watch requires --root and no positional arguments")
+	}
+	report, err := unitwatch.Run(ctx, options)
+	if encodeErr := json.NewEncoder(stdout).Encode(report); encodeErr != nil && err == nil {
+		err = encodeErr
+	}
+	return err
 }
 
 func sealState(ctx context.Context, args []string, stdout, stderr io.Writer) error {

@@ -45,3 +45,16 @@ func TestRuntimeCommandRejectsMissingFlagsAndUnknownOperations(t *testing.T) {
 		require.Empty(t, stdout.String())
 	}
 }
+
+func TestRuntimeCommandWatchRequiresRootAndReportsEmptyHosts(t *testing.T) {
+	for _, args := range [][]string{{"watch"}, {"watch", "--unknown"}, {"watch", "--root", "/data/moox", "unexpected"}} {
+		var stdout, stderr bytes.Buffer
+		require.Error(t, run(context.Background(), args, &stdout, &stderr))
+		require.Empty(t, stdout.String())
+	}
+	var stdout, stderr bytes.Buffer
+	err := run(context.Background(), []string{"watch", "--root", t.TempDir()}, &stdout, &stderr)
+	require.ErrorContains(t, err, "no installed units")
+	var report map[string]any
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &report), "出错时也输出一行汇总，cron 日志里能看到")
+}

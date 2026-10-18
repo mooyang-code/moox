@@ -45,6 +45,9 @@ type Status struct {
 	Forced         bool   `json:"forced,omitempty"`
 	Binary         string `json:"binary_sha256,omitempty"`
 	ReadinessError string `json:"readiness_error,omitempty"`
+	// Action 是 healthcheck 实际做了什么："started"（组件原本没在运行，已拉起）或 "restarted"（存活检查失败，已停止并重新拉起）；
+	// 什么也没做时为空。watch 据此给出结果分类与告警原因。
+	Action string `json:"action,omitempty"`
 }
 
 type pidRecord struct {
@@ -625,7 +628,9 @@ func (s *runtimeState) healthcheck(ctx context.Context, component Component) (St
 		return status, err
 	}
 	if status.State == "stopped" {
-		return s.start(ctx, component)
+		status, err := s.start(ctx, component)
+		status.Action = "started"
+		return status, err
 	}
 	values, err := loadEnvironment(component)
 	if err != nil {
@@ -636,7 +641,10 @@ func (s *runtimeState) healthcheck(ctx context.Context, component Component) (St
 		return status, err
 	}
 	if record.Launcher != nil {
-		return s.start(ctx, component)
+		// 上一次拉起在就绪之前中断：接着等它就绪，仍算一次拉起。
+		status, err := s.start(ctx, component)
+		status.Action = "started"
+		return status, err
 	}
 	live, err := s.probe(ctx, component, record, values, false)
 	if ctx.Err() != nil {
@@ -652,7 +660,9 @@ func (s *runtimeState) healthcheck(ctx context.Context, component Component) (St
 	if _, err := s.stop(ctx, component); err != nil {
 		return status, err
 	}
-	return s.start(ctx, component)
+	status, err = s.start(ctx, component)
+	status.Action = "restarted"
+	return status, err
 }
 
 func waitProcess(ctx context.Context, file *os.File, deadline time.Time) (bool, error) {

@@ -421,7 +421,9 @@ func TestRuntimeLinuxWatchdogRestartsFailedLivenessWithRunningGraceBudget(t *tes
 	require.GreaterOrEqual(t, time.Since(before), 1100*time.Millisecond)
 	require.NotEqual(t, started.Components[0].PID, checked.Components[0].PID)
 	require.True(t, checked.Components[0].Ready)
+	require.Equal(t, "restarted", checked.Components[0].Action)
 	require.NoFileExists(t, marker)
+	require.Empty(t, runRuntime(t, path, "healthcheck").Components[0].Action, "存活正常时守护什么也不做")
 }
 
 func TestRuntimeLinuxCancelledPauseMarksAllTargetsAndHostIdentityIsPersistent(t *testing.T) {
@@ -541,6 +543,7 @@ func TestRuntimeLinuxRebootClearsReusedPIDAndInterruptedDrain(t *testing.T) {
 	require.Equal(t, []BootRecovery{{Component: "web-host", Kind: "draining"}, {Component: "web-host", Kind: "pid"}}, checked.BootRecovered)
 	require.Equal(t, "running", checked.Components[0].State)
 	require.True(t, checked.Components[0].Ready)
+	require.Equal(t, "started", checked.Components[0].Action)
 	require.NotEqual(t, identity.PID, checked.Components[0].PID)
 	require.NoError(t, unrelated.Process.Signal(syscall.Signal(0)), "复用了 PID 的无关进程不能被误杀")
 
