@@ -161,6 +161,16 @@ func renderConfigurations(root *os.Root, options PrepareOptions, components []st
 					return err
 				}
 			}
+			if access := member(document, "scf_access"); access != nil && id == "collector" {
+				if keys["scf-collector"] == "" {
+					return errors.New("collector configuration lacks the scf-collector identity")
+				}
+				for key, value := range map[string]string{"caller": "scf-collector", "key_id": keys["scf-collector"], "key_file": "../../secrets/caller-scf-collector.key"} {
+					if err := setValue(access, key, value); err != nil {
+						return err
+					}
+				}
+			}
 			bind := "0.0.0.0"
 			if component.Health.Loopback {
 				bind = "127.0.0.1"

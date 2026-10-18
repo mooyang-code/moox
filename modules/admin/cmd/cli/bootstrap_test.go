@@ -139,11 +139,14 @@ func TestBootstrapEmptyEnvironmentExportsWorkingCredentialsCertificateAndConfig(
 	require.NoError(t, err)
 	require.NotContains(t, string(metadata), key.Secret)
 	require.NotContains(t, string(metadata), strings.TrimSpace(string(master)))
+	var callers []string
 	for _, entry := range result.Credentials {
 		require.NotContains(t, entry.Caller, "@storage")
 		require.NotContains(t, entry.Caller, "@compute-1")
-		require.False(t, slices.Contains([]string{"factor-engine", "scf-collector", "trade"}, entry.Caller))
+		require.False(t, slices.Contains([]string{"factor-engine", "trade"}, entry.Caller))
+		callers = append(callers, entry.Caller)
 	}
+	require.Contains(t, callers, "scf-collector", "放置了 Collector 的主机要带上交给采集云函数的 scf-collector 身份")
 	require.NoError(t, filepath.WalkDir(result.BundleDir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err

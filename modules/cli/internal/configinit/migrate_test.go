@@ -111,3 +111,40 @@ func TestMigrateRejectsUnknownFactorsAndBadRenames(t *testing.T) {
 	require.Nil(t, report.Rename)
 	require.Len(t, report.Labels, 2)
 }
+
+func TestMigrateImportsSCFPlanAndEntryHostNetwork(t *testing.T) {
+	path, root, keys := migrateFixture(t, sampleText(t))
+	plan := filepath.Join(root, "scf.json")
+	require.NoError(t, os.WriteFile(plan, []byte(`{"cloud_account":{"account_id":"acct-test","account_name":"Test","credential_secret_id":"AKIDTEST","app_id":"1250000000","cos_region":"ap-guangzhou","cos_bucket":"moox-scf-test-1250000000"},
+"memory_mb":256,"symbols_per_function":40,"assumed_egress_ips":2,
+"regions":{"ap-hongkong":{"vpc_id":"vpc-test","subnet_id":"subnet-test","access_host":"overseas"}},
+"hosts":{"overseas":{"region":"ap-hongkong","private_address":"10.1.2.3"}},
+"spaces":[{"space_id":"crypto","markets":{"spot":["ap-hongkong"],"swap":["ap-hongkong"]},"package_name":"moox-collector-crypto-plan","namespace":"moox-crypto-plan"}]}`), 0o600))
+
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, SCFImport: plan, Write: true, Now: func() time.Time { return time.Unix(0, 0) }})
+	require.NoError(t, err)
+	require.True(t, report.Valid && report.Written)
+	require.Equal(t, &SCFImportReport{Regions: []string{"ap-hongkong"}, Spaces: map[string][]string{"crypto": {"spot", "swap"}}, Hosts: []string{"overseas"}}, report.SCF)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	manifest, err := setupconfig.Parse(plain)
+	require.NoError(t, err)
+	require.True(t, manifest.SCFPlan.Enabled)
+	require.Equal(t, 256, manifest.SCFPlan.MemoryMB)
+	require.Equal(t, "acct-test", manifest.SCFPlan.CloudAccount.AccountID)
+	require.Equal(t, "overseas", manifest.SCFPlan.Regions["ap-hongkong"].AccessHost)
+	require.Equal(t, "10.1.2.3", manifest.HostByID("overseas").PrivateAddress)
+	address, id, err := manifest.SCFPlanAccess("ap-hongkong")
+	require.NoError(t, err)
+	require.Equal(t, "10.1.2.3:11004", address)
+	require.Equal(t, "access@overseas", id)
+	require.Equal(t, 1, strings.Count(string(plain), "[scf_plan]"), "旧的 [scf_plan] 被整体替换")
+
+	// 导入引用了不存在的主机时拒绝，不写回。
+	bad := filepath.Join(root, "bad.json")
+	require.NoError(t, os.WriteFile(bad, []byte(`{"regions":{"ap-hongkong":{"vpc_id":"v","subnet_id":"s","access_host":"nope"}},"hosts":{"nope":{"region":"ap-hongkong","private_address":"10.0.0.1"}},"spaces":[{"space_id":"crypto","markets":{"spot":["ap-hongkong"]}}]}`), 0o600))
+	_, err = MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, SCFImport: bad})
+	require.ErrorContains(t, err, "没有主机 nope")
+}

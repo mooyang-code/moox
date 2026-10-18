@@ -3,12 +3,14 @@ package configinit
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -31,6 +33,8 @@ type MigrateOptions struct {
 	RepoRoot string
 	// RenameFrom / RenameTo 非空时把主机 ID 改名（--rename-host old=new）。
 	RenameFrom, RenameTo string
+	// SCFImport 非空时用这份 JSON 整体替换 [scf_plan]，并给相关主机补上 region 与 private_address（--import-scf）。
+	SCFImport string
 	// Write 为 true 时校验通过后写回（备份原文件并重新加密）；否则只预览。
 	Write bool
 	Keys  configcrypt.KeyStore
@@ -58,6 +62,13 @@ type HostRename struct {
 	Changes int    `json:"changes"`
 }
 
+// SCFImportReport 记录导入的 SCF 计划概要（地域、空间与市场、更新了网络信息的主机），不含任何配置值。
+type SCFImportReport struct {
+	Regions []string            `json:"regions"`
+	Spaces  map[string][]string `json:"spaces"`
+	Hosts   []string            `json:"hosts"`
+}
+
 // MigrateReport 只包含键名、因子 ID、文件名、主机 ID 与中文名，不含任何配置值。
 type MigrateReport struct {
 	Path       string               `json:"path"`
@@ -65,6 +76,7 @@ type MigrateReport struct {
 	Factors    []FactorMigration    `json:"factors,omitempty"`
 	Labels     []HostLabelMigration `json:"labels,omitempty"`
 	Rename     *HostRename          `json:"rename,omitempty"`
+	SCF        *SCFImportReport     `json:"scf,omitempty"`
 	Changed    bool                 `json:"changed"`
 	Valid      bool                 `json:"valid"`
 	Written    bool                 `json:"written"`
@@ -100,6 +112,15 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 	migrated, err := migrateManifestText(plain, library, opts.RenameFrom, opts.RenameTo, &report)
 	if err != nil {
 		return report, err
+	}
+	if opts.SCFImport != "" {
+		plan, err := readSCFImport(opts.SCFImport)
+		if err != nil {
+			return report, err
+		}
+		if migrated, err = importSCFPlan(migrated, plan, &report); err != nil {
+			return report, err
+		}
 	}
 	report.Changed = !bytes.Equal(migrated, plain)
 	if _, err := setupconfig.Parse(migrated); err != nil {
@@ -438,4 +459,150 @@ func renameHost(blocks []block, from, to string, report *MigrateReport) error {
 	}
 	report.Rename = rename
 	return nil
+}
+
+// scfImport 是 --import-scf 的 JSON：与 [scf_plan] 同构，另带各入口主机的地域与私网地址。
+type scfImport struct {
+	CloudAccount struct {
+		AccountID          string `json:"account_id"`
+		AccountName        string `json:"account_name"`
+		CredentialSecretID string `json:"credential_secret_id"`
+		AppID              string `json:"app_id"`
+		COSRegion          string `json:"cos_region"`
+		COSBucket          string `json:"cos_bucket"`
+	} `json:"cloud_account"`
+	MemoryMB           int `json:"memory_mb"`
+	SymbolsPerFunction int `json:"symbols_per_function"`
+	AssumedEgressIPs   int `json:"assumed_egress_ips"`
+	Regions            map[string]struct {
+		VPCID      string `json:"vpc_id"`
+		SubnetID   string `json:"subnet_id"`
+		AccessHost string `json:"access_host"`
+	} `json:"regions"`
+	Hosts map[string]struct {
+		Region         string `json:"region"`
+		PrivateAddress string `json:"private_address"`
+	} `json:"hosts"`
+	Spaces []struct {
+		SpaceID     string              `json:"space_id"`
+		Markets     map[string][]string `json:"markets"`
+		PackageName string              `json:"package_name"`
+		Namespace   string              `json:"namespace"`
+	} `json:"spaces"`
+}
+
+func readSCFImport(path string) (scfImport, error) {
+	var plan scfImport
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return plan, fmt.Errorf("读不到 SCF 导入文件：%w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&plan); err != nil {
+		return plan, errors.New("SCF 导入文件不是预期的 JSON 结构")
+	}
+	if len(plan.Regions) == 0 || len(plan.Spaces) == 0 {
+		return plan, errors.New("SCF 导入文件缺少地域或空间")
+	}
+	return plan, nil
+}
+
+// importSCFPlan 删除现有的 [scf_plan] 各表，追加导入的计划，并给入口主机写上 region 与 private_address。
+func importSCFPlan(plain []byte, plan scfImport, report *MigrateReport) ([]byte, error) {
+	blocks := splitBlocks(strings.Split(strings.TrimRight(string(plain), "\n"), "\n"))
+	kept := blocks[:0]
+	for _, b := range blocks {
+		if b.header == "scf_plan" || strings.HasPrefix(b.header, "scf_plan.") {
+			continue
+		}
+		kept = append(kept, b)
+	}
+	blocks = kept
+	summary := &SCFImportReport{Spaces: map[string][]string{}}
+	hosts := make([]string, 0, len(plan.Hosts))
+	for id := range plan.Hosts {
+		hosts = append(hosts, id)
+	}
+	sort.Strings(hosts)
+	for _, id := range hosts {
+		values := plan.Hosts[id]
+		i := slices.IndexFunc(blocks, func(b block) bool { return b.header == "hosts."+id && !b.array })
+		if i < 0 {
+			return nil, fmt.Errorf("moox.toml 里没有主机 %s，无法写入它的 SCF 入口网络", id)
+		}
+		setBlockKey(&blocks[i], "region", fmt.Sprintf("%q", values.Region))
+		setBlockKey(&blocks[i], "private_address", fmt.Sprintf("%q", values.PrivateAddress))
+		summary.Hosts = append(summary.Hosts, id)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n[scf_plan]\nenabled = true\n")
+	for _, kv := range []struct {
+		key   string
+		value int
+	}{{"memory_mb", plan.MemoryMB}, {"symbols_per_function", plan.SymbolsPerFunction}, {"assumed_egress_ips", plan.AssumedEgressIPs}} {
+		if kv.value > 0 {
+			fmt.Fprintf(&b, "%s = %d\n", kv.key, kv.value)
+		}
+	}
+	a := plan.CloudAccount
+	fmt.Fprintf(&b, "\n[scf_plan.cloud_account]\naccount_id = %q\naccount_name = %q\ncredential_secret_id = %q\napp_id = %q\ncos_region = %q\ncos_bucket = %q\n",
+		a.AccountID, a.AccountName, a.CredentialSecretID, a.AppID, a.COSRegion, a.COSBucket)
+	regions := make([]string, 0, len(plan.Regions))
+	for name := range plan.Regions {
+		regions = append(regions, name)
+	}
+	sort.Strings(regions)
+	for _, name := range regions {
+		r := plan.Regions[name]
+		fmt.Fprintf(&b, "\n[scf_plan.regions.%s]\nvpc_id = %q\nsubnet_id = %q\naccess_host = %q\n", name, r.VPCID, r.SubnetID, r.AccessHost)
+	}
+	summary.Regions = regions
+	for _, space := range plan.Spaces {
+		fmt.Fprintf(&b, "\n[[scf_plan.spaces]]\nspace_id = %q\n", space.SpaceID)
+		if space.PackageName != "" {
+			fmt.Fprintf(&b, "package_name = %q\n", space.PackageName)
+		}
+		if space.Namespace != "" {
+			fmt.Fprintf(&b, "namespace = %q\n", space.Namespace)
+		}
+		markets := make([]string, 0, len(space.Markets))
+		for market := range space.Markets {
+			markets = append(markets, market)
+		}
+		sort.Strings(markets)
+		fmt.Fprintf(&b, "\n[scf_plan.spaces.markets]\n")
+		for _, market := range markets {
+			quoted := make([]string, 0, len(space.Markets[market]))
+			for _, region := range space.Markets[market] {
+				quoted = append(quoted, fmt.Sprintf("%q", region))
+			}
+			fmt.Fprintf(&b, "%s = [%s]\n", market, strings.Join(quoted, ", "))
+		}
+		summary.Spaces[space.SpaceID] = markets
+	}
+	var out []string
+	for _, blk := range blocks {
+		out = append(out, blk.lines...)
+	}
+	report.SCF = summary
+	return []byte(strings.Join(out, "\n") + "\n" + b.String()), nil
+}
+
+// setBlockKey 在表里设置一个键：已有就替换那一行，没有就插到表头（以及 label）之后。
+func setBlockKey(b *block, key, value string) {
+	line := key + " = " + value
+	for i := 1; i < len(b.lines); i++ {
+		if k, _, ok := keyValue(b.lines[i]); ok && k == key {
+			b.lines[i] = line
+			return
+		}
+	}
+	at := 1
+	if len(b.lines) > 1 {
+		if k, _, ok := keyValue(b.lines[1]); ok && k == "label" {
+			at = 2
+		}
+	}
+	b.lines = append(b.lines[:at], append([]string{line}, b.lines[at:]...)...)
 }

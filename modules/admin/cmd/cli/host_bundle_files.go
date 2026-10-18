@@ -34,6 +34,9 @@ func hostSigningCallers(host hostbundle.Host, operator bool) []string {
 	if slices.Contains(host.Components, "console-proxy") {
 		callers = append(callers, "console")
 	}
+	if slices.Contains(host.Components, "collector") {
+		callers = append(callers, "scf-collector")
+	}
 	if operator {
 		callers = append(callers, "moox-cli")
 	}

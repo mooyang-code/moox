@@ -32,7 +32,7 @@ func RenderEgressConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
 	))
 }
 
-// RenderCollectorRuntimeConfig also preserves the Admin-assigned SCF identity.
+// RenderCollectorRuntimeConfig renders Collector's egress and SCF settings; the scf-collector key ID is filled in at install time from host material.
 func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, error) {
 	if snapshot == nil {
 		return nil, fmt.Errorf("runtime_config: snapshot is required")
@@ -64,11 +64,6 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 	if len(existing) > 0 {
 		if err := yaml.Unmarshal(existing, &prior); err != nil {
 			return nil, err
-		}
-	}
-	if values, ok := prior["scf_access"].(map[string]any); ok {
-		if keyID, ok := values["key_id"].(string); ok {
-			access["key_id"] = keyID
 		}
 	}
 	rendered, err = replaceYAMLMapping(rendered, "collector_runtime", nil)
