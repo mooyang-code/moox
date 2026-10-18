@@ -92,6 +92,13 @@ func BuildRelease(ctx context.Context, options ReleaseOptions) (Release, error) 
 	if err != nil {
 		return release, err
 	}
+	// 失败时删掉本次构建目录；成功时只删中间二进制，软件包与助手留在构建目录里。
+	built := false
+	defer func() {
+		if !built {
+			_ = os.RemoveAll(work)
+		}
+	}()
 	bin := options.BinaryDirectory
 	if bin == "" {
 		bin = filepath.Join(work, "bin")
@@ -155,6 +162,10 @@ func BuildRelease(ctx context.Context, options ReleaseOptions) (Release, error) 
 	}
 	if err := saveJSON(root, releaseName(options.ReleaseID), release, false); err != nil {
 		return Release{}, err
+	}
+	built = true
+	if options.BinaryDirectory == "" {
+		_ = os.RemoveAll(bin)
 	}
 	return release, nil
 }

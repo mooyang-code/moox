@@ -356,3 +356,60 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 		t.Fatal("archive-worker 的外部白名单边界不对")
 	}
 }
+
+// 出站主机：目录记录中转主机，control 快照列出该主机允许的中转端口与调用方；直达主机不带许可，control 不能是出站主机。
+func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	baseline, err := c.Compile(p, "storage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Hosts[2].Reachability = ReachabilityOutbound
+	control, err := c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if control.Directory.Hosts["compute-1"].Relay != "control" || control.Directory.Hosts["storage"].Relay != "" {
+		t.Fatalf("directory relay = %+v", control.Directory.Hosts)
+	}
+	if len(control.Relays) != 1 || control.Relays[0].HostID != "compute-1" {
+		t.Fatalf("relays = %+v", control.Relays)
+	}
+	relay := control.Relays[0]
+	if relay.Ports[0].Port != HostGatewayRemotePort || !slices.Equal(relay.Ports[0].Callers, []string{"collector", "console", "monitor", "moox-cli", "strategy"}) {
+		t.Fatalf("gateway port = %+v", relay.Ports[0])
+	}
+	if !relay.Allowed("monitor", HostGatewayRemotePort) || relay.Allowed("admin", HostGatewayRemotePort) || relay.Allowed("monitor", 1) {
+		t.Fatal("relay allowlist is wrong")
+	}
+	if len(relay.Ports) < 2 {
+		t.Fatal("component health ports are missing")
+	}
+	for _, port := range relay.Ports[1:] {
+		if !slices.Equal(port.Callers, []string{"monitor"}) {
+			t.Fatalf("health port %d open to %v", port.Port, port.Callers)
+		}
+	}
+	storage, err := c.Compile(p, "storage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(storage.Relays) != 0 || storage.Directory.Hosts["compute-1"].Relay != "control" || storage.Hash == baseline.Hash {
+		t.Fatal("direct host must see the relay in its directory but carry no allowlist")
+	}
+	p.Hosts[2].Status = Disabled
+	if control, err = c.Compile(p, "control"); err != nil || len(control.Relays) != 0 {
+		t.Fatalf("disabled outbound host keeps relay: %v %+v", err, control.Relays)
+	}
+
+	p = productionTopology()
+	p.Hosts[0].Reachability = ReachabilityOutbound
+	if _, err := c.Compile(p, "control"); err == nil {
+		t.Fatal("outbound control host accepted")
+	}
+	p = productionTopology()
+	p.Hosts[1].Reachability = "inbound"
+	if _, err := c.Compile(p, "control"); err == nil {
+		t.Fatal("unknown reachability accepted")
+	}
+}

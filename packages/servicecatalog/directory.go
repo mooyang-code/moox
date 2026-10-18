@@ -45,7 +45,7 @@ func (d Directory) Validate() error {
 }
 
 func validDirectoryHost(id string, host DirectoryHost) bool {
-	return ValidHostID(id) && ValidHostAddress(host.Address) && (host.PrivateAddress == "" || ValidHostAddress(host.PrivateAddress)) && len(host.Region) <= 128
+	return ValidHostID(id) && ValidHostAddress(host.Address) && (host.PrivateAddress == "" || ValidHostAddress(host.PrivateAddress)) && len(host.Region) <= 128 && (host.Relay == "" || ValidHostID(host.Relay) && host.Relay != id)
 }
 
 // ValidHostID checks the canonical host identity shared by topology and callers.
