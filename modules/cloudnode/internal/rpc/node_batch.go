@@ -116,7 +116,7 @@ func (s *Service) SubmitDeployNodes(ctx context.Context, req *pb.BatchDeployNode
 		if node == nil || node.IsDeleted {
 			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "node not found: "+nodeID)}, nil
 		}
-		lifecycleID, ensureErr := s.catalog.EnsureNodeLifecycleID(ctx, spaceID, nodeID)
+		lifecycleID, ensureErr := s.catalog.NodeLifecycleID(ctx, spaceID, nodeID)
 		if ensureErr != nil {
 			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(ensureErr)}, nil
 		}
@@ -208,7 +208,7 @@ func (s *Service) SubmitDeleteNodes(ctx context.Context, req *pb.BatchDeleteNode
 			items = append(items, store.NodeBatchItemCreate{ItemID: fmt.Sprintf("%s-%03d", jobID, index), ItemIndex: index, NodeID: nodeID, RequestJSON: string(raw)})
 			continue
 		}
-		lifecycleID, ensureErr := s.catalog.EnsureNodeLifecycleID(ctx, spaceID, nodeID)
+		lifecycleID, ensureErr := s.catalog.NodeLifecycleID(ctx, spaceID, nodeID)
 		if ensureErr != nil {
 			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(ensureErr)}, nil
 		}

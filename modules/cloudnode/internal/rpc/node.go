@@ -132,7 +132,6 @@ func (s *Service) refreshTimerTriggerMetadata(ctx context.Context, spaceID strin
 		return nil
 	}
 	metadata := parseJSONMap(node.Metadata)
-	removeDeprecatedNodeMetadata(metadata)
 	readbackAt := time.Now().UTC().Format(time.RFC3339Nano)
 	patch := map[string]any{"timer_available_status": "Unknown", "timer_actual_type": nil, "timer_actual_enabled": nil, "timer_actual_cron": nil, "timer_actual_qualifier": nil, "timer_actual_message": nil, "timer_last_readback_at": readbackAt}
 	if strings.TrimSpace(node.PackageID) == "" || (strings.TrimSpace(node.DeploymentID) == "" && !metadataBool(metadata, "deployment_ready")) {
@@ -582,7 +581,7 @@ func (s *Service) executeDeployNodeItem(
 	if node == nil || node.IsDeleted {
 		return "", fmt.Errorf("node not found: %s", item.GetNodeId())
 	}
-	lifecycleID, err := s.catalog.EnsureNodeLifecycleID(ctx, spaceID, node.NodeID)
+	lifecycleID, err := s.catalog.NodeLifecycleID(ctx, spaceID, node.NodeID)
 	if err != nil {
 		return "", err
 	}
@@ -1464,11 +1463,9 @@ func mergeNodeUpdate(existing store.CloudNode, node *pb.CloudNode) store.CloudNo
 		if parseJSONMap(existing.Metadata)["collector_publish_fenced"] == true {
 			merged["collector_publish_fenced"] = true
 		}
-		removeDeprecatedNodeMetadata(merged)
 		next.Metadata = jsonString(merged)
 	} else {
 		merged := parseJSONMap(existing.Metadata)
-		removeDeprecatedNodeMetadata(merged)
 		next.Metadata = jsonString(merged)
 	}
 	next.IsDeleted = node.GetIsDeleted()
@@ -1540,10 +1537,4 @@ func nodeMetadataFromPB(node *pb.CloudNode) map[string]any {
 		metadata["ip_address"] = node.GetIpAddress()
 	}
 	return metadata
-}
-
-func removeDeprecatedNodeMetadata(metadata map[string]any) {
-	delete(metadata, "timeout_threshold")
-	delete(metadata, "probe_enabled")
-	delete(metadata, "probe_url")
 }

@@ -270,77 +270,13 @@ func (r *CatalogRepository) CompleteNodeBatchItem(
 	})
 }
 
-// ReleaseTerminalNodeBatchClaims repairs successful claims left by older
-// versions. Failed legacy items are ambiguous, so they must remain fenced.
-func (r *CatalogRepository) ReleaseTerminalNodeBatchClaims(ctx context.Context) (int64, error) {
-	now := time.Now().UTC()
-	result := r.db.WithContext(ctx).Exec(`
-		UPDATE t_cloud_nodes AS n
-		SET c_lifecycle_operation_id = '', c_mtime = ?
-		WHERE n.c_lifecycle_operation_id <> ''
-		AND EXISTS (
-			SELECT 1 FROM t_cloud_node_batch_items AS i
-			WHERE i.c_space_id = n.c_space_id
-			  AND i.c_node_id = n.c_node_id
-			  AND i.c_item_id = n.c_lifecycle_operation_id
-			  AND i.c_status = ?
-			  AND json_valid(i.c_request_json)
-			  AND json_extract(i.c_request_json, '$.lifecycleId') = n.c_lifecycle_id
-			  AND json_extract(i.c_request_json, '$.operationId') = n.c_lifecycle_operation_id
-		)`, now, NodeBatchSuccess)
-	return result.RowsAffected, result.Error
-}
-
-// RecoverFailedNodeBatchMutationClaims promotes legacy failed items that still
-// own the exact node generation claim back into reconciliation. Older runners
-// could persist FAILED after an ambiguous provider outcome without releasing
-// the node claim; keeping that claim and resuming the same item is the only
-// safe automatic recovery.
-func (r *CatalogRepository) RecoverFailedNodeBatchMutationClaims(ctx context.Context) (int64, error) {
-	now := time.Now().UTC()
-	var recovered int64
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Exec(`
-			UPDATE t_cloud_node_batch_items AS i
-			SET c_status = ?, c_completed_at = NULL, c_started_at = NULL, c_mtime = ?
-			WHERE i.c_status = ?
-			AND EXISTS (
-				SELECT 1 FROM t_cloud_nodes AS n
-				WHERE n.c_space_id = i.c_space_id
-				  AND n.c_node_id = i.c_node_id
-				  AND n.c_lifecycle_operation_id = i.c_item_id
-				  AND json_valid(i.c_request_json)
-				  AND json_extract(i.c_request_json, '$.lifecycleId') = n.c_lifecycle_id
-				  AND json_extract(i.c_request_json, '$.operationId') = n.c_lifecycle_operation_id
-			)`, NodeBatchReconciliationRequired, now, NodeBatchFailed)
-		if result.Error != nil {
-			return result.Error
-		}
-		recovered = result.RowsAffected
-		if recovered == 0 {
-			return nil
-		}
-		return tx.Exec(`
-			UPDATE t_cloud_node_batches AS b
-			SET c_status = ?, c_completed_at = NULL, c_mtime = ?
-			WHERE EXISTS (
-				SELECT 1 FROM t_cloud_node_batch_items AS i
-				WHERE i.c_space_id = b.c_space_id
-				  AND i.c_job_id = b.c_job_id
-				  AND i.c_status = ?
-			)
-		`, NodeBatchRunning, now, NodeBatchReconciliationRequired).Error
-	})
-	return recovered, err
-}
-
 func releaseTerminalNodeBatchMutationClaim(tx *gorm.DB, item NodeBatchItem, now time.Time) error {
 	var request struct {
 		LifecycleID string `json:"lifecycleId"`
 		OperationID string `json:"operationId"`
 	}
 	if err := json.Unmarshal([]byte(item.RequestJSON), &request); err != nil {
-		return nil // malformed legacy requests never own a lifecycle claim
+		return nil // malformed requests never own a lifecycle claim
 	}
 	if request.LifecycleID == "" || request.OperationID == "" || request.OperationID != item.ItemID {
 		return nil

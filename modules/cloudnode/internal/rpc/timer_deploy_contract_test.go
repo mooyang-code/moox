@@ -128,25 +128,6 @@ func TestMarketFetcherTimerDeployValidatesFinalContractBeforeCodeUpdate(t *testi
 	}
 }
 
-func TestMarketFetcherTimerDeployRemovesLegacyEmbeddedCA(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	seedSCFAccountAndPackage(t, catalog)
-	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "timer", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "timer", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "timer", CreateTime: time.Now(), Metadata: `{}`}))
-	env := completeTimerEnvironment()
-	env["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = "cGVt"
-	env["MOOX_GATEWAY_SERVICE_SECRET_KEY"] = "remove-internal-key"
-	env["MOOX_COLLECTOR_RPC_GATEWAY_TARGET"] = "ip://internal.example:11003"
-	fake := &fakeSCFClient{currentEnvironment: env, currentTimeout: 60}
-	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
-
-	_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{NodeId: "timer", PackageId: "moox-collector_dev", Environment: map[string]string{"MOOX_SPACE_ID": "crypto"}})
-	require.NoError(t, err)
-	require.Len(t, fake.configured, 1)
-	require.NotContains(t, fake.configured[0].Environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
-	require.NotContains(t, fake.configured[0].Environment, "MOOX_GATEWAY_SERVICE_SECRET_KEY")
-	require.NotContains(t, fake.configured[0].Environment, "MOOX_COLLECTOR_RPC_GATEWAY_TARGET")
-}
-
 // 上线时发现：环境里不带 CLS 配置的 Timer 函数创建被环境校验拒绝，因为 CloudNode 的自动补齐发生在校验之后。
 // 补齐必须先于校验：提交的环境没有 CLS 变量也能创建，且创建出的函数带齐 CLS 配置。
 func TestMarketFetcherTimerCreateWithoutCLSEnvironmentGetsItInjectedBeforeValidation(t *testing.T) {

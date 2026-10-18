@@ -296,9 +296,6 @@ func TestAmbiguousNodeMutationRemainsFencedUntilSameOperationReconciles(t *testi
 	require.NoError(t, repo.db.Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", item.SpaceID, item.JobID, item.ItemID).First(&stored).Error)
 	assert.Equal(t, NodeBatchReconciliationRequired, stored.Status)
 	assert.Nil(t, stored.CompletedAt)
-	repaired, err := repo.ReleaseTerminalNodeBatchClaims(ctx)
-	require.NoError(t, err)
-	assert.Zero(t, repaired, "reconciliation-required claims are never startup-released")
 
 	require.NoError(t, repo.db.Model(&NodeBatchItem{}).
 		Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", item.SpaceID, item.JobID, item.ItemID).
@@ -311,39 +308,6 @@ func TestAmbiguousNodeMutationRemainsFencedUntilSameOperationReconciles(t *testi
 	require.NoError(t, repo.UpdateNodeDeployment(ctx, node.SpaceID, node.NodeID, "pkg-next", "v2", nil, nil, false, node.LifecycleID, item.ItemID))
 	require.NoError(t, repo.CompleteNodeBatchItem(ctx, item.SpaceID, item.JobID, item.ItemID, "reconciled", nil))
 	require.NoError(t, repo.ClaimNodeMutation(ctx, node.SpaceID, node.NodeID, node.LifecycleID, "new-operation"))
-}
-
-func TestStartupRecoversLegacyFailedItemThatStillOwnsMutationClaim(t *testing.T) {
-	repo := newTestCatalog(t)
-	ctx := context.Background()
-	item, node := createNodeMutationBatchFixture(t, repo, "job-legacy-ambiguous")
-	require.NoError(t, repo.ClaimNodeMutation(ctx, node.SpaceID, node.NodeID, node.LifecycleID, item.ItemID))
-	require.NoError(t, repo.db.Model(&NodeBatchItem{}).
-		Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", item.SpaceID, item.JobID, item.ItemID).
-		Updates(map[string]any{"c_status": NodeBatchFailed, "c_error_message": "old runner lost provider outcome", "c_completed_at": time.Now().UTC()}).Error)
-	require.NoError(t, repo.db.Model(&NodeBatch{}).
-		Where("c_space_id = ? AND c_job_id = ?", item.SpaceID, item.JobID).
-		Update("c_status", NodeBatchFailed).Error)
-
-	recovered, err := repo.RecoverFailedNodeBatchMutationClaims(ctx)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, recovered)
-	aggregate, err := repo.GetNodeBatch(ctx, item.SpaceID, item.JobID)
-	require.NoError(t, err)
-	require.NotNil(t, aggregate)
-	assert.Equal(t, NodeBatchRunning, aggregate.Job.Status)
-	assert.Equal(t, NodeBatchReconciliationRequired, aggregate.Items[0].Status)
-	assert.Nil(t, aggregate.Items[0].CompletedAt)
-	require.ErrorIs(t, repo.ClaimNodeMutation(ctx, node.SpaceID, node.NodeID, node.LifecycleID, "new-operation"), ErrNodeMutationClaimed)
-
-	require.NoError(t, repo.db.Model(&NodeBatchItem{}).
-		Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", item.SpaceID, item.JobID, item.ItemID).
-		Update("c_mtime", time.Now().UTC().Add(-nodeBatchReconciliationRetryDelay-time.Second)).Error)
-	resumed, err := repo.TakePendingNodeBatchItems(ctx, 1)
-	require.NoError(t, err)
-	require.Len(t, resumed, 1)
-	assert.Equal(t, item.ItemID, resumed[0].ItemID)
-	assert.True(t, resumed[0].ResumeClaim)
 }
 
 func TestDeletedNodeGenerationRemainsFencedUntilBatchItemCompletes(t *testing.T) {

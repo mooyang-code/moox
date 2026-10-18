@@ -121,8 +121,6 @@ func TestNodeMetadataBranches(t *testing.T) {
 		Metadata: metadata, BizType: "market_fetcher", Tag: "prod", IpAddress: "10.0.0.1",
 	})
 	assert.Equal(t, "market_fetcher", got["biz_type"])
-	assert.NotContains(t, got, "timeout_threshold")
-	assert.NotContains(t, got, "probe_enabled")
 	assert.NotContains(t, got, "probe_url")
 	assert.Empty(t, nodeMetadataFromPB(nil))
 }
@@ -573,8 +571,6 @@ func TestExecuteRuntimeConfigSkipsUnchangedEnvironmentUpdate(t *testing.T) {
 	environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"] = "1"
 	environment["MOOX_MARKET_FETCH_DNS_HASH"] = "dns"
 	environment["MOOX_MARKET_FETCH_DNS_UPDATED_AT"] = "2026-08-04T01:00:00Z"
-	environment["MOOX_MARKET_FETCH_SUBJECTS"] = "BTC-USDT"
-	environment["MOOX_MARKET_FETCH_SYMBOLS_JSON"] = `{"BTC-USDT":"BTCUSDT"}`
 	environment["MOOX_MARKET_FETCH_PROVIDER"] = "binance"
 	environment["MOOX_MARKET_FETCH_MARKET_TYPE"] = "spot"
 	environment["MOOX_MARKET_FETCH_DATASET_ID"] = "bars"
@@ -628,10 +624,8 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	environment["MOOX_SPACE_ID"] = "stockcn"
 	environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] = "assignment"
 	environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"] = "80"
-	environment["MOOX_MARKET_FETCH_SUBJECTS"] = strings.Repeat("old-subject|", 80)
 	environment["MOOX_EVENTBUS_NATS_PASSWORD"] = "keep-password"
 	environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] = "remove-internal-key"
-	environment["MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64"] = "cGVt"
 	fake := &fakeSCFClient{currentEnvironment: environment}
 	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
 	patch := &pb.NodeRuntimeConfigPatch{NodeId: "timer-node", TimerCron: "5 * * * * * *", TimerEnabled: true, ManagedEnvironment: map[string]string{
@@ -644,15 +638,12 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	require.EqualValues(t, 60, fake.configured[0].Timeout)
 	require.Equal(t, "keep-password", fake.currentEnvironment["MOOX_EVENTBUS_NATS_PASSWORD"])
 	require.NotContains(t, fake.currentEnvironment, "MOOX_GATEWAY_SERVICE_SECRET_KEY")
-	require.NotContains(t, fake.currentEnvironment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
-	require.NotContains(t, fake.configured[0].Environment, "MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64")
-	require.NotContains(t, fake.currentEnvironment, "MOOX_MARKET_FETCH_SUBJECTS")
 	node, err := catalog.GetNode(context.Background(), "stockcn", "timer-node")
 	require.NoError(t, err)
 	require.Contains(t, node.Metadata, `"access_address":"access.example:11004"`)
 	require.Contains(t, node.Metadata, `"access_key_id":"assigned-scf-key-18"`)
 	require.NotContains(t, node.Metadata, strings.Repeat("b", 64))
-	require.Contains(t, node.Metadata, `"timeout_seconds":60`, "later redeploys must not restore the legacy catalog timeout")
+	require.Contains(t, node.Metadata, `"timeout_seconds":60`)
 	require.Contains(t, node.Metadata, `"assignment_count":80`, "the assignment readback must persist the verified subject count")
 }
 
