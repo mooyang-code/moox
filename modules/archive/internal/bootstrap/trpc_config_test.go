@@ -39,7 +39,7 @@ func TestShippedTRPCConfigMatchesTheServiceCatalogAndTimers(t *testing.T) {
 		}
 		ports[svc.Port], byName[svc.Name] = svc.Name, svc
 	}
-	for _, name := range []string{healthService, mgrService, workerService, triggerService, maintainService} {
+	for _, name := range []string{healthService, mgrService, workerService, triggerService, maintainService, metricsService} {
 		if _, ok := byName[name]; !ok {
 			t.Fatalf("trpc_go.yaml 缺少服务 %s", name)
 		}

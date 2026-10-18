@@ -55,6 +55,7 @@ func Open(opts *Options) (*Store, error) {
 
 // ApplySchema executes the embedded schema on a new database and rejects a
 // database whose Factor tables do not match the current schema.
+// 已有库缺少后来新增的表时由 CREATE TABLE IF NOT EXISTS 补齐；已有的表必须与当前结构一致。
 func (s *Store) ApplySchema(sql string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("factor database is not open")
@@ -67,7 +68,7 @@ func (s *Store) ApplySchema(sql string) error {
 		return err
 	}
 	if len(existing) > 0 {
-		if err := s.validateSchemaTables(existing); err != nil {
+		if err := s.validateSchemaTables(existing, false); err != nil {
 			return err
 		}
 	}
@@ -78,7 +79,7 @@ func (s *Store) ApplySchema(sql string) error {
 	if err != nil {
 		return err
 	}
-	return s.validateSchemaTables(tables)
+	return s.validateSchemaTables(tables, true)
 }
 
 func (s *Store) factorSchemaTables() ([]string, error) {
@@ -91,7 +92,8 @@ func (s *Store) factorSchemaTables() ([]string, error) {
 	return tables, nil
 }
 
-func (s *Store) validateSchemaTables(tables []string) error {
+// validateSchemaTables 检查表结构；requireAll 为 false 时允许缺少表（建表前检查已有库）。
+func (s *Store) validateSchemaTables(tables []string, requireAll bool) error {
 	expected := map[string][]string{
 		"t_factor_defs": {
 			"c_factor_id", "c_name", "c_spec", "c_spec_hash", "c_allow_partial_universe", "c_ctime", "c_mtime",
@@ -109,9 +111,12 @@ func (s *Store) validateSchemaTables(tables []string) error {
 			"c_set_id", "c_space_id", "c_source_dataset_id", "c_freq", "c_subject_mode",
 			"c_subjects_json", "c_result_dataset_id", "c_status", "c_ctime", "c_mtime",
 		},
+		"t_factor_engine_heartbeat": {
+			"c_id", "c_engine_id", "c_boot_id", "c_heartbeat_at", "c_mtime",
+		},
 	}
-	if len(tables) != len(expected) {
-		return fmt.Errorf("factor database must contain only factor sets, definitions, set members, and recalc jobs; create a fresh database")
+	if requireAll && len(tables) != len(expected) {
+		return fmt.Errorf("factor database must contain only factor sets, definitions, set members, recalc jobs and the engine heartbeat; create a fresh database")
 	}
 	for _, table := range tables {
 		want, ok := expected[table]
@@ -127,7 +132,7 @@ func (s *Store) validateSchemaTables(tables []string) error {
 		}
 	}
 	for name := range expected {
-		if !contains(tables, name) {
+		if requireAll && !contains(tables, name) {
 			return fmt.Errorf("factor database missing table %s; create a fresh database", name)
 		}
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // ErrLeaseConflict means another engine holds the live engine lease.
@@ -61,6 +62,9 @@ type Hub struct {
 	engine *engineState
 	// onHeartbeat 在每次心跳被接受后调用（锁外）：因子管理服务据此立刻刷新因子数据集指标并补报。
 	onHeartbeat func()
+	// heartbeats 保存最近一次心跳（离线告警用），persisted 是最近一次落库的内容。
+	heartbeats HeartbeatStore
+	persisted  store.EngineHeartbeat
 }
 
 // OnHeartbeat 登记每次心跳被接受后调用的函数。
@@ -88,7 +92,7 @@ func New(db Store, options ...Option) *Hub {
 
 // Heartbeat records the engine's status and renews its lease. While another
 // engine's lease is live the heartbeat is rejected with ErrLeaseConflict.
-func (h *Hub) Heartbeat(_ context.Context, id domain.EngineIdentity, status domain.EngineStatus) (time.Duration, error) {
+func (h *Hub) Heartbeat(ctx context.Context, id domain.EngineIdentity, status domain.EngineStatus) (time.Duration, error) {
 	if id.EngineID == "" {
 		return 0, errors.New("engine_id is required")
 	}
@@ -104,6 +108,9 @@ func (h *Hub) Heartbeat(_ context.Context, id domain.EngineIdentity, status doma
 	h.engine = &engineState{identity: id, status: status, lastSeen: now}
 	hook, ttl := h.onHeartbeat, h.engineTTL
 	h.mu.Unlock()
+	if err := h.persistHeartbeat(ctx, id, now); err != nil {
+		log.WarnContextf(ctx, "factor engine heartbeat not persisted: %v", err)
+	}
 	if hook != nil {
 		hook()
 	}

@@ -23,6 +23,8 @@ var healthMetricSuffixes = []string{
 	"_input_watermark_timestamp_seconds",
 	"_metrics_errors_total",
 	"_metrics_last_error_timestamp_seconds",
+	PresenceStateSuffix,
+	PresenceLastHeartbeatSuffix,
 }
 
 var healthMetricNames = map[string]struct{}{

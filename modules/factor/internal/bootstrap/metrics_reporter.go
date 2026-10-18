@@ -20,6 +20,11 @@ type heartbeatSource interface {
 	OnHeartbeat(func())
 }
 
+// presenceSource 是引擎在线状态评估，见 enginehub.Hub.Presence。
+type presenceSource interface {
+	Presence(ctx context.Context) (int, string, time.Time, error)
+}
+
 // observeTimeout 是收到心跳后刷新因子数据集指标的最长时间。
 const observeTimeout = 10 * time.Second
 
@@ -43,6 +48,10 @@ func registerMetricsReporter(s *server.Server, engine engineView) error {
 		return fmt.Errorf("create factor dataset metrics: %w", err)
 	}
 	observer := newFactorDatasetObserver(engine, datasets)
+	presence, err := report.NewWorkerPresence(prometheus.DefaultRegisterer, "factor")
+	if err != nil {
+		return fmt.Errorf("create factor engine presence metric: %w", err)
+	}
 	handler.FlushOnOutputAdvance()
 	if source, ok := engine.(heartbeatSource); ok {
 		source.OnHeartbeat(func() {
@@ -58,6 +67,14 @@ func registerMetricsReporter(s *server.Server, engine engineView) error {
 	timer.RegisterHandlerService(service, func(ctx context.Context) error {
 		if err := observer.observe(ctx); err != nil {
 			log.WarnContextf(ctx, "factor dataset metrics not refreshed: %v", err)
+		}
+		// 每 30 秒评估一次引擎在线状态并随快照上报，Monitor 据此发出“因子引擎离线”告警。
+		if source, ok := engine.(presenceSource); ok {
+			if state, engineID, last, err := source.Presence(ctx); err != nil {
+				log.WarnContextf(ctx, "factor engine presence not evaluated: %v", err)
+			} else {
+				presence.Set(state, engineID, last)
+			}
 		}
 		return handler.Handle(ctx)
 	})

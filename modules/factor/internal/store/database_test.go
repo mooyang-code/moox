@@ -16,7 +16,22 @@ func TestOpenCreatesFactorSchema(t *testing.T) {
 	require.NoError(t, s.db.Raw(`
 		SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 't_factor_%' ORDER BY name
 	`).Scan(&tables).Error)
-	require.Equal(t, []string{"t_factor_defs", "t_factor_recalc_jobs", "t_factor_set_members", "t_factor_sets"}, tables)
+	require.Equal(t, []string{"t_factor_defs", "t_factor_engine_heartbeat", "t_factor_recalc_jobs", "t_factor_set_members", "t_factor_sets"}, tables)
+}
+
+// 已有库缺少后来新增的引擎心跳表时，启动时补建，已有数据保留。
+func TestApplySchemaAddsMissingHeartbeatTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "factor.db")
+	s, err := Open(&Options{Path: path})
+	require.NoError(t, err)
+	require.NoError(t, s.db.Exec("DROP TABLE t_factor_engine_heartbeat").Error)
+	require.NoError(t, s.Close())
+	s, err = Open(&Options{Path: path})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	_, ok, err := s.LastEngineHeartbeat(context.Background())
+	require.NoError(t, err)
+	require.False(t, ok)
 }
 
 func TestApplySchemaRejectsNonCurrentTables(t *testing.T) {
@@ -24,7 +39,7 @@ func TestApplySchemaRejectsNonCurrentTables(t *testing.T) {
 	s, err := Open(&Options{Path: path})
 	require.NoError(t, err)
 	require.NoError(t, s.db.Exec("CREATE TABLE t_factor_old_ledger (c_id TEXT)").Error)
-	require.ErrorContains(t, s.ApplySchema("CREATE TABLE IF NOT EXISTS t_factor_sets(c_id TEXT)"), "only factor sets")
+	require.ErrorContains(t, s.ApplySchema("CREATE TABLE IF NOT EXISTS t_factor_sets(c_id TEXT)"), "unexpected table t_factor_old_ledger")
 	require.NoError(t, s.Close())
 }
 
