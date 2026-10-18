@@ -401,6 +401,8 @@ message RunAssignment {
   string task_epoch = 21;
   // 导出文件名前缀（数据集名去空格；为空时用数据集 ID）。
   string file_prefix = 22;
+  // 数据集元数据 JSON（名称、简介、数据来源、标的范围等），由 mgr 从 Storage 读取，worker 写进根目录的 *_dataset.json。
+  string dataset_meta_json = 23;
 }
 message PullArchiveRunRsp {
   common.RetInfo ret_info = 1;

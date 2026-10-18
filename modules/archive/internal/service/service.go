@@ -27,6 +27,15 @@ type Dataset struct {
 	DataNodeID string
 	// Retention 是线上保留期："<n>h" 或 "forever"。
 	Retention string
+	// 以下是写进归档根目录元数据文件的数据集信息。
+	Description     string
+	DataSourceID    string
+	RetentionSource string
+	SubjectTags     []string
+	Attributes      map[string]string
+	CreatedAt       string
+	UpdatedAt       string
+	Revision        uint64
 }
 
 // DatasetProvider 读取数据集信息；数据集不存在时返回 ErrDatasetNotFound。

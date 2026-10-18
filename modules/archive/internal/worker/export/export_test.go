@@ -127,28 +127,38 @@ func TestWriteFailureLeavesNoPartialAndKeepsTheOldFile(t *testing.T) {
 	}
 }
 
-func TestDatasetJSONIsRewrittenOnlyWhenColumnsChange(t *testing.T) {
+func TestDatasetJSONCarriesTheDatasetAndColumnDescriptionsAndIsRewrittenOnlyOnRealChanges(t *testing.T) {
 	files := Files{Root: t.TempDir()}
 	now := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
 	cols := []staging.Column{{Name: "open", Type: staging.TypeDouble}}
-	if err := files.WriteDatasetJSON("crypto", "ds_1m", "ds_1m", "1m", cols, now); err != nil {
+	input := DatasetMetaInput{
+		SpaceID: "crypto", DatasetID: "ds_1m", FilePrefix: "现货分钟K线", Freq: "1m", PartitionUnit: "day", Timezone: "UTC",
+		DatasetJSON: `{"name":"现货分钟K线","description":"币安现货 1 分钟 K 线"}`, Columns: cols,
+		Infos: []ColumnMeta{{Name: "open", DisplayName: "开盘价", OriginType: "field", OriginID: "open"}},
+	}
+	if err := files.WriteDatasetJSON(files.BuildDatasetMeta(input, now)); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(files.Root, "crypto", "ds_1m_dataset.json")
+	path := filepath.Join(files.Root, "crypto", "现货分钟K线_dataset.json")
 	first, _ := os.ReadFile(path)
-	if err := files.WriteDatasetJSON("crypto", "ds_1m", "ds_1m", "1m", cols, now.Add(time.Hour)); err != nil {
+	for _, want := range []string{`"name": "现货分钟K线"`, `"description": "币安现货 1 分钟 K 线"`, `"display_name": "开盘价"`, `"display_name": "数据时间"`, `"path_pattern": "<yyyy>/现货分钟K线_<yyyymmdd>.csv"`, `"timezone": "UTC"`} {
+		if !strings.Contains(string(first), want) {
+			t.Fatalf("元数据缺少 %s:\n%s", want, first)
+		}
+	}
+	if err := files.WriteDatasetJSON(files.BuildDatasetMeta(input, now.Add(time.Hour))); err != nil {
 		t.Fatal(err)
 	}
 	if again, _ := os.ReadFile(path); string(again) != string(first) {
-		t.Fatal("列没变不应重写")
+		t.Fatal("内容没变不应重写")
 	}
-	cols = append(cols, staging.Column{Name: "close", Type: staging.TypeDouble})
-	if err := files.WriteDatasetJSON("crypto", "ds_1m", "ds_1m", "1m", cols, now.Add(2*time.Hour)); err != nil {
+	input.DatasetJSON = `{"name":"现货分钟K线","description":"新的简介"}`
+	if err := files.WriteDatasetJSON(files.BuildDatasetMeta(input, now.Add(2*time.Hour))); err != nil {
 		t.Fatal(err)
 	}
 	changed, _ := os.ReadFile(path)
-	if string(changed) == string(first) || !strings.Contains(string(changed), `"close"`) {
-		t.Fatalf("changed = %s", changed)
+	if string(changed) == string(first) || !strings.Contains(string(changed), "新的简介") {
+		t.Fatalf("简介变化应重写: %s", changed)
 	}
 }
 

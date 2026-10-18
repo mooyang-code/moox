@@ -61,6 +61,8 @@ func (g *gatewayDatasets) GetDataset(ctx context.Context, spaceID, datasetID str
 	return service.Dataset{
 		SpaceID: ds.GetSpaceId(), DatasetID: ds.GetDatasetId(), Name: ds.GetName(), DataKind: dataKind(ds.GetDataKind()), Freq: ds.GetFreq(),
 		Status: ds.GetStatus(), DataNodeID: ds.GetDataNodeId(), Retention: ds.GetRetention(),
+		Description: ds.GetDescription(), DataSourceID: ds.GetDataSourceId(), RetentionSource: ds.GetRetentionSource(), SubjectTags: ds.GetSubjectTags(),
+		Attributes: ds.GetAttributes(), CreatedAt: ds.GetCreatedAt(), UpdatedAt: ds.GetUpdatedAt(), Revision: ds.GetRevision(),
 	}, nil
 }
 
