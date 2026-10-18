@@ -115,7 +115,7 @@ func TestControlPreflightRejectsUnreadyAndUnrelatedRuntime(t *testing.T) {
 	root, err := privateRoot(directory)
 	require.NoError(t, err)
 	defer root.Close()
-	require.NoError(t, bindControlRequest(root, "sha256:original"))
-	require.NoError(t, bindControlRequest(root, "sha256:original"))
-	require.Error(t, bindControlRequest(root, "sha256:changed"))
+	require.NoError(t, bindControlRequest(root, "", "sha256:original"))
+	require.NoError(t, bindControlRequest(root, "", "sha256:original"))
+	require.Error(t, bindControlRequest(root, "", "sha256:changed"))
 }

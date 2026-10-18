@@ -40,6 +40,7 @@ type setupDeps struct {
 	bootstrapControl       setupControlBootstrap
 	deployHost             setupHostDeploy
 	deployUnit             setupUnitDeploy
+	buildRelease           setupReleaseBuild
 	load                   func(string) (*setupconfig.Snapshot, error)
 	loadInitBundle         func(string) (setupInitBundle, error)
 	validate               func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
@@ -97,6 +98,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupBootstrapCommand(deps),
 		newSetupDeployHostCommand(deps),
 		newSetupDeployUnitCommand(deps),
+		newSetupReleaseCommand(deps),
 		newSetupPackageCommand(),
 		newSetupRenderRuntimeConfigCommand(deps),
 		newSetupApplyCommand(deps),

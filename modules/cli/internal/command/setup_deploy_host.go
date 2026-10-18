@@ -58,5 +58,6 @@ func newSetupDeployHostCommand(deps setupDeps) *cobra.Command {
 	command.Flags().StringVar(&options.BinaryDirectory, "binary-dir", "", "可选：本机构建的目标 Linux host 二进制目录")
 	command.Flags().StringVar(&options.StateDirectory, "state-dir", "", "bootstrap core 创建的持久私有状态目录")
 	command.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
+	command.Flags().StringVar(&options.Release, "release", "", "可选：setup release build 产出的版本 ID；为空时修复首次安装的发布")
 	return command
 }

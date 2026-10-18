@@ -39,7 +39,9 @@ type CoreOptions struct {
 }
 
 type CoreResult struct {
-	Stage          string               `json:"stage"`
+	Stage string `json:"stage"`
+	// Release 是 control 升级使用的版本 ID；首次初始化为空。
+	Release        string               `json:"release,omitempty"`
 	Bootstrap      unitbootstrap.Result `json:"bootstrap"`
 	OperatorConfig string               `json:"operator_config"`
 	Components     []unitruntime.Status `json:"components,omitempty"`
@@ -186,9 +188,20 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 	}
 	var packages []unitpackage.Result
 	var helper string
-	if controlOptions == nil {
+	switch {
+	case controlOptions == nil:
 		packages, helper, err = prepareCoreSoftware(ctx, root, options, arch)
-	} else {
+	case controlOptions.Release != "":
+		// control 升级：host 与 control 两个单元都换成该版本的软件，目标端走 bootstrap 的再执行路径。
+		release, exists, readErr := readRelease(ctx, root, controlOptions.Release, arch)
+		if readErr != nil {
+			return result, readErr
+		}
+		if !exists {
+			return result, errors.New("control upgrade requires a release built by setup release build")
+		}
+		packages, helper = []unitpackage.Result{release.Packages["host"], release.Packages["control"]}, release.Helper
+	default:
 		stored, exists, readErr := readCoreSoftware(ctx, root, arch)
 		if readErr != nil || !exists {
 			return result, errors.New("full control requires its original verified core software")
@@ -224,7 +237,7 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 		return result, err
 	}
 	if controlOptions != nil {
-		if err := bindControlRequest(root, expectedRequest); err != nil {
+		if err := bindControlRequest(root, controlOptions.Release, expectedRequest); err != nil {
 			return result, err
 		}
 	}
@@ -285,7 +298,7 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 	result.Stage, result.OperatorConfig = "core-ready", filepath.Join(options.OperatorDirectory, "gateway-client.yaml")
 	receipt := "core-ready.json"
 	if controlOptions != nil {
-		result.Stage, receipt = "control-ready", "control-ready.json"
+		result.Stage, receipt, result.Release = "control-ready", "control-ready.json", controlOptions.Release
 		result.Components, err = activeControlStatus(ctx, transport, remoteHelper, result.Bootstrap.ControlDirectory, host.Name, request.Control.Components)
 		if err != nil {
 			return CoreResult{}, err
