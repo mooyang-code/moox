@@ -47,17 +47,6 @@ func (p *CollectParams) DNSIPs(host string) []string {
 	canonicalHost := NormalizeDNSHost(host)
 	route, ok := p.DNSRoutes[canonicalHost]
 	if !ok {
-		// Requests may come from older callers that did not canonicalize JSON
-		// object keys. Accept those keys as a compatibility fallback while all
-		// newly generated snapshots use canonical keys.
-		for rawHost, candidate := range p.DNSRoutes {
-			if NormalizeDNSHost(rawHost) == canonicalHost {
-				route, ok = candidate, true
-				break
-			}
-		}
-	}
-	if !ok {
 		return nil
 	}
 	result := make([]string, 0, len(route.IPs))

@@ -74,9 +74,8 @@ func (r *TaskInstanceRepository) ClaimDueResampleTasksWithSettleDelay(ctx contex
 	return r.claimDueResampleTasks(ctx, "", now, origin, limit, leaseDuration, false, defaultSettleDelay)
 }
 
-// ClaimDueResampleTasksInSpace limits claims to one Collector space. The
-// compatibility wrapper above is retained for repository callers that need a
-// whole-database maintenance sweep.
+// ClaimDueResampleTasksInSpace limits claims to one Collector space;
+// ClaimDueResampleTasks above sweeps the whole database.
 func (r *TaskInstanceRepository) ClaimDueResampleTasksInSpace(
 	ctx context.Context,
 	spaceID string,

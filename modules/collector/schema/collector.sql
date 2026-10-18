@@ -293,10 +293,6 @@ BEGIN
     UPDATE t_collector_fetch_plan_pauses SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- 旧版补采表：范围存成 JSON、缺少缺失判定列，改名重建；作业是可重建的运行状态，直接删除。
-DROP TABLE IF EXISTS t_collector_backfill_chunks;
-DROP TABLE IF EXISTS t_collector_backfill_jobs;
-
 -- K 线补采作业：一个作业拆成若干（数据集、标的、时间段）分块。
 -- c_dataset_id、c_frequency、c_subject_id 为空表示全部；c_kind 取 gap（按缺口）、force（整段重拉）、history（确认历史缺口）。
 CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_jobs (

@@ -426,9 +426,8 @@ func (r *TaskRepository) UpdateMutableByTaskID(ctx context.Context, spaceID, tas
 }
 
 // UpdateValidatedTaskByTaskID is used after the RPC layer has validated that
-// the collection definition is semantically unchanged. It persists the
-// canonical collect_params in the same SQL update, allowing legacy kline
-// provider/market keys to be removed without exposing them as task identity.
+// the collection definition is semantically unchanged. It also persists the
+// canonical collect_params in the same SQL update.
 func (r *TaskRepository) UpdateValidatedTaskByTaskID(ctx context.Context, spaceID, taskID string, task domain.CollectionTask) (*domain.CollectionTask, error) {
 	return r.updateMutableByTaskID(ctx, spaceID, taskID, task, true)
 }

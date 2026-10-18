@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -32,23 +31,6 @@ func TestParseCollectParamsNormalizesSelectedOutputFields(t *testing.T) {
 	params, err := ParseCollectParams(`{"provider":"binance","market_type":"spot","frequency":"1m","output_fields":["close","open","close"]}`, "", "", "kline")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"close", "open"}, params.OutputFields)
-}
-
-func TestParseCollectParamsIgnoresRetiredHistoryPolicy(t *testing.T) {
-	// 存量任务的 collect_params 里还带着已删除的 history_policy：解析时忽略，重新序列化后消失。
-	params, err := ParseCollectParams(`{
-		"provider":"binance",
-		"market_type":"spot",
-		"subject_tags":["binance_spot"],
-		"target_dataset_id":"dataset_binance_kline_1m",
-		"frequency":"1m",
-		"history_policy":{"mode":"live_only","batch_bar_limit":1000}
-	}`, "", "", "kline")
-	require.NoError(t, err)
-	require.NoError(t, params.Validate())
-	raw, err := json.Marshal(params)
-	require.NoError(t, err)
-	assert.NotContains(t, string(raw), "history_policy")
 }
 
 func TestParseCollectParamsRejectsRemovedFields(t *testing.T) {
