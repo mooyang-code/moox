@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"io"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"

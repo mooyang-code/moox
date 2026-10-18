@@ -18,15 +18,12 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/collectorpackager"
-	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	metricsreport "github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
 )
 
 const (
-	defaultCollectorSCFTimeout = "60"
-	stockCNKlineTaskName       = "A 股 K 线 1m"
 	// Manifest deployments may spread a stockcn fleet across multiple regions;
 	// keep the ad-hoc guard above one normal 200-function release while the
 	// per-region platform limit remains enforced by setup validation.
@@ -261,18 +258,6 @@ func defaultCollectorPackageConfigDir(spaceID string) string {
 		return filepath.ToSlash(filepath.Join("scf", "market_data"))
 	}
 	return filepath.ToSlash(filepath.Join("scf", spaceID))
-}
-
-func readRemoteControlFile(ctx context.Context, transport setupssh.Client, relativePath string) ([]byte, error) {
-	command := `cat "$HOME/$1"`
-	if filepath.IsAbs(relativePath) {
-		command = `cat "$1"`
-	}
-	result, err := transport.Run(ctx, []string{"sh", "-lc", command, "moox-scf-trust", relativePath}, nil)
-	if err != nil || len(result.Stdout) == 0 || len(result.Stdout) > 1<<20 {
-		return nil, fmt.Errorf("control_public_file_unavailable")
-	}
-	return []byte(result.Stdout), nil
 }
 
 func collectorStoragePrimaryAuthSecret(raw []byte) (string, error) {

@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 
 	"github.com/glebarez/sqlite"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"

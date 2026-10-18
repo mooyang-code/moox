@@ -1,9 +1,11 @@
-package deploy
+package tlstrust
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -43,4 +45,13 @@ func TestEnsureLocalCATrustSkipsInstallWhenAlreadyTrusted(t *testing.T) {
 
 func TestEnsureLocalCATrustForHostSkipsPublicTLS(t *testing.T) {
 	require.NoError(t, EnsureLocalCATrustForHost(context.Background(), t.TempDir(), "203.0.113.8", TLSModePublic))
+}
+func TestLocalCATrustFailuresAreRecognizable(t *testing.T) {
+	err := EnsureLocalCATrust(context.Background(), "", "")
+	if !errors.Is(err, ErrBrowserCATrust) {
+		t.Fatalf("EnsureLocalCATrust error %v does not wrap ErrBrowserCATrust", err)
+	}
+	if !strings.HasPrefix(err.Error(), "browser_ca_trust_failed: ") {
+		t.Fatalf("error text changed: %q", err.Error())
+	}
 }

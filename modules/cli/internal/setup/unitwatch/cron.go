@@ -15,9 +15,6 @@ import (
 // CronMarker 标记 watch 的 crontab 行：安装时按它替换，卸载时按它删除。
 const CronMarker = "# moox-watchdog"
 
-// legacyCronMarker 是旧部署器每分钟执行各包 healthcheck.sh 的条目，原生部署不再使用，安装时一并删除。
-const legacyCronMarker = "# moox-healthchecks"
-
 // CronLine 是部署用户 crontab 里的 watch 条目：每分钟一次，flock 保证上一轮没跑完时不叠加，日志由 watch 自己写并轮转。
 func CronLine(root, runtime string) string {
 	return fmt.Sprintf("* * * * * PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin flock -n %s %s watch --root %s --log %s %s",
@@ -31,7 +28,7 @@ type InstallOptions struct {
 	Runtime string
 	// Seed 是部署时用 moox.toml 生成的策略种子；为空时不动策略缓存。
 	Seed *hostpolicy.Policy
-	// Remove 为 true 时删除 watch 条目（以及旧条目），不写种子。
+	// Remove 为 true 时删除 watch 条目，不写种子。
 	Remove bool
 
 	// crontab 执行 crontab 命令（"-l" 读取、"-" 从标准输入写入）；cronActive 检查 cron 守护进程在运行。测试可替换。
@@ -41,9 +38,8 @@ type InstallOptions struct {
 
 // InstallResult 是 install-watchdog 的结果。
 type InstallResult struct {
-	CronLine      string `json:"cron_line,omitempty"`
-	Removed       bool   `json:"removed,omitempty"`
-	LegacyRemoved int    `json:"legacy_removed,omitempty"`
+	CronLine string `json:"cron_line,omitempty"`
+	Removed  bool   `json:"removed,omitempty"`
 	// Seed 是策略种子的处理结果：written（写入）、unchanged（内容相同）、kept_monitor（已有从 Monitor 拉取的策略，不覆盖）。
 	Seed string `json:"seed,omitempty"`
 }
@@ -79,8 +75,6 @@ func Install(opts InstallOptions) (InstallResult, error) {
 			continue
 		case strings.Contains(line, CronMarker):
 			result.Removed = opts.Remove
-		case strings.Contains(line, legacyCronMarker):
-			result.LegacyRemoved++
 		default:
 			kept = append(kept, line)
 		}

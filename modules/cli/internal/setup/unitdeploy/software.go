@@ -181,7 +181,7 @@ func buildCoreLocally(ctx context.Context, repository, bin, arch string, log io.
 		}
 		return nil
 	}
-	// 前端使用 pnpm 与 pnpm-lock.yaml（仓库没有 package-lock.json），与 deploy-moox.sh 的构建方式一致。
+	// 前端使用 pnpm 与 pnpm-lock.yaml（仓库没有 package-lock.json）。
 	if err := run(filepath.Join(repository, "web"), "pnpm", "install", "--frozen-lockfile", "--config.confirmModulesPurge=false"); err != nil {
 		return err
 	}

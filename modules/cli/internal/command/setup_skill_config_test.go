@@ -104,18 +104,3 @@ func testSkillDataAccessConfig() dataAccessConfig {
 		},
 	}
 }
-
-// repoSkillKlineDatasets resolves Skill kline Datasets from the checked-in
-// collection task seed.
-func repoSkillKlineDatasets(t *testing.T) skillKlineDatasets {
-	t.Helper()
-	return mustRepoSkillKlineDatasets()
-}
-
-func mustRepoSkillKlineDatasets() skillKlineDatasets {
-	resolver, err := loadSkillKlineDatasets(filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml"))
-	if err != nil {
-		panic(err)
-	}
-	return resolver
-}

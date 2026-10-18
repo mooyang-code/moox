@@ -129,10 +129,6 @@ func TestNormalizedStorageImportBatchSize(t *testing.T) {
 	assert.Equal(t, 200, normalizedStorageImportBatchSize(200))
 }
 
-type assertErr string
-
-func (e assertErr) Error() string { return string(e) }
-
 func TestEmptyCSVRecord(t *testing.T) {
 	assert.True(t, emptyCSVRecord([]string{"", "  "}))
 	assert.False(t, emptyCSVRecord([]string{"", "x"}))

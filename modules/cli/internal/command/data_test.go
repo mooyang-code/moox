@@ -3,12 +3,13 @@ package command
 import (
 	"bytes"
 	"context"
-	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/security"

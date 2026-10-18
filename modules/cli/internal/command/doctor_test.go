@@ -3,8 +3,9 @@ package command
 import (
 	"context"
 	"errors"
-	"github.com/mooyang-code/moox/modules/cli/internal/config"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/config"
 
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/stretchr/testify/require"

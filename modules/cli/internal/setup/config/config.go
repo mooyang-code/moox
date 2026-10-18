@@ -638,8 +638,7 @@ func validate(manifest *Manifest) error {
 	if err := policy.Validate(); err != nil {
 		return fmt.Errorf("config_invalid: storage policy: %w", err)
 	}
-	// Session-market estimates are only warnings; `moox-cli config plan`
-	// reports them. A 7×24 retention that cannot hold view_rows_per_series is an error.
+	// 交易时段市场的估算只是提示；7×24 市场的保留期装不下 view_rows_per_series 时报错。
 	if errs, _ := policy.Coverage(); len(errs) > 0 {
 		return fmt.Errorf("config_invalid: storage policy: %s", strings.Join(errs, "; "))
 	}

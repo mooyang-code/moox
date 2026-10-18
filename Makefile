@@ -1,4 +1,4 @@
-.PHONY: build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check release release-binaries release-matrix deploy publish-release-binaries test test-go test-web test-release verify-pr verify verify-custom-setup test-caddy test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e package-skill clean proto
+.PHONY: build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check test test-go test-web verify-pr verify verify-custom-setup test-caddy package-skill clean proto
 
 build:
 	./scripts/build/build.sh
@@ -73,21 +73,6 @@ test-docs-architecture:
 test-greenfield-contract:
 	bash scripts/test/contract/test-greenfield-contract.sh
 
-release:
-	./scripts/release/release.sh
-
-release-binaries:
-	./scripts/build/build-release-binaries.sh
-
-release-matrix:
-	./scripts/release/release-matrix.sh
-
-deploy:
-	./scripts/deploy/deploy-moox.sh $(ARGS)
-
-publish-release-binaries:
-	./scripts/release/publish-release-binaries.sh $(ARGS)
-
 test: test-go test-web
 
 test-go:
@@ -102,9 +87,6 @@ test-web:
 	pnpm --dir web test
 	pnpm --dir web build:prod
 
-test-release:
-	./scripts/test/contract/test-release-contract.sh
-
 proto-check:
 	$(MAKE) proto
 	@test -z "$$(git status --porcelain)"
@@ -115,7 +97,7 @@ check-go-module-graph:
 
 verify-pr: test-deployment-packages test-host-placement-deployment test-host-identity-bundles test-unit-install test-unit-runtime test-unit-bootstrap check-go-module-graph proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
 
-verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-release test-gateway-deploy test-strategy-deploy test-strategy-deploy-e2e test-caddy test-skill-contracts
+verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-caddy test-skill-contracts
 	CI=true pnpm install --frozen-lockfile
 	pnpm docs:build
 
@@ -123,16 +105,9 @@ verify-custom-setup:
 	(cd packages/cloudprovider && go test -count=1 ./...)
 	(cd modules/admin && go test -count=1 ./internal/service/setup/... ./internal/bootstrap ./schema && go test -count=1 ./test -run Setup)
 	(cd modules/cli && go test -count=1 ./internal/setup/... ./internal/command && go test -count=1 ./test -run Setup)
-	bash scripts/test/contract/test-deploy-moox-admin-bootstrap.sh
-	bash scripts/test/contract/test-deploy-moox-control-profile.sh
-	bash scripts/test/contract/test-deploy-moox-storage-profile.sh
-	bash scripts/test/contract/test-deploy-moox-storage-view.sh
-	bash skills/moox/scripts/test-custom-setup-contract.sh
 	bash skills/moox/scripts/test-private-network-contract.sh
 
 test-caddy:
-	bash scripts/test/contract/test-caddy-config.sh
-	bash scripts/test/contract/test-deploy-moox-https.sh
 	bash scripts/test/contract/test-install-caddy-ca.sh
 	bash skills/moox/scripts/test-caddy-prerequisite.sh
 	bash skills/moox/scripts/test-caddy-ca.sh
@@ -146,7 +121,6 @@ test-script-contracts:
 test-skill-contracts:
 	bash scripts/build/package-skill_test.sh
 	bash skills/moox/scripts/test-data-query-contract.sh
-	bash skills/moox/scripts/test-custom-setup-contract.sh
 	bash skills/moox/scripts/test-private-network-contract.sh
 	bash skills/moox/scripts/test-hostagent-deploy.sh
 	bash skills/moox/scripts/test-eventbus-credentials-contract.sh
@@ -157,15 +131,6 @@ test-script-e2e:
 	@set -e; for script in scripts/test/e2e/*.sh; do bash "$$script"; done
 
 test-scripts: test-script-contracts test-script-e2e
-
-test-gateway-deploy:
-	bash scripts/test/contract/test-deploy-moox-host-gateway.sh
-
-test-strategy-deploy:
-	bash scripts/test/contract/test-deploy-moox-strategy.sh
-
-test-strategy-deploy-e2e:
-	bash scripts/test/e2e/test-deploy-moox-strategy-e2e.sh
 
 package-skill:
 	./scripts/build/package-skill.sh
@@ -198,14 +163,13 @@ clean:
 .PHONY: test-deployment-packages test-unit-package-linux
 test-deployment-packages:
 	go test ./modules/cli/internal/setup/unitpackage ./modules/cli/internal/command -run 'TestUnit|TestSetupPackage'
-	bash scripts/test/contract/test-deployment-package-boundaries.sh
 
 test-unit-package-linux:
 	bash scripts/test/gates/test-unit-package-linux.sh
 
 .PHONY: test-host-placement-deployment
 test-host-placement-deployment:
-	go test ./modules/admin/internal/service/sysdeploy/... ./modules/admin/cmd/cli ./modules/cli/internal/setup/client ./modules/cli/internal/doctor ./modules/cli/internal/command -run 'TestHostTopologyAPIOverRealTRPC|TestTopology|TestSyncHostPlacements|TestDoctorPlacements|TestEventBusURL|TestServiceRegistry|TestControlDeployOptions'
+	go test ./modules/admin/internal/service/sysdeploy/... ./modules/admin/cmd/cli ./modules/cli/internal/setup/client ./modules/cli/internal/doctor ./modules/cli/internal/command -run 'TestHostTopologyAPIOverRealTRPC|TestTopology|TestSyncHostPlacements|TestDoctorPlacements'
 
 .PHONY: test-host-identity-bundles test-unit-bundle-linux
 test-host-identity-bundles:

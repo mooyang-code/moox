@@ -34,22 +34,19 @@ func installFixture(t *testing.T, existing string) (InstallOptions, *fakeCrontab
 	return InstallOptions{Root: root, crontab: fake.run, cronActive: func() error { return nil }}, fake
 }
 
-// 安装：保留用户自己的条目，删掉旧的 moox-healthchecks，只留一条 watch；重复安装不产生重复条目。
-func TestInstallIsIdempotentAndRemovesLegacyEntry(t *testing.T) {
-	opts, fake := installFixture(t, "0 3 * * * /usr/bin/backup\n* * * * * for h in /data/moox/*/healthcheck.sh; do $h; done # moox-healthchecks\n")
+// 安装：保留用户自己的条目，只留一条 watch；重复安装不产生重复条目。
+func TestInstallIsIdempotent(t *testing.T) {
+	opts, fake := installFixture(t, "0 3 * * * /usr/bin/backup\n")
 	result, err := Install(opts)
 	require.NoError(t, err)
-	require.Equal(t, 1, result.LegacyRemoved)
 	require.Equal(t, CronLine(opts.Root, filepath.Join(opts.Root, "host", "current", "bin", "moox-runtime")), result.CronLine)
 	require.Contains(t, fake.content, "/usr/bin/backup")
-	require.NotContains(t, fake.content, "moox-healthchecks")
 	require.Equal(t, 1, strings.Count(fake.content, CronMarker))
 	require.Contains(t, result.CronLine, "flock -n "+filepath.Join(opts.Root, "run", "watchdog.lock"))
 	require.Contains(t, result.CronLine, "watch --root "+opts.Root+" --log "+filepath.Join(opts.Root, "run", "watchdog.log"))
 
-	again, err := Install(opts)
+	_, err = Install(opts)
 	require.NoError(t, err)
-	require.Zero(t, again.LegacyRemoved)
 	require.Equal(t, 1, strings.Count(fake.content, CronMarker))
 }
 

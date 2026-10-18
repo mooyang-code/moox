@@ -52,23 +52,26 @@ type Status struct {
 
 type pidRecord struct {
 	processIdentity
-	HostID         string           `json:"host_id"`
-	ComponentID    string           `json:"component_id"`
-	ReleaseRoot    string           `json:"release_root"`
-	StopTimeout    time.Duration    `json:"stop_timeout_ns"`
-	BinarySHA256   string           `json:"binary_sha256"`
-	BootID         string           `json:"boot_id"`
+	HostID       string        `json:"host_id"`
+	ComponentID  string        `json:"component_id"`
+	ReleaseRoot  string        `json:"release_root"`
+	StopTimeout  time.Duration `json:"stop_timeout_ns"`
+	BinarySHA256 string        `json:"binary_sha256"`
+	BootID       string        `json:"boot_id"`
+	// KernelBootID 是启动时的内核 boot ID：与当前不同说明记录属于上一次开机。
+	KernelBootID   string           `json:"kernel_boot_id"`
 	StartedAt      time.Time        `json:"started_at"`
 	StartupTimeout time.Duration    `json:"startup_timeout_ns"`
 	Launcher       *processIdentity `json:"launcher,omitempty"`
 }
 
 type drainRecord struct {
-	PID        int           `json:"pid"`
-	StartTicks string        `json:"start_ticks"`
-	StartedAt  time.Time     `json:"started_at"`
-	Budget     time.Duration `json:"budget_ns"`
-	TermSent   bool          `json:"term_sent"`
+	PID          int           `json:"pid"`
+	StartTicks   string        `json:"start_ticks"`
+	KernelBootID string        `json:"kernel_boot_id"`
+	StartedAt    time.Time     `json:"started_at"`
+	Budget       time.Duration `json:"budget_ns"`
+	TermSent     bool          `json:"term_sent"`
 }
 
 type runtimeState struct {
@@ -264,7 +267,7 @@ func (s *runtimeState) record(component Component) (pidRecord, bool, error) {
 	catalog, ok := s.catalog.Component(component.ID)
 	if !ok || record.HostID != s.plan.HostID || record.ComponentID != component.ID || record.PID <= 1 ||
 		record.UID != uint32(os.Getuid()) || record.StartTicks == "" || record.ReleaseRoot == "" || !filepath.IsAbs(record.ReleaseRoot) || filepath.Clean(record.ReleaseRoot) != record.ReleaseRoot ||
-		record.Executable != filepath.Join(record.ReleaseRoot, "bin", catalog.Binary) || record.StopTimeout <= 0 || record.StopTimeout > maxStopTimeout || !validDigest(record.BinarySHA256) || !validDigest(record.BootID) || record.StartedAt.IsZero() || record.StartedAt.After(time.Now().Add(time.Second)) || record.StartupTimeout <= 0 || record.StartupTimeout > 10*time.Minute {
+		record.Executable != filepath.Join(record.ReleaseRoot, "bin", catalog.Binary) || record.StopTimeout <= 0 || record.StopTimeout > maxStopTimeout || !validDigest(record.BinarySHA256) || !validDigest(record.BootID) || record.KernelBootID == "" || record.StartedAt.IsZero() || record.StartedAt.After(time.Now().Add(time.Second)) || record.StartupTimeout <= 0 || record.StartupTimeout > 10*time.Minute {
 		return record, false, errIdentity
 	}
 	if launch := record.Launcher; launch != nil && (launch.PID != record.PID || launch.StartTicks != record.StartTicks || launch.UID != record.UID || !filepath.IsAbs(launch.Executable) || filepath.Clean(launch.Executable) != launch.Executable || launch.Inode == 0) {
@@ -473,7 +476,11 @@ func (s *runtimeState) start(ctx context.Context, component Component) (Status, 
 		_ = command.Process.Kill()
 		return status, err
 	}
-	record := pidRecord{processIdentity: expected, HostID: s.plan.HostID, ComponentID: component.ID, ReleaseRoot: s.plan.ReleaseRoot, StopTimeout: stop, BinarySHA256: values["MOOX_BINARY_SHA256"], BootID: bootID, StartedAt: time.Now().UTC(), StartupTimeout: startup, Launcher: &identity}
+	kernelBoot, err := kernelBootID()
+	if err != nil {
+		return status, err
+	}
+	record := pidRecord{processIdentity: expected, HostID: s.plan.HostID, ComponentID: component.ID, ReleaseRoot: s.plan.ReleaseRoot, StopTimeout: stop, BinarySHA256: values["MOOX_BINARY_SHA256"], BootID: bootID, KernelBootID: kernelBoot, StartedAt: time.Now().UTC(), StartupTimeout: startup, Launcher: &identity}
 	if err := writeState(s.pids, component.ID+".json", record); err != nil {
 		_ = command.Process.Kill()
 		return status, err
@@ -564,7 +571,7 @@ func (s *runtimeState) stop(ctx context.Context, component Component) (Status, e
 	}
 	defer file.Close()
 	status.State, status.PID, status.Binary = "draining", record.PID, record.BinarySHA256
-	drain := drainRecord{PID: record.PID, StartTicks: record.StartTicks, StartedAt: time.Now().UTC(), Budget: record.StopTimeout}
+	drain := drainRecord{PID: record.PID, StartTicks: record.StartTicks, KernelBootID: record.KernelBootID, StartedAt: time.Now().UTC(), Budget: record.StopTimeout}
 	var previous drainRecord
 	if err := privateJSON(filepath.Join(s.draining.Name(), component.ID), &previous); err == nil {
 		if previous.PID == record.PID && previous.StartTicks == record.StartTicks && previous.TermSent {

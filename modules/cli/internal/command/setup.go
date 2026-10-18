@@ -1,77 +1,60 @@
 package command
 
 import (
-	"bytes"
 	"context"
-	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
-	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
-	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/spf13/cobra"
-	"google.golang.org/protobuf/encoding/protojson"
-	"trpc.group/trpc-go/trpc-go/codec"
 )
 
 const defaultSetupFile = "./moox.toml"
 
 type setupDeps struct {
-	bootstrapCore          setupCoreBootstrap
-	bootstrapControl       setupControlBootstrap
-	deployHost             setupHostDeploy
-	deployUnit             setupUnitDeploy
-	buildRelease           setupReleaseBuild
-	load                   func(string) (*setupconfig.Snapshot, error)
-	loadInitBundle         func(string) (setupInitBundle, error)
-	validate               func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
-	validateDeployment     func(context.Context, *setupconfig.Snapshot, []setupconfig.Host) (setupvalidate.Result, error)
-	trustHost              func(context.Context, *setupconfig.Snapshot, string, string) error
-	deployControl          func(context.Context, *setupconfig.Snapshot, bool) error
-	deployService          func(context.Context, *setupconfig.Snapshot, string, string, string, string) (setupdeploy.ServiceResult, error)
-	apply                  func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
-	status                 func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
-	applySpaces            func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error)
-	statusSpaces           func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error)
-	registerCloudAccounts  func(context.Context, *setupconfig.Snapshot) (*setupCloudAccountSummary, error)
-	provisionCLS           func(context.Context, *setupconfig.Snapshot) (*setupCLSSummary, error)
-	ensureSCFPlan          func(context.Context, *setupconfig.Snapshot) (*setupSCFPlanSummary, error)
-	login                  func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
-	openInitStorage        func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error)
-	openInitFactor         func(context.Context, *setupconfig.Snapshot) (setupInitFactor, error)
-	initStorage            func(context.Context, *setupconfig.Snapshot, string, string, string, setupInitBundle) (setupInitSummary, error)
-	rebuildStorage         func(context.Context, *setupconfig.Snapshot, string, string, string, bool) (storageRebuildSummary, error)
-	deployStorage          func(context.Context, *setupconfig.Snapshot, string, bool, bool) error
-	installStorageWatchdog func(context.Context, *setupconfig.Snapshot, string) error
-	installWatchdog        func(context.Context, *setupconfig.Snapshot, setupconfig.Host, bool) (json.RawMessage, error)
-	importMetadata         func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
-	verifyStorage          func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
-	e2eStorage             func(context.Context, *setupconfig.Snapshot, string, string) (storageE2EResult, error)
-	browserE2EStorage      func(context.Context, *setupconfig.Snapshot, string, string, bool) (storageBrowserResult, error)
-	exportSkillConfig      func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
-	ensureFirewall         func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
-	ensureRelayFirewall    func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
-	ensurePrivateNetwork   func(context.Context, *setupconfig.Snapshot, privatenet.Options, io.Writer) (privatenet.Result, error)
-	resolveSCFRoutes       func(context.Context, *setupconfig.Snapshot, string) (privatenet.SCFRoutePlan, error)
+	bootstrapCore         setupCoreBootstrap
+	bootstrapControl      setupControlBootstrap
+	deployHost            setupHostDeploy
+	deployUnit            setupUnitDeploy
+	buildRelease          setupReleaseBuild
+	load                  func(string) (*setupconfig.Snapshot, error)
+	loadInitBundle        func(string) (setupInitBundle, error)
+	validate              func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
+	trustHost             func(context.Context, *setupconfig.Snapshot, string, string) error
+	apply                 func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
+	status                func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
+	applySpaces           func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error)
+	statusSpaces          func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error)
+	registerCloudAccounts func(context.Context, *setupconfig.Snapshot) (*setupCloudAccountSummary, error)
+	provisionCLS          func(context.Context, *setupconfig.Snapshot) (*setupCLSSummary, error)
+	ensureSCFPlan         func(context.Context, *setupconfig.Snapshot) (*setupSCFPlanSummary, error)
+	login                 func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error)
+	openInitStorage       func(context.Context, *setupconfig.Snapshot, string) (setupInitStorage, error)
+	openInitFactor        func(context.Context, *setupconfig.Snapshot) (setupInitFactor, error)
+	initStorage           func(context.Context, *setupconfig.Snapshot, string, string, string, setupInitBundle) (setupInitSummary, error)
+	installWatchdog       func(context.Context, *setupconfig.Snapshot, setupconfig.Host, bool) (json.RawMessage, error)
+	importMetadata        func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
+	verifyStorage         func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
+	e2eStorage            func(context.Context, *setupconfig.Snapshot, string, string) (storageE2EResult, error)
+	browserE2EStorage     func(context.Context, *setupconfig.Snapshot, string, string, bool) (storageBrowserResult, error)
+	exportSkillConfig     func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
+	ensureFirewall        func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
+	ensureRelayFirewall   func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
+	ensurePrivateNetwork  func(context.Context, *setupconfig.Snapshot, privatenet.Options, io.Writer) (privatenet.Result, error)
+	resolveSCFRoutes      func(context.Context, *setupconfig.Snapshot, string) (privatenet.SCFRoutePlan, error)
 }
 
 func init() {
@@ -93,8 +76,6 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupValidateCommand(deps),
 		newSetupTrustHostCommand(deps),
 		newSetupTrustBrowserCommand(deps),
-		newSetupDeployCommand(deps),
-		newSetupDeployServiceCommand(deps),
 		newSetupBuildLinuxCommand(deps),
 		newSetupBootstrapCommand(deps),
 		newSetupDeployHostCommand(deps),
@@ -104,8 +85,6 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupRenderRuntimeConfigCommand(deps),
 		newSetupApplyCommand(deps),
 		newSetupStatusCommand(deps),
-		newSetupDeployStorageCommand(deps),
-		newSetupRebuildStorageCommand(deps),
 		newSetupRebootHostCommand(deps),
 		newSetupRestartHostCommand(deps),
 		newSetupHostDiagnosticsCommand(deps),
@@ -114,7 +93,6 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupInspectSCFCommand(deps),
 		newSetupAttachSCFVPCCommand(deps),
 		newSetupInvokeSCFCommand(deps),
-		newSetupInstallStorageWatchdogCommand(deps),
 		newSetupWatchdogCommand(deps),
 		newSetupMetadataImportCommand(deps),
 		newSetupVerifyStorageCommand(deps),
@@ -747,13 +725,13 @@ func newSetupTrustBrowserCommand(deps setupDeps) *cobra.Command {
 				"host":   host.Name,
 				"status": "trusted",
 			}
-			if !setupdeploy.RequiresLocalCATrust(setupdeploy.TLSMode(host.TLSMode), host.Address) {
+			if !tlstrust.RequiresLocalCATrust(tlstrust.TLSMode(host.TLSMode), host.Address) {
 				result["status"] = "not_required"
 			} else {
 				if err := ensureSetupBrowserCATrust(cmd.Context(), snapshot); err != nil {
 					return err
 				}
-				result["ca_path"] = setupdeploy.CAPath(host.Address)
+				result["ca_path"] = tlstrust.CAPath(host.Address)
 			}
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return fmt.Errorf("config_changed")
@@ -762,101 +740,6 @@ func newSetupTrustBrowserCommand(deps setupDeps) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	return cmd
-}
-
-func newSetupDeployCommand(deps setupDeps) *cobra.Command {
-	var file string
-	var resetData bool
-	cmd := &cobra.Command{Use: "deploy-control", Short: "部署 Admin、Gateway 和 Web", RunE: func(cmd *cobra.Command, _ []string) error {
-		snapshot, err := deps.load(file)
-		if err != nil {
-			return err
-		}
-		defer clearSetupSecrets(snapshot)
-		deploymentHosts := []setupconfig.Host{snapshot.Manifest.ControlHost()}
-		selected := map[string]bool{snapshot.Manifest.ControlHost().Name: true}
-		for _, component := range []string{"trade", "egress-proxy"} {
-			hostID := snapshot.Manifest.PlacementHost(component)
-			if hostID == "" || selected[hostID] {
-				continue
-			}
-			host, err := findSetupHost(snapshot.Manifest, hostID)
-			if err != nil {
-				return err
-			}
-			deploymentHosts = append(deploymentHosts, host)
-			selected[hostID] = true
-		}
-		result, validationErr := deps.validateDeployment(cmd.Context(), snapshot, deploymentHosts)
-		if validationErr != nil {
-			if encodeErr := writeSetupJSON(cmd, result); encodeErr != nil {
-				return encodeErr
-			}
-			return validationErr
-		}
-		if err := deps.deployControl(cmd.Context(), snapshot, resetData); err != nil {
-			return err
-		}
-		if err := snapshot.VerifyUnchanged(); err != nil {
-			return fmt.Errorf("config_changed")
-		}
-		return writeSetupJSON(cmd, map[string]any{
-			"host":        snapshot.Manifest.ControlHost().Name,
-			"status":      "ready",
-			"reset_data":  resetData,
-			"certificate": setupCertificateSummaryWithMode(snapshot.Manifest.ControlHost().Address, setupdeploy.TLSMode(snapshot.Manifest.ControlHost().TLSMode)),
-		})
-	}}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().BoolVar(&resetData, "reset-data", false, "删除控制面现有数据后重新部署")
-	return cmd
-}
-
-func setupCertificateSummaryWithMode(publicHost string, mode setupdeploy.TLSMode) map[string]any {
-	if setupdeploy.UsesPublicTLSMode(mode, publicHost) {
-		return map[string]any{
-			"mode":              "public",
-			"issuer":            "letsencrypt",
-			"automatic_renewal": true,
-			"renewal":           "caddy_acme_ari",
-		}
-	}
-	return map[string]any{
-		"mode":              "internal",
-		"issuer":            "caddy_internal_ca",
-		"automatic_renewal": true,
-		"renewal":           "caddy_internal",
-	}
-}
-
-func newSetupDeployServiceCommand(deps setupDeps) *cobra.Command {
-	var file, host, packagePath, service, deployDir string
-	cmd := &cobra.Command{Use: "deploy-service", Short: "通过 SSH 发布并校验完整服务包", RunE: func(cmd *cobra.Command, _ []string) error {
-		snapshot, err := deps.load(file)
-		if err != nil {
-			return err
-		}
-		defer clearSetupSecrets(snapshot)
-		if err := snapshot.VerifyUnchanged(); err != nil {
-			return fmt.Errorf("config_changed")
-		}
-		result, err := deps.deployService(cmd.Context(), snapshot, host, packagePath, service, deployDir)
-		if err != nil {
-			return err
-		}
-		if err := snapshot.VerifyUnchanged(); err != nil {
-			return fmt.Errorf("config_changed")
-		}
-		return writeSetupJSON(cmd, result)
-	}}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&host, "host", "control", "目标主机名称")
-	cmd.Flags().StringVar(&packagePath, "package", "", "本地服务 ZIP 包路径")
-	cmd.Flags().StringVar(&service, "service", "", "远端服务名称")
-	cmd.Flags().StringVar(&deployDir, "deploy-dir", setupconfig.DefaultControlRoot, "远端部署目录")
-	_ = cmd.MarkFlagRequired("package")
-	_ = cmd.MarkFlagRequired("service")
 	return cmd
 }
 
@@ -912,74 +795,6 @@ func newSetupStatusCommand(deps setupDeps) *cobra.Command {
 	return cmd
 }
 
-func newSetupDeployStorageCommand(deps setupDeps) *cobra.Command {
-	var file, host string
-	var resetStorageData, resetViewData bool
-	cmd := &cobra.Command{Use: "deploy-storage", Short: "将 Storage 组件部署到用户选择的主机", RunE: func(cmd *cobra.Command, _ []string) error {
-		snapshot, err := deps.load(file)
-		if err != nil {
-			return err
-		}
-		defer clearSetupSecrets(snapshot)
-		storageHost, err := findSetupHost(snapshot.Manifest, host)
-		if err != nil {
-			return err
-		}
-		result, validationErr := deps.validateDeployment(cmd.Context(), snapshot, []setupconfig.Host{snapshot.Manifest.ControlHost(), storageHost})
-		if validationErr != nil {
-			if encodeErr := writeSetupJSON(cmd, result); encodeErr != nil {
-				return encodeErr
-			}
-			return validationErr
-		}
-		status, err := deps.status(cmd.Context(), snapshot)
-		if err != nil || status.State != "completed" {
-			return fmt.Errorf("setup_incomplete")
-		}
-		if resetStorageData && resetViewData {
-			return fmt.Errorf("--reset-storage-data and --reset-view-data are mutually exclusive")
-		}
-		if err := deps.deployStorage(cmd.Context(), snapshot, host, resetStorageData, resetViewData); err != nil {
-			return err
-		}
-		if err := snapshot.VerifyUnchanged(); err != nil {
-			return fmt.Errorf("config_changed")
-		}
-		return writeSetupJSON(cmd, map[string]any{"host": host, "status": "ready", "reset_storage_data": resetStorageData, "reset_view_data": resetViewData})
-	}}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&host, "host", "", "Storage 目标主机名称")
-	cmd.Flags().BoolVar(&resetStorageData, "reset-storage-data", false, "仅用于已确认的破坏性 Schema 切换，清空旧 Storage data")
-	cmd.Flags().BoolVar(&resetViewData, "reset-view-data", false, "清空 View A/B 索引和消费状态，但保留 Primary 数据")
-	_ = cmd.MarkFlagRequired("host")
-	return cmd
-}
-
-func newSetupInstallStorageWatchdogCommand(deps setupDeps) *cobra.Command {
-	var file, host string
-	cmd := &cobra.Command{Use: "install-storage-watchdog", Short: "在 Storage 主机安装并启用自动恢复监控", RunE: func(cmd *cobra.Command, _ []string) error {
-		snapshot, err := deps.load(file)
-		if err != nil {
-			return err
-		}
-		defer clearSetupSecrets(snapshot)
-		if _, err := resolveStorageDeploymentHost(snapshot.Manifest, host); err != nil {
-			return err
-		}
-		if err := deps.installStorageWatchdog(cmd.Context(), snapshot, host); err != nil {
-			return err
-		}
-		if err := snapshot.VerifyUnchanged(); err != nil {
-			return fmt.Errorf("config_changed")
-		}
-		return writeSetupJSON(cmd, map[string]any{"host": host, "status": "ready"})
-	}}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&host, "host", "", "Storage 目标主机名称")
-	_ = cmd.MarkFlagRequired("host")
-	return cmd
-}
-
 func newSetupMetadataImportCommand(deps setupDeps) *cobra.Command {
 	var file, seed, storageHost string
 	var spaces []string
@@ -1018,17 +833,8 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.validate == nil {
 		deps.validate = defaults.validate
 	}
-	if deps.validateDeployment == nil {
-		deps.validateDeployment = defaults.validateDeployment
-	}
 	if deps.trustHost == nil {
 		deps.trustHost = defaults.trustHost
-	}
-	if deps.deployControl == nil {
-		deps.deployControl = defaults.deployControl
-	}
-	if deps.deployService == nil {
-		deps.deployService = defaults.deployService
 	}
 	if deps.apply == nil {
 		deps.apply = defaults.apply
@@ -1064,17 +870,6 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 		deps.initStorage = func(ctx context.Context, snapshot *setupconfig.Snapshot, file, configDir, storageHost string, bundle setupInitBundle) (setupInitSummary, error) {
 			return runSetupInit(ctx, deps, snapshot, file, configDir, storageHost, bundle)
 		}
-	}
-	if deps.rebuildStorage == nil {
-		deps.rebuildStorage = func(ctx context.Context, snapshot *setupconfig.Snapshot, host, file, configDir string, apply bool) (storageRebuildSummary, error) {
-			return runSetupRebuildStorage(ctx, deps, snapshot, host, file, configDir, apply)
-		}
-	}
-	if deps.deployStorage == nil {
-		deps.deployStorage = defaults.deployStorage
-	}
-	if deps.installStorageWatchdog == nil {
-		deps.installStorageWatchdog = defaults.installStorageWatchdog
 	}
 	if deps.installWatchdog == nil {
 		deps.installWatchdog = defaults.installWatchdog
@@ -1118,421 +913,44 @@ func defaultSetupDeps() setupDeps {
 			}
 			return setupconfig.Load(path, root)
 		},
-		loadInitBundle:         loadSetupInitBundle,
-		validate:               defaultSetupValidate,
-		validateDeployment:     defaultSetupValidateDeployment,
-		trustHost:              defaultSetupTrustHost,
-		deployControl:          defaultSetupDeploy,
-		deployService:          defaultSetupDeployService,
-		apply:                  defaultSetupApply,
-		status:                 defaultSetupStatus,
-		applySpaces:            defaultSetupApplyWithSpaces,
-		statusSpaces:           defaultSetupStatusWithSpaces,
-		registerCloudAccounts:  defaultSetupRegisterCloudAccounts,
-		provisionCLS:           defaultSetupProvisionCLS,
-		ensureSCFPlan:          defaultSetupEnsureSCFPlan,
-		openInitStorage:        defaultOpenSetupInitStorage,
-		openInitFactor:         defaultOpenSetupFactor,
-		initStorage:            nil,
-		rebuildStorage:         nil,
-		deployStorage:          defaultSetupDeployStorage,
-		installStorageWatchdog: defaultSetupInstallStorageWatchdog,
-		installWatchdog:        defaultSetupInstallWatchdog,
-		importMetadata:         defaultSetupImportMetadata,
-		verifyStorage:          defaultSetupVerifyStorage,
-		e2eStorage:             defaultSetupE2EStorage,
-		browserE2EStorage:      defaultSetupBrowserE2EStorage,
-		exportSkillConfig:      defaultSetupExportSkillConfig,
-		ensureFirewall:         defaultSetupEnsureFirewall,
-		ensureRelayFirewall:    setupEnsureRelayFirewall,
-		ensurePrivateNetwork:   defaultEnsurePrivateNetwork,
-		resolveSCFRoutes:       resolveSCFRoutePlan,
+		loadInitBundle:        loadSetupInitBundle,
+		validate:              defaultSetupValidate,
+		trustHost:             defaultSetupTrustHost,
+		apply:                 defaultSetupApply,
+		status:                defaultSetupStatus,
+		applySpaces:           defaultSetupApplyWithSpaces,
+		statusSpaces:          defaultSetupStatusWithSpaces,
+		registerCloudAccounts: defaultSetupRegisterCloudAccounts,
+		provisionCLS:          defaultSetupProvisionCLS,
+		ensureSCFPlan:         defaultSetupEnsureSCFPlan,
+		openInitStorage:       defaultOpenSetupInitStorage,
+		openInitFactor:        defaultOpenSetupFactor,
+		initStorage:           nil,
+		installWatchdog:       defaultSetupInstallWatchdog,
+		importMetadata:        defaultSetupImportMetadata,
+		verifyStorage:         defaultSetupVerifyStorage,
+		e2eStorage:            defaultSetupE2EStorage,
+		browserE2EStorage:     defaultSetupBrowserE2EStorage,
+		exportSkillConfig:     defaultSetupExportSkillConfig,
+		ensureFirewall:        defaultSetupEnsureFirewall,
+		ensureRelayFirewall:   setupEnsureRelayFirewall,
+		ensurePrivateNetwork:  defaultEnsurePrivateNetwork,
+		resolveSCFRoutes:      resolveSCFRoutePlan,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost().Address)
-			tlsMode := setupdeploy.TLSMode(snapshot.Manifest.ControlHost().TLSMode)
+			tlsMode := tlstrust.TLSMode(snapshot.Manifest.ControlHost().TLSMode)
 			if err := ensureSetupBrowserCATrust(ctx, snapshot); err != nil {
 				return setupclient.LoginResult{}, err
 			}
-			if setupdeploy.UsesPublicTLSMode(tlsMode, snapshot.Manifest.ControlHost().Address) {
+			if tlstrust.UsesPublicTLSMode(tlsMode, snapshot.Manifest.ControlHost().Address) {
 				return setupclient.VerifyPublicLogin(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password)
 			}
-			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, setupdeploy.CAPath(snapshot.Manifest.ControlHost().Address))
+			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, tlstrust.CAPath(snapshot.Manifest.ControlHost().Address))
 		},
 	}
 }
 
-func defaultSetupDeployStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name string, resetStorageData, resetViewData bool) error {
-	host, err := resolveStorageDeploymentHost(snapshot.Manifest, name)
-	if err != nil {
-		return err
-	}
-	transport, err := dialSetupHost(ctx, host)
-	if err != nil {
-		return err
-	}
-	defer transport.Close()
-	control, err := dialSetupHost(ctx, snapshot.Manifest.ControlHost())
-	if err != nil {
-		return err
-	}
-	defer control.Close()
-	gateway, err := openCommandGateway(ctx, "", snapshot)
-	if err != nil {
-		return err
-	}
-	defer gateway.Close()
-	paths := snapshot.Manifest.Paths.Resolved()
-	useControlGateway := sameHostEndpoint(host, snapshot.Manifest.ControlHost())
-	primarySecret, viewSecret, err := controlStorageInternalAuth(ctx, control, paths.ControlRoot)
-	if err != nil {
-		return err
-	}
-	healthVersion, healthAccessKey, healthSecret, err := controlHealthAuth(ctx, control, paths.ControlRoot)
-	if err != nil {
-		return err
-	}
-	controlTLSMode := setupdeploy.TLSMode(snapshot.Manifest.ControlHost().TLSMode)
-	controlURL, controlKey, serviceKey, gatewayCA, err := controlGatewayMaterial(ctx, control, snapshot.Manifest.ControlHost().Address, useControlGateway, paths.ControlRoot, controlTLSMode)
-	if err != nil {
-		return err
-	}
-	var storageEventBusCredential, storageEventBusCA, storageMetricsEventBusCredential []byte
-	if !useControlGateway {
-		storageEventBusCredential, err = readRemoteControlFile(ctx, control, ".config/moox/eventbus/storage-eventbus.yaml")
-		if err != nil {
-			return fmt.Errorf("read control Storage EventBus credential: %w", err)
-		}
-		storageEventBusCA, err = readRemoteControlFile(ctx, control, ".config/moox/eventbus/ca.pem")
-		if err != nil {
-			return fmt.Errorf("read control EventBus CA for Storage: %w", err)
-		}
-		storageMetricsEventBusCredential, err = readRemoteControlFile(ctx, control, ".config/moox/eventbus/metrics-publisher.yaml")
-		if err != nil {
-			return fmt.Errorf("read control metrics EventBus credential for Storage: %w", err)
-		}
-	}
-	root, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("storage_deploy_invalid")
-	}
-	buildHost := host
-	buildHostRole := ""
-	if snapshot.Manifest.HasCompileHost() {
-		buildHost = snapshot.Manifest.CompileHost()
-		buildHostRole = "compile"
-	}
-	if err := setupdeploy.Storage(ctx, transport, setupdeploy.Options{
-		RepositoryRoot: root, PublicHost: host.Address, NodeID: host.Name, ResetStorageData: resetStorageData, ResetViewData: resetViewData,
-		DeployRoot: paths.DeployRoot, ControlRoot: paths.ControlRoot, StorageRoot: paths.StorageRoot,
-		UseControlGateway:                useControlGateway,
-		EventBusPublicAddress:            snapshot.Manifest.EventBus.PublicAddress,
-		EventBusPort:                     snapshot.Manifest.EventBus.Port,
-		EventBusTLSEnabled:               snapshot.Manifest.EventBus.TLSEnabled,
-		StoragePrimarySecret:             primarySecret,
-		StorageViewSecret:                viewSecret,
-		StorageEventBusCredential:        storageEventBusCredential,
-		StorageEventBusCA:                storageEventBusCA,
-		StorageMetricsEventBusCredential: storageMetricsEventBusCredential,
-		StorageBuildPassword:             buildHost.Password,
-		StorageBuildHost:                 buildHost.Name,
-		StorageBuildHostRole:             buildHostRole,
-		StoragePolicy:                    snapshot.Manifest.StoragePolicy(),
-		LocalLogs:                        snapshot.Manifest.LocalLogs,
-		InstallStorageWatchdog:           true,
-		HealthAuthVersion:                healthVersion,
-		HealthAuthAccessKey:              healthAccessKey,
-		HealthAuthSecretKey:              healthSecret,
-		GatewayControlURL:                controlURL,
-		GatewayControlKey:                controlKey,
-		GatewayServiceKey:                serviceKey,
-		GatewayCABundle:                  gatewayCA,
-		TLSMode:                          controlTLSMode,
-	}, setupdeploy.Dependencies{}); err != nil {
-		return err
-	}
-	if err = setupclient.New(gateway).SyncHostPlacements(ctx, snapshot, host.Name); err != nil {
-		return err
-	}
-	if !useControlGateway {
-		if err = configureRemoteCollectorStorageTarget(ctx, control, host.Name, host.Address, paths.ControlRoot); err != nil {
-			return err
-		}
-		if err = configureRemoteMonitorStorageTarget(ctx, control, host.Name, host.Address, paths.ControlRoot); err != nil {
-			return err
-		}
-		if err = ensureSetupStorageGatewayFirewall(ctx, snapshot, host.Address); err != nil {
-			return err
-		}
-	}
-
-	// Persist where Storage runs. On the control host (its own root beside
-	// Admin/Gateway) the control routes must survive the next Admin restart;
-	// on a separate host they must not, or every control deploy re-enables
-	// local Storage routes and health checks for processes that are not there.
-	// The update is atomic and guarded by a per-config lock.
-	if err := persistControlStorageRoutePolicy(ctx, control, paths.ControlRoot, useControlGateway); err != nil {
-		return err
-	}
-	return restartStorageClients(ctx, control, paths.ControlRoot)
-}
-
-func persistControlStorageRoutePolicy(ctx context.Context, control setupssh.Client, controlRoot string, preserve bool) error {
-	if control == nil {
-		return fmt.Errorf("storage_route_policy_persist_failed")
-	}
-	value := "0"
-	if preserve {
-		value = "1"
-	}
-	_, err := control.Run(ctx, []string{
-		"sh", "-lc", `set -eu
-config="$1/config/components.env"
-test -f "$config"
-lock="$1.maintenance.lock"
-(
-  flock -x 9
-  tmp="$config.tmp.$$"
-  trap 'rm -f "$tmp"' EXIT
-  awk '!/^MOOX_PRESERVE_STORAGE_ROUTES=/' "$config" >"$tmp"
-  printf 'MOOX_PRESERVE_STORAGE_ROUTES=%s\n' "$2" >>"$tmp"
-  chmod --reference="$config" "$tmp" 2>/dev/null || chmod 0600 "$tmp"
-  mv -f "$tmp" "$config"
-  trap - EXIT
-) 9>"$lock"
-	`, "moox-persist-storage-route-policy", controlRoot, value,
-	}, nil)
-	if err != nil {
-		return fmt.Errorf("storage_route_policy_persist_failed")
-	}
-	return nil
-}
-
-func defaultSetupInstallStorageWatchdog(ctx context.Context, snapshot *setupconfig.Snapshot, name string) error {
-	host, err := resolveStorageDeploymentHost(snapshot.Manifest, name)
-	if err != nil {
-		return err
-	}
-	transport, err := dialSetupHost(ctx, host)
-	if err != nil {
-		return err
-	}
-	defer transport.Close()
-	root, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("storage_watchdog_install_invalid")
-	}
-	eventBusURL := "tls://" + net.JoinHostPort(snapshot.Manifest.EventBus.PublicAddress, strconv.Itoa(snapshot.Manifest.EventBus.Port))
-	return setupdeploy.InstallStorageViewWatchdogWithOptions(ctx, transport, root, setupdeploy.WatchdogOptions{
-		StorageRoot: snapshot.Manifest.Paths.Resolved().StorageRoot,
-		EventBusURL: eventBusURL, GatewayNodeID: host.Name,
-	})
-}
-
-// configureRemoteCollectorStorageTarget keeps the Collector planner on the
-// same native Storage gateway that short-lived SCF invocations use. The
-// control host has no local Storage when Storage is deployed remotely.
-func configureRemoteCollectorStorageTarget(ctx context.Context, control setupssh.Client, nodeID, host, controlRoot string) error {
-	if control == nil || strings.TrimSpace(nodeID) == "" || net.ParseIP(strings.TrimSpace(host)) == nil {
-		return fmt.Errorf("collector_storage_target_prepare_failed")
-	}
-	target := "ip://" + net.JoinHostPort(host, "11003")
-	_, err := control.Run(ctx, []string{
-		"sh", "-lc", `set -eu
-control_root="$1"
-target="$2"
-config="$control_root/collector/config/app.yaml"
-test -f "$config"
-python3 - "$config" "$target" "$3" <<'PY'
-import pathlib
-import re
-import sys
-
-path = pathlib.Path(sys.argv[1])
-target = sys.argv[2]
-node_id = sys.argv[3]
-raw = path.read_text()
-updated, target_count = re.subn(r'(?m)^  gateway_target:.*$', '  gateway_target: ' + target, raw, count=1)
-updated, node_count = re.subn(r'(?m)^  gateway_node_id:.*$', '  gateway_node_id: "' + node_id + '"', updated, count=1)
-if target_count != 1 or node_count != 1:
-    raise SystemExit(1)
-path.write_text(updated)
-PY
-	`, "sh", controlRoot, target, nodeID}, nil)
-	if err != nil {
-		return fmt.Errorf("collector_storage_target_prepare_failed")
-	}
-	return nil
-}
-
-// configureRemoteMonitorStorageTarget points Monitor's Primary/Metadata
-// clients at the remote Storage gateway. Control's leftover Primary has
-// catalog metadata from earlier local installs but no live market facts.
-func configureRemoteMonitorStorageTarget(ctx context.Context, control setupssh.Client, nodeID, host, controlRoot string) error {
-	if control == nil || strings.TrimSpace(nodeID) == "" || net.ParseIP(strings.TrimSpace(host)) == nil {
-		return fmt.Errorf("monitor_storage_target_prepare_failed")
-	}
-	target := "ip://" + net.JoinHostPort(host, "11003")
-	_, err := control.Run(ctx, []string{
-		"sh", "-lc", `set -eu
-control_root="$1"
-target="$2"
-config="$control_root/monitor/config/app.yaml"
-test -f "$config"
-python3 - "$config" "$target" "$3" <<'PY'
-import pathlib
-import re
-import sys
-
-path = pathlib.Path(sys.argv[1])
-target = sys.argv[2]
-node_id = sys.argv[3]
-raw = path.read_text()
-updated, target_count = re.subn(r'(?m)^    gateway_target:.*$', '    gateway_target: ' + target, raw)
-updated, node_count = re.subn(r'(?m)^    gateway_node_id:.*$', '    gateway_node_id: ' + node_id, updated)
-if target_count < 2 or node_count < 2:
-    raise SystemExit(1)
-path.write_text(updated)
-PY
-	`, "sh", controlRoot, target, nodeID}, nil)
-	if err != nil {
-		return fmt.Errorf("monitor_storage_target_prepare_failed")
-	}
-	return nil
-}
-
-func controlGatewayMaterial(ctx context.Context, control setupssh.Client, controlHost string, local bool, controlRoot string, tlsMode setupdeploy.TLSMode) (string, string, string, []byte, error) {
-	if local {
-		return "http://127.0.0.1:11000", "", "", nil, nil
-	}
-	result, err := control.Run(ctx, []string{"sh", "-lc", `set -eu
-control_root="$1"
-	tls_mode="$2"
-control_key="$control_root/secrets/gateway-control.key"
-service_key="$control_root/secrets/gateway-service.key"
-caddy_root="$control_root/data/caddy/caddy/pki/authorities/local/root.crt"
-gateway_peers="$control_root/certs/gateway/peers.pem"
-for file in "$control_key" "$service_key" "$gateway_peers"; do test -s "$file"; done
-base64 -w 0 "$control_key"; printf '\n'
-base64 -w 0 "$service_key"; printf '\n'
-if [ "$tls_mode" = internal ]; then
-  test -s "$caddy_root"
-  cat "$caddy_root" "$gateway_peers" | base64 -w 0
-else
-  cat "$gateway_peers" | base64 -w 0
-fi
-printf '\n'`, "moox-control-gateway-material", controlRoot, string(tlsMode)}, nil)
-	if err != nil {
-		return "", "", "", nil, fmt.Errorf("gateway_material_prepare_failed")
-	}
-	parts := strings.Split(strings.TrimSpace(result.Stdout), "\n")
-	if len(parts) != 3 {
-		return "", "", "", nil, fmt.Errorf("gateway_material_prepare_failed")
-	}
-	decoded := make([][]byte, 3)
-	for index, value := range parts {
-		decoded[index], err = base64.StdEncoding.DecodeString(value)
-		if err != nil || index < 2 && len(decoded[index]) == 0 {
-			return "", "", "", nil, fmt.Errorf("gateway_material_prepare_failed")
-		}
-	}
-	return "https://" + net.JoinHostPort(controlHost, "9527"), strings.TrimSpace(string(decoded[0])), strings.TrimSpace(string(decoded[1])), decoded[2], nil
-}
-
-func controlHealthAuth(ctx context.Context, control setupssh.Client, controlRoot string) (string, string, string, error) {
-	if control == nil {
-		return "", "", "", fmt.Errorf("health_secret_prepare_failed")
-	}
-	result, err := control.Run(ctx, []string{
-		"sh", "-lc", `set -eu
-secret_file="$1/secrets/health-auth.env"
-test -s "${secret_file}"
-awk '/^MOOX_HEALTH_AUTH_(VERSION|ACCESS_KEY|SECRET_KEY)=/{print}' "${secret_file}"`,
-		"moox-control-health-auth", controlRoot,
-	}, nil)
-	if err != nil {
-		return "", "", "", fmt.Errorf("health_secret_prepare_failed")
-	}
-	normalized, err := normalizeHealthAuth(result.Stdout)
-	if err != nil {
-		return "", "", "", fmt.Errorf("health_secret_prepare_failed")
-	}
-	values := make(map[string]string, 3)
-	for _, line := range strings.Split(normalized, "\n") {
-		key, value, ok := strings.Cut(line, "=")
-		if ok {
-			values[key] = value
-		}
-	}
-	return values["MOOX_HEALTH_AUTH_VERSION"], values["MOOX_HEALTH_AUTH_ACCESS_KEY"], values["MOOX_HEALTH_AUTH_SECRET_KEY"], nil
-}
-
-func controlStorageInternalAuth(ctx context.Context, control setupssh.Client, controlRoot string) (string, string, error) {
-	if control == nil {
-		return "", "", fmt.Errorf("storage_secret_prepare_failed")
-	}
-	result, err := control.Run(ctx, []string{
-		"sh", "-lc", `set -eu
-secret_file="$1/secrets/storage-internal-auth.env"
-test -s "${secret_file}"
-awk '/^MOOX_STORAGE_(PRIMARY|VIEW)_AUTH_SECRET=/{print}' "${secret_file}"`,
-		"moox-control-storage-auth", controlRoot,
-	}, nil)
-	if err != nil {
-		return "", "", fmt.Errorf("storage_secret_prepare_failed")
-	}
-	secretEnv, err := normalizeStorageInternalAuth(result.Stdout)
-	if err != nil {
-		return "", "", fmt.Errorf("storage_secret_prepare_failed")
-	}
-	values := make(map[string]string, 2)
-	for _, line := range strings.Split(secretEnv, "\n") {
-		key, value, ok := strings.Cut(line, "=")
-		if ok {
-			values[key] = value
-		}
-	}
-	return values["MOOX_STORAGE_PRIMARY_AUTH_SECRET"], values["MOOX_STORAGE_VIEW_AUTH_SECRET"], nil
-}
-
-func restartStorageClients(ctx context.Context, control setupssh.Client, controlRoot string) error {
-	if control == nil {
-		return fmt.Errorf("storage_client_restart_failed")
-	}
-	if _, err := control.Run(ctx, []string{
-		"sh", "-lc",
-		restartStorageClientsScript,
-		"moox-restart-storage-clients", controlRoot,
-	}, nil); err != nil {
-		return fmt.Errorf("storage_client_restart_failed")
-	}
-	return nil
-}
-
-const restartStorageClientsScript = `set -eu
-for service in monitor cloudnode collector; do
-  if "$1/status.sh" "$service" >/dev/null 2>&1; then
-    restarted=0
-    for attempt in 1 2 3; do
-      if "$1/restart.sh" "$service"; then
-        restarted=1
-        break
-      fi
-      sleep 2
-    done
-    test "$restarted" -eq 1
-  fi
-done`
-
 var storageSecretValuePattern = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]+$`)
-
-func normalizeHealthAuth(raw string) (string, error) {
-	keys := []string{
-		"MOOX_HEALTH_AUTH_VERSION",
-		"MOOX_HEALTH_AUTH_ACCESS_KEY",
-		"MOOX_HEALTH_AUTH_SECRET_KEY",
-	}
-	return normalizeSecretEnv(raw, keys)
-}
 
 func normalizeStorageInternalAuth(raw string) (string, error) {
 	return normalizeSecretEnv(raw, []string{
@@ -1616,28 +1034,6 @@ func defaultSetupValidate(ctx context.Context, snapshot *setupconfig.Snapshot) (
 	return setupvalidate.Run(ctx, snapshot, setupvalidate.Dependencies{Identity: identity, SSH: commandSSHChecker{}})
 }
 
-func defaultSetupValidateDeployment(ctx context.Context, snapshot *setupconfig.Snapshot, hosts []setupconfig.Host) (setupvalidate.Result, error) {
-	result, err := setupvalidate.RunSSHHosts(ctx, snapshot, setupvalidate.Dependencies{SSH: commandSSHChecker{}}, hosts)
-	if err != nil {
-		return result, err
-	}
-	// 旧的 deploy-control/deploy-storage/deploy-service 走 deploy-moox.sh 的旧布局与旧网关字段，不能写到原生部署的主机上：
-	// 在它们改任何文件、停任何服务之前拒绝。
-	deployRoot := snapshot.Manifest.Paths.Resolved().DeployRoot
-	for _, host := range hosts {
-		client, dialErr := dialSetupHost(ctx, host)
-		if dialErr != nil {
-			return result, dialErr
-		}
-		probeErr := rejectNativeLayout(ctx, client, deployRoot)
-		_ = client.Close()
-		if probeErr != nil {
-			return result, fmt.Errorf("%s: %w", host.Name, probeErr)
-		}
-	}
-	return result, nil
-}
-
 type commandSSHChecker struct{}
 
 func (commandSSHChecker) Check(ctx context.Context, host setupconfig.Host) error {
@@ -1657,147 +1053,11 @@ func defaultSetupTrustHost(ctx context.Context, snapshot *setupconfig.Snapshot, 
 	return setupssh.TrustHost(ctx, sshTarget(host), fingerprint, setupssh.Options{Timeout: 15 * time.Second})
 }
 
-func defaultSetupDeploy(ctx context.Context, snapshot *setupconfig.Snapshot, resetData bool) error {
-	return runSetupControlDeploySteps(
-		func() error {
-			_, err := defaultSetupEnsureFirewall(ctx, snapshot)
-			return err
-		},
-		func() error { return deploySetupControl(ctx, snapshot, resetData) },
-		func() error { return nil },
-	)
-}
-
-func runSetupControlDeploySteps(ensureControl, deploy, ensureEventBus func() error) error {
-	if err := ensureControl(); err != nil {
-		return err
-	}
-	if err := deploy(); err != nil {
-		return err
-	}
-	return ensureEventBus()
-}
-
-func deploySetupControl(ctx context.Context, snapshot *setupconfig.Snapshot, resetData bool) error {
-	host := snapshot.Manifest.ControlHost()
-	transport, err := dialSetupHost(ctx, host)
-	if err != nil {
-		return err
-	}
-	defer transport.Close()
-	root, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("control_deploy_invalid")
-	}
-	opts := controlDeployOptions(snapshot, root)
-	opts.ResetControlData = resetData
-	// A browser CA trust failure is reported only after the remote deployment
-	// is finalized; the control-plane follow-ups below still have to run.
-	deployErr := setupdeploy.Control(ctx, transport, opts, setupdeploy.Dependencies{})
-	if deployErr != nil && !errors.Is(deployErr, setupdeploy.ErrBrowserCATrust) {
-		return deployErr
-	}
-	gateway, err := openCommandGateway(ctx, "", snapshot)
-	if err != nil {
-		return err
-	}
-	defer gateway.Close()
-	client := setupclient.New(gateway)
-	for _, deployedHost := range snapshot.Manifest.Hosts() {
-		if err := client.SyncHostPlacements(ctx, snapshot, deployedHost.Name); err != nil {
-			return err
-		}
-	}
-	return deployErr
-}
-
-func ensureSetupFirewallRules(
-	ctx context.Context,
-	snapshot *setupconfig.Snapshot,
-	address string,
-	rules []cloudtencent.CreateFirewallRulesOptions,
-	failure string,
-) error {
-	publicIP, err := eventBusFirewallIP(ctx, address, net.DefaultResolver.LookupIP)
-	if err != nil {
-		return fmt.Errorf("%s", failure)
-	}
-	if !isPublicFirewallIP(publicIP) {
-		return nil
-	}
-	client, err := cloudtencent.NewClient(cloudtencent.ClientOptions{
-		SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
-		Region: snapshot.Manifest.TencentCloud.Region,
-	})
-	if err != nil {
-		return fmt.Errorf("%s", failure)
-	}
-	for _, rule := range rules {
-		if _, err := client.EnsureFirewallRule(ctx, publicIP, rule); err != nil {
-			return fmt.Errorf("%s", failure)
-		}
-	}
-	return nil
-}
-
 func isPublicFirewallIP(address string) bool {
 	ip := net.ParseIP(strings.TrimSpace(address))
 	return ip != nil && ip.To4() != nil && ip.IsGlobalUnicast() &&
 		!ip.IsPrivate() && !ip.IsLoopback() && !ip.IsUnspecified() &&
 		!ip.IsLinkLocalUnicast() && !ip.IsMulticast()
-}
-
-func ensureSetupStorageGatewayFirewall(ctx context.Context, snapshot *setupconfig.Snapshot, address string) error {
-	if storageGatewayPortReachable(ctx, address, 11003) {
-		return nil
-	}
-	rule := cloudtencent.CreateFirewallRulesOptions{
-		Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway",
-	}
-	if err := ensureSetupFirewallRules(ctx, snapshot, address, []cloudtencent.CreateFirewallRulesOptions{rule}, "storage_gateway_firewall_failed"); err == nil {
-		return nil
-	}
-	// A remote Storage host may be a CVM rather than a Lighthouse instance.
-	// Lighthouse's public-IP lookup then reports a false deployment failure;
-	// fall back to the CVM/VPC security-group API for that topology.
-	publicIP, err := eventBusFirewallIP(ctx, address, net.DefaultResolver.LookupIP)
-	if err != nil {
-		return fmt.Errorf("storage_gateway_firewall_failed")
-	}
-	client, err := cloudtencent.NewCVMClient(cloudtencent.ClientOptions{
-		SecretID: snapshot.Manifest.TencentCloud.SecretID, SecretKey: snapshot.Manifest.TencentCloud.SecretKey,
-		Region: snapshot.Manifest.TencentCloud.Region,
-	})
-	if err != nil {
-		return fmt.Errorf("storage_gateway_firewall_failed")
-	}
-	if err := client.EnsureSecurityGroupRule(ctx, publicIP, rule); err != nil {
-		return fmt.Errorf("storage_gateway_firewall_failed")
-	}
-	return nil
-}
-
-func storageGatewayPortReachable(ctx context.Context, address string, port int) bool {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	timeout := 3 * time.Second
-	if deadline, ok := ctx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return false
-		}
-		if remaining < timeout {
-			timeout = remaining
-		}
-	}
-	dialer := net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(strings.Trim(address, "[]"), strconv.Itoa(port)))
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
 }
 
 func setupControlFirewallRules() []cloudtencent.CreateFirewallRulesOptions {
@@ -1817,9 +1077,9 @@ func setupControlFirewallRules() []cloudtencent.CreateFirewallRulesOptions {
 	}
 }
 
-func setupControlFirewallRulesForTLS(mode setupdeploy.TLSMode, address string) []cloudtencent.CreateFirewallRulesOptions {
+func setupControlFirewallRulesForTLS(mode tlstrust.TLSMode, address string) []cloudtencent.CreateFirewallRulesOptions {
 	rules := setupControlFirewallRules()
-	if setupdeploy.UsesPublicTLSMode(mode, address) {
+	if tlstrust.UsesPublicTLSMode(mode, address) {
 		return rules
 	}
 	return rules[1:]
@@ -1876,333 +1136,6 @@ func eventBusFirewallIP(
 	return "", fmt.Errorf("EventBus DNS address has no IPv4 address")
 }
 
-func controlDeployOptions(snapshot *setupconfig.Snapshot, repositoryRoot string) setupdeploy.Options {
-	paths := snapshot.Manifest.Paths.Resolved()
-	localStorageTarget := ""
-	localStorageNodeID := ""
-	if snapshot.Manifest.HasStorageHost() {
-		storageHost := snapshot.Manifest.StorageHost()
-		localStorageTarget = "ip://" + net.JoinHostPort(strings.Trim(storageHost.Address, "[]"), "11003")
-		localStorageNodeID = storageHost.Name
-	}
-	options := setupdeploy.Options{
-		RepositoryRoot:               repositoryRoot,
-		DeployRoot:                   paths.DeployRoot,
-		ControlRoot:                  paths.ControlRoot,
-		StorageRoot:                  paths.StorageRoot,
-		PublicHost:                   snapshot.Manifest.ControlHost().Address,
-		NodeID:                       snapshot.Manifest.ControlHost().Name,
-		BrowserPort:                  9527,
-		EventBusPublicAddress:        snapshot.Manifest.EventBus.PublicAddress,
-		EventBusPort:                 snapshot.Manifest.EventBus.Port,
-		EventBusTLSEnabled:           snapshot.Manifest.EventBus.TLSEnabled,
-		LocalStorageRPCGatewayTarget: localStorageTarget,
-		LocalStorageGatewayNodeID:    localStorageNodeID,
-		NotificationChannelType:      snapshot.Manifest.Notification.ChannelType,
-		NotificationWebhookURL:       snapshot.Manifest.Notification.WebhookURL,
-		LocalLogs:                    snapshot.Manifest.LocalLogs,
-		Observability:                snapshot.Manifest.Observability,
-		TLSMode:                      setupdeploy.TLSMode(snapshot.Manifest.ControlHost().TLSMode),
-		InstallLocalCA:               true,
-	}
-	if snapshot.Manifest.HasCompileHost() {
-		options.StorageBuildPassword = snapshot.Manifest.CompileHost().Password
-		options.StorageBuildHost = snapshot.Manifest.CompileHost().Name
-		options.StorageBuildHostRole = "compile"
-	}
-	// The Trade execution host is an explicit placement, independent of the
-	// upstream HTTP/DNS policy. A deployment may disable market-domain
-	// probing while Strategy still needs the authenticated ownership Gateway.
-	if tradeHostName := strings.TrimSpace(snapshot.Manifest.PlacementHost("trade")); tradeHostName != "" {
-		if tradeHost, err := findSetupHost(snapshot.Manifest, tradeHostName); err == nil {
-			options.TradeGatewayURL = "https://" + net.JoinHostPort(strings.Trim(tradeHost.Address, "[]"), strconv.Itoa(setupclient.TradeGatewayHTTPSPort))
-			options.TradeGatewayNode = tradeHost.Name
-		}
-	}
-	return options
-}
-
-func defaultSetupDeployService(ctx context.Context, snapshot *setupconfig.Snapshot, hostName, packagePath, service, deployDir string) (setupdeploy.ServiceResult, error) {
-	host, err := findSetupHost(snapshot.Manifest, hostName)
-	if err != nil {
-		return setupdeploy.ServiceResult{}, err
-	}
-	transport, err := dialSetupHost(ctx, host)
-	if err != nil {
-		return setupdeploy.ServiceResult{}, err
-	}
-	defer transport.Close()
-	// 旧的整包发布使用旧布局与旧启停脚本，不能写到原生部署的主机上：上传之前检查部署根及 --deploy-dir 的上一级。
-	for _, root := range []string{snapshot.Manifest.Paths.Resolved().DeployRoot, path.Dir(path.Clean(deployDir))} {
-		if err := rejectNativeLayout(ctx, transport, root); err != nil {
-			return setupdeploy.ServiceResult{}, err
-		}
-	}
-	if isBrowserService(service) {
-		if err := ensureSetupBrowserCATrust(ctx, snapshot); err != nil {
-			return setupdeploy.ServiceResult{}, err
-		}
-	}
-	tradeConsoleBindAddress := ""
-	isTrade := strings.EqualFold(strings.TrimSpace(service), "trade") || strings.EqualFold(strings.TrimSpace(service), "moox_trade")
-	if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
-		// TradeConsole has no authentication and trusts X-Space-Id. Keep it on
-		// loopback; external callers must use the authenticated trade_owner
-		// Gateway route.
-		tradeConsoleBindAddress = "127.0.0.1"
-	}
-	result, err := setupdeploy.Service(ctx, transport, setupdeploy.ServiceOptions{
-		PackagePath: packagePath, ServiceName: service, DeployDir: deployDir,
-		EventBusURL: setupEventBusURL(snapshot.Manifest), TradeConsoleBindAddress: tradeConsoleBindAddress,
-	})
-	if err != nil {
-		return setupdeploy.ServiceResult{}, err
-	}
-	// Keep the Admin deployment directory in sync with every successful
-	// package deployment. Monitor derives system checks from this store, so a
-	// service published only through SSH must still become visible in the
-	// operations overview. Reuse the target connection for control deployments;
-	// remote-node deployments open a short-lived control-plane tunnel.
-	control := transport
-	closeControl := false
-	if !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
-		control, err = dialSetupHost(ctx, snapshot.Manifest.ControlHost())
-		if err != nil {
-			// The package has already been activated on the target node. If the
-			// control-plane SSH connection fails, roll it back immediately rather
-			// than leaving a running service with no registry/route ownership.
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if rollbackErr := setupdeploy.RollbackService(cleanupCtx, transport, result.DeployDir, service); rollbackErr != nil {
-				return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w; rollback: %v", err, rollbackErr)
-			}
-			return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", err)
-		}
-		closeControl = true
-	}
-	if closeControl {
-		defer control.Close()
-	}
-	var previousTradeCA []byte
-	var previousTradeCAExists bool
-	if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
-		controlPaths := snapshot.Manifest.Paths.Resolved()
-		var readErr error
-		previousTradeCA, previousTradeCAExists, readErr = readTradeGatewayCA(ctx, control, controlPaths.ControlRoot)
-		if readErr != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			_, _ = transport.Run(cleanupCtx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-ca-read-failure", result.DeployDir}, nil)
-			if rollbackErr := setupdeploy.RollbackService(cleanupCtx, transport, result.DeployDir, service); rollbackErr != nil {
-				readErr = errors.Join(readErr, fmt.Errorf("rollback service after CA read failure: %w", rollbackErr))
-			}
-			return setupdeploy.ServiceResult{}, readErr
-		}
-		if err := syncTradeGatewayCA(ctx, transport, control, result.DeployDir, controlPaths.ControlRoot); err != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			_, _ = transport.Run(cleanupCtx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-ca-failure", result.DeployDir}, nil)
-			_ = setupdeploy.RollbackService(cleanupCtx, transport, result.DeployDir, service)
-			if restoreErr := restoreTradeGatewayRuntime(cleanupCtx, control, controlPaths.ControlRoot, previousTradeCA, previousTradeCAExists); restoreErr != nil {
-				err = errors.Join(err, fmt.Errorf("restore Trade Gateway runtime after CA sync failure: %w", restoreErr))
-			}
-			return setupdeploy.ServiceResult{}, err
-		}
-		if _, err := control.Run(ctx, []string{"bash", "-lc", `set -eu; "$1/restart.sh" admin; "$1/restart.sh" strategy`, "moox-restart-control-after-trade-ca", controlPaths.ControlRoot}, nil); err != nil {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			_, _ = transport.Run(cleanupCtx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-ca-restart-failure", result.DeployDir}, nil)
-			_ = setupdeploy.RollbackService(cleanupCtx, transport, result.DeployDir, service)
-			if restoreErr := restoreTradeGatewayRuntime(cleanupCtx, control, controlPaths.ControlRoot, previousTradeCA, previousTradeCAExists); restoreErr != nil {
-				err = errors.Join(err, fmt.Errorf("restore Trade Gateway runtime after restart failure: %w", restoreErr))
-			}
-			return setupdeploy.ServiceResult{}, fmt.Errorf("trade_gateway_ca_sync_failed: %w", err)
-		}
-	}
-	result, err = syncSetupServiceRegistry(ctx, snapshot, transport, host, service, tradeConsoleBindAddress != "", result)
-	if err != nil {
-		if isTrade && !strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if restoreErr := restoreTradeGatewayRuntime(cleanupCtx, control, snapshot.Manifest.Paths.Resolved().ControlRoot, previousTradeCA, previousTradeCAExists); restoreErr != nil {
-				err = errors.Join(err, fmt.Errorf("restore Trade Gateway runtime after registry failure: %w", restoreErr))
-			}
-		}
-		return setupdeploy.ServiceResult{}, err
-	}
-	if err := setupdeploy.FinalizeService(ctx, transport, result.DeployDir); err != nil {
-		// Finalize only removes the retained rollback snapshot. The service,
-		// registry, and Trade Gateway CA are already consistent at this point;
-		// leave that state intact so cleanup can be retried without invalidating
-		// the live Admin/Strategy TLS trust cache.
-		return setupdeploy.ServiceResult{}, fmt.Errorf("service_finalize_failed: %w", err)
-	}
-	return result, nil
-}
-
-func syncTradeGatewayCA(ctx context.Context, trade, control setupssh.Client, tradeDeployDir, controlRoot string) error {
-	if trade == nil || control == nil || strings.TrimSpace(tradeDeployDir) == "" || strings.TrimSpace(controlRoot) == "" {
-		return fmt.Errorf("trade_gateway_ca_sync_failed")
-	}
-	result, err := trade.Run(ctx, []string{"sh", "-lc", `cat -- "$1/certs/caddy/root.crt"`, "moox-read-trade-gateway-ca", tradeDeployDir}, nil)
-	if err != nil {
-		return fmt.Errorf("trade_gateway_ca_sync_failed")
-	}
-	ca := []byte(result.Stdout)
-	if len(ca) == 0 || len(ca) > 1<<20 {
-		return fmt.Errorf("trade_gateway_ca_sync_failed")
-	}
-	block, rest := pem.Decode(ca)
-	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
-		return fmt.Errorf("trade_gateway_ca_sync_failed")
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil || !cert.IsCA {
-		return fmt.Errorf("trade_gateway_ca_sync_failed")
-	}
-	target := filepath.Join(strings.TrimRight(controlRoot, "/"), "certs", "caddy", "trade-gateway-root.crt")
-	tmp := target + ".next"
-	if err := control.Upload(ctx, bytes.NewReader(ca), int64(len(ca)), tmp, 0o600); err != nil {
-		return fmt.Errorf("trade_gateway_ca_sync_failed")
-	}
-	if _, err := control.Run(ctx, []string{"sh", "-lc", `set -eu; mkdir -p -- "$(dirname -- "$2")"; chmod 600 -- "$1"; mv -f -- "$1" "$2"; chmod 644 -- "$2"`, "moox-install-trade-gateway-ca", tmp, target}, nil); err != nil {
-		return fmt.Errorf("trade_gateway_ca_sync_failed")
-	}
-	return nil
-}
-
-func readTradeGatewayCA(ctx context.Context, control setupssh.Client, controlRoot string) ([]byte, bool, error) {
-	target := filepath.Join(strings.TrimRight(controlRoot, "/"), "certs", "caddy", "trade-gateway-root.crt")
-	result, err := control.Run(ctx, []string{"sh", "-lc", `if [ ! -e "$1" ]; then exit 3; fi; cat -- "$1"`, "moox-read-previous-trade-gateway-ca", target}, nil)
-	if err != nil {
-		if result.ExitCode == 3 {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("trade_gateway_ca_read_failed")
-	}
-	if len(result.Stdout) == 0 {
-		return nil, true, fmt.Errorf("trade_gateway_ca_read_failed")
-	}
-	return []byte(result.Stdout), true, nil
-}
-
-func restoreTradeGatewayCA(ctx context.Context, control setupssh.Client, controlRoot string, ca []byte, exists bool) error {
-	target := filepath.Join(strings.TrimRight(controlRoot, "/"), "certs", "caddy", "trade-gateway-root.crt")
-	if !exists {
-		_, err := control.Run(ctx, []string{"sh", "-lc", `rm -f -- "$1"`, "moox-remove-trade-gateway-ca", target}, nil)
-		return err
-	}
-	tmp := target + ".restore"
-	if err := control.Upload(ctx, bytes.NewReader(ca), int64(len(ca)), tmp, 0o600); err != nil {
-		return err
-	}
-	_, err := control.Run(ctx, []string{"sh", "-lc", `set -eu; mv -f -- "$1" "$2"; chmod 644 -- "$2"`, "moox-restore-trade-gateway-ca", tmp, target}, nil)
-	return err
-}
-
-// restoreTradeGatewayRuntime restores both the CA file and the processes that
-// cache its certificate pool. Restoring only the file leaves an already-running
-// Admin/Strategy process trusting the new CA, which can make the next restart
-// fail after a deployment rollback.
-func restoreTradeGatewayRuntime(ctx context.Context, control setupssh.Client, controlRoot string, ca []byte, exists bool) error {
-	if err := restoreTradeGatewayCA(ctx, control, controlRoot, ca, exists); err != nil {
-		return err
-	}
-	if _, err := control.Run(ctx, []string{"bash", "-lc", `set -eu; "$1/restart.sh" admin; "$1/restart.sh" strategy`, "moox-restart-control-after-trade-ca-restore", controlRoot}, nil); err != nil {
-		return err
-	}
-	return nil
-}
-
-func syncSetupServiceRegistry(ctx context.Context, snapshot *setupconfig.Snapshot, transport setupssh.Client, host setupconfig.Host, service string, remoteTrade bool, result setupdeploy.ServiceResult) (setupdeploy.ServiceResult, error) {
-	failRegistration := func(cause error, stage string) (setupdeploy.ServiceResult, error) {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if service == "trade" {
-			if _, err := transport.Run(cleanupCtx, []string{"bash", "-lc", `"$1/stop.sh" trade`, "moox-stop-trade-after-" + stage + "-failure", result.DeployDir}, nil); err != nil {
-				cause = errors.Join(cause, fmt.Errorf("stop Trade after registry failure: %w", err))
-			}
-		}
-		if err := setupdeploy.RollbackService(cleanupCtx, transport, result.DeployDir, service); err != nil {
-			cause = errors.Join(cause, fmt.Errorf("rollback service deployment after failure: %w", err))
-		}
-		return setupdeploy.ServiceResult{}, fmt.Errorf("service_registry_failed: %w", cause)
-	}
-	if snapshot == nil || !slices.Contains(snapshot.Manifest.Placements[host.Name], service) {
-		return failRegistration(fmt.Errorf("service is absent from the host's desired placements"), "placement")
-	}
-	gateway, err := openCommandGateway(ctx, "", snapshot)
-	if err != nil {
-		return failRegistration(err, "gateway")
-	}
-	if gateway == nil {
-		return failRegistration(fmt.Errorf("gateway is unavailable"), "gateway")
-	}
-	defer gateway.Close()
-	if err := setupclient.New(gateway).SyncHostPlacements(ctx, snapshot, host.Name); err != nil {
-		return failRegistration(err, "registry")
-	}
-	if remoteTrade {
-		if err := probeTradeConsole(ctx, gateway); err != nil {
-			return failRegistration(err, "probe")
-		}
-	}
-	result.RegistrySynced = true
-	return result, nil
-}
-
-// probeTradeConsole exercises the signed native gateway and the Trade handler.
-// Without a space/account, the handler must return NO_PERMISSION. No business
-// data or operator credentials are needed for this transport check.
-func probeTradeConsole(ctx context.Context, gateway commandGateway) error {
-	if gateway == nil {
-		return fmt.Errorf("trade_console_probe_invalid")
-	}
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	raw, err := gateway.Forward(ctx, "trpc.moox.trade.TradeConsoleService", "GetExecutionCapabilities", codec.SerializationTypeJSON, []byte(`{}`))
-	if err != nil {
-		return fmt.Errorf("trade_console_probe_failed: %w", err)
-	}
-	var envelope struct {
-		RetInfo      json.RawMessage `json:"ret_info"`
-		RetInfoCamel json.RawMessage `json:"retInfo"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return fmt.Errorf("trade_console_probe_failed: invalid response")
-	}
-	status := envelope.RetInfo
-	if len(status) == 0 {
-		status = envelope.RetInfoCamel
-	}
-	var retInfo commonpb.RetInfo
-	if err := protojson.Unmarshal(status, &retInfo); err != nil || retInfo.GetCode() != commonpb.ErrorCode_NO_PERMISSION {
-		return fmt.Errorf("trade_console_probe_failed: unexpected status")
-	}
-	return nil
-}
-
-func setupEventBusURL(manifest setupconfig.Manifest) string {
-	address := strings.TrimSpace(manifest.EventBus.PublicAddress)
-	if address == "" || manifest.EventBus.Port < 1 || manifest.EventBus.Port > 65535 {
-		return ""
-	}
-	scheme := "nats"
-	if manifest.EventBus.TLSEnabled {
-		scheme = "tls"
-	}
-	return scheme + "://" + net.JoinHostPort(address, strconv.Itoa(manifest.EventBus.Port))
-}
-
-func isBrowserService(service string) bool {
-	switch strings.ToLower(strings.TrimSpace(service)) {
-	case "admin", "admin_gateway", "moox-admin", "web-host", "web_host", "moox-web-host":
-		return true
-	default:
-		return false
-	}
-}
-
 func ensureSetupBrowserCATrust(ctx context.Context, snapshot *setupconfig.Snapshot) error {
 	if snapshot == nil {
 		return fmt.Errorf("browser_ca_trust_failed: setup configuration is missing")
@@ -2212,11 +1145,11 @@ func ensureSetupBrowserCATrust(ctx context.Context, snapshot *setupconfig.Snapsh
 		return fmt.Errorf("browser_ca_trust_failed: resolve repository root: %w", err)
 	}
 	host := snapshot.Manifest.ControlHost()
-	return setupdeploy.EnsureLocalCATrustForHost(
+	return tlstrust.EnsureLocalCATrustForHost(
 		ctx,
 		root,
 		host.Address,
-		setupdeploy.TLSMode(host.TLSMode),
+		tlstrust.TLSMode(host.TLSMode),
 	)
 }
 

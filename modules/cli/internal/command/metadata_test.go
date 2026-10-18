@@ -2,6 +2,13 @@ package command
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
@@ -9,12 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"io"
-	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
 )
 
 func TestValidateReservedInternalSpacesRejectsUndeclaredLogicalResource(t *testing.T) {

@@ -48,7 +48,7 @@ func unitConfiguration(snapshot *setupconfig.Snapshot, profile string) ([]byte, 
 // storageNodeID 是单个存储节点的固定 ID：元数据种子、Collector 与 Storage 的默认值都使用它。
 const storageNodeID = "storage-node-0"
 
-// defaultSpaceID 是 Collector 行情调度的默认空间（与 deploy-moox.sh 的默认值一致）。
+// defaultSpaceID 是 Collector 行情调度的默认空间。
 const defaultSpaceID = "crypto"
 
 func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, hostID string, components []string) (map[string]map[string]string, error) {

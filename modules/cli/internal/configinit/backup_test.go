@@ -17,7 +17,7 @@ import (
 	"time"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/consoleclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
@@ -265,7 +265,7 @@ func TestBackupRefreshesAStaleConsoleCA(t *testing.T) {
 	refreshConsoleCA = func(_ context.Context, manifest setupconfig.Manifest) error {
 		refreshed++
 		pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: console.server.Certificate().Raw})
-		return setupdeploy.FileCAStore{}.Save(manifest.ControlHost().Address, pemBytes)
+		return tlstrust.FileCAStore{}.Save(manifest.ControlHost().Address, pemBytes)
 	}
 	keys := &configcrypt.MemoryStore{}
 	if _, err := BackupFile(context.Background(), writeConfig(t, keys), keys); err != nil {

@@ -8,8 +8,8 @@ import (
 	"os"
 	"time"
 
-	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/consoleclient"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -116,7 +116,7 @@ var refreshConsoleCA = func(ctx context.Context, manifest setupconfig.Manifest) 
 	if err != nil {
 		return fmt.Errorf("读取根证书失败")
 	}
-	return setupdeploy.FileCAStore{}.Save(host.Address, []byte(result.Stdout))
+	return tlstrust.FileCAStore{}.Save(host.Address, []byte(result.Stdout))
 }
 
 // consoleRoots 返回校验管理台证书用的根证书：系统信任，加上部署时缓存在本机的管理台内部 CA 根证书（如果有）。
@@ -126,7 +126,7 @@ func consoleRoots(address string) *x509.CertPool {
 	if err != nil || pool == nil {
 		pool = x509.NewCertPool()
 	}
-	if path := setupdeploy.CAPath(address); path != "" {
+	if path := tlstrust.CAPath(address); path != "" {
 		if pem, err := os.ReadFile(path); err == nil {
 			pool.AppendCertsFromPEM(pem)
 		}

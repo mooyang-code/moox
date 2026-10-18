@@ -16,8 +16,6 @@ if rg -n 'ActivateDataset\(' "${ROOT}/modules/cli/internal/doctor/storage_activa
   exit 1
 fi
 
-bash -n "${ROOT}/scripts/deploy/deploy-moox.sh"
-grep -q 'MOOX_SERVICE_NAME=${service_name}' "${ROOT}/scripts/deploy/deploy-moox.sh"
 # Catalog/Doctor and release-byte identity are checked by packages/doctor.
 # The deployment inventory migrates to HostPlacements in the gateway plan.
 if [[ -e "${ROOT}/packages/doctor/components.yaml" ]]; then

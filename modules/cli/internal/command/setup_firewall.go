@@ -10,7 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
-	setupdeploy "github.com/mooyang-code/moox/modules/cli/internal/setup/deploy"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/spf13/cobra"
@@ -221,7 +221,7 @@ func setupFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
 	}
 
 	controlRules := append([]cloudtencent.CreateFirewallRulesOptions(nil), setupControlFirewallRulesForTLS(
-		setupdeploy.TLSMode(manifest.ControlHost().TLSMode), manifest.ControlHost().Address,
+		tlstrust.TLSMode(manifest.ControlHost().TLSMode), manifest.ControlHost().Address,
 	)...)
 	controlRules = appendUniqueFirewallRules(controlRules, setupRuntimeFirewallRules(manifest.EventBus.Port)...)
 	add(manifest.ControlHost(), controlRules)

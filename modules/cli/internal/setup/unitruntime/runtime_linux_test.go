@@ -535,9 +535,9 @@ func TestRuntimeLinuxRebootClearsReusedPIDAndInterruptedDrain(t *testing.T) {
 	stale := actual
 	stale.processIdentity = identity
 	stale.Launcher = nil
+	stale.KernelBootID = "00000000-0000-0000-0000-000000000000"
 	require.NoError(t, writeState(state.pids, "web-host.json", stale))
-	require.NoError(t, writeState(state.draining, "web-host", drainRecord{PID: identity.PID, StartTicks: identity.StartTicks, StartedAt: time.Now().UTC(), Budget: time.Second, TermSent: true}))
-	require.NoError(t, writeState(state.run, bootStateName, bootState{KernelBootID: "00000000-0000-0000-0000-000000000000", RecordedAt: time.Now().UTC()}))
+	require.NoError(t, writeState(state.draining, "web-host", drainRecord{PID: identity.PID, StartTicks: identity.StartTicks, KernelBootID: stale.KernelBootID, StartedAt: time.Now().UTC(), Budget: time.Second, TermSent: true}))
 
 	checked := runRuntime(t, path, "healthcheck")
 	require.Equal(t, []BootRecovery{{Component: "web-host", Kind: "draining"}, {Component: "web-host", Kind: "pid"}}, checked.BootRecovered)
@@ -547,11 +547,6 @@ func TestRuntimeLinuxRebootClearsReusedPIDAndInterruptedDrain(t *testing.T) {
 	require.NotEqual(t, identity.PID, checked.Components[0].PID)
 	require.NoError(t, unrelated.Process.Signal(syscall.Signal(0)), "复用了 PID 的无关进程不能被误杀")
 
-	current, err := readKernelBootID()
-	require.NoError(t, err)
-	var saved bootState
-	require.NoError(t, privateJSON(filepath.Join(plan.DeploymentRoot, "run", bootStateName), &saved))
-	require.Equal(t, current, saved.KernelBootID)
 	again := runRuntime(t, path, "healthcheck")
 	require.Empty(t, again.BootRecovered)
 	require.Equal(t, checked.Components[0].PID, again.Components[0].PID)
@@ -602,7 +597,9 @@ func TestRuntimeLinuxStartBarrierRejectsUnrecordedChildAndRecoversDurableLaunch(
 			require.NoError(t, err)
 			values, stop, startup, err := state.prepare(plan.Components[0])
 			require.NoError(t, err)
-			record := pidRecord{processIdentity: final, HostID: plan.HostID, ComponentID: "console-proxy", ReleaseRoot: plan.ReleaseRoot, StopTimeout: stop, BinarySHA256: values["MOOX_BINARY_SHA256"], BootID: strings.Repeat("a", 64), StartedAt: time.Now().UTC(), StartupTimeout: startup, Launcher: &launch}
+			kernelBoot, err := readKernelBootID()
+			require.NoError(t, err)
+			record := pidRecord{processIdentity: final, HostID: plan.HostID, ComponentID: "console-proxy", ReleaseRoot: plan.ReleaseRoot, StopTimeout: stop, BinarySHA256: values["MOOX_BINARY_SHA256"], BootID: strings.Repeat("a", 64), KernelBootID: kernelBoot, StartedAt: time.Now().UTC(), StartupTimeout: startup, Launcher: &launch}
 			require.NoError(t, writeState(state.pids, "console-proxy.json", record))
 			if phase == "recorded-after-exec" {
 				_, err = release.Write([]byte{1})

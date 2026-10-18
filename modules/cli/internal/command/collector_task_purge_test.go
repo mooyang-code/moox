@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 
 	"github.com/glebarez/sqlite"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
