@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
+	"github.com/mooyang-code/moox/modules/cli/internal/tencenthost"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 )
 
@@ -83,8 +83,8 @@ func (tencentCloud) Lookup(ctx context.Context, keys Keys, address string) (Inst
 	if err != nil {
 		return Instance{}, err
 	}
-	found, err := (privatenet.TencentCloud{Network: network, Lighthouse: lighthouse}).LookupHost(ctx, address, tencent.ProbeRegions(homeRegion))
-	if errors.Is(err, privatenet.ErrHostNotFound) {
+	found, err := (tencenthost.TencentCloud{Network: network, Lighthouse: lighthouse}).LookupHost(ctx, address, tencent.ProbeRegions(homeRegion))
+	if errors.Is(err, tencenthost.ErrHostNotFound) {
 		return Instance{}, errNotInAccount
 	}
 	if err != nil {

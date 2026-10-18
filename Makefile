@@ -109,7 +109,6 @@ verify-custom-setup:
 
 test-caddy:
 	bash scripts/test/contract/test-install-caddy-ca.sh
-	bash skills/moox/scripts/test-caddy-prerequisite.sh
 	bash skills/moox/scripts/test-caddy-ca.sh
 
 test-collector-scf-package-contract:
@@ -122,7 +121,6 @@ test-skill-contracts:
 	bash scripts/build/package-skill_test.sh
 	bash skills/moox/scripts/test-data-query-contract.sh
 	bash skills/moox/scripts/test-private-network-contract.sh
-	bash skills/moox/scripts/test-hostagent-deploy.sh
 	bash skills/moox/scripts/test-eventbus-credentials-contract.sh
 	bash skills/moox/scripts/test-native-release.sh
 	bash skills/moox/scripts/test-factor-convert-contract.sh

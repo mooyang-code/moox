@@ -119,7 +119,7 @@ type UpdateFunctionConfigurationRequest struct {
 	VpcID                  string
 	SubnetID               string
 	// ClearVPC explicitly sends an empty VpcConfig during an update, removing
-	// a previous private-network binding. Omitting VpcConfig otherwise keeps
+	// the function's VPC binding. Omitting VpcConfig otherwise keeps
 	// the current SCF network unchanged for ordinary environment updates.
 	ClearVPC bool
 	// ClearNativeCLS explicitly sends empty CLS ids during an update, removing

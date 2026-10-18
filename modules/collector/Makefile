@@ -1,6 +1,5 @@
 ROOT := ../..
 APP_NAME := moox-collector
-SERVER ?= $(MOOX_DEV_SSH_TARGET)
 
 .PHONY: help build build-linux build-darwin build-scf package-scf clean deps lint linux darwin
 

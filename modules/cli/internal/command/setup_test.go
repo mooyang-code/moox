@@ -81,7 +81,7 @@ func TestSetupHelpListsWorkflowCommands(t *testing.T) {
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
-	for _, name := range []string{"init", "hosts", "validate", "trust-host", "trust-browser", "build-linux", "apply", "status", "deploy-host", "deploy-unit", "bootstrap", "release", "watchdog", "metadata-import", "verify-storage", "e2e-storage", "browser-e2e-storage", "export-skill-config", "firewall", "private-network"} {
+	for _, name := range []string{"init", "hosts", "validate", "trust-host", "trust-browser", "build-linux", "apply", "status", "deploy-host", "deploy-unit", "bootstrap", "release", "watchdog", "metadata-import", "export-skill-config", "firewall"} {
 		require.Contains(t, output.String(), name)
 	}
 	require.Contains(t, output.String(), "render-runtime-config")

@@ -1,6 +1,5 @@
 ROOT := ../..
 APP_NAME := moox-admin
-SERVER ?= $(MOOX_DEV_SSH_TARGET)
 
 .PHONY: help build build-linux build-darwin build-windows build-all clean deps lint install linux darwin windows
 

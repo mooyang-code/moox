@@ -1522,7 +1522,7 @@ func (r *PlanReconciler) logPlan(ctx context.Context, record *store.FetchPlanRec
 	return r.Activity.AppendActivityLogs(ctx, r.SpaceID, entries)
 }
 
-// BackfillFunctionName 返回某市场、地域的补采函数名。名称含 PlanFleetMarker，旧的 Invoke 节点池不会选用它。
+// BackfillFunctionName 返回某市场、地域的补采函数名，名称含 PlanFleetMarker。
 func BackfillFunctionName(spaceID, marketType, region string) string {
 	region = strings.TrimPrefix(strings.ToLower(region), "ap-")
 	return fmt.Sprintf("moox-fetch%sbackfill-%s-%s-%s", PlanFleetMarker, planNameSanitizer.Replace(strings.ToLower(spaceID)),

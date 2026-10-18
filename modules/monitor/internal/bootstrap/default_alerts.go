@@ -134,15 +134,6 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 		// 磁盘写满是 Storage / View 故障的首要原因：在写满之前尽早告警，留出清理时间。
 		hostmetrics.HostMetricFilesystemUsage: `{"threshold":85,"recovery_threshold":80}`,
 	}
-	// 磁盘繁忙度、网络错误包两类告警已精简掉（个人系统噪声大、价值低）：删除存量规则。
-	for _, retired := range []string{"disk_utilization", "network_errors"} {
-		for _, agent := range agents {
-			checkID := hostmetrics.HostRulePrefix + agent.AgentID + ":" + retired
-			if err := repositories.Alerts.DeleteRule(ctx, hostmetrics.SpaceID, "default:"+checkID); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-				return err
-			}
-		}
-	}
 	for _, agent := range agents {
 		for metric, definition := range definitions {
 			failureThreshold := hostFailureThresholds[metric]

@@ -206,15 +206,11 @@ test("refresh and direct routes stay available for collection pages", async ({ p
   await expect(page.getByRole("heading", { name: "Binance 现货 K 线 1m" })).toBeVisible();
 });
 
-test("groups cloud nodes under collection tasks and redirects the legacy route", async ({ page }) => {
+test("groups cloud nodes under collection tasks", async ({ page }) => {
   await page.goto("/#/collector/tasks?tab=executors");
   await expect(page.getByLabel("采集任务")).toBeVisible();
   await expect(page.getByText("执行器", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "云节点" })).toHaveCount(0);
-
-  await page.goto("/#/collector/cloudnodes");
-  await expect(page).toHaveURL(/#\/collector\/tasks\?tab=executors/);
-  await expect(page.getByText("执行器", { exact: true })).toBeVisible();
 });
 
 test("shows task-owned real data and the K-line modal", async ({ page }) => {

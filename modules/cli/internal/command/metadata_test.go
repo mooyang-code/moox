@@ -11,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -908,3 +909,5 @@ func TestApplyProbeResultDatasetColumns(t *testing.T) {
 	assert.True(t, found)
 	assert.Equal(t, column, actual)
 }
+
+func storageOK() *storagepb.RetInfo { return &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS} }

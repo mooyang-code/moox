@@ -27,15 +27,4 @@ describe("账户工作台契约", () => {
     expect(source).toContain('logical_account_id: view === "trading" ? undefined : route.query.logical_account_id');
     expect(source).toContain('router.replace({ path: "/trading/accounts", query })');
   });
-
-  it("将旧组合账户入口重定向到统一工作台", () => {
-    const source = read(routePath);
-    expect(source).toContain('path: "/trading/accounts"');
-    expect(source).toContain('path: "/trading/logical-accounts"');
-    expect(source).toContain('view: "strategy"');
-    expect(source).toContain("...to.query");
-    expect(source).not.toContain(
-      'path: "/trading/logical-accounts",\n        name: "trading-logical-accounts",\n        component:'
-    );
-  });
 });

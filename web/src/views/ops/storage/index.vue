@@ -28,7 +28,7 @@ const activeTab = ref<StorageConfigTab>(normalizeTab(route.query.tab));
 
 const activeComponent = computed(() => ({ nodes: DataNodes })[activeTab.value]);
 
-// 旧的归档页签已随旧归档实现删除，任何取值都回到数据节点。
+// 目前只有数据节点一个页签，任何取值都回到数据节点。
 function normalizeTab(_value: unknown): StorageConfigTab {
   return "nodes";
 }

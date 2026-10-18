@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
+	"github.com/mooyang-code/moox/modules/cli/internal/tencenthost"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/spf13/cobra"
@@ -168,7 +168,7 @@ func ensureFirewallRuleAtDiscoveredRegion(ctx context.Context, manifest setupcon
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	instance, err := (privatenet.TencentCloud{Network: network, Lighthouse: lighthouse}).LookupHost(
+	instance, err := (tencenthost.TencentCloud{Network: network, Lighthouse: lighthouse}).LookupHost(
 		lookupCtx, address, cloudtencent.ProbeRegions(manifest.TencentCloud.Region),
 	)
 	if err != nil {

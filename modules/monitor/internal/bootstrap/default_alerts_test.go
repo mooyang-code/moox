@@ -85,20 +85,8 @@ func TestEnsureDefaultHostAlertRulesCoversRegisteredAgent(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// 存量库里已精简掉的主机告警（磁盘繁忙度、网络错误包）必须被清理。
-	for _, retired := range []string{"disk_utilization", "network_errors"} {
-		checkID := "host:agent-a:" + retired
-		if err := repositories.Alerts.CreateRule(t.Context(), &domain.AlertRule{SpaceID: hostmetrics.SpaceID, RuleID: "default:" + checkID, CheckID: checkID, FailureThreshold: 20, SuccessThreshold: 1, Enabled: true}); err != nil {
-			t.Fatal(err)
-		}
-	}
 	if err := ensureDefaultHostAlertRules(t.Context(), repositories, registry); err != nil {
 		t.Fatal(err)
-	}
-	for _, retired := range []string{"disk_utilization", "network_errors"} {
-		if _, err := repositories.Alerts.GetRule(t.Context(), hostmetrics.SpaceID, "default:host:agent-a:"+retired); err == nil {
-			t.Fatalf("retired host rule %s was not removed", retired)
-		}
 	}
 	rules, err := repositories.Alerts.ListRules(t.Context(), hostmetrics.SpaceID)
 	if err != nil {

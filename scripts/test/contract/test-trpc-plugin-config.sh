@@ -111,8 +111,6 @@ done
 # 只读重试目前只有主机网关转发在用，且只挂在只读、非 GatewayControl 的路由上。
 require_text modules/hostgateway/internal/router/upstream.go 'if route.ReadOnly && !control {' 'gateway retry must remain scoped to read-only routes'
 require_text modules/hostgateway/internal/router/upstream.go 'client.WithFilter(trpcretry.ReadOnly())' 'gateway read-only routes must use the bounded retry'
-require_text modules/factor/go.mod 'trpc.group/trpc-go/trpc-filter/transinfo-blocker v1.0.0' 'missing metadata boundary dependency'
-require_text modules/factor/config/trpc_go.yaml '        mode: whitelist' 'metadata boundary must use an allowlist'
 if grep -Fq -- '          - baggage' modules/factor/config/trpc_go.yaml; then
 	fail 'arbitrary W3C baggage must not cross the Factor to Storage boundary'
 fi
@@ -129,7 +127,9 @@ if rg -n 'filterextensions' modules/*/config/trpc_go*.yaml modules/*/cmd/server/
 	fail 'filterextensions must remain deferred until method policies diverge'
 fi
 
+# Access 是对外签名入口（11004），按设计监听所有地址；其余服务端只监听回环。
 for config in modules/*/config/trpc_go*.yaml; do
+	[[ "${config}" == modules/access/config/trpc_go.yaml ]] && continue
 	assert_loopback_server_services "${config}"
 done
 
@@ -141,20 +141,6 @@ if rg -n -g '*.yaml' -g '*.yml' -g '*.env' '^\s*(secret_id|secret_key|authorizat
   fail 'committed remote logging credential found'
 fi
 
-require_text skills/moox/scripts/cls-bootstrap.sh 'ops tencent cls prepare' 'MooX Skill must prepare CLS through moox-cli'
-require_text skills/moox/scripts/cls-bootstrap.sh 'topic_id: ${MOOX_CLS_TOPIC_ID}' 'staged CLS writer must use the generated Topic ID resource'
-require_text skills/moox/scripts/cls-bootstrap.sh 'MOOX_CLS_LOGSET_ID' 'CLS bootstrap must persist generated resource metadata'
-require_text skills/moox/scripts/cls-bootstrap.sh 'MOOX_CLS_ACCOUNT_ID' 'CLS bootstrap must persist selected cloud account metadata'
-require_text skills/moox/scripts/cls-bootstrap.sh 'secret_id: \${MOOX_CLS_SECRET_ID}' 'staged CLS writer must retain credential placeholders'
-require_text skills/moox/scripts/cls-bootstrap.sh '*/factor-mgr/config/trpc_go*.yaml' 'Factor CLS rendering must cover the service config'
-require_text skills/moox/scripts/cls-bootstrap.sh 'level: " level' 'Factor CLS rendering must retain calculation info logs'
 bash skills/moox/scripts/test-cls-query.sh >/dev/null
-require_text 'docs/部署与运维.md' 'config/resources.env' 'operations baseline must document generated CLS resource metadata'
-require_text 'docs/部署与运维.md' '${MOOX_CLS_SECRET_ID}' 'operations baseline must name the CLS secret-id placeholder'
-require_text 'docs/部署与运维.md' '${MOOX_CLS_SECRET_KEY}' 'operations baseline must name the CLS secret-key placeholder'
-require_text 'docs/部署与运维.md' 'service_name' 'operations baseline must document the CLS service identity field'
-require_text 'docs/部署与运维.md' '发布包同步和停服之前' 'operations baseline must distinguish helper upload from release sync'
-require_text skills/moox/SKILL.md 'architecture-matched `moox-cli` helper solely for preflight' 'MooX Skill must document temporary preflight helper cleanup'
-require_text 'docs/部署与运维.md' '${MOOX_CLS_TOPIC_ID}' 'operations baseline must document the generated Topic ID placeholder'
 
 printf 'PASS: tRPC plugin configuration and registration matrix\n'

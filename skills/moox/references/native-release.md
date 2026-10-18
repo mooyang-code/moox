@@ -1,8 +1,7 @@
 # 原生部署的发布流程（Agent 用）
 
 适用于线上这套**原生部署**（`/data/moox/<单元>/releases/<发布ID>` + `current`，由 `moox-runtime` 管理进程）：
-在构建机上构建 Linux 二进制，经本机中转，逐台替换并重启，核对 sha 与就绪。旧的 `deploy-moox.sh`、`setup deploy-service` ZIP 包流程
-（[`service-release.md`](service-release.md)、[`release.md`](release.md)）属于切换前的部署方式，不要用来发布当前线上。
+在构建机上构建 Linux 二进制，经本机中转，逐台替换并重启，核对 sha 与就绪。
 
 固化的步骤在 `skills/moox/scripts/native-release.sh`（契约测试 `test-native-release.sh`）；这里写流程、顺序和陷阱。
 

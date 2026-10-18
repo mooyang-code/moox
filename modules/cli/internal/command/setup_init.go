@@ -13,7 +13,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	"github.com/mooyang-code/moox/modules/cli/internal/clsprepare"
-	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
@@ -71,7 +70,6 @@ type setupInitSummary struct {
 	Datasets         setupDatasetActivationSummary `json:"datasets"`
 	Verification     setupInitMetadataCounts       `json:"verification"`
 	Factors          *setupFactorSummary           `json:"factors,omitempty"`
-	SCFRoutes        *privatenet.SCFRoutePlan      `json:"scf_routes,omitempty"`
 }
 
 func newSetupInitCommand(deps setupDeps) *cobra.Command {
@@ -110,20 +108,8 @@ func runSetupInit(
 	file, configDir, storageHost string,
 	bundle setupInitBundle,
 ) (setupInitSummary, error) {
-	// Resolve the Storage placement before mutating Admin/metadata. This is a
-	// read-only preflight: collector publication later consumes the same plan
-	// and applies private routing only to SCF functions in Storage's Tencent
-	// region.
 	if err := snapshot.Manifest.RequireNotification(); err != nil {
 		return setupInitSummary{}, err
-	}
-	var scfRoutes *privatenet.SCFRoutePlan
-	if snapshot.Manifest.SCFPlan.Enabled && snapshot.Manifest.HasStorageHost() && strings.EqualFold(strings.TrimSpace(snapshot.Manifest.StorageHost().Provider), "tencent") {
-		plan, routeErr := deps.resolveSCFRoutes(ctx, snapshot, "")
-		if routeErr != nil {
-			return setupInitSummary{}, fmt.Errorf("scf-network: %w", routeErr)
-		}
-		scfRoutes = &plan
 	}
 	// Open the cloud ingress required by every configured public runtime endpoint
 	// before the first Admin/Storage mutation.
@@ -233,7 +219,7 @@ func runSetupInit(
 		Verification: setupInitMetadataCounts{
 			Planned: verification.Planned, Unchanged: verification.Unchanged,
 		},
-		Factors: factorSummary, SCFRoutes: scfRoutes,
+		Factors: factorSummary,
 	}, nil
 }
 

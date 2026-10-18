@@ -119,18 +119,3 @@ func TestCollectorTimerEnvironmentRejectsIncompleteOrInvalidManagedValues(t *tes
 		})
 	}
 }
-
-func TestCollectorAccessPublicationRemovesInternalGatewayCredentials(t *testing.T) {
-	for _, key := range collectorInternalGatewayEnvironmentKeys {
-		values := map[string]string{key: "private-internal-test-value", "MOOX_CALLER_KEY": strings.Repeat("a", 64), "MOOX_CLS_SECRET_KEY": "preserve-cls-key"}
-		if err := ValidateCollectorMarketFetchEnvironment(values); err == nil || !strings.Contains(err.Error(), key) || strings.Contains(err.Error(), "private-internal-test-value") {
-			t.Fatalf("internal field %s must be rejected without disclosure: %v", key, err)
-		}
-		if !RemoveCollectorInternalGatewayEnvironment(values) || RemoveCollectorInternalGatewayEnvironment(values) {
-			t.Fatalf("internal field %s was not removed exactly once", key)
-		}
-		if len(values) != 2 || values["MOOX_CLS_SECRET_KEY"] != "preserve-cls-key" || values["MOOX_CALLER_KEY"] != strings.Repeat("a", 64) {
-			t.Fatalf("removing %s changed unrelated credentials", key)
-		}
-	}
-}

@@ -223,7 +223,6 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 		environment = make(map[string]string)
 	}
 	needsEnvironmentUpdate := !managedEnvironmentMatches(environment, item.GetManagedEnvironment())
-	needsEnvironmentUpdate = tencent.RemoveCollectorInternalGatewayEnvironment(environment) || needsEnvironmentUpdate
 	for key, value := range item.GetManagedEnvironment() {
 		environment[key] = value
 	}

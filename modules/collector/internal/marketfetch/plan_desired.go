@@ -74,7 +74,7 @@ func planMarketKey(group TaskGroup) string {
 
 var planNameSanitizer = strings.NewReplacer("_", "", " ", "", ".", "")
 
-// PlanFunctionName 返回第 index 个函数的名称，名称含 PlanFleetMarker 以便旧链路识别并排除。
+// PlanFunctionName 返回第 index 个函数的名称，名称含 PlanFleetMarker。
 func PlanFunctionName(spaceID, marketType, region string, index int) string {
 	region = strings.TrimPrefix(strings.ToLower(region), "ap-")
 	return fmt.Sprintf("moox-fetch%s%s-%s-%s-%03d", PlanFleetMarker, planNameSanitizer.Replace(strings.ToLower(spaceID)),

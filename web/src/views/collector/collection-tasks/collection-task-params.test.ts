@@ -79,12 +79,10 @@ describe("collection task params", () => {
     expect(payload.collect_params).toMatchObject({ provider: "moox", market_type: "spot" });
   });
 
-  it("parses resample routing only from collect_params", () => {
+  it("parses resample routing from collect_params", () => {
     const task = normalizeCollectionTask({
       task_id: "resample-routing",
       data_type: "kline_resample",
-      provider: "legacy-top-level",
-      market_type: "swap",
       collect_params: {
         provider: "moox",
         market_type: "spot",
@@ -150,8 +148,6 @@ describe("collection task params", () => {
       task_name: "任务一",
       data_type: "kline_resample",
       tag_ids: ["source_tag"],
-      provider: "legacy-provider-must-be-ignored",
-      market_type: "swap",
       enabled: "false",
       collect_params: '{"provider":"moox","market_type":"spot","target_frequency":"5m"}',
       result: { view_id: "view-1", status: "ready" }

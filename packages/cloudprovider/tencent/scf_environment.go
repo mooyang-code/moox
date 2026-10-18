@@ -57,28 +57,6 @@ func ValidateCollectorAccessEnvironment(values map[string]string) error {
 	return nil
 }
 
-// RemoveCollectorInternalGatewayEnvironment clears internal credentials and
-// addresses when a function is published with the external Access contract.
-func RemoveCollectorInternalGatewayEnvironment(values map[string]string) bool {
-	changed := false
-	for _, key := range collectorInternalGatewayEnvironmentKeys {
-		if _, ok := values[key]; ok {
-			delete(values, key)
-			changed = true
-		}
-	}
-	return changed
-}
-
-var collectorInternalGatewayEnvironmentKeys = [...]string{
-	"MOOX_STORAGE_RPC_GATEWAY_TARGET", "MOOX_GATEWAY_NODE_ID", "MOOX_GATEWAY_TARGET_NODE",
-	"MOOX_GATEWAY_CALLER", "MOOX_GATEWAY_SERVICE_KEY_ID", "MOOX_GATEWAY_SERVICE_SECRET_KEY",
-	"MOOX_COLLECTOR_RPC_GATEWAY_TARGET", "MOOX_COLLECTOR_GATEWAY_TARGET_NODE", "MOOX_COLLECTOR_NODE_ID",
-	"MOOX_COLLECTOR_GATEWAY_SERVICE_KEY_ID", "MOOX_COLLECTOR_GATEWAY_SERVICE_SECRET_KEY",
-	"MOOX_RPC_SERVICE_ID", "MOOX_RPC_SERVICE_SECRET", "MOOX_GATEWAY_CA_FILE", "MOOX_GATEWAY_CA_PEM_B64",
-	"MOOX_SERVICE_GATEWAY_CA_FILE", "MOOX_SERVICE_GATEWAY_CA_PEM_B64",
-}
-
 // collectorPlanEnvironmentKey 是定时触发采集计划的环境变量名，必须与 marketfetch.PlanEnvName 一致。
 const collectorPlanEnvironmentKey = "MOOX_MARKET_FETCH_PLAN"
 
@@ -88,11 +66,6 @@ func ValidateCollectorMarketFetchEnvironment(values map[string]string) error {
 	// 采集计划函数与补采函数（MOOX_MARKET_FETCH_MODE=backfill，不带计划）都不连 EventBus。
 	if strings.TrimSpace(values[collectorPlanEnvironmentKey]) != "" || strings.TrimSpace(values["MOOX_MARKET_FETCH_MODE"]) == "backfill" {
 		return validateCollectorPlanEnvironment(values)
-	}
-	for _, key := range collectorInternalGatewayEnvironmentKeys {
-		if _, ok := values[key]; ok {
-			return fmt.Errorf("collector Access environment must not contain internal gateway field %s", key)
-		}
 	}
 	if err := ValidateSCFEnvironment(values); err != nil {
 		return err
@@ -217,11 +190,6 @@ func ValidateSCFEnvironment(values map[string]string) error {
 // validateCollectorPlanEnvironment 校验定时触发采集函数的环境：携带采集计划，经 Access 访问
 // Storage，诊断写 CLS，不连接 EventBus，因此不得出现任何 EventBus 变量。
 func validateCollectorPlanEnvironment(values map[string]string) error {
-	for _, key := range collectorInternalGatewayEnvironmentKeys {
-		if _, ok := values[key]; ok {
-			return fmt.Errorf("collector Access environment must not contain internal gateway field %s", key)
-		}
-	}
 	for key := range values {
 		if strings.HasPrefix(key, "MOOX_EVENTBUS_") || key == "MOOX_METRICS_EVENTBUS_URL" || key == "MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE" || key == "NATS_URL" {
 			return fmt.Errorf("collector plan environment must not contain EventBus field %s", key)

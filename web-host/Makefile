@@ -1,6 +1,5 @@
 ROOT := ..
 APP_NAME := moox-web-host
-SERVER ?= $(MOOX_DEV_SSH_TARGET)
 STATIK_VERSION ?= v0.1.7
 
 .PHONY: help statik build build-linux build-darwin build-windows build-all clean deps lint install linux darwin windows

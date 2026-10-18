@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,12 +11,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/cli/internal/privatenet"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	setupvalidate "github.com/mooyang-code/moox/modules/cli/internal/setup/validate"
+	"github.com/mooyang-code/moox/modules/cli/internal/tencenthost"
 	cloudtencent "github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
 )
@@ -47,14 +46,9 @@ type setupDeps struct {
 	initStorage           func(context.Context, *setupconfig.Snapshot, string, string, string, setupInitBundle) (setupInitSummary, error)
 	installWatchdog       func(context.Context, *setupconfig.Snapshot, setupconfig.Host, bool) (json.RawMessage, error)
 	importMetadata        func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
-	verifyStorage         func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
-	e2eStorage            func(context.Context, *setupconfig.Snapshot, string, string) (storageE2EResult, error)
-	browserE2EStorage     func(context.Context, *setupconfig.Snapshot, string, string, bool) (storageBrowserResult, error)
 	exportSkillConfig     func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
 	ensureFirewall        func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
 	ensureRelayFirewall   func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
-	ensurePrivateNetwork  func(context.Context, *setupconfig.Snapshot, privatenet.Options, io.Writer) (privatenet.Result, error)
-	resolveSCFRoutes      func(context.Context, *setupconfig.Snapshot, string) (privatenet.SCFRoutePlan, error)
 }
 
 func init() {
@@ -86,22 +80,14 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupApplyCommand(deps),
 		newSetupStatusCommand(deps),
 		newSetupRebootHostCommand(deps),
-		newSetupRestartHostCommand(deps),
 		newSetupHostDiagnosticsCommand(deps),
-		newSetupConsoleProxyPreflightCommand(deps),
-		newSetupPurgeEventBusCommand(deps),
 		newSetupInspectSCFCommand(deps),
 		newSetupAttachSCFVPCCommand(deps),
 		newSetupInvokeSCFCommand(deps),
 		newSetupWatchdogCommand(deps),
 		newSetupMetadataImportCommand(deps),
-		newSetupVerifyStorageCommand(deps),
-		newSetupE2EStorageCommand(deps),
-		newSetupBrowserE2EStorageCommand(deps),
 		newSetupExportSkillConfigCommand(deps),
 		newSetupFirewallCommand(deps),
-		newSetupPrivateNetworkCommand(deps),
-		newSetupSCFNetworkPlanCommand(deps),
 	)
 	return cmd
 }
@@ -140,15 +126,15 @@ func newSetupInspectSCFCommand(deps setupDeps) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			envTarget := ""
+			accessAddress := ""
 			if fn.Environment != nil {
-				envTarget = fn.Environment["MOOX_STORAGE_RPC_GATEWAY_TARGET"]
+				accessAddress = fn.Environment["MOOX_ACCESS_ADDRESS"]
 			}
 			return writeSetupJSON(cmd, map[string]any{
 				"region": region, "namespace": namespace, "function": functionName,
 				"status": fn.Status, "vpc_id": fn.VpcID, "subnet_id": fn.SubnetID,
 				"public_net_status": fn.PublicNetStatus,
-				"storage_target":    envTarget,
+				"access_address":    accessAddress,
 			})
 		},
 	}
@@ -296,7 +282,7 @@ func newSetupRebootHostCommand(deps setupDeps) *cobra.Command {
 			if lighthouseErr != nil {
 				return lighthouseErr
 			}
-			cloud := privatenet.TencentCloud{Network: network, Lighthouse: lighthouse}
+			cloud := tencenthost.TencentCloud{Network: network, Lighthouse: lighthouse}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 60*time.Second)
 			defer cancel()
 			instance, err := cloud.LookupHost(ctx, host.Address, cloudtencent.DefaultProbeRegions)
@@ -333,75 +319,6 @@ func newSetupRebootHostCommand(deps setupDeps) *cobra.Command {
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	cmd.Flags().StringVar(&hostName, "host", "", "目标主机名称")
 	_ = cmd.MarkFlagRequired("host")
-	return cmd
-}
-
-// newSetupRestartHostCommand is intentionally separate from deployment. It is
-// useful after an interrupted remote rollout, where the binaries are still
-// intact but the supervisor was left stopped.
-func newSetupRestartHostCommand(deps setupDeps) *cobra.Command {
-	var file, hostName, service string
-	cmd := &cobra.Command{
-		Use:   "restart-host",
-		Short: "启动远端部署服务",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			snapshot, err := deps.load(file)
-			if err != nil {
-				return err
-			}
-			defer clearSetupSecrets(snapshot)
-			host, err := findSetupHost(snapshot.Manifest, hostName)
-			if err != nil {
-				return err
-			}
-			transport, err := dialSetupHost(cmd.Context(), host)
-			if err != nil {
-				return err
-			}
-			defer transport.Close()
-			paths := snapshot.Manifest.Paths.Resolved()
-			root := paths.DeployRoot
-			if strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
-				root = paths.ControlRoot
-			} else if snapshot.Manifest.HasStorageHost() && strings.EqualFold(host.Name, snapshot.Manifest.StorageHost().Name) {
-				root = paths.StorageRoot
-			}
-			result, err := transport.Run(cmd.Context(), []string{
-				"sh", "-lc",
-				`set -eu
-root="$1"
-service="$2"
-if [ ! -x "$root/start.sh" ]; then
-  echo "missing start script at $root/start.sh" >&2
-  ls -ld "$root" "$root/start.sh" 2>&1 || true
-  exit 2
-fi
-if [ -n "$service" ]; then
-  "$root/start.sh" "$service"
-else
-  "$root/start.sh"
-fi
-`, "moox-restart-host", root, strings.TrimSpace(service),
-			}, nil)
-			if err != nil {
-				detail := strings.TrimSpace(result.Stderr)
-				if detail == "" {
-					detail = strings.TrimSpace(result.Stdout)
-				}
-				if len(detail) > 512 {
-					detail = detail[len(detail)-512:]
-				}
-				if detail != "" {
-					return fmt.Errorf("restart_host_failed: %s", detail)
-				}
-				return fmt.Errorf("restart_host_failed: %v", err)
-			}
-			return writeSetupJSON(cmd, map[string]any{"host": hostName, "service": service, "status": "started"})
-		},
-	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&hostName, "host", "control", "主机名称")
-	cmd.Flags().StringVar(&service, "service", "", "仅启动指定服务；留空启动默认服务")
 	return cmd
 }
 
@@ -453,60 +370,6 @@ done
 				return fmt.Errorf("host_diagnostics_failed: %v", err)
 			}
 			return writeSetupJSON(cmd, map[string]any{"host": host.Name, "root": root, "diagnostics": result.Stdout})
-		},
-	}
-	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
-	cmd.Flags().StringVar(&hostName, "host", "control", "主机名称")
-	return cmd
-}
-
-// newSetupPurgeEventBusCommand clears only the local JetStream payloads on a
-// control host. The current environment is pre-production and the event bus
-// data is rebuildable; this is the minimal recovery action when NATS refuses
-// to create streams because its filesystem is full.
-func newSetupPurgeEventBusCommand(deps setupDeps) *cobra.Command {
-	var file, hostName string
-	cmd := &cobra.Command{
-		Use:   "purge-eventbus-data",
-		Short: "清理控制面 EventBus 可重建数据",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			snapshot, err := deps.load(file)
-			if err != nil {
-				return err
-			}
-			defer clearSetupSecrets(snapshot)
-			host, err := findSetupHost(snapshot.Manifest, hostName)
-			if err != nil {
-				return err
-			}
-			transport, err := dialSetupHost(cmd.Context(), host)
-			if err != nil {
-				return err
-			}
-			defer transport.Close()
-			root := snapshot.Manifest.Paths.Resolved().DeployRoot
-			if strings.EqualFold(host.Name, snapshot.Manifest.ControlHost().Name) {
-				root = snapshot.Manifest.Paths.Resolved().ControlRoot
-			}
-			result, err := transport.Run(cmd.Context(), []string{"sh", "-lc", `set -eu
-root="$1"
-if [ ! -x "$root/stop.sh" ]; then echo stop_script_missing >&2; exit 1; fi
-# Stop every control-plane writer before unlinking SQLite/WAL files. This
-# command is intentionally destructive and is only for rebuildable preprod
-# state; callers must explicitly restart the host afterwards.
-"$root/stop.sh" >/dev/null
-rm -rf "$root/data/eventbus/jetstream"
-mkdir -p "$root/data/eventbus/jetstream"
-# Collector and archive-state are rebuildable control-plane state in this
-# pre-production environment; remove them only after all writers are stopped.
-rm -rf "$root/data/collector" "$root/data/archive-state"
-mkdir -p "$root/data/collector" "$root/data/archive-state"
-df -h "$root" | tail -1
-`, "moox-purge-eventbus-data", root}, nil)
-			if err != nil {
-				return fmt.Errorf("purge_eventbus_data_failed: %v", err)
-			}
-			return writeSetupJSON(cmd, map[string]any{"host": host.Name, "status": "purged", "disk": strings.TrimSpace(result.Stdout)})
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
@@ -877,15 +740,6 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.importMetadata == nil {
 		deps.importMetadata = defaults.importMetadata
 	}
-	if deps.verifyStorage == nil {
-		deps.verifyStorage = defaults.verifyStorage
-	}
-	if deps.e2eStorage == nil {
-		deps.e2eStorage = defaults.e2eStorage
-	}
-	if deps.browserE2EStorage == nil {
-		deps.browserE2EStorage = defaults.browserE2EStorage
-	}
 	if deps.exportSkillConfig == nil {
 		deps.exportSkillConfig = defaults.exportSkillConfig
 	}
@@ -894,12 +748,6 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	}
 	if deps.ensureFirewall == nil {
 		deps.ensureFirewall = defaults.ensureFirewall
-	}
-	if deps.ensurePrivateNetwork == nil {
-		deps.ensurePrivateNetwork = defaults.ensurePrivateNetwork
-	}
-	if deps.resolveSCFRoutes == nil {
-		deps.resolveSCFRoutes = defaults.resolveSCFRoutes
 	}
 	return deps
 }
@@ -928,14 +776,9 @@ func defaultSetupDeps() setupDeps {
 		initStorage:           nil,
 		installWatchdog:       defaultSetupInstallWatchdog,
 		importMetadata:        defaultSetupImportMetadata,
-		verifyStorage:         defaultSetupVerifyStorage,
-		e2eStorage:            defaultSetupE2EStorage,
-		browserE2EStorage:     defaultSetupBrowserE2EStorage,
 		exportSkillConfig:     defaultSetupExportSkillConfig,
 		ensureFirewall:        defaultSetupEnsureFirewall,
 		ensureRelayFirewall:   setupEnsureRelayFirewall,
-		ensurePrivateNetwork:  defaultEnsurePrivateNetwork,
-		resolveSCFRoutes:      resolveSCFRoutePlan,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			baseURL := fmt.Sprintf("https://%s:9527", snapshot.Manifest.ControlHost().Address)
 			tlsMode := tlstrust.TLSMode(snapshot.Manifest.ControlHost().TLSMode)

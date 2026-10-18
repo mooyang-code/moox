@@ -13,6 +13,6 @@ go test -count=1 ./modules/hostagent/...
 
 ## 配置
 
-`config/app.yaml`（身份文件、EventBus 凭据、健康端口、`host_name`）、`config/trpc_go.yaml`。部署使用 `skills/moox/scripts/hostagent-deploy.sh`。
+`config/app.yaml`（身份文件、EventBus 凭据、健康端口、`host_name`）、`config/trpc_go.yaml`。随每台主机的 host 单元（`setup deploy-host`）安装，EventBus 凭据在安装时从 Admin 导出写入发布目录。
 
 HostAgentMgr 管理接口使用 loopback 原生 tRPC 11426，经共享网关调用；健康检查继续使用原有独立 HTTP 端点。

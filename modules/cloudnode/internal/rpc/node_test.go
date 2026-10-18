@@ -613,7 +613,7 @@ func TestExecuteRuntimeConfigDoesNotEnableTimerWithIncompleteDependencies(t *tes
 	require.Zero(t, fake.timerEnsures, "invalid runtime dependencies must not enable the Timer trigger")
 }
 
-func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
+func TestExecuteRuntimeConfigAppliesClaimRoutingAndTimeout(t *testing.T) {
 	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
 	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
@@ -625,7 +625,6 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	environment["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"] = "assignment"
 	environment["MOOX_MARKET_FETCH_SUBJECT_COUNT"] = "80"
 	environment["MOOX_EVENTBUS_NATS_PASSWORD"] = "keep-password"
-	environment["MOOX_GATEWAY_SERVICE_SECRET_KEY"] = "remove-internal-key"
 	fake := &fakeSCFClient{currentEnvironment: environment}
 	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
 	patch := &pb.NodeRuntimeConfigPatch{NodeId: "timer-node", TimerCron: "5 * * * * * *", TimerEnabled: true, ManagedEnvironment: map[string]string{
@@ -637,7 +636,6 @@ func TestExecuteRuntimeConfigUpgradesClaimRoutingAndTimeout(t *testing.T) {
 	require.Len(t, fake.configured, 1)
 	require.EqualValues(t, 60, fake.configured[0].Timeout)
 	require.Equal(t, "keep-password", fake.currentEnvironment["MOOX_EVENTBUS_NATS_PASSWORD"])
-	require.NotContains(t, fake.currentEnvironment, "MOOX_GATEWAY_SERVICE_SECRET_KEY")
 	node, err := catalog.GetNode(context.Background(), "stockcn", "timer-node")
 	require.NoError(t, err)
 	require.Contains(t, node.Metadata, `"access_address":"access.example:11004"`)

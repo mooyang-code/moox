@@ -1,6 +1,5 @@
 ROOT := ../..
 APP_NAME := moox-storage
-SERVER ?= $(MOOX_DEV_SSH_TARGET)
 
 .PHONY: help all deps proto lint build build-linux build-darwin build-windows build-all clean dev install linux darwin windows
 

@@ -48,8 +48,8 @@
               v-if="store.instance.logical_account_id"
               @click="
                 router.push({
-                  name: 'trading-logical-accounts',
-                  query: { logical_account_id: store.instance.logical_account_id }
+                  path: '/trading/accounts',
+                  query: { view: 'strategy', logical_account_id: store.instance.logical_account_id }
                 })
               "
               >{{ store.instance.logical_account_id }}</a-link
