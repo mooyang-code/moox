@@ -110,11 +110,19 @@ func TestSetupTrustBrowserInstallsInternalCA(t *testing.T) {
 	host := snapshot.Manifest.HostCatalog["control"]
 	host.TLSMode = "internal"
 	snapshot.Manifest.HostCatalog["control"] = host
+	original := refreshSetupConsoleCA
+	t.Cleanup(func() { refreshSetupConsoleCA = original })
+	refreshed := 0
+	refreshSetupConsoleCA = func(context.Context, setupconfig.Manifest) error {
+		refreshed++
+		return nil
+	}
 	cmd := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil }})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
 	cmd.SetArgs([]string{"trust-browser", "--file", "moox.toml"})
 	require.NoError(t, cmd.Execute())
+	require.Equal(t, 1, refreshed)
 	require.FileExists(t, marker)
 	require.Contains(t, output.String(), `"status":"trusted"`)
 }

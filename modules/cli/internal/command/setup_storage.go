@@ -3,7 +3,6 @@ package command
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 
@@ -220,13 +219,7 @@ func openRemoteStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name
 	if err != nil {
 		return setupconfig.Host{}, nil, nil, "", err
 	}
-	storageRoot := snapshot.Manifest.Paths.Resolved().StorageRoot
-	secret, err := readRemoteStorageSecret(ctx, transport, storageRoot)
-	if err != nil {
-		_ = transport.Close()
-		return setupconfig.Host{}, nil, nil, "", err
-	}
-	primarySecret, err := readRemoteStoragePrimarySecret(ctx, transport, storageRoot)
+	secrets, err := readRemoteStorageRoleSecrets(ctx, transport, snapshot.Manifest.Paths.Resolved().StorageRoot)
 	if err != nil {
 		_ = transport.Close()
 		return setupconfig.Host{}, nil, nil, "", err
@@ -236,7 +229,7 @@ func openRemoteStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name
 		_ = transport.Close()
 		return setupconfig.Host{}, nil, nil, "", err
 	}
-	session, err := newRemoteStorageSession(transport, gateway, secret, primarySecret)
+	session, err := newRemoteStorageSession(transport, gateway, secrets.Node, secrets.Primary)
 	if err != nil {
 		_ = gateway.Close()
 		_ = transport.Close()
@@ -249,38 +242,4 @@ func openRemoteStorage(ctx context.Context, snapshot *setupconfig.Snapshot, name
 		return setupconfig.Host{}, nil, nil, "", errors.New("storage_verification_invalid")
 	}
 	return host, transport, session, root, nil
-}
-
-func readRemoteStorageSecret(ctx context.Context, transport setupssh.Client, storageRoot string) (string, error) {
-	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
-secret_file="$1/secrets/storage-node-auth.env"
-value=$(sed -n 's/^MOOX_STORAGE_NODE_AUTH_SECRET=//p' "$secret_file" | head -n 1)
-test -n "$value"
-case "$value" in *[!A-Za-z0-9._-]*) exit 1 ;; esac
-printf '%s' "$value"`, "moox-storage-node-auth", storageRoot}, nil)
-	if err != nil || strings.TrimSpace(result.Stdout) == "" || strings.ContainsAny(result.Stdout, "\r\n") {
-		detail := strings.TrimSpace(result.Stderr)
-		if detail != "" {
-			return "", fmt.Errorf("storage_verification_auth_unavailable: %s", strings.Join(strings.Fields(detail), " "))
-		}
-		return "", errors.New("storage_verification_auth_unavailable")
-	}
-	return strings.TrimSpace(result.Stdout), nil
-}
-
-func readRemoteStoragePrimarySecret(ctx context.Context, transport setupssh.Client, storageRoot string) (string, error) {
-	result, err := transport.Run(ctx, []string{"sh", "-lc", `set -eu
-secret_file="$1/secrets/storage-internal-auth.env"
-value=$(sed -n 's/^MOOX_STORAGE_PRIMARY_AUTH_SECRET=//p' "$secret_file" | head -n 1)
-test -n "$value"
-case "$value" in *[!A-Za-z0-9._-]*) exit 1 ;; esac
-printf '%s' "$value"`, "moox-storage-primary-auth", storageRoot}, nil)
-	if err != nil || strings.TrimSpace(result.Stdout) == "" || strings.ContainsAny(result.Stdout, "\r\n") {
-		detail := strings.TrimSpace(result.Stderr)
-		if detail != "" {
-			return "", fmt.Errorf("storage_primary_auth_unavailable: %s", strings.Join(strings.Fields(detail), " "))
-		}
-		return "", errors.New("storage_primary_auth_unavailable")
-	}
-	return strings.TrimSpace(result.Stdout), nil
 }

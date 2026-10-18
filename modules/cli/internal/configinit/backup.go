@@ -103,9 +103,12 @@ func loginForBackup(ctx context.Context, manifest setupconfig.Manifest) (*consol
 	return client, client.Login(ctx, manifest.Admin.Username, manifest.Admin.Password)
 }
 
-// refreshConsoleCA 用配置里的 SSH 登录管理台服务器，读取 console-proxy 发布的根证书（公开证书），
-// 校验是 CA 证书后更新本机缓存。测试里替换。
-var refreshConsoleCA = func(ctx context.Context, manifest setupconfig.Manifest) error {
+// refreshConsoleCA 在测试里替换。
+var refreshConsoleCA = RefreshConsoleCA
+
+// RefreshConsoleCA 用配置里的 SSH 登录管理台服务器，读取原生 control 单元 console-proxy 发布的根证书（公开证书），
+// 校验是 CA 证书后更新本机缓存。
+func RefreshConsoleCA(ctx context.Context, manifest setupconfig.Manifest) error {
 	host := manifest.ControlHost()
 	client, err := setupssh.Dial(ctx, setupssh.Target{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username}, host.Password, setupssh.Options{Timeout: 15 * time.Second})
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cli/internal/configinit"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
@@ -988,13 +989,20 @@ func ensureSetupBrowserCATrust(ctx context.Context, snapshot *setupconfig.Snapsh
 		return fmt.Errorf("browser_ca_trust_failed: resolve repository root: %w", err)
 	}
 	host := snapshot.Manifest.ControlHost()
-	return tlstrust.EnsureLocalCATrustForHost(
-		ctx,
-		root,
-		host.Address,
-		tlstrust.TLSMode(host.TLSMode),
-	)
+	mode := tlstrust.TLSMode(host.TLSMode)
+	if !tlstrust.RequiresLocalCATrust(mode, host.Address) {
+		return nil
+	}
+	// 原生 control 单元把内部 CA 根证书发布在 current/console-proxy 下；先经 SSH 取回到本机缓存再安装信任，
+	// 不依赖本机残留的旧证书副本。
+	if err := refreshSetupConsoleCA(ctx, snapshot.Manifest); err != nil {
+		return fmt.Errorf("browser_ca_trust_failed: 无法从管理台服务器取回内部 CA 根证书: %w", err)
+	}
+	return tlstrust.EnsureLocalCATrustForHost(ctx, root, host.Address, mode)
 }
+
+// refreshSetupConsoleCA 在测试里替换。
+var refreshSetupConsoleCA = configinit.RefreshConsoleCA
 
 func defaultSetupApply(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.ApplyResult, error) {
 	gateway, err := openCommandGateway(ctx, "", snapshot)
