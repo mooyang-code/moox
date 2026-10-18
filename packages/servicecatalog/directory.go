@@ -21,6 +21,10 @@ func (d Directory) Validate() error {
 		if !validDirectoryHost(id, host) {
 			return fmt.Errorf("invalid directory host %q", id)
 		}
+		// 中转主机必须在目录里且自身可直达，否则调用方无路可走。
+		if relay, ok := d.Hosts[host.Relay]; host.Relay != "" && (!ok || relay.Relay != "") {
+			return fmt.Errorf("directory host %q has an unusable relay", id)
+		}
 	}
 	for path, hosts := range d.Services {
 		if !servicePath.MatchString(path) || len(hosts) == 0 || len(hosts) > len(d.Hosts) {

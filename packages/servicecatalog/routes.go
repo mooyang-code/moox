@@ -328,6 +328,44 @@ func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
 	return relays
 }
 
+// ValidRelay 校验一条中转许可：端口不重复，跨主机端口的调用方是合法 ID 且不重复，
+// 其余端口必须是服务目录里某个组件的健康端口并且只对 Monitor 开放。
+func (c Catalog) ValidRelay(r RelayTarget) bool {
+	if !ValidHostID(r.HostID) || len(r.Ports) > 64 {
+		return false
+	}
+	seen := map[int]bool{}
+	for _, port := range r.Ports {
+		if seen[port.Port] || len(port.Callers) == 0 || len(port.Callers) > 2048 {
+			return false
+		}
+		seen[port.Port] = true
+		if port.Port != HostGatewayRemotePort {
+			if !slices.Equal(port.Callers, []string{"monitor"}) || !c.healthPort(port.Port) {
+				return false
+			}
+			continue
+		}
+		callers := map[string]bool{}
+		for _, caller := range port.Callers {
+			if caller == "" || len(caller) > 128 || callers[caller] {
+				return false
+			}
+			callers[caller] = true
+		}
+	}
+	return true
+}
+
+func (c Catalog) healthPort(port int) bool {
+	for _, component := range c.Components {
+		if component.Health.Port == port && port > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // Allowed 报告调用方能否经中转连接出站主机的指定端口。
 func (r RelayTarget) Allowed(caller string, port int) bool {
 	for _, p := range r.Ports {

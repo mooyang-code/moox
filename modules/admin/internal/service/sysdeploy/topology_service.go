@@ -187,10 +187,22 @@ func (s *ServiceImpl) DeleteHost(ctx context.Context, req *pb.DeleteDeploymentHo
 func directoryToProto(d servicecatalog.Directory) *directorypb.ServiceDirectory {
 	result := &directorypb.ServiceDirectory{Version: d.Version, Hosts: map[string]*directorypb.DirectoryHost{}, Services: map[string]*directorypb.ServiceHosts{}}
 	for id, host := range d.Hosts {
-		result.Hosts[id] = &directorypb.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region}
+		result.Hosts[id] = &directorypb.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Relay: host.Relay}
 	}
 	for path, hosts := range d.Services {
 		result.Services[path] = &directorypb.ServiceHosts{HostIds: append([]string{}, hosts...)}
+	}
+	return result
+}
+
+func relaysToProto(relays []servicecatalog.RelayTarget) []*pb.HostGatewayRelay {
+	var result []*pb.HostGatewayRelay
+	for _, relay := range relays {
+		item := &pb.HostGatewayRelay{HostId: relay.HostID}
+		for _, port := range relay.Ports {
+			item.Ports = append(item.Ports, &pb.HostGatewayRelayPort{Port: int32(port.Port), Callers: slices.Clone(port.Callers)})
+		}
+		result = append(result, item)
 	}
 	return result
 }
