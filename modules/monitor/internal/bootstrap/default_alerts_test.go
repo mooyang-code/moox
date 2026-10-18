@@ -109,13 +109,8 @@ func TestEnsureDefaultHostAlertRulesCoversRegisteredAgent(t *testing.T) {
 		if _, _, ok := hostmetrics.ParseHostRuleKey(rule.CheckID); ok {
 			hostRules++
 			_, metric, _ := hostmetrics.ParseHostRuleKey(rule.CheckID)
-			wantFailureThreshold := 20
-			switch metric {
-			case hostmetrics.HostMetricFilesystemUsage:
-				wantFailureThreshold = 3
-			case hostmetrics.HostMetricCPU:
-				wantFailureThreshold = 12
-			}
+			// HostAgent 每分钟采样：CPU、磁盘约 3 分钟，内存约 5 分钟。
+			wantFailureThreshold := map[string]int{hostmetrics.HostMetricCPU: 3, hostmetrics.HostMetricMemory: 5, hostmetrics.HostMetricFilesystemUsage: 3}[metric]
 			if rule.FailureThreshold != wantFailureThreshold {
 				t.Fatalf("host %s failure threshold = %d, want %d", metric, rule.FailureThreshold, wantFailureThreshold)
 			}

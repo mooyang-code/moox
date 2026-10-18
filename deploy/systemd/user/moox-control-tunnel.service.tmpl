@@ -1,0 +1,17 @@
+# Rendered by scripts/deploy/deploy-control-tunnel.sh into
+# ~/.config/systemd/user/moox-control-tunnel.service.
+# 由本机主动连到 control，把本机主机网关与 HostAgent 的端口反向映射到 control 的专用回环地址，
+# control 上的 Monitor 按登记的 private_address 探测这些端口。转发失败（端口被占用）时立即退出重连。
+[Unit]
+Description=MooX reverse tunnel to the control host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ssh -N -T -i __KEY__ -o IdentitiesOnly=yes -o UserKnownHostsFile=__KNOWN_HOSTS__ -o StrictHostKeyChecking=yes -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 __FORWARDS__ -p __SSH_PORT__ __CONTROL__
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

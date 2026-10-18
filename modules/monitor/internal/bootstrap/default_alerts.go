@@ -109,8 +109,14 @@ func listAllMonitorChecks(ctx context.Context, repositories *store.Repositories)
 	return nil, fmt.Errorf("default alert checks exceed %d pages", maxDefaultCheckPages)
 }
 
-// hostCPUFailureThreshold 是 CPU 告警需要连续超过阈值的采样次数。HostAgent 每 15 秒采样一次，12 次约 3 分钟。
-const hostCPUFailureThreshold = 12
+// 主机资源告警需要连续超过阈值的采样次数。HostAgent 每分钟采样一次（整分 0 秒），
+// CPU 3 次约 3 分钟、内存 5 次约 5 分钟、磁盘 3 次约 3 分钟。不改成更密的采样：
+// mooxsys 视图每个序列只保留最近 5000 根，每分钟采样约能保留 3.5 天的主机指标历史。
+var hostFailureThresholds = map[string]int{
+	hostmetrics.HostMetricCPU:             3,
+	hostmetrics.HostMetricMemory:          5,
+	hostmetrics.HostMetricFilesystemUsage: 3,
+}
 
 func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Repositories, registry *hostmetrics.Registry) error {
 	if repositories == nil || registry == nil {
@@ -121,13 +127,11 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 		return err
 	}
 	definitions := map[string]string{
-		// CPU 阈值取 80%、连续 12 次采样（约 3 分钟）：2026-10-14 两个 1h 因子集回填，storage-node 吃掉 4 核主机的
-		// 330%–380% CPU（整机 82%–95%），读窗口一再超时，却没有一次连续 20 次（5 分钟）都不低于 90%，原来的规则一条告警也没出。
+		// CPU 阈值取 80%、连续约 3 分钟：2026-10-14 两个 1h 因子集回填，storage-node 吃掉 4 核主机的
+		// 330%–380% CPU（整机 82%–95%），读窗口一再超时，却没有一次连续 5 分钟都不低于 90%，原来的规则一条告警也没出。
 		hostmetrics.HostMetricCPU:    `{"threshold":80,"recovery_threshold":70}`,
 		hostmetrics.HostMetricMemory: `{"threshold":90,"recovery_threshold":80}`,
-		// Filesystem pressure is the leading cause of Storage/View outages. Start
-		// warning before the disk is full and evaluate it quickly enough to leave
-		// room for cleanup or an operator intervention.
+		// 磁盘写满是 Storage / View 故障的首要原因：在写满之前尽早告警，留出清理时间。
 		hostmetrics.HostMetricFilesystemUsage: `{"threshold":85,"recovery_threshold":80}`,
 	}
 	// 磁盘繁忙度、网络错误包两类告警已精简掉（个人系统噪声大、价值低）：删除存量规则。
@@ -141,16 +145,7 @@ func ensureDefaultHostAlertRules(ctx context.Context, repositories *store.Reposi
 	}
 	for _, agent := range agents {
 		for metric, definition := range definitions {
-			failureThreshold := 20
-			if metric == hostmetrics.HostMetricCPU {
-				failureThreshold = hostCPUFailureThreshold
-			}
-			if metric == hostmetrics.HostMetricFilesystemUsage {
-				// HostAgent samples every 15 seconds. Three consecutive samples
-				// provide a short, debounced disk alert without paging on one
-				// transient statfs result.
-				failureThreshold = 3
-			}
+			failureThreshold := hostFailureThresholds[metric]
 			checkID := hostmetrics.HostRuleKey(agent.AgentID, metric)
 			rule := &domain.AlertRule{
 				SpaceID: hostmetrics.SpaceID, RuleID: "default:" + checkID, CheckID: checkID,
