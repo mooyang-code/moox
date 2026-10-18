@@ -85,4 +85,9 @@ func TestConfigNotificationPlansAndPublishes(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, output, `"changed":0`)
 	require.Contains(t, output, `"in_moox_toml":true`)
+
+	// --no-hosts 只对比 Monitor 渠道，不查询主机。
+	output, err = runNotificationCommand(t, monitor, "--no-hosts")
+	require.NoError(t, err)
+	require.NotContains(t, output, `"hosts"`)
 }

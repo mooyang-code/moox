@@ -63,7 +63,7 @@ type notificationChannelView struct {
 // 确认后写入 Monitor；同时列出各主机策略缓存的版本与拉取时间，HostAgent 每 5 分钟同步一次。
 func newConfigNotificationCommand(deps notificationDeps) *cobra.Command {
 	var file string
-	var publish, yes, prune bool
+	var publish, yes, prune, noHosts bool
 	cmd := &cobra.Command{
 		Use:   "notification",
 		Short: "对比 moox.toml 与 Monitor 的告警渠道，确认后写入 Monitor，并显示各主机缓存版本",
@@ -101,6 +101,9 @@ func newConfigNotificationCommand(deps notificationDeps) *cobra.Command {
 			}
 			hosts := map[string]any{}
 			for _, host := range snapshot.Manifest.Hosts() {
+				if noHosts {
+					break
+				}
 				summary, err := deps.hostStatus(cmd.Context(), snapshot, host)
 				if err != nil {
 					hosts[host.Name] = map[string]string{"error": err.Error()}
@@ -108,7 +111,9 @@ func newConfigNotificationCommand(deps notificationDeps) *cobra.Command {
 				}
 				hosts[host.Name] = summary
 			}
-			output["hosts"] = hosts
+			if !noHosts {
+				output["hosts"] = hosts
+			}
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return fmt.Errorf("config_changed")
 			}
@@ -119,6 +124,7 @@ func newConfigNotificationCommand(deps notificationDeps) *cobra.Command {
 	cmd.Flags().BoolVar(&publish, "publish", false, "把差异写入 Monitor（需同时传 --yes）")
 	cmd.Flags().BoolVar(&yes, "yes", false, "确认写入")
 	cmd.Flags().BoolVar(&prune, "prune", false, "同时删除 moox.toml 中没有的渠道（默认保留在控制台添加的渠道）")
+	cmd.Flags().BoolVar(&noHosts, "no-hosts", false, "不经 SSH 查询各主机的策略缓存（只对比 Monitor 渠道）")
 	return cmd
 }
 
