@@ -98,7 +98,7 @@ require (
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/sys v0.43.0
 	golang.org/x/text v0.36.0 // indirect
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
@@ -144,9 +144,12 @@ require (
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/servicehost v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/nats-io/nats.go v1.51.0 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 )
+
+replace github.com/mooyang-code/moox/packages/servicehost => ../../packages/servicehost

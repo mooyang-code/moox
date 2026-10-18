@@ -53,6 +53,7 @@ use (
 	./packages/seriesset
 	./packages/routeprobe
 	./packages/security
+	./packages/servicehost
 	./packages/servicecatalog
 	./packages/storagepolicy
 	./packages/storagepb

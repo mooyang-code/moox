@@ -54,6 +54,36 @@ jobs:
         run: bash scripts/ci/check-go-version.sh
       - run: make verify
 
+  # 运维机外部程序（因子引擎、归档 worker）在 Windows 上的代码路径：私密文件 ACL、集合锁、服务子命令、
+  # 磁盘余量、目录同步与导出，以及 PowerShell 安装脚本的语法。实机安装与开机自启仍需在 Windows 机器上验证。
+  windows-external:
+    name: Windows external programs
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: '**/go.sum'
+      - name: Test Windows code paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd packages/security && go test ./...)
+          (cd packages/servicehost && go test ./...)
+          (cd packages/jetstream && go vet ./...)
+          (cd modules/factor && go test ./internal/setlock/ ./cmd/engine/)
+          (cd modules/archive && go test ./internal/worker/... ./cmd/worker/)
+      - name: Check PowerShell scripts
+        shell: pwsh
+        run: |
+          foreach ($script in 'scripts/deploy/deploy-factor-engine.ps1', 'scripts/deploy/deploy-archive-worker.ps1') {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $script), [ref]$null, [ref]$errors) | Out-Null
+            if ($errors) { $errors | Format-List; exit 1 }
+          }
+
   verify-trusted:
     if: github.event_name != 'pull_request'
     runs-on: moox-ci

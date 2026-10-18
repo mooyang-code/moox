@@ -5,6 +5,8 @@ go 1.25.0
 require (
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
+	github.com/stretchr/testify v1.11.1
+	google.golang.org/protobuf v1.36.11
 	trpc.group/trpc-go/trpc-go v1.0.4
 )
 
@@ -29,7 +31,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
-	github.com/stretchr/testify v1.11.1 // indirect
+	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.48.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/automaxprocs v1.6.0 // indirect
@@ -39,7 +41,6 @@ require (
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/tnet v1.0.1 // indirect
