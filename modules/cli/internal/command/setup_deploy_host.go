@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
@@ -36,6 +37,18 @@ func newSetupDeployHostCommand(deps setupDeps) *cobra.Command {
 		result, err := deps.deployHost(command.Context(), snapshot, options)
 		if err != nil {
 			return err
+		}
+		// 主机服务就绪后安装主机级守护（crontab 与告警策略种子）；重复执行是幂等的。
+		if deps.installWatchdog != nil {
+			host, err := findSetupHost(snapshot.Manifest, options.HostID)
+			if err != nil {
+				return err
+			}
+			watchdog, err := deps.installWatchdog(command.Context(), snapshot, host, false)
+			if err != nil {
+				return fmt.Errorf("install watchdog on %s: %w", options.HostID, err)
+			}
+			fmt.Fprintf(options.Log, "watchdog installed on %s: %s\n", options.HostID, watchdog)
 		}
 		return writeSetupJSON(command, result)
 	}}

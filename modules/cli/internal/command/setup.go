@@ -61,6 +61,7 @@ type setupDeps struct {
 	rebuildStorage         func(context.Context, *setupconfig.Snapshot, string, string, string, bool) (storageRebuildSummary, error)
 	deployStorage          func(context.Context, *setupconfig.Snapshot, string, bool, bool) error
 	installStorageWatchdog func(context.Context, *setupconfig.Snapshot, string) error
+	installWatchdog        func(context.Context, *setupconfig.Snapshot, setupconfig.Host, bool) (json.RawMessage, error)
 	importMetadata         func(context.Context, *setupconfig.Snapshot, string, string, []string) (metadataImportSummary, error)
 	verifyStorage          func(context.Context, *setupconfig.Snapshot, string) (storageVerifyResult, error)
 	e2eStorage             func(context.Context, *setupconfig.Snapshot, string, string) (storageE2EResult, error)
@@ -111,6 +112,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupAttachSCFVPCCommand(deps),
 		newSetupInvokeSCFCommand(deps),
 		newSetupInstallStorageWatchdogCommand(deps),
+		newSetupWatchdogCommand(deps),
 		newSetupMetadataImportCommand(deps),
 		newSetupVerifyStorageCommand(deps),
 		newSetupE2EStorageCommand(deps),
@@ -1071,6 +1073,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.installStorageWatchdog == nil {
 		deps.installStorageWatchdog = defaults.installStorageWatchdog
 	}
+	if deps.installWatchdog == nil {
+		deps.installWatchdog = defaults.installWatchdog
+	}
 	if deps.importMetadata == nil {
 		deps.importMetadata = defaults.importMetadata
 	}
@@ -1126,6 +1131,7 @@ func defaultSetupDeps() setupDeps {
 		rebuildStorage:         nil,
 		deployStorage:          defaultSetupDeployStorage,
 		installStorageWatchdog: defaultSetupInstallStorageWatchdog,
+		installWatchdog:        defaultSetupInstallWatchdog,
 		importMetadata:         defaultSetupImportMetadata,
 		verifyStorage:          defaultSetupVerifyStorage,
 		e2eStorage:             defaultSetupE2EStorage,

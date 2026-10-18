@@ -3,6 +3,7 @@ package command
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -13,10 +14,15 @@ import (
 func TestSetupDeployHostUsesOneSnapshotAndPreservesPausedResult(t *testing.T) {
 	snapshot := setupSnapshot(t)
 	loaded, called := 0, 0
-	command := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { loaded++; return snapshot, nil }, deployHost: func(_ context.Context, got *setupconfig.Snapshot, options unitdeploy.HostOptions) (unitdeploy.HostResult, error) {
+	var watchdogHosts []string
+	command := newSetupCommand(setupDeps{load: func(string) (*setupconfig.Snapshot, error) { loaded++; return snapshot, nil }, installWatchdog: func(_ context.Context, _ *setupconfig.Snapshot, host setupconfig.Host, remove bool) (json.RawMessage, error) {
+		require.False(t, remove)
+		watchdogHosts = append(watchdogHosts, host.Name)
+		return json.RawMessage(`{"seed":"written"}`), nil
+	}, deployHost: func(_ context.Context, got *setupconfig.Snapshot, options unitdeploy.HostOptions) (unitdeploy.HostResult, error) {
 		called++
 		require.Same(t, snapshot, got)
-		require.Equal(t, "compute1", options.HostID)
+		require.Equal(t, "compute", options.HostID)
 		require.NotEmpty(t, options.StateDirectory)
 		require.NotEmpty(t, options.OperatorDirectory)
 		return unitdeploy.HostResult{Stage: "host-paused"}, nil
@@ -26,10 +32,11 @@ func TestSetupDeployHostUsesOneSnapshotAndPreservesPausedResult(t *testing.T) {
 	command.SetArgs([]string{"deploy-host"})
 	require.ErrorContains(t, command.Execute(), "--host")
 	require.Zero(t, loaded)
-	command.SetArgs([]string{"deploy-host", "--host", "compute1", "--state-dir", t.TempDir(), "--operator-dir", t.TempDir()})
+	command.SetArgs([]string{"deploy-host", "--host", "compute", "--state-dir", t.TempDir(), "--operator-dir", t.TempDir()})
 	require.NoError(t, command.Execute())
 	require.Equal(t, 1, loaded)
 	require.Equal(t, 1, called)
+	require.Equal(t, []string{"compute"}, watchdogHosts, "主机服务就绪后安装守护")
 	require.Contains(t, output.String(), `"stage":"host-paused"`)
 	require.NotContains(t, output.String(), "admin-test-password")
 }
