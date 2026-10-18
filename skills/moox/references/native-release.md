@@ -107,6 +107,18 @@ $S catalog-changed --host control                    # 用台账里最近一次 
 
 只想发布别的改动、而目录改动还不想发布时，在构建树里去掉目录改动再构建（不要把半截目录发出去）。
 
+## 主机守护（crontab）与 `moox-runtime`
+
+每台主机的部署用户 crontab 里有一条 `# moox-watchdog`，每分钟执行 `/data/moox/host/current/bin/moox-runtime watch`，会自动拉起停掉的组件。
+因此：
+
+- 发布期间 `native-release.sh` 持有维护锁，watch 那一轮整轮跳过，不会和发布抢着重启；但**手工 `stop` 某个组件后一分钟内会被拉起**。
+  要让组件保持停止，用 `moox-runtime pause --plan <单元>/current/runtime.json --components <组件>`，恢复用 `resume`。
+- 替换 `moox-runtime`（构建目标 `host-gateway` 会产出它）之后，在本机执行一次 `moox-cli setup watchdog --file moox.toml`（可 `--host` 只处理换过的主机），
+  重新校验并写入 crontab 条目（`native-release.sh` 不读取凭据，不写主机策略种子）。
+- 想整体暂停自动拉起时，在 Monitor 配置 `host_policy.watchdog.disabled: true`（约 5 分钟同步到各主机），或 `moox-cli setup watchdog --remove`；演练与发布结束后恢复。
+- 查看一轮会做什么：`moox-runtime watch --root /data/moox --dry-run`；历史在 `/data/moox/run/watchdog.log` 与 `run/watchdog/<组件>.jsonl`。
+
 ## 配置文件不随二进制更新
 
 发布目录里的 `<组件>/config/*.yaml` 是首次安装时放下的，只换二进制不会带上仓库里的配置改动。改了服务超时、端口之类配置时：
