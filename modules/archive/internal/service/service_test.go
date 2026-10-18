@@ -768,3 +768,26 @@ func TestRecreatingATaskCancelsThePendingDeletionNotice(t *testing.T) {
 		t.Fatalf("重新创建后不能再通知 worker 清理: %v", hb.GetDeletedTasks())
 	}
 }
+
+func TestFilePrefixUsesTheDatasetNameWithoutSpacesAndAvoidsCollisions(t *testing.T) {
+	for in, want := range map[string]string{"币安 现货 1分钟K线": "币安现货1分钟K线", " a/b:c ": "a_b_c", "..隐藏": "隐藏", "   ": ""} {
+		if got := sanitizeFilePrefix(in); got != want {
+			t.Fatalf("sanitizeFilePrefix(%q) = %q, want %q", in, got, want)
+		}
+	}
+	h := newHarness(t)
+	ctx := context.Background()
+	h.datasets.datasets["crypto/ds_1m"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1m", Name: "币安 现货 K线", DataKind: "time_series", Freq: "1m", Status: "active", DataNodeID: "node-0", Retention: "168h"}
+	h.datasets.datasets["crypto/ds_1h"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1h", Name: "币安现货K线", DataKind: "time_series", Freq: "1h", Status: "active", DataNodeID: "node-0", Retention: "forever"}
+	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
+	first, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
+	if first.FilePrefix != "币安现货K线" {
+		t.Fatalf("prefix = %q", first.FilePrefix)
+	}
+	// 另一个数据集去空格后同名：退回「名称_数据集 ID」，两个任务的文件不会互相覆盖。
+	requireOK(t, h.create("ds_1h", nil).GetRetInfo())
+	second, _ := h.store.GetTask(ctx, "crypto", "ds_1h")
+	if second.FilePrefix != "币安现货K线_ds_1h" {
+		t.Fatalf("prefix = %q", second.FilePrefix)
+	}
+}

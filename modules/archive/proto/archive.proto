@@ -399,6 +399,8 @@ message RunAssignment {
   uint32 lease_ttl_seconds = 20;
   // 任务实例标识（任务自增 ID，不复用）。任务被删除后重建会得到新的值，worker 据此丢弃旧任务遗留的水位和暂存数据。
   string task_epoch = 21;
+  // 导出文件名前缀（数据集名去空格；为空时用数据集 ID）。
+  string file_prefix = 22;
 }
 message PullArchiveRunRsp {
   common.RetInfo ret_info = 1;

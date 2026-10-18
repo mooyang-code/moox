@@ -131,7 +131,7 @@ storage_auth_file: ${SECRETS_DIR}/storage-primary-auth.secret
 worker:
   worker_id: ${WORKER_ID}
   root_dir: ${ROOT_DIR}
-  export_formats: [csv.gz]
+  export_formats: [csv]
   min_free_bytes: 5GB
   heartbeat_interval: 10s
   pull_interval: 5s

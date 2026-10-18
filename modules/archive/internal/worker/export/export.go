@@ -30,6 +30,8 @@ const (
 // Files 管理归档根目录下的分区文件。
 type Files struct {
 	Root string
+	// Format 是导出文件格式：csv（默认，空值同 csv）或 csv.gz。
+	Format string
 }
 
 // Info 是一次导出得到的文件信息。
@@ -41,9 +43,30 @@ type Info struct {
 	Preview string
 }
 
+// 导出文件格式。
+const (
+	FormatCSV   = "csv"
+	FormatCSVGz = "csv.gz"
+)
+
+func ext(format string) string {
+	if format == FormatCSVGz {
+		return ".csv.gz"
+	}
+	return ".csv"
+}
+
+func checkComponent(part string) error {
+	if part == "" || strings.ContainsAny(part, `/\`) || part == "." || part == ".." || strings.HasPrefix(part, ".") {
+		return fmt.Errorf("unsafe path component %q", part)
+	}
+	return nil
+}
+
 // RelPath 返回分区文件相对归档根目录的路径：
-// <space>/<dataset>/<yyyy>/<dataset>_<yyyymmdd>.csv.gz（日分区）或 <dataset>_<yyyymm>.csv.gz（月分区）。
-func RelPath(spaceID, datasetID, partitionKey string) (string, error) {
+// <space>/<yyyy>/<prefix>_<yyyymmdd>.csv（日分区）或 <prefix>_<yyyymm>.csv（月分区）；format 为 csv.gz 时扩展名为 .csv.gz。
+// prefix 是导出文件名前缀（数据集名去空格）。
+func RelPath(spaceID, prefix, partitionKey, format string) (string, error) {
 	digits := strings.ReplaceAll(partitionKey, "-", "")
 	if len(partitionKey) != 7 && len(partitionKey) != 10 || len(digits) < 6 {
 		return "", fmt.Errorf("invalid partition key %q", partitionKey)
@@ -53,20 +76,25 @@ func RelPath(spaceID, datasetID, partitionKey string) (string, error) {
 			return "", fmt.Errorf("invalid partition key %q", partitionKey)
 		}
 	}
-	for _, part := range []string{spaceID, datasetID} {
-		if part == "" || strings.ContainsAny(part, `/\`) || part == "." || part == ".." || strings.HasPrefix(part, ".") {
-			return "", fmt.Errorf("unsafe path component %q", part)
+	for _, part := range []string{spaceID, prefix} {
+		if err := checkComponent(part); err != nil {
+			return "", err
 		}
 	}
-	return filepath.ToSlash(filepath.Join(spaceID, datasetID, digits[:4], datasetID+"_"+digits+".csv.gz")), nil
+	return filepath.ToSlash(filepath.Join(spaceID, digits[:4], prefix+"_"+digits+ext(format))), nil
+}
+
+// RelPath 按本目录配置的格式返回分区文件的相对路径。
+func (f Files) RelPath(spaceID, prefix, partitionKey string) (string, error) {
+	return RelPath(spaceID, prefix, partitionKey, f.Format)
 }
 
 // Abs 把相对路径解析到归档根目录下。
 func (f Files) Abs(rel string) string { return filepath.Join(f.Root, filepath.FromSlash(rel)) }
 
 // Write 导出分区：COPY 到 .partial，fsync，rename，fsync 目录，计算 sha256 与预览。任何一步失败都不会留下半写的正式文件。
-func (f Files) Write(ctx context.Context, store *staging.Store, task staging.Task, p staging.PartitionState) (Info, error) {
-	rel, err := RelPath(task.SpaceID, task.DatasetID, p.Key)
+func (f Files) Write(ctx context.Context, store *staging.Store, task staging.Task, prefix string, p staging.PartitionState) (Info, error) {
+	rel, err := f.RelPath(task.SpaceID, prefix, p.Key)
 	if err != nil {
 		return Info{}, err
 	}
@@ -76,7 +104,7 @@ func (f Files) Write(ctx context.Context, store *staging.Store, task staging.Tas
 	}
 	partial := final + partialSuffix
 	_ = os.Remove(partial)
-	if err := store.Export(ctx, task, p, partial); err != nil {
+	if err := store.ExportCSV(ctx, task, p, partial, f.Format == FormatCSVGz); err != nil {
 		_ = os.Remove(partial)
 		return Info{}, err
 	}
@@ -147,12 +175,17 @@ func preview(path string) (string, error) {
 		return "", err
 	}
 	defer file.Close()
-	zr, err := gzip.NewReader(bufio.NewReader(file))
-	if err != nil {
-		return "", err
+	br := bufio.NewReader(file)
+	var source io.Reader = br
+	if magic, _ := br.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+		zr, err := gzip.NewReader(br)
+		if err != nil {
+			return "", err
+		}
+		defer zr.Close()
+		source = zr
 	}
-	defer zr.Close()
-	reader := bufio.NewReader(zr)
+	reader := bufio.NewReader(source)
 	var out strings.Builder
 	for i := 0; i < previewLines; i++ {
 		line, err := reader.ReadString('\n')
@@ -178,16 +211,16 @@ type DatasetMeta struct {
 	UpdatedAt string           `json:"updated_at"`
 }
 
-// WriteDatasetJSON 写 <root>/<space>/<dataset>/_dataset.json（频率、列及类型）；内容没变时不重写。
-func (f Files) WriteDatasetJSON(spaceID, datasetID, freq string, columns []staging.Column, now time.Time) error {
-	if _, err := RelPath(spaceID, datasetID, "2000-01"); err != nil {
+// WriteDatasetJSON 写 <root>/<space>/<prefix>_dataset.json（频率、列及类型）；内容没变时不重写。
+func (f Files) WriteDatasetJSON(spaceID, prefix, datasetID, freq string, columns []staging.Column, now time.Time) error {
+	if _, err := f.RelPath(spaceID, prefix, "2000-01"); err != nil {
 		return err
 	}
-	dir := filepath.Join(f.Root, spaceID, datasetID)
+	dir := filepath.Join(f.Root, spaceID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "_dataset.json")
+	path := filepath.Join(dir, prefix+"_dataset.json")
 	if raw, err := os.ReadFile(path); err == nil {
 		var current DatasetMeta
 		if json.Unmarshal(raw, &current) == nil && current.Freq == freq && sameColumns(current.Columns, columns) {

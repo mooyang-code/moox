@@ -159,7 +159,7 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	}
 	p := parts.GetPartitions()[0]
 	if p.GetPartitionKey() != "2026-10-16" || p.GetStatus() != "exported" || p.GetRowCount() != 2*4*60 || p.GetSubjectCount() != 2 || p.GetWorkerId() != "archive-worker@e2e" ||
-		p.GetFilePath() != "crypto/ds_1m/2026/ds_1m_20261016.csv.gz" || p.GetFileSha256() == "" || p.GetExportCount() != 1 || !strings.HasPrefix(p.GetPreview(), "data_time,subject_id,series_tag,close,open\n") {
+		p.GetFilePath() != "crypto/2026/ds_1m_20261016.csv" || p.GetFileSha256() == "" || p.GetExportCount() != 1 || !strings.HasPrefix(p.GetPreview(), "data_time,subject_id,series_tag,close,open\n") {
 		t.Fatalf("partition = %v", p)
 	}
 	if sha, size, err := export.FileSHA256(files.Abs(p.GetFilePath())); err != nil || sha != p.GetFileSha256() || size != p.GetFileBytes() {

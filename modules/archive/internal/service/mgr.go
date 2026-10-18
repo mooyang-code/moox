@@ -158,8 +158,13 @@ func (m *MgrService) CreateArchiveTask(ctx context.Context, req *archivepb.Creat
 	if err != nil {
 		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
+	prefix, err := s.chooseFilePrefix(ctx, space, ds.DatasetID, ds.Name)
+	if err != nil {
+		return &archivepb.CreateArchiveTaskRsp{RetInfo: fail(err)}, nil
+	}
 	task := store.Task{
-		SpaceID: space, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, DataNodeID: ds.DataNodeID, Retention: ds.Retention,
+		FilePrefix: prefix,
+		SpaceID:    space, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, DataNodeID: ds.DataNodeID, Retention: ds.Retention,
 		ScheduleCron: built.Plan.Cron, ScheduleTZ: built.Plan.TZ, IntervalSeconds: int(built.Interval / time.Second), StartAt: built.StartAt,
 		BackfillFrom: built.BackfillFrom, Status: store.StatusEnabled, NextRunAt: built.NextRunAt, Creator: "console",
 	}

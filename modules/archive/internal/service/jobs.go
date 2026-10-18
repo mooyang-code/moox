@@ -140,6 +140,16 @@ func (s *Service) refreshDatasets(ctx context.Context) error {
 		if err := s.store.UpdateTaskDataset(ctx, task.SpaceID, task.DatasetID, ds.DataNodeID, ds.Retention); err != nil {
 			return err
 		}
+		if task.FilePrefix == "" {
+			// 升级前创建的任务没有文件名前缀：补上（之后不再随数据集改名变化）。
+			prefix, err := s.chooseFilePrefix(ctx, task.SpaceID, task.DatasetID, ds.Name)
+			if err != nil {
+				return err
+			}
+			if err := s.store.SetFilePrefixIfEmpty(ctx, task.SpaceID, task.DatasetID, prefix); err != nil {
+				return err
+			}
+		}
 	}
 	if failed > 0 {
 		return fmt.Errorf("%d archive datasets could not be refreshed", failed)

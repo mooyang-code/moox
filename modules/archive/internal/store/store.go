@@ -83,6 +83,11 @@ func Open(path string) (*Store, error) {
 		_ = s.Close()
 		return nil, fmt.Errorf("initialize archive schema: %w", err)
 	}
+	// 旧库的任务表没有 c_file_prefix 列：补上（新库已在建表时带上，重复添加的错误忽略）。
+	if _, err := db.Exec(`ALTER TABLE t_archive_tasks ADD COLUMN c_file_prefix TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+		_ = s.Close()
+		return nil, fmt.Errorf("migrate archive schema: %w", err)
+	}
 	return s, nil
 }
 

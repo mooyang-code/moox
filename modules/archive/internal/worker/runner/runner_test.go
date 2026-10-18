@@ -156,11 +156,15 @@ func readFile(t *testing.T, root, rel string) string {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	zr, err := gzip.NewReader(f)
-	if err != nil {
-		t.Fatal(err)
+	if strings.HasSuffix(rel, ".gz") {
+		zr, err := gzip.NewReader(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := io.ReadAll(zr)
+		return string(raw)
 	}
-	raw, _ := io.ReadAll(zr)
+	raw, _ := io.ReadAll(f)
 	return string(raw)
 }
 
@@ -193,7 +197,7 @@ func TestFirstRunStagesRowsWithoutBackfillAndAdvancesTheWatermark(t *testing.T) 
 	if w, ok, _ := e.store.Watermark(context.Background(), "crypto", "ds_1m"); !ok || !w.Equal(e.now) {
 		t.Fatalf("watermark = %v %v", w, ok)
 	}
-	if _, err := os.Stat(filepath.Join(e.root, "crypto", "ds_1m", "_dataset.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(e.root, "crypto", "ds_1m_dataset.json")); err != nil {
 		t.Fatalf("_dataset.json: %v", err)
 	}
 }
@@ -237,7 +241,7 @@ func TestPartitionIsExportedAfterCloseAndThenFinalizedAfterTheHoldPeriod(t *test
 	e.now = time.Date(2026, 10, 17, 0, 34, 43, 0, time.UTC)
 	out = e.run(2000, nil, nil)
 	p := report(out, "2026-10-16")
-	if p == nil || p.GetStatus() != "exported" || out.Exported != 1 || p.GetFilePath() != "crypto/ds_1m/2026/ds_1m_20261016.csv.gz" || p.GetFileSha256() == "" ||
+	if p == nil || p.GetStatus() != "exported" || out.Exported != 1 || p.GetFilePath() != "crypto/2026/ds_1m_20261016.csv" || p.GetFileSha256() == "" ||
 		p.GetFileBytes() == 0 || p.GetExportCount() != 1 || !strings.HasPrefix(p.GetPreview(), "data_time,subject_id,series_tag,open,close\n") || p.GetRowCount() != 90 {
 		t.Fatalf("partition = %v", p)
 	}
@@ -269,7 +273,7 @@ func TestPartitionIsExportedAfterCloseAndThenFinalizedAfterTheHoldPeriod(t *test
 	if state.Status != staging.StatusFinal || st.Rows != 0 {
 		t.Fatalf("state=%+v stats=%+v", state, st)
 	}
-	if _, err := os.Stat(filepath.Join(e.root, "crypto", "ds_1m", "2026", "ds_1m_20261016.csv.gz")); err != nil {
+	if _, err := os.Stat(filepath.Join(e.root, "crypto", "2026", "ds_1m_20261016.csv")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -285,7 +289,7 @@ func TestLateRowsReopenAFinalPartitionAndKeepEveryOriginalRow(t *testing.T) {
 	if p := report(out, "2026-10-10"); p == nil || p.GetStatus() != "final" || p.GetExportCount() != 1 || out.Exported != 1 || out.Finalized != 1 {
 		t.Fatalf("应已导出并定稿: %v out=%+v", p, out)
 	}
-	orig := readFile(t, e.root, "crypto/ds_1m/2026/ds_1m_20261010.csv.gz")
+	orig := readFile(t, e.root, "crypto/2026/ds_1m_20261010.csv")
 	// 用补拉区间读到一条晚到的行：先读回原文件，再写入，重新导出，包含原来的 30 行 + 1 行。
 	e.src.rows = append(e.src.rows, rows("ETH", day.Add(2*time.Hour), 1, 9)...)
 	e.now = e.now.Add(time.Hour)

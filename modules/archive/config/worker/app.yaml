@@ -14,7 +14,7 @@ storage_auth_file: ../secrets/storage-primary-auth.secret
 worker:
   worker_id: archive-worker@example-host   # 换机器时整体迁移目录并沿用同一个 worker_id
   root_dir: /data/moox-archive
-  export_formats: [csv.gz]
+  export_formats: [csv]
   min_free_bytes: 5GB
   heartbeat_interval: 10s
   pull_interval: 5s

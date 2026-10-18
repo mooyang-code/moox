@@ -15,10 +15,11 @@ import (
 
 func TestRelPathBuildsDayAndMonthNamesAndRejectsUnsafeInput(t *testing.T) {
 	for _, tc := range []struct{ space, dataset, key, want string }{
-		{"crypto", "ds_1m", "2026-10-15", "crypto/ds_1m/2026/ds_1m_20261015.csv.gz"},
-		{"stockcn", "cn_1d", "2026-10", "stockcn/cn_1d/2026/cn_1d_202610.csv.gz"},
+		{"crypto", "ds_1m", "2026-10-15", "crypto/2026/ds_1m_20261015.csv"},
+		{"stockcn", "cn_1d", "2026-10", "stockcn/2026/cn_1d_202610.csv"},
+		{"crypto", "币安现货1分钟K线", "2026-10-15", "crypto/2026/币安现货1分钟K线_20261015.csv"},
 	} {
-		got, err := RelPath(tc.space, tc.dataset, tc.key)
+		got, err := RelPath(tc.space, tc.dataset, tc.key, FormatCSV)
 		if err != nil || got != tc.want {
 			t.Fatalf("RelPath(%v) = %q, %v, want %q", tc, got, err, tc.want)
 		}
@@ -27,7 +28,7 @@ func TestRelPathBuildsDayAndMonthNamesAndRejectsUnsafeInput(t *testing.T) {
 		{"crypto", "ds", "2026-1"}, {"crypto", "ds", "20261015"}, {"crypto", "ds", "2026-10-1x"},
 		{"../etc", "ds", "2026-10"}, {"crypto", "a/b", "2026-10"}, {"crypto", "..", "2026-10"}, {".state", "ds", "2026-10"}, {"", "ds", "2026-10"},
 	} {
-		if _, err := RelPath(tc.space, tc.dataset, tc.key); err == nil {
+		if _, err := RelPath(tc.space, tc.dataset, tc.key, FormatCSV); err == nil {
 			t.Fatalf("RelPath(%v) 应报错", tc)
 		}
 	}
@@ -60,16 +61,16 @@ func setup(t *testing.T) (Files, *staging.Store, staging.Task, staging.Partition
 	if err != nil || !ok {
 		t.Fatalf("partition: %v %v", ok, err)
 	}
-	return Files{Root: root}, store, task, p
+	return Files{Root: root, Format: FormatCSVGz}, store, task, p
 }
 
 func TestWriteIsAtomicAndReportsHashSizeAndPreview(t *testing.T) {
 	files, store, task, p := setup(t)
-	info, err := files.Write(context.Background(), store, task, p)
+	info, err := files.Write(context.Background(), store, task, "ds_1m", p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Path != "crypto/ds_1m/2026/ds_1m_20261015.csv.gz" || info.Bytes == 0 || len(info.SHA256) != 64 {
+	if info.Path != "crypto/2026/ds_1m_20261015.csv.gz" || info.Bytes == 0 || len(info.SHA256) != 64 {
 		t.Fatalf("info = %+v", info)
 	}
 	lines := strings.Split(strings.TrimSuffix(info.Preview, "\n"), "\n")
@@ -93,7 +94,7 @@ func TestWriteIsAtomicAndReportsHashSizeAndPreview(t *testing.T) {
 		t.Fatalf("行数 = %d", strings.Count(string(raw), "\n"))
 	}
 	// 重写：同路径原子替换。
-	again, err := files.Write(context.Background(), store, task, p)
+	again, err := files.Write(context.Background(), store, task, "ds_1m", p)
 	if err != nil || again.Path != info.Path {
 		t.Fatalf("again = %+v err=%v", again, err)
 	}
@@ -101,14 +102,14 @@ func TestWriteIsAtomicAndReportsHashSizeAndPreview(t *testing.T) {
 
 func TestWriteFailureLeavesNoPartialAndKeepsTheOldFile(t *testing.T) {
 	files, store, task, p := setup(t)
-	info, err := files.Write(context.Background(), store, task, p)
+	info, err := files.Write(context.Background(), store, task, "ds_1m", p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	before, _ := os.ReadFile(files.Abs(info.Path))
 	bad := task
 	bad.Columns = []staging.Column{{Name: "no_such_column", Type: staging.TypeDouble}} // 暂存表里没有这一列：COPY 会失败
-	if _, err := files.Write(context.Background(), store, bad, p); err == nil {
+	if _, err := files.Write(context.Background(), store, bad, "ds_1m", p); err == nil {
 		t.Fatal("导出失败必须返回错误")
 	}
 	after, _ := os.ReadFile(files.Abs(info.Path))
@@ -121,7 +122,7 @@ func TestWriteFailureLeavesNoPartialAndKeepsTheOldFile(t *testing.T) {
 	}
 	unsafe := task
 	unsafe.DatasetID = "../x"
-	if _, err := files.Write(context.Background(), store, unsafe, p); err == nil {
+	if _, err := files.Write(context.Background(), store, unsafe, "ds_1m", p); err == nil {
 		t.Fatal("不安全的路径必须被拒绝")
 	}
 }
@@ -130,19 +131,19 @@ func TestDatasetJSONIsRewrittenOnlyWhenColumnsChange(t *testing.T) {
 	files := Files{Root: t.TempDir()}
 	now := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
 	cols := []staging.Column{{Name: "open", Type: staging.TypeDouble}}
-	if err := files.WriteDatasetJSON("crypto", "ds_1m", "1m", cols, now); err != nil {
+	if err := files.WriteDatasetJSON("crypto", "ds_1m", "ds_1m", "1m", cols, now); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(files.Root, "crypto", "ds_1m", "_dataset.json")
+	path := filepath.Join(files.Root, "crypto", "ds_1m_dataset.json")
 	first, _ := os.ReadFile(path)
-	if err := files.WriteDatasetJSON("crypto", "ds_1m", "1m", cols, now.Add(time.Hour)); err != nil {
+	if err := files.WriteDatasetJSON("crypto", "ds_1m", "ds_1m", "1m", cols, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if again, _ := os.ReadFile(path); string(again) != string(first) {
 		t.Fatal("列没变不应重写")
 	}
 	cols = append(cols, staging.Column{Name: "close", Type: staging.TypeDouble})
-	if err := files.WriteDatasetJSON("crypto", "ds_1m", "1m", cols, now.Add(2*time.Hour)); err != nil {
+	if err := files.WriteDatasetJSON("crypto", "ds_1m", "ds_1m", "1m", cols, now.Add(2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	changed, _ := os.ReadFile(path)
@@ -179,5 +180,21 @@ func TestCleanPartialsRemovesLeftoversButNotTheStateDirectory(t *testing.T) {
 	}
 	if n, err := (Files{Root: filepath.Join(root, "missing")}).CleanPartials(); err != nil || n != 0 {
 		t.Fatalf("目录不存在: n=%d err=%v", n, err)
+	}
+}
+
+func TestWritePlainCSVWithAChinesePrefix(t *testing.T) {
+	files, store, task, p := setup(t)
+	files.Format = FormatCSV
+	info, err := files.Write(context.Background(), store, task, "币安现货1分钟K线", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Path != "crypto/2026/币安现货1分钟K线_20261015.csv" || !strings.HasPrefix(info.Preview, "data_time,subject_id,series_tag,open\n") {
+		t.Fatalf("info = %+v", info)
+	}
+	raw, err := os.ReadFile(files.Abs(info.Path))
+	if err != nil || !strings.HasPrefix(string(raw), "data_time,subject_id,series_tag,open\n") {
+		t.Fatalf("文件应是未压缩的 CSV: %v %q", err, raw[:20])
 	}
 }

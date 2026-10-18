@@ -11,13 +11,15 @@ import (
 // Task 是一个归档任务。
 type Task struct {
 	// ID 是自增主键，删除后不复用，用作任务实例标识。
-	ID               int64
-	SpaceID          string
-	DatasetID        string
-	Freq             string
-	PartitionUnit    string
-	DataNodeID       string
-	Retention        string
+	ID            int64
+	SpaceID       string
+	DatasetID     string
+	Freq          string
+	PartitionUnit string
+	DataNodeID    string
+	Retention     string
+	// FilePrefix 是导出文件名前缀（数据集名去空格）；创建时确定，之后数据集改名也不变，已导出的文件不会改名。
+	FilePrefix       string
 	ScheduleCron     string
 	ScheduleTZ       string
 	IntervalSeconds  int
@@ -33,7 +35,7 @@ type Task struct {
 	UpdatedAt        time.Time
 }
 
-const taskColumns = `c_id, c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_schedule_cron, c_schedule_tz,
+const taskColumns = `c_id, c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_file_prefix, c_schedule_cron, c_schedule_tz,
 c_interval_seconds, c_start_at, c_backfill_from, c_status, c_next_run_at, c_consecutive_skips, c_last_success_at, c_final_until,
 c_creator, c_ctime, c_mtime`
 
@@ -42,7 +44,7 @@ type rowScanner interface{ Scan(dest ...any) error }
 func scanTask(row rowScanner) (Task, error) {
 	var t Task
 	var start, backfill, next, lastSuccess, finalUntil, created, updated timeValue
-	err := row.Scan(&t.ID, &t.SpaceID, &t.DatasetID, &t.Freq, &t.PartitionUnit, &t.DataNodeID, &t.Retention, &t.ScheduleCron, &t.ScheduleTZ,
+	err := row.Scan(&t.ID, &t.SpaceID, &t.DatasetID, &t.Freq, &t.PartitionUnit, &t.DataNodeID, &t.Retention, &t.FilePrefix, &t.ScheduleCron, &t.ScheduleTZ,
 		&t.IntervalSeconds, &start, &backfill, &t.Status, &next, &t.ConsecutiveSkips, &lastSuccess, &finalUntil,
 		&t.Creator, &created, &updated)
 	if err != nil {
@@ -57,10 +59,10 @@ func scanTask(row rowScanner) (Task, error) {
 func (s *Store) CreateTask(ctx context.Context, task Task, immediate bool, now time.Time) (Task, *Run, error) {
 	var run *Run
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention,
+		_, err := tx.ExecContext(ctx, `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_file_prefix,
 c_schedule_cron, c_schedule_tz, c_interval_seconds, c_start_at, c_backfill_from, c_status, c_next_run_at, c_consecutive_skips, c_creator)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-			task.SpaceID, task.DatasetID, task.Freq, task.PartitionUnit, task.DataNodeID, task.Retention,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+			task.SpaceID, task.DatasetID, task.Freq, task.PartitionUnit, task.DataNodeID, task.Retention, task.FilePrefix,
 			task.ScheduleCron, task.ScheduleTZ, task.IntervalSeconds, fmtTime(task.StartAt), nullTime(task.BackfillFrom),
 			task.Status, nullTime(task.NextRunAt), task.Creator)
 		if err != nil {
@@ -278,4 +280,10 @@ ORDER BY c_next_run_at`, fmtTime(now))
 		return nil
 	})
 	return result, problems, err
+}
+
+// SetFilePrefixIfEmpty 给还没有文件名前缀的任务（升级前创建的）补上前缀；已有前缀的不改。
+func (s *Store) SetFilePrefixIfEmpty(ctx context.Context, spaceID, datasetID, prefix string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE t_archive_tasks SET c_file_prefix = ? WHERE c_space_id = ? AND c_dataset_id = ? AND c_file_prefix = ''`, prefix, spaceID, datasetID)
+	return err
 }

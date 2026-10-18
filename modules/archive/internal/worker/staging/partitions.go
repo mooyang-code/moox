@@ -8,6 +8,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -135,6 +136,11 @@ func (s *Store) Stats(ctx context.Context, task Task, p PartitionState) (Partiti
 // Export 把分区的暂存行按 subject_id, data_time, series_tag 排序后导出成 gzip CSV 到 dest（调用方负责 .partial/rename）。
 // 表头为 data_time,subject_id,series_tag,<值列…>；data_time 为 UTC RFC3339。
 func (s *Store) Export(ctx context.Context, task Task, p PartitionState, dest string) error {
+	return s.ExportCSV(ctx, task, p, dest, true)
+}
+
+// ExportCSV 同 Export，compress 为 false 时写未压缩的 CSV。
+func (s *Store) ExportCSV(ctx context.Context, task Task, p PartitionState, dest string, compress bool) error {
 	if err := task.Validate(); err != nil {
 		return err
 	}
@@ -142,8 +148,12 @@ func (s *Store) Export(ctx context.Context, task Task, p PartitionState, dest st
 	for _, c := range task.Columns {
 		cols = append(cols, quote(c.Name))
 	}
-	query := fmt.Sprintf(`COPY (SELECT strftime(t.data_time, '%%Y-%%m-%%dT%%H:%%M:%%SZ') AS data_time, t.subject_id, t.series_tag%s FROM %s t WHERE t.data_time >= %s AND t.data_time < %s ORDER BY t.subject_id, t.data_time, t.series_tag) TO %s (FORMAT csv, HEADER, COMPRESSION gzip)`,
-		prefixed(cols), quote(task.Table()), timestampLiteral(p.Start), timestampLiteral(p.End), literal(dest))
+	compression := ""
+	if compress {
+		compression = ", COMPRESSION gzip"
+	}
+	query := fmt.Sprintf(`COPY (SELECT strftime(t.data_time, '%%Y-%%m-%%dT%%H:%%M:%%SZ') AS data_time, t.subject_id, t.series_tag%s FROM %s t WHERE t.data_time >= %s AND t.data_time < %s ORDER BY t.subject_id, t.data_time, t.series_tag) TO %s (FORMAT csv, HEADER%s)`,
+		prefixed(cols), quote(task.Table()), timestampLiteral(p.Start), timestampLiteral(p.End), literal(dest), compression)
 	if _, err := s.db.ExecContext(ctx, query); err != nil {
 		return fmt.Errorf("export partition %s: %w", p.Key, err)
 	}
@@ -224,19 +234,24 @@ ON CONFLICT (space_id, dataset_id) DO UPDATE SET scan_watermark = excluded.scan_
 	})
 }
 
-// CSVHeader 读取 gzip CSV 的表头。
+// CSVHeader 读取 CSV 的表头；文件是 gzip 压缩的（按魔数判断）则先解压。
 func CSVHeader(path string) ([]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	zr, err := gzip.NewReader(bufio.NewReader(file))
-	if err != nil {
-		return nil, err
+	br := bufio.NewReader(file)
+	var r io.Reader = br
+	if magic, _ := br.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+		zr, err := gzip.NewReader(br)
+		if err != nil {
+			return nil, err
+		}
+		defer zr.Close()
+		r = zr
 	}
-	defer zr.Close()
-	return csv.NewReader(zr).Read()
+	return csv.NewReader(r).Read()
 }
 
 // ReopenFinal 把已定稿分区的原文件按列名读回暂存表并把分区标回 open：文件里没有的新列为 NULL，同键以文件里的值为准。

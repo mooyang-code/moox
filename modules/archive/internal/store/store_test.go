@@ -726,3 +726,23 @@ func TestClaimRunsRechecksTheInstanceInsideTheTransaction(t *testing.T) {
 		t.Fatalf("活动实例可以领取: %v err=%v", claimed, err)
 	}
 }
+
+func TestOpenAddsTheFilePrefixColumnToAnOlderDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`ALTER TABLE t_archive_tasks DROP COLUMN c_file_prefix`); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("旧库应能升级: %v", err)
+	}
+	defer s.Close()
+	if _, err := s.db.Exec(`SELECT c_file_prefix FROM t_archive_tasks LIMIT 1`); err != nil {
+		t.Fatal(err)
+	}
+}

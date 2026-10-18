@@ -157,7 +157,7 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	if err := r.Staging.EnsureTable(ctx, s.task); err != nil {
 		return out, err
 	}
-	if err := r.Files.WriteDatasetJSON(a.GetSpaceId(), a.GetDatasetId(), a.GetFreq(), columns, r.now()); err != nil {
+	if err := r.Files.WriteDatasetJSON(a.GetSpaceId(), s.filePrefix(), a.GetDatasetId(), a.GetFreq(), columns, r.now()); err != nil {
 		return out, fmt.Errorf("write _dataset.json: %w", err)
 	}
 	out.Unrecoverable = unrecoverable
@@ -351,7 +351,7 @@ func (s *runState) stage(ctx context.Context, rows []staging.Row) error {
 		if !ok || p.Status != staging.StatusFinal {
 			continue
 		}
-		rel, err := export.RelPath(s.task.SpaceID, s.task.DatasetID, key)
+		rel, err := s.r.Files.RelPath(s.task.SpaceID, s.filePrefix(), key)
 		if err != nil {
 			return err
 		}
@@ -393,7 +393,7 @@ func (s *runState) exportDue(ctx context.Context, out *Outcome) error {
 		}
 		// 导出时间取 COPY 开始之前的时刻：此后（含 COPY 与登记之间）写入的变化，其 last_changed_at 一定晚于它，会触发下一次重写。
 		exportStarted := s.r.now()
-		info, err := s.r.Files.Write(ctx, s.r.Staging, s.task, p)
+		info, err := s.r.Files.Write(ctx, s.r.Staging, s.task, s.filePrefix(), p)
 		if err != nil {
 			return err
 		}
@@ -469,7 +469,7 @@ func (s *runState) partitionReports(ctx context.Context, out *Outcome) ([]*archi
 			report.MinDataTime, report.MaxDataTime = minTime.Format(time.RFC3339), maxTime.Format(time.RFC3339)
 		}
 		if !p.ExportedAt.IsZero() {
-			rel, err := export.RelPath(s.task.SpaceID, s.task.DatasetID, p.Key)
+			rel, err := s.r.Files.RelPath(s.task.SpaceID, s.filePrefix(), p.Key)
 			if err != nil {
 				return nil, err
 			}
@@ -507,4 +507,12 @@ func formatTime(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+// filePrefix 是导出文件名前缀：任务下发的前缀，没有时用数据集 ID。
+func (s *runState) filePrefix() string {
+	if p := s.a.GetFilePrefix(); p != "" {
+		return p
+	}
+	return s.a.GetDatasetId()
 }

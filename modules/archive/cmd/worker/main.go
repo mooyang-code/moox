@@ -90,7 +90,7 @@ func serve(cfg *config.Config) (err error) {
 	if err != nil {
 		return err
 	}
-	files := export.Files{Root: cfg.Worker.RootDir}
+	files := export.Files{Root: cfg.Worker.RootDir, Format: cfg.Worker.ExportFormats[0]}
 	instance := newInstanceID()
 	worker := app.New(app.Options{
 		Config: cfg, Manager: manager.New(gateway), Staging: store, Files: files, InstanceID: instance, Version: Version,

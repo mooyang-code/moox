@@ -117,7 +117,7 @@ func Default() *Config {
 	return &Config{
 		StorageAuthFile: "../secrets/storage-primary-auth.secret",
 		Worker: WorkerSection{
-			WorkerID: Caller + "@" + host, ExportFormats: []string{"csv.gz"}, MinFreeBytes: ByteSize(5 << 30),
+			WorkerID: Caller + "@" + host, ExportFormats: []string{"csv"}, MinFreeBytes: ByteSize(5 << 30),
 			HeartbeatInterval: 10 * time.Second, PullInterval: 5 * time.Second,
 		},
 		Staging: StagingSection{MemoryLimit: "1GB", Threads: 2, RebuildRatio: 2},
@@ -178,8 +178,8 @@ func (c *Config) Validate() error {
 	if strings.Contains(w.RootDir, string(filepath.Separator)+"Documents"+string(filepath.Separator)) {
 		return fmt.Errorf("worker.root_dir 不能放在 ~/Documents 下")
 	}
-	if len(w.ExportFormats) != 1 || w.ExportFormats[0] != "csv.gz" {
-		return fmt.Errorf("worker.export_formats 目前只支持 [csv.gz]")
+	if len(w.ExportFormats) != 1 || (w.ExportFormats[0] != "csv" && w.ExportFormats[0] != "csv.gz") {
+		return fmt.Errorf("worker.export_formats 目前只支持 [csv] 或 [csv.gz]")
 	}
 	if w.MinFreeBytes < 0 {
 		return fmt.Errorf("worker.min_free_bytes 不能为负")
