@@ -55,7 +55,7 @@ type activeRun struct {
 	ctx        context.Context
 	stop       atomic.Bool
 	// recreated：领取时数据集还有未处理的删除通知，说明任务被删除后重建，旧状态须在运行前清掉。
-	recreated bool
+	recreated *taskRef
 }
 
 // App 是 worker。
@@ -289,8 +289,8 @@ func (a *App) pullOnce(ctx context.Context) {
 		a.running[assignment.GetRunId()] = run
 		// 数据集重新创建了任务：之前记下的「已删除」通知作废，不能再清掉它的暂存数据。
 		key := assignment.GetSpaceId() + "/" + assignment.GetDatasetId()
-		if _, ok := a.deleted[key]; ok {
-			run.recreated = true
+		if ref, ok := a.deleted[key]; ok {
+			run.recreated = &ref
 		}
 		delete(a.deleted, key)
 		runs = append(runs, run)
@@ -397,11 +397,11 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 	release, err := a.acquireDataset(ctx, run, send)
 	if err == nil {
 		defer release()
-		if run.recreated {
+		if run.recreated != nil {
 			// 在串行保护内清掉升级前（未绑定任务实例）遗留的旧状态；已绑定实例的状态交给 BindEpoch 判断。失败则本次运行失败，并把删除通知放回去等待重试。
 			if derr := a.opts.Staging.DropIfUnbound(ctx, assignment.GetSpaceId(), assignment.GetDatasetId()); derr != nil {
 				a.mu.Lock()
-				a.deleted[assignment.GetSpaceId()+"/"+assignment.GetDatasetId()] = taskRef{space: assignment.GetSpaceId(), dataset: assignment.GetDatasetId()}
+				a.deleted[assignment.GetSpaceId()+"/"+assignment.GetDatasetId()] = *run.recreated
 				a.mu.Unlock()
 				err, dropErr = nil, derr
 			}
