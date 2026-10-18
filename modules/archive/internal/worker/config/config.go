@@ -83,9 +83,9 @@ type WorkerSection struct {
 
 // StagingSection 是 DuckDB 暂存库的资源设置。
 type StagingSection struct {
-	MemoryLimit  string  `yaml:"memory_limit"`
-	Threads      int     `yaml:"threads"`
-	RebuildRatio float64 `yaml:"rebuild_ratio"`
+	// CacheSize 是暂存库（SQLite）的页缓存上限。
+	CacheSize    ByteSize `yaml:"cache_size"`
+	RebuildRatio float64  `yaml:"rebuild_ratio"`
 }
 
 // PacingSection 是节奏与并发。
@@ -120,7 +120,7 @@ func Default() *Config {
 			WorkerID: Caller + "@" + host, ExportFormats: []string{"csv"}, MinFreeBytes: ByteSize(5 << 30),
 			HeartbeatInterval: 10 * time.Second, PullInterval: 5 * time.Second,
 		},
-		Staging: StagingSection{MemoryLimit: "1GB", Threads: 2, RebuildRatio: 2},
+		Staging: StagingSection{CacheSize: ByteSize(256 << 20), RebuildRatio: 2},
 		Pacing: PacingSection{
 			RequestSeconds: [2]int{25, 55}, MinuteWindow: true, HourQuiet: [2]string{"58:00", "04:00"}, RequestInterval: 200 * time.Millisecond,
 			MaxBytesPerSecond: ByteSize(512 << 10), MaxConcurrentRuns: 4, MaxRunsPerDataNode: 2, PageRows: 500,
@@ -190,14 +190,11 @@ func (c *Config) Validate() error {
 	if w.PullInterval < time.Second {
 		return fmt.Errorf("worker.pull_interval 不能小于 1s")
 	}
-	if c.Staging.Threads < 1 || c.Staging.Threads > 8 {
-		return fmt.Errorf("staging.threads 必须在 1 到 8 之间")
-	}
 	if c.Staging.RebuildRatio < 1.2 {
 		return fmt.Errorf("staging.rebuild_ratio 不能小于 1.2")
 	}
-	if c.Staging.MemoryLimit == "" {
-		return fmt.Errorf("staging.memory_limit 不能为空")
+	if c.Staging.CacheSize < ByteSize(1<<20) {
+		return fmt.Errorf("staging.cache_size 不能小于 1MB")
 	}
 	p := c.Pacing
 	if err := c.PacingConfig().Validate(); err != nil {
@@ -240,7 +237,7 @@ func ParseClock(value string) (time.Duration, error) {
 
 // StatePath 返回暂存库路径。
 func (c *Config) StatePath() string {
-	return filepath.Join(c.Worker.RootDir, ".state", "staging.duckdb")
+	return filepath.Join(c.Worker.RootDir, ".state", "staging.db")
 }
 
 // StorageSecretPath 返回 Storage 鉴权文件的绝对路径（相对配置文件所在目录）。

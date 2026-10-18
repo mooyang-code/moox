@@ -20,8 +20,7 @@ worker:
   pull_interval: 5s
 
 staging:
-  memory_limit: 1GB
-  threads: 2
+  cache_size: 256MB
   rebuild_ratio: 2
 
 pacing:

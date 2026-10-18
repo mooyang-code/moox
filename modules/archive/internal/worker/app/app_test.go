@@ -158,7 +158,7 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	root := t.TempDir()
-	store, err := staging.Open(filepath.Join(root, ".state", "staging.duckdb"), staging.Options{})
+	store, err := staging.Open(filepath.Join(root, ".state", "staging.db"), staging.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

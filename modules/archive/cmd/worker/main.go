@@ -81,7 +81,7 @@ func serve(cfg *config.Config) (err error) {
 	if err != nil {
 		return fmt.Errorf("read storage auth file: %w", err)
 	}
-	store, err := staging.Open(cfg.StatePath(), staging.Options{MemoryLimit: cfg.Staging.MemoryLimit, Threads: cfg.Staging.Threads})
+	store, err := staging.Open(cfg.StatePath(), staging.Options{CacheBytes: int64(cfg.Staging.CacheSize)})
 	if err != nil {
 		return fmt.Errorf("open staging database: %w", err)
 	}

@@ -39,10 +39,10 @@ func TestLoadAppliesTheDocumentedDefaults(t *testing.T) {
 		t.Fatalf("pacing = %+v", cfg.Pacing)
 	}
 	if cfg.Worker.MinFreeBytes != 5<<30 || cfg.Worker.HeartbeatInterval != 10*time.Second || cfg.Worker.PullInterval != 5*time.Second ||
-		cfg.Staging.MemoryLimit != "1GB" || cfg.Staging.Threads != 2 || cfg.Staging.RebuildRatio != 2 || cfg.Health.Addr != "127.0.0.1:11418" || cfg.Maintenance.At != "04:17:43" {
+		cfg.Staging.CacheSize != 256<<20 || cfg.Staging.RebuildRatio != 2 || cfg.Health.Addr != "127.0.0.1:11418" || cfg.Maintenance.At != "04:17:43" {
 		t.Fatalf("defaults = %+v", cfg)
 	}
-	if cfg.StatePath() != "/data/moox-archive/.state/staging.duckdb" {
+	if cfg.StatePath() != "/data/moox-archive/.state/staging.db" {
 		t.Fatalf("state path = %s", cfg.StatePath())
 	}
 	if !strings.HasSuffix(cfg.StorageSecretPath(), "/secrets/storage-primary-auth.secret") {
@@ -66,7 +66,7 @@ func TestLoadRejectsBadSettings(t *testing.T) {
 		"too many pages":  "",
 		"bad maintenance": "",
 		"per node over":   "",
-		"threads":         "",
+		"small cache":     "",
 		"two documents":   "---\nworker:\n  worker_id: x\n",
 		"export formats":  "",
 	} {
@@ -93,8 +93,8 @@ func TestLoadRejectsBadSettings(t *testing.T) {
 			body = base + "maintenance:\n  at: noon\n"
 		case "per node over":
 			body = base + "pacing:\n  max_concurrent_runs: 2\n  max_runs_per_data_node: 3\n"
-		case "threads":
-			body = base + "staging:\n  threads: 0\n"
+		case "small cache":
+			body = base + "staging:\n  cache_size: 64KB\n"
 		case "export formats":
 			body = base + "  export_formats: []\n"
 		default:

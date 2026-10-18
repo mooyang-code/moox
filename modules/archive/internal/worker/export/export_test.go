@@ -37,7 +37,7 @@ func TestRelPathBuildsDayAndMonthNamesAndRejectsUnsafeInput(t *testing.T) {
 func setup(t *testing.T) (Files, *staging.Store, staging.Task, staging.PartitionState) {
 	t.Helper()
 	root := t.TempDir()
-	store, err := staging.Open(filepath.Join(root, ".state", "staging.duckdb"), staging.Options{})
+	store, err := staging.Open(filepath.Join(root, ".state", "staging.db"), staging.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestDatasetJSONCarriesTheDatasetAndColumnDescriptionsAndIsRewrittenOnlyOnRe
 func TestCleanPartialsRemovesLeftoversButNotTheStateDirectory(t *testing.T) {
 	root := t.TempDir()
 	files := Files{Root: root}
-	keep := filepath.Join(root, ".state", "staging.duckdb.partial")
+	keep := filepath.Join(root, ".state", "staging.db.partial")
 	stale := filepath.Join(root, "crypto", "ds", "2026", "ds_20261015.csv.gz.partial")
 	good := filepath.Join(root, "crypto", "ds", "2026", "ds_20261014.csv.gz")
 	for _, p := range []string{keep, stale, good} {
