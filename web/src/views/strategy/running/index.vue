@@ -76,6 +76,9 @@
                 <a-dropdown trigger="click">
                   <a-button type="text" size="mini">更多</a-button>
                   <template #content>
+                    <a-doption :disabled="togglingId === record.instance_id" @click="toggle(record)">{{
+                      record.enabled ? "停用实例" : "启用实例"
+                    }}</a-doption>
                     <a-doption
                       :disabled="deleteState(record).disabled || removingId === record.instance_id"
                       @click="confirmRemove(record)"
@@ -130,6 +133,7 @@ import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import StrategyInstanceCreate from "@/views/strategy/components/strategy-instance-create.vue";
+import { confirmInstanceToggle } from "@/views/strategy/components/instance-toggle";
 import { formatStrategyTime } from "@/views/strategy/model";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
 import { STRATEGY_TASKS_ROUTE, detailLink, normalizeTaskTab, replayLink, resultsLink } from "@/views/strategy/links";
@@ -157,6 +161,7 @@ const filters = reactive({ strategy_id: state.value.strategyId, enabled: state.v
 const pagination = computed(() => ({ current: state.value.page, pageSize: PAGE_SIZE, total: store.totalInstances }));
 const readAt = ref("");
 const removingId = ref("");
+const togglingId = ref("");
 const empty = computed(() =>
   emptyKind({
     loading: store.instancesLoading,
@@ -237,6 +242,17 @@ function deleteState(instance: StrategyInstance) {
 }
 function created(instanceId: string) {
   openDetail(instanceId);
+}
+/** 列表行启停：与详情页共用确认对话框与请求流程，结束后（无论成败）重新读取列表以显示真实状态。 */
+function toggle(instance: StrategyInstance) {
+  if (togglingId.value) return;
+  confirmInstanceToggle(instance.instance_id, !instance.enabled, {
+    onStart: () => (togglingId.value = instance.instance_id),
+    onSettled: async () => {
+      await refresh();
+      togglingId.value = "";
+    }
+  });
 }
 function confirmRemove(instance: StrategyInstance) {
   Modal.warning({

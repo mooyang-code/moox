@@ -41,7 +41,7 @@
           <a-button @click="emit('replay', instance)">按实例会话回放</a-button>
           <a-button :loading="loading" @click="load">刷新</a-button>
         </a-space>
-        <div class="muted">当前目标与历史结果在「运行结果」查看；启停在完整详情中操作。</div>
+        <div class="muted">当前目标与历史结果在「运行结果」查看；启停可在列表「更多」菜单或完整详情中操作。</div>
       </template>
     </a-spin>
   </a-drawer>

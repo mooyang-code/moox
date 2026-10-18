@@ -52,7 +52,7 @@ export interface ActionState {
 
 /** 删除实例的条件与原因：启用中、会话仍在释放中都不能删。 */
 export function instanceDeleteState(instance: { enabled: boolean; session_id: string }): ActionState {
-  if (instance.enabled) return { disabled: true, reason: "实例已启用，请先在详情页停用" };
+  if (instance.enabled) return { disabled: true, reason: "实例已启用，请先停用" };
   if (instance.session_id) return { disabled: true, reason: "实例已停用，但会话仍在释放中，稍后可删除" };
   return { disabled: false, reason: "" };
 }

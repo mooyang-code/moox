@@ -9,9 +9,11 @@ const api = vi.hoisted(() => ({
   clearInstances: vi.fn(),
   store: null as any,
   space: null as any,
-  warning: vi.fn()
+  warning: vi.fn(),
+  confirmToggle: vi.fn()
 }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), error: vi.fn() }, Modal: { warning: api.warning } }));
+vi.mock("@/views/strategy/components/instance-toggle", () => ({ confirmInstanceToggle: api.confirmToggle }));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => api.space }));
 vi.mock("@/store/modules/strategy", () => ({ useStrategyStore: () => api.store }));
 
@@ -77,6 +79,7 @@ describe("strategy running page", () => {
     api.removeInstance.mockReset().mockResolvedValue(undefined);
     api.clearInstances.mockReset();
     api.warning.mockReset();
+    api.confirmToggle.mockReset();
     api.space = reactive({ selectedSpaceId: "crypto" });
     api.store = reactive({
       strategyCatalog: [] as unknown[],
@@ -200,6 +203,21 @@ describe("strategy running page", () => {
     await api.warning.mock.calls.at(-1)[0].onOk();
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({ page: "2" });
+  });
+
+  it("toggles an instance from the list through the shared confirm flow and reloads afterwards", async () => {
+    const { wrapper } = await setup({ page: "2" });
+    api.loadInstances.mockClear();
+    const vm = wrapper.vm as unknown as { toggle: (instance: unknown) => void; togglingId: string };
+    vm.toggle({ instance_id: "i5", enabled: true, session_id: "s" });
+    expect(api.confirmToggle).toHaveBeenCalledWith("i5", false, expect.any(Object));
+    const hooks = api.confirmToggle.mock.calls[0][2];
+    hooks.onStart();
+    expect(vm.togglingId).toBe("i5");
+    await hooks.onSettled(false);
+    expect(api.loadInstances).toHaveBeenCalledTimes(1);
+    expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: undefined, enabled: undefined, page: 2, page_size: 20 });
+    expect(vm.togglingId).toBe("");
   });
 
   it("lets only the latest of two quick space switches load the list", async () => {
