@@ -81,6 +81,13 @@ $S rollback --host control --unit prod --backup /data/moox/prod/binary-backup-co
   重启 `storage-primary`、`storage-node` 会让这一刻的周期提交失败，监控可能出一条几十秒的行情探针告警并自动恢复。
 - 发布 Storage 前确认没有正在跑的 `reset-view-consumers` 或 View 重建。
 
+## 发布清单的重新封存
+
+单元工具（`deploy-host`、`deploy-unit`、`bootstrap --release`）会核对已安装发布的文件清单（`prepared.json`）。`install` 与 `rollback`
+在组件重启核对之后，会调用该主机 `host/current/bin/moox-runtime reseal --unit-root <单元> --yes` 把清单改成现状（输出 `RESEALED:`）。
+封存失败时二进制已经生效，脚本以 7 退出并给出手工补救命令；手工改配置之后也要执行同样的 `reseal`（不带 `--yes` 先看差异路径）。
+改写前的清单留在单元根目录的 `reseal-backups/` 下。
+
 ## 服务目录变化：必须整体发布
 
 `packages/servicecatalog/catalog.yaml`（新增或删除 RPC 路由、改 ACL、改方法超时都算）内嵌在 **Admin、Monitor、每台主机的 host-gateway** 里。

@@ -190,6 +190,19 @@ print(\"重启结果里没有组件 \" + cid, file=sys.stderr); sys.exit(4)
 " || return 4
   wait_ready "${c}"
 }
+
+reseal_unit() {
+  # 原地换过二进制后把单元当前发布的文件清单重新封存，单元工具（deploy-host/deploy-unit/bootstrap --release）才会接受这个发布。
+  local root rt out
+  root="$(dirname "$(dirname "${LEDGER}")")"
+  rt="${root}/host/current/bin/moox-runtime"
+  if ! out="$("${rt}" reseal --unit-root "$(dirname "${LINK}")" --yes 2>&1)"; then
+    echo "二进制已生效，但发布清单没能重新封存：${out}" >&2
+    echo "处理后手工执行 ${rt} reseal --unit-root $(dirname "${LINK}") --yes" >&2
+    return 7
+  fi
+  echo "RESEALED:$(dirname "${LINK}")"
+}
 '
 
 # 远端安装脚本：校验上传、备份、原子替换、写台账、重启并核对。
@@ -214,6 +227,7 @@ echo "BACKUP:${BK}"
 mkdir -p "$(dirname "${LEDGER}")"
 printf '%s %s %s %s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${UNIT}" "${NAME}" "${COMMIT}" "${SHA}" "${COMPONENTS:-none}" >> "${LEDGER}"
 for c in ${COMPONENTS}; do restart_and_verify "${c}" "${SHA}" || exit $?; done
+reseal_unit || exit $?
 REMOTE
 
 # 远端回滚脚本：把备份目录里的 moox-* 装回去并重启。
@@ -236,6 +250,7 @@ done
 [ -n "${restored}" ] || { echo "备份目录里没有 moox-* 二进制" >&2; exit 5; }
 # 回滚时不知道哪个文件对应哪个组件，所以只核对组件重启后就绪；二进制 sha 以 RESTORED 行为准。
 for c in ${COMPONENTS}; do restart_and_verify "${c}" "" || exit $?; done
+reseal_unit || exit $?
 REMOTE
 
 cmd_install() {

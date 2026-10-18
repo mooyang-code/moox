@@ -112,6 +112,18 @@ done
 printf '{"host_id":"control","operation":"status","components":[%s]}\n' "${items}"
 EOF
 chmod +x "${REL}/restart.sh" "${REL}/status.sh"
+# 假的运行助手：记录 reseal 调用；存在 reseal-fail 标记时失败。
+mkdir -p "${FAKE_ROOT}/host/releases/h1/bin"
+ln -s releases/h1 "${FAKE_ROOT}/host/current"
+cat >"${FAKE_ROOT}/host/releases/h1/bin/moox-runtime" <<'EOF'
+#!/usr/bin/env bash
+root="$(cd "$(dirname "$0")/../../.." && pwd)"
+[[ "$1" == "reseal" && "$2" == "--unit-root" && "$4" == "--yes" ]] || exit 2
+[[ -e "${root}/reseal-fail" ]] && { echo "release inventory refused" >&2; exit 1; }
+echo "$3" >>"${root}/reseal-calls"
+printf '{"unit":"%s","resealed":true}\n' "$3"
+EOF
+chmod +x "${FAKE_ROOT}/host/releases/h1/bin/moox-runtime"
 
 cat >"${TMP}/release.env" <<EOF
 MOOX_RELEASE_HOST_CONTROL=ubuntu@control.example
@@ -199,12 +211,24 @@ grep -q '^RESULT:admin:running:ready=True:sha='"$(sha "${NEW}" | cut -c1-16)" "$
 grep -q '^READY:admin' "${TMP}/out.txt" || fail "要等到就绪"
 grep -q " prod moox-admin ${HEAD1} $(sha "${NEW}") admin\$" "${FAKE_ROOT}/run/release-ledger.log" || fail "发布台账里要有提交与 sha"
 [[ ! -e "${REL}/bin/.moox-admin.new" ]] || fail "不能留下 .new 临时文件"
+grep -q "^RESEALED:${FAKE_ROOT}/prod\$" "${TMP}/out.txt" || fail "安装后要重新封存单元的发布清单"
+[[ "$(tail -n 1 "${FAKE_ROOT}/reseal-calls")" == "${FAKE_ROOT}/prod" ]] || fail "reseal 要针对安装的单元"
 
 # --no-restart（装 cli 之类没有组件的二进制）
 printf 'new-cli\n' >"${TMP}/moox-admin-cli"
 run install --host control --unit prod --file "${TMP}/moox-admin-cli" --no-restart >"${TMP}/out.txt" 2>&1 || fail "--no-restart 应成功"
 grep -q RESTART "${TMP}/out.txt" && fail "--no-restart 不该重启" || true
 [[ "$(cat "${REL}/bin/moox-admin-cli")" == "new-cli" ]] || fail "cli 没装上"
+grep -q '^RESEALED:' "${TMP}/out.txt" || fail "--no-restart 也要重新封存发布清单"
+
+# 重新封存失败：二进制已生效，但要非零退出并说明手工补救的命令。
+touch "${FAKE_ROOT}/reseal-fail"
+printf 'cli-2\n' >"${TMP}/moox-admin-cli"
+expect_fail "重新封存失败" install --host control --unit prod --file "${TMP}/moox-admin-cli" --no-restart
+grep -q "发布清单没能重新封存" "${TMP}/out.txt" || fail "封存失败要说明"
+grep -q "reseal --unit-root ${FAKE_ROOT}/prod --yes" "${TMP}/out.txt" || fail "封存失败要给出手工命令"
+[[ "$(cat "${REL}/bin/moox-admin-cli")" == "cli-2" ]] || fail "封存失败不影响已安装的二进制"
+rm -f "${FAKE_ROOT}/reseal-fail"
 
 # ---------------------------------------------------------------- install 失败
 cp "${REL}/bin/moox-admin" "${TMP}/admin-before"
@@ -238,6 +262,7 @@ if compgen -G "/tmp/moox-release-*-moox-*" >/dev/null; then fail "远端临时�
 run rollback --host control --unit prod --backup "${BACKUP}" --restart admin >"${TMP}/out.txt" 2>&1 || { cat "${TMP}/out.txt" >&2; fail "rollback 应成功"; }
 [[ "$(cat "${REL}/bin/moox-admin")" == "old-admin" ]] || fail "回滚后应是旧二进制"
 grep -q '^RESTORED:moox-admin:' "${TMP}/out.txt" || fail "要打印恢复了哪些文件"
+grep -q '^RESEALED:' "${TMP}/out.txt" || fail "回滚后也要重新封存发布清单"
 grep -q "rollback:$(basename "${BACKUP}")" "${FAKE_ROOT}/run/release-ledger.log" || fail "回滚要写台账"
 expect_fail "备份目录越界" rollback --host control --unit prod --backup "/etc" --no-restart
 no_remote_calls "备份目录越界"

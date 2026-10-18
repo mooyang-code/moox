@@ -43,6 +43,7 @@ required=[
     'TestUnitPreparationLinuxFailureDoesNotPublishOrReplaceCurrent',
     'TestUnitPreparationLinuxReceiptRejectsChangedFilesAndEscapingHostView',
     'TestUnitActivationLinuxReplacesAndRollsBackAcrossServiceCatalogChange',
+    'TestUnitResealLinuxSealsInPlaceChangesOfTheCurrentRelease',
 ]
 for name in required:
     if not re.search(r'^--- PASS: '+re.escape(name)+r' \(',log,re.M):
