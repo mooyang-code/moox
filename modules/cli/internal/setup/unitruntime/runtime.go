@@ -33,6 +33,8 @@ type Result struct {
 	Operation  string   `json:"operation"`
 	Skipped    bool     `json:"skipped,omitempty"`
 	Components []Status `json:"components"`
+	// BootRecovered 列出本次因主机重启而清理掉的上次开机残留（只在开机后第一次操作时出现）。
+	BootRecovered []BootRecovery `json:"boot_recovered,omitempty"`
 }
 
 type Status struct {
@@ -108,6 +110,10 @@ func Execute(ctx context.Context, planPath, operation string, ids []string, opts
 	}
 	defer lock.Close()
 	if err := state.ensureHostIdentity(); err != nil {
+		return result, err
+	}
+	// 主机重启后先清掉上次开机留下的进程记录与停止中标记，否则 PID 被复用时身份核对失败、守护永远不拉起。
+	if result.BootRecovered, err = state.reconcileBoot(); err != nil {
 		return result, err
 	}
 	if pending, err := state.pendingInstallation(); err != nil {

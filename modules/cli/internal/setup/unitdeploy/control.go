@@ -160,7 +160,6 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 	return result, nil
 }
 
-
 func persistPrivateBytes(root *os.Root, name string, raw []byte) error {
 	if _, err := root.Lstat(name); err == nil {
 		stored, err := fsutil.ReadPrivate(root, name, 4<<20)

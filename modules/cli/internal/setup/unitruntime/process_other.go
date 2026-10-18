@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"time"
 )
 
 var errLinux = errors.New("deployment runtime process operations require Linux")
@@ -23,6 +24,8 @@ func execComponent(string, []string, []string) error { return errLinux }
 func signalProcess(*os.File, bool) error             { return errLinux }
 func processExited(*os.File) (bool, error)           { return false, errLinux }
 func detachCommand(*exec.Cmd)                        {}
+func readKernelBootID() (string, error)              { return "", errBootUnsupported }
+func readSystemBootTime() (time.Time, error)         { return time.Time{}, errBootUnsupported }
 func acquireLock(context.Context, *os.Root, bool, int, bool) (*os.File, bool, error) {
 	return nil, false, errLinux
 }
