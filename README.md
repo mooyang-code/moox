@@ -54,7 +54,6 @@ make build      # 构建
 make test       # Go 与前端测试
 make proto      # 重新生成 Protobuf 代码
 make verify     # 提交前的完整检查（CI 同款）
-make release    # 生成发布包
 ```
 
 仓库是 Go Workspace（`go.work`），每个模块、共享包都是独立的 Go module；模块之间只通过

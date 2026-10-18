@@ -47,5 +47,5 @@ src/views/        页面
 
 ## 发布
 
-`pnpm build:prod` 生成 `dist/` 后，在 `../web-host` 执行 `make statik` 把资源嵌入 `moox-web-host`，
-或直接使用 `./scripts/deploy/deploy-moox.sh --build-web-assets`。
+`pnpm build:prod` 生成 `dist/` 后，在 `../web-host` 执行 `make statik` 把资源嵌入 `moox-web-host`；
+原生部署（`setup bootstrap` / `setup release build`）会自动完成这两步。

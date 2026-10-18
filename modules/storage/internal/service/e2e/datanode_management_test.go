@@ -72,7 +72,7 @@ func TestDataNodeManagementLifecycle(t *testing.T) {
 
 	primary, err := primarystore.New(primarystore.Options{
 		Validator: primarystore.NewMetadataValidator(cache),
-		Resolver: func(ctx context.Context, spaceID, datasetID string) (pb.DataNodeRuntimeService, error) {
+		Resolver: func(ctx context.Context, spaceID, datasetID string) (primarystore.DataNodeClient, error) {
 			snapshot := coremetadata.RequestSnapshotFromContext(ctx)
 			if snapshot == nil {
 				snapshot = cache.RequestSnapshot()
