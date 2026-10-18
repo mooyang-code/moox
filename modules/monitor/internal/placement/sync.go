@@ -12,6 +12,7 @@ import (
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
@@ -115,6 +116,9 @@ func Checks(snapshot Snapshot, https map[string]domain.HTTPSConfig) ([]domain.Ch
 			}
 			if component.Health.Loopback || (snapshot.LocalHostID != "" && host.GetHostId() == snapshot.LocalHostID) {
 				address = "127.0.0.1"
+			} else if host.GetReachability() == servicecatalog.ReachabilityOutbound {
+				// 只能出站的主机连不进去：探测经 control 网关中转（合成主机名由探测器识别）。
+				address = host.GetHostId() + gatewayclient.RelayHostSuffix
 			}
 			check.URL = (&url.URL{Scheme: "http", Host: net.JoinHostPort(address, strconv.Itoa(component.Health.Port)), Path: "/readyz"}).String()
 			check.BodyContains = component.Health.ReadyBody

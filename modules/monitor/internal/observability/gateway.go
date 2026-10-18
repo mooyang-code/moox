@@ -71,8 +71,15 @@ func gatewayObservationSignals(row domain.GatewayObservation, status *adminpb.Ho
 		for index := range signals {
 			signals[index].RawError = row.ReadError
 		}
-		return signals
+		return append(signals, relaySignals(status, now, true)...)
 	}
+	if heartbeat.Status != "healthy" {
+		// control 网关心跳停了，会话状态已经过时，不能据此判断反向连接。
+		signals = append(signals, relaySignals(status, now, true)...)
+	} else {
+		signals = append(signals, relaySignals(status, now, false)...)
+	}
+	heartbeat, conflict, routes = &signals[0], &signals[1], &signals[2]
 	if status.GetInstanceId() == "" {
 		conflict.Status, conflict.Reason = "unknown", "主机网关尚未上报实例身份"
 	}
@@ -91,6 +98,28 @@ func gatewayObservationSignals(row domain.GatewayObservation, status *adminpb.Ho
 			routes.Status, routes.Reason = "down", "主机网关超过 2 分钟未应用期望路由快照"
 		}
 		routes.RawError = fmt.Sprintf("expected_hash=%s applied_hash=%s last_error=%s", row.ExpectedHash, row.AppliedHash, status.GetLastError())
+	}
+	return signals
+}
+
+// RelaySignalKind 是出站主机反向连接的信号类型；信号挂在出站主机上，数据来自 control 网关的心跳。
+const RelaySignalKind = "relay"
+
+// relaySignals 把 control 网关上报的各出站主机会话转换成信号。stale 表示 control 的心跳不可确认，只能给出 unknown。
+func relaySignals(status *adminpb.HostGatewayRuntimeStatus, now time.Time, stale bool) []GatewaySignal {
+	var signals []GatewaySignal
+	for _, session := range status.GetRelaySessions() {
+		signal := GatewaySignal{HostID: session.GetHostId(), Kind: RelaySignalKind, CheckedAt: now,
+			RawError: fmt.Sprintf("instance_id=%s connected_at=%s reconnects=%d streams=%d", session.GetInstanceId(), session.GetConnectedAt(), session.GetReconnects(), session.GetStreams())}
+		switch {
+		case stale:
+			signal.Status, signal.Reason = "unknown", "控制主机网关心跳不可确认，暂时无法判断反向连接"
+		case session.GetOnline():
+			signal.Status, signal.Reason = "healthy", "主机网关与控制主机的反向连接在线"
+		default:
+			signal.Status, signal.Reason = "down", "主机网关与控制主机的反向连接已断开"
+		}
+		signals = append(signals, signal)
 	}
 	return signals
 }

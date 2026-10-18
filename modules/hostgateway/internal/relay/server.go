@@ -277,11 +277,24 @@ func (s *Server) openStream(open protocol.Open) (net.Conn, func(), error) {
 	return stream, release, nil
 }
 
-// Status 返回所有接入过的出站主机的会话状态，按主机排序。
+// Status 返回目录里由本机中转的每台出站主机（包括从未接入的）以及仍有记录的主机的会话状态，按主机排序。
 func (s *Server) Status() []Status {
+	var outbound []string
+	if view := s.options.State.Load(); view != nil {
+		for id := range view.Directory().Hosts {
+			if view.OutboundHost(id) {
+				outbound = append(outbound, id)
+			}
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	result := make([]Status, 0, len(s.hosts))
+	result := make([]Status, 0, len(s.hosts)+len(outbound))
+	for _, id := range outbound {
+		if s.hosts[id] == nil {
+			result = append(result, Status{HostID: id})
+		}
+	}
 	for id, record := range s.hosts {
 		status := Status{HostID: id, Reconnects: record.reconnects}
 		if record.current != nil {

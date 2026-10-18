@@ -182,6 +182,7 @@ func roundTrip(t *testing.T, conn net.Conn) {
 // 同端口上不带 ALPN 的普通连接照常交给 tRPC。
 func TestRelayOpenStreamAllowlistAndReplay(t *testing.T) {
 	h := newHarness(t)
+	require.Equal(t, []relay.Status{{HostID: "home"}}, h.server.Status(), "从未接入的出站主机也要上报为离线")
 	_, err := h.open("monitor", servicecatalog.HostGatewayRemotePort)
 	require.ErrorContains(t, err, "offline")
 

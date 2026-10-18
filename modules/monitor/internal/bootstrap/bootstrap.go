@@ -179,7 +179,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	resultHook := monitorResultHook(runtime)
-	probeRunner := buildProbeRunner(cfg)
+	probeRunner := buildProbeRunner(cfg, runtime.Gateway)
 	marketCanary, marketCanaryProbe, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, metricsStorage, resultHook)
 	if err != nil {
 		_ = runtime.Close()

@@ -4,6 +4,7 @@ package gatewayclient
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient/relay"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
@@ -83,9 +85,40 @@ type relayRoute struct {
 	credentials                         gatewayauth.Credentials
 }
 
-// relayAddress 是中转目标在连接池里的合成地址，与真实地址不会冲突，也从不解析。
+// RelayHostSuffix 标记经 control 中转的合成主机名（<主机 ID>.moox-relay），只在本进程内使用、从不解析。
+const RelayHostSuffix = ".moox-relay"
+
+// relayAddress 是中转目标在连接池里的合成地址，与真实地址不会冲突。
 func relayAddress(target string) string {
-	return net.JoinHostPort(target+".moox-relay", strconv.Itoa(servicecatalog.HostGatewayRemotePort))
+	return net.JoinHostPort(target+RelayHostSuffix, strconv.Itoa(servicecatalog.HostGatewayRemotePort))
+}
+
+// DialRelay 经 control 中转连接只能出站主机的本机端口（例如 Monitor 的健康探测），
+// 返回的连接里是目标端口的原始字节；外层与 control 之间是 TLS。
+func (c *Client) DialRelay(ctx context.Context, hostID string, port int) (net.Conn, error) {
+	if c.closed.Load() {
+		return nil, net.ErrClosed
+	}
+	c.mu.RLock()
+	directory := c.directory
+	c.mu.RUnlock()
+	host, ok := directory.Hosts[hostID]
+	if !ok || host.Relay == "" {
+		return nil, fmt.Errorf("host %s is not an outbound host in the directory", hostID)
+	}
+	ep, err := c.relayEndpoint(ctx, directory, hostID, host.Relay)
+	if err != nil {
+		return nil, err
+	}
+	roots, err := loadRoots(ep.relay.caFile)
+	if err != nil {
+		return nil, err
+	}
+	return relay.Dial(ctx, relay.OpenOptions{
+		Address: ep.relay.controlAddress, ControlHost: ep.relay.controlHost,
+		TLS:         &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots},
+		Credentials: c.config.Credentials, Target: relay.Open{HostID: hostID, Port: port},
+	})
 }
 
 const (
