@@ -62,6 +62,8 @@ type Options struct {
 	PolicyPath string
 	// NewSender 按渠道创建告警发送器，默认 notification.NewSender；测试可替换。
 	NewSender func(notification.ChannelConfig) (notification.Sender, error)
+	// PeerProbe 是 control 交叉检查的 TLS 握手，默认 probeTLS；测试可替换。
+	PeerProbe PeerProbe
 }
 
 // ComponentReport 是一个组件本轮的结果。
@@ -93,6 +95,8 @@ type Report struct {
 	Barrier       string                     `json:"barrier,omitempty"`
 	BootRecovered []unitruntime.BootRecovery `json:"boot_recovered,omitempty"`
 	Components    []ComponentReport          `json:"components"`
+	// PeerControl 是非 control 主机对 control 网关的交叉检查结果。
+	PeerControl *PeerReport `json:"peer_control,omitempty"`
 	// WatchdogDisabled 表示中心策略关闭了守护：本轮只检查，不拉起、不重启、不告警。
 	WatchdogDisabled bool `json:"watchdog_disabled,omitempty"`
 	// Alerts 是本轮发出的告警标题；AlertErrors 是策略读取或推送失败的说明。
@@ -133,11 +137,30 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	if err != nil {
 		return report, err
 	}
+	// control 交叉检查与本机组件无关，安装屏障存在时也照常进行。
+	var peerMessages []notification.Message
+	peer, peerErr := checkControlPeer(ctx, opts.Root, opts.PeerProbe)
+	if peerErr != nil {
+		report.AlertErrors = append(report.AlertErrors, "control 交叉检查不可用："+peerErr.Error())
+	}
+	if peer != nil {
+		report.PeerControl = peer
+		if !opts.DryRun {
+			ps, err := store.loadPeer()
+			if err != nil {
+				return report, err
+			}
+			peerMessages = observePeer(peer, ps, hostID, opts.Now())
+			if err := store.savePeer(ps); err != nil {
+				return report, err
+			}
+		}
+	}
 	for _, barrier := range []string{"installation", "bootstrap"} {
 		if _, err := os.Lstat(filepath.Join(runDir, barrier+".json")); err == nil {
 			report.Barrier = barrier
 			if !opts.DryRun {
-				opts.deliver(ctx, &report, state, policy)
+				opts.deliver(ctx, &report, state, policy, peerMessages)
 				if err := store.save(state); err != nil {
 					return report, err
 				}
@@ -188,7 +211,7 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	}
 	sort.SliceStable(report.BootRecovered, func(i, j int) bool { return report.BootRecovered[i].Component < report.BootRecovered[j].Component })
 	if !opts.DryRun {
-		opts.deliver(ctx, &report, state, policy)
+		opts.deliver(ctx, &report, state, policy, peerMessages)
 		if err := store.save(state); err != nil {
 			return report, err
 		}
@@ -197,8 +220,8 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 }
 
 // deliver 决定并发出本轮告警，把结果写进报告。
-func (o Options) deliver(ctx context.Context, report *Report, state *watchState, policy hostpolicy.Policy) {
-	messages := planAlerts(*report, state, o.Now(), o.Policy)
+func (o Options) deliver(ctx context.Context, report *Report, state *watchState, policy hostpolicy.Policy, extra []notification.Message) {
+	messages := append(planAlerts(*report, state, o.Now(), o.Policy), extra...)
 	for _, message := range messages {
 		report.Alerts = append(report.Alerts, message.Title)
 	}
@@ -324,6 +347,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.NewSender == nil {
 		o.NewSender = notification.NewSender
+	}
+	if o.PeerProbe == nil {
+		o.PeerProbe = probeTLS
 	}
 	o.Policy = o.Policy.withDefaults()
 	return o
