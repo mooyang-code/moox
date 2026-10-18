@@ -16,12 +16,13 @@ import (
 
 // fakeHost 模拟一台主机：若干单元、每个组件的检查结果，以及可推进的时钟。
 type fakeHost struct {
-	t       *testing.T
-	root    string
-	plans   map[string]unitruntime.Plan
-	now     time.Time
-	calls   []string
-	respond func(component string) (unitruntime.Result, error)
+	t          *testing.T
+	root       string
+	plans      map[string]unitruntime.Plan
+	now        time.Time
+	calls      []string
+	operations []string
+	respond    func(component string) (unitruntime.Result, error)
 	// tick 是每次检查消耗的时间。
 	tick time.Duration
 }
@@ -61,9 +62,10 @@ func (h *fakeHost) options() Options {
 			return plan, nil
 		},
 		Execute: func(_ context.Context, path, operation string, ids []string, _ unitruntime.Options) (unitruntime.Result, error) {
-			require.Equal(h.t, "healthcheck", operation)
+			require.Contains(h.t, []string{"healthcheck", "status"}, operation)
 			require.Len(h.t, ids, 1)
 			h.calls = append(h.calls, ids[0])
+			h.operations = append(h.operations, operation)
 			h.now = h.now.Add(h.tick)
 			return h.respond(ids[0])
 		},
@@ -72,7 +74,7 @@ func (h *fakeHost) options() Options {
 
 func (h *fakeHost) run() Report {
 	h.t.Helper()
-	h.calls = nil
+	h.calls, h.operations = nil, nil
 	report, err := Run(context.Background(), h.options())
 	require.NoError(h.t, err)
 	return report

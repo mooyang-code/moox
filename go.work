@@ -42,6 +42,7 @@ use (
 	./packages/gatewayroute/proto/gatewayroutegen
 	./packages/healthz
 	./packages/hostmetricpb
+	./packages/hostpolicy
 	./packages/jetstream
 	./packages/marketcalendar
 	./packages/marketfetchpb

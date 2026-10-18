@@ -18,6 +18,8 @@ type Policy struct {
 	CrashLoopSlow     time.Duration // 持续崩溃超过 1 小时后的尝试间隔
 	StableAfter       time.Duration // 连续正常这么久才判定恢复并清零
 	LedgerRetention   time.Duration
+	MergeWindow       time.Duration // 同一组件的拉起告警合并窗口
+	NotReadyAlert     time.Duration // 持续未就绪多久才告警
 }
 
 func (p Policy) withDefaults() Policy {
@@ -39,6 +41,12 @@ func (p Policy) withDefaults() Policy {
 	if p.LedgerRetention <= 0 {
 		p.LedgerRetention = 30 * 24 * time.Hour
 	}
+	if p.MergeWindow <= 0 {
+		p.MergeWindow = 10 * time.Minute
+	}
+	if p.NotReadyAlert <= 0 {
+		p.NotReadyAlert = 5 * time.Minute
+	}
 	return p
 }
 
@@ -57,6 +65,7 @@ type componentState struct {
 
 type watchState struct {
 	Components map[string]*componentState `json:"components"`
+	Alerts     alertState                 `json:"alerts"`
 }
 
 func (s *watchState) component(id string) *componentState {

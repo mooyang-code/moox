@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
+	"github.com/mooyang-code/moox/packages/hostpolicy"
+	"github.com/mooyang-code/moox/packages/notification"
 )
 
 // 结果分类。
@@ -54,8 +56,12 @@ type Options struct {
 	Execute      ExecuteFunc
 	// LoadPlan 读取单元的运行计划，默认 unitruntime.LoadPlan；测试可替换。
 	LoadPlan func(path string) (unitruntime.Plan, error)
-	// Policy 是持续崩溃与未就绪的参数，零值使用默认值。
+	// Policy 是持续崩溃与未就绪的参数，零值使用默认值；主机策略缓存里的守护参数会覆盖它。
 	Policy Policy
+	// PolicyPath 是主机策略缓存，默认 <Root>/run/host-policy.json。
+	PolicyPath string
+	// NewSender 按渠道创建告警发送器，默认 notification.NewSender；测试可替换。
+	NewSender func(notification.ChannelConfig) (notification.Sender, error)
 }
 
 // ComponentReport 是一个组件本轮的结果。
@@ -87,6 +93,11 @@ type Report struct {
 	Barrier       string                     `json:"barrier,omitempty"`
 	BootRecovered []unitruntime.BootRecovery `json:"boot_recovered,omitempty"`
 	Components    []ComponentReport          `json:"components"`
+	// WatchdogDisabled 表示中心策略关闭了守护：本轮只检查，不拉起、不重启、不告警。
+	WatchdogDisabled bool `json:"watchdog_disabled,omitempty"`
+	// Alerts 是本轮发出的告警标题；AlertErrors 是策略读取或推送失败的说明。
+	Alerts      []string `json:"alerts,omitempty"`
+	AlertErrors []string `json:"alert_errors,omitempty"`
 }
 
 type target struct {
@@ -106,13 +117,13 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	}
 	report.HostID = hostID
 	runDir := filepath.Join(opts.Root, "run")
-	for _, barrier := range []string{"installation", "bootstrap"} {
-		if _, err := os.Lstat(filepath.Join(runDir, barrier+".json")); err == nil {
-			report.Barrier = barrier
-			return report, nil
-		} else if !os.IsNotExist(err) {
-			return report, err
-		}
+	policy, _, policyErr := loadPolicy(opts.PolicyPath)
+	if policyErr != nil {
+		report.AlertErrors = append(report.AlertErrors, "主机策略缓存不可用："+policyErr.Error())
+	}
+	opts.Policy = applyWatchdog(opts.Policy, policy.Watchdog)
+	if policy.Watchdog.Disabled && !opts.DryRun {
+		opts.DryRun, report.DryRun, report.WatchdogDisabled = true, true, true
 	}
 	store, err := openStore(runDir)
 	if err != nil {
@@ -121,6 +132,20 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	state, err := store.load()
 	if err != nil {
 		return report, err
+	}
+	for _, barrier := range []string{"installation", "bootstrap"} {
+		if _, err := os.Lstat(filepath.Join(runDir, barrier+".json")); err == nil {
+			report.Barrier = barrier
+			if !opts.DryRun {
+				opts.deliver(ctx, &report, state, policy)
+				if err := store.save(state); err != nil {
+					return report, err
+				}
+			}
+			return report, nil
+		} else if !os.IsNotExist(err) {
+			return report, err
+		}
 	}
 
 	dependencyDown := ""
@@ -161,13 +186,23 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 		report.BootRecovered = append(report.BootRecovered, entry.bootRecovered...)
 		report.Components = append(report.Components, entry.ComponentReport)
 	}
+	sort.SliceStable(report.BootRecovered, func(i, j int) bool { return report.BootRecovered[i].Component < report.BootRecovered[j].Component })
 	if !opts.DryRun {
+		opts.deliver(ctx, &report, state, policy)
 		if err := store.save(state); err != nil {
 			return report, err
 		}
 	}
-	sort.SliceStable(report.BootRecovered, func(i, j int) bool { return report.BootRecovered[i].Component < report.BootRecovered[j].Component })
 	return report, nil
+}
+
+// deliver 决定并发出本轮告警，把结果写进报告。
+func (o Options) deliver(ctx context.Context, report *Report, state *watchState, policy hostpolicy.Policy) {
+	messages := planAlerts(*report, state, o.Now(), o.Policy)
+	for _, message := range messages {
+		report.Alerts = append(report.Alerts, message.Title)
+	}
+	report.AlertErrors = append(report.AlertErrors, sendAlerts(ctx, messages, policy, o.NewSender)...)
 }
 
 // running 报告结果是否表示组件此刻在运行（依赖判断用）。
@@ -283,6 +318,12 @@ func (o Options) withDefaults() Options {
 	}
 	if o.LoadPlan == nil {
 		o.LoadPlan = unitruntime.LoadPlan
+	}
+	if o.PolicyPath == "" {
+		o.PolicyPath = hostpolicy.Path(o.Root)
+	}
+	if o.NewSender == nil {
+		o.NewSender = notification.NewSender
 	}
 	o.Policy = o.Policy.withDefaults()
 	return o

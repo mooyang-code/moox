@@ -19,7 +19,9 @@ require (
 	github.com/mooyang-code/moox/packages/cloudprovider v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/hostpolicy v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/notification v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepolicy v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
@@ -163,3 +165,7 @@ replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storag
 replace github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen => ../cloudnode/proto/cloudnodegen
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
+
+replace github.com/mooyang-code/moox/packages/hostpolicy => ../../packages/hostpolicy
+
+replace github.com/mooyang-code/moox/packages/notification => ../../packages/notification
