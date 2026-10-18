@@ -33,6 +33,8 @@ type MigrateOptions struct {
 	RepoRoot string
 	// RenameFrom / RenameTo 非空时把主机 ID 改名（--rename-host old=new）。
 	RenameFrom, RenameTo string
+	// TLSModeHost / TLSMode 非空时设置该主机的控制台证书模式（--set-tls-mode 主机=auto|public|internal）。
+	TLSModeHost, TLSMode string
 	// SCFImport 非空时用这份 JSON 整体替换 [scf_plan]，并给相关主机补上 region 与 private_address（--import-scf）。
 	SCFImport string
 	// Write 为 true 时校验通过后写回（备份原文件并重新加密）；否则只预览。
@@ -77,6 +79,7 @@ type MigrateReport struct {
 	Labels     []HostLabelMigration `json:"labels,omitempty"`
 	Rename     *HostRename          `json:"rename,omitempty"`
 	SCF        *SCFImportReport     `json:"scf,omitempty"`
+	TLSMode    map[string]string    `json:"tls_mode,omitempty"`
 	Changed    bool                 `json:"changed"`
 	Valid      bool                 `json:"valid"`
 	Written    bool                 `json:"written"`
@@ -112,6 +115,12 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 	migrated, err := migrateManifestText(plain, library, opts.RenameFrom, opts.RenameTo, &report)
 	if err != nil {
 		return report, err
+	}
+	if opts.TLSModeHost != "" {
+		if migrated, err = setHostTLSMode(migrated, opts.TLSModeHost, opts.TLSMode); err != nil {
+			return report, err
+		}
+		report.TLSMode = map[string]string{opts.TLSModeHost: opts.TLSMode}
 	}
 	if opts.SCFImport != "" {
 		plan, err := readSCFImport(opts.SCFImport)
@@ -605,4 +614,22 @@ func setBlockKey(b *block, key, value string) {
 		}
 	}
 	b.lines = append(b.lines[:at], append([]string{line}, b.lines[at:]...)...)
+}
+
+// setHostTLSMode 设置 [hosts.<host>] 的 tls_mode。
+func setHostTLSMode(plain []byte, host, mode string) ([]byte, error) {
+	if mode != "auto" && mode != "public" && mode != "internal" {
+		return nil, errors.New("--set-tls-mode 的模式只能是 auto、public 或 internal")
+	}
+	blocks := splitBlocks(strings.Split(string(plain), "\n"))
+	i := slices.IndexFunc(blocks, func(b block) bool { return b.header == "hosts."+host && !b.array })
+	if i < 0 {
+		return nil, fmt.Errorf("moox.toml 里没有主机 %s", host)
+	}
+	setBlockKey(&blocks[i], "tls_mode", fmt.Sprintf("%q", mode))
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.lines...)
+	}
+	return []byte(strings.Join(out, "\n")), nil
 }

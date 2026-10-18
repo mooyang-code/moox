@@ -11,7 +11,7 @@ import (
 )
 
 func newConfigMigrateCommand() *cobra.Command {
-	var file, renameHost, importSCF string
+	var file, renameHost, importSCF, tlsMode string
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "migrate",
@@ -28,6 +28,13 @@ func newConfigMigrateCommand() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			opts := configinit.MigrateOptions{Write: yes, SCFImport: importSCF}
+			if tlsMode != "" {
+				host, mode, ok := strings.Cut(tlsMode, "=")
+				if !ok {
+					return errors.New("--set-tls-mode 需要写成 主机ID=auto|public|internal")
+				}
+				opts.TLSModeHost, opts.TLSMode = strings.TrimSpace(host), strings.TrimSpace(mode)
+			}
 			if renameHost != "" {
 				from, to, ok := strings.Cut(renameHost, "=")
 				if !ok {
@@ -50,6 +57,7 @@ func newConfigMigrateCommand() *cobra.Command {
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "moox.toml 路径（因子库目录相对它所在的仓库根目录解析）")
 	cmd.Flags().StringVar(&renameHost, "rename-host", "", "把主机 ID 改名，写成 旧ID=新ID，例如 compute-1=overseas")
 	cmd.Flags().StringVar(&importSCF, "import-scf", "", "用这份 JSON 整体替换 [scf_plan]，并给入口主机补上 region 与 private_address")
+	cmd.Flags().StringVar(&tlsMode, "set-tls-mode", "", "设置主机的控制台证书模式，写成 主机ID=auto|public|internal")
 	cmd.Flags().BoolVar(&yes, "yes", false, "校验通过后写回（备份原文件并重新加密）")
 	return cmd
 }
