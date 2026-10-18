@@ -21,6 +21,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// OperatorCAFile 是操作端身份目录里的 MooX CA 文件名，由身份安装写入。
+const OperatorCAFile = "moox-ca.crt"
+
 // Client owns all connections, including the directory source borrowed by the
 // shared client. Closing it first joins directory refresh, then closes SSH.
 type Client struct {
@@ -70,9 +73,14 @@ func open(ctx context.Context, snapshot *setupconfig.Snapshot, identityPath stri
 		resolver.hosts[host.Name] = host
 	}
 	source := &directorySource{control: snapshot.Manifest.ControlHost().Name, tunnels: resolver}
+	// 安装操作端身份时一并保存的 MooX CA；连接只能出站的主机（经 control 中转）时用它校验证书。
+	caFile := filepath.Join(filepath.Dir(identityPath), OperatorCAFile)
+	if _, err := os.Stat(caFile); err != nil {
+		caFile = ""
+	}
 	shared, err := gatewayclient.New(gatewayclient.Config{
 		Mode: gatewayclient.Tunnel, Credentials: gatewayauth.Credentials{Caller: "moox-cli", KeyID: identity.KeyID, Secret: secret},
-		Source: source, Tunnels: resolver,
+		Source: source, Tunnels: resolver, CAFile: caFile,
 	})
 	if err != nil {
 		_ = source.Close()
@@ -140,6 +148,16 @@ type tunnels struct {
 // Resolve ignores public addresses in Directory. Only a configured SSH host
 // may supply a local forward, always to that host's 127.0.0.1:11002.
 func (t *tunnels) Resolve(ctx context.Context, hostID string) (string, error) {
+	return t.forward(ctx, hostID, hostID, "127.0.0.1:11002")
+}
+
+// ResolveRelay 经 SSH 转发到 control 的跨主机端口 127.0.0.1:11003，用来经中转连接只能出站的主机；
+// 不会去 SSH 直连出站主机。
+func (t *tunnels) ResolveRelay(ctx context.Context, controlHostID string) (string, error) {
+	return t.forward(ctx, "relay/"+controlHostID, controlHostID, "127.0.0.1:11003")
+}
+
+func (t *tunnels) forward(ctx context.Context, key, hostID, remote string) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed || t.ctx.Err() != nil {
@@ -152,7 +170,7 @@ func (t *tunnels) Resolve(ctx context.Context, hostID string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("directory host %q has no configured SSH identity", hostID)
 	}
-	if connection := t.connections[hostID]; connection != nil {
+	if connection := t.connections[key]; connection != nil {
 		if err := connection.ssh.Check(ctx); err == nil {
 			return connection.listener.Addr().String(), nil
 		} else if ctx.Err() != nil {
@@ -160,18 +178,18 @@ func (t *tunnels) Resolve(ctx context.Context, hostID string) (string, error) {
 		}
 		_ = connection.listener.Close()
 		_ = connection.ssh.Close()
-		delete(t.connections, hostID)
+		delete(t.connections, key)
 	}
 	transport, err := setupssh.Dial(ctx, setupssh.Target{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username}, host.Password, t.options)
 	if err != nil {
 		return "", fmt.Errorf("open gateway SSH tunnel for %s: %w", hostID, err)
 	}
-	listener, err := transport.ForwardLocal(t.ctx, "127.0.0.1:11002")
+	listener, err := transport.ForwardLocal(t.ctx, remote)
 	if err != nil {
 		_ = transport.Close()
 		return "", err
 	}
-	t.connections[hostID] = &tunnel{ssh: transport, listener: listener}
+	t.connections[key] = &tunnel{ssh: transport, listener: listener}
 	return listener.Addr().String(), nil
 }
 

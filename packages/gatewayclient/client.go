@@ -37,6 +37,12 @@ type TunnelResolver interface {
 	Resolve(ctx context.Context, hostID string) (string, error)
 }
 
+// RelayTunnelResolver 由隧道模式的解析器可选实现：返回到 control 主机 127.0.0.1:11003 的本地转发，
+// 用来经 control 网关中转连接只能出站的主机。
+type RelayTunnelResolver interface {
+	ResolveRelay(ctx context.Context, controlHostID string) (string, error)
+}
+
 // Invoker is the object-call interface used by service clients.
 type Invoker interface {
 	Invoke(context.Context, string, string, any, any) error
@@ -66,6 +72,20 @@ type Config struct {
 type endpoint struct {
 	address, target, caFile, serverName string
 	compress                            bool
+	// relay 非空时经 control 网关中转：address 是只在本进程内使用的合成地址，拨号时先连 control 再连目标。
+	relay *relayRoute
+}
+
+// relayRoute 描述一次经 control 中转的连接。
+type relayRoute struct {
+	controlAddress, controlHost, target string
+	caFile                              string
+	credentials                         gatewayauth.Credentials
+}
+
+// relayAddress 是中转目标在连接池里的合成地址，与真实地址不会冲突，也从不解析。
+func relayAddress(target string) string {
+	return net.JoinHostPort(target+".moox-relay", strconv.Itoa(servicecatalog.HostGatewayRemotePort))
 }
 
 const (
@@ -156,6 +176,7 @@ func New(config Config) (*Client, error) {
 		if config.Credentials.Caller != "moox-cli" || config.Source == nil || config.Tunnels == nil {
 			return nil, fmt.Errorf("tunnel client requires moox-cli identity, directory source and tunnel resolver")
 		}
+		// 隧道模式平时不需要 CA；连接出站主机时要用它校验 control 与目标网关的证书。
 	case External:
 		if err := validateExternalIdentity(catalog, config.Credentials.Caller, config.AccessAddress, config.AccessInstanceID); err != nil {
 			return nil, err
@@ -401,6 +422,9 @@ func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoi
 	if chosen == previous && len(hosts) > 1 {
 		chosen = hosts[1]
 	}
+	if relayHost := directory.Hosts[chosen].Relay; relayHost != "" && chosen != c.config.LocalHostID {
+		return c.relayEndpoint(ctx, directory, chosen, relayHost)
+	}
 	if c.config.Mode == Tunnel {
 		address, err := c.config.Tunnels.Resolve(ctx, chosen)
 		if err != nil {
@@ -416,6 +440,40 @@ func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoi
 	}
 	host := directory.Hosts[chosen]
 	return endpoint{address: net.JoinHostPort(host.Address, "11003"), target: chosen, caFile: c.config.CAFile, serverName: chosen, compress: c.config.Compression == CompressionGzip}, nil
+}
+
+// relayEndpoint 为只能出站的主机构造经 control 中转的端点；端到端 TLS 仍校验目标主机身份。
+func (c *Client) relayEndpoint(ctx context.Context, directory servicecatalog.Directory, target, controlHost string) (endpoint, error) {
+	if c.config.CAFile == "" {
+		return endpoint{}, fmt.Errorf("host %s is reachable only through the control relay, which requires the MooX CA file", target)
+	}
+	route := &relayRoute{controlHost: controlHost, target: target, caFile: c.config.CAFile, credentials: c.config.Credentials}
+	port := strconv.Itoa(servicecatalog.HostGatewayRemotePort)
+	switch {
+	case c.config.Mode == Tunnel:
+		resolver, ok := c.config.Tunnels.(RelayTunnelResolver)
+		if !ok {
+			return endpoint{}, fmt.Errorf("tunnel resolver cannot reach the control relay for host %s", target)
+		}
+		address, err := resolver.ResolveRelay(ctx, controlHost)
+		if err != nil {
+			return endpoint{}, err
+		}
+		if !loopbackAddress(address) {
+			return endpoint{}, fmt.Errorf("SSH tunnel returned a non-loopback endpoint")
+		}
+		route.controlAddress = address
+	case controlHost == c.config.LocalHostID:
+		// control 上的调用方直接连本机的跨主机端口，不绕公网地址。
+		route.controlAddress = net.JoinHostPort("127.0.0.1", port)
+	default:
+		control, ok := directory.Hosts[controlHost]
+		if !ok {
+			return endpoint{}, fmt.Errorf("relay host %s is not in the directory", controlHost)
+		}
+		route.controlAddress = net.JoinHostPort(control.Address, port)
+	}
+	return endpoint{address: relayAddress(target), target: target, caFile: c.config.CAFile, serverName: target, compress: c.config.Compression == CompressionGzip, relay: route}, nil
 }
 
 func validAddress(address string) bool {

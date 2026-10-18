@@ -2,11 +2,18 @@ package gatewayclient
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
+
+	"github.com/mooyang-code/moox/packages/gatewayclient/relay"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 
 	_ "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -29,12 +36,20 @@ type rpcPool struct {
 	mu        sync.Mutex
 	pools     map[trustIdentity]connpool.Pool
 	conns     map[*trackedConn]struct{}
+	relays    map[string]*relayRoute
 	closed    bool
 	transport transport.ClientTransport
 }
 
 func newRPCPool() *rpcPool {
-	return &rpcPool{pools: make(map[trustIdentity]connpool.Pool), conns: make(map[*trackedConn]struct{}), transport: transport.NewClientTransport()}
+	return &rpcPool{pools: make(map[trustIdentity]connpool.Pool), conns: make(map[*trackedConn]struct{}), relays: make(map[string]*relayRoute), transport: transport.NewClientTransport()}
+}
+
+// route 登记合成地址对应的中转路线；control 地址随目录变化时覆盖旧值，已建立的连接不受影响。
+func (p *rpcPool) route(address string, route *relayRoute) {
+	p.mu.Lock()
+	p.relays[address] = route
+	p.mu.Unlock()
 }
 
 func (p *rpcPool) Get(network, address string, opts connpool.GetOptions) (net.Conn, error) {
@@ -54,7 +69,16 @@ func (p *rpcPool) Get(network, address string, opts connpool.GetOptions) (net.Co
 }
 
 func (p *rpcPool) dial(opts *connpool.DialOptions) (net.Conn, error) {
-	conn, err := connpool.Dial(opts)
+	p.mu.Lock()
+	route := p.relays[opts.Address]
+	p.mu.Unlock()
+	var conn net.Conn
+	var err error
+	if route != nil {
+		conn, err = dialRelay(opts, route)
+	} else {
+		conn, err = connpool.Dial(opts)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +149,9 @@ func (p *rpcPool) invoke(ctx context.Context, ep endpoint, service, method strin
 	if ep.compress && len(body) >= minCompressBytes {
 		options = append(options, client.WithCompressType(codec.CompressTypeGzip))
 	}
+	if ep.relay != nil {
+		p.route(ep.address, ep.relay)
+	}
 	if ep.caFile != "" {
 		options = append(options, client.WithTLS("", "", ep.caFile, ep.serverName))
 	}
@@ -136,4 +163,45 @@ func (p *rpcPool) invoke(ctx context.Context, ep endpoint, service, method strin
 		return nil, err
 	}
 	return response.Data, nil
+}
+
+// dialRelay 经 control 网关打开中转流，再在流上与目标网关做 TLS（ServerName 为目标主机 ID）。
+// control 只转发密文；连接池按 TLS 身份与合成地址隔离，复用与只读重试语义与直连相同。
+func dialRelay(opts *connpool.DialOptions, route *relayRoute) (net.Conn, error) {
+	roots, err := loadRoots(route.caFile)
+	if err != nil {
+		return nil, err
+	}
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	stream, err := relay.Dial(ctx, relay.OpenOptions{
+		Address: route.controlAddress, ControlHost: route.controlHost,
+		TLS:         &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots},
+		Credentials: route.credentials, Target: relay.Open{HostID: route.target, Port: servicecatalog.HostGatewayRemotePort},
+	})
+	if err != nil {
+		return nil, err
+	}
+	conn := tls.Client(stream, &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: route.target})
+	if err := conn.HandshakeContext(ctx); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("relay TLS handshake with %s: %w", route.target, err)
+	}
+	return conn, nil
+}
+
+func loadRoots(path string) (*x509.CertPool, error) {
+	pem, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read MooX CA: %w", err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(pem) {
+		return nil, errors.New("MooX CA file contains no certificates")
+	}
+	return roots, nil
 }

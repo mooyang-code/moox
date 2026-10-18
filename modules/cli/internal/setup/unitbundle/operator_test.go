@@ -36,7 +36,10 @@ func TestOperatorInstallationDownloadsOnlyAssignedIdentityAndPreservesPin(t *tes
 	secret, err := gatewayauth.ReadSigningSecret(config.KeyFile)
 	require.NoError(t, err)
 	require.Equal(t, strings.TrimSpace(string(f.files["operator/caller-moox-cli.key"])), secret)
-	for _, name := range []string{"gateway-client.yaml", "gateway-bootstrap.json", filepath.Base(config.KeyFile)} {
+	ca, err := os.ReadFile(filepath.Join(directory, "moox-ca.crt"))
+	require.NoError(t, err)
+	require.Equal(t, f.files["certs/moox-ca.crt"], ca, "经中转连接出站主机需要 MooX CA")
+	for _, name := range []string{"gateway-client.yaml", "gateway-bootstrap.json", "moox-ca.crt", filepath.Base(config.KeyFile)} {
 		info, err := os.Stat(filepath.Join(directory, name))
 		require.NoError(t, err)
 		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
