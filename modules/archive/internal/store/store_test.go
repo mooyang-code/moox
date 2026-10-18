@@ -615,7 +615,7 @@ func TestUpdateTaskDatasetRefreshesRetentionAndDataNode(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", false)
-	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", "node-9", "336h"); err != nil {
+	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", "node-9", "336h", ""); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.GetTask(ctx, "crypto", "ds1")

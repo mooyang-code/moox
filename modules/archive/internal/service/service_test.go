@@ -821,3 +821,31 @@ func TestFilePrefixCollisionIgnoresCase(t *testing.T) {
 		t.Fatalf("大小写不同的名称在不区分大小写的文件系统上会互相覆盖，应改用带 ID 的前缀: %q", second.FilePrefix)
 	}
 }
+
+func TestTaskCarriesDatasetMetadataToTheWorkerAndRefreshesIt(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.datasets.datasets["crypto/ds_1m"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1m", Name: "现货分钟K线", Description: "币安现货 1 分钟 K 线", DataSourceID: "binance_spot",
+		DataKind: "time_series", Freq: "1m", Status: "active", DataNodeID: "node-0", Retention: "168h", SubjectTags: []string{"crypto_spot"}, Revision: 3}
+	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
+	task, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
+	for _, want := range []string{`"name":"现货分钟K线"`, `"description":"币安现货 1 分钟 K 线"`, `"data_source_id":"binance_spot"`, `"subject_tags":["crypto_spot"]`, `"online_retention":"168h"`} {
+		if !strings.Contains(task.MetaJSON, want) {
+			t.Fatalf("meta_json 缺少 %s: %s", want, task.MetaJSON)
+		}
+	}
+	if got := h.svc.assignment(store.Claimed{Task: task}).GetDatasetMetaJson(); got != task.MetaJSON {
+		t.Fatalf("assignment meta = %q", got)
+	}
+	// 数据集简介改了：每小时维护刷新任务里的元数据。
+	changed := h.datasets.datasets["crypto/ds_1m"]
+	changed.Description = "新的简介"
+	h.datasets.datasets["crypto/ds_1m"] = changed
+	if err := h.svc.refreshDatasets(ctx); err != nil {
+		t.Fatal(err)
+	}
+	task, _ = h.store.GetTask(ctx, "crypto", "ds_1m")
+	if !strings.Contains(task.MetaJSON, "新的简介") {
+		t.Fatalf("meta_json 应被刷新: %s", task.MetaJSON)
+	}
+}

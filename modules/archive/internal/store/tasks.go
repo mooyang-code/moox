@@ -19,7 +19,9 @@ type Task struct {
 	DataNodeID    string
 	Retention     string
 	// FilePrefix 是导出文件名前缀（数据集名去空格）；创建时确定，之后数据集改名也不变，已导出的文件不会改名。
-	FilePrefix       string
+	FilePrefix string
+	// MetaJSON 是数据集元数据（名称、简介等）的 JSON，创建与每小时维护时从 Storage 刷新。
+	MetaJSON         string
 	ScheduleCron     string
 	ScheduleTZ       string
 	IntervalSeconds  int
@@ -35,7 +37,7 @@ type Task struct {
 	UpdatedAt        time.Time
 }
 
-const taskColumns = `c_id, c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_file_prefix, c_schedule_cron, c_schedule_tz,
+const taskColumns = `c_id, c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_file_prefix, c_meta_json, c_schedule_cron, c_schedule_tz,
 c_interval_seconds, c_start_at, c_backfill_from, c_status, c_next_run_at, c_consecutive_skips, c_last_success_at, c_final_until,
 c_creator, c_ctime, c_mtime`
 
@@ -44,7 +46,7 @@ type rowScanner interface{ Scan(dest ...any) error }
 func scanTask(row rowScanner) (Task, error) {
 	var t Task
 	var start, backfill, next, lastSuccess, finalUntil, created, updated timeValue
-	err := row.Scan(&t.ID, &t.SpaceID, &t.DatasetID, &t.Freq, &t.PartitionUnit, &t.DataNodeID, &t.Retention, &t.FilePrefix, &t.ScheduleCron, &t.ScheduleTZ,
+	err := row.Scan(&t.ID, &t.SpaceID, &t.DatasetID, &t.Freq, &t.PartitionUnit, &t.DataNodeID, &t.Retention, &t.FilePrefix, &t.MetaJSON, &t.ScheduleCron, &t.ScheduleTZ,
 		&t.IntervalSeconds, &start, &backfill, &t.Status, &next, &t.ConsecutiveSkips, &lastSuccess, &finalUntil,
 		&t.Creator, &created, &updated)
 	if err != nil {
@@ -59,10 +61,10 @@ func scanTask(row rowScanner) (Task, error) {
 func (s *Store) CreateTask(ctx context.Context, task Task, immediate bool, now time.Time) (Task, *Run, error) {
 	var run *Run
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_file_prefix,
+		_, err := tx.ExecContext(ctx, `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_file_prefix, c_meta_json,
 c_schedule_cron, c_schedule_tz, c_interval_seconds, c_start_at, c_backfill_from, c_status, c_next_run_at, c_consecutive_skips, c_creator)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-			task.SpaceID, task.DatasetID, task.Freq, task.PartitionUnit, task.DataNodeID, task.Retention, task.FilePrefix,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+			task.SpaceID, task.DatasetID, task.Freq, task.PartitionUnit, task.DataNodeID, task.Retention, task.FilePrefix, task.MetaJSON,
 			task.ScheduleCron, task.ScheduleTZ, task.IntervalSeconds, fmtTime(task.StartAt), nullTime(task.BackfillFrom),
 			task.Status, nullTime(task.NextRunAt), task.Creator)
 		if err != nil {
@@ -207,9 +209,9 @@ func (s *Store) DeleteTask(ctx context.Context, spaceID, datasetID string) (int6
 }
 
 // UpdateTaskDataset 刷新任务的 DataNode 与线上保留期（维护定时器每小时从 Storage 读取）。
-func (s *Store) UpdateTaskDataset(ctx context.Context, spaceID, datasetID, dataNodeID, retention string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE t_archive_tasks SET c_data_node_id = ?, c_retention = ? WHERE c_space_id = ? AND c_dataset_id = ?
-AND (c_data_node_id != ? OR c_retention != ?)`, dataNodeID, retention, spaceID, datasetID, dataNodeID, retention)
+func (s *Store) UpdateTaskDataset(ctx context.Context, spaceID, datasetID, dataNodeID, retention, metaJSON string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE t_archive_tasks SET c_data_node_id = ?, c_retention = ?, c_meta_json = ? WHERE c_space_id = ? AND c_dataset_id = ?
+AND (c_data_node_id != ? OR c_retention != ? OR c_meta_json != ?)`, dataNodeID, retention, metaJSON, spaceID, datasetID, dataNodeID, retention, metaJSON)
 	return err
 }
 

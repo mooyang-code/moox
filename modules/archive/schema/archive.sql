@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS t_archive_tasks (
     c_data_node_id TEXT NOT NULL DEFAULT '',
     c_retention TEXT NOT NULL DEFAULT '',
     c_file_prefix TEXT NOT NULL DEFAULT '',
+    c_meta_json TEXT NOT NULL DEFAULT '',
     c_schedule_cron TEXT NOT NULL,
     c_schedule_tz TEXT NOT NULL DEFAULT 'Asia/Shanghai',
     c_interval_seconds INTEGER NOT NULL,

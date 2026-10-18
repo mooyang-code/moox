@@ -139,7 +139,7 @@ func (s *Service) refreshDatasets(ctx context.Context) error {
 			log.WarnContextf(ctx, "archive maintain: refresh dataset %s/%s: %v", task.SpaceID, task.DatasetID, err)
 			continue
 		}
-		if err := s.store.UpdateTaskDataset(ctx, task.SpaceID, task.DatasetID, ds.DataNodeID, ds.Retention); err != nil {
+		if err := s.store.UpdateTaskDataset(ctx, task.SpaceID, task.DatasetID, ds.DataNodeID, ds.Retention, metaJSON(ds)); err != nil {
 			return err
 		}
 		if task.FilePrefix == "" {

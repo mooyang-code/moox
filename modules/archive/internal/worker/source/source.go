@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
@@ -43,6 +44,28 @@ type Page struct {
 type Client struct {
 	gateway gatewayclient.Invoker
 	secret  string
+
+	mu    sync.Mutex
+	infos map[string][]ColumnInfo
+}
+
+// ColumnInfo 是一个值列的元数据（来自 Storage 的数据集列定义），写进归档根目录的 *_dataset.json。
+type ColumnInfo struct {
+	Name        string            `json:"name"`
+	Type        string            `json:"type"`
+	DisplayName string            `json:"display_name,omitempty"`
+	OriginType  string            `json:"origin_type,omitempty"`
+	OriginID    string            `json:"origin_id,omitempty"`
+	Required    bool              `json:"required,omitempty"`
+	Aliases     []string          `json:"aliases,omitempty"`
+	Attributes  map[string]string `json:"attributes,omitempty"`
+}
+
+// ColumnInfos 返回最近一次 Columns 调用得到的列元数据（同一数据集）；没有调用过返回 nil。
+func (c *Client) ColumnInfos(spaceID, datasetID string) []ColumnInfo {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.infos[spaceID+"/"+datasetID]
 }
 
 // New 创建客户端；secret 是 Storage 的 Primary 签名密钥（可空，仅用于没有开启认证的环境）。
@@ -63,6 +86,7 @@ const columnPageSize = 200
 // Columns 返回数据集的值列：来源为字段或因子、状态为启用的列，按列名排序；系统列不导出。
 func (c *Client) Columns(ctx context.Context, spaceID, datasetID string) ([]staging.Column, error) {
 	var out []staging.Column
+	var infos []ColumnInfo
 	for page := uint32(1); ; page++ {
 		rsp := &storagepb.ListDatasetColumnsRsp{}
 		req := &storagepb.ListDatasetColumnsReq{AuthInfo: c.auth(), SpaceId: spaceID, DatasetId: datasetID, Page: &commonpb.Page{Page: page, Size: columnPageSize}}
@@ -86,6 +110,11 @@ func (c *Client) Columns(ctx context.Context, spaceID, datasetID string) ([]stag
 				return nil, fmt.Errorf("dataset %s/%s column %q has unsupported value type %s", spaceID, datasetID, column.GetColumnName(), column.GetValueType())
 			}
 			out = append(out, staging.Column{Name: column.GetColumnName(), Type: typ})
+			attributes := column.GetAttributes()
+			infos = append(infos, ColumnInfo{
+				Name: column.GetColumnName(), Type: typ, DisplayName: attributes["display_name"], OriginType: originName(column.GetOriginType()),
+				OriginID: column.GetOriginId(), Required: column.GetRequired(), Aliases: column.GetAliases(), Attributes: attributes,
+			})
 		}
 		if !rsp.GetPageResult().GetHasMore() {
 			break
@@ -95,6 +124,13 @@ func (c *Client) Columns(ctx context.Context, spaceID, datasetID string) ([]stag
 		return nil, fmt.Errorf("dataset %s/%s has no value columns to archive", spaceID, datasetID)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
+	c.mu.Lock()
+	if c.infos == nil {
+		c.infos = map[string][]ColumnInfo{}
+	}
+	c.infos[spaceID+"/"+datasetID] = infos
+	c.mu.Unlock()
 	return out, nil
 }
 
@@ -216,4 +252,15 @@ func convert(columnType string, value *storagepb.TypedValue) (any, error) {
 		}
 	}
 	return nil, fmt.Errorf("value %T does not match column type %s", value.GetValue(), columnType)
+}
+
+func originName(t storagepb.DatasetColumnOriginType) string {
+	switch t {
+	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD:
+		return "field"
+	case storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR:
+		return "factor"
+	default:
+		return ""
+	}
 }

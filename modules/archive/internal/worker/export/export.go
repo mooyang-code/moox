@@ -3,6 +3,7 @@ package export
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -202,35 +203,132 @@ func preview(path string) (string, error) {
 	return out.String(), nil
 }
 
-// DatasetMeta 是 _dataset.json 的内容。
-type DatasetMeta struct {
-	SpaceID   string           `json:"space_id"`
-	DatasetID string           `json:"dataset_id"`
-	Freq      string           `json:"freq"`
-	Columns   []staging.Column `json:"columns"`
-	UpdatedAt string           `json:"updated_at"`
+// ColumnMeta 是元数据文件里一列的说明。
+type ColumnMeta struct {
+	Name        string            `json:"name"`
+	Type        string            `json:"type"`
+	DisplayName string            `json:"display_name,omitempty"`
+	Description string            `json:"description,omitempty"`
+	OriginType  string            `json:"origin_type,omitempty"`
+	OriginID    string            `json:"origin_id,omitempty"`
+	Required    bool              `json:"required,omitempty"`
+	Aliases     []string          `json:"aliases,omitempty"`
+	Attributes  map[string]string `json:"attributes,omitempty"`
 }
 
-// WriteDatasetJSON 写 <root>/<space>/<prefix>_dataset.json（频率、列及类型）；内容没变时不重写。
-func (f Files) WriteDatasetJSON(spaceID, prefix, datasetID, freq string, columns []staging.Column, now time.Time) error {
-	if _, err := f.RelPath(spaceID, prefix, "2000-01"); err != nil {
+// DatasetMeta 是 <prefix>_dataset.json 的内容：数据集的完整说明，方便不看线上系统也能读懂归档文件。
+type DatasetMeta struct {
+	SpaceID    string `json:"space_id"`
+	DatasetID  string `json:"dataset_id"`
+	FilePrefix string `json:"file_prefix"`
+	// Dataset 是 Storage 里的数据集信息（名称、简介、数据来源、标的范围等），由 mgr 提供。
+	Dataset json.RawMessage `json:"dataset,omitempty"`
+	Freq    string          `json:"freq"`
+	// Partition 说明文件如何切分。
+	Partition PartitionMeta `json:"partition"`
+	Files     FilesMeta     `json:"files"`
+	// Columns 依次是文件里的列：先是三个系统列，再是按列名排序的值列。
+	Columns   []ColumnMeta `json:"columns"`
+	UpdatedAt string       `json:"updated_at"`
+}
+
+// PartitionMeta 说明分区方式。
+type PartitionMeta struct {
+	Unit     string `json:"unit"`
+	Timezone string `json:"timezone"`
+}
+
+// FilesMeta 说明文件格式与命名。
+type FilesMeta struct {
+	Format      string   `json:"format"`
+	PathPattern string   `json:"path_pattern"`
+	Header      []string `json:"header"`
+}
+
+// DatasetMetaInput 是生成元数据文件需要的信息。
+type DatasetMetaInput struct {
+	SpaceID, DatasetID, FilePrefix, Freq string
+	PartitionUnit, Timezone              string
+	// DatasetJSON 是 mgr 下发的数据集信息 JSON，可为空。
+	DatasetJSON string
+	Columns     []staging.Column
+	// Infos 是值列的元数据，可为空；按列名匹配。
+	Infos []ColumnMeta
+}
+
+// BuildDatasetMeta 组装元数据：系统列说明固定，值列的展示名等来自 Infos。
+func (f Files) BuildDatasetMeta(in DatasetMetaInput, now time.Time) DatasetMeta {
+	system := []ColumnMeta{
+		{Name: "data_time", Type: "timestamp", DisplayName: "数据时间", Description: "该行数据对应的时间，UTC，格式 RFC3339（如 2026-10-17T12:00:00Z）"},
+		{Name: "subject_id", Type: "string", DisplayName: "标的 ID", Description: "标的（如交易对、股票代码）的 ID"},
+		{Name: "series_tag", Type: "string", DisplayName: "序列标签", Description: "区分同一标的下不同数据序列的标签（如来源、市场）；没有时为空"},
+	}
+	byName := map[string]ColumnMeta{}
+	for _, info := range in.Infos {
+		byName[info.Name] = info
+	}
+	columns := append([]ColumnMeta{}, system...)
+	header := []string{"data_time", "subject_id", "series_tag"}
+	for _, c := range in.Columns {
+		meta, ok := byName[c.Name]
+		if !ok {
+			meta = ColumnMeta{Name: c.Name}
+		}
+		meta.Name, meta.Type = c.Name, c.Type
+		columns = append(columns, meta)
+		header = append(header, c.Name)
+	}
+	var dataset json.RawMessage
+	if in.DatasetJSON != "" && json.Valid([]byte(in.DatasetJSON)) {
+		dataset = json.RawMessage(in.DatasetJSON)
+	}
+	pattern := "<yyyy>/" + in.FilePrefix + "_<yyyymmdd>" + ext(f.Format)
+	if in.PartitionUnit == "month" {
+		pattern = "<yyyy>/" + in.FilePrefix + "_<yyyymm>" + ext(f.Format)
+	}
+	format := f.Format
+	if format == "" {
+		format = FormatCSV
+	}
+	return DatasetMeta{
+		SpaceID: in.SpaceID, DatasetID: in.DatasetID, FilePrefix: in.FilePrefix, Dataset: dataset, Freq: in.Freq,
+		Partition: PartitionMeta{Unit: in.PartitionUnit, Timezone: in.Timezone},
+		Files:     FilesMeta{Format: format, PathPattern: pattern, Header: header},
+		Columns:   columns, UpdatedAt: now.UTC().Format(time.RFC3339),
+	}
+}
+
+// WriteDatasetJSON 写 <root>/<space>/<prefix>_dataset.json；除更新时间外内容没变时不重写。
+func (f Files) WriteDatasetJSON(meta DatasetMeta) error {
+	if _, err := f.RelPath(meta.SpaceID, meta.FilePrefix, "2000-01"); err != nil {
 		return err
 	}
-	dir := filepath.Join(f.Root, spaceID)
+	dir := filepath.Join(f.Root, meta.SpaceID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, prefix+"_dataset.json")
+	path := filepath.Join(dir, meta.FilePrefix+"_dataset.json")
 	if raw, err := os.ReadFile(path); err == nil {
 		var current DatasetMeta
-		if json.Unmarshal(raw, &current) == nil && current.Freq == freq && sameColumns(current.Columns, columns) {
-			return nil
+		if json.Unmarshal(raw, &current) == nil {
+			stamp := current.UpdatedAt
+			current.UpdatedAt = meta.UpdatedAt
+			if a, errA := json.Marshal(current); errA == nil {
+				if b, errB := json.Marshal(meta); errB == nil && string(a) == string(b) {
+					_ = stamp
+					return nil
+				}
+			}
 		}
 	}
-	raw, err := json.MarshalIndent(DatasetMeta{SpaceID: spaceID, DatasetID: datasetID, Freq: freq, Columns: columns, UpdatedAt: now.UTC().Format(time.RFC3339)}, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false) // path_pattern 里的 <yyyy> 不转义，保持可读
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(meta); err != nil {
 		return err
 	}
+	raw := bytes.TrimRight(buf.Bytes(), "\n")
 	tmp := path + partialSuffix
 	if err := os.WriteFile(tmp, append(raw, '\n'), 0o644); err != nil {
 		return err
@@ -242,18 +340,6 @@ func (f Files) WriteDatasetJSON(spaceID, prefix, datasetID, freq string, columns
 		return err
 	}
 	return syncDir(dir)
-}
-
-func sameColumns(a, b []staging.Column) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // CleanPartials 启动时清理残留的 .partial 文件。

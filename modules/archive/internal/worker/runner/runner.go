@@ -157,7 +157,10 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	if err := r.Staging.EnsureTable(ctx, s.task); err != nil {
 		return out, err
 	}
-	if err := r.Files.WriteDatasetJSON(a.GetSpaceId(), s.filePrefix(), a.GetDatasetId(), a.GetFreq(), columns, r.now()); err != nil {
+	if err := r.Files.WriteDatasetJSON(r.Files.BuildDatasetMeta(export.DatasetMetaInput{
+		SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), FilePrefix: s.filePrefix(), Freq: a.GetFreq(), PartitionUnit: a.GetPartitionUnit(),
+		Timezone: a.GetSpaceTz(), DatasetJSON: a.GetDatasetMetaJson(), Columns: columns, Infos: r.columnMetas(a.GetSpaceId(), a.GetDatasetId()),
+	}, r.now())); err != nil {
 		return out, fmt.Errorf("write _dataset.json: %w", err)
 	}
 	out.Unrecoverable = unrecoverable
@@ -529,4 +532,26 @@ func (s *runState) exportedFileMissing(p staging.PartitionState) bool {
 	}
 	_, err = os.Stat(s.r.Files.Abs(rel))
 	return errors.Is(err, os.ErrNotExist)
+}
+
+// ColumnDescriber 由能提供列元数据（展示名、来源等）的 Source 实现，用来丰富元数据文件。
+type ColumnDescriber interface {
+	ColumnInfos(spaceID, datasetID string) []source.ColumnInfo
+}
+
+// columnMetas 取最近一次读到的列元数据；Source 不提供时返回 nil。
+func (r *Runner) columnMetas(spaceID, datasetID string) []export.ColumnMeta {
+	d, ok := r.Source.(ColumnDescriber)
+	if !ok {
+		return nil
+	}
+	infos := d.ColumnInfos(spaceID, datasetID)
+	out := make([]export.ColumnMeta, 0, len(infos))
+	for _, info := range infos {
+		out = append(out, export.ColumnMeta{
+			Name: info.Name, Type: info.Type, DisplayName: info.DisplayName, OriginType: info.OriginType, OriginID: info.OriginID,
+			Required: info.Required, Aliases: info.Aliases, Attributes: info.Attributes,
+		})
+	}
+	return out
 }
