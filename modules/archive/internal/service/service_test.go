@@ -802,9 +802,7 @@ func TestPullDoesNotDispatchTasksThatStillLackAFilePrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.datasets.datasets["crypto/ds_1m"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1m", Name: "币安 K线", DataKind: "time_series", Freq: "1m", Status: "active", DataNodeID: "node-0", Retention: "168h"}
-	if err := h.svc.ensureFilePrefixes(ctx); err != nil {
-		t.Fatal(err)
-	}
+	h.svc.ensureFilePrefixes(ctx)
 	task, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
 	if task.FilePrefix != "币安K线" {
 		t.Fatalf("prefix = %q", task.FilePrefix)

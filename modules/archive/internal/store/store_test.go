@@ -23,7 +23,7 @@ func openTest(t *testing.T) *Store {
 
 func task(space, dataset string) Task {
 	return Task{
-		SpaceID: space, DatasetID: dataset, Freq: "1m", PartitionUnit: "day", DataNodeID: "node-0", Retention: "168h",
+		SpaceID: space, DatasetID: dataset, FilePrefix: dataset, Freq: "1m", PartitionUnit: "day", DataNodeID: "node-0", Retention: "168h",
 		ScheduleCron: "43 4-59/5 * * * *", ScheduleTZ: "Asia/Shanghai", IntervalSeconds: 300,
 		StartAt: t0, Status: StatusEnabled, NextRunAt: t0.Add(5 * time.Minute), Creator: "tester",
 	}
@@ -747,5 +747,25 @@ func TestOpenAddsTheFilePrefixColumnToAnOlderDatabase(t *testing.T) {
 	defer s.Close()
 	if _, err := s.db.Exec(`SELECT c_file_prefix FROM t_archive_tasks LIMIT 1`); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestClaimRunsSkipsTasksWithoutAFilePrefixUntilItIsSet(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	old := task("crypto", "old")
+	old.FilePrefix = ""
+	if _, _, err := s.CreateTask(ctx, old, true, t0); err != nil {
+		t.Fatal(err)
+	}
+	req := ClaimRequest{WorkerID: "w1", FreeSlots: 4, Now: t0, LeaseTTL: time.Minute}
+	if got, err := s.ClaimRuns(ctx, req); err != nil || len(got) != 0 {
+		t.Fatalf("没有前缀的任务不应被派发: %v %v", got, err)
+	}
+	if err := s.SetFilePrefixIfEmpty(ctx, "crypto", "old", "旧任务"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.ClaimRuns(ctx, req); err != nil || len(got) != 1 || got[0].Task.FilePrefix != "旧任务" {
+		t.Fatalf("补上前缀后应能派发: %v %v", got, err)
 	}
 }

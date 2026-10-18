@@ -282,6 +282,10 @@ ORDER BY c_scheduled_at, c_id`, req.WorkerID)
 			if req.MaxPerDataNode > 0 && busy[task.DataNodeID] >= req.MaxPerDataNode {
 				continue
 			}
+			if task.FilePrefix == "" {
+				// 文件名前缀还没补上（升级前创建的任务）：先不派发，避免 worker 用临时名字导出。
+				continue
+			}
 			token := newToken()
 			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'running', c_started_at = ?, c_worker_id = ?, c_lease_token = ?, c_lease_until = ?
 WHERE c_run_id = ? AND c_status = 'queued'`, fmtTime(req.Now), req.WorkerID, token, fmtTime(req.Now.Add(req.LeaseTTL)), run.RunID); err != nil {
