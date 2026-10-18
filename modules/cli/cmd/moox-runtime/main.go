@@ -127,6 +127,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) > 0 && args[0] == "install-watchdog" {
 		return installWatchdog(args[1:], os.Stdin, stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "host-policy-status" {
+		// 只输出主机策略缓存的版本、来源与拉取时间，不含推送地址。
+		flags := flag.NewFlagSet("moox-runtime host-policy-status", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		root := flags.String("root", "", "deployment root, e.g. /data/moox")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *root == "" || flags.NArg() != 0 {
+			return errors.New("host-policy-status requires --root and no positional arguments")
+		}
+		return json.NewEncoder(stdout).Encode(hostpolicy.Summarize(hostpolicy.Path(*root)))
+	}
 	if len(args) > 0 && args[0] == "prepare" {
 		return prepare(ctx, args[1:], stdout, stderr)
 	}

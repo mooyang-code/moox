@@ -1,11 +1,35 @@
 package hostpolicy
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+// 概要不含推送地址；文件不存在时 Present 为 false。
+func TestSummarizeOmitsWebhooks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if summary := Summarize(path); summary.Present || summary.Error != "" {
+		t.Fatalf("missing file: %+v", summary)
+	}
+	if err := Write(path, samplePolicy()); err != nil {
+		t.Fatal(err)
+	}
+	summary := Summarize(path)
+	if !summary.Present || summary.Version != 3 || summary.Channels != 2 || summary.Source != SourceMonitor || summary.ContentHash == "" {
+		t.Fatalf("summary = %+v", summary)
+	}
+	raw, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "qyapi") || strings.Contains(string(raw), "feishu.cn") {
+		t.Fatalf("summary leaks webhook: %s", raw)
+	}
+}
 
 func samplePolicy() Policy {
 	return Policy{

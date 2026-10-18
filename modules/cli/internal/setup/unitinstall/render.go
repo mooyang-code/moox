@@ -15,6 +15,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
+	"github.com/mooyang-code/moox/packages/hostpolicy"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gopkg.in/yaml.v3"
 )
@@ -187,6 +188,16 @@ func renderConfigurations(root *os.Root, options PrepareOptions, components []st
 					if err := setValue(document, key, value); err != nil {
 						return err
 					}
+				}
+				// 部署的 HostAgent 经本机网关定期从 Monitor 拉取主机策略，写入部署根下的缓存文件。
+				if keys[id] == "" {
+					return errors.New("host-agent configuration lacks its assigned component identity")
+				}
+				if err := setValue(document, "gateway_client", map[string]string{"caller": id, "key_id": keys[id], "key_file": "../../secrets/caller-" + id + ".key"}); err != nil {
+					return err
+				}
+				if err := setValue(document, "host_policy_path", hostpolicy.Path(options.DeploymentRoot)); err != nil {
+					return err
 				}
 			}
 			var output bytes.Buffer

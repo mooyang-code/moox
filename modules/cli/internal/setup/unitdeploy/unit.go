@@ -12,6 +12,7 @@ import (
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
+	"github.com/mooyang-code/moox/packages/hostpolicy"
 )
 
 func unitComponents(manifest setupconfig.Manifest, hostID, profile string) ([]string, error) {
@@ -73,6 +74,10 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 			}
 			values["MOOX_NOTIFICATION_CHANNEL_TYPE"] = manifest.Notification.ChannelType
 			values["MOOX_NOTIFICATION_WEBHOOK_URL"] = manifest.Notification.WebhookURL
+		}
+		if id == "admin" {
+			// 证书巡检每次从本机主机策略缓存读取告警渠道（HostAgent 从 Monitor 同步）。
+			values["MOOX_HOST_POLICY_FILE"] = hostpolicy.Path(manifest.Paths.Resolved().DeployRoot)
 		}
 		if id == "collector" {
 			// Collector 的行情调度必须有目标空间；与旧部署脚本一致，默认 crypto。

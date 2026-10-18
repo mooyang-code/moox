@@ -13,6 +13,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/admin/internal/pki"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
+	"github.com/mooyang-code/moox/packages/hostpolicy"
 	"github.com/mooyang-code/moox/packages/notification"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gorm.io/gorm"
@@ -37,7 +38,8 @@ type certificateWatch struct {
 	Hosts  func(context.Context) ([]pki.HostIdentity, error)
 	Files  []certificateWatchFile
 	Now    func() time.Time
-	Sender notification.Sender
+	// Senders 每次巡检时取一次告警渠道；为空或返回空时只记录不推送。
+	Senders func() []notification.Sender
 }
 
 func newCertificateWatchFromEnvironment(db *gorm.DB) certificateWatch {
@@ -66,19 +68,30 @@ func newCertificateWatchFromEnvironment(db *gorm.DB) certificateWatch {
 	if path := strings.TrimSpace(os.Getenv("MOOX_EVENTBUS_CA_FILE")); path != "" {
 		watch.Files = []certificateWatchFile{{Name: "eventbus_ca", Path: path}}
 	}
-	if webhookURL := strings.TrimSpace(os.Getenv("MOOX_NOTIFICATION_WEBHOOK_URL")); webhookURL != "" {
-		channelType := strings.TrimSpace(os.Getenv("MOOX_NOTIFICATION_CHANNEL_TYPE"))
-		if channelType == "" {
-			channelType = string(notification.ChannelTypeWeCom)
-		}
-		sender, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channelType), WebhookURL: webhookURL})
-		if err != nil {
-			log.Warn("certificate watch notification configuration is invalid")
-		} else {
-			watch.Sender = sender
-		}
+	if path := strings.TrimSpace(os.Getenv("MOOX_HOST_POLICY_FILE")); path != "" {
+		watch.Senders = func() []notification.Sender { return hostPolicySenders(path) }
 	}
 	return watch
+}
+
+// hostPolicySenders 从本机主机策略缓存（HostAgent 从 Monitor 同步）读取全部告警渠道。
+// 每次巡检重新读取，用户在 Monitor 修改渠道后无需重启 Admin；读取失败只记录。
+func hostPolicySenders(path string) []notification.Sender {
+	policy, err := hostpolicy.Read(path)
+	if err != nil {
+		log.Warn("certificate watch cannot read the host policy cache; findings are only logged")
+		return nil
+	}
+	var senders []notification.Sender
+	for _, channel := range policy.NotificationChannels {
+		sender, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channel.Type), WebhookURL: channel.WebhookURL})
+		if err != nil {
+			log.Warn("certificate watch skipped an invalid notification channel")
+			continue
+		}
+		senders = append(senders, sender)
+	}
+	return senders
 }
 
 type certificateFinding struct {
@@ -203,7 +216,11 @@ func (w certificateWatch) notify(ctx context.Context, severity notification.Seve
 	if len(findings) > 12 {
 		body.WriteString("\n其余项目见 Admin 巡检日志。")
 	}
-	if w.Sender == nil {
+	if w.Senders == nil {
+		return
+	}
+	senders := w.Senders()
+	if len(senders) == 0 {
 		return
 	}
 	title := "MooX 证书将在 90 天内到期"
@@ -212,7 +229,10 @@ func (w certificateWatch) notify(ctx context.Context, severity notification.Seve
 	}
 	notifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := w.Sender.Send(notifyCtx, notification.Message{Key: "admin_certificate_watch_" + string(severity), Severity: severity, Title: title, Body: body.String(), Labels: map[string]string{"source": "admin_certificate_watch"}}); err != nil {
-		log.ErrorContext(ctx, "certificate_watch notification failed")
+	message := notification.Message{Key: "admin_certificate_watch_" + string(severity), Severity: severity, Title: title, Body: body.String(), Labels: map[string]string{"source": "admin_certificate_watch"}}
+	for _, sender := range senders {
+		if err := sender.Send(notifyCtx, message); err != nil {
+			log.ErrorContext(ctx, "certificate_watch notification failed")
+		}
 	}
 }

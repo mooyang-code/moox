@@ -64,7 +64,7 @@ func certificateWatchFixture(t *testing.T, caLifetime, hostLifetime time.Duratio
 	// No CA or leaf private key is written: successful validation proves the
 	// periodic checker needs only the public inventory.
 	sender := &certificateNotifications{}
-	return certificateWatch{PKIDir: dir, Hosts: func(context.Context) ([]pki.HostIdentity, error) { return hosts, nil }, Now: func() time.Time { return now }, Sender: sender}, sender
+	return certificateWatch{PKIDir: dir, Hosts: func(context.Context) ([]pki.HostIdentity, error) { return hosts, nil }, Now: func() time.Time { return now }, Senders: func() []notification.Sender { return []notification.Sender{sender} }}, sender
 }
 
 func TestCertificateWatchPublicInventoryAndExpiryBoundary(t *testing.T) {
@@ -184,13 +184,14 @@ func TestCertificateWatchEnvironmentUsesLiveAllHostInventoryAndOnlyCurrentCAs(t 
 	defer sqlDB.Close()
 	watch, _ := certificateWatchFixture(t, 365*24*time.Hour, 180*24*time.Hour)
 	t.Setenv("MOOX_ADMIN_PKI_DIR", watch.PKIDir)
-	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
+	t.Setenv("MOOX_HOST_POLICY_FILE", "")
 	t.Setenv("MOOX_EVENTBUS_CA_FILE", "fixture-eventbus-ca.crt")
 	t.Setenv("MOOX_GATEWAY_CA_FILE", "obsolete-gateway-ca.crt")
 	t.Setenv("MOOX_SERVICE_GATEWAY_CA_FILE", "obsolete-service-gateway-ca.crt")
 	configured := newCertificateWatchFromEnvironment(db)
 	require.Equal(t, watch.PKIDir, configured.PKIDir)
 	require.Equal(t, []certificateWatchFile{{Name: "eventbus_ca", Path: "fixture-eventbus-ca.crt"}}, configured.Files)
+	require.Nil(t, configured.Senders, "没有主机策略缓存时只记录不推送")
 	require.NoError(t, db.Exec("INSERT INTO t_hosts (c_host_id, c_address, c_status) VALUES ('control', '192.0.2.1', 'enabled'), ('storage', '2001:db8::2', 'disabled')").Error)
 	hosts, err := configured.Hosts(context.Background())
 	require.NoError(t, err)

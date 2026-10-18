@@ -98,10 +98,11 @@ config edit 在本机打开配置页，查看并修改 moox.toml（保存后重�
 config encrypt 把明文保存的 moox.toml 加密保存；
 config backup 把配置用管理员密码加密备份到管理后台，config restore 换电脑时从管理台恢复；
 config plan 渲染由 moox.toml 派生的各主机配置文件并与主机上的当前文件对比，不做任何修改；
-config publish 写入有变更的文件、重启受影响的服务并等待就绪，失败时恢复原文件。`,
+config publish 写入有变更的文件、重启受影响的服务并等待就绪，失败时恢复原文件；
+config notification 对比 moox.toml 与 Monitor 的告警渠道（唯一来源），确认后写入 Monitor，并显示各主机策略缓存的版本。`,
 		SilenceUsage: true,
 	}
-	cmd.AddCommand(newConfigInitCommand(), newConfigEditCommand(), newConfigEncryptCommand(), newConfigBackupCommand(), newConfigRestoreCommand(), newConfigPlanCommand(deps), newConfigPublishCommand(deps))
+	cmd.AddCommand(newConfigInitCommand(), newConfigEditCommand(), newConfigEncryptCommand(), newConfigBackupCommand(), newConfigRestoreCommand(), newConfigPlanCommand(deps), newConfigPublishCommand(deps), newConfigNotificationCommand(defaultNotificationDeps()))
 	return cmd
 }
 

@@ -110,7 +110,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":   {167, []string{"access", "admin", "cloudnode", "collector", "console", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "4611ac5314267319dc4624b35075dda7d3f60ba8a99b7f21e433d02a7ff32051"},
+		"control":   {168, []string{"access", "admin", "cloudnode", "collector", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "69e92d99ef3b76809599924e652dbbf5df5f067de0705aa91327407577ae13de"},
 		"storage":   {95, []string{"access", "archive-mgr", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "831ac2ac0ed1db7003f84b1ee3c9c1e9b4868ccee88114e33193a8af28fe900c"},
 		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "cf0c78e6614510d464b9500c4459f5a0fa8392684a0347f6b02346ab49ea4c91"},
 	}

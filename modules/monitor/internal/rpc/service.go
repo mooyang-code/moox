@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
@@ -17,11 +18,14 @@ type Options struct {
 	HostStorageReady func() bool
 	DoctorContext    *doctor.Builder
 	HealthView       *healthview.Builder
+	// HostWatchdog 是 GetHostPolicy 下发的主机守护参数。
+	HostWatchdog config.HostWatchdogConfig
 }
 
 type Service struct {
 	alerts           *store.AlertRepository
 	notifications    *store.NotificationRepository
+	hostWatchdog     config.HostWatchdogConfig
 	hostStore        *hostmetrics.Store
 	hostReader       *hostmetrics.StorageReader
 	hostStorageReady func() bool
@@ -36,6 +40,7 @@ func New(repos *store.Repositories, opts Options) *Service {
 	return &Service{
 		alerts:           repos.Alerts,
 		notifications:    repos.Notifications,
+		hostWatchdog:     opts.HostWatchdog,
 		hostStore:        opts.HostStore,
 		hostReader:       opts.HostReader,
 		hostStorageReady: opts.HostStorageReady,

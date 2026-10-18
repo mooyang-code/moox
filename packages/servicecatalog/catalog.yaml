@@ -562,6 +562,7 @@ components:
           - QueryHostMetricHistory
           - QueryPipelineArrivalHistory
           - GetDoctorContext
+          - GetHostPolicy
         read_only_methods:
           - GetHealthOverview
           - ListNotificationChannels
@@ -569,6 +570,7 @@ components:
           - QueryHostMetricHistory
           - QueryPipelineArrivalHistory
           - GetDoctorContext
+          - GetHostPolicy
         acl:
           - methods:
               - GetHealthOverview
@@ -582,6 +584,10 @@ components:
             callers:
               - console
               - moox-cli
+          - methods:
+              - GetHostPolicy
+            callers:
+              - host-agent
     doctor:
       role: monitor
       description: Single-instance monitoring fact store and alert evaluator

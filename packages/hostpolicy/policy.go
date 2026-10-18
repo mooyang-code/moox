@@ -171,3 +171,31 @@ func Write(path string, policy Policy) error {
 func Path(deploymentRoot string) string {
 	return filepath.Join(deploymentRoot, "run", FileName)
 }
+
+// Summary 是策略缓存的概要，不含推送地址，可以安全地打印或经 SSH 传回。
+type Summary struct {
+	Path        string    `json:"path"`
+	Present     bool      `json:"present"`
+	Version     int64     `json:"version,omitempty"`
+	Source      string    `json:"source,omitempty"`
+	FetchedAt   time.Time `json:"fetched_at,omitzero"`
+	ContentHash string    `json:"content_hash,omitempty"`
+	Channels    int       `json:"channels"`
+	Error       string    `json:"error,omitempty"`
+}
+
+// Summarize 读取策略缓存并返回概要；文件不存在或不可用时写在 Present / Error 里，不返回错误。
+func Summarize(path string) Summary {
+	summary := Summary{Path: path}
+	policy, err := Read(path)
+	switch {
+	case os.IsNotExist(err):
+		return summary
+	case err != nil:
+		summary.Present, summary.Error = true, err.Error()
+		return summary
+	}
+	summary.Present, summary.Version, summary.Source, summary.FetchedAt = true, policy.Version, policy.Source, policy.FetchedAt
+	summary.ContentHash, summary.Channels = policy.ContentHash, len(policy.NotificationChannels)
+	return summary
+}
