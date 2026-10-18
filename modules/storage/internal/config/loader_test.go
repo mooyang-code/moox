@@ -48,18 +48,6 @@ func TestCheckedInStorageRoleConfigsShareThePolicyFile(t *testing.T) {
 	}
 }
 
-func TestStorageConfigAppliesEventConsumerDefaults(t *testing.T) {
-	var cfg RuntimeConfig
-	cfg.ApplyDefaults()
-
-	if cfg.Storage.EventBus.MaxAckPending != 256 {
-		t.Fatalf("EventBus.MaxAckPending = %d, want 256 for the default view role", cfg.Storage.EventBus.MaxAckPending)
-	}
-	if cfg.Storage.EventBus.AckWaitMS != 120000 {
-		t.Fatalf("EventBus.AckWaitMS = %d, want 120000", cfg.Storage.EventBus.AckWaitMS)
-	}
-}
-
 func TestStorageViewConsumerDefaults(t *testing.T) {
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
@@ -285,9 +273,6 @@ func TestStorageDeploymentConfigFilesLoadRolesAndHealth(t *testing.T) {
 			}
 			if cfg.Storage.EventBus.CredentialFile != "~/.config/moox/eventbus/storage-eventbus.yaml" {
 				t.Fatalf("EventBus.CredentialFile = %q", cfg.Storage.EventBus.CredentialFile)
-			}
-			if tt.file == "storage_view/trpc_go.yaml" && cfg.Storage.EventBus.MaxAckPending != 256 {
-				t.Fatalf("EventBus.MaxAckPending = %d, want 256 for view consumer", cfg.Storage.EventBus.MaxAckPending)
 			}
 			if cfg.Storage.Health.Addr != tt.wantHealth {
 				t.Fatalf("Health.Addr = %q, want %q", cfg.Storage.Health.Addr, tt.wantHealth)

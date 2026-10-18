@@ -142,7 +142,7 @@ func validateDataNodeMarkerMessage(raw []byte) (*eventpb.EventMessage, error) {
 	}
 	event, ok := registry.Lookup(message.GetEventName(), message.GetEventVersion())
 	if !ok || !isDataNodeOutboxEvent(event) {
-		return nil, fmt.Errorf("%w: %s@%d", ErrUnsupportedOutboxEvent, message.GetEventName(), message.GetEventVersion())
+		return nil, fmt.Errorf("event %s@%d is not a DataNode outbox event", message.GetEventName(), message.GetEventVersion())
 	}
 	subject, err := registry.RenderSubject(event, message.GetSpaceId(), message.GetSubjectId())
 	if err != nil {

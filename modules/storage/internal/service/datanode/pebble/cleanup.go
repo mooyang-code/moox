@@ -89,8 +89,8 @@ func (s *Store) CleanupExpiredBuckets(ctx context.Context, spaceID, datasetID st
 		})
 		nextTagPrefix := nextPrefix(tagPrefix)
 		// Keys inside a tag prefix are ordered by canonical data_time. A
-		// malformed legacy timestamp is left untouched rather than causing a
-		// broad delete; the next cleanup can retry after repair.
+		// malformed timestamp is left untouched rather than causing a broad
+		// delete; the next cleanup can retry after repair.
 		if _, parseErr := time.Parse(canonicalTimeLayout, series.GetDataTime()); parseErr == nil && series.GetDataTime() < before {
 			upper := appendPart(append([]byte(nil), tagPrefix...), before)
 			if err := batch.DeleteRange(tagPrefix, upper, s.writeOptions); err != nil {

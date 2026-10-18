@@ -12,13 +12,8 @@ import (
 const (
 	layoutMarkerName       = "storage_layout_version"
 	layoutMarkerTempPrefix = "." + layoutMarkerName + ".tmp-"
-	// Version 4 adds the subject-first series history index. Existing
-	// stores must materialize both derived namespaces before serving a history
-	// read; the legacy field namespace remains authoritative.
-	// Version 3 added the logical time-ordered history-row index. Existing
-	// stores cannot satisfy the rebuild lookback contract without that index;
-	// operators must perform the explicit reset-all operation instead of
-	// silently activating a View with an incomplete history.
+	// 版本 4：字段/属性命名空间之外，同批写入按时间排序的历史行索引与按标的排序的序列历史索引。
+	// 其他版本的数据都要显式重置后再用，不做原地升级。
 	layoutVersion = "4\n"
 )
 
@@ -33,19 +28,6 @@ func ensureLayout(path string) error {
 	case err == nil:
 		switch string(data) {
 		case layoutVersion:
-			return cleanupLayoutMarkerTemps(path)
-		case "2\n":
-			// Version 4 adds derived history namespaces. The legacy field
-			// namespace remains readable, so upgrade the marker in place and
-			// keep existing indexes valid.
-			if err := upgradeLayoutMarker(path, markerPath); err != nil {
-				return err
-			}
-			return cleanupLayoutMarkerTemps(path)
-		case "3\n":
-			if err := upgradeLayoutMarker(path, markerPath); err != nil {
-				return err
-			}
 			return cleanupLayoutMarkerTemps(path)
 		default:
 			return validateLayoutMarker(data)
@@ -127,31 +109,6 @@ func createLayoutMarker(dirPath, markerPath string) error {
 		}
 	}
 	_ = os.Remove(tempPath)
-	return syncDirectory(dirPath)
-}
-
-func upgradeLayoutMarker(dirPath, markerPath string) error {
-	temp, err := os.CreateTemp(dirPath, layoutMarkerTempPrefix)
-	if err != nil {
-		return fmt.Errorf("create upgraded DataNode layout marker: %w", err)
-	}
-	tempPath := temp.Name()
-	defer func() {
-		_ = temp.Close()
-		_ = os.Remove(tempPath)
-	}()
-	if _, err := io.WriteString(temp, layoutVersion); err != nil {
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tempPath, markerPath); err != nil {
-		return fmt.Errorf("activate upgraded DataNode layout marker: %w", err)
-	}
 	return syncDirectory(dirPath)
 }
 

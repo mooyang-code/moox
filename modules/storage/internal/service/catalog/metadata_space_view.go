@@ -26,17 +26,7 @@ func (s *Service) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.
 	if space.Name == "" {
 		space.Name = space.GetSpaceId()
 	}
-	var created *pb.Space
-	var err error
-	if creator, ok := s.metadata.(interface {
-		CreateSpace(context.Context, *pb.Space) (*pb.Space, error)
-	}); ok {
-		created, err = creator.CreateSpace(ctx, space)
-	} else {
-		// Non-SQLite test/compatibility stores may only expose the historical
-		// Writer contract. Production SQLite always takes the atomic path above.
-		created, err = s.metadata.UpsertSpace(ctx, space)
-	}
+	created, err := s.metadata.CreateSpace(ctx, space)
 	if err != nil {
 		return &pb.CreateSpaceRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}

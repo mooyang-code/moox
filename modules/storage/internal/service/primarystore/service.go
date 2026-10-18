@@ -29,12 +29,8 @@ type rangeDataNodeClient interface {
 	CountTimeSeriesRows(context.Context, *pb.CountTimeSeriesRowsReq) (*pb.CountTimeSeriesRowsRsp, error)
 }
 
-// NodeResolver is the legacy resolver shape used by the server and existing
-// in-process tests. Marker-capable calls are discovered with a small
-// type-asserted extension, so old DataNode fakes do not need to implement the
-// new methods.
-type NodeResolver func(context.Context, string, string) (pb.DataNodeRuntimeService, error)
-type dataNodeResolver func(context.Context, string, string) (DataNodeClient, error)
+// Resolver 按空间与数据集找到负责的 DataNode。区间读取等能力通过类型断言发现。
+type Resolver func(ctx context.Context, spaceID, datasetID string) (DataNodeClient, error)
 type AuthSigner func(*pb.AuthInfo) (*pb.AuthInfo, error)
 type Authorizer func(*pb.AuthInfo) error
 type SnapshotProvider func() metadata.RequestSnapshot
@@ -48,7 +44,7 @@ type DatasetRunObserver interface {
 }
 
 type Service struct {
-	resolve   dataNodeResolver
+	resolve   Resolver
 	validate  Validator
 	sign      AuthSigner
 	authorize Authorizer
@@ -60,10 +56,8 @@ type Service struct {
 
 type Options struct {
 	Node DataNodeClient
-	// Resolver accepts NodeResolver and the minimal function shape used by
-	// focused tests. Keeping this as any preserves source compatibility while
-	// the constructor normalizes it to the internal resolver.
-	Resolver       any
+	// Resolver 为空时使用固定的 Node。
+	Resolver       Resolver
 	Validator      Validator
 	AuthSigner     AuthSigner
 	Authorizer     Authorizer
@@ -74,23 +68,7 @@ type Options struct {
 }
 
 func New(opts Options) (*Service, error) {
-	var resolve dataNodeResolver
-	switch resolver := opts.Resolver.(type) {
-	case NodeResolver:
-		resolve = func(ctx context.Context, spaceID, datasetID string) (DataNodeClient, error) {
-			return resolver(ctx, spaceID, datasetID)
-		}
-	case func(context.Context, string, string) (pb.DataNodeRuntimeService, error):
-		resolve = func(ctx context.Context, spaceID, datasetID string) (DataNodeClient, error) {
-			return resolver(ctx, spaceID, datasetID)
-		}
-	case func(context.Context, string, string) (DataNodeClient, error):
-		resolve = resolver
-	case nil:
-		// handled by the fixed Node fallback below
-	default:
-		return nil, errors.New("unsupported data node resolver type")
-	}
+	resolve := opts.Resolver
 	if resolve == nil && opts.Node != nil {
 		resolve = func(context.Context, string, string) (DataNodeClient, error) { return opts.Node, nil }
 	}

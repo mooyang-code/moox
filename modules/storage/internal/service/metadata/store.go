@@ -128,6 +128,8 @@ const ActiveBuildIDAttribute = "moox.active_build_id"
 // Writer 定义元数据存储的写入与状态变更接口。
 type Writer interface {
 	UpsertSpace(ctx context.Context, space *pb.Space) (*pb.Space, error)
+	// CreateSpace 原子地创建空间，已存在时返回冲突。
+	CreateSpace(ctx context.Context, space *pb.Space) (*pb.Space, error)
 	DeleteSpace(ctx context.Context, spaceID string) error
 	UpsertView(ctx context.Context, item *pb.View) (*pb.View, error)
 	CreateView(ctx context.Context, item *pb.View) (*pb.View, error)

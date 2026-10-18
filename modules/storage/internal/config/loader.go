@@ -53,19 +53,10 @@ type StorageDevices struct {
 // StorageEventBus 保存事件总线传输配置。
 type StorageEventBus struct {
 	CredentialFile string `yaml:"credential_file"`
-	Consumer       string `yaml:"-"`
-	// MaxAckPending bounds the number of View events that may be in flight.
-	// The subject dispatcher still serializes events for the same dataset/view,
-	// so different dataset subjects can make progress concurrently.
-	MaxAckPending int `yaml:"max_ack_pending"`
-	AckWaitMS     int `yaml:"-"`
 }
 
-const (
-	StorageDefaultMaxAckPending = 8
-	StorageViewMaxAckPending    = 256
-	StorageViewAckWaitMS        = 120000
-)
+// StorageViewAckWaitMS 是 View 消费分区未配置 ack_wait_ms 时的默认值。
+const StorageViewAckWaitMS = 120000
 
 // StorageView 保存 View 服务消费与批处理配置。
 type StorageView struct {
@@ -382,15 +373,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if c.Devices.ViewIndexRoot == "" {
 		c.Devices.ViewIndexRoot = filepath.Join(c.Root, "view-indexes")
-	}
-	if c.EventBus.MaxAckPending == 0 {
-		c.EventBus.MaxAckPending = StorageDefaultMaxAckPending
-		if c.HasRole("view") {
-			c.EventBus.MaxAckPending = StorageViewMaxAckPending
-		}
-	}
-	if c.EventBus.AckWaitMS == 0 {
-		c.EventBus.AckWaitMS = StorageViewAckWaitMS
 	}
 	if c.Primary.Outbox.FlushBatchSize <= 0 {
 		c.Primary.Outbox.FlushBatchSize = 100

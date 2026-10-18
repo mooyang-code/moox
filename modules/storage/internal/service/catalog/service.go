@@ -32,8 +32,7 @@ type Options struct {
 	AuthSecret string
 	// OperatorAuthSecret authenticates expensive admin/CLI metadata actions.
 	// It is separate from the DataNode registration secret used by the
-	// storage-primary role, while tests and legacy callers may use AuthSecret
-	// as a fallback.
+	// storage-primary role.
 	OperatorAuthSecret string
 	// ViewAuthSecret authenticates the View role's append-only active-schema CAS.
 	ViewAuthSecret   string
@@ -54,9 +53,6 @@ func NewMetadataService(store metadata.Store, cache *metacache.Store, options Op
 	operatorSecret := options.OperatorAuthSecret
 	if operatorSecret == "" {
 		operatorSecret = os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET")
-	}
-	if operatorSecret == "" {
-		operatorSecret = secret
 	}
 	viewSecret := options.ViewAuthSecret
 	if viewSecret == "" {

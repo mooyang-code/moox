@@ -123,8 +123,8 @@ func (r *Relay) Start(ctx context.Context) {
 			for {
 				if err := r.flush(ctx); err != nil {
 					r.report(err)
-					// Keep a failed publish for the next poll. Unsupported
-					// legacy payloads are dropped inside flush instead.
+					// Keep a failed publish for the next poll. Permanently invalid
+					// payloads are quarantined inside flush instead.
 					select {
 					case <-time.After(r.options.PollInterval):
 					case <-r.stop:
@@ -220,11 +220,6 @@ func (r *Relay) flush(ctx context.Context) error {
 			return publishErr
 		})
 		if err != nil {
-			if pebble.IsUnsupportedOutboxEvent(err) {
-				log.Printf("storage outbox dropping unsupported event %d: %v", entry.ID, err)
-				confirmed = append(confirmed, entry.ID)
-				continue
-			}
 			if pebble.IsInvalidOutboxEvent(err) {
 				// 永久无效：隔离并告警，继续投递其后的事件。
 				log.Printf("Storage 出站队列隔离无法通过契约校验的事件 %d：%v", entry.ID, err)

@@ -227,8 +227,8 @@ func (c *Consumer) Start(ctx context.Context) (func(), error) {
 		return nil, err
 	}
 	// Multi-partition Storage View owns the aggregate bound state in
-	// StartEventConsumer. Keep the legacy single-consumer metric behavior when
-	// no partition callback is supplied, but do not let one partition overwrite
+	// StartEventConsumer. A single consumer without a partition callback reports
+	// the aggregate itself, but do not let one partition overwrite
 	// the aggregate with its own state.
 	if opts.BoundReporter == nil {
 		opts.Metrics.SetConsumerBound(true)

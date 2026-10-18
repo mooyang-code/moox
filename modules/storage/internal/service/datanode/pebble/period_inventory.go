@@ -570,17 +570,9 @@ func finalizePeriodInventoryRecord(record *periodInventoryRecord) {
 		}
 	}
 	var snapshotKey string
-	_, hasSeriesSnapshot := fields["series_snapshot"]
-	_, hasLegacyRoster := fields["roster"]
-	if hasSeriesSnapshot && hasLegacyRoster {
-		entry.IntegrityErrors = append(entry.IntegrityErrors, "both series_snapshot and legacy roster keys are present")
-	}
-	switch {
-	case hasSeriesSnapshot:
+	if _, ok := fields["series_snapshot"]; ok {
 		snapshotKey, entry.SnapshotFormat = "series_snapshot", "series_snapshot"
-	case hasLegacyRoster:
-		snapshotKey, entry.SnapshotFormat = "roster", "legacy_roster"
-	default:
+	} else {
 		entry.SnapshotFormat = "missing"
 		entry.IntegrityErrors = append(entry.IntegrityErrors, "missing field: series_snapshot")
 	}
@@ -617,9 +609,6 @@ func finalizePeriodInventoryRecord(record *periodInventoryRecord) {
 				}
 			}
 		}
-	}
-	if entry.SnapshotFormat == "legacy_roster" {
-		entry.IntegrityErrors = append(entry.IntegrityErrors, "legacy roster state requires an explicitly approved rebuild")
 	}
 	if entry.DeadlineAt <= 0 {
 		if entry.Status == "degraded" {

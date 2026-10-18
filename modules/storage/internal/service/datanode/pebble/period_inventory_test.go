@@ -124,36 +124,6 @@ func TestInspectPeriodLedgerRequiresBoundedIdentityScope(t *testing.T) {
 	require.ErrorContains(t, err, "period_time")
 }
 
-func TestInspectPeriodLedgerLabelsLegacySnapshotWithoutMigratingIt(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "node")
-	store, err := Open(Options{Path: path, NodeID: "node-a"})
-	require.NoError(t, err)
-	period := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	exp := periodExpectationForTest(period, 1, "BTC-USDT")
-	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
-	require.NoError(t, err)
-	require.NoError(t, store.Close())
-
-	db, err := cpebble.Open(path, &cpebble.Options{Merger: BitmapORMerger})
-	require.NoError(t, err)
-	base := periodBase(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime)
-	value, closer, err := db.Get(periodFieldKey(base, "series_snapshot"))
-	require.NoError(t, err)
-	raw := append([]byte(nil), value...)
-	require.NoError(t, closer.Close())
-	require.NoError(t, db.Set(periodFieldKey(base, "roster"), raw, cpebble.Sync))
-	require.NoError(t, db.Delete(periodFieldKey(base, "series_snapshot"), cpebble.Sync))
-	require.NoError(t, db.Close())
-
-	got, err := InspectPeriodLedger(path, "node-a", PeriodLedgerScope{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTimeMin: exp.PeriodTime, PeriodTimeMax: exp.PeriodTime})
-	require.NoError(t, err)
-	require.Equal(t, "legacy_roster", got.Periods[0].SnapshotFormat)
-	require.Contains(t, got.Periods[0].IntegrityErrors, "legacy roster state requires an explicitly approved rebuild")
-	readOnlyDB, err := cpebble.Open(path, &cpebble.Options{ReadOnly: true, Merger: BitmapORMerger})
-	require.NoError(t, err, "inspection leaves the existing legacy key layout untouched")
-	require.NoError(t, readOnlyDB.Close())
-}
-
 func TestInspectPeriodLedgerRejectsMismatchedSecondaryIndexKeys(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "node")
 	store, err := Open(Options{Path: path, NodeID: "node-a"})
@@ -203,31 +173,6 @@ func TestInspectPeriodLedgerRejectsBitmapPaddingAndOverlap(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, got.Periods[0].IntegrityErrors, "success bitmap has bits outside expected_count")
 	require.Contains(t, got.Periods[0].IntegrityErrors, "success and failure bitmaps overlap")
-}
-
-func TestInspectPeriodLedgerRejectsAmbiguousSnapshotKeys(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "node")
-	store, err := Open(Options{Path: path, NodeID: "node-a"})
-	require.NoError(t, err)
-	period := time.Date(2026, 9, 30, 17, 0, 0, 0, time.UTC)
-	exp := periodExpectationForTest(period, 1, "BTC-USDT")
-	_, err = store.EnsureDatasetPeriod(context.Background(), exp)
-	require.NoError(t, err)
-	require.NoError(t, store.Close())
-
-	db, err := cpebble.Open(path, &cpebble.Options{Merger: BitmapORMerger})
-	require.NoError(t, err)
-	base := periodBase(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime)
-	value, closer, err := db.Get(periodFieldKey(base, "series_snapshot"))
-	require.NoError(t, err)
-	raw := append([]byte(nil), value...)
-	require.NoError(t, closer.Close())
-	require.NoError(t, db.Set(periodFieldKey(base, "roster"), raw, cpebble.Sync))
-	require.NoError(t, db.Close())
-
-	got, err := InspectPeriodLedger(path, "node-a", PeriodLedgerScope{SpaceID: exp.SpaceID, DatasetID: exp.DatasetID, Frequency: exp.Frequency, PeriodTimeMin: exp.PeriodTime, PeriodTimeMax: exp.PeriodTime})
-	require.NoError(t, err)
-	require.Contains(t, got.Periods[0].IntegrityErrors, "both series_snapshot and legacy roster keys are present")
 }
 
 func TestInspectPeriodLedgerCrossChecksMarkerAgainstSnapshotAndBitmap(t *testing.T) {
