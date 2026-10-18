@@ -174,9 +174,10 @@ WHERE c_space_id = ? AND c_dataset_id = ? AND c_status = 'queued'`, fmtTime(now)
 	return task, run, err
 }
 
-// DeleteTask 删除任务；已有分区登记的任务不能删除。
-func (s *Store) DeleteTask(ctx context.Context, spaceID, datasetID string) error {
-	return s.tx(ctx, func(tx *sql.Tx) error {
+// DeleteTask 删除任务；已有分区登记的任务不能删除。返回实际被删除的任务 ID（同一事务内读取），用作删除通知的实例标识。
+func (s *Store) DeleteTask(ctx context.Context, spaceID, datasetID string) (int64, error) {
+	var deleted int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
 		var partitions int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID).Scan(&partitions); err != nil {
 			return err
@@ -191,15 +192,16 @@ func (s *Store) DeleteTask(ctx context.Context, spaceID, datasetID string) error
 		if active > 0 {
 			return ErrConflict
 		}
-		result, err := tx.ExecContext(ctx, `DELETE FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID)
-		if err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT c_id FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID).Scan(&deleted); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
 			return err
 		}
-		if affected, _ := result.RowsAffected(); affected == 0 {
-			return ErrNotFound
-		}
-		return nil
+		_, err := tx.ExecContext(ctx, `DELETE FROM t_archive_tasks WHERE c_id = ?`, deleted)
+		return err
 	})
+	return deleted, err
 }
 
 // UpdateTaskDataset 刷新任务的 DataNode 与线上保留期（维护定时器每小时从 Storage 读取）。

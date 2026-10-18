@@ -538,24 +538,24 @@ func TestDeleteTaskRefusesTasksWithPartitionsOrRunningRuns(t *testing.T) {
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
 	c := mustClaim(t, s, "w1", t0)
-	if err := s.DeleteTask(ctx, "crypto", "ds1"); !errors.Is(err, ErrConflict) {
+	if _, err := s.DeleteTask(ctx, "crypto", "ds1"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("运行中的任务不能删除: %v", err)
 	}
 	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0,
 		Partitions: []Partition{finishedPartition("2026-10-16", PartitionExported)}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteTask(ctx, "crypto", "ds1"); !errors.Is(err, ErrHasPartitions) {
+	if _, err := s.DeleteTask(ctx, "crypto", "ds1"); !errors.Is(err, ErrHasPartitions) {
 		t.Fatalf("有分区的任务不能删除: %v", err)
 	}
 	mustTask(t, s, "crypto", "ds2", true)
-	if err := s.DeleteTask(ctx, "crypto", "ds2"); err != nil {
+	if _, err := s.DeleteTask(ctx, "crypto", "ds2"); err != nil {
 		t.Fatal(err)
 	}
 	if runs, _, _ := s.ListRuns(ctx, "crypto", "ds2", "", 10, 0); len(runs) != 0 {
 		t.Fatalf("删除任务应级联删除运行: %v", runs)
 	}
-	if err := s.DeleteTask(ctx, "crypto", "ds2"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.DeleteTask(ctx, "crypto", "ds2"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("again: %v", err)
 	}
 }
