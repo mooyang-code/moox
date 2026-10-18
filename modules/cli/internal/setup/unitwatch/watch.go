@@ -109,10 +109,11 @@ type target struct {
 }
 
 // Run 执行一轮守护。单个组件出错不影响其他组件，只有本机布局本身无法读取时返回错误。
-func Run(ctx context.Context, opts Options) (Report, error) {
+func Run(ctx context.Context, opts Options) (report Report, _ error) {
 	opts = opts.withDefaults()
 	started := opts.Now()
-	report := Report{StartedAt: started.UTC(), DryRun: opts.DryRun, Components: []ComponentReport{}}
+	report = Report{StartedAt: started.UTC(), DryRun: opts.DryRun, Components: []ComponentReport{}}
+	// 具名返回值：延迟赋值要作用在返回给调用方的报告上。
 	defer func() { report.ElapsedMS = opts.Now().Sub(started).Milliseconds() }()
 
 	targets, hostID, err := discover(opts.Root, opts.LoadPlan)

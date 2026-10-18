@@ -99,12 +99,14 @@ func controlUnits() map[string][]string {
 // 依赖顺序：admin → host-gateway → eventbus → host-agent，然后按单元与计划顺序检查其余组件。
 func TestRunChecksInDependencyOrder(t *testing.T) {
 	h := newFakeHost(t, controlUnits())
+	h.tick = 100 * time.Millisecond
 	report := h.run()
 	require.Equal(t, []string{"admin", "host-gateway", "eventbus", "host-agent", "monitor", "collector"}, h.calls)
 	require.Equal(t, "control", report.HostID)
 	for _, c := range report.Components {
 		require.Equal(t, OutcomeHealthy, c.Outcome, c.Component)
 	}
+	require.Equal(t, int64(len(h.calls))*h.tick.Milliseconds(), report.ElapsedMS, "报告记录整轮耗时")
 }
 
 // 上游没运行起来时，其余上游照常检查，下游本轮跳过。
