@@ -9,7 +9,6 @@ import (
 	"time"
 
 	logicaldomain "github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
-	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -238,204 +237,8 @@ func (s *Service) RemoveMember(
 	})
 }
 
-func (s *Service) ClaimOwner(
-	ctx context.Context,
-	spaceID string,
-	logicalAccountID string,
-	runnerID string,
-) (store.LogicalAccountRecord, error) {
-	if s == nil || s.Store == nil ||
-		strings.TrimSpace(runnerID) == "" {
-		return store.LogicalAccountRecord{}, ErrServiceConfig
-	}
-	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
-	if lockErr != nil {
-		return store.LogicalAccountRecord{}, lockErr
-	}
-	defer unlock()
-	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
-	if err != nil {
-		return store.LogicalAccountRecord{}, err
-	}
-	if current.ControlMode != "STRATEGY" {
-		return store.LogicalAccountRecord{}, ErrOwnerConflict
-	}
-	if current.OwnerRunnerID == runnerID {
-		return current, nil
-	}
-	if current.OwnerRunnerID != "" {
-		return store.LogicalAccountRecord{}, ErrOwnerConflict
-	}
-	accounts, err := s.Store.ListLogicalAccounts(ctx, spaceID)
-	if err != nil {
-		return store.LogicalAccountRecord{}, err
-	}
-	for _, account := range accounts {
-		if account.OwnerRunnerID == runnerID &&
-			account.LogicalAccountID != logicalAccountID {
-			return store.LogicalAccountRecord{}, ErrOwnerConflict
-		}
-	}
-	orders, totalOpenOrders, err := s.Store.ListOrders(ctx, spaceID, store.OrderQuery{
-		LogicalAccountID: logicalAccountID,
-		OnlyOpen:         true,
-		Limit:            1000,
-	})
-	if err != nil {
-		return store.LogicalAccountRecord{}, err
-	}
-	if totalOpenOrders > int64(len(orders)) {
-		return store.LogicalAccountRecord{}, fmt.Errorf("%w: open target orders exceed safety limit", ErrNotReady)
-	}
-	for _, current := range orders {
-		if current.OwnerType == string(orderdomain.OwnerTarget) {
-			return store.LogicalAccountRecord{}, fmt.Errorf(
-				"%w: previous runner order %s is still active",
-				ErrNotReady,
-				current.OrderID,
-			)
-		}
-	}
-	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.TryClaimLogicalAccountOwner(spaceID, logicalAccountID, runnerID); err != nil {
-			return err
-		}
-		// Claiming after a release starts a new Strategy binding lifecycle. Do
-		// not resume a target accepted by the previous lifecycle, even when the
-		// same runner ID is reused after its strategy/account configuration has
-		// changed. The next Strategy result must establish a fresh target.
-		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
-	}); err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			return store.LogicalAccountRecord{}, ErrOwnerConflict
-		}
-		return store.LogicalAccountRecord{}, err
-	}
-	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
-}
-
-// RebindOwner starts a new owner lifecycle while retaining the current
-// runner/automation binding. It fences delayed targets and removes the live
-// target left by an archived Strategy V1 runner with the same runner ID.
-func (s *Service) RebindOwner(
-	ctx context.Context,
-	spaceID string,
-	logicalAccountID string,
-	runnerID string,
-	rebindKey string,
-) (store.LogicalAccountRecord, error) {
-	if s == nil || s.Store == nil || strings.TrimSpace(runnerID) == "" || strings.TrimSpace(rebindKey) == "" {
-		return store.LogicalAccountRecord{}, ErrServiceConfig
-	}
-	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
-	if lockErr != nil {
-		return store.LogicalAccountRecord{}, lockErr
-	}
-	defer unlock()
-	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
-	if err != nil {
-		return store.LogicalAccountRecord{}, err
-	}
-	if current.ControlMode != "STRATEGY" {
-		return store.LogicalAccountRecord{}, ErrOwnerConflict
-	}
-	if current.OwnerRunnerID != "" && current.OwnerRunnerID != runnerID {
-		return store.LogicalAccountRecord{}, ErrOwnerConflict
-	}
-	already, err := s.Store.HasLogicalAccountOwnerRebind(ctx, spaceID, logicalAccountID, rebindKey)
-	if err != nil {
-		return store.LogicalAccountRecord{}, err
-	}
-	if already {
-		return current, nil
-	}
-	orders, totalOpenOrders, err := s.Store.ListOrders(ctx, spaceID, store.OrderQuery{
-		LogicalAccountID: logicalAccountID,
-		OnlyOpen:         true,
-		Limit:            1000,
-	})
-	if err != nil {
-		return store.LogicalAccountRecord{}, err
-	}
-	if totalOpenOrders > int64(len(orders)) {
-		return store.LogicalAccountRecord{}, fmt.Errorf("%w: open target orders exceed safety limit", ErrNotReady)
-	}
-	for _, openOrder := range orders {
-		if openOrder.OwnerType == string(orderdomain.OwnerTarget) {
-			return store.LogicalAccountRecord{}, fmt.Errorf(
-				"%w: previous runner order %s is still active",
-				ErrNotReady,
-				openOrder.OrderID,
-			)
-		}
-	}
-	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		applied, err := tx.RebindLogicalAccountOwner(spaceID, logicalAccountID, runnerID, rebindKey)
-		if err != nil {
-			return err
-		}
-		if !applied {
-			return nil
-		}
-		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
-	}); err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			return store.LogicalAccountRecord{}, ErrOwnerConflict
-		}
-		return store.LogicalAccountRecord{}, err
-	}
-	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
-}
-
-func (s *Service) ReleaseOwner(
-	ctx context.Context,
-	spaceID string,
-	logicalAccountID string,
-	runnerID string,
-) error {
-	if s == nil || s.Store == nil {
-		return ErrServiceConfig
-	}
-	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
-	if lockErr != nil {
-		return lockErr
-	}
-	defer unlock()
-	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
-	if err != nil {
-		return err
-	}
-	if current.OwnerRunnerID == "" {
-		return nil
-	}
-	if current.OwnerRunnerID != runnerID {
-		return ErrOwnerConflict
-	}
-	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		if current.AutomationState == "ACTIVE" {
-			if err := tx.SetLogicalAccountAutomation(
-				spaceID,
-				logicalAccountID,
-				"PAUSED",
-				"runner ownership released",
-			); err != nil {
-				return err
-			}
-		}
-		// Keep advancing the lifecycle generation even while no runner owns the
-		// account. Any delayed target from the previous transition is rejected
-		// by the receipt accept path without comparing service clocks.
-		return tx.ReleaseLogicalAccountOwner(spaceID, logicalAccountID, runnerID)
-	})
-	if errors.Is(err, store.ErrConflict) {
-		return ErrOwnerConflict
-	}
-	return err
-}
-
 // ClaimSession assigns the explicit Strategy instance/session identity used by
-// new target events. It deliberately keeps the old ClaimOwner API intact for
-// console clients while ensuring the new path uses auth_fence CAS semantics.
+// target events, with auth_fence compare-and-set semantics.
 func (s *Service) ClaimSession(
 	ctx context.Context,
 	spaceID, logicalAccountID, instanceID, sessionID, expectedFence string,
@@ -703,19 +506,14 @@ func (s *Service) readiness(
 	)
 	switch {
 	case targetErr == nil:
-		modern := target.InstanceID != "" || target.SessionID != "" || target.BarEndTime != 0 || target.ValidUntil != 0
-		if modern {
-			if target.InstanceID == "" || target.SessionID == "" ||
-				target.InstanceID != logicalAccount.OwnerInstanceID || target.SessionID != logicalAccount.OwnerSessionID {
-				reasons = append(reasons, "target session does not own logical account")
-			}
-			// Resume enables automation, not an expired target. Execution waits
-			// for the next valid target and checks its validity window itself.
-			if now.UnixMilli() >= target.ValidUntil {
-				break
-			}
-		} else if target.RunnerID != logicalAccount.OwnerRunnerID {
-			reasons = append(reasons, "target runner does not own logical account")
+		if target.InstanceID == "" || target.SessionID == "" ||
+			target.InstanceID != logicalAccount.OwnerInstanceID || target.SessionID != logicalAccount.OwnerSessionID {
+			reasons = append(reasons, "target session does not own logical account")
+		}
+		// Resume enables automation, not an expired target. Execution waits
+		// for the next valid target and checks its validity window itself.
+		if now.UnixMilli() >= target.ValidUntil {
+			break
 		}
 		for _, desired := range target.Targets {
 			// 保持标的不会被下单，不因它暂时不可用而阻止恢复自动化。
@@ -730,10 +528,6 @@ func (s *Service) readiness(
 			}
 		}
 	case errors.Is(targetErr, gorm.ErrRecordNotFound):
-		if logicalAccount.OwnerRunnerID != "" &&
-			(logicalAccount.OwnerInstanceID == "" || logicalAccount.OwnerSessionID == "") {
-			reasons = append(reasons, "owner runner has no current target")
-		}
 	default:
 		return Readiness{}, targetErr
 	}

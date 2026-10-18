@@ -183,11 +183,7 @@ func (e *Executor) Converge(
 		}
 		return Result{Status: StatusPaused}, nil
 	}
-	if target.InstanceID == "" {
-		if logicalAccount.OwnerRunnerID != target.RunnerID {
-			return Result{}, fmt.Errorf("%w: target runner no longer owns logical account", ErrInvalidTarget)
-		}
-	} else if logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
+	if target.InstanceID == "" || logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
 		return Result{}, ErrTargetSession
 	}
 
@@ -856,12 +852,6 @@ func (e *Executor) checkTargetExecutable(
 	logicalAccount store.LogicalAccountRecord,
 	target store.LogicalAccountTargetRecord,
 ) error {
-	if target.InstanceID == "" && target.SessionID == "" && target.ValidUntil == 0 {
-		if logicalAccount.OwnerRunnerID != "" && target.RunnerID != logicalAccount.OwnerRunnerID {
-			return ErrTargetSession
-		}
-		return nil
-	}
 	if target.InstanceID == "" || target.SessionID == "" || target.StrategyID == "" ||
 		target.BarEndTime <= 0 || target.EffectiveAt != target.BarEndTime || target.ValidUntil <= target.EffectiveAt {
 		return ErrInvalidTarget

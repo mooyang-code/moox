@@ -209,17 +209,10 @@ func (h *LogicalAccountServer) ClaimLogicalAccountOwner(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	var record store.LogicalAccountRecord
-	if req.GetInstanceId() != "" {
-		record, _, err = h.LogicalAccounts.ClaimSession(
-			ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(),
-			req.GetSessionId(), req.GetExpectedAuthFence(),
-		)
-	} else {
-		record, err = h.LogicalAccounts.ClaimOwner(
-			ctx, spaceID, req.GetLogicalAccountId(), req.GetRunnerId(),
-		)
-	}
+	record, _, err := h.LogicalAccounts.ClaimSession(
+		ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(),
+		req.GetSessionId(), req.GetExpectedAuthFence(),
+	)
 	return &tradepb.ClaimLogicalAccountOwnerRsp{
 		RetInfo:        errorInfo(err),
 		LogicalAccount: h.logicalAccount(ctx, record),
@@ -239,17 +232,10 @@ func (h *LogicalAccountServer) ReleaseLogicalAccountOwner(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	if req.GetInstanceId() != "" {
-		err = h.LogicalAccounts.ReleaseSession(
-			ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(),
-			req.GetSessionId(), req.GetExpectedAuthFence(),
-		)
-	} else {
-		err = h.LogicalAccounts.ReleaseOwner(
-			ctx, spaceID, req.GetLogicalAccountId(), req.GetRunnerId(),
-		)
-	}
-	if err != nil {
+	if err := h.LogicalAccounts.ReleaseSession(
+		ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(),
+		req.GetSessionId(), req.GetExpectedAuthFence(),
+	); err != nil {
 		return &tradepb.ReleaseLogicalAccountOwnerRsp{RetInfo: errorInfo(err)}, nil
 	}
 	record, err := h.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId())
@@ -272,18 +258,10 @@ func (h *LogicalAccountServer) RebindLogicalAccountOwner(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	var record store.LogicalAccountRecord
-	if req.GetInstanceId() == "" {
-		// The endpoint name is retained for the modern session CAS contract, but
-		// runner/rebind_key requests are no longer an executable authorization
-		// path. Historical owner rows require an explicit administrative cutover.
-		err = fmt.Errorf("%w: legacy logical account owner rebind is disabled", store.ErrConflict)
-	} else {
-		record, _, err = h.LogicalAccounts.RebindSession(
-			ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(), req.GetSessionId(),
-			req.GetExpectedAuthFence(), req.GetNewInstanceId(), req.GetNewSessionId(),
-		)
-	}
+	record, _, err := h.LogicalAccounts.RebindSession(
+		ctx, spaceID, req.GetLogicalAccountId(), req.GetInstanceId(), req.GetSessionId(),
+		req.GetExpectedAuthFence(), req.GetNewInstanceId(), req.GetNewSessionId(),
+	)
 	return &tradepb.RebindLogicalAccountOwnerRsp{
 		RetInfo:        errorInfo(err),
 		LogicalAccount: h.logicalAccount(ctx, record),

@@ -2,10 +2,7 @@ package logicalaccount
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -42,8 +39,10 @@ func TestAddMemberRequiresAdoptionForExistingExposure(t *testing.T) {
 func TestManualControlRejectsIdempotentClaimAndResume(t *testing.T) {
 	s, db := logicalAccountServiceFixture(t)
 	ctx := context.Background()
-	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_runner_id = 'runner', c_owner_instance_id = 'runner' WHERE c_logical_account_id = 'logical-1'").Error)
-	_, err := s.ClaimOwner(ctx, "space-1", "logical-1", "runner")
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_instance_id = NULL, c_owner_session_id = NULL WHERE c_logical_account_id = 'logical-1'").Error)
+	account, err := db.GetLogicalAccount(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	_, _, err = s.ClaimSession(ctx, "space-1", "logical-1", "runner", "session-1", account.AuthFence)
 	require.Error(t, err)
 	_, _, err = s.Resume(ctx, "space-1", "logical-1")
 	require.Error(t, err)
@@ -51,7 +50,7 @@ func TestManualControlRejectsIdempotentClaimAndResume(t *testing.T) {
 
 func TestManualReadinessUsesActualMembersWithoutStrategyOwner(t *testing.T) {
 	s, db := logicalAccountServiceFixture(t)
-	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_runner_id = NULL, c_owner_instance_id = NULL").Error)
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_instance_id = NULL").Error)
 	ready, err := s.Readiness(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.True(t, ready.Ready, ready.Reasons)
@@ -103,353 +102,13 @@ func TestDisableMemberCannotAdoptAwayExistingExposure(t *testing.T) {
 	require.True(t, member.Enabled)
 }
 
-func TestLogicalAccountOwnerRunnerIsExclusive(t *testing.T) {
-	service, _ := logicalAccountServiceFixture(t)
-
-	account, err := service.ClaimOwner(
-		context.Background(), "space-1", "logical-1", "runner-1",
-	)
-	require.NoError(t, err)
-	require.Equal(t, "runner-1", account.OwnerRunnerID)
-
-	_, err = service.ClaimOwner(
-		context.Background(), "space-1", "logical-1", "runner-other",
-	)
-	require.ErrorIs(t, err, ErrOwnerConflict)
-
-	require.NoError(t, service.ReleaseOwner(
-		context.Background(), "space-1", "logical-1", "runner-1",
-	))
-	account, err = service.ClaimOwner(
-		context.Background(), "space-1", "logical-1", "runner-other",
-	)
-	require.NoError(t, err)
-	require.Equal(t, "runner-other", account.OwnerRunnerID)
-}
-
-func TestLogicalAccountOwnerRunnerIsExclusiveUnderConcurrency(t *testing.T) {
-	service, tradeStore := logicalAccountServiceFixture(t)
-	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "logical-2",
-			ExecutionMode: "PAPER", MarketType: "SWAP", SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
-		})
-	}))
-	require.NoError(t, service.ReleaseOwner(
-		context.Background(), "space-1", "logical-1", "runner-1",
-	))
-
-	var wait sync.WaitGroup
-	results := make(chan error, 2)
-	for _, logicalAccountID := range []string{"logical-1", "logical-2"} {
-		wait.Add(1)
-		go func(id string) {
-			defer wait.Done()
-			_, err := service.ClaimOwner(
-				context.Background(), "space-1", id, "runner-shared",
-			)
-			results <- err
-		}(logicalAccountID)
-	}
-	wait.Wait()
-	close(results)
-	successes := 0
-	conflicts := 0
-	for err := range results {
-		switch {
-		case err == nil:
-			successes++
-		case errors.Is(err, ErrOwnerConflict):
-			conflicts++
-		default:
-			t.Fatalf("ClaimOwner() error = %v", err)
-		}
-	}
-	require.Equal(t, 1, successes)
-	require.Equal(t, 1, conflicts)
-}
-
-func TestLogicalAccountOwnerCASAcrossStoreConnections(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "trade.db")
-	first, err := store.Open(path)
-	require.NoError(t, err)
-	second, err := store.Open(path)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, first.Close())
-		require.NoError(t, second.Close())
-	})
-	require.NoError(t, first.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-cas", Name: "logical-cas",
-			ExecutionMode: "PAPER", MarketType: "SWAP", SettlementAsset: "USDT",
-			AutomationState: "PAUSED", PauseReason: "configure",
-		})
-	}))
-	services := []*Service{
-		{Store: first, Syncer: noopAccountSyncer{}},
-		{Store: second, Syncer: noopAccountSyncer{}},
-	}
-	var wait sync.WaitGroup
-	results := make(chan error, len(services))
-	for i, service := range services {
-		wait.Add(1)
-		go func(i int, service *Service) {
-			defer wait.Done()
-			_, claimErr := service.ClaimOwner(context.Background(), "space-1", "logical-cas", fmt.Sprintf("runner-%d", i))
-			results <- claimErr
-		}(i, service)
-	}
-	wait.Wait()
-	close(results)
-	successes, conflicts := 0, 0
-	for claimErr := range results {
-		switch {
-		case claimErr == nil:
-			successes++
-		case errors.Is(claimErr, ErrOwnerConflict):
-			conflicts++
-		default:
-			t.Fatalf("cross-connection ClaimOwner() error = %v", claimErr)
-		}
-	}
-	require.Equal(t, 1, successes)
-	require.Equal(t, 1, conflicts)
-}
-
-func TestClaimOwnerClearsPreviousRunnerSequence(t *testing.T) {
-	service, tradeStore := logicalAccountServiceFixture(t)
-	_, accepted, err := tradeStore.AcceptLogicalAccountTarget(
-		context.Background(),
-		store.LogicalAccountTargetRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			TargetID: "old-target", RunnerID: "runner-1",
-			CommandSequence: 100, Status: "PENDING", AcceptedAt: 2_000,
-			Targets: []store.InstrumentTarget{{
-				InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
-			}},
-		},
-	)
-	require.NoError(t, err)
-	require.True(t, accepted)
-	require.NoError(t, service.ReleaseOwner(
-		context.Background(), "space-1", "logical-1", "runner-1",
-	))
-	_, err = service.ClaimOwner(
-		context.Background(), "space-1", "logical-1", "runner-2",
-	)
-	require.NoError(t, err)
-
-	_, err = tradeStore.GetLogicalAccountTarget(
-		context.Background(), "space-1", "logical-1",
-	)
-	require.Error(t, err)
-	_, accepted, err = tradeStore.AcceptLogicalAccountTarget(
-		context.Background(),
-		store.LogicalAccountTargetRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			TargetID: "new-target", RunnerID: "runner-2",
-			CommandSequence: 1, Status: "PENDING", AcceptedAt: 2_001,
-			Targets: []store.InstrumentTarget{{
-				InstrumentID: "BTC-USDT-SWAP", Quantity: "2",
-			}},
-		},
-	)
-	require.NoError(t, err)
-	require.True(t, accepted)
-}
-
-func TestClaimOwnerClearsReleasedTargetWhenRunnerIsReused(t *testing.T) {
-	service, tradeStore := logicalAccountServiceFixture(t)
-	_, accepted, err := tradeStore.AcceptLogicalAccountTarget(
-		context.Background(),
-		store.LogicalAccountTargetRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			TargetID: "old-target", RunnerID: "runner-1",
-			CommandSequence: 1, Status: "PENDING", AcceptedAt: 2_000,
-			Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
-		},
-	)
-	require.NoError(t, err)
-	require.True(t, accepted)
-	require.NoError(t, service.ReleaseOwner(context.Background(), "space-1", "logical-1", "runner-1"))
-	_, err = service.ClaimOwner(context.Background(), "space-1", "logical-1", "runner-1")
-	require.NoError(t, err)
-	_, err = tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
-	require.Error(t, err)
-}
-
-func TestRebindOwnerFencesAndClearsTargetWithoutPausing(t *testing.T) {
-	service, tradeStore := logicalAccountServiceFixture(t)
-	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", ""); err != nil {
-			return err
-		}
-		return tx.SetLogicalAccountOwnerGeneration("space-1", "logical-1", "runner-1")
-	}); err != nil {
-		t.Fatal(err)
-	}
-	before, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
-	_, accepted, err := tradeStore.AcceptLogicalAccountTarget(
-		context.Background(),
-		store.LogicalAccountTargetRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			TargetID: "old-target", RunnerID: "runner-1",
-			CommandSequence: 1, Status: "PENDING", AcceptedAt: 2_000,
-			Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
-		},
-	)
-	require.NoError(t, err)
-	require.True(t, accepted)
-	claimed, err := service.RebindOwner(context.Background(), "space-1", "logical-1", "runner-1", "archive-key")
-	require.NoError(t, err)
-	require.Equal(t, "runner-1", claimed.OwnerRunnerID)
-	require.Equal(t, "ACTIVE", claimed.AutomationState)
-	require.Greater(t, claimed.OwnerGeneration, before.OwnerGeneration)
-	_, err = tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
-	require.Error(t, err)
-}
-
-func TestRebindOwnerClaimsWhenReleaseAlreadyWon(t *testing.T) {
-	service, tradeStore := logicalAccountServiceFixture(t)
-	claimed, err := service.RebindOwner(context.Background(), "space-1", "logical-1", "runner-1", "archive-key")
-	require.NoError(t, err)
-	require.Equal(t, "runner-1", claimed.OwnerRunnerID)
-	current, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Equal(t, int64(1), current.OwnerGeneration)
-}
-
-func TestRebindOwnerRetryDoesNotDeleteNewTarget(t *testing.T) {
-	service, tradeStore := logicalAccountServiceFixture(t)
-	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountOwnerGeneration("space-1", "logical-1", "runner-1")
-	}))
-	_, err := service.RebindOwner(context.Background(), "space-1", "logical-1", "runner-1", "archive-key")
-	require.NoError(t, err)
-	_, accepted, err := tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
-		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "new-target", RunnerID: "runner-1",
-		CommandSequence: 1, Status: "PENDING", AcceptedAt: 2_001,
-		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "2"}},
-	})
-	require.NoError(t, err)
-	require.True(t, accepted)
-	_, err = service.RebindOwner(context.Background(), "space-1", "logical-1", "runner-1", "archive-key")
-	require.NoError(t, err)
-	target, err := tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Equal(t, "new-target", target.TargetID)
-}
-
-func TestRebindOwnerWaitsForOpenTargetOrders(t *testing.T) {
-	service, tradeStore := logicalAccountServiceFixture(t)
-	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountOwnerGeneration("space-1", "logical-1", "runner-1")
-	}))
-	_, accepted, err := tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
-		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "old-target", RunnerID: "runner-1",
-		CommandSequence: 1, Status: "PENDING", AcceptedAt: 2_000,
-		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
-	})
-	require.NoError(t, err)
-	require.True(t, accepted)
-	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
-			SpaceID: "space-1", OrderID: "old-target-order", TradingAccountID: "account-a", ClientOrderID: "old-target-order",
-			ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY", PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
-			ReferencePriceAt: 2_000, OwnerType: "TARGET", OwnerID: "old-target", LogicalAccountID: "logical-1", RunnerID: "runner-1",
-			State: "OPEN", Version: 1,
-		})
-	}))
-	_, err = service.RebindOwner(context.Background(), "space-1", "logical-1", "runner-1", "archive-key")
-	require.ErrorIs(t, err, ErrNotReady)
-	target, err := tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
-	require.Equal(t, "old-target", target.TargetID)
-}
-
-func TestClaimOwnerWaitsForPreviousRunnerTargetOrdersToStop(t *testing.T) {
-	service, tradeStore := logicalAccountServiceFixture(t)
-	_, accepted, err := tradeStore.AcceptLogicalAccountTarget(
-		context.Background(),
-		store.LogicalAccountTargetRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			TargetID: "old-target", RunnerID: "runner-1",
-			CommandSequence: 1, Status: "PENDING", AcceptedAt: 2_000,
-			Targets: []store.InstrumentTarget{{
-				InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
-			}},
-		},
-	)
-	require.NoError(t, err)
-	require.True(t, accepted)
-	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.CreateOrder(store.OrderRecord{
-			SpaceID: "space-1", OrderID: "old-target-order",
-			TradingAccountID: "account-a", ClientOrderID: "old-target-order",
-			ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY",
-			PositionSide: "NET", Quantity: "1", ReferencePrice: "100",
-			ReferencePriceAt: 2_000,
-			OwnerType:        "TARGET", OwnerID: "old-target",
-			LogicalAccountID: "logical-1", RunnerID: "runner-1",
-			State: "OPEN", Version: 1,
-		})
-	}))
-	require.NoError(t, service.ReleaseOwner(
-		context.Background(), "space-1", "logical-1", "runner-1",
-	))
-
-	_, err = service.ClaimOwner(
-		context.Background(), "space-1", "logical-1", "runner-2",
-	)
-	require.ErrorIs(t, err, ErrNotReady)
-	current, getErr := tradeStore.GetLogicalAccountTarget(
-		context.Background(), "space-1", "logical-1",
-	)
-	require.NoError(t, getErr)
-	require.Equal(t, "old-target", current.TargetID)
-
-	order, err := tradeStore.GetOrder(
-		context.Background(), "space-1", "old-target-order",
-	)
-	require.NoError(t, err)
-	expectedVersion := order.Version
-	order.State = "CANCELED"
-	order.Version++
-	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateOrder(order, expectedVersion)
-	}))
-	claimed, err := service.ClaimOwner(
-		context.Background(), "space-1", "logical-1", "runner-2",
-	)
-	require.NoError(t, err)
-	require.Equal(t, "runner-2", claimed.OwnerRunnerID)
-	_, err = tradeStore.GetLogicalAccountTarget(
-		context.Background(), "space-1", "logical-1",
-	)
-	require.Error(t, err)
-}
-
 func TestLogicalReadinessRequiresEveryEnabledMemberAndTargetMetadata(t *testing.T) {
 	service, tradeStore := logicalAccountServiceFixture(t)
 	require.NoError(t, service.AddMember(context.Background(), AddMemberCommand{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
 		TradingAccountID: "account-b", Enabled: true, Priority: 2,
 	}))
-	_, _, err := tradeStore.AcceptLogicalAccountTarget(
-		context.Background(),
-		store.LogicalAccountTargetRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			TargetID: "target-1", RunnerID: "runner-1",
-			CommandSequence: 1, Status: "PENDING", AcceptedAt: 2_000,
-			Targets: []store.InstrumentTarget{{
-				InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
-			}},
-		},
-	)
-	require.NoError(t, err)
+	acceptSessionTarget(t, service, tradeStore, "target-1")
 
 	readiness, err := service.Readiness(
 		context.Background(), "space-1", "logical-1",
@@ -477,18 +136,7 @@ func TestLogicalReadinessRejectsTargetForDifferentSettlementAsset(t *testing.T) 
 			MinExchangeQuantity: "1", PriceTick: "0.1", Status: "TRADING",
 		})
 	}))
-	_, _, err := tradeStore.AcceptLogicalAccountTarget(
-		context.Background(),
-		store.LogicalAccountTargetRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			TargetID: "target-usdc", RunnerID: "runner-1",
-			CommandSequence: 1, Status: "PENDING", AcceptedAt: 2_000,
-			Targets: []store.InstrumentTarget{{
-				InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
-			}},
-		},
-	)
-	require.NoError(t, err)
+	acceptSessionTarget(t, service, tradeStore, "target-usdc")
 
 	readiness, err := service.Readiness(
 		context.Background(), "space-1", "logical-1",
@@ -500,18 +148,7 @@ func TestLogicalReadinessRejectsTargetForDifferentSettlementAsset(t *testing.T) 
 
 func TestResumeRequiresReadyNoConflictAndWarnsAboutReopen(t *testing.T) {
 	service, tradeStore := logicalAccountServiceFixture(t)
-	_, _, err := tradeStore.AcceptLogicalAccountTarget(
-		context.Background(),
-		store.LogicalAccountTargetRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			TargetID: "target-1", RunnerID: "runner-1",
-			CommandSequence: 1, Status: "PENDING", AcceptedAt: 2_000,
-			Targets: []store.InstrumentTarget{{
-				InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
-			}},
-		},
-	)
-	require.NoError(t, err)
+	acceptSessionTarget(t, service, tradeStore, "target-1")
 
 	account, warning, err := service.Resume(
 		context.Background(), "space-1", "logical-1",
@@ -820,8 +457,8 @@ func logicalAccountServiceFixture(t *testing.T) (*Service, *store.Store) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", ExecutionMode: "LIVE",
-			MarketType: "SWAP", SettlementAsset: "USDT",
+			ExecutionMode: "LIVE",
+			MarketType:    "SWAP", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -926,4 +563,21 @@ func TestLogicalAccountOperationsHonorDeadlineWhileLocksAreHeld(t *testing.T) {
 	unlockMembership, err := tradeStore.LockLogicalAccountMembershipContext(ctx)
 	require.NoError(t, err)
 	unlockMembership()
+}
+
+// acceptSessionTarget 以 runner-1/session-1 认领账户并写入一份有效的会话目标（目标数量 1 张 BTC-USDT-SWAP）。
+func acceptSessionTarget(t *testing.T, service *Service, tradeStore *store.Store, targetID string) {
+	t.Helper()
+	account, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	_, _, err = service.ClaimSession(context.Background(), "space-1", "logical-1", "runner-1", "session-1", account.AuthFence)
+	require.NoError(t, err)
+	_, _, err = tradeStore.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
+		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: targetID,
+		InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
+		BarEndTime: 2_000, EffectiveAt: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
+		Status: "PENDING", AcceptedAt: 2_000,
+		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}},
+	})
+	require.NoError(t, err)
 }

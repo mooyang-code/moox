@@ -36,8 +36,8 @@ type LogicalAccountTargetRecord struct {
 	TargetID         string
 	RunnerID         string
 	CommandSequence  uint64
-	// Strategy target identity. The fields are authoritative when populated;
-	// RunnerID/CommandSequence are retained for older console fixtures.
+	// Strategy target identity; RunnerID mirrors InstanceID and CommandSequence
+	// mirrors BarEndTime.
 	InstanceID     string
 	SessionID      string
 	StrategyID     string
@@ -123,36 +123,21 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	if account.ControlMode != "STRATEGY" {
 		return LogicalAccountTargetRecord{}, false, ErrTargetAuthorization
 	}
-	newIdentity := record.InstanceID != "" || record.SessionID != "" || record.BarEndTime != 0 || record.ValidUntil != 0
-	if newIdentity {
-		if blank(record.InstanceID) || blank(record.SessionID) || blank(record.StrategyID) ||
-			record.BarEndTime <= 0 || record.EffectiveAt != record.BarEndTime || record.ValidUntil <= record.EffectiveAt {
-			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete target session contract", ErrInvalidRecord)
-		}
-		if record.CommandSequence == 0 {
-			record.CommandSequence = uint64(record.BarEndTime)
-		}
-		if record.RunnerID == "" {
-			record.RunnerID = record.InstanceID
-		}
-		if account.OwnerInstanceID != record.InstanceID || account.OwnerSessionID != record.SessionID {
-			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: logical account target session authorization", ErrTargetAuthorization)
-		}
-		now := time.Now().UTC().UnixMilli()
-		if now >= record.ValidUntil {
-			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: target validity window", ErrTargetExpired)
-		}
-	} else {
-		if blank(record.RunnerID) {
-			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete logical account target", ErrInvalidRecord)
-		}
-		if record.CommandSequence == 0 {
-			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete logical account target", ErrInvalidRecord)
-		}
-		if account.OwnerRunnerID != record.RunnerID {
-			return LogicalAccountTargetRecord{}, false,
-				fmt.Errorf("%w: logical account target runner ownership", ErrConflict)
-		}
+	if blank(record.InstanceID) || blank(record.SessionID) || blank(record.StrategyID) ||
+		record.BarEndTime <= 0 || record.EffectiveAt != record.BarEndTime || record.ValidUntil <= record.EffectiveAt {
+		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: incomplete target session contract", ErrInvalidRecord)
+	}
+	if record.CommandSequence == 0 {
+		record.CommandSequence = uint64(record.BarEndTime)
+	}
+	if record.RunnerID == "" {
+		record.RunnerID = record.InstanceID
+	}
+	if account.OwnerInstanceID != record.InstanceID || account.OwnerSessionID != record.SessionID {
+		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: logical account target session authorization", ErrTargetAuthorization)
+	}
+	if time.Now().UTC().UnixMilli() >= record.ValidUntil {
+		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: target validity window", ErrTargetExpired)
 	}
 	if account.MarketType == "SPOT" {
 		for _, target := range record.Targets {
@@ -182,15 +167,13 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 		}
 		same := current.TargetID == record.TargetID &&
 			current.RunnerID == record.RunnerID &&
-			((newIdentity && current.InstanceID == record.InstanceID && current.SessionID == record.SessionID && current.BarEndTime == record.BarEndTime) ||
-				(!newIdentity && current.CommandSequence == record.CommandSequence)) &&
+			current.InstanceID == record.InstanceID && current.SessionID == record.SessionID && current.BarEndTime == record.BarEndTime &&
 			row.TargetsJSON == targetsJSON
 		if same {
 			return current, false, nil
 		}
 		if record.TargetID == current.TargetID ||
-			(newIdentity && current.InstanceID == record.InstanceID && current.SessionID == record.SessionID && record.BarEndTime <= current.BarEndTime) ||
-			(!newIdentity && record.CommandSequence <= current.CommandSequence) {
+			(current.InstanceID == record.InstanceID && current.SessionID == record.SessionID && record.BarEndTime <= current.BarEndTime) {
 			return current, false, fmt.Errorf("%w: stale or conflicting logical account target", ErrConflict)
 		}
 	case query.Error != nil && !errors.Is(query.Error, gorm.ErrRecordNotFound):

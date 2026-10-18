@@ -402,11 +402,7 @@ func (s *Service) authorizeTargetSubmit(
 	if logicalAccount.AutomationState != "ACTIVE" {
 		return ErrAutomationPaused
 	}
-	if logicalAccount.OwnerInstanceID != "" {
-		if logicalAccount.OwnerInstanceID != record.RunnerID {
-			return ErrTargetOwnerConflict
-		}
-	} else if logicalAccount.OwnerRunnerID == "" || logicalAccount.OwnerRunnerID != record.RunnerID {
+	if logicalAccount.OwnerInstanceID == "" || logicalAccount.OwnerInstanceID != record.RunnerID {
 		return ErrTargetOwnerConflict
 	}
 	// A target order may be prepared long before Submit. Resolve the current

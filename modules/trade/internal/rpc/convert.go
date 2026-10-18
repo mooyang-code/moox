@@ -335,7 +335,6 @@ func logicalAccountToPB(
 		LogicalAccountId: value.LogicalAccountID,
 		SpaceId:          value.SpaceID,
 		Name:             value.Name,
-		OwnerRunnerId:    value.OwnerRunnerID,
 		OwnerGeneration:  value.OwnerGeneration,
 		OwnerInstanceId:  value.OwnerInstanceID,
 		OwnerSessionId:   value.OwnerSessionID,

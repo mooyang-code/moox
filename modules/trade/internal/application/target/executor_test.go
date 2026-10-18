@@ -180,11 +180,18 @@ func TestTargetExecutorDiscardsPendingChildWhenAutomationChangesBeforeSubmit(t *
 func TestTargetExecutorDiscardsPendingChildWhenSessionChangesAfterPlace(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.now = time.Now().UTC()
-	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err)
 	var fence string
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		var err error
+		logical, err := tx.GetLogicalAccount("space-1", "logical-1")
+		if err != nil {
+			return err
+		}
+		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", logical.OwnerInstanceID, logical.OwnerSessionID, logical.AuthFence); err != nil {
+			return err
+		}
+		if logical, err = tx.GetLogicalAccount("space-1", "logical-1"); err != nil {
+			return err
+		}
 		fence, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", logical.AuthFence)
 		return err
 	}))
@@ -235,40 +242,6 @@ func TestTargetExecutorWaitsWithoutPausingWhenAccountTurnsNotReady(t *testing.T)
 	)
 	require.NoError(t, err)
 	require.Equal(t, StatusPending, target.Status)
-}
-
-func TestTargetExecutorPausedOwnerReleaseCancelsOwnedOrderWithoutError(t *testing.T) {
-	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
-	fixture.target(t, []store.InstrumentTarget{{
-		InstrumentID: "BTC-USDT-SWAP", Quantity: "1",
-	}})
-	fixture.order(t, store.OrderRecord{
-		SpaceID: "space-1", OrderID: "target-open",
-		TradingAccountID: "account-a", ClientOrderID: "target-open",
-		Exchange: "BINANCE", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT",
-		OrderType: "MARKET", Side: "BUY", PositionSide: "NET",
-		Quantity: "1", ReferencePrice: "100", ReferencePriceAt: 2_000,
-		OwnerType: "TARGET", OwnerID: "target-current",
-		LogicalAccountID: "logical-1", RunnerID: "runner-1",
-		State: "OPEN", Version: 1,
-	})
-	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.SetLogicalAccountAutomation(
-			"space-1", "logical-1", "PAUSED", "runner ownership released",
-		); err != nil {
-			return err
-		}
-		return tx.SetLogicalAccountOwner("space-1", "logical-1", "")
-	}))
-
-	result, err := fixture.executor().Converge(
-		context.Background(), "space-1", "logical-1",
-	)
-
-	require.NoError(t, err)
-	require.Equal(t, StatusPaused, result.Status)
-	require.Equal(t, "cancel", result.Action)
-	require.Equal(t, []string{"target-open"}, fixture.orders.canceled)
 }
 
 func TestTargetExecutorClosesOpposingBeforeOpening(t *testing.T) {
@@ -750,7 +723,7 @@ func newTargetFixture(t *testing.T, market exchange.MarketType) *targetFixture {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", ExecutionMode: "PAPER",
+			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
 			MarketType: string(market), SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -834,9 +807,9 @@ func (f *targetFixture) target(t *testing.T, targets []store.InstrumentTarget) {
 		context.Background(),
 		store.LogicalAccountTargetRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
-			TargetID: "target-current", RunnerID: "runner-1",
-			CommandSequence: 1, Targets: targets, Status: StatusPending,
-			AcceptedAt: f.now.UnixMilli(),
+			TargetID: "target-current", InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
+			BarEndTime: f.now.UnixMilli(), EffectiveAt: f.now.UnixMilli(), ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
+			Targets: targets, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
 		},
 	)
 	require.NoError(t, err)

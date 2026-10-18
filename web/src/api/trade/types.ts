@@ -87,8 +87,6 @@ export interface LogicalAccount {
   logical_account_id: string;
   space_id: string;
   name: string;
-  /** @deprecated compatibility field for legacy strategy runners. */
-  owner_runner_id?: string;
   owner_instance_id?: string;
   owner_session_id?: string;
   control_mode: ControlMode;

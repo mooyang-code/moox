@@ -92,7 +92,7 @@
             </template>
           </a-table-column>
           <a-table-column title="策略实例" :width="180" :ellipsis="true" :tooltip="true">
-            <template #cell="{ record }">{{ record.owner_instance_id || record.owner_runner_id || "-" }}</template>
+            <template #cell="{ record }">{{ record.owner_instance_id || "-" }}</template>
           </a-table-column>
           <a-table-column title="成员数" :width="80">
             <template #cell="{ record }">{{ record.members?.length || 0 }}</template>
@@ -175,7 +175,7 @@
             }}</a-descriptions-item>
             <a-descriptions-item label="就绪状态">{{ selected.ready ? "就绪" : "未就绪" }}</a-descriptions-item>
             <a-descriptions-item label="策略实例">{{
-              selected.owner_instance_id || selected.owner_runner_id || "-"
+              selected.owner_instance_id || "-"
             }}</a-descriptions-item>
             <a-descriptions-item label="运行会话">{{
               target?.session_id || selected.owner_session_id || "-"

@@ -2,11 +2,9 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
     c_space_id TEXT NOT NULL,
     c_logical_account_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
-    c_owner_runner_id TEXT,
+    -- 归属代数：每次认领、重绑或释放加一，延迟到达的目标按它隔离
     c_owner_claimed_at INTEGER NOT NULL DEFAULT 0,
-    -- Strategy instances use an explicit lifecycle identity. The runner
-    -- columns above remain as a source-compatibility bridge for old console
-    -- clients, but new target acceptance never relies on them.
+    -- 当前归属的 Strategy 实例与会话
     c_owner_instance_id TEXT,
     c_owner_session_id TEXT,
     c_auth_fence TEXT NOT NULL DEFAULT '',
@@ -56,27 +54,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_enabled_physical_account_membership
 ON t_logical_account_members (c_space_id, c_trading_account_id)
 WHERE c_enabled = 1;
 
-CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_owner_runner
-ON t_logical_accounts (c_space_id, c_owner_runner_id)
-WHERE c_owner_runner_id IS NOT NULL;
-
 CREATE UNIQUE INDEX IF NOT EXISTS ux_logical_account_owner_instance
 ON t_logical_accounts (c_space_id, c_owner_instance_id)
 WHERE c_owner_instance_id IS NOT NULL;
-
-CREATE TABLE IF NOT EXISTS t_logical_account_owner_rebinds (
-    c_space_id TEXT NOT NULL,
-    c_logical_account_id TEXT NOT NULL,
-    c_rebind_key TEXT NOT NULL,
-    c_runner_id TEXT NOT NULL,
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_logical_account_id, c_rebind_key),
-    FOREIGN KEY (c_space_id, c_logical_account_id)
-        REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
-        ON DELETE CASCADE,
-    CHECK (c_rebind_key <> ''),
-    CHECK (c_runner_id <> '')
-);
 
 CREATE INDEX IF NOT EXISTS idx_logical_account_members_account
 ON t_logical_account_members (c_space_id, c_trading_account_id);
@@ -105,10 +85,9 @@ CREATE TABLE IF NOT EXISTS t_logical_account_targets (
         REFERENCES t_logical_accounts (c_space_id, c_logical_account_id)
         ON DELETE CASCADE,
     CHECK (c_command_sequence > 0),
-    CHECK ((c_instance_id = '' AND c_session_id = '') OR
-           (c_instance_id <> '' AND c_session_id <> '' AND
-            c_strategy_id <> '' AND c_bar_end_time > 0 AND
-            c_effective_at = c_bar_end_time AND c_valid_until > c_effective_at)),
+    CHECK (c_instance_id <> '' AND c_session_id <> '' AND
+           c_strategy_id <> '' AND c_bar_end_time > 0 AND
+           c_effective_at = c_bar_end_time AND c_valid_until > c_effective_at),
     CHECK (c_status IN ('PENDING', 'CONVERGING', 'CONVERGED', 'BLOCKED', 'EXPIRED')),
     CHECK (json_valid(c_targets_json)),
     CHECK (json_type(c_targets_json) = 'array'),

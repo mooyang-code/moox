@@ -1152,7 +1152,7 @@ func seedSyncAccount(t *testing.T, tradeStore *store.Store) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", ExecutionMode: "LIVE",
+			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "LIVE",
 			MarketType: "SWAP", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "test",
 		}); err != nil {

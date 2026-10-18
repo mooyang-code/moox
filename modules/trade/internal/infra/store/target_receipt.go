@@ -190,11 +190,8 @@ func (s *Store) acceptLogicalAccountTargetWithReceipt(ctx context.Context, targe
 			return query.Error
 		}
 		if len(ownerGenerations) > 0 {
-			generation := ownerGenerations[0]
-			// Legacy fixtures/accounts may not have entered an ownership
-			// lifecycle yet (generation zero). Once a claim/release has advanced
-			// the token, a target must carry the exact generation.
-			if account.OwnerGeneration > 0 && (generation <= 0 || generation != account.OwnerGeneration) {
+			// 目标必须属于当前归属代数：认领、重绑、释放都会推进代数，延迟到达的旧目标在这里被拒绝。
+			if generation := ownerGenerations[0]; generation <= 0 || generation != account.OwnerGeneration {
 				return fmt.Errorf("%w: target event belongs to stale owner lifecycle", ErrConflict)
 			}
 		}

@@ -232,7 +232,7 @@ func seedLogicalAccount(t *testing.T, tradeStore *store.Store) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount,
-			Name: "E2E logical account", OwnerRunnerID: testRunner,
+			Name:            "E2E logical account",
 			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
 			ExecutionMode: account.ExecutionMode, MarketType: "SPOT", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",

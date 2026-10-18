@@ -43,7 +43,7 @@ func TestTargetExpiryCASDoesNotOverwriteNewerTarget(t *testing.T) {
 	require.True(t, accepted)
 	next := old
 	next.TargetID = "new-target"
-	next.CommandSequence++
+	setTargetBar(&next, 2)
 	_, accepted, err = s.AcceptLogicalAccountTarget(ctx, next)
 	require.NoError(t, err)
 	require.True(t, accepted)
