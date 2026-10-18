@@ -26,13 +26,6 @@ func TestLoadRuntimeConfigReadsDatabaseAndStorage(t *testing.T) {
 	require.Equal(t, path, cfg.ConfigPath)
 }
 
-func TestLoadRuntimeConfigRejectsRetiredPythonSection(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "app.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("python:\n  bin: python3\n"), 0o600))
-	_, err := loadRuntimeConfig(path)
-	require.Error(t, err, "旧配置的 python 段必须随发布删除")
-}
-
 func TestLoadRuntimeConfigEnvironmentOverridesConfig(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "app.yaml")

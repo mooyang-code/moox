@@ -110,11 +110,6 @@ fi
 [[ -x "${DEPLOY_DIR}/bin/moox-factor-engine" ]] || fail "missing ${DEPLOY_DIR}/bin/moox-factor-engine"
 
 install -m 0644 "${ROOT}/modules/factor/config/trpc_go.engine.yaml" "${DEPLOY_DIR}/config/trpc_go.engine.yaml"
-# 因子由引擎内置的表达式执行器计算，不再需要 Python 环境。Python 时代留下的 venv、pyworker、python-runtime
-# 与源码落盘目录 data/engine/factors 不再使用；切换期间作为回滚备份保留，验证完成后手工删除。
-for stale in venv pyworker python-runtime data/engine/factors; do
-  [[ -e "${DEPLOY_DIR}/${stale}" ]] && log "note: ${DEPLOY_DIR}/${stale} is no longer used (kept for rollback)"
-done
 
 umask 077
 cat >"${DEPLOY_DIR}/config/engine.yaml" <<EOF

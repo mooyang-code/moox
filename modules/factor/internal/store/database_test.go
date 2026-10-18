@@ -83,7 +83,7 @@ func TestApplySchemaRejectsObsoleteDefsColumns(t *testing.T) {
 	require.NoError(t, s.db.Exec("DROP TABLE t_factor_defs").Error)
 	require.NoError(t, s.db.Exec(`CREATE TABLE t_factor_defs (
 		c_factor_id TEXT NOT NULL PRIMARY KEY, c_set_id TEXT NOT NULL, c_name TEXT NOT NULL,
-		c_factor_type TEXT NOT NULL, c_source_code TEXT NOT NULL, c_source_hash TEXT NOT NULL,
+		c_factor_type TEXT NOT NULL, c_obsolete TEXT NOT NULL,
 		c_input_columns_json TEXT NOT NULL, c_outputs_json TEXT NOT NULL, c_params_json TEXT NOT NULL,
 		c_lookback_periods INTEGER NOT NULL, c_allow_partial_universe INTEGER NOT NULL,
 		c_status TEXT NOT NULL, c_ctime DATETIME, c_mtime DATETIME)`).Error)

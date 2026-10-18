@@ -33,7 +33,6 @@ func TestLoadRejectsEngineOnlySections(t *testing.T) {
 	for _, section := range []string{
 		"eventbus:\n  urls: [nats://127.0.0.1:4222]\n",
 		"pipeline:\n  read_workers: 4\n",
-		"python:\n  bin: python3\n",
 		"compute:\n  workers: 4\n",
 		"recalc:\n  chunk_periods: 500\n",
 	} {

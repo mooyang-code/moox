@@ -96,7 +96,7 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 }
 
 // pipelineStages is the order a period runs through; the log line lists the
-// per-stage time so slow reads, Python and writes can be told apart.
+// per-stage time so slow reads, compute and writes can be told apart.
 var pipelineStages = []string{"plan", "load", "compute", "assemble", "write", "report"}
 
 func stageSummary(durations map[string]time.Duration) string {

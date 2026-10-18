@@ -18,7 +18,7 @@ import (
 
 // Compute 每个集合每期（补算每个分块）调用一次 factorexpr 程序（设计 8）：集合内可计算的因子编译成一个程序，
 // 在 available 标的的网格面板上算出全部目标时刻，再按源行转换成逐行结果。因子级的判断（严格截面因子跳过、
-// 空洞标的失败）与 Python 时代一致。
+// 空洞标的失败）都在这里完成。
 func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Computation, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -438,7 +438,7 @@ func (c *Computation) addCross(factor domain.FactorDef, result *exec.Result, gri
 }
 
 // fail 记录一个因子本期（本分块）整体计算失败：时序因子对每个标的失败；截面因子未跳过的周期记为 failed，
-// 补算时结果不带错误（各周期的结果由 CrossPeriods 表达），与 Python 时代一致。
+// 补算时结果不带错误（各周期的结果由 CrossPeriods 表达）。
 func (c *Computation) fail(factor domain.FactorDef, plan Plan, available []string, err error) {
 	state := c.FactorStates[factor.FactorID]
 	state.FailedSubjects = uniqueSorted(append(state.FailedSubjects, available...))
@@ -498,18 +498,6 @@ func periodRange(clock periodclock.Clock, start, end time.Time, freq string) ([]
 		return nil, fmt.Errorf("factor period range contains no periods")
 	}
 	return periods, nil
-}
-
-func equalStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func subjectDifference(expected, available []string) []string {

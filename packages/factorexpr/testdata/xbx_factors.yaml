@@ -1,4 +1,4 @@
-# 现有 11 个 Python 因子（modules/factor/factors/*.py）的表达式写法，以及 2026-10-17 生产因子库中的元数据。
+# 生产因子库的 11 个因子（表达式写法）及其编译元数据。
 # 测试断言推导出的输入列、输出列与回看与生产一致。
 - factor_id: Bias
   inputs: [close]

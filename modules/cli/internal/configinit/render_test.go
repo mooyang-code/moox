@@ -219,8 +219,8 @@ func TestLocalFactorMachineOnlyRecordsLocal(t *testing.T) {
 func TestFactorMachineMustPassTheEnvironmentCheck(t *testing.T) {
 	request := sampleRequest()
 	request.Servers.Factor = &FactorServer{Mode: FactorRemote, Address: "192.168.0.103", SSHUser: "u", SSHPassword: "p"}
-	failing := &fakeProber{report: ProbeReport{OK: false, Items: []CheckItem{{Name: "Python", Status: CheckFail, Detail: "没有找到可用的 Python"}}}}
-	if err := renderErr(request, failing); err == nil || !strings.Contains(err.Error(), "Python") {
+	failing := &fakeProber{report: ProbeReport{OK: false, Items: []CheckItem{{Name: "内存", Status: CheckFail, Detail: "内存不足"}}}}
+	if err := renderErr(request, failing); err == nil || !strings.Contains(err.Error(), "内存") {
 		t.Fatalf("环境检测失败时应拒绝并说明原因，实际 %v", err)
 	}
 	unknown := &fakeProber{report: linuxReport(), hostKey: "SHA256:abc"}

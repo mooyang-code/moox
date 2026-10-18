@@ -120,7 +120,6 @@ grep -q 'strategy) url=http://127.0.0.1:11431/healthz' "${TMP_ROOT}/unpacked/hea
 grep -q 'stop_service "strategy"' "${TMP_ROOT}/unpacked/stop.sh"
 ! test -e "${TMP_ROOT}/unpacked/strategy/pyworker"
 ! test -e "${TMP_ROOT}/unpacked/strategy/pysdk"
-! test -e "${TMP_ROOT}/unpacked/python-runtime"
 ! find "${TMP_ROOT}/unpacked/strategy" -type f \( -name '*.pyc' -o -name '*.sqlite' -o -name '*.db' \) -print -quit | grep -q .
 
 # The synchronous Strategy owner reconciliation requires Trade to be serving

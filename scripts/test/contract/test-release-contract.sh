@@ -82,10 +82,6 @@ done
 tmp_strategy="$(mktemp -d "${TMPDIR:-/tmp}/moox-strategy-release.XXXXXX")"
 trap 'rm -rf "${tmp_strategy}"' EXIT
 mkdir -p "${tmp_strategy}/strategy"
-if grep -Eq 'python-runtime|pyruntime|modules/factor/pyworker' "${ROOT}/scripts/release/release.sh"; then
-  echo "the release must not ship the retired factor Python runtime" >&2
-  exit 1
-fi
 grep -q "name __pycache__ -o -name .pytest_cache" "${ROOT}/scripts/release/release.sh"
 grep -q "name '\*.pyc' -o -name '\*.sqlite' -o -name '\*.db'" "${ROOT}/scripts/release/release.sh"
 

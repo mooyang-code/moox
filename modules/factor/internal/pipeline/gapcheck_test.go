@@ -197,7 +197,7 @@ func TestAssembleNullsGapPeriodsOnlyAndReportsItems(t *testing.T) {
 		byTime[row.DataTime] = row
 	}
 	require.Equal(t, 1.0, byTime[minute(8)].Fields[factor.Outputs[0]])
-	require.Nil(t, byTime[minute(10)].Fields[factor.Outputs[0]], "10 的窗口覆盖空洞：即使 Python 给了值也写 NULL")
+	require.Nil(t, byTime[minute(10)].Fields[factor.Outputs[0]], "10 的窗口覆盖空洞：即使计算给了值也写 NULL")
 	require.Nil(t, byTime[minute(11)].Fields[factor.Outputs[0]])
 	require.Equal(t, ItemWritten, report.Items[ItemKey{FactorID: "f", Subject: "BTC", Period: minute(8)}])
 	require.Equal(t, ItemGap, report.Items[ItemKey{FactorID: "f", Subject: "BTC", Period: minute(10)}])

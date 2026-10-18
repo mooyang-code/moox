@@ -31,13 +31,8 @@ grep -Fq 'access_id: "access@storage"' "${config}"
 grep -Fq "key_file: ${DIR}/secrets/access-factor-engine.key" "${config}"
 grep -Fq 'tls://control.example:4222' "${config}"
 ! grep -Eq '^database:' "${config}"
-# 因子由引擎内置的表达式执行器计算：配置里只有 compute 段，不再安装 Python 环境与 worker。
 grep -Eq '^compute:' "${config}"
-! grep -Eq '^python:' "${config}"
 [[ -s "${DIR}/config/trpc_go.engine.yaml" ]]
-for removed in venv pyworker python-runtime; do
-  [[ ! -e "${DIR}/${removed}" ]] || { echo "the engine install must not create ${removed}" >&2; exit 1; }
-done
 grep -Eq '^MOOX_HEALTH_AUTH_SECRET_KEY=[0-9a-f]{64}$' "${DIR}/secrets/health-auth.env"
 
 if [[ "$(uname -s)" == Darwin ]]; then
@@ -48,10 +43,6 @@ else
 fi
 [[ -s "${service}" ]]
 grep -Fq "${DIR}/bin/moox-factor-engine" "${service}"
-if grep -Eq 'python-runtime|MOOX_PYTHON_RUNTIME_PATH|OPENBLAS_NUM_THREADS' "${service}"; then
-  echo "the engine service must not carry Python runtime settings" >&2
-  exit 1
-fi
 if grep -Eq '(HTTPS?_PROXY|https?_proxy)[^ ]*=|<key>HTTPS?_PROXY' "${service}"; then
   echo "the engine service must not carry proxy variables" >&2
   exit 1

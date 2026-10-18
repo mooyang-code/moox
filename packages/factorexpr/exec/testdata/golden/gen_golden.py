@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """生成 factorexpr 的 pandas 对照数据 golden.json（开发工具，CI 不运行）。
 
-用法（仓库根目录）：
-    ~/.venvs/moox/bin/python packages/factorexpr/exec/testdata/golden/gen_golden.py
+用法（仓库根目录，需要 numpy 与 pandas）：
+    python3 packages/factorexpr/exec/testdata/golden/gen_golden.py
 
 内容：
 - rolling：各时序算子在一条序列上的结果，pandas 严格窗口（min_periods = n）；
-- cross：各截面算子在 12 个标的 × 30 个时刻上的结果（按时刻与 series_tag 分组）；
-- factors：现有 11 个 Python 因子（modules/factor/factors/*.py）在合成 K 线上的输出。
-  Python 因子删除之后无法重新生成这一部分，保留已生成的 JSON 即可。
+- cross：各截面算子在 12 个标的 × 30 个时刻上的结果（按时刻与 series_tag 分组）。
 
 约定：结果里的 NaN 与 ±Inf 写成 null（与 factorexpr 把非有限值记为 NaN 一致）。
 """
-import importlib.util
 import json
 import math
 import pathlib
@@ -21,7 +18,6 @@ import numpy as np
 import pandas as pd
 
 HERE = pathlib.Path(__file__).resolve()
-ROOT = HERE.parents[5]
 OUT = HERE.with_name("golden.json")
 rng = np.random.default_rng(20261017)
 
@@ -167,32 +163,7 @@ for expression, values in cross_cases.items():
     matrix = values.to_numpy().reshape(S, T)
     cross["cases"].append({"expr": expression, "tol": 1e-12, "expect": [clean(matrix[s]) for s in range(S)]})
 
-# ---------------------------------------------------------------- 现有 11 个 Python 因子
-M = 300
-close = 100 * np.exp(np.cumsum(rng.normal(0, 0.004, M)))
-open_ = np.concatenate([[close[0]], close[:-1]])
-high = np.maximum(open_, close) * (1 + np.abs(rng.normal(0, 0.002, M)))
-low = np.minimum(open_, close) * (1 - np.abs(rng.normal(0, 0.002, M)))
-volume = rng.uniform(100, 1000, M)
-bars = pd.DataFrame({
-    "data_time": pd.date_range("2026-10-01", periods=M, freq="min", tz="UTC"),
-    "series_tag": "binance",
-    "open": open_, "high": high, "low": low, "close": close,
-    "volume": volume, "quote_volume": volume * close,
-})
-catalog = json.loads((ROOT / "modules/factor/factors/catalog.json").read_text())
-factors = {"bars": {name: clean(bars[name]) for name in ("open", "high", "low", "close", "volume", "quote_volume")}, "outputs": {}}
-for entry in catalog:
-    path = ROOT / "modules/factor/factors" / entry["file"]
-    spec = importlib.util.spec_from_file_location("golden_" + entry["factor_id"], path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    result = module.compute(bars[["data_time", "series_tag", *entry["input_columns"]]], entry["params"], {})
-    for output in entry["outputs"]:
-        factors["outputs"][output] = clean(result[output])
-
 OUT.write_text(json.dumps({"pandas": pd.__version__, "numpy": np.__version__, "length": N,
-                           "x": clean(x), "y": clean(y), "rolling": rolling, "cross": cross,
-                           "factors": factors}, separators=(",", ":")) + "\n")
-print(f"wrote {OUT} ({OUT.stat().st_size} bytes): {len(rolling)} rolling cases, {len(cross['cases'])} cross cases, "
-      f"{len(factors['outputs'])} factor outputs")
+                           "x": clean(x), "y": clean(y), "rolling": rolling, "cross": cross},
+                          separators=(",", ":")) + "\n")
+print(f"wrote {OUT} ({OUT.stat().st_size} bytes): {len(rolling)} rolling cases, {len(cross['cases'])} cross cases")

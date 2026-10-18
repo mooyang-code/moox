@@ -129,7 +129,6 @@ func refEMA(w []float64, alpha float64) float64 {
 
 type refCase struct {
 	op     string
-	ints   []int
 	floats []float64
 	args   int
 	ref    func(w []float64, v []float64, n int) float64

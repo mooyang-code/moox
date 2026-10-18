@@ -75,12 +75,6 @@ func TestEngineConfigEngineIDFromEnvironment(t *testing.T) {
 	require.Equal(t, "factor-engine@mac", cfg.Engine.ID)
 }
 
-// 旧配置的 python 段会让启动失败（严格解析），发布时必须同步改配置。
-func TestEngineConfigRejectsRetiredPythonSection(t *testing.T) {
-	_, err := Load(writeEngineConfig(t, minimalEngineConfig+"python:\n  bin: ./venv/bin/python\n"))
-	require.ErrorContains(t, err, "python")
-}
-
 func TestEngineConfigComputeSection(t *testing.T) {
 	cfg, err := Load(writeEngineConfig(t, minimalEngineConfig+"compute:\n  workers: 2\n  max_memory: 512MiB\n"))
 	require.NoError(t, err)

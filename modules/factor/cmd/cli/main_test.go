@@ -29,17 +29,6 @@ func TestParseImport(t *testing.T) {
 	}
 }
 
-func TestParseMigrateExpr(t *testing.T) {
-	cfg, err := parseArgs([]string{"migrate-expr", "--db", "/data/factor.db", "--library", "/opt/factors"})
-	require.NoError(t, err)
-	require.Equal(t, "/data/factor.db", cfg.DBPath)
-	require.Equal(t, "/opt/factors", cfg.CatalogDir)
-	require.False(t, cfg.NoBackup)
-	var output bytes.Buffer
-	err = runMigrateExpr(t.Context(), cliConfig{DBPath: "/data/factor.db"}, &output)
-	require.ErrorContains(t, err, "--library")
-}
-
 func TestParseImportCatalogUsesDirectoryAndSet(t *testing.T) {
 	cfg, err := parseArgs([]string{"import-catalog", "--set", "fset_bars_1m", "--dir", "/opt/factors"})
 	require.NoError(t, err)
@@ -166,17 +155,4 @@ func TestImportSelectsOneDefinitionFromFile(t *testing.T) {
 	require.ErrorContains(t, err, "没有因子 Missing")
 	require.NoError(t, runImport(t.Context(), cliConfig{ConfigPath: configPath, File: library, FactorID: "Cci"}, &output))
 	require.Contains(t, output.String(), `"definition_hash":"sha256:`)
-}
-
-func TestMigrateExprIsNoOpOnCurrentSchema(t *testing.T) {
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "factor.db")
-	require.NoError(t, runInit(cliConfig{DBPath: dbPath}, &bytes.Buffer{}))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "lib.yaml"), []byte(testLibrary), 0o600))
-	var output bytes.Buffer
-	require.NoError(t, runMigrateExpr(t.Context(), cliConfig{DBPath: dbPath, CatalogDir: root}, &output))
-	require.Contains(t, output.String(), `"already_migrated":true`)
-	matches, err := filepath.Glob(dbPath + ".bak-*")
-	require.NoError(t, err)
-	require.Empty(t, matches, "已经是新结构时不备份")
 }

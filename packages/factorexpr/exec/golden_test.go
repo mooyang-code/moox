@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/packages/factorexpr"
-	"gopkg.in/yaml.v3"
 )
 
 type goldenData struct {
@@ -31,10 +30,6 @@ type goldenData struct {
 			Expect [][]*float64 `json:"expect"`
 		} `json:"cases"`
 	} `json:"cross"`
-	Factors struct {
-		Bars    map[string][]*float64 `json:"bars"`
-		Outputs map[string][]*float64 `json:"outputs"`
-	} `json:"factors"`
 }
 
 func loadGolden(t *testing.T) *goldenData {
@@ -166,99 +161,4 @@ func TestCrossMatchesPandas(t *testing.T) {
 			}
 		})
 	}
-}
-
-type libraryEntry struct {
-	FactorID string `yaml:"factor_id"`
-	Spec     string `yaml:"spec"`
-	Lookback int    `yaml:"lookback"`
-}
-
-// 现有 11 个 Python 因子在合成 K 线上的输出，与表达式写法在完整窗口上的结果一致。
-func TestLibraryMatchesPythonFactors(t *testing.T) {
-	data := loadGolden(t).Factors
-	raw, err := os.ReadFile("../testdata/xbx_factors.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var entries []libraryEntry
-	if err := yaml.Unmarshal(raw, &entries); err != nil {
-		t.Fatal(err)
-	}
-	var inputs []factorexpr.ProgramInput
-	roots := map[string]*factorexpr.Node{}
-	for _, entry := range entries {
-		factor, err := factorexpr.Compile(entry.Spec)
-		if err != nil {
-			t.Fatal(err)
-		}
-		inputs = append(inputs, factorexpr.ProgramInput{FactorID: entry.FactorID, Factor: factor})
-		for _, output := range factor.Outputs {
-			roots[output.Name] = output.Root
-		}
-	}
-	program, err := factorexpr.NewProgram(inputs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	length := len(data.Bars["close"])
-	panel := singleSeriesPanel(t, length, data.Bars)
-	result, err := Run(context.Background(), program, panel, Options{Start: program.Lookback - 1, End: length - 1, Workers: 4})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Columns) != 11 {
-		t.Fatalf("columns = %d", len(result.Columns))
-	}
-	for c, column := range result.Columns {
-		expect, ok := data.Outputs[column.Name]
-		if !ok {
-			t.Fatalf("no python output for %s", column.Name)
-		}
-		worst, flips := 0.0, 0
-		for i := result.Start; i <= result.End; i++ {
-			got, want := result.Value(c, 0, i), value(expect[i])
-			if !closeEnough(got, want, 1e-9) {
-				// 离散跳变：pandas 的滑动均值在内容相同的窗口上会差 1 个最小精度单位，打破本该存在的并列；精确求和保住了并列。
-				// 只有能证明当期值在窗口内确有精确并列时才放行（设计 12.2 的离散跳变口径）。
-				if root := roots[column.Name]; root.Op == "ts_rank" && hasExactTie(t, panel, root, i) {
-					flips++
-					continue
-				}
-				t.Errorf("%s t=%d: got %v, want %v", column.Name, i, got, want)
-				continue
-			}
-			if !math.IsNaN(want) {
-				worst = math.Max(worst, math.Abs(got-want)/math.Max(1, math.Abs(want)))
-			}
-		}
-		t.Logf("%s: max relative error %.3g, %d tie flips", column.Name, worst, flips)
-		if flips*100 > result.Len() {
-			t.Errorf("%s: %d tie flips exceed 1%%", column.Name, flips)
-		}
-	}
-}
-
-// hasExactTie 计算 ts_rank 的参数在以 t 结尾的窗口上的值，报告当期值是否与窗口内另一个值精确相等。
-func hasExactTie(t *testing.T, panel *Panel, rank *factorexpr.Node, at int) bool {
-	t.Helper()
-	inner := rank.Args[0]
-	window := rank.Ints[0]
-	program, err := factorexpr.NewProgram([]factorexpr.ProgramInput{{FactorID: "inner", Factor: &factorexpr.Factor{
-		Outputs: []factorexpr.Output{{Name: "inner", Root: inner}}, Lookback: inner.Lookback,
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := Run(context.Background(), program, panel, Options{Start: at - window + 1, End: at})
-	if err != nil {
-		t.Fatal(err)
-	}
-	current := result.Value(0, 0, at)
-	for i := at - window + 1; i < at; i++ {
-		if result.Value(0, 0, i) == current {
-			return true
-		}
-	}
-	return false
 }

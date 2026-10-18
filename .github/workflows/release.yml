@@ -60,7 +60,6 @@ jobs:
       - name: Add preinstalled tools to PATH
         run: |
           echo /home/ubuntu/go-sdk/bin >> "$GITHUB_PATH"
-          echo /home/ubuntu/.venvs/moox/bin >> "$GITHUB_PATH"
       - name: Check self-hosted runner
         run: bash scripts/ci/check-runner.sh
       - name: Verify before packaging

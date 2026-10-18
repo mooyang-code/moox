@@ -245,7 +245,7 @@ func decodeFields(fields []*storagepb.FieldValue, columns []string) ([]any, erro
 	return values, nil
 }
 
-// TimeText 与 JSONText 保留源字段的 TIME / JSON 类型：对 Python 就是字符串，携带列写回时仍按原类型编码，
+// TimeText 与 JSONText 保留源字段的 TIME / JSON 类型：计算时按字符串处理，携带列写回时仍按原类型编码，
 // 否则会被编码成 STRING，与结果数据集的字段类型不一致而整批写入失败。
 type (
 	TimeText string

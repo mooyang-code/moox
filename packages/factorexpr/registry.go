@@ -46,10 +46,6 @@ const (
 	ArgConstant
 )
 
-func (k ArgKind) isParameter() bool {
-	return k == ArgWindow || k == ArgInteger || k == ArgConstant
-}
-
 // ArgSpec 描述一个参数。Min、Max 只对编译期常量参数有效（闭区间）。
 type ArgSpec struct {
 	Name     string

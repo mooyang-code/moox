@@ -348,7 +348,7 @@ func sameSetupCloudAccount(account adminclient.CloudAccount, input adminclient.C
 		account.AppID == input.AppID && account.COSRegion == input.COSRegion && account.COSBucket == input.COSBucket
 }
 
-// newSetupFactorsCommand imports the repository's Python factor definitions
+// newSetupFactorsCommand imports the repository's YAML factor library definitions
 // without touching Storage metadata.  It is useful when metadata has already
 // been initialized (possibly from an older seed) and a full setup init would
 // correctly refuse to overwrite that existing contract.
@@ -356,7 +356,7 @@ func newSetupFactorsCommand(deps setupDeps) *cobra.Command {
 	var file string
 	cmd := &cobra.Command{
 		Use:   "factors",
-		Short: "导入本地 Python 因子并建立默认 View 绑定",
+		Short: "导入本地 YAML 因子库并建立默认 View 绑定",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			snapshot, err := deps.load(file)
 			if err != nil {

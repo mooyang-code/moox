@@ -20,7 +20,7 @@ func statusOf(report ProbeReport, name string) (string, string) {
 }
 
 func TestEvaluateAcceptsAWellEquippedLinuxMachine(t *testing.T) {
-	report := evaluate(parseFacts("os=Linux\narch=x86_64\nosname=Ubuntu 26.04 LTS\ncpu=88\nmem_kb=263854080\ndisk_kb=1800000000\npython=3.12.3\ngo=go1.26.9\ngcc=1\n"), true)
+	report := evaluate(parseFacts("os=Linux\narch=x86_64\nosname=Ubuntu 26.04 LTS\ncpu=88\nmem_kb=263854080\ndisk_kb=1800000000\ngo=go1.26.9\ngcc=1\n"), true)
 	if !report.OK || report.OS != "linux" {
 		t.Fatalf("report = %+v", report)
 	}
@@ -35,12 +35,9 @@ func TestEvaluateAcceptsAWellEquippedLinuxMachine(t *testing.T) {
 }
 
 func TestEvaluateWarnsBelowTheRecommendationButOnlyFailsWhenItCannotInstall(t *testing.T) {
-	report := evaluate(parseFacts("os=Darwin\narch=arm64\nosname=macOS 15.1\ncpu=4\nmem_bytes=8589934592\ndisk_kb=10485760\npython=3.9.6\nuv=1\n"), true)
+	report := evaluate(parseFacts("os=Darwin\narch=arm64\nosname=macOS 15.1\ncpu=4\nmem_bytes=8589934592\ndisk_kb=10485760\n"), true)
 	if !report.OK {
 		t.Fatalf("只是低于建议配置时应通过: %+v", report)
-	}
-	if status, _ := statusOf(report, "Python"); status != "" {
-		t.Fatal("因子用表达式计算，不再检查 Python")
 	}
 	for name, want := range map[string]string{"CPU": CheckWarn, "内存": CheckWarn, "磁盘": CheckWarn} {
 		if status, detail := statusOf(report, name); status != want {
@@ -51,26 +48,26 @@ func TestEvaluateWarnsBelowTheRecommendationButOnlyFailsWhenItCannotInstall(t *t
 		t.Fatal("只有 Linux 机器才检查能否兼作编译机")
 	}
 
-	noPython := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\n"), true)
-	if !noPython.OK {
-		t.Fatal("没有 Python 不影响通过")
+	minimal := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\n"), true)
+	if !minimal.OK {
+		t.Fatal("满足最低配置时应通过")
 	}
-	tinyDisk := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=1048576\npython=3.12.1\n"), true)
+	tinyDisk := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=1048576\n"), true)
 	if tinyDisk.OK {
 		t.Fatal("可用磁盘不足 5 GB 时应失败")
 	}
-	noCompiler := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\npython=3.12.1\n"), true)
+	noCompiler := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\n"), true)
 	if status, _ := statusOf(noCompiler, "源码编译"); status != CheckWarn || !noCompiler.OK {
 		t.Fatal("缺少 Go 或 gcc 只提醒，不影响通过")
 	}
-	local := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\npython=3.12.1\n"), false)
+	local := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\n"), false)
 	if status, _ := statusOf(local, "源码编译"); status != "" {
 		t.Fatal("本机不做编译机检查")
 	}
 }
 
 func TestEvaluateWindowsAndUnknownSystems(t *testing.T) {
-	windows := evaluate(parseFacts("os=Windows\nosname=Microsoft Windows 11 专业版\ncpu=16\nmem_bytes=34359738368\ndisk_bytes=214748364800\npython=3.12.4\n"), true)
+	windows := evaluate(parseFacts("os=Windows\nosname=Microsoft Windows 11 专业版\ncpu=16\nmem_bytes=34359738368\ndisk_bytes=214748364800\n"), true)
 	if !windows.OK || windows.OS != "windows" {
 		t.Fatalf("Windows 可以登记: %+v", windows)
 	}

@@ -55,8 +55,8 @@ describe("recalc model", () => {
     const degraded = jobDisplay(job({ status: "succeeded", error: "degraded: 3 chunks skipped" }));
     expect(degraded).toMatchObject({ degraded: true, degradedText: "3 chunks skipped", errorText: "" });
     expect(degraded.statusLabel).toBe("已完成");
-    const failed = jobDisplay(job({ status: "failed", error: "python worker down" }));
-    expect(failed).toMatchObject({ degraded: false, errorText: "python worker down" });
+    const failed = jobDisplay(job({ status: "failed", error: "storage read timeout" }));
+    expect(failed).toMatchObject({ degraded: false, errorText: "storage read timeout" });
     expect(jobDisplay(job({ status: "succeeded" }))).toMatchObject({ degraded: false, errorText: "" });
   });
 

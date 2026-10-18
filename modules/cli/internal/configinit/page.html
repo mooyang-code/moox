@@ -431,7 +431,7 @@ button.ghost.away { visibility: hidden; }
     b.trust = el('div', { class: 'trust' }); b.trust.hidden = true;
     b.checks = el('div', { class: 'checks' }); b.checks.hidden = true;
     b.check = el('button', { type: 'button', text: '检测环境' });
-    b.hint = el('span', { class: 'hint', text: '检测系统、CPU、内存、磁盘和 Python 是否满足要求' });
+    b.hint = el('span', { class: 'hint', text: '检测系统、CPU、内存和磁盘是否满足要求' });
     var checkRow = el('div', { class: 'fields two' }, [b.trust, b.checks, el('div', { class: 'actions-inline' }, [b.check, b.hint])]);
     body.append(b.mode, b.ssh.wrap, checkRow);
     right.append(body);

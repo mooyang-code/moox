@@ -1,6 +1,6 @@
 # 系统初始化配置
 
-这个目录是发布包和 `moox-cli setup init --config-dir` 使用的版本化初始化种子，只识别四个固定文件；Python
+这个目录是发布包和 `moox-cli setup init --config-dir` 使用的版本化初始化种子，只识别四个固定文件；
 因子由用户配置文件 `moox.toml` 的 `[factors]` 配置控制：
 
 | 文件 | 消费方 | 内容 |
@@ -49,10 +49,10 @@ moox-cli collector function publish submit --file ./moox.toml --space-id crypto 
 节点“占满”以该地域的 `function_count` 为准；如需集中内网流量，请在配置中提高
 Storage 同地域的目标数量，CLI 不会自动挪动其他地域配额。
 
-默认因子配置位于仓库根目录的 `moox.toml.example`，当前把 `Bias.py` 和 `Cci.py`
+默认因子配置位于仓库根目录的 `moox.toml.example`，当前把 `Bias`、`Cci`、`MinMax`、`QuoteVolumeMean`
 加入币安现货、合约 1m 采集任务结果（`dataset_dasftksvjhj2jom4vhd0`、`dataset_dasftksvjhj2jom4vhdg`）的因子集。示例用 `[[factors.definitions]]`
 声明因子、用 `[[factors.members]]` 声明因子集成员。将示例复制为
-`moox.toml` 后，`setup init` 会导入因子定义、创建成员并启用它们；因子源文件路径相对
+`moox.toml` 后，`setup init` 会导入因子定义、创建成员并启用它们；因子库文件路径相对
 `factors.source_dir` 解析。若不需要默认因子，设置 `factors.enabled = false`。如果 Storage
 已存在且 `setup init` 因元数据契约差异停止，可改用 `moox-cli setup factors --file ./moox.toml`
 单独导入因子。

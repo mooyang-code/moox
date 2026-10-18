@@ -149,7 +149,7 @@ done
 for binary in moox-factor-mgr moox-factor-mgr-cli; do
   [[ -x "${TMP_ROOT}/unpacked/bin/${binary}" ]] || { echo "missing factor manager binary: ${binary}" >&2; exit 1; }
 done
-[[ -s "${TMP_ROOT}/unpacked/factor-mgr/config/app.yaml" && ! -e "${TMP_ROOT}/unpacked/factor-mgr/pyworker" ]]
+[[ -s "${TMP_ROOT}/unpacked/factor-mgr/config/app.yaml" ]]
 [[ -s "${TMP_ROOT}/unpacked/certs/gateway/peers.pem" ]]
 [[ -s "${TMP_ROOT}/unpacked/secrets/storage-internal-auth.env" ]]
 [[ -s "${TMP_ROOT}/unpacked/config/components.env" ]]

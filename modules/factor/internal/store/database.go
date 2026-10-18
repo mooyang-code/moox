@@ -123,9 +123,6 @@ func (s *Store) validateSchemaTables(tables []string) error {
 			return fmt.Errorf("inspect factor schema table %s: %w", table, err)
 		}
 		if strings.Join(columns, "\x00") != strings.Join(want, "\x00") {
-			if table == "t_factor_defs" && contains(columns, "c_source_code") {
-				return fmt.Errorf("因子定义表仍是 Python 源码的旧结构：请先停止 factor-mgr，运行 moox-factor-mgr-cli migrate-expr --library <因子库目录> 迁移")
-			}
 			return fmt.Errorf("factor database table %s uses an obsolete schema; create a fresh database", table)
 		}
 	}

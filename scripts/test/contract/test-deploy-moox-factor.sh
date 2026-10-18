@@ -95,19 +95,11 @@ grep -Fxq 'MOOX_GATEWAY_NODE_ID=factor-contract' "${UNPACKED}/secrets/gateway-se
 grep -Fq 'MOOX_FACTOR_STORAGE_GATEWAY_TARGET=${LOCAL_STORAGE_RPC_GATEWAY_TARGET}' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_FACTOR_STORAGE_GATEWAY_NODE_ID=${LOCAL_STORAGE_GATEWAY_NODE_ID}' "${UNPACKED}/start.sh"
 grep -Fq 'MOOX_FACTOR_DB_PATH=${MOOX_FACTOR_DB_PATH:-${ROOT}/data/factor-mgr/factor.db}' "${UNPACKED}/start.sh"
-if grep -Eq 'import pandas|MOOX_FACTOR_PYTHON_BIN' "${UNPACKED}/start.sh"; then
-  echo "control start.sh still requires a Python factor runtime" >&2
-  exit 1
-fi
-for removed in factor-mgr/pyworker python-runtime/moox_pyruntime bin/moox-factor-engine factor-mgr/config/engine.yaml; do
+for removed in bin/moox-factor-engine factor-mgr/config/engine.yaml; do
   [[ ! -e "${UNPACKED}/${removed}" ]] || { echo "the manager package must not ship ${removed}" >&2; exit 1; }
 done
 if awk '/^start_factor_mgr\(\)/,/^start_strategy\(\)/' "${UNPACKED}/start.sh" | grep -Eq 'wait_nats|EVENTBUS'; then
   echo "moox-factor-mgr must not wait for or consume EventBus" >&2
-  exit 1
-fi
-if awk '/^start_factor_mgr\(\)/,/^start_strategy\(\)/' "${UNPACKED}/start.sh" | grep -q ensure_factor_python; then
-  echo "control start_factor_mgr still installs Python compute dependencies" >&2
   exit 1
 fi
 grep -Fq 'MOOX_LOCAL_STORAGE_RPC_GATEWAY_TARGET=${quoted_local_storage_gateway_target}' "${FIXTURE_ROOT}/scripts/deploy/deploy-moox.sh"

@@ -43,6 +43,11 @@ func ohlcvPanel(b *testing.B, seriesCount, length int) *Panel {
 	return panel
 }
 
+type libraryEntry struct {
+	FactorID string `yaml:"factor_id"`
+	Spec     string `yaml:"spec"`
+}
+
 func libraryProgram(b *testing.B) *factorexpr.Program {
 	b.Helper()
 	raw, err := os.ReadFile("../testdata/xbx_factors.yaml")

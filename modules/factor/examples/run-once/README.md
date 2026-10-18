@@ -17,13 +17,3 @@ cd ~/moox/factor-engine
 
 - `--factor`、`--subject` 可以重复，不写时分别取集合的全部启用成员与全部标的。
 - 结果写入集合的结果数据集；输出里的 `null` 是显式清除，会覆盖该键已有的值。
-- 只想核对数值而不写入时，用 `compare` 子命令：它用新引擎重算一段历史，与结果数据集里已写入的值逐值比较，不写任何结果。
-
-```bash
-./bin/moox-factor-engine compare \
-  --config config/engine.yaml \
-  --set-file data/engine/catalog.json \
-  --set fset_binance_kline_1m \
-  --start 2026-10-14T00:00:00Z --end 2026-10-17T00:00:00Z \
-  --output report.json
-```

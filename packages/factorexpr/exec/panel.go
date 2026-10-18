@@ -112,7 +112,3 @@ func (p *Panel) Value(column, series, t int) float64 {
 func (p *Panel) Present(series, t int) bool {
 	return p.present[series*p.length+t]
 }
-
-func (p *Panel) bytes() int64 {
-	return int64(len(p.columns))*int64(len(p.series))*int64(p.length)*8 + int64(len(p.present))
-}

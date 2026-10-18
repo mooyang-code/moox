@@ -19,7 +19,6 @@ type cliConfig struct {
 	File       string
 	CatalogDir string
 	FactorID   string
-	NoBackup   bool
 	StartTime  time.Time
 	EndTime    time.Time
 	FactorIDs  []string
@@ -47,8 +46,6 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return runImport(ctx, cfg, out)
 	case "import-catalog":
 		return runImportCatalog(ctx, cfg, out)
-	case "migrate-expr":
-		return runMigrateExpr(ctx, cfg, out)
 	case "recalc":
 		return runRecalc(ctx, cfg, out)
 	case "status":
@@ -84,10 +81,6 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
 		fs.StringVar(&cfg.CatalogDir, "dir", cfg.CatalogDir, "YAML factor library directory (*.yaml)")
 		fs.StringVar(&cfg.SetID, "set", "", "also add the definitions to this factor set as disabled members")
-	case "migrate-expr":
-		fs.StringVar(&cfg.DBPath, "db", cfg.DBPath, "Factor SQLite database (factor-mgr must be stopped)")
-		fs.StringVar(&cfg.CatalogDir, "library", "", "YAML factor library directory holding every existing factor")
-		fs.BoolVar(&cfg.NoBackup, "no-backup", false, "skip the automatic <db>.bak-<time> copy")
 	case "recalc":
 		cfg.DBPath = ""
 		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
@@ -133,13 +126,6 @@ func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	return fs
-}
-
-func parseCSV(name, raw string) ([]string, error) {
-	if strings.TrimSpace(raw) == "" {
-		return nil, nil
-	}
-	return normalizeCLIList(name, strings.Split(raw, ","))
 }
 
 func parseTimeFlag(name, raw string) (time.Time, error) {

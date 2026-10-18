@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -211,37 +210,6 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		result["set_id"] = target.set.SetID
 	}
 	return json.NewEncoder(out).Encode(result)
-}
-
-// runMigrateExpr 把定义表从 Python 源码的旧结构迁移为表达式结构（设计 13.2）。必须在 factor-mgr 停止时运行；
-// 迁移前先把数据库一致地备份为 <db>.bak-<UTC 时间>。已经是新结构时什么也不做，也不备份。
-func runMigrateExpr(ctx context.Context, cfg cliConfig, out io.Writer) error {
-	if cfg.CatalogDir == "" {
-		return errors.New("--library is required")
-	}
-	entries, err := factorlib.LoadDir(cfg.CatalogDir)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(cfg.DBPath); err != nil {
-		return fmt.Errorf("数据库 %s 不可用：%w", cfg.DBPath, err)
-	}
-	library := make(map[string]store.LibraryDefinition, len(entries))
-	for _, entry := range entries {
-		library[entry.FactorID] = store.LibraryDefinition{Name: entry.Name, Spec: entry.Spec}
-	}
-	backup := ""
-	if !cfg.NoBackup {
-		backup = fmt.Sprintf("%s.bak-%s", cfg.DBPath, time.Now().UTC().Format("20060102T150405Z"))
-	}
-	result, err := store.MigrateExprWithBackup(ctx, cfg.DBPath, backup, library)
-	if err != nil {
-		return err
-	}
-	return json.NewEncoder(out).Encode(map[string]any{
-		"ok": true, "database": cfg.DBPath, "already_migrated": result.AlreadyMigrated,
-		"migrated": result.Migrated, "backup": result.Backup,
-	})
 }
 
 // importTarget is the set (and its source columns) that imported definitions are attached to.
