@@ -792,23 +792,6 @@ func TestFilePrefixUsesTheDatasetNameWithoutSpacesAndAvoidsCollisions(t *testing
 	}
 }
 
-func TestPullDoesNotDispatchTasksThatStillLackAFilePrefix(t *testing.T) {
-	h := newHarness(t)
-	ctx := context.Background()
-	// 模拟升级前创建的任务：没有文件名前缀。
-	old := store.Task{SpaceID: "crypto", DatasetID: "ds_1m", Freq: "1m", PartitionUnit: "day", ScheduleCron: "43 34 * * * *", ScheduleTZ: "Asia/Shanghai",
-		IntervalSeconds: 3600, StartAt: h.now, Status: store.StatusEnabled, NextRunAt: h.now.Add(time.Hour)}
-	if _, _, err := h.store.CreateTask(ctx, old, false, h.now); err != nil {
-		t.Fatal(err)
-	}
-	h.datasets.datasets["crypto/ds_1m"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1m", Name: "币安 K线", DataKind: "time_series", Freq: "1m", Status: "active", DataNodeID: "node-0", Retention: "168h"}
-	h.svc.ensureFilePrefixes(ctx)
-	task, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
-	if task.FilePrefix != "币安K线" {
-		t.Fatalf("prefix = %q", task.FilePrefix)
-	}
-}
-
 func TestFilePrefixCollisionIgnoresCase(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()

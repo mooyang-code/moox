@@ -468,7 +468,7 @@ ON CONFLICT (space_id, dataset_id) DO UPDATE SET task_epoch = excluded.task_epoc
 	return dropped, nil
 }
 
-// DropIfUnbound 丢弃还没绑定任务实例的旧状态（升级前留下的）。已绑定实例的状态一律保留：
+// DropIfUnbound 丢弃还没绑定任务实例的状态（只补拉过或首次回补中途失败留下的）。已绑定实例的状态一律保留：
 // 迟到的删除通知不能清掉新任务的数据，新旧任务的区分交给 BindEpoch。
 func (s *Store) DropIfUnbound(ctx context.Context, spaceID, datasetID string) error {
 	var stored sql.NullString
@@ -484,17 +484,18 @@ func (s *Store) DropIfUnbound(ctx context.Context, spaceID, datasetID string) er
 }
 
 // DropDeleted 按删除通知清理任务状态：通知带着被删任务的实例标识，只清理属于该实例（或尚未绑定实例）的状态；
-// 状态已经属于另一个实例（任务已重建并绑定）时，迟到的通知不能删掉它。通知没带实例标识时按旧行为清理。
+// 状态已经属于另一个实例（任务已重建并绑定）时，迟到的通知不能删掉它。
 func (s *Store) DropDeleted(ctx context.Context, spaceID, datasetID, epoch string) error {
-	if epoch != "" {
-		var stored sql.NullString
-		err := s.db.QueryRowContext(ctx, `SELECT task_epoch FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&stored)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		if err == nil && stored.Valid && stored.String != "" && stored.String != epoch && !epochNewer(epoch, stored.String) {
-			return nil
-		}
+	if epoch == "" {
+		return errors.New("archive delete notice requires a task epoch")
+	}
+	var stored sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT task_epoch FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil && stored.Valid && stored.String != "" && stored.String != epoch && !epochNewer(epoch, stored.String) {
+		return nil
 	}
 	return s.DropTask(ctx, spaceID, datasetID)
 }

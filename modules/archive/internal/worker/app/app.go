@@ -398,7 +398,7 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 	if err == nil {
 		defer release()
 		if run.recreated != nil {
-			// 在串行保护内清掉升级前（未绑定任务实例）遗留的旧状态；已绑定实例的状态交给 BindEpoch 判断。失败则本次运行失败，并把删除通知放回去等待重试。
+			// 在串行保护内清掉未绑定任务实例的状态；已绑定实例的状态交给 BindEpoch 判断。失败则本次运行失败，并把删除通知放回去等待重试。
 			if derr := a.opts.Staging.DropIfUnbound(ctx, assignment.GetSpaceId(), assignment.GetDatasetId()); derr != nil {
 				a.mu.Lock()
 				a.deleted[assignment.GetSpaceId()+"/"+assignment.GetDatasetId()] = *run.recreated

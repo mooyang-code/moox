@@ -512,15 +512,10 @@ func formatTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// filePrefix 是导出文件名前缀：任务下发的前缀，没有时用数据集 ID。
-func (s *runState) filePrefix() string {
-	if p := s.a.GetFilePrefix(); p != "" {
-		return p
-	}
-	return s.a.GetDatasetId()
-}
+// filePrefix 是任务下发的导出文件名前缀。
+func (s *runState) filePrefix() string { return s.a.GetFilePrefix() }
 
-// exportedFileMissing 报告已导出但还没定稿的分区在当前命名下没有文件（文件被删除，或升级前用旧的目录/文件名导出）：
+// exportedFileMissing 报告已导出但还没定稿的分区没有文件（文件被删除）：
 // 它的行还在暂存区，重新导出即可。已定稿分区的行已不在暂存区，不在此列。
 func (s *runState) exportedFileMissing(p staging.PartitionState) bool {
 	if p.Status != staging.StatusExported {

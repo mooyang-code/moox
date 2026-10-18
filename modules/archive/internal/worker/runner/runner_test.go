@@ -113,7 +113,7 @@ func (e *env) runner(pageRows int) *Runner {
 
 func (e *env) assignment(mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: "run_1", LeaseToken: "tok", Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
+		RunId: "run_1", LeaseToken: "tok", Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", FilePrefix: "ds_1m", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
 		Retention: "168h", IntervalSeconds: 3600, MinLookbackSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 		StartedAt: e.now.Format(time.RFC3339), ScheduledAt: e.now.Format(time.RFC3339),
 	}
