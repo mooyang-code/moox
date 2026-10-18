@@ -35,12 +35,12 @@ func (s *Service) chooseFilePrefix(ctx context.Context, spaceID, datasetID, name
 	taken := map[string]bool{}
 	for _, t := range tasks {
 		if t.DatasetID != datasetID && t.FilePrefix != "" {
-			taken[t.FilePrefix] = true
+			taken[strings.ToLower(t.FilePrefix)] = true
 		}
 	}
 	base := sanitizeFilePrefix(name)
 	for _, candidate := range []string{base, base + "_" + datasetID, datasetID} {
-		if candidate != "" && candidate != "_"+datasetID && !taken[candidate] {
+		if candidate != "" && candidate != "_"+datasetID && !taken[strings.ToLower(candidate)] {
 			return candidate, nil
 		}
 	}

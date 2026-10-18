@@ -83,6 +83,8 @@ func (s *Service) Maintain(ctx context.Context) error {
 	if expired > 0 {
 		log.WarnContextf(ctx, "archive maintain: %d runs lost their worker", expired)
 	}
+	// 升级前创建的任务补文件名前缀（每分钟检查一次，没有缺前缀的任务时只是一次查询）；放在维护里，不占用 worker 的领取请求。
+	s.ensureFilePrefixes(ctx)
 	s.mu.Lock()
 	doRefresh := now.Sub(s.lastRefresh) >= datasetRefreshEvery
 	doCleanup := now.Sub(s.lastCleanup) >= cleanupEvery

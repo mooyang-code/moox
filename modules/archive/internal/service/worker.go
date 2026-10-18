@@ -63,8 +63,6 @@ func (w *WorkerService) PullArchiveRun(ctx context.Context, req *archivepb.PullA
 		// 备用 worker 或租约已过期的实例什么都领不到，等心跳重新取得租约。
 		return &archivepb.PullArchiveRunRsp{RetInfo: success()}, nil
 	}
-	// 升级前创建的任务要先有文件名前缀才能派发：这里尽量补上，补不上的任务在领取时被跳过，不影响其他任务。
-	s.ensureFilePrefixes(ctx)
 	busy := map[string]int{}
 	for _, load := range req.GetBusyDataNodes() {
 		busy[load.GetDataNodeId()] += int(load.GetRunning())

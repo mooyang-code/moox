@@ -808,3 +808,16 @@ func TestPullDoesNotDispatchTasksThatStillLackAFilePrefix(t *testing.T) {
 		t.Fatalf("prefix = %q", task.FilePrefix)
 	}
 }
+
+func TestFilePrefixCollisionIgnoresCase(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.datasets.datasets["crypto/ds_1m"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1m", Name: "BTC行情", DataKind: "time_series", Freq: "1m", Status: "active", DataNodeID: "node-0", Retention: "168h"}
+	h.datasets.datasets["crypto/ds_1h"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1h", Name: "btc行情", DataKind: "time_series", Freq: "1h", Status: "active", DataNodeID: "node-0", Retention: "forever"}
+	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
+	requireOK(t, h.create("ds_1h", nil).GetRetInfo())
+	second, _ := h.store.GetTask(ctx, "crypto", "ds_1h")
+	if second.FilePrefix != "btc行情_ds_1h" {
+		t.Fatalf("大小写不同的名称在不区分大小写的文件系统上会互相覆盖，应改用带 ID 的前缀: %q", second.FilePrefix)
+	}
+}

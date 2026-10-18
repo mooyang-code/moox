@@ -88,8 +88,8 @@ func Open(path string) (*Store, error) {
 		_ = s.Close()
 		return nil, fmt.Errorf("migrate archive schema: %w", err)
 	}
-	// 同一空间内文件名前缀唯一（空前缀不受限）：防止不同数据集的导出文件互相覆盖。
-	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_archive_tasks_file_prefix ON t_archive_tasks (c_space_id, c_file_prefix) WHERE c_file_prefix != ''`); err != nil {
+	// 同一空间内文件名前缀唯一（不区分大小写，macOS 等文件系统不区分；空前缀不受限）：防止不同数据集的导出文件互相覆盖。
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_archive_tasks_file_prefix ON t_archive_tasks (c_space_id, lower(c_file_prefix)) WHERE c_file_prefix != ''`); err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("migrate archive schema: %w", err)
 	}
