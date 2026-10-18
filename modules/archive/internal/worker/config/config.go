@@ -90,7 +90,9 @@ type StagingSection struct {
 
 // PacingSection 是节奏与并发。
 type PacingSection struct {
-	RequestSeconds     [2]int        `yaml:"request_seconds"`
+	RequestSeconds [2]int `yaml:"request_seconds"`
+	// MinuteWindow 控制是否只在每分钟的 request_seconds 区间内发请求，默认 true；设为 false 则整分钟都可发（整点静默仍生效）。
+	MinuteWindow       bool          `yaml:"minute_window"`
 	HourQuiet          [2]string     `yaml:"hour_quiet"`
 	RequestInterval    time.Duration `yaml:"request_interval"`
 	MaxBytesPerSecond  ByteSize      `yaml:"max_bytes_per_second"`
@@ -120,7 +122,7 @@ func Default() *Config {
 		},
 		Staging: StagingSection{MemoryLimit: "1GB", Threads: 2, RebuildRatio: 2},
 		Pacing: PacingSection{
-			RequestSeconds: [2]int{25, 55}, HourQuiet: [2]string{"58:00", "04:00"}, RequestInterval: 200 * time.Millisecond,
+			RequestSeconds: [2]int{25, 55}, MinuteWindow: true, HourQuiet: [2]string{"58:00", "04:00"}, RequestInterval: 200 * time.Millisecond,
 			MaxBytesPerSecond: ByteSize(512 << 10), MaxConcurrentRuns: 4, MaxRunsPerDataNode: 2, PageRows: 500,
 		},
 		Health:      HealthSection{Addr: "127.0.0.1:11418"},
@@ -222,7 +224,7 @@ func (c *Config) Validate() error {
 // PacingConfig 转成节奏包的配置。
 func (c *Config) PacingConfig() pacing.Config {
 	return pacing.Config{
-		RequestSeconds: c.Pacing.RequestSeconds, HourQuiet: c.Pacing.HourQuiet,
+		RequestSeconds: c.Pacing.RequestSeconds, DisableMinuteWindow: !c.Pacing.MinuteWindow, HourQuiet: c.Pacing.HourQuiet,
 		RequestInterval: c.Pacing.RequestInterval, MaxBytesPerSecond: int64(c.Pacing.MaxBytesPerSecond),
 	}
 }

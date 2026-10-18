@@ -26,6 +26,7 @@ staging:
 
 pacing:
   request_seconds: [25, 55]          # 每分钟内允许发起请求的秒区间
+  minute_window: true                # 是否启用上面的每分钟区间；false 则整分钟都可发请求（整点静默仍生效）
   hour_quiet: ["58:00", "04:00"]     # 每小时内不发起请求的区间
   request_interval: 200ms
   max_bytes_per_second: 512KB

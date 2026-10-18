@@ -145,3 +145,20 @@ func TestShippedWorkerConfigParsesOnceTheCredentialsAreFilledIn(t *testing.T) {
 		t.Fatal("没有填 key_id 的示例配置不应通过校验")
 	}
 }
+
+func TestMinuteWindowDefaultsOnAndCanBeSwitchedOff(t *testing.T) {
+	cfg, err := Load(write(t, base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Pacing.MinuteWindow || cfg.PacingConfig().DisableMinuteWindow {
+		t.Fatalf("minute_window 默认应开启: %+v", cfg.Pacing)
+	}
+	off, err := Load(write(t, base+"pacing:\n  minute_window: false\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.Pacing.MinuteWindow || !off.PacingConfig().DisableMinuteWindow {
+		t.Fatalf("minute_window: false 应关闭: %+v", off.Pacing)
+	}
+}

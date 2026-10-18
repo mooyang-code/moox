@@ -16,6 +16,8 @@ import (
 type Config struct {
 	// RequestSeconds 是每分钟内允许发起请求的秒区间 [from, to]（含）。
 	RequestSeconds [2]int
+	// DisableMinuteWindow 为 true 时不再限制每分钟内的秒区间（整点静默、带宽和请求间隔仍然生效）。默认 false，即启用。
+	DisableMinuteWindow bool
 	// HourQuiet 是每小时内不发起请求的区间 [from, to)，格式 "MM:SS"，from 大于 to 表示跨整点。
 	HourQuiet [2]string
 	// RequestInterval 是同一运行两次请求之间的最小间隔。
@@ -140,6 +142,9 @@ func (p *Pacer) AllowedAt(t time.Time) time.Time {
 			}
 			t = next
 			continue
+		}
+		if p.cfg.DisableMinuteWindow {
+			return t
 		}
 		minute := t.Truncate(time.Minute)
 		switch {

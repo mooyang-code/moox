@@ -372,7 +372,7 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 				c.report(refreshErr)
 			}
 		}
-		if attempt == 1 || !retry || !c.catalog.ReadOnly(service, method) || ctx.Err() != nil {
+		if attempt == 1 || !retry || !c.catalog.ReadOnly(service, method) || ctx.Err() != nil || noRetry(ctx) {
 			return nil, err
 		}
 		failedHost = ep.target
@@ -434,4 +434,17 @@ func loopbackAddress(address string) bool {
 	host, _, _ := net.SplitHostPort(address)
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+type noRetryKey struct{}
+
+// WithoutRetry 让通过该 ctx 发起的调用不在网关客户端内部重试（只读调用默认会换节点重发一次）。
+// 调用方自己控制请求节奏（如归档 worker 的避让窗口）时使用：由调用方重试，每次重试前重新检查时间。
+func WithoutRetry(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noRetryKey{}, true)
+}
+
+func noRetry(ctx context.Context) bool {
+	v, _ := ctx.Value(noRetryKey{}).(bool)
+	return v
 }

@@ -140,3 +140,17 @@ func TestValidateRejectsBadConfigs(t *testing.T) {
 		t.Fatalf("AllowedAt = %s", got.Format("15:04:05"))
 	}
 }
+
+func TestDisablingTheMinuteWindowKeepsTheHourQuietZone(t *testing.T) {
+	cfg := Default()
+	cfg.DisableMinuteWindow = true
+	p := mustPacer(t, cfg, &fakeClock{now: at(1, 10, 0)})
+	// 关闭每分钟窗口：整分钟都可以发请求。
+	if got := p.AllowedAt(at(1, 10, 3)); !got.Equal(at(1, 10, 3)) {
+		t.Fatalf("关闭后每分钟开头也应放行: %s", got)
+	}
+	// 整点静默仍然生效。
+	if got := p.AllowedAt(at(1, 58, 30)); !got.Equal(at(2, 4, 0)) {
+		t.Fatalf("整点静默应仍生效: %s", got)
+	}
+}

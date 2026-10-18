@@ -131,7 +131,7 @@ func (c *Client) ReadRange(ctx context.Context, req Range) (Page, error) {
 		TimeRange: &storagepb.TimeRange{StartTime: req.Start.UTC().Format(time.RFC3339Nano), EndTime: req.End.UTC().Format(time.RFC3339Nano)},
 		Page:      &commonpb.Page{Size: uint32(req.PageRows), Cursor: req.Cursor},
 	}
-	if err := c.gateway.Invoke(ctx, "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", call, rsp); err != nil {
+	if err := c.gateway.Invoke(gatewayclient.WithoutRetry(ctx), "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", call, rsp); err != nil {
 		return Page{}, fmt.Errorf("read rows %s/%s: %w", req.SpaceID, req.DatasetID, err)
 	}
 	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {

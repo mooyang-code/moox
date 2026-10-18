@@ -338,3 +338,21 @@ func TestReadRetryRefreshesOnGatewayAuthFailure(t *testing.T) {
 	require.Equal(t, 2, calls)
 	require.GreaterOrEqual(t, source.calls, 2)
 }
+
+func TestWithoutRetryLeavesRetriesToTheCaller(t *testing.T) {
+	source := &sourceStub{directory: testDirectory(t, "b", "a")}
+	c := newTestClient(t, tunnelConfig(source))
+	calls := 0
+	c.invoke = func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error) {
+		calls++
+		return nil, errs.NewFrameError(errs.RetClientNetErr, "boom")
+	}
+	body := []byte(`{}`)
+	_, err := c.Forward(WithoutRetry(context.Background()), secretService, "GetSecret", codec.SerializationTypeJSON, body)
+	require.Error(t, err)
+	require.Equal(t, 1, calls, "只读调用在 WithoutRetry 下也只发一次")
+	calls = 0
+	_, err = c.Forward(context.Background(), secretService, "GetSecret", codec.SerializationTypeJSON, body)
+	require.Error(t, err)
+	require.Equal(t, 2, calls, "默认仍会重试一次")
+}

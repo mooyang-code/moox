@@ -143,6 +143,7 @@ staging:
 
 pacing:
   request_seconds: [25, 55]
+  minute_window: true
   hour_quiet: ["58:00", "04:00"]
   request_interval: 200ms
   max_bytes_per_second: 512KB
