@@ -11,9 +11,7 @@ region = "ap-guangzhou"
 port = 4222
 tls_enabled = true
 
-# Only all/new are supported. Omit deliver_policy on redeploy to keep the
-# installed policy; a fresh deployment defaults to all. Existing JetStream
-# durable consumers must be migrated explicitly before changing this value.
+# 只支持 all / new，默认 all。
 [observability]
 # deliver_policy = "all"
 

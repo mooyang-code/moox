@@ -29,29 +29,25 @@ secret_key = "contract-secret-key"
 region = "ap-guangzhou"
 
 [eventbus]
-host = "192.0.2.10"
 port = 4222
 tls_enabled = true
 
-[hosts."192.0.2.10"]
-port = 22
-username = "ubuntu"
-password = "control-host-password"
+[hosts.control]
+address = "192.0.2.10"
+tls_mode = "auto"
+ssh = { port = 22, username = "ubuntu" }
 
-[hosts."43.132.204.177"]
-port = 22
-username = "ubuntu"
-password = "compute-host-password"
+[hosts.storage]
+address = "192.0.2.11"
+ssh = { port = 22, username = "ubuntu" }
 
-[control_host]
-name = "control"
-host = "192.0.2.10"
-
-[[other_hosts]]
-name = "compute-1"
-host = "43.132.204.177"
+[hosts.compute-1]
+address = "43.132.204.177"
+ssh = { port = 22, username = "ubuntu" }
 
 [placements]
+control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"]
+storage = ["storage-primary", "storage-node", "storage-view", "access"]
 compute-1 = ["trade", "egress-proxy"]
 
 [egress_proxy]

@@ -22,7 +22,7 @@ type BootRecovery struct {
 	Kind      string `json:"kind"`
 }
 
-// reconcileBoot 必须在持有维护锁之后调用。读不懂的记录留给身份核对报错，不擅自删除。
+// reconcileBoot 必须在持有维护锁之后调用。读不懂或没有开机标识的记录留给身份核对报错，不擅自删除。
 func (s *runtimeState) reconcileBoot() ([]BootRecovery, error) {
 	current, err := kernelBootID()
 	if err != nil {
@@ -38,7 +38,7 @@ func (s *runtimeState) reconcileBoot() ([]BootRecovery, error) {
 			continue
 		}
 		var record pidRecord
-		if privateJSON(filepath.Join(s.pids.Name(), name), &record) != nil || record.KernelBootID == current {
+		if privateJSON(filepath.Join(s.pids.Name(), name), &record) != nil || record.KernelBootID == "" || record.KernelBootID == current {
 			continue
 		}
 		if err := removeState(s.pids, name); err != nil {
@@ -52,7 +52,7 @@ func (s *runtimeState) reconcileBoot() ([]BootRecovery, error) {
 	}
 	for _, name := range drainNames {
 		var drain drainRecord
-		if privateJSON(filepath.Join(s.draining.Name(), name), &drain) != nil || drain.KernelBootID == current {
+		if privateJSON(filepath.Join(s.draining.Name(), name), &drain) != nil || drain.KernelBootID == "" || drain.KernelBootID == current {
 			continue
 		}
 		if err := removeState(s.draining, name); err != nil {

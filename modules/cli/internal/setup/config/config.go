@@ -134,8 +134,7 @@ type EventBus struct {
 }
 
 type Observability struct {
-	DeliverPolicy         string `toml:"deliver_policy"`
-	DeliverPolicyExplicit bool   `toml:"-"`
+	DeliverPolicy string `toml:"deliver_policy"`
 }
 
 // EgressProxy separates upstream policy from service placement.
@@ -543,8 +542,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("local_logs", "max_size_mb") {
 		out.LocalLogs.MaxSizeMB = 50
 	}
-	out.Observability.DeliverPolicyExplicit = md.IsDefined("observability", "deliver_policy")
-	if !out.Observability.DeliverPolicyExplicit {
+	if !md.IsDefined("observability", "deliver_policy") {
 		out.Observability.DeliverPolicy = "all"
 	}
 	if !md.IsDefined("local_logs", "backup_count") {

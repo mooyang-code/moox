@@ -52,7 +52,7 @@ func TestOpenCreatesIncrementalVacuumDatabase(t *testing.T) {
 	}
 }
 
-func TestCreateTaskIsUniquePerDatasetAndImmediateCreatesAManualRun(t *testing.T) {
+func TestCreateTaskAllowsOneTaskPerDatasetAndImmediateCreatesAManualRun(t *testing.T) {
 	s := openTest(t)
 	created, run := mustTask(t, s, "crypto", "ds1", true)
 	if created.Status != StatusEnabled || created.IntervalSeconds != 300 || !created.NextRunAt.Equal(t0.Add(5*time.Minute)) {
