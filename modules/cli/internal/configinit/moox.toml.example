@@ -214,7 +214,7 @@ enabled = false
 # [scf_plan.regions.ap-hongkong]
 # vpc_id = "vpc-xxxxxxxx"
 # subnet_id = "subnet-xxxxxxxx"
-# access_host = "compute-1"   # 同地域有多台带私网地址的 access 主机时必须指定入口主机
+# access_host = "overseas"   # 同地域有多台带私网地址的 access 主机时必须指定入口主机
 
 # [[scf_plan.spaces]]
 # space_id = "crypto"
@@ -223,7 +223,10 @@ enabled = false
 # spot = ["ap-hongkong"]
 # swap = ["ap-hongkong"]
 
+# 主机命名：英文 ID 全小写、按角色命名（control 控制机、storage 存储机、overseas 海外机、factor 因子机），
+# 同一角色有多台时才加序号（overseas-2）；label 是中文名，登记到管理台用于界面展示。
 [hosts.control]
+label = "控制机"
 address = "203.0.113.10"
 region = "ap-guangzhou"
 provider = "tencent"
@@ -231,22 +234,26 @@ tls_mode = "auto"
 ssh = { port = 22, username = "ubuntu" }
 
 [hosts.storage]
+label = "存储机"
 address = "203.0.113.11"
 region = "ap-nanjing"
 provider = "tencent"
 tls_mode = "auto"
 ssh = { port = 22, username = "ubuntu" }
 
-[hosts.compute-1]
+# 海外机：海外 IP 出口，运行交易执行与出口代理，建议放在香港。
+[hosts.overseas]
+label = "海外机"
 address = "203.0.113.12"
 region = "ap-hongkong"
 provider = "tencent"
 ssh = { port = 22, username = "ubuntu" }
 
-# 因子计算机：运行因子引擎，可以是局域网里的机器。Linux 机器同时作为编译机，
+# 因子机：运行因子引擎，可以是局域网里的机器。Linux 机器同时作为编译机，
 # 只有 CGO Linux 制品（Storage）使用；纯 Go 交叉编译与前端构建在本机执行。
 # 它只登记登录方式，不加入 MooX 部署拓扑；如需同时部署组件，在 placements 中显式声明。
 [hosts.factor]
+label = "因子机"
 address = "192.0.2.30"
 ssh = { port = 22, username = "builder" }
 
@@ -261,7 +268,7 @@ host = "factor"
 [placements]
 control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"]
 storage = ["storage-primary", "storage-node", "storage-view", "access"]
-compute-1 = ["trade", "access", "egress-proxy"]
+overseas = ["trade", "access", "egress-proxy"]
 
 [egress_proxy]
 http_domains = ["*.binance.com", "data-api.binance.vision"]

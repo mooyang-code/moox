@@ -74,7 +74,7 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 	// 角色到组件的映射与示例模板的放置一致。
 	if !slices.Equal(manifest.Placements["control"], []string{"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"}) ||
 		!slices.Equal(manifest.Placements["storage"], []string{"storage-primary", "storage-node", "storage-view", "access"}) ||
-		!slices.Equal(manifest.Placements["compute-1"], []string{"trade", "access", "egress-proxy"}) {
+		!slices.Equal(manifest.Placements["overseas"], []string{"trade", "access", "egress-proxy"}) {
 		t.Fatalf("放置 = %+v", manifest.Placements)
 	}
 	if manifest.EventBus.PublicAddress != "198.51.100.10" {
@@ -88,7 +88,7 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 // 地域、云厂商不让用户填：由公网 IP 在腾讯云里识别；腾讯云默认地域取管理台所在地域。
 func TestRegionsComeFromTheCloudNotTheUser(t *testing.T) {
 	manifest := render(t, sampleRequest())
-	for id, want := range map[string]string{"control": "ap-guangzhou", "storage": "ap-nanjing", "compute-1": "ap-hongkong"} {
+	for id, want := range map[string]string{"control": "ap-guangzhou", "storage": "ap-nanjing", "overseas": "ap-hongkong"} {
 		host := manifest.HostCatalog[id]
 		if host.Region != want || host.Provider != "tencent" {
 			t.Fatalf("%s：地域/云厂商 = %q/%q，应为 %q/tencent", id, host.Region, host.Provider, want)
@@ -137,7 +137,7 @@ func TestOverseasServerIsOptional(t *testing.T) {
 	request := sampleRequest()
 	request.Servers.Overseas = nil
 	manifest := render(t, request)
-	if _, ok := manifest.HostCatalog["compute-1"]; ok || manifest.PlacementHost("trade") != "" || manifest.PlacementHost("egress-proxy") != "" {
+	if _, ok := manifest.HostCatalog["overseas"]; ok || manifest.PlacementHost("trade") != "" || manifest.PlacementHost("egress-proxy") != "" {
 		t.Fatalf("不配海外服务器时不应有交易与出口代理: %+v", manifest.Placements)
 	}
 	request.Servers.Control = &Server{SharedWith: RoleOverseas}
@@ -147,7 +147,7 @@ func TestOverseasServerIsOptional(t *testing.T) {
 }
 
 func TestControlCanShareAServerWithStorageOrOverseas(t *testing.T) {
-	for _, target := range []struct{ role, host string }{{RoleStorage, "storage"}, {RoleOverseas, "compute-1"}} {
+	for _, target := range []struct{ role, host string }{{RoleStorage, "storage"}, {RoleOverseas, "overseas"}} {
 		request := sampleRequest()
 		// 共用时管理台自己的 IP 和密码不用填。
 		request.Servers.Control = &Server{SharedWith: target.role}

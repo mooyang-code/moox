@@ -1,11 +1,13 @@
 package config
 
 import (
-	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
 
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/stretchr/testify/assert"
@@ -803,4 +805,18 @@ ssh = { username = "mooyang" }
 	other := t.TempDir()
 	_, err = Load(writeManifest(t, other, strings.Replace(body, "Outbound", "inbound", 1), 0o600), other)
 	require.ErrorContains(t, err, "reachability")
+}
+
+func TestLoadHostLabel(t *testing.T) {
+	root := t.TempDir()
+	body := strings.Replace(validManifest, "[hosts.control]\n", "[hosts.control]\nlabel = \" 控制机 \"\n", 1)
+	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.NoError(t, err)
+	require.Equal(t, "控制机", snapshot.Manifest.ControlHost().Label)
+	for _, invalid := range []string{"控制\n机", strings.Repeat("机", 33)} {
+		other := t.TempDir()
+		bad := strings.Replace(validManifest, "[hosts.control]\n", "[hosts.control]\nlabel = "+strconv.Quote(invalid)+"\n", 1)
+		_, err := Load(writeManifest(t, other, bad, 0o600), other)
+		require.ErrorContains(t, err, "label")
+	}
 }

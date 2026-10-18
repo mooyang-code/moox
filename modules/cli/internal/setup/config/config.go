@@ -225,6 +225,8 @@ type Host struct {
 	TLSMode        string
 	// Reachability 为空表示可直达，outbound 表示只能出站。
 	Reachability string
+	// Label 是主机的中文名（例如“海外机”），登记为 Admin 的主机描述，用于界面展示。
+	Label string
 }
 
 type SSHConfig struct {
@@ -234,6 +236,8 @@ type SSHConfig struct {
 }
 
 type HostDefinition struct {
+	// Label 是主机的中文名，例如“控制机”“存储机”“海外机”“因子机”；英文 ID 是表名里的主机 ID。
+	Label          string `toml:"label"`
 	Address        string `toml:"address"`
 	PrivateAddress string `toml:"private_address"`
 	Region         string `toml:"region"`
@@ -483,6 +487,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		out.TencentCloud.Region = "ap-guangzhou"
 	}
 	for id, definition := range out.HostCatalog {
+		definition.Label = strings.TrimSpace(definition.Label)
 		definition.Address = strings.TrimSpace(definition.Address)
 		definition.PrivateAddress = strings.TrimSpace(definition.PrivateAddress)
 		definition.Region = strings.ToLower(strings.TrimSpace(definition.Region))

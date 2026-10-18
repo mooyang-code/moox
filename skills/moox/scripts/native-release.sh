@@ -33,7 +33,7 @@ usage() {
           服务目录 packages/servicecatalog/catalog.yaml 自上次发布以来是否变化；变化时退出码 10，必须整体发布。
 
 主机别名对应环境变量 MOOX_RELEASE_HOST_<别名大写，- 换成 _>，值为 user@host，例如
-MOOX_RELEASE_HOST_CONTROL、MOOX_RELEASE_HOST_STORAGE、MOOX_RELEASE_HOST_COMPUTE_1；构建机用 MOOX_RELEASE_BUILDER。
+MOOX_RELEASE_HOST_CONTROL、MOOX_RELEASE_HOST_STORAGE、MOOX_RELEASE_HOST_OVERSEAS；构建机用 MOOX_RELEASE_BUILDER。
 这些从 ~/.moox-release.env（或 MOOX_RELEASE_ENV 指定的文件）读取，不入库，示例见 skills/moox/references/release-hosts.env.example。
 EOF
   exit 2

@@ -71,16 +71,16 @@ port = 22
 username = "ubuntu"
 password = "recognizable-control-password"
 
-[hosts.compute-1]
+[hosts.overseas]
 address = "192.0.2.11"
-[hosts.compute-1.ssh]
+[hosts.overseas.ssh]
 port = 22
 username = "ubuntu"
 password = "recognizable-compute-password"
 
 [placements]
 control = ["admin", "console-proxy", "web-host", "eventbus"]
-compute-1 = []
+overseas = []
 `
 	path := filepath.Join(root, "moox.toml")
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
@@ -100,10 +100,10 @@ func TestRunChecksIdentityThenHosts(t *testing.T) {
 		{Name: "config", Status: "valid"},
 		{Name: "tencent_cloud", Status: "valid"},
 		{Name: "host:control", Status: "valid"},
-		{Name: "host:compute-1", Status: "valid"},
+		{Name: "host:overseas", Status: "valid"},
 	}, result.Checks)
 	assert.Equal(t, 1, identity.calls)
-	assert.Equal(t, []string{"control", "compute-1"}, sshChecker.calls)
+	assert.Equal(t, []string{"control", "overseas"}, sshChecker.calls)
 }
 
 func TestRunStopsBeforeSSHWhenIdentityFails(t *testing.T) {
@@ -125,7 +125,7 @@ func TestRunPreservesHostOrderAndRedactsErrors(t *testing.T) {
 	snapshot := validationSnapshot(t)
 	identity := &fakeIdentity{}
 	sshChecker := &fakeSSHChecker{errs: map[string]error{
-		"compute-1": fmt.Errorf("recognizable-compute-password"),
+		"overseas": fmt.Errorf("recognizable-compute-password"),
 	}}
 
 	result, err := Run(context.Background(), snapshot, Dependencies{Identity: identity, SSH: sshChecker})
@@ -134,7 +134,7 @@ func TestRunPreservesHostOrderAndRedactsErrors(t *testing.T) {
 		{Name: "config", Status: "valid"},
 		{Name: "tencent_cloud", Status: "valid"},
 		{Name: "host:control", Status: "valid"},
-		{Name: "host:compute-1", Status: "invalid", Code: "ssh_validation_failed"},
+		{Name: "host:overseas", Status: "invalid", Code: "ssh_validation_failed"},
 	}, result.Checks)
 	assert.NotContains(t, err.Error(), "recognizable-compute-password")
 }

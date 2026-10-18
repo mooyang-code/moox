@@ -12,11 +12,11 @@ func scfPlanTestManifest() Manifest {
 	account := SCFCloudAccountConfig{AccountID: "tencent-scf", AccountName: "Tencent SCF", CredentialSecretID: "secret", AppID: "1", COSRegion: "ap-guangzhou", COSBucket: "bucket"}
 	return Manifest{
 		HostCatalog: map[string]HostDefinition{
-			"control":   {Address: "1.1.1.1", Region: "ap-guangzhou", PrivateAddress: "10.0.0.1"},
-			"storage":   {Address: "2.2.2.2", Region: "ap-nanjing", PrivateAddress: "10.206.0.5"},
-			"compute-1": {Address: "3.3.3.3", Region: "ap-hongkong", PrivateAddress: "172.19.32.13"},
+			"control":  {Address: "1.1.1.1", Region: "ap-guangzhou", PrivateAddress: "10.0.0.1"},
+			"storage":  {Address: "2.2.2.2", Region: "ap-nanjing", PrivateAddress: "10.206.0.5"},
+			"overseas": {Address: "3.3.3.3", Region: "ap-hongkong", PrivateAddress: "172.19.32.13"},
 		},
-		Placements: map[string][]string{"control": {"admin", "collector"}, "storage": {"storage-primary", "access"}, "compute-1": {"access"}},
+		Placements: map[string][]string{"control": {"admin", "collector"}, "storage": {"storage-primary", "access"}, "overseas": {"access"}},
 		SCFPlan: SCFPlan{
 			Enabled: true, CloudAccount: account,
 			Regions: map[string]SCFPlanRegion{"ap-hongkong": {VPCID: "vpc-hk", SubnetID: "subnet-hk"}},
@@ -45,7 +45,7 @@ func TestSCFPlanDefaultsAndRenderedCollectorConfig(t *testing.T) {
 	require.Equal(t, 128, plan["memory_mb"])
 	require.Equal(t, 50, plan["symbols_per_function"])
 	require.NotContains(t, plan, "package_id", "代码包只写名称，固定 ID 不再渲染")
-	require.Equal(t, map[string]any{"ap-hongkong": map[string]any{"access_address": "172.19.32.13:11004", "access_id": "access@compute-1"}}, plan["access_routes"])
+	require.Equal(t, map[string]any{"ap-hongkong": map[string]any{"access_address": "172.19.32.13:11004", "access_id": "access@overseas"}}, plan["access_routes"])
 	require.Equal(t, map[string]any{"crypto": map[string]any{"package_name": "moox-collector-crypto-plan", "namespace": "moox-crypto-plan"}}, plan["spaces"])
 
 	// 渲染幂等：对自己的输出再渲染结果不变。
@@ -77,11 +77,11 @@ func TestSCFPlanValidationRejectsIncompleteOrInconsistentSettings(t *testing.T) 
 		"missing vpc":        func(m *Manifest) { m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{} },
 		"unused region":      func(m *Manifest) { m.SCFPlan.Regions["ap-nanjing"] = SCFPlanRegion{VPCID: "v", SubnetID: "s"} },
 		"unsupported region": func(m *Manifest) { m.SCFPlan.Spaces[0].Markets["spot"] = []string{"mars-1"} },
-		"no access host":     func(m *Manifest) { m.Placements["compute-1"] = nil },
+		"no access host":     func(m *Manifest) { m.Placements["overseas"] = nil },
 		"access has no VPC ip": func(m *Manifest) {
-			definition := m.HostCatalog["compute-1"]
+			definition := m.HostCatalog["overseas"]
 			definition.PrivateAddress = ""
-			m.HostCatalog["compute-1"] = definition
+			m.HostCatalog["overseas"] = definition
 		},
 		"duplicate space": func(m *Manifest) { m.SCFPlan.Spaces = append(m.SCFPlan.Spaces, m.SCFPlan.Spaces[0]) },
 		"bad space id":    func(m *Manifest) { m.SCFPlan.Spaces[0].SpaceID = "Crypto Space" },
@@ -138,7 +138,7 @@ func TestSCFPlanAccessSelectionHandlesSeveralHostsInOneRegion(t *testing.T) {
 	address, id, err = manifest.SCFPlanAccess("ap-hongkong")
 	require.NoError(t, err)
 	require.Equal(t, "172.19.32.13:11004", address)
-	require.Equal(t, "access@compute-1", id)
+	require.Equal(t, "access@overseas", id)
 }
 
 // 渲染产物夹具：Collector 的 bootstrap 测试用真实 Load 读取同一份文件，两端字段名、键与必填项不一致时任一侧测试都会失败。
