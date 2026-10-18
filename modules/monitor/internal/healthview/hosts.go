@@ -55,6 +55,9 @@ func projectHosts(facts observability.Overview) []*pb.HealthHost {
 	var out []*pb.HealthHost
 	covered := make(map[string]bool)
 	for _, item := range facts.Hosts {
+		if hostRemoved(facts, item.HostID) {
+			continue
+		}
 		host := &pb.HealthHost{HostId: item.HostID, AgentId: item.AgentID, Hostname: item.Hostname, Status: domain.HealthStatus(item.Status), Reason: ChineseReason(item.Reason), CpuPercent: item.CPUPercent, MemoryPercent: item.MemoryPercent, DiskPercent: item.FilesystemMaxPercent, MemoryAvailable: item.MemoryAvailable, DiskAvailable: item.DiskAvailable, MetricsAvailable: item.MetricsAvailable, CpuAvailable: item.CPUAvailable, LastReportedAt: stamp(item.LastSeenAt),
 			CpuCores: item.CPUCores, MemoryTotalBytes: item.MemoryTotalBytes, MemoryUsedBytes: item.MemoryUsedBytes,
 			DiskTotalBytes: item.FilesystemTotalBytes, DiskUsedBytes: item.FilesystemUsedBytes, DiskMountpoint: item.FilesystemMountpoint}
@@ -76,6 +79,20 @@ func projectHosts(facts observability.Overview) []*pb.HealthHost {
 	return out
 }
 
+// hostRemoved 判断采集代理所在主机是否已从部署拓扑中删除（例如主机改名后旧主机被移除）：这类代理不再上报，
+// 不应继续显示为失联。拓扑未知或代理没有主机 ID 时不做判断。
+func hostRemoved(facts observability.Overview, hostID string) bool {
+	if facts.Topology == nil || len(facts.Topology.Hosts) == 0 || hostID == "" {
+		return false
+	}
+	for _, host := range facts.Topology.Hosts {
+		if host.HostID == hostID {
+			return false
+		}
+	}
+	return true
+}
+
 // Presence notifications are code-owned transitions, not threshold rules in the
 // alert repository. Project the same silence cutoff as a current host alert.
 func hostPresenceAlerts(facts observability.Overview) []*pb.HealthAlert {
@@ -94,7 +111,7 @@ func hostPresenceAlerts(facts observability.Overview) []*pb.HealthAlert {
 	}
 	var out []*pb.HealthAlert
 	for _, host := range facts.Hosts {
-		if host.Status != "down" || disabled[host.HostID] {
+		if host.Status != "down" || disabled[host.HostID] || hostRemoved(facts, host.HostID) {
 			continue
 		}
 		title := host.HostID

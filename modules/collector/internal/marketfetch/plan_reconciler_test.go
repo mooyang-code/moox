@@ -204,6 +204,7 @@ func (c *fakePlanCloud) SubmitDeleteNodes(_ context.Context, _ string, nodeIDs [
 	for _, id := range nodeIDs {
 		delete(c.unready, id)
 		delete(c.nodes, id)
+		delete(c.backfill, id)
 	}
 	c.deleted = append(c.deleted, nodeIDs...)
 	return c.newJob(nodeIDs), nil
@@ -229,10 +230,18 @@ func (c *fakePlanCloud) SubmitCreateNodes(_ context.Context, _ string, items []*
 	for _, item := range items {
 		name := item.GetMetadata().AsMap()["function_name"].(string)
 		names = append(names, name)
-		if !c.failNodes[name] {
-			c.nodes[name] = scfinvoker.Node{NodeID: name, FunctionName: name, Region: item.GetRegion(), TriggerType: "timer", Metadata: map[string]any{}}
-			c.created = append(c.created, name)
+		if c.failNodes[name] {
+			continue
 		}
+		if item.GetTriggerType() == "invoke" {
+			if c.backfill == nil {
+				c.backfill = map[string]scfinvoker.Node{}
+			}
+			c.backfill[name] = scfinvoker.Node{NodeID: name, FunctionName: name, Region: item.GetRegion(), TriggerType: "invoke", PackageID: item.GetPackageId(), Metadata: item.GetMetadata().AsMap(), Ready: true}
+		} else {
+			c.nodes[name] = scfinvoker.Node{NodeID: name, FunctionName: name, Region: item.GetRegion(), TriggerType: "timer", Metadata: map[string]any{}}
+		}
+		c.created = append(c.created, name)
 	}
 	return c.newJob(names), nil
 }
@@ -1199,7 +1208,7 @@ func TestBackfillFunctionFollowsANewlyUploadedPackageWithinTheSameReconciler(t *
 	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
 	name := BackfillFunctionName("crypto", "spot", "ap-nanjing")
 	h.cloud.packages = []string{"pkg-v1"}
-	h.cloud.backfill = map[string]scfinvoker.Node{name: {NodeID: name, PackageID: "pkg-v1"}}
+	h.cloud.backfill = map[string]scfinvoker.Node{name: {NodeID: name, PackageID: "pkg-v1", Metadata: testBackfillMetadata()}}
 
 	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
 	require.NoError(t, err)
@@ -1245,7 +1254,7 @@ func TestBackfillFunctionIsNeverDowngradedByAStaleCaller(t *testing.T) {
 	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
 	name := BackfillFunctionName("crypto", "spot", "ap-nanjing")
 	h.cloud.packages = []string{"pkg-v1"}
-	h.cloud.backfill = map[string]scfinvoker.Node{name: {NodeID: name, PackageID: "pkg-v2"}}
+	h.cloud.backfill = map[string]scfinvoker.Node{name: {NodeID: name, PackageID: "pkg-v2", Metadata: testBackfillMetadata()}}
 
 	r.backfillMu.Lock() // 模拟另一次调用正在升级补采函数
 	done := make(chan error, 1)
@@ -1264,6 +1273,42 @@ func TestBackfillFunctionIsNeverDowngradedByAStaleCaller(t *testing.T) {
 	require.NoError(t, <-done)
 	require.Empty(t, h.cloud.upgraded, "已在 v2 的补采函数不能被降级")
 	require.Equal(t, "pkg-v2", h.cloud.backfill[name].PackageID)
+}
+
+// 访问入口或调用方身份变了（主机改名、密钥轮换），以及没有记录指纹的旧补采函数：删掉后按当前身份重建，之后不再重复。
+func TestBackfillFunctionIsRecreatedWhenAccessIdentityChanges(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
+	name := BackfillFunctionName("crypto", "spot", "ap-nanjing")
+	h.cloud.packages = []string{"pkg-v1"}
+	h.cloud.backfill = map[string]scfinvoker.Node{name: {NodeID: name, PackageID: "pkg-v1", Metadata: map[string]any{}, Ready: true}}
+
+	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, name, got)
+	require.Equal(t, []string{name}, h.cloud.deleted)
+	require.Equal(t, []string{name}, h.cloud.created)
+	require.Equal(t, testBackfillMetadata()[backfillAccessMetadataKey], h.cloud.backfill[name].Metadata[backfillAccessMetadataKey])
+
+	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Len(t, h.cloud.deleted, 1, "身份一致后不再重建")
+
+	r.Access = func(region string) (map[string]string, error) {
+		access, err := testSCFAccessEnvironment(region)
+		access["MOOX_ACCESS_ID"] = "access@overseas"
+		return access, err
+	}
+	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Len(t, h.cloud.deleted, 2, "访问入口变了要重建")
+	require.Len(t, h.cloud.created, 2)
+}
+
+func testBackfillMetadata() map[string]any {
+	access, _ := testSCFAccessEnvironment("")
+	return map[string]any{backfillAccessMetadataKey: backfillAccessFingerprint(access)}
 }
 
 func testSCFAccessEnvironment(string) (map[string]string, error) {
