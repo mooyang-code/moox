@@ -7,6 +7,7 @@ import (
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/spf13/cobra"
 )
 
@@ -34,6 +35,14 @@ func newSetupDeployHostCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		options.Log = command.ErrOrStderr()
+		// 只能出站的主机经 control 反向连接接入：先经腾讯云接口确认 control 的端口已放行，再部署。
+		if snapshot.Manifest.HostByID(options.HostID).Reachability == servicecatalog.ReachabilityOutbound && deps.ensureRelayFirewall != nil {
+			firewall, err := deps.ensureRelayFirewall(command.Context(), snapshot)
+			if err != nil {
+				return fmt.Errorf("prepare control firewall for outbound host %s: %w", options.HostID, err)
+			}
+			fmt.Fprintf(options.Log, "control firewall ready for outbound host %s: created=%d already_open=%d\n", options.HostID, firewall.Created, firewall.AlreadyOpen)
+		}
 		result, err := deps.deployHost(command.Context(), snapshot, options)
 		if err != nil {
 			return err

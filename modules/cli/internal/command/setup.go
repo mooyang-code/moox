@@ -69,6 +69,7 @@ type setupDeps struct {
 	browserE2EStorage      func(context.Context, *setupconfig.Snapshot, string, string, bool) (storageBrowserResult, error)
 	exportSkillConfig      func(context.Context, *setupconfig.Snapshot, string) (dataAccessConfig, error)
 	ensureFirewall         func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
+	ensureRelayFirewall    func(context.Context, *setupconfig.Snapshot) (setupFirewallSummary, error)
 	ensurePrivateNetwork   func(context.Context, *setupconfig.Snapshot, privatenet.Options, io.Writer) (privatenet.Result, error)
 	resolveSCFRoutes       func(context.Context, *setupconfig.Snapshot, string) (privatenet.SCFRoutePlan, error)
 }
@@ -1093,6 +1094,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.exportSkillConfig == nil {
 		deps.exportSkillConfig = defaults.exportSkillConfig
 	}
+	if deps.ensureRelayFirewall == nil {
+		deps.ensureRelayFirewall = defaults.ensureRelayFirewall
+	}
 	if deps.ensureFirewall == nil {
 		deps.ensureFirewall = defaults.ensureFirewall
 	}
@@ -1140,6 +1144,7 @@ func defaultSetupDeps() setupDeps {
 		browserE2EStorage:      defaultSetupBrowserE2EStorage,
 		exportSkillConfig:      defaultSetupExportSkillConfig,
 		ensureFirewall:         defaultSetupEnsureFirewall,
+		ensureRelayFirewall:    setupEnsureRelayFirewall,
 		ensurePrivateNetwork:   defaultEnsurePrivateNetwork,
 		resolveSCFRoutes:       resolveSCFRoutePlan,
 		login: func(ctx context.Context, snapshot *setupconfig.Snapshot) (setupclient.LoginResult, error) {

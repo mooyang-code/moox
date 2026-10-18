@@ -19,7 +19,6 @@ type Host struct {
 	Region         string `json:"region,omitempty"`
 	Status         string `json:"status"`
 	// Reachability 为空表示可直达；ReachabilityOutbound 表示只能出站（家庭网络等），进入它的连接经 control 网关中转。
-	// 空值不参与序列化，只有直达主机的拓扑与快照哈希保持不变。
 	Reachability string `json:"reachability,omitempty"`
 }
 

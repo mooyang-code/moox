@@ -589,8 +589,21 @@ func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
 		return nil
 	}
 	assert.Contains(t, ports("control"), "4222")
+	assert.Contains(t, ports("control"), "11003", "出站主机经 control 的 11003 反向连接")
 	assert.Equal(t, []string{"11003"}, ports("storage"))
 	assert.Equal(t, []string{"11003", "11200"}, ports("compute"))
+
+	// 只能出站的主机不接受入站连接，不作为防火墙目标。
+	compute := manifest.HostCatalog["compute"]
+	compute.Reachability = "outbound"
+	manifest.HostCatalog["compute"] = compute
+	targets = setupFirewallTargets(manifest)
+	require.Len(t, targets, 2)
+	assert.Nil(t, ports("compute"))
+	relay := setupRelayFirewallRules(4222)
+	require.Len(t, relay, 2)
+	assert.Equal(t, "11003", relay[0].Ports)
+	assert.Equal(t, "4222", relay[1].Ports)
 }
 
 func TestSetupControlDeploymentOpensACMEBeforeDeploy(t *testing.T) {

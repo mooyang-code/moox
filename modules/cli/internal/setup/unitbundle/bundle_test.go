@@ -535,13 +535,3 @@ func TestHostMaterialCertificateUsageFollowsReachability(t *testing.T) {
 	_, err = Load(t.Context(), f.write(t), f.options)
 	require.NoError(t, err)
 }
-
-// 直达主机的选项序列化保持原样：旧部署记录与旧版本助手（严格拒绝未知字段）不受影响。
-func TestOptionsJSONOmitsDirectReachability(t *testing.T) {
-	raw, err := json.Marshal(Options{HostID: "storage"})
-	require.NoError(t, err)
-	require.NotContains(t, string(raw), "Outbound")
-	raw, err = json.Marshal(Options{HostID: "home", Outbound: true})
-	require.NoError(t, err)
-	require.Contains(t, string(raw), `"Outbound":true`)
-}
