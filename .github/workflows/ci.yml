@@ -106,11 +106,13 @@ jobs:
             "https://gh-proxy.com/https://github.com/${GITHUB_REPOSITORY}.git"
             "https://ghproxy.net/https://github.com/${GITHUB_REPOSITORY}.git"
           )
+          # macOS 没有 timeout 命令，优先用 coreutils 的 gtimeout，都没有就不限时。
+          limit="$(command -v timeout || command -v gtimeout || true)"
           for source in "${sources[@]}"; do
             rm -rf "${GITHUB_WORKSPACE}/.git"
             git -C "${GITHUB_WORKSPACE}" init --quiet
             git -C "${GITHUB_WORKSPACE}" remote add source "${source}"
-            if timeout 120 git -C "${GITHUB_WORKSPACE}" fetch --no-tags --depth=1 source "${GITHUB_SHA}"; then
+            if ${limit:+"${limit}" 120} git -C "${GITHUB_WORKSPACE}" fetch --no-tags --depth=1 source "${GITHUB_SHA}"; then
               git -C "${GITHUB_WORKSPACE}" fsck --strict
               git -C "${GITHUB_WORKSPACE}" checkout --detach FETCH_HEAD
               [[ "$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD)" == "${GITHUB_SHA}" ]]
@@ -121,7 +123,11 @@ jobs:
           exit 1
       - name: Add preinstalled tools to PATH
         run: |
-          echo "/home/ubuntu/.local/go$(cat .go-version)/bin" >> "$GITHUB_PATH"
+          # 固定版本的 Go 若装在运行用户目录下（Linux 编译机），加入 PATH；其余工具沿用运行器注册时的 PATH。
+          go_bin="${HOME}/.local/go$(cat .go-version)/bin"
+          if [[ -d "${go_bin}" ]]; then
+            echo "${go_bin}" >> "${GITHUB_PATH}"
+          fi
       - name: Check self-hosted runner
         run: bash scripts/ci/check-runner.sh
       - run: make verify
