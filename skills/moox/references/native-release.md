@@ -154,7 +154,7 @@ systemctl --user restart moox-factor-engine.service
 **前端 `web-host`**（本机构建，发布到控制机 `prod` 单元）：
 
 1. `web/` 下 `NODE_OPTIONS=--experimental-require-module pnpm run build:prod`。
-2. `web-host/` 下 `make statik && make build-linux`（PATH 里要有 Go 1.26.9 toolchain），产物 `bin/moox-web-host`。
+2. `web-host/` 下 `make statik && make build-linux`（PATH 里要有 `.go-version` 固定版本的 Go toolchain），产物 `bin/moox-web-host`。
 3. 构建会改写 `web-host/internal/statik/statik.go` 与 `web/src/components.d.ts`：发布后 `git checkout --` 还原，**不要提交**。
 4. 用 `native-release.sh install --host control --unit prod --file web-host/bin/moox-web-host --restart web-host` 装。
 5. 线上验证：curl 懒加载分包检索新文案；页面需登录，由用户自己在浏览器验证。

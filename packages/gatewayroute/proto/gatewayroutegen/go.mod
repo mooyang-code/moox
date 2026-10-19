@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen
 
-go 1.26.9
+go 1.27.2
 
 require (
 	google.golang.org/protobuf v1.36.11

@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/storage
 
-go 1.26.9
+go 1.27.2
 
 replace (
 	github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/proto/admingen
