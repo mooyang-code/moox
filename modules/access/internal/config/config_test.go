@@ -47,6 +47,7 @@ func TestPackagedTemplateCarriesPoolWarmup(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 32, cfg.GatewayClient.Pool.MinIdle)
 	require.Equal(t, 64, cfg.GatewayClient.Pool.MaxIdle)
+	require.Equal(t, "gzip", cfg.GatewayClient.Compression, "跨境一跳必须压缩，见模板注释")
 
 	path := filepath.Join(t.TempDir(), "app.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(example, "key_file:", "pool:\n    min_idle: 100\n  key_file:", 1)), 0o644))
