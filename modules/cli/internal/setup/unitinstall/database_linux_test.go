@@ -4,6 +4,8 @@ package unitinstall
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -14,8 +16,29 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 )
+
+// writeReleaseCatalog 写入发布自带的服务目录与记录它哈希的包清单（与 unitpackage 打包的布局相同）：
+// 运行时按发布自带的目录读取启停，夹具里缺少它们时候选发布无法被读取。
+func writeReleaseCatalog(t *testing.T, release string) {
+	t.Helper()
+	catalog := servicecatalog.EmbeddedYAML()
+	digest := sha256.Sum256(catalog)
+	value := "sha256:" + hex.EncodeToString(digest[:])
+	path := filepath.Join(release, "config/servicecatalog/catalog.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, catalog, 0o644))
+	require.NoError(t, os.Chmod(path, 0o644))
+	manifest := map[string]any{
+		"version": 1, "profile": "storage", "catalog_sha256": value,
+		"files": []map[string]any{{"path": "config/servicecatalog/catalog.yaml", "sha256": value}},
+	}
+	raw, err := json.Marshal(manifest)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(release, "package-manifest.json"), append(raw, '\n'), 0o644))
+}
 
 func databaseCandidate(t *testing.T, flag string) Prepared {
 	t.Helper()
@@ -30,6 +53,7 @@ func databaseCandidate(t *testing.T, flag string) Prepared {
 	require.NoError(t, err)
 	envFile := filepath.Join(candidate.Directory, "secrets/runtime-storage-primary.json")
 	require.NoError(t, os.WriteFile(envFile, raw, 0o600))
+	writeReleaseCatalog(t, candidate.Directory)
 	plan := unitruntime.Plan{Version: 1, HostID: candidate.HostID, DeploymentRoot: root, ReleaseRoot: candidate.Directory, CatalogSHA256: unitruntime.CatalogSHA256(), Components: []unitruntime.Component{{ID: "storage-primary", EnvironmentFile: envFile}}}
 	raw, err = json.Marshal(plan)
 	require.NoError(t, err)
