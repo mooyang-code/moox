@@ -73,6 +73,20 @@ type Config struct {
 	OnRefreshError   func(error)
 }
 
+// CallFailure 描述一次失败的尝试。
+type CallFailure struct {
+	Service, Method string
+	Target          string // 目标主机
+	Attempt         int    // 第几次尝试，从 0 开始
+	// ConnectFailed 为 true 表示获取连接失败、请求尚未发出。
+	ConnectFailed bool
+	// Retrying 为 true 表示本次失败之后会再尝试一次。
+	Retrying bool
+	// Remaining 是失败时调用预算的剩余时间。
+	Remaining time.Duration
+	Err       error
+}
+
 type endpoint struct {
 	address, target, caFile, serverName string
 	compress                            bool
@@ -149,6 +163,7 @@ type Client struct {
 	// unpersisted 记录目录已应用但缓存落盘失败；仅在 refresh 令牌持有期间读写。
 	unpersisted bool
 	closed      atomic.Bool
+	onFailure   atomic.Pointer[func(CallFailure)]
 }
 
 var hostID = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
@@ -437,7 +452,9 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 		}
 		// 获取连接失败：请求尚未发出，对所有方法（包括写）都可以安全重试；预算不足时放弃，交给补采。
 		if state.connectFailed.Load() {
-			if attempt == 1 || ctx.Err() != nil || noRetry(ctx) || remainingBudget(ctx) < minRetryRemaining {
+			giveUp := attempt == 1 || ctx.Err() != nil || noRetry(ctx) || remainingBudget(ctx) < minRetryRemaining
+			c.reportFailure(CallFailure{Service: service, Method: method, Target: ep.target, Attempt: attempt, ConnectFailed: true, Retrying: !giveUp, Remaining: remainingBudget(ctx), Err: err})
+			if giveUp {
 				if attempt == 1 {
 					c.pool.stats.retriesFailed.Add(1)
 				}
@@ -458,7 +475,9 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 			}
 		}
 		// 请求可能已发出：只有只读方法与声明为幂等的写方法可以重发，其余写方法绝不重试。
-		if attempt == 1 || !retry || !c.catalog.Retryable(service, method) || ctx.Err() != nil || noRetry(ctx) || !c.catalog.ReadOnly(service, method) && remainingBudget(ctx) < minRetryRemaining {
+		giveUp := attempt == 1 || !retry || !c.catalog.Retryable(service, method) || ctx.Err() != nil || noRetry(ctx) || !c.catalog.ReadOnly(service, method) && remainingBudget(ctx) < minRetryRemaining
+		c.reportFailure(CallFailure{Service: service, Method: method, Target: ep.target, Attempt: attempt, Retrying: !giveUp, Remaining: remainingBudget(ctx), Err: err})
+		if giveUp {
 			if connectRetried {
 				c.pool.stats.retriesFailed.Add(1)
 			}
@@ -573,6 +592,21 @@ func WithoutRetry(ctx context.Context) context.Context {
 func noRetry(ctx context.Context) bool {
 	v, _ := ctx.Value(noRetryKey{}).(bool)
 	return v
+}
+
+// SetCallFailureObserver 设置每次尝试失败（含将要重试的尝试）时调用的回调，用来记录失败原因；回调必须快速返回。
+func (c *Client) SetCallFailureObserver(observer func(CallFailure)) {
+	if observer == nil {
+		c.onFailure.Store(nil)
+		return
+	}
+	c.onFailure.Store(&observer)
+}
+
+func (c *Client) reportFailure(failure CallFailure) {
+	if observer := c.onFailure.Load(); observer != nil {
+		(*observer)(failure)
+	}
 }
 
 // remainingBudget 是 ctx 截止时间前的剩余时间；没有截止时间时视为充足。

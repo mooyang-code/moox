@@ -66,6 +66,11 @@ func run(ctx context.Context, cfg config.Config) error {
 	if err := accessproxy.RegisterPoolMetrics(nil, gateway.PoolStats); err != nil {
 		return err
 	}
+	// 跨主机调用失败的原因（建连失败、超时、对端重置）是丢整批采集的直接线索，失败本身不频繁，逐次记录。
+	gateway.SetCallFailureObserver(func(f gatewayclient.CallFailure) {
+		log.Printf("access gateway call failed service=%s method=%s target=%s attempt=%d connect_failed=%t retrying=%t remaining=%s err=%v",
+			f.Service, f.Method, f.Target, f.Attempt, f.ConnectFailed, f.Retrying, f.Remaining.Round(time.Millisecond), f.Err)
+	})
 	proxy, err := accessproxy.New(accessproxy.Options{HostID: gateway.LocalHostID(), Credentials: credentials, Gateway: gateway, Nonces: nonces})
 	if err != nil {
 		return err

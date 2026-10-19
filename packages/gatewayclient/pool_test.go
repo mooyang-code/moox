@@ -235,6 +235,50 @@ func TestRetryBudgetOnlyLimitsIdempotentWrites(t *testing.T) {
 	require.Equal(t, 2, readCalls)
 }
 
+// 端到端：Forward 经真实的 tRPC 客户端与连接池调用，目标端口拒绝连接时，标记必须穿过 tRPC 客户端传到连接池，
+// 写方法才会在建连失败后重试。（其余测试手工置标记或直接调连接池，覆盖不到这条链路。）
+func TestConnectFailureThroughTheRealTRPCClientIsRetried(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := listener.Addr().String()
+	require.NoError(t, listener.Close())
+
+	source := &sourceStub{directory: testDirectory(t, "a")}
+	config := tunnelConfig(source)
+	config.Tunnels = tunnelFunc(func(context.Context, string) (string, error) { return address, nil })
+	c := newTestClient(t, config)
+	_, err = c.Forward(context.Background(), secretService, "UpdateSecret", codec.SerializationTypeJSON, []byte(`{}`))
+	require.Error(t, err)
+	stats := c.PoolStats()
+	require.Equal(t, uint64(2), stats.DialsErr, "第一次尝试与重试各拨号一次")
+	require.Equal(t, uint64(1), stats.ConnectRetriesFailed, "重试之后仍失败")
+}
+
+// 失败回调拿到每次失败尝试的原因：第一次建连失败会重试，重试再失败就放弃。
+func TestCallFailureObserverSeesEveryFailedAttempt(t *testing.T) {
+	source := &sourceStub{directory: testDirectory(t, "a")}
+	c := newTestClient(t, tunnelConfig(source))
+	var seen []CallFailure
+	c.SetCallFailureObserver(func(failure CallFailure) { seen = append(seen, failure) })
+	c.invoke = func(ctx context.Context, _ endpoint, _, _ string, _ int, _ []byte, _ http.Header) ([]byte, error) {
+		return nil, connectFailure(ctx)
+	}
+	_, err := c.Forward(context.Background(), secretService, "UpdateSecret", codec.SerializationTypeJSON, []byte(`{}`))
+	require.Error(t, err)
+	require.Len(t, seen, 2)
+	require.True(t, seen[0].ConnectFailed)
+	require.True(t, seen[0].Retrying)
+	require.Equal(t, 0, seen[0].Attempt)
+	require.False(t, seen[1].Retrying)
+	require.Equal(t, 1, seen[1].Attempt)
+	require.Equal(t, "a", seen[1].Target)
+	require.Equal(t, "UpdateSecret", seen[1].Method)
+	require.Greater(t, seen[0].Remaining, time.Duration(0))
+	c.SetCallFailureObserver(nil)
+	_, _ = c.Forward(context.Background(), secretService, "UpdateSecret", codec.SerializationTypeJSON, []byte(`{}`))
+	require.Len(t, seen, 2, "取消观察者之后不再回调")
+}
+
 func acceptingListener(t *testing.T) (string, *atomic.Int64) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
