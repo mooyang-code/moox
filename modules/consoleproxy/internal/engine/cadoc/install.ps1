@@ -1,4 +1,4 @@
-# 把 MooX 管理台的 HTTPS 根证书导入当前用户的“受信任的根证书颁发机构”。
+﻿# 把 MooX 管理台的 HTTPS 根证书导入当前用户的“受信任的根证书颁发机构”。
 # 先核对证书的 SHA-256 指纹与同目录 root.sha256 一致；Windows 会弹出确认框，需要用户确认。
 param(
     [string]$CaFile = (Join-Path $PSScriptRoot 'moox-caddy-root.crt'),

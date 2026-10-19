@@ -69,7 +69,12 @@ func TestCABundleContainsCertGuideAndInstallers(t *testing.T) {
 		t.Fatalf("包内指纹 = %q，期望 %q", got, want)
 	}
 	guide := string(readZipFile(t, files["AGENT-INSTALL.md"]))
-	for _, text := range []string{want, "https://106.53.107.122:9527/", "install.sh --ca-file", "install.ps1", "不要索取、记录或输入用户的密码", "curl -k"} {
+	for _, text := range []string{
+		want, "https://106.53.107.122:9527/", "install.sh --ca-file", "install.ps1",
+		"不要索取、记录或输入用户的密码", "curl -k",
+		"不能证明包没被篡改", "自己计算证书指纹", "不要不加检查地运行包里的",
+		"迁移到新机器", "setup trust-browser", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
+	} {
 		if !strings.Contains(guide, text) {
 			t.Fatalf("Agent 说明缺少 %q", text)
 		}
@@ -79,6 +84,10 @@ func TestCABundleContainsCertGuideAndInstallers(t *testing.T) {
 	}
 	if mode := files["install.sh"].Mode(); mode&0o111 == 0 {
 		t.Fatalf("install.sh 应可执行，实际权限 %v", mode)
+	}
+	// 含中文的 PowerShell 脚本必须带 UTF-8 BOM，否则 Windows PowerShell 5.1 按 ANSI 解析会报语法错误。
+	if !bytes.HasPrefix(readZipFile(t, files["install.ps1"]), []byte{0xEF, 0xBB, 0xBF}) {
+		t.Fatal("install.ps1 缺少 UTF-8 BOM")
 	}
 }
 

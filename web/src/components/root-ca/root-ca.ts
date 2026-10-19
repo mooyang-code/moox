@@ -7,7 +7,7 @@ export const ROOT_CA_BUNDLE_FILE_NAME = "moox-root-ca.zip";
 export const ROOT_CA_FILE_NAME = "moox-caddy-root.crt";
 
 export interface RootCaGuide {
-  key: "macos" | "linux" | "windows" | "firefox";
+  key: "macos" | "linux" | "windows" | "firefox" | "cli";
   label: string;
   /** 每一项是一条可直接复制执行的命令；没有命令时只展示 note。 */
   commands: string[];
@@ -63,6 +63,16 @@ export function rootCaGuides(fileName: string = ROOT_CA_FILE_NAME): RootCaGuide[
         `certutil -addstore -f Root "%USERPROFILE%\\Downloads\\${fileName}"`
       ],
       note: "在管理员命令提示符中执行；第一条的输出里有 Cert Hash(sha256) 可核对指纹，第二条安装到“受信任的根证书颁发机构”。"
+    },
+    {
+      key: "cli",
+      label: "命令行 / 脚本",
+      commands: [
+        `curl --cacert ~/Downloads/${fileName} https://<管理台地址>/`,
+        `export NODE_EXTRA_CA_CERTS=~/Downloads/${fileName}`,
+        `export REQUESTS_CA_BUNDLE=~/Downloads/${fileName}`
+      ],
+      note: "装进系统信任库后，系统自带的 curl 和 Go 程序直接可用；Node.js、Python、Homebrew 的 curl 不读系统信任库，要用上面的方式指定根证书。不要使用 curl -k 等关闭校验的开关。"
     },
     {
       key: "firefox",

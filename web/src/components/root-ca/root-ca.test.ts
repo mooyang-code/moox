@@ -42,13 +42,17 @@ describe("根证书指纹", () => {
 describe("各系统的安装说明", () => {
   it("覆盖 macOS、Linux、Windows 和 Firefox，命令都指向同一个证书文件名", () => {
     const guides = rootCaGuides();
-    expect(guides.map(item => item.key)).toEqual(["macos", "linux", "windows", "firefox"]);
-    for (const guide of guides.filter(item => item.key !== "firefox")) {
+    expect(guides.map(item => item.key)).toEqual(["macos", "linux", "windows", "cli", "firefox"]);
+    for (const guide of guides.filter(item => item.key !== "firefox" && item.key !== "cli")) {
       expect(guide.commands.length).toBeGreaterThan(0);
       for (const command of guide.commands) expect(command).toContain(ROOT_CA_FILE_NAME);
     }
     expect(guides[0].commands.join("\n")).toContain("security add-trusted-cert");
-    expect(guides[3].commands).toEqual([]);
-    expect(guides[3].note).toContain("security.enterprise_roots.enabled");
+    const firefox = guides.find(item => item.key === "firefox");
+    expect(firefox?.commands).toEqual([]);
+    expect(firefox?.note).toContain("security.enterprise_roots.enabled");
+    const cli = guides.find(item => item.key === "cli");
+    expect(cli?.commands.join("\n")).toContain("NODE_EXTRA_CA_CERTS");
+    expect(cli?.commands.join("\n")).not.toMatch(/ -k|--insecure/);
   });
 });

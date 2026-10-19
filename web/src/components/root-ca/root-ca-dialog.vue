@@ -33,8 +33,9 @@
       <span v-else class="ca-hint">当前环境没有提供根证书（未使用内置 CA，或页面不是由控制台代理提供）。</span>
     </div>
     <a-alert type="warning" class="ca-alert">
-      下载的证书可能经过不受信任的连接。安装前请核对指纹：与运维通道（例如
-      <code>caddy-ca.sh fetch --expected-fingerprint</code>）或另一台已信任的主机上看到的指纹一致，再安装。
+      这个页面和安装包是经由尚未被信任的连接下载的，包里的一切都可能被替换，包内指纹只能防误操作。请以运维人员或另一台已信任主机上看到的指纹为准
+      （有 SSH 权限的机器直接运行
+      <code>moox-cli setup trust-browser</code> 最稳妥）。安装时优先用下面的系统命令，不要不加检查地运行包内脚本。
     </a-alert>
 
     <a-tabs default-active-key="macos" size="small">

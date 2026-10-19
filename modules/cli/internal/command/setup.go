@@ -596,7 +596,10 @@ func newSetupTrustBrowserCommand(deps setupDeps) *cobra.Command {
 				if err := ensureSetupBrowserCATrust(cmd.Context(), snapshot); err != nil {
 					return err
 				}
-				result["ca_path"] = tlstrust.CAPath(host.Address)
+				trust := describeSetupBrowserTrust(snapshot)
+				result["ca_path"] = trust.CAPath
+				result["fingerprint"] = trust.Fingerprint
+				result["other_machines"] = trust.OtherMachines
 			}
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return fmt.Errorf("config_changed")
