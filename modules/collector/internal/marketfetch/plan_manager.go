@@ -497,14 +497,20 @@ func (r *PlanReconciler) upgradeBeforeEnable(ctx context.Context) error {
 	}
 	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
 	if err != nil {
-		return err
+		// 读不到云端就无法确认代码已经升级：同样不放行，等下一轮。
+		return fmt.Errorf("%w: cannot read back the fleet: %v", errCodeUpgradePending, err)
 	}
 	prefix := "moox-fetch" + PlanFleetMarker + planNameSanitizer.Replace(strings.ToLower(r.SpaceID)) + "-"
 	stale := 0
 	for _, node := range nodes {
-		if strings.HasPrefix(node.NodeID, prefix) && strings.TrimSpace(node.PackageID) != "" && node.PackageID != pkg {
-			stale++
+		if !strings.HasPrefix(node.NodeID, prefix) || strings.TrimSpace(node.PackageID) == "" || node.PackageID == pkg {
+			continue
 		}
+		// 云端已确认不存在的函数没有代码可升级，交给对账清理和重建，不能因此永久阻塞整个空间。
+		if readbackState(node.Metadata, r.now()) == readbackGone {
+			continue
+		}
+		stale++
 	}
 	if stale > 0 {
 		return fmt.Errorf("%w: %d functions are still on an older code package", errCodeUpgradePending, stale)

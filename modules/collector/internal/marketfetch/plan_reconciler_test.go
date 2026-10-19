@@ -1531,3 +1531,35 @@ func TestEnableAllRefusesToEnableWhileFunctionsStayOnTheOldPackage(t *testing.T)
 		require.True(t, h.cloud.patches[name].GetTimerEnabled(), name)
 	}
 }
+
+// 云端已确认不存在的函数没有代码可升级，不能让整个空间永远等下去；读回失败则无法确认，同样等待。
+func TestUpgradeBeforeEnableIgnoresFunctionsGoneFromTheCloudAndWaitsOnReadbackErrors(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	require.Nil(t, h.open())
+	var gone string
+	for name, patch := range h.cloud.patches {
+		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, PackageID: "pkg-new", Metadata: map[string]any{
+			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": false,
+			"timer_available_status": "Disabled", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
+		}}
+		gone = name
+	}
+	r.Deploy.PackageID = "pkg-new"
+	// 一个函数在目录里还是旧包，但云端读回确认它已不存在。
+	h.cloud.nodes[gone] = scfinvoker.Node{NodeID: gone, PackageID: "pkg-old", Metadata: map[string]any{
+		"timer_last_readback_at": h.now.UTC().Format(time.RFC3339Nano),
+		"timer_status_error":     "ResourceNotFound.Function: function not found",
+	}}
+	h.cloud.failNodes[gone] = true // 不存在的函数升级必然失败，留在旧包
+	require.NoError(t, r.upgradeBeforeEnable(context.Background()), "已确认不存在的函数不阻塞升级门禁")
+	require.Equal(t, "pkg-old", h.cloud.nodes[gone].PackageID)
+
+	// 同一个函数没有读回证据（读回过期），说明它可能还活着：必须等。
+	h.cloud.nodes[gone] = scfinvoker.Node{NodeID: gone, PackageID: "pkg-old", Metadata: map[string]any{}}
+	require.ErrorIs(t, r.upgradeBeforeEnable(context.Background()), errCodeUpgradePending)
+}
