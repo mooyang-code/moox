@@ -20,11 +20,11 @@ func statusOf(report ProbeReport, name string) (string, string) {
 }
 
 func TestEvaluateAcceptsAWellEquippedLinuxMachine(t *testing.T) {
-	report := evaluate(parseFacts("os=Linux\narch=x86_64\nosname=Ubuntu 26.04 LTS\ncpu=88\nmem_kb=263854080\ndisk_kb=1800000000\ngo=go1.26.9\ngcc=1\n"), true)
+	report := evaluate(parseFacts("os=Linux\narch=x86_64\nosname=Ubuntu 26.04 LTS\ncpu=88\nmem_kb=263854080\ndisk_kb=1800000000\n"), true)
 	if !report.OK || report.OS != "linux" {
 		t.Fatalf("report = %+v", report)
 	}
-	for _, name := range []string{"系统", "CPU", "内存", "磁盘", "源码编译"} {
+	for _, name := range []string{"系统", "CPU", "内存", "磁盘"} {
 		if status, detail := statusOf(report, name); status != CheckOK {
 			t.Fatalf("%s 应通过，实际 %s %s", name, status, detail)
 		}
@@ -44,9 +44,6 @@ func TestEvaluateWarnsBelowTheRecommendationButOnlyFailsWhenItCannotInstall(t *t
 			t.Fatalf("%s 应为 %s，实际 %s %s", name, want, status, detail)
 		}
 	}
-	if status, _ := statusOf(report, "源码编译"); status != "" {
-		t.Fatal("只有 Linux 机器才检查能否兼作编译机")
-	}
 
 	minimal := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\n"), true)
 	if !minimal.OK {
@@ -55,14 +52,6 @@ func TestEvaluateWarnsBelowTheRecommendationButOnlyFailsWhenItCannotInstall(t *t
 	tinyDisk := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=1048576\n"), true)
 	if tinyDisk.OK {
 		t.Fatal("可用磁盘不足 5 GB 时应失败")
-	}
-	noCompiler := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\n"), true)
-	if status, _ := statusOf(noCompiler, "源码编译"); status != CheckWarn || !noCompiler.OK {
-		t.Fatal("缺少 Go 或 gcc 只提醒，不影响通过")
-	}
-	local := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\n"), false)
-	if status, _ := statusOf(local, "源码编译"); status != "" {
-		t.Fatal("本机不做编译机检查")
 	}
 }
 

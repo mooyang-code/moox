@@ -19,12 +19,10 @@ func (m Manifest) HostByID(id string) Host {
 	reachability, _ := servicecatalog.ParseReachability(definition.Reachability)
 	return Host{Name: id, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region, Port: definition.SSH.Port, Username: definition.SSH.Username, Password: definition.SSH.Password, Provider: definition.Provider, TLSMode: definition.TLSMode, Reachability: reachability, Label: definition.Label}
 }
-func (m Manifest) ControlHost() Host    { return m.HostByID(m.PlacementHost("admin")) }
-func (m Manifest) CompileHost() Host    { return m.HostByID(m.CompileHostRef.Host) }
-func (m Manifest) StorageHost() Host    { return m.HostByID(m.PlacementHost("storage-primary")) }
-func (m Manifest) ViewHost() Host       { return m.HostByID(m.PlacementHost("storage-view")) }
-func (m Manifest) StrategyHost() Host   { return m.HostByID(m.PlacementHost("strategy")) }
-func (m Manifest) HasCompileHost() bool { return m.CompileHostRef.Host != "" }
+func (m Manifest) ControlHost() Host  { return m.HostByID(m.PlacementHost("admin")) }
+func (m Manifest) StorageHost() Host  { return m.HostByID(m.PlacementHost("storage-primary")) }
+func (m Manifest) ViewHost() Host     { return m.HostByID(m.PlacementHost("storage-view")) }
+func (m Manifest) StrategyHost() Host { return m.HostByID(m.PlacementHost("strategy")) }
 
 // FactorEngineHost 返回因子引擎所在的主机；未配置或在本机（local）时返回空 Host。
 func (m Manifest) FactorEngineHost() Host {
@@ -43,8 +41,8 @@ func (m Manifest) HasStrategyHost() bool     { return m.StrategyHost().Name != "
 func (m Manifest) Hosts() []Host {
 	ids := make([]string, 0, len(m.HostCatalog))
 	for id := range m.HostCatalog {
-		// 编译机和因子计算机只登记登录方式；没有放置组件时不是部署主机。
-		if id == m.CompileHostRef.Host || id == m.FactorEngineRef.Host {
+		// 因子计算机只登记登录方式；没有放置组件时不是部署主机。
+		if id == m.FactorEngineRef.Host {
 			if _, deployed := m.Placements[id]; !deployed {
 				continue
 			}
@@ -147,11 +145,6 @@ func validateHostCatalog(catalog map[string]HostDefinition) error {
 func resolveManifestReferences(m *Manifest) error {
 	if err := validateHostCatalog(m.HostCatalog); err != nil {
 		return err
-	}
-	if m.CompileHostRef.Host != "" {
-		if _, ok := m.HostCatalog[m.CompileHostRef.Host]; !ok {
-			return fmt.Errorf("config_invalid: compile_host.host must select an existing host ID")
-		}
 	}
 	if ref := m.FactorEngineRef.Host; ref != "" && ref != FactorEngineLocal {
 		if _, ok := m.HostCatalog[ref]; !ok {

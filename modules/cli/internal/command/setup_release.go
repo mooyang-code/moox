@@ -20,7 +20,7 @@ func newSetupReleaseCommand(deps setupDeps) *cobra.Command {
 	if deps.buildRelease == nil {
 		deps.buildRelease = unitdeploy.BuildRelease
 	}
-	build := &cobra.Command{Use: "build", Short: "在本机构建并打包一个版本的全部纯 Go 单元", Long: "要求工作区干净；host、control、access、egress-proxy、trade 在本机关闭 CGO 构建，Storage 需用 --storage-binary-dir 提供编译机构建的 CGO 二进制（含 storage CLI）。同一版本 ID 已存在且来源提交一致时直接复用。", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
+	build := &cobra.Command{Use: "build", Short: "在本机构建并打包一个版本的全部纯 Go 单元", Long: "要求工作区干净；host、control、access、egress-proxy、trade 在本机关闭 CGO 构建，Storage 需用 --storage-binary-dir 提供已构建的 CGO 二进制（setup build-linux 在本机 Docker 里构建）（含 storage CLI）。同一版本 ID 已存在且来源提交一致时直接复用。", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
 		if options.ReleaseID == "" {
 			return errors.New("release build requires --release")
 		}

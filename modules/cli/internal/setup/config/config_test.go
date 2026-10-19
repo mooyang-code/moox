@@ -593,7 +593,8 @@ func TestPlacementsRejectAmbiguousOrInvalidComponents(t *testing.T) {
 	require.Equal(t, "compute", m.PlacementHost("trade"))
 }
 
-func TestLoadOptionalCompileHost(t *testing.T) {
+// [compile_host] 已退役：编译在本机进行。留着它要明确报错，提示删除，而不是静默忽略。
+func TestLoadRejectsRetiredCompileHost(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
 [hosts.compile]
@@ -602,20 +603,8 @@ ssh = { username = "builder" }
 [compile_host]
 host = "compile"
 `
-	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
-	require.NoError(t, err)
-	assert.True(t, snapshot.Manifest.HasCompileHost())
-	assert.Equal(t, "compile", snapshot.Manifest.CompileHost().Name)
-	assert.Equal(t, 22, snapshot.Manifest.CompileHost().Port)
-	assert.Len(t, snapshot.Manifest.Hosts(), 1)
-	topology, err := snapshot.Manifest.Topology()
-	require.NoError(t, err)
-	assert.Len(t, topology.Hosts, 1)
-	// An explicit empty placement includes a build host in the deployment.
-	body = strings.Replace(body, "[hosts.compile]", "compile = []\n[hosts.compile]", 1)
-	snapshot, err = Load(writeManifest(t, root, body, 0o600), root)
-	require.NoError(t, err)
-	assert.Len(t, snapshot.Manifest.Hosts(), 2)
+	_, err := Load(writeManifest(t, root, body, 0o600), root)
+	require.ErrorContains(t, err, "[compile_host] is retired")
 }
 
 func TestLoadOptionalStrategyHost(t *testing.T) {
@@ -660,7 +649,6 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{"unknown placement", validManifest + "unknown = [\"trade\"]\n", "placements host ID"},
 		{"automatic component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "host-gateway"`, 1), "automatic component"},
 		{"unknown field", "unexpected = true\n" + validManifest, "unknown field"},
-		{"unknown compile host", validManifest + "[compile_host]\nhost = \"missing\"\n", "compile_host.host"},
 		{"unknown factor engine host", validManifest + "[factor_engine]\nhost = \"missing\"\n", "factor_engine.host"},
 		{"factor engine with credentials", validManifest + "[factor_engine]\nhost = \"local\"\npassword = \"x\"\n", "factor_engine accepts only"},
 		{"duplicate address", validManifest + "[hosts.compute]\naddress = \"192.0.2.10\"\nssh = { username = \"ubuntu\" }\n", "duplicates hosts."},

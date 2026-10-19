@@ -45,7 +45,6 @@ type Options struct {
 type Result struct {
 	Path         string   `json:"path"`
 	Hosts        []string `json:"hosts"`
-	CompileHost  string   `json:"compile_host,omitempty"`
 	FactorEngine string   `json:"factor_engine,omitempty"`
 }
 
@@ -254,9 +253,6 @@ func (s *session) submit(w http.ResponseWriter, r *http.Request) {
 	result := Result{Path: s.output, FactorEngine: request.factorEngine}
 	for _, host := range request.hosts {
 		result.Hosts = append(result.Hosts, host.ID)
-	}
-	if request.compile != nil {
-		result.CompileHost = request.compile.ID
 	}
 	reply(w, http.StatusOK, response{OK: true})
 	s.result <- result

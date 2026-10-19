@@ -249,16 +249,12 @@ region = "ap-hongkong"
 provider = "tencent"
 ssh = { port = 22, username = "ubuntu" }
 
-# 因子机：运行因子引擎，可以是局域网里的机器。Linux 机器同时作为编译机，
-# 只有 CGO Linux 制品（Storage）使用；纯 Go 交叉编译与前端构建在本机执行。
+# 因子机：运行因子引擎，可以是局域网里的机器。
 # 它只登记登录方式，不加入 MooX 部署拓扑；如需同时部署组件，在 placements 中显式声明。
 [hosts.factor]
 label = "因子机"
 address = "192.0.2.30"
 ssh = { port = 22, username = "builder" }
-
-[compile_host]
-host = "factor"
 
 # 因子引擎所在的机器：local 表示运行 moox-cli 的这台电脑，也可以是上面登记的主机 ID。
 [factor_engine]

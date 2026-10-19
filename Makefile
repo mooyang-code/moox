@@ -1,4 +1,4 @@
-.PHONY: build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check test test-go test-web verify-pr verify verify-custom-setup test-caddy package-skill clean proto
+.PHONY: build build-host-gateway build-storage-linux check-boundaries check-factor-split check-module-boundaries check-package-boundaries check-format check-lint test-quality-gates test-docs-architecture test-greenfield-contract test-storage-boundary test-storage-consistency test-storage-datanode-management-contract test-build-linux-local-contract test-collector-scf-package-contract e2e-storage-datanode-management test-event-contracts test-eventbus-topology test-storage-market-pipeline test-storage-view-series-capacity test-kline-resample test-script-contracts test-script-e2e test-scripts test-skill-contracts proto-check test test-go test-web verify-pr verify verify-custom-setup test-caddy package-skill clean proto
 
 build:
 	./scripts/build/build.sh
@@ -7,8 +7,7 @@ build-host-gateway:
 	./scripts/build/build.sh host-gateway
 
 build-storage-linux:
-	./scripts/build/build.sh cli
-	bash scripts/build/build-storage-linux.sh
+	bash scripts/build/build-linux-local.sh storage
 
 check-boundaries: check-module-boundaries check-package-boundaries check-factor-split
 
@@ -30,8 +29,8 @@ test-storage-consistency:
 test-storage-datanode-management-contract:
 	bash scripts/test/contract/test-storage-datanode-management-contract.sh
 
-test-build-storage-linux-contract:
-	bash scripts/test/contract/test-build-storage-linux-contract.sh
+test-build-linux-local-contract:
+	bash scripts/test/contract/test-build-linux-local.sh
 
 test-event-contracts:
 	bash scripts/check/verify-event-contracts.sh
@@ -99,7 +98,7 @@ check-go-module-graph:
 # GitHub 托管运行器上没有这些工具：这里用 SKIP_PROTO_CHECK=1 跳过，完整检查由自托管运行器（verify-trusted）执行。
 PROTO_CHECK := $(if $(SKIP_PROTO_CHECK),,proto-check)
 
-verify-pr: test-deployment-packages test-host-placement-deployment test-host-identity-bundles test-unit-install test-unit-runtime test-unit-bootstrap check-go-module-graph $(PROTO_CHECK) test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
+verify-pr: test-deployment-packages test-host-placement-deployment test-host-identity-bundles test-unit-install test-unit-runtime test-unit-bootstrap check-go-module-graph $(PROTO_CHECK) test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-linux-local-contract test-collector-scf-package-contract
 
 verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-caddy test-skill-contracts
 	CI=true pnpm install --frozen-lockfile

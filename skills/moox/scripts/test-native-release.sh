@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# native-release.sh 的契约测试：用替身 ssh/scp/rsync 把“远端脚本”放在本机的假部署根里真正执行，
-# 覆盖构建前的护栏、安装/回滚的校验与台账、就绪与 sha 核对、服务目录变更检测。
+# native-release.sh 的契约测试：用替身 ssh/scp 把“远端脚本”放在本机的假部署根里真正执行，构建用假的 build-linux-local.sh，
+# 覆盖构建前的护栏与本机构建结果的校验、安装/回滚的校验与台账、就绪与 sha 核对、服务目录变更检测。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -12,23 +12,18 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
 
 STUBS="${TMP}/stubs"
-BUILDER_HOME="${TMP}/builder-home"
 FAKE_ROOT="${TMP}/data-moox"
 CALLS="${TMP}/calls.log"
-mkdir -p "${STUBS}" "${BUILDER_HOME}/moox-build/bin" "${BUILDER_HOME}/moox-build/scripts/build"
+mkdir -p "${STUBS}"
 : >"${CALLS}"
 
-# --- 替身：ssh 把命令放在本机执行（构建机则切到它的假 HOME），scp/rsync 只做本地拷贝或记录。
+# --- 替身：ssh 把命令放在本机执行，scp 只做本地拷贝或记录。
 cat >"${STUBS}/ssh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 while [[ "${1:-}" == -o ]]; do shift 2; done
 host="$1"; shift
 printf 'ssh %s %s\n' "${host}" "$*" >>"${STUB_CALLS}"
-if [[ "${host}" == "${STUB_BUILDER}" ]]; then
-  cd "${STUB_BUILDER_HOME}"
-  export HOME="${STUB_BUILDER_HOME}"
-fi
 exec bash -c "$*"
 EOF
 cat >"${STUBS}/scp" <<'EOF'
@@ -40,42 +35,43 @@ while [[ $# -gt 0 ]]; do
 done
 src="${args[0]}"; dst="${args[1]}"
 printf 'scp %s %s\n' "${src}" "${dst}" >>"${STUB_CALLS}"
-if [[ "${src}" == "${STUB_BUILDER}:"* ]]; then src="${STUB_BUILDER_HOME}/${src#*:}"; fi
 if [[ "${dst}" == *:* ]]; then dst="${dst#*:}"; fi
 cp "${src}" "${dst}"
 if [[ -n "${STUB_SCP_CORRUPT:-}" ]]; then printf 'x' >>"${dst}"; fi
 EOF
-cat >"${STUBS}/rsync" <<'EOF'
-#!/usr/bin/env bash
-printf 'rsync %s\n' "$*" >>"${STUB_CALLS}"
-EOF
-# 本机可能没有 GNU 的 sha256sum，构建机脚本要用它。
+# 本机可能没有 GNU 的 sha256sum，远端脚本要用它。
 if ! command -v sha256sum >/dev/null 2>&1; then
   printf '#!/usr/bin/env bash\nexec shasum -a 256 "$@"\n' >"${STUBS}/sha256sum"
 fi
 chmod +x "${STUBS}"/*
-
-# --- 假构建机：build.sh 把目标名写进 bin/moox-<目标>，并记录 CGO 与 GOTMPDIR。
-printf '1.26.9\n' >"${BUILDER_HOME}/moox-build/.go-version"
-cat >"${BUILDER_HOME}/moox-build/scripts/build/build.sh" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-[[ -d "${GOTMPDIR}" ]] || { echo "go: creating work dir: ${GOTMPDIR} 不存在" >&2; exit 1; }
-printf '%s cgo=%s version=%s tmp=%s\n' "$1" "${CGO_ENABLED}" "${VERSION}" "${GOTMPDIR##*/}" >>"${PWD}/build-env.log"
-[[ -e "${PWD}/noop" ]] && exit 0
-sleep 0.05
-printf 'binary-of-%s-%s\n' "$1" "${VERSION}" >"${PWD}/bin/moox-$1"
-EOF
-chmod +x "${BUILDER_HOME}/moox-build/scripts/build/build.sh"
-mkdir -p "${BUILDER_HOME}/moox-build/bin"
-printf 'stale\n' >"${BUILDER_HOME}/moox-build/bin/moox-stale"
 
 # --- 假仓库：有远端、有服务目录文件。
 REPO="${TMP}/repo"
 git init -q "${REPO}"
 git -C "${REPO}" config user.email t@example.com
 git -C "${REPO}" config user.name test
-mkdir -p "${REPO}/packages/servicecatalog"
+mkdir -p "${REPO}/packages/servicecatalog" "${REPO}/scripts/build"
+# 假的本机构建脚本：按真实脚本的约定接收 --out 与目标，在输出目录写 moox-<目标>，并打印 BUILT:<名>:<sha>；
+# 把目标与收到的 VERSION 记到 BUILD_LOG；build-fail / build-noop 标记分别模拟构建失败与没有新产物。
+cat >"${REPO}/scripts/build/build-linux-local.sh" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+out="" targets=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in --out) out="$2"; shift 2 ;; *) targets+=("$1"); shift ;; esac
+done
+[[ -d "${out}" ]] || { echo "输出目录不存在：${out}" >&2; exit 1; }
+printf 'targets=%s version=%s commit=%s\n' "${targets[*]}" "${VERSION}" "${GIT_COMMIT}" >>"${BUILD_LOG}"
+[[ -e "${BUILD_FLAGS}/fail" ]] && { echo "docker: Cannot connect to the Docker daemon" >&2; exit 1; }
+[[ -e "${BUILD_FLAGS}/noop" ]] && exit 0
+for target in "${targets[@]}"; do
+  printf 'binary-of-%s-%s\n' "${target}" "${VERSION}" >"${out}/moox-${target}"
+  if command -v sha256sum >/dev/null 2>&1; then sum="$(sha256sum "${out}/moox-${target}" | cut -d' ' -f1)"; else sum="$(shasum -a 256 "${out}/moox-${target}" | cut -d' ' -f1)"; fi
+  [[ -e "${BUILD_FLAGS}/wrong-sha" ]] && sum="$(printf '0%.0s' $(seq 1 64))"
+  printf 'BUILT:moox-%s:%s\n' "${target}" "${sum}"
+done
+FAKE
+chmod +x "${REPO}/scripts/build/build-linux-local.sh"
 printf 'catalog: 1\n' >"${REPO}/packages/servicecatalog/catalog.yaml"
 printf 'x\n' >"${REPO}/main.go"
 git -C "${REPO}" add -A && git -C "${REPO}" commit -q -m first
@@ -127,11 +123,12 @@ chmod +x "${FAKE_ROOT}/host/releases/h1/bin/moox-runtime"
 
 cat >"${TMP}/release.env" <<EOF
 MOOX_RELEASE_HOST_CONTROL=ubuntu@control.example
-MOOX_RELEASE_BUILDER=mooyang@builder.example
 EOF
 
 export PATH="${STUBS}:${PATH}"
-export STUB_CALLS="${CALLS}" STUB_BUILDER="mooyang@builder.example" STUB_BUILDER_HOME="${BUILDER_HOME}"
+export STUB_CALLS="${CALLS}" BUILD_LOG="${TMP}/build.log" BUILD_FLAGS="${TMP}/build-flags"
+mkdir -p "${BUILD_FLAGS}"
+: >"${BUILD_LOG}"
 export MOOX_RELEASE_ENV="${TMP}/release.env" MOOX_RELEASE_REPO="${REPO}" MOOX_RELEASE_ROOT="${FAKE_ROOT}"
 export MOOX_RELEASE_OUT="${TMP}/out" MOOX_RELEASE_READY_ATTEMPTS=2 MOOX_RELEASE_READY_INTERVAL=0
 
@@ -174,30 +171,37 @@ HEAD1="$(git -C "${REPO}" rev-parse --short=8 HEAD)"
 
 # ---------------------------------------------------------------- build 成功
 : >"${CALLS}"
+: >"${BUILD_LOG}"
 run build admin storage-primary >"${TMP}/out.txt" 2>&1 || { cat "${TMP}/out.txt" >&2; fail "build 应成功"; }
-grep -q -- '--delete' "${CALLS}" || fail "rsync 要带 --delete"
-for excluded in .git moox.toml bin .gotmp node_modules; do
-  grep -q -- "--exclude ${excluded} " "${CALLS}" || fail "rsync 必须排除 ${excluded}（.gotmp 被删会让 go 沿用旧产物，moox.toml 不能上传）"
-done
-grep -q '^admin cgo=0 version='"${HEAD1}"' tmp=.gotmp' "${BUILDER_HOME}/moox-build/build-env.log" || fail "admin 应 CGO=0、VERSION 为提交、GOTMPDIR 在 .gotmp"
-grep -q '^storage-primary cgo=1 ' "${BUILDER_HOME}/moox-build/build-env.log" || fail "storage-primary 要 CGO=1（DuckDB）"
+no_remote_calls "本机构建不该联系任何主机"
+grep -q "^targets=admin storage-primary version=${HEAD1} commit=${HEAD1}\$" "${BUILD_LOG}" || fail "构建脚本应收到目标、以提交作为 VERSION 与 GIT_COMMIT：$(cat "${BUILD_LOG}")"
 for name in moox-admin moox-storage-primary; do
-  [[ -f "${MOOX_RELEASE_OUT}/${HEAD1}/${name}" ]] || fail "没有取回 ${name}"
+  [[ -f "${MOOX_RELEASE_OUT}/${HEAD1}/${name}" ]] || fail "没有产出 ${name}"
   grep -q "^BUILT ${name} $(sha "${MOOX_RELEASE_OUT}/${HEAD1}/${name}") " "${TMP}/out.txt" || fail "BUILT 行要带正确的 sha：${name}"
 done
-[[ ! -e "${MOOX_RELEASE_OUT}/${HEAD1}/moox-stale" ]] || fail "构建机上旧的产物不能被当成这次的"
 
-# 取回的文件和构建机上的 sha 对不上（传输损坏）必须报错，不能把坏文件当成构建产物。
-STUB_SCP_CORRUPT=1 expect_fail "取回的二进制损坏" build admin
-grep -q "取回后的 sha 与构建机上的不一致" "${TMP}/out.txt" || fail "要说明取回后的 sha 不一致"
+# 构建失败（例如 Docker 没启动）必须报错并带上构建输出，不能当成成功。
+touch "${BUILD_FLAGS}/fail"
+expect_fail "构建失败" build admin
+grep -q "构建失败" "${TMP}/out.txt" || fail "要说明构建失败"
+grep -q "Docker daemon" "${TMP}/out.txt" || fail "要把构建输出给用户看"
+rm -f "${BUILD_FLAGS}/fail"
 
-# 构建没有产出新文件（例如 .gotmp 缺失导致 go 失败而沿用旧产物）必须报错。
-touch "${BUILDER_HOME}/moox-build/noop"
+# 构建报告的 sha 和落盘文件对不上必须报错，不能把坏文件当成构建产物。
+touch "${BUILD_FLAGS}/wrong-sha"
+expect_fail "sha 不一致" build admin
+grep -q "sha 与构建时记录的不一致" "${TMP}/out.txt" || fail "要说明 sha 不一致"
+rm -f "${BUILD_FLAGS}/wrong-sha"
+
+# 构建没有产出新文件（旧产物不算）必须报错。
+touch "${BUILD_FLAGS}/noop"
 expect_fail "构建没有新产物" build admin
 grep -q "没有产出新的二进制" "${TMP}/out.txt" || fail "要说明构建没有产出新的二进制"
-rm -f "${BUILDER_HOME}/moox-build/noop"
+rm -f "${BUILD_FLAGS}/noop"
 expect_fail "构建目标不合法" build "admin;rm"
 no_remote_calls "构建目标不合法"
+expect_fail "不再支持的 --builder 选项" build --builder user@host admin
+grep -q "未知选项" "${TMP}/out.txt" || fail "--builder 已移除，要报未知选项"
 
 # ---------------------------------------------------------------- install 成功
 NEW="${MOOX_RELEASE_OUT}/${HEAD1}/moox-admin"

@@ -6,7 +6,7 @@
 #   bash scripts/ci/local-verify.sh --full          同 verify-trusted，额外执行 proto-check（要求已安装代码生成工具且工作区干净）
 #   bash scripts/ci/local-verify.sh -- <target>...  只运行指定的 make 目标，例如 check-format check-lint
 #
-# 说明：带 linux 构建标签的测试在 macOS 上不会编译执行；它们由托管运行器或 Linux 编译机覆盖
+# 说明：带 linux 构建标签的测试在 macOS 上不会编译执行；它们由托管运行器覆盖
 # （见 Makefile 里的 test-*-linux 目标）。
 set -euo pipefail
 

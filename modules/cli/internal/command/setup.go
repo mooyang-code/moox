@@ -520,10 +520,6 @@ func newSetupHostsCommand(deps setupDeps) *cobra.Command {
 			}
 			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Provider: host.Provider, Role: role})
 		}
-		if snapshot.Manifest.HasCompileHost() {
-			host := snapshot.Manifest.CompileHost()
-			hosts = append(hosts, setupHostChoice{Name: host.Name, Address: host.Address, Port: host.Port, Username: host.Username, Provider: host.Provider, Role: "compile"})
-		}
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return fmt.Errorf("config_changed")
 		}
@@ -1100,9 +1096,6 @@ func sameHostEndpoint(left, right setupconfig.Host) bool {
 }
 
 func findSetupTrustHost(manifest setupconfig.Manifest, name string) (setupconfig.Host, error) {
-	if manifest.HasCompileHost() && strings.EqualFold(manifest.CompileHost().Name, strings.TrimSpace(name)) {
-		return manifest.CompileHost(), nil
-	}
 	return findSetupHost(manifest, name)
 }
 

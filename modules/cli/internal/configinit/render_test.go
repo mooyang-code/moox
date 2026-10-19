@@ -80,8 +80,8 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 	if manifest.EventBus.PublicAddress != "198.51.100.10" {
 		t.Fatalf("EventBus 地址应由 eventbus 所在主机推出，实际 %q", manifest.EventBus.PublicAddress)
 	}
-	if manifest.HasCompileHost() || manifest.FactorEngineRef.Host != "" {
-		t.Fatal("没配因子计算机时不应有编译机或因子引擎位置")
+	if manifest.FactorEngineRef.Host != "" {
+		t.Fatal("没配因子计算机时不应有因子引擎位置")
 	}
 }
 
@@ -125,7 +125,7 @@ func TestRenderKeepsTheExampleDefaultsAndComments(t *testing.T) {
 			t.Fatalf("应保留示例里的 %q", want)
 		}
 	}
-	for _, leftover := range []string{"203.0.113.", "192.0.2.30", "[hosts.factor]", "[compile_host]", "[factor_engine]"} {
+	for _, leftover := range []string{"203.0.113.", "192.0.2.30", "[hosts.factor]", "[factor_engine]"} {
 		if strings.Contains(text, leftover) {
 			t.Fatalf("不应残留示例里的 %q", leftover)
 		}
@@ -167,13 +167,13 @@ func TestControlCanShareAServerWithStorageOrOverseas(t *testing.T) {
 	}
 }
 
-// Linux 因子计算机同时作为编译机；它只登记登录方式，不是部署主机。
-func TestLinuxFactorMachineIsAlsoTheCompileHost(t *testing.T) {
+// 远程因子计算机只登记登录方式，不是部署主机，也不再写 [compile_host]（编译在本机进行）。
+func TestRemoteFactorMachineIsRecordedButNotDeployed(t *testing.T) {
 	request := sampleRequest()
 	request.Servers.Factor = &FactorServer{Mode: FactorRemote, Address: "192.168.0.103", SSHPort: 2222, SSHUser: "builder", SSHPassword: "pw-build"}
 	manifest := render(t, request)
-	if !manifest.HasCompileHost() || manifest.CompileHost().Name != "factor" || manifest.CompileHost().Port != 2222 || manifest.CompileHost().Password != "pw-build" {
-		t.Fatalf("编译机 = %+v", manifest.CompileHost())
+	if host := manifest.HostByID("factor"); host.Port != 2222 || host.Password != "pw-build" {
+		t.Fatalf("因子计算机的登录方式 = %+v", host)
 	}
 	if manifest.FactorEngineRef.Host != "factor" || manifest.FactorEngineHost().Address != "192.168.0.103" {
 		t.Fatalf("因子引擎位置 = %+v", manifest.FactorEngineRef)
@@ -188,13 +188,10 @@ func TestLinuxFactorMachineIsAlsoTheCompileHost(t *testing.T) {
 	}
 }
 
-func TestNonLinuxFactorMachineIsRecordedButNotACompileHost(t *testing.T) {
+func TestNonLinuxFactorMachineIsRecorded(t *testing.T) {
 	request := sampleRequest()
 	request.Servers.Factor = &FactorServer{Mode: FactorRemote, Address: "192.168.0.20", SSHUser: "me", SSHPassword: "pw"}
 	manifest, _ := renderWith(t, request, &fakeProber{report: ProbeReport{OK: true, OS: "darwin"}})
-	if manifest.HasCompileHost() {
-		t.Fatal("macOS 不能作为 Linux 编译机")
-	}
 	if manifest.FactorEngineHost().Address != "192.168.0.20" {
 		t.Fatalf("因子计算机应登记在 hosts 里: %+v", manifest.HostCatalog)
 	}
@@ -205,7 +202,7 @@ func TestLocalFactorMachineOnlyRecordsLocal(t *testing.T) {
 	request.Servers.Factor = &FactorServer{Mode: FactorLocal, Address: "ignored", SSHPassword: "ignored"}
 	prober := &fakeProber{report: ProbeReport{OK: true, OS: "darwin"}}
 	manifest, text := renderWith(t, request, prober)
-	if !manifest.FactorEngineIsLocal() || manifest.HasCompileHost() {
+	if !manifest.FactorEngineIsLocal() {
 		t.Fatalf("本机应只记 local: %+v", manifest.FactorEngineRef)
 	}
 	if strings.Contains(text, "ignored") || strings.Contains(text, "[hosts.factor]") {

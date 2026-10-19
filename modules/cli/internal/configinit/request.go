@@ -31,8 +31,7 @@ type Request struct {
 
 	// 以下由 normalize 算出，供渲染使用。
 	hosts        []Host
-	compile      *Host
-	factorRemote Host // 非 Linux 的因子计算机：只登记，不作为编译机
+	factorRemote Host // 远程的因子计算机：只登记登录方式，不加入部署拓扑
 	factorEngine string
 	region       string
 }
@@ -47,7 +46,7 @@ type Server struct {
 	SSHPassword string `json:"ssh_password"`
 }
 
-// Host 是渲染进 moox.toml 的一台主机。Components 只对部署主机有意义，编译机与因子计算机不放置组件。
+// Host 是渲染进 moox.toml 的一台主机。Components 只对部署主机有意义，因子计算机不放置组件。
 type Host struct {
 	ID          string
 	Address     string
@@ -90,7 +89,7 @@ func (r *Request) normalize(ctx context.Context, env Environment) error {
 	return r.buildTopology(ctx, env)
 }
 
-// buildTopology 把各类服务器换算成部署主机（含组件放置）、编译机和因子引擎位置。
+// buildTopology 把各类服务器换算成部署主机（含组件放置）和因子引擎位置。
 func (r *Request) buildTopology(ctx context.Context, env Environment) error {
 	roles, err := loadRoles()
 	if err != nil {
@@ -100,7 +99,7 @@ func (r *Request) buildTopology(ctx context.Context, env Environment) error {
 	if err != nil {
 		return err
 	}
-	r.hosts, r.compile, r.factorEngine, r.region = nil, nil, "", ""
+	r.hosts, r.factorRemote, r.factorEngine, r.region = nil, Host{}, "", ""
 	byRole := map[string]int{}
 	var titles []string // 与 hosts（以及排在最后的因子计算机）一一对应，用于错误提示
 	for _, item := range []struct {
@@ -175,11 +174,8 @@ func (r *Request) buildTopology(ctx context.Context, env Environment) error {
 	return nil
 }
 
-// factorHostOf 返回因子计算机的主机定义（Linux 时它同时是编译机）。
+// factorHostOf 返回因子计算机的主机定义。
 func factorHostOf(r *Request) Host {
-	if r.compile != nil {
-		return *r.compile
-	}
 	return r.factorRemote
 }
 
@@ -222,7 +218,7 @@ func (s *Server) host(ctx context.Context, env Environment, keys Keys, role Role
 	}, nil
 }
 
-// factorHost 检测因子计算机并决定怎么写：本机只记 local；另一台机器登记登录方式，Linux 时同时作为编译机。
+// factorHost 检测因子计算机并决定怎么写：本机只记 local；另一台机器登记登录方式。
 // 返回 nil 表示没有需要登记的主机（本机）。
 func (r *Request) factorHost(ctx context.Context, env Environment, role Role) (*Host, error) {
 	target, err := r.Servers.Factor.normalize()
@@ -250,11 +246,7 @@ func (r *Request) factorHost(ctx context.Context, env Environment, role Role) (*
 	}
 	host := Host{ID: role.hostID, Address: target.Address, SSHPort: target.SSHPort, SSHUser: target.SSHUser, SSHPassword: target.SSHPassword}
 	r.factorEngine = host.ID
-	if report.OS == "linux" {
-		r.compile = &host
-	} else {
-		r.factorRemote = host
-	}
+	r.factorRemote = host
 	return &host, nil
 }
 

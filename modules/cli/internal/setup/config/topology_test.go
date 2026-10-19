@@ -16,11 +16,6 @@ func TestManifestTopologyUsesCanonicalHostsAndAutomaticComponents(t *testing.T) 
 [hosts.compute]
 address = "192.0.2.11"
 ssh = { username = "ubuntu" }
-[hosts.compile]
-address = "192.0.2.30"
-ssh = { username = "builder" }
-[compile_host]
-host = "compile"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
