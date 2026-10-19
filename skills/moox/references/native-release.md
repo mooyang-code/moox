@@ -1,7 +1,7 @@
 # 原生部署的发布流程（Agent 用）
 
 适用于线上这套**原生部署**（`/data/moox/<单元>/releases/<发布ID>` + `current`，由 `moox-runtime` 管理进程）：
-在构建机上构建 Linux 二进制，经本机中转，逐台替换并重启，核对 sha 与就绪。
+在本机构建 Linux 二进制（含 CGO 的 Storage 在 Docker 里构建），逐台替换并重启，核对 sha 与就绪。构建环境见 [`docs/构建手册.md`](../../../docs/构建手册.md)。
 
 固化的步骤在 `skills/moox/scripts/native-release.sh`（契约测试 `test-native-release.sh`）；这里写流程、顺序和陷阱。
 
@@ -17,14 +17,13 @@
 主机地址不入库，写在 `~/.moox-release.env`（模板见 [`release-hosts.env.example`](release-hosts.env.example)）：
 
 ```bash
-MOOX_RELEASE_BUILDER=<构建机用户>@<构建机地址>
 MOOX_RELEASE_HOST_CONTROL=ubuntu@<控制机>
 MOOX_RELEASE_HOST_STORAGE=ubuntu@<存储机>
 MOOX_RELEASE_HOST_OVERSEAS=ubuntu@<海外机>
 ```
 
 主机命名统一为控制机（control）、存储机（storage）、海外机（overseas）、因子机（factor）；生产海外机的主机 ID 目前仍是 `compute-1`，
-改名步骤见 `docs/部署与运维.md` 第 1 节。实际地址见 `docs/计划/网关与服务部署重构设计.md` 的主机表；构建机是内网的编译机，也运行因子引擎。配置好后先只读验证：
+改名步骤见 `docs/部署与运维.md` 第 1 节。实际地址见 `docs/计划/网关与服务部署重构设计.md` 的主机表；因子机是内网机器，运行因子引擎。配置好后先只读验证：
 
 ```bash
 S=skills/moox/scripts/native-release.sh
@@ -43,18 +42,18 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 | 每台主机 | `host` | `host-gateway` `host-agent` |
 | 存储机、海外机 | `access` | `access` |
 | 海外机 | `trade`、`egress-proxy` | `trade`、`egress-proxy` |
-| 构建机 | systemd 用户单元 | `moox-factor-engine`（不在 `/data/moox` 里，见下） |
+| 因子机 | systemd 用户单元 | `moox-factor-engine`（不在 `/data/moox` 里，见下） |
 
 构建目标是 `scripts/build/build.sh` 的参数，和组件 id 基本一致（`host-gateway` 目标同时产出 server、cli 和 `moox-runtime`；`admin`、`monitor`、`collector`、
 `factor-mgr`、`strategy`、`trade`、`cloudnode` 目标同时产出对应的 `-cli`；`storage-cli`、`factor-engine`、`hostagent` 是独立目标）。
-CGO 只有 Storage 需要（DuckDB），脚本对 `storage*` 目标自动开启，其余一律关闭；**不要在 macOS 上交叉编译 Storage**。
+CGO 只有 Storage 需要（DuckDB），脚本对 `storage*` 目标自动在 Docker 编译镜像里开启 CGO 构建，其余一律在本机交叉编译且关闭 CGO；**不要在宿主机上直接 `CGO_ENABLED=1` 交叉编译 Storage**，需要先启动 Docker（macOS：`colima start`）。
 
 ## 标准流程（单个或几个组件）
 
 ```bash
 S=skills/moox/scripts/native-release.sh
 
-# 1. 构建：同步到构建机、构建、取回到 $TMPDIR/moox-release/<提交>/，并逐个校验 sha
+# 1. 构建：在本机构建（含 CGO 的目标在 Docker 里），产物放到 $TMPDIR/moox-release/<提交>/，并逐个校验 sha
 $S build collector
 
 # 2. 逐台逐组件安装并重启；输出里的 BACKUP 要记下来，回滚用
@@ -138,7 +137,7 @@ $S catalog-changed --host control                    # 用台账里最近一次 
 
 ## 不走 `native-release.sh` 的组件
 
-**因子引擎**（构建机上的 systemd 用户单元 `moox-factor-engine.service`，安装在 `~/moox/factor-engine/`）：构建目标 `factor-engine`，就在构建机上操作，不需要 scp。
+**因子引擎**（因子机上的 systemd 用户单元 `moox-factor-engine.service`，安装在 `~/moox/factor-engine/`）：构建目标 `factor-engine`，在本机构建后用 scp 传到因子机，再在因子机上替换。
 
 ```bash
 D=~/moox/factor-engine; TS=$(date +%Y%m%d%H%M%S)
@@ -178,9 +177,9 @@ EOF
 
 ## 陷阱清单
 
-- **`.gotmp` 丢失，旧二进制被原样重新部署**：rsync `--delete` 会删掉构建机上的 `.gotmp`，`go` 创建不了工作目录就失败，上一次的产物还留在 `bin/`。`build` 已经排除 `.gotmp` 并只认本次新产出的文件；手工构建时每次先 `mkdir -p bin .gotmp`，并核对返回的 `binary_sha256` 确实变了。
-- **构建的是工作区，不是提交**：未提交的改动会被同步过去，线上二进制就对不上任何提交。`build` 要求干净且已推送。
-- **构建机 Go 版本**：用 `.go-version` 指定的 toolchain（`$HOME/.local/go<版本>/bin`），并设 `GOTOOLCHAIN=local`，不要联网下载 toolchain。`-buildvcs=false`。
+- **旧二进制被原样重新部署**：构建没有产出新文件时，`build` 会直接报错（只认本次新产出的文件）；手工构建时也要核对产物的时间和 sha，不要把旧文件当成这次的成果。
+- **构建的是工作区，不是提交**：未提交的改动会被编进二进制，线上二进制就对不上任何提交。`build` 要求工作区干净且提交已推送。
+- **Go 版本**：用 `.go-version` 指定的 toolchain（`$HOME/.local/go<版本>/bin`，没有就运行 `bash scripts/build/install-go.sh`），并设 `GOTOOLCHAIN=local`，不要联网下载 toolchain。`-buildvcs=false`。
 - **`restart.sh` 输出多行日志，最后一行才是 JSON**；`status.sh` 同理。
 - **host 单元每台主机都有**，控制机上也有；改了网关就三台都要装，而且 cli 也要装。
 - **服务目录只发布一半**：见上节，会让三台主机同时出“网关心跳”告警。

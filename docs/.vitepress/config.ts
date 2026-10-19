@@ -56,6 +56,7 @@ export default defineConfig({
           { text: '文档索引', link: '/README' },
           { text: '当前实现与文档边界', link: '/实现状态' },
           { text: '总体设计', link: '/总体设计' },
+          { text: '构建手册', link: '/构建手册' },
           { text: '部署与运维', link: '/部署与运维' },
           { text: '元数据命名规范', link: '/元数据命名规范' },
         ],
