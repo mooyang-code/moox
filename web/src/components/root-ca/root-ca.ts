@@ -40,16 +40,16 @@ export function rootCaGuides(fileName: string = ROOT_CA_FILE_NAME): RootCaGuide[
       key: "macos",
       label: "macOS",
       commands: [
-        `openssl x509 -in ~/Downloads/${fileName} -noout -fingerprint -sha256`,
+        `[ "$(grep -c '^-----BEGIN ' ~/Downloads/${fileName})" = 1 ] && openssl x509 -in ~/Downloads/${fileName} -noout -fingerprint -sha256`,
         `sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain ~/Downloads/${fileName}`
       ],
-      note: "第一条核对指纹，第二条安装；会要求输入本机密码。装好后彻底退出并重新打开浏览器。"
+      note: "第一条确认文件里只有一张证书并核对指纹，第二条安装；会要求输入本机密码。装好后彻底退出并重新打开浏览器。"
     },
     {
       key: "linux",
       label: "Linux",
       commands: [
-        `openssl x509 -in ~/Downloads/${fileName} -noout -fingerprint -sha256`,
+        `[ "$(grep -c '^-----BEGIN ' ~/Downloads/${fileName})" = 1 ] && openssl x509 -in ~/Downloads/${fileName} -noout -fingerprint -sha256`,
         `sudo cp ~/Downloads/${fileName} /usr/local/share/ca-certificates/${fileName} && sudo update-ca-certificates`,
         `sudo cp ~/Downloads/${fileName} /etc/pki/ca-trust/source/anchors/${fileName} && sudo update-ca-trust`
       ],
@@ -59,6 +59,7 @@ export function rootCaGuides(fileName: string = ROOT_CA_FILE_NAME): RootCaGuide[
       key: "windows",
       label: "Windows",
       commands: [
+        `find /c "-----BEGIN " "%USERPROFILE%\\Downloads\\${fileName}"`,
         `certutil -dump "%USERPROFILE%\\Downloads\\${fileName}"`,
         `certutil -addstore -f Root "%USERPROFILE%\\Downloads\\${fileName}"`
       ],

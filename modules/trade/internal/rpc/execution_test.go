@@ -136,12 +136,12 @@ func TestPlaceManualOrderUsesServerOwnedApplicationPath(t *testing.T) {
 		) (store.OperatorActionRecord, store.OrderRecord, error) {
 			got = command
 			return store.OperatorActionRecord{
-					ActionID: "action-1", LogicalAccountID: "logical-1",
-					ActionType: "MANUAL_ORDER", Status: "COMPLETED",
-				}, store.OrderRecord{
-					OrderID: "order-1", OwnerType: "OPERATOR",
-					OwnerID: "action-1", LogicalAccountID: "logical-1",
-				}, nil
+				ActionID: "action-1", LogicalAccountID: "logical-1",
+				ActionType: "MANUAL_ORDER", Status: "COMPLETED",
+			}, store.OrderRecord{
+				OrderID: "order-1", OwnerType: "OPERATOR",
+				OwnerID: "action-1", LogicalAccountID: "logical-1",
+			}, nil
 		},
 	}
 	response, err := handler.PlaceManualOrder(

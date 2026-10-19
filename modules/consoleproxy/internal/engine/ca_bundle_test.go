@@ -72,8 +72,9 @@ func TestCABundleContainsCertGuideAndInstallers(t *testing.T) {
 	for _, text := range []string{
 		want, "https://106.53.107.122:9527/", "install.sh --ca-file", "install.ps1",
 		"不要索取、记录或输入用户的密码", "curl -k",
-		"不能证明包没被篡改", "自己计算证书指纹", "不要不加检查地运行包里的",
-		"迁移到新机器", "setup trust-browser", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
+		"不能证明包没被篡改", "再自己计算指纹", "不要不加检查地运行包里的",
+		"迁移到新机器", "setup trust-host", "setup trust-browser", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
+		"恰好只有一个 PEM 块", "grep -c '^-----BEGIN '",
 	} {
 		if !strings.Contains(guide, text) {
 			t.Fatalf("Agent 说明缺少 %q", text)

@@ -60,9 +60,10 @@ func TestSetupInitSummaryReportsBrowserTrustForInternalCA(t *testing.T) {
 	require.Equal(t, want, trust.Fingerprint)
 	require.Equal(t, tlstrust.CAPath(control.Address), trust.CAPath)
 	require.True(t, strings.HasPrefix(trust.CAPath, os.Getenv("HOME")))
-	for _, text := range []string{"https://" + control.Address + ":9527", "下载并安装根证书", "AGENT-INSTALL.md", "setup trust-browser"} {
+	for _, text := range []string{"https://" + control.Address + ":9527", "下载并安装根证书", "AGENT-INSTALL.md", "setup trust-host", "setup trust-browser", "不要不加检查地运行包内脚本"} {
 		require.Contains(t, trust.OtherMachines, text)
 	}
+	require.NotContains(t, trust.OtherMachines, "直接运行包内")
 }
 
 func TestTLSTrustFingerprintRejectsMissingOrInvalidFiles(t *testing.T) {

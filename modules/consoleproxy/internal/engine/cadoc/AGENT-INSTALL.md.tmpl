@@ -29,8 +29,13 @@
 2. **下载并安装**：在新机器上从登录页或“秘钥管理”页的“HTTPS 根证书”下载本包，按“直接安装”核对指纹并安装；也可以把本说明交给 Agent，让它按“给 Agent 的规则”操作。
 3. **重启浏览器并验证**：见“验证”一节。
 
-新机器上如果有 MooX 仓库、`moox.toml` 和控制机的 SSH 权限，更快也更可信：`moox-cli setup trust-browser --file moox.toml`
-会经 SSH 从控制机取回根证书（不经过 HTTPS，不存在被中间人替换的问题）并安装到本机。
+新机器上如果有 MooX 仓库、`moox.toml` 和控制机的 SSH 权限，更快也更可信，会经 SSH 从控制机取回根证书（不经过 HTTPS，不存在被中间人替换的问题）并安装到本机。
+`moox-cli` 只信任它自己记录的 SSH 主机指纹，新机器上第一次要先记录（指纹要通过可信渠道拿到，不要照抄屏幕上看到的）：
+
+```bash
+moox-cli setup trust-host --file moox.toml --host control --fingerprint <已核验的 SSH 主机指纹>
+moox-cli setup trust-browser --file moox.toml
+```
 
 ## 先看清可信边界
 
@@ -41,8 +46,10 @@
 ## 给 Agent 的规则
 
 1. **先拿到用户确认的指纹，再动手。** 向用户索要他们通过可信渠道确认的指纹（本包生成时记录的是上面那一串，仅供对照）。用户没有确认时，停下来，不要安装。
-2. **自己计算证书指纹，不要读 `root.sha256`。** 用 `openssl x509 -in moox-caddy-root.crt -noout -fingerprint -sha256`（Windows 用 `certutil -dump`）
-   算出实际指纹，和用户确认的指纹逐字节比较，不一致就停止并告诉用户。
+2. **确认文件里只有一张证书，再自己计算指纹，不要读 `root.sha256`。** `openssl x509` 只计算第一张证书的指纹，而安装命令会复制整个文件，
+   攻击者可以在正确的证书后面追加另一张根证书。所以先确认 `moox-caddy-root.crt` 里恰好只有一个 PEM 块（下面命令里的计数必须是 1），
+   再用 `openssl x509 -in moox-caddy-root.crt -noout -fingerprint -sha256`（Windows 用 `certutil -dump`）算出实际指纹，
+   和用户确认的指纹逐字节比较，任何一步不一致就停止并告诉用户。
 3. **优先用下面“直接安装”的系统命令，只安装 `moox-caddy-root.crt` 这一个文件。** 不要不加检查地运行包里的 `install.sh` / `install.ps1`：
    它们和证书来自同一个压缩包，同样可能被替换，而且会通过 `sudo` 获得管理员权限。确实要用，先完整阅读脚本，确认只做“检查证书、写入系统信任库”，
    最好再和 MooX 仓库里的 `scripts/deploy/install-caddy-ca.sh` 比较是否一致。
@@ -57,14 +64,14 @@
 ### macOS
 
 ```bash
-openssl x509 -in ./moox-caddy-root.crt -noout -fingerprint -sha256
+[ "$(grep -c '^-----BEGIN ' ./moox-caddy-root.crt)" = 1 ] && openssl x509 -in ./moox-caddy-root.crt -noout -fingerprint -sha256
 sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain ./moox-caddy-root.crt
 ```
 
 ### Linux
 
 ```bash
-openssl x509 -in ./moox-caddy-root.crt -noout -fingerprint -sha256
+[ "$(grep -c '^-----BEGIN ' ./moox-caddy-root.crt)" = 1 ] && openssl x509 -in ./moox-caddy-root.crt -noout -fingerprint -sha256
 # Debian / Ubuntu
 sudo cp ./moox-caddy-root.crt /usr/local/share/ca-certificates/moox-caddy-root.crt && sudo update-ca-certificates
 # RHEL / Fedora
@@ -76,11 +83,12 @@ sudo cp ./moox-caddy-root.crt /etc/pki/ca-trust/source/anchors/moox-caddy-root.c
 在管理员命令提示符中：
 
 ```bat
+find /c "-----BEGIN " moox-caddy-root.crt
 certutil -dump moox-caddy-root.crt
 certutil -addstore -f Root moox-caddy-root.crt
 ```
 
-`certutil -dump` 输出里的 `Cert Hash(sha256)` 是实际指纹，核对后再执行第二条。
+`find /c` 的计数必须是 1（文件里只有一个 PEM 块）；`certutil -dump` 输出里的 `Cert Hash(sha256)` 是实际指纹，两者都核对无误后再执行最后一条。
 
 ## 包内脚本（可选，使用前先阅读）
 

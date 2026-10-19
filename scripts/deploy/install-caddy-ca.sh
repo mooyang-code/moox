@@ -13,6 +13,9 @@ done
 
 [[ -f "${CA_FILE}" ]] || { echo 'CA certificate file is required' >&2; exit 1; }
 grep -q -- 'PRIVATE KEY' "${CA_FILE}" && { echo 'private keys are forbidden' >&2; exit 1; }
+# 指纹只覆盖第一张证书，而安装会复制整个文件，所以文件里必须恰好只有一个 PEM 块，防止夹带额外的根证书。
+[[ "$(grep -c -- '^-----BEGIN ' "${CA_FILE}")" == 1 ]] && grep -q -- '^-----BEGIN CERTIFICATE-----' "${CA_FILE}" ||
+  { echo 'CA file must contain exactly one certificate' >&2; exit 1; }
 openssl x509 -in "${CA_FILE}" -noout -text | grep -Eq 'CA:TRUE' || { echo 'certificate is not a CA' >&2; exit 1; }
 fingerprint=$(openssl x509 -in "${CA_FILE}" -noout -fingerprint -sha256 | cut -d= -f2)
 fingerprint_hex=${fingerprint//:/}
