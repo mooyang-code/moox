@@ -161,6 +161,50 @@ func rawBlock(payload []byte, last bool) []byte {
 	return append([]byte{byte(h), byte(h >> 8), byte(h >> 16)}, payload...)
 }
 
+// compressedRLEBlock 构造一个“零序列、RLE 字面量”的压缩块：输出 size 个相同字节，块本身只有 8 字节。
+// 库对这种块直接 append 字面量，是此前复审指出的缓冲越界路径。
+func compressedRLEBlock(size int, last bool) []byte {
+	content := []byte{
+		byte(0x01 | 0x0c | (size&0x0f)<<4), byte(size >> 4), byte(size >> 12), // 字面量头：RLE，3 字节大小格式
+		'x',  // RLE 的一个字节
+		0x00, // 序列数 0
+	}
+	h := uint32(len(content))<<3 | 2<<1
+	if last {
+		h |= 1
+	}
+	return append([]byte{byte(h), byte(h >> 8), byte(h >> 16)}, content...)
+}
+
+// 压缩块里的零序列 RLE 字面量：声明 64MB、塞 513 个 128KB 的块，总输入只有几 KB。
+// 库在每个块之后检查累计输出，超过声明长度即报错；输出缓冲带一个块的余量，所以拒绝之前不会扩容。
+func TestZeroSequenceCompressedBlocksCannotInflateTheBuffer(t *testing.T) {
+	const limit = 64 << 20
+	decoder := NewDecoder(UseTRPC, limit)
+	blocks := make([][]byte, 0, 513)
+	for i := 0; i < 513; i++ {
+		blocks = append(blocks, compressedRLEBlock(maxBlock, i == 512))
+	}
+	attack := rawFrame(limit, blocks...)
+	require.Less(t, len(attack), 8<<10, "攻击输入只有几 KB")
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, err := decoder.Decode(attack)
+	runtime.ReadMemStats(&after)
+	require.Error(t, err)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(limit+(2<<20)), "分配量不能超过声明长度加一个块的余量")
+
+	// 同样的块数、合计刚好等于声明长度时是合法帧（最后一块输出刚好填满）。
+	ok := make([][]byte, 0, 512)
+	for i := 0; i < 512; i++ {
+		ok = append(ok, compressedRLEBlock(maxBlock, i == 511))
+	}
+	got, err := decoder.Decode(rawFrame(limit, ok...))
+	require.NoError(t, err)
+	require.Len(t, got, limit)
+}
+
 // 原始块和 RLE 块是直接追加到输出缓冲的：声明长度小、块输出大的帧，必须在分配之前被拒绝，
 // 不能等缓冲被扩到约 1.25 倍再报错；拼接帧同理。用实际分配量断言，而不只是最终返回错误。
 func TestAttackFramesAreRejectedBeforeAllocation(t *testing.T) {

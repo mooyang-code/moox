@@ -189,13 +189,16 @@ func (c *fakePlanCloud) LatestPackage(context.Context, string, string) (string, 
 
 func (c *fakePlanCloud) SubmitDeployNodes(_ context.Context, _ string, nodeIDs []string, packageID string, _ *scfinvoker.CollectorPublishLease) (string, error) {
 	for _, id := range nodeIDs {
-		if node, ok := c.backfill[id]; ok {
-			node.PackageID = packageID
-			c.backfill[id] = node
-		} else {
-			node := c.nodes[id]
-			node.PackageID = packageID
-			c.nodes[id] = node
+		// 升级失败的函数留在旧代码包上，与真实云端一致。
+		if !c.failNodes[id] {
+			if node, ok := c.backfill[id]; ok {
+				node.PackageID = packageID
+				c.backfill[id] = node
+			} else {
+				node := c.nodes[id]
+				node.PackageID = packageID
+				c.nodes[id] = node
+			}
 		}
 		c.upgraded = append(c.upgraded, id)
 	}
@@ -1463,6 +1466,67 @@ func TestEnableAllUpgradesFunctionCodeBeforeEnablingTimers(t *testing.T) {
 	for name, upgraded := range enabledAfterUpgrade {
 		require.True(t, upgraded, "函数 %s 启用定时器时代码必须已经是新版本", name)
 	}
+	for name := range h.cloud.nodes {
+		require.True(t, h.cloud.patches[name].GetTimerEnabled(), name)
+	}
+}
+
+// 升级失败或仍在进行时，EnableAll 读回确认仍有函数在旧代码包上：返回 errCodeUpgradePending，既不启用定时器也不下发环境。
+func TestEnableAllRefusesToEnableWhileFunctionsStayOnTheOldPackage(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	require.Nil(t, h.open())
+	done, err := r.DisableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	var stuck string
+	for name, patch := range h.cloud.patches {
+		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, PackageID: "pkg-old", Metadata: map[string]any{
+			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": false,
+			"timer_available_status": "Disabled", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
+		}}
+		stuck = name
+	}
+	r.Deploy.PackageID = "pkg-new"
+	before := map[string]bool{}
+	for name, patch := range h.cloud.patches {
+		before[name] = patch.GetTimerEnabled()
+	}
+
+	// 某个函数的升级失败：不能启用。
+	h.cloud.failNodes[stuck] = true
+	done, err = r.EnableAll(context.Background())
+	require.ErrorIs(t, err, errCodeUpgradePending)
+	require.False(t, done)
+	for name, patch := range h.cloud.patches {
+		require.Equal(t, before[name], patch.GetTimerEnabled(), "代码没升级完，函数 %s 的定时器不能被启用", name)
+	}
+
+	// 作业仍在运行（升级请求已提交、云端还没完成）：同样不能启用。
+	h.cloud.failNodes[stuck] = false
+	node := h.cloud.nodes[stuck]
+	node.PackageID = "pkg-old"
+	h.cloud.nodes[stuck] = node
+	r.aux.track(auxJob{id: "job-running", kind: auxJobKindUpgrade, functions: []string{stuck}, at: r.now()})
+	h.cloud.running = map[string]bool{"job-running": true}
+	_, err = r.EnableAll(context.Background())
+	require.ErrorIs(t, err, errCodeUpgradePending)
+
+	// 作业结束、代码已是新包：启用。
+	h.cloud.running["job-running"] = false
+	node.PackageID = "pkg-new"
+	h.cloud.nodes[stuck] = node
+	for name, n := range h.cloud.nodes {
+		n.PackageID = "pkg-new"
+		h.cloud.nodes[name] = n
+	}
+	done, err = r.EnableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
 	for name := range h.cloud.nodes {
 		require.True(t, h.cloud.patches[name].GetTimerEnabled(), name)
 	}

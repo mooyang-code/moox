@@ -2,6 +2,7 @@ package marketfetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -446,6 +447,12 @@ func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *Pl
 		}
 		if enabling {
 			done, err := reconciler.EnableAll(tickCtx)
+			if errors.Is(err, errCodeUpgradePending) {
+				// 函数代码还没升级完：对账会把新环境和定时器启用推下去，旧代码读不了新环境，本轮整体跳过。
+				log.WarnContextf(ctx, "collector fetch plan waiting for function code upgrade space=%s: %v", space, err)
+				cancel()
+				continue
+			}
 			if err != nil {
 				log.WarnContextf(ctx, "collector fetch plan enabling timers space=%s failed: %v", space, err)
 			} else if done {
@@ -468,15 +475,39 @@ func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *Pl
 	}
 }
 
+// errCodeUpgradePending 表示仍有函数运行着比配置更旧的代码包：此时不能启用定时器，也不能下发新环境。
+var errCodeUpgradePending = errors.New("function code upgrade pending")
+
 // upgradeBeforeEnable 刷新配置的代码包并升级落后的函数；调用方已持有 r.mu。
+// 升级作业是异步的、失败也只记日志，所以最后要读回云端确认没有任何函数仍在旧代码包上，
+// 否则返回 errCodeUpgradePending，调用方本轮既不启用定时器也不继续对账。
 func (r *PlanReconciler) upgradeBeforeEnable(ctx context.Context) error {
 	if err := r.refreshPackage(ctx); err != nil {
 		return r.fail("package", err)
 	}
 	upgradeCtx, cancel := upgradeContext(ctx)
-	defer cancel()
-	if err := r.upgradeLaggingFunctions(upgradeCtx); err != nil {
-		return fmt.Errorf("upgrade function code before enabling timers: %w", err)
+	upgradeErr := r.upgradeLaggingFunctions(upgradeCtx)
+	cancel()
+	if upgradeErr != nil {
+		log.WarnContextf(ctx, "collector fetch plan code upgrade before enabling timers space=%s failed: %v", r.SpaceID, upgradeErr)
+	}
+	pkg := strings.TrimSpace(r.packageID())
+	if pkg == "" {
+		return nil
+	}
+	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
+	if err != nil {
+		return err
+	}
+	prefix := "moox-fetch" + PlanFleetMarker + planNameSanitizer.Replace(strings.ToLower(r.SpaceID)) + "-"
+	stale := 0
+	for _, node := range nodes {
+		if strings.HasPrefix(node.NodeID, prefix) && strings.TrimSpace(node.PackageID) != "" && node.PackageID != pkg {
+			stale++
+		}
+	}
+	if stale > 0 {
+		return fmt.Errorf("%w: %d functions are still on an older code package", errCodeUpgradePending, stale)
 	}
 	return nil
 }

@@ -25,8 +25,11 @@ const (
 	// MaxFrameBytes 是进程级 tRPC 帧上限，也是帧内解压后正文的上限。
 	MaxFrameBytes = 64 << 20
 
-	// maxWindow 是编码窗口，也是解码允许的最大窗口。
+	// maxWindow 是编码窗口。
 	maxWindow = 1 << 20
+
+	// maxBlock 是 zstd 块的最大输出（128KB）。
+	maxBlock = 128 << 10
 )
 
 var (
@@ -145,8 +148,10 @@ func (d *Decoder) Decode(src []byte) ([]byte, error) {
 		}
 		dictName = v.name
 	}
-	// 容量至少 1：声明长度 0 的帧也要有一个非零容量的缓冲，累计上限才有意义。
-	buffer := make([]byte, 0, max(int(header.FrameContentSize), 1))
+	// 容量 = 声明长度 + 一个块（128KB）的余量。库在每个块解完之后检查累计输出是否超过声明长度（超过即报错），
+	// 一个块最多输出 128KB，所以输出缓冲永远不会越过这个容量、也就不会触发 append 扩容（扩容会一次多分配约 25%，
+	// 并在新旧缓冲同时存在时翻倍占用）；压缩块里的序列执行另受剩余容量限制。声明长度为 0 的帧也有非零容量。
+	buffer := make([]byte, 0, int(header.FrameContentSize)+maxBlock+256)
 	out, err := d.dec.DecodeAll(src, buffer)
 	if err != nil {
 		reason := "corrupt"
@@ -178,7 +183,6 @@ func (d *Decoder) fail(reason string, err error) error {
 // 追加越过容量时先扩容、之后才报错，一个几 KB 的输入就能让缓冲在拒绝之前翻倍。块头只有 3 字节、
 // 块的输出大小能直接读出（原始块和 RLE 块），所以这里先把形状查清，库只会看到不会越界的单帧。
 func checkFrameShape(src []byte, header *zstd.Header) error {
-	const maxBlock = 128 << 10
 	pos := header.HeaderSize
 	var literal uint64 // 原始块与 RLE 块的输出字节数
 	for {
