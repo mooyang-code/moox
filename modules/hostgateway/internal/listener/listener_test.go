@@ -12,7 +12,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/testcert"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"github.com/stretchr/testify/require"
 	_ "trpc.group/trpc-go/trpc-go"
@@ -296,22 +295,4 @@ func TestRemoteConnectionQuotaLastsUntilClose(t *testing.T) {
 	require.True(t, quota.reserve("192.0.2.10"))
 	quota.releaseConn("192.0.2.9")
 	require.True(t, quota.reserve("192.0.2.9"))
-}
-
-// 手工创建的 tRPC 服务必须设置空闲超时，否则对端消失后残留的连接永远不会被回收。
-func TestTRPCReclaimsIdleConnections(t *testing.T) {
-	previous := serverIdleTimeout
-	serverIdleTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { serverIdleTimeout = previous })
-	require.Equal(t, 15*time.Minute, servicecatalog.HostGatewayServerIdleTimeout)
-
-	opened, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	echo(t, opened)
-	conn, err := net.Dial("tcp", opened.Addr().String())
-	require.NoError(t, err)
-	defer conn.Close()
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(3*time.Second)))
-	_, err = conn.Read(make([]byte, 1))
-	require.ErrorIs(t, err, io.EOF, "空闲连接应被服务端关闭，而不是读超时")
 }

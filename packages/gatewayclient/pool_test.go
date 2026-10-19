@@ -9,16 +9,15 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
 	"trpc.group/trpc-go/trpc-go/pool/connpool"
 )
 
-// 客户端空闲超时必须明显小于服务端回收时间：TLS 连接复用前没有探测，客户端先回收才不会把请求发到已关闭的连接上。
-func TestClientIdleTimeoutStaysBelowServer(t *testing.T) {
-	require.Less(t, clientIdleTimeout+5*time.Minute, servicecatalog.HostGatewayServerIdleTimeout, "至少留 5 分钟余量")
+// 客户端空闲超时必须大于最长的调用间隔（采集函数每分钟一次），否则连接会在两次调用之间被回收，每分钟重建。
+func TestClientIdleTimeoutCoversTheCollectionInterval(t *testing.T) {
+	require.Greater(t, clientIdleTimeout, 2*time.Minute)
 	require.Less(t, clientIdleTimeout, clientMaxLifetime)
 }
 
@@ -26,6 +25,9 @@ func TestPoolConfigValidate(t *testing.T) {
 	require.NoError(t, PoolConfig{}.Validate())
 	require.NoError(t, PoolConfig{MinIdle: 16, MaxIdle: 32}.Validate())
 	require.NoError(t, PoolConfig{MinIdle: 16}.Validate(), "MaxIdle 省略时使用默认值")
+	require.NoError(t, PoolConfig{MinIdle: 32}.Validate())
+	require.Error(t, PoolConfig{MinIdle: 64}.Validate(), "超过默认 max_idle(32) 会形成补建后关闭的循环")
+	require.NoError(t, PoolConfig{MinIdle: 64, MaxIdle: 64}.Validate())
 	require.Error(t, PoolConfig{MinIdle: -1}.Validate())
 	require.Error(t, PoolConfig{MinIdle: 65}.Validate())
 	require.Error(t, PoolConfig{MaxIdle: 129}.Validate())
@@ -343,8 +345,7 @@ func TestRetryAvoidsTheMainPoolIdleConnections(t *testing.T) {
 	require.Eventually(t, func() bool { return accepted.Load() == 2 }, 3*time.Second, 10*time.Millisecond, "重试不复用主池的空闲连接")
 	retryAgain := getAs(t, pool, address, 1)
 	require.NoError(t, retryAgain.Close())
-	time.Sleep(100 * time.Millisecond)
-	require.EqualValues(t, 2, accepted.Load(), "重试子池自己的连接可以复用")
+	require.Eventually(t, func() bool { return accepted.Load() == 3 }, 3*time.Second, 10*time.Millisecond, "重试连接用完即关，下一次重试也现建，不复用上一次重试的连接")
 }
 
 func TestWarmupAvoidsTheMinuteBoundary(t *testing.T) {

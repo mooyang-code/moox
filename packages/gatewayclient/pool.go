@@ -25,8 +25,8 @@ const (
 	defaultTunedMaxIdle = 32
 	legacyMaxIdle       = 8
 
-	// clientIdleTimeout 必须明显小于服务端的回收时间（servicecatalog.HostGatewayServerIdleTimeout），
-	// 见 TestClientIdleTimeoutStaysBelowServer。
+	// clientIdleTimeout 是客户端回收空闲连接的时间，必须大于最长的调用间隔（采集函数每分钟一次）。
+	// 网关服务端不回收空闲连接，连接是否还活着靠 TCP keepalive 和调用时的重试兜底。
 	clientIdleTimeout = 8 * time.Minute
 	// clientMaxLifetime 定期轮换老连接，避免长期持有被中间设备悄悄丢弃的连接。
 	clientMaxLifetime = 30 * time.Minute
@@ -52,8 +52,13 @@ func (c PoolConfig) Validate() error {
 	if c.MaxIdle < 0 || c.MaxIdle > maxPoolMaxIdle {
 		return errors.New("gateway_client.pool.max_idle must be between 0 and 128")
 	}
-	if c.MaxIdle != 0 && c.MaxIdle < c.MinIdle {
-		return errors.New("gateway_client.pool.max_idle must not be below min_idle")
+	// 按生效的 max_idle（省略时是默认值）判断：min_idle 超过它，预热每轮取满再归还时会关掉多出的连接，形成补建后关闭的循环。
+	maxIdle := c.MaxIdle
+	if maxIdle == 0 {
+		maxIdle = defaultTunedMaxIdle
+	}
+	if c.MinIdle > maxIdle {
+		return errors.New("gateway_client.pool.min_idle must not exceed max_idle (default 32)")
 	}
 	return nil
 }
@@ -66,9 +71,15 @@ type poolSettings struct {
 	maxLifetime time.Duration
 	// fastConnect 为 true 时请求路径的拨号超时受 connectBudget 约束，建连失败可以在预算内重试。
 	fastConnect bool
+	// forceClose 为 true 时连接用完即关，不归还空闲池（重试子池：每次重试都现建连接）。
+	forceClose bool
 }
 
 func legacyPoolSettings() poolSettings { return poolSettings{maxIdle: legacyMaxIdle} }
+
+// retryPoolSettings 用于重试子池：重试往往是因为主池里取到了已失效的连接（网关重启后），
+// 重试连接如果成功后被复用，下一次重试仍可能取到同一批已失效的连接，所以用完即关。
+func retryPoolSettings() poolSettings { return poolSettings{maxIdle: legacyMaxIdle, forceClose: true} }
 
 // tunedPoolSettings 用于连接本机/跨主机网关的客户端（Internal 与 Tunnel 模式）。
 func tunedPoolSettings(c PoolConfig) poolSettings {
@@ -86,6 +97,9 @@ func (s poolSettings) options(dial connpool.DialFunc) []connpool.Option {
 	}
 	if s.maxLifetime > 0 {
 		options = append(options, connpool.WithMaxConnLifetime(s.maxLifetime))
+	}
+	if s.forceClose {
+		options = append(options, connpool.WithForceClose(true))
 	}
 	return options
 }

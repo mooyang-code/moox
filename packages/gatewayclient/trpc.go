@@ -88,7 +88,7 @@ func (p *rpcPool) Get(network, address string, opts connpool.GetOptions) (net.Co
 	if pool == nil {
 		settings := p.settings
 		if retry {
-			settings = legacyPoolSettings()
+			settings = retryPoolSettings()
 		}
 		pool = connpool.NewConnectionPool(settings.options(p.dial)...)
 		p.pools[key] = pool

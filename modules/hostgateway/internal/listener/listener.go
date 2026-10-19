@@ -15,7 +15,6 @@ import (
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
 	"github.com/mooyang-code/moox/packages/gatewayclient/relay"
 	"github.com/mooyang-code/moox/packages/healthz"
-	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -23,9 +22,6 @@ import (
 )
 
 const handshakeTimeout = 5 * time.Second
-
-// serverIdleTimeout 是 tRPC 服务端回收空闲连接的时间；测试里缩短它来验证回收行为。
-var serverIdleTimeout = servicecatalog.HostGatewayServerIdleTimeout
 
 type Listeners struct {
 	Remote net.Listener
@@ -105,9 +101,6 @@ func TRPC(opened net.Listener, serviceName string, gates ...*healthz.DrainGate) 
 		server.WithTransport(transport.NewServerTransport()),
 		server.WithListener(opened), server.WithAddress(opened.Addr().String()),
 		server.WithNetwork("tcp"), server.WithProtocol("trpc"),
-		// 手工创建的服务不读 trpc_go.yaml 的 idletime，默认不回收空闲连接；对端消失（崩溃、NAT 丢弃）后会残留半死连接。
-		// 回收时间必须明显大于客户端连接池的空闲超时，见 servicecatalog.HostGatewayServerIdleTimeout。
-		server.WithIdleTimeout(serverIdleTimeout),
 		server.WithServiceName(serviceName), server.WithCurrentSerializationType(codec.SerializationTypeNoop),
 	)...)
 }
