@@ -652,7 +652,7 @@ RPC 用窗口 B 评估，事件用 10-19 较晚的块（rows、misc，约 4 小�
 | 13:37 | 事件排空：EventBus `total_pending` 连续三次为 0 |
 | 13:37～13:39 | 主机网关（控制机最先，其余各隔 15 秒）、主机代理、两处 Access |
 | 13:39～13:41 | 存储 node、primary，隔 40 秒后 view |
-| 13:41 | EventBus：暂停看护、停止、把 `jetstream` 数据目录改名为 `jetstream.before-zstd-20261019064134`（留作回滚，确认稳定后删除）、装新二进制、启动，三个流自动重建 |
+| 13:41 | EventBus：暂停看护、停止、把 `jetstream` 数据目录改名为 `jetstream.before-zstd-20261019064134`（留作回滚，发布当天已删除）、装新二进制、启动，三个流自动重建 |
 | 13:42～13:44 | 控制机 admin、monitor、cloudnode、factor-mgr、strategy、archive-mgr、collector |
 | 13:44 | 海外机 egress-proxy、trade；编译机 archive-worker、factor-engine |
 | 13:45 | 重启 storage-view：它在 EventBus 清空之前启动，被清掉的消费者没有重建，日志刷“no responders” |
@@ -698,6 +698,6 @@ EventBus 这一行没有下降：这条链路的字节大部分是 NATS 拉取�
 
 ### 12.4 后续
 
-- `jetstream.before-zstd-*`（1.9GB，在控制机 EventBus 数据目录下）确认稳定一天后删除。
+- `jetstream.before-zstd-*`（1.9GB，在控制机 EventBus 数据目录下）已按用户要求在发布当天删除；此后回滚只能靠各单元的 `binary-backup-zstd-53b3c40a-*` 旧二进制，旧事件流数据不可恢复。
 - SCF 函数内存只配了 128MB，新代码多了字典和编码器（并发 1，约 7～12MB）；目前没有发现超限，仍应观察 SCF 的内存峰值。
 - 接入 A 股等新空间后，按第 6 节流程训练专用字典；新增字典和改绑定分两次发布。
