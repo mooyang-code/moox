@@ -95,7 +95,11 @@ proto-check:
 check-go-module-graph:
 	bash scripts/ci/check-go-module-graph.sh
 
-verify-pr: test-deployment-packages test-host-placement-deployment test-host-identity-bundles test-unit-install test-unit-runtime test-unit-bootstrap check-go-module-graph proto-check test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
+# proto-check 需要 trpc-open、protoc、protoc-gen-go 等代码生成工具，且要求生成结果与提交逐字节一致。
+# GitHub 托管运行器上没有这些工具：这里用 SKIP_PROTO_CHECK=1 跳过，完整检查由自托管运行器（verify-trusted）执行。
+PROTO_CHECK := $(if $(SKIP_PROTO_CHECK),,proto-check)
+
+verify-pr: test-deployment-packages test-host-placement-deployment test-host-identity-bundles test-unit-install test-unit-runtime test-unit-bootstrap check-go-module-graph $(PROTO_CHECK) test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-storage-linux-contract test-collector-scf-package-contract
 
 verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-caddy test-skill-contracts
 	CI=true pnpm install --frozen-lockfile
