@@ -62,8 +62,8 @@ type Config struct {
 	AccessAddress    string
 	AccessInstanceID string
 	Serialization    int
-	// Compression 控制跨主机/经 Access 的公网请求体压缩：空或 none 不压缩，gzip 压缩
-	// 达到阈值的请求体；服务端按请求的压缩方式同样压缩响应。回环调用从不压缩。
+	// Compression 控制跨主机调用（经主机网关、Access 或 SSH 隧道）的压缩：空或 gzip 压缩请求，
+	// 服务端按请求的压缩方式同样压缩响应；none 关闭（例如同地域内网、调用方 CPU 很紧时）。回环调用从不压缩。
 	Compression string
 	// Pool 调整连接本机/跨主机网关的连接池（Internal 与 Tunnel 模式）；零值使用默认。
 	Pool             PoolConfig
@@ -142,7 +142,7 @@ const (
 	CompressionGzip = "gzip"
 )
 
-// ValidCompression 判断压缩配置取值；空串等同 none。
+// ValidCompression 判断压缩配置取值；空串等同 gzip。
 func ValidCompression(value string) bool {
 	return value == "" || value == CompressionNone || value == CompressionGzip
 }
@@ -490,7 +490,7 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 
 func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoint, error) {
 	if c.config.Mode == External {
-		return endpoint{address: c.config.AccessAddress, target: c.config.AccessInstanceID, compress: c.config.Compression == CompressionGzip}, nil
+		return endpoint{address: c.config.AccessAddress, target: c.config.AccessInstanceID, compress: c.compress()}, nil
 	}
 	c.mu.RLock()
 	// Published directory maps are immutable. Keep one coherent snapshot without
@@ -503,7 +503,10 @@ func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoi
 	}
 	slices.Sort(hosts)
 	if i := slices.Index(hosts, c.config.LocalHostID); i >= 0 {
-		hosts = append([]string{hosts[i]}, append(hosts[:i], hosts[i+1:]...)...)
+		// 本机优先。不能写成 append([]string{hosts[i]}, append(hosts[:i], hosts[i+1:]...)...)：内层 append 原地改写底层数组，
+		// 而字面量里的 hosts[i] 与内层 append 的求值先后不确定，本机排在第一位时会读到被覆盖的值，把调用发到远端主机。
+		local := hosts[i]
+		hosts = append([]string{local}, slices.Delete(hosts, i, i+1)...)
 	}
 	chosen := hosts[0]
 	if chosen == previous && len(hosts) > 1 {
@@ -520,13 +523,14 @@ func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoi
 		if !loopbackAddress(address) {
 			return endpoint{}, fmt.Errorf("SSH tunnel returned a non-loopback endpoint")
 		}
-		return endpoint{address: address, target: chosen}, nil
+		// 隧道的本地端口只是 SSH 转发入口，实际经公网到达目标主机，按跨主机调用压缩。
+		return endpoint{address: address, target: chosen, compress: c.compress()}, nil
 	}
 	if chosen == c.config.LocalHostID {
 		return endpoint{address: c.config.LocalAddress, target: chosen}, nil
 	}
 	host := directory.Hosts[chosen]
-	return endpoint{address: net.JoinHostPort(host.Address, "11003"), target: chosen, caFile: c.config.CAFile, serverName: chosen, compress: c.config.Compression == CompressionGzip}, nil
+	return endpoint{address: net.JoinHostPort(host.Address, "11003"), target: chosen, caFile: c.config.CAFile, serverName: chosen, compress: c.compress()}, nil
 }
 
 // relayEndpoint 为只能出站的主机构造经 control 中转的端点；端到端 TLS 仍校验目标主机身份。
@@ -560,8 +564,11 @@ func (c *Client) relayEndpoint(ctx context.Context, directory servicecatalog.Dir
 		}
 		route.controlAddress = net.JoinHostPort(control.Address, port)
 	}
-	return endpoint{address: relayAddress(target), target: target, caFile: c.config.CAFile, serverName: target, compress: c.config.Compression == CompressionGzip, relay: route}, nil
+	return endpoint{address: relayAddress(target), target: target, caFile: c.config.CAFile, serverName: target, compress: c.compress(), relay: route}, nil
 }
+
+// compress 报告跨主机调用是否压缩：默认压缩，只有显式 none 才关闭。
+func (c *Client) compress() bool { return c.config.Compression != CompressionNone }
 
 func validAddress(address string) bool {
 	host, port, err := net.SplitHostPort(address)

@@ -2,9 +2,6 @@ gateway_client:
   caller: access
   key_id: ""
   key_file: ../../secrets/caller-access.key
-  # 跨主机一跳压缩请求体：海外机（香港）到存储机（南京）出口约 3 Mbit/s，未压缩的整分钟突发约 600KB 会排队丢包、
-  # 重传超时拖到数秒；压缩后约 100KB，没有重传。回环调用从不压缩，存储机上的 Access 不受影响。
-  compression: gzip
   # 整分钟突发：约 42 个采集函数在 1.5 秒内错峰写入，实测峰值并发约 24 条；保持 32 条连接常驻（预热），
   # 请求路径上不再现建跨境 TLS 连接，空闲上限 64 留出余量。
   pool:

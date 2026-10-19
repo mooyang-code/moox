@@ -22,9 +22,6 @@ import (
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-// 小于该长度的请求体压缩收益不抵 CPU 开销。
-const minCompressBytes = 1024
-
 // The SDK pool keys connections by address and protocol only. Partition its
 // factories by TLS identity so a previously authenticated socket cannot bypass
 // a different CA or server name on a later call to the same address.
@@ -208,7 +205,8 @@ func (p *rpcPool) invoke(ctx context.Context, ep endpoint, service, method strin
 		}
 		options = append(options, client.WithTimeout(remaining), client.WithDialTimeout(dialTimeout))
 	}
-	if ep.compress && len(body) >= minCompressBytes {
+	// 不设请求体大小门槛：服务端按请求的压缩方式压缩响应，读接口请求很小、响应很大，小请求也必须标记压缩。
+	if ep.compress {
 		options = append(options, client.WithCompressType(codec.CompressTypeGzip))
 	}
 	if ep.relay != nil {

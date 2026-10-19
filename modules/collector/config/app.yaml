@@ -1,6 +1,5 @@
 gateway_client:
   caller: collector
-  compression: gzip
   key_id: ""
   key_file: ../../secrets/caller-collector.key
 # MooX Collector control-plane service configuration.
@@ -88,6 +87,7 @@ scf_access:
   caller: scf-collector
   key_id: ""
   key_file: ../../secrets/caller-scf-collector.key
-  # 可选：none（默认）或 gzip，随环境变量 MOOX_GATEWAY_COMPRESSION 下发给 SCF。
+  # 随环境变量 MOOX_GATEWAY_COMPRESSION 下发给 SCF：省略或 none 不压缩，gzip 压缩。SCF 与 Access 在同地域 VPC 内网，
+  # 压缩没有带宽收益、只消耗 128MB 函数的 CPU，所以关闭；跨境一跳由 Access 自己压缩。
   compression: none
 scf_access_routes: {}
