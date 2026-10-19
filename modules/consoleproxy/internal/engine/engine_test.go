@@ -186,6 +186,22 @@ func TestHTTPSRoutesTrustAndCAContinuity(t *testing.T) {
 			t.Errorf("forbidden path %q returned %d", path, rsp.StatusCode)
 		}
 	}
+	// 叶子证书寿命要拉长：默认 12 小时会让只对当前证书点过“继续访问”的浏览器每隔几小时就在后台请求上报 Network Error。
+	leafRsp, err := client.Get(base + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafRsp.Body.Close()
+	chain := leafRsp.TLS.PeerCertificates
+	if lifetime := chain[0].NotAfter.Sub(chain[0].NotBefore); lifetime < 80*24*time.Hour || lifetime > 91*24*time.Hour {
+		t.Fatalf("叶子证书寿命 = %s，期望约 90 天", lifetime)
+	}
+	if len(chain) < 2 {
+		t.Fatal("服务端应同时给出中间证书")
+	}
+	if lifetime := chain[1].NotAfter.Sub(chain[1].NotBefore); lifetime < 300*24*time.Hour {
+		t.Fatalf("中间证书寿命 = %s，期望约 1 年", lifetime)
+	}
 	wrongHost, _ := http.NewRequest(http.MethodGet, base+"/", nil)
 	wrongHost.Host = "unconfigured.example.com"
 	rsp, err = client.Do(wrongHost)

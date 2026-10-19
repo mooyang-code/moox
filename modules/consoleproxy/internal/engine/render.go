@@ -9,6 +9,11 @@ import (
 	"github.com/mooyang-code/moox/modules/consoleproxy/internal/config"
 )
 
+const (
+	leafLifetime         = "2160h" // 90 天
+	intermediateLifetime = "8760h" // 1 年
+)
+
 // Render builds only typed, constrained settings, never an arbitrary external
 // Caddyfile. It does not call Caddy provisioning or touch persistent state.
 func Render(c config.Config) ([]byte, error) {
@@ -16,7 +21,9 @@ func Render(c config.Config) ([]byte, error) {
 		return nil, err
 	}
 	type obj = map[string]any
-	issuer := obj{"module": "internal", "ca": "local"}
+	// 叶子证书寿命：Caddy 默认 12 小时、约每 8 小时换一次证书。浏览器里只对当前证书点过“继续访问”（没有安装根证书）的用户，
+	// 每次换证后后台请求都会报 Network Error，要刷新页面重新信任。拉长寿命让换证变得很少；根证书不变，已安装根证书的客户端不受影响。
+	issuer := obj{"module": "internal", "ca": "local", "lifetime": leafLifetime}
 	if c.TLS.Mode == "public" {
 		issuer = obj{"module": "acme", "email": c.TLS.Email, "challenges": obj{"tls-alpn": obj{"disabled": true}}}
 		if c.TLS.ACMECA != "" {
@@ -57,7 +64,8 @@ func Render(c config.Config) ([]byte, error) {
 	if c.TLS.Mode == "internal" {
 		// Instantiating PKI in public mode would create an unused internal CA.
 		// Whenever it is needed, explicitly disable trust-store installation.
-		apps["pki"] = obj{"certificate_authorities": obj{"local": obj{"install_trust": false}}}
+		// 叶子证书不能比签发它的中间证书活得久，中间证书默认只有 7 天，所以一并拉长；根证书（约 10 年）不变。
+		apps["pki"] = obj{"certificate_authorities": obj{"local": obj{"install_trust": false, "intermediate_lifetime": intermediateLifetime}}}
 	}
 	return json.Marshal(obj{
 		"admin": obj{"disabled": true, "config": obj{"persist": false}},
