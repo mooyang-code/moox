@@ -96,6 +96,7 @@ func member(node *yaml.Node, key string) *yaml.Node {
 	}
 	return nil
 }
+
 // setGatewayIdentity 逐键写入网关客户端身份字段；模板里的其他设置（例如 Access 的连接池参数 pool）要保留。
 func setGatewayIdentity(client *yaml.Node, id, keyID string) error {
 	for _, field := range [][2]string{{"caller", id}, {"key_id", keyID}, {"key_file", "../../secrets/caller-" + id + ".key"}} {

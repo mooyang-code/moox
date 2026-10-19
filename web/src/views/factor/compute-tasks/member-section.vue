@@ -83,7 +83,9 @@
 
     <p class="member-section__hint">启用时加列并自动回填历史；停用保留结果列。已启用的因子需先停用才能编辑定义或移除。</p>
     <p v-if="props.info.last_run?.last_period_time" class="member-section__hint">
-      最近周期 {{ formatPeriod(props.info.last_run.last_period_time) }}，{{ barLagText(props.info.factor_set.freq, props.info.last_run) }}
+      最近周期 {{ formatPeriod(props.info.last_run.last_period_time) }}，{{
+        barLagText(props.info.factor_set.freq, props.info.last_run)
+      }}
     </p>
 
     <AddFactorModal v-model:visible="addVisible" :info="props.info" :title="props.title" @added="onAdded" />

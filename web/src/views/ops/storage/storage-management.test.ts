@@ -142,5 +142,4 @@ describe("storage configuration workbench", () => {
     const normalized = normalizeSource(routes);
     expect(normalized).not.toContain('path:"/data/datasets"');
   });
-
 });

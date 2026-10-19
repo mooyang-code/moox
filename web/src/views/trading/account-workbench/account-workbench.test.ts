@@ -3,7 +3,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const workbenchPath = path.resolve(__dirname, "index.vue");
-const routePath = path.resolve(__dirname, "../../../router/route.ts");
 const read = (filePath: string) => fs.readFileSync(filePath, "utf8");
 
 describe("账户工作台契约", () => {

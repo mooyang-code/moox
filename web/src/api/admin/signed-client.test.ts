@@ -239,7 +239,7 @@ describe("installSpaceAwareSignedClient", () => {
     const seen: Array<{ url: string; signal?: AbortSignal }> = [];
     const hang = (url: string, _data?: unknown, config?: { signal?: AbortSignal }) => {
       seen.push({ url, signal: config?.signal });
-      return new Promise(() => {});
+      return new Promise(() => undefined);
     };
     const client = {
       interceptors: { request: { use: () => undefined }, response: { use: () => undefined } },
@@ -265,7 +265,7 @@ describe("installSpaceAwareSignedClient", () => {
 
   it("registers reads issued before the Space initialization finishes, so a later switch still cancels them", async () => {
     setSelectedSpaceIdCache("");
-    let finishInit: () => void = () => {};
+    let finishInit: () => void = () => undefined;
     setSpaceInitializer(
       () =>
         new Promise<void>(resolve => {
@@ -280,7 +280,7 @@ describe("installSpaceAwareSignedClient", () => {
       interceptors: { request: { use: () => undefined }, response: { use: () => undefined } },
       post: (_url: string, _data?: unknown, config?: { signal?: AbortSignal }) => {
         seen.push({ signal: config?.signal });
-        return new Promise(() => {});
+        return new Promise(() => undefined);
       }
     };
     installSpaceAwareSignedClient(client as never);
