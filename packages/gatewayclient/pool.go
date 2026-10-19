@@ -11,8 +11,8 @@ import (
 
 // PoolConfig 是内部网关客户端连接池的可调参数，零值表示使用默认。
 type PoolConfig struct {
-	// MinIdle 是连接池保持的最少空闲连接数（预热）：空闲连接过期或被回收后由连接池后台补齐，
-	// 请求路径上只复用现成连接。默认 0；整分钟并发写入的 Access 设置为 16。
+	// MinIdle 是每个地址保持的最少打开连接数（预热）：不足时由后台协程补齐，请求路径上复用现成连接。
+	// 默认 0；整分钟并发写入的 Access 设置为 16。
 	MinIdle int `yaml:"min_idle"`
 	// MaxIdle 是每个（地址，协议）子池保留的空闲连接上限，不是客户端的总连接数上限。默认 32。
 	MaxIdle int `yaml:"max_idle"`
@@ -31,10 +31,12 @@ const (
 	// clientMaxLifetime 定期轮换老连接，避免长期持有被中间设备悄悄丢弃的连接。
 	clientMaxLifetime = 30 * time.Minute
 
-	// connpool 的 MinIdle 后台补连接固定使用 200ms 的拨号超时，跨境 TLS 握手经常超过它；
-	// 后台补连接走 rpcPool.dial，在那里把过短的超时抬到 backgroundDialTimeout。
-	backgroundDialThreshold = 250 * time.Millisecond
-	backgroundDialTimeout   = 3 * time.Second
+	// 预热：每 warmInterval 检查一次，只在某个地址的打开连接数低于 min_idle 时才补，不触碰已有连接（不重置它们的空闲计时）；
+	// 超过 warmWatchLimit 没有被请求使用的地址不再预热；整分钟的前后几秒是业务突发窗口，避开它。
+	warmInterval     = 10 * time.Second
+	warmDialTimeout  = 3 * time.Second
+	warmWatchLimit   = 15 * time.Minute
+	burstWindowAfter = 5 // 每分钟的第 0～4 秒与第 58～59 秒不预热
 
 	// 请求路径的拨号预算：总预算（服务目录里 PrimaryStore 为 5 秒）内要留出至少 retryReserve 给发送与提交。
 	maxConnectTimeout = 3 * time.Second
@@ -85,32 +87,37 @@ func (s poolSettings) options(dial connpool.DialFunc) []connpool.Option {
 	if s.maxLifetime > 0 {
 		options = append(options, connpool.WithMaxConnLifetime(s.maxLifetime))
 	}
-	if s.minIdle > 0 {
-		options = append(options, connpool.WithMinIdle(s.minIdle))
-	}
 	return options
 }
 
 // PoolStats 是连接池拨号与建连重试的累计计数，由进程自己暴露为指标。
 type PoolStats struct {
-	// RequestDialsOK/Err 是请求路径上新建连接的次数；预热后稳态应接近 0。
-	RequestDialsOK, RequestDialsErr uint64
-	// WarmupDialsOK/Err 是连接池后台补连接（预热与替换过期连接）的次数。
-	WarmupDialsOK, WarmupDialsErr uint64
+	// DialsOK/Err 是新建连接的总次数（请求路径与预热合计）；预热到位后稳态应接近 0。
+	DialsOK, DialsErr uint64
+	// WarmupOK/Err 是预热协程补连接时每一次取连接的结果。
+	WarmupOK, WarmupErr uint64
 	// ConnectRetriesRecovered 是建连失败后重试成功的调用数；ConnectRetriesFailed 是重试后仍失败的调用数。
 	ConnectRetriesRecovered, ConnectRetriesFailed uint64
 }
 
 type poolCounters struct {
-	requestDialsOK, requestDialsErr atomic.Uint64
-	warmupDialsOK, warmupDialsErr   atomic.Uint64
+	dialsOK, dialsErr               atomic.Uint64
+	warmupOK, warmupErr             atomic.Uint64
 	retriesRecovered, retriesFailed atomic.Uint64
+}
+
+func (c *poolCounters) dial(ok bool) {
+	if ok {
+		c.dialsOK.Add(1)
+	} else {
+		c.dialsErr.Add(1)
+	}
 }
 
 func (c *poolCounters) snapshot() PoolStats {
 	return PoolStats{
-		RequestDialsOK: c.requestDialsOK.Load(), RequestDialsErr: c.requestDialsErr.Load(),
-		WarmupDialsOK: c.warmupDialsOK.Load(), WarmupDialsErr: c.warmupDialsErr.Load(),
+		DialsOK: c.dialsOK.Load(), DialsErr: c.dialsErr.Load(),
+		WarmupOK: c.warmupOK.Load(), WarmupErr: c.warmupErr.Load(),
 		ConnectRetriesRecovered: c.retriesRecovered.Load(), ConnectRetriesFailed: c.retriesFailed.Load(),
 	}
 }

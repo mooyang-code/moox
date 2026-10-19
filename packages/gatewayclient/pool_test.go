@@ -169,44 +169,7 @@ func TestPoolGetFailureMarksTheCall(t *testing.T) {
 	_, err = pool.Get("tcp", address, opts)
 	require.Error(t, err)
 	require.True(t, state.connectFailed.Load())
-	require.Equal(t, uint64(1), pool.stats.snapshot().RequestDialsErr)
-}
-
-// MinIdle 的后台补连接固定使用 200ms 拨号超时；dial 把它识别出来，计入预热统计，请求路径的拨号单独计数。
-func TestDialSeparatesBackgroundWarmupFromRequests(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = listener.Close() })
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			_ = conn
-		}
-	}()
-	pool := newRPCPool(tunedPoolSettings(PoolConfig{MinIdle: 2}))
-	t.Cleanup(func() { _ = pool.Close() })
-
-	conn, err := pool.dial(&connpool.DialOptions{Network: "tcp", Address: listener.Addr().String(), Timeout: 200 * time.Millisecond})
-	require.NoError(t, err)
-	_ = conn.Close()
-	conn, err = pool.dial(&connpool.DialOptions{Network: "tcp", Address: listener.Addr().String(), Timeout: 2 * time.Second})
-	require.NoError(t, err)
-	_ = conn.Close()
-	stats := pool.stats.snapshot()
-	require.Equal(t, uint64(1), stats.WarmupDialsOK)
-	require.Equal(t, uint64(1), stats.RequestDialsOK)
-
-	// 没有预热配置的池不把短超时当作后台拨号。
-	plain := newRPCPool(tunedPoolSettings(PoolConfig{}))
-	t.Cleanup(func() { _ = plain.Close() })
-	conn, err = plain.dial(&connpool.DialOptions{Network: "tcp", Address: listener.Addr().String(), Timeout: 200 * time.Millisecond})
-	require.NoError(t, err)
-	_ = conn.Close()
-	require.Equal(t, uint64(1), plain.stats.snapshot().RequestDialsOK)
-	require.Zero(t, plain.stats.snapshot().WarmupDialsOK)
+	require.Equal(t, uint64(1), pool.stats.snapshot().DialsErr)
 }
 
 func externalCollector(t *testing.T) *Client {
@@ -270,8 +233,8 @@ func TestRetryBudgetOnlyLimitsIdempotentWrites(t *testing.T) {
 	require.Equal(t, 2, readCalls)
 }
 
-// 预热：连接池第一次被使用后，后台把空闲连接补到 MinIdle，之后的请求直接复用，不再在请求路径上拨号。
-func TestMinIdleWarmsConnectionsBeforeRequestsNeedThem(t *testing.T) {
+func acceptingListener(t *testing.T) (string, *atomic.Int64) {
+	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = listener.Close() })
@@ -286,30 +249,110 @@ func TestMinIdleWarmsConnectionsBeforeRequestsNeedThem(t *testing.T) {
 			_ = conn
 		}
 	}()
+	return listener.Addr().String(), &accepted
+}
+
+func getAs(t *testing.T, pool *rpcPool, address string, attempt int) net.Conn {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	t.Cleanup(cancel)
+	ctx, state := withCallState(ctx)
+	state.attempt = attempt
+	opts := connpool.NewGetOptions()
+	opts.WithContext(ctx)
+	opts.WithDialTimeout(2 * time.Second)
+	conn, err := pool.Get("tcp", address, opts)
+	require.NoError(t, err)
+	return conn
+}
+
+// 预热只在某个地址的打开连接数低于 min_idle 时补齐，不触碰已有连接；到位后不再拨号，并发请求直接复用空闲连接。
+func TestWarmupFillsOnlyTheShortfall(t *testing.T) {
+	address, accepted := acceptingListener(t)
 	pool := newRPCPool(tunedPoolSettings(PoolConfig{MinIdle: 3}))
 	t.Cleanup(func() { _ = pool.Close() })
 
-	opts := connpool.NewGetOptions()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	opts.WithContext(ctx)
-	first, err := pool.Get("tcp", listener.Addr().String(), opts)
-	require.NoError(t, err)
-	_ = first.Close()
-	require.Eventually(t, func() bool { return pool.stats.snapshot().WarmupDialsOK >= 3 }, 5*time.Second, 20*time.Millisecond)
-	before := pool.stats.snapshot().RequestDialsOK
-	held := make([]net.Conn, 0, 3)
-	for i := 0; i < 3; i++ {
-		o := connpool.NewGetOptions()
-		c2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-		o.WithContext(c2)
-		conn, err := pool.Get("tcp", listener.Addr().String(), o)
-		cancel2()
-		require.NoError(t, err)
-		held = append(held, conn)
-	}
+	first := getAs(t, pool, address, 0)
+	require.NoError(t, first.Close())
+	require.Eventually(t, func() bool { return accepted.Load() == 1 }, 3*time.Second, 10*time.Millisecond)
+
+	pool.warmCycle(time.Now())
+	require.Eventually(t, func() bool { return accepted.Load() == 3 }, 3*time.Second, 10*time.Millisecond, "已有 1 条，只补 2 条")
+	require.Equal(t, uint64(3), pool.stats.snapshot().WarmupOK)
+	require.Zero(t, pool.stats.snapshot().WarmupErr)
+
+	pool.warmCycle(time.Now())
+	time.Sleep(100 * time.Millisecond)
+	require.EqualValues(t, 3, accepted.Load(), "连接数到位后不再拨号")
+	require.Equal(t, uint64(3), pool.stats.snapshot().WarmupOK, "也不再取放已有连接")
+
+	dials := pool.stats.snapshot().DialsOK
+	held := []net.Conn{getAs(t, pool, address, 0), getAs(t, pool, address, 0), getAs(t, pool, address, 0)}
 	for _, conn := range held {
-		_ = conn.Close()
+		require.NoError(t, conn.Close())
 	}
-	require.Equal(t, before, pool.stats.snapshot().RequestDialsOK, "预热过的并发请求不需要在请求路径上拨号")
+	require.Equal(t, dials, pool.stats.snapshot().DialsOK, "预热过的并发请求不需要在请求路径上拨号")
+}
+
+func TestWarmupStopsWatchingIdleTargetsAndClosesCleanly(t *testing.T) {
+	address, accepted := acceptingListener(t)
+	pool := newRPCPool(tunedPoolSettings(PoolConfig{MinIdle: 2}))
+	conn := getAs(t, pool, address, 0)
+	require.NoError(t, conn.Close())
+	pool.mu.Lock()
+	for _, target := range pool.targets {
+		target.lastUsed = time.Now().Add(-2 * warmWatchLimit)
+	}
+	pool.mu.Unlock()
+	pool.warmCycle(time.Now())
+	time.Sleep(100 * time.Millisecond)
+	require.EqualValues(t, 1, accepted.Load(), "太久没有被请求使用的地址不再预热")
+	pool.mu.Lock()
+	require.Empty(t, pool.targets)
+	pool.mu.Unlock()
+
+	done := make(chan error, 1)
+	go func() { done <- pool.Close() }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close 必须等待预热协程退出且不能卡住")
+	}
+	require.NoError(t, pool.Close(), "Close 幂等")
+	_, err := pool.dial(&connpool.DialOptions{Network: "tcp", Address: address, Timeout: time.Second})
+	require.ErrorIs(t, err, net.ErrClosed, "关闭后不再拨号")
+	require.EqualValues(t, 1, accepted.Load())
+}
+
+// 重试可能是因为取到了已失效的空闲连接（网关重启后）：重试必须避开主池里的空闲连接，现建一条。
+func TestRetryAvoidsTheMainPoolIdleConnections(t *testing.T) {
+	address, accepted := acceptingListener(t)
+	pool := newRPCPool(tunedPoolSettings(PoolConfig{}))
+	t.Cleanup(func() { _ = pool.Close() })
+
+	first := getAs(t, pool, address, 0)
+	require.NoError(t, first.Close())
+	again := getAs(t, pool, address, 0)
+	require.NoError(t, again.Close())
+	time.Sleep(100 * time.Millisecond)
+	require.EqualValues(t, 1, accepted.Load(), "第一次尝试复用主池的空闲连接")
+
+	retry := getAs(t, pool, address, 1)
+	require.NoError(t, retry.Close())
+	require.Eventually(t, func() bool { return accepted.Load() == 2 }, 3*time.Second, 10*time.Millisecond, "重试不复用主池的空闲连接")
+	retryAgain := getAs(t, pool, address, 1)
+	require.NoError(t, retryAgain.Close())
+	time.Sleep(100 * time.Millisecond)
+	require.EqualValues(t, 2, accepted.Load(), "重试子池自己的连接可以复用")
+}
+
+func TestWarmupAvoidsTheMinuteBoundary(t *testing.T) {
+	at := func(second int) time.Time { return time.Date(2026, 10, 19, 12, 30, second, 0, time.UTC) }
+	for _, second := range []int{0, 1, 4, 58, 59} {
+		require.True(t, inBurstWindow(at(second)), second)
+	}
+	for _, second := range []int{5, 20, 30, 57} {
+		require.False(t, inBurstWindow(at(second)), second)
+	}
 }

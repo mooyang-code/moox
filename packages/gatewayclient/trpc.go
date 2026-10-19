@@ -32,20 +32,33 @@ type trustIdentity struct {
 	ca, server, cert, key, provider, local string
 }
 
+// poolKey 区分连接池子池。retry 子池专供重试使用：重试往往是因为取到了已失效的空闲连接（例如网关重启后），
+// 主池里其余空闲连接多半同样失效，重试必须避开它们，从一个空的子池现建连接。
+type poolKey struct {
+	trust trustIdentity
+	retry bool
+}
+
 type rpcPool struct {
 	mu        sync.Mutex
-	pools     map[trustIdentity]connpool.Pool
+	pools     map[poolKey]connpool.Pool
 	conns     map[*trackedConn]struct{}
+	open      map[string]int // 每个地址当前打开的连接数（空闲加使用中），预热据此判断是否缺连接
 	relays    map[string]*relayRoute
+	targets   map[warmKey]*warmTarget
 	closed    bool
 	transport transport.ClientTransport
 	settings  poolSettings
 	stats     poolCounters
+	// 预热协程只在配置了 min_idle 时存在，Close 时停止并等待退出。
+	warmStop  chan struct{}
+	warmWG    sync.WaitGroup
+	warmStart sync.Once
 }
 
 // newRPCPool 创建连接池；不带参数时保持改动前的行为（用于只访问本机目录服务的来源）。
 func newRPCPool(settings ...poolSettings) *rpcPool {
-	pool := &rpcPool{pools: make(map[trustIdentity]connpool.Pool), conns: make(map[*trackedConn]struct{}), relays: make(map[string]*relayRoute), transport: transport.NewClientTransport(), settings: legacyPoolSettings()}
+	pool := &rpcPool{pools: make(map[poolKey]connpool.Pool), conns: make(map[*trackedConn]struct{}), open: make(map[string]int), relays: make(map[string]*relayRoute), targets: make(map[warmKey]*warmTarget), transport: transport.NewClientTransport(), settings: legacyPoolSettings(), warmStop: make(chan struct{})}
 	if len(settings) > 0 {
 		pool.settings = settings[0]
 	}
@@ -60,20 +73,30 @@ func (p *rpcPool) route(address string, route *relayRoute) {
 }
 
 func (p *rpcPool) Get(network, address string, opts connpool.GetOptions) (net.Conn, error) {
+	// 连接池取走 opts.Ctx，先记下本次调用的状态；获取连接失败意味着请求尚未发出。
+	ctx := opts.Ctx
+	state := callStateFrom(ctx)
+	retry := state != nil && state.attempt > 0
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
 		return nil, net.ErrClosed
 	}
-	key := trustIdentity{opts.CACertFile, opts.TLSServerName, opts.TLSCertFile, opts.TLSKeyFile, opts.TLSCertProvider, opts.LocalAddr}
+	trust := trustIdentity{opts.CACertFile, opts.TLSServerName, opts.TLSCertFile, opts.TLSKeyFile, opts.TLSCertProvider, opts.LocalAddr}
+	key := poolKey{trust: trust, retry: retry}
 	pool := p.pools[key]
 	if pool == nil {
-		pool = connpool.NewConnectionPool(p.settings.options(p.dial)...)
+		settings := p.settings
+		if retry {
+			settings = legacyPoolSettings()
+		}
+		pool = connpool.NewConnectionPool(settings.options(p.dial)...)
 		p.pools[key] = pool
 	}
+	if p.settings.minIdle > 0 && state != nil && !retry {
+		p.watchLocked(trust, network, address, opts)
+	}
 	p.mu.Unlock()
-	// 连接池取走 opts.Ctx，先记下本次调用的状态；获取连接失败意味着请求尚未发出。
-	ctx := opts.Ctx
 	conn, err := pool.Get(network, address, opts)
 	if err != nil {
 		markConnectFailure(ctx)
@@ -84,13 +107,12 @@ func (p *rpcPool) Get(network, address string, opts connpool.GetOptions) (net.Co
 
 func (p *rpcPool) dial(opts *connpool.DialOptions) (net.Conn, error) {
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil, net.ErrClosed
+	}
 	route := p.relays[opts.Address]
 	p.mu.Unlock()
-	// 连接池后台补连接（MinIdle）固定使用 200ms 拨号超时，跨境 TLS 握手经常超过它，在这里抬到后台拨号超时。
-	background := p.settings.minIdle > 0 && opts.Timeout > 0 && opts.Timeout <= backgroundDialThreshold
-	if background {
-		opts.Timeout = backgroundDialTimeout
-	}
 	var conn net.Conn
 	var err error
 	if route != nil {
@@ -98,11 +120,11 @@ func (p *rpcPool) dial(opts *connpool.DialOptions) (net.Conn, error) {
 	} else {
 		conn, err = connpool.Dial(opts)
 	}
-	p.stats.record(background, err == nil)
+	p.stats.dial(err == nil)
 	if err != nil {
 		return nil, err
 	}
-	tracked := &trackedConn{Conn: conn, owner: p}
+	tracked := &trackedConn{Conn: conn, owner: p, address: opts.Address}
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -110,19 +132,27 @@ func (p *rpcPool) dial(opts *connpool.DialOptions) (net.Conn, error) {
 		return nil, net.ErrClosed
 	}
 	p.conns[tracked] = struct{}{}
+	p.open[opts.Address]++
 	p.mu.Unlock()
 	return tracked, nil
 }
 
 func (p *rpcPool) Close() error {
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil
+	}
 	p.closed = true
 	conns := make([]*trackedConn, 0, len(p.conns))
 	for conn := range p.conns {
 		conns = append(conns, conn)
 	}
 	p.pools = nil
+	p.targets = nil
 	p.mu.Unlock()
+	close(p.warmStop)
+	p.warmWG.Wait()
 	var err error
 	for _, conn := range conns {
 		err = errors.Join(err, conn.Close())
@@ -132,9 +162,10 @@ func (p *rpcPool) Close() error {
 
 type trackedConn struct {
 	net.Conn
-	owner *rpcPool
-	once  sync.Once
-	err   error
+	owner   *rpcPool
+	address string
+	once    sync.Once
+	err     error
 }
 
 func (c *trackedConn) Close() error {
@@ -142,6 +173,9 @@ func (c *trackedConn) Close() error {
 		c.err = c.Conn.Close()
 		c.owner.mu.Lock()
 		delete(c.owner.conns, c)
+		if c.owner.open[c.address]--; c.owner.open[c.address] <= 0 {
+			delete(c.owner.open, c.address)
+		}
 		c.owner.mu.Unlock()
 	})
 	return c.err
@@ -232,17 +266,4 @@ func loadRoots(path string) (*x509.CertPool, error) {
 		return nil, errors.New("MooX CA file contains no certificates")
 	}
 	return roots, nil
-}
-
-func (c *poolCounters) record(background, ok bool) {
-	switch {
-	case background && ok:
-		c.warmupDialsOK.Add(1)
-	case background:
-		c.warmupDialsErr.Add(1)
-	case ok:
-		c.requestDialsOK.Add(1)
-	default:
-		c.requestDialsErr.Add(1)
-	}
 }
