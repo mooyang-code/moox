@@ -114,7 +114,7 @@ func coreRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host, 
 	for _, h := range manifest.Hosts() {
 		components := slices.Clone(manifest.Placements[h.Name])
 		slices.Sort(components)
-		topology.Hosts = append(topology.Hosts, hostbundle.Host{HostID: h.Name, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Components: components, Reachability: h.Reachability})
+		topology.Hosts = append(topology.Hosts, hostbundle.Host{HostID: h.Name, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Components: components, Reachability: h.Reachability, Description: h.Label})
 	}
 	health := map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": identity.HealthAccessKey, "MOOX_HEALTH_AUTH_SECRET_KEY": identity.HealthSecret}
 	unit := func(result unitpackage.Result, name string, components []string) unitbootstrap.Unit {

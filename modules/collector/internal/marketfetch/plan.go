@@ -2,13 +2,11 @@ package marketfetch
 
 import (
 	"bytes"
-	"compress/gzip"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 	"time"
@@ -16,9 +14,10 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
+	"github.com/mooyang-code/moox/packages/wirecompress"
 )
 
-// PlanEnvName 是承载采集计划的 SCF 环境变量：gzip 后再 base64 的 JSON。
+// PlanEnvName 是承载采集计划的 SCF 环境变量：zstd 字典压缩后再 base64 的 JSON。
 const PlanEnvName = "MOOX_MARKET_FETCH_PLAN"
 
 const (
@@ -81,8 +80,11 @@ type PlanSubject struct {
 	Index uint32 `json:"i"`
 }
 
-// EncodePlan 把计划编码为环境变量值。
-func EncodePlan(plan *Plan) (string, error) {
+// planDecoder 解压环境变量里的计划：1MB 与计划 JSON 的解码上限一致，在解压过程中生效。
+var planDecoder = wirecompress.NewDecoder(wirecompress.UsePlan, maxPlanJSONBytes)
+
+// EncodePlan 把计划编码为环境变量值：JSON 经 zstd 字典压缩（空间有专用字典就用，否则用默认字典）再 base64。
+func EncodePlan(spaceID string, plan *Plan) (string, error) {
 	if err := plan.Validate(); err != nil {
 		return "", err
 	}
@@ -90,25 +92,14 @@ func EncodePlan(plan *Plan) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var buffer bytes.Buffer
-	writer, err := gzip.NewWriterLevel(&buffer, gzip.BestCompression)
-	if err != nil {
-		return "", err
-	}
-	if _, err := writer.Write(raw); err != nil {
-		return "", err
-	}
-	if err := writer.Close(); err != nil {
-		return "", err
-	}
-	encoded := base64.StdEncoding.EncodeToString(buffer.Bytes())
+	encoded := base64.StdEncoding.EncodeToString(wirecompress.Encode(wirecompress.UsePlan, spaceID, raw))
 	if len(encoded) > maxPlanEncodedBytes {
 		return "", fmt.Errorf("encoded plan is %d bytes, limit %d", len(encoded), maxPlanEncodedBytes)
 	}
 	return encoded, nil
 }
 
-// DecodePlan 解码并校验环境变量值。
+// DecodePlan 解码并校验环境变量值。解码不需要空间：帧头里的字典 ID 决定用哪本字典。
 func DecodePlan(encoded string) (*Plan, error) {
 	encoded = strings.TrimSpace(encoded)
 	if encoded == "" {
@@ -121,17 +112,12 @@ func DecodePlan(encoded string) (*Plan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("market fetch plan is not valid base64: %w", err)
 	}
-	reader, err := gzip.NewReader(bytes.NewReader(compressed))
+	raw, err := planDecoder.Decode(compressed)
 	if err != nil {
-		return nil, fmt.Errorf("market fetch plan is not valid gzip: %w", err)
-	}
-	defer reader.Close()
-	raw, err := io.ReadAll(io.LimitReader(reader, maxPlanJSONBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("read market fetch plan: %w", err)
-	}
-	if len(raw) > maxPlanJSONBytes {
-		return nil, errors.New("market fetch plan exceeds the decoded size limit")
+		if errors.Is(err, wirecompress.ErrTooLarge) {
+			return nil, errors.New("market fetch plan exceeds the decoded size limit")
+		}
+		return nil, fmt.Errorf("market fetch plan is not valid zstd: %w", err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()

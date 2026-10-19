@@ -102,11 +102,6 @@ func NewJetStreamPublisher(client *jetstream.Client) *JetStreamPublisher {
 	if err != nil {
 		return &JetStreamPublisher{}
 	}
-	// 因子结果行事件每期数百 KB，经公网在 Storage 与 EventBus 之间往返一次要近 1 秒；信封重复字段多，gzip 后小一个数量级。
-	// 所有消费端（View、因子引擎、Archive）经 events.DecodeRaw 透明解压，必须先于发布端部署。
-	publisher.SetCompression(compressEventMinBytes)
+	// 事件信封由发布器按空间绑定的字典默认压缩；所有消费端经 events.DecodeRaw 透明解压。
 	return &JetStreamPublisher{publisher: publisher, client: client}
 }
-
-// compressEventMinBytes 是 DataNode 出站事件启用 gzip 的最小信封字节数。
-const compressEventMinBytes = 4096

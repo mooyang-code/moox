@@ -13,6 +13,7 @@ replace (
 	github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 	github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 	github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
+	github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
 )
 
 require (
@@ -49,6 +50,7 @@ require (
 	trpc.group/trpc-go/trpc-go v1.0.4
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
 	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
 )
 
 require (

@@ -1,12 +1,16 @@
 package marketfetch
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/wirecompress"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,7 +34,7 @@ func testPlan() *Plan {
 }
 
 func TestPlanEncodeDecodeRoundTripAndLimits(t *testing.T) {
-	encoded, err := EncodePlan(testPlan())
+	encoded, err := EncodePlan("crypto", testPlan())
 	require.NoError(t, err)
 	decoded, err := DecodePlan(encoded)
 	require.NoError(t, err)
@@ -42,16 +46,30 @@ func TestPlanEncodeDecodeRoundTripAndLimits(t *testing.T) {
 	require.Error(t, err)
 	bad := testPlan()
 	bad.V = 2
-	_, err = EncodePlan(bad)
+	_, err = EncodePlan("crypto", bad)
 	require.Error(t, err)
 	bad = testPlan()
 	bad.Datasets[0].Copies[1].From = bad.Datasets[0].Copies[0].From
-	_, err = EncodePlan(bad)
+	_, err = EncodePlan("crypto", bad)
 	require.Error(t, err, "份的生效起点必须严格递增")
 	bad = testPlan()
 	bad.Datasets[0].Copies[0].Subjects[0].Index = 99
-	_, err = EncodePlan(bad)
+	_, err = EncodePlan("crypto", bad)
 	require.Error(t, err, "序号必须小于总数")
+}
+
+// 计划环境变量不再接受 gzip；超过 1MB 的展开数据在解压过程中被拒绝。
+func TestPlanRejectsGzipAndOversizedDecoded(t *testing.T) {
+	var gz bytes.Buffer
+	writer := gzip.NewWriter(&gz)
+	_, _ = writer.Write([]byte(`{"v":1}`))
+	_ = writer.Close()
+	_, err := DecodePlan(base64.StdEncoding.EncodeToString(gz.Bytes()))
+	require.Error(t, err, "旧的 gzip 编码不再受理")
+
+	huge := wirecompress.Encode(wirecompress.UsePlan, "crypto", bytes.Repeat([]byte("a"), maxPlanJSONBytes+1))
+	_, err = DecodePlan(base64.StdEncoding.EncodeToString(huge))
+	require.ErrorContains(t, err, "decoded size limit")
 }
 
 func TestPlanSelectCopyBoundaries(t *testing.T) {

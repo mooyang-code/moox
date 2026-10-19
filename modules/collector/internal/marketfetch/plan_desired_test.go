@@ -161,10 +161,10 @@ func TestBuildPlanContentLifecycle(t *testing.T) {
 		if !function.Create || !function.Push {
 			t.Fatalf("new function must be created and pushed: %+v", function)
 		}
-		if _, err := EncodePlan(first.TransitionalPlan(function)); err != nil {
+		if _, err := EncodePlan("crypto", first.TransitionalPlan(function)); err != nil {
 			t.Fatalf("transitional plan is invalid: %v", err)
 		}
-		if _, err := EncodePlan(first.FinalPlan(function)); err != nil {
+		if _, err := EncodePlan("crypto", first.FinalPlan(function)); err != nil {
 			t.Fatalf("final plan is invalid: %v", err)
 		}
 		if dataset := findPlanDataset(first.FinalPlan(function), "ds_spot_1m|1m"); len(dataset.Copies) != 1 || dataset.Copies[0].From != change.P {
@@ -246,7 +246,7 @@ func TestBuildPlanContentRetiresFunctionsAndDatasets(t *testing.T) {
 		if len(dataset.Copies) != 2 || len(dataset.Copies[1].Subjects) != 0 {
 			t.Fatalf("retired function must stop after P: %+v", dataset.Copies)
 		}
-		if _, err := EncodePlan(transitional); err != nil {
+		if _, err := EncodePlan("crypto", transitional); err != nil {
 			t.Fatal(err)
 		}
 		if second.FinalPlan(function) != nil || second.FinalCron(function) != "" {

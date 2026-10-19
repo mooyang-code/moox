@@ -143,7 +143,7 @@ func TestInternalSelectsLocalOtherwiseTLSWithPrivateCA(t *testing.T) {
 	require.Equal(t, endpoint{address: "127.0.0.1:11002", target: "b"}, ep)
 	ep, err = c.endpoint(context.Background(), secretService, "b")
 	require.NoError(t, err)
-	require.Equal(t, endpoint{address: "a.example.test:11003", target: "a", caFile: ca, serverName: "a"}, ep)
+	require.Equal(t, endpoint{address: "a.example.test:11003", target: "a", caFile: ca, serverName: "a", compress: true}, ep, "跨主机调用默认压缩")
 	for _, invalid := range []string{"", "none", "root"} {
 		config.CAFile = invalid
 		_, err = New(config)
@@ -182,7 +182,8 @@ func TestExternalReadsResignRetriesAndWritesRunOnce(t *testing.T) {
 		attempts                int
 	}{
 		{"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", 2},
-		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", 1},
+		// 周期提交声明为幂等写：请求可能已发出的网络失败后重发一次；其他写方法绝不重发。
+		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", 2},
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "UpsertFields", 1},
 	} {
 		t.Run(call.method, func(t *testing.T) {
@@ -194,7 +195,7 @@ func TestExternalReadsResignRetriesAndWritesRunOnce(t *testing.T) {
 			nonces := map[string]bool{}
 			client.invoke = func(_ context.Context, ep endpoint, service, method string, serialization int, raw []byte, headers http.Header) ([]byte, error) {
 				attempts++
-				require.Equal(t, endpoint{address: config.AccessAddress, target: config.AccessInstanceID}, ep)
+				require.Equal(t, endpoint{address: config.AccessAddress, target: config.AccessInstanceID, compress: true}, ep)
 				require.Equal(t, codec.SerializationTypePB, serialization)
 				require.Equal(t, body, raw)
 				claims, err := gatewayauth.Verify(config.Credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method,

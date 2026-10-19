@@ -1465,6 +1465,9 @@ components:
           - ReadTimeSeriesRows
           - CountTimeSeriesRows
           - GetFactorPeriodComputed
+        # 周期提交按（数据集，周期，序列）覆盖行并幂等置位完成位图，周期封口后返回回执而不再写入，重复提交安全。
+        idempotent_methods:
+          - CommitTimeSeriesBatch
         acl:
           - methods:
               - UpsertFields

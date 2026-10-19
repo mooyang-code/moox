@@ -141,7 +141,7 @@ func TestEditorPageAndOverviewNeverCarrySecrets(t *testing.T) {
 			t.Fatalf("主机概览 = %+v", server)
 		}
 	}
-	if uses["control"] != "管理台" || uses["storage"] != "数据存储" || uses["compute-1"] != "海外接入与交易" {
+	if uses["control"] != "管理台" || uses["storage"] != "数据存储" || uses["overseas"] != "海外接入与交易" {
 		t.Fatalf("用途 = %v", uses)
 	}
 }

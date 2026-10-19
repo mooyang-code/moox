@@ -110,9 +110,10 @@ func Checks(snapshot Snapshot, https map[string]domain.HTTPSConfig) ([]domain.Ch
 		check := baseCheck(host, placement, component)
 		switch component.Health.Kind {
 		case "readyz":
-			address := host.GetPrivateAddress()
-			if address == "" {
-				address = host.GetAddress()
+			// 私网地址只在与 Monitor 所在主机同一地域时可达（跨地域私网不通），否则用公网地址。
+			address := host.GetAddress()
+			if local := hosts[snapshot.LocalHostID]; local != nil && host.GetPrivateAddress() != "" && host.GetRegion() != "" && host.GetRegion() == local.GetRegion() {
+				address = host.GetPrivateAddress()
 			}
 			if component.Health.Loopback || (snapshot.LocalHostID != "" && host.GetHostId() == snapshot.LocalHostID) {
 				address = "127.0.0.1"

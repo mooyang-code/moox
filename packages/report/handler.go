@@ -2,7 +2,6 @@ package report
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -322,26 +321,15 @@ func (h *Handler) BuildSnapshot() (*metricspb.MetricSnapshot, error) {
 		}
 	}
 	checksum := sha256.Sum256(raw.Bytes())
-	var compressed bytes.Buffer
-	gz, err := gzip.NewWriterLevel(&compressed, h.cfg.GzipLevel)
-	if err != nil {
-		return nil, fmt.Errorf("gzip level: %w", err)
-	}
-	if _, err := gz.Write(raw.Bytes()); err != nil {
-		return nil, fmt.Errorf("gzip metrics: %w", err)
-	}
-	if err := gz.Close(); err != nil {
-		return nil, fmt.Errorf("close gzip metrics: %w", err)
-	}
-	if compressed.Len() > h.cfg.MaxCompressedBytes {
-		return nil, fmt.Errorf("compressed metric limit exceeded: %d", h.cfg.MaxCompressedBytes)
+	// 传输压缩由事件信封层统一完成（zstd 字典），这里只发 Prometheus 文本原文。
+	if raw.Len() > h.cfg.MaxUncompressedBytes {
+		return nil, fmt.Errorf("uncompressed metric limit exceeded: %d", h.cfg.MaxUncompressedBytes)
 	}
 	return &metricspb.MetricSnapshot{
 		SchemaVersion:             1,
 		CollectionIntervalSeconds: uint32(h.cfg.Interval / time.Second),
 		Format:                    metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT,
-		Compression:               metricspb.Compression_COMPRESSION_GZIP,
-		Data:                      compressed.Bytes(), MetricFamilyCount: uint32(familyCount), SampleCount: uint32(sampleCount), UncompressedSha256: checksum[:],
+		Data:                      raw.Bytes(), MetricFamilyCount: uint32(familyCount), SampleCount: uint32(sampleCount), DataSha256: checksum[:],
 	}, nil
 }
 

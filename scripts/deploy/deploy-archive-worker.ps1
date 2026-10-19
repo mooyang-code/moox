@@ -108,7 +108,6 @@ gateway_client:
   caller: archive-worker
   key_id: "$AccessKeyId"
   key_file: $secretsYaml/access-archive-worker.key
-  compression: gzip
 
 storage_auth_file: $secretsYaml/storage-primary-auth.secret
 

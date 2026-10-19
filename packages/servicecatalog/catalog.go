@@ -62,7 +62,10 @@ type Service struct {
 	MaxBodyBytes     int64            `yaml:"max_body_bytes,omitempty" json:"max_body_bytes,omitempty"`
 	Methods          []string         `yaml:"methods" json:"methods"`
 	ReadOnlyMethods  []string         `yaml:"read_only_methods,omitempty" json:"read_only_methods,omitempty"`
-	ACL              []Grant          `yaml:"acl" json:"acl"`
+	// IdempotentMethods 是写方法中重复提交同一请求不会产生额外副作用的方法：请求可能已发出的网络失败后，
+	// 网关客户端可以像只读方法一样换连接重试一次。必须由服务端语义保证幂等，不得与只读方法重复声明。
+	IdempotentMethods []string `yaml:"idempotent_methods,omitempty" json:"idempotent_methods,omitempty"`
+	ACL               []Grant  `yaml:"acl" json:"acl"`
 }
 
 type Grant struct {

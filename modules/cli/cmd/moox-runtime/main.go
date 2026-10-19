@@ -121,6 +121,24 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		return json.NewEncoder(stdout).Encode(prepared)
 	}
+	if len(args) > 0 && args[0] == "reseal" {
+		// 把单元当前发布的文件清单重新封存为现状（原地换过二进制或改过配置之后）；不带 --yes 只列出差异路径。
+		flags := flag.NewFlagSet("moox-runtime reseal", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		unitRoot := flags.String("unit-root", "", "physical deployment unit root, e.g. /data/moox/storage")
+		yes := flags.Bool("yes", false, "rewrite prepared.json under the host maintenance lock")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *unitRoot == "" || flags.NArg() != 0 {
+			return errors.New("reseal requires --unit-root and no positional arguments")
+		}
+		result, err := unitinstall.Reseal(ctx, *unitRoot, *yes, unitruntime.Options{}, nil)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(stdout).Encode(result)
+	}
 	if len(args) > 0 && args[0] == "watch" {
 		return watch(ctx, args[1:], stdout, stderr)
 	}

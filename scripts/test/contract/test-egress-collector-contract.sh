@@ -41,14 +41,14 @@ ssh = { port = 22, username = "ubuntu" }
 address = "192.0.2.11"
 ssh = { port = 22, username = "ubuntu" }
 
-[hosts.compute-1]
+[hosts.overseas]
 address = "43.132.204.177"
 ssh = { port = 22, username = "ubuntu" }
 
 [placements]
 control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"]
 storage = ["storage-primary", "storage-node", "storage-view", "access"]
-compute-1 = ["trade", "egress-proxy"]
+overseas = ["trade", "egress-proxy"]
 
 [egress_proxy]
 http_domains = ["*.binance.com", "data-api.binance.vision"]

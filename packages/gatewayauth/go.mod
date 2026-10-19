@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/protobuf v1.36.11
 	trpc.group/trpc-go/trpc-go v1.0.4
@@ -50,3 +51,5 @@ require (
 replace github.com/mooyang-code/moox/packages/security => ../security
 
 replace github.com/mooyang-code/moox/packages/requestauth => ../requestauth
+
+replace github.com/mooyang-code/moox/packages/wirecompress => ../wirecompress

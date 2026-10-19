@@ -99,6 +99,9 @@ func wanted(options Options) ([]string, error) {
 		if id == "console-proxy" {
 			callers = append(callers, "console")
 		}
+		if id == "collector" {
+			callers = append(callers, "scf-collector")
+		}
 	}
 	if options.AllowOperator {
 		callers = append(callers, "moox-cli")

@@ -19,11 +19,12 @@
 ```bash
 MOOX_RELEASE_BUILDER=<构建机用户>@<构建机地址>
 MOOX_RELEASE_HOST_CONTROL=ubuntu@<控制机>
-MOOX_RELEASE_HOST_STORAGE=ubuntu@<Storage 主机>
-MOOX_RELEASE_HOST_COMPUTE_1=ubuntu@<compute-1>
+MOOX_RELEASE_HOST_STORAGE=ubuntu@<存储机>
+MOOX_RELEASE_HOST_OVERSEAS=ubuntu@<海外机>
 ```
 
-实际地址见 `docs/计划/网关与服务部署重构设计.md` 的主机表；构建机是内网的编译机，也运行因子引擎。配置好后先只读验证：
+主机命名统一为控制机（control）、存储机（storage）、海外机（overseas）、因子机（factor）；生产海外机的主机 ID 目前仍是 `compute-1`，
+改名步骤见 `docs/部署与运维.md` 第 1 节。实际地址见 `docs/计划/网关与服务部署重构设计.md` 的主机表；构建机是内网的编译机，也运行因子引擎。配置好后先只读验证：
 
 ```bash
 S=skills/moox/scripts/native-release.sh
@@ -40,8 +41,8 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 | 控制机 | `prod` | `admin` `eventbus` `monitor` `collector` `cloudnode` `factor-mgr` `strategy` `web-host` `console-proxy` |
 | Storage 主机 | `storage` | `storage-primary` `storage-node` `storage-view`（**同一份二进制，三个文件名**） |
 | 每台主机 | `host` | `host-gateway` `host-agent` |
-| Storage 主机、compute-1 | `access` | `access` |
-| compute-1 | `trade`、`egress-proxy` | `trade`、`egress-proxy` |
+| 存储机、海外机 | `access` | `access` |
+| 海外机 | `trade`、`egress-proxy` | `trade`、`egress-proxy` |
 | 构建机 | systemd 用户单元 | `moox-factor-engine`（不在 `/data/moox` 里，见下） |
 
 构建目标是 `scripts/build/build.sh` 的参数，和组件 id 基本一致（`host-gateway` 目标同时产出 server、cli 和 `moox-runtime`；`admin`、`monitor`、`collector`、
@@ -80,6 +81,13 @@ $S rollback --host control --unit prod --backup /data/moox/prod/binary-backup-co
   重启 `storage-primary`、`storage-node` 会让这一刻的周期提交失败，监控可能出一条几十秒的行情探针告警并自动恢复。
 - 发布 Storage 前确认没有正在跑的 `reset-view-consumers` 或 View 重建。
 
+## 发布清单的重新封存
+
+单元工具（`deploy-host`、`deploy-unit`、`bootstrap --release`）会核对已安装发布的文件清单（`prepared.json`）。`install` 与 `rollback`
+在组件重启核对之后，会调用该主机 `host/current/bin/moox-runtime reseal --unit-root <单元> --yes` 把清单改成现状（输出 `RESEALED:`）。
+封存失败时二进制已经生效，脚本以 7 退出并给出手工补救命令；手工改配置之后也要执行同样的 `reseal`（不带 `--yes` 先看差异路径）。
+改写前的清单留在单元根目录的 `reseal-backups/` 下。
+
 ## 服务目录变化：必须整体发布
 
 `packages/servicecatalog/catalog.yaml`（新增或删除 RPC 路由、改 ACL、改方法超时都算）内嵌在 **Admin、Monitor、每台主机的 host-gateway** 里。
@@ -101,7 +109,7 @@ $S catalog-changed --host control                    # 用台账里最近一次 
    （日志 `initial host snapshot unavailable: invalid host gateway snapshot: route differs from catalog or directory`，`status` 里 `host-gateway stopped`，
    脚本不打印 `RESULT/READY`）。此时控制机上的组件跨主机调用全部中断，要立刻装 Admin，Admin 就绪后在控制机执行
    `/data/moox/host/current/bin/moox-runtime start --plan /data/moox/host/current/runtime.json --components host-gateway` 拉起网关（2026-10-15 实测中断约 50 秒）。
-   Storage 主机和 compute-1 的网关不受影响。
+   存储机和海外机的网关不受影响。
 4. 核对：Admin 数据库的 `t_host_gateway_status` 里三台主机 `c_expected_hash == c_applied_hash` 且 `c_last_error` 为空；Monitor 日志每分钟有 `placement sync updated N checks`、没有 `catalog differs`。
 
 只想发布别的改动、而目录改动还不想发布时，在构建树里去掉目录改动再构建（不要把半截目录发出去）。

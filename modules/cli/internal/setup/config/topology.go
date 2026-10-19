@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
@@ -16,7 +17,7 @@ func (m Manifest) HostByID(id string) Host {
 		return Host{}
 	}
 	reachability, _ := servicecatalog.ParseReachability(definition.Reachability)
-	return Host{Name: id, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region, Port: definition.SSH.Port, Username: definition.SSH.Username, Password: definition.SSH.Password, Provider: definition.Provider, TLSMode: definition.TLSMode, Reachability: reachability}
+	return Host{Name: id, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region, Port: definition.SSH.Port, Username: definition.SSH.Username, Password: definition.SSH.Password, Provider: definition.Provider, TLSMode: definition.TLSMode, Reachability: reachability, Label: definition.Label}
 }
 func (m Manifest) ControlHost() Host    { return m.HostByID(m.PlacementHost("admin")) }
 func (m Manifest) CompileHost() Host    { return m.HostByID(m.CompileHostRef.Host) }
@@ -129,6 +130,9 @@ func validateHostCatalog(catalog map[string]HostDefinition) error {
 		}
 		if definition.SSH.Username == "" {
 			return fmt.Errorf("config_invalid: %s.ssh.username is required", path)
+		}
+		if utf8.RuneCountInString(definition.Label) > 32 || strings.ContainsAny(definition.Label, "\r\n\t") {
+			return fmt.Errorf("config_invalid: %s.label must be a single line of at most 32 characters", path)
 		}
 		if definition.TLSMode != "" && definition.TLSMode != "auto" && definition.TLSMode != "public" && definition.TLSMode != "internal" {
 			return fmt.Errorf("config_invalid: %s.tls_mode must be auto, public, or internal", path)

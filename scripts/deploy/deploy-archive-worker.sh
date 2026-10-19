@@ -124,7 +124,6 @@ gateway_client:
   caller: archive-worker
   key_id: "${ACCESS_KEY_ID}"
   key_file: ${SECRETS_DIR}/access-archive-worker.key
-  compression: gzip
 
 storage_auth_file: ${SECRETS_DIR}/storage-primary-auth.secret
 

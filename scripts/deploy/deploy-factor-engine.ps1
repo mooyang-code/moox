@@ -108,7 +108,6 @@ engine:
 gateway_client:
   access_address: "$AccessAddress"
   access_id: "$AccessId"
-  compression: gzip
   caller: factor-engine
   key_id: "$AccessKeyId"
   key_file: $secretsYaml/access-factor-engine.key

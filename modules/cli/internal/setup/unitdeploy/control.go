@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -218,7 +219,7 @@ func checkControlDependencyRecords(snapshot *setupconfig.Snapshot, root *os.Root
 			if _, err := unitComponents(snapshot.Manifest, host.Name, profile); err != nil {
 				continue
 			}
-			if _, err := root.Lstat(filepath.Join("units", host.Name, profile, "operation.json")); err != nil {
+			if !unitDeploymentRecorded(root, host.Name, profile) {
 				return fmt.Errorf("control upgrade requires an existing %s deployment on %s", profile, host.Name)
 			}
 			found = true
@@ -228,6 +229,24 @@ func checkControlDependencyRecords(snapshot *setupconfig.Snapshot, root *os.Root
 		}
 	}
 	return nil
+}
+
+// unitDeploymentRecorded 报告单元已有部署记录：首次安装的 operation.json，或任一版本安装的 releases/<版本>/operation.json。
+func unitDeploymentRecorded(root *os.Root, host, profile string) bool {
+	base := filepath.Join("units", host, profile)
+	if _, err := root.Lstat(filepath.Join(base, "operation.json")); err == nil {
+		return true
+	}
+	entries, err := fs.ReadDir(root.FS(), filepath.Join(base, "releases"))
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if _, err := root.Lstat(filepath.Join(base, "releases", entry.Name(), "operation.json")); entry.IsDir() && err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func activeControlStatus(ctx context.Context, transport setupssh.Client, helper, directory, host string, ids []string) ([]unitruntime.Status, error) {

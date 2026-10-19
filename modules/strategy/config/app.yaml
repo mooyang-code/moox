@@ -16,7 +16,6 @@ eventbus:
 # 访问 Storage、FactorMgr 与 Trade 统一经本机主机网关（strategy 身份）
 gateway_client:
   caller: strategy
-  compression: gzip
   key_id: ""
   key_file: ../../secrets/caller-strategy.key
 factor:

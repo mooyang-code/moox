@@ -2,6 +2,7 @@ package marketfetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -140,6 +141,11 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 	functions, _ := content.Applied()
 	if len(functions) == 0 {
 		return true, nil
+	}
+	// 启用定时器并下发环境之前，先让落后的函数跟上配置的代码包：环境的编码格式（例如采集计划）随代码版本变化，
+	// 先启用会出现“旧代码读新环境”。升级失败或仍在进行都不启用，下一轮重试；没有落后函数时这一步什么也不做。
+	if err := r.upgradeBeforeEnable(ctx); err != nil {
+		return false, err
 	}
 	release, err := r.acquireOperation(ctx)
 	if err != nil {
@@ -441,6 +447,12 @@ func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *Pl
 		}
 		if enabling {
 			done, err := reconciler.EnableAll(tickCtx)
+			if errors.Is(err, errCodeUpgradePending) {
+				// 函数代码还没升级完：对账会把新环境和定时器启用推下去，旧代码读不了新环境，本轮整体跳过。
+				log.WarnContextf(ctx, "collector fetch plan waiting for function code upgrade space=%s: %v", space, err)
+				cancel()
+				continue
+			}
 			if err != nil {
 				log.WarnContextf(ctx, "collector fetch plan enabling timers space=%s failed: %v", space, err)
 			} else if done {
@@ -461,4 +473,47 @@ func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *Pl
 		}
 		cancel()
 	}
+}
+
+// errCodeUpgradePending 表示仍有函数运行着比配置更旧的代码包：此时不能启用定时器，也不能下发新环境。
+var errCodeUpgradePending = errors.New("function code upgrade pending")
+
+// upgradeBeforeEnable 刷新配置的代码包并升级落后的函数；调用方已持有 r.mu。
+// 升级作业是异步的、失败也只记日志，所以最后要读回云端确认没有任何函数仍在旧代码包上，
+// 否则返回 errCodeUpgradePending，调用方本轮既不启用定时器也不继续对账。
+func (r *PlanReconciler) upgradeBeforeEnable(ctx context.Context) error {
+	if err := r.refreshPackage(ctx); err != nil {
+		return r.fail("package", err)
+	}
+	upgradeCtx, cancel := upgradeContext(ctx)
+	upgradeErr := r.upgradeLaggingFunctions(upgradeCtx)
+	cancel()
+	if upgradeErr != nil {
+		log.WarnContextf(ctx, "collector fetch plan code upgrade before enabling timers space=%s failed: %v", r.SpaceID, upgradeErr)
+	}
+	pkg := strings.TrimSpace(r.packageID())
+	if pkg == "" {
+		return nil
+	}
+	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
+	if err != nil {
+		// 读不到云端就无法确认代码已经升级：同样不放行，等下一轮。
+		return fmt.Errorf("%w: cannot read back the fleet: %v", errCodeUpgradePending, err)
+	}
+	prefix := "moox-fetch" + PlanFleetMarker + planNameSanitizer.Replace(strings.ToLower(r.SpaceID)) + "-"
+	stale := 0
+	for _, node := range nodes {
+		if !strings.HasPrefix(node.NodeID, prefix) || strings.TrimSpace(node.PackageID) == "" || node.PackageID == pkg {
+			continue
+		}
+		// 云端已确认不存在的函数没有代码可升级，交给对账清理和重建，不能因此永久阻塞整个空间。
+		if readbackState(node.Metadata, r.now()) == readbackGone {
+			continue
+		}
+		stale++
+	}
+	if stale > 0 {
+		return fmt.Errorf("%w: %d functions are still on an older code package", errCodeUpgradePending, stale)
+	}
+	return nil
 }

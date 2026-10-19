@@ -38,7 +38,7 @@ func (c *Client) SyncHostPlacements(ctx context.Context, snapshot *setupconfig.S
 	response := &pb.SyncHostPlacementsRsp{}
 	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "SyncHostPlacements", &pb.SyncHostPlacementsReq{
 		HostId: hostID, Address: host.Address, PrivateAddress: host.PrivateAddress,
-		Region: host.Region, Reachability: servicecatalog.ReachabilityName(host.Reachability), ComponentIds: components,
+		Region: host.Region, Reachability: servicecatalog.ReachabilityName(host.Reachability), Description: host.Label, ComponentIds: components,
 	}, response); err != nil {
 		return err
 	}
