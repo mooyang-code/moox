@@ -39,10 +39,17 @@ type rpcPool struct {
 	relays    map[string]*relayRoute
 	closed    bool
 	transport transport.ClientTransport
+	settings  poolSettings
+	stats     poolCounters
 }
 
-func newRPCPool() *rpcPool {
-	return &rpcPool{pools: make(map[trustIdentity]connpool.Pool), conns: make(map[*trackedConn]struct{}), relays: make(map[string]*relayRoute), transport: transport.NewClientTransport()}
+// newRPCPool 创建连接池；不带参数时保持改动前的行为（用于只访问本机目录服务的来源）。
+func newRPCPool(settings ...poolSettings) *rpcPool {
+	pool := &rpcPool{pools: make(map[trustIdentity]connpool.Pool), conns: make(map[*trackedConn]struct{}), relays: make(map[string]*relayRoute), transport: transport.NewClientTransport(), settings: legacyPoolSettings()}
+	if len(settings) > 0 {
+		pool.settings = settings[0]
+	}
+	return pool
 }
 
 // route 登记合成地址对应的中转路线；control 地址随目录变化时覆盖旧值，已建立的连接不受影响。
@@ -61,17 +68,29 @@ func (p *rpcPool) Get(network, address string, opts connpool.GetOptions) (net.Co
 	key := trustIdentity{opts.CACertFile, opts.TLSServerName, opts.TLSCertFile, opts.TLSKeyFile, opts.TLSCertProvider, opts.LocalAddr}
 	pool := p.pools[key]
 	if pool == nil {
-		pool = connpool.NewConnectionPool(connpool.WithDialFunc(p.dial), connpool.WithMaxIdle(8))
+		pool = connpool.NewConnectionPool(p.settings.options(p.dial)...)
 		p.pools[key] = pool
 	}
 	p.mu.Unlock()
-	return pool.Get(network, address, opts)
+	// 连接池取走 opts.Ctx，先记下本次调用的状态；获取连接失败意味着请求尚未发出。
+	ctx := opts.Ctx
+	conn, err := pool.Get(network, address, opts)
+	if err != nil {
+		markConnectFailure(ctx)
+		return nil, err
+	}
+	return conn, nil
 }
 
 func (p *rpcPool) dial(opts *connpool.DialOptions) (net.Conn, error) {
 	p.mu.Lock()
 	route := p.relays[opts.Address]
 	p.mu.Unlock()
+	// 连接池后台补连接（MinIdle）固定使用 200ms 拨号超时，跨境 TLS 握手经常超过它，在这里抬到后台拨号超时。
+	background := p.settings.minIdle > 0 && opts.Timeout > 0 && opts.Timeout <= backgroundDialThreshold
+	if background {
+		opts.Timeout = backgroundDialTimeout
+	}
 	var conn net.Conn
 	var err error
 	if route != nil {
@@ -79,6 +98,7 @@ func (p *rpcPool) dial(opts *connpool.DialOptions) (net.Conn, error) {
 	} else {
 		conn, err = connpool.Dial(opts)
 	}
+	p.stats.record(background, err == nil)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +164,15 @@ func (p *rpcPool) invoke(ctx context.Context, ep endpoint, service, method strin
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
-		options = append(options, client.WithTimeout(remaining), client.WithDialTimeout(remaining))
+		dialTimeout := remaining
+		if state := callStateFrom(ctx); state != nil && p.settings.fastConnect && !noRetry(ctx) {
+			// 建连失败可以在预算内重试，所以单次拨号不能吃掉整个调用预算。
+			dialTimeout = connectBudget(remaining, state.attempt)
+			if dialTimeout <= 0 {
+				dialTimeout = remaining
+			}
+		}
+		options = append(options, client.WithTimeout(remaining), client.WithDialTimeout(dialTimeout))
 	}
 	if ep.compress && len(body) >= minCompressBytes {
 		options = append(options, client.WithCompressType(codec.CompressTypeGzip))
@@ -204,4 +232,17 @@ func loadRoots(path string) (*x509.CertPool, error) {
 		return nil, errors.New("MooX CA file contains no certificates")
 	}
 	return roots, nil
+}
+
+func (c *poolCounters) record(background, ok bool) {
+	switch {
+	case background && ok:
+		c.warmupDialsOK.Add(1)
+	case background:
+		c.warmupDialsErr.Add(1)
+	case ok:
+		c.requestDialsOK.Add(1)
+	default:
+		c.requestDialsErr.Add(1)
+	}
 }

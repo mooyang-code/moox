@@ -230,9 +230,13 @@ func TestUnitPreparationLinuxBusinessUsesHostViewAndOnlyAccessIdentities(t *test
 			Caller  string `yaml:"caller"`
 			KeyID   string `yaml:"key_id"`
 			KeyFile string `yaml:"key_file"`
+			Pool    struct {
+				MinIdle int `yaml:"min_idle"`
+			} `yaml:"pool"`
 		} `yaml:"gateway_client"`
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &rendered))
+	require.Equal(t, 16, rendered.Client.Pool.MinIdle, "渲染身份字段时不能丢掉模板里的连接池参数")
 	require.Equal(t, "access", rendered.Client.Caller)
 	require.Equal(t, prepared.Identity.Credentials[0].KeyID, rendered.Client.KeyID)
 	require.Equal(t, "../../secrets/caller-access.key", rendered.Client.KeyFile)

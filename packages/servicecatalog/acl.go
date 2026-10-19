@@ -61,3 +61,9 @@ func (c Catalog) ReadOnly(servicePath, method string) bool {
 	service, ok := c.Service(servicePath)
 	return ok && slices.Contains(service.ReadOnlyMethods, method)
 }
+
+// Retryable 判断方法在请求可能已发出的网络失败后能否安全重发：只读方法，或声明为幂等的写方法。
+func (c Catalog) Retryable(servicePath, method string) bool {
+	service, ok := c.Service(servicePath)
+	return ok && (slices.Contains(service.ReadOnlyMethods, method) || slices.Contains(service.IdempotentMethods, method))
+}

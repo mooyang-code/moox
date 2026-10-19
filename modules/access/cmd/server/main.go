@@ -63,6 +63,9 @@ func run(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 	defer gateway.Close()
+	if err := accessproxy.RegisterPoolMetrics(nil, gateway.PoolStats); err != nil {
+		return err
+	}
 	proxy, err := accessproxy.New(accessproxy.Options{HostID: gateway.LocalHostID(), Credentials: credentials, Gateway: gateway, Nonces: nonces})
 	if err != nil {
 		return err

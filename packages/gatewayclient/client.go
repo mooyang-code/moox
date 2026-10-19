@@ -64,7 +64,9 @@ type Config struct {
 	Serialization    int
 	// Compression 控制跨主机/经 Access 的公网请求体压缩：空或 none 不压缩，gzip 压缩
 	// 达到阈值的请求体；服务端按请求的压缩方式同样压缩响应。回环调用从不压缩。
-	Compression      string
+	Compression string
+	// Pool 调整连接本机/跨主机网关的连接池（Internal 与 Tunnel 模式）；零值使用默认。
+	Pool             PoolConfig
 	Timeout          time.Duration
 	DirectoryTimeout time.Duration
 	RefreshInterval  time.Duration
@@ -166,6 +168,9 @@ func New(config Config) (*Client, error) {
 	if !ValidCompression(config.Compression) {
 		return nil, fmt.Errorf("gateway compression must be none or gzip")
 	}
+	if err := config.Pool.Validate(); err != nil {
+		return nil, err
+	}
 	if config.Credentials.Caller == "" {
 		return nil, fmt.Errorf("gateway caller is required")
 	}
@@ -220,7 +225,11 @@ func New(config Config) (*Client, error) {
 	default:
 		return nil, fmt.Errorf("unknown gateway client mode")
 	}
-	pool := newRPCPool()
+	settings := legacyPoolSettings()
+	if config.Mode != External {
+		settings = tunedPoolSettings(config.Pool)
+	}
+	pool := newRPCPool(settings)
 	c := &Client{config: config, catalog: catalog, pool: pool, ownedSource: ownedSource, invoke: pool.invoke, done: make(chan struct{}), refresh: make(chan struct{}, 1)}
 	if config.Mode != External {
 		if config.CachePath != "" {
@@ -245,6 +254,9 @@ func New(config Config) (*Client, error) {
 	go c.poll(ctx)
 	return c, nil
 }
+
+// PoolStats 返回连接池拨号与建连重试的累计计数。
+func (c *Client) PoolStats() PoolStats { return c.pool.stats.snapshot() }
 
 func (c *Client) Directory() servicecatalog.Directory {
 	c.mu.RLock()
@@ -392,6 +404,7 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	failedHost := ""
+	connectRetried := false
 	for attempt := 0; attempt < 2; attempt++ {
 		ep, err := c.endpoint(ctx, service, failedHost)
 		if err != nil {
@@ -410,23 +423,45 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 				headers.Set(name, value)
 			}
 		}
-		response, err := c.invoke(ctx, ep, service, method, serialization, body, headers)
+		callCtx, state := withCallState(ctx)
+		state.attempt = attempt
+		response, err := c.invoke(callCtx, ep, service, method, serialization, body, headers)
 		if err == nil {
+			if connectRetried {
+				c.pool.stats.retriesRecovered.Add(1)
+			}
 			if int64(len(response)) > limit {
 				return nil, fmt.Errorf("gateway response exceeds service body limit")
 			}
 			return response, nil
 		}
+		// 获取连接失败：请求尚未发出，对所有方法（包括写）都可以安全重试；预算不足时放弃，交给补采。
+		if state.connectFailed.Load() {
+			if attempt == 1 || ctx.Err() != nil || noRetry(ctx) || remainingBudget(ctx) < minRetryRemaining {
+				if attempt == 1 {
+					c.pool.stats.retriesFailed.Add(1)
+				}
+				return nil, err
+			}
+			connectRetried = true
+			failedHost = ep.target
+			continue
+		}
 		code := errs.Code(err)
 		// 服务撤离后旧目录的调用方可能先在验签处失败（撤离同时撤销了调用方验证密钥），也需要刷新目录。
 		refresh := code == errs.RetClientNetErr || code == errs.RetServerNoService || code == errs.RetServerAuthFail
-		retry := refresh || code == errs.RetClientTimeout
+		// 响应读取阶段失败（连接已被对端关闭或重置）与超时、网络错误一样，请求可能已经发出。
+		retry := refresh || code == errs.RetClientTimeout || code == errs.RetClientReadFrameErr
 		if refresh && c.config.Mode != External {
 			if refreshErr := c.Refresh(ctx); refreshErr != nil {
 				c.report(refreshErr)
 			}
 		}
-		if attempt == 1 || !retry || !c.catalog.ReadOnly(service, method) || ctx.Err() != nil || noRetry(ctx) {
+		// 请求可能已发出：只有只读方法与声明为幂等的写方法可以重发，其余写方法绝不重试。
+		if attempt == 1 || !retry || !c.catalog.Retryable(service, method) || ctx.Err() != nil || noRetry(ctx) || !c.catalog.ReadOnly(service, method) && remainingBudget(ctx) < minRetryRemaining {
+			if connectRetried {
+				c.pool.stats.retriesFailed.Add(1)
+			}
 			return nil, err
 		}
 		failedHost = ep.target
@@ -538,4 +573,12 @@ func WithoutRetry(ctx context.Context) context.Context {
 func noRetry(ctx context.Context) bool {
 	v, _ := ctx.Value(noRetryKey{}).(bool)
 	return v
+}
+
+// remainingBudget 是 ctx 截止时间前的剩余时间；没有截止时间时视为充足。
+func remainingBudget(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline)
+	}
+	return time.Hour
 }

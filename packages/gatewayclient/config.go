@@ -20,6 +20,8 @@ type FileConfig struct {
 	KeyFile string `yaml:"key_file"`
 	// Compression 为 none（默认）或 gzip，作用于跨主机的公网请求。
 	Compression string `yaml:"compression"`
+	// Pool 调整连接本机与跨主机网关的连接池；省略时使用默认。
+	Pool PoolConfig `yaml:"pool"`
 }
 
 // ExternalFileConfig selects one fixed Access instance, without directory
@@ -48,6 +50,9 @@ func (c FileConfig) Validate() error {
 	}
 	if !ValidCompression(c.Compression) {
 		return errors.New("gateway_client.compression must be none or gzip")
+	}
+	if err := c.Pool.Validate(); err != nil {
+		return err
 	}
 	return validateCredentialFile(c.KeyID, c.KeyFile, false)
 }
@@ -165,6 +170,6 @@ func (c FileConfig) OpenInternal(moduleConfigPath, dataDirectory string, onRefre
 	return New(Config{
 		Mode: Internal, Credentials: credentials,
 		LocalHostID: host.Host.ID, LocalAddress: host.Server.LocalAddr, CAFile: host.TLS.CAFile,
-		CachePath: cachePath, Compression: c.Compression, OnRefreshError: onRefreshError,
+		CachePath: cachePath, Compression: c.Compression, Pool: c.Pool, OnRefreshError: onRefreshError,
 	})
 }

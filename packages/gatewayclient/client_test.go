@@ -182,7 +182,8 @@ func TestExternalReadsResignRetriesAndWritesRunOnce(t *testing.T) {
 		attempts                int
 	}{
 		{"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", 2},
-		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", 1},
+		// 周期提交声明为幂等写：请求可能已发出的网络失败后重发一次；其他写方法绝不重发。
+		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", 2},
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "UpsertFields", 1},
 	} {
 		t.Run(call.method, func(t *testing.T) {

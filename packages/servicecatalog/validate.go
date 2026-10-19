@@ -85,6 +85,14 @@ func (c Catalog) Validate() error {
 			if err := declaredMethods(service.ReadOnlyMethods, methods); err != nil {
 				return fmt.Errorf("service %q read-only methods: %w", service.Path, err)
 			}
+			if err := declaredMethods(service.IdempotentMethods, methods); err != nil {
+				return fmt.Errorf("service %q idempotent methods: %w", service.Path, err)
+			}
+			for _, method := range service.IdempotentMethods {
+				if slices.Contains(service.ReadOnlyMethods, method) {
+					return fmt.Errorf("service %q method %q is declared both read-only and idempotent", service.Path, method)
+				}
+			}
 			for method, timeout := range service.MethodTimeoutsMS {
 				if !methods[method] || timeout <= 0 {
 					return fmt.Errorf("service %q has invalid method timeout for %q", service.Path, method)

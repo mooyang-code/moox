@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Host struct {
@@ -49,6 +50,10 @@ func ReachabilityName(value string) string {
 
 // HostGatewayRemotePort 是主机网关的跨主机 TLS 端口。
 const HostGatewayRemotePort = 11003
+
+// HostGatewayServerIdleTimeout 是主机网关服务端回收空闲连接的时间。网关客户端连接池的空闲超时必须明显小于它：
+// TLS 连接复用前没有探测对端是否已关闭，客户端先于服务端回收才不会把请求发到已被服务端关闭的连接上。
+const HostGatewayServerIdleTimeout = 15 * time.Minute
 
 type Placement struct {
 	HostID      string `json:"host_id"`

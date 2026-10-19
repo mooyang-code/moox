@@ -40,3 +40,15 @@ func TestConfigUsesCanonicalLayoutAndRejectsLegacyFields(t *testing.T) {
 		require.NotContains(t, err.Error(), "do-not-echo-this-secret")
 	}
 }
+
+// 打包进发布的 Access 模板必须能被严格加载器解析，并带有连接池预热参数；非法的池参数被拒绝。
+func TestPackagedTemplateCarriesPoolWarmup(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "config", "app.yaml"))
+	require.NoError(t, err)
+	require.Equal(t, 16, cfg.GatewayClient.Pool.MinIdle)
+
+	path := filepath.Join(t.TempDir(), "app.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(example, "key_file:", "pool:\n    min_idle: 100\n  key_file:", 1)), 0o644))
+	_, err = Load(path)
+	require.Error(t, err, "min_idle 超过上限应被拒绝")
+}
