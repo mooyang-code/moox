@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"os"
 	"path/filepath"
 	"sort"
@@ -333,9 +332,5 @@ func (c *Config) scfPlanAccessEnvironment(region string) (map[string]string, err
 	if err != nil {
 		return nil, fmt.Errorf("SCF Access signing key: %w", err)
 	}
-	compression := config.Compression
-	if compression == "" {
-		compression = gatewayclient.CompressionNone
-	}
-	return map[string]string{"MOOX_ACCESS_ADDRESS": config.Address, "MOOX_ACCESS_ID": config.InstanceID, "MOOX_CALLER": config.Caller, "MOOX_CALLER_KEY_ID": config.KeyID, "MOOX_CALLER_KEY": secret, "MOOX_GATEWAY_COMPRESSION": compression}, nil
+	return map[string]string{"MOOX_ACCESS_ADDRESS": config.Address, "MOOX_ACCESS_ID": config.InstanceID, "MOOX_CALLER": config.Caller, "MOOX_CALLER_KEY_ID": config.KeyID, "MOOX_CALLER_KEY": secret}, nil
 }

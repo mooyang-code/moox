@@ -29,7 +29,7 @@ func DecodeRaw(registry *Registry, raw []byte, subject, messageID, contentType s
 	if registry == nil {
 		return nil, nil, fmt.Errorf("event registry is nil")
 	}
-	if contentType == ContentTypeGzip {
+	if contentType == ContentTypeZstd {
 		var err error
 		if raw, err = inflateBody(raw); err != nil {
 			return nil, nil, err

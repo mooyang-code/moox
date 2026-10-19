@@ -205,9 +205,9 @@ func (p *rpcPool) invoke(ctx context.Context, ep endpoint, service, method strin
 		}
 		options = append(options, client.WithTimeout(remaining), client.WithDialTimeout(dialTimeout))
 	}
-	// 不设请求体大小门槛：服务端按请求的压缩方式压缩响应，读接口请求很小、响应很大，小请求也必须标记压缩。
+	// 不设请求体大小门槛：服务端按请求的压缩类型压缩响应，读接口请求很小、响应很大，小请求也必须标记压缩。
 	if ep.compress {
-		options = append(options, client.WithCompressType(codec.CompressTypeGzip))
+		options = append(options, client.WithCompressType(compressTypeFor(ctx)))
 	}
 	if ep.relay != nil {
 		p.route(ep.address, ep.relay)

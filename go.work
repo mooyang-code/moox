@@ -61,7 +61,9 @@ use (
 	./packages/timerjob
 	./packages/tradeeventpb
 	./packages/trpcretry
+	./packages/wirecompress
 	./tools/moox-mcp
+	./tools/zstddict
 	./web-host
 )
 

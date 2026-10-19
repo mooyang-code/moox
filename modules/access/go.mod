@@ -12,6 +12,7 @@ require (
 	trpc.group/trpc-go/trpc-go v1.0.4
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
 	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -101,6 +102,7 @@ replace (
 	github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 	github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 	github.com/mooyang-code/moox/packages/security => ../../packages/security
+	github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
 )
 
 replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/gatewayclient

@@ -34,6 +34,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
 	trpc.group/trpc-go/trpc-go v1.0.4
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
 )
 
 require (
@@ -169,3 +170,5 @@ replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 replace github.com/mooyang-code/moox/packages/hostpolicy => ../../packages/hostpolicy
 
 replace github.com/mooyang-code/moox/packages/notification => ../../packages/notification
+
+replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress

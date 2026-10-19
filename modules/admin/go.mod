@@ -32,6 +32,7 @@ require (
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
 )
 
 require github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
@@ -73,6 +74,7 @@ replace (
 	github.com/mooyang-code/moox/packages/notification => ../../packages/notification
 	github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 	github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
+	github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
 )
 
 require (

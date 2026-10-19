@@ -384,7 +384,7 @@ func (r *PlanReconciler) holdMissingDatasets(ctx context.Context, desired *Desir
 
 // functionEnvironment 构造受管环境：采集计划、Access 入口、超时。
 func (r *PlanReconciler) functionEnvironment(region string, plan *Plan) (map[string]string, error) {
-	encoded, err := EncodePlan(plan)
+	encoded, err := EncodePlan(r.SpaceID, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -409,7 +409,7 @@ func (r *PlanReconciler) functionEnvironment(region string, plan *Plan) (map[str
 	if err := tencent.ValidateCollectorAccessEnvironment(access); err != nil {
 		return nil, err
 	}
-	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY", "MOOX_GATEWAY_COMPRESSION"} {
+	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
 		if value, ok := access[key]; ok {
 			environment[key] = value
 		}
@@ -1603,7 +1603,7 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 		return "", fmt.Errorf("region %s has no VPC and subnet configured", region)
 	}
 	environment := map[string]string{"MOOX_MARKET_FETCH_MODE": "backfill", "MOOX_FETCH_TIMEOUT_SECONDS": strconv.Itoa(tencent.CollectorTimerTimeoutSeconds)}
-	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY", "MOOX_GATEWAY_COMPRESSION"} {
+	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
 		if value, ok := access[key]; ok {
 			environment[key] = value
 		}

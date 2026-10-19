@@ -1,63 +1,45 @@
 package events
 
 import (
-	"bytes"
-	"compress/gzip"
 	"fmt"
-	"io"
+
+	"github.com/mooyang-code/moox/packages/wirecompress"
 )
 
-// ContentTypeGzip 标识事件信封经 gzip 压缩后的字节。压缩只发生在发布端显式开启之后；
-// 消费端经 DecodeRaw 透明解压，业务代码不感知。
-const ContentTypeGzip = ContentType + "+gzip"
+// ContentTypeZstd 标识事件信封经 zstd 字典压缩后的字节。发布器默认压缩；
+// 消费端经 DecodeRaw 透明解压，业务代码不感知。字典由帧头里的字典 ID 决定，解码不需要知道空间。
+const ContentTypeZstd = ContentType + "+zstd"
 
 // maxInflatedBytes 是解压后信封的上限，防止异常数据撑爆内存；正常的行事件远小于它。
 const maxInflatedBytes = 64 << 20
 
-// compressBody 压缩信封字节；压缩后没有明显变小时返回 false，调用方按原样发布。
-func compressBody(body []byte) ([]byte, bool) {
-	var buffer bytes.Buffer
-	writer, err := gzip.NewWriterLevel(&buffer, gzip.BestSpeed)
-	if err != nil {
+// compressMinBytes 是压缩的最小信封字节数：有字典时小信封也划算（1KB 以下实测仍有 2～3 倍）。
+const compressMinBytes = 256
+
+var inflater = wirecompress.NewDecoder(wirecompress.UseEvent, maxInflatedBytes)
+
+// compressBody 按空间绑定的字典压缩信封字节；压缩后没有明显变小时返回 false，调用方按原样发布。
+func compressBody(space string, body []byte) ([]byte, bool) {
+	packed := wirecompress.Encode(wirecompress.UseEvent, space, body)
+	if len(packed) == 0 || len(packed) >= len(body)*9/10 {
 		return nil, false
 	}
-	if _, err := writer.Write(body); err != nil || writer.Close() != nil {
-		return nil, false
-	}
-	if buffer.Len() >= len(body)*9/10 {
-		return nil, false
-	}
-	return buffer.Bytes(), true
+	return packed, true
 }
 
 func inflateBody(raw []byte) ([]byte, error) {
-	reader, err := gzip.NewReader(bytes.NewReader(raw))
+	body, err := inflater.Decode(raw)
 	if err != nil {
 		return nil, fmt.Errorf("解压事件信封：%w", err)
-	}
-	defer reader.Close()
-	body, err := io.ReadAll(io.LimitReader(reader, maxInflatedBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("解压事件信封：%w", err)
-	}
-	if len(body) > maxInflatedBytes {
-		return nil, fmt.Errorf("解压后的事件信封超过 %d 字节", maxInflatedBytes)
 	}
 	return body, nil
 }
 
-// SetCompression 让发布器对不小于 minBytes 的信封启用 gzip；0 关闭（默认）。
-// 只在所有消费端都已升级到支持 ContentTypeGzip 之后开启。
-func (p *Publisher) SetCompression(minBytes int) {
-	if p != nil {
-		p.compressMin = minBytes
-	}
-}
-
-func (p *Publisher) pack(body []byte) ([]byte, string) {
-	if p.compressMin > 0 && len(body) >= p.compressMin {
-		if compressed, ok := compressBody(body); ok {
-			return compressed, ContentTypeGzip
+// pack 压缩信封；space 是事件所属空间，没有专用字典的空间（含系统事件）用默认字典。
+func (p *Publisher) pack(space string, body []byte) ([]byte, string) {
+	if len(body) >= compressMinBytes {
+		if compressed, ok := compressBody(space, body); ok {
+			return compressed, ContentTypeZstd
 		}
 	}
 	return body, ContentType

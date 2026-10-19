@@ -20,6 +20,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/wirecompress"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -254,4 +255,27 @@ func TestNativeAccessForwardsExactBytesThroughSharedInternalClient(t *testing.T)
 			}
 		}
 	}
+}
+
+// Access 只转发原始字节，不知道空间：入站帧的压缩类型（字典）要沿用到出站一跳。
+func TestProxyReusesInboundCompressTypeForTheUpstreamHop(t *testing.T) {
+	var seen int
+	var seenOK bool
+	proxy, credential := fixtureProxy(t, forwardFunc(func(ctx context.Context, _, _ string, _ int, body []byte) ([]byte, error) {
+		seen, seenOK = gatewayclient.CompressTypeFromContext(ctx)
+		return body, nil
+	}))
+	body := []byte{0x0a, 1, 'a'}
+	ctx := signedContext(t, credential, "access@storage", primaryService, "CommitTimeSeriesBatch", body)
+	codec.Message(ctx).WithCompressType(wirecompress.CompressType(""))
+	_, err := proxy.Forward(ctx, &codec.Body{Data: body})
+	require.NoError(t, err)
+	require.True(t, seenOK)
+	require.Equal(t, wirecompress.CompressType(""), seen)
+
+	// 入站未压缩（类型 0）时不沿用，出站按默认字典压缩。
+	seenOK = false
+	_, err = proxy.Forward(signedContext(t, credential, "access@storage", primaryService, "CommitTimeSeriesBatch", body), &codec.Body{Data: body})
+	require.NoError(t, err)
+	require.False(t, seenOK)
 }

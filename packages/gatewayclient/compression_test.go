@@ -3,62 +3,102 @@ package gatewayclient
 import (
 	"context"
 	"net"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/wirecompress"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-// 跨主机调用默认压缩：远端网关、经 control 中转、SSH 隧道、Access 都压缩；本机回环从不压缩；显式 none 全部关闭。
-func TestCrossHostEndpointsCompressByDefault(t *testing.T) {
+// 跨主机调用恒定压缩：远端网关、经 control 中转、SSH 隧道、Access 都压缩；本机回环从不压缩。
+func TestCrossHostEndpointsAlwaysCompress(t *testing.T) {
 	ca, _, _ := testCertificates(t)
 	directory := testDirectory(t, "a", "b")
-	for _, compression := range []string{"", CompressionGzip, CompressionNone} {
-		want := compression != CompressionNone
-		t.Run("compression="+compression, func(t *testing.T) {
-			// Tunnel：每个目标主机经 SSH 本地转发。
-			tunnel := tunnelConfig(&sourceStub{directory: directory})
-			tunnel.Compression = compression
-			c := newTestClient(t, tunnel)
-			ep, err := c.endpoint(context.Background(), secretService, "")
-			require.NoError(t, err)
-			require.Equal(t, want, ep.compress, "SSH 隧道经公网到达目标主机")
 
-			// External：经 Access。
-			external := newTestClient(t, Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: "scf-collector", KeyID: "k", Secret: "fixture-key"},
-				AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage", Compression: compression})
-			ep, err = external.endpoint(context.Background(), secretService, "")
-			require.NoError(t, err)
-			require.Equal(t, want, ep.compress, "经 Access 的调用")
+	// Tunnel：每个目标主机经 SSH 本地转发。
+	c := newTestClient(t, tunnelConfig(&sourceStub{directory: directory}))
+	ep, err := c.endpoint(context.Background(), secretService, "")
+	require.NoError(t, err)
+	require.True(t, ep.compress, "SSH 隧道经公网到达目标主机")
 
-			// Internal：本机回环不压缩，远端主机与中转按配置压缩。
-			internal := &Client{config: Config{Mode: Internal, LocalHostID: "a", LocalAddress: "127.0.0.1:11002", CAFile: ca, Compression: compression}}
-			internal.directory = directory
-			ep, err = internal.endpoint(context.Background(), secretService, "")
-			require.NoError(t, err)
-			require.Equal(t, "a", ep.target)
-			require.False(t, ep.compress, "本机回环从不压缩")
-			ep, err = internal.endpoint(context.Background(), secretService, "a")
-			require.NoError(t, err)
-			require.Equal(t, "b", ep.target)
-			require.Equal(t, want, ep.compress, "远端主机网关")
+	// External：经 Access。
+	external := newTestClient(t, Config{Mode: External, Credentials: gatewayauth.Credentials{Caller: "scf-collector", KeyID: "k", Secret: "fixture-key"},
+		AccessAddress: "access.example.test:11004", AccessInstanceID: "access@storage"})
+	ep, err = external.endpoint(context.Background(), secretService, "")
+	require.NoError(t, err)
+	require.True(t, ep.compress, "经 Access 的调用")
 
-			relayed := directory.Clone()
-			relayed.Hosts["b"] = servicecatalog.DirectoryHost{Address: "b.example.test", Relay: "a"}
-			internal.directory = relayed
-			ep, err = internal.endpoint(context.Background(), secretService, "a")
-			require.NoError(t, err)
-			require.NotNil(t, ep.relay)
-			require.Equal(t, want, ep.compress, "经 control 中转")
-		})
-	}
+	// Internal：本机回环不压缩，远端主机与中转压缩。
+	internal := &Client{config: Config{Mode: Internal, LocalHostID: "a", LocalAddress: "127.0.0.1:11002", CAFile: ca}}
+	internal.directory = directory
+	ep, err = internal.endpoint(context.Background(), secretService, "")
+	require.NoError(t, err)
+	require.Equal(t, "a", ep.target)
+	require.False(t, ep.compress, "本机回环从不压缩")
+	ep, err = internal.endpoint(context.Background(), secretService, "a")
+	require.NoError(t, err)
+	require.Equal(t, "b", ep.target)
+	require.True(t, ep.compress, "远端主机网关")
+
+	relayed := directory.Clone()
+	relayed.Hosts["b"] = servicecatalog.DirectoryHost{Address: "b.example.test", Relay: "a"}
+	internal.directory = relayed
+	ep, err = internal.endpoint(context.Background(), secretService, "a")
+	require.NoError(t, err)
+	require.NotNil(t, ep.relay)
+	require.True(t, ep.compress, "经 control 中转")
 }
+
+type spacedRequest struct{ Space string }
+
+func (r spacedRequest) GetSpaceId() string { return r.Space }
+
+// 压缩类型的选择：沿用入站类型 > context 里的空间 > 默认字典；Invoke 会把请求顶层的 space_id 写进 context。
+func TestCompressTypeSelection(t *testing.T) {
+	defaultType := wirecompress.CompressType("")
+	require.Equal(t, defaultType, compressTypeFor(context.Background()), "没有空间用默认字典")
+	require.Equal(t, defaultType, compressTypeFor(wirecompress.WithSpace(context.Background(), "no-dedicated-dict")), "没有专用字典的空间用默认字典")
+	require.Equal(t, defaultType, compressTypeFor(WithCompressType(context.Background(), 0)), "未压缩类型不能沿用")
+	require.Equal(t, defaultType, compressTypeFor(WithCompressType(context.Background(), codec.CompressTypeGzip)), "非本包注册的类型不能沿用")
+	require.Equal(t, defaultType, compressTypeFor(WithCompressType(context.Background(), 200)), "未注册的类型号不能沿用")
+	require.Equal(t, defaultType, compressTypeFor(WithCompressType(context.Background(), defaultType)))
+}
+
+func TestInvokePutsRequestSpaceIntoContext(t *testing.T) {
+	config := tunnelConfig(&sourceStub{directory: testDirectory(t, "a")})
+	config.Serialization = codec.SerializationTypeJSON
+	c := newTestClient(t, config)
+	var seen string
+	c.invoke = func(ctx context.Context, _ endpoint, _, _ string, _ int, _ []byte, _ http.Header) ([]byte, error) {
+		seen = wirecompress.SpaceOf(ctx, nil)
+		return []byte(`{}`), nil
+	}
+	rsp := map[string]any{}
+	require.NoError(t, c.Invoke(context.Background(), secretService, "GetSecret", map[string]any{}, &rsp))
+	require.Equal(t, "", seen, "请求不带空间字段时不设置")
+	c.invoke = func(ctx context.Context, _ endpoint, _, _ string, _ int, _ []byte, _ http.Header) ([]byte, error) {
+		seen = wirecompress.SpaceOf(ctx, nil)
+		return []byte(`{}`), nil
+	}
+	require.NoError(t, c.Invoke(context.Background(), secretService, "GetSecret", &spaceCarrier{Space: "ashare"}, &rsp))
+	require.Equal(t, "ashare", seen, "请求顶层的 space_id 决定字典")
+	require.NoError(t, c.Invoke(wirecompress.WithSpace(context.Background(), "crypto"), secretService, "GetSecret", &spaceCarrier{Space: "ashare"}, &rsp))
+	require.Equal(t, "crypto", seen, "调用点显式指定的空间优先")
+}
+
+// spaceCarrier 是可 JSON 序列化的带空间请求。
+type spaceCarrier struct {
+	Space string `json:"space_id"`
+}
+
+func (r *spaceCarrier) GetSpaceId() string { return r.Space }
 
 // 读接口的请求很小、响应很大：服务端按请求的压缩方式压缩响应，所以小请求也必须标记压缩，响应才会被压缩。
 func TestTinyRequestStillGetsACompressedResponse(t *testing.T) {

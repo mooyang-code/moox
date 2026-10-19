@@ -23,6 +23,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient/relay"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/wirecompress"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
@@ -62,9 +63,6 @@ type Config struct {
 	AccessAddress    string
 	AccessInstanceID string
 	Serialization    int
-	// Compression 控制跨主机调用（经主机网关、Access 或 SSH 隧道）的压缩：空或 gzip 压缩请求，
-	// 服务端按请求的压缩方式同样压缩响应；none 关闭（例如同地域内网、调用方 CPU 很紧时）。回环调用从不压缩。
-	Compression string
 	// Pool 调整连接本机/跨主机网关的连接池（Internal 与 Tunnel 模式）；零值使用默认。
 	Pool             PoolConfig
 	Timeout          time.Duration
@@ -137,16 +135,6 @@ func (c *Client) DialRelay(ctx context.Context, hostID string, port int) (net.Co
 	})
 }
 
-const (
-	CompressionNone = "none"
-	CompressionGzip = "gzip"
-)
-
-// ValidCompression 判断压缩配置取值；空串等同 gzip。
-func ValidCompression(value string) bool {
-	return value == "" || value == CompressionNone || value == CompressionGzip
-}
-
 type invokeFunc func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error)
 
 type Client struct {
@@ -179,9 +167,6 @@ func New(config Config) (*Client, error) {
 	}
 	if config.Timeout < 0 || config.DirectoryTimeout <= 0 || config.RefreshInterval <= 0 || config.Serialization != codec.SerializationTypePB && config.Serialization != codec.SerializationTypeJSON {
 		return nil, fmt.Errorf("gateway client requires positive timeouts and PB or JSON serialization")
-	}
-	if !ValidCompression(config.Compression) {
-		return nil, fmt.Errorf("gateway compression must be none or gzip")
 	}
 	if err := config.Pool.Validate(); err != nil {
 		return nil, err
@@ -376,6 +361,10 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Invoke(ctx context.Context, service, method string, req, rsp interface{}) error {
+	// 字典按空间选择：请求顶层带 space_id 的直接用；顶层没有的调用点自行用 wirecompress.WithSpace 指定。
+	if space := wirecompress.SpaceOf(ctx, req); space != "" {
+		ctx = wirecompress.WithSpace(ctx, space)
+	}
 	body, err := codec.Marshal(c.config.Serialization, req)
 	if err != nil {
 		return err
@@ -490,7 +479,7 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 
 func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoint, error) {
 	if c.config.Mode == External {
-		return endpoint{address: c.config.AccessAddress, target: c.config.AccessInstanceID, compress: c.compress()}, nil
+		return endpoint{address: c.config.AccessAddress, target: c.config.AccessInstanceID, compress: true}, nil
 	}
 	c.mu.RLock()
 	// Published directory maps are immutable. Keep one coherent snapshot without
@@ -524,13 +513,13 @@ func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoi
 			return endpoint{}, fmt.Errorf("SSH tunnel returned a non-loopback endpoint")
 		}
 		// 隧道的本地端口只是 SSH 转发入口，实际经公网到达目标主机，按跨主机调用压缩。
-		return endpoint{address: address, target: chosen, compress: c.compress()}, nil
+		return endpoint{address: address, target: chosen, compress: true}, nil
 	}
 	if chosen == c.config.LocalHostID {
 		return endpoint{address: c.config.LocalAddress, target: chosen}, nil
 	}
 	host := directory.Hosts[chosen]
-	return endpoint{address: net.JoinHostPort(host.Address, "11003"), target: chosen, caFile: c.config.CAFile, serverName: chosen, compress: c.compress()}, nil
+	return endpoint{address: net.JoinHostPort(host.Address, "11003"), target: chosen, caFile: c.config.CAFile, serverName: chosen, compress: true}, nil
 }
 
 // relayEndpoint 为只能出站的主机构造经 control 中转的端点；端到端 TLS 仍校验目标主机身份。
@@ -564,11 +553,8 @@ func (c *Client) relayEndpoint(ctx context.Context, directory servicecatalog.Dir
 		}
 		route.controlAddress = net.JoinHostPort(control.Address, port)
 	}
-	return endpoint{address: relayAddress(target), target: target, caFile: c.config.CAFile, serverName: target, compress: c.compress(), relay: route}, nil
+	return endpoint{address: relayAddress(target), target: target, caFile: c.config.CAFile, serverName: target, compress: true, relay: route}, nil
 }
-
-// compress 报告跨主机调用是否压缩：默认压缩，只有显式 none 才关闭。
-func (c *Client) compress() bool { return c.config.Compression != CompressionNone }
 
 func validAddress(address string) bool {
 	host, port, err := net.SplitHostPort(address)

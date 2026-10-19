@@ -1,11 +1,9 @@
 package report
 
 import (
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -86,7 +84,6 @@ func TestBuildSnapshotPreservesFamiliesAndLimits(t *testing.T) {
 	}
 	gauge.WithLabelValues("unit").Set(42)
 	cfg := validConfig("monitor")
-	cfg.GzipLevel = 1
 	h, err := NewHandlerWithPublisher(cfg, nil, registry)
 	if err != nil {
 		t.Fatal(err)
@@ -95,20 +92,13 @@ func TestBuildSnapshotPreservesFamiliesAndLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.GetCompression() != metricspb.Compression_COMPRESSION_GZIP || snapshot.GetSampleCount() != 1 {
+	if snapshot.GetSampleCount() != 1 {
 		t.Fatalf("unexpected snapshot: %+v", snapshot)
 	}
-	if len(snapshot.GetUncompressedSha256()) != 32 {
-		t.Fatalf("checksum length = %d", len(snapshot.GetUncompressedSha256()))
+	if len(snapshot.GetDataSha256()) != 32 {
+		t.Fatalf("checksum length = %d", len(snapshot.GetDataSha256()))
 	}
-	reader, err := gzip.NewReader(strings.NewReader(string(snapshot.GetData())))
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := snapshot.GetData()
 	if !strings.Contains(string(raw), "# HELP moox_reporter_last_success_timestamp_seconds reporter help") || !strings.Contains(string(raw), "# TYPE moox_reporter_last_success_timestamp_seconds gauge") {
 		t.Fatalf("family metadata missing: %s", raw)
 	}
@@ -181,7 +171,7 @@ func TestDefaultConfigUsesCentralEventBus(t *testing.T) {
 	if cfg.EventBusURL != DefaultBusURL || cfg.SpaceID != DefaultSpace {
 		t.Fatalf("defaults: %+v", cfg)
 	}
-	if cfg.MaxSamples < 100000 || cfg.MaxUncompressedBytes < 16*1024*1024 || cfg.MaxCompressedBytes < 4*1024*1024 {
+	if cfg.MaxSamples < 100000 || cfg.MaxUncompressedBytes < 16*1024*1024 {
 		t.Fatalf("metric snapshot limits are too small: %+v", cfg)
 	}
 }

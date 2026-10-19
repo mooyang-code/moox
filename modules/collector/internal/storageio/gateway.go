@@ -7,6 +7,7 @@ import (
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/wirecompress"
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
@@ -61,6 +62,14 @@ func invoke[T any](ctx context.Context, gateway gatewayclient.Invoker, service, 
 	}
 	if len(options) != 0 {
 		return nil, errors.New("collector gateway calls use context and catalog settings instead of tRPC client options")
+	}
+	// 整分钟写入突发等请求顶层没有 space_id，空间在 Expectation 里：这里统一取出，让 tRPC 压缩按空间选字典。
+	if carrier, ok := request.(interface {
+		GetExpectation() *storagepb.DatasetPeriodExpectation
+	}); ok {
+		if space := carrier.GetExpectation().GetSpaceId(); space != "" {
+			ctx = wirecompress.WithSpace(ctx, space)
+		}
 	}
 	response := new(T)
 	if err := gateway.Invoke(ctx, service, method, request, response); err != nil {

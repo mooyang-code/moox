@@ -20,6 +20,7 @@ require (
 	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	trpc.group/trpc-go/trpc-go v1.0.4
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
 )
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
@@ -140,3 +141,5 @@ replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/s
 replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/proto/admingen
 
 replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen
+
+replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress

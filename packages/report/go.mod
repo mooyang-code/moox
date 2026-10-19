@@ -14,6 +14,7 @@ require (
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
 )
 
 require (
@@ -68,3 +69,5 @@ replace github.com/mooyang-code/moox/packages/metricspb => ../metricspb
 replace github.com/mooyang-code/moox/packages/frequency => ../frequency
 
 replace github.com/mooyang-code/moox/packages/security => ../security
+
+replace github.com/mooyang-code/moox/packages/wirecompress => ../wirecompress

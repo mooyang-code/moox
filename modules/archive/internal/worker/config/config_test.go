@@ -138,7 +138,7 @@ func TestShippedWorkerConfigParsesOnceTheCredentialsAreFilledIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GatewayClient.Caller != Caller || cfg.Worker.RootDir != "/data/moox-archive" || cfg.GatewayClient.Compression != "gzip" {
+	if cfg.GatewayClient.Caller != Caller || cfg.Worker.RootDir != "/data/moox-archive" {
 		t.Fatalf("shipped = %+v", cfg)
 	}
 	if _, err := Load(write(t, string(raw))); err == nil {

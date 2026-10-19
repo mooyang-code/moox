@@ -18,8 +18,6 @@ type RawPublisher interface {
 type Publisher struct {
 	client   RawPublisher
 	registry *Registry
-	// compressMin 非 0 时，不小于它的信封以 gzip 发布。
-	compressMin int
 }
 
 // Close releases the underlying transport when it owns a closeable client.
@@ -58,7 +56,7 @@ func (p *Publisher) Publish(ctx context.Context, event Event, payload proto.Mess
 	if err != nil {
 		return nil, fmt.Errorf("marshal event message: %w", err)
 	}
-	body, contentType := p.pack(body)
+	body, contentType := p.pack(encoded.Message.GetSpaceId(), body)
 	return p.client.PublishRaw(ctx, encoded.Subject, opts.EventID, body, contentType)
 }
 
@@ -76,6 +74,6 @@ func (p *Publisher) PublishMessage(ctx context.Context, message *eventpb.EventMe
 	if err != nil {
 		return nil, fmt.Errorf("marshal event message: %w", err)
 	}
-	body, contentType := p.pack(body)
+	body, contentType := p.pack(message.GetSpaceId(), body)
 	return p.client.PublishRaw(ctx, subject, message.GetEventId(), body, contentType)
 }
