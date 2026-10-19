@@ -85,12 +85,14 @@ func TestTinyRequestStillGetsACompressedResponse(t *testing.T) {
 		defer cancel()
 		pool := newRPCPool()
 		defer pool.Close()
-		rsp, err := pool.invoke(ctx, endpoint{address: base.Addr().String(), target: "storage", compress: compress}, secretService, "GetSecret", codec.SerializationTypeJSON, []byte(`{}`), nil)
-		require.NoError(t, err)
-		require.Equal(t, response, rsp)
+		for _, request := range [][]byte{nil, {}, []byte(`{}`)} {
+			rsp, err := pool.invoke(ctx, endpoint{address: base.Addr().String(), target: "storage", compress: compress}, secretService, "GetSecret", codec.SerializationTypeJSON, request, nil)
+			require.NoError(t, err, "空请求体与极小请求体在压缩时也要能完整往返")
+			require.Equal(t, response, rsp)
+		}
 		return listener.written.Load()
 	}
 	plain := run(false)
 	compressed := run(true)
-	require.Less(t, compressed*5, plain, "两字节的请求也要标记压缩，大响应才会被压缩")
+	require.Less(t, compressed*5, plain, "空请求和两字节的请求也要标记压缩，大响应才会被压缩")
 }
