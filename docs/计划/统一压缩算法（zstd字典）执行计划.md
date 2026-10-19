@@ -11,7 +11,8 @@
 - 项目未上线，不考虑兼容、不做平滑迁移：gzip 路径直接删除，所有组件同一提交一次性发布。
 - SCF→Access 也纳入，统一压缩。
 - 只有浏览器流量不纳入。
-- 已实测并决策：**单一通用字典**（方案 A），不做分类字典（第 3、11 节）。
+- 已实测并决策：**通用字典作为默认字典**（方案 A），不按调用类别拆分字典（第 3、11 节）。
+- **字典与空间绑定**（用户确认）：每个空间可以有自己的专用字典；没有专用字典的空间用默认字典。第 0 阶段训练出的通用字典就是默认字典。首次发布只带默认字典，绑定机制随首发上线，专用字典以后按需训练（第 4.5、6 节）。
 
 **纳入范围**：
 
@@ -121,7 +122,8 @@
 
 ### 4.1 职责
 
-- 内嵌字典（`//go:embed dicts/*.zdict`）。
+- 内嵌字典（`//go:embed dicts/*.zdict`）和字典注册表（`dicts/registry.yaml`，第 4.5 节）。
+- 维护“空间 → 字典”的绑定，没有专用字典的空间落到默认字典。
 - 构造全局编码器和解码器。
 - 注册 tRPC 压缩类型。
 - 给非 tRPC 路径提供编解码函数。
@@ -135,8 +137,8 @@
 ```go
 package wirecompress
 
-// Encode 用当前字典压缩；空输入返回空。
-func Encode(src []byte) []byte
+// Encode 用 space 绑定的字典压缩；space 为空或没有专用字典时用默认字典；空输入返回空。
+func Encode(space string, src []byte) []byte
 
 // Decoder 是固定解压上限的解码器，按帧头里的字典 ID 自动选字典。
 // 每个使用点在初始化时按自己的上限构造一个，进程内全局复用、可并发调用。
@@ -147,24 +149,31 @@ func NewDecoder(limit int) *Decoder
 // Decode 解压；解压过程中累计输出超过构造时的上限立即返回 ErrTooLarge，不会先展开再校验。
 func (d *Decoder) Decode(src []byte) ([]byte, error)
 
-// CompressType 是注册给 tRPC 的压缩类型编号（32），供 gatewayclient 使用。
-const CompressType = 32
+// CompressType 返回 space 当前绑定的字典版本对应的 tRPC 压缩类型编号。供 gatewayclient 使用。
+func CompressType(space string) int
+
+// WithSpace 把空间写进 context，供请求本身不带空间字段的调用指定字典（第 4.3 节）。
+func WithSpace(ctx context.Context, space string) context.Context
 
 var ErrTooLarge = errors.New(...)
 ```
 
 - **编码器**：
-  - 一个全局 `*zstd.Encoder`，用 `EncodeAll`，可并发调用。
-  - 选项：`WithEncoderLevel(SpeedDefault)`（对应 zstd 3 级；实测比最快档再省 3%～4%，编码耗时仍明显低于 gzip）、`WithEncoderDict(当前字典)`、`WithEncoderCRC(false)`（TCP/TLS 已保证完整性，每帧省 4 字节）、`WithWindowSize(1MB)`、`WithLowerEncoderMem(true)`。
+  - 每本字典一个全局 `*zstd.Encoder`，第一次用到时才创建（SCF 与只碰一两个空间的进程不为用不到的字典付内存），用 `EncodeAll`，可并发调用。
+  - 选项：`WithEncoderLevel(SpeedDefault)`（对应 zstd 3 级；实测比最快档再省 3%～4%，编码耗时仍明显低于 gzip）、`WithEncoderDict(该字典)`、`WithEncoderCRC(false)`（TCP/TLS 已保证完整性，每帧省 4 字节）、`WithWindowSize(1MB)`、`WithLowerEncoderMem(true)`。
   - 并发数取 `min(GOMAXPROCS, 4)`，控制常驻内存。SCF 函数内存小，在第 0 阶段测量里要确认。
 - **解码器**：按上限分实例，不用一个全局解码器加事后校验。
   - 原因：`WithDecoderMaxMemory` 是解码器级别的上限，`DecodeAll` 会按帧声明的原始长度预分配并展开到这个上限。如果全局解码器按 64MB 构造、调用方事后再按 1MB 校验，攻击帧仍能先让进程展开 64MB。
   - 每个 `NewDecoder(limit)` 内部是一个独立的 `*zstd.Decoder`，选项为：
-    - `WithDecoderDicts(全部内嵌字典...)`
+    - `WithDecoderDicts(注册表里的全部字典...)`：解码不看空间，由帧头里的字典 ID 选字典，所以新旧、默认与专用字典都能解
     - `WithDecoderMaxMemory(limit)`
     - `WithDecoderMaxWindow(min(limit, 1MB))`
     - `WithDecoderConcurrency(min(GOMAXPROCS, 4))`
-  - 帧声明长度超限时 `DecodeAll` 直接拒绝。不声明长度、多帧拼接时，klauspost 在解码过程中按累计输出校验（`framedec.go` 的 `maxDecodedSize` 检查）。两种情况都要有测试覆盖。
+  - **`WithDecoderMaxMemory` 不能单独当作累计输出上限**：对不声明长度的帧，klauspost 只按“当前帧新增输出”在解码中检查（`framedec.go` 第 337、375 行），一帧解完后才在 `DecodeAll` 里（`decoder.go` 第 395 行）检查累计长度。把 64MB 的帧和一个不声明长度的 64MB 帧拼在一起，能展开到约 128MB 才报错，而且发生在 Access 验签之前。
+  - 所以 `Decode` 自己约束输入形状，不依赖库的多帧行为：
+    1. 先用 `zstd.Header` 解析帧头：必须是**声明了原始长度**的帧，且 ≤ 实例上限、窗口 ≤ `MaxWindow`，否则直接拒绝（我们的编码器 `EncodeAll` 总会写原始长度）；
+    2. 按声明长度分配输出缓冲，并开启 `WithDecodeAllCapLimit(true)`：此后整个 `DecodeAll` 的**累计输出不能超过缓冲容量**，第一帧之后再拼接任何有输出的帧，都会在解码过程中被拒绝（`decoder.go` 第 376～382 行、`framedec.go` 第 377 行），不用等到全部展开；
+    3. 单次调用最多分配该实例的上限（64MB / 1MB），这与此前 gzip 的 64MB 上限同量级，是接受的边界。
   - 字典 ID 不在已知集合时直接报错。
   - 使用点与上限是固定的少数几个，进程内最多 3～4 个实例：
     - tRPC 帧：`MaxFrameBytes`，64MB。
@@ -172,19 +181,28 @@ var ErrTooLarge = errors.New(...)
     - 采集计划：1MB。
 - **字典 ID**：用 zstd 规定的用户区间（≥32768），固定前缀加序号，例如 `0x4D580001`。
   - 字典注册表只追加：退役的字典继续留在解码集合里，至少保留到 JetStream 最长保留期（当前 168h）之后。
-  - 编码器只用“当前”字典。
+  - 每个绑定关系只用该字典的“当前”版本；同一个空间不会同时用两本字典编码。
 
 ### 4.3 tRPC 压缩类型注册
 
-- 框架内置类型占 0～7。本包使用 **32**，写死在本包常量里，不可配置。
-- **注册**：在 `wirecompress` 的 `init` 里 `codec.RegisterCompressor(CompressType, compressor{})`。
-  - `Compress` 走全局编码器。
-  - `Decompress` 走按帧上限构造的解码器，上限为进程级帧上限 `nativewire.MaxFrameBytes`（64MB）。帧上限常量移进 `wirecompress`，nativewire 引用它，避免循环依赖。
+- 框架内置类型占 0～7。本包使用 **32～255**，**每一个字典版本占一个不可变的类型号**（写在注册表里，第 4.5 节），类型号在版本发布后永不改指、永不复用；它和“某个空间当前绑定哪个版本”是两回事。tRPC 的类型号是 int，注册表是 `map[int]`，没有范围校验，可以这样用（`codec/compress.go` 第 36～38 行）。注册同一类型号会直接覆盖（第 42 行），所以一个版本的编码器永远不能被换掉。
+- **注册**：tRPC 压缩器注册表是全局的、只能在 `init` 里注册，所以按注册表里的每个类型号注册一个压缩器：`codec.RegisterCompressor(类型号, compressor{字典})`。压缩器接口没有上下文，也就是**空间只能通过类型号传递**，这是每本字典占一个类型号的原因。
+  - `Compress` 走该字典版本的编码器。服务端按**请求**的类型号压缩响应（`server/service.go` 第 366 行），所以客户端用哪个版本发请求，响应就用哪个版本，和“当前绑定”无关。
+  - `Decompress` 与类型号无关，走同一个按帧上限构造的解码器（帧头里的字典 ID 自动选字典），上限为进程级帧上限 `nativewire.MaxFrameBytes`（64MB）。帧上限常量移进 `wirecompress`，nativewire 引用它，避免循环依赖。
 - **替换 `nativewire/compress.go`**：
   - 删除 `boundedGzip`。
   - `unsupportedDecompress` 覆盖范围扩大到 gzip（`CompressTypeGzip`）在内的全部内置类型，拒绝解压。压缩方向也一并拒绝：本系统不再有任何调用方使用它们。
   - nativewire 的 `init` 导入 `wirecompress`，保证所有引用 gatewayauth 的进程（主机网关、Access、业务组件）都注册了 zstd 类型。
-- **响应方向**：tRPC 服务端用请求的压缩类型压缩响应（`server/service.go` 约第 366 行），读接口的大响应自然用同一个字典。所以字典训练语料必须同时包含请求和响应两侧样本。
+- **响应方向**：tRPC 服务端用请求的压缩类型压缩响应（`server/service.go` 约第 366 行），读接口的大响应自然用同一个空间的字典。所以字典训练语料必须同时包含请求和响应两侧样本。
+- **调用方怎么决定空间**：
+  1. context 里有 `wirecompress.WithSpace` 设置的空间，用它；
+  2. 否则请求对象**顶层**实现了 `GetSpaceId() string`（生成代码里有 165 个消息带这个方法，其中 `ReadTimeSeriesRowsReq`、`QueryTimeSeriesRowsReq`、`WriteFactorRowsReq` 等高流量请求都有）且非空，用它；
+  3. 否则用默认字典。
+  空间没有专用字典时 `CompressType(space)` 返回默认绑定的版本，等同第 3 步。
+- **有一个重要例外，必须在调用点显式指定**：整分钟写入突发的 `CommitTimeSeriesBatchReq` 顶层没有 `space_id`，空间在 `Expectation.SpaceId` 里。第 2 步对它不起作用，会落到默认字典。所以采集侧写存储的那一个调用点（`modules/collector/internal/marketfetch` 里调 `CommitTimeSeriesBatch` 的存储客户端，`contracts.go` 第 286 行的接口）要在调用前 `ctx = wirecompress.WithSpace(ctx, expectation.GetSpaceId())`。实施时要列一张“高流量方法 → 空间从哪来”的清单，逐个核实并加测试，不能只依赖第 2 步（第 5.1 节）。
+- **只转发原始字节的路径**：
+  - Access 把 SCF 的请求体原样转发给存储网关（`accessproxy/proxy.go` 第 156 行），手里没有请求对象。Access 把入站帧的压缩类型沿用到出站这一跳（通过 `gatewayclient` 暴露的 context 选项传入），这样 SCF 选的空间字典全程不变。实施时要核实 tRPC 服务端 handler 里取得入站压缩类型的方式（`codec.Message.CompressType()`），并加测试。
+  - 主机网关转发给本机上游时不压缩，不受影响。
 - **主机网关**：
   - 网关是 Noop 序列化转发。入站帧由框架按请求类型解压，转发给本机上游时不带压缩（`router/upstream.go` 不设压缩类型）。
   - 回给调用方时，框架按原请求类型压缩响应。
@@ -200,6 +218,57 @@ var ErrTooLarge = errors.New(...)
 
 监控页不新增面板，只在发布验证和字典老化判断时查询。可选：压缩比低于发布时基线 80% 告警，第 9 节。
 
+指标再加一个标签 `dict`（字典名），按字典看压缩比。
+
+### 4.5 字典注册表与空间绑定
+
+`packages/wirecompress/dicts/registry.yaml`（随包内嵌）把“字典版本”和“绑定”分开：
+
+- **字典版本**：不可变、只增不删。每个版本有自己的名字、文件、字典 ID（写进 zstd 帧头）和 tRPC 压缩类型号。
+- **绑定**：当前默认用哪个版本、每个空间用哪个版本。绑定可以改，版本不能改。
+
+首发内容：
+
+```yaml
+dictionaries:
+  - name: default-v1
+    file: default-v1.zdict
+    id: 0x4D580001
+    compress_type: 32
+bindings:
+  default: default-v1
+  spaces: {}
+```
+
+以后新增一个空间专用字典，例如：
+
+```yaml
+dictionaries:
+  - name: default-v1
+    ...
+  - name: ashare-v1
+    file: ashare-v1.zdict
+    id: 0x4D580002
+    compress_type: 33
+bindings:
+  default: default-v1
+  spaces:
+    ashare: ashare-v1
+```
+
+重训默认字典，例如：新增 `default-v2`（新 ID、新类型号 34），发布完成后把 `bindings.default` 改为 `default-v2`。
+
+规则（加载时和单元测试都校验，违反则进程启动失败 / 测试失败）：
+
+- 字典 ID、类型号（32～255）、版本名、文件名在注册表里唯一；每个版本的文件帧头 ID 必须等于注册表里的 `id`。
+- `bindings.default` 和 `bindings.spaces` 里的值必须是已存在的版本名；一个空间只绑定一个版本。
+- 已发布的版本**不删、不改文件、不改类型号**。退役的版本仍在解码集合里（第 4.2 节），也仍可作为响应方向的编码器：旧客户端用旧类型号发请求时，服务端用同一个旧版本压缩响应。
+- 绑定是**编译期静态**的，不放在 Admin 数据库里：tRPC 压缩器只能在 `init` 注册，解码端也必须在编码端用上之前拿到字典；动态下发解决不了这两点。
+
+空间如何得到字典：`CompressType(space)` 和 `Encode(space, …)` 查绑定表，命中就用专用字典版本，否则用默认版本。事件发布时主题里本来就有空间（`events.Registry.SpacePattern`），采集计划本来就按空间生成，tRPC 调用按第 4.3 节决定；**这三处都不需要业务代码改动**（除第 4.3 节说的少数高流量调用点）。
+
+指标快照事件属于系统空间，没有专用字典，走默认字典。
+
 ## 5. 各替换点的具体改动
 
 ### 5.1 `packages/gatewayclient`
@@ -207,7 +276,8 @@ var ErrTooLarge = errors.New(...)
 - 删除 `Compression` 配置项、`CompressionNone`、`ValidCompression` 及校验（`config.go` 第 21、36、51、83 行附近，`client.go` 第 65 行附近）。
   - 跨主机端点恒定压缩，本机回环恒定不压缩。
   - 理由：统一算法后不再有“关掉压缩”的业务需要，少一个会配错的开关。
-- `trpc.go` 第 210 行：由 `codec.CompressTypeGzip` 改为 `wirecompress.CompressType`。
+- 高流量调用点显式设置空间（第 4.3 节的例外）：至少包括采集侧的 `CommitTimeSeriesBatch`（空间取 `expectation.GetSpaceId()`）；其余高流量方法逐个核对：`WriteFactorRows`、`ReadTimeSeriesRows`、`QueryTimeSeriesRows` 顶层有 `space_id`，不需要；`ReportFactorPeriodComputed`、`UpsertViewPeriodDatasetState`、`Metadata` 的各方法以及因子引擎、归档的调用，实施时对照生成代码确认并补测试。清单放进本节，核对完才算完成。
+- `trpc.go` 第 210 行：由 `codec.CompressTypeGzip` 改为 `wirecompress.CompressType(空间)`，空间按第 4.3 节的三步规则得到：`Invoke` 里在序列化之前从请求对象取出空间，放进传给 `Forward` 的 context；`Forward` 直接调用（原始字节）的路径只认 context 里的 `WithSpace` 和 Access 传入的入站压缩类型。
 - 测试：
   - `compression_test.go` 改为断言跨主机用 zstd 类型、回环不压缩。
   - 保留“极小请求也拿到压缩响应”的用例，含空 body。
@@ -238,7 +308,7 @@ var ErrTooLarge = errors.New(...)
 
 - `compress.go` 改写：
   - `ContentTypeGzip` 改为 `ContentTypeZstd = ContentType + "+zstd"`。
-  - `compressBody` 和 `inflateBody` 改调 `wirecompress.Encode`，以及包级 `wirecompress.NewDecoder(maxInflatedBytes)` 实例（上限沿用 64MB）。
+  - `compressBody(space, body)` 和 `inflateBody` 改调 `wirecompress.Encode(space, …)`，以及包级 `wirecompress.NewDecoder(maxInflatedBytes)` 实例（上限沿用 64MB）。`pack` 多接收一个空间参数，发布时构造主题已经需要空间，直接带过去；系统事件（指标快照、主机快照）的空间没有专用字典，走默认字典。解码不需要空间，帧头里的字典 ID 决定一切。
   - 保留“压缩后没有明显变小（≥90%）就按原样发布”的判断。
 - 压缩改为发布器默认行为：
   - 删除 `SetCompression`，阈值固定为包内常量。
@@ -266,7 +336,7 @@ var ErrTooLarge = errors.New(...)
 
 ### 5.5 采集计划环境变量（`modules/collector/internal/marketfetch/plan.go`）
 
-- 第 94～104 行：gzip（BestCompression）改为 `wirecompress.Encode(json)`，再 base64。
+- 第 94～104 行：gzip（BestCompression）改为 `wirecompress.Encode(plan.空间, json)`，再 base64。计划本身属于某个空间，没有专用字典就用默认字典。
 - 第 120～129 行：解码改为包级 `wirecompress.NewDecoder(1MB)` 实例。上限与现有读取阶段的 1MB 限制（第 129 行）一致，在解压过程中生效。
 - `plan_runtime.go` 和 `plan_reconciler.go` 只经这两个函数，不改。
 - 这里预计有额外收益：计划 JSON 同构性高，字典能明显降低环境变量体积，`managed_environment_budget_bytes` 的余量更大。第 0 阶段测出具体数字。
@@ -297,7 +367,8 @@ SCF 函数由 collector 模块构建，`marketfetch` 引用 `gatewayclient` 和 
 
 - **工具**：`tools/zstddict`（独立程序，不进任何服务二进制）。
   - 输入：语料目录（按来源分子目录：写、读、元数据、控制面、事件行、指标快照、事件其他、计划）、字典大小、字典 ID。
-  - 输出：`packages/wirecompress/dicts/universal-v<N>.zdict`，并打印评估表（同第 3.2 节的指标）。
+  - 输出：默认字典 `dicts/default-v<N>.zdict` 或空间专用字典 `dicts/<空间>-v<N>.zdict`，并打印评估表（同第 3.2 节的指标）。
+  - 两种模式：`train default`，语料取所有**没有专用字典**的空间；`train space <空间>`，语料只取该空间。
   - **训练算法用 zstd 命令行的 `--train`（COVER 系列）**，不用 klauspost 的 `zstd.BuildDict`：后者要求调用方自己提供字典主体（History），本身不做片段选择。训练时需要 zstd 命令行（编译机 192.168.0.103 已有 1.5.7）；运行时只需要 Go 解码，两者格式互通，实测已验证。
   - 混合方式：每个来源子目录等间隔抽样到不超过 3MB（实测比 8MB 略差或持平），合并成一个训练目录再训练；不截断单个样本。
   - 评估集与训练集按时间切分；训练前丢弃空样本、重复样本。
@@ -307,7 +378,8 @@ SCF 函数由 collector 模块构建，`marketfetch` 引用 `gatewayclient` 和 
     训练前把这类内容替换成固定的占位串，让字典主体留给字段名、结构骨架和高频词。
   - 归一化是否值得做，**实施时要用同一份语料对比有无归一化的加权结果**再决定，不预先假设有收益；第 0 阶段没有测过这一项。
   - 字典 ID 用 `--dictID` 固定为注册表里的值。
-- **语料**：第 3.1 节的采集脚本整理进 `tools/zstddict/README.md`，只写步骤和过滤规则，不提交语料。
+- **语料**：第 3.1 节的采集脚本整理进 `tools/zstddict/README.md`，只写步骤和过滤规则，不提交语料。抓取和事件取样按空间过滤（请求里的空间字段、事件主题里的空间）。
+- **专用字典的采用门槛**：专用字典在该空间的留出集上，相对默认字典**加权总字节至少再省 10%**（和第 3.3 节同一量级的门槛）才采用，否则不建；多一本字典就多一份内存、一次两阶段发布和一次老化监控。
 - **字典审查**：`tools/zstddict` 输出字典里长度不小于 8 的可打印串摘要，人工确认无敏感内容后再提交。
 - **何时重训**：
   - 某个使用点线上压缩比连续 24 小时低于发布时基线的 80%（第 4.4 节指标）。
@@ -319,13 +391,13 @@ SCF 函数由 collector 模块构建，`marketfetch` 引用 `gatewayclient` 和 
       - 数据行事件和读响应：协议字段名和单位仍能命中，标的 ID 命不中，收益比第 11 节低，低多少没有测过；
       - 不受影响的：事件信封骨架、tRPC 请求响应的字段骨架、指标快照。
     - A 股标的有五千多只，采集计划和标的相关的元数据会比现在大得多，这部分用不上现有字典；zstd 本身仍比 gzip 快，不会比现状差。
-    - 做法：A 股数据稳定运行一两天后，按本节流程重训，**语料必须包含 A 股样本**，否则新字典只会更偏向旧市场。发布按下面的两阶段方式进行。
-    - 第 4.4 节的压缩比指标是这个时机的判断依据；A 股接入后很可能触发 80% 阈值。
-- **上线后的重训发布**（以后才会遇到，这次不需要）：分两次发布。
-  1. 新字典只加入解码集合。
-  2. 全部组件发布完成后，再把编码器切到新字典。
+    - 有了空间绑定后的做法：A 股在自己的空间里运行，**先用默认字典**；稳定运行一两天后，用该空间的语料训练专用字典，按采用门槛评估，达标再绑定。**默认字典不用动**，原来的空间不受影响。
+    - 第 4.4 节按字典拆分的压缩比指标是判断时机的依据。
+- **新增专用字典、重训默认字典、重训专用字典的发布**（以后才会遇到，这次不需要）：都分两次发布，且新字典永远是**新版本**，不覆盖旧版本。
+  1. 第一次：注册表里加入新版本（新 ID、新类型号），**`bindings` 一律不动**。此后所有组件都能解码、也能在对端用新类型号请求时用新版本压缩响应，但还没有人主动用新版本发请求。
+  2. 确认全部组件都已运行第一次的版本之后——包括所有 SCF 函数的代码包（用函数代码版本读回确认）、编译机的 factor-engine 和 archive-worker——再发第二次，只改 `bindings`。
 
-  字典 ID 写在帧头里，解码端无需协调。
+  第 1 步没有全量完成之前，不能做第 2 步：否则编码端会用旧解码端没有的字典，或用旧服务端没有注册的类型号，对端报“未知字典 ID”或“compressor not registered”。滞后的客户端仍用旧类型号，服务端仍用旧版本回响应，所以第二次发布过程中新旧客户端可以混跑。字典 ID 写在帧头里，解码端不需要额外协调。
 
 ## 7. 测试计划
 
@@ -333,10 +405,17 @@ SCF 函数由 collector 模块构建，`marketfetch` 引用 `gatewayclient` 和 
 
 - 每个字典的往返一致性，含空输入、1 字节、刚好等于上限、超上限。
 - 解压炸弹：构造 1KB → 1GB 的 zstd 帧，断言返回 `ErrTooLarge`，且内存峰值不超过上限加常数。
-- 帧头声明的原始长度超上限时直接拒绝；不声明长度的帧、多帧拼接在解压过程中超限即停止，内存峰值不超过该实例上限加常数。
+- 帧头声明的原始长度超上限时直接拒绝；**不声明原始长度的帧直接拒绝**。
+- 拼接帧：第一帧接近上限、后面再拼一个不声明长度（或声明长度）的帧，断言在解码过程中被拒绝，内存峰值不超过该实例上限加常数，不会展开到约 2 倍。
 - 上限隔离：同一份 2MB 的合法帧，1MB 实例拒绝、64MB 实例接受。
 - 未知字典 ID、损坏帧、截断帧都返回错误，不 panic。
 - 并发 `Encode`/`Decode`（`-race`）。
+- 注册表校验：重复的字典 ID / 类型号 / 版本名 / 文件名，绑定指向不存在的版本，同一空间重复绑定，类型号小于 32，文件帧头 ID 与注册表不一致，都要在加载时报错。
+- 空间绑定：
+  - 有专用字典的空间 `Encode` 用专用字典，没有或为空时用默认字典（用帧头字典 ID 断言）。
+  - `CompressType` 的结果与绑定一致，未知空间返回默认绑定版本的类型号。
+  - 默认字典编码的数据、专用字典编码的数据，都能被同一个解码器解开。
+  - 版本演进：注册表含 `default-v1`、`default-v2`，绑定在 v1 时，用 v2 类型号发来的请求仍能解码，服务端响应用 v2；绑定切到 v2 后，用 v1 类型号发来的请求（滞后客户端）仍能解码，响应用 v1。
 - tRPC 注册：
   - `codec.GetCompressor(32)` 能取到。
   - gzip 和其他内置类型解压都被拒绝。
@@ -347,6 +426,8 @@ SCF 函数由 collector 模块构建，`marketfetch` 引用 `gatewayclient` 和 
 - `packages/gatewayclient`：
   - 跨主机端点（网关、中转、隧道、External）的调用带 zstd 类型，回环不带。
   - 服务端按请求类型返回压缩响应。
+  - 空间选择：context 的 `WithSpace` 优先于请求对象的 `GetSpaceId`；两者都没有时用默认字典；专用字典的空间在请求和响应两个方向都用同一本字典。
+  - Access 转发：SCF 用某空间的类型号发请求，Access 出站沿用同一个类型号。
   - 沿用 `compression_test.go` 的假服务端。
 - 主机网关：压缩请求 → 网关 → 本机上游收到未压缩体 → 调用方收到压缩响应，扩展 `hostgateway` 现有 e2e。
 - `packages/events`：
@@ -459,12 +540,15 @@ collector 启动后，暂停的空间仍不对账。
 | 字典老化（新标的、新市场如 A 股、新字段、时间戳变化） | 压缩比逐步回落，最差退化到无字典的 zstd（与 gzip 相当略好） | 第 0 阶段跨天评估显示 3 天前的事件仍保持约 +23%（见第 11 节）；4.4 节指标加 80% 阈值触发重训；新市场接入后一两天内主动重训（第 6 节） |
 | 字典里混入敏感串 | 字典进仓库、进所有二进制 | 采集时按服务过滤；字典提交前做可打印串审查（第 6 节） |
 | 解压炸弹 / 恶意帧 | 解压发生在验签之前，可耗尽内存 | 每个使用点按自己的上限构造解码器（`WithDecoderMaxMemory` 在解压过程中生效），不做事后校验；专门的炸弹测试（第 7 节） |
-| 编码器、解码器常驻内存 | 一套编码器加按上限分实例的解码器，SCF 内存小 | 低内存选项、限制并发、1MB 窗口；实测并发 1 时编解码器合计约 7～12MB，并发 4 约 25～28MB，SCF 固定并发 1 |
+| 编码器、解码器常驻内存（每本字典一个编码器，惰性创建） | 一套编码器加按上限分实例的解码器，SCF 内存小 | 低内存选项、限制并发、1MB 窗口；实测并发 1 时编解码器合计约 7～12MB，并发 4 约 25～28MB，SCF 固定并发 1 |
 | JetStream 里残留旧格式或旧字典的消息 | 消费端解码失败后 `TERM`，投递终止；在排空前清空会丢事件 | 发布与回滚都先冻结来源，等 outbox 和消费者积压归零后再清空流（第 8 节）；无法排空时先 `nats stream backup`；字典注册表只追加，退役字典保留超过最长保留期（168h） |
 | 一次性发布中断 | 窗口内丢分钟 | 暂停调度、补采兜底；发布避开整点 |
 | 配置严格解析 | 残留 `compression` 字段导致进程起不来（archive-worker 有前例） | 模板、编译机部署脚本（sh/ps1）一并删除并加契约测试；发布前逐台核对已安装配置；先换配置再重启 |
 | SCF 代码包与环境变量不同步 | 函数解不开计划 | 持久化暂停（定时器停用、对账协程退出）期间先换代码包；恢复时 `EnableAll` 在同一补丁里下发新环境与定时器（第 8 节第 5、6 步） |
-| 二进制体积增大 | 字典约 224KB | 可忽略 |
+| 二进制体积增大 | 每本字典约 224KB | 首发只有默认字典，可忽略；专用字典达标才建，数量受控 |
+| 绑定的空间配错 | 只影响压缩比，不影响正确性（解码按帧头字典 ID） | 注册表加载校验；按字典拆分的压缩比指标 |
+| 新字典版本的发布顺序错 | 编码端先于解码端用新字典，对端报“未知字典 ID”或“compressor not registered”，调用失败 | 严格两阶段发布（第 6 节）：第一次只加版本不改绑定，第二次只改绑定；第二次前读回确认全部组件和 SCF 函数的版本；发布清单里检查两次的注册表差异 |
+| 请求里的空间字段含义与“数据空间”不一致，或高流量请求顶层没有空间字段（`CommitTimeSeriesBatchReq` 就是） | 选错或落到默认字典，只影响压缩比，不影响正确性 | 高流量方法逐个核对清单（第 5.1 节），调用点显式 `WithSpace`；测试里对这几个方法断言选中的字典；按字典拆分的压缩比指标能发现落错的流量 |
 
 ## 11. 实测结果与决策记录
 
@@ -550,7 +634,7 @@ RPC 用窗口 B 评估，事件用 10-19 较晚的块（rows、misc，约 4 小�
 
 ### 11.7 结论与对计划的影响
 
-1. **方案 A：单一通用字典，224KB，tRPC 压缩类型 32；不引入类别概念**。已在第 4、5 节收敛。
+1. **方案 A：通用字典，224KB，作为默认字典（tRPC 压缩类型 32）；不按调用类别拆分**。后来确认**字典与空间绑定**：不同空间可以有专用字典，没有专用字典的空间用默认字典，首发只带默认字典（第 4.5、6 节）。
 2. 加权估算跨主机总字节比 gzip **再降约 22%**：字典贡献约 19%，zstd 算法本身约 2.5%。这比最初按单类实测外推的约 40% 低，原因是大批量读和数据行事件的内容本身熵高，字典帮助有限。
 3. 事件压缩阈值 256B，小事件也有收益；指标快照删除内层 gzip 后，信封层压缩比由 1.03x 变为 8.1x。
 4. 编码级别 `SpeedDefault`，SCF 与服务一致，并发固定为 1。
