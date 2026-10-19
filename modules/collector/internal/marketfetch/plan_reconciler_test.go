@@ -122,11 +122,13 @@ type fakePlanCloud struct {
 	onFresh    func()          // 新鲜读回返回前的钩子，用于构造读回与作业结算之间的竞态
 	submitErr  error           // 非空时 SubmitRuntimeConfigs 直接失败，模拟提交停用时崩溃
 	patches    map[string]*cloudnodepb.NodeRuntimeConfigPatch
-	created    []string
-	submits    int
-	failNodes  map[string]bool
-	leaseCalls int
-	releases   int
+	// onRuntimeConfig 在 SubmitRuntimeConfigs 接受一批补丁之前调用，用于断言提交时函数的代码版本。
+	onRuntimeConfig func([]*cloudnodepb.NodeRuntimeConfigPatch)
+	created         []string
+	submits         int
+	failNodes       map[string]bool
+	leaseCalls      int
+	releases        int
 }
 
 func newFakePlanCloud() *fakePlanCloud {
@@ -255,6 +257,9 @@ func (c *fakePlanCloud) SubmitRuntimeConfigs(_ context.Context, _ string, patche
 		if strings.TrimSpace(patch.GetTimerCron()) == "" {
 			return "", errors.New("INVALID_PARAM: timer_cron is required")
 		}
+	}
+	if c.onRuntimeConfig != nil {
+		c.onRuntimeConfig(patches)
 	}
 	names := make([]string, 0, len(patches))
 	for _, patch := range patches {
@@ -1421,4 +1426,44 @@ func TestEnableAllWaitsForInFlightJobs(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, done)
 	require.True(t, h.cloud.patches[target].GetTimerEnabled())
+}
+
+// 恢复采集时必须先升级落后的函数，再启用定时器并下发环境：环境格式随代码版本变化，不能出现“旧代码读新环境”。
+func TestEnableAllUpgradesFunctionCodeBeforeEnablingTimers(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	require.Nil(t, h.open())
+	done, err := r.DisableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	for name, patch := range h.cloud.patches {
+		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, PackageID: "pkg-old", Metadata: map[string]any{
+			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": false,
+			"timer_available_status": "Disabled", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
+		}}
+	}
+	r.Deploy.PackageID = "pkg-new"
+	h.cloud.upgraded = nil
+	enabledAfterUpgrade := map[string]bool{}
+	h.cloud.onRuntimeConfig = func(patches []*cloudnodepb.NodeRuntimeConfigPatch) {
+		for _, patch := range patches {
+			enabledAfterUpgrade[patch.GetNodeId()] = h.cloud.nodes[patch.GetNodeId()].PackageID == "pkg-new"
+		}
+	}
+
+	done, err = r.EnableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	require.Len(t, h.cloud.upgraded, len(h.cloud.nodes), "全部落后函数先升级")
+	require.NotEmpty(t, enabledAfterUpgrade)
+	for name, upgraded := range enabledAfterUpgrade {
+		require.True(t, upgraded, "函数 %s 启用定时器时代码必须已经是新版本", name)
+	}
+	for name := range h.cloud.nodes {
+		require.True(t, h.cloud.patches[name].GetTimerEnabled(), name)
+	}
 }

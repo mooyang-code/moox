@@ -141,6 +141,11 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 	if len(functions) == 0 {
 		return true, nil
 	}
+	// 启用定时器并下发环境之前，先让落后的函数跟上配置的代码包：环境的编码格式（例如采集计划）随代码版本变化，
+	// 先启用会出现“旧代码读新环境”。升级失败或仍在进行都不启用，下一轮重试；没有落后函数时这一步什么也不做。
+	if err := r.upgradeBeforeEnable(ctx); err != nil {
+		return false, err
+	}
 	release, err := r.acquireOperation(ctx)
 	if err != nil {
 		return false, err
@@ -461,4 +466,17 @@ func (m *PlanManager) runSpace(ctx context.Context, space string, reconciler *Pl
 		}
 		cancel()
 	}
+}
+
+// upgradeBeforeEnable 刷新配置的代码包并升级落后的函数；调用方已持有 r.mu。
+func (r *PlanReconciler) upgradeBeforeEnable(ctx context.Context) error {
+	if err := r.refreshPackage(ctx); err != nil {
+		return r.fail("package", err)
+	}
+	upgradeCtx, cancel := upgradeContext(ctx)
+	defer cancel()
+	if err := r.upgradeLaggingFunctions(upgradeCtx); err != nil {
+		return fmt.Errorf("upgrade function code before enabling timers: %w", err)
+	}
+	return nil
 }

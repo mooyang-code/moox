@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -125,6 +126,77 @@ func TestConcatenatedFramesAreRejectedDuringDecode(t *testing.T) {
 	// 比上限小一点的第一帧，加上第二帧超出声明容量也要被拒绝。
 	_, err = NewDecoder(UseTRPC, 2<<20).Decode(append(append([]byte{}, a...), b...))
 	require.Error(t, err)
+}
+
+// rawFrame 手工构造一个声明长度为 declared 的 zstd 帧（单段、不带校验和），块由调用方给出。
+func rawFrame(declared int, blocks ...[]byte) []byte {
+	frame := []byte{0x28, 0xb5, 0x2f, 0xfd}
+	switch {
+	case declared < 256:
+		frame = append(frame, 0x20, byte(declared)) // 单段，FCS 1 字节
+	case declared < 65536+256:
+		frame = append(frame, 0x60, byte(declared-256), byte((declared-256)>>8))
+	default:
+		frame = append(frame, 0xa0, byte(declared), byte(declared>>8), byte(declared>>16), byte(declared>>24))
+	}
+	for _, block := range blocks {
+		frame = append(frame, block...)
+	}
+	return frame
+}
+
+func rleBlock(size int, last bool) []byte {
+	h := uint32(size)<<3 | 1<<1
+	if last {
+		h |= 1
+	}
+	return []byte{byte(h), byte(h >> 8), byte(h >> 16), 'x'}
+}
+
+func rawBlock(payload []byte, last bool) []byte {
+	h := uint32(len(payload)) << 3
+	if last {
+		h |= 1
+	}
+	return append([]byte{byte(h), byte(h >> 8), byte(h >> 16)}, payload...)
+}
+
+// 原始块和 RLE 块是直接追加到输出缓冲的：声明长度小、块输出大的帧，必须在分配之前被拒绝，
+// 不能等缓冲被扩到约 1.25 倍再报错；拼接帧同理。用实际分配量断言，而不只是最终返回错误。
+func TestAttackFramesAreRejectedBeforeAllocation(t *testing.T) {
+	const limit = 64 << 20
+	decoder := NewDecoder(UseTRPC, limit)
+	cases := map[string][]byte{
+		"声明 100 字节的帧里塞 RLE 块": rawFrame(100, rleBlock(128<<10, true)),
+		"原始块越界":               rawFrame(10, rawBlock(make([]byte, 64), true)),
+		"保留块类型":               rawFrame(10, []byte{0x07, 0, 0}),
+		"块头被截断":               rawFrame(10, []byte{0x01}),
+		"最后一块之后拼接了第二帧":        append(rawFrame(4, rawBlock([]byte("abcd"), true)), rawFrame(4, rawBlock([]byte("efgh"), true))...),
+		"最后一块之后有多余字节":         append(rawFrame(4, rawBlock([]byte("abcd"), true)), 0x00),
+	}
+	for name, frame := range cases {
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		_, err := decoder.Decode(frame)
+		runtime.ReadMemStats(&after)
+		require.Error(t, err, name)
+		require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(1<<20), "%s：拒绝前不应分配大块内存", name)
+	}
+	// 声明长度合法（等于上限）但实际内容短得多的帧：按声明分配是设计上的上界（单次调用最多 limit），
+	// 解压后长度对不上被拒绝；分配量不能超过上限加常数。
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, err := decoder.Decode(rawFrame(limit, rleBlock(128<<10, false), rleBlock(128<<10, true)))
+	runtime.ReadMemStats(&after)
+	require.Error(t, err)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(limit+(4<<20)), "单次调用最多分配上限加常数")
+
+	// 合法的最小帧不受影响
+	got, err := decoder.Decode(rawFrame(4, rawBlock([]byte("abcd"), true)))
+	require.NoError(t, err)
+	require.Equal(t, []byte("abcd"), got)
 }
 
 func TestCorruptAndTruncatedFrames(t *testing.T) {

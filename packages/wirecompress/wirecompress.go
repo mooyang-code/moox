@@ -134,6 +134,9 @@ func (d *Decoder) Decode(src []byte) ([]byte, error) {
 	if !header.SingleSegment && header.WindowSize > uint64(windowLimit(d.limit)) {
 		return nil, d.fail("too_large", fmt.Errorf("%w: 窗口 %d 超过上限", ErrTooLarge, header.WindowSize))
 	}
+	if err := checkFrameShape(src, &header); err != nil {
+		return nil, d.fail("corrupt", err)
+	}
 	dictName := "none"
 	if header.DictionaryID != 0 {
 		v, ok := d.reg.byID[header.DictionaryID]
@@ -167,4 +170,51 @@ func (d *Decoder) Decode(src []byte) ([]byte, error) {
 func (d *Decoder) fail(reason string, err error) error {
 	recordError(d.use, "decode", reason)
 	return err
+}
+
+// checkFrameShape 在分配和解压之前走一遍块头，确认输入恰好是一个完整的 zstd 帧，且原始块和 RLE 块的输出不超过声明长度。
+//
+// 库的 WithDecodeAllCapLimit 只在压缩块里按剩余容量限制输出；原始块与 RLE 块是直接追加到输出缓冲的，
+// 追加越过容量时先扩容、之后才报错，一个几 KB 的输入就能让缓冲在拒绝之前翻倍。块头只有 3 字节、
+// 块的输出大小能直接读出（原始块和 RLE 块），所以这里先把形状查清，库只会看到不会越界的单帧。
+func checkFrameShape(src []byte, header *zstd.Header) error {
+	const maxBlock = 128 << 10
+	pos := header.HeaderSize
+	var literal uint64 // 原始块与 RLE 块的输出字节数
+	for {
+		if pos+3 > len(src) {
+			return fmt.Errorf("%w: 块头被截断", ErrCorrupt)
+		}
+		h := uint32(src[pos]) | uint32(src[pos+1])<<8 | uint32(src[pos+2])<<16
+		last, kind, size := h&1 == 1, (h>>1)&3, int(h>>3)
+		pos += 3
+		switch kind {
+		case 0: // 原始块
+			literal += uint64(size)
+			pos += size
+		case 1: // RLE 块：一个字节重复 size 次
+			literal += uint64(size)
+			pos++
+		case 2: // 压缩块
+			pos += size
+		default:
+			return fmt.Errorf("%w: 保留的块类型", ErrCorrupt)
+		}
+		if size > maxBlock || pos > len(src) {
+			return fmt.Errorf("%w: 块超出边界", ErrCorrupt)
+		}
+		if literal > header.FrameContentSize {
+			return fmt.Errorf("%w: 块输出超过声明的原始长度", ErrCorrupt)
+		}
+		if last {
+			break
+		}
+	}
+	if header.HasCheckSum {
+		pos += 4
+	}
+	if pos != len(src) {
+		return fmt.Errorf("%w: 帧之后还有数据（拼接帧）", ErrCorrupt)
+	}
+	return nil
 }
