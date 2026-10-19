@@ -5,7 +5,8 @@
 #
 # 用法：build-linux-local.sh [--out 输出目录] <构建目标>...
 #   构建目标即 scripts/build/build.sh 的目标，例如 admin monitor collector storage-primary。
-#   输出目录默认 bin/；每个构建出的文件在 stdout 打印一行 BUILT:<文件名>:<sha256>，进度信息走 stderr。
+#   输出目录默认 bin/（可以是相对路径）；每个构建出的文件在 stdout 打印一行 BUILT:<文件名>:<sha256>，进度信息走 stderr。
+#   不支持 all：逐个写明目标。
 #
 # 环境变量：
 #   VERSION / GIT_COMMIT   写进二进制的版本信息，默认取当前提交。
@@ -33,6 +34,11 @@ done
 [[ ${#targets[@]} -gt 0 ]] || die "没有指定构建目标"
 for target in "${targets[@]}"; do
   [[ "${target}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "构建目标 ${target} 不合法"
+  # all 里包含 Storage：按纯 Go 关闭 CGO 构建会得到启动即报错的 storage-view。逐个写明目标，才能正确选择本机还是 Docker。
+  case "${target}" in
+    all) die "不支持 all：请逐个指定目标（例如 admin monitor collector storage-primary），含 CGO 的目标会自动进 Docker" ;;
+    proto) die "proto 不是二进制目标：用 make proto 生成协议代码" ;;
+  esac
 done
 
 go_version="$(tr -d '[:space:]' < "${ROOT}/.go-version")"
@@ -53,18 +59,19 @@ done
 version="${VERSION:-$(git -C "${ROOT}" rev-parse --short=8 HEAD 2>/dev/null || echo dev)}"
 commit="${GIT_COMMIT:-${version}}"
 
-# 只认这次构建新产出的文件：先打一个时间戳标记，最后列出比它新的文件。
+# 输出目录先转成绝对路径：build.sh 会先进入各模块目录再写文件，相对路径会让产物落到模块目录里。
 mkdir -p "${OUT}"
-marker="${OUT}/.build-marker.$$"
-touch "${marker}"
-trap 'rm -f "${marker}"' EXIT
-sleep 1
+OUT="$(cd "${OUT}" && pwd)"
+# 每次构建用独立的暂存目录，构建成功后只把这个目录里的产物拷到输出目录并列出；不比较修改时间
+# （容器与宿主机的时钟可能有偏差，输出目录里也可能留着旧文件）。
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/moox-build-stage.XXXXXX")"
+trap 'rm -rf "${STAGE}"' EXIT
 
 if [[ ${#plain_targets[@]} -gt 0 ]]; then
   command -v go >/dev/null || die "找不到 go"
   for target in "${plain_targets[@]}"; do
     echo "==> 本机交叉编译 ${target} (linux/amd64, CGO=0)" >&2
-    TARGET_GOOS=linux TARGET_GOARCH=amd64 CGO_ENABLED=0 BIN_DIR="${OUT}" VERSION="${version}" GIT_COMMIT="${commit}" \
+    TARGET_GOOS=linux TARGET_GOARCH=amd64 CGO_ENABLED=0 BIN_DIR="${STAGE}" VERSION="${version}" GIT_COMMIT="${commit}" \
       bash "${ROOT}/scripts/build/build.sh" "${target}" >&2
   done
 fi
@@ -99,17 +106,19 @@ if [[ ${#cgo_targets[@]} -gt 0 ]]; then
         -e "VERSION=${version}" -e "GIT_COMMIT=${commit}" \
         -e "GOPROXY=${MOOX_BUILD_GOPROXY:-https://mirrors.tencent.com/go,direct}" -e GOFLAGS=-buildvcs=false \
         "${image}" bash -c 'mkdir -p /src /out && tar -x -C /src && bash /src/scripts/build/docker/container-build.sh "$@" && tar -C /out -cf - .' container-build "${cgo_targets[@]}" \
-    | tar -x -C "${OUT}"
+    | tar -x -C "${STAGE}"
 fi
 
 sha_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
 count=0
-while IFS= read -r file; do
+for file in "${STAGE}"/*; do
+  [[ -f "${file}" ]] || continue
   name="$(basename "${file}")"
   [[ "${name}" =~ ^moox-[a-z0-9-]+$ ]] || continue
-  printf 'BUILT:%s:%s\n' "${name}" "$(sha_of "${file}")"
+  cp -f "${file}" "${OUT}/${name}"
+  printf 'BUILT:%s:%s\n' "${name}" "$(sha_of "${OUT}/${name}")"
   count=$((count + 1))
-done < <(find "${OUT}" -maxdepth 1 -type f -newer "${marker}" | sort)
-[[ ${count} -gt 0 ]] || die "构建没有产出新的二进制：检查构建目标名是否正确、Go 版本是否为 ${go_version}"
+done
+[[ ${count} -gt 0 ]] || die "构建没有产出二进制：检查构建目标名是否正确、Go 版本是否为 ${go_version}"

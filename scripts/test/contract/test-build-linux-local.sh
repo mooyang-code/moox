@@ -80,7 +80,22 @@ grep -q '^factor-mgr goos=linux goarch=amd64 cgo=0 ' "${HOST_BUILD_LOG}" || fail
 [[ ! -s "${DOCKER_LOG}" ]] || fail "纯 Go 目标不该用 Docker：$(cat "${DOCKER_LOG}")"
 grep -q "^BUILT:moox-admin:$(sha "${OUT}/moox-admin")\$" "${TMP}/stdout.txt" || fail "stdout 要有 admin 的 BUILT 行"
 grep -q "^BUILT:moox-monitor:$(sha "${OUT}/moox-monitor")\$" "${TMP}/stdout.txt" || fail "stdout 要有 monitor 的 BUILT 行"
-[[ -z "$(find "${OUT}" -name '.build-marker*' -print -quit)" ]] || fail "不能留下构建标记文件"
+[[ -z "$(find "${OUT}" -name '.build-*' -print -quit)" ]] || fail "输出目录里不能留下构建的临时文件"
+[[ -z "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'moox-build-stage.*' -newer "${HOST_BUILD_LOG}" -print -quit 2>/dev/null)" ]] || fail "暂存目录要在结束后清理"
+
+# 输出目录里已有的旧文件（哪怕修改时间在未来）不能被当成这次的产物：只列出这次构建出来的。
+printf 'stale\n' >"${OUT}/moox-stale"
+touch -t 209912312359 "${OUT}/moox-stale"
+bash "${SCRIPT}" --out "${OUT}" admin >"${TMP}/stdout.txt" 2>/dev/null || fail "已有旧文件时构建应成功"
+grep -q '^BUILT:moox-admin:' "${TMP}/stdout.txt" || fail "要列出这次构建的 admin"
+! grep -q 'moox-stale' "${TMP}/stdout.txt" || fail "旧文件不能被当成这次的产物"
+rm -f "${OUT}/moox-stale"
+
+# 相对路径的 --out：产物必须落在调用目录下的那个目录，而不是模块目录里（build.sh 会先进入各模块目录）。
+mkdir -p "${TMP}/cwd"
+( cd "${TMP}/cwd" && bash "${SCRIPT}" --out ./rel-out admin >"${TMP}/stdout.txt" 2>/dev/null ) || fail "相对路径 --out 应成功"
+[[ -f "${TMP}/cwd/rel-out/moox-admin" ]] || fail "相对路径 --out 的产物要落在调用目录下的 rel-out"
+grep -q '^BUILT:moox-admin:' "${TMP}/stdout.txt" || fail "相对路径 --out 要列出产物"
 
 # ---------------------------------------------------------------- 含 CGO：Docker 里编，镜像按需构建
 : >"${HOST_BUILD_LOG}"
@@ -132,6 +147,9 @@ expect_fail() {
 expect_fail "没有目标" "没有指定构建目标"
 expect_fail "目标不合法" "不合法" "admin;rm"
 expect_fail "未知选项" "未知选项" --bogus admin
+expect_fail "all 不支持" "不支持 all" all
+expect_fail "all 混在其它目标里也不支持" "不支持 all" admin all
+expect_fail "proto 不是二进制目标" "proto 不是二进制目标" proto
 
 touch "${DOCKER_FLAGS}/down"
 expect_fail "Docker 没运行" "colima start" storage-primary
