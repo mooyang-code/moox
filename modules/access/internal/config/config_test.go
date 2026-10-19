@@ -45,7 +45,8 @@ func TestConfigUsesCanonicalLayoutAndRejectsLegacyFields(t *testing.T) {
 func TestPackagedTemplateCarriesPoolWarmup(t *testing.T) {
 	cfg, err := Load(filepath.Join("..", "..", "config", "app.yaml"))
 	require.NoError(t, err)
-	require.Equal(t, 16, cfg.GatewayClient.Pool.MinIdle)
+	require.Equal(t, 32, cfg.GatewayClient.Pool.MinIdle)
+	require.Equal(t, 64, cfg.GatewayClient.Pool.MaxIdle)
 
 	path := filepath.Join(t.TempDir(), "app.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(example, "key_file:", "pool:\n    min_idle: 100\n  key_file:", 1)), 0o644))

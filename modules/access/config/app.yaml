@@ -2,9 +2,11 @@ gateway_client:
   caller: access
   key_id: ""
   key_file: ../../secrets/caller-access.key
-  # 整分钟并发写入：保持 16 条空闲连接常驻（预热），请求路径上不再现建跨境 TLS 连接。
+  # 整分钟突发：约 42 个采集函数在 1.5 秒内错峰写入，实测峰值并发约 24 条；保持 32 条连接常驻（预热），
+  # 请求路径上不再现建跨境 TLS 连接，空闲上限 64 留出余量。
   pool:
-    min_idle: 16
+    min_idle: 32
+    max_idle: 64
 
 # Admin keys export-access publishes this registry and versioned private keys.
 verification_file: ../../secrets/access/access-verification.json
