@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -185,6 +186,29 @@ func TestHTTPSRoutesTrustAndCAContinuity(t *testing.T) {
 		if rsp.StatusCode != 404 {
 			t.Errorf("forbidden path %q returned %d", path, rsp.StatusCode)
 		}
+	}
+	// 根证书与指纹要在登录前公开下载，内容与发布目录一致，并带上安全响应头。
+	publishedRoot, err := os.ReadFile(filepath.Join(c.TLS.CAPublishDir, "root.crt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootRsp, err := client.Get(base + caDownloadCertPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootBody, _ := io.ReadAll(rootRsp.Body)
+	rootRsp.Body.Close()
+	if rootRsp.StatusCode != http.StatusOK || !bytes.Equal(rootBody, publishedRoot) || rootRsp.Header.Get("X-Frame-Options") != "DENY" {
+		t.Fatalf("根证书下载失败：%d，内容一致=%v", rootRsp.StatusCode, bytes.Equal(rootBody, publishedRoot))
+	}
+	printRsp, err := client.Get(base + caDownloadFingerprintPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	printBody, _ := io.ReadAll(printRsp.Body)
+	printRsp.Body.Close()
+	if want := fingerprint(e.root); printRsp.StatusCode != http.StatusOK || string(printBody) != want {
+		t.Fatalf("指纹下载失败：%d %q，期望 %q", printRsp.StatusCode, printBody, want)
 	}
 	// 叶子证书寿命要拉长：默认 12 小时会让只对当前证书点过“继续访问”的浏览器每隔几小时就在后台请求上报 Network Error。
 	leafRsp, err := client.Get(base + "/")

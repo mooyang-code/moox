@@ -1,0 +1,86 @@
+# 安装 MooX 管理台的 HTTPS 根证书（给 Agent 阅读）
+
+这个压缩包由 MooX 管理台（`{{.Host}}`）提供，用来让本机信任管理台的内置 HTTPS 证书。
+没有安装时，浏览器会提示“不安全”，页面的定时请求会报 `Network Error`。安装一次即可，之后管理台换证书不会再受影响。
+
+## 包内文件
+
+| 文件 | 说明 |
+| --- | --- |
+| `moox-caddy-root.crt` | 根证书（公开证书，不含私钥） |
+| `root.sha256` | 根证书的 SHA-256 指纹，冒号分隔的大写十六进制 |
+| `install.sh` | macOS / Linux 安装脚本（Windows 的 Git Bash 也可用） |
+| `install.ps1` | Windows PowerShell 安装脚本 |
+| `AGENT-INSTALL.md` | 本说明 |
+
+本包生成时根证书的 SHA-256 指纹：
+
+```
+{{.Fingerprint}}
+```
+
+## 给 Agent 的规则
+
+1. **先核对指纹再安装。** 这个压缩包可能是经由尚未被信任的连接下载的。让用户通过另一条可信渠道（运维人员、另一台已信任的主机、
+   `skills/moox/scripts/caddy-ca.sh fetch --expected-fingerprint`）确认上面的指纹，再继续。用户没有确认时，把指纹原样告诉用户并停下来，不要自行安装。
+2. **不要索取、记录或输入用户的密码。** 安装需要管理员权限：macOS / Linux 的脚本会自己调用 `sudo`，密码由用户在终端里输入；
+   Windows 会弹出系统确认框，需要用户点击。无法交互时，把要执行的命令告诉用户，让用户自己运行。
+3. **不要绕过证书校验。** 不要使用 `curl -k`、`--insecure`、`NODE_TLS_REJECT_UNAUTHORIZED=0`，也不要关闭浏览器的安全警告。
+4. 只安装本包里的 `moox-caddy-root.crt`，不要安装来源不明的其他证书。
+
+## 安装
+
+先解压，进入解压后的目录。
+
+### macOS / Linux
+
+```bash
+bash install.sh --ca-file ./moox-caddy-root.crt
+```
+
+脚本会：检查文件是证书而不是私钥、输出指纹、已信任则不做改动，否则写入系统信任库
+（macOS 写入 System 钥匙串；Debian / Ubuntu 用 `update-ca-certificates`；RHEL / Fedora 用 `update-ca-trust`）。
+只想检查是否已信任：`bash install.sh --ca-file ./moox-caddy-root.crt --check`，退出码 0 表示已信任。
+想先看会执行什么：加 `--dry-run`。
+
+### Windows
+
+在 PowerShell 中：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+脚本会核对 `root.sha256`，再把证书导入当前用户的“受信任的根证书颁发机构”，期间 Windows 会弹出确认框，需要用户确认。
+
+### Firefox
+
+Firefox 使用自己的证书库，上面的脚本对它不生效。任选其一：
+
+- 设置 → 隐私与安全 → 证书 → 查看证书 → 证书颁发机构 → 导入 `moox-caddy-root.crt`，勾选“信任由此证书颁发机构来标识网站”；
+- 在 `about:config` 把 `security.enterprise_roots.enabled` 设为 `true`，让 Firefox 读取系统证书库。
+
+## 验证
+
+1. 退出并重新打开浏览器（已经打开的浏览器不会重新读取系统信任库）。
+2. 不加 `-k` 访问管理台，应该返回 200：
+
+   ```bash
+   curl -sS -o /dev/null -w '%{http_code}\n' https://{{.Host}}/
+   ```
+
+   如果终端设置了代理环境变量，先取消或把管理台地址加入 `NO_PROXY`。
+3. 浏览器打开 `https://{{.Host}}/`，地址栏不再提示不安全。
+
+## 常见问题
+
+- **安装成功但浏览器仍报不安全：** 浏览器没有完全退出；或使用的是 Firefox；或 Linux 上的 Chrome 使用自己的证书库（在浏览器设置的“管理证书”里导入）。
+- **指纹和预期不一致：** 不要安装，把两个指纹都告诉用户，说明有可能下载到了被替换的证书。
+- **管理台管理员重新生成了内置 CA：** 指纹会变，需要重新下载本包并重新核对、安装。
+
+## 卸载
+
+- macOS：`sudo security delete-certificate -Z <指纹去掉冒号> /Library/Keychains/System.keychain`
+- Debian / Ubuntu：删除 `/usr/local/share/ca-certificates/moox-*.crt` 后运行 `sudo update-ca-certificates --fresh`
+- RHEL / Fedora：删除 `/etc/pki/ca-trust/source/anchors/moox-*.crt` 后运行 `sudo update-ca-trust`
+- Windows：在 `certmgr.msc` 的“受信任的根证书颁发机构”里删除 `Caddy Local Authority` 对应条目。
