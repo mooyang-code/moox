@@ -105,7 +105,8 @@ func TestExportThenImportSecretsKeepsIDsAndValues(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SUCCESS, exported.GetRetInfo().GetCode(), exported.GetRetInfo().GetMsg())
 	require.EqualValues(t, 2, exported.GetCount())
 	require.NotContains(t, exported.GetBundle(), "plain-okx-secret", "迁移包里没有明文")
-	require.NotContains(t, exported.GetBundle(), "OKX")
+	// 密文是随机 base64，短片段（如 "OKX"）会偶然出现；用含空格和中文的完整名称，base64 字母表里不可能有。
+	require.NotContains(t, exported.GetBundle(), "OKX 主账户")
 	// EventBus 内部凭据由部署工具在 mooxsys 空间生成、按 key_id 读取：带到另一套环境会和那里的同名令牌冲突，不导出。
 	var outer map[string]any
 	require.NoError(t, json.Unmarshal([]byte(exported.GetBundle()), &outer))
