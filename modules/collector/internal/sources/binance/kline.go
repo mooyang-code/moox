@@ -182,8 +182,9 @@ func endpointAttemptContext(parent context.Context, remainingEndpoints int) (con
 	return context.WithTimeout(parent, slice)
 }
 
-// minEndpointAttempt 是单个端点一次尝试的最短时间。
-const minEndpointAttempt = 1200 * time.Millisecond
+// minEndpointAttempt 是单个端点一次尝试的最短时间。2026-10-20 的整点实测：币安现货、合约的响应在整点前后约 1 秒上下，
+// 原来的 1.2 秒上限把约一半的 1m 请求截断后换端点重发，级联 3 到 4 次累计 3.7～4.9 秒才成功；放宽到 2 秒让这类请求在一次尝试内完成。
+const minEndpointAttempt = 2 * time.Second
 
 func convertExchangeKlines(exchangeKlines []*exchange.Kline, symbol string, interval string) []*market.Kline {
 	klines := make([]*market.Kline, 0, len(exchangeKlines))
