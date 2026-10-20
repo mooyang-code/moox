@@ -56,6 +56,9 @@ type SCFPlanFetchConfig struct {
 	StandbyMS       int  `yaml:"standby_ms"`
 	StandbyPercent  int  `yaml:"standby_percent"`
 	StandbyHourOnly bool `yaml:"standby_hour_only"`
+	// ConnReuse 为真时函数进程在多次调用之间复用到行情源的 HTTP 连接，默认关闭；ConnReusePercent 是启用的函数占比（0 等同 100）。
+	ConnReuse        bool `yaml:"conn_reuse"`
+	ConnReusePercent int  `yaml:"conn_reuse_percent"`
 }
 
 // filled 用 base 补齐未指定（为零）的字段。拉取参数里零值表示“沿用默认”，所以只写部分字段的覆盖项不会得到不完整的参数。
@@ -71,6 +74,7 @@ func (f SCFPlanFetchConfig) filled(base SCFPlanFetchConfig) SCFPlanFetchConfig {
 		FeedConcurrency: pick(f.FeedConcurrency, base.FeedConcurrency), RequestTimeoutMS: pick(f.RequestTimeoutMS, base.RequestTimeoutMS),
 		StorageTimeoutMS: pick(f.StorageTimeoutMS, base.StorageTimeoutMS), StaggerBaseMS: pick(f.StaggerBaseMS, base.StaggerBaseMS), StaggerMS: pick(f.StaggerMS, base.StaggerMS),
 		StandbyMS: pick(f.StandbyMS, base.StandbyMS), StandbyPercent: pick(f.StandbyPercent, base.StandbyPercent), StandbyHourOnly: f.StandbyHourOnly || base.StandbyHourOnly,
+		ConnReuse: f.ConnReuse || base.ConnReuse, ConnReusePercent: pick(f.ConnReusePercent, base.ConnReusePercent),
 	}
 }
 
@@ -105,6 +109,7 @@ func (c SCFPlanConfig) fetchFor(spaceID string) marketfetch.PlanFetch {
 		Concurrency: fetch.Concurrency, RPS: fetch.RPS, Burst: fetch.Burst, FeedConcurrency: fetch.FeedConcurrency,
 		RequestTimeoutMS: fetch.RequestTimeoutMS, StorageTimeoutMS: fetch.StorageTimeoutMS, StaggerBaseMS: fetch.StaggerBaseMS, StaggerMS: fetch.StaggerMS,
 		StandbyMS: fetch.StandbyMS, StandbyPercent: fetch.StandbyPercent, StandbyHourOnly: fetch.StandbyHourOnly,
+		ConnReuse: fetch.ConnReuse, ConnReusePercent: fetch.ConnReusePercent,
 	}
 }
 

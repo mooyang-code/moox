@@ -67,6 +67,11 @@ func runtimeFields(req Request, started time.Time) map[string]string {
 		"invocation_seq": strconv.FormatInt(invocationSeq.Load(), 10),
 		"num_cpu":        strconv.Itoa(runtime.NumCPU()),
 	}
+	if req.ConnReuse {
+		fields["conn_reuse"] = "1"
+	} else {
+		fields["conn_reuse"] = "0"
+	}
 	if req.TimerLateMS != 0 {
 		fields["timer_late_ms"] = strconv.Itoa(req.TimerLateMS)
 	}

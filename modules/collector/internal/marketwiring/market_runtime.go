@@ -2,6 +2,7 @@ package marketwiring
 
 import (
 	"fmt"
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
@@ -92,7 +93,7 @@ func newMarketProvider(marketID string, instrumentType marketdata.InstrumentType
 		if sourceID != DefaultSourceID(providerID, string(instrumentType)) {
 			return nil, fmt.Errorf("unsupported crypto %s source %s/%s", instrumentType, providerID, sourceID)
 		}
-		return binance.NewMarketDataAdapter(binance.AdapterConfig{InstrumentType: productType}), nil
+		return binance.NewMarketDataAdapter(binance.AdapterConfig{HTTPClient: httpclient.SharedClientIfEnabled(), InstrumentType: productType}), nil
 	}
 	if instrumentType == marketdata.InstrumentConvertibleBond {
 		switch {

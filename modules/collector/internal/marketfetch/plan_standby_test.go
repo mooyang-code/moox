@@ -80,3 +80,38 @@ func TestRequestRejectsOutOfRangeStandby(t *testing.T) {
 	req.StandbyMS = MaxStandbyMS + 1
 	require.ErrorContains(t, req.validate(), "standby_ms")
 }
+
+func TestConnReuseForIsOffByDefaultAndUsesTheOtherEndOfTheBuckets(t *testing.T) {
+	require.False(t, (*Plan)(nil).ConnReuseFor("fn-009"))
+	require.False(t, standbyPlan(PlanFetch{}).ConnReuseFor("fn-009"))
+	require.True(t, standbyPlan(PlanFetch{ConnReuse: true}).ConnReuseFor("fn-000"), "占比 0 等同全部")
+	require.True(t, standbyPlan(PlanFetch{ConnReuse: true, ConnReusePercent: 100}).ConnReuseFor("fn-000"))
+
+	plan := standbyPlan(PlanFetch{ConnReuse: true, ConnReusePercent: 30, StandbyMS: 1000, StandbyPercent: 30})
+	hour := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	var standby, reuse, control []string
+	for digit := 0; digit < 10; digit++ {
+		name := "moox-fetch-plan-crypto-spot-hongkong-00" + string(rune('0'+digit))
+		s, r := plan.StandbyFor(name, hour) > 0, plan.ConnReuseFor(name)
+		require.False(t, s && r, "两组不重叠：%s", name)
+		switch {
+		case s:
+			standby = append(standby, name[len(name)-1:])
+		case r:
+			reuse = append(reuse, name[len(name)-1:])
+		default:
+			control = append(control, name[len(name)-1:])
+		}
+	}
+	require.Equal(t, []string{"0", "1", "2"}, standby)
+	require.Equal(t, []string{"7", "8", "9"}, reuse)
+	require.Equal(t, []string{"3", "4", "5", "6"}, control)
+}
+
+func TestPlanValidateRejectsOutOfRangeConnReusePercent(t *testing.T) {
+	plan := testPlan()
+	plan.Fetch.ConnReuse, plan.Fetch.ConnReusePercent = true, 101
+	require.Error(t, plan.Validate())
+	plan.Fetch.ConnReusePercent = 30
+	require.NoError(t, plan.Validate())
+}

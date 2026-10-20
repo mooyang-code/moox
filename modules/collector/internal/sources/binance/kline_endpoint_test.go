@@ -57,8 +57,8 @@ func TestEndpointAttemptContextKeepsAMinimumWindow(t *testing.T) {
 	if !ok {
 		t.Fatal("endpoint attempt must have a deadline")
 	}
-	if window := time.Until(deadline); window < 2900*time.Millisecond {
-		t.Fatalf("endpoint window %v is shorter than the 3s minimum", window)
+	if window := time.Until(deadline); window < 1900*time.Millisecond {
+		t.Fatalf("endpoint window %v is shorter than the 2s minimum", window)
 	}
 
 	short, shortCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)

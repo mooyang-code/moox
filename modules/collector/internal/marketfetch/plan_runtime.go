@@ -3,6 +3,7 @@ package marketfetch
 import (
 	"context"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"os"
 	"sort"
 	"strconv"
@@ -72,8 +73,11 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 		return respond(true, "no_work", nil)
 	}
 	standbyMS := plan.StandbyFor(functionName, scheduled)
+	connReuse := plan.ConnReuseFor(functionName)
+	httpclient.SetConnReuse(connReuse)
 	for index := range planned {
 		planned[index].Request.StandbyMS = standbyMS
+		planned[index].Request.ConnReuse = connReuse
 	}
 	// 截止时间最近的先执行：整点同时到期多个频率时，短周期不能被长周期占去预算。
 	// 截止时间相同则周期短的先执行（1m 先于 1h）。

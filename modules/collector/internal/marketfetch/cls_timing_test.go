@@ -195,7 +195,9 @@ func TestSchedProbeAndRuntimeFields(t *testing.T) {
 
 	entry := time.Now()
 	started := entry.Add(2400 * time.Millisecond)
-	runtime := runtimeFields(Request{TimerLateMS: 900, StaggerMS: 1500, EntryAt: entry}, started)
+	runtime := runtimeFields(Request{TimerLateMS: 900, StaggerMS: 1500, EntryAt: entry, ConnReuse: true}, started)
+	require.Equal(t, "1", runtime["conn_reuse"])
+	require.Equal(t, "0", runtimeFields(Request{}, started)["conn_reuse"])
 	require.Equal(t, "900", runtime["timer_late_ms"])
 	require.Equal(t, "1500", runtime["stagger_ms"])
 	require.Equal(t, "2400", runtime["entry_to_start_ms"])

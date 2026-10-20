@@ -61,6 +61,11 @@ type PlanFetch struct {
 	StandbyMS       int  `json:"standby_ms,omitempty"`
 	StandbyPercent  int  `json:"standby_percent,omitempty"`
 	StandbyHourOnly bool `json:"standby_hour_only,omitempty"`
+	// ConnReuse 为真时，函数进程在多次调用之间复用到行情源的 HTTP 连接（上一分钟留下的空闲连接下一分钟直接用）；
+	// ConnReusePercent 是启用的函数占比（1～100，0 等同 100），按函数名末尾序号的个位从大到小分组（与备援的分组从小到大错开），
+	// 便于同一时刻与不启用、启用备援的函数对比。
+	ConnReuse        bool `json:"conn_reuse,omitempty"`
+	ConnReusePercent int  `json:"conn_reuse_percent,omitempty"`
 }
 
 // MinStandbyMS 是备援延迟的下限：正常请求的首字节在几十到几百毫秒，延迟太短会让几乎所有请求都发出备援。
@@ -158,6 +163,9 @@ func (p *Plan) Validate() error {
 	}
 	if f.RPS < 0 || f.Burst < 0 || f.FeedConcurrency < 0 || f.RequestTimeoutMS < 0 || f.StorageTimeoutMS < 0 || f.StaggerMS < 0 || f.StaggerMS > 60000 || f.StaggerBaseMS < 0 || f.StaggerBaseMS > 60000 {
 		return errors.New("plan fetch limits are out of range")
+	}
+	if f.ConnReusePercent < 0 || f.ConnReusePercent > 100 {
+		return errors.New("plan fetch.conn_reuse_percent must be between 0 and 100")
 	}
 	if f.StandbyMS != 0 && (f.StandbyMS < MinStandbyMS || f.StandbyMS > MaxStandbyMS) || f.StandbyPercent < 0 || f.StandbyPercent > 100 {
 		return fmt.Errorf("plan fetch.standby_ms must be 0 or between %d and %d, standby_percent between 0 and 100", MinStandbyMS, MaxStandbyMS)
@@ -417,4 +425,17 @@ func standbyBucket(functionName string) int {
 	}
 	sum := sha256.Sum256([]byte(name))
 	return int(sum[2]) % 10
+}
+
+// ConnReuseFor 返回这个函数是否使用跨调用的连接复用。分组与备援错开：备援取个位小的函数（0～），连接复用取个位大的函数（9～），
+// 占比都是 30 时备援 0～2、复用 7～9、其余 3～6 作对照。
+func (p *Plan) ConnReuseFor(functionName string) bool {
+	if p == nil || !p.Fetch.ConnReuse {
+		return false
+	}
+	percent := p.Fetch.ConnReusePercent
+	if percent <= 0 || percent >= 100 {
+		return true
+	}
+	return (9-standbyBucket(functionName))*10 < percent
 }

@@ -63,6 +63,8 @@ type Request struct {
 	Concurrency         int              `json:"concurrency,omitempty"`
 	// StandbyMS 大于 0 时启用备援请求：行情请求超过这么多毫秒还没有结果，就并发再发一个备援请求，先成功的为准（采集计划控制，默认关闭）。
 	StandbyMS int `json:"standby_ms,omitempty"`
+	// ConnReuse 记录本次调用是否使用了跨调用的连接复用，只用于上报。
+	ConnReuse bool `json:"conn_reuse,omitempty"`
 	// TimerLateMS 是函数入口时刻减去定时事件计划时间（毫秒），StaggerMS 是函数内错峰等待的时长，EntryAt 是函数入口时刻；
 	// 只用于上报，定位“收盘到开始取数”这一段花在触发、启动还是错峰上。
 	TimerLateMS int                              `json:"timer_late_ms,omitempty"`

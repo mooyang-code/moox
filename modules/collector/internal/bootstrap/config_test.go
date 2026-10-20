@@ -487,6 +487,21 @@ func TestScfPlanFetchYAMLWithOnlyStandbyKeepsDefaults(t *testing.T) {
 	require.True(t, fetch.StandbyHourOnly)
 	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
 	require.Equal(t, defaultSCFPlan().Fetch.StaggerMS, fetch.StaggerMS)
+	require.False(t, fetch.ConnReuse, "没写的开关保持关闭")
+}
+
+// 连接复用与备援、错峰可以只写需要改的几项，其余沿用默认值。
+func TestScfPlanFetchYAMLConnReuseAndStagger(t *testing.T) {
+	cfg := Default()
+	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    stagger_ms: 500\n    conn_reuse: true\n    conn_reuse_percent: 30\n"))
+	decoder.KnownFields(true)
+	require.NoError(t, decoder.Decode(&cfg))
+	fetch := cfg.SCFPlan.fetchFor("crypto")
+	require.Equal(t, 500, fetch.StaggerMS)
+	require.True(t, fetch.ConnReuse)
+	require.Equal(t, 30, fetch.ConnReusePercent)
+	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
+	require.Zero(t, fetch.StandbyMS)
 }
 
 // CLI 渲染测试生成的真实产物（modules/cli/.../testdata/scf_plan_rendered.yaml）必须能被 Collector 真实加载并通过校验。
