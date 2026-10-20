@@ -142,7 +142,7 @@ $S catalog-changed --host control                    # 用台账里最近一次 
 ```bash
 D=~/moox/factor-engine; TS=$(date +%Y%m%d%H%M%S)
 mkdir -p $D/bin-backup-$TS && cp -p $D/bin/moox-factor-engine $D/bin-backup-$TS/
-install -m 0755 ~/moox-build/bin/moox-factor-engine $D/bin/.moox-factor-engine.new && mv -f $D/bin/.moox-factor-engine.new $D/bin/moox-factor-engine
+install -m 0755 <传到因子机的 moox-factor-engine> $D/bin/.moox-factor-engine.new && mv -f $D/bin/.moox-factor-engine.new $D/bin/moox-factor-engine
 systemctl --user restart moox-factor-engine.service
 ```
 
