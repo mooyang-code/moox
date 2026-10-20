@@ -3,6 +3,7 @@ package tencentscf
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -93,7 +94,10 @@ func (c *Client) EnsureTimerTrigger(ctx context.Context, req TimerTriggerRequest
 	update.Qualifier = common.StringPtr(qualifier)
 	update.Namespace = common.StringPtr(req.Namespace)
 	update.CustomArgument = common.StringPtr(message)
-	if _, err := client.UpdateTriggerWithContext(ctx, update); err != nil {
+	if err := c.call(ctx, req.Region, "UpdateTrigger", func(ctx context.Context) error {
+		_, callErr := client.UpdateTriggerWithContext(ctx, update)
+		return callErr
+	}); err != nil {
 		return nil, err
 	}
 	updated, err := c.waitForTimerTrigger(ctx, req.FunctionRef, req, qualifier, message)
@@ -128,8 +132,10 @@ func (c *Client) DeleteTimerTrigger(ctx context.Context, req TimerTriggerRequest
 	request.Type = common.StringPtr("timer")
 	request.Namespace = common.StringPtr(req.Namespace)
 	request.Qualifier = common.StringPtr(firstNonEmpty(req.Qualifier, defaultTimerQualifier))
-	_, err = client.DeleteTriggerWithContext(ctx, request)
-	return err
+	return c.call(ctx, req.Region, "DeleteTrigger", func(ctx context.Context) error {
+		_, callErr := client.DeleteTriggerWithContext(ctx, request)
+		return callErr
+	})
 }
 
 func (c *Client) createTimerTrigger(ctx context.Context, req TimerTriggerRequest, qualifier, message string) (*TimerTriggerInfo, error) {
@@ -147,7 +153,10 @@ func (c *Client) createTimerTrigger(ctx context.Context, req TimerTriggerRequest
 	request.Qualifier = common.StringPtr(qualifier)
 	request.Enable = common.StringPtr(timerEnable(req.Enabled))
 	request.CustomArgument = common.StringPtr(message)
-	if _, err := client.CreateTriggerWithContext(ctx, request); err != nil {
+	if err := c.call(ctx, req.Region, "CreateTrigger", func(ctx context.Context) error {
+		_, callErr := client.CreateTriggerWithContext(ctx, request)
+		return callErr
+	}); err != nil {
 		return nil, err
 	}
 	created, err := c.waitForTimerTrigger(ctx, req.FunctionRef, req, qualifier, message)
@@ -183,30 +192,58 @@ func validateTimerTriggerInfo(info *TimerTriggerInfo, req TimerTriggerRequest, q
 // waitForTimerTrigger is kept small and bounded. Tencent may expose the
 // trigger list one short poll behind Create/Update; callers can use it before
 // strict validation without turning a control-plane retry into a long job.
+// timerConfirmBudget 是更新或创建定时器后等待云端读回一致的总时限；
+// timerConfirmBackoff 是各次轮询之间的间隔，用尽后不再拉长。
+// 轮询走 ListTriggers（官方限频 20 次/秒），固定 200ms 轮询时每个函数最多约 25 次调用。
+var (
+	timerConfirmBudget  = 5 * time.Second
+	timerConfirmBackoff = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second}
+)
+
+// waitForTimerTrigger 等待云端定时器读回与请求一致，返回最后一次读到的触发器。
+// 总时限由局部 ctx 约束，并传给每次查询：取令牌、限频重试和 SDK 请求都不会越过预算。
 func (c *Client) waitForTimerTrigger(ctx context.Context, ref FunctionRef, req TimerTriggerRequest, qualifier, message string) (*scf.TriggerInfo, error) {
-	deadline := time.Now().Add(5 * time.Second)
+	return pollTimerTrigger(ctx, func(ctx context.Context) (*scf.TriggerInfo, error) {
+		return c.findTimerTrigger(ctx, ref, req.Name)
+	}, req, qualifier, message)
+}
+
+func pollTimerTrigger(ctx context.Context, find func(context.Context) (*scf.TriggerInfo, error), req TimerTriggerRequest, qualifier, message string) (*scf.TriggerInfo, error) {
+	localDeadline := limiterNow().Add(timerConfirmBudget)
+	// 父 ctx 的截止时间更早时，超时属于调用方预算不足，不能当成本地预算耗尽而吞掉。
+	parentDeadline, hasParentDeadline := ctx.Deadline()
+	parentTighter := hasParentDeadline && parentDeadline.Before(localDeadline)
+	pollCtx, cancel := context.WithDeadline(ctx, localDeadline)
+	defer cancel()
 	var last *scf.TriggerInfo
-	for {
-		item, err := c.findTimerTrigger(ctx, ref, req.Name)
-		if err != nil || item == nil {
-			if err != nil {
+	for attempt := 0; ; attempt++ {
+		item, err := find(pollCtx)
+		if err != nil {
+			switch {
+			case ctx.Err() != nil:
+				return nil, ctx.Err()
+			case !parentTighter && (pollCtx.Err() != nil || errors.Is(err, ErrRateLimitWaitExceedsDeadline)):
+				// 本地预算耗尽：返回最后一次读到的结果，由调用方校验。
+				return last, nil
+			default:
 				return nil, err
 			}
-		} else {
+		}
+		if item != nil {
 			last = item
 			if validateTimerTriggerInfo(timerTriggerInfoFromSDK(item), req, qualifier, message) == nil {
 				return item, nil
 			}
 		}
-		if time.Now().After(deadline) {
+		delay := timerConfirmBackoff[min(attempt, len(timerConfirmBackoff)-1)]
+		if !limiterNow().Add(delay).Before(localDeadline) {
 			return last, nil
 		}
-		timer := time.NewTimer(200 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil, ctx.Err()
-		case <-timer.C:
+		if err := limiterSleep(pollCtx, delay); err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return last, nil
 		}
 	}
 }
@@ -222,8 +259,11 @@ func (c *Client) findTimerTrigger(ctx context.Context, ref FunctionRef, name str
 		request.Namespace = common.StringPtr(ref.Namespace)
 		request.Offset = common.Uint64Ptr(offset)
 		request.Limit = common.Uint64Ptr(100)
-		response, err := client.ListTriggersWithContext(ctx, request)
-		if err != nil {
+		var response *scf.ListTriggersResponse
+		if err := c.call(ctx, ref.Region, "ListTriggers", func(ctx context.Context) (callErr error) {
+			response, callErr = client.ListTriggersWithContext(ctx, request)
+			return callErr
+		}); err != nil {
 			return nil, err
 		}
 		if response.Response == nil {

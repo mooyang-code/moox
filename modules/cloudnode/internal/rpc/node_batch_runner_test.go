@@ -1117,3 +1117,9 @@ func (l *bufferLogger) Sync() error                       { return nil }
 func (l *bufferLogger) SetLevel(string, log.Level)        {}
 func (l *bufferLogger) GetLevel(string) log.Level         { return log.LevelDebug }
 func (l *bufferLogger) With(...log.Field) log.Logger      { return l }
+
+func TestRateLimitWaitExceedingDeadlineIsTransient(t *testing.T) {
+	wrapped := fmt.Errorf("ensure timer trigger for fn: %w", tencentscf.ErrRateLimitWaitExceedsDeadline)
+	require.True(t, isTransientSCFProviderError(wrapped), "请求没有发出，下一次尝试有新的预算，应由外层重试")
+	require.False(t, isTransientSCFProviderError(errors.New("InvalidParameterValue: bad cron")))
+}

@@ -118,3 +118,31 @@ func TestGatewayIdentityAndStrictConfiguration(t *testing.T) {
 	_, err := cfg.OpenGateway(nil)
 	require.Error(t, err)
 }
+
+func TestTencentSCFAPIRateLimitsFromYAMLAndValidation(t *testing.T) {
+	path := writeCloudnodeConfig(t, `
+tencent_scf:
+  api_rate_limits:
+    ListTriggers: 10
+    UpdateTrigger: 12.5
+`)
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]float64{"ListTriggers": 10, "UpdateTrigger": 12.5}, cfg.TencentSCF.APIRateLimits)
+
+	assert.Empty(t, Default().TencentSCF.APIRateLimits, "默认不覆盖，使用官方限频的 75%")
+	require.NoError(t, Default().Validate())
+
+	for name, limits := range map[string]map[string]float64{
+		"unknown action":         {"NoSuchAction": 5},
+		"zero":                   {"ListTriggers": 0},
+		"negative":               {"ListTriggers": -3},
+		"above the official cap": {"ListTriggers": 21},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Default()
+			cfg.TencentSCF.APIRateLimits = limits
+			require.ErrorContains(t, cfg.Validate(), "tencent_scf.api_rate_limits")
+		})
+	}
+}

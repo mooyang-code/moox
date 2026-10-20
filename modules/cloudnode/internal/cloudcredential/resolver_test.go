@@ -21,10 +21,14 @@ func TestResolverAcceptsActiveTencentCloudSecret(t *testing.T) {
 		}, nil
 	}}
 	credential, err := resolver.Resolve(context.Background(), store.CloudAccount{
-		Provider: "tencent", CredentialSecretID: "secret-1",
+		AccountID: "acct-100", Provider: "tencent", CredentialSecretID: "secret-1",
 	})
 	if err != nil || credential.SecretID != "sid" || credential.SecretKey != "skey" {
 		t.Fatalf("credential=%+v err=%v", credential, err)
+	}
+	// 限流配额以云账号标识为准：轮换密钥不改变它。
+	if credential.AccountID != "acct-100" {
+		t.Fatalf("AccountID = %q, want acct-100", credential.AccountID)
 	}
 }
 

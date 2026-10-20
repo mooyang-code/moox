@@ -20,8 +20,31 @@ type DiscoveryFunction struct {
 }
 
 type discoveryAPI interface {
-	ListNamespacesWithContext(context.Context, *scf.ListNamespacesRequest) (*scf.ListNamespacesResponse, error)
-	ListFunctionsWithContext(context.Context, *scf.ListFunctionsRequest) (*scf.ListFunctionsResponse, error)
+	ListNamespaces(context.Context, *scf.ListNamespacesRequest) (*scf.ListNamespacesResponse, error)
+	ListFunctions(context.Context, *scf.ListFunctionsRequest) (*scf.ListFunctionsResponse, error)
+}
+
+// limitedDiscoveryAPI 让盘点扫描的 SDK 调用也走统一的限流与限频重试入口。
+type limitedDiscoveryAPI struct {
+	client *Client
+	region string
+	api    *scf.Client
+}
+
+func (l limitedDiscoveryAPI) ListNamespaces(ctx context.Context, request *scf.ListNamespacesRequest) (response *scf.ListNamespacesResponse, err error) {
+	err = l.client.call(ctx, l.region, "ListNamespaces", func(ctx context.Context) (callErr error) {
+		response, callErr = l.api.ListNamespacesWithContext(ctx, request)
+		return callErr
+	})
+	return response, err
+}
+
+func (l limitedDiscoveryAPI) ListFunctions(ctx context.Context, request *scf.ListFunctionsRequest) (response *scf.ListFunctionsResponse, err error) {
+	err = l.client.call(ctx, l.region, "ListFunctions", func(ctx context.Context) (callErr error) {
+		response, callErr = l.api.ListFunctionsWithContext(ctx, request)
+		return callErr
+	})
+	return response, err
 }
 
 // ListFunctionInventory scans every Namespace and function in one SCF region.
@@ -30,7 +53,7 @@ func (c *Client) ListFunctionInventory(ctx context.Context, region string) ([]Di
 	if err != nil {
 		return nil, err
 	}
-	return listFunctionInventory(ctx, region, api)
+	return listFunctionInventory(ctx, region, limitedDiscoveryAPI{client: c, region: region, api: api})
 }
 
 func listFunctionInventory(ctx context.Context, region string, api discoveryAPI) ([]DiscoveryFunction, error) {
@@ -64,7 +87,7 @@ func listNamespaces(ctx context.Context, api discoveryAPI) ([]string, error) {
 		request := scf.NewListNamespacesRequest()
 		request.Limit = common.Int64Ptr(discoveryPageSize)
 		request.Offset = common.Int64Ptr(offset)
-		response, err := api.ListNamespacesWithContext(ctx, request)
+		response, err := api.ListNamespaces(ctx, request)
 		if err != nil {
 			return nil, err
 		}
@@ -95,7 +118,7 @@ func listFunctions(ctx context.Context, api discoveryAPI, region, namespace stri
 		request.Namespace = common.StringPtr(namespace)
 		request.Order = common.StringPtr("ASC")
 		request.Orderby = common.StringPtr("FunctionName")
-		response, err := api.ListFunctionsWithContext(ctx, request)
+		response, err := api.ListFunctions(ctx, request)
 		if err != nil {
 			return nil, err
 		}

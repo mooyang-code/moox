@@ -21,6 +21,7 @@ require (
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.135
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf v1.3.101
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.70
+	golang.org/x/time v0.15.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
