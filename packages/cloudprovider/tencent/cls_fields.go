@@ -22,7 +22,7 @@ var MarketFetchLogIndexFields = []CLSIndexField{
 	{Key: "conn_new", Numeric: true}, {Key: "conn_reused", Numeric: true}, {Key: "http_status", Numeric: true},
 	{Key: "rows", Numeric: true}, {Key: "datasets", Numeric: true}, {Key: "commit_ms", Numeric: true},
 	// 失败的 HTTP 尝试：批次里的次数与分布、偏慢单项的逐次记录。
-	{Key: "attempt_trace"},
+	{Key: "attempt_trace"}, {Key: "hedge_ms", Numeric: true}, {Key: "hedge_fired", Numeric: true}, {Key: "hedge_won", Numeric: true},
 	{Key: "fail_total", Numeric: true}, {Key: "fail_timeout", Numeric: true}, {Key: "fail_reset", Numeric: true},
 	{Key: "fail_tls", Numeric: true}, {Key: "fail_dial", Numeric: true}, {Key: "fail_status", Numeric: true}, {Key: "fail_other", Numeric: true},
 	{Key: "fail_in_connect_phase", Numeric: true}, {Key: "fail_in_wait_response", Numeric: true}, {Key: "fail_in_io_phase", Numeric: true},

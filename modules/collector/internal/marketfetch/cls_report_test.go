@@ -132,7 +132,7 @@ func TestReportedFieldsAreAllInTheCLSIndex(t *testing.T) {
 		HTTP: httpclient.TraceSnapshot{Requests: 2, NewConns: 2, DNSMs: 1, ConnectMs: 30, TLSMs: 60, TTFBMs: 800, LastStatus: 200, LastDomain: "api.binance.com", RemoteIP: "1.2.3.4:443",
 			Attempts: []httpclient.TraceAttempt{{Domain: "api.binance.com", Phase: "wait_response", Kind: "timeout", Ms: 1200, Reused: true}, {Domain: "api.binance.com", Phase: "done", Status: 200, Ms: 300}}},
 	}}
-	pipeline.reportBatch(req, 1, 1, time.Second, time.Second, batchTimingFields(timings, closeAt.Add(time.Second), closeAt.Add(3*time.Second), closeAt))
+	pipeline.reportBatch(req, 1, 1, time.Second, time.Second, batchTimingFields(timings, closeAt.Add(time.Second), closeAt.Add(3*time.Second), closeAt, 800))
 	pipeline.reportSlowItems(req, timings, closeAt)
 	pipeline.reportCommit(req, 25, 1, 120*time.Millisecond, closeAt.Add(4*time.Second), closeAt, errors.New("storage busy"))
 	indexed := map[string]bool{}

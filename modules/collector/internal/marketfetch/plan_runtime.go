@@ -67,6 +67,10 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 	if len(planned) == 0 {
 		return respond(true, "no_work", nil)
 	}
+	hedgeMS := plan.HedgeFor(functionName, scheduled)
+	for index := range planned {
+		planned[index].Request.HedgeMS = hedgeMS
+	}
 	// 截止时间最近的先执行：整点同时到期多个频率时，短周期不能被长周期占去预算。
 	// 截止时间相同则周期短的先执行（1m 先于 1h）。
 	sort.SliceStable(planned, func(i, j int) bool {

@@ -460,6 +460,20 @@ func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 	require.Equal(t, defaults.Fetch.RequestTimeoutMS, got.RequestTimeoutMS)
 }
 
+func TestHedgeFetchOptionsAreOffByDefaultAndInheritedFromTheGlobalFetch(t *testing.T) {
+	defaults := defaultSCFPlan()
+	require.Zero(t, defaults.fetchFor("crypto").HedgeMS, "默认不对冲")
+
+	plan := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"crypto": {Fetch: &SCFPlanFetchConfig{HedgeMS: 800, HedgePercent: 50, HedgeHourOnly: true}}}}
+	plan.mergeSpaceDefaults(defaults.Spaces)
+	fetch := plan.fetchFor("crypto")
+	require.Equal(t, 800, fetch.HedgeMS)
+	require.Equal(t, 50, fetch.HedgePercent)
+	require.True(t, fetch.HedgeHourOnly)
+	require.Equal(t, defaults.Fetch.Concurrency, fetch.Concurrency, "只写对冲项时其余拉取参数沿用全局默认")
+	require.Zero(t, plan.fetchFor("stockcn").HedgeMS, "其他空间不受影响")
+}
+
 // CLI 渲染测试生成的真实产物（modules/cli/.../testdata/scf_plan_rendered.yaml）必须能被 Collector 真实加载并通过校验。
 func TestLoadTheConfigRenderedByTheCLI(t *testing.T) {
 	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")

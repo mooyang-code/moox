@@ -20,8 +20,6 @@ import (
 type Trace struct {
 	mu   sync.Mutex
 	snap TraceSnapshot
-
-	dnsStart, connectStart, tlsStart, wroteAt time.Time
 }
 
 // TraceSnapshot 是 Trace 的一份只读拷贝。耗时单位为毫秒，同一项的多次请求（换 IP、换端点、重试）累加。
@@ -41,6 +39,8 @@ type TraceSnapshot struct {
 	LastDomain, RemoteIP string
 	// Attempts 是逐次请求的记录（最多 maxTraceAttempts 条，含成功的），用来看失败的那一次停在哪个阶段、为什么失败。
 	Attempts []TraceAttempt
+	// HedgeFired 是发出对冲请求的次数，HedgeWon 是对冲请求先成功的次数。
+	HedgeFired, HedgeWon int
 }
 
 // maxTraceAttempts 限制每个取数项保留的逐次记录条数。
@@ -97,6 +97,8 @@ func (t *Trace) begin(ctx context.Context, domain string) (context.Context, func
 	// 本次请求自己的阶段状态：Go 的传输层可能在一次请求内换连接重试，回调因此可能触发多次。
 	var req struct {
 		sync.Mutex
+		// 各阶段的起点放在请求自己的状态里：对冲请求会让同一个 Trace 并发发出多个请求，不能共用起点。
+		dnsStart, connectStart, tlsStart, wroteAt                time.Time
 		dnsOpen, connectOpen, tlsOpen, gotConn, wrote, firstByte bool
 		reused                                                   bool
 		idle                                                     time.Duration
@@ -107,29 +109,39 @@ func (t *Trace) begin(ctx context.Context, domain string) (context.Context, func
 		f()
 		req.Unlock()
 	}
+	// lap 把从 from 到现在的毫秒数累加到快照字段 total，并清除起点。
+	lap := func(from *time.Time, total *int64) {
+		req.Lock()
+		started := *from
+		*from = time.Time{}
+		req.Unlock()
+		if started.IsZero() {
+			return
+		}
+		t.mu.Lock()
+		*total += time.Since(started).Milliseconds()
+		t.mu.Unlock()
+	}
 	hooks := &httptrace.ClientTrace{
 		DNSStart: func(httptrace.DNSStartInfo) {
-			t.mark(&t.dnsStart)
-			with(func() { req.dnsOpen = true })
+			with(func() { req.dnsStart, req.dnsOpen = time.Now(), true })
 		},
 		DNSDone: func(httptrace.DNSDoneInfo) {
-			t.addSince(&t.dnsStart, &t.snap.DNSMs)
+			lap(&req.dnsStart, &t.snap.DNSMs)
 			with(func() { req.dnsOpen = false })
 		},
 		ConnectStart: func(string, string) {
-			t.mark(&t.connectStart)
-			with(func() { req.connectOpen = true })
+			with(func() { req.connectStart, req.connectOpen = time.Now(), true })
 		},
 		ConnectDone: func(string, string, error) {
-			t.addSince(&t.connectStart, &t.snap.ConnectMs)
+			lap(&req.connectStart, &t.snap.ConnectMs)
 			with(func() { req.connectOpen = false })
 		},
 		TLSHandshakeStart: func() {
-			t.mark(&t.tlsStart)
-			with(func() { req.tlsOpen = true })
+			with(func() { req.tlsStart, req.tlsOpen = time.Now(), true })
 		},
 		TLSHandshakeDone: func(tls.ConnectionState, error) {
-			t.addSince(&t.tlsStart, &t.snap.TLSMs)
+			lap(&req.tlsStart, &t.snap.TLSMs)
 			with(func() { req.tlsOpen = false })
 		},
 		GotConn: func(info httptrace.GotConnInfo) {
@@ -151,16 +163,19 @@ func (t *Trace) begin(ctx context.Context, domain string) (context.Context, func
 			})
 		},
 		WroteRequest: func(httptrace.WroteRequestInfo) {
-			t.mark(&t.wroteAt)
-			with(func() { req.wrote = true })
+			with(func() { req.wroteAt, req.wrote = time.Now(), true })
 		},
 		GotFirstResponseByte: func() {
+			var ttfb int64
+			with(func() {
+				req.firstByte = true
+				if !req.wroteAt.IsZero() {
+					ttfb = time.Since(req.wroteAt).Milliseconds()
+				}
+			})
 			t.mu.Lock()
-			if !t.wroteAt.IsZero() {
-				t.snap.TTFBMs = time.Since(t.wroteAt).Milliseconds()
-			}
+			t.snap.TTFBMs = ttfb
 			t.mu.Unlock()
-			with(func() { req.firstByte = true })
 		},
 	}
 	return httptrace.WithClientTrace(ctx, hooks), func(status int, err error) {
@@ -255,17 +270,20 @@ func AttemptsText(attempts []TraceAttempt) string {
 	return strings.Join(parts, ";")
 }
 
-func (t *Trace) mark(at *time.Time) {
-	t.mu.Lock()
-	*at = time.Now()
-	t.mu.Unlock()
-}
+// TraceFromContext 返回上下文里的 Trace，没有则为 nil；对冲请求用它登记触发与获胜。
+func TraceFromContext(ctx context.Context) *Trace { return traceFrom(ctx) }
 
-func (t *Trace) addSince(from *time.Time, total *int64) {
+// NoteHedge 登记一次对冲：fired 表示发出了对冲请求，won 表示对冲请求先成功。nil 接收者安全。
+func (t *Trace) NoteHedge(fired, won bool) {
+	if t == nil {
+		return
+	}
 	t.mu.Lock()
-	if !from.IsZero() {
-		*total += time.Since(*from).Milliseconds()
-		*from = time.Time{}
+	if fired {
+		t.snap.HedgeFired++
+	}
+	if won {
+		t.snap.HedgeWon++
 	}
 	t.mu.Unlock()
 }

@@ -51,6 +51,11 @@ type SCFPlanFetchConfig struct {
 	StorageTimeoutMS int `yaml:"storage_timeout_ms"`
 	StaggerBaseMS    int `yaml:"stagger_base_ms"`
 	StaggerMS        int `yaml:"stagger_ms"`
+	// HedgeMS 大于 0 时启用对冲请求（行情请求超过这么多毫秒没有结果就并发再发一个，先成功的为准），默认关闭；
+	// HedgePercent 是启用对冲的函数占比（0 等同 100，用于同一时刻对比开与不开），HedgeHourOnly 为真时只在整点那一分钟对冲。
+	HedgeMS       int  `yaml:"hedge_ms"`
+	HedgePercent  int  `yaml:"hedge_percent"`
+	HedgeHourOnly bool `yaml:"hedge_hour_only"`
 }
 
 // filled 用 base 补齐未指定（为零）的字段。拉取参数里零值表示“沿用默认”，所以只写部分字段的覆盖项不会得到不完整的参数。
@@ -65,6 +70,7 @@ func (f SCFPlanFetchConfig) filled(base SCFPlanFetchConfig) SCFPlanFetchConfig {
 		Concurrency: pick(f.Concurrency, base.Concurrency), RPS: pick(f.RPS, base.RPS), Burst: pick(f.Burst, base.Burst),
 		FeedConcurrency: pick(f.FeedConcurrency, base.FeedConcurrency), RequestTimeoutMS: pick(f.RequestTimeoutMS, base.RequestTimeoutMS),
 		StorageTimeoutMS: pick(f.StorageTimeoutMS, base.StorageTimeoutMS), StaggerBaseMS: pick(f.StaggerBaseMS, base.StaggerBaseMS), StaggerMS: pick(f.StaggerMS, base.StaggerMS),
+		HedgeMS: pick(f.HedgeMS, base.HedgeMS), HedgePercent: pick(f.HedgePercent, base.HedgePercent), HedgeHourOnly: f.HedgeHourOnly || base.HedgeHourOnly,
 	}
 }
 
@@ -98,6 +104,7 @@ func (c SCFPlanConfig) fetchFor(spaceID string) marketfetch.PlanFetch {
 	return marketfetch.PlanFetch{
 		Concurrency: fetch.Concurrency, RPS: fetch.RPS, Burst: fetch.Burst, FeedConcurrency: fetch.FeedConcurrency,
 		RequestTimeoutMS: fetch.RequestTimeoutMS, StorageTimeoutMS: fetch.StorageTimeoutMS, StaggerBaseMS: fetch.StaggerBaseMS, StaggerMS: fetch.StaggerMS,
+		HedgeMS: fetch.HedgeMS, HedgePercent: fetch.HedgePercent, HedgeHourOnly: fetch.HedgeHourOnly,
 	}
 }
 
