@@ -200,7 +200,7 @@ func metricsObservabilityRoute(
 		}
 		parsed := len(samples)
 		samples = monmetrics.FilterHealthSamples(samples)
-		monmetrics.RecordSamplesFiltered(metricReport.GetServiceName(), parsed-len(samples))
+		filtered := parsed - len(samples)
 		duplicate, err := messageStore.IsDuplicate(ctx, message.GetEventId())
 		if err != nil || duplicate {
 			return err
@@ -217,6 +217,8 @@ func metricsObservabilityRoute(
 			}
 			return err
 		}
+		// 过滤数在入库成功且不是重复投递之后才计：失败重试、重复投递不会把同一批过滤样本反复累加。
+		monmetrics.RecordSamplesFiltered(metricReport.GetServiceName(), filtered)
 		runtime.recordObservabilityWriteSuccess()
 		monmetrics.RecordIngest(moduleMetrics, "success", observed)
 		return nil

@@ -767,6 +767,12 @@ func TestBusinessFreshnessReporterChecksNewSeriesGrowth(t *testing.T) {
 	check, err := repositories.Checks.Get(t.Context(), monmetrics.InternalMetricSpaceID, "metrics_ingest:series_limit")
 	require.NoError(t, err)
 	require.Equal(t, "指标序列数量保护", check.Name)
+
+	// 之后关闭限额：检查不再期望，以成功结果收尾，已有告警随之恢复而不是永久遗留。
+	messages.SetSeriesLimits(monmetrics.SeriesLimits{})
+	result = latest()
+	require.True(t, result.Success)
+	require.Equal(t, noLongerExpected, result.ErrorMessage)
 }
 
 func TestBusinessFreshnessReporterSkipsSeriesLimitCheckWhenUnlimited(t *testing.T) {

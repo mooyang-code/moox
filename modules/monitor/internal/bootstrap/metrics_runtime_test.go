@@ -193,6 +193,9 @@ func TestMetricsRouteCountsFilteredSamplesAndRejectReasons(t *testing.T) {
 	good := &metricspb.MetricReport{ServiceName: "filter-svc", InstanceId: "filter-svc@node", NodeId: "node", BootId: "boot", Snapshot: snapshot(raw)}
 	require.NoError(t, ingest("filter-1", "mooxsys", good))
 	require.Equal(t, before+1, counterValue(t, "moox_monitor_metrics_samples_filtered_total", map[string]string{"service": "filter-svc"}))
+	// 同一事件重复投递：已入库的快照不再累加过滤数。
+	require.NoError(t, ingest("filter-1", "mooxsys", good))
+	require.Equal(t, before+1, counterValue(t, "moox_monitor_metrics_samples_filtered_total", map[string]string{"service": "filter-svc"}))
 
 	// 校验和不对：按 checksum 拒收，并记在该服务名下。
 	bad := &metricspb.MetricReport{ServiceName: "reject-svc", InstanceId: "reject-svc@node", NodeId: "node", BootId: "boot", Snapshot: snapshot(raw)}

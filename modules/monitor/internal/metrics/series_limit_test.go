@@ -201,3 +201,14 @@ func TestIngestDiagnosticsAreBounded(t *testing.T) {
 	require.Len(t, d.drops(time.Time{}), maxDiagServices)
 	require.Len(t, d.rejects(), maxDiagServices)
 }
+
+func TestSeriesLimitGaugeSurvivesAnEmptySnapshot(t *testing.T) {
+	r := seriesLimitStore(t, SeriesLimits{MaxNewPerHour: 10, MaxNewPerDay: 100})
+	commit(t, r, "m1", "svc", samplesFor("svc", "a", "b", "c"))
+	require.Equal(t, 3.0, testutil.ToFloat64(seriesLimitCurrent.WithLabelValues("hour")))
+
+	// 白名单过滤后为空的快照：gauge 仍是目录里的真实新增数，而不是 0。
+	commit(t, r, "m2", "svc", nil)
+	require.Equal(t, 3.0, testutil.ToFloat64(seriesLimitCurrent.WithLabelValues("hour")))
+	require.Equal(t, 3.0, testutil.ToFloat64(seriesLimitCurrent.WithLabelValues("day")))
+}

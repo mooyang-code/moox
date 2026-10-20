@@ -54,17 +54,21 @@ type droppedSeries struct {
 // 返回放行的样本、被丢弃序列的统计，以及事务内看到的“近 1 小时、近 24 小时新增序列数”（含本次放行的）。
 func (r *MetricMessageStore) admitSamples(tx *gorm.DB, samples []Sample, now time.Time) (admitted []Sample, dropped []droppedSeries, hour, day int64, err error) {
 	limits := r.limits
-	if !limits.enabled() || len(samples) == 0 {
+	if !limits.enabled() {
 		return samples, nil, 0, 0, nil
 	}
-	existing, err := existingSeries(tx, samples)
-	if err != nil {
-		return nil, nil, 0, 0, err
-	}
+	// 空样本也要读真实的窗口计数：gauge 反映的是目录里的实际新增数，不能因为一份空快照被写成 0。
 	if err := tx.Model(&MetricSeries{}).Where("c_ctime >= ?", now.Add(-time.Hour)).Count(&hour).Error; err != nil {
 		return nil, nil, 0, 0, err
 	}
 	if err := tx.Model(&MetricSeries{}).Where("c_ctime >= ?", now.Add(-24*time.Hour)).Count(&day).Error; err != nil {
+		return nil, nil, 0, 0, err
+	}
+	if len(samples) == 0 {
+		return samples, nil, hour, day, nil
+	}
+	existing, err := existingSeries(tx, samples)
+	if err != nil {
 		return nil, nil, 0, 0, err
 	}
 	decided := make(map[seriesKey]bool, len(samples))
