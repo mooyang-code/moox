@@ -36,7 +36,7 @@ func TestValidateDoesNotProvisionOrCreateState(t *testing.T) {
 	if out.String() != "45\n" {
 		t.Fatalf("unexpected script stop budget %q", out.String())
 	}
-	for _, args := range [][]string{{}, {"reload"}, {"serve", "extra"}, {"validate", "--config", path, "extra"}, {"serve", "--import-existing"}, {"serve", "--for-import"}, {"initialize-state", "--for-import"}} {
+	for _, args := range [][]string{{}, {"reload"}, {"serve", "extra"}, {"validate", "--config", path, "extra"}, {"serve", "--import-existing"}, {"initialize-state", "--import-existing"}, {"check-state", "--for-import"}} {
 		if err := run(context.Background(), args, &out); err == nil {
 			t.Fatalf("accepted unsupported command %v", args)
 		}

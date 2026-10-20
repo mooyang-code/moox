@@ -58,7 +58,7 @@ type Lifecycle struct {
 
 func Defaults() Config {
 	return Config{
-		Public:    Public{Host: "localhost", Bind: "0.0.0.0", Port: 9527, HTTP3: true},
+		Public:    Public{Host: "localhost", Bind: "0.0.0.0", Port: 9527, HTTP3: false},
 		TLS:       TLS{Mode: "internal", StorageRoot: "../data/caddy/caddy", CABaseline: "../data/caddy/internal-ca.sha256", CAPublishDir: "../certs/caddy"},
 		Upstreams: Upstreams{Admin: "127.0.0.1:11000", Web: "127.0.0.1:9528"},
 		Health:    Health{Listen: "127.0.0.1:19528"},

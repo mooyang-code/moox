@@ -12,6 +12,7 @@ func TestFactorSchemaContainsOnlySetsDefsMembersAndRecalcJobs(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS t_factor_defs",
 		"CREATE TABLE IF NOT EXISTS t_factor_set_members",
 		"CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs",
+		"CREATE TABLE IF NOT EXISTS t_factor_engine_heartbeat",
 		"PRIMARY KEY (c_set_id, c_factor_id)",
 		"FOREIGN KEY (c_factor_id) REFERENCES t_factor_defs (c_factor_id) ON DELETE RESTRICT",
 		"idx_t_factor_set_members_set",
@@ -36,8 +37,8 @@ func TestFactorSchemaContainsOnlySetsDefsMembersAndRecalcJobs(t *testing.T) {
 			t.Fatalf("t_factor_defs must not contain %q", forbidden)
 		}
 	}
-	if got := strings.Count(sql, "CREATE TABLE IF NOT EXISTS"); got != 4 {
-		t.Fatalf("factor schema creates %d tables, want exactly 4", got)
+	if got := strings.Count(sql, "CREATE TABLE IF NOT EXISTS"); got != 5 {
+		t.Fatalf("factor schema creates %d tables, want exactly 5", got)
 	}
 }
 

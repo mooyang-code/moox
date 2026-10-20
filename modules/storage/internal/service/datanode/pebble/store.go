@@ -796,9 +796,6 @@ func (s *Store) prepareOutboxPublicationLocked(ctx context.Context, id uint64) (
 		return nil, fmt.Errorf("unmarshal outbox entry %d: %w", id, err)
 	}
 	if _, err := validateDataNodeMarkerMessage(raw); err != nil {
-		if IsUnsupportedOutboxEvent(err) {
-			return nil, fmt.Errorf("validate outbox event %d: %w", id, err)
-		}
 		return nil, fmt.Errorf("%w %d: %v", ErrInvalidOutboxEvent, id, err)
 	}
 	return raw, nil
@@ -841,8 +838,8 @@ func (s *Store) ListOutbox(ctx context.Context, after uint64, max int) ([]*Outbo
 		return nil, err
 	}
 	// Keep the relay's hot path on a cheap atomic hint. A full scan is still
-	// used to discover legacy entries after restart, but it must not be repeated
-	// every poll when the outbox is empty. Do not overwrite a concurrent write.
+	// used to discover entries that existed before a restart, but it must not be
+	// repeated every poll when the outbox is empty. Do not overwrite a concurrent write.
 	s.applyOutboxHintIfUnchanged(revision, func() { s.setOutboxHintFromList(len(result), len(result) == max, oldestEventAt) })
 	return result, nil
 }
@@ -987,8 +984,8 @@ func (s *Store) noteOutboxCommitted(count int, oldest time.Time) {
 		return
 	}
 	// Keep the hint unknown until the first bounded scan after a restart. A
-	// newly committed event must not hide legacy entries that may already exist
-	// in the database.
+	// newly committed event must not hide entries that already existed in the
+	// database before the restart.
 	s.outboxPending.Add(int64(count))
 	if !oldest.IsZero() {
 		oldestNanos := oldest.UTC().UnixNano()

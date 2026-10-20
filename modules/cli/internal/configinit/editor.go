@@ -444,14 +444,11 @@ func describe(m setupconfig.Manifest, encrypted bool, where string) Overview {
 		if id == m.FactorEngineRef.Host {
 			server.Uses = append(server.Uses, "因子计算")
 		}
-		if id == m.CompileHostRef.Host {
-			server.Uses = append(server.Uses, "源码编译")
-		}
 		view.Servers = append(view.Servers, server)
 	}
 	// 按用途排序：管理台、数据存储、海外、因子计算机，其余在后。
 	rank := func(server ServerView) int {
-		for i, use := range []string{"管理台", "数据存储", "海外接入与交易", "因子计算", "源码编译"} {
+		for i, use := range []string{"管理台", "数据存储", "海外接入与交易", "因子计算"} {
 			if slices.Contains(server.Uses, use) {
 				return i
 			}

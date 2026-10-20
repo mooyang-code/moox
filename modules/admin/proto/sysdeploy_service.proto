@@ -18,6 +18,8 @@ message DeploymentHost {
   string description = 6;
   string created_at = 7;
   string updated_at = 8;
+  // direct 或 outbound（只能出站，经 control 网关反向连接中转）。
+  string reachability = 9;
 }
 
 message ComponentPlacement {
@@ -40,6 +42,8 @@ message HostGatewayRuntimeStatus {
   string replaced_at = 9;
   string conflict_instance_id = 10;
   string conflict_seen_at = 11;
+  // control 网关上报的各出站主机反向连接会话。
+  repeated trpc.moox.admin.RelaySessionStatus relay_sessions = 12;
 }
 
 message GetCatalogReq {}
@@ -122,6 +126,8 @@ message SyncHostPlacementsReq {
   string description = 5;
   // Complete business component list. Host-scope components are automatic.
   repeated string component_ids = 6;
+  // 空或 direct 表示可直达，outbound 表示只能出站。
+  string reachability = 7;
 }
 message SyncHostPlacementsRsp {
   trpc.moox.common.RetInfo ret_info = 1;

@@ -144,4 +144,14 @@ grep -Fq "<${CA_FILE}>" "${TMP}/windows.log"
 if "${SCRIPT}" --ca-file "${TMP}/root.key" --dry-run >/dev/null 2>&1; then
   echo 'FAIL: private key accepted' >&2; exit 1
 fi
+# 指纹只覆盖第一张证书而安装会复制整个文件：在正确的证书后夹带另一张根证书必须被拒绝，且不能执行任何安装操作。
+cat "${CA_FILE}" "${TMP}/other.crt" >"${TMP}/two-certs.crt"
+cat "${TMP}/other.crt" "${CA_FILE}" >"${TMP}/two-certs-reversed.crt"
+for bundle in "${TMP}/two-certs.crt" "${TMP}/two-certs-reversed.crt"; do
+  if out=$("${SCRIPT}" --ca-file "${bundle}" --dry-run 2>&1); then
+    echo "FAIL: multi-certificate file accepted: ${bundle}" >&2; exit 1
+  fi
+  grep -Fq 'exactly one certificate' <<<"${out}" || { echo "FAIL: wrong rejection reason for ${bundle}: ${out}" >&2; exit 1; }
+  ! grep -Fq 'DRY-RUN:' <<<"${out}" || { echo 'FAIL: multi-certificate file reached the install step' >&2; exit 1; }
+done
 printf 'PASS: fingerprint idempotency, platform stores, dry-run, and safe paths\n'

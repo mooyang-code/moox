@@ -1,0 +1,10 @@
+# 字典注册表：字典版本不可变（只增不删、不改文件、不改类型号），绑定可以改。
+# 新增或重训字典分两次发布：先只加版本，全部组件（含 SCF 函数）升级后再改 bindings。
+dictionaries:
+  - name: default-v1
+    file: default-v1.zdict
+    id: 0x4D580001
+    compress_type: 32
+bindings:
+  default: default-v1
+  spaces: {}

@@ -151,7 +151,10 @@ func (p *Proxy) Forward(ctx context.Context, body *codec.Body) (*codec.Body, err
 		}
 	}
 	timeout := spec.TimeoutFor(method)
-	upstream, cancel := context.WithTimeout(gatewayclient.WithCallMetadata(ctx, metadata), time.Duration(timeout)*time.Millisecond)
+	upstreamCtx := gatewayclient.WithCallMetadata(ctx, metadata)
+	// Access 手里只有原始字节，不知道空间：沿用入站帧的压缩类型，调用方（SCF）选的空间字典在出站这一跳保持不变。
+	upstreamCtx = gatewayclient.WithCompressType(upstreamCtx, message.CompressType())
+	upstream, cancel := context.WithTimeout(upstreamCtx, time.Duration(timeout)*time.Millisecond)
 	defer cancel()
 	response, err := p.options.Gateway.Forward(upstream, service, method, serialization, body.Data)
 	if err != nil {

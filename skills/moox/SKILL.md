@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo, releasing or deploying MooX binaries to the production hosts (发布, 部署, 上线, rollout, rollback, 回滚, native release, service catalog rollout, host-gateway/Admin/Monitor/Storage/factor-engine release), operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, factor expression DSL (因子表达式, 因子 DSL), converting legacy Python factors (Python 因子转换, pandas 因子迁移) with offline check/eval/compare and writing them into the system, Tencent Cloud Lighthouse firewall changes, CCN/云联网, CCN 费用, SCF 公网, SCF VPC, restore-scf-public, 内网组网, private-network, storage_private_gateway_host, MOOX_STORAGE_RPC_GATEWAY_TARGET, and control-plane maintenance.
+description: Use when working in the MooX monorepo, releasing or deploying MooX binaries to the production hosts (发布, 部署, 上线, rollout, rollback, 回滚, native release, service catalog rollout, host-gateway/Admin/Monitor/Storage/factor-engine release), operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, factor expression DSL (因子表达式, 因子 DSL), converting legacy Python factors (Python 因子转换, pandas 因子迁移) with offline check/eval/compare and writing them into the system, Tencent Cloud firewall changes, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance.
 ---
 
 # MooX Quant Data System
@@ -21,10 +21,9 @@ Core concepts:
 - View: a query-facing, asynchronously built wide view over one primary DataSet and selected columns from related DataSets.
 - DataNode: the Storage node a fact Dataset is bound to at activation; it persists field-level facts in Pebble and publishes row changes through its outbox. DuckDB/Bleve views and Parquet archive are derived asynchronously from those changes.
 
-Host Agent deployment:
+Host Agent and EventBus credentials:
 
-- Build `skills/moox/scripts/hostagent-release.sh` for Linux `amd64` or `arm64`.
-- Deploy with `skills/moox/scripts/hostagent-deploy.sh`; it uses a normal user and `systemctl --user`, never sudo.
+- Host Agent ships inside every host's `host` unit together with Host Gateway (`setup deploy-host`); see [`references/host-agent.md`](references/host-agent.md).
 - Provision and rotate EventBus credentials only through `skills/moox/scripts/eventbus-credentials.sh`; release archives and checked-in YAML must remain credential-free.
 - After EventBus CA or role-token rotation, fan-out to every client before treating deploy as done. Follow [`references/eventbus-credentials.md`](references/eventbus-credentials.md). Control `export` does not update Host Agents on other machines.
 
@@ -35,12 +34,9 @@ Host Agent deployment:
 （构建、安装、回滚、状态、台账、服务目录变更检测）；服务目录（`catalog.yaml`）变化必须整体发布，配置文件不随二进制更新，文档里有顺序和陷阱。
 只有用户明确要求“发布/上线”时才发布，并且只发布他点名的组件。
 
-下面提到的 `scripts/deploy/deploy-moox.sh`、`moox-cli setup deploy-service`、外置 Caddy `11001` 等是切换前的旧部署工具，不要用来发布当前线上；
-切换、暂停和回滚的过程见 `docs/计划/网关与服务部署重构执行计划.md`（第 13 节）。
-
 ## Repository Layout
 
-- `modules/cli`: `moox-cli` (setup, deploy, SCF publish, data import, doctor).
+- `modules/cli`: `moox-cli` (setup and native unit deployment, SCF publish, data import, doctor).
 - `modules/admin`: control plane (auth, spaces, component catalog and host placements, gateway control, PKI and keys, SSH, setup) and the browser API gateway.
 - `modules/hostgateway`: per-host service gateway (signed native tRPC: loopback `11002`, cross-host TLS `11003`); the only gateway.
 - `modules/access`: signed entry for external callers (SCF, factor engine, Skill) on `11004`, with per-caller method allowlists from `packages/servicecatalog`.
@@ -53,7 +49,7 @@ Host Agent deployment:
 - `modules/factor`: factor manager and the expression factor engine (`packages/factorexpr`).
 - `modules/strategy`, `modules/trade`, `modules/monitor`, `modules/hostagent`, `modules/archive`.
 - `docs`: 总体设计、部署与运维和 `docs/模块/` 下的模块设计文档.
-- `scripts`: build, release, deploy, quality checks, and contract/E2E test scripts.
+- `scripts`: build, quality checks, and contract/E2E test scripts.
 
 ## Common Commands
 
@@ -62,15 +58,10 @@ From the repository root:
 ```bash
 make build
 make check-boundaries
-make release
-make deploy
+make verify-pr
 ```
 
 发布或替换线上已部署的二进制时，用上面“Deployment Status”里的原生发布流程（[`references/native-release.md`](references/native-release.md)）。
-下面是切换前的旧服务包流程，仅作历史参考：[`references/service-release.md`](references/service-release.md)；先用
-`scripts/build/package-service.sh` 生成 ZIP，再通过通用入口 `moox-cli setup deploy-service` 发布。
-服务包包含二进制、配置和生命周期脚本，由 CLI 通过已核验的 SSH 主机指纹完成上传、解压、
-回滚和健康检查；不要在命令行中拼接密码。
 
 敏感信息扫描已接入 CNB 和 GitHub CI 的 Pull Request 流程：`.cnb.yml` 的 `pull_request`
 流水线和 `.github/workflows/ci.yml` 的 `Secret scan` 任务都会扫描本次 PR 的提交范围，
@@ -100,12 +91,10 @@ View bar budget (`[storage_retention] view_rows_per_series`), and the high-risk 
 Never delete a durable consumer or a View index by hand when the corresponding `moox-cli`
 operation is available.
 
-When the user changes `moox.toml` (for example `[storage_retention]` retention periods or
-`[storage_view]`), publish it with `moox-cli config`: run `moox-cli config plan --file ./moox.toml`,
-show the user each target's status, changed keys, restarts, warnings and `retention_shrinks`, and
-only after the user confirms run `moox-cli config publish --file ./moox.toml --yes`. A retention
-shrink deletes rows at the next Storage cleanup; add `--allow-retention-shrink` only when the user
-explicitly accepts that. Do not edit host config files by hand.
+`moox.toml` changes (for example `[storage_retention]` or `[storage_view]`) reach a native unit
+only through a new installation of that unit (`setup release build` plus the unit's setup command
+with `--release`); binary-only releases keep the installed configuration. A retention shrink deletes
+rows at the next Storage cleanup, so confirm it with the user first. Do not edit host config files by hand.
 
 When crypto K-line or Factor periods stall, read
 [`references/view-catchup.md`](references/view-catchup.md) first. Measure Primary vs View vs
@@ -122,72 +111,28 @@ distinguish event backlog, Storage failures, and compute errors (`factor_compile
 向用户汇报差异并在用户确认后写入（`moox-cli setup factors` 或控制台），最后做写入后验证。
 不要把不支持的写法悄悄换成近似公式，也不要“修正”原公式；输出列名必须保持不变。
 
-### Tencent Lighthouse Firewall
+### Tencent Cloud Firewall
 
-When the user provides a Tencent Cloud Lighthouse instance detail URL, use the bundled script to parse the instance ID and call `moox-cli`:
-
-```bash
-python3 skills/moox/scripts/tencent_lighthouse_firewall.py add \
-  --detail-url 'https://console.cloud.tencent.com/lighthouse/instance/detail?searchParams=rid%3D5&rid=1&id=lhins-a7yikq89' \
-  --ports 20201,20200,20202,11000 \
-  --dry-run
-```
-
-After the dry run is correct, remove `--dry-run` to create the firewall rule. The script defaults to the MooX service ports `20201,20200,20202,11000`, `TCP`, `0.0.0.0/0`, and `ap-guangzhou` when the console URL does not provide a region.
-
-Useful safe checks:
+Open the ports MooX needs on every Tencent host with the CLI; it derives the ports from the
+topology in `moox.toml` and calls the Tencent Cloud API (Lighthouse firewall or CVM security group):
 
 ```bash
-python3 skills/moox/scripts/tencent_lighthouse_firewall.py parse --detail-url '<console-detail-url>'
-python3 skills/moox/scripts/tencent_lighthouse_firewall.py add --detail-url '<console-detail-url>' --print-command
+./bin/moox-cli setup firewall --file ./moox.toml
 ```
 
-The script calls `bin/moox-cli` from the repository when present, or `moox-cli` from `PATH`. Tencent credentials should be supplied through `TENCENTCLOUD_SECRET_ID` and `TENCENTCLOUD_SECRET_KEY`; do not echo secrets in final responses or logs.
+`setup deploy-host` also confirms the control host's relay and EventBus ports before deploying an
+outbound-only host. Tencent credentials come only from `moox.toml`; never echo them.
 
 ### Tencent Private Network
 
-Storage routing is regional. Before SCF publication,
-run `moox-cli setup scf-network-plan --file ./moox.toml`: same-region SCF uses
-Storage's discovered VPC/subnet/private IP, while cross-region SCF uses the
-configured public gateway. Do not create CCN. Keep `public_net_status=ENABLE`
-when the function must reach public market providers. Follow
-[`references/private-network.md`](references/private-network.md) for the full
-decision table, canary order and evidence requirements. Do not change Caddy or
-`MOOX_PUBLIC_HOST` to private IPs.
+SCF functions run inside each region's VPC and reach MooX only through the same-region
+Access host's private address (`11004`); they never connect to Storage or EventBus directly.
+Every SCF region in `[scf_plan]` needs an Access host with `region` and `private_address`.
+Do not create CCN. Keep `public_net_status=ENABLE` when the function must reach public market
+providers. Follow [`references/private-network.md`](references/private-network.md) for the
+configuration rules and evidence requirements.
 
 Runtime data can be deleted and rebuilt from `examples/` and service flows. Do not reintroduce standalone acceptance CSV scripts.
-
-### Tencent CLS Before Deployment
-
-When CLS is enabled, prepare it before syncing the release archive or stopping
-any existing service. On remote targets this may upload a temporary,
-architecture-matched `moox-cli` helper solely for preflight; the helper is
-removed immediately and is not the release archive. The Admin and CloudNode
-control plane must already be running and reachable through the
-service-authenticated gateway, and the selected account must be a Tencent
-cloud account:
-
-```bash
-skills/moox/scripts/cls-bootstrap.sh \
-  --target user@host \
-  --deploy-dir /home/user/moox \
-  --stage-dir release/deploy-stage/moox \
-  --admin-url http://127.0.0.1:11002
-```
-
-The script selects the first Tencent cloud account unless
-`--cloud-account-id` is set. It queries the fixed `ap-guangzhou` Tencent Cloud
-region for Logset `moox` and Topic `moox-application`. Missing
-resources are created; existing resources are reused. The resolved non-secret
-metadata is written to the generated `config/resources.env`, while staged
-`trpc_go*.yaml` files reference `${MOOX_CLS_TOPIC_ID}`. Writer credentials are
-installed only in the target's `secrets/cls.env`, with mode `0600`.
-
-`moox.toml` contains only Tencent Cloud input credentials and region. The
-generated `config/resources.env` is the canonical runtime source for the
-selected cloud account, resolved Logset/Topic IDs, and CLS endpoint; it is non-secret, mode `0644`, and
-is atomically replaced with the release stage. Never add resource IDs or
-credentials to tracked examples, staged YAML, or command output.
 
 ## Development Rules
 
@@ -200,75 +145,6 @@ credentials to tracked examples, staged YAML, or command output.
 - Treat Pebble-backed PrimaryStore as the online ordered fact store. Treat DuckDB as analytical query and versioned wide view storage. Treat Parquet as cold archive. Treat Bleve as text search.
 
 See `references/` for more detailed notes.
-
-### moox-storage 远端 CGO 编译（内部）
-
-维护者专用，见 [skills/dev-helper/SKILL.md](../dev-helper/SKILL.md)。未配置 SSH 目标时脚本会交互提示；Agent 应在对话中向用户询问后以 `--target` 传入，勿写入仓库。
-
-```bash
-# 先配置 MOOX_DEV_SSH_TARGET（勿提交密码）
-./skills/dev-helper/scripts/storage-remote-build.sh \
-  --deploy-dir /data/moox \
-  --deploy
-```
-
-## System Initialization Deployment Flow
-
-Use `moox-cli setup deploy-control` for the first control-plane deployment. It
-owns the Caddy prerequisite, certificate selection, HTTPS acceptance, and the
-healthcheck/renewal scheduler; do not ask the user to run a separate Caddy
-script during initialization:
-
-```bash
-./bin/moox-cli setup validate --file ./moox.toml
-./bin/moox-cli setup deploy-control --file ./moox.toml
-```
-
-The command installs and verifies pinned Caddy `v2.11.4`, uploads the
-candidate Caddyfile, rejects non-loopback upstreams, starts or reloads only the
-MooX-owned edge, and performs HTTPS acceptance. Its sanitized JSON includes a
-`certificate` summary (`mode`, `issuer`, and `automatic_renewal`) so the Skill
-can prove which trust model was selected without reading keys.
-
-For internal CA deployments, `moox-cli` also checks and installs the Caddy root
-in the operator machine's browser trust store during control initialization.
-The same check runs before publishing `admin` or `web-host` packages. If a
-previous run was interrupted, repair it with:
-
-```bash
-./bin/moox-cli setup trust-browser --file ./moox.toml
-```
-
-Automatic mode selects Let's Encrypt public certificates for public IP/DNS
-hosts and Caddy internal CA for private, loopback, and `.localhost` hosts.
-Public mode requires TCP 80 to remain reachable for HTTP-01 issuance and
-renewal. Caddy remains running, renews from ACME ARI automatically, and is
-restarted by the generated healthcheck after failure or reboot. Browsers and
-backend clients use their operating-system trust store in public mode; no MooX
-root certificate is installed.
-
-### Internal 模式根证书
-
-Only explicit `--tls-mode internal` creates `certs/caddy/root.crt`. Fetch and install it with the Caddy CA helper, then verify trust by fingerprint:
-
-```bash
-skills/moox/scripts/caddy-ca.sh fetch --target user@host --deploy-dir /home/user/moox \
-  --output ~/.moox/certs/moox-caddy-root-<host>.crt
-skills/moox/scripts/caddy-ca.sh install --ca-file ~/.moox/certs/moox-caddy-root-<host>.crt
-skills/moox/scripts/caddy-ca.sh status --ca-file "$CA_FILE"
-```
-
-Host gateways use the private CA configured in `host-gateway/config/app.yaml`. SCF connects to Access using `MOOX_ACCESS_ADDRESS`, `MOOX_ACCESS_ID`, `MOOX_CALLER=scf-collector`, and the Admin-assigned `MOOX_CALLER_KEY_ID` / `MOOX_CALLER_KEY`; it carries no service-edge CA or internal gateway credential. Access uses its separate internal identity for the gateway hop.
-
-For a CLS-enabled release, `scripts/deploy/deploy-moox.sh --enable-cls` runs the CLS
-predeploy check after stage creation and before release archive sync or service
-shutdown.
-That check requires the already-running Admin/CloudNode control plane and at
-least one Tencent cloud account; a failed check must not stop the current
-deployment.
-The managed Factor configuration uses an `info` CLS writer. Diagnose calculation freshness
-with `factor_period_total`, `factor_period_lag_seconds`, `factor_lane_backlog` and structured
-period pipeline logs; other services keep the lower-volume `warn` policy.
 
 ### Tencent CLS Log Query And Verification
 
@@ -302,20 +178,15 @@ for a hand-written plaintext file. After the initial deployment run
 `moox-cli config backup` once (encrypted with the admin password, stored on the
 user's own Admin); on a new computer run `moox-cli config restore`. The Agent may test only
 whether it exists and must never read, parse, print, copy, or source it outside
-`moox-cli setup`, except the `storage_gateway_host` confirmation in
-[`references/private-network.md`](references/private-network.md) when checking
-that Storage RPC stays on the public IP.
+`moox-cli setup`.
 
-Run `validate`, `deploy-control`, `apply`, and `status` in that order. Do not
-ask about Storage until setup is complete and the public login API is verified.
-Then use `setup hosts`, ask the user in natural language for exactly one Storage
-host, and run `setup deploy-storage`; the four initial Storage processes stay on
-that machine. After Storage is ready, run `setup init --config-dir
-./config/setup --storage-host <host-name>` to create or verify the
-default Admin spaces and Storage metadata, activate Datasets, and verify the
-result. Keep `moox.toml` secrets unchanged and never parse a generated filtered seed
-in Agent context. After Tencent hosts exist, resolve the Storage placement and
-apply the regional SCF route rules in
+Run `setup validate`, `setup bootstrap --stage core`, `setup deploy-host` for every
+other host, `setup deploy-unit` for the Storage/Access/egress-proxy/Trade placements,
+`setup bootstrap --stage control`, and finally `setup init --config-dir
+./config/setup --storage-host <host-name>` to create or verify the default Admin
+spaces and Storage metadata, activate Datasets, and verify the result. Keep
+`moox.toml` secrets unchanged and never parse a generated filtered seed in Agent
+context. When SCF is enabled, configure the same-region Access hosts described in
 [`references/private-network.md`](references/private-network.md).
 
 `t_hosts` and `t_placements` are the source of truth for service placement;
@@ -325,9 +196,8 @@ Admin adds host components and preserves persisted enablement state.
 `/#/ops/storage/nodes` remains the separate PrimaryStore topology and is never
 silently synchronized. SCF receives active service deployments from the control
 plane rather than embedding addresses at package time.
-Host Agent deployment and server-resource monitoring are supported for Linux
-amd64/arm64. Use `scripts/hostagent-release.sh` and
-`scripts/hostagent-deploy.sh` for rootless user-systemd deployment. EventBus
+Host Agent server-resource monitoring is supported for Linux amd64/arm64 and
+ships inside every host's `host` unit. EventBus
 credentials are provisioned, exported, and rotated only through Admin using
 `scripts/eventbus-credentials.sh`; do not put tokens or private keys in a
 release archive, command line, or checked-in config. After CA or role-token

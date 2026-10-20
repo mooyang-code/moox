@@ -10,6 +10,7 @@ type HostRecord struct {
 	PrivateAddress string    `gorm:"column:c_private_address"`
 	Region         string    `gorm:"column:c_region"`
 	Status         string    `gorm:"column:c_status"`
+	Reachability   string    `gorm:"column:c_reachability"`
 	Description    string    `gorm:"column:c_description"`
 	CreatedAt      time.Time `gorm:"column:c_ctime;autoCreateTime"`
 	UpdatedAt      time.Time `gorm:"column:c_mtime;autoUpdateTime"`
@@ -40,6 +41,8 @@ type HostGatewayStatus struct {
 	ReplacedAt         *time.Time `gorm:"column:c_replaced_at"`
 	ConflictInstanceID string     `gorm:"column:c_conflict_instance_id"`
 	ConflictSeenAt     *time.Time `gorm:"column:c_conflict_seen_at"`
+	// RelaySessions 是 control 网关上报的反向连接会话（JSON 数组），其他主机为空。
+	RelaySessions string `gorm:"column:c_relay_sessions"`
 }
 
 func (HostGatewayStatus) TableName() string { return "t_host_gateway_status" }
@@ -58,7 +61,9 @@ type HostSpec struct {
 	HostID         string
 	Address        string
 	PrivateAddress string
-	Region         string
-	Description    string
-	Components     []string
+	// Reachability 为空或 direct 表示可直达，outbound 表示只能出站。
+	Reachability string
+	Region       string
+	Description  string
+	Components   []string
 }

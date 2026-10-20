@@ -421,7 +421,9 @@ func TestRuntimeLinuxWatchdogRestartsFailedLivenessWithRunningGraceBudget(t *tes
 	require.GreaterOrEqual(t, time.Since(before), 1100*time.Millisecond)
 	require.NotEqual(t, started.Components[0].PID, checked.Components[0].PID)
 	require.True(t, checked.Components[0].Ready)
+	require.Equal(t, "restarted", checked.Components[0].Action)
 	require.NoFileExists(t, marker)
+	require.Empty(t, runRuntime(t, path, "healthcheck").Components[0].Action, "存活正常时守护什么也不做")
 }
 
 func TestRuntimeLinuxCancelledPauseMarksAllTargetsAndHostIdentityIsPersistent(t *testing.T) {
@@ -505,6 +507,51 @@ func TestRuntimeLinuxRefusesUnrelatedOrReusedPIDAndDoesNotExposeSecrets(t *testi
 	require.NoError(t, removeState(state.pids, "web-host.json"))
 }
 
+// 主机重启后：PID 记录指向的 PID 已被无关进程复用、还留着被关机打断的停止中标记。守护检查要识别出这是上次开机的残留，
+// 清理后拉起组件，并且不碰那个无关进程；同一次开机内再检查不重复清理。
+func TestRuntimeLinuxRebootClearsReusedPIDAndInterruptedDrain(t *testing.T) {
+	path, plan := planFixture(t, "web-host")
+	executableFixture(t, plan)
+	cleanupRuntime(t, path)
+	runRuntime(t, path, "start")
+	state, err := openRuntime(plan)
+	require.NoError(t, err)
+	defer state.close()
+	actual, alive, err := state.record(plan.Components[0])
+	require.NoError(t, err)
+	require.True(t, alive)
+	runRuntime(t, path, "stop")
+
+	sleep, err := os.ReadFile("/bin/sleep")
+	require.NoError(t, err)
+	unrelatedPath := filepath.Join(plan.ReleaseRoot, "reused-pid-sleep")
+	require.NoError(t, os.WriteFile(unrelatedPath, sleep, 0o755))
+	unrelated := exec.Command(unrelatedPath, "30")
+	require.NoError(t, unrelated.Start())
+	defer func() { _ = unrelated.Process.Kill(); _ = unrelated.Wait() }()
+	identity, alive, err := readProcess(unrelated.Process.Pid)
+	require.NoError(t, err)
+	require.True(t, alive)
+	stale := actual
+	stale.processIdentity = identity
+	stale.Launcher = nil
+	stale.KernelBootID = "00000000-0000-0000-0000-000000000000"
+	require.NoError(t, writeState(state.pids, "web-host.json", stale))
+	require.NoError(t, writeState(state.draining, "web-host", drainRecord{PID: identity.PID, StartTicks: identity.StartTicks, KernelBootID: stale.KernelBootID, StartedAt: time.Now().UTC(), Budget: time.Second, TermSent: true}))
+
+	checked := runRuntime(t, path, "healthcheck")
+	require.Equal(t, []BootRecovery{{Component: "web-host", Kind: "draining"}, {Component: "web-host", Kind: "pid"}}, checked.BootRecovered)
+	require.Equal(t, "running", checked.Components[0].State)
+	require.True(t, checked.Components[0].Ready)
+	require.Equal(t, "started", checked.Components[0].Action)
+	require.NotEqual(t, identity.PID, checked.Components[0].PID)
+	require.NoError(t, unrelated.Process.Signal(syscall.Signal(0)), "复用了 PID 的无关进程不能被误杀")
+
+	again := runRuntime(t, path, "healthcheck")
+	require.Empty(t, again.BootRecovered)
+	require.Equal(t, checked.Components[0].PID, again.Components[0].PID)
+}
+
 func TestRuntimeLinuxStartBarrierRejectsUnrecordedChildAndRecoversDurableLaunch(t *testing.T) {
 	for _, phase := range []string{"unrecorded-parent-exit", "recorded-before-exec", "recorded-after-exec"} {
 		t.Run(phase, func(t *testing.T) {
@@ -550,7 +597,9 @@ func TestRuntimeLinuxStartBarrierRejectsUnrecordedChildAndRecoversDurableLaunch(
 			require.NoError(t, err)
 			values, stop, startup, err := state.prepare(plan.Components[0])
 			require.NoError(t, err)
-			record := pidRecord{processIdentity: final, HostID: plan.HostID, ComponentID: "console-proxy", ReleaseRoot: plan.ReleaseRoot, StopTimeout: stop, BinarySHA256: values["MOOX_BINARY_SHA256"], BootID: strings.Repeat("a", 64), StartedAt: time.Now().UTC(), StartupTimeout: startup, Launcher: &launch}
+			kernelBoot, err := readKernelBootID()
+			require.NoError(t, err)
+			record := pidRecord{processIdentity: final, HostID: plan.HostID, ComponentID: "console-proxy", ReleaseRoot: plan.ReleaseRoot, StopTimeout: stop, BinarySHA256: values["MOOX_BINARY_SHA256"], BootID: strings.Repeat("a", 64), KernelBootID: kernelBoot, StartedAt: time.Now().UTC(), StartupTimeout: startup, Launcher: &launch}
 			require.NoError(t, writeState(state.pids, "console-proxy.json", record))
 			if phase == "recorded-after-exec" {
 				_, err = release.Write([]byte{1})

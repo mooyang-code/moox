@@ -15,9 +15,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// errActiveContractUnavailable is a startup-fatal metadata condition. A
-// legacy view already mid-rebuild must not fall back to its desired contract:
-// doing so would acknowledge rows/markers against the wrong View revision.
+// errActiveContractUnavailable is a startup-fatal metadata condition. A view
+// already mid-rebuild must not fall back to its desired contract: doing so
+// would acknowledge rows/markers against the wrong View revision.
 var errActiveContractUnavailable = errors.New("active view contract unavailable")
 
 type backfillRequestLimiter struct {
@@ -643,11 +643,10 @@ func (s *Service) AttachActiveView(ctx context.Context, view *pb.View) error {
 	if err := validateAttachedSingleDataset(view); err != nil {
 		return err
 	}
-	// A legacy metadata row may describe an in-flight rebuild without the
-	// persisted active contract introduced for A/B views. Falling back to the
-	// desired DatasetIds/DatasetId would silently route markers and
-	// queries to the next revision. Refuse that ambiguous state so startup or
-	// reconciliation surfaces an actionable migration error instead.
+	// A metadata row describing an in-flight rebuild must carry the persisted
+	// active contract. Falling back to the desired DatasetIds/DatasetId would
+	// silently route markers and queries to the next revision, so refuse that
+	// inconsistent state and surface an actionable error.
 	if view.GetActiveViewRevision() > 0 && view.GetDesiredViewRevision() > view.GetActiveViewRevision() {
 		if persistedActiveDatasetID(view) == "" {
 			return fmt.Errorf("%w: active view %s/%s is rebuilding without persisted active contract", errActiveContractUnavailable, view.GetSpaceId(), view.GetViewId())

@@ -68,9 +68,9 @@ func (s *Service) StartEventConsumer(ctx context.Context, client *jetstream.Clie
 	}
 	partitionConfigs := opts.PartitionConfigs
 	if len(partitionConfigs) == 0 {
-		legacy := opts
-		legacy.PartitionConfigs = nil
-		partitionConfigs = []EventConsumerOptions{legacy}
+		single := opts
+		single.PartitionConfigs = nil
+		partitionConfigs = []EventConsumerOptions{single}
 	}
 	for i := range partitionConfigs {
 		partitionConfigs[i].PartitionConfigs = nil

@@ -181,3 +181,29 @@ func TestConcurrentTopologyWritersCannotEnableTwoSingleReplicas(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, compiled.Directory.Validate())
 }
+
+// 出站主机登记后进入拓扑与目录；未知取值与出站 control 都拒绝。
+func TestTopologyOutboundHostReachability(t *testing.T) {
+	dao, ctx := topologyDAO(t), context.Background()
+	home := HostSpec{HostID: "home", Address: "192.168.0.103", Reachability: "outbound"}
+	require.NoError(t, dao.SyncHostPlacements(ctx, home))
+	hosts, _, err := dao.Read(ctx)
+	require.NoError(t, err)
+	for _, h := range hosts {
+		want := "direct"
+		if h.HostID == "home" {
+			want = "outbound"
+		}
+		require.Equal(t, want, h.Reachability, h.HostID)
+	}
+	compiled, err := dao.Compile(ctx, "control")
+	require.NoError(t, err)
+	require.Equal(t, "control", compiled.Directory.Hosts["home"].Relay)
+	require.Len(t, compiled.Relays, 1)
+
+	home.Reachability = "inbound"
+	require.ErrorIs(t, dao.SyncHostPlacements(ctx, home), ErrInvalidTopology)
+	control := topologySpecs()[0]
+	control.Reachability = "outbound"
+	require.ErrorIs(t, dao.SyncHostPlacements(ctx, control), ErrInvalidTopology)
+}

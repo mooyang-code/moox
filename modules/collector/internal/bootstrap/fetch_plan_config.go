@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
-	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"os"
 	"path/filepath"
 	"sort"
@@ -127,7 +126,9 @@ func (c *SCFPlanConfig) mergeSpaceDefaults(defaults map[string]SCFPlanSpaceConfi
 func defaultSCFPlan() SCFPlanConfig {
 	return SCFPlanConfig{
 		Namespace: "default", MemoryMB: 128, SymbolsPerFunction: marketfetch.DefaultSymbolsPerFunction, MaxConcurrentOperations: 20,
-		Fetch: SCFPlanFetchConfig{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerMS: 1500},
+		// 写入阶段预算 4 秒：错峰 1.5 秒 + 行情请求 3 秒 + 写入 4 秒仍在 1m 数据集 10 秒的迟到窗口内；2 秒太紧，
+		// 跨境建连稍慢或整分钟突发时存储端稍慢就超时，也没有时间重试。
+		Fetch: SCFPlanFetchConfig{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50, RequestTimeoutMS: 3000, StorageTimeoutMS: 4000, StaggerMS: 1500},
 		// stockcn：每函数 40 个标的；错峰窗口第 5～40 秒；国内数据源限流较保守。
 		Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {SymbolsPerFunction: 40, Fetch: &SCFPlanFetchConfig{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerBaseMS: 5000, StaggerMS: 35000}}},
 	}
@@ -331,9 +332,5 @@ func (c *Config) scfPlanAccessEnvironment(region string) (map[string]string, err
 	if err != nil {
 		return nil, fmt.Errorf("SCF Access signing key: %w", err)
 	}
-	compression := config.Compression
-	if compression == "" {
-		compression = gatewayclient.CompressionNone
-	}
-	return map[string]string{"MOOX_ACCESS_ADDRESS": config.Address, "MOOX_ACCESS_ID": config.InstanceID, "MOOX_CALLER": config.Caller, "MOOX_CALLER_KEY_ID": config.KeyID, "MOOX_CALLER_KEY": secret, "MOOX_GATEWAY_COMPRESSION": compression}, nil
+	return map[string]string{"MOOX_ACCESS_ADDRESS": config.Address, "MOOX_ACCESS_ID": config.InstanceID, "MOOX_CALLER": config.Caller, "MOOX_CALLER_KEY_ID": config.KeyID, "MOOX_CALLER_KEY": secret}, nil
 }

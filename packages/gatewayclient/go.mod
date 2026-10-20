@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/packages/gatewayclient
 
-go 1.26.9
+go 1.27.2
 
 require (
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
@@ -32,6 +32,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mooyang-code/moox/packages/requestauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000 // indirect
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000
 	github.com/panjf2000/ants/v2 v2.8.1 // indirect
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
@@ -63,3 +64,5 @@ replace github.com/mooyang-code/moox/packages/servicecatalog => ../servicecatalo
 replace github.com/mooyang-code/moox/packages/requestauth => ../requestauth
 
 replace github.com/mooyang-code/moox/packages/security => ../security
+
+replace github.com/mooyang-code/moox/packages/wirecompress => ../wirecompress

@@ -23,28 +23,6 @@ const (
 	testSkillPrimarySecret = "storage-primary-secret"
 )
 
-func TestReadRemoteSkillSecretRejectsUnsafeRemoteFiles(t *testing.T) {
-	dir := t.TempDir()
-	valid := filepath.Join(dir, "valid.key")
-	require.NoError(t, os.WriteFile(valid, []byte("secret\n"), 0o600))
-	got, err := readRemoteSkillSecret(context.Background(), localSkillSSH{}, valid)
-	require.NoError(t, err)
-	require.Equal(t, "secret\n", string(got))
-
-	unsafeMode := filepath.Join(dir, "mode.key")
-	require.NoError(t, os.WriteFile(unsafeMode, []byte("secret"), 0o644))
-	symlink := filepath.Join(dir, "link.key")
-	require.NoError(t, os.Symlink(valid, symlink))
-	empty := filepath.Join(dir, "empty.key")
-	require.NoError(t, os.WriteFile(empty, nil, 0o600))
-	oversize := filepath.Join(dir, "oversize.key")
-	require.NoError(t, os.WriteFile(oversize, bytes.Repeat([]byte("x"), 4097), 0o600))
-	for _, path := range []string{filepath.Join(dir, "missing.key"), unsafeMode, symlink, empty, oversize} {
-		_, err := readRemoteSkillSecret(context.Background(), localSkillSSH{}, path)
-		require.ErrorContains(t, err, "unavailable", path)
-	}
-}
-
 func TestWriteSkillConfigAtomicFailurePreservesExistingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data-access.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("old"), 0o600))
@@ -103,19 +81,4 @@ func testSkillDataAccessConfig() dataAccessConfig {
 			},
 		},
 	}
-}
-
-// repoSkillKlineDatasets resolves Skill kline Datasets from the checked-in
-// collection task seed.
-func repoSkillKlineDatasets(t *testing.T) skillKlineDatasets {
-	t.Helper()
-	return mustRepoSkillKlineDatasets()
-}
-
-func mustRepoSkillKlineDatasets() skillKlineDatasets {
-	resolver, err := loadSkillKlineDatasets(filepath.Join("..", "..", "..", "..", "config", "setup", "collection-tasks.yaml"))
-	if err != nil {
-		panic(err)
-	}
-	return resolver
 }

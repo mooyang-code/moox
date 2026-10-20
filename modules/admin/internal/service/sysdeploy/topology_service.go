@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"slices"
 	"time"
@@ -70,7 +71,7 @@ func (s *ServiceImpl) ListHosts(ctx context.Context, req *pb.ListDeploymentHosts
 	response.PageResult = page
 	hosts = hosts[start:end]
 	for _, h := range hosts {
-		response.Hosts = append(response.Hosts, &pb.DeploymentHost{HostId: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Description: h.Description, CreatedAt: h.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: h.UpdatedAt.UTC().Format(time.RFC3339Nano)})
+		response.Hosts = append(response.Hosts, &pb.DeploymentHost{HostId: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Reachability: servicecatalog.ReachabilityName(h.Reachability), Description: h.Description, CreatedAt: h.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: h.UpdatedAt.UTC().Format(time.RFC3339Nano)})
 	}
 	return response, nil
 }
@@ -146,7 +147,7 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 func (s *ServiceImpl) SyncHostPlacements(ctx context.Context, req *pb.SyncHostPlacementsReq) (*pb.SyncHostPlacementsRsp, error) {
 	dao, err := s.topologyDAO()
 	if err == nil {
-		err = dao.SyncHostPlacements(ctx, HostSpec{HostID: req.GetHostId(), Address: req.GetAddress(), PrivateAddress: req.GetPrivateAddress(), Region: req.GetRegion(), Description: req.GetDescription(), Components: req.GetComponentIds()})
+		err = dao.SyncHostPlacements(ctx, HostSpec{HostID: req.GetHostId(), Address: req.GetAddress(), PrivateAddress: req.GetPrivateAddress(), Region: req.GetRegion(), Reachability: req.GetReachability(), Description: req.GetDescription(), Components: req.GetComponentIds()})
 	}
 	return &pb.SyncHostPlacementsRsp{RetInfo: topologyRet(err)}, nil
 }
@@ -187,10 +188,22 @@ func (s *ServiceImpl) DeleteHost(ctx context.Context, req *pb.DeleteDeploymentHo
 func directoryToProto(d servicecatalog.Directory) *directorypb.ServiceDirectory {
 	result := &directorypb.ServiceDirectory{Version: d.Version, Hosts: map[string]*directorypb.DirectoryHost{}, Services: map[string]*directorypb.ServiceHosts{}}
 	for id, host := range d.Hosts {
-		result.Hosts[id] = &directorypb.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region}
+		result.Hosts[id] = &directorypb.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Relay: host.Relay}
 	}
 	for path, hosts := range d.Services {
 		result.Services[path] = &directorypb.ServiceHosts{HostIds: append([]string{}, hosts...)}
+	}
+	return result
+}
+
+func relaysToProto(relays []servicecatalog.RelayTarget) []*pb.HostGatewayRelay {
+	var result []*pb.HostGatewayRelay
+	for _, relay := range relays {
+		item := &pb.HostGatewayRelay{HostId: relay.HostID}
+		for _, port := range relay.Ports {
+			item.Ports = append(item.Ports, &pb.HostGatewayRelayPort{Port: int32(port.Port), Callers: slices.Clone(port.Callers)})
+		}
+		result = append(result, item)
 	}
 	return result
 }
@@ -206,5 +219,10 @@ func statusToProto(status *HostGatewayStatus) *pb.HostGatewayRuntimeStatus {
 		}
 		return t.UTC().Format(time.RFC3339Nano)
 	}
-	return &pb.HostGatewayRuntimeStatus{InstanceId: status.InstanceID, Version: status.Version, ExpectedHash: status.ExpectedHash, AppliedHash: status.AppliedHash, RouteCount: status.RouteCount, LastSeenAt: format(status.LastSeenAt), LastError: status.LastError, PreviousInstanceId: status.PreviousInstanceID, ReplacedAt: format(status.ReplacedAt), ConflictInstanceId: status.ConflictInstanceID, ConflictSeenAt: format(status.ConflictSeenAt)}
+	result := &pb.HostGatewayRuntimeStatus{InstanceId: status.InstanceID, Version: status.Version, ExpectedHash: status.ExpectedHash, AppliedHash: status.AppliedHash, RouteCount: status.RouteCount, LastSeenAt: format(status.LastSeenAt), LastError: status.LastError, PreviousInstanceId: status.PreviousInstanceID, ReplacedAt: format(status.ReplacedAt), ConflictInstanceId: status.ConflictInstanceID, ConflictSeenAt: format(status.ConflictSeenAt)}
+	if status.RelaySessions != "" {
+		// 写入时已校验；读不出时宁可不展示，也不让整个状态查询失败。
+		_ = json.Unmarshal([]byte(status.RelaySessions), &result.RelaySessions)
+	}
+	return result
 }

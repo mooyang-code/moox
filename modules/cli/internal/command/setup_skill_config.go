@@ -107,7 +107,7 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 		if err != nil {
 			return nil, err
 		}
-		return readRemoteSkillSecret(ctx, transport, path)
+		return readRemotePrivateFile(ctx, transport, path, nativeStorageEnvironmentLimit)
 	}
 
 	klineDatasets, err := loadSkillKlineDatasets(filepath.Join(defaultSetupConfigDir, "collection-tasks.yaml"))
@@ -122,7 +122,7 @@ func defaultSetupExportSkillConfig(ctx context.Context, snapshot *setupconfig.Sn
 	if err != nil {
 		return dataAccessConfig{}, err
 	}
-	credentials, err := exportRemoteExternalCaller(ctx, control, snapshot.Manifest.Paths.Resolved().ControlRoot, "moox-skill")
+	credentials, err := exportRemoteExternalCaller(ctx, control, snapshot.Manifest.Paths.Resolved().ControlRoot, snapshot.Manifest.Paths.Resolved().DeployRoot, "moox-skill")
 	if err != nil {
 		return dataAccessConfig{}, err
 	}
@@ -159,17 +159,16 @@ func buildSkillDataAccessConfig(
 	}
 	storageRoot := snapshot.Manifest.Paths.Resolved().StorageRoot
 
-	storageRaw, err := read(ctx, storageHost, filepath.Join(storageRoot, "secrets/storage-internal-auth.env"))
+	storageRaw, err := read(ctx, storageHost, nativeStorageEnvironmentPath(storageRoot))
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: Storage auth unavailable")
 	}
-	primarySecret, err := collectorStoragePrimaryAuthSecret(storageRaw)
+	secrets, err := parseNativeStorageRoleSecrets(storageRaw)
+	clear(storageRaw)
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: Storage auth invalid")
 	}
-	storageAppKey := security.HMACSHA256Hex(primarySecret, []byte(skillConfigIdentity))
-	primarySecret = ""
-	storageRaw = nil
+	storageAppKey := security.HMACSHA256Hex(secrets.Primary, []byte(skillConfigIdentity))
 	binanceKline, err := klineDatasets("crypto", "binance_spot")
 	if err != nil {
 		return dataAccessConfig{}, fmt.Errorf("skill_config: %w", err)
@@ -206,43 +205,6 @@ func buildSkillDataAccessConfig(
 			},
 		},
 	}, nil
-}
-
-func readRemoteSkillSecret(ctx context.Context, transport setupssh.Client, path string) ([]byte, error) {
-	if transport == nil || !filepath.IsAbs(path) {
-		return nil, fmt.Errorf("remote secret unavailable")
-	}
-	result, err := transport.Run(ctx, []string{
-		"sh", "-lc",
-		`set -eu
-path="$1"
-file_id() { stat -c '%d:%i:%s:%Y' "$1" 2>/dev/null || stat -f '%d:%i:%z:%m' "$1"; }
-file_hash() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}';
-  else shasum -a 256 "$1" | awk '{print $1}'; fi
-}
-attempt=1
-tmp=$(mktemp)
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
-while [ "$attempt" -le 3 ]; do
-  [ -f "$path" ] && [ ! -L "$path" ] || exit 1
-  mode=$(stat -c '%a' "$path" 2>/dev/null || stat -f '%Lp' "$path")
-  [ "$mode" = 600 ] || exit 1
-  size=$(wc -c <"$path")
-  [ "$size" -gt 0 ] && [ "$size" -le 4096 ] || exit 1
-  before="$(file_id "$path"):$(file_hash "$path")"
-  cp "$path" "$tmp"
-  after="$(file_id "$path"):$(file_hash "$path")"
-  if [ "$before" = "$after" ]; then cat "$tmp"; exit 0; fi
-  attempt=$((attempt + 1))
-done
-exit 1`,
-		"moox-read-skill-secret", path,
-	}, nil)
-	if err != nil || result.ExitCode != 0 || len(result.Stdout) == 0 || len(result.Stdout) > 4096 {
-		return nil, fmt.Errorf("remote secret unavailable")
-	}
-	return []byte(result.Stdout), nil
 }
 
 func writeSkillConfigAtomic0600(path string, content []byte, rename func(string, string) error) (err error) {

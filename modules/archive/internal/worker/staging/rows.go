@@ -31,7 +31,7 @@ type StageResult struct {
 	Touched map[string]PartitionRef
 }
 
-// maxParams 限制一条 INSERT 的参数个数。
+// maxParams 限制一条 INSERT 的参数个数（SQLite 默认上限 32766）。
 const maxParams = 6000
 
 // Stage 把一批行写入暂存区：先进临时表，与暂存表按主键比对，只把新增和值有变化的行写进暂存表，
@@ -44,7 +44,7 @@ func (s *Store) Stage(ctx context.Context, task Task, rows []Row, partition func
 	if err := task.Validate(); err != nil {
 		return result, err
 	}
-	// 同一批里主键重复的行以最后一条为准。
+	// 同一批里主键重复的行以最后一条为准（按纳秒比较，与暂存表的主键一致）。
 	type key struct {
 		subject string
 		at      int64
@@ -54,9 +54,9 @@ func (s *Store) Stage(ctx context.Context, task Task, rows []Row, partition func
 	unique := make([]Row, 0, len(rows))
 	for _, row := range rows {
 		if len(row.Values) != len(task.Columns) {
-			return result, fmt.Errorf("row %s@%s has %d values, want %d", row.SubjectID, row.DataTime.Format(time.RFC3339), len(row.Values), len(task.Columns))
+			return result, fmt.Errorf("row %s@%s has %d values, want %d", row.SubjectID, row.DataTime.Format(time.RFC3339Nano), len(row.Values), len(task.Columns))
 		}
-		k := key{row.SubjectID, row.DataTime.UnixMicro(), row.SeriesTag}
+		k := key{row.SubjectID, nanos(row.DataTime), row.SeriesTag}
 		if at, ok := index[k]; ok {
 			unique[at] = row
 			continue
@@ -77,21 +77,20 @@ func (s *Store) Stage(ctx context.Context, task Task, rows []Row, partition func
 	}
 	table := quote(task.Table())
 	err := s.tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS incoming; DROP TABLE IF EXISTS changed`); err != nil {
-			return err
+		for _, ddl := range []string{`DROP TABLE IF EXISTS temp.incoming`, `DROP TABLE IF EXISTS temp.changed`} {
+			if _, err := tx.ExecContext(ctx, ddl); err != nil {
+				return err
+			}
 		}
 		extra := ""
 		if len(typedefs) > 0 {
 			extra = ", " + strings.Join(typedefs, ", ")
 		}
-		if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE incoming (subject_id VARCHAR, data_time TIMESTAMP, series_tag VARCHAR`+extra+`, pkey VARCHAR, pstart TIMESTAMP, pend TIMESTAMP)`); err != nil {
+		if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE incoming (subject_id TEXT, data_time INTEGER, series_tag TEXT`+extra+`, pkey TEXT, pstart INTEGER, pend INTEGER)`); err != nil {
 			return err
 		}
 		perRow := 6 + len(names)
-		chunk := maxParams / perRow
-		if chunk < 1 {
-			chunk = 1
-		}
+		chunk := max(maxParams/perRow, 1)
 		for start := 0; start < len(unique); start += chunk {
 			end := min(start+chunk, len(unique))
 			var placeholders []string
@@ -99,9 +98,15 @@ func (s *Store) Stage(ctx context.Context, task Task, rows []Row, partition func
 			for _, row := range unique[start:end] {
 				ref := partition(row.DataTime)
 				placeholders = append(placeholders, "("+strings.TrimSuffix(strings.Repeat("?,", perRow), ",")+")")
-				args = append(args, row.SubjectID, row.DataTime.UTC(), row.SeriesTag)
-				args = append(args, row.Values...)
-				args = append(args, ref.Key, ref.Start.UTC(), ref.End.UTC())
+				args = append(args, row.SubjectID, nanos(row.DataTime), row.SeriesTag)
+				for i, value := range row.Values {
+					bound, err := bindValue(task.Columns[i].Type, value)
+					if err != nil {
+						return fmt.Errorf("column %s of %s@%s: %w", task.Columns[i].Name, row.SubjectID, row.DataTime.Format(time.RFC3339Nano), err)
+					}
+					args = append(args, bound)
+				}
+				args = append(args, ref.Key, nanos(ref.Start), nanos(ref.End))
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO incoming VALUES `+strings.Join(placeholders, ","), args...); err != nil {
 				return fmt.Errorf("stage incoming rows: %w", err)
@@ -109,7 +114,7 @@ func (s *Store) Stage(ctx context.Context, task Task, rows []Row, partition func
 		}
 		var differs []string
 		for _, c := range task.Columns {
-			differs = append(differs, fmt.Sprintf("i.%s IS DISTINCT FROM s.%s", quote(c.Name), quote(c.Name)))
+			differs = append(differs, fmt.Sprintf("i.%s IS NOT s.%s", quote(c.Name), quote(c.Name)))
 		}
 		where := "s.subject_id IS NULL"
 		if len(differs) > 0 {
@@ -130,7 +135,7 @@ FROM incoming i LEFT JOIN %s s ON i.subject_id = s.subject_id AND i.data_time = 
 		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT OR REPLACE INTO %s (subject_id, data_time, series_tag%s) SELECT subject_id, data_time, series_tag%s FROM changed`, table, valueList, valueList)); err != nil {
 			return fmt.Errorf("write changed rows: %w", err)
 		}
-		stats, err := tx.QueryContext(ctx, `SELECT pkey, pstart, pend, count(*) FILTER (WHERE existed), count(*) FILTER (WHERE NOT existed) FROM changed GROUP BY pkey, pstart, pend`)
+		stats, err := tx.QueryContext(ctx, `SELECT pkey, pstart, pend, SUM(existed), SUM(1 - existed) FROM changed GROUP BY pkey, pstart, pend`)
 		if err != nil {
 			return err
 		}
@@ -142,12 +147,12 @@ FROM incoming i LEFT JOIN %s s ON i.subject_id = s.subject_id AND i.data_time = 
 		var list []touched
 		for stats.Next() {
 			var t touched
-			var changed, added int64
-			if err := stats.Scan(&t.ref.Key, &t.ref.Start, &t.ref.End, &changed, &added); err != nil {
+			var pstart, pend, changed, added int64
+			if err := stats.Scan(&t.ref.Key, &pstart, &pend, &changed, &added); err != nil {
 				_ = stats.Close()
 				return err
 			}
-			t.ref.Start, t.ref.End = t.ref.Start.UTC(), t.ref.End.UTC()
+			t.ref.Start, t.ref.End = fromNanos(pstart), fromNanos(pend)
 			t.changed, t.added = uint64(changed), uint64(added)
 			list = append(list, t)
 		}
@@ -160,14 +165,18 @@ FROM incoming i LEFT JOIN %s s ON i.subject_id = s.subject_id AND i.data_time = 
 			result.Touched[t.ref.Key] = t.ref
 			if _, err := tx.ExecContext(ctx, `INSERT INTO partition_state (space_id, dataset_id, partition_key, range_start, range_end, status, last_changed_at)
 VALUES (?, ?, ?, ?, ?, 'open', ?)
-ON CONFLICT (space_id, dataset_id, partition_key) DO UPDATE SET last_changed_at = excluded.last_changed_at, report_pending = TRUE,
+ON CONFLICT (space_id, dataset_id, partition_key) DO UPDATE SET last_changed_at = excluded.last_changed_at, report_pending = 1,
     status = CASE WHEN partition_state.status = 'final' THEN 'open' ELSE partition_state.status END`,
-				task.SpaceID, task.DatasetID, t.ref.Key, t.ref.Start, t.ref.End, now.UTC()); err != nil {
+				task.SpaceID, task.DatasetID, t.ref.Key, nanos(t.ref.Start), nanos(t.ref.End), nanos(now)); err != nil {
 				return err
 			}
 		}
-		_, err = tx.ExecContext(ctx, `DROP TABLE IF EXISTS incoming; DROP TABLE IF EXISTS changed`)
-		return err
+		for _, ddl := range []string{`DROP TABLE IF EXISTS temp.incoming`, `DROP TABLE IF EXISTS temp.changed`} {
+			if _, err := tx.ExecContext(ctx, ddl); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return StageResult{Touched: map[string]PartitionRef{}}, err

@@ -158,7 +158,7 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	root := t.TempDir()
-	store, err := staging.Open(filepath.Join(root, ".state", "staging.duckdb"), staging.Options{})
+	store, err := staging.Open(filepath.Join(root, ".state", "staging.db"), staging.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func newHarness(t *testing.T) *harness {
 
 func assignment(runID string, mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: runID, LeaseToken: "tok-" + runID, Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
+		RunId: runID, LeaseToken: "tok-" + runID, Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", FilePrefix: "ds_1m", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
 		Retention: "168h", IntervalSeconds: 3600, MinLookbackSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 		StartedAt: "2026-10-17T01:04:43Z", ScheduledAt: "2026-10-17T01:04:43Z",
 	}
@@ -223,7 +223,7 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	h.app.running["r1"] = &activeRun{assignment: assignment("r1", nil), cancel: func() { cancelled = true }}
 	h.app.mu.Unlock()
 	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30, CancelRunIds: []string{"r1", "ghost"},
-		DeletedTasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "old"}}}
+		DeletedTasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "old", TaskEpoch: "1"}}}
 	h.app.heartbeatOnce(ctx)
 	req := h.mgr.heartbeats[0]
 	if req.GetWorkerId() != "w1" || req.GetInstanceId() != "i1" || req.GetVersion() != "test" || req.GetRootDir() != h.root || req.GetDiskTotalBytes() != 200<<30 ||
@@ -414,7 +414,7 @@ func TestMaintenanceWaitsForInFlightPullsAndANewAssignmentCancelsAStaleDeletion(
 			t.Fatal(err)
 		}
 	}
-	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 45, DeletedTasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "gone"}, {SpaceId: "crypto", DatasetId: "ds_1m"}}}
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 45, DeletedTasks: []*archivepb.TaskRef{{SpaceId: "crypto", DatasetId: "gone", TaskEpoch: "1"}, {SpaceId: "crypto", DatasetId: "ds_1m", TaskEpoch: "1"}}}
 	h.app.heartbeatOnce(ctx)
 	if len(h.app.deleted) != 2 {
 		t.Fatalf("deleted = %v", h.app.deleted)
@@ -514,7 +514,7 @@ func TestMaintenanceDropsDeletedTasksAndWaitsForRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.app.mu.Lock()
-	h.app.deleted["crypto/old"] = taskRef{space: "crypto", dataset: "old"}
+	h.app.deleted["crypto/old"] = taskRef{space: "crypto", dataset: "old", epoch: "1"}
 	h.app.running["r1"] = &activeRun{assignment: assignment("r1", nil), cancel: func() {}}
 	h.app.mu.Unlock()
 	// 有运行一直不结束：等待到期后跳过，已删除的任务保留到下次。

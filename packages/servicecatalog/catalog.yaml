@@ -562,6 +562,7 @@ components:
           - QueryHostMetricHistory
           - QueryPipelineArrivalHistory
           - GetDoctorContext
+          - GetHostPolicy
         read_only_methods:
           - GetHealthOverview
           - ListNotificationChannels
@@ -569,6 +570,7 @@ components:
           - QueryHostMetricHistory
           - QueryPipelineArrivalHistory
           - GetDoctorContext
+          - GetHostPolicy
         acl:
           - methods:
               - GetHealthOverview
@@ -582,6 +584,10 @@ components:
             callers:
               - console
               - moox-cli
+          - methods:
+              - GetHostPolicy
+            callers:
+              - host-agent
     doctor:
       role: monitor
       description: Single-instance monitoring fact store and alert evaluator
@@ -987,6 +993,7 @@ components:
           - GetArchiveRun
           - ListArchivePartitions
           - GetArchivePartition
+          - RetireArchiveWorker
         read_only_methods:
           - GetArchiveOverview
           - ListArchiveTasks
@@ -1012,6 +1019,7 @@ components:
               - GetArchiveRun
               - ListArchivePartitions
               - GetArchivePartition
+              - RetireArchiveWorker
             callers:
               - console
               - moox-cli
@@ -1457,6 +1465,9 @@ components:
           - ReadTimeSeriesRows
           - CountTimeSeriesRows
           - GetFactorPeriodComputed
+        # 周期提交按（数据集，周期，序列）覆盖行并幂等置位完成位图，周期封口后返回回执而不再写入，重复提交安全。
+        idempotent_methods:
+          - CommitTimeSeriesBatch
         acl:
           - methods:
               - UpsertFields

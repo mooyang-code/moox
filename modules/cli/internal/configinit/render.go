@@ -52,7 +52,7 @@ func Render(ctx context.Context, request *Request, env Environment) ([]byte, err
 	return raw, nil
 }
 
-// replaceTopology 把示例里从第一个 [hosts.*] 到 [egress_proxy] 之前的主机、编译机和放置段整体换成生成的拓扑。
+// replaceTopology 把示例里从第一个 [hosts.*] 到 [egress_proxy] 之前的主机和放置段整体换成生成的拓扑。
 func replaceTopology(lines []string, topology []string) ([]string, error) {
 	start, end := -1, -1
 	for i, line := range lines {
@@ -80,14 +80,7 @@ func renderTopology(request *Request) []string {
 		out = append(out, renderHost(host)...)
 		out = append(out, "")
 	}
-	switch {
-	case request.compile != nil:
-		out = append(out,
-			"# 因子计算机：运行因子引擎，同时作为 CGO Linux 制品（Storage）的编译机；",
-			"# 纯 Go 交叉编译与前端构建在本机执行。它只登记登录方式，不加入 MooX 部署拓扑。")
-		out = append(out, renderHost(*request.compile)...)
-		out = append(out, "", "[compile_host]", "host = "+tomlString(request.compile.ID), "")
-	case request.factorRemote.ID != "":
+	if request.factorRemote.ID != "" {
 		out = append(out, "# 因子计算机：运行因子引擎。它只登记登录方式，不加入 MooX 部署拓扑。")
 		out = append(out, renderHost(request.factorRemote)...)
 		out = append(out, "")

@@ -2,6 +2,8 @@
 
 > 文档定位：历史执行计划与分阶段实施记录。当前代理、Monitor 探针和完整 control 原生部署已接通；下文各时间点的“尚未完成”保留历史语境。最新能力与验收边界见[实现状态](实现状态.md)。
 
+> 后续变化（2026-10-18）：CA 历史导入（`--import-existing`、`--for-import`、`--proxy-ca-import-dir`）与旧部署器已在兼容清理中删除，internal CA 只能首次显式创建。
+
 日期：2026-10-09
 
 状态：第二版，实施中；已按 `feature/mooyang` 当前代码与网关重构主计划复审。独立 worktree 已交付主计划 A/B/C 与代理原型，业务调用方和部署迁移、完整交付及正式环境验收仍未完成。
@@ -214,11 +216,11 @@ G5 消费层本批验证：Admin、CLI 与服务目录 56 个测试包全量 rac
 
 主要依据：
 
-- [当前 Caddy 路由](../deploy/caddy/Caddyfile)。
+- 当前 Caddy 路由。
 - [Gateway 配置约束](../modules/hostgateway/internal/config/config.go) 与 [启动实现](../modules/hostgateway/internal/bootstrap/bootstrap.go)。
 - [原生共享客户端与连接约束](../packages/gatewayclient/client.go)。
-- [Caddy 管理脚本](../scripts/lib/caddy-managed.sh)。
-- [shell 部署](../scripts/deploy/deploy-moox.sh) 与 [CLI 部署](../modules/cli/internal/setup/deploy/deploy.go)。
+- Caddy 管理脚本。
+- shell 部署 与 CLI 部署。
 - [共享组件目录](../packages/servicecatalog/catalog.yaml)（复审时 Doctor 的独立清单现已在 A8 并入此处）。
 
 ## 4. 目标架构与路由契约

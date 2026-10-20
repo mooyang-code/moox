@@ -116,6 +116,11 @@ func TestHostBundleScopesPrivateIdentityReissuesLeafAndPreservesTopology(t *test
 			if hostID == "control" {
 				want = append(want, "console")
 			}
+			for _, p := range beforePlacements {
+				if p.HostID == hostID && p.ComponentID == "collector" {
+					want = append(want, "scf-collector")
+				}
+			}
 			var got []string
 			for _, c := range first.Credentials {
 				got = append(got, c.Caller)

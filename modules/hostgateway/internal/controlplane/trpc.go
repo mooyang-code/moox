@@ -27,6 +27,7 @@ type RPCClient struct {
 	instanceID, version string
 	pool                *rpcconn.Pool
 	transport           transport.ClientTransport
+	relayStatus         func() []*pb.RelaySessionStatus
 }
 
 func NewRPC(cfg hostgatewayconfig.Config, material *tlsconfig.Material, credentials gatewayauth.Credentials, version string) (*RPCClient, error) {
@@ -82,12 +83,19 @@ func (c *RPCClient) Pull(ctx context.Context, currentHash string) (*snapshot.Vie
 	return snapshot.Build(c.cfg.Host.ID, rsp.Snapshot)
 }
 
+// SetRelayStatus 让心跳带上反向连接会话状态，只在 control 网关上设置，须在开始同步前调用。
+func (c *RPCClient) SetRelayStatus(status func() []*pb.RelaySessionStatus) { c.relayStatus = status }
+
 func (c *RPCClient) Report(ctx context.Context, hash string, count int32, lastError string) error {
 	if len(lastError) > 4096 {
 		lastError = "host gateway synchronization failed"
 	}
+	req := &pb.ReportStatusReq{HostId: c.cfg.Host.ID, InstanceId: c.instanceID, Version: c.version, AppliedHash: hash, RouteCount: count, Error: lastError}
+	if c.relayStatus != nil {
+		req.RelaySessions = c.relayStatus()
+	}
 	rsp := &pb.ReportStatusRsp{}
-	if err := c.invoke(ctx, "ReportStatus", &pb.ReportStatusReq{HostId: c.cfg.Host.ID, InstanceId: c.instanceID, Version: c.version, AppliedHash: hash, RouteCount: count, Error: lastError}, rsp); err != nil {
+	if err := c.invoke(ctx, "ReportStatus", req, rsp); err != nil {
 		return err
 	}
 	if rsp.RetInfo == nil || rsp.RetInfo.Code != pb.ErrorCode_SUCCESS {

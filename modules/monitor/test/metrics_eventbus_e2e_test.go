@@ -104,7 +104,7 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	raw := []byte(fmt.Sprintf("# HELP moox_e2e_requests Requests handled.\n# TYPE moox_e2e_requests counter\nmoox_e2e_requests{route=\"read\"} 7\n"+
 		"moox_storage_view_output_latest_data_time_seconds{%s} %d\n"+
 		"moox_storage_view_output_subjects{%s} 1\n", labels, dataTime.Unix(), labels))
-	snapshot := &metricspb.MetricSnapshot{SchemaVersion: 1, CollectionIntervalSeconds: 30, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_NONE, Data: raw, MetricFamilyCount: 3, SampleCount: 3}
+	snapshot := &metricspb.MetricSnapshot{SchemaVersion: 1, CollectionIntervalSeconds: 30, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Data: raw, MetricFamilyCount: 3, SampleCount: 3}
 	publisher, err := events.NewPublisher(eventClient, registry)
 	if err != nil {
 		t.Fatal(err)

@@ -91,6 +91,11 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		{"undeclared ACL method", func(c *Catalog) { servicePtr(c, cloud).ACL[0].Methods = []string{"Unregistered"} }},
 		{"wildcard ACL method", func(c *Catalog) { servicePtr(c, cloud).ACL[0].Methods = []string{"*"} }},
 		{"unknown read only method", func(c *Catalog) { servicePtr(c, cloud).ReadOnlyMethods = []string{"Unregistered"} }},
+		{"unknown idempotent method", func(c *Catalog) { servicePtr(c, cloud).IdempotentMethods = []string{"Unregistered"} }},
+		{"read only and idempotent", func(c *Catalog) {
+			service := servicePtr(c, cloud)
+			service.IdempotentMethods = append([]string(nil), service.ReadOnlyMethods[0])
+		}},
 		{"duplicate service", func(c *Catalog) {
 			componentPtr(c, "cloudnode").Services = append(componentPtr(c, "cloudnode").Services, *servicePtr(c, cloud))
 		}},
@@ -295,6 +300,30 @@ func TestReadOnlyMethodsDoNotIncludeWrites(t *testing.T) {
 		if c.ReadOnly(tc.path, tc.method) != tc.want {
 			t.Errorf("unsafe retry classification for %s/%s", tc.path, tc.method)
 		}
+	}
+}
+
+// 请求可能已发出的网络失败后可以重发的方法：只读方法，以及显式声明幂等的写方法；其余写方法一律不重发。
+func TestOnlyReadOnlyAndDeclaredIdempotentMethodsAreRetryable(t *testing.T) {
+	c := mustCatalog(t)
+	for _, tc := range []struct {
+		path, method string
+		want         bool
+	}{
+		{"trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", true},
+		{"trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", true},
+		{"trpc.moox.storage.PrimaryStore", "UpsertFields", false},
+		{"trpc.moox.storage.PrimaryStore", "WriteFactorRows", false},
+		{"trpc.moox.storage.PrimaryStore", "ReportFactorPeriodComputed", false},
+		{"trpc.moox.factor.FactorEngine", "PullRecalcJob", false},
+		{"trpc.moox.unknown.Service", "CommitTimeSeriesBatch", false},
+	} {
+		if c.Retryable(tc.path, tc.method) != tc.want {
+			t.Errorf("retry classification for %s/%s = %v, want %v", tc.path, tc.method, !tc.want, tc.want)
+		}
+	}
+	if c.ReadOnly("trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch") {
+		t.Error("an idempotent write must not be classified read-only")
 	}
 }
 

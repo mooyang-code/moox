@@ -224,31 +224,10 @@ func ensureTaskResultMetadata(ctx context.Context, repo *store.TaskRepository, m
 			if err := persistTaskResultIDs(ctx, repo, &task, ids); err != nil {
 				return err
 			}
-			if err := refreshTaskDefinition(ctx, repo, &task); err != nil {
-				// 哈希冲突等不影响采集：保留旧值，只告警。
-				log.WarnContextf(ctx, "%v", err)
-			}
 		}
 		if int64(page*store.MaxEnabledTasks) >= total || len(tasks) == 0 {
 			break
 		}
-	}
-	return nil
-}
-
-// refreshTaskDefinition 去掉存量任务 collect_params 里已删除的参数（如 history_policy），并按新的规范化形式重算定义哈希，
-// 避免旧哈希让同义任务逃过去重、或让旧任务之后的更新被误判重复。
-func refreshTaskDefinition(ctx context.Context, repo *store.TaskRepository, task *domain.CollectionTask) error {
-	params := domain.DropRetiredParams(task.CollectParams)
-	hash := collectsvc.CollectionTaskDefinitionHash(domain.CollectionTask{
-		SpaceID: task.SpaceID, TagIDs: task.TagIDs, DataType: task.DataType, CollectParams: params,
-	})
-	if params == task.CollectParams && hash == task.DefinitionHash {
-		return nil
-	}
-	task.CollectParams, task.DefinitionHash = params, hash
-	if _, err := repo.UpdateValidatedTaskByTaskID(ctx, task.SpaceID, task.TaskID, *task); err != nil {
-		return fmt.Errorf("refresh task %s/%s definition: %w", task.SpaceID, task.TaskID, err)
 	}
 	return nil
 }

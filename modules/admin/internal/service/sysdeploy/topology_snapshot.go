@@ -42,6 +42,7 @@ func (d *TopologyDAO) CompileSnapshot(ctx context.Context, hostID, encryptionKey
 		for _, key := range verification {
 			snapshot.VerificationKeys = append(snapshot.VerificationKeys, &pb.GatewayVerificationKey{Caller: key.Caller, KeyId: key.KeyID, Secret: slices.Clone(key.Secret)})
 		}
+		snapshot.Relays = relaysToProto(compiled.Relays)
 		snapshot.Hash, err = pb.SnapshotHash(snapshot)
 		return err
 	})

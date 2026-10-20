@@ -16,7 +16,7 @@ import (
 
 func testPlanEnv(t *testing.T) string {
 	t.Helper()
-	encoded, err := marketfetch.EncodePlan(&marketfetch.Plan{
+	encoded, err := marketfetch.EncodePlan("crypto", &marketfetch.Plan{
 		V:      1,
 		Market: marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
 		Fetch:  marketfetch.PlanFetch{Concurrency: 10, RPS: 50, Burst: 50, FeedConcurrency: 10},

@@ -13,6 +13,9 @@ hero:
       text: 总体设计
       link: /总体设计
     - theme: alt
+      text: 构建手册
+      link: /构建手册
+    - theme: alt
       text: 部署与运维
       link: /部署与运维
     - theme: alt

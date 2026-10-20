@@ -18,6 +18,8 @@ type Host struct {
 	Region         string   `json:"region"`
 	Description    string   `json:"description"`
 	Components     []string `json:"components"`
+	// Reachability 为空表示可直达，outbound 表示只能出站。
+	Reachability string `json:"reachability,omitempty"`
 }
 
 type CertificateInfo struct {

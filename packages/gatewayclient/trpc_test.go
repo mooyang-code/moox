@@ -220,7 +220,7 @@ func (l *byteCountingListener) Accept() (net.Conn, error) {
 	return &byteCountingConn{Conn: conn, read: &l.read, written: &l.written}, nil
 }
 
-func TestRealTRPCGzipCompressionKeepsSignedBodyAndShrinksWire(t *testing.T) {
+func TestRealTRPCZstdCompressionKeepsSignedBodyAndShrinksWire(t *testing.T) {
 	body := []byte(`{"rows":"` + strings.Repeat("kline-row-0123456789,", 4000) + `"}`)
 	run := func(compress bool) (read, written int64) {
 		base, err := net.Listen("tcp", "127.0.0.1:0")
@@ -240,16 +240,7 @@ func TestRealTRPCGzipCompressionKeepsSignedBodyAndShrinksWire(t *testing.T) {
 		return listener.read.Load(), listener.written.Load()
 	}
 	plainRead, plainWritten := run(false)
-	gzipRead, gzipWritten := run(true)
-	require.Less(t, gzipRead*5, plainRead, "请求方向应显著缩小")
-	require.Less(t, gzipWritten*5, plainWritten, "响应方向应随请求压缩方式一并压缩")
-}
-
-func TestCompressionConfigValidation(t *testing.T) {
-	require.True(t, ValidCompression(""))
-	require.True(t, ValidCompression(CompressionNone))
-	require.True(t, ValidCompression(CompressionGzip))
-	require.False(t, ValidCompression("zstd"))
-	_, err := New(Config{Mode: Tunnel, Compression: "zstd", Serialization: codec.SerializationTypeJSON})
-	require.ErrorContains(t, err, "compression")
+	zstdRead, zstdWritten := run(true)
+	require.Less(t, zstdRead*5, plainRead, "请求方向应显著缩小")
+	require.Less(t, zstdWritten*5, plainWritten, "响应方向应随请求压缩类型一并压缩")
 }

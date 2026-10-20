@@ -78,7 +78,7 @@ func (TotalMode) EnumDescriptor() ([]byte, []int) {
 type TotalState int32
 
 const (
-	// UNKNOWN 表示旧接口或未设置 total 状态。
+	// UNKNOWN 表示未设置 total 状态。
 	TotalState_UNKNOWN TotalState = 0
 	// EXACT 表示 total 是精确总数。
 	TotalState_EXACT TotalState = 1

@@ -310,6 +310,16 @@ message GetArchivePartitionRsp {
   ArchivePartition partition = 2;
 }
 
+// RetireArchiveWorkerReq 删除一条不再使用的 worker 登记（例如换机后的旧记录）；仍持有活动租约的 worker 不能退役。
+message RetireArchiveWorkerReq {
+  string worker_id = 1;
+}
+message RetireArchiveWorkerRsp {
+  common.RetInfo ret_info = 1;
+  // retired：删除了登记；为 false 表示本来就没有这条登记。
+  bool retired = 2;
+}
+
 service ArchiveMgr {
   rpc GetArchiveOverview(GetArchiveOverviewReq) returns (GetArchiveOverviewRsp);
   rpc ListArchiveTasks(ListArchiveTasksReq) returns (ListArchiveTasksRsp);
@@ -325,6 +335,7 @@ service ArchiveMgr {
   rpc GetArchiveRun(GetArchiveRunReq) returns (GetArchiveRunRsp);
   rpc ListArchivePartitions(ListArchivePartitionsReq) returns (ListArchivePartitionsRsp);
   rpc GetArchivePartition(GetArchivePartitionReq) returns (GetArchivePartitionRsp);
+  rpc RetireArchiveWorker(RetireArchiveWorkerReq) returns (RetireArchiveWorkerRsp);
 }
 
 // ---- ArchiveWorker：mgr 与 worker 之间的内部契约，只有外部身份 archive-worker 可以调用 ----

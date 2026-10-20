@@ -6,20 +6,27 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
+	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/controlplane"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/directory"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/health"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/listener"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/relay"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/router"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/snapshot"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/store"
+	"github.com/mooyang-code/moox/modules/hostgateway/internal/tlsconfig"
+	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
@@ -222,6 +229,23 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		return err
 	}
 	defer opened.Close()
+	relayCtx, stopRelay := context.WithCancel(ctx)
+	defer stopRelay()
+	if cfg.Host.ID == cfg.Control.HostID {
+		server, err := relay.NewServer(relay.ServerOptions{State: runtime.State(), Nonces: nonces})
+		if err != nil {
+			return err
+		}
+		defer server.Close()
+		opened.SetRelay(server)
+		control.SetRelayStatus(func() []*pb.RelaySessionStatus {
+			// 每次心跳先断开已不再由本机中转的主机，再上报剩余会话。
+			server.Prune()
+			return relayStatusProto(server.Status())
+		})
+	} else if err := startRelayClient(relayCtx, cfg, material, credentials, runtime.State()); err != nil {
+		return err
+	}
 	drain := &healthz.DrainGate{}
 	remote := listener.TRPC(opened.Remote, "trpc.moox.hostgateway.Remote", drain)
 	local := listener.TRPC(opened.Local, "trpc.moox.hostgateway.Local", drain)
@@ -280,6 +304,66 @@ func Run(ctx context.Context, cfg config.Config, version string) error {
 		completed++
 	}
 	return errors.Join(firstErr, shutdownErr)
+}
+
+// startRelayClient 在后台保持反向连接：只有目录里本机由 control 中转时才连接。
+// 证书不带 ClientAuth 时不能连接，只在需要中转时周期性告警，不影响直达主机的启动。
+func startRelayClient(ctx context.Context, cfg config.Config, material *tlsconfig.Material, credentials gatewayauth.Credentials, state *snapshot.State) error {
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return err
+	}
+	_, remotePort, err := net.SplitHostPort(cfg.Server.RemoteAddr)
+	if err != nil {
+		return err
+	}
+	active := func() bool {
+		view := state.Load()
+		return view != nil && view.Directory().Hosts[cfg.Host.ID].Relay != ""
+	}
+	tlsConfig, tlsErr := material.RelayClient(cfg.Control.HostID)
+	if tlsErr != nil {
+		go func() {
+			ticker := time.NewTicker(10 * time.Minute)
+			defer ticker.Stop()
+			for {
+				if active() {
+					log.Print("host gateway relay unavailable: host_id=" + cfg.Host.ID + ": " + tlsErr.Error())
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+		return nil
+	}
+	client, err := relay.NewClient(relay.ClientOptions{
+		HostID: cfg.Host.ID, ControlHost: cfg.Control.HostID, Target: cfg.Control.Target, TLS: tlsConfig, Credentials: credentials,
+		Active: active,
+		Allowed: func(port int) bool {
+			return strconv.Itoa(port) == remotePort || catalog.HealthPort(port)
+		},
+		Warn: func(s string) { log.Print(s) },
+	})
+	if err != nil {
+		return err
+	}
+	go client.Run(ctx)
+	return nil
+}
+
+func relayStatusProto(items []relay.Status) []*pb.RelaySessionStatus {
+	result := make([]*pb.RelaySessionStatus, 0, len(items))
+	for _, item := range items {
+		status := &pb.RelaySessionStatus{HostId: item.HostID, Online: item.Online, InstanceId: item.InstanceID, Reconnects: item.Reconnects, Streams: int32(item.Streams)}
+		if item.Online {
+			status.ConnectedAt = item.ConnectedAt.UTC().Format(time.RFC3339Nano)
+		}
+		result = append(result, status)
+	}
+	return result
 }
 
 func authenticatedHealthHandler(next http.Handler) (http.Handler, error) {

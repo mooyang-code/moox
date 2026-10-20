@@ -5,9 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"unicode"
-
-	"github.com/mooyang-code/moox/modules/archive/internal/store"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // sanitizeFilePrefix 把数据集名变成文件名前缀：去掉所有空白，路径不安全或控制字符换成下划线，去掉开头的点；
@@ -46,35 +43,6 @@ func (s *Service) chooseFilePrefix(ctx context.Context, spaceID, datasetID, name
 		}
 	}
 	return datasetID, nil
-}
-
-// fillFilePrefix 给升级前创建的任务补上文件名前缀（之后不再随数据集改名变化）。
-func (s *Service) fillFilePrefix(ctx context.Context, task store.Task, name string) error {
-	prefix, err := s.chooseFilePrefix(ctx, task.SpaceID, task.DatasetID, name)
-	if err != nil {
-		return err
-	}
-	return s.store.SetFilePrefixIfEmpty(ctx, task.SpaceID, task.DatasetID, prefix)
-}
-
-// ensureFilePrefixes 在派发运行之前尽量给所有缺前缀的任务补上文件名前缀；某个任务补不上（比如数据集已删除）只记日志，
-// 不影响其他任务——领取时会跳过仍没有前缀的任务。
-func (s *Service) ensureFilePrefixes(ctx context.Context) {
-	tasks, err := s.store.TasksWithoutFilePrefix(ctx)
-	if err != nil {
-		log.WarnContextf(ctx, "archive: list tasks without file prefix: %v", err)
-		return
-	}
-	for _, task := range tasks {
-		ds, err := s.datasets.GetDataset(ctx, task.SpaceID, task.DatasetID)
-		if err != nil {
-			log.WarnContextf(ctx, "archive: resolve file prefix of %s/%s: %v", task.SpaceID, task.DatasetID, err)
-			continue
-		}
-		if err := s.fillFilePrefix(ctx, task, ds.Name); err != nil {
-			log.WarnContextf(ctx, "archive: set file prefix of %s/%s: %v", task.SpaceID, task.DatasetID, err)
-		}
-	}
 }
 
 // datasetMeta 是写进归档根目录元数据文件的数据集信息（由 mgr 从 Storage 读取，随运行下发给 worker）。

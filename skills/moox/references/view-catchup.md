@@ -27,7 +27,7 @@
 - 分区 durable 在 **View** 的 `trpc_go.yaml`：`storage_view_factor` / `storage_view_misc`（模板），实际消费者是按数据集动态创建的 `storage_view_factor_<hash>` / `storage_view_misc_<hash>`
 - Primary 的 `storage.yaml` 可以很短、没有 `consumer_partitions`，这不代表 View 没用分区
 
-控制面：`/data/moox/prod`。Trade 可能在 `/home/ubuntu/moox/trade-move`，不要往香港机发 Storage。
+控制面：`/data/moox/prod`；Storage 单元在 Storage 主机的 `/data/moox/storage/current`，不要往其他主机发 Storage。
 
 ## Storage View 容量检查
 
@@ -69,7 +69,7 @@ moox-cli storage repair-view \
   --dry-run
 ```
 
-执行时：第一个 View 删除 kline durable 并 bump revision；其余三个 `--reset-consumer=false` 只 bump；最后一次再 `--restart=true`。用 `trap` 保证失败后仍 `start.sh storage-view`。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`[storage_retention] view_rows_per_series`，默认 5000 根），不要为了追平改成 `--reset-view-indexes`。
+执行时：第一个 View 删除 kline durable 并 bump revision；其余三个 `--reset-consumer=false` 只 bump；最后一次再 `--restart=true`。用 `trap` 保证失败后仍 `start.sh --components storage-view`。默认 `deliver_policy=new`，缺口靠 A/B 从 Primary 回溯（`[storage_retention] view_rows_per_series`，默认 5000 根），不要为了追平改成 `--reset-view-indexes`。
 
 ### EventBus 管理权限
 

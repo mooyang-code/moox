@@ -35,7 +35,6 @@ type Account struct {
 	SpaceID         string
 	ID              string
 	Name            string
-	OwnerRunnerID   string
 	ExecutionMode   exchange.ExecutionMode
 	MarketType      exchange.MarketType
 	SettlementAsset string
@@ -81,7 +80,7 @@ func (a Account) Validate() error {
 	if a.ControlMode != ControlStrategy && a.ControlMode != ControlManual {
 		return fmt.Errorf("%w: unsupported control mode %q", ErrInvalidAccount, a.ControlMode)
 	}
-	if a.ControlMode == ControlManual && (!blank(a.OwnerRunnerID) || a.AutomationState == AutomationActive) {
+	if a.ControlMode == ControlManual && a.AutomationState == AutomationActive {
 		return fmt.Errorf("%w: manual account cannot have strategy ownership or automation", ErrInvalidAccount)
 	}
 	if blank(a.SpaceID) || blank(a.ID) || blank(a.Name) ||

@@ -269,9 +269,7 @@ service DataNodeDatasetAdminRuntime {
   rpc RestoreDatasetRows(RestoreDatasetRowsReq) returns (RestoreDatasetRowsRsp);
 }
 
-// DataNodeMarkerRuntime is kept separate from the legacy DataNodeRuntime
-// surface so existing DataNode clients remain source compatible while marker
-// writes gain an explicit, narrow internal API.
+// DataNodeMarkerRuntime 是周期标记写入的独立内部接口，与行读写的 DataNodeRuntime 分开授权与演进。
 service DataNodeMarkerRuntime {
   rpc AppendCollectorPeriodCompleted(AppendCollectorPeriodCompletedReq) returns (AppendCollectorPeriodCompletedRsp);
   rpc AppendFactorPeriodComputed(AppendFactorPeriodComputedReq) returns (AppendFactorPeriodComputedRsp);

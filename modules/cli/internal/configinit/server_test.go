@@ -202,8 +202,8 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 	if !slices.Equal(keys, []string{RoleStorage, RoleControl, RoleOverseas, RoleFactor}) {
 		t.Fatalf("角色顺序 = %v", keys)
 	}
-	// 用户只看到用途说明，不看到组件和主机 ID。
-	for _, id := range []string{"storage-primary", "console-proxy", "egress-proxy", "factor-mgr", "compute-1"} {
+	// 用户只看到用途说明，不看到组件 ID（主机 ID 与角色键同名，会出现在页面脚本里）。
+	for _, id := range []string{"storage-primary", "console-proxy", "egress-proxy", "factor-mgr"} {
 		if strings.Contains(body, id) {
 			t.Fatalf("页面不应展示组件 ID %q", id)
 		}
@@ -366,7 +366,7 @@ func TestSubmitWritesTheFileAndEndsTheSession(t *testing.T) {
 	if outcome.err != nil {
 		t.Fatal(outcome.err)
 	}
-	if outcome.result.Path != h.output || strings.Join(outcome.result.Hosts, ",") != "control,storage,compute-1" {
+	if outcome.result.Path != h.output || strings.Join(outcome.result.Hosts, ",") != "control,storage,overseas" {
 		t.Fatalf("结果 = %+v", outcome.result)
 	}
 	raw, err := os.ReadFile(h.output)

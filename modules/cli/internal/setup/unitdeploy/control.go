@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -26,6 +28,8 @@ import (
 type ControlOptions struct {
 	CoreOptions
 	ProxyCA unitbootstrap.ProxyCAAuthorization
+	// Release 非空时升级 control：使用该版本的 host 与 control 软件，不顺带部署 Storage 与出口单元。
+	Release string
 }
 
 // BootstrapControl promotes the original core software to every control
@@ -46,10 +50,14 @@ func controlInput(ctx context.Context, snapshot *setupconfig.Snapshot, root *os.
 	}
 	request.Control.Environment["admin"]["MOOX_ADMIN_JWT_SECRET_KEY"] = identity.JWTSecret
 	request.ProxyCA = options.ProxyCA
-	if request.ProxyCA.Create && request.ProxyCA.ImportDirectory != "" || request.ProxyCA.Create && consoleTLSMode(snapshot.Manifest.ControlHost()) == "public" {
+	if request.ProxyCA.Create && consoleTLSMode(snapshot.Manifest.ControlHost()) == "public" {
 		return request, nil, errors.New("proxy CA creation requires internal TLS and cannot be combined with trusted import")
 	}
-	if err := checkControlDependencies(ctx, snapshot, root, components, options.CoreOptions); err != nil {
+	if options.Release != "" {
+		if err := checkControlDependencyRecords(snapshot, root, components); err != nil {
+			return request, nil, err
+		}
+	} else if err := checkControlDependencies(ctx, snapshot, root, components, options.CoreOptions); err != nil {
 		return request, nil, err
 	}
 	temporary, err := os.MkdirTemp(root.Name(), "control-templates-")
@@ -160,7 +168,6 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 	return result, nil
 }
 
-
 func persistPrivateBytes(root *os.Root, name string, raw []byte) error {
 	if _, err := root.Lstat(name); err == nil {
 		stored, err := fsutil.ReadPrivate(root, name, 4<<20)
@@ -174,7 +181,9 @@ func persistPrivateBytes(root *os.Root, name string, raw []byte) error {
 	return fsutil.WritePrivate(root, name, raw, false)
 }
 
-func bindControlRequest(root *os.Root, digest string) error {
+// bindControlRequest 把 control 请求摘要绑定到操作记录：首次完整 control 用 control-operation.json，
+// 每个升级版本各自一条 control-operations/<版本>.json；重试同一版本必须是同一请求。
+func bindControlRequest(root *os.Root, release, digest string) error {
 	raw, err := json.Marshal(struct {
 		Version int    `json:"version"`
 		SHA256  string `json:"sha256"`
@@ -182,7 +191,62 @@ func bindControlRequest(root *os.Root, digest string) error {
 	if err != nil {
 		return err
 	}
-	return persistPrivateBytes(root, "control-operation.json", append(raw, '\n'))
+	name := "control-operation.json"
+	if release != "" {
+		if !validReleaseID(release) {
+			return errors.New("invalid release ID")
+		}
+		name = "control-operations/" + release + ".json"
+	}
+	return persistPrivateBytes(root, name, append(raw, '\n'))
+}
+
+// checkControlDependencyRecords 是 control 升级时的依赖检查：只核验 Storage 与出口单元已有部署记录，
+// 不重新部署它们（升级它们是各自单元的事）。
+func checkControlDependencyRecords(snapshot *setupconfig.Snapshot, root *os.Root, components []string) error {
+	profiles := []string{}
+	if slices.ContainsFunc(components, func(id string) bool {
+		return slices.Contains([]string{"monitor", "collector", "factor-mgr", "archive-mgr", "strategy"}, id)
+	}) {
+		profiles = append(profiles, "storage")
+	}
+	if slices.Contains(components, "collector") {
+		profiles = append(profiles, "egress-proxy")
+	}
+	for _, profile := range profiles {
+		found := false
+		for _, host := range snapshot.Manifest.Hosts() {
+			if _, err := unitComponents(snapshot.Manifest, host.Name, profile); err != nil {
+				continue
+			}
+			if !unitDeploymentRecorded(root, host.Name, profile) {
+				return fmt.Errorf("control upgrade requires an existing %s deployment on %s", profile, host.Name)
+			}
+			found = true
+		}
+		if !found {
+			return errors.New("control upgrade is missing a required Storage or egress placement")
+		}
+	}
+	return nil
+}
+
+// unitDeploymentRecorded 报告单元已有部署记录：首次安装的 operation.json，或任一版本安装的 releases/<版本>/operation.json。
+func unitDeploymentRecorded(root *os.Root, host, profile string) bool {
+	base := filepath.Join("units", host, profile)
+	if _, err := root.Lstat(filepath.Join(base, "operation.json")); err == nil {
+		return true
+	}
+	entries, err := fs.ReadDir(root.FS(), filepath.Join(base, "releases"))
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if _, err := root.Lstat(filepath.Join(base, "releases", entry.Name(), "operation.json")); entry.IsDir() && err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func activeControlStatus(ctx context.Context, transport setupssh.Client, helper, directory, host string, ids []string) ([]unitruntime.Status, error) {

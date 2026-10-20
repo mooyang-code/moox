@@ -1,5 +1,5 @@
 // Command moox-archive-worker 是归档 worker：经 Access 领取运行，读取 Storage 的时间区间数据，
-// 写入本地 DuckDB 暂存区，并导出 gzip CSV 分区文件。它只出站，可以部署在任何能访问 Access 的机器上。
+// 写入本地 SQLite 暂存区，并导出 CSV 分区文件。它只出站，可以部署在任何能访问 Access 的机器上（Linux、macOS、Windows）。
 package main
 
 import (
@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -29,6 +30,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/requestauth"
+	"github.com/mooyang-code/moox/packages/servicehost"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -57,6 +59,8 @@ func run(args []string) error {
 			return health(args[1:])
 		case "probe":
 			return probe(args[1:])
+		case "service":
+			return serviceCommand(args[1:])
 		}
 	}
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
@@ -68,10 +72,34 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	return serve(cfg)
+	return servicehost.Run(workerService, func(ctx context.Context) error { return serve(ctx, cfg) })
 }
 
-func serve(cfg *config.Config) (err error) {
+// workerService 是 Windows 服务名。
+const workerService = "moox-archive-worker"
+
+// serviceCommand 处理 Windows 上的 `service install|uninstall|start|stop [-config 路径]`：安装时把配置路径转成绝对路径写进启动参数。
+func serviceCommand(args []string) error {
+	if len(args) == 0 {
+		return servicehost.Command(servicehost.Spec{Name: workerService}, args)
+	}
+	fs := flag.NewFlagSet("service", flag.ContinueOnError)
+	configPath := fs.String("config", "config/app.yaml", "archive worker config")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	absolute, err := filepath.Abs(*configPath)
+	if err != nil {
+		return err
+	}
+	return servicehost.Command(servicehost.Spec{
+		Name: workerService, DisplayName: "MooX archive worker", Description: "MooX 定时归档 worker（运维机外部程序）",
+		Args: []string{"-config", absolute},
+	}, args[:1])
+}
+
+// serve 运行 worker 直到收到退出信号，或 parent 结束（Windows 服务收到停止请求）。
+func serve(parent context.Context, cfg *config.Config) (err error) {
 	gateway, err := cfg.OpenGateway()
 	if err != nil {
 		return fmt.Errorf("open gateway client: %w", err)
@@ -81,7 +109,7 @@ func serve(cfg *config.Config) (err error) {
 	if err != nil {
 		return fmt.Errorf("read storage auth file: %w", err)
 	}
-	store, err := staging.Open(cfg.StatePath(), staging.Options{MemoryLimit: cfg.Staging.MemoryLimit, Threads: cfg.Staging.Threads})
+	store, err := staging.Open(cfg.StatePath(), staging.Options{CacheBytes: int64(cfg.Staging.CacheSize)})
 	if err != nil {
 		return fmt.Errorf("open staging database: %w", err)
 	}
@@ -97,7 +125,7 @@ func serve(cfg *config.Config) (err error) {
 		Runner:    &runner.Runner{Source: source.New(gateway, secret), Staging: store, Files: files, Pace: pacer, PageRows: cfg.Pacing.PageRows},
 		DiskUsage: app.StatfsDiskUsage,
 	})
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	shutdownHealth, err := serveHealth(cfg.Health.Addr, worker)
 	if err != nil {

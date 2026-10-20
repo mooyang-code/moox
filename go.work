@@ -1,4 +1,4 @@
-go 1.26.9
+go 1.27.2
 
 use (
 	./modules/access
@@ -42,6 +42,7 @@ use (
 	./packages/gatewayroute/proto/gatewayroutegen
 	./packages/healthz
 	./packages/hostmetricpb
+	./packages/hostpolicy
 	./packages/jetstream
 	./packages/marketcalendar
 	./packages/marketfetchpb
@@ -52,6 +53,7 @@ use (
 	./packages/seriesset
 	./packages/routeprobe
 	./packages/security
+	./packages/servicehost
 	./packages/servicecatalog
 	./packages/storagepolicy
 	./packages/storagepb
@@ -59,7 +61,9 @@ use (
 	./packages/timerjob
 	./packages/tradeeventpb
 	./packages/trpcretry
+	./packages/wirecompress
 	./tools/moox-mcp
+	./tools/zstddict
 	./web-host
 )
 

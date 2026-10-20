@@ -14,13 +14,27 @@ import (
 
 func New(t testing.TB, hostID string, components ...string) *pb.HostGatewaySnapshot {
 	t.Helper()
+	return build(t, hostID, "", components)
+}
+
+// NewWithOutbound 在拓扑里加入一台只能出站、由 control 中转的主机（放置全部主机级组件），返回 hostID 的快照。
+func NewWithOutbound(t testing.TB, hostID, outbound string, components ...string) *pb.HostGatewaySnapshot {
+	t.Helper()
+	return build(t, hostID, outbound, components)
+}
+
+func build(t testing.TB, hostID, outbound string, components []string) *pb.HostGatewaySnapshot {
+	t.Helper()
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		t.Fatal(err)
 	}
 	topology := servicecatalog.Topology{ControlHostID: "control", Hosts: []servicecatalog.Host{{ID: "control", Address: "192.0.2.1", Status: servicecatalog.Enabled}}}
-	if hostID != "control" {
+	if hostID != "control" && hostID != outbound {
 		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: hostID, Address: "192.0.2.2", Status: servicecatalog.Enabled})
+	}
+	if outbound != "" {
+		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: outbound, Address: "192.168.0.103", Status: servicecatalog.Enabled, Reachability: servicecatalog.ReachabilityOutbound})
 	}
 	seen := map[string]bool{}
 	add := func(host, component string) {
@@ -50,7 +64,7 @@ func New(t testing.TB, hostID string, components ...string) *pb.HostGatewaySnaps
 	raw := &pb.HostGatewaySnapshot{SchemaVersion: 1, HostId: hostID, Disabled: compiled.Disabled,
 		Directory: &directorypb.ServiceDirectory{Version: compiled.Directory.Version, Hosts: map[string]*directorypb.DirectoryHost{}, Services: map[string]*directorypb.ServiceHosts{}}}
 	for id, host := range compiled.Directory.Hosts {
-		raw.Directory.Hosts[id] = &directorypb.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region}
+		raw.Directory.Hosts[id] = &directorypb.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Relay: host.Relay}
 	}
 	for path, ids := range compiled.Directory.Services {
 		raw.Directory.Services[path] = &directorypb.ServiceHosts{HostIds: ids}
@@ -58,6 +72,13 @@ func New(t testing.TB, hostID string, components ...string) *pb.HostGatewaySnaps
 	for _, route := range compiled.Routes {
 		raw.Routes = append(raw.Routes, &pb.HostGatewayRoute{ComponentId: route.ComponentID, ServicePath: route.ServicePath, Method: route.Method, Address: route.Address,
 			TimeoutMs: route.TimeoutMS, MaxBodyBytes: route.MaxBodyBytes, Callers: route.Callers, ReadOnly: route.ReadOnly})
+	}
+	for _, relay := range compiled.Relays {
+		item := &pb.HostGatewayRelay{HostId: relay.HostID}
+		for _, port := range relay.Ports {
+			item.Ports = append(item.Ports, &pb.HostGatewayRelayPort{Port: int32(port.Port), Callers: port.Callers})
+		}
+		raw.Relays = append(raw.Relays, item)
 	}
 	for _, caller := range compiled.VerificationCallers {
 		credential := Credential(caller)

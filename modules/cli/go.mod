@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/cli
 
-go 1.26.9
+go 1.27.2
 
 replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../storage/proto/storagegen
 
@@ -19,7 +19,9 @@ require (
 	github.com/mooyang-code/moox/packages/cloudprovider v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/hostpolicy v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/notification v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepolicy v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
@@ -32,6 +34,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.2
 	trpc.group/trpc-go/trpc-go v1.0.4
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
 )
 
 require (
@@ -163,3 +166,9 @@ replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storag
 replace github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen => ../cloudnode/proto/cloudnodegen
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
+
+replace github.com/mooyang-code/moox/packages/hostpolicy => ../../packages/hostpolicy
+
+replace github.com/mooyang-code/moox/packages/notification => ../../packages/notification
+
+replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress

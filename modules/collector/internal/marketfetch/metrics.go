@@ -373,11 +373,6 @@ func boundedValue(value string, allowed []string, fallback string) string {
 	return fallback
 }
 
-// Observe and SetRetryPending remain no-ops for the retired completion-based
-// realtime scheduler. They keep the manual catchup package boundary source
-// compatible without registering legacy high-cardinality metrics.
-func (m *Metrics) Observe(string, any) {}
-
 func (m *Metrics) ObserveAssignmentError(spaceID, reason string) {
 	if m == nil {
 		return

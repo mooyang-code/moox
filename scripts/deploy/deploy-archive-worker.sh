@@ -35,7 +35,7 @@ Options:
   --access-address <addr>   Fixed native Access host:port for archive-mgr and Storage.
   --access-id <id>          Access identity, e.g. access@storage.
   --access-key-id <id>      KeyID assigned by Admin keys export --caller archive-worker.
-  --binary <path>           Install this prebuilt (CGO) moox-archive-worker, e.g. built by `moox-cli setup build-linux --module archive-worker`.
+  --binary <path>           Install this prebuilt moox-archive-worker, e.g. cross-built by `scripts/build/build.sh archive-worker`.
   --skip-build              Reuse <dir>/bin/moox-archive-worker.
   --no-start                Install files only; do not (re)start the service.
 
@@ -106,10 +106,10 @@ if [[ -n "${BINARY}" ]]; then
   install -m 0755 "${BINARY}" "${DEPLOY_DIR}/bin/moox-archive-worker.new"
   mv -f "${DEPLOY_DIR}/bin/moox-archive-worker.new" "${DEPLOY_DIR}/bin/moox-archive-worker"
 elif [[ "${SKIP_BUILD}" -eq 0 ]]; then
-  # DuckDB needs CGO. Go module downloads stall behind an operator's local HTTP proxy.
-  log "build moox-archive-worker (CGO)"
+  # Pure Go (SQLite staging). Go module downloads stall behind an operator's local HTTP proxy.
+  log "build moox-archive-worker"
   version="$(git -C "${ROOT}" describe --always --dirty 2>/dev/null || echo dev)"
-  (cd "${ROOT}/modules/archive" && env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy CGO_ENABLED=1 \
+  (cd "${ROOT}/modules/archive" && env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy CGO_ENABLED=0 \
     go build -ldflags "-X main.Version=${version} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     -o "${DEPLOY_DIR}/bin/moox-archive-worker" ./cmd/worker)
 fi
@@ -124,7 +124,6 @@ gateway_client:
   caller: archive-worker
   key_id: "${ACCESS_KEY_ID}"
   key_file: ${SECRETS_DIR}/access-archive-worker.key
-  compression: gzip
 
 storage_auth_file: ${SECRETS_DIR}/storage-primary-auth.secret
 
@@ -137,8 +136,7 @@ worker:
   pull_interval: 5s
 
 staging:
-  memory_limit: 1GB
-  threads: 2
+  cache_size: 256MB
   rebuild_ratio: 2
 
 pacing:

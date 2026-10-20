@@ -37,7 +37,7 @@ func TestRelPathBuildsDayAndMonthNamesAndRejectsUnsafeInput(t *testing.T) {
 func setup(t *testing.T) (Files, *staging.Store, staging.Task, staging.PartitionState) {
 	t.Helper()
 	root := t.TempDir()
-	store, err := staging.Open(filepath.Join(root, ".state", "staging.duckdb"), staging.Options{})
+	store, err := staging.Open(filepath.Join(root, ".state", "staging.db"), staging.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,12 +84,13 @@ func TestWriteIsAtomicAndReportsHashSizeAndPreview(t *testing.T) {
 		t.Fatalf(".partial 不应残留: %v", err)
 	}
 	f, _ := os.Open(files.Abs(info.Path))
-	defer f.Close()
 	zr, err := gzip.NewReader(f)
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := io.ReadAll(zr)
+	// 读完立刻关闭：Windows 上不能把仍被打开的文件作为重命名的目标替换。
+	_ = f.Close()
 	if strings.Count(string(raw), "\n") != 41 {
 		t.Fatalf("行数 = %d", strings.Count(string(raw), "\n"))
 	}
@@ -165,7 +166,7 @@ func TestDatasetJSONCarriesTheDatasetAndColumnDescriptionsAndIsRewrittenOnlyOnRe
 func TestCleanPartialsRemovesLeftoversButNotTheStateDirectory(t *testing.T) {
 	root := t.TempDir()
 	files := Files{Root: root}
-	keep := filepath.Join(root, ".state", "staging.duckdb.partial")
+	keep := filepath.Join(root, ".state", "staging.db.partial")
 	stale := filepath.Join(root, "crypto", "ds", "2026", "ds_20261015.csv.gz.partial")
 	good := filepath.Join(root, "crypto", "ds", "2026", "ds_20261014.csv.gz")
 	for _, p := range []string{keep, stale, good} {

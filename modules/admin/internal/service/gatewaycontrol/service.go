@@ -5,6 +5,7 @@ package gatewaycontrol
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
@@ -100,15 +101,43 @@ func validReport(req *pb.ReportStatusReq) bool {
 		req.GetVersion() == strings.TrimSpace(req.GetVersion()) && !strings.ContainsFunc(req.GetVersion(), unicode.IsControl) &&
 		(req.GetAppliedHash() == "" || validHash(req.GetAppliedHash())) &&
 		req.GetRouteCount() >= 0 && req.GetRouteCount() <= 10000 &&
-		len(req.GetError()) <= 4096 && utf8.ValidString(req.GetError())
+		len(req.GetError()) <= 4096 && utf8.ValidString(req.GetError()) && validRelaySessions(req.GetRelaySessions())
+}
+
+func validRelaySessions(sessions []*pb.RelaySessionStatus) bool {
+	if len(sessions) > 1024 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, item := range sessions {
+		if item == nil || !servicecatalog.ValidHostID(item.GetHostId()) || seen[item.GetHostId()] || item.GetReconnects() < 0 || item.GetStreams() < 0 ||
+			len(item.GetInstanceId()) > 128 || !utf8.ValidString(item.GetInstanceId()) {
+			return false
+		}
+		if at := item.GetConnectedAt(); at != "" {
+			if _, err := time.Parse(time.RFC3339Nano, at); err != nil {
+				return false
+			}
+		}
+		seen[item.GetHostId()] = true
+	}
+	return true
 }
 
 func (s *Service) ReportStatus(ctx context.Context, req *pb.ReportStatusReq) (*pb.ReportStatusRsp, error) {
 	if !sameHost(ctx, req.GetHostId()) {
 		return nil, errors.New("gateway control caller must match request host")
 	}
-	if !validReport(req) {
+	if !validReport(req) || len(req.GetRelaySessions()) != 0 && req.GetHostId() != s.controlHostID {
 		return &pb.ReportStatusRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: "无效的网关心跳"}}, nil
+	}
+	relaySessions := ""
+	if sessions := req.GetRelaySessions(); len(sessions) != 0 {
+		raw, err := json.Marshal(sessions)
+		if err != nil {
+			return &pb.ReportStatusRsp{RetInfo: result(err)}, nil
+		}
+		relaySessions = string(raw)
 	}
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Serialize read/modify/write with all live/offline topology and key
@@ -133,6 +162,7 @@ func (s *Service) ReportStatus(ctx context.Context, req *pb.ReportStatusReq) (*p
 		updateInstance(&status, req.GetInstanceId(), now)
 		status.Version, status.ExpectedHash, status.AppliedHash = req.GetVersion(), snapshot.Hash, req.GetAppliedHash()
 		status.RouteCount, status.LastError, status.LastSeenAt = int64(req.GetRouteCount()), req.GetError(), &now
+		status.RelaySessions = relaySessions
 		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_host_id"}}, UpdateAll: true}).Create(&status).Error
 	})
 	return &pb.ReportStatusRsp{RetInfo: result(err)}, nil

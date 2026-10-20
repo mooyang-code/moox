@@ -33,6 +33,8 @@ type Result struct {
 	Operation  string   `json:"operation"`
 	Skipped    bool     `json:"skipped,omitempty"`
 	Components []Status `json:"components"`
+	// BootRecovered 列出本次因主机重启而清理掉的上次开机残留（只在开机后第一次操作时出现）。
+	BootRecovered []BootRecovery `json:"boot_recovered,omitempty"`
 }
 
 type Status struct {
@@ -43,27 +45,33 @@ type Status struct {
 	Forced         bool   `json:"forced,omitempty"`
 	Binary         string `json:"binary_sha256,omitempty"`
 	ReadinessError string `json:"readiness_error,omitempty"`
+	// Action 是 healthcheck 实际做了什么："started"（组件原本没在运行，已拉起）或 "restarted"（存活检查失败，已停止并重新拉起）；
+	// 什么也没做时为空。watch 据此给出结果分类与告警原因。
+	Action string `json:"action,omitempty"`
 }
 
 type pidRecord struct {
 	processIdentity
-	HostID         string           `json:"host_id"`
-	ComponentID    string           `json:"component_id"`
-	ReleaseRoot    string           `json:"release_root"`
-	StopTimeout    time.Duration    `json:"stop_timeout_ns"`
-	BinarySHA256   string           `json:"binary_sha256"`
-	BootID         string           `json:"boot_id"`
+	HostID       string        `json:"host_id"`
+	ComponentID  string        `json:"component_id"`
+	ReleaseRoot  string        `json:"release_root"`
+	StopTimeout  time.Duration `json:"stop_timeout_ns"`
+	BinarySHA256 string        `json:"binary_sha256"`
+	BootID       string        `json:"boot_id"`
+	// KernelBootID 是启动时的内核 boot ID：与当前不同说明记录属于上一次开机。
+	KernelBootID   string           `json:"kernel_boot_id"`
 	StartedAt      time.Time        `json:"started_at"`
 	StartupTimeout time.Duration    `json:"startup_timeout_ns"`
 	Launcher       *processIdentity `json:"launcher,omitempty"`
 }
 
 type drainRecord struct {
-	PID        int           `json:"pid"`
-	StartTicks string        `json:"start_ticks"`
-	StartedAt  time.Time     `json:"started_at"`
-	Budget     time.Duration `json:"budget_ns"`
-	TermSent   bool          `json:"term_sent"`
+	PID          int           `json:"pid"`
+	StartTicks   string        `json:"start_ticks"`
+	KernelBootID string        `json:"kernel_boot_id"`
+	StartedAt    time.Time     `json:"started_at"`
+	Budget       time.Duration `json:"budget_ns"`
+	TermSent     bool          `json:"term_sent"`
 }
 
 type runtimeState struct {
@@ -108,6 +116,10 @@ func Execute(ctx context.Context, planPath, operation string, ids []string, opts
 	}
 	defer lock.Close()
 	if err := state.ensureHostIdentity(); err != nil {
+		return result, err
+	}
+	// 主机重启后先清掉上次开机留下的进程记录与停止中标记，否则 PID 被复用时身份核对失败、守护永远不拉起。
+	if result.BootRecovered, err = state.reconcileBoot(); err != nil {
 		return result, err
 	}
 	if pending, err := state.pendingInstallation(); err != nil {
@@ -255,7 +267,7 @@ func (s *runtimeState) record(component Component) (pidRecord, bool, error) {
 	catalog, ok := s.catalog.Component(component.ID)
 	if !ok || record.HostID != s.plan.HostID || record.ComponentID != component.ID || record.PID <= 1 ||
 		record.UID != uint32(os.Getuid()) || record.StartTicks == "" || record.ReleaseRoot == "" || !filepath.IsAbs(record.ReleaseRoot) || filepath.Clean(record.ReleaseRoot) != record.ReleaseRoot ||
-		record.Executable != filepath.Join(record.ReleaseRoot, "bin", catalog.Binary) || record.StopTimeout <= 0 || record.StopTimeout > maxStopTimeout || !validDigest(record.BinarySHA256) || !validDigest(record.BootID) || record.StartedAt.IsZero() || record.StartedAt.After(time.Now().Add(time.Second)) || record.StartupTimeout <= 0 || record.StartupTimeout > 10*time.Minute {
+		record.Executable != filepath.Join(record.ReleaseRoot, "bin", catalog.Binary) || record.StopTimeout <= 0 || record.StopTimeout > maxStopTimeout || !validDigest(record.BinarySHA256) || !validDigest(record.BootID) || record.KernelBootID == "" || record.StartedAt.IsZero() || record.StartedAt.After(time.Now().Add(time.Second)) || record.StartupTimeout <= 0 || record.StartupTimeout > 10*time.Minute {
 		return record, false, errIdentity
 	}
 	if launch := record.Launcher; launch != nil && (launch.PID != record.PID || launch.StartTicks != record.StartTicks || launch.UID != record.UID || !filepath.IsAbs(launch.Executable) || filepath.Clean(launch.Executable) != launch.Executable || launch.Inode == 0) {
@@ -464,7 +476,11 @@ func (s *runtimeState) start(ctx context.Context, component Component) (Status, 
 		_ = command.Process.Kill()
 		return status, err
 	}
-	record := pidRecord{processIdentity: expected, HostID: s.plan.HostID, ComponentID: component.ID, ReleaseRoot: s.plan.ReleaseRoot, StopTimeout: stop, BinarySHA256: values["MOOX_BINARY_SHA256"], BootID: bootID, StartedAt: time.Now().UTC(), StartupTimeout: startup, Launcher: &identity}
+	kernelBoot, err := kernelBootID()
+	if err != nil {
+		return status, err
+	}
+	record := pidRecord{processIdentity: expected, HostID: s.plan.HostID, ComponentID: component.ID, ReleaseRoot: s.plan.ReleaseRoot, StopTimeout: stop, BinarySHA256: values["MOOX_BINARY_SHA256"], BootID: bootID, KernelBootID: kernelBoot, StartedAt: time.Now().UTC(), StartupTimeout: startup, Launcher: &identity}
 	if err := writeState(s.pids, component.ID+".json", record); err != nil {
 		_ = command.Process.Kill()
 		return status, err
@@ -555,7 +571,7 @@ func (s *runtimeState) stop(ctx context.Context, component Component) (Status, e
 	}
 	defer file.Close()
 	status.State, status.PID, status.Binary = "draining", record.PID, record.BinarySHA256
-	drain := drainRecord{PID: record.PID, StartTicks: record.StartTicks, StartedAt: time.Now().UTC(), Budget: record.StopTimeout}
+	drain := drainRecord{PID: record.PID, StartTicks: record.StartTicks, KernelBootID: record.KernelBootID, StartedAt: time.Now().UTC(), Budget: record.StopTimeout}
 	var previous drainRecord
 	if err := privateJSON(filepath.Join(s.draining.Name(), component.ID), &previous); err == nil {
 		if previous.PID == record.PID && previous.StartTicks == record.StartTicks && previous.TermSent {
@@ -619,7 +635,9 @@ func (s *runtimeState) healthcheck(ctx context.Context, component Component) (St
 		return status, err
 	}
 	if status.State == "stopped" {
-		return s.start(ctx, component)
+		status, err := s.start(ctx, component)
+		status.Action = "started"
+		return status, err
 	}
 	values, err := loadEnvironment(component)
 	if err != nil {
@@ -630,7 +648,10 @@ func (s *runtimeState) healthcheck(ctx context.Context, component Component) (St
 		return status, err
 	}
 	if record.Launcher != nil {
-		return s.start(ctx, component)
+		// 上一次拉起在就绪之前中断：接着等它就绪，仍算一次拉起。
+		status, err := s.start(ctx, component)
+		status.Action = "started"
+		return status, err
 	}
 	live, err := s.probe(ctx, component, record, values, false)
 	if ctx.Err() != nil {
@@ -646,7 +667,9 @@ func (s *runtimeState) healthcheck(ctx context.Context, component Component) (St
 	if _, err := s.stop(ctx, component); err != nil {
 		return status, err
 	}
-	return s.start(ctx, component)
+	status, err = s.start(ctx, component)
+	status.Action = "restarted"
+	return status, err
 }
 
 func waitProcess(ctx context.Context, file *os.File, deadline time.Time) (bool, error) {

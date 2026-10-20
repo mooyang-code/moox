@@ -10,8 +10,8 @@ func TestMetricSnapshotDescriptorContract(t *testing.T) {
 	d := (&MetricSnapshot{}).ProtoReflect().Descriptor()
 	want := map[string]protoreflect.FieldNumber{
 		"schema_version": 1, "collection_interval_seconds": 2, "format": 3,
-		"compression": 4, "data": 5, "metric_family_count": 6,
-		"sample_count": 7, "uncompressed_sha256": 8,
+		"data": 4, "metric_family_count": 5,
+		"sample_count": 6, "data_sha256": 7,
 	}
 	if d.Fields().Len() != len(want) {
 		t.Fatalf("field count = %d, want %d", d.Fields().Len(), len(want))
@@ -38,10 +38,6 @@ func TestMetricSnapshotDescriptorContract(t *testing.T) {
 			name   string
 			number protoreflect.EnumNumber
 		}{{"EXPOSITION_FORMAT_UNSPECIFIED", 0}, {"EXPOSITION_FORMAT_PROMETHEUS_TEXT", 1}}},
-		{d.Fields().ByName("compression").Enum(), []struct {
-			name   string
-			number protoreflect.EnumNumber
-		}{{"COMPRESSION_UNSPECIFIED", 0}, {"COMPRESSION_NONE", 1}, {"COMPRESSION_GZIP", 2}}},
 	} {
 		for _, value := range item.values {
 			got := item.enum.Values().ByName(protoreflect.Name(value.name))

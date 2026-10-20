@@ -44,7 +44,7 @@ func NewRealtimeInventory(source taskSource, registry datasetRegistry) *Realtime
 }
 
 // SetResampleEnabled keeps the published expectation aligned with the runtime
-// feature gate. Existing callers default to enabled for backwards compatibility.
+// feature gate, which defaults to enabled.
 func (i *RealtimeInventory) SetResampleEnabled(enabled bool) {
 	if i == nil {
 		return

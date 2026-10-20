@@ -1,87 +1,21 @@
 package command
 
 import (
-	"archive/zip"
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"debug/elf"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
-	"math/big"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
-	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
-	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
-
-func setCollectorCLSTestCredentials(t *testing.T) {
-	t.Helper()
-	if os.Getenv("MOOX_CLS_SECRET_ID") == "" {
-		t.Setenv("MOOX_CLS_SECRET_ID", "test-cls-id")
-	}
-	if os.Getenv("MOOX_CLS_SECRET_KEY") == "" {
-		t.Setenv("MOOX_CLS_SECRET_KEY", "test-cls-key")
-	}
-}
-
-func setCollectorFleetRuntimeTestEnvironment(t *testing.T) string {
-	t.Helper()
-	setCollectorCLSTestCredentials(t)
-	t.Setenv("MOOX_CLS_ENDPOINT", "ap-guangzhou.cls.tencentyun.com")
-	t.Setenv("MOOX_CLS_TOPIC_ID", "topic-test")
-	t.Setenv("MOOX_ACCESS_ADDRESS", "storage.example:11004")
-	t.Setenv("MOOX_ACCESS_ID", "access@storage")
-	t.Setenv("MOOX_CALLER_KEY_ID", "assigned-scf-key-17")
-	t.Setenv("MOOX_CALLER_KEY", strings.Repeat("a", 64))
-
-	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	t.Cleanup(server.Close)
-	gatewayCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
-	dir := t.TempDir()
-	gatewayCAFile := filepath.Join(dir, "gateway-ca.pem")
-	require.NoError(t, os.WriteFile(gatewayCAFile, gatewayCA, 0o600))
-	t.Setenv("MOOX_GATEWAY_CA_FILE", gatewayCAFile)
-	t.Setenv("MOOX_SERVICE_GATEWAY_CA_FILE", gatewayCAFile)
-
-	eventBusCAFile := filepath.Join(dir, "eventbus-ca.pem")
-	require.NoError(t, os.WriteFile(eventBusCAFile, mustTestEventBusCAPEM(t), 0o600))
-	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "test-primary-secret")
-	credentialFile := filepath.Join(dir, "eventbus.yaml")
-	require.NoError(t, os.WriteFile(credentialFile, []byte(
-		"version: 1\nurls: [tls://203.0.113.10:4222]\nusername: worker\npassword: worker-secret\nca_file: eventbus-ca.pem\n",
-	), 0o600))
-	return credentialFile
-}
-
-const collectorTestStorageAppKeysJSON = `{"moox-collector":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
-
-func mustTestEventBusCAPEM(t *testing.T) []byte {
-	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 1024)
-	require.NoError(t, err)
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
-	require.NoError(t, err)
-	template := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: "moox-test-eventbus-ca"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	require.NoError(t, err)
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-}
 
 func TestCollectorStoragePrimaryAuthSecretUsesNormalizedControlFile(t *testing.T) {
 	secret, err := collectorStoragePrimaryAuthSecret([]byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-secret\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"))
@@ -197,62 +131,6 @@ func TestDefaultStockCNCollectorTasksRequireExplicitActivation(t *testing.T) {
 		assert.False(t, task.Enabled)
 	}
 	assert.True(t, found, "default stockcn 1m task should exist and remain disabled until explicit activation")
-}
-
-type collectorCLSAPI struct{}
-
-func (collectorCLSAPI) GetService(context.Context) (bool, error)    { return true, nil }
-func (collectorCLSAPI) OpenService(context.Context) (string, error) { return "", nil }
-func (collectorCLSAPI) FindLogset(context.Context, string) (tencent.CLSLogset, bool, error) {
-	return tencent.CLSLogset{ID: "logset-from-api", Name: "moox"}, true, nil
-}
-func (collectorCLSAPI) CreateLogset(context.Context, string) (tencent.CLSLogset, string, error) {
-	panic("unexpected CreateLogset")
-}
-func (collectorCLSAPI) FindTopic(context.Context, string, string) (tencent.CLSTopic, bool, error) {
-	return tencent.CLSTopic{ID: "topic-from-api", LogsetID: "logset-from-api", Name: "moox-application", IndexEnabled: true}, true, nil
-}
-func (collectorCLSAPI) CreateTopic(context.Context, tencent.CLSCreateTopicOptions) (tencent.CLSTopic, string, error) {
-	panic("unexpected CreateTopic")
-}
-func (collectorCLSAPI) EnsureIndexFields(context.Context, string, []tencent.CLSIndexField) (bool, string, error) {
-	return false, "", nil
-}
-
-func (collectorCLSAPI) CreateIndex(context.Context, string) (string, error) {
-	panic("unexpected CreateIndex")
-}
-
-type fakeCollectorFleetAPI struct {
-	nodes       []adminclient.CloudNode
-	createCalls [][]adminclient.NodeCreateItem
-	deployCalls [][]adminclient.NodeDeployItem
-	createErr   error
-}
-
-func (f *fakeCollectorFleetAPI) ListCloudNodes(context.Context, adminclient.CloudNodeListFilter) ([]adminclient.CloudNode, error) {
-	return append([]adminclient.CloudNode(nil), f.nodes...), nil
-}
-
-func (f *fakeCollectorFleetAPI) SubmitCreateNodes(_ context.Context, items []adminclient.NodeCreateItem) (*adminclient.SubmitNodeBatchResponse, error) {
-	f.createCalls = append(f.createCalls, append([]adminclient.NodeCreateItem(nil), items...))
-	if f.createErr != nil {
-		return nil, f.createErr
-	}
-	return &adminclient.SubmitNodeBatchResponse{
-		JobID:      fmt.Sprintf("create-%d", len(f.createCalls)),
-		Operation:  "NODE_BATCH_OPERATION_CREATE_NODES",
-		TotalCount: len(items),
-	}, nil
-}
-
-func (f *fakeCollectorFleetAPI) SubmitDeployNodes(_ context.Context, items []adminclient.NodeDeployItem) (*adminclient.SubmitNodeBatchResponse, error) {
-	f.deployCalls = append(f.deployCalls, append([]adminclient.NodeDeployItem(nil), items...))
-	return &adminclient.SubmitNodeBatchResponse{
-		JobID:      fmt.Sprintf("deploy-%d", len(f.deployCalls)),
-		Operation:  "NODE_BATCH_OPERATION_DEPLOY_NODES",
-		TotalCount: len(items),
-	}, nil
 }
 
 func TestDeleteCollectorFunctionsFiltersNamespace(t *testing.T) {
@@ -467,72 +345,6 @@ func TestCollectorPublishUnknownSubmissionErrorsAreAmbiguous(t *testing.T) {
 			assert.Equal(t, test.want, isAmbiguousCollectorPublishOutcome(test.err))
 		})
 	}
-}
-
-type stockCNHandoffTestState struct {
-	acquireCount                          int
-	listCount                             int
-	releasedLeaseID                       string
-	firstLeaseReleasedBeforeSecondAcquire bool
-}
-
-func newStockCNHandoffTestServer(t *testing.T, assignmentHashes ...string) (*httptest.Server, *stockCNHandoffTestState) {
-	t.Helper()
-	state := &stockCNHandoffTestState{}
-	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/api/admin/publishlease/AcquireCollectorPublishLease":
-			state.acquireCount++
-			if state.acquireCount == 2 {
-				state.firstLeaseReleasedBeforeSecondAcquire = state.releasedLeaseID == "lease-1"
-			}
-			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"space_id":"stockcn","lease_id":"lease-%d","fencing_token":"%d","expires_at":"2026-10-03T20:02:00Z"}`, state.acquireCount, state.acquireCount)
-		case "/api/admin/publishlease/ReleaseCollectorPublishLease":
-			var request struct {
-				LeaseID string `json:"lease_id"`
-			}
-			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
-			state.releasedLeaseID = request.LeaseID
-			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"released":true}`))
-		case "/api/admin/cloudnode/GetNodeList":
-			state.listCount++
-			index := min(state.listCount-1, len(assignmentHashes)-1)
-			assignmentHash := assignmentHashes[index]
-			packageID := "package-7"
-			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"items":[{"node_id":"timer-1","package_id":%q,"region":"ap-guangzhou","namespace":"default","node_type":"scf-event","biz_type":"market_fetcher","trigger_type":"timer","function_name":"stock-ap-guangzhou-0","metadata":{"index":0,"assignment_hash":%q,"binding_hash":"binding-a","assignment_count":12,"runtime_config_reconciled_at":"2026-10-03T00:00:00Z"}}],"page":{"has_more":false}}`, packageID, assignmentHash)
-		default:
-			t.Errorf("unexpected request %s", r.URL.Path)
-			http.Error(w, "unexpected request", http.StatusInternalServerError)
-		}
-	}))
-	return server, state
-}
-
-func writeMinimalSCFZip(t *testing.T, zipPath string, files map[string]string) {
-	t.Helper()
-	out, err := os.Create(zipPath)
-	require.NoError(t, err)
-	zw := zip.NewWriter(out)
-	if len(files) == 0 {
-		files = map[string]string{"main": "binary"}
-	}
-	for name, content := range files {
-		header := &zip.FileHeader{Name: name, Method: zip.Deflate}
-		header.SetMode(0o644)
-		if name == "main" {
-			header.SetMode(0o755)
-			if content == "binary" {
-				content = string(testfixture.LinuxExecutable(elf.EM_X86_64))
-			}
-		}
-		writer, err := zw.CreateHeader(header)
-		require.NoError(t, err)
-		_, err = writer.Write([]byte(content))
-		require.NoError(t, err)
-	}
-	require.NoError(t, zw.Close())
-	require.NoError(t, out.Close())
 }
 
 func TestResolveCollectorRootMissing(t *testing.T) {

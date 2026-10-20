@@ -331,7 +331,7 @@ func queryErrorCode(err error) pb.ErrorCode {
 func queryCoverageComplete(rng *pb.TimeRange, stats viewindex.ViewIndexStats) bool {
 	// Persisted bounds are maintained transactionally with writes. They are a
 	// stronger signal than the optional full-scan row count, which may be zero
-	// on a cold start of a legacy index until its first low-frequency scan.
+	// on a cold start until the index's first low-frequency scan.
 	if !stats.Exists || stats.IndexedFrom == "" || stats.IndexedTo == "" {
 		return false
 	}

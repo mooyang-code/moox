@@ -3,8 +3,8 @@
 `moox-cli setup bootstrap --stage core --file ./moox.toml --source-dir /path/to/worktree`
 由本机 CLI 读取一次私有配置，核验 SSH 主机指纹，按目标 Linux 架构准备 host/control
 软件包，再传输规范请求并调用目标 `moox-runtime`。缺少预构建目录时，前端和这两个
-包内的纯 Go 组件均在本机构建，强制 `CGO_ENABLED=0`；该构建器没有远端编译能力。
-只有 Storage CGO 构建使用 `setup build-linux` 和 `compile_host`。
+包内的纯 Go 组件均在本机构建，强制 `CGO_ENABLED=0`。
+含 CGO 的 Storage 二进制用 `setup build-linux`（或 `scripts/build/build-linux-local.sh`）在本机 Docker 里构建，见 `docs/构建手册.md`。
 
 核心请求从同一可信快照携带初始管理员，离线建表和身份签发后通过 stdin 调用
 `moox-admin-cli user ensure`，密码不进入 argv、环境或公开收据。已有用户名只保留原密码，

@@ -2,12 +2,10 @@ package metrics
 
 import (
 	"bytes"
-	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"sort"
 	"time"
@@ -23,7 +21,6 @@ const (
 	// Keep metric snapshots bounded while retaining enough headroom for the
 	// A-share universe. Kline freshness is scoped later to enabled View output.
 	DefaultMaxUncompressedBytes int64 = 16 << 20
-	DefaultMaxCompressedBytes   int64 = 4 << 20
 	DefaultMaxMetricFamilies          = 2000
 	DefaultMaxSamples                 = 100000
 	DefaultMaxLabelsPerSample         = 20
@@ -33,7 +30,6 @@ const (
 
 type Limits struct {
 	MaxUncompressedBytes int64
-	MaxCompressedBytes   int64
 	MaxMetricFamilies    int
 	MaxSamples           int
 	MaxLabelsPerSample   int
@@ -42,16 +38,13 @@ type Limits struct {
 }
 
 func DefaultLimits() Limits {
-	return Limits{DefaultMaxUncompressedBytes, DefaultMaxCompressedBytes, DefaultMaxMetricFamilies, DefaultMaxSamples, DefaultMaxLabelsPerSample, DefaultMaxLabelNameBytes, DefaultMaxLabelValueBytes}
+	return Limits{DefaultMaxUncompressedBytes, DefaultMaxMetricFamilies, DefaultMaxSamples, DefaultMaxLabelsPerSample, DefaultMaxLabelNameBytes, DefaultMaxLabelValueBytes}
 }
 
 func (l Limits) normalized() Limits {
 	d := DefaultLimits()
 	if l.MaxUncompressedBytes <= 0 {
 		l.MaxUncompressedBytes = d.MaxUncompressedBytes
-	}
-	if l.MaxCompressedBytes <= 0 {
-		l.MaxCompressedBytes = d.MaxCompressedBytes
 	}
 	if l.MaxMetricFamilies <= 0 {
 		l.MaxMetricFamilies = d.MaxMetricFamilies
@@ -96,7 +89,7 @@ type Sample struct {
 	ProducerVersion string
 }
 
-// DecodeSnapshot verifies and decompresses a bounded snapshot payload.
+// DecodeSnapshot verifies a bounded snapshot payload.
 func DecodeSnapshot(snapshot *metricspb.MetricSnapshot, limits Limits) ([]byte, error) {
 	if snapshot == nil {
 		return nil, errors.New("metric snapshot is nil")
@@ -105,36 +98,14 @@ func DecodeSnapshot(snapshot *metricspb.MetricSnapshot, limits Limits) ([]byte, 
 		return nil, fmt.Errorf("unsupported metric snapshot schema_version %d", snapshot.GetSchemaVersion())
 	}
 	limits = limits.normalized()
-	var raw []byte
-	switch snapshot.GetCompression() {
-	case metricspb.Compression_COMPRESSION_NONE:
-		if int64(len(snapshot.GetData())) > limits.MaxUncompressedBytes {
-			return nil, fmt.Errorf("snapshot exceeds %d bytes", limits.MaxUncompressedBytes)
-		}
-		raw = append([]byte(nil), snapshot.GetData()...)
-	case metricspb.Compression_COMPRESSION_GZIP:
-		if int64(len(snapshot.GetData())) > limits.MaxCompressedBytes {
-			return nil, fmt.Errorf("compressed snapshot exceeds %d bytes", limits.MaxCompressedBytes)
-		}
-		zr, err := gzip.NewReader(bytes.NewReader(snapshot.GetData()))
-		if err != nil {
-			return nil, fmt.Errorf("open gzip snapshot: %w", err)
-		}
-		lr := io.LimitReader(zr, limits.MaxUncompressedBytes+1)
-		raw, err = io.ReadAll(lr)
-		_ = zr.Close()
-		if err != nil {
-			return nil, fmt.Errorf("read gzip snapshot: %w", err)
-		}
-		if int64(len(raw)) > limits.MaxUncompressedBytes {
-			return nil, fmt.Errorf("decompressed snapshot exceeds %d bytes", limits.MaxUncompressedBytes)
-		}
-	default:
-		return nil, fmt.Errorf("unsupported snapshot compression %s", snapshot.GetCompression().String())
+	// 传输压缩由事件信封层完成，快照里的 Data 恒为 Prometheus 文本原文。
+	if int64(len(snapshot.GetData())) > limits.MaxUncompressedBytes {
+		return nil, fmt.Errorf("snapshot exceeds %d bytes", limits.MaxUncompressedBytes)
 	}
-	if len(snapshot.GetUncompressedSha256()) > 0 {
+	raw := append([]byte(nil), snapshot.GetData()...)
+	if len(snapshot.GetDataSha256()) > 0 {
 		sum := sha256.Sum256(raw)
-		if !bytes.Equal(sum[:], snapshot.GetUncompressedSha256()) {
+		if !bytes.Equal(sum[:], snapshot.GetDataSha256()) {
 			return nil, fmt.Errorf("snapshot checksum mismatch: got %s", hex.EncodeToString(sum[:]))
 		}
 	}

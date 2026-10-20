@@ -55,14 +55,6 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	path := flags.String("config", "config/console-proxy.yaml", "component configuration")
-	var importExisting bool
-	var forImport bool
-	if args[0] == "initialize-state" {
-		flags.BoolVar(&importExisting, "import-existing", false, "import stopped CA state with its trusted published fingerprint")
-	}
-	if args[0] == "check-state" {
-		flags.BoolVar(&forImport, "for-import", false, "validate original published CA trust proof before offline import")
-	}
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -75,17 +67,13 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 	}
 	switch args[0] {
 	case "initialize-state":
-		fingerprint, err := engine.InitializeState(ctx, cfg, importExisting)
+		fingerprint, err := engine.InitializeState(ctx, cfg)
 		if err != nil {
 			return err
 		}
 		return json.NewEncoder(out).Encode(map[string]string{"ca_sha256": fingerprint})
 	case "check-state":
-		check := engine.CheckState
-		if forImport {
-			check = engine.CheckImportState
-		}
-		fingerprint, err := check(cfg)
+		fingerprint, err := engine.CheckState(cfg)
 		if err != nil {
 			return err
 		}

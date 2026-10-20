@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"context"
 	"database/sql"
-	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
@@ -47,22 +46,14 @@ const partitionColumns = `partition_key, range_start, range_end, status, last_ch
 
 func scanPartition(row interface{ Scan(...any) error }) (PartitionState, error) {
 	var p PartitionState
-	var exported, minTime, maxTime, finalized sql.NullTime
-	var rows, subjects int64
-	if err := row.Scan(&p.Key, &p.Start, &p.End, &p.Status, &p.LastChangedAt, &exported, &p.SHA256, &p.ExportCount, &rows, &subjects, &minTime, &maxTime, &finalized, &p.ReportPending); err != nil {
+	var start, end, changed, rows, subjects, pending int64
+	var exported, minTime, maxTime, finalized sql.NullInt64
+	if err := row.Scan(&p.Key, &start, &end, &p.Status, &changed, &exported, &p.SHA256, &p.ExportCount, &rows, &subjects, &minTime, &maxTime, &finalized, &pending); err != nil {
 		return PartitionState{}, err
 	}
-	p.RowCount, p.SubjectCount = uint64(rows), uint64(subjects)
-	if minTime.Valid {
-		p.MinDataTime, p.MaxDataTime = minTime.Time.UTC(), maxTime.Time.UTC()
-	}
-	if finalized.Valid {
-		p.FinalizedAt = finalized.Time.UTC()
-	}
-	p.Start, p.End, p.LastChangedAt = p.Start.UTC(), p.End.UTC(), p.LastChangedAt.UTC()
-	if exported.Valid {
-		p.ExportedAt = exported.Time.UTC()
-	}
+	p.Start, p.End, p.LastChangedAt = fromNanos(start), fromNanos(end), fromNanos(changed)
+	p.ExportedAt, p.MinDataTime, p.MaxDataTime, p.FinalizedAt = scanNanos(exported), scanNanos(minTime), scanNanos(maxTime), scanNanos(finalized)
+	p.RowCount, p.SubjectCount, p.ReportPending = uint64(rows), uint64(subjects), pending != 0
 	return p, nil
 }
 
@@ -97,15 +88,8 @@ func (s *Store) Partition(ctx context.Context, spaceID, datasetID, key string) (
 func (s *Store) RegisterPartition(ctx context.Context, spaceID, datasetID string, p PartitionState) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO partition_state (space_id, dataset_id, partition_key, range_start, range_end, status, last_changed_at, exported_at, file_sha256)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (space_id, dataset_id, partition_key) DO NOTHING`,
-		spaceID, datasetID, p.Key, p.Start.UTC(), p.End.UTC(), p.Status, p.LastChangedAt.UTC(), nullTime(p.ExportedAt), p.SHA256)
+		spaceID, datasetID, p.Key, nanos(p.Start), nanos(p.End), p.Status, nanos(p.LastChangedAt), nullNanos(p.ExportedAt), p.SHA256)
 	return err
-}
-
-func nullTime(t time.Time) any {
-	if t.IsZero() {
-		return nil
-	}
-	return t.UTC()
 }
 
 // PartitionStats 是暂存区里一个分区的行数、标的数和数据时间范围。
@@ -120,65 +104,105 @@ type PartitionStats struct {
 func (s *Store) Stats(ctx context.Context, task Task, p PartitionState) (PartitionStats, error) {
 	var out PartitionStats
 	var rows, subjects int64
-	var min, max sql.NullTime
+	var min, max sql.NullInt64
 	err := s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT count(*), count(DISTINCT subject_id), min(data_time), max(data_time) FROM %s WHERE data_time >= ? AND data_time < ?`, quote(task.Table())),
-		p.Start.UTC(), p.End.UTC()).Scan(&rows, &subjects, &min, &max)
+		nanos(p.Start), nanos(p.End)).Scan(&rows, &subjects, &min, &max)
 	if err != nil {
 		return out, err
 	}
-	out.Rows, out.Subjects = uint64(rows), uint64(subjects)
-	if min.Valid {
-		out.Min, out.Max = min.Time.UTC(), max.Time.UTC()
-	}
+	out.Rows, out.Subjects, out.Min, out.Max = uint64(rows), uint64(subjects), scanNanos(min), scanNanos(max)
 	return out, nil
 }
 
 // Export 把分区的暂存行按 subject_id, data_time, series_tag 排序后导出成 gzip CSV 到 dest（调用方负责 .partial/rename）。
-// 表头为 data_time,subject_id,series_tag,<值列…>；data_time 为 UTC RFC3339。
+// 格式见 csvio.go：表头为 data_time,subject_id,series_tag,<值列…>。
 func (s *Store) Export(ctx context.Context, task Task, p PartitionState, dest string) error {
 	return s.ExportCSV(ctx, task, p, dest, true)
 }
 
-// ExportCSV 同 Export，compress 为 false 时写未压缩的 CSV。
-func (s *Store) ExportCSV(ctx context.Context, task Task, p PartitionState, dest string, compress bool) error {
+// ExportCSV 同 Export，compress 为 false 时写未压缩的 CSV。流式写出，不在内存里攒整个分区。
+func (s *Store) ExportCSV(ctx context.Context, task Task, p PartitionState, dest string, compress bool) (err error) {
 	if err := task.Validate(); err != nil {
 		return err
 	}
-	var cols []string
-	for _, c := range task.Columns {
-		cols = append(cols, quote(c.Name))
+	file, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
 	}
-	compression := ""
+	defer func() {
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			err = fmt.Errorf("export partition %s: %w", p.Key, err)
+		}
+	}()
+	var out io.Writer = file
+	var zw *gzip.Writer
 	if compress {
-		compression = ", COMPRESSION gzip"
+		zw = gzip.NewWriter(file)
+		out = zw
 	}
-	query := fmt.Sprintf(`COPY (SELECT strftime(t.data_time, '%%Y-%%m-%%dT%%H:%%M:%%SZ') AS data_time, t.subject_id, t.series_tag%s FROM %s t WHERE t.data_time >= %s AND t.data_time < %s ORDER BY t.subject_id, t.data_time, t.series_tag) TO %s (FORMAT csv, HEADER%s)`,
-		prefixed(cols), quote(task.Table()), timestampLiteral(p.Start), timestampLiteral(p.End), literal(dest), compression)
-	if _, err := s.db.ExecContext(ctx, query); err != nil {
-		return fmt.Errorf("export partition %s: %w", p.Key, err)
+	w := bufio.NewWriterSize(out, 256<<10)
+	header := []csvField{{value: "data_time"}, {value: "subject_id"}, {value: "series_tag"}}
+	cols := make([]string, len(task.Columns))
+	for i, c := range task.Columns {
+		header = append(header, csvField{value: c.Name})
+		cols[i] = "t." + quote(c.Name)
 	}
-	return nil
-}
-
-func prefixed(cols []string) string {
-	if len(cols) == 0 {
-		return ""
+	if err := writeCSVRecord(w, header); err != nil {
+		return err
 	}
-	out := make([]string, len(cols))
-	for i, c := range cols {
-		out[i] = "t." + c
+	selectCols := ""
+	if len(cols) > 0 {
+		selectCols = ", " + strings.Join(cols, ", ")
 	}
-	return ", " + strings.Join(out, ", ")
-}
-
-func timestampLiteral(t time.Time) string {
-	return "TIMESTAMP " + literal(t.UTC().Format("2006-01-02 15:04:05.000000"))
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT t.data_time, t.subject_id, t.series_tag%s FROM %s t WHERE t.data_time >= ? AND t.data_time < ? ORDER BY t.subject_id, t.data_time, t.series_tag`,
+		selectCols, quote(task.Table())), nanos(p.Start), nanos(p.End))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var at int64
+	var subject, tag string
+	values := make([]any, len(task.Columns))
+	targets := append([]any{&at, &subject, &tag}, make([]any, len(task.Columns))...)
+	for i := range values {
+		targets[3+i] = &values[i]
+	}
+	record := make([]csvField, 3+len(task.Columns))
+	for rows.Next() {
+		if err := rows.Scan(targets...); err != nil {
+			return err
+		}
+		record[0], record[1], record[2] = csvField{value: formatTime(fromNanos(at))}, csvField{value: subject}, csvField{value: tag}
+		for i, c := range task.Columns {
+			if record[3+i], err = formatValue(c.Type, values[i]); err != nil {
+				return err
+			}
+		}
+		if err := writeCSVRecord(w, record); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if zw != nil {
+		if err := zw.Close(); err != nil {
+			return err
+		}
+	}
+	return file.Sync()
 }
 
 // MarkExported 记录分区已导出。
 func (s *Store) MarkExported(ctx context.Context, spaceID, datasetID, key string, exportedAt time.Time, sha string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE partition_state SET status = 'exported', exported_at = ?, file_sha256 = ?, export_count = export_count + 1, report_pending = TRUE WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`,
-		exportedAt.UTC(), sha, spaceID, datasetID, key)
+	result, err := s.db.ExecContext(ctx, `UPDATE partition_state SET status = 'exported', exported_at = ?, file_sha256 = ?, export_count = export_count + 1, report_pending = 1 WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`,
+		nanos(exportedAt), sha, spaceID, datasetID, key)
 	if err != nil {
 		return err
 	}
@@ -193,21 +217,20 @@ func (s *Store) MarkExported(ctx context.Context, spaceID, datasetID, key string
 func (s *Store) Finalize(ctx context.Context, task Task, keys []string, watermark, finalizedAt time.Time, setWatermark bool) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		for _, key := range keys {
-			var start, end time.Time
+			var start, end, changed int64
 			var status string
-			var exported sql.NullTime
-			var changed time.Time
+			var exported sql.NullInt64
 			err := tx.QueryRowContext(ctx, `SELECT range_start, range_end, status, last_changed_at, exported_at FROM partition_state WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`,
 				task.SpaceID, task.DatasetID, key).Scan(&start, &end, &status, &changed, &exported)
 			if err != nil {
 				return fmt.Errorf("finalize partition %s: %w", key, err)
 			}
-			if !exported.Valid || changed.After(exported.Time) {
+			if !exported.Valid || changed > exported.Int64 {
 				return fmt.Errorf("partition %s has changes that were not exported; refusing to finalize", key)
 			}
 			// 删除暂存行之前把统计记进分区状态：定稿后登记（行数、标的数、数据时间范围）只能靠它。
 			var rows, subjects int64
-			var minTime, maxTime sql.NullTime
+			var minTime, maxTime sql.NullInt64
 			if err := tx.QueryRowContext(ctx, fmt.Sprintf(`SELECT count(*), count(DISTINCT subject_id), min(data_time), max(data_time) FROM %s WHERE data_time >= ? AND data_time < ?`, quote(task.Table())), start, end).
 				Scan(&rows, &subjects, &minTime, &maxTime); err != nil {
 				return err
@@ -215,44 +238,71 @@ func (s *Store) Finalize(ctx context.Context, task Task, keys []string, watermar
 			if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE data_time >= ? AND data_time < ?`, quote(task.Table())), start, end); err != nil {
 				return err
 			}
-			var minArg, maxArg any
-			if minTime.Valid {
-				minArg, maxArg = minTime.Time, maxTime.Time
-			}
-			if _, err := tx.ExecContext(ctx, `UPDATE partition_state SET status = 'final', row_count = ?, subject_count = ?, min_data_time = ?, max_data_time = ?, finalized_at = ?, report_pending = TRUE
-WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`, rows, subjects, minArg, maxArg, finalizedAt.UTC(), task.SpaceID, task.DatasetID, key); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE partition_state SET status = 'final', row_count = ?, subject_count = ?, min_data_time = ?, max_data_time = ?, finalized_at = ?, report_pending = 1
+WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`, rows, subjects, minTime, maxTime, nanos(finalizedAt), task.SpaceID, task.DatasetID, key); err != nil {
 				return err
 			}
 		}
 		if setWatermark {
 			// 水位一旦前进，首次运行的起点就不再需要。
 			_, err := tx.ExecContext(ctx, `INSERT INTO task_state (space_id, dataset_id, scan_watermark, first_start) VALUES (?, ?, ?, NULL)
-ON CONFLICT (space_id, dataset_id) DO UPDATE SET scan_watermark = excluded.scan_watermark, first_start = NULL`, task.SpaceID, task.DatasetID, watermark.UTC())
+ON CONFLICT (space_id, dataset_id) DO UPDATE SET scan_watermark = excluded.scan_watermark, first_start = NULL`, task.SpaceID, task.DatasetID, nanos(watermark))
 			return err
 		}
 		return nil
 	})
 }
 
-// CSVHeader 读取 CSV 的表头；文件是 gzip 压缩的（按魔数判断）则先解压。
-func CSVHeader(path string) ([]string, error) {
+// openCSV 打开归档文件；gzip 压缩的（按魔数判断）先解压。
+func openCSV(path string) (*csvReader, io.Closer, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer file.Close()
-	br := bufio.NewReader(file)
-	var r io.Reader = br
+	br := bufio.NewReaderSize(file, 256<<10)
 	if magic, _ := br.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
 		zr, err := gzip.NewReader(br)
 		if err != nil {
-			return nil, err
+			_ = file.Close()
+			return nil, nil, err
 		}
-		defer zr.Close()
-		r = zr
+		return &csvReader{r: bufio.NewReaderSize(zr, 256<<10)}, closers{zr, file}, nil
 	}
-	return csv.NewReader(r).Read()
+	return &csvReader{r: br}, file, nil
 }
+
+type closers []io.Closer
+
+func (c closers) Close() error {
+	var first error
+	for _, closer := range c {
+		if err := closer.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+// CSVHeader 读取 CSV 的表头。
+func CSVHeader(path string) ([]string, error) {
+	reader, closer, err := openCSV(path)
+	if err != nil {
+		return nil, err
+	}
+	defer closer.Close()
+	fields, err := reader.read()
+	if err != nil {
+		return nil, err
+	}
+	header := make([]string, len(fields))
+	for i, f := range fields {
+		header[i] = f.value
+	}
+	return header, nil
+}
+
+// reopenBatchRows 是读回时每条 INSERT 的行数上限。
+const reopenBatchRows = 500
 
 // ReopenFinal 把已定稿分区的原文件按列名读回暂存表并把分区标回 open：文件里没有的新列为 NULL，同键以文件里的值为准。
 // 读回的行与导出时一致，所以 last_changed_at 置为 exported_at，不会因为重新打开就触发重写。
@@ -260,32 +310,69 @@ func (s *Store) ReopenFinal(ctx context.Context, task Task, key, path string) er
 	if err := task.Validate(); err != nil {
 		return err
 	}
-	header, err := CSVHeader(path)
+	reader, closer, err := openCSV(path)
 	if err != nil {
 		return fmt.Errorf("read archive file header %s: %w", path, err)
 	}
-	known := map[string]string{"data_time": "TIMESTAMP", "subject_id": "VARCHAR", "series_tag": "VARCHAR"}
-	columnType := map[string]string{}
+	defer closer.Close()
+	headerFields, err := reader.read()
+	if err != nil {
+		return fmt.Errorf("read archive file header %s: %w", path, err)
+	}
+	columnType := map[string]string{"data_time": TypeTime, "subject_id": TypeString, "series_tag": TypeString}
 	for _, c := range task.Columns {
-		typ, _ := sqlType(c.Type)
-		known[c.Name], columnType[c.Name] = typ, typ
+		columnType[c.Name] = c.Type
 	}
-	var types, selectNames []string
-	for _, name := range header {
-		typ, ok := known[name]
+	var names, types []string
+	for _, f := range headerFields {
+		typ, ok := columnType[f.value]
 		if !ok {
-			return fmt.Errorf("archive file %s has column %q which the dataset no longer has", path, name)
+			return fmt.Errorf("archive file %s has column %q which the dataset no longer has", path, f.value)
 		}
-		types = append(types, literal(name)+": "+literal(typ))
-		selectNames = append(selectNames, quote(name))
+		names, types = append(names, quote(f.value)), append(types, typ)
 	}
+	insert := fmt.Sprintf(`INSERT OR REPLACE INTO %s (%s) VALUES `, quote(task.Table()), strings.Join(names, ", "))
+	placeholder := "(" + strings.TrimSuffix(strings.Repeat("?,", len(names)), ",") + ")"
 	return s.tx(ctx, func(tx *sql.Tx) error {
-		query := fmt.Sprintf(`INSERT OR REPLACE INTO %s (%s) SELECT %s FROM read_csv(%s, header = true, union_by_name = true, allow_quoted_nulls = false, types = {%s})`,
-			quote(task.Table()), strings.Join(selectNames, ", "), strings.Join(selectNames, ", "), literal(path), strings.Join(types, ", "))
-		if _, err := tx.ExecContext(ctx, query); err != nil {
+		var placeholders []string
+		var args []any
+		flush := func() error {
+			if len(placeholders) == 0 {
+				return nil
+			}
+			_, err := tx.ExecContext(ctx, insert+strings.Join(placeholders, ","), args...)
+			placeholders, args = placeholders[:0], args[:0]
+			return err
+		}
+		for {
+			record, err := reader.read()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("read back archive file %s: %w", path, err)
+			}
+			if len(record) != len(names) {
+				return fmt.Errorf("read back archive file %s: line %d has %d fields, want %d", path, reader.line, len(record), len(names))
+			}
+			for i, f := range record {
+				value, err := parseValue(types[i], f)
+				if err != nil {
+					return fmt.Errorf("read back archive file %s: line %d column %s: %w", path, reader.line, names[i], err)
+				}
+				args = append(args, value)
+			}
+			placeholders = append(placeholders, placeholder)
+			if len(placeholders) >= reopenBatchRows {
+				if err := flush(); err != nil {
+					return fmt.Errorf("read back archive file %s: %w", path, err)
+				}
+			}
+		}
+		if err := flush(); err != nil {
 			return fmt.Errorf("read back archive file %s: %w", path, err)
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE partition_state SET status = 'open', report_pending = TRUE, finalized_at = NULL, last_changed_at = COALESCE(exported_at, last_changed_at) WHERE space_id = ? AND dataset_id = ? AND partition_key = ? AND status = 'final'`,
+		result, err := tx.ExecContext(ctx, `UPDATE partition_state SET status = 'open', report_pending = 1, finalized_at = NULL, last_changed_at = COALESCE(exported_at, last_changed_at) WHERE space_id = ? AND dataset_id = ? AND partition_key = ? AND status = 'final'`,
 			task.SpaceID, task.DatasetID, key)
 		if err != nil {
 			return err
@@ -299,7 +386,7 @@ func (s *Store) ReopenFinal(ctx context.Context, task Task, key, path string) er
 
 // PendingReports 返回最新状态还没有被 mgr 确认登记的分区（含已定稿的），按分区键升序。
 func (s *Store) PendingReports(ctx context.Context, spaceID, datasetID string) ([]PartitionState, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+partitionColumns+` FROM partition_state WHERE space_id = ? AND dataset_id = ? AND report_pending ORDER BY partition_key`, spaceID, datasetID)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+partitionColumns+` FROM partition_state WHERE space_id = ? AND dataset_id = ? AND report_pending = 1 ORDER BY partition_key`, spaceID, datasetID)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +406,7 @@ func (s *Store) PendingReports(ctx context.Context, spaceID, datasetID string) (
 func (s *Store) MarkReported(ctx context.Context, spaceID, datasetID string, keys []string) error {
 	return s.tx(ctx, func(tx *sql.Tx) error {
 		for _, key := range keys {
-			if _, err := tx.ExecContext(ctx, `UPDATE partition_state SET report_pending = FALSE WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`, spaceID, datasetID, key); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE partition_state SET report_pending = 0 WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`, spaceID, datasetID, key); err != nil {
 				return err
 			}
 		}
@@ -329,7 +416,7 @@ func (s *Store) MarkReported(ctx context.Context, spaceID, datasetID string, key
 
 // FirstStart 返回首次运行（还没有水位）时记下的读取起点。
 func (s *Store) FirstStart(ctx context.Context, spaceID, datasetID string) (time.Time, bool, error) {
-	var v sql.NullTime
+	var v sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `SELECT first_start FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, false, nil
@@ -340,7 +427,7 @@ func (s *Store) FirstStart(ctx context.Context, spaceID, datasetID string) (time
 	if !v.Valid {
 		return time.Time{}, false, nil
 	}
-	return v.Time.UTC(), true, nil
+	return fromNanos(v.Int64), true, nil
 }
 
 // SetFirstStart 记下首次运行的读取起点；已有更早的起点时保留更早的。首次运行失败后重试必须从同一个起点读起，
@@ -348,12 +435,12 @@ func (s *Store) FirstStart(ctx context.Context, spaceID, datasetID string) (time
 func (s *Store) SetFirstStart(ctx context.Context, spaceID, datasetID string, start time.Time) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO task_state (space_id, dataset_id, first_start) VALUES (?, ?, ?)
 ON CONFLICT (space_id, dataset_id) DO UPDATE SET first_start = CASE WHEN task_state.first_start IS NULL OR excluded.first_start < task_state.first_start THEN excluded.first_start ELSE task_state.first_start END`,
-		spaceID, datasetID, start.UTC())
+		spaceID, datasetID, nanos(start))
 	return err
 }
 
 // BindEpoch 把暂存状态绑定到任务实例。已绑定的实例与当前不同，说明任务被删除后重建过：旧任务遗留的水位、
-// 首次起点和暂存数据一律丢弃，新任务从自己的回补设置开始。没有绑定记录（旧版本留下的状态）时直接采用当前实例。
+// 首次起点和暂存数据一律丢弃，新任务从自己的回补设置开始。没有绑定记录时直接采用当前实例。
 // 返回 true 表示丢弃了旧状态。
 func (s *Store) BindEpoch(ctx context.Context, spaceID, datasetID, epoch string) (bool, error) {
 	if epoch == "" {
@@ -381,7 +468,7 @@ ON CONFLICT (space_id, dataset_id) DO UPDATE SET task_epoch = excluded.task_epoc
 	return dropped, nil
 }
 
-// DropIfUnbound 丢弃还没绑定任务实例的旧状态（升级前留下的）。已绑定实例的状态一律保留：
+// DropIfUnbound 丢弃还没绑定任务实例的状态（只补拉过或首次回补中途失败留下的）。已绑定实例的状态一律保留：
 // 迟到的删除通知不能清掉新任务的数据，新旧任务的区分交给 BindEpoch。
 func (s *Store) DropIfUnbound(ctx context.Context, spaceID, datasetID string) error {
 	var stored sql.NullString
@@ -397,17 +484,18 @@ func (s *Store) DropIfUnbound(ctx context.Context, spaceID, datasetID string) er
 }
 
 // DropDeleted 按删除通知清理任务状态：通知带着被删任务的实例标识，只清理属于该实例（或尚未绑定实例）的状态；
-// 状态已经属于另一个实例（任务已重建并绑定）时，迟到的通知不能删掉它。通知没带实例标识时按旧行为清理。
+// 状态已经属于另一个实例（任务已重建并绑定）时，迟到的通知不能删掉它。
 func (s *Store) DropDeleted(ctx context.Context, spaceID, datasetID, epoch string) error {
-	if epoch != "" {
-		var stored sql.NullString
-		err := s.db.QueryRowContext(ctx, `SELECT task_epoch FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&stored)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		if err == nil && stored.Valid && stored.String != "" && stored.String != epoch && !epochNewer(epoch, stored.String) {
-			return nil
-		}
+	if epoch == "" {
+		return errors.New("archive delete notice requires a task epoch")
+	}
+	var stored sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT task_epoch FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&stored)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if err == nil && stored.Valid && stored.String != "" && stored.String != epoch && !epochNewer(epoch, stored.String) {
+		return nil
 	}
 	return s.DropTask(ctx, spaceID, datasetID)
 }

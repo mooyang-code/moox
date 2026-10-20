@@ -34,6 +34,8 @@ type HostIdentity struct {
 	HostID         string
 	Address        string
 	PrivateAddress string
+	// Outbound 为只能出站的主机签发：证书同时带 ClientAuth，网关用它与 control 建立反向连接。
+	Outbound bool
 }
 
 type IssuedCertificate struct {
@@ -250,6 +252,9 @@ func (s *Store) Issue(host HostIdentity, outputDir string) (IssuedCertificate, e
 		BasicConstraintsValid: true, KeyUsage: x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:    []string{host.HostID},
+	}
+	if host.Outbound {
+		template.ExtKeyUsage = append(template.ExtKeyUsage, x509.ExtKeyUsageClientAuth)
 	}
 	for _, address := range []string{host.Address, host.PrivateAddress} {
 		if address == "" {

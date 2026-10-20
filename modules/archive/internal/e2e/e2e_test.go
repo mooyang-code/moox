@@ -103,7 +103,7 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	stage, err := staging.Open(filepath.Join(root, ".state", "staging.duckdb"), staging.Options{})
+	stage, err := staging.Open(filepath.Join(root, ".state", "staging.db"), staging.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

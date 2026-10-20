@@ -127,6 +127,14 @@ func verifyCertificates(metadata hostbundle.Metadata, files map[string][]byte, o
 	if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, DNSName: options.HostID, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
 		return errors.New("host material leaf certificate does not verify under the pinned CA")
 	}
+	// 只有出站主机的网关证书带 ClientAuth；直达主机的证书不能用于反向连接。
+	usages := []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+	if options.Outbound {
+		usages = append(usages, x509.ExtKeyUsageClientAuth)
+	}
+	if !slices.Equal(leaf.ExtKeyUsage, usages) || len(leaf.UnknownExtKeyUsage) != 0 {
+		return errors.New("host material leaf certificate key usage does not match the host reachability")
+	}
 	names, ips := []string{options.HostID}, []string{}
 	for _, address := range []string{options.Address, options.PrivateAddress} {
 		if address == "" {

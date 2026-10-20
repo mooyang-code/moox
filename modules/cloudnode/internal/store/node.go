@@ -217,34 +217,22 @@ func (r *CatalogRepository) DeleteNodes(ctx context.Context, spaceID string, nod
 	return q.Updates(map[string]any{"c_is_deleted": true, "c_mtime": time.Now().UTC()}).Error
 }
 
-// EnsureNodeLifecycleID assigns a durable generation to a legacy active row.
-// The conditional update makes concurrent callers converge on the same value.
-func (r *CatalogRepository) EnsureNodeLifecycleID(ctx context.Context, spaceID, nodeID string) (string, error) {
+// NodeLifecycleID 返回活动节点的生命周期 ID（节点创建时分配）。
+func (r *CatalogRepository) NodeLifecycleID(ctx context.Context, spaceID, nodeID string) (string, error) {
 	if strings.TrimSpace(nodeID) == "" {
 		return "", gorm.ErrInvalidData
 	}
-	for attempts := 0; attempts < 3; attempts++ {
-		id := uuid.NewString()
-		q := r.db.WithContext(ctx).Model(&CloudNode{}).
-			Where("c_node_id = ? AND c_is_deleted = ? AND c_lifecycle_id = ''", nodeID, false)
-		if spaceID != "" {
-			q = q.Where("c_space_id = ?", spaceID)
-		}
-		if err := q.Updates(map[string]any{"c_lifecycle_id": id, "c_mtime": r.currentTime()}).Error; err != nil {
-			return "", err
-		}
-		node, err := r.GetNode(ctx, spaceID, nodeID)
-		if err != nil {
-			return "", err
-		}
-		if node == nil {
-			return "", gorm.ErrRecordNotFound
-		}
-		if node.LifecycleID != "" {
-			return node.LifecycleID, nil
-		}
+	node, err := r.GetNode(ctx, spaceID, nodeID)
+	if err != nil {
+		return "", err
 	}
-	return "", ErrNodeLifecycleMismatch
+	if node == nil || node.IsDeleted {
+		return "", gorm.ErrRecordNotFound
+	}
+	if node.LifecycleID == "" {
+		return "", ErrNodeLifecycleMismatch
+	}
+	return node.LifecycleID, nil
 }
 
 func (r *CatalogRepository) ClaimNodeDelete(ctx context.Context, spaceID, nodeID, lifecycleID, operationID string) error {

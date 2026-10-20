@@ -44,6 +44,8 @@ func buildBusinessFreshnessReporterWithInterval(
 		klineInterval = 30 * time.Second
 	}
 	var lastKlineEvaluation time.Time
+	// 各出站主机反向连接首次被观察到断开的时间：断开持续 relayAlertAfter 才判定失败，避免出口 IP 变化等短暂重连误报。
+	relayDownSince := map[string]time.Time{}
 	// 上一次成功评估时被 K 线新鲜度覆盖的结果数据集与视图（键：空间\x00ID\x00频率）。评估按自己的间隔进行，
 	// 没到评估时间的轮次沿用它；评估失败或没有评估器时清空，dataset 新鲜度检查恢复兜底。
 	var lastCoveredDatasets, lastCoveredViews map[string]struct{}
@@ -76,7 +78,19 @@ func buildBusinessFreshnessReporterWithInterval(
 		}
 		gatewayHosts := make(map[string]*gatewayHost)
 		gatewayNames := map[string]string{"heartbeat": "心跳", "instance_conflict": "实例", "route_sync": "路由同步"}
+		relaySeen := map[string]bool{}
 		for _, signal := range overview.GatewaySignals {
+			if signal.Kind == monitorobservability.RelaySignalKind {
+				relaySeen[signal.HostID] = true
+				key := monmetrics.InternalMetricSpaceID + "\x00" + relayCheckID(signal.HostID)
+				item, frozen := relayItem(signal, relayDownSince, overview.GeneratedAt)
+				if frozen {
+					frozenGateway[key] = true
+				} else {
+					items[key] = item
+				}
+				continue
+			}
 			host := gatewayHosts[signal.HostID]
 			if host == nil {
 				host = &gatewayHost{}
@@ -91,6 +105,11 @@ func buildBusinessFreshnessReporterWithInterval(
 				if signal.RawError != "" {
 					host.raws = append(host.raws, signal.RawError)
 				}
+			}
+		}
+		for hostID := range relayDownSince {
+			if !relaySeen[hostID] {
+				delete(relayDownSince, hostID)
 			}
 		}
 		for hostID, host := range gatewayHosts {
@@ -196,10 +215,8 @@ func buildBusinessFreshnessReporterWithInterval(
 		for _, dataset := range overview.Datasets {
 			if dataset.Producer == "storage" {
 				storageScopes[dataset.SpaceID+"\x00"+dataset.DatasetID+"\x00"+strings.ToLower(dataset.Freq)] = struct{}{}
-			} else if dataset.Producer == "storage_view" {
-				for _, scopeDatasetID := range storageViewDatasetIDs(dataset.SpaceID, dataset.DatasetID, dataset.PrimaryDatasetID) {
-					storageScopes[dataset.SpaceID+"\x00"+scopeDatasetID+"\x00"+strings.ToLower(dataset.Freq)] = struct{}{}
-				}
+			} else if dataset.Producer == "storage_view" && strings.TrimSpace(dataset.PrimaryDatasetID) != "" {
+				storageScopes[dataset.SpaceID+"\x00"+strings.TrimSpace(dataset.PrimaryDatasetID)+"\x00"+strings.ToLower(dataset.Freq)] = struct{}{}
 			}
 		}
 		for _, dataset := range overview.Datasets {
@@ -265,7 +282,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		for _, business := range overview.BusinessChecks {
-			if business.Kind != "balance" && business.Kind != "market_fetch" && business.Kind != "data_delivery" {
+			if business.Kind != "balance" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "worker_presence" {
 				continue
 			}
 			spaceID := business.SpaceID
@@ -277,6 +294,8 @@ func buildBusinessFreshnessReporterWithInterval(
 				checkID, name = "market_fetch:"+business.Module, "行情采集 "+business.Module+" 协调"
 			} else if business.Kind == "data_delivery" {
 				checkID, name = "data_delivery:"+business.Module, "数据投递队列"
+			} else if business.Kind == "worker_presence" {
+				checkID, name = "worker_presence:"+business.Module, monitorobservability.WorkerPresenceName(business.Module)
 			}
 			item := businessFreshnessItem{spaceID: spaceID, checkID: checkID, name: name, success: business.Status == "healthy", reason: business.Reason}
 			items[item.spaceID+"\x00"+item.checkID] = item
@@ -482,38 +501,6 @@ func klineReportCoversDatasets(report monmetrics.KlineFreshnessReport) bool {
 	return !(report.Skipped && report.Reason == "disabled")
 }
 
-// storageViewDatasetIDs keeps Collector freshness compatible with older View
-// reporters that did not include dataset_id in the watermark labels. New
-// reporters provide the exact primary dataset; the derived candidates cover
-// the repository's historical view_<space>_<dataset> naming convention while
-// the monitor fleet is upgraded one host at a time.
-func storageViewDatasetIDs(spaceID, viewID, primaryDatasetID string) []string {
-	ids := make([]string, 0, 3)
-	add := func(value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return
-		}
-		for _, existing := range ids {
-			if existing == value {
-				return
-			}
-		}
-		ids = append(ids, value)
-	}
-	add(primaryDatasetID)
-	viewID = strings.TrimPrefix(strings.TrimSpace(viewID), "view_")
-	if viewID == "" {
-		return ids
-	}
-	add("dataset_" + viewID)
-	spaceID = strings.TrimSpace(spaceID)
-	if spaceID != "" && strings.HasPrefix(viewID, spaceID+"_") {
-		add("dataset_" + strings.TrimPrefix(viewID, spaceID+"_"))
-	}
-	return ids
-}
-
 func serviceDeploymentExpected(ctx context.Context, topology *store.TopologyRepository, componentID string) (bool, error) {
 	if topology == nil {
 		return false, nil
@@ -539,4 +526,35 @@ const noLongerExpected = domain.CheckReasonRetired
 
 func systemMonitoringDataset(dataset monitorobservability.DatasetFrequencyStatus) bool {
 	return strings.EqualFold(strings.TrimSpace(dataset.SpaceID), monmetrics.InternalMetricSpaceID)
+}
+
+// relayAlertAfter 是反向连接断开多久后告警。
+const relayAlertAfter = 3 * time.Minute
+
+// relayCheckID 沿用 gateway: 前缀，主机不再是出站主机时检查随之退役。
+func relayCheckID(hostID string) string { return "gateway:" + hostID + ":relay" }
+
+// relayItem 把一台出站主机的反向连接信号转换成检查结果；frozen 表示保持原状态（无法确认，或断开还没到告警时长）。
+func relayItem(signal monitorobservability.GatewaySignal, downSince map[string]time.Time, now time.Time) (businessFreshnessItem, bool) {
+	item := businessFreshnessItem{spaceID: monmetrics.InternalMetricSpaceID, checkID: relayCheckID(signal.HostID), name: "主机网关反向连接（" + signal.HostID + "）"}
+	switch signal.Status {
+	case "healthy":
+		delete(downSince, signal.HostID)
+		item.success, item.reason = true, signal.Reason
+		return item, false
+	case "down":
+		since, ok := downSince[signal.HostID]
+		if !ok {
+			since = now
+			downSince[signal.HostID] = since
+		}
+		if now.Sub(since) < relayAlertAfter {
+			return item, true
+		}
+		item.reason = fmt.Sprintf("%s，已持续 %d 分钟。若该主机的 host-agent 仍在上报，说明主机在线、只是反向连接断开（检查它的出口网络与 host-gateway 日志）；"+
+			"若 host-agent 也停止上报，按主机失联处理", signal.Reason, int(now.Sub(since)/time.Minute))
+		item.rawError = signal.RawError
+		return item, false
+	}
+	return item, true
 }

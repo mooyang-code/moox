@@ -6,12 +6,12 @@ require (
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000
 	github.com/nats-io/nats.go v1.51.0
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/protobuf v1.36.11
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -19,6 +19,7 @@ require (
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
@@ -28,6 +29,7 @@ require (
 	github.com/lestrrat-go/strftime v1.0.6 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/panjf2000/ants/v2 v2.8.1 // indirect
@@ -50,7 +52,6 @@ require (
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
 
-
 replace github.com/mooyang-code/moox/packages/hostmetricpb => ../hostmetricpb
 
 replace github.com/mooyang-code/moox/packages/jetstream => ../jetstream
@@ -59,7 +60,10 @@ replace github.com/mooyang-code/moox/packages/metricspb => ../metricspb
 
 replace github.com/mooyang-code/moox/packages/marketfetchpb => ../marketfetchpb
 
-
 replace github.com/mooyang-code/moox/packages/storagepb => ../storagepb
 
 replace github.com/mooyang-code/moox/packages/tradeeventpb => ../tradeeventpb
+
+replace github.com/mooyang-code/moox/packages/security => ../security
+
+replace github.com/mooyang-code/moox/packages/wirecompress => ../wirecompress

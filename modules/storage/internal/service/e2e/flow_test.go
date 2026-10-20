@@ -60,7 +60,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	}
 	defer node.Close()
 	primary, err := primarystore.New(primarystore.Options{
-		Resolver: func(_ context.Context, _, dataset string) (pb.DataNodeRuntimeService, error) {
+		Resolver: func(_ context.Context, _, dataset string) (primarystore.DataNodeClient, error) {
 			return node, nil
 		},
 		AuthSigner: func(in *pb.AuthInfo) (*pb.AuthInfo, error) {

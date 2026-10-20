@@ -101,6 +101,8 @@ func TestUnitPreparationLinuxUsesActualHostSoftwareAndPreservesPause(t *testing.
 	require.Equal(t, "compute1", agent["host_id"])
 	require.Equal(t, filepath.Join(prepared.Directory, "host-agent/data/identity.yaml"), agent["identity_path"])
 	require.Equal(t, filepath.Join(prepared.Directory, "host-agent/config/eventbus.yaml"), agent["eventbus_config"])
+	require.Equal(t, filepath.Join(options.DeploymentRoot, "run", "host-policy.json"), agent["host_policy_path"])
+	require.Equal(t, "host-agent", agent["gateway_client"].(map[string]any)["caller"])
 	status := runScript(t, prepared.Directory, "status")
 	require.Len(t, status.Components, 2)
 	for _, component := range status.Components {
@@ -228,9 +230,13 @@ func TestUnitPreparationLinuxBusinessUsesHostViewAndOnlyAccessIdentities(t *test
 			Caller  string `yaml:"caller"`
 			KeyID   string `yaml:"key_id"`
 			KeyFile string `yaml:"key_file"`
+			Pool    struct {
+				MinIdle int `yaml:"min_idle"`
+			} `yaml:"pool"`
 		} `yaml:"gateway_client"`
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &rendered))
+	require.Equal(t, 16, rendered.Client.Pool.MinIdle, "渲染身份字段时不能丢掉模板里的连接池参数")
 	require.Equal(t, "access", rendered.Client.Caller)
 	require.Equal(t, prepared.Identity.Credentials[0].KeyID, rendered.Client.KeyID)
 	require.Equal(t, "../../secrets/caller-access.key", rendered.Client.KeyFile)

@@ -13,16 +13,14 @@
 `attributes.scope: internal`，只进入 Storage，不显示在管理台业务空间选择器中。
 
 SCF 采集函数的云账号、地域网络与空间在根目录 `moox.toml` 的 `[scf_plan]` 声明；函数数量由 Collector 按标的数与每函数标的数自动计算，每个空间使用独立 namespace。
-仓库实际 `moox.toml` 保留既有 `default` fleet 且默认关闭 SCF；重新启用前请先完成 namespace
-迁移或地域节点重平衡，发布校验会拒绝包含辅助函数后超过配额的配置。
+发布校验会拒绝包含辅助函数后超过配额的配置。
 
 初始化可重复执行。已有资源与声明一致时报告 unchanged；契约不一致时失败，不覆盖已有
 配置和数据。Dataset 先以 disabled 创建，通过 Storage 激活检查后由 `setup init`
 显式激活。
 
-需要清空并重建全部 Storage/View 数据时，使用 `moox-cli setup rebuild-storage`；命令默认只做
-dry-run，确认目标和数量后加 `--yes` 执行全量删除、重新导入本目录的 `metadata.yaml` 并激活
-Dataset。
+需要清空全部行情与因子数据时，按 `docs/部署与运维.md`「清空全部数据重新积累」的顺序操作；
+数据集、View、标的等定义保留，不需要重新导入本目录。
 
 ```bash
 moox-cli setup init \
@@ -35,19 +33,8 @@ moox-cli setup init \
 `metadata.yaml` 完成 Storage 初始化；Monitor、Admin 和 Collector 分别读取其余三个
 职责专属配置文件。
 
-启用 SCF 时，`setup init` 会在写入元数据前发现 `storage_host` 的腾讯地域/VPC/子网，
-并在结果中返回 `scf_routes`。后续发布命令按地域选择 Storage 私网或公网：
-
-```bash
-moox-cli setup scf-network-plan --file ./moox.toml
-moox-cli collector function publish submit --file ./moox.toml --space-id crypto --same-region-first
-```
-
-同地域函数绑定 Storage VPC/子网并使用私网 `11003`；发布时先完整占满该地域配置的
-节点数并完成 canary/回读，再继续其他地域。跨地域不创建 CCN，使用
-`storage_gateway_host` 公网回退。
-节点“占满”以该地域的 `function_count` 为准；如需集中内网流量，请在配置中提高
-Storage 同地域的目标数量，CLI 不会自动挪动其他地域配额。
+启用 SCF 时，每个采集地域都要有一台同地域、带私网地址的 Access 主机；函数在该地域 VPC 里经
+Access 私网地址认领和写入，规则见 `skills/moox/references/private-network.md`。
 
 默认因子配置位于仓库根目录的 `moox.toml.example`，当前把 `Bias`、`Cci`、`MinMax`、`QuoteVolumeMean`
 加入币安现货、合约 1m 采集任务结果（`dataset_dasftksvjhj2jom4vhd0`、`dataset_dasftksvjhj2jom4vhdg`）的因子集。示例用 `[[factors.definitions]]`

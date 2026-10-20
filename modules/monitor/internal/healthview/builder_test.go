@@ -136,6 +136,23 @@ func TestDisabledHostAgentDoesNotTurnAnEnabledHostIntoSilenceFailure(t *testing.
 	require.Empty(t, view.Alerts)
 }
 
+// 主机从拓扑中删除（改名后移除旧主机）：旧主机上的采集代理不再显示，也不再报失联；拓扑未知时照常显示。
+func TestAgentOfRemovedHostIsNeitherListedNorAlerted(t *testing.T) {
+	facts := observability.Overview{TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "overseas", Status: "enabled"}}}, Hosts: []observability.HostStatus{
+		{HostID: "compute-1", AgentID: "OLD1", Status: "down", LastSeenAt: time.Now().Add(-time.Hour)},
+		{HostID: "overseas", AgentID: "NEW1", Status: "healthy", LastSeenAt: time.Now()},
+	}}
+	view := projectFacts(facts)
+	require.Len(t, view.Hosts, 1)
+	require.Equal(t, "overseas", view.Hosts[0].HostId)
+	require.Empty(t, view.Alerts)
+
+	facts.Topology = nil
+	view = projectFacts(facts)
+	require.Len(t, view.Hosts, 2)
+	require.Len(t, view.Alerts, 1)
+}
+
 func TestGatewayPendingTimeKeepsItsSnapshotIdentity(t *testing.T) {
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	pending := now.Add(-time.Minute)

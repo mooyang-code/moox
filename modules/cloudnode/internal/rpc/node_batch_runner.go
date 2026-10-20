@@ -51,20 +51,6 @@ func (s *Service) StartNodeBatchRunner(ctx context.Context, batchSize int, pollI
 	if requeued > 0 {
 		log.InfoContextf(ctx, "[CloudNode] requeued interrupted node batch items count=%d", requeued)
 	}
-	recoveredItems, err := s.catalog.RecoverFailedNodeBatchMutationClaims(recoveryCtx)
-	if err != nil {
-		return fmt.Errorf("recover failed node batch mutation claims: %w", err)
-	}
-	if recoveredItems > 0 {
-		log.InfoContextf(ctx, "[CloudNode] recovered failed node mutation items for reconciliation count=%d", recoveredItems)
-	}
-	repairedClaims, err := s.catalog.ReleaseTerminalNodeBatchClaims(recoveryCtx)
-	if err != nil {
-		return fmt.Errorf("repair terminal node batch claims: %w", err)
-	}
-	if repairedClaims > 0 {
-		log.InfoContextf(ctx, "[CloudNode] repaired successful node batch mutation claims count=%d", repairedClaims)
-	}
 	s.nodeBatchWorkers.Add(1)
 	go func() {
 		defer s.nodeBatchWorkers.Done()

@@ -384,7 +384,7 @@ func (r *PlanReconciler) holdMissingDatasets(ctx context.Context, desired *Desir
 
 // functionEnvironment 构造受管环境：采集计划、Access 入口、超时。
 func (r *PlanReconciler) functionEnvironment(region string, plan *Plan) (map[string]string, error) {
-	encoded, err := EncodePlan(plan)
+	encoded, err := EncodePlan(r.SpaceID, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -409,7 +409,7 @@ func (r *PlanReconciler) functionEnvironment(region string, plan *Plan) (map[str
 	if err := tencent.ValidateCollectorAccessEnvironment(access); err != nil {
 		return nil, err
 	}
-	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY", "MOOX_GATEWAY_COMPRESSION"} {
+	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
 		if value, ok := access[key]; ok {
 			environment[key] = value
 		}
@@ -1522,7 +1522,7 @@ func (r *PlanReconciler) logPlan(ctx context.Context, record *store.FetchPlanRec
 	return r.Activity.AppendActivityLogs(ctx, r.SpaceID, entries)
 }
 
-// BackfillFunctionName 返回某市场、地域的补采函数名。名称含 PlanFleetMarker，旧的 Invoke 节点池不会选用它。
+// BackfillFunctionName 返回某市场、地域的补采函数名，名称含 PlanFleetMarker。
 func BackfillFunctionName(spaceID, marketType, region string) string {
 	region = strings.TrimPrefix(strings.ToLower(region), "ap-")
 	return fmt.Sprintf("moox-fetch%sbackfill-%s-%s-%s", PlanFleetMarker, planNameSanitizer.Replace(strings.ToLower(spaceID)),
@@ -1552,12 +1552,17 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 		return "", fmt.Errorf("no SCF region is configured for market %s", marketType)
 	}
 	name := BackfillFunctionName(r.SpaceID, marketType, region)
+	access, err := r.Access(region)
+	if err != nil {
+		return "", err
+	}
+	fingerprint := backfillAccessFingerprint(access)
 	r.backfillMu.Lock()
 	defer r.backfillMu.Unlock()
 	// 持有补采锁之后才读取并固定目标代码包：在锁外读取，较早读到旧包的调用等到锁后会把已升级的函数降回旧版本。
 	// 期间对账协程解析到新版本不影响这次的判断与创建，下一次调用再跟进。
 	pkg := r.packageID()
-	if pkg != "" && r.backfillReady[name] == pkg {
+	if pkg != "" && r.backfillReady[name] == pkg+"|"+fingerprint {
 		return name, nil
 	}
 	release, err := r.acquireOperation(ctx)
@@ -1573,12 +1578,19 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 		if node.NodeID != name {
 			continue
 		}
+		if fmt.Sprint(node.Metadata[backfillAccessMetadataKey]) != fingerprint {
+			// 访问入口或调用方身份变了（主机改名、密钥轮换）：补采函数没有定时器，不能走运行配置更新，删掉后按当前身份重建。
+			if err := r.deleteBackfillFunction(ctx, name); err != nil {
+				return "", err
+			}
+			break
+		}
 		if strings.TrimSpace(node.PackageID) != "" && node.PackageID != pkg {
 			if err := r.upgradeBackfillCode(ctx, name, pkg); err != nil {
 				return "", err
 			}
 		}
-		r.markBackfillReady(name, pkg)
+		r.markBackfillReady(name, pkg+"|"+fingerprint)
 		return name, nil
 	}
 	if cleared, clearErr := r.clearStale(ctx, "invoke", []string{name}, true); clearErr != nil {
@@ -1590,12 +1602,8 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 	if !ok || network.VPCID == "" || network.SubnetID == "" {
 		return "", fmt.Errorf("region %s has no VPC and subnet configured", region)
 	}
-	access, err := r.Access(region)
-	if err != nil {
-		return "", err
-	}
 	environment := map[string]string{"MOOX_MARKET_FETCH_MODE": "backfill", "MOOX_FETCH_TIMEOUT_SECONDS": strconv.Itoa(tencent.CollectorTimerTimeoutSeconds)}
-	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY", "MOOX_GATEWAY_COMPRESSION"} {
+	for _, key := range []string{"MOOX_ACCESS_ADDRESS", "MOOX_ACCESS_ID", "MOOX_CALLER", "MOOX_CALLER_KEY_ID", "MOOX_CALLER_KEY"} {
 		if value, ok := access[key]; ok {
 			environment[key] = value
 		}
@@ -1618,7 +1626,7 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 			"vpc_id": network.VPCID, "subnet_id": network.SubnetID, "public_net_status": "ENABLE",
 			"reserved_concurrency_mem": strconv.Itoa(BackfillReservedConcurrency * memory),
 		},
-		Metadata:            mustStruct(map[string]any{"function_name": name, "node_id": name, "biz_type": "market_fetcher", "function_mode": "kline", "memory_size": memory, "timeout_seconds": tencent.CollectorTimerTimeoutSeconds}),
+		Metadata:            mustStruct(map[string]any{"function_name": name, "node_id": name, "biz_type": "market_fetcher", "function_mode": "kline", "memory_size": memory, "timeout_seconds": tencent.CollectorTimerTimeoutSeconds, backfillAccessMetadataKey: fingerprint}),
 		CreateReservationId: hex.EncodeToString(reservation[:16]),
 	}
 	lease, err := r.ensureBackfillLease(ctx)
@@ -1643,7 +1651,7 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 			return "", fmt.Errorf("create backfill function %s: %s", name, result.Message)
 		}
 	}
-	r.markBackfillReady(name, pkg)
+	r.markBackfillReady(name, pkg+"|"+fingerprint)
 	return name, nil
 }
 
@@ -1673,11 +1681,47 @@ func (r *PlanReconciler) upgradeBackfillCode(ctx context.Context, name, pkg stri
 	return nil
 }
 
-func (r *PlanReconciler) markBackfillReady(name, pkg string) {
+// deleteBackfillFunction 删除已存在的补采函数（调用方已持有操作槽），之后由调用方重新创建。
+func (r *PlanReconciler) deleteBackfillFunction(ctx context.Context, name string) error {
+	lease, err := r.ensureBackfillLease(ctx)
+	if err != nil {
+		return fmt.Errorf("publish lease: %w", err)
+	}
+	defer r.releaseBackfillLease(ctx)
+	jobID, err := r.Cloud.SubmitDeleteNodes(ctx, r.SpaceID, []string{name}, lease)
+	if err != nil {
+		return err
+	}
+	items, terminal, err := r.waitJob(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if !terminal {
+		return fmt.Errorf("backfill function %s deletion is still running", name)
+	}
+	for _, result := range items {
+		if !result.Success {
+			return fmt.Errorf("delete backfill function %s: %s", name, result.Message)
+		}
+	}
+	return nil
+}
+
+// backfillAccessMetadataKey 是补采函数元数据里记录创建时 Access 入口与调用方身份指纹的键。
+const backfillAccessMetadataKey = "access_fingerprint"
+
+// backfillAccessFingerprint 由 Access 地址、实例、调用方与密钥 ID 算出指纹，不含密钥本身。
+func backfillAccessFingerprint(access map[string]string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{access["MOOX_ACCESS_ADDRESS"], access["MOOX_ACCESS_ID"], access["MOOX_CALLER"], access["MOOX_CALLER_KEY_ID"]}, "\x00")))
+	return hex.EncodeToString(sum[:16])
+}
+
+// markBackfillReady 记下补采函数已确认的“代码包|Access 指纹”。
+func (r *PlanReconciler) markBackfillReady(name, key string) {
 	if r.backfillReady == nil {
 		r.backfillReady = map[string]string{}
 	}
-	r.backfillReady[name] = pkg
+	r.backfillReady[name] = key
 }
 
 func (r *PlanReconciler) ensureBackfillLease(ctx context.Context) (*scfinvoker.CollectorPublishLease, error) {

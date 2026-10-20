@@ -271,3 +271,21 @@ func TestFailResult(t *testing.T) {
 	assert.Equal(t, int64(12), got.LatencyMS)
 	require.NotEmpty(t, got.ResultID)
 }
+
+// URL 主机名为 <主机>.moox-relay 的检查经 Relay 拨号；没有网关客户端时直接失败。
+func TestHTTPRunnerDialsOutboundHostThroughRelay(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ready")) }))
+	defer server.Close()
+	var dialedHost string
+	var dialedPort int
+	runner := HTTPRunner{Relay: func(ctx context.Context, host string, port int) (net.Conn, error) {
+		dialedHost, dialedPort = host, port
+		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}}
+	check := domain.Check{CheckID: "placement:home:host-agent", Kind: domain.CheckKindHTTP, URL: "http://home.moox-relay:11426/readyz", ExpectedStatus: "200-299", TimeoutMS: 2000}
+	result := runner.Run(context.Background(), check)
+	require.True(t, result.Success, result.ErrorMessage)
+	require.Equal(t, "home", dialedHost)
+	require.Equal(t, 11426, dialedPort)
+	require.False(t, HTTPRunner{}.Run(context.Background(), check).Success)
+}

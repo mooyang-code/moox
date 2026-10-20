@@ -23,6 +23,10 @@
             <template #icon><icon-plus /></template>
             新增秘钥
           </a-button>
+          <a-button @click="rootCaVisible = true">
+            <template #icon><icon-safe /></template>
+            HTTPS 根证书
+          </a-button>
           <template v-if="isAdmin">
             <a-button @click="openExport">
               <template #icon><icon-download /></template>
@@ -146,6 +150,9 @@
         </a-form>
       </a-modal>
 
+      <!-- 换了主机登录时用来安装 HTTPS 信任：下载根证书、核对指纹、各系统的安装命令 -->
+      <root-ca-dialog v-model:visible="rootCaVisible" />
+
       <!-- 导出：全部秘钥连同明文用口令加密成迁移包，在服务端完成，浏览器只拿到密文 -->
       <a-modal
         v-model:visible="exportVisible"
@@ -230,6 +237,7 @@ import {
   type Secret
 } from "@/api/admin/secret";
 import { reportControlError } from "@/api/admin/http";
+import RootCaDialog from "@/components/root-ca/root-ca-dialog.vue";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
 import { MIN_PASSPHRASE_LENGTH, exportFileName, importSummary, passphraseError, saveTextFile } from "./secret-transfer";
@@ -440,6 +448,8 @@ function onPageSizeChange(pageSize: number) {
 // 导出、导入只对全局管理员开放（迁移包里有全部秘钥的明文），其他用户不显示入口。
 const { account } = storeToRefs(useUserInfoStore());
 const isAdmin = computed(() => !!account.value.user?.admin);
+
+const rootCaVisible = ref(false);
 
 const exportVisible = ref(false);
 const exporting = ref(false);

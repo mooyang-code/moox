@@ -38,8 +38,7 @@ func renderStorageConfiguration(document *yaml.Node) error {
 	if storage == nil {
 		return nil
 	}
-	// Legacy templates share ../config; each native component instead owns
-	// its policy and all writable paths inside its independent release tree.
+	// 每个组件在自己的发布目录里拥有策略文件与全部可写路径；安装器强制这些值，不信任模板。
 	for _, field := range []struct {
 		key   string
 		value any

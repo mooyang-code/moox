@@ -12,6 +12,7 @@ import (
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
+	"github.com/mooyang-code/moox/packages/hostpolicy"
 )
 
 func unitComponents(manifest setupconfig.Manifest, hostID, profile string) ([]string, error) {
@@ -47,7 +48,7 @@ func unitConfiguration(snapshot *setupconfig.Snapshot, profile string) ([]byte, 
 // storageNodeID 是单个存储节点的固定 ID：元数据种子、Collector 与 Storage 的默认值都使用它。
 const storageNodeID = "storage-node-0"
 
-// defaultSpaceID 是 Collector 行情调度的默认空间（与 deploy-moox.sh 的默认值一致）。
+// defaultSpaceID 是 Collector 行情调度的默认空间。
 const defaultSpaceID = "crypto"
 
 func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, hostID string, components []string) (map[string]map[string]string, error) {
@@ -73,6 +74,10 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 			}
 			values["MOOX_NOTIFICATION_CHANNEL_TYPE"] = manifest.Notification.ChannelType
 			values["MOOX_NOTIFICATION_WEBHOOK_URL"] = manifest.Notification.WebhookURL
+		}
+		if id == "admin" {
+			// 证书巡检每次从本机主机策略缓存读取告警渠道（HostAgent 从 Monitor 同步）。
+			values["MOOX_HOST_POLICY_FILE"] = hostpolicy.Path(manifest.Paths.Resolved().DeployRoot)
 		}
 		if id == "collector" {
 			// Collector 的行情调度必须有目标空间；与旧部署脚本一致，默认 crypto。

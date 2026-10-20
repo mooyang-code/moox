@@ -1,7 +1,5 @@
 package tencent
 
-import "strings"
-
 // SCFRegion describes a Tencent Cloud SCF region supported by MooX.
 type SCFRegion struct {
 	Code string
@@ -45,20 +43,4 @@ func IsSCFRegion(code string) bool {
 		}
 	}
 	return false
-}
-
-// NetworkArea classifies a Tencent region for CCN attachment. Mainland and
-// overseas VPCs cannot share a CCN unless the account is approved for
-// cross-border traffic billing.
-func NetworkArea(region string) string {
-	region = strings.ToLower(strings.TrimSpace(region))
-	for _, item := range scfRegions {
-		if item.Code == region {
-			if item.Tag == "海外" {
-				return "overseas"
-			}
-			return "mainland"
-		}
-	}
-	return "mainland"
 }

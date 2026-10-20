@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/collector
 
-go 1.26.9
+go 1.27.2
 
 require (
 	github.com/avast/retry-go v3.0.0+incompatible
@@ -31,6 +31,7 @@ require (
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -188,3 +189,5 @@ replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/pr
 replace github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen => ../egressproxy/proto/egressgen
 
 replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
+
+replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress

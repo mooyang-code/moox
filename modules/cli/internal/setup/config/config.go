@@ -134,8 +134,7 @@ type EventBus struct {
 }
 
 type Observability struct {
-	DeliverPolicy         string `toml:"deliver_policy"`
-	DeliverPolicyExplicit bool   `toml:"-"`
+	DeliverPolicy string `toml:"deliver_policy"`
 }
 
 // EgressProxy separates upstream policy from service placement.
@@ -224,6 +223,10 @@ type Host struct {
 	Password       string `json:"-"`
 	Provider       string
 	TLSMode        string
+	// Reachability 为空表示可直达，outbound 表示只能出站。
+	Reachability string
+	// Label 是主机的中文名（例如“海外机”），登记为 Admin 的主机描述，用于界面展示。
+	Label string
 }
 
 type SSHConfig struct {
@@ -233,12 +236,16 @@ type SSHConfig struct {
 }
 
 type HostDefinition struct {
-	Address        string    `toml:"address"`
-	PrivateAddress string    `toml:"private_address"`
-	Region         string    `toml:"region"`
-	Provider       string    `toml:"provider"`
-	TLSMode        string    `toml:"tls_mode"`
-	SSH            SSHConfig `toml:"ssh"`
+	// Label 是主机的中文名，例如“控制机”“存储机”“海外机”“因子机”；英文 ID 是表名里的主机 ID。
+	Label          string `toml:"label"`
+	Address        string `toml:"address"`
+	PrivateAddress string `toml:"private_address"`
+	Region         string `toml:"region"`
+	Provider       string `toml:"provider"`
+	TLSMode        string `toml:"tls_mode"`
+	// Reachability：direct（默认）或 outbound（只能出站，例如家庭网络，经 control 网关反向连接）。
+	Reachability string    `toml:"reachability"`
+	SSH          SSHConfig `toml:"ssh"`
 }
 
 // FactorEngineLocal 表示因子引擎运行在执行 moox-cli 的这台电脑上。
@@ -247,12 +254,6 @@ const FactorEngineLocal = "local"
 // FactorEngineReference 记录因子引擎所在的机器：local，或 [hosts.*] 里的主机 ID。
 // 该主机只登记登录方式，不放置组件时不属于 MooX 部署拓扑。
 type FactorEngineReference struct {
-	Host string `toml:"host"`
-}
-
-// CompileHostReference selects credentials from hosts without deploying a
-// compiler-only host. An explicit placements entry also makes it a MooX host.
-type CompileHostReference struct {
 	Host string `toml:"host"`
 }
 
@@ -318,7 +319,6 @@ type Manifest struct {
 	Factors            FactorSetup               `toml:"factors"`
 	SCFPlan            SCFPlan                   `toml:"scf_plan"`
 	HostCatalog        map[string]HostDefinition `toml:"hosts"`
-	CompileHostRef     CompileHostReference      `toml:"compile_host"`
 	FactorEngineRef    FactorEngineReference     `toml:"factor_engine"`
 }
 
@@ -467,7 +467,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		case "dns_resolver":
 			return fmt.Errorf("config_invalid: dns_resolver is retired; use [egress_proxy.dns] and remove trade_node")
 		case "compile_host":
-			return fmt.Errorf("config_invalid: compile_host accepts only host = <host-id>; SSH credentials belong to hosts.<host-id>.ssh")
+			return fmt.Errorf("config_invalid: [compile_host] is retired; builds run on the local machine (see docs/构建手册.md); remove [compile_host] and any host that was only used for compiling")
 		case "factor_engine":
 			return fmt.Errorf("config_invalid: factor_engine accepts only host = \"local\" or <host-id>; SSH credentials belong to hosts.<host-id>.ssh")
 		}
@@ -480,18 +480,19 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		out.TencentCloud.Region = "ap-guangzhou"
 	}
 	for id, definition := range out.HostCatalog {
+		definition.Label = strings.TrimSpace(definition.Label)
 		definition.Address = strings.TrimSpace(definition.Address)
 		definition.PrivateAddress = strings.TrimSpace(definition.PrivateAddress)
 		definition.Region = strings.ToLower(strings.TrimSpace(definition.Region))
 		definition.Provider = strings.ToLower(strings.TrimSpace(definition.Provider))
 		definition.TLSMode = strings.ToLower(strings.TrimSpace(definition.TLSMode))
+		definition.Reachability = strings.ToLower(strings.TrimSpace(definition.Reachability))
 		definition.SSH.Username = strings.TrimSpace(definition.SSH.Username)
 		if !md.IsDefined("hosts", id, "ssh", "port") {
 			definition.SSH.Port = 22
 		}
 		out.HostCatalog[id] = definition
 	}
-	out.CompileHostRef.Host = strings.TrimSpace(out.CompileHostRef.Host)
 	out.FactorEngineRef.Host = strings.TrimSpace(out.FactorEngineRef.Host)
 	out.Paths = out.Paths.Resolved()
 	if !md.IsDefined("factors", "enabled") {
@@ -538,8 +539,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 	if !md.IsDefined("local_logs", "max_size_mb") {
 		out.LocalLogs.MaxSizeMB = 50
 	}
-	out.Observability.DeliverPolicyExplicit = md.IsDefined("observability", "deliver_policy")
-	if !out.Observability.DeliverPolicyExplicit {
+	if !md.IsDefined("observability", "deliver_policy") {
 		out.Observability.DeliverPolicy = "all"
 	}
 	if !md.IsDefined("local_logs", "backup_count") {
@@ -633,8 +633,7 @@ func validate(manifest *Manifest) error {
 	if err := policy.Validate(); err != nil {
 		return fmt.Errorf("config_invalid: storage policy: %w", err)
 	}
-	// Session-market estimates are only warnings; `moox-cli config plan`
-	// reports them. A 7×24 retention that cannot hold view_rows_per_series is an error.
+	// 交易时段市场的估算只是提示；7×24 市场的保留期装不下 view_rows_per_series 时报错。
 	if errs, _ := policy.Coverage(); len(errs) > 0 {
 		return fmt.Errorf("config_invalid: storage policy: %s", strings.Join(errs, "; "))
 	}

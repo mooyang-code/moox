@@ -35,6 +35,8 @@
         </a-form-item>
       </a-form>
     </div>
+    <div class="ca-entry">浏览器提示证书不安全？<a class="ca-link" @click="rootCaVisible = true">下载并安装根证书</a></div>
+    <root-ca-dialog v-model:visible="rootCaVisible" />
     <div class="register">Powered by Moo</div>
   </div>
 </template>
@@ -47,6 +49,7 @@ import { loginAPI } from "@/api/modules/user/index";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { Message } from "@arco-design/web-vue";
 import { getErrorMessage } from "@/utils/error-handler";
+import RootCaDialog from "@/components/root-ca/root-ca-dialog.vue";
 
 let userStores = useUserInfoStore();
 const routeStore = useRoutesConfigStore();
@@ -142,6 +145,7 @@ const verifyCodeChange = (code: string) => (verifyCode.value = code);
 
 // 添加登录状态
 const loginLoading = ref(false);
+const rootCaVisible = ref(false);
 
 // 提交表单
 const onSubmit = async ({ errors, values }: any) => {
@@ -277,6 +281,16 @@ onMounted(() => {
       color: $color-primary;
       cursor: pointer;
     }
+  }
+}
+.ca-entry {
+  margin-bottom: 8px;
+  font-size: $font-size-body-1;
+  color: $color-text-3;
+  text-align: center;
+  .ca-link {
+    color: $color-primary;
+    cursor: pointer;
   }
 }
 .register {

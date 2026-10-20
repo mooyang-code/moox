@@ -40,6 +40,7 @@ type View struct {
 	routes    map[string]servicecatalog.Route
 	keys      map[string]verification
 	directory servicecatalog.Directory
+	relays    map[string]servicecatalog.RelayTarget
 }
 
 // String/GoString deliberately exclude verification material.
@@ -55,6 +56,18 @@ func (v *View) Proto() *pb.HostGatewaySnapshot {
 	return proto.Clone(v.raw).(*pb.HostGatewaySnapshot)
 }
 func (v *View) Directory() servicecatalog.Directory { return v.directory.Clone() }
+
+// Relay 返回本机（control）对一台出站主机的中转许可。
+func (v *View) Relay(hostID string) (servicecatalog.RelayTarget, bool) {
+	relay, ok := v.relays[hostID]
+	return relay, ok
+}
+
+// OutboundHost 报告目录里该主机是否只能出站、且由本机中转。
+func (v *View) OutboundHost(hostID string) bool {
+	host, ok := v.directory.Hosts[hostID]
+	return ok && host.Relay == v.HostID()
+}
 
 func (v *View) Resolve(service, method string) (servicecatalog.Route, bool) {
 	route, ok := v.routes[service+"/"+method]
@@ -112,8 +125,39 @@ func Build(hostID string, raw *pb.HostGatewaySnapshot) (*View, error) {
 			return bad("unknown directory service")
 		}
 	}
-	v := &View{raw: owned, routes: map[string]servicecatalog.Route{}, keys: map[string]verification{}, directory: dir}
+	v := &View{raw: owned, routes: map[string]servicecatalog.Route{}, keys: map[string]verification{}, directory: dir, relays: map[string]servicecatalog.RelayTarget{}}
 	callers := map[string]bool{}
+	if len(owned.Relays) > 1024 {
+		return bad("too many relays")
+	}
+	for _, relay := range owned.Relays {
+		if relay == nil || len(relay.ProtoReflect().GetUnknown()) != 0 {
+			return bad("relay fields")
+		}
+		target := servicecatalog.RelayTarget{HostID: relay.HostId}
+		for _, port := range relay.Ports {
+			if port == nil || len(port.ProtoReflect().GetUnknown()) != 0 {
+				return bad("relay port fields")
+			}
+			target.Ports = append(target.Ports, servicecatalog.RelayPort{Port: int(port.Port), Callers: slices.Clone(port.Callers)})
+		}
+		_, duplicate := v.relays[target.HostID]
+		if duplicate || dir.Hosts[target.HostID].Relay != hostID || !catalog.ValidRelay(target) {
+			return bad("relay differs from directory or catalog")
+		}
+		for _, port := range target.Ports {
+			for _, caller := range port.Callers {
+				callers[caller] = true
+			}
+		}
+		v.relays[target.HostID] = target
+	}
+	// 由本机中转的每台出站主机都必须有许可，否则调用方打不开中转流。
+	for id, host := range dir.Hosts {
+		if _, ok := v.relays[id]; host.Relay == hostID && !ok {
+			return bad("outbound host without relay")
+		}
+	}
 	for _, route := range owned.Routes {
 		if route == nil || len(route.ProtoReflect().GetUnknown()) != 0 {
 			return bad("route fields")
@@ -190,7 +234,7 @@ func decodeDirectory(raw *directorypb.ServiceDirectory) (servicecatalog.Director
 		if host == nil || len(host.ProtoReflect().GetUnknown()) != 0 {
 			return d, errors.New("invalid directory host")
 		}
-		d.Hosts[id] = servicecatalog.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region}
+		d.Hosts[id] = servicecatalog.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Relay: host.Relay}
 	}
 	for path, hosts := range raw.Services {
 		if hosts == nil || len(hosts.ProtoReflect().GetUnknown()) != 0 {

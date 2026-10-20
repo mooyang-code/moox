@@ -119,8 +119,7 @@ func HandleTarget(
 	// already been superseded. The transactional accept path remains the
 	// authority, but this read-only fast path prevents stale redeliveries from
 	// blocking a durable consumer on unavailable market data.
-	// The historical target table still stores a sequence for ordering and
-	// migration queries. For the modern contract it is derived from the
+	// The target table stores a sequence for ordering. It is derived from the
 	// immutable bar timestamp, never supplied as an authorization fallback.
 	barEnd := request.GetBarEndTime().AsTime().UnixMilli()
 	sequence := uint64(barEnd)

@@ -73,7 +73,6 @@ func ParseCollectParams(raw string, fallbackProvider string, fallbackMarketType 
 	if raw == "" {
 		raw = "{}"
 	}
-	raw = DropRetiredParams(raw)
 	var params CollectParams
 	decoder := json.NewDecoder(bytes.NewBufferString(raw))
 	decoder.DisallowUnknownFields()
@@ -91,32 +90,6 @@ func ParseCollectParams(raw string, fallbackProvider string, fallbackMarketType 
 		return nil, err
 	}
 	return &params, nil
-}
-
-// retiredParams 是已删除的采集参数：存量任务的 collect_params 里还带着这些键，解析时忽略，下次保存即消失。
-var retiredParams = []string{"history_policy"}
-
-// DropRetiredParams 去掉已删除的采集参数键，返回新的 JSON；没有这些键时原样返回。
-func DropRetiredParams(raw string) string {
-	var values map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &values); err != nil {
-		return raw // 交给严格解码报告真正的 JSON 错误
-	}
-	changed := false
-	for _, key := range retiredParams {
-		if _, exists := values[key]; exists {
-			delete(values, key)
-			changed = true
-		}
-	}
-	if !changed {
-		return raw
-	}
-	encoded, err := json.Marshal(values)
-	if err != nil {
-		return raw
-	}
-	return string(encoded)
 }
 
 func (p *CollectParams) validatePlanOptions() error {

@@ -99,6 +99,9 @@ func TestUnitPackagesHaveExactComponentBoundariesAndRepeatableDigests(t *testing
 				if profile == "control" {
 					assert.Contains(t, ids, "console-proxy")
 					assert.Contains(t, ids, "web-host")
+					// archive-mgr 与 factor-mgr 一样随 control 单元发布，由 moox-runtime 管理、watch 看护。
+					assert.Contains(t, ids, "factor-mgr")
+					assert.Contains(t, ids, "archive-mgr")
 					assert.NotContains(t, ids, "trade")
 					assert.NotContains(t, ids, "access")
 				}

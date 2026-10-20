@@ -31,28 +31,37 @@ func (s *externalCallerSSH) Run(ctx context.Context, argv []string, input io.Rea
 func TestExportRemoteExternalCallerUsesAssignedIdentityAndPrivateOpaqueKey(t *testing.T) {
 	for _, caller := range []string{"scf-collector", "factor-engine", "moox-skill"} {
 		t.Run(caller, func(t *testing.T) {
-			root := t.TempDir()
-			path := filepath.Join(root, "secrets/external", caller, "caller-"+caller+".key")
+			deployRoot := t.TempDir()
+			controlRoot := filepath.Join(deployRoot, "prod")
+			path := filepath.Join(deployRoot, "run/external-callers", caller, "caller-"+caller+".key")
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 			secret := strings.Repeat("opaqueGXz!", 5)
 			require.NoError(t, os.WriteFile(path, []byte(secret+"\n"), 0o600))
 			metadata, err := json.Marshal(map[string]string{"caller": caller, "key_id": "assigned-key-73", "key_file": path})
 			require.NoError(t, err)
 			ssh := &externalCallerSSH{metadata: string(metadata)}
-			credential, err := exportRemoteExternalCaller(t.Context(), ssh, root, caller)
+			credential, err := exportRemoteExternalCaller(t.Context(), ssh, controlRoot, deployRoot, caller)
 			require.NoError(t, err)
 			require.Equal(t, caller, credential.Caller)
 			require.Equal(t, "assigned-key-73", credential.KeyID)
 			require.Equal(t, secret, credential.Secret)
-			require.Len(t, ssh.calls, 2)
-			require.Equal(t, []string{filepath.Join(root, "bin/moox-admin-cli"), caller, filepath.Dir(path), filepath.Join(root, "data/admin.db")}, ssh.calls[0][4:])
+			require.Len(t, ssh.calls, 3)
+			// 原生 control 单元：当前发布内的 admin-cli 与数据库，部署根 identity 下的主密钥。
+			require.Equal(t, []string{
+				filepath.Join(controlRoot, "current/bin/moox-admin-cli"), caller, filepath.Dir(path),
+				filepath.Join(controlRoot, "current/admin/data/admin.db"), filepath.Join(deployRoot, "identity/admin-master.key"),
+			}, ssh.calls[0][4:])
 			for _, argv := range ssh.calls {
 				require.NotContains(t, strings.Join(argv, " "), secret)
 			}
-			require.NoError(t, os.Chmod(path, 0o644))
-			_, err = exportRemoteExternalCaller(t.Context(), ssh, root, caller)
+			// 读取后删除远端导出的密钥副本。
+			require.NoFileExists(t, path)
+
+			require.NoError(t, os.WriteFile(path, []byte(secret+"\n"), 0o644))
+			_, err = exportRemoteExternalCaller(t.Context(), ssh, controlRoot, deployRoot, caller)
 			require.ErrorContains(t, err, "signing key unavailable")
 			require.NotContains(t, err.Error(), secret)
+			require.NoFileExists(t, path)
 		})
 	}
 }
@@ -72,7 +81,7 @@ func TestExportRemoteExternalCallerRejectsUntrustedMetadataBeforeReadingKey(t *t
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ssh := &externalCallerSSH{metadata: test.metadata, exitCode: test.exitCode}
-			_, err := exportRemoteExternalCaller(t.Context(), ssh, root, "moox-skill")
+			_, err := exportRemoteExternalCaller(t.Context(), ssh, filepath.Join(root, "prod"), root, "moox-skill")
 			require.Error(t, err)
 			require.Len(t, ssh.calls, 1)
 			require.NotContains(t, err.Error(), "do-not-disclose-this-secret")

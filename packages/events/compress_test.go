@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
+	"google.golang.org/protobuf/proto"
 )
 
 type captureClient struct {
@@ -33,37 +35,34 @@ func rowsPayload(count int) *storagepb.DatasetRowsUpserted {
 	return &storagepb.DatasetRowsUpserted{SourceNodeId: "node", SourceStoreId: "store", SourceSequence: 1, SpaceId: "space", DatasetId: "dataset", Rows: rows}
 }
 
-// 压缩发布的信封经 DecodeRaw 透明解压，与未压缩的解码结果一致；小信封与关闭压缩时保持原样。
+// 发布器默认压缩：压缩发布的信封经 DecodeRaw 透明解压，与未压缩的解码结果一致；低于阈值的小信封保持原样。
 func TestPublisherCompressionRoundTrip(t *testing.T) {
 	registry, err := DefaultRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
 	opts := PublishOptions{EventID: "evt-1", OccurredAt: time.Unix(1_700_000_000, 0).UTC(), SpaceID: "space", SubjectID: "dataset"}
-	payload := rowsPayload(200)
 
-	plain := &captureClient{}
-	publisher, err := NewPublisher(plain, registry)
+	packed := &captureClient{}
+	publisher, err := NewPublisher(packed, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
+	payload := rowsPayload(200)
 	if _, err := publisher.Publish(context.Background(), DatasetRowsUpserted, payload, opts); err != nil {
 		t.Fatal(err)
 	}
-	if plain.contentType != ContentType {
-		t.Fatalf("默认不压缩：%s", plain.contentType)
+	if packed.contentType != ContentTypeZstd {
+		t.Fatalf("发布器默认压缩大信封：%s", packed.contentType)
 	}
-
-	packed := &captureClient{}
-	compressing, _ := NewPublisher(packed, registry)
-	compressing.SetCompression(4096)
-	if _, err := compressing.Publish(context.Background(), DatasetRowsUpserted, payload, opts); err != nil {
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(mustEncode(t, registry, payload, opts))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if packed.contentType != ContentTypeGzip || len(packed.body) >= len(plain.body)/2 {
-		t.Fatalf("大信封应被压缩：%s %d/%d", packed.contentType, len(packed.body), len(plain.body))
+	if len(packed.body) >= len(raw)/2 {
+		t.Fatalf("大信封应明显变小：%d/%d", len(packed.body), len(raw))
 	}
-	messageA, payloadA, errA := DecodeRaw(registry, plain.body, plain.subject, "evt-1", plain.contentType)
+	messageA, payloadA, errA := DecodeRaw(registry, raw, packed.subject, "evt-1", ContentType)
 	messageB, payloadB, errB := DecodeRaw(registry, packed.body, packed.subject, "evt-1", packed.contentType)
 	if errA != nil || errB != nil {
 		t.Fatalf("解码失败：%v %v", errA, errB)
@@ -72,16 +71,35 @@ func TestPublisherCompressionRoundTrip(t *testing.T) {
 		t.Fatal("压缩与未压缩的解码结果应一致")
 	}
 
+	// 小于阈值的信封保持原样。
 	small := &captureClient{}
 	smallPublisher, _ := NewPublisher(small, registry)
-	smallPublisher.SetCompression(1 << 20)
-	if _, err := smallPublisher.Publish(context.Background(), DatasetRowsUpserted, payload, opts); err != nil || small.contentType != ContentType {
+	if _, err := smallPublisher.Publish(context.Background(), DatasetRowsUpserted, rowsPayload(1), opts); err != nil || small.contentType != ContentType {
 		t.Fatalf("低于阈值不压缩：%v %s", err, small.contentType)
 	}
 }
 
-func TestInflateRejectsGarbage(t *testing.T) {
-	if _, err := inflateBody([]byte("not gzip")); err == nil {
-		t.Fatal("非 gzip 数据应报错")
+func mustEncode(t *testing.T, registry *Registry, payload proto.Message, opts PublishOptions) *eventpb.EventMessage {
+	t.Helper()
+	encoded, err := registry.Encode(DatasetRowsUpserted, payload, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Message
+}
+
+// 不是 zstd 的数据、gzip 内容类型、未知的 +xxx 内容类型都必须被拒绝。
+func TestDecodeRejectsGarbageAndOldContentTypes(t *testing.T) {
+	registry, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inflateBody([]byte("not zstd")); err == nil {
+		t.Fatal("非 zstd 数据应报错")
+	}
+	for _, contentType := range []string{ContentType + "+gzip", ContentType + "+br"} {
+		if _, _, err := DecodeRaw(registry, []byte("x"), "subject", "evt", contentType); err == nil {
+			t.Fatalf("内容类型 %s 应被拒绝", contentType)
+		}
 	}
 }

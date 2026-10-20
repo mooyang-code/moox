@@ -20,14 +20,38 @@ import (
 
 // presenceGate 让同一主机的上下线通知串行发送，并在每次发送（含内部重试）前复核主机当前状态：
 // 已被更新状态取代的通知直接丢弃，保证不会出现“已恢复 → 失联”的错误顺序。
+//
+// 门也负责区分失联原因：HostAgent 停止上报而该主机的网关心跳仍正常时，主机本身在线，只是采集代理停了，
+// 告警标题改为“host-agent 停止上报”（警告），恢复时对应“host-agent 已恢复上报”。
 type presenceGate struct {
 	status func(ctx context.Context, agentID string) (string, error)
-	mu     sync.Mutex
-	locks  map[string]*sync.Mutex
+	// gatewayAlive 报告主机网关在给定时刻是否仍有心跳；为空时不区分原因。
+	gatewayAlive func(ctx context.Context, hostID string, at time.Time) bool
+	mu           sync.Mutex
+	locks        map[string]*sync.Mutex
+	// agentOnly 记录最近一次离线通知是否判为只有 HostAgent 停止，恢复通知据此选标题。
+	agentOnly map[string]bool
 }
 
 func newPresenceGate(status func(ctx context.Context, agentID string) (string, error)) *presenceGate {
-	return &presenceGate{status: status, locks: make(map[string]*sync.Mutex)}
+	return &presenceGate{status: status, locks: make(map[string]*sync.Mutex), agentOnly: make(map[string]bool)}
+}
+
+// classify 返回离线是否只是 HostAgent 停止（主机网关心跳仍正常），并记住结论供恢复通知使用。
+func (g *presenceGate) classify(ctx context.Context, transition hostmetrics.PresenceTransition) bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if transition.To == hostmetrics.PresenceReachable {
+		agentOnly := g.agentOnly[transition.AgentID]
+		delete(g.agentOnly, transition.AgentID)
+		return agentOnly
+	}
+	agentOnly := g.gatewayAlive != nil && transition.HostID != "" && g.gatewayAlive(ctx, transition.HostID, transition.ObservedAt)
+	g.agentOnly[transition.AgentID] = agentOnly
+	return agentOnly
 }
 
 func (g *presenceGate) lock(agentID string) *sync.Mutex {
@@ -70,13 +94,26 @@ func hostPresenceTransitionSinkWithGate(provider func(context.Context) (notifica
 		if host == "" {
 			host = transition.AgentID
 		}
+		agentOnly := gate.classify(ctx, transition)
 		severity := notification.SeverityCritical
 		title := "主机 " + host + " · 失联"
 		body := "状态：新告警\n问题：" + presenceLostReason
-		if transition.To == hostmetrics.PresenceReachable {
+		if gate != nil && gate.gatewayAlive != nil {
+			body = "状态：新告警\n问题：" + hostLostReason
+		}
+		switch {
+		case transition.To == hostmetrics.PresenceReachable && agentOnly:
+			severity = notification.SeverityInfo
+			title = "主机 " + host + " · host-agent 已恢复上报"
+			body = "状态：已恢复\n当前：" + presenceBackReason
+		case transition.To == hostmetrics.PresenceReachable:
 			severity = notification.SeverityInfo
 			title = "主机 " + host + " · 已恢复在线"
 			body = "状态：已恢复\n当前：" + presenceBackReason
+		case agentOnly:
+			severity = notification.SeverityWarning
+			title = "主机 " + host + " · host-agent 停止上报"
+			body = "状态：新告警\n问题：" + agentStoppedReason
 		}
 		message := notification.Message{
 			Key:      "host-presence:" + transition.AgentID,
@@ -139,6 +176,8 @@ func hostPresenceTransitionSinkWithGate(provider func(context.Context) (notifica
 
 const (
 	presenceLostReason = "主机采集代理停止上报，主机可能宕机、断网，或采集代理已停止"
+	hostLostReason     = "主机采集代理停止上报，主机网关心跳也已停止，主机可能宕机或断网"
+	agentStoppedReason = "主机采集代理（host-agent）超过 3 分钟没有上报，但主机网关心跳正常，主机仍在线；主机守护应在 1 分钟内把它拉起，持续未恢复请查看该主机的 run/logs/host-agent.log"
 	presenceBackReason = "主机重新开始上报"
 )
 

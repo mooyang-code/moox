@@ -48,7 +48,7 @@ bash "${SCRIPT}" "${args[@]}" >"${tmp}/ok.log" 2>&1 || { cat "${tmp}/ok.log" >&2
 config="${deploy}/config/app.yaml"
 for want in 'access_address: "access.example.test:11004"' 'access_id: "access@storage"' 'caller: archive-worker' 'key_id: "key-123"' \
   "key_file: ${secrets}/access-archive-worker.key" "storage_auth_file: ${secrets}/storage-primary-auth.secret" 'worker_id: archive-worker@testhost' \
-  "root_dir: ${archive_root}" 'compression: gzip' 'addr: 127.0.0.1:11418'; do
+  "root_dir: ${archive_root}" 'addr: 127.0.0.1:11418'; do
   grep -qF -- "${want}" "${config}" || fail "rendered config misses: ${want}"
 done
 [[ "$(uname -s)" == Darwin ]] && unit="${MOOX_LAUNCH_AGENTS_DIR}/com.moox.archive-worker.plist" || unit="${MOOX_SYSTEMD_USER_DIR}/moox-archive-worker.service"

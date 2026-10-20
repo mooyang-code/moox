@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 // Lock order: a definition lock (LockFactorContext) is always taken before any
@@ -73,24 +71,27 @@ func (l *Locks) LockContext(ctx context.Context, setID string) (func(), error) {
 		var once sync.Once
 		return func() { once.Do(release) }, nil
 	}
-	fd, err := l.openFileLock(setID)
+	file, err := l.openFileLock(setID)
 	if err != nil {
 		release()
 		return nil, err
 	}
+	// 非阻塞加锁，被占用时每 10 毫秒重试，直到拿到或 ctx 结束。
 	for {
-		if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err == nil {
-			break
-		} else if err != unix.EWOULDBLOCK && err != unix.EAGAIN && err != unix.EINTR {
-			_ = unix.Close(fd)
+		locked, err := file.tryLock()
+		if err != nil {
+			_ = file.close()
 			release()
 			return nil, err
+		}
+		if locked {
+			break
 		}
 		timer := time.NewTimer(10 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			_ = unix.Close(fd)
+			_ = file.close()
 			release()
 			return nil, ctx.Err()
 		case <-timer.C:
@@ -99,8 +100,8 @@ func (l *Locks) LockContext(ctx context.Context, setID string) (func(), error) {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			_ = unix.Flock(fd, unix.LOCK_UN)
-			_ = unix.Close(fd)
+			file.unlock()
+			_ = file.close()
 			release()
 		})
 	}, nil
@@ -118,15 +119,10 @@ func (l *Locks) LockFactorContext(ctx context.Context, factorID string) (func(),
 
 const factorLockPrefix = "factor:"
 
-func (l *Locks) openFileLock(setID string) (int, error) {
+func (l *Locks) openFileLock(setID string) (*fileLock, error) {
 	if err := os.MkdirAll(l.dir, 0o700); err != nil {
-		return -1, err
+		return nil, err
 	}
 	digest := sha256.Sum256([]byte(setID))
-	path := filepath.Join(l.dir, hex.EncodeToString(digest[:])+".lock")
-	fd, err := unix.Open(path, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
-	if err != nil {
-		return -1, err
-	}
-	return fd, nil
+	return openLockFile(filepath.Join(l.dir, hex.EncodeToString(digest[:])+".lock"))
 }

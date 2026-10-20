@@ -2,19 +2,21 @@ package command
 
 import (
 	"context"
-	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
-	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	commonpb "github.com/mooyang-code/moox/packages/commonpb"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	commonpb "github.com/mooyang-code/moox/packages/commonpb"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestValidateReservedInternalSpacesRejectsUndeclaredLogicalResource(t *testing.T) {
@@ -907,3 +909,5 @@ func TestApplyProbeResultDatasetColumns(t *testing.T) {
 	assert.True(t, found)
 	assert.Equal(t, column, actual)
 }
+
+func storageOK() *storagepb.RetInfo { return &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS} }

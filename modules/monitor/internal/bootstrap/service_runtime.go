@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
@@ -34,15 +35,19 @@ func registerMonitorService(s *server.Server, cfg *config.Config, runtime *Runti
 		HostStorageReady: hostReady,
 		DoctorContext:    doctorContext,
 		HealthView:       health,
+		HostWatchdog:     cfg.HostPolicy.Watchdog,
 	}))
 }
 
-func buildProbeRunner(cfg *config.Config) probe.MultiRunner {
+func buildProbeRunner(cfg *config.Config, gateway *gatewayclient.Client) probe.MultiRunner {
 	runner := probe.DefaultRunner()
 	if cfg == nil {
 		return runner
 	}
 	runner.HTTP.HealthSigner = &probe.HealthSigner{Version: cfg.HealthAuth.Version, AccessKey: cfg.HealthAuth.AccessKey, SecretKey: cfg.HealthAuth.SecretKey}
+	if gateway != nil {
+		runner.HTTP.Relay = gateway.DialRelay
+	}
 	return runner
 }
 

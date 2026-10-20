@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mooyang-code/moox/packages/security"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,12 +36,9 @@ func ExpandCredentialPath(path string) string {
 }
 
 func LoadCredentialFile(path string) (CredentialFile, error) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return CredentialFile{}, fmt.Errorf("stat credential file: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
-		return CredentialFile{}, fmt.Errorf("credential file must be a regular 0600 file")
+	// Unix 上要求 0600，Windows 上要求 ACL 只允许当前用户（运维机上的因子引擎可能运行在 Windows）。
+	if err := security.CheckPrivateFile(path); err != nil {
+		return CredentialFile{}, fmt.Errorf("credential file must be private to the current user: %w", err)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -75,9 +73,9 @@ func (c *Config) ApplyCredentialFile(path string) error {
 		caFile = filepath.Join(filepath.Dir(path), caFile)
 	}
 	c.Username, c.Password = file.Username, file.Password
-	// Keep a deployment-wide CA supplied by the environment when a legacy or
-	// externally managed role file omits ca_file. A credential file with an
-	// explicit CA remains authoritative and is resolved relative to itself.
+	// Keep a deployment-wide CA supplied by the environment when an externally
+	// managed role file omits ca_file. A credential file with an explicit CA
+	// remains authoritative and is resolved relative to itself.
 	if caFile != "" {
 		c.TLSCAFile = caFile
 		c.TLSCAPEMBase64 = ""

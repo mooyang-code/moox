@@ -1,8 +1,6 @@
 package metrics
 
 import (
-	"bytes"
-	"compress/gzip"
 	"crypto/sha256"
 	"testing"
 	"time"
@@ -31,25 +29,16 @@ func TestEncodeParseHistogramSummary(t *testing.T) {
 func TestDecodeSnapshotChecksumAndLimits(t *testing.T) {
 	raw := []byte("# TYPE x gauge\nx 1\n")
 	sum := sha256.Sum256(raw)
-	var compressed bytes.Buffer
-	zw := gzip.NewWriter(&compressed)
-	_, _ = zw.Write(raw)
-	_ = zw.Close()
-	s := &metricspb.MetricSnapshot{SchemaVersion: 1, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_GZIP, Data: compressed.Bytes(), UncompressedSha256: sum[:], SampleCount: 1}
+	s := &metricspb.MetricSnapshot{SchemaVersion: 1, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Data: raw, DataSha256: sum[:], SampleCount: 1}
 	if _, err := DecodeSnapshot(s, Limits{MaxUncompressedBytes: 1}); err == nil {
-		t.Fatal("expected decompressed size limit")
+		t.Fatal("expected snapshot size limit")
 	}
-	s.UncompressedSha256 = []byte("bad")
+	if got, err := DecodeSnapshot(s, Limits{MaxUncompressedBytes: int64(len(raw))}); err != nil || string(got) != string(raw) {
+		t.Fatalf("DecodeSnapshot() = %q, %v, want the exposition text at exactly the limit", got, err)
+	}
+	s.DataSha256 = []byte("bad")
 	if _, err := DecodeSnapshot(s, Limits{}); err == nil {
 		t.Fatal("expected checksum error")
-	}
-}
-
-func TestDecodeSnapshotNoneUsesUncompressedLimit(t *testing.T) {
-	raw := []byte("# TYPE x gauge\nx 1\n")
-	snapshot := &metricspb.MetricSnapshot{SchemaVersion: 1, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT, Compression: metricspb.Compression_COMPRESSION_NONE, Data: raw}
-	if _, err := DecodeSnapshot(snapshot, Limits{MaxCompressedBytes: 1, MaxUncompressedBytes: int64(len(raw))}); err != nil {
-		t.Fatalf("DecodeSnapshot() error = %v, want none-compressed payload to use uncompressed limit", err)
 	}
 }
 
@@ -58,7 +47,7 @@ func TestDefaultLimitsAllowFullKlineSnapshot(t *testing.T) {
 	if limits.MaxSamples < 100000 {
 		t.Fatalf("MaxSamples = %d, want at least 100000", limits.MaxSamples)
 	}
-	if limits.MaxUncompressedBytes < 16<<20 || limits.MaxCompressedBytes < 4<<20 {
+	if limits.MaxUncompressedBytes < 16<<20 {
 		t.Fatalf("snapshot byte limits are too small: %+v", limits)
 	}
 }
@@ -75,25 +64,13 @@ func TestParseSnapshotRejectsDeclaredFamilyCountMismatch(t *testing.T) {
 }
 
 func testSnapshot(raw []byte, interval time.Duration) (*metricspb.MetricSnapshot, error) {
-	var compressed bytes.Buffer
-	zw, err := gzip.NewWriterLevel(&compressed, gzip.BestSpeed)
-	if err != nil {
-		return nil, err
-	}
-	if _, err = zw.Write(raw); err != nil {
-		return nil, err
-	}
-	if err = zw.Close(); err != nil {
-		return nil, err
-	}
 	sum := sha256.Sum256(raw)
 	return &metricspb.MetricSnapshot{
 		SchemaVersion:             1,
 		CollectionIntervalSeconds: uint32(interval / time.Second),
 		Format:                    metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT,
-		Compression:               metricspb.Compression_COMPRESSION_GZIP,
-		Data:                      compressed.Bytes(),
-		UncompressedSha256:        sum[:],
+		Data:                      raw,
+		DataSha256:                sum[:],
 	}, nil
 }
 

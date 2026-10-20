@@ -102,7 +102,7 @@ func New(opts Options) *App {
 	return &App{opts: opts, running: map[string]*activeRun{}, deleted: map[string]taskRef{}, datasetSlots: map[string]chan struct{}{}, leaseTTL: 45 * time.Second, progressEvery: progressEvery}
 }
 
-// Start 启动时的清理：残留的 .partial 文件和 DuckDB 临时目录。
+// Start 启动时的清理：残留的 .partial 文件。
 func (a *App) Start() error {
 	removed, err := a.opts.Files.CleanPartials()
 	if err != nil {
@@ -111,7 +111,7 @@ func (a *App) Start() error {
 	if removed > 0 {
 		log.Warnf("archive worker removed %d leftover .partial files", removed)
 	}
-	return a.opts.Staging.CleanTemp()
+	return nil
 }
 
 // Run 运行主循环，直到 ctx 结束；退出时取消进行中的运行并等待它们收尾。
@@ -398,7 +398,7 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 	if err == nil {
 		defer release()
 		if run.recreated != nil {
-			// 在串行保护内清掉升级前（未绑定任务实例）遗留的旧状态；已绑定实例的状态交给 BindEpoch 判断。失败则本次运行失败，并把删除通知放回去等待重试。
+			// 在串行保护内清掉未绑定任务实例的状态；已绑定实例的状态交给 BindEpoch 判断。失败则本次运行失败，并把删除通知放回去等待重试。
 			if derr := a.opts.Staging.DropIfUnbound(ctx, assignment.GetSpaceId(), assignment.GetDatasetId()); derr != nil {
 				a.mu.Lock()
 				a.deleted[assignment.GetSpaceId()+"/"+assignment.GetDatasetId()] = *run.recreated
@@ -537,9 +537,6 @@ func (a *App) maintainOnce(ctx context.Context) {
 		log.Errorf("archive worker compact staging database: %v", err)
 	} else if compacted {
 		log.Infof("archive worker rebuilt the staging database")
-	}
-	if err := a.opts.Staging.CleanTemp(); err != nil {
-		log.Warnf("archive worker clean temp: %v", err)
 	}
 }
 

@@ -29,6 +29,7 @@ type Config struct {
 	MarketCanary   MarketCanaryConfig       `yaml:"market_canary"`
 	MarketHealth   MarketHealthConfig       `yaml:"market_health"`
 	KlineFreshness KlineFreshnessConfig     `yaml:"kline_freshness"`
+	HostPolicy     HostPolicyConfig         `yaml:"host_policy"`
 }
 
 type DatabaseConfig struct {
@@ -65,6 +66,23 @@ type PlacementConfig struct {
 	// LocalHostID 是 Monitor 自己所在的部署主机 ID；该主机上的组件健康检查直接连 127.0.0.1。
 	// 主机没有私网地址时对外地址从本机访问常常不通（云厂商不回环公网 IP），会把健康的服务误报为超时。
 	LocalHostID string `yaml:"local_host_id"`
+}
+
+// HostPolicyConfig 是经 GetHostPolicy 下发给各主机的主机策略里，除告警渠道以外的部分。
+type HostPolicyConfig struct {
+	Watchdog HostWatchdogConfig `yaml:"watchdog"`
+}
+
+// HostWatchdogConfig 是主机守护（moox-runtime watch）参数；零值表示各主机用守护自己的默认值。
+type HostWatchdogConfig struct {
+	Disabled          bool          `yaml:"disabled"`
+	MergeWindow       time.Duration `yaml:"merge_window"`
+	CrashLoopFailures int           `yaml:"crash_loop_failures"`
+	CrashLoopWindow   time.Duration `yaml:"crash_loop_window"`
+	CrashLoopRetry    time.Duration `yaml:"crash_loop_retry"`
+	CrashLoopSlow     time.Duration `yaml:"crash_loop_slow"`
+	StableAfter       time.Duration `yaml:"stable_after"`
+	NotReadyAlert     time.Duration `yaml:"not_ready_alert"`
 }
 
 type AlertConfig struct {
@@ -404,6 +422,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Alert.SendTimeoutSeconds <= 0 || c.Alert.SendTimeoutSeconds > 300 {
 		return fmt.Errorf("alert.send_timeout_seconds must be between 1 and 300")
+	}
+	watchdog := c.HostPolicy.Watchdog
+	if watchdog.CrashLoopFailures < 0 {
+		return fmt.Errorf("host_policy.watchdog.crash_loop_failures must not be negative")
+	}
+	for _, d := range []time.Duration{watchdog.MergeWindow, watchdog.CrashLoopWindow, watchdog.CrashLoopRetry, watchdog.CrashLoopSlow, watchdog.StableAfter, watchdog.NotReadyAlert} {
+		if d < 0 {
+			return fmt.Errorf("host_policy.watchdog durations must not be negative")
+		}
 	}
 	if c.Observability.Enabled {
 		if len(c.Observability.EventBusURLs) == 0 {

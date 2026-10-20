@@ -178,40 +178,6 @@ func encodeSeriesHistoryKey(key *pb.RowKey, bucketDuration time.Duration) ([]byt
 	return out, nil
 }
 
-// parseTimeSeriesFieldKey extracts the row identity from a legacy field or
-// attribute key. Older stores predate the dedicated history namespace, but
-// their row identity is still encoded losslessly in every field key. The
-// history reader uses this parser once per dataset to backfill the compact
-// time-ordered index without reading field values.
-func parseTimeSeriesFieldKey(key []byte) (*pb.RowKey, bool) {
-	if len(key) < 2 || (key[0] != fieldNamespace && key[0] != attributeNamespace) || key[1] != timeSeriesKind {
-		return nil, false
-	}
-	rest := key[2:]
-	parts := make([]string, 0, 7)
-	for i := 0; i < 7; i++ {
-		part, next, err := decodePart(rest)
-		if err != nil {
-			return nil, false
-		}
-		parts = append(parts, part)
-		rest = next
-	}
-	if len(parts) != 7 {
-		return nil, false
-	}
-	return &pb.RowKey{
-		SpaceId:   parts[0],
-		DatasetId: parts[1],
-		Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
-			SubjectId: parts[3],
-			Freq:      parts[4],
-			DataTime:  parts[5],
-			SeriesTag: parts[6],
-		}},
-	}, true
-}
-
 func decodePart(data []byte) (string, []byte, error) {
 	value := make([]byte, 0, len(data))
 	for i := 0; i < len(data); {

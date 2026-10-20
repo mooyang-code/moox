@@ -122,11 +122,13 @@ type fakePlanCloud struct {
 	onFresh    func()          // 新鲜读回返回前的钩子，用于构造读回与作业结算之间的竞态
 	submitErr  error           // 非空时 SubmitRuntimeConfigs 直接失败，模拟提交停用时崩溃
 	patches    map[string]*cloudnodepb.NodeRuntimeConfigPatch
-	created    []string
-	submits    int
-	failNodes  map[string]bool
-	leaseCalls int
-	releases   int
+	// onRuntimeConfig 在 SubmitRuntimeConfigs 接受一批补丁之前调用，用于断言提交时函数的代码版本。
+	onRuntimeConfig func([]*cloudnodepb.NodeRuntimeConfigPatch)
+	created         []string
+	submits         int
+	failNodes       map[string]bool
+	leaseCalls      int
+	releases        int
 }
 
 func newFakePlanCloud() *fakePlanCloud {
@@ -187,13 +189,16 @@ func (c *fakePlanCloud) LatestPackage(context.Context, string, string) (string, 
 
 func (c *fakePlanCloud) SubmitDeployNodes(_ context.Context, _ string, nodeIDs []string, packageID string, _ *scfinvoker.CollectorPublishLease) (string, error) {
 	for _, id := range nodeIDs {
-		if node, ok := c.backfill[id]; ok {
-			node.PackageID = packageID
-			c.backfill[id] = node
-		} else {
-			node := c.nodes[id]
-			node.PackageID = packageID
-			c.nodes[id] = node
+		// 升级失败的函数留在旧代码包上，与真实云端一致。
+		if !c.failNodes[id] {
+			if node, ok := c.backfill[id]; ok {
+				node.PackageID = packageID
+				c.backfill[id] = node
+			} else {
+				node := c.nodes[id]
+				node.PackageID = packageID
+				c.nodes[id] = node
+			}
 		}
 		c.upgraded = append(c.upgraded, id)
 	}
@@ -204,6 +209,7 @@ func (c *fakePlanCloud) SubmitDeleteNodes(_ context.Context, _ string, nodeIDs [
 	for _, id := range nodeIDs {
 		delete(c.unready, id)
 		delete(c.nodes, id)
+		delete(c.backfill, id)
 	}
 	c.deleted = append(c.deleted, nodeIDs...)
 	return c.newJob(nodeIDs), nil
@@ -229,10 +235,18 @@ func (c *fakePlanCloud) SubmitCreateNodes(_ context.Context, _ string, items []*
 	for _, item := range items {
 		name := item.GetMetadata().AsMap()["function_name"].(string)
 		names = append(names, name)
-		if !c.failNodes[name] {
-			c.nodes[name] = scfinvoker.Node{NodeID: name, FunctionName: name, Region: item.GetRegion(), TriggerType: "timer", Metadata: map[string]any{}}
-			c.created = append(c.created, name)
+		if c.failNodes[name] {
+			continue
 		}
+		if item.GetTriggerType() == "invoke" {
+			if c.backfill == nil {
+				c.backfill = map[string]scfinvoker.Node{}
+			}
+			c.backfill[name] = scfinvoker.Node{NodeID: name, FunctionName: name, Region: item.GetRegion(), TriggerType: "invoke", PackageID: item.GetPackageId(), Metadata: item.GetMetadata().AsMap(), Ready: true}
+		} else {
+			c.nodes[name] = scfinvoker.Node{NodeID: name, FunctionName: name, Region: item.GetRegion(), TriggerType: "timer", Metadata: map[string]any{}}
+		}
+		c.created = append(c.created, name)
 	}
 	return c.newJob(names), nil
 }
@@ -246,6 +260,9 @@ func (c *fakePlanCloud) SubmitRuntimeConfigs(_ context.Context, _ string, patche
 		if strings.TrimSpace(patch.GetTimerCron()) == "" {
 			return "", errors.New("INVALID_PARAM: timer_cron is required")
 		}
+	}
+	if c.onRuntimeConfig != nil {
+		c.onRuntimeConfig(patches)
 	}
 	names := make([]string, 0, len(patches))
 	for _, patch := range patches {
@@ -1199,7 +1216,7 @@ func TestBackfillFunctionFollowsANewlyUploadedPackageWithinTheSameReconciler(t *
 	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
 	name := BackfillFunctionName("crypto", "spot", "ap-nanjing")
 	h.cloud.packages = []string{"pkg-v1"}
-	h.cloud.backfill = map[string]scfinvoker.Node{name: {NodeID: name, PackageID: "pkg-v1"}}
+	h.cloud.backfill = map[string]scfinvoker.Node{name: {NodeID: name, PackageID: "pkg-v1", Metadata: testBackfillMetadata()}}
 
 	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
 	require.NoError(t, err)
@@ -1245,7 +1262,7 @@ func TestBackfillFunctionIsNeverDowngradedByAStaleCaller(t *testing.T) {
 	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
 	name := BackfillFunctionName("crypto", "spot", "ap-nanjing")
 	h.cloud.packages = []string{"pkg-v1"}
-	h.cloud.backfill = map[string]scfinvoker.Node{name: {NodeID: name, PackageID: "pkg-v2"}}
+	h.cloud.backfill = map[string]scfinvoker.Node{name: {NodeID: name, PackageID: "pkg-v2", Metadata: testBackfillMetadata()}}
 
 	r.backfillMu.Lock() // 模拟另一次调用正在升级补采函数
 	done := make(chan error, 1)
@@ -1264,6 +1281,42 @@ func TestBackfillFunctionIsNeverDowngradedByAStaleCaller(t *testing.T) {
 	require.NoError(t, <-done)
 	require.Empty(t, h.cloud.upgraded, "已在 v2 的补采函数不能被降级")
 	require.Equal(t, "pkg-v2", h.cloud.backfill[name].PackageID)
+}
+
+// 访问入口或调用方身份变了（主机改名、密钥轮换），以及没有记录指纹的旧补采函数：删掉后按当前身份重建，之后不再重复。
+func TestBackfillFunctionIsRecreatedWhenAccessIdentityChanges(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	r.Deploy.PackageID, r.Deploy.PackageName = "", "moox-collector-crypto-plan"
+	name := BackfillFunctionName("crypto", "spot", "ap-nanjing")
+	h.cloud.packages = []string{"pkg-v1"}
+	h.cloud.backfill = map[string]scfinvoker.Node{name: {NodeID: name, PackageID: "pkg-v1", Metadata: map[string]any{}, Ready: true}}
+
+	got, err := r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Equal(t, name, got)
+	require.Equal(t, []string{name}, h.cloud.deleted)
+	require.Equal(t, []string{name}, h.cloud.created)
+	require.Equal(t, testBackfillMetadata()[backfillAccessMetadataKey], h.cloud.backfill[name].Metadata[backfillAccessMetadataKey])
+
+	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Len(t, h.cloud.deleted, 1, "身份一致后不再重建")
+
+	r.Access = func(region string) (map[string]string, error) {
+		access, err := testSCFAccessEnvironment(region)
+		access["MOOX_ACCESS_ID"] = "access@overseas"
+		return access, err
+	}
+	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+	require.NoError(t, err)
+	require.Len(t, h.cloud.deleted, 2, "访问入口变了要重建")
+	require.Len(t, h.cloud.created, 2)
+}
+
+func testBackfillMetadata() map[string]any {
+	access, _ := testSCFAccessEnvironment("")
+	return map[string]any{backfillAccessMetadataKey: backfillAccessFingerprint(access)}
 }
 
 func testSCFAccessEnvironment(string) (map[string]string, error) {
@@ -1376,4 +1429,137 @@ func TestEnableAllWaitsForInFlightJobs(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, done)
 	require.True(t, h.cloud.patches[target].GetTimerEnabled())
+}
+
+// 恢复采集时必须先升级落后的函数，再启用定时器并下发环境：环境格式随代码版本变化，不能出现“旧代码读新环境”。
+func TestEnableAllUpgradesFunctionCodeBeforeEnablingTimers(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	require.Nil(t, h.open())
+	done, err := r.DisableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	for name, patch := range h.cloud.patches {
+		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, PackageID: "pkg-old", Metadata: map[string]any{
+			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": false,
+			"timer_available_status": "Disabled", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
+		}}
+	}
+	r.Deploy.PackageID = "pkg-new"
+	h.cloud.upgraded = nil
+	enabledAfterUpgrade := map[string]bool{}
+	h.cloud.onRuntimeConfig = func(patches []*cloudnodepb.NodeRuntimeConfigPatch) {
+		for _, patch := range patches {
+			enabledAfterUpgrade[patch.GetNodeId()] = h.cloud.nodes[patch.GetNodeId()].PackageID == "pkg-new"
+		}
+	}
+
+	done, err = r.EnableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	require.Len(t, h.cloud.upgraded, len(h.cloud.nodes), "全部落后函数先升级")
+	require.NotEmpty(t, enabledAfterUpgrade)
+	for name, upgraded := range enabledAfterUpgrade {
+		require.True(t, upgraded, "函数 %s 启用定时器时代码必须已经是新版本", name)
+	}
+	for name := range h.cloud.nodes {
+		require.True(t, h.cloud.patches[name].GetTimerEnabled(), name)
+	}
+}
+
+// 升级失败或仍在进行时，EnableAll 读回确认仍有函数在旧代码包上：返回 errCodeUpgradePending，既不启用定时器也不下发环境。
+func TestEnableAllRefusesToEnableWhileFunctionsStayOnTheOldPackage(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	require.Nil(t, h.open())
+	done, err := r.DisableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	var stuck string
+	for name, patch := range h.cloud.patches {
+		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, PackageID: "pkg-old", Metadata: map[string]any{
+			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": false,
+			"timer_available_status": "Disabled", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
+		}}
+		stuck = name
+	}
+	r.Deploy.PackageID = "pkg-new"
+	before := map[string]bool{}
+	for name, patch := range h.cloud.patches {
+		before[name] = patch.GetTimerEnabled()
+	}
+
+	// 某个函数的升级失败：不能启用。
+	h.cloud.failNodes[stuck] = true
+	done, err = r.EnableAll(context.Background())
+	require.ErrorIs(t, err, errCodeUpgradePending)
+	require.False(t, done)
+	for name, patch := range h.cloud.patches {
+		require.Equal(t, before[name], patch.GetTimerEnabled(), "代码没升级完，函数 %s 的定时器不能被启用", name)
+	}
+
+	// 作业仍在运行（升级请求已提交、云端还没完成）：同样不能启用。
+	h.cloud.failNodes[stuck] = false
+	node := h.cloud.nodes[stuck]
+	node.PackageID = "pkg-old"
+	h.cloud.nodes[stuck] = node
+	r.aux.track(auxJob{id: "job-running", kind: auxJobKindUpgrade, functions: []string{stuck}, at: r.now()})
+	h.cloud.running = map[string]bool{"job-running": true}
+	_, err = r.EnableAll(context.Background())
+	require.ErrorIs(t, err, errCodeUpgradePending)
+
+	// 作业结束、代码已是新包：启用。
+	h.cloud.running["job-running"] = false
+	node.PackageID = "pkg-new"
+	h.cloud.nodes[stuck] = node
+	for name, n := range h.cloud.nodes {
+		n.PackageID = "pkg-new"
+		h.cloud.nodes[name] = n
+	}
+	done, err = r.EnableAll(context.Background())
+	require.NoError(t, err)
+	require.True(t, done)
+	for name := range h.cloud.nodes {
+		require.True(t, h.cloud.patches[name].GetTimerEnabled(), name)
+	}
+}
+
+// 云端已确认不存在的函数没有代码可升级，不能让整个空间永远等下去；读回失败则无法确认，同样等待。
+func TestUpgradeBeforeEnableIgnoresFunctionsGoneFromTheCloudAndWaitsOnReadbackErrors(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	require.NoError(t, h.reconcile(r))
+	change := h.content(h.open()).Datasets["ds_spot|1m"]
+	h.now = time.Unix(change.P, 0).Add(time.Minute)
+	require.NoError(t, h.reconcile(r))
+	require.Nil(t, h.open())
+	var gone string
+	for name, patch := range h.cloud.patches {
+		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, PackageID: "pkg-new", Metadata: map[string]any{
+			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": false,
+			"timer_available_status": "Disabled", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
+		}}
+		gone = name
+	}
+	r.Deploy.PackageID = "pkg-new"
+	// 一个函数在目录里还是旧包，但云端读回确认它已不存在。
+	h.cloud.nodes[gone] = scfinvoker.Node{NodeID: gone, PackageID: "pkg-old", Metadata: map[string]any{
+		"timer_last_readback_at": h.now.UTC().Format(time.RFC3339Nano),
+		"timer_status_error":     "ResourceNotFound.Function: function not found",
+	}}
+	h.cloud.failNodes[gone] = true // 不存在的函数升级必然失败，留在旧包
+	require.NoError(t, r.upgradeBeforeEnable(context.Background()), "已确认不存在的函数不阻塞升级门禁")
+	require.Equal(t, "pkg-old", h.cloud.nodes[gone].PackageID)
+
+	// 同一个函数没有读回证据（读回过期），说明它可能还活着：必须等。
+	h.cloud.nodes[gone] = scfinvoker.Node{NodeID: gone, PackageID: "pkg-old", Metadata: map[string]any{}}
+	require.ErrorIs(t, r.upgradeBeforeEnable(context.Background()), errCodeUpgradePending)
 }

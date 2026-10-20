@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/hostgateway
 
-go 1.26.9
+go 1.27.2
 
 require (
 	github.com/dgraph-io/badger/v4 v4.7.0
@@ -20,6 +20,7 @@ require (
 	trpc.group/trpc-go/trpc-database/timer v1.0.0
 	trpc.group/trpc-go/trpc-go v1.0.4
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
 )
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
@@ -30,6 +31,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/go-playground/form/v4 v4.2.0 // indirect
 	github.com/golang/protobuf v1.5.0 // indirect
+	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
@@ -139,3 +141,5 @@ replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/s
 replace github.com/mooyang-code/moox/modules/admin/proto/admingen => ../admin/proto/admingen
 
 replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen
+
+replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress

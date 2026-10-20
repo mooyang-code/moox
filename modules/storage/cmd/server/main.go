@@ -124,7 +124,7 @@ func runPrimaryRole() error {
 		}
 		return "", fmt.Errorf("factor result dataset for source view %s/%s is not found", spaceID, sourceViewID)
 	}
-	svc, err := primarystore.New(primarystore.Options{Resolver: resolver, Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, ResultDataset: resultDatasetResolver, SyncPoints: meta, Authorizer: func(auth *pb.AuthInfo) error {
+	svc, err := primarystore.New(primarystore.Options{Resolver: resolver.primaryStore(), Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, ResultDataset: resultDatasetResolver, SyncPoints: meta, Authorizer: func(auth *pb.AuthInfo) error {
 		if auth == nil || auth.GetAppId() == "" ||
 			!hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(datanode.ServiceAuthKey(primarySecret, auth.GetAppId()))) {
 			return errors.New("invalid primary auth")
@@ -249,7 +249,7 @@ func storageViewPeriodRetention() time.Duration {
 // are older than its retention in the Storage policy.
 type datasetCleanup struct {
 	reader    datasetReader
-	resolver  primarystore.NodeResolver
+	resolver  dataNodeResolver
 	auth      *pb.AuthInfo
 	retention storagepolicy.Retention
 	metrics   *observability.CleanupMetrics
@@ -917,7 +917,10 @@ type dataNodeProxyKey struct {
 	ServiceTarget string
 }
 
-func newDataNodeResolver(snapshotProvider func() metadata.RequestSnapshot, newProxy func(string) pb.DataNodeRuntimeService) primarystore.NodeResolver {
+// dataNodeResolver 按空间与数据集找到负责的 DataNode 完整服务（清理等维护任务需要全部接口）。
+type dataNodeResolver func(ctx context.Context, spaceID, datasetID string) (pb.DataNodeRuntimeService, error)
+
+func newDataNodeResolver(snapshotProvider func() metadata.RequestSnapshot, newProxy func(string) pb.DataNodeRuntimeService) dataNodeResolver {
 	if newProxy == nil {
 		newProxy = func(target string) pb.DataNodeRuntimeService {
 			opts := []client.Option{client.WithTarget(target), client.WithNetwork("tcp"), client.WithProtocol("trpc"), client.WithTransport(transport.DefaultClientTransport), client.WithTimeout(dataNodeClientTimeout)}
@@ -1234,4 +1237,11 @@ func registerRoleHealth(s *server.Server, instance string) error {
 		return fmt.Errorf("register storage health: %w", err)
 	}
 	return nil
+}
+
+// primaryStore 把完整服务解析器交给 PrimaryStore 使用。
+func (r dataNodeResolver) primaryStore() primarystore.Resolver {
+	return func(ctx context.Context, spaceID, datasetID string) (primarystore.DataNodeClient, error) {
+		return r(ctx, spaceID, datasetID)
+	}
 }

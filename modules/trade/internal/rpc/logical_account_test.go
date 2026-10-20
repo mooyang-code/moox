@@ -49,15 +49,17 @@ func TestLogicalAccountRPCCreatesPausedAccountAndClaimsOwner(t *testing.T) {
 	claimed, err := handler.ClaimLogicalAccountOwner(
 		ctx,
 		&tradepb.ClaimLogicalAccountOwnerReq{
-			LogicalAccountId: "logical-1",
-			RunnerId:         "runner-1",
+			LogicalAccountId:  "logical-1",
+			InstanceId:        "instance-1",
+			SessionId:         "session-1",
+			ExpectedAuthFence: created.GetLogicalAccount().GetAuthFence(),
 		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if claimed.GetRetInfo().GetCode() != tradepb.ErrorCode_SUCCESS ||
-		claimed.GetLogicalAccount().GetOwnerRunnerId() != "runner-1" {
+		claimed.GetLogicalAccount().GetOwnerInstanceId() != "instance-1" {
 		t.Fatalf("claimed = %+v", claimed)
 	}
 }
@@ -119,16 +121,18 @@ func TestReleaseLogicalAccountOwnerMapsOwnerConflict(t *testing.T) {
 	requireNoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
-			OwnerRunnerID: "runner-1", ExecutionMode: "PAPER",
+			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
 			MarketType: "SPOT", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "test",
 		})
 	}))
 
+	account, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	requireNoError(t, err)
 	response, err := handler.ReleaseLogicalAccountOwner(
 		spacecontext.WithSpaceID(context.Background(), "space-1"),
 		&tradepb.ReleaseLogicalAccountOwnerReq{
-			LogicalAccountId: "logical-1", RunnerId: "runner-other",
+			LogicalAccountId: "logical-1", InstanceId: "runner-other", SessionId: "session-other", ExpectedAuthFence: account.AuthFence,
 		},
 	)
 	if err != nil {

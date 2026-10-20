@@ -324,9 +324,8 @@ func (r *InventoryReconciler) consumerSpec(ref datasetRef) (dynamicDatasetConsum
 	config.PartitionID = partitionID
 	config.Consumer = durable
 	// A per-Dataset durable is created after the View may already have emitted
-	// historical rows. Replay the complete stream slice so replacing the legacy
-	// catch-all durable cannot strand its pending sequence. The durable keeps
-	// this policy on subsequent restarts, making the migration idempotent.
+	// historical rows. Replay the complete stream slice so no pending sequence
+	// is stranded; the durable keeps this policy on subsequent restarts.
 	config.DeliverPolicy = "all"
 	config.FilterSubjects = append([]string(nil), filters...)
 	config.DatasetRoutes = []DatasetRoute{{SpaceID: ref.spaceID, DatasetID: ref.datasetID}}
@@ -412,8 +411,8 @@ func dynamicConsumerTemplate(options EventConsumerOptions) (EventConsumerOptions
 				}
 			}
 			// Every route in the misc partition is reconciled dynamically, including
-			// its non-wildcard legacy routes. Only partitions that remain static
-			// are excluded from dynamic bindings.
+			// its non-wildcard routes. Only partitions that remain static are
+			// excluded from dynamic bindings.
 			continue
 		}
 		for _, route := range partition.DatasetRoutes {

@@ -110,7 +110,7 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 	report := &metricspb.MetricReport{
 		ServiceName: "collector", InstanceId: "collector@control", NodeId: "control", BootId: "boot-1",
 		Snapshot: &metricspb.MetricSnapshot{SchemaVersion: 1, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT,
-			Compression: metricspb.Compression_COMPRESSION_NONE, Data: raw, UncompressedSha256: sum[:], SampleCount: 1},
+			Data: raw, DataSha256: sum[:], SampleCount: 1},
 	}
 	encode := func(id string, observed time.Time, report *metricspb.MetricReport) events.EncodedEvent {
 		t.Helper()

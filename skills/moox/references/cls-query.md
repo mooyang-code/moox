@@ -38,7 +38,7 @@ python3 skills/moox/scripts/cls_search.py \
 
 ## MooX CLS 验证流程
 
-1. 从本次 `cls-bootstrap.sh` 结果或部署配置取得 Topic ID，不要猜测 Topic ID。
+1. 从 `setup init` 摘要里的 `cls` 结果或部署配置取得 Topic ID，不要猜测 Topic ID。
 2. 先用 `--query '*'` 拉取少量原始日志，记录 Topic、时间范围、RequestId 和结果数。
 3. 检查 `LogJson` 中是否有 `service_name`，并按该字段在客户端筛选服务。
 4. 只有确认 CLS Topic 已建立 `service_name` 索引后，才使用

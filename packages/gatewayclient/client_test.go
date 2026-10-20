@@ -143,7 +143,7 @@ func TestInternalSelectsLocalOtherwiseTLSWithPrivateCA(t *testing.T) {
 	require.Equal(t, endpoint{address: "127.0.0.1:11002", target: "b"}, ep)
 	ep, err = c.endpoint(context.Background(), secretService, "b")
 	require.NoError(t, err)
-	require.Equal(t, endpoint{address: "a.example.test:11003", target: "a", caFile: ca, serverName: "a"}, ep)
+	require.Equal(t, endpoint{address: "a.example.test:11003", target: "a", caFile: ca, serverName: "a", compress: true}, ep, "跨主机调用默认压缩")
 	for _, invalid := range []string{"", "none", "root"} {
 		config.CAFile = invalid
 		_, err = New(config)
@@ -182,7 +182,8 @@ func TestExternalReadsResignRetriesAndWritesRunOnce(t *testing.T) {
 		attempts                int
 	}{
 		{"moox-skill", "trpc.moox.storage.PrimaryStore", "ReadTimeSeriesRows", 2},
-		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", 1},
+		// 周期提交声明为幂等写：请求可能已发出的网络失败后重发一次；其他写方法绝不重发。
+		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", 2},
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "UpsertFields", 1},
 	} {
 		t.Run(call.method, func(t *testing.T) {
@@ -194,7 +195,7 @@ func TestExternalReadsResignRetriesAndWritesRunOnce(t *testing.T) {
 			nonces := map[string]bool{}
 			client.invoke = func(_ context.Context, ep endpoint, service, method string, serialization int, raw []byte, headers http.Header) ([]byte, error) {
 				attempts++
-				require.Equal(t, endpoint{address: config.AccessAddress, target: config.AccessInstanceID}, ep)
+				require.Equal(t, endpoint{address: config.AccessAddress, target: config.AccessInstanceID, compress: true}, ep)
 				require.Equal(t, codec.SerializationTypePB, serialization)
 				require.Equal(t, body, raw)
 				claims, err := gatewayauth.Verify(config.Credentials, gatewayauth.Request{Method: "POST", Path: "/" + service + "/" + method,
@@ -355,4 +356,53 @@ func TestWithoutRetryLeavesRetriesToTheCaller(t *testing.T) {
 	_, err = c.Forward(context.Background(), secretService, "GetSecret", codec.SerializationTypeJSON, body)
 	require.Error(t, err)
 	require.Equal(t, 2, calls, "默认仍会重试一次")
+}
+
+type relayTunnelStub struct{ tunnelFunc }
+
+func (relayTunnelStub) ResolveRelay(_ context.Context, control string) (string, error) {
+	return "127.0.0.1:23456", nil
+}
+
+// 只能出站的主机经 control 中转：其他主机连 control 的公网端口，control 上的调用方连本机端口，
+// 隧道模式经 SSH 转发到 control；缺 CA 或隧道不支持中转时拒绝。目标主机自己仍走本机网关。
+func TestRelayEndpointForOutboundHost(t *testing.T) {
+	ca, _, _ := testCertificates(t)
+	directory := testDirectory(t, "home")
+	directory.Hosts["control"] = servicecatalog.DirectoryHost{Address: "control.example.test"}
+	directory.Hosts["home"] = servicecatalog.DirectoryHost{Address: "192.168.0.103", Relay: "control"}
+	var err error
+	directory.Version, err = directory.VersionHash()
+	require.NoError(t, err)
+	config := tunnelConfig(&sourceStub{directory: directory})
+	config.Mode, config.Tunnels, config.CAFile, config.LocalHostID = Internal, nil, ca, "storage"
+	route := func(config Config) (endpoint, error) {
+		return newTestClient(t, config).endpoint(context.Background(), secretService, "")
+	}
+	ep, err := route(config)
+	require.NoError(t, err)
+	require.Equal(t, "home.moox-relay:11003", ep.address)
+	require.Equal(t, "home", ep.serverName)
+	require.Equal(t, &relayRoute{controlAddress: "control.example.test:11003", controlHost: "control", target: "home", caFile: ca, credentials: config.Credentials}, ep.relay)
+
+	config.LocalHostID = "control"
+	ep, err = route(config)
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:11003", ep.relay.controlAddress)
+
+	config.LocalHostID = "home"
+	ep, err = route(config)
+	require.NoError(t, err)
+	require.Nil(t, ep.relay, "目标主机自己走本机网关")
+
+	tunnel := tunnelConfig(&sourceStub{directory: directory})
+	_, err = route(tunnel)
+	require.ErrorContains(t, err, "CA")
+	tunnel.CAFile = ca
+	_, err = route(tunnel)
+	require.ErrorContains(t, err, "relay")
+	tunnel.Tunnels = relayTunnelStub{tunnelFunc(func(context.Context, string) (string, error) { return "", errors.New("no direct tunnel") })}
+	ep, err = route(tunnel)
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:23456", ep.relay.controlAddress)
 }

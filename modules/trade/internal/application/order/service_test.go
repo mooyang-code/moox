@@ -1252,7 +1252,7 @@ func newTestServiceForMarket(
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: account.SpaceID, LogicalAccountID: "logical-1", Name: "logical",
-			OwnerRunnerID: "runner-1", ExecutionMode: string(account.ExecutionMode),
+			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: string(account.ExecutionMode),
 			MarketType: string(account.MarketType), SettlementAsset: account.SettlementAsset,
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
@@ -1267,6 +1267,16 @@ func newTestServiceForMarket(
 		if err := tx.SetLogicalAccountAutomation(
 			account.SpaceID, "logical-1", "ACTIVE", "",
 		); err != nil {
+			return err
+		}
+		// 目标订单（setTestOwner 的 owner-1）需要当前会话的有效目标。
+		if _, _, err := tx.AcceptLogicalAccountTarget(store.LogicalAccountTargetRecord{
+			SpaceID: account.SpaceID, LogicalAccountID: "logical-1", TargetID: "owner-1",
+			InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
+			BarEndTime: 1, EffectiveAt: 1, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
+			Status: "PENDING", AcceptedAt: 1,
+			Targets: []store.InstrumentTarget{{InstrumentID: "BTCUSDT", Quantity: "1"}},
+		}); err != nil {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{

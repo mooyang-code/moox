@@ -34,6 +34,8 @@ type MonitorMgrService interface {
 	QueryPipelineArrivalHistory(ctx context.Context, req *QueryPipelineArrivalHistoryReq) (*QueryPipelineArrivalHistoryRsp, error)
 
 	GetDoctorContext(ctx context.Context, req *GetDoctorContextReq) (*GetDoctorContextRsp, error)
+
+	GetHostPolicy(ctx context.Context, req *GetHostPolicyReq) (*GetHostPolicyRsp, error)
 }
 
 func MonitorMgrService_GetHealthOverview_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -180,6 +182,24 @@ func MonitorMgrService_GetDoctorContext_Handler(svr interface{}, ctx context.Con
 	return rsp, nil
 }
 
+func MonitorMgrService_GetHostPolicy_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetHostPolicyReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MonitorMgrService).GetHostPolicy(ctx, reqbody.(*GetHostPolicyReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // MonitorMgrServer_ServiceDesc descriptor for server.RegisterService.
 var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.monitor.MonitorMgr",
@@ -216,6 +236,10 @@ var MonitorMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.monitor.MonitorMgr/GetDoctorContext",
 			Func: MonitorMgrService_GetDoctorContext_Handler,
+		},
+		{
+			Name: "/trpc.moox.monitor.MonitorMgr/GetHostPolicy",
+			Func: MonitorMgrService_GetHostPolicy_Handler,
 		},
 	},
 }
@@ -255,6 +279,9 @@ func (s *UnimplementedMonitorMgr) QueryPipelineArrivalHistory(ctx context.Contex
 func (s *UnimplementedMonitorMgr) GetDoctorContext(ctx context.Context, req *GetDoctorContextReq) (*GetDoctorContextRsp, error) {
 	return nil, errors.New("rpc GetDoctorContext of service MonitorMgr is not implemented")
 }
+func (s *UnimplementedMonitorMgr) GetHostPolicy(ctx context.Context, req *GetHostPolicyReq) (*GetHostPolicyRsp, error) {
+	return nil, errors.New("rpc GetHostPolicy of service MonitorMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -279,6 +306,8 @@ type MonitorMgrClientProxy interface {
 	QueryPipelineArrivalHistory(ctx context.Context, req *QueryPipelineArrivalHistoryReq, opts ...client.Option) (rsp *QueryPipelineArrivalHistoryRsp, err error)
 
 	GetDoctorContext(ctx context.Context, req *GetDoctorContextReq, opts ...client.Option) (rsp *GetDoctorContextRsp, err error)
+
+	GetHostPolicy(ctx context.Context, req *GetHostPolicyReq, opts ...client.Option) (rsp *GetHostPolicyRsp, err error)
 }
 
 type MonitorMgrClientProxyImpl struct {
@@ -444,6 +473,26 @@ func (c *MonitorMgrClientProxyImpl) GetDoctorContext(ctx context.Context, req *G
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetDoctorContextRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *MonitorMgrClientProxyImpl) GetHostPolicy(ctx context.Context, req *GetHostPolicyReq, opts ...client.Option) (*GetHostPolicyRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.monitor.MonitorMgr/GetHostPolicy")
+	msg.WithCalleeServiceName(MonitorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("monitor")
+	msg.WithCalleeService("MonitorMgr")
+	msg.WithCalleeMethod("GetHostPolicy")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetHostPolicyRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

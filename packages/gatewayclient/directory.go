@@ -62,7 +62,7 @@ func (s *LocalDirectorySource) Fetch(ctx context.Context, version string) (Direc
 			if host == nil {
 				return DirectoryUpdate{}, fmt.Errorf("empty directory host")
 			}
-			d.Hosts[id] = servicecatalog.DirectoryHost{Address: host.GetAddress(), PrivateAddress: host.GetPrivateAddress(), Region: host.GetRegion()}
+			d.Hosts[id] = servicecatalog.DirectoryHost{Address: host.GetAddress(), PrivateAddress: host.GetPrivateAddress(), Region: host.GetRegion(), Relay: host.GetRelay()}
 		}
 		for path, hosts := range rsp.GetServices() {
 			if hosts == nil {

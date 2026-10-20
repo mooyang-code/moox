@@ -6,6 +6,7 @@ import { isRetInfoSuccess } from "../ret-info";
 import type { ControlResponse } from "./types";
 import { expireBrowserSession, installSpaceAwareSignedClient } from "./signed-client";
 import { StaleSpaceRequestError } from "./stale-space";
+import { explainTransportError } from "../network-error";
 
 declare module "axios" {
   interface AxiosRequestConfig {
@@ -99,7 +100,7 @@ adminClient.interceptors.response.use(
     // 切换空间造成的取消保持原类型，调用方按类型静默处理
     if (error instanceof StaleSpaceRequestError) return Promise.reject(error);
     const data = error?.response?.data as ControlResponse<unknown> | undefined;
-    const message = data?.ret_info?.msg || error?.message || "Control 请求失败";
+    const message = data?.ret_info?.msg || explainTransportError(error, "Control 请求失败");
     const reportedError = new ControlRequestError(message, data);
     if (!error?.config?.silentError) reportControlError(reportedError);
     return Promise.reject(reportedError);

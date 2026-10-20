@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	protocol "github.com/mooyang-code/moox/packages/gatewayclient/relay"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/mooyang-code/moox/packages/servicecatalog/hostgatewayconfig"
 )
@@ -102,9 +103,40 @@ func (m *Material) HostID() string      { return m.hostID }
 func (m *Material) Fingerprint() string { return m.fingerprint }
 
 // Server uses TLS for server authentication. Caller authentication is HMAC at
-// the RPC layer; installing the CA as ClientCAs would incorrectly require mTLS.
+// the RPC layer, so ordinary connections never present client certificates.
+// 只有 ALPN 为反向连接 attach 的连接强制双向 TLS（证书须由 MooX CA 签发且带 ClientAuth）；
+// 打开中转流的连接只协商 ALPN；不带这两个 ALPN 的连接保持原样交给 tRPC。
 func (m *Material) Server() *tls.Config {
-	return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{m.certificate}}
+	base := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{m.certificate}}
+	attach := base.Clone()
+	attach.NextProtos = []string{protocol.ALPNAttach}
+	attach.ClientAuth = tls.RequireAndVerifyClientCert
+	attach.ClientCAs = m.roots.Clone()
+	open := base.Clone()
+	open.NextProtos = []string{protocol.ALPNOpen}
+	base.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		switch {
+		case slices.Contains(hello.SupportedProtos, protocol.ALPNAttach):
+			return attach, nil
+		case slices.Contains(hello.SupportedProtos, protocol.ALPNOpen):
+			return open, nil
+		}
+		return nil, nil
+	}
+	return base
+}
+
+// RelayClient 是出站主机网关与 control 建立反向连接用的配置：提交本机网关证书，只信任 MooX CA。
+func (m *Material) RelayClient(controlHost string) (*tls.Config, error) {
+	config, err := m.Client(controlHost)
+	if err != nil {
+		return nil, err
+	}
+	if !slices.Contains(m.certificate.Leaf.ExtKeyUsage, x509.ExtKeyUsageClientAuth) {
+		return nil, errors.New("host certificate lacks ClientAuth; outbound hosts need a relay-capable certificate")
+	}
+	config.Certificates = []tls.Certificate{m.certificate}
+	return config, nil
 }
 
 // Client never consults the OS trust store. Its server name is the canonical

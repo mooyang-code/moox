@@ -352,3 +352,16 @@ func TestRejectUnsafeDirectoriesNamesAndExistingBundles(t *testing.T) {
 		require.NotContains(t, file.Name(), ".issue-", "staging directories must be cleaned")
 	}
 }
+
+// 出站主机的网关证书同时带 ServerAuth 与 ClientAuth，直达主机只有 ServerAuth。
+func TestIssueOutboundCertificateAllowsClientAuth(t *testing.T) {
+	store := newStore(t)
+	_, err := store.EnsureCA()
+	require.NoError(t, err)
+	direct, err := store.Issue(HostIdentity{HostID: "storage", Address: "192.0.2.20"}, filepath.Join(privateFixtureDir(t), "direct"))
+	require.NoError(t, err)
+	require.Equal(t, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, parseFixtureCertificate(t, direct.Certificate).ExtKeyUsage)
+	outbound, err := store.Issue(HostIdentity{HostID: "home", Address: "192.168.0.103", Outbound: true}, filepath.Join(privateFixtureDir(t), "outbound"))
+	require.NoError(t, err)
+	require.Equal(t, []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}, parseFixtureCertificate(t, outbound.Certificate).ExtKeyUsage)
+}

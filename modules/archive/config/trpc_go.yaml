@@ -44,6 +44,11 @@ server:
       network: "13 * * * * *"
       protocol: timer
       timeout: 50000
+    - name: trpc.moox.archive.mgr.metrics.timer
+      port: 11410
+      network: "*/30 * * * * *?startAtOnce=1"
+      protocol: timer
+      timeout: 10000
 
 plugins:
   metrics:

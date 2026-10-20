@@ -1,5 +1,8 @@
-// Package staging is the worker's DuckDB staging area: one staged table per task plus the task
-// watermark and the (permanent) partition state.
+// Package staging is the worker's SQLite staging area: one staged table per task plus the task
+// watermark and the (permanent) partition state. 纯 Go 实现（modernc SQLite），不需要 cgo。
+//
+// 时间一律存 Unix 纳秒整数：Storage 的行键保留纳秒，降精度会让同一标的、同一序列相差不到 1 毫秒的两行互相覆盖。
+// 转换集中在 nanos / fromNanos / nullNanos / scanNanos。
 package staging
 
 import (
@@ -15,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/marcboeker/go-duckdb/v2"
+	_ "github.com/glebarez/go-sqlite"
 )
 
 // 列类型：与 Storage 的 FieldValueType 对应。
@@ -81,18 +84,15 @@ func (t Task) Validate() error {
 	return nil
 }
 
+// sqlType 返回列在 SQLite 里的类型（决定列亲和性）：布尔存 0/1，时间存 Unix 纳秒。
 func sqlType(t string) (string, error) {
 	switch t {
 	case TypeDouble:
-		return "DOUBLE", nil
-	case TypeInt:
-		return "BIGINT", nil
+		return "REAL", nil
+	case TypeInt, TypeBool, TypeTime:
+		return "INTEGER", nil
 	case TypeString, TypeJSON:
-		return "VARCHAR", nil
-	case TypeBool:
-		return "BOOLEAN", nil
-	case TypeTime:
-		return "TIMESTAMP", nil
+		return "TEXT", nil
 	case TypeBytes:
 		return "BLOB", nil
 	default:
@@ -102,12 +102,69 @@ func sqlType(t string) (string, error) {
 
 func quote(name string) string { return `"` + name + `"` }
 
-func literal(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
+// nanos、fromNanos、nullNanos 是时间列与纳秒整数之间的转换；零值时间对应 SQL NULL。
+func nanos(t time.Time) int64 { return t.UTC().UnixNano() }
 
-// Options 是 DuckDB 的资源限制。
+func fromNanos(n int64) time.Time { return time.Unix(0, n).UTC() }
+
+func nullNanos(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return nanos(t)
+}
+
+func scanNanos(v sql.NullInt64) time.Time {
+	if !v.Valid {
+		return time.Time{}
+	}
+	return fromNanos(v.Int64)
+}
+
+// bindValue 把行里的 Go 值转换成绑定参数：时间转纳秒、布尔转 0/1，其余原样。
+func bindValue(columnType string, value any) (any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	switch columnType {
+	case TypeTime:
+		if t, ok := value.(time.Time); ok {
+			return nanos(t), nil
+		}
+	case TypeBool:
+		if b, ok := value.(bool); ok {
+			if b {
+				return int64(1), nil
+			}
+			return int64(0), nil
+		}
+	case TypeDouble:
+		switch v := value.(type) {
+		case float64:
+			return v, nil
+		case int64:
+			return float64(v), nil
+		}
+	case TypeInt:
+		if v, ok := value.(int64); ok {
+			return v, nil
+		}
+	case TypeString, TypeJSON:
+		if v, ok := value.(string); ok {
+			return v, nil
+		}
+	case TypeBytes:
+		if v, ok := value.([]byte); ok {
+			return v, nil
+		}
+	}
+	return nil, fmt.Errorf("value %T does not match column type %s", value, columnType)
+}
+
+// Options 是 SQLite 的资源限制。
 type Options struct {
-	MemoryLimit string
-	Threads     int
+	// CacheBytes 是页缓存上限（PRAGMA cache_size），默认 256 MiB。
+	CacheBytes int64
 }
 
 // Store 是暂存库。
@@ -117,96 +174,77 @@ type Store struct {
 	opts Options
 }
 
-var memoryLimitPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?\s?(B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)$`)
-
-// TempDir 返回暂存库专用的临时目录。
-func TempDir(path string) string { return path + ".tmp" }
-
 // Open 打开（必要时创建）暂存库，并创建任务水位与分区状态两张永久表。
 func Open(path string, opts Options) (*Store, error) {
-	if opts.MemoryLimit == "" {
-		opts.MemoryLimit = "1GB"
+	if opts.CacheBytes == 0 {
+		opts.CacheBytes = 256 << 20
 	}
-	if opts.Threads <= 0 {
-		opts.Threads = 2
-	}
-	if !memoryLimitPattern.MatchString(opts.MemoryLimit) {
-		return nil, fmt.Errorf("invalid DuckDB memory limit %q", opts.MemoryLimit)
+	if opts.CacheBytes < 1<<20 {
+		return nil, fmt.Errorf("staging cache must be at least 1 MiB, got %d bytes", opts.CacheBytes)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	tempDir := TempDir(path)
-	if err := os.MkdirAll(tempDir, 0o755); err != nil {
-		return nil, err
-	}
-	db, err := openDB(path, tempDir, opts)
+	db, err := openDB(path, opts)
 	if err != nil {
 		return nil, err
 	}
 	s := &Store{db: db, path: path, opts: opts}
-	if _, err := db.Exec(`
+	for _, ddl := range []string{`
 CREATE TABLE IF NOT EXISTS task_state (
-    space_id VARCHAR NOT NULL,
-    dataset_id VARCHAR NOT NULL,
-    scan_watermark TIMESTAMP,
-    first_start TIMESTAMP,
+    space_id TEXT NOT NULL,
+    dataset_id TEXT NOT NULL,
+    scan_watermark INTEGER,
+    first_start INTEGER,
+    task_epoch TEXT,
     PRIMARY KEY (space_id, dataset_id)
-);
+) WITHOUT ROWID`, `
 CREATE TABLE IF NOT EXISTS partition_state (
-    space_id VARCHAR NOT NULL,
-    dataset_id VARCHAR NOT NULL,
-    partition_key VARCHAR NOT NULL,
-    range_start TIMESTAMP NOT NULL,
-    range_end TIMESTAMP NOT NULL,
-    status VARCHAR NOT NULL DEFAULT 'open',
-    last_changed_at TIMESTAMP NOT NULL,
-    exported_at TIMESTAMP,
-    file_sha256 VARCHAR NOT NULL DEFAULT '',
+    space_id TEXT NOT NULL,
+    dataset_id TEXT NOT NULL,
+    partition_key TEXT NOT NULL,
+    range_start INTEGER NOT NULL,
+    range_end INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    last_changed_at INTEGER NOT NULL,
+    exported_at INTEGER,
+    file_sha256 TEXT NOT NULL DEFAULT '',
     export_count INTEGER NOT NULL DEFAULT 0,
-    row_count BIGINT NOT NULL DEFAULT 0,
-    subject_count BIGINT NOT NULL DEFAULT 0,
-    min_data_time TIMESTAMP,
-    max_data_time TIMESTAMP,
-    finalized_at TIMESTAMP,
-    report_pending BOOLEAN NOT NULL DEFAULT TRUE,
+    row_count INTEGER NOT NULL DEFAULT 0,
+    subject_count INTEGER NOT NULL DEFAULT 0,
+    min_data_time INTEGER,
+    max_data_time INTEGER,
+    finalized_at INTEGER,
+    report_pending INTEGER NOT NULL DEFAULT 1,
     CHECK (status IN ('open', 'exported', 'final')),
     PRIMARY KEY (space_id, dataset_id, partition_key)
-)`); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("create staging state tables: %w", err)
-	}
-	// 旧库补列（IF NOT EXISTS，重复执行无害）。
-	for _, ddl := range []string{
-		`ALTER TABLE task_state ADD COLUMN IF NOT EXISTS first_start TIMESTAMP`,
-		`ALTER TABLE task_state ADD COLUMN IF NOT EXISTS task_epoch VARCHAR`,
-		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS row_count BIGINT DEFAULT 0`,
-		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS subject_count BIGINT DEFAULT 0`,
-		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS min_data_time TIMESTAMP`,
-		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS max_data_time TIMESTAMP`,
-		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS finalized_at TIMESTAMP`,
-		`ALTER TABLE partition_state ADD COLUMN IF NOT EXISTS report_pending BOOLEAN DEFAULT TRUE`,
-	} {
+) WITHOUT ROWID`} {
 		if _, err := db.Exec(ddl); err != nil {
 			_ = db.Close()
-			return nil, fmt.Errorf("upgrade staging state tables: %w", err)
+			return nil, fmt.Errorf("create staging state tables: %w", err)
 		}
 	}
 	return s, nil
 }
 
-func openDB(path, tempDir string, opts Options) (*sql.DB, error) {
-	db, err := sql.Open("duckdb", path)
+func openDB(path string, opts Options) (*sql.DB, error) {
+	pragmas := []string{
+		"_pragma=journal_mode(WAL)",
+		"_pragma=synchronous(NORMAL)",
+		"_pragma=busy_timeout(5000)",
+		"_pragma=temp_store(FILE)",
+		fmt.Sprintf("_pragma=cache_size(-%d)", opts.CacheBytes>>10),
+	}
+	db, err := sql.Open("sqlite", path+"?"+strings.Join(pragmas, "&"))
 	if err != nil {
 		return nil, err
 	}
 	// 暂存库由一个写入者使用；单连接让事务与临时表在同一个会话里。
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	settings := fmt.Sprintf("SET memory_limit = %s; SET threads = %d; SET temp_directory = %s", literal(opts.MemoryLimit), opts.Threads, literal(tempDir))
-	if _, err := db.Exec(settings); err != nil {
+	if err := db.Ping(); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("configure DuckDB: %w", err)
+		return nil, fmt.Errorf("open staging database: %w", err)
 	}
 	return db, nil
 }
@@ -222,21 +260,19 @@ func (s *Store) Close() error {
 // Path 返回库文件路径。
 func (s *Store) Path() string { return s.path }
 
-// Checkpoint 把 WAL 合入库文件。
+// Checkpoint 把 WAL 合入库文件并截断 WAL。
 func (s *Store) Checkpoint(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "CHECKPOINT")
+	_, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
 	return err
 }
 
-// FileBytes 返回库文件当前大小（不含临时目录）。
+// FileBytes 返回库文件与 WAL 文件（<库>-wal）的当前大小之和。
 func (s *Store) FileBytes() int64 {
-	info, err := os.Stat(s.path)
-	if err != nil {
-		return 0
-	}
-	total := info.Size()
-	if wal, err := os.Stat(s.path + ".wal"); err == nil {
-		total += wal.Size()
+	var total int64
+	for _, name := range []string{s.path, s.path + "-wal"} {
+		if info, err := os.Stat(name); err == nil {
+			total += info.Size()
+		}
 	}
 	return total
 }
@@ -255,9 +291,14 @@ func (s *Store) EnsureTable(ctx context.Context, task Task) error {
 	if len(defs) > 0 {
 		extra = ", " + strings.Join(defs, ", ")
 	}
-	create := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (subject_id VARCHAR NOT NULL, data_time TIMESTAMP NOT NULL, series_tag VARCHAR NOT NULL%s, PRIMARY KEY (subject_id, data_time, series_tag))`, quote(task.Table()), extra)
+	table := quote(task.Table())
+	create := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (subject_id TEXT NOT NULL, data_time INTEGER NOT NULL, series_tag TEXT NOT NULL%s, PRIMARY KEY (subject_id, data_time, series_tag)) WITHOUT ROWID`, table, extra)
 	if _, err := s.db.ExecContext(ctx, create); err != nil {
 		return fmt.Errorf("create staged table: %w", err)
+	}
+	// 按分区导出与统计都按 data_time 区间扫描。
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON %s (data_time)`, quote("idx_"+task.Table()+"_time"), table)); err != nil {
+		return fmt.Errorf("create staged time index: %w", err)
 	}
 	have, err := s.tableColumns(ctx, task.Table())
 	if err != nil {
@@ -268,7 +309,7 @@ func (s *Store) EnsureTable(ctx context.Context, task Task) error {
 			continue
 		}
 		typ, _ := sqlType(c.Type)
-		if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, quote(task.Table()), quote(c.Name), typ)); err != nil {
+		if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, quote(c.Name), typ)); err != nil {
 			return fmt.Errorf("add staged column %s: %w", c.Name, err)
 		}
 	}
@@ -276,7 +317,7 @@ func (s *Store) EnsureTable(ctx context.Context, task Task) error {
 }
 
 func (s *Store) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT column_name FROM information_schema.columns WHERE table_name = ?`, table)
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM pragma_table_info(?)`, table)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +350,7 @@ func (s *Store) DropTask(ctx context.Context, spaceID, datasetID string) error {
 
 // StagedTables 返回暂存库里全部暂存表名。
 func (s *Store) StagedTables(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'staged\_%' ESCAPE '\'`)
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'staged\_%' ESCAPE '\' ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +368,7 @@ func (s *Store) StagedTables(ctx context.Context) ([]string, error) {
 
 // Watermark 返回任务的读取水位 W；没有时 ok 为假。
 func (s *Store) Watermark(ctx context.Context, spaceID, datasetID string) (time.Time, bool, error) {
-	var w sql.NullTime
+	var w sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `SELECT scan_watermark FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&w)
 	if errors.Is(err, sql.ErrNoRows) {
 		return time.Time{}, false, nil
@@ -338,7 +379,7 @@ func (s *Store) Watermark(ctx context.Context, spaceID, datasetID string) (time.
 	if !w.Valid {
 		return time.Time{}, false, nil
 	}
-	return w.Time.UTC(), true, nil
+	return fromNanos(w.Int64), true, nil
 }
 
 func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
@@ -15,14 +16,13 @@ func (m Manifest) HostByID(id string) Host {
 	if !ok {
 		return Host{}
 	}
-	return Host{Name: id, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region, Port: definition.SSH.Port, Username: definition.SSH.Username, Password: definition.SSH.Password, Provider: definition.Provider, TLSMode: definition.TLSMode}
+	reachability, _ := servicecatalog.ParseReachability(definition.Reachability)
+	return Host{Name: id, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region, Port: definition.SSH.Port, Username: definition.SSH.Username, Password: definition.SSH.Password, Provider: definition.Provider, TLSMode: definition.TLSMode, Reachability: reachability, Label: definition.Label}
 }
-func (m Manifest) ControlHost() Host    { return m.HostByID(m.PlacementHost("admin")) }
-func (m Manifest) CompileHost() Host    { return m.HostByID(m.CompileHostRef.Host) }
-func (m Manifest) StorageHost() Host    { return m.HostByID(m.PlacementHost("storage-primary")) }
-func (m Manifest) ViewHost() Host       { return m.HostByID(m.PlacementHost("storage-view")) }
-func (m Manifest) StrategyHost() Host   { return m.HostByID(m.PlacementHost("strategy")) }
-func (m Manifest) HasCompileHost() bool { return m.CompileHostRef.Host != "" }
+func (m Manifest) ControlHost() Host  { return m.HostByID(m.PlacementHost("admin")) }
+func (m Manifest) StorageHost() Host  { return m.HostByID(m.PlacementHost("storage-primary")) }
+func (m Manifest) ViewHost() Host     { return m.HostByID(m.PlacementHost("storage-view")) }
+func (m Manifest) StrategyHost() Host { return m.HostByID(m.PlacementHost("strategy")) }
 
 // FactorEngineHost 返回因子引擎所在的主机；未配置或在本机（local）时返回空 Host。
 func (m Manifest) FactorEngineHost() Host {
@@ -41,8 +41,8 @@ func (m Manifest) HasStrategyHost() bool     { return m.StrategyHost().Name != "
 func (m Manifest) Hosts() []Host {
 	ids := make([]string, 0, len(m.HostCatalog))
 	for id := range m.HostCatalog {
-		// 编译机和因子计算机只登记登录方式；没有放置组件时不是部署主机。
-		if id == m.CompileHostRef.Host || id == m.FactorEngineRef.Host {
+		// 因子计算机只登记登录方式；没有放置组件时不是部署主机。
+		if id == m.FactorEngineRef.Host {
 			if _, deployed := m.Placements[id]; !deployed {
 				continue
 			}
@@ -74,7 +74,7 @@ func (m Manifest) Topology() (servicecatalog.Topology, error) {
 	}
 	topology := servicecatalog.Topology{ControlHostID: m.PlacementHost("admin")}
 	for _, host := range m.Hosts() {
-		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: host.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Status: servicecatalog.Enabled})
+		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: host.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Status: servicecatalog.Enabled, Reachability: host.Reachability})
 		for _, component := range catalog.Components {
 			if component.Scope == servicecatalog.ScopeHost {
 				topology.Placements = append(topology.Placements, servicecatalog.Placement{HostID: host.Name, ComponentID: component.ID, Status: servicecatalog.Enabled})
@@ -112,6 +112,9 @@ func validateHostCatalog(catalog map[string]HostDefinition) error {
 		if len(definition.Region) > 128 {
 			return fmt.Errorf("config_invalid: %s.region exceeds 128 bytes", path)
 		}
+		if _, ok := servicecatalog.ParseReachability(definition.Reachability); !ok {
+			return fmt.Errorf("config_invalid: %s.reachability must be direct or outbound", path)
+		}
 		address := strings.ToLower(strings.TrimSuffix(definition.Address, "."))
 		if ip := net.ParseIP(address); ip != nil {
 			address = ip.String()
@@ -126,6 +129,9 @@ func validateHostCatalog(catalog map[string]HostDefinition) error {
 		if definition.SSH.Username == "" {
 			return fmt.Errorf("config_invalid: %s.ssh.username is required", path)
 		}
+		if utf8.RuneCountInString(definition.Label) > 32 || strings.ContainsAny(definition.Label, "\r\n\t") {
+			return fmt.Errorf("config_invalid: %s.label must be a single line of at most 32 characters", path)
+		}
 		if definition.TLSMode != "" && definition.TLSMode != "auto" && definition.TLSMode != "public" && definition.TLSMode != "internal" {
 			return fmt.Errorf("config_invalid: %s.tls_mode must be auto, public, or internal", path)
 		}
@@ -139,11 +145,6 @@ func validateHostCatalog(catalog map[string]HostDefinition) error {
 func resolveManifestReferences(m *Manifest) error {
 	if err := validateHostCatalog(m.HostCatalog); err != nil {
 		return err
-	}
-	if m.CompileHostRef.Host != "" {
-		if _, ok := m.HostCatalog[m.CompileHostRef.Host]; !ok {
-			return fmt.Errorf("config_invalid: compile_host.host must select an existing host ID")
-		}
 	}
 	if ref := m.FactorEngineRef.Host; ref != "" && ref != FactorEngineLocal {
 		if _, ok := m.HostCatalog[ref]; !ok {

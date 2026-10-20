@@ -14,7 +14,7 @@
 
 ## 2. 测试方法
 
-- **客户端**：控制机（106.53.107.122）上用 Collector 同一套 Storage 客户端、同一套凭据，经节点网关 `ip://146.56.196.204:11003` 写入。调用与 SCF 函数实际使用的完全一致：先 `EnsureDatasetPeriod` 冻结周期快照，再由多个并发"函数"各自调用 `CommitTimeSeriesBatch` 提交自己的分片（每分片 13 行，字段为 open、high、low、close、volume、quote_volume、trade_num）。
+- **客户端**：控制机上用 Collector 同一套 Storage 客户端、同一套凭据，经节点网关 `ip://146.56.196.204:11003` 写入。调用与 SCF 函数实际使用的完全一致：先 `EnsureDatasetPeriod` 冻结周期快照，再由多个并发"函数"各自调用 `CommitTimeSeriesBatch` 提交自己的分片（每分片 13 行，字段为 open、high、low、close、volume、quote_volume、trade_num）。
 - **目标数据集**：canary 数据集 `dataset_db3fdvivka41ueg211ng`，使用 `ZLOAD*****-USDT` 虚构标的，周期时间设在 2020 年，不与真实数据冲突；2020 年的数据早于 7 天保留期，会在每小时清理时被删除。
 - **每个场景**：3–5 个周期，周期之间间隔 8 秒；"持续"场景为 10 个周期、每分钟一个。
 - **同步采样**：在存储主机上每秒记录整机 CPU、网卡收发速率、各进程 CPU。

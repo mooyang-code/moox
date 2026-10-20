@@ -3,9 +3,11 @@ package command
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitdeploy"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/spf13/cobra"
 )
 
@@ -33,9 +35,29 @@ func newSetupDeployHostCommand(deps setupDeps) *cobra.Command {
 			return err
 		}
 		options.Log = command.ErrOrStderr()
+		// 只能出站的主机经 control 反向连接接入：先经腾讯云接口确认 control 的端口已放行，再部署。
+		if snapshot.Manifest.HostByID(options.HostID).Reachability == servicecatalog.ReachabilityOutbound && deps.ensureRelayFirewall != nil {
+			firewall, err := deps.ensureRelayFirewall(command.Context(), snapshot)
+			if err != nil {
+				return fmt.Errorf("prepare control firewall for outbound host %s: %w", options.HostID, err)
+			}
+			fmt.Fprintf(options.Log, "control firewall ready for outbound host %s: created=%d already_open=%d\n", options.HostID, firewall.Created, firewall.AlreadyOpen)
+		}
 		result, err := deps.deployHost(command.Context(), snapshot, options)
 		if err != nil {
 			return err
+		}
+		// 主机服务就绪后安装主机级守护（crontab 与告警策略种子）；重复执行是幂等的。
+		if deps.installWatchdog != nil {
+			host, err := findSetupHost(snapshot.Manifest, options.HostID)
+			if err != nil {
+				return err
+			}
+			watchdog, err := deps.installWatchdog(command.Context(), snapshot, host, false)
+			if err != nil {
+				return fmt.Errorf("install watchdog on %s: %w", options.HostID, err)
+			}
+			fmt.Fprintf(options.Log, "watchdog installed on %s: %s\n", options.HostID, watchdog)
 		}
 		return writeSetupJSON(command, result)
 	}}
@@ -45,5 +67,6 @@ func newSetupDeployHostCommand(deps setupDeps) *cobra.Command {
 	command.Flags().StringVar(&options.BinaryDirectory, "binary-dir", "", "可选：本机构建的目标 Linux host 二进制目录")
 	command.Flags().StringVar(&options.StateDirectory, "state-dir", "", "bootstrap core 创建的持久私有状态目录")
 	command.Flags().StringVar(&options.OperatorDirectory, "operator-dir", "", "本机操作员身份目录（默认 ~/.config/moox）")
+	command.Flags().StringVar(&options.Release, "release", "", "可选：setup release build 产出的版本 ID；为空时修复首次安装的发布")
 	return command
 }

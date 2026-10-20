@@ -6,7 +6,6 @@ gateway_client:
   caller: archive-worker
   key_id: ""                     # 由 Admin 分配（moox-admin-cli keys export --caller archive-worker）
   key_file: ../secrets/access-archive-worker.key
-  compression: gzip
 
 # 以 AppId archive 签名，只用于 Storage 识别调用方。
 storage_auth_file: ../secrets/storage-primary-auth.secret
@@ -20,8 +19,7 @@ worker:
   pull_interval: 5s
 
 staging:
-  memory_limit: 1GB
-  threads: 2
+  cache_size: 256MB
   rebuild_ratio: 2
 
 pacing:

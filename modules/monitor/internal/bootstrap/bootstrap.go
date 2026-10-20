@@ -121,6 +121,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	presenceGate := newPresenceGate(func(ctx context.Context, agentID string) (string, error) {
 		return hostRegistry.Status(ctx, agentID)
 	})
+	presenceGate.gatewayAlive = gatewayHeartbeatAlive(runtime.Repositories.Gateways)
 	presenceSink := recordHostPresence(runtime.Repositories.Alerts, hostPresenceTransitionSinkWithGate(presenceProvider, nil, presenceGate))
 	presenceScannerSink := recordHostPresence(runtime.Repositories.Alerts, hostPresenceTransitionSinkWithGate(presenceProvider, presenceNotificationFailure, presenceGate))
 	hostSilence := hostmetrics.NewSilenceScanner(hostRegistry, hostmetrics.DefaultHostStaleAfter, presenceScannerSink)
@@ -176,7 +177,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		return nil, err
 	}
 	resultHook := monitorResultHook(runtime)
-	probeRunner := buildProbeRunner(cfg)
+	probeRunner := buildProbeRunner(cfg, runtime.Gateway)
 	marketCanary, marketCanaryProbe, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, storageMetadata, resultHook)
 	if err != nil {
 		_ = runtime.Close()

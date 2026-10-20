@@ -47,7 +47,7 @@ func Register(local server.Service, state *snapshot.State) error {
 				if rsp.Changed {
 					rsp.Hosts, rsp.Services = map[string]*pb.DirectoryHost{}, map[string]*pb.ServiceHosts{}
 					for id, host := range d.Hosts {
-						rsp.Hosts[id] = &pb.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region}
+						rsp.Hosts[id] = &pb.DirectoryHost{Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Relay: host.Relay}
 					}
 					for path, hosts := range d.Services {
 						rsp.Services[path] = &pb.ServiceHosts{HostIds: hosts}

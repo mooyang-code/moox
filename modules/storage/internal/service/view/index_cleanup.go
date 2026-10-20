@@ -214,8 +214,8 @@ func cleanupIndexProtected(protected map[managedIndexRef]struct{}, ref managedIn
 	if _, ok := protected[ref]; ok {
 		return true
 	}
-	// Legacy Metadata/runtime rows may not have persisted an engine. Treat
-	// those as a wildcard rather than risking deletion of the active artifact.
+	// An engine-less reference (a busy runtime protects both official slots this
+	// way) is a wildcard rather than risking deletion of the active artifact.
 	_, ok := protected[managedIndexRef{indexID: ref.indexID}]
 	return ok
 }
@@ -388,7 +388,7 @@ func (s *Service) indexEngineMatches(ref managedIndexRef) bool {
 	s.mu.RLock()
 	engine := normalizedEngine(s.indexEngine[ref.indexID])
 	s.mu.RUnlock()
-	// Missing legacy mappings are fail-closed while a runtime still references
+	// A missing engine mapping is fail-closed while a runtime still references
 	// the ID. A known different engine must not protect a stale sibling artifact.
 	return engine == "" || engine == ref.engine
 }

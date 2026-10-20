@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	"github.com/mooyang-code/moox/packages/requestauth"
+	"github.com/mooyang-code/moox/packages/servicehost"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
 	_ "trpc.group/trpc-go/trpc-log-cls"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
@@ -52,7 +54,9 @@ func run(args []string, out io.Writer) error {
 	}
 	switch command {
 	case "serve":
-		return serve(args)
+		return servicehost.Run(engineService, func(ctx context.Context) error { return serve(ctx, args) })
+	case "service":
+		return serviceCommand(args)
 	case "run-once":
 		return runOnce(args, out)
 	case "health":
@@ -63,11 +67,41 @@ func run(args []string, out io.Writer) error {
 		_, err := fmt.Fprintf(out, "moox-factor-engine %s %s %s\n", Version, GitCommit, BuildTime)
 		return err
 	default:
-		return fmt.Errorf("unknown command %q (serve, run-once, health, reset-gap-ledger, version)", command)
+		return fmt.Errorf("unknown command %q (serve, service, run-once, health, reset-gap-ledger, version)", command)
 	}
 }
 
-func serve(args []string) (err error) {
+// engineService 是 Windows 服务名。
+const engineService = "moox-factor-engine"
+
+// serviceCommand 处理 Windows 上的 `service install|uninstall|start|stop [-config 路径] [-conf 路径]`：
+// 安装时把配置路径转成绝对路径写进服务的启动参数。
+func serviceCommand(args []string) error {
+	if len(args) == 0 {
+		return servicehost.Command(servicehost.Spec{Name: engineService}, args)
+	}
+	fs := flag.NewFlagSet("service", flag.ContinueOnError)
+	app := fs.String("config", "config/engine.yaml", "factor engine config")
+	framework := fs.String("conf", "config/trpc_go.engine.yaml", "factor engine tRPC config")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	appPath, err := filepath.Abs(*app)
+	if err != nil {
+		return err
+	}
+	frameworkPath, err := filepath.Abs(*framework)
+	if err != nil {
+		return err
+	}
+	return servicehost.Command(servicehost.Spec{
+		Name: engineService, DisplayName: "MooX factor engine", Description: "MooX 因子计算引擎（运维机外部程序）",
+		Args: []string{"serve", "-config", appPath, "-conf", frameworkPath},
+	}, args[:1])
+}
+
+// serve 运行引擎直到收到退出信号，或 ctx 结束（Windows 服务收到停止请求）。
+func serve(ctx context.Context, args []string) (err error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	app := fs.String("config", "config/engine.yaml", "factor engine config")
 	framework := fs.String("conf", "config/trpc_go.engine.yaml", "factor engine tRPC config")
@@ -81,13 +115,22 @@ func serve(args []string) (err error) {
 	trpc.ServerConfigPath = *framework
 	s := trpc.NewServer()
 	trpclog.InstallServiceName("factor-engine")
-	ctx, cancel := context.WithCancel(trpc.BackgroundContext())
+	runCtx, cancel := context.WithCancel(trpc.BackgroundContext())
 	defer cancel()
-	runtime, err := engine.Initialize(ctx, s, cfg, Version)
+	runtime, err := engine.Initialize(runCtx, s, cfg, Version)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, runtime.Close()) }()
+	stopped := make(chan struct{})
+	defer close(stopped)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = s.Close(nil) // 与收到 SIGTERM 相同的优雅退出
+		case <-stopped:
+		}
+	}()
 	return s.Serve()
 }
 

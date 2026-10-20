@@ -1318,17 +1318,6 @@ describe("strategy replay page URL state and create drawer", () => {
     expect(wrapper.findAll("button.replay-row")[1].attributes("aria-current")).toBe("true");
   });
 
-  it("normalizes a legacy prefill entry into an open create drawer with the form prefilled", async () => {
-    nav.route.query = { tab: "replay", instance_id: "i1", view_id: "view_a" };
-    const wrapper = mountPage();
-    await flushPromises();
-    expect(nav.route.query).toMatchObject({ create: "1", instance_id: "i1", view_id: "view_a" });
-    expect(wrapper.find(".drawer").attributes("data-visible")).toBe("true");
-    const vm = wrapper.vm as any;
-    expect(vm.form.instance_id).toBe("i1");
-    expect(vm.form.view_id).toBe("view_a");
-  });
-
   it("prefills a definition and clears the prefill from the URL when the drawer closes", async () => {
     nav.route.query = { tab: "replay", create: "1", strategy_id: "s1" };
     const wrapper = mountPage();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReplayQuery, emptyPrefill, hasPrefill, parseReplayQuery } from "./replay-query";
+import { buildReplayQuery, emptyPrefill, parseReplayQuery } from "./replay-query";
 
 describe("replay query", () => {
   it("normalizes pages and drops the definition when an instance is given", () => {
@@ -28,10 +28,5 @@ describe("replay query", () => {
 
   it("does not write bar_page without a selected replay", () => {
     expect(buildReplayQuery({ replayId: "", page: 1, barPage: 4, create: false, prefill: emptyPrefill })).toEqual({});
-  });
-
-  it("detects a prefill", () => {
-    expect(hasPrefill(emptyPrefill)).toBe(false);
-    expect(hasPrefill({ ...emptyPrefill, viewId: "v" })).toBe(true);
   });
 });

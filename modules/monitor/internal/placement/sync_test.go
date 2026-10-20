@@ -29,8 +29,8 @@ func testSnapshot(t *testing.T) Snapshot {
 	require.NoError(t, err)
 	return Snapshot{Catalog: catalog,
 		Hosts: []*adminpb.DeploymentHost{
-			{HostId: "control", Address: "control.example.test", Status: "enabled"},
-			{HostId: "storage", Address: "storage.example.test", PrivateAddress: "2001:db8::2", Status: "enabled"},
+			{HostId: "control", Address: "control.example.test", Region: "ap-guangzhou", Status: "enabled"},
+			{HostId: "storage", Address: "storage.example.test", PrivateAddress: "2001:db8::2", Region: "ap-guangzhou", Status: "enabled"},
 		},
 		Placements: []*adminpb.ComponentPlacement{
 			{HostId: "control", ComponentId: "console-proxy", Status: "enabled"},
@@ -41,6 +41,7 @@ func testSnapshot(t *testing.T) Snapshot {
 
 func TestChecksUseCatalogHealthAndPreserveProxyLoopback(t *testing.T) {
 	snapshot := testSnapshot(t)
+	snapshot.LocalHostID = "control"
 	checks, err := Checks(snapshot, map[string]domain.HTTPSConfig{"console-proxy": {
 		URL: "https://console.example.test:9527/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public",
 	}})
@@ -171,10 +172,33 @@ func TestChecksProbeLocalHostThroughLoopback(t *testing.T) {
 	checks, err := Checks(snapshot, testHTTPS())
 	require.NoError(t, err)
 	require.Contains(t, addressOf(checks, "placement:control:admin"), "control.example.test", "没有指定本机时按对外地址探测")
+	require.Contains(t, addressOf(checks, "placement:storage:storage-primary"), "storage.example.test", "不知道本机地域时不用私网地址")
 
 	snapshot.LocalHostID = "control"
 	checks, err = Checks(snapshot, testHTTPS())
 	require.NoError(t, err)
 	require.Contains(t, addressOf(checks, "placement:control:admin"), "127.0.0.1:", "Monitor 所在主机上的组件连回环地址")
-	require.Contains(t, addressOf(checks, "placement:storage:storage-primary"), "2001:db8::2", "其他主机仍按私网/对外地址探测")
+	require.Contains(t, addressOf(checks, "placement:storage:storage-primary"), "2001:db8::2", "同地域的其他主机按私网地址探测")
+
+	snapshot.Hosts[1].Region = "ap-hongkong"
+	checks, err = Checks(snapshot, testHTTPS())
+	require.NoError(t, err)
+	require.Contains(t, addressOf(checks, "placement:storage:storage-primary"), "storage.example.test", "跨地域私网不通，按公网地址探测")
+}
+
+// 只能出站的主机：健康检查使用合成主机名，由探测器经 control 中转连接。
+func TestChecksProbeOutboundHostThroughRelay(t *testing.T) {
+	snapshot := testSnapshot(t)
+	snapshot.LocalHostID = "control"
+	snapshot.Hosts = append(snapshot.Hosts, &adminpb.DeploymentHost{HostId: "home", Address: "192.168.0.103", Status: "enabled", Reachability: "outbound"})
+	snapshot.Placements = append(snapshot.Placements, &adminpb.ComponentPlacement{HostId: "home", ComponentId: "host-agent", Status: "enabled"})
+	checks, err := Checks(snapshot, testHTTPS())
+	require.NoError(t, err)
+	for _, check := range checks {
+		if check.CheckID == "placement:home:host-agent" {
+			require.Contains(t, check.URL, "//home.moox-relay:")
+			return
+		}
+	}
+	t.Fatal("outbound host check not found")
 }

@@ -28,13 +28,11 @@ type Config struct {
 	Interval       time.Duration
 
 	MaxUncompressedBytes int
-	MaxCompressedBytes   int
 	MaxMetricFamilies    int
 	MaxSamples           int
 	MaxLabelsPerSample   int
 	MaxLabelNameBytes    int
 	MaxLabelValueBytes   int
-	GzipLevel            int
 }
 
 func DefaultConfig(module, serviceName string) Config {
@@ -50,22 +48,18 @@ func DefaultConfig(module, serviceName string) Config {
 		SpaceID:              DefaultSpace,
 		Interval:             30 * time.Second,
 		MaxUncompressedBytes: 16 * 1024 * 1024,
-		MaxCompressedBytes:   4 * 1024 * 1024,
 		MaxMetricFamilies:    2000,
 		MaxSamples:           100000,
 		MaxLabelsPerSample:   20,
 		MaxLabelNameBytes:    128,
 		MaxLabelValueBytes:   512,
-		GzipLevel:            1,
 	}
 	c.MaxUncompressedBytes = envInt("MOOX_METRICS_MAX_UNCOMPRESSED_BYTES", c.MaxUncompressedBytes)
-	c.MaxCompressedBytes = envInt("MOOX_METRICS_MAX_COMPRESSED_BYTES", c.MaxCompressedBytes)
 	c.MaxMetricFamilies = envInt("MOOX_METRICS_MAX_FAMILIES", c.MaxMetricFamilies)
 	c.MaxSamples = envInt("MOOX_METRICS_MAX_SAMPLES", c.MaxSamples)
 	c.MaxLabelsPerSample = envInt("MOOX_METRICS_MAX_LABELS_PER_SAMPLE", c.MaxLabelsPerSample)
 	c.MaxLabelNameBytes = envInt("MOOX_METRICS_MAX_LABEL_NAME_BYTES", c.MaxLabelNameBytes)
 	c.MaxLabelValueBytes = envInt("MOOX_METRICS_MAX_LABEL_VALUE_BYTES", c.MaxLabelValueBytes)
-	c.GzipLevel = envInt("MOOX_METRICS_GZIP_LEVEL", c.GzipLevel)
 	if c.EventBusURL == "" {
 		c.EventBusURL = DefaultBusURL
 	}
@@ -107,9 +101,6 @@ func (c Config) withDefaults() Config {
 	if c.MaxUncompressedBytes <= 0 {
 		c.MaxUncompressedBytes = d.MaxUncompressedBytes
 	}
-	if c.MaxCompressedBytes <= 0 {
-		c.MaxCompressedBytes = d.MaxCompressedBytes
-	}
 	if c.MaxMetricFamilies <= 0 {
 		c.MaxMetricFamilies = d.MaxMetricFamilies
 	}
@@ -124,9 +115,6 @@ func (c Config) withDefaults() Config {
 	}
 	if c.MaxLabelValueBytes <= 0 {
 		c.MaxLabelValueBytes = d.MaxLabelValueBytes
-	}
-	if c.GzipLevel == 0 {
-		c.GzipLevel = d.GzipLevel
 	}
 	return c
 }

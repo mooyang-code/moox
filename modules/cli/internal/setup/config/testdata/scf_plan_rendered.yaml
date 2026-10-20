@@ -36,7 +36,7 @@ scf_plan:
   access_routes:
     ap-hongkong:
       access_address: 172.19.32.13:11004
-      access_id: access@compute-1
+      access_id: access@overseas
   spaces:
     crypto:
       namespace: moox-crypto-plan

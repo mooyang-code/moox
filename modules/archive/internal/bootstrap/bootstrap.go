@@ -15,7 +15,9 @@ import (
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/timerjob"
+	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -27,9 +29,11 @@ const (
 	workerService   = "trpc.moox.archive.ArchiveWorker"
 	triggerService  = "trpc.moox.archive.mgr.trigger.timer"
 	maintainService = "trpc.moox.archive.mgr.maintain.timer"
+	metricsService  = "trpc.moox.archive.mgr.metrics.timer"
 
 	triggerTimeout  = 900 * time.Millisecond
 	maintainTimeout = 50 * time.Second
+	metricsTimeout  = 10 * time.Second
 )
 
 // Runtime 持有 mgr 的长期资源。
@@ -41,7 +45,7 @@ type Runtime struct {
 	err     error
 }
 
-// Initialize 组装 mgr：打开 SQLite 与网关客户端，注册两个 RPC 服务、两个定时器和健康服务。
+// Initialize 组装 mgr：打开 SQLite 与网关客户端，注册两个 RPC 服务、三个定时器（触发、维护、指标上报）和健康服务。
 func Initialize(ctx context.Context, s *server.Server, cfg *config.Config) (_ *Runtime, err error) {
 	if ctx == nil || s == nil || cfg == nil {
 		return nil, errors.New("archive context, server and config are required")
@@ -49,7 +53,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *config.Config) (_ *R
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	for _, name := range []string{healthService, mgrService, workerService, triggerService, maintainService} {
+	for _, name := range []string{healthService, mgrService, workerService, triggerService, maintainService, metricsService} {
 		if s.Service(name) == nil {
 			return nil, fmt.Errorf("archive service %q is required", name)
 		}
@@ -80,6 +84,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg *config.Config) (_ *R
 	if err := registerTimer(s, maintainService, "archive_maintain", maintainTimeout, svc.Maintain); err != nil {
 		return nil, err
 	}
+	if err := registerMetricsReporter(s, svc); err != nil {
+		return nil, err
+	}
 	runtime.health.SnapshotFunc = runtime.healthSnapshot()
 	if err := archivehealth.Register(s.Service(healthService), runtime.health); err != nil {
 		return nil, fmt.Errorf("register archive health service: %w", err)
@@ -95,6 +102,26 @@ func registerTimer(s *server.Server, service, name string, timeout time.Duration
 	}
 	timer.RegisterHandlerService(s.Service(service), job.Handle)
 	return nil
+}
+
+// registerMetricsReporter 每 30 秒评估一次归档 worker 的在线状态并上报指标快照，Monitor 据此发出“归档 worker 离线”告警。
+func registerMetricsReporter(s *server.Server, svc *service.Service) error {
+	handler, err := report.NewHandler(report.DefaultConfig("archive", "archive-mgr"))
+	if err != nil {
+		return fmt.Errorf("create archive metrics reporter: %w", err)
+	}
+	presence, err := report.NewWorkerPresence(prometheus.DefaultRegisterer, "archive")
+	if err != nil {
+		return fmt.Errorf("create archive worker presence metric: %w", err)
+	}
+	return registerTimer(s, metricsService, "archive_metrics", metricsTimeout, func(ctx context.Context) error {
+		if state, workerID, last, err := svc.Presence(ctx); err != nil {
+			log.WarnContextf(ctx, "archive worker presence not evaluated: %v", err)
+		} else {
+			presence.Set(state, workerID, last)
+		}
+		return handler.Handle(ctx)
+	})
 }
 
 // Close 释放资源，幂等。

@@ -12,7 +12,7 @@ import (
 // migrated. The old service IDs and duplicate compute gateway are not inputs.
 func productionTopology() Topology {
 	t := Topology{ControlHostID: "control", Hosts: []Host{
-		{ID: "control", Address: "106.53.107.122", Status: Enabled},
+		{ID: "control", Address: "203.0.113.10", Status: Enabled},
 		{ID: "storage", Address: "146.56.196.204", PrivateAddress: "10.206.0.5", Region: "ap-nanjing", Status: Enabled},
 		{ID: "compute-1", Address: "43.132.204.177", PrivateAddress: "172.19.32.13", Region: "ap-hongkong", Status: Enabled},
 	}}
@@ -110,9 +110,9 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":   {167, []string{"access", "admin", "cloudnode", "collector", "console", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "4611ac5314267319dc4624b35075dda7d3f60ba8a99b7f21e433d02a7ff32051"},
-		"storage":   {95, []string{"access", "archive-mgr", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "831ac2ac0ed1db7003f84b1ee3c9c1e9b4868ccee88114e33193a8af28fe900c"},
-		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "cf0c78e6614510d464b9500c4459f5a0fa8392684a0347f6b02346ab49ea4c91"},
+		"control":   {168, []string{"access", "admin", "cloudnode", "collector", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "b3851d3803c0d0af0c499fb21f4bedd366a1e346e7ea20151cd620be02f385f0"},
+		"storage":   {95, []string{"access", "archive-mgr", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "cbfc21292383eabe5723411b92f6443fb85d87774664cb2b3dc6fb0e3badbdae"},
+		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "40337493f782f4b135a4f3f7ef66dacbc105339638c397f2d7dd9faf445f5ab1"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
@@ -329,8 +329,12 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 			routes[route.ServicePath+"/"+route.Method] = route
 		}
 	}
-	if len(routes) != 14+4 {
-		t.Fatalf("archive-mgr routes = %d, want 18", len(routes))
+	if len(routes) != 15+4 {
+		t.Fatalf("archive-mgr routes = %d, want 19", len(routes))
+	}
+	retire := routes["trpc.moox.archive.ArchiveMgr/RetireArchiveWorker"]
+	if !slices.Equal(retire.Callers, []string{"console", "moox-cli"}) || retire.ReadOnly {
+		t.Fatalf("RetireArchiveWorker route = %+v", retire)
 	}
 	create := routes["trpc.moox.archive.ArchiveMgr/CreateArchiveTask"]
 	if !slices.Equal(create.Callers, []string{"console", "moox-cli"}) || create.ReadOnly {
@@ -350,5 +354,62 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 		c.PrincipalAllowed("archive-worker", "trpc.moox.storage.PrimaryStore", "WriteFactorRows") ||
 		c.PrincipalAllowed("factor-engine", "trpc.moox.archive.ArchiveWorker", "PullArchiveRun") {
 		t.Fatal("archive-worker 的外部白名单边界不对")
+	}
+}
+
+// 出站主机：目录记录中转主机，control 快照列出该主机允许的中转端口与调用方；直达主机不带许可，control 不能是出站主机。
+func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	baseline, err := c.Compile(p, "storage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Hosts[2].Reachability = ReachabilityOutbound
+	control, err := c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if control.Directory.Hosts["compute-1"].Relay != "control" || control.Directory.Hosts["storage"].Relay != "" {
+		t.Fatalf("directory relay = %+v", control.Directory.Hosts)
+	}
+	if len(control.Relays) != 1 || control.Relays[0].HostID != "compute-1" {
+		t.Fatalf("relays = %+v", control.Relays)
+	}
+	relay := control.Relays[0]
+	if relay.Ports[0].Port != HostGatewayRemotePort || !slices.Equal(relay.Ports[0].Callers, []string{"collector", "console", "monitor", "moox-cli", "strategy"}) {
+		t.Fatalf("gateway port = %+v", relay.Ports[0])
+	}
+	if !relay.Allowed("monitor", HostGatewayRemotePort) || relay.Allowed("admin", HostGatewayRemotePort) || relay.Allowed("monitor", 1) {
+		t.Fatal("relay allowlist is wrong")
+	}
+	if len(relay.Ports) < 2 {
+		t.Fatal("component health ports are missing")
+	}
+	for _, port := range relay.Ports[1:] {
+		if !slices.Equal(port.Callers, []string{"monitor"}) {
+			t.Fatalf("health port %d open to %v", port.Port, port.Callers)
+		}
+	}
+	storage, err := c.Compile(p, "storage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(storage.Relays) != 0 || storage.Directory.Hosts["compute-1"].Relay != "control" || storage.Hash == baseline.Hash {
+		t.Fatal("direct host must see the relay in its directory but carry no allowlist")
+	}
+	p.Hosts[2].Status = Disabled
+	if control, err = c.Compile(p, "control"); err != nil || len(control.Relays) != 0 {
+		t.Fatalf("disabled outbound host keeps relay: %v %+v", err, control.Relays)
+	}
+
+	p = productionTopology()
+	p.Hosts[0].Reachability = ReachabilityOutbound
+	if _, err := c.Compile(p, "control"); err == nil {
+		t.Fatal("outbound control host accepted")
+	}
+	p = productionTopology()
+	p.Hosts[1].Reachability = "inbound"
+	if _, err := c.Compile(p, "control"); err == nil {
+		t.Fatal("unknown reachability accepted")
 	}
 }

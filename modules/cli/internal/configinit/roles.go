@@ -76,7 +76,7 @@ var roleCatalog = []Role{
 		},
 	},
 	{
-		Key: RoleOverseas, Title: "海外服务器", exampleHost: "compute-1", Optional: true,
+		Key: RoleOverseas, Title: "海外服务器", exampleHost: "overseas", Optional: true,
 		Purpose:   "接入海外交易所的行情并执行下单，建议放在香港。",
 		Specs:     []string{"2 核 · 2 GB · 50 GB", "带宽按流量计费"},
 		Recommend: Recommend{CPU: 2, MemoryGB: 2, DiskGB: 50},

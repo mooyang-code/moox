@@ -774,7 +774,7 @@ function rebuildLogDetail(log: ViewRebuildLog) {
         return `${series}：${observed} / ${max} 根，重建后保留 ${lookback} 根`;
       }
     } catch {
-      // Keep the generic phase/error text for legacy or malformed details.
+      // 详情无法解析时沿用通用的阶段/错误文本。
     }
   }
   if (log.error_summary) return log.error_summary;

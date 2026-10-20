@@ -2,7 +2,6 @@ package httpclient
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -137,7 +136,7 @@ func (t *EgressTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var response egresspb.DoRsp
 	if err := t.gateway.Invoke(req.Context(), egressService, "Do", &egresspb.DoReq{
 		Method: req.Method, Host: req.URL.Hostname(), Path: path, Query: req.URL.RawQuery,
-		Headers: headers, Body: body, TimeoutMs: timeoutMS, GzipResponse: true,
+		Headers: headers, Body: body, TimeoutMs: timeoutMS,
 	}, &response); err != nil {
 		return nil, fmt.Errorf("egress proxy RPC: %w", err)
 	}
@@ -151,12 +150,6 @@ func (t *EgressTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, errors.New("egress proxy returned an invalid HTTP status or oversized body")
 	}
 	payload := response.Body
-	if response.BodyGzip {
-		var err error
-		if payload, err = gunzipLimited(response.Body, 32<<20); err != nil {
-			return nil, err
-		}
-	}
 	output := http.Header{}
 	for name, value := range response.Headers {
 		canonical := textproto.CanonicalMIMEHeaderKey(name)
@@ -176,22 +169,6 @@ func (t *EgressTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		Body: io.NopCloser(bytes.NewReader(payload)), ContentLength: int64(len(payload)),
 		Uncompressed: true, Request: req,
 	}, nil
-}
-
-func gunzipLimited(data []byte, limit int64) ([]byte, error) {
-	reader, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("egress response gzip header: %w", err)
-	}
-	defer reader.Close()
-	out, err := io.ReadAll(io.LimitReader(reader, limit+1))
-	if err != nil {
-		return nil, fmt.Errorf("egress response gunzip: %w", err)
-	}
-	if int64(len(out)) > limit {
-		return nil, errors.New("egress decompressed response exceeds 32 MiB")
-	}
-	return out, nil
 }
 
 // Close releases the HTTP transports; the process closes its borrowed gateway

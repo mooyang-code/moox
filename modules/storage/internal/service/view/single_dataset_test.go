@@ -51,7 +51,7 @@ func TestSingleDatasetView(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	svc, err := catalog.NewMetadataService(store, nil, catalog.Options{AuthSecret: "secret"})
+	svc, err := catalog.NewMetadataService(store, nil, catalog.Options{AuthSecret: "secret", OperatorAuthSecret: "secret"})
 	require.NoError(t, err)
 
 	closeCol := &pb.ViewColumn{

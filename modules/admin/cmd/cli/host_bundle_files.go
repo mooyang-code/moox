@@ -34,6 +34,9 @@ func hostSigningCallers(host hostbundle.Host, operator bool) []string {
 	if slices.Contains(host.Components, "console-proxy") {
 		callers = append(callers, "console")
 	}
+	if slices.Contains(host.Components, "collector") {
+		callers = append(callers, "scf-collector")
+	}
 	if operator {
 		callers = append(callers, "moox-cli")
 	}
@@ -140,7 +143,7 @@ func publishHostBundle(parentDir string, material hostBundleMaterial, ca *pki.St
 		return hostbundle.Metadata{}, err
 	}
 	defer certs.Close()
-	issued, err := ca.Issue(pki.HostIdentity{HostID: material.host.HostID, Address: material.host.Address, PrivateAddress: material.host.PrivateAddress}, filepath.Join(stageDir, "certs", "host-gateway"))
+	issued, err := ca.Issue(pki.HostIdentity{HostID: material.host.HostID, Address: material.host.Address, PrivateAddress: material.host.PrivateAddress, Outbound: material.host.Reachability != ""}, filepath.Join(stageDir, "certs", "host-gateway"))
 	if err != nil {
 		return hostbundle.Metadata{}, err
 	}

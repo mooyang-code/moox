@@ -5,7 +5,7 @@ gateway_client:
 storage:
   root: ./var/storage
   # Dataset retention and View limits rendered by moox-cli from moox.toml.
-  policy_file: ../config/storage-policy.json
+  policy_file: config/storage-policy.json
   roles:
     - primary
     - view
@@ -16,7 +16,6 @@ storage:
     view_index_root: ./var/storage/view-indexes
   eventbus:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
-    max_ack_pending: 8
   primary:
     service_name: ""
     node_id: storage-node-0

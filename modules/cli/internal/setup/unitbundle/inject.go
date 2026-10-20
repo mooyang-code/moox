@@ -50,6 +50,9 @@ func (m *Material) Inject(ctx context.Context, directory string, components []st
 		if id == "console-proxy" {
 			wanted["console"] = true
 		}
+		if id == "collector" {
+			wanted["scf-collector"] = true
+		}
 	}
 	if host && (!wanted["host-agent"] || !wanted["host-gateway"] || len(components) != 2) {
 		return Projection{}, errors.New("host identities must be installed together in the host unit")

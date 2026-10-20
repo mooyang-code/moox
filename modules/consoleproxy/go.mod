@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/consoleproxy
 
-go 1.26.9
+go 1.27.2
 
 require (
 	github.com/caddyserver/caddy/v2 v2.11.4

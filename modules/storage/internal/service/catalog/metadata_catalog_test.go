@@ -128,7 +128,7 @@ func TestRequestViewRebuildReturnsImmediatelyAndPreservesActiveView(t *testing.T
 		Status:        "active",
 		ActiveIndexId: "index-a", ActiveViewRevision: 4, DesiredViewRevision: 4,
 	}}
-	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret"})
+	svc, err := NewMetadataService(store, nil, Options{AuthSecret: "secret", OperatorAuthSecret: "secret"})
 	require.NoError(t, err)
 
 	rsp, err := svc.RequestViewRebuild(context.Background(), &pb.RequestViewRebuildReq{

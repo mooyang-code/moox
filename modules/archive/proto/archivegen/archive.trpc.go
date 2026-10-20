@@ -46,6 +46,8 @@ type ArchiveMgrService interface {
 	ListArchivePartitions(ctx context.Context, req *ListArchivePartitionsReq) (*ListArchivePartitionsRsp, error)
 
 	GetArchivePartition(ctx context.Context, req *GetArchivePartitionReq) (*GetArchivePartitionRsp, error)
+
+	RetireArchiveWorker(ctx context.Context, req *RetireArchiveWorkerReq) (*RetireArchiveWorkerRsp, error)
 }
 
 func ArchiveMgrService_GetArchiveOverview_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -300,6 +302,24 @@ func ArchiveMgrService_GetArchivePartition_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
+func ArchiveMgrService_RetireArchiveWorker_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &RetireArchiveWorkerReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(ArchiveMgrService).RetireArchiveWorker(ctx, reqbody.(*RetireArchiveWorkerReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // ArchiveMgrServer_ServiceDesc descriptor for server.RegisterService.
 var ArchiveMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.archive.ArchiveMgr",
@@ -360,6 +380,10 @@ var ArchiveMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.archive.ArchiveMgr/GetArchivePartition",
 			Func: ArchiveMgrService_GetArchivePartition_Handler,
+		},
+		{
+			Name: "/trpc.moox.archive.ArchiveMgr/RetireArchiveWorker",
+			Func: ArchiveMgrService_RetireArchiveWorker_Handler,
 		},
 	},
 }
@@ -531,6 +555,9 @@ func (s *UnimplementedArchiveMgr) ListArchivePartitions(ctx context.Context, req
 func (s *UnimplementedArchiveMgr) GetArchivePartition(ctx context.Context, req *GetArchivePartitionReq) (*GetArchivePartitionRsp, error) {
 	return nil, errors.New("rpc GetArchivePartition of service ArchiveMgr is not implemented")
 }
+func (s *UnimplementedArchiveMgr) RetireArchiveWorker(ctx context.Context, req *RetireArchiveWorkerReq) (*RetireArchiveWorkerRsp, error) {
+	return nil, errors.New("rpc RetireArchiveWorker of service ArchiveMgr is not implemented")
+}
 
 type UnimplementedArchiveWorker struct{}
 
@@ -582,6 +609,8 @@ type ArchiveMgrClientProxy interface {
 	ListArchivePartitions(ctx context.Context, req *ListArchivePartitionsReq, opts ...client.Option) (rsp *ListArchivePartitionsRsp, err error)
 
 	GetArchivePartition(ctx context.Context, req *GetArchivePartitionReq, opts ...client.Option) (rsp *GetArchivePartitionRsp, err error)
+
+	RetireArchiveWorker(ctx context.Context, req *RetireArchiveWorkerReq, opts ...client.Option) (rsp *RetireArchiveWorkerRsp, err error)
 }
 
 type ArchiveMgrClientProxyImpl struct {
@@ -867,6 +896,26 @@ func (c *ArchiveMgrClientProxyImpl) GetArchivePartition(ctx context.Context, req
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetArchivePartitionRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *ArchiveMgrClientProxyImpl) RetireArchiveWorker(ctx context.Context, req *RetireArchiveWorkerReq, opts ...client.Option) (*RetireArchiveWorkerRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.archive.ArchiveMgr/RetireArchiveWorker")
+	msg.WithCalleeServiceName(ArchiveMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("archive")
+	msg.WithCalleeService("ArchiveMgr")
+	msg.WithCalleeMethod("RetireArchiveWorker")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &RetireArchiveWorkerRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

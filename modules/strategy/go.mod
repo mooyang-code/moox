@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/strategy
 
-go 1.26.9
+go 1.27.2
 
 require (
 	github.com/expr-lang/expr v1.17.8
@@ -35,6 +35,7 @@ require (
 	trpc.group/trpc-go/trpc-go v1.0.4
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
 	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
 )
 
 require (
@@ -157,3 +158,5 @@ replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tra
 replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
 
 replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
+
+replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress

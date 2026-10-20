@@ -249,6 +249,31 @@ message AddNotificationChannelRsp { common.RetInfo ret_info = 1; NotificationCha
 message DeleteNotificationChannelReq { string channel_id = 1; }
 message DeleteNotificationChannelRsp { common.RetInfo ret_info = 1; }
 
+// GetHostPolicyReq 由每台主机的 HostAgent 定期调用，拉取主机策略并缓存到 <部署根>/run/host-policy.json，
+// 供主机守护（moox-runtime watch）与证书巡检直接推送告警。只允许调用方 host-agent。
+message GetHostPolicyReq {}
+// HostPolicyChannel 是一个告警渠道；Webhook URL 本身就是推送凭据。
+message HostPolicyChannel {
+  string channel_type = 1;
+  string webhook_url = 2;
+}
+// HostWatchdogPolicy 是主机守护参数，空值表示各主机使用守护自己的默认值；时长用 Go 的写法，例如 "10m"。
+message HostWatchdogPolicy {
+  bool disabled = 1;
+  string merge_window = 2;
+  int32 crash_loop_failures = 3;
+  string crash_loop_window = 4;
+  string crash_loop_retry = 5;
+  string crash_loop_slow = 6;
+  string stable_after = 7;
+  string not_ready_alert = 8;
+}
+message GetHostPolicyRsp {
+  common.RetInfo ret_info = 1;
+  repeated HostPolicyChannel channels = 2;
+  HostWatchdogPolicy watchdog = 3;
+}
+
 message HostAgentInfo {
   string agent_id = 1;
   string hostname = 2;
@@ -386,4 +411,5 @@ service MonitorMgr {
   rpc QueryHostMetricHistory(QueryHostMetricHistoryReq) returns (QueryHostMetricHistoryRsp);
   rpc QueryPipelineArrivalHistory(QueryPipelineArrivalHistoryReq) returns (QueryPipelineArrivalHistoryRsp);
   rpc GetDoctorContext(GetDoctorContextReq) returns (GetDoctorContextRsp);
+  rpc GetHostPolicy(GetHostPolicyReq) returns (GetHostPolicyRsp);
 }

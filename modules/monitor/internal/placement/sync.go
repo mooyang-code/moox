@@ -12,6 +12,7 @@ import (
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
@@ -109,12 +110,16 @@ func Checks(snapshot Snapshot, https map[string]domain.HTTPSConfig) ([]domain.Ch
 		check := baseCheck(host, placement, component)
 		switch component.Health.Kind {
 		case "readyz":
-			address := host.GetPrivateAddress()
-			if address == "" {
-				address = host.GetAddress()
+			// 私网地址只在与 Monitor 所在主机同一地域时可达（跨地域私网不通），否则用公网地址。
+			address := host.GetAddress()
+			if local := hosts[snapshot.LocalHostID]; local != nil && host.GetPrivateAddress() != "" && host.GetRegion() != "" && host.GetRegion() == local.GetRegion() {
+				address = host.GetPrivateAddress()
 			}
 			if component.Health.Loopback || (snapshot.LocalHostID != "" && host.GetHostId() == snapshot.LocalHostID) {
 				address = "127.0.0.1"
+			} else if host.GetReachability() == servicecatalog.ReachabilityOutbound {
+				// 只能出站的主机连不进去：探测经 control 网关中转（合成主机名由探测器识别）。
+				address = host.GetHostId() + gatewayclient.RelayHostSuffix
 			}
 			check.URL = (&url.URL{Scheme: "http", Host: net.JoinHostPort(address, strconv.Itoa(component.Health.Port)), Path: "/readyz"}).String()
 			check.BodyContains = component.Health.ReadyBody

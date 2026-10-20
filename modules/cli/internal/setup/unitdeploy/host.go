@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -30,6 +31,8 @@ import (
 type HostOptions struct {
 	CoreOptions
 	HostID string
+	// Release 选择版本制品，含义同 UnitOptions.Release。
+	Release string
 }
 type HostResult struct {
 	Stage      string                 `json:"stage"`
@@ -86,13 +89,15 @@ func runtimeBinding(identity runtimeIdentity) string {
 // DeployHost installs the two host components after core initialization. It
 // reads the operator manifest only through the caller's trusted snapshot.
 func DeployHost(ctx context.Context, snapshot *setupconfig.Snapshot, options HostOptions) (HostResult, error) {
-	return DeployUnit(ctx, snapshot, UnitOptions{CoreOptions: options.CoreOptions, HostID: options.HostID, Profile: "host"})
+	return DeployUnit(ctx, snapshot, UnitOptions{CoreOptions: options.CoreOptions, HostID: options.HostID, Profile: "host", Release: options.Release})
 }
 
 type UnitOptions struct {
 	CoreOptions
 	HostID  string
 	Profile string
+	// Release 选择 setup release build 产出的版本制品；为空时修复首次安装的发布（使用首次初始化的软件）。
+	Release string
 }
 type UnitResult = HostResult
 
@@ -165,12 +170,19 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		return result, errors.New("unit deployment requires its original operator bootstrap pin")
 	}
 	host := manifest.HostByID(options.HostID)
-	material := unitbundle.Options{HostID: host.Name, ControlHostID: control.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, ControlAddress: control.Address, Components: slices.Clone(manifest.Placements[host.Name]), ExpectedCA: pin.CA}
+	material := unitbundle.Options{HostID: host.Name, ControlHostID: control.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, ControlAddress: control.Address, Outbound: host.Reachability != "", Components: slices.Clone(manifest.Placements[host.Name]), ExpectedCA: pin.CA}
 	slices.Sort(material.Components)
 	request := unitbootstrap.ExportRequest{Version: 1, DeploymentRoot: manifest.Paths.DeployRoot, ControlUnitRoot: manifest.Paths.ControlRoot, RuntimeSHA256: runtimeBinding(identity), Target: material, Roles: unitinstall.EventBusRoles(components)}
 	stateDirectory := filepath.Join(root.Name(), "units", host.Name, options.Profile)
 	if options.Profile == "host" {
 		stateDirectory = filepath.Join(root.Name(), "hosts", host.Name)
+	}
+	if options.Release != "" {
+		// 每个版本各自一条操作记录：重试同一版本要求与该版本首次请求一致，不同版本互不影响。
+		if !validReleaseID(options.Release) {
+			return result, errors.New("invalid release ID")
+		}
+		stateDirectory = filepath.Join(stateDirectory, "releases", options.Release)
 	}
 	state, err := privateRoot(stateDirectory)
 	if err != nil {
@@ -214,15 +226,42 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	if err != nil {
 		return result, err
 	}
-	core, exists, err := readCoreSoftware(ctx, root, controlArch)
-	if err != nil || !exists {
-		return result, errors.New("unit deployment requires the original verified core software")
-	}
-	if os.IsNotExist(operationErr) {
-		software, helper, err := prepareUnitSoftware(ctx, root, state, options.CoreOptions, arch, options.Profile, core)
+	// exportHelper 在 control 上执行材料导出：带版本时用该版本的助手，否则用首次初始化的助手。
+	var exportHelper, exportHelperSHA string
+	var release Release
+	if options.Release != "" {
+		var exists bool
+		release, exists, err = readRelease(ctx, root, options.Release, controlArch)
 		if err != nil {
 			return result, err
 		}
+		if !exists {
+			return result, errors.New("unit deployment requires a release built by setup release build")
+		}
+		if release.Architecture != arch {
+			return result, errors.New("release architecture does not match the target host")
+		}
+		exportHelper, exportHelperSHA = release.Helper, release.HelperSHA256
+	} else {
+		core, exists, err := readCoreSoftware(ctx, root, controlArch)
+		if err != nil || !exists {
+			return result, errors.New("unit deployment requires the original verified core software")
+		}
+		exportHelper, exportHelperSHA = core.Helper, core.HelperSHA256
+		if os.IsNotExist(operationErr) {
+			software, helper, err := prepareUnitSoftware(ctx, root, state, options.CoreOptions, arch, options.Profile, core)
+			if err != nil {
+				return result, err
+			}
+			release = Release{Packages: map[string]unitpackage.Result{options.Profile: software}, Helper: helper}
+		}
+	}
+	if os.IsNotExist(operationErr) {
+		software, ok := release.Packages[options.Profile]
+		if !ok {
+			return result, fmt.Errorf("release %s has no %s software", options.Release, options.Profile)
+		}
+		helper := release.Helper
 		helperSHA, err := fileSHA(helper)
 		if err != nil {
 			return result, err
@@ -258,12 +297,12 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 			return result, err
 		}
 		raw = append(raw, '\n')
-		remoteHelper := path.Join(manifest.Paths.DeployRoot, "bootstrap-input/runtime", core.HelperSHA256, "moox-runtime")
+		remoteHelper := path.Join(manifest.Paths.DeployRoot, "bootstrap-input/runtime", exportHelperSHA, "moox-runtime")
 		remoteRequest := path.Join(manifest.Paths.DeployRoot, "bootstrap-input/requests", sha(raw), "export-host.json")
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return result, errors.New("config_changed")
 		}
-		if err := uploadFile(ctx, source, manifest.Paths.DeployRoot, core.Helper, remoteHelper, core.HelperSHA256, 0o700); err != nil {
+		if err := uploadFile(ctx, source, manifest.Paths.DeployRoot, exportHelper, remoteHelper, exportHelperSHA, 0o700); err != nil {
 			return result, err
 		}
 		if err := uploadBytes(ctx, source, manifest.Paths.DeployRoot, raw, remoteRequest, 0o600); err != nil {

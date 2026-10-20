@@ -22,7 +22,7 @@ var (
 
 func openTest(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), ".state", "staging.duckdb"), Options{})
+	s, err := Open(filepath.Join(t.TempDir(), ".state", "staging.db"), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestStageDedupesKeysWithinABatchAndSplitsPartitions(t *testing.T) {
 		t.Fatalf("res = %+v err=%v", res, err)
 	}
 	var open float64
-	if err := s.db.QueryRow(fmt.Sprintf(`SELECT "open" FROM %s WHERE data_time = ?`, quote(task.Table())), at).Scan(&open); err != nil || open != 2.0 {
+	if err := s.db.QueryRow(fmt.Sprintf(`SELECT "open" FROM %s WHERE data_time = ?`, quote(task.Table())), nanos(at)).Scan(&open); err != nil || open != 2.0 {
 		t.Fatalf("open=%v err=%v", open, err)
 	}
 	bad := Row{SubjectID: "X", DataTime: at, Values: []any{1.0}}
@@ -387,11 +387,11 @@ func TestDropTaskRemovesTablesAndState(t *testing.T) {
 
 func TestOpenValidatesLimitsAndReopensExistingState(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := Open(filepath.Join(dir, "a.duckdb"), Options{MemoryLimit: "lots"}); err == nil {
-		t.Fatal("非法内存上限必须报错")
+	if _, err := Open(filepath.Join(dir, "a.db"), Options{CacheBytes: 1024}); err == nil {
+		t.Fatal("过小的缓存上限必须报错")
 	}
-	path := filepath.Join(dir, "b.duckdb")
-	s, err := Open(path, Options{MemoryLimit: "512MB", Threads: 1})
+	path := filepath.Join(dir, "b.db")
+	s, err := Open(path, Options{CacheBytes: 64 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,9 +479,6 @@ func TestCompactShrinksTheFileAfterLargeDeletesAndKeepsTheData(t *testing.T) {
 	}
 	if _, err := os.Stat(s.Path() + ".old"); !os.IsNotExist(err) {
 		t.Fatal("旧文件应被清理")
-	}
-	if err := s.CleanTemp(); err != nil {
-		t.Fatal(err)
 	}
 }
 

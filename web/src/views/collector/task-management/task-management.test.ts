@@ -27,19 +27,6 @@ describe("collector task management workbench", () => {
     expect(normalized).toContain("consttab=normalizeTab(value)");
   });
 
-  it("redirects the legacy cloud-node entry into the executor tab", () => {
-    const menu = fs.readFileSync(path.resolve(__dirname, "../../../api/modules/system/static-menu.ts"), "utf8");
-    const routes = fs.readFileSync(path.resolve(__dirname, "../../../router/route.ts"), "utf8");
-    const home = fs.readFileSync(path.resolve(__dirname, "../../home/home.vue"), "utf8");
-    const normalizedMenu = normalizeSource(menu);
-    const normalizedRoutes = normalizeSource(routes);
-
-    expect(normalizedMenu).not.toContain('menu("0301"');
-    expect(normalizedRoutes).toContain('path:"/collector/cloudnodes"');
-    expect(normalizedRoutes).toContain('path:"/collector/tasks",query:{...to.query,tab:"executors"}');
-    expect(home).toContain('path: "/collector/tasks?tab=executors"');
-  });
-
   it("keeps one visible task menu and removes retired collector URLs", () => {
     const menu = fs.readFileSync(path.resolve(__dirname, "../../../api/modules/system/static-menu.ts"), "utf8");
     const routes = fs.readFileSync(path.resolve(__dirname, "../../../router/route.ts"), "utf8");

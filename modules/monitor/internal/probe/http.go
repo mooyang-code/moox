@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/requestauth"
 )
 
@@ -22,6 +24,8 @@ type HTTPRunner struct {
 	HealthSigner *HealthSigner
 	Client       *http.Client
 	Now          func() time.Time
+	// Relay 经 control 中转连接只能出站主机的本机端口；URL 主机名为 <主机 ID>.moox-relay 的检查使用它。
+	Relay func(ctx context.Context, hostID string, port int) (net.Conn, error)
 }
 
 type HealthSigner struct {
@@ -79,6 +83,11 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 			return failResult(check, 0, err.Error())
 		}
 		defer closeClient()
+	} else if relayHost, ok := strings.CutSuffix(req.URL.Hostname(), gatewayclient.RelayHostSuffix); ok {
+		if r.Relay == nil {
+			return failResult(check, 0, "该主机只能经控制主机中转访问，但 Monitor 没有可用的网关客户端")
+		}
+		client = relayClient(r.Relay, relayHost, timeout)
 	}
 	owned := *client
 	owned.CheckRedirect = stopRedirect
@@ -221,4 +230,22 @@ func parseHeaders(raw string) map[string]string {
 		return nil
 	}
 	return out
+}
+
+// relayClient 为一次探测建立经 control 中转的 HTTP 客户端，不复用连接（每次探测都验证中转链路）。
+func relayClient(dial func(context.Context, string, int) (net.Conn, error), hostID string, timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, Transport: &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			n, err := strconv.Atoi(port)
+			if err != nil {
+				return nil, err
+			}
+			return dial(ctx, hostID, n)
+		},
+	}}
 }

@@ -10,6 +10,7 @@ import (
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/packages/hostpolicy"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
@@ -56,7 +57,7 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 	require.Equal(t, 7, monitor["metrics"].(map[string]any)["no_data_intervals"])
 	require.Equal(t, "config/dataset-health-policy.yaml", monitor["metrics"].(map[string]any)["dataset_health_policy_path"])
 	require.Equal(t, "storage-node-0", collector["storage"].(map[string]any)["result_data_node_id"])
-	require.Equal(t, "original-scf-id", collector["scf_access"].(map[string]any)["key_id"])
+	require.Equal(t, "", collector["scf_access"].(map[string]any)["key_id"], "scf-collector 的 key_id 在安装时由主机材料填入，不从旧配置继承")
 	require.Equal(t, "7m", collector["period_readiness"].(map[string]any)["grace"])
 	require.Equal(t, 19, collector["collector_retention"].(map[string]any)["max_rows_per_pass"])
 	definition := snapshot.Manifest.HostCatalog["control"]
@@ -82,6 +83,7 @@ func TestControlEnvironmentDistributesOnlyRequiredStorageRoleSecrets(t *testing.
 	require.Equal(t, "wecom", env["monitor"]["MOOX_NOTIFICATION_CHANNEL_TYPE"])
 	require.Equal(t, manifest.Notification.WebhookURL, env["monitor"]["MOOX_NOTIFICATION_WEBHOOK_URL"])
 	require.NotContains(t, env["admin"], "MOOX_NOTIFICATION_WEBHOOK_URL")
+	require.Equal(t, hostpolicy.Path(manifest.Paths.Resolved().DeployRoot), env["admin"]["MOOX_HOST_POLICY_FILE"])
 	for _, id := range []string{"eventbus", "console-proxy"} {
 		require.NotContains(t, env[id], "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
 	}
@@ -113,7 +115,7 @@ func TestControlPreflightRejectsUnreadyAndUnrelatedRuntime(t *testing.T) {
 	root, err := privateRoot(directory)
 	require.NoError(t, err)
 	defer root.Close()
-	require.NoError(t, bindControlRequest(root, "sha256:original"))
-	require.NoError(t, bindControlRequest(root, "sha256:original"))
-	require.Error(t, bindControlRequest(root, "sha256:changed"))
+	require.NoError(t, bindControlRequest(root, "", "sha256:original"))
+	require.NoError(t, bindControlRequest(root, "", "sha256:original"))
+	require.Error(t, bindControlRequest(root, "", "sha256:changed"))
 }

@@ -18,6 +18,8 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitinstall"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitruntime"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitwatch"
+	"github.com/mooyang-code/moox/packages/hostpolicy"
 )
 
 var Version = "dev"
@@ -119,6 +121,43 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		}
 		return json.NewEncoder(stdout).Encode(prepared)
 	}
+	if len(args) > 0 && args[0] == "reseal" {
+		// 把单元当前发布的文件清单重新封存为现状（原地换过二进制或改过配置之后）；不带 --yes 只列出差异路径。
+		flags := flag.NewFlagSet("moox-runtime reseal", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		unitRoot := flags.String("unit-root", "", "physical deployment unit root, e.g. /data/moox/storage")
+		yes := flags.Bool("yes", false, "rewrite prepared.json under the host maintenance lock")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *unitRoot == "" || flags.NArg() != 0 {
+			return errors.New("reseal requires --unit-root and no positional arguments")
+		}
+		result, err := unitinstall.Reseal(ctx, *unitRoot, *yes, unitruntime.Options{}, nil)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(stdout).Encode(result)
+	}
+	if len(args) > 0 && args[0] == "watch" {
+		return watch(ctx, args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "install-watchdog" {
+		return installWatchdog(args[1:], os.Stdin, stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "host-policy-status" {
+		// 只输出主机策略缓存的版本、来源与拉取时间，不含推送地址。
+		flags := flag.NewFlagSet("moox-runtime host-policy-status", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		root := flags.String("root", "", "deployment root, e.g. /data/moox")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *root == "" || flags.NArg() != 0 {
+			return errors.New("host-policy-status requires --root and no positional arguments")
+		}
+		return json.NewEncoder(stdout).Encode(hostpolicy.Summarize(hostpolicy.Path(*root)))
+	}
 	if len(args) > 0 && args[0] == "prepare" {
 		return prepare(ctx, args[1:], stdout, stderr)
 	}
@@ -207,6 +246,79 @@ func installOperation(ctx context.Context, operation string, args []string, stdo
 	return json.NewEncoder(stdout).Encode(result)
 }
 
+// watch 是 crontab 每分钟调用的主机级守护：遍历部署根下全部单元，按依赖顺序执行 healthcheck，输出一行 JSON 汇总。
+func watch(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("moox-runtime watch", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var options unitwatch.Options
+	flags.StringVar(&options.Root, "root", "", "deployment root, e.g. /data/moox")
+	flags.BoolVar(&options.DryRun, "dry-run", false, "report component states without starting or restarting anything")
+	logPath := flags.String("log", "", "append the JSON report to this rotated log instead of stdout")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if options.Root == "" || flags.NArg() != 0 {
+		return errors.New("watch requires --root and no positional arguments")
+	}
+	if *logPath != "" {
+		file, err := unitwatch.OpenLog(*logPath)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		stdout = file
+	}
+	report, err := unitwatch.Run(ctx, options)
+	if encodeErr := json.NewEncoder(stdout).Encode(report); encodeErr != nil && err == nil {
+		err = encodeErr
+	}
+	return err
+}
+
+// installWatchdog 幂等地写入部署用户 crontab 里的 watch 条目（--remove 删除），并可从 --seed-policy 写入策略种子；
+// 种子含告警推送地址，用 "-" 从标准输入读取，不出现在命令行参数里。
+func installWatchdog(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("moox-runtime install-watchdog", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	var options unitwatch.InstallOptions
+	flags.StringVar(&options.Root, "root", "", "deployment root, e.g. /data/moox")
+	flags.StringVar(&options.Runtime, "runtime", "", "moox-runtime used by the crontab entry (default <root>/host/current/bin/moox-runtime)")
+	seed := flags.String("seed-policy", "", "host policy seed JSON file, or - for stdin")
+	flags.BoolVar(&options.Remove, "remove", false, "remove the watchdog crontab entry")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if options.Root == "" || flags.NArg() != 0 || (options.Remove && *seed != "") {
+		return errors.New("install-watchdog requires --root, accepts --seed-policy only when installing, and takes no positional arguments")
+	}
+	if *seed != "" {
+		var raw []byte
+		var err error
+		if *seed == "-" {
+			raw, err = io.ReadAll(io.LimitReader(stdin, 1<<20))
+		} else {
+			raw, err = os.ReadFile(*seed)
+		}
+		if err != nil {
+			return err
+		}
+		var policy hostpolicy.Policy
+		if err := json.Unmarshal(raw, &policy); err != nil {
+			return fmt.Errorf("parse seed policy: %w", err)
+		}
+		policy.Source = hostpolicy.SourceSeed
+		if err := policy.Validate(); err != nil {
+			return err
+		}
+		options.Seed = &policy
+	}
+	result, err := unitwatch.Install(options)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(result)
+}
+
 func sealState(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("moox-runtime seal-state", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -267,6 +379,7 @@ func inspectBundle(ctx context.Context, args []string, stdout, stderr io.Writer)
 	flags.StringVar(&options.Address, "address", "", "target public address from registered topology")
 	flags.StringVar(&options.PrivateAddress, "private-address", "", "target private address from registered topology")
 	flags.StringVar(&options.ControlAddress, "control-address", "", "registered control address")
+	flags.BoolVar(&options.Outbound, "outbound", false, "target is an outbound-only host whose gateway certificate also allows client auth")
 	flags.StringVar(&options.ExpectedCA, "ca-sha256", "", "pinned DER CA fingerprint")
 	flags.StringVar(&options.ExpectedHash, "snapshot-sha256", "", "expected compiled snapshot hash")
 	flags.StringVar(&components, "components", "", "complete target placement, comma-separated")

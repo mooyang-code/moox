@@ -179,30 +179,37 @@ func TestListenerRollbackAndIdentityValidation(t *testing.T) {
 	require.ErrorContains(t, err, "distinct")
 }
 
+// 握手在分流前完成：卡住的握手由服务端在时限内关闭，永远不会交给 tRPC 的 Accept。
 func TestTLSMinimumVersionAndStalledHandshakeBound(t *testing.T) {
 	cfg, material := fixture(t)
 	opened, err := Open(context.Background(), cfg, material)
 	require.NoError(t, err)
 	defer opened.Close()
-	readResult := make(chan error, 1)
+	acceptedStalled := make(chan struct{}, 1)
 	go func() {
-		accepted, err := opened.Remote.Accept()
-		if err != nil {
-			readResult <- err
-			return
+		if accepted, err := opened.Remote.Accept(); err == nil {
+			acceptedStalled <- struct{}{}
+			_ = accepted.Close()
 		}
-		defer accepted.Close()
-		_, err = accepted.Read(make([]byte, 1))
-		readResult <- err
 	}()
 	conn, err := net.Dial("tcp", cfg.Server.RemoteAddr)
 	require.NoError(t, err)
 	defer conn.Close()
+	readResult := make(chan error, 1)
+	go func() {
+		_, err := conn.Read(make([]byte, 1))
+		readResult <- err
+	}()
 	select {
 	case err := <-readResult:
 		require.Error(t, err)
 	case <-time.After(handshakeTimeout + 3*time.Second):
 		t.Fatal("stalled TLS handshake exceeded its time limit")
+	}
+	select {
+	case <-acceptedStalled:
+		t.Fatal("stalled handshake reached tRPC Accept")
+	default:
 	}
 	// Use an actual old TLS client to exercise the server's minimum version.
 	go func() {
@@ -229,27 +236,16 @@ func TestClosingListenersCancelsPendingTLSHandshake(t *testing.T) {
 	opened, err := Open(context.Background(), cfg, material)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = opened.Close() })
-	accepted := make(chan struct{})
-	readResult := make(chan error, 1)
-	go func() {
-		conn, err := opened.Remote.Accept()
-		if err != nil {
-			readResult <- err
-			return
-		}
-		defer conn.Close()
-		close(accepted)
-		_, err = conn.Read(make([]byte, 1))
-		readResult <- err
-	}()
+	go func() { _, _ = opened.Remote.Accept() }()
 	conn, err := net.Dial("tcp", cfg.Server.RemoteAddr)
 	require.NoError(t, err)
 	defer conn.Close()
-	select {
-	case <-accepted:
-	case <-time.After(time.Second):
-		t.Fatal("TLS connection was not accepted")
-	}
+	readResult := make(chan error, 1)
+	go func() {
+		_, err := conn.Read(make([]byte, 1))
+		readResult <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
 	require.NoError(t, opened.Close())
 	select {
 	case err := <-readResult:
@@ -257,4 +253,46 @@ func TestClosingListenersCancelsPendingTLSHandshake(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("listener shutdown did not cancel the TLS handshake")
 	}
+}
+
+// 连接配额覆盖整个连接生命周期：握手完成后仍计数，关闭后归还；单 IP 与全局上限在接受时就拒绝。
+func TestRemoteConnectionQuotaLastsUntilClose(t *testing.T) {
+	cfg, material := fixture(t)
+	opened, err := Open(context.Background(), cfg, material)
+	require.NoError(t, err)
+	defer opened.Close()
+	remote := opened.Remote.(*remoteListener)
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if conn, err := opened.Remote.Accept(); err == nil {
+			accepted <- conn
+		}
+	}()
+	clientConfig, err := material.Client("storage")
+	require.NoError(t, err)
+	client, err := tls.Dial("tcp", cfg.Server.RemoteAddr, clientConfig)
+	require.NoError(t, err)
+	defer client.Close()
+	conn := <-accepted
+	count := func() (int, int) {
+		remote.mu.Lock()
+		defer remote.mu.Unlock()
+		return remote.open["127.0.0.1"], remote.pending["127.0.0.1"]
+	}
+	open, pending := count()
+	require.Equal(t, 1, open, "握手完成后连接仍占用配额")
+	require.Zero(t, pending)
+	require.NoError(t, conn.Close())
+	open, _ = count()
+	require.Zero(t, open)
+
+	quota := newRemoteListener(nil, nil, context.Background())
+	for range maxConnsPerIP {
+		require.True(t, quota.reserve("192.0.2.9"))
+		quota.release("192.0.2.9")
+	}
+	require.False(t, quota.reserve("192.0.2.9"), "单个来源 IP 的连接上限")
+	require.True(t, quota.reserve("192.0.2.10"))
+	quota.releaseConn("192.0.2.9")
+	require.True(t, quota.reserve("192.0.2.9"))
 }

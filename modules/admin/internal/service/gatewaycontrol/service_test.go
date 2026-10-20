@@ -236,6 +236,10 @@ func TestInvalidHeartbeatsDoNotOverwriteLastGoodStatus(t *testing.T) {
 		func(r *pb.ReportStatusReq) { r.Version = "" }, func(r *pb.ReportStatusReq) { r.AppliedHash = "bad" },
 		func(r *pb.ReportStatusReq) { r.RouteCount = -1 }, func(r *pb.ReportStatusReq) { r.RouteCount = 10001 },
 		func(r *pb.ReportStatusReq) { r.Error = strings.Repeat("x", 4097) },
+		// 只有 control 网关能上报反向连接会话。
+		func(r *pb.ReportStatusReq) {
+			r.RelaySessions = []*pb.RelaySessionStatus{{HostId: "home", Online: true}}
+		},
 	} {
 		req := &pb.ReportStatusReq{HostId: "storage", InstanceId: "B", Version: "v2"}
 		mutate(req)
@@ -317,4 +321,24 @@ func TestFailedStatusWritePreservesInstanceHistory(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, response.GetRetInfo().GetCode())
 	require.Equal(t, before, f.status(t))
+}
+
+// control 网关的心跳携带反向连接会话，经主机状态查询原样返回；非法会话拒绝。
+func TestControlHeartbeatCarriesRelaySessions(t *testing.T) {
+	f := newControlFixture(t)
+	report := func(sessions []*pb.RelaySessionStatus) *pb.ReportStatusRsp {
+		rsp, err := f.service.ReportStatus(hostContext("control"), &pb.ReportStatusReq{HostId: "control", InstanceId: "C", Version: "v1", RelaySessions: sessions})
+		require.NoError(t, err)
+		return rsp
+	}
+	sessions := []*pb.RelaySessionStatus{{HostId: "home", Online: true, InstanceId: "abc", ConnectedAt: "2026-10-18T01:00:00Z", Reconnects: 2, Streams: 1}}
+	require.Equal(t, pb.ErrorCode_SUCCESS, report(sessions).GetRetInfo().GetCode())
+	var status sysdeploy.HostGatewayStatus
+	require.NoError(t, f.db.Where("c_host_id = ?", "control").First(&status).Error)
+	require.Contains(t, status.RelaySessions, `"host_id":"home"`)
+	for _, bad := range [][]*pb.RelaySessionStatus{
+		{{HostId: "home"}, {HostId: "home"}}, {{HostId: "bad/id"}}, {{HostId: "home", ConnectedAt: "yesterday"}}, {{HostId: "home", Reconnects: -1}},
+	} {
+		require.Equal(t, pb.ErrorCode_INVALID_PARAM, report(bad).GetRetInfo().GetCode())
+	}
 }

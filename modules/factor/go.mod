@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/factor
 
-go 1.26.9
+go 1.27.2
 
 require (
 	github.com/glebarez/sqlite v1.11.0
@@ -24,6 +24,7 @@ require (
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
 )
 
 require (
@@ -72,7 +73,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fsnotify/fsnotify v1.6.0 // indirect
-	github.com/glebarez/go-sqlite v1.21.2
+	github.com/glebarez/go-sqlite v1.21.2 // indirect
 	github.com/go-playground/form/v4 v4.2.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
@@ -90,6 +91,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/servicehost v0.0.0-00010101000000-000000000000
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/nats-io/nats.go v1.51.0
 	github.com/nats-io/nkeys v0.4.15 // indirect
@@ -151,3 +153,7 @@ replace github.com/mooyang-code/moox/packages/security => ../../packages/securit
 replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
 
 replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
+
+replace github.com/mooyang-code/moox/packages/servicehost => ../../packages/servicehost
+
+replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress

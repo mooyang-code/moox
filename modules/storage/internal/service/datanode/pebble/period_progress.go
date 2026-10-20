@@ -161,7 +161,7 @@ func (s *Store) EnsureDatasetPeriod(ctx context.Context, exp DatasetPeriodExpect
 }
 
 // writePeriodRecord 把一个新周期的全部记录写入 batch。withSnapshot 为 true 时内嵌完整快照
-// （旧的 Ensure 路径）；否则只保存 series_hash 引用，读取时按 hash 到共享快照存储查回。
+// （只建周期、不写数据的 EnsureDatasetPeriod）；否则只保存 series_hash 引用，读取时按 hash 到共享快照存储查回。
 func (s *Store) writePeriodRecord(batch *cpebble.Batch, base string, exp DatasetPeriodExpectation, withSnapshot bool) error {
 	if err := batch.Set(periodFieldKey(base, "series_hash"), []byte(exp.SeriesHash), s.writeOptions); err != nil {
 		return err

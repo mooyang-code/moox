@@ -4,6 +4,7 @@ package gatewayclient
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -20,7 +21,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayauth"
+	"github.com/mooyang-code/moox/packages/gatewayclient/relay"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/mooyang-code/moox/packages/wirecompress"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
@@ -35,6 +38,12 @@ const (
 // Returned addresses must be local forwards to the host's 127.0.0.1:11002.
 type TunnelResolver interface {
 	Resolve(ctx context.Context, hostID string) (string, error)
+}
+
+// RelayTunnelResolver 由隧道模式的解析器可选实现：返回到 control 主机 127.0.0.1:11003 的本地转发，
+// 用来经 control 网关中转连接只能出站的主机。
+type RelayTunnelResolver interface {
+	ResolveRelay(ctx context.Context, controlHostID string) (string, error)
 }
 
 // Invoker is the object-call interface used by service clients.
@@ -54,28 +63,76 @@ type Config struct {
 	AccessAddress    string
 	AccessInstanceID string
 	Serialization    int
-	// Compression 控制跨主机/经 Access 的公网请求体压缩：空或 none 不压缩，gzip 压缩
-	// 达到阈值的请求体；服务端按请求的压缩方式同样压缩响应。回环调用从不压缩。
-	Compression      string
+	// Pool 调整连接本机/跨主机网关的连接池（Internal 与 Tunnel 模式）；零值使用默认。
+	Pool             PoolConfig
 	Timeout          time.Duration
 	DirectoryTimeout time.Duration
 	RefreshInterval  time.Duration
 	OnRefreshError   func(error)
 }
 
+// CallFailure 描述一次失败的尝试。
+type CallFailure struct {
+	Service, Method string
+	Target          string // 目标主机
+	Attempt         int    // 第几次尝试，从 0 开始
+	// ConnectFailed 为 true 表示获取连接失败、请求尚未发出。
+	ConnectFailed bool
+	// Retrying 为 true 表示本次失败之后会再尝试一次。
+	Retrying bool
+	// Remaining 是失败时调用预算的剩余时间。
+	Remaining time.Duration
+	Err       error
+}
+
 type endpoint struct {
 	address, target, caFile, serverName string
 	compress                            bool
+	// relay 非空时经 control 网关中转：address 是只在本进程内使用的合成地址，拨号时先连 control 再连目标。
+	relay *relayRoute
 }
 
-const (
-	CompressionNone = "none"
-	CompressionGzip = "gzip"
-)
+// relayRoute 描述一次经 control 中转的连接。
+type relayRoute struct {
+	controlAddress, controlHost, target string
+	caFile                              string
+	credentials                         gatewayauth.Credentials
+}
 
-// ValidCompression 判断压缩配置取值；空串等同 none。
-func ValidCompression(value string) bool {
-	return value == "" || value == CompressionNone || value == CompressionGzip
+// RelayHostSuffix 标记经 control 中转的合成主机名（<主机 ID>.moox-relay），只在本进程内使用、从不解析。
+const RelayHostSuffix = ".moox-relay"
+
+// relayAddress 是中转目标在连接池里的合成地址，与真实地址不会冲突。
+func relayAddress(target string) string {
+	return net.JoinHostPort(target+RelayHostSuffix, strconv.Itoa(servicecatalog.HostGatewayRemotePort))
+}
+
+// DialRelay 经 control 中转连接只能出站主机的本机端口（例如 Monitor 的健康探测），
+// 返回的连接里是目标端口的原始字节；外层与 control 之间是 TLS。
+func (c *Client) DialRelay(ctx context.Context, hostID string, port int) (net.Conn, error) {
+	if c.closed.Load() {
+		return nil, net.ErrClosed
+	}
+	c.mu.RLock()
+	directory := c.directory
+	c.mu.RUnlock()
+	host, ok := directory.Hosts[hostID]
+	if !ok || host.Relay == "" {
+		return nil, fmt.Errorf("host %s is not an outbound host in the directory", hostID)
+	}
+	ep, err := c.relayEndpoint(ctx, directory, hostID, host.Relay)
+	if err != nil {
+		return nil, err
+	}
+	roots, err := loadRoots(ep.relay.caFile)
+	if err != nil {
+		return nil, err
+	}
+	return relay.Dial(ctx, relay.OpenOptions{
+		Address: ep.relay.controlAddress, ControlHost: ep.relay.controlHost,
+		TLS:         &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots},
+		Credentials: c.config.Credentials, Target: relay.Open{HostID: hostID, Port: port},
+	})
 }
 
 type invokeFunc func(context.Context, endpoint, string, string, int, []byte, http.Header) ([]byte, error)
@@ -94,6 +151,7 @@ type Client struct {
 	// unpersisted 记录目录已应用但缓存落盘失败；仅在 refresh 令牌持有期间读写。
 	unpersisted bool
 	closed      atomic.Bool
+	onFailure   atomic.Pointer[func(CallFailure)]
 }
 
 var hostID = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
@@ -110,8 +168,8 @@ func New(config Config) (*Client, error) {
 	if config.Timeout < 0 || config.DirectoryTimeout <= 0 || config.RefreshInterval <= 0 || config.Serialization != codec.SerializationTypePB && config.Serialization != codec.SerializationTypeJSON {
 		return nil, fmt.Errorf("gateway client requires positive timeouts and PB or JSON serialization")
 	}
-	if !ValidCompression(config.Compression) {
-		return nil, fmt.Errorf("gateway compression must be none or gzip")
+	if err := config.Pool.Validate(); err != nil {
+		return nil, err
 	}
 	if config.Credentials.Caller == "" {
 		return nil, fmt.Errorf("gateway caller is required")
@@ -156,6 +214,7 @@ func New(config Config) (*Client, error) {
 		if config.Credentials.Caller != "moox-cli" || config.Source == nil || config.Tunnels == nil {
 			return nil, fmt.Errorf("tunnel client requires moox-cli identity, directory source and tunnel resolver")
 		}
+		// 隧道模式平时不需要 CA；连接出站主机时要用它校验 control 与目标网关的证书。
 	case External:
 		if err := validateExternalIdentity(catalog, config.Credentials.Caller, config.AccessAddress, config.AccessInstanceID); err != nil {
 			return nil, err
@@ -166,7 +225,11 @@ func New(config Config) (*Client, error) {
 	default:
 		return nil, fmt.Errorf("unknown gateway client mode")
 	}
-	pool := newRPCPool()
+	settings := legacyPoolSettings()
+	if config.Mode != External {
+		settings = tunedPoolSettings(config.Pool)
+	}
+	pool := newRPCPool(settings)
 	c := &Client{config: config, catalog: catalog, pool: pool, ownedSource: ownedSource, invoke: pool.invoke, done: make(chan struct{}), refresh: make(chan struct{}, 1)}
 	if config.Mode != External {
 		if config.CachePath != "" {
@@ -191,6 +254,9 @@ func New(config Config) (*Client, error) {
 	go c.poll(ctx)
 	return c, nil
 }
+
+// PoolStats 返回连接池拨号与建连重试的累计计数。
+func (c *Client) PoolStats() PoolStats { return c.pool.stats.snapshot() }
 
 func (c *Client) Directory() servicecatalog.Directory {
 	c.mu.RLock()
@@ -295,6 +361,10 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Invoke(ctx context.Context, service, method string, req, rsp interface{}) error {
+	// 字典按空间选择：请求顶层带 space_id 的直接用；顶层没有的调用点自行用 wirecompress.WithSpace 指定。
+	if space := wirecompress.SpaceOf(ctx, req); space != "" {
+		ctx = wirecompress.WithSpace(ctx, space)
+	}
 	body, err := codec.Marshal(c.config.Serialization, req)
 	if err != nil {
 		return err
@@ -338,6 +408,7 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	failedHost := ""
+	connectRetried := false
 	for attempt := 0; attempt < 2; attempt++ {
 		ep, err := c.endpoint(ctx, service, failedHost)
 		if err != nil {
@@ -356,23 +427,49 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 				headers.Set(name, value)
 			}
 		}
-		response, err := c.invoke(ctx, ep, service, method, serialization, body, headers)
+		callCtx, state := withCallState(ctx)
+		state.attempt = attempt
+		response, err := c.invoke(callCtx, ep, service, method, serialization, body, headers)
 		if err == nil {
+			if connectRetried {
+				c.pool.stats.retriesRecovered.Add(1)
+			}
 			if int64(len(response)) > limit {
 				return nil, fmt.Errorf("gateway response exceeds service body limit")
 			}
 			return response, nil
 		}
+		// 获取连接失败：请求尚未发出，对所有方法（包括写）都可以安全重试；预算不足时放弃，交给补采。
+		if state.connectFailed.Load() {
+			giveUp := attempt == 1 || ctx.Err() != nil || noRetry(ctx) || remainingBudget(ctx) < minRetryRemaining
+			c.reportFailure(CallFailure{Service: service, Method: method, Target: ep.target, Attempt: attempt, ConnectFailed: true, Retrying: !giveUp, Remaining: remainingBudget(ctx), Err: err})
+			if giveUp {
+				if attempt == 1 {
+					c.pool.stats.retriesFailed.Add(1)
+				}
+				return nil, err
+			}
+			connectRetried = true
+			failedHost = ep.target
+			continue
+		}
 		code := errs.Code(err)
 		// 服务撤离后旧目录的调用方可能先在验签处失败（撤离同时撤销了调用方验证密钥），也需要刷新目录。
 		refresh := code == errs.RetClientNetErr || code == errs.RetServerNoService || code == errs.RetServerAuthFail
-		retry := refresh || code == errs.RetClientTimeout
+		// 响应读取阶段失败（连接已被对端关闭或重置）与超时、网络错误一样，请求可能已经发出。
+		retry := refresh || code == errs.RetClientTimeout || code == errs.RetClientReadFrameErr
 		if refresh && c.config.Mode != External {
 			if refreshErr := c.Refresh(ctx); refreshErr != nil {
 				c.report(refreshErr)
 			}
 		}
-		if attempt == 1 || !retry || !c.catalog.ReadOnly(service, method) || ctx.Err() != nil || noRetry(ctx) {
+		// 请求可能已发出：只有只读方法与声明为幂等的写方法可以重发，其余写方法绝不重试。
+		giveUp := attempt == 1 || !retry || !c.catalog.Retryable(service, method) || ctx.Err() != nil || noRetry(ctx) || !c.catalog.ReadOnly(service, method) && remainingBudget(ctx) < minRetryRemaining
+		c.reportFailure(CallFailure{Service: service, Method: method, Target: ep.target, Attempt: attempt, Retrying: !giveUp, Remaining: remainingBudget(ctx), Err: err})
+		if giveUp {
+			if connectRetried {
+				c.pool.stats.retriesFailed.Add(1)
+			}
 			return nil, err
 		}
 		failedHost = ep.target
@@ -382,7 +479,7 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 
 func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoint, error) {
 	if c.config.Mode == External {
-		return endpoint{address: c.config.AccessAddress, target: c.config.AccessInstanceID, compress: c.config.Compression == CompressionGzip}, nil
+		return endpoint{address: c.config.AccessAddress, target: c.config.AccessInstanceID, compress: true}, nil
 	}
 	c.mu.RLock()
 	// Published directory maps are immutable. Keep one coherent snapshot without
@@ -395,11 +492,17 @@ func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoi
 	}
 	slices.Sort(hosts)
 	if i := slices.Index(hosts, c.config.LocalHostID); i >= 0 {
-		hosts = append([]string{hosts[i]}, append(hosts[:i], hosts[i+1:]...)...)
+		// 本机优先。不能写成 append([]string{hosts[i]}, append(hosts[:i], hosts[i+1:]...)...)：内层 append 原地改写底层数组，
+		// 而字面量里的 hosts[i] 与内层 append 的求值先后不确定，本机排在第一位时会读到被覆盖的值，把调用发到远端主机。
+		local := hosts[i]
+		hosts = append([]string{local}, slices.Delete(hosts, i, i+1)...)
 	}
 	chosen := hosts[0]
 	if chosen == previous && len(hosts) > 1 {
 		chosen = hosts[1]
+	}
+	if relayHost := directory.Hosts[chosen].Relay; relayHost != "" && chosen != c.config.LocalHostID {
+		return c.relayEndpoint(ctx, directory, chosen, relayHost)
 	}
 	if c.config.Mode == Tunnel {
 		address, err := c.config.Tunnels.Resolve(ctx, chosen)
@@ -409,13 +512,48 @@ func (c *Client) endpoint(ctx context.Context, service, previous string) (endpoi
 		if !loopbackAddress(address) {
 			return endpoint{}, fmt.Errorf("SSH tunnel returned a non-loopback endpoint")
 		}
-		return endpoint{address: address, target: chosen}, nil
+		// 隧道的本地端口只是 SSH 转发入口，实际经公网到达目标主机，按跨主机调用压缩。
+		return endpoint{address: address, target: chosen, compress: true}, nil
 	}
 	if chosen == c.config.LocalHostID {
 		return endpoint{address: c.config.LocalAddress, target: chosen}, nil
 	}
 	host := directory.Hosts[chosen]
-	return endpoint{address: net.JoinHostPort(host.Address, "11003"), target: chosen, caFile: c.config.CAFile, serverName: chosen, compress: c.config.Compression == CompressionGzip}, nil
+	return endpoint{address: net.JoinHostPort(host.Address, "11003"), target: chosen, caFile: c.config.CAFile, serverName: chosen, compress: true}, nil
+}
+
+// relayEndpoint 为只能出站的主机构造经 control 中转的端点；端到端 TLS 仍校验目标主机身份。
+func (c *Client) relayEndpoint(ctx context.Context, directory servicecatalog.Directory, target, controlHost string) (endpoint, error) {
+	if c.config.CAFile == "" {
+		return endpoint{}, fmt.Errorf("host %s is reachable only through the control relay, which requires the MooX CA file", target)
+	}
+	route := &relayRoute{controlHost: controlHost, target: target, caFile: c.config.CAFile, credentials: c.config.Credentials}
+	port := strconv.Itoa(servicecatalog.HostGatewayRemotePort)
+	switch {
+	case c.config.Mode == Tunnel:
+		resolver, ok := c.config.Tunnels.(RelayTunnelResolver)
+		if !ok {
+			return endpoint{}, fmt.Errorf("tunnel resolver cannot reach the control relay for host %s", target)
+		}
+		address, err := resolver.ResolveRelay(ctx, controlHost)
+		if err != nil {
+			return endpoint{}, err
+		}
+		if !loopbackAddress(address) {
+			return endpoint{}, fmt.Errorf("SSH tunnel returned a non-loopback endpoint")
+		}
+		route.controlAddress = address
+	case controlHost == c.config.LocalHostID:
+		// control 上的调用方直接连本机的跨主机端口，不绕公网地址。
+		route.controlAddress = net.JoinHostPort("127.0.0.1", port)
+	default:
+		control, ok := directory.Hosts[controlHost]
+		if !ok {
+			return endpoint{}, fmt.Errorf("relay host %s is not in the directory", controlHost)
+		}
+		route.controlAddress = net.JoinHostPort(control.Address, port)
+	}
+	return endpoint{address: relayAddress(target), target: target, caFile: c.config.CAFile, serverName: target, compress: true, relay: route}, nil
 }
 
 func validAddress(address string) bool {
@@ -447,4 +585,27 @@ func WithoutRetry(ctx context.Context) context.Context {
 func noRetry(ctx context.Context) bool {
 	v, _ := ctx.Value(noRetryKey{}).(bool)
 	return v
+}
+
+// SetCallFailureObserver 设置每次尝试失败（含将要重试的尝试）时调用的回调，用来记录失败原因；回调必须快速返回。
+func (c *Client) SetCallFailureObserver(observer func(CallFailure)) {
+	if observer == nil {
+		c.onFailure.Store(nil)
+		return
+	}
+	c.onFailure.Store(&observer)
+}
+
+func (c *Client) reportFailure(failure CallFailure) {
+	if observer := c.onFailure.Load(); observer != nil {
+		(*observer)(failure)
+	}
+}
+
+// remainingBudget 是 ctx 截止时间前的剩余时间；没有截止时间时视为充足。
+func remainingBudget(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline)
+	}
+	return time.Hour
 }

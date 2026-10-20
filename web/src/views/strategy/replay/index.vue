@@ -273,7 +273,7 @@ import InfoTip from "@/views/factor/shared/info-tip.vue";
 import { STRATEGY_TASKS_ROUTE, normalizeTaskTab } from "@/views/strategy/links";
 import ReplayCreateDrawer from "@/views/strategy/replay/replay-create-drawer.vue";
 import { type ReplayFormState, replaySourceOf, validateReplayForm } from "@/views/strategy/replay/replay-form-model";
-import { buildReplayQuery, hasPrefill, parseReplayQuery, type ReplayQueryState } from "@/views/strategy/replay/replay-query";
+import { buildReplayQuery, parseReplayQuery, type ReplayQueryState } from "@/views/strategy/replay/replay-query";
 import ReplayRecordList from "@/views/strategy/replay/replay-record-list.vue";
 import {
   equitySeries,
@@ -869,12 +869,7 @@ onMounted(() => {
   loadViews();
   loadReplays();
   startPolling();
-  normalizeEntry();
 });
-/** 旧入口只带来源预填、没有 create=1：规范化为打开创建抽屉。 */
-function normalizeEntry() {
-  if (!parsed.value.create && hasPrefill(parsed.value.prefill)) writeQuery({ create: true });
-}
 watch(
   () => parsed.value.create,
   open => {
@@ -882,18 +877,11 @@ watch(
   },
   { immediate: true }
 );
-// URL 的外部变化：预填入口、前进后退、深链接。
+// URL 的外部变化：前进后退、深链接。
 watch(
-  () =>
-    [
-      parsed.value.replayId,
-      parsed.value.barPage,
-      parsed.value.page,
-      hasPrefill(parsed.value.prefill) && !parsed.value.create
-    ] as const,
-  ([replayId, barPage, page, legacy]) => {
+  () => [parsed.value.replayId, parsed.value.barPage, parsed.value.page] as const,
+  ([replayId, barPage, page]) => {
     if (!isCurrentTab()) return;
-    if (legacy) normalizeEntry();
     if (page !== replayPage.value) {
       replayPage.value = page;
       void loadReplays();

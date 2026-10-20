@@ -152,6 +152,19 @@ func processExited(file *os.File) (bool, error) {
 
 func detachCommand(command *exec.Cmd) { command.SysProcAttr = &syscall.SysProcAttr{Setsid: true} }
 
+// readKernelBootID 返回内核为本次开机生成的随机 ID，每次开机都不同。
+func readKernelBootID() (string, error) {
+	raw, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(string(raw))
+	if len(id) != 36 {
+		return "", errors.New("unexpected kernel boot id")
+	}
+	return id, nil
+}
+
 func acquireLock(ctx context.Context, root *os.Root, held bool, inheritedFD int, nonblocking bool) (*os.File, bool, error) {
 	name := "maintenance.lock"
 	if info, err := root.Lstat(name); err == nil && (!info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !ownerMatches(info)) {

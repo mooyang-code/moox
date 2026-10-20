@@ -117,7 +117,7 @@ func TestLiveWriteBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	namesWith := append(append([]string{"subject_id", "freq", "data_time", "series_tag"}, factorCols...), internalAttributesColumn)
-	namesNoAttr := append(append([]string{"subject_id", "freq", "data_time", "series_tag"}, factorCols...))
+	namesNoAttr := append([]string{"subject_id", "freq", "data_time", "series_tag"}, factorCols...)
 	runRaw := func(name string, bar int, names []string, chunk int, build func(names []string, rows int) string) {
 		timeIt(name, func() error {
 			writes := factorWrites(bar)

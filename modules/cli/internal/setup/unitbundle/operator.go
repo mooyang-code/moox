@@ -149,6 +149,10 @@ func InstallOperator(ctx context.Context, download Download, source hostbundle.M
 	} else if err := fsutil.WritePrivate(root, keyName, key, false); err != nil {
 		return err
 	}
+	// 保存已按固定指纹校验过的 MooX CA：操作端经 control 中转连接只能出站的主机时用它校验证书。
+	if err := fsutil.WritePrivate(root, "moox-ca.crt", files["certs/moox-ca.crt"], true); err != nil {
+		return err
+	}
 	config.KeyFile = filepath.Join(directory, keyName)
 	encoded, err := yaml.Marshal(config)
 	if err != nil {

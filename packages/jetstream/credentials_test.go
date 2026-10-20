@@ -3,6 +3,7 @@ package jetstream
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -21,6 +22,9 @@ func TestExpandCredentialPathExpandsEnvironment(t *testing.T) {
 }
 
 func TestLoadCredentialFileRequiresPrivateRegularFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 按 ACL 判断私密文件，见 packages/security 的 Windows 测试")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "eventbus.yaml")
 	if err := os.WriteFile(path, []byte("username: monitor\ntoken: secret\n"), 0o644); err != nil {
@@ -59,11 +63,11 @@ func TestApplyCredentialFilePreservesExplicitEndpoint(t *testing.T) {
 	if err := os.WriteFile(path, []byte("version: 1\nurls:\n  - tls://127.0.0.1:4222\nusername: trade-eventbus\ntoken: secret\nca_file: ca.pem\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	config := Config{URLs: []string{"tls://106.53.107.122:4222"}}
+	config := Config{URLs: []string{"tls://203.0.113.10:4222"}}
 	if err := config.ApplyCredentialFile(path); err != nil {
 		t.Fatal(err)
 	}
-	if len(config.URLs) != 1 || config.URLs[0] != "tls://106.53.107.122:4222" {
+	if len(config.URLs) != 1 || config.URLs[0] != "tls://203.0.113.10:4222" {
 		t.Fatalf("explicit endpoint was overwritten: %+v", config.URLs)
 	}
 }

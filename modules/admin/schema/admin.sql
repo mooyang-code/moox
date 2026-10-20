@@ -160,10 +160,13 @@ CREATE TABLE IF NOT EXISTS t_hosts (
     c_private_address TEXT NOT NULL DEFAULT '',
     c_region TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'enabled',
+    -- direct：可直达；outbound：只能出站，经 control 网关反向连接中转
+    c_reachability TEXT NOT NULL DEFAULT 'direct',
     c_description TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('enabled', 'disabled')),
+    CHECK (c_reachability IN ('direct', 'outbound')),
     UNIQUE (c_address)
 );
 
@@ -210,6 +213,8 @@ CREATE TABLE IF NOT EXISTS t_host_gateway_status (
     c_replaced_at DATETIME,
     c_conflict_instance_id TEXT NOT NULL DEFAULT '',
     c_conflict_seen_at DATETIME,
+    -- control 网关上报的反向连接会话（JSON 数组），其他主机为空
+    c_relay_sessions TEXT NOT NULL DEFAULT '',
     CHECK (c_route_count >= 0),
     FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id)
 );

@@ -15,6 +15,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/fsutil"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitbundle"
+	"github.com/mooyang-code/moox/packages/hostpolicy"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gopkg.in/yaml.v3"
 )
@@ -95,6 +96,17 @@ func member(node *yaml.Node, key string) *yaml.Node {
 	}
 	return nil
 }
+
+// setGatewayIdentity 逐键写入网关客户端身份字段；模板里的其他设置（例如 Access 的连接池参数 pool）要保留。
+func setGatewayIdentity(client *yaml.Node, id, keyID string) error {
+	for _, field := range [][2]string{{"caller", id}, {"key_id", keyID}, {"key_file", "../../secrets/caller-" + id + ".key"}} {
+		if err := setValue(client, field[0], field[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func setValue(node *yaml.Node, key string, value any) error {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return errors.New("configuration field must be a mapping")
@@ -156,8 +168,18 @@ func renderConfigurations(root *os.Root, options PrepareOptions, components []st
 				if keys[id] == "" {
 					return errors.New("gateway configuration lacks its assigned component identity")
 				}
-				if err := setValue(document, "gateway_client", map[string]string{"caller": id, "key_id": keys[id], "key_file": "../../secrets/caller-" + id + ".key"}); err != nil {
+				if err := setGatewayIdentity(client, id, keys[id]); err != nil {
 					return err
+				}
+			}
+			if access := member(document, "scf_access"); access != nil && id == "collector" {
+				if keys["scf-collector"] == "" {
+					return errors.New("collector configuration lacks the scf-collector identity")
+				}
+				for key, value := range map[string]string{"caller": "scf-collector", "key_id": keys["scf-collector"], "key_file": "../../secrets/caller-scf-collector.key"} {
+					if err := setValue(access, key, value); err != nil {
+						return err
+					}
 				}
 			}
 			bind := "0.0.0.0"
@@ -187,6 +209,16 @@ func renderConfigurations(root *os.Root, options PrepareOptions, components []st
 					if err := setValue(document, key, value); err != nil {
 						return err
 					}
+				}
+				// 部署的 HostAgent 经本机网关定期从 Monitor 拉取主机策略，写入部署根下的缓存文件。
+				if keys[id] == "" {
+					return errors.New("host-agent configuration lacks its assigned component identity")
+				}
+				if err := setValue(document, "gateway_client", map[string]string{"caller": id, "key_id": keys[id], "key_file": "../../secrets/caller-" + id + ".key"}); err != nil {
+					return err
+				}
+				if err := setValue(document, "host_policy_path", hostpolicy.Path(options.DeploymentRoot)); err != nil {
+					return err
 				}
 			}
 			var output bytes.Buffer

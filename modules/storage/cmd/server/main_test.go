@@ -565,7 +565,7 @@ func TestPrimaryReadWriteUsePublishedSnapshotAndFakeRuntime(t *testing.T) {
 		runtime = &resolverRuntime{target: target}
 		return runtime
 	})
-	svc, err := primarystore.New(primarystore.Options{Resolver: resolver})
+	svc, err := primarystore.New(primarystore.Options{Resolver: resolver.primaryStore()})
 	if err != nil {
 		t.Fatal(err)
 	}

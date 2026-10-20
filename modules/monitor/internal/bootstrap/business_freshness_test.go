@@ -551,7 +551,7 @@ func TestBusinessFreshnessReporterUsesStorageViewForCollectorDataset(t *testing.
 			{"enabled", "moox_collector_dataset_enabled", `{"dataset_id":"dataset_binance_kline_1m","freq":"1m","space_id":"crypto"}`, 1},
 			{"interval", "moox_collector_dataset_expected_interval_seconds", `{"dataset_id":"dataset_binance_kline_1m","freq":"1m","space_id":"crypto"}`, 60},
 			{"inventory", "moox_collector_dataset_inventory_last_success_timestamp_seconds", `{}`, float64(now.Unix())},
-			{"view-watermark", "moox_storage_view_output_watermark_timestamp_seconds", `{"freq":"1m","space_id":"crypto","view_id":"view_binance_kline_1m"}`, float64(now.Add(-time.Minute).Unix())},
+			{"view-watermark", "moox_storage_view_output_watermark_timestamp_seconds", `{"dataset_id":"dataset_binance_kline_1m","freq":"1m","space_id":"crypto","view_id":"view_binance_kline_1m"}`, float64(now.Add(-time.Minute).Unix())},
 		}
 		for _, metric := range metrics {
 			if err := db.Create(&monmetrics.MetricSeries{

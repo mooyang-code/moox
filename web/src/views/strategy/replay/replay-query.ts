@@ -20,10 +20,6 @@ type QueryLike = Record<string, unknown>;
 
 export const emptyPrefill: ReplayPrefill = { strategyId: "", instanceId: "", viewId: "" };
 
-export function hasPrefill(prefill: ReplayPrefill): boolean {
-  return Boolean(prefill.strategyId || prefill.instanceId || prefill.viewId);
-}
-
 /** 从 URL 解析并规范化：非法页码回到 1；实例与定义同时出现时沿用“实例优先”，清掉定义。 */
 export function parseReplayQuery(query: QueryLike): ReplayQueryState {
   const instanceId = queryString(query.instance_id as string);

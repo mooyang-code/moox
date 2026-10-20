@@ -26,7 +26,7 @@ func TestManualPersistedFailureMapsToInvalidParam(t *testing.T) {
 			db := openRPCStore(t)
 			ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 			if err := db.Transaction(ctx, func(tx *store.Tx) error {
-				return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "manual", OwnerRunnerID: "runner-1", ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"})
+				return tx.CreateLogicalAccount(store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "manual", OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test"})
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -136,12 +136,12 @@ func TestPlaceManualOrderUsesServerOwnedApplicationPath(t *testing.T) {
 		) (store.OperatorActionRecord, store.OrderRecord, error) {
 			got = command
 			return store.OperatorActionRecord{
-					ActionID: "action-1", LogicalAccountID: "logical-1",
-					ActionType: "MANUAL_ORDER", Status: "COMPLETED",
-				}, store.OrderRecord{
-					OrderID: "order-1", OwnerType: "OPERATOR",
-					OwnerID: "action-1", LogicalAccountID: "logical-1",
-				}, nil
+				ActionID: "action-1", LogicalAccountID: "logical-1",
+				ActionType: "MANUAL_ORDER", Status: "COMPLETED",
+			}, store.OrderRecord{
+				OrderID: "order-1", OwnerType: "OPERATOR",
+				OwnerID: "action-1", LogicalAccountID: "logical-1",
+			}, nil
 		},
 	}
 	response, err := handler.PlaceManualOrder(
@@ -193,7 +193,7 @@ func TestListOrdersCanScopeByLogicalAccount(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
-			OwnerRunnerID: "runner-1",
+			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1",
 			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "test",
 		}); err != nil {

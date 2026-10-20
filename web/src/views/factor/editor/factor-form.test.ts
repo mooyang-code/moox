@@ -100,7 +100,9 @@ describe("factorChecklist", () => {
     expect(diagnosticDocLine(result)).toBe(3);
     const multiline = { ...result, diagnostic: { ...result.diagnostic!, line: 2, column: 4 } };
     expect(diagnosticText(multiline)).toBe("outputs.bias，定义第 3 行，表达式第 2 行第 4 列：未知的函数 nope");
-    expect(diagnosticText({ ret_info: { code: 0, msg: "" }, valid: false, diagnostic: { message: "定义为空" } })).toBe("定义为空");
+    expect(diagnosticText({ ret_info: { code: 0, msg: "" }, valid: false, diagnostic: { message: "定义为空" } })).toBe(
+      "定义为空"
+    );
   });
 
   it("allows partial universe only for cross-section results", () => {

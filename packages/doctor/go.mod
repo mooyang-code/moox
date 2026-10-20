@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/packages/doctor
 
-go 1.26.9
+go 1.27.2
 
 require (
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000

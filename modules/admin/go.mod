@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/admin
 
-go 1.26.9
+go 1.27.2
 
 require (
 	github.com/dgraph-io/badger/v4 v4.7.0
@@ -32,6 +32,7 @@ require (
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
 	trpc.group/trpc-go/trpc-log-cls v1.0.0
+	github.com/mooyang-code/moox/packages/wirecompress v0.0.0-00010101000000-000000000000 // indirect
 )
 
 require github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
@@ -46,7 +47,6 @@ require (
 	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/hostmetricpb v0.0.0-00010101000000-000000000000 // indirect
-	github.com/mooyang-code/moox/packages/marketfetchpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/metricspb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/tradeeventpb v0.0.0-00010101000000-000000000000 // indirect
@@ -74,6 +74,7 @@ replace (
 	github.com/mooyang-code/moox/packages/notification => ../../packages/notification
 	github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 	github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
+	github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
 )
 
 require (
@@ -106,6 +107,7 @@ require (
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/hostpolicy v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/security v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
@@ -172,3 +174,5 @@ replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/ma
 replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
 
 replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
+
+replace github.com/mooyang-code/moox/packages/hostpolicy => ../../packages/hostpolicy

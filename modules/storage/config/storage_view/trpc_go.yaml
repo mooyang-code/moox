@@ -94,7 +94,7 @@ plugins:
 storage:
   root: ./var/storage
   # Dataset retention and View limits rendered by moox-cli from moox.toml.
-  policy_file: ../config/storage-policy.json
+  policy_file: config/storage-policy.json
   roles:
     - view
   metadata:
@@ -106,9 +106,6 @@ storage:
     service_name: trpc.moox.storage.DataNode
   eventbus:
     credential_file: ~/.config/moox/eventbus/storage-eventbus.yaml
-    # Partition-specific ACK budgets live under view.consumer_partitions.
-    # This field is retained for the primary/legacy config loader only.
-    max_ack_pending: 256
   view:
     batch_size: 500
     batch_wait_ms: 200

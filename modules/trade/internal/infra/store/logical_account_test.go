@@ -159,14 +159,19 @@ func TestLogicalAccountOwnerAndAutomationRoundTrip(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		if err := tx.SetLogicalAccountOwner("space-1", "logical-1", "runner-1"); err != nil {
+		account, err := tx.GetLogicalAccount("space-1", "logical-1")
+		if err != nil {
+			return err
+		}
+		if _, _, err := tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", account.AuthFence); err != nil {
 			return err
 		}
 		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
 	}))
 	got, err := s.GetLogicalAccount(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "runner-1", got.OwnerRunnerID)
+	require.Equal(t, "instance-1", got.OwnerInstanceID)
+	require.Equal(t, int64(1), got.OwnerGeneration)
 	require.Equal(t, "ACTIVE", got.AutomationState)
 	require.Empty(t, got.PauseReason)
 }

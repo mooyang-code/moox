@@ -47,11 +47,6 @@ type MarketCanary struct {
 	AuthInfo *commonpb.AuthInfo
 	Config   MarketCanaryConfig
 	Now      func() time.Time
-	// ResolveSubjectID lets the monitor use the authoritative metadata catalog
-	// when a legacy canary config contains a symbol instead of the canonical
-	// dataset subject. The resolver is deliberately injected so watchdog does
-	// not depend on a concrete market/provider implementation.
-	ResolveSubjectID func(context.Context, string, string, string) (string, error)
 }
 
 // ErrStorageUnavailable means the monitor could not reach Primary during its
@@ -157,12 +152,6 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 		result.ErrorMessage = "invalid_config"
 		return result
 	}
-	resolvedConfig, err := c.resolveConfig(ctx, config)
-	if err != nil {
-		result.ErrorMessage = "subject_catalog_unavailable"
-		return result
-	}
-	config = resolvedConfig
 	if strings.EqualFold(strings.TrimSpace(config.MarketID), "stockcn") || strings.EqualFold(strings.TrimSpace(config.SpaceID), "stockcn") {
 		return c.runStockCN(ctx, result, now, config)
 	}
@@ -228,18 +217,6 @@ func (c MarketCanary) Run(ctx context.Context) domain.CheckResult {
 	result.Connected = true
 	result.Status = domain.CheckStatusOK
 	return result
-}
-
-func (c MarketCanary) resolveConfig(ctx context.Context, config MarketCanaryConfig) (MarketCanaryConfig, error) {
-	if c.ResolveSubjectID == nil {
-		return config, nil
-	}
-	resolved, err := c.ResolveSubjectID(ctx, config.SpaceID, config.DatasetID, config.SubjectID)
-	if err != nil {
-		return MarketCanaryConfig{}, err
-	}
-	config.SubjectID = resolved
-	return config, nil
 }
 
 type stockCalendarFile struct {
@@ -464,11 +441,6 @@ func (c MarketCanary) ProbeStorageAuth(ctx context.Context) error {
 	if c.Reader == nil || strings.TrimSpace(config.SpaceID) == "" || strings.TrimSpace(config.DatasetID) == "" ||
 		strings.TrimSpace(config.SubjectID) == "" || strings.TrimSpace(config.Frequency) == "" || config.SeriesTag == nil {
 		return fmt.Errorf("invalid market canary configuration")
-	}
-	var err error
-	config, err = c.resolveConfig(ctx, config)
-	if err != nil {
-		return fmt.Errorf("resolve market canary subject: %w", err)
 	}
 	frequency, err := frequencypkg.Normalize(config.Frequency)
 	if err != nil {

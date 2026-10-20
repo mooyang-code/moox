@@ -2,9 +2,9 @@ package gatewayauth
 
 import (
 	"errors"
+	"github.com/mooyang-code/moox/packages/security"
 	"io"
 	"os"
-	"runtime"
 	"strings"
 	"unicode"
 )
@@ -24,8 +24,9 @@ func ReadSigningSecret(path string) (string, error) {
 	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 		return "", errors.New("signing key changed while opening")
 	}
-	if runtime.GOOS != "windows" && opened.Mode().Perm() != 0o600 {
-		return "", errors.New("signing key permissions must be 0600")
+	// Unix 上要求 0600，Windows 上要求 ACL 只允许当前用户。
+	if err := security.CheckPrivateFile(path); err != nil {
+		return "", errors.New("signing key must be private to the current user (0600, or an ACL limited to the current user on Windows)")
 	}
 	raw, err := io.ReadAll(io.LimitReader(file, 4097))
 	if err != nil || len(raw) > 4096 {

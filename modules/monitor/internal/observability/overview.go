@@ -174,6 +174,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, delivery...)
+	presence, err := b.buildWorkerPresence(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, presence...)
 	if out.GatewaySignals, err = b.gatewaySignals(ctx, now); err != nil {
 		return Overview{}, err
 	}

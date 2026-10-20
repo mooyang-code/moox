@@ -23,7 +23,7 @@ import (
 func TestProbeRunnerUsesConfiguredHealthSigner(t *testing.T) {
 	cfg := config.Default()
 	cfg.HealthAuth = config.HealthAuthConfig{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "secret"}
-	runner := buildProbeRunner(cfg)
+	runner := buildProbeRunner(cfg, nil)
 	require.NotNil(t, runner.HTTP.HealthSigner)
 	assert.Equal(t, "monitor", runner.HTTP.HealthSigner.AccessKey)
 }

@@ -75,6 +75,17 @@ ON t_factor_recalc_jobs (c_status, c_mtime);
 CREATE INDEX IF NOT EXISTS idx_t_factor_recalc_jobs_pull
 ON t_factor_recalc_jobs (c_status, c_lease_expires_at);
 
+-- 最近一次被接受的引擎心跳（单行）：引擎租约只有 45 秒，离线告警按最近心跳判断；
+-- 落库后管理端重启也能判定“引擎一直没回来”
+CREATE TABLE IF NOT EXISTS t_factor_engine_heartbeat (
+    c_id INTEGER NOT NULL PRIMARY KEY,
+    c_engine_id TEXT NOT NULL,
+    c_boot_id TEXT NOT NULL DEFAULT '',
+    c_heartbeat_at INTEGER NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_id = 1)
+);
+
 CREATE TRIGGER IF NOT EXISTS trg_t_factor_sets_mtime
 AFTER UPDATE ON t_factor_sets
 FOR EACH ROW
