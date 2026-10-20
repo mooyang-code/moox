@@ -72,11 +72,10 @@ type AlertConfig struct {
 }
 
 type MetricsConfig struct {
-	Enabled                 bool                 `yaml:"enabled"`
-	DatasetHealthPolicyPath string               `yaml:"dataset_health_policy_path"`
-	NoDataIntervals         int                  `yaml:"no_data_intervals"`
-	Storage                 MetricsStorageConfig `yaml:"storage"`
-	HostStorage             HostStorageConfig    `yaml:"host_storage"`
+	Enabled                 bool              `yaml:"enabled"`
+	DatasetHealthPolicyPath string            `yaml:"dataset_health_policy_path"`
+	NoDataIntervals         int               `yaml:"no_data_intervals"`
+	HostStorage             HostStorageConfig `yaml:"host_storage"`
 }
 
 type ObservabilityConfig struct {
@@ -128,14 +127,6 @@ type MarketCanarySubject struct {
 	MarketID               string   `yaml:"market_id"`
 	CalendarPath           string   `yaml:"calendar_path"`
 	EligibleKlineProviders []string `yaml:"eligible_kline_providers"`
-}
-
-type MetricsStorageConfig struct {
-	SpaceID                    string        `yaml:"space_id"`
-	DatasetID                  string        `yaml:"dataset_id"`
-	Frequency                  string        `yaml:"frequency"`
-	MetadataValidationInterval time.Duration `yaml:"metadata_validation_interval"`
-	WriteBatchSize             int           `yaml:"write_batch_size"`
 }
 
 // HostStorageConfig controls the Storage datasets for host snapshots.
@@ -224,7 +215,7 @@ func Default() *Config {
 			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
 		},
-		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, Storage: MetricsStorageConfig{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", MetadataValidationInterval: 30 * time.Second, WriteBatchSize: 1000}, HostStorage: HostStorageConfig{Enabled: true, SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
+		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, HostStorage: HostStorageConfig{Enabled: true, SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
 	}
 }
 
@@ -337,21 +328,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Metrics.NoDataIntervals == 0 {
 		c.Metrics.NoDataIntervals = metricsDefaults.NoDataIntervals
-	}
-	if c.Metrics.Storage.SpaceID == "" {
-		c.Metrics.Storage.SpaceID = metricsDefaults.Storage.SpaceID
-	}
-	if c.Metrics.Storage.DatasetID == "" {
-		c.Metrics.Storage.DatasetID = metricsDefaults.Storage.DatasetID
-	}
-	if c.Metrics.Storage.Frequency == "" {
-		c.Metrics.Storage.Frequency = metricsDefaults.Storage.Frequency
-	}
-	if c.Metrics.Storage.MetadataValidationInterval == 0 {
-		c.Metrics.Storage.MetadataValidationInterval = metricsDefaults.Storage.MetadataValidationInterval
-	}
-	if c.Metrics.Storage.WriteBatchSize == 0 {
-		c.Metrics.Storage.WriteBatchSize = metricsDefaults.Storage.WriteBatchSize
 	}
 	if c.Metrics.HostStorage.SpaceID == "" {
 		c.Metrics.HostStorage.SpaceID = metricsDefaults.HostStorage.SpaceID

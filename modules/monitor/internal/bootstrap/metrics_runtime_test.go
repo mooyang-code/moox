@@ -1,20 +1,16 @@
 package bootstrap
 
 import (
-	"context"
 	"crypto/sha256"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
@@ -22,15 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"trpc.group/trpc-go/trpc-go/client"
 )
-
-type ingestHistory struct{ writes int }
-
-func (h *ingestHistory) UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
-	h.writes++
-	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &commonpb.RetInfo{}}, nil
-}
 
 func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
@@ -101,10 +89,6 @@ func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T
 
 }
 
-func (*ingestHistory) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
-	panic("history read is not part of ingestion")
-}
-
 func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
@@ -118,9 +102,7 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 	now := time.Now().UTC()
 	_, err = manager.Repositories().Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: now}, nil)
 	require.NoError(t, err)
-	history := &ingestHistory{}
-	storage := monmetrics.NewStorageAdapter(history, nil, config.MetricsStorageConfig{SpaceID: "mooxsys", DatasetID: "metrics", Frequency: "1m"})
-	route := metricsObservabilityRoute(storage, messages, nil, nil, true)
+	route := metricsObservabilityRoute(messages, nil, nil, true)
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	raw := []byte("# TYPE moox_collector_kline_resample_claims_total gauge\nmoox_collector_kline_resample_claims_total 1\n")
@@ -147,7 +129,9 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 	encoded := encode("unregistered", now, report)
 	require.NoError(t, ingest(encoded))
 	require.NoError(t, ingest(encoded))
-	require.Equal(t, 1, history.writes, "redelivery stays idempotent")
+	series, err := messages.ListSeries(t.Context(), "collector", "moox_collector_kline_resample_claims_total", 10)
+	require.NoError(t, err)
+	require.Len(t, series, 1, "redelivery stays idempotent")
 	got, err := (monitorobservability.Builder{Metrics: query, Topology: manager.Repositories().Topology, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.Unregistered, 1)
@@ -159,7 +143,6 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 	invalid := proto.Clone(report).(*metricspb.MetricReport)
 	invalid.Snapshot.Data = []byte("corrupted")
 	require.ErrorContains(t, ingest(encode("invalid-snapshot", now, invalid)), "checksum mismatch")
-	require.Equal(t, 1, history.writes, "invalid snapshots never reach history")
 	duplicate, err := messages.IsDuplicate(t.Context(), "invalid-snapshot")
 	require.NoError(t, err)
 	require.False(t, duplicate)

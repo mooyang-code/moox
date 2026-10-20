@@ -158,28 +158,26 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	hostStore.SetPresenceTransitionSink(presenceSink)
 	hostStore.SetPresenceTransitionFailureSink(presenceNotificationFailure)
 
-	var metricsStorage *monmetrics.StorageAdapter
+	var storageMetadata *monmetrics.StorageAdapter
 	var metricsQuery *monmetrics.QueryService
 	if cfg.Metrics.Enabled {
-		metricsStorage = monmetrics.NewStorageAdapter(runtime.StorageGateway, runtime.StorageGateway, cfg.Metrics.Storage)
+		storageMetadata = monmetrics.NewStorageAdapter(runtime.StorageGateway)
 		metricStores, err := store.WithDatabase(mgr, monmetrics.NewStores)
 		if err != nil {
 			_ = runtime.Close()
 			return nil, err
 		}
 		runtime.MetricStores = metricStores
-		metricsQuery = monmetrics.NewQueryService(metricStores.Messages, metricsStorage)
-		if interval, err := time.ParseDuration(cfg.Metrics.Storage.Frequency); err == nil {
-			metricsQuery.Catalog().SetNoDataAfter(time.Duration(maxInt(cfg.Metrics.NoDataIntervals, 1)) * interval)
-		}
+		metricsQuery = monmetrics.NewQueryService(metricStores.Messages, storageMetadata)
+		metricsQuery.Catalog().SetNoDataAfter(time.Duration(maxInt(cfg.Metrics.NoDataIntervals, 1)) * monmetrics.ServiceReportInterval)
 	}
-	if err := registerHealth(s, cfg, runtime, metricsStorage, hostStore); err != nil {
+	if err := registerHealth(s, cfg, runtime, hostStore); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}
 	resultHook := monitorResultHook(runtime)
 	probeRunner := buildProbeRunner(cfg)
-	marketCanary, marketCanaryProbe, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, metricsStorage, resultHook)
+	marketCanary, marketCanaryProbe, err := buildMonitorMarketCanary(runtimeCtx, cfg, runtime, storageMetadata, resultHook)
 	if err != nil {
 		_ = runtime.Close()
 		return nil, err
@@ -281,9 +279,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
-	startMetricsStorageGate(runtimeCtx, cfg, runtime, metricsStorage)
 	startHostStorageGate(runtimeCtx, cfg, runtime, hostGate)
-	startObservabilityConsumer(runtimeCtx, cfg, runtime, metricsStorage, hostStore, klineInventory)
+	startObservabilityConsumer(runtimeCtx, cfg, runtime, hostStore, klineInventory)
 	if done := ctx.Done(); done != nil {
 		go func() {
 			<-done

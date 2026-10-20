@@ -8,13 +8,10 @@ import (
 	"testing"
 	"time"
 
-	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	observabilityconsumer "github.com/mooyang-code/moox/modules/monitor/internal/observability/eventconsumer"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/hostmetricpb"
@@ -22,7 +19,6 @@ import (
 	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
-	"trpc.group/trpc-go/trpc-go/client"
 )
 
 // TestEventBusToMonitorHistoryFlow covers the bounded production path without
@@ -72,9 +68,6 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	if err := mgr.ApplySchema(schema.SQL()); err != nil {
 		t.Fatal(err)
 	}
-	access := &metricsE2EAccess{}
-	storageCfg := monconfig.MetricsStorageConfig{SpaceID: metrics.InternalMetricSpaceID, DatasetID: "dataset_mooxsys_service_metrics", Frequency: "30s", WriteBatchSize: 20}
-	storage := metrics.NewStorageAdapter(access, nil, storageCfg)
 	messageStore, err := store.WithDatabase(mgr, metrics.NewMetricMessageStore)
 	if err != nil {
 		t.Fatal(err)
@@ -93,9 +86,6 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 			}, metrics.DefaultLimits())
 			if parseErr != nil {
 				return observabilityconsumer.Permanent(parseErr)
-			}
-			if writeErr := storage.WriteSamples(routeCtx, samples); writeErr != nil {
-				return writeErr
 			}
 			_, commitErr := messageStore.CommitIngest(routeCtx, message, report, samples)
 			return commitErr
@@ -148,9 +138,6 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	if latest.Value != 7 || latest.MessageID != messageID {
 		t.Fatalf("latest=%+v, want value=7 and message=%q", latest, messageID)
 	}
-	if len(access.rows) != 3 {
-		t.Fatalf("storage rows=%d, want three reporter samples", len(access.rows))
-	}
 	query := metrics.NewQueryService(messageStore, nil)
 	reports, err := metrics.NewKlineFreshnessEvaluator(query, []metrics.KlineFreshnessRule{{
 		Enabled: true, SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m",
@@ -159,15 +146,6 @@ func TestEventBusToMonitorHistoryFlow(t *testing.T) {
 	if err != nil || len(reports) != 1 || !reports[0].Success || reports[0].ObservedCount != 1 {
 		t.Fatalf("kline freshness reports=%+v err=%v", reports, err)
 	}
-}
-
-type metricsE2EAccess struct {
-	rows []*storagepb.RowFieldUpsert
-}
-
-func (a *metricsE2EAccess) UpsertFields(_ context.Context, req *storagepb.PrimaryUpsertFieldsReq, _ ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
-	a.rows = append(a.rows, req.GetRows()...)
-	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS}}, nil
 }
 
 func fetchMetricsEventually(ctx context.Context, consumer *observabilityconsumer.Consumer, timeout time.Duration) ([]*jetstream.Delivery, error) {

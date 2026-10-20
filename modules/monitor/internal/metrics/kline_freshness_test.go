@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	monconfig "github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -81,7 +80,7 @@ func TestKlineFreshnessEvaluatorIgnoresRetiredSubjectsAndCountsMissing(t *testin
 		LaggingSubjects: []viewSummaryLaggingSample{{Subject: "OLD", DataTime: now.Add(-10 * time.Minute), ObservedAt: now}},
 	}})
 	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{{SubjectId: "BTC", Status: "active"}, {SubjectId: "ETH", Status: "active"}, {SubjectId: "OLD", Status: "archived"}}}
-	query.storage = NewStorageAdapter(nil, metadata, monconfig.MetricsStorageConfig{SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m"})
+	query.storage = NewStorageAdapter(metadata)
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
@@ -97,7 +96,7 @@ func TestKlineFreshnessEvaluatorWaitsOneBarBeforeCountingMissing(t *testing.T) {
 	// Storage View just restarted: it has seen one subject in its first bar.
 	query := newViewSummaryQuery(t, []viewSummaryTestSample{{Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Minute), Subjects: 1, ObservedAt: now}})
 	metadata := &fakeMetadata{subjects: []*storagepb.DatasetSubject{{SubjectId: "BTC", Status: "active"}, {SubjectId: "ETH", Status: "active"}}}
-	query.storage = NewStorageAdapter(nil, metadata, monconfig.MetricsStorageConfig{SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m"})
+	query.storage = NewStorageAdapter(metadata)
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)
@@ -116,7 +115,7 @@ func TestKlineFreshnessEvaluatorMatchesMarketSuffixDuringSubjectMigration(t *tes
 		{SubjectId: "OPG-USDT", Status: "active"},
 		{SubjectId: "ETH-USDT", Status: "active"},
 	}}
-	query.storage = NewStorageAdapter(nil, metadata, monconfig.MetricsStorageConfig{SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m"})
+	query.storage = NewStorageAdapter(metadata)
 
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
@@ -138,7 +137,7 @@ func TestKlineFreshnessEvaluatorRejectsAmbiguousMarketSuffix(t *testing.T) {
 		{SubjectId: "OPG-USDT-SPOT", Status: "active"},
 		{SubjectId: "OPG-USDT-SWAP", Status: "active"},
 	}}
-	query.storage = NewStorageAdapter(nil, metadata, monconfig.MetricsStorageConfig{SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m"})
+	query.storage = NewStorageAdapter(metadata)
 
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
@@ -401,7 +400,7 @@ func TestKlineFreshnessEvaluatorTruncatedLaggingListDoesNotKeepAlertingForRetire
 		Latest: now.Add(-time.Minute), TrackedSince: now.Add(-time.Hour), Subjects: 22, Lagging: 21, ObservedAt: now,
 		LaggingSubjects: lagging,
 	}})
-	query.storage = NewStorageAdapter(nil, &fakeMetadata{subjects: subjects}, monconfig.MetricsStorageConfig{SpaceID: "crypto", DatasetID: "dataset", Frequency: "1m"})
+	query.storage = NewStorageAdapter(&fakeMetadata{subjects: subjects})
 	reports, err := NewKlineFreshnessEvaluator(query, []KlineFreshnessRule{rule}, 20).Evaluate(context.Background(), now)
 	require.NoError(t, err)
 	require.Len(t, reports, 1)

@@ -19,6 +19,7 @@
 | [日线时间键约定](日线时间键约定.md) | 设计稿 v1（尚未编码，待用户决定）：盘点日线、周线、月线 `data_time` 的写法——采集、重采样、因子、CLI 按 UTC 网格，Strategy `cn_stock` 与 Monitor 交易所时钟按市场本地零点，周、月线另有多种起点；线上没有日线及以上的数据；推荐统一为「交易日期的 UTC 零点」（周线为 ISO 周一、月线为 1 日），不选市场本地零点；列出两种方案的改动范围及与读接口收敛、归档、去耦合的关系 |
 | [因子表达式引擎详细设计](因子表达式引擎详细设计.md) | 已实现（`feature/factorexpr`，待发布切换；设计 v3，已吸收三轮 Codex 审查）：用 Go 原生表达式引擎替换 Python 因子执行（2026-10-17 实测 192 上 64 个 Python 进程、约 4100 线程，每期 30～55 CPU 秒）；YAML spec + BRAIN 风格表达式（复用 expr-lang），回看、输入列、类型由编译推导；严格窗口与 NaN 语义、算子点纯性；集合级 DAG、公共子表达式消除、需求区间、列式面板；definition_hash 改为规范程序文本加 expr 语义版本；Python 链路直接删除，删除前在现有代码上让 Python 与新引擎读同一份线上窗口并排计算来验收；实现后以[因子](../模块/因子.md)为准 |
 | [因子表达式引擎执行计划](因子表达式引擎执行计划.md) | 阶段 1～8 已完成（`feature/factorexpr`），阶段 9 发布切换待执行：9 个阶段——表达式包（语法编译、算子执行）、一致性验收（在现有代码上与 Python 并排计算、线上只读，作为改动管理端与引擎之前的闸门）、管理端与接口、引擎接入、删除 Python、控制台、文档、发布切换（`migrate-expr` 迁移、服务目录相关组件同发、策略实例重新启用、保留账本的回滚） |
+| [监控指标链路优化执行计划](监控指标链路优化执行计划.md) | v1（2026-10-20）：对 VictoriaMetrics 调研后的取舍——不引入为核心组件，不用 vmalert/vmagent；阶段 1 服务指标停写 Storage 已编码待发布，后续下线服务指标视图与 `system_metrics` 消费分区、新序列速率限制、入库丢弃可见、JetStream 流压缩，长期历史按条件再引入 VM；实现后以[监控](../模块/监控.md)为准 |
 | [Console Proxy 内嵌 Caddy 执行计划](../2026-10-09-console-proxy-embedded-caddy-execution-plan.md) | 保留原路径便于已有引用；代理、Monitor 探针及 control bootstrap 已接通，历史验收记录仍按其原范围解读 |
 | [Timer 模式 Storage 写入压测报告](Timer模式Storage写入压测报告.md) | 特定配置、数据规模和环境下的历史观测，不能外推为当前版本或全部拓扑的容量保证 |
 | [Console Proxy 依赖审计数据](console-proxy-dependency-audit.json) | 历史源码基线的模块差异，不能替代当前 go.work/go.sum 或制品依赖清单 |

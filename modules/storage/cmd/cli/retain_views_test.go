@@ -14,7 +14,6 @@ func TestValidateRetainViewsRequiresExactConfirmedInventory(t *testing.T) {
 		"mooxsys/view_mooxsys_host_fs",
 		"mooxsys/view_mooxsys_host_disk",
 		"mooxsys/view_mooxsys_host_net",
-		"mooxsys/view_mooxsys_service_metrics",
 	}
 	if err := validateRetainViewsOptions(retainViewsOptions{metadataDB: "metadata.db", packageRoot: "/tmp/storage", keepViews: keep, yes: true}); err != nil {
 		t.Fatal(err)
@@ -22,11 +21,11 @@ func TestValidateRetainViewsRequiresExactConfirmedInventory(t *testing.T) {
 	if err := validateRetainViewsOptions(retainViewsOptions{metadataDB: "metadata.db", packageRoot: "/tmp/storage", keepViews: keep}); err == nil {
 		t.Fatal("missing --yes was accepted")
 	}
-	if err := validateRetainViewsOptions(retainViewsOptions{metadataDB: "metadata.db", packageRoot: "/tmp/storage", keepViews: keep[:7], yes: true}); err == nil {
+	if err := validateRetainViewsOptions(retainViewsOptions{metadataDB: "metadata.db", packageRoot: "/tmp/storage", keepViews: keep[:6], yes: true}); err == nil {
 		t.Fatal("incomplete keep inventory was accepted")
 	}
 	duplicate := append([]string(nil), keep...)
-	duplicate[7] = duplicate[0]
+	duplicate[6] = duplicate[0]
 	if err := validateRetainViewsOptions(retainViewsOptions{metadataDB: "metadata.db", packageRoot: "/tmp/storage", keepViews: duplicate, yes: true}); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("duplicate keep inventory error = %v", err)
 	}

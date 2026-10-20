@@ -16,7 +16,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const requiredRetainedViewCount = 8
+const requiredRetainedViewCount = 7
 
 type retainViewsOptions struct {
 	metadataDB  string
@@ -42,7 +42,7 @@ func runRetainViews(args []string, stdout, stderr io.Writer) error {
 	opts := retainViewsOptions{}
 	fs.StringVar(&opts.metadataDB, "metadata-db", "", "Metadata SQLite database path")
 	fs.StringVar(&opts.packageRoot, "package-root", "", "Storage package root; the View process must be stopped")
-	fs.Var((*stringListValue)(&opts.keepViews), "keep-view", "View to retain, in space_id/view_id form (repeat exactly eight times)")
+	fs.Var((*stringListValue)(&opts.keepViews), "keep-view", "View to retain, in space_id/view_id form (repeat exactly seven times)")
 	fs.BoolVar(&opts.yes, "yes", false, "confirm permanent metadata deletion")
 	if err := fs.Parse(args); err != nil {
 		return err

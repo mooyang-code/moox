@@ -175,12 +175,6 @@ data_sources:
   kind: internal
   timezone: UTC
   status: active
-- space_id: mooxsys
-  data_source_id: moox_monitor
-  name: MooX Monitor
-  kind: internal
-  timezone: UTC
-  status: active
 
 tags:
 - space_id: crypto
@@ -343,15 +337,6 @@ datasets:
   data_kind: time_series
   data_node_id: storage-node-0
   freq: 1m
-  status: disabled
-- space_id: mooxsys
-  dataset_id: dataset_mooxsys_service_metrics
-  data_source_id: moox_monitor
-  name: 服务指标
-  description: Historical tRPC application and business metrics
-  data_kind: time_series
-  data_node_id: storage-node-0
-  freq: 30s
   status: disabled
 
 field_groups:
@@ -1217,31 +1202,6 @@ fields:
   name: Network error rate available
   value_type: bool
   status: active
-- space_id: mooxsys
-  field_id: monitor_metric_value
-  name: Metric value
-  value_type: double
-  status: active
-- space_id: mooxsys
-  field_id: monitor_metric_labels
-  name: Canonical labels
-  value_type: json
-  status: active
-- space_id: mooxsys
-  field_id: monitor_metric_producer_node_id
-  name: Producer node ID
-  value_type: string
-  status: active
-- space_id: mooxsys
-  field_id: monitor_metric_producer_version
-  name: Producer version
-  value_type: string
-  status: active
-- space_id: mooxsys
-  field_id: monitor_metric_message_id
-  name: Message ID
-  value_type: string
-  status: active
 
 dataset_columns:
 
@@ -2097,44 +2057,6 @@ dataset_columns:
   origin_id: host_net_error_rate_available
   value_type: bool
   status: active
-- space_id: mooxsys
-  dataset_id: dataset_mooxsys_service_metrics
-  column_name: value
-  origin_type: field
-  origin_id: monitor_metric_value
-  value_type: double
-  required: true
-  status: active
-- space_id: mooxsys
-  dataset_id: dataset_mooxsys_service_metrics
-  column_name: labels_json
-  origin_type: field
-  origin_id: monitor_metric_labels
-  value_type: json
-  required: true
-  status: active
-- space_id: mooxsys
-  dataset_id: dataset_mooxsys_service_metrics
-  column_name: producer_node_id
-  origin_type: field
-  origin_id: monitor_metric_producer_node_id
-  value_type: string
-  status: active
-- space_id: mooxsys
-  dataset_id: dataset_mooxsys_service_metrics
-  column_name: producer_version
-  origin_type: field
-  origin_id: monitor_metric_producer_version
-  value_type: string
-  status: active
-- space_id: mooxsys
-  dataset_id: dataset_mooxsys_service_metrics
-  column_name: message_id
-  origin_type: field
-  origin_id: monitor_metric_message_id
-  value_type: string
-  required: true
-  status: active
 
 devices:
 - device_id: parquet-local
@@ -2236,17 +2158,6 @@ views:
   view_id: view_mooxsys_host_net
   name: 主机网络视图
   dataset_id: dataset_mooxsys_host_network
-  grain_keys:
-  - subject_id
-  - freq
-  - data_time
-  - series_tag
-  engine: duckdb
-  status: active
-- space_id: mooxsys
-  view_id: view_mooxsys_service_metrics
-  name: 服务指标视图
-  dataset_id: dataset_mooxsys_service_metrics
   grain_keys:
   - subject_id
   - freq
@@ -2909,38 +2820,3 @@ view_columns:
   origin_id: error_rate_available
   value_type: bool
   sort_order: 140
-- space_id: mooxsys
-  view_id: view_mooxsys_service_metrics
-  column_name: value
-  origin_type: dataset_column
-  origin_id: value
-  value_type: double
-  sort_order: 10
-- space_id: mooxsys
-  view_id: view_mooxsys_service_metrics
-  column_name: labels_json
-  origin_type: dataset_column
-  origin_id: labels_json
-  value_type: json
-  sort_order: 20
-- space_id: mooxsys
-  view_id: view_mooxsys_service_metrics
-  column_name: producer_node_id
-  origin_type: dataset_column
-  origin_id: producer_node_id
-  value_type: string
-  sort_order: 30
-- space_id: mooxsys
-  view_id: view_mooxsys_service_metrics
-  column_name: producer_version
-  origin_type: dataset_column
-  origin_id: producer_version
-  value_type: string
-  sort_order: 40
-- space_id: mooxsys
-  view_id: view_mooxsys_service_metrics
-  column_name: message_id
-  origin_type: dataset_column
-  origin_id: message_id
-  value_type: string
-  sort_order: 50

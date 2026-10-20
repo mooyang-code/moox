@@ -8,19 +8,18 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/health"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, metricsStorage *monmetrics.StorageAdapter, hostStore *hostmetrics.Store) error {
+func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store) error {
 	if cfg == nil {
 		return nil
 	}
 	state := health.New("monitor", cfg.Instance.InstanceID, "", "")
 	state.SetReady(true)
-	state.SnapshotFunc = monitorHealthSnapshot(cfg, runtime, metricsStorage, hostStore)
+	state.SnapshotFunc = monitorHealthSnapshot(cfg, runtime, hostStore)
 	healthAuth, err := healthz.NewAuthenticator(healthz.AuthConfig{
 		Version: cfg.HealthAuth.Version, AccessKey: cfg.HealthAuth.AccessKey, SecretKey: cfg.HealthAuth.SecretKey,
 		ClockSkew: time.Minute, NonceTTL: 2 * time.Minute,
@@ -41,7 +40,7 @@ func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, metr
 	return nil
 }
 
-func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage *monmetrics.StorageAdapter, hostStore *hostmetrics.Store) healthz.SnapshotFunc {
+func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		var activeChecks int64
 		var checksErr error
@@ -62,20 +61,6 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage 
 			"active_checks":     activeChecks,
 			"placement_enabled": cfg.Placement.Enabled,
 		}
-		metricsReady := !cfg.Metrics.Enabled
-		metricsReason := "metrics ingestion disabled"
-		if cfg.Metrics.Enabled {
-			metricsReason = "metrics schema has not been checked"
-			if metricsStorage != nil {
-				status := metricsStorage.SchemaStatus()
-				metricsReady = status.Valid
-				if status.Error != "" {
-					metricsReason = status.Error
-				}
-			}
-		}
-		rsp.Details["metrics_schema_ready"] = metricsReady
-		rsp.Details["metrics_schema_reason"] = metricsReason
 		hostStorageReady := !cfg.Metrics.HostStorage.Enabled || (hostStore != nil && hostStore.StorageReady())
 		rsp.Details["host_storage_schema_ready"] = hostStorageReady
 		reporterReady := !cfg.Metrics.Enabled || (runtime != nil && runtime.MetricsReporterReady.Load())
@@ -97,7 +82,7 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, metricsStorage 
 		if runtime != nil && runtime.observabilityIngestErrorMessage() != "" {
 			rsp.Details["observability_ingest_error"] = runtime.observabilityIngestErrorMessage()
 		}
-		ready = databaseReady && schedulerReady && metricsReady && hostStorageReady && ingestReady && reporterReady
+		ready = databaseReady && schedulerReady && hostStorageReady && ingestReady && reporterReady
 		rsp.Ready = ready
 		if ready {
 			rsp.Status = "ok"

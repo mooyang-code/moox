@@ -485,6 +485,54 @@ func TestBusinessFreshnessReporterKeepsCollectorExpectationBeforeStorage(t *test
 	}
 }
 
+func TestBusinessFreshnessReporterSkipsSystemMonitoringDatasets(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.Close() })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	now := time.Now().UTC().Truncate(time.Second)
+	stale := float64(now.Add(-time.Hour).Unix())
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		for _, space := range []struct{ id, labels string }{
+			{"crypto", `{"dataset_id":"bars","freq":"1m","space_id":"crypto"}`},
+			{"mooxsys", `{"dataset_id":"dataset_mooxsys_probe","freq":"30s","space_id":"mooxsys"}`},
+		} {
+			for _, metric := range []struct {
+				name  string
+				value float64
+			}{
+				{"moox_storage_dataset_enabled", 1},
+				{"moox_storage_dataset_expected_interval_seconds", 60},
+				{"moox_storage_dataset_last_run_timestamp_seconds", stale},
+				{"moox_storage_dataset_last_success_timestamp_seconds", stale},
+				{"moox_storage_dataset_output_watermark_timestamp_seconds", stale},
+			} {
+				id := space.id + "-" + metric.name
+				require.NoError(t, db.Create(&monmetrics.MetricSeries{
+					ServiceName: "storage-primary", InstanceID: "storage-primary@storage", SeriesID: id,
+					MetricName: metric.name, MetricType: "gauge", LabelsJSON: space.labels, LastSeenAt: now,
+				}).Error)
+				require.NoError(t, db.Create(&monmetrics.MetricLatest{
+					SeriesID: id, ServiceName: "storage-primary", InstanceID: "storage-primary@storage",
+					MetricName: metric.name, MetricType: "gauge", LabelsJSON: space.labels, Value: metric.value, ObservedAt: now,
+				}).Error)
+			}
+		}
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	require.NoError(t, err)
+	repositories := manager.Repositories()
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
+		Now: func() time.Time { return now },
+	}, repositories, nil)
+	require.NoError(t, run(t.Context()))
+	_, err = repositories.Checks.Get(t.Context(), "crypto", "dataset:storage:bars:1m")
+	require.NoError(t, err, "业务数据集照常建立新鲜度检查")
+	_, err = repositories.Checks.Get(t.Context(), "mooxsys", "dataset:storage:dataset_mooxsys_probe:30s")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound, "mooxsys 系统监控数据集不做新鲜度检查")
+}
+
 func TestBusinessFreshnessReporterUsesStorageViewForCollectorDataset(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	if err != nil {

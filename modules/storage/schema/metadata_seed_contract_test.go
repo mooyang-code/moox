@@ -134,7 +134,6 @@ func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {
 		"mooxsys/dataset_mooxsys_host_filesystem":            {"time_series", ""},
 		"mooxsys/dataset_mooxsys_host_disk":                  {"time_series", ""},
 		"mooxsys/dataset_mooxsys_host_network":               {"time_series", ""},
-		"mooxsys/dataset_mooxsys_service_metrics":            {"time_series", ""},
 	}
 	for key, want := range preserved {
 		t.Run(key, func(t *testing.T) {
