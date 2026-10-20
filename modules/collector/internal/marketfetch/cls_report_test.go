@@ -129,7 +129,8 @@ func TestReportedFieldsAreAllInTheCLSIndex(t *testing.T) {
 	timings := []itemTiming{{
 		Recorded: true, Subject: "S", Symbol: "SYM", Provider: "binance", Outcome: domain.ItemOutcomeSuccess,
 		Queue: 10 * time.Millisecond, Fetch: 1500 * time.Millisecond, StartedAt: closeAt.Add(time.Second), Attempts: 2,
-		HTTP: httpclient.TraceSnapshot{Requests: 2, NewConns: 2, DNSMs: 1, ConnectMs: 30, TLSMs: 60, TTFBMs: 800, LastStatus: 200, LastDomain: "api.binance.com", RemoteIP: "1.2.3.4:443"},
+		HTTP: httpclient.TraceSnapshot{Requests: 2, NewConns: 2, DNSMs: 1, ConnectMs: 30, TLSMs: 60, TTFBMs: 800, LastStatus: 200, LastDomain: "api.binance.com", RemoteIP: "1.2.3.4:443",
+			Attempts: []httpclient.TraceAttempt{{Domain: "api.binance.com", Phase: "wait_response", Kind: "timeout", Ms: 1200, Reused: true}, {Domain: "api.binance.com", Phase: "done", Status: 200, Ms: 300}}},
 	}}
 	pipeline.reportBatch(req, 1, 1, time.Second, time.Second, batchTimingFields(timings, closeAt.Add(time.Second), closeAt.Add(3*time.Second), closeAt))
 	pipeline.reportSlowItems(req, timings, closeAt)

@@ -3,6 +3,7 @@ package marketfetch
 import (
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -46,7 +47,8 @@ func batchTimingFields(items []itemTiming, batchStart, fetchEnd, closeAt time.Ti
 		fields["since_close_start_ms"] = strconv.FormatInt(batchStart.Sub(closeAt).Milliseconds(), 10)
 		fields["since_close_fetch_end_ms"] = strconv.FormatInt(fetchEnd.Sub(closeAt).Milliseconds(), 10)
 	}
-	var fetch, queue, connect, tlsMs, dns, ttfb []int64
+	var fetch, queue, connect, tlsMs, dns, ttfb, failMs []int64
+	fails := map[string]int{}
 	attempts, retried, requests, newConns, reusedConns := 0, 0, 0, 0, 0
 	for _, item := range items {
 		if !item.Recorded {
@@ -67,6 +69,18 @@ func batchTimingFields(items []itemTiming, batchStart, fetchEnd, closeAt time.Ti
 		if item.HTTP.Requests > 0 {
 			ttfb = append(ttfb, item.HTTP.TTFBMs)
 		}
+		for _, attempt := range item.HTTP.Attempts {
+			if attempt.Kind == "" {
+				continue
+			}
+			fails["fail_total"]++
+			fails["fail_"+failureGroup(attempt.Kind)]++
+			fails["fail_in_"+failurePhaseGroup(attempt.Phase)]++
+			if attempt.Reused {
+				fails["fail_on_reused_conn"]++
+			}
+			failMs = append(failMs, attempt.Ms)
+		}
 	}
 	if len(fetch) == 0 {
 		return fields
@@ -86,12 +100,47 @@ func batchTimingFields(items []itemTiming, batchStart, fetchEnd, closeAt time.Ti
 		set("ttfb_p90_ms", percentile(ttfb, 90))
 		set("ttfb_max_ms", percentile(ttfb, 100))
 	}
+	for key, count := range fails {
+		set(key, int64(count))
+	}
+	if len(failMs) > 0 {
+		set("fail_ms_p50", percentile(failMs, 50))
+		set("fail_ms_max", percentile(failMs, 100))
+	}
 	set("attempts_total", int64(attempts))
 	set("retried", int64(retried))
 	set("http_requests", int64(requests))
 	set("conn_new", int64(newConns))
 	set("conn_reused", int64(reusedConns))
 	return fields
+}
+
+// failureGroup 把请求错误原因归并成批次摘要里的几个计数：超时（含上下文截止）、重置（含对端提前关闭）、TLS、拨号、状态码、其他。
+func failureGroup(kind string) string {
+	switch {
+	case kind == "timeout" || kind == "deadline":
+		return "timeout"
+	case kind == "reset" || kind == "eof":
+		return "reset"
+	case kind == "tls" || kind == "dial":
+		return kind
+	case strings.HasPrefix(kind, "status_"):
+		return "status"
+	default:
+		return "other"
+	}
+}
+
+// failurePhaseGroup 把失败所处阶段归并成：建立连接前（dns、connect、tls、get_conn）、等响应（已写出请求没有首字节）、读响应与写请求。
+func failurePhaseGroup(phase string) string {
+	switch phase {
+	case "dns", "connect", "tls", "get_conn":
+		return "connect_phase"
+	case "wait_response":
+		return "wait_response"
+	default:
+		return "io_phase"
+	}
 }
 
 // percentile 返回已有样本里的第 p 百分位（最近秩法）；样本为空返回 0。
@@ -137,6 +186,10 @@ func (p *KlinePipeline) reportSlowItems(req Request, items []itemTiming, closeAt
 			"dns_ms": strconv.FormatInt(item.HTTP.DNSMs, 10), "connect_ms": strconv.FormatInt(item.HTTP.ConnectMs, 10),
 			"tls_ms": strconv.FormatInt(item.HTTP.TLSMs, 10), "ttfb_ms": strconv.FormatInt(item.HTTP.TTFBMs, 10),
 			"http_status": strconv.Itoa(item.HTTP.LastStatus), "endpoint": item.HTTP.LastDomain, "remote_addr": item.HTTP.RemoteIP,
+		}
+		// 逐次请求的结果：失败的那一次停在哪个阶段、为什么失败、复用连接是否已空闲很久。
+		if trace := httpclient.AttemptsText(item.HTTP.Attempts); trace != "" {
+			fields["attempt_trace"] = truncateString(trace, clsErrorLimit)
 		}
 		if !closeAt.IsZero() {
 			fields["since_close_start_ms"] = strconv.FormatInt(item.StartedAt.Sub(closeAt).Milliseconds(), 10)

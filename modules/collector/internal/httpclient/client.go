@@ -271,7 +271,7 @@ func (c *HTTPClient) clientForIP(ip string) *http.Client {
 	return &client
 }
 
-func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, domain, path string, query url.Values, consume func(io.Reader) error) error {
+func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, domain, path string, query url.Values, consume func(io.Reader) error) (retErr error) {
 	if client == nil {
 		return fmt.Errorf("HTTP client is not initialized")
 	}
@@ -285,9 +285,9 @@ func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, dom
 	// 调用方通过 WithTrace 挂了 Trace 时，记录这次请求的 DNS、建连、TLS 与首字节耗时。
 	status := 0
 	if trace := traceFrom(ctx); trace != nil {
-		var done func(int)
+		var done func(int, error)
 		ctx, done = trace.begin(ctx, domain)
-		defer func() { done(status) }()
+		defer func() { done(status, retErr) }()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {

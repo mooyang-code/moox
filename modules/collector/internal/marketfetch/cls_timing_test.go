@@ -43,6 +43,22 @@ func TestBatchTimingFieldsSummarizeStagesAndRetries(t *testing.T) {
 	require.Equal(t, "400", fields["connect_max_ms"])
 	require.Equal(t, "700", fields["tls_max_ms"])
 	require.Equal(t, "2500", fields["ttfb_max_ms"])
+	require.NotContains(t, fields, "fail_total", "没有失败尝试时不上报失败计数")
+
+	// 失败尝试按原因、阶段与是否复用连接计数。
+	items[1].HTTP.Attempts = []httpclient.TraceAttempt{
+		{Domain: "api.binance.com", Phase: "wait_response", Kind: "timeout", Ms: 1200, Reused: true, IdleMs: 40000},
+		{Domain: "api.binance.com", Phase: "connect", Kind: "dial", Ms: 800},
+		{Domain: "data-api.binance.vision", Phase: "done", Status: 200, Ms: 300},
+	}
+	fields = batchTimingFields(items, closeAt, closeAt, closeAt)
+	require.Equal(t, "2", fields["fail_total"])
+	require.Equal(t, "1", fields["fail_timeout"])
+	require.Equal(t, "1", fields["fail_dial"])
+	require.Equal(t, "1", fields["fail_in_wait_response"])
+	require.Equal(t, "1", fields["fail_in_connect_phase"])
+	require.Equal(t, "1", fields["fail_on_reused_conn"])
+	require.Equal(t, "1200", fields["fail_ms_max"])
 
 	// 不是周期提交请求（没有收盘时刻）不上报相对收盘的偏移；没有取数项时只剩空字段。
 	require.NotContains(t, batchTimingFields(items, closeAt, closeAt, time.Time{}), "since_close_start_ms")
@@ -65,6 +81,7 @@ func TestReportSlowItemsPicksSlowestAndRetriedWithinTheCap(t *testing.T) {
 	pipeline.reportSlowItems(req, items, closeAt)
 
 	require.Len(t, reporter.entries, maxSlowItemReports)
+	require.NotContains(t, reporter.entries[0].Fields, "attempt_trace", "没有逐次记录时不带 attempt_trace")
 	first := reporter.entries[0].Fields
 	require.Equal(t, "market_fetch_item_slow", first["log_type"])
 	require.Equal(t, "SLOW-11", first["subject_id"], "最慢的排最前")
@@ -143,4 +160,19 @@ func TestKlinePipelineReportsStageTimingsAndCommit(t *testing.T) {
 	require.Equal(t, "1", commit["rows"])
 	require.Contains(t, commit, "commit_ms")
 	require.NotContains(t, byType, "market_fetch_item_slow", "正常的单项不单独上报")
+}
+
+func TestReportSlowItemsCarriesAttemptTrace(t *testing.T) {
+	reporter := &recordingReporter{}
+	pipeline := &KlinePipeline{Reporter: reporter, SpaceID: "crypto", FunctionName: "fn"}
+	req := Request{RequestID: "r", DatasetID: "ds", Frequency: "1m", BatchKind: domain.BatchKindRealtime}
+	pipeline.reportSlowItems(req, []itemTiming{{
+		Recorded: true, Subject: "BTC-USDT", Fetch: 2 * time.Second, Attempts: 2,
+		HTTP: httpclient.TraceSnapshot{Requests: 2, Attempts: []httpclient.TraceAttempt{
+			{Domain: "api.binance.com", Phase: "wait_response", Kind: "timeout", Ms: 1200, Reused: true, IdleMs: 30000},
+			{Domain: "data-api.binance.vision", Phase: "done", Status: 200, Ms: 300},
+		}},
+	}}, time.Time{})
+	require.Len(t, reporter.entries, 1)
+	require.Equal(t, "api.binance.com:wait_response:timeout:1200ms:reused30000ms;data-api.binance.vision:done:200:300ms:new", reporter.entries[0].Fields["attempt_trace"])
 }

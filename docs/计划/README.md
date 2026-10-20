@@ -22,5 +22,6 @@
 | [监控指标链路优化执行计划](监控指标链路优化执行计划.md) | v1（2026-10-20）：对 VictoriaMetrics 调研后的取舍——不引入为核心组件，不用 vmalert/vmagent；阶段 1 服务指标停写 Storage 已编码待发布，后续下线服务指标视图与 `system_metrics` 消费分区、新序列速率限制、入库丢弃可见、JetStream 流压缩，长期历史按条件再引入 VM；实现后以[监控](../模块/监控.md)为准 |
 | [主机守护与告警高可用执行计划](主机守护与告警高可用执行计划.md) | 执行计划 v3（2026-10-18，尚未编码，已吸收一轮 Codex 审查）：服务器上 `/data/moox` 内全部组件统一由 `moox-runtime` 管理，每主机一条 `# moox-watchdog` crontab 调用 `moox-runtime watch` 按依赖顺序自动拉起并直接推送告警，服务器重启后自动恢复；修复 PID 复用、遗留停止中标记、持久屏障等起不来的边界；archive-mgr 并入 control 单元；告警渠道以 Monitor 为唯一来源、HostAgent 拉取主机策略缓存；storage、compute-1 交叉检查 control 失联，Monitor 评估停滞告警；因子引擎机器登记为主机；外部程序（因子引擎、archive-worker）离线告警并支持 Windows；archive-worker 暂存从 DuckDB 换成纯 Go SQLite（归档旧数据直接删除）；含演练清单；实现后以[部署与运维](../部署与运维.md)、[监控](../模块/监控.md)与[归档](../模块/归档.md)为准 |
 | [Console Proxy 内嵌 Caddy 执行计划](../2026-10-09-console-proxy-embedded-caddy-execution-plan.md) | 保留原路径便于已有引用；代理、Monitor 探针及 control bootstrap 已接通，历史验收记录仍按其原范围解读 |
+| [采集整点取数变慢：排查记录与优化](采集整点取数变慢排查与优化.md) | 2026-10-20 排查记录：整点策略延迟高的原因在采集取数（现货 1m 第一次尝试停住并重试），含已证实结论、未证实部分与优化点清单 |
 | [Timer 模式 Storage 写入压测报告](Timer模式Storage写入压测报告.md) | 特定配置、数据规模和环境下的历史观测，不能外推为当前版本或全部拓扑的容量保证 |
 | [Console Proxy 依赖审计数据](console-proxy-dependency-audit.json) | 历史源码基线的模块差异，不能替代当前 go.work/go.sum 或制品依赖清单 |
