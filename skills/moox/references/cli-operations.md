@@ -138,6 +138,22 @@ moox-cli storage force-rebuild-view \
 重新消费 Source 事件；原 View 历史数据不可恢复。重建按 `view_rows_per_series` 从 Primary 回填每个序列最近的
 K 线，历史不足时以现有数据激活。
 
+## 下线单个 View
+
+控制台没有删除 View 的入口。要下线某一个 View（例如不再有读取方的 `view_mooxsys_service_metrics`），先暂停 `storage-view`
+（直接 stop 会在一分钟内被主机守护拉起，用 `moox-runtime pause`），再离线删除这一个 View 的元数据：
+
+```bash
+/home/<user>/moox/storage/bin/moox-storage-cli delete-view \
+  --metadata-db /home/<user>/moox/storage/data/storage/metadata/storage_metadata.db \
+  --package-root /home/<user>/moox/storage \
+  --view mooxsys/view_mooxsys_service_metrics \
+  --yes
+```
+
+命令只删指定的一个 View 及其列、构建与重建日志（外键级联），输出待回收的 `engine/index_id`；物理 A/B 文件由 `storage-view` 的清理定时器在确认无引用后回收。
+**不要用 `retain-views` 删单个 View**：它会删除所有不在保留清单里的 View，生产上的因子结果视图也会被删掉。删除前先备份元数据库。
+
 ## 收敛默认 View 集合
 
 新项目只保留三个行情 View 和四个主机监控 View。需要删除其他 View 定义时，先停止

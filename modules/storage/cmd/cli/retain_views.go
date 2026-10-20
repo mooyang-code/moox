@@ -146,22 +146,27 @@ func storageViewState(output []byte) (string, error) {
 	return "", errors.New("status output has no storage-view component")
 }
 
-func retainViews(ctx context.Context, opts retainViewsOptions) (retainViewsSummary, error) {
-	db, err := sql.Open("sqlite", opts.metadataDB)
+// retainViewRow 是 t_views 里和删除有关的几列。
+type retainViewRow struct{ spaceID, viewID, engine, status, activeIndexID string }
+
+// withMetadataTx 在 Metadata SQLite 的一个 BEGIN IMMEDIATE 事务里执行 fn：fn 返回 nil 就提交，否则回滚。
+// 外键级联打开，删除 t_views 的行会连带删除它的列、构建、重建日志与周期状态。
+func withMetadataTx(ctx context.Context, metadataDB string, fn func(conn *sql.Conn) error) error {
+	db, err := sql.Open("sqlite", metadataDB)
 	if err != nil {
-		return retainViewsSummary{}, err
+		return err
 	}
 	defer db.Close()
 	conn, err := db.Conn(ctx)
 	if err != nil {
-		return retainViewsSummary{}, err
+		return err
 	}
 	defer conn.Close()
 	if _, err := conn.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
-		return retainViewsSummary{}, err
+		return err
 	}
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return retainViewsSummary{}, fmt.Errorf("begin metadata transaction: %w", err)
+		return fmt.Errorf("begin metadata transaction: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -169,73 +174,97 @@ func retainViews(ctx context.Context, opts retainViewsOptions) (retainViewsSumma
 			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
 		}
 	}()
-
-	keep := make(map[string]struct{}, len(opts.keepViews))
-	for _, value := range opts.keepViews {
-		keep[strings.TrimSpace(value)] = struct{}{}
+	if err := fn(conn); err != nil {
+		return err
 	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+func listViewRows(ctx context.Context, conn *sql.Conn) ([]retainViewRow, error) {
 	rows, err := conn.QueryContext(ctx, `SELECT c_space_id, c_view_id, c_engine, c_status, c_active_index_id FROM t_views`)
 	if err != nil {
-		return retainViewsSummary{}, err
+		return nil, err
 	}
-	type viewRow struct{ spaceID, viewID, engine, status, activeIndexID string }
-	var all []viewRow
+	defer rows.Close()
+	var all []retainViewRow
 	for rows.Next() {
-		var item viewRow
+		var item retainViewRow
 		if err := rows.Scan(&item.spaceID, &item.viewID, &item.engine, &item.status, &item.activeIndexID); err != nil {
-			_ = rows.Close()
-			return retainViewsSummary{}, err
+			return nil, err
 		}
 		all = append(all, item)
 	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return retainViewsSummary{}, err
+	return all, rows.Err()
+}
+
+// deleteViewMetadata 删除一个 View 的元数据，并把它占用的活动索引与构建中索引记进 summary，
+// 供之后由 Storage View 的清理定时器回收物理文件。
+func deleteViewMetadata(ctx context.Context, conn *sql.Conn, item retainViewRow, summary *retainViewsSummary) error {
+	var buildIndexID, buildEngine string
+	_ = conn.QueryRowContext(ctx, `SELECT c_index_id, c_engine FROM t_view_index_builds WHERE c_space_id = ? AND c_view_id = ?`, item.spaceID, item.viewID).Scan(&buildIndexID, &buildEngine)
+	if strings.TrimSpace(item.activeIndexID) != "" {
+		summary.RetiredIndexes = append(summary.RetiredIndexes, retainedIndex{Engine: item.engine, IndexID: item.activeIndexID})
 	}
-	if err := rows.Close(); err != nil {
-		return retainViewsSummary{}, err
+	if strings.TrimSpace(buildIndexID) != "" {
+		summary.RetiredIndexes = append(summary.RetiredIndexes, retainedIndex{Engine: buildEngine, IndexID: buildIndexID})
 	}
+	if _, err := conn.ExecContext(ctx, `DELETE FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, item.spaceID, item.viewID); err != nil {
+		return err
+	}
+	summary.DeletedViews++
+	return nil
+}
+
+func retainViews(ctx context.Context, opts retainViewsOptions) (retainViewsSummary, error) {
 	summary := retainViewsSummary{}
-	for key := range keep {
-		spaceID, viewID, _ := strings.Cut(key, "/")
-		found := false
+	err := withMetadataTx(ctx, opts.metadataDB, func(conn *sql.Conn) error {
+		keep := make(map[string]struct{}, len(opts.keepViews))
+		for _, value := range opts.keepViews {
+			keep[strings.TrimSpace(value)] = struct{}{}
+		}
+		all, err := listViewRows(ctx, conn)
+		if err != nil {
+			return err
+		}
+		for key := range keep {
+			spaceID, viewID, _ := strings.Cut(key, "/")
+			found := false
+			for _, item := range all {
+				if item.spaceID != spaceID || item.viewID != viewID {
+					continue
+				}
+				found = true
+				if item.status != "active" && item.status != "" {
+					return fmt.Errorf("kept View %s is not active", key)
+				}
+				break
+			}
+			if !found {
+				return fmt.Errorf("kept View %s does not exist", key)
+			}
+		}
 		for _, item := range all {
-			if item.spaceID != spaceID || item.viewID != viewID {
+			if _, ok := keep[item.spaceID+"/"+item.viewID]; ok {
+				summary.KeptViews++
 				continue
 			}
-			found = true
-			if item.status != "active" && item.status != "" {
-				return retainViewsSummary{}, fmt.Errorf("kept View %s is not active", key)
+			if err := deleteViewMetadata(ctx, conn, item, &summary); err != nil {
+				return err
 			}
-			break
 		}
-		if !found {
-			return retainViewsSummary{}, fmt.Errorf("kept View %s does not exist", key)
-		}
-	}
-	for _, item := range all {
-		key := item.spaceID + "/" + item.viewID
-		if _, ok := keep[key]; ok {
-			summary.KeptViews++
-			continue
-		}
-		var buildIndexID, buildEngine string
-		_ = conn.QueryRowContext(ctx, `SELECT c_index_id, c_engine FROM t_view_index_builds WHERE c_space_id = ? AND c_view_id = ?`, item.spaceID, item.viewID).Scan(&buildIndexID, &buildEngine)
-		if strings.TrimSpace(item.activeIndexID) != "" {
-			summary.RetiredIndexes = append(summary.RetiredIndexes, retainedIndex{Engine: item.engine, IndexID: item.activeIndexID})
-		}
-		if strings.TrimSpace(buildIndexID) != "" {
-			summary.RetiredIndexes = append(summary.RetiredIndexes, retainedIndex{Engine: buildEngine, IndexID: buildIndexID})
-		}
-		if _, err := conn.ExecContext(ctx, `DELETE FROM t_views WHERE c_space_id = ? AND c_view_id = ?`, item.spaceID, item.viewID); err != nil {
-			return retainViewsSummary{}, err
-		}
-		summary.DeletedViews++
-	}
-	sort.Slice(summary.RetiredIndexes, func(i, j int) bool { return summary.RetiredIndexes[i].IndexID < summary.RetiredIndexes[j].IndexID })
-	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return nil
+	})
+	if err != nil {
 		return retainViewsSummary{}, err
 	}
-	committed = true
+	sortRetiredIndexes(&summary)
 	return summary, nil
+}
+
+func sortRetiredIndexes(summary *retainViewsSummary) {
+	sort.Slice(summary.RetiredIndexes, func(i, j int) bool { return summary.RetiredIndexes[i].IndexID < summary.RetiredIndexes[j].IndexID })
 }
