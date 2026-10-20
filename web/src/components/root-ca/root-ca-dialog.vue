@@ -1,7 +1,7 @@
 <template>
   <a-modal
     :visible="visible"
-    width="680px"
+    width="min(680px, 94vw)"
     title="HTTPS 根证书"
     hide-cancel
     ok-text="关闭"
@@ -38,9 +38,12 @@
       <code>moox-cli setup trust-browser</code> 最稳妥）。安装时优先用下面的系统命令，不要不加检查地运行包内脚本。
     </a-alert>
 
-    <a-tabs default-active-key="macos" size="small">
+    <a-tabs :default-active-key="initialGuide" size="small">
       <a-tab-pane v-for="guide in guides" :key="guide.key" :title="guide.label">
         <pre v-for="command in guide.commands" :key="command" class="ca-command">{{ command }}</pre>
+        <ol v-if="guide.steps?.length" class="ca-steps">
+          <li v-for="step in guide.steps" :key="step">{{ step }}</li>
+        </ol>
         <p v-if="guide.note" class="ca-note">{{ guide.note }}</p>
       </a-tab-pane>
     </a-tabs>
@@ -50,6 +53,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import {
+  defaultGuideKey,
   fetchRootCaFingerprint,
   ROOT_CA_BUNDLE_FILE_NAME,
   ROOT_CA_BUNDLE_URL,
@@ -62,6 +66,8 @@ const props = defineProps<{ visible: boolean }>();
 const emit = defineEmits<{ (event: "update:visible", value: boolean): void }>();
 
 const guides = rootCaGuides();
+// 手机上打开时直接停在手机的页签。
+const initialGuide = defaultGuideKey(typeof navigator === "undefined" ? "" : navigator.userAgent);
 const loading = ref(false);
 const fingerprint = ref<string | null>(null);
 
@@ -110,6 +116,16 @@ watch(
 .ca-note {
   color: var(--color-text-3);
   font-size: 12px;
+}
+
+.ca-steps {
+  margin: 0 0 8px;
+  padding-left: 20px;
+  line-height: 1.7;
+
+  li + li {
+    margin-top: 4px;
+  }
 }
 
 .ca-command {

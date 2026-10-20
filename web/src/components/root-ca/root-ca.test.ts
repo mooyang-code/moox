@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  defaultGuideKey,
   fetchRootCaFingerprint,
   normalizeFingerprint,
   ROOT_CA_FILE_NAME,
@@ -42,8 +43,8 @@ describe("根证书指纹", () => {
 describe("各系统的安装说明", () => {
   it("覆盖 macOS、Linux、Windows 和 Firefox，命令都指向同一个证书文件名", () => {
     const guides = rootCaGuides();
-    expect(guides.map(item => item.key)).toEqual(["macos", "linux", "windows", "cli", "firefox"]);
-    for (const guide of guides.filter(item => item.key !== "firefox" && item.key !== "cli")) {
+    expect(guides.map(item => item.key)).toEqual(["macos", "linux", "windows", "ios", "android", "cli", "firefox"]);
+    for (const guide of guides.filter(item => ["macos", "linux", "windows"].includes(item.key))) {
       expect(guide.commands.length).toBeGreaterThan(0);
       for (const command of guide.commands) expect(command).toContain(ROOT_CA_FILE_NAME);
     }
@@ -54,5 +55,40 @@ describe("各系统的安装说明", () => {
     const cli = guides.find(item => item.key === "cli");
     expect(cli?.commands.join("\n")).toContain("NODE_EXTRA_CA_CERTS");
     expect(cli?.commands.join("\n")).not.toMatch(/ -k|--insecure/);
+  });
+});
+
+describe("手机的安装步骤", () => {
+  it("iPhone：用 Safari 下载、安装描述文件，并且要在证书信任设置里打开完全信任", () => {
+    const ios = rootCaGuides().find(item => item.key === "ios");
+    const text = (ios?.steps || []).join("\n");
+    expect(ios?.commands).toEqual([]);
+    expect(text).toContain("Safari");
+    expect(text).toContain("VPN 与设备管理");
+    expect(text).toContain("证书信任设置");
+    expect(text).toContain("SHA-256");
+  });
+
+  it("Android：安装为 CA 证书并核对指纹，提到 Firefox 的额外开关", () => {
+    const android = rootCaGuides().find(item => item.key === "android");
+    const text = (android?.steps || []).join("\n");
+    expect(text).toContain("CA 证书");
+    expect(text).toContain(ROOT_CA_FILE_NAME);
+    expect(text).toContain("SHA-256");
+    expect(text).toContain("第三方 CA 证书");
+  });
+
+  it("按设备自动选中页签", () => {
+    expect(defaultGuideKey("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Mobile/15E148 Safari/604.1")).toBe("ios");
+    expect(
+      defaultGuideKey(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1"
+      )
+    ).toBe("ios");
+    expect(defaultGuideKey("Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/126.0 Mobile Safari/537.36")).toBe("android");
+    expect(defaultGuideKey("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0")).toBe("windows");
+    expect(defaultGuideKey("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/126.0")).toBe("macos");
+    expect(defaultGuideKey("Mozilla/5.0 (X11; Linux x86_64) Firefox/128.0")).toBe("linux");
+    expect(defaultGuideKey("")).toBe("macos");
   });
 });

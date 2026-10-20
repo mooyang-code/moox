@@ -75,6 +75,7 @@ func TestCABundleContainsCertGuideAndInstallers(t *testing.T) {
 		"不能证明包没被篡改", "再自己计算指纹", "不要不加检查地运行包里的",
 		"迁移到新机器", "setup trust-host", "setup trust-browser", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
 		"恰好只有一个 PEM 块", "grep -c '^-----BEGIN '",
+		"iPhone / iPad", "证书信任设置", "VPN 与设备管理", "Android", "安装证书 → CA 证书", "https://203.0.113.10:9527/ca/root.crt",
 	} {
 		if !strings.Contains(guide, text) {
 			t.Fatalf("Agent 说明缺少 %q", text)

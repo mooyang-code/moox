@@ -6,12 +6,28 @@ export const ROOT_CA_BUNDLE_URL = "/ca/moox-root-ca.zip";
 export const ROOT_CA_BUNDLE_FILE_NAME = "moox-root-ca.zip";
 export const ROOT_CA_FILE_NAME = "moox-caddy-root.crt";
 
+export type RootCaGuideKey = "macos" | "linux" | "windows" | "ios" | "android" | "cli" | "firefox";
+
 export interface RootCaGuide {
-  key: "macos" | "linux" | "windows" | "firefox" | "cli";
+  key: RootCaGuideKey;
   label: string;
-  /** 每一项是一条可直接复制执行的命令；没有命令时只展示 note。 */
+  /** 每一项是一条可直接复制执行的命令；没有命令时只展示 steps / note。 */
   commands: string[];
+  /** 需要在设备界面上手工操作的步骤（手机），按顺序展示。 */
+  steps?: string[];
   note?: string;
+}
+
+/** 按浏览器的 User-Agent 选中最可能用到的页签：手机直接看到手机的步骤。 */
+export function defaultGuideKey(userAgent: string): RootCaGuideKey {
+  if (/iPhone|iPad|iPod/i.test(userAgent)) return "ios";
+  // iPadOS 的 Safari 默认伪装成 macOS，但带触屏标记的 Macintosh 只可能是 iPad。
+  if (/Macintosh/i.test(userAgent) && /Mobile/i.test(userAgent)) return "ios";
+  if (/Android/i.test(userAgent)) return "android";
+  if (/Windows/i.test(userAgent)) return "windows";
+  if (/Mac OS X|Macintosh/i.test(userAgent)) return "macos";
+  if (/Linux|X11/i.test(userAgent)) return "linux";
+  return "macos";
 }
 
 const FINGERPRINT_PATTERN = /^[0-9A-F]{2}(:[0-9A-F]{2}){31}$/;
@@ -64,6 +80,28 @@ export function rootCaGuides(fileName: string = ROOT_CA_FILE_NAME): RootCaGuide[
         `certutil -addstore -f Root "%USERPROFILE%\\Downloads\\${fileName}"`
       ],
       note: "在管理员命令提示符中执行；第一条的输出里有 Cert Hash(sha256) 可核对指纹，第二条安装到“受信任的根证书颁发机构”。"
+    },
+    {
+      key: "ios",
+      label: "iPhone / iPad",
+      commands: [],
+      steps: [
+        "用 Safari 打开管理台，点登录页底部的“下载并安装根证书”（或“秘钥管理”页的“HTTPS 根证书”），再点“仅下载证书”；提示“已下载描述文件”。其它浏览器下载的证书装不上，要用 Safari。",
+        "打开“设置 → 通用 → VPN 与设备管理”，点刚下载的描述文件，按提示安装（需要输入锁屏密码）。安装前在详情里核对 SHA-256 指纹。",
+        "还要打开信任开关：“设置 → 通用 → 关于本机 → 证书信任设置”，打开这张证书的“完全信任”。少了这一步，iOS 仍然不信任它。",
+        "从后台彻底划掉 Safari 再重新打开管理台，地址栏不再提示不安全即成功。"
+      ]
+    },
+    {
+      key: "android",
+      label: "Android",
+      commands: [],
+      steps: [
+        `用 Chrome 打开管理台，点登录页底部的“下载并安装根证书”（或“秘钥管理”页的“HTTPS 根证书”），再点“仅下载证书”，得到 ${fileName}。`,
+        "打开“设置 → 安全（或“密码与安全”）→ 更多安全设置 → 加密与凭据 → 安装证书 → CA 证书”，确认提示后选中下载的文件。各品牌菜单名称略有不同，可以在设置里搜索“CA 证书”。",
+        "在“加密与凭据 → 受信任的凭据 → 用户”里点开这张证书，核对 SHA-256 指纹。",
+        "彻底关闭 Chrome 再重新打开管理台。Chrome 会信任这里装的证书；Firefox 要在它自己的设置里打开“使用第三方 CA 证书”（设置 → 关于 Firefox，连点图标 5 次打开隐藏设置后可见）。"
+      ]
     },
     {
       key: "cli",
