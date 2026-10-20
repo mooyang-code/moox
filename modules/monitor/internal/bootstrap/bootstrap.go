@@ -169,6 +169,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			return nil, err
 		}
 		runtime.MetricStores = metricStores
+		metricStores.Messages.SetSeriesLimits(monmetrics.SeriesLimits{
+			MaxNewPerHour: cfg.Metrics.MaxNewSeriesPerHour, MaxNewPerDay: cfg.Metrics.MaxNewSeriesPerDay,
+		})
 		metricsQuery = monmetrics.NewQueryService(metricStores.Messages, storageMetadata)
 		metricsQuery.Catalog().SetNoDataAfter(time.Duration(maxInt(cfg.Metrics.NoDataIntervals, 1)) * monmetrics.ServiceReportInterval)
 	}

@@ -13,6 +13,8 @@ import (
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
+	metricspb "github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
@@ -705,6 +707,83 @@ func TestBusinessFreshnessReporterCreatesStorageOutboxAlert(t *testing.T) {
 	if len(results) != 1 || results[0].Success || !strings.Contains(results[0].ErrorMessage, "积压 12 条") {
 		t.Fatalf("results = %+v", results)
 	}
+}
+
+func commitSeriesForTest(t *testing.T, messages *monmetrics.MetricMessageStore, eventID, service string, observed time.Time, names ...string) {
+	t.Helper()
+	samples := make([]monmetrics.Sample, 0, len(names))
+	for _, name := range names {
+		samples = append(samples, monmetrics.Sample{
+			SeriesID: "series-" + name, ServiceName: service, InstanceID: service + "@node", MetricName: name,
+			MetricType: "gauge", Value: 1, ObservedAt: observed, MessageID: eventID,
+		})
+	}
+	report := &metricspb.MetricReport{ServiceName: service, InstanceId: service + "@node", BootId: "boot"}
+	_, err := messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: eventID}, report, samples)
+	require.NoError(t, err)
+}
+
+func TestBusinessFreshnessReporterChecksNewSeriesGrowth(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.Close() })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	messages, err := store.WithDatabase(manager, monmetrics.NewMetricMessageStore)
+	require.NoError(t, err)
+	messages.SetSeriesLimits(monmetrics.SeriesLimits{MaxNewPerHour: 10, MaxNewPerDay: 1000})
+	now := time.Now().UTC().Truncate(time.Second)
+	repositories := manager.Repositories()
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: monmetrics.NewQueryService(messages, nil), Checks: repositories.Checks, Topology: repositories.Topology,
+		Results: repositories.Results, Now: func() time.Time { return now },
+	}, repositories, nil)
+	latest := func() domain.CheckResult {
+		t.Helper()
+		require.NoError(t, run(t.Context()))
+		results, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, "metrics_ingest:series_limit", 1)
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		return results[0]
+	}
+
+	commitSeriesForTest(t, messages, "e1", "noisy", now, "m1", "m2")
+	result := latest()
+	require.True(t, result.Success, "2/10 在限额内：%s", result.ErrorMessage)
+	require.Contains(t, result.ErrorMessage, "2/10")
+
+	// 9/10 达到 90%：还没丢弃，但已经接近上限。
+	commitSeriesForTest(t, messages, "e2", "noisy", now, "m3", "m4", "m5", "m6", "m7", "m8", "m9")
+	result = latest()
+	require.False(t, result.Success)
+	require.Contains(t, result.ErrorMessage, "指标序列新增过快")
+	require.NotContains(t, result.ErrorMessage, "已丢弃")
+
+	// 再来 3 个新序列：只放行 1 个，丢弃 2 个，原因里点名上报方。
+	commitSeriesForTest(t, messages, "e3", "noisy", now, "m10", "m11", "m12")
+	result = latest()
+	require.False(t, result.Success)
+	require.Contains(t, result.ErrorMessage, "已丢弃 noisy 的新序列 2 条")
+
+	check, err := repositories.Checks.Get(t.Context(), monmetrics.InternalMetricSpaceID, "metrics_ingest:series_limit")
+	require.NoError(t, err)
+	require.Equal(t, "指标序列数量保护", check.Name)
+}
+
+func TestBusinessFreshnessReporterSkipsSeriesLimitCheckWhenUnlimited(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.Close() })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	messages, err := store.WithDatabase(manager, monmetrics.NewMetricMessageStore)
+	require.NoError(t, err)
+	repositories := manager.Repositories()
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: monmetrics.NewQueryService(messages, nil), Checks: repositories.Checks, Topology: repositories.Topology,
+		Results: repositories.Results,
+	}, repositories, nil)
+	require.NoError(t, run(t.Context()))
+	_, err = repositories.Checks.Get(t.Context(), monmetrics.InternalMetricSpaceID, "metrics_ingest:series_limit")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
 func TestBusinessFreshnessReporterDisablesReporterForDisabledDeployment(t *testing.T) {

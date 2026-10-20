@@ -76,3 +76,19 @@ func (q *QueryService) DatasetDisplayName(ctx context.Context, spaceID, datasetI
 	}
 	return q.storage.DatasetDisplayName(ctx, spaceID, datasetID)
 }
+
+// SeriesLimitStatus 返回新序列限额的使用情况，供健康概览判断指标目录是否在失控增长。
+func (q *QueryService) SeriesLimitStatus(ctx context.Context, now time.Time) (SeriesLimitStatus, error) {
+	if q == nil || q.messageStore == nil {
+		return SeriesLimitStatus{}, ErrMetricsStoreUnavailable
+	}
+	return q.messageStore.SeriesLimitStatus(ctx, now)
+}
+
+// IngestRejects 返回各服务最近被拒收的快照及原因，供 Doctor 诊断。
+func (q *QueryService) IngestRejects() []IngestReject {
+	if q == nil {
+		return nil
+	}
+	return q.messageStore.IngestRejects()
+}

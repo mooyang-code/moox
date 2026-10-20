@@ -19,6 +19,8 @@ import (
 type MetricMessageStore struct {
 	db              *gorm.DB
 	DedupeRetention time.Duration
+	limits          SeriesLimits
+	diag            *ingestDiagnostics
 }
 
 const (
@@ -38,7 +40,7 @@ var viewDatasetMetricNames = map[string]struct{}{
 }
 
 func NewMetricMessageStore(db *gorm.DB) *MetricMessageStore {
-	return &MetricMessageStore{db: db, DedupeRetention: 7 * 24 * time.Hour}
+	return &MetricMessageStore{db: db, DedupeRetention: 7 * 24 * time.Hour, diag: newIngestDiagnostics()}
 }
 func (r *MetricMessageStore) IsDuplicate(ctx context.Context, messageID string) (bool, error) {
 	if r == nil || r.db == nil || strings.TrimSpace(messageID) == "" {
@@ -65,6 +67,8 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 	now := time.Now().UTC()
 	expires := now.Add(retention)
 	var duplicate bool
+	var dropped []droppedSeries
+	var hourNew, dayNew int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		row := &MetricIngestMessage{MessageID: msg.GetEventId(), ServiceName: report.GetServiceName(), InstanceID: report.GetInstanceId(), ProcessedAt: now, ExpiresAt: expires}
 		if at := msg.GetOccurredAt(); at != nil {
@@ -82,6 +86,12 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 		if err := upsertMetricService(tx, report, reportSeenAt(msg, now)); err != nil {
 			return err
 		}
+		// 新序列限额：已有序列照常更新，超出限额的新序列丢弃，快照里的其余样本照常入库。
+		admitted, droppedInTx, hour, day, err := r.admitSamples(tx, samples, now)
+		if err != nil {
+			return fmt.Errorf("apply series limits: %w", err)
+		}
+		samples, dropped, hourNew, dayNew = admitted, droppedInTx, hour, day
 		// 必须在更新最新值之前：要和上一份已提交的水位比较。
 		if err := recordBarArrivals(tx, samples); err != nil {
 			return fmt.Errorf("record bar arrivals: %w", err)
@@ -91,7 +101,23 @@ func (r *MetricMessageStore) CommitIngest(ctx context.Context, msg *eventpb.Even
 	if err != nil {
 		return false, fmt.Errorf("commit metrics ingest: %w", err)
 	}
+	if !duplicate {
+		r.recordSeriesLimit(report.GetServiceName(), dropped, hourNew, dayNew, now)
+	}
 	return duplicate, nil
+}
+
+// recordSeriesLimit 在入库事务提交之后记录限额的使用与丢弃情况（回滚的事务不计入）。
+func (r *MetricMessageStore) recordSeriesLimit(service string, dropped []droppedSeries, hour, day int64, now time.Time) {
+	if !r.limits.enabled() {
+		return
+	}
+	seriesLimitCurrent.WithLabelValues("hour").Set(float64(hour))
+	seriesLimitCurrent.WithLabelValues("day").Set(float64(day))
+	for _, item := range dropped {
+		seriesDropped.WithLabelValues(item.service).Add(float64(item.count))
+		r.diag.recordDropped(item.service, item.metric, item.count, now)
+	}
 }
 
 // TouchService 在写 Storage 历史之前记录上报方仍然在线。Storage 不可用时只延迟指标历史，

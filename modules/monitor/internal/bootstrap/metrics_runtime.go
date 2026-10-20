@@ -185,6 +185,7 @@ func metricsObservabilityRoute(
 			return errors.New("metrics catalog is unavailable")
 		}
 		if message.GetSpaceId() != monmetrics.InternalMetricSpaceID {
+			messageStore.RecordIngestRejected(moduleMetrics, metricReport.GetServiceName(), monmetrics.RejectSpace)
 			return observabilityconsumer.Permanent(fmt.Errorf("unsupported metric space %q", message.GetSpaceId()))
 		}
 		observed := message.GetOccurredAt().AsTime()
@@ -194,10 +195,12 @@ func metricsObservabilityRoute(
 			ProducerVersion: metricReport.GetServiceVersion(), ObservedAt: observed,
 		}, monmetrics.DefaultLimits())
 		if err != nil {
-			monmetrics.RecordIngest(moduleMetrics, "rejected", time.Time{})
+			messageStore.RecordIngestRejected(moduleMetrics, metricReport.GetServiceName(), monmetrics.RejectReason(err))
 			return observabilityconsumer.Permanent(err)
 		}
+		parsed := len(samples)
 		samples = monmetrics.FilterHealthSamples(samples)
+		monmetrics.RecordSamplesFiltered(metricReport.GetServiceName(), parsed-len(samples))
 		duplicate, err := messageStore.IsDuplicate(ctx, message.GetEventId())
 		if err != nil || duplicate {
 			return err

@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -158,4 +159,75 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 			require.WithinDuration(t, now.Add(-time.Hour), row.LastSeenAt, time.Millisecond)
 		}
 	}
+}
+
+func TestMetricsRouteCountsFilteredSamplesAndRejectReasons(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	messages, err := store.WithDatabase(manager, monmetrics.NewMetricMessageStore)
+	require.NoError(t, err)
+	route := metricsObservabilityRoute(messages, nil, &Runtime{}, true)
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+
+	ingest := func(id, space string, report *metricspb.MetricReport) error {
+		t.Helper()
+		encoded, err := registry.Encode(events.ObservabilityMetricsSnapshotReported, report, events.PublishOptions{EventID: id, SpaceID: space, SubjectID: report.ServiceName + "/" + report.InstanceId, OccurredAt: time.Now().UTC()})
+		require.NoError(t, err)
+		encoded.Payload, err = proto.Marshal(encoded.Message)
+		require.NoError(t, err)
+		message, payload, err := events.DecodeRaw(registry, encoded.Payload, encoded.Subject, encoded.Message.GetEventId(), events.ContentType)
+		require.NoError(t, err)
+		return route(t.Context(), message, payload.(*metricspb.MetricReport))
+	}
+	snapshot := func(raw string) *metricspb.MetricSnapshot {
+		sum := sha256.Sum256([]byte(raw))
+		return &metricspb.MetricSnapshot{SchemaVersion: 1, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT,
+			Data: []byte(raw), DataSha256: sum[:], SampleCount: 2}
+	}
+	// 一个在白名单里、一个不在：后者按白名单过滤并计数。
+	raw := "# TYPE moox_collector_kline_resample_claims_total gauge\nmoox_collector_kline_resample_claims_total 1\n# TYPE not_a_health_metric gauge\nnot_a_health_metric 5\n"
+	before := counterValue(t, "moox_monitor_metrics_samples_filtered_total", map[string]string{"service": "filter-svc"})
+	good := &metricspb.MetricReport{ServiceName: "filter-svc", InstanceId: "filter-svc@node", NodeId: "node", BootId: "boot", Snapshot: snapshot(raw)}
+	require.NoError(t, ingest("filter-1", "mooxsys", good))
+	require.Equal(t, before+1, counterValue(t, "moox_monitor_metrics_samples_filtered_total", map[string]string{"service": "filter-svc"}))
+
+	// 校验和不对：按 checksum 拒收，并记在该服务名下。
+	bad := &metricspb.MetricReport{ServiceName: "reject-svc", InstanceId: "reject-svc@node", NodeId: "node", BootId: "boot", Snapshot: snapshot(raw)}
+	bad.Snapshot.DataSha256 = make([]byte, 32)
+	require.Error(t, ingest("reject-1", "mooxsys", bad))
+	// 空间不对：按 space 拒收。
+	require.Error(t, ingest("reject-2", "crypto", &metricspb.MetricReport{ServiceName: "space-svc", InstanceId: "space-svc@node", NodeId: "node", BootId: "boot", Snapshot: snapshot(raw)}))
+
+	reasons := map[string]string{}
+	for _, item := range messages.IngestRejects() {
+		reasons[item.Service] = item.LastReason
+	}
+	require.Equal(t, map[string]string{"reject-svc": monmetrics.RejectChecksum, "space-svc": monmetrics.RejectSpace}, reasons)
+}
+
+// counterValue 从默认注册表读出带指定标签的计数器当前值；指标还没出现过时为 0。
+func counterValue(t *testing.T, name string, labels map[string]string) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			matched := 0
+			for _, pair := range metric.GetLabel() {
+				if want, ok := labels[pair.GetName()]; ok && want == pair.GetValue() {
+					matched++
+				}
+			}
+			if matched == len(labels) {
+				return metric.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
 }

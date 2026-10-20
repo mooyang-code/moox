@@ -90,10 +90,14 @@ type AlertConfig struct {
 }
 
 type MetricsConfig struct {
-	Enabled                 bool              `yaml:"enabled"`
-	DatasetHealthPolicyPath string            `yaml:"dataset_health_policy_path"`
-	NoDataIntervals         int               `yaml:"no_data_intervals"`
-	HostStorage             HostStorageConfig `yaml:"host_storage"`
+	Enabled                 bool   `yaml:"enabled"`
+	DatasetHealthPolicyPath string `yaml:"dataset_health_policy_path"`
+	NoDataIntervals         int    `yaml:"no_data_intervals"`
+	// MaxNewSeriesPerHour / MaxNewSeriesPerDay 限制每小时、每天新建的指标序列数，超出的新序列被丢弃并告警；不写用默认值，负数表示不限。
+	// 现状目录约 500 条序列，全新启动时一小时内要建全，所以默认值留足余量，只拦标签失控这种成倍增长。
+	MaxNewSeriesPerHour int               `yaml:"max_new_series_per_hour"`
+	MaxNewSeriesPerDay  int               `yaml:"max_new_series_per_day"`
+	HostStorage         HostStorageConfig `yaml:"host_storage"`
 }
 
 type ObservabilityConfig struct {
@@ -233,7 +237,7 @@ func Default() *Config {
 			Enabled: false, SpaceIDs: []string{"crypto", "stockcn"}, EvaluationInterval: 30 * time.Second, InventoryRefreshInterval: time.Minute,
 			InventoryPageSize: 100, InventoryMaxEntries: 1000, MaxSubjectsPerAlert: 20,
 		},
-		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, HostStorage: HostStorageConfig{Enabled: true, SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
+		Metrics: MetricsConfig{Enabled: true, DatasetHealthPolicyPath: "../../config/setup/dataset-health-policy.yaml", NoDataIntervals: 2, MaxNewSeriesPerHour: 2000, MaxNewSeriesPerDay: 10000, HostStorage: HostStorageConfig{Enabled: true, SpaceID: "mooxsys", Frequency: "1m", WriteTimeout: 5 * time.Second, ReadLimit: 500, MetadataRefreshInterval: time.Minute, RuleRefreshInterval: 30 * time.Second, ResourceDatasetID: "dataset_mooxsys_host_resource", FilesystemDatasetID: "dataset_mooxsys_host_filesystem", DiskDatasetID: "dataset_mooxsys_host_disk", NetworkDatasetID: "dataset_mooxsys_host_network"}},
 	}
 }
 
@@ -346,6 +350,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Metrics.NoDataIntervals == 0 {
 		c.Metrics.NoDataIntervals = metricsDefaults.NoDataIntervals
+	}
+	if c.Metrics.MaxNewSeriesPerHour == 0 {
+		c.Metrics.MaxNewSeriesPerHour = metricsDefaults.MaxNewSeriesPerHour
+	}
+	if c.Metrics.MaxNewSeriesPerDay == 0 {
+		c.Metrics.MaxNewSeriesPerDay = metricsDefaults.MaxNewSeriesPerDay
 	}
 	if c.Metrics.HostStorage.SpaceID == "" {
 		c.Metrics.HostStorage.SpaceID = metricsDefaults.HostStorage.SpaceID

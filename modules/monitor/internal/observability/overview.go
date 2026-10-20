@@ -179,6 +179,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, presence...)
+	seriesLimit, err := b.buildSeriesLimitHealth(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, seriesLimit...)
 	if out.GatewaySignals, err = b.gatewaySignals(ctx, now); err != nil {
 		return Overview{}, err
 	}
@@ -188,6 +193,45 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 }
 
 const storageOutboxBacklogGrace = 2 * time.Minute
+
+// buildSeriesLimitHealth 检查指标目录的新序列增长：新序列被限额丢弃，或近 1 小时 / 24 小时的新增数接近上限，都视为异常。
+// 这通常是某个上报方的标签失控（例如把标的、请求 ID 放进了标签），不处理会撑大目录并让真正的指标被挤掉。
+func (b Builder) buildSeriesLimitHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
+	if spaceID != "" && spaceID != monmetrics.InternalMetricSpaceID {
+		return nil, nil
+	}
+	if b.Metrics == nil {
+		return nil, nil
+	}
+	limit, err := b.Metrics.SeriesLimitStatus(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	if !limit.Enabled {
+		return nil, nil
+	}
+	status, reason := "healthy", fmt.Sprintf("指标序列新增正常（近 1 小时 %s，近 24 小时 %s）", seriesQuota(limit.HourCurrent, limit.HourMax), seriesQuota(limit.DayCurrent, limit.DayMax))
+	if !limit.Healthy() {
+		status = "down"
+		reason = fmt.Sprintf("指标序列新增过快（近 1 小时 %s，近 24 小时 %s）", seriesQuota(limit.HourCurrent, limit.HourMax), seriesQuota(limit.DayCurrent, limit.DayMax))
+		if limit.HasDropping {
+			top := limit.Drops[0]
+			reason += fmt.Sprintf("，已丢弃 %s 的新序列 %d 条（最近一条 %s），请检查它的指标标签是否失控", top.Service, top.Total, top.LastMetric)
+		}
+	}
+	return []BusinessStatus{{
+		SpaceID: monmetrics.InternalMetricSpaceID, Kind: "metrics_ingest", Module: "series_limit",
+		Status: status, Reason: reason, LastCheckedAt: now,
+	}}, nil
+}
+
+// seriesQuota 把“当前 / 上限”写成文字，上限为 0 表示该窗口不限。
+func seriesQuota(current, max int64) string {
+	if max <= 0 {
+		return fmt.Sprintf("%d 条（不限）", current)
+	}
+	return fmt.Sprintf("%d/%d", current, max)
+}
 
 // buildStorageOutboxHealth detects an interrupted Primary-to-View delivery
 // path before a Dataset output watermark has had time to become stale.
