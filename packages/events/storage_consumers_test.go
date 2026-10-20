@@ -12,7 +12,7 @@ func TestIsStorageViewDurable(t *testing.T) {
 		"", "storage_view", "factor_collector_period_v1", "*", ">", "storage_view_*",
 		"storage_view_misc_", "storage_view_misc_0123456789a", "storage_view_misc_0123456789abc",
 		"storage_view_misc_0123456789AB", "storage_view_misc_0123456789ag", "storage_view_misc_01234567.9ab",
-		"storage_view_metrics_0123456789ab", "other_storage_view_misc_0123456789ab",
+		"storage_view_kline_0123456789ab", "other_storage_view_misc_0123456789ab",
 	} {
 		if IsStorageViewDurable(name) {
 			t.Fatalf("%q 不应被认可", name)

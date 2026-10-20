@@ -50,20 +50,20 @@ func TestGatewayEventBusAdminInspectMapsConsumerStates(t *testing.T) {
 		require.Equal(t, "InspectEventBus", method)
 		*rsp.(*adminpb.InspectEventBusRsp) = adminpb.InspectEventBusRsp{RetInfo: okRet(), Consumers: []*adminpb.EventBusConsumerState{
 			{Durable: events.StorageViewFactorConsumer, Exists: true, FilterSubjects: []string{"a", "b"}},
-			{Durable: events.StorageViewMetricsConsumer},
+			{Durable: events.StorageViewMiscConsumer},
 		}}
 		return nil
 	}}
 	admin := gatewayEventBusAdmin{gateway: gateway}
 
-	got, err := admin.Inspect(t.Context(), events.StorageViewConsumerStream, []string{events.StorageViewFactorConsumer, events.StorageViewMetricsConsumer})
+	got, err := admin.Inspect(t.Context(), events.StorageViewConsumerStream, []string{events.StorageViewFactorConsumer, events.StorageViewMiscConsumer})
 	require.NoError(t, err)
 	require.Equal(t, sysDeployService, gateway.service)
 	require.Equal(t, viewConsumerFilterState{Exists: true, Filters: []string{"a", "b"}}, got[events.StorageViewFactorConsumer])
-	require.Equal(t, viewConsumerFilterState{}, got[events.StorageViewMetricsConsumer])
+	require.Equal(t, viewConsumerFilterState{}, got[events.StorageViewMiscConsumer])
 	request := gateway.calls[0].req.(*adminpb.InspectEventBusReq)
 	require.Equal(t, events.StorageViewConsumerStream, request.GetStream())
-	require.Equal(t, []string{events.StorageViewFactorConsumer, events.StorageViewMetricsConsumer}, request.GetDurables())
+	require.Equal(t, []string{events.StorageViewFactorConsumer, events.StorageViewMiscConsumer}, request.GetDurables())
 }
 
 func TestGatewayEventBusAdminInspectRejectsIncompleteAnswer(t *testing.T) {
@@ -71,8 +71,8 @@ func TestGatewayEventBusAdminInspectRejectsIncompleteAnswer(t *testing.T) {
 		*rsp.(*adminpb.InspectEventBusRsp) = adminpb.InspectEventBusRsp{RetInfo: okRet(), Consumers: []*adminpb.EventBusConsumerState{{Durable: events.StorageViewFactorConsumer, Exists: true}}}
 		return nil
 	}}
-	_, err := gatewayEventBusAdmin{gateway: gateway}.Inspect(t.Context(), events.StorageViewConsumerStream, []string{events.StorageViewFactorConsumer, events.StorageViewMetricsConsumer})
-	require.ErrorContains(t, err, events.StorageViewMetricsConsumer, "缺少某个消费者的状态时不能当作它不存在")
+	_, err := gatewayEventBusAdmin{gateway: gateway}.Inspect(t.Context(), events.StorageViewConsumerStream, []string{events.StorageViewFactorConsumer, events.StorageViewMiscConsumer})
+	require.ErrorContains(t, err, events.StorageViewMiscConsumer, "缺少某个消费者的状态时不能当作它不存在")
 }
 
 func TestGatewayEventBusAdminSurfacesAdminFailuresAndTransportErrors(t *testing.T) {
@@ -93,13 +93,13 @@ func TestGatewayEventBusAdminSurfacesAdminFailuresAndTransportErrors(t *testing.
 func TestGatewayEventBusAdminDeleteReturnsDeletedEvenOnFailure(t *testing.T) {
 	gateway := &fakeGateway{invoke: func(_ string, _, rsp interface{}) error {
 		*rsp.(*adminpb.DeleteEventBusConsumersRsp) = adminpb.DeleteEventBusConsumersRsp{
-			RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_INNER_ERR, Msg: "删除消费者 storage_view_metrics 失败"},
+			RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_INNER_ERR, Msg: "删除消费者 storage_view_misc 失败"},
 			Deleted: []string{events.StorageViewFactorConsumer},
 		}
 		return nil
 	}}
 	deleted, _, err := gatewayEventBusAdmin{gateway: gateway}.DeleteConsumers(t.Context(), events.StorageViewConsumerStream, events.StorageViewConsumerDurables)
-	require.ErrorContains(t, err, "storage_view_metrics")
+	require.ErrorContains(t, err, "storage_view_misc")
 	require.Equal(t, []string{events.StorageViewFactorConsumer}, deleted, "失败前已删除的也要告诉调用方")
 }
 

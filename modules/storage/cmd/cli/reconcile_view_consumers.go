@@ -155,13 +155,10 @@ func desiredStaticViewConsumerFilters(storage storageconfig.StorageConfig) (map[
 	if err != nil {
 		return nil, err
 	}
-	static := map[string]bool{
-		events.StorageViewFactorConsumer:  true,
-		events.StorageViewMetricsConsumer: true,
-	}
 	desired := make(map[string][]string)
 	for _, partition := range storage.View.ConsumerPartitions {
-		if !static[partition.Durable] {
+		// 只有 factor 是静态消费者；misc 由 View 清单协调器按数据集动态管理。
+		if partition.Durable != events.StorageViewFactorConsumer {
 			continue
 		}
 		for _, dataset := range partition.Datasets() {
@@ -180,9 +177,9 @@ func desiredStaticViewConsumerFilters(storage storageconfig.StorageConfig) (map[
 	return desired, nil
 }
 
-// inspectViewConsumerFilters 读取两个静态 View 消费者当前的过滤主题。
+// inspectViewConsumerFilters 读取静态 View 消费者（factor）当前的过滤主题。
 func inspectViewConsumerFilters(ctx context.Context, admin eventBusAdmin, stream string) (map[string]viewConsumerFilterState, error) {
-	durables := []string{events.StorageViewFactorConsumer, events.StorageViewMetricsConsumer}
+	durables := []string{events.StorageViewFactorConsumer}
 	result, err := admin.Inspect(ctx, stream, durables)
 	if err != nil {
 		return nil, fmt.Errorf("inspect View consumers: %w", err)

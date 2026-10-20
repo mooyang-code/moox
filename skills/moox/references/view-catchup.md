@@ -24,7 +24,7 @@
 
 - 包根：`/data/moox/storage`
 - `repair-view` 的 `--storage-conf`：`/data/moox/storage/storage/config/storage.yaml`（不要传 `storage-view/config/trpc_go.yaml`，那是 View 进程配置）
-- 分区 durable 在 **View** 的 `trpc_go.yaml`：`storage_view_kline` / `storage_view_metrics` / `storage_view_factor` / `storage_view_misc*`
+- 分区 durable 在 **View** 的 `trpc_go.yaml`：`storage_view_factor` / `storage_view_misc`（模板），实际消费者是按数据集动态创建的 `storage_view_factor_<hash>` / `storage_view_misc_<hash>`
 - Primary 的 `storage.yaml` 可以很短、没有 `consumer_partitions`，这不代表 View 没用分区
 
 控制面：`/data/moox/prod`。Trade 可能在 `/home/ubuntu/moox/trade-move`，不要往香港机发 Storage。

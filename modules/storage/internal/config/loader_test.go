@@ -72,8 +72,8 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 	var cfg RuntimeConfig
 	cfg.ApplyDefaults()
 	partitions := cfg.Storage.View.ConsumerPartitions
-	if len(partitions) != 3 {
-		t.Fatalf("consumer partitions = %+v, want factor/metrics/misc", partitions)
+	if len(partitions) != 2 {
+		t.Fatalf("consumer partitions = %+v, want factor/misc", partitions)
 	}
 	if err := cfg.Storage.View.ValidateConsumerPartitions(nil); err != nil {
 		t.Fatalf("ValidateConsumerPartitions() error = %v", err)
@@ -84,18 +84,18 @@ func TestStorageViewConsumerPartitionsDefaultToIsolatedRoutes(t *testing.T) {
 	if got := partitions[0].Datasets(); len(got) != 0 {
 		t.Fatalf("factor results bind dynamically; default static routes = %+v", got)
 	}
-	if partitions[1].ID != "system_metrics" || partitions[1].Durable != "storage_view_metrics" || partitions[1].FetchBatch != 16 || partitions[1].MaxWorkers != 4 || partitions[1].MaxAckPending != 64 {
-		t.Fatalf("metrics partition = %+v", partitions[1])
+	if partitions[1].ID != "misc" || partitions[1].Durable != "storage_view_misc" {
+		t.Fatalf("misc partition = %+v", partitions[1])
 	}
 	wildcards := map[string]bool{}
-	for _, dataset := range partitions[2].Datasets() {
+	for _, dataset := range partitions[1].Datasets() {
 		if dataset.DatasetID == "*" {
 			wildcards[dataset.SpaceID] = true
 		}
 	}
 	for _, spaceID := range []string{"crypto", "stockcn", "stockhk", "stockus"} {
 		if !wildcards[spaceID] {
-			t.Fatalf("misc partition must route every %s Dataset: %+v", spaceID, partitions[2].Datasets())
+			t.Fatalf("misc partition must route every %s Dataset: %+v", spaceID, partitions[1].Datasets())
 		}
 	}
 }
@@ -156,7 +156,7 @@ func TestCheckedInFactorViewConsumerProfilesAreSerializedTemplates(t *testing.T)
 func TestStorageViewConsumerPartitionsRejectOverlapAndInvalidLimits(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
 		{ID: "a", Durable: "storage_view_misc", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m"}, FetchBatch: 4, MaxAckPending: 8, MaxWorkers: 1, AckWaitMS: 1000},
-		{ID: "b", Durable: "storage_view_metrics", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "b", Durable: "storage_view_factor", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}
 	if err := view.ValidateConsumerPartitions(nil); err == nil {
 		t.Fatal("overlapping Dataset partition was accepted")
@@ -181,7 +181,6 @@ func TestStorageViewConsumerPartitionsRejectInvalidDurableName(t *testing.T) {
 func TestStorageViewConsumerPartitionsAllowFutureConfiguredDatasets(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
 		{ID: "factor", Durable: "storage_view_factor", SpaceID: "crypto", DatasetIDs: []string{"dataset_factor_binance_kline_1m"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
-		{ID: "system_metrics", Durable: "storage_view_metrics", SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 		{ID: "misc", Durable: "storage_view_misc", SpaceID: "crypto", DatasetIDs: []string{"dataset_binance_kline_1m", "future_dataset", "other"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}
 	managed := []StorageViewConsumerDataset{{SpaceID: "crypto", DatasetID: "dataset_binance_kline_1m"}}
@@ -192,10 +191,16 @@ func TestStorageViewConsumerPartitionsAllowFutureConfiguredDatasets(t *testing.T
 
 func TestStorageViewConsumerPartitionsRequireAllManagedDurables(t *testing.T) {
 	view := StorageView{ConsumerPartitions: []StorageViewConsumerPartition{
-		{ID: "system_metrics", Durable: "storage_view_metrics", SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
+		{ID: "misc", Durable: "storage_view_misc", SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_host_resource"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000},
 	}}
 	if err := view.ValidateConsumerPartitions(nil); err == nil {
 		t.Fatal("partial consumer topology was accepted")
+	}
+	view.ConsumerPartitions = append(view.ConsumerPartitions, StorageViewConsumerPartition{
+		ID: "kline", Durable: "storage_view_kline", SpaceID: "mooxsys", DatasetIDs: []string{"other"}, FetchBatch: 1, MaxAckPending: 1, MaxWorkers: 1, AckWaitMS: 1000,
+	})
+	if err := view.ValidateConsumerPartitions(nil); err == nil {
+		t.Fatal("unmanaged durable was accepted")
 	}
 }
 

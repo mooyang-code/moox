@@ -310,14 +310,14 @@ func TestStorageViewConsumerOptionsUseCodeOwnedDeliverySettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(opts.PartitionConfigs) != 3 {
+	if len(opts.PartitionConfigs) != 2 {
 		t.Fatalf("consumer partitions = %+v", opts.PartitionConfigs)
 	}
 	if opts.PartitionConfigs[0].PartitionID != "factor" || opts.PartitionConfigs[0].Consumer != "storage_view_factor" || len(opts.PartitionConfigs[0].FilterSubjects) != 0 || opts.PartitionConfigs[0].FetchBatch != 1 || opts.PartitionConfigs[0].MaxWorkers != 1 || opts.PartitionConfigs[0].MaxAckPending != 1 || len(opts.PartitionConfigs[0].DatasetRoutes) != 0 {
 		t.Fatalf("factor consumer options = %+v", opts.PartitionConfigs[0])
 	}
-	if opts.PartitionConfigs[1].PartitionID != "system_metrics" || opts.PartitionConfigs[1].Consumer != "storage_view_metrics" || len(opts.PartitionConfigs[1].FilterSubjects) != 4 || opts.PartitionConfigs[1].AckWaitMS != 120000 || opts.PartitionConfigs[1].Ordering != "dataset" || opts.PartitionConfigs[1].DeliverPolicy != "new" {
-		t.Fatalf("metrics consumer options = %+v", opts.PartitionConfigs[1])
+	if opts.PartitionConfigs[1].PartitionID != "misc" || opts.PartitionConfigs[1].Consumer != "storage_view_misc" || opts.PartitionConfigs[1].Ordering != "dataset" || opts.PartitionConfigs[1].DeliverPolicy != "new" {
+		t.Fatalf("misc consumer options = %+v", opts.PartitionConfigs[1])
 	}
 }
 
@@ -386,11 +386,11 @@ func TestStripWildcardConsumerRoutesKeepsStaticMiscDurableStable(t *testing.T) {
 
 func TestStripMiscConsumerPartitionLeavesExactConsumers(t *testing.T) {
 	opts := viewservice.EventConsumerOptions{PartitionConfigs: []viewservice.EventConsumerOptions{
-		{PartitionID: "system_metrics", Consumer: "storage_view_metrics"},
+		{PartitionID: "factor", Consumer: "storage_view_factor"},
 		{PartitionID: "misc", Consumer: "storage_view_misc"},
 	}}
 	stripMiscConsumerPartition(&opts)
-	if len(opts.PartitionConfigs) != 1 || opts.PartitionConfigs[0].Consumer != "storage_view_metrics" {
+	if len(opts.PartitionConfigs) != 1 || opts.PartitionConfigs[0].Consumer != "storage_view_factor" {
 		t.Fatalf("static partitions = %+v, want misc removed", opts.PartitionConfigs)
 	}
 }

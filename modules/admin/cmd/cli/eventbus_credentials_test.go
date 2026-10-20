@@ -196,7 +196,7 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	assert.NotContains(t, storageACL, "moox.dlq.")
 	assert.NotContains(t, storageACL, "moox.event.storage.rows_committed")
 	assert.NotContains(t, storageACL, "storage_view_kline")
-	for _, durable := range []string{"storage_view_factor", "storage_view_metrics", "storage_view_misc"} {
+	for _, durable := range []string{"storage_view_factor", "storage_view_misc"} {
 		assert.Contains(t, storageACL, "$JS.API.CONSUMER.INFO.*."+durable)
 		assert.Contains(t, storageACL, "$JS.API.CONSUMER.CREATE.MOOX_STORAGE."+durable)
 		assert.Contains(t, storageACL, "$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE."+durable)

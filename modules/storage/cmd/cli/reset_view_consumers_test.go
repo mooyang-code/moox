@@ -223,7 +223,7 @@ VALUES ('crypto','view','duckdb','active','ds_a','view_a',3,'{"space_id":"crypto
 	_ = db.Close()
 	conf := filepath.Join(root, "config", "storage.yaml")
 	yaml := "storage:\n  root: " + parent + "\n  metadata:\n    path: " + dbPath + "\n  devices:\n    pebble_path: " + filepath.Join(root, "data", "pebble") + "\n    view_index_root: " + filepath.Join(parent, "view-indexes") + "\n" +
-		"  view:\n    consumer_partitions:\n      - id: factor\n        durable: storage_view_factor\n      - id: system_metrics\n        durable: storage_view_metrics\n        space_id: mooxsys\n        dataset_ids: [dataset_mooxsys_service_metrics]\n      - id: misc\n        durable: storage_view_misc\n        space_id: crypto\n        dataset_ids: [ds_a]\n"
+		"  view:\n    consumer_partitions:\n      - id: factor\n        durable: storage_view_factor\n      - id: misc\n        durable: storage_view_misc\n        space_id: crypto\n        dataset_ids: [ds_a]\n"
 	if err := os.WriteFile(conf, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}

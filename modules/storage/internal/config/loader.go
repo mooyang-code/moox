@@ -143,7 +143,6 @@ func (v *StorageView) applyConsumerPartitionDefaults() {
 			// Factor result Datasets are bound dynamically, one durable per result;
 			// this partition only supplies their serialized delivery template.
 			{ID: "factor", Durable: events.StorageViewFactorConsumer, FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1},
-			{ID: "system_metrics", Durable: events.StorageViewMetricsConsumer, Routes: []StorageViewConsumerRoute{{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_service_metrics"}}}, FetchBatch: 16, MaxWorkers: 4, MaxAckPending: 64},
 			{ID: "misc", Durable: events.StorageViewMiscConsumer, Routes: []StorageViewConsumerRoute{
 				{SpaceID: "mooxsys", DatasetIDs: []string{"dataset_mooxsys_host_disk", "dataset_mooxsys_host_filesystem", "dataset_mooxsys_host_network", "dataset_mooxsys_host_resource"}},
 				{SpaceID: "crypto", DatasetIDs: []string{"*"}},
@@ -202,7 +201,7 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 		if !validConsumerName(id) || !validConsumerName(durable) {
 			return fmt.Errorf("storage view consumer partition %q has an invalid id or durable name", id)
 		}
-		if durable != events.StorageViewFactorConsumer && durable != events.StorageViewMetricsConsumer && durable != events.StorageViewMiscConsumer {
+		if durable != events.StorageViewFactorConsumer && durable != events.StorageViewMiscConsumer {
 			return fmt.Errorf("storage view durable %q is not one of the managed partition durables", durable)
 		}
 		if _, exists := partitionIDs[id]; exists {
@@ -266,35 +265,10 @@ func (v StorageView) ValidateConsumerPartitions(managed []StorageViewConsumerDat
 		// created routes would make a fresh deployment unable to start before
 		// those optional Views exist.
 	}
-	// The four durable consumers are an intentional topology contract, not
-	// optional tuning knobs. A partial or overlapping config would silently put
-	// Kline back behind system metrics, defeating the partitioning guarantee.
-	if len(durables) != 3 {
-		return fmt.Errorf("storage view consumer topology must define exactly three durables (factor, metrics, misc); got %d", len(durables))
-	}
-	requiredRoutes := []struct {
-		name    string
-		durable string
-		space   string
-		dataset string
-	}{
-		{name: "metrics", durable: events.StorageViewMetricsConsumer, space: "mooxsys", dataset: "dataset_mooxsys_service_metrics"},
-	}
-	for _, required := range requiredRoutes {
-		partitionID, ok := routes[required.space+"\x00"+required.dataset]
-		if !ok {
-			return fmt.Errorf("storage view %s route %s/%s is missing", required.name, required.space, required.dataset)
-		}
-		partitionIndex := -1
-		for i := range v.ConsumerPartitions {
-			if v.ConsumerPartitions[i].ID == partitionID {
-				partitionIndex = i
-				break
-			}
-		}
-		if partitionIndex < 0 || v.ConsumerPartitions[partitionIndex].Durable != required.durable {
-			return fmt.Errorf("storage view %s route %s/%s must use durable %s", required.name, required.space, required.dataset, required.durable)
-		}
+	// 固定 durable 是拓扑契约，不是可选的调优项：factor 只提供因子结果的串行投递模板，
+	// misc 承接其余数据集；缺一个就会让对应数据集无人消费。
+	if len(durables) != 2 {
+		return fmt.Errorf("storage view consumer topology must define exactly two durables (factor, misc); got %d", len(durables))
 	}
 	return nil
 }

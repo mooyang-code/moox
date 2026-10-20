@@ -47,7 +47,7 @@ moox-cli storage repair-view \
   --yes
 ```
 
-独立 Storage 主机用上面的 `storage.yaml` 和包根，不要传 `storage-view/config/trpc_go.yaml`。`--consumer` 只接受 Storage View 的消费者：固定的 `storage_view_factor`、`storage_view_metrics`、`storage_view_misc`，以及按数据集动态创建的 `storage_view_misc_<12 位十六进制>`、`storage_view_factor_<12 位十六进制>`（其他名称在发出请求前就会被拒绝）。多个 View 共用同一个消费者时，只在第一个 View 删除 durable，其余 `--reset-consumer=false`。
+独立 Storage 主机用上面的 `storage.yaml` 和包根，不要传 `storage-view/config/trpc_go.yaml`。`--consumer` 只接受 Storage View 的消费者：固定的 `storage_view_factor`、`storage_view_misc`，以及按数据集动态创建的 `storage_view_misc_<12 位十六进制>`、`storage_view_factor_<12 位十六进制>`（其他名称在发出请求前就会被拒绝）。多个 View 共用同一个消费者时，只在第一个 View 删除 durable，其余 `--reset-consumer=false`。
 
 默认流程：
 
@@ -104,13 +104,13 @@ moox-cli storage repair-view ... \
 
 ## 精确清理单个 Dataset 的历史事件
 
-当一个可丢弃的高频运维 Dataset（例如 `dataset_mooxsys_service_metrics`）占满共享 Storage View durable，
+当一个可丢弃的运维 Dataset（例如主机资源快照 `dataset_mooxsys_host_resource`）占满共享 Storage View durable，
 但业务 Dataset 的历史事件必须保留时，不要删除整个 consumer。先检查精确 subject：
 
 ```bash
 /home/<user>/moox/storage/bin/moox-storage-cli purge-dataset-events \
   --space mooxsys \
-  --dataset dataset_mooxsys_service_metrics \
+  --dataset dataset_mooxsys_host_resource \
   --storage-conf /home/<user>/moox/storage/config/storage.yaml \
   --dry-run
 ```
@@ -140,7 +140,7 @@ K 线，历史不足时以现有数据激活。
 
 ## 收敛默认 View 集合
 
-新项目只保留三个行情 View 和五个系统监控 View。需要删除其他 View 定义时，先停止
+新项目只保留三个行情 View 和四个主机监控 View。需要删除其他 View 定义时，先停止
 `storage-view`，再执行一次性元数据收敛命令：
 
 ```bash
@@ -154,11 +154,10 @@ K 线，历史不足时以现有数据激活。
   --keep-view mooxsys/view_mooxsys_host_fs \
   --keep-view mooxsys/view_mooxsys_host_disk \
   --keep-view mooxsys/view_mooxsys_host_net \
-  --keep-view mooxsys/view_mooxsys_service_metrics \
   --yes
 ```
 
-命令要求精确传入八个活动 View，并且 `storage-view` 必须已经停止。它只删除 SQLite
+命令要求精确传入七个活动 View，并且 `storage-view` 必须已经停止。它只删除 SQLite
 中的非保留 View、列、构建和日志记录，输出待清理的 `engine/index_id`；不会直接删除
 物理 A/B 文件。随后由 Storage View 的 Cleanup Timer 在确认无引用后清理文件。
 

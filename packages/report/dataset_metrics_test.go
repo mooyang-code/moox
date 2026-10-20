@@ -155,7 +155,7 @@ func TestDatasetMetricsAcceptsSecondFrequency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := DatasetKey{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics", Freq: "30s"}
+	key := DatasetKey{SpaceID: "crypto", DatasetID: "dataset_binance_kline_30s", Freq: "30s"}
 	if err := metrics.ObserveFact(DatasetObservation{Key: key, Result: "success", FinishedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("second frequency observation rejected: %v", err)
 	}

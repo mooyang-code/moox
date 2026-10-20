@@ -24,7 +24,7 @@ const overview: HealthOverview = {
       datasets: [
         { producer: "storage", space_id: "stockcn", dataset_id: "dataset_stockcn_1m", freq: "1m", timezone: "Asia/Shanghai" },
         { producer: "storage", space_id: "crypto", dataset_id: "dataset_spot_1m", freq: "1m", timezone: "UTC" },
-        { producer: "storage", space_id: "mooxsys", dataset_id: "dataset_mooxsys_service_metrics", freq: "30s" }
+        { producer: "storage", space_id: "mooxsys", dataset_id: "dataset_mooxsys_host_resource", freq: "1m" }
       ]
     },
     {
