@@ -27,7 +27,7 @@ jobs:
         with:
           args: git --redact --exit-code 1 --log-opts=${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} .
 
-  # 判断这个 PR 是否只改了 docs/：只改文档时 verify-pr 只跑文档检查，verify-go 整个跳过。
+  # 判断这个 PR 是否只改了 docs/：只改文档时只跑 verify-docs，其余验证作业整个跳过。
   # 取不到文件列表、列表为空或任何一个文件在 docs/ 之外，都按“不是纯文档”处理，跑完整检查。
   changes:
     name: Detect changes
@@ -53,12 +53,21 @@ jobs:
           fi
           echo "docs_only=${docs_only}" | tee -a "${GITHUB_OUTPUT}"
 
-  # 综合检查拆成 verify-pr 与 verify-go 两个作业并行：Go 工作区测试最慢（约 5 分钟），单独放一个作业，总时间约减半。
-  verify-pr:
+  # PR 的综合检查按耗时拆成并行的作业，最后由 verify-pr 汇总：
+  #   verify (core / contracts / storage / web)：make verify 的四组检查，定义见 Makefile 的 verify-ci-*；
+  #   verify-go (1/3 ~ 3/3)：Go 工作区测试最慢，按模块切成三片；
+  #   verify-docs：只改了 docs/ 时代替以上两类，只跑文档检查；
+  #   verify-pr：汇总，所有该跑的作业都成功才算通过。
+  verify:
+    name: verify (${{ matrix.group }})
     needs: changes
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [core, contracts, storage, web]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -84,24 +93,19 @@ jobs:
       - name: Check pinned Go toolchain
         run: bash scripts/ci/check-go-version.sh
       # 托管运行器没有 proto 代码生成工具，跳过 proto-check；自托管运行器的 verify-trusted 仍执行完整检查。
-      # Go 工作区测试由并行的 verify-go 作业执行，这里用 SKIP_GO_TEST=1 跳过，其余检查与 make verify 一致。
-      - name: Run make verify
-        if: needs.changes.outputs.docs_only != 'true'
-        run: make verify SKIP_PROTO_CHECK=1 SKIP_GO_TEST=1
-      # 只改了 docs/：跑文档架构契约与文档站点构建，跳过 Go、前端和脚本的检查。
-      - name: Run docs checks
-        if: needs.changes.outputs.docs_only == 'true'
-        run: |
-          make test-docs-architecture
-          CI=true pnpm install --frozen-lockfile
-          pnpm docs:build
+      - name: Run make verify-ci-${{ matrix.group }}
+        run: make verify-ci-${{ matrix.group }} SKIP_PROTO_CHECK=1
 
   verify-go:
-    name: verify-go
+    name: verify-go (${{ matrix.shard }}/3)
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -111,7 +115,57 @@ jobs:
       - name: Check pinned Go toolchain
         run: bash scripts/ci/check-go-version.sh
       - name: Go workspace tests
+        env:
+          MOOX_GO_SHARD: ${{ matrix.shard }}/3
         run: make test-go
+
+  verify-docs:
+    name: verify-docs
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.docs_only == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            web/pnpm-lock.yaml
+      - name: Install verification tools
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
+      - name: Run docs checks
+        run: |
+          make test-docs-architecture
+          CI=true pnpm install --frozen-lockfile
+          pnpm docs:build
+
+  verify-pr:
+    name: verify-pr
+    needs: [changes, verify, verify-go, verify-docs]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every expected job to pass
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          VERIFY: ${{ needs.verify.result }}
+          VERIFY_GO: ${{ needs.verify-go.result }}
+          VERIFY_DOCS: ${{ needs.verify-docs.result }}
+        run: |
+          echo "changes=${CHANGES} docs_only=${DOCS_ONLY} verify=${VERIFY} verify-go=${VERIFY_GO} verify-docs=${VERIFY_DOCS}"
+          # changes 没成功就无法确定该跑哪些作业，不能把“全部跳过”当成通过。
+          [[ "${CHANGES}" == success ]] || { echo '改动判断作业没有成功' >&2; exit 1; }
+          if [[ "${DOCS_ONLY}" == true ]]; then
+            [[ "${VERIFY_DOCS}" == success ]] || { echo '文档检查没有通过' >&2; exit 1; }
+          else
+            [[ "${VERIFY}" == success && "${VERIFY_GO}" == success ]] || { echo '验证作业没有全部通过' >&2; exit 1; }
+          fi
 
   # 运维机外部程序（因子引擎、归档 worker）在 Windows 上的代码路径：私密文件 ACL、集合锁、服务子命令、
   # 磁盘余量、目录同步与导出，以及 PowerShell 安装脚本的语法。实机安装与开机自启仍需在 Windows 机器上验证。

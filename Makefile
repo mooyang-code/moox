@@ -72,10 +72,7 @@ test-docs-architecture:
 test-greenfield-contract:
 	bash scripts/test/contract/test-greenfield-contract.sh
 
-# 托管运行器把 Go 工作区测试拆到并行的 verify-go 作业，这里用 SKIP_GO_TEST=1 跳过；本机和自托管运行器的 make verify 不设它，仍然全跑。
-TEST_GO := $(if $(SKIP_GO_TEST),,test-go)
-
-test: $(TEST_GO) test-web
+test: test-go test-web
 
 test-go:
 	./scripts/test/contract/test-go-workspace.sh
@@ -101,11 +98,25 @@ check-go-module-graph:
 # GitHub 托管运行器上没有这些工具：这里用 SKIP_PROTO_CHECK=1 跳过，完整检查由自托管运行器（verify-trusted）执行。
 PROTO_CHECK := $(if $(SKIP_PROTO_CHECK),,proto-check)
 
-verify-pr: test-deployment-packages test-host-placement-deployment test-host-identity-bundles test-unit-install test-unit-runtime test-unit-bootstrap check-go-module-graph $(PROTO_CHECK) test-greenfield-contract test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-linux-local-contract test-collector-scf-package-contract
+# make verify 由下面几组检查组成，PR 上的 CI 按组并行运行（make verify-ci-<组>）；本机和自托管运行器的 make verify 仍然依次全跑。
+# 新增检查时放进某一组，verify 与各组自动保持一致。组之间互不依赖：需要前端依赖的检查都放在 web 组，由 test-web 先安装。
+VERIFY_PR_UNITS := test-deployment-packages test-host-placement-deployment test-host-identity-bundles test-unit-install test-unit-runtime test-unit-bootstrap check-go-module-graph $(PROTO_CHECK) test-greenfield-contract test-unit-core
+VERIFY_PR_CONTRACTS := test-event-contracts test-eventbus-topology test-storage-view-event-pipeline test-storage-view-series-capacity test-storage-datanode-management-contract test-build-linux-local-contract test-collector-scf-package-contract
+VERIFY_CORE_CHECKS := check-boundaries test-quality-gates test-docs-architecture test-caddy test-skill-contracts
+VERIFY_STORAGE_CHECKS := test-storage-boundary test-storage-consistency
 
-verify: verify-pr check-boundaries test-storage-boundary test-storage-consistency test check-format check-lint test-quality-gates test-docs-architecture test-caddy test-skill-contracts
+verify-pr: $(VERIFY_PR_UNITS) $(VERIFY_PR_CONTRACTS)
+
+.PHONY: verify-ci-core verify-ci-contracts verify-ci-storage verify-ci-web
+verify-ci-core: $(VERIFY_PR_UNITS) $(VERIFY_CORE_CHECKS)
+verify-ci-contracts: $(VERIFY_PR_CONTRACTS)
+verify-ci-storage: $(VERIFY_STORAGE_CHECKS)
+verify-ci-web: test-web check-format check-lint
 	CI=true pnpm install --frozen-lockfile
 	pnpm docs:build
+
+# Go 工作区测试不属于任何一组：CI 里按 MOOX_GO_SHARD 切成几片并行跑，完整的 make verify 通过 test 目标运行它。
+verify: verify-ci-core verify-ci-contracts verify-ci-storage test verify-ci-web
 
 verify-custom-setup:
 	(cd packages/cloudprovider && go test -count=1 ./...)
@@ -187,7 +198,6 @@ test-unit-bundle-linux:
 .PHONY: test-unit-install test-unit-install-linux
 .PHONY: test-unit-bootstrap test-unit-bootstrap-linux
 .PHONY: test-unit-core test-unit-core-linux
-verify-pr: test-unit-core
 test-unit-core:
 	go test ./modules/cli/internal/setup/unitdeploy
 

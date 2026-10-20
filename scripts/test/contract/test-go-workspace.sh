@@ -1,7 +1,23 @@
 #!/usr/bin/env bash
+# 对 go.work 里的每个模块运行 go test 与 go vet。
+# 环境变量：
+#   MOOX_GO_SHARD=<第几片>/<共几片>   只运行其中一片（按模块在 go.work 里的顺序轮转分配），例如 2/3；CI 用它并行。不设就全部运行。
+#   MOOX_GO_SHARD_LIST=1             只打印本片包含的模块，不运行测试。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+
+shard_index=0
+shard_total=1
+if [[ -n "${MOOX_GO_SHARD:-}" ]]; then
+  if [[ ! "${MOOX_GO_SHARD}" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] || (( BASH_REMATCH[1] > BASH_REMATCH[2] )); then
+    echo "MOOX_GO_SHARD 应为 <第几片>/<共几片>，例如 2/3；收到：${MOOX_GO_SHARD}" >&2
+    exit 2
+  fi
+  shard_index=$(( BASH_REMATCH[1] - 1 ))
+  shard_total=${BASH_REMATCH[2]}
+fi
+position=0
 
 mapfile_compat() {
   local line
@@ -12,6 +28,10 @@ mapfile_compat() {
 
 while IFS= read -r -d '' module; do
   module="${module#./}"
+  selected=$(( position % shard_total == shard_index ))
+  position=$(( position + 1 ))
+  if (( ! selected )); then continue; fi
+  if [[ -n "${MOOX_GO_SHARD_LIST:-}" ]]; then echo "${module}"; continue; fi
   echo "==> go test ${module}"
   test_flags=(-count=1)
   case "${module}" in
