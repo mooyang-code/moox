@@ -99,15 +99,6 @@ func TestCalendarTradingDaysAndExpectedBars(t *testing.T) {
 	require.Equal(t, "14:59", bars[len(bars)-1].In(location).Format("15:04"))
 }
 
-func TestCalendarLookbackCountsTradingDays(t *testing.T) {
-	calendar, err := LoadCalendar("../../../config/markets/stockcn/calendar.yaml")
-	require.NoError(t, err)
-
-	start, err := calendar.LookbackStart(time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), 2)
-	require.NoError(t, err)
-	require.Equal(t, time.Date(2026, 9, 30, 1, 30, 0, 0, time.UTC), start)
-}
-
 func TestCalendarLatestClosedMinuteWalksBackAcrossClosedDays(t *testing.T) {
 	calendar, err := LoadCalendar("../../../config/markets/stockcn/calendar.yaml")
 	require.NoError(t, err)

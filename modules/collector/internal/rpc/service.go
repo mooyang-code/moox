@@ -422,9 +422,8 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 		task.ResultDatasetID = resultIDs.DatasetID
 		task.ResultViewID = resultIDs.ViewID
 		task.CollectParams = setTaskResultDatasetID(task.CollectParams, resultIDs.DatasetID)
-		params, err = domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
-		if err != nil {
-			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		if _, parseErr := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType); parseErr != nil {
+			return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, parseErr.Error())}, nil
 		}
 	} else {
 		if s.resultManager == nil {

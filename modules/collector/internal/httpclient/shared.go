@@ -20,9 +20,6 @@ var (
 // SetConnReuse 设置本次调用是否使用进程内共享客户端。SCF 实例同一时刻只处理一次调用，调用开始时设置即可。
 func SetConnReuse(enabled bool) { connReuse.Store(enabled) }
 
-// ConnReuseEnabled 返回本次调用是否使用共享客户端。
-func ConnReuseEnabled() bool { return connReuse.Load() }
-
 // SharedClientIfEnabled 在打开连接复用时返回进程内共享客户端，否则返回 nil（调用方沿用每次新建的客户端）。
 func SharedClientIfEnabled() *HTTPClient {
 	if !connReuse.Load() {

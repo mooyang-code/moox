@@ -1391,15 +1391,6 @@ func datasetFrequency(kind storagepb.DataKind, frequency string) string {
 	return strings.TrimSpace(frequency)
 }
 
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
-
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {

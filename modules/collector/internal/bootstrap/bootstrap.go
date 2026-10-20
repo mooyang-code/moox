@@ -136,9 +136,9 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	if cfg.EgressProxy.DNS.Enabled() {
 		remoteDNS = collectordns.NewEgressClient(process.gateway, cfg.EgressProxy.DNS.RequestTimeout)
 	}
-	refreshInterval, cacheTTL := cfg.DNS.RefreshInterval, cfg.DNS.RefreshInterval
+	refreshInterval, cacheTTL := cfg.DNS.RefreshInterval, cfg.EgressProxy.DNS.CacheTTL
 	if cfg.EgressProxy.DNS.Enabled() {
-		refreshInterval, cacheTTL = cfg.EgressProxy.DNS.RefreshInterval, cfg.EgressProxy.DNS.CacheTTL
+		refreshInterval = cfg.EgressProxy.DNS.RefreshInterval
 	} else {
 		cacheTTL = 0 // preserve dnscache's last-good local snapshot semantics
 	}

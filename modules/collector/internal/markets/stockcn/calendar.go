@@ -185,49 +185,6 @@ func (c *Calendar) ExpectedMinuteBars(tradeDate string) ([]time.Time, error) {
 	return bars, nil
 }
 
-// LookbackStart returns the first session of the Nth most recent trading day
-// at or before now. It keeps history lookback semantics aligned with the
-// exchange calendar instead of treating weekends and holidays as data days.
-func (c *Calendar) LookbackStart(now time.Time, tradingDays int) (time.Time, error) {
-	if c == nil || c.location == nil {
-		return time.Time{}, fmt.Errorf("calendar is not initialized")
-	}
-	if tradingDays <= 0 {
-		return time.Time{}, fmt.Errorf("trading days must be positive")
-	}
-	if len(c.sessions) == 0 {
-		return time.Time{}, fmt.Errorf("calendar has no sessions")
-	}
-	local := now.In(c.location)
-	day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, c.location)
-	// Before the first session opens, the current trading date has not produced
-	// any completed market data yet. Exclude it so a lookback never returns a
-	// future session start.
-	firstOpen, err := time.ParseInLocation("15:04", c.sessions[0].Start, c.location)
-	if err != nil {
-		return time.Time{}, err
-	}
-	if local.Hour() < firstOpen.Hour() || local.Hour() == firstOpen.Hour() && local.Minute() < firstOpen.Minute() {
-		day = day.AddDate(0, 0, -1)
-	}
-	seen := 0
-	for !day.Before(c.start) {
-		date := day.Format("2006-01-02")
-		if c.isTradingDay(date, day.Weekday()) {
-			seen++
-			if seen == tradingDays {
-				openTime, err := time.ParseInLocation("2006-01-02 15:04", date+" "+c.sessions[0].Start, c.location)
-				if err != nil {
-					return time.Time{}, err
-				}
-				return openTime.UTC(), nil
-			}
-		}
-		day = day.AddDate(0, 0, -1)
-	}
-	return time.Time{}, fmt.Errorf("calendar does not cover %d trading days before %s", tradingDays, local.Format("2006-01-02"))
-}
-
 // LatestClosedMinute returns the most recent closed 1m bucket and its end
 // time. It walks backwards through the configured sessions, so a deployment
 // canary can replay the last real market session on weekends and holidays

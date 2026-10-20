@@ -172,7 +172,6 @@ func TestSharedClientIsOnlyUsedWhenConnReuseIsEnabled(t *testing.T) {
 	first := SharedClientIfEnabled()
 	require.NotNil(t, first)
 	require.Same(t, first, SharedClientIfEnabled(), "进程内共享同一个客户端，空闲连接才能跨调用复用")
-	require.True(t, ConnReuseEnabled())
 	SetConnReuse(false)
 	require.Nil(t, SharedClientIfEnabled(), "关闭后沿用每次新建的客户端")
 }
