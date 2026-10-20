@@ -56,16 +56,11 @@ type PlanFetch struct {
 	StaggerBaseMS int `json:"stagger_base_ms,omitempty"`
 	StaggerMS     int `json:"stagger_ms,omitempty"`
 	// StandbyMS 大于 0 时启用备援请求（行情请求超过这么多毫秒还没有结果，就并发再发一个备援请求，先成功的为准），0 表示关闭。
-	// StandbyPercent 是启用备援的函数占比（1～100，0 等同 100），按函数名末尾序号分组，便于同一时刻对比开与不开；
 	// StandbyHourOnly 为真时只在整点那一分钟触发的调用里启用。
 	StandbyMS       int  `json:"standby_ms,omitempty"`
-	StandbyPercent  int  `json:"standby_percent,omitempty"`
 	StandbyHourOnly bool `json:"standby_hour_only,omitempty"`
-	// ConnReuse 为真时，函数进程在多次调用之间复用到行情源的 HTTP 连接（上一分钟留下的空闲连接下一分钟直接用）；
-	// ConnReusePercent 是启用的函数占比（1～100，0 等同 100），按函数名末尾序号的个位从大到小分组（与备援的分组从小到大错开），
-	// 便于同一时刻与不启用、启用备援的函数对比。
-	ConnReuse        bool `json:"conn_reuse,omitempty"`
-	ConnReusePercent int  `json:"conn_reuse_percent,omitempty"`
+	// ConnReuse 为真时，函数进程在多次调用之间复用到行情源的 HTTP 连接（上一分钟留下的空闲连接下一分钟直接用）。
+	ConnReuse bool `json:"conn_reuse,omitempty"`
 }
 
 // MinStandbyMS 是备援延迟的下限：正常请求的首字节在几十到几百毫秒，延迟太短会让几乎所有请求都发出备援。
@@ -164,11 +159,8 @@ func (p *Plan) Validate() error {
 	if f.RPS < 0 || f.Burst < 0 || f.FeedConcurrency < 0 || f.RequestTimeoutMS < 0 || f.StorageTimeoutMS < 0 || f.StaggerMS < 0 || f.StaggerMS > 60000 || f.StaggerBaseMS < 0 || f.StaggerBaseMS > 60000 {
 		return errors.New("plan fetch limits are out of range")
 	}
-	if f.ConnReusePercent < 0 || f.ConnReusePercent > 100 {
-		return errors.New("plan fetch.conn_reuse_percent must be between 0 and 100")
-	}
-	if f.StandbyMS != 0 && (f.StandbyMS < MinStandbyMS || f.StandbyMS > MaxStandbyMS) || f.StandbyPercent < 0 || f.StandbyPercent > 100 {
-		return fmt.Errorf("plan fetch.standby_ms must be 0 or between %d and %d, standby_percent between 0 and 100", MinStandbyMS, MaxStandbyMS)
+	if f.StandbyMS != 0 && (f.StandbyMS < MinStandbyMS || f.StandbyMS > MaxStandbyMS) {
+		return fmt.Errorf("plan fetch.standby_ms must be 0 or between %d and %d", MinStandbyMS, MaxStandbyMS)
 	}
 	if len(p.Datasets) == 0 {
 		return errors.New("plan requires at least one dataset")
@@ -393,49 +385,13 @@ func (p *Plan) StaggerDelay(functionName string) time.Duration {
 	return base + time.Duration(int(sum[0])<<8|int(sum[1]))%time.Duration(p.Fetch.StaggerMS+1)*time.Millisecond
 }
 
-// StandbyFor 返回这次调用使用的备援延迟（毫秒），0 表示不启用。函数按名字末尾的序号分组：序号个位 ×10 小于启用占比的函数启用，
-// 占比 50 时序号个位 0～4 启用、5～9 不启用，同一整点就能对比开与不开；名字不以数字结尾时按名字哈希分组。
-func (p *Plan) StandbyFor(functionName string, scheduled time.Time) int {
+// StandbyFor 返回这次调用使用的备援延迟（毫秒），0 表示不启用。
+func (p *Plan) StandbyFor(scheduled time.Time) int {
 	if p == nil || p.Fetch.StandbyMS <= 0 {
 		return 0
 	}
 	if p.Fetch.StandbyHourOnly && scheduled.UTC().Minute() != 0 {
 		return 0
 	}
-	percent := p.Fetch.StandbyPercent
-	if percent <= 0 || percent >= 100 {
-		return p.Fetch.StandbyMS
-	}
-	if standbyBucket(functionName)*10 < percent {
-		return p.Fetch.StandbyMS
-	}
-	return 0
-}
-
-// standbyBucket 返回函数所在分组 0～9：优先取名字末尾序号的个位，否则取名字哈希。
-func standbyBucket(functionName string) int {
-	name := strings.TrimSpace(functionName)
-	end := len(name)
-	start := end
-	for start > 0 && name[start-1] >= '0' && name[start-1] <= '9' {
-		start--
-	}
-	if start < end {
-		return int(name[end-1] - '0')
-	}
-	sum := sha256.Sum256([]byte(name))
-	return int(sum[2]) % 10
-}
-
-// ConnReuseFor 返回这个函数是否使用跨调用的连接复用。分组与备援错开：备援取个位小的函数（0～），连接复用取个位大的函数（9～），
-// 占比都是 30 时备援 0～2、复用 7～9、其余 3～6 作对照。
-func (p *Plan) ConnReuseFor(functionName string) bool {
-	if p == nil || !p.Fetch.ConnReuse {
-		return false
-	}
-	percent := p.Fetch.ConnReusePercent
-	if percent <= 0 || percent >= 100 {
-		return true
-	}
-	return (9-standbyBucket(functionName))*10 < percent
+	return p.Fetch.StandbyMS
 }

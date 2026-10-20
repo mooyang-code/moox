@@ -463,43 +463,42 @@ func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 
 func TestStandbyFetchOptionsAreOffByDefaultAndInheritedFromTheGlobalFetch(t *testing.T) {
 	defaults := defaultSCFPlan()
-	require.Zero(t, defaults.fetchFor("crypto").StandbyMS, "默认不备援")
+	require.Zero(t, defaults.fetchFor("crypto").StandbyMS, "默认不启用备援")
+	require.False(t, defaults.fetchFor("crypto").ConnReuse, "默认不复用连接")
 
-	plan := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"crypto": {Fetch: &SCFPlanFetchConfig{StandbyMS: 800, StandbyPercent: 50, StandbyHourOnly: true}}}}
+	plan := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"crypto": {Fetch: &SCFPlanFetchConfig{StandbyMS: 800, StandbyHourOnly: true, ConnReuse: true}}}}
 	plan.mergeSpaceDefaults(defaults.Spaces)
 	fetch := plan.fetchFor("crypto")
 	require.Equal(t, 800, fetch.StandbyMS)
-	require.Equal(t, 50, fetch.StandbyPercent)
 	require.True(t, fetch.StandbyHourOnly)
-	require.Equal(t, defaults.Fetch.Concurrency, fetch.Concurrency, "只写备援项时其余拉取参数沿用全局默认")
+	require.True(t, fetch.ConnReuse)
+	require.Equal(t, defaults.Fetch.Concurrency, fetch.Concurrency, "只写这几项时其余拉取参数沿用全局默认")
 	require.Zero(t, plan.fetchFor("stockcn").StandbyMS, "其他空间不受影响")
 }
 
-// 线上配置只写备援三项时，其余拉取参数沿用内置默认值（解码落在默认配置上，严格解析也认这三个键）。
-func TestScfPlanFetchYAMLWithOnlyStandbyKeepsDefaults(t *testing.T) {
+// 线上配置只写备援与连接复用时，其余拉取参数沿用内置默认值（解码落在默认配置上，严格解析也认这三个键）。
+func TestScfPlanFetchYAMLWithStandbyAndConnReuseKeepsDefaults(t *testing.T) {
 	cfg := Default()
-	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    standby_ms: 800\n    standby_percent: 50\n    standby_hour_only: true\n"))
+	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    standby_ms: 800\n    standby_hour_only: true\n    conn_reuse: true\n"))
 	decoder.KnownFields(true)
 	require.NoError(t, decoder.Decode(&cfg))
 	fetch := cfg.SCFPlan.fetchFor("crypto")
 	require.Equal(t, 800, fetch.StandbyMS)
-	require.Equal(t, 50, fetch.StandbyPercent)
 	require.True(t, fetch.StandbyHourOnly)
 	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
 	require.Equal(t, defaultSCFPlan().Fetch.StaggerMS, fetch.StaggerMS)
-	require.False(t, fetch.ConnReuse, "没写的开关保持关闭")
+	require.True(t, fetch.ConnReuse)
 }
 
 // 连接复用与备援、错峰可以只写需要改的几项，其余沿用默认值。
-func TestScfPlanFetchYAMLConnReuseAndStagger(t *testing.T) {
+func TestScfPlanFetchYAMLStaggerOverride(t *testing.T) {
 	cfg := Default()
-	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    stagger_ms: 500\n    conn_reuse: true\n    conn_reuse_percent: 30\n"))
+	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    stagger_ms: 500\n    conn_reuse: true\n"))
 	decoder.KnownFields(true)
 	require.NoError(t, decoder.Decode(&cfg))
 	fetch := cfg.SCFPlan.fetchFor("crypto")
 	require.Equal(t, 500, fetch.StaggerMS)
 	require.True(t, fetch.ConnReuse)
-	require.Equal(t, 30, fetch.ConnReusePercent)
 	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
 	require.Zero(t, fetch.StandbyMS)
 }

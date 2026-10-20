@@ -72,8 +72,8 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 	if len(planned) == 0 {
 		return respond(true, "no_work", nil)
 	}
-	standbyMS := plan.StandbyFor(functionName, scheduled)
-	connReuse := plan.ConnReuseFor(functionName)
+	standbyMS := plan.StandbyFor(scheduled)
+	connReuse := plan != nil && plan.Fetch.ConnReuse
 	httpclient.SetConnReuse(connReuse)
 	for index := range planned {
 		planned[index].Request.StandbyMS = standbyMS
