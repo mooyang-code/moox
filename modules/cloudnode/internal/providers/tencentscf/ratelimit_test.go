@@ -138,9 +138,8 @@ func TestLimiterConcurrentCallersShareOneBucket(t *testing.T) {
 	sort.Slice(stamps, func(i, j int) bool { return stamps[i].Before(stamps[j]) })
 	span := stamps[len(stamps)-1].Sub(stamps[0])
 	require.Greater(t, span, 2200*time.Millisecond, "250 个调用按 100 次/秒至少要跑 2.5 秒，说明确实被限流摊开了")
-	// 令牌桶保证相邻调用的间隔不小于 1/速率，因此任意 1 秒窗口至多 速率+1 次（窗口两端各取到一次）；
-	// 默认速率只取官方限频的 75%，这个边界效应和调度抖动由 25% 的余量吸收。
-	require.LessOrEqual(t, maxPerWindow(stamps, time.Second), 101+5, "允许少量调度抖动")
+	// 任意 1 秒窗口的次数由假时钟测试精确验证（TestLimiterNeverExceedsRateInAnyOneSecondWindow）；
+	// 真实计时的并发测试只确认共桶与总体耗时，不依赖调度的精确性。
 }
 
 func TestLimiterBurstOfOneNeverReleasesTwoCallsAtTheSameInstant(t *testing.T) {

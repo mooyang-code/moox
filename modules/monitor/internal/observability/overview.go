@@ -1478,7 +1478,8 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 				reason = "函数运行环境生成失败：请检查环境变量大小和 DNS 配置"
 			case state.failureReasons["rules"]:
 				reason = "采集规则读取失败：请检查 Collector 规则配置和存储连接"
-			case state.failureReasons[publishLeaseHeldReason]:
+			case leaseHeld && len(state.failureReasons) == 1:
+				// 租约冲突是唯一原因才用这条文案；与其他没有专属文案的原因同时出现时，回退到通用提示。
 				reason = "发布租约长时间被占用：请检查 CloudNode 批次作业是否卡住，以及是否有其他发布方（CLI 手工发布、补采）在运行"
 			}
 			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})

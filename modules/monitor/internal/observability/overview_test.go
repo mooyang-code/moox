@@ -346,6 +346,20 @@ func TestBuilderLeaseGraceDoesNotHideAnotherInstancesRealFailure(t *testing.T) {
 	require.Contains(t, got.BusinessChecks[0].Reason, "配置服务调用失败", "真实故障的文案优先")
 }
 
+func TestBuilderMixedReasonsWithoutDedicatedTextDoNotBlameTheLease(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		seedLeaseHeldFailure(t, db, "mixed-capacity", now, time.Minute)
+		seedOverviewMetricForInstance(t, db, "mixed-capacity-other", "collector", "collector@standby", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"capacity"}`, 1, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "down", got.BusinessChecks[0].Status)
+	require.NotContains(t, got.BusinessChecks[0].Reason, "发布租约长时间被占用", "租约冲突才持续一分钟，不能把告警归因到租约")
+	require.Contains(t, got.BusinessChecks[0].Reason, "采集计划协调失败")
+}
+
 func TestBuilderPendingGraceDoesNotOverrideAnExpiredLeaseGrace(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	seed := func(failureAge time.Duration) func(db *gorm.DB) {

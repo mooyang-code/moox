@@ -120,6 +120,7 @@ type fakePlanCloud struct {
 	jobs       map[string][]scfinvoker.BatchItemResult
 	running    map[string]bool // 仍在运行的作业
 	onFresh    func()          // 新鲜读回返回前的钩子，用于构造读回与作业结算之间的竞态
+	freshErr   error           // 非空时新鲜读回失败，模拟 CloudNode 查询超时
 	submitErr  error           // 非空时 SubmitRuntimeConfigs 直接失败，模拟提交停用时崩溃
 	patches    map[string]*cloudnodepb.NodeRuntimeConfigPatch
 	// onRuntimeConfig 在 SubmitRuntimeConfigs 接受一批补丁之前调用，用于断言提交时函数的代码版本。
@@ -150,6 +151,9 @@ func (c *fakePlanCloud) ListTimerMarketFetchers(context.Context, string) ([]scfi
 }
 
 func (c *fakePlanCloud) ListTimerMarketFetchersFresh(ctx context.Context, spaceID string) ([]scfinvoker.Node, error) {
+	if c.freshErr != nil {
+		return nil, c.freshErr
+	}
 	nodes, err := c.ListTimerMarketFetchers(ctx, spaceID)
 	if c.onFresh != nil {
 		c.onFresh()

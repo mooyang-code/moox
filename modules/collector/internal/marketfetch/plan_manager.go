@@ -502,8 +502,9 @@ func (r *PlanReconciler) upgradeBeforeEnable(ctx context.Context) error {
 	}
 	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
 	if err != nil {
-		// 读不到云端就无法确认代码已经升级：同样不放行，等下一轮。
-		return fmt.Errorf("%w: cannot read back the fleet: %v", errCodeUpgradePending, err)
+		// 读不到云端就无法确认代码已经升级：同样不放行，等下一轮。这是 CloudNode 调用失败，必须记入失败，
+		// 否则 EnableAll 里按“升级等待”收尾时会把它当成无失败而清掉既有的失败原因。
+		return r.fail("cloudnode", fmt.Errorf("%w: cannot read back the fleet: %v", errCodeUpgradePending, err))
 	}
 	prefix := "moox-fetch" + PlanFleetMarker + planNameSanitizer.Replace(strings.ToLower(r.SpaceID)) + "-"
 	stale := 0

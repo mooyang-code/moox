@@ -356,3 +356,22 @@ func TestFinishRoundDoesNotClearFailuresRecordedBetweenRounds(t *testing.T) {
 	requireNoFailure(t, metrics)
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
 }
+
+func TestEnableAllReadbackFailureIsRecordedAndNotClearedByTheUpgradeWait(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	metrics := roundMetrics(h, r)
+	appliedFleet(t, h, r)
+	// 上一轮因租约被占用失败；本 tick 的启用前升级读不到云端：这是 CloudNode 调用失败，
+	// 即使它以“升级等待”收尾，也不能把既有失败当成无失败清掉。
+	_ = r.fail(ReasonPublishLeaseHeld, heldError())
+	r.roundFailCount = r.failCount
+	h.cloud.freshErr = errors.New("list market fetchers: context deadline exceeded")
+
+	done, err := r.EnableAll(context.Background())
+	require.False(t, done)
+	require.ErrorIs(t, err, errCodeUpgradePending)
+	require.Equal(t, float64(1), failureLabel(metrics, "cloudnode"))
+	require.Zero(t, failureLabel(metrics, ReasonPublishLeaseHeld))
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
+}
