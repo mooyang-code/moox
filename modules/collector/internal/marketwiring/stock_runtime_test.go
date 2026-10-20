@@ -44,15 +44,6 @@ func TestNewStockKlinePipelineUsesSourceBoundEnvironment(t *testing.T) {
 	require.Empty(t, pipeline.SourceID)
 }
 
-func TestNewMarketKlinePipelineCreatesCatalogGatedHongKongSource(t *testing.T) {
-	pipeline, err := NewMarketKlinePipeline(timerHandlerStorage{}, "stockhk", marketdata.InstrumentEquity, "eastmoney", "stockhk_http")
-	require.NoError(t, err)
-	require.Equal(t, "stockhk", pipeline.SpaceID)
-	require.Equal(t, "stockhk", pipeline.MarketID)
-	require.Equal(t, "stockhk_http", pipeline.SourceID)
-	require.Equal(t, []string{"eastmoney"}, pipeline.CandidateChain)
-}
-
 func TestNewMarketKlinePipelineCreatesBinanceSpotSource(t *testing.T) {
 	pipeline, err := NewMarketKlinePipeline(timerHandlerStorage{}, "crypto", marketdata.InstrumentSpot, "binance", "spot_http")
 	require.NoError(t, err)

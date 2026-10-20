@@ -16,10 +16,6 @@ import (
 	indexsina "github.com/mooyang-code/moox/modules/collector/internal/sources/index/sina"
 	indexsw "github.com/mooyang-code/moox/modules/collector/internal/sources/index/sw"
 	indextencent "github.com/mooyang-code/moox/modules/collector/internal/sources/index/tencent"
-	stockhkeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/eastmoney"
-	stockhksina "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/sina"
-	stockuseastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/eastmoney"
-	stockussina "github.com/mooyang-code/moox/modules/collector/internal/sources/stockus/sina"
 )
 
 func NewMarketKlinePipeline(storage marketfetch.Storage, marketID string, instrumentType marketdata.InstrumentType, providerID, sourceID string) (*marketfetch.KlinePipeline, error) {
@@ -124,26 +120,6 @@ func newMarketProvider(marketID string, instrumentType marketdata.InstrumentType
 			return csindex.New(csindex.Config{}), nil
 		default:
 			return nil, fmt.Errorf("unsupported index source %s/%s", providerID, sourceID)
-		}
-	}
-	if marketID == "stockhk" {
-		switch {
-		case providerID == "eastmoney" && sourceID == "stockhk_http":
-			return stockhkeastmoney.New(stockhkeastmoney.Config{}), nil
-		case providerID == "sina" && sourceID == "stockhk_http":
-			return stockhksina.New(stockhksina.Config{}), nil
-		default:
-			return nil, fmt.Errorf("unsupported stockhk source %s/%s", providerID, sourceID)
-		}
-	}
-	if marketID == "stockus" {
-		switch {
-		case providerID == "eastmoney" && sourceID == "stockus_http":
-			return stockuseastmoney.New(stockuseastmoney.Config{}), nil
-		case providerID == "sina" && sourceID == "stockus_http":
-			return stockussina.New(stockussina.Config{}), nil
-		default:
-			return nil, fmt.Errorf("unsupported stockus source %s/%s", providerID, sourceID)
 		}
 	}
 	return nil, fmt.Errorf("unsupported market %q", marketID)

@@ -14,7 +14,7 @@ import (
 
 func defaultInstrumentTypeForMarket(marketID, marketType string) string {
 	switch strings.ToLower(strings.TrimSpace(marketID)) {
-	case "stockcn", "stockhk", "stockus":
+	case "stockcn":
 		return "equity"
 	case "crypto":
 		if strings.EqualFold(strings.TrimSpace(marketType), "swap") {
@@ -32,13 +32,6 @@ func stockProviderSymbol(subjectID string) (string, error) {
 
 func marketProviderSymbolForMarket(marketID, marketType, subjectID string) (string, error) {
 	marketID = strings.ToLower(strings.TrimSpace(marketID))
-	if marketID == "stockhk" || marketID == "stockus" {
-		parts := strings.Split(strings.TrimSpace(subjectID), ".")
-		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
-			return "", fmt.Errorf("subject %s has no exchange-qualified symbol", subjectID)
-		}
-		return strings.TrimSpace(parts[0]), nil
-	}
 	if strings.EqualFold(strings.TrimSpace(marketType), "equity") {
 		return stockProviderSymbol(subjectID)
 	}
