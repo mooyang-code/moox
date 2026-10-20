@@ -18,8 +18,8 @@ not a deployment artifact.
 地域与规格按 IP 从当前账号识别，不在账号下的 IP 不能用；因子计算机提交前要通过环境检测，首次 SSH 连接由
 用户在页面上确认主机指纹。确认后直接写出仓库根目录的 `moox.toml`（权限 0600，**整份加密保存**，解密密钥在
 系统钥匙串里：macOS 钥匙串、Windows 凭据管理器或 Linux Secret Service；没有钥匙串时是 `~/.config/moox/config.key`），
-所有 `moox-cli` 命令会自动解密，Linux 因子计算机同时登记
-为编译机，`[factor_engine]` 记录因子引擎所在的机器（`local` 表示这台电脑）。规则：
+所有 `moox-cli` 命令会自动解密，`[factor_engine]` 记录因子引擎
+所在的机器（`local` 表示这台电脑）。规则：
 
 - 腾讯云密钥建议用子用户（访问管理 → 用户列表，编程访问），需要授权 6 个预设策略：
   `QcloudSCFFullAccess`（采集云函数）、`QcloudCOSFullAccess`（函数代码包）、`QcloudCLSFullAccess`（日志）、
@@ -49,7 +49,7 @@ not a deployment artifact.
 - `[hosts.<主机ID>]` 是唯一的主机目录：`address`、`region`、`provider`、`ssh = { port, username }`，
   控制主机另有 `tls_mode`（`auto` 按地址选公网证书或内部 CA）。只能出站的主机写 `reachability = "outbound"`。
 - `[placements]` 按主机 ID 列出业务组件；`host-gateway` 与 `host-agent` 由代码为每台部署主机自动补齐。
-- `[compile_host]` 只用于 Storage 的 Linux CGO 构建，不是部署目标；`[factor_engine]` 记录因子引擎所在的机器。
+- `[factor_engine]` 记录因子引擎所在的机器。构建一律在本机进行（含 CGO 的 Storage 在 Docker 里构建），环境见 `docs/构建手册.md`；`[compile_host]` 已退役，配置里出现会被拒绝。
 - `[eventbus]` 只写公网连接事实（地址、端口、TLS）；账号、token、CA 和私钥由 MooX 在部署时生成。
 - `[paths]` 统一声明运行时根目录（默认 `/data/moox`）。
 - `[notification]` 的 webhook 地址是凭据：留空时仍采集和展示监控数据，只是不发站外告警。
@@ -63,7 +63,7 @@ test -e ./moox.toml || exit 2
 ./bin/moox-cli setup validate --file ./moox.toml
 ./bin/moox-cli setup bootstrap --stage core --file ./moox.toml --source-dir .
 ./bin/moox-cli setup deploy-host --file ./moox.toml --source-dir . --host <主机ID>      # 每台非 control 主机
-./bin/moox-cli setup build-linux --file ./moox.toml --module storage --source-dir .
+./bin/moox-cli setup build-linux --module storage --source-dir .
 ./bin/moox-cli setup deploy-unit --file ./moox.toml --source-dir . --host <主机ID> --profile storage --binary-dir ./bin
 ./bin/moox-cli setup deploy-unit --file ./moox.toml --source-dir . --host <主机ID> --profile access   # 以及 egress-proxy、trade
 ./bin/moox-cli setup bootstrap --stage control --file ./moox.toml --source-dir .

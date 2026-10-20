@@ -24,25 +24,25 @@ const tabs = [{ key: "nodes", label: "数据节点" }] as const;
 
 const route = useRoute();
 const router = useRouter();
-const activeTab = ref<StorageConfigTab>(normalizeTab(route.query.tab));
+const activeTab = ref<StorageConfigTab>(normalizeTab());
 
 const activeComponent = computed(() => ({ nodes: DataNodes })[activeTab.value]);
 
 // 目前只有数据节点一个页签，任何取值都回到数据节点。
-function normalizeTab(_value: unknown): StorageConfigTab {
+function normalizeTab(): StorageConfigTab {
   return "nodes";
 }
 
-function onTabChange(value: string | number) {
-  const tab = normalizeTab(value);
+function onTabChange() {
+  const tab = normalizeTab();
   activeTab.value = tab;
   void router.replace({ query: { ...route.query, tab } });
 }
 
 watch(
   () => route.query.tab,
-  value => {
-    const tab = normalizeTab(value);
+  () => {
+    const tab = normalizeTab();
     if (tab !== activeTab.value) activeTab.value = tab;
   }
 );

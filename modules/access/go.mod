@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/access
 
-go 1.26.9
+go 1.27.2
 
 require (
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000

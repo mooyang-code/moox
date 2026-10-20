@@ -17,7 +17,7 @@ func TestConfigInitCommandReportsOnlyStatusAndUsesDefaults(t *testing.T) {
 	var got configinit.Options
 	runConfigInit = func(_ context.Context, options configinit.Options) (configinit.Result, error) {
 		got = options
-		return configinit.Result{Path: "/work/moox.toml", Hosts: []string{"control", "storage"}, CompileHost: "compile"}, nil
+		return configinit.Result{Path: "/work/moox.toml", Hosts: []string{"control", "storage"}}, nil
 	}
 	cmd := newConfigInitCommand()
 	var stdout, stderr bytes.Buffer
@@ -30,7 +30,7 @@ func TestConfigInitCommandReportsOnlyStatusAndUsesDefaults(t *testing.T) {
 	if got.Output != "./moox.toml" || got.Timeout != configinit.DefaultTimeout || got.Notice == nil {
 		t.Fatalf("默认选项 = %+v", got)
 	}
-	for _, want := range []string{`"status":"written"`, `"path":"/work/moox.toml"`, `"hosts":["control","storage"]`, `"compile_host":"compile"`, "仓库根目录且名为 moox.toml", "moox-cli setup validate"} {
+	for _, want := range []string{`"status":"written"`, `"path":"/work/moox.toml"`, `"hosts":["control","storage"]`, "仓库根目录且名为 moox.toml", "moox-cli setup validate"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("输出缺少 %q: %s", want, stdout.String())
 		}

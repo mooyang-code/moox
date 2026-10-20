@@ -12,8 +12,8 @@ import (
 )
 
 func TestRequiresLocalCATrust(t *testing.T) {
-	require.True(t, RequiresLocalCATrust(TLSModeInternal, "106.53.107.122"))
-	require.False(t, RequiresLocalCATrust(TLSModePublic, "106.53.107.122"))
+	require.True(t, RequiresLocalCATrust(TLSModeInternal, "203.0.113.10"))
+	require.False(t, RequiresLocalCATrust(TLSModePublic, "203.0.113.10"))
 	require.False(t, RequiresLocalCATrust("", "203.0.113.8"))
 	require.True(t, RequiresLocalCATrust("", "127.0.0.1"))
 }

@@ -3,6 +3,7 @@ package tlstrust
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -90,6 +91,24 @@ func (FileCAStore) Save(publicHost string, raw []byte) error {
 		return err
 	}
 	return nil
+}
+
+// Fingerprint 返回 PEM 证书文件的 SHA-256 指纹（冒号分隔的大写十六进制）；文件不存在或不是单张证书时返回空串。
+func Fingerprint(caPath string) string {
+	raw, err := os.ReadFile(caPath)
+	if err != nil {
+		return ""
+	}
+	block, rest := pem.Decode(raw)
+	if block == nil || block.Type != "CERTIFICATE" || len(strings.TrimSpace(string(rest))) != 0 {
+		return ""
+	}
+	sum := sha256.Sum256(block.Bytes)
+	parts := make([]string, len(sum))
+	for i, b := range sum {
+		parts[i] = fmt.Sprintf("%02X", b)
+	}
+	return strings.Join(parts, ":")
 }
 
 // ErrBrowserCATrust 标记操作员本机信任控制台 CA 失败。

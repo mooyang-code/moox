@@ -142,8 +142,6 @@ else
   echo "mem_kb=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)"
 fi
 echo "disk_kb=$(df -Pk "$HOME" | awk 'NR==2{print $4}')"
-command -v go >/dev/null 2>&1 && echo "go=$(go env GOVERSION 2>/dev/null)"
-command -v gcc >/dev/null 2>&1 && echo "gcc=1"
 true`
 
 // windowsProbe 在 Windows 上用 PowerShell 收集同样的信息。
@@ -273,15 +271,6 @@ func evaluate(f facts, remote bool) ProbeReport {
 		add("磁盘", CheckWarn, fmt.Sprintf("可用 %.0f GB，建议留出 %d GB 以上", diskGB, factorMinDiskGB))
 	case diskGB > 0:
 		add("磁盘", CheckFail, fmt.Sprintf("可用只有 %.1f GB，至少需要 %d GB", diskGB, factorLowDiskGB))
-	}
-
-	// 只有用 SSH 登录的 Linux 机器才能兼作编译机。
-	if remote && report.OS == "linux" {
-		if f["go"] != "" && f["gcc"] == "1" {
-			add("源码编译", CheckOK, "已安装 Go 和 gcc，可以兼作编译机")
-		} else {
-			add("源码编译", CheckWarn, "缺少 Go 或 gcc；只在从源码编译存储服务时需要，可以以后再装")
-		}
 	}
 	return report
 }

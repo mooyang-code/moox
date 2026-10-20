@@ -37,7 +37,7 @@ setup 系列命令只认仓库根目录下名为 moox.toml 的文件，生成到
 				return err
 			}
 			return writeSetupJSON(cmd, map[string]any{
-				"status": "written", "path": result.Path, "hosts": result.Hosts, "compile_host": result.CompileHost, "factor_engine": result.FactorEngine,
+				"status": "written", "path": result.Path, "hosts": result.Hosts, "factor_engine": result.FactorEngine,
 				"next": "确认文件位于仓库根目录且名为 moox.toml（其他 setup 命令只认这个位置），再运行 moox-cli setup validate",
 			})
 		},

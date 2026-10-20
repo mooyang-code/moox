@@ -174,9 +174,7 @@
               selected.control_mode === 2 ? "不适用" : automationStateLabel(selected.automation_state)
             }}</a-descriptions-item>
             <a-descriptions-item label="就绪状态">{{ selected.ready ? "就绪" : "未就绪" }}</a-descriptions-item>
-            <a-descriptions-item label="策略实例">{{
-              selected.owner_instance_id || "-"
-            }}</a-descriptions-item>
+            <a-descriptions-item label="策略实例">{{ selected.owner_instance_id || "-" }}</a-descriptions-item>
             <a-descriptions-item label="运行会话">{{
               target?.session_id || selected.owner_session_id || "-"
             }}</a-descriptions-item>

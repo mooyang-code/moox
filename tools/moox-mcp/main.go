@@ -200,7 +200,7 @@ func registerTools(server *mcp.Server, ws workspace) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "run_shell",
-		Description: "在 106.53.107.122 上执行 shell 命令。工作目录默认是 moox 项目根，也可以指定该机器上的其他目录。",
+		Description: "在控制机上执行 shell 命令。工作目录默认是 moox 项目根，也可以指定该机器上的其他目录。",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct {
 		Command        string `json:"command" jsonschema:"交给 bash -c 执行的命令"`
 		Cwd            string `json:"cwd,omitempty" jsonschema:"工作目录，默认 moox 项目根"`

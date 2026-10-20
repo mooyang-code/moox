@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MooX 原生部署的二进制发布助手：在构建机上构建、取回、逐台安装并重启、核对 sha、写发布台账、回滚。
+# MooX 原生部署的二进制发布助手：在本机构建（含 CGO 的在 Docker 里）、逐台安装并重启、核对 sha、写发布台账、回滚。
 # 流程、顺序与注意事项见 skills/moox/references/native-release.md；这里只固化其中机械且容易出错的步骤。
 #
 # 只用 SSH 公钥（BatchMode，禁用密码登录）；不读取、不使用 moox.toml；不处理任何凭据。
@@ -10,7 +10,6 @@ CONFIG_FILE="${MOOX_RELEASE_ENV:-${HOME}/.moox-release.env}"
 [[ -f "${CONFIG_FILE}" ]] && source "${CONFIG_FILE}"
 
 DEPLOY_ROOT="${MOOX_RELEASE_ROOT:-/data/moox}"
-BUILD_DIR="${MOOX_RELEASE_BUILD_DIR:-moox-build}"
 OUT_ROOT="${MOOX_RELEASE_OUT:-${TMPDIR:-/tmp}/moox-release}"
 SSH_OPTS=(-o BatchMode=yes -o PasswordAuthentication=no)
 LEDGER_REL="run/release-ledger.log"
@@ -19,8 +18,9 @@ usage() {
   cat >&2 <<'EOF'
 用法：native-release.sh <命令> [选项]
 
-  build   [--allow-unpushed] [--builder user@host] <构建目标>...
-          把当前（干净且已推送的）提交同步到构建机、构建、取回到本地并校验 sha。
+  build   [--allow-unpushed] <构建目标>...
+          在本机构建当前（干净且已推送的）提交的 linux/amd64 二进制并输出 sha：不含 CGO 的目标用本机 Go 交叉编译，
+          含 CGO 的目标（Storage 的 DuckDB）在 Docker 编译镜像里编，需要先启动 Docker（macOS：colima start）。
           构建目标即 scripts/build/build.sh 的目标，例如 host-gateway admin monitor collector storage-primary。
   install --host <别名> --unit <单元目录> --file <本地二进制> [--name moox-xxx]
           (--restart <组件id>... | --no-restart) [--label <备份标签>]
@@ -33,7 +33,7 @@ usage() {
           服务目录 packages/servicecatalog/catalog.yaml 自上次发布以来是否变化；变化时退出码 10，必须整体发布。
 
 主机别名对应环境变量 MOOX_RELEASE_HOST_<别名大写，- 换成 _>，值为 user@host，例如
-MOOX_RELEASE_HOST_CONTROL、MOOX_RELEASE_HOST_STORAGE、MOOX_RELEASE_HOST_OVERSEAS；构建机用 MOOX_RELEASE_BUILDER。
+MOOX_RELEASE_HOST_CONTROL、MOOX_RELEASE_HOST_STORAGE、MOOX_RELEASE_HOST_OVERSEAS。
 这些从 ~/.moox-release.env（或 MOOX_RELEASE_ENV 指定的文件）读取，不入库，示例见 skills/moox/references/release-hosts.env.example。
 EOF
   exit 2
@@ -79,39 +79,18 @@ check_component_ids() {
 }
 
 # ---------------------------------------------------------------- build
-# 构建机上的脚本：只认这次构建新产出的文件。放在变量里再经管道交给 ssh（macOS 自带的 bash 3.2 解析不了 $(...) 里嵌 heredoc）。
-read -r -d '' REMOTE_BUILD_BODY <<'REMOTE' || true
-set -euo pipefail
-cd "${BUILD_DIR}"
-export PATH="${HOME}/.local/go$(tr -d '[:space:]' < .go-version)/bin:${PATH}" GOTOOLCHAIN=local
-mkdir -p bin .gotmp
-touch .release-marker
-for target in ${TARGETS}; do
-  cgo=0
-  # Storage 依赖 DuckDB，必须在 Linux 构建机上开 CGO；其余组件不开。
-  case "${target}" in storage|storage-cgo|storage-primary|storage-node) cgo=1 ;; esac
-  GOTMPDIR="${PWD}/.gotmp" GOFLAGS=-buildvcs=false VERSION="${VERSION}" GIT_COMMIT="${VERSION}" \
-    CGO_ENABLED="${cgo}" TARGET_GOOS=linux TARGET_GOARCH=amd64 bash scripts/build/build.sh "${target}" >&2
-done
-# 只认这次构建新产出的文件，旧产物不算。
-find bin -maxdepth 1 -type f -newer .release-marker | sort | while read -r file; do
-  printf 'BUILT:%s:%s\n' "$(basename "${file}")" "$(sha256sum "${file}" | cut -d' ' -f1)"
-done
-REMOTE
-
+# 构建在本机完成：scripts/build/build-linux-local.sh 负责交叉编译与 Docker 里的 CGO 构建，
+# 并且只列出这次新产出的文件，旧产物不算。
 cmd_build() {
-  local allow_unpushed=0 builder="${MOOX_RELEASE_BUILDER:-}" targets=()
+  local allow_unpushed=0 targets=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --allow-unpushed) allow_unpushed=1; shift ;;
-      --builder) builder="${2:-}"; shift 2 ;;
       --*) die "未知选项 $1" ;;
       *) targets+=("$1"); shift ;;
     esac
   done
   [[ ${#targets[@]} -gt 0 ]] || usage
-  [[ -n "${builder}" ]] || die "没有配置构建机（MOOX_RELEASE_BUILDER=user@host，或 --builder）"
-  [[ "${builder}" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._:-]+$ ]] || die "构建机必须是 user@host 形式"
   local target
   for target in "${targets[@]}"; do
     [[ "${target}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || die "构建目标 ${target} 不合法"
@@ -119,37 +98,30 @@ cmd_build() {
 
   local repo version
   repo="$(repo_root)"
-  # 构建的是工作区同步过去的内容，必须和提交一一对应，否则线上二进制对不上任何提交。
+  # 构建的是工作区的内容，必须和提交一一对应，否则线上二进制对不上任何提交。
   if [[ -n "$(git -C "${repo}" status --porcelain --untracked-files=no)" ]]; then
-    die "工作区有未提交的改动；先提交（构建机上的二进制要能对应到一个提交）"
+    die "工作区有未提交的改动；先提交（二进制要能对应到一个提交）"
   fi
   version="$(git -C "${repo}" rev-parse --short=8 HEAD)"
   if [[ ${allow_unpushed} -ne 1 ]] && [[ -z "$(git -C "${repo}" branch -r --contains HEAD 2>/dev/null)" ]]; then
     die "提交 ${version} 还没有推送到远端；先 git push（只有用户明确要求本地试验时才加 --allow-unpushed）"
   fi
 
-  # .gotmp 必须保留：rsync --delete 会把它删掉，go 就会因为创建不了工作目录而失败并沿用旧产物。
-  rsync -az --delete \
-    --exclude .git --exclude moox.toml --exclude bin --exclude .gotmp --exclude node_modules --exclude web/dist \
-    --exclude release --exclude artifacts --exclude .worktrees --exclude .tmp --exclude '*.test' \
-    -e "ssh ${SSH_OPTS[*]}" "${repo}/" "${builder}:${BUILD_DIR}/"
-
-  local listing line name sha
-  listing="$(printf '%s\n' "${REMOTE_BUILD_BODY}" | ssh "${SSH_OPTS[@]}" "${builder}" "BUILD_DIR='${BUILD_DIR}' VERSION='${version}' TARGETS='${targets[*]}' bash -s")"
-  local out_dir="${OUT_ROOT}/${version}" count=0
+  local out_dir="${OUT_ROOT}/${version}" listing line name sha count=0
   mkdir -p "${out_dir}"
+  listing="$(VERSION="${version}" GIT_COMMIT="${version}" bash "${repo}/scripts/build/build-linux-local.sh" --out "${out_dir}" "${targets[@]}")" \
+    || die "构建失败（上面是构建输出）"
   while IFS= read -r line; do
     [[ "${line}" == BUILT:* ]] || continue
     name="$(printf '%s' "${line}" | cut -d: -f2)"
     sha="$(printf '%s' "${line}" | cut -d: -f3)"
-    [[ "${name}" =~ ^moox-[a-z0-9-]+$ ]] || die "构建机返回了不认识的文件名 ${name}"
-    scp -O -q -C "${SSH_OPTS[@]}" "${builder}:${BUILD_DIR}/bin/${name}" "${out_dir}/${name}"
-    [[ "$(sha_of "${out_dir}/${name}")" == "${sha}" ]] || die "${name} 取回后的 sha 与构建机上的不一致"
+    [[ "${name}" =~ ^moox-[a-z0-9-]+$ ]] || die "构建返回了不认识的文件名 ${name}"
+    [[ "$(sha_of "${out_dir}/${name}")" == "${sha}" ]] || die "${name} 的 sha 与构建时记录的不一致"
     printf 'BUILT %s %s %s\n' "${name}" "${sha}" "${out_dir}/${name}"
     count=$((count + 1))
   done <<<"${listing}"
-  [[ ${count} -gt 0 ]] || die "构建没有产出新的二进制：常见原因是构建机上缺 .gotmp（go 创建工作目录失败却沿用了旧产物）、Go 版本不对或目标名写错"
-  echo "提交 ${version} 的 ${count} 个二进制已取回到 ${out_dir}"
+  [[ ${count} -gt 0 ]] || die "构建没有产出新的二进制：检查构建目标名是否正确、Go 版本是否为 .go-version 固定的版本"
+  echo "提交 ${version} 的 ${count} 个二进制已构建到 ${out_dir}"
 }
 
 # -------------------------------------------------------------- install

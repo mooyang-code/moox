@@ -84,12 +84,13 @@ func TestWriteIsAtomicAndReportsHashSizeAndPreview(t *testing.T) {
 		t.Fatalf(".partial 不应残留: %v", err)
 	}
 	f, _ := os.Open(files.Abs(info.Path))
-	defer f.Close()
 	zr, err := gzip.NewReader(f)
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := io.ReadAll(zr)
+	// 读完立刻关闭：Windows 上不能把仍被打开的文件作为重命名的目标替换。
+	_ = f.Close()
 	if strings.Count(string(raw), "\n") != 41 {
 		t.Fatalf("行数 = %d", strings.Count(string(raw), "\n"))
 	}

@@ -41,4 +41,4 @@ go run ./tools/zstddict scan  -dict default-v2.zdict
 
 ## 依赖
 
-训练需要 zstd 命令行（`--train`，编译机 192.168.0.103 已有 1.5.7）。`zstd.BuildDict` 需要调用方自己提供字典主体，不做片段选择，所以不用它。
+训练需要 zstd 命令行（`--train`，因子机 192.168.0.103 已有 1.5.7）。`zstd.BuildDict` 需要调用方自己提供字典主体，不做片段选择，所以不用它。

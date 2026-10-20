@@ -26,10 +26,4 @@ bash "${tmp}/scripts/build/build.sh" factor-mgr
 test "$(wc -l <"${BUILD_RECORD}" | tr -d ' ')" = 2
 grep -Eq '^linux\|amd64\|0\|build .*moox-factor-mgr ./cmd/mgr$' "${BUILD_RECORD}"
 grep -Eq '^linux\|amd64\|0\|build .*moox-factor-mgr-cli ./cmd/cli$' "${BUILD_RECORD}"
-# Reject a pure Go target before inspecting any manifest or opening SSH.
-if MOOX_LINUX_CGO_TARGET=factor-mgr CONFIG=/nonexistent/moox.toml bash "${ROOT}/scripts/build/build-storage-linux.sh" >"${tmp}/reject.log" 2>&1; then
-  echo 'remote CGO builder accepted Factor' >&2
-  exit 1
-fi
-grep -Fq 'unsupported linux CGO build target: factor-mgr' "${tmp}/reject.log"
 echo "factor local build routing contract passed"

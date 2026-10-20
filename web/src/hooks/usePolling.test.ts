@@ -9,9 +9,9 @@ describe("usePolling", () => {
     let calls = 0;
     const task = vi.fn(() => {
       calls += 1;
-      return calls === 1 ? new Promise<void>(() => {}) : Promise.resolve();
+      return calls === 1 ? new Promise<void>(() => undefined) : Promise.resolve();
     });
-    let tick: () => Promise<void> = async () => {};
+    let tick: () => Promise<void> = async () => undefined;
     const app = createApp(
       defineComponent({
         setup() {

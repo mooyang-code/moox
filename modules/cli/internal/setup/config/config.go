@@ -257,12 +257,6 @@ type FactorEngineReference struct {
 	Host string `toml:"host"`
 }
 
-// CompileHostReference selects credentials from hosts without deploying a
-// compiler-only host. An explicit placements entry also makes it a MooX host.
-type CompileHostReference struct {
-	Host string `toml:"host"`
-}
-
 type SCFCloudAccountConfig struct {
 	AccountID          string `toml:"account_id"`
 	AccountName        string `toml:"account_name"`
@@ -325,7 +319,6 @@ type Manifest struct {
 	Factors            FactorSetup               `toml:"factors"`
 	SCFPlan            SCFPlan                   `toml:"scf_plan"`
 	HostCatalog        map[string]HostDefinition `toml:"hosts"`
-	CompileHostRef     CompileHostReference      `toml:"compile_host"`
 	FactorEngineRef    FactorEngineReference     `toml:"factor_engine"`
 }
 
@@ -474,7 +467,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		case "dns_resolver":
 			return fmt.Errorf("config_invalid: dns_resolver is retired; use [egress_proxy.dns] and remove trade_node")
 		case "compile_host":
-			return fmt.Errorf("config_invalid: compile_host accepts only host = <host-id>; SSH credentials belong to hosts.<host-id>.ssh")
+			return fmt.Errorf("config_invalid: [compile_host] is retired; builds run on the local machine (see docs/构建手册.md); remove [compile_host] and any host that was only used for compiling")
 		case "factor_engine":
 			return fmt.Errorf("config_invalid: factor_engine accepts only host = \"local\" or <host-id>; SSH credentials belong to hosts.<host-id>.ssh")
 		}
@@ -500,7 +493,6 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		}
 		out.HostCatalog[id] = definition
 	}
-	out.CompileHostRef.Host = strings.TrimSpace(out.CompileHostRef.Host)
 	out.FactorEngineRef.Host = strings.TrimSpace(out.FactorEngineRef.Host)
 	out.Paths = out.Paths.Resolved()
 	if !md.IsDefined("factors", "enabled") {

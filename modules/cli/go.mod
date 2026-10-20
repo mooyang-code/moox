@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/cli
 
-go 1.26.9
+go 1.27.2
 
 replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../storage/proto/storagegen
 

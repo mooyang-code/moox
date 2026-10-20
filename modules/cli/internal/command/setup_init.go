@@ -16,6 +16,7 @@ import (
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	setupssh "github.com/mooyang-code/moox/modules/cli/internal/setup/ssh"
+	"github.com/mooyang-code/moox/modules/cli/internal/setup/tlstrust"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/spf13/cobra"
@@ -70,6 +71,7 @@ type setupInitSummary struct {
 	Datasets         setupDatasetActivationSummary `json:"datasets"`
 	Verification     setupInitMetadataCounts       `json:"verification"`
 	Factors          *setupFactorSummary           `json:"factors,omitempty"`
+	BrowserTrust     *setupBrowserTrustSummary     `json:"browser_trust,omitempty"`
 }
 
 func newSetupInitCommand(deps setupDeps) *cobra.Command {
@@ -219,7 +221,7 @@ func runSetupInit(
 		Verification: setupInitMetadataCounts{
 			Planned: verification.Planned, Unchanged: verification.Unchanged,
 		},
-		Factors: factorSummary,
+		Factors: factorSummary, BrowserTrust: describeSetupBrowserTrust(snapshot),
 	}, nil
 }
 
@@ -808,3 +810,32 @@ func summarizeDatasetActivationChecks(checks []*storagepb.DatasetActivationCheck
 
 var _ setupInitStorage = (*remoteSetupInitStorage)(nil)
 var _ datasetActivationAPI = (storageMetadataAPI)(nil)
+
+// setupBrowserTrustSummary 记录初始化时已在本机安装信任的控制台内部 CA，以及其他机器怎么快速做同样的事。
+type setupBrowserTrustSummary struct {
+	Status        string `json:"status"`
+	CAPath        string `json:"ca_path"`
+	Fingerprint   string `json:"fingerprint,omitempty"`
+	OtherMachines string `json:"other_machines"`
+}
+
+// describeSetupBrowserTrust 只在控制台使用内部 CA 时返回摘要；公共证书不需要本机信任，返回 nil。
+func describeSetupBrowserTrust(snapshot *setupconfig.Snapshot) *setupBrowserTrustSummary {
+	if snapshot == nil {
+		return nil
+	}
+	host := snapshot.Manifest.ControlHost()
+	if !tlstrust.RequiresLocalCATrust(tlstrust.TLSMode(host.TLSMode), host.Address) {
+		return nil
+	}
+	caPath := tlstrust.CAPath(host.Address)
+	return &setupBrowserTrustSummary{
+		Status:      "trusted",
+		CAPath:      caPath,
+		Fingerprint: tlstrust.Fingerprint(caPath),
+		OtherMachines: fmt.Sprintf("换电脑或迁移机器：打开 https://%s:9527 的登录页或“秘钥管理”页，点“下载并安装根证书”，下载安装包后核对指纹，"+
+			"向运维或已信任的机器取得根证书指纹，按安装包里 AGENT-INSTALL.md 的“直接安装”用系统命令安装（可把该文件交给 Agent，由它先向你确认指纹）；"+
+			"不要不加检查地运行包内脚本。有仓库、moox.toml 和控制机 SSH 权限的机器更稳妥：先用可信渠道拿到 SSH 主机指纹，运行 "+
+			"moox-cli setup trust-host --file moox.toml --host control --fingerprint <指纹>，再运行 moox-cli setup trust-browser --file moox.toml", host.Address),
+	}
+}

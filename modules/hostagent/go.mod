@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/hostagent
 
-go 1.26.9
+go 1.27.2
 
 require (
 	github.com/google/uuid v1.6.0

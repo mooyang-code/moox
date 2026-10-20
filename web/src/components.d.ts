@@ -13,6 +13,7 @@ declare module 'vue' {
     LangProvider: typeof import('./components/lang-provider/index.vue')['default']
     MainTransition: typeof import('./components/main-transition/index.vue')['default']
     PageTitleTabs: typeof import('./components/page-title-tabs/index.vue')['default']
+    RootCaDialog: typeof import('./components/root-ca/root-ca-dialog.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SvgIcon: typeof import('./components/svg-icon/index.vue')['default']

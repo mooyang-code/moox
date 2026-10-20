@@ -67,14 +67,14 @@ describe("buildHostMonitorRows", () => {
   it("matches a monitor agent to an SSH host by exact unique name", () => {
     const rows = buildHostMonitorRows(
       [monitor({ host_name: "腾讯云-122" })],
-      [ssh({ name: "腾讯云-122", address: "106.53.107.122" })]
+      [ssh({ name: "腾讯云-122", address: "203.0.113.10" })]
     );
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       match: "unique_name",
       displayName: "腾讯云-122",
-      displayAddress: "106.53.107.122",
+      displayAddress: "203.0.113.10",
       state: "online"
     });
   });

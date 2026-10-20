@@ -1,6 +1,6 @@
 module github.com/mooyang-code/moox/modules/hostgateway
 
-go 1.26.9
+go 1.27.2
 
 require (
 	github.com/dgraph-io/badger/v4 v4.7.0

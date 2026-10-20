@@ -17,7 +17,7 @@ func newSetupDeployUnitCommand(deps setupDeps) *cobra.Command {
 	if deps.deployUnit == nil {
 		deps.deployUnit = unitdeploy.DeployUnit
 	}
-	command := &cobra.Command{Use: "deploy-unit", Short: "通过已核验 SSH 部署业务单元", Long: "先完成核心初始化及目标主机部署，再安装该主机已登记的 access、egress-proxy、trade 或 storage 单元。纯 Go 默认在本机构建；Storage 必须通过 --binary-dir 使用编译机已构建的 Linux CGO 制品。重试复用原始软件、身份和配置，保留暂停状态；结果仅表示所选单元，不代表完整系统初始化成功。", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
+	command := &cobra.Command{Use: "deploy-unit", Short: "通过已核验 SSH 部署业务单元", Long: "先完成核心初始化及目标主机部署，再安装该主机已登记的 access、egress-proxy、trade 或 storage 单元。纯 Go 默认在本机构建；Storage 必须通过 --binary-dir 使用已构建的 Linux CGO 制品（setup build-linux 在本机 Docker 里构建）。重试复用原始软件、身份和配置，保留暂停状态；结果仅表示所选单元，不代表完整系统初始化成功。", Args: cobra.NoArgs, RunE: func(command *cobra.Command, _ []string) error {
 		if options.HostID == "" || options.Profile == "" || options.Profile == "host" {
 			return errors.New("deploy-unit requires --host and a business --profile")
 		}

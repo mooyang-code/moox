@@ -44,7 +44,7 @@ func InitializeState(ctx context.Context, cfg config.Config) (string, error) {
 		raw, err := json.Marshal(obj{
 			"admin":   obj{"disabled": true, "config": obj{"persist": false}},
 			"storage": obj{"module": "file_system", "root": cfg.TLS.StorageRoot},
-			"apps":    obj{"pki": obj{"certificate_authorities": obj{"local": obj{"install_trust": false}}}},
+			"apps":    obj{"pki": obj{"certificate_authorities": obj{"local": obj{"install_trust": false, "intermediate_lifetime": intermediateLifetime}}}},
 		})
 		if err != nil {
 			return "", err

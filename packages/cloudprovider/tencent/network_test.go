@@ -156,7 +156,7 @@ func TestLighthouseLookupInstance(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(apiResponse{Response: responseBody{
 			InstanceSet: []InstanceBrief{{
 				InstanceID: "lhins-control", InstanceName: "control", Zone: "ap-guangzhou-3",
-				PublicAddresses: []string{"106.53.107.122"}, PrivateAddresses: []string{"10.0.1.12"},
+				PublicAddresses: []string{"203.0.113.10"}, PrivateAddresses: []string{"10.0.1.12"},
 				CPU: 4, Memory: 4, SystemDisk: diskSize{DiskSize: 40},
 			}},
 		}})
@@ -167,7 +167,7 @@ func TestLighthouseLookupInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.now = func() time.Time { return time.Unix(1700000000, 0) }
-	got, found, err := client.LookupInstance(context.Background(), "106.53.107.122")
+	got, found, err := client.LookupInstance(context.Background(), "203.0.113.10")
 	if err != nil || !found {
 		t.Fatalf("found=%v err=%v", found, err)
 	}

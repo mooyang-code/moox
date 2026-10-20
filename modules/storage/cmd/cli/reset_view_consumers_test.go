@@ -227,9 +227,13 @@ VALUES ('crypto','view','duckdb','active','ds_a','view_a',3,'{"space_id":"crypto
 	if err := os.WriteFile(conf, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	opts = resetViewConsumersOptions{storageConf: conf, packageRoot: root, stream: events.StorageViewConsumerStream, timeout: 3 * time.Second, yes: true, restart: true}
+	opts = resetViewConsumersOptions{storageConf: conf, packageRoot: root, stream: events.StorageViewConsumerStream, timeout: resetE2ETimeout, yes: true, restart: true}
 	return opts, calls, dbPath
 }
+
+// resetE2ETimeout 要覆盖“清理 + 拉起 storage-view 子进程”在全量并发测试下的耗时；太短会让截止时间落在拉起过程中，
+// 报 start storage-view: signal: killed 而不是预期的“重置已完成”。这两个用例按设计要等满该超时，所以也不宜过长。
+const resetE2ETimeout = 8 * time.Second
 
 // runResetE2E 像 runResetViewConsumers 那样用 --timeout 给整个操作设截止时间后执行。
 func runResetE2E(opts resetViewConsumersOptions) error {
@@ -248,7 +252,7 @@ func TestResetViewConsumersReportsCommittedResetWhenViewsAreStillRebuilding(t *t
 	if err == nil {
 		t.Fatal("View 没有重建完成，命令应因超时返回错误")
 	}
-	for _, want := range []string{"重置已完成", "后台", "--timeout（3s）", "设为 60m"} {
+	for _, want := range []string{"重置已完成", "后台", "--timeout（" + resetE2ETimeout.String() + "）", "设为 60m"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("报错缺少 %q: %v", want, err)
 		}

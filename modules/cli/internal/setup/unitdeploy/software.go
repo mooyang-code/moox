@@ -159,7 +159,7 @@ func prepareCoreSoftware(ctx context.Context, root *os.Root, options CoreOptions
 	return stored.Packages, stored.Helper, nil
 }
 
-// No SSH or compile_host capability is available to this builder. Every
+// No SSH capability is available to this builder. Every
 // component in the host/control profiles is pure Go; frontend assets use Node.
 func buildCoreLocally(ctx context.Context, repository, bin, arch string, log io.Writer) error {
 	if log == nil {
