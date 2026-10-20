@@ -27,7 +27,35 @@ jobs:
         with:
           args: git --redact --exit-code 1 --log-opts=${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} .
 
+  # 判断这个 PR 是否只改了 docs/：只改文档时 verify-pr 只跑文档检查，verify-go 整个跳过。
+  # 取不到文件列表、列表为空或任何一个文件在 docs/ 之外，都按“不是纯文档”处理，跑完整检查。
+  changes:
+    name: Detect changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          docs_only=false
+          if files="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[] | .filename, (.previous_filename // empty)')" \
+            && [[ -n "${files}" ]] && ! grep -qv '^docs/' <<<"${files}"; then
+            docs_only=true
+          fi
+          echo "docs_only=${docs_only}" | tee -a "${GITHUB_OUTPUT}"
+
+  # 综合检查拆成 verify-pr 与 verify-go 两个作业并行：Go 工作区测试最慢（约 5 分钟），单独放一个作业，总时间约减半。
   verify-pr:
+    needs: changes
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -56,7 +84,34 @@ jobs:
       - name: Check pinned Go toolchain
         run: bash scripts/ci/check-go-version.sh
       # 托管运行器没有 proto 代码生成工具，跳过 proto-check；自托管运行器的 verify-trusted 仍执行完整检查。
-      - run: make verify SKIP_PROTO_CHECK=1
+      # Go 工作区测试由并行的 verify-go 作业执行，这里用 SKIP_GO_TEST=1 跳过，其余检查与 make verify 一致。
+      - name: Run make verify
+        if: needs.changes.outputs.docs_only != 'true'
+        run: make verify SKIP_PROTO_CHECK=1 SKIP_GO_TEST=1
+      # 只改了 docs/：跑文档架构契约与文档站点构建，跳过 Go、前端和脚本的检查。
+      - name: Run docs checks
+        if: needs.changes.outputs.docs_only == 'true'
+        run: |
+          make test-docs-architecture
+          CI=true pnpm install --frozen-lockfile
+          pnpm docs:build
+
+  verify-go:
+    name: verify-go
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: '**/go.sum'
+      - name: Check pinned Go toolchain
+        run: bash scripts/ci/check-go-version.sh
+      - name: Go workspace tests
+        run: make test-go
 
   # 运维机外部程序（因子引擎、归档 worker）在 Windows 上的代码路径：私密文件 ACL、集合锁、服务子命令、
   # 磁盘余量、目录同步与导出，以及 PowerShell 安装脚本的语法。实机安装与开机自启仍需在 Windows 机器上验证。
@@ -123,7 +178,7 @@ jobs:
           exit 1
       - name: Add preinstalled tools to PATH
         run: |
-          # 固定版本的 Go 若装在运行用户目录下（Linux 编译机），加入 PATH；其余工具沿用运行器注册时的 PATH。
+          # 固定版本的 Go 若装在运行用户目录下（自托管运行器），加入 PATH；其余工具沿用运行器注册时的 PATH。
           go_bin="${HOME}/.local/go$(cat .go-version)/bin"
           if [[ -d "${go_bin}" ]]; then
             echo "${go_bin}" >> "${GITHUB_PATH}"
