@@ -6,15 +6,13 @@ import "strings"
 // Keep them in the events package so Storage, Admin and operational tooling
 // cannot silently drift to different durable names.
 const (
-	StorageViewConsumerStream  = "MOOX_STORAGE"
-	StorageViewFactorConsumer  = "storage_view_factor"
-	StorageViewMetricsConsumer = "storage_view_metrics"
-	StorageViewMiscConsumer    = "storage_view_misc"
+	StorageViewConsumerStream = "MOOX_STORAGE"
+	StorageViewFactorConsumer = "storage_view_factor"
+	StorageViewMiscConsumer   = "storage_view_misc"
 )
 
 var StorageViewConsumerDurables = []string{
 	StorageViewFactorConsumer,
-	StorageViewMetricsConsumer,
 	StorageViewMiscConsumer,
 }
 
@@ -22,7 +20,7 @@ var StorageViewConsumerDurables = []string{
 // 都按这四类处理。放在这里让 Storage 命令行与 Admin 的 EventBus 维护接口不会各记一份。
 var StorageDatasetEvents = []Event{DatasetRowsUpserted, CollectorPeriodCompleted, FactorPeriodComputed, DatasetSyncPoint}
 
-// IsStorageViewDurable 报告 name 是否是 Storage View 的消费者：三个固定消费者，
+// IsStorageViewDurable 报告 name 是否是 Storage View 的消费者：两个固定消费者，
 // 或 View 清单协调器按数据集动态创建的 storage_view_misc_<12 位十六进制>、storage_view_factor_<12 位十六进制>
 // （名称由数据集身份哈希得到，见 storage-view 的 dynamicDatasetConsumerIdentityForPartition）。
 func IsStorageViewDurable(name string) bool {

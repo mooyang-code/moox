@@ -1,36 +1,25 @@
 package bootstrap
 
 import (
-	"context"
 	"crypto/sha256"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
-	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/metricspb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"trpc.group/trpc-go/trpc-go/client"
 )
-
-type ingestHistory struct{ writes int }
-
-func (h *ingestHistory) UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error) {
-	h.writes++
-	return &storagepb.PrimaryUpsertFieldsRsp{RetInfo: &commonpb.RetInfo{}}, nil
-}
 
 func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
@@ -101,10 +90,6 @@ func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T
 
 }
 
-func (*ingestHistory) ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
-	panic("history read is not part of ingestion")
-}
-
 func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
@@ -118,9 +103,7 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 	now := time.Now().UTC()
 	_, err = manager.Repositories().Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: now}, nil)
 	require.NoError(t, err)
-	history := &ingestHistory{}
-	storage := monmetrics.NewStorageAdapter(history, nil, config.MetricsStorageConfig{SpaceID: "mooxsys", DatasetID: "metrics", Frequency: "1m"})
-	route := metricsObservabilityRoute(storage, messages, nil, nil, true)
+	route := metricsObservabilityRoute(messages, nil, nil, true)
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	raw := []byte("# TYPE moox_collector_kline_resample_claims_total gauge\nmoox_collector_kline_resample_claims_total 1\n")
@@ -147,7 +130,9 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 	encoded := encode("unregistered", now, report)
 	require.NoError(t, ingest(encoded))
 	require.NoError(t, ingest(encoded))
-	require.Equal(t, 1, history.writes, "redelivery stays idempotent")
+	series, err := messages.ListSeries(t.Context(), "collector", "moox_collector_kline_resample_claims_total", 10)
+	require.NoError(t, err)
+	require.Len(t, series, 1, "redelivery stays idempotent")
 	got, err := (monitorobservability.Builder{Metrics: query, Topology: manager.Repositories().Topology, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.Unregistered, 1)
@@ -159,7 +144,6 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 	invalid := proto.Clone(report).(*metricspb.MetricReport)
 	invalid.Snapshot.Data = []byte("corrupted")
 	require.ErrorContains(t, ingest(encode("invalid-snapshot", now, invalid)), "checksum mismatch")
-	require.Equal(t, 1, history.writes, "invalid snapshots never reach history")
 	duplicate, err := messages.IsDuplicate(t.Context(), "invalid-snapshot")
 	require.NoError(t, err)
 	require.False(t, duplicate)
@@ -175,4 +159,78 @@ func TestMetricsRouteAcceptsUnregisteredReportsWithoutBypassingValidation(t *tes
 			require.WithinDuration(t, now.Add(-time.Hour), row.LastSeenAt, time.Millisecond)
 		}
 	}
+}
+
+func TestMetricsRouteCountsFilteredSamplesAndRejectReasons(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	messages, err := store.WithDatabase(manager, monmetrics.NewMetricMessageStore)
+	require.NoError(t, err)
+	route := metricsObservabilityRoute(messages, nil, &Runtime{}, true)
+	registry, err := events.DefaultRegistry()
+	require.NoError(t, err)
+
+	ingest := func(id, space string, report *metricspb.MetricReport) error {
+		t.Helper()
+		encoded, err := registry.Encode(events.ObservabilityMetricsSnapshotReported, report, events.PublishOptions{EventID: id, SpaceID: space, SubjectID: report.ServiceName + "/" + report.InstanceId, OccurredAt: time.Now().UTC()})
+		require.NoError(t, err)
+		encoded.Payload, err = proto.Marshal(encoded.Message)
+		require.NoError(t, err)
+		message, payload, err := events.DecodeRaw(registry, encoded.Payload, encoded.Subject, encoded.Message.GetEventId(), events.ContentType)
+		require.NoError(t, err)
+		return route(t.Context(), message, payload.(*metricspb.MetricReport))
+	}
+	snapshot := func(raw string) *metricspb.MetricSnapshot {
+		sum := sha256.Sum256([]byte(raw))
+		return &metricspb.MetricSnapshot{SchemaVersion: 1, Format: metricspb.ExpositionFormat_EXPOSITION_FORMAT_PROMETHEUS_TEXT,
+			Data: []byte(raw), DataSha256: sum[:], SampleCount: 2}
+	}
+	// 一个在白名单里、一个不在：后者按白名单过滤并计数。
+	raw := "# TYPE moox_collector_kline_resample_claims_total gauge\nmoox_collector_kline_resample_claims_total 1\n# TYPE not_a_health_metric gauge\nnot_a_health_metric 5\n"
+	before := counterValue(t, "moox_monitor_metrics_samples_filtered_total", map[string]string{"service": "filter-svc"})
+	good := &metricspb.MetricReport{ServiceName: "filter-svc", InstanceId: "filter-svc@node", NodeId: "node", BootId: "boot", Snapshot: snapshot(raw)}
+	require.NoError(t, ingest("filter-1", "mooxsys", good))
+	require.Equal(t, before+1, counterValue(t, "moox_monitor_metrics_samples_filtered_total", map[string]string{"service": "filter-svc"}))
+	// 同一事件重复投递：已入库的快照不再累加过滤数。
+	require.NoError(t, ingest("filter-1", "mooxsys", good))
+	require.Equal(t, before+1, counterValue(t, "moox_monitor_metrics_samples_filtered_total", map[string]string{"service": "filter-svc"}))
+
+	// 校验和不对：按 checksum 拒收，并记在该服务名下。
+	bad := &metricspb.MetricReport{ServiceName: "reject-svc", InstanceId: "reject-svc@node", NodeId: "node", BootId: "boot", Snapshot: snapshot(raw)}
+	bad.Snapshot.DataSha256 = make([]byte, 32)
+	require.Error(t, ingest("reject-1", "mooxsys", bad))
+	// 空间不对：按 space 拒收。
+	require.Error(t, ingest("reject-2", "crypto", &metricspb.MetricReport{ServiceName: "space-svc", InstanceId: "space-svc@node", NodeId: "node", BootId: "boot", Snapshot: snapshot(raw)}))
+
+	reasons := map[string]string{}
+	for _, item := range messages.IngestRejects() {
+		reasons[item.Service] = item.LastReason
+	}
+	require.Equal(t, map[string]string{"reject-svc": monmetrics.RejectChecksum, "space-svc": monmetrics.RejectSpace}, reasons)
+}
+
+// counterValue 从默认注册表读出带指定标签的计数器当前值；指标还没出现过时为 0。
+func counterValue(t *testing.T, name string, labels map[string]string) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			matched := 0
+			for _, pair := range metric.GetLabel() {
+				if want, ok := labels[pair.GetName()]; ok && want == pair.GetValue() {
+					matched++
+				}
+			}
+			if matched == len(labels) {
+				return metric.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
 }

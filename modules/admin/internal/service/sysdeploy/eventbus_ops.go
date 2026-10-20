@@ -146,7 +146,7 @@ func checkEventBusStream(stream string) error {
 	return nil
 }
 
-// checkEventBusDurables 只放行 Storage View 的消费者（固定的三个与按数据集动态创建的），去重后返回，保持调用方给出的顺序。
+// checkEventBusDurables 只放行 Storage View 的消费者（固定的两个与按数据集动态创建的），去重后返回，保持调用方给出的顺序。
 func checkEventBusDurables(durables []string) ([]string, error) {
 	if len(durables) == 0 {
 		return nil, errors.New("至少指定一个消费者")

@@ -76,50 +76,16 @@ func maxInt(a, b int) int {
 	return b
 }
 
-func startMetricsStorageGate(ctx context.Context, cfg *config.Config, runtime *Runtime, storage *monmetrics.StorageAdapter) {
-	if cfg == nil || runtime == nil || storage == nil || !cfg.Metrics.Enabled {
-		return
-	}
-	interval := cfg.Metrics.Storage.MetadataValidationInterval
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
-	check := func() {
-		checkCtx, cancel := context.WithTimeout(ctx, interval)
-		defer cancel()
-		if err := storage.ValidateSchema(checkCtx); err != nil {
-			log.WarnContextf(ctx, "metrics storage schema check failed: %v", err)
-		}
-	}
-	runtime.Go(func() {
-		check()
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				check()
-			}
-		}
-	})
-}
-
 func startObservabilityConsumer(
 	ctx context.Context,
 	cfg *config.Config,
 	runtime *Runtime,
-	storage *monmetrics.StorageAdapter,
 	hostStore *hostmetrics.Store,
 	klineInventory *monmetrics.TaskResultInventoryCache,
 ) {
 	if cfg == nil || !cfg.Observability.Enabled || runtime == nil || runtime.Store == nil ||
 		runtime.Store.Ping(ctx) != nil || runtime.Repositories == nil || hostStore == nil {
 		return
-	}
-	if cfg.Metrics.Enabled && storage == nil {
-		storage = monmetrics.NewStorageAdapter(runtime.StorageGateway, runtime.StorageGateway, cfg.Metrics.Storage)
 	}
 	var messageStore *monmetrics.MetricMessageStore
 	if runtime.MetricStores != nil {
@@ -134,7 +100,7 @@ func startObservabilityConsumer(
 		return
 	}
 	routes := observabilityconsumer.Routes{
-		Metrics: metricsObservabilityRoute(storage, messageStore, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
+		Metrics: metricsObservabilityRoute(messageStore, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
 		Host:    hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
 	}
 	runtime.Go(func() {
@@ -206,7 +172,6 @@ func startObservabilityConsumer(
 }
 
 func metricsObservabilityRoute(
-	storage *monmetrics.StorageAdapter,
 	messageStore *monmetrics.MetricMessageStore,
 	moduleMetrics *report.ModuleMetrics,
 	runtime *Runtime,
@@ -216,10 +181,11 @@ func metricsObservabilityRoute(
 		if !enabled {
 			return nil
 		}
-		if storage == nil || messageStore == nil {
-			return errors.New("metrics storage is unavailable")
+		if messageStore == nil {
+			return errors.New("metrics catalog is unavailable")
 		}
 		if message.GetSpaceId() != monmetrics.InternalMetricSpaceID {
+			messageStore.RecordIngestRejected(moduleMetrics, metricReport.GetServiceName(), monmetrics.RejectSpace)
 			return observabilityconsumer.Permanent(fmt.Errorf("unsupported metric space %q", message.GetSpaceId()))
 		}
 		observed := message.GetOccurredAt().AsTime()
@@ -229,22 +195,19 @@ func metricsObservabilityRoute(
 			ProducerVersion: metricReport.GetServiceVersion(), ObservedAt: observed,
 		}, monmetrics.DefaultLimits())
 		if err != nil {
-			monmetrics.RecordIngest(moduleMetrics, "rejected", time.Time{})
+			messageStore.RecordIngestRejected(moduleMetrics, metricReport.GetServiceName(), monmetrics.RejectReason(err))
 			return observabilityconsumer.Permanent(err)
 		}
+		parsed := len(samples)
 		samples = monmetrics.FilterHealthSamples(samples)
+		filtered := parsed - len(samples)
 		duplicate, err := messageStore.IsDuplicate(ctx, message.GetEventId())
 		if err != nil || duplicate {
 			return err
 		}
-		// 先记录上报方在线，再写 Storage 历史：Storage 不可用时上报方不会被误判为停止上报。
+		// 服务指标只保存最新值与目录（SQLite），不写 Storage 历史：Storage 故障不会卡住健康事实的入库。
 		if err := messageStore.TouchService(ctx, message, metricReport); err != nil {
 			runtime.recordObservabilityWriteFailure(reasonMetricsCatalog, err)
-			return err
-		}
-		if err := storage.WriteSamples(ctx, samples); err != nil {
-			monmetrics.RecordIngest(moduleMetrics, "error", time.Time{})
-			runtime.recordObservabilityWriteFailure(reasonMetricsHistory, err)
 			return err
 		}
 		duplicate, err = messageStore.CommitIngest(ctx, message, metricReport, samples)
@@ -254,6 +217,8 @@ func metricsObservabilityRoute(
 			}
 			return err
 		}
+		// 过滤数在入库成功且不是重复投递之后才计：失败重试、重复投递不会把同一批过滤样本反复累加。
+		monmetrics.RecordSamplesFiltered(metricReport.GetServiceName(), filtered)
 		runtime.recordObservabilityWriteSuccess()
 		monmetrics.RecordIngest(moduleMetrics, "success", observed)
 		return nil
@@ -296,7 +261,6 @@ func waitObservabilityRetry(ctx context.Context) bool {
 // 健康原因按出错环节区分，不带原始错误文本（可能含地址或凭据）。
 const (
 	reasonEventbus       = "eventbus connection unavailable"
-	reasonMetricsHistory = "metrics history write to Storage failed"
 	reasonMetricsCatalog = "metrics catalog write failed"
 	reasonHostMetrics    = "host metrics write failed"
 	reasonAuthSuffix     = ": authentication failed"

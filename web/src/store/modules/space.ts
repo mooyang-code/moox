@@ -6,7 +6,7 @@ import { setSpaceInitializer } from "@/api/admin/signed-client";
 import type { Space } from "@/api/admin/types";
 
 /**
- * 系统内部空间：以 mooxsys 开头的空间存放主机指标、服务指标及其视图，不是交易市场，
+ * 系统内部空间：以 mooxsys 开头的空间存放主机指标及其视图，不是交易市场，
  * 不出现在全局空间选择里，也不能设为当前空间。
  */
 export function isSystemSpace(spaceId: string | undefined): boolean {

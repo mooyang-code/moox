@@ -142,8 +142,8 @@ func Default() Policy {
 				"stockcn": sessionMarket("45d"),
 				"stockhk": sessionMarket("30d"),
 				"stockus": sessionMarket("30d"),
-				// 主机资源历史（1m）与服务指标（30s）只保留短期：排障看最近几天，长期趋势不靠它。
-				"mooxsys": {"30s": "48h", "1m": "7d"},
+				// 主机资源历史（1m）只保留短期：排障看最近几天，长期趋势不靠它。
+				"mooxsys": {"1m": "7d"},
 			},
 		},
 		View: View{

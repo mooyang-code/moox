@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
-	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 	"github.com/mooyang-code/moox/modules/monitor/internal/scheduler"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
@@ -57,7 +56,7 @@ func TestMonitorHealthSnapshotReportsClosedDatabaseAsNotReady(t *testing.T) {
 	cfg := config.Default()
 	cfg.Instance.InstanceID = "monitor-test"
 	cfg.Metrics.Enabled = false
-	rsp := monitorHealthSnapshot(cfg, runtime, nil, nil)(context.Background())
+	rsp := monitorHealthSnapshot(cfg, runtime, nil)(context.Background())
 	if rsp.Ready {
 		t.Fatalf("health response = %+v, want not ready", rsp)
 	}
@@ -127,19 +126,19 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	disabled.Metrics.HostStorage.Enabled = false
 	startHostStorageGate(ctx, &disabled, rt, &hostmetrics.StorageGate{})
 
-	startObservabilityConsumer(ctx, nil, rt, nil, nil, nil)
-	startObservabilityConsumer(ctx, &disabled, rt, nil, hostmetrics.NewStore(nil, nil), nil)
+	startObservabilityConsumer(ctx, nil, rt, nil, nil)
+	startObservabilityConsumer(ctx, &disabled, rt, hostmetrics.NewStore(nil, nil), nil)
 	cfg.Observability.Enabled = false
-	startObservabilityConsumer(ctx, cfg, rt, nil, hostmetrics.NewStore(nil, nil), nil)
+	startObservabilityConsumer(ctx, cfg, rt, hostmetrics.NewStore(nil, nil), nil)
 	cfg.Observability.Enabled = true
-	startObservabilityConsumer(ctx, cfg, nil, nil, nil, nil)
-	startObservabilityConsumer(ctx, cfg, &Runtime{}, nil, hostmetrics.NewStore(nil, nil), nil)
+	startObservabilityConsumer(ctx, cfg, nil, nil, nil)
+	startObservabilityConsumer(ctx, cfg, &Runtime{}, hostmetrics.NewStore(nil, nil), nil)
 
 	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{Placement: config.PlacementConfig{Enabled: false}}, rt))
 	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
 
 	registerMetricsReporter(nil, nil)
-	assert.NoError(t, registerHealth(nil, nil, rt, nil, nil))
+	assert.NoError(t, registerHealth(nil, nil, rt, nil))
 }
 
 func TestMonitorSyncHandlerPropagatesTimerFailure(t *testing.T) {
@@ -269,24 +268,20 @@ func TestMonitorHealthSnapshotMetricsBranches(t *testing.T) {
 	cfg.Metrics.Enabled = false
 	cfg.Metrics.HostStorage.Enabled = false
 	cfg.Observability.Enabled = false
-	rsp := monitorHealthSnapshot(cfg, rt, nil, nil)(context.Background())
+	rsp := monitorHealthSnapshot(cfg, rt, nil)(context.Background())
 	assert.True(t, rsp.Ready)
 
 	cfg.Metrics.Enabled = true
 	cfg.Observability.Enabled = true
-	rsp = monitorHealthSnapshot(cfg, rt, nil, nil)(context.Background())
+	rsp = monitorHealthSnapshot(cfg, rt, nil)(context.Background())
 	assert.False(t, rsp.Ready)
 	assert.Equal(t, "degraded", rsp.Status)
-
-	adapter := monmetrics.NewStorageAdapter(nil, nil, cfg.Metrics.Storage)
-	rsp = monitorHealthSnapshot(cfg, rt, adapter, nil)(context.Background())
-	assert.False(t, rsp.Ready)
-	assert.Contains(t, rsp.Details["metrics_schema_reason"], "checked")
+	assert.NotContains(t, rsp.Details, "metrics_schema_ready", "服务指标不写 Storage，就绪不再依赖其表结构")
 }
 
 func TestObservabilityWriteFailureRequiresSubsequentSuccess(t *testing.T) {
 	rt := &Runtime{}
-	rt.recordObservabilityWriteFailure(reasonMetricsHistory, errors.New("storage unavailable"))
+	rt.recordObservabilityWriteFailure(reasonMetricsCatalog, errors.New("database is locked"))
 
 	ready, _ := rt.observabilityWriteReady(time.Now().Add(24 * time.Hour))
 	assert.False(t, ready)
@@ -332,19 +327,19 @@ func TestMonitorHealthSnapshotRequiresHostStorageSchema(t *testing.T) {
 	hostStore := hostmetrics.NewStore(nil, nil)
 	hostStore.SetStorageReady(func() bool { return false })
 
-	rsp := monitorHealthSnapshot(cfg, rt, nil, hostStore)(context.Background())
+	rsp := monitorHealthSnapshot(cfg, rt, hostStore)(context.Background())
 	assert.False(t, rsp.Ready)
 	assert.Equal(t, false, rsp.Details["host_storage_schema_ready"])
 }
 
 func TestFailureReasonNamesTheFailingStepWithoutTheRawError(t *testing.T) {
-	assert.Equal(t, "metrics history write to Storage failed", failureReason(reasonMetricsHistory, errors.New("write metrics history: dial tcp 10.0.0.8:20102: connection refused")))
+	assert.Equal(t, "host metrics write failed", failureReason(reasonHostMetrics, errors.New("write host metrics: dial tcp 10.0.0.8:20102: connection refused")))
 	assert.Equal(t, "eventbus connection unavailable: authentication failed", failureReason(reasonEventbus, errors.New("nats: Authorization Violation")))
 	assert.Empty(t, failureReason(reasonEventbus, nil))
 
 	rt := &Runtime{}
-	rt.recordObservabilityWriteFailure(reasonMetricsHistory, errors.New("storage-primary unavailable"))
+	rt.recordObservabilityWriteFailure(reasonMetricsCatalog, errors.New("database is locked"))
 	ready, reason := rt.observabilityWriteReady(time.Now())
 	assert.False(t, ready)
-	assert.Equal(t, "metrics history write to Storage failed", reason, "a Storage outage must not be reported as an eventbus problem")
+	assert.Equal(t, "metrics catalog write failed", reason, "a catalog failure must not be reported as an eventbus problem")
 }

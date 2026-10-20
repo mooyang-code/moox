@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// ServiceReportInterval 是各服务定时上报指标快照的周期（packages/report 的默认值），“无数据”按它的整数倍判断。
+const ServiceReportInterval = 30 * time.Second
+
 // MetricCatalog provides bounded reads over the SQLite catalog. It never
 // queries Storage without first resolving a finite set of series IDs.
 type MetricCatalog struct {

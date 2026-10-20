@@ -1,13 +1,14 @@
 package config
 
 import (
-	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 
 	"gopkg.in/yaml.v3"
 )
@@ -71,6 +72,9 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	}
 	if !cfg.Metrics.HostStorage.Enabled || cfg.Metrics.HostStorage.SpaceID != "mooxsys" || cfg.Metrics.HostStorage.Frequency != "1m" {
 		t.Fatalf("host storage defaults = %+v", cfg.Metrics.HostStorage)
+	}
+	if cfg.Metrics.MaxNewSeriesPerHour != 2000 || cfg.Metrics.MaxNewSeriesPerDay != 10000 {
+		t.Fatalf("new series limits = %d/%d", cfg.Metrics.MaxNewSeriesPerHour, cfg.Metrics.MaxNewSeriesPerDay)
 	}
 	if !cfg.Observability.Enabled || len(cfg.Observability.EventBusURLs) == 0 {
 		t.Fatalf("observability defaults = %+v", cfg.Observability)
@@ -448,4 +452,16 @@ func writeConfig(t *testing.T, content string) string {
 		t.Fatalf("write config: %v", err)
 	}
 	return path
+}
+
+func TestMonitorNewSeriesLimitsCanBeTunedOrDisabled(t *testing.T) {
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "fixture-health-secret")
+	cfg, err := Load(writeConfig(t, "metrics:\n  max_new_series_per_hour: 50\n  max_new_series_per_day: -1\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Metrics.MaxNewSeriesPerHour != 50 || cfg.Metrics.MaxNewSeriesPerDay != -1 {
+		t.Fatalf("limits = %d/%d, want 50/-1 (negative means unlimited)", cfg.Metrics.MaxNewSeriesPerHour, cfg.Metrics.MaxNewSeriesPerDay)
+	}
 }

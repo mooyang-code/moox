@@ -48,13 +48,13 @@ func TestOutputAdvanceFlushesOnceWithinTheWindow(t *testing.T) {
 
 func TestSystemDataDoesNotTriggerFlush(t *testing.T) {
 	_, _, timer := subscribedHandler(t)
-	// Monitor 把每份快照写进 mooxsys 的系统指标数据集，水位随之前进；若再补报就会循环。
+	// Monitor 把每份主机快照写进 mooxsys 的系统数据集，水位随之前进；若再补报就会循环。
 	NotifyOutputAdvanced(DefaultSpace)
 	require.Empty(t, timer.runs)
 	metrics, err := NewDatasetMetrics(prometheus.NewRegistry(), "storage")
 	require.NoError(t, err)
-	key := DatasetKey{SpaceID: DefaultSpace, DatasetID: "dataset_mooxsys_service_metrics", Freq: "30s"}
-	require.NoError(t, metrics.ReplaceExpected([]DatasetExpectation{{Key: key, Interval: 30 * time.Second}}))
+	key := DatasetKey{SpaceID: DefaultSpace, DatasetID: "dataset_mooxsys_host_resource", Freq: "1m"}
+	require.NoError(t, metrics.ReplaceExpected([]DatasetExpectation{{Key: key, Interval: time.Minute}}))
 	require.NoError(t, metrics.ObserveRun(DatasetObservation{Key: key, Result: "success", Rows: 1, FinishedAt: time.Unix(100, 0), OutputWatermark: time.Unix(90, 0)}))
 	require.Empty(t, timer.runs)
 }

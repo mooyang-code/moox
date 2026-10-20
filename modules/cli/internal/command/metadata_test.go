@@ -20,7 +20,7 @@ import (
 )
 
 func TestValidateReservedInternalSpacesRejectsUndeclaredLogicalResource(t *testing.T) {
-	seed := metadataSeed{Datasets: []seedDataset{{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_service_metrics"}}}
+	seed := metadataSeed{Datasets: []seedDataset{{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_host_resource"}}}
 	if err := validateReservedInternalSpaces(seed); err == nil {
 		t.Fatal("logical resource without an internal space declaration should be rejected")
 	}

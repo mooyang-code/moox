@@ -87,12 +87,9 @@ metrics:
   enabled: true
   dataset_health_policy_path: ../../config/setup/dataset-health-policy.yaml
   no_data_intervals: 2
-  storage:
-    space_id: mooxsys
-    dataset_id: dataset_mooxsys_service_metrics
-    frequency: 30s
-    metadata_validation_interval: 30s
-    write_batch_size: 1000
+  # 每小时、每天最多新建的指标序列数，超出的新序列被丢弃并告警；负数表示不限。
+  max_new_series_per_hour: 2000
+  max_new_series_per_day: 10000
   host_storage:
     enabled: true
     space_id: mooxsys

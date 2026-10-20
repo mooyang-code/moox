@@ -35,22 +35,6 @@ storage:
     max_workers: 1
     ordering: dataset
     consumer_partitions:
-      - id: system_metrics
-        durable: storage_view_metrics
-        routes:
-          - space_id: mooxsys
-            dataset_ids: [dataset_mooxsys_service_metrics]
-        # System metrics are emitted every 30 seconds and can accumulate a
-        # sizeable durable backlog after a Storage View restart. Keep the
-        # dataset/subject ordering guarantee while allowing independent
-        # service subjects to drain in parallel.
-        fetch_batch: 16
-        max_workers: 4
-        max_ack_pending: 64
-        ack_wait_ms: 120000
-        ordering: dataset
-        deliver_policy: new
-        max_retry_attempts: -1
       - id: factor
         durable: storage_view_factor
         # Factor result Datasets are bound dynamically, one durable per result;

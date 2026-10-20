@@ -196,3 +196,38 @@ func TestBuilderReadsCanonicalModuleMetricNames(t *testing.T) {
 func messageQuery(messageStore *monmetrics.MetricMessageStore) *monmetrics.QueryService {
 	return monmetrics.NewQueryService(messageStore, nil)
 }
+
+func TestBuilderReportsIngestDropsAndRejectsWithoutBreakingBounds(t *testing.T) {
+	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+	require.NoError(t, mgr.ApplySchema(schema.SQL()))
+	messages, err := store.WithDatabase(mgr, monmetrics.NewMetricMessageStore)
+	require.NoError(t, err)
+	messages.SetSeriesLimits(monmetrics.SeriesLimits{MaxNewPerHour: 1, MaxNewPerDay: 100})
+	now := time.Now().UTC()
+	report := &metricspb.MetricReport{ServiceName: "noisy", InstanceId: "noisy@node", BootId: "boot"}
+	_, err = messages.CommitIngest(t.Context(), &eventpb.EventMessage{EventId: "e1"}, report, []monmetrics.Sample{
+		{SeriesID: "s1", ServiceName: "noisy", InstanceID: "noisy@node", MetricName: "m_keep", MetricType: "gauge", ObservedAt: now, MessageID: "e1"},
+		{SeriesID: "s2", ServiceName: "noisy", InstanceID: "noisy@node", MetricName: "m_dropped", MetricType: "gauge", ObservedAt: now, MessageID: "e1"},
+	})
+	require.NoError(t, err)
+	messages.RecordIngestRejected(nil, "broken", monmetrics.RejectChecksum)
+
+	builder := Builder{Metrics: monmetrics.NewQueryService(messages, nil), Now: func() time.Time { return now }}
+	got, err := builder.Build(t.Context(), "", nil, nil)
+	require.NoError(t, err)
+	byKind := map[string]Observation{}
+	for _, item := range got.ModuleObservations {
+		if item.Kind == "metrics_ingest" {
+			byKind[item.Summary] = item
+		}
+	}
+	dropped := byKind["metrics_ingest_series_dropped"]
+	require.Equal(t, "noisy", dropped.ServiceName)
+	require.EqualValues(t, 1, dropped.Value)
+	require.Contains(t, dropped.DetailsJSON, `"last_metric":"m_dropped"`)
+	rejected := byKind["metrics_ingest_snapshot_rejected"]
+	require.Equal(t, "broken", rejected.ServiceName)
+	require.Contains(t, rejected.DetailsJSON, `"last_reason":"checksum"`)
+}

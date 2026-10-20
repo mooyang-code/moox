@@ -9,13 +9,13 @@ import (
 )
 
 func TestPurgeDatasetEventsRequiresConfirmation(t *testing.T) {
-	err := runPurgeDatasetEvents(context.Background(), []string{"--space", "mooxsys", "--dataset", "dataset_mooxsys_service_metrics"}, &bytes.Buffer{})
+	err := runPurgeDatasetEvents(context.Background(), []string{"--space", "mooxsys", "--dataset", "dataset_mooxsys_host_resource"}, &bytes.Buffer{})
 	require.ErrorContains(t, err, "--yes")
 }
 
 func TestPurgeDatasetEventsDryRunPrintsExactSubjects(t *testing.T) {
 	var stdout bytes.Buffer
-	err := runPurgeDatasetEvents(context.Background(), []string{"--space", "mooxsys", "--dataset", "dataset_mooxsys_service_metrics", "--dry-run"}, &stdout)
+	err := runPurgeDatasetEvents(context.Background(), []string{"--space", "mooxsys", "--dataset", "dataset_mooxsys_host_resource", "--dry-run"}, &stdout)
 	require.NoError(t, err)
 	require.Contains(t, stdout.String(), `"status":"dry_run"`)
 	require.Contains(t, stdout.String(), "moox.event.storage.dataset.rows.upserted.v2.")
@@ -26,13 +26,13 @@ func TestPurgeDatasetEventsDryRunPrintsExactSubjects(t *testing.T) {
 }
 
 func TestDatasetEventSubjectsAreExactAndDatasetScoped(t *testing.T) {
-	subjects, err := datasetEventSubjects("mooxsys", "dataset_mooxsys_service_metrics")
+	subjects, err := datasetEventSubjects("mooxsys", "dataset_mooxsys_host_resource")
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		"moox.event.storage.dataset.rows.upserted.v2.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5zwk4twnfrwkx3nmv2he2ldom",
-		"moox.event.storage.collector.period.completed.v1.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5zwk4twnfrwkx3nmv2he2ldom",
-		"moox.event.storage.dataset.factor_period.computed.v1.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5zwk4twnfrwkx3nmv2he2ldom",
-		"moox.event.storage.dataset.sync_point.v1.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5zwk4twnfrwkx3nmv2he2ldom",
+		"moox.event.storage.dataset.rows.upserted.v2.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5ug643ul5zgk43povzggzi",
+		"moox.event.storage.collector.period.completed.v1.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5ug643ul5zgk43povzggzi",
+		"moox.event.storage.dataset.factor_period.computed.v1.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5ug643ul5zgk43povzggzi",
+		"moox.event.storage.dataset.sync_point.v1.nvxw66dtpfzq.mrqxiyltmv2f63lpn54hg6ltl5ug643ul5zgk43povzggzi",
 	}, subjects)
 	other, err := datasetEventSubjects("mooxsys", "other")
 	require.NoError(t, err)
@@ -50,7 +50,7 @@ func TestPurgeDatasetEventsCallsPurgeAfterConfirmation(t *testing.T) {
 		return nil
 	}
 	var stdout bytes.Buffer
-	err := runPurgeDatasetEvents(context.Background(), []string{"--space", "mooxsys", "--dataset", "dataset_mooxsys_service_metrics", "--yes"}, &stdout)
+	err := runPurgeDatasetEvents(context.Background(), []string{"--space", "mooxsys", "--dataset", "dataset_mooxsys_host_resource", "--yes"}, &stdout)
 	require.NoError(t, err)
 	require.True(t, called)
 }

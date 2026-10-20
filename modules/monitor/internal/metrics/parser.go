@@ -89,6 +89,33 @@ type Sample struct {
 	ProducerVersion string
 }
 
+// 快照被拒收的原因，用于入库拒收计数与诊断；没有专门归类的解析失败都算 RejectParse。
+const (
+	RejectChecksum      = "checksum"
+	RejectLimitExceeded = "limit_exceeded"
+	RejectParse         = "parse"
+	RejectSpace         = "space"
+)
+
+type rejectError struct {
+	reason string
+	err    error
+}
+
+func (e *rejectError) Error() string { return e.err.Error() }
+func (e *rejectError) Unwrap() error { return e.err }
+
+func rejected(reason string, err error) error { return &rejectError{reason: reason, err: err} }
+
+// RejectReason 返回快照被拒收的原因分类。
+func RejectReason(err error) string {
+	var target *rejectError
+	if errors.As(err, &target) {
+		return target.reason
+	}
+	return RejectParse
+}
+
 // DecodeSnapshot verifies a bounded snapshot payload.
 func DecodeSnapshot(snapshot *metricspb.MetricSnapshot, limits Limits) ([]byte, error) {
 	if snapshot == nil {
@@ -100,13 +127,13 @@ func DecodeSnapshot(snapshot *metricspb.MetricSnapshot, limits Limits) ([]byte, 
 	limits = limits.normalized()
 	// 传输压缩由事件信封层完成，快照里的 Data 恒为 Prometheus 文本原文。
 	if int64(len(snapshot.GetData())) > limits.MaxUncompressedBytes {
-		return nil, fmt.Errorf("snapshot exceeds %d bytes", limits.MaxUncompressedBytes)
+		return nil, rejected(RejectLimitExceeded, fmt.Errorf("snapshot exceeds %d bytes", limits.MaxUncompressedBytes))
 	}
 	raw := append([]byte(nil), snapshot.GetData()...)
 	if len(snapshot.GetDataSha256()) > 0 {
 		sum := sha256.Sum256(raw)
 		if !bytes.Equal(sum[:], snapshot.GetDataSha256()) {
-			return nil, fmt.Errorf("snapshot checksum mismatch: got %s", hex.EncodeToString(sum[:]))
+			return nil, rejected(RejectChecksum, fmt.Errorf("snapshot checksum mismatch: got %s", hex.EncodeToString(sum[:])))
 		}
 	}
 	return raw, nil
@@ -134,7 +161,7 @@ func ParseSnapshot(snapshot *metricspb.MetricSnapshot, env Envelope, limits Limi
 		return nil, fmt.Errorf("parse prometheus exposition: %w", err)
 	}
 	if len(families) > limits.MaxMetricFamilies {
-		return nil, fmt.Errorf("metric family limit exceeded: %d > %d", len(families), limits.MaxMetricFamilies)
+		return nil, rejected(RejectLimitExceeded, fmt.Errorf("metric family limit exceeded: %d > %d", len(families), limits.MaxMetricFamilies))
 	}
 	if snapshot.GetMetricFamilyCount() != 0 && int(snapshot.GetMetricFamilyCount()) != len(families) {
 		return nil, fmt.Errorf("metric family count mismatch: declared %d got %d", snapshot.GetMetricFamilyCount(), len(families))
@@ -162,12 +189,12 @@ func ParseSnapshot(snapshot *metricspb.MetricSnapshot, env Envelope, limits Limi
 					return nil, fmt.Errorf("metric %s has duplicate label %q", name, pair.GetName())
 				}
 				if len(pair.GetName()) > limits.MaxLabelNameBytes || len(pair.GetValue()) > limits.MaxLabelValueBytes {
-					return nil, fmt.Errorf("metric %s label exceeds size limit", name)
+					return nil, rejected(RejectLimitExceeded, fmt.Errorf("metric %s label exceeds size limit", name))
 				}
 				labels[pair.GetName()] = pair.GetValue()
 			}
 			if len(labels) > limits.MaxLabelsPerSample {
-				return nil, fmt.Errorf("metric %s label limit exceeded", name)
+				return nil, rejected(RejectLimitExceeded, fmt.Errorf("metric %s label limit exceeded", name))
 			}
 			if err := appendMetricSamples(&out, family, metric, name, typeName, labels, env, interval, limits.MaxSamples, limits.MaxLabelsPerSample); err != nil {
 				return nil, err
@@ -219,7 +246,7 @@ func appendMetricSamples(out *[]Sample, family *dto.MetricFamily, metric *dto.Me
 			merged[k] = v
 		}
 		if len(merged) > maxLabels {
-			return fmt.Errorf("metric %s label limit exceeded", name)
+			return rejected(RejectLimitExceeded, fmt.Errorf("metric %s label limit exceeded", name))
 		}
 		lj, err := CanonicalLabelsJSON(merged)
 		if err != nil {
@@ -227,7 +254,7 @@ func appendMetricSamples(out *[]Sample, family *dto.MetricFamily, metric *dto.Me
 		}
 		*out = append(*out, Sample{SeriesID: SeriesID(env.ServiceName, env.InstanceID, name+suffix, merged), ServiceName: env.ServiceName, InstanceID: env.InstanceID, MetricName: name + suffix, MetricType: typeName, Labels: merged, LabelsJSON: lj, Value: value, ObservedAt: env.ObservedAt, Interval: interval, MessageID: env.MessageID, ProducerNodeID: env.ProducerNodeID, ProducerVersion: env.ProducerVersion})
 		if len(*out) > max {
-			return fmt.Errorf("sample limit exceeded: %d > %d", len(*out), max)
+			return rejected(RejectLimitExceeded, fmt.Errorf("sample limit exceeded: %d > %d", len(*out), max))
 		}
 		return nil
 	}

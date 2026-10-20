@@ -163,17 +163,17 @@ func TestSystemMetricsFromScratchDoesNotJournalPendingSubjects(t *testing.T) {
 	ctx := context.Background()
 	engine := &existenceQueryEngine{queryEngine: &queryEngine{}, exists: true}
 	svc, _ := queryTestService(engine, false)
-	key := viewRef{spaceID: "mooxsys", viewID: "view_mooxsys_service_metrics"}
+	key := viewRef{spaceID: "mooxsys", viewID: "view_mooxsys_host_resource"}
 	indexID := "metrics-next"
 	svc.views[key] = &viewRuntime{active: "", next: indexID, status: "building"}
 	svc.indexView = map[string]viewRef{indexID: key}
 	svc.indexEngine[indexID] = "query-test"
 	svc.schemas[indexID] = viewindex.ViewIndexSchema{
-		SpaceID: "mooxsys", ViewID: "view_mooxsys_service_metrics", PrimaryDatasetID: "dataset_mooxsys_service_metrics",
+		SpaceID: "mooxsys", ViewID: "view_mooxsys_host_resource", PrimaryDatasetID: "dataset_mooxsys_host_resource",
 		SchemaHash: "schema", ViewVersion: 1,
 		Columns: []*pb.ViewColumn{{OriginId: "cpu", ColumnName: "cpu"}},
 	}
-	svc.byData = map[datasetRef]map[string]struct{}{{spaceID: "mooxsys", datasetID: "dataset_mooxsys_service_metrics"}: {indexID: {}}}
+	svc.byData = map[datasetRef]map[string]struct{}{{spaceID: "mooxsys", datasetID: "dataset_mooxsys_host_resource"}: {indexID: {}}}
 	svc.pendingSubjectsDir = filepath.Join(t.TempDir(), "pending")
 	published := 0
 	svc.readyPublisher = subjectPublisherFunc(func(context.Context, events.Event, proto.Message, events.PublishOptions) (*jetstream.PublishAck, error) {
@@ -181,15 +181,15 @@ func TestSystemMetricsFromScratchDoesNotJournalPendingSubjects(t *testing.T) {
 		return &jetstream.PublishAck{}, nil
 	})
 	row := &pb.RowFieldUpsert{
-		Key: &pb.RowKey{SpaceId: "mooxsys", DatasetId: "dataset_mooxsys_service_metrics", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+		Key: &pb.RowKey{SpaceId: "mooxsys", DatasetId: "dataset_mooxsys_host_resource", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 			SubjectId: "collector", Freq: "1m", SeriesTag: "host", DataTime: "2026-09-13T08:00:00Z",
 		}}},
 		Fields: []*pb.FieldValue{{FieldId: "cpu", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
 	}
-	payload, err := eventmapper.ToEventRows(&pb.RowsUpserted{SpaceId: "mooxsys", DatasetId: "dataset_mooxsys_service_metrics", Rows: []*pb.RowFieldUpsert{row}})
+	payload, err := eventmapper.ToEventRows(&pb.RowsUpserted{SpaceId: "mooxsys", DatasetId: "dataset_mooxsys_host_resource", Rows: []*pb.RowFieldUpsert{row}})
 	require.NoError(t, err)
 	payload.SourceNodeId, payload.SourceStoreId, payload.SourceSequence = "node", "store", 1
-	message := &eventpb.EventMessage{EventId: "source", SpaceId: "mooxsys", SubjectId: "dataset_mooxsys_service_metrics", OccurredAt: timestamppb.Now()}
+	message := &eventpb.EventMessage{EventId: "source", SpaceId: "mooxsys", SubjectId: "dataset_mooxsys_host_resource", OccurredAt: timestamppb.Now()}
 	require.NoError(t, svc.HandleDatasetRows(ctx, message, payload))
 	require.Equal(t, 1, engine.writes[indexID])
 	_, err = os.ReadDir(svc.pendingSubjectsDir)
@@ -201,23 +201,23 @@ func TestReplayDropsPendingSubjectsForSystemViews(t *testing.T) {
 	ctx := context.Background()
 	engine := &existenceQueryEngine{queryEngine: &queryEngine{}, exists: true}
 	svc, _ := queryTestService(engine, false)
-	key := viewRef{spaceID: "mooxsys", viewID: "view_mooxsys_service_metrics"}
+	key := viewRef{spaceID: "mooxsys", viewID: "view_mooxsys_host_resource"}
 	svc.views[key] = &viewRuntime{active: "", next: "metrics-next", status: "building"}
 	svc.pendingSubjectsDir = filepath.Join(t.TempDir(), "pending")
 	require.NoError(t, os.MkdirAll(svc.pendingSubjectsDir, 0o700))
 	row := &pb.RowFieldUpsert{
-		Key: &pb.RowKey{SpaceId: "mooxsys", DatasetId: "dataset_mooxsys_service_metrics", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+		Key: &pb.RowKey{SpaceId: "mooxsys", DatasetId: "dataset_mooxsys_host_resource", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
 			SubjectId: "collector", Freq: "1m", SeriesTag: "host", DataTime: "2026-09-13T08:00:00Z",
 		}}},
 	}
 	rowData, err := proto.MarshalOptions{Deterministic: true}.Marshal(&pb.RowFieldUpsert{Key: row.GetKey()})
 	require.NoError(t, err)
-	messageData, err := proto.MarshalOptions{Deterministic: true}.Marshal(&eventpb.EventMessage{EventId: "source", SpaceId: "mooxsys", SubjectId: "dataset_mooxsys_service_metrics"})
+	messageData, err := proto.MarshalOptions{Deterministic: true}.Marshal(&eventpb.EventMessage{EventId: "source", SpaceId: "mooxsys", SubjectId: "dataset_mooxsys_host_resource"})
 	require.NoError(t, err)
 	data, err := json.Marshal(pendingSubject{
-		Space: "mooxsys", View: "view_mooxsys_service_metrics", Dataset: "dataset_mooxsys_service_metrics",
+		Space: "mooxsys", View: "view_mooxsys_host_resource", Dataset: "dataset_mooxsys_host_resource",
 		Row: rowData, Message: messageData, Node: "node", Store: "store", Sequence: 1,
-		Contract: "schema:1", Primary: "dataset_mooxsys_service_metrics",
+		Contract: "schema:1", Primary: "dataset_mooxsys_host_resource",
 	})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(svc.pendingSubjectsDir, "metrics.json"), data, 0o600))

@@ -230,9 +230,8 @@ func buildBusinessFreshnessReporterWithInterval(
 					continue
 				}
 			}
-			if hostMonitoringDataset(dataset) {
-				// Host samples land in these datasets; host presence and the host
-				// threshold rules already alert when a host stops reporting.
+			if systemMonitoringDataset(dataset) {
+				// mooxsys 是系统监控数据（主机快照）：主机失联与阈值规则已覆盖主机停报，不做数据集新鲜度检查。
 				continue
 			}
 			checkID := strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":")
@@ -283,7 +282,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		for _, business := range overview.BusinessChecks {
-			if business.Kind != "balance" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "worker_presence" {
+			if business.Kind != "balance" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "worker_presence" && business.Kind != "metrics_ingest" {
 				continue
 			}
 			spaceID := business.SpaceID
@@ -295,6 +294,8 @@ func buildBusinessFreshnessReporterWithInterval(
 				checkID, name = "market_fetch:"+business.Module, "行情采集 "+business.Module+" 协调"
 			} else if business.Kind == "data_delivery" {
 				checkID, name = "data_delivery:"+business.Module, "数据投递队列"
+			} else if business.Kind == "metrics_ingest" {
+				checkID, name = "metrics_ingest:"+business.Module, "指标序列数量保护"
 			} else if business.Kind == "worker_presence" {
 				checkID, name = "worker_presence:"+business.Module, monitorobservability.WorkerPresenceName(business.Module)
 			}
@@ -525,14 +526,8 @@ func serviceDeploymentExpected(ctx context.Context, topology *store.TopologyRepo
 // noLongerExpected resolves a check whose subject was disabled or removed.
 const noLongerExpected = domain.CheckReasonRetired
 
-func hostMonitoringDataset(dataset monitorobservability.DatasetFrequencyStatus) bool {
-	for _, id := range []string{dataset.DatasetID, dataset.PrimaryDatasetID} {
-		id = strings.ToLower(strings.TrimSpace(id))
-		if strings.HasPrefix(id, "dataset_mooxsys_host_") || strings.HasPrefix(id, "view_mooxsys_host_") {
-			return true
-		}
-	}
-	return false
+func systemMonitoringDataset(dataset monitorobservability.DatasetFrequencyStatus) bool {
+	return strings.EqualFold(strings.TrimSpace(dataset.SpaceID), monmetrics.InternalMetricSpaceID)
 }
 
 // relayAlertAfter 是反向连接断开多久后告警。

@@ -44,7 +44,6 @@ func TestDefaultViewInventory(t *testing.T) {
 		"mooxsys/view_mooxsys_host_fs",
 		"mooxsys/view_mooxsys_host_net",
 		"mooxsys/view_mooxsys_host_resource",
-		"mooxsys/view_mooxsys_service_metrics",
 		"stockcn/view_stockcn_bond_kline_1m",
 		"stockcn/view_stockcn_index_kline_1d",
 		"stockcn/view_stockcn_equity_kline_1m",

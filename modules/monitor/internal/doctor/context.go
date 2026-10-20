@@ -131,6 +131,7 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 	if err := b.addMetrics(ctx, components, nodeID, healthCheckIDs, now, &out); err != nil {
 		return Context{}, err
 	}
+	b.addIngestDiagnostics(ctx, now, &out)
 	if err := b.addHosts(ctx, nodeID, now, &out); err != nil {
 		out.MissingObservations = append(out.MissingObservations, Observation{Kind: "host", NodeID: nodeID, Status: "UNKNOWN", Summary: "host resource history unavailable"})
 	}
@@ -150,6 +151,42 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 		return Context{}, err
 	}
 	return out, nil
+}
+
+// maxIngestObservations 限制每类入库诊断放进 Doctor 上下文的条数，避免挤占 module 观察项的上限。
+const maxIngestObservations = 10
+
+// addIngestDiagnostics 把指标入库的诊断放进上下文：哪些服务的新序列被限额丢弃、哪些服务的快照被拒收以及最近一次的原因。
+// 诊断来自进程内累计，Monitor 重启后清零；不影响其他观察项，读取失败也不让 Doctor 失败。
+func (b Builder) addIngestDiagnostics(ctx context.Context, now time.Time, out *Context) {
+	if b.Metrics == nil {
+		return
+	}
+	room := func() int { return min(maxIngestObservations, MaxObservations-len(out.ModuleObservations)) }
+	if limit, err := b.Metrics.SeriesLimitStatus(ctx, now); err == nil && limit.Enabled {
+		for _, drop := range limit.Drops {
+			if room() <= 0 {
+				break
+			}
+			details, _ := json.Marshal(map[string]any{"last_metric": drop.LastMetric, "total_dropped": drop.Total, "hour_current": limit.HourCurrent, "hour_max": limit.HourMax, "day_current": limit.DayCurrent, "day_max": limit.DayMax})
+			out.ModuleObservations = append(out.ModuleObservations, Observation{
+				Kind: "metrics_ingest", ComponentID: "monitor", ServiceName: drop.Service, Status: "DEGRADED",
+				ObservedAt: drop.LastAt, Value: float64(drop.Total), AgeSeconds: observationAge(now, drop.LastAt),
+				Summary: "metrics_ingest_series_dropped", DetailsJSON: string(details),
+			})
+		}
+	}
+	for i, reject := range b.Metrics.IngestRejects() {
+		if i >= maxIngestObservations || room() <= 0 {
+			break
+		}
+		details, _ := json.Marshal(map[string]any{"last_reason": reject.LastReason, "by_reason": reject.ByReason})
+		out.ModuleObservations = append(out.ModuleObservations, Observation{
+			Kind: "metrics_ingest", ComponentID: "monitor", ServiceName: reject.Service, Status: "DEGRADED",
+			ObservedAt: reject.LastAt, AgeSeconds: observationAge(now, reject.LastAt),
+			Summary: "metrics_ingest_snapshot_rejected", DetailsJSON: string(details),
+		})
+	}
 }
 
 func (b Builder) loadDeployments(ctx context.Context) (placement.Snapshot, error) {

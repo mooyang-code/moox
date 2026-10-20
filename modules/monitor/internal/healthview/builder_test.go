@@ -165,3 +165,25 @@ func TestGatewayPendingTimeKeepsItsSnapshotIdentity(t *testing.T) {
 	require.Equal(t, "new", signal.ExpectedHash)
 	require.Equal(t, "old", signal.AppliedHash)
 }
+
+func TestPipelineSkipsSystemMonitoringDatasets(t *testing.T) {
+	stages := projectPipeline(observability.Overview{Datasets: []observability.DatasetFrequencyStatus{
+		{Producer: "storage", SpaceID: "crypto", DatasetID: "dataset_crypto_kline_1m", Freq: "1m", Status: "healthy"},
+		{Producer: "storage", SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_probe", Freq: "30s", Status: "degraded"},
+		{Producer: "storage_view", SpaceID: "mooxsys", DatasetID: "view_mooxsys_host_resource", Freq: "1m", Status: "degraded"},
+	}})
+	var datasets []string
+	for _, stage := range stages {
+		for _, dataset := range stage.GetDatasets() {
+			datasets = append(datasets, dataset.GetSpaceId()+"/"+dataset.GetDatasetId())
+		}
+	}
+	require.Equal(t, []string{"crypto/dataset_crypto_kline_1m"}, datasets, "mooxsys 系统监控数据不进入业务数据链路")
+}
+
+func TestSeriesLimitAlertIsAWarning(t *testing.T) {
+	object := alertObject("mooxsys", "metrics_ingest:series_limit", observability.Overview{})
+	require.Equal(t, "metrics_ingest", object.Kind)
+	require.Equal(t, "warning", alertSeverity("metrics_ingest:series_limit", object))
+	require.Equal(t, "critical", alertSeverity("dataset:storage:bars:1m", alertObject("crypto", "dataset:storage:bars:1m", observability.Overview{})), "数据集告警仍是严重")
+}
