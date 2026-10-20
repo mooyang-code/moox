@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"sort"
 	"strings"
@@ -101,7 +102,8 @@ func ValidateRateLimits(overrides map[string]float64) error {
 			return fmt.Errorf("tencent_scf.api_rate_limits 包含未知接口 %q", name)
 		}
 		value := overrides[name]
-		if value <= 0 || value > official {
+		// YAML 允许 .nan / .inf：NaN 与 0 或负数的比较都为假，必须显式拒绝非有限值。
+		if math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 || value > official {
 			return fmt.Errorf("tencent_scf.api_rate_limits.%s 必须大于 0 且不超过官方限频 %g，当前为 %g", name, official, value)
 		}
 	}

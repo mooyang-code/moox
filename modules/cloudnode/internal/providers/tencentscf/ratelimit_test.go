@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -108,19 +109,21 @@ func TestLimiterNeverExceedsRateInAnyOneSecondWindow(t *testing.T) {
 func TestLimiterConcurrentCallersShareOneBucket(t *testing.T) {
 	// 官方限频是 20 次/秒，真实计时的并发测试要更高的速率才跑得快，直接写入覆盖表绕过校验。
 	limiterRegistry.Lock()
-	limiterRegistry.overrides = map[string]float64{"ListTriggers": 200}
+	limiterRegistry.overrides = map[string]float64{"ListTriggers": 100}
 	limiterRegistry.limiters = make(map[limiterKey]*rate.Limiter)
 	limiterRegistry.Unlock()
 	t.Cleanup(func() { require.NoError(t, ConfigureRateLimits(nil)) })
-	client := New("acct-concurrent", "id", "key")
+	// 多个 Client 实例（同一账号换了密钥）同时调用，也共用一个桶。
+	clients := []*Client{New("acct-concurrent", "id-old", "key"), New("acct-concurrent", "id-new", "key")}
 	var (
 		mu     sync.Mutex
 		stamps []time.Time
 		wg     sync.WaitGroup
 	)
-	for i := 0; i < 60; i++ {
+	// 250 个样本按 100 次/秒要跑约 2.5 秒，窗口断言覆盖多个完整的 1 秒窗口，不会因为样本太少而必然通过。
+	for i := 0; i < 250; i++ {
 		wg.Add(1)
-		go func() {
+		go func(client *Client) {
 			defer wg.Done()
 			require.NoError(t, client.call(context.Background(), "ap-hongkong", "ListTriggers", func(context.Context) error {
 				mu.Lock()
@@ -128,13 +131,32 @@ func TestLimiterConcurrentCallersShareOneBucket(t *testing.T) {
 				mu.Unlock()
 				return nil
 			}))
-		}()
+		}(clients[i%len(clients)])
 	}
 	wg.Wait()
-	// 200 次/秒、突发 1：任意 1 秒窗口至多 200 次（含边界误差），60 次的总耗时约 0.3 秒。
-	require.LessOrEqual(t, maxPerWindow(stamps, time.Second), 201)
+	require.Len(t, stamps, 250)
 	sort.Slice(stamps, func(i, j int) bool { return stamps[i].Before(stamps[j]) })
-	require.Greater(t, stamps[len(stamps)-1].Sub(stamps[0]), 250*time.Millisecond)
+	span := stamps[len(stamps)-1].Sub(stamps[0])
+	require.Greater(t, span, 2200*time.Millisecond, "250 个调用按 100 次/秒至少要跑 2.5 秒，说明确实被限流摊开了")
+	// 令牌桶保证相邻调用的间隔不小于 1/速率，因此任意 1 秒窗口至多 速率+1 次（窗口两端各取到一次）；
+	// 默认速率只取官方限频的 75%，这个边界效应和调度抖动由 25% 的余量吸收。
+	require.LessOrEqual(t, maxPerWindow(stamps, time.Second), 101+5, "允许少量调度抖动")
+}
+
+func TestLimiterBurstOfOneNeverReleasesTwoCallsAtTheSameInstant(t *testing.T) {
+	clock := useFakeClock(t)
+	client := New("acct-burst", "id", "key")
+	var stamps []time.Time
+	for i := 0; i < 5; i++ {
+		require.NoError(t, client.call(context.Background(), "ap-hongkong", "ListTriggers", func(context.Context) error {
+			stamps = append(stamps, clock.Now())
+			return nil
+		}))
+	}
+	for i := 1; i < len(stamps); i++ {
+		// 15 次/秒：相邻调用至少间隔约 66ms。突发容量等于速率时，前 15 个会在同一时刻放行。
+		require.GreaterOrEqual(t, stamps[i].Sub(stamps[i-1]), 60*time.Millisecond)
+	}
 }
 
 func TestLimiterKeyedByAccountAndActionNotBySecret(t *testing.T) {
@@ -252,6 +274,9 @@ func TestRateLimitConfigValidation(t *testing.T) {
 	require.ErrorContains(t, ValidateRateLimits(map[string]float64{"NoSuchAction": 5}), "未知接口")
 	require.ErrorContains(t, ValidateRateLimits(map[string]float64{"ListTriggers": 0}), "必须大于 0")
 	require.ErrorContains(t, ValidateRateLimits(map[string]float64{"ListTriggers": -1}), "必须大于 0")
+	require.Error(t, ValidateRateLimits(map[string]float64{"ListTriggers": math.NaN()}), "YAML 的 .nan 必须被拒绝")
+	require.Error(t, ValidateRateLimits(map[string]float64{"ListTriggers": math.Inf(1)}))
+	require.Error(t, ValidateRateLimits(map[string]float64{"ListTriggers": math.Inf(-1)}))
 	require.ErrorContains(t, ValidateRateLimits(map[string]float64{"ListTriggers": 21}), "不超过官方限频 20")
 	require.Error(t, ConfigureRateLimits(map[string]float64{"UpdateTrigger": 100}))
 }

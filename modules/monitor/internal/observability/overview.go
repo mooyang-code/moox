@@ -1452,28 +1452,34 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 	for currentSpace, state := range states {
 		pendingGrace := state.hasPending && state.pending > 0 && state.hasPendingSince && state.pendingSince > 0 &&
 			now.Sub(unixTime(state.pendingSince)) >= 0 && now.Sub(unixTime(state.pendingSince)) <= thresholds.PendingGrace
-		if pendingGrace {
+		// 发布租约被占用有自己的宽限期：只有在「被占用」是唯一失败原因、且起始时间已知并在宽限期内时才给宽限。
+		// 多个 Collector 实例上报时，另一个实例的真实故障不能被租约宽限掩盖；缺少起始时间无法证明在宽限期内。
+		leaseHeld := state.hasHealth && state.healthy <= 0 && state.failureReasons[publishLeaseHeldReason]
+		leaseWithinGrace := leaseHeld && len(state.failureReasons) == 1 && state.hasFailureSince && state.failureSince > 0 &&
+			now.Sub(unixTime(state.failureSince)) <= thresholds.LeaseGrace
+		// 普通的 pending 宽限不能盖过已超期（或无法证明在宽限期内）的租约失败。
+		if pendingGrace && !(leaseHeld && !leaseWithinGrace) {
 			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: "采集计划协调进行中", LastCheckedAt: now})
 			continue
 		}
 		if state.hasHealth && state.healthy <= 0 {
 			// 发布租约被占用是租约在正常工作（重启前的旧作业还在云端运行）：宽限期内按协调进行中处理。
 			// 缺少失败起始时间时无法证明还在宽限期内，按已超期处理。
-			if state.failureReasons[publishLeaseHeldReason] && state.hasFailureSince && state.failureSince > 0 &&
-				now.Sub(unixTime(state.failureSince)) <= thresholds.LeaseGrace {
+			if leaseWithinGrace {
 				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: "发布租约被占用：等待在途云端作业结束，通常数分钟内自动恢复", LastCheckedAt: now})
 				continue
 			}
 			reason := "采集计划协调失败：请检查 Collector 日志、CloudNode 和函数网络"
+			// 多个实例上报不同原因时，真实故障的文案优先于租约被占用。
 			switch {
-			case state.failureReasons[publishLeaseHeldReason]:
-				reason = "发布租约长时间被占用：请检查 CloudNode 批次作业是否卡住，以及是否有其他发布方（CLI 手工发布、补采）在运行"
 			case state.failureReasons["cloudnode"]:
 				reason = "采集计划配置服务调用失败：请检查 CloudNode、网关连接和批处理队列"
 			case state.failureReasons["environment"]:
 				reason = "函数运行环境生成失败：请检查环境变量大小和 DNS 配置"
 			case state.failureReasons["rules"]:
 				reason = "采集规则读取失败：请检查 Collector 规则配置和存储连接"
+			case state.failureReasons[publishLeaseHeldReason]:
+				reason = "发布租约长时间被占用：请检查 CloudNode 批次作业是否卡住，以及是否有其他发布方（CLI 手工发布、补采）在运行"
 			}
 			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
 			continue

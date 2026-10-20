@@ -219,10 +219,17 @@ func (r *PlanReconciler) inFlightSince() (time.Time, bool) {
 	return since, found
 }
 
+// inFlightStuck 判断最老的在途云端作业是否已超过告警年龄（pendingJobWarnAge）。
+func (r *PlanReconciler) inFlightStuck() bool {
+	since, ok := r.inFlightSince()
+	return ok && r.now().Sub(since) > pendingJobWarnAge
+}
+
 // finishRound 在每轮对账结束时统一收尾：有在途云端作业就按作业的提交时间上报 pending；
 // 本轮及自上一轮结束以来没有任何失败时恢复健康并清除遗留的失败原因（计划仍在进行也一样）。
 func (r *PlanReconciler) finishRound(err error) {
-	clean := err == nil && r.failCount == r.roundFailCount
+	// 函数代码升级仍在进行（errCodeUpgradePending）是等待，不是失败。
+	clean := (err == nil || errors.Is(err, errCodeUpgradePending)) && r.failCount == r.roundFailCount
 	r.roundFailCount = r.failCount
 	if r.Metrics == nil {
 		return
@@ -288,9 +295,10 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) (err error) {
 	if err := r.planChange(ctx); err != nil {
 		return err
 	}
-	// 没有未生效的计划（或本轮刚把计划推进到生效），且没有在途云端作业：对账成功。
-	// 有在途作业时不刷新成功时间：作业卡住时由 Monitor 的对账陈旧判定发现。
-	if _, inFlight := r.inFlightSince(); r.Metrics != nil && !inFlight {
+	// 没有未生效的计划（或本轮刚把计划推进到生效）：对账成功。
+	// 在途云端作业只要还没超过告警年龄就不影响成功：大批量升级可能连续跑十几分钟，期间一直有正常推进的作业；
+	// 最老的作业超龄说明卡住了，此时不再刷新成功时间，由 Monitor 的对账陈旧判定（默认 15 分钟）发现。
+	if r.Metrics != nil && !r.inFlightStuck() {
 		if still, openErr := r.Store.Open(ctx, r.SpaceID); openErr == nil && still == nil {
 			r.Metrics.ObserveAssignmentPending(r.SpaceID, false, time.Time{})
 			r.Metrics.ObserveAssignmentSuccess(r.SpaceID, r.now().Unix())
