@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 	"github.com/mooyang-code/moox/packages/clsreporter"
 	"github.com/stretchr/testify/require"
@@ -124,7 +125,15 @@ func TestReportedFieldsAreAllInTheCLSIndex(t *testing.T) {
 	req := Request{RequestID: "r", DatasetID: "ds", Frequency: "1m", BatchKind: domain.BatchKindRealtime}
 	cause := errors.New("boom")
 	pipeline.reportItemFailure(req, failureResult(domain.CollectionItem{SubjectID: "S", Symbol: "SYM"}, domain.ItemOutcomeNetworkError, "network_error", cause), "binance", 3, time.Second, time.Now(), time.Now(), cause)
-	pipeline.reportBatch(req, 1, 1, time.Second, time.Second)
+	closeAt := time.Date(2026, 10, 20, 6, 0, 0, 0, time.UTC)
+	timings := []itemTiming{{
+		Recorded: true, Subject: "S", Symbol: "SYM", Provider: "binance", Outcome: domain.ItemOutcomeSuccess,
+		Queue: 10 * time.Millisecond, Fetch: 1500 * time.Millisecond, StartedAt: closeAt.Add(time.Second), Attempts: 2,
+		HTTP: httpclient.TraceSnapshot{Requests: 2, NewConns: 2, DNSMs: 1, ConnectMs: 30, TLSMs: 60, TTFBMs: 800, LastStatus: 200, LastDomain: "api.binance.com", RemoteIP: "1.2.3.4:443"},
+	}}
+	pipeline.reportBatch(req, 1, 1, time.Second, time.Second, batchTimingFields(timings, closeAt.Add(time.Second), closeAt.Add(3*time.Second), closeAt))
+	pipeline.reportSlowItems(req, timings, closeAt)
+	pipeline.reportCommit(req, 25, 1, 120*time.Millisecond, closeAt.Add(4*time.Second), closeAt, errors.New("storage busy"))
 	indexed := map[string]bool{}
 	for _, field := range tencent.MarketFetchLogIndexFields {
 		indexed[field.Key] = true

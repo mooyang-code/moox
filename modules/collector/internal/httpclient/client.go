@@ -282,6 +282,13 @@ func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, dom
 	if len(query) > 0 {
 		fullURL += "?" + query.Encode()
 	}
+	// 调用方通过 WithTrace 挂了 Trace 时，记录这次请求的 DNS、建连、TLS 与首字节耗时。
+	status := 0
+	if trace := traceFrom(ctx); trace != nil {
+		var done func(int)
+		ctx, done = trace.begin(ctx, domain)
+		defer func() { done(status) }()
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %w", err)
@@ -294,6 +301,7 @@ func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, dom
 		return fmt.Errorf("请求 %s 失败: %w", domain, err)
 	}
 	defer resp.Body.Close()
+	status = resp.StatusCode
 	if c.ResponseObserver != nil {
 		c.ResponseObserver(domain, resp.StatusCode, resp.Header)
 	}
