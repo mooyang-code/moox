@@ -72,7 +72,10 @@ test-docs-architecture:
 test-greenfield-contract:
 	bash scripts/test/contract/test-greenfield-contract.sh
 
-test: test-go test-web
+# 托管运行器把 Go 工作区测试拆到并行的 verify-go 作业，这里用 SKIP_GO_TEST=1 跳过；本机和自托管运行器的 make verify 不设它，仍然全跑。
+TEST_GO := $(if $(SKIP_GO_TEST),,test-go)
+
+test: $(TEST_GO) test-web
 
 test-go:
 	./scripts/test/contract/test-go-workspace.sh
