@@ -43,15 +43,16 @@ type itemTiming struct {
 }
 
 // batchTimingFields 把整批取数项的阶段耗时汇总成批次摘要的附加字段。
-func batchTimingFields(items []itemTiming, batchStart, fetchEnd, closeAt time.Time) map[string]string {
-	fields := map[string]string{}
+func batchTimingFields(items []itemTiming, batchStart, fetchEnd, closeAt time.Time, standbyMS int) map[string]string {
+	// standby_ms 总是上报（0 表示这批没有启用备援），便于在同一时刻按 standby_ms 对比开与不开。
+	fields := map[string]string{"standby_ms": strconv.Itoa(standbyMS)}
 	if !closeAt.IsZero() {
 		fields["since_close_start_ms"] = strconv.FormatInt(batchStart.Sub(closeAt).Milliseconds(), 10)
 		fields["since_close_fetch_end_ms"] = strconv.FormatInt(fetchEnd.Sub(closeAt).Milliseconds(), 10)
 	}
 	var fetch, queue, connect, tlsMs, dns, ttfb, failMs []int64
 	fails := map[string]int{}
-	attempts, retried, requests, newConns, reusedConns := 0, 0, 0, 0, 0
+	attempts, retried, requests, newConns, reusedConns, standbyFired, standbyWon := 0, 0, 0, 0, 0, 0, 0
 	for _, item := range items {
 		if !item.Recorded {
 			continue
@@ -63,6 +64,8 @@ func batchTimingFields(items []itemTiming, batchStart, fetchEnd, closeAt time.Ti
 			retried++
 		}
 		requests += item.HTTP.Requests
+		standbyFired += item.HTTP.StandbyFired
+		standbyWon += item.HTTP.StandbyWon
 		newConns += item.HTTP.NewConns
 		reusedConns += item.HTTP.ReusedConns
 		dns = append(dns, item.HTTP.DNSMs)
@@ -109,6 +112,8 @@ func batchTimingFields(items []itemTiming, batchStart, fetchEnd, closeAt time.Ti
 		set("fail_ms_p50", percentile(failMs, 50))
 		set("fail_ms_max", percentile(failMs, 100))
 	}
+	set("standby_fired", int64(standbyFired))
+	set("standby_won", int64(standbyWon))
 	set("attempts_total", int64(attempts))
 	set("retried", int64(retried))
 	set("http_requests", int64(requests))

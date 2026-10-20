@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/model/market"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
@@ -66,16 +67,17 @@ func (c *KlineCollector) fetchExchangeKlines(ctx context.Context, params *source
 	}
 }
 
-// tryEndpoints 按端点顺序请求，前一个失败才换下一个；每个端点的单次尝试时间见 endpointAttemptContext。
+// tryEndpoints 按端点顺序请求，前一个失败才换下一个。上下文带备援延迟时（httpclient.WithStandbyDelay），
+// 某个端点的请求超过延迟还没有结果，就并发再发一个备援请求（有下一个端点用下一个，只有一个端点就再发一次同一个），先成功的为准；
+// 前一个端点在延迟之前就失败时仍是普通的顺序换端点，不发备援。
 func tryEndpoints(ctx context.Context, domains []string, call func(context.Context, string) ([]*exchange.Kline, error)) ([]*exchange.Kline, error) {
+	delay := httpclient.StandbyDelayFrom(ctx)
 	var lastErr error
-	for index, domain := range domains {
-		if err := defaultWeightGovernor.Admit(ctx, domain); err != nil {
+	for index := 0; index < len(domains); index++ {
+		if err := defaultWeightGovernor.Admit(ctx, domains[index]); err != nil {
 			return nil, err
 		}
-		attemptCtx, cancel := endpointAttemptContext(ctx, len(domains)-index)
-		klines, err := call(attemptCtx, domain)
-		cancel()
+		klines, consumed, err := attemptEndpoint(ctx, domains, index, delay, call)
 		if err == nil {
 			return klines, nil
 		}
@@ -83,8 +85,77 @@ func tryEndpoints(ctx context.Context, domains []string, call func(context.Conte
 		if ctx.Err() != nil {
 			break
 		}
+		index += consumed
 	}
 	return nil, lastErr
+}
+
+type endpointResult struct {
+	klines  []*exchange.Kline
+	err     error
+	standby bool
+}
+
+// attemptEndpoint 请求 domains[index]；consumed 是备援占用的下一个端点个数（0 或 1），调用方据此跳过它。
+func attemptEndpoint(ctx context.Context, domains []string, index int, delay time.Duration, call func(context.Context, string) ([]*exchange.Kline, error)) (klines []*exchange.Kline, consumed int, err error) {
+	primaryCtx, cancelPrimary := endpointAttemptContext(ctx, len(domains)-index)
+	defer cancelPrimary()
+	if delay <= 0 {
+		klines, err = call(primaryCtx, domains[index])
+		return klines, 0, err
+	}
+	results := make(chan endpointResult, 2)
+	go func() {
+		klines, err := call(primaryCtx, domains[index])
+		results <- endpointResult{klines: klines, err: err}
+	}()
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	trace := httpclient.TraceFromContext(ctx)
+	pending, standbySent := 1, false
+	var lastErr error
+	for pending > 0 {
+		select {
+		case result := <-results:
+			pending--
+			if result.err == nil {
+				if result.standby {
+					trace.NoteStandby(false, true)
+				}
+				return result.klines, consumed, nil
+			}
+			lastErr = result.err
+			if !standbySent {
+				// 第一次请求在备援延迟之前就失败了：交给普通的顺序换端点。
+				return nil, 0, lastErr
+			}
+		case <-timer.C:
+			if standbySent {
+				continue
+			}
+			standbySent = true
+			standbyIndex := index
+			if index+1 < len(domains) {
+				standbyIndex = index + 1
+			}
+			if err := defaultWeightGovernor.Admit(ctx, domains[standbyIndex]); err != nil {
+				// 备援请求不值得顶着频控发出：按没有备援继续等第一次请求。
+				continue
+			}
+			consumed = standbyIndex - index
+			standbyCtx, cancelStandby := endpointAttemptContext(ctx, len(domains)-standbyIndex)
+			defer cancelStandby()
+			trace.NoteStandby(true, false)
+			pending++
+			go func() {
+				klines, err := call(standbyCtx, domains[standbyIndex])
+				results <- endpointResult{klines: klines, err: err, standby: true}
+			}()
+		case <-ctx.Done():
+			return nil, consumed, ctx.Err()
+		}
+	}
+	return nil, consumed, lastErr
 }
 
 func endpointAttemptContext(parent context.Context, remainingEndpoints int) (context.Context, context.CancelFunc) {

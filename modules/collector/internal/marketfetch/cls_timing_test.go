@@ -3,6 +3,7 @@ package marketfetch
 import (
 	"context"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,7 +29,8 @@ func TestBatchTimingFieldsSummarizeStagesAndRetries(t *testing.T) {
 		{Recorded: true, Fetch: 4 * time.Second, Queue: 50 * time.Millisecond, Attempts: 2, HTTP: httpclient.TraceSnapshot{Requests: 2, NewConns: 2, DNSMs: 5, ConnectMs: 400, TLSMs: 700, TTFBMs: 2500}},
 		{}, // 没走到取数的项不计入。
 	}
-	fields := batchTimingFields(items, closeAt.Add(500*time.Millisecond), closeAt.Add(4600*time.Millisecond), closeAt)
+	fields := batchTimingFields(items, closeAt.Add(500*time.Millisecond), closeAt.Add(4600*time.Millisecond), closeAt, 0)
+	require.Equal(t, "0", fields["standby_ms"], "standby_ms 总是上报，0 表示这批没有启用备援")
 	require.Equal(t, "500", fields["since_close_start_ms"])
 	require.Equal(t, "4600", fields["since_close_fetch_end_ms"])
 	require.Equal(t, "4000", fields["item_max_ms"])
@@ -51,7 +53,7 @@ func TestBatchTimingFieldsSummarizeStagesAndRetries(t *testing.T) {
 		{Domain: "api.binance.com", Phase: "connect", Kind: "dial", Ms: 800},
 		{Domain: "data-api.binance.vision", Phase: "done", Status: 200, Ms: 300},
 	}
-	fields = batchTimingFields(items, closeAt, closeAt, closeAt)
+	fields = batchTimingFields(items, closeAt, closeAt, closeAt, 0)
 	require.Equal(t, "2", fields["fail_total"])
 	require.Equal(t, "1", fields["fail_timeout"])
 	require.Equal(t, "1", fields["fail_dial"])
@@ -59,6 +61,13 @@ func TestBatchTimingFieldsSummarizeStagesAndRetries(t *testing.T) {
 	require.Equal(t, "1", fields["fail_in_connect_phase"])
 	require.Equal(t, "1", fields["fail_on_reused_conn"])
 	require.Equal(t, "1200", fields["fail_ms_max"])
+
+	// 备援：上报延迟配置与触发、获胜次数。
+	items[1].HTTP.StandbyFired, items[1].HTTP.StandbyWon = 1, 1
+	fields = batchTimingFields(items, closeAt, closeAt, closeAt, 800)
+	require.Equal(t, "800", fields["standby_ms"])
+	require.Equal(t, "1", fields["standby_fired"])
+	require.Equal(t, "1", fields["standby_won"])
 }
 
 func TestReportSlowItemsPicksSlowestAndRetriedWithinTheCap(t *testing.T) {
@@ -196,4 +205,46 @@ func TestSchedProbeAndRuntimeFields(t *testing.T) {
 	// 非定时触发的请求没有这几项。
 	require.NotContains(t, runtimeFields(Request{}, started), "timer_late_ms")
 	require.NotContains(t, runtimeFields(Request{}, started), "entry_to_start_ms")
+}
+
+func TestKlinePipelinePassesStandbyDelayToProviderRequests(t *testing.T) {
+	now := time.Date(2026, 8, 28, 7, 5, 0, 0, time.UTC)
+	bar := marketdata.NormalizedKline{
+		SubjectID: "600000.XSHG", ProviderID: "sina", SourceID: "stockcn_minute_http",
+		ProviderSymbol: "sh600000", Frequency: "1m",
+		BarStart: now.Add(-6 * time.Minute), BarEnd: now.Add(-5 * time.Minute),
+		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050,
+		ProviderTimestamp: now.Add(-5 * time.Minute), FetchedAt: now, RequestID: "standby",
+	}
+	var got []time.Duration
+	var mu sync.Mutex
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(pipelineProvider{id: "sina", sourceID: "stockcn_minute_http", rows: []marketdata.NormalizedKline{bar},
+		ctxHook: func(ctx context.Context) {
+			mu.Lock()
+			got = append(got, httpclient.StandbyDelayFrom(ctx))
+			mu.Unlock()
+		}}))
+	router, err := marketdata.NewRouter(registry, 2, pipelineClock{now}, nil)
+	require.NoError(t, err)
+	pipeline := &KlinePipeline{
+		Router: router, Storage: &pipelineStorage{}, CandidateChain: []string{"sina"},
+		SourceID: "stockcn_minute_http", MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID,
+		DatasetID: StockCNDatasetID, Now: func() time.Time { return now },
+	}
+	run := func(standbyMS int) {
+		_, err := pipeline.Execute(context.Background(), Request{
+			BatchID: "standby", BatchKind: domain.BatchKindRealtime, StandbyMS: standbyMS,
+			SpaceID: StockCNSpaceID, DatasetID: StockCNDatasetID, Frequency: "1m",
+			Provider: "sina", SourceID: "stockcn_minute_http", MarketType: "equity", RequestID: "standby",
+			Items: []domain.CollectionItem{{
+				SubjectID: bar.SubjectID, Symbol: bar.ProviderSymbol, Provider: "sina", SourceID: "stockcn_minute_http",
+				MarketType: "equity", DataType: "kline", DatasetID: StockCNDatasetID, Frequency: "1m", BarLimit: 1,
+			}},
+		})
+		require.NoError(t, err)
+	}
+	run(0)
+	run(800)
+	require.Equal(t, []time.Duration{0, 800 * time.Millisecond}, got)
 }

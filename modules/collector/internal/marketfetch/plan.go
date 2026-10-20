@@ -55,7 +55,16 @@ type PlanFetch struct {
 	// StaggerBaseMS 是错峰的固定起点；StaggerMS 是在起点之后按函数名哈希增加的确定性延迟上限（毫秒）。
 	StaggerBaseMS int `json:"stagger_base_ms,omitempty"`
 	StaggerMS     int `json:"stagger_ms,omitempty"`
+	// StandbyMS 大于 0 时启用备援请求（行情请求超过这么多毫秒还没有结果，就并发再发一个备援请求，先成功的为准），0 表示关闭。
+	// StandbyPercent 是启用备援的函数占比（1～100，0 等同 100），按函数名末尾序号分组，便于同一时刻对比开与不开；
+	// StandbyHourOnly 为真时只在整点那一分钟触发的调用里启用。
+	StandbyMS       int  `json:"standby_ms,omitempty"`
+	StandbyPercent  int  `json:"standby_percent,omitempty"`
+	StandbyHourOnly bool `json:"standby_hour_only,omitempty"`
 }
+
+// MinStandbyMS 是备援延迟的下限：正常请求的首字节在几十到几百毫秒，延迟太短会让几乎所有请求都发出备援。
+const MinStandbyMS = 200
 
 // PlanDataset 是一个结果数据集：每个数据集 1～2 份（生效起点、hash、总数、本函数标的与序号）。
 type PlanDataset struct {
@@ -149,6 +158,9 @@ func (p *Plan) Validate() error {
 	}
 	if f.RPS < 0 || f.Burst < 0 || f.FeedConcurrency < 0 || f.RequestTimeoutMS < 0 || f.StorageTimeoutMS < 0 || f.StaggerMS < 0 || f.StaggerMS > 60000 || f.StaggerBaseMS < 0 || f.StaggerBaseMS > 60000 {
 		return errors.New("plan fetch limits are out of range")
+	}
+	if f.StandbyMS != 0 && (f.StandbyMS < MinStandbyMS || f.StandbyMS > MaxStandbyMS) || f.StandbyPercent < 0 || f.StandbyPercent > 100 {
+		return fmt.Errorf("plan fetch.standby_ms must be 0 or between %d and %d, standby_percent between 0 and 100", MinStandbyMS, MaxStandbyMS)
 	}
 	if len(p.Datasets) == 0 {
 		return errors.New("plan requires at least one dataset")
@@ -371,4 +383,38 @@ func (p *Plan) StaggerDelay(functionName string) time.Duration {
 	}
 	sum := sha256.Sum256([]byte(functionName))
 	return base + time.Duration(int(sum[0])<<8|int(sum[1]))%time.Duration(p.Fetch.StaggerMS+1)*time.Millisecond
+}
+
+// StandbyFor 返回这次调用使用的备援延迟（毫秒），0 表示不启用。函数按名字末尾的序号分组：序号个位 ×10 小于启用占比的函数启用，
+// 占比 50 时序号个位 0～4 启用、5～9 不启用，同一整点就能对比开与不开；名字不以数字结尾时按名字哈希分组。
+func (p *Plan) StandbyFor(functionName string, scheduled time.Time) int {
+	if p == nil || p.Fetch.StandbyMS <= 0 {
+		return 0
+	}
+	if p.Fetch.StandbyHourOnly && scheduled.UTC().Minute() != 0 {
+		return 0
+	}
+	percent := p.Fetch.StandbyPercent
+	if percent <= 0 || percent >= 100 {
+		return p.Fetch.StandbyMS
+	}
+	if standbyBucket(functionName)*10 < percent {
+		return p.Fetch.StandbyMS
+	}
+	return 0
+}
+
+// standbyBucket 返回函数所在分组 0～9：优先取名字末尾序号的个位，否则取名字哈希。
+func standbyBucket(functionName string) int {
+	name := strings.TrimSpace(functionName)
+	end := len(name)
+	start := end
+	for start > 0 && name[start-1] >= '0' && name[start-1] <= '9' {
+		start--
+	}
+	if start < end {
+		return int(name[end-1] - '0')
+	}
+	sum := sha256.Sum256([]byte(name))
+	return int(sum[2]) % 10
 }

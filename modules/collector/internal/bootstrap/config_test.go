@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -458,6 +459,34 @@ func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 	require.Equal(t, 4, got.Concurrency)
 	require.Equal(t, defaults.Fetch.RPS, got.RPS)
 	require.Equal(t, defaults.Fetch.RequestTimeoutMS, got.RequestTimeoutMS)
+}
+
+func TestStandbyFetchOptionsAreOffByDefaultAndInheritedFromTheGlobalFetch(t *testing.T) {
+	defaults := defaultSCFPlan()
+	require.Zero(t, defaults.fetchFor("crypto").StandbyMS, "默认不备援")
+
+	plan := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"crypto": {Fetch: &SCFPlanFetchConfig{StandbyMS: 800, StandbyPercent: 50, StandbyHourOnly: true}}}}
+	plan.mergeSpaceDefaults(defaults.Spaces)
+	fetch := plan.fetchFor("crypto")
+	require.Equal(t, 800, fetch.StandbyMS)
+	require.Equal(t, 50, fetch.StandbyPercent)
+	require.True(t, fetch.StandbyHourOnly)
+	require.Equal(t, defaults.Fetch.Concurrency, fetch.Concurrency, "只写备援项时其余拉取参数沿用全局默认")
+	require.Zero(t, plan.fetchFor("stockcn").StandbyMS, "其他空间不受影响")
+}
+
+// 线上配置只写备援三项时，其余拉取参数沿用内置默认值（解码落在默认配置上，严格解析也认这三个键）。
+func TestScfPlanFetchYAMLWithOnlyStandbyKeepsDefaults(t *testing.T) {
+	cfg := Default()
+	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    standby_ms: 800\n    standby_percent: 50\n    standby_hour_only: true\n"))
+	decoder.KnownFields(true)
+	require.NoError(t, decoder.Decode(&cfg))
+	fetch := cfg.SCFPlan.fetchFor("crypto")
+	require.Equal(t, 800, fetch.StandbyMS)
+	require.Equal(t, 50, fetch.StandbyPercent)
+	require.True(t, fetch.StandbyHourOnly)
+	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
+	require.Equal(t, defaultSCFPlan().Fetch.StaggerMS, fetch.StaggerMS)
 }
 
 // CLI 渲染测试生成的真实产物（modules/cli/.../testdata/scf_plan_rendered.yaml）必须能被 Collector 真实加载并通过校验。

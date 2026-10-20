@@ -39,6 +39,8 @@ type TraceSnapshot struct {
 	LastDomain, RemoteIP string
 	// Attempts 是逐次请求的记录（最多 maxTraceAttempts 条，含成功的），用来看失败的那一次停在哪个阶段、为什么失败。
 	Attempts []TraceAttempt
+	// StandbyFired 是发出备援请求的次数，StandbyWon 是备援请求先成功的次数。
+	StandbyFired, StandbyWon int
 }
 
 // maxTraceAttempts 限制每个取数项保留的逐次记录条数。
@@ -355,4 +357,22 @@ func AttemptsText(attempts []TraceAttempt) string {
 		parts = append(parts, text+"|"+strings.Join(extras, ","))
 	}
 	return strings.Join(parts, ";")
+}
+
+// TraceFromContext 返回上下文里的 Trace，没有则为 nil；备援请求用它登记触发与获胜。
+func TraceFromContext(ctx context.Context) *Trace { return traceFrom(ctx) }
+
+// NoteStandby 登记一次备援：fired 表示发出了备援请求，won 表示备援请求先成功。nil 接收者安全。
+func (t *Trace) NoteStandby(fired, won bool) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if fired {
+		t.snap.StandbyFired++
+	}
+	if won {
+		t.snap.StandbyWon++
+	}
+	t.mu.Unlock()
 }
