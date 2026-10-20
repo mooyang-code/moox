@@ -154,6 +154,9 @@ systemctl --user restart moox-factor-engine.service
 
 1. `web/` 下 `NODE_OPTIONS=--experimental-require-module pnpm run build:prod`。
 2. `web-host/` 下 `make statik && make build-linux`（PATH 里要有 `.go-version` 固定版本的 Go toolchain），产物 `bin/moox-web-host`。
+   **国内网络要先设 `GOPROXY=https://mirrors.tencent.com/go,direct`**：`make statik` 要 `go run` 一个外部工具，取不到 `proxy.golang.org` 会失败；
+   分两条命令执行时，失败后 `make build-linux` 仍会成功，打出的是内嵌**旧前端**的二进制。构建后核对 `git status` 里 `web-host/internal/statik/statik.go`
+   已被改写，装完再用线上取到的新分包文案确认（见下一步之后的“线上验证”）。
 3. 构建会改写 `web-host/internal/statik/statik.go` 与 `web/src/components.d.ts`：发布后 `git checkout --` 还原，**不要提交**。
 4. 用 `native-release.sh install --host control --unit prod --file web-host/bin/moox-web-host --restart web-host` 装。
 5. 线上验证：curl 懒加载分包检索新文案；页面需登录，由用户自己在浏览器验证。
