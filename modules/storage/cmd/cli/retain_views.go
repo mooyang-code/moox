@@ -118,7 +118,8 @@ func ensureStorageViewStopped(packageRoot string) error {
 		return fmt.Errorf("storage-view status is indeterminate; refusing retain-views: %w", err)
 	}
 	switch state {
-	case "stopped":
+	case "stopped", "paused":
+		// paused 是 moox-runtime pause 之后的状态：进程已停，主机守护也不会拉起。
 		return nil
 	case "running":
 		return errors.New("storage-view must be stopped before retain-views")

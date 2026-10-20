@@ -110,3 +110,16 @@ func TestRetainViewsStillKeepsOnlyTheListedViews(t *testing.T) {
 	require.Len(t, summary.RetiredIndexes, 2)
 	require.Equal(t, 1, countRows(t, path, `SELECT COUNT(*) FROM t_views`))
 }
+
+func TestDeleteViewAcceptsPausedStorageView(t *testing.T) {
+	for _, state := range []string{"stopped", "paused"} {
+		root := t.TempDir()
+		script := "#!/bin/sh\necho '{\"components\":[{\"id\":\"storage-view\",\"state\":\"" + state + "\"}]}'\n"
+		require.NoError(t, os.WriteFile(filepath.Join(root, "status.sh"), []byte(script), 0o755))
+		require.NoError(t, ensureStorageViewStopped(root), state)
+	}
+	root := t.TempDir()
+	script := "#!/bin/sh\necho '{\"components\":[{\"id\":\"storage-view\",\"state\":\"starting\"}]}'\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "status.sh"), []byte(script), 0o755))
+	require.ErrorContains(t, ensureStorageViewStopped(root), "refusing")
+}
