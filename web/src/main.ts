@@ -1,4 +1,5 @@
 import { installStaleSpaceToastFilter } from "@/api/admin/stale-space";
+import { installMessageDedupe } from "@/utils/message-dedupe";
 import { createApp } from "vue";
 import "@/style.css";
 import App from "@/App.vue";
@@ -38,6 +39,7 @@ async function initVChartTheme() {
 router.isReady().then(initVChartTheme);
 
 installStaleSpaceToastFilter();
+installMessageDedupe();
 const app = createApp(App);
 
 // 全局错误处理
