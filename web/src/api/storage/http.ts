@@ -6,6 +6,7 @@ import { getStorageAuthInfo } from "./auth";
 import type { RetInfo } from "./types";
 import { installSpaceAwareSignedClient, readPersistedAuth } from "../admin/signed-client";
 import { StaleSpaceRequestError } from "../admin/stale-space";
+import { explainTransportError } from "../network-error";
 import { onSpaceGenerationChange, readSelectedSpaceId, selectedSpaceGeneration } from "../admin/space-header";
 
 const storageClient = axios.create({
@@ -157,7 +158,7 @@ storageClient.interceptors.response.use(
   },
   error => {
     if (error instanceof StaleSpaceRequestError) return Promise.reject(error);
-    Message.error(error?.message || "Storage 请求失败");
+    Message.error(explainTransportError(error, "Storage 请求失败"));
     return Promise.reject(error);
   }
 );

@@ -4,6 +4,7 @@ import { gatewayOrigin } from "@/api/gateway";
 import { isRetInfoSuccess } from "../ret-info";
 import type { OperatorAction, Order, RetInfo } from "./types";
 import { installSpaceAwareSignedClient } from "../admin/signed-client";
+import { explainTransportError } from "../network-error";
 
 export const tradeServiceMap = {
   console: "trade"
@@ -52,7 +53,7 @@ tradeClient.interceptors.response.use(
     return rsp;
   },
   error => {
-    Message.error(error?.message || "Trade 请求失败");
+    Message.error(explainTransportError(error, "Trade 请求失败"));
     return Promise.reject(error);
   }
 );
