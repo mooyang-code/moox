@@ -6,7 +6,7 @@
 
 .EXAMPLE
   .\scripts\deploy\deploy-factor-engine.ps1 -AccessAddress storage.example:11004 -AccessId access@storage `
-    -AccessKeyId assigned-key -EventBusUrl tls://106.53.107.122:4222 -Binary .\bin\windows-amd64\moox-factor-engine.exe
+    -AccessKeyId assigned-key -EventBusUrl tls://eventbus.example.com:4222 -Binary .\bin\windows-amd64\moox-factor-engine.exe
 
   密钥目录（默认 <Dir>\secrets）需要：access-factor-engine.key、storage-primary-auth.secret、factor-eventbus.yaml（及其 ca 文件）。
   脚本会把密钥目录的权限收紧为只允许当前用户与 SYSTEM（服务以 LocalSystem 运行）。

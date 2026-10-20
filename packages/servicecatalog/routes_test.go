@@ -12,7 +12,7 @@ import (
 // migrated. The old service IDs and duplicate compute gateway are not inputs.
 func productionTopology() Topology {
 	t := Topology{ControlHostID: "control", Hosts: []Host{
-		{ID: "control", Address: "106.53.107.122", Status: Enabled},
+		{ID: "control", Address: "203.0.113.10", Status: Enabled},
 		{ID: "storage", Address: "146.56.196.204", PrivateAddress: "10.206.0.5", Region: "ap-nanjing", Status: Enabled},
 		{ID: "compute-1", Address: "43.132.204.177", PrivateAddress: "172.19.32.13", Region: "ap-hongkong", Status: Enabled},
 	}}
@@ -110,9 +110,9 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":   {168, []string{"access", "admin", "cloudnode", "collector", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "69e92d99ef3b76809599924e652dbbf5df5f067de0705aa91327407577ae13de"},
-		"storage":   {95, []string{"access", "archive-mgr", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "831ac2ac0ed1db7003f84b1ee3c9c1e9b4868ccee88114e33193a8af28fe900c"},
-		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "cf0c78e6614510d464b9500c4459f5a0fa8392684a0347f6b02346ab49ea4c91"},
+		"control":   {168, []string{"access", "admin", "cloudnode", "collector", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "b3851d3803c0d0af0c499fb21f4bedd366a1e346e7ea20151cd620be02f385f0"},
+		"storage":   {95, []string{"access", "archive-mgr", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "cbfc21292383eabe5723411b92f6443fb85d87774664cb2b3dc6fb0e3badbdae"},
+		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "40337493f782f4b135a4f3f7ef66dacbc105339638c397f2d7dd9faf445f5ab1"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)

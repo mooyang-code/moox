@@ -48,7 +48,7 @@ func readZipFile(t *testing.T, file *zip.File) []byte {
 
 func TestCABundleContainsCertGuideAndInstallers(t *testing.T) {
 	crt, cert := testRootPEM(t)
-	archive, err := buildCABundle(crt, "106.53.107.122:9527")
+	archive, err := buildCABundle(crt, "203.0.113.10:9527")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestCABundleContainsCertGuideAndInstallers(t *testing.T) {
 	}
 	guide := string(readZipFile(t, files["AGENT-INSTALL.md"]))
 	for _, text := range []string{
-		want, "https://106.53.107.122:9527/", "install.sh --ca-file", "install.ps1",
+		want, "https://203.0.113.10:9527/", "install.sh --ca-file", "install.ps1",
 		"不要索取、记录或输入用户的密码", "curl -k",
 		"不能证明包没被篡改", "再自己计算指纹", "不要不加检查地运行包里的",
 		"迁移到新机器", "setup trust-host", "setup trust-browser", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",

@@ -33,7 +33,7 @@ Options:
   --access-address <addr>  Fixed native Access host:port for both FactorMgr and Storage.
   --access-id <id>         Access identity, e.g. access@storage.
   --access-key-id <id>     KeyID assigned by Admin keys export --caller factor-engine.
-  --eventbus-url <url>      EventBus URL, e.g. tls://106.53.107.122:4222.
+  --eventbus-url <url>      EventBus URL, e.g. tls://eventbus.example.com:4222.
   --skip-build              Reuse <dir>/bin/moox-factor-engine.
   --no-start                Install files only; do not (re)start the service.
 
