@@ -22,7 +22,11 @@ var MarketFetchLogIndexFields = []CLSIndexField{
 	{Key: "conn_new", Numeric: true}, {Key: "conn_reused", Numeric: true}, {Key: "http_status", Numeric: true},
 	{Key: "rows", Numeric: true}, {Key: "datasets", Numeric: true}, {Key: "commit_ms", Numeric: true},
 	// 失败的 HTTP 尝试：批次里的次数与分布、偏慢单项的逐次记录。
-	{Key: "attempt_trace"}, {Key: "hedge_ms", Numeric: true}, {Key: "hedge_fired", Numeric: true}, {Key: "hedge_won", Numeric: true},
+	{Key: "attempt_trace"},
+	// 函数进程与触发：定时事件迟到、错峰等待、入口到开始取数、进程存活时间、第几次调用、CPU 数、取数期间的最大调度迟滞与协程数。
+	{Key: "timer_late_ms", Numeric: true}, {Key: "stagger_ms", Numeric: true}, {Key: "entry_to_start_ms", Numeric: true},
+	{Key: "proc_age_ms", Numeric: true}, {Key: "invocation_seq", Numeric: true}, {Key: "num_cpu", Numeric: true},
+	{Key: "sched_lag_max_ms", Numeric: true}, {Key: "goroutines_max", Numeric: true},
 	{Key: "fail_total", Numeric: true}, {Key: "fail_timeout", Numeric: true}, {Key: "fail_reset", Numeric: true},
 	{Key: "fail_tls", Numeric: true}, {Key: "fail_dial", Numeric: true}, {Key: "fail_status", Numeric: true}, {Key: "fail_other", Numeric: true},
 	{Key: "fail_in_connect_phase", Numeric: true}, {Key: "fail_in_wait_response", Numeric: true}, {Key: "fail_in_io_phase", Numeric: true},

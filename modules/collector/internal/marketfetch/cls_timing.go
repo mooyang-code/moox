@@ -22,6 +22,8 @@ const (
 	slowItemThreshold = time.Second
 	// maxSlowItemReports 限制每个批次上报的偏慢单项条数，取最慢的几条。
 	maxSlowItemReports = 8
+	// clsTraceLimit 是逐次请求记录（attempt_trace）的长度上限；每次请求带阶段耗时与响应头线索，比错误全文长。
+	clsTraceLimit = 1600
 )
 
 // itemTiming 是一个取数项的阶段耗时。
@@ -41,16 +43,15 @@ type itemTiming struct {
 }
 
 // batchTimingFields 把整批取数项的阶段耗时汇总成批次摘要的附加字段。
-func batchTimingFields(items []itemTiming, batchStart, fetchEnd, closeAt time.Time, hedgeMS int) map[string]string {
-	// hedge_ms 总是上报（0 表示这批没有对冲），便于在同一时刻按 hedge_ms 对比开与不开。
-	fields := map[string]string{"hedge_ms": strconv.Itoa(hedgeMS)}
+func batchTimingFields(items []itemTiming, batchStart, fetchEnd, closeAt time.Time) map[string]string {
+	fields := map[string]string{}
 	if !closeAt.IsZero() {
 		fields["since_close_start_ms"] = strconv.FormatInt(batchStart.Sub(closeAt).Milliseconds(), 10)
 		fields["since_close_fetch_end_ms"] = strconv.FormatInt(fetchEnd.Sub(closeAt).Milliseconds(), 10)
 	}
 	var fetch, queue, connect, tlsMs, dns, ttfb, failMs []int64
 	fails := map[string]int{}
-	attempts, retried, requests, newConns, reusedConns, hedgeFired, hedgeWon := 0, 0, 0, 0, 0, 0, 0
+	attempts, retried, requests, newConns, reusedConns := 0, 0, 0, 0, 0
 	for _, item := range items {
 		if !item.Recorded {
 			continue
@@ -62,8 +63,6 @@ func batchTimingFields(items []itemTiming, batchStart, fetchEnd, closeAt time.Ti
 			retried++
 		}
 		requests += item.HTTP.Requests
-		hedgeFired += item.HTTP.HedgeFired
-		hedgeWon += item.HTTP.HedgeWon
 		newConns += item.HTTP.NewConns
 		reusedConns += item.HTTP.ReusedConns
 		dns = append(dns, item.HTTP.DNSMs)
@@ -110,8 +109,6 @@ func batchTimingFields(items []itemTiming, batchStart, fetchEnd, closeAt time.Ti
 		set("fail_ms_p50", percentile(failMs, 50))
 		set("fail_ms_max", percentile(failMs, 100))
 	}
-	set("hedge_fired", int64(hedgeFired))
-	set("hedge_won", int64(hedgeWon))
 	set("attempts_total", int64(attempts))
 	set("retried", int64(retried))
 	set("http_requests", int64(requests))
@@ -194,7 +191,7 @@ func (p *KlinePipeline) reportSlowItems(req Request, items []itemTiming, closeAt
 		}
 		// 逐次请求的结果：失败的那一次停在哪个阶段、为什么失败、复用连接是否已空闲很久。
 		if trace := httpclient.AttemptsText(item.HTTP.Attempts); trace != "" {
-			fields["attempt_trace"] = truncateString(trace, clsErrorLimit)
+			fields["attempt_trace"] = truncateString(trace, clsTraceLimit)
 		}
 		if !closeAt.IsZero() {
 			fields["since_close_start_ms"] = strconv.FormatInt(item.StartedAt.Sub(closeAt).Milliseconds(), 10)

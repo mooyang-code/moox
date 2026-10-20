@@ -284,10 +284,10 @@ func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, dom
 	}
 	// 调用方通过 WithTrace 挂了 Trace 时，记录这次请求的 DNS、建连、TLS 与首字节耗时。
 	status := 0
+	var rt *requestTrace
 	if trace := traceFrom(ctx); trace != nil {
-		var done func(int, error)
-		ctx, done = trace.begin(ctx, domain)
-		defer func() { done(status, retErr) }()
+		ctx, rt = trace.begin(ctx, domain)
+		defer func() { rt.done(status, retErr) }()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {
@@ -302,10 +302,15 @@ func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, dom
 	}
 	defer resp.Body.Close()
 	status = resp.StatusCode
+	rt.response(resp.Header)
 	if c.ResponseObserver != nil {
 		c.ResponseObserver(domain, resp.StatusCode, resp.Header)
 	}
 	if resp.StatusCode != http.StatusOK {
+		if rt != nil {
+			hint, _ := io.ReadAll(io.LimitReader(resp.Body, 100))
+			rt.body(hint)
+		}
 		log.WarnContextf(ctx, "collector_http_failed domain=%s status=%d duration_ms=%d", domain, resp.StatusCode, time.Since(started).Milliseconds())
 		return &StatusError{StatusCode: resp.StatusCode, RetryAfter: retryAfterOf(resp.Header)}
 	}

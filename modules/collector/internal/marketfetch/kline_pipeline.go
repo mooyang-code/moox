@@ -136,6 +136,8 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	var rowsMu sync.Mutex
 	// 阶段耗时：每个取数项只写自己下标的一格，不需要加锁；收盘时刻用来换算相对收盘的偏移（周期提交请求才有）。
 	timings := make([]itemTiming, len(req.Items))
+	invocationSeq.Add(1)
+	probe := startSchedProbe()
 	closeAt := periodCloseTime(req, frequency)
 	for index, item := range req.Items {
 		index, item := index, item
@@ -220,7 +222,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 			fetchStarted := time.Now()
 			trace := &httpclient.Trace{}
-			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithHedgeDelay(httpclient.WithTrace(ctx, trace), time.Duration(req.HedgeMS)*time.Millisecond), routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
+			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithTrace(ctx, trace), routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
 			timings[index] = itemTiming{
 				Recorded: true, Subject: item.SubjectID, Symbol: providerSymbol, Provider: selectedProvider,
 				Queue: fetchStarted.Sub(queueStarted), Fetch: time.Since(fetchStarted), StartedAt: fetchStarted,
@@ -340,6 +342,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 		}()
 	}
 	wg.Wait()
+	probeFields := probe.finish()
 	if deadline, ok := ctx.Deadline(); ok {
 		failed := 0
 		for _, result := range results {
@@ -348,7 +351,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 		}
 		log.WarnContextf(ctx, "market_fetch_pipeline_fetched frequency=%s items=%d failed=%d fetch_ms=%d window_left_ms=%d", req.Frequency, len(req.Items), failed, time.Since(started).Milliseconds(), time.Until(deadline).Milliseconds())
-		p.reportBatch(req, len(req.Items), failed, time.Since(started), time.Until(deadline), batchTimingFields(timings, started, time.Now(), closeAt, req.HedgeMS))
+		p.reportBatch(req, len(req.Items), failed, time.Since(started), time.Until(deadline), batchTimingFields(timings, started, time.Now(), closeAt), probeFields, runtimeFields(req, started))
 		p.reportSlowItems(req, timings, closeAt)
 	}
 	sort.Slice(rows, func(i, j int) bool {

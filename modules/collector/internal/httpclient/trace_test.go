@@ -119,3 +119,47 @@ func TestErrorKindClassification(t *testing.T) {
 	require.Equal(t, "decode", errorKind(errors.New("JSON 解析失败"), 200))
 	require.Equal(t, "other", errorKind(errors.New("boom"), 0))
 }
+
+func TestTraceRecordsResponseHintsAndBodyOfNon200(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Amz-Cf-Pop", "NRT57-P1")
+		w.Header().Set("X-Cache", "Miss from cloudfront")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("{\"msg\":\"queued\"}\n\x01"))
+	}))
+	defer server.Close()
+	base := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	client := NewHTTPClient(base)
+	trace := &Trace{}
+	require.Error(t, client.Get(WithTrace(context.Background(), trace), strings.TrimPrefix(server.URL, "https://"), "/", nil, nil))
+
+	attempts := trace.Snapshot().Attempts
+	require.Len(t, attempts, 1)
+	a := attempts[0]
+	require.Equal(t, "status_202", a.Kind)
+	require.Equal(t, "NRT57-P1", a.Pop)
+	require.Equal(t, "Miss from cloudfront", a.Cache)
+	require.Contains(t, a.BodyHint, "queued")
+	require.NotContains(t, a.BodyHint, "\n", "不可打印字符被替换")
+	require.False(t, a.StartedAt.IsZero())
+	require.GreaterOrEqual(t, a.ConnectMs+a.TLSMs, int64(0))
+	require.GreaterOrEqual(t, a.WroteMs, int64(0))
+	require.GreaterOrEqual(t, a.TTFBMs, int64(0))
+	text := AttemptsText(attempts)
+	require.Contains(t, text, "status_202")
+	require.Contains(t, text, "pop=NRT57-P1")
+	require.Contains(t, text, "cache=Miss from cloudfront")
+	require.Contains(t, text, "body=")
+	require.Contains(t, text, "skew=")
+
+	// 没收到首字节的失败：f=-1。
+	block := make(chan struct{})
+	slow := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-block }))
+	defer slow.Close()
+	defer close(block)
+	short := NewHTTPClient(&http.Client{Timeout: 150 * time.Millisecond, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}})
+	trace = &Trace{}
+	require.Error(t, short.Get(WithTrace(context.Background(), trace), strings.TrimPrefix(slow.URL, "https://"), "/", nil, nil))
+	require.Equal(t, int64(-1), trace.Snapshot().Attempts[0].TTFBMs)
+	require.Contains(t, AttemptsText(trace.Snapshot().Attempts), "f=-1")
+}

@@ -18,8 +18,6 @@ import (
 const (
 	DefaultConcurrency = 5
 	MaxConcurrency     = 64
-	// MaxHedgeMS 是对冲延迟的上限；下限由采集计划校验（太短会让几乎所有请求都被对冲）。
-	MaxHedgeMS = 5000
 	// MaxRealtimeItems bounds the work accepted by one short-lived SCF. The
 	// assignment planner keeps each non-stock function at or below this limit.
 	MaxRealtimeItems = 40
@@ -61,10 +59,13 @@ type Request struct {
 	RequirePeriodCommit bool             `json:"require_period_commit,omitempty"`
 	RunID               string           `json:"-"`
 	Concurrency         int              `json:"concurrency,omitempty"`
-	// HedgeMS 大于 0 时启用对冲请求：行情请求超过这么多毫秒还没有结果，就并发再发一个，先成功的为准（采集计划控制，默认关闭）。
-	HedgeMS   int                              `json:"hedge_ms,omitempty"`
-	DNSRoutes map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
-	Items     []domain.CollectionItem          `json:"items"`
+	// TimerLateMS 是函数入口时刻减去定时事件计划时间（毫秒），StaggerMS 是函数内错峰等待的时长，EntryAt 是函数入口时刻；
+	// 只用于上报，定位“收盘到开始取数”这一段花在触发、启动还是错峰上。
+	TimerLateMS int                              `json:"timer_late_ms,omitempty"`
+	StaggerMS   int                              `json:"stagger_ms,omitempty"`
+	EntryAt     time.Time                        `json:"-"`
+	DNSRoutes   map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
+	Items       []domain.CollectionItem          `json:"items"`
 	// Targets are the destinations attached to a shared acquisition instance.
 	// When present, one fetched result is fanned out to every target.
 	Targets []domain.WriteTarget `json:"targets,omitempty"`
@@ -258,9 +259,6 @@ func (r *Request) validate() error {
 		} else if r.BatchKind == domain.BatchKindRealtime && item.BarLimit > MaxRealtimeRows {
 			return fmt.Errorf("realtime bar_limit must be between 1 and %d", MaxRealtimeRows)
 		}
-	}
-	if r.HedgeMS < 0 || r.HedgeMS > MaxHedgeMS {
-		return fmt.Errorf("hedge_ms must be between 0 and %d", MaxHedgeMS)
 	}
 	if r.Concurrency < 0 || r.Concurrency > MaxConcurrency {
 		return fmt.Errorf("concurrency must be between 0 and %d", MaxConcurrency)
