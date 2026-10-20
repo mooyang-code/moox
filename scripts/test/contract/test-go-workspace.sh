@@ -39,6 +39,11 @@ while IFS= read -r -d '' module; do
       # goom relies on disabled inlining for its method interception tests.
       test_flags+=(-gcflags=all=-l -ldflags=-s=false)
       ;;
+    modules/cli)
+      # unitruntime、unitbootstrap 等包的测试会启动真实的 console-proxy，健康检查固定监听 127.0.0.1:19528；
+      # 包之间并行会抢这个端口，偶发 "release process did not become ready"，所以这个模块的包依次运行。
+      test_flags+=(-p 1)
+      ;;
   esac
   (cd "${ROOT}/${module}" && go test "${test_flags[@]}" ./...)
   echo "==> go vet ${module}"

@@ -81,7 +81,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: pnpm
+          # 只有 web 组会安装前端依赖；其他组没有 pnpm 存储目录，开缓存会让收尾步骤报 Path Validation Error 而失败。
+          cache: ${{ matrix.group == 'web' && 'pnpm' || '' }}
           cache-dependency-path: |
             pnpm-lock.yaml
             web/pnpm-lock.yaml
