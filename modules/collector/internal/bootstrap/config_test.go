@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -472,6 +473,20 @@ func TestHedgeFetchOptionsAreOffByDefaultAndInheritedFromTheGlobalFetch(t *testi
 	require.True(t, fetch.HedgeHourOnly)
 	require.Equal(t, defaults.Fetch.Concurrency, fetch.Concurrency, "只写对冲项时其余拉取参数沿用全局默认")
 	require.Zero(t, plan.fetchFor("stockcn").HedgeMS, "其他空间不受影响")
+}
+
+// 线上配置只写对冲三项时，其余拉取参数沿用内置默认值（解码落在默认配置上，严格解析也认这三个键）。
+func TestScfPlanFetchYAMLWithOnlyHedgeKeepsDefaults(t *testing.T) {
+	cfg := Default()
+	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    hedge_ms: 800\n    hedge_percent: 50\n    hedge_hour_only: true\n"))
+	decoder.KnownFields(true)
+	require.NoError(t, decoder.Decode(&cfg))
+	fetch := cfg.SCFPlan.fetchFor("crypto")
+	require.Equal(t, 800, fetch.HedgeMS)
+	require.Equal(t, 50, fetch.HedgePercent)
+	require.True(t, fetch.HedgeHourOnly)
+	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
+	require.Equal(t, defaultSCFPlan().Fetch.StaggerMS, fetch.StaggerMS)
 }
 
 // CLI 渲染测试生成的真实产物（modules/cli/.../testdata/scf_plan_rendered.yaml）必须能被 Collector 真实加载并通过校验。
