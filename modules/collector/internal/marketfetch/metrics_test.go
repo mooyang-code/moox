@@ -100,11 +100,11 @@ func TestMetricsRecoveryCanSucceedWithoutAssignmentScopes(t *testing.T) {
 
 func TestMetricsKeepOnlyCurrentCoordinationFailureReason(t *testing.T) {
 	metrics := NewMetrics(prometheus.NewRegistry())
-	metrics.ObserveAssignmentFailure("crypto", "submit_timeout")
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "submit_timeout")))
+	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", ReasonPublishLeaseHeld)))
 
 	metrics.ObserveAssignmentFailure("crypto", "cloudnode")
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "submit_timeout")))
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", ReasonPublishLeaseHeld)))
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "cloudnode")))
 
 	metrics.ObserveAssignmentSuccess("crypto", 1722772800)
@@ -173,4 +173,53 @@ func metricLabels(metric *dto.Metric) map[string]string {
 		labels[label.GetName()] = label.GetValue()
 	}
 	return labels
+}
+
+func TestMetricsFailureReasonWhitelist(t *testing.T) {
+	require.Equal(t, ReasonPublishLeaseHeld, normalizeAssignmentFailureReason(ReasonPublishLeaseHeld))
+	// 白名单之外（包括已删除的 submit_timeout 与随手写的 publish_lease）一律归为 cloudnode。
+	require.Equal(t, "cloudnode", normalizeAssignmentFailureReason("submit_timeout"))
+	require.Equal(t, "cloudnode", normalizeAssignmentFailureReason("publish_lease"))
+	require.Equal(t, "rules", normalizeAssignmentFailureReason(" rules "))
+}
+
+func TestMetricsFailureSinceTracksTheFirstAppearanceOfTheCurrentReason(t *testing.T) {
+	metrics := NewMetrics(prometheus.NewRegistry())
+	clock := time.Unix(1_700_000_000, 0)
+	metrics.now = func() time.Time { return clock }
+	since := func() float64 { return testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("crypto")) }
+	require.Zero(t, since())
+
+	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
+	require.Equal(t, float64(1_700_000_000), since())
+	// 同一原因连续出现：起始时间保持不变。
+	clock = clock.Add(3 * time.Minute)
+	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
+	require.Equal(t, float64(1_700_000_000), since())
+	// 原因变化：重新计时。
+	metrics.ObserveAssignmentFailure("crypto", "cloudnode")
+	require.Equal(t, float64(1_700_000_180), since())
+	// 其他空间互不影响。
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("stockcn")))
+
+	// 成功清零，再失败从新时间开始。
+	metrics.ObserveAssignmentSuccess("crypto", 1_700_000_200)
+	require.Zero(t, since())
+	clock = clock.Add(time.Minute)
+	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
+	require.Equal(t, float64(1_700_000_240), since())
+}
+
+func TestMetricsRoundOKRestoresHealthAndClearsFailureWithoutTouchingLastSuccess(t *testing.T) {
+	metrics := NewMetrics(prometheus.NewRegistry())
+	metrics.ObserveAssignmentSuccess("crypto", 1_700_000_000)
+	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
+
+	metrics.ObserveAssignmentRoundOK("crypto")
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", ReasonPublishLeaseHeld)))
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("crypto")))
+	require.Equal(t, float64(1_700_000_000), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), "计划仍在进行时不刷新最近一次对账成功时间")
+	require.NotPanics(t, func() { (*Metrics)(nil).ObserveAssignmentRoundOK("crypto") })
 }

@@ -129,6 +129,7 @@ type InventorySource interface {
 type MarketFetchThresholds struct {
 	CoordinationStaleAfter      time.Duration
 	PendingGrace                time.Duration
+	LeaseGrace                  time.Duration
 	FeedFailureRateWindow       time.Duration
 	FeedFailureRateThreshold    float64
 	InstrumentSnapshotMaxAge    time.Duration
@@ -1024,6 +1025,9 @@ type timerCoordinationState struct {
 	hasHealth       bool
 	staleSeries     bool
 	failureReasons  map[string]bool
+	// failureSince 是当前失败原因首次出现的时间（多个上报方时取最早的非零值）。
+	failureSince    float64
+	hasFailureSince bool
 }
 
 type marketFeedHealthState struct {
@@ -1297,6 +1301,13 @@ const timerCoordinationStaleAfter = 15 * time.Minute
 
 const timerCoordinationPendingGrace = 5 * time.Minute
 
+// timerCoordinationLeaseGrace 是「发布租约被占用」的宽限期。重启后旧作业的操作占用要等它结束或过期（每次续期到当前时间加
+// 6 分钟），实测通常 6 分钟左右；10 分钟之后仍被占用，说明作业卡住或有其他发布方，值得人工介入。
+const timerCoordinationLeaseGrace = 10 * time.Minute
+
+// publishLeaseHeldReason 是 Collector 上报的失败原因：Admin 明确答复发布租约或在途操作占用仍被持有。
+const publishLeaseHeldReason = "publish_lease_held"
+
 func (b Builder) marketFetchThresholds() MarketFetchThresholds {
 	thresholds := b.MarketFetchThresholds
 	if thresholds.CoordinationStaleAfter <= 0 {
@@ -1304,6 +1315,9 @@ func (b Builder) marketFetchThresholds() MarketFetchThresholds {
 	}
 	if thresholds.PendingGrace <= 0 {
 		thresholds.PendingGrace = timerCoordinationPendingGrace
+	}
+	if thresholds.LeaseGrace <= 0 {
+		thresholds.LeaseGrace = timerCoordinationLeaseGrace
 	}
 	if thresholds.FeedFailureRateWindow <= 0 {
 		thresholds.FeedFailureRateWindow = 5 * time.Minute
@@ -1410,6 +1424,14 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 	}); err != nil {
 		return nil, err
 	}
+	if err := load("moox_collector_market_fetch_coordination_failure_since_timestamp_seconds", func(state *timerCoordinationState, _ map[string]string, value float64) {
+		// 多个 Collector 上报同一空间时取最早的非零起始时间：最保守，不会因为另一个实例刚开始失败而延长宽限。
+		if value > 0 && (!state.hasFailureSince || value < state.failureSince) {
+			state.failureSince, state.hasFailureSince = value, true
+		}
+	}); err != nil {
+		return nil, err
+	}
 	if err := load("moox_collector_market_fetch_coordination_pending", func(state *timerCoordinationState, _ map[string]string, value float64) {
 		if value > state.pending {
 			state.pending = value
@@ -1431,18 +1453,21 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 		pendingGrace := state.hasPending && state.pending > 0 && state.hasPendingSince && state.pendingSince > 0 &&
 			now.Sub(unixTime(state.pendingSince)) >= 0 && now.Sub(unixTime(state.pendingSince)) <= thresholds.PendingGrace
 		if pendingGrace {
-			reason := "采集计划协调进行中"
-			if state.failureReasons["submit_timeout"] {
-				reason = "采集计划配置提交超时，正在自动重试"
-			}
-			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: reason, LastCheckedAt: now})
+			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: "采集计划协调进行中", LastCheckedAt: now})
 			continue
 		}
 		if state.hasHealth && state.healthy <= 0 {
+			// 发布租约被占用是租约在正常工作（重启前的旧作业还在云端运行）：宽限期内按协调进行中处理。
+			// 缺少失败起始时间时无法证明还在宽限期内，按已超期处理。
+			if state.failureReasons[publishLeaseHeldReason] && state.hasFailureSince && state.failureSince > 0 &&
+				now.Sub(unixTime(state.failureSince)) <= thresholds.LeaseGrace {
+				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: "发布租约被占用：等待在途云端作业结束，通常数分钟内自动恢复", LastCheckedAt: now})
+				continue
+			}
 			reason := "采集计划协调失败：请检查 Collector 日志、CloudNode 和函数网络"
 			switch {
-			case state.failureReasons["submit_timeout"]:
-				reason = "采集计划配置提交持续超时：请检查 CloudNode、网关连接和批处理队列"
+			case state.failureReasons[publishLeaseHeldReason]:
+				reason = "发布租约长时间被占用：请检查 CloudNode 批次作业是否卡住，以及是否有其他发布方（CLI 手工发布、补采）在运行"
 			case state.failureReasons["cloudnode"]:
 				reason = "采集计划配置服务调用失败：请检查 CloudNode、网关连接和批处理队列"
 			case state.failureReasons["environment"]:

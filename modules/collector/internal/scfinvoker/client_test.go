@@ -62,6 +62,33 @@ func TestCollectorPublishLeaseCallsBorrowProcessGateway(t *testing.T) {
 	require.Equal(t, []string{"AcquireCollectorPublishLease", "RenewCollectorPublishLease", "ReleaseCollectorPublishLease"}, calls)
 }
 
+func TestAcquireCollectorPublishLeaseSeparatesHeldFromOtherFailures(t *testing.T) {
+	respond := func(code adminpb.ErrorCode, msg string, transport error) *Client {
+		return New(Config{Gateway: gatewayFunc(func(_ context.Context, _, _ string, _, rsp any) error {
+			if transport != nil {
+				return transport
+			}
+			*rsp.(*adminpb.CollectorPublishLeaseRsp) = adminpb.CollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{Code: code, Msg: msg}}
+			return nil
+		})})
+	}
+	// Admin 明确答复 CONFLICT：租约或在途操作占用仍被持有，是租约在正常工作。
+	_, err := respond(adminpb.ErrorCode_CONFLICT, "collector publish lease is held", nil).AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")
+	require.ErrorIs(t, err, ErrCollectorPublishLeaseHeld)
+	require.Contains(t, err.Error(), "collector publish lease is held")
+	// 无权限、参数错误、Admin 不可达、响应异常都不是「被占用」，不能享受宽限。
+	for name, client := range map[string]*Client{
+		"no permission": respond(adminpb.ErrorCode_NO_PERMISSION, "requires space owner or admin", nil),
+		"invalid param": respond(adminpb.ErrorCode_INVALID_PARAM, "space_id and holder_id are required", nil),
+		"transport":     respond(0, "", errors.New("dial tcp: connection refused")),
+		"incomplete":    respond(adminpb.ErrorCode_SUCCESS, "", nil),
+	} {
+		_, err := client.AcquireCollectorPublishLease(t.Context(), "crypto", "holder-1")
+		require.Error(t, err, name)
+		require.NotErrorIs(t, err, ErrCollectorPublishLeaseHeld, name)
+	}
+}
+
 type gatewayFunc func(context.Context, string, string, any, any) error
 
 func (f gatewayFunc) Invoke(ctx context.Context, service, method string, req, rsp any) error {
