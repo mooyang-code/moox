@@ -6,7 +6,6 @@ app:
   type: "market"
 
 api:
-  base_url: "https://api.binance.com"
   # 现货只配 3 个出口各不相同的官方端点，按顺序故障转移（2026-10-20 在香港实测都可用）：
   #   api.binance.com        CloudFront 边缘节点（香港就近，建连约 2ms，首字节约 110ms）
   #   api-gcp.binance.com    Google Cloud 负载均衡（香港就近，同量级）
