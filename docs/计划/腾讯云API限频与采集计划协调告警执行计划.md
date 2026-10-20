@@ -1,6 +1,6 @@
 # 腾讯云 API 限频与采集计划协调告警执行计划
 
-v2（2026-10-20，尚未编码；已吸收一轮 Codex 审查）。起因是 2026-10-20 23:23 的「行情采集 scf_timer 协调」严重告警。实现后以[云节点](../模块/云节点.md)、[采集](../模块/采集.md)与[监控](../模块/监控.md)为准。
+v3（2026-10-20，阶段 1～5 已编码，阶段 6 发布验收待执行；v2 已吸收一轮 Codex 审查，实现中按下文「实现中的调整」修订）。起因是 2026-10-20 23:23 的「行情采集 scf_timer 协调」严重告警。实现后以[云节点](../模块/云节点.md)、[采集](../模块/采集.md)与[监控](../模块/监控.md)为准。
 
 ## 1. 背景与线上现象
 
@@ -187,12 +187,12 @@ CloudNode 用到的接口及其默认限频（[云函数 API 概览](https://clo
 ### 8.2 Collector：作业未结束按「进行中」处理
 
 - **不改 `waitJob` 本身**，因为补采路径依赖它现在的行为（§2.5）。新增 `waitJobWithin(ctx, jobID)`，供 `submit` 和 `waitAux`（[plan_aux.go:83](../../modules/collector/internal/marketfetch/plan_aux.go)，`verifyFleet`、清理、停用等辅助作业都经它等待）使用：
-  - 等待上限是 `min(JobWait, ctx 剩余时间 − 5 秒)`，并用这个上限生成局部 ctx 传给 `checkJob`，避免一次慢查询越过上限。
+  - 等待上限是 `min(JobWait, 剩余时间 − 余量)`，余量取 5 秒与剩余时间四分之一的较小者，并用这个上限生成局部 ctx 传给 `checkJob`，避免一次慢查询越过上限。**实现中的调整**：最初写的是固定扣 5 秒，剩余时间不足 5 秒时直接视为未结束而不查询，短时限下作业永远查不到（既有的 `PlanManager` 用例因此失败），所以余量随剩余时间缩小。
   - 到达上限时作业仍未结束，就返回「未结束」，不返回错误。父 ctx 被取消时返回父 ctx 的错误。`checkJob` 本身出错时返回该错误。三种情况要区分开。
 - `submit`：作业未结束时，记入 `r.pending`（现有行为），**不调用 `fail`**。
 - `verifyFleet`：作业未结束的函数不算失败。`waitAux` 已经把未结束的作业登记进 `r.aux`（现有行为），后续由 `refreshAux` / `busyFunctions` 确认终态后收尾。只有作业已结束且确实失败，才调用 `fail("cloudnode", ...)`。
-- **pending 指标同时覆盖 `r.pending` 和 `r.aux`**：任一非空时上报 `coordination_pending=1`。`pending_since` 取**最早在途作业的提交时间**，不再取计划的 `CreatedAt`（[plan_reconciler.go:228](../../modules/collector/internal/marketfetch/plan_reconciler.go)），否则计划一旦创建较久，宽限期就形同虚设。
-- **失败状态的清除规则**：任一轮只要没有调用 `fail`，就清除失败原因与 `failure_since`，并把 `coordination_healthy` 置 1，不管计划是否仍在进行中、是否还有在途作业。现在开放计划直接走 `advance`、不执行成功清理（`:228`），会导致租约冲突解除后，旧的失败原因一直留着。
+- **pending 指标同时覆盖 `r.pending` 和 `r.aux`**：有在途作业时，每轮收尾（`finishRound`）上报 `coordination_pending=1`，`pending_since` 取**最早在途作业的提交时间**，覆盖开放计划的 `CreatedAt`，否则计划一旦创建较久，宽限期就形同虚设。没有在途作业时保持原行为（开放计划取 `CreatedAt`）。有在途作业时**不宣布对账成功**、不刷新最近一次成功时间。
+- **失败状态的清除规则**：`fail` 每次调用计数；一轮对账结束时，若本轮没有返回错误、且自上一轮结束以来（包括同一 tick 内对账之前的启用、升级）没有任何 `fail` 调用，就清除失败原因与 `failure_since` 并把 `coordination_healthy` 置 1，不管计划是否仍在进行中、是否还有在途作业，但不刷新最近一次成功时间。现在开放计划直接走 `advance`、不执行成功清理，会导致租约冲突解除后，旧的失败原因一直留着。
 
 ### 8.3 Collector：新增指标
 
@@ -207,7 +207,7 @@ CloudNode 用到的接口及其默认限频（[云函数 API 概览](https://clo
 - 原因是 `publish_lease_held` 且失败持续时间不超过宽限期：状态为 `healthy`，文案为「发布租约被占用：等待在途云端作业结束，通常数分钟内自动恢复」。
 - 超过宽限期：状态为 `down`，文案为「发布租约长时间被占用：请检查 CloudNode 批次作业是否卡住，以及是否有其他发布方（CLI 手工发布、补采）在运行」。
 - 缺少 `failure_since` 时按超过宽限期处理。Collector 与 Monitor 按 §10 的顺序发布后，这种情况只会出现在指标丢失时。
-- **pending 超过宽限期的判定**：目前 `pending_grace`（5 分钟）超期后，会落到后面的分支，首次运行、没有成功或失败指标时还可能直接跳过该空间（[overview.go:1456](../../modules/monitor/internal/observability/overview.go)）。改为：pending 超过 `pending_grace` 后状态为 `down`，文案为「采集计划作业长时间未完成：请检查 CloudNode 批次作业」，并且不能被跳过。
+- **pending 超过宽限期的判定（实现中的调整）**：最初计划新增「pending 超过 `pending_grace` 即 down」的分支。实现时发现 `coordination_pending` 同时用于「开放计划等待窗口结束」（最长可达一个整点周期），这样改会让正常等待的计划在 5 分钟后误报。改为不新增分支：在途作业卡住时，Collector 不刷新最近一次成功时间，Monitor 现有的对账陈旧判定（`timer_coordination_stale_after`，默认 15 分钟）会发现；首次运行尚无成功指标时仍不判定，这是已有行为，不在本计划内。
 
 **单测**
 
@@ -218,13 +218,13 @@ CloudNode 用到的接口及其默认限频（[云函数 API 概览](https://clo
   - `pending_since` 取最早在途作业的提交时间；`r.aux` 非空时也上报 pending。
   - 开放计划进行中、本轮没有失败时，失败原因与 `failure_since` 被清除。
   - 补采路径的行为不变（回归测试）。
-- Monitor：`publish_lease_held` 宽限期内为 healthy、超过宽限期为 down、缺少 `failure_since` 为 down；pending 超期为 down，并且首次运行时不被跳过；`cloudnode` 等原有分支不变。`modules/monitor/internal/healthview/incidents_test.go` 与前端 `web/src/views/ops/monitor/*.test.ts` 中涉及 `scf_timer` 的用例要跟着检查。
+- Monitor：`publish_lease_held` 宽限期内为 healthy、超过宽限期为 down、缺少 `failure_since` 为 down、宽限期可配置；`cloudnode` 等其他原因不享受宽限。`modules/monitor/internal/healthview/incidents_test.go` 与前端 `web/src/views/ops/monitor/*.test.ts` 中涉及 `scf_timer` 的用例要跟着检查。
 
 ## 9. 阶段 5：文档
 
 - [云节点](../模块/云节点.md)：腾讯云接口限流（维度、默认值、突发容量、`tencent_scf.api_rate_limits` 配置、本地指标）。
 - [采集](../模块/采集.md)：协调失败原因增加 `publish_lease_held`，删除 `submit_timeout`；说明重启后短时间租约冲突属于预期；作业未结束按进行中处理。
-- [监控](../模块/监控.md)：`timer_coordination_lease_grace`、pending 超期判定及新文案。
+- [监控](../模块/监控.md)：`timer_coordination_lease_grace` 及新文案。
 - [部署与运维](../部署与运维.md)的故障表增加两行：「协调告警：发布租约被占用」和「CloudNode 日志出现 `RequestLimitExceeded`」，分别写明原因与处理方法。
 - 在本目录 `README.md` 里更新本计划的状态。
 
@@ -258,3 +258,12 @@ CloudNode 用到的接口及其默认限频（[云函数 API 概览](https://clo
 - [腾讯云 API 频率限制说明](https://cloud.tencent.com/document/product/1278/109059)
 - [云函数 API 概览（各接口限频）](https://cloud.tencent.com/document/product/583/17235)
 - [获取函数触发器列表 ListTriggers](https://cloud.tencent.com/document/product/583/44268)
+
+## 13. 实现中的调整
+
+- **`waitJobWithin` 的余量随剩余时间缩小**（§8.2）：固定扣 5 秒会让短时限下的作业永远查不到。
+- **不新增 Monitor 的 pending 超期分支**（§8.4）：避免开放计划正常等待窗口时误报，卡住的在途作业由对账陈旧判定发现。
+- **`fail` 计数而不是布尔标志**（§8.2）：同一 tick 内对账之前的步骤（启用、升级）失败时，不能被本轮的健康恢复清掉。
+- **租约被占用的失败原因名为 `publish_lease_held`**，并删除从未使用的 `submit_timeout`（白名单与 Monitor 文案一并删）。
+- **限流器键用云账号标识**：`TencentCredential` 增加 `AccountID`，由凭证解析器从云账号带出；没有账号标识时退回 `secret:<SecretID>`。
+- **已知但不在本计划内**：Collector 的 `fail("package" | "store" | "storage" | "dataset" | "activity" | "preflight", …)` 同样不在白名单里，会被归为 `cloudnode`，Monitor 上仍显示「CloudNode 服务调用失败」。需要时另行把它们加入白名单并给出专属文案。
