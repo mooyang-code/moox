@@ -154,7 +154,8 @@ CREATE TABLE IF NOT EXISTS t_collector_stream_workers (
 - `ingest=stream` 时：SCF 实时函数在 `drain` 结束后才下发空的最终计划并停用定时器（函数保留，代码包照常随发布升级）；补采函数不受影响。
 - 补采解析（`klinecheck/backfill.go` 的 `datasetMarket`）遍历两种执行端的计划项，按执行端类型选补采函数的市场与来源。
 - 观察计划：`ingest=scf` 且配置开启 `stream.observe` 时，给 stream 下发全部标的的观察计划（不授予写权限），用于阶段 5。
-- 下架处理（设计 5.10）：`ReportStreamPeriods` 带"已确认下架"的标的；Collector 立即对相应自动标签做一次快照同步，交易所快照确认下架的标的跳过消失防抖。测试：下架后约 5 分钟内计划去掉该标的；标签列表取不全（非下架）时仍按 5 轮防抖。
+- 下架处理（设计 5.10）：`ReportStreamPeriods` 带疑似下架的标的；Collector 立即对相应自动标签做一次快照同步。标的快照取数在同步内退避重试（3 次），失败或校验不通过时保持原成员。测试：下架后约 5 分钟内计划去掉该标的；快照请求失败、返回残缺时成员不变。
+- 采集名单干预（设计 6.6）：表 `t_collector_subject_exclusions`；RPC `SetSubjectExclusions`／`ClearSubjectExclusions`／`ListSubjectExclusions`；期望状态计算时去掉排除的标的；到期自动失效；`moox-cli collector subjects exclude|unexclude|exclusions`；活动日志。服务目录：三个方法放行 `console`、`moox-cli` 与外部身份 `collector-operator`（旁路程序经 Access 调用，同时放行 `SyncSubjects`）。测试：排除后下一轮生成新计划且 hash 变化；到期自动恢复；交接进行中设置排除时推迟到交接完成。
 
 ### 5.4 `StreamCollector` 服务（`modules/collector/proto/collector.proto`）
 
