@@ -661,3 +661,49 @@ func (c *Controller) Run(ctx context.Context, interval time.Duration) {
 		}
 	}
 }
+
+// Compact 是放进 /healthz 响应（details.lifecycle）的精简快照：Monitor 据此汇总首页状态。
+// 只列出需要关注的对象（暂停、故障、未就绪），运行与预热的对象只计数，响应体不随对象数增长。
+type Compact struct {
+	Stage    Stage  `json:"stage"`
+	Color    string `json:"color"`
+	Degraded bool   `json:"degraded,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	// Self 是模块自身的阶段。
+	Self Stage `json:"self"`
+	// Counts 是各阶段的对象数。
+	Counts    map[Stage]int `json:"counts,omitempty"`
+	Attention []Object      `json:"attention,omitempty"`
+	// Recovered 是重启后自动回到原阶段的对象数（首页提示「已自动恢复」）。
+	Recovered int `json:"recovered,omitempty"`
+}
+
+// maxAttention 是精简快照里最多列出的需要关注的对象数。
+const maxAttention = 6
+
+// Compact 返回精简快照。
+func (c *Controller) Compact() Compact {
+	snap := c.Snapshot()
+	out := Compact{Stage: snap.Stage, Color: snap.Color, Degraded: snap.Degraded, Reason: snap.Reason, Self: snap.Self.Stage, Counts: map[Stage]int{}}
+	for _, o := range snap.Objects {
+		out.Counts[o.Stage]++
+		if o.Recovered {
+			out.Recovered++
+		}
+		if (o.Stage == StagePaused || o.Stage == StageFault || o.Stage == StageNotReady) && len(out.Attention) < maxAttention {
+			o.Checks = failedChecks(o.Checks)
+			out.Attention = append(out.Attention, o)
+		}
+	}
+	return out
+}
+
+func failedChecks(checks []Check) []Check {
+	var out []Check
+	for _, c := range checks {
+		if c.Status == CheckFail {
+			out = append(out, c)
+		}
+	}
+	return out
+}

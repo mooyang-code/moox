@@ -415,6 +415,9 @@ func (r *Runtime) healthSnapshot(context.Context) healthz.Response {
 	if lease.LastError != "" {
 		details["heartbeat_error"] = lease.LastError
 	}
+	if r.life != nil {
+		details["lifecycle"] = r.life.Compact()
+	}
 	return healthz.Response{Module: "factor-engine", Ready: check.Healthy, Status: state, Time: time.Now().UTC(), Details: details}
 }
 

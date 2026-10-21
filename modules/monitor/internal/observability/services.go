@@ -167,6 +167,7 @@ func mergeServiceHealth(service ServiceStatus, result *domain.CheckResult) Servi
 	healthStatus, healthReason := "unknown", "health not checked"
 	if result != nil {
 		service.ProbeCheckedAt, service.ProbeRawError = result.CheckedAt.UTC(), result.RawError
+		service.Lifecycle = ParseLifecycle(result.BodyExcerpt)
 		switch {
 		case !result.Success:
 			healthStatus, healthReason = "down", strings.TrimSpace(result.ErrorMessage)

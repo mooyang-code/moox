@@ -119,7 +119,7 @@ func withLifecycle(snapshot func(context.Context) healthz.Response, c *lifecycle
 		if rsp.Details == nil {
 			rsp.Details = map[string]any{}
 		}
-		rsp.Details[lifecycleHealthDetailID] = c.Snapshot()
+		rsp.Details[lifecycleHealthDetailID] = c.Compact()
 		return rsp
 	}
 }

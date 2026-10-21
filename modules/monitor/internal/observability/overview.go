@@ -34,6 +34,8 @@ type ServiceStatus struct {
 	Instances                                       []ReporterInstance
 	ProbeURL                                        string
 	ProbeHistory                                    []domain.CheckResult
+	// Lifecycle 是最近一次探测的健康响应里带的生命周期状态；模块没有上报时为 nil。
+	Lifecycle *LifecycleStatus
 }
 
 type HostStatus struct {

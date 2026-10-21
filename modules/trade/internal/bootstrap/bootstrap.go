@@ -750,7 +750,7 @@ func registerHealth(
 		if response.Details == nil {
 			response.Details = map[string]any{}
 		}
-		response.Details["lifecycle"] = life.Snapshot()
+		response.Details["lifecycle"] = life.Compact()
 		return response
 	}
 	go func() {

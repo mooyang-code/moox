@@ -406,3 +406,29 @@ func TestClientStatusAndCommand(t *testing.T) {
 	_, err = c.Do(ctx, CmdConfirm, Ref{Kind: "set", ID: "a"})
 	require.ErrorContains(t, err, "409")
 }
+
+func TestCompactListsOnlyAttentionObjects(t *testing.T) {
+	ctrl, err := New(Options{Module: "m", Hooks: Hooks{
+		Objects: func() []Ref { return []Ref{{Kind: "set", ID: "ok"}, {Kind: "set", ID: "bad"}} },
+		CheckObject: func(_ context.Context, ref Ref) []Check {
+			if ref.ID == "bad" {
+				return []Check{{Name: "窗口", Status: CheckFail, Message: "没载入"}, {Name: "其他", Status: CheckPass}}
+			}
+			return []Check{{Name: "窗口", Status: CheckPass}}
+		},
+	}})
+	require.NoError(t, err)
+	ctx := context.Background()
+	ctrl.Refresh(ctx)
+	_, _ = ctrl.Command(ctx, CmdInit, Ref{Kind: "set", ID: "ok"})
+	_, _ = ctrl.Command(ctx, CmdInit, Ref{Kind: "set", ID: "bad"})
+	c := ctrl.Compact()
+	require.Equal(t, 1, c.Counts[StageReady])
+	require.Equal(t, 1, c.Counts[StageNotReady])
+	require.Len(t, c.Attention, 1)
+	require.Equal(t, "bad", c.Attention[0].ID)
+	require.Len(t, c.Attention[0].Checks, 1, "只保留失败的检查，响应体不随检查数增长")
+	raw, err := json.Marshal(c)
+	require.NoError(t, err)
+	require.Less(t, len(raw), 700)
+}

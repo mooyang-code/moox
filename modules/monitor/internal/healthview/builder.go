@@ -109,6 +109,7 @@ func (b Builder) Build(ctx context.Context, spaceID string) (*Overview, error) {
 		return a.Id < z.Id
 	})
 	out.Summary.AlertCount = int32(len(out.Alerts))
+	out.System = projectSystem(out.Components)
 	return out, nil
 }
 
@@ -215,6 +216,7 @@ func projectComponent(item observability.ServiceStatus, facts observability.Over
 	for _, result := range item.ProbeHistory {
 		component.RecentProbes = append(component.RecentProbes, &pb.HealthSignal{Status: domain.HealthStatus(result.Status), Reason: ChineseReason(result.ErrorMessage), RawError: unhealthyRaw(domain.HealthStatus(result.Status), result.ErrorMessage, result.RawError), CheckedAt: stamp(result.CheckedAt)})
 	}
+	component.Lifecycle = projectLifecycle((*lifecycleSource)(item.Lifecycle))
 	for _, instance := range item.Instances {
 		component.Instances = append(component.Instances, &pb.HealthReporter{InstanceId: instance.InstanceID, BootId: instance.BootID, Version: instance.Version, Status: domain.HealthStatus(instance.Status), LastReportedAt: stamp(instance.LastSeenAt)})
 	}
