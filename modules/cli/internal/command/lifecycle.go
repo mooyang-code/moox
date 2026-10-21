@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -22,7 +23,11 @@ type lifecycleOptions struct {
 	JSON     bool
 }
 
-var lifecycleFlags lifecycleOptions
+var (
+	lifecycleFlags lifecycleOptions
+	shadowSpace    string
+	shadowLimit    int
+)
 
 var lifecycleCmd = &cobra.Command{
 	Use:   "lifecycle",
@@ -56,6 +61,15 @@ func init() {
 			return runLifecycleStatus(cmd.Context(), lifecycleFlags, cmd.OutOrStdout())
 		},
 	})
+	shadow := &cobra.Command{
+		Use: "shadow", Short: "查看预热中的策略实例的影子目标（--endpoint 指向 Trade 的健康检查地址）", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runLifecycleShadow(cmd.Context(), lifecycleFlags, shadowSpace, shadowLimit, cmd.OutOrStdout())
+		},
+	}
+	shadow.Flags().StringVar(&shadowSpace, "space", "", "空间 ID")
+	shadow.Flags().IntVar(&shadowLimit, "limit", 20, "最多显示的条数")
+	lifecycleCmd.AddCommand(shadow)
 	for _, name := range []lifecycle.Command{lifecycle.CmdCheck, lifecycle.CmdInit, lifecycle.CmdStart, lifecycle.CmdConfirm, lifecycle.CmdPause, lifecycle.CmdResume} {
 		name := name
 		lifecycleCmd.AddCommand(&cobra.Command{
@@ -130,6 +144,37 @@ func runLifecycleCommand(ctx context.Context, o lifecycleOptions, cmd lifecycle.
 		name = ref.Kind + "/" + ref.ID
 	}
 	printObject(out, name, obj)
+	return nil
+}
+
+// runLifecycleShadow 读 Trade 记录的影子目标：预热中的策略实例发来的、只换算不下单的目标。
+func runLifecycleShadow(ctx context.Context, o lifecycleOptions, space string, limit int, out io.Writer) error {
+	if space == "" || o.ID == "" {
+		return errors.New("需要 --space 与 --id（策略实例 ID）")
+	}
+	var rsp struct {
+		Targets []struct {
+			TargetID            string `json:"TargetID"`
+			LogicalAccountID    string `json:"LogicalAccountID"`
+			BarEndTime          int64  `json:"BarEndTime"`
+			Equity              string `json:"Equity"`
+			QuantityTargetsJSON string `json:"QuantityTargetsJSON"`
+		} `json:"targets"`
+	}
+	path := fmt.Sprintf("/v1/shadow/targets?space=%s&instance=%s&limit=%d", url.QueryEscape(space), url.QueryEscape(o.ID), limit)
+	if err := o.client().Get(ctx, path, &rsp); err != nil {
+		return err
+	}
+	if o.JSON {
+		return writeLifecycleJSON(out, rsp)
+	}
+	if len(rsp.Targets) == 0 {
+		fmt.Fprintln(out, "没有影子目标")
+		return nil
+	}
+	for _, t := range rsp.Targets {
+		fmt.Fprintf(out, "%s  账户 %s  权益 %s  目标数量 %s\n", time.UnixMilli(t.BarEndTime).UTC().Format("2006-01-02 15:04"), t.LogicalAccountID, t.Equity, t.QuantityTargetsJSON)
+	}
 	return nil
 }
 

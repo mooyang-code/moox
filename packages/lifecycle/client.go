@@ -39,6 +39,11 @@ func (c *Client) Do(ctx context.Context, cmd Command, ref Ref) (Object, error) {
 	return obj, err
 }
 
+// Get 调用模块健康端口上的其他只读接口（例如 Trade 的影子目标），path 可带查询串。
+func (c *Client) Get(ctx context.Context, path string, out any) error {
+	return c.do(ctx, http.MethodGet, path, nil, out)
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
