@@ -69,7 +69,9 @@ type Conn struct {
 	writeMu     sync.Mutex
 	lastMessage atomic.Int64
 	messages    atomic.Int64
-	nextID      atomic.Int64
+	// data 是收到的行情事件数（K 线），不含订阅回执等控制消息；轮换时据此确认新连接确实有行情。
+	data   atomic.Int64
+	nextID atomic.Int64
 
 	mu      sync.Mutex
 	pending map[int]chan string
@@ -151,6 +153,9 @@ func (c *Conn) readLoop(keepalive Keepalive) {
 			if event.Kind == EventControl {
 				c.resolve(event.ID, event.Err)
 				continue
+			}
+			if event.Kind == EventKlineUpdate || event.Kind == EventKlineFinal {
+				c.data.Add(1)
 			}
 			c.onEvent(event)
 		}
@@ -258,6 +263,9 @@ func (c *Conn) Done() <-chan struct{} { return c.closed }
 
 // Messages 返回已收到的消息数（轮换时用来确认新连接已有数据）。
 func (c *Conn) Messages() int64 { return c.messages.Load() }
+
+// DataMessages 返回已收到的行情事件数。
+func (c *Conn) DataMessages() int64 { return c.data.Load() }
 
 // LastMessage 返回最近一条消息的时间。
 func (c *Conn) LastMessage() time.Time { return time.Unix(0, c.lastMessage.Load()) }

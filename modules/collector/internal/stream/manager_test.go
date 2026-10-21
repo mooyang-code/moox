@@ -228,3 +228,37 @@ func TestConnManagerSubscribeLatency(t *testing.T) {
 	t.Logf("1000 个流在每秒 5 条报文下订阅完成耗时 %s", elapsed)
 	require.Less(t, elapsed, 3*time.Second)
 }
+
+// 新连接只有订阅回执、没有行情：不轮换，旧连接继续服务。
+func TestConnManagerKeepsTheOldConnectionWhenTheNewOneHasNoData(t *testing.T) {
+	exchange := newFakeExchange(t)
+	manager, sink := startManager(t, exchange, stream.ManagerOptions{CheckInterval: 10 * time.Millisecond, MaxConnAge: 300 * time.Millisecond, RotateLead: 200 * time.Millisecond, RotationConfirm: 100 * time.Millisecond, RotationWindow: func(time.Time) bool { return true }})
+	manager.Apply(map[string][]string{"1m": {"btcusdt@kline_1m"}})
+	require.Eventually(t, manager.Ready, 3*time.Second, 10*time.Millisecond)
+	endpoint := manager.Status()[0].Endpoint
+	require.Eventually(t, func() bool { return exchange.opened.Load() >= 3 }, 3*time.Second, 10*time.Millisecond, "尝试过轮换")
+	exchange.mu.Lock()
+	open := len(exchange.conns)
+	exchange.mu.Unlock()
+	require.LessOrEqual(t, open, 2, "没确认的新连接被关掉")
+	require.Equal(t, endpoint, manager.Status()[0].Endpoint)
+	require.Zero(t, manager.Status()[0].Reconnects, "旧连接一直在")
+	require.Positive(t, exchange.push("btcusdt@kline_1m", "BTCUSDT", 0))
+	require.Eventually(t, func() bool { return sink.finals()[0] >= 1 }, time.Second, 10*time.Millisecond)
+}
+
+// 新连接上旧连接正常的流被拒绝：不轮换。
+func TestConnManagerAbortsRotationOnNewRejections(t *testing.T) {
+	exchange := newFakeExchange(t)
+	manager, _ := startManager(t, exchange, stream.ManagerOptions{CheckInterval: 10 * time.Millisecond, MaxConnAge: 300 * time.Millisecond, RotateLead: 200 * time.Millisecond, RotationConfirm: 100 * time.Millisecond, RotationWindow: func(time.Time) bool { return true }})
+	manager.Apply(map[string][]string{"1m": {"btcusdt@kline_1m"}})
+	require.Eventually(t, manager.Ready, 3*time.Second, 10*time.Millisecond)
+	exchange.mu.Lock()
+	exchange.reject["btcusdt@kline_1m"] = true
+	exchange.mu.Unlock()
+	require.Eventually(t, func() bool { return exchange.opened.Load() >= 2 }, 3*time.Second, 10*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+	status := manager.Status()[0]
+	require.Zero(t, status.Rejected, "旧连接的订阅保持")
+	require.Zero(t, status.Reconnects)
+}

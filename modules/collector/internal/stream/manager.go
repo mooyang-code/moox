@@ -18,6 +18,8 @@ const (
 	// rotationConfirm 是轮换时等待新连接收到第一条消息的时间。
 	rotationConfirm       = 30 * time.Second
 	defaultStreamsPerConn = 1000
+	// backoffResetAfter 是连接要稳定多久，重连退避才回到最小值：连上即断时退避继续增长。
+	backoffResetAfter = time.Minute
 )
 
 // ConnStatus 是一条连接（分片）的状态。
@@ -41,6 +43,8 @@ type ManagerOptions struct {
 	OnReconnect    func(group string)
 	// MaxConnAge 覆盖来源声明的连接寿命（测试用）。
 	MaxConnAge time.Duration
+	// RotationConfirm 是轮换时等待新连接收到行情的时间（默认 30 秒，测试用小值）。
+	RotationConfirm time.Duration
 }
 
 // DefaultRotationWindow 是默认的轮换窗口：非整点前后（:59、:00 之外），分钟第 20～40 秒。
@@ -58,6 +62,7 @@ type ConnManager struct {
 	onEvent func(Event)
 	opts    ManagerOptions
 	pace    *pacer
+	dials   *dialBudget
 
 	mu     sync.Mutex
 	slots  []*connSlot
@@ -92,7 +97,11 @@ func NewConnManager(source Source, onEvent func(Event), opts ManagerOptions) *Co
 	if opts.CheckInterval <= 0 {
 		opts.CheckInterval = time.Second
 	}
-	return &ConnManager{source: source, onEvent: onEvent, opts: opts, pace: newPacer(source.Limits().MessagesPerSecond)}
+	if opts.RotationConfirm <= 0 {
+		opts.RotationConfirm = rotationConfirm
+	}
+	limits := source.Limits()
+	return &ConnManager{source: source, onEvent: onEvent, opts: opts, pace: newPacer(limits.MessagesPerSecond), dials: newDialBudget(limits.ConnectsPerWindow, limits.ConnectWindow)}
 }
 
 // Start 启动管理器；Close 停止全部连接。
@@ -243,6 +252,10 @@ func (m *ConnManager) dial(ctx context.Context, slot *connSlot) (*Conn, error) {
 	slot.mu.Lock()
 	index := slot.endpoint % max(len(endpoints), 1)
 	slot.mu.Unlock()
+	// 首次连接、重连与主动轮换共用来源的建连限额（各分片共享）。
+	if err := m.dials.wait(ctx); err != nil {
+		return nil, err
+	}
 	conn, err := dialConn(ctx, m.source, endpoints[index], m.opts.Resolve, m.pace, m.onEvent)
 	if err != nil {
 		slot.mu.Lock()
@@ -281,8 +294,13 @@ func (m *ConnManager) supervise(slot *connSlot) {
 			log.Warnf("stream %s/%s subscribe failed: %v", m.source.MarketType(), slot.group, err)
 			conn.Close()
 		} else {
-			backoff = backoffMin
+			served := time.Now()
 			m.serve(ctx, slot, conn)
+			if time.Since(served) >= backoffResetAfter {
+				backoff = backoffMin
+			} else {
+				backoff = min(backoff*2, backoffMax)
+			}
 		}
 		slot.mu.Lock()
 		if slot.conn == conn {
@@ -368,14 +386,27 @@ func (m *ConnManager) rotate(ctx context.Context, slot *connSlot) *Conn {
 		next.Close()
 		return nil
 	}
-	deadline := time.Now().Add(rotationConfirm)
-	for next.Messages() == 0 && time.Now().Before(deadline) {
+	// 新连接被拒绝了旧连接上正常的流：不轮换，保留旧连接（旧连接到寿命被交易所断开后按重连处理）。
+	slot.mu.Lock()
+	for stream := range rejected {
+		if _, before := slot.rejected[stream]; !before {
+			slot.mu.Unlock()
+			log.Warnf("stream %s/%s rotation aborted: %s was rejected on the new connection", m.source.MarketType(), slot.group, stream)
+			next.Close()
+			return nil
+		}
+	}
+	slot.mu.Unlock()
+	// 订阅回执不算：要收到行情事件才确认新连接可用。
+	deadline := time.Now().Add(m.opts.RotationConfirm)
+	for next.DataMessages() == 0 && time.Now().Before(deadline) {
 		if !sleepCtx(ctx, 50*time.Millisecond) {
 			next.Close()
 			return nil
 		}
 	}
-	if next.Messages() == 0 {
+	if next.DataMessages() == 0 {
+		log.Warnf("stream %s/%s rotation aborted: no market data on the new connection", m.source.MarketType(), slot.group)
 		next.Close()
 		return nil
 	}
@@ -466,4 +497,45 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 
 func jitter(d time.Duration) time.Duration {
 	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
+}
+
+// dialBudget 是来源的建连限额：每 window 最多 limit 次建连（滑动窗口），超出时等到最早一次滑出窗口。
+type dialBudget struct {
+	limit  int
+	window time.Duration
+	mu     sync.Mutex
+	recent []time.Time
+	now    func() time.Time
+}
+
+func newDialBudget(limit int, window time.Duration) *dialBudget {
+	return &dialBudget{limit: limit, window: window, now: time.Now}
+}
+
+func (b *dialBudget) wait(ctx context.Context) error {
+	if b == nil || b.limit <= 0 || b.window <= 0 {
+		return nil
+	}
+	for {
+		b.mu.Lock()
+		now := b.now()
+		kept := b.recent[:0]
+		for _, at := range b.recent {
+			if now.Sub(at) < b.window {
+				kept = append(kept, at)
+			}
+		}
+		b.recent = kept
+		if len(b.recent) < b.limit {
+			b.recent = append(b.recent, now)
+			b.mu.Unlock()
+			return nil
+		}
+		wait := b.window - now.Sub(b.recent[0])
+		b.mu.Unlock()
+		log.Warnf("stream dial budget exhausted (%d per %s), waiting %s", b.limit, b.window, wait.Truncate(time.Millisecond))
+		if !sleepCtx(ctx, wait) {
+			return ctx.Err()
+		}
+	}
 }
