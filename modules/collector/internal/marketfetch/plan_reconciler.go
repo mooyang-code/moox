@@ -16,6 +16,7 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -201,12 +202,29 @@ type PlanReconciler struct {
 	// lastUpgradeCheck 是上一次检查函数代码包是否落后的时间。
 	lastUpgradeCheck time.Time
 	goneSeen         map[string]int
+	// sleep 替换本轮内的等待（测试用）。
+	sleep func(context.Context, time.Duration) error
 
 	// 补采函数的创建与对账协程互不干扰：单独的互斥与租约，并缓存已确认存在的函数。
 	backfillMu     sync.Mutex
 	backfillReady  map[string]string // 补采函数名 → 已确认就绪的代码包 ID：目标包变了就重新校验升级
 	backfillLease  *scfinvoker.CollectorPublishLease
 	backfillHolder string
+}
+
+// wait 在本轮里等待一段时间（测试替换为推进假时钟）。
+func (r *PlanReconciler) wait(ctx context.Context, d time.Duration) error {
+	if r.sleep != nil {
+		return r.sleep(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (r *PlanReconciler) now() time.Time {
@@ -639,10 +657,14 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 	if err != nil || !done {
 		return err
 	}
+	// 交接数据集的截止各自在自己的窗口里改（旧周期都已建立之后、新执行端的第一个周期建立之前），不等整份计划收尾。
+	if err := r.applyHandoffLateness(ctx, record, content, progress, false); err != nil {
+		return err
+	}
 	if end := content.WindowEnd(); !end.IsZero() && r.now().Before(end.Add(planFinalizeMargin)) {
 		return nil
 	}
-	if err := r.applyHandoffLateness(ctx, record, content, progress); err != nil {
+	if err := r.applyHandoffLateness(ctx, record, content, progress, true); err != nil {
 		return err
 	}
 	done, err = r.pushFunctions(ctx, record, content, progress, true)
@@ -915,21 +937,58 @@ func streamStageRank(stage string) int {
 	}
 }
 
-// applyHandoffLateness 在 drain 结束（旧截止的 WindowEnd 加收尾余量之后）、下发最终计划之前，把交接数据集的截止改成新值：
-// 此后旧周期已不能再建立，而新执行端的第一个周期要到 P 加一个周期之后才建立。
-func (r *PlanReconciler) applyHandoffLateness(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress) error {
+// handoffLatenessMaxWait 是一轮对账里为等到交接截止的可改时刻最多等待的时间（对账每分钟一轮，1m 的窗口只有约 35 秒）。
+const handoffLatenessMaxWait = 40 * time.Second
+
+// handoffLatenessDue 返回一个交接数据集可以改截止的时刻与必须改完的时刻：
+// 截止在周期第一次建立时冻结，旧执行端的最后一个周期（P 之前）到 P + 旧截止之后不能再建立；
+// 新执行端的第一个周期 P 在它收盘（P 加一个周期）之后才建立，要在那之前改成新值。
+func handoffLatenessDue(change *PlanDatasetChange) (time.Time, time.Time) {
+	start := time.Unix(change.P, 0).UTC()
+	due := start.Add(time.Duration(change.OldLatenessS)*time.Second + planFinalizeMargin)
+	deadline := start.Add(time.Minute)
+	if frequency, err := marketdata.ParseFrequency(change.Frequency); err == nil {
+		deadline = nextBoundary(frequency, start.Add(time.Second))
+	}
+	return due, deadline
+}
+
+// applyHandoffLateness 把交接数据集的截止改成新值，每个数据集在自己的窗口里改（见 handoffLatenessDue）：
+// 可改时刻在本轮 handoffLatenessMaxWait 之内就等到那一刻；all 为真（整份计划收尾、下发最终计划之前）时把剩下的都改掉。
+func (r *PlanReconciler) applyHandoffLateness(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress, all bool) error {
 	if r.Lateness == nil {
 		return nil
 	}
-	keys := make([]string, 0, len(content.Datasets))
+	type pending struct {
+		key           string
+		due, deadline time.Time
+	}
+	var items []pending
 	for key, change := range content.Datasets {
 		if change.HandoffLateness() && !progress.LatenessSet[key] {
-			keys = append(keys, key)
+			due, deadline := handoffLatenessDue(change)
+			items = append(items, pending{key: key, due: due, deadline: deadline})
 		}
 	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		change := content.Datasets[key]
+	sort.Slice(items, func(i, j int) bool {
+		if !items[i].due.Equal(items[j].due) {
+			return items[i].due.Before(items[j].due)
+		}
+		return items[i].key < items[j].key
+	})
+	for _, item := range items {
+		if wait := item.due.Sub(r.now()); wait > 0 && !all {
+			if wait > handoffLatenessMaxWait {
+				continue
+			}
+			if err := r.wait(ctx, wait); err != nil {
+				return nil
+			}
+		}
+		key, change := item.key, content.Datasets[item.key]
+		if r.now().After(item.deadline) {
+			log.WarnContextf(ctx, "collector fetch plan switched allowed lateness late space=%s dataset=%s: periods from %s were created with the old lateness", r.SpaceID, key, time.Unix(change.P, 0).UTC().Format(time.RFC3339))
+		}
 		if err := r.Lateness.EnsureAllowedLateness(ctx, r.SpaceID, change.DatasetID, change.LatenessS); err != nil {
 			return r.fail("dataset", fmt.Errorf("set allowed lateness of dataset %s: %w", change.DatasetID, err))
 		}

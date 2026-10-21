@@ -188,15 +188,19 @@ func TestHandoffPullToStreamAndBack(t *testing.T) {
 	progress, _ = decodeFetchPlanProgress(h.open().Progress)
 	require.True(t, progress.Transitioned[streamItem])
 
-	// 1h 的旧周期在 drain 结束前不停用：WindowEnd 按旧截止算到 1h 的 P。
-	h.now = time.Unix(minute.P, 0).Add(30 * time.Second)
+	// 截止按数据集在各自窗口里改：1m 在 P + 旧截止 + 余量之后、P 收盘之前（对账在 P+10 秒那一轮里等到可改时刻）。
+	h.now = time.Unix(minute.P, 0).Add(10 * time.Second)
 	h.r = h.newReconciler(modePullSCF) // Collector 重启后续跑
 	require.NoError(t, h.reconcile(h.r))
 	require.NotNil(t, h.open())
-	require.Equal(t, 15, h.lateness.values["ds_spot_1m"])
+	require.Equal(t, 5, h.lateness.values["ds_spot_1m"], "1m 在自己的窗口里改，不等 1h")
+	require.False(t, h.now.Before(time.Unix(minute.P, 0).Add(15*time.Second+planFinalizeMargin)), "不早于旧周期都已建立")
+	require.True(t, h.now.Before(time.Unix(minute.P, 0).Add(time.Minute)), "在新执行端第一个周期建立之前")
+	require.Equal(t, 15, h.lateness.values["ds_spot_1h"])
+	// 1h 的旧周期在 drain 结束前不停用：WindowEnd 按旧截止算到 1h 的 P。
 	h.now = time.Unix(hour.P, 0).Add(15*time.Second + planFinalizeMargin - time.Second)
 	require.NoError(t, h.reconcile(h.r))
-	require.Equal(t, 15, h.lateness.values["ds_spot_1h"], "1h 的 drain 还没结束")
+	require.Equal(t, 8, h.lateness.values["ds_spot_1h"], "1h 的可改时刻在本轮等待范围内，等到之后就改")
 	h.now = h.now.Add(2 * time.Second)
 	require.NoError(t, h.reconcile(h.r))
 	require.Equal(t, 5, h.lateness.values["ds_spot_1m"])
@@ -345,4 +349,15 @@ func TestStreamPlanCarriesPairsOnly(t *testing.T) {
 			require.NotContains(t, string(raw), "executor", name)
 		}
 	}
+}
+
+// 截止的可改窗口：旧周期都已建立之后（P + 旧截止 + 余量）、新执行端第一个周期收盘之前（P 加一个周期）。
+func TestHandoffLatenessWindow(t *testing.T) {
+	p := time.Date(2026, 10, 21, 8, 37, 0, 0, time.UTC)
+	due, deadline := handoffLatenessDue(&PlanDatasetChange{PlanDatasetState: PlanDatasetState{Frequency: "1m", LatenessS: 20}, P: p.Unix(), OldLatenessS: 5})
+	require.Equal(t, p.Add(10*time.Second), due, "stream→SCF：5 秒截止的旧周期在 P+5 之后不能再建立")
+	require.Equal(t, p.Add(time.Minute), deadline)
+	due, deadline = handoffLatenessDue(&PlanDatasetChange{PlanDatasetState: PlanDatasetState{Frequency: "1h", LatenessS: 8}, P: p.Truncate(time.Hour).Add(time.Hour).Unix(), OldLatenessS: 20})
+	require.Equal(t, time.Date(2026, 10, 21, 9, 0, 25, 0, time.UTC), due)
+	require.Equal(t, time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC), deadline)
 }

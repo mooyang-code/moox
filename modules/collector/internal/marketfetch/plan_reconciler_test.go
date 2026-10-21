@@ -422,6 +422,7 @@ func (h *planHarness) reconciler() *PlanReconciler {
 		Groups: &GroupBuilder{Tasks: h.tasks, Symbols: h.symbols},
 		Store:  h.store, Storage: h.registrar, Cloud: h.cloud, Access: testSCFAccessEnvironment, Lateness: h.lateness, Activity: h.activity,
 		Now: func() time.Time { return h.now }, JobWait: time.Millisecond, PollInterval: time.Millisecond,
+		sleep: func(_ context.Context, d time.Duration) error { h.now = h.now.Add(d); return nil },
 	}
 }
 
