@@ -67,13 +67,13 @@
 
 ## 阶段 7：收尾
 
-- ☐ 模块文档（采集、命令行工具、监控、部署与运维）；计划目录标"已实现"。
+- ☑ 模块文档（采集、命令行工具、监控、部署与运维、因子）；计划目录标"已实现"。
 - ☐ 一周后复核（本会话外的待办）。
 
 ## 阶段 8：切换后的独立任务
 
-- ☐ `marketdata.Catalog`；`NewSubjectListers`、`newMarketProvider`、`newStockCNProviderForSource` 改为从目录取；等价性测试。
-- ☐ 采集名单干预：表 `t_collector_subject_exclusions`、三个 RPC、期望状态去掉排除、到期失效、CLI、活动日志、服务目录（含外部身份 `collector-operator`）、测试。
+- ☑ `marketdata.Catalog`（登记表在 `internal/sources/catalog`，collector-stream 也从目录取 WS 数据源）；`NewSubjectListers`、`newMarketProvider`、`newStockCNProviderForSource` 改为从目录取；等价性测试。
+- ☑ 采集名单干预：表 `t_collector_subject_exclusions`、三个 RPC、期望状态去掉排除、到期失效、CLI、活动日志、服务目录（含外部身份 `collector-operator`）、测试。交接进行中时排除自然推迟：已打开的计划先推进完，对账才生成下一份计划。
 
 ## 按"无需兼容"删去的步骤
 
