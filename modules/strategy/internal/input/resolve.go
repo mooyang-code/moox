@@ -374,3 +374,6 @@ func (r Resolved) ReadinessBinding() readiness.Binding {
 	}
 	return readiness.Binding{Factors: factors, PreviousFactors: append([]string(nil), r.PreviousFactors...)}
 }
+
+// ReferencedTags 返回 DSL 引用的全部标签（去重、排序），回放按它预取标签成员。
+func ReferencedTags(strategy dsl.Strategy) []string { return referencedTags(strategy) }

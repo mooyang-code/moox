@@ -174,7 +174,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	healthState := health.New("strategy", "strategy", "", "")
 	healthState.SnapshotFunc = withLifecycle(strategyHealthSnapshot(db, eventRuntime, healthState, consumer), life)
 	healthState.SetReady(true)
-	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState, lifecycleRoutes(life)...); err != nil {
+	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState, append(lifecycleRoutes(life), (&trigger.ReplayEvaluator{Store: db, Client: inputClient}).Routes()...)...); err != nil {
 		return nil, nil, fmt.Errorf("注册策略健康检查失败：%w", err)
 	}
 	keep = true
