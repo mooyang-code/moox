@@ -54,7 +54,7 @@ func TestRuntimeSubscribesAndCommitsAPlannedPeriod(t *testing.T) {
 	period := time.Date(2026, 10, 21, 8, 0, 0, 0, time.UTC)
 	clock := stream.NewFakeClock(period.Add(time.Minute + 150*time.Millisecond))
 	runtime := stream.NewRuntime(stream.RuntimeConfig{
-		Clock: clock,
+		Clock:   clock,
 		SpaceID: "crypto", Providers: map[string]stream.Provider{"binance": exchangeProvider{url: exchange.url()}},
 		NewCommitter: func(marketfetch.PlanMarket) (stream.PeriodCommitter, error) { return committer, nil },
 		Manager:      stream.ManagerOptions{CheckInterval: 20 * time.Millisecond},

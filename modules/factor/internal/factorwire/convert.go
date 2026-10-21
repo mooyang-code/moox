@@ -174,10 +174,15 @@ func EngineStatusToPB(status domain.EngineStatus) *factorpb.EngineRuntimeStatus 
 	for _, run := range status.RecentRuns {
 		runs = append(runs, RunSummaryToPB(run))
 	}
+	watermarks := make([]*factorpb.SetWatermarkStatus, 0, len(status.Watermarks))
+	for _, item := range status.Watermarks {
+		watermarks = append(watermarks, &factorpb.SetWatermarkStatus{SetId: item.SetID, CommittedThrough: FormatTime(item.CommittedThrough), Target: FormatTime(item.Target),
+			BlockedSince: FormatTime(item.BlockedSince), BlockedPeriod: FormatTime(item.BlockedPeriod), BlockedReason: item.BlockedReason})
+	}
 	return &factorpb.EngineRuntimeStatus{
 		ConsumerRunning: status.ConsumerRunning, ComputeWorkers: status.ComputeWorkers, ExprVersion: status.ExprVersion,
 		Lanes: LanesToPB(status.Lanes), RecentRuns: runs,
-		CatalogHash: status.CatalogHash, CatalogSyncedAt: FormatTime(status.CatalogSyncedAt),
+		CatalogHash: status.CatalogHash, CatalogSyncedAt: FormatTime(status.CatalogSyncedAt), Watermarks: watermarks,
 	}
 }
 
@@ -190,9 +195,17 @@ func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, 
 	for _, run := range pb.GetRecentRuns() {
 		runs = append(runs, RunSummaryFromPB(run))
 	}
+	watermarks := make([]domain.SetWatermark, 0, len(pb.GetWatermarks()))
+	for _, item := range pb.GetWatermarks() {
+		committed, _ := ParseTime(item.GetCommittedThrough())
+		target, _ := ParseTime(item.GetTarget())
+		blockedSince, _ := ParseTime(item.GetBlockedSince())
+		blockedPeriod, _ := ParseTime(item.GetBlockedPeriod())
+		watermarks = append(watermarks, domain.SetWatermark{SetID: item.GetSetId(), CommittedThrough: committed, Target: target, BlockedSince: blockedSince, BlockedPeriod: blockedPeriod, BlockedReason: item.GetBlockedReason()})
+	}
 	return domain.EngineStatus{
 		ConsumerRunning: pb.GetConsumerRunning(), ComputeWorkers: pb.GetComputeWorkers(), ExprVersion: pb.GetExprVersion(),
-		Lanes: LanesFromPB(pb.GetLanes()), RecentRuns: runs, CatalogHash: pb.GetCatalogHash(), CatalogSyncedAt: syncedAt,
+		Lanes: LanesFromPB(pb.GetLanes()), RecentRuns: runs, CatalogHash: pb.GetCatalogHash(), CatalogSyncedAt: syncedAt, Watermarks: watermarks,
 	}, nil
 }
 

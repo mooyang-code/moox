@@ -183,3 +183,25 @@ func TestRunRecordsWarmingSkipsForRecovery(t *testing.T) {
 		return keys
 	}())
 }
+
+// 上游失败（截止时还没到）的标的记入账本，原因是 upstream_failed，补采补齐后由只填充补算补上。
+func TestRunRecordsUpstreamFailedSubjectsForRecovery(t *testing.T) {
+	sink := &recordingSink{}
+	runner := NewRunner(&hourlyStore{}, periodclock.Continuous{}, Config{GapSink: sink})
+	factors := []domain.FactorDef{testPipelineFactor("mom", domain.FactorTypeTimeSeries, 1, false)}
+	period := time.Date(2026, 10, 16, 8, 0, 0, 0, time.UTC)
+	plan := hourlyPlan(t, period, factors...)
+	plan.UpstreamFailed, plan.Available = []string{"ETH"}, []string{"BTC"}
+	_, err := runner.Run(context.Background(), plan)
+	require.NoError(t, err)
+	var upstream []GapEntry
+	for _, entry := range sink.entries {
+		if entry.Reason == SkipReasonUpstream {
+			upstream = append(upstream, entry)
+		}
+	}
+	require.Len(t, upstream, 1)
+	require.Equal(t, "ETH", upstream[0].Subject)
+	require.Equal(t, period, upstream[0].Period)
+	require.Equal(t, "evt-0800", upstream[0].TriggerEventID)
+}

@@ -4259,6 +4259,8 @@ type EngineRuntimeStatus struct {
 	CatalogSyncedAt string              `protobuf:"bytes,7,opt,name=catalog_synced_at,json=catalogSyncedAt,proto3" json:"catalog_synced_at,omitempty"`
 	ComputeWorkers  int32               `protobuf:"varint,8,opt,name=compute_workers,json=computeWorkers,proto3" json:"compute_workers,omitempty"`
 	ExprVersion     string              `protobuf:"bytes,9,opt,name=expr_version,json=exprVersion,proto3" json:"expr_version,omitempty"`
+	// watermarks 是各集合的连续水位：已连续算完到哪一期、已知的最新一期、是否阻塞在还没补到的周期上。
+	Watermarks []*SetWatermarkStatus `protobuf:"bytes,10,rep,name=watermarks,proto3" json:"watermarks,omitempty"`
 }
 
 func (x *EngineRuntimeStatus) Reset() {
@@ -4342,6 +4344,285 @@ func (x *EngineRuntimeStatus) GetExprVersion() string {
 	return ""
 }
 
+func (x *EngineRuntimeStatus) GetWatermarks() []*SetWatermarkStatus {
+	if x != nil {
+		return x.Watermarks
+	}
+	return nil
+}
+
+type SetWatermarkStatus struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SetId            string `protobuf:"bytes,1,opt,name=set_id,json=setId,proto3" json:"set_id,omitempty"`
+	CommittedThrough string `protobuf:"bytes,2,opt,name=committed_through,json=committedThrough,proto3" json:"committed_through,omitempty"`
+	Target           string `protobuf:"bytes,3,opt,name=target,proto3" json:"target,omitempty"`
+	// blocked_since 非空表示水位阻塞：blocked_period 是卡住的那一期，blocked_reason 是原因（no_rows、missing_over_threshold、no_universe）。
+	BlockedSince  string `protobuf:"bytes,4,opt,name=blocked_since,json=blockedSince,proto3" json:"blocked_since,omitempty"`
+	BlockedPeriod string `protobuf:"bytes,5,opt,name=blocked_period,json=blockedPeriod,proto3" json:"blocked_period,omitempty"`
+	BlockedReason string `protobuf:"bytes,6,opt,name=blocked_reason,json=blockedReason,proto3" json:"blocked_reason,omitempty"`
+}
+
+func (x *SetWatermarkStatus) Reset() {
+	*x = SetWatermarkStatus{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_factor_proto_msgTypes[64]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *SetWatermarkStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetWatermarkStatus) ProtoMessage() {}
+
+func (x *SetWatermarkStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_factor_proto_msgTypes[64]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetWatermarkStatus.ProtoReflect.Descriptor instead.
+func (*SetWatermarkStatus) Descriptor() ([]byte, []int) {
+	return file_factor_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *SetWatermarkStatus) GetSetId() string {
+	if x != nil {
+		return x.SetId
+	}
+	return ""
+}
+
+func (x *SetWatermarkStatus) GetCommittedThrough() string {
+	if x != nil {
+		return x.CommittedThrough
+	}
+	return ""
+}
+
+func (x *SetWatermarkStatus) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *SetWatermarkStatus) GetBlockedSince() string {
+	if x != nil {
+		return x.BlockedSince
+	}
+	return ""
+}
+
+func (x *SetWatermarkStatus) GetBlockedPeriod() string {
+	if x != nil {
+		return x.BlockedPeriod
+	}
+	return ""
+}
+
+func (x *SetWatermarkStatus) GetBlockedReason() string {
+	if x != nil {
+		return x.BlockedReason
+	}
+	return ""
+}
+
+// PeriodsFilled 是补采补齐了一段周期的通知：absent_subjects 是补采确认行情源没有的标的。
+type PeriodsFilled struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SpaceId   string `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	DatasetId string `protobuf:"bytes,2,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	Frequency string `protobuf:"bytes,3,opt,name=frequency,proto3" json:"frequency,omitempty"`
+	// [from, to) 是补齐的 K 线开始时间范围（Unix 秒）。
+	From           int64    `protobuf:"varint,4,opt,name=from,proto3" json:"from,omitempty"`
+	To             int64    `protobuf:"varint,5,opt,name=to,proto3" json:"to,omitempty"`
+	AbsentSubjects []string `protobuf:"bytes,6,rep,name=absent_subjects,json=absentSubjects,proto3" json:"absent_subjects,omitempty"`
+}
+
+func (x *PeriodsFilled) Reset() {
+	*x = PeriodsFilled{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_factor_proto_msgTypes[65]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *PeriodsFilled) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PeriodsFilled) ProtoMessage() {}
+
+func (x *PeriodsFilled) ProtoReflect() protoreflect.Message {
+	mi := &file_factor_proto_msgTypes[65]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PeriodsFilled.ProtoReflect.Descriptor instead.
+func (*PeriodsFilled) Descriptor() ([]byte, []int) {
+	return file_factor_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *PeriodsFilled) GetSpaceId() string {
+	if x != nil {
+		return x.SpaceId
+	}
+	return ""
+}
+
+func (x *PeriodsFilled) GetDatasetId() string {
+	if x != nil {
+		return x.DatasetId
+	}
+	return ""
+}
+
+func (x *PeriodsFilled) GetFrequency() string {
+	if x != nil {
+		return x.Frequency
+	}
+	return ""
+}
+
+func (x *PeriodsFilled) GetFrom() int64 {
+	if x != nil {
+		return x.From
+	}
+	return 0
+}
+
+func (x *PeriodsFilled) GetTo() int64 {
+	if x != nil {
+		return x.To
+	}
+	return 0
+}
+
+func (x *PeriodsFilled) GetAbsentSubjects() []string {
+	if x != nil {
+		return x.AbsentSubjects
+	}
+	return nil
+}
+
+// NotifyPeriodsFilled 由 Collector 在补采作业成功后调用；因子管理服务在引擎心跳响应里转交，引擎据此立即推进水位并补算。
+type NotifyPeriodsFilledReq struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Filled []*PeriodsFilled `protobuf:"bytes,1,rep,name=filled,proto3" json:"filled,omitempty"`
+}
+
+func (x *NotifyPeriodsFilledReq) Reset() {
+	*x = NotifyPeriodsFilledReq{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_factor_proto_msgTypes[66]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *NotifyPeriodsFilledReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NotifyPeriodsFilledReq) ProtoMessage() {}
+
+func (x *NotifyPeriodsFilledReq) ProtoReflect() protoreflect.Message {
+	mi := &file_factor_proto_msgTypes[66]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NotifyPeriodsFilledReq.ProtoReflect.Descriptor instead.
+func (*NotifyPeriodsFilledReq) Descriptor() ([]byte, []int) {
+	return file_factor_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *NotifyPeriodsFilledReq) GetFilled() []*PeriodsFilled {
+	if x != nil {
+		return x.Filled
+	}
+	return nil
+}
+
+type NotifyPeriodsFilledRsp struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+}
+
+func (x *NotifyPeriodsFilledRsp) Reset() {
+	*x = NotifyPeriodsFilledRsp{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_factor_proto_msgTypes[67]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *NotifyPeriodsFilledRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NotifyPeriodsFilledRsp) ProtoMessage() {}
+
+func (x *NotifyPeriodsFilledRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_factor_proto_msgTypes[67]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NotifyPeriodsFilledRsp.ProtoReflect.Descriptor instead.
+func (*NotifyPeriodsFilledRsp) Descriptor() ([]byte, []int) {
+	return file_factor_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *NotifyPeriodsFilledRsp) GetRetInfo() *commonpb.RetInfo {
+	if x != nil {
+		return x.RetInfo
+	}
+	return nil
+}
+
 type EngineHeartbeatReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -4354,7 +4635,7 @@ type EngineHeartbeatReq struct {
 func (x *EngineHeartbeatReq) Reset() {
 	*x = EngineHeartbeatReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_factor_proto_msgTypes[64]
+		mi := &file_factor_proto_msgTypes[68]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4367,7 +4648,7 @@ func (x *EngineHeartbeatReq) String() string {
 func (*EngineHeartbeatReq) ProtoMessage() {}
 
 func (x *EngineHeartbeatReq) ProtoReflect() protoreflect.Message {
-	mi := &file_factor_proto_msgTypes[64]
+	mi := &file_factor_proto_msgTypes[68]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4380,7 +4661,7 @@ func (x *EngineHeartbeatReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EngineHeartbeatReq.ProtoReflect.Descriptor instead.
 func (*EngineHeartbeatReq) Descriptor() ([]byte, []int) {
-	return file_factor_proto_rawDescGZIP(), []int{64}
+	return file_factor_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *EngineHeartbeatReq) GetEngine() *EngineIdentity {
@@ -4404,12 +4685,14 @@ type EngineHeartbeatRsp struct {
 
 	RetInfo         *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 	LeaseTtlSeconds int64             `protobuf:"varint,2,opt,name=lease_ttl_seconds,json=leaseTtlSeconds,proto3" json:"lease_ttl_seconds,omitempty"`
+	// filled 是自上次心跳以来收到的补齐通知（只交给持有租约的引擎）。
+	Filled []*PeriodsFilled `protobuf:"bytes,3,rep,name=filled,proto3" json:"filled,omitempty"`
 }
 
 func (x *EngineHeartbeatRsp) Reset() {
 	*x = EngineHeartbeatRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_factor_proto_msgTypes[65]
+		mi := &file_factor_proto_msgTypes[69]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4422,7 +4705,7 @@ func (x *EngineHeartbeatRsp) String() string {
 func (*EngineHeartbeatRsp) ProtoMessage() {}
 
 func (x *EngineHeartbeatRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_factor_proto_msgTypes[65]
+	mi := &file_factor_proto_msgTypes[69]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4435,7 +4718,7 @@ func (x *EngineHeartbeatRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EngineHeartbeatRsp.ProtoReflect.Descriptor instead.
 func (*EngineHeartbeatRsp) Descriptor() ([]byte, []int) {
-	return file_factor_proto_rawDescGZIP(), []int{65}
+	return file_factor_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *EngineHeartbeatRsp) GetRetInfo() *commonpb.RetInfo {
@@ -4452,6 +4735,13 @@ func (x *EngineHeartbeatRsp) GetLeaseTtlSeconds() int64 {
 	return 0
 }
 
+func (x *EngineHeartbeatRsp) GetFilled() []*PeriodsFilled {
+	if x != nil {
+		return x.Filled
+	}
+	return nil
+}
+
 type PullRecalcJobReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -4463,7 +4753,7 @@ type PullRecalcJobReq struct {
 func (x *PullRecalcJobReq) Reset() {
 	*x = PullRecalcJobReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_factor_proto_msgTypes[66]
+		mi := &file_factor_proto_msgTypes[70]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4476,7 +4766,7 @@ func (x *PullRecalcJobReq) String() string {
 func (*PullRecalcJobReq) ProtoMessage() {}
 
 func (x *PullRecalcJobReq) ProtoReflect() protoreflect.Message {
-	mi := &file_factor_proto_msgTypes[66]
+	mi := &file_factor_proto_msgTypes[70]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4489,7 +4779,7 @@ func (x *PullRecalcJobReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PullRecalcJobReq.ProtoReflect.Descriptor instead.
 func (*PullRecalcJobReq) Descriptor() ([]byte, []int) {
-	return file_factor_proto_rawDescGZIP(), []int{66}
+	return file_factor_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *PullRecalcJobReq) GetEngine() *EngineIdentity {
@@ -4514,7 +4804,7 @@ type PullRecalcJobRsp struct {
 func (x *PullRecalcJobRsp) Reset() {
 	*x = PullRecalcJobRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_factor_proto_msgTypes[67]
+		mi := &file_factor_proto_msgTypes[71]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4527,7 +4817,7 @@ func (x *PullRecalcJobRsp) String() string {
 func (*PullRecalcJobRsp) ProtoMessage() {}
 
 func (x *PullRecalcJobRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_factor_proto_msgTypes[67]
+	mi := &file_factor_proto_msgTypes[71]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4540,7 +4830,7 @@ func (x *PullRecalcJobRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PullRecalcJobRsp.ProtoReflect.Descriptor instead.
 func (*PullRecalcJobRsp) Descriptor() ([]byte, []int) {
-	return file_factor_proto_rawDescGZIP(), []int{67}
+	return file_factor_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *PullRecalcJobRsp) GetRetInfo() *commonpb.RetInfo {
@@ -4594,7 +4884,7 @@ type ReportRecalcProgressReq struct {
 func (x *ReportRecalcProgressReq) Reset() {
 	*x = ReportRecalcProgressReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_factor_proto_msgTypes[68]
+		mi := &file_factor_proto_msgTypes[72]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4607,7 +4897,7 @@ func (x *ReportRecalcProgressReq) String() string {
 func (*ReportRecalcProgressReq) ProtoMessage() {}
 
 func (x *ReportRecalcProgressReq) ProtoReflect() protoreflect.Message {
-	mi := &file_factor_proto_msgTypes[68]
+	mi := &file_factor_proto_msgTypes[72]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4620,7 +4910,7 @@ func (x *ReportRecalcProgressReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportRecalcProgressReq.ProtoReflect.Descriptor instead.
 func (*ReportRecalcProgressReq) Descriptor() ([]byte, []int) {
-	return file_factor_proto_rawDescGZIP(), []int{68}
+	return file_factor_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *ReportRecalcProgressReq) GetEngine() *EngineIdentity {
@@ -4677,7 +4967,7 @@ type ReportRecalcProgressRsp struct {
 func (x *ReportRecalcProgressRsp) Reset() {
 	*x = ReportRecalcProgressRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_factor_proto_msgTypes[69]
+		mi := &file_factor_proto_msgTypes[73]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4690,7 +4980,7 @@ func (x *ReportRecalcProgressRsp) String() string {
 func (*ReportRecalcProgressRsp) ProtoMessage() {}
 
 func (x *ReportRecalcProgressRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_factor_proto_msgTypes[69]
+	mi := &file_factor_proto_msgTypes[73]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4703,7 +4993,7 @@ func (x *ReportRecalcProgressRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportRecalcProgressRsp.ProtoReflect.Descriptor instead.
 func (*ReportRecalcProgressRsp) Descriptor() ([]byte, []int) {
-	return file_factor_proto_rawDescGZIP(), []int{69}
+	return file_factor_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *ReportRecalcProgressRsp) GetRetInfo() *commonpb.RetInfo {
@@ -5325,7 +5615,7 @@ var file_factor_proto_rawDesc = []byte{
 	0x64, 0x12, 0x2f, 0x0a, 0x04, 0x73, 0x65, 0x74, 0x73, 0x18, 0x04, 0x20, 0x03, 0x28, 0x0b, 0x32,
 	0x1b, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74,
 	0x6f, 0x72, 0x2e, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x53, 0x65, 0x74, 0x52, 0x04, 0x73, 0x65,
-	0x74, 0x73, 0x22, 0xd7, 0x02, 0x0a, 0x13, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x52, 0x75, 0x6e,
+	0x74, 0x73, 0x22, 0x9d, 0x03, 0x0a, 0x13, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x52, 0x75, 0x6e,
 	0x74, 0x69, 0x6d, 0x65, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12, 0x29, 0x0a, 0x10, 0x63, 0x6f,
 	0x6e, 0x73, 0x75, 0x6d, 0x65, 0x72, 0x5f, 0x72, 0x75, 0x6e, 0x6e, 0x69, 0x6e, 0x67, 0x18, 0x01,
 	0x20, 0x01, 0x28, 0x08, 0x52, 0x0f, 0x63, 0x6f, 0x6e, 0x73, 0x75, 0x6d, 0x65, 0x72, 0x52, 0x75,
@@ -5346,24 +5636,68 @@ var file_factor_proto_rawDesc = []byte{
 	0x65, 0x72, 0x73, 0x18, 0x08, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0e, 0x63, 0x6f, 0x6d, 0x70, 0x75,
 	0x74, 0x65, 0x57, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x73, 0x12, 0x21, 0x0a, 0x0c, 0x65, 0x78, 0x70,
 	0x72, 0x5f, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x18, 0x09, 0x20, 0x01, 0x28, 0x09, 0x52,
-	0x0b, 0x65, 0x78, 0x70, 0x72, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x22, 0x8d, 0x01, 0x0a,
-	0x12, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74,
-	0x52, 0x65, 0x71, 0x12, 0x38, 0x0a, 0x06, 0x65, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x18, 0x01, 0x20,
-	0x01, 0x28, 0x0b, 0x32, 0x20, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
-	0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x49, 0x64, 0x65,
-	0x6e, 0x74, 0x69, 0x74, 0x79, 0x52, 0x06, 0x65, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x12, 0x3d, 0x0a,
-	0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x25, 0x2e,
-	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72,
-	0x2e, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x52, 0x75, 0x6e, 0x74, 0x69, 0x6d, 0x65, 0x53, 0x74,
-	0x61, 0x74, 0x75, 0x73, 0x52, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x22, 0x76, 0x0a, 0x12,
-	0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x52,
-	0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01,
-	0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
-	0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52,
-	0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x2a, 0x0a, 0x11, 0x6c, 0x65, 0x61, 0x73,
-	0x65, 0x5f, 0x74, 0x74, 0x6c, 0x5f, 0x73, 0x65, 0x63, 0x6f, 0x6e, 0x64, 0x73, 0x18, 0x02, 0x20,
-	0x01, 0x28, 0x03, 0x52, 0x0f, 0x6c, 0x65, 0x61, 0x73, 0x65, 0x54, 0x74, 0x6c, 0x53, 0x65, 0x63,
-	0x6f, 0x6e, 0x64, 0x73, 0x22, 0x4c, 0x0a, 0x10, 0x50, 0x75, 0x6c, 0x6c, 0x52, 0x65, 0x63, 0x61,
+	0x0b, 0x65, 0x78, 0x70, 0x72, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x12, 0x44, 0x0a, 0x0a,
+	0x77, 0x61, 0x74, 0x65, 0x72, 0x6d, 0x61, 0x72, 0x6b, 0x73, 0x18, 0x0a, 0x20, 0x03, 0x28, 0x0b,
+	0x32, 0x24, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63,
+	0x74, 0x6f, 0x72, 0x2e, 0x53, 0x65, 0x74, 0x57, 0x61, 0x74, 0x65, 0x72, 0x6d, 0x61, 0x72, 0x6b,
+	0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x0a, 0x77, 0x61, 0x74, 0x65, 0x72, 0x6d, 0x61, 0x72,
+	0x6b, 0x73, 0x22, 0xe3, 0x01, 0x0a, 0x12, 0x53, 0x65, 0x74, 0x57, 0x61, 0x74, 0x65, 0x72, 0x6d,
+	0x61, 0x72, 0x6b, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12, 0x15, 0x0a, 0x06, 0x73, 0x65, 0x74,
+	0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x73, 0x65, 0x74, 0x49, 0x64,
+	0x12, 0x2b, 0x0a, 0x11, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x74, 0x65, 0x64, 0x5f, 0x74, 0x68,
+	0x72, 0x6f, 0x75, 0x67, 0x68, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x10, 0x63, 0x6f, 0x6d,
+	0x6d, 0x69, 0x74, 0x74, 0x65, 0x64, 0x54, 0x68, 0x72, 0x6f, 0x75, 0x67, 0x68, 0x12, 0x16, 0x0a,
+	0x06, 0x74, 0x61, 0x72, 0x67, 0x65, 0x74, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x74,
+	0x61, 0x72, 0x67, 0x65, 0x74, 0x12, 0x23, 0x0a, 0x0d, 0x62, 0x6c, 0x6f, 0x63, 0x6b, 0x65, 0x64,
+	0x5f, 0x73, 0x69, 0x6e, 0x63, 0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0c, 0x62, 0x6c,
+	0x6f, 0x63, 0x6b, 0x65, 0x64, 0x53, 0x69, 0x6e, 0x63, 0x65, 0x12, 0x25, 0x0a, 0x0e, 0x62, 0x6c,
+	0x6f, 0x63, 0x6b, 0x65, 0x64, 0x5f, 0x70, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x18, 0x05, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x0d, 0x62, 0x6c, 0x6f, 0x63, 0x6b, 0x65, 0x64, 0x50, 0x65, 0x72, 0x69, 0x6f,
+	0x64, 0x12, 0x25, 0x0a, 0x0e, 0x62, 0x6c, 0x6f, 0x63, 0x6b, 0x65, 0x64, 0x5f, 0x72, 0x65, 0x61,
+	0x73, 0x6f, 0x6e, 0x18, 0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x62, 0x6c, 0x6f, 0x63, 0x6b,
+	0x65, 0x64, 0x52, 0x65, 0x61, 0x73, 0x6f, 0x6e, 0x22, 0xb4, 0x01, 0x0a, 0x0d, 0x50, 0x65, 0x72,
+	0x69, 0x6f, 0x64, 0x73, 0x46, 0x69, 0x6c, 0x6c, 0x65, 0x64, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70,
+	0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70,
+	0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x1d, 0x0a, 0x0a, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74,
+	0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x64, 0x61, 0x74, 0x61, 0x73,
+	0x65, 0x74, 0x49, 0x64, 0x12, 0x1c, 0x0a, 0x09, 0x66, 0x72, 0x65, 0x71, 0x75, 0x65, 0x6e, 0x63,
+	0x79, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x66, 0x72, 0x65, 0x71, 0x75, 0x65, 0x6e,
+	0x63, 0x79, 0x12, 0x12, 0x0a, 0x04, 0x66, 0x72, 0x6f, 0x6d, 0x18, 0x04, 0x20, 0x01, 0x28, 0x03,
+	0x52, 0x04, 0x66, 0x72, 0x6f, 0x6d, 0x12, 0x0e, 0x0a, 0x02, 0x74, 0x6f, 0x18, 0x05, 0x20, 0x01,
+	0x28, 0x03, 0x52, 0x02, 0x74, 0x6f, 0x12, 0x27, 0x0a, 0x0f, 0x61, 0x62, 0x73, 0x65, 0x6e, 0x74,
+	0x5f, 0x73, 0x75, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x73, 0x18, 0x06, 0x20, 0x03, 0x28, 0x09, 0x52,
+	0x0e, 0x61, 0x62, 0x73, 0x65, 0x6e, 0x74, 0x53, 0x75, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x73, 0x22,
+	0x51, 0x0a, 0x16, 0x4e, 0x6f, 0x74, 0x69, 0x66, 0x79, 0x50, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x73,
+	0x46, 0x69, 0x6c, 0x6c, 0x65, 0x64, 0x52, 0x65, 0x71, 0x12, 0x37, 0x0a, 0x06, 0x66, 0x69, 0x6c,
+	0x6c, 0x65, 0x64, 0x18, 0x01, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x1f, 0x2e, 0x74, 0x72, 0x70, 0x63,
+	0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x50, 0x65, 0x72,
+	0x69, 0x6f, 0x64, 0x73, 0x46, 0x69, 0x6c, 0x6c, 0x65, 0x64, 0x52, 0x06, 0x66, 0x69, 0x6c, 0x6c,
+	0x65, 0x64, 0x22, 0x4e, 0x0a, 0x16, 0x4e, 0x6f, 0x74, 0x69, 0x66, 0x79, 0x50, 0x65, 0x72, 0x69,
+	0x6f, 0x64, 0x73, 0x46, 0x69, 0x6c, 0x6c, 0x65, 0x64, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08,
+	0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19,
+	0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f,
+	0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e,
+	0x66, 0x6f, 0x22, 0x8d, 0x01, 0x0a, 0x12, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x48, 0x65, 0x61,
+	0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x52, 0x65, 0x71, 0x12, 0x38, 0x0a, 0x06, 0x65, 0x6e, 0x67,
+	0x69, 0x6e, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x20, 0x2e, 0x74, 0x72, 0x70, 0x63,
+	0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x45, 0x6e, 0x67,
+	0x69, 0x6e, 0x65, 0x49, 0x64, 0x65, 0x6e, 0x74, 0x69, 0x74, 0x79, 0x52, 0x06, 0x65, 0x6e, 0x67,
+	0x69, 0x6e, 0x65, 0x12, 0x3d, 0x0a, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x18, 0x02, 0x20,
+	0x01, 0x28, 0x0b, 0x32, 0x25, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x52, 0x75, 0x6e,
+	0x74, 0x69, 0x6d, 0x65, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x06, 0x73, 0x74, 0x61, 0x74,
+	0x75, 0x73, 0x22, 0xaf, 0x01, 0x0a, 0x12, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x48, 0x65, 0x61,
+	0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74,
+	0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72,
+	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52,
+	0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12,
+	0x2a, 0x0a, 0x11, 0x6c, 0x65, 0x61, 0x73, 0x65, 0x5f, 0x74, 0x74, 0x6c, 0x5f, 0x73, 0x65, 0x63,
+	0x6f, 0x6e, 0x64, 0x73, 0x18, 0x02, 0x20, 0x01, 0x28, 0x03, 0x52, 0x0f, 0x6c, 0x65, 0x61, 0x73,
+	0x65, 0x54, 0x74, 0x6c, 0x53, 0x65, 0x63, 0x6f, 0x6e, 0x64, 0x73, 0x12, 0x37, 0x0a, 0x06, 0x66,
+	0x69, 0x6c, 0x6c, 0x65, 0x64, 0x18, 0x03, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x1f, 0x2e, 0x74, 0x72,
+	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x50,
+	0x65, 0x72, 0x69, 0x6f, 0x64, 0x73, 0x46, 0x69, 0x6c, 0x6c, 0x65, 0x64, 0x52, 0x06, 0x66, 0x69,
+	0x6c, 0x6c, 0x65, 0x64, 0x22, 0x4c, 0x0a, 0x10, 0x50, 0x75, 0x6c, 0x6c, 0x52, 0x65, 0x63, 0x61,
 	0x6c, 0x63, 0x4a, 0x6f, 0x62, 0x52, 0x65, 0x71, 0x12, 0x38, 0x0a, 0x06, 0x65, 0x6e, 0x67, 0x69,
 	0x6e, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x20, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e,
 	0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x45, 0x6e, 0x67, 0x69,
@@ -5403,7 +5737,7 @@ var file_factor_proto_rawDesc = []byte{
 	0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74,
 	0x49, 0x6e, 0x66, 0x6f, 0x12, 0x1d, 0x0a, 0x0a, 0x6a, 0x6f, 0x62, 0x5f, 0x73, 0x74, 0x61, 0x74,
 	0x75, 0x73, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6a, 0x6f, 0x62, 0x53, 0x74, 0x61,
-	0x74, 0x75, 0x73, 0x32, 0xff, 0x0f, 0x0a, 0x09, 0x46, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x4d, 0x67,
+	0x74, 0x75, 0x73, 0x32, 0xea, 0x10, 0x0a, 0x09, 0x46, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x4d, 0x67,
 	0x72, 0x12, 0x5d, 0x0a, 0x0f, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x46, 0x61, 0x63, 0x74, 0x6f,
 	0x72, 0x53, 0x65, 0x74, 0x12, 0x24, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
 	0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x46, 0x61,
@@ -5531,38 +5865,44 @@ var file_factor_proto_rawDesc = []byte{
 	0x75, 0x6e, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x52, 0x65, 0x71, 0x1a, 0x28, 0x2e, 0x74, 0x72,
 	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x4c,
 	0x69, 0x73, 0x74, 0x46, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x46, 0x75, 0x6e, 0x63, 0x74, 0x69, 0x6f,
-	0x6e, 0x73, 0x52, 0x73, 0x70, 0x32, 0x99, 0x03, 0x0a, 0x0c, 0x46, 0x61, 0x63, 0x74, 0x6f, 0x72,
-	0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x12, 0x63, 0x0a, 0x11, 0x53, 0x79, 0x6e, 0x63, 0x45, 0x6e,
-	0x67, 0x69, 0x6e, 0x65, 0x43, 0x61, 0x74, 0x61, 0x6c, 0x6f, 0x67, 0x12, 0x26, 0x2e, 0x74, 0x72,
-	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53,
-	0x79, 0x6e, 0x63, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x43, 0x61, 0x74, 0x61, 0x6c, 0x6f, 0x67,
-	0x52, 0x65, 0x71, 0x1a, 0x26, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
-	0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x79, 0x6e, 0x63, 0x45, 0x6e, 0x67, 0x69, 0x6e,
-	0x65, 0x43, 0x61, 0x74, 0x61, 0x6c, 0x6f, 0x67, 0x52, 0x73, 0x70, 0x12, 0x5d, 0x0a, 0x0f, 0x45,
-	0x6e, 0x67, 0x69, 0x6e, 0x65, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x12, 0x24,
+	0x6e, 0x73, 0x52, 0x73, 0x70, 0x12, 0x69, 0x0a, 0x13, 0x4e, 0x6f, 0x74, 0x69, 0x66, 0x79, 0x50,
+	0x65, 0x72, 0x69, 0x6f, 0x64, 0x73, 0x46, 0x69, 0x6c, 0x6c, 0x65, 0x64, 0x12, 0x28, 0x2e, 0x74,
+	0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e,
+	0x4e, 0x6f, 0x74, 0x69, 0x66, 0x79, 0x50, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x73, 0x46, 0x69, 0x6c,
+	0x6c, 0x65, 0x64, 0x52, 0x65, 0x71, 0x1a, 0x28, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
+	0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x4e, 0x6f, 0x74, 0x69, 0x66, 0x79,
+	0x50, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x73, 0x46, 0x69, 0x6c, 0x6c, 0x65, 0x64, 0x52, 0x73, 0x70,
+	0x32, 0x99, 0x03, 0x0a, 0x0c, 0x46, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x45, 0x6e, 0x67, 0x69, 0x6e,
+	0x65, 0x12, 0x63, 0x0a, 0x11, 0x53, 0x79, 0x6e, 0x63, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x43,
+	0x61, 0x74, 0x61, 0x6c, 0x6f, 0x67, 0x12, 0x26, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
+	0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x79, 0x6e, 0x63, 0x45, 0x6e,
+	0x67, 0x69, 0x6e, 0x65, 0x43, 0x61, 0x74, 0x61, 0x6c, 0x6f, 0x67, 0x52, 0x65, 0x71, 0x1a, 0x26,
 	0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f,
-	0x72, 0x2e, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61,
-	0x74, 0x52, 0x65, 0x71, 0x1a, 0x24, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
-	0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x48, 0x65,
-	0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x52, 0x73, 0x70, 0x12, 0x57, 0x0a, 0x0d, 0x50, 0x75,
-	0x6c, 0x6c, 0x52, 0x65, 0x63, 0x61, 0x6c, 0x63, 0x4a, 0x6f, 0x62, 0x12, 0x22, 0x2e, 0x74, 0x72,
-	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x50,
-	0x75, 0x6c, 0x6c, 0x52, 0x65, 0x63, 0x61, 0x6c, 0x63, 0x4a, 0x6f, 0x62, 0x52, 0x65, 0x71, 0x1a,
-	0x22, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74,
-	0x6f, 0x72, 0x2e, 0x50, 0x75, 0x6c, 0x6c, 0x52, 0x65, 0x63, 0x61, 0x6c, 0x63, 0x4a, 0x6f, 0x62,
-	0x52, 0x73, 0x70, 0x12, 0x6c, 0x0a, 0x14, 0x52, 0x65, 0x70, 0x6f, 0x72, 0x74, 0x52, 0x65, 0x63,
-	0x61, 0x6c, 0x63, 0x50, 0x72, 0x6f, 0x67, 0x72, 0x65, 0x73, 0x73, 0x12, 0x29, 0x2e, 0x74, 0x72,
-	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x52,
-	0x65, 0x70, 0x6f, 0x72, 0x74, 0x52, 0x65, 0x63, 0x61, 0x6c, 0x63, 0x50, 0x72, 0x6f, 0x67, 0x72,
-	0x65, 0x73, 0x73, 0x52, 0x65, 0x71, 0x1a, 0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
+	0x72, 0x2e, 0x53, 0x79, 0x6e, 0x63, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x43, 0x61, 0x74, 0x61,
+	0x6c, 0x6f, 0x67, 0x52, 0x73, 0x70, 0x12, 0x5d, 0x0a, 0x0f, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65,
+	0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x12, 0x24, 0x2e, 0x74, 0x72, 0x70, 0x63,
+	0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x45, 0x6e, 0x67,
+	0x69, 0x6e, 0x65, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x52, 0x65, 0x71, 0x1a,
+	0x24, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74,
+	0x6f, 0x72, 0x2e, 0x45, 0x6e, 0x67, 0x69, 0x6e, 0x65, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65,
+	0x61, 0x74, 0x52, 0x73, 0x70, 0x12, 0x57, 0x0a, 0x0d, 0x50, 0x75, 0x6c, 0x6c, 0x52, 0x65, 0x63,
+	0x61, 0x6c, 0x63, 0x4a, 0x6f, 0x62, 0x12, 0x22, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
+	0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x50, 0x75, 0x6c, 0x6c, 0x52, 0x65,
+	0x63, 0x61, 0x6c, 0x63, 0x4a, 0x6f, 0x62, 0x52, 0x65, 0x71, 0x1a, 0x22, 0x2e, 0x74, 0x72, 0x70,
+	0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x50, 0x75,
+	0x6c, 0x6c, 0x52, 0x65, 0x63, 0x61, 0x6c, 0x63, 0x4a, 0x6f, 0x62, 0x52, 0x73, 0x70, 0x12, 0x6c,
+	0x0a, 0x14, 0x52, 0x65, 0x70, 0x6f, 0x72, 0x74, 0x52, 0x65, 0x63, 0x61, 0x6c, 0x63, 0x50, 0x72,
+	0x6f, 0x67, 0x72, 0x65, 0x73, 0x73, 0x12, 0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
 	0x6f, 0x78, 0x2e, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x52, 0x65, 0x70, 0x6f, 0x72, 0x74,
-	0x52, 0x65, 0x63, 0x61, 0x6c, 0x63, 0x50, 0x72, 0x6f, 0x67, 0x72, 0x65, 0x73, 0x73, 0x52, 0x73,
-	0x70, 0x42, 0x46, 0x5a, 0x44, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f,
-	0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f,
-	0x78, 0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72,
-	0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x67, 0x65, 0x6e,
-	0x3b, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f,
-	0x33,
+	0x52, 0x65, 0x63, 0x61, 0x6c, 0x63, 0x50, 0x72, 0x6f, 0x67, 0x72, 0x65, 0x73, 0x73, 0x52, 0x65,
+	0x71, 0x1a, 0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x66, 0x61,
+	0x63, 0x74, 0x6f, 0x72, 0x2e, 0x52, 0x65, 0x70, 0x6f, 0x72, 0x74, 0x52, 0x65, 0x63, 0x61, 0x6c,
+	0x63, 0x50, 0x72, 0x6f, 0x67, 0x72, 0x65, 0x73, 0x73, 0x52, 0x73, 0x70, 0x42, 0x46, 0x5a, 0x44,
+	0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61,
+	0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64,
+	0x75, 0x6c, 0x65, 0x73, 0x2f, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x2f, 0x70, 0x72, 0x6f, 0x74,
+	0x6f, 0x2f, 0x66, 0x61, 0x63, 0x74, 0x6f, 0x72, 0x67, 0x65, 0x6e, 0x3b, 0x66, 0x61, 0x63, 0x74,
+	0x6f, 0x72, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -5577,7 +5917,7 @@ func file_factor_proto_rawDescGZIP() []byte {
 	return file_factor_proto_rawDescData
 }
 
-var file_factor_proto_msgTypes = make([]protoimpl.MessageInfo, 70)
+var file_factor_proto_msgTypes = make([]protoimpl.MessageInfo, 74)
 var file_factor_proto_goTypes = []interface{}{
 	(*FactorSet)(nil),                // 0: trpc.moox.factor.FactorSet
 	(*FactorDef)(nil),                // 1: trpc.moox.factor.FactorDef
@@ -5643,15 +5983,19 @@ var file_factor_proto_goTypes = []interface{}{
 	(*SyncEngineCatalogReq)(nil),     // 61: trpc.moox.factor.SyncEngineCatalogReq
 	(*SyncEngineCatalogRsp)(nil),     // 62: trpc.moox.factor.SyncEngineCatalogRsp
 	(*EngineRuntimeStatus)(nil),      // 63: trpc.moox.factor.EngineRuntimeStatus
-	(*EngineHeartbeatReq)(nil),       // 64: trpc.moox.factor.EngineHeartbeatReq
-	(*EngineHeartbeatRsp)(nil),       // 65: trpc.moox.factor.EngineHeartbeatRsp
-	(*PullRecalcJobReq)(nil),         // 66: trpc.moox.factor.PullRecalcJobReq
-	(*PullRecalcJobRsp)(nil),         // 67: trpc.moox.factor.PullRecalcJobRsp
-	(*ReportRecalcProgressReq)(nil),  // 68: trpc.moox.factor.ReportRecalcProgressReq
-	(*ReportRecalcProgressRsp)(nil),  // 69: trpc.moox.factor.ReportRecalcProgressRsp
-	(*commonpb.RetInfo)(nil),         // 70: trpc.moox.common.RetInfo
-	(*commonpb.Page)(nil),            // 71: trpc.moox.common.Page
-	(*commonpb.PageResult)(nil),      // 72: trpc.moox.common.PageResult
+	(*SetWatermarkStatus)(nil),       // 64: trpc.moox.factor.SetWatermarkStatus
+	(*PeriodsFilled)(nil),            // 65: trpc.moox.factor.PeriodsFilled
+	(*NotifyPeriodsFilledReq)(nil),   // 66: trpc.moox.factor.NotifyPeriodsFilledReq
+	(*NotifyPeriodsFilledRsp)(nil),   // 67: trpc.moox.factor.NotifyPeriodsFilledRsp
+	(*EngineHeartbeatReq)(nil),       // 68: trpc.moox.factor.EngineHeartbeatReq
+	(*EngineHeartbeatRsp)(nil),       // 69: trpc.moox.factor.EngineHeartbeatRsp
+	(*PullRecalcJobReq)(nil),         // 70: trpc.moox.factor.PullRecalcJobReq
+	(*PullRecalcJobRsp)(nil),         // 71: trpc.moox.factor.PullRecalcJobRsp
+	(*ReportRecalcProgressReq)(nil),  // 72: trpc.moox.factor.ReportRecalcProgressReq
+	(*ReportRecalcProgressRsp)(nil),  // 73: trpc.moox.factor.ReportRecalcProgressRsp
+	(*commonpb.RetInfo)(nil),         // 74: trpc.moox.common.RetInfo
+	(*commonpb.Page)(nil),            // 75: trpc.moox.common.Page
+	(*commonpb.PageResult)(nil),      // 76: trpc.moox.common.PageResult
 }
 var file_factor_proto_depIdxs = []int32{
 	1,   // 0: trpc.moox.factor.FactorInfo.factor:type_name -> trpc.moox.factor.FactorDef
@@ -5662,135 +6006,141 @@ var file_factor_proto_depIdxs = []int32{
 	4,   // 5: trpc.moox.factor.FactorSetInfo.members:type_name -> trpc.moox.factor.FactorMember
 	6,   // 6: trpc.moox.factor.FactorSetInfo.last_run:type_name -> trpc.moox.factor.SetRunSummary
 	0,   // 7: trpc.moox.factor.CreateFactorSetReq.factor_set:type_name -> trpc.moox.factor.FactorSet
-	70,  // 8: trpc.moox.factor.CreateFactorSetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 8: trpc.moox.factor.CreateFactorSetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	0,   // 9: trpc.moox.factor.CreateFactorSetRsp.factor_set:type_name -> trpc.moox.factor.FactorSet
-	70,  // 10: trpc.moox.factor.UpdateFactorSetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 10: trpc.moox.factor.UpdateFactorSetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	0,   // 11: trpc.moox.factor.UpdateFactorSetRsp.factor_set:type_name -> trpc.moox.factor.FactorSet
-	70,  // 12: trpc.moox.factor.SetFactorSetStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 12: trpc.moox.factor.SetFactorSetStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	0,   // 13: trpc.moox.factor.SetFactorSetStatusRsp.factor_set:type_name -> trpc.moox.factor.FactorSet
-	70,  // 14: trpc.moox.factor.DeleteFactorSetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	70,  // 15: trpc.moox.factor.GetFactorSetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 14: trpc.moox.factor.DeleteFactorSetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 15: trpc.moox.factor.GetFactorSetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	0,   // 16: trpc.moox.factor.GetFactorSetRsp.factor_set:type_name -> trpc.moox.factor.FactorSet
 	4,   // 17: trpc.moox.factor.GetFactorSetRsp.members:type_name -> trpc.moox.factor.FactorMember
 	6,   // 18: trpc.moox.factor.GetFactorSetRsp.last_run:type_name -> trpc.moox.factor.SetRunSummary
-	71,  // 19: trpc.moox.factor.ListFactorSetsReq.page:type_name -> trpc.moox.common.Page
-	70,  // 20: trpc.moox.factor.ListFactorSetsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	75,  // 19: trpc.moox.factor.ListFactorSetsReq.page:type_name -> trpc.moox.common.Page
+	74,  // 20: trpc.moox.factor.ListFactorSetsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	7,   // 21: trpc.moox.factor.ListFactorSetsRsp.factor_sets:type_name -> trpc.moox.factor.FactorSetInfo
-	72,  // 22: trpc.moox.factor.ListFactorSetsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	76,  // 22: trpc.moox.factor.ListFactorSetsRsp.page_result:type_name -> trpc.moox.common.PageResult
 	1,   // 23: trpc.moox.factor.CreateFactorReq.factor:type_name -> trpc.moox.factor.FactorDef
-	70,  // 24: trpc.moox.factor.CreateFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 24: trpc.moox.factor.CreateFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	1,   // 25: trpc.moox.factor.CreateFactorRsp.factor:type_name -> trpc.moox.factor.FactorDef
 	1,   // 26: trpc.moox.factor.UpdateFactorReq.factor:type_name -> trpc.moox.factor.FactorDef
-	70,  // 27: trpc.moox.factor.UpdateFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 27: trpc.moox.factor.UpdateFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	1,   // 28: trpc.moox.factor.UpdateFactorRsp.factor:type_name -> trpc.moox.factor.FactorDef
-	70,  // 29: trpc.moox.factor.AddFactorToSetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 29: trpc.moox.factor.AddFactorToSetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	4,   // 30: trpc.moox.factor.AddFactorToSetRsp.member:type_name -> trpc.moox.factor.FactorMember
-	70,  // 31: trpc.moox.factor.RemoveFactorFromSetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	70,  // 32: trpc.moox.factor.SetFactorMemberStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 31: trpc.moox.factor.RemoveFactorFromSetRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 32: trpc.moox.factor.SetFactorMemberStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	4,   // 33: trpc.moox.factor.SetFactorMemberStatusRsp.member:type_name -> trpc.moox.factor.FactorMember
 	8,   // 34: trpc.moox.factor.SetFactorMemberStatusRsp.backfill_job:type_name -> trpc.moox.factor.RecalcJob
-	70,  // 35: trpc.moox.factor.DeleteFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	70,  // 36: trpc.moox.factor.GetFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 35: trpc.moox.factor.DeleteFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 36: trpc.moox.factor.GetFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	1,   // 37: trpc.moox.factor.GetFactorRsp.factor:type_name -> trpc.moox.factor.FactorDef
 	2,   // 38: trpc.moox.factor.GetFactorRsp.usages:type_name -> trpc.moox.factor.FactorUsage
-	71,  // 39: trpc.moox.factor.ListFactorsReq.page:type_name -> trpc.moox.common.Page
-	70,  // 40: trpc.moox.factor.ListFactorsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	75,  // 39: trpc.moox.factor.ListFactorsReq.page:type_name -> trpc.moox.common.Page
+	74,  // 40: trpc.moox.factor.ListFactorsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	3,   // 41: trpc.moox.factor.ListFactorsRsp.factors:type_name -> trpc.moox.factor.FactorInfo
-	72,  // 42: trpc.moox.factor.ListFactorsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	70,  // 43: trpc.moox.factor.RecalcFactorsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	76,  // 42: trpc.moox.factor.ListFactorsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	74,  // 43: trpc.moox.factor.RecalcFactorsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	8,   // 44: trpc.moox.factor.RecalcFactorsRsp.job:type_name -> trpc.moox.factor.RecalcJob
-	71,  // 45: trpc.moox.factor.ListRecalcJobsReq.page:type_name -> trpc.moox.common.Page
-	70,  // 46: trpc.moox.factor.ListRecalcJobsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	75,  // 45: trpc.moox.factor.ListRecalcJobsReq.page:type_name -> trpc.moox.common.Page
+	74,  // 46: trpc.moox.factor.ListRecalcJobsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	8,   // 47: trpc.moox.factor.ListRecalcJobsRsp.jobs:type_name -> trpc.moox.factor.RecalcJob
-	72,  // 48: trpc.moox.factor.ListRecalcJobsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	70,  // 49: trpc.moox.factor.GetRecalcJobRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	76,  // 48: trpc.moox.factor.ListRecalcJobsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	74,  // 49: trpc.moox.factor.GetRecalcJobRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	8,   // 50: trpc.moox.factor.GetRecalcJobRsp.job:type_name -> trpc.moox.factor.RecalcJob
-	70,  // 51: trpc.moox.factor.CancelRecalcJobRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 51: trpc.moox.factor.CancelRecalcJobRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	8,   // 52: trpc.moox.factor.CancelRecalcJobRsp.job:type_name -> trpc.moox.factor.RecalcJob
-	70,  // 53: trpc.moox.factor.GetStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 53: trpc.moox.factor.GetStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	45,  // 54: trpc.moox.factor.GetStatusRsp.lanes:type_name -> trpc.moox.factor.FactorLaneStatus
 	6,   // 55: trpc.moox.factor.GetStatusRsp.recent_runs:type_name -> trpc.moox.factor.SetRunSummary
 	46,  // 56: trpc.moox.factor.GetStatusRsp.engine:type_name -> trpc.moox.factor.EngineInfo
-	70,  // 57: trpc.moox.factor.ValidateFactorSpecRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 57: trpc.moox.factor.ValidateFactorSpecRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	50,  // 58: trpc.moox.factor.ValidateFactorSpecRsp.diagnostic:type_name -> trpc.moox.factor.FactorSpecDiagnostic
-	70,  // 59: trpc.moox.factor.PreviewFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 59: trpc.moox.factor.PreviewFactorRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	53,  // 60: trpc.moox.factor.PreviewFactorRsp.rows:type_name -> trpc.moox.factor.PreviewRow
 	55,  // 61: trpc.moox.factor.FactorFunction.args:type_name -> trpc.moox.factor.FactorFunctionArg
-	70,  // 62: trpc.moox.factor.ListFactorFunctionsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 62: trpc.moox.factor.ListFactorFunctionsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	56,  // 63: trpc.moox.factor.ListFactorFunctionsRsp.functions:type_name -> trpc.moox.factor.FactorFunction
 	0,   // 64: trpc.moox.factor.EngineSet.factor_set:type_name -> trpc.moox.factor.FactorSet
 	1,   // 65: trpc.moox.factor.EngineSet.factors:type_name -> trpc.moox.factor.FactorDef
 	59,  // 66: trpc.moox.factor.SyncEngineCatalogReq.engine:type_name -> trpc.moox.factor.EngineIdentity
-	70,  // 67: trpc.moox.factor.SyncEngineCatalogRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 67: trpc.moox.factor.SyncEngineCatalogRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	60,  // 68: trpc.moox.factor.SyncEngineCatalogRsp.sets:type_name -> trpc.moox.factor.EngineSet
 	45,  // 69: trpc.moox.factor.EngineRuntimeStatus.lanes:type_name -> trpc.moox.factor.FactorLaneStatus
 	6,   // 70: trpc.moox.factor.EngineRuntimeStatus.recent_runs:type_name -> trpc.moox.factor.SetRunSummary
-	59,  // 71: trpc.moox.factor.EngineHeartbeatReq.engine:type_name -> trpc.moox.factor.EngineIdentity
-	63,  // 72: trpc.moox.factor.EngineHeartbeatReq.status:type_name -> trpc.moox.factor.EngineRuntimeStatus
-	70,  // 73: trpc.moox.factor.EngineHeartbeatRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	59,  // 74: trpc.moox.factor.PullRecalcJobReq.engine:type_name -> trpc.moox.factor.EngineIdentity
-	70,  // 75: trpc.moox.factor.PullRecalcJobRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	8,   // 76: trpc.moox.factor.PullRecalcJobRsp.job:type_name -> trpc.moox.factor.RecalcJob
-	60,  // 77: trpc.moox.factor.PullRecalcJobRsp.set:type_name -> trpc.moox.factor.EngineSet
-	59,  // 78: trpc.moox.factor.ReportRecalcProgressReq.engine:type_name -> trpc.moox.factor.EngineIdentity
-	70,  // 79: trpc.moox.factor.ReportRecalcProgressRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	9,   // 80: trpc.moox.factor.FactorMgr.CreateFactorSet:input_type -> trpc.moox.factor.CreateFactorSetReq
-	11,  // 81: trpc.moox.factor.FactorMgr.UpdateFactorSet:input_type -> trpc.moox.factor.UpdateFactorSetReq
-	13,  // 82: trpc.moox.factor.FactorMgr.SetFactorSetStatus:input_type -> trpc.moox.factor.SetFactorSetStatusReq
-	15,  // 83: trpc.moox.factor.FactorMgr.DeleteFactorSet:input_type -> trpc.moox.factor.DeleteFactorSetReq
-	17,  // 84: trpc.moox.factor.FactorMgr.GetFactorSet:input_type -> trpc.moox.factor.GetFactorSetReq
-	19,  // 85: trpc.moox.factor.FactorMgr.ListFactorSets:input_type -> trpc.moox.factor.ListFactorSetsReq
-	21,  // 86: trpc.moox.factor.FactorMgr.CreateFactor:input_type -> trpc.moox.factor.CreateFactorReq
-	23,  // 87: trpc.moox.factor.FactorMgr.UpdateFactor:input_type -> trpc.moox.factor.UpdateFactorReq
-	31,  // 88: trpc.moox.factor.FactorMgr.DeleteFactor:input_type -> trpc.moox.factor.DeleteFactorReq
-	33,  // 89: trpc.moox.factor.FactorMgr.GetFactor:input_type -> trpc.moox.factor.GetFactorReq
-	25,  // 90: trpc.moox.factor.FactorMgr.AddFactorToSet:input_type -> trpc.moox.factor.AddFactorToSetReq
-	27,  // 91: trpc.moox.factor.FactorMgr.RemoveFactorFromSet:input_type -> trpc.moox.factor.RemoveFactorFromSetReq
-	29,  // 92: trpc.moox.factor.FactorMgr.SetFactorMemberStatus:input_type -> trpc.moox.factor.SetFactorMemberStatusReq
-	35,  // 93: trpc.moox.factor.FactorMgr.ListFactors:input_type -> trpc.moox.factor.ListFactorsReq
-	37,  // 94: trpc.moox.factor.FactorMgr.RecalcFactors:input_type -> trpc.moox.factor.RecalcFactorsReq
-	39,  // 95: trpc.moox.factor.FactorMgr.ListRecalcJobs:input_type -> trpc.moox.factor.ListRecalcJobsReq
-	41,  // 96: trpc.moox.factor.FactorMgr.GetRecalcJob:input_type -> trpc.moox.factor.GetRecalcJobReq
-	43,  // 97: trpc.moox.factor.FactorMgr.CancelRecalcJob:input_type -> trpc.moox.factor.CancelRecalcJobReq
-	47,  // 98: trpc.moox.factor.FactorMgr.GetStatus:input_type -> trpc.moox.factor.GetStatusReq
-	49,  // 99: trpc.moox.factor.FactorMgr.ValidateFactorSpec:input_type -> trpc.moox.factor.ValidateFactorSpecReq
-	52,  // 100: trpc.moox.factor.FactorMgr.PreviewFactor:input_type -> trpc.moox.factor.PreviewFactorReq
-	57,  // 101: trpc.moox.factor.FactorMgr.ListFactorFunctions:input_type -> trpc.moox.factor.ListFactorFunctionsReq
-	61,  // 102: trpc.moox.factor.FactorEngine.SyncEngineCatalog:input_type -> trpc.moox.factor.SyncEngineCatalogReq
-	64,  // 103: trpc.moox.factor.FactorEngine.EngineHeartbeat:input_type -> trpc.moox.factor.EngineHeartbeatReq
-	66,  // 104: trpc.moox.factor.FactorEngine.PullRecalcJob:input_type -> trpc.moox.factor.PullRecalcJobReq
-	68,  // 105: trpc.moox.factor.FactorEngine.ReportRecalcProgress:input_type -> trpc.moox.factor.ReportRecalcProgressReq
-	10,  // 106: trpc.moox.factor.FactorMgr.CreateFactorSet:output_type -> trpc.moox.factor.CreateFactorSetRsp
-	12,  // 107: trpc.moox.factor.FactorMgr.UpdateFactorSet:output_type -> trpc.moox.factor.UpdateFactorSetRsp
-	14,  // 108: trpc.moox.factor.FactorMgr.SetFactorSetStatus:output_type -> trpc.moox.factor.SetFactorSetStatusRsp
-	16,  // 109: trpc.moox.factor.FactorMgr.DeleteFactorSet:output_type -> trpc.moox.factor.DeleteFactorSetRsp
-	18,  // 110: trpc.moox.factor.FactorMgr.GetFactorSet:output_type -> trpc.moox.factor.GetFactorSetRsp
-	20,  // 111: trpc.moox.factor.FactorMgr.ListFactorSets:output_type -> trpc.moox.factor.ListFactorSetsRsp
-	22,  // 112: trpc.moox.factor.FactorMgr.CreateFactor:output_type -> trpc.moox.factor.CreateFactorRsp
-	24,  // 113: trpc.moox.factor.FactorMgr.UpdateFactor:output_type -> trpc.moox.factor.UpdateFactorRsp
-	32,  // 114: trpc.moox.factor.FactorMgr.DeleteFactor:output_type -> trpc.moox.factor.DeleteFactorRsp
-	34,  // 115: trpc.moox.factor.FactorMgr.GetFactor:output_type -> trpc.moox.factor.GetFactorRsp
-	26,  // 116: trpc.moox.factor.FactorMgr.AddFactorToSet:output_type -> trpc.moox.factor.AddFactorToSetRsp
-	28,  // 117: trpc.moox.factor.FactorMgr.RemoveFactorFromSet:output_type -> trpc.moox.factor.RemoveFactorFromSetRsp
-	30,  // 118: trpc.moox.factor.FactorMgr.SetFactorMemberStatus:output_type -> trpc.moox.factor.SetFactorMemberStatusRsp
-	36,  // 119: trpc.moox.factor.FactorMgr.ListFactors:output_type -> trpc.moox.factor.ListFactorsRsp
-	38,  // 120: trpc.moox.factor.FactorMgr.RecalcFactors:output_type -> trpc.moox.factor.RecalcFactorsRsp
-	40,  // 121: trpc.moox.factor.FactorMgr.ListRecalcJobs:output_type -> trpc.moox.factor.ListRecalcJobsRsp
-	42,  // 122: trpc.moox.factor.FactorMgr.GetRecalcJob:output_type -> trpc.moox.factor.GetRecalcJobRsp
-	44,  // 123: trpc.moox.factor.FactorMgr.CancelRecalcJob:output_type -> trpc.moox.factor.CancelRecalcJobRsp
-	48,  // 124: trpc.moox.factor.FactorMgr.GetStatus:output_type -> trpc.moox.factor.GetStatusRsp
-	51,  // 125: trpc.moox.factor.FactorMgr.ValidateFactorSpec:output_type -> trpc.moox.factor.ValidateFactorSpecRsp
-	54,  // 126: trpc.moox.factor.FactorMgr.PreviewFactor:output_type -> trpc.moox.factor.PreviewFactorRsp
-	58,  // 127: trpc.moox.factor.FactorMgr.ListFactorFunctions:output_type -> trpc.moox.factor.ListFactorFunctionsRsp
-	62,  // 128: trpc.moox.factor.FactorEngine.SyncEngineCatalog:output_type -> trpc.moox.factor.SyncEngineCatalogRsp
-	65,  // 129: trpc.moox.factor.FactorEngine.EngineHeartbeat:output_type -> trpc.moox.factor.EngineHeartbeatRsp
-	67,  // 130: trpc.moox.factor.FactorEngine.PullRecalcJob:output_type -> trpc.moox.factor.PullRecalcJobRsp
-	69,  // 131: trpc.moox.factor.FactorEngine.ReportRecalcProgress:output_type -> trpc.moox.factor.ReportRecalcProgressRsp
-	106, // [106:132] is the sub-list for method output_type
-	80,  // [80:106] is the sub-list for method input_type
-	80,  // [80:80] is the sub-list for extension type_name
-	80,  // [80:80] is the sub-list for extension extendee
-	0,   // [0:80] is the sub-list for field type_name
+	64,  // 71: trpc.moox.factor.EngineRuntimeStatus.watermarks:type_name -> trpc.moox.factor.SetWatermarkStatus
+	65,  // 72: trpc.moox.factor.NotifyPeriodsFilledReq.filled:type_name -> trpc.moox.factor.PeriodsFilled
+	74,  // 73: trpc.moox.factor.NotifyPeriodsFilledRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	59,  // 74: trpc.moox.factor.EngineHeartbeatReq.engine:type_name -> trpc.moox.factor.EngineIdentity
+	63,  // 75: trpc.moox.factor.EngineHeartbeatReq.status:type_name -> trpc.moox.factor.EngineRuntimeStatus
+	74,  // 76: trpc.moox.factor.EngineHeartbeatRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	65,  // 77: trpc.moox.factor.EngineHeartbeatRsp.filled:type_name -> trpc.moox.factor.PeriodsFilled
+	59,  // 78: trpc.moox.factor.PullRecalcJobReq.engine:type_name -> trpc.moox.factor.EngineIdentity
+	74,  // 79: trpc.moox.factor.PullRecalcJobRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	8,   // 80: trpc.moox.factor.PullRecalcJobRsp.job:type_name -> trpc.moox.factor.RecalcJob
+	60,  // 81: trpc.moox.factor.PullRecalcJobRsp.set:type_name -> trpc.moox.factor.EngineSet
+	59,  // 82: trpc.moox.factor.ReportRecalcProgressReq.engine:type_name -> trpc.moox.factor.EngineIdentity
+	74,  // 83: trpc.moox.factor.ReportRecalcProgressRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	9,   // 84: trpc.moox.factor.FactorMgr.CreateFactorSet:input_type -> trpc.moox.factor.CreateFactorSetReq
+	11,  // 85: trpc.moox.factor.FactorMgr.UpdateFactorSet:input_type -> trpc.moox.factor.UpdateFactorSetReq
+	13,  // 86: trpc.moox.factor.FactorMgr.SetFactorSetStatus:input_type -> trpc.moox.factor.SetFactorSetStatusReq
+	15,  // 87: trpc.moox.factor.FactorMgr.DeleteFactorSet:input_type -> trpc.moox.factor.DeleteFactorSetReq
+	17,  // 88: trpc.moox.factor.FactorMgr.GetFactorSet:input_type -> trpc.moox.factor.GetFactorSetReq
+	19,  // 89: trpc.moox.factor.FactorMgr.ListFactorSets:input_type -> trpc.moox.factor.ListFactorSetsReq
+	21,  // 90: trpc.moox.factor.FactorMgr.CreateFactor:input_type -> trpc.moox.factor.CreateFactorReq
+	23,  // 91: trpc.moox.factor.FactorMgr.UpdateFactor:input_type -> trpc.moox.factor.UpdateFactorReq
+	31,  // 92: trpc.moox.factor.FactorMgr.DeleteFactor:input_type -> trpc.moox.factor.DeleteFactorReq
+	33,  // 93: trpc.moox.factor.FactorMgr.GetFactor:input_type -> trpc.moox.factor.GetFactorReq
+	25,  // 94: trpc.moox.factor.FactorMgr.AddFactorToSet:input_type -> trpc.moox.factor.AddFactorToSetReq
+	27,  // 95: trpc.moox.factor.FactorMgr.RemoveFactorFromSet:input_type -> trpc.moox.factor.RemoveFactorFromSetReq
+	29,  // 96: trpc.moox.factor.FactorMgr.SetFactorMemberStatus:input_type -> trpc.moox.factor.SetFactorMemberStatusReq
+	35,  // 97: trpc.moox.factor.FactorMgr.ListFactors:input_type -> trpc.moox.factor.ListFactorsReq
+	37,  // 98: trpc.moox.factor.FactorMgr.RecalcFactors:input_type -> trpc.moox.factor.RecalcFactorsReq
+	39,  // 99: trpc.moox.factor.FactorMgr.ListRecalcJobs:input_type -> trpc.moox.factor.ListRecalcJobsReq
+	41,  // 100: trpc.moox.factor.FactorMgr.GetRecalcJob:input_type -> trpc.moox.factor.GetRecalcJobReq
+	43,  // 101: trpc.moox.factor.FactorMgr.CancelRecalcJob:input_type -> trpc.moox.factor.CancelRecalcJobReq
+	47,  // 102: trpc.moox.factor.FactorMgr.GetStatus:input_type -> trpc.moox.factor.GetStatusReq
+	49,  // 103: trpc.moox.factor.FactorMgr.ValidateFactorSpec:input_type -> trpc.moox.factor.ValidateFactorSpecReq
+	52,  // 104: trpc.moox.factor.FactorMgr.PreviewFactor:input_type -> trpc.moox.factor.PreviewFactorReq
+	57,  // 105: trpc.moox.factor.FactorMgr.ListFactorFunctions:input_type -> trpc.moox.factor.ListFactorFunctionsReq
+	66,  // 106: trpc.moox.factor.FactorMgr.NotifyPeriodsFilled:input_type -> trpc.moox.factor.NotifyPeriodsFilledReq
+	61,  // 107: trpc.moox.factor.FactorEngine.SyncEngineCatalog:input_type -> trpc.moox.factor.SyncEngineCatalogReq
+	68,  // 108: trpc.moox.factor.FactorEngine.EngineHeartbeat:input_type -> trpc.moox.factor.EngineHeartbeatReq
+	70,  // 109: trpc.moox.factor.FactorEngine.PullRecalcJob:input_type -> trpc.moox.factor.PullRecalcJobReq
+	72,  // 110: trpc.moox.factor.FactorEngine.ReportRecalcProgress:input_type -> trpc.moox.factor.ReportRecalcProgressReq
+	10,  // 111: trpc.moox.factor.FactorMgr.CreateFactorSet:output_type -> trpc.moox.factor.CreateFactorSetRsp
+	12,  // 112: trpc.moox.factor.FactorMgr.UpdateFactorSet:output_type -> trpc.moox.factor.UpdateFactorSetRsp
+	14,  // 113: trpc.moox.factor.FactorMgr.SetFactorSetStatus:output_type -> trpc.moox.factor.SetFactorSetStatusRsp
+	16,  // 114: trpc.moox.factor.FactorMgr.DeleteFactorSet:output_type -> trpc.moox.factor.DeleteFactorSetRsp
+	18,  // 115: trpc.moox.factor.FactorMgr.GetFactorSet:output_type -> trpc.moox.factor.GetFactorSetRsp
+	20,  // 116: trpc.moox.factor.FactorMgr.ListFactorSets:output_type -> trpc.moox.factor.ListFactorSetsRsp
+	22,  // 117: trpc.moox.factor.FactorMgr.CreateFactor:output_type -> trpc.moox.factor.CreateFactorRsp
+	24,  // 118: trpc.moox.factor.FactorMgr.UpdateFactor:output_type -> trpc.moox.factor.UpdateFactorRsp
+	32,  // 119: trpc.moox.factor.FactorMgr.DeleteFactor:output_type -> trpc.moox.factor.DeleteFactorRsp
+	34,  // 120: trpc.moox.factor.FactorMgr.GetFactor:output_type -> trpc.moox.factor.GetFactorRsp
+	26,  // 121: trpc.moox.factor.FactorMgr.AddFactorToSet:output_type -> trpc.moox.factor.AddFactorToSetRsp
+	28,  // 122: trpc.moox.factor.FactorMgr.RemoveFactorFromSet:output_type -> trpc.moox.factor.RemoveFactorFromSetRsp
+	30,  // 123: trpc.moox.factor.FactorMgr.SetFactorMemberStatus:output_type -> trpc.moox.factor.SetFactorMemberStatusRsp
+	36,  // 124: trpc.moox.factor.FactorMgr.ListFactors:output_type -> trpc.moox.factor.ListFactorsRsp
+	38,  // 125: trpc.moox.factor.FactorMgr.RecalcFactors:output_type -> trpc.moox.factor.RecalcFactorsRsp
+	40,  // 126: trpc.moox.factor.FactorMgr.ListRecalcJobs:output_type -> trpc.moox.factor.ListRecalcJobsRsp
+	42,  // 127: trpc.moox.factor.FactorMgr.GetRecalcJob:output_type -> trpc.moox.factor.GetRecalcJobRsp
+	44,  // 128: trpc.moox.factor.FactorMgr.CancelRecalcJob:output_type -> trpc.moox.factor.CancelRecalcJobRsp
+	48,  // 129: trpc.moox.factor.FactorMgr.GetStatus:output_type -> trpc.moox.factor.GetStatusRsp
+	51,  // 130: trpc.moox.factor.FactorMgr.ValidateFactorSpec:output_type -> trpc.moox.factor.ValidateFactorSpecRsp
+	54,  // 131: trpc.moox.factor.FactorMgr.PreviewFactor:output_type -> trpc.moox.factor.PreviewFactorRsp
+	58,  // 132: trpc.moox.factor.FactorMgr.ListFactorFunctions:output_type -> trpc.moox.factor.ListFactorFunctionsRsp
+	67,  // 133: trpc.moox.factor.FactorMgr.NotifyPeriodsFilled:output_type -> trpc.moox.factor.NotifyPeriodsFilledRsp
+	62,  // 134: trpc.moox.factor.FactorEngine.SyncEngineCatalog:output_type -> trpc.moox.factor.SyncEngineCatalogRsp
+	69,  // 135: trpc.moox.factor.FactorEngine.EngineHeartbeat:output_type -> trpc.moox.factor.EngineHeartbeatRsp
+	71,  // 136: trpc.moox.factor.FactorEngine.PullRecalcJob:output_type -> trpc.moox.factor.PullRecalcJobRsp
+	73,  // 137: trpc.moox.factor.FactorEngine.ReportRecalcProgress:output_type -> trpc.moox.factor.ReportRecalcProgressRsp
+	111, // [111:138] is the sub-list for method output_type
+	84,  // [84:111] is the sub-list for method input_type
+	84,  // [84:84] is the sub-list for extension type_name
+	84,  // [84:84] is the sub-list for extension extendee
+	0,   // [0:84] is the sub-list for field type_name
 }
 
 func init() { file_factor_proto_init() }
@@ -6568,7 +6918,7 @@ func file_factor_proto_init() {
 			}
 		}
 		file_factor_proto_msgTypes[64].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*EngineHeartbeatReq); i {
+			switch v := v.(*SetWatermarkStatus); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6580,7 +6930,7 @@ func file_factor_proto_init() {
 			}
 		}
 		file_factor_proto_msgTypes[65].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*EngineHeartbeatRsp); i {
+			switch v := v.(*PeriodsFilled); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6592,7 +6942,7 @@ func file_factor_proto_init() {
 			}
 		}
 		file_factor_proto_msgTypes[66].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*PullRecalcJobReq); i {
+			switch v := v.(*NotifyPeriodsFilledReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6604,7 +6954,7 @@ func file_factor_proto_init() {
 			}
 		}
 		file_factor_proto_msgTypes[67].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*PullRecalcJobRsp); i {
+			switch v := v.(*NotifyPeriodsFilledRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6616,7 +6966,7 @@ func file_factor_proto_init() {
 			}
 		}
 		file_factor_proto_msgTypes[68].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ReportRecalcProgressReq); i {
+			switch v := v.(*EngineHeartbeatReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6628,6 +6978,54 @@ func file_factor_proto_init() {
 			}
 		}
 		file_factor_proto_msgTypes[69].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*EngineHeartbeatRsp); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_factor_proto_msgTypes[70].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*PullRecalcJobReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_factor_proto_msgTypes[71].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*PullRecalcJobRsp); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_factor_proto_msgTypes[72].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ReportRecalcProgressReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_factor_proto_msgTypes[73].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ReportRecalcProgressRsp); i {
 			case 0:
 				return &v.state
@@ -6646,7 +7044,7 @@ func file_factor_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_factor_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   70,
+			NumMessages:   74,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

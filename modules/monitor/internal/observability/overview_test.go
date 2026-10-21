@@ -1093,3 +1093,25 @@ func TestBuilderReportsCollectorStreamHeartbeatAndMissingStreaks(t *testing.T) {
 		require.Equal(t, "healthy", check.Status, check.Module)
 	}
 }
+
+// 因子集合连续水位阻塞超过 30 分钟告警，未超过或没有阻塞时正常。
+func TestBuilderReportsStalledFactorWatermarks(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		seedOverviewMetricForInstance(t, db, "wm-stalled", "factor", "factor-mgr@control", "moox_factor_set_watermark_blocked_since_timestamp_seconds", `{"space_id":"crypto","set_id":"fset_a"}`, float64(now.Add(-31*time.Minute).Unix()), now)
+		seedOverviewMetricForInstance(t, db, "wm-recent", "factor", "factor-mgr@control", "moox_factor_set_watermark_blocked_since_timestamp_seconds", `{"space_id":"crypto","set_id":"fset_b"}`, float64(now.Add(-5*time.Minute).Unix()), now)
+		seedOverviewMetricForInstance(t, db, "wm-ok", "factor", "factor-mgr@control", "moox_factor_set_watermark_blocked_since_timestamp_seconds", `{"space_id":"crypto","set_id":"fset_c"}`, 0, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	var check *BusinessStatus
+	for i := range got.BusinessChecks {
+		if got.BusinessChecks[i].Kind == "factor_watermark" {
+			check = &got.BusinessChecks[i]
+		}
+	}
+	require.NotNil(t, check)
+	require.Equal(t, "down", check.Status)
+	require.Contains(t, check.Reason, "fset_a")
+	require.NotContains(t, check.Reason, "fset_b")
+}

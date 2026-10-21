@@ -170,6 +170,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, streams...)
+	watermarks, err := b.buildFactorWatermarkHealth(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, watermarks...)
 	signals, err := b.buildMarketFetchSignalHealth(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err
@@ -1722,6 +1727,59 @@ func (b Builder) buildCollectorStreamHealth(ctx context.Context, spaceID string,
 		} else if state.heartbeat > 0 {
 			out = append(out, BusinessStatus{SpaceID: space, Kind: "market_fetch", Module: "collector_stream_missing", Status: "healthy", Reason: "推送周期没有连续缺失", LastCheckedAt: now})
 		}
+	}
+	return out, nil
+}
+
+// factorWatermarkStallAfter 是因子集合连续水位阻塞多久告警：不自动跳过，交给人工（手动补采、确认缺失）。
+const factorWatermarkStallAfter = 30 * time.Minute
+
+// buildFactorWatermarkHealth 消费因子管理服务导出的连续水位阻塞起始时间：阻塞超过 30 分钟的集合告警。
+func (b Builder) buildFactorWatermarkHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
+	if b.Metrics == nil || b.Metrics.Catalog() == nil {
+		return nil, nil
+	}
+	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_factor_set_watermark_blocked_since_timestamp_seconds", "", 500, now)
+	if err != nil {
+		return nil, err
+	}
+	stalled := map[string][]string{}
+	seen := map[string]bool{}
+	for _, item := range series {
+		if item.IsStale {
+			continue
+		}
+		labels, err := datasetLabels(item.LabelsJSON)
+		if err != nil {
+			return nil, fmt.Errorf("factor watermark labels for %s: %w", item.SeriesID, err)
+		}
+		current := strings.TrimSpace(labels["space_id"])
+		if current == "" || (spaceID != "" && current != spaceID) {
+			continue
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		seen[current] = true
+		if latest.Value > 0 && now.Sub(unixTime(latest.Value)) > factorWatermarkStallAfter {
+			stalled[current] = append(stalled[current], fmt.Sprintf("%s 自 %s 起", labels["set_id"], unixTime(latest.Value).Format(time.RFC3339)))
+		}
+	}
+	spaces := make([]string, 0, len(seen))
+	for space := range seen {
+		spaces = append(spaces, space)
+	}
+	sort.Strings(spaces)
+	out := make([]BusinessStatus, 0, len(spaces))
+	for _, space := range spaces {
+		if list := stalled[space]; len(list) > 0 {
+			sort.Strings(list)
+			out = append(out, BusinessStatus{SpaceID: space, Kind: "factor_watermark", Module: "factor_engine", Status: "down",
+				Reason: "因子连续水位停滞超过 30 分钟（前面有还没补到的周期，不会自动跳过）：" + strings.Join(list, "；") + "。请检查补采，或确认行情源缺失", LastCheckedAt: now})
+			continue
+		}
+		out = append(out, BusinessStatus{SpaceID: space, Kind: "factor_watermark", Module: "factor_engine", Status: "healthy", Reason: "因子连续水位正常", LastCheckedAt: now})
 	}
 	return out, nil
 }

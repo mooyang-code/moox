@@ -953,6 +953,7 @@ components:
           - ValidateFactorSpec
           - PreviewFactor
           - ListFactorFunctions
+          - NotifyPeriodsFilled
         read_only_methods:
           - GetFactorSet
           - ListFactorSets
@@ -1000,6 +1001,11 @@ components:
               - GetStatus
             callers:
               - strategy
+          # 补采补齐通知：因子据此立即推进连续水位并补算上游失败的标的。
+          - methods:
+              - NotifyPeriodsFilled
+            callers:
+              - collector
       - path: trpc.moox.factor.FactorEngine
         port: 11405
         timeout_ms: 120000

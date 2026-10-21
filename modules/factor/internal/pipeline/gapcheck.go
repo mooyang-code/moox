@@ -100,6 +100,9 @@ func (g GapReport) AffectedSubjects() []string {
 // SkipReasonWarming 是账本里「预热中被跳过」的原因：回看窗口还没载入，本期没有算。空洞跳过的原因为空。
 const SkipReasonWarming = "warming"
 
+// SkipReasonUpstream 是实时周期里上游失败（截止时还没到）而没有算的标的：补采补齐后由只填充补算补上。
+const SkipReasonUpstream = "upstream_failed"
+
 // GapEntry 是写入账本的一条跳过记录：一个标的、一个周期、一个因子。跳过有两种：回看窗口有空洞（Reason 为空），
 // 或者实时周期里标的还在预热（Reason 为 SkipReasonWarming）；两者都由空洞恢复按「只填充」补算。
 type GapEntry struct {

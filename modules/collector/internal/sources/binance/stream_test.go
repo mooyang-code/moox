@@ -54,7 +54,7 @@ func TestStreamDecodeMatchesRESTNormalization(t *testing.T) {
 	received := time.Date(2025, 10, 21, 8, 0, 0, 231e6, time.UTC)
 	for _, test := range []struct {
 		market, file, symbol, sourceID, open, high, low, close, volume, quote string
-		trades                                                                 int64
+		trades                                                                int64
 	}{
 		{"spot", "spot_kline_final.json", "BTCUSDT", "spot_http", "108012.34000000", "108077.00000000", "107990.10000000", "108050.01000000", "12.34567000", "1333777.12345670", 1207},
 		{"swap", "swap_continuous_final.json", "BTCUSDT", "swap_http", "107980.1", "108040.0", "107950.0", "108020.5", "321.456", "34712345.6789", 1455},

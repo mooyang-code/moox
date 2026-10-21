@@ -19,6 +19,8 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
+	"github.com/mooyang-code/moox/modules/factor/internal/watermark"
+	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/factorexpr"
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -45,10 +47,14 @@ type Runtime struct {
 	metrics  *observability.Metrics
 	locks    *setlock.Locks
 	gap      *gapledger.Ledger
-	lease    *leaseState
-	syncer   *catalogSyncer
-	prewarm  *prewarmer
-	health   *factorhealth.State
+	// continuity 维护各集合的连续水位；advanceKick 唤醒追赶循环（补齐通知）。
+	continuity  *eventconsumer.Continuity
+	advanceKick chan string
+	filled      *filledPeriods
+	lease       *leaseState
+	syncer      *catalogSyncer
+	prewarm     *prewarmer
+	health      *factorhealth.State
 
 	// reconcileMu serializes consumer start/stop; consumerMu only guards the
 	// pointer so status and health reads never wait on EventBus I/O.
@@ -140,6 +146,17 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if cfg.Gap.Enabled {
 		pipelineConfig.GapCheck, pipelineConfig.MassRatio = true, cfg.Gap.MassRatio
 	}
+	watermarks, err := watermark.Open(cfg.Watermark.StateFile)
+	if err != nil {
+		return nil, fmt.Errorf("open factor watermarks: %w", err)
+	}
+	if r.continuity, err = eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{
+		Store: watermarks, Reader: r.storage, MaxMissingRatio: cfg.Watermark.MaxMissingRatio, SetRatios: cfg.Watermark.SetRatios, MaxPeriods: cfg.Watermark.MaxPeriods,
+	}); err != nil {
+		return nil, err
+	}
+	r.advanceKick, r.filled = make(chan string, 64), newFilledPeriods(time.Now)
+	r.manager.OnFilled = func(filled []*factorpb.PeriodsFilled) { r.onFilled(filled, kickGap) }
 	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, clock, pipelineConfig)
 	r.pipeline = base
 	r.runner = &measuredRunner{inner: base, metrics: r.metrics, health: r.monitor, runs: r.runs}
@@ -173,7 +190,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	filler := &gapFiller{
 		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
 		active: r.active, cfg: cfg.Gap, now: time.Now, onGaveUp: func(n int) { r.metrics.GapGaveUp.Add(float64(n)) },
-		kick: gapKick, warmup: r.pipeline.WarmupStatuses,
+		kick: gapKick, warmup: r.pipeline.WarmupStatuses, filled: r.filled.covers,
 		// 补齐的最新一期记入运行摘要（并立刻补发心跳）：预热中跳过的那一期补算后，因子管理服务马上把它记为完成。
 		onRepaired: func(setID string, period RepairedPeriod) {
 			if r.runs.repair(setID, period, time.Now()) {
@@ -185,6 +202,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.pipeline.OnWarmupDone(func(string) { kickGap() })
 
 	r.goRun(appCtx, filler.Run)
+	r.goRun(appCtx, r.runCatchup)
 	r.goRun(appCtx, r.syncer.Run)
 	r.goRun(appCtx, beat.Run)
 	r.goRun(appCtx, recalc.Run)
@@ -223,7 +241,7 @@ func (r *Runtime) reconcileConsumer() {
 		consumer, err := eventconsumer.NewConsumer(context.Background(), eventconsumer.ConsumerConfig{
 			URLs: r.cfg.EventBus.URLs, CredentialFile: r.cfg.EventBus.CredentialFile,
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
-			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax,
+			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity,
 		}, r.catalog, &observedStore{Store: r.storage, health: r.monitor}, r.runner, r.locks)
 		if err != nil {
 			log.ErrorContextf(context.Background(), "factor_engine_consumer_start_failed error=%v", err)
@@ -283,6 +301,12 @@ func (r *Runtime) engineStatus() domain.EngineStatus {
 		}
 	}
 	status.Lanes = withWarmup(status.Lanes, r.catalog.SetIDs(), r.pipeline.WarmupStatuses())
+	if r.continuity != nil {
+		for _, state := range r.continuity.States() {
+			status.Watermarks = append(status.Watermarks, domain.SetWatermark{SetID: state.SetID, CommittedThrough: state.CommittedThrough, Target: state.Target,
+				BlockedSince: state.BlockedSince, BlockedPeriod: state.BlockedPeriod, BlockedReason: state.BlockedReason})
+		}
+	}
 	return status
 }
 

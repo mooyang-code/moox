@@ -2,8 +2,8 @@ package klinecheck
 
 import (
 	"context"
-	"errors"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -583,4 +583,25 @@ func TestBackfillUsesTheSCFFunctionWhenTheExecutorIsSCF(t *testing.T) {
 	require.NoError(t, backfiller.Tick(ctx, "crypto"))
 	backfiller.Wait()
 	require.Len(t, scf.events, 2)
+}
+
+// 补采作业成功后按（数据集, 频率）发补齐通知，带上确认行情源没有的标的。
+func TestBackfillNotifiesFilledRangesAfterAJobSucceeds(t *testing.T) {
+	backfiller, invoker, _, base := newBackfillFixture(t)
+	invoker.noWrite = true
+	var got []FilledRange
+	backfiller.Notify = func(_ context.Context, filled []FilledRange) error { got = append(got, filled...); return nil }
+	ctx := context.Background()
+	jobID, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", DatasetID: "ds", SubjectID: "ETH-USDT", From: base, To: base.Add(time.Hour)}, "manual")
+	require.NoError(t, err)
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	status, _ := backfiller.Status(ctx, jobID)
+	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
+	require.Len(t, got, 1)
+	require.Equal(t, "ds", got[0].DatasetID)
+	require.Equal(t, "1m", got[0].Frequency)
+	require.Equal(t, []string{"ETH-USDT"}, got[0].Absent, "单根缺口复查仍缺即确认行情源没有")
+	require.False(t, got[0].From.After(base.Add(10*time.Minute)))
 }

@@ -142,6 +142,7 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 		if !plan.FillOnly {
 			r.recordGaps(ctx, plan, loaded.Gaps)
 			r.recordWarming(ctx, plan, loaded.WarmingSubjects)
+			r.recordUpstream(ctx, plan)
 		}
 		stage = time.Now()
 		target, targetErr := planTarget(r.clock, plan)
@@ -230,6 +231,31 @@ func (r *Runner) recordWarming(ctx context.Context, plan Plan, warming []string)
 	}
 	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
 		log.ErrorContextf(ctx, "factor_warming_record_failed set_id=%s period=%s subjects=%d error=%v", plan.Set.SetID, target.UTC().Format(time.RFC3339), len(warming), err)
+	}
+}
+
+// recordUpstream 把实时周期里上游失败（截止时还没到）的 (因子, 标的, 周期) 记入账本：这一期缺失在阈值以内时水位照常前进，
+// 补采补齐之后由空洞恢复按「只填充」补算；不记账的话这些标的的这一期永远不会补算（原事件的失败名单已过时，不能重放）。
+func (r *Runner) recordUpstream(ctx context.Context, plan Plan) {
+	if r.cfg.GapSink == nil || plan.Mode != ModeLive || len(plan.UpstreamFailed) == 0 || len(plan.Factors) == 0 {
+		return
+	}
+	target, err := planTarget(r.clock, plan)
+	if err != nil {
+		log.ErrorContextf(ctx, "factor_upstream_record_failed set_id=%s error=%v", plan.Set.SetID, err)
+		return
+	}
+	entries := make([]GapEntry, 0, len(plan.UpstreamFailed)*len(plan.Factors))
+	for _, subject := range plan.UpstreamFailed {
+		for _, factor := range plan.Factors {
+			entries = append(entries, GapEntry{
+				SetID: plan.Set.SetID, Subject: subject, Period: target.UTC(), FactorID: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor),
+				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonUpstream,
+			})
+		}
+	}
+	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
+		log.ErrorContextf(ctx, "factor_upstream_record_failed set_id=%s period=%s subjects=%d error=%v", plan.Set.SetID, target.UTC().Format(time.RFC3339), len(plan.UpstreamFailed), err)
 	}
 }
 

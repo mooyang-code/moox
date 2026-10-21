@@ -102,6 +102,8 @@ type Service struct {
 	engine  EngineAPI
 	// previewer 执行 PreviewFactor 的试算。
 	previewer Previewer
+	// filled 暂存补齐通知。
+	filled *FilledInbox
 }
 
 func NewService(catalog CatalogAPI, recalc RecalcAPI, opts ...ServiceOption) *Service {

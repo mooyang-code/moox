@@ -282,7 +282,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		for _, business := range overview.BusinessChecks {
-			if business.Kind != "balance" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "worker_presence" && business.Kind != "metrics_ingest" {
+			if business.Kind != "balance" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "worker_presence" && business.Kind != "metrics_ingest" && business.Kind != "factor_watermark" {
 				continue
 			}
 			spaceID := business.SpaceID
@@ -298,6 +298,8 @@ func buildBusinessFreshnessReporterWithInterval(
 				case "collector_stream_missing":
 					name = "行情推送连续缺失"
 				}
+			} else if business.Kind == "factor_watermark" {
+				checkID, name = "factor_watermark:"+business.Module, "因子连续水位"
 			} else if business.Kind == "data_delivery" {
 				checkID, name = "data_delivery:"+business.Module, "数据投递队列"
 			} else if business.Kind == "metrics_ingest" {

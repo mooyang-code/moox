@@ -57,6 +57,18 @@ type EngineStatus struct {
 	RecentRuns      []SetRunSummary
 	CatalogHash     string
 	CatalogSyncedAt time.Time
+	// Watermarks 是各集合的连续水位与阻塞状态。
+	Watermarks []SetWatermark
+}
+
+// SetWatermark 是一个集合的连续水位：BlockedSince 非零表示阻塞在 BlockedPeriod（还没补到的周期）上。
+type SetWatermark struct {
+	SetID            string
+	CommittedThrough time.Time
+	Target           time.Time
+	BlockedSince     time.Time
+	BlockedPeriod    time.Time
+	BlockedReason    string
 }
 
 // EngineInfo is the manager's view of the engine holding the lease.

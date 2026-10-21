@@ -28,10 +28,14 @@ type EngineHub interface {
 // EngineService implements the internal FactorEngine contract used only by
 // moox-factor-engine.
 type EngineService struct {
-	hub EngineHub
+	hub    EngineHub
+	filled *FilledInbox
 }
 
-func NewEngineService(hub EngineHub) *EngineService { return &EngineService{hub: hub} }
+// NewEngineService 构造服务；filled 非空时心跳响应带上暂存的补齐通知。
+func NewEngineService(hub EngineHub, filled *FilledInbox) *EngineService {
+	return &EngineService{hub: hub, filled: filled}
+}
 
 func (s *EngineService) SyncEngineCatalog(ctx context.Context, req *factorpb.SyncEngineCatalogReq) (*factorpb.SyncEngineCatalogRsp, error) {
 	if strings.TrimSpace(req.GetEngine().GetEngineId()) == "" {
@@ -61,7 +65,12 @@ func (s *EngineService) EngineHeartbeat(ctx context.Context, req *factorpb.Engin
 	if err != nil {
 		return &factorpb.EngineHeartbeatRsp{RetInfo: engineError(err)}, nil
 	}
-	return &factorpb.EngineHeartbeatRsp{RetInfo: success(), LeaseTtlSeconds: int64(ttl / time.Second)}, nil
+	rsp := &factorpb.EngineHeartbeatRsp{RetInfo: success(), LeaseTtlSeconds: int64(ttl / time.Second)}
+	if s.filled != nil {
+		// 心跳成功说明对方持有租约：补齐通知只交给它。
+		rsp.Filled = s.filled.Drain()
+	}
+	return rsp, nil
 }
 
 func (s *EngineService) PullRecalcJob(ctx context.Context, req *factorpb.PullRecalcJobReq) (*factorpb.PullRecalcJobRsp, error) {

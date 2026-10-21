@@ -27,36 +27,36 @@
 
 ## 阶段 3：Collector
 
-- ☐ 表 `t_collector_ingest_modes`、`t_collector_stream_workers`。
-- ☐ 配置 `default_ingest`、`default_executor`、`stream.{heartbeat_timeout_seconds, lateness_s, commit_reserve_ms}`；初值规则（已在计划里的数据集按现状落库）。
-- ☐ 对账器执行端抽象：scf / stream / local 计划项，SCF 专属步骤只作用于 scf 项；stream/local 以心跳确认。
-- ☐ 截止跟随采集方式：`OldLatenessS`、`WindowEnd` 用旧值、交接中的数据集在 drain 改属性；新数据集直接取新值。
-- ☐ 交接（prepare → switch → drain，P 至少 3 分钟）；交接与标的变更分开；`--force`（含已打开的计划）；Collector 重启续跑。
-- ☐ drain 结束后 SCF 函数去掉数据集、全部去掉后停用定时器。
-- ☐ 补采：`datasetMarket` 解析三类执行端；`Invoker` 按数据集 `executor` 选 SCF 或本地执行端。
-- ☐ 下架处理：`ReportStreamPeriods` 带疑似下架标的 → 立即同步相应自动标签；快照取数重试 3 次、失败保持成员。
-- ☐ `StreamCollector` 服务（`StreamHeartbeat`、`PullStreamPlan`、`ReportStreamPeriods`）；`CollectMgr.SetIngestMode`/`GetIngestMode`；服务目录 ACL。
-- ☐ 周期统计进 Collector 指标（不落库）。
-- ☐ `moox-cli collector ingest-mode get|set`（打印 P 与 stream 状态、离线拒绝、`--force`）。
-- ☐ 运行状态页"函数"区显示 stream 实例、连接、最近周期。
-- ☐ 测试：执行计划 5.6 全部场景。
+- ☑ 表 `t_collector_ingest_modes`、`t_collector_stream_workers`。
+- ☑ 配置 `default_ingest`、`default_executor`、`stream.{heartbeat_timeout_seconds, lateness_s, commit_reserve_ms}`；初值规则（已在计划里的数据集按现状落库）。
+- ☑ 对账器执行端抽象：scf / stream / local 计划项，SCF 专属步骤只作用于 scf 项；stream/local 以心跳确认。
+- ☑ 截止跟随采集方式：`OldLatenessS`、`WindowEnd` 用旧值、交接中的数据集在 drain 改属性；新数据集直接取新值。
+- ☑ 交接（prepare → switch → drain，P 至少 3 分钟）；交接与标的变更分开；`--force`（含已打开的计划）；Collector 重启续跑。
+- ☑ drain 结束后 SCF 函数去掉数据集、全部去掉后停用定时器。
+- ☑ 补采：`datasetMarket` 解析三类执行端；`Invoker` 按数据集 `executor` 选 SCF 或本地执行端。
+- ☑ 下架处理：`ReportStreamPeriods` 带疑似下架标的 → 立即同步相应自动标签；快照取数重试 3 次、失败保持成员。
+- ☑ `StreamCollector` 服务（`StreamHeartbeat`、`PullStreamPlan`、`ReportStreamPeriods`）；`CollectMgr.SetIngestMode`/`GetIngestMode`；服务目录 ACL。
+- ☑ 周期统计进 Collector 指标（不落库）。
+- ☑ `moox-cli collector ingest-mode get|set`（打印 P 与 stream 状态、离线拒绝、`--force`）。
+- ☑ 运行状态页"函数"区显示 stream 实例、连接、最近周期。
+- ☑ 测试：执行计划 5.6 全部场景。
 
 ## 阶段 4：`collector-stream` 组件
 
-- ☐ `cmd/stream` 主程序（`/healthz`、`/readyz`、`/metrics`，同进程挂 `MarketFetchExecutor`）、`config/stream/app.yaml`。
-- ☐ 服务目录组件 `collector-stream`（`scope: any`、`replicas: single`、`required_in_default_profile: false`），Storage 权限，`MarketFetchExecutor` 服务。
-- ☐ `unitdeploy`：control 上派生 `moox-collector` 应用密钥注入 `collector-stream`；`unitpackage` 加入组件；部署工具支持向已部署单元新增组件。
-- ☐ `scripts/build`：`build.sh collector-stream`。
-- ☐ `moox.toml.example` 与 setup 渲染：overseas 默认放 `collector-stream`；`default_ingest`/`default_executor` 渲染（crypto stream+local，其余 pull+scf）。
-- ☐ Monitor 告警：stream 心跳中断 > 3 分钟；连续 3 个周期有失败标的（疑似下架不计）；因子水位停滞 > 30 分钟。
-- ☐ 测试：严格配置解析、健康检查、setup 渲染、服务目录一致性。
+- ☑ `cmd/stream` 主程序（`/healthz`、`/readyz`、`/metrics`，同进程挂 `MarketFetchExecutor`）、`config/stream/app.yaml`。
+- ☑ 服务目录组件 `collector-stream`（`scope: any`、`replicas: single`、`required_in_default_profile: false`），Storage 权限，`MarketFetchExecutor` 服务。
+- ☑ `unitdeploy`：control 上派生 `moox-collector` 应用密钥注入 `collector-stream`；`collector-stream` 作为独立的部署单元档案（`setup deploy-unit --profile collector-stream`），不改动已部署单元。
+- ☑ `scripts/build`：`build.sh collector-stream`。
+- ☑ `moox.toml.example` 与 setup 渲染：overseas 默认放 `collector-stream`；`default_ingest`/`default_executor` 渲染（crypto stream+local，其余 pull+scf）。
+- ☑ Monitor 告警：stream 心跳中断 > 3 分钟；连续 3 个周期有失败标的（疑似下架不计）；因子水位停滞 > 30 分钟。
+- ☑ 测试：严格配置解析、健康检查、setup 渲染、服务目录一致性。
 
 ## 阶段 5a：因子连续水位
 
-- ☐ 详细设计（短文档）。
-- ☐ `committed_through` 持久化；逐期处理与阻塞（零提交、缺失超阈值默认 10%）；当期降级不阻塞、失败标的记入空洞账本由 gapfill 只填充补算；确认缺失不阻塞。
-- ☐ "周期已补齐"事件（补采发、因子收）与阻塞期间定时查 Storage 保底；阻塞 > 30 分钟告警。
-- ☐ 核实线上 `gap.enabled`。
+- ☑ 详细设计（短文档）。
+- ☑ `committed_through` 持久化；逐期处理与阻塞（零提交、缺失超阈值默认 10%）；当期降级不阻塞、失败标的记入空洞账本由 gapfill 只填充补算；确认缺失不阻塞。
+- ☑ "周期已补齐"通知（补采成功后调 `FactorMgr.NotifyPeriodsFilled`，经引擎心跳响应送达）与阻塞期间每 10 秒读回 Storage 的追赶循环；事件一律 ACK；阻塞 > 30 分钟告警（`moox_factor_set_watermark_blocked_since_timestamp_seconds`）。详见[因子连续水位详细设计](因子连续水位详细设计.md)。
+- ☐ 核实线上 `gap.enabled`：发布时在生产引擎配置上实际核对（代码与默认配置已为 `true`）。
 
 ## 阶段 6：切换（线上）
 

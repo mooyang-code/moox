@@ -111,6 +111,8 @@ type Backfiller struct {
 	// Executor 返回数据集的补采执行端（scf 或 local），为空时按 scf；Local 是本地执行端（collector-stream 里的 MarketFetchExecutor）。
 	Executor func(ctx context.Context, spaceID, datasetID string) (string, error)
 	Local    Invoker
+	// Notify 在补采作业成功后调用（补齐通知：因子据此立即推进连续水位并补算），失败只记日志；absent 是确认行情源没有的标的。
+	Notify func(ctx context.Context, filled []FilledRange) error
 	// Paused 报告空间是否处于采集暂停；暂停期间不再认领分块（含补位），已在执行的分块自然结束。为空表示不暂停。
 	Paused func(ctx context.Context, spaceID string) (bool, error)
 	// BaseCtx 是异步执行分块的上下文（进程生命周期）。
@@ -125,6 +127,18 @@ type Backfiller struct {
 	workers        sync.WaitGroup
 	// tickMu 串行化认领，避免补位与调度节拍同时超出并发上限。
 	tickMu sync.Mutex
+	// absent 是本进程内各作业确认的行情源缺失标的，随补齐通知发出。
+	absentMu sync.Mutex
+	absent   map[string]map[string]struct{}
+}
+
+// FilledRange 是补采补齐的一段（数据集, 频率, [From, To)）。
+type FilledRange struct {
+	SpaceID   string
+	DatasetID string
+	Frequency string
+	From, To  time.Time
+	Absent    []string
 }
 
 func (b *Backfiller) now() time.Time {
@@ -359,6 +373,7 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 			}
 			if status == store.BackfillSucceeded {
 				b.advanceWatermark(ctx, job)
+				b.notifyFilled(ctx, job)
 			}
 		}
 	}
@@ -600,6 +615,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 			fail(fmt.Errorf("record source absences: %w", err))
 			return
 		}
+		b.noteAbsent(chunk.JobID, chunk.SubjectID)
 		rows -= check.Missing
 		note = fmt.Sprintf("%d bars are absent at the source", check.Missing)
 		log.InfoContextf(ctx, "collector backfill chunk finished with source gaps space=%s chunk=%s missing=%d", spaceID, chunk.ChunkID, check.Missing)
@@ -640,6 +656,68 @@ func bars(chunk store.BackfillChunk) int {
 		return 0
 	}
 	return barCount(frequency, chunk.From, chunk.To)
+}
+
+func (b *Backfiller) noteAbsent(jobID, subject string) {
+	b.absentMu.Lock()
+	defer b.absentMu.Unlock()
+	if b.absent == nil {
+		b.absent = map[string]map[string]struct{}{}
+	}
+	if b.absent[jobID] == nil {
+		b.absent[jobID] = map[string]struct{}{}
+	}
+	b.absent[jobID][subject] = struct{}{}
+}
+
+// notifyFilled 在作业成功后按（数据集, 频率）发补齐通知。通知只是加快下游，失败只记日志（因子另有定时读回保底）。
+func (b *Backfiller) notifyFilled(ctx context.Context, job store.BackfillJob) {
+	b.absentMu.Lock()
+	absentSet := b.absent[job.JobID]
+	delete(b.absent, job.JobID)
+	b.absentMu.Unlock()
+	if b.Notify == nil {
+		return
+	}
+	_, chunks, err := b.Store.GetJob(ctx, job.JobID)
+	if err != nil {
+		log.WarnContextf(ctx, "collector backfill filled notification skipped job=%s: %v", job.JobID, err)
+		return
+	}
+	ranges := map[string]*FilledRange{}
+	var order []string
+	for _, chunk := range chunks {
+		key := chunk.DatasetID + "|" + chunk.Frequency
+		item := ranges[key]
+		if item == nil {
+			item = &FilledRange{SpaceID: job.SpaceID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, From: chunk.From, To: chunk.To}
+			ranges[key] = item
+			order = append(order, key)
+		}
+		if chunk.From.Before(item.From) {
+			item.From = chunk.From
+		}
+		if chunk.To.After(item.To) {
+			item.To = chunk.To
+		}
+	}
+	absent := make([]string, 0, len(absentSet))
+	for subject := range absentSet {
+		absent = append(absent, subject)
+	}
+	sort.Strings(absent)
+	filled := make([]FilledRange, 0, len(order))
+	for _, key := range order {
+		item := *ranges[key]
+		item.Absent = absent
+		filled = append(filled, item)
+	}
+	if len(filled) == 0 {
+		return
+	}
+	if err := b.Notify(ctx, filled); err != nil {
+		log.WarnContextf(ctx, "collector backfill filled notification failed job=%s: %v", job.JobID, err)
+	}
 }
 
 // advanceWatermark 自动补采作业全部成功后才推进扫描水位；失败的作业不推进，下次扫描会重新覆盖同一窗口。

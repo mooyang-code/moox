@@ -54,7 +54,7 @@ recalc:
 # enabled 只控制 K 线空洞检查：有空洞的因子对该标的当期失败（按失败标的上报并带 gap_subjects）。
 # 默认关闭：Storage、策略、Trade 都升级到支持 gap_subjects 与保持标记之后才打开。
 gap:
-  enabled: false
+  enabled: true                 # 回看窗口空洞检查：WS 推送采集上线前必须打开（下游 Storage、策略、Trade 已支持 gap_subjects）
   ledger_dir: ./data/gap        # 账本目录（按月一个 JSONL，永不自动删除），纳入备份
   sweep_interval: 5m
   settle: 5m                    # 发现后至少等这么久再尝试恢复，给自动补采留时间
@@ -62,3 +62,11 @@ gap:
   max_groups_per_sweep: 20      # 每轮最多运行的恢复批数（区间相同的时序分组合并成一批，每批最多 100 个标的）
   max_span: 60                  # 每组一次最多处理的周期数，避免长时间占住集合锁
   mass_ratio: 0.2               # 有空洞或上游失败的标的占预期的比例达到它时输出 ERROR（整期大面积缺失）
+
+# 连续水位：每个集合从水位下一期逐期推进，前面有还没补到的周期（零提交、缺失超过阈值）就停住，不跳期。
+watermark:
+  state_file: ./data/engine/watermarks.json
+  max_missing_ratio: 0.1        # 未确认缺失的失败标的 ÷ 期望标的超过它的周期阻塞水位
+  set_ratios: {}                # 按集合 ID 覆盖阈值
+  poll_interval: 10s            # 阻塞或落后时读回 Storage 继续推进的间隔（保底）
+  max_periods: 30               # 一次推进最多处理的周期数

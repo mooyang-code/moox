@@ -48,6 +48,7 @@ func registerMetricsReporter(s *server.Server, engine engineView) error {
 		return fmt.Errorf("create factor dataset metrics: %w", err)
 	}
 	observer := newFactorDatasetObserver(engine, datasets)
+	observer.blocked = newWatermarkBlockedGauge(prometheus.DefaultRegisterer)
 	presence, err := report.NewWorkerPresence(prometheus.DefaultRegisterer, "factor")
 	if err != nil {
 		return fmt.Errorf("create factor engine presence metric: %w", err)

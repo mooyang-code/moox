@@ -81,6 +81,8 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			return marketfetch.PlanExecutorSCF, nil
 		},
 		Local: &localexec.Client{Gateway: process.gateway},
+		// 补采作业成功后通知因子：引擎立即推进连续水位、补算上游失败的标的。
+		Notify: klinecheck.FactorNotifier(process.gateway),
 	}
 	process.beforeClose = append(process.beforeClose, func() error { backfiller.Wait(); return nil })
 	svc.SetKlineOps(backfiller)
