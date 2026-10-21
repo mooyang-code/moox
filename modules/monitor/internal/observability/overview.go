@@ -1469,17 +1469,9 @@ func (b Builder) buildMarketFetchCoordination(ctx context.Context, spaceID strin
 				out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "healthy", Reason: "发布租约被占用：等待在途云端作业结束，通常数分钟内自动恢复", LastCheckedAt: now})
 				continue
 			}
-			reason := "采集计划协调失败：请检查 Collector 日志、CloudNode 和函数网络"
-			// 多个实例上报不同原因时，真实故障的文案优先于租约被占用。
-			switch {
-			case state.failureReasons["cloudnode"]:
-				reason = "采集计划配置服务调用失败：请检查 CloudNode、网关连接和批处理队列"
-			case state.failureReasons["environment"]:
-				reason = "函数运行环境生成失败：请检查环境变量大小和 DNS 配置"
-			case state.failureReasons["rules"]:
-				reason = "采集规则读取失败：请检查 Collector 规则配置和存储连接"
-			case leaseHeld && len(state.failureReasons) == 1:
-				// 租约冲突是唯一原因才用这条文案；与其他没有专属文案的原因同时出现时，回退到通用提示。
+			reason := coordinationFailureText(state.failureReasons)
+			if leaseHeld && len(state.failureReasons) == 1 {
+				// 租约冲突是唯一原因才用这条文案；与其他原因同时出现时，以真实故障的文案为准。
 				reason = "发布租约长时间被占用：请检查 CloudNode 批次作业是否卡住，以及是否有其他发布方（CLI 手工发布、补采）在运行"
 			}
 			out = append(out, BusinessStatus{SpaceID: currentSpace, Kind: "market_fetch", Module: "scf_timer", Status: "down", Reason: reason, LastCheckedAt: now})
@@ -1625,6 +1617,31 @@ func statusRank(status string) int {
 	default:
 		return 3
 	}
+}
+
+// coordinationFailureTexts 是 Collector 上报的协调失败原因对应的告警文案，按优先级排列：
+// 多个实例上报不同原因时取排在前面的。原因名与 Collector 的 assignmentFailureReasons 一一对应。
+var coordinationFailureTexts = []struct{ reason, text string }{
+	{"cloudnode", "采集计划配置服务调用失败：请检查 CloudNode、网关连接和批处理队列"},
+	{"environment", "函数运行环境生成失败：请检查环境变量大小和 DNS 配置"},
+	{"rules", "采集规则读取失败：请检查 Collector 规则配置和存储连接"},
+	{"store", "Collector 本地数据库读写失败：请检查 Collector 的 SQLite 数据库、磁盘空间和权限"},
+	{"storage", "标的快照登记失败：请检查 Storage 连接，以及 Collector 与 Storage 计算的快照哈希是否一致"},
+	{"package", "采集函数代码包解析失败：请检查代码包是否已上传，以及 CloudNode 是否可达"},
+	{"dataset", "数据集属性（允许迟到）设置失败：请检查 Storage 连接和数据集配置"},
+	{"activity", "采集计划活动日志未写入，计划保持未生效：请检查 Admin 的活动日志服务"},
+	{"preflight", "创建新采集计划前的检查未通过：请检查数据源前置条件，例如 A 股交易日历的覆盖期"},
+	{"capacity", "采集计划无法放进函数：请检查每函数标的数（symbols_per_function）、环境变量大小和 Access 配置"},
+}
+
+// coordinationFailureText 返回当前失败原因集合对应的告警文案；没有专属文案时给出通用提示。
+func coordinationFailureText(reasons map[string]bool) string {
+	for _, item := range coordinationFailureTexts {
+		if reasons[item.reason] {
+			return item.text
+		}
+	}
+	return "采集计划协调失败：请检查 Collector 日志、CloudNode 和函数网络"
 }
 
 func unixTime(value float64) time.Time {

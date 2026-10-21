@@ -3,6 +3,12 @@ package marketfetch
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -222,4 +228,59 @@ func TestMetricsRoundOKRestoresHealthAndClearsFailureWithoutTouchingLastSuccess(
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("crypto")))
 	require.Equal(t, float64(1_700_000_000), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), "计划仍在进行时不刷新最近一次对账成功时间")
 	require.NotPanics(t, func() { (*Metrics)(nil).ObserveAssignmentRoundOK("crypto") })
+}
+
+// fail 调用点用到的每个原因都必须在白名单里：白名单之外的原因会被悄悄归为 cloudnode，
+// Monitor 就会把 Collector 本地数据库、Storage 等故障显示成“CloudNode 服务调用失败”。
+func TestEveryFailureReasonUsedByTheReconcilerIsWhitelisted(t *testing.T) {
+	allowed := map[string]bool{}
+	for _, reason := range assignmentFailureReasons {
+		allowed[reason] = true
+	}
+	used := map[string]int{}
+	for _, name := range []string{"plan_reconciler.go", "plan_manager.go", "plan_aux.go"} {
+		file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+		require.NoError(t, err)
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || selector.Sel.Name != "fail" || len(call.Args) == 0 {
+				return true
+			}
+			literal, ok := call.Args[0].(*ast.BasicLit)
+			if !ok {
+				return true
+			}
+			reason, err := strconv.Unquote(literal.Value)
+			require.NoError(t, err)
+			used[reason]++
+			require.Truef(t, allowed[reason], "%s: fail(%q, …) 的原因不在 assignmentFailureReasons 白名单里，会被归为 cloudnode", name, reason)
+			return true
+		})
+	}
+	require.GreaterOrEqual(t, len(used), 8, "扫描到的原因数量异常，扫描规则可能失效")
+	// 白名单里没有任何调用点使用的原因是死条目。
+	for _, reason := range assignmentFailureReasons {
+		if reason == ReasonPublishLeaseHeld {
+			continue // 由 failCloud 按错误类别选择，没有字面量调用点
+		}
+		require.Positivef(t, used[reason], "白名单里的 %q 没有任何 fail 调用点使用", reason)
+	}
+}
+
+// 每个白名单原因都要在 Monitor 里有专属告警文案，否则 Monitor 只能显示通用提示。
+func TestEveryFailureReasonHasAMonitorText(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "monitor", "internal", "observability", "overview.go"))
+	require.NoError(t, err)
+	source := string(raw)
+	for _, reason := range assignmentFailureReasons {
+		if reason == ReasonPublishLeaseHeld {
+			require.Contains(t, source, "publishLeaseHeldReason = \""+reason+"\"")
+			continue
+		}
+		require.Containsf(t, source, "{\""+reason+"\", \"", "Monitor 的 coordinationFailureTexts 缺少原因 %q 的告警文案", reason)
+	}
 }

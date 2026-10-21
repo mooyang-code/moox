@@ -278,8 +278,11 @@ func (m *Metrics) trackFailureSince(spaceID, reason string) {
 // ReasonPublishLeaseHeld 是 Admin 明确答复「发布租约或在途操作占用仍被持有」时的失败原因。
 const ReasonPublishLeaseHeld = "publish_lease_held"
 
+// assignmentFailureReasons 是协调失败原因的白名单，与 fail 的调用点一一对应；白名单之外的一律按 cloudnode 上报。
+// Monitor 的 coordinationFailureTexts 为每个原因给出告警文案，新增原因时两边要一起改。
 var assignmentFailureReasons = []string{
-	"capacity", "rules", "symbols", "dns", "cloudnode", "environment", "task_instances", ReasonPublishLeaseHeld,
+	"cloudnode", "environment", "rules", "store", "storage", "package", "dataset", "activity", "preflight", "capacity",
+	ReasonPublishLeaseHeld,
 }
 
 func normalizeAssignmentFailureReason(reason string) string {

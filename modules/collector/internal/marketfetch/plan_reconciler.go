@@ -174,7 +174,20 @@ type PlanReconciler struct {
 	backfillReady  map[string]string // 补采函数名 → 已确认就绪的代码包 ID：目标包变了就重新校验升级
 	backfillLease  *scfinvoker.CollectorPublishLease
 	backfillHolder string
+	// backfillJobs 是仍在云端运行的补采作业（函数名 → 作业），受 backfillMu 保护。
+	// 作业结束之前不释放补采租约，也不对同一函数重复提交。
+	backfillJobs map[string]backfillJob
 }
+
+// backfillJob 是一个仍在云端运行的补采函数作业（创建、升级、删除或清理遗留预留）。
+type backfillJob struct {
+	id   string
+	kind string
+	at   time.Time
+}
+
+// errBackfillJobRunning 表示补采作业在等待上限内没有结束；作业已登记在途，调用方稍后重试。
+var errBackfillJobRunning = errors.New("backfill operation is still running")
 
 func (r *PlanReconciler) now() time.Time {
 	if r.Now != nil {
@@ -868,31 +881,39 @@ func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names [
 			return false, nil
 		}
 	}
-	var lease *scfinvoker.CollectorPublishLease
-	if backfill {
-		lease, err = r.ensureBackfillLease(ctx)
-	} else {
-		lease, err = r.ensureLease(ctx)
-	}
-	if err != nil {
-		return false, fmt.Errorf("publish lease: %w", err)
-	}
-	jobID, err := r.Cloud.SubmitDeleteNodes(ctx, r.SpaceID, stale, lease)
-	if err != nil {
-		return false, fmt.Errorf("submit delete of stale reservations: %w", err)
-	}
 	var items []scfinvoker.BatchItemResult
-	var terminal bool
 	if backfill {
-		items, terminal, err = r.waitJob(ctx, jobID)
+		// 补采路径：作业未结束时保留租约并登记在途（见 runBackfillJob），本轮视为清理尚未完成。
+		items, err = r.runBackfillJob(ctx, names[0], "cleanup", "stale reservation cleanup", func(lease *scfinvoker.CollectorPublishLease) (string, error) {
+			jobID, submitErr := r.Cloud.SubmitDeleteNodes(ctx, r.SpaceID, stale, lease)
+			if submitErr != nil {
+				return "", fmt.Errorf("submit delete of stale reservations: %w", submitErr)
+			}
+			return jobID, nil
+		})
+		if errors.Is(err, errBackfillJobRunning) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
 	} else {
+		lease, leaseErr := r.ensureLease(ctx)
+		if leaseErr != nil {
+			return false, fmt.Errorf("publish lease: %w", leaseErr)
+		}
+		jobID, submitErr := r.Cloud.SubmitDeleteNodes(ctx, r.SpaceID, stale, lease)
+		if submitErr != nil {
+			return false, fmt.Errorf("submit delete of stale reservations: %w", submitErr)
+		}
+		var terminal bool
 		items, terminal, err = r.waitAux(ctx, auxJobKindCleanup, stale, jobID)
-	}
-	if err != nil {
-		return false, err
-	}
-	if !terminal {
-		return false, nil
+		if err != nil {
+			return false, err
+		}
+		if !terminal {
+			return false, nil
+		}
 	}
 	for _, item := range items {
 		if !item.Success {
@@ -900,10 +921,8 @@ func (r *PlanReconciler) clearStale(ctx context.Context, trigger string, names [
 		}
 	}
 	log.Infof("collector fetch plan removed stale create reservations space=%s functions=%s", r.SpaceID, strings.Join(stale, ","))
-	if backfill {
-		r.releaseBackfillLease(ctx)
-	}
-	// 实时对账路径的租约由调用方统一持有与释放：清理后调用方还要继续创建与补推，不能在此释放。
+	// 实时对账路径的租约由调用方统一持有与释放：清理后调用方还要继续创建与补推，不能在此释放；
+	// 补采路径的租约已由 runBackfillJob 在作业结束后释放。
 	return true, nil
 }
 
@@ -1700,6 +1719,12 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 	if pkg != "" && r.backfillReady[name] == pkg+"|"+fingerprint {
 		return name, nil
 	}
+	// 上一次调用留下的在途作业：先结算。仍在运行就不重复提交，也不碰租约；到终态后继续按云端实际状态判断。
+	if busy, settleErr := r.settleBackfillJob(ctx, name); settleErr != nil {
+		return "", settleErr
+	} else if busy {
+		return "", fmt.Errorf("backfill function %s has an operation still running (%w)", name, errBackfillJobRunning)
+	}
 	release, err := r.acquireOperation(ctx)
 	if err != nil {
 		return "", err
@@ -1764,22 +1789,12 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 		Metadata:            mustStruct(map[string]any{"function_name": name, "node_id": name, "biz_type": "market_fetcher", "function_mode": "kline", "memory_size": memory, "timeout_seconds": tencent.CollectorTimerTimeoutSeconds, backfillAccessMetadataKey: fingerprint}),
 		CreateReservationId: hex.EncodeToString(reservation[:16]),
 	}
-	lease, err := r.ensureBackfillLease(ctx)
-	if err != nil {
-		return "", fmt.Errorf("publish lease: %w", err)
-	}
-	defer r.releaseBackfillLease(ctx)
-	item.CollectorPublishLeaseId, item.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
-	jobID, err := r.Cloud.SubmitCreateNodes(ctx, r.SpaceID, []*cloudnodepb.NodeCreateItem{item})
+	items, err := r.runBackfillJob(ctx, name, "create", "is still being created", func(lease *scfinvoker.CollectorPublishLease) (string, error) {
+		item.CollectorPublishLeaseId, item.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
+		return r.Cloud.SubmitCreateNodes(ctx, r.SpaceID, []*cloudnodepb.NodeCreateItem{item})
+	})
 	if err != nil {
 		return "", err
-	}
-	items, terminal, err := r.waitJob(ctx, jobID)
-	if err != nil {
-		return "", err
-	}
-	if !terminal {
-		return "", fmt.Errorf("backfill function %s is still being created", name)
 	}
 	for _, result := range items {
 		if !result.Success {
@@ -1792,21 +1807,11 @@ func (r *PlanReconciler) EnsureBackfillFunction(ctx context.Context, marketType 
 
 // upgradeBackfillCode 把已存在的补采函数升级到配置的代码包（调用方已持有操作槽）。
 func (r *PlanReconciler) upgradeBackfillCode(ctx context.Context, name, pkg string) error {
-	lease, err := r.ensureBackfillLease(ctx)
-	if err != nil {
-		return fmt.Errorf("publish lease: %w", err)
-	}
-	defer r.releaseBackfillLease(ctx)
-	jobID, err := r.Cloud.SubmitDeployNodes(ctx, r.SpaceID, []string{name}, pkg, lease)
+	items, err := r.runBackfillJob(ctx, name, "upgrade", "code upgrade is still running", func(lease *scfinvoker.CollectorPublishLease) (string, error) {
+		return r.Cloud.SubmitDeployNodes(ctx, r.SpaceID, []string{name}, pkg, lease)
+	})
 	if err != nil {
 		return err
-	}
-	items, terminal, err := r.waitJob(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	if !terminal {
-		return fmt.Errorf("backfill function %s code upgrade is still running", name)
 	}
 	for _, result := range items {
 		if !result.Success {
@@ -1818,21 +1823,11 @@ func (r *PlanReconciler) upgradeBackfillCode(ctx context.Context, name, pkg stri
 
 // deleteBackfillFunction 删除已存在的补采函数（调用方已持有操作槽），之后由调用方重新创建。
 func (r *PlanReconciler) deleteBackfillFunction(ctx context.Context, name string) error {
-	lease, err := r.ensureBackfillLease(ctx)
-	if err != nil {
-		return fmt.Errorf("publish lease: %w", err)
-	}
-	defer r.releaseBackfillLease(ctx)
-	jobID, err := r.Cloud.SubmitDeleteNodes(ctx, r.SpaceID, []string{name}, lease)
+	items, err := r.runBackfillJob(ctx, name, "delete", "deletion is still running", func(lease *scfinvoker.CollectorPublishLease) (string, error) {
+		return r.Cloud.SubmitDeleteNodes(ctx, r.SpaceID, []string{name}, lease)
+	})
 	if err != nil {
 		return err
-	}
-	items, terminal, err := r.waitJob(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	if !terminal {
-		return fmt.Errorf("backfill function %s deletion is still running", name)
 	}
 	for _, result := range items {
 		if !result.Success {
@@ -1859,7 +1854,16 @@ func (r *PlanReconciler) markBackfillReady(name, key string) {
 	r.backfillReady[name] = key
 }
 
+// ensureBackfillLease 返回补采租约：已持有的租约先续租，续租失败（已过期、被取代、通信失败）就丢弃重新申请。
+// 有在途补采作业时租约一直保留，多个函数的作业共用它。
 func (r *PlanReconciler) ensureBackfillLease(ctx context.Context) (*scfinvoker.CollectorPublishLease, error) {
+	if r.backfillLease != nil {
+		renewed, err := r.renewBackfillLease(ctx)
+		if err == nil {
+			return renewed, nil
+		}
+		r.backfillLease = nil
+	}
 	if r.backfillHolder == "" {
 		var raw [16]byte
 		if _, err := rand.Read(raw[:]); err != nil {
@@ -1880,6 +1884,19 @@ func (r *PlanReconciler) ensureBackfillLease(ctx context.Context) (*scfinvoker.C
 	return lease, nil
 }
 
+func (r *PlanReconciler) renewBackfillLease(ctx context.Context) (*scfinvoker.CollectorPublishLease, error) {
+	leaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	renewed, err := r.Cloud.RenewCollectorPublishLease(leaseCtx, r.backfillLease)
+	if err != nil {
+		return nil, err
+	}
+	if renewed != nil {
+		r.backfillLease = renewed
+	}
+	return r.backfillLease, nil
+}
+
 func (r *PlanReconciler) releaseBackfillLease(ctx context.Context) {
 	if r.backfillLease == nil {
 		return
@@ -1888,4 +1905,69 @@ func (r *PlanReconciler) releaseBackfillLease(ctx context.Context) {
 	defer cancel()
 	_ = r.Cloud.ReleaseCollectorPublishLease(leaseCtx, r.backfillLease)
 	r.backfillLease = nil
+}
+
+// releaseBackfillLeaseIfIdle 只在没有在途补采作业时释放租约：租约一释放就立即过期，
+// 排队中的作业开始执行时会因租约已过期而失败，下一次调用还会对同一函数重复提交。
+func (r *PlanReconciler) releaseBackfillLeaseIfIdle(ctx context.Context) {
+	if len(r.backfillJobs) == 0 {
+		r.releaseBackfillLease(ctx)
+	}
+}
+
+// runBackfillJob 取得补采租约，提交一个作业并等待。调用方须已持有 backfillMu。
+// 作业在等待上限内结束就释放租约（没有其他在途作业时）并返回结果；
+// 没有结束，或读取结果出错时作业仍可能在云端运行：登记在途并保留租约，返回 errBackfillJobRunning
+// （读取出错时返回该错误），由后续调用经 settleBackfillJob 结算。
+func (r *PlanReconciler) runBackfillJob(ctx context.Context, name, kind, running string, submit func(lease *scfinvoker.CollectorPublishLease) (string, error)) ([]scfinvoker.BatchItemResult, error) {
+	lease, err := r.ensureBackfillLease(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("publish lease: %w", err)
+	}
+	jobID, err := submit(lease)
+	if err != nil {
+		r.releaseBackfillLeaseIfIdle(ctx)
+		return nil, err
+	}
+	items, terminal, err := r.waitJob(ctx, jobID)
+	if err != nil || !terminal {
+		if r.backfillJobs == nil {
+			r.backfillJobs = map[string]backfillJob{}
+		}
+		r.backfillJobs[name] = backfillJob{id: jobID, kind: kind, at: r.now()}
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("backfill function %s %s (%w)", name, running, errBackfillJobRunning)
+	}
+	r.releaseBackfillLeaseIfIdle(ctx)
+	return items, nil
+}
+
+// settleBackfillJob 结算函数上一次调用留下的在途作业，调用方须已持有 backfillMu。
+// busy 为 true 表示作业仍在运行（顺带续租，防止排队中的作业因租约过期失败）；到终态就移出在途集合，
+// 没有其他在途作业时释放租约。作业结果不在这里判断：调用方随后读取云端实际状态，缺失就重建，失败就重试。
+func (r *PlanReconciler) settleBackfillJob(ctx context.Context, name string) (busy bool, err error) {
+	job, ok := r.backfillJobs[name]
+	if !ok {
+		return false, nil
+	}
+	_, terminal, err := r.checkJob(ctx, job.id)
+	if err != nil {
+		return true, err
+	}
+	if !terminal {
+		if r.backfillLease != nil {
+			if _, renewErr := r.renewBackfillLease(ctx); renewErr != nil {
+				log.WarnContextf(ctx, "collector backfill renew publish lease for in-flight job space=%s function=%s: %v", r.SpaceID, name, renewErr)
+			}
+		}
+		if age := r.now().Sub(job.at); age > pendingJobWarnAge {
+			log.WarnContextf(ctx, "collector backfill cloud job is still not finished space=%s function=%s job=%s kind=%s age=%s", r.SpaceID, name, job.id, job.kind, age.Round(time.Second))
+		}
+		return true, nil
+	}
+	delete(r.backfillJobs, name)
+	r.releaseBackfillLeaseIfIdle(ctx)
+	return false, nil
 }

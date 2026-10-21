@@ -130,6 +130,8 @@ type fakePlanCloud struct {
 	failNodes       map[string]bool
 	leaseCalls      int
 	releases        int
+	renews          int
+	renewErr        error // 非空时续租失败，模拟租约已过期或被取代
 	// acquireErr 非空时申请发布租约失败，用来模拟 Admin 答复「被占用」或其他故障。
 	acquireErr error
 	// runningAll 让所有作业都停在运行中；batchErr 让读取作业结果失败；hangBatch 让读取一直阻塞到 ctx 结束。
@@ -314,6 +316,10 @@ func (c *fakePlanCloud) AcquireCollectorPublishLease(_ context.Context, spaceID,
 }
 
 func (c *fakePlanCloud) RenewCollectorPublishLease(_ context.Context, lease *scfinvoker.CollectorPublishLease) (*scfinvoker.CollectorPublishLease, error) {
+	c.renews++
+	if c.renewErr != nil {
+		return nil, c.renewErr
+	}
 	return lease, nil
 }
 
