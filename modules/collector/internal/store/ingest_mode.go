@@ -109,12 +109,16 @@ func (r *IngestModeRepository) Set(ctx context.Context, modes []IngestMode) erro
 	})
 }
 
-// ClearForce 清掉空间里全部 --force 标记。
-func (r *IngestModeRepository) ClearForce(ctx context.Context, spaceID string) error {
+// ClearForce 清掉 --force 标记：datasetIDs 为空时清空间里全部，否则只清这些数据集的。
+func (r *IngestModeRepository) ClearForce(ctx context.Context, spaceID string, datasetIDs []string) error {
 	if r == nil || r.db == nil {
 		return fmt.Errorf("ingest mode repository is not initialized")
 	}
-	return r.db.WithContext(ctx).Model(&ingestModeRow{}).Where("c_space_id = ? AND c_force = 1", strings.ToLower(spaceID)).Update("c_force", false).Error
+	query := r.db.WithContext(ctx).Model(&ingestModeRow{}).Where("c_space_id = ? AND c_force = 1", strings.ToLower(spaceID))
+	if len(datasetIDs) > 0 {
+		query = query.Where("c_dataset_id IN ?", datasetIDs)
+	}
+	return query.Update("c_force", false).Error
 }
 
 // StreamWorker 是 collector-stream 实例的心跳记录。

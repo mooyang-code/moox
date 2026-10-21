@@ -26,7 +26,7 @@ func TestIngestModesInitializeOnceAndSwitch(t *testing.T) {
 	require.NoError(t, repo.Set(ctx, []IngestMode{{SpaceID: "crypto", DatasetID: "a", Mode: IngestStream, Executor: ExecutorLocal, Force: true}}))
 	modes, _ = repo.List(ctx, "crypto")
 	require.Equal(t, IngestMode{SpaceID: "crypto", DatasetID: "a", Mode: IngestStream, Executor: ExecutorLocal, Force: true, UpdatedAt: modes["a"].UpdatedAt}, modes["a"])
-	require.NoError(t, repo.ClearForce(ctx, "crypto"))
+	require.NoError(t, repo.ClearForce(ctx, "crypto", nil))
 	modes, _ = repo.List(ctx, "crypto")
 	require.False(t, modes["a"].Force)
 	require.Error(t, repo.Set(ctx, []IngestMode{{SpaceID: "crypto", DatasetID: "a", Mode: "ws", Executor: ExecutorSCF}}))

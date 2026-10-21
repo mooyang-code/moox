@@ -47,7 +47,11 @@ func TestDecodeRecordedBinanceMessages(t *testing.T) {
 			}
 			require.NoError(t, json.Unmarshal(raw, &envelope))
 			k := envelope.Data.K
-			num := func(key string) float64 { v, err := strconv.ParseFloat(k[key].(string), 64); require.NoError(t, err); return v }
+			num := func(key string) float64 {
+				v, err := strconv.ParseFloat(k[key].(string), 64)
+				require.NoError(t, err)
+				return v
+			}
 			require.Equal(t, strings.ToUpper(envelope.Data.Symbol+envelope.Data.Pair), event.Symbol, name)
 			require.Equal(t, int64(k["t"].(float64)), event.Kline.BarStart.UnixMilli(), name)
 			require.Equal(t, time.Minute, event.Kline.BarEnd.Sub(event.Kline.BarStart), name)

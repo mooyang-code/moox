@@ -49,7 +49,7 @@ const (
 type IngestModeSource interface {
 	List(context.Context, string) (map[string]store.IngestMode, error)
 	Initialize(context.Context, []store.IngestMode) error
-	ClearForce(context.Context, string) error
+	ClearForce(context.Context, string, []string) error
 }
 
 // SubjectExclusionSource 读取采集名单排除（store.SubjectExclusionRepository）。
@@ -460,7 +460,7 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	if !changed {
 		if len(forced) > 0 && r.Modes != nil {
 			// 切换命令没有带来任何变化：--force 标记不再需要。
-			if err := r.Modes.ClearForce(ctx, r.SpaceID); err != nil {
+			if err := r.Modes.ClearForce(ctx, r.SpaceID, nil); err != nil {
 				return r.fail("store", err)
 			}
 		}
@@ -685,9 +685,10 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 	if err := r.saveProgress(ctx, record, progress, store.FetchPlanApplied, ""); err != nil {
 		return err
 	}
-	if progress.Forced && r.Modes != nil && content.HasHandoff() {
-		// 被 --force 推进的标的变更计划不清标记：紧接着的交接计划同样不等失联端。
-		if err := r.Modes.ClearForce(ctx, r.SpaceID); err != nil {
+	if r.Modes != nil && content.HasHandoff() {
+		// 只清这份计划完成交接的数据集的 --force 标记：其他数据集的切换（例如逐个数据集执行的 --force）
+		// 还在等下一份计划，标记要留给它。被 --force 推进的标的变更计划没有交接，不清标记。
+		if err := r.Modes.ClearForce(ctx, r.SpaceID, handedOff(content)); err != nil {
 			log.WarnContextf(ctx, "collector fetch plan clear force flags space=%s: %v", r.SpaceID, err)
 		}
 	}
@@ -914,6 +915,20 @@ func (r *PlanReconciler) forceRequested(ctx context.Context) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// handedOff 返回计划里完成交接（换了执行端）的数据集。
+func handedOff(content *FetchPlanContent) []string {
+	seen := map[string]bool{}
+	var ids []string
+	for _, change := range content.Datasets {
+		if change.Changed && change.OldIngest != "" && !seen[change.DatasetID] {
+			seen[change.DatasetID] = true
+			ids = append(ids, change.DatasetID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // movesToWorker 判断计划里有数据集正从别的执行端切到推送或本地执行端（collector-stream 是新执行端）。

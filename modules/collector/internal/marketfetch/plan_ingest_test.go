@@ -3,6 +3,7 @@ package marketfetch
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -33,8 +34,11 @@ func (m *memModes) Initialize(_ context.Context, modes []store.IngestMode) error
 	return nil
 }
 
-func (m *memModes) ClearForce(context.Context, string) error {
+func (m *memModes) ClearForce(_ context.Context, _ string, datasetIDs []string) error {
 	for key, mode := range m.modes {
+		if len(datasetIDs) > 0 && !slices.Contains(datasetIDs, key) {
+			continue
+		}
 		mode.Force = false
 		m.modes[key] = mode
 	}
@@ -373,4 +377,21 @@ func TestTaskParamsSetTheInitialIngestMode(t *testing.T) {
 	h.now = h.now.Add(time.Minute)
 	h.settle(true)
 	require.Equal(t, PlanExecutorSCF, h.applied().Datasets["ds_spot_1m|1m"].IngestOrSCF(), "初值之后以库为准")
+}
+
+// 逐个数据集执行 --force：前一份交接计划生效时只清它交接的数据集的标记，后一个数据集的标记留给下一份计划。
+func TestForceFlagsAreClearedPerHandedOffDataset(t *testing.T) {
+	h := newIngestHarness(t, modeStream, "1m", "1h")
+	h.settle(true)
+	h.workers.worker = nil
+	h.modes.set("ds_spot_1m", IngestPull, PlanExecutorSCF, true)
+	h.modes.set("ds_spot_1h", IngestStream, PlanExecutorLocal, true)
+	h.settle(false)
+	require.False(t, h.modes.modes["ds_spot_1m"].Force)
+	require.True(t, h.modes.modes["ds_spot_1h"].Force, "没有交接的数据集保留标记")
+	h.modes.set("ds_spot_1h", IngestPull, PlanExecutorSCF, true)
+	h.now = h.now.Add(time.Minute)
+	h.settle(false)
+	require.False(t, h.modes.modes["ds_spot_1h"].Force)
+	require.Equal(t, PlanExecutorSCF, h.applied().Datasets["ds_spot_1h|1h"].IngestOrSCF(), "后一个数据集的 --force 交接不等失联端")
 }
