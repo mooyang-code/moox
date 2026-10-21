@@ -437,3 +437,22 @@ func TestFrameConversionRoundTrip(t *testing.T) {
 }
 
 func Span(from, to time.Time) seriesstore.Span { return seriesstore.Span{From: from, To: to} }
+
+// 保留期之外的本地历史（导入的或早先同步的）不能被「Storage 已经清理」改写：变更修正只重拉 Storage 现存的区间。
+func TestFollowLeavesHistoryBeyondStorageRetention(t *testing.T) {
+	st := newFakeStorage()
+	st.put("A", 100, 0, 1, 2, 3)
+	s, spec := newSyncer(t, st)
+	_, err := s.Baseline(context.Background(), src)
+	require.NoError(t, err)
+	_, err = s.Pull(context.Background(), spec, []string{"A"}, at(4))
+	require.NoError(t, err)
+
+	// t1 的修正日志还没消费，但 Storage 已经清理了 t0、t1（保留起点移到 t2）。
+	st.put("A", 500, 1)
+	st.earliest["A"] = at(2)
+	res, err := s.Follow(context.Background(), spec)
+	require.NoError(t, err)
+	require.Empty(t, res.Applied, "修正落在保留期之外：本地历史不动")
+	require.Equal(t, map[int]float64{0: 100, 1: 101, 2: 102, 3: 103}, closes(t, s, "A"))
+}

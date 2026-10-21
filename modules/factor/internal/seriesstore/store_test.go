@@ -221,6 +221,22 @@ func TestPrependEarlierHistory(t *testing.T) {
 	require.False(t, cells[5].filled)
 }
 
+// 补更早的历史使 Earliest 前移：不带 RecordPending 也自动记入失效重算待办（此前因历史不足而为空的结果要重算）；普通追加不记。
+func TestEarliestMovedRecordsPendingWithoutRecordPending(t *testing.T) {
+	s := openTest(t, t.TempDir())
+	write(t, s, "BTCUSDT", 10, 12, rowsOf(map[int]float64{10: 100, 11: 101}), false)
+	pending, err := s.Pending(testSrc)
+	require.NoError(t, err)
+	require.Empty(t, pending, "首次写入与追加不记")
+
+	res := write(t, s, "BTCUSDT", 8, 10, rowsOf(map[int]float64{8: 98, 9: 99}), false)
+	require.Equal(t, at(10), res.PrevEarliest)
+	require.Equal(t, at(8), res.Earliest)
+	pending, err = s.Pending(testSrc)
+	require.NoError(t, err)
+	require.Equal(t, []PendingSpan{{Subject: "BTCUSDT", From: at(8), To: at(10), Reason: "earliest_moved"}}, pending)
+}
+
 func TestReplaceWithMissingRowsFills(t *testing.T) {
 	s := openTest(t, t.TempDir())
 	write(t, s, "BTCUSDT", 0, 5, rowsOf(map[int]float64{0: 100, 1: 101, 2: 102, 3: 103, 4: 104}), false)

@@ -118,8 +118,18 @@ func (f *fakeStorage) ReadDatasetChanges(_ context.Context, _, _ string, cursor 
 	return out, nil
 }
 
-func (f *fakeStorage) EarliestPeriod(context.Context, string, string, string, []string, []string) (time.Time, bool, error) {
-	return time.Time{}, false, nil
+func (f *fakeStorage) EarliestPeriod(_ context.Context, _, _, _ string, subjects, _ []string) (time.Time, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var best time.Time
+	for _, s := range subjects {
+		for _, r := range f.rows[s] {
+			if best.IsZero() || r.at.Before(best) {
+				best = r.at
+			}
+		}
+	}
+	return best, !best.IsZero(), nil
 }
 
 func (f *fakeStorage) DatasetColumns(context.Context, string, string) ([]string, error) {
@@ -415,4 +425,76 @@ func TestWriteLocalReloadsWindow(t *testing.T) {
 	view := fx.data.st(src).win.Load().Acquire([]string{"BTC"}, at(9).Unix())
 	idx, _ := view.FieldIndex("close")
 	require.Equal(t, 900.0, view.Series("BTC")[0].Cols[idx][1])
+}
+
+// 追赶一个早于窗口最新一根的周期：窗口只保留到最新为止的回看根数，截止该周期的回看不全，要改读本地磁盘，
+// 不能用不完整的窗口算出看似正常的值（mean3 在 t8 需要 t6、t7、t8）。
+func TestLiveCatchUpOlderPeriodReadsDiskNotTruncatedWindow(t *testing.T) {
+	fx := newFixture(t, mean3())
+	subjects := []string{"BTC"}
+	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+	fx.now = at(11)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, subjects))
+	// 本地磁盘里有更早的历史（例如导入的），窗口里没有。
+	src := seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}
+	fields, ok, err := fx.data.Store().Schema(src)
+	require.NoError(t, err)
+	require.True(t, ok)
+	hist := seriesstore.NewColumns(fields, 8)
+	for m := 0; m < 8; m++ {
+		values := make([]seriesstore.Value, len(fields))
+		for i, f := range fields {
+			values[i] = seriesstore.Float(100 + float64(m))
+			if f.Name == "volume" {
+				values[i] = seriesstore.Float(10)
+			}
+		}
+		hist.AppendRow(at(m), "", false, values...)
+	}
+	_, err = fx.data.Store().WriteRange(context.Background(), src, seriesstore.SubjectWrite{Subject: "BTC", From: at(0), To: at(8), Rows: hist}, seriesstore.WriteOptions{})
+	require.NoError(t, err)
+
+	outcome := fx.live(t, at(8), subjects)
+	require.Equal(t, "complete", outcome.Status)
+	require.InDelta(t, (106+107+108)/3.0, fx.result("BTC", 8).Fields["mean3"], 1e-9)
+}
+
+// 本地数据覆盖：连续根数不足回看、而 Storage 在本地最早一根之前还有数据的标的列为不足；
+// 本地最早一根就是 Storage 首根的新标的放行；导入更早的历史后不再不足。
+func TestCoverageFlagsShortSubjectsButNotNewListings(t *testing.T) {
+	fx := newFixture(t, mean3())
+	subjects := []string{"BTC", "NEW"}
+	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	fx.st.put("NEW", 100, 7, 8, 9)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, subjects))
+	src := seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}
+	short, err := fx.data.Coverage(context.Background(), src)
+	require.NoError(t, err)
+	require.Empty(t, short, "回看 3 根，本地各有 3 根")
+
+	fx.set.Factors = []domain.FactorDef{mean5()} // 回看变长，本地仍是 3 根
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, subjects))
+	short, err = fx.data.Coverage(context.Background(), src)
+	require.NoError(t, err)
+	require.Len(t, short, 1)
+	require.Equal(t, "BTC", short[0].Subject)
+	require.Equal(t, 3, short[0].Have)
+	require.Equal(t, 5, short[0].Want)
+
+	// 导入更早的历史（与本地最早一根相接）后，BTC 够了。
+	fields, _, err := fx.data.Store().Schema(src)
+	require.NoError(t, err)
+	hist := seriesstore.NewColumns(fields, 3)
+	for m := 4; m < 7; m++ {
+		values := make([]seriesstore.Value, len(fields))
+		for i := range fields {
+			values[i] = seriesstore.Float(float64(100 + m))
+		}
+		hist.AppendRow(at(m), "", false, values...)
+	}
+	_, err = fx.data.Store().WriteRange(context.Background(), src, seriesstore.SubjectWrite{Subject: "BTC", From: at(4), To: at(7), Rows: hist}, seriesstore.WriteOptions{})
+	require.NoError(t, err)
+	short, err = fx.data.Coverage(context.Background(), src)
+	require.NoError(t, err)
+	require.Empty(t, short)
 }

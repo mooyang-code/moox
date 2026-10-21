@@ -88,6 +88,22 @@ func init() {
 	f.StringVar(&importFlags.JobID, "job", "", "任务 ID；不写时按请求与文件特征生成，重跑同一请求自动续传")
 }
 
+// localBounds 取标的在因子机本地的边界（补更早的历史时批要从后往前写）。
+func localBounds(engine *engineclient.Client, opts importOptions) func(ctx context.Context, subject string) (time.Time, time.Time, bool, error) {
+	return func(ctx context.Context, subject string) (time.Time, time.Time, bool, error) {
+		b, err := engine.Bounds(ctx, opts.Space, opts.Dataset, opts.Freq, subject)
+		if err != nil || !b.Exists {
+			return time.Time{}, time.Time{}, false, err
+		}
+		earliest, err := time.Parse(time.RFC3339, b.Earliest)
+		if err != nil {
+			return time.Time{}, time.Time{}, false, err
+		}
+		latest, err := time.Parse(time.RFC3339, b.Latest)
+		return earliest, latest, err == nil, err
+	}
+}
+
 func runImportCommand(ctx context.Context, opts importOptions) error {
 	step, err := importStep(opts.Freq)
 	if err != nil {
@@ -152,6 +168,9 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 		meta = runner.Meta{Fields: fields, SubjectInScope: func(ctx context.Context, subject string) (bool, error) {
 			return engine.SubjectInScope(ctx, opts.Space, opts.Dataset, subject)
 		}}
+	}
+	if wantFactor {
+		meta.LocalBounds = localBounds(engine, opts)
 	}
 	if wantFactor && !opts.DryRun {
 		targets = append(targets, &target.Factor{Endpoint: opts.Engine, AuthVersion: engine.AuthVersion, AccessKey: engine.AccessKey, SecretKey: engine.SecretKey})
@@ -305,7 +324,8 @@ func (t *importStorageTarget) Finish(ctx context.Context) error {
 	return nil
 }
 
-// importUpserts 把一批行转成 Storage 的字段更新；空值不写（字段保持原值）。
+// importUpserts 把一批行转成 Storage 的字段更新；空值写成显式 NULL（清除该字段，与因子机本地「整段替换」的结果一致，
+// 否则 Storage 保留旧值、本地为 NULL，两边不一致，之后同步还会把本地改回旧值）。
 func importUpserts(c runner.Chunk, types map[string]pb.FieldValueType) ([]*pb.RowFieldUpsert, error) {
 	rows := make([]*pb.RowFieldUpsert, 0, c.Batch.Len())
 	for i := 0; i < c.Batch.Len(); i++ {
@@ -313,6 +333,7 @@ func importUpserts(c runner.Chunk, types map[string]pb.FieldValueType) ([]*pb.Ro
 		for fi, field := range c.Fields {
 			col := c.Batch.Cols[fi]
 			if col.Null[i] {
+				values = append(values, &pb.FieldValue{FieldId: field.Name, Value: &pb.TypedValue{Value: &pb.TypedValue_NullValue{NullValue: pb.NullValue_NULL_VALUE_NULL}}})
 				continue
 			}
 			value, err := importTypedValue(field, col, i, types[field.Name])

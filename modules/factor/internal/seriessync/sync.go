@@ -32,6 +32,9 @@ type Spec struct {
 	Lookback int
 }
 
+// Names 是数据源字段名。
+func (s Spec) Names() []string { return s.names() }
+
 func (s Spec) names() []string {
 	out := make([]string, len(s.Fields))
 	for i, f := range s.Fields {
@@ -385,6 +388,21 @@ func mergeSpans(in []seriesstore.Span) []seriesstore.Span {
 
 // refetch 重拉 [lo, hi) 并与本地比对；不同才返回要写入的整段替换。
 func (s *Syncer) refetch(ctx context.Context, spec Spec, subject string, lo, hi time.Time) (seriesstore.SubjectWrite, bool, error) {
+	// 保留期之外的数据 Storage 已经清理：本地的历史（导入的、早先同步的）不能被「Storage 没有」改写成填充行。
+	// 只重拉 Storage 现存的区间；Storage 完全没有这个标的的数据时，本地不动。
+	earliest, has, err := s.Storage.EarliestPeriod(ctx, spec.Source.SpaceID, spec.Source.DatasetID, spec.Source.Freq, []string{subject}, spec.names())
+	if err != nil {
+		return seriesstore.SubjectWrite{}, false, err
+	}
+	if !has {
+		return seriesstore.SubjectWrite{}, false, nil
+	}
+	if earliest.After(lo) {
+		lo = earliest
+	}
+	if !lo.Before(hi) {
+		return seriesstore.SubjectWrite{}, false, nil
+	}
 	frames, err := s.Storage.ReadWindow(ctx, storageio.ReadRequest{
 		SpaceID: spec.Source.SpaceID, DatasetID: spec.Source.DatasetID, Freq: spec.Source.Freq,
 		Subjects: []string{subject}, Start: lo, End: hi, Columns: spec.names(),

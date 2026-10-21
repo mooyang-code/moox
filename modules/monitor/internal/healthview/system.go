@@ -34,6 +34,9 @@ func projectLifecycle(l *lifecycleSource) *pb.HealthLifecycle {
 	return out
 }
 
+// lifecycleModules 是提供生命周期接口的模块（组件 ID）。
+var lifecycleModules = map[string]bool{"factor-engine": true, "strategy": true, "trade": true}
+
 // phaseRank 是运行阶段的先后：系统的运行阶段取各模块中最靠前的（只要有一个模块还没到运行，系统就没有完全运行）。
 var phaseRank = map[string]int{"uninitialized": 0, "not_ready": 0, "ready": 1, "warming": 2, "running": 3, "paused": 3, "fault": 3}
 
@@ -49,7 +52,13 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 		l    *pb.HealthLifecycle
 	}
 	var modules []module
+	var unreachable []string
 	for _, c := range components {
+		if c.GetLifecycle() == nil && lifecycleModules[c.GetComponentId()] && (c.GetStatus() == "down" || c.GetStatus() == "unknown") {
+			// 有生命周期接口的模块探测不到：它的生命周期状态读不出来，但不能因此从系统汇总里消失（否则其余模块还在跑时首页仍是绿色）。
+			unreachable = append(unreachable, firstNonEmpty(c.GetName(), c.GetComponentId()))
+			continue
+		}
 		if c.GetLifecycle() != nil {
 			name := c.GetName()
 			if name == "" {
@@ -58,13 +67,21 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 			modules = append(modules, module{name: name, l: c.GetLifecycle()})
 		}
 	}
-	if len(modules) == 0 {
+	if len(modules) == 0 && len(unreachable) == 0 {
 		return nil
 	}
 	sort.Slice(modules, func(i, j int) bool { return modules[i].name < modules[j].name })
-	out := &pb.HealthSystem{Health: "healthy", ModuleCount: int32(len(modules))}
+	sort.Strings(unreachable)
+	out := &pb.HealthSystem{Health: "healthy", ModuleCount: int32(len(modules) + len(unreachable))}
+	for _, name := range unreachable {
+		out.Health = "attention"
+		out.Issues = append(out.Issues, fmt.Sprintf("%s：探测不到（模块没有响应）", name))
+	}
 	phase := 3
 	phaseName := "running"
+	if len(modules) == 0 {
+		phase, phaseName = 0, "uninitialized"
+	}
 	for _, m := range modules {
 		l := m.l
 		bad := l.Stage == "not_ready" || l.Stage == "fault"

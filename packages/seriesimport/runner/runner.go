@@ -53,6 +53,9 @@ type Meta struct {
 	Fields []seriesformat.Field
 	// SubjectInScope 判断标的是否在数据集的标签范围内；nil 表示不检查。
 	SubjectInScope func(ctx context.Context, subject string) (bool, error)
+	// LocalBounds 返回标的在因子机本地的最早与最新时间；nil 表示不知道。文件完全早于本地已有数据（补更早的历史）时，
+	// 批要从后往前写：每一批都与已有数据（或刚写的那一批）相接，本地数据才始终连续。
+	LocalBounds func(ctx context.Context, subject string) (earliest, latest time.Time, ok bool, err error)
 }
 
 // Request 是一次导入。
@@ -130,6 +133,7 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 	type plan struct {
 		file, subject string
 		report        seriesformat.Report
+		reverse       bool
 	}
 	var plans []plan
 	for _, file := range files {
@@ -162,7 +166,15 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 		}
 		summary.Files = append(summary.Files, fs)
 		summary.Rows += report.Rows
-		plans = append(plans, plan{file: file, subject: subject, report: report})
+		reverse := false
+		if meta.LocalBounds != nil {
+			earliest, _, ok, err := meta.LocalBounds(ctx, subject)
+			if err != nil {
+				return summary, fmt.Errorf("读取标的 %s 的本地边界：%w", subject, err)
+			}
+			reverse = ok && report.Last.Before(earliest)
+		}
+		plans = append(plans, plan{file: file, subject: subject, report: report, reverse: reverse})
 	}
 	if req.DryRun {
 		summary.Status = "dry_run"
@@ -174,7 +186,7 @@ func Run(ctx context.Context, req Request, meta Meta, targets []Target, cps Chec
 		fs := &summary.Files[i]
 		fs.Batches, fs.Skipped = map[string]int64{}, map[string]int64{}
 		for _, target := range targets {
-			if err := writeFile(ctx, decoder, p.file, p.subject, req, meta, target, cps, job, fs); err != nil {
+			if err := writeFile(ctx, decoder, p.file, p.subject, p.reverse, req, meta, target, cps, job, fs); err != nil {
 				summary.Status = "failed"
 				if cps != nil {
 					_ = cps.Save(job, p.file, target.Name(), fs.Batches[target.Name()]+fs.Skipped[target.Name()], 0, false, err.Error())
@@ -252,7 +264,7 @@ func scan(ctx context.Context, d seriesformat.Decoder, file string, req Request,
 }
 
 // writeFile 把一个文件写到一个目标：按时间边界分批，已经有断点的批跳过。
-func writeFile(ctx context.Context, d seriesformat.Decoder, file, subject string, req Request, meta Meta, target Target, cps Checkpoints, job string, fs *FileSummary) error {
+func writeFile(ctx context.Context, d seriesformat.Decoder, file, subject string, reverse bool, req Request, meta Meta, target Target, cps Checkpoints, job string, fs *FileSummary) error {
 	var doneBatches, doneRows int64
 	if cps != nil {
 		b, rows, done, err := cps.Get(job, file, target.Name())
@@ -301,6 +313,34 @@ func writeFile(ctx context.Context, d seriesformat.Decoder, file, subject string
 	}
 	_ = doneRows
 	rb := newRebatcher(r, req.batchRows())
+	if reverse {
+		// 补更早的历史：先读出全部批，再从最晚的一批往回写。
+		var batches []*seriesformat.Batch
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			b, err := rb.next()
+			if b != nil && b.Len() > 0 {
+				batches = append(batches, b)
+			}
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return err
+			}
+		}
+		for i := len(batches) - 1; i >= 0; i-- {
+			if err := write(batches[i]); err != nil {
+				return err
+			}
+		}
+		if cps != nil {
+			return cps.Save(job, file, target.Name(), batchNo, rowsSoFar, true, "")
+		}
+		return nil
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err

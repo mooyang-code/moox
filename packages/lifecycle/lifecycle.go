@@ -578,7 +578,18 @@ func (c *Controller) Stage(ref Ref) Stage {
 }
 
 // Allowed 报告对象是否在计算（预热或运行）：处理周期事件前用它做门禁。
-func (c *Controller) Allowed(ref Ref) bool { return c.Stage(ref).Active() }
+// 模块自身暂停或故障时（模块级 pause，或自身检查失败后自动暂停）整个模块都不计算，不管对象各自处于什么阶段。
+func (c *Controller) Allowed(ref Ref) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.self.Stage == StagePaused || c.self.Stage == StageFault {
+		return false
+	}
+	if r := c.objects[ref.key()]; r != nil {
+		return r.Stage.Active()
+	}
+	return false
+}
 
 // Warming 报告对象是否处于预热（预热期间不真实下单）。
 func (c *Controller) Warming(ref Ref) bool { return c.Stage(ref) == StageWarming }

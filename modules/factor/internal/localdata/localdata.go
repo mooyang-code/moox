@@ -57,6 +57,12 @@ type Data struct {
 	sources map[seriesstore.Source]*source
 }
 
+type coverageKey struct {
+	subject  string
+	earliest int64
+	lookback int
+}
+
 type source struct {
 	setIDv atomic.Value // string：集合 ID，Prepare 时写入
 
@@ -68,6 +74,9 @@ type source struct {
 	numeric []string
 	window  *serieswindow.Window
 	blocked error
+	// subjects 是 Prepare 时集合的标的全集；covered 缓存「回看根数够了或属于新标的」的结论，键是 标的、本地最早时间、回看根数。
+	subjects []string
+	covered  map[coverageKey]struct{}
 
 	// ready、expected、win 在不持有 mu 时也会被读取（实时周期判断要不要等、状态上报），所以用原子量；
 	// 准备窗口、跟进变更这类长操作持有 mu 期间，实时周期看到 ready 为假就直接按预热处理，不会被它挡住。
@@ -155,6 +164,7 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineSet, subjects []str
 	st.types = seriessync.ValueTypes(columns)
 	st.numeric = numeric
 	st.expected.Store(int64(len(subjects)))
+	st.subjects = append([]string(nil), subjects...)
 
 	// 窗口内存超出上限或进程预算：拒绝启用并给出明确原因，不让窗口把计算挤出内存。
 	need := serieswindow.BytesPerSeries(lookback, d.cfg.Headroom, len(numeric)) * int64(max(len(subjects), 1))
@@ -307,24 +317,35 @@ func (d *Data) Load(ctx context.Context, plan pipeline.Plan) (pipeline.DataResul
 }
 
 func (d *Data) loadLive(ctx context.Context, st *source, plan pipeline.Plan, subjects []string) (pipeline.DataResult, error) {
+	res, fromDisk, err := d.loadLiveWindow(ctx, st, plan, subjects)
+	if err != nil || !fromDisk {
+		return res, err
+	}
+	// 目标周期早于窗口的最新一根（追赶、补算更早的周期）：窗口只保留到最新为止的回看根数，截止目标周期的回看窗口不全，
+	// 改读本地磁盘（同步已经写完），不能用不完整的窗口算出看似正常的值。
+	return d.loadRange(ctx, st, plan, subjects)
+}
+
+// loadLiveWindow 同步本期数据并从内存窗口取输入；目标周期早于窗口最新一根时返回 fromDisk=true，由调用方改读磁盘。
+func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Plan, subjects []string) (res pipeline.DataResult, fromDisk bool, err error) {
 	// 窗口还没载入完成（或正在重建）：不等，本期按预热处理。
 	if st == nil || !st.ready.Load() {
-		return pipeline.DataResult{Warming: subjects}, nil
+		return pipeline.DataResult{Warming: subjects}, false, nil
 	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if !st.ready.Load() || st.window == nil {
-		return pipeline.DataResult{Warming: subjects}, nil
+		return pipeline.DataResult{Warming: subjects}, false, nil
 	}
 	step, err := seriesstore.Step(plan.Set.Freq)
 	if err != nil {
-		return pipeline.DataResult{}, err
+		return pipeline.DataResult{}, false, err
 	}
 	target := plan.TargetEnd.Add(-step)
 
 	pull, err := d.syncer.Pull(ctx, st.spec, subjects, plan.TargetEnd)
 	if err != nil {
-		return pipeline.DataResult{}, err
+		return pipeline.DataResult{}, false, err
 	}
 	failed := map[string]struct{}{}
 	for _, s := range pull.Failed {
@@ -335,13 +356,18 @@ func (d *Data) loadLive(ctx context.Context, st *source, plan pipeline.Plan, sub
 			if errors.Is(err, serieswindow.ErrSchemaChanged) {
 				// 数据集字段变了：窗口要按新字段重建，重建完成之前该集合按预热处理。
 				st.ready.Store(false)
-				return pipeline.DataResult{Warming: subjects}, nil
+				return pipeline.DataResult{Warming: subjects}, false, nil
 			}
-			return pipeline.DataResult{}, err
+			return pipeline.DataResult{}, false, err
 		}
 	}
 
 	view := st.window.Acquire(subjects, target.Unix())
+	for _, subject := range subjects {
+		if end, has := st.window.Latest(subject); has && end.After(target) {
+			return pipeline.DataResult{}, true, nil
+		}
+	}
 	var ok []string
 	for _, subject := range subjects {
 		if _, bad := failed[subject]; bad {
@@ -356,9 +382,9 @@ func (d *Data) loadLive(ctx context.Context, st *source, plan pipeline.Plan, sub
 	}
 	rows, err := d.rows(ctx, st, plan, ok, target, plan.TargetEnd)
 	if err != nil {
-		return pipeline.DataResult{}, err
+		return pipeline.DataResult{}, false, err
 	}
-	return pipeline.DataResult{View: view, Frames: rows, Failed: sortedKeys(failed)}, nil
+	return pipeline.DataResult{View: view, Frames: rows, Failed: sortedKeys(failed)}, false, nil
 }
 
 // applyToWindow 把一次同步写入的结果反映到窗口：新标的或修正了窗口里的区间就整个标的重新载入，否则追加新行。
@@ -514,19 +540,21 @@ func (d *Data) followSource(ctx context.Context, st *source) (int, bool, error) 
 	if st.spec.Source.DatasetID == "" || st.window == nil || st.blocked != nil && !errors.Is(st.blocked, ErrChangeGap) {
 		return 0, false, nil
 	}
-	res, err := d.syncer.Follow(ctx, st.spec)
-	if err != nil {
-		return 0, false, err
+	res, followErr := d.syncer.Follow(ctx, st.spec)
+	// 分页应用中途失败时，前面成功的页已经写进本地存储并推进了位点：这些标的的窗口也要重载，
+	// 否则重试从新位点开始、不会再返回这些修正，窗口会一直留着旧值。
+	for subject := range res.Applied {
+		if err := st.window.Reload(ctx, d.cfg.Store, subject); err != nil {
+			return 0, false, errors.Join(followErr, err)
+		}
+	}
+	if followErr != nil {
+		return len(res.Applied), false, followErr
 	}
 	if res.Gap {
 		st.ready.Store(false)
 		st.blocked = ErrChangeGap
 		return 0, true, nil
-	}
-	for subject := range res.Applied {
-		if err := st.window.Reload(ctx, d.cfg.Store, subject); err != nil {
-			return 0, false, err
-		}
 	}
 	return len(res.Applied), false, nil
 }
@@ -616,3 +644,65 @@ func sortedKeys(set map[string]struct{}) []string {
 
 // st 返回数据源状态（测试用）。
 func (d *Data) st(src seriesstore.Source) *source { return d.lookup(src) }
+
+// Short 是回看根数不足的标的：本地连续数据的根数不到集合要求的回看，而 Storage 在本地最早一根之前还有数据（不是新上市的标的）。
+type Short struct {
+	Subject string
+	// Have 是本地连续的根数，Want 是要求的回看根数。
+	Have, Want int
+	// Earliest 是本地最早的一根。
+	Earliest time.Time
+}
+
+// Coverage 检查数据源每个标的的本地数据是否满足回看要求（设计 6.2）：根数 ≥ 最大回看根数，或者本地最早一根就是 Storage 的首根
+// （在 Storage 保留期内上市、Storage 有多少本地就有多少的新标的）。不满足的列出来，提示导入。
+// 没有本地数据的标的不在此列（同步失败由同步状态体现）。
+func (d *Data) Coverage(ctx context.Context, src seriesstore.Source) ([]Short, error) {
+	st := d.lookup(src)
+	if st == nil {
+		return nil, nil
+	}
+	st.mu.Lock()
+	subjects, lookback, spec := append([]string(nil), st.subjects...), st.spec.Lookback, st.spec
+	st.mu.Unlock()
+	step, err := seriesstore.Step(src.Freq)
+	if err != nil {
+		return nil, err
+	}
+	var short []Short
+	for _, subject := range subjects {
+		b, ok, err := d.cfg.Store.Bounds(src, subject)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		have := int(b.Latest.Sub(b.Earliest)/step) + 1
+		if have >= lookback {
+			continue
+		}
+		key := coverageKey{subject: subject, earliest: b.Earliest.Unix(), lookback: lookback}
+		st.mu.Lock()
+		_, known := st.covered[key]
+		st.mu.Unlock()
+		if known {
+			continue
+		}
+		first, has, err := d.cfg.Storage.EarliestPeriod(ctx, src.SpaceID, src.DatasetID, src.Freq, []string{subject}, spec.Names())
+		if err != nil {
+			return nil, err
+		}
+		if !has || !first.Before(b.Earliest) {
+			st.mu.Lock()
+			if st.covered == nil {
+				st.covered = map[coverageKey]struct{}{}
+			}
+			st.covered[key] = struct{}{}
+			st.mu.Unlock()
+			continue
+		}
+		short = append(short, Short{Subject: subject, Have: have, Want: lookback, Earliest: b.Earliest})
+	}
+	return short, nil
+}

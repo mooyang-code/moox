@@ -58,3 +58,17 @@ func TestProjectSystemDegradedAndAttention(t *testing.T) {
 	recovered := projectSystem([]*pb.HealthComponent{component("因子引擎", "running", func(l *pb.HealthLifecycle) { l.Recovered = 2 })})
 	require.True(t, recovered.AutoRecovered)
 }
+
+// 有生命周期接口的模块探测不到：不能从系统汇总里消失，健康面标红并列出。
+func TestProjectSystemReportsUnreachableLifecycleModule(t *testing.T) {
+	down := &pb.HealthComponent{ComponentId: "strategy", Name: "策略", Status: "down"}
+	system := projectSystem([]*pb.HealthComponent{component("因子引擎", "running"), down, {ComponentId: "storage", Status: "down"}})
+	require.Equal(t, "attention", system.Health)
+	require.Equal(t, "red", system.Color)
+	require.Equal(t, []string{"策略：探测不到（模块没有响应）"}, system.Issues, "没有生命周期接口的组件不在此列")
+	require.Equal(t, int32(2), system.ModuleCount)
+
+	only := projectSystem([]*pb.HealthComponent{down})
+	require.Equal(t, "attention", only.Health)
+	require.Equal(t, "uninitialized", only.Phase)
+}

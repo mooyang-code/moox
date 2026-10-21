@@ -432,3 +432,30 @@ func TestCompactListsOnlyAttentionObjects(t *testing.T) {
 	require.NoError(t, err)
 	require.Less(t, len(raw), 700)
 }
+
+// 模块自身暂停：所有对象的门禁都关闭，不管对象各自处于什么阶段。
+func TestModulePauseClosesEveryObjectGate(t *testing.T) {
+	ctrl, err := New(Options{Module: "m", Hooks: Hooks{
+		Objects:     func() []Ref { return []Ref{{Kind: "set", ID: "a"}} },
+		CheckObject: func(context.Context, Ref) []Check { return []Check{{Name: "x", Status: CheckPass}} },
+	}})
+	require.NoError(t, err)
+	ctx := context.Background()
+	ctrl.Refresh(ctx)
+	obj := Ref{Kind: "set", ID: "a"}
+	for _, cmd := range []Command{CmdInit, CmdStart, CmdConfirm} {
+		_, err = ctrl.Command(ctx, cmd, obj)
+		require.NoError(t, err)
+	}
+	require.True(t, ctrl.Allowed(obj))
+
+	for _, cmd := range []Command{CmdStart, CmdConfirm, CmdPause} {
+		_, err = ctrl.Command(ctx, cmd, Ref{}) // 模块自身
+		require.NoError(t, err, cmd)
+	}
+	require.Equal(t, StageRunning, ctrl.Stage(obj), "对象自己仍是运行阶段")
+	require.False(t, ctrl.Allowed(obj), "模块暂停后对象不计算")
+	_, err = ctrl.Command(ctx, CmdResume, Ref{})
+	require.NoError(t, err)
+	require.True(t, ctrl.Allowed(obj))
+}

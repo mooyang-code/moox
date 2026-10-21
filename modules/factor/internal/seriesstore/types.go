@@ -244,8 +244,8 @@ type WriteResult struct {
 	// Written 是写入的真实行数，Filled 是新生成或重新生成的填充行数，Removed 是被替换掉的旧行数。
 	Written, Filled, Removed int
 	Earliest, Latest         time.Time
-	// PrevLatest 是写入前的最新时间（零值表示此前没有数据）。
-	PrevLatest time.Time
+	// PrevLatest 与 PrevEarliest 是写入前的最新与最早时间（零值表示此前没有数据）。
+	PrevLatest, PrevEarliest time.Time
 }
 
 // Bounds 是标的本地数据的边界。

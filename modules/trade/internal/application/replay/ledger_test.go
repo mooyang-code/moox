@@ -157,3 +157,18 @@ func TestHoldSlippageCloseAndDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, orders, "清理会话同时清掉订单")
 }
+
+// 保持全仓的目标不能因为收盘价与下期开盘价不同而被误调仓：目标权重相对成交时的权益换算。
+func TestSizingUsesExecutionPricedEquity(t *testing.T) {
+	svc := newService(t)
+	ctx := context.Background()
+	_, err := svc.CreateSession(ctx, CreateRequest{ReplayID: "r5", InitialCash: "1000", FeeRate: "0"})
+	require.NoError(t, err)
+	_, err = svc.Advance(ctx, buy("r5", 1000, "1", map[string]Quote{"A": q("100", "100")}))
+	require.NoError(t, err) // 全仓：持有 10 个 A，现金 0
+
+	// 收盘 100、下期开盘 200，目标仍是 100%：持仓不应被卖掉一半。
+	res, err := svc.Advance(ctx, buy("r5", 2000, "1", map[string]Quote{"A": q("100", "200")}))
+	require.NoError(t, err)
+	require.Empty(t, res.Orders, "按成交价估值的权益是 2000，目标 100%% = 10 个，与持仓相同")
+}

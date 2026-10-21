@@ -406,7 +406,7 @@ func (l *ledgerState) settle(req AdvanceRequest) (Result, []Order, error) {
 	var orders []Order
 	fees, turnover := shared.Zero(), shared.Zero()
 	if req.Decision.Kind == KindUpdateTarget {
-		orders, fees, turnover, err = l.rebalance(req, equityBefore)
+		orders, fees, turnover, err = l.rebalance(req)
 		if err != nil {
 			return Result{}, nil, err
 		}
@@ -440,8 +440,26 @@ func (l *ledgerState) settle(req AdvanceRequest) (Result, []Order, error) {
 	return result, orders, nil
 }
 
+// sizingEquity 是换算目标数量用的权益：现金加持仓按成交价（有的话）估值。目标权重是相对「成交时」权益的比例，
+// 持仓用收盘估值价而数量除以下期开盘价会让保持全仓的目标被误调仓（收盘 100、开盘 200 时持仓价值翻倍，权益也要同步翻倍）。
+func (l *ledgerState) sizingEquity(quotes map[string]Quote) shared.Decimal {
+	total := l.cash
+	for instrument, quantity := range l.positions {
+		if quantity.IsZero() {
+			continue
+		}
+		price, ok := parseQuote(quotes[instrument].Exec)
+		if !ok {
+			price, _ = parseQuote(quotes[instrument].Mark) // 没有成交价的标的不会被调仓，按估值价计入权益
+		}
+		total = total.Add(quantity.Mul(price))
+	}
+	return total
+}
+
 // rebalance 把持仓调到目标权重：先卖后买；买单受可用现金限制（资金不足时部分成交或拒绝）。
-func (l *ledgerState) rebalance(req AdvanceRequest, equity shared.Decimal) ([]Order, shared.Decimal, shared.Decimal, error) {
+func (l *ledgerState) rebalance(req AdvanceRequest) ([]Order, shared.Decimal, shared.Decimal, error) {
+	equity := l.sizingEquity(req.Quotes)
 	targets := map[string]shared.Decimal{}
 	hold := map[string]bool{}
 	for _, target := range req.Decision.Targets {

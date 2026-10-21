@@ -512,14 +512,21 @@ func (s *replaySession) sourceColumns(requested []string) []string {
 // compute 用快照算一期（实时计算路径）；已经算过的周期直接取缓存（调用方持有会话锁）。
 func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, period time.Time) (*replayPeriod, pipeline.Plan, pipeline.Computation, error) {
 	cached := s.cache[period.Unix()]
+	// 本期的标的全集只含这一期已经上市（本地最早一根不晚于本期）的标的：未来才出现的标的不能改变早期周期的截面与「缺数」判定。
+	var universe []string
+	for _, subject := range s.subjects {
+		if first, ok := s.earliest[subject]; ok && !first.After(period) {
+			universe = append(universe, subject)
+		}
+	}
 	plan, err := pipeline.BuildLivePlan(s.clock, pipeline.LiveInput{
-		Set: s.set.Set, Factors: s.set.Factors, PeriodTime: period, Universe: s.subjects, CarryColumns: s.carry,
+		Set: s.set.Set, Factors: s.set.Factors, PeriodTime: period, Universe: universe, CarryColumns: s.carry,
 	})
 	if err != nil {
 		return nil, pipeline.Plan{}, pipeline.Computation{}, err
 	}
 	var available []string
-	for _, subject := range s.subjects {
+	for _, subject := range universe {
 		if _, ok := s.view.ValueAt(subject, "close", period.Unix()); ok || s.hasRow(subject, period) {
 			available = append(available, subject)
 		}

@@ -267,3 +267,31 @@ func TestFinisherRunsOnceAfterAllFiles(t *testing.T) {
 	require.ErrorContains(t, err, "view 没有追平")
 	require.Equal(t, "failed", sum.Status)
 }
+
+// 补更早的历史（文件完全早于本地已有数据）：批从后往前写，每一批都与已有数据或刚写的那一批相接；
+// 断点按这个顺序计数，中断后续跑不会漏批。
+func TestRunWritesBatchesBackwardsWhenPrependingHistory(t *testing.T) {
+	dir := t.TempDir()
+	path := writeCSV(t, dir, "BTC.csv", "data_time,close,volume", minuteRows(0, 10))
+	local := time.Date(2026, 10, 1, 0, 10, 0, 0, time.UTC)
+	meta := Meta{Fields: fields, LocalBounds: func(context.Context, string) (time.Time, time.Time, bool, error) {
+		return local, local.Add(5 * time.Minute), true, nil
+	}}
+	rec := &recorder{name: "factor"}
+	_, err := Run(context.Background(), baseRequest(path), meta, []Target{rec}, nil)
+	require.NoError(t, err)
+	require.Len(t, rec.chunks, 3)
+	require.Equal(t, local.Add(-2*time.Minute), rec.chunks[0].From, "先写最晚的一批：[8, 10)，与本地起点相接")
+	require.Equal(t, local, rec.chunks[0].To)
+	require.Equal(t, local.Add(-6*time.Minute), rec.chunks[1].From)
+	require.Equal(t, local.Add(-10*time.Minute), rec.chunks[2].From)
+
+	// 文件不完全早于本地数据（有重叠）：保持从前往后。
+	rec2 := &recorder{name: "factor"}
+	overlap := Meta{Fields: fields, LocalBounds: func(context.Context, string) (time.Time, time.Time, bool, error) {
+		return local.Add(-3 * time.Minute), local.Add(5 * time.Minute), true, nil
+	}}
+	_, err = Run(context.Background(), baseRequest(path), overlap, []Target{rec2}, nil)
+	require.NoError(t, err)
+	require.Equal(t, local.Add(-10*time.Minute), rec2.chunks[0].From)
+}

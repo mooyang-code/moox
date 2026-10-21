@@ -117,7 +117,8 @@ func (f *seriesFollower) recomputeSource(ctx context.Context, info localdata.Sou
 	}
 	committed, hasCommitted := f.periods.CommittedThrough(info.SetID)
 
-	// 失效范围向后扩展到受影响的回看窗口：[from, to + (L−1)×周期)，再截断到已经算过的范围。
+	// 失效范围向后扩展到受影响的回看窗口：[from, to + (L−1)×周期)；有连续水位时再截断到水位之前（水位之后的周期由实时与追赶用新数据算）。
+	// 没有水位（集合还没有跑过实时周期）时水位不能代表「算过的范围」（可能做过人工补算），不截断，按请求的范围重算，待办不能丢。
 	type job struct {
 		from, to time.Time
 		subjects map[string]struct{}
@@ -128,7 +129,7 @@ func (f *seriesFollower) recomputeSource(ctx context.Context, info localdata.Sou
 		if hasCommitted && to.After(committed.Add(step)) {
 			to = committed.Add(step)
 		}
-		if !hasCommitted || !span.From.Before(to) {
+		if !span.From.Before(to) {
 			continue // 这段还没算过：正常的实时与追赶会用新数据算
 		}
 		merged := false

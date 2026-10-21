@@ -131,3 +131,37 @@ func TestReplayQuoteCloseAndValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.InDelta(t, 105, step.Subjects["A"].Exec, 1e-9, "close 模式用本期收盘价成交")
 }
+
+// 未来才上市的标的不能改变早期周期的截面：本期的全集只含已经上市的标的。
+func TestReplayUniverseExcludesNotYetListedSubjects(t *testing.T) {
+	m, set := newReplayManagerForTest(t)
+	_ = set
+	ctx := context.Background()
+	// 用一个在第 8 分钟才上市的标的 LATE：数据覆盖到终点。
+	store := m.deps.Store
+	src := seriesstore.Source{SpaceID: "crypto", DatasetID: "dataset_a", Freq: "1m"}
+	fields := []seriesstore.Field{{Name: "close", Type: seriesstore.TypeFloat64}, {Name: "open", Type: seriesstore.TypeFloat64}}
+	cols := seriesstore.NewColumns(fields, 12)
+	for i := 8; i < 20; i++ {
+		cols.AppendRow(rt0.Add(time.Duration(i)*time.Minute), "", false, seriesstore.Float(50), seriesstore.Float(50))
+	}
+	_, err := store.WriteRange(ctx, src, seriesstore.SubjectWrite{Subject: "LATE", From: rt0.Add(8 * time.Minute), To: rt0.Add(20 * time.Minute), Rows: cols}, seriesstore.WriteOptions{})
+	require.NoError(t, err)
+	m.deps.Source = lateSource{}
+	_, _, err = m.Open(ctx, ReplayOpenRequest{ReplayID: "r9", SetID: "fset_replay", From: rt0.Add(5 * time.Minute).Format(time.RFC3339), To: rt0.Add(10 * time.Minute).Format(time.RFC3339), ExtraPeriods: 1})
+	require.NoError(t, err)
+
+	early, _, err := m.Step(ctx, ReplayStepRequest{ReplayID: "r9", Period: rt0.Add(6 * time.Minute).Format(time.RFC3339)})
+	require.NoError(t, err)
+	require.NotContains(t, early.Subjects, "LATE", "第 6 分钟 LATE 还没上市")
+	require.Contains(t, early.Subjects, "A")
+	later, _, err := m.Step(ctx, ReplayStepRequest{ReplayID: "r9", Period: rt0.Add(8 * time.Minute).Format(time.RFC3339)})
+	require.NoError(t, err)
+	require.Contains(t, later.Subjects, "LATE")
+}
+
+type lateSource struct{ replaySource }
+
+func (lateSource) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	return []string{"A", "B", "LATE"}, nil
+}

@@ -82,9 +82,10 @@ func (d lifecycleDeps) checkInstance(ctx context.Context, ref lifecycle.Ref) []l
 	}
 	checks := []lifecycle.Check{{Name: "实例", Status: lifecycle.CheckPass}}
 	if instance.Health != "ok" {
+		// 只告警、不挡路：实例健康由成功求值恢复；这里判失败会让实例自动暂停、不再求值，健康就永远恢复不了（循环依赖）。
 		checks = append(checks, lifecycle.Check{
-			Name: "实例健康", Status: lifecycle.CheckFail, Message: "实例处于 " + instance.Health,
-			Remedy: "按实例的跳过原因修复后重新启用实例",
+			Name: "实例健康", Status: lifecycle.CheckWarn, Message: "实例处于 " + instance.Health,
+			Remedy: "按实例的跳过原因修复（补数据、改配置）；因子定义变化要重新启用实例",
 		})
 	} else {
 		checks = append(checks, lifecycle.Check{Name: "实例健康", Status: lifecycle.CheckPass})
@@ -95,6 +96,9 @@ func (d lifecycleDeps) checkInstance(ctx context.Context, ref lifecycle.Ref) []l
 // triggerGate 把控制器的阶段翻译成处理器的模式：运行是正式目标，预热是影子目标，其他都不求值。
 func triggerGate(c *lifecycle.Controller) func(string) trigger.Mode {
 	return func(instanceID string) trigger.Mode {
+		if !c.Allowed(instanceRef(instanceID)) { // 模块自身暂停或故障时，所有实例都不求值
+			return trigger.ModeOff
+		}
 		switch c.Stage(instanceRef(instanceID)) {
 		case lifecycle.StageRunning:
 			return trigger.ModeLive

@@ -79,7 +79,8 @@ func TestImportUpsertsBuildTypedRowsAndSkipNulls(t *testing.T) {
 	require.Equal(t, 1.5, rows[0].GetFields()[0].GetValue().GetDoubleValue())
 	require.True(t, rows[0].GetFields()[2].GetValue().GetBoolValue())
 	require.Equal(t, "2026-10-01T00:00:00Z", rows[0].GetFields()[3].GetValue().GetTimeValue())
-	require.Len(t, rows[1].GetFields(), 4, "空值不写：字段保持原值")
+	require.Len(t, rows[1].GetFields(), 5, "空值写成显式 NULL，清除该字段")
+	require.Equal(t, pb.NullValue_NULL_VALUE_NULL, rows[1].GetFields()[0].GetValue().GetNullValue())
 
 	b.Cols[4].S[0] = "{broken"
 	_, err = importUpserts(runner.Chunk{Space: "crypto", Dataset: "spot", Freq: "1m", Subject: "BTC", Fields: fields, Batch: b}, nil)

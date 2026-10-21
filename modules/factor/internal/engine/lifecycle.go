@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"time"
 
 	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
@@ -60,7 +61,7 @@ func (r *Runtime) checkModule(context.Context) []lifecycle.Check {
 }
 
 // checkSet 检查一个因子集能不能计算：窗口已就绪、数据源没有变更日志断档。
-func (r *Runtime) checkSet(_ context.Context, ref lifecycle.Ref) []lifecycle.Check {
+func (r *Runtime) checkSet(ctx context.Context, ref lifecycle.Ref) []lifecycle.Check {
 	set, lookup := r.catalog.SetByID(ref.ID)
 	if lookup != SetFound {
 		return []lifecycle.Check{{Name: "因子目录", Status: lifecycle.CheckFail, Message: "集合已不在目录里"}}
@@ -72,6 +73,9 @@ func (r *Runtime) checkSet(_ context.Context, ref lifecycle.Ref) []lifecycle.Che
 		checks = append(checks, lifecycle.Check{Name: "本地窗口", Status: lifecycle.CheckFail, Message: "窗口还没有载入完成", Remedy: "moox-cli lifecycle init --set " + ref.ID})
 	}
 	src := seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}
+	if r.preload.Ready(ref.ID) {
+		checks = append(checks, r.coverageCheck(ctx, src))
+	}
 	if err := r.data.Blocked(src); err != nil {
 		checks = append(checks, lifecycle.Check{
 			Name: "变更同步", Status: lifecycle.CheckFail, Message: err.Error(),
@@ -96,5 +100,23 @@ func (r *Runtime) lifecycleRoutes() []factorhealth.Route {
 	return []factorhealth.Route{
 		{Path: lifecycle.StatusPath, Handler: r.life.StatusHandler()},
 		{Path: lifecycle.CommandPath, Handler: r.life.CommandHandler()},
+	}
+}
+
+// coverageCheck 检查每个标的的本地连续数据满足回看要求，或属于新标的（本地最早一根就是 Storage 的首根）；不满足的列出来并提示导入。
+func (r *Runtime) coverageCheck(ctx context.Context, src seriesstore.Source) lifecycle.Check {
+	short, err := r.data.Coverage(ctx, src)
+	if err != nil {
+		return lifecycle.Check{Name: "本地数据覆盖", Status: lifecycle.CheckWarn, Message: "无法核对：" + err.Error()}
+	}
+	if len(short) == 0 {
+		return lifecycle.Check{Name: "本地数据覆盖", Status: lifecycle.CheckPass}
+	}
+	first := short[0]
+	return lifecycle.Check{
+		Name: "本地数据覆盖", Status: lifecycle.CheckFail,
+		Message: fmt.Sprintf("%d 个标的的本地数据不足回看根数，例如 %s：本地 %d 根（最早 %s），需要 %d 根",
+			len(short), first.Subject, first.Have, first.Earliest.UTC().Format(time.RFC3339), first.Want),
+		Remedy: fmt.Sprintf("导入更早的历史：moox-cli import --target factor --space %s --dataset %s --freq %s --path <历史文件>", src.SpaceID, src.DatasetID, src.Freq),
 	}
 }

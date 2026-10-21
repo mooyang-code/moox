@@ -90,6 +90,11 @@ func (s *Store) WriteBatch(ctx context.Context, src Source, writes []SubjectWrit
 		if opts.RecordPending && !res.PrevLatest.IsZero() && !res.Changed.Empty() && !res.Changed.From.After(res.PrevLatest) {
 			pending = append(pending, PendingSpan{Subject: w.Subject, From: res.Changed.From, To: res.Changed.To, Reason: opts.PendingReason})
 		}
+		// Earliest 前移（补更早的历史）单独触发失效重算（设计 5.3），不受 RecordPending 控制：此前靠历史不足得到空值的结果要重算。
+		// 记录新补入的区间，引擎按因子回看向后扩展受影响的周期。
+		if !res.PrevEarliest.IsZero() && !res.Earliest.IsZero() && res.Earliest.Before(res.PrevEarliest) {
+			pending = append(pending, PendingSpan{Subject: w.Subject, From: res.Earliest, To: res.PrevEarliest, Reason: "earliest_moved"})
+		}
 	}
 	if schemaChanged {
 		if err := batch.Set(schemaKey(src), marshalSchema(fields, 1), nil); err != nil {
@@ -197,6 +202,15 @@ func (s *Store) writeSubject(snap kvReader, batch *pebble.Batch, src Source, g g
 		return res, err
 	}
 	res.Removed = removed
+	var prevE int64
+	for _, tb := range existing {
+		if tb.exists && (prevE == 0 || tb.e < prevE) {
+			prevE = tb.e
+		}
+	}
+	if prevE != 0 {
+		res.PrevEarliest = time.Unix(prevE, 0).UTC()
+	}
 	var allE, allL int64
 	haveBounds := false
 	cLo, cHi := int64(1<<62), int64(-1<<62)

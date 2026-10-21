@@ -152,6 +152,10 @@ func TestCheckerValidatesAlignmentOrderAndCountsGaps(t *testing.T) {
 	two := &Batch{Times: []time.Time{at(0), at(0), at(1)}, Tags: []string{"a", "b", "a"}}
 	require.NoError(t, NewChecker(time.Minute).Check(two))
 
+	// 多序列的文件要整体按时间升序：按序列分块排列（a 的全部行、再 b 的全部行）会让按时间边界切出的批互相覆盖，拒绝。
+	blocked := &Batch{Times: []time.Time{at(0), at(1), at(0), at(1)}, Tags: []string{"a", "a", "b", "b"}}
+	require.ErrorContains(t, NewChecker(time.Minute).Check(blocked), "整体按时间升序")
+
 	limited := NewChecker(time.Minute)
 	limited.MaxMissing = 2
 	require.NoError(t, limited.Check(mk(0, 9)))
