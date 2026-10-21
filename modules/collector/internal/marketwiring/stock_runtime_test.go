@@ -9,7 +9,7 @@ import (
 )
 
 func TestNewStockCNProviderForSourceCarriesSourceIdentity(t *testing.T) {
-	provider, err := newStockCNProviderForSource("sina", "stockcn_minute_http", marketfetch.StockCNProviderRuntime{
+	provider, err := newStockCNProvider("sina", "stockcn_minute_http", marketfetch.StockCNProviderRuntime{
 		KlineSpec: marketfetch.StockCNProviderKlineConfig{Frequency: "1m", MaxBarsPerRequest: 1023},
 		RateLimit: marketdata.RateLimitPolicy{
 			RequestsPerSecond: 5, Burst: 2, MaxConcurrent: 1,
@@ -22,7 +22,7 @@ func TestNewStockCNProviderForSourceCarriesSourceIdentity(t *testing.T) {
 }
 
 func TestNewStockCNProviderForSourceSupportsNormalTDX(t *testing.T) {
-	provider, err := newStockCNProviderForSource("tdx", "normal_7709", marketfetch.StockCNProviderRuntime{
+	provider, err := newStockCNProvider("tdx", "normal_7709", marketfetch.StockCNProviderRuntime{
 		Hosts: []string{"quotes.example"},
 		Port:  7709,
 		KlineSpec: marketfetch.StockCNProviderKlineConfig{

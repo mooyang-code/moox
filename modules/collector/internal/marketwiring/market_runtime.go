@@ -2,20 +2,12 @@ package marketwiring
 
 import (
 	"fmt"
-	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/bond/eastmoney"
-	bondsina "github.com/mooyang-code/moox/modules/collector/internal/sources/bond/sina"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/index/cni"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/index/csindex"
-	indexeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/index/eastmoney"
-	indexsina "github.com/mooyang-code/moox/modules/collector/internal/sources/index/sina"
-	indexsw "github.com/mooyang-code/moox/modules/collector/internal/sources/index/sw"
-	indextencent "github.com/mooyang-code/moox/modules/collector/internal/sources/index/tencent"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
 )
 
 func NewMarketKlinePipeline(storage marketfetch.Storage, marketID string, instrumentType marketdata.InstrumentType, providerID, sourceID string) (*marketfetch.KlinePipeline, error) {
@@ -76,51 +68,29 @@ func NewMarketKlinePipeline(storage marketfetch.Storage, marketID string, instru
 	return pipeline, nil
 }
 
+// newMarketProvider 从行情源目录构造 SCF 与本地执行端取数用的数据源（加密、可转债、指数）。
 func newMarketProvider(marketID string, instrumentType marketdata.InstrumentType, providerID, sourceID string) (marketdata.MarketProvider, error) {
-	if marketID == "crypto" && providerID == "binance" {
-		productType := marketdata.InstrumentSpot
-		switch instrumentType {
-		case marketdata.InstrumentSpot:
-		case marketdata.InstrumentSwap:
-			productType = marketdata.InstrumentSwap
-		default:
-			return nil, fmt.Errorf("unsupported crypto instrument source %s/%s", providerID, sourceID)
-		}
-		if sourceID != DefaultSourceID(providerID, string(instrumentType)) {
-			return nil, fmt.Errorf("unsupported crypto %s source %s/%s", instrumentType, providerID, sourceID)
-		}
-		return binance.NewMarketDataAdapter(binance.AdapterConfig{HTTPClient: httpclient.SharedClientIfEnabled(), InstrumentType: productType}), nil
+	market := marketdata.MarketID(marketID)
+	entry, err := catalog.Default().Lookup(market, instrumentType, providerID, sourceID)
+	if err != nil || entry.RouteSource {
+		return nil, unsupportedMarketSource(market, instrumentType, providerID, sourceID)
 	}
-	if instrumentType == marketdata.InstrumentConvertibleBond {
-		switch {
-		case providerID == "eastmoney" && sourceID == "convertible_bond_http":
-			return eastmoney.New(eastmoney.Config{}), nil
-		case providerID == "sina" && sourceID == "convertible_bond_http":
-			return bondsina.New(bondsina.Config{}), nil
-		default:
-			return nil, fmt.Errorf("unsupported convertible_bond source %s/%s", providerID, sourceID)
-		}
+	return entry.Build(marketdata.Deps{HTTPClient: httpclient.SharedClientIfEnabled(), SourceID: sourceID})
+}
+
+// unsupportedMarketSource 是目录里没有这个组合时的报错，按市场与品种说明哪一层不支持。
+func unsupportedMarketSource(market marketdata.MarketID, instrumentType marketdata.InstrumentType, providerID, sourceID string) error {
+	switch {
+	case market == "crypto" && providerID == "binance" && instrumentType != marketdata.InstrumentSpot && instrumentType != marketdata.InstrumentSwap:
+		return fmt.Errorf("unsupported crypto instrument source %s/%s", providerID, sourceID)
+	case market == "crypto" && providerID == "binance":
+		return fmt.Errorf("unsupported crypto %s source %s/%s", instrumentType, providerID, sourceID)
+	case instrumentType == marketdata.InstrumentConvertibleBond:
+		return fmt.Errorf("unsupported convertible_bond source %s/%s", providerID, sourceID)
+	case instrumentType == marketdata.InstrumentIndex && market != marketfetch.StockCNSpaceID:
+		return fmt.Errorf("index market %q is unsupported", market)
+	case instrumentType == marketdata.InstrumentIndex:
+		return fmt.Errorf("unsupported index source %s/%s", providerID, sourceID)
 	}
-	if instrumentType == marketdata.InstrumentIndex {
-		if marketID != marketfetch.StockCNSpaceID {
-			return nil, fmt.Errorf("index market %q is unsupported", marketID)
-		}
-		switch {
-		case providerID == "eastmoney" && sourceID == "index_http":
-			return indexeastmoney.New(indexeastmoney.Config{}), nil
-		case providerID == "sina" && sourceID == "index_http":
-			return indexsina.New(indexsina.Config{}), nil
-		case providerID == "tencent" && sourceID == "index_http":
-			return indextencent.New(indextencent.Config{}), nil
-		case providerID == "cni" && sourceID == "index_cni_http":
-			return cni.New(cni.Config{}), nil
-		case providerID == "sw" && sourceID == "index_sw_http":
-			return indexsw.New(indexsw.Config{}), nil
-		case providerID == "csindex" && sourceID == "index_http":
-			return csindex.New(csindex.Config{}), nil
-		default:
-			return nil, fmt.Errorf("unsupported index source %s/%s", providerID, sourceID)
-		}
-	}
-	return nil, fmt.Errorf("unsupported market %q", marketID)
+	return fmt.Errorf("unsupported market %q", market)
 }

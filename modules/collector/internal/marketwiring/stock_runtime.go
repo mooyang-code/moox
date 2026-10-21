@@ -11,11 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/baidu"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoney"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/sina"
-	tdxsource "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tdx"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tencent"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
 )
 
 func NewStockKlinePipeline(storage marketfetch.Storage) (*marketfetch.KlinePipeline, error) {
@@ -41,7 +37,7 @@ func NewStockKlinePipeline(storage marketfetch.Storage) (*marketfetch.KlinePipel
 		if !ok || !providerConfig.KlineEnabled || providerConfig.KlineShadow {
 			return nil, fmt.Errorf("stockcn kline provider %q is not active in source config", providerID)
 		}
-		provider, providerErr := newStockCNProvider(providerID, providerConfig)
+		provider, providerErr := newStockCNProvider(providerID, "", providerConfig)
 		if providerErr != nil {
 			return nil, providerErr
 		}
@@ -105,7 +101,7 @@ func NewStockKlinePipelineForSource(storage marketfetch.Storage, providerID, sou
 			return nil, fmt.Errorf("stockcn kline provider %q is not active in source config", candidateID)
 		}
 		candidateSourceID := stockCNSourceID(route, candidateID)
-		candidate, providerErr := newStockCNProviderForSource(candidateID, candidateSourceID, candidateConfig)
+		candidate, providerErr := newStockCNProvider(candidateID, candidateSourceID, candidateConfig)
 		if providerErr != nil {
 			return nil, providerErr
 		}
@@ -208,39 +204,20 @@ func validateStockCNProviderChain(chain []string, providers map[string]marketfet
 	return nil
 }
 
-func newStockCNProvider(providerID string, config marketfetch.StockCNProviderRuntime) (marketdata.MarketProvider, error) {
-	sourceID := "stockcn_http"
-	if strings.EqualFold(strings.TrimSpace(providerID), "sina") {
-		sourceID = "stockcn_minute_http"
+// newStockCNProvider 从行情源目录构造 A 股股票数据源；sourceID 为空时取登记的默认值，运行参数来自数据源配置文件。
+func newStockCNProvider(providerID, sourceID string, config marketfetch.StockCNProviderRuntime) (marketdata.MarketProvider, error) {
+	entry, err := catalog.Default().Lookup(marketfetch.StockCNSpaceID, marketdata.InstrumentEquity, providerID, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("unsupported stockcn provider %q", providerID)
 	}
-	return newStockCNProviderForSource(providerID, sourceID, config)
+	return entry.Build(marketdata.Deps{SourceID: sourceID, Settings: stockCNSettings(config)})
 }
 
-func newStockCNProviderForSource(providerID, sourceID string, config marketfetch.StockCNProviderRuntime) (marketdata.MarketProvider, error) {
-	switch strings.ToLower(strings.TrimSpace(providerID)) {
-	case "sina":
-		return sina.New(sina.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, SourceID: sourceID, InstrumentRequestTimeout: 30 * time.Second, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
-	case "tencent":
-		return tencent.New(tencent.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, SourceID: sourceID, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
-	case "eastmoney":
-		return eastmoney.New(eastmoney.Config{BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, SourceID: sourceID, InstrumentRequestTimeout: 30 * time.Second, RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest}), nil
-	case "baidu":
-		return baidu.New(baidu.Config{SourceID: sourceID, RateLimit: config.RateLimit}), nil
-	case "tdx":
-		host := ""
-		if len(config.Hosts) > 0 {
-			host = config.Hosts[0]
-		}
-		port := config.Port
-		if port <= 0 {
-			port = 7709
-		}
-		return tdxsource.New(tdxsource.Config{
-			Host: host, Port: port, Timeout: config.RateLimit.RequestTimeout,
-			RateLimit: config.RateLimit, MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest,
-		}), nil
-	default:
-		return nil, fmt.Errorf("unsupported stockcn provider %q", providerID)
+// stockCNSettings 把 A 股数据源配置文件的运行参数交给目录里的工厂。
+func stockCNSettings(config marketfetch.StockCNProviderRuntime) marketdata.SourceSettings {
+	return marketdata.SourceSettings{
+		BaseURL: config.KlineBaseURL, KlineEndpoint: config.KlineEndpoint, Hosts: config.Hosts, Port: config.Port,
+		MaxBarsPerRequest: config.KlineSpec.MaxBarsPerRequest, RateLimit: config.RateLimit,
 	}
 }
 

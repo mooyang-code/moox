@@ -36,6 +36,24 @@ type Provider interface {
 	StreamSource(marketType string) (Source, error)
 }
 
+// ProvidersFrom 从行情源目录取出全部实现了 Provider 的数据源，按 provider 取第一个登记项（同一交易所的适配器按市场类型返回来源）。
+func ProvidersFrom(catalog *marketdata.Catalog, deps marketdata.Deps) (map[string]Provider, error) {
+	out := map[string]Provider{}
+	for _, entry := range catalog.Entries() {
+		if _, ok := out[entry.Key.ProviderID]; ok {
+			continue
+		}
+		built, err := entry.Build(deps)
+		if err != nil {
+			return nil, err
+		}
+		if provider, ok := built.(Provider); ok {
+			out[entry.Key.ProviderID] = provider
+		}
+	}
+	return out, nil
+}
+
 // Limits 是一个来源的连接与订阅限额。
 type Limits struct {
 	StreamsPerConn    int           // 每条连接的流数上限（币安 1024，按 1000 用）

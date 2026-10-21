@@ -10,9 +10,11 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/dnscache"
 	"github.com/mooyang-code/moox/modules/collector/internal/localexec"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
 	"github.com/mooyang-code/moox/modules/collector/internal/stream"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/prometheus/client_golang/prometheus"
@@ -61,10 +63,15 @@ func New(cfg *Config, version string, registerer prometheus.Registerer) (*App, e
 		return handler
 	})
 	app.Scheduler = localexec.NewScheduler(app.Executor)
+	providers, err := stream.ProvidersFrom(catalog.Default(), marketdata.Deps{})
+	if err != nil {
+		_ = gateway.Close()
+		return nil, err
+	}
 	var agent *stream.Agent
 	app.Runtime = stream.NewRuntime(stream.RuntimeConfig{
 		SpaceID:   cfg.SpaceID,
-		Providers: map[string]stream.Provider{"binance": binance.NewMarketDataAdapter(binance.AdapterConfig{})},
+		Providers: providers,
 		NewCommitter: func(market marketfetch.PlanMarket) (stream.PeriodCommitter, error) {
 			storage, err := newStorage(market.MarketType)
 			if err != nil {
