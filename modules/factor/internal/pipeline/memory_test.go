@@ -22,8 +22,11 @@ func TestEstimateChunkMemoryGrowsWithPeriodsAndIgnoresUncompilable(t *testing.T)
 	require.Positive(t, one.Total())
 	require.Greater(t, many.Total(), one.Total())
 	require.Greater(t, many.Assemble, one.Assemble)
-	// 回看 200 的节点要读 200 期窗口：实时一期的读取量也不小。
-	require.Greater(t, one.Read, int64(500*199*8*frameCellBytes/8))
+	// 回看窗口是常驻的列式窗口，不再计入读取；读取项只随目标周期数增长（目标区间的行）。
+	require.Equal(t, int64(500*1*(2+6))*frameCellBytes, one.Read)
+	require.Equal(t, int64(500*500*(2+6))*frameCellBytes, many.Read)
+	// 回看 200 的节点要在 200 期窗口上计算：实时一期的计算内存也不小。
+	require.Greater(t, one.Compute, int64(500*199*8))
 
 	broken := domain.FactorDef{FactorID: "broken", Spec: "outputs:\n  x: nope(close)\n"}
 	withBroken, err := EstimateChunkMemory(append(factors, broken), 500, 500, 6)
@@ -79,7 +82,7 @@ func TestRunPrechecksMemoryBeforeReading(t *testing.T) {
 	subjects := []string{"BTC", "ETH"}
 	clock := periodclock.Continuous{}
 	store := newMemoryStorage(subjects, target, 10)
-	runner := NewRunner(store, clock, Config{MaxMemory: 64})
+	runner := NewRunner(store, store.data(), clock, Config{MaxMemory: 64})
 	plan, err := BuildLivePlan(clock, e2eLiveInput(target, subjects, []domain.FactorDef{e2eMean()}))
 	require.NoError(t, err)
 	outcome, err := runner.Run(context.Background(), plan)
@@ -100,5 +103,6 @@ func TestCountSeriesCountsTags(t *testing.T) {
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	loaded := framesForBars([]string{"BTC", "ETH"}, target, 2)
 	loaded.Frames["BTC"].Rows = append(loaded.Frames["BTC"].Rows, []any{target, "venue:okx", 1.0})
-	require.Equal(t, 4, countSeries([]string{"BTC", "ETH", "SOL"}, loaded.Frames), "BTC 两个标签、ETH 一个、SOL 没有行按 1 条")
+	loaded = withView(t, loaded)
+	require.Equal(t, 4, countSeries([]string{"BTC", "ETH", "SOL"}, loaded.View), "BTC 两个标签、ETH 一个、SOL 没有行按 1 条")
 }

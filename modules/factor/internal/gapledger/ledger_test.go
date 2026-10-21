@@ -22,7 +22,7 @@ func gap(subject string, minute int, factors ...string) []pipeline.GapEntry {
 	for _, factor := range factors {
 		out = append(out, pipeline.GapEntry{
 			SetID: "fset", Subject: subject, Period: t0.Add(time.Duration(minute) * time.Minute), FactorID: factor, DefinitionHash: "h-" + factor,
-			Missing: []time.Time{t0.Add(-time.Minute)}, Tags: []string{""}, TriggerEventID: "evt",
+			TriggerEventID: "evt",
 		})
 	}
 	return out
@@ -54,7 +54,6 @@ func TestLedgerReplayRebuildsPendingSet(t *testing.T) {
 	require.Len(t, got, 2)
 	require.Equal(t, "b", got[0].FactorID, "BTC 的因子 a 已 repaired，回放后不再待恢复")
 	require.Equal(t, "evt", got[0].Trigger)
-	require.Equal(t, []time.Time{t0.Add(-time.Minute)}, got[0].Missing)
 }
 
 // 同键再次 skip：skipID 取最后一条，发现时间取最早；用旧 skipID 确认不会移除新的待办。

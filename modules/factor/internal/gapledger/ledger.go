@@ -45,8 +45,6 @@ type line struct {
 	Period  time.Time   `json:"period"`
 	Factors []FactorRef `json:"factors"`
 	SkipID  string      `json:"skip_id"`
-	Missing []time.Time `json:"missing,omitempty"`
-	Tags    []string    `json:"tags,omitempty"`
 	Trigger string      `json:"trigger,omitempty"`
 	Reason  string      `json:"reason,omitempty"`
 }
@@ -68,9 +66,7 @@ type Entry struct {
 	SkipID    string
 	FirstSeen time.Time
 	Trigger   string
-	Missing   []time.Time
-	Tags      []string
-	// Reason 是跳过的原因：空洞为空，预热中为 pipeline.SkipReasonWarming。
+	// Reason 是跳过的原因：窗口还没载入完成为 pipeline.SkipReasonWarming，本期数据取不到为 pipeline.SkipReasonUpstream。
 	Reason string
 }
 
@@ -201,12 +197,12 @@ func (l *Ledger) apply(entry line) {
 				if entry.Trigger != "" {
 					existing.Trigger = entry.Trigger
 				}
-				existing.Missing, existing.Tags, existing.Reason = entry.Missing, entry.Tags, entry.Reason
+				existing.Reason = entry.Reason
 				continue
 			}
 			l.pending[k] = &Entry{
 				Set: entry.Set, Subject: entry.Subject, Period: entry.Period.UTC(), FactorID: factor.ID, Hash: factor.Hash,
-				SkipID: entry.SkipID, FirstSeen: entry.At.UTC(), Trigger: entry.Trigger, Missing: entry.Missing, Tags: entry.Tags,
+				SkipID: entry.SkipID, FirstSeen: entry.At.UTC(), Trigger: entry.Trigger,
 				Reason: entry.Reason,
 			}
 		case EventRepaired, EventCancelled, EventGaveUp:
@@ -244,8 +240,6 @@ func (l *Ledger) RecordGaps(_ context.Context, entries []pipeline.GapEntry) erro
 			order = append(order, gk)
 		}
 		row.Factors = append(row.Factors, FactorRef{ID: entry.FactorID, Hash: entry.DefinitionHash})
-		row.Missing = mergeTimes(row.Missing, entry.Missing)
-		row.Tags = mergeStrings(row.Tags, entry.Tags)
 	}
 	lines := make([]line, 0, len(order))
 	for _, gk := range order {
@@ -288,8 +282,6 @@ func (l *Ledger) pendingLocked(match func(Entry) bool) []Entry {
 	for _, entry := range l.pending {
 		if match(*entry) {
 			copied := *entry
-			copied.Missing = append([]time.Time(nil), entry.Missing...)
-			copied.Tags = append([]string(nil), entry.Tags...)
 			out = append(out, copied)
 		}
 	}
@@ -498,38 +490,4 @@ func newSkipID() (string, error) {
 		return "", fmt.Errorf("generate skip id: %w", err)
 	}
 	return hex.EncodeToString(buf), nil
-}
-
-func mergeTimes(values []time.Time, more []time.Time) []time.Time {
-	for _, candidate := range more {
-		found := false
-		for _, existing := range values {
-			if existing.Equal(candidate) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			values = append(values, candidate.UTC())
-		}
-	}
-	sort.Slice(values, func(i, j int) bool { return values[i].Before(values[j]) })
-	return values
-}
-
-func mergeStrings(values []string, more []string) []string {
-	for _, candidate := range more {
-		found := false
-		for _, existing := range values {
-			if existing == candidate {
-				found = true
-				break
-			}
-		}
-		if !found {
-			values = append(values, candidate)
-		}
-	}
-	sort.Strings(values)
-	return values
 }

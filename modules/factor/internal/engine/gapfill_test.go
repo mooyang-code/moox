@@ -144,7 +144,7 @@ func (f *gapFixture) record(t *testing.T, at time.Time, subject string, minute i
 	f.now = saved
 }
 
-// 发现后过了 settle 才恢复；填充写入确认的项追加 repaired，仍有洞的保持待恢复。
+// 发现后过了 settle 才恢复；填充写入确认的项追加 repaired，仍然失败的保持待恢复。
 func TestGapFillerRepairsWrittenItemsAndKeepsGaps(t *testing.T) {
 	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
 	f := newGapFixture(t, fakeUniverse{}, factor)
@@ -152,7 +152,7 @@ func TestGapFillerRepairsWrittenItemsAndKeepsGaps(t *testing.T) {
 	f.record(t, gapT0, "BTC", 1, "", factor)
 	f.chunks.status = func(_ recalcexec.Selection, at time.Time) pipeline.ItemStatus {
 		if at.Equal(gapT0.Add(time.Minute)) {
-			return pipeline.ItemGap // 01 仍有洞
+			return pipeline.ItemFailed // 01 仍然取不到数据
 		}
 		return pipeline.ItemWritten
 	}

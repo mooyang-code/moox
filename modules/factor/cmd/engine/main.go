@@ -63,11 +63,13 @@ func run(args []string, out io.Writer) error {
 		return health(args, out)
 	case "reset-gap-ledger":
 		return resetGapLedger(args, out)
+	case "reconcile":
+		return reconcile(args, out)
 	case "version":
 		_, err := fmt.Fprintf(out, "moox-factor-engine %s %s %s\n", Version, GitCommit, BuildTime)
 		return err
 	default:
-		return fmt.Errorf("unknown command %q (serve, service, run-once, health, reset-gap-ledger, version)", command)
+		return fmt.Errorf("unknown command %q (serve, service, run-once, health, reset-gap-ledger, reconcile, version)", command)
 	}
 }
 
@@ -236,6 +238,44 @@ func resetGapLedger(args []string, out io.Writer) error {
 		return err
 	}
 	return json.NewEncoder(out).Encode(map[string]any{"status": "ok", "ledger_dir": cfg.Gap.LedgerDir, "files_removed": removed})
+}
+
+// reconcile 对账一个因子集合的源数据：本地时序存储与 Storage 保留期内的数据比对并整段替换，完成后重建变更日志位点。
+// 变更日志断档（离线超过保留期、Storage 节点更换）时引擎把该数据源判为未就绪，由人工执行本命令。
+// 本地存储同一时刻只能由一个进程打开，必须在引擎停止后执行。
+func reconcile(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("reconcile", flag.ContinueOnError)
+	app := fs.String("config", "config/engine.yaml", "factor engine config")
+	healthAddr := fs.String("health-addr", "127.0.0.1:11417", "引擎健康检查地址；能连上说明引擎还在运行，拒绝执行")
+	set := fs.String("set", "", "要对账的因子集合 ID")
+	var subjects listFlag
+	fs.Var(&subjects, "subject", "只对账这个标的（可重复）；不写表示本地有数据的全部标的")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*set) == "" {
+		return errors.New("--set 是必填项")
+	}
+	cfg, err := engine.Load(*app)
+	if err != nil {
+		return err
+	}
+	if conn, dialErr := net.DialTimeout("tcp", *healthAddr, time.Second); dialErr == nil {
+		_ = conn.Close()
+		return fmt.Errorf("因子引擎仍在运行（%s 可以连上）：先停止引擎再对账（本地存储同一时刻只能由一个进程打开）", *healthAddr)
+	}
+	summary, err := engine.Reconcile(context.Background(), cfg, engine.ReconcileRequest{
+		SetID: *set, Subjects: subjects,
+		Progress: func(done, total int) {
+			if done == total || done%50 == 0 {
+				fmt.Fprintf(os.Stderr, "对账进度 %d/%d\n", done, total)
+			}
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(out).Encode(summary)
 }
 
 func signHealthRequest(request *http.Request) error {

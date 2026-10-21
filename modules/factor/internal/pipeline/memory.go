@@ -10,7 +10,7 @@ import (
 )
 
 // 每格开销的估算常量（字节，带余量），见 docs/计划/因子表达式引擎详细设计.md 7.5：
-//   - frameCellBytes：storageio.Frame 行式数据的一个单元（interface 值、装箱的 float64、切片分摊）；
+//   - frameCellBytes：storageio.Frame 行式数据的一个单元（interface 值、装箱的 float64、切片分摊），现在只用于目标区间的行；
 //   - resultCellBytes：计算结果转换成逐行结果后的一个单元（ItemResult.Rows 里的值与行切片分摊）；
 //   - fieldBytes：组装与写入阶段一行里的一个字段（map 项、键、装箱值）。
 const (
@@ -22,7 +22,7 @@ const (
 // ErrMemoryBudget 表示一个计算分块（实时周期视为 1 个周期的分块）估算的峰值内存超过 compute.max_memory。
 var ErrMemoryBudget = errors.New("因子计算的估算内存超过上限")
 
-// MemoryEstimate 是一个分块完整生命周期的峰值内存估算：读取的源窗口、面板与节点缓冲区、逐行结果、组装与写入。
+// MemoryEstimate 是一个分块完整生命周期的峰值内存估算：目标区间的行、面板与节点缓冲区、逐行结果、组装与写入。
 type MemoryEstimate struct {
 	Read     int64
 	Compute  int64
@@ -63,7 +63,8 @@ func EstimateChunkMemory(factors []domain.FactorDef, series, periods, carryColum
 	}
 	cells := func(rows, columns int) int64 { return int64(series) * int64(rows) * int64(columns) }
 	return MemoryEstimate{
-		Read:     cells(length, 2+carryColumns) * frameCellBytes,
+		// 回看窗口是内存里的常驻列式窗口，不再按帧计入；这里只有目标区间的行（组装写出携带列用）。
+		Read:     cells(periods, 2+carryColumns) * frameCellBytes,
 		Compute:  computeEstimate.Total(),
 		Result:   cells(periods, 2+outputs) * resultCellBytes,
 		Assemble: cells(periods, outputs+carryColumns) * fieldBytes,

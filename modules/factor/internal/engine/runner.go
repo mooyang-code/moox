@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/memadmit"
 	"github.com/mooyang-code/moox/modules/factor/internal/observability"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
@@ -16,20 +17,6 @@ import (
 type observedStore struct {
 	storageio.Store
 	health *Health
-}
-
-// earliestPeriodReader 是存储客户端读取标的最早一根 K 线的能力；窗口空洞检查用它区分新上市与真正的空洞。
-// observedStore 嵌入的是 storageio.Store 接口，不含这个方法，必须显式转发，否则 pipeline 里的类型断言永远失败。
-type earliestPeriodReader interface {
-	EarliestPeriod(ctx context.Context, spaceID, datasetID, freq string, subjects, columns []string) (time.Time, bool, error)
-}
-
-func (s *observedStore) EarliestPeriod(ctx context.Context, spaceID, datasetID, freq string, subjects, columns []string) (time.Time, bool, error) {
-	reader, ok := s.Store.(earliestPeriodReader)
-	if !ok {
-		return time.Time{}, false, errors.New("storage client does not support earliest period reads")
-	}
-	return reader.EarliestPeriod(ctx, spaceID, datasetID, freq, subjects, columns)
 }
 
 func (s *observedStore) WriteRows(ctx context.Context, spaceID, datasetID, commitID string, rows []storageio.ResultRow) error {
@@ -49,6 +36,12 @@ type measuredRunner struct {
 
 func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.Outcome, error) {
 	started := time.Now()
+	// 内存预留的优先级：实时周期最高，补算、恢复与失效重算让路。
+	prio := memadmit.PriorityBackground
+	if plan.Mode == pipeline.ModeLive {
+		prio = memadmit.PriorityRealtime
+	}
+	ctx = memadmit.WithPriority(ctx, prio)
 	periodTime := plan.PeriodTime
 	if periodTime.IsZero() {
 		periodTime = plan.TargetStart

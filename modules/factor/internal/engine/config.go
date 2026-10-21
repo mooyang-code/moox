@@ -27,6 +27,10 @@ type Config struct {
 	Storage       StorageConfig                    `yaml:"storage"`
 	EventBus      EventBusConfig                   `yaml:"eventbus"`
 	Compute       ComputeConfig                    `yaml:"compute"`
+	SeriesStore   SeriesStoreConfig                `yaml:"seriesstore"`
+	Window        WindowConfig                     `yaml:"window"`
+	Memory        MemoryConfig                     `yaml:"memory"`
+	Sync          SyncConfig                       `yaml:"sync"`
 	Pipeline      PipelineConfig                   `yaml:"pipeline"`
 	Recalc        RecalcConfig                     `yaml:"recalc"`
 	Gap           GapConfig                        `yaml:"gap"`
@@ -85,6 +89,37 @@ type ComputeConfig struct {
 	MaxMemory ByteSize `yaml:"max_memory"`
 }
 
+// SeriesStoreConfig 是本地时序存储（Pebble，数据永不删除，设计第 3 节）。
+type SeriesStoreConfig struct {
+	// Dir 是存储目录，相对路径按引擎根目录解析。
+	Dir string `yaml:"dir"`
+	// BlockCache 是 Pebble 块缓存大小，默认 512MiB，计入进程内存预算。
+	BlockCache ByteSize `yaml:"block_cache"`
+}
+
+// WindowConfig 是内存列式窗口（设计第 4 节）。
+type WindowConfig struct {
+	// MaxMemory 是所有数据源窗口常驻内存的上限；新启用的集合会超出时拒绝启用。0 表示不限制。
+	MaxMemory ByteSize `yaml:"max_memory"`
+	// Headroom 是每个序列数组余量的根数，0 取窗口长度的 1/4（至少 16）。
+	Headroom int `yaml:"headroom"`
+}
+
+// MemoryConfig 是进程级内存预算（设计 4.4）：常驻窗口与块缓存先扣除，计算、回放、重算向准入器预留。
+type MemoryConfig struct {
+	// TotalBudget 是进程内存预算，初始化时按「总内存 × 60%」写入；0 表示不限制。
+	TotalBudget ByteSize `yaml:"total_budget"`
+}
+
+// SyncConfig 是本地存储与 Storage 的同步。
+type SyncConfig struct {
+	// Workers 与 BatchSubjects 是同步时并行读取 Storage 的批数与每批标的数（Storage 单次最多 100 个）。
+	Workers       int `yaml:"workers"`
+	BatchSubjects int `yaml:"batch_subjects"`
+	// FollowInterval 是读取 Storage 行变更日志、应用修正的间隔。
+	FollowInterval time.Duration `yaml:"follow_interval"`
+}
+
 // ByteSize 是字节数，YAML 里可以写整数或带 KiB、MiB、GiB 后缀的字符串。
 type ByteSize int64
 
@@ -110,20 +145,9 @@ func (b *ByteSize) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type PipelineConfig struct {
-	ReadBatchSubjects int           `yaml:"read_batch_subjects"`
-	ReadWorkers       int           `yaml:"read_workers"`
-	ReadTimeout       time.Duration `yaml:"read_timeout"`
-	// 补算与预热读窗口的并发上限、失败后重试前的退避基数、连续失败多少个批次后断路（负数关闭）。
-	BulkReadWorkers     int           `yaml:"bulk_read_workers"`
-	ReadRetryBackoff    time.Duration `yaml:"read_retry_backoff"`
-	ReadBreakerFailures int           `yaml:"read_breaker_failures"`
-	// 预热读取节流（默认 10 个标的一批、1 个并发、批间停顿 500ms）。
-	WarmupBatchSubjects int           `yaml:"warmup_batch_subjects"`
-	WarmupWorkers       int           `yaml:"warmup_workers"`
-	WarmupBatchPause    time.Duration `yaml:"warmup_batch_pause"`
-	WriteBatchRows      int           `yaml:"write_batch_rows"`
-	PeriodBudgetMin     time.Duration `yaml:"period_budget_min"`
-	PeriodBudgetMax     time.Duration `yaml:"period_budget_max"`
+	WriteBatchRows  int           `yaml:"write_batch_rows"`
+	PeriodBudgetMin time.Duration `yaml:"period_budget_min"`
+	PeriodBudgetMax time.Duration `yaml:"period_budget_max"`
 }
 
 type RecalcConfig struct {
@@ -131,11 +155,9 @@ type RecalcConfig struct {
 	PollInterval time.Duration `yaml:"poll_interval"`
 }
 
-// GapConfig 是跳过账本与恢复：回看窗口有洞、或实时周期里标的还在预热而跳过的结果，账本永久记录，定时只填充重算。
-// 账本与恢复始终开启；Enabled 只控制 K 线空洞检查（有洞的因子对该标的当期失败），默认关闭：
-// 下游（Storage、策略、Trade）全部支持 gap_subjects 与保持标记之后才打开。设计见 docs/计划/因子窗口空洞防护详细设计.md。
+// GapConfig 是跳过账本与恢复：实时周期里标的本期数据取不到（上游失败、同步失败）、或内存窗口还没载入完成而跳过的结果，
+// 账本永久记录，定时只填充重算。本地数据写入时保证连续，窗口里不会再有空洞。
 type GapConfig struct {
-	Enabled bool `yaml:"enabled"`
 	// LedgerDir 是账本目录（按月一个 JSONL 文件，永不自动删除，纳入备份）。
 	LedgerDir string `yaml:"ledger_dir"`
 	// SweepInterval 是恢复轮询间隔；Settle 是发现后至少等多久才尝试恢复（给自动补采留时间）。
@@ -147,8 +169,6 @@ type GapConfig struct {
 	// 每个组一次最多处理 MaxSpan 个周期，避免长时间占住集合锁。
 	MaxGroupsPerSweep int `yaml:"max_groups_per_sweep"`
 	MaxSpan           int `yaml:"max_span"`
-	// MassRatio 是整期大面积缺失的告警阈值：有空洞或上游失败的标的占预期的比例达到它时输出 ERROR 日志；0 表示不告警。
-	MassRatio float64 `yaml:"mass_ratio"`
 }
 
 // Load reads the engine config; relative paths resolve against the directory
@@ -199,16 +219,13 @@ func Default() *Config {
 		Storage:       StorageConfig{AuthSecretFile: "./secrets/storage-primary-auth.secret"},
 		EventBus:      EventBusConfig{FetchMaxWait: 10 * time.Second},
 		Compute:       ComputeConfig{Workers: min(4, runtime.NumCPU()), MaxMemory: 1 << 30},
-		Pipeline: PipelineConfig{
-			ReadBatchSubjects: 100, ReadWorkers: autoReadWorkers(runtime.NumCPU()), ReadTimeout: 60 * time.Second,
-			BulkReadWorkers: 4, ReadRetryBackoff: 2 * time.Second, ReadBreakerFailures: 3,
-			WarmupBatchSubjects: 10, WarmupWorkers: 1, WarmupBatchPause: 500 * time.Millisecond,
-			WriteBatchRows: 1000, PeriodBudgetMin: time.Minute, PeriodBudgetMax: 15 * time.Minute,
-		},
-		Recalc: RecalcConfig{ChunkPeriods: 500, PollInterval: 5 * time.Second},
+		SeriesStore:   SeriesStoreConfig{Dir: "./data/seriesstore", BlockCache: 512 << 20},
+		Sync:          SyncConfig{Workers: 4, BatchSubjects: 100, FollowInterval: 30 * time.Second},
+		Pipeline:      PipelineConfig{WriteBatchRows: 1000, PeriodBudgetMin: time.Minute, PeriodBudgetMax: 15 * time.Minute},
+		Recalc:        RecalcConfig{ChunkPeriods: 500, PollInterval: 5 * time.Second},
 		Gap: GapConfig{
 			LedgerDir: "./data/gap", SweepInterval: 5 * time.Minute, Settle: 5 * time.Minute, GiveUpAfter: 6 * time.Hour,
-			MaxGroupsPerSweep: 20, MaxSpan: 60, MassRatio: 0.2,
+			MaxGroupsPerSweep: 20, MaxSpan: 60,
 		},
 		Watermark: WatermarkConfig{StateFile: "./data/engine/watermarks.json", MaxMissingRatio: 0.1, PollInterval: 10 * time.Second, MaxPeriods: 30},
 	}
@@ -226,15 +243,13 @@ func (c *Config) applyDefaults() {
 	if c.Compute.MaxMemory == 0 {
 		c.Compute.MaxMemory = d.Compute.MaxMemory
 	}
-	setInt(&c.Pipeline.ReadBatchSubjects, d.Pipeline.ReadBatchSubjects)
-	setInt(&c.Pipeline.ReadWorkers, d.Pipeline.ReadWorkers)
-	setDuration(&c.Pipeline.ReadTimeout, d.Pipeline.ReadTimeout)
-	setInt(&c.Pipeline.BulkReadWorkers, d.Pipeline.BulkReadWorkers)
-	setDuration(&c.Pipeline.ReadRetryBackoff, d.Pipeline.ReadRetryBackoff)
-	setInt(&c.Pipeline.ReadBreakerFailures, d.Pipeline.ReadBreakerFailures)
-	setInt(&c.Pipeline.WarmupBatchSubjects, d.Pipeline.WarmupBatchSubjects)
-	setInt(&c.Pipeline.WarmupWorkers, d.Pipeline.WarmupWorkers)
-	setDuration(&c.Pipeline.WarmupBatchPause, d.Pipeline.WarmupBatchPause)
+	setString(&c.SeriesStore.Dir, d.SeriesStore.Dir)
+	if c.SeriesStore.BlockCache == 0 {
+		c.SeriesStore.BlockCache = d.SeriesStore.BlockCache
+	}
+	setInt(&c.Sync.Workers, d.Sync.Workers)
+	setInt(&c.Sync.BatchSubjects, d.Sync.BatchSubjects)
+	setDuration(&c.Sync.FollowInterval, d.Sync.FollowInterval)
 	setInt(&c.Pipeline.WriteBatchRows, d.Pipeline.WriteBatchRows)
 	setDuration(&c.Pipeline.PeriodBudgetMin, d.Pipeline.PeriodBudgetMin)
 	setDuration(&c.Pipeline.PeriodBudgetMax, d.Pipeline.PeriodBudgetMax)
@@ -246,9 +261,6 @@ func (c *Config) applyDefaults() {
 	setDuration(&c.Gap.GiveUpAfter, d.Gap.GiveUpAfter)
 	setInt(&c.Gap.MaxGroupsPerSweep, d.Gap.MaxGroupsPerSweep)
 	setInt(&c.Gap.MaxSpan, d.Gap.MaxSpan)
-	if c.Gap.MassRatio == 0 {
-		c.Gap.MassRatio = d.Gap.MassRatio
-	}
 	setString(&c.Watermark.StateFile, d.Watermark.StateFile)
 	if c.Watermark.MaxMissingRatio == 0 {
 		c.Watermark.MaxMissingRatio = d.Watermark.MaxMissingRatio
@@ -260,7 +272,7 @@ func (c *Config) applyDefaults() {
 func (c *Config) resolvePaths(root string) {
 	for _, path := range []*string{
 		&c.CatalogSync.StateFile, &c.Storage.AuthSecretFile, &c.EventBus.CredentialFile,
-		&c.Gap.LedgerDir, &c.Watermark.StateFile,
+		&c.Gap.LedgerDir, &c.Watermark.StateFile, &c.SeriesStore.Dir,
 	} {
 		value := strings.TrimSpace(*path)
 		if value == "" || filepath.IsAbs(value) || strings.HasPrefix(value, "~") {
@@ -293,7 +305,10 @@ func (c *Config) Validate() error {
 	require(c.Recalc.ChunkPeriods > 0, "recalc.chunk_periods must be positive")
 	require(c.Gap.SweepInterval > 0 && c.Gap.Settle >= 0 && c.Gap.GiveUpAfter > 0, "gap.sweep_interval, gap.settle and gap.give_up_after must be positive")
 	require(c.Gap.MaxGroupsPerSweep > 0 && c.Gap.MaxSpan > 0, "gap.max_groups_per_sweep and gap.max_span must be positive")
-	require(c.Gap.MassRatio >= 0 && c.Gap.MassRatio <= 1, "gap.mass_ratio must be within [0, 1]")
+	require(strings.TrimSpace(c.SeriesStore.Dir) != "" && c.SeriesStore.BlockCache > 0, "seriesstore.dir and seriesstore.block_cache are required")
+	require(c.Sync.Workers > 0 && c.Sync.BatchSubjects > 0 && c.Sync.BatchSubjects <= 100 && c.Sync.FollowInterval > 0,
+		"sync.workers must be positive, sync.batch_subjects must be within [1, 100] and sync.follow_interval must be positive")
+	require(c.Window.MaxMemory >= 0 && c.Window.Headroom >= 0 && c.Memory.TotalBudget >= 0, "window.max_memory, window.headroom and memory.total_budget must not be negative")
 	require(c.Watermark.MaxMissingRatio > 0 && c.Watermark.MaxMissingRatio < 1 && c.Watermark.PollInterval > 0 && c.Watermark.MaxPeriods > 0,
 		"watermark.max_missing_ratio must be within (0, 1), poll_interval and max_periods must be positive")
 	for setID, ratio := range c.Watermark.SetRatios {
@@ -315,11 +330,6 @@ func setDuration(target *time.Duration, fallback time.Duration) {
 	if *target == 0 {
 		*target = fallback
 	}
-}
-
-// autoReadWorkers 按核数选择读取并发（read_workers 不写或为 0 时），范围 [4, 16]。
-func autoReadWorkers(cpus int) int {
-	return min(16, max(4, cpus/4))
 }
 
 func setInt(target *int, fallback int) {

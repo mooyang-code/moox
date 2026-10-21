@@ -98,6 +98,19 @@ func (p *Panel) Set(column, series, t int, value float64) {
 	p.data[column][series*p.length+t] = value
 }
 
+// SetRun 一次设置一条序列在连续网格下标 [t0, t0+len(values)) 上的值，等价于逐个 Set，供按列连续存放的数据源批量填充。
+func (p *Panel) SetRun(column, series, t0 int, values []float64) {
+	copy(p.data[column][series*p.length+t0:], values)
+}
+
+// MarkPresentRun 标记一条序列在连续网格下标 [t0, t0+n) 上都有源行。
+func (p *Panel) MarkPresentRun(series, t0, n int) {
+	run := p.present[series*p.length+t0 : series*p.length+t0+n]
+	for i := range run {
+		run[i] = true
+	}
+}
+
 // MarkPresent 标记网格下标 t 上该序列有源行；结果只在有源行的目标时刻输出。
 func (p *Panel) MarkPresent(series, t int) {
 	p.present[series*p.length+t] = true

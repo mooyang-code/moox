@@ -91,21 +91,43 @@ func TestEngineConfigComputeSection(t *testing.T) {
 	require.ErrorContains(t, err, "compute.workers")
 }
 
-// 空洞防护默认关闭，默认值与账本目录按配置根目录解析；不合法的取值被拒绝。
-func TestEngineConfigGapDefaultsAndValidation(t *testing.T) {
+// 账本的默认值与目录按配置根目录解析；本地存储、窗口、内存、同步的默认值与校验。
+func TestEngineConfigGapSeriesDefaultsAndValidation(t *testing.T) {
 	path := writeEngineConfig(t, minimalEngineConfig)
 	root := filepath.Dir(filepath.Dir(path))
 	cfg, err := Load(path)
 	require.NoError(t, err)
-	require.False(t, cfg.Gap.Enabled, "默认关闭")
 	require.Equal(t, filepath.Join(root, "data/gap"), cfg.Gap.LedgerDir)
 	require.Equal(t, 5*time.Minute, cfg.Gap.SweepInterval)
 	require.Equal(t, 6*time.Hour, cfg.Gap.GiveUpAfter)
 	require.Equal(t, 20, cfg.Gap.MaxGroupsPerSweep)
 	require.Equal(t, 60, cfg.Gap.MaxSpan)
-	require.InDelta(t, 0.2, cfg.Gap.MassRatio, 1e-9)
 
-	bad := writeEngineConfig(t, minimalEngineConfig+"\ngap:\n  mass_ratio: 1.5\n")
-	_, err = Load(bad)
-	require.ErrorContains(t, err, "gap.mass_ratio")
+	require.Equal(t, filepath.Join(root, "data/seriesstore"), cfg.SeriesStore.Dir)
+	require.Equal(t, ByteSize(512<<20), cfg.SeriesStore.BlockCache)
+	require.Equal(t, 4, cfg.Sync.Workers)
+	require.Equal(t, 100, cfg.Sync.BatchSubjects)
+	require.Equal(t, 30*time.Second, cfg.Sync.FollowInterval)
+	require.Zero(t, cfg.Window.MaxMemory, "默认不限制，初始化时按探测结果写入")
+	require.Zero(t, cfg.Memory.TotalBudget)
+
+	cfg, err = Load(writeEngineConfig(t, minimalEngineConfig+"seriesstore:\n  dir: /data/series\n  block_cache: 1GiB\nwindow:\n  max_memory: 4GiB\n  headroom: 64\nmemory:\n  total_budget: 12GiB\nsync:\n  workers: 2\n  batch_subjects: 50\n  follow_interval: 10s\n"))
+	require.NoError(t, err)
+	require.Equal(t, "/data/series", cfg.SeriesStore.Dir)
+	require.Equal(t, ByteSize(1<<30), cfg.SeriesStore.BlockCache)
+	require.Equal(t, ByteSize(4<<30), cfg.Window.MaxMemory)
+	require.Equal(t, 64, cfg.Window.Headroom)
+	require.Equal(t, ByteSize(12<<30), cfg.Memory.TotalBudget)
+	require.Equal(t, 50, cfg.Sync.BatchSubjects)
+
+	for _, bad := range []struct{ body, want string }{
+		{"\ngap:\n  max_span: -1\n", "gap.max_groups_per_sweep and gap.max_span"},
+		{"\nsync:\n  batch_subjects: 101\n", "sync.batch_subjects"},
+		{"\nwindow:\n  headroom: -1\n", "window.headroom"},
+		{"\npipeline:\n  read_workers: 4\n", "read_workers"}, // 旧的读取配置已经删除：严格解析拒绝未知字段
+		{"\ngap:\n  mass_ratio: 0.2\n", "mass_ratio"},
+	} {
+		_, err = Load(writeEngineConfig(t, minimalEngineConfig+bad.body))
+		require.ErrorContains(t, err, bad.want, bad.body)
+	}
 }

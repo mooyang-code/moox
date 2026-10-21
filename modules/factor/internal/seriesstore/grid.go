@@ -36,6 +36,15 @@ func gridFor(freq string) (grid, error) {
 	return grid{freq: freq, step: int64(step / time.Second)}, nil
 }
 
+// Step 返回频率对应的周期时长。
+func Step(freq string) (time.Duration, error) {
+	g, err := gridFor(freq)
+	if err != nil {
+		return 0, err
+	}
+	return time.Duration(g.step) * time.Second, nil
+}
+
 func (g grid) aligned(sec int64) bool { return sec%g.step == 0 }
 
 // blockStart 返回包含 sec 的块的起点（UTC 秒）：1m 按小时，5m 按 6 小时，15m 与 30m 按天，

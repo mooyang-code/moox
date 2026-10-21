@@ -197,6 +197,12 @@ func (c *Columns) sortRows() *Columns {
 	return out
 }
 
+// AppendRowFrom 把 src 的一行追加到 c 末尾；两边的字段必须一致。
+func (c *Columns) AppendRowFrom(src *Columns, row int) { c.copyRow(src, row) }
+
+// SortedByKey 返回按（时间、标签）排序的副本。
+func (c *Columns) SortedByKey() *Columns { return c.sortRows() }
+
 // Span 是一个左闭右开的时间区间（UTC）。
 type Span struct{ From, To time.Time }
 

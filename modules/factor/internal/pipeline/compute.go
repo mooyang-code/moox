@@ -13,6 +13,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
+	"github.com/mooyang-code/moox/modules/factor/internal/serieswindow"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
 
@@ -40,7 +41,6 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 			return Computation{}, err
 		}
 	}
-	gaps := loaded.Gaps
 	available := intersectLists(plan.Expected, loaded.Available)
 	missing := subjectDifference(plan.Expected, available)
 	missing = uniqueSorted(append(missing, loaded.FailedSubjects...))
@@ -62,14 +62,8 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		compiled[factor.FactorID] = def
 		status := "complete"
 		failed := append([]string(nil), missing...)
-		// 回看窗口有 K 线空洞的标的对该因子失败（gap_subjects 是 failed_subjects 的子集）。
-		gapSubjects := gaps.FactorSubjects(factor.FactorID)
-		failed = uniqueSorted(append(failed, gapSubjects...))
+		failed = uniqueSorted(failed)
 		if factor.FactorType == domain.FactorTypeCrossSection && len(missing) > 0 && !factor.AllowPartialUniverse {
-			status = "skipped"
-		}
-		// 严格截面因子：实时周期只要有标的有洞就整因子 skipped；补算按周期逐个跳过（见 crossPeriods），不整块跳过。
-		if factor.FactorType == domain.FactorTypeCrossSection && len(gapSubjects) > 0 && !factor.AllowPartialUniverse && plan.Mode == ModeLive {
 			status = "skipped"
 		}
 		if factor.FactorType == domain.FactorTypeCrossSection && len(available) == 0 {
@@ -81,7 +75,7 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		computation.Results[factor.FactorID] = make(map[string]ItemResult)
 		computation.FactorStates[factor.FactorID] = storageio.FactorState{
 			FactorID: factor.FactorID, Status: status, FailedSubjects: failed, SourceHash: factor.SpecHash,
-			DefinitionHash: domain.DefinitionHash(def), GapSubjects: gapSubjects,
+			DefinitionHash: domain.DefinitionHash(def),
 		}
 	}
 
@@ -92,7 +86,7 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 			if computation.FactorStates[factor.FactorID].Status == "skipped" {
 				continue
 			}
-			computation.crossPeriods(factor, gaps, targets)
+			computation.crossPeriods(factor, targets)
 		}
 		if err := compileErrs[factor.FactorID]; err != nil {
 			computation.fail(factor, plan, available, err)
@@ -110,7 +104,7 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		workCtx, cancel = context.WithTimeout(ctx, plan.Budget)
 	}
 	defer cancel()
-	result, grid, runErr := r.run(workCtx, plan, runnable, available, loaded.Frames)
+	result, grid, runErr := r.run(workCtx, plan, runnable, available, loaded.View)
 	if ctx.Err() != nil {
 		return computation, ctx.Err()
 	}
@@ -169,12 +163,32 @@ func (g computeGrid) index(at time.Time) int { return int(at.Sub(g.start) / g.du
 
 // run 构建面板并执行程序。网格从“第一个目标周期的集合回看窗口起点”到最后一个目标周期（设计 7.1）。
 func (r *Runner) run(ctx context.Context, plan Plan, factors []domain.FactorDef, subjects []string,
-	frames map[string]*storageio.Frame) (*exec.Result, computeGrid, error) {
+	view *serieswindow.View) (*exec.Result, computeGrid, error) {
+	if view == nil {
+		return nil, computeGrid{}, errors.New("factor computation has no input view")
+	}
+	series := countSeries(subjects, view)
 	if r.cfg.MaxMemory > 0 {
 		// 读取后按实际的序列数（标的 × series_tag）复核：读取前的预检只能按标的数估计。
-		if err := withinBudget(factors, countSeries(subjects, frames), planPeriods(r.clock, plan), len(plan.CarryColumns), r.cfg.MaxMemory); err != nil {
+		if err := withinBudget(factors, series, planPeriods(r.clock, plan), len(plan.CarryColumns), r.cfg.MaxMemory); err != nil {
 			return nil, computeGrid{}, err
 		}
+	}
+	if r.cfg.MemoryAdmission != nil {
+		estimate, err := EstimateChunkMemory(factors, series, planPeriods(r.clock, plan), len(plan.CarryColumns))
+		if err != nil {
+			return nil, computeGrid{}, err
+		}
+		reserveCtx, cancel := ctx, context.CancelFunc(func() {})
+		if r.cfg.AdmissionTimeout > 0 {
+			reserveCtx, cancel = context.WithTimeout(ctx, r.cfg.AdmissionTimeout)
+		}
+		release, err := r.cfg.MemoryAdmission.Reserve(reserveCtx, estimate.Total())
+		cancel()
+		if err != nil {
+			return nil, computeGrid{}, fmt.Errorf("%w：等待内存预留失败：%v", ErrMemoryBudget, err)
+		}
+		defer release()
 	}
 	inputs := make([]factorexpr.ProgramInput, 0, len(factors))
 	for _, factor := range factors {
@@ -202,7 +216,7 @@ func (r *Runner) run(ctx context.Context, plan Plan, factors []domain.FactorDef,
 	}
 	grid := computeGrid{start: window[0].UTC(), duration: duration}
 	grid.first, grid.last = grid.index(first), grid.index(last)
-	panel, err := buildPanel(grid, program.Columns, subjects, frames)
+	panel, err := buildPanel(grid, program.Columns, subjects, view)
 	if err != nil {
 		return nil, computeGrid{}, err
 	}
@@ -225,22 +239,11 @@ func planPeriods(clock periodclock.Clock, plan Plan) int {
 	return max(1, int(plan.TargetEnd.Sub(plan.TargetStart)/duration))
 }
 
-// countSeries 数出窗口里的 (标的, series_tag) 序列数；没有行的标的按 1 条计。
-func countSeries(subjects []string, frames map[string]*storageio.Frame) int {
+// countSeries 数出视图里这些标的的 (标的, series_tag) 序列数；视图里没有的标的按 1 条计。
+func countSeries(subjects []string, view *serieswindow.View) int {
 	total := 0
 	for _, subject := range subjects {
-		frame := frames[subject]
-		if frame == nil {
-			total++
-			continue
-		}
-		tags := map[any]struct{}{}
-		for _, row := range frame.Rows {
-			if len(row) > 1 {
-				tags[row[1]] = struct{}{}
-			}
-		}
-		total += max(1, len(tags))
+		total += max(1, len(view.Series(subject)))
 	}
 	return total
 }
@@ -276,92 +279,72 @@ func (r *Runner) failAll(plan Plan, err error) Computation {
 			FactorID: factor.FactorID, Status: "degraded", SourceHash: factor.SpecHash, DefinitionHash: domain.DefinitionHash(factor),
 		}
 		if factor.FactorType == domain.FactorTypeCrossSection {
-			computation.crossPeriods(factor, GapReport{}, targets)
+			computation.crossPeriods(factor, targets)
 		}
 		computation.fail(factor, plan, expected, err)
 	}
 	return computation
 }
 
-// buildPanel 把各标的的窗口放到网格上：每个 (标的, series_tag) 一条序列，按 (标的, 标签) 排序，结果与工作线程数无关；
-// null 与网格上缺失的行是 NaN，非数值值报错（入成员时已校验列类型，正常不会出现）。
-func buildPanel(grid computeGrid, columns []string, subjects []string, frames map[string]*storageio.Frame) (*exec.Panel, error) {
+// buildPanel 把各标的的窗口放到网格上：每个 (标的, series_tag) 一条序列，按 (标的, 标签) 排序，结果与工作线程数无关。
+// 视图里的序列按列连续存放（本地数据没有缺行），直接按段复制到面板；null 在窗口里已经是 NaN。
+// 虚拟列 is_filled 由填充标记生成；输入列不在视图里（非数值字段）时报错。
+func buildPanel(grid computeGrid, columns []string, subjects []string, view *serieswindow.View) (*exec.Panel, error) {
 	length := grid.last + 1
 	ordered := append([]string(nil), subjects...)
 	sort.Strings(ordered)
 	var keys []exec.SeriesKey
 	for _, subject := range ordered {
-		frame := frames[subject]
-		if frame == nil {
+		for _, sv := range view.Series(subject) {
+			keys = append(keys, exec.SeriesKey{Subject: subject, Tag: sv.Tag})
+		}
+	}
+	positions := make([]int, len(columns))
+	for i, column := range columns {
+		positions[i] = -2
+		if column == serieswindow.FilledColumn {
 			continue
 		}
-		if len(frame.Columns) < 2 || frame.Columns[0] != "data_time" || frame.Columns[1] != "series_tag" {
-			return nil, fmt.Errorf("frame for %q does not start with data_time, series_tag", subject)
+		index, ok := view.FieldIndex(column)
+		if !ok {
+			return nil, fmt.Errorf("窗口缺少输入列 %s（只有数值字段可以作为因子输入）", column)
 		}
-		seen := map[string]bool{}
-		var tags []string
-		for rowNo, row := range frame.Rows {
-			if len(row) != len(frame.Columns) {
-				return nil, fmt.Errorf("frame row %d for %q has %d values for %d columns", rowNo, subject, len(row), len(frame.Columns))
-			}
-			tag, ok := row[1].(string)
-			if !ok {
-				return nil, fmt.Errorf("标的 %s 的 series_tag 类型为 %T", subject, row[1])
-			}
-			if !seen[tag] {
-				seen[tag] = true
-				tags = append(tags, tag)
-			}
-		}
-		sort.Strings(tags)
-		for _, tag := range tags {
-			keys = append(keys, exec.SeriesKey{Subject: subject, Tag: tag})
-		}
+		positions[i] = index
 	}
 	panel, err := exec.NewPanel(length, columns, keys)
 	if err != nil {
 		return nil, err
 	}
+	step := int64(grid.duration / time.Second)
+	gridStart := grid.start.Unix()
 	for _, subject := range ordered {
-		frame := frames[subject]
-		if frame == nil {
-			continue
-		}
-		positions := make([]int, len(columns))
-		for i, column := range columns {
-			positions[i] = -1
-			for j, name := range frame.Columns {
-				if name == column {
-					positions[i] = j
-					break
-				}
+		for _, sv := range view.Series(subject) {
+			s, _ := panel.SeriesIndex(exec.SeriesKey{Subject: subject, Tag: sv.Tag})
+			// 行 [r0, r0+count) 对应网格下标 [t0, t0+count)。
+			t0, r0 := 0, 0
+			if sv.Start >= gridStart {
+				t0 = int((sv.Start - gridStart) / step)
+			} else {
+				r0 = int((gridStart - sv.Start) / step)
 			}
-			if positions[i] < 0 {
-				return nil, fmt.Errorf("标的 %s 的窗口缺少输入列 %s", subject, column)
-			}
-		}
-		for rowNo, row := range frame.Rows {
-			at, err := parseDataTime(row[0])
-			if err != nil {
-				return nil, fmt.Errorf("标的 %s 第 %d 行 data_time：%w", subject, rowNo, err)
-			}
-			offset := at.Sub(grid.start)
-			if offset < 0 || offset%grid.duration != 0 || int(offset/grid.duration) >= length {
+			count := min(length-t0, sv.N-r0)
+			if count <= 0 {
 				continue
 			}
-			t := int(offset / grid.duration)
-			s, _ := panel.SeriesIndex(exec.SeriesKey{Subject: subject, Tag: row[1].(string)})
 			for i, position := range positions {
-				value, ok := numericOrNull(row[position])
-				if !ok {
-					return nil, fmt.Errorf("标的 %s 的列 %s 不是数值（%T）", subject, columns[i], row[position])
+				if position == -2 {
+					filled := make([]float64, count)
+					for j := range filled {
+						if sv.Filled[r0+j] {
+							filled[j] = 1
+						}
+					}
+					panel.SetRun(i, s, t0, filled)
+					continue
 				}
-				if row[position] == nil {
-					value = math.NaN()
-				}
-				panel.Set(i, s, t, value)
+				panel.SetRun(i, s, t0, sv.Cols[position][r0:r0+count])
 			}
-			panel.MarkPresent(s, t)
+			panel.MarkPresentRun(s, t0, count)
 		}
 	}
 	return panel, nil
@@ -408,14 +391,9 @@ func (c *Computation) addTimeSeries(factor domain.FactorDef, result *exec.Result
 	}
 }
 
-// crossPeriods 预置截面因子各目标周期的结果：严格截面因子在有标的有洞的周期记为 gap、不产出（其余周期照常），
-// 不能用缺了标的的全集算排名与标准化；其余周期先记为 ok，计算失败时由 fail 改为 failed。
-func (c *Computation) crossPeriods(factor domain.FactorDef, gaps GapReport, targets []time.Time) {
+// crossPeriods 预置截面因子各目标周期的结果为 ok，计算失败时由 fail 改为 failed。
+func (c *Computation) crossPeriods(factor domain.FactorDef, targets []time.Time) {
 	for _, period := range targets {
-		if !factor.AllowPartialUniverse && len(gaps.Subjects(factor.FactorID, period)) > 0 {
-			setCrossPeriod(c, factor.FactorID, period, periodGap)
-			continue
-		}
 		setCrossPeriod(c, factor.FactorID, period, periodOK)
 	}
 }
