@@ -1,6 +1,6 @@
 import type { ActivityLogItem } from "@/api/admin/activity";
 import type { FactorSetInfo } from "@/api/factor/types";
-import type { HealthAlert, HealthHost, HealthOverview } from "@/api/monitor";
+import type { HealthAlert, HealthHost, HealthOverview, LifecycleColor } from "@/api/monitor";
 import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { freqSeconds, runBarLag, setHealth } from "@/views/factor/shared/health";
 import { statusLabel } from "@/views/ops/monitor/health-display";
@@ -450,6 +450,38 @@ export function statusLine(input: { attention: AttentionItem[]; overview?: Healt
   if (input.monitorError) return { tone: "idle", text: "监控数据暂不可用" };
   if (!input.overview) return { tone: "idle", text: "正在读取状态" };
   return { tone: "ok", text: "运行正常" };
+}
+
+/** 运行阶段的中文名。 */
+const PHASE_LABELS: Record<string, string> = {
+  uninitialized: "未初始化",
+  ready: "就绪",
+  warming: "预热中",
+  running: "运行中"
+};
+
+export interface SystemStage {
+  /** 圆点颜色：红（健康面异常）、橙（降级）、黄（预热）、蓝（就绪）、绿（运行）、灰。 */
+  color: LifecycleColor;
+  /** 形如「运行中 · 降级」「预热中」「就绪」。 */
+  label: string;
+  /** 受影响的模块与原因，最多显示 3 条，其余折叠为一条“另有 N 项”。 */
+  issues: string[];
+  /** 有模块重启后自动回到原阶段。 */
+  recovered: boolean;
+}
+
+/** 首页的系统状态：健康面与运行阶段两个维度同时展示。没有模块上报生命周期状态时返回 undefined（不显示）。 */
+export function systemStage(overview?: HealthOverview): SystemStage | undefined {
+  const system = overview?.system;
+  if (!system || !system.phase) return undefined;
+  let label = PHASE_LABELS[system.phase] || system.phase;
+  if (system.health === "attention") label = `${label} · 有模块未就绪`;
+  else if (system.degraded) label += " · 降级";
+  const all = system.issues || [];
+  const issues = all.slice(0, 3);
+  if (all.length > 3) issues.push(`另有 ${all.length - 3} 项`);
+  return { color: system.color || "gray", label, issues, recovered: Boolean(system.auto_recovered) };
 }
 
 /** 磁贴里固定显示的条数，其余折叠为“另有 N 项”。 */

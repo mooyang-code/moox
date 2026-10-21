@@ -17,6 +17,12 @@
               <span class="status-icon" :class="`is-${status.tone}`"><component :is="statusIcon" /></span>
               <h2>{{ status.text }}</h2>
             </div>
+            <div v-if="stage" class="banner-stage" :title="stage.issues.join('\n')">
+              <span class="stage-dot" :class="`is-${stage.color}`" />
+              <b>{{ stage.label }}</b>
+              <small v-if="stage.recovered" class="stage-recovered">已自动恢复</small>
+              <small v-for="issue in stage.issues" :key="issue" class="stage-issue">{{ issue }}</small>
+            </div>
             <div class="banner-facts">
               <span v-for="fact in facts" :key="fact.key" :title="fact.hint"
                 >{{ fact.label }} <b :class="`is-${fact.tone}`">{{ fact.value }}</b></span
@@ -289,6 +295,7 @@ import {
   kpiCards,
   statusLine,
   strategyRows,
+  systemStage,
   toneIcon,
   type HomeTarget,
   type NameBook
@@ -357,6 +364,7 @@ const attention = computed(() =>
 const status = computed(() =>
   statusLine({ attention: attention.value, overview: overview.value, monitorError: monitorError.value })
 );
+const stage = computed(() => (monitorError.value ? undefined : systemStage(overview.value)));
 const alertCount = computed(() => (monitorError.value ? "—" : String(overview.value?.summary?.alert_count ?? 0)));
 const statusIcon = computed(() => toneIcon(status.value.tone));
 const services = computed(() => serviceHealth(overview.value, monitorError.value));
@@ -691,6 +699,55 @@ a {
   display: inline-flex;
   font-size: 26px;
   color: var(--tone);
+}
+
+.banner-stage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 13px;
+  color: var(--color-text-2);
+}
+
+.banner-stage b {
+  color: var(--color-text-1);
+  font-weight: 600;
+}
+
+.stage-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-neutral-5);
+}
+
+.stage-dot.is-red {
+  background: rgb(var(--danger-6));
+}
+
+.stage-dot.is-orange {
+  background: rgb(var(--orange-6));
+}
+
+.stage-dot.is-yellow {
+  background: rgb(var(--warning-6));
+}
+
+.stage-dot.is-blue {
+  background: rgb(var(--primary-6));
+}
+
+.stage-dot.is-green {
+  background: rgb(var(--success-6));
+}
+
+.stage-recovered {
+  color: rgb(var(--success-6));
+}
+
+.stage-issue {
+  color: var(--color-text-3);
 }
 
 .banner-facts {
