@@ -322,8 +322,26 @@ func (d *Data) loadLive(ctx context.Context, st *source, plan pipeline.Plan, sub
 		return res, err
 	}
 	// 目标周期早于窗口的最新一根（追赶、补算更早的周期）：窗口只保留到最新为止的回看根数，截止目标周期的回看窗口不全，
-	// 改读本地磁盘（同步已经写完），不能用不完整的窗口算出看似正常的值。
-	return d.loadRange(ctx, st, plan, subjects)
+	// 改读本地磁盘（同步已经写完），不能用不完整的窗口算出看似正常的值。同步失败的标的不能当作可用。
+	failed := map[string]struct{}{}
+	for _, s := range res.Failed {
+		failed[s] = struct{}{}
+	}
+	var ok []string
+	for _, s := range subjects {
+		if _, bad := failed[s]; !bad {
+			ok = append(ok, s)
+		}
+	}
+	out, err := d.loadRange(ctx, st, plan, ok)
+	if err != nil {
+		return pipeline.DataResult{}, err
+	}
+	for s := range failed {
+		out.Failed = append(out.Failed, s)
+	}
+	sort.Strings(out.Failed)
+	return out, nil
 }
 
 // loadLiveWindow 同步本期数据并从内存窗口取输入；目标周期早于窗口最新一根时返回 fromDisk=true，由调用方改读磁盘。
@@ -365,7 +383,7 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 	view := st.window.Acquire(subjects, target.Unix())
 	for _, subject := range subjects {
 		if end, has := st.window.Latest(subject); has && end.After(target) {
-			return pipeline.DataResult{}, true, nil
+			return pipeline.DataResult{Failed: sortedKeys(failed)}, true, nil
 		}
 	}
 	var ok []string
@@ -468,6 +486,10 @@ func (d *Data) loadRange(ctx context.Context, st *source, plan pipeline.Plan, su
 		// 目标区间的行：补算的目标区间，或实时周期的最后一根。
 		target := seriesstore.NewColumns(cols.Fields, 0)
 		lo := plan.TargetStart.Unix()
+		if plan.Mode == pipeline.ModeLive {
+			// 实时周期（追赶读磁盘）的 TargetStart 是回看起点：行式的目标区间只取最后一根，不把整个回看窗口转成行。
+			lo = plan.TargetEnd.Add(-time.Duration(step)).Unix()
+		}
 		for i := 0; i < cols.Len(); i++ {
 			if cols.Times[i] >= lo && cols.Times[i] < plan.TargetEnd.Unix() {
 				target.AppendRowFrom(cols, i)

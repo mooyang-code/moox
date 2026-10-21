@@ -295,3 +295,30 @@ func TestRunWritesBatchesBackwardsWhenPrependingHistory(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, local.Add(-10*time.Minute), rec2.chunks[0].From)
 }
+
+// 倒序补历史写到一半中断：续传时本地最早时间已经前移，方向仍要保持倒序，否则按断点跳过前几批会漏掉最早的批。
+func TestReverseImportResumesInTheSameDirection(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTC.csv", "data_time,close,volume", minuteRows(0, 10))
+	cps, err := checkpoint.Open(filepath.Join(t.TempDir(), "importer.db"))
+	require.NoError(t, err)
+	defer cps.Close()
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	boundsAt := func(earliestMinute int) Meta {
+		return Meta{Fields: fields, LocalBounds: func(context.Context, string) (time.Time, time.Time, bool, error) {
+			return base.Add(time.Duration(earliestMinute) * time.Minute), base.Add(20 * time.Minute), true, nil
+		}}
+	}
+	flaky := &recorder{name: "factor", failAt: 3} // 10 行每批 4 行：[8,10)、[4,8)、[0,4)；第 3 批失败
+	_, err = Run(context.Background(), baseRequest(file), boundsAt(10), []Target{flaky}, cps)
+	require.Error(t, err)
+	require.Len(t, flaky.chunks, 2)
+
+	// 重跑时本地最早已是第 4 分钟（前两批写完了）：仍按倒序，只剩 [0,4) 没写。
+	healthy := &recorder{name: "factor"}
+	_, err = Run(context.Background(), baseRequest(file), boundsAt(4), []Target{healthy}, cps)
+	require.NoError(t, err)
+	require.Len(t, healthy.chunks, 1)
+	require.Equal(t, base, healthy.chunks[0].From)
+	require.Equal(t, base.Add(4*time.Minute), healthy.chunks[0].To)
+}

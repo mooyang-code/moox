@@ -313,6 +313,20 @@ func writeFile(ctx context.Context, d seriesformat.Decoder, file, subject string
 	}
 	_ = doneRows
 	rb := newRebatcher(r, req.batchRows())
+	// 方向要在续传时保持一致：倒序写到一半时本地最早时间已经前移，重新判断会变成正序，按断点跳过前几批就会漏掉最早的批。
+	// 所以第一次决定倒序时在断点里留一个方向标记，续传时以它为准。
+	const dirSuffix = "#reverse"
+	if cps != nil {
+		if marked, _, _, err := cps.Get(job, file, target.Name()+dirSuffix); err != nil {
+			return err
+		} else if marked > 0 {
+			reverse = true
+		} else if reverse {
+			if err := cps.Save(job, file, target.Name()+dirSuffix, 1, 0, false, ""); err != nil {
+				return err
+			}
+		}
+	}
 	if reverse {
 		// 补更早的历史：先读出全部批，再从最晚的一批往回写。
 		var batches []*seriesformat.Batch
