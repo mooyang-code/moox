@@ -14,7 +14,7 @@
 | 6 | 本地数据**写入时保证连续、没有空洞**，每个标的的本地数据就是 `[Earliest, Latest]` 连续的一段，相信 `Latest`。标的首根就是本地最早一根 |
 | 7 | 交易所本身缺的周期写成**缺失行**，按字段的填充规则（`prev` / `prev_close` / `zero`）填充并带「已填充」标记；不设长缺口上限；填充只发生在本地，不写回 Storage |
 | 8 | 数据导入独立成 **`modules/importer`**，并入现有 `moox-cli storage import`；格式解析独立成 **`packages/seriesformat`**，CSV 是第一种格式 |
-| 9 | 逐期回放独立成 **`modules/replay`**；回放不产生实际下单，只走纸上交易；每次回放创建专用 PAPER 账户和独立策略会话 |
+| 9 | 逐期回放独立成 **`modules/replay`**；回放不产生实际下单，只走纸上交易；每次回放在 Trade 里建立**独立的纸面账本会话**（见 9.2、15），规则状态按 `replay_id` 独立保存 |
 | 10 | 回放默认按下一根 K 线开盘价成交（可选本期收盘价）；回放不走生产事件总线 |
 | 11 | Storage 是近期数据的权威，本地靠 Storage 行变更序号持久化同步；导入的历史不受 Storage 保留期约束 |
 | 12 | 变更日志断档（离线太久、Storage 节点更换）不自动处理：自检判为未就绪，由用户执行对账命令 |
@@ -286,17 +286,17 @@ Storage 每个分页 RPC 各自新建快照（`pebble/rows_read.go`），全量�
 
 ### 6.2 模块要提供的能力
 
-每个模块都提供下面这些接口（RPC）和对应的命令行：
+每个模块都提供下面这些接口和对应的命令行（实现为挂在各模块**健康端口**上的 HTTP 接口 `/v1/lifecycle/status|command`，签名鉴权，命令行是 `moox-cli lifecycle ...`，见第 15 节）：
 
 | 能力 | 说明 |
 | --- | --- |
-| `check` | 启动前检查，复用 `packages/doctor` 的检查框架（PASS / WARN / FAIL / BLOCKED 和依赖关系） |
+| `check` | 启动前检查（PASS / WARN / FAIL，失败项带处理办法；实现为 `packages/lifecycle` 的 `Check`，没有复用 `packages/doctor`） |
 | `init` | 执行该模块的初始化动作 |
 | `status` | 返回模块状态、各对象状态和未就绪原因 |
 | `start` / `confirm` / `pause` / `resume` | 推进或改变阶段；可作用于整个模块或单个对象 |
 
-- 每个模块在自己的存储里**持久化**自己和对象的当前阶段；`packages/healthz` 现有的 `State` 只有一个就绪布尔值，要扩展成上面的状态。
-- 状态由 monitor 汇总（现有 `monitor/internal/healthview`），首页展示。
+- 每个模块在自己的存储里**持久化**自己和对象的当前阶段（因子引擎 `data/engine/lifecycle.json`、策略与 Trade 在数据库旁的 `lifecycle.json`）；`packages/healthz` 的 `State` 保持就绪布尔值不变，生命周期快照放在 `/healthz` 响应的 `details.lifecycle`。
+- 状态由 monitor 汇总（`monitor/internal/healthview`），首页展示。
 
 因子引擎的启动前检查：本地存储布局版本；每个启用集合的数据源本地数据就绪（下一条）；变更日志没有断档；窗口内存与总预算放得下。
 
@@ -376,10 +376,10 @@ moox-cli import --format csv --space crypto --dataset <dataset> --freq 1m \
 | --- | --- |
 | 因子引擎 | `ReplayOpen(session, set, from)`：按预热区间加载回放窗口（会话开始时取快照，运行中不随修正更新），向准入器预留内存；`ReplayStep(session, t)`：计算第 t 期并返回因子帧；`ReplayClose(session)` |
 | 策略 | 新增回放求值接口：入参是 `replay_id`、实例、周期和完整回放输入（见 9.4），复用现有求值引擎（`strategy/internal/engine`），**只返回本期决策**（目标权重或跳过），不直接发事件 |
-| Trade：回放会话 | 每次回放创建专用 PAPER 账户和策略会话，初始资金与配置快照固定，结束后保留结果、可清理 |
-| Trade：回放推进命令（新增 `ReplayAdvance`） | 每期必达：`replay_id`、周期、回放时钟、回放报价、决策（`UPDATE_TARGET` 内含目标权重 / `SKIP`）。`SKIP` 不改动目标，只撮合遗留挂单。同步返回本期确认 |
-| Trade：执行上下文 | 会话级 `{replay_id, clock, quotes}`：入口的 `valid_until` 校验（`eventconsumer/target.go`）用回放时钟；权重换算（`application/target/weight_resolver.go`）的权益和参考价取自回放会话与回放报价；资金预留、`PaperExecutionPrice`、撮合（`execution/reservation_policy.go`、`execution/paper/pricing.go`、`matcher.go`）都用回放报价，缺价时报错、不回退实时报价；撮合只处理本会话的挂单 |
-| Trade：订单、成交 | 记录 `replay_id` |
+| Trade：回放会话 | 每次回放建立一个**纸面账本会话**（`t_replay_sessions`），初始资金、费率、滑点固定，结束后保留结果、可清理 |
+| Trade：回放推进命令（新增 `ReplayAdvance`） | 每期必达：`replay_id`、周期（决策时刻毫秒）、回放报价（估值价与成交价）、决策（`UPDATE_TARGET` 带完整目标集合 / `SKIP`）。`SKIP` 不改动目标，只按回放报价估值。同步返回本期确认；按 `(replay_id, period)` 幂等 |
+| Trade：账本撮合 | 估值与成交都用回放报价，缺价时报错、不回退实时报价；先卖后买，买单受可用现金限制；只做多现货；不接触实盘账户、订单、预留与执行器（实盘的执行链路绑定墙钟与交易所适配器，回放账本自成一体，保证回放绝不下单、不影响实盘） |
+| Trade：订单、成交 | 记录在 `t_replay_orders`（带 `replay_id`），周期结果在 `t_replay_periods` |
 | 因子集合事件、水位 | 不变，回放不发 `FactorPeriodComputed` 等生产事件 |
 
 ### 9.3 流程
@@ -521,7 +521,7 @@ import:
 | 5 | 生命周期与状态 | `packages/healthz` 状态扩展；各模块的 `check` / `init` / `status` / `start` / `confirm` / `pause` / `resume`；阶段持久化与重启恢复；依赖链暂停；monitor 汇总与首页展示；Trade 影子模式与预热指标 |
 | 6 | 初始化与配置 | 窗口内存估算与内存配置自适应；`DefaultViewBars` 改为 1 万、各频率默认保留期（含 30s）、单 View 容量阈值；相关文档同步 |
 | 6a | **实时闭环验证（阶段 1–6 上线门槛）** | 引擎重启、历史修正、缺失行填充与之后被真实数据替换、导入与实时并发、断档与对账、内存准入拒绝、上游故障只停受影响部分；与 Storage 抽样比对一致 |
-| 7 | 逐期回放 | Trade：回放会话与专用 PAPER 账户、执行上下文、`ReplayAdvance`；策略：回放求值接口与输入契约；因子：`ReplayOpen` / `ReplayStep` / `ReplayClose`；`modules/replay`：编排、周期记录与恢复、`moox-cli replay`。短周期（几十期）的一致性与重启恢复测试在本阶段完成 |
+| 7 | 逐期回放 | Trade：回放纸面账本会话、`ReplayAdvance` 与撮合；策略：回放求值接口与输入契约；因子：`ReplayOpen` / `ReplayStep` / `ReplayClose`；`modules/replay`：编排、周期记录与恢复、`moox-cli replay`。短周期（几十期）的一致性与重启恢复测试在本阶段完成 |
 | 8 | 部署验证 | 导入真实数据；测 1m 实时周期耗时、窗口内存、磁盘；一次一个月的 1m 回放（性能验收） |
 
 阶段 1–6 加 6a 通过后可以先上线；阶段 7 依赖 1–5。阶段 5 涉及所有模块，可以和阶段 2–4 并行推进。
@@ -529,3 +529,18 @@ import:
 ## 14. 待确认
 
 无。第 0 节各项已于 2026-10-21 确认。
+
+## 15. 实施状态与实现说明（2026-10-21）
+
+阶段 1–7 已实现并通过单元与集成测试，阶段 6a、8 在正式环境验证（结果见本节末尾）。与上文设计相比的实现选择：
+
+| 项 | 设计 | 实现 | 原因 |
+| --- | --- | --- | --- |
+| 生命周期接口 | 每个模块的 RPC | 挂在健康端口的 HTTP `/v1/lifecycle/status|command` 与 `moox-cli lifecycle` | 引擎只做出站连接、没有可调的 RPC；健康端口已有签名鉴权，沿用 |
+| 启动前检查 | 复用 `packages/doctor` | `packages/lifecycle` 的 `Check`（PASS / WARN / FAIL、失败项带处理办法） | doctor 的检查框架绑定部署与主机检查，对象级检查（集合、实例）用不上 |
+| 状态汇总 | 扩展 `healthz.State` | `/healthz` 的 `details.lifecycle` 精简快照，Monitor 解析后输出概览的 `system` | 不改变就绪布尔值的既有语义与告警 |
+| 依赖链暂停 | 数据源 → 因子集合 → 策略实例逐级传递 | 数据源 → 因子集合显式（集合检查失败自动暂停）；策略实例靠「没有新事件就没有新目标」隐式停下，策略侧自己的检查管实例自身 | 引擎不可被策略反向访问；漏掉的周期由追赶补算，过期目标被 Trade 按 `valid_until` 拒绝 |
+| 回放的 Trade 侧 | 专用 PAPER 账户、执行上下文改造实盘执行链路 | 独立的纸面账本会话（`t_replay_*`），共用费率、滑点口径 | 实盘执行链路绑定墙钟、交易所适配器与后台工人，改造有影响实盘的风险；独立账本从结构上保证不下单 |
+| 回放接口 | RPC | 因子引擎、策略、Trade 的健康端口 HTTP（`/v1/replay/*`） | 同上 |
+| `modules/replay` | 编排服务 | 编排在 `packages/seriesreplay`，`moox-replay` 与 `moox-cli replay` 共用 | 与导入（`packages/seriesimport`）一致，命令行与独立二进制两种用法 |
+| 内存自适应 | 初始化写入 `engine.yaml` | `moox-factor-engine tune [--write]` 按本机内存给建议并写入；`moox-cli` 的因子机探测报告展示内存预算 | 引擎的配置在引擎机器上，初始化时无法写入 |
