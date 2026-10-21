@@ -108,7 +108,7 @@ func TestSetIngestModeRequiresAnOnlineStreamAndMarksForce(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode(), "stream 离线时拒绝切到 stream")
 
 	_, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1"})
-	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Mode: "stream", Executor: "local"})
+	rsp, err = service.SetIngestMode(ctx, &pb.SetIngestModeReq{SpaceId: "crypto", Mode: "stream"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
 	require.Len(t, rsp.GetModes(), 2, "--space-id 表示该空间全部数据集")

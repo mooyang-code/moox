@@ -5224,7 +5224,7 @@ type SetIngestModeReq struct {
 	SpaceId   string `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
 	DatasetId string `protobuf:"bytes,2,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
 	Mode      string `protobuf:"bytes,3,opt,name=mode,proto3" json:"mode,omitempty"`
-	// executor 为空时：stream 保持原执行端（补采用），pull 默认 scf。
+	// executor 为空时：stream 默认 local（补采走同进程的本地执行端），pull 默认 scf。
 	Executor string `protobuf:"bytes,4,opt,name=executor,proto3" json:"executor,omitempty"`
 	Force    bool   `protobuf:"varint,5,opt,name=force,proto3" json:"force,omitempty"`
 }

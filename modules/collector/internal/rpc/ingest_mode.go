@@ -117,8 +117,9 @@ func (s *Service) SetIngestMode(ctx context.Context, req *pb.SetIngestModeReq) (
 	updates := make([]store.IngestMode, 0, len(targets))
 	for _, id := range targets {
 		next := store.IngestMode{SpaceID: spaceID, DatasetID: id, Mode: mode, Executor: executor, Force: req.GetForce()}
+		// 不指定执行端时：切到 stream 一并把补采执行端设为 local（本地执行端与推送同进程），切到 pull 用 scf。
 		if next.Executor == "" {
-			next.Executor = stored[id].Executor
+			next.Executor = store.ExecutorLocal
 			if mode == store.IngestPull {
 				next.Executor = store.ExecutorSCF
 			}

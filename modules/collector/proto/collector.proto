@@ -616,7 +616,7 @@ message SetIngestModeReq {
   string space_id = 1;
   string dataset_id = 2;
   string mode = 3;
-  // executor 为空时：stream 保持原执行端（补采用），pull 默认 scf。
+  // executor 为空时：stream 默认 local（补采走同进程的本地执行端），pull 默认 scf。
   string executor = 4;
   bool force = 5;
 }
