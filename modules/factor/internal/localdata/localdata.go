@@ -728,3 +728,21 @@ func (d *Data) Coverage(ctx context.Context, src seriesstore.Source) ([]Short, e
 	}
 	return short, nil
 }
+
+// BackfillSet 把集合源数据每个标的的本地历史从 Storage 补到最多 bars 根（只补本地最早一根之前、Storage 保留期内的部分）。
+// 不碰窗口：由引擎停止时的命令行使用。subjects 为空表示本地有数据的全部标的。
+func (d *Data) BackfillSet(ctx context.Context, set domain.EngineSet, subjects []string, bars int, progress func(done, total int)) (int, error) {
+	src := sourceOf(set.Set)
+	columns, err := d.cfg.Storage.ListColumns(ctx, src.SpaceID, src.DatasetID)
+	if err != nil {
+		return 0, fmt.Errorf("读取源数据集字段：%w", err)
+	}
+	spec := seriessync.Spec{Source: src, Fields: seriessync.FieldsFromColumns(columns), Lookback: maxLookback(set.Factors)}
+	if len(subjects) == 0 {
+		if subjects, err = d.cfg.Store.Subjects(src); err != nil {
+			return 0, err
+		}
+	}
+	written, err := d.syncer.Backfill(ctx, spec, subjects, bars, progress)
+	return len(written), err
+}

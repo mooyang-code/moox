@@ -9,7 +9,8 @@
 //	report   --replay <ID>   汇总权益、回撤、费用与成交
 //	delete   --replay <ID>   清理这次回放在 Trade 里的结果和本地记录
 //
-// 回放接口挂在各模块的健康检查端口上，鉴权密钥取自环境变量 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY。
+// 回放接口挂在各模块的健康检查端口上，鉴权密钥取自环境变量 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY；
+// 各模块的密钥不同时分别用 MOOX_FACTOR_/MOOX_STRATEGY_/MOOX_TRADE_HEALTH_AUTH_ACCESS_KEY、_SECRET_KEY 覆盖。
 package command
 
 import (
@@ -66,15 +67,20 @@ func (c *common) bind(fs *flag.FlagSet) {
 	fs.BoolVar(&c.asJSON, "json", false, "以 JSON 输出")
 }
 
-func (c *common) endpoint(url string) seriesreplay.Endpoint {
-	return seriesreplay.Endpoint{
-		URL: url, AuthVersion: os.Getenv("MOOX_HEALTH_AUTH_VERSION"),
-		AccessKey: os.Getenv("MOOX_HEALTH_AUTH_ACCESS_KEY"), SecretKey: os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY"),
+// endpoint 取模块的健康端口地址与鉴权密钥：先看该模块自己的环境变量 MOOX_<模块>_HEALTH_AUTH_ACCESS_KEY / _SECRET_KEY / _VERSION
+// （模块：FACTOR、STRATEGY、TRADE；各模块的健康密钥可以不同），没有时用共用的 MOOX_HEALTH_AUTH_*。
+func (c *common) endpoint(module, url string) seriesreplay.Endpoint {
+	get := func(suffix string) string {
+		if v := os.Getenv("MOOX_" + module + "_HEALTH_AUTH_" + suffix); v != "" {
+			return v
+		}
+		return os.Getenv("MOOX_HEALTH_AUTH_" + suffix)
 	}
+	return seriesreplay.Endpoint{URL: url, AuthVersion: get("VERSION"), AccessKey: get("ACCESS_KEY"), SecretKey: get("SECRET_KEY")}
 }
 
 func (c *common) trade() seriesreplay.TradeClient {
-	return seriesreplay.TradeClient{Endpoint: c.endpoint(c.tradeURL)}
+	return seriesreplay.TradeClient{Endpoint: c.endpoint("TRADE", c.tradeURL)}
 }
 
 func writeJSON(out io.Writer, v any) error {
@@ -121,8 +127,8 @@ func start(ctx context.Context, args []string, out io.Writer) error {
 	fmt.Fprintf(out, "回放 %s：因子集合 %s，策略实例 %s，区间 [%s, %s)\n", spec.ReplayID, spec.SetID, spec.InstanceID, spec.From, spec.To)
 	runner := &seriesreplay.Runner{
 		Store:    store,
-		Factor:   seriesreplay.FactorClient{Endpoint: c.endpoint(c.factorURL)},
-		Strategy: seriesreplay.StrategyClient{Endpoint: c.endpoint(c.strategyURL)},
+		Factor:   seriesreplay.FactorClient{Endpoint: c.endpoint("FACTOR", c.factorURL)},
+		Strategy: seriesreplay.StrategyClient{Endpoint: c.endpoint("STRATEGY", c.strategyURL)},
 		Trade:    c.trade(),
 		Logf:     func(format string, args ...any) { fmt.Fprintf(out, "提示："+format+"\n", args...) },
 	}

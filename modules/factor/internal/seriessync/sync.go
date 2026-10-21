@@ -540,3 +540,67 @@ func (s *Syncer) Reconcile(ctx context.Context, spec Spec, subjects []string, pr
 	res.Followed = follow.Applied
 	return res, nil
 }
+
+// Backfill 把标的在本地最早一根之前的历史从 Storage 补到最多 bars 根（以本地最新一根往前数；Storage 保留期内有多少补多少）。
+// 补上的区间与本地最早一根相接，写入时连续；Earliest 前移会自动登记失效重算。没有本地数据的标的不处理（由同步一次性拉取）。
+// 用于 Storage 保留期内的历史（回放、较长回看的因子）；保留期之外的历史用导入。返回有写入的标的。
+func (s *Syncer) Backfill(ctx context.Context, spec Spec, subjects []string, bars int, progress func(done, total int)) (map[string]seriesstore.WriteResult, error) {
+	step, err := seriesstore.Step(spec.Source.Freq)
+	if err != nil {
+		return nil, err
+	}
+	if bars < 1 {
+		return nil, errors.New("bars 必须为正数")
+	}
+	column := "close"
+	if len(spec.Fields) > 0 {
+		column = spec.Fields[0].Name
+	}
+	written := map[string]seriesstore.WriteResult{}
+	for i, subject := range subjects {
+		if err := ctx.Err(); err != nil {
+			return written, err
+		}
+		b, ok, err := s.Store.Bounds(spec.Source, subject)
+		if err != nil {
+			return written, err
+		}
+		if ok {
+			lo := b.Latest.Add(-time.Duration(bars-1) * step)
+			hi := b.Earliest
+			if lo.Before(hi) {
+				first, found, err := s.Storage.EarliestPeriod(ctx, spec.Source.SpaceID, spec.Source.DatasetID, spec.Source.Freq, []string{subject}, []string{column})
+				if err != nil {
+					return written, err
+				}
+				if found && first.After(lo) {
+					lo = first
+				}
+				if found && lo.Before(hi) {
+					frames, err := s.Storage.ReadWindow(ctx, storageio.ReadRequest{
+						SpaceID: spec.Source.SpaceID, DatasetID: spec.Source.DatasetID, Freq: spec.Source.Freq,
+						Subjects: []string{subject}, Start: lo, End: hi, Columns: spec.names(),
+					})
+					if err != nil {
+						return written, err
+					}
+					rows, err := FrameToColumns(spec.Fields, frames[subject])
+					if err != nil {
+						return written, err
+					}
+					if rows.Len() > 0 {
+						r, err := s.Store.WriteBatch(ctx, spec.Source, []seriesstore.SubjectWrite{{Subject: subject, From: lo, To: hi, Rows: rows}}, seriesstore.WriteOptions{FillGaps: true})
+						if err != nil {
+							return written, fmt.Errorf("%w: 补历史写入本地 %s/%s：%v", storageio.ErrInfra, spec.Source, subject, err)
+						}
+						written[subject] = r[0]
+					}
+				}
+			}
+		}
+		if progress != nil {
+			progress(i+1, len(subjects))
+		}
+	}
+	return written, nil
+}

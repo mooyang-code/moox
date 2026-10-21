@@ -456,3 +456,35 @@ func TestFollowLeavesHistoryBeyondStorageRetention(t *testing.T) {
 	require.Empty(t, res.Applied, "修正落在保留期之外：本地历史不动")
 	require.Equal(t, map[int]float64{0: 100, 1: 101, 2: 102, 3: 103}, closes(t, s, "A"))
 }
+
+// 历史回补：把本地最早一根之前、Storage 保留期内的历史补到指定根数，与本地相接；Earliest 前移自动记失效重算；
+// Storage 保留不够时有多少补多少。
+func TestBackfillExtendsHistoryBeforeLocalEarliest(t *testing.T) {
+	st := newFakeStorage()
+	st.put("A", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	s, spec := newSyncer(t, st) // Lookback 5
+	_, err := s.Baseline(context.Background(), src)
+	require.NoError(t, err)
+	_, err = s.Pull(context.Background(), spec, []string{"A"}, at(10))
+	require.NoError(t, err)
+	b, _, _ := s.Store.Bounds(src, "A")
+	require.Equal(t, at(5), b.Earliest)
+
+	written, err := s.Backfill(context.Background(), spec, []string{"A", "NOPE"}, 8, nil)
+	require.NoError(t, err)
+	require.Len(t, written, 1)
+	b, _, _ = s.Store.Bounds(src, "A")
+	require.Equal(t, at(2), b.Earliest, "以本地最新一根（t9）往前数 8 根：t2")
+	require.Equal(t, map[int]float64{2: 102, 3: 103, 4: 104, 5: 105, 6: 106, 7: 107, 8: 108, 9: 109}, closes(t, s, "A"))
+	pending, err := s.Store.Pending(src)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.Equal(t, "earliest_moved", pending[0].Reason)
+
+	// Storage 的保留起点是 t1：想补 20 根也只能补到 t1。
+	st.earliest["A"] = at(1)
+	_, err = s.Backfill(context.Background(), spec, []string{"A"}, 20, nil)
+	require.NoError(t, err)
+	b, _, _ = s.Store.Bounds(src, "A")
+	require.Equal(t, at(1), b.Earliest)
+}

@@ -68,11 +68,13 @@ func run(args []string, out io.Writer) error {
 		return reconcile(args, out)
 	case "tune":
 		return tune(args, out)
+	case "backfill":
+		return backfill(args, out)
 	case "version":
 		_, err := fmt.Fprintf(out, "moox-factor-engine %s %s %s\n", Version, GitCommit, BuildTime)
 		return err
 	default:
-		return fmt.Errorf("unknown command %q (serve, service, run-once, health, reset-gap-ledger, reconcile, tune, version)", command)
+		return fmt.Errorf("unknown command %q (serve, service, run-once, health, reset-gap-ledger, reconcile, backfill, tune, version)", command)
 	}
 }
 
@@ -272,6 +274,43 @@ func reconcile(args []string, out io.Writer) error {
 		Progress: func(done, total int) {
 			if done == total || done%50 == 0 {
 				fmt.Fprintf(os.Stderr, "对账进度 %d/%d\n", done, total)
+			}
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(out).Encode(summary)
+}
+
+// backfill 把集合源数据的本地历史从 Storage 回补到指定根数（Storage 保留期内有多少补多少）；引擎必须已停止。
+func backfill(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("backfill", flag.ContinueOnError)
+	app := fs.String("config", "config/engine.yaml", "factor engine config")
+	healthAddr := fs.String("health-addr", "127.0.0.1:11417", "引擎健康检查地址；能连上说明引擎还在运行，拒绝执行")
+	set := fs.String("set", "", "要回补的因子集合 ID")
+	bars := fs.Int("bars", 0, "每个标的本地连续历史的目标根数（以本地最新一根往前数）")
+	var subjects listFlag
+	fs.Var(&subjects, "subject", "只回补这个标的（可重复）；不写表示本地有数据的全部标的")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*set) == "" || *bars <= 0 {
+		return errors.New("--set 与 --bars 是必填项")
+	}
+	cfg, err := engine.Load(*app)
+	if err != nil {
+		return err
+	}
+	if conn, dialErr := net.DialTimeout("tcp", *healthAddr, time.Second); dialErr == nil {
+		_ = conn.Close()
+		return fmt.Errorf("因子引擎仍在运行（%s 可以连上）：先停止引擎再回补（本地存储同一时刻只能由一个进程打开）", *healthAddr)
+	}
+	summary, err := engine.Backfill(context.Background(), cfg, engine.BackfillRequest{
+		SetID: *set, Bars: *bars, Subjects: subjects,
+		Progress: func(done, total int) {
+			if done == total || done%50 == 0 {
+				fmt.Fprintf(os.Stderr, "回补进度 %d/%d\n", done, total)
 			}
 		},
 	})
