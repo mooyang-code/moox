@@ -37,7 +37,17 @@ type binanceSourceConfig struct {
 		Type        string `yaml:"type"`
 	} `yaml:"app"`
 	API     APIConfig      `yaml:"api"`
+	Stream  StreamConfig   `yaml:"stream"`
 	Storage map[string]any `yaml:"storage"`
+}
+
+// ResolveStreamConfig 读取 WS 推送的地址与限额（binance.yaml 的 stream 段），没写的字段用内置默认。
+func ResolveStreamConfig() (StreamConfig, error) {
+	source, err := loadBinanceSourceConfig()
+	if err != nil {
+		return StreamConfig{}, err
+	}
+	return source.Stream.withDefaults(), nil
 }
 
 func ResolveAPIConfig() (APIConfig, error) {

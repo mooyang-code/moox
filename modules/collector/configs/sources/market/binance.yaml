@@ -14,6 +14,18 @@ api:
   swap_base_urls:
     - "https://fapi.binance.com"
 
+# WS 推送（collector-stream）：现货 kline、合约连续合约 K 线（只在 /market 路由）。
+stream:
+  spot_endpoints:
+    - "wss://stream.binance.com:9443/stream"
+    - "wss://stream.binance.com:443/stream"
+  swap_endpoints:
+    - "wss://fstream.binance.com/market/stream"
+  streams_per_conn: 1000
+  streams_per_message: 100
+  messages_per_second: 5
+  max_conn_age_hours: 24
+
 storage:
   bindings:
     spot:

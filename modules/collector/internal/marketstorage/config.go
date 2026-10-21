@@ -37,7 +37,9 @@ type sourceConfig struct {
 	// API contains provider-specific values that are not consumed by the
 	// storage adapter. Keep it structurally permissive because providers can
 	// declare scalar endpoints as well as ordered endpoint lists.
-	API     map[string]any `yaml:"api"`
+	API map[string]any `yaml:"api"`
+	// Stream 是 WS 推送的地址与限额，由数据源适配器读取。
+	Stream  map[string]any `yaml:"stream"`
 	Storage struct {
 		Bindings map[string]StorageBinding `yaml:"bindings"`
 	} `yaml:"storage"`
