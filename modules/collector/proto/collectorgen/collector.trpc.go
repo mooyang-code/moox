@@ -203,6 +203,12 @@ type CollectMgrService interface {
 	GetIngestMode(ctx context.Context, req *GetIngestModeReq) (*GetIngestModeRsp, error)
 
 	SetIngestMode(ctx context.Context, req *SetIngestModeReq) (*SetIngestModeRsp, error)
+	// SetSubjectExclusions 采集名单干预：排除的标的从下一份采集计划里去掉（交接进行中时等交接完成），到期自动恢复。
+	SetSubjectExclusions(ctx context.Context, req *SetSubjectExclusionsReq) (*SetSubjectExclusionsRsp, error)
+
+	ClearSubjectExclusions(ctx context.Context, req *ClearSubjectExclusionsReq) (*ClearSubjectExclusionsRsp, error)
+
+	ListSubjectExclusions(ctx context.Context, req *ListSubjectExclusionsReq) (*ListSubjectExclusionsRsp, error)
 }
 
 func CollectMgrService_GetTaskList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -673,6 +679,60 @@ func CollectMgrService_SetIngestMode_Handler(svr interface{}, ctx context.Contex
 	return rsp, nil
 }
 
+func CollectMgrService_SetSubjectExclusions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetSubjectExclusionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).SetSubjectExclusions(ctx, reqbody.(*SetSubjectExclusionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ClearSubjectExclusions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ClearSubjectExclusionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ClearSubjectExclusions(ctx, reqbody.(*ClearSubjectExclusionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_ListSubjectExclusions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListSubjectExclusionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).ListSubjectExclusions(ctx, reqbody.(*ListSubjectExclusionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CollectMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.collector.CollectMgr",
@@ -781,6 +841,18 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.collector.CollectMgr/SetIngestMode",
 			Func: CollectMgrService_SetIngestMode_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/SetSubjectExclusions",
+			Func: CollectMgrService_SetSubjectExclusions_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ClearSubjectExclusions",
+			Func: CollectMgrService_ClearSubjectExclusions_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/ListSubjectExclusions",
+			Func: CollectMgrService_ListSubjectExclusions_Handler,
 		},
 	},
 }
@@ -900,6 +972,17 @@ func (s *UnimplementedCollectMgr) GetIngestMode(ctx context.Context, req *GetIng
 }
 func (s *UnimplementedCollectMgr) SetIngestMode(ctx context.Context, req *SetIngestModeReq) (*SetIngestModeRsp, error) {
 	return nil, errors.New("rpc SetIngestMode of service CollectMgr is not implemented")
+}
+
+// SetSubjectExclusions 采集名单干预：排除的标的从下一份采集计划里去掉（交接进行中时等交接完成），到期自动恢复。
+func (s *UnimplementedCollectMgr) SetSubjectExclusions(ctx context.Context, req *SetSubjectExclusionsReq) (*SetSubjectExclusionsRsp, error) {
+	return nil, errors.New("rpc SetSubjectExclusions of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) ClearSubjectExclusions(ctx context.Context, req *ClearSubjectExclusionsReq) (*ClearSubjectExclusionsRsp, error) {
+	return nil, errors.New("rpc ClearSubjectExclusions of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) ListSubjectExclusions(ctx context.Context, req *ListSubjectExclusionsReq) (*ListSubjectExclusionsRsp, error) {
+	return nil, errors.New("rpc ListSubjectExclusions of service CollectMgr is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -1074,6 +1157,12 @@ type CollectMgrClientProxy interface {
 	GetIngestMode(ctx context.Context, req *GetIngestModeReq, opts ...client.Option) (rsp *GetIngestModeRsp, err error)
 
 	SetIngestMode(ctx context.Context, req *SetIngestModeReq, opts ...client.Option) (rsp *SetIngestModeRsp, err error)
+	// SetSubjectExclusions 采集名单干预：排除的标的从下一份采集计划里去掉（交接进行中时等交接完成），到期自动恢复。
+	SetSubjectExclusions(ctx context.Context, req *SetSubjectExclusionsReq, opts ...client.Option) (rsp *SetSubjectExclusionsRsp, err error)
+
+	ClearSubjectExclusions(ctx context.Context, req *ClearSubjectExclusionsReq, opts ...client.Option) (rsp *ClearSubjectExclusionsRsp, err error)
+
+	ListSubjectExclusions(ctx context.Context, req *ListSubjectExclusionsReq, opts ...client.Option) (rsp *ListSubjectExclusionsRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -1599,6 +1688,66 @@ func (c *CollectMgrClientProxyImpl) SetIngestMode(ctx context.Context, req *SetI
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SetIngestModeRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) SetSubjectExclusions(ctx context.Context, req *SetSubjectExclusionsReq, opts ...client.Option) (*SetSubjectExclusionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/SetSubjectExclusions")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("SetSubjectExclusions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SetSubjectExclusionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ClearSubjectExclusions(ctx context.Context, req *ClearSubjectExclusionsReq, opts ...client.Option) (*ClearSubjectExclusionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ClearSubjectExclusions")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ClearSubjectExclusions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ClearSubjectExclusionsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) ListSubjectExclusions(ctx context.Context, req *ListSubjectExclusionsReq, opts ...client.Option) (*ListSubjectExclusionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ListSubjectExclusions")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("ListSubjectExclusions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListSubjectExclusionsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

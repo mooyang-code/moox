@@ -185,10 +185,11 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 func TestExternalPrincipalWhitelistIsExact(t *testing.T) {
 	c := mustCatalog(t)
 	want := map[string][]Permission{
-		"scf-collector":  {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"CommitTimeSeriesBatch", "UpsertFields"}}},
-		"factor-engine":  {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows", "WriteFactorRows", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"}}, {Service: "trpc.moox.storage.Metadata", Methods: []string{"GetDataset", "ListDatasetColumns", "ListDatasetSubjects"}}, {Service: "trpc.moox.factor.FactorEngine", Methods: []string{"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress"}}},
-		"archive-worker": {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows"}}, {Service: "trpc.moox.storage.Metadata", Methods: []string{"GetDataset", "ListDatasetColumns"}}, {Service: "trpc.moox.archive.ArchiveWorker", Methods: []string{"ArchiveWorkerHeartbeat", "PullArchiveRun", "ReportArchiveRunProgress", "CompleteArchiveRun"}}},
-		"moox-skill":     {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows"}}},
+		"scf-collector":      {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"CommitTimeSeriesBatch", "UpsertFields"}}},
+		"factor-engine":      {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows", "WriteFactorRows", "ReportFactorPeriodComputed", "GetFactorPeriodComputed"}}, {Service: "trpc.moox.storage.Metadata", Methods: []string{"GetDataset", "ListDatasetColumns", "ListDatasetSubjects"}}, {Service: "trpc.moox.factor.FactorEngine", Methods: []string{"SyncEngineCatalog", "EngineHeartbeat", "PullRecalcJob", "ReportRecalcProgress"}}},
+		"archive-worker":     {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows"}}, {Service: "trpc.moox.storage.Metadata", Methods: []string{"GetDataset", "ListDatasetColumns"}}, {Service: "trpc.moox.archive.ArchiveWorker", Methods: []string{"ArchiveWorkerHeartbeat", "PullArchiveRun", "ReportArchiveRunProgress", "CompleteArchiveRun"}}},
+		"moox-skill":         {{Service: "trpc.moox.storage.PrimaryStore", Methods: []string{"ReadTimeSeriesRows"}}},
+		"collector-operator": {{Service: "trpc.moox.collector.CollectMgr", Methods: []string{"SetSubjectExclusions", "ClearSubjectExclusions", "ListSubjectExclusions", "SyncSubjects"}}},
 	}
 	if len(c.Principals) != len(want) {
 		t.Fatal("unexpected principal")

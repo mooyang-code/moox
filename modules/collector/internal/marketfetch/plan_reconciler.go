@@ -51,6 +51,11 @@ type IngestModeSource interface {
 	ClearForce(context.Context, string) error
 }
 
+// SubjectExclusionSource 读取采集名单排除（store.SubjectExclusionRepository）。
+type SubjectExclusionSource interface {
+	Active(context.Context, string, time.Time) ([]store.SubjectExclusion, error)
+}
+
 // StreamWorkerSource 读取 collector-stream 的心跳（store.StreamWorkerRepository）。
 type StreamWorkerSource interface {
 	Get(context.Context, string) (*store.StreamWorker, error)
@@ -168,6 +173,8 @@ type PlanReconciler struct {
 	DefaultMode DatasetMode
 	// Workers 读取推送与本地执行端（collector-stream）的确认。
 	Workers StreamWorkerSource
+	// Exclusions 是采集名单排除：期望状态去掉排除的标的；为空表示没有排除。
+	Exclusions SubjectExclusionSource
 	// Operations 限制同时进行的 SCF 配置操作（各空间共用）；为空表示不限制。
 	Operations chan struct{}
 	// Preflight 在创建新计划前执行（例如 stockcn 的公共日历覆盖期检查）；返回错误则本轮不创建新计划，已有计划照常续跑。
@@ -368,6 +375,14 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	groups, err := r.Groups.groups(ctx, r.SpaceID)
 	if err != nil {
 		return r.fail("rules", err)
+	}
+	// 排除名单叠加在标签成员之上；它的变化与标的变更一样生成新计划（已打开的计划，包括进行中的交接，先推进完）。
+	if r.Exclusions != nil {
+		exclusions, err := r.Exclusions.Active(ctx, r.SpaceID, r.now())
+		if err != nil {
+			return r.fail("store", fmt.Errorf("read subject exclusions: %w", err))
+		}
+		groups = excludeSubjects(groups, exclusions)
 	}
 	managed, err := r.managedTasks(ctx)
 	if err != nil {
@@ -941,6 +956,56 @@ func (r *PlanReconciler) datasetModes(ctx context.Context, groups []TaskGroup, p
 		}
 	}
 	return modes, forced, nil
+}
+
+// excludeSubjects 从采集组里去掉排除的标的；标的全被排除的组不再采集。
+func excludeSubjects(groups []TaskGroup, exclusions []store.SubjectExclusion) []TaskGroup {
+	if len(exclusions) == 0 {
+		return groups
+	}
+	result := make([]TaskGroup, 0, len(groups))
+	for _, group := range groups {
+		excluded := map[string]bool{}
+		for _, exclusion := range exclusions {
+			if exclusion.Excludes(group.MarketType) {
+				excluded[exclusion.SubjectID] = true
+			}
+		}
+		subjects := make([]string, 0, len(group.Subjects))
+		for _, subject := range group.Subjects {
+			if !excluded[strings.ToUpper(subject)] {
+				subjects = append(subjects, subject)
+			}
+		}
+		if len(subjects) == len(group.Subjects) {
+			result = append(result, group)
+			continue
+		}
+		if len(subjects) == 0 {
+			continue
+		}
+		group.Subjects = subjects
+		group.ExternalSymbols = keepKeys(group.ExternalSymbols, subjects)
+		group.Pairs = keepKeys(group.Pairs, subjects)
+		result = append(result, group)
+	}
+	return result
+}
+
+func keepKeys(values map[string]string, keys []string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	kept := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if value, ok := values[key]; ok {
+			kept[key] = value
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
 }
 
 // handoffPending 判断期望状态里有已生效的数据集换了执行端。

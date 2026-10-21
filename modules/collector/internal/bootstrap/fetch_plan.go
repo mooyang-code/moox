@@ -86,6 +86,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	}
 	process.beforeClose = append(process.beforeClose, func() error { backfiller.Wait(); return nil })
 	svc.SetKlineOps(backfiller)
+	svc.SetActivityLogger(invoker)
 	manager := &marketfetch.PlanManager{
 		Configured: configured,
 		Spaces: func(ctx context.Context) ([]string, error) {
@@ -131,6 +132,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				Store: dbm.FetchPlans(), Storage: registrar, Cloud: invoker, Access: cfg.scfPlanAccessEnvironment, Lateness: results,
 				Activity: invoker, Metrics: metrics, Operations: operations,
 				Modes: dbm.IngestModes(), DefaultMode: cfg.SCFPlan.defaultModeFor(spaceID), Workers: dbm.StreamWorkers(),
+				Exclusions: dbm.SubjectExclusions(),
 			}
 			reconcilers.Store(spaceID, reconciler)
 			return reconciler, nil

@@ -660,6 +660,9 @@ components:
           - SetFetchPlanPaused
           - GetIngestMode
           - SetIngestMode
+          - SetSubjectExclusions
+          - ClearSubjectExclusions
+          - ListSubjectExclusions
         read_only_methods:
           - GetTaskList
           - GetTaskDetail
@@ -672,6 +675,7 @@ components:
           - ListKlineBackfills
           - GetCollectorStatus
           - GetIngestMode
+          - ListSubjectExclusions
         acl:
           - methods:
               - GetTaskList
@@ -705,6 +709,14 @@ components:
               - SetFetchPlanPaused
               - SetIngestMode
             callers:
+              - moox-cli
+          # 采集名单干预：控制台、moox-cli；旁路程序经 Access 用外部身份 collector-operator 调用（见 principals）。
+          - methods:
+              - SetSubjectExclusions
+              - ClearSubjectExclusions
+              - ListSubjectExclusions
+            callers:
+              - console
               - moox-cli
           - methods:
               - GetTaskResultInventory
@@ -1978,6 +1990,15 @@ principals:
           - PullArchiveRun
           - ReportArchiveRunProgress
           - CompleteArchiveRun
+  # 采集名单干预的旁路程序（不在部署拓扑里）：只放行排除名单三个方法与 SyncSubjects。
+  - id: collector-operator
+    allow:
+      - service: trpc.moox.collector.CollectMgr
+        methods:
+          - SetSubjectExclusions
+          - ClearSubjectExclusions
+          - ListSubjectExclusions
+          - SyncSubjects
   - id: moox-skill
     allow:
       - service: trpc.moox.storage.PrimaryStore

@@ -110,7 +110,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":   {174, []string{"access", "admin", "cloudnode", "collector", "collector-stream", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "85c3a7857740fb93d4032bbc25c8f6c3d95d13d20e6afd9612a509b2f84c4af6"},
+		"control":   {177, []string{"access", "admin", "cloudnode", "collector", "collector-stream", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "160ff4e0351e8debbc029bdb0144045059c22d57d2087d5468c10c7263d3b6ec"},
 		"storage":   {95, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "bc98b86b2c5582a48e69c90e78882d3ecb05e9c8bb940e57fdb2ae56c58f1a09"},
 		"compute-1": {38, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "f4c9039d40728218f4158c1b7ebd13b57c79e858ab14071b70900685eb0b8ce7"},
 	}
@@ -156,7 +156,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 			}
 		}
 		for _, caller := range compiled.VerificationCallers {
-			if strings.Contains(caller, "*") || slices.Contains([]string{"scf-collector", "factor-engine", "archive-worker", "moox-skill"}, caller) {
+			if strings.Contains(caller, "*") || slices.Contains([]string{"scf-collector", "factor-engine", "archive-worker", "moox-skill", "collector-operator"}, caller) {
 				t.Fatalf("unexpanded or external verification scope %q", caller)
 			}
 		}

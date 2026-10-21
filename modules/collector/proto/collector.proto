@@ -629,6 +629,59 @@ message SetIngestModeRsp {
   int64 plan_id = 4;
 }
 
+// SubjectExclusion 是采集名单里的一条排除：叠加在标签成员之上，只作用于采集计划。
+message SubjectExclusion {
+  string space_id = 1;
+  string subject_id = 2;
+  // market_type 为空表示该空间所有市场。
+  string market_type = 3;
+  string reason = 4;
+  // operator 是设置人（moox-cli 填本机用户与主机，旁路程序填自己的名字）。
+  string operator = 5;
+  // created_at、expires_at 为 RFC3339；expires_at 为空表示不过期。
+  string created_at = 6;
+  string expires_at = 7;
+}
+
+// SetSubjectExclusions 按空间加入一批排除；同一标的重复设置时更新原因与到期时间。
+message SetSubjectExclusionsReq {
+  string space_id = 1;
+  repeated string subject_ids = 2;
+  string market_type = 3;
+  string reason = 4;
+  string operator = 5;
+  // expires_at 为 RFC3339，空表示不过期；必须晚于当前时间。
+  string expires_at = 6;
+}
+
+message SetSubjectExclusionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated SubjectExclusion exclusions = 2;
+}
+
+// ClearSubjectExclusions 按空间与标的移除排除；market_type 为空时移除该标的全部市场的排除。
+message ClearSubjectExclusionsReq {
+  string space_id = 1;
+  repeated string subject_ids = 2;
+  string market_type = 3;
+  string operator = 4;
+}
+
+message ClearSubjectExclusionsRsp {
+  common.RetInfo ret_info = 1;
+  int64 removed = 2;
+}
+
+// ListSubjectExclusions 列出空间当前生效的排除。
+message ListSubjectExclusionsReq {
+  string space_id = 1;
+}
+
+message ListSubjectExclusionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated SubjectExclusion exclusions = 2;
+}
+
 // StreamConnStatus 是 collector-stream 一条 WS 连接的状态。
 message StreamConnStatus {
   string market = 1;
@@ -791,4 +844,8 @@ service CollectMgr {
   rpc SetFetchPlanPaused(SetFetchPlanPausedReq) returns (SetFetchPlanPausedRsp);
   rpc GetIngestMode(GetIngestModeReq) returns (GetIngestModeRsp);
   rpc SetIngestMode(SetIngestModeReq) returns (SetIngestModeRsp);
+  // 采集名单干预：排除的标的从下一份采集计划里去掉（交接进行中时等交接完成），到期自动恢复。
+  rpc SetSubjectExclusions(SetSubjectExclusionsReq) returns (SetSubjectExclusionsRsp);
+  rpc ClearSubjectExclusions(ClearSubjectExclusionsReq) returns (ClearSubjectExclusionsRsp);
+  rpc ListSubjectExclusions(ListSubjectExclusionsReq) returns (ListSubjectExclusionsRsp);
 }

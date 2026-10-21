@@ -135,7 +135,7 @@ func TestEnsureAllAndVerificationIdentityIsolation(t *testing.T) {
 	ctx := context.Background()
 	first, err := store.EnsureAll(ctx)
 	require.NoError(t, err)
-	require.Len(t, first, 26) // 18 components + console/CLI + 4 external + 2 hosts.
+	require.Len(t, first, 27) // 18 components + console/CLI + 5 external + 2 hosts.
 	second, err := store.EnsureAll(ctx)
 	require.NoError(t, err)
 	require.Equal(t, first, second)
@@ -150,7 +150,7 @@ func TestEnsureAllAndVerificationIdentityIsolation(t *testing.T) {
 	require.NotEqual(t, current.Credentials().Secret, string(internal[0].Secret))
 	external, err := store.ExternalVerification(ctx)
 	require.NoError(t, err)
-	require.Len(t, external, 4)
+	require.Len(t, external, 5)
 	for _, key := range external {
 		require.True(t, store.isExternal(key.Caller))
 		require.NotContains(t, fmt.Sprintf("%#v", key), string(key.Secret))

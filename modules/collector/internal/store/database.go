@@ -27,6 +27,7 @@ type Store struct {
 	fetchPlans *FetchPlanRepository
 	ingest     *IngestModeRepository
 	workers    *StreamWorkerRepository
+	exclusions *SubjectExclusionRepository
 	backfill   *BackfillRepository
 }
 
@@ -115,6 +116,7 @@ func Open(opts *Options) (*Store, error) {
 	s.fetchPlans = NewFetchPlanRepository(db)
 	s.ingest = NewIngestModeRepository(db)
 	s.workers = NewStreamWorkerRepository(db)
+	s.exclusions = NewSubjectExclusionRepository(db)
 	s.backfill = NewBackfillRepository(db)
 	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
@@ -167,6 +169,14 @@ func (s *Store) StreamWorkers() *StreamWorkerRepository {
 		return nil
 	}
 	return s.workers
+}
+
+// SubjectExclusions returns the collection subject exclusion repository.
+func (s *Store) SubjectExclusions() *SubjectExclusionRepository {
+	if s == nil {
+		return nil
+	}
+	return s.exclusions
 }
 
 // Backfill returns the K-line backfill job repository.

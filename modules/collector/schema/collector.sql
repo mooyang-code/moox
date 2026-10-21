@@ -427,3 +427,16 @@ CREATE TABLE IF NOT EXISTS t_collector_stream_workers (
     c_heartbeat_at DATETIME NOT NULL,
     PRIMARY KEY (c_space_id)
 );
+
+-- 采集名单排除：叠加在标签成员之上，只作用于采集计划（标签成员与标的属性照常同步）；
+-- c_market_type 为空表示该空间所有市场，c_expires_at 为空表示不过期，到期后自动失效。
+CREATE TABLE IF NOT EXISTS t_collector_subject_exclusions (
+    c_space_id TEXT NOT NULL,
+    c_subject_id TEXT NOT NULL,
+    c_market_type TEXT NOT NULL DEFAULT '',
+    c_reason TEXT NOT NULL DEFAULT '',
+    c_caller TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_expires_at DATETIME,
+    PRIMARY KEY (c_space_id, c_subject_id, c_market_type)
+);
