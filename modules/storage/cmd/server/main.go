@@ -1019,7 +1019,10 @@ type dataNodeProxyAdapter struct {
 	nodeID      string
 }
 
-var _ pb.DataNodePeriodRuntimeService = (*dataNodeProxyAdapter)(nil)
+var (
+	_ pb.DataNodePeriodRuntimeService = (*dataNodeProxyAdapter)(nil)
+	_ pb.DataNodeRangeRuntimeService  = (*dataNodeProxyAdapter)(nil)
+)
 
 func newDataNodeProxyAdapter(opts ...client.Option) *dataNodeProxyAdapter {
 	return &dataNodeProxyAdapter{
@@ -1071,6 +1074,13 @@ func (a *dataNodeProxyAdapter) CountTimeSeriesRows(ctx context.Context, req *pb.
 		return nil, errors.New("DataNode range runtime is unavailable")
 	}
 	return a.rangeProxy.CountTimeSeriesRows(ctx, req)
+}
+
+func (a *dataNodeProxyAdapter) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error) {
+	if a == nil || a.rangeProxy == nil {
+		return nil, errors.New("DataNode range runtime is unavailable")
+	}
+	return a.rangeProxy.ReadDatasetChanges(ctx, req)
 }
 
 func (a *dataNodeProxyAdapter) UpsertFields(ctx context.Context, req *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
