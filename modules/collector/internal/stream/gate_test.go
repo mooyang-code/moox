@@ -285,3 +285,39 @@ func TestGateStopsCommittingFromTheEffectivePeriodOfAnEmptyCopy(t *testing.T) {
 	h.advance(10 * time.Second)
 	require.Len(t, h.committer.calls(), 1, "P 起没有期望标的，不建立周期也不提交")
 }
+
+type namedCommitter struct {
+	mu    sync.Mutex
+	fail  map[string]bool
+	order []string
+}
+
+func (c *namedCommitter) CommitPeriod(_ context.Context, batch marketfetch.KlineBatch) (marketfetch.KlineCommitResult, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.order = append(c.order, batch.BatchID)
+	if c.fail[batch.BatchID] {
+		return marketfetch.KlineCommitResult{}, context.DeadlineExceeded
+	}
+	return marketfetch.KlineCommitResult{}, nil
+}
+
+// 整点 1h 先收齐、提交失败重试期间 1m 到达：1m 在 1h 的下一次重试之前提交，不被长截止任务的重试占住。
+func TestCommitQueueRetryDoesNotHoldBackAnEarlierDeadline(t *testing.T) {
+	clock := NewFakeClock(closeAt)
+	queue := NewCommitQueue(clock)
+	committer := &namedCommitter{fail: map[string]bool{"1h": true}}
+	done := make(chan string, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go queue.Run(ctx)
+	queue.submit(&commitJob{committer: committer, batch: marketfetch.KlineBatch{BatchID: "1h"}, deadline: closeAt.Add(8 * time.Second), step: time.Hour, done: func(commitOutcome) { done <- "1h" }})
+	require.Eventually(t, func() bool { committer.mu.Lock(); defer committer.mu.Unlock(); return len(committer.order) == 1 }, time.Second, time.Millisecond)
+	queue.submit(&commitJob{committer: committer, batch: marketfetch.KlineBatch{BatchID: "1m"}, deadline: closeAt.Add(5 * time.Second), step: time.Minute, done: func(commitOutcome) { done <- "1m" }})
+	require.Equal(t, "1m", <-done)
+	committer.mu.Lock()
+	require.Equal(t, []string{"1h", "1m"}, committer.order)
+	committer.mu.Unlock()
+	clock.Advance(commitRetryInterval)
+	require.Eventually(t, func() bool { committer.mu.Lock(); defer committer.mu.Unlock(); return len(committer.order) == 3 }, time.Second, time.Millisecond)
+}

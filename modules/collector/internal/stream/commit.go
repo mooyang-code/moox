@@ -28,6 +28,9 @@ type commitJob struct {
 	step      time.Duration
 	done      func(commitOutcome)
 	index     int
+	// notBefore 是失败后下一次尝试的最早时刻；outcome 累计各次尝试。
+	notBefore time.Time
+	outcome   commitOutcome
 }
 
 type commitOutcome struct {
@@ -79,13 +82,27 @@ func (q *CommitQueue) submit(job *commitJob) {
 	notify(q.wake)
 }
 
-func (q *CommitQueue) next() *commitJob {
+// next 取出可以执行的任务：已到重试时刻的任务里截止最早的；都没到时返回最早的重试时刻。
+func (q *CommitQueue) next(now time.Time) (*commitJob, time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.jobs.Len() == 0 {
-		return nil
+	var best *commitJob
+	var wakeAt time.Time
+	for _, job := range q.jobs {
+		if job.notBefore.After(now) {
+			if wakeAt.IsZero() || job.notBefore.Before(wakeAt) {
+				wakeAt = job.notBefore
+			}
+			continue
+		}
+		if best == nil || q.jobs.Less(job.index, best.index) {
+			best = job
+		}
 	}
-	return heap.Pop(&q.jobs).(*commitJob)
+	if best != nil {
+		heap.Remove(&q.jobs, best.index)
+	}
+	return best, wakeAt
 }
 
 // Pending 返回排队中的任务数。
@@ -95,52 +112,64 @@ func (q *CommitQueue) Pending() int {
 	return q.jobs.Len()
 }
 
-// Run 执行队列直到 ctx 结束。
+// Run 执行队列直到 ctx 结束。每次只做一次尝试：失败的任务按重试间隔放回队列重新排队，
+// 期间截止更早的任务（例如整点 1h 提交失败时到达的 1m）先执行，不会被长截止任务的重试占住。
 func (q *CommitQueue) Run(ctx context.Context) {
 	for {
-		job := q.next()
+		job, wakeAt := q.next(q.clock.Now())
 		if job == nil {
+			var timer Stopper
+			retry := make(chan struct{})
+			if !wakeAt.IsZero() {
+				timer = q.clock.AfterFunc(wakeAt.Sub(q.clock.Now()), func() { close(retry) })
+			}
 			select {
 			case <-q.wake:
-				continue
+			case <-retry:
 			case <-ctx.Done():
+			}
+			if timer != nil {
+				timer.Stop()
+			}
+			if ctx.Err() != nil {
 				return
 			}
+			continue
 		}
-		job.done(q.execute(ctx, job))
+		if q.attempt(ctx, job) {
+			job.outcome.finished = q.clock.Now()
+			job.done(job.outcome)
+			continue
+		}
+		job.notBefore = q.clock.Now().Add(commitRetryInterval)
+		q.submit(job)
 	}
 }
 
-func (q *CommitQueue) execute(ctx context.Context, job *commitJob) commitOutcome {
-	outcome := commitOutcome{started: q.clock.Now()}
-	for {
-		outcome.attempts++
-		remaining := job.deadline.Sub(q.clock.Now())
-		if remaining <= 0 {
-			if outcome.err == nil {
-				outcome.err = context.DeadlineExceeded
-			}
-			break
-		}
-		timeout := remaining
-		if q.Timeout > 0 && q.Timeout < timeout {
-			timeout = q.Timeout
-		}
-		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
-		outcome.result, outcome.err = job.committer.CommitPeriod(attemptCtx, job.batch)
-		cancel()
-		if outcome.err == nil || ctx.Err() != nil {
-			break
-		}
-		if !q.clock.Now().Add(commitRetryInterval).Before(job.deadline.Add(-commitStopBefore)) {
-			break
-		}
-		if !sleepClock(ctx, q.clock, commitRetryInterval) {
-			break
-		}
+// attempt 做一次提交，返回任务是否结束（成功、到截止、或不再有重试的时间）。
+func (q *CommitQueue) attempt(ctx context.Context, job *commitJob) bool {
+	if job.outcome.started.IsZero() {
+		job.outcome.started = q.clock.Now()
 	}
-	outcome.finished = q.clock.Now()
-	return outcome
+	remaining := job.deadline.Sub(q.clock.Now())
+	if remaining <= 0 {
+		if job.outcome.err == nil {
+			job.outcome.err = context.DeadlineExceeded
+		}
+		return true
+	}
+	job.outcome.attempts++
+	timeout := remaining
+	if q.Timeout > 0 && q.Timeout < timeout {
+		timeout = q.Timeout
+	}
+	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+	job.outcome.result, job.outcome.err = job.committer.CommitPeriod(attemptCtx, job.batch)
+	cancel()
+	if job.outcome.err == nil || ctx.Err() != nil {
+		return true
+	}
+	return !q.clock.Now().Add(commitRetryInterval).Before(job.deadline.Add(-commitStopBefore))
 }
 
 // sleepClock 按注入的时钟等待（假时钟由测试推进）。
