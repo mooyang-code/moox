@@ -748,7 +748,7 @@ func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchP
 		}
 	}
 	if len(streamItems) > 0 {
-		if err := r.confirmStream(ctx, record, progress, streamItems, final); err != nil {
+		if err := r.confirmStream(ctx, record, content, progress, streamItems, final); err != nil {
 			return false, err
 		}
 	}
@@ -833,8 +833,10 @@ func (r *PlanReconciler) allConfirmed(content *FetchPlanContent, progress *Fetch
 }
 
 // confirmStream 把推送与本地执行端的项“下发”到这一阶段：记下要求的阶段（collector-stream 心跳拿到新版本后拉取），
-// 看到实例回报已应用该记录的这一阶段（或更后的阶段）才算确认。--force 时不等确认。
-func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchPlanRecord, progress *FetchPlanProgress, names []string, final bool) error {
+// 看到实例回报已应用该记录的这一阶段（或更后的阶段）才算确认。
+// --force：带 --force 创建的计划只在 collector-stream 是旧执行端（没有数据集正切到推送或本地执行端）时不等确认，新执行端仍要确认；
+// 计划打开之后才执行的 --force（库里留下了标记）说明这份计划卡在失联的 collector-stream 上，不再等它确认。
+func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress, names []string, final bool) error {
 	stage, confirmed := StreamStageTransition, &progress.Transitioned
 	if final {
 		stage, confirmed = StreamStageFinal, &progress.Finalized
@@ -845,7 +847,14 @@ func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchP
 			return err
 		}
 	}
-	ok := progress.Forced
+	ok := progress.Forced && !movesToWorker(content)
+	if !ok && !progress.Forced {
+		later, err := r.forceRequested(ctx)
+		if err != nil {
+			return err
+		}
+		ok = later
+	}
 	if !ok && r.Workers != nil {
 		worker, err := r.Workers.Get(ctx, r.SpaceID)
 		if err != nil {
@@ -865,6 +874,34 @@ func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchP
 		progress.mark(confirmed, name)
 	}
 	return r.saveProgress(ctx, record, progress, record.Status, record.LastError)
+}
+
+// forceRequested 判断计划打开之后有没有执行过 --force：标记由切换命令原子写进采集方式表，
+// 对账器在这里读取，不与对账器保存的进度互相覆盖。
+func (r *PlanReconciler) forceRequested(ctx context.Context) (bool, error) {
+	if r.Modes == nil {
+		return false, nil
+	}
+	modes, err := r.Modes.List(ctx, r.SpaceID)
+	if err != nil {
+		return false, r.fail("store", err)
+	}
+	for _, mode := range modes {
+		if mode.Force {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// movesToWorker 判断计划里有数据集正从别的执行端切到推送或本地执行端（collector-stream 是新执行端）。
+func movesToWorker(content *FetchPlanContent) bool {
+	for _, change := range content.Datasets {
+		if change.Changed && change.OldIngest != "" && change.IngestOrSCF() != PlanExecutorSCF {
+			return true
+		}
+	}
+	return false
 }
 
 func streamStageRank(stage string) int {

@@ -129,12 +129,6 @@ func (s *Service) SetIngestMode(ctx context.Context, req *pb.SetIngestModeReq) (
 	if err := s.persistence.IngestModes().Set(ctx, updates); err != nil {
 		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	if req.GetForce() {
-		// 已打开的计划如果正等着失联的推送或本地执行端确认，也不再等：按它已登记的 hash 与生效周期推进完成，再开始交接。
-		if err := marketfetch.MarkOpenPlanForced(ctx, s.persistence.FetchPlans(), spaceID); err != nil {
-			return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-	}
 	modes, err := s.ingestModes(ctx, spaceID, datasetID)
 	if err != nil {
 		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil

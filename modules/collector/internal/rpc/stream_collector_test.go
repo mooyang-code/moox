@@ -124,8 +124,7 @@ func TestSetIngestModeRequiresAnOnlineStreamAndMarksForce(t *testing.T) {
 	modes, _ := db.IngestModes().List(ctx, "crypto")
 	require.Equal(t, store.IngestMode{SpaceID: "crypto", DatasetID: "ds1", Mode: "pull", Executor: "scf", Force: true, UpdatedAt: modes["ds1"].UpdatedAt}, modes["ds1"])
 	record, _ := db.FetchPlans().Open(ctx, "crypto")
-	progress, _ := marketfetch.DecodeFetchPlanProgress(record.Progress)
-	require.True(t, progress.Forced)
+	require.Equal(t, "{}", record.Progress, "--force 只写采集方式表，不改写已打开计划的进度")
 
 	got, err := service.GetIngestMode(ctx, &pb.GetIngestModeReq{SpaceId: "crypto", DatasetId: "ds2"})
 	require.NoError(t, err)

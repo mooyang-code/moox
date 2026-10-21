@@ -277,8 +277,8 @@ func TestForceAdvancesAnOpenPlanStuckOnTheLostWorker(t *testing.T) {
 		require.NoError(t, h.reconcile(h.r))
 	}
 	require.Equal(t, stuck.ID, h.open().ID, "stream 不确认就卡住")
+	// 切换命令只把 --force 标记写进采集方式表，对账器读到后不再等失联端（不改写已打开计划的进度，避免互相覆盖）。
 	h.modes.set("ds_spot_1m", IngestPull, PlanExecutorSCF, true)
-	require.NoError(t, MarkOpenPlanForced(context.Background(), h.store, "crypto"))
 	require.NoError(t, h.reconcile(h.r))
 	require.Nil(t, h.open(), "已打开的计划推进完成")
 	require.Equal(t, stuckP, h.applied().Datasets["ds_spot_1m|1m"].P)
@@ -287,6 +287,25 @@ func TestForceAdvancesAnOpenPlanStuckOnTheLostWorker(t *testing.T) {
 	require.Equal(t, PlanExecutorStream, handoff.Datasets["ds_spot_1m|1m"].OldIngest, "交接随即开始")
 	h.settle(false)
 	require.Nil(t, h.open())
+}
+
+// 带 --force 切到 stream：collector-stream 是新执行端，仍要等它确认，不会在它没应用计划时提前生效。
+func TestForcedHandoffStillWaitsForTheNewStreamWorker(t *testing.T) {
+	h := newIngestHarness(t, modePullSCF, "1m")
+	h.settle(true)
+	h.workers.worker = nil
+	h.modes.set("ds_spot_1m", IngestStream, PlanExecutorLocal, true)
+	require.NoError(t, h.reconcile(h.r))
+	record := h.open()
+	require.NotNil(t, record)
+	for i := 0; i < 20; i++ {
+		h.now = h.now.Add(20 * time.Second)
+		require.NoError(t, h.reconcile(h.r))
+	}
+	require.Equal(t, record.ID, h.open().ID, "新执行端没确认就不生效")
+	h.settle(true)
+	require.Nil(t, h.open())
+	require.Equal(t, PlanExecutorStream, h.applied().Functions[streamItem].Executor)
 }
 
 // 交接与标的变更同时出现：先按已生效的执行端完成标的变更，下一份计划再交接。
