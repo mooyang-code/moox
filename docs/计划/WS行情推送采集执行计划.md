@@ -110,6 +110,7 @@
 
 - 适配器：用调研时录制的真实报文（现货 kline、合约 continuousKline、订阅回执、错误回执）做解码与"REST 同一根 K 线字段一致"的测试；大小写键串值的回归测试。
 - 连接管理：本地 WS 测试服务器模拟断线、ping、订阅报错、24 小时轮换；断言轮换期间无重复提交、无缺失。
+- 下架探测：合约 `!contractInfo` 状态变化、连续 3 个周期无推送且兜底取不到时调标的快照确认。
 - 周期闸门：用假时钟覆盖"到齐即提交""兜底补齐""兜底超时按失败""提交后迟到""两条连接重复定稿去重""计划切换（新 copy 生效）"。
 - `go test -race ./internal/stream/... ./internal/marketfetch/...`。
 
@@ -153,6 +154,7 @@ CREATE TABLE IF NOT EXISTS t_collector_stream_workers (
 - `ingest=stream` 时：SCF 实时函数在 `drain` 结束后才下发空的最终计划并停用定时器（函数保留，代码包照常随发布升级）；补采函数不受影响。
 - 补采解析（`klinecheck/backfill.go` 的 `datasetMarket`）遍历两种执行端的计划项，按执行端类型选补采函数的市场与来源。
 - 观察计划：`ingest=scf` 且配置开启 `stream.observe` 时，给 stream 下发全部标的的观察计划（不授予写权限），用于阶段 5。
+- 下架处理（设计 5.10）：`ReportStreamPeriods` 带"已确认下架"的标的；Collector 立即对相应自动标签做一次快照同步，交易所快照确认下架的标的跳过消失防抖。测试：下架后约 5 分钟内计划去掉该标的；标签列表取不全（非下架）时仍按 5 轮防抖。
 
 ### 5.4 `StreamCollector` 服务（`modules/collector/proto/collector.proto`）
 
