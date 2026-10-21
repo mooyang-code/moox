@@ -21,7 +21,8 @@ func Handler(state *State, routes ...Route) http.Handler {
 		return standard
 	}
 	for _, route := range routes {
-		mux.Handle(route.Path, route.Handler)
+		// 前缀路由不限方法：exact 路由只接受 GET，而本地写入、生命周期命令、回放都是 POST。
+		mux.HandlePrefix(route.Path, route.Handler)
 	}
 	return mux
 }
