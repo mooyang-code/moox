@@ -33,7 +33,9 @@ func (replayClient) GetDataset(context.Context, string, string) (input.DatasetIn
 func (replayClient) ListDatasetSubjects(context.Context, string, string) ([]input.Subject, error) {
 	return []input.Subject{{SubjectID: "A", Active: true}, {SubjectID: "B", Active: true}, {SubjectID: "C", Active: true}}, nil
 }
-func (replayClient) ListTagMembers(context.Context, string, string) ([]string, error) { return nil, nil }
+func (replayClient) ListTagMembers(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
 func (replayClient) GetTag(context.Context, string, string) (input.TagInfo, error) {
 	return input.TagInfo{}, nil
 }
