@@ -348,7 +348,8 @@ func TestFinishRoundDoesNotClearFailuresRecordedBetweenRounds(t *testing.T) {
 	// 同一 tick 内对账之前的步骤（启用、升级）失败：对账本身没报错，也不能把它当成「本轮无失败」清掉。
 	_ = r.fail("package", errors.New("resolve code package: unavailable"))
 	require.NoError(t, r.Reconcile(context.Background()))
-	require.Equal(t, float64(1), failureLabel(metrics, "cloudnode"))
+	require.Equal(t, float64(1), failureLabel(metrics, "package"), "package 是独立的失败原因，不再归为 cloudnode")
+	require.Zero(t, failureLabel(metrics, "cloudnode"))
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
 
 	// 下一轮没有任何失败：恢复。

@@ -346,7 +346,49 @@ func TestBuilderLeaseGraceDoesNotHideAnotherInstancesRealFailure(t *testing.T) {
 	require.Contains(t, got.BusinessChecks[0].Reason, "配置服务调用失败", "真实故障的文案优先")
 }
 
-func TestBuilderMixedReasonsWithoutDedicatedTextDoNotBlameTheLease(t *testing.T) {
+func TestBuilderExplainsEachCoordinationFailureReasonWithItsOwnText(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	for reason, want := range map[string]string{
+		"cloudnode":   "配置服务调用失败",
+		"environment": "函数运行环境生成失败",
+		"rules":       "采集规则读取失败",
+		"store":       "本地数据库读写失败",
+		"storage":     "标的快照登记失败",
+		"package":     "代码包解析失败",
+		"dataset":     "允许迟到）设置失败",
+		"activity":    "活动日志未写入",
+		"preflight":   "创建新采集计划前的检查未通过",
+		"capacity":    "无法放进函数",
+	} {
+		t.Run(reason, func(t *testing.T) {
+			query, _ := openOverviewState(t, func(db *gorm.DB) {
+				labels := `{"space_id":"crypto","dataset_id":"bars","frequency":"1m"}`
+				seedOverviewMetricForInstance(t, db, reason+"-required", "collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 34, now)
+				seedOverviewMetricForInstance(t, db, reason+"-active", "collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 34, now)
+				seedOverviewMetricForInstance(t, db, reason+"-health", "collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto"}`, 0, now)
+				seedOverviewMetricForInstance(t, db, reason+"-reason", "collector", "collector@control", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"`+reason+`"}`, 1, now)
+			})
+			got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+			require.NoError(t, err)
+			require.Len(t, got.BusinessChecks, 1)
+			require.Equal(t, "down", got.BusinessChecks[0].Status)
+			require.Contains(t, got.BusinessChecks[0].Reason, want)
+			if reason != "cloudnode" {
+				require.NotContains(t, got.BusinessChecks[0].Reason, "CloudNode 服务调用失败", "非 CloudNode 的故障不能显示成 CloudNode 调用失败")
+				require.NotContains(t, got.BusinessChecks[0].Reason, "配置服务调用失败")
+			}
+		})
+	}
+}
+
+func TestCoordinationFailureTextFallsBackToAGenericHint(t *testing.T) {
+	require.Contains(t, coordinationFailureText(map[string]bool{"something_new": true}), "采集计划协调失败")
+	require.Contains(t, coordinationFailureText(nil), "采集计划协调失败")
+	// 多个原因同时出现：按表中的优先级取第一个。
+	require.Contains(t, coordinationFailureText(map[string]bool{"store": true, "cloudnode": true}), "配置服务调用失败")
+}
+
+func TestBuilderMixedLeaseHeldAndAnotherReasonUsesTheOtherReasonsText(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
 		seedLeaseHeldFailure(t, db, "mixed-capacity", now, time.Minute)
@@ -357,7 +399,7 @@ func TestBuilderMixedReasonsWithoutDedicatedTextDoNotBlameTheLease(t *testing.T)
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "down", got.BusinessChecks[0].Status)
 	require.NotContains(t, got.BusinessChecks[0].Reason, "发布租约长时间被占用", "租约冲突才持续一分钟，不能把告警归因到租约")
-	require.Contains(t, got.BusinessChecks[0].Reason, "采集计划协调失败")
+	require.Contains(t, got.BusinessChecks[0].Reason, "无法放进函数", "以真实故障（capacity）的文案为准")
 }
 
 func TestBuilderPendingGraceDoesNotOverrideAnExpiredLeaseGrace(t *testing.T) {
