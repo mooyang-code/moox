@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
+	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	trpc "trpc.group/trpc-go/trpc-go"
@@ -79,6 +81,12 @@ func run(ctx context.Context, cfg *streamapp.Config) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	app.Start(runCtx)
+	// 运行指标经消息总线上报 Monitor（服务目录 transport: reporter）：没有上报时 Monitor 判定该组件“没有收到运行指标”。
+	reporter, err := report.NewHandler(report.DefaultConfig("collector", "collector-stream"))
+	if err != nil {
+		return fmt.Errorf("create collector-stream metrics reporter: %w", err)
+	}
+	go reportMetrics(runCtx, reporter)
 	done := make(chan error, 1)
 	go func() { done <- server.Serve() }()
 	// /readyz：已应用 Collector 要求的计划版本，且全部市场的连接都已订阅完成。
@@ -100,6 +108,26 @@ func run(ctx context.Context, cfg *streamapp.Config) error {
 			return err
 		case <-ticker.C:
 			state.SetReady(app.Ready())
+		}
+	}
+}
+
+// metricsReportInterval 是运行指标上报间隔，与其他组件的 metrics 定时器一致。
+const metricsReportInterval = 30 * time.Second
+
+func reportMetrics(ctx context.Context, reporter *report.Handler) {
+	ticker := time.NewTicker(metricsReportInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			if err := reporter.Handle(callCtx); err != nil {
+				log.Warnf("collector-stream metrics report failed: %v", err)
+			}
+			cancel()
 		}
 	}
 }

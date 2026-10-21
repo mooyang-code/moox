@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
@@ -272,8 +273,22 @@ func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
 	}
 	assert.Contains(t, ports("control"), "4222")
 	assert.Contains(t, ports("control"), "11003", "出站主机经 control 的 11003 反向连接")
+	assert.Equal(t, []string{"11003", "20210"}, ports("storage"), "存储机没有同地域私网地址时 Monitor 走公网探测健康端口")
+	assert.Equal(t, []string{"11003", "11200", "11210"}, ports("compute"), "Monitor 探测 trade 健康端口")
+	for _, target := range targets {
+		for _, rule := range target.Rules {
+			if strings.HasPrefix(rule.Description, "MooX Monitor health probe") {
+				assert.Equal(t, "203.0.113.8/32", rule.CidrBlock, "健康端口只放行控制机")
+			}
+		}
+	}
+
+	// 与控制机同地域、有私网地址的存储机：Monitor 走私网探测，不放行健康端口。
+	control, storage := manifest.HostCatalog["control"], manifest.HostCatalog["storage"]
+	control.Region, storage.Region, storage.PrivateAddress = "ap-guangzhou", "ap-guangzhou", "10.0.0.5"
+	manifest.HostCatalog["control"], manifest.HostCatalog["storage"] = control, storage
+	targets = setupFirewallTargets(manifest)
 	assert.Equal(t, []string{"11003"}, ports("storage"))
-	assert.Equal(t, []string{"11003", "11200"}, ports("compute"))
 
 	// 只能出站的主机不接受入站连接，不作为防火墙目标。
 	compute := manifest.HostCatalog["compute"]
