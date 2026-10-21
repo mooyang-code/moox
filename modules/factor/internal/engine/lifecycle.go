@@ -69,13 +69,13 @@ func (r *Runtime) checkSet(_ context.Context, ref lifecycle.Ref) []lifecycle.Che
 	if r.preload.Ready(ref.ID) {
 		checks = append(checks, lifecycle.Check{Name: "本地窗口", Status: lifecycle.CheckPass})
 	} else {
-		checks = append(checks, lifecycle.Check{Name: "本地窗口", Status: lifecycle.CheckFail, Message: "窗口还没有载入完成"})
+		checks = append(checks, lifecycle.Check{Name: "本地窗口", Status: lifecycle.CheckFail, Message: "窗口还没有载入完成", Remedy: "moox-cli lifecycle init --set " + ref.ID})
 	}
 	src := seriesstore.Source{SpaceID: set.Set.SpaceID, DatasetID: set.Set.SourceDatasetID, Freq: set.Set.Freq}
 	if err := r.data.Blocked(src); err != nil {
 		checks = append(checks, lifecycle.Check{
-			Name: "变更同步", Status: lifecycle.CheckFail,
-			Message: fmt.Sprintf("%v；请先停止引擎并执行 moox-factor-engine reconcile --set %s", err, ref.ID),
+			Name: "变更同步", Status: lifecycle.CheckFail, Message: err.Error(),
+			Remedy: fmt.Sprintf("先停止引擎，再执行 moox-factor-engine reconcile --set %s", ref.ID),
 		})
 	} else {
 		checks = append(checks, lifecycle.Check{Name: "变更同步", Status: lifecycle.CheckPass})

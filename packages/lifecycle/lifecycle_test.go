@@ -378,3 +378,31 @@ func TestOnChangeHookReportsTransitions(t *testing.T) {
 	_, _ = c.Command(ctx, CmdStart, set1)
 	require.Equal(t, []string{"factor_set/set1:uninitialized>ready", "factor_set/set1:ready>warming"}, f.changes)
 }
+
+// 客户端经过 HTTP 处理器读状态、执行命令；命令不被允许时返回 409 和错误文本。
+func TestClientStatusAndCommand(t *testing.T) {
+	ctrl, err := New(Options{Module: "m", Hooks: Hooks{
+		Objects:     func() []Ref { return []Ref{{Kind: "set", ID: "a"}} },
+		CheckObject: func(context.Context, Ref) []Check { return []Check{{Name: "数据", Status: CheckPass}} },
+	}})
+	require.NoError(t, err)
+	mux := http.NewServeMux()
+	mux.Handle(StatusPath, ctrl.StatusHandler())
+	mux.Handle(CommandPath, ctrl.CommandHandler())
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	c := &Client{Endpoint: srv.URL, AccessKey: "k", SecretKey: "s"}
+	ctx := context.Background()
+
+	ctrl.Refresh(ctx)
+	snap, err := c.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "m", snap.Module)
+	require.Len(t, snap.Objects, 1)
+
+	obj, err := c.Do(ctx, CmdInit, Ref{Kind: "set", ID: "a"})
+	require.NoError(t, err)
+	require.Equal(t, StageReady, obj.Stage)
+	_, err = c.Do(ctx, CmdConfirm, Ref{Kind: "set", ID: "a"})
+	require.ErrorContains(t, err, "409")
+}
