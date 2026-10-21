@@ -653,12 +653,13 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 			return err
 		}
 	}
-	done, err := r.pushFunctions(ctx, record, content, progress, false)
-	if err != nil || !done {
+	// 交接数据集的截止各自在自己的窗口里改（旧周期都已建立之后、新执行端的第一个周期建立之前），只看时间：
+	// 不等过渡阶段的确认，也不等整份计划收尾。旧端迟迟不确认（失联、云端作业慢）时，晚改截止会让新执行端的周期整期被拒。
+	if err := r.applyHandoffLateness(ctx, record, content, progress, false); err != nil {
 		return err
 	}
-	// 交接数据集的截止各自在自己的窗口里改（旧周期都已建立之后、新执行端的第一个周期建立之前），不等整份计划收尾。
-	if err := r.applyHandoffLateness(ctx, record, content, progress, false); err != nil {
+	done, err := r.pushFunctions(ctx, record, content, progress, false)
+	if err != nil || !done {
 		return err
 	}
 	if end := content.WindowEnd(); !end.IsZero() && r.now().Before(end.Add(planFinalizeMargin)) {

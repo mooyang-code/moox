@@ -124,3 +124,31 @@ func TestPeriodCommitFailureIsRecordedAsErrorWithoutAWatermark(t *testing.T) {
 		})
 	}
 }
+
+type recordedRejections struct{ keys []string }
+
+func (r *recordedRejections) ObserveDeadlineRejection(spaceID, datasetID, frequency string, _ time.Time) {
+	r.keys = append(r.keys, spaceID+"/"+datasetID+"/"+frequency)
+}
+
+// DataNode 拒绝“周期建立前截止已过”时记录截止拒绝；其他失败不记。
+func TestPeriodCommitRecordsDeadlineRejections(t *testing.T) {
+	for name, tc := range map[string]struct {
+		msg  string
+		want int
+	}{
+		"deadline passed": {"dataset period deadline 1792572005 has passed before the period was created", 1},
+		"other rejection": {"series hash a does not match the effective snapshot b for this period", 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, _ := commitMetricsService(t, &commitMetricsNode{commit: func(*pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
+				return &pb.CommitTimeSeriesBatchRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: tc.msg}}, nil
+			}})
+			rejections := &recordedRejections{}
+			svc.rejection = rejections
+			_, err := svc.CommitTimeSeriesBatch(context.Background(), commitRequest(time.Date(2026, 10, 14, 1, 58, 0, 0, time.UTC)))
+			require.NoError(t, err)
+			require.Len(t, rejections.keys, tc.want)
+		})
+	}
+}

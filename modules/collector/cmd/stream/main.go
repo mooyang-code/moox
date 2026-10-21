@@ -41,8 +41,16 @@ func main() {
 	}
 }
 
+// reportedVersion 是心跳上报的版本：构建没有指定版本号（dev）时带上提交号，Collector 与运行状态页据此认出线上二进制。
+func reportedVersion() string {
+	if Version == "dev" && GitCommit != "" && GitCommit != "unknown" {
+		return "dev-" + GitCommit
+	}
+	return Version
+}
+
 func run(ctx context.Context, cfg *streamapp.Config) error {
-	app, err := streamapp.New(cfg, Version, prometheus.DefaultRegisterer)
+	app, err := streamapp.New(cfg, reportedVersion(), prometheus.DefaultRegisterer)
 	if err != nil {
 		return err
 	}

@@ -175,6 +175,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, watermarks...)
+	rejections, err := b.buildDeadlineRejectionHealth(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, rejections...)
 	signals, err := b.buildMarketFetchSignalHealth(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err
@@ -1780,6 +1785,61 @@ func (b Builder) buildFactorWatermarkHealth(ctx context.Context, spaceID string,
 			continue
 		}
 		out = append(out, BusinessStatus{SpaceID: space, Kind: "factor_watermark", Module: "factor_engine", Status: "healthy", Reason: "因子连续水位正常", LastCheckedAt: now})
+	}
+	return out, nil
+}
+
+// deadlineRejectionWindow 是“周期建立前截止已过”拒绝的告警窗口：最近这段时间内出现过就告警。
+const deadlineRejectionWindow = 10 * time.Minute
+
+// buildDeadlineRejectionHealth 消费 Storage 导出的截止拒绝时刻：写入方取数晚于数据集截止时整期提交被拒（常见于采集方式切换后截止没跟上），
+// 数据只能靠补采补齐，最近 10 分钟内出现过就告警。
+func (b Builder) buildDeadlineRejectionHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
+	if b.Metrics == nil || b.Metrics.Catalog() == nil {
+		return nil, nil
+	}
+	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_storage_period_deadline_rejected_timestamp_seconds", "", 500, now)
+	if err != nil {
+		return nil, err
+	}
+	recent := map[string][]string{}
+	seen := map[string]bool{}
+	for _, item := range series {
+		labels, err := datasetLabels(item.LabelsJSON)
+		if err != nil {
+			return nil, fmt.Errorf("storage deadline rejection labels for %s: %w", item.SeriesID, err)
+		}
+		current := strings.TrimSpace(labels["space_id"])
+		if current == "" || (spaceID != "" && current != spaceID) {
+			continue
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		seen[current] = true
+		if latest.Value > 0 && now.Sub(unixTime(latest.Value)) <= deadlineRejectionWindow {
+			name := b.Metrics.DatasetDisplayName(ctx, current, labels["dataset_id"])
+			if name == "" {
+				name = labels["dataset_id"]
+			}
+			recent[current] = append(recent[current], fmt.Sprintf("%s（%s，最近 %s）", name, labels["freq"], unixTime(latest.Value).Format(time.RFC3339)))
+		}
+	}
+	spaces := make([]string, 0, len(seen))
+	for space := range seen {
+		spaces = append(spaces, space)
+	}
+	sort.Strings(spaces)
+	out := make([]BusinessStatus, 0, len(spaces))
+	for _, space := range spaces {
+		if list := recent[space]; len(list) > 0 {
+			sort.Strings(list)
+			out = append(out, BusinessStatus{SpaceID: space, Kind: "storage_rejection", Module: "storage", Status: "down",
+				Reason: "Storage 拒绝周期提交：周期建立前截止已过（写入方取数晚于数据集截止，常见于采集方式切换后截止没跟上），整期数据要靠补采：" + strings.Join(list, "；"), LastCheckedAt: now})
+			continue
+		}
+		out = append(out, BusinessStatus{SpaceID: space, Kind: "storage_rejection", Module: "storage", Status: "healthy", Reason: "最近 10 分钟没有截止拒绝", LastCheckedAt: now})
 	}
 	return out, nil
 }

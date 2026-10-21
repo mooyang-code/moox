@@ -106,6 +106,10 @@ func runPrimaryRole() error {
 	if err != nil {
 		return fmt.Errorf("initialize storage dataset metrics: %w", err)
 	}
+	deadlineRejections, err := observability.NewDeadlineRejections(prometheus.DefaultRegisterer)
+	if err != nil {
+		return fmt.Errorf("initialize storage deadline rejection metrics: %w", err)
+	}
 	resultDatasetResolver := func(ctx context.Context, spaceID, sourceViewID string) (string, error) {
 		for pageNo := uint32(1); ; pageNo++ {
 			datasets, page, err := cached.ListDatasets(ctx, metadata.DatasetQuery{SpaceID: spaceID, Page: &pb.Page{Page: pageNo, Size: 100}})
@@ -124,7 +128,7 @@ func runPrimaryRole() error {
 		}
 		return "", fmt.Errorf("factor result dataset for source view %s/%s is not found", spaceID, sourceViewID)
 	}
-	svc, err := primarystore.New(primarystore.Options{Resolver: resolver.primaryStore(), Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, ResultDataset: resultDatasetResolver, SyncPoints: meta, Authorizer: func(auth *pb.AuthInfo) error {
+	svc, err := primarystore.New(primarystore.Options{DeadlineRejections: deadlineRejections, Resolver: resolver.primaryStore(), Validator: primarystore.NewMetadataValidator(cached), Snapshot: cached.RequestSnapshot, ResultDataset: resultDatasetResolver, SyncPoints: meta, Authorizer: func(auth *pb.AuthInfo) error {
 		if auth == nil || auth.GetAppId() == "" ||
 			!hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(datanode.ServiceAuthKey(primarySecret, auth.GetAppId()))) {
 			return errors.New("invalid primary auth")

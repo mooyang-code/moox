@@ -1115,3 +1115,24 @@ func TestBuilderReportsStalledFactorWatermarks(t *testing.T) {
 	require.Contains(t, check.Reason, "fset_a")
 	require.NotContains(t, check.Reason, "fset_b")
 }
+
+// 最近 10 分钟内有截止拒绝的数据集告警，更早的不告警。
+func TestBuilderReportsRecentStorageDeadlineRejections(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		seedOverviewMetricForInstance(t, db, "rej-recent", "storage", "storage-primary@storage", "moox_storage_period_deadline_rejected_timestamp_seconds", `{"space_id":"crypto","dataset_id":"ds_swap","freq":"1m"}`, float64(now.Add(-2*time.Minute).Unix()), now)
+		seedOverviewMetricForInstance(t, db, "rej-old", "storage", "storage-primary@storage", "moox_storage_period_deadline_rejected_timestamp_seconds", `{"space_id":"crypto","dataset_id":"ds_spot","freq":"1m"}`, float64(now.Add(-30*time.Minute).Unix()), now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	var check *BusinessStatus
+	for i := range got.BusinessChecks {
+		if got.BusinessChecks[i].Kind == "storage_rejection" {
+			check = &got.BusinessChecks[i]
+		}
+	}
+	require.NotNil(t, check)
+	require.Equal(t, "down", check.Status)
+	require.Contains(t, check.Reason, "ds_swap")
+	require.NotContains(t, check.Reason, "ds_spot")
+}

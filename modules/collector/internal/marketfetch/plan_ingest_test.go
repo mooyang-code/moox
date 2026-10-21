@@ -395,3 +395,22 @@ func TestForceFlagsAreClearedPerHandedOffDataset(t *testing.T) {
 	require.False(t, h.modes.modes["ds_spot_1h"].Force)
 	require.Equal(t, PlanExecutorSCF, h.applied().Datasets["ds_spot_1h|1h"].IngestOrSCF(), "后一个数据集的 --force 交接不等失联端")
 }
+
+// 旧端（collector-stream）始终不确认、也没有 --force：截止仍按时间在窗口里改成新执行端的值，
+// 新执行端（SCF）P 起的周期不会因为截止还是旧值而整期被拒。
+func TestHandoffLatenessSwitchesOnTimeWhenTheOldSideNeverConfirms(t *testing.T) {
+	h := newIngestHarness(t, modeStream, "1m")
+	h.settle(true)
+	require.Equal(t, 5, h.lateness.values["ds_spot_1m"])
+	h.workers.worker = nil
+	h.modes.set("ds_spot_1m", IngestPull, PlanExecutorSCF, false)
+	require.NoError(t, h.reconcile(h.r))
+	record := h.open()
+	require.NotNil(t, record)
+	p := time.Unix(h.content(record).Datasets["ds_spot_1m|1m"].P, 0)
+	h.now = p.Add(5 * time.Second)
+	require.NoError(t, h.reconcile(h.r))
+	require.Equal(t, 15, h.lateness.values["ds_spot_1m"], "P + 旧截止 + 余量（10 秒）时改成 SCF 的截止")
+	require.True(t, h.now.Before(p.Add(time.Minute)), "在新执行端第一个周期建立之前")
+	require.Equal(t, record.ID, h.open().ID, "旧端不确认，计划本身仍等着（没有 --force）")
+}
