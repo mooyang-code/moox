@@ -9,21 +9,21 @@
 
 ## 阶段 1：SCF 合约数据修复
 
-- ☐ `SCFPlanSpaceConfig.Markets`（`scf_plan.spaces.<空间>.markets.<市场>.fetch`、`lateness_s`），`fetchFor(spaceID, marketType)`；期望状态按函数市场取拉取参数。
-- ☐ `PlanFetch.NotBeforeMS`（0 或 1000～12000）；`plan_runtime` 在错峰之后再等到收盘 + `not_before_ms`。
-- ☐ 默认配置：crypto 合约 `not_before_ms: 8000`、`lateness_s: 20`，现货 `not_before_ms: 3000`。
-- ☐ 测试：按市场覆盖、`plan_desired` 两市场不同、`not_before_ms` 范围校验、`plan_runtime` 取数开始不早于收盘 + 8 秒。
+- ☑ `SCFPlanSpaceConfig.Markets`（`scf_plan.spaces.<空间>.markets.<市场>.fetch`、`lateness_s`），`fetchFor(spaceID, marketType)`；期望状态按函数市场取拉取参数。
+- ☑ `PlanFetch.NotBeforeMS`（0 或 1000～12000）；`plan_runtime` 在错峰之后再等到收盘 + `not_before_ms`。
+- ☑ 默认配置：crypto 合约 `not_before_ms: 8000`、`lateness_s: 20`，现货 `not_before_ms: 3000`。
+- ☑ 测试：按市场覆盖、`plan_desired` 两市场不同、`not_before_ms` 范围校验、`plan_runtime` 取数开始不早于收盘 + 8 秒。
 - ☐ 发布：先升函数包、再装 Collector 与配置；历史数据重拉（10-16 起到切换的 P，合约 1m/1h、现货 1m），因子补算。
 
 ## 阶段 2：框架与币安适配器
 
-- ☐ `marketdata.Instrument.Pair`，币安合约快照填入；采集计划带给 stream（`PlanSubject`/计划里的 pair 映射）。
-- ☐ `internal/stream`：`source.go`、`conn.go`、`manager.go`、`gate.go`、`planclient.go`、`metrics.go`。
-- ☐ `marketfetch.KlineBatch` 与 `KlineCommitter`（`CommitPeriod`、`Upsert`），`KlinePipeline.Execute` 改为"取数 + 提交"；逐字节一致测试。
-- ☐ stream 计划条目上限（4000），`MaxPlanItems` 200 只对 SCF。
-- ☐ 本地执行端：`serverless/market_data` 抽出 `Execute(ctx, event, env)`，去掉进程环境依赖；`MarketFetchExecutor.Invoke` RPC；独立并发上限与 HTTP 客户端；测试。
-- ☐ 币安适配器 `sources/binance/stream.go`（现货 kline、合约 continuousKline），`binance.yaml` 的 `stream` 段。
-- ☐ 测试：报文解码与 REST 字段一致、大小写键回归；连接管理（断线、ping、订阅报错、轮换无重复无缺失、订阅耗时）；下架探测（`!contractInfo`、连续 3 个 1m 周期无推送）；闸门（到齐、D 时提交、迟到增量提交、去重、跨 P、整点 1m 先于 1h）；`-race`。
+- ☑ `marketdata.Instrument.Pair`，币安合约快照填入 → 标的属性 `pair` → 任务分组 → 推送计划的 `pairs`。
+- ☑ `internal/stream`：`source.go`、`conn.go`、`manager.go`、`gate.go`、`commit.go`、`planclient.go`、`agent.go`、`runtime.go`、`delist.go`、`metrics.go`、`clock.go`。执行计划列的 `FallbackPolicy` 不再定义：v3 起不做 REST 兜底，没有可配置的兜底策略。
+- ☑ `marketfetch.KlineBatch` 与 `KlineCommitter`（`CommitPeriod`、`Upsert`），`KlinePipeline.Execute` 的行构造与写入改由提交器完成；逐字节一致测试。
+- ☑ 计划按执行端区分条目上限（SCF 200，推送与本地 4000）；本地执行时超过单次上限的请求切开执行。
+- ☑ 本地执行端：`serverless/market_data.Execute(ctx, event, env)`，`Handler.RunPlan` 不读写进程环境；`MarketFetchExecutor.Invoke`；独立并发上限；Collector 侧客户端；本地定时拉取；测试。
+- ☑ 币安适配器 `sources/binance/stream.go`（现货 kline、合约 continuousKline、`!contractInfo`），`binance.yaml` 的 `stream` 段。
+- △ 测试：报文解码与 REST 字段一致、大小写键回归、连接管理（断线、ping、订阅报错、轮换无缺失、订阅耗时约 1.8 秒/1000 流）、下架探测、闸门（到齐、D 时提交、迟到增量、去重、跨 P、1m 先于 1h）已完成；报文样例按官方文档格式构造，生产主机上录制真实报文替换为待办（需要 compute-1 访问）。
 
 ## 阶段 3：Collector
 
