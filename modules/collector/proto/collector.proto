@@ -545,6 +545,10 @@ message GetCollectorStatusRsp {
   int32 active_backfills = 8;
   int32 failed_backfills_24h = 9;
   string generated_at = 10;
+  // stream 是该空间 collector-stream 实例的状态（心跳、连接、最近周期），没有实例时为空。
+  StreamWorkerStatus stream = 11;
+  // ingest_modes 是各数据集的采集方式与执行端。
+  repeated IngestMode ingest_modes = 12;
 }
 
 // ReregisterFetchPlan 在 Storage 数据被清空后让采集计划重新生效：把最近一份已生效计划里各数据集标记为
@@ -577,6 +581,177 @@ message ReregisterFetchPlanRsp {
   repeated string datasets = 2;
   // backfill_jobs 是被清掉的补采作业数。
   int32 backfill_jobs = 3;
+}
+
+// ===== 采集方式（按数据集）与 WS 推送采集 =====
+
+// IngestMode 是一个数据集的采集方式：stream（WS 推送）或 pull（定时拉取）；executor 是拉取与补采的执行端（scf 或 local）。
+message IngestMode {
+  string space_id = 1;
+  string dataset_id = 2;
+  string mode = 3;
+  string executor = 4;
+  string updated_at = 5;
+  // effective_periods 是正在交接的数据集按频率选定的生效周期 P（RFC3339，K 线开始时间），没有交接时为空。
+  map<string, string> effective_periods = 6;
+}
+
+message GetIngestModeReq {
+  string space_id = 1;
+  // dataset_id 为空表示该空间全部数据集。
+  string dataset_id = 2;
+}
+
+message GetIngestModeRsp {
+  common.RetInfo ret_info = 1;
+  repeated IngestMode modes = 2;
+  StreamWorkerStatus stream = 3;
+}
+
+// SetIngestMode 按数据集切换采集方式：dataset_id 为空表示 space_id 的全部数据集。切到 stream 要求 collector-stream 在线；
+// force 用于旧执行端失联的极端故障：不等旧执行端确认，已打开的计划也不再等失联端确认。
+message SetIngestModeReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string mode = 3;
+  // executor 为空时：stream 保持原执行端（补采用），pull 默认 scf。
+  string executor = 4;
+  bool force = 5;
+}
+
+message SetIngestModeRsp {
+  common.RetInfo ret_info = 1;
+  repeated IngestMode modes = 2;
+  StreamWorkerStatus stream = 3;
+  // plan_id 是本次切换生成的采集计划（交接），0 表示没有需要交接的数据集。
+  int64 plan_id = 4;
+}
+
+// StreamConnStatus 是 collector-stream 一条 WS 连接的状态。
+message StreamConnStatus {
+  string market = 1;
+  string frequency = 2;
+  int32 streams = 3;
+  string last_message_at = 4;
+  int64 reconnects = 5;
+  bool subscribed = 6;
+  string endpoint = 7;
+}
+
+// StreamPeriodStat 是一个（数据集, 周期）的接收与提交统计；时间都是相对收盘的毫秒数。
+message StreamPeriodStat {
+  string market = 1;
+  string dataset_id = 2;
+  string frequency = 3;
+  // period 是 K 线开始时间（Unix 秒）。
+  int64 period = 4;
+  int32 expected = 5;
+  int32 arrived = 6;
+  // missing 是截止时仍缺的标的数（疑似下架的标的另计在 suspected 里）。
+  int32 missing = 7;
+  int32 late_after_commit = 8;
+  int64 last_arrival_ms = 9;
+  int64 commit_done_ms = 10;
+  int64 commit_ms = 11;
+  bool committed = 12;
+  string error = 13;
+  int32 suspected = 14;
+}
+
+message StreamWorkerStatus {
+  string instance_id = 1;
+  bool online = 2;
+  string heartbeat_at = 3;
+  int64 applied_plan_id = 4;
+  string applied_stage = 5;
+  repeated StreamConnStatus conns = 6;
+  repeated StreamPeriodStat recent = 7;
+  // clock_offset_ms 是实例时钟减 Collector 时钟的估计值。
+  int64 clock_offset_ms = 8;
+  string version = 9;
+}
+
+message StreamHeartbeatReq {
+  string space_id = 1;
+  string instance_id = 2;
+  // applied_plan_id 与 applied_stage 是实例已应用的计划记录与阶段（transition、final）。
+  int64 applied_plan_id = 3;
+  string applied_stage = 4;
+  repeated StreamConnStatus conns = 5;
+  int64 sent_at_ms = 6;
+  string version = 7;
+}
+
+message StreamHeartbeatRsp {
+  common.RetInfo ret_info = 1;
+  // plan_id 与 stage 是 Collector 当前要求推送与本地执行端应用的计划版本。
+  int64 plan_id = 2;
+  string stage = 3;
+  int64 server_time_ms = 4;
+}
+
+// StreamPlanItem 是计划内容里分给推送或本地执行端的一项（一个市场），plan_json 是 marketfetch.Plan 的 JSON。
+message StreamPlanItem {
+  string name = 1;
+  string executor = 2;
+  string market = 3;
+  string plan_json = 4;
+}
+
+message PullStreamPlanReq {
+  string space_id = 1;
+  // market 为空表示该空间全部市场。
+  string market = 2;
+}
+
+message PullStreamPlanRsp {
+  common.RetInfo ret_info = 1;
+  int64 plan_id = 2;
+  string stage = 3;
+  repeated StreamPlanItem items = 4;
+  // commit_reserve_ms 是周期闸门的提交预留：最晚开始提交 = 收盘 + 截止 − 预留。
+  int32 commit_reserve_ms = 5;
+}
+
+// StreamSuspect 是推送侧疑似下架的标的。
+message StreamSuspect {
+  string market = 1;
+  string subject_id = 2;
+  string reason = 3;
+}
+
+message ReportStreamPeriodsReq {
+  string space_id = 1;
+  string instance_id = 2;
+  repeated StreamPeriodStat periods = 3;
+  repeated StreamSuspect suspects = 4;
+}
+
+message ReportStreamPeriodsRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// InvokeMarketFetchReq 的 event 是与 SCF 函数相同的事件 JSON；响应是同样的 model.Response JSON。
+message InvokeMarketFetchReq {
+  string space_id = 1;
+  bytes event = 2;
+}
+
+message InvokeMarketFetchRsp {
+  common.RetInfo ret_info = 1;
+  bytes response = 2;
+}
+
+// StreamCollector 是 collector-stream 与 Collector 之间的计划同步与统计上报。
+service StreamCollector {
+  rpc StreamHeartbeat(StreamHeartbeatReq) returns (StreamHeartbeatRsp);
+  rpc PullStreamPlan(PullStreamPlanReq) returns (PullStreamPlanRsp);
+  rpc ReportStreamPeriods(ReportStreamPeriodsReq) returns (ReportStreamPeriodsRsp);
+}
+
+// MarketFetchExecutor 是拉取与补采的本地执行端（挂在 collector-stream 进程里），处理代码与 SCF 函数相同。
+service MarketFetchExecutor {
+  rpc Invoke(InvokeMarketFetchReq) returns (InvokeMarketFetchRsp);
 }
 
 service CollectMgr {
@@ -612,4 +787,6 @@ service CollectMgr {
   rpc GetCollectorStatus(GetCollectorStatusReq) returns (GetCollectorStatusRsp);
   rpc ReregisterFetchPlan(ReregisterFetchPlanReq) returns (ReregisterFetchPlanRsp);
   rpc SetFetchPlanPaused(SetFetchPlanPausedReq) returns (SetFetchPlanPausedRsp);
+  rpc GetIngestMode(GetIngestModeReq) returns (GetIngestModeRsp);
+  rpc SetIngestMode(SetIngestModeReq) returns (SetIngestModeRsp);
 }

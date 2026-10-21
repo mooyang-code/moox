@@ -4636,6 +4636,10 @@ type GetCollectorStatusRsp struct {
 	ActiveBackfills     int32                      `protobuf:"varint,8,opt,name=active_backfills,json=activeBackfills,proto3" json:"active_backfills,omitempty"`
 	FailedBackfills_24H int32                      `protobuf:"varint,9,opt,name=failed_backfills_24h,json=failedBackfills24h,proto3" json:"failed_backfills_24h,omitempty"`
 	GeneratedAt         string                     `protobuf:"bytes,10,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
+	// stream 是该空间 collector-stream 实例的状态（心跳、连接、最近周期），没有实例时为空。
+	Stream *StreamWorkerStatus `protobuf:"bytes,11,opt,name=stream,proto3" json:"stream,omitempty"`
+	// ingest_modes 是各数据集的采集方式与执行端。
+	IngestModes []*IngestMode `protobuf:"bytes,12,rep,name=ingest_modes,json=ingestModes,proto3" json:"ingest_modes,omitempty"`
 }
 
 func (x *GetCollectorStatusRsp) Reset() {
@@ -4738,6 +4742,20 @@ func (x *GetCollectorStatusRsp) GetGeneratedAt() string {
 		return x.GeneratedAt
 	}
 	return ""
+}
+
+func (x *GetCollectorStatusRsp) GetStream() *StreamWorkerStatus {
+	if x != nil {
+		return x.Stream
+	}
+	return nil
+}
+
+func (x *GetCollectorStatusRsp) GetIngestModes() []*IngestMode {
+	if x != nil {
+		return x.IngestModes
+	}
+	return nil
 }
 
 // ReregisterFetchPlan 在 Storage 数据被清空后让采集计划重新生效：把最近一份已生效计划里各数据集标记为
@@ -4977,6 +4995,1399 @@ func (x *ReregisterFetchPlanRsp) GetBackfillJobs() int32 {
 		return x.BackfillJobs
 	}
 	return 0
+}
+
+// IngestMode 是一个数据集的采集方式：stream（WS 推送）或 pull（定时拉取）；executor 是拉取与补采的执行端（scf 或 local）。
+type IngestMode struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SpaceId   string `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	DatasetId string `protobuf:"bytes,2,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	Mode      string `protobuf:"bytes,3,opt,name=mode,proto3" json:"mode,omitempty"`
+	Executor  string `protobuf:"bytes,4,opt,name=executor,proto3" json:"executor,omitempty"`
+	UpdatedAt string `protobuf:"bytes,5,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// effective_periods 是正在交接的数据集按频率选定的生效周期 P（RFC3339，K 线开始时间），没有交接时为空。
+	EffectivePeriods map[string]string `protobuf:"bytes,6,rep,name=effective_periods,json=effectivePeriods,proto3" json:"effective_periods,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+}
+
+func (x *IngestMode) Reset() {
+	*x = IngestMode{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[64]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *IngestMode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IngestMode) ProtoMessage() {}
+
+func (x *IngestMode) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[64]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IngestMode.ProtoReflect.Descriptor instead.
+func (*IngestMode) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *IngestMode) GetSpaceId() string {
+	if x != nil {
+		return x.SpaceId
+	}
+	return ""
+}
+
+func (x *IngestMode) GetDatasetId() string {
+	if x != nil {
+		return x.DatasetId
+	}
+	return ""
+}
+
+func (x *IngestMode) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+func (x *IngestMode) GetExecutor() string {
+	if x != nil {
+		return x.Executor
+	}
+	return ""
+}
+
+func (x *IngestMode) GetUpdatedAt() string {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return ""
+}
+
+func (x *IngestMode) GetEffectivePeriods() map[string]string {
+	if x != nil {
+		return x.EffectivePeriods
+	}
+	return nil
+}
+
+type GetIngestModeReq struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SpaceId string `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	// dataset_id 为空表示该空间全部数据集。
+	DatasetId string `protobuf:"bytes,2,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+}
+
+func (x *GetIngestModeReq) Reset() {
+	*x = GetIngestModeReq{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[65]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetIngestModeReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetIngestModeReq) ProtoMessage() {}
+
+func (x *GetIngestModeReq) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[65]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetIngestModeReq.ProtoReflect.Descriptor instead.
+func (*GetIngestModeReq) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *GetIngestModeReq) GetSpaceId() string {
+	if x != nil {
+		return x.SpaceId
+	}
+	return ""
+}
+
+func (x *GetIngestModeReq) GetDatasetId() string {
+	if x != nil {
+		return x.DatasetId
+	}
+	return ""
+}
+
+type GetIngestModeRsp struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	RetInfo *commonpb.RetInfo   `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Modes   []*IngestMode       `protobuf:"bytes,2,rep,name=modes,proto3" json:"modes,omitempty"`
+	Stream  *StreamWorkerStatus `protobuf:"bytes,3,opt,name=stream,proto3" json:"stream,omitempty"`
+}
+
+func (x *GetIngestModeRsp) Reset() {
+	*x = GetIngestModeRsp{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[66]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *GetIngestModeRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetIngestModeRsp) ProtoMessage() {}
+
+func (x *GetIngestModeRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[66]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetIngestModeRsp.ProtoReflect.Descriptor instead.
+func (*GetIngestModeRsp) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *GetIngestModeRsp) GetRetInfo() *commonpb.RetInfo {
+	if x != nil {
+		return x.RetInfo
+	}
+	return nil
+}
+
+func (x *GetIngestModeRsp) GetModes() []*IngestMode {
+	if x != nil {
+		return x.Modes
+	}
+	return nil
+}
+
+func (x *GetIngestModeRsp) GetStream() *StreamWorkerStatus {
+	if x != nil {
+		return x.Stream
+	}
+	return nil
+}
+
+// SetIngestMode 按数据集切换采集方式：dataset_id 为空表示 space_id 的全部数据集。切到 stream 要求 collector-stream 在线；
+// force 用于旧执行端失联的极端故障：不等旧执行端确认，已打开的计划也不再等失联端确认。
+type SetIngestModeReq struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SpaceId   string `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	DatasetId string `protobuf:"bytes,2,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	Mode      string `protobuf:"bytes,3,opt,name=mode,proto3" json:"mode,omitempty"`
+	// executor 为空时：stream 保持原执行端（补采用），pull 默认 scf。
+	Executor string `protobuf:"bytes,4,opt,name=executor,proto3" json:"executor,omitempty"`
+	Force    bool   `protobuf:"varint,5,opt,name=force,proto3" json:"force,omitempty"`
+}
+
+func (x *SetIngestModeReq) Reset() {
+	*x = SetIngestModeReq{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[67]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *SetIngestModeReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetIngestModeReq) ProtoMessage() {}
+
+func (x *SetIngestModeReq) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[67]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetIngestModeReq.ProtoReflect.Descriptor instead.
+func (*SetIngestModeReq) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *SetIngestModeReq) GetSpaceId() string {
+	if x != nil {
+		return x.SpaceId
+	}
+	return ""
+}
+
+func (x *SetIngestModeReq) GetDatasetId() string {
+	if x != nil {
+		return x.DatasetId
+	}
+	return ""
+}
+
+func (x *SetIngestModeReq) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+func (x *SetIngestModeReq) GetExecutor() string {
+	if x != nil {
+		return x.Executor
+	}
+	return ""
+}
+
+func (x *SetIngestModeReq) GetForce() bool {
+	if x != nil {
+		return x.Force
+	}
+	return false
+}
+
+type SetIngestModeRsp struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	RetInfo *commonpb.RetInfo   `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Modes   []*IngestMode       `protobuf:"bytes,2,rep,name=modes,proto3" json:"modes,omitempty"`
+	Stream  *StreamWorkerStatus `protobuf:"bytes,3,opt,name=stream,proto3" json:"stream,omitempty"`
+	// plan_id 是本次切换生成的采集计划（交接），0 表示没有需要交接的数据集。
+	PlanId int64 `protobuf:"varint,4,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
+}
+
+func (x *SetIngestModeRsp) Reset() {
+	*x = SetIngestModeRsp{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[68]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *SetIngestModeRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetIngestModeRsp) ProtoMessage() {}
+
+func (x *SetIngestModeRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[68]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetIngestModeRsp.ProtoReflect.Descriptor instead.
+func (*SetIngestModeRsp) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{68}
+}
+
+func (x *SetIngestModeRsp) GetRetInfo() *commonpb.RetInfo {
+	if x != nil {
+		return x.RetInfo
+	}
+	return nil
+}
+
+func (x *SetIngestModeRsp) GetModes() []*IngestMode {
+	if x != nil {
+		return x.Modes
+	}
+	return nil
+}
+
+func (x *SetIngestModeRsp) GetStream() *StreamWorkerStatus {
+	if x != nil {
+		return x.Stream
+	}
+	return nil
+}
+
+func (x *SetIngestModeRsp) GetPlanId() int64 {
+	if x != nil {
+		return x.PlanId
+	}
+	return 0
+}
+
+// StreamConnStatus 是 collector-stream 一条 WS 连接的状态。
+type StreamConnStatus struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Market        string `protobuf:"bytes,1,opt,name=market,proto3" json:"market,omitempty"`
+	Frequency     string `protobuf:"bytes,2,opt,name=frequency,proto3" json:"frequency,omitempty"`
+	Streams       int32  `protobuf:"varint,3,opt,name=streams,proto3" json:"streams,omitempty"`
+	LastMessageAt string `protobuf:"bytes,4,opt,name=last_message_at,json=lastMessageAt,proto3" json:"last_message_at,omitempty"`
+	Reconnects    int64  `protobuf:"varint,5,opt,name=reconnects,proto3" json:"reconnects,omitempty"`
+	Subscribed    bool   `protobuf:"varint,6,opt,name=subscribed,proto3" json:"subscribed,omitempty"`
+	Endpoint      string `protobuf:"bytes,7,opt,name=endpoint,proto3" json:"endpoint,omitempty"`
+}
+
+func (x *StreamConnStatus) Reset() {
+	*x = StreamConnStatus{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[69]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *StreamConnStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamConnStatus) ProtoMessage() {}
+
+func (x *StreamConnStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[69]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamConnStatus.ProtoReflect.Descriptor instead.
+func (*StreamConnStatus) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{69}
+}
+
+func (x *StreamConnStatus) GetMarket() string {
+	if x != nil {
+		return x.Market
+	}
+	return ""
+}
+
+func (x *StreamConnStatus) GetFrequency() string {
+	if x != nil {
+		return x.Frequency
+	}
+	return ""
+}
+
+func (x *StreamConnStatus) GetStreams() int32 {
+	if x != nil {
+		return x.Streams
+	}
+	return 0
+}
+
+func (x *StreamConnStatus) GetLastMessageAt() string {
+	if x != nil {
+		return x.LastMessageAt
+	}
+	return ""
+}
+
+func (x *StreamConnStatus) GetReconnects() int64 {
+	if x != nil {
+		return x.Reconnects
+	}
+	return 0
+}
+
+func (x *StreamConnStatus) GetSubscribed() bool {
+	if x != nil {
+		return x.Subscribed
+	}
+	return false
+}
+
+func (x *StreamConnStatus) GetEndpoint() string {
+	if x != nil {
+		return x.Endpoint
+	}
+	return ""
+}
+
+// StreamPeriodStat 是一个（数据集, 周期）的接收与提交统计；时间都是相对收盘的毫秒数。
+type StreamPeriodStat struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Market    string `protobuf:"bytes,1,opt,name=market,proto3" json:"market,omitempty"`
+	DatasetId string `protobuf:"bytes,2,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	Frequency string `protobuf:"bytes,3,opt,name=frequency,proto3" json:"frequency,omitempty"`
+	// period 是 K 线开始时间（Unix 秒）。
+	Period   int64 `protobuf:"varint,4,opt,name=period,proto3" json:"period,omitempty"`
+	Expected int32 `protobuf:"varint,5,opt,name=expected,proto3" json:"expected,omitempty"`
+	Arrived  int32 `protobuf:"varint,6,opt,name=arrived,proto3" json:"arrived,omitempty"`
+	// missing 是截止时仍缺的标的数（疑似下架的标的另计在 suspected 里）。
+	Missing         int32  `protobuf:"varint,7,opt,name=missing,proto3" json:"missing,omitempty"`
+	LateAfterCommit int32  `protobuf:"varint,8,opt,name=late_after_commit,json=lateAfterCommit,proto3" json:"late_after_commit,omitempty"`
+	LastArrivalMs   int64  `protobuf:"varint,9,opt,name=last_arrival_ms,json=lastArrivalMs,proto3" json:"last_arrival_ms,omitempty"`
+	CommitDoneMs    int64  `protobuf:"varint,10,opt,name=commit_done_ms,json=commitDoneMs,proto3" json:"commit_done_ms,omitempty"`
+	CommitMs        int64  `protobuf:"varint,11,opt,name=commit_ms,json=commitMs,proto3" json:"commit_ms,omitempty"`
+	Committed       bool   `protobuf:"varint,12,opt,name=committed,proto3" json:"committed,omitempty"`
+	Error           string `protobuf:"bytes,13,opt,name=error,proto3" json:"error,omitempty"`
+	Suspected       int32  `protobuf:"varint,14,opt,name=suspected,proto3" json:"suspected,omitempty"`
+}
+
+func (x *StreamPeriodStat) Reset() {
+	*x = StreamPeriodStat{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[70]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *StreamPeriodStat) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamPeriodStat) ProtoMessage() {}
+
+func (x *StreamPeriodStat) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[70]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamPeriodStat.ProtoReflect.Descriptor instead.
+func (*StreamPeriodStat) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{70}
+}
+
+func (x *StreamPeriodStat) GetMarket() string {
+	if x != nil {
+		return x.Market
+	}
+	return ""
+}
+
+func (x *StreamPeriodStat) GetDatasetId() string {
+	if x != nil {
+		return x.DatasetId
+	}
+	return ""
+}
+
+func (x *StreamPeriodStat) GetFrequency() string {
+	if x != nil {
+		return x.Frequency
+	}
+	return ""
+}
+
+func (x *StreamPeriodStat) GetPeriod() int64 {
+	if x != nil {
+		return x.Period
+	}
+	return 0
+}
+
+func (x *StreamPeriodStat) GetExpected() int32 {
+	if x != nil {
+		return x.Expected
+	}
+	return 0
+}
+
+func (x *StreamPeriodStat) GetArrived() int32 {
+	if x != nil {
+		return x.Arrived
+	}
+	return 0
+}
+
+func (x *StreamPeriodStat) GetMissing() int32 {
+	if x != nil {
+		return x.Missing
+	}
+	return 0
+}
+
+func (x *StreamPeriodStat) GetLateAfterCommit() int32 {
+	if x != nil {
+		return x.LateAfterCommit
+	}
+	return 0
+}
+
+func (x *StreamPeriodStat) GetLastArrivalMs() int64 {
+	if x != nil {
+		return x.LastArrivalMs
+	}
+	return 0
+}
+
+func (x *StreamPeriodStat) GetCommitDoneMs() int64 {
+	if x != nil {
+		return x.CommitDoneMs
+	}
+	return 0
+}
+
+func (x *StreamPeriodStat) GetCommitMs() int64 {
+	if x != nil {
+		return x.CommitMs
+	}
+	return 0
+}
+
+func (x *StreamPeriodStat) GetCommitted() bool {
+	if x != nil {
+		return x.Committed
+	}
+	return false
+}
+
+func (x *StreamPeriodStat) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *StreamPeriodStat) GetSuspected() int32 {
+	if x != nil {
+		return x.Suspected
+	}
+	return 0
+}
+
+type StreamWorkerStatus struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	InstanceId    string              `protobuf:"bytes,1,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	Online        bool                `protobuf:"varint,2,opt,name=online,proto3" json:"online,omitempty"`
+	HeartbeatAt   string              `protobuf:"bytes,3,opt,name=heartbeat_at,json=heartbeatAt,proto3" json:"heartbeat_at,omitempty"`
+	AppliedPlanId int64               `protobuf:"varint,4,opt,name=applied_plan_id,json=appliedPlanId,proto3" json:"applied_plan_id,omitempty"`
+	AppliedStage  string              `protobuf:"bytes,5,opt,name=applied_stage,json=appliedStage,proto3" json:"applied_stage,omitempty"`
+	Conns         []*StreamConnStatus `protobuf:"bytes,6,rep,name=conns,proto3" json:"conns,omitempty"`
+	Recent        []*StreamPeriodStat `protobuf:"bytes,7,rep,name=recent,proto3" json:"recent,omitempty"`
+	// clock_offset_ms 是实例时钟减 Collector 时钟的估计值。
+	ClockOffsetMs int64  `protobuf:"varint,8,opt,name=clock_offset_ms,json=clockOffsetMs,proto3" json:"clock_offset_ms,omitempty"`
+	Version       string `protobuf:"bytes,9,opt,name=version,proto3" json:"version,omitempty"`
+}
+
+func (x *StreamWorkerStatus) Reset() {
+	*x = StreamWorkerStatus{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[71]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *StreamWorkerStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamWorkerStatus) ProtoMessage() {}
+
+func (x *StreamWorkerStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[71]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamWorkerStatus.ProtoReflect.Descriptor instead.
+func (*StreamWorkerStatus) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{71}
+}
+
+func (x *StreamWorkerStatus) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+func (x *StreamWorkerStatus) GetOnline() bool {
+	if x != nil {
+		return x.Online
+	}
+	return false
+}
+
+func (x *StreamWorkerStatus) GetHeartbeatAt() string {
+	if x != nil {
+		return x.HeartbeatAt
+	}
+	return ""
+}
+
+func (x *StreamWorkerStatus) GetAppliedPlanId() int64 {
+	if x != nil {
+		return x.AppliedPlanId
+	}
+	return 0
+}
+
+func (x *StreamWorkerStatus) GetAppliedStage() string {
+	if x != nil {
+		return x.AppliedStage
+	}
+	return ""
+}
+
+func (x *StreamWorkerStatus) GetConns() []*StreamConnStatus {
+	if x != nil {
+		return x.Conns
+	}
+	return nil
+}
+
+func (x *StreamWorkerStatus) GetRecent() []*StreamPeriodStat {
+	if x != nil {
+		return x.Recent
+	}
+	return nil
+}
+
+func (x *StreamWorkerStatus) GetClockOffsetMs() int64 {
+	if x != nil {
+		return x.ClockOffsetMs
+	}
+	return 0
+}
+
+func (x *StreamWorkerStatus) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+type StreamHeartbeatReq struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SpaceId    string `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	InstanceId string `protobuf:"bytes,2,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	// applied_plan_id 与 applied_stage 是实例已应用的计划记录与阶段（transition、final）。
+	AppliedPlanId int64               `protobuf:"varint,3,opt,name=applied_plan_id,json=appliedPlanId,proto3" json:"applied_plan_id,omitempty"`
+	AppliedStage  string              `protobuf:"bytes,4,opt,name=applied_stage,json=appliedStage,proto3" json:"applied_stage,omitempty"`
+	Conns         []*StreamConnStatus `protobuf:"bytes,5,rep,name=conns,proto3" json:"conns,omitempty"`
+	SentAtMs      int64               `protobuf:"varint,6,opt,name=sent_at_ms,json=sentAtMs,proto3" json:"sent_at_ms,omitempty"`
+	Version       string              `protobuf:"bytes,7,opt,name=version,proto3" json:"version,omitempty"`
+}
+
+func (x *StreamHeartbeatReq) Reset() {
+	*x = StreamHeartbeatReq{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[72]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *StreamHeartbeatReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamHeartbeatReq) ProtoMessage() {}
+
+func (x *StreamHeartbeatReq) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[72]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamHeartbeatReq.ProtoReflect.Descriptor instead.
+func (*StreamHeartbeatReq) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{72}
+}
+
+func (x *StreamHeartbeatReq) GetSpaceId() string {
+	if x != nil {
+		return x.SpaceId
+	}
+	return ""
+}
+
+func (x *StreamHeartbeatReq) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+func (x *StreamHeartbeatReq) GetAppliedPlanId() int64 {
+	if x != nil {
+		return x.AppliedPlanId
+	}
+	return 0
+}
+
+func (x *StreamHeartbeatReq) GetAppliedStage() string {
+	if x != nil {
+		return x.AppliedStage
+	}
+	return ""
+}
+
+func (x *StreamHeartbeatReq) GetConns() []*StreamConnStatus {
+	if x != nil {
+		return x.Conns
+	}
+	return nil
+}
+
+func (x *StreamHeartbeatReq) GetSentAtMs() int64 {
+	if x != nil {
+		return x.SentAtMs
+	}
+	return 0
+}
+
+func (x *StreamHeartbeatReq) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+type StreamHeartbeatRsp struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	// plan_id 与 stage 是 Collector 当前要求推送与本地执行端应用的计划版本。
+	PlanId       int64  `protobuf:"varint,2,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
+	Stage        string `protobuf:"bytes,3,opt,name=stage,proto3" json:"stage,omitempty"`
+	ServerTimeMs int64  `protobuf:"varint,4,opt,name=server_time_ms,json=serverTimeMs,proto3" json:"server_time_ms,omitempty"`
+}
+
+func (x *StreamHeartbeatRsp) Reset() {
+	*x = StreamHeartbeatRsp{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[73]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *StreamHeartbeatRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamHeartbeatRsp) ProtoMessage() {}
+
+func (x *StreamHeartbeatRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[73]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamHeartbeatRsp.ProtoReflect.Descriptor instead.
+func (*StreamHeartbeatRsp) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{73}
+}
+
+func (x *StreamHeartbeatRsp) GetRetInfo() *commonpb.RetInfo {
+	if x != nil {
+		return x.RetInfo
+	}
+	return nil
+}
+
+func (x *StreamHeartbeatRsp) GetPlanId() int64 {
+	if x != nil {
+		return x.PlanId
+	}
+	return 0
+}
+
+func (x *StreamHeartbeatRsp) GetStage() string {
+	if x != nil {
+		return x.Stage
+	}
+	return ""
+}
+
+func (x *StreamHeartbeatRsp) GetServerTimeMs() int64 {
+	if x != nil {
+		return x.ServerTimeMs
+	}
+	return 0
+}
+
+// StreamPlanItem 是计划内容里分给推送或本地执行端的一项（一个市场），plan_json 是 marketfetch.Plan 的 JSON。
+type StreamPlanItem struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Name     string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Executor string `protobuf:"bytes,2,opt,name=executor,proto3" json:"executor,omitempty"`
+	Market   string `protobuf:"bytes,3,opt,name=market,proto3" json:"market,omitempty"`
+	PlanJson string `protobuf:"bytes,4,opt,name=plan_json,json=planJson,proto3" json:"plan_json,omitempty"`
+}
+
+func (x *StreamPlanItem) Reset() {
+	*x = StreamPlanItem{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[74]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *StreamPlanItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamPlanItem) ProtoMessage() {}
+
+func (x *StreamPlanItem) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[74]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamPlanItem.ProtoReflect.Descriptor instead.
+func (*StreamPlanItem) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{74}
+}
+
+func (x *StreamPlanItem) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *StreamPlanItem) GetExecutor() string {
+	if x != nil {
+		return x.Executor
+	}
+	return ""
+}
+
+func (x *StreamPlanItem) GetMarket() string {
+	if x != nil {
+		return x.Market
+	}
+	return ""
+}
+
+func (x *StreamPlanItem) GetPlanJson() string {
+	if x != nil {
+		return x.PlanJson
+	}
+	return ""
+}
+
+type PullStreamPlanReq struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SpaceId string `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	// market 为空表示该空间全部市场。
+	Market string `protobuf:"bytes,2,opt,name=market,proto3" json:"market,omitempty"`
+}
+
+func (x *PullStreamPlanReq) Reset() {
+	*x = PullStreamPlanReq{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[75]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *PullStreamPlanReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PullStreamPlanReq) ProtoMessage() {}
+
+func (x *PullStreamPlanReq) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[75]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PullStreamPlanReq.ProtoReflect.Descriptor instead.
+func (*PullStreamPlanReq) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{75}
+}
+
+func (x *PullStreamPlanReq) GetSpaceId() string {
+	if x != nil {
+		return x.SpaceId
+	}
+	return ""
+}
+
+func (x *PullStreamPlanReq) GetMarket() string {
+	if x != nil {
+		return x.Market
+	}
+	return ""
+}
+
+type PullStreamPlanRsp struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	PlanId  int64             `protobuf:"varint,2,opt,name=plan_id,json=planId,proto3" json:"plan_id,omitempty"`
+	Stage   string            `protobuf:"bytes,3,opt,name=stage,proto3" json:"stage,omitempty"`
+	Items   []*StreamPlanItem `protobuf:"bytes,4,rep,name=items,proto3" json:"items,omitempty"`
+	// commit_reserve_ms 是周期闸门的提交预留：最晚开始提交 = 收盘 + 截止 − 预留。
+	CommitReserveMs int32 `protobuf:"varint,5,opt,name=commit_reserve_ms,json=commitReserveMs,proto3" json:"commit_reserve_ms,omitempty"`
+}
+
+func (x *PullStreamPlanRsp) Reset() {
+	*x = PullStreamPlanRsp{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[76]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *PullStreamPlanRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PullStreamPlanRsp) ProtoMessage() {}
+
+func (x *PullStreamPlanRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[76]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PullStreamPlanRsp.ProtoReflect.Descriptor instead.
+func (*PullStreamPlanRsp) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{76}
+}
+
+func (x *PullStreamPlanRsp) GetRetInfo() *commonpb.RetInfo {
+	if x != nil {
+		return x.RetInfo
+	}
+	return nil
+}
+
+func (x *PullStreamPlanRsp) GetPlanId() int64 {
+	if x != nil {
+		return x.PlanId
+	}
+	return 0
+}
+
+func (x *PullStreamPlanRsp) GetStage() string {
+	if x != nil {
+		return x.Stage
+	}
+	return ""
+}
+
+func (x *PullStreamPlanRsp) GetItems() []*StreamPlanItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+func (x *PullStreamPlanRsp) GetCommitReserveMs() int32 {
+	if x != nil {
+		return x.CommitReserveMs
+	}
+	return 0
+}
+
+// StreamSuspect 是推送侧疑似下架的标的。
+type StreamSuspect struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Market    string `protobuf:"bytes,1,opt,name=market,proto3" json:"market,omitempty"`
+	SubjectId string `protobuf:"bytes,2,opt,name=subject_id,json=subjectId,proto3" json:"subject_id,omitempty"`
+	Reason    string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+}
+
+func (x *StreamSuspect) Reset() {
+	*x = StreamSuspect{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[77]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *StreamSuspect) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamSuspect) ProtoMessage() {}
+
+func (x *StreamSuspect) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[77]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamSuspect.ProtoReflect.Descriptor instead.
+func (*StreamSuspect) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{77}
+}
+
+func (x *StreamSuspect) GetMarket() string {
+	if x != nil {
+		return x.Market
+	}
+	return ""
+}
+
+func (x *StreamSuspect) GetSubjectId() string {
+	if x != nil {
+		return x.SubjectId
+	}
+	return ""
+}
+
+func (x *StreamSuspect) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type ReportStreamPeriodsReq struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SpaceId    string              `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	InstanceId string              `protobuf:"bytes,2,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	Periods    []*StreamPeriodStat `protobuf:"bytes,3,rep,name=periods,proto3" json:"periods,omitempty"`
+	Suspects   []*StreamSuspect    `protobuf:"bytes,4,rep,name=suspects,proto3" json:"suspects,omitempty"`
+}
+
+func (x *ReportStreamPeriodsReq) Reset() {
+	*x = ReportStreamPeriodsReq{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[78]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ReportStreamPeriodsReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportStreamPeriodsReq) ProtoMessage() {}
+
+func (x *ReportStreamPeriodsReq) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[78]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportStreamPeriodsReq.ProtoReflect.Descriptor instead.
+func (*ReportStreamPeriodsReq) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{78}
+}
+
+func (x *ReportStreamPeriodsReq) GetSpaceId() string {
+	if x != nil {
+		return x.SpaceId
+	}
+	return ""
+}
+
+func (x *ReportStreamPeriodsReq) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
+	}
+	return ""
+}
+
+func (x *ReportStreamPeriodsReq) GetPeriods() []*StreamPeriodStat {
+	if x != nil {
+		return x.Periods
+	}
+	return nil
+}
+
+func (x *ReportStreamPeriodsReq) GetSuspects() []*StreamSuspect {
+	if x != nil {
+		return x.Suspects
+	}
+	return nil
+}
+
+type ReportStreamPeriodsRsp struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+}
+
+func (x *ReportStreamPeriodsRsp) Reset() {
+	*x = ReportStreamPeriodsRsp{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[79]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ReportStreamPeriodsRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportStreamPeriodsRsp) ProtoMessage() {}
+
+func (x *ReportStreamPeriodsRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[79]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportStreamPeriodsRsp.ProtoReflect.Descriptor instead.
+func (*ReportStreamPeriodsRsp) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{79}
+}
+
+func (x *ReportStreamPeriodsRsp) GetRetInfo() *commonpb.RetInfo {
+	if x != nil {
+		return x.RetInfo
+	}
+	return nil
+}
+
+// InvokeMarketFetchReq 的 event 是与 SCF 函数相同的事件 JSON；响应是同样的 model.Response JSON。
+type InvokeMarketFetchReq struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SpaceId string `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	Event   []byte `protobuf:"bytes,2,opt,name=event,proto3" json:"event,omitempty"`
+}
+
+func (x *InvokeMarketFetchReq) Reset() {
+	*x = InvokeMarketFetchReq{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[80]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *InvokeMarketFetchReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InvokeMarketFetchReq) ProtoMessage() {}
+
+func (x *InvokeMarketFetchReq) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[80]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InvokeMarketFetchReq.ProtoReflect.Descriptor instead.
+func (*InvokeMarketFetchReq) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{80}
+}
+
+func (x *InvokeMarketFetchReq) GetSpaceId() string {
+	if x != nil {
+		return x.SpaceId
+	}
+	return ""
+}
+
+func (x *InvokeMarketFetchReq) GetEvent() []byte {
+	if x != nil {
+		return x.Event
+	}
+	return nil
+}
+
+type InvokeMarketFetchRsp struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	RetInfo  *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Response []byte            `protobuf:"bytes,2,opt,name=response,proto3" json:"response,omitempty"`
+}
+
+func (x *InvokeMarketFetchRsp) Reset() {
+	*x = InvokeMarketFetchRsp{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_collector_proto_msgTypes[81]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *InvokeMarketFetchRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InvokeMarketFetchRsp) ProtoMessage() {}
+
+func (x *InvokeMarketFetchRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_collector_proto_msgTypes[81]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InvokeMarketFetchRsp.ProtoReflect.Descriptor instead.
+func (*InvokeMarketFetchRsp) Descriptor() ([]byte, []int) {
+	return file_collector_proto_rawDescGZIP(), []int{81}
+}
+
+func (x *InvokeMarketFetchRsp) GetRetInfo() *commonpb.RetInfo {
+	if x != nil {
+		return x.RetInfo
+	}
+	return nil
+}
+
+func (x *InvokeMarketFetchRsp) GetResponse() []byte {
+	if x != nil {
+		return x.Response
+	}
+	return nil
 }
 
 var File_collector_proto protoreflect.FileDescriptor
@@ -5687,7 +7098,7 @@ var file_collector_proto_rawDesc = []byte{
 	0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x43, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74,
 	0x6f, 0x72, 0x46, 0x75, 0x6e, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x44, 0x61, 0x74, 0x61, 0x73, 0x65,
 	0x74, 0x52, 0x0f, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x53, 0x75, 0x62, 0x6a, 0x65, 0x63,
-	0x74, 0x73, 0x22, 0x8e, 0x04, 0x0a, 0x15, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6c, 0x6c, 0x65, 0x63,
+	0x74, 0x73, 0x22, 0x93, 0x05, 0x0a, 0x15, 0x47, 0x65, 0x74, 0x43, 0x6f, 0x6c, 0x6c, 0x65, 0x63,
 	0x74, 0x6f, 0x72, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08,
 	0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19,
 	0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f,
@@ -5720,33 +7131,285 @@ var file_collector_proto_rawDesc = []byte{
 	0x69, 0x6c, 0x65, 0x64, 0x42, 0x61, 0x63, 0x6b, 0x66, 0x69, 0x6c, 0x6c, 0x73, 0x32, 0x34, 0x68,
 	0x12, 0x21, 0x0a, 0x0c, 0x67, 0x65, 0x6e, 0x65, 0x72, 0x61, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74,
 	0x18, 0x0a, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x67, 0x65, 0x6e, 0x65, 0x72, 0x61, 0x74, 0x65,
-	0x64, 0x41, 0x74, 0x22, 0x33, 0x0a, 0x16, 0x52, 0x65, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x65,
-	0x72, 0x46, 0x65, 0x74, 0x63, 0x68, 0x50, 0x6c, 0x61, 0x6e, 0x52, 0x65, 0x71, 0x12, 0x19, 0x0a,
-	0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52,
-	0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x22, 0x4a, 0x0a, 0x15, 0x53, 0x65, 0x74, 0x46,
-	0x65, 0x74, 0x63, 0x68, 0x50, 0x6c, 0x61, 0x6e, 0x50, 0x61, 0x75, 0x73, 0x65, 0x64, 0x52, 0x65,
+	0x64, 0x41, 0x74, 0x12, 0x3f, 0x0a, 0x06, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x18, 0x0b, 0x20,
+	0x01, 0x28, 0x0b, 0x32, 0x27, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d,
+	0x57, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x06, 0x73, 0x74,
+	0x72, 0x65, 0x61, 0x6d, 0x12, 0x42, 0x0a, 0x0c, 0x69, 0x6e, 0x67, 0x65, 0x73, 0x74, 0x5f, 0x6d,
+	0x6f, 0x64, 0x65, 0x73, 0x18, 0x0c, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x1f, 0x2e, 0x74, 0x72, 0x70,
+	0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72,
+	0x2e, 0x49, 0x6e, 0x67, 0x65, 0x73, 0x74, 0x4d, 0x6f, 0x64, 0x65, 0x52, 0x0b, 0x69, 0x6e, 0x67,
+	0x65, 0x73, 0x74, 0x4d, 0x6f, 0x64, 0x65, 0x73, 0x22, 0x33, 0x0a, 0x16, 0x52, 0x65, 0x72, 0x65,
+	0x67, 0x69, 0x73, 0x74, 0x65, 0x72, 0x46, 0x65, 0x74, 0x63, 0x68, 0x50, 0x6c, 0x61, 0x6e, 0x52,
+	0x65, 0x71, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x22, 0x4a, 0x0a,
+	0x15, 0x53, 0x65, 0x74, 0x46, 0x65, 0x74, 0x63, 0x68, 0x50, 0x6c, 0x61, 0x6e, 0x50, 0x61, 0x75,
+	0x73, 0x65, 0x64, 0x52, 0x65, 0x71, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f,
+	0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49,
+	0x64, 0x12, 0x16, 0x0a, 0x06, 0x70, 0x61, 0x75, 0x73, 0x65, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28,
+	0x08, 0x52, 0x06, 0x70, 0x61, 0x75, 0x73, 0x65, 0x64, 0x22, 0x8e, 0x01, 0x0a, 0x15, 0x53, 0x65,
+	0x74, 0x46, 0x65, 0x74, 0x63, 0x68, 0x50, 0x6c, 0x61, 0x6e, 0x50, 0x61, 0x75, 0x73, 0x65, 0x64,
+	0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18,
+	0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
+	0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f,
+	0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x16, 0x0a, 0x06, 0x70, 0x61, 0x75,
+	0x73, 0x65, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x08, 0x52, 0x06, 0x70, 0x61, 0x75, 0x73, 0x65,
+	0x64, 0x12, 0x27, 0x0a, 0x0f, 0x74, 0x69, 0x6d, 0x65, 0x72, 0x73, 0x5f, 0x64, 0x69, 0x73, 0x61,
+	0x62, 0x6c, 0x65, 0x64, 0x18, 0x03, 0x20, 0x01, 0x28, 0x08, 0x52, 0x0e, 0x74, 0x69, 0x6d, 0x65,
+	0x72, 0x73, 0x44, 0x69, 0x73, 0x61, 0x62, 0x6c, 0x65, 0x64, 0x22, 0x8f, 0x01, 0x0a, 0x16, 0x52,
+	0x65, 0x72, 0x65, 0x67, 0x69, 0x73, 0x74, 0x65, 0x72, 0x46, 0x65, 0x74, 0x63, 0x68, 0x50, 0x6c,
+	0x61, 0x6e, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66,
+	0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d,
+	0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e,
+	0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x1a, 0x0a, 0x08, 0x64,
+	0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x09, 0x52, 0x08, 0x64,
+	0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x73, 0x12, 0x23, 0x0a, 0x0d, 0x62, 0x61, 0x63, 0x6b, 0x66,
+	0x69, 0x6c, 0x6c, 0x5f, 0x6a, 0x6f, 0x62, 0x73, 0x18, 0x03, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0c,
+	0x62, 0x61, 0x63, 0x6b, 0x66, 0x69, 0x6c, 0x6c, 0x4a, 0x6f, 0x62, 0x73, 0x22, 0xbe, 0x02, 0x0a,
+	0x0a, 0x49, 0x6e, 0x67, 0x65, 0x73, 0x74, 0x4d, 0x6f, 0x64, 0x65, 0x12, 0x19, 0x0a, 0x08, 0x73,
+	0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73,
+	0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x1d, 0x0a, 0x0a, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65,
+	0x74, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x64, 0x61, 0x74, 0x61,
+	0x73, 0x65, 0x74, 0x49, 0x64, 0x12, 0x12, 0x0a, 0x04, 0x6d, 0x6f, 0x64, 0x65, 0x18, 0x03, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x04, 0x6d, 0x6f, 0x64, 0x65, 0x12, 0x1a, 0x0a, 0x08, 0x65, 0x78, 0x65,
+	0x63, 0x75, 0x74, 0x6f, 0x72, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x65, 0x78, 0x65,
+	0x63, 0x75, 0x74, 0x6f, 0x72, 0x12, 0x1d, 0x0a, 0x0a, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64,
+	0x5f, 0x61, 0x74, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x75, 0x70, 0x64, 0x61, 0x74,
+	0x65, 0x64, 0x41, 0x74, 0x12, 0x62, 0x0a, 0x11, 0x65, 0x66, 0x66, 0x65, 0x63, 0x74, 0x69, 0x76,
+	0x65, 0x5f, 0x70, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x73, 0x18, 0x06, 0x20, 0x03, 0x28, 0x0b, 0x32,
+	0x35, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c,
+	0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x49, 0x6e, 0x67, 0x65, 0x73, 0x74, 0x4d, 0x6f, 0x64, 0x65,
+	0x2e, 0x45, 0x66, 0x66, 0x65, 0x63, 0x74, 0x69, 0x76, 0x65, 0x50, 0x65, 0x72, 0x69, 0x6f, 0x64,
+	0x73, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x52, 0x10, 0x65, 0x66, 0x66, 0x65, 0x63, 0x74, 0x69, 0x76,
+	0x65, 0x50, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x73, 0x1a, 0x43, 0x0a, 0x15, 0x45, 0x66, 0x66, 0x65,
+	0x63, 0x74, 0x69, 0x76, 0x65, 0x50, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x73, 0x45, 0x6e, 0x74, 0x72,
+	0x79, 0x12, 0x10, 0x0a, 0x03, 0x6b, 0x65, 0x79, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x03,
+	0x6b, 0x65, 0x79, 0x12, 0x14, 0x0a, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x18, 0x02, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x3a, 0x02, 0x38, 0x01, 0x22, 0x4c, 0x0a,
+	0x10, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x67, 0x65, 0x73, 0x74, 0x4d, 0x6f, 0x64, 0x65, 0x52, 0x65,
 	0x71, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20,
-	0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x16, 0x0a, 0x06,
-	0x70, 0x61, 0x75, 0x73, 0x65, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x08, 0x52, 0x06, 0x70, 0x61,
-	0x75, 0x73, 0x65, 0x64, 0x22, 0x8e, 0x01, 0x0a, 0x15, 0x53, 0x65, 0x74, 0x46, 0x65, 0x74, 0x63,
-	0x68, 0x50, 0x6c, 0x61, 0x6e, 0x50, 0x61, 0x75, 0x73, 0x65, 0x64, 0x52, 0x73, 0x70, 0x12, 0x34,
-	0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b,
-	0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d,
-	0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74,
-	0x49, 0x6e, 0x66, 0x6f, 0x12, 0x16, 0x0a, 0x06, 0x70, 0x61, 0x75, 0x73, 0x65, 0x64, 0x18, 0x02,
-	0x20, 0x01, 0x28, 0x08, 0x52, 0x06, 0x70, 0x61, 0x75, 0x73, 0x65, 0x64, 0x12, 0x27, 0x0a, 0x0f,
-	0x74, 0x69, 0x6d, 0x65, 0x72, 0x73, 0x5f, 0x64, 0x69, 0x73, 0x61, 0x62, 0x6c, 0x65, 0x64, 0x18,
-	0x03, 0x20, 0x01, 0x28, 0x08, 0x52, 0x0e, 0x74, 0x69, 0x6d, 0x65, 0x72, 0x73, 0x44, 0x69, 0x73,
-	0x61, 0x62, 0x6c, 0x65, 0x64, 0x22, 0x8f, 0x01, 0x0a, 0x16, 0x52, 0x65, 0x72, 0x65, 0x67, 0x69,
-	0x73, 0x74, 0x65, 0x72, 0x46, 0x65, 0x74, 0x63, 0x68, 0x50, 0x6c, 0x61, 0x6e, 0x52, 0x73, 0x70,
+	0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x1d, 0x0a, 0x0a,
+	0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x09, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x49, 0x64, 0x22, 0xc0, 0x01, 0x0a, 0x10,
+	0x47, 0x65, 0x74, 0x49, 0x6e, 0x67, 0x65, 0x73, 0x74, 0x4d, 0x6f, 0x64, 0x65, 0x52, 0x73, 0x70,
 	0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01,
 	0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63,
 	0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72,
-	0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x1a, 0x0a, 0x08, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65,
-	0x74, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x09, 0x52, 0x08, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65,
-	0x74, 0x73, 0x12, 0x23, 0x0a, 0x0d, 0x62, 0x61, 0x63, 0x6b, 0x66, 0x69, 0x6c, 0x6c, 0x5f, 0x6a,
-	0x6f, 0x62, 0x73, 0x18, 0x03, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0c, 0x62, 0x61, 0x63, 0x6b, 0x66,
-	0x69, 0x6c, 0x6c, 0x4a, 0x6f, 0x62, 0x73, 0x32, 0xa6, 0x14, 0x0a, 0x0a, 0x43, 0x6f, 0x6c, 0x6c,
+	0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x35, 0x0a, 0x05, 0x6d, 0x6f, 0x64, 0x65, 0x73, 0x18,
+	0x02, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x1f, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
+	0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x49, 0x6e, 0x67, 0x65,
+	0x73, 0x74, 0x4d, 0x6f, 0x64, 0x65, 0x52, 0x05, 0x6d, 0x6f, 0x64, 0x65, 0x73, 0x12, 0x3f, 0x0a,
+	0x06, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x27, 0x2e,
+	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63,
+	0x74, 0x6f, 0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x57, 0x6f, 0x72, 0x6b, 0x65, 0x72,
+	0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x06, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x22, 0x92,
+	0x01, 0x0a, 0x10, 0x53, 0x65, 0x74, 0x49, 0x6e, 0x67, 0x65, 0x73, 0x74, 0x4d, 0x6f, 0x64, 0x65,
+	0x52, 0x65, 0x71, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18,
+	0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x1d,
+	0x0a, 0x0a, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x09, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x49, 0x64, 0x12, 0x12, 0x0a,
+	0x04, 0x6d, 0x6f, 0x64, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6d, 0x6f, 0x64,
+	0x65, 0x12, 0x1a, 0x0a, 0x08, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x6f, 0x72, 0x18, 0x04, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x08, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x6f, 0x72, 0x12, 0x14, 0x0a,
+	0x05, 0x66, 0x6f, 0x72, 0x63, 0x65, 0x18, 0x05, 0x20, 0x01, 0x28, 0x08, 0x52, 0x05, 0x66, 0x6f,
+	0x72, 0x63, 0x65, 0x22, 0xd9, 0x01, 0x0a, 0x10, 0x53, 0x65, 0x74, 0x49, 0x6e, 0x67, 0x65, 0x73,
+	0x74, 0x4d, 0x6f, 0x64, 0x65, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f,
+	0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70,
+	0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65,
+	0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x35,
+	0x0a, 0x05, 0x6d, 0x6f, 0x64, 0x65, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x1f, 0x2e,
+	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63,
+	0x74, 0x6f, 0x72, 0x2e, 0x49, 0x6e, 0x67, 0x65, 0x73, 0x74, 0x4d, 0x6f, 0x64, 0x65, 0x52, 0x05,
+	0x6d, 0x6f, 0x64, 0x65, 0x73, 0x12, 0x3f, 0x0a, 0x06, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x18,
+	0x03, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x27, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
+	0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x74, 0x72, 0x65,
+	0x61, 0x6d, 0x57, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x06,
+	0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x12, 0x17, 0x0a, 0x07, 0x70, 0x6c, 0x61, 0x6e, 0x5f, 0x69,
+	0x64, 0x18, 0x04, 0x20, 0x01, 0x28, 0x03, 0x52, 0x06, 0x70, 0x6c, 0x61, 0x6e, 0x49, 0x64, 0x22,
+	0xe6, 0x01, 0x0a, 0x10, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x43, 0x6f, 0x6e, 0x6e, 0x53, 0x74,
+	0x61, 0x74, 0x75, 0x73, 0x12, 0x16, 0x0a, 0x06, 0x6d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x18, 0x01,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x6d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x12, 0x1c, 0x0a, 0x09,
+	0x66, 0x72, 0x65, 0x71, 0x75, 0x65, 0x6e, 0x63, 0x79, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x09, 0x66, 0x72, 0x65, 0x71, 0x75, 0x65, 0x6e, 0x63, 0x79, 0x12, 0x18, 0x0a, 0x07, 0x73, 0x74,
+	0x72, 0x65, 0x61, 0x6d, 0x73, 0x18, 0x03, 0x20, 0x01, 0x28, 0x05, 0x52, 0x07, 0x73, 0x74, 0x72,
+	0x65, 0x61, 0x6d, 0x73, 0x12, 0x26, 0x0a, 0x0f, 0x6c, 0x61, 0x73, 0x74, 0x5f, 0x6d, 0x65, 0x73,
+	0x73, 0x61, 0x67, 0x65, 0x5f, 0x61, 0x74, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d, 0x6c,
+	0x61, 0x73, 0x74, 0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x41, 0x74, 0x12, 0x1e, 0x0a, 0x0a,
+	0x72, 0x65, 0x63, 0x6f, 0x6e, 0x6e, 0x65, 0x63, 0x74, 0x73, 0x18, 0x05, 0x20, 0x01, 0x28, 0x03,
+	0x52, 0x0a, 0x72, 0x65, 0x63, 0x6f, 0x6e, 0x6e, 0x65, 0x63, 0x74, 0x73, 0x12, 0x1e, 0x0a, 0x0a,
+	0x73, 0x75, 0x62, 0x73, 0x63, 0x72, 0x69, 0x62, 0x65, 0x64, 0x18, 0x06, 0x20, 0x01, 0x28, 0x08,
+	0x52, 0x0a, 0x73, 0x75, 0x62, 0x73, 0x63, 0x72, 0x69, 0x62, 0x65, 0x64, 0x12, 0x1a, 0x0a, 0x08,
+	0x65, 0x6e, 0x64, 0x70, 0x6f, 0x69, 0x6e, 0x74, 0x18, 0x07, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08,
+	0x65, 0x6e, 0x64, 0x70, 0x6f, 0x69, 0x6e, 0x74, 0x22, 0xb8, 0x03, 0x0a, 0x10, 0x53, 0x74, 0x72,
+	0x65, 0x61, 0x6d, 0x50, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x53, 0x74, 0x61, 0x74, 0x12, 0x16, 0x0a,
+	0x06, 0x6d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x6d,
+	0x61, 0x72, 0x6b, 0x65, 0x74, 0x12, 0x1d, 0x0a, 0x0a, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74,
+	0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x64, 0x61, 0x74, 0x61, 0x73,
+	0x65, 0x74, 0x49, 0x64, 0x12, 0x1c, 0x0a, 0x09, 0x66, 0x72, 0x65, 0x71, 0x75, 0x65, 0x6e, 0x63,
+	0x79, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x66, 0x72, 0x65, 0x71, 0x75, 0x65, 0x6e,
+	0x63, 0x79, 0x12, 0x16, 0x0a, 0x06, 0x70, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x18, 0x04, 0x20, 0x01,
+	0x28, 0x03, 0x52, 0x06, 0x70, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x12, 0x1a, 0x0a, 0x08, 0x65, 0x78,
+	0x70, 0x65, 0x63, 0x74, 0x65, 0x64, 0x18, 0x05, 0x20, 0x01, 0x28, 0x05, 0x52, 0x08, 0x65, 0x78,
+	0x70, 0x65, 0x63, 0x74, 0x65, 0x64, 0x12, 0x18, 0x0a, 0x07, 0x61, 0x72, 0x72, 0x69, 0x76, 0x65,
+	0x64, 0x18, 0x06, 0x20, 0x01, 0x28, 0x05, 0x52, 0x07, 0x61, 0x72, 0x72, 0x69, 0x76, 0x65, 0x64,
+	0x12, 0x18, 0x0a, 0x07, 0x6d, 0x69, 0x73, 0x73, 0x69, 0x6e, 0x67, 0x18, 0x07, 0x20, 0x01, 0x28,
+	0x05, 0x52, 0x07, 0x6d, 0x69, 0x73, 0x73, 0x69, 0x6e, 0x67, 0x12, 0x2a, 0x0a, 0x11, 0x6c, 0x61,
+	0x74, 0x65, 0x5f, 0x61, 0x66, 0x74, 0x65, 0x72, 0x5f, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x18,
+	0x08, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0f, 0x6c, 0x61, 0x74, 0x65, 0x41, 0x66, 0x74, 0x65, 0x72,
+	0x43, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x12, 0x26, 0x0a, 0x0f, 0x6c, 0x61, 0x73, 0x74, 0x5f, 0x61,
+	0x72, 0x72, 0x69, 0x76, 0x61, 0x6c, 0x5f, 0x6d, 0x73, 0x18, 0x09, 0x20, 0x01, 0x28, 0x03, 0x52,
+	0x0d, 0x6c, 0x61, 0x73, 0x74, 0x41, 0x72, 0x72, 0x69, 0x76, 0x61, 0x6c, 0x4d, 0x73, 0x12, 0x24,
+	0x0a, 0x0e, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x5f, 0x64, 0x6f, 0x6e, 0x65, 0x5f, 0x6d, 0x73,
+	0x18, 0x0a, 0x20, 0x01, 0x28, 0x03, 0x52, 0x0c, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x44, 0x6f,
+	0x6e, 0x65, 0x4d, 0x73, 0x12, 0x1b, 0x0a, 0x09, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x5f, 0x6d,
+	0x73, 0x18, 0x0b, 0x20, 0x01, 0x28, 0x03, 0x52, 0x08, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x4d,
+	0x73, 0x12, 0x1c, 0x0a, 0x09, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x74, 0x65, 0x64, 0x18, 0x0c,
+	0x20, 0x01, 0x28, 0x08, 0x52, 0x09, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x74, 0x65, 0x64, 0x12,
+	0x14, 0x0a, 0x05, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x18, 0x0d, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05,
+	0x65, 0x72, 0x72, 0x6f, 0x72, 0x12, 0x1c, 0x0a, 0x09, 0x73, 0x75, 0x73, 0x70, 0x65, 0x63, 0x74,
+	0x65, 0x64, 0x18, 0x0e, 0x20, 0x01, 0x28, 0x05, 0x52, 0x09, 0x73, 0x75, 0x73, 0x70, 0x65, 0x63,
+	0x74, 0x65, 0x64, 0x22, 0xfb, 0x02, 0x0a, 0x12, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x57, 0x6f,
+	0x72, 0x6b, 0x65, 0x72, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x12, 0x1f, 0x0a, 0x0b, 0x69, 0x6e,
+	0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x0a, 0x69, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x49, 0x64, 0x12, 0x16, 0x0a, 0x06, 0x6f,
+	0x6e, 0x6c, 0x69, 0x6e, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x08, 0x52, 0x06, 0x6f, 0x6e, 0x6c,
+	0x69, 0x6e, 0x65, 0x12, 0x21, 0x0a, 0x0c, 0x68, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74,
+	0x5f, 0x61, 0x74, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x68, 0x65, 0x61, 0x72, 0x74,
+	0x62, 0x65, 0x61, 0x74, 0x41, 0x74, 0x12, 0x26, 0x0a, 0x0f, 0x61, 0x70, 0x70, 0x6c, 0x69, 0x65,
+	0x64, 0x5f, 0x70, 0x6c, 0x61, 0x6e, 0x5f, 0x69, 0x64, 0x18, 0x04, 0x20, 0x01, 0x28, 0x03, 0x52,
+	0x0d, 0x61, 0x70, 0x70, 0x6c, 0x69, 0x65, 0x64, 0x50, 0x6c, 0x61, 0x6e, 0x49, 0x64, 0x12, 0x23,
+	0x0a, 0x0d, 0x61, 0x70, 0x70, 0x6c, 0x69, 0x65, 0x64, 0x5f, 0x73, 0x74, 0x61, 0x67, 0x65, 0x18,
+	0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0c, 0x61, 0x70, 0x70, 0x6c, 0x69, 0x65, 0x64, 0x53, 0x74,
+	0x61, 0x67, 0x65, 0x12, 0x3b, 0x0a, 0x05, 0x63, 0x6f, 0x6e, 0x6e, 0x73, 0x18, 0x06, 0x20, 0x03,
+	0x28, 0x0b, 0x32, 0x25, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63,
+	0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x43,
+	0x6f, 0x6e, 0x6e, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x05, 0x63, 0x6f, 0x6e, 0x6e, 0x73,
+	0x12, 0x3d, 0x0a, 0x06, 0x72, 0x65, 0x63, 0x65, 0x6e, 0x74, 0x18, 0x07, 0x20, 0x03, 0x28, 0x0b,
+	0x32, 0x25, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c,
+	0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x65, 0x72,
+	0x69, 0x6f, 0x64, 0x53, 0x74, 0x61, 0x74, 0x52, 0x06, 0x72, 0x65, 0x63, 0x65, 0x6e, 0x74, 0x12,
+	0x26, 0x0a, 0x0f, 0x63, 0x6c, 0x6f, 0x63, 0x6b, 0x5f, 0x6f, 0x66, 0x66, 0x73, 0x65, 0x74, 0x5f,
+	0x6d, 0x73, 0x18, 0x08, 0x20, 0x01, 0x28, 0x03, 0x52, 0x0d, 0x63, 0x6c, 0x6f, 0x63, 0x6b, 0x4f,
+	0x66, 0x66, 0x73, 0x65, 0x74, 0x4d, 0x73, 0x12, 0x18, 0x0a, 0x07, 0x76, 0x65, 0x72, 0x73, 0x69,
+	0x6f, 0x6e, 0x18, 0x09, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x76, 0x65, 0x72, 0x73, 0x69, 0x6f,
+	0x6e, 0x22, 0x92, 0x02, 0x0a, 0x12, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x48, 0x65, 0x61, 0x72,
+	0x74, 0x62, 0x65, 0x61, 0x74, 0x52, 0x65, 0x71, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63,
+	0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63,
+	0x65, 0x49, 0x64, 0x12, 0x1f, 0x0a, 0x0b, 0x69, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x5f,
+	0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x69, 0x6e, 0x73, 0x74, 0x61, 0x6e,
+	0x63, 0x65, 0x49, 0x64, 0x12, 0x26, 0x0a, 0x0f, 0x61, 0x70, 0x70, 0x6c, 0x69, 0x65, 0x64, 0x5f,
+	0x70, 0x6c, 0x61, 0x6e, 0x5f, 0x69, 0x64, 0x18, 0x03, 0x20, 0x01, 0x28, 0x03, 0x52, 0x0d, 0x61,
+	0x70, 0x70, 0x6c, 0x69, 0x65, 0x64, 0x50, 0x6c, 0x61, 0x6e, 0x49, 0x64, 0x12, 0x23, 0x0a, 0x0d,
+	0x61, 0x70, 0x70, 0x6c, 0x69, 0x65, 0x64, 0x5f, 0x73, 0x74, 0x61, 0x67, 0x65, 0x18, 0x04, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x0c, 0x61, 0x70, 0x70, 0x6c, 0x69, 0x65, 0x64, 0x53, 0x74, 0x61, 0x67,
+	0x65, 0x12, 0x3b, 0x0a, 0x05, 0x63, 0x6f, 0x6e, 0x6e, 0x73, 0x18, 0x05, 0x20, 0x03, 0x28, 0x0b,
+	0x32, 0x25, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c,
+	0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x43, 0x6f, 0x6e,
+	0x6e, 0x53, 0x74, 0x61, 0x74, 0x75, 0x73, 0x52, 0x05, 0x63, 0x6f, 0x6e, 0x6e, 0x73, 0x12, 0x1c,
+	0x0a, 0x0a, 0x73, 0x65, 0x6e, 0x74, 0x5f, 0x61, 0x74, 0x5f, 0x6d, 0x73, 0x18, 0x06, 0x20, 0x01,
+	0x28, 0x03, 0x52, 0x08, 0x73, 0x65, 0x6e, 0x74, 0x41, 0x74, 0x4d, 0x73, 0x12, 0x18, 0x0a, 0x07,
+	0x76, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x18, 0x07, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x76,
+	0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x22, 0x9f, 0x01, 0x0a, 0x12, 0x53, 0x74, 0x72, 0x65, 0x61,
+	0x6d, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a,
+	0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32,
+	0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d,
+	0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49,
+	0x6e, 0x66, 0x6f, 0x12, 0x17, 0x0a, 0x07, 0x70, 0x6c, 0x61, 0x6e, 0x5f, 0x69, 0x64, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x03, 0x52, 0x06, 0x70, 0x6c, 0x61, 0x6e, 0x49, 0x64, 0x12, 0x14, 0x0a, 0x05,
+	0x73, 0x74, 0x61, 0x67, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x73, 0x74, 0x61,
+	0x67, 0x65, 0x12, 0x24, 0x0a, 0x0e, 0x73, 0x65, 0x72, 0x76, 0x65, 0x72, 0x5f, 0x74, 0x69, 0x6d,
+	0x65, 0x5f, 0x6d, 0x73, 0x18, 0x04, 0x20, 0x01, 0x28, 0x03, 0x52, 0x0c, 0x73, 0x65, 0x72, 0x76,
+	0x65, 0x72, 0x54, 0x69, 0x6d, 0x65, 0x4d, 0x73, 0x22, 0x75, 0x0a, 0x0e, 0x53, 0x74, 0x72, 0x65,
+	0x61, 0x6d, 0x50, 0x6c, 0x61, 0x6e, 0x49, 0x74, 0x65, 0x6d, 0x12, 0x12, 0x0a, 0x04, 0x6e, 0x61,
+	0x6d, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x12, 0x1a,
+	0x0a, 0x08, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x6f, 0x72, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x08, 0x65, 0x78, 0x65, 0x63, 0x75, 0x74, 0x6f, 0x72, 0x12, 0x16, 0x0a, 0x06, 0x6d, 0x61,
+	0x72, 0x6b, 0x65, 0x74, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x6d, 0x61, 0x72, 0x6b,
+	0x65, 0x74, 0x12, 0x1b, 0x0a, 0x09, 0x70, 0x6c, 0x61, 0x6e, 0x5f, 0x6a, 0x73, 0x6f, 0x6e, 0x18,
+	0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x70, 0x6c, 0x61, 0x6e, 0x4a, 0x73, 0x6f, 0x6e, 0x22,
+	0x46, 0x0a, 0x11, 0x50, 0x75, 0x6c, 0x6c, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x6c, 0x61,
+	0x6e, 0x52, 0x65, 0x71, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12,
+	0x16, 0x0a, 0x06, 0x6d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x06, 0x6d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x22, 0xdf, 0x01, 0x0a, 0x11, 0x50, 0x75, 0x6c, 0x6c,
+	0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x6c, 0x61, 0x6e, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a,
+	0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32,
+	0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d,
+	0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49,
+	0x6e, 0x66, 0x6f, 0x12, 0x17, 0x0a, 0x07, 0x70, 0x6c, 0x61, 0x6e, 0x5f, 0x69, 0x64, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x03, 0x52, 0x06, 0x70, 0x6c, 0x61, 0x6e, 0x49, 0x64, 0x12, 0x14, 0x0a, 0x05,
+	0x73, 0x74, 0x61, 0x67, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x73, 0x74, 0x61,
+	0x67, 0x65, 0x12, 0x39, 0x0a, 0x05, 0x69, 0x74, 0x65, 0x6d, 0x73, 0x18, 0x04, 0x20, 0x03, 0x28,
+	0x0b, 0x32, 0x23, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f,
+	0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x6c,
+	0x61, 0x6e, 0x49, 0x74, 0x65, 0x6d, 0x52, 0x05, 0x69, 0x74, 0x65, 0x6d, 0x73, 0x12, 0x2a, 0x0a,
+	0x11, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x5f, 0x72, 0x65, 0x73, 0x65, 0x72, 0x76, 0x65, 0x5f,
+	0x6d, 0x73, 0x18, 0x05, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0f, 0x63, 0x6f, 0x6d, 0x6d, 0x69, 0x74,
+	0x52, 0x65, 0x73, 0x65, 0x72, 0x76, 0x65, 0x4d, 0x73, 0x22, 0x5e, 0x0a, 0x0d, 0x53, 0x74, 0x72,
+	0x65, 0x61, 0x6d, 0x53, 0x75, 0x73, 0x70, 0x65, 0x63, 0x74, 0x12, 0x16, 0x0a, 0x06, 0x6d, 0x61,
+	0x72, 0x6b, 0x65, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x6d, 0x61, 0x72, 0x6b,
+	0x65, 0x74, 0x12, 0x1d, 0x0a, 0x0a, 0x73, 0x75, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x5f, 0x69, 0x64,
+	0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x73, 0x75, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x49,
+	0x64, 0x12, 0x16, 0x0a, 0x06, 0x72, 0x65, 0x61, 0x73, 0x6f, 0x6e, 0x18, 0x03, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x06, 0x72, 0x65, 0x61, 0x73, 0x6f, 0x6e, 0x22, 0xd5, 0x01, 0x0a, 0x16, 0x52, 0x65,
+	0x70, 0x6f, 0x72, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x65, 0x72, 0x69, 0x6f, 0x64,
+	0x73, 0x52, 0x65, 0x71, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12,
+	0x1f, 0x0a, 0x0b, 0x69, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x69, 0x6e, 0x73, 0x74, 0x61, 0x6e, 0x63, 0x65, 0x49, 0x64,
+	0x12, 0x3f, 0x0a, 0x07, 0x70, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28,
+	0x0b, 0x32, 0x25, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f,
+	0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x65,
+	0x72, 0x69, 0x6f, 0x64, 0x53, 0x74, 0x61, 0x74, 0x52, 0x07, 0x70, 0x65, 0x72, 0x69, 0x6f, 0x64,
+	0x73, 0x12, 0x3e, 0x0a, 0x08, 0x73, 0x75, 0x73, 0x70, 0x65, 0x63, 0x74, 0x73, 0x18, 0x04, 0x20,
+	0x03, 0x28, 0x0b, 0x32, 0x22, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d,
+	0x53, 0x75, 0x73, 0x70, 0x65, 0x63, 0x74, 0x52, 0x08, 0x73, 0x75, 0x73, 0x70, 0x65, 0x63, 0x74,
+	0x73, 0x22, 0x4e, 0x0a, 0x16, 0x52, 0x65, 0x70, 0x6f, 0x72, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61,
+	0x6d, 0x50, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x73, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72,
+	0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e,
+	0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e,
+	0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66,
+	0x6f, 0x22, 0x47, 0x0a, 0x14, 0x49, 0x6e, 0x76, 0x6f, 0x6b, 0x65, 0x4d, 0x61, 0x72, 0x6b, 0x65,
+	0x74, 0x46, 0x65, 0x74, 0x63, 0x68, 0x52, 0x65, 0x71, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61,
+	0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61,
+	0x63, 0x65, 0x49, 0x64, 0x12, 0x14, 0x0a, 0x05, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x18, 0x02, 0x20,
+	0x01, 0x28, 0x0c, 0x52, 0x05, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x22, 0x68, 0x0a, 0x14, 0x49, 0x6e,
+	0x76, 0x6f, 0x6b, 0x65, 0x4d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x46, 0x65, 0x74, 0x63, 0x68, 0x52,
+	0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01,
+	0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
+	0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52,
+	0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x1a, 0x0a, 0x08, 0x72, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x08, 0x72, 0x65, 0x73, 0x70,
+	0x6f, 0x6e, 0x73, 0x65, 0x32, 0xc9, 0x02, 0x0a, 0x0f, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x43,
+	0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x12, 0x63, 0x0a, 0x0f, 0x53, 0x74, 0x72, 0x65,
+	0x61, 0x6d, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x12, 0x27, 0x2e, 0x74, 0x72,
+	0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f,
+	0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61,
+	0x74, 0x52, 0x65, 0x71, 0x1a, 0x27, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
+	0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61,
+	0x6d, 0x48, 0x65, 0x61, 0x72, 0x74, 0x62, 0x65, 0x61, 0x74, 0x52, 0x73, 0x70, 0x12, 0x60, 0x0a,
+	0x0e, 0x50, 0x75, 0x6c, 0x6c, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x6c, 0x61, 0x6e, 0x12,
+	0x26, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c,
+	0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x50, 0x75, 0x6c, 0x6c, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d,
+	0x50, 0x6c, 0x61, 0x6e, 0x52, 0x65, 0x71, 0x1a, 0x26, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d,
+	0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x50, 0x75,
+	0x6c, 0x6c, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x6c, 0x61, 0x6e, 0x52, 0x73, 0x70, 0x12,
+	0x6f, 0x0a, 0x13, 0x52, 0x65, 0x70, 0x6f, 0x72, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50,
+	0x65, 0x72, 0x69, 0x6f, 0x64, 0x73, 0x12, 0x2b, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
+	0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x52, 0x65, 0x70,
+	0x6f, 0x72, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x73,
+	0x52, 0x65, 0x71, 0x1a, 0x2b, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x52, 0x65, 0x70, 0x6f, 0x72, 0x74,
+	0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x50, 0x65, 0x72, 0x69, 0x6f, 0x64, 0x73, 0x52, 0x73, 0x70,
+	0x32, 0x75, 0x0a, 0x13, 0x4d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x46, 0x65, 0x74, 0x63, 0x68, 0x45,
+	0x78, 0x65, 0x63, 0x75, 0x74, 0x6f, 0x72, 0x12, 0x5e, 0x0a, 0x06, 0x49, 0x6e, 0x76, 0x6f, 0x6b,
+	0x65, 0x12, 0x29, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f,
+	0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x49, 0x6e, 0x76, 0x6f, 0x6b, 0x65, 0x4d, 0x61,
+	0x72, 0x6b, 0x65, 0x74, 0x46, 0x65, 0x74, 0x63, 0x68, 0x52, 0x65, 0x71, 0x1a, 0x29, 0x2e, 0x74,
+	0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74,
+	0x6f, 0x72, 0x2e, 0x49, 0x6e, 0x76, 0x6f, 0x6b, 0x65, 0x4d, 0x61, 0x72, 0x6b, 0x65, 0x74, 0x46,
+	0x65, 0x74, 0x63, 0x68, 0x52, 0x73, 0x70, 0x32, 0xe4, 0x15, 0x0a, 0x0a, 0x43, 0x6f, 0x6c, 0x6c,
 	0x65, 0x63, 0x74, 0x4d, 0x67, 0x72, 0x12, 0x57, 0x0a, 0x0b, 0x47, 0x65, 0x74, 0x54, 0x61, 0x73,
 	0x6b, 0x4c, 0x69, 0x73, 0x74, 0x12, 0x23, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
 	0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x54,
@@ -5909,12 +7572,24 @@ var file_collector_proto_rawDesc = []byte{
 	0x64, 0x52, 0x65, 0x71, 0x1a, 0x2a, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
 	0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x65, 0x74, 0x46, 0x65,
 	0x74, 0x63, 0x68, 0x50, 0x6c, 0x61, 0x6e, 0x50, 0x61, 0x75, 0x73, 0x65, 0x64, 0x52, 0x73, 0x70,
-	0x42, 0x4f, 0x5a, 0x4d, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d,
-	0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78,
-	0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74,
-	0x6f, 0x72, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74,
-	0x6f, 0x72, 0x67, 0x65, 0x6e, 0x3b, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x70,
-	0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x12, 0x5d, 0x0a, 0x0d, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x67, 0x65, 0x73, 0x74, 0x4d, 0x6f, 0x64,
+	0x65, 0x12, 0x25, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f,
+	0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x47, 0x65, 0x74, 0x49, 0x6e, 0x67, 0x65, 0x73,
+	0x74, 0x4d, 0x6f, 0x64, 0x65, 0x52, 0x65, 0x71, 0x1a, 0x25, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e,
+	0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x47,
+	0x65, 0x74, 0x49, 0x6e, 0x67, 0x65, 0x73, 0x74, 0x4d, 0x6f, 0x64, 0x65, 0x52, 0x73, 0x70, 0x12,
+	0x5d, 0x0a, 0x0d, 0x53, 0x65, 0x74, 0x49, 0x6e, 0x67, 0x65, 0x73, 0x74, 0x4d, 0x6f, 0x64, 0x65,
+	0x12, 0x25, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c,
+	0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x65, 0x74, 0x49, 0x6e, 0x67, 0x65, 0x73, 0x74,
+	0x4d, 0x6f, 0x64, 0x65, 0x52, 0x65, 0x71, 0x1a, 0x25, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d,
+	0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x65,
+	0x74, 0x49, 0x6e, 0x67, 0x65, 0x73, 0x74, 0x4d, 0x6f, 0x64, 0x65, 0x52, 0x73, 0x70, 0x42, 0x4f,
+	0x5a, 0x4d, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f,
+	0x79, 0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d,
+	0x6f, 0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72,
+	0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72,
+	0x67, 0x65, 0x6e, 0x3b, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x70, 0x62, 0x62,
+	0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -5929,7 +7604,7 @@ func file_collector_proto_rawDescGZIP() []byte {
 	return file_collector_proto_rawDescData
 }
 
-var file_collector_proto_msgTypes = make([]protoimpl.MessageInfo, 64)
+var file_collector_proto_msgTypes = make([]protoimpl.MessageInfo, 83)
 var file_collector_proto_goTypes = []interface{}{
 	(*CollectionTask)(nil),                 // 0: trpc.moox.collector.CollectionTask
 	(*TaskResult)(nil),                     // 1: trpc.moox.collector.TaskResult
@@ -5995,125 +7670,175 @@ var file_collector_proto_goTypes = []interface{}{
 	(*SetFetchPlanPausedReq)(nil),          // 61: trpc.moox.collector.SetFetchPlanPausedReq
 	(*SetFetchPlanPausedRsp)(nil),          // 62: trpc.moox.collector.SetFetchPlanPausedRsp
 	(*ReregisterFetchPlanRsp)(nil),         // 63: trpc.moox.collector.ReregisterFetchPlanRsp
-	(*structpb.Struct)(nil),                // 64: google.protobuf.Struct
-	(*commonpb.Page)(nil),                  // 65: trpc.moox.common.Page
-	(*commonpb.RetInfo)(nil),               // 66: trpc.moox.common.RetInfo
-	(*commonpb.PageResult)(nil),            // 67: trpc.moox.common.PageResult
-	(*structpb.Value)(nil),                 // 68: google.protobuf.Value
+	(*IngestMode)(nil),                     // 64: trpc.moox.collector.IngestMode
+	(*GetIngestModeReq)(nil),               // 65: trpc.moox.collector.GetIngestModeReq
+	(*GetIngestModeRsp)(nil),               // 66: trpc.moox.collector.GetIngestModeRsp
+	(*SetIngestModeReq)(nil),               // 67: trpc.moox.collector.SetIngestModeReq
+	(*SetIngestModeRsp)(nil),               // 68: trpc.moox.collector.SetIngestModeRsp
+	(*StreamConnStatus)(nil),               // 69: trpc.moox.collector.StreamConnStatus
+	(*StreamPeriodStat)(nil),               // 70: trpc.moox.collector.StreamPeriodStat
+	(*StreamWorkerStatus)(nil),             // 71: trpc.moox.collector.StreamWorkerStatus
+	(*StreamHeartbeatReq)(nil),             // 72: trpc.moox.collector.StreamHeartbeatReq
+	(*StreamHeartbeatRsp)(nil),             // 73: trpc.moox.collector.StreamHeartbeatRsp
+	(*StreamPlanItem)(nil),                 // 74: trpc.moox.collector.StreamPlanItem
+	(*PullStreamPlanReq)(nil),              // 75: trpc.moox.collector.PullStreamPlanReq
+	(*PullStreamPlanRsp)(nil),              // 76: trpc.moox.collector.PullStreamPlanRsp
+	(*StreamSuspect)(nil),                  // 77: trpc.moox.collector.StreamSuspect
+	(*ReportStreamPeriodsReq)(nil),         // 78: trpc.moox.collector.ReportStreamPeriodsReq
+	(*ReportStreamPeriodsRsp)(nil),         // 79: trpc.moox.collector.ReportStreamPeriodsRsp
+	(*InvokeMarketFetchReq)(nil),           // 80: trpc.moox.collector.InvokeMarketFetchReq
+	(*InvokeMarketFetchRsp)(nil),           // 81: trpc.moox.collector.InvokeMarketFetchRsp
+	nil,                                    // 82: trpc.moox.collector.IngestMode.EffectivePeriodsEntry
+	(*structpb.Struct)(nil),                // 83: google.protobuf.Struct
+	(*commonpb.Page)(nil),                  // 84: trpc.moox.common.Page
+	(*commonpb.RetInfo)(nil),               // 85: trpc.moox.common.RetInfo
+	(*commonpb.PageResult)(nil),            // 86: trpc.moox.common.PageResult
+	(*structpb.Value)(nil),                 // 87: google.protobuf.Value
 }
 var file_collector_proto_depIdxs = []int32{
-	64, // 0: trpc.moox.collector.CollectionTask.collect_params:type_name -> google.protobuf.Struct
-	1,  // 1: trpc.moox.collector.CollectionTask.result:type_name -> trpc.moox.collector.TaskResult
-	65, // 2: trpc.moox.collector.GetTaskListReq.page:type_name -> trpc.moox.common.Page
-	66, // 3: trpc.moox.collector.GetTaskListRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	0,  // 4: trpc.moox.collector.GetTaskListRsp.tasks:type_name -> trpc.moox.collector.CollectionTask
-	67, // 5: trpc.moox.collector.GetTaskListRsp.page:type_name -> trpc.moox.common.PageResult
-	66, // 6: trpc.moox.collector.GetTaskDetailRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	0,  // 7: trpc.moox.collector.GetTaskDetailRsp.task:type_name -> trpc.moox.collector.CollectionTask
-	65, // 8: trpc.moox.collector.GetTaskResultInventoryReq.page:type_name -> trpc.moox.common.Page
-	66, // 9: trpc.moox.collector.GetTaskResultInventoryRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	7,  // 10: trpc.moox.collector.GetTaskResultInventoryRsp.entries:type_name -> trpc.moox.collector.TaskResultInventoryEntry
-	67, // 11: trpc.moox.collector.GetTaskResultInventoryRsp.page:type_name -> trpc.moox.common.PageResult
-	0,  // 12: trpc.moox.collector.CreateTaskReq.task:type_name -> trpc.moox.collector.CollectionTask
-	2,  // 13: trpc.moox.collector.CreateTaskReq.result_config:type_name -> trpc.moox.collector.ResultConfig
-	66, // 14: trpc.moox.collector.CreateTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	0,  // 15: trpc.moox.collector.UpdateTaskReq.task:type_name -> trpc.moox.collector.CollectionTask
-	2,  // 16: trpc.moox.collector.UpdateTaskReq.result_config:type_name -> trpc.moox.collector.ResultConfig
-	66, // 17: trpc.moox.collector.UpdateTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	0,  // 18: trpc.moox.collector.UpdateTaskRsp.task:type_name -> trpc.moox.collector.CollectionTask
-	66, // 19: trpc.moox.collector.DisableTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	66, // 20: trpc.moox.collector.DeleteTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	64, // 21: trpc.moox.collector.DataTypeConfig.data_source_options:type_name -> google.protobuf.Struct
-	68, // 22: trpc.moox.collector.DataTypeFieldConfig.default_value:type_name -> google.protobuf.Value
-	64, // 23: trpc.moox.collector.DataTypeFieldConfig.field_options:type_name -> google.protobuf.Struct
-	64, // 24: trpc.moox.collector.DataTypeFieldConfig.data_source_options:type_name -> google.protobuf.Struct
-	18, // 25: trpc.moox.collector.DataTypeConfigDetail.config:type_name -> trpc.moox.collector.DataTypeConfig
-	19, // 26: trpc.moox.collector.DataTypeConfigDetail.fields:type_name -> trpc.moox.collector.DataTypeFieldConfig
-	66, // 27: trpc.moox.collector.GetDataTypeConfigsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	18, // 28: trpc.moox.collector.GetDataTypeConfigsRsp.configs:type_name -> trpc.moox.collector.DataTypeConfig
-	66, // 29: trpc.moox.collector.GetDataTypeConfigWithFieldsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	20, // 30: trpc.moox.collector.GetDataTypeConfigWithFieldsRsp.detail:type_name -> trpc.moox.collector.DataTypeConfigDetail
-	66, // 31: trpc.moox.collector.StartKlineResampleBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	66, // 32: trpc.moox.collector.CancelKlineResampleBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	66, // 33: trpc.moox.collector.GetKlineResampleBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	66, // 34: trpc.moox.collector.SyncSubjectsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	32, // 35: trpc.moox.collector.SyncSubjectsRsp.tags:type_name -> trpc.moox.collector.SubjectTagSyncResult
-	33, // 36: trpc.moox.collector.SyncSubjectsRsp.attributes:type_name -> trpc.moox.collector.SubjectAttributeSyncResult
-	66, // 37: trpc.moox.collector.CheckKlineRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	36, // 38: trpc.moox.collector.CheckKlineRsp.gaps:type_name -> trpc.moox.collector.KlineGap
-	66, // 39: trpc.moox.collector.SubmitKlineBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	66, // 40: trpc.moox.collector.GetKlineBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	41, // 41: trpc.moox.collector.GetKlineBackfillRsp.job:type_name -> trpc.moox.collector.KlineBackfillJob
-	40, // 42: trpc.moox.collector.GetKlineBackfillRsp.failed_chunks:type_name -> trpc.moox.collector.KlineBackfillChunk
-	65, // 43: trpc.moox.collector.ListKlineBackfillsReq.page:type_name -> trpc.moox.common.Page
-	66, // 44: trpc.moox.collector.ListKlineBackfillsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	41, // 45: trpc.moox.collector.ListKlineBackfillsRsp.items:type_name -> trpc.moox.collector.KlineBackfillJob
-	67, // 46: trpc.moox.collector.ListKlineBackfillsRsp.page:type_name -> trpc.moox.common.PageResult
-	66, // 47: trpc.moox.collector.CancelKlineBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	66, // 48: trpc.moox.collector.RetryKlineBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	66, // 49: trpc.moox.collector.ConfirmHistoryGapsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	66, // 50: trpc.moox.collector.ClearSourceAbsencesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	57, // 51: trpc.moox.collector.CollectorFunctionStatus.dataset_subjects:type_name -> trpc.moox.collector.CollectorFunctionDataset
-	66, // 52: trpc.moox.collector.GetCollectorStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	55, // 53: trpc.moox.collector.GetCollectorStatusRsp.open:type_name -> trpc.moox.collector.FetchPlanSummary
-	55, // 54: trpc.moox.collector.GetCollectorStatusRsp.applied:type_name -> trpc.moox.collector.FetchPlanSummary
-	56, // 55: trpc.moox.collector.GetCollectorStatusRsp.datasets:type_name -> trpc.moox.collector.CollectorDatasetStatus
-	58, // 56: trpc.moox.collector.GetCollectorStatusRsp.functions:type_name -> trpc.moox.collector.CollectorFunctionStatus
-	66, // 57: trpc.moox.collector.SetFetchPlanPausedRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	66, // 58: trpc.moox.collector.ReregisterFetchPlanRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	3,  // 59: trpc.moox.collector.CollectMgr.GetTaskList:input_type -> trpc.moox.collector.GetTaskListReq
-	5,  // 60: trpc.moox.collector.CollectMgr.GetTaskDetail:input_type -> trpc.moox.collector.GetTaskDetailReq
-	8,  // 61: trpc.moox.collector.CollectMgr.GetTaskResultInventory:input_type -> trpc.moox.collector.GetTaskResultInventoryReq
-	10, // 62: trpc.moox.collector.CollectMgr.CreateTask:input_type -> trpc.moox.collector.CreateTaskReq
-	12, // 63: trpc.moox.collector.CollectMgr.UpdateTask:input_type -> trpc.moox.collector.UpdateTaskReq
-	14, // 64: trpc.moox.collector.CollectMgr.DisableTask:input_type -> trpc.moox.collector.DisableTaskReq
-	16, // 65: trpc.moox.collector.CollectMgr.DeleteTask:input_type -> trpc.moox.collector.DeleteTaskReq
-	21, // 66: trpc.moox.collector.CollectMgr.GetDataTypeConfigs:input_type -> trpc.moox.collector.GetDataTypeConfigsReq
-	23, // 67: trpc.moox.collector.CollectMgr.GetDataTypeConfigWithFields:input_type -> trpc.moox.collector.GetDataTypeConfigWithFieldsReq
-	25, // 68: trpc.moox.collector.CollectMgr.StartKlineResampleBackfill:input_type -> trpc.moox.collector.StartKlineResampleBackfillReq
-	27, // 69: trpc.moox.collector.CollectMgr.CancelKlineResampleBackfill:input_type -> trpc.moox.collector.CancelKlineResampleBackfillReq
-	29, // 70: trpc.moox.collector.CollectMgr.GetKlineResampleBackfill:input_type -> trpc.moox.collector.GetKlineResampleBackfillReq
-	31, // 71: trpc.moox.collector.CollectMgr.SyncSubjects:input_type -> trpc.moox.collector.SyncSubjectsReq
-	35, // 72: trpc.moox.collector.CollectMgr.CheckKline:input_type -> trpc.moox.collector.CheckKlineReq
-	38, // 73: trpc.moox.collector.CollectMgr.SubmitKlineBackfill:input_type -> trpc.moox.collector.SubmitKlineBackfillReq
-	42, // 74: trpc.moox.collector.CollectMgr.GetKlineBackfill:input_type -> trpc.moox.collector.GetKlineBackfillReq
-	44, // 75: trpc.moox.collector.CollectMgr.ListKlineBackfills:input_type -> trpc.moox.collector.ListKlineBackfillsReq
-	46, // 76: trpc.moox.collector.CollectMgr.CancelKlineBackfill:input_type -> trpc.moox.collector.CancelKlineBackfillReq
-	48, // 77: trpc.moox.collector.CollectMgr.RetryKlineBackfill:input_type -> trpc.moox.collector.RetryKlineBackfillReq
-	50, // 78: trpc.moox.collector.CollectMgr.ConfirmHistoryGaps:input_type -> trpc.moox.collector.ConfirmHistoryGapsReq
-	52, // 79: trpc.moox.collector.CollectMgr.ClearSourceAbsences:input_type -> trpc.moox.collector.ClearSourceAbsencesReq
-	54, // 80: trpc.moox.collector.CollectMgr.GetCollectorStatus:input_type -> trpc.moox.collector.GetCollectorStatusReq
-	60, // 81: trpc.moox.collector.CollectMgr.ReregisterFetchPlan:input_type -> trpc.moox.collector.ReregisterFetchPlanReq
-	61, // 82: trpc.moox.collector.CollectMgr.SetFetchPlanPaused:input_type -> trpc.moox.collector.SetFetchPlanPausedReq
-	4,  // 83: trpc.moox.collector.CollectMgr.GetTaskList:output_type -> trpc.moox.collector.GetTaskListRsp
-	6,  // 84: trpc.moox.collector.CollectMgr.GetTaskDetail:output_type -> trpc.moox.collector.GetTaskDetailRsp
-	9,  // 85: trpc.moox.collector.CollectMgr.GetTaskResultInventory:output_type -> trpc.moox.collector.GetTaskResultInventoryRsp
-	11, // 86: trpc.moox.collector.CollectMgr.CreateTask:output_type -> trpc.moox.collector.CreateTaskRsp
-	13, // 87: trpc.moox.collector.CollectMgr.UpdateTask:output_type -> trpc.moox.collector.UpdateTaskRsp
-	15, // 88: trpc.moox.collector.CollectMgr.DisableTask:output_type -> trpc.moox.collector.DisableTaskRsp
-	17, // 89: trpc.moox.collector.CollectMgr.DeleteTask:output_type -> trpc.moox.collector.DeleteTaskRsp
-	22, // 90: trpc.moox.collector.CollectMgr.GetDataTypeConfigs:output_type -> trpc.moox.collector.GetDataTypeConfigsRsp
-	24, // 91: trpc.moox.collector.CollectMgr.GetDataTypeConfigWithFields:output_type -> trpc.moox.collector.GetDataTypeConfigWithFieldsRsp
-	26, // 92: trpc.moox.collector.CollectMgr.StartKlineResampleBackfill:output_type -> trpc.moox.collector.StartKlineResampleBackfillRsp
-	28, // 93: trpc.moox.collector.CollectMgr.CancelKlineResampleBackfill:output_type -> trpc.moox.collector.CancelKlineResampleBackfillRsp
-	30, // 94: trpc.moox.collector.CollectMgr.GetKlineResampleBackfill:output_type -> trpc.moox.collector.GetKlineResampleBackfillRsp
-	34, // 95: trpc.moox.collector.CollectMgr.SyncSubjects:output_type -> trpc.moox.collector.SyncSubjectsRsp
-	37, // 96: trpc.moox.collector.CollectMgr.CheckKline:output_type -> trpc.moox.collector.CheckKlineRsp
-	39, // 97: trpc.moox.collector.CollectMgr.SubmitKlineBackfill:output_type -> trpc.moox.collector.SubmitKlineBackfillRsp
-	43, // 98: trpc.moox.collector.CollectMgr.GetKlineBackfill:output_type -> trpc.moox.collector.GetKlineBackfillRsp
-	45, // 99: trpc.moox.collector.CollectMgr.ListKlineBackfills:output_type -> trpc.moox.collector.ListKlineBackfillsRsp
-	47, // 100: trpc.moox.collector.CollectMgr.CancelKlineBackfill:output_type -> trpc.moox.collector.CancelKlineBackfillRsp
-	49, // 101: trpc.moox.collector.CollectMgr.RetryKlineBackfill:output_type -> trpc.moox.collector.RetryKlineBackfillRsp
-	51, // 102: trpc.moox.collector.CollectMgr.ConfirmHistoryGaps:output_type -> trpc.moox.collector.ConfirmHistoryGapsRsp
-	53, // 103: trpc.moox.collector.CollectMgr.ClearSourceAbsences:output_type -> trpc.moox.collector.ClearSourceAbsencesRsp
-	59, // 104: trpc.moox.collector.CollectMgr.GetCollectorStatus:output_type -> trpc.moox.collector.GetCollectorStatusRsp
-	63, // 105: trpc.moox.collector.CollectMgr.ReregisterFetchPlan:output_type -> trpc.moox.collector.ReregisterFetchPlanRsp
-	62, // 106: trpc.moox.collector.CollectMgr.SetFetchPlanPaused:output_type -> trpc.moox.collector.SetFetchPlanPausedRsp
-	83, // [83:107] is the sub-list for method output_type
-	59, // [59:83] is the sub-list for method input_type
-	59, // [59:59] is the sub-list for extension type_name
-	59, // [59:59] is the sub-list for extension extendee
-	0,  // [0:59] is the sub-list for field type_name
+	83,  // 0: trpc.moox.collector.CollectionTask.collect_params:type_name -> google.protobuf.Struct
+	1,   // 1: trpc.moox.collector.CollectionTask.result:type_name -> trpc.moox.collector.TaskResult
+	84,  // 2: trpc.moox.collector.GetTaskListReq.page:type_name -> trpc.moox.common.Page
+	85,  // 3: trpc.moox.collector.GetTaskListRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	0,   // 4: trpc.moox.collector.GetTaskListRsp.tasks:type_name -> trpc.moox.collector.CollectionTask
+	86,  // 5: trpc.moox.collector.GetTaskListRsp.page:type_name -> trpc.moox.common.PageResult
+	85,  // 6: trpc.moox.collector.GetTaskDetailRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	0,   // 7: trpc.moox.collector.GetTaskDetailRsp.task:type_name -> trpc.moox.collector.CollectionTask
+	84,  // 8: trpc.moox.collector.GetTaskResultInventoryReq.page:type_name -> trpc.moox.common.Page
+	85,  // 9: trpc.moox.collector.GetTaskResultInventoryRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	7,   // 10: trpc.moox.collector.GetTaskResultInventoryRsp.entries:type_name -> trpc.moox.collector.TaskResultInventoryEntry
+	86,  // 11: trpc.moox.collector.GetTaskResultInventoryRsp.page:type_name -> trpc.moox.common.PageResult
+	0,   // 12: trpc.moox.collector.CreateTaskReq.task:type_name -> trpc.moox.collector.CollectionTask
+	2,   // 13: trpc.moox.collector.CreateTaskReq.result_config:type_name -> trpc.moox.collector.ResultConfig
+	85,  // 14: trpc.moox.collector.CreateTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	0,   // 15: trpc.moox.collector.UpdateTaskReq.task:type_name -> trpc.moox.collector.CollectionTask
+	2,   // 16: trpc.moox.collector.UpdateTaskReq.result_config:type_name -> trpc.moox.collector.ResultConfig
+	85,  // 17: trpc.moox.collector.UpdateTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	0,   // 18: trpc.moox.collector.UpdateTaskRsp.task:type_name -> trpc.moox.collector.CollectionTask
+	85,  // 19: trpc.moox.collector.DisableTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	85,  // 20: trpc.moox.collector.DeleteTaskRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	83,  // 21: trpc.moox.collector.DataTypeConfig.data_source_options:type_name -> google.protobuf.Struct
+	87,  // 22: trpc.moox.collector.DataTypeFieldConfig.default_value:type_name -> google.protobuf.Value
+	83,  // 23: trpc.moox.collector.DataTypeFieldConfig.field_options:type_name -> google.protobuf.Struct
+	83,  // 24: trpc.moox.collector.DataTypeFieldConfig.data_source_options:type_name -> google.protobuf.Struct
+	18,  // 25: trpc.moox.collector.DataTypeConfigDetail.config:type_name -> trpc.moox.collector.DataTypeConfig
+	19,  // 26: trpc.moox.collector.DataTypeConfigDetail.fields:type_name -> trpc.moox.collector.DataTypeFieldConfig
+	85,  // 27: trpc.moox.collector.GetDataTypeConfigsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	18,  // 28: trpc.moox.collector.GetDataTypeConfigsRsp.configs:type_name -> trpc.moox.collector.DataTypeConfig
+	85,  // 29: trpc.moox.collector.GetDataTypeConfigWithFieldsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	20,  // 30: trpc.moox.collector.GetDataTypeConfigWithFieldsRsp.detail:type_name -> trpc.moox.collector.DataTypeConfigDetail
+	85,  // 31: trpc.moox.collector.StartKlineResampleBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	85,  // 32: trpc.moox.collector.CancelKlineResampleBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	85,  // 33: trpc.moox.collector.GetKlineResampleBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	85,  // 34: trpc.moox.collector.SyncSubjectsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	32,  // 35: trpc.moox.collector.SyncSubjectsRsp.tags:type_name -> trpc.moox.collector.SubjectTagSyncResult
+	33,  // 36: trpc.moox.collector.SyncSubjectsRsp.attributes:type_name -> trpc.moox.collector.SubjectAttributeSyncResult
+	85,  // 37: trpc.moox.collector.CheckKlineRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	36,  // 38: trpc.moox.collector.CheckKlineRsp.gaps:type_name -> trpc.moox.collector.KlineGap
+	85,  // 39: trpc.moox.collector.SubmitKlineBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	85,  // 40: trpc.moox.collector.GetKlineBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	41,  // 41: trpc.moox.collector.GetKlineBackfillRsp.job:type_name -> trpc.moox.collector.KlineBackfillJob
+	40,  // 42: trpc.moox.collector.GetKlineBackfillRsp.failed_chunks:type_name -> trpc.moox.collector.KlineBackfillChunk
+	84,  // 43: trpc.moox.collector.ListKlineBackfillsReq.page:type_name -> trpc.moox.common.Page
+	85,  // 44: trpc.moox.collector.ListKlineBackfillsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	41,  // 45: trpc.moox.collector.ListKlineBackfillsRsp.items:type_name -> trpc.moox.collector.KlineBackfillJob
+	86,  // 46: trpc.moox.collector.ListKlineBackfillsRsp.page:type_name -> trpc.moox.common.PageResult
+	85,  // 47: trpc.moox.collector.CancelKlineBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	85,  // 48: trpc.moox.collector.RetryKlineBackfillRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	85,  // 49: trpc.moox.collector.ConfirmHistoryGapsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	85,  // 50: trpc.moox.collector.ClearSourceAbsencesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	57,  // 51: trpc.moox.collector.CollectorFunctionStatus.dataset_subjects:type_name -> trpc.moox.collector.CollectorFunctionDataset
+	85,  // 52: trpc.moox.collector.GetCollectorStatusRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	55,  // 53: trpc.moox.collector.GetCollectorStatusRsp.open:type_name -> trpc.moox.collector.FetchPlanSummary
+	55,  // 54: trpc.moox.collector.GetCollectorStatusRsp.applied:type_name -> trpc.moox.collector.FetchPlanSummary
+	56,  // 55: trpc.moox.collector.GetCollectorStatusRsp.datasets:type_name -> trpc.moox.collector.CollectorDatasetStatus
+	58,  // 56: trpc.moox.collector.GetCollectorStatusRsp.functions:type_name -> trpc.moox.collector.CollectorFunctionStatus
+	71,  // 57: trpc.moox.collector.GetCollectorStatusRsp.stream:type_name -> trpc.moox.collector.StreamWorkerStatus
+	64,  // 58: trpc.moox.collector.GetCollectorStatusRsp.ingest_modes:type_name -> trpc.moox.collector.IngestMode
+	85,  // 59: trpc.moox.collector.SetFetchPlanPausedRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	85,  // 60: trpc.moox.collector.ReregisterFetchPlanRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	82,  // 61: trpc.moox.collector.IngestMode.effective_periods:type_name -> trpc.moox.collector.IngestMode.EffectivePeriodsEntry
+	85,  // 62: trpc.moox.collector.GetIngestModeRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	64,  // 63: trpc.moox.collector.GetIngestModeRsp.modes:type_name -> trpc.moox.collector.IngestMode
+	71,  // 64: trpc.moox.collector.GetIngestModeRsp.stream:type_name -> trpc.moox.collector.StreamWorkerStatus
+	85,  // 65: trpc.moox.collector.SetIngestModeRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	64,  // 66: trpc.moox.collector.SetIngestModeRsp.modes:type_name -> trpc.moox.collector.IngestMode
+	71,  // 67: trpc.moox.collector.SetIngestModeRsp.stream:type_name -> trpc.moox.collector.StreamWorkerStatus
+	69,  // 68: trpc.moox.collector.StreamWorkerStatus.conns:type_name -> trpc.moox.collector.StreamConnStatus
+	70,  // 69: trpc.moox.collector.StreamWorkerStatus.recent:type_name -> trpc.moox.collector.StreamPeriodStat
+	69,  // 70: trpc.moox.collector.StreamHeartbeatReq.conns:type_name -> trpc.moox.collector.StreamConnStatus
+	85,  // 71: trpc.moox.collector.StreamHeartbeatRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	85,  // 72: trpc.moox.collector.PullStreamPlanRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	74,  // 73: trpc.moox.collector.PullStreamPlanRsp.items:type_name -> trpc.moox.collector.StreamPlanItem
+	70,  // 74: trpc.moox.collector.ReportStreamPeriodsReq.periods:type_name -> trpc.moox.collector.StreamPeriodStat
+	77,  // 75: trpc.moox.collector.ReportStreamPeriodsReq.suspects:type_name -> trpc.moox.collector.StreamSuspect
+	85,  // 76: trpc.moox.collector.ReportStreamPeriodsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	85,  // 77: trpc.moox.collector.InvokeMarketFetchRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	72,  // 78: trpc.moox.collector.StreamCollector.StreamHeartbeat:input_type -> trpc.moox.collector.StreamHeartbeatReq
+	75,  // 79: trpc.moox.collector.StreamCollector.PullStreamPlan:input_type -> trpc.moox.collector.PullStreamPlanReq
+	78,  // 80: trpc.moox.collector.StreamCollector.ReportStreamPeriods:input_type -> trpc.moox.collector.ReportStreamPeriodsReq
+	80,  // 81: trpc.moox.collector.MarketFetchExecutor.Invoke:input_type -> trpc.moox.collector.InvokeMarketFetchReq
+	3,   // 82: trpc.moox.collector.CollectMgr.GetTaskList:input_type -> trpc.moox.collector.GetTaskListReq
+	5,   // 83: trpc.moox.collector.CollectMgr.GetTaskDetail:input_type -> trpc.moox.collector.GetTaskDetailReq
+	8,   // 84: trpc.moox.collector.CollectMgr.GetTaskResultInventory:input_type -> trpc.moox.collector.GetTaskResultInventoryReq
+	10,  // 85: trpc.moox.collector.CollectMgr.CreateTask:input_type -> trpc.moox.collector.CreateTaskReq
+	12,  // 86: trpc.moox.collector.CollectMgr.UpdateTask:input_type -> trpc.moox.collector.UpdateTaskReq
+	14,  // 87: trpc.moox.collector.CollectMgr.DisableTask:input_type -> trpc.moox.collector.DisableTaskReq
+	16,  // 88: trpc.moox.collector.CollectMgr.DeleteTask:input_type -> trpc.moox.collector.DeleteTaskReq
+	21,  // 89: trpc.moox.collector.CollectMgr.GetDataTypeConfigs:input_type -> trpc.moox.collector.GetDataTypeConfigsReq
+	23,  // 90: trpc.moox.collector.CollectMgr.GetDataTypeConfigWithFields:input_type -> trpc.moox.collector.GetDataTypeConfigWithFieldsReq
+	25,  // 91: trpc.moox.collector.CollectMgr.StartKlineResampleBackfill:input_type -> trpc.moox.collector.StartKlineResampleBackfillReq
+	27,  // 92: trpc.moox.collector.CollectMgr.CancelKlineResampleBackfill:input_type -> trpc.moox.collector.CancelKlineResampleBackfillReq
+	29,  // 93: trpc.moox.collector.CollectMgr.GetKlineResampleBackfill:input_type -> trpc.moox.collector.GetKlineResampleBackfillReq
+	31,  // 94: trpc.moox.collector.CollectMgr.SyncSubjects:input_type -> trpc.moox.collector.SyncSubjectsReq
+	35,  // 95: trpc.moox.collector.CollectMgr.CheckKline:input_type -> trpc.moox.collector.CheckKlineReq
+	38,  // 96: trpc.moox.collector.CollectMgr.SubmitKlineBackfill:input_type -> trpc.moox.collector.SubmitKlineBackfillReq
+	42,  // 97: trpc.moox.collector.CollectMgr.GetKlineBackfill:input_type -> trpc.moox.collector.GetKlineBackfillReq
+	44,  // 98: trpc.moox.collector.CollectMgr.ListKlineBackfills:input_type -> trpc.moox.collector.ListKlineBackfillsReq
+	46,  // 99: trpc.moox.collector.CollectMgr.CancelKlineBackfill:input_type -> trpc.moox.collector.CancelKlineBackfillReq
+	48,  // 100: trpc.moox.collector.CollectMgr.RetryKlineBackfill:input_type -> trpc.moox.collector.RetryKlineBackfillReq
+	50,  // 101: trpc.moox.collector.CollectMgr.ConfirmHistoryGaps:input_type -> trpc.moox.collector.ConfirmHistoryGapsReq
+	52,  // 102: trpc.moox.collector.CollectMgr.ClearSourceAbsences:input_type -> trpc.moox.collector.ClearSourceAbsencesReq
+	54,  // 103: trpc.moox.collector.CollectMgr.GetCollectorStatus:input_type -> trpc.moox.collector.GetCollectorStatusReq
+	60,  // 104: trpc.moox.collector.CollectMgr.ReregisterFetchPlan:input_type -> trpc.moox.collector.ReregisterFetchPlanReq
+	61,  // 105: trpc.moox.collector.CollectMgr.SetFetchPlanPaused:input_type -> trpc.moox.collector.SetFetchPlanPausedReq
+	65,  // 106: trpc.moox.collector.CollectMgr.GetIngestMode:input_type -> trpc.moox.collector.GetIngestModeReq
+	67,  // 107: trpc.moox.collector.CollectMgr.SetIngestMode:input_type -> trpc.moox.collector.SetIngestModeReq
+	73,  // 108: trpc.moox.collector.StreamCollector.StreamHeartbeat:output_type -> trpc.moox.collector.StreamHeartbeatRsp
+	76,  // 109: trpc.moox.collector.StreamCollector.PullStreamPlan:output_type -> trpc.moox.collector.PullStreamPlanRsp
+	79,  // 110: trpc.moox.collector.StreamCollector.ReportStreamPeriods:output_type -> trpc.moox.collector.ReportStreamPeriodsRsp
+	81,  // 111: trpc.moox.collector.MarketFetchExecutor.Invoke:output_type -> trpc.moox.collector.InvokeMarketFetchRsp
+	4,   // 112: trpc.moox.collector.CollectMgr.GetTaskList:output_type -> trpc.moox.collector.GetTaskListRsp
+	6,   // 113: trpc.moox.collector.CollectMgr.GetTaskDetail:output_type -> trpc.moox.collector.GetTaskDetailRsp
+	9,   // 114: trpc.moox.collector.CollectMgr.GetTaskResultInventory:output_type -> trpc.moox.collector.GetTaskResultInventoryRsp
+	11,  // 115: trpc.moox.collector.CollectMgr.CreateTask:output_type -> trpc.moox.collector.CreateTaskRsp
+	13,  // 116: trpc.moox.collector.CollectMgr.UpdateTask:output_type -> trpc.moox.collector.UpdateTaskRsp
+	15,  // 117: trpc.moox.collector.CollectMgr.DisableTask:output_type -> trpc.moox.collector.DisableTaskRsp
+	17,  // 118: trpc.moox.collector.CollectMgr.DeleteTask:output_type -> trpc.moox.collector.DeleteTaskRsp
+	22,  // 119: trpc.moox.collector.CollectMgr.GetDataTypeConfigs:output_type -> trpc.moox.collector.GetDataTypeConfigsRsp
+	24,  // 120: trpc.moox.collector.CollectMgr.GetDataTypeConfigWithFields:output_type -> trpc.moox.collector.GetDataTypeConfigWithFieldsRsp
+	26,  // 121: trpc.moox.collector.CollectMgr.StartKlineResampleBackfill:output_type -> trpc.moox.collector.StartKlineResampleBackfillRsp
+	28,  // 122: trpc.moox.collector.CollectMgr.CancelKlineResampleBackfill:output_type -> trpc.moox.collector.CancelKlineResampleBackfillRsp
+	30,  // 123: trpc.moox.collector.CollectMgr.GetKlineResampleBackfill:output_type -> trpc.moox.collector.GetKlineResampleBackfillRsp
+	34,  // 124: trpc.moox.collector.CollectMgr.SyncSubjects:output_type -> trpc.moox.collector.SyncSubjectsRsp
+	37,  // 125: trpc.moox.collector.CollectMgr.CheckKline:output_type -> trpc.moox.collector.CheckKlineRsp
+	39,  // 126: trpc.moox.collector.CollectMgr.SubmitKlineBackfill:output_type -> trpc.moox.collector.SubmitKlineBackfillRsp
+	43,  // 127: trpc.moox.collector.CollectMgr.GetKlineBackfill:output_type -> trpc.moox.collector.GetKlineBackfillRsp
+	45,  // 128: trpc.moox.collector.CollectMgr.ListKlineBackfills:output_type -> trpc.moox.collector.ListKlineBackfillsRsp
+	47,  // 129: trpc.moox.collector.CollectMgr.CancelKlineBackfill:output_type -> trpc.moox.collector.CancelKlineBackfillRsp
+	49,  // 130: trpc.moox.collector.CollectMgr.RetryKlineBackfill:output_type -> trpc.moox.collector.RetryKlineBackfillRsp
+	51,  // 131: trpc.moox.collector.CollectMgr.ConfirmHistoryGaps:output_type -> trpc.moox.collector.ConfirmHistoryGapsRsp
+	53,  // 132: trpc.moox.collector.CollectMgr.ClearSourceAbsences:output_type -> trpc.moox.collector.ClearSourceAbsencesRsp
+	59,  // 133: trpc.moox.collector.CollectMgr.GetCollectorStatus:output_type -> trpc.moox.collector.GetCollectorStatusRsp
+	63,  // 134: trpc.moox.collector.CollectMgr.ReregisterFetchPlan:output_type -> trpc.moox.collector.ReregisterFetchPlanRsp
+	62,  // 135: trpc.moox.collector.CollectMgr.SetFetchPlanPaused:output_type -> trpc.moox.collector.SetFetchPlanPausedRsp
+	66,  // 136: trpc.moox.collector.CollectMgr.GetIngestMode:output_type -> trpc.moox.collector.GetIngestModeRsp
+	68,  // 137: trpc.moox.collector.CollectMgr.SetIngestMode:output_type -> trpc.moox.collector.SetIngestModeRsp
+	108, // [108:138] is the sub-list for method output_type
+	78,  // [78:108] is the sub-list for method input_type
+	78,  // [78:78] is the sub-list for extension type_name
+	78,  // [78:78] is the sub-list for extension extendee
+	0,   // [0:78] is the sub-list for field type_name
 }
 
 func init() { file_collector_proto_init() }
@@ -6890,6 +8615,222 @@ func file_collector_proto_init() {
 				return nil
 			}
 		}
+		file_collector_proto_msgTypes[64].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*IngestMode); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[65].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetIngestModeReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[66].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*GetIngestModeRsp); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[67].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*SetIngestModeReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[68].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*SetIngestModeRsp); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[69].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*StreamConnStatus); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[70].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*StreamPeriodStat); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[71].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*StreamWorkerStatus); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[72].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*StreamHeartbeatReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[73].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*StreamHeartbeatRsp); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[74].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*StreamPlanItem); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[75].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*PullStreamPlanReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[76].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*PullStreamPlanRsp); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[77].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*StreamSuspect); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[78].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ReportStreamPeriodsReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[79].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ReportStreamPeriodsRsp); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[80].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*InvokeMarketFetchReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_collector_proto_msgTypes[81].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*InvokeMarketFetchRsp); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	file_collector_proto_msgTypes[0].OneofWrappers = []interface{}{}
 	file_collector_proto_msgTypes[3].OneofWrappers = []interface{}{}
@@ -6899,9 +8840,9 @@ func file_collector_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_collector_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   64,
+			NumMessages:   83,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   3,
 		},
 		GoTypes:           file_collector_proto_goTypes,
 		DependencyIndexes: file_collector_proto_depIdxs,

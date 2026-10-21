@@ -17,6 +17,138 @@ import (
 
 // START ======================================= Server Service Definition ======================================= START
 
+// StreamCollectorService defines service.
+type StreamCollectorService interface {
+	StreamHeartbeat(ctx context.Context, req *StreamHeartbeatReq) (*StreamHeartbeatRsp, error)
+
+	PullStreamPlan(ctx context.Context, req *PullStreamPlanReq) (*PullStreamPlanRsp, error)
+
+	ReportStreamPeriods(ctx context.Context, req *ReportStreamPeriodsReq) (*ReportStreamPeriodsRsp, error)
+}
+
+func StreamCollectorService_StreamHeartbeat_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &StreamHeartbeatReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StreamCollectorService).StreamHeartbeat(ctx, reqbody.(*StreamHeartbeatReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StreamCollectorService_PullStreamPlan_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PullStreamPlanReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StreamCollectorService).PullStreamPlan(ctx, reqbody.(*PullStreamPlanReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StreamCollectorService_ReportStreamPeriods_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReportStreamPeriodsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StreamCollectorService).ReportStreamPeriods(ctx, reqbody.(*ReportStreamPeriodsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// StreamCollectorServer_ServiceDesc descriptor for server.RegisterService.
+var StreamCollectorServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.collector.StreamCollector",
+	HandlerType: ((*StreamCollectorService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.collector.StreamCollector/StreamHeartbeat",
+			Func: StreamCollectorService_StreamHeartbeat_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.StreamCollector/PullStreamPlan",
+			Func: StreamCollectorService_PullStreamPlan_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.StreamCollector/ReportStreamPeriods",
+			Func: StreamCollectorService_ReportStreamPeriods_Handler,
+		},
+	},
+}
+
+// RegisterStreamCollectorService registers service.
+func RegisterStreamCollectorService(s server.Service, svr StreamCollectorService) {
+	if err := s.Register(&StreamCollectorServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("StreamCollector register error:%v", err))
+	}
+}
+
+// MarketFetchExecutorService defines service.
+type MarketFetchExecutorService interface {
+	Invoke(ctx context.Context, req *InvokeMarketFetchReq) (*InvokeMarketFetchRsp, error)
+}
+
+func MarketFetchExecutorService_Invoke_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &InvokeMarketFetchReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(MarketFetchExecutorService).Invoke(ctx, reqbody.(*InvokeMarketFetchReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// MarketFetchExecutorServer_ServiceDesc descriptor for server.RegisterService.
+var MarketFetchExecutorServer_ServiceDesc = server.ServiceDesc{
+	ServiceName: "trpc.moox.collector.MarketFetchExecutor",
+	HandlerType: ((*MarketFetchExecutorService)(nil)),
+	Methods: []server.Method{
+		{
+			Name: "/trpc.moox.collector.MarketFetchExecutor/Invoke",
+			Func: MarketFetchExecutorService_Invoke_Handler,
+		},
+	},
+}
+
+// RegisterMarketFetchExecutorService registers service.
+func RegisterMarketFetchExecutorService(s server.Service, svr MarketFetchExecutorService) {
+	if err := s.Register(&MarketFetchExecutorServer_ServiceDesc, svr); err != nil {
+		panic(fmt.Sprintf("MarketFetchExecutor register error:%v", err))
+	}
+}
+
 // CollectMgrService defines service.
 type CollectMgrService interface {
 	// GetTaskList ----- 采集任务 -----
@@ -67,6 +199,10 @@ type CollectMgrService interface {
 	ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq) (*ReregisterFetchPlanRsp, error)
 
 	SetFetchPlanPaused(ctx context.Context, req *SetFetchPlanPausedReq) (*SetFetchPlanPausedRsp, error)
+
+	GetIngestMode(ctx context.Context, req *GetIngestModeReq) (*GetIngestModeRsp, error)
+
+	SetIngestMode(ctx context.Context, req *SetIngestModeReq) (*SetIngestModeRsp, error)
 }
 
 func CollectMgrService_GetTaskList_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -501,6 +637,42 @@ func CollectMgrService_SetFetchPlanPaused_Handler(svr interface{}, ctx context.C
 	return rsp, nil
 }
 
+func CollectMgrService_GetIngestMode_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetIngestModeReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).GetIngestMode(ctx, reqbody.(*GetIngestModeReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_SetIngestMode_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetIngestModeReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).SetIngestMode(ctx, reqbody.(*SetIngestModeReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // CollectMgrServer_ServiceDesc descriptor for server.RegisterService.
 var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.collector.CollectMgr",
@@ -602,6 +774,14 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.collector.CollectMgr/SetFetchPlanPaused",
 			Func: CollectMgrService_SetFetchPlanPaused_Handler,
 		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/GetIngestMode",
+			Func: CollectMgrService_GetIngestMode_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/SetIngestMode",
+			Func: CollectMgrService_SetIngestMode_Handler,
+		},
 	},
 }
 
@@ -613,6 +793,24 @@ func RegisterCollectMgrService(s server.Service, svr CollectMgrService) {
 }
 
 // START --------------------------------- Default Unimplemented Server Service --------------------------------- START
+
+type UnimplementedStreamCollector struct{}
+
+func (s *UnimplementedStreamCollector) StreamHeartbeat(ctx context.Context, req *StreamHeartbeatReq) (*StreamHeartbeatRsp, error) {
+	return nil, errors.New("rpc StreamHeartbeat of service StreamCollector is not implemented")
+}
+func (s *UnimplementedStreamCollector) PullStreamPlan(ctx context.Context, req *PullStreamPlanReq) (*PullStreamPlanRsp, error) {
+	return nil, errors.New("rpc PullStreamPlan of service StreamCollector is not implemented")
+}
+func (s *UnimplementedStreamCollector) ReportStreamPeriods(ctx context.Context, req *ReportStreamPeriodsReq) (*ReportStreamPeriodsRsp, error) {
+	return nil, errors.New("rpc ReportStreamPeriods of service StreamCollector is not implemented")
+}
+
+type UnimplementedMarketFetchExecutor struct{}
+
+func (s *UnimplementedMarketFetchExecutor) Invoke(ctx context.Context, req *InvokeMarketFetchReq) (*InvokeMarketFetchRsp, error) {
+	return nil, errors.New("rpc Invoke of service MarketFetchExecutor is not implemented")
+}
 
 type UnimplementedCollectMgr struct{}
 
@@ -697,12 +895,130 @@ func (s *UnimplementedCollectMgr) ReregisterFetchPlan(ctx context.Context, req *
 func (s *UnimplementedCollectMgr) SetFetchPlanPaused(ctx context.Context, req *SetFetchPlanPausedReq) (*SetFetchPlanPausedRsp, error) {
 	return nil, errors.New("rpc SetFetchPlanPaused of service CollectMgr is not implemented")
 }
+func (s *UnimplementedCollectMgr) GetIngestMode(ctx context.Context, req *GetIngestModeReq) (*GetIngestModeRsp, error) {
+	return nil, errors.New("rpc GetIngestMode of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) SetIngestMode(ctx context.Context, req *SetIngestModeReq) (*SetIngestModeRsp, error) {
+	return nil, errors.New("rpc SetIngestMode of service CollectMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
 // END ======================================= Server Service Definition ======================================= END
 
 // START ======================================= Client Service Definition ======================================= START
+
+// StreamCollectorClientProxy defines service client proxy
+type StreamCollectorClientProxy interface {
+	StreamHeartbeat(ctx context.Context, req *StreamHeartbeatReq, opts ...client.Option) (rsp *StreamHeartbeatRsp, err error)
+
+	PullStreamPlan(ctx context.Context, req *PullStreamPlanReq, opts ...client.Option) (rsp *PullStreamPlanRsp, err error)
+
+	ReportStreamPeriods(ctx context.Context, req *ReportStreamPeriodsReq, opts ...client.Option) (rsp *ReportStreamPeriodsRsp, err error)
+}
+
+type StreamCollectorClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewStreamCollectorClientProxy = func(opts ...client.Option) StreamCollectorClientProxy {
+	return &StreamCollectorClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *StreamCollectorClientProxyImpl) StreamHeartbeat(ctx context.Context, req *StreamHeartbeatReq, opts ...client.Option) (*StreamHeartbeatRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.StreamCollector/StreamHeartbeat")
+	msg.WithCalleeServiceName(StreamCollectorServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("StreamCollector")
+	msg.WithCalleeMethod("StreamHeartbeat")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &StreamHeartbeatRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StreamCollectorClientProxyImpl) PullStreamPlan(ctx context.Context, req *PullStreamPlanReq, opts ...client.Option) (*PullStreamPlanRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.StreamCollector/PullStreamPlan")
+	msg.WithCalleeServiceName(StreamCollectorServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("StreamCollector")
+	msg.WithCalleeMethod("PullStreamPlan")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PullStreamPlanRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StreamCollectorClientProxyImpl) ReportStreamPeriods(ctx context.Context, req *ReportStreamPeriodsReq, opts ...client.Option) (*ReportStreamPeriodsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.StreamCollector/ReportStreamPeriods")
+	msg.WithCalleeServiceName(StreamCollectorServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("StreamCollector")
+	msg.WithCalleeMethod("ReportStreamPeriods")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReportStreamPeriodsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+// MarketFetchExecutorClientProxy defines service client proxy
+type MarketFetchExecutorClientProxy interface {
+	Invoke(ctx context.Context, req *InvokeMarketFetchReq, opts ...client.Option) (rsp *InvokeMarketFetchRsp, err error)
+}
+
+type MarketFetchExecutorClientProxyImpl struct {
+	client client.Client
+	opts   []client.Option
+}
+
+var NewMarketFetchExecutorClientProxy = func(opts ...client.Option) MarketFetchExecutorClientProxy {
+	return &MarketFetchExecutorClientProxyImpl{client: client.DefaultClient, opts: opts}
+}
+
+func (c *MarketFetchExecutorClientProxyImpl) Invoke(ctx context.Context, req *InvokeMarketFetchReq, opts ...client.Option) (*InvokeMarketFetchRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.MarketFetchExecutor/Invoke")
+	msg.WithCalleeServiceName(MarketFetchExecutorServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("MarketFetchExecutor")
+	msg.WithCalleeMethod("Invoke")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &InvokeMarketFetchRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
 
 // CollectMgrClientProxy defines service client proxy
 type CollectMgrClientProxy interface {
@@ -754,6 +1070,10 @@ type CollectMgrClientProxy interface {
 	ReregisterFetchPlan(ctx context.Context, req *ReregisterFetchPlanReq, opts ...client.Option) (rsp *ReregisterFetchPlanRsp, err error)
 
 	SetFetchPlanPaused(ctx context.Context, req *SetFetchPlanPausedReq, opts ...client.Option) (rsp *SetFetchPlanPausedRsp, err error)
+
+	GetIngestMode(ctx context.Context, req *GetIngestModeReq, opts ...client.Option) (rsp *GetIngestModeRsp, err error)
+
+	SetIngestMode(ctx context.Context, req *SetIngestModeReq, opts ...client.Option) (rsp *SetIngestModeRsp, err error)
 }
 
 type CollectMgrClientProxyImpl struct {
@@ -1239,6 +1559,46 @@ func (c *CollectMgrClientProxyImpl) SetFetchPlanPaused(ctx context.Context, req 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SetFetchPlanPausedRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) GetIngestMode(ctx context.Context, req *GetIngestModeReq, opts ...client.Option) (*GetIngestModeRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetIngestMode")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("GetIngestMode")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetIngestModeRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) SetIngestMode(ctx context.Context, req *SetIngestModeReq, opts ...client.Option) (*SetIngestModeRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/SetIngestMode")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("SetIngestMode")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SetIngestModeRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
