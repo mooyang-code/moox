@@ -25,6 +25,10 @@ type Metrics struct {
 	assignmentLastSuccess    *prometheus.GaugeVec
 	assignmentHealthy        *prometheus.GaugeVec
 	assignmentFailure        *prometheus.GaugeVec
+	assignmentFailureSince   *prometheus.GaugeVec
+	failureMu                sync.Mutex
+	failures                 map[string]failureRecord
+	now                      func() time.Time
 	assignmentPending        *prometheus.GaugeVec
 	assignmentPendingSince   *prometheus.GaugeVec
 	assignmentErrors         *prometheus.CounterVec
@@ -34,6 +38,12 @@ type Metrics struct {
 	periodReportRetry        *prometheus.CounterVec
 	feedResults              *prometheus.CounterVec
 	feedObservations         *prometheus.CounterVec
+}
+
+// failureRecord 记录一个空间当前协调失败原因的首次出现时间：同一原因连续出现时不重置，原因变化时重置。
+type failureRecord struct {
+	reason string
+	since  time.Time
 }
 
 type FeedMetric struct {
@@ -64,6 +74,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		assignmentLastSuccess:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_assignment_last_success_timestamp_seconds", Help: "Last successful Timer assignment reconciliation timestamp."}, []string{"space_id"}),
 		assignmentHealthy:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_healthy", Help: "Whether the latest Timer assignment reconciliation completed (1 healthy, 0 failed)."}, []string{"space_id"}),
 		assignmentFailure:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_failure", Help: "Current Timer coordination failure reason (1 current, 0 inactive)."}, []string{"space_id", "reason"}),
+		assignmentFailureSince:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_failure_since_timestamp_seconds", Help: "Unix timestamp when the current Timer coordination failure reason first appeared (0 when none)."}, []string{"space_id"}),
+		failures:                 make(map[string]failureRecord),
+		now:                      time.Now,
 		assignmentPending:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_pending", Help: "Whether a Timer assignment reconciliation batch is pending or running (1 pending, 0 idle)."}, []string{"space_id"}),
 		assignmentPendingSince:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", Help: "Unix timestamp when the current Timer assignment reconciliation batch started."}, []string{"space_id"}),
 		assignmentErrors:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_collector_market_fetch_assignment_errors_total", Help: "Timer assignment reconciliation errors."}, []string{"space_id", "reason"}),
@@ -89,6 +102,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	metrics.assignmentLastSuccess = registerGaugeVec(reg, metrics.assignmentLastSuccess)
 	metrics.assignmentHealthy = registerGaugeVec(reg, metrics.assignmentHealthy)
 	metrics.assignmentFailure = registerGaugeVec(reg, metrics.assignmentFailure)
+	metrics.assignmentFailureSince = registerGaugeVec(reg, metrics.assignmentFailureSince)
 	metrics.assignmentPending = registerGaugeVec(reg, metrics.assignmentPending)
 	metrics.assignmentPendingSince = registerGaugeVec(reg, metrics.assignmentPendingSince)
 	metrics.assignmentErrors = registerCounterVec(reg, metrics.assignmentErrors)
@@ -210,16 +224,38 @@ func (m *Metrics) ObserveAssignmentFailure(spaceID, reason string) {
 	}
 	m.assignmentHealthy.WithLabelValues(spaceID).Set(0)
 	reason = normalizeAssignmentFailureReason(reason)
-	m.ClearAssignmentFailure(spaceID)
+	m.clearFailureLabels(spaceID)
 	m.assignmentFailure.WithLabelValues(spaceID, reason).Set(1)
+	m.trackFailureSince(spaceID, reason)
 	m.ObserveAssignmentError(spaceID, reason)
 }
 
-// ClearAssignmentFailure clears every bounded failure label. Setting the
+// ObserveAssignmentRoundOK 在一轮对账没有任何失败时调用：协调恢复为健康并清除上一轮遗留的失败原因。
+// 它不更新「最近一次对账成功」时间：计划仍在进行或云端作业仍在途时，该时间保持不动。
+func (m *Metrics) ObserveAssignmentRoundOK(spaceID string) {
+	if m == nil || strings.TrimSpace(spaceID) == "" {
+		return
+	}
+	m.assignmentHealthy.WithLabelValues(spaceID).Set(1)
+	m.ClearAssignmentFailure(spaceID)
+}
+
+// ClearAssignmentFailure clears every bounded failure label and the failure start time. Setting the
 // values to zero (rather than deleting them) lets Monitor stop using the last
 // scraped failure immediately.
 func (m *Metrics) ClearAssignmentFailure(spaceID string) {
 	if m == nil || strings.TrimSpace(spaceID) == "" {
+		return
+	}
+	m.clearFailureLabels(spaceID)
+	m.failureMu.Lock()
+	delete(m.failures, spaceID)
+	m.failureMu.Unlock()
+	m.assignmentFailureSince.WithLabelValues(spaceID).Set(0)
+}
+
+func (m *Metrics) clearFailureLabels(spaceID string) {
+	if strings.TrimSpace(spaceID) == "" {
 		return
 	}
 	for _, reason := range assignmentFailureReasons {
@@ -227,8 +263,23 @@ func (m *Metrics) ClearAssignmentFailure(spaceID string) {
 	}
 }
 
+// trackFailureSince 记录失败原因的首次出现时间：原因不变时保持，原因变化时重置。
+func (m *Metrics) trackFailureSince(spaceID, reason string) {
+	m.failureMu.Lock()
+	defer m.failureMu.Unlock()
+	record, ok := m.failures[spaceID]
+	if !ok || record.reason != reason {
+		record = failureRecord{reason: reason, since: m.now()}
+		m.failures[spaceID] = record
+	}
+	m.assignmentFailureSince.WithLabelValues(spaceID).Set(float64(record.since.Unix()))
+}
+
+// ReasonPublishLeaseHeld 是 Admin 明确答复「发布租约或在途操作占用仍被持有」时的失败原因。
+const ReasonPublishLeaseHeld = "publish_lease_held"
+
 var assignmentFailureReasons = []string{
-	"capacity", "rules", "symbols", "dns", "cloudnode", "environment", "task_instances", "submit_timeout",
+	"capacity", "rules", "symbols", "dns", "cloudnode", "environment", "task_instances", ReasonPublishLeaseHeld,
 }
 
 func normalizeAssignmentFailureReason(reason string) string {

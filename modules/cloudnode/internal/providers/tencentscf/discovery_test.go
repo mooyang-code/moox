@@ -17,7 +17,7 @@ type fakeDiscoveryAPI struct {
 	err            error
 }
 
-func (f *fakeDiscoveryAPI) ListNamespacesWithContext(context.Context, *scf.ListNamespacesRequest) (*scf.ListNamespacesResponse, error) {
+func (f *fakeDiscoveryAPI) ListNamespaces(context.Context, *scf.ListNamespacesRequest) (*scf.ListNamespacesResponse, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -26,7 +26,7 @@ func (f *fakeDiscoveryAPI) ListNamespacesWithContext(context.Context, *scf.ListN
 	return response, nil
 }
 
-func (f *fakeDiscoveryAPI) ListFunctionsWithContext(_ context.Context, request *scf.ListFunctionsRequest) (*scf.ListFunctionsResponse, error) {
+func (f *fakeDiscoveryAPI) ListFunctions(_ context.Context, request *scf.ListFunctionsRequest) (*scf.ListFunctionsResponse, error) {
 	if f.err != nil {
 		return nil, f.err
 	}

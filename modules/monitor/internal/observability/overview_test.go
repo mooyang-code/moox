@@ -272,42 +272,139 @@ func TestBuilderSuppressesShortPendingTimerBatch(t *testing.T) {
 	require.Contains(t, got.BusinessChecks[0].Reason, "协调进行中")
 }
 
-func TestBuilderExplainsShortRuntimeSubmitTimeout(t *testing.T) {
+// seedLeaseHeldFailure 构造「协调失败，原因是发布租约被占用」的指标：failureAge 为 0 表示不上报失败起始时间。
+func seedLeaseHeldFailure(t *testing.T, db *gorm.DB, prefix string, now time.Time, failureAge time.Duration) {
+	t.Helper()
+	labels := `{"space_id":"crypto","dataset_id":"bars","frequency":"1m"}`
+	seedOverviewMetricForInstance(t, db, prefix+"-required", "collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 34, now)
+	seedOverviewMetricForInstance(t, db, prefix+"-active", "collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 34, now)
+	seedOverviewMetricForInstance(t, db, prefix+"-health", "collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto"}`, 0, now)
+	seedOverviewMetricForInstance(t, db, prefix+"-reason", "collector", "collector@control", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"publish_lease_held"}`, 1, now)
+	if failureAge > 0 {
+		seedOverviewMetricForInstance(t, db, prefix+"-since", "collector", "collector@control", "moox_collector_market_fetch_coordination_failure_since_timestamp_seconds", `{"space_id":"crypto"}`, float64(now.Add(-failureAge).Unix()), now)
+	}
+}
+
+func TestBuilderTreatsRecentPublishLeaseHeldAsCoordinationInProgress(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		labels := `{"space_id":"crypto","dataset_id":"bars","frequency":"1m"}`
-		seedOverviewMetricForInstance(t, db, "timeout-required", "collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 34, now)
-		seedOverviewMetricForInstance(t, db, "timeout-active", "collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 34, now)
-		seedOverviewMetricForInstance(t, db, "timeout-health", "collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto"}`, 0, now)
-		seedOverviewMetricForInstance(t, db, "timeout-state", "collector", "collector@control", "moox_collector_market_fetch_coordination_pending", `{"space_id":"crypto"}`, 1, now)
-		seedOverviewMetricForInstance(t, db, "timeout-since", "collector", "collector@control", "moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", `{"space_id":"crypto"}`, float64(now.Add(-time.Minute).Unix()), now)
-		seedOverviewMetricForInstance(t, db, "timeout-reason", "collector", "collector@control", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"submit_timeout"}`, 1, now)
-	})
+	query, _ := openOverviewState(t, func(db *gorm.DB) { seedLeaseHeldFailure(t, db, "held-recent", now, 6*time.Minute) })
 	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "healthy", got.BusinessChecks[0].Status)
-	require.Contains(t, got.BusinessChecks[0].Reason, "配置提交超时")
-	require.Contains(t, got.BusinessChecks[0].Reason, "自动重试")
+	require.Contains(t, got.BusinessChecks[0].Reason, "发布租约被占用")
+	require.NotContains(t, got.BusinessChecks[0].Reason, "CloudNode 服务调用失败")
 }
 
-func TestBuilderReportsPersistentRuntimeSubmitTimeout(t *testing.T) {
+func TestBuilderAlertsWhenPublishLeaseStaysHeldPastTheGrace(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
-		labels := `{"space_id":"crypto","dataset_id":"bars","frequency":"1m"}`
-		seedOverviewMetricForInstance(t, db, "timeout-old-required", "collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 34, now)
-		seedOverviewMetricForInstance(t, db, "timeout-old-active", "collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 34, now)
-		seedOverviewMetricForInstance(t, db, "timeout-old-health", "collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto"}`, 0, now)
-		seedOverviewMetricForInstance(t, db, "timeout-old-state", "collector", "collector@control", "moox_collector_market_fetch_coordination_pending", `{"space_id":"crypto"}`, 1, now)
-		seedOverviewMetricForInstance(t, db, "timeout-old-since", "collector", "collector@control", "moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", `{"space_id":"crypto"}`, float64(now.Add(-timerCoordinationPendingGrace-time.Minute).Unix()), now)
-		seedOverviewMetricForInstance(t, db, "timeout-old-reason", "collector", "collector@control", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"submit_timeout"}`, 1, now)
+		seedLeaseHeldFailure(t, db, "held-old", now, timerCoordinationLeaseGrace+time.Minute)
 	})
 	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "down", got.BusinessChecks[0].Status)
-	require.Contains(t, got.BusinessChecks[0].Reason, "配置提交持续超时")
-	require.NotContains(t, got.BusinessChecks[0].Reason, "节点不足")
+	require.Contains(t, got.BusinessChecks[0].Reason, "发布租约长时间被占用")
+	require.Contains(t, got.BusinessChecks[0].Reason, "批次作业是否卡住")
+}
+
+func TestBuilderDoesNotGivePublishLeaseGraceWithoutAFailureStartTime(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) { seedLeaseHeldFailure(t, db, "held-unknown", now, 0) })
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "down", got.BusinessChecks[0].Status, "无法证明还在宽限期内时保持保守")
+	require.Contains(t, got.BusinessChecks[0].Reason, "发布租约长时间被占用")
+}
+
+func TestBuilderLeaseGraceIsConfigurable(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) { seedLeaseHeldFailure(t, db, "held-cfg", now, 3*time.Minute) })
+	build := func(grace time.Duration) string {
+		got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, MarketFetchThresholds: MarketFetchThresholds{LeaseGrace: grace}}).Build(t.Context(), "")
+		require.NoError(t, err)
+		require.Len(t, got.BusinessChecks, 1)
+		return got.BusinessChecks[0].Status
+	}
+	require.Equal(t, "healthy", build(5*time.Minute))
+	require.Equal(t, "down", build(2*time.Minute))
+}
+
+func TestBuilderLeaseGraceDoesNotHideAnotherInstancesRealFailure(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		seedLeaseHeldFailure(t, db, "mixed", now, time.Minute)
+		// 另一个 Collector 实例同时报告真实故障：聚合后原因集合包含两者，租约宽限不能把它盖住。
+		seedOverviewMetricForInstance(t, db, "mixed-other", "collector", "collector@standby", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"cloudnode"}`, 1, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "down", got.BusinessChecks[0].Status)
+	require.Contains(t, got.BusinessChecks[0].Reason, "配置服务调用失败", "真实故障的文案优先")
+}
+
+func TestBuilderMixedReasonsWithoutDedicatedTextDoNotBlameTheLease(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		seedLeaseHeldFailure(t, db, "mixed-capacity", now, time.Minute)
+		seedOverviewMetricForInstance(t, db, "mixed-capacity-other", "collector", "collector@standby", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"capacity"}`, 1, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "down", got.BusinessChecks[0].Status)
+	require.NotContains(t, got.BusinessChecks[0].Reason, "发布租约长时间被占用", "租约冲突才持续一分钟，不能把告警归因到租约")
+	require.Contains(t, got.BusinessChecks[0].Reason, "采集计划协调失败")
+}
+
+func TestBuilderPendingGraceDoesNotOverrideAnExpiredLeaseGrace(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	seed := func(failureAge time.Duration) func(db *gorm.DB) {
+		return func(db *gorm.DB) {
+			seedLeaseHeldFailure(t, db, "pg", now, failureAge)
+			// 开放计划刚创建：普通 pending 宽限（默认 5 分钟）还没过。
+			seedOverviewMetricForInstance(t, db, "pg-state", "collector", "collector@control", "moox_collector_market_fetch_coordination_pending", `{"space_id":"crypto"}`, 1, now)
+			seedOverviewMetricForInstance(t, db, "pg-pending-since", "collector", "collector@control", "moox_collector_market_fetch_coordination_pending_since_timestamp_seconds", `{"space_id":"crypto"}`, float64(now.Add(-time.Minute).Unix()), now)
+		}
+	}
+	build := func(grace time.Duration, failureAge time.Duration) BusinessStatus {
+		query, _ := openOverviewState(t, seed(failureAge))
+		got, err := (Builder{Metrics: query, Now: func() time.Time { return now }, MarketFetchThresholds: MarketFetchThresholds{LeaseGrace: grace}}).Build(t.Context(), "")
+		require.NoError(t, err)
+		require.Len(t, got.BusinessChecks, 1)
+		return got.BusinessChecks[0]
+	}
+	// 租约宽限 2 分钟、失败已持续 3 分钟：即使 pending 宽限还没过，也要告警。
+	expired := build(2*time.Minute, 3*time.Minute)
+	require.Equal(t, "down", expired.Status)
+	require.Contains(t, expired.Reason, "发布租约长时间被占用")
+	// 缺少失败起始时间：无法证明还在宽限期内，同样不能被 pending 宽限盖住。
+	unknown := build(10*time.Minute, 0)
+	require.Equal(t, "down", unknown.Status)
+	// 租约宽限内：仍按协调进行中处理。
+	within := build(10*time.Minute, 3*time.Minute)
+	require.Equal(t, "healthy", within.Status)
+}
+
+func TestBuilderOnlyLeaseHeldGetsTheGraceNotOtherFailureReasons(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		labels := `{"space_id":"crypto","dataset_id":"bars","frequency":"1m"}`
+		seedOverviewMetricForInstance(t, db, "other-required", "collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 34, now)
+		seedOverviewMetricForInstance(t, db, "other-active", "collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 34, now)
+		seedOverviewMetricForInstance(t, db, "other-health", "collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto"}`, 0, now)
+		seedOverviewMetricForInstance(t, db, "other-reason", "collector", "collector@control", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"cloudnode"}`, 1, now)
+		// 失败刚刚开始，但原因不是「被占用」：Admin 不可达、无权限等照常告警。
+		seedOverviewMetricForInstance(t, db, "other-since", "collector", "collector@control", "moox_collector_market_fetch_coordination_failure_since_timestamp_seconds", `{"space_id":"crypto"}`, float64(now.Add(-time.Minute).Unix()), now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	require.Len(t, got.BusinessChecks, 1)
+	require.Equal(t, "down", got.BusinessChecks[0].Status)
+	require.Contains(t, got.BusinessChecks[0].Reason, "配置服务调用失败")
 }
 
 func TestBuilderDoesNotMislabelCloudNodeFailureAsCapacityShortage(t *testing.T) {

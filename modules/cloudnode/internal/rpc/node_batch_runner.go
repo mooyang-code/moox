@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/publishlease"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
@@ -324,6 +325,10 @@ func (s *Service) releasePendingRecoveredPublishLeases(ctx context.Context, limi
 func isTransientSCFProviderError(err error) bool {
 	if err == nil {
 		return false
+	}
+	// 等本地限流令牌的时间超过了本次尝试的截止时间：请求没有发出，下一次尝试有新的预算。
+	if errors.Is(err, tencentscf.ErrRateLimitWaitExceedsDeadline) {
+		return true
 	}
 	message := strings.ToLower(err.Error())
 	for _, marker := range []string{"validation", "invalid param", "permission denied", "access denied", "not found", "quota", "limitexceeded.function"} {

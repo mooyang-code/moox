@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/clsprovision"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/health"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/publishlease"
 	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudnode/internal/rpc"
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/store"
@@ -82,6 +83,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	cfg, err := config.Load("./config/app.yaml")
 	if err != nil {
 		log.ErrorContextf(ctx, "加载 cloudnode 配置失败: %v", err)
+		return nil, err
+	}
+	if err := tencentscf.ConfigureRateLimits(cfg.TencentSCF.APIRateLimits); err != nil {
 		return nil, err
 	}
 	runtime := &Runtime{StartedAt: time.Now()}

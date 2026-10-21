@@ -37,7 +37,7 @@ func (p *KlinePipeline) reportItemFailure(req Request, result domain.ItemResult,
 }
 
 // reportBatch 上报一次取数批次的摘要：条数、失败数、取数耗时与剩余窗口，用来统计整体效率。
-func (p *KlinePipeline) reportBatch(req Request, planned, failed int, fetch time.Duration, windowLeft time.Duration) {
+func (p *KlinePipeline) reportBatch(req Request, planned, failed int, fetch time.Duration, windowLeft time.Duration, extra ...map[string]string) {
 	if p == nil || p.Reporter == nil {
 		return
 	}
@@ -46,6 +46,12 @@ func (p *KlinePipeline) reportBatch(req Request, planned, failed int, fetch time
 		"batch_kind": string(req.BatchKind), "request_id": req.RequestID, "dataset_id": req.DatasetID, "frequency": req.Frequency,
 		"planned": strconv.Itoa(planned), "failed": strconv.Itoa(failed),
 		"fetch_ms": strconv.FormatInt(fetch.Milliseconds(), 10), "window_left_ms": strconv.FormatInt(windowLeft.Milliseconds(), 10),
+	}
+	// 取数项的阶段耗时汇总（排队、DNS、建连、TLS、首字节、重试），见 cls_timing.go。
+	for _, more := range extra {
+		for key, value := range more {
+			fields[key] = value
+		}
 	}
 	// 已用权重：行情源按出口 IP 统计的当前分钟总用量（含同一 IP 上其他函数），用来估算离限额还有多远。
 	if used := marketdata.TakeUsedWeight(); used > 0 {

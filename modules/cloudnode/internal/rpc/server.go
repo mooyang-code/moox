@@ -84,7 +84,7 @@ func New(dbm *store.Store, opts ...Option) *Service {
 }
 
 func defaultSCFClientFactory(credential cloudcredential.TencentCredential) scfProvisioner {
-	return tencentscf.New(credential.SecretID, credential.SecretKey)
+	return tencentscf.New(credential.AccountID, credential.SecretID, credential.SecretKey)
 }
 
 func retOK() *pb.RetInfo {

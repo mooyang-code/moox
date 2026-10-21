@@ -10,11 +10,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// APIConfig 是按顺序故障转移的币安官方端点；没有写时沿用客户端内置的默认域名。
 type APIConfig struct {
-	BaseURL      string   `yaml:"base_url"`
-	SpotBaseURL  string   `yaml:"spot_base_url"`
 	SpotBaseURLs []string `yaml:"spot_base_urls"`
-	SwapBaseURL  string   `yaml:"swap_base_url"`
 	SwapBaseURLs []string `yaml:"swap_base_urls"`
 }
 
@@ -47,25 +45,7 @@ func ResolveAPIConfig() (APIConfig, error) {
 	if err != nil {
 		return APIConfig{}, err
 	}
-	cfg := source.API
-	if len(cfg.SpotBaseURLs) == 0 {
-		if cfg.SpotBaseURL == "" {
-			cfg.SpotBaseURL = cfg.BaseURL
-		}
-		if cfg.SpotBaseURL != "" {
-			cfg.SpotBaseURLs = []string{cfg.SpotBaseURL}
-		}
-	}
-	if len(cfg.SwapBaseURLs) == 0 && cfg.SwapBaseURL != "" {
-		cfg.SwapBaseURLs = []string{cfg.SwapBaseURL}
-	}
-	if len(cfg.SpotBaseURLs) > 0 {
-		cfg.SpotBaseURL = cfg.SpotBaseURLs[0]
-	}
-	if len(cfg.SwapBaseURLs) > 0 {
-		cfg.SwapBaseURL = cfg.SwapBaseURLs[0]
-	}
-	return cfg, nil
+	return source.API, nil
 }
 
 func loadBinanceSourceConfig() (*binanceSourceConfig, error) {

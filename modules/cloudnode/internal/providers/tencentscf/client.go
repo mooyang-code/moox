@@ -18,8 +18,10 @@ import (
 
 // Client is a Tencent SCF provider client.
 type Client struct {
-	secretID    string
-	secretKey   string
+	secretID  string
+	secretKey string
+	// limitKey 标识限流配额的归属：腾讯云按子账号限频，同一账号轮换密钥后新旧 Client 必须共用同一组令牌桶。
+	limitKey    string
 	namespaceMu sync.Mutex
 	namespaces  map[string]struct{}
 }
@@ -90,8 +92,10 @@ func (c *Client) DeleteFunction(ctx context.Context, ref FunctionRef) error {
 	request := scf.NewDeleteFunctionRequest()
 	request.FunctionName = common.StringPtr(ref.FunctionName)
 	request.Namespace = common.StringPtr(ref.Namespace)
-	_, err = client.DeleteFunctionWithContext(ctx, request)
-	return err
+	return c.call(ctx, ref.Region, "DeleteFunction", func(ctx context.Context) error {
+		_, err := client.DeleteFunctionWithContext(ctx, request)
+		return err
+	})
 }
 
 // UpdateFunctionCodeRequest updates a Tencent SCF function with a local zip.
@@ -159,8 +163,11 @@ func (c *Client) UpdateFunctionEventInvokeConfig(ctx context.Context, req Update
 		msgTTL = 21600
 	}
 	request.AsyncTriggerConfig = &scf.AsyncTriggerConfig{RetryConfig: []*scf.RetryConfig{{RetryNum: common.Int64Ptr(req.RetryNum)}}, MsgTTL: common.Int64Ptr(msgTTL)}
-	response, err := client.UpdateFunctionEventInvokeConfigWithContext(ctx, request)
-	if err != nil {
+	var response *scf.UpdateFunctionEventInvokeConfigResponse
+	if err := c.call(ctx, req.Region, "UpdateFunctionEventInvokeConfig", func(ctx context.Context) (callErr error) {
+		response, callErr = client.UpdateFunctionEventInvokeConfigWithContext(ctx, request)
+		return callErr
+	}); err != nil {
 		return nil, err
 	}
 	out := &UpdateFunctionEventInvokeConfigResponse{}
@@ -186,8 +193,10 @@ func (c *Client) PutReservedConcurrencyConfig(ctx context.Context, req PutReserv
 	request.FunctionName = common.StringPtr(req.FunctionName)
 	request.Namespace = common.StringPtr(req.Namespace)
 	request.ReservedConcurrencyMem = common.Uint64Ptr(uint64(req.ReservedConcurrencyMem))
-	_, err = client.PutReservedConcurrencyConfigWithContext(ctx, request)
-	return err
+	return c.call(ctx, req.Region, "PutReservedConcurrencyConfig", func(ctx context.Context) error {
+		_, err := client.PutReservedConcurrencyConfigWithContext(ctx, request)
+		return err
+	})
 }
 
 // InvokeFunctionRequest describes a SCF invocation.
@@ -211,9 +220,14 @@ type InvokeFunctionResponse struct {
 	MemoryUsage  int64
 }
 
-// New creates a Tencent SCF client.
-func New(secretID string, secretKey string) *Client {
-	return &Client{secretID: secretID, secretKey: secretKey, namespaces: make(map[string]struct{})}
+// New creates a Tencent SCF client. accountID 是云账号标识，用作限流配额的归属；
+// 为空时退回按 SecretID 区分。
+func New(accountID string, secretID string, secretKey string) *Client {
+	limitKey := strings.TrimSpace(accountID)
+	if limitKey == "" {
+		limitKey = "secret:" + secretID
+	}
+	return &Client{secretID: secretID, secretKey: secretKey, limitKey: limitKey, namespaces: make(map[string]struct{})}
 }
 
 // EnsureNamespace makes the configured namespace available before a function
@@ -246,7 +260,11 @@ func (c *Client) EnsureNamespace(ctx context.Context, region, namespace string) 
 		request := scf.NewListNamespacesRequest()
 		request.Limit = common.Int64Ptr(100)
 		request.Offset = common.Int64Ptr(offset)
-		response, listErr := scfClient.ListNamespacesWithContext(ctx, request)
+		var response *scf.ListNamespacesResponse
+		listErr := c.call(ctx, region, "ListNamespaces", func(ctx context.Context) (callErr error) {
+			response, callErr = scfClient.ListNamespacesWithContext(ctx, request)
+			return callErr
+		})
 		if listErr != nil {
 			return fmt.Errorf("list SCF namespaces in %s: %w", region, listErr)
 		}
@@ -268,14 +286,21 @@ func (c *Client) EnsureNamespace(ctx context.Context, region, namespace string) 
 	request := scf.NewCreateNamespaceRequest()
 	request.Namespace = common.StringPtr(namespace)
 	request.Description = common.StringPtr("MooX managed SCF namespace")
-	if _, err = scfClient.CreateNamespaceWithContext(ctx, request); err != nil {
+	if err = c.call(ctx, region, "CreateNamespace", func(ctx context.Context) error {
+		_, callErr := scfClient.CreateNamespaceWithContext(ctx, request)
+		return callErr
+	}); err != nil {
 		// A concurrent deployment or an operator may have created it after the
 		// list call. Re-list once before surfacing the provider error.
 		for retryOffset := int64(0); ; {
 			listRequest := scf.NewListNamespacesRequest()
 			listRequest.Limit = common.Int64Ptr(100)
 			listRequest.Offset = common.Int64Ptr(retryOffset)
-			listResponse, listErr := scfClient.ListNamespacesWithContext(ctx, listRequest)
+			var listResponse *scf.ListNamespacesResponse
+			listErr := c.call(ctx, region, "ListNamespaces", func(ctx context.Context) (callErr error) {
+				listResponse, callErr = scfClient.ListNamespacesWithContext(ctx, listRequest)
+				return callErr
+			})
 			if listErr != nil || listResponse == nil || listResponse.Response == nil {
 				break
 			}
@@ -307,8 +332,11 @@ func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInf
 	request := scf.NewGetFunctionRequest()
 	request.FunctionName = common.StringPtr(req.FunctionName)
 	request.Namespace = common.StringPtr(req.Namespace)
-	response, err := scfClient.GetFunctionWithContext(ctx, request)
-	if err != nil {
+	var response *scf.GetFunctionResponse
+	if err := c.call(ctx, req.Region, "GetFunction", func(ctx context.Context) (callErr error) {
+		response, callErr = scfClient.GetFunctionWithContext(ctx, request)
+		return callErr
+	}); err != nil {
 		return nil, err
 	}
 	out := &FunctionInfo{}
@@ -406,8 +434,11 @@ func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunc
 		// provider switch that actually disables that native path.
 		request.IgnoreSysLog = common.BoolPtr(true)
 	}
-	response, err := scfClient.UpdateFunctionConfigurationWithContext(ctx, request)
-	if err != nil {
+	var response *scf.UpdateFunctionConfigurationResponse
+	if err := c.call(ctx, req.Region, "UpdateFunctionConfiguration", func(ctx context.Context) (callErr error) {
+		response, callErr = scfClient.UpdateFunctionConfigurationWithContext(ctx, request)
+		return callErr
+	}); err != nil {
 		return nil, err
 	}
 	out := &UpdateFunctionConfigurationResponse{}
@@ -430,8 +461,12 @@ func (c *Client) CreateFunction(ctx context.Context, req CreateFunctionRequest) 
 	if !validVPCPair(req.VpcID, req.SubnetID) {
 		return nil, fmt.Errorf("vpc_id and subnet_id must be provided together")
 	}
-	response, err := scfClient.CreateFunctionWithContext(ctx, buildCreateFunctionRequest(req))
-	if err != nil {
+	request := buildCreateFunctionRequest(req)
+	var response *scf.CreateFunctionResponse
+	if err := c.call(ctx, req.Region, "CreateFunction", func(ctx context.Context) (callErr error) {
+		response, callErr = scfClient.CreateFunctionWithContext(ctx, request)
+		return callErr
+	}); err != nil {
 		return nil, err
 	}
 	out := &CreateFunctionResponse{}
@@ -451,8 +486,12 @@ func (c *Client) UpdateFunctionCode(ctx context.Context, req UpdateFunctionCodeR
 	if err != nil {
 		return nil, err
 	}
-	response, err := scfClient.UpdateFunctionCodeWithContext(ctx, buildUpdateFunctionCodeRequest(req))
-	if err != nil {
+	request := buildUpdateFunctionCodeRequest(req)
+	var response *scf.UpdateFunctionCodeResponse
+	if err := c.call(ctx, req.Region, "UpdateFunctionCode", func(ctx context.Context) (callErr error) {
+		response, callErr = scfClient.UpdateFunctionCodeWithContext(ctx, request)
+		return callErr
+	}); err != nil {
 		return nil, err
 	}
 	out := &UpdateFunctionCodeResponse{}
@@ -573,8 +612,11 @@ func (c *Client) InvokeFunction(ctx context.Context, req InvokeFunctionRequest) 
 	}
 	request.ClientContext = common.StringPtr(string(raw))
 
-	response, err := scfClient.InvokeWithContext(ctx, request)
-	if err != nil {
+	var response *scf.InvokeResponse
+	if err := c.call(ctx, req.Region, "Invoke", func(ctx context.Context) (callErr error) {
+		response, callErr = scfClient.InvokeWithContext(ctx, request)
+		return callErr
+	}); err != nil {
 		return nil, err
 	}
 	out := &InvokeFunctionResponse{}

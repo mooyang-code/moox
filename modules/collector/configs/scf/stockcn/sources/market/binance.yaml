@@ -5,9 +5,10 @@ app:
   type: "market"
 
 api:
-  base_url: "https://data-api.binance.vision"
-  spot_base_url: "https://data-api.binance.vision"
-  swap_base_url: "https://fapi.binance.com"
+  spot_base_urls:
+    - "https://data-api.binance.vision"
+  swap_base_urls:
+    - "https://fapi.binance.com"
 
 storage:
   bindings:

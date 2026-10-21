@@ -271,7 +271,7 @@ func (c *HTTPClient) clientForIP(ip string) *http.Client {
 	return &client
 }
 
-func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, domain, path string, query url.Values, consume func(io.Reader) error) error {
+func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, domain, path string, query url.Values, consume func(io.Reader) error) (retErr error) {
 	if client == nil {
 		return fmt.Errorf("HTTP client is not initialized")
 	}
@@ -281,6 +281,13 @@ func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, dom
 	fullURL := fmt.Sprintf("https://%s%s", domain, path)
 	if len(query) > 0 {
 		fullURL += "?" + query.Encode()
+	}
+	// 调用方通过 WithTrace 挂了 Trace 时，记录这次请求的 DNS、建连、TLS 与首字节耗时。
+	status := 0
+	var rt *requestTrace
+	if trace := traceFrom(ctx); trace != nil {
+		ctx, rt = trace.begin(ctx, domain)
+		defer func() { rt.done(status, retErr) }()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {
@@ -294,10 +301,16 @@ func (c *HTTPClient) getWithClient(ctx context.Context, client *http.Client, dom
 		return fmt.Errorf("请求 %s 失败: %w", domain, err)
 	}
 	defer resp.Body.Close()
+	status = resp.StatusCode
+	rt.response(resp.Header)
 	if c.ResponseObserver != nil {
 		c.ResponseObserver(domain, resp.StatusCode, resp.Header)
 	}
 	if resp.StatusCode != http.StatusOK {
+		if rt != nil {
+			hint, _ := io.ReadAll(io.LimitReader(resp.Body, 100))
+			rt.body(hint)
+		}
 		log.WarnContextf(ctx, "collector_http_failed domain=%s status=%d duration_ms=%d", domain, resp.StatusCode, time.Since(started).Milliseconds())
 		return &StatusError{StatusCode: resp.StatusCode, RetryAfter: retryAfterOf(resp.Header)}
 	}

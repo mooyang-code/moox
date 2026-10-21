@@ -89,7 +89,8 @@ func TestMonitorConfigDefaults(t *testing.T) {
 		t.Fatalf("market canary must come from deployment config, defaults = %+v", cfg.MarketCanary)
 	}
 	if cfg.MarketHealth.TimerCoordinationStaleAfter != 15*time.Minute ||
-		cfg.MarketHealth.TimerCoordinationPendingGrace != 5*time.Minute {
+		cfg.MarketHealth.TimerCoordinationPendingGrace != 5*time.Minute ||
+		cfg.MarketHealth.TimerCoordinationLeaseGrace != 10*time.Minute {
 		t.Fatalf("market health defaults = %+v", cfg.MarketHealth)
 	}
 }
@@ -425,6 +426,33 @@ func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
 	cfg.MarketHealth.TimerCoordinationStaleAfter = -time.Second
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "timer_coordination_stale_after") {
 		t.Fatalf("Validate() error = %v, want timer coordination threshold error", err)
+	}
+
+	cfg = Default()
+	cfg.Placement.Enabled = false
+	cfg.MarketHealth.TimerCoordinationLeaseGrace = -time.Second
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "timer_coordination_lease_grace") {
+		t.Fatalf("Validate() error = %v, want lease grace error", err)
+	}
+}
+
+func TestMonitorConfigFillsTheLeaseGraceDefaultWhenTheFileOmitsIt(t *testing.T) {
+	// 线上配置文件不随二进制更新：旧文件没有 timer_coordination_lease_grace 时必须取默认值。
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "monitor")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "secret")
+	cfg, err := Load(writeConfig(t, "market_health:\n  timer_coordination_stale_after: 15m\n  timer_coordination_pending_grace: 5m\n"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.MarketHealth.TimerCoordinationLeaseGrace != 10*time.Minute {
+		t.Fatalf("lease grace = %v, want 10m", cfg.MarketHealth.TimerCoordinationLeaseGrace)
+	}
+	cfg, err = Load(writeConfig(t, "market_health:\n  timer_coordination_lease_grace: 3m\n"))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.MarketHealth.TimerCoordinationLeaseGrace != 3*time.Minute {
+		t.Fatalf("lease grace = %v, want 3m", cfg.MarketHealth.TimerCoordinationLeaseGrace)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudnode/internal/clsprovision"
+	"github.com/mooyang-code/moox/modules/cloudnode/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
 )
@@ -48,6 +49,9 @@ type TencentSCFConfig struct {
 	DefaultRegion    string `yaml:"default_region"`
 	DefaultNamespace string `yaml:"default_namespace"`
 	DefaultRuntime   string `yaml:"default_runtime"`
+	// APIRateLimits 按接口名覆盖进程内令牌桶的速率（次/秒）；未写的接口使用官方限频的 75%。
+	// 值必须大于 0 且不超过官方限频，接口名必须是 CloudNode 调用的 SCF 接口。
+	APIRateLimits map[string]float64 `yaml:"api_rate_limits"`
 }
 
 // DebugConfig controls local diagnostics endpoints.
@@ -99,6 +103,9 @@ func (c *Config) Validate() error {
 	}
 	if c.NodeBatch.PollInterval < 100*time.Millisecond || c.NodeBatch.PollInterval > 10*time.Second {
 		return fmt.Errorf("node_batch.poll_interval must be between 100ms and 10s")
+	}
+	if err := tencentscf.ValidateRateLimits(c.TencentSCF.APIRateLimits); err != nil {
+		return err
 	}
 	if err := c.CLS.Validate(); err != nil {
 		return err

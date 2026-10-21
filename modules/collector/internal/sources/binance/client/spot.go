@@ -136,10 +136,7 @@ func (api *SpotAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain str
 			return api.client.GetDirectStreamWithIPs(ctx, domain, ips, SpotExchangeInfoEndpoint, query, func(reader io.Reader) error {
 				var decodeErr error
 				total, symbols, decodeErr = decodeExchangeInfo(reader, func(raw *exchangeInfoSymbolRaw) bool {
-					if raw.Status != "TRADING" {
-						return false
-					}
-					return true
+					return raw.Status == "TRADING"
 				})
 				return decodeErr
 			})

@@ -3,8 +3,10 @@ package binance
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,7 +49,7 @@ func assertEqualTime(t *testing.T, want, got time.Time) {
 }
 
 func TestEndpointAttemptContextKeepsAMinimumWindow(t *testing.T) {
-	parent, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	parent, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	attempt, release := endpointAttemptContext(parent, 7)
 	defer release()
@@ -55,8 +57,8 @@ func TestEndpointAttemptContextKeepsAMinimumWindow(t *testing.T) {
 	if !ok {
 		t.Fatal("endpoint attempt must have a deadline")
 	}
-	if window := time.Until(deadline); window < time.Second {
-		t.Fatalf("endpoint window %v is shorter than the minimum", window)
+	if window := time.Until(deadline); window < 1900*time.Millisecond {
+		t.Fatalf("endpoint window %v is shorter than the 2s minimum", window)
 	}
 
 	short, shortCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
@@ -67,5 +69,27 @@ func TestEndpointAttemptContextKeepsAMinimumWindow(t *testing.T) {
 	parentDeadline, _ := short.Deadline()
 	if limitedDeadline.After(parentDeadline) {
 		t.Fatal("an endpoint window must never outlive its parent")
+	}
+}
+
+func TestTryEndpointsFailsOverInOrder(t *testing.T) {
+	var called []string
+	klines, err := tryEndpoints(context.Background(), []string{"a", "b", "c"}, func(_ context.Context, domain string) ([]*exchange.Kline, error) {
+		called = append(called, domain)
+		if domain == "c" {
+			return []*exchange.Kline{{}}, nil
+		}
+		return nil, errors.New(domain + " down")
+	})
+	if err != nil || len(klines) != 1 {
+		t.Fatalf("klines=%d err=%v", len(klines), err)
+	}
+	if strings.Join(called, ",") != "a,b,c" {
+		t.Fatalf("called %v, want a,b,c", called)
+	}
+	if _, err := tryEndpoints(context.Background(), []string{"a"}, func(context.Context, string) ([]*exchange.Kline, error) {
+		return nil, errors.New("only down")
+	}); err == nil || err.Error() != "only down" {
+		t.Fatalf("err=%v", err)
 	}
 }

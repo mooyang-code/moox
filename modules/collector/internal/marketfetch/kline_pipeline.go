@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -133,9 +134,15 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 	var rowsMu sync.Mutex
+	// 阶段耗时：每个取数项只写自己下标的一格，不需要加锁；收盘时刻用来换算相对收盘的偏移（周期提交请求才有）。
+	timings := make([]itemTiming, len(req.Items))
+	invocationSeq.Add(1)
+	probe := startSchedProbe()
+	closeAt := periodCloseTime(req, frequency)
 	for index, item := range req.Items {
 		index, item := index, item
 		wg.Add(1)
+		queueStarted := time.Now()
 		go func() {
 			defer wg.Done()
 			select {
@@ -214,8 +221,15 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				}
 			}
 			fetchStarted := time.Now()
-			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(ctx, routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
+			trace := &httpclient.Trace{}
+			fetched, selectedProvider, nextCandidateIndex, attempts, err := fetchKlinesFromChain(httpclient.WithStandbyDelay(httpclient.WithTrace(ctx, trace), time.Duration(req.StandbyMS)*time.Millisecond), routerSession, marketdata.KlineRequest{MarketID: marketID, ExchangeID: exchangeID, InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol, SourceID: itemSourceID, Frequency: req.Frequency, Limit: limit, StartTime: coverageStart, EndTime: coverageEnd, Now: started.UTC(), HistoryAsOf: historyAsOf, RequestID: firstNonEmptyString(item.SourceEventID, req.RequestID, req.BatchID), RateBudgetRatio: item.RateBudgetRatio, DNSRoutes: dnsRoutes}, itemChain, item.CandidateIndex)
+			timings[index] = itemTiming{
+				Recorded: true, Subject: item.SubjectID, Symbol: providerSymbol, Provider: selectedProvider,
+				Queue: fetchStarted.Sub(queueStarted), Fetch: time.Since(fetchStarted), StartedAt: fetchStarted,
+				Attempts: attempts, HTTP: trace.Snapshot(), Outcome: domain.ItemOutcomeSuccess,
+			}
 			if err != nil {
+				timings[index].Outcome = classifyError(err)
 				item.CandidateIndex = nextCandidateIndex
 				p.observeFeed(req, selectedProvider, "kline", metricKlineResult(err))
 				results[index] = failureResult(item, classifyError(err), errorType(err), err)
@@ -328,6 +342,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 		}()
 	}
 	wg.Wait()
+	probeFields := probe.finish()
 	if deadline, ok := ctx.Deadline(); ok {
 		failed := 0
 		for _, result := range results {
@@ -336,7 +351,8 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 		}
 		log.WarnContextf(ctx, "market_fetch_pipeline_fetched frequency=%s items=%d failed=%d fetch_ms=%d window_left_ms=%d", req.Frequency, len(req.Items), failed, time.Since(started).Milliseconds(), time.Until(deadline).Milliseconds())
-		p.reportBatch(req, len(req.Items), failed, time.Since(started), time.Until(deadline))
+		p.reportBatch(req, len(req.Items), failed, time.Since(started), time.Until(deadline), batchTimingFields(timings, started, time.Now(), closeAt, req.StandbyMS), probeFields, runtimeFields(req, started))
+		p.reportSlowItems(req, timings, closeAt)
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		left, right := rows[i].GetKey().GetTimeSeries(), rows[j].GetKey().GetTimeSeries()
@@ -354,6 +370,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				targetRows[row.GetKey().GetDatasetId()] = append(targetRows[row.GetKey().GetDatasetId()], row)
 			}
 		}
+		commitStarted := time.Now()
 		var writeErr error
 		writeSuccesses := 0
 		targetStatus := make(map[string]domain.TargetResult)
@@ -384,6 +401,8 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				targetStatus[datasetID] = domain.TargetResult{DatasetID: datasetID, Status: "succeeded"}
 			}
 		}
+		commitDone := time.Now()
+		p.reportCommit(req, len(rows), len(targetRows), commitDone.Sub(commitStarted), commitDone, closeAt, writeErr)
 		for index := range results {
 			if results[index].Outcome != domain.ItemOutcomeSuccess && len(results[index].TargetResults) == 0 {
 				continue
@@ -1020,4 +1039,17 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// periodCloseTime 返回周期提交请求所对应周期的收盘时刻，用来把耗时换算成“收盘后多少毫秒”；
+// 不是周期提交请求（补采、手动调用）或目标时间无法解析时返回零值，相关字段不上报。
+func periodCloseTime(req Request, frequency marketdata.Frequency) time.Time {
+	if !req.RequirePeriodCommit || len(req.Items) == 0 {
+		return time.Time{}
+	}
+	target, err := parseRequestTime(req.Items[0].TargetDataTime)
+	if err != nil || target.IsZero() {
+		return time.Time{}
+	}
+	return frequency.BarEnd(target.UTC())
 }

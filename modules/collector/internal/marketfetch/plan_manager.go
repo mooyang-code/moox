@@ -145,6 +145,11 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 	// 启用定时器并下发环境之前，先让落后的函数跟上配置的代码包：环境的编码格式（例如采集计划）随代码版本变化，
 	// 先启用会出现“旧代码读新环境”。升级失败或仍在进行都不启用，下一轮重试；没有落后函数时这一步什么也不做。
 	if err := r.upgradeBeforeEnable(ctx); err != nil {
+		if errors.Is(err, errCodeUpgradePending) {
+			// 管理器随后直接跳过本 tick 的对账，唯一的收尾点不会执行：在这里补上，
+			// 否则升级作业的 pending 指标不更新，之前的失败原因（例如租约被占用）也不会清除。
+			r.finishRound(err)
+		}
 		return false, err
 	}
 	release, err := r.acquireOperation(ctx)
@@ -497,8 +502,9 @@ func (r *PlanReconciler) upgradeBeforeEnable(ctx context.Context) error {
 	}
 	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
 	if err != nil {
-		// 读不到云端就无法确认代码已经升级：同样不放行，等下一轮。
-		return fmt.Errorf("%w: cannot read back the fleet: %v", errCodeUpgradePending, err)
+		// 读不到云端就无法确认代码已经升级：同样不放行，等下一轮。这是 CloudNode 调用失败，必须记入失败，
+		// 否则 EnableAll 里按“升级等待”收尾时会把它当成无失败而清掉既有的失败原因。
+		return r.fail("cloudnode", fmt.Errorf("%w: cannot read back the fleet: %v", errCodeUpgradePending, err))
 	}
 	prefix := "moox-fetch" + PlanFleetMarker + planNameSanitizer.Replace(strings.ToLower(r.SpaceID)) + "-"
 	stale := 0

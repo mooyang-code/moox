@@ -208,10 +208,6 @@ func marketIdentity(marketID, instrumentType, datasetID string) (string, string)
 		return "stockcn", "index"
 	case strings.HasPrefix(datasetID, "dataset_stockcn_bond"):
 		return "stockcn", "convertible_bond"
-	case strings.HasPrefix(datasetID, "dataset_stockhk"):
-		return "stockhk", "equity"
-	case strings.HasPrefix(datasetID, "dataset_stockus"):
-		return "stockus", "equity"
 	case strings.HasPrefix(datasetID, "dataset_stockcn"):
 		return "stockcn", "equity"
 	default:

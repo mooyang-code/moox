@@ -25,6 +25,9 @@ const listMarketFetchersPageSize = 500
 var (
 	ErrRuntimeConfigSubmissionUnknown = errors.New("runtime config submission outcome is unknown")
 	ErrCollectorPublishLeaseStale     = errors.New("collector publish lease is expired or fenced")
+	// ErrCollectorPublishLeaseHeld 表示 Admin 明确答复该空间的发布租约或在途操作占用仍被他人持有（CONFLICT）。
+	// 它是租约在正常工作，持续时间取决于旧作业还要跑多久；通信失败、无权限、响应异常不属于它。
+	ErrCollectorPublishLeaseHeld = errors.New("collector publish lease is held")
 )
 
 // Client borrows the process gateway for CloudNode and Admin publish leases.
@@ -344,6 +347,10 @@ func (c *Client) AcquireCollectorPublishLease(ctx context.Context, spaceID, hold
 	if err := c.invoke(ctx, spaceID, "trpc.moox.admin.CollectorPublishLease", "AcquireCollectorPublishLease",
 		&adminpb.AcquireCollectorPublishLeaseReq{SpaceId: spaceID, HolderId: holderID}, &response, false); err != nil {
 		return nil, err
+	}
+	// 申请租约（不带期望令牌）时 Admin 只会因租约或操作占用未过期返回 CONFLICT。
+	if response.GetRetInfo().GetCode() == adminpb.ErrorCode_CONFLICT {
+		return nil, fmt.Errorf("collector publish lease rejected: %w", ErrCollectorPublishLeaseHeld)
 	}
 	return collectorLeaseFromResponse(spaceID, holderID, &response)
 }

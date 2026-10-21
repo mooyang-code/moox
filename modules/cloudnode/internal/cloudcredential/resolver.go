@@ -11,6 +11,8 @@ import (
 )
 
 type TencentCredential struct {
+	// AccountID 是云账号标识，腾讯云按子账号限频，限流配额以它为准；同一账号轮换密钥后不变。
+	AccountID string
 	SecretID  string
 	SecretKey string
 }
@@ -55,5 +57,5 @@ func (r *Resolver) Resolve(ctx context.Context, account store.CloudAccount) (Ten
 	if strings.TrimSpace(secret.GetKeyId()) == "" || secret.GetSecretValue() == "" {
 		return TencentCredential{}, fmt.Errorf("cloud credential is incomplete")
 	}
-	return TencentCredential{SecretID: secret.GetKeyId(), SecretKey: secret.GetSecretValue()}, nil
+	return TencentCredential{AccountID: account.AccountID, SecretID: secret.GetKeyId(), SecretKey: secret.GetSecretValue()}, nil
 }

@@ -150,12 +150,16 @@ type PlanReconciler struct {
 	JobWait      time.Duration
 	PollInterval time.Duration
 
-	mu           sync.Mutex
-	lease        *scfinvoker.CollectorPublishLease
-	holder       string
-	pending      []pendingPlanJob
-	aux          auxJobs
-	lastVerified time.Time
+	mu sync.Mutex
+	// failCount 统计 fail 的调用次数，roundFailCount 是上一轮对账结束时的值；
+	// 两者相等说明自上一轮结束以来没有任何失败（包括同一 tick 内对账之前的启用、升级）。
+	failCount      int
+	roundFailCount int
+	lease          *scfinvoker.CollectorPublishLease
+	holder         string
+	pending        []pendingPlanJob
+	aux            auxJobs
+	lastVerified   time.Time
 	// 按包名解析出的最新代码包及其解析时间（见 plan_package.go）。
 	packageMu       sync.Mutex
 	refreshMu       sync.Mutex // 串行化包解析（含云端查询）
@@ -180,10 +184,62 @@ func (r *PlanReconciler) now() time.Time {
 }
 
 func (r *PlanReconciler) fail(reason string, err error) error {
+	r.failCount++
 	if r.Metrics != nil {
 		r.Metrics.ObserveAssignmentFailure(r.SpaceID, reason)
 	}
 	return err
+}
+
+// failCloud 上报云端协作类失败：Admin 明确答复「发布租约或在途操作占用仍被持有」时单独归类，
+// 其余（包括 Admin 不可达、无权限、响应异常）仍归为 cloudnode，照常告警。
+func (r *PlanReconciler) failCloud(err error) error {
+	reason := "cloudnode"
+	if errors.Is(err, scfinvoker.ErrCollectorPublishLeaseHeld) {
+		reason = ReasonPublishLeaseHeld
+	}
+	return r.fail(reason, err)
+}
+
+// inFlightSince 返回最早一个在途云端作业（计划作业或辅助作业）的提交时间。
+func (r *PlanReconciler) inFlightSince() (time.Time, bool) {
+	var since time.Time
+	found := false
+	consider := func(at time.Time) {
+		if !found || at.Before(since) {
+			since, found = at, true
+		}
+	}
+	for _, job := range r.pending {
+		consider(job.at)
+	}
+	for _, job := range r.aux.snapshot() {
+		consider(job.at)
+	}
+	return since, found
+}
+
+// inFlightStuck 判断最老的在途云端作业是否已超过告警年龄（pendingJobWarnAge）。
+func (r *PlanReconciler) inFlightStuck() bool {
+	since, ok := r.inFlightSince()
+	return ok && r.now().Sub(since) > pendingJobWarnAge
+}
+
+// finishRound 在每轮对账结束时统一收尾：有在途云端作业就按作业的提交时间上报 pending；
+// 本轮及自上一轮结束以来没有任何失败时恢复健康并清除遗留的失败原因（计划仍在进行也一样）。
+func (r *PlanReconciler) finishRound(err error) {
+	// 函数代码升级仍在进行（errCodeUpgradePending）是等待，不是失败。
+	clean := (err == nil || errors.Is(err, errCodeUpgradePending)) && r.failCount == r.roundFailCount
+	r.roundFailCount = r.failCount
+	if r.Metrics == nil {
+		return
+	}
+	if since, ok := r.inFlightSince(); ok {
+		r.Metrics.ObserveAssignmentPending(r.SpaceID, true, since)
+	}
+	if clean {
+		r.Metrics.ObserveAssignmentRoundOK(r.SpaceID)
+	}
 }
 
 func (r *PlanReconciler) acquireOperation(ctx context.Context) (func(), error) {
@@ -199,7 +255,7 @@ func (r *PlanReconciler) acquireOperation(ctx context.Context) (func(), error) {
 }
 
 // Reconcile 执行一轮对账。上一轮未结束时本轮直接跳过。
-func (r *PlanReconciler) Reconcile(ctx context.Context) error {
+func (r *PlanReconciler) Reconcile(ctx context.Context) (err error) {
 	if r == nil || r.Store == nil || r.Cloud == nil || r.Groups == nil || r.Storage == nil {
 		return errors.New("plan reconciler is not initialized")
 	}
@@ -207,6 +263,7 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) error {
 		return errors.New("plan reconciliation already running")
 	}
 	defer r.mu.Unlock()
+	defer func() { r.finishRound(err) }()
 	if err := r.refreshPackage(ctx); err != nil {
 		return r.fail("package", err)
 	}
@@ -239,7 +296,9 @@ func (r *PlanReconciler) Reconcile(ctx context.Context) error {
 		return err
 	}
 	// 没有未生效的计划（或本轮刚把计划推进到生效）：对账成功。
-	if r.Metrics != nil {
+	// 在途云端作业只要还没超过告警年龄就不影响成功：大批量升级可能连续跑十几分钟，期间一直有正常推进的作业；
+	// 最老的作业超龄说明卡住了，此时不再刷新成功时间，由 Monitor 的对账陈旧判定（默认 15 分钟）发现。
+	if r.Metrics != nil && !r.inFlightStuck() {
 		if still, openErr := r.Store.Open(ctx, r.SpaceID); openErr == nil && still == nil {
 			r.Metrics.ObserveAssignmentPending(r.SpaceID, false, time.Time{})
 			r.Metrics.ObserveAssignmentSuccess(r.SpaceID, r.now().Unix())
@@ -704,7 +763,7 @@ func (r *PlanReconciler) ensureCreated(ctx context.Context, record *store.FetchP
 		}
 	}
 	if cleared, err := r.clearStaleReservations(ctx, "timer", absent); err != nil {
-		return false, r.fail("cloudnode", err)
+		return false, r.failCloud(err)
 	} else if !cleared {
 		return false, nil
 	}
@@ -936,7 +995,7 @@ func (r *PlanReconciler) upgradeCodeOf(ctx context.Context, names []string, byNa
 	defer release()
 	lease, err := r.ensureLease(ctx)
 	if err != nil {
-		return r.fail("publish_lease", err)
+		return r.failCloud(err)
 	}
 	log.WarnContextf(ctx, "collector fetch plan upgrading function code space=%s package=%s functions=%d", r.SpaceID, r.packageID(), len(stale))
 	for start := 0; start < len(stale); start += runtimeConfigBatchSize {
@@ -1010,7 +1069,7 @@ func (r *PlanReconciler) submit(ctx context.Context, record *store.FetchPlanReco
 	defer release()
 	lease, err := r.ensureLease(ctx)
 	if err != nil {
-		return r.fail("publish_lease", fmt.Errorf("publish lease: %w", err))
+		return r.failCloud(fmt.Errorf("publish lease: %w", err))
 	}
 	var firstErr error
 	for start := 0; start < len(names); start += runtimeConfigBatchSize {
@@ -1021,7 +1080,7 @@ func (r *PlanReconciler) submit(ctx context.Context, record *store.FetchPlanReco
 			return r.fail("cloudnode", fmt.Errorf("submit %s: %w", kind, sendErr))
 		}
 		job := pendingPlanJob{id: jobID, kind: kind, functions: batch, at: r.now()}
-		items, terminal, waitErr := r.waitJob(ctx, jobID)
+		items, terminal, waitErr := r.waitJobWithin(ctx, jobID)
 		if waitErr != nil {
 			r.pending = append(r.pending, job)
 			return r.fail("cloudnode", waitErr)
@@ -1100,7 +1159,7 @@ func (r *PlanReconciler) settlePending(ctx context.Context, record *store.FetchP
 		if !terminal {
 			r.pending = append(r.pending, pending[index:]...)
 			if renewErr := r.renewLease(ctx); renewErr != nil {
-				return true, r.fail("publish_lease", renewErr)
+				return true, r.failCloud(renewErr)
 			}
 			return true, nil
 		}
@@ -1147,6 +1206,65 @@ func (r *PlanReconciler) waitJob(ctx context.Context, jobID string) ([]scfinvoke
 		case <-time.After(interval):
 		case <-ctx.Done():
 			return nil, false, ctx.Err()
+		}
+	}
+}
+
+// waitJobReserve 是 waitJobWithin 给本轮剩余时间留出的余量上限：等待上限 = min(JobWait, 剩余时间 − 余量)，
+// 轮次的时间用尽之前就把作业交给下一轮继续，而不是等到 ctx 到期再把「慢」记成失败。
+// 余量取 5 秒与剩余时间四分之一的较小者：剩余时间很短时仍会查询作业，只是等待上限随之缩小。
+const waitJobReserve = 5 * time.Second
+
+// waitJobWithin 轮询云端作业，到等待上限仍未结束时返回「未结束」（terminal=false, err=nil），由调用方登记在途作业，
+// 下一轮继续。只有 checkJob 本身出错、或父 ctx 被取消/超时才返回错误。
+// 对账、漂移修复等实时路径使用它；补采路径仍用 waitJob（它们没有在途作业记录，且返回时就释放租约）。
+func (r *PlanReconciler) waitJobWithin(ctx context.Context, jobID string) ([]scfinvoker.BatchItemResult, bool, error) {
+	wait, interval := r.JobWait, r.PollInterval
+	if wait <= 0 {
+		wait = 90 * time.Second
+	}
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if room := remaining - min(waitJobReserve, remaining/4); room < wait {
+			wait = room
+		}
+	}
+	if wait <= 0 {
+		// 父 ctx 已经到期：与 waitJob 一样返回其错误。
+		return nil, false, ctx.Err()
+	}
+	// 局部 ctx 同时约束每一次 checkJob，一次慢查询不会越过等待上限。
+	waitCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	limit := time.Now().Add(wait)
+	for {
+		items, terminal, err := r.checkJob(waitCtx, jobID)
+		if err != nil {
+			switch {
+			case ctx.Err() != nil:
+				return nil, false, ctx.Err()
+			case waitCtx.Err() != nil:
+				return nil, false, nil
+			default:
+				return nil, false, err
+			}
+		}
+		if terminal {
+			return items, true, nil
+		}
+		if !time.Now().Add(interval).Before(limit) {
+			return nil, false, nil
+		}
+		select {
+		case <-time.After(interval):
+		case <-waitCtx.Done():
+			if err := ctx.Err(); err != nil {
+				return nil, false, err
+			}
+			return nil, false, nil
 		}
 	}
 }
@@ -1298,9 +1416,11 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 	defer release()
 	lease, err := r.ensureLease(ctx)
 	if err != nil {
-		return r.fail("publish_lease", err)
+		return r.failCloud(err)
 	}
-	allOK := true
+	// allOK 表示没有失败项也没有在途作业；failed 表示有作业已到终态但失败。
+	// allOK 为 false 而 failed 为 false，说明只有仍在云端运行的作业（不是失败）。
+	allOK, failed := true, false
 	// 云端函数已不存在但目录里还有记录：先走受租约保护的删除清掉记录，才能重新创建。
 	if len(gone) > 0 {
 		sort.Strings(gone)
@@ -1317,10 +1437,13 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 			removed[result.NodeID] = result.Success
 		}
 		for _, name := range gone {
-			if terminal && removed[name] {
+			switch {
+			case terminal && removed[name]:
 				missing = append(missing, name)
-			} else {
+			case !terminal:
 				allOK = false
+			default:
+				allOK, failed = false, true
 			}
 		}
 	}
@@ -1328,9 +1451,10 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 	if len(missing) > 0 {
 		cleared, clearErr := r.clearStale(ctx, "timer", missing, false)
 		if clearErr != nil {
-			return r.fail("cloudnode", clearErr)
+			return r.failCloud(clearErr)
 		}
 		if !cleared {
+			// 清理作业仍在途或预留刚创建还要再等：不是失败，下一轮继续。
 			missing = nil
 			allOK = false
 		}
@@ -1361,10 +1485,13 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 			created[result.NodeID] = result.Success
 		}
 		for _, name := range batch {
-			if terminal && created[name] {
+			switch {
+			case terminal && created[name]:
 				drifted = append(drifted, name)
-			} else {
+			case !terminal:
 				allOK = false
+			default:
+				allOK, failed = false, true
 			}
 		}
 	}
@@ -1390,8 +1517,11 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 			pushed[result.NodeID] = result.Success
 		}
 		for _, name := range batch {
-			if !terminal || !pushed[name] {
+			switch {
+			case !terminal:
 				allOK = false
+			case !pushed[name]:
+				allOK, failed = false, true
 			}
 		}
 	}
@@ -1406,7 +1536,12 @@ func (r *PlanReconciler) verifyFleet(ctx context.Context, applied map[string]*Pl
 		return nil
 	}
 	// 有失败项：不更新读回时间，下一轮继续修复。
-	return r.fail("cloudnode", errors.New("repair of drifted or missing functions did not fully succeed"))
+	if failed {
+		return r.fail("cloudnode", errors.New("repair of drifted or missing functions did not fully succeed"))
+	}
+	// 只有在途作业：不是失败，也不能宣布核对完毕。作业已登记在在途集合里，结束前不会重复提交，
+	// 结束后下一轮重新读回并继续。
+	return nil
 }
 
 // accessDrifted 判断云端记录的 Access 入口与调用方身份是否与期望一致。

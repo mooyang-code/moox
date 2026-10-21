@@ -66,6 +66,8 @@ market_canary:
 market_health:
   timer_coordination_stale_after: 15m
   timer_coordination_pending_grace: 5m
+  # 发布租约被占用（重启后旧作业仍在云端运行）的宽限期：告警策略，不是恢复时间的上界。
+  timer_coordination_lease_grace: 10m
   feed_failure_rate_window: 5m
   feed_failure_rate_threshold: 0.2
   instrument_snapshot_max_age: 36h

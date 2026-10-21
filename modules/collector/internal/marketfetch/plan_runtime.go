@@ -3,6 +3,7 @@ package marketfetch
 import (
 	"context"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"os"
 	"sort"
 	"strconv"
@@ -31,6 +32,10 @@ type PlanRunResult struct {
 func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName string, scheduled time.Time) (*model.Response, error) {
 	if h == nil {
 		return nil, fmt.Errorf("market fetch handler is nil")
+	}
+	entry := time.Now()
+	if h.Now != nil {
+		entry = h.Now()
 	}
 	respond := func(success bool, message string, results []PlanRunResult) (*model.Response, error) {
 		return &model.Response{Success: success, Message: message, Data: results, RequestID: requestID, Timestamp: time.Now().UTC()}, nil
@@ -67,6 +72,13 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 	if len(planned) == 0 {
 		return respond(true, "no_work", nil)
 	}
+	standbyMS := plan.StandbyFor(scheduled)
+	connReuse := plan != nil && plan.Fetch.ConnReuse
+	httpclient.SetConnReuse(connReuse)
+	for index := range planned {
+		planned[index].Request.StandbyMS = standbyMS
+		planned[index].Request.ConnReuse = connReuse
+	}
 	// 截止时间最近的先执行：整点同时到期多个频率时，短周期不能被长周期占去预算。
 	// 截止时间相同则周期短的先执行（1m 先于 1h）。
 	sort.SliceStable(planned, func(i, j int) bool {
@@ -81,7 +93,13 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 	}
 	defer closeGateway()
 	defer h.reportMetrics(ctx)
-	if delay := plan.StaggerDelay(functionName); delay > 0 {
+	stagger := plan.StaggerDelay(functionName)
+	for index := range planned {
+		planned[index].Request.TimerLateMS = int(entry.Sub(scheduled).Milliseconds())
+		planned[index].Request.StaggerMS = int(stagger.Milliseconds())
+		planned[index].Request.EntryAt = entry
+	}
+	if delay := stagger; delay > 0 {
 		timer := time.NewTimer(delay)
 		select {
 		case <-timer.C:

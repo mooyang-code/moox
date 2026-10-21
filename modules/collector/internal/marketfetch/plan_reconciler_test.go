@@ -120,6 +120,7 @@ type fakePlanCloud struct {
 	jobs       map[string][]scfinvoker.BatchItemResult
 	running    map[string]bool // 仍在运行的作业
 	onFresh    func()          // 新鲜读回返回前的钩子，用于构造读回与作业结算之间的竞态
+	freshErr   error           // 非空时新鲜读回失败，模拟 CloudNode 查询超时
 	submitErr  error           // 非空时 SubmitRuntimeConfigs 直接失败，模拟提交停用时崩溃
 	patches    map[string]*cloudnodepb.NodeRuntimeConfigPatch
 	// onRuntimeConfig 在 SubmitRuntimeConfigs 接受一批补丁之前调用，用于断言提交时函数的代码版本。
@@ -129,6 +130,12 @@ type fakePlanCloud struct {
 	failNodes       map[string]bool
 	leaseCalls      int
 	releases        int
+	// acquireErr 非空时申请发布租约失败，用来模拟 Admin 答复「被占用」或其他故障。
+	acquireErr error
+	// runningAll 让所有作业都停在运行中；batchErr 让读取作业结果失败；hangBatch 让读取一直阻塞到 ctx 结束。
+	runningAll bool
+	batchErr   error
+	hangBatch  bool
 }
 
 func newFakePlanCloud() *fakePlanCloud {
@@ -144,6 +151,9 @@ func (c *fakePlanCloud) ListTimerMarketFetchers(context.Context, string) ([]scfi
 }
 
 func (c *fakePlanCloud) ListTimerMarketFetchersFresh(ctx context.Context, spaceID string) ([]scfinvoker.Node, error) {
+	if c.freshErr != nil {
+		return nil, c.freshErr
+	}
 	nodes, err := c.ListTimerMarketFetchers(ctx, spaceID)
 	if c.onFresh != nil {
 		c.onFresh()
@@ -274,8 +284,15 @@ func (c *fakePlanCloud) SubmitRuntimeConfigs(_ context.Context, _ string, patche
 	return c.newJob(names), nil
 }
 
-func (c *fakePlanCloud) GetBatchResults(_ context.Context, _, jobID string) (*cloudnodepb.NodeBatchSummary, []scfinvoker.BatchItemResult, error) {
-	if c.running[jobID] {
+func (c *fakePlanCloud) GetBatchResults(ctx context.Context, _, jobID string) (*cloudnodepb.NodeBatchSummary, []scfinvoker.BatchItemResult, error) {
+	if c.hangBatch {
+		<-ctx.Done()
+		return nil, nil, ctx.Err()
+	}
+	if c.batchErr != nil {
+		return nil, nil, c.batchErr
+	}
+	if c.runningAll || c.running[jobID] {
 		return &cloudnodepb.NodeBatchSummary{JobId: jobID, Status: cloudnodepb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING}, nil, nil
 	}
 	items := c.jobs[jobID]
@@ -289,6 +306,9 @@ func (c *fakePlanCloud) GetBatchResults(_ context.Context, _, jobID string) (*cl
 }
 
 func (c *fakePlanCloud) AcquireCollectorPublishLease(_ context.Context, spaceID, holder string) (*scfinvoker.CollectorPublishLease, error) {
+	if c.acquireErr != nil {
+		return nil, c.acquireErr
+	}
 	c.leaseCalls++
 	return &scfinvoker.CollectorPublishLease{SpaceID: spaceID, LeaseID: "lease", HolderID: holder, FencingToken: int64(c.leaseCalls), ExpiresAt: time.Now().Add(time.Minute)}, nil
 }

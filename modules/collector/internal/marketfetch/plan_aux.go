@@ -81,7 +81,7 @@ func (a *auxJobs) count() int {
 
 // waitAux 等待辅助作业；超时或读取失败时作业仍可能在运行，记入在途集合。
 func (r *PlanReconciler) waitAux(ctx context.Context, kind string, names []string, jobID string) ([]scfinvoker.BatchItemResult, bool, error) {
-	items, terminal, err := r.waitJob(ctx, jobID)
+	items, terminal, err := r.waitJobWithin(ctx, jobID)
 	if err != nil || !terminal {
 		r.aux.track(auxJob{id: jobID, kind: kind, functions: append([]string(nil), names...), at: r.now()})
 	}

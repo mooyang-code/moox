@@ -35,11 +35,9 @@ func PlanTask(ctx context.Context, source subjectSource, instances *store.TaskIn
 	if err := ValidateTaskParams(params); err != nil {
 		return err
 	}
-	taskParams := task.CollectParams
-	if canonical, canonicalErr := params.CanonicalJSON(); canonicalErr != nil {
+	taskParams, canonicalErr := params.CanonicalJSON()
+	if canonicalErr != nil {
 		return canonicalErr
-	} else {
-		taskParams = canonical
 	}
 	info, err := source.GetDataset(ctx, task.SpaceID, params.SourceDatasetID)
 	if err != nil {

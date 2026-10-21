@@ -18,6 +18,8 @@ import (
 const (
 	DefaultConcurrency = 5
 	MaxConcurrency     = 64
+	// MaxStandbyMS 是备援延迟的上限；下限由采集计划校验（太短会让几乎所有请求都发出备援，白白加倍请求权重）。
+	MaxStandbyMS = 5000
 	// MaxRealtimeItems bounds the work accepted by one short-lived SCF. The
 	// assignment planner keeps each non-stock function at or below this limit.
 	MaxRealtimeItems = 40
@@ -35,32 +37,41 @@ type Request struct {
 	BatchID string `json:"batch_id"`
 	// SyncPointID is the stable logical catchup fence identity. Retry batches
 	// get a new BatchID for outbox/write idempotency, but keep the same fence.
-	SyncPointID         string                           `json:"sync_point_id,omitempty"`
-	ScheduleID          string                           `json:"schedule_id,omitempty"`
-	BatchKind           domain.BatchKind                 `json:"batch_kind"`
-	SpaceID             string                           `json:"space_id"`
-	MarketID            string                           `json:"market_id,omitempty"`
-	InstrumentType      string                           `json:"instrument_type,omitempty"`
-	DatasetID           string                           `json:"dataset_id,omitempty"`
-	Frequency           string                           `json:"frequency,omitempty"`
-	Provider            string                           `json:"provider"`
-	RouteProvider       string                           `json:"route_provider,omitempty"`
-	SourceID            string                           `json:"source_id,omitempty"`
-	MarketType          string                           `json:"market_type"`
-	Region              string                           `json:"region"`
-	NodeID              string                           `json:"node_id"`
-	FunctionName        string                           `json:"function_name,omitempty"`
-	RequestID           string                           `json:"request_id,omitempty"`
-	ShardIndex          int                              `json:"shard_index,omitempty"`
-	GroupID             int                              `json:"group_id,omitempty"`
-	GroupCount          int                              `json:"group_count,omitempty"`
-	BindingHash         string                           `json:"binding_hash,omitempty"`
-	RouteVersion        string                           `json:"route_version,omitempty"`
-	RequirePeriodCommit bool                             `json:"require_period_commit,omitempty"`
-	RunID               string                           `json:"-"`
-	Concurrency         int                              `json:"concurrency,omitempty"`
-	DNSRoutes           map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
-	Items               []domain.CollectionItem          `json:"items"`
+	SyncPointID         string           `json:"sync_point_id,omitempty"`
+	ScheduleID          string           `json:"schedule_id,omitempty"`
+	BatchKind           domain.BatchKind `json:"batch_kind"`
+	SpaceID             string           `json:"space_id"`
+	MarketID            string           `json:"market_id,omitempty"`
+	InstrumentType      string           `json:"instrument_type,omitempty"`
+	DatasetID           string           `json:"dataset_id,omitempty"`
+	Frequency           string           `json:"frequency,omitempty"`
+	Provider            string           `json:"provider"`
+	RouteProvider       string           `json:"route_provider,omitempty"`
+	SourceID            string           `json:"source_id,omitempty"`
+	MarketType          string           `json:"market_type"`
+	Region              string           `json:"region"`
+	NodeID              string           `json:"node_id"`
+	FunctionName        string           `json:"function_name,omitempty"`
+	RequestID           string           `json:"request_id,omitempty"`
+	ShardIndex          int              `json:"shard_index,omitempty"`
+	GroupID             int              `json:"group_id,omitempty"`
+	GroupCount          int              `json:"group_count,omitempty"`
+	BindingHash         string           `json:"binding_hash,omitempty"`
+	RouteVersion        string           `json:"route_version,omitempty"`
+	RequirePeriodCommit bool             `json:"require_period_commit,omitempty"`
+	RunID               string           `json:"-"`
+	Concurrency         int              `json:"concurrency,omitempty"`
+	// StandbyMS 大于 0 时启用备援请求：行情请求超过这么多毫秒还没有结果，就并发再发一个备援请求，先成功的为准（采集计划控制，默认关闭）。
+	StandbyMS int `json:"standby_ms,omitempty"`
+	// ConnReuse 记录本次调用是否使用了跨调用的连接复用，只用于上报。
+	ConnReuse bool `json:"conn_reuse,omitempty"`
+	// TimerLateMS 是函数入口时刻减去定时事件计划时间（毫秒），StaggerMS 是函数内错峰等待的时长，EntryAt 是函数入口时刻；
+	// 只用于上报，定位“收盘到开始取数”这一段花在触发、启动还是错峰上。
+	TimerLateMS int                              `json:"timer_late_ms,omitempty"`
+	StaggerMS   int                              `json:"stagger_ms,omitempty"`
+	EntryAt     time.Time                        `json:"-"`
+	DNSRoutes   map[string]sources.DNSResolution `json:"dns_routes,omitempty"`
+	Items       []domain.CollectionItem          `json:"items"`
 	// Targets are the destinations attached to a shared acquisition instance.
 	// When present, one fetched result is fanned out to every target.
 	Targets []domain.WriteTarget `json:"targets,omitempty"`
@@ -254,6 +265,9 @@ func (r *Request) validate() error {
 		} else if r.BatchKind == domain.BatchKindRealtime && item.BarLimit > MaxRealtimeRows {
 			return fmt.Errorf("realtime bar_limit must be between 1 and %d", MaxRealtimeRows)
 		}
+	}
+	if r.StandbyMS < 0 || r.StandbyMS > MaxStandbyMS {
+		return fmt.Errorf("standby_ms must be between 0 and %d", MaxStandbyMS)
 	}
 	if r.Concurrency < 0 || r.Concurrency > MaxConcurrency {
 		return fmt.Errorf("concurrency must be between 0 and %d", MaxConcurrency)

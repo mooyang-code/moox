@@ -55,7 +55,16 @@ type PlanFetch struct {
 	// StaggerBaseMS 是错峰的固定起点；StaggerMS 是在起点之后按函数名哈希增加的确定性延迟上限（毫秒）。
 	StaggerBaseMS int `json:"stagger_base_ms,omitempty"`
 	StaggerMS     int `json:"stagger_ms,omitempty"`
+	// StandbyMS 大于 0 时启用备援请求（行情请求超过这么多毫秒还没有结果，就并发再发一个备援请求，先成功的为准），0 表示关闭。
+	// StandbyHourOnly 为真时只在整点那一分钟触发的调用里启用。
+	StandbyMS       int  `json:"standby_ms,omitempty"`
+	StandbyHourOnly bool `json:"standby_hour_only,omitempty"`
+	// ConnReuse 为真时，函数进程在多次调用之间复用到行情源的 HTTP 连接（上一分钟留下的空闲连接下一分钟直接用）。
+	ConnReuse bool `json:"conn_reuse,omitempty"`
 }
+
+// MinStandbyMS 是备援延迟的下限：正常请求的首字节在几十到几百毫秒，延迟太短会让几乎所有请求都发出备援。
+const MinStandbyMS = 200
 
 // PlanDataset 是一个结果数据集：每个数据集 1～2 份（生效起点、hash、总数、本函数标的与序号）。
 type PlanDataset struct {
@@ -149,6 +158,9 @@ func (p *Plan) Validate() error {
 	}
 	if f.RPS < 0 || f.Burst < 0 || f.FeedConcurrency < 0 || f.RequestTimeoutMS < 0 || f.StorageTimeoutMS < 0 || f.StaggerMS < 0 || f.StaggerMS > 60000 || f.StaggerBaseMS < 0 || f.StaggerBaseMS > 60000 {
 		return errors.New("plan fetch limits are out of range")
+	}
+	if f.StandbyMS != 0 && (f.StandbyMS < MinStandbyMS || f.StandbyMS > MaxStandbyMS) {
+		return fmt.Errorf("plan fetch.standby_ms must be 0 or between %d and %d", MinStandbyMS, MaxStandbyMS)
 	}
 	if len(p.Datasets) == 0 {
 		return errors.New("plan requires at least one dataset")
@@ -371,4 +383,15 @@ func (p *Plan) StaggerDelay(functionName string) time.Duration {
 	}
 	sum := sha256.Sum256([]byte(functionName))
 	return base + time.Duration(int(sum[0])<<8|int(sum[1]))%time.Duration(p.Fetch.StaggerMS+1)*time.Millisecond
+}
+
+// StandbyFor 返回这次调用使用的备援延迟（毫秒），0 表示不启用。
+func (p *Plan) StandbyFor(scheduled time.Time) int {
+	if p == nil || p.Fetch.StandbyMS <= 0 {
+		return 0
+	}
+	if p.Fetch.StandbyHourOnly && scheduled.UTC().Minute() != 0 {
+		return 0
+	}
+	return p.Fetch.StandbyMS
 }
