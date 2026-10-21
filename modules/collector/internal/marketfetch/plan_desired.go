@@ -142,7 +142,7 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		info.size = minPositive(info.size, group.SymbolsPerFunction)
 		mode := opts.modeOf(group)
 		executor := mode.PlanExecutor()
-		if executor == PlanExecutorStream && !marketdata.SupportsStream(frequency) {
+		if executor == PlanExecutorStreaming && !marketdata.SupportsStream(frequency) {
 			return nil, fmt.Errorf("dataset %s %s cannot be collected by stream", group.DatasetID, group.Frequency)
 		}
 		datasetKey := planDatasetKey(group.DatasetID, group.Frequency)
@@ -230,7 +230,7 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 					plan.SymbolExceptions[subject] = external
 				}
 				// 交易对只下发给推送：SCF 函数按未知字段拒绝解码计划。
-				if pair := info.pairs[subject]; executor == PlanExecutorStream && pair != "" && pair != plan.ExchangeSymbol(subject) {
+				if pair := info.pairs[subject]; executor == PlanExecutorStreaming && pair != "" && pair != plan.ExchangeSymbol(subject) {
 					if plan.Pairs == nil {
 						plan.Pairs = map[string]string{}
 					}
@@ -258,7 +258,7 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 			}
 			return plan
 		}
-		for _, executor := range []string{PlanExecutorSCF, PlanExecutorStream, PlanExecutorLocal} {
+		for _, executor := range []string{PlanExecutorSCF, PlanExecutorStreaming, PlanExecutorLocal} {
 			universe := make([]string, 0, len(info.subjects[executor]))
 			for subject := range info.subjects[executor] {
 				universe = append(universe, subject)
@@ -319,8 +319,8 @@ func PlanItemName(executor, spaceID, marketType string) string {
 
 // 采集方式。
 const (
-	IngestStream = "stream"
-	IngestPull   = "pull"
+	IngestStreaming = "stream"
+	IngestPull      = "pull"
 )
 
 // DatasetMode 是一个数据集的采集方式与拉取、补采执行端。
@@ -332,8 +332,8 @@ type DatasetMode struct {
 // PlanExecutor 返回该方式在计划里的执行端：推送是 stream，拉取按执行端是 scf 或 local。
 func (m DatasetMode) PlanExecutor() string {
 	switch {
-	case m.Mode == IngestStream:
-		return PlanExecutorStream
+	case m.Mode == IngestStreaming:
+		return PlanExecutorStreaming
 	case m.Executor == PlanExecutorLocal:
 		return PlanExecutorLocal
 	default:
@@ -356,7 +356,7 @@ func (o PlanOptions) latenessFor(group TaskGroup, mode DatasetMode) int {
 		return group.AllowedLatenessSeconds
 	}
 	lateness := 0
-	if mode.PlanExecutor() == PlanExecutorStream {
+	if mode.PlanExecutor() == PlanExecutorStreaming {
 		lateness = o.StreamLatenessS[group.Frequency]
 	} else {
 		lateness = o.MarketLatenessS[strings.ToLower(group.MarketType)]

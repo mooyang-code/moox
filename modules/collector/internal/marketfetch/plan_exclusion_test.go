@@ -78,7 +78,7 @@ func TestSubjectExclusionWaitsForAnOpenHandoff(t *testing.T) {
 	exclusions := &memExclusions{}
 	h.r.Exclusions = exclusions
 	h.settle(true)
-	h.modes.set("ds_spot_1m", IngestStream, PlanExecutorLocal, false)
+	h.modes.set("ds_spot_1m", IngestStreaming, PlanExecutorLocal, false)
 	require.NoError(t, h.reconcile(h.r))
 	handoff := h.open()
 	require.NotNil(t, handoff)
@@ -98,7 +98,7 @@ func TestSubjectExclusionWaitsForAnOpenHandoff(t *testing.T) {
 	require.Equal(t, []string{"S001-USDT"}, h.content(next).Datasets["ds_spot_1m|1m"].Removed)
 	h.settle(true)
 	content := h.applied()
-	require.Equal(t, PlanExecutorStream, content.Functions[streamItem].Executor)
+	require.Equal(t, PlanExecutorStreaming, content.Functions[streamItem].Executor)
 	require.NotContains(t, finalSubjects(t, content), "S001-USDT")
 }
 

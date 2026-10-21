@@ -17,9 +17,9 @@ import (
 
 // K 线批次的来源，只用于写入来源与指标。
 const (
-	KlineOriginStream   = "stream"
-	KlineOriginPull     = "pull"
-	KlineOriginBackfill = "backfill"
+	KlineOriginStreaming = "stream"
+	KlineOriginPull      = "pull"
+	KlineOriginBackfill  = "backfill"
 )
 
 // KlineBatch 是与采集方式无关的 K 线批次：推送（周期闸门）、SCF 拉取、本地拉取、补采都只产出它，经 KlineCommitter 写 Storage。

@@ -82,7 +82,7 @@ func (s *Service) SetIngestMode(ctx context.Context, req *pb.SetIngestModeReq) (
 	if spaceID == "" {
 		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id 必填")}, nil
 	}
-	if mode != store.IngestStream && mode != store.IngestPull {
+	if mode != store.IngestStreaming && mode != store.IngestPull {
 		return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "mode 必须是 stream 或 pull")}, nil
 	}
 	if executor != "" && executor != store.ExecutorSCF && executor != store.ExecutorLocal {
@@ -109,7 +109,7 @@ func (s *Service) SetIngestMode(ctx context.Context, req *pb.SetIngestModeReq) (
 		}
 	}
 	// 切到 stream（或用本地执行端）要求 collector-stream 在线，否则拒绝。
-	if mode == store.IngestStream || executor == store.ExecutorLocal {
+	if mode == store.IngestStreaming || executor == store.ExecutorLocal {
 		if worker == nil || !worker.GetOnline() {
 			return &pb.SetIngestModeRsp{RetInfo: retErr(pb.ErrorCode_CONFLICT, "collector-stream 不在线（心跳超时），不能切到 stream 或本地执行端"), Stream: worker}, nil
 		}

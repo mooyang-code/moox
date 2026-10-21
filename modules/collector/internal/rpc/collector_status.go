@@ -61,7 +61,7 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 		}
 	}
 	for _, mode := range rsp.IngestModes {
-		if mode.GetMode() == store.IngestStream && (rsp.Stream == nil || !rsp.Stream.GetOnline()) {
+		if mode.GetMode() == store.IngestStreaming && (rsp.Stream == nil || !rsp.Stream.GetOnline()) {
 			raise(klinecheck.HealthError, "collector-stream 不在线：推送采集的数据集没有写入方，可用 moox-cli collector ingest-mode set --mode pull --executor scf --force 切回")
 			break
 		}

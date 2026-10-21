@@ -11,9 +11,10 @@ import (
 )
 
 // 采集方式与执行端。
+// 推送模式的标识符不以 Stream 结尾：该后缀会被 check-event-topology-declarations 当作事件拓扑命名，取值仍是 "stream"。
 const (
-	IngestStream = "stream"
-	IngestPull   = "pull"
+	IngestStreaming = "stream"
+	IngestPull      = "pull"
 
 	ExecutorSCF   = "scf"
 	ExecutorLocal = "local"
@@ -42,7 +43,7 @@ func (ingestModeRow) TableName() string { return "t_collector_ingest_modes" }
 
 // ValidateIngestMode 检查采集方式与执行端的取值。
 func ValidateIngestMode(mode, executor string) error {
-	if mode != IngestStream && mode != IngestPull {
+	if mode != IngestStreaming && mode != IngestPull {
 		return fmt.Errorf("采集方式必须是 stream 或 pull，收到 %q", mode)
 	}
 	if executor != ExecutorSCF && executor != ExecutorLocal {

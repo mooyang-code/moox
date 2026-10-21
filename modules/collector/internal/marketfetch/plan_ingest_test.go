@@ -115,7 +115,7 @@ func (h *ingestHarness) applied() *FetchPlanContent {
 }
 
 var (
-	modeStream  = DatasetMode{Mode: IngestStream, Executor: PlanExecutorLocal}
+	modeStream  = DatasetMode{Mode: IngestStreaming, Executor: PlanExecutorLocal}
 	modePullSCF = DatasetMode{Mode: IngestPull, Executor: PlanExecutorSCF}
 	streamItem  = "stream-crypto-spot"
 	localItem   = "local-crypto-spot"
@@ -126,16 +126,16 @@ func TestFreshDeploymentPutsDefaultStreamDatasetsOnTheStreamItem(t *testing.T) {
 	h := newIngestHarness(t, modeStream, "1m", "1h")
 	h.settle(true)
 	content := h.applied()
-	require.Equal(t, PlanExecutorStream, content.Functions[streamItem].Executor)
+	require.Equal(t, PlanExecutorStreaming, content.Functions[streamItem].Executor)
 	require.Len(t, content.Functions, 1, "没有 SCF 函数")
 	require.Empty(t, h.cloud.created)
 	plan := content.FinalPlan(content.Functions[streamItem])
-	require.Equal(t, PlanExecutorStream, plan.Executor)
+	require.Equal(t, PlanExecutorStreaming, plan.Executor)
 	require.Len(t, plan.Datasets[0].Copies[0].Subjects, 60)
 	require.NoError(t, plan.Validate())
 	require.Equal(t, 5, h.lateness.values["ds_spot_1m"])
 	require.Equal(t, 8, h.lateness.values["ds_spot_1h"])
-	require.Equal(t, store.IngestStream, h.modes.modes["ds_spot_1m"].Mode)
+	require.Equal(t, store.IngestStreaming, h.modes.modes["ds_spot_1m"].Mode)
 }
 
 // 已在 SCF 上生效的数据集，第一次落库按现有执行端（pull + scf），升级本身不切换。
@@ -157,8 +157,8 @@ func TestHandoffPullToStreamAndBack(t *testing.T) {
 	scfNames := h.applied().SortedFunctionNames()
 
 	// 切到 stream：P 至少 3 分钟之后，hash 不变不重新登记，截止先不改。
-	h.modes.set("ds_spot_1m", IngestStream, PlanExecutorLocal, false)
-	h.modes.set("ds_spot_1h", IngestStream, PlanExecutorLocal, false)
+	h.modes.set("ds_spot_1m", IngestStreaming, PlanExecutorLocal, false)
+	h.modes.set("ds_spot_1h", IngestStreaming, PlanExecutorLocal, false)
 	registered := len(h.registrar.registered["ds_spot_1m|1m"])
 	require.NoError(t, h.reconcile(h.r))
 	record := h.open()
@@ -227,7 +227,7 @@ func TestHandoffPullToStreamAndBack(t *testing.T) {
 	h.modes.set("ds_spot_1m", IngestPull, PlanExecutorSCF, false)
 	require.NoError(t, h.reconcile(h.r))
 	content = h.content(h.open())
-	require.Equal(t, PlanExecutorStream, content.Datasets["ds_spot_1m|1m"].OldIngest)
+	require.Equal(t, PlanExecutorStreaming, content.Datasets["ds_spot_1m|1m"].OldIngest)
 	require.Equal(t, 5, content.Datasets["ds_spot_1m|1m"].OldLatenessS)
 	require.Equal(t, 5, h.lateness.values["ds_spot_1m"])
 	require.Equal(t, 8, h.lateness.values["ds_spot_1h"], "未切换的数据集不动")
@@ -292,7 +292,7 @@ func TestForceAdvancesAnOpenPlanStuckOnTheLostWorker(t *testing.T) {
 	require.Equal(t, stuckP, h.applied().Datasets["ds_spot_1m|1m"].P)
 	require.NoError(t, h.reconcile(h.r))
 	handoff := h.content(h.open())
-	require.Equal(t, PlanExecutorStream, handoff.Datasets["ds_spot_1m|1m"].OldIngest, "交接随即开始")
+	require.Equal(t, PlanExecutorStreaming, handoff.Datasets["ds_spot_1m|1m"].OldIngest, "交接随即开始")
 	h.settle(false)
 	require.Nil(t, h.open())
 }
@@ -302,7 +302,7 @@ func TestForcedHandoffStillWaitsForTheNewStreamWorker(t *testing.T) {
 	h := newIngestHarness(t, modePullSCF, "1m")
 	h.settle(true)
 	h.workers.worker = nil
-	h.modes.set("ds_spot_1m", IngestStream, PlanExecutorLocal, true)
+	h.modes.set("ds_spot_1m", IngestStreaming, PlanExecutorLocal, true)
 	require.NoError(t, h.reconcile(h.r))
 	record := h.open()
 	require.NotNil(t, record)
@@ -313,7 +313,7 @@ func TestForcedHandoffStillWaitsForTheNewStreamWorker(t *testing.T) {
 	require.Equal(t, record.ID, h.open().ID, "新执行端没确认就不生效")
 	h.settle(true)
 	require.Nil(t, h.open())
-	require.Equal(t, PlanExecutorStream, h.applied().Functions[streamItem].Executor)
+	require.Equal(t, PlanExecutorStreaming, h.applied().Functions[streamItem].Executor)
 }
 
 // 交接与标的变更同时出现：先按已生效的执行端完成标的变更，下一份计划再交接。
@@ -321,7 +321,7 @@ func TestHandoffWaitsForAPendingSubjectChange(t *testing.T) {
 	h := newIngestHarness(t, modePullSCF, "1m")
 	h.settle(true)
 	h.setSubjects(62)
-	h.modes.set("ds_spot_1m", IngestStream, PlanExecutorLocal, false)
+	h.modes.set("ds_spot_1m", IngestStreaming, PlanExecutorLocal, false)
 	require.NoError(t, h.reconcile(h.r))
 	first := h.content(h.open())
 	require.True(t, first.Datasets["ds_spot_1m|1m"].HashChanged)
@@ -346,7 +346,7 @@ func TestStreamPlanCarriesPairsOnly(t *testing.T) {
 	require.NoError(t, err)
 	for name, function := range state.Functions {
 		raw, _ := json.Marshal(function.Plan)
-		if function.Executor == PlanExecutorStream {
+		if function.Executor == PlanExecutorStreaming {
 			require.Equal(t, "ABCUSDT_X", function.Plan.Pair("ABC-USDT"), name)
 		} else {
 			require.NotContains(t, string(raw), "pairs", name)
@@ -371,8 +371,8 @@ func TestTaskParamsSetTheInitialIngestMode(t *testing.T) {
 	h := newIngestHarness(t, modePullSCF, "1m")
 	h.tasks.tasks[0].CollectParams = `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot_1m","frequency":"1m","ingest":"stream","executor":"local"}`
 	h.settle(true)
-	require.Equal(t, store.IngestMode{SpaceID: "crypto", DatasetID: "ds_spot_1m", Mode: IngestStream, Executor: PlanExecutorLocal, UpdatedAt: h.modes.modes["ds_spot_1m"].UpdatedAt}, h.modes.modes["ds_spot_1m"])
-	require.Equal(t, PlanExecutorStream, h.applied().Functions[streamItem].Executor)
+	require.Equal(t, store.IngestMode{SpaceID: "crypto", DatasetID: "ds_spot_1m", Mode: IngestStreaming, Executor: PlanExecutorLocal, UpdatedAt: h.modes.modes["ds_spot_1m"].UpdatedAt}, h.modes.modes["ds_spot_1m"])
+	require.Equal(t, PlanExecutorStreaming, h.applied().Functions[streamItem].Executor)
 	h.modes.set("ds_spot_1m", IngestPull, PlanExecutorSCF, false)
 	h.now = h.now.Add(time.Minute)
 	h.settle(true)
@@ -385,7 +385,7 @@ func TestForceFlagsAreClearedPerHandedOffDataset(t *testing.T) {
 	h.settle(true)
 	h.workers.worker = nil
 	h.modes.set("ds_spot_1m", IngestPull, PlanExecutorSCF, true)
-	h.modes.set("ds_spot_1h", IngestStream, PlanExecutorLocal, true)
+	h.modes.set("ds_spot_1h", IngestStreaming, PlanExecutorLocal, true)
 	h.settle(false)
 	require.False(t, h.modes.modes["ds_spot_1m"].Force)
 	require.True(t, h.modes.modes["ds_spot_1h"].Force, "没有交接的数据集保留标记")

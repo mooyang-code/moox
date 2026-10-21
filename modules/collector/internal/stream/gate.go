@@ -305,7 +305,7 @@ func (g *Gate) commit(slot *periodSlot) {
 	slot.pendingLate = false
 	batch := marketfetch.KlineBatch{
 		SpaceID: g.cfg.SpaceID, BatchID: fmt.Sprintf("stream|%s|%s|%s|%d", g.cfg.Market.MarketType, slot.dataset.DatasetID, slot.dataset.Frequency, slot.period.Unix()),
-		Market: g.cfg.Market, Dataset: slot.dataset, Period: slot.period, Symbols: slot.symbols, Bars: bars, Origin: marketfetch.KlineOriginStream,
+		Market: g.cfg.Market, Dataset: slot.dataset, Period: slot.period, Symbols: slot.symbols, Bars: bars, Origin: marketfetch.KlineOriginStreaming,
 	}
 	g.cfg.Queue.submit(&commitJob{committer: g.cfg.Committer, batch: batch, deadline: slot.deadline, step: g.step, done: func(outcome commitOutcome) {
 		g.post(func() { g.onCommitted(slot, positions, outcome) })

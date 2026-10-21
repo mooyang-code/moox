@@ -23,7 +23,7 @@ func (s *recordingSyncer) SyncNow(_ context.Context, filter subjectsync.Filter, 
 
 func streamPlanContent(t *testing.T) string {
 	t.Helper()
-	plan := &marketfetch.Plan{V: 1, Executor: marketfetch.PlanExecutorStream, Fetch: marketfetch.PlanFetch{Concurrency: 1},
+	plan := &marketfetch.Plan{V: 1, Executor: marketfetch.PlanExecutorStreaming, Fetch: marketfetch.PlanFetch{Concurrency: 1},
 		Market:   marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
 		Datasets: []marketfetch.PlanDataset{{DatasetID: "ds1", Frequency: "1m", LatenessS: 5, Copies: []marketfetch.PlanCopy{{From: 1000, Hash: "h", Count: 1, Subjects: []marketfetch.PlanSubject{{ID: "BTC-USDT", Index: 0}}}}}}}
 	content := marketfetch.FetchPlanContent{
@@ -58,7 +58,7 @@ func TestStreamCollectorHeartbeatPullAndConfirm(t *testing.T) {
 	var plan marketfetch.Plan
 	require.NoError(t, json.Unmarshal([]byte(pull.GetItems()[0].GetPlanJson()), &plan))
 	require.NoError(t, plan.Validate(), "下发的计划通过 Plan.Validate")
-	require.Equal(t, marketfetch.PlanExecutorStream, pull.GetItems()[0].GetExecutor())
+	require.Equal(t, marketfetch.PlanExecutorStreaming, pull.GetItems()[0].GetExecutor())
 
 	// 心跳回报已应用的版本，Collector 据此确认。
 	_, _ = stream.StreamHeartbeat(ctx, &pb.StreamHeartbeatReq{SpaceId: "crypto", InstanceId: "hk-1", AppliedPlanId: applied.ID, AppliedStage: marketfetch.StreamStageFinal,
