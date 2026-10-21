@@ -108,6 +108,19 @@ func validateColumnDisplayName(field string, spaceID string, attrs map[string]st
 	return validateChineseDisplayName(field, displayName)
 }
 
+// ColumnFillAttribute 是数据集字段的缺失行填充规则属性（因子机本地存储用，设计 3.4）：
+// prev 取上一期该字段的值（默认），prev_close 取上一期的 close，zero 填 0。
+const ColumnFillAttribute = "fill"
+
+func validateColumnFill(attrs map[string]string) error {
+	value := strings.TrimSpace(attrs[ColumnFillAttribute])
+	switch value {
+	case "", "prev", "prev_close", "zero":
+		return nil
+	}
+	return fmt.Errorf("dataset column attribute %s must be one of prev, prev_close, zero; got %q", ColumnFillAttribute, value)
+}
+
 const factorResultDatasetPrefix = "dataset_factor_"
 
 // normalizeDatasetRole canonicalises the role attribute in place so that every

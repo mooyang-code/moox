@@ -599,6 +599,9 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 	if err := validateColumnDisplayName("dataset column display_name", item.GetSpaceId(), item.GetAttributes(), factorOutput); err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
+	if err := validateColumnFill(item.GetAttributes()); err != nil {
+		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
 	if factorOutput {
 		attrs := item.GetAttributes()
 		factorID := strings.TrimSpace(attrs["origin_factor_id"])

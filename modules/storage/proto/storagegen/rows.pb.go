@@ -1176,6 +1176,397 @@ func (x *CountTimeSeriesRowsRsp) GetCounts() []*SubjectRowCount {
 	return nil
 }
 
+// DatasetChangeCursor 是行变更日志的读取位点：序号只在 (source_node_id, source_store_id) 内可比较，
+// 节点更换或存储重建后身份对不上，读取方会收到「断档」。
+type DatasetChangeCursor struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SourceNodeId  string `protobuf:"bytes,1,opt,name=source_node_id,json=sourceNodeId,proto3" json:"source_node_id,omitempty"`
+	SourceStoreId string `protobuf:"bytes,2,opt,name=source_store_id,json=sourceStoreId,proto3" json:"source_store_id,omitempty"`
+	// sequence 是已处理到的序号；0 表示还没有处理过任何变更（配合 from_head 取基线）。
+	Sequence uint64 `protobuf:"varint,3,opt,name=sequence,proto3" json:"sequence,omitempty"`
+}
+
+func (x *DatasetChangeCursor) Reset() {
+	*x = DatasetChangeCursor{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_rows_proto_msgTypes[16]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *DatasetChangeCursor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DatasetChangeCursor) ProtoMessage() {}
+
+func (x *DatasetChangeCursor) ProtoReflect() protoreflect.Message {
+	mi := &file_rows_proto_msgTypes[16]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DatasetChangeCursor.ProtoReflect.Descriptor instead.
+func (*DatasetChangeCursor) Descriptor() ([]byte, []int) {
+	return file_rows_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *DatasetChangeCursor) GetSourceNodeId() string {
+	if x != nil {
+		return x.SourceNodeId
+	}
+	return ""
+}
+
+func (x *DatasetChangeCursor) GetSourceStoreId() string {
+	if x != nil {
+		return x.SourceStoreId
+	}
+	return ""
+}
+
+func (x *DatasetChangeCursor) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+// DatasetChangeRange 是一个标的在一次写入里受影响的时间点范围（含两端，RFC3339 UTC）。
+type DatasetChangeRange struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	SubjectId string `protobuf:"bytes,1,opt,name=subject_id,json=subjectId,proto3" json:"subject_id,omitempty"`
+	Freq      string `protobuf:"bytes,2,opt,name=freq,proto3" json:"freq,omitempty"`
+	StartTime string `protobuf:"bytes,3,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
+	EndTime   string `protobuf:"bytes,4,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
+}
+
+func (x *DatasetChangeRange) Reset() {
+	*x = DatasetChangeRange{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_rows_proto_msgTypes[17]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *DatasetChangeRange) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DatasetChangeRange) ProtoMessage() {}
+
+func (x *DatasetChangeRange) ProtoReflect() protoreflect.Message {
+	mi := &file_rows_proto_msgTypes[17]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DatasetChangeRange.ProtoReflect.Descriptor instead.
+func (*DatasetChangeRange) Descriptor() ([]byte, []int) {
+	return file_rows_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *DatasetChangeRange) GetSubjectId() string {
+	if x != nil {
+		return x.SubjectId
+	}
+	return ""
+}
+
+func (x *DatasetChangeRange) GetFreq() string {
+	if x != nil {
+		return x.Freq
+	}
+	return ""
+}
+
+func (x *DatasetChangeRange) GetStartTime() string {
+	if x != nil {
+		return x.StartTime
+	}
+	return ""
+}
+
+func (x *DatasetChangeRange) GetEndTime() string {
+	if x != nil {
+		return x.EndTime
+	}
+	return ""
+}
+
+// DatasetChange 是一次写入对一个数据集造成的变更。本地副本据此得知哪些区间被写入或修正。
+type DatasetChange struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Sequence  uint64                `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	SpaceId   string                `protobuf:"bytes,2,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	DatasetId string                `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	Ranges    []*DatasetChangeRange `protobuf:"bytes,4,rep,name=ranges,proto3" json:"ranges,omitempty"`
+	CreatedAt string                `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+}
+
+func (x *DatasetChange) Reset() {
+	*x = DatasetChange{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_rows_proto_msgTypes[18]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *DatasetChange) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DatasetChange) ProtoMessage() {}
+
+func (x *DatasetChange) ProtoReflect() protoreflect.Message {
+	mi := &file_rows_proto_msgTypes[18]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DatasetChange.ProtoReflect.Descriptor instead.
+func (*DatasetChange) Descriptor() ([]byte, []int) {
+	return file_rows_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *DatasetChange) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *DatasetChange) GetSpaceId() string {
+	if x != nil {
+		return x.SpaceId
+	}
+	return ""
+}
+
+func (x *DatasetChange) GetDatasetId() string {
+	if x != nil {
+		return x.DatasetId
+	}
+	return ""
+}
+
+func (x *DatasetChange) GetRanges() []*DatasetChangeRange {
+	if x != nil {
+		return x.Ranges
+	}
+	return nil
+}
+
+func (x *DatasetChange) GetCreatedAt() string {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return ""
+}
+
+// ReadDatasetChangesReq 从持久化的变更日志里按序读取变更。日志与行写入在同一个 Pebble batch 里提交，
+// 保留一段时间（默认 7 天）；游标早于保留起点或身份对不上时返回 gap。
+type ReadDatasetChangesReq struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	AuthInfo *commonpb.AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
+	SpaceId  string             `protobuf:"bytes,2,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
+	// dataset_id 必填：PrimaryStore 据此找到数据集所在的 DataNode；只返回这个数据集的变更，游标仍按该节点的全部变更推进。
+	DatasetId string               `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
+	Cursor    *DatasetChangeCursor `protobuf:"bytes,4,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	// from_head 为真时不返回变更，只返回当前日志头部的位点：基线先取位点、再读数据，之后从这个位点继续读。
+	FromHead bool `protobuf:"varint,5,opt,name=from_head,json=fromHead,proto3" json:"from_head,omitempty"`
+	// limit 是最多扫描的日志条数，默认 500，最大 2000。
+	Limit uint32 `protobuf:"varint,6,opt,name=limit,proto3" json:"limit,omitempty"`
+}
+
+func (x *ReadDatasetChangesReq) Reset() {
+	*x = ReadDatasetChangesReq{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_rows_proto_msgTypes[19]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ReadDatasetChangesReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadDatasetChangesReq) ProtoMessage() {}
+
+func (x *ReadDatasetChangesReq) ProtoReflect() protoreflect.Message {
+	mi := &file_rows_proto_msgTypes[19]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadDatasetChangesReq.ProtoReflect.Descriptor instead.
+func (*ReadDatasetChangesReq) Descriptor() ([]byte, []int) {
+	return file_rows_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ReadDatasetChangesReq) GetAuthInfo() *commonpb.AuthInfo {
+	if x != nil {
+		return x.AuthInfo
+	}
+	return nil
+}
+
+func (x *ReadDatasetChangesReq) GetSpaceId() string {
+	if x != nil {
+		return x.SpaceId
+	}
+	return ""
+}
+
+func (x *ReadDatasetChangesReq) GetDatasetId() string {
+	if x != nil {
+		return x.DatasetId
+	}
+	return ""
+}
+
+func (x *ReadDatasetChangesReq) GetCursor() *DatasetChangeCursor {
+	if x != nil {
+		return x.Cursor
+	}
+	return nil
+}
+
+func (x *ReadDatasetChangesReq) GetFromHead() bool {
+	if x != nil {
+		return x.FromHead
+	}
+	return false
+}
+
+func (x *ReadDatasetChangesReq) GetLimit() uint32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type ReadDatasetChangesRsp struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
+	Changes []*DatasetChange  `protobuf:"bytes,2,rep,name=changes,proto3" json:"changes,omitempty"`
+	// next_cursor 是读完本批之后的位点，原样放进下一次请求。
+	NextCursor *DatasetChangeCursor `protobuf:"bytes,3,opt,name=next_cursor,json=nextCursor,proto3" json:"next_cursor,omitempty"`
+	HasMore    bool                 `protobuf:"varint,4,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	// gap 为真表示游标早于日志保留起点，或游标身份与当前存储对不上，调用方要走对账。
+	Gap bool `protobuf:"varint,5,opt,name=gap,proto3" json:"gap,omitempty"`
+}
+
+func (x *ReadDatasetChangesRsp) Reset() {
+	*x = ReadDatasetChangesRsp{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_rows_proto_msgTypes[20]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ReadDatasetChangesRsp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadDatasetChangesRsp) ProtoMessage() {}
+
+func (x *ReadDatasetChangesRsp) ProtoReflect() protoreflect.Message {
+	mi := &file_rows_proto_msgTypes[20]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadDatasetChangesRsp.ProtoReflect.Descriptor instead.
+func (*ReadDatasetChangesRsp) Descriptor() ([]byte, []int) {
+	return file_rows_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *ReadDatasetChangesRsp) GetRetInfo() *commonpb.RetInfo {
+	if x != nil {
+		return x.RetInfo
+	}
+	return nil
+}
+
+func (x *ReadDatasetChangesRsp) GetChanges() []*DatasetChange {
+	if x != nil {
+		return x.Changes
+	}
+	return nil
+}
+
+func (x *ReadDatasetChangesRsp) GetNextCursor() *DatasetChangeCursor {
+	if x != nil {
+		return x.NextCursor
+	}
+	return nil
+}
+
+func (x *ReadDatasetChangesRsp) GetHasMore() bool {
+	if x != nil {
+		return x.HasMore
+	}
+	return false
+}
+
+func (x *ReadDatasetChangesRsp) GetGap() bool {
+	if x != nil {
+		return x.Gap
+	}
+	return false
+}
+
 type ReadTimeSeriesRowsRsp struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -1190,7 +1581,7 @@ type ReadTimeSeriesRowsRsp struct {
 func (x *ReadTimeSeriesRowsRsp) Reset() {
 	*x = ReadTimeSeriesRowsRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_rows_proto_msgTypes[16]
+		mi := &file_rows_proto_msgTypes[21]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1203,7 +1594,7 @@ func (x *ReadTimeSeriesRowsRsp) String() string {
 func (*ReadTimeSeriesRowsRsp) ProtoMessage() {}
 
 func (x *ReadTimeSeriesRowsRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_rows_proto_msgTypes[16]
+	mi := &file_rows_proto_msgTypes[21]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1216,7 +1607,7 @@ func (x *ReadTimeSeriesRowsRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadTimeSeriesRowsRsp.ProtoReflect.Descriptor instead.
 func (*ReadTimeSeriesRowsRsp) Descriptor() ([]byte, []int) {
-	return file_rows_proto_rawDescGZIP(), []int{16}
+	return file_rows_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ReadTimeSeriesRowsRsp) GetRetInfo() *commonpb.RetInfo {
@@ -1437,24 +1828,85 @@ var file_rows_proto_rawDesc = []byte{
 	0x63, 0x6f, 0x75, 0x6e, 0x74, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x22, 0x2e, 0x74,
 	0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65,
 	0x2e, 0x53, 0x75, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x52, 0x6f, 0x77, 0x43, 0x6f, 0x75, 0x6e, 0x74,
-	0x52, 0x06, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x73, 0x22, 0xc2, 0x01, 0x0a, 0x15, 0x52, 0x65, 0x61,
-	0x64, 0x54, 0x69, 0x6d, 0x65, 0x53, 0x65, 0x72, 0x69, 0x65, 0x73, 0x52, 0x6f, 0x77, 0x73, 0x52,
-	0x73, 0x70, 0x12, 0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01,
-	0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
-	0x2e, 0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52,
-	0x07, 0x72, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x34, 0x0a, 0x04, 0x72, 0x6f, 0x77, 0x73,
-	0x18, 0x02, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x20, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f,
-	0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x54, 0x69, 0x6d, 0x65, 0x53,
-	0x65, 0x72, 0x69, 0x65, 0x73, 0x52, 0x6f, 0x77, 0x52, 0x04, 0x72, 0x6f, 0x77, 0x73, 0x12, 0x3d,
-	0x0a, 0x0b, 0x70, 0x61, 0x67, 0x65, 0x5f, 0x72, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x18, 0x03, 0x20,
-	0x01, 0x28, 0x0b, 0x32, 0x1c, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
-	0x63, 0x6f, 0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x50, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x75, 0x6c,
-	0x74, 0x52, 0x0a, 0x70, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x42, 0x49, 0x5a,
-	0x47, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79,
-	0x61, 0x6e, 0x67, 0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d, 0x6f,
-	0x64, 0x75, 0x6c, 0x65, 0x73, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x72,
-	0x6f, 0x74, 0x6f, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x67, 0x65, 0x6e, 0x3b, 0x73,
-	0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x52, 0x06, 0x63, 0x6f, 0x75, 0x6e, 0x74, 0x73, 0x22, 0x7f, 0x0a, 0x13, 0x44, 0x61, 0x74, 0x61,
+	0x73, 0x65, 0x74, 0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x43, 0x75, 0x72, 0x73, 0x6f, 0x72, 0x12,
+	0x24, 0x0a, 0x0e, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x5f, 0x6e, 0x6f, 0x64, 0x65, 0x5f, 0x69,
+	0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0c, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x4e,
+	0x6f, 0x64, 0x65, 0x49, 0x64, 0x12, 0x26, 0x0a, 0x0f, 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x5f,
+	0x73, 0x74, 0x6f, 0x72, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0d,
+	0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x53, 0x74, 0x6f, 0x72, 0x65, 0x49, 0x64, 0x12, 0x1a, 0x0a,
+	0x08, 0x73, 0x65, 0x71, 0x75, 0x65, 0x6e, 0x63, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x04, 0x52,
+	0x08, 0x73, 0x65, 0x71, 0x75, 0x65, 0x6e, 0x63, 0x65, 0x22, 0x81, 0x01, 0x0a, 0x12, 0x44, 0x61,
+	0x74, 0x61, 0x73, 0x65, 0x74, 0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x52, 0x61, 0x6e, 0x67, 0x65,
+	0x12, 0x1d, 0x0a, 0x0a, 0x73, 0x75, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x73, 0x75, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x49, 0x64, 0x12,
+	0x12, 0x0a, 0x04, 0x66, 0x72, 0x65, 0x71, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x66,
+	0x72, 0x65, 0x71, 0x12, 0x1d, 0x0a, 0x0a, 0x73, 0x74, 0x61, 0x72, 0x74, 0x5f, 0x74, 0x69, 0x6d,
+	0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x73, 0x74, 0x61, 0x72, 0x74, 0x54, 0x69,
+	0x6d, 0x65, 0x12, 0x19, 0x0a, 0x08, 0x65, 0x6e, 0x64, 0x5f, 0x74, 0x69, 0x6d, 0x65, 0x18, 0x04,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x65, 0x6e, 0x64, 0x54, 0x69, 0x6d, 0x65, 0x22, 0xc3, 0x01,
+	0x0a, 0x0d, 0x44, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x12,
+	0x1a, 0x0a, 0x08, 0x73, 0x65, 0x71, 0x75, 0x65, 0x6e, 0x63, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28,
+	0x04, 0x52, 0x08, 0x73, 0x65, 0x71, 0x75, 0x65, 0x6e, 0x63, 0x65, 0x12, 0x19, 0x0a, 0x08, 0x73,
+	0x70, 0x61, 0x63, 0x65, 0x5f, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73,
+	0x70, 0x61, 0x63, 0x65, 0x49, 0x64, 0x12, 0x1d, 0x0a, 0x0a, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65,
+	0x74, 0x5f, 0x69, 0x64, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x64, 0x61, 0x74, 0x61,
+	0x73, 0x65, 0x74, 0x49, 0x64, 0x12, 0x3d, 0x0a, 0x06, 0x72, 0x61, 0x6e, 0x67, 0x65, 0x73, 0x18,
+	0x04, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x25, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
+	0x78, 0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x44, 0x61, 0x74, 0x61, 0x73, 0x65,
+	0x74, 0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x52, 0x61, 0x6e, 0x67, 0x65, 0x52, 0x06, 0x72, 0x61,
+	0x6e, 0x67, 0x65, 0x73, 0x12, 0x1d, 0x0a, 0x0a, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x5f,
+	0x61, 0x74, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65,
+	0x64, 0x41, 0x74, 0x22, 0xfd, 0x01, 0x0a, 0x15, 0x52, 0x65, 0x61, 0x64, 0x44, 0x61, 0x74, 0x61,
+	0x73, 0x65, 0x74, 0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x73, 0x52, 0x65, 0x71, 0x12, 0x37, 0x0a,
+	0x09, 0x61, 0x75, 0x74, 0x68, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b,
+	0x32, 0x1a, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d,
+	0x6d, 0x6f, 0x6e, 0x2e, 0x41, 0x75, 0x74, 0x68, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x08, 0x61, 0x75,
+	0x74, 0x68, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x19, 0x0a, 0x08, 0x73, 0x70, 0x61, 0x63, 0x65, 0x5f,
+	0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x73, 0x70, 0x61, 0x63, 0x65, 0x49,
+	0x64, 0x12, 0x1d, 0x0a, 0x0a, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x5f, 0x69, 0x64, 0x18,
+	0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x64, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x49, 0x64,
+	0x12, 0x3e, 0x0a, 0x06, 0x63, 0x75, 0x72, 0x73, 0x6f, 0x72, 0x18, 0x04, 0x20, 0x01, 0x28, 0x0b,
+	0x32, 0x26, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x73, 0x74, 0x6f,
+	0x72, 0x61, 0x67, 0x65, 0x2e, 0x44, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74, 0x43, 0x68, 0x61, 0x6e,
+	0x67, 0x65, 0x43, 0x75, 0x72, 0x73, 0x6f, 0x72, 0x52, 0x06, 0x63, 0x75, 0x72, 0x73, 0x6f, 0x72,
+	0x12, 0x1b, 0x0a, 0x09, 0x66, 0x72, 0x6f, 0x6d, 0x5f, 0x68, 0x65, 0x61, 0x64, 0x18, 0x05, 0x20,
+	0x01, 0x28, 0x08, 0x52, 0x08, 0x66, 0x72, 0x6f, 0x6d, 0x48, 0x65, 0x61, 0x64, 0x12, 0x14, 0x0a,
+	0x05, 0x6c, 0x69, 0x6d, 0x69, 0x74, 0x18, 0x06, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x05, 0x6c, 0x69,
+	0x6d, 0x69, 0x74, 0x22, 0xff, 0x01, 0x0a, 0x15, 0x52, 0x65, 0x61, 0x64, 0x44, 0x61, 0x74, 0x61,
+	0x73, 0x65, 0x74, 0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x73, 0x52, 0x73, 0x70, 0x12, 0x34, 0x0a,
+	0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32,
+	0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d, 0x6d,
+	0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65, 0x74, 0x49,
+	0x6e, 0x66, 0x6f, 0x12, 0x3a, 0x0a, 0x07, 0x63, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x73, 0x18, 0x02,
+	0x20, 0x03, 0x28, 0x0b, 0x32, 0x20, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
+	0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x44, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74,
+	0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x52, 0x07, 0x63, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x73, 0x12,
+	0x47, 0x0a, 0x0b, 0x6e, 0x65, 0x78, 0x74, 0x5f, 0x63, 0x75, 0x72, 0x73, 0x6f, 0x72, 0x18, 0x03,
+	0x20, 0x01, 0x28, 0x0b, 0x32, 0x26, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78,
+	0x2e, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x44, 0x61, 0x74, 0x61, 0x73, 0x65, 0x74,
+	0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x43, 0x75, 0x72, 0x73, 0x6f, 0x72, 0x52, 0x0a, 0x6e, 0x65,
+	0x78, 0x74, 0x43, 0x75, 0x72, 0x73, 0x6f, 0x72, 0x12, 0x19, 0x0a, 0x08, 0x68, 0x61, 0x73, 0x5f,
+	0x6d, 0x6f, 0x72, 0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x08, 0x52, 0x07, 0x68, 0x61, 0x73, 0x4d,
+	0x6f, 0x72, 0x65, 0x12, 0x10, 0x0a, 0x03, 0x67, 0x61, 0x70, 0x18, 0x05, 0x20, 0x01, 0x28, 0x08,
+	0x52, 0x03, 0x67, 0x61, 0x70, 0x22, 0xc2, 0x01, 0x0a, 0x15, 0x52, 0x65, 0x61, 0x64, 0x54, 0x69,
+	0x6d, 0x65, 0x53, 0x65, 0x72, 0x69, 0x65, 0x73, 0x52, 0x6f, 0x77, 0x73, 0x52, 0x73, 0x70, 0x12,
+	0x34, 0x0a, 0x08, 0x72, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x66, 0x6f, 0x18, 0x01, 0x20, 0x01, 0x28,
+	0x0b, 0x32, 0x19, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f,
+	0x6d, 0x6d, 0x6f, 0x6e, 0x2e, 0x52, 0x65, 0x74, 0x49, 0x6e, 0x66, 0x6f, 0x52, 0x07, 0x72, 0x65,
+	0x74, 0x49, 0x6e, 0x66, 0x6f, 0x12, 0x34, 0x0a, 0x04, 0x72, 0x6f, 0x77, 0x73, 0x18, 0x02, 0x20,
+	0x03, 0x28, 0x0b, 0x32, 0x20, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e,
+	0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2e, 0x54, 0x69, 0x6d, 0x65, 0x53, 0x65, 0x72, 0x69,
+	0x65, 0x73, 0x52, 0x6f, 0x77, 0x52, 0x04, 0x72, 0x6f, 0x77, 0x73, 0x12, 0x3d, 0x0a, 0x0b, 0x70,
+	0x61, 0x67, 0x65, 0x5f, 0x72, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0b,
+	0x32, 0x1c, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x6f, 0x6d,
+	0x6d, 0x6f, 0x6e, 0x2e, 0x50, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x52, 0x0a,
+	0x70, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x42, 0x49, 0x5a, 0x47, 0x67, 0x69,
+	0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x6f, 0x6f, 0x79, 0x61, 0x6e, 0x67,
+	0x2d, 0x63, 0x6f, 0x64, 0x65, 0x2f, 0x6d, 0x6f, 0x6f, 0x78, 0x2f, 0x6d, 0x6f, 0x64, 0x75, 0x6c,
+	0x65, 0x73, 0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f,
+	0x2f, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x67, 0x65, 0x6e, 0x3b, 0x73, 0x74, 0x6f, 0x72,
+	0x61, 0x67, 0x65, 0x70, 0x62, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -1469,7 +1921,7 @@ func file_rows_proto_rawDescGZIP() []byte {
 	return file_rows_proto_rawDescData
 }
 
-var file_rows_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_rows_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_rows_proto_goTypes = []interface{}{
 	(*TimeSeriesRowKey)(nil),       // 0: trpc.moox.storage.TimeSeriesRowKey
 	(*RecordRowKey)(nil),           // 1: trpc.moox.storage.RecordRowKey
@@ -1487,52 +1939,63 @@ var file_rows_proto_goTypes = []interface{}{
 	(*CountTimeSeriesRowsReq)(nil), // 13: trpc.moox.storage.CountTimeSeriesRowsReq
 	(*SubjectRowCount)(nil),        // 14: trpc.moox.storage.SubjectRowCount
 	(*CountTimeSeriesRowsRsp)(nil), // 15: trpc.moox.storage.CountTimeSeriesRowsRsp
-	(*ReadTimeSeriesRowsRsp)(nil),  // 16: trpc.moox.storage.ReadTimeSeriesRowsRsp
-	nil,                            // 17: trpc.moox.storage.RowFieldUpsert.AttributesEntry
-	nil,                            // 18: trpc.moox.storage.RowFieldValues.AttributesEntry
-	nil,                            // 19: trpc.moox.storage.RecordRow.AttributesEntry
-	(*TypedValue)(nil),             // 20: trpc.moox.storage.TypedValue
-	(*commonpb.AuthInfo)(nil),      // 21: trpc.moox.common.AuthInfo
-	(*TimeRange)(nil),              // 22: trpc.moox.storage.TimeRange
-	(*commonpb.Page)(nil),          // 23: trpc.moox.common.Page
-	(*commonpb.RetInfo)(nil),       // 24: trpc.moox.common.RetInfo
-	(*commonpb.PageResult)(nil),    // 25: trpc.moox.common.PageResult
+	(*DatasetChangeCursor)(nil),    // 16: trpc.moox.storage.DatasetChangeCursor
+	(*DatasetChangeRange)(nil),     // 17: trpc.moox.storage.DatasetChangeRange
+	(*DatasetChange)(nil),          // 18: trpc.moox.storage.DatasetChange
+	(*ReadDatasetChangesReq)(nil),  // 19: trpc.moox.storage.ReadDatasetChangesReq
+	(*ReadDatasetChangesRsp)(nil),  // 20: trpc.moox.storage.ReadDatasetChangesRsp
+	(*ReadTimeSeriesRowsRsp)(nil),  // 21: trpc.moox.storage.ReadTimeSeriesRowsRsp
+	nil,                            // 22: trpc.moox.storage.RowFieldUpsert.AttributesEntry
+	nil,                            // 23: trpc.moox.storage.RowFieldValues.AttributesEntry
+	nil,                            // 24: trpc.moox.storage.RecordRow.AttributesEntry
+	(*TypedValue)(nil),             // 25: trpc.moox.storage.TypedValue
+	(*commonpb.AuthInfo)(nil),      // 26: trpc.moox.common.AuthInfo
+	(*TimeRange)(nil),              // 27: trpc.moox.storage.TimeRange
+	(*commonpb.Page)(nil),          // 28: trpc.moox.common.Page
+	(*commonpb.RetInfo)(nil),       // 29: trpc.moox.common.RetInfo
+	(*commonpb.PageResult)(nil),    // 30: trpc.moox.common.PageResult
 }
 var file_rows_proto_depIdxs = []int32{
 	0,  // 0: trpc.moox.storage.RowKey.time_series:type_name -> trpc.moox.storage.TimeSeriesRowKey
 	1,  // 1: trpc.moox.storage.RowKey.record:type_name -> trpc.moox.storage.RecordRowKey
-	20, // 2: trpc.moox.storage.FieldValue.value:type_name -> trpc.moox.storage.TypedValue
+	25, // 2: trpc.moox.storage.FieldValue.value:type_name -> trpc.moox.storage.TypedValue
 	2,  // 3: trpc.moox.storage.RowFieldUpsert.key:type_name -> trpc.moox.storage.RowKey
 	3,  // 4: trpc.moox.storage.RowFieldUpsert.fields:type_name -> trpc.moox.storage.FieldValue
-	17, // 5: trpc.moox.storage.RowFieldUpsert.attributes:type_name -> trpc.moox.storage.RowFieldUpsert.AttributesEntry
+	22, // 5: trpc.moox.storage.RowFieldUpsert.attributes:type_name -> trpc.moox.storage.RowFieldUpsert.AttributesEntry
 	2,  // 6: trpc.moox.storage.RowFieldValues.key:type_name -> trpc.moox.storage.RowKey
 	3,  // 7: trpc.moox.storage.RowFieldValues.fields:type_name -> trpc.moox.storage.FieldValue
-	18, // 8: trpc.moox.storage.RowFieldValues.attributes:type_name -> trpc.moox.storage.RowFieldValues.AttributesEntry
+	23, // 8: trpc.moox.storage.RowFieldValues.attributes:type_name -> trpc.moox.storage.RowFieldValues.AttributesEntry
 	4,  // 9: trpc.moox.storage.RowsUpserted.rows:type_name -> trpc.moox.storage.RowFieldUpsert
 	7,  // 10: trpc.moox.storage.TimeSeriesRow.key:type_name -> trpc.moox.storage.TimeSeriesKey
 	3,  // 11: trpc.moox.storage.TimeSeriesRow.fields:type_name -> trpc.moox.storage.FieldValue
 	9,  // 12: trpc.moox.storage.RecordRow.key:type_name -> trpc.moox.storage.RecordKey
 	3,  // 13: trpc.moox.storage.RecordRow.fields:type_name -> trpc.moox.storage.FieldValue
-	19, // 14: trpc.moox.storage.RecordRow.attributes:type_name -> trpc.moox.storage.RecordRow.AttributesEntry
-	21, // 15: trpc.moox.storage.ReadTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	24, // 14: trpc.moox.storage.RecordRow.attributes:type_name -> trpc.moox.storage.RecordRow.AttributesEntry
+	26, // 15: trpc.moox.storage.ReadTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
 	8,  // 16: trpc.moox.storage.ReadTimeSeriesRowsReq.selectors:type_name -> trpc.moox.storage.TimeSeriesSelector
-	22, // 17: trpc.moox.storage.ReadTimeSeriesRowsReq.time_range:type_name -> trpc.moox.storage.TimeRange
-	23, // 18: trpc.moox.storage.ReadTimeSeriesRowsReq.page:type_name -> trpc.moox.common.Page
-	21, // 19: trpc.moox.storage.CountTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	27, // 17: trpc.moox.storage.ReadTimeSeriesRowsReq.time_range:type_name -> trpc.moox.storage.TimeRange
+	28, // 18: trpc.moox.storage.ReadTimeSeriesRowsReq.page:type_name -> trpc.moox.common.Page
+	26, // 19: trpc.moox.storage.CountTimeSeriesRowsReq.auth_info:type_name -> trpc.moox.common.AuthInfo
 	8,  // 20: trpc.moox.storage.CountTimeSeriesRowsReq.selectors:type_name -> trpc.moox.storage.TimeSeriesSelector
-	22, // 21: trpc.moox.storage.CountTimeSeriesRowsReq.time_range:type_name -> trpc.moox.storage.TimeRange
-	24, // 22: trpc.moox.storage.CountTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	27, // 21: trpc.moox.storage.CountTimeSeriesRowsReq.time_range:type_name -> trpc.moox.storage.TimeRange
+	29, // 22: trpc.moox.storage.CountTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
 	14, // 23: trpc.moox.storage.CountTimeSeriesRowsRsp.counts:type_name -> trpc.moox.storage.SubjectRowCount
-	24, // 24: trpc.moox.storage.ReadTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	10, // 25: trpc.moox.storage.ReadTimeSeriesRowsRsp.rows:type_name -> trpc.moox.storage.TimeSeriesRow
-	25, // 26: trpc.moox.storage.ReadTimeSeriesRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	20, // 27: trpc.moox.storage.RowFieldUpsert.AttributesEntry.value:type_name -> trpc.moox.storage.TypedValue
-	20, // 28: trpc.moox.storage.RowFieldValues.AttributesEntry.value:type_name -> trpc.moox.storage.TypedValue
-	29, // [29:29] is the sub-list for method output_type
-	29, // [29:29] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	17, // 24: trpc.moox.storage.DatasetChange.ranges:type_name -> trpc.moox.storage.DatasetChangeRange
+	26, // 25: trpc.moox.storage.ReadDatasetChangesReq.auth_info:type_name -> trpc.moox.common.AuthInfo
+	16, // 26: trpc.moox.storage.ReadDatasetChangesReq.cursor:type_name -> trpc.moox.storage.DatasetChangeCursor
+	29, // 27: trpc.moox.storage.ReadDatasetChangesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	18, // 28: trpc.moox.storage.ReadDatasetChangesRsp.changes:type_name -> trpc.moox.storage.DatasetChange
+	16, // 29: trpc.moox.storage.ReadDatasetChangesRsp.next_cursor:type_name -> trpc.moox.storage.DatasetChangeCursor
+	29, // 30: trpc.moox.storage.ReadTimeSeriesRowsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	10, // 31: trpc.moox.storage.ReadTimeSeriesRowsRsp.rows:type_name -> trpc.moox.storage.TimeSeriesRow
+	30, // 32: trpc.moox.storage.ReadTimeSeriesRowsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	25, // 33: trpc.moox.storage.RowFieldUpsert.AttributesEntry.value:type_name -> trpc.moox.storage.TypedValue
+	25, // 34: trpc.moox.storage.RowFieldValues.AttributesEntry.value:type_name -> trpc.moox.storage.TypedValue
+	35, // [35:35] is the sub-list for method output_type
+	35, // [35:35] is the sub-list for method input_type
+	35, // [35:35] is the sub-list for extension type_name
+	35, // [35:35] is the sub-list for extension extendee
+	0,  // [0:35] is the sub-list for field type_name
 }
 
 func init() { file_rows_proto_init() }
@@ -1735,6 +2198,66 @@ func file_rows_proto_init() {
 			}
 		}
 		file_rows_proto_msgTypes[16].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*DatasetChangeCursor); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_rows_proto_msgTypes[17].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*DatasetChangeRange); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_rows_proto_msgTypes[18].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*DatasetChange); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_rows_proto_msgTypes[19].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ReadDatasetChangesReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_rows_proto_msgTypes[20].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ReadDatasetChangesRsp); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_rows_proto_msgTypes[21].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ReadTimeSeriesRowsRsp); i {
 			case 0:
 				return &v.state
@@ -1758,7 +2281,7 @@ func file_rows_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_rows_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   20,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

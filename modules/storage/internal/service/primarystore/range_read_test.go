@@ -13,8 +13,14 @@ import (
 // rangeNode 同时实现精确读取与区间读取，记录收到的请求。
 type rangeNode struct {
 	recordingNode
-	read  *pb.ReadTimeSeriesRowsReq
-	count *pb.CountTimeSeriesRowsReq
+	read    *pb.ReadTimeSeriesRowsReq
+	count   *pb.CountTimeSeriesRowsReq
+	changes *pb.ReadDatasetChangesReq
+}
+
+func (n *rangeNode) ReadDatasetChanges(_ context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error) {
+	n.changes = req
+	return &pb.ReadDatasetChangesRsp{RetInfo: successRetInfo(), NextCursor: &pb.DatasetChangeCursor{SourceNodeId: "n", SourceStoreId: "s", Sequence: 7}}, nil
 }
 
 func (n *rangeNode) ReadTimeSeriesRows(_ context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
@@ -181,4 +187,38 @@ func TestReadRowsOmitsMissingRowsAndKeepsRequestOrder(t *testing.T) {
 		require.NoError(t, err, name)
 		require.Equal(t, pb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode(), name)
 	}
+}
+
+func TestReadDatasetChangesRoutesToTheDataNode(t *testing.T) {
+	node := &rangeNode{}
+	svc := newRangeService(t, node)
+	cursor := &pb.DatasetChangeCursor{SourceNodeId: "n", SourceStoreId: "s", Sequence: 3}
+	rsp, err := svc.ReadDatasetChanges(context.Background(), &pb.ReadDatasetChangesReq{
+		AuthInfo: &pb.AuthInfo{AppId: "factor", AppKey: "key"}, SpaceId: "space", DatasetId: "market", Cursor: cursor, Limit: 100,
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, uint64(7), rsp.GetNextCursor().GetSequence())
+	require.NotNil(t, node.changes)
+	require.Equal(t, "signed", node.changes.GetAuthInfo().GetAppKey())
+	require.Equal(t, cursor.GetSequence(), node.changes.GetCursor().GetSequence())
+	require.Equal(t, "market", node.changes.GetDatasetId())
+
+	// 取基线位点：不需要游标。
+	node.changes = nil
+	rsp, err = svc.ReadDatasetChanges(context.Background(), &pb.ReadDatasetChangesReq{
+		AuthInfo: &pb.AuthInfo{AppId: "factor", AppKey: "key"}, SpaceId: "space", DatasetId: "market", FromHead: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.True(t, node.changes.GetFromHead())
+
+	// 缺游标又不是取基线：参数错误，不会走到 DataNode。
+	node.changes = nil
+	rsp, err = svc.ReadDatasetChanges(context.Background(), &pb.ReadDatasetChangesReq{
+		AuthInfo: &pb.AuthInfo{AppId: "factor", AppKey: "key"}, SpaceId: "space", DatasetId: "market",
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Nil(t, node.changes)
 }

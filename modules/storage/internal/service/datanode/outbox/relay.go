@@ -150,9 +150,11 @@ func (r *Relay) Start(ctx context.Context) {
 }
 
 func (r *Relay) cleanupProcessedSourceEvents(ctx context.Context) error {
-	cutoff := time.Now().UTC().Add(-r.options.ProcessedEventRetention)
-	_, err := r.store.CleanupProcessedSourceEventsBefore(ctx, cutoff)
-	return err
+	now := time.Now().UTC()
+	_, err := r.store.CleanupProcessedSourceEventsBefore(ctx, now.Add(-r.options.ProcessedEventRetention))
+	// 行变更日志与去重标记同一节奏清理。
+	_, changeErr := r.store.CleanupChangeLog(ctx, now.Add(-r.store.ChangeLogRetention()))
+	return errors.Join(err, changeErr)
 }
 
 func (r *Relay) report(err error) {

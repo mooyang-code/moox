@@ -407,6 +407,8 @@ type DataNodeRangeRuntimeService interface {
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
 
 	CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesRowsReq) (*CountTimeSeriesRowsRsp, error)
+
+	ReadDatasetChanges(ctx context.Context, req *ReadDatasetChangesReq) (*ReadDatasetChangesRsp, error)
 }
 
 func DataNodeRangeRuntimeService_ReadTimeSeriesRows_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -445,6 +447,24 @@ func DataNodeRangeRuntimeService_CountTimeSeriesRows_Handler(svr interface{}, ct
 	return rsp, nil
 }
 
+func DataNodeRangeRuntimeService_ReadDatasetChanges_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReadDatasetChangesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(DataNodeRangeRuntimeService).ReadDatasetChanges(ctx, reqbody.(*ReadDatasetChangesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // DataNodeRangeRuntimeServer_ServiceDesc descriptor for server.RegisterService.
 var DataNodeRangeRuntimeServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.storage.DataNodeRangeRuntime",
@@ -457,6 +477,10 @@ var DataNodeRangeRuntimeServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.storage.DataNodeRangeRuntime/CountTimeSeriesRows",
 			Func: DataNodeRangeRuntimeService_CountTimeSeriesRows_Handler,
+		},
+		{
+			Name: "/trpc.moox.storage.DataNodeRangeRuntime/ReadDatasetChanges",
+			Func: DataNodeRangeRuntimeService_ReadDatasetChanges_Handler,
 		},
 	},
 }
@@ -529,6 +553,9 @@ func (s *UnimplementedDataNodeRangeRuntime) ReadTimeSeriesRows(ctx context.Conte
 }
 func (s *UnimplementedDataNodeRangeRuntime) CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesRowsReq) (*CountTimeSeriesRowsRsp, error) {
 	return nil, errors.New("rpc CountTimeSeriesRows of service DataNodeRangeRuntime is not implemented")
+}
+func (s *UnimplementedDataNodeRangeRuntime) ReadDatasetChanges(ctx context.Context, req *ReadDatasetChangesReq) (*ReadDatasetChangesRsp, error) {
+	return nil, errors.New("rpc ReadDatasetChanges of service DataNodeRangeRuntime is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -877,6 +904,8 @@ type DataNodeRangeRuntimeClientProxy interface {
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
 
 	CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesRowsReq, opts ...client.Option) (rsp *CountTimeSeriesRowsRsp, err error)
+
+	ReadDatasetChanges(ctx context.Context, req *ReadDatasetChangesReq, opts ...client.Option) (rsp *ReadDatasetChangesRsp, err error)
 }
 
 type DataNodeRangeRuntimeClientProxyImpl struct {
@@ -922,6 +951,26 @@ func (c *DataNodeRangeRuntimeClientProxyImpl) CountTimeSeriesRows(ctx context.Co
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CountTimeSeriesRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *DataNodeRangeRuntimeClientProxyImpl) ReadDatasetChanges(ctx context.Context, req *ReadDatasetChangesReq, opts ...client.Option) (*ReadDatasetChangesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.DataNodeRangeRuntime/ReadDatasetChanges")
+	msg.WithCalleeServiceName(DataNodeRangeRuntimeServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("DataNodeRangeRuntime")
+	msg.WithCalleeMethod("ReadDatasetChanges")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReadDatasetChangesRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

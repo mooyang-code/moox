@@ -27,6 +27,7 @@ type DataNodeClient interface {
 type rangeDataNodeClient interface {
 	ReadTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error)
 	CountTimeSeriesRows(context.Context, *pb.CountTimeSeriesRowsReq) (*pb.CountTimeSeriesRowsRsp, error)
+	ReadDatasetChanges(context.Context, *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error)
 }
 
 // Resolver 按空间与数据集找到负责的 DataNode。区间读取等能力通过类型断言发现。

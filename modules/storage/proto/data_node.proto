@@ -281,4 +281,5 @@ service DataNodeMarkerRuntime {
 service DataNodeRangeRuntime {
 	 rpc ReadTimeSeriesRows(ReadTimeSeriesRowsReq) returns (ReadTimeSeriesRowsRsp);
 	 rpc CountTimeSeriesRows(CountTimeSeriesRowsReq) returns (CountTimeSeriesRowsRsp);
+	 rpc ReadDatasetChanges(ReadDatasetChangesReq) returns (ReadDatasetChangesRsp);
 }

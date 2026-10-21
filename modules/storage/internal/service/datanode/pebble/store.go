@@ -41,8 +41,10 @@ type Options struct {
 	BucketDuration          time.Duration
 	MaxEventBytes           int
 	ProcessedEventRetention time.Duration
-	DisableSyncWrites       bool
-	PeriodNow               func() time.Time
+	// ChangeLogRetention 是行变更日志的保留期；为 0 时取 DefaultChangeLogRetention。
+	ChangeLogRetention time.Duration
+	DisableSyncWrites  bool
+	PeriodNow          func() time.Time
 	// BlockCacheBytes 是 Pebble 块缓存大小；为 0 时由环境变量或主机内存推算，见 resolveBlockCache。
 	BlockCacheBytes int64
 }
@@ -66,6 +68,7 @@ type Store struct {
 	bucketDuration          time.Duration
 	maxEventBytes           int
 	processedEventRetention time.Duration
+	changeLogRetention      time.Duration
 	datasetWriteMu          sync.RWMutex
 	outboxMu                sync.Mutex
 	outboxPublicationMu     sync.Mutex
@@ -129,7 +132,7 @@ func Open(opts Options) (*Store, error) {
 		writeOptions = cpebble.NoSync
 	}
 	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
-	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{})}
+	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, processedEventRetention: opts.ProcessedEventRetention, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{})}
 	store.startPeriodFinalizer()
 	store.startCacheStats(cacheStatsFirstDelay, cacheStatsInterval)
 	return store, nil
@@ -228,7 +231,7 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 	}
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
-	return s.writeFieldsEventLocked(ctx, normalizedRows, sourceEventID, event, nil)
+	return s.writeFieldsEventLocked(ctx, normalizedRows, sourceEventID, true, event, nil)
 }
 
 func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpsert) ([]*pb.RowFieldUpsert, error) {
@@ -257,7 +260,8 @@ func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpser
 	return normalizedRows, nil
 }
 
-func (s *Store) writeFieldsEventLocked(ctx context.Context, normalizedRows []*pb.RowFieldUpsert, sourceEventID string, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error), decorate func(*cpebble.Batch, []*OutboxEntry) error) ([]*OutboxEntry, error) {
+// changeLog 为真时，在同一个 batch 里追加行变更日志（因子结果写入不记：它们不是本地副本的输入）。
+func (s *Store) writeFieldsEventLocked(ctx context.Context, normalizedRows []*pb.RowFieldUpsert, sourceEventID string, changeLog bool, event func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error), decorate func(*cpebble.Batch, []*OutboxEntry) error) ([]*OutboxEntry, error) {
 	grouped := groupRowsByDataset(normalizedRows)
 	for group := range grouped {
 		deleted, err := s.isDatasetDeleted(group.spaceID, group.datasetID)
@@ -392,6 +396,11 @@ func (s *Store) writeFieldsEventLocked(ctx context.Context, normalizedRows []*pb
 				}
 			}
 			nextID++
+		}
+	}
+	if changeLog {
+		if err := s.stageChangeLog(batch, grouped, time.Now()); err != nil {
+			return nil, err
 		}
 	}
 	if decorate != nil {

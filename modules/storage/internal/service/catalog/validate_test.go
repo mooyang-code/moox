@@ -89,3 +89,17 @@ func TestNormalizeDatasetRoleCanonicalisesAndEnforcesContract(t *testing.T) {
 	require.NoError(t, normalizeDatasetRole(&pb.Dataset{DatasetId: "dataset_plain"}))
 	require.NoError(t, normalizeDatasetRole(nil))
 }
+
+func TestValidateColumnFill(t *testing.T) {
+	for _, ok := range []string{"", "prev", "prev_close", "zero", " zero "} {
+		if err := validateColumnFill(map[string]string{ColumnFillAttribute: ok}); err != nil {
+			t.Fatalf("fill %q should be accepted: %v", ok, err)
+		}
+	}
+	if err := validateColumnFill(nil); err != nil {
+		t.Fatalf("nil attributes: %v", err)
+	}
+	if err := validateColumnFill(map[string]string{ColumnFillAttribute: "next"}); err == nil {
+		t.Fatal("unknown fill rule must be rejected")
+	}
+}
