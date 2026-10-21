@@ -108,6 +108,9 @@ type Backfiller struct {
 	Plans     PlanHistory
 	Invoker   Invoker
 	Functions func(spaceID string) FunctionProvider
+	// Executor 返回数据集的补采执行端（scf 或 local），为空时按 scf；Local 是本地执行端（collector-stream 里的 MarketFetchExecutor）。
+	Executor func(ctx context.Context, spaceID, datasetID string) (string, error)
+	Local    Invoker
 	// Paused 报告空间是否处于采集暂停；暂停期间不再认领分块（含补位），已在执行的分块自然结束。为空表示不暂停。
 	Paused func(ctx context.Context, spaceID string) (bool, error)
 	// BaseCtx 是异步执行分块的上下文（进程生命周期）。
@@ -508,19 +511,39 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		fail(err)
 		return
 	}
-	provider := b.Functions(spaceID)
-	if provider == nil {
-		fail(fmt.Errorf("no backfill function provider for space %s", spaceID))
-		return
-	}
-	functionName, err := provider.EnsureBackfillFunction(ctx, plan.Market.MarketType)
-	if err != nil {
-		// 补采函数暂时不可用（创建中、发布租约被占用）：不算执行失败，分块退回待认领并退回这次尝试。
-		log.WarnContextf(ctx, "collector backfill function is not ready space=%s chunk=%s: %v", spaceID, chunk.ChunkID, err)
+	release := func(reason error) {
+		// 执行端暂时不可用（函数创建中、发布租约被占用、本地执行端离线）：不算执行失败，分块退回待认领并退回这次尝试。
+		log.WarnContextf(ctx, "collector backfill executor is not ready space=%s chunk=%s: %v", spaceID, chunk.ChunkID, reason)
 		if releaseErr := b.Store.ReleaseChunk(ctx, chunk.ID, chunk.Attempts); releaseErr != nil {
 			log.WarnContextf(ctx, "collector backfill chunk release failed chunk=%s: %v", chunk.ChunkID, releaseErr)
 		}
-		return
+	}
+	executor := marketfetch.PlanExecutorSCF
+	if b.Executor != nil {
+		if executor, err = b.Executor(ctx, spaceID, chunk.DatasetID); err != nil {
+			release(err)
+			return
+		}
+	}
+	invoker := b.Invoker
+	var functionName string
+	switch executor {
+	case marketfetch.PlanExecutorLocal:
+		if b.Local == nil {
+			fail(fmt.Errorf("no local executor is configured for space %s", spaceID))
+			return
+		}
+		invoker, functionName = b.Local, "local-"+strings.ToLower(spaceID)
+	default:
+		provider := b.Functions(spaceID)
+		if provider == nil {
+			fail(fmt.Errorf("no backfill function provider for space %s", spaceID))
+			return
+		}
+		if functionName, err = provider.EnsureBackfillFunction(ctx, plan.Market.MarketType); err != nil {
+			release(err)
+			return
+		}
 	}
 	request, err := chunkRequest(spaceID, functionName, plan, chunk)
 	if err != nil {
@@ -539,7 +562,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		return
 	}
 	callCtx, cancel := context.WithTimeout(ctx, chunkInvokeLimit)
-	result, err := b.Invoker.Invoke(callCtx, spaceID, functionName, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
+	result, err := invoker.Invoke(callCtx, spaceID, functionName, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
 	cancel()
 	if err != nil {
 		// 同步调用超时或断连时结果不明：不标记失败，名额保留到最迟结束时间后，由重新认领再执行。

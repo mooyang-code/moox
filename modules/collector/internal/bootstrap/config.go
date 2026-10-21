@@ -35,6 +35,34 @@ type Config struct {
 	DNS                DNSConfig                          `yaml:"dns"`
 	EgressProxy        EgressProxyConfig                  `yaml:"egress_proxy"`
 	SubjectSync        subjectsync.Config                 `yaml:"subject_sync"`
+	// Stream 是 WS 推送采集的 Collector 侧参数（截止、提交预留随计划下发给 collector-stream）。
+	Stream StreamConfig `yaml:"stream"`
+}
+
+// StreamConfig 是推送采集的参数。没有 REST 兜底，也没有兜底相关的配置。
+type StreamConfig struct {
+	// HeartbeatTimeoutSeconds 是 collector-stream 心跳的超时，只用于运行状态、告警与切换前检查。
+	HeartbeatTimeoutSeconds int `yaml:"heartbeat_timeout_seconds"`
+	// LatenessS 是推送方式按频率的截止默认值（任务显式指定的以任务为准）。
+	LatenessS map[string]int `yaml:"lateness_s"`
+	// CommitReserveMS 是周期闸门的提交预留：最晚开始提交 = 收盘 + 截止 − 预留，要容得下同一截止的全部数据集串行提交完。
+	CommitReserveMS int `yaml:"commit_reserve_ms"`
+}
+
+func defaultStreamConfig() StreamConfig {
+	return StreamConfig{HeartbeatTimeoutSeconds: 180, LatenessS: map[string]int{"1m": 5, "1h": 8}, CommitReserveMS: 1000}
+}
+
+func (c StreamConfig) validate() error {
+	if c.HeartbeatTimeoutSeconds < 30 || c.CommitReserveMS < 100 || c.CommitReserveMS > 5000 {
+		return fmt.Errorf("stream: heartbeat_timeout_seconds 至少 30，commit_reserve_ms 在 100～5000 之间")
+	}
+	for frequency, seconds := range c.LatenessS {
+		if seconds < 2 || seconds > 3600 || seconds*1000 <= c.CommitReserveMS {
+			return fmt.Errorf("stream.lateness_s[%s] 必须在 2～3600 秒之间且大于提交预留", frequency)
+		}
+	}
+	return nil
 }
 
 // DatabaseConfig describes SQLite settings.
@@ -175,6 +203,9 @@ func Load(path string) (*Config, error) {
 	if err := cfg.validateSCFAccess(); err != nil {
 		return nil, err
 	}
+	if err := cfg.Stream.validate(); err != nil {
+		return nil, err
+	}
 	if err := cfg.validateSCFPlan(); err != nil {
 		return nil, err
 	}
@@ -310,6 +341,7 @@ func Default() *Config {
 		Storage:     StorageConfig{ResultDataNodeID: "storage-node-0"},
 		SCFPlan:     defaultSCFPlan(),
 		SubjectSync: subjectsync.DefaultConfig(),
+		Stream:      defaultStreamConfig(),
 		SCFAccess:   gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
 		PeriodReadiness: PeriodReadinessConfig{
 			Grace: 2 * time.Minute, ReportInterval: 5 * time.Second,

@@ -97,6 +97,22 @@ type SCFPlanSpaceConfig struct {
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
 	// Markets 是按市场的覆盖项（现货、合约的取数时刻与截止不同）。
 	Markets map[string]SCFPlanMarketConfig `yaml:"markets"`
+	// DefaultIngest（stream|pull）与 DefaultExecutor（scf|local）是新数据集第一次出现时的采集方式初值，之后以库为准。
+	DefaultIngest   string `yaml:"default_ingest"`
+	DefaultExecutor string `yaml:"default_executor"`
+}
+
+// defaultModeFor 返回空间新数据集的采集方式初值（没写的按拉取 + SCF）。
+func (c SCFPlanConfig) defaultModeFor(spaceID string) marketfetch.DatasetMode {
+	space := c.Spaces[strings.ToLower(spaceID)]
+	mode := marketfetch.DatasetMode{Mode: space.DefaultIngest, Executor: space.DefaultExecutor}
+	if mode.Mode == "" {
+		mode.Mode = marketfetch.IngestPull
+	}
+	if mode.Executor == "" {
+		mode.Executor = marketfetch.PlanExecutorSCF
+	}
+	return mode
 }
 
 // maxFunctionsPerNamespace 是腾讯云每个命名空间的函数数上限，超过后分到下一个命名空间。
@@ -157,6 +173,12 @@ func (c *SCFPlanConfig) mergeSpaceDefaults(defaults map[string]SCFPlanSpaceConfi
 		if override.SymbolsPerFunction == 0 {
 			override.SymbolsPerFunction = base.SymbolsPerFunction
 		}
+		if override.DefaultIngest == "" {
+			override.DefaultIngest = base.DefaultIngest
+		}
+		if override.DefaultExecutor == "" {
+			override.DefaultExecutor = base.DefaultExecutor
+		}
 		switch {
 		case override.Fetch == nil && base.Fetch != nil:
 			fetch := *base.Fetch
@@ -201,8 +223,9 @@ func defaultSCFPlan() SCFPlanConfig {
 		// crypto：币安 REST 要到收盘后才返回定稿值（合约约 8 秒、现货约 3 秒），所以按市场推迟取数；
 		// 合约 8 秒起取数，再加整点可能的停顿，SCF 模式下合约数据集的截止放宽到 20 秒。
 		Spaces: map[string]SCFPlanSpaceConfig{
-			"stockcn": {SymbolsPerFunction: 40, Fetch: &SCFPlanFetchConfig{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerBaseMS: 5000, StaggerMS: 35000}},
-			"crypto": {Markets: map[string]SCFPlanMarketConfig{
+			"stockcn": {SymbolsPerFunction: 40, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerBaseMS: 5000, StaggerMS: 35000}},
+			// crypto 的新数据集默认 WS 推送，补采走香港机的本地执行端。
+			"crypto": {DefaultIngest: "stream", DefaultExecutor: "local", Markets: map[string]SCFPlanMarketConfig{
 				"spot": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 3000}},
 				"swap": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 8000}, LatenessS: 20},
 			}},
@@ -268,6 +291,12 @@ func (c *Config) validateSCFPlan() error {
 			return fmt.Errorf("scf_plan: spaces %s and %s share code package %s; every space needs its own package_name or package_id in scf_plan.spaces", other, space, key)
 		}
 		packages[key] = space
+	}
+	for space, override := range plan.Spaces {
+		mode := plan.defaultModeFor(space)
+		if (mode.Mode != marketfetch.IngestStream && mode.Mode != marketfetch.IngestPull) || (mode.Executor != marketfetch.PlanExecutorSCF && mode.Executor != marketfetch.PlanExecutorLocal) {
+			return fmt.Errorf("scf_plan.spaces[%s]: default_ingest 必须是 stream 或 pull，default_executor 必须是 scf 或 local（收到 %q、%q）", space, override.DefaultIngest, override.DefaultExecutor)
+		}
 	}
 	for space, markets := range c.SCFMarkets {
 		if space != strings.ToLower(space) || len(markets) == 0 {

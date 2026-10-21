@@ -62,6 +62,7 @@ type Service struct {
 	subjectSyncer              SubjectSyncer
 	klineOps                   KlineOps
 	fetchPlanControl           FetchPlanControl
+	stream                     *StreamService
 }
 
 // ctxMutex 是可响应 context 取消的互斥锁：等待者超时或被取消后立即返回，而不是一直排队。

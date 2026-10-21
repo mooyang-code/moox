@@ -21,6 +21,13 @@ server:
       protocol: trpc
       transport: go-net
       timeout: 320000
+    - name: trpc.moox.collector.StreamCollector
+      ip: 127.0.0.1
+      port: 11422
+      network: tcp
+      protocol: trpc
+      transport: go-net
+      timeout: 10000
     - name: trpc.moox.collector.Health
       ip: 127.0.0.1
       port: 11412

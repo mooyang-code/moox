@@ -198,6 +198,54 @@
           </a-table>
         </section>
 
+        <section v-if="status.stream" class="stream-section">
+          <div class="pane-toolbar stream-toolbar">
+            <h3 class="toolbar-title">WS 推送（collector-stream）</h3>
+            <a-tag size="small" :color="status.stream.online ? 'green' : 'red'">{{
+              status.stream.online ? "在线" : "离线"
+            }}</a-tag>
+            <span class="muted mono-text"
+              >{{ status.stream.instance_id }} · 心跳 {{ status.stream.heartbeat_at }} · 已应用计划
+              {{ status.stream.applied_plan_id }}/{{ status.stream.applied_stage }}</span
+            >
+          </div>
+          <a-table row-key="key" size="mini" :data="streamConnRows" :pagination="false" :bordered="{ cell: true }">
+            <template #columns>
+              <a-table-column title="市场" data-index="market" :width="90" />
+              <a-table-column title="频率" data-index="frequency" :width="70" />
+              <a-table-column title="流数" data-index="streams" :width="70" align="right" />
+              <a-table-column title="已订阅" :width="80" align="center">
+                <template #cell="{ record }">{{ record.subscribed ? "是" : "否" }}</template>
+              </a-table-column>
+              <a-table-column title="最近消息" data-index="last_message_at" :width="230" />
+              <a-table-column title="重连" data-index="reconnects" :width="70" align="right" />
+              <a-table-column title="地址" data-index="endpoint" />
+            </template>
+          </a-table>
+          <a-table
+            row-key="key"
+            size="mini"
+            class="stream-periods"
+            :data="streamPeriodRows"
+            :pagination="false"
+            :bordered="{ cell: true }"
+          >
+            <template #empty><div class="empty-text">还没有周期统计</div></template>
+            <template #columns>
+              <a-table-column title="周期" data-index="period" :width="180" />
+              <a-table-column title="数据集" :width="220">
+                <template #cell="{ record }">{{
+                  datasetLabel(datasetNames, `${record.dataset_id}|${record.frequency}`)
+                }}</template>
+              </a-table-column>
+              <a-table-column title="到达/期望" data-index="arrived" :width="100" align="right" />
+              <a-table-column title="缺失" data-index="missing" :width="160" />
+              <a-table-column title="写入完成（相对收盘）" data-index="done" :width="160" />
+              <a-table-column title="错误" data-index="error" />
+            </template>
+          </a-table>
+        </section>
+
         <section class="function-section">
           <div class="pane-toolbar">
             <h3 class="toolbar-title">
@@ -239,7 +287,9 @@
                     >
                   </template>
                 </a-table-column>
-                <a-table-column title="地域" data-index="region" :width="110" />
+                <a-table-column title="地域" :width="110">
+                  <template #cell="{ record }">{{ executorText(record) }}</template>
+                </a-table-column>
                 <a-table-column title="市场" :width="140">
                   <template #cell="{ record }"
                     ><span class="single-line" :title="record.market">{{ record.market }}</span></template
@@ -247,7 +297,13 @@
                 </a-table-column>
                 <a-table-column title="触发" :width="140">
                   <template #cell="{ record }"
-                    ><span class="single-line" :title="record.cron">{{ cronText(record.cron) }}</span></template
+                    ><span class="single-line" :title="record.cron">{{
+                      record.executor === "stream"
+                        ? "收盘推送"
+                        : record.executor === "local"
+                          ? "本地按收盘"
+                          : cronText(record.cron)
+                    }}</span></template
                   >
                 </a-table-column>
                 <a-table-column title="标的" data-index="subject_count" :width="70" align="right" />
@@ -311,6 +367,8 @@ import KlineRangeDialog from "@/views/collector/backfill-jobs/kline-range-dialog
 import FunctionDetailDialog from "./function-detail-dialog.vue";
 import {
   datasetFunctions,
+  executorText,
+  streamPeriodText,
   datasetKey,
   cronText,
   datasetLabel,
@@ -397,6 +455,19 @@ watch(functionArea, (area, previous) => {
 onActivated(() => void nextTick(fitFunctionPageSize));
 onBeforeUnmount(() => functionResize?.disconnect());
 
+const streamConnRows = computed(() =>
+  (status.value.stream?.conns || []).map((conn, index) => ({ key: `${conn.market}-${conn.frequency}-${index}`, ...conn }))
+);
+const streamPeriodRows = computed(() =>
+  (status.value.stream?.recent || []).map(stat => ({
+    key: `${stat.dataset_id}-${stat.frequency}-${stat.period}`,
+    dataset_id: stat.dataset_id,
+    frequency: stat.frequency,
+    period: new Date(Number(stat.period || 0) * 1000).toISOString().replace(".000Z", "Z"),
+    error: stat.error || "",
+    ...streamPeriodText(stat)
+  }))
+);
 const filteredFunctions = computed(() => {
   const list = filterFunctions(status.value.functions || [], functionFilters.value, datasetNames.value);
   // 下发中、退役中排前，其余保持后端顺序。
@@ -529,6 +600,22 @@ onMounted(loadStatus);
 .runtime-status > section {
   flex: none;
 }
+.runtime-status > .stream-section {
+  flex-shrink: 0;
+  margin-bottom: 12px;
+}
+
+.stream-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.stream-periods {
+  margin-top: 8px;
+}
+
 .runtime-status > .function-section {
   display: flex;
   min-height: 0;

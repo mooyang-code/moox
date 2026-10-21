@@ -165,8 +165,16 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		return nil, err
 	}
 	svc.SetSubjectSyncer(subjectSyncer)
+	streamService := collectsvc.NewStreamService(dbm, collectsvc.StreamSettings{HeartbeatTimeout: time.Duration(cfg.Stream.HeartbeatTimeoutSeconds) * time.Second, CommitReserveMS: cfg.Stream.CommitReserveMS},
+		marketfetch.NewStreamMetrics(prometheus.DefaultRegisterer), subjectSyncer)
+	streamServer := s.Service("trpc.moox.collector.StreamCollector")
+	if streamServer == nil {
+		return nil, fmt.Errorf("trpc_go.yaml 缺少 trpc.moox.collector.StreamCollector 服务")
+	}
+	collectorpb.RegisterStreamCollectorService(streamServer, streamService)
+	svc.SetStreamService(streamService)
 	registerCollectorBackground(ctx, s, cfg, dbm, marketFetchMetrics, process)
-	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc); err != nil {
+	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService); err != nil {
 		return nil, err
 	}
 	if err := registerHealth(s, cfg, dbm, dnsSnapshot); err != nil {

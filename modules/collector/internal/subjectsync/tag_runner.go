@@ -27,7 +27,12 @@ type TagRunner struct {
 	FetchTimeout time.Duration
 	Now          func() time.Time
 	Metrics      *Metrics
+	// RetryDelays 是快照取数失败或校验不通过时在本次同步内重试前的等待（默认 2 秒、4 秒，共 3 次）；
+	// 都失败就保持原成员不变并上报失败，绝不用一份残缺的快照更新成员。
+	RetryDelays []time.Duration
 }
+
+var defaultSnapshotRetryDelays = []time.Duration{2 * time.Second, 4 * time.Second}
 
 func probing(tag *pb.Tag) bool {
 	if tag == nil {
@@ -112,7 +117,19 @@ func (r *TagRunner) runTag(ctx context.Context, tag *pb.Tag, runAt time.Time) (i
 	}
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	delays := r.RetryDelays
+	if delays == nil {
+		delays = defaultSnapshotRetryDelays
+	}
 	instruments, err := FetchSnapshot(fetchCtx, r.Listers, []string{tag.GetSource()}, tag.GetMarketType())
+	for attempt := 0; err != nil && attempt < len(delays) && fetchCtx.Err() == nil; attempt++ {
+		log.WarnContextf(ctx, "tag %s/%s snapshot attempt %d failed, retrying: %v", tag.GetSpaceId(), tag.GetTagId(), attempt+1, err)
+		select {
+		case <-time.After(delays[attempt]):
+		case <-fetchCtx.Done():
+		}
+		instruments, err = FetchSnapshot(fetchCtx, r.Listers, []string{tag.GetSource()}, tag.GetMarketType())
+	}
 	subjects := 0
 	if err == nil {
 		items := make([]*pb.TagSnapshotItem, 0, len(instruments))

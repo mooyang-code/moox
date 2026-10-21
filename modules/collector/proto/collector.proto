@@ -529,6 +529,8 @@ message CollectorFunctionStatus {
   string state = 7;
   // dataset_subjects 是每个数据集上本函数负责的标的，供详情查看。
   repeated CollectorFunctionDataset dataset_subjects = 8;
+  // executor 是执行端：scf（云函数）、stream（WS 推送）、local（本地执行端）。
+  string executor = 9;
 }
 
 message GetCollectorStatusRsp {

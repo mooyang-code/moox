@@ -222,3 +222,30 @@ export function cronText(expr?: string) {
   }
   return raw;
 }
+
+/** 执行端的展示名：SCF 函数显示地域，推送与本地执行端显示类型。 */
+export function executorText(fn: { executor?: string; region?: string }) {
+  switch (fn.executor) {
+    case "stream":
+      return "WS 推送";
+    case "local":
+      return "本地执行端";
+    default:
+      return fn.region || "-";
+  }
+}
+
+/** 推送周期一行的展示：到达/期望、缺失（含疑似下架）、写入完成相对收盘。 */
+export function streamPeriodText(stat: {
+  arrived?: number;
+  expected?: number;
+  missing?: number;
+  suspected?: number;
+  commit_done_ms?: number | string;
+  committed?: boolean;
+}) {
+  const arrived = `${stat.arrived || 0}/${stat.expected || 0}`;
+  const missing = stat.missing ? `缺 ${stat.missing}${stat.suspected ? `（疑似下架 ${stat.suspected}）` : ""}` : "齐";
+  const done = stat.committed ? `${(Number(stat.commit_done_ms || 0) / 1000).toFixed(2)} 秒` : stat.arrived ? "未写入" : "零到达";
+  return { arrived, missing, done };
+}

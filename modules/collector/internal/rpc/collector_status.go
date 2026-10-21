@@ -52,6 +52,20 @@ func (s *Service) GetCollectorStatus(ctx context.Context, req *pb.GetCollectorSt
 			raise(klinecheck.HealthError, fmt.Sprintf("采集计划 #%d 下发失败：%s", source.ID, lastError))
 		}
 	}
+	if rsp.IngestModes, err = s.ingestModes(ctx, spaceID, ""); err != nil {
+		return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+	}
+	if s.stream != nil {
+		if rsp.Stream, err = s.stream.WorkerStatus(ctx, spaceID); err != nil {
+			return &pb.GetCollectorStatusRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
+		}
+	}
+	for _, mode := range rsp.IngestModes {
+		if mode.GetMode() == store.IngestStream && (rsp.Stream == nil || !rsp.Stream.GetOnline()) {
+			raise(klinecheck.HealthError, "collector-stream 不在线：推送采集的数据集没有写入方，可用 moox-cli collector ingest-mode set --mode pull --executor scf --force 切回")
+			break
+		}
+	}
 	if open != nil && now.Sub(open.CreatedAt) > pendingPlanWarn {
 		raise(klinecheck.HealthWarn, fmt.Sprintf("采集计划 #%d 已 %s 未生效", open.ID, klinecheck.FormatDuration(now.Sub(open.CreatedAt))))
 	}
@@ -158,7 +172,11 @@ func planFunctions(source *store.FetchPlanRecord) ([]*pb.CollectorFunctionStatus
 		if plan == nil {
 			continue
 		}
-		state := &pb.CollectorFunctionStatus{Name: name, Region: function.Region, Market: function.Market, State: "applied", Cron: content.TransitionalCron(function)}
+		executor := function.Executor
+		if executor == "" {
+			executor = marketfetch.PlanExecutorSCF
+		}
+		state := &pb.CollectorFunctionStatus{Name: name, Region: function.Region, Market: function.Market, State: "applied", Cron: content.TransitionalCron(function), Executor: executor}
 		switch {
 		case function.New == nil:
 			if appliedPlan {
