@@ -242,12 +242,28 @@ func (m *marketRuntime) setPlan(r *Runtime, plan *marketfetch.Plan) {
 	m.tracker.setPlan(plan)
 }
 
-// SetCommitReserve 更新提交预留（随计划下发）。只影响之后新建的闸门周期。
+// SetCommitReserve 更新提交预留（随计划与心跳下发）：新建的闸门与已有闸门之后建立的周期都用新值。
 func (r *Runtime) SetCommitReserve(reserve time.Duration) {
-	if reserve > 0 {
-		r.mu.Lock()
-		r.cfg.CommitReserve = reserve
+	if reserve <= 0 {
+		return
+	}
+	r.mu.Lock()
+	if r.cfg.CommitReserve == reserve {
 		r.mu.Unlock()
+		return
+	}
+	r.cfg.CommitReserve = reserve
+	markets := make([]*marketRuntime, 0, len(r.markets))
+	for _, market := range r.markets {
+		markets = append(markets, market)
+	}
+	r.mu.Unlock()
+	for _, market := range markets {
+		market.mu.Lock()
+		for _, gate := range market.gates {
+			gate.SetCommitReserve(reserve)
+		}
+		market.mu.Unlock()
 	}
 }
 

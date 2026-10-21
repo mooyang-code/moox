@@ -150,6 +150,13 @@ func (g *Gate) SetPlan(plan *marketfetch.Plan, dataset *marketfetch.PlanDataset)
 	g.post(func() { g.plan, g.dataset = plan, dataset })
 }
 
+// SetCommitReserve 更新提交预留：之后建立的周期按新值计算最晚提交时刻。
+func (g *Gate) SetCommitReserve(reserve time.Duration) {
+	if reserve > 0 {
+		g.post(func() { g.cfg.CommitReserve = reserve })
+	}
+}
+
 // Offer 投递一条解码后的事件；只处理收盘定稿。
 func (g *Gate) Offer(event Event) {
 	if event.Kind != EventKlineFinal {

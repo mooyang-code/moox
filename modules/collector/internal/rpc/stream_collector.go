@@ -110,7 +110,7 @@ func (s *StreamService) StreamHeartbeat(ctx context.Context, req *pb.StreamHeart
 	if err != nil {
 		return &pb.StreamHeartbeatRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	return &pb.StreamHeartbeatRsp{RetInfo: retOK(), PlanId: id, Stage: stage, ServerTimeMs: now.UnixMilli()}, nil
+	return &pb.StreamHeartbeatRsp{RetInfo: retOK(), PlanId: id, Stage: stage, ServerTimeMs: now.UnixMilli(), CommitReserveMs: int32(s.settings.CommitReserveMS)}, nil
 }
 
 // PullStreamPlan 返回分给推送与本地执行端的计划项。

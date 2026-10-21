@@ -321,3 +321,17 @@ func TestCommitQueueRetryDoesNotHoldBackAnEarlierDeadline(t *testing.T) {
 	clock.Advance(commitRetryInterval)
 	require.Eventually(t, func() bool { committer.mu.Lock(); defer committer.mu.Unlock(); return len(committer.order) == 3 }, time.Second, time.Millisecond)
 }
+
+// 提交预留随心跳更新：已有闸门之后建立的周期按新值提前提交（预留 3 秒：D = 收盘 + 5 − 3）。
+func TestGateUsesAnUpdatedCommitReserveForLaterPeriods(t *testing.T) {
+	period := closeAt.Add(-time.Minute)
+	plan, dataset := testStreamPlan("1m", 5, copyOf(period.Add(-time.Hour), "BTC-USDT", "ETH-USDT"))
+	h := newGateHarness(t, closeAt.Add(-time.Second), marketdata.FrequencyMinute, plan, dataset)
+	h.gate.SetCommitReserve(3 * time.Second)
+	h.advance(time.Second)
+	h.final("BTCUSDT", period, 1)
+	h.advance(1900 * time.Millisecond)
+	require.Empty(t, h.committer.calls())
+	h.advance(100 * time.Millisecond)
+	require.Len(t, h.waitCalls(1)[0].Bars, 1)
+}

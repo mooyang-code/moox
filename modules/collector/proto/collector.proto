@@ -743,6 +743,8 @@ message StreamHeartbeatRsp {
   int64 plan_id = 2;
   string stage = 3;
   int64 server_time_ms = 4;
+  // commit_reserve_ms 是周期闸门当前的提交预留：配置变化不改计划版本，随心跳下发，已有闸门从下一个周期起使用。
+  int32 commit_reserve_ms = 5;
 }
 
 // StreamPlanItem 是计划内容里分给推送或本地执行端的一项（一个市场），plan_json 是 marketfetch.Plan 的 JSON。

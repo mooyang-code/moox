@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
@@ -28,6 +29,8 @@ type PlanClient struct {
 	SpaceID    string
 	InstanceID string
 	Version    string
+	// reserve 是最近一次心跳下发的提交预留（毫秒）。
+	reserve atomic.Int64
 }
 
 func (c *PlanClient) call(ctx context.Context, method string, request, response any) error {
@@ -65,7 +68,13 @@ func (c *PlanClient) Heartbeat(ctx context.Context, applied PlanVersion, markets
 	if err := retError("StreamHeartbeat", response.GetRetInfo()); err != nil {
 		return PlanVersion{}, err
 	}
+	c.reserve.Store(int64(response.GetCommitReserveMs()))
 	return PlanVersion{ID: response.GetPlanId(), Stage: response.GetStage()}, nil
+}
+
+// CommitReserve 返回最近一次心跳下发的提交预留（0 表示还没有）。
+func (c *PlanClient) CommitReserve() time.Duration {
+	return time.Duration(c.reserve.Load()) * time.Millisecond
 }
 
 // Pull 拉取本空间分给推送与本地执行端的计划项。

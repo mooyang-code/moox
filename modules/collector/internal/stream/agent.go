@@ -101,6 +101,8 @@ func (a *Agent) beat(ctx context.Context) {
 		log.Warnf("collector-stream heartbeat failed: %v", err)
 		return
 	}
+	// 提交预留随心跳下发：配置变化不改计划版本，也要让已有闸门用上新值。
+	a.Runtime.SetCommitReserve(a.Client.CommitReserve())
 	a.mu.Lock()
 	a.latest, a.lastBeat = latest, time.Now()
 	changed := latest != a.applied
