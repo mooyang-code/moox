@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -65,11 +66,13 @@ func run(args []string, out io.Writer) error {
 		return resetGapLedger(args, out)
 	case "reconcile":
 		return reconcile(args, out)
+	case "tune":
+		return tune(args, out)
 	case "version":
 		_, err := fmt.Fprintf(out, "moox-factor-engine %s %s %s\n", Version, GitCommit, BuildTime)
 		return err
 	default:
-		return fmt.Errorf("unknown command %q (serve, service, run-once, health, reset-gap-ledger, reconcile, version)", command)
+		return fmt.Errorf("unknown command %q (serve, service, run-once, health, reset-gap-ledger, reconcile, tune, version)", command)
 	}
 }
 
@@ -276,6 +279,54 @@ func reconcile(args []string, out io.Writer) error {
 		return err
 	}
 	return json.NewEncoder(out).Encode(summary)
+}
+
+// tune 按本机内存给出内存配置建议（设计第 8 节）；--write 把建议写进 engine.yaml（只写还没设置过的项，--force 覆盖）。
+func tune(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("tune", flag.ContinueOnError)
+	app := fs.String("config", "config/engine.yaml", "factor engine config")
+	memory := fs.Int64("memory-gib", 0, "总内存（GiB）；不写则探测本机")
+	sets := fs.Int("sets", 4, "计划启用的因子集合数（决定计算并行数）")
+	cpus := fs.Int("cpus", runtime.NumCPU(), "CPU 核数")
+	write := fs.Bool("write", false, "把建议写进配置文件")
+	force := fs.Bool("force", false, "覆盖已经设置过的值")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	total := *memory << 30
+	if total == 0 {
+		detected, err := engine.DetectTotalMemory()
+		if err != nil {
+			return fmt.Errorf("探测总内存失败：%w（可用 --memory-gib 指定）", err)
+		}
+		total = detected
+	}
+	cfg, err := engine.Load(*app)
+	if err != nil {
+		return err
+	}
+	plan := engine.PlanMemory(total, *cpus, *sets, int64(cfg.SeriesStore.BlockCache))
+	if _, err := io.WriteString(out, plan.Summary()); err != nil {
+		return err
+	}
+	if !*write {
+		_, err = fmt.Fprintln(out, "加 --write 写入配置文件")
+		return err
+	}
+	changes, err := engine.TuneConfig(*app, plan, *force)
+	if err != nil {
+		return err
+	}
+	if len(changes) == 0 {
+		_, err = fmt.Fprintln(out, "配置里的相关项都已设置，没有改动（--force 可覆盖）")
+		return err
+	}
+	for _, change := range changes {
+		if _, err := fmt.Fprintf(out, "已写入 %s：%s → %s\n", change.Path, change.Old, change.New); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func signHealthRequest(request *http.Request) error {

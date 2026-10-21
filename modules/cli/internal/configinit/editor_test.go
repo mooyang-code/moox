@@ -198,7 +198,7 @@ func TestEditorFormShowsTheCommonSettings(t *testing.T) {
 	if len(form.Hosts) != 3 || form.Hosts[0].ID != "control" || form.Hosts[0].SSHUser != "ubuntu" || form.Hosts[0].SSHPassword != "pw-control" || form.Hosts[0].Address == "" {
 		t.Fatalf("主机 = %+v", form.Hosts)
 	}
-	if form.Retention.ViewBars != 5000 || form.Retention.Defaults["1m"] != "7d" || len(form.Retention.Frequencies) != 10 {
+	if form.Retention.ViewBars != 10000 || form.Retention.Defaults["1m"] != "8d" || len(form.Retention.Frequencies) != 10 {
 		t.Fatalf("保留期 = %+v", form.Retention)
 	}
 	names := map[string]string{}
@@ -261,7 +261,7 @@ func TestEditorSavesFormChangesLineByLine(t *testing.T) {
 	if manifest.StorageRetention.ViewBars != 5500 || manifest.StorageRetention.Defaults["1m"] != "14d" || manifest.LocalLogs.MaxSizeMB != 100 || manifest.LocalLogs.BackupCount != 3 {
 		t.Fatalf("保留期或日志没有写对: %+v %+v", manifest.StorageRetention, manifest.LocalLogs)
 	}
-	if _, ok := manifest.StorageRetention.Spaces["stockcn"]["1m"]; ok || manifest.StorageRetention.Spaces["stockcn"]["5m"] != "240d" {
+	if _, ok := manifest.StorageRetention.Spaces["stockcn"]["1m"]; ok || manifest.StorageRetention.Spaces["stockcn"]["5m"] != "300d" {
 		t.Fatalf("留空的格子应删掉，其余不变: %+v", manifest.StorageRetention.Spaces["stockcn"])
 	}
 	// 只改目标行：注释和没动的设置原样保留。

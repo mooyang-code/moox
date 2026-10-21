@@ -259,6 +259,10 @@ func evaluate(f facts, remote bool) ProbeReport {
 	} else if memoryGB > 0 {
 		add("内存", CheckWarn, fmt.Sprintf("%.0f GB，建议 %d GB 以上", memoryGB, factorMinMemoryGB))
 	}
+	if memoryGB > 0 {
+		// 进程内存预算 = 总内存 × 60%；窗口上限、单次计算上限由引擎自己的 tune 命令按公式写入 engine.yaml。
+		add("内存预算", CheckOK, fmt.Sprintf("因子引擎进程预算约 %.0f GB（总内存的 60%%）；安装后执行 moox-factor-engine tune --write 写入窗口与计算上限的建议值", memoryGB*0.6))
+	}
 
 	diskGB := float64(f.int("disk_bytes")) / (1 << 30)
 	if kb := f.int("disk_kb"); kb > 0 {

@@ -522,7 +522,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		out.StorageView.CapacityCheckJitter = jitter.String()
 	}
 	if !md.IsDefined("storage_view", "max_view_file_bytes") {
-		out.StorageView.MaxViewFileBytes = 1 << 30
+		out.StorageView.MaxViewFileBytes = storagepolicy.DefaultMaxViewFileBytes
 	}
 	if !md.IsDefined("collector_retention", "maintenance_interval") {
 		out.CollectorRetention.MaintenanceInterval = "1m"

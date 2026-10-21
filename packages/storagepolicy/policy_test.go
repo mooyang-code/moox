@@ -33,14 +33,14 @@ func TestResolvePrefersSpaceOverride(t *testing.T) {
 	cases := []struct {
 		space, freq, want, source string
 	}{
-		{"crypto", "1m", "168h", SourceDefault},
+		{"crypto", "1m", "192h", SourceDefault},
 		{"crypto", "1d", Forever, SourceDefault},
-		{"stockcn", "1m", "1080h", SourceSpace},
-		{"stockhk", "1m", "720h", SourceSpace},
+		{"stockcn", "1m", "1440h", SourceSpace},
+		{"stockhk", "1m", "1080h", SourceSpace},
 		{"stockcn", "1d", Forever, SourceDefault},
-		{"mooxsys", "30s", "48h", SourceDefault},
-		{"mooxsys", "1m", "168h", SourceSpace},
-		{"newspace", "5m", "720h", SourceDefault},
+		{"mooxsys", "30s", "90h", SourceDefault},
+		{"mooxsys", "1m", "192h", SourceSpace},
+		{"newspace", "5m", "840h", SourceDefault},
 	}
 	for _, tc := range cases {
 		period, source, err := retention.Resolve(tc.space, tc.freq)
