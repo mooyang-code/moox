@@ -266,7 +266,7 @@ CloudNode 用到的接口及其默认限频（[云函数 API 概览](https://clo
 - **`fail` 计数而不是布尔标志**（§8.2）：同一 tick 内对账之前的步骤（启用、升级）失败时，不能被本轮的健康恢复清掉。
 - **租约被占用的失败原因名为 `publish_lease_held`**，并删除从未使用的 `submit_timeout`（白名单与 Monitor 文案一并删）。
 - **限流器键用云账号标识**：`TencentCredential` 增加 `AccountID`，由凭证解析器从云账号带出；没有账号标识时退回 `secret:<SecretID>`。
-- **已知但不在本计划内**：Collector 的 `fail("package" | "store" | "storage" | "dataset" | "activity" | "preflight", …)` 同样不在白名单里，会被归为 `cloudnode`，Monitor 上仍显示「CloudNode 服务调用失败」。需要时另行把它们加入白名单并给出专属文案。
+- **已知但不在本计划内**（已在第 15 节后续处理）：Collector 的 `fail("package" | "store" | "storage" | "dataset" | "activity" | "preflight", …)` 不在白名单里会被归为 `cloudnode`；补采路径一返回就释放租约。
 - **在途作业按年龄决定是否影响对账成功**（§8.2）：最老在途作业未超过 `pendingJobWarnAge`（10 分钟）时照常宣布成功，超龄才停止刷新成功时间。
 - **Monitor 的租约宽限只在「被占用」是唯一失败原因时生效**（§8.4）：多个 Collector 实例上报不同原因时，真实故障不能被另一个实例的租约冲突盖住，文案也以真实故障为准；普通 pending 宽限同样不能盖过已超期或起始时间未知的租约失败。
 - **升级等待也要收尾**（§8.2）：`EnableAll` 遇到 `errCodeUpgradePending` 时管理器会跳过本 tick 的对账，因此在 `EnableAll` 内补一次 `finishRound`，并把升级等待视为非失败。
@@ -295,3 +295,17 @@ CloudNode 用到的接口及其默认限频（[云函数 API 概览](https://clo
 | `upgradeBeforeEnable` 读回失败被包装成升级等待却没有记失败，`EnableAll` 的收尾会把既有失败原因误清 | 采纳：读回失败路径调用 `fail("cloudnode", …)`，并补一个真正经过 `EnableAll` 的测试 |
 | 多原因时文案仍可能指向租约超期 | 采纳：只有租约冲突是唯一原因才用租约文案，否则回退到通用提示 |
 | 真实计时的并发测试里 106 次的窗口断言仍可能因调度暂停失败 | 采纳：窗口断言只放在假时钟测试里，并发测试只验证共桶与总体耗时 |
+
+## 15. 后续处理（2026-10-21）
+
+本计划发布后处理了两个“已知但不在本计划内”的问题（分支 `fix/coordination-reasons-and-backfill-lease`）：
+
+1. **失败原因归类**：白名单扩为 `cloudnode`、`environment`、`rules`、`store`、`storage`、`package`、`dataset`、`activity`、`preflight`、`capacity`、`publish_lease_held`，
+   删除没有任何调用点的 `symbols`、`dns`、`task_instances`。Monitor 用有序的 `coordinationFailureTexts` 为每个原因给出文案，多个原因同时出现时按表中优先级取第一个。
+   两个单测守住一致性：一个扫描 `fail(...)` 调用点，保证用到的原因都在白名单、白名单里没有死条目；一个读取 Monitor 源码，保证每个原因都有专属文案。
+2. **补采路径的租约**：新增 `runBackfillJob` / `settleBackfillJob`。作业未结束（或读取结果出错）时保留补采租约并登记在途，不重复提交，下一次调用先结算并续租；
+   补采租约已持有时复用并续租。`clearStale` 的补采分支改走同一入口，不再在 `!terminal` 时悄悄遗留租约。
+   仍然没有后台续租：没有后续调用时租约按 2 分钟 TTL 自行过期。
+3. **Codex 审查（对本次改动）**：续租遇到通信错误不再丢弃仍然有效的租约句柄（只有明确的 `ErrCollectorPublishLeaseStale` 才丢弃）；读取作业结果失败的分支也续租；
+   增加 30 分钟的放弃期限，避免作业记录丢失（例如 `NOT_FOUND`）时永久挡住该函数的补采。放弃不是“超时就重提”：先停止续租、移除记录，再按云端实际状态判断，旧作业由新租约的围栏令牌隔离。
+   未采纳：无。
