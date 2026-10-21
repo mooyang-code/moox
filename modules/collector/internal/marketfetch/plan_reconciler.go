@@ -1061,8 +1061,8 @@ func (r *PlanReconciler) datasetModes(ctx context.Context, groups []TaskGroup, p
 		}
 		if executor, ok := current[group.DatasetID]; ok {
 			switch executor {
-			case PlanExecutorStream:
-				mode.Mode = IngestStream
+			case PlanExecutorStreaming:
+				mode.Mode = IngestStreaming
 			case PlanExecutorLocal:
 				mode = DatasetMode{Mode: IngestPull, Executor: PlanExecutorLocal}
 			default:
@@ -1170,8 +1170,8 @@ func appliedModes(modes map[string]DatasetMode, previous map[string]*PlanDataset
 	for _, state := range previous {
 		mode := result[state.DatasetID]
 		switch state.IngestOrSCF() {
-		case PlanExecutorStream:
-			mode.Mode = IngestStream
+		case PlanExecutorStreaming:
+			mode.Mode = IngestStreaming
 		case PlanExecutorLocal:
 			mode.Mode, mode.Executor = IngestPull, PlanExecutorLocal
 		default:

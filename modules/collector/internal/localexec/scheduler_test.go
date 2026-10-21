@@ -25,7 +25,7 @@ func TestSchedulerRunsLocalPlansWithoutProcessEnvironment(t *testing.T) {
 		Market:   marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
 		Datasets: []marketfetch.PlanDataset{{DatasetID: "bars_1m", Frequency: "1m", LatenessS: 600, Copies: []marketfetch.PlanCopy{{From: 1000, Hash: "h", Count: 250, Subjects: subjects}}}}}
 	require.NoError(t, plan.Validate())
-	scheduler.Apply([]stream.PlanItem{{Executor: marketfetch.PlanExecutorStream, Plan: plan}, {Executor: marketfetch.PlanExecutorLocal, Plan: plan}})
+	scheduler.Apply([]stream.PlanItem{{Executor: marketfetch.PlanExecutorStreaming, Plan: plan}, {Executor: marketfetch.PlanExecutorLocal, Plan: plan}})
 	require.Len(t, scheduler.plans, 1)
 
 	t.Setenv("MOOX_SPACE_ID", "")

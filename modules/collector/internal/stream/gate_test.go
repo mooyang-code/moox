@@ -49,7 +49,7 @@ type gateHarness struct {
 var gateMarket = marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "swap", Provider: "binance", SourceID: "swap_http", MarketType: "swap"}
 
 func testStreamPlan(frequency string, lateness int, copies ...marketfetch.PlanCopy) (*marketfetch.Plan, *marketfetch.PlanDataset) {
-	plan := &marketfetch.Plan{V: 1, Executor: marketfetch.PlanExecutorStream, Market: gateMarket, Fetch: marketfetch.PlanFetch{Concurrency: 1},
+	plan := &marketfetch.Plan{V: 1, Executor: marketfetch.PlanExecutorStreaming, Market: gateMarket, Fetch: marketfetch.PlanFetch{Concurrency: 1},
 		Datasets: []marketfetch.PlanDataset{{DatasetID: "bars_" + frequency, Frequency: frequency, LatenessS: lateness, Copies: copies}}}
 	return plan, &plan.Datasets[0]
 }

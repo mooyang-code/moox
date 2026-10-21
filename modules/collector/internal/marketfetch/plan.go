@@ -91,9 +91,9 @@ const (
 
 // 计划执行端。SCF 函数的计划不写 executor（函数按未知字段拒绝解码），推送与本地执行端的计划写明自己的类型。
 const (
-	PlanExecutorSCF    = "scf"
-	PlanExecutorStream = "stream"
-	PlanExecutorLocal  = "local"
+	PlanExecutorSCF       = "scf"
+	PlanExecutorStreaming = "stream"
+	PlanExecutorLocal     = "local"
 )
 
 // MinStandbyMS 是备援延迟的下限：正常请求的首字节在几十到几百毫秒，延迟太短会让几乎所有请求都发出备援。
@@ -204,7 +204,7 @@ func (p *Plan) Validate() error {
 	maxItems := MaxPlanItems
 	switch p.Executor {
 	case "":
-	case PlanExecutorStream, PlanExecutorLocal:
+	case PlanExecutorStreaming, PlanExecutorLocal:
 		maxItems = MaxStreamPlanItems
 	default:
 		return fmt.Errorf("unsupported plan executor %q", p.Executor)

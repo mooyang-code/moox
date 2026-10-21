@@ -553,7 +553,7 @@ func (noFunctions) EnsureBackfillFunction(context.Context, string) (string, erro
 
 // 数据集走推送、补采执行端为 local：从推送项解析市场与交易所符号，调本地执行端，不建补采函数。
 func TestBackfillUsesTheLocalExecutorForStreamDatasets(t *testing.T) {
-	backfiller, local, _, base := newBackfillFixtureWithModes(t, map[string]marketfetch.DatasetMode{"ds": {Mode: marketfetch.IngestStream, Executor: marketfetch.PlanExecutorLocal}})
+	backfiller, local, _, base := newBackfillFixtureWithModes(t, map[string]marketfetch.DatasetMode{"ds": {Mode: marketfetch.IngestStreaming, Executor: marketfetch.PlanExecutorLocal}})
 	backfiller.Invoker, backfiller.Local = failingInvoker{}, local
 	backfiller.Functions = func(string) FunctionProvider { return noFunctions{} }
 	backfiller.Executor = func(context.Context, string, string) (string, error) { return marketfetch.PlanExecutorLocal, nil }

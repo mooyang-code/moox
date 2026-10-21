@@ -294,7 +294,7 @@ func (c *Config) validateSCFPlan() error {
 	}
 	for space, override := range plan.Spaces {
 		mode := plan.defaultModeFor(space)
-		if (mode.Mode != marketfetch.IngestStream && mode.Mode != marketfetch.IngestPull) || (mode.Executor != marketfetch.PlanExecutorSCF && mode.Executor != marketfetch.PlanExecutorLocal) {
+		if (mode.Mode != marketfetch.IngestStreaming && mode.Mode != marketfetch.IngestPull) || (mode.Executor != marketfetch.PlanExecutorSCF && mode.Executor != marketfetch.PlanExecutorLocal) {
 			return fmt.Errorf("scf_plan.spaces[%s]: default_ingest 必须是 stream 或 pull，default_executor 必须是 scf 或 local（收到 %q、%q）", space, override.DefaultIngest, override.DefaultExecutor)
 		}
 	}
