@@ -152,19 +152,97 @@ func TestBackfillInFlightQueryErrorKeepsTheJobTracked(t *testing.T) {
 	require.Equal(t, 1, h.cloud.submits)
 }
 
-func TestBackfillRenewFailureWhileSettlingDoesNotAcquireANewLease(t *testing.T) {
+func TestBackfillTransientRenewFailureKeepsTheStillValidLease(t *testing.T) {
 	h, r, _ := backfillHarness(t)
 	h.cloud.runningAll = true
 	_, err := r.EnsureBackfillFunction(context.Background(), "spot")
 	require.ErrorIs(t, err, errBackfillJobRunning)
 	acquired := h.cloud.leaseCalls
+	lease := r.backfillLease
+	require.NotNil(t, lease)
 
-	// 结算在途作业时续租失败（租约已过期或被取代）：只记日志，不去申请新租约，也不会对同一函数重复提交。
+	// 续租遇到通信错误：租约可能仍然有效，丢掉句柄后 Admin 会拒绝重新申请（租约未过期），在途作业也失去续租保护。
+	h.cloud.renewErr = errors.New("rpc: response lost")
+	_, err = r.ensureBackfillLease(context.Background())
+	require.ErrorContains(t, err, "response lost")
+	require.Same(t, lease, r.backfillLease, "通信错误时保留句柄")
+	require.Equal(t, acquired, h.cloud.leaseCalls, "不去申请新租约")
+
+	// 恢复后继续续租同一个租约。
+	h.cloud.renewErr = nil
+	got, err := r.ensureBackfillLease(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, lease.LeaseID, got.LeaseID)
+
+	// 明确得知租约已过期或被取代：丢弃并重新申请。
 	h.cloud.renewErr = scfinvoker.ErrCollectorPublishLeaseStale
-	_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+	fresh, err := r.ensureBackfillLease(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, acquired+1, h.cloud.leaseCalls)
+	require.NotNil(t, fresh)
+}
+
+func TestBackfillSettlingKeepsTheLeaseAliveEvenWhenTheJobQueryFails(t *testing.T) {
+	h, r, name := backfillHarness(t)
+	h.cloud.runningAll = true
+	_, err := r.EnsureBackfillFunction(context.Background(), "spot")
 	require.ErrorIs(t, err, errBackfillJobRunning)
-	require.Equal(t, 1, h.cloud.submits)
-	require.Equal(t, acquired, h.cloud.leaseCalls, "结算在途作业时只续租，失败只记日志，不去申请新租约")
+	renewsBefore := h.cloud.renews
+
+	// 作业结果持续读不到：作业仍可能在运行，每次重试都要续租，否则超过租约 TTL 后租约过期。
+	h.cloud.runningAll = false
+	h.cloud.batchErr = errors.New("get batch results: gateway unavailable")
+	for i := 0; i < 3; i++ {
+		_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+		require.ErrorContains(t, err, "gateway unavailable")
+	}
+	require.Equal(t, renewsBefore+3, h.cloud.renews)
+	require.Contains(t, r.backfillJobs, name)
+	require.NotNil(t, r.backfillLease)
+	require.Zero(t, h.cloud.releases)
+}
+
+func TestBackfillGivesUpOnAJobThatNeverReachesATerminalState(t *testing.T) {
+	// 放弃之后一切以云端实际状态为准：函数已经存在就直接就绪，不重复提交；函数不存在才重新创建。
+	for name, tc := range map[string]struct {
+		functionExists bool
+		wantSubmits    int
+	}{
+		"the function exists in the cloud":     {functionExists: true, wantSubmits: 1},
+		"the function is missing in the cloud": {functionExists: false, wantSubmits: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, r, fn := backfillHarness(t)
+			h.cloud.runningAll = true
+			_, err := r.EnsureBackfillFunction(context.Background(), "spot")
+			require.ErrorIs(t, err, errBackfillJobRunning)
+			first := r.backfillJobs[fn].id
+			if !tc.functionExists {
+				delete(h.cloud.backfill, fn) // 作业记录丢失，函数也没有创建出来
+			}
+
+			// 放弃期限之内：一直挡住，不重复提交。
+			h.now = h.now.Add(backfillJobGiveUpAge - time.Minute)
+			_, err = r.EnsureBackfillFunction(context.Background(), "spot")
+			require.ErrorIs(t, err, errBackfillJobRunning)
+			require.Equal(t, 1, h.cloud.submits)
+
+			// 超过 CloudNode 单项预算（16 分钟）很久仍无法确认终态：不再等，释放租约、移除在途记录，按云端实际状态判断；
+			// 旧作业即使还活着，也会被新租约的围栏令牌隔离。
+			h.now = h.now.Add(2 * time.Minute)
+			got, err := r.EnsureBackfillFunction(context.Background(), "spot")
+			require.Equal(t, tc.wantSubmits, h.cloud.submits)
+			require.Equal(t, 1, h.cloud.releases, "放弃旧作业时释放了它的租约")
+			if tc.functionExists {
+				require.NoError(t, err)
+				require.Equal(t, fn, got)
+				require.Empty(t, r.backfillJobs)
+			} else {
+				require.ErrorIs(t, err, errBackfillJobRunning, "重新提交的新作业同样停在运行中")
+				require.NotEqual(t, first, r.backfillJobs[fn].id)
+			}
+		})
+	}
 }
 
 func TestBackfillLeaseHeldByRealtimeIsRetriedLaterWithoutTrackingAJob(t *testing.T) {

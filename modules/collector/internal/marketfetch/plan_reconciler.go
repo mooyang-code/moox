@@ -1862,6 +1862,11 @@ func (r *PlanReconciler) ensureBackfillLease(ctx context.Context) (*scfinvoker.C
 		if err == nil {
 			return renewed, nil
 		}
+		// 只有明确得知租约已过期或被取代才丢弃句柄；通信错误时租约可能仍然有效，丢掉句柄后 Admin 会拒绝重新申请
+		// （租约未过期），在途作业也失去续租保护。保留句柄，把错误交给调用方，下次再试。
+		if !errors.Is(err, scfinvoker.ErrCollectorPublishLeaseStale) {
+			return nil, err
+		}
 		r.backfillLease = nil
 	}
 	if r.backfillHolder == "" {
@@ -1944,25 +1949,36 @@ func (r *PlanReconciler) runBackfillJob(ctx context.Context, name, kind, running
 	return items, nil
 }
 
+// backfillJobGiveUpAge 是在途补采作业的放弃期限。CloudNode 单个节点批次项的总预算是 16 分钟，超过它仍无法确认终态
+// （作业记录丢失、状态一直读不到）就不再等：停止续租、移除在途记录，再按云端实际状态判断下一步。
+// 旧作业即使还活着也会被新租约的围栏令牌隔离；不能更早放弃，否则会对仍在运行的作业重复提交。
+const backfillJobGiveUpAge = 30 * time.Minute
+
 // settleBackfillJob 结算函数上一次调用留下的在途作业，调用方须已持有 backfillMu。
-// busy 为 true 表示作业仍在运行（顺带续租，防止排队中的作业因租约过期失败）；到终态就移出在途集合，
-// 没有其他在途作业时释放租约。作业结果不在这里判断：调用方随后读取云端实际状态，缺失就重建，失败就重试。
+// busy 为 true 表示作业仍在运行或结果暂时读不到（都会尽力续租，防止排队中的作业因租约过期失败）；
+// 到终态就移出在途集合，没有其他在途作业时释放租约。作业结果不在这里判断：调用方随后读取云端实际状态，
+// 缺失就重建，失败就重试。超过放弃期限仍无法确认终态时见 backfillJobGiveUpAge。
 func (r *PlanReconciler) settleBackfillJob(ctx context.Context, name string) (busy bool, err error) {
 	job, ok := r.backfillJobs[name]
 	if !ok {
 		return false, nil
 	}
+	age := r.now().Sub(job.at)
+	if age > backfillJobGiveUpAge {
+		log.WarnContextf(ctx, "collector backfill gives up waiting for a cloud job space=%s function=%s job=%s kind=%s age=%s", r.SpaceID, name, job.id, job.kind, age.Round(time.Second))
+		delete(r.backfillJobs, name)
+		r.releaseBackfillLeaseIfIdle(ctx)
+		return false, nil
+	}
 	_, terminal, err := r.checkJob(ctx, job.id)
 	if err != nil {
+		// 结果暂时读不到：作业仍可能在运行，同样要续租，否则持续重试超过租约 TTL 后租约过期。
+		r.keepBackfillLeaseAlive(ctx, name)
 		return true, err
 	}
 	if !terminal {
-		if r.backfillLease != nil {
-			if _, renewErr := r.renewBackfillLease(ctx); renewErr != nil {
-				log.WarnContextf(ctx, "collector backfill renew publish lease for in-flight job space=%s function=%s: %v", r.SpaceID, name, renewErr)
-			}
-		}
-		if age := r.now().Sub(job.at); age > pendingJobWarnAge {
+		r.keepBackfillLeaseAlive(ctx, name)
+		if age > pendingJobWarnAge {
 			log.WarnContextf(ctx, "collector backfill cloud job is still not finished space=%s function=%s job=%s kind=%s age=%s", r.SpaceID, name, job.id, job.kind, age.Round(time.Second))
 		}
 		return true, nil
@@ -1970,4 +1986,17 @@ func (r *PlanReconciler) settleBackfillJob(ctx context.Context, name string) (bu
 	delete(r.backfillJobs, name)
 	r.releaseBackfillLeaseIfIdle(ctx)
 	return false, nil
+}
+
+// keepBackfillLeaseAlive 尽力续租在途补采作业持有的租约：失败只记日志，明确得知租约已失效时丢弃句柄。
+func (r *PlanReconciler) keepBackfillLeaseAlive(ctx context.Context, name string) {
+	if r.backfillLease == nil {
+		return
+	}
+	if _, err := r.renewBackfillLease(ctx); err != nil {
+		if errors.Is(err, scfinvoker.ErrCollectorPublishLeaseStale) {
+			r.backfillLease = nil
+		}
+		log.WarnContextf(ctx, "collector backfill renew publish lease for in-flight job space=%s function=%s: %v", r.SpaceID, name, err)
+	}
 }
