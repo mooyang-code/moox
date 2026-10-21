@@ -418,8 +418,8 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []string{"stockcn"}, cfg.fetchPlanSpaces(), "只配置 stockcn 也要启动管理器")
 		require.Equal(t, 40, cfg.SCFPlan.symbolsPerFunction("stockcn"))
-		require.Equal(t, 8, cfg.SCFPlan.fetchFor("stockcn").Concurrency)
-		require.Equal(t, 35000, cfg.SCFPlan.fetchFor("stockcn").StaggerMS)
+		require.Equal(t, 8, cfg.SCFPlan.fetchFor("stockcn", "").Concurrency)
+		require.Equal(t, 35000, cfg.SCFPlan.fetchFor("stockcn", "").StaggerMS)
 	})
 	t.Run("several spaces", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n  stockcn: {equity: [ap-nanjing]}\n",
@@ -444,7 +444,7 @@ func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 	// 只写了 rps：并发、错峰等沿用 stockcn 的默认值，不会变成零。
 	plan := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {Fetch: &SCFPlanFetchConfig{RPS: 10}}}}
 	plan.mergeSpaceDefaults(defaults.Spaces)
-	fetch := plan.fetchFor("stockcn")
+	fetch := plan.fetchFor("stockcn", "")
 	require.Equal(t, 10, fetch.RPS)
 	require.Equal(t, 8, fetch.Concurrency)
 	require.Equal(t, 35000, fetch.StaggerMS)
@@ -455,7 +455,7 @@ func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 	// 没有内置默认的空间只写部分字段：从全局默认补齐。
 	other := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"futures": {Fetch: &SCFPlanFetchConfig{Concurrency: 4}}}}
 	other.mergeSpaceDefaults(defaults.Spaces)
-	got := other.fetchFor("futures")
+	got := other.fetchFor("futures", "")
 	require.Equal(t, 4, got.Concurrency)
 	require.Equal(t, defaults.Fetch.RPS, got.RPS)
 	require.Equal(t, defaults.Fetch.RequestTimeoutMS, got.RequestTimeoutMS)
@@ -463,17 +463,17 @@ func TestPartialFetchOverridesInheritTheRemainingFields(t *testing.T) {
 
 func TestStandbyFetchOptionsAreOffByDefaultAndInheritedFromTheGlobalFetch(t *testing.T) {
 	defaults := defaultSCFPlan()
-	require.Zero(t, defaults.fetchFor("crypto").StandbyMS, "默认不启用备援")
-	require.False(t, defaults.fetchFor("crypto").ConnReuse, "默认不复用连接")
+	require.Zero(t, defaults.fetchFor("crypto", "").StandbyMS, "默认不启用备援")
+	require.False(t, defaults.fetchFor("crypto", "").ConnReuse, "默认不复用连接")
 
 	plan := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"crypto": {Fetch: &SCFPlanFetchConfig{StandbyMS: 800, StandbyHourOnly: true, ConnReuse: true}}}}
 	plan.mergeSpaceDefaults(defaults.Spaces)
-	fetch := plan.fetchFor("crypto")
+	fetch := plan.fetchFor("crypto", "")
 	require.Equal(t, 800, fetch.StandbyMS)
 	require.True(t, fetch.StandbyHourOnly)
 	require.True(t, fetch.ConnReuse)
 	require.Equal(t, defaults.Fetch.Concurrency, fetch.Concurrency, "只写这几项时其余拉取参数沿用全局默认")
-	require.Zero(t, plan.fetchFor("stockcn").StandbyMS, "其他空间不受影响")
+	require.Zero(t, plan.fetchFor("stockcn", "").StandbyMS, "其他空间不受影响")
 }
 
 // 线上配置只写备援与连接复用时，其余拉取参数沿用内置默认值（解码落在默认配置上，严格解析也认这三个键）。
@@ -482,7 +482,7 @@ func TestScfPlanFetchYAMLWithStandbyAndConnReuseKeepsDefaults(t *testing.T) {
 	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    standby_ms: 800\n    standby_hour_only: true\n    conn_reuse: true\n"))
 	decoder.KnownFields(true)
 	require.NoError(t, decoder.Decode(&cfg))
-	fetch := cfg.SCFPlan.fetchFor("crypto")
+	fetch := cfg.SCFPlan.fetchFor("crypto", "")
 	require.Equal(t, 800, fetch.StandbyMS)
 	require.True(t, fetch.StandbyHourOnly)
 	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
@@ -496,7 +496,7 @@ func TestScfPlanFetchYAMLStaggerOverride(t *testing.T) {
 	decoder := yaml.NewDecoder(strings.NewReader("scf_plan:\n  fetch:\n    stagger_ms: 500\n    conn_reuse: true\n"))
 	decoder.KnownFields(true)
 	require.NoError(t, decoder.Decode(&cfg))
-	fetch := cfg.SCFPlan.fetchFor("crypto")
+	fetch := cfg.SCFPlan.fetchFor("crypto", "")
 	require.Equal(t, 500, fetch.StaggerMS)
 	require.True(t, fetch.ConnReuse)
 	require.Equal(t, defaultSCFPlan().Fetch.Concurrency, fetch.Concurrency)
@@ -521,4 +521,36 @@ func TestLoadTheConfigRenderedByTheCLI(t *testing.T) {
 	route, err := cfg.scfPlanAccessEnvironmentRoute("ap-hongkong")
 	require.NoError(t, err)
 	require.Equal(t, "172.19.32.13:11004", route.Address)
+}
+
+// 按市场的覆盖只影响该市场，未写的字段沿用空间与全局值；内置默认给 crypto 合约 8 秒、现货 3 秒后取数、合约 SCF 截止 20 秒。
+func TestPerMarketFetchOverridesOnlyTheirMarket(t *testing.T) {
+	defaults := defaultSCFPlan()
+	plan := SCFPlanConfig{Fetch: defaults.Fetch, Spaces: map[string]SCFPlanSpaceConfig{"crypto": {
+		Fetch:   &SCFPlanFetchConfig{RPS: 30},
+		Markets: map[string]SCFPlanMarketConfig{"swap": {Fetch: &SCFPlanFetchConfig{Concurrency: 7}}},
+	}}}
+	plan.mergeSpaceDefaults(defaults.Spaces)
+	swap, spot := plan.fetchFor("crypto", "swap"), plan.fetchFor("crypto", "spot")
+	require.Equal(t, 7, swap.Concurrency)
+	require.Equal(t, 30, swap.RPS, "市场没写的字段沿用空间值")
+	require.Equal(t, 8000, swap.NotBeforeMS, "内置合约推迟补齐")
+	require.Equal(t, defaults.Fetch.Concurrency, spot.Concurrency, "现货不受合约覆盖影响")
+	require.Equal(t, 3000, spot.NotBeforeMS)
+	require.Zero(t, plan.fetchFor("crypto", "").NotBeforeMS, "空间级参数不带市场推迟")
+	require.Equal(t, map[string]int{"swap": 20}, plan.marketLateness("crypto"))
+	require.Zero(t, plan.fetchFor("stockcn", "equity").NotBeforeMS)
+}
+
+func TestPerMarketFetchYAMLIsStrictlyParsed(t *testing.T) {
+	t.Setenv(storageAuthSecretEnv, "test-storage-primary-secret")
+	cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing], swap: [ap-nanjing]}\n",
+		"    crypto: {package_name: pkg-crypto, namespace: ns-crypto, markets: {swap: {fetch: {not_before_ms: 9000}, lateness_s: 25}}}\n")))
+	require.NoError(t, err)
+	require.Equal(t, 9000, cfg.SCFPlan.fetchFor("crypto", "swap").NotBeforeMS)
+	require.Equal(t, 3000, cfg.SCFPlan.fetchFor("crypto", "spot").NotBeforeMS, "未写的市场仍用内置默认")
+	require.Equal(t, 25, cfg.SCFPlan.marketLateness("crypto")["swap"])
+	_, err = Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n",
+		"    crypto: {package_name: pkg-crypto, markets: {swap: {unknown: 1}}}\n")))
+	require.Error(t, err)
 }

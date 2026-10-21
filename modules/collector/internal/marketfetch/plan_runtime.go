@@ -93,7 +93,7 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 	}
 	defer closeGateway()
 	defer h.reportMetrics(ctx)
-	stagger := plan.StaggerDelay(functionName)
+	stagger := plan.StartDelay(functionName, entry, scheduled.UTC().Truncate(time.Minute))
 	for index := range planned {
 		planned[index].Request.TimerLateMS = int(entry.Sub(scheduled).Milliseconds())
 		planned[index].Request.StaggerMS = int(stagger.Milliseconds())

@@ -27,8 +27,11 @@ type PlanOptions struct {
 	Markets            map[string][]string
 	SymbolsPerFunction int
 	Fetch              PlanFetch
-	// DefaultLatenessS 是任务没有指定允许迟到时间时的空间默认值。
+	// MarketFetch 是按市场类型（小写）覆盖的拉取参数，没有的市场用 Fetch。
+	MarketFetch map[string]PlanFetch
+	// DefaultLatenessS 是任务没有指定允许迟到时间时的空间默认值；MarketLatenessS 按市场类型覆盖（拉取模式）。
 	DefaultLatenessS int
+	MarketLatenessS  map[string]int
 	// AssumedEgressIPs 是函数出口 IP 个数的估计值，只用于频控估算（保守默认 1）。
 	AssumedEgressIPs int
 }
@@ -122,6 +125,9 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		dataset := state.Datasets[datasetKey]
 		if dataset == nil {
 			lateness := group.AllowedLatenessSeconds
+			if lateness <= 0 {
+				lateness = opts.MarketLatenessS[strings.ToLower(group.MarketType)]
+			}
 			if lateness <= 0 {
 				lateness = opts.DefaultLatenessS
 			}
@@ -222,7 +228,7 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 				continue
 			}
 			sort.Strings(subjects)
-			plan := &Plan{V: 1, Fetch: opts.Fetch, Market: PlanMarket{
+			plan := &Plan{V: 1, Fetch: opts.fetchFor(info.sample.MarketType), Market: PlanMarket{
 				MarketID: info.sample.MarketID, InstrumentType: info.sample.InstrumentType, Provider: info.sample.Provider,
 				SourceID: info.sample.SourceID, MarketType: info.sample.MarketType,
 			}}
@@ -258,6 +264,14 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 		}
 	}
 	return state, nil
+}
+
+// fetchFor 返回某市场类型的拉取参数：有按市场的覆盖就用覆盖，否则用空间值。
+func (o PlanOptions) fetchFor(marketType string) PlanFetch {
+	if fetch, ok := o.MarketFetch[strings.ToLower(marketType)]; ok {
+		return fetch
+	}
+	return o.Fetch
 }
 
 // previousAssignment 从已生效的函数还原“标的 → 函数名”。

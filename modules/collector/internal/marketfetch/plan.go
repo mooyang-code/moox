@@ -61,7 +61,15 @@ type PlanFetch struct {
 	StandbyHourOnly bool `json:"standby_hour_only,omitempty"`
 	// ConnReuse 为真时，函数进程在多次调用之间复用到行情源的 HTTP 连接（上一分钟留下的空闲连接下一分钟直接用）。
 	ConnReuse bool `json:"conn_reuse,omitempty"`
+	// NotBeforeMS 是相对收盘的最早取数时刻（毫秒）：错峰等待之后还要等到收盘 + NotBeforeMS 才取数，0 表示不限制。
+	NotBeforeMS int `json:"not_before_ms,omitempty"`
 }
+
+// MinNotBeforeMS、MaxNotBeforeMS 是最早取数时刻的取值范围：小于 1 秒没有意义，超过 12 秒就挤占了提交与重试的时间。
+const (
+	MinNotBeforeMS = 1000
+	MaxNotBeforeMS = 12000
+)
 
 // MinStandbyMS 是备援延迟的下限：正常请求的首字节在几十到几百毫秒，延迟太短会让几乎所有请求都发出备援。
 const MinStandbyMS = 200
@@ -161,6 +169,9 @@ func (p *Plan) Validate() error {
 	}
 	if f.StandbyMS != 0 && (f.StandbyMS < MinStandbyMS || f.StandbyMS > MaxStandbyMS) {
 		return fmt.Errorf("plan fetch.standby_ms must be 0 or between %d and %d", MinStandbyMS, MaxStandbyMS)
+	}
+	if f.NotBeforeMS != 0 && (f.NotBeforeMS < MinNotBeforeMS || f.NotBeforeMS > MaxNotBeforeMS) {
+		return fmt.Errorf("plan fetch.not_before_ms must be 0 or between %d and %d", MinNotBeforeMS, MaxNotBeforeMS)
 	}
 	if len(p.Datasets) == 0 {
 		return errors.New("plan requires at least one dataset")
@@ -383,6 +394,18 @@ func (p *Plan) StaggerDelay(functionName string) time.Duration {
 	}
 	sum := sha256.Sum256([]byte(functionName))
 	return base + time.Duration(int(sum[0])<<8|int(sum[1]))%time.Duration(p.Fetch.StaggerMS+1)*time.Millisecond
+}
+
+// StartDelay 返回从函数入口 entry 起到开始取数的等待时间：先错峰，再保证不早于收盘（scheduled）+ NotBeforeMS。
+// 定时器本身会晚到，所以“收盘后多少秒”必须按 scheduled 而不是入口时间算。
+func (p *Plan) StartDelay(functionName string, entry, scheduled time.Time) time.Duration {
+	delay := p.StaggerDelay(functionName)
+	if p.Fetch.NotBeforeMS > 0 {
+		if wait := scheduled.Add(time.Duration(p.Fetch.NotBeforeMS) * time.Millisecond).Sub(entry); wait > delay {
+			delay = wait
+		}
+	}
+	return max(delay, 0)
 }
 
 // StandbyFor 返回这次调用使用的备援延迟（毫秒），0 表示不启用。
