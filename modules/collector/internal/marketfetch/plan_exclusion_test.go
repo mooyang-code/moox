@@ -114,3 +114,32 @@ func TestExcludeSubjectsDropsSymbolsPairsAndEmptyGroups(t *testing.T) {
 	require.Nil(t, got[0].Pairs)
 	require.Equal(t, []string{"BTC-USDT", "ETH-USDT"}, groups[0].Subjects, "不改原分组")
 }
+
+// 全部标的都被排除是操作员的决定：不按“标的暂时取不到”保持现状，经过去抖后数据集退出计划；到期后作为新数据集回到计划。
+func TestExcludingEverySubjectRetiresTheDatasetAndExpiryBringsItBack(t *testing.T) {
+	h := newIngestHarness(t, modePullSCF, "1m")
+	exclusions := &memExclusions{}
+	h.r.Exclusions = exclusions
+	h.settle(true)
+	var all []store.SubjectExclusion
+	for _, subject := range h.symbols.subjects {
+		all = append(all, store.SubjectExclusion{SpaceID: "crypto", SubjectID: subject, ExpiresAt: h.now.Add(time.Hour)})
+	}
+	exclusions.items = all
+	// 数据集整体消失要经过去抖（与任务暂时取不到分组同一规则）才退出计划。
+	for i := 0; i < planGoneDebounce && h.open() == nil; i++ {
+		require.NoError(t, h.reconcile(h.r))
+		h.now = h.now.Add(20 * time.Second)
+	}
+	require.NotNil(t, h.open())
+	h.settle(true)
+	content := h.applied()
+	require.True(t, content.Datasets["ds_spot_1m|1m"].Gone, "数据集退出计划")
+	require.Empty(t, finalSubjects(t, content))
+
+	h.now = h.now.Add(time.Hour)
+	h.settle(true)
+	content = h.applied()
+	require.False(t, content.Datasets["ds_spot_1m|1m"].Gone)
+	require.Len(t, finalSubjects(t, content), 60)
+}

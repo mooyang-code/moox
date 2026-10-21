@@ -376,14 +376,6 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	if err != nil {
 		return r.fail("rules", err)
 	}
-	// 排除名单叠加在标签成员之上；它的变化与标的变更一样生成新计划（已打开的计划，包括进行中的交接，先推进完）。
-	if r.Exclusions != nil {
-		exclusions, err := r.Exclusions.Active(ctx, r.SpaceID, r.now())
-		if err != nil {
-			return r.fail("store", fmt.Errorf("read subject exclusions: %w", err))
-		}
-		groups = excludeSubjects(groups, exclusions)
-	}
 	managed, err := r.managedTasks(ctx)
 	if err != nil {
 		return r.fail("rules", err)
@@ -392,6 +384,15 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 		// 任务启用但标的暂时取不到：属于临时数据状况，保持现状，不能据此停掉全部函数。
 		log.WarnContextf(ctx, "collector fetch plan kept current state space=%s: enabled tasks have no usable kline groups", r.SpaceID)
 		return nil
+	}
+	// 排除名单叠加在标签成员之上，放在“标的暂时取不到”的保护之后：全部标的都被排除是操作员的决定，照常生效。
+	// 它的变化与标的变更一样生成新计划（已打开的计划，包括进行中的交接，先推进完）。
+	if r.Exclusions != nil {
+		exclusions, err := r.Exclusions.Active(ctx, r.SpaceID, r.now())
+		if err != nil {
+			return r.fail("store", fmt.Errorf("read subject exclusions: %w", err))
+		}
+		groups = excludeSubjects(groups, exclusions)
 	}
 	modes, forced, err := r.datasetModes(ctx, groups, previousDatasets)
 	if err != nil {
