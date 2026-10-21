@@ -25,7 +25,7 @@ type TaskGroup struct {
 	// 以下为定时采集计划使用：每函数标的数（0 为默认）、允许迟到时间（0 为空间默认）。
 	SymbolsPerFunction     int
 	AllowedLatenessSeconds int
-	// Ingest、Executor 是任务参数显式指定的采集方式与执行端，空表示按库里的数据集设置。
+	// Ingest、Executor 是任务参数指定的采集方式初值（数据集第一次出现时代替空间默认值），之后以库里的数据集设置为准。
 	Ingest   string
 	Executor string
 }

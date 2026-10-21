@@ -361,3 +361,16 @@ func TestHandoffLatenessWindow(t *testing.T) {
 	require.Equal(t, time.Date(2026, 10, 21, 9, 0, 25, 0, time.UTC), due)
 	require.Equal(t, time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC), deadline)
 }
+
+// 任务参数指定的采集方式是数据集初值（代替空间默认值），之后以库为准，命令照常能切换。
+func TestTaskParamsSetTheInitialIngestMode(t *testing.T) {
+	h := newIngestHarness(t, modePullSCF, "1m")
+	h.tasks.tasks[0].CollectParams = `{"provider":"binance","market_type":"spot","subject_tags":["binance_spot"],"target_dataset_id":"ds_spot_1m","frequency":"1m","ingest":"stream","executor":"local"}`
+	h.settle(true)
+	require.Equal(t, store.IngestMode{SpaceID: "crypto", DatasetID: "ds_spot_1m", Mode: IngestStream, Executor: PlanExecutorLocal, UpdatedAt: h.modes.modes["ds_spot_1m"].UpdatedAt}, h.modes.modes["ds_spot_1m"])
+	require.Equal(t, PlanExecutorStream, h.applied().Functions[streamItem].Executor)
+	h.modes.set("ds_spot_1m", IngestPull, PlanExecutorSCF, false)
+	h.now = h.now.Add(time.Minute)
+	h.settle(true)
+	require.Equal(t, PlanExecutorSCF, h.applied().Datasets["ds_spot_1m|1m"].IngestOrSCF(), "初值之后以库为准")
+}

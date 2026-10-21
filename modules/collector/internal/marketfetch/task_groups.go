@@ -198,6 +198,7 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 			Frequency: frequency, OutputFields: append([]string(nil), params.OutputFields...),
 			Subjects: symbolIDs, ExternalSymbols: externalSymbols, Pairs: pairs,
 			SymbolsPerFunction: params.SymbolsPerFunction, AllowedLatenessSeconds: params.AllowedLatenessSeconds,
+			Ingest: params.Ingest, Executor: params.Executor,
 		})
 	}
 	return result, nil
@@ -235,6 +236,12 @@ func mergeGroups(groups []TaskGroup) []TaskGroup {
 		current.Subjects = append(current.Subjects, group.Subjects...)
 		current.SymbolsPerFunction = minPositive(current.SymbolsPerFunction, group.SymbolsPerFunction)
 		current.AllowedLatenessSeconds = minPositive(current.AllowedLatenessSeconds, group.AllowedLatenessSeconds)
+		if current.Ingest == "" {
+			current.Ingest = group.Ingest
+		}
+		if current.Executor == "" {
+			current.Executor = group.Executor
+		}
 		if group.ExternalSymbols != nil {
 			if current.ExternalSymbols == nil {
 				current.ExternalSymbols = make(map[string]string)

@@ -1023,6 +1023,13 @@ func (r *PlanReconciler) datasetModes(ctx context.Context, groups []TaskGroup, p
 			continue
 		}
 		mode := r.DefaultMode
+		// 任务参数指定的初值优先于空间默认值。
+		if group.Ingest != "" {
+			mode.Mode = group.Ingest
+		}
+		if group.Executor != "" {
+			mode.Executor = group.Executor
+		}
 		if executor, ok := current[group.DatasetID]; ok {
 			switch executor {
 			case PlanExecutorStream:

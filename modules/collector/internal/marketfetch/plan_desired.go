@@ -341,19 +341,12 @@ func (m DatasetMode) PlanExecutor() string {
 	}
 }
 
-// modeOf 返回任务组的采集方式：任务参数显式指定的优先，否则取库里该数据集的方式，都没有时按拉取 + SCF。
+// modeOf 返回任务组的采集方式：库里该数据集的方式（初值见 PlanReconciler.datasetModes），没有时按拉取 + SCF。
 func (o PlanOptions) modeOf(group TaskGroup) DatasetMode {
-	mode, ok := o.Modes[group.DatasetID]
-	if !ok {
-		mode = DatasetMode{Mode: IngestPull, Executor: PlanExecutorSCF}
+	if mode, ok := o.Modes[group.DatasetID]; ok {
+		return mode
 	}
-	if group.Ingest != "" {
-		mode.Mode = group.Ingest
-	}
-	if group.Executor != "" {
-		mode.Executor = group.Executor
-	}
-	return mode
+	return DatasetMode{Mode: IngestPull, Executor: PlanExecutorSCF}
 }
 
 // latenessFor 是数据集截止时间的唯一计算入口：任务值 → 当前采集方式的默认值（推送按频率 1m 5 秒、1h 8 秒；
