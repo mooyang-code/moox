@@ -526,3 +526,50 @@ func (v *View) Latest(subject string) (int64, bool) {
 	}
 	return end, true
 }
+
+// Truncate 返回截至 endSec（含）的视图，每个序列最多保留最后 keep 根（keep <= 0 不限）；切片共用原数组，不复制。
+// 回放把整段快照做成一个视图，逐期用它截取当期的计算输入。
+func (v *View) Truncate(endSec int64, keep int) *View {
+	out := &View{Step: v.Step, Fields: v.Fields, fieldIdx: v.fieldIdx, bySubject: make(map[string][]SeriesView, len(v.bySubject))}
+	for subject, list := range v.bySubject {
+		for _, sv := range list {
+			n := sv.N
+			if sv.End(v.Step) > endSec {
+				n -= int((sv.End(v.Step) - endSec) / v.Step)
+			}
+			if n <= 0 {
+				continue
+			}
+			from := 0
+			if keep > 0 && n > keep {
+				from = n - keep
+			}
+			cut := SeriesView{Subject: sv.Subject, Tag: sv.Tag, Start: sv.Start + int64(from)*v.Step, N: n - from, Filled: sv.Filled[from:n]}
+			cut.Cols = make([][]float64, len(sv.Cols))
+			for i := range sv.Cols {
+				cut.Cols[i] = sv.Cols[i][from:n]
+			}
+			out.bySubject[subject] = append(out.bySubject[subject], cut)
+		}
+	}
+	return out
+}
+
+// ValueAt 返回标的某一序列在 atSec 那一根某个数值字段的值；没有这一根、值为 NaN 时 ok 为 false。
+func (v *View) ValueAt(subject string, field string, atSec int64) (float64, bool) {
+	idx, ok := v.fieldIdx[field]
+	if !ok {
+		return 0, false
+	}
+	for _, sv := range v.bySubject[subject] {
+		if atSec < sv.Start || atSec > sv.End(v.Step) {
+			continue
+		}
+		value := sv.Cols[idx][(atSec-sv.Start)/v.Step]
+		if math.IsNaN(value) {
+			return 0, false
+		}
+		return value, true
+	}
+	return 0, false
+}

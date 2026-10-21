@@ -63,6 +63,7 @@ type Runtime struct {
 	admit       *memadmit.Admitter
 	health      *factorhealth.State
 	life        *lifecycle.Controller
+	replays     *replayManager
 
 	// reconcileMu serializes consumer start/stop; consumerMu only guards the
 	// pointer so status and health reads never wait on EventBus I/O.
@@ -228,13 +229,18 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, r.reportMetrics)
 	r.goRun(appCtx, r.preload.Run)
 	r.goRun(appCtx, follower.Run)
+	r.replays = newReplayManager(ReplayDeps{
+		Sets: r.catalog, Source: r.storage, Columns: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
+		BatchOK: func() int { return cfg.Pipeline.WriteBatchRows },
+	})
+	r.goRun(appCtx, r.replays.Run)
 	r.goRun(appCtx, func(ctx context.Context) {
 		r.life.Recover(ctx)
 		r.life.Run(ctx, cfg.Lifecycle.Interval)
 	})
 
 	r.health.SnapshotFunc = r.healthSnapshot
-	if err := factorhealth.Register(s.Service(healthService), r.health, append(newLocalWriter(r.data, r.storage).routes(), r.lifecycleRoutes()...)...); err != nil {
+	if err := factorhealth.Register(s.Service(healthService), r.health, append(append(newLocalWriter(r.data, r.storage).routes(), r.lifecycleRoutes()...), r.replays.routes()...)...); err != nil {
 		return nil, fmt.Errorf("register factor engine health service: %w", err)
 	}
 	r.health.SetReady(true)
