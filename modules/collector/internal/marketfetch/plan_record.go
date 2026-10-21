@@ -28,15 +28,26 @@ type PlanDatasetChange struct {
 	Series      []seriesset.Series `json:"series,omitempty"`
 	Added       []string           `json:"added,omitempty"`
 	Removed     []string           `json:"removed,omitempty"`
+	// OldIngest、OldLatenessS 是交接前的执行端与截止（采集方式切换时才有）：旧执行端那一份与 WindowEnd 按旧值，
+	// Storage 属性在 drain 结束、下发最终计划之前才改成新值。
+	OldIngest    string `json:"old_ingest,omitempty"`
+	OldLatenessS int    `json:"old_lateness_s,omitempty"`
+}
+
+// HandoffLateness 判断这个数据集的截止要推迟到 drain 再改：数据集在本计划里换了执行端，且新旧截止不同。
+func (c *PlanDatasetChange) HandoffLateness() bool {
+	return c.Changed && !c.Gone && c.OldLatenessS > 0 && c.OldLatenessS != c.LatenessS
 }
 
 // PlanFunctionChange 是一份采集计划里一个函数的变更。Old 是已生效（单份）的计划，New 是目标计划；
 // New 为空表示该函数退役。
 type PlanFunctionChange struct {
-	Name    string `json:"name"`
-	Region  string `json:"region"`
-	Market  string `json:"market"`
-	Old     *Plan  `json:"old,omitempty"`
+	Name   string `json:"name"`
+	Region string `json:"region"`
+	Market string `json:"market"`
+	// Executor 为空表示 SCF 函数；stream、local 由 collector-stream 心跳确认，没有云端步骤。
+	Executor string `json:"executor,omitempty"`
+	Old      *Plan  `json:"old,omitempty"`
 	OldCron string `json:"old_cron,omitempty"`
 	New     *Plan  `json:"new,omitempty"`
 	NewCron string `json:"new_cron,omitempty"`
@@ -60,7 +71,23 @@ type FetchPlanProgress struct {
 	Finalized    map[string]bool `json:"finalized,omitempty"`
 	LoggedStart  bool            `json:"logged_start,omitempty"`
 	LoggedApply  bool            `json:"logged_apply,omitempty"`
+	// StreamStage 是要求推送与本地执行端应用的阶段（transition、final），空表示还没开始下发。
+	StreamStage string `json:"stream_stage,omitempty"`
+	// Forced 为真时不等推送与本地执行端确认（--force：旧执行端失联）。
+	Forced bool `json:"forced,omitempty"`
+	// LatenessSet 记录 drain 时已改成新截止的数据集。
+	LatenessSet map[string]bool `json:"lateness_set,omitempty"`
 }
+
+// 推送与本地执行端的计划阶段。
+const (
+	StreamStageTransition = "transition"
+	StreamStageFinal      = "final"
+	StreamStagePaused     = "paused"
+)
+
+// IsSCF 判断该项是 SCF 函数（需要云端创建、下发环境与定时器）。
+func (f *PlanFunctionChange) IsSCF() bool { return f.Executor == "" || f.Executor == PlanExecutorSCF }
 
 func (p *FetchPlanProgress) mark(set *map[string]bool, key string) {
 	if *set == nil {
@@ -228,6 +255,9 @@ func BuildPlanContent(previous map[string]*PlanFunction, previousDatasets map[st
 			change.OldHash = old.Hash
 		default:
 			change.PlanDatasetState = current.PlanDatasetState
+			if old != nil && old.IngestOrSCF() != current.IngestOrSCF() {
+				change.OldIngest, change.OldLatenessS = old.IngestOrSCF(), old.LatenessS
+			}
 			if old == nil || old.Hash != current.Hash {
 				change.HashChanged, change.Changed = true, true
 				change.Series = current.Series
@@ -251,10 +281,10 @@ func BuildPlanContent(previous map[string]*PlanFunction, previousDatasets map[st
 		old, target := previous[name], desired.Functions[name]
 		function := &PlanFunctionChange{Name: name}
 		if old != nil {
-			function.Region, function.Market, function.Old, function.OldCron = old.Region, old.Market, old.Plan, old.Cron
+			function.Region, function.Market, function.Executor, function.Old, function.OldCron = old.Region, old.Market, old.Executor, old.Plan, old.Cron
 		}
 		if target != nil {
-			function.Region, function.Market, function.New, function.NewCron = target.Region, target.Market, target.Plan, target.Cron
+			function.Region, function.Market, function.Executor, function.New, function.NewCron = target.Region, target.Market, target.Executor, target.Plan, target.Cron
 		}
 		var oldPlan, newPlan *Plan
 		if old != nil {
@@ -308,7 +338,7 @@ func BuildPlanContent(previous map[string]*PlanFunction, previousDatasets map[st
 	// 哪些函数需要下发：过渡计划与已生效计划不同、cron 不同、或新函数。
 	for _, function := range content.Functions {
 		transitional := content.TransitionalPlan(function)
-		function.Create = function.Old == nil && function.New != nil
+		function.Create = function.Old == nil && function.New != nil && function.IsSCF()
 		switch {
 		case function.Old == nil && function.New == nil:
 		case function.Create, function.New == nil, function.OldCron != function.NewCron:
@@ -352,7 +382,7 @@ func (c *FetchPlanContent) TransitionalPlan(function *PlanFunctionChange) *Plan 
 	if base == nil {
 		return nil
 	}
-	out := &Plan{V: base.V, Market: base.Market, Fetch: base.Fetch}
+	out := &Plan{V: base.V, Executor: base.Executor, Market: base.Market, Fetch: base.Fetch}
 	// 例外表：只保留过渡计划里仍会采集的标的，新计划的映射优先于旧计划（例外被删除时旧值随之消失）。
 	exceptions := map[string]string{}
 	if function.Old != nil {
@@ -471,7 +501,7 @@ func (c *FetchPlanContent) FinalPlan(function *PlanFunctionChange) *Plan {
 	if transitional == nil {
 		return nil
 	}
-	out := &Plan{V: transitional.V, Market: transitional.Market, Fetch: transitional.Fetch, SymbolExceptions: transitional.SymbolExceptions, Pairs: transitional.Pairs}
+	out := &Plan{V: transitional.V, Executor: transitional.Executor, Market: transitional.Market, Fetch: transitional.Fetch, SymbolExceptions: transitional.SymbolExceptions, Pairs: transitional.Pairs}
 	for _, dataset := range transitional.Datasets {
 		copy := lastCopy(&dataset)
 		if copy == nil || len(copy.Subjects) == 0 {
@@ -488,10 +518,10 @@ func (c *FetchPlanContent) FinalPlan(function *PlanFunctionChange) *Plan {
 	return out
 }
 
-// TransitionalCron 覆盖新旧两份需要的频率；FinalCron 只服务最终计划。
+// TransitionalCron 覆盖新旧两份需要的频率；FinalCron 只服务最终计划。推送与本地执行端没有 cron。
 func (c *FetchPlanContent) TransitionalCron(function *PlanFunctionChange) string {
 	plan := c.TransitionalPlan(function)
-	if plan == nil {
+	if plan == nil || !function.IsSCF() {
 		return ""
 	}
 	return planCron(plan)
@@ -499,7 +529,7 @@ func (c *FetchPlanContent) TransitionalCron(function *PlanFunctionChange) string
 
 func (c *FetchPlanContent) FinalCron(function *PlanFunctionChange) string {
 	plan := c.FinalPlan(function)
-	if plan == nil {
+	if plan == nil || !function.IsSCF() {
 		return ""
 	}
 	return planCron(plan)
@@ -510,7 +540,11 @@ func (c *FetchPlanContent) Applied() (map[string]*PlanFunction, map[string]*Plan
 	functions := map[string]*PlanFunction{}
 	for name, function := range c.Functions {
 		if final := c.FinalPlan(function); final != nil {
-			functions[name] = &PlanFunction{Name: name, Region: function.Region, Market: function.Market, Cron: planCron(final), Plan: final}
+			cron := ""
+			if function.IsSCF() {
+				cron = planCron(final)
+			}
+			functions[name] = &PlanFunction{Name: name, Region: function.Region, Market: function.Market, Executor: function.Executor, Cron: cron, Plan: final}
 		}
 	}
 	datasets := map[string]*PlanDatasetState{}
@@ -531,7 +565,12 @@ func (c *FetchPlanContent) WindowEnd() time.Time {
 		if !change.Changed || change.P <= 0 {
 			continue
 		}
-		candidate := time.Unix(change.P, 0).UTC().Add(time.Duration(change.LatenessS) * time.Second)
+		lateness := change.LatenessS
+		if change.OldLatenessS > 0 {
+			// 交接：P 之前的旧周期是按旧截止建立的。
+			lateness = change.OldLatenessS
+		}
+		candidate := time.Unix(change.P, 0).UTC().Add(time.Duration(lateness) * time.Second)
 		if candidate.After(end) {
 			end = candidate
 		}

@@ -401,3 +401,29 @@ CREATE TABLE IF NOT EXISTS t_collector_backfill_watermarks (
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (c_space_id, c_dataset_id, c_frequency)
 );
+
+-- 每个数据集的采集方式：stream（WS 推送）或 pull（定时拉取）；executor 是拉取与补采的执行端（scf 云函数或 local 本地执行端）。
+-- c_force 为 1 表示最近一次切换用了 --force：交接计划不等失联的推送或本地执行端确认，计划生效后清零。
+CREATE TABLE IF NOT EXISTS t_collector_ingest_modes (
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_mode TEXT NOT NULL,
+    c_executor TEXT NOT NULL,
+    c_force INTEGER NOT NULL DEFAULT 0,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_space_id, c_dataset_id),
+    CHECK (c_mode IN ('stream', 'pull')),
+    CHECK (c_executor IN ('scf', 'local')),
+    CHECK (c_force IN (0, 1))
+);
+
+-- collector-stream 实例的心跳与已应用的计划：c_applied 是已应用的计划记录 ID 与阶段，c_status 是连接状态；
+-- 同一空间只部署一个实例，一空间一行，不设租约与写权限到期。
+CREATE TABLE IF NOT EXISTS t_collector_stream_workers (
+    c_space_id TEXT NOT NULL,
+    c_instance_id TEXT NOT NULL,
+    c_applied TEXT NOT NULL DEFAULT '{}',
+    c_status TEXT NOT NULL DEFAULT '{}',
+    c_heartbeat_at DATETIME NOT NULL,
+    PRIMARY KEY (c_space_id)
+);

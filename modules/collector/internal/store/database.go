@@ -25,6 +25,8 @@ type Store struct {
 	taskItems  *TaskInstanceRepository
 	periods    *PeriodReadinessRepository
 	fetchPlans *FetchPlanRepository
+	ingest     *IngestModeRepository
+	workers    *StreamWorkerRepository
 	backfill   *BackfillRepository
 }
 
@@ -111,6 +113,8 @@ func Open(opts *Options) (*Store, error) {
 	s.taskItems = NewTaskInstanceRepository(db)
 	s.periods = NewPeriodReadinessRepository(db)
 	s.fetchPlans = NewFetchPlanRepository(db)
+	s.ingest = NewIngestModeRepository(db)
+	s.workers = NewStreamWorkerRepository(db)
 	s.backfill = NewBackfillRepository(db)
 	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
@@ -147,6 +151,22 @@ func (s *Store) FetchPlans() *FetchPlanRepository {
 		return nil
 	}
 	return s.fetchPlans
+}
+
+// IngestModes returns the per-dataset ingest mode repository.
+func (s *Store) IngestModes() *IngestModeRepository {
+	if s == nil {
+		return nil
+	}
+	return s.ingest
+}
+
+// StreamWorkers returns the collector-stream heartbeat repository.
+func (s *Store) StreamWorkers() *StreamWorkerRepository {
+	if s == nil {
+		return nil
+	}
+	return s.workers
 }
 
 // Backfill returns the K-line backfill job repository.

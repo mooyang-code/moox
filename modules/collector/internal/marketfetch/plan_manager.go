@@ -32,7 +32,9 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 			return false, decodeErr
 		}
 		for name, function := range content.Functions {
-			names[name] = function.Region
+			if function.IsSCF() {
+				names[name] = function.Region
+			}
 		}
 	}
 	openRecord, err := r.Store.Open(ctx, r.SpaceID)
@@ -45,7 +47,9 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 			return false, decodeErr
 		}
 		for name, function := range content.Functions {
-			names[name] = function.Region
+			if function.IsSCF() {
+				names[name] = function.Region
+			}
 		}
 	}
 	if len(names) == 0 {
@@ -139,6 +143,7 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	functions, _ := content.Applied()
+	functions = scfFunctions(functions)
 	if len(functions) == 0 {
 		return true, nil
 	}

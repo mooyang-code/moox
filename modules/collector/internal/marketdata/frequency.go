@@ -2,6 +2,7 @@ package marketdata
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/mooyang-code/moox/packages/frequency"
 )
@@ -38,4 +39,10 @@ func ParseFrequency(input string) (Frequency, error) {
 		return "", fmt.Errorf("unsupported K-line frequency %q", input)
 	}
 	return parsed, nil
+}
+
+// SupportsStream 判断该频率能否由 WS 推送按固定步长切周期（月线、周线等日历频率不行）。
+func SupportsStream(f Frequency) bool {
+	step := f.Duration()
+	return step > 0 && step <= 24*time.Hour
 }

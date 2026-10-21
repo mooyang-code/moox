@@ -25,6 +25,9 @@ type TaskGroup struct {
 	// 以下为定时采集计划使用：每函数标的数（0 为默认）、允许迟到时间（0 为空间默认）。
 	SymbolsPerFunction     int
 	AllowedLatenessSeconds int
+	// Ingest、Executor 是任务参数显式指定的采集方式与执行端，空表示按库里的数据集设置。
+	Ingest   string
+	Executor string
 }
 
 func normalizeSubjects(subjects []string) []string {
