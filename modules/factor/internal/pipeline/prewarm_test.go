@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -204,4 +205,19 @@ func TestRunRecordsUpstreamFailedSubjectsForRecovery(t *testing.T) {
 	require.Equal(t, "ETH", upstream[0].Subject)
 	require.Equal(t, period, upstream[0].Period)
 	require.Equal(t, "evt-0800", upstream[0].TriggerEventID)
+}
+
+type failingSink struct{}
+
+func (failingSink) RecordGaps(context.Context, []GapEntry) error { return errors.New("disk full") }
+
+// 上游失败记不进账本：这一期不写结果、返回基础设施错误，水位不前进（由重投或追赶重试）。
+func TestRunFailsWhenUpstreamFailuresCannotBeRecorded(t *testing.T) {
+	store := &hourlyStore{}
+	runner := NewRunner(store, periodclock.Continuous{}, Config{GapSink: failingSink{}})
+	factors := []domain.FactorDef{testPipelineFactor("mom", domain.FactorTypeTimeSeries, 1, false)}
+	plan := hourlyPlan(t, time.Date(2026, 10, 16, 8, 0, 0, 0, time.UTC), factors...)
+	plan.UpstreamFailed, plan.Available = []string{"ETH"}, []string{"BTC"}
+	_, err := runner.Run(context.Background(), plan)
+	require.ErrorIs(t, err, storageio.ErrInfra)
 }

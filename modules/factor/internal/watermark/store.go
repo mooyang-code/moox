@@ -29,6 +29,10 @@ type State struct {
 	// BlockedPeriod 与 BlockedReason 说明卡在哪一期、为什么。
 	BlockedPeriod time.Time `json:"blocked_period,omitempty"`
 	BlockedReason string    `json:"blocked_reason,omitempty"`
+	// InFlightPeriod 与 InFlightTrigger 是开始计算、还没推进水位的一期及其触发事件 ID：
+	// 计算与 marker 成功后、水位落盘前进程退出时，重启后沿用同一个 ID，已完成检查能认出它，不会重复计算与发布。
+	InFlightPeriod  time.Time `json:"in_flight_period,omitempty"`
+	InFlightTrigger string    `json:"in_flight_trigger,omitempty"`
 }
 
 // Behind 判断还有已知的周期没有推进到。

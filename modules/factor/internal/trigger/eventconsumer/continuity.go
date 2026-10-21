@@ -111,7 +111,12 @@ func (c *Continuity) absentAt(setID string, period time.Time) map[string]struct{
 			delete(c.absent[setID], key)
 		}
 	}
-	return c.absent[setID][period.Unix()].subjects
+	// 复制一份：NoteAbsent 在心跳线程里会修改同一个集合。
+	confirmed := make(map[string]struct{}, len(c.absent[setID][period.Unix()].subjects))
+	for subject := range c.absent[setID][period.Unix()].subjects {
+		confirmed[subject] = struct{}{}
+	}
+	return confirmed
 }
 
 func (c *Continuity) ratioFor(setID string) float64 {
@@ -189,8 +194,11 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorS
 			}
 			failed = missing
 		}
-		expected, unconfirmed := c.missing(set, period, universe, failed)
-		if reason := c.invalid(set.SetID, expected, unconfirmed); reason != "" {
+		if state.InFlightTrigger != "" && state.InFlightPeriod.Equal(period) {
+			triggerID = state.InFlightTrigger
+		}
+		expected, unconfirmed, confirmed := c.missing(set, period, universe, failed)
+		if reason := c.invalid(set.SetID, expected, unconfirmed, confirmed); reason != "" {
 			if state.BlockedSince.IsZero() || !state.BlockedPeriod.Equal(period) {
 				if state.BlockedSince.IsZero() {
 					state.BlockedSince = c.cfg.Now().UTC()
@@ -203,13 +211,22 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorS
 			}
 			return nil
 		}
-		if _, err := h.computePeriod(ctx, set, factors, period, universe, unconfirmed, triggerID); err != nil {
-			return err
+		// 补采确认行情源没有的标的不参与计算：不读窗口、不记空洞账本、不补算。
+		// 范围内的标的全部确认没有时这一期没有可算的，直接推进。
+		if len(expected) > 0 {
+			state.InFlightPeriod, state.InFlightTrigger = period, triggerID
+			if err := c.cfg.Store.Put(state); err != nil {
+				return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
+			}
+			if _, err := h.computePeriod(ctx, set, factors, period, withoutSubjects(universe, confirmed), unconfirmed, triggerID); err != nil {
+				return err
+			}
 		}
 		if !state.BlockedSince.IsZero() {
 			log.InfoContextf(ctx, "factor_watermark_unblocked set_id=%s period=%s blocked_for=%s", set.SetID, period.Format(time.RFC3339), c.cfg.Now().Sub(state.BlockedSince).Truncate(time.Second))
 		}
 		state.CommittedThrough, state.BlockedSince, state.BlockedPeriod, state.BlockedReason = period, time.Time{}, time.Time{}, ""
+		state.InFlightPeriod, state.InFlightTrigger = time.Time{}, ""
 		if err := c.cfg.Store.Put(state); err != nil {
 			return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
 		}
@@ -217,15 +234,17 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorS
 	return nil
 }
 
-// missing 返回该期期望的标的（按集合范围）与未确认缺失的失败标的。
-func (c *Continuity) missing(set domain.FactorSet, period time.Time, universe, failed []string) ([]string, []string) {
+// missing 返回该期期望的标的（按集合范围，扣除确认没有的）、未确认缺失的失败标的与范围内确认没有的标的。
+func (c *Continuity) missing(set domain.FactorSet, period time.Time, universe, failed []string) ([]string, []string, map[string]struct{}) {
 	absent := c.absentAt(set.SetID, period)
 	var expected []string
+	confirmed := map[string]struct{}{}
 	for _, subject := range uniqueStrings(universe) {
 		if !set.InScope(subject) {
 			continue
 		}
-		if _, confirmed := absent[subject]; confirmed {
+		if _, ok := absent[subject]; ok {
+			confirmed[subject] = struct{}{}
 			continue
 		}
 		expected = append(expected, subject)
@@ -240,12 +259,29 @@ func (c *Continuity) missing(set domain.FactorSet, period time.Time, universe, f
 			unconfirmed = append(unconfirmed, subject)
 		}
 	}
-	return expected, unconfirmed
+	return expected, unconfirmed, confirmed
+}
+
+// withoutSubjects 返回去掉给定标的后的列表。
+func withoutSubjects(values []string, drop map[string]struct{}) []string {
+	if len(drop) == 0 {
+		return values
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := drop[strings.TrimSpace(value)]; !ok {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 // invalid 判断一期是否无效：不知道期望标的、零提交（全部缺失）、缺失超过阈值。
-func (c *Continuity) invalid(setID string, expected, missing []string) string {
+// 范围内的标的全部确认没有时不算无效（没有可算的，直接推进）。
+func (c *Continuity) invalid(setID string, expected, missing []string, confirmed map[string]struct{}) string {
 	switch {
+	case len(expected) == 0 && len(confirmed) > 0:
+		return ""
 	case len(expected) == 0:
 		return "no_universe"
 	case len(missing) == len(expected):

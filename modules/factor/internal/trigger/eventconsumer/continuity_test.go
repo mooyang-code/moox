@@ -258,3 +258,55 @@ func TestContinuityBoundsOneAdvance(t *testing.T) {
 	require.NoError(t, h.handler.Advance(context.Background(), h.setID))
 	require.Equal(t, minuteAt(5), h.state().CommittedThrough)
 }
+
+// 确认没有的标的不参与计算（不读窗口、不记账本）；范围内全部确认没有时直接推进，不阻塞。
+func TestContinuityExcludesConfirmedAbsencesFromComputation(t *testing.T) {
+	h := newContinuityHarness(t)
+	universe := subjectsN(20)
+	h.event(0, universe, nil)
+	h.cont.NoteAbsent(h.setID, minuteAt(1), minuteAt(2), time.Minute, []string{"S00"})
+	h.event(1, universe, []string{"S00"})
+	require.NotContains(t, h.runner.plans[1].Expected, "S00")
+	require.Len(t, h.runner.plans[1].Expected, 19)
+
+	h.cont.NoteAbsent(h.setID, minuteAt(2), minuteAt(3), time.Minute, universe)
+	h.event(2, universe, universe)
+	require.Len(t, h.runner.plans, 2, "全部确认没有：这一期没有可算的")
+	require.Equal(t, minuteAt(2), h.state().CommittedThrough)
+	require.True(t, h.state().BlockedSince.IsZero())
+}
+
+// 计算完成、水位落盘前进程退出：重启后这一期沿用原触发事件 ID，已完成检查能认出它。
+func TestContinuityReusesTheInFlightTriggerAfterACrash(t *testing.T) {
+	h := newContinuityHarness(t)
+	universe := subjectsN(20)
+	h.event(0, universe, nil)
+	state := h.state()
+	state.Target, state.InFlightPeriod, state.InFlightTrigger = minuteAt(1), minuteAt(1), "event-1"
+	require.NoError(t, h.store.Put(state))
+	h.rows.set(minuteAt(1), universe...)
+	require.NoError(t, h.handler.Advance(context.Background(), h.setID))
+	require.Equal(t, "event-1", h.runner.plans[1].TriggerEventID)
+	require.Empty(t, h.state().InFlightTrigger)
+	require.Equal(t, minuteAt(1), h.state().CommittedThrough)
+}
+
+// 补齐通知（心跳线程）与推进并发时没有数据竞争（配合 -race）。
+func TestContinuityNoteAbsentConcurrentWithAdvance(t *testing.T) {
+	h := newContinuityHarness(t)
+	universe := subjectsN(20)
+	h.event(0, universe, nil)
+	for minute := 1; minute <= 20; minute++ {
+		h.rows.set(minuteAt(minute), universe...)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			h.cont.NoteAbsent(h.setID, minuteAt(1), minuteAt(20), time.Minute, []string{fmt.Sprintf("X%03d", i)})
+		}
+	}()
+	h.event(20, universe, nil)
+	<-done
+	require.Equal(t, minuteAt(20), h.state().CommittedThrough)
+}
