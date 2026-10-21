@@ -25,6 +25,8 @@ const (
 	MaxRealtimeItems = 40
 	// MaxPlanItems 是由采集计划构造的请求的条目上限；Collector 按容量校验每函数标的数。
 	MaxPlanItems = 200
+	// MaxStreamPlanItems 是推送与本地执行端一份计划（一个市场的全部标的）的条目上限，不受 SCF 环境变量限制。
+	MaxStreamPlanItems = 4000
 	// MaxRealtimeRows is the fixed number of latest K-lines fetched for each
 	// symbol in one realtime SCF request.
 	MaxRealtimeRows = 10

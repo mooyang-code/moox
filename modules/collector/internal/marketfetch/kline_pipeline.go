@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -293,45 +292,9 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				result = "fallback"
 			}
 			p.observeFeed(req, selectedProvider, "kline", result)
+			expanded, missingTargets := expandTargetRows(req, item, itemRows)
 			rowsMu.Lock()
-			targets := req.Targets
-			if item.InstanceID != "" {
-				targets = make([]domain.WriteTarget, 0, len(req.Targets))
-				for _, candidate := range req.Targets {
-					if candidate.InstanceID == "" || candidate.InstanceID == item.InstanceID {
-						targets = append(targets, candidate)
-					}
-				}
-			}
-			var missingTargets []domain.TargetResult
-			for _, target := range targets {
-				targetRowCount := 0
-				for _, sourceRow := range itemRows {
-					row, ok := proto.Clone(sourceRow).(*storagepb.RowFieldUpsert)
-					if !ok || row.GetKey() == nil {
-						continue
-					}
-					row.GetKey().DatasetId = target.DatasetID
-					fields := item.OutputFields
-					if target.OutputFields != "" {
-						var selected []string
-						if json.Unmarshal([]byte(target.OutputFields), &selected) == nil {
-							fields = selected
-						}
-					}
-					row.Fields = selectOutputFields(row.Fields, fields)
-					if len(row.Fields) > 0 {
-						rows = append(rows, row)
-						targetRowCount++
-					}
-				}
-				if req.RequirePeriodCommit && targetRowCount == 0 {
-					missingTargets = append(missingTargets, domain.TargetResult{WriteTargetID: target.ID, DatasetID: target.DatasetID, Status: "failed", ErrorSummary: "required period target has no supported output rows"})
-				}
-			}
-			if len(req.Targets) == 0 {
-				rows = append(rows, itemRows...)
-			}
+			rows = append(rows, expanded...)
 			rowsMu.Unlock()
 			if len(missingTargets) > 0 {
 				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "output_fields", fmt.Errorf("required period target has no supported output rows"))
@@ -371,36 +334,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			}
 		}
 		commitStarted := time.Now()
-		var writeErr error
-		writeSuccesses := 0
-		targetStatus := make(map[string]domain.TargetResult)
-		for datasetID, datasetRows := range targetRows {
-			var err error
-			expectation, periodItems, periodEnabled, periodErr := periodCommitForDataset(req, datasetID, datasetRows)
-			if periodErr != nil {
-				err = periodErr
-			} else if periodEnabled {
-				storage, ok := p.Storage.(periodStorage)
-				if !ok {
-					err = fmt.Errorf("dataset %s requires CommitTimeSeriesBatch but storage client does not support period commits", datasetID)
-				} else {
-					err = storage.CommitTimeSeriesBatch(ctx, expectation, periodItems, writeEventID(req, datasetRows))
-				}
-			} else if storage, ok := p.Storage.(sourceStorage); ok {
-				err = storage.UpsertFieldsWithSource(ctx, datasetRows, writeEventID(req, datasetRows))
-			} else {
-				err = p.Storage.UpsertFields(ctx, datasetRows)
-			}
-			if err != nil {
-				if writeErr == nil {
-					writeErr = fmt.Errorf("dataset %s: %w", datasetID, err)
-				}
-				targetStatus[datasetID] = domain.TargetResult{DatasetID: datasetID, Status: "failed", ErrorSummary: err.Error()}
-			} else if err == nil {
-				writeSuccesses++
-				targetStatus[datasetID] = domain.TargetResult{DatasetID: datasetID, Status: "succeeded"}
-			}
-		}
+		targetStatus, writeSuccesses, writeErr := p.committer().writeDatasets(ctx, req, targetRows)
 		commitDone := time.Now()
 		p.reportCommit(req, len(rows), len(targetRows), commitDone.Sub(commitStarted), commitDone, closeAt, writeErr)
 		for index := range results {
@@ -775,60 +709,12 @@ func stockProviderExchange(subjectID string) marketdata.ExchangeID {
 }
 
 func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int, instrumentName ...string) (*storagepb.RowFieldUpsert, error) {
-	if strings.TrimSpace(req.Frequency) != "" {
-		requestedFrequency, err := marketdata.ParseFrequency(req.Frequency)
-		if err != nil {
-			return nil, fmt.Errorf("request frequency is invalid: %w", err)
-		}
-		barFrequency, err := marketdata.ParseFrequency(bar.Frequency)
-		if err != nil || requestedFrequency != barFrequency {
-			return nil, fmt.Errorf("provider frequency %q does not match request frequency %q", bar.Frequency, req.Frequency)
-		}
-		bar.Frequency = strings.TrimSpace(req.Frequency)
-	}
-	if (p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID) &&
-		(p.InstrumentType == "" || p.InstrumentType == marketdata.InstrumentEquity) {
-		name := ""
-		if len(instrumentName) > 0 {
-			name = instrumentName[0]
-		}
-		return stockKlineRow(bar, firstNonEmptyString(p.DatasetID, req.DatasetID), routeID, routeRank, name)
-	}
-	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
-		return nil, err
-	}
-	if strings.EqualFold(firstNonEmptyString(p.MarketID, req.SpaceID), "crypto") {
-		bar.SubjectID = strings.ToUpper(strings.TrimSpace(bar.SubjectID))
-	}
-	seriesTag := strings.TrimSpace(p.SeriesTag)
-	if p.MarketID == StockCNSpaceID || req.SpaceID == StockCNSpaceID {
-		seriesTag = "default"
-	} else if seriesTag == "" {
-		seriesTag = defaultMarketSeriesTag(bar.ProviderID, firstNonEmptyString(bar.SourceID, req.SourceID), req.MarketType)
-	}
-	fields := []*storagepb.FieldValue{
-		doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
-		doubleValue("volume", bar.VolumeShares),
-	}
-	if strings.EqualFold(firstNonEmptyString(p.MarketID, req.SpaceID), "crypto") {
-		fields = append(fields, doubleValue("quote_volume", bar.AmountCNY), intValue("trade_num", bar.TradeCount))
-	} else {
-		// 估算成交额（close × volume）不是真实成交额：显式写 NULL，也覆盖该行之前写入过的估算值。
-		fields = append(fields, amountField(bar))
-		if p.InstrumentType == marketdata.InstrumentIndex {
-			fields = append(fields, stringValue("index_code", bar.ProviderSymbol))
-		}
-	}
-	fields = append(fields,
-		stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID),
-		stringValue("provider_symbol", bar.ProviderSymbol),
-	)
-	return &storagepb.RowFieldUpsert{
-		Key: &storagepb.RowKey{SpaceId: req.SpaceID, DatasetId: req.DatasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-			SubjectId: bar.SubjectID, Freq: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
-		}}},
-		Fields: fields,
-	}, nil
+	return p.committer().rowFor(bar, req, routeID, routeRank, instrumentName...)
+}
+
+// committer 返回与本流水线行身份一致的提交器：行构造与写入只在 KlineCommitter 里。
+func (p *KlinePipeline) committer() *KlineCommitter {
+	return &KlineCommitter{Storage: p.Storage, SpaceID: p.SpaceID, MarketID: p.MarketID, InstrumentType: p.InstrumentType, SeriesTag: p.SeriesTag, DatasetID: p.DatasetID}
 }
 
 // defaultMarketSeriesTag builds the storage-series identity for Provider data.

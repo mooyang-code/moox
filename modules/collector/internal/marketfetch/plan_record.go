@@ -373,6 +373,18 @@ func (c *FetchPlanContent) TransitionalPlan(function *PlanFunctionChange) *Plan 
 	if len(exceptions) > 0 {
 		out.SymbolExceptions = exceptions
 	}
+	// 交易对：新计划优先，旧计划补上仍在过渡计划里的标的。
+	pairs := map[string]string{}
+	for _, plan := range []*Plan{function.Old, function.New} {
+		if plan != nil {
+			for key, value := range plan.Pairs {
+				pairs[key] = value
+			}
+		}
+	}
+	if len(pairs) > 0 {
+		out.Pairs = pairs
+	}
 	for _, key := range planDatasetKeys(function.Old, function.New) {
 		oldDataset, newDataset := findPlanDataset(function.Old, key), findPlanDataset(function.New, key)
 		meta := newDataset
@@ -459,7 +471,7 @@ func (c *FetchPlanContent) FinalPlan(function *PlanFunctionChange) *Plan {
 	if transitional == nil {
 		return nil
 	}
-	out := &Plan{V: transitional.V, Market: transitional.Market, Fetch: transitional.Fetch, SymbolExceptions: transitional.SymbolExceptions}
+	out := &Plan{V: transitional.V, Market: transitional.Market, Fetch: transitional.Fetch, SymbolExceptions: transitional.SymbolExceptions, Pairs: transitional.Pairs}
 	for _, dataset := range transitional.Datasets {
 		copy := lastCopy(&dataset)
 		if copy == nil || len(copy.Subjects) == 0 {
@@ -573,12 +585,20 @@ func (p *Plan) hasSubject(id string) bool {
 	return ok
 }
 
-// pruneExceptions 去掉不再出现在任何份里的标的的例外。
+// pruneExceptions 去掉不再出现在任何份里的标的的例外与交易对。
 func (p *Plan) pruneExceptions() {
+	subjects := p.symbolsOrNil()
+	for key := range p.Pairs {
+		if _, ok := subjects[key]; !ok {
+			delete(p.Pairs, key)
+		}
+	}
+	if len(p.Pairs) == 0 {
+		p.Pairs = nil
+	}
 	if len(p.SymbolExceptions) == 0 {
 		return
 	}
-	subjects := p.symbolsOrNil()
 	for key := range p.SymbolExceptions {
 		if _, ok := subjects[key]; !ok {
 			delete(p.SymbolExceptions, key)

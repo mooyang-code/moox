@@ -168,7 +168,8 @@ func (s *DatasetSource) ResolveSubjects(ctx context.Context, spaceID string, tag
 		if subject == nil || strings.TrimSpace(subject.GetSubjectId()) == "" {
 			continue
 		}
-		items = append(items, domain.Subject{SubjectID: strings.TrimSpace(subject.GetSubjectId()), Name: strings.TrimSpace(subject.GetName()), Status: strings.TrimSpace(subject.GetStatus())})
+		items = append(items, domain.Subject{SubjectID: strings.TrimSpace(subject.GetSubjectId()), Name: strings.TrimSpace(subject.GetName()), Status: strings.TrimSpace(subject.GetStatus()),
+			Pair: strings.ToUpper(strings.TrimSpace(subject.GetAttributes()["pair"]))})
 	}
 	return items, nil
 }

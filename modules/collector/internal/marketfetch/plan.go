@@ -28,11 +28,15 @@ const (
 // Plan 是 Collector 下发给一个函数的采集计划。函数只认“市场 + 标的 + 频率”，
 // 以及结果写到哪些数据集；不知道数据集的规则。
 type Plan struct {
-	V                int               `json:"v"`
+	V int `json:"v"`
+	// Executor 是计划的执行端：空表示 SCF 函数，stream 是 WS 推送，local 是本地执行端（见 PlanExecutor*）。
+	Executor         string            `json:"executor,omitempty"`
 	Market           PlanMarket        `json:"market"`
 	Fetch            PlanFetch         `json:"fetch"`
 	SymbolExceptions map[string]string `json:"symbol_exceptions,omitempty"`
-	Datasets         []PlanDataset     `json:"datasets"`
+	// Pairs 是交易对与交易所 symbol 不同的标的（币安永续合约的 pair）：WS 按 pair 订阅、按 symbol 写入。只出现在推送执行端的计划里。
+	Pairs    map[string]string `json:"pairs,omitempty"`
+	Datasets []PlanDataset     `json:"datasets"`
 }
 
 // PlanMarket 描述这个函数服务的市场（现货与合约是不同市场）。
@@ -69,6 +73,13 @@ type PlanFetch struct {
 const (
 	MinNotBeforeMS = 1000
 	MaxNotBeforeMS = 12000
+)
+
+// 计划执行端。SCF 函数的计划不写 executor（函数按未知字段拒绝解码），推送与本地执行端的计划写明自己的类型。
+const (
+	PlanExecutorSCF    = "scf"
+	PlanExecutorStream = "stream"
+	PlanExecutorLocal  = "local"
 )
 
 // MinStandbyMS 是备援延迟的下限：正常请求的首字节在几十到几百毫秒，延迟太短会让几乎所有请求都发出备援。
@@ -176,6 +187,14 @@ func (p *Plan) Validate() error {
 	if len(p.Datasets) == 0 {
 		return errors.New("plan requires at least one dataset")
 	}
+	maxItems := MaxPlanItems
+	switch p.Executor {
+	case "":
+	case PlanExecutorStream, PlanExecutorLocal:
+		maxItems = MaxStreamPlanItems
+	default:
+		return fmt.Errorf("unsupported plan executor %q", p.Executor)
+	}
 	seen := make(map[string]struct{}, len(p.Datasets))
 	for index, dataset := range p.Datasets {
 		if strings.TrimSpace(dataset.DatasetID) == "" {
@@ -204,8 +223,8 @@ func (p *Plan) Validate() error {
 			}
 			previous = copy.From
 			// 后一份允许没有标的：标的移到别的函数、或数据集不再采集时，从该份起本函数不再抓取。
-			if len(copy.Subjects) > MaxPlanItems {
-				return fmt.Errorf("plan datasets[%d].copies[%d] has more than %d subjects", index, copyIndex, MaxPlanItems)
+			if len(copy.Subjects) > maxItems {
+				return fmt.Errorf("plan datasets[%d].copies[%d] has more than %d subjects", index, copyIndex, maxItems)
 			}
 			if strings.TrimSpace(copy.Hash) == "" || copy.Count == 0 || (copyIndex == 0 && len(copy.Subjects) == 0) {
 				return fmt.Errorf("plan datasets[%d].copies[%d] requires hash, count and subjects", index, copyIndex)
@@ -269,6 +288,14 @@ func (p *Plan) ExchangeSymbol(subjectID string) string {
 		return symbol
 	}
 	return strings.ReplaceAll(strings.TrimSpace(subjectID), "-", "")
+}
+
+// Pair 返回标的的交易所交易对：没有单独登记时与交易所 symbol 相同。
+func (p *Plan) Pair(subjectID string) string {
+	if pair, ok := p.Pairs[subjectID]; ok && pair != "" {
+		return pair
+	}
+	return p.ExchangeSymbol(subjectID)
 }
 
 // PlanSeriesTag 返回写入行使用的 series_tag；Collector 登记快照时必须使用同一个函数。

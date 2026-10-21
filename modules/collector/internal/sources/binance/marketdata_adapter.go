@@ -293,6 +293,7 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 			Status:         symbol.Status,
 			BaseAsset:      symbol.BaseAsset,
 			QuoteAsset:     symbol.QuoteAsset,
+			Pair:           symbol.Pair,
 		})
 	}
 	if len(duplicated) > 0 {
