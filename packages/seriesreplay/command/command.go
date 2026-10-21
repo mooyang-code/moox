@@ -100,6 +100,7 @@ func start(ctx context.Context, args []string, out io.Writer) error {
 	fs.StringVar(&spec.To, "to", "", "回放终点（RFC3339，不含）；本地数据必须包含终点之后的一根")
 	fs.StringVar(&spec.Quote, "quote", "next_open", "成交价取法：next_open（下一根开盘）或 close（本期收盘）")
 	fs.BoolVar(&spec.WriteFactors, "write-factors", false, "每期把因子结果写回结果数据集（不发周期完成事件）")
+	fs.BoolVar(&spec.AllowShortWarmup, "allow-short-warmup", false, "允许多数标的的本地数据不够预热区间（因子前段为空值）；不加时拒绝")
 	fs.StringVar(&spec.InitialCash, "initial-cash", "", "纸面账本的初始资金（默认 100000）")
 	fs.StringVar(&spec.FeeRate, "fee-rate", "", "费率（默认 0.001）")
 	fs.StringVar(&spec.SlippageBPS, "slippage-bps", "", "滑点（基点，默认 0）")

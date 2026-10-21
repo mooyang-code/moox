@@ -96,13 +96,16 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (Run, error) {
 
 	open, err := r.Factor.Open(ctx, FactorOpenRequest{
 		ReplayID: spec.ReplayID, SetID: spec.SetID, From: spec.From, To: spec.To, ExtraPeriods: binding.PreviousDepth,
-		Quote: spec.Quote, WriteFactors: spec.WriteFactors,
+		Quote: spec.Quote, WriteFactors: spec.WriteFactors, AllowShortWarmup: spec.AllowShortWarmup,
 	})
 	if err != nil {
 		return r.fail(spec.ReplayID, fmt.Errorf("建立因子回放会话：%w", err))
 	}
 	if drift := factorDrift(binding.Factors, open.Factors); drift != "" {
 		return r.fail(spec.ReplayID, fmt.Errorf("策略引用的因子与因子集合 %s 里的定义不一致（%s）", spec.SetID, drift))
+	}
+	if open.ShortWarmup > 0 {
+		r.logf("回放 %s：%d 个标的的本地数据晚于预热起点（例如 %s），它们的因子前段是空值", spec.ReplayID, open.ShortWarmup, strings.Join(open.ShortSamples, "、"))
 	}
 	if len(open.Excluded) > 0 {
 		r.logf("回放 %s：%d 个标的的本地数据不满足回放要求，已排除（例如 %s：%s）", spec.ReplayID, len(open.Excluded), open.Excluded[0].Subject, open.Excluded[0].Reason)
@@ -285,7 +288,7 @@ func (r *Runner) factorStep(ctx context.Context, spec Spec, binding StrategyBind
 	var httpErr *HTTPError
 	if errors.As(err, &httpErr) && httpErr.Status == http.StatusNotFound {
 		r.logf("回放 %s：因子引擎里的会话不存在（引擎重启？），重新建立", spec.ReplayID)
-		if _, openErr := r.Factor.Open(ctx, FactorOpenRequest{ReplayID: spec.ReplayID, SetID: spec.SetID, From: spec.From, To: spec.To, ExtraPeriods: binding.PreviousDepth, Quote: spec.Quote, WriteFactors: spec.WriteFactors}); openErr != nil {
+		if _, openErr := r.Factor.Open(ctx, FactorOpenRequest{ReplayID: spec.ReplayID, SetID: spec.SetID, From: spec.From, To: spec.To, ExtraPeriods: binding.PreviousDepth, Quote: spec.Quote, WriteFactors: spec.WriteFactors, AllowShortWarmup: spec.AllowShortWarmup}); openErr != nil {
 			return FactorStepResponse{}, fmt.Errorf("重新建立因子回放会话：%w", openErr)
 		}
 		frame, err = r.Factor.Step(ctx, request)

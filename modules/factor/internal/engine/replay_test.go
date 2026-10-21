@@ -165,3 +165,19 @@ type lateSource struct{ replaySource }
 func (lateSource) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
 	return []string{"A", "B", "LATE"}, nil
 }
+
+// 多数标的的本地数据不够预热区间：因子前段是空值，回放没有意义，拒绝建立会话并提示回补；显式允许后建立并报告不足的标的数。
+func TestReplayOpenRejectsShortWarmupUnlessAllowed(t *testing.T) {
+	m, _ := newReplayManagerForTest(t)
+	ctx := context.Background()
+	req := ReplayOpenRequest{ReplayID: "r10", SetID: "fset_replay", From: rt0.Add(1 * time.Minute).Format(time.RFC3339), To: rt0.Add(5 * time.Minute).Format(time.RFC3339), ExtraPeriods: 1}
+	_, status, err := m.Open(ctx, req)
+	require.Error(t, err)
+	require.Equal(t, http.StatusConflict, status)
+	require.Contains(t, err.Error(), "回补")
+
+	req.AllowShortWarmup = true
+	rsp, _, err := m.Open(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, 2, rsp.ShortWarmup)
+}

@@ -18,6 +18,8 @@ type Spec struct {
 	Quote string `json:"quote,omitempty"`
 	// WriteFactors 为真时每期把因子结果写回结果数据集（与区间重算相同的写法，不发周期完成事件）。
 	WriteFactors bool `json:"write_factors,omitempty"`
+	// AllowShortWarmup 允许多数标的的本地数据不够预热区间（不加时拒绝，因子前段会是空值）。
+	AllowShortWarmup bool `json:"allow_short_warmup,omitempty"`
 	// InitialCash、FeeRate、SlippageBPS 是纸面账本的初始资金与费用配置（空取账本默认值）。
 	InitialCash string `json:"initial_cash,omitempty"`
 	FeeRate     string `json:"fee_rate,omitempty"`
@@ -44,6 +46,8 @@ type FactorOpenRequest struct {
 	ExtraPeriods int    `json:"extra_periods"`
 	Quote        string `json:"quote,omitempty"`
 	WriteFactors bool   `json:"write_factors,omitempty"`
+	// AllowShortWarmup 允许多数标的的本地数据不够预热区间。
+	AllowShortWarmup bool `json:"allow_short_warmup,omitempty"`
 }
 
 // FactorInfo 是回放固定下来的一个因子。
@@ -70,6 +74,9 @@ type FactorOpenResponse struct {
 	Bytes    int64            `json:"bytes"`
 	Factors  []FactorInfo     `json:"factors"`
 	Fields   []string         `json:"fields"`
+	// ShortWarmup 是本地数据起点晚于预热起点的标的数（因子前段为空值）。
+	ShortWarmup  int      `json:"short_warmup,omitempty"`
+	ShortSamples []string `json:"short_samples,omitempty"`
 }
 
 // FactorStepRequest 是 POST /v1/replay/step 的请求体。

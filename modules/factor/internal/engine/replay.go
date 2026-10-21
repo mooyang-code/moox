@@ -119,6 +119,8 @@ type ReplayOpenRequest struct {
 	Quote string `json:"quote"`
 	// WriteFactors 为真时，每期把因子结果写回结果数据集（与区间重算相同的写法，不发周期完成事件）。
 	WriteFactors bool `json:"write_factors"`
+	// AllowShortWarmup 允许多数标的的本地数据不够预热区间：不加时多数标的预热不足会拒绝建立会话（因子前段会是空值，回放结果没有意义）。
+	AllowShortWarmup bool `json:"allow_short_warmup,omitempty"`
 }
 
 // ReplayFactor 描述回放固定下来的一个因子。
@@ -145,6 +147,9 @@ type ReplayOpenResponse struct {
 	Bytes    int64            `json:"bytes"`
 	Factors  []ReplayFactor   `json:"factors"`
 	Fields   []string         `json:"fields"`
+	// ShortWarmup 是本地数据起点晚于预热起点的标的数（因子前段为空值）；ShortSamples 是其中的前几个。
+	ShortWarmup  int      `json:"short_warmup,omitempty"`
+	ShortSamples []string `json:"short_samples,omitempty"`
 }
 
 func (m *replayManager) routes() []factorhealth.Route {
@@ -266,6 +271,20 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	if len(subjects) == 0 {
 		return ReplayOpenResponse{}, http.StatusConflict, fmt.Errorf("没有任何标的的本地数据覆盖回放区间：先导入 %s 到 %s 的数据（需要包含终点之后的一根）", from.Format(time.RFC3339), to.Format(time.RFC3339))
 	}
+	var shortSamples []string
+	shortCount := 0
+	for _, subject := range subjects {
+		if earliest[subject].After(start) {
+			shortCount++
+			if len(shortSamples) < 5 {
+				shortSamples = append(shortSamples, subject)
+			}
+		}
+	}
+	if shortCount*2 > len(subjects) && !req.AllowShortWarmup {
+		return ReplayOpenResponse{}, http.StatusConflict, fmt.Errorf("%d/%d 个标的的本地数据晚于预热起点 %s（例如 %s），因子前段会是空值：先回补或导入更早的历史（moox-factor-engine backfill / moox-cli import），或确认接受后加 --allow-short-warmup",
+			shortCount, len(subjects), start.Format(time.RFC3339), strings.Join(shortSamples, "、"))
+	}
 	periods := int(to.Sub(from) / step)
 	rowsPerSubject := int(to.Add(step).Sub(start) / step)
 	need := int64(len(subjects)) * int64(rowsPerSubject) * int64(len(numeric)*8+9)
@@ -315,7 +334,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	m.mu.Unlock()
 	rsp := ReplayOpenResponse{
 		ReplayID: req.ReplayID, Subjects: subjects, Excluded: excluded, Periods: periods, Start: start.Format(time.RFC3339),
-		StepSecs: int64(step / time.Second), Bytes: need, Fields: numeric,
+		StepSecs: int64(step / time.Second), Bytes: need, Fields: numeric, ShortWarmup: shortCount, ShortSamples: shortSamples,
 	}
 	for _, factor := range set.Factors {
 		rsp.Factors = append(rsp.Factors, ReplayFactor{FactorID: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor), Outputs: append([]string(nil), factor.Outputs...)})
