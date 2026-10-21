@@ -34,7 +34,7 @@
 | 连续合约 K 线全量 | 订阅全部合约标的的 `<pair>_perpetual@continuousKline_1m` 与 `_1h`，至少 75 分钟、覆盖一个整点；结束后用收盘 1 分钟后的 REST 历史 K 线逐条比对 | 每个标的每个周期都有 `x=true`（含没有成交的分钟）；到达时刻 p99 ≤ 500 毫秒；与基准 100% 一致 |
 | 合约 REST 定稿时间 | 收盘后 3、5、6、7、8、12 秒取 REST，覆盖至少 3 个整点 | 找出全部一致的最早时刻；设计取 8 秒，若 6、7 秒也 100% 可提前 |
 | 现货 REST 定稿时间 | 同上，现货 1、2、3 秒 | 设计取 3 秒；验证 3 秒在多个整点下仍 100% |
-| 海外机出站 | 在海外机上按 1m 两个数据集、整点四个数据集的数据量（约 150KB／数据集）向存储机方向做一次集中上传测速 | 整点四个数据集串行提交 ≤ 2 秒；否则设计 5.5 分片 |
+| 海外机出站 | 在海外机上按 1m 两个数据集、整点四个数据集的数据量（约 150KB／数据集）向存储机方向做一次集中上传测速 | 整点四个数据集串行提交 ≤ 2 秒（stream 模式截止 5 秒、提交须在 4 秒前完成）；否则 1m、1h 分开提交，仍不满足就放宽截止 |
 | 现货收盘推送 | 已有全量数据（511 个标的，含 16:00 整点）复核一个更多整点的样本 | 每分钟 511 个全到；p99 ≤ 500 毫秒 |
 
 阶段 0 不通过的处理：连续合约 K 线不满足时，合约改用普通 K 线（`@kline_`），冷门标的约 3 秒到达，兜底仍按 8 秒，合约延迟目标改为 p99 ≤ 3.5 秒，并在设计里改写第 5.7 节。
@@ -143,13 +143,14 @@ CREATE TABLE IF NOT EXISTS t_collector_stream_workers (
 ### 5.2 配置
 
 - `scf_plan.spaces.<空间>.ingest: scf|stream`：首次启动时写入 `t_collector_ingest_modes` 的初值，之后以库为准。
-- `stream`：`lease_takeover_seconds`（45）、`heartbeat_timeout_seconds`（180）、按市场的 `fallback_after_ms`（现货 800、合约 800）与 `commit_reserve_ms`（3000）。随计划下发给 stream 进程。
+- `stream`：`lease_takeover_seconds`（45）、`heartbeat_timeout_seconds`（180）、`lateness_s`（5，stream 模式下数据集的截止时间）、按市场的 `fallback_after_ms`（现货 800、合约 800）、`fallback`（现货开、合约关：合约 REST 8 秒才定稿，晚于 5 秒截止）与 `commit_reserve_ms`（1000）。随计划下发给 stream 进程。
 
 ### 5.3 对账器
 
 - 抽出执行端接口（名称暂定 `planFleet`）：`Desired(groups) → 分配`、`Push(record, content, final) → 是否全部确认`、`Verify(applied)`。SCF 实现就是现有 `pushFunctions`／`verifyFleet`／`ensureCreated`；stream 实现把分配写进计划内容的 `stream` 执行端项，并比对心跳里已应用的计划记录 ID 与阶段。
 - `BuildDesiredState` 增加 stream 分配：每市场一个分配，包含全部标的；快照、hash、序号、生效周期 P 的计算不变。
 - 计划内容（`FetchPlanContent.Functions`）增加执行端类型（`scf`／`stream`），stream 分配作为 `stream-<空间>-<市场>` 一项与 SCF 函数并列；SCF 专属的步骤（建函数、环境变量、定时器、代码包升级、读回）只对 `scf` 项执行。
+- 截止时间跟随采集方式（设计 5.11）：交接的 `drain` 步骤在 P + 30 秒调用 `EnsureAllowedLateness` 把数据集属性改为新模式的值（stream 5 秒、SCF 15 秒）；任务参数显式指定了 `allowed_lateness_seconds` 的不改。测试：切换前后的最后一个旧周期与第一个新周期分别得到 15 秒与 5 秒（或反之）的截止，1m、1h 都覆盖。
 - 交接按设计 6.3 的状态机实现（`prepare → release → grant → drain`），阶段记在计划进度（`FetchPlanProgress`）里，Collector 重启后续跑；只有 `grant` 开始下发之前可以撤回（`P − 60 秒`前 `release` 未全部确认），`grant` 开始后只向前推进。交接计划不包含标的变更，有待处理的标的变化时先完成那份计划再交接。
 - `ingest=stream` 时：SCF 实时函数在 `drain` 结束后才下发空的最终计划并停用定时器（函数保留，代码包照常随发布升级）；补采函数不受影响。
 - 补采解析（`klinecheck/backfill.go` 的 `datasetMarket`）遍历两种执行端的计划项，按执行端类型选补采函数的市场与来源。
@@ -218,7 +219,7 @@ CREATE TABLE IF NOT EXISTS t_collector_stream_workers (
 2. 跟踪交接阶段：`release`（SCF 函数确认 P 起为空）→ `grant`（stream 确认 P 起全部标的、心跳变为"可写"）在 `P − 30 秒`前完成；P 之后 stream 开始提交；`drain` 结束（1h 要过 P 之后的整点 + 迟到窗口）后 SCF 定时器才停用。
 3. 验收（P 之后 2 小时、覆盖 2 个整点）：
    - 周期标记全部 `complete`，`missed` 为 0；
-   - `collector-stream` 写入完成相对收盘：现货、合约 p99 ≤ 1 秒（整点同样）；
+   - `collector-stream` 写入完成相对收盘：现货、合约 p99 ≤ 1 秒（整点同样）；数据集截止时间已是 5 秒，降级周期的完成标记在收盘后 5 秒内发出；
    - 策略 1m 整点产出延迟比切换前下降 5 秒以上；
    - 自动补采没有新增作业；
    - 用设计第 1.5 节方法复核 1 小时数据，与基准 100% 一致。
