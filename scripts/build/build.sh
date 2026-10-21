@@ -130,6 +130,7 @@ case "${TARGET_MODULE}" in
     build_go modules/factor ./cmd/mgr moox-factor-mgr 0
     build_go modules/factor ./cmd/cli moox-factor-mgr-cli 0
     build_go modules/factor ./cmd/engine moox-factor-engine 0
+    build_go modules/importer ./cmd/importer moox-importer 0
     build_go modules/archive ./cmd/mgr moox-archive-mgr 0
     build_go modules/strategy ./cmd/server moox-strategy 0
     build_go modules/strategy ./cmd/cli moox-strategy-cli 0
@@ -194,6 +195,9 @@ case "${TARGET_MODULE}" in
   factor-mgr)
     build_go modules/factor ./cmd/mgr moox-factor-mgr 0
     build_go modules/factor ./cmd/cli moox-factor-mgr-cli 0
+    ;;
+  importer)
+    build_go modules/importer ./cmd/importer moox-importer 0
     ;;
   factor-engine)
     build_go modules/factor ./cmd/engine moox-factor-engine 0

@@ -134,56 +134,6 @@ func (b *bytesBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func TestRunStorageImportDryRunPath(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "data.csv")
-	content := "meta\nignore\nopen_time,close\n2026-01-02T03:04:05Z,1.25\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	meta := fakeStorageImportMeta{
-		dataset: &pb.Dataset{DatasetId: "kline", Freq: "1m", Status: "active"},
-		subject: &pb.Subject{SubjectId: "BTC", Status: "active"},
-		columns: []*pb.DatasetColumn{
-			{ColumnName: "open_time", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_TIME, Required: true, Status: "active"},
-			{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Required: true, Status: "active"},
-		},
-	}
-	summary, err := runStorageImport(context.Background(), storageImportOptions{
-		Format: "csv", File: path,
-		SpaceID: "crypto", DatasetID: "kline", SubjectID: "BTC", Freq: "1m", TimeColumn: "open_time",
-		DryRun: true,
-	}, meta, fakeStorageWriter{})
-	require.NoError(t, err)
-	assert.Equal(t, "dry_run", summary.Status)
-	assert.Equal(t, 1, summary.ValidatedRows)
-}
-
-type fakeStorageImportMeta struct {
-	dataset *pb.Dataset
-	subject *pb.Subject
-	columns []*pb.DatasetColumn
-}
-
-func (f fakeStorageImportMeta) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
-	return f.dataset, nil
-}
-func (f fakeStorageImportMeta) GetView(context.Context, string, string) (*pb.View, error) {
-	return nil, nil
-}
-func (f fakeStorageImportMeta) GetSubject(context.Context, string, string) (*pb.Subject, error) {
-	return f.subject, nil
-}
-func (f fakeStorageImportMeta) ListDatasetColumns(context.Context, string, string) ([]*pb.DatasetColumn, error) {
-	return f.columns, nil
-}
-func (f fakeStorageImportMeta) ListDatasetSubjects(context.Context, string, string, string) ([]*pb.DatasetSubject, error) {
-	return nil, nil
-}
-
-type fakeStorageWriter struct{}
-
-func (fakeStorageWriter) UpsertFields(context.Context, *pb.PrimaryUpsertFieldsReq) error {
-	return nil
-}
-
 func TestMetadataSeedYAMLRoundTrip(t *testing.T) {
 	seed := metadataSeed{Spaces: []seedSpace{{SpaceID: "crypto", Name: "Crypto"}}}
 	raw, err := yaml.Marshal(seed)

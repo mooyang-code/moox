@@ -225,7 +225,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, follower.Run)
 
 	r.health.SnapshotFunc = r.healthSnapshot
-	if err := factorhealth.Register(s.Service(healthService), r.health); err != nil {
+	if err := factorhealth.Register(s.Service(healthService), r.health, newLocalWriter(r.data, r.storage).routes()...); err != nil {
 		return nil, fmt.Errorf("register factor engine health service: %w", err)
 	}
 	r.health.SetReady(true)
