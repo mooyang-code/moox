@@ -103,6 +103,9 @@ func HandleTarget(
 	if !now.Before(request.GetValidUntil().AsTime()) {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: store.ErrTargetExpired}
 	}
+	if request.GetShadow() {
+		return handleShadowTarget(ctx, opts, message.GetSpaceId(), message.GetOccurredAt().AsTime().UnixMilli(), request, now)
+	}
 	requestHash, err := targetapp.RequestHash(request)
 	if err != nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
@@ -248,6 +251,60 @@ func HandleTarget(
 		} else if opts.Wake != nil {
 			opts.Wake()
 		}
+	}
+	return jetstream.HandlerResult{Decision: jetstream.ACK}
+}
+
+// handleShadowTarget 处理预热中的策略实例发来的影子目标（设计 6.3）：完成权重到数量的换算并记录，
+// 不接受为正式目标，不拿账户锁、不预留资金、不唤醒执行器。
+func handleShadowTarget(
+	ctx context.Context,
+	opts TargetOptions,
+	spaceID string,
+	occurredAtMillis int64,
+	request *tradeeventpb.LogicalAccountTargetWeightRequested,
+	now time.Time,
+) jetstream.HandlerResult {
+	timeout := opts.ResolveTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	resolveCtx, cancel := context.WithTimeout(ctx, timeout)
+	conversion, err := opts.WeightResolver.Resolve(resolveCtx, occurredAtMillis, request, spaceID)
+	if err == nil {
+		err = resolveCtx.Err()
+	}
+	cancel()
+	if err != nil {
+		if errors.Is(err, targetapp.ErrPermanent) {
+			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+		}
+		return retryTarget(err)
+	}
+	referencePrices := make(map[string]targetapp.ReferencePriceEvidence, len(conversion.ReferencePriceEvidence))
+	for _, evidence := range conversion.ReferencePriceEvidence {
+		if evidence.InstrumentID != "" {
+			referencePrices[evidence.InstrumentID] = evidence
+		}
+	}
+	if len(referencePrices) == 0 {
+		for instrumentID, price := range conversion.ReferencePrices {
+			referencePrices[instrumentID] = targetapp.ReferencePriceEvidence{InstrumentID: instrumentID, Price: price}
+		}
+	}
+	_, err = opts.Store.RecordShadowTarget(ctx, store.ShadowTargetRecord{
+		SpaceID: spaceID, TargetID: request.GetTargetId(), LogicalAccountID: request.GetLogicalAccountId(),
+		InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), StrategyID: request.GetStrategyId(),
+		BarEndTime: request.GetBarEndTime().AsTime().UTC().UnixMilli(), ValidUntil: request.GetValidUntil().AsTime().UTC().UnixMilli(),
+		WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime,
+		ReferencePricesJSON: mustMarshal(referencePrices), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets),
+		RecordedAt: now.UnixMilli(),
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrInvalidRecord) {
+			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+		}
+		return retryTarget(err)
 	}
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }

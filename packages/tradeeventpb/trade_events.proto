@@ -24,4 +24,6 @@ message LogicalAccountTargetWeightRequested {
   google.protobuf.Timestamp bar_end_time = 10;
   google.protobuf.Timestamp effective_at = 11;
   google.protobuf.Timestamp valid_until = 12;
+  // shadow 为真表示预热中的策略实例发出的影子目标：Trade 只完成换算并记录，不预留资金、不下单。
+  bool shadow = 13;
 }

@@ -36,6 +36,7 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 		"t_trade_orders",
 		"t_paper_account_configs",
 		"t_paper_balance_projections",
+		"t_shadow_targets",
 		"t_paper_asset_balances",
 		"t_account_equity_points",
 		"t_logical_account_equity_points",
