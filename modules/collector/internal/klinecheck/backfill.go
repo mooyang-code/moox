@@ -83,6 +83,7 @@ type BackfillStore interface {
 	Watermark(context.Context, string, string, string) (time.Time, error)
 	SetWatermark(context.Context, string, string, string, time.Time) error
 	AddAbsences(context.Context, []store.SourceAbsence) error
+	AbsencesIn(context.Context, string, string, string, []string, time.Time, time.Time) ([]store.SourceAbsence, error)
 	ClearAbsences(context.Context, string, string, string) (int64, error)
 	HistoryScans(context.Context, string) (map[string]store.HistoryScan, error)
 	SaveHistoryScan(context.Context, store.HistoryScan) error
@@ -127,9 +128,6 @@ type Backfiller struct {
 	workers        sync.WaitGroup
 	// tickMu 串行化认领，避免补位与调度节拍同时超出并发上限。
 	tickMu sync.Mutex
-	// absent 是本进程内各作业确认的行情源缺失标的，随补齐通知发出。
-	absentMu sync.Mutex
-	absent   map[string]map[string]struct{}
 }
 
 // FilledRange 是补采补齐的一段（数据集, 频率, [From, To)）。
@@ -615,7 +613,6 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 			fail(fmt.Errorf("record source absences: %w", err))
 			return
 		}
-		b.noteAbsent(chunk.JobID, chunk.SubjectID)
 		rows -= check.Missing
 		note = fmt.Sprintf("%d bars are absent at the source", check.Missing)
 		log.InfoContextf(ctx, "collector backfill chunk finished with source gaps space=%s chunk=%s missing=%d", spaceID, chunk.ChunkID, check.Missing)
@@ -658,24 +655,9 @@ func bars(chunk store.BackfillChunk) int {
 	return barCount(frequency, chunk.From, chunk.To)
 }
 
-func (b *Backfiller) noteAbsent(jobID, subject string) {
-	b.absentMu.Lock()
-	defer b.absentMu.Unlock()
-	if b.absent == nil {
-		b.absent = map[string]map[string]struct{}{}
-	}
-	if b.absent[jobID] == nil {
-		b.absent[jobID] = map[string]struct{}{}
-	}
-	b.absent[jobID][subject] = struct{}{}
-}
-
 // notifyFilled 在作业成功后按（数据集, 频率）发补齐通知。通知只是加快下游，失败只记日志（因子另有定时读回保底）。
+// 确认没有的标的按库里的已确认缺失逐条带出精确的数据集、频率、标的与区间（进程重启不丢）。
 func (b *Backfiller) notifyFilled(ctx context.Context, job store.BackfillJob) {
-	b.absentMu.Lock()
-	absentSet := b.absent[job.JobID]
-	delete(b.absent, job.JobID)
-	b.absentMu.Unlock()
 	if b.Notify == nil {
 		return
 	}
@@ -701,16 +683,25 @@ func (b *Backfiller) notifyFilled(ctx context.Context, job store.BackfillJob) {
 			item.To = chunk.To
 		}
 	}
-	absent := make([]string, 0, len(absentSet))
-	for subject := range absentSet {
-		absent = append(absent, subject)
-	}
-	sort.Strings(absent)
 	filled := make([]FilledRange, 0, len(order))
 	for _, key := range order {
 		item := *ranges[key]
-		item.Absent = absent
 		filled = append(filled, item)
+		absences, err := b.Store.AbsencesIn(ctx, job.SpaceID, item.DatasetID, item.Frequency, nil, item.From, item.To)
+		if err != nil {
+			log.WarnContextf(ctx, "collector backfill filled notification skips source absences job=%s dataset=%s: %v", job.JobID, item.DatasetID, err)
+			continue
+		}
+		for _, absence := range absences {
+			from, to := absence.From, absence.To
+			if from.Before(item.From) {
+				from = item.From
+			}
+			if to.After(item.To) {
+				to = item.To
+			}
+			filled = append(filled, FilledRange{SpaceID: job.SpaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, From: from, To: to, Absent: []string{absence.SubjectID}})
+		}
 	}
 	if len(filled) == 0 {
 		return

@@ -599,9 +599,14 @@ func TestBackfillNotifiesFilledRangesAfterAJobSucceeds(t *testing.T) {
 	require.NoError(t, backfiller.Tick(ctx, "crypto"))
 	status, _ := backfiller.Status(ctx, jobID)
 	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
-	require.Len(t, got, 1)
+	require.Len(t, got, 2)
 	require.Equal(t, "ds", got[0].DatasetID)
 	require.Equal(t, "1m", got[0].Frequency)
-	require.Equal(t, []string{"ETH-USDT"}, got[0].Absent, "单根缺口复查仍缺即确认行情源没有")
+	require.Empty(t, got[0].Absent, "整个补齐范围不带确认缺失")
 	require.False(t, got[0].From.After(base.Add(10*time.Minute)))
+	// 确认没有的标的按库里的记录带出精确区间（单根缺口复查仍缺即确认行情源没有）。
+	require.Equal(t, []string{"ETH-USDT"}, got[1].Absent)
+	require.False(t, got[1].From.Before(got[0].From))
+	require.False(t, got[1].To.After(got[0].To))
+	require.Less(t, got[1].To.Sub(got[1].From), time.Hour)
 }
