@@ -2,6 +2,7 @@ package marketfetch
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
@@ -34,6 +36,16 @@ type PlanDatasetChange struct {
 	OldLatenessS int    `json:"old_lateness_s,omitempty"`
 }
 
+// HasHandoff 判断这份计划里有数据集换了执行端（交接计划）。
+func (c *FetchPlanContent) HasHandoff() bool {
+	for _, change := range c.Datasets {
+		if change.Changed && change.OldIngest != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // HandoffLateness 判断这个数据集的截止要推迟到 drain 再改：数据集在本计划里换了执行端，且新旧截止不同。
 func (c *PlanDatasetChange) HandoffLateness() bool {
 	return c.Changed && !c.Gone && c.OldLatenessS > 0 && c.OldLatenessS != c.LatenessS
@@ -48,9 +60,9 @@ type PlanFunctionChange struct {
 	// Executor 为空表示 SCF 函数；stream、local 由 collector-stream 心跳确认，没有云端步骤。
 	Executor string `json:"executor,omitempty"`
 	Old      *Plan  `json:"old,omitempty"`
-	OldCron string `json:"old_cron,omitempty"`
-	New     *Plan  `json:"new,omitempty"`
-	NewCron string `json:"new_cron,omitempty"`
+	OldCron  string `json:"old_cron,omitempty"`
+	New      *Plan  `json:"new,omitempty"`
+	NewCron  string `json:"new_cron,omitempty"`
 	// Push：需要向云端下发过渡环境；Create：函数尚不存在，需要先创建。
 	Push   bool `json:"push,omitempty"`
 	Create bool `json:"create,omitempty"`
@@ -646,4 +658,27 @@ func (p *Plan) pruneExceptions() {
 	if len(p.SymbolExceptions) == 0 {
 		p.SymbolExceptions = nil
 	}
+}
+
+// fetchPlanUpdater 是标记计划进度需要的存储接口。
+type fetchPlanUpdater interface {
+	Open(context.Context, string) (*store.FetchPlanRecord, error)
+	Update(context.Context, int64, string, string, string) error
+}
+
+// MarkOpenPlanForced 让该空间未完成的计划不再等推送与本地执行端确认（--force）：失联端负责的周期没人写，由补采补齐。
+func MarkOpenPlanForced(ctx context.Context, plans fetchPlanUpdater, spaceID string) error {
+	open, err := plans.Open(ctx, spaceID)
+	if err != nil || open == nil {
+		return err
+	}
+	progress, err := decodeFetchPlanProgress(open.Progress)
+	if err != nil {
+		return err
+	}
+	if progress.Forced {
+		return nil
+	}
+	progress.Forced = true
+	return plans.Update(ctx, open.ID, open.Status, mustJSON(progress), open.LastError)
 }

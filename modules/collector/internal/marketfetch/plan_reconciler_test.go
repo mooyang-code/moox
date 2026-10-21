@@ -109,6 +109,8 @@ func (f *fakeRegistrar) RegisterSeriesSnapshot(_ context.Context, _, datasetID, 
 }
 
 type fakePlanCloud struct {
+	// patchMu 保护 patches：管理器协程写、测试协程读。
+	patchMu    sync.Mutex
 	nodes      map[string]scfinvoker.Node
 	clock      func() time.Time
 	unready    map[string]scfinvoker.Node
@@ -275,12 +277,14 @@ func (c *fakePlanCloud) SubmitRuntimeConfigs(_ context.Context, _ string, patche
 		c.onRuntimeConfig(patches)
 	}
 	names := make([]string, 0, len(patches))
+	c.patchMu.Lock()
 	for _, patch := range patches {
 		names = append(names, patch.GetNodeId())
 		if !c.failNodes[patch.GetNodeId()] {
 			c.patches[patch.GetNodeId()] = patch
 		}
 	}
+	c.patchMu.Unlock()
 	return c.newJob(names), nil
 }
 
@@ -928,6 +932,8 @@ func TestPlanManagerDisablesConfiguredSpacesThatAreInactiveAtStartup(t *testing.
 	finished := make(chan struct{})
 	go func() { manager.Run(ctx); close(finished) }()
 	require.Eventually(t, func() bool {
+		h.cloud.patchMu.Lock()
+		defer h.cloud.patchMu.Unlock()
 		for _, patch := range h.cloud.patches {
 			if patch.GetTimerEnabled() {
 				return false

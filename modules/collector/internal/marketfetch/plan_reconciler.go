@@ -647,7 +647,8 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 	if err := r.saveProgress(ctx, record, progress, store.FetchPlanApplied, ""); err != nil {
 		return err
 	}
-	if progress.Forced && r.Modes != nil {
+	if progress.Forced && r.Modes != nil && content.HasHandoff() {
+		// 被 --force 推进的标的变更计划不清标记：紧接着的交接计划同样不等失联端。
 		if err := r.Modes.ClearForce(ctx, r.SpaceID); err != nil {
 			log.WarnContextf(ctx, "collector fetch plan clear force flags space=%s: %v", r.SpaceID, err)
 		}

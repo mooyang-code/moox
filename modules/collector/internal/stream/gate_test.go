@@ -269,3 +269,19 @@ func TestCommitQueueOrdersByDeadlineThenFrequency(t *testing.T) {
 	require.Equal(t, "1h-swap", order[3])
 	require.Equal(t, "tie-1h", order[2])
 }
+
+// 收到新计划后，P 起不再属于本执行端的标的（这一份为空）不再提交。
+func TestGateStopsCommittingFromTheEffectivePeriodOfAnEmptyCopy(t *testing.T) {
+	p := closeAt
+	plan, dataset := testStreamPlan("1m", 5, copyOf(p.Add(-time.Hour), "BTC-USDT"))
+	h := newGateHarness(t, p.Add(-time.Second), marketdata.FrequencyMinute, plan, dataset)
+	next, nextDataset := testStreamPlan("1m", 5, copyOf(p.Add(-time.Hour), "BTC-USDT"), marketfetch.PlanCopy{From: p.Unix(), Hash: "h", Count: 3})
+	h.gate.SetPlan(next, nextDataset)
+	h.advance(time.Second)
+	h.final("BTCUSDT", p.Add(-time.Minute), 1)
+	h.waitCalls(1)
+	h.advance(time.Minute)
+	h.final("BTCUSDT", p, 1)
+	h.advance(10 * time.Second)
+	require.Len(t, h.committer.calls(), 1, "P 起没有期望标的，不建立周期也不提交")
+}
