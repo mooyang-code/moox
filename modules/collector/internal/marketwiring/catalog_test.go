@@ -38,7 +38,7 @@ func TestMarketProvidersFromCatalogMatchTheFormerSwitch(t *testing.T) {
 		{"stockcn", "equity", "sina", "stockcn_minute_http", "", "", `unsupported market "stockcn"`},
 	} {
 		name := fmt.Sprintf("%s/%s/%s/%s", test.market, test.instrument, test.provider, test.source)
-		provider, err := newMarketProvider(test.market, marketdata.InstrumentType(test.instrument), test.provider, test.source)
+		provider, err := newMarketProvider(test.market, marketdata.InstrumentType(test.instrument), test.provider, test.source, marketdata.RateLimitPolicy{})
 		if test.wantErr != "" {
 			require.EqualError(t, err, test.wantErr, name)
 			continue

@@ -138,7 +138,7 @@ func stockCNSourceID(route marketfetch.StockCNRoute, providerID string) string {
 // NewCryptoKlinePipeline is the crypto composition root for the same common
 // KlinePipeline used by stockcn. Binance remains responsible only for HTTP
 // protocol parsing and normalization; marketfetch.Storage and routing stay market-agnostic.
-func NewCryptoKlinePipeline(storage marketfetch.Storage, productType marketdata.InstrumentType) (*marketfetch.KlinePipeline, error) {
+func NewCryptoKlinePipeline(storage marketfetch.Storage, productType marketdata.InstrumentType, limits *marketfetch.FeedLimits) (*marketfetch.KlinePipeline, error) {
 	if storage == nil {
 		return nil, fmt.Errorf("crypto kline storage is required")
 	}
@@ -156,7 +156,7 @@ func NewCryptoKlinePipeline(storage marketfetch.Storage, productType marketdata.
 	// the configured market routes. This is important for swap: the handler
 	// uses this factory for both timer and invoke requests, so a swap request
 	// must receive the swap-aware Binance adapter rather than a spot default.
-	pipeline, err := NewMarketKlinePipeline(storage, "crypto", instrumentType, "binance", DefaultSourceID("binance", string(instrumentType)))
+	pipeline, err := newMarketKlinePipeline(storage, "crypto", instrumentType, "binance", DefaultSourceID("binance", string(instrumentType)), limits)
 	if err != nil {
 		return nil, fmt.Errorf("create Binance crypto kline pipeline: %w", err)
 	}

@@ -29,7 +29,7 @@ type Handler struct {
 	// contract without making an external exchange request.
 	Execute                func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error)
 	NewMarketKlinePipeline func(Storage, string, marketdata.InstrumentType, string, string) (*KlinePipeline, error)
-	NewCryptoKlinePipeline func(Storage, marketdata.InstrumentType) (*KlinePipeline, error)
+	NewCryptoKlinePipeline func(Storage, marketdata.InstrumentType, *FeedLimits) (*KlinePipeline, error)
 	NewStockKlinePipeline  func(Storage) (*KlinePipeline, error)
 	ResolveSourceID        func(string, string) string
 	ResolveSymbol          SymbolResolver
@@ -217,6 +217,9 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 		return nil, err
 	}
 	storageTimeout := time.Duration(envInt("MOOX_FETCH_STORAGE_TIMEOUT_MS", int(defaultStorageTimeout/time.Millisecond))) * time.Millisecond
+	if req.FetchLimits != nil && req.FetchLimits.StorageTimeoutMS > 0 {
+		storageTimeout = time.Duration(req.FetchLimits.StorageTimeoutMS) * time.Millisecond
+	}
 	commitReserve := storageCommitReserve(storageTimeout, h.CLSReserve)
 	writeCtx, writeCancel := contextWithReserve(budgetCtx, commitReserve-storageTimeout)
 	defer writeCancel()
@@ -254,7 +257,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 				return nil, fmt.Errorf("crypto kline pipeline factory is not configured")
 			}
 			alignCryptoRequest(&req, cryptoProduct)
-			pipeline, pipelineErr = h.NewCryptoKlinePipeline(storage, cryptoProduct)
+			pipeline, pipelineErr = h.NewCryptoKlinePipeline(storage, cryptoProduct, req.FetchLimits)
 		} else {
 			if h.NewMarketKlinePipeline == nil {
 				return nil, fmt.Errorf("market kline pipeline factory is not configured")

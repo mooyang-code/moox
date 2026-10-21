@@ -69,6 +69,20 @@ type PlanFetch struct {
 	NotBeforeMS int `json:"not_before_ms,omitempty"`
 }
 
+// FeedLimits 是一次取数的限流与超时（计划的 fetch 段），零值字段用数据源默认或进程环境。
+type FeedLimits struct {
+	RPS              int `json:"rps,omitempty"`
+	Burst            int `json:"burst,omitempty"`
+	FeedConcurrency  int `json:"feed_concurrency,omitempty"`
+	RequestTimeoutMS int `json:"request_timeout_ms,omitempty"`
+	StorageTimeoutMS int `json:"storage_timeout_ms,omitempty"`
+}
+
+// Limits 返回计划的限流与超时。
+func (f PlanFetch) Limits() *FeedLimits {
+	return &FeedLimits{RPS: f.RPS, Burst: f.Burst, FeedConcurrency: f.FeedConcurrency, RequestTimeoutMS: f.RequestTimeoutMS, StorageTimeoutMS: f.StorageTimeoutMS}
+}
+
 // MinNotBeforeMS、MaxNotBeforeMS 是最早取数时刻的取值范围：小于 1 秒没有意义，超过 12 秒就挤占了提交与重试的时间。
 const (
 	MinNotBeforeMS = 1000

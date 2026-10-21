@@ -497,7 +497,7 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 	return marketfetch.Request{
 		BatchID: chunk.ChunkID, BatchKind: domain.BatchKindBackfill, SpaceID: spaceID, MarketID: plan.Market.MarketID, InstrumentType: plan.Market.InstrumentType,
 		DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, Provider: plan.Market.Provider, SourceID: plan.Market.SourceID, MarketType: plan.Market.MarketType,
-		NodeID: functionName, FunctionName: functionName, RequestID: chunk.ChunkID, WriteIDByContent: true, Concurrency: 1,
+		NodeID: functionName, FunctionName: functionName, RequestID: chunk.ChunkID, WriteIDByContent: true, Concurrency: 1, FetchLimits: plan.Fetch.Limits(),
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
 	}, nil
 }

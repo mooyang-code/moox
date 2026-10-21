@@ -55,7 +55,7 @@ func stockCNEntry(provider, source string, factory marketdata.Factory) marketdat
 
 func binanceFactory(instrument marketdata.InstrumentType) marketdata.Factory {
 	return func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
-		return binance.NewMarketDataAdapter(binance.AdapterConfig{HTTPClient: deps.HTTPClient, InstrumentType: instrument}), nil
+		return binance.NewMarketDataAdapter(binance.AdapterConfig{HTTPClient: deps.HTTPClient, InstrumentType: instrument, RateLimit: deps.Settings.RateLimit}), nil
 	}
 }
 

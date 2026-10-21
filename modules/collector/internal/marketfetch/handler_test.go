@@ -61,10 +61,11 @@ func TestHandleRequestUsesCryptoSwapPipeline(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	var product marketdata.InstrumentType
+	var gotLimits *FeedLimits
 	handler := &Handler{
 		NewStorage: func(string, string) (Storage, error) { return storage, nil },
-		NewCryptoKlinePipeline: func(s Storage, got marketdata.InstrumentType) (*KlinePipeline, error) {
-			product = got
+		NewCryptoKlinePipeline: func(s Storage, got marketdata.InstrumentType, limits *FeedLimits) (*KlinePipeline, error) {
+			product, gotLimits = got, limits
 			return &KlinePipeline{
 				Router: router, Storage: s, CandidateChain: []string{"binance"}, MarketID: "crypto",
 				InstrumentType: got, DatasetID: "dataset_binance_kline_1m",
@@ -80,13 +81,14 @@ func TestHandleRequestUsesCryptoSwapPipeline(t *testing.T) {
 	req := Request{
 		BatchID: "swap-pipeline", BatchKind: domain.BatchKindRealtime, SpaceID: "crypto", MarketID: "crypto",
 		DatasetID: "dataset_binance_kline_1m", Frequency: "1m", Provider: "binance", SourceID: "swap_http",
-		MarketType: "swap", InstrumentType: "swap", RequestID: "swap-pipeline",
+		MarketType: "swap", InstrumentType: "swap", RequestID: "swap-pipeline", FetchLimits: &FeedLimits{RPS: 40, Burst: 40, FeedConcurrency: 16, RequestTimeoutMS: 3000},
 		Items: []domain.CollectionItem{{SubjectID: "BTC-USDT", Symbol: "BTCUSDT", Provider: "binance", SourceID: "swap_http", MarketType: "swap", DataType: "kline", DatasetID: "dataset_binance_kline_1m", Frequency: "1m", BarLimit: 1}},
 	}
 	response, err := handler.handleRequest(context.Background(), req)
 	require.NoError(t, err)
 	require.True(t, response.Success)
 	require.Equal(t, marketdata.InstrumentSwap, product)
+	require.Equal(t, &FeedLimits{RPS: 40, Burst: 40, FeedConcurrency: 16, RequestTimeoutMS: 3000}, gotLimits, "计划的限流随请求交给数据源（常驻本地执行端不读进程环境）")
 	require.Len(t, storage.rows, 1)
 }
 
@@ -104,7 +106,7 @@ func TestHandleRequestAlignsStaleSpotSourceOntoSwapPipeline(t *testing.T) {
 	storage := &pipelineStorage{}
 	handler := &Handler{
 		NewStorage: func(string, string) (Storage, error) { return storage, nil },
-		NewCryptoKlinePipeline: func(s Storage, got marketdata.InstrumentType) (*KlinePipeline, error) {
+		NewCryptoKlinePipeline: func(s Storage, got marketdata.InstrumentType, _ *FeedLimits) (*KlinePipeline, error) {
 			return &KlinePipeline{
 				Router: router, Storage: s, CandidateChain: []string{"binance"}, MarketID: "crypto",
 				InstrumentType: got, DatasetID: "dataset_binance_kline_1m",

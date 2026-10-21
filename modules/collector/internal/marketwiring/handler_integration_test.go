@@ -82,8 +82,8 @@ func TestComposedHandlerUsesProductEndpointAndPersistsSource(t *testing.T) {
 						}
 						return pipeline, err
 					}
-					h.NewCryptoKlinePipeline = func(s marketfetch.Storage, productType marketdata.InstrumentType) (*marketfetch.KlinePipeline, error) {
-						pipeline, err := NewCryptoKlinePipeline(s, productType)
+					h.NewCryptoKlinePipeline = func(s marketfetch.Storage, productType marketdata.InstrumentType, limits *marketfetch.FeedLimits) (*marketfetch.KlinePipeline, error) {
+						pipeline, err := NewCryptoKlinePipeline(s, productType, limits)
 						if err == nil {
 							pipeline.Router = router
 						}

@@ -3,6 +3,7 @@ package marketwiring
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
@@ -11,6 +12,11 @@ import (
 )
 
 func NewMarketKlinePipeline(storage marketfetch.Storage, marketID string, instrumentType marketdata.InstrumentType, providerID, sourceID string) (*marketfetch.KlinePipeline, error) {
+	return newMarketKlinePipeline(storage, marketID, instrumentType, providerID, sourceID, nil)
+}
+
+// newMarketKlinePipeline 构造市场 K 线流水线；limits 非空时按它设置数据源限流与熔断阈值（本地执行端随请求给出）。
+func newMarketKlinePipeline(storage marketfetch.Storage, marketID string, instrumentType marketdata.InstrumentType, providerID, sourceID string, limits *marketfetch.FeedLimits) (*marketfetch.KlinePipeline, error) {
 	if storage == nil {
 		return nil, fmt.Errorf("market kline storage is required")
 	}
@@ -28,7 +34,7 @@ func NewMarketKlinePipeline(storage marketfetch.Storage, marketID string, instru
 			return NewStockKlinePipelineForSource(storage, providerID, sourceID)
 		}
 	}
-	provider, err := newMarketProvider(marketID, instrumentType, providerID, sourceID)
+	provider, err := newMarketProvider(marketID, instrumentType, providerID, sourceID, feedRateLimit(limits))
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +42,11 @@ func NewMarketKlinePipeline(storage marketfetch.Storage, marketID string, instru
 	if err := registry.Register(provider); err != nil {
 		return nil, err
 	}
-	router, err := marketdata.NewRouter(registry, marketfetch.RuntimeKlineBreakerThreshold(), nil, nil)
+	threshold := marketfetch.RuntimeKlineBreakerThreshold()
+	if limits != nil && limits.FeedConcurrency > 0 {
+		threshold = marketfetch.RuntimeKlineProviderAttemptBudget() * limits.FeedConcurrency
+	}
+	router, err := marketdata.NewRouter(registry, threshold, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -69,13 +79,13 @@ func NewMarketKlinePipeline(storage marketfetch.Storage, marketID string, instru
 }
 
 // newMarketProvider 从行情源目录构造 SCF 与本地执行端取数用的数据源（加密、可转债、指数）。
-func newMarketProvider(marketID string, instrumentType marketdata.InstrumentType, providerID, sourceID string) (marketdata.MarketProvider, error) {
+func newMarketProvider(marketID string, instrumentType marketdata.InstrumentType, providerID, sourceID string, rateLimit marketdata.RateLimitPolicy) (marketdata.MarketProvider, error) {
 	market := marketdata.MarketID(marketID)
 	entry, err := catalog.Default().Lookup(market, instrumentType, providerID, sourceID)
 	if err != nil || entry.RouteSource {
 		return nil, unsupportedMarketSource(market, instrumentType, providerID, sourceID)
 	}
-	return entry.Build(marketdata.Deps{HTTPClient: httpclient.SharedClientIfEnabled(), SourceID: sourceID})
+	return entry.Build(marketdata.Deps{HTTPClient: httpclient.SharedClientIfEnabled(), SourceID: sourceID, Settings: marketdata.SourceSettings{RateLimit: rateLimit}})
 }
 
 // unsupportedMarketSource 是目录里没有这个组合时的报错，按市场与品种说明哪一层不支持。
@@ -93,4 +103,15 @@ func unsupportedMarketSource(market marketdata.MarketID, instrumentType marketda
 		return fmt.Errorf("unsupported index source %s/%s", providerID, sourceID)
 	}
 	return fmt.Errorf("unsupported market %q", market)
+}
+
+// feedRateLimit 把计划的限流与超时转成数据源限流参数；零值字段由数据源按进程环境与默认取值。
+func feedRateLimit(limits *marketfetch.FeedLimits) marketdata.RateLimitPolicy {
+	if limits == nil {
+		return marketdata.RateLimitPolicy{}
+	}
+	return marketdata.RateLimitPolicy{
+		RequestsPerSecond: float64(limits.RPS), Burst: limits.Burst, MaxConcurrent: limits.FeedConcurrency,
+		RequestTimeout: time.Duration(limits.RequestTimeoutMS) * time.Millisecond,
+	}
 }
