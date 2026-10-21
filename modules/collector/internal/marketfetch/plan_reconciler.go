@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -15,6 +16,7 @@ import (
 
 	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -39,7 +41,32 @@ const (
 	planVerifyRetry    = 5 * time.Minute
 	// planGoneDebounce 是“数据集消失但任务仍启用”被视为真实删除前需要连续观察到的轮数。
 	planGoneDebounce = 5
+	// planLeadTimeHandoff 是采集方式交接时 P 的最短提前量。
+	planLeadTimeHandoff = 3 * time.Minute
 )
+
+// IngestModeSource 是按数据集的采集方式（store.IngestModeRepository）。
+type IngestModeSource interface {
+	List(context.Context, string) (map[string]store.IngestMode, error)
+	Initialize(context.Context, []store.IngestMode) error
+	ClearForce(context.Context, string, []string) error
+}
+
+// SubjectExclusionSource 读取采集名单排除（store.SubjectExclusionRepository）。
+type SubjectExclusionSource interface {
+	Active(context.Context, string, time.Time) ([]store.SubjectExclusion, error)
+}
+
+// StreamWorkerSource 读取 collector-stream 的心跳（store.StreamWorkerRepository）。
+type StreamWorkerSource interface {
+	Get(context.Context, string) (*store.StreamWorker, error)
+}
+
+// StreamApplied 是 collector-stream 已应用的计划版本（t_collector_stream_workers.c_applied）。
+type StreamApplied struct {
+	ID    int64  `json:"id"`
+	Stage string `json:"stage"`
+}
 
 type planStore interface {
 	Open(context.Context, string) (*store.FetchPlanRecord, error)
@@ -142,6 +169,13 @@ type PlanReconciler struct {
 	Activity ActivityLogger
 	Metrics  *Metrics
 	Now      func() time.Time
+	// Modes 是按数据集的采集方式；DefaultMode 是新数据集的初值（空间配置的 default_ingest、default_executor）。
+	Modes       IngestModeSource
+	DefaultMode DatasetMode
+	// Workers 读取推送与本地执行端（collector-stream）的确认。
+	Workers StreamWorkerSource
+	// Exclusions 是采集名单排除：期望状态去掉排除的标的；为空表示没有排除。
+	Exclusions SubjectExclusionSource
 	// Operations 限制同时进行的 SCF 配置操作（各空间共用）；为空表示不限制。
 	Operations chan struct{}
 	// Preflight 在创建新计划前执行（例如 stockcn 的公共日历覆盖期检查）；返回错误则本轮不创建新计划，已有计划照常续跑。
@@ -168,6 +202,8 @@ type PlanReconciler struct {
 	// lastUpgradeCheck 是上一次检查函数代码包是否落后的时间。
 	lastUpgradeCheck time.Time
 	goneSeen         map[string]int
+	// sleep 替换本轮内的等待（测试用）。
+	sleep func(context.Context, time.Duration) error
 
 	// 补采函数的创建与对账协程互不干扰：单独的互斥与租约，并缓存已确认存在的函数。
 	backfillMu     sync.Mutex
@@ -177,6 +213,21 @@ type PlanReconciler struct {
 	// backfillJobs 是仍在云端运行的补采作业（函数名 → 作业），受 backfillMu 保护。
 	// 作业结束之前不释放补采租约，也不对同一函数重复提交。
 	backfillJobs map[string]backfillJob
+}
+
+// wait 在本轮里等待一段时间（测试替换为推进假时钟）。
+func (r *PlanReconciler) wait(ctx context.Context, d time.Duration) error {
+	if r.sleep != nil {
+		return r.sleep(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // backfillJob 是一个仍在云端运行的补采函数作业（创建、升级、删除或清理遗留预留）。
@@ -365,22 +416,49 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 		log.WarnContextf(ctx, "collector fetch plan kept current state space=%s: enabled tasks have no usable kline groups", r.SpaceID)
 		return nil
 	}
-	desired, err := BuildDesiredState(r.Options, groups, previousFunctions)
+	// 排除名单叠加在标签成员之上，放在“标的暂时取不到”的保护之后：全部标的都被排除是操作员的决定，照常生效。
+	// 它的变化与标的变更一样生成新计划（已打开的计划，包括进行中的交接，先推进完）。
+	if r.Exclusions != nil {
+		exclusions, err := r.Exclusions.Active(ctx, r.SpaceID, r.now())
+		if err != nil {
+			return r.fail("store", fmt.Errorf("read subject exclusions: %w", err))
+		}
+		groups = excludeSubjects(groups, exclusions)
+	}
+	modes, forced, err := r.datasetModes(ctx, groups, previousDatasets)
+	if err != nil {
+		return r.fail("store", err)
+	}
+	options := r.Options
+	options.Modes = modes
+	desired, err := BuildDesiredState(options, groups, previousFunctions)
 	if err != nil {
 		return r.fail("rules", err)
 	}
+	// 交接与标的变更分开：有数据集的标的集合在变时，本轮先按已生效的执行端完成标的变更，交接等下一份计划。
+	if handoffPending(desired, previousDatasets) && subjectsChanging(desired, previousDatasets) {
+		options.Modes = appliedModes(modes, previousDatasets)
+		if desired, err = BuildDesiredState(options, groups, previousFunctions); err != nil {
+			return r.fail("rules", err)
+		}
+		log.InfoContextf(ctx, "collector fetch plan defers the ingest handoff until the subject change is applied space=%s", r.SpaceID)
+	}
+	handoff := handoffPending(desired, previousDatasets)
 	if r.holdMissingDatasets(ctx, desired, previousDatasets, managed) {
 		return nil
 	}
-	for _, estimate := range EstimateRateBudget(desired.Functions, r.Options.AssumedEgressIPs) {
+	for _, estimate := range EstimateRateBudget(scfFunctions(desired.Functions), r.Options.AssumedEgressIPs) {
 		if estimate.Exceeds() {
 			log.WarnContextf(ctx, "collector fetch plan may hit the provider rate limit space=%s %s: add functions or egress IPs, or lower symbols per function", r.SpaceID, estimate)
 		}
 	}
 	// 计划里有需要新建的函数时拉长提前量：创建 VPC 函数比改环境慢得多。
 	lead := planLeadTime
-	for name := range desired.Functions {
-		if previousFunctions[name] == nil {
+	if handoff {
+		lead = planLeadTimeHandoff
+	}
+	for name, function := range desired.Functions {
+		if previousFunctions[name] == nil && function.Executor == "" {
 			lead = planLeadTimeWithCreate
 			break
 		}
@@ -393,7 +471,13 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 		return r.fail("rules", err)
 	}
 	if !changed {
-		return r.verifyFleet(ctx, previousFunctions)
+		if len(forced) > 0 && r.Modes != nil {
+			// 切换命令没有带来任何变化：--force 标记不再需要。
+			if err := r.Modes.ClearForce(ctx, r.SpaceID, nil); err != nil {
+				return r.fail("store", err)
+			}
+		}
+		return r.verifyFleet(ctx, scfFunctions(previousFunctions))
 	}
 	if r.Preflight != nil {
 		if err := r.Preflight(ctx); err != nil {
@@ -405,7 +489,8 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 	}
 	if r.Lateness != nil {
 		for _, change := range content.Datasets {
-			if change.Gone {
+			// 交接中的数据集在 drain 结束时再改：此刻改会让旧执行端最后几个周期按新截止建立。
+			if change.Gone || change.HandoffLateness() {
 				continue
 			}
 			if err := r.Lateness.EnsureAllowedLateness(ctx, r.SpaceID, change.DatasetID, change.LatenessS); err != nil {
@@ -413,7 +498,13 @@ func (r *PlanReconciler) planChange(ctx context.Context) error {
 			}
 		}
 	}
-	record, err := r.Store.Create(ctx, r.SpaceID, mustJSON(content), mustJSON(&FetchPlanProgress{}))
+	progress := &FetchPlanProgress{}
+	for _, change := range content.Datasets {
+		if change.Changed && forced[change.DatasetID] {
+			progress.Forced = true
+		}
+	}
+	record, err := r.Store.Create(ctx, r.SpaceID, mustJSON(content), mustJSON(progress))
 	if errors.Is(err, store.ErrFetchPlanOpen) {
 		return nil
 	}
@@ -500,6 +591,12 @@ func (r *PlanReconciler) validateContent(content *FetchPlanContent) error {
 			if plan == nil {
 				continue
 			}
+			if !function.IsSCF() {
+				if err := plan.Validate(); err != nil {
+					return fmt.Errorf("%s: %w", name, err)
+				}
+				continue
+			}
 			environment, err := r.functionEnvironment(function.Region, plan)
 			if err != nil {
 				return fmt.Errorf("function %s: %w", name, err)
@@ -569,12 +666,20 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 			return err
 		}
 	}
+	// 交接数据集的截止各自在自己的窗口里改（旧周期都已建立之后、新执行端的第一个周期建立之前），只看时间：
+	// 不等过渡阶段的确认，也不等整份计划收尾。旧端迟迟不确认（失联、云端作业慢）时，晚改截止会让新执行端的周期整期被拒。
+	if err := r.applyHandoffLateness(ctx, record, content, progress, false); err != nil {
+		return err
+	}
 	done, err := r.pushFunctions(ctx, record, content, progress, false)
 	if err != nil || !done {
 		return err
 	}
 	if end := content.WindowEnd(); !end.IsZero() && r.now().Before(end.Add(planFinalizeMargin)) {
 		return nil
+	}
+	if err := r.applyHandoffLateness(ctx, record, content, progress, true); err != nil {
+		return err
 	}
 	done, err = r.pushFunctions(ctx, record, content, progress, true)
 	if err != nil || !done {
@@ -593,6 +698,13 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 	}
 	if err := r.saveProgress(ctx, record, progress, store.FetchPlanApplied, ""); err != nil {
 		return err
+	}
+	if r.Modes != nil && content.HasHandoff() {
+		// 只清这份计划完成交接的数据集的 --force 标记：其他数据集的切换（例如逐个数据集执行的 --force）
+		// 还在等下一份计划，标记要留给它。被 --force 推进的标的变更计划没有交接，不清标记。
+		if err := r.Modes.ClearForce(ctx, r.SpaceID, handedOff(content)); err != nil {
+			log.WarnContextf(ctx, "collector fetch plan clear force flags space=%s: %v", r.SpaceID, err)
+		}
 	}
 	log.InfoContextf(ctx, "collector fetch plan applied space=%s plan=%d", r.SpaceID, record.ID)
 	return nil
@@ -664,6 +776,23 @@ func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchP
 	if len(todo) == 0 {
 		return true, nil
 	}
+	var cloud, streamItems []string
+	for _, name := range todo {
+		if content.Functions[name].IsSCF() {
+			cloud = append(cloud, name)
+		} else {
+			streamItems = append(streamItems, name)
+		}
+	}
+	if len(streamItems) > 0 {
+		if err := r.confirmStream(ctx, record, content, progress, streamItems, final); err != nil {
+			return false, err
+		}
+	}
+	todo = cloud
+	if len(todo) == 0 {
+		return r.allConfirmed(content, progress, final), nil
+	}
 	// 创建失败或尚未完成的函数不阻塞其他函数：已存在的函数先下发，缺的下一轮再试。
 	notReady := map[string]bool{}
 	if !final {
@@ -718,12 +847,350 @@ func (r *PlanReconciler) pushFunctions(ctx context.Context, record *store.FetchP
 		_ = r.saveProgress(ctx, record, progress, record.Status, createErr.Error())
 		return false, createErr
 	}
-	for _, name := range todo {
-		if !(*confirmed)[name] {
-			return false, nil
+	return r.allConfirmed(content, progress, final), nil
+}
+
+// allConfirmed 判断这一阶段需要下发的项都已确认。
+func (r *PlanReconciler) allConfirmed(content *FetchPlanContent, progress *FetchPlanProgress, final bool) bool {
+	confirmed := progress.Transitioned
+	if final {
+		confirmed = progress.Finalized
+	}
+	for _, name := range content.SortedFunctionNames() {
+		function := content.Functions[name]
+		needed := function.Push
+		if final {
+			needed = r.finalDiffers(content, function)
+		}
+		if needed && !confirmed[name] {
+			return false
 		}
 	}
-	return true, nil
+	return true
+}
+
+// confirmStream 把推送与本地执行端的项“下发”到这一阶段：记下要求的阶段（collector-stream 心跳拿到新版本后拉取），
+// 看到实例回报已应用该记录的这一阶段（或更后的阶段）才算确认。
+// --force：带 --force 创建的计划只在 collector-stream 是旧执行端（没有数据集正切到推送或本地执行端）时不等确认，新执行端仍要确认；
+// 计划打开之后才执行的 --force（库里留下了标记）说明这份计划卡在失联的 collector-stream 上，不再等它确认。
+func (r *PlanReconciler) confirmStream(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress, names []string, final bool) error {
+	stage, confirmed := StreamStageTransition, &progress.Transitioned
+	if final {
+		stage, confirmed = StreamStageFinal, &progress.Finalized
+	}
+	if streamStageRank(progress.StreamStage) < streamStageRank(stage) {
+		progress.StreamStage = stage
+		if err := r.saveProgress(ctx, record, progress, record.Status, record.LastError); err != nil {
+			return err
+		}
+	}
+	ok := progress.Forced && !movesToWorker(content)
+	if !ok && !progress.Forced {
+		later, err := r.forceRequested(ctx)
+		if err != nil {
+			return err
+		}
+		ok = later
+	}
+	if !ok && r.Workers != nil {
+		worker, err := r.Workers.Get(ctx, r.SpaceID)
+		if err != nil {
+			return r.fail("store", err)
+		}
+		if worker != nil {
+			var applied StreamApplied
+			if json.Unmarshal([]byte(worker.Applied), &applied) == nil {
+				ok = applied.ID == record.ID && streamStageRank(applied.Stage) >= streamStageRank(stage)
+			}
+		}
+	}
+	if !ok {
+		return nil
+	}
+	for _, name := range names {
+		progress.mark(confirmed, name)
+	}
+	return r.saveProgress(ctx, record, progress, record.Status, record.LastError)
+}
+
+// forceRequested 判断计划打开之后有没有执行过 --force：标记由切换命令原子写进采集方式表，
+// 对账器在这里读取，不与对账器保存的进度互相覆盖。
+func (r *PlanReconciler) forceRequested(ctx context.Context) (bool, error) {
+	if r.Modes == nil {
+		return false, nil
+	}
+	modes, err := r.Modes.List(ctx, r.SpaceID)
+	if err != nil {
+		return false, r.fail("store", err)
+	}
+	for _, mode := range modes {
+		if mode.Force {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// handedOff 返回计划里完成交接（换了执行端）的数据集。
+func handedOff(content *FetchPlanContent) []string {
+	seen := map[string]bool{}
+	var ids []string
+	for _, change := range content.Datasets {
+		if change.Changed && change.OldIngest != "" && !seen[change.DatasetID] {
+			seen[change.DatasetID] = true
+			ids = append(ids, change.DatasetID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// movesToWorker 判断计划里有数据集正从别的执行端切到推送或本地执行端（collector-stream 是新执行端）。
+func movesToWorker(content *FetchPlanContent) bool {
+	for _, change := range content.Datasets {
+		if change.Changed && change.OldIngest != "" && change.IngestOrSCF() != PlanExecutorSCF {
+			return true
+		}
+	}
+	return false
+}
+
+func streamStageRank(stage string) int {
+	switch stage {
+	case StreamStageTransition:
+		return 1
+	case StreamStageFinal:
+		return 2
+	default:
+		return 0
+	}
+}
+
+// handoffLatenessMaxWait 是一轮对账里为等到交接截止的可改时刻最多等待的时间（对账每分钟一轮，1m 的窗口只有约 35 秒）。
+const handoffLatenessMaxWait = 40 * time.Second
+
+// handoffLatenessDue 返回一个交接数据集可以改截止的时刻与必须改完的时刻：
+// 截止在周期第一次建立时冻结，旧执行端的最后一个周期（P 之前）到 P + 旧截止之后不能再建立；
+// 新执行端的第一个周期 P 在它收盘（P 加一个周期）之后才建立，要在那之前改成新值。
+func handoffLatenessDue(change *PlanDatasetChange) (time.Time, time.Time) {
+	start := time.Unix(change.P, 0).UTC()
+	due := start.Add(time.Duration(change.OldLatenessS)*time.Second + planFinalizeMargin)
+	deadline := start.Add(time.Minute)
+	if frequency, err := marketdata.ParseFrequency(change.Frequency); err == nil {
+		deadline = nextBoundary(frequency, start.Add(time.Second))
+	}
+	return due, deadline
+}
+
+// applyHandoffLateness 把交接数据集的截止改成新值，每个数据集在自己的窗口里改（见 handoffLatenessDue）：
+// 可改时刻在本轮 handoffLatenessMaxWait 之内就等到那一刻；all 为真（整份计划收尾、下发最终计划之前）时把剩下的都改掉。
+func (r *PlanReconciler) applyHandoffLateness(ctx context.Context, record *store.FetchPlanRecord, content *FetchPlanContent, progress *FetchPlanProgress, all bool) error {
+	if r.Lateness == nil {
+		return nil
+	}
+	type pending struct {
+		key           string
+		due, deadline time.Time
+	}
+	var items []pending
+	for key, change := range content.Datasets {
+		if change.HandoffLateness() && !progress.LatenessSet[key] {
+			due, deadline := handoffLatenessDue(change)
+			items = append(items, pending{key: key, due: due, deadline: deadline})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if !items[i].due.Equal(items[j].due) {
+			return items[i].due.Before(items[j].due)
+		}
+		return items[i].key < items[j].key
+	})
+	for _, item := range items {
+		if wait := item.due.Sub(r.now()); wait > 0 && !all {
+			if wait > handoffLatenessMaxWait {
+				continue
+			}
+			if err := r.wait(ctx, wait); err != nil {
+				return nil
+			}
+		}
+		key, change := item.key, content.Datasets[item.key]
+		if r.now().After(item.deadline) {
+			log.WarnContextf(ctx, "collector fetch plan switched allowed lateness late space=%s dataset=%s: periods from %s were created with the old lateness", r.SpaceID, key, time.Unix(change.P, 0).UTC().Format(time.RFC3339))
+		}
+		if err := r.Lateness.EnsureAllowedLateness(ctx, r.SpaceID, change.DatasetID, change.LatenessS); err != nil {
+			return r.fail("dataset", fmt.Errorf("set allowed lateness of dataset %s: %w", change.DatasetID, err))
+		}
+		progress.mark(&progress.LatenessSet, key)
+		if err := r.saveProgress(ctx, record, progress, record.Status, ""); err != nil {
+			return err
+		}
+		log.InfoContextf(ctx, "collector fetch plan switched allowed lateness space=%s dataset=%s %ds -> %ds", r.SpaceID, key, change.OldLatenessS, change.LatenessS)
+	}
+	return nil
+}
+
+// datasetModes 返回各数据集的采集方式，并为第一次出现的数据集写入初值：已在生效计划里的按它现在的执行端，
+// 真正新出现的取空间默认值（default_ingest、default_executor）。forced 是带 --force 标记的数据集。
+func (r *PlanReconciler) datasetModes(ctx context.Context, groups []TaskGroup, previous map[string]*PlanDatasetState) (map[string]DatasetMode, map[string]bool, error) {
+	modes := map[string]DatasetMode{}
+	forced := map[string]bool{}
+	if r.Modes == nil {
+		return modes, forced, nil
+	}
+	stored, err := r.Modes.List(ctx, r.SpaceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	current := map[string]string{}
+	for _, state := range previous {
+		current[state.DatasetID] = state.IngestOrSCF()
+	}
+	var initial []store.IngestMode
+	for _, group := range groups {
+		if _, ok := stored[group.DatasetID]; ok {
+			continue
+		}
+		mode := r.DefaultMode
+		// 任务参数指定的初值优先于空间默认值。
+		if group.Ingest != "" {
+			mode.Mode = group.Ingest
+		}
+		if group.Executor != "" {
+			mode.Executor = group.Executor
+		}
+		if executor, ok := current[group.DatasetID]; ok {
+			switch executor {
+			case PlanExecutorStream:
+				mode.Mode = IngestStream
+			case PlanExecutorLocal:
+				mode = DatasetMode{Mode: IngestPull, Executor: PlanExecutorLocal}
+			default:
+				mode = DatasetMode{Mode: IngestPull, Executor: PlanExecutorSCF}
+			}
+		}
+		if mode.Mode == "" {
+			mode.Mode = IngestPull
+		}
+		if mode.Executor == "" {
+			mode.Executor = PlanExecutorSCF
+		}
+		entry := store.IngestMode{SpaceID: r.SpaceID, DatasetID: group.DatasetID, Mode: mode.Mode, Executor: mode.Executor}
+		stored[group.DatasetID] = entry
+		initial = append(initial, entry)
+	}
+	if err := r.Modes.Initialize(ctx, initial); err != nil {
+		return nil, nil, err
+	}
+	for datasetID, mode := range stored {
+		modes[datasetID] = DatasetMode{Mode: mode.Mode, Executor: mode.Executor}
+		if mode.Force {
+			forced[datasetID] = true
+		}
+	}
+	return modes, forced, nil
+}
+
+// excludeSubjects 从采集组里去掉排除的标的；标的全被排除的组不再采集。
+func excludeSubjects(groups []TaskGroup, exclusions []store.SubjectExclusion) []TaskGroup {
+	if len(exclusions) == 0 {
+		return groups
+	}
+	result := make([]TaskGroup, 0, len(groups))
+	for _, group := range groups {
+		excluded := map[string]bool{}
+		for _, exclusion := range exclusions {
+			if exclusion.Excludes(group.MarketType) {
+				excluded[exclusion.SubjectID] = true
+			}
+		}
+		subjects := make([]string, 0, len(group.Subjects))
+		for _, subject := range group.Subjects {
+			if !excluded[strings.ToUpper(subject)] {
+				subjects = append(subjects, subject)
+			}
+		}
+		if len(subjects) == len(group.Subjects) {
+			result = append(result, group)
+			continue
+		}
+		if len(subjects) == 0 {
+			continue
+		}
+		group.Subjects = subjects
+		group.ExternalSymbols = keepKeys(group.ExternalSymbols, subjects)
+		group.Pairs = keepKeys(group.Pairs, subjects)
+		result = append(result, group)
+	}
+	return result
+}
+
+func keepKeys(values map[string]string, keys []string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	kept := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if value, ok := values[key]; ok {
+			kept[key] = value
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
+// handoffPending 判断期望状态里有已生效的数据集换了执行端。
+func handoffPending(desired *DesiredState, previous map[string]*PlanDatasetState) bool {
+	for key, dataset := range desired.Datasets {
+		if old := previous[key]; old != nil && old.IngestOrSCF() != dataset.IngestOrSCF() {
+			return true
+		}
+	}
+	return false
+}
+
+// subjectsChanging 判断有已生效的数据集标的集合在变。
+func subjectsChanging(desired *DesiredState, previous map[string]*PlanDatasetState) bool {
+	for key, dataset := range desired.Datasets {
+		if old := previous[key]; old != nil && old.Hash != dataset.Hash {
+			return true
+		}
+	}
+	return false
+}
+
+// appliedModes 把已生效的数据集的方式还原成它们现在的执行端（推迟交接），新数据集保持库里的方式。
+func appliedModes(modes map[string]DatasetMode, previous map[string]*PlanDatasetState) map[string]DatasetMode {
+	result := make(map[string]DatasetMode, len(modes))
+	for id, mode := range modes {
+		result[id] = mode
+	}
+	for _, state := range previous {
+		mode := result[state.DatasetID]
+		switch state.IngestOrSCF() {
+		case PlanExecutorStream:
+			mode.Mode = IngestStream
+		case PlanExecutorLocal:
+			mode.Mode, mode.Executor = IngestPull, PlanExecutorLocal
+		default:
+			mode.Mode, mode.Executor = IngestPull, PlanExecutorSCF
+		}
+		result[state.DatasetID] = mode
+	}
+	return result
+}
+
+// scfFunctions 只保留 SCF 函数（云端校验、修复、频控估算只作用于它们）。
+func scfFunctions(functions map[string]*PlanFunction) map[string]*PlanFunction {
+	result := make(map[string]*PlanFunction, len(functions))
+	for name, function := range functions {
+		if function != nil && function.Executor == "" {
+			result[name] = function
+		}
+	}
+	return result
 }
 
 // timerCronOrPlaceholder 停用定时器时仍要给 CloudNode 一个受支持的 cron（预检要求非空），只靠 enabled=false 停用。
@@ -954,6 +1421,7 @@ func (r *PlanReconciler) verifyUntouched(ctx context.Context, open *store.FetchP
 		return err
 	}
 	previous, _ := appliedContent.Applied()
+	previous = scfFunctions(previous)
 	untouched := map[string]*PlanFunction{}
 	for name, function := range previous {
 		change := openContent.Functions[name]

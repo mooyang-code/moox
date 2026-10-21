@@ -241,7 +241,39 @@ func setupFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
 			})
 		}
 	}
+	for _, host := range manifest.Hosts() {
+		add(host, healthProbeFirewallRules(manifest, host))
+	}
 	return targets
+}
+
+// healthProbeFirewallRules 是 Monitor（在控制机上）探测其他直连主机上组件健康端口需要的规则：只放行控制机地址。
+// 健康端口本身还有签名鉴权；控制机自己的组件由本机探测，不需要放行。
+func healthProbeFirewallRules(manifest setupconfig.Manifest, host setupconfig.Host) []cloudtencent.CreateFirewallRulesOptions {
+	control := manifest.ControlHost()
+	if strings.EqualFold(strings.TrimSpace(host.Name), strings.TrimSpace(control.Name)) || !isPublicFirewallIP(control.Address) {
+		return nil
+	}
+	// 与控制机同一地域且有私网地址的主机，Monitor 走私网探测，不经过公网防火墙（与 Monitor 放置同步的规则一致）。
+	if host.PrivateAddress != "" && host.Region != "" && host.Region == control.Region {
+		return nil
+	}
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		return nil
+	}
+	var rules []cloudtencent.CreateFirewallRulesOptions
+	for _, id := range manifest.Placements[host.Name] {
+		component, ok := catalog.Component(id)
+		if !ok || component.Health.Kind != "readyz" || component.Health.Port <= 0 || component.Health.Loopback {
+			continue
+		}
+		rules = append(rules, cloudtencent.CreateFirewallRulesOptions{
+			Protocol: "TCP", Ports: fmt.Sprint(component.Health.Port), CidrBlock: control.Address + "/32",
+			Action: "ACCEPT", Description: "MooX Monitor health probe " + id,
+		})
+	}
+	return rules
 }
 
 func setupconfigHostConfigured(host setupconfig.Host) bool {

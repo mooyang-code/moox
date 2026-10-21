@@ -40,6 +40,10 @@ type CollectParams struct {
 	SymbolsPerFunction int `json:"symbols_per_function,omitempty"`
 	// AllowedLatenessSeconds 是结果数据集的允许迟到时间；0 表示使用空间默认值（crypto 15 秒，stockcn 90 秒）。
 	AllowedLatenessSeconds int `json:"allowed_lateness_seconds,omitempty"`
+	// Ingest、Executor 是结果数据集采集方式的初值（stream / pull，scf / local）：数据集第一次出现时代替空间默认值写入，
+	// 之后以 Collector 库为准，由 moox-cli collector ingest-mode set 切换。为空表示用空间默认值。
+	Ingest   string `json:"ingest,omitempty"`
+	Executor string `json:"executor,omitempty"`
 }
 
 // CollectSource describes where target objects come from.
@@ -98,6 +102,13 @@ func (p *CollectParams) validatePlanOptions() error {
 	}
 	if p.AllowedLatenessSeconds != 0 && (p.AllowedLatenessSeconds < 5 || p.AllowedLatenessSeconds > 3600) {
 		return fmt.Errorf("parse collect params: allowed_lateness_seconds must be 0 (default) or between 5 and 3600")
+	}
+	p.Ingest, p.Executor = strings.ToLower(strings.TrimSpace(p.Ingest)), strings.ToLower(strings.TrimSpace(p.Executor))
+	if p.Ingest != "" && p.Ingest != "stream" && p.Ingest != "pull" {
+		return fmt.Errorf("parse collect params: ingest must be stream or pull")
+	}
+	if p.Executor != "" && p.Executor != "scf" && p.Executor != "local" {
+		return fmt.Errorf("parse collect params: executor must be scf or local")
 	}
 	return nil
 }

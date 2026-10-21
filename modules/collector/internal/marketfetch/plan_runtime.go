@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/marketfetchpb"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -37,29 +38,52 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 	if h.Now != nil {
 		entry = h.Now()
 	}
-	respond := func(success bool, message string, results []PlanRunResult) (*model.Response, error) {
-		return &model.Response{Success: success, Message: message, Data: results, RequestID: requestID, Timestamp: time.Now().UTC()}, nil
+	respond := func(message string) (*model.Response, error) {
+		return &model.Response{Success: false, Message: message, RequestID: requestID, Timestamp: time.Now().UTC()}, nil
 	}
 	if scheduled.IsZero() {
-		return respond(false, "timer scheduled time is required", nil)
-	}
-	spaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
-	if spaceID == "" {
-		return respond(false, "MOOX_SPACE_ID is required", nil)
+		return respond("timer scheduled time is required")
 	}
 	plan, err := DecodePlan(os.Getenv(PlanEnvName))
 	if err != nil {
-		return respond(false, err.Error(), nil)
+		return respond(err.Error())
 	}
 	applyPlanFetchEnvironment(plan.Fetch)
 	dnsRoutes, err := parseDNSRoutes(os.Getenv("MOOX_MARKET_FETCH_DNS_ROUTES_JSON"))
 	if err != nil {
-		return respond(false, err.Error(), nil)
+		return respond(err.Error())
 	}
-	planned, err := plan.BuildRequests(spaceID, functionName, requestID, scheduled, dnsRoutes)
+	httpclient.SetConnReuse(plan.Fetch.ConnReuse)
+	return h.RunPlan(ctx, plan, PlanRun{RequestID: requestID, FunctionName: functionName, Scheduled: scheduled, Entry: entry, DNSRoutes: dnsRoutes})
+}
+
+// PlanRun 是一次按计划执行的触发信息。
+type PlanRun struct {
+	RequestID    string
+	FunctionName string
+	Scheduled    time.Time
+	Entry        time.Time
+	DNSRoutes    map[string]sources.DNSResolution
+}
+
+// RunPlan 按计划与触发时间对到期的频率各执行一次（SCF 定时器与本地执行端共用），不读写进程环境。
+func (h *Handler) RunPlan(ctx context.Context, plan *Plan, run PlanRun) (*model.Response, error) {
+	requestID, functionName, scheduled, entry := run.RequestID, run.FunctionName, run.Scheduled, run.Entry
+	respond := func(success bool, message string, results []PlanRunResult) (*model.Response, error) {
+		return &model.Response{Success: success, Message: message, Data: results, RequestID: requestID, Timestamp: time.Now().UTC()}, nil
+	}
+	spaceID := h.spaceID()
+	if spaceID == "" {
+		return respond(false, "MOOX_SPACE_ID is required", nil)
+	}
+	if entry.IsZero() {
+		entry = time.Now()
+	}
+	planned, err := plan.BuildRequests(spaceID, functionName, requestID, scheduled, run.DNSRoutes)
 	if err != nil {
 		return respond(false, err.Error(), nil)
 	}
+	planned = splitPlannedRequests(planned, MaxPlanItems)
 	if h.PlanPeriodValid != nil {
 		kept := planned[:0]
 		for _, item := range planned {
@@ -73,11 +97,11 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 		return respond(true, "no_work", nil)
 	}
 	standbyMS := plan.StandbyFor(scheduled)
-	connReuse := plan != nil && plan.Fetch.ConnReuse
-	httpclient.SetConnReuse(connReuse)
+	connReuse := plan.Fetch.ConnReuse
 	for index := range planned {
 		planned[index].Request.StandbyMS = standbyMS
 		planned[index].Request.ConnReuse = connReuse
+		planned[index].Request.FetchLimits = plan.Fetch.Limits()
 	}
 	// 截止时间最近的先执行：整点同时到期多个频率时，短周期不能被长周期占去预算。
 	// 截止时间相同则周期短的先执行（1m 先于 1h）。
@@ -93,7 +117,7 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 	}
 	defer closeGateway()
 	defer h.reportMetrics(ctx)
-	stagger := plan.StaggerDelay(functionName)
+	stagger := plan.StartDelay(functionName, entry, scheduled.UTC().Truncate(time.Minute))
 	for index := range planned {
 		planned[index].Request.TimerLateMS = int(entry.Sub(scheduled).Milliseconds())
 		planned[index].Request.StaggerMS = int(stagger.Milliseconds())
@@ -161,6 +185,35 @@ func (h *Handler) HandlePlanTimer(ctx context.Context, requestID, functionName s
 		message = "partial_failed"
 	}
 	return respond(allSucceeded, message, results)
+}
+
+// splitPlannedRequests 把条目超过 limit 的请求按条目切开（目标随条目走）：本地执行端一份计划包含一个市场的全部标的，
+// 而单次请求的条目有上限；同一周期分几次部分提交，Storage 会把成功位图合并。
+func splitPlannedRequests(planned []PlannedRequest, limit int) []PlannedRequest {
+	var result []PlannedRequest
+	for _, item := range planned {
+		if len(item.Request.Items) <= limit {
+			result = append(result, item)
+			continue
+		}
+		for start := 0; start < len(item.Request.Items); start += limit {
+			part := item
+			part.Request.Items = append([]domain.CollectionItem(nil), item.Request.Items[start:min(start+limit, len(item.Request.Items))]...)
+			instances := make(map[string]struct{}, len(part.Request.Items))
+			for _, collection := range part.Request.Items {
+				instances[collection.InstanceID] = struct{}{}
+			}
+			part.Request.Targets = nil
+			for _, target := range item.Request.Targets {
+				if _, ok := instances[target.InstanceID]; ok {
+					part.Request.Targets = append(part.Request.Targets, target)
+				}
+			}
+			part.Request.BatchID = fmt.Sprintf("%s#%d", item.Request.BatchID, start/limit)
+			result = append(result, part)
+		}
+	}
+	return result
 }
 
 // applyPlanFetchEnvironment 把计划里的拉取参数设置为进程环境，供数据源适配器在每次调用时读取。

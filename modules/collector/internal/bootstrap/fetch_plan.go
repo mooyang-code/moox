@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/klinecheck"
+	"github.com/mooyang-code/moox/modules/collector/internal/localexec"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	stockmarket "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
@@ -23,7 +24,7 @@ import (
 )
 
 // registerFetchPlanManager 为配置了 SCF 市场地域的空间启动采集计划对账：每个空间一个独立协程。
-func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *marketfetch.Metrics, svc *collectsvc.Service) error {
+func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *marketfetch.Metrics, svc *collectsvc.Service, stream *collectsvc.StreamService) error {
 	spaces := cfg.fetchPlanSpaces()
 	stored, err := dbm.FetchPlans().Spaces(process.ctx)
 	if err != nil {
@@ -68,9 +69,24 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			}
 			return nil
 		},
+		// 补采按数据集的执行端调用：scf 走补采函数，local 调香港机 collector-stream 里的本地执行端。
+		Executor: func(ctx context.Context, spaceID, datasetID string) (string, error) {
+			modes, err := dbm.IngestModes().List(ctx, spaceID)
+			if err != nil {
+				return "", err
+			}
+			if mode, ok := modes[datasetID]; ok && mode.Executor == store.ExecutorLocal {
+				return marketfetch.PlanExecutorLocal, nil
+			}
+			return marketfetch.PlanExecutorSCF, nil
+		},
+		Local: &localexec.Client{Gateway: process.gateway},
+		// 补采作业成功后通知因子：引擎立即推进连续水位、补算上游失败的标的。
+		Notify: klinecheck.FactorNotifier(process.gateway),
 	}
 	process.beforeClose = append(process.beforeClose, func() error { backfiller.Wait(); return nil })
 	svc.SetKlineOps(backfiller)
+	svc.SetActivityLogger(invoker)
 	manager := &marketfetch.PlanManager{
 		Configured: configured,
 		Spaces: func(ctx context.Context) ([]string, error) {
@@ -94,8 +110,10 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		},
 		Factory: func(spaceID string) (*marketfetch.PlanReconciler, error) {
 			options := marketfetch.PlanOptions{
-				SpaceID: spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], SymbolsPerFunction: cfg.SCFPlan.symbolsPerFunction(spaceID),
-				Fetch: cfg.SCFPlan.fetchFor(spaceID), DefaultLatenessS: defaultLatenessSeconds(spaceID), AssumedEgressIPs: cfg.SCFPlan.AssumedEgressIPs,
+				StreamLatenessS: cfg.Stream.LatenessS,
+				SpaceID:         spaceID, Markets: cfg.SCFMarkets[strings.ToLower(spaceID)], SymbolsPerFunction: cfg.SCFPlan.symbolsPerFunction(spaceID),
+				Fetch: cfg.SCFPlan.fetchFor(spaceID, ""), MarketFetch: cfg.SCFPlan.marketFetches(spaceID),
+				DefaultLatenessS: defaultLatenessSeconds(spaceID), MarketLatenessS: cfg.SCFPlan.marketLateness(spaceID), AssumedEgressIPs: cfg.SCFPlan.AssumedEgressIPs,
 			}
 			var preflight func(context.Context) error
 			if strings.EqualFold(spaceID, marketfetch.StockCNSpaceID) {
@@ -113,6 +131,8 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 				},
 				Store: dbm.FetchPlans(), Storage: registrar, Cloud: invoker, Access: cfg.scfPlanAccessEnvironment, Lateness: results,
 				Activity: invoker, Metrics: metrics, Operations: operations,
+				Modes: dbm.IngestModes(), DefaultMode: cfg.SCFPlan.defaultModeFor(spaceID), Workers: dbm.StreamWorkers(),
+				Exclusions: dbm.SubjectExclusions(),
 			}
 			reconcilers.Store(spaceID, reconciler)
 			return reconciler, nil
@@ -144,6 +164,21 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		},
 	}
 	svc.SetFetchPlanControl(manager)
+	// 心跳中断时在线指标也要变：定时按心跳超时刷新。
+	if !process.launch(func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-process.ctx.Done():
+				return
+			case <-ticker.C:
+				stream.RefreshOnline(process.ctx, spaces)
+			}
+		}
+	}) {
+		return fmt.Errorf("collector runtime is closing")
+	}
 	if !process.launch(func() { manager.Run(process.ctx) }) {
 		return fmt.Errorf("collector runtime is closing")
 	}

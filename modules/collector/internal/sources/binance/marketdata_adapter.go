@@ -31,6 +31,8 @@ type AdapterConfig struct {
 	KlineCollector  *KlineCollector
 	SymbolCollector *SymbolCollector
 	Now             func() time.Time
+	// RateLimit 覆盖从进程环境读取的限流与超时（常驻的本地执行端按计划随请求给出），零值字段仍按环境与默认。
+	RateLimit marketdata.RateLimitPolicy
 }
 
 // MarketDataAdapter exposes the existing Binance collectors through the common
@@ -41,6 +43,7 @@ type MarketDataAdapter struct {
 	klineCollector        *KlineCollector
 	symbolCollector       *SymbolCollector
 	now                   func() time.Time
+	rateLimit             marketdata.RateLimitPolicy
 }
 
 func NewMarketDataAdapter(cfg AdapterConfig) *MarketDataAdapter {
@@ -61,6 +64,7 @@ func NewMarketDataAdapter(cfg AdapterConfig) *MarketDataAdapter {
 		klineCollector:        cfg.KlineCollector,
 		symbolCollector:       cfg.SymbolCollector,
 		now:                   cfg.Now,
+		rateLimit:             cfg.RateLimit,
 	}
 }
 
@@ -102,14 +106,35 @@ func (a *MarketDataAdapter) KlineSpec() marketdata.KlineSpec {
 		SupportsBatch:     false,
 		TimestampMode:     marketdata.TimestampModeOpen,
 		History:           marketdata.KlineHistoryCapability{SupportsArbitraryRange: true},
-		RateLimit: marketdata.RateLimitPolicy{
-			RequestsPerSecond: configuredFeedLimit("MOOX_FETCH_RPS", 5),
-			Burst:             int(configuredFeedLimit("MOOX_FETCH_BURST", 5)),
-			MaxConcurrent:     int(configuredFeedLimit("MOOX_FETCH_FEED_CONCURRENCY", 1)),
-			Cooldown:          time.Second,
-			RequestTimeout:    configuredKlineRequestTimeout(),
-		},
+		RateLimit:         a.klineRateLimit(),
 	}
+}
+
+// klineRateLimit 是 K 线请求的限流与超时：适配器配置给出的值优先，其余读进程环境（SCF 按计划设置）与默认。
+func (a *MarketDataAdapter) klineRateLimit() marketdata.RateLimitPolicy {
+	policy := marketdata.RateLimitPolicy{
+		RequestsPerSecond: configuredFeedLimit("MOOX_FETCH_RPS", 5),
+		Burst:             int(configuredFeedLimit("MOOX_FETCH_BURST", 5)),
+		MaxConcurrent:     int(configuredFeedLimit("MOOX_FETCH_FEED_CONCURRENCY", 1)),
+		Cooldown:          time.Second,
+		RequestTimeout:    configuredKlineRequestTimeout(),
+	}
+	if a == nil {
+		return policy
+	}
+	if a.rateLimit.RequestsPerSecond > 0 {
+		policy.RequestsPerSecond = a.rateLimit.RequestsPerSecond
+	}
+	if a.rateLimit.Burst > 0 {
+		policy.Burst = a.rateLimit.Burst
+	}
+	if a.rateLimit.MaxConcurrent > 0 {
+		policy.MaxConcurrent = a.rateLimit.MaxConcurrent
+	}
+	if a.rateLimit.RequestTimeout > 0 {
+		policy.RequestTimeout = a.rateLimit.RequestTimeout
+	}
+	return policy
 }
 
 // configuredFeedLimit 读取限流参数（速率、突发、并发）。默认值保持保守；SCF 的计划按数据源下发更大的值，
@@ -293,6 +318,7 @@ func (a *MarketDataAdapter) FetchInstrumentSnapshot(ctx context.Context, req mar
 			Status:         symbol.Status,
 			BaseAsset:      symbol.BaseAsset,
 			QuoteAsset:     symbol.QuoteAsset,
+			Pair:           symbol.Pair,
 		})
 	}
 	if len(duplicated) > 0 {

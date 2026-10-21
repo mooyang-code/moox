@@ -43,6 +43,12 @@ type DatasetRunObserver interface {
 	ObserveRun(report.DatasetObservation) error
 }
 
+// DeadlineRejectionObserver 记录“周期建立前截止已过”的拒绝：写入方取数晚于数据集截止（常见于采集方式切换时截止没跟上），
+// 整期提交都会被拒，Monitor 据此告警。
+type DeadlineRejectionObserver interface {
+	ObserveDeadlineRejection(spaceID, datasetID, frequency string, at time.Time)
+}
+
 type Service struct {
 	resolve   Resolver
 	validate  Validator
@@ -50,6 +56,7 @@ type Service struct {
 	authorize Authorizer
 	snapshot  SnapshotProvider
 	metrics   DatasetRunObserver
+	rejection DeadlineRejectionObserver
 	result    ResultDatasetResolver
 	syncPoint ViewSyncPointReader
 }
@@ -63,8 +70,10 @@ type Options struct {
 	Authorizer     Authorizer
 	Snapshot       SnapshotProvider
 	DatasetMetrics DatasetRunObserver
-	ResultDataset  ResultDatasetResolver
-	SyncPoints     ViewSyncPointReader
+	// DeadlineRejections 为空时不记录截止拒绝。
+	DeadlineRejections DeadlineRejectionObserver
+	ResultDataset      ResultDatasetResolver
+	SyncPoints         ViewSyncPointReader
 }
 
 func New(opts Options) (*Service, error) {
@@ -77,7 +86,7 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{
 		resolve: resolve, validate: opts.Validator, sign: opts.AuthSigner, authorize: opts.Authorizer,
-		snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, result: opts.ResultDataset, syncPoint: opts.SyncPoints,
+		snapshot: opts.Snapshot, metrics: opts.DatasetMetrics, rejection: opts.DeadlineRejections, result: opts.ResultDataset, syncPoint: opts.SyncPoints,
 	}, nil
 }
 

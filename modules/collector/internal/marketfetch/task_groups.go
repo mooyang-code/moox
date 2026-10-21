@@ -161,6 +161,7 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 	}
 	symbolIDs := make([]string, 0, len(subjects))
 	externalSymbols := make(map[string]string, len(subjects))
+	var pairs map[string]string
 	activeSubjectCount := 0
 	invalidSubjects := make([]string, 0)
 	for _, subject := range subjects {
@@ -176,6 +177,12 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 		}
 		symbolIDs = append(symbolIDs, subjectID)
 		externalSymbols[subjectID] = external
+		if pair := strings.ToUpper(strings.TrimSpace(subject.Pair)); pair != "" && pair != external {
+			if pairs == nil {
+				pairs = map[string]string{}
+			}
+			pairs[subjectID] = pair
+		}
 	}
 	if activeSubjectCount > 0 && len(symbolIDs) == 0 {
 		return nil, fmt.Errorf("all active %s subjects are invalid: %s", marketType, strings.Join(invalidSubjects, ","))
@@ -189,8 +196,9 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 			Provider: provider, MarketType: marketType, MarketID: marketID, InstrumentType: instrumentType,
 			SourceID: sourceID, SeriesTag: params.SeriesTag, DatasetID: params.Target.DatasetID,
 			Frequency: frequency, OutputFields: append([]string(nil), params.OutputFields...),
-			Subjects: symbolIDs, ExternalSymbols: externalSymbols,
+			Subjects: symbolIDs, ExternalSymbols: externalSymbols, Pairs: pairs,
 			SymbolsPerFunction: params.SymbolsPerFunction, AllowedLatenessSeconds: params.AllowedLatenessSeconds,
+			Ingest: params.Ingest, Executor: params.Executor,
 		})
 	}
 	return result, nil
@@ -228,6 +236,12 @@ func mergeGroups(groups []TaskGroup) []TaskGroup {
 		current.Subjects = append(current.Subjects, group.Subjects...)
 		current.SymbolsPerFunction = minPositive(current.SymbolsPerFunction, group.SymbolsPerFunction)
 		current.AllowedLatenessSeconds = minPositive(current.AllowedLatenessSeconds, group.AllowedLatenessSeconds)
+		if current.Ingest == "" {
+			current.Ingest = group.Ingest
+		}
+		if current.Executor == "" {
+			current.Executor = group.Executor
+		}
 		if group.ExternalSymbols != nil {
 			if current.ExternalSymbols == nil {
 				current.ExternalSymbols = make(map[string]string)
@@ -241,6 +255,12 @@ func mergeGroups(groups []TaskGroup) []TaskGroup {
 				}
 				current.ExternalSymbols[subject] = external
 			}
+		}
+		for subject, pair := range group.Pairs {
+			if current.Pairs == nil {
+				current.Pairs = make(map[string]string)
+			}
+			current.Pairs[subject] = pair
 		}
 		byKey[key] = current
 	}

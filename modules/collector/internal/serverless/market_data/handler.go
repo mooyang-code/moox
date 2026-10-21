@@ -46,28 +46,10 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	if spaceID == "" {
 		return failure("invalid_space", "MOOX_SPACE_ID is required"), nil
 	}
-	var event model.CloudFunctionEvent
-	if err := json.Unmarshal(raw, &event); err != nil {
-		return failure("invalid_event", fmt.Sprintf("decode event: %v", err)), nil
-	}
-	timerEnvelope := event.Type != "" || event.TriggerName != "" || event.Message != ""
-	var scheduled time.Time
-	if timerEnvelope {
-		var err error
-		if scheduled, err = validateTimerEvent(event); err != nil {
-			return failure("invalid_timer_event", err.Error()), nil
-		}
-		if event.Action != "" && event.Action != model.EventActionMarketFetch {
-			return failure("invalid_timer_event", "timer event action must be market_fetch"), nil
-		}
-		event.Action = model.EventActionMarketFetch
-		event.Source = "tencent_timer"
-	}
 	functionName := strings.TrimSpace(os.Getenv("MOOX_SCF_FUNCTION_NAME"))
+	requestID := ""
 	if function, _ := functioncontext.FromContext(ctx); function != nil {
-		if event.RequestID == "" {
-			event.RequestID = function.RequestID
-		}
+		requestID = function.RequestID
 		if strings.TrimSpace(function.FunctionName) != "" {
 			functionName = function.FunctionName
 		}
@@ -90,16 +72,61 @@ func (h *Handler) HandleRequest(ctx context.Context, raw json.RawMessage) (respo
 	if reporter := newItemReporter(ctx, functionName); reporter != nil {
 		runtimeHandler.Reporter = reporter
 	}
+	return Execute(ctx, raw, Env{SpaceID: spaceID, FunctionName: functionName, RequestID: requestID, Handler: runtimeHandler, AllowTimer: true})
+}
+
+// Env 是一次执行的上下文：云函数入口从函数环境与运行时填写，本地执行端由进程配置填写。
+type Env struct {
+	SpaceID      string
+	FunctionName string
+	// RequestID 是运行时提供的请求 ID，事件没有带时使用。
+	RequestID string
+	// Handler 是已装配好的处理器（存储、指标、上报由入口决定）。
+	Handler *marketfetch.Handler
+	// AllowTimer 为真时接受定时器事件（只有云函数入口：计划在函数环境变量里）。
+	AllowTimer bool
+}
+
+// Execute 解码事件并按 action 分发；云函数入口与本地执行端入口都调它。
+func Execute(ctx context.Context, raw json.RawMessage, env Env) (*model.Response, error) {
+	if env.Handler == nil {
+		return failure("internal_error", "market fetch handler is not configured"), nil
+	}
+	var event model.CloudFunctionEvent
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return failure("invalid_event", fmt.Sprintf("decode event: %v", err)), nil
+	}
+	if event.RequestID == "" {
+		event.RequestID = env.RequestID
+	}
+	timerEnvelope := event.Type != "" || event.TriggerName != "" || event.Message != ""
+	var scheduled time.Time
+	if timerEnvelope {
+		if !env.AllowTimer {
+			return failure("invalid_event", "timer events are only accepted by cloud functions"), nil
+		}
+		var err error
+		if scheduled, err = validateTimerEvent(event); err != nil {
+			return failure("invalid_timer_event", err.Error()), nil
+		}
+		if event.Action != "" && event.Action != model.EventActionMarketFetch {
+			return failure("invalid_timer_event", "timer event action must be market_fetch"), nil
+		}
+		event.Action = model.EventActionMarketFetch
+		event.Source = "tencent_timer"
+	}
+	handler := *env.Handler
+	handler.SpaceID = env.SpaceID
 	switch event.Action {
 	case model.EventActionMarketFetch:
 		if timerEnvelope {
 			// 定时触发：按环境里的采集计划与事件的计划时间执行，周期由计划时间决定。
-			return runtimeHandler.HandlePlanTimer(ctx, event.RequestID, functionName, scheduled)
+			return handler.HandlePlanTimer(ctx, event.RequestID, env.FunctionName, scheduled)
 		}
 		// 手动调用与补采：只写行，不涉及周期状态。
-		return runtimeHandler.HandleWithFunctionName(ctx, event, functionName)
+		return handler.HandleWithFunctionName(ctx, event, env.FunctionName)
 	case model.EventActionEgressProbe:
-		if spaceID == "stockcn" {
+		if env.SpaceID == "stockcn" {
 			return marketfetch.StockEgressIdentityProbe(ctx)
 		}
 		return marketwiring.EgressProbe(ctx, "binance", "spot")

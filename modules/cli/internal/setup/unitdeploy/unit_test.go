@@ -6,6 +6,7 @@ import (
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitinstall"
+	"github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,4 +55,22 @@ func TestStorageEnvironmentSharesOnlyRequiredPersistentCredentials(t *testing.T)
 	manifest.Placements["view"] = []string{"storage-view"}
 	_, err = unitEnvironment(manifest, identity, "view", []string{"storage-view"})
 	require.Error(t, err, "loopback RPC templates cannot reach a different host")
+}
+
+// collector-stream 只拿到按 Storage 主密钥派生的 moox-collector 应用密钥，不拿主密钥。
+func TestCollectorStreamGetsOnlyTheDerivedCollectorAppKey(t *testing.T) {
+	manifest := setupconfig.Manifest{Placements: map[string][]string{"overseas": {"access", "collector-stream"}}}
+	components, err := unitComponents(manifest, "overseas", "collector-stream")
+	require.NoError(t, err)
+	require.Equal(t, []string{"collector-stream"}, components)
+	identity := runtimeIdentity{StoragePrimarySecret: strings.Repeat("p", 32), StorageViewSecret: strings.Repeat("v", 32), HealthAccessKey: "a", HealthSecret: "s"}
+	environment, err := unitEnvironment(manifest, identity, "overseas", components)
+	require.NoError(t, err)
+	values := environment["collector-stream"]
+	require.NotContains(t, values, "MOOX_STORAGE_PRIMARY_AUTH_SECRET")
+	require.NotContains(t, values, "MOOX_STORAGE_VIEW_AUTH_SECRET")
+	require.Equal(t, `{"moox-collector":"`+security.HMACSHA256Hex(identity.StoragePrimarySecret, []byte("moox-collector"))+`"}`, values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"])
+	require.Equal(t, "crypto", values["MOOX_SPACE_ID"])
+	_, err = unitEnvironment(manifest, runtimeIdentity{}, "overseas", components)
+	require.Error(t, err)
 }

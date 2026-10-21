@@ -157,7 +157,7 @@ func (c Catalog) Validate() error {
 	}
 	principals := map[string]bool{}
 	for _, principal := range c.Principals {
-		if !slices.Contains([]string{"scf-collector", "factor-engine", "archive-worker", "moox-skill"}, principal.ID) || principals[principal.ID] || ids[principal.ID] || len(principal.Allow) == 0 {
+		if !slices.Contains([]string{"scf-collector", "factor-engine", "archive-worker", "moox-skill", "collector-operator"}, principal.ID) || principals[principal.ID] || ids[principal.ID] || len(principal.Allow) == 0 {
 			return fmt.Errorf("invalid or duplicate external principal %q", principal.ID)
 		}
 		principals[principal.ID] = true

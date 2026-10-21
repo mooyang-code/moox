@@ -3,6 +3,7 @@ package klinecheck
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -74,6 +75,11 @@ func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string
 
 func newBackfillFixture(t *testing.T) (*Backfiller, *healingInvoker, *fakeRows, time.Time) {
 	t.Helper()
+	return newBackfillFixtureWithModes(t, nil)
+}
+
+func newBackfillFixtureWithModes(t *testing.T, modes map[string]marketfetch.DatasetMode) (*Backfiller, *healingInvoker, *fakeRows, time.Time) {
+	t.Helper()
 	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
 	require.NoError(t, err)
 	require.NoError(t, db.ApplySchema(schema.AllSQL()))
@@ -84,7 +90,7 @@ func newBackfillFixture(t *testing.T) (*Backfiller, *healingInvoker, *fakeRows, 
 	const slot = 5 * time.Minute
 	now := time.Now().UTC().Add(slot).Truncate(slot).Add(3 * time.Minute)
 	base := now.Add(-48*time.Hour - 3*time.Minute)
-	options := marketfetch.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}}
+	options := marketfetch.PlanOptions{SpaceID: "crypto", Markets: map[string][]string{"spot": {"ap-nanjing"}}, DefaultLatenessS: 15, Fetch: marketfetch.PlanFetch{Concurrency: 5}, Modes: modes}
 	desired, err := marketfetch.BuildDesiredState(options, []marketfetch.TaskGroup{{
 		Provider: "binance", SourceID: "binance", MarketType: "spot", MarketID: "crypto", InstrumentType: "spot", DatasetID: "ds", Frequency: "1m",
 		Subjects: []string{"BTC-USDT", "ETH-USDT"},
@@ -531,4 +537,76 @@ func TestBackfillRefillDrainsAJobWithoutWaitingForTheNextTick(t *testing.T) {
 	status, err := backfiller.Status(ctx, jobID)
 	require.NoError(t, err)
 	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
+}
+
+type failingInvoker struct{}
+
+func (failingInvoker) Invoke(context.Context, string, string, map[string]any, cloudnodepb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
+	return scfinvoker.InvocationResult{}, errors.New("SCF must not be invoked")
+}
+
+type noFunctions struct{}
+
+func (noFunctions) EnsureBackfillFunction(context.Context, string) (string, error) {
+	return "", errors.New("the backfill function must not be created")
+}
+
+// 数据集走推送、补采执行端为 local：从推送项解析市场与交易所符号，调本地执行端，不建补采函数。
+func TestBackfillUsesTheLocalExecutorForStreamDatasets(t *testing.T) {
+	backfiller, local, _, base := newBackfillFixtureWithModes(t, map[string]marketfetch.DatasetMode{"ds": {Mode: marketfetch.IngestStream, Executor: marketfetch.PlanExecutorLocal}})
+	backfiller.Invoker, backfiller.Local = failingInvoker{}, local
+	backfiller.Functions = func(string) FunctionProvider { return noFunctions{} }
+	backfiller.Executor = func(context.Context, string, string) (string, error) { return marketfetch.PlanExecutorLocal, nil }
+	ctx := context.Background()
+	jobID, chunks, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", From: base, To: base.Add(time.Hour)}, "manual")
+	require.NoError(t, err)
+	require.Equal(t, 2, chunks)
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	status, err := backfiller.Status(ctx, jobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillSucceeded, status.Job.Status, status.Failed)
+	require.Len(t, local.events, 2)
+	item := local.events[0]["data"].(map[string]any)["items"].([]any)[0].(map[string]any)
+	require.Contains(t, []any{"BTCUSDT", "ETHUSDT"}, item["symbol"])
+}
+
+// executor=scf 时仍调补采函数。
+func TestBackfillUsesTheSCFFunctionWhenTheExecutorIsSCF(t *testing.T) {
+	backfiller, scf, _, base := newBackfillFixture(t)
+	backfiller.Local = failingInvoker{}
+	backfiller.Executor = func(context.Context, string, string) (string, error) { return marketfetch.PlanExecutorSCF, nil }
+	ctx := context.Background()
+	_, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", From: base, To: base.Add(time.Hour)}, "manual")
+	require.NoError(t, err)
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	require.Len(t, scf.events, 2)
+}
+
+// 补采作业成功后按（数据集, 频率）发补齐通知，带上确认行情源没有的标的。
+func TestBackfillNotifiesFilledRangesAfterAJobSucceeds(t *testing.T) {
+	backfiller, invoker, _, base := newBackfillFixture(t)
+	invoker.noWrite = true
+	var got []FilledRange
+	backfiller.Notify = func(_ context.Context, filled []FilledRange) error { got = append(got, filled...); return nil }
+	ctx := context.Background()
+	jobID, _, err := backfiller.Submit(ctx, JobRequest{SpaceID: "crypto", DatasetID: "ds", SubjectID: "ETH-USDT", From: base, To: base.Add(time.Hour)}, "manual")
+	require.NoError(t, err)
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	backfiller.Wait()
+	require.NoError(t, backfiller.Tick(ctx, "crypto"))
+	status, _ := backfiller.Status(ctx, jobID)
+	require.Equal(t, store.BackfillSucceeded, status.Job.Status)
+	require.Len(t, got, 2)
+	require.Equal(t, "ds", got[0].DatasetID)
+	require.Equal(t, "1m", got[0].Frequency)
+	require.Empty(t, got[0].Absent, "整个补齐范围不带确认缺失")
+	require.False(t, got[0].From.After(base.Add(10*time.Minute)))
+	// 确认没有的标的按库里的记录带出精确区间（单根缺口复查仍缺即确认行情源没有）。
+	require.Equal(t, []string{"ETH-USDT"}, got[1].Absent)
+	require.False(t, got[1].From.Before(got[0].From))
+	require.False(t, got[1].To.After(got[0].To))
+	require.Less(t, got[1].To.Sub(got[1].From), time.Hour)
 }

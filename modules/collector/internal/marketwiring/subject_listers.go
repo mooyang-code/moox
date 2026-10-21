@@ -2,12 +2,13 @@ package marketwiring
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
-	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 )
 
@@ -24,14 +25,12 @@ func (l fetcherLister) List(ctx context.Context) ([]marketdata.Instrument, error
 	return snapshot.Instruments, nil
 }
 
+// NewSubjectListers 从行情源目录取出全部能提供标的快照的数据源：币安用传入的出口代理客户端，
+// A 股只启用路由里 instrument 为 active 且数据源配置开启的。
 func NewSubjectListers(clients ...*httpclient.HTTPClient) (subjectsync.Listers, error) {
 	var http *httpclient.HTTPClient
 	if len(clients) > 0 {
 		http = clients[0]
-	}
-	listers := subjectsync.Listers{
-		{Source: "binance", InstrumentType: "spot"}: fetcherLister{fetcher: binance.NewMarketDataAdapter(binance.AdapterConfig{HTTPClient: http, InstrumentType: marketdata.InstrumentSpot}), marketID: "crypto"},
-		{Source: "binance", InstrumentType: "swap"}: fetcherLister{fetcher: binance.NewMarketDataAdapter(binance.AdapterConfig{HTTPClient: http, InstrumentType: marketdata.InstrumentSwap}), marketID: "crypto"},
 	}
 	route, err := marketfetch.LoadStockCNRoute()
 	if err != nil {
@@ -41,20 +40,25 @@ func NewSubjectListers(clients ...*httpclient.HTTPClient) (subjectsync.Listers, 
 	if err != nil {
 		return nil, err
 	}
-	for _, providerID := range route.InstrumentProviders() {
-		config, ok := providerConfigs[providerID]
+	sources, err := catalog.Default().Instruments(func(entry marketdata.CatalogEntry) (marketdata.Deps, bool) {
+		if entry.MarketID != marketfetch.StockCNSpaceID {
+			return marketdata.Deps{HTTPClient: http}, true
+		}
+		if entry.Instrument != marketdata.InstrumentEquity || !slices.Contains(route.InstrumentProviders(), entry.Key.ProviderID) {
+			return marketdata.Deps{}, false
+		}
+		config, ok := providerConfigs[entry.Key.ProviderID]
 		if !ok || !config.InstrumentEnabled {
-			continue
+			return marketdata.Deps{}, false
 		}
-		provider, err := newStockCNProvider(providerID, config)
-		if err != nil {
-			return nil, err
-		}
-		fetcher, ok := provider.(marketdata.InstrumentFetcher)
-		if !ok {
-			continue
-		}
-		listers[subjectsync.ListerKey{Source: providerID, InstrumentType: "equity"}] = fetcherLister{fetcher: fetcher, marketID: "stockcn"}
+		return marketdata.Deps{Settings: stockCNSettings(config)}, true
+	})
+	if err != nil {
+		return nil, err
+	}
+	listers := subjectsync.Listers{}
+	for _, source := range sources {
+		listers[subjectsync.ListerKey{Source: source.Entry.Key.ProviderID, InstrumentType: string(source.Entry.Instrument)}] = fetcherLister{fetcher: source.Fetcher, marketID: source.Entry.MarketID}
 	}
 	return listers, nil
 }

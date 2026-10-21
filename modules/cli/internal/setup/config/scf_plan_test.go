@@ -46,7 +46,7 @@ func TestSCFPlanDefaultsAndRenderedCollectorConfig(t *testing.T) {
 	require.Equal(t, 50, plan["symbols_per_function"])
 	require.NotContains(t, plan, "package_id", "代码包只写名称，固定 ID 不再渲染")
 	require.Equal(t, map[string]any{"ap-hongkong": map[string]any{"access_address": "172.19.32.13:11004", "access_id": "access@overseas"}}, plan["access_routes"])
-	require.Equal(t, map[string]any{"crypto": map[string]any{"package_name": "moox-collector-crypto-plan", "namespace": "moox-crypto-plan"}}, plan["spaces"])
+	require.Equal(t, map[string]any{"crypto": map[string]any{"package_name": "moox-collector-crypto-plan", "namespace": "moox-crypto-plan", "default_ingest": "stream", "default_executor": "local"}}, plan["spaces"])
 
 	// 渲染幂等：对自己的输出再渲染结果不变。
 	again, err := RenderCollectorRuntimeConfig(&Snapshot{Manifest: manifest}, rendered)
@@ -160,4 +160,23 @@ func TestSCFPlanRenderedCollectorConfigMatchesTheSharedFixture(t *testing.T) {
 	expected, err := os.ReadFile(scfPlanRenderedFixture)
 	require.NoError(t, err)
 	require.Equal(t, string(expected), string(rendered))
+}
+
+// 新部署：crypto 默认 stream + local，stockcn 默认 pull + scf；显式写的以配置为准。
+func TestSCFPlanDefaultIngestPerSpace(t *testing.T) {
+	manifest := scfPlanTestManifest()
+	manifest.SCFPlan.Spaces = append(manifest.SCFPlan.Spaces,
+		SCFPlanSpace{SpaceID: "stockcn", Markets: map[string][]string{"equity": {"ap-hongkong"}}},
+		SCFPlanSpace{SpaceID: "futures", Markets: map[string][]string{"swap": {"ap-hongkong"}}, DefaultIngest: "Pull", DefaultExecutor: "local"})
+	require.NoError(t, validateSCFPlan(&manifest))
+	modes := map[string][2]string{}
+	for _, space := range manifest.SCFPlan.Spaces {
+		modes[space.SpaceID] = [2]string{space.DefaultIngest, space.DefaultExecutor}
+	}
+	require.Equal(t, [2]string{"stream", "local"}, modes["crypto"])
+	require.Equal(t, [2]string{"pull", "scf"}, modes["stockcn"])
+	require.Equal(t, [2]string{"pull", "local"}, modes["futures"])
+	invalid := scfPlanTestManifest()
+	invalid.SCFPlan.Spaces[0].DefaultIngest = "ws"
+	require.ErrorContains(t, validateSCFPlan(&invalid), "default_ingest")
 }

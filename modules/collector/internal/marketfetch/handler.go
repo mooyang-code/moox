@@ -29,11 +29,13 @@ type Handler struct {
 	// contract without making an external exchange request.
 	Execute                func(context.Context, Request, Storage) (*marketfetchpb.MarketFetchBatchCompleted, error)
 	NewMarketKlinePipeline func(Storage, string, marketdata.InstrumentType, string, string) (*KlinePipeline, error)
-	NewCryptoKlinePipeline func(Storage, marketdata.InstrumentType) (*KlinePipeline, error)
+	NewCryptoKlinePipeline func(Storage, marketdata.InstrumentType, *FeedLimits) (*KlinePipeline, error)
 	NewStockKlinePipeline  func(Storage) (*KlinePipeline, error)
 	ResolveSourceID        func(string, string) string
 	ResolveSymbol          SymbolResolver
-	Now                    func() time.Time
+	// SpaceID 是执行端所属空间；为空时读 MOOX_SPACE_ID（SCF 函数）。本地执行端显式设置，不依赖进程环境。
+	SpaceID string
+	Now     func() time.Time
 	// PlanPeriodValid 判断采集计划里某个频率的目标周期是否需要执行（stockcn 用交易日历跳过非交易周期）；nil 表示总是执行。
 	PlanPeriodValid func(market PlanMarket, frequency string, period time.Time) bool
 	Reporter        ItemReporter
@@ -56,6 +58,14 @@ const (
 )
 
 func NewHandler() *Handler { return &Handler{} }
+
+// spaceID 返回执行端所属空间：显式设置优先，否则读 SCF 函数环境。
+func (h *Handler) spaceID() string {
+	if spaceID := strings.TrimSpace(h.SpaceID); spaceID != "" {
+		return spaceID
+	}
+	return strings.TrimSpace(os.Getenv("MOOX_SPACE_ID"))
+}
 
 // prepareInvocation 为这次调用建立一条到 Access 的连接给 Storage 适配器使用；注入的适配器由调用方负责。
 func (h *Handler) prepareInvocation() (*Handler, func(), error) {
@@ -134,7 +144,7 @@ func (h *Handler) handleWithFunctionName(ctx context.Context, event model.CloudF
 	} else if strings.TrimSpace(req.FunctionName) == "" {
 		req.FunctionName = strings.TrimSpace(os.Getenv("MOOX_SCF_FUNCTION_NAME"))
 	}
-	if expectedSpaceID := strings.TrimSpace(os.Getenv("MOOX_SPACE_ID")); expectedSpaceID == "" {
+	if expectedSpaceID := h.spaceID(); expectedSpaceID == "" {
 		return &model.Response{Success: false, Message: "MOOX_SPACE_ID is required", RequestID: req.RequestID, Timestamp: time.Now().UTC()}, nil
 	} else if req.SpaceID != expectedSpaceID {
 		return &model.Response{Success: false, Message: fmt.Sprintf("market_fetch space_id %q does not match function space %q", req.SpaceID, expectedSpaceID), RequestID: req.RequestID, Timestamp: time.Now().UTC()}, nil
@@ -207,6 +217,9 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 		return nil, err
 	}
 	storageTimeout := time.Duration(envInt("MOOX_FETCH_STORAGE_TIMEOUT_MS", int(defaultStorageTimeout/time.Millisecond))) * time.Millisecond
+	if req.FetchLimits != nil && req.FetchLimits.StorageTimeoutMS > 0 {
+		storageTimeout = time.Duration(req.FetchLimits.StorageTimeoutMS) * time.Millisecond
+	}
 	commitReserve := storageCommitReserve(storageTimeout, h.CLSReserve)
 	writeCtx, writeCancel := contextWithReserve(budgetCtx, commitReserve-storageTimeout)
 	defer writeCancel()
@@ -244,7 +257,7 @@ func (h *Handler) handleRequest(ctx context.Context, req Request) (*model.Respon
 				return nil, fmt.Errorf("crypto kline pipeline factory is not configured")
 			}
 			alignCryptoRequest(&req, cryptoProduct)
-			pipeline, pipelineErr = h.NewCryptoKlinePipeline(storage, cryptoProduct)
+			pipeline, pipelineErr = h.NewCryptoKlinePipeline(storage, cryptoProduct, req.FetchLimits)
 		} else {
 			if h.NewMarketKlinePipeline == nil {
 				return nil, fmt.Errorf("market kline pipeline factory is not configured")

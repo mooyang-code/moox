@@ -57,6 +57,8 @@ type SCFPlanFetchConfig struct {
 	StandbyHourOnly bool `yaml:"standby_hour_only"`
 	// ConnReuse 为真时函数进程在多次调用之间复用到行情源的 HTTP 连接，默认关闭。
 	ConnReuse bool `yaml:"conn_reuse"`
+	// NotBeforeMS 是相对收盘的最早取数时刻（毫秒）：行情源 REST 要到收盘后一段时间才返回定稿值（币安合约约 8 秒）。
+	NotBeforeMS int `yaml:"not_before_ms"`
 }
 
 // filled 用 base 补齐未指定（为零）的字段。拉取参数里零值表示“沿用默认”，所以只写部分字段的覆盖项不会得到不完整的参数。
@@ -72,8 +74,15 @@ func (f SCFPlanFetchConfig) filled(base SCFPlanFetchConfig) SCFPlanFetchConfig {
 		FeedConcurrency: pick(f.FeedConcurrency, base.FeedConcurrency), RequestTimeoutMS: pick(f.RequestTimeoutMS, base.RequestTimeoutMS),
 		StorageTimeoutMS: pick(f.StorageTimeoutMS, base.StorageTimeoutMS), StaggerBaseMS: pick(f.StaggerBaseMS, base.StaggerBaseMS), StaggerMS: pick(f.StaggerMS, base.StaggerMS),
 		StandbyMS: pick(f.StandbyMS, base.StandbyMS), StandbyHourOnly: f.StandbyHourOnly || base.StandbyHourOnly,
-		ConnReuse: f.ConnReuse || base.ConnReuse,
+		ConnReuse: f.ConnReuse || base.ConnReuse, NotBeforeMS: pick(f.NotBeforeMS, base.NotBeforeMS),
 	}
+}
+
+// SCFPlanMarketConfig 覆盖空间内某个市场（spot、swap 等）的拉取参数与 SCF 模式下的允许迟到时间；字段为零表示沿用空间值。
+type SCFPlanMarketConfig struct {
+	Fetch *SCFPlanFetchConfig `yaml:"fetch"`
+	// LatenessS 是该市场数据集在拉取模式下的允许迟到时间默认值（任务显式指定的以任务为准）。
+	LatenessS int `yaml:"lateness_s"`
 }
 
 // SCFPlanSpaceConfig 覆盖某个空间的每函数标的数与拉取参数；字段为零表示沿用全局值。
@@ -86,6 +95,24 @@ type SCFPlanSpaceConfig struct {
 	PackageID           string `yaml:"package_id"`
 	Namespace           string `yaml:"namespace"`
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
+	// Markets 是按市场的覆盖项（现货、合约的取数时刻与截止不同）。
+	Markets map[string]SCFPlanMarketConfig `yaml:"markets"`
+	// DefaultIngest（stream|pull）与 DefaultExecutor（scf|local）是新数据集第一次出现时的采集方式初值，之后以库为准。
+	DefaultIngest   string `yaml:"default_ingest"`
+	DefaultExecutor string `yaml:"default_executor"`
+}
+
+// defaultModeFor 返回空间新数据集的采集方式初值（没写的按拉取 + SCF）。
+func (c SCFPlanConfig) defaultModeFor(spaceID string) marketfetch.DatasetMode {
+	space := c.Spaces[strings.ToLower(spaceID)]
+	mode := marketfetch.DatasetMode{Mode: space.DefaultIngest, Executor: space.DefaultExecutor}
+	if mode.Mode == "" {
+		mode.Mode = marketfetch.IngestPull
+	}
+	if mode.Executor == "" {
+		mode.Executor = marketfetch.PlanExecutorSCF
+	}
+	return mode
 }
 
 // maxFunctionsPerNamespace 是腾讯云每个命名空间的函数数上限，超过后分到下一个命名空间。
@@ -98,17 +125,42 @@ func (c SCFPlanConfig) symbolsPerFunction(spaceID string) int {
 	return c.SymbolsPerFunction
 }
 
-func (c SCFPlanConfig) fetchFor(spaceID string) marketfetch.PlanFetch {
+// fetchFor 返回某空间某市场的拉取参数：市场覆盖 → 空间覆盖 → 全局值，未写的字段逐级沿用。
+func (c SCFPlanConfig) fetchFor(spaceID, marketType string) marketfetch.PlanFetch {
+	space := c.Spaces[strings.ToLower(spaceID)]
 	fetch := c.Fetch
-	if override := c.Spaces[strings.ToLower(spaceID)].Fetch; override != nil {
-		fetch = override.filled(c.Fetch)
+	if space.Fetch != nil {
+		fetch = space.Fetch.filled(c.Fetch)
+	}
+	if override := space.Markets[strings.ToLower(marketType)].Fetch; override != nil {
+		fetch = override.filled(fetch)
 	}
 	return marketfetch.PlanFetch{
 		Concurrency: fetch.Concurrency, RPS: fetch.RPS, Burst: fetch.Burst, FeedConcurrency: fetch.FeedConcurrency,
 		RequestTimeoutMS: fetch.RequestTimeoutMS, StorageTimeoutMS: fetch.StorageTimeoutMS, StaggerBaseMS: fetch.StaggerBaseMS, StaggerMS: fetch.StaggerMS,
 		StandbyMS: fetch.StandbyMS, StandbyHourOnly: fetch.StandbyHourOnly,
-		ConnReuse: fetch.ConnReuse,
+		ConnReuse: fetch.ConnReuse, NotBeforeMS: fetch.NotBeforeMS,
 	}
+}
+
+// marketFetches 返回空间里写了覆盖项的各市场的拉取参数；没写的市场用 fetchFor(spaceID, "")。
+func (c SCFPlanConfig) marketFetches(spaceID string) map[string]marketfetch.PlanFetch {
+	result := map[string]marketfetch.PlanFetch{}
+	for market := range c.Spaces[strings.ToLower(spaceID)].Markets {
+		result[market] = c.fetchFor(spaceID, market)
+	}
+	return result
+}
+
+// marketLateness 返回空间里各市场在拉取模式下的允许迟到时间默认值（0 的不列出，沿用空间默认）。
+func (c SCFPlanConfig) marketLateness(spaceID string) map[string]int {
+	result := map[string]int{}
+	for market, override := range c.Spaces[strings.ToLower(spaceID)].Markets {
+		if override.LatenessS > 0 {
+			result[market] = override.LatenessS
+		}
+	}
+	return result
 }
 
 // mergeSpaceDefaults 用内置的空间默认值补齐配置里未指定的字段（每函数标的数、拉取参数）。
@@ -121,6 +173,12 @@ func (c *SCFPlanConfig) mergeSpaceDefaults(defaults map[string]SCFPlanSpaceConfi
 		if override.SymbolsPerFunction == 0 {
 			override.SymbolsPerFunction = base.SymbolsPerFunction
 		}
+		if override.DefaultIngest == "" {
+			override.DefaultIngest = base.DefaultIngest
+		}
+		if override.DefaultExecutor == "" {
+			override.DefaultExecutor = base.DefaultExecutor
+		}
 		switch {
 		case override.Fetch == nil && base.Fetch != nil:
 			fetch := *base.Fetch
@@ -128,6 +186,28 @@ func (c *SCFPlanConfig) mergeSpaceDefaults(defaults map[string]SCFPlanSpaceConfi
 		case override.Fetch != nil && base.Fetch != nil:
 			fetch := override.Fetch.filled(*base.Fetch)
 			override.Fetch = &fetch
+		}
+		for market, defaults := range base.Markets {
+			current, ok := override.Markets[market]
+			if !ok {
+				if override.Markets == nil {
+					override.Markets = map[string]SCFPlanMarketConfig{}
+				}
+				override.Markets[market] = defaults
+				continue
+			}
+			if current.LatenessS == 0 {
+				current.LatenessS = defaults.LatenessS
+			}
+			switch {
+			case current.Fetch == nil && defaults.Fetch != nil:
+				fetch := *defaults.Fetch
+				current.Fetch = &fetch
+			case current.Fetch != nil && defaults.Fetch != nil:
+				fetch := current.Fetch.filled(*defaults.Fetch)
+				current.Fetch = &fetch
+			}
+			override.Markets[market] = current
 		}
 		c.Spaces[space] = override
 	}
@@ -140,7 +220,16 @@ func defaultSCFPlan() SCFPlanConfig {
 		// 跨境建连稍慢或整分钟突发时存储端稍慢就超时，也没有时间重试。
 		Fetch: SCFPlanFetchConfig{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50, RequestTimeoutMS: 3000, StorageTimeoutMS: 4000, StaggerMS: 1500},
 		// stockcn：每函数 40 个标的；错峰窗口第 5～40 秒；国内数据源限流较保守。
-		Spaces: map[string]SCFPlanSpaceConfig{"stockcn": {SymbolsPerFunction: 40, Fetch: &SCFPlanFetchConfig{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerBaseMS: 5000, StaggerMS: 35000}}},
+		// crypto：币安 REST 要到收盘后才返回定稿值（合约约 8 秒、现货约 3 秒），所以按市场推迟取数；
+		// 合约 8 秒起取数，再加整点可能的停顿，SCF 模式下合约数据集的截止放宽到 20 秒。
+		Spaces: map[string]SCFPlanSpaceConfig{
+			"stockcn": {SymbolsPerFunction: 40, DefaultIngest: "pull", DefaultExecutor: "scf", Fetch: &SCFPlanFetchConfig{Concurrency: 8, RPS: 20, Burst: 20, FeedConcurrency: 8, RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, StaggerBaseMS: 5000, StaggerMS: 35000}},
+			// crypto 的新数据集默认 WS 推送，补采走香港机的本地执行端。
+			"crypto": {DefaultIngest: "stream", DefaultExecutor: "local", Markets: map[string]SCFPlanMarketConfig{
+				"spot": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 3000}},
+				"swap": {Fetch: &SCFPlanFetchConfig{NotBeforeMS: 8000}, LatenessS: 20},
+			}},
+		},
 	}
 }
 
@@ -202,6 +291,12 @@ func (c *Config) validateSCFPlan() error {
 			return fmt.Errorf("scf_plan: spaces %s and %s share code package %s; every space needs its own package_name or package_id in scf_plan.spaces", other, space, key)
 		}
 		packages[key] = space
+	}
+	for space, override := range plan.Spaces {
+		mode := plan.defaultModeFor(space)
+		if (mode.Mode != marketfetch.IngestStream && mode.Mode != marketfetch.IngestPull) || (mode.Executor != marketfetch.PlanExecutorSCF && mode.Executor != marketfetch.PlanExecutorLocal) {
+			return fmt.Errorf("scf_plan.spaces[%s]: default_ingest 必须是 stream 或 pull，default_executor 必须是 scf 或 local（收到 %q、%q）", space, override.DefaultIngest, override.DefaultExecutor)
+		}
 	}
 	for space, markets := range c.SCFMarkets {
 		if space != strings.ToLower(space) || len(markets) == 0 {

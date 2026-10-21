@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"time"
 	"trpc.group/trpc-go/trpc-go/log"
 
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -141,6 +142,7 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 		return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode returned no period response"))}, nil
 	}
 	s.observePeriodCommit(ctx, rows, rsp)
+	s.observeDeadlineRejection(exp, rsp)
 	return &pb.PrimaryCommitTimeSeriesBatchRsp{RetInfo: rsp.GetRetInfo(), Keys: rsp.GetKeys(), PeriodStatus: rsp.GetPeriodStatus(), AcceptedSeriesIndexes: rsp.GetAcceptedSeriesIndexes()}, nil
 }
 
@@ -199,6 +201,16 @@ func datasetAllowedLateness(ctx context.Context, exp *pb.DatasetPeriodExpectatio
 		return 0
 	}
 	return seconds
+}
+
+// periodDeadlinePassedText 是 DataNode 拒绝“周期建立前截止已过”时的错误文本（pebble.PeriodDeadlinePassedError）。
+const periodDeadlinePassedText = "has passed before the period was created"
+
+func (s *Service) observeDeadlineRejection(exp *pb.DatasetPeriodExpectation, rsp *pb.CommitTimeSeriesBatchRsp) {
+	if s.rejection == nil || rsp.GetRetInfo().GetCode() == pb.ErrorCode_SUCCESS || !strings.Contains(rsp.GetRetInfo().GetMsg(), periodDeadlinePassedText) {
+		return
+	}
+	s.rejection.ObserveDeadlineRejection(exp.GetSpaceId(), exp.GetDatasetId(), exp.GetFrequency(), time.Now())
 }
 
 // observePeriodCommit 按 DataNode 的提交结果记录数据集观测：提交了行记为 success 并推进输出水位；

@@ -219,6 +219,10 @@ enabled = false
 # [[scf_plan.spaces]]
 # space_id = "crypto"
 # # package_name 默认 moox-collector-<space>-plan，namespace 默认 moox-<space>-plan，均可覆盖
+# # 新数据集的采集方式初值：crypto 默认 default_ingest = "stream"、default_executor = "local"（WS 推送，补采走海外机本地执行端），
+# # 其他空间默认 "pull" + "scf"。之后以 Collector 库为准，用 moox-cli collector ingest-mode set 切换。
+# default_ingest = "stream"
+# default_executor = "local"
 # [scf_plan.spaces.markets]
 # spot = ["ap-hongkong"]
 # swap = ["ap-hongkong"]
@@ -264,7 +268,8 @@ host = "factor"
 [placements]
 control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"]
 storage = ["storage-primary", "storage-node", "storage-view", "access"]
-overseas = ["trade", "access", "egress-proxy"]
+# collector-stream 接收交易所 WS 推送并提供本地执行端，必须放在能直连交易所的海外机；首次安装用 setup deploy-unit --profile collector-stream。
+overseas = ["trade", "access", "egress-proxy", "collector-stream"]
 
 [egress_proxy]
 http_domains = ["*.binance.com", "data-api.binance.vision"]

@@ -30,6 +30,19 @@ type Config struct {
 	Pipeline      PipelineConfig                   `yaml:"pipeline"`
 	Recalc        RecalcConfig                     `yaml:"recalc"`
 	Gap           GapConfig                        `yaml:"gap"`
+	Watermark     WatermarkConfig                  `yaml:"watermark"`
+}
+
+// WatermarkConfig 是连续水位：每个集合从水位下一期逐期推进，前面有还没补到的周期就停住（docs/计划/因子连续水位详细设计.md）。
+type WatermarkConfig struct {
+	// StateFile 保存各集合的水位与阻塞状态。
+	StateFile string `yaml:"state_file"`
+	// MaxMissingRatio 是缺失阈值（未确认缺失的失败标的 ÷ 期望标的），超过的周期阻塞水位；SetRatios 按集合 ID 覆盖。
+	MaxMissingRatio float64            `yaml:"max_missing_ratio"`
+	SetRatios       map[string]float64 `yaml:"set_ratios"`
+	// PollInterval 是阻塞或落后时按读回 Storage 继续推进的间隔（保底）；MaxPeriods 是一次推进最多处理的周期数。
+	PollInterval time.Duration `yaml:"poll_interval"`
+	MaxPeriods   int           `yaml:"max_periods"`
 }
 
 // IdentityConfig names the engine; engine_id must stay stable across restarts
@@ -197,6 +210,7 @@ func Default() *Config {
 			LedgerDir: "./data/gap", SweepInterval: 5 * time.Minute, Settle: 5 * time.Minute, GiveUpAfter: 6 * time.Hour,
 			MaxGroupsPerSweep: 20, MaxSpan: 60, MassRatio: 0.2,
 		},
+		Watermark: WatermarkConfig{StateFile: "./data/engine/watermarks.json", MaxMissingRatio: 0.1, PollInterval: 10 * time.Second, MaxPeriods: 30},
 	}
 }
 
@@ -235,12 +249,18 @@ func (c *Config) applyDefaults() {
 	if c.Gap.MassRatio == 0 {
 		c.Gap.MassRatio = d.Gap.MassRatio
 	}
+	setString(&c.Watermark.StateFile, d.Watermark.StateFile)
+	if c.Watermark.MaxMissingRatio == 0 {
+		c.Watermark.MaxMissingRatio = d.Watermark.MaxMissingRatio
+	}
+	setDuration(&c.Watermark.PollInterval, d.Watermark.PollInterval)
+	setInt(&c.Watermark.MaxPeriods, d.Watermark.MaxPeriods)
 }
 
 func (c *Config) resolvePaths(root string) {
 	for _, path := range []*string{
 		&c.CatalogSync.StateFile, &c.Storage.AuthSecretFile, &c.EventBus.CredentialFile,
-		&c.Gap.LedgerDir,
+		&c.Gap.LedgerDir, &c.Watermark.StateFile,
 	} {
 		value := strings.TrimSpace(*path)
 		if value == "" || filepath.IsAbs(value) || strings.HasPrefix(value, "~") {
@@ -274,6 +294,11 @@ func (c *Config) Validate() error {
 	require(c.Gap.SweepInterval > 0 && c.Gap.Settle >= 0 && c.Gap.GiveUpAfter > 0, "gap.sweep_interval, gap.settle and gap.give_up_after must be positive")
 	require(c.Gap.MaxGroupsPerSweep > 0 && c.Gap.MaxSpan > 0, "gap.max_groups_per_sweep and gap.max_span must be positive")
 	require(c.Gap.MassRatio >= 0 && c.Gap.MassRatio <= 1, "gap.mass_ratio must be within [0, 1]")
+	require(c.Watermark.MaxMissingRatio > 0 && c.Watermark.MaxMissingRatio < 1 && c.Watermark.PollInterval > 0 && c.Watermark.MaxPeriods > 0,
+		"watermark.max_missing_ratio must be within (0, 1), poll_interval and max_periods must be positive")
+	for setID, ratio := range c.Watermark.SetRatios {
+		require(ratio > 0 && ratio < 1, "watermark.set_ratios["+setID+"] must be within (0, 1)")
+	}
 	if len(problems) > 0 {
 		return errors.New("invalid factor engine config: " + strings.Join(problems, "; "))
 	}

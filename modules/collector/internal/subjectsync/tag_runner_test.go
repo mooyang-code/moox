@@ -75,3 +75,44 @@ func TestRunOnceAppliesAndReports(t *testing.T) {
 		t.Fatalf("manual tag membership must remain operator-owned: %v", store.applied)
 	}
 }
+
+type flakyLister struct {
+	calls    *int
+	failures int
+	items    []marketdata.Instrument
+}
+
+func (l flakyLister) List(context.Context) ([]marketdata.Instrument, error) {
+	*l.calls++
+	if *l.calls <= l.failures {
+		return nil, errors.New("exchange returned an incomplete snapshot")
+	}
+	return l.items, nil
+}
+
+// 快照取数失败或校验不通过时在本次同步内退避重试；都失败就保持原成员不变；只同步指定市场的标签。
+func TestSyncTagsRetriesSnapshotsAndKeepsMembersOnFailure(t *testing.T) {
+	store := &fakeTagStore{
+		tags: []*pb.Tag{
+			{SpaceId: "crypto", TagId: "binance_spot", Mode: "auto", Source: "binance", MarketType: "spot"},
+			{SpaceId: "crypto", TagId: "binance_swap", Mode: "auto", Source: "binance", MarketType: "swap"},
+		},
+		applied: map[string]int{}, failures: map[string]string{},
+	}
+	calls := 0
+	runner := &TagRunner{Store: store, FetchTimeout: time.Second, RetryDelays: []time.Duration{time.Millisecond, time.Millisecond}, Listers: Listers{
+		{Source: "binance", InstrumentType: "swap"}: flakyLister{calls: &calls, failures: 2, items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}},
+		{Source: "binance", InstrumentType: "spot"}: fakeSubjectLister{err: errors.New("must not be called")},
+	}}
+	results, err := runner.SyncTags(context.Background(), Filter{SpaceID: "crypto", MarketType: "swap"})
+	if err != nil || len(results) != 1 || results[0].Status != StatusSuccess || calls != 3 || store.applied["binance_swap"] != 1 {
+		t.Fatalf("results=%v err=%v calls=%d applied=%v", results, err, calls, store.applied)
+	}
+	calls = 0
+	store.applied = map[string]int{}
+	runner.Listers[ListerKey{Source: "binance", InstrumentType: "swap"}] = flakyLister{calls: &calls, failures: 3}
+	results, _ = runner.SyncTags(context.Background(), Filter{SpaceID: "crypto", MarketType: "swap"})
+	if results[0].Status != StatusFailed || calls != 3 || len(store.applied) != 0 || store.failures["binance_swap"] == "" {
+		t.Fatalf("a failed snapshot must keep members: results=%v calls=%d applied=%v", results, calls, store.applied)
+	}
+}

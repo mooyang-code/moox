@@ -25,6 +25,8 @@ const (
 	MaxRealtimeItems = 40
 	// MaxPlanItems 是由采集计划构造的请求的条目上限；Collector 按容量校验每函数标的数。
 	MaxPlanItems = 200
+	// MaxStreamPlanItems 是推送与本地执行端一份计划（一个市场的全部标的）的条目上限，不受 SCF 环境变量限制。
+	MaxStreamPlanItems = 4000
 	// MaxRealtimeRows is the fixed number of latest K-lines fetched for each
 	// symbol in one realtime SCF request.
 	MaxRealtimeRows = 10
@@ -63,6 +65,8 @@ type Request struct {
 	Concurrency         int              `json:"concurrency,omitempty"`
 	// StandbyMS 大于 0 时启用备援请求：行情请求超过这么多毫秒还没有结果，就并发再发一个备援请求，先成功的为准（采集计划控制，默认关闭）。
 	StandbyMS int `json:"standby_ms,omitempty"`
+	// FetchLimits 是计划给出的限流与超时：常驻的本地执行端不能靠进程环境（各市场、各次调用参数可能不同），随请求带上。
+	FetchLimits *FeedLimits `json:"fetch_limits,omitempty"`
 	// ConnReuse 记录本次调用是否使用了跨调用的连接复用，只用于上报。
 	ConnReuse bool `json:"conn_reuse,omitempty"`
 	// TimerLateMS 是函数入口时刻减去定时事件计划时间（毫秒），StaggerMS 是函数内错峰等待的时长，EntryAt 是函数入口时刻；

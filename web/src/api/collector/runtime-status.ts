@@ -51,6 +51,56 @@ export interface CollectorFunctionStatus {
   datasets?: string[];
   state?: string;
   dataset_subjects?: CollectorFunctionDataset[];
+  /** 执行端：scf（云函数）、stream（WS 推送）、local（本地执行端）。 */
+  executor?: string;
+}
+
+export interface StreamConnStatus {
+  market?: string;
+  frequency?: string;
+  streams?: number;
+  last_message_at?: string;
+  reconnects?: number | string;
+  subscribed?: boolean;
+  endpoint?: string;
+}
+
+/** 一个（数据集, 周期）的推送接收与提交统计；时间是相对收盘的毫秒数。 */
+export interface StreamPeriodStat {
+  market?: string;
+  dataset_id?: string;
+  frequency?: string;
+  period?: number | string;
+  expected?: number;
+  arrived?: number;
+  missing?: number;
+  late_after_commit?: number;
+  last_arrival_ms?: number | string;
+  commit_done_ms?: number | string;
+  commit_ms?: number | string;
+  committed?: boolean;
+  error?: string;
+  suspected?: number;
+}
+
+export interface StreamWorkerStatus {
+  instance_id?: string;
+  online?: boolean;
+  heartbeat_at?: string;
+  applied_plan_id?: number | string;
+  applied_stage?: string;
+  conns?: StreamConnStatus[];
+  recent?: StreamPeriodStat[];
+  clock_offset_ms?: number | string;
+  version?: string;
+}
+
+export interface IngestMode {
+  dataset_id?: string;
+  mode?: string;
+  executor?: string;
+  updated_at?: string;
+  effective_periods?: Record<string, string>;
 }
 
 export interface GetCollectorStatusResponse {
@@ -63,6 +113,8 @@ export interface GetCollectorStatusResponse {
   active_backfills?: number;
   failed_backfills_24h?: number;
   generated_at?: string;
+  stream?: StreamWorkerStatus;
+  ingest_modes?: IngestMode[];
 }
 
 export interface KlineBackfillJob {

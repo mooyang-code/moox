@@ -57,4 +57,6 @@ type SymbolInfo struct {
 	MaxQty     string // 最大交易数量
 	TickSize   string // 价格最小变动单位
 	LotSize    string // 数量最小变动单位
+	// Pair 是永续合约的标的交易对（连续合约 K 线按它订阅），现货为空。
+	Pair string
 }

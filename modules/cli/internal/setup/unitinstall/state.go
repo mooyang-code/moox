@@ -13,7 +13,7 @@ import (
 )
 
 func lifecycleOrder(ids []string) []string {
-	order := []string{"admin", "eventbus", "host-gateway", "host-agent", "storage-primary", "storage-node", "storage-view", "egress-proxy", "access", "trade", "monitor", "collector", "cloudnode", "factor-mgr", "archive-mgr", "strategy", "web-host", "console-proxy"}
+	order := []string{"admin", "eventbus", "host-gateway", "host-agent", "storage-primary", "storage-node", "storage-view", "egress-proxy", "access", "trade", "monitor", "collector", "collector-stream", "cloudnode", "factor-mgr", "archive-mgr", "strategy", "web-host", "console-proxy"}
 	result := slices.Clone(ids)
 	slices.SortStableFunc(result, func(a, b string) int { return slices.Index(order, a) - slices.Index(order, b) })
 	return result

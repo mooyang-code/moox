@@ -37,7 +37,17 @@ type binanceSourceConfig struct {
 		Type        string `yaml:"type"`
 	} `yaml:"app"`
 	API     APIConfig      `yaml:"api"`
+	Stream  StreamConfig   `yaml:"stream"`
 	Storage map[string]any `yaml:"storage"`
+}
+
+// ResolveStreamConfig 读取 WS 推送的地址与限额（binance.yaml 的 stream 段），没写的字段用内置默认。
+func ResolveStreamConfig() (StreamConfig, error) {
+	source, err := loadBinanceSourceConfig()
+	if err != nil {
+		return StreamConfig{}, err
+	}
+	return source.Stream.withDefaults(), nil
 }
 
 func ResolveAPIConfig() (APIConfig, error) {
@@ -76,6 +86,13 @@ func decodeBinanceSourceConfig(reader io.Reader) (*binanceSourceConfig, error) {
 // resolveBinanceSourceConfigPath finds the Binance source file: the SCF
 // package root first, then the repository layout used by local runs.
 func resolveBinanceSourceConfigPath() (string, error) {
+	// 常驻进程（collector-stream）显式给出数据源配置路径，与 Storage 绑定读同一个文件。
+	if explicit := strings.TrimSpace(os.Getenv("MOOX_STORAGE_MARKET_CONFIG")); explicit != "" {
+		if _, err := os.Stat(explicit); err != nil {
+			return "", fmt.Errorf("MOOX_STORAGE_MARKET_CONFIG: %w", err)
+		}
+		return explicit, nil
+	}
 	for _, candidate := range []string{"sources/market/binance.yaml", "configs/sources/market/binance.yaml"} {
 		for _, full := range relativeConfigCandidates(candidate) {
 			if _, err := os.Stat(full); err == nil {

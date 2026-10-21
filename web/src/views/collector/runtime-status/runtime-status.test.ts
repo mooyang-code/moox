@@ -7,6 +7,8 @@ import {
   datasetLabel,
   datasetNameMap,
   durationText,
+  executorText,
+  streamPeriodText,
   filterFunctions,
   functionOptions,
   functionStateInfo,
@@ -194,5 +196,24 @@ describe("collector runtime status page", () => {
     expect(page).toContain("补采确认");
     expect(page).toContain("清除并重新检查");
     expect(page).toContain('tab: "backfills"');
+  });
+});
+
+describe("WS 推送执行端", () => {
+  it("推送与本地执行端显示类型，SCF 函数显示地域", () => {
+    expect(executorText({ executor: "stream", region: "" })).toBe("WS 推送");
+    expect(executorText({ executor: "local" })).toBe("本地执行端");
+    expect(executorText({ executor: "scf", region: "ap-tokyo" })).toBe("ap-tokyo");
+    expect(executorText({ region: "ap-tokyo" })).toBe("ap-tokyo");
+  });
+  it("周期统计显示到达、缺失与写入完成", () => {
+    expect(
+      streamPeriodText({ arrived: 510, expected: 511, missing: 1, suspected: 1, commit_done_ms: "420", committed: true })
+    ).toEqual({
+      arrived: "510/511",
+      missing: "缺 1（疑似下架 1）",
+      done: "0.42 秒"
+    });
+    expect(streamPeriodText({ arrived: 0, expected: 2, missing: 2 }).done).toBe("零到达");
   });
 });

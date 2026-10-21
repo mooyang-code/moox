@@ -3,6 +3,7 @@ package subjectsync
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -22,10 +23,13 @@ var ErrBusy = errors.New("subject sync is already running")
 type Filter struct {
 	SpaceID string
 	TagID   string
+	// MarketType 只选该市场的标签（推送侧发现疑似下架时按市场同步）。
+	MarketType string
 }
 
 func (f Filter) matchTag(tag *pb.Tag) bool {
-	return tag != nil && (f.SpaceID == "" || f.SpaceID == tag.GetSpaceId()) && (f.TagID == "" || f.TagID == tag.GetTagId())
+	return tag != nil && (f.SpaceID == "" || f.SpaceID == tag.GetSpaceId()) && (f.TagID == "" || f.TagID == tag.GetTagId()) &&
+		(f.MarketType == "" || strings.EqualFold(f.MarketType, tag.GetMarketType()))
 }
 
 // TagResult is the outcome for one tag.

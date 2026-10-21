@@ -49,6 +49,8 @@ type gapFiller struct {
 	kick <-chan struct{}
 	// warmup 返回各集合的预热状态（可为 nil）：已就绪集合里因预热中跳过的待办不再等 Settle。
 	warmup func() []pipeline.WarmupStatus
+	// filled 判断某集合某一期是否已收到补齐通知（可为 nil）。
+	filled func(setID string, period time.Time) bool
 	// lastTried 记录每个组最近一次尝试的时间：一轮只处理 MaxGroupsPerSweep 个组，按「最久没试过的优先」轮转，
 	// 前面一直补不上的组不会让后面已经补齐的组长期得不到执行机会。
 	lastTried map[string]time.Time
@@ -89,8 +91,10 @@ func (s warmingKickSink) RecordGaps(ctx context.Context, entries []pipeline.GapE
 
 // settled 判断一条待办是否可以恢复了：发现后过了 Settle（给自动补采留时间）；预热中跳过的项在该集合预热就绪后即可恢复，
 // 那一期的源数据在跳过时就已入库，只是窗口还没载入。否则重启后第一期（1h 集合是整整一根）要在预热完成后再等 5～10 分钟才补齐。
-func settled(entry gapledger.Entry, cutoff time.Time, ready map[string]bool) bool {
-	return !entry.FirstSeen.After(cutoff) || (entry.Reason == pipeline.SkipReasonWarming && ready[entry.Set])
+// 上游失败（截止时还没到）的项在收到覆盖该期的补齐通知后也不再等 Settle。
+func settled(entry gapledger.Entry, cutoff time.Time, ready map[string]bool, filled func(string, time.Time) bool) bool {
+	return !entry.FirstSeen.After(cutoff) || (entry.Reason == pipeline.SkipReasonWarming && ready[entry.Set]) ||
+		(entry.Reason == pipeline.SkipReasonUpstream && filled != nil && filled(entry.Set, entry.Period))
 }
 
 // readySets 返回预热已就绪（全部标的窗口已载入、没有排队或在途的预热）的集合。
@@ -141,7 +145,7 @@ func (g *gapFiller) tick(ctx context.Context) {
 	setCache := make(map[string]domain.EngineSet)
 	lookups := make(map[string]SetLookup)
 	for _, entry := range g.ledger.Pending() {
-		if !settled(entry, cutoff, ready) {
+		if !settled(entry, cutoff, ready, g.filled) {
 			continue // 刚发现，给自动补采一点时间
 		}
 		set, lookup := setCache[entry.Set], lookups[entry.Set]
@@ -390,11 +394,11 @@ func (g *gapFiller) fillSubjects(ctx context.Context, set domain.EngineSet, subj
 	return err
 }
 
-// anyWarming 报告待办里是否有预热中跳过的项：那一期实时路径没有写任何行，恢复时 carry 列也要按源数据写入。
+// anyWarming 报告待办里是否有预热中或上游失败而跳过的项：那一期实时路径没有写任何行，恢复时 carry 列也要按源数据写入。
 // 空洞跳过的那一期实时路径已经写过 carry 列，恢复只补因子列。
 func anyWarming(entries []gapledger.Entry) bool {
 	for _, entry := range entries {
-		if entry.Reason == pipeline.SkipReasonWarming {
+		if entry.Reason == pipeline.SkipReasonWarming || entry.Reason == pipeline.SkipReasonUpstream {
 			return true
 		}
 	}

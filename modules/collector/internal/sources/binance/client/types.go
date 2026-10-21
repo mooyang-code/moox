@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/model/common"
@@ -282,5 +283,6 @@ func (s *SymbolInfoRaw) ToSymbolInfo() *exchange.SymbolInfo {
 		MaxQty:     maxQty,
 		TickSize:   tickSize,
 		LotSize:    lotSize,
+		Pair:       strings.ToUpper(strings.TrimSpace(s.Pair)),
 	}
 }

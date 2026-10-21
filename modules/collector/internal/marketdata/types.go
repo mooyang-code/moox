@@ -378,6 +378,8 @@ type Instrument struct {
 	Status         string
 	BaseAsset      string
 	QuoteAsset     string
+	// Pair 是可选的交易所交易对（币安永续合约的 pair，连续合约 K 线按它订阅）；为空表示与 ProviderSymbol 相同。
+	Pair string
 }
 
 type InstrumentSnapshot struct {

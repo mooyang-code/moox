@@ -111,10 +111,18 @@ func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) error {
 	return nil
 }
 
+// SubjectPairAttribute 是标的属性里记录交易所交易对的键，采集计划据此给 WS 推送带出 pair。
+const SubjectPairAttribute = "pair"
+
 func attributes(spaceID string, item marketdata.Instrument) map[string]string {
 	switch spaceID {
 	case "crypto":
-		return map[string]string{"base": strings.ToUpper(item.BaseAsset), "quote": strings.ToUpper(item.QuoteAsset)}
+		values := map[string]string{"base": strings.ToUpper(item.BaseAsset), "quote": strings.ToUpper(item.QuoteAsset)}
+		// 永续合约的交易对：WS 连续合约 K 线按它订阅（目前 USDT 永续与 symbol 相同）。
+		if pair := strings.ToUpper(strings.TrimSpace(item.Pair)); pair != "" {
+			values[SubjectPairAttribute] = pair
+		}
+		return values
 	case "stockcn":
 		return map[string]string{"exchange": item.Exchange}
 	default:

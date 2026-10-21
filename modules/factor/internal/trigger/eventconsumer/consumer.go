@@ -27,6 +27,8 @@ type ConsumerConfig struct {
 	MaxAckPending      int
 	InProgressInterval time.Duration
 	ReadColumnTimeout  time.Duration
+	// Continuity 非空时按连续水位逐期推进。
+	Continuity *Continuity
 }
 
 // ackWaitHeartbeats is how many InProgress heartbeats may be missed before a
@@ -135,6 +137,9 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 		NakDelay: cfg.NakDelay, PeriodBudgetMin: cfg.PeriodBudgetMin,
 		PeriodBudgetMax: cfg.PeriodBudgetMax, ReadColumnTimeout: cfg.ReadColumnTimeout,
 	})
+	if cfg.Continuity != nil {
+		handler.SetContinuity(cfg.Continuity)
+	}
 	runCtx, cancel := context.WithCancel(ctx)
 	c.client, c.consumer, c.handler, c.cancel = client, consumer, handler, cancel
 	c.runner = jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{
@@ -154,6 +159,14 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 }
 
 func (c *Consumer) Ready() bool { return c != nil && c.ready.Load() }
+
+// Advance 在集合的通道里按连续水位推进一次（追赶循环、补齐通知）。
+func (c *Consumer) Advance(ctx context.Context, setID string) error {
+	if c == nil || c.handler == nil {
+		return nil
+	}
+	return c.handler.Advance(ctx, setID)
+}
 
 func (c *Consumer) CurrentFilterSubjects() []string {
 	if c == nil {

@@ -20,9 +20,14 @@ type TaskGroup struct {
 	OutputFields    []string
 	Subjects        []string
 	ExternalSymbols map[string]string
+	// Pairs 是交易对与交易所 symbol 不同的标的（币安永续合约的 pair），只下发给 WS 推送。
+	Pairs map[string]string
 	// 以下为定时采集计划使用：每函数标的数（0 为默认）、允许迟到时间（0 为空间默认）。
 	SymbolsPerFunction     int
 	AllowedLatenessSeconds int
+	// Ingest、Executor 是任务参数指定的采集方式初值（数据集第一次出现时代替空间默认值），之后以库里的数据集设置为准。
+	Ingest   string
+	Executor string
 }
 
 func normalizeSubjects(subjects []string) []string {

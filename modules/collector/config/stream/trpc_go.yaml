@@ -1,0 +1,37 @@
+global:
+  namespace: Production
+  env_name: collector-stream
+
+server:
+  # 停止时等待已接纳的请求完成（毫秒），小于运行器的 2 分钟停止预算。
+  max_close_wait_time: 100000
+  filter: [recovery]
+  timeout: 95000
+  service:
+    - name: trpc.moox.collector.MarketFetchExecutor
+      ip: 127.0.0.1
+      port: 11450
+      network: tcp
+      protocol: trpc
+      transport: go-net
+      timeout: 95000
+    - name: trpc.moox.collector.stream.Health
+      ip: 127.0.0.1
+      port: 11451
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
+
+plugins:
+  log:
+    default:
+      - writer: file
+        level: info
+        writer_config:
+          log_path: ./logs
+          filename: trpc.log
+          roll_type: size
+          max_age: 7
+          max_size: 50
+          max_backups: 5
+          compress: false

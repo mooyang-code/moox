@@ -142,6 +142,10 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 		if !plan.FillOnly {
 			r.recordGaps(ctx, plan, loaded.Gaps)
 			r.recordWarming(ctx, plan, loaded.WarmingSubjects)
+			// 上游失败的待办是这一期补齐的唯一依据（水位随后前进，不会再回头），记不进账本就不能继续。
+			if err := r.recordUpstream(ctx, plan); err != nil {
+				return Outcome{StageDurations: outcome.StageDurations}, err
+			}
 		}
 		stage = time.Now()
 		target, targetErr := planTarget(r.clock, plan)
@@ -231,6 +235,33 @@ func (r *Runner) recordWarming(ctx context.Context, plan Plan, warming []string)
 	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
 		log.ErrorContextf(ctx, "factor_warming_record_failed set_id=%s period=%s subjects=%d error=%v", plan.Set.SetID, target.UTC().Format(time.RFC3339), len(warming), err)
 	}
+}
+
+// recordUpstream 把实时周期里上游失败（截止时还没到）的 (因子, 标的, 周期) 记入账本：这一期缺失在阈值以内时水位照常前进，
+// 补采补齐之后由空洞恢复按「只填充」补算；不记账的话这些标的的这一期永远不会补算（原事件的失败名单已过时，不能重放）。
+// 记账失败返回基础设施错误：这一期不写结果、水位不前进，由重投或追赶重试。
+func (r *Runner) recordUpstream(ctx context.Context, plan Plan) error {
+	if r.cfg.GapSink == nil || plan.Mode != ModeLive || len(plan.UpstreamFailed) == 0 || len(plan.Factors) == 0 {
+		return nil
+	}
+	target, err := planTarget(r.clock, plan)
+	if err != nil {
+		return err
+	}
+	entries := make([]GapEntry, 0, len(plan.UpstreamFailed)*len(plan.Factors))
+	for _, subject := range plan.UpstreamFailed {
+		for _, factor := range plan.Factors {
+			entries = append(entries, GapEntry{
+				SetID: plan.Set.SetID, Subject: subject, Period: target.UTC(), FactorID: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor),
+				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonUpstream,
+			})
+		}
+	}
+	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
+		log.ErrorContextf(ctx, "factor_upstream_record_failed set_id=%s period=%s subjects=%d error=%v", plan.Set.SetID, target.UTC().Format(time.RFC3339), len(plan.UpstreamFailed), err)
+		return fmt.Errorf("%w: record upstream failures: %v", storageio.ErrInfra, err)
+	}
+	return nil
 }
 
 // noteGaps 输出有空洞的结构化日志；整期大面积缺失（有空洞或上游失败的标的占预期的比例达到 MassRatio）输出 ERROR，

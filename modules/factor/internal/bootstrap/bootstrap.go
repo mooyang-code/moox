@@ -97,10 +97,11 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	}
 	runtime.stopCatalog = stopCatalog
 
+	filled := factorrpc.NewFilledInbox()
 	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub),
-		factorrpc.WithPreviewer(preview.New(storage, previewWorkers)))
+		factorrpc.WithPreviewer(preview.New(storage, previewWorkers)), factorrpc.WithFilledInbox(filled))
 	factorpb.RegisterFactorMgrService(s.Service(factorMgrService), factorService)
-	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub))
+	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub, filled))
 
 	runtime.health.SnapshotFunc = runtime.healthSnapshot(db)
 	if err := registerMetricsReporter(s, hub); err != nil {

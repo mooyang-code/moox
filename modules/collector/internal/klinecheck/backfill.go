@@ -83,6 +83,7 @@ type BackfillStore interface {
 	Watermark(context.Context, string, string, string) (time.Time, error)
 	SetWatermark(context.Context, string, string, string, time.Time) error
 	AddAbsences(context.Context, []store.SourceAbsence) error
+	AbsencesIn(context.Context, string, string, string, []string, time.Time, time.Time) ([]store.SourceAbsence, error)
 	ClearAbsences(context.Context, string, string, string) (int64, error)
 	HistoryScans(context.Context, string) (map[string]store.HistoryScan, error)
 	SaveHistoryScan(context.Context, store.HistoryScan) error
@@ -108,6 +109,11 @@ type Backfiller struct {
 	Plans     PlanHistory
 	Invoker   Invoker
 	Functions func(spaceID string) FunctionProvider
+	// Executor 返回数据集的补采执行端（scf 或 local），为空时按 scf；Local 是本地执行端（collector-stream 里的 MarketFetchExecutor）。
+	Executor func(ctx context.Context, spaceID, datasetID string) (string, error)
+	Local    Invoker
+	// Notify 在补采作业成功后调用（补齐通知：因子据此立即推进连续水位并补算），失败只记日志；absent 是确认行情源没有的标的。
+	Notify func(ctx context.Context, filled []FilledRange) error
 	// Paused 报告空间是否处于采集暂停；暂停期间不再认领分块（含补位），已在执行的分块自然结束。为空表示不暂停。
 	Paused func(ctx context.Context, spaceID string) (bool, error)
 	// BaseCtx 是异步执行分块的上下文（进程生命周期）。
@@ -122,6 +128,15 @@ type Backfiller struct {
 	workers        sync.WaitGroup
 	// tickMu 串行化认领，避免补位与调度节拍同时超出并发上限。
 	tickMu sync.Mutex
+}
+
+// FilledRange 是补采补齐的一段（数据集, 频率, [From, To)）。
+type FilledRange struct {
+	SpaceID   string
+	DatasetID string
+	Frequency string
+	From, To  time.Time
+	Absent    []string
 }
 
 func (b *Backfiller) now() time.Time {
@@ -356,6 +371,7 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 			}
 			if status == store.BackfillSucceeded {
 				b.advanceWatermark(ctx, job)
+				b.notifyFilled(ctx, job)
 			}
 		}
 	}
@@ -481,7 +497,7 @@ func chunkRequest(spaceID, functionName string, plan *marketfetch.Plan, chunk st
 	return marketfetch.Request{
 		BatchID: chunk.ChunkID, BatchKind: domain.BatchKindBackfill, SpaceID: spaceID, MarketID: plan.Market.MarketID, InstrumentType: plan.Market.InstrumentType,
 		DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, Provider: plan.Market.Provider, SourceID: plan.Market.SourceID, MarketType: plan.Market.MarketType,
-		NodeID: functionName, FunctionName: functionName, RequestID: chunk.ChunkID, WriteIDByContent: true, Concurrency: 1,
+		NodeID: functionName, FunctionName: functionName, RequestID: chunk.ChunkID, WriteIDByContent: true, Concurrency: 1, FetchLimits: plan.Fetch.Limits(),
 		Items: []domain.CollectionItem{item}, Targets: []domain.WriteTarget{target},
 	}, nil
 }
@@ -508,19 +524,39 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		fail(err)
 		return
 	}
-	provider := b.Functions(spaceID)
-	if provider == nil {
-		fail(fmt.Errorf("no backfill function provider for space %s", spaceID))
-		return
-	}
-	functionName, err := provider.EnsureBackfillFunction(ctx, plan.Market.MarketType)
-	if err != nil {
-		// 补采函数暂时不可用（创建中、发布租约被占用）：不算执行失败，分块退回待认领并退回这次尝试。
-		log.WarnContextf(ctx, "collector backfill function is not ready space=%s chunk=%s: %v", spaceID, chunk.ChunkID, err)
+	release := func(reason error) {
+		// 执行端暂时不可用（函数创建中、发布租约被占用、本地执行端离线）：不算执行失败，分块退回待认领并退回这次尝试。
+		log.WarnContextf(ctx, "collector backfill executor is not ready space=%s chunk=%s: %v", spaceID, chunk.ChunkID, reason)
 		if releaseErr := b.Store.ReleaseChunk(ctx, chunk.ID, chunk.Attempts); releaseErr != nil {
 			log.WarnContextf(ctx, "collector backfill chunk release failed chunk=%s: %v", chunk.ChunkID, releaseErr)
 		}
-		return
+	}
+	executor := marketfetch.PlanExecutorSCF
+	if b.Executor != nil {
+		if executor, err = b.Executor(ctx, spaceID, chunk.DatasetID); err != nil {
+			release(err)
+			return
+		}
+	}
+	invoker := b.Invoker
+	var functionName string
+	switch executor {
+	case marketfetch.PlanExecutorLocal:
+		if b.Local == nil {
+			fail(fmt.Errorf("no local executor is configured for space %s", spaceID))
+			return
+		}
+		invoker, functionName = b.Local, "local-"+strings.ToLower(spaceID)
+	default:
+		provider := b.Functions(spaceID)
+		if provider == nil {
+			fail(fmt.Errorf("no backfill function provider for space %s", spaceID))
+			return
+		}
+		if functionName, err = provider.EnsureBackfillFunction(ctx, plan.Market.MarketType); err != nil {
+			release(err)
+			return
+		}
 	}
 	request, err := chunkRequest(spaceID, functionName, plan, chunk)
 	if err != nil {
@@ -539,7 +575,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		return
 	}
 	callCtx, cancel := context.WithTimeout(ctx, chunkInvokeLimit)
-	result, err := b.Invoker.Invoke(callCtx, spaceID, functionName, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
+	result, err := invoker.Invoke(callCtx, spaceID, functionName, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
 	cancel()
 	if err != nil {
 		// 同步调用超时或断连时结果不明：不标记失败，名额保留到最迟结束时间后，由重新认领再执行。
@@ -617,6 +653,62 @@ func bars(chunk store.BackfillChunk) int {
 		return 0
 	}
 	return barCount(frequency, chunk.From, chunk.To)
+}
+
+// notifyFilled 在作业成功后按（数据集, 频率）发补齐通知。通知只是加快下游，失败只记日志（因子另有定时读回保底）。
+// 确认没有的标的按库里的已确认缺失逐条带出精确的数据集、频率、标的与区间（进程重启不丢）。
+func (b *Backfiller) notifyFilled(ctx context.Context, job store.BackfillJob) {
+	if b.Notify == nil {
+		return
+	}
+	_, chunks, err := b.Store.GetJob(ctx, job.JobID)
+	if err != nil {
+		log.WarnContextf(ctx, "collector backfill filled notification skipped job=%s: %v", job.JobID, err)
+		return
+	}
+	ranges := map[string]*FilledRange{}
+	var order []string
+	for _, chunk := range chunks {
+		key := chunk.DatasetID + "|" + chunk.Frequency
+		item := ranges[key]
+		if item == nil {
+			item = &FilledRange{SpaceID: job.SpaceID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, From: chunk.From, To: chunk.To}
+			ranges[key] = item
+			order = append(order, key)
+		}
+		if chunk.From.Before(item.From) {
+			item.From = chunk.From
+		}
+		if chunk.To.After(item.To) {
+			item.To = chunk.To
+		}
+	}
+	filled := make([]FilledRange, 0, len(order))
+	for _, key := range order {
+		item := *ranges[key]
+		filled = append(filled, item)
+		absences, err := b.Store.AbsencesIn(ctx, job.SpaceID, item.DatasetID, item.Frequency, nil, item.From, item.To)
+		if err != nil {
+			log.WarnContextf(ctx, "collector backfill filled notification skips source absences job=%s dataset=%s: %v", job.JobID, item.DatasetID, err)
+			continue
+		}
+		for _, absence := range absences {
+			from, to := absence.From, absence.To
+			if from.Before(item.From) {
+				from = item.From
+			}
+			if to.After(item.To) {
+				to = item.To
+			}
+			filled = append(filled, FilledRange{SpaceID: job.SpaceID, DatasetID: item.DatasetID, Frequency: item.Frequency, From: from, To: to, Absent: []string{absence.SubjectID}})
+		}
+	}
+	if len(filled) == 0 {
+		return
+	}
+	if err := b.Notify(ctx, filled); err != nil {
+		log.WarnContextf(ctx, "collector backfill filled notification failed job=%s: %v", job.JobID, err)
+	}
 }
 
 // advanceWatermark 自动补采作业全部成功后才推进扫描水位；失败的作业不推进，下次扫描会重新覆盖同一窗口。

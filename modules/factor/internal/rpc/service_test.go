@@ -277,7 +277,7 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 		"CreateFactor", "UpdateFactor", "DeleteFactor", "GetFactor", "ListFactors",
 		"AddFactorToSet", "RemoveFactorFromSet", "SetFactorMemberStatus",
 		"RecalcFactors", "ListRecalcJobs", "GetRecalcJob", "CancelRecalcJob", "GetStatus",
-		"ValidateFactorSpec", "PreviewFactor", "ListFactorFunctions",
+		"ValidateFactorSpec", "PreviewFactor", "ListFactorFunctions", "NotifyPeriodsFilled",
 	}
 	got := make([]string, 0, service.Methods().Len())
 	for i := 0; i < service.Methods().Len(); i++ {

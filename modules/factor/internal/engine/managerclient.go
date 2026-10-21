@@ -26,6 +26,8 @@ type ManagerClient struct {
 	gateway  gatewayclient.Invoker
 	timeout  time.Duration
 	identity domain.EngineIdentity
+	// OnFilled 收到心跳响应里的补齐通知时调用（可为 nil）。
+	OnFilled func([]*factorpb.PeriodsFilled)
 }
 
 func NewManagerClient(gateway gatewayclient.Invoker, timeout time.Duration, identity domain.EngineIdentity) (*ManagerClient, error) {
@@ -64,6 +66,9 @@ func (c *ManagerClient) Heartbeat(ctx context.Context, status domain.EngineStatu
 	req := &factorpb.EngineHeartbeatReq{Engine: factorwire.EngineIdentityToPB(c.identity), Status: factorwire.EngineStatusToPB(status)}
 	if err := c.call(ctx, "EngineHeartbeat", req, &rsp, rsp.GetRetInfo); err != nil {
 		return 0, err
+	}
+	if handler := c.OnFilled; handler != nil && len(rsp.GetFilled()) > 0 {
+		handler(rsp.GetFilled())
 	}
 	return time.Duration(rsp.GetLeaseTtlSeconds()) * time.Second, nil
 }

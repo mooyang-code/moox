@@ -107,7 +107,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		return result, errors.New("unit deployment requires an unchanged setup snapshot")
 	}
 	manifest := snapshot.Manifest
-	if !slices.Contains([]string{"host", "access", "egress-proxy", "trade", "storage"}, options.Profile) {
+	if !slices.Contains([]string{"host", "access", "egress-proxy", "trade", "storage", "collector-stream"}, options.Profile) {
 		return result, errors.New("unsupported native deployment unit")
 	}
 	unitRoot := path.Join(manifest.Paths.DeployRoot, options.Profile)

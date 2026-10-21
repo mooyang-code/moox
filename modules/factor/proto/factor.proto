@@ -379,6 +379,7 @@ service FactorMgr {
   rpc ValidateFactorSpec(ValidateFactorSpecReq) returns (ValidateFactorSpecRsp);
   rpc PreviewFactor(PreviewFactorReq) returns (PreviewFactorRsp);
   rpc ListFactorFunctions(ListFactorFunctionsReq) returns (ListFactorFunctionsRsp);
+  rpc NotifyPeriodsFilled(NotifyPeriodsFilledReq) returns (NotifyPeriodsFilledRsp);
 }
 
 // FactorEngine is the internal contract between moox-factor-mgr and the
@@ -414,6 +415,38 @@ message EngineRuntimeStatus {
   string catalog_synced_at = 7;
   int32 compute_workers = 8;
   string expr_version = 9;
+  // watermarks 是各集合的连续水位：已连续算完到哪一期、已知的最新一期、是否阻塞在还没补到的周期上。
+  repeated SetWatermarkStatus watermarks = 10;
+}
+
+message SetWatermarkStatus {
+  string set_id = 1;
+  string committed_through = 2;
+  string target = 3;
+  // blocked_since 非空表示水位阻塞：blocked_period 是卡住的那一期，blocked_reason 是原因（no_rows、missing_over_threshold、no_universe）。
+  string blocked_since = 4;
+  string blocked_period = 5;
+  string blocked_reason = 6;
+}
+
+// PeriodsFilled 是补采补齐了一段周期的通知：absent_subjects 是补采确认行情源没有的标的。
+message PeriodsFilled {
+  string space_id = 1;
+  string dataset_id = 2;
+  string frequency = 3;
+  // [from, to) 是补齐的 K 线开始时间范围（Unix 秒）。
+  int64 from = 4;
+  int64 to = 5;
+  repeated string absent_subjects = 6;
+}
+
+// NotifyPeriodsFilled 由 Collector 在补采作业成功后调用；因子管理服务在引擎心跳响应里转交，引擎据此立即推进水位并补算。
+message NotifyPeriodsFilledReq {
+  repeated PeriodsFilled filled = 1;
+}
+
+message NotifyPeriodsFilledRsp {
+  common.RetInfo ret_info = 1;
 }
 
 message EngineHeartbeatReq {
@@ -423,6 +456,8 @@ message EngineHeartbeatReq {
 message EngineHeartbeatRsp {
   common.RetInfo ret_info = 1;
   int64 lease_ttl_seconds = 2;
+  // filled 是自上次心跳以来收到的补齐通知（只交给持有租约的引擎）。
+  repeated PeriodsFilled filled = 3;
 }
 
 message PullRecalcJobReq { EngineIdentity engine = 1; }

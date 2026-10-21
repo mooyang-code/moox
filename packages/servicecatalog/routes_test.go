@@ -24,7 +24,7 @@ func productionTopology() Topology {
 	for host, ids := range map[string][]string{
 		"control":   {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"},
 		"storage":   {"storage-primary", "storage-node", "storage-view", "access"},
-		"compute-1": {"access", "egress-proxy", "trade"},
+		"compute-1": {"access", "egress-proxy", "trade", "collector-stream"},
 	} {
 		for _, id := range ids {
 			t.Placements = append(t.Placements, Placement{HostID: host, ComponentID: id, Status: Enabled})
@@ -110,9 +110,9 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":   {168, []string{"access", "admin", "cloudnode", "collector", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "b3851d3803c0d0af0c499fb21f4bedd366a1e346e7ea20151cd620be02f385f0"},
-		"storage":   {95, []string{"access", "archive-mgr", "collector", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "cbfc21292383eabe5723411b92f6443fb85d87774664cb2b3dc6fb0e3badbdae"},
-		"compute-1": {37, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "40337493f782f4b135a4f3f7ef66dacbc105339638c397f2d7dd9faf445f5ab1"},
+		"control":   {177, []string{"access", "admin", "cloudnode", "collector", "collector-stream", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "160ff4e0351e8debbc029bdb0144045059c22d57d2087d5468c10c7263d3b6ec"},
+		"storage":   {95, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "bc98b86b2c5582a48e69c90e78882d3ecb05e9c8bb940e57fdb2ae56c58f1a09"},
+		"compute-1": {38, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "f4c9039d40728218f4158c1b7ebd13b57c79e858ab14071b70900685eb0b8ce7"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
@@ -156,7 +156,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 			}
 		}
 		for _, caller := range compiled.VerificationCallers {
-			if strings.Contains(caller, "*") || slices.Contains([]string{"scf-collector", "factor-engine", "archive-worker", "moox-skill"}, caller) {
+			if strings.Contains(caller, "*") || slices.Contains([]string{"scf-collector", "factor-engine", "archive-worker", "moox-skill", "collector-operator"}, caller) {
 				t.Fatalf("unexpanded or external verification scope %q", caller)
 			}
 		}

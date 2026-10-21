@@ -658,6 +658,11 @@ components:
           - GetCollectorStatus
           - ReregisterFetchPlan
           - SetFetchPlanPaused
+          - GetIngestMode
+          - SetIngestMode
+          - SetSubjectExclusions
+          - ClearSubjectExclusions
+          - ListSubjectExclusions
         read_only_methods:
           - GetTaskList
           - GetTaskDetail
@@ -669,6 +674,8 @@ components:
           - GetKlineBackfill
           - ListKlineBackfills
           - GetCollectorStatus
+          - GetIngestMode
+          - ListSubjectExclusions
         acl:
           - methods:
               - GetTaskList
@@ -692,6 +699,7 @@ components:
               - ConfirmHistoryGaps
               - ClearSourceAbsences
               - GetCollectorStatus
+              - GetIngestMode
             callers:
               - console
               - moox-cli
@@ -699,12 +707,39 @@ components:
               - SyncSubjects
               - ReregisterFetchPlan
               - SetFetchPlanPaused
+              - SetIngestMode
             callers:
+              - moox-cli
+          # 采集名单干预：控制台、moox-cli；旁路程序经 Access 用外部身份 collector-operator 调用（见 principals）。
+          - methods:
+              - SetSubjectExclusions
+              - ClearSubjectExclusions
+              - ListSubjectExclusions
+            callers:
+              - console
               - moox-cli
           - methods:
               - GetTaskResultInventory
             callers:
               - monitor
+      # collector-stream 的心跳、拉计划与周期统计上报；不设租约，计划里的份就是唯一的授权。
+      - path: trpc.moox.collector.StreamCollector
+        port: 11422
+        timeout_ms: 10000
+        max_body_bytes: 4194304
+        methods:
+          - StreamHeartbeat
+          - PullStreamPlan
+          - ReportStreamPeriods
+        read_only_methods:
+          - PullStreamPlan
+        acl:
+          - methods:
+              - StreamHeartbeat
+              - PullStreamPlan
+              - ReportStreamPeriods
+            callers:
+              - collector-stream
     doctor:
       role: collector
       description: Market data collection planner and executor
@@ -730,6 +765,54 @@ components:
         - inspect_health_check_input
         - restart_service_manually
       required_in_default_profile: true
+  - id: collector-stream
+    name: 行情推送采集
+    binary: moox-collector-stream
+    scope: any
+    replicas: single
+    protected: false
+    health:
+      kind: readyz
+      port: 11451
+      ready_body: '"ready":true'
+    services:
+      # 拉取与补采的本地执行端，处理代码与 SCF 函数相同；补采分块单次调用最长 90 秒。
+      - path: trpc.moox.collector.MarketFetchExecutor
+        port: 11450
+        timeout_ms: 95000
+        max_body_bytes: 4194304
+        methods:
+          - Invoke
+        acl:
+          - methods:
+              - Invoke
+            callers:
+              - collector
+    doctor:
+      role: collector-stream
+      description: 常驻接收交易所 WebSocket 收盘 K 线并按周期提交 Storage，同进程提供本地执行端
+      duties:
+        - 按采集计划订阅推送并在截止前提交周期
+        - 执行补采与本地定时拉取
+      inputs:
+        - 交易所 WebSocket 收盘推送
+        - Collector 下发的推送与本地执行端计划
+      outputs:
+        - Storage 周期提交与补采写入
+        - 心跳与周期统计
+      dependencies:
+        - collector
+        - storage-primary
+      transport: reporter
+      functional_observability: active
+      config_paths:
+        - collector-stream/config/app.yaml
+        - collector-stream/config/trpc_go.yaml
+      writable_paths:
+        - data/collector-stream
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: false
   - id: cloudnode
     name: 云节点服务
     binary: moox-cloudnode
@@ -882,6 +965,7 @@ components:
           - ValidateFactorSpec
           - PreviewFactor
           - ListFactorFunctions
+          - NotifyPeriodsFilled
         read_only_methods:
           - GetFactorSet
           - ListFactorSets
@@ -929,6 +1013,11 @@ components:
               - GetStatus
             callers:
               - strategy
+          # 补采补齐通知：因子据此立即推进连续水位并补算上游失败的标的。
+          - methods:
+              - NotifyPeriodsFilled
+            callers:
+              - collector
       - path: trpc.moox.factor.FactorEngine
         port: 11405
         timeout_ms: 120000
@@ -1515,6 +1604,12 @@ components:
               - UpsertFields
             callers:
               - monitor
+          # collector-stream 的周期提交与补采写入；请求体的 AppId 仍是 moox-collector（周期 RPC 只接受 Collector 身份）。
+          - methods:
+              - CommitTimeSeriesBatch
+              - UpsertFields
+            callers:
+              - collector-stream
           - methods:
               - WriteFactorRows
               - ReportFactorPeriodComputed
@@ -1895,6 +1990,15 @@ principals:
           - PullArchiveRun
           - ReportArchiveRunProgress
           - CompleteArchiveRun
+  # 采集名单干预的旁路程序（不在部署拓扑里）：只放行排除名单三个方法与 SyncSubjects。
+  - id: collector-operator
+    allow:
+      - service: trpc.moox.collector.CollectMgr
+        methods:
+          - SetSubjectExclusions
+          - ClearSubjectExclusions
+          - ListSubjectExclusions
+          - SyncSubjects
   - id: moox-skill
     allow:
       - service: trpc.moox.storage.PrimaryStore

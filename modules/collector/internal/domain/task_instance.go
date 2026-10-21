@@ -18,6 +18,8 @@ type Subject struct {
 	SubjectID string
 	Name      string
 	Status    string
+	// Pair 是标的属性里的交易所交易对（币安永续合约），为空表示与交易所 symbol 相同。
+	Pair string
 }
 
 // DatasetSubject is the subject projection consumed by job planners. Provider

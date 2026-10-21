@@ -28,11 +28,15 @@ const (
 // Plan 是 Collector 下发给一个函数的采集计划。函数只认“市场 + 标的 + 频率”，
 // 以及结果写到哪些数据集；不知道数据集的规则。
 type Plan struct {
-	V                int               `json:"v"`
+	V int `json:"v"`
+	// Executor 是计划的执行端：空表示 SCF 函数，stream 是 WS 推送，local 是本地执行端（见 PlanExecutor*）。
+	Executor         string            `json:"executor,omitempty"`
 	Market           PlanMarket        `json:"market"`
 	Fetch            PlanFetch         `json:"fetch"`
 	SymbolExceptions map[string]string `json:"symbol_exceptions,omitempty"`
-	Datasets         []PlanDataset     `json:"datasets"`
+	// Pairs 是交易对与交易所 symbol 不同的标的（币安永续合约的 pair）：WS 按 pair 订阅、按 symbol 写入。只出现在推送执行端的计划里。
+	Pairs    map[string]string `json:"pairs,omitempty"`
+	Datasets []PlanDataset     `json:"datasets"`
 }
 
 // PlanMarket 描述这个函数服务的市场（现货与合约是不同市场）。
@@ -61,7 +65,36 @@ type PlanFetch struct {
 	StandbyHourOnly bool `json:"standby_hour_only,omitempty"`
 	// ConnReuse 为真时，函数进程在多次调用之间复用到行情源的 HTTP 连接（上一分钟留下的空闲连接下一分钟直接用）。
 	ConnReuse bool `json:"conn_reuse,omitempty"`
+	// NotBeforeMS 是相对收盘的最早取数时刻（毫秒）：错峰等待之后还要等到收盘 + NotBeforeMS 才取数，0 表示不限制。
+	NotBeforeMS int `json:"not_before_ms,omitempty"`
 }
+
+// FeedLimits 是一次取数的限流与超时（计划的 fetch 段），零值字段用数据源默认或进程环境。
+type FeedLimits struct {
+	RPS              int `json:"rps,omitempty"`
+	Burst            int `json:"burst,omitempty"`
+	FeedConcurrency  int `json:"feed_concurrency,omitempty"`
+	RequestTimeoutMS int `json:"request_timeout_ms,omitempty"`
+	StorageTimeoutMS int `json:"storage_timeout_ms,omitempty"`
+}
+
+// Limits 返回计划的限流与超时。
+func (f PlanFetch) Limits() *FeedLimits {
+	return &FeedLimits{RPS: f.RPS, Burst: f.Burst, FeedConcurrency: f.FeedConcurrency, RequestTimeoutMS: f.RequestTimeoutMS, StorageTimeoutMS: f.StorageTimeoutMS}
+}
+
+// MinNotBeforeMS、MaxNotBeforeMS 是最早取数时刻的取值范围：小于 1 秒没有意义，超过 12 秒就挤占了提交与重试的时间。
+const (
+	MinNotBeforeMS = 1000
+	MaxNotBeforeMS = 12000
+)
+
+// 计划执行端。SCF 函数的计划不写 executor（函数按未知字段拒绝解码），推送与本地执行端的计划写明自己的类型。
+const (
+	PlanExecutorSCF    = "scf"
+	PlanExecutorStream = "stream"
+	PlanExecutorLocal  = "local"
+)
 
 // MinStandbyMS 是备援延迟的下限：正常请求的首字节在几十到几百毫秒，延迟太短会让几乎所有请求都发出备援。
 const MinStandbyMS = 200
@@ -162,8 +195,19 @@ func (p *Plan) Validate() error {
 	if f.StandbyMS != 0 && (f.StandbyMS < MinStandbyMS || f.StandbyMS > MaxStandbyMS) {
 		return fmt.Errorf("plan fetch.standby_ms must be 0 or between %d and %d", MinStandbyMS, MaxStandbyMS)
 	}
+	if f.NotBeforeMS != 0 && (f.NotBeforeMS < MinNotBeforeMS || f.NotBeforeMS > MaxNotBeforeMS) {
+		return fmt.Errorf("plan fetch.not_before_ms must be 0 or between %d and %d", MinNotBeforeMS, MaxNotBeforeMS)
+	}
 	if len(p.Datasets) == 0 {
 		return errors.New("plan requires at least one dataset")
+	}
+	maxItems := MaxPlanItems
+	switch p.Executor {
+	case "":
+	case PlanExecutorStream, PlanExecutorLocal:
+		maxItems = MaxStreamPlanItems
+	default:
+		return fmt.Errorf("unsupported plan executor %q", p.Executor)
 	}
 	seen := make(map[string]struct{}, len(p.Datasets))
 	for index, dataset := range p.Datasets {
@@ -193,8 +237,8 @@ func (p *Plan) Validate() error {
 			}
 			previous = copy.From
 			// 后一份允许没有标的：标的移到别的函数、或数据集不再采集时，从该份起本函数不再抓取。
-			if len(copy.Subjects) > MaxPlanItems {
-				return fmt.Errorf("plan datasets[%d].copies[%d] has more than %d subjects", index, copyIndex, MaxPlanItems)
+			if len(copy.Subjects) > maxItems {
+				return fmt.Errorf("plan datasets[%d].copies[%d] has more than %d subjects", index, copyIndex, maxItems)
 			}
 			if strings.TrimSpace(copy.Hash) == "" || copy.Count == 0 || (copyIndex == 0 && len(copy.Subjects) == 0) {
 				return fmt.Errorf("plan datasets[%d].copies[%d] requires hash, count and subjects", index, copyIndex)
@@ -258,6 +302,14 @@ func (p *Plan) ExchangeSymbol(subjectID string) string {
 		return symbol
 	}
 	return strings.ReplaceAll(strings.TrimSpace(subjectID), "-", "")
+}
+
+// Pair 返回标的的交易所交易对：没有单独登记时与交易所 symbol 相同。
+func (p *Plan) Pair(subjectID string) string {
+	if pair, ok := p.Pairs[subjectID]; ok && pair != "" {
+		return pair
+	}
+	return p.ExchangeSymbol(subjectID)
 }
 
 // PlanSeriesTag 返回写入行使用的 series_tag；Collector 登记快照时必须使用同一个函数。
@@ -383,6 +435,18 @@ func (p *Plan) StaggerDelay(functionName string) time.Duration {
 	}
 	sum := sha256.Sum256([]byte(functionName))
 	return base + time.Duration(int(sum[0])<<8|int(sum[1]))%time.Duration(p.Fetch.StaggerMS+1)*time.Millisecond
+}
+
+// StartDelay 返回从函数入口 entry 起到开始取数的等待时间：先错峰，再保证不早于收盘（scheduled）+ NotBeforeMS。
+// 定时器本身会晚到，所以“收盘后多少秒”必须按 scheduled 而不是入口时间算。
+func (p *Plan) StartDelay(functionName string, entry, scheduled time.Time) time.Duration {
+	delay := p.StaggerDelay(functionName)
+	if p.Fetch.NotBeforeMS > 0 {
+		if wait := scheduled.Add(time.Duration(p.Fetch.NotBeforeMS) * time.Millisecond).Sub(entry); wait > delay {
+			delay = wait
+		}
+	}
+	return max(delay, 0)
 }
 
 // StandbyFor 返回这次调用使用的备援延迟（毫秒），0 表示不启用。

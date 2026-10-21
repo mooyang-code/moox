@@ -81,7 +81,7 @@ func DeploymentRequestHash(options PrepareOptions, material hostbundle.Metadata,
 // is recovered before preparing a fresh candidate; mutable retired data is
 // never reused. A completed retry repairs missing processes and preserves pause.
 func Deploy(ctx context.Context, options PrepareOptions) (result Deployment, returnErr error) {
-	if !slices.Contains([]string{"host", "access", "egress-proxy", "trade", "storage"}, options.Profile) || options.MaterialOptions.AllowOperator || options.EventBusDirectory == "" || options.EventBusURL == "" || !validReleaseID(options.ReleaseID) || len(options.ReleaseID) > 40 {
+	if !slices.Contains([]string{"host", "access", "egress-proxy", "trade", "storage", "collector-stream"}, options.Profile) || options.MaterialOptions.AllowOperator || options.EventBusDirectory == "" || options.EventBusURL == "" || !validReleaseID(options.ReleaseID) || len(options.ReleaseID) > 40 {
 		return result, errors.New("deploy requires a client-only host or business unit and a bounded release prefix")
 	}
 	if err := fsutil.ValidateUnitRoots(options.DeploymentRoot, options.UnitRoot); err != nil {
