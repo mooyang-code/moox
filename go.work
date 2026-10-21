@@ -45,6 +45,7 @@ use (
 	./packages/hostmetricpb
 	./packages/hostpolicy
 	./packages/jetstream
+	./packages/lifecycle
 	./packages/marketcalendar
 	./packages/marketfetchpb
 	./packages/metricspb

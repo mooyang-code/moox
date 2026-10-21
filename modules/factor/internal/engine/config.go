@@ -35,6 +35,7 @@ type Config struct {
 	Recalc        RecalcConfig                     `yaml:"recalc"`
 	Gap           GapConfig                        `yaml:"gap"`
 	Watermark     WatermarkConfig                  `yaml:"watermark"`
+	Lifecycle     LifecycleConfig                  `yaml:"lifecycle"`
 }
 
 // WatermarkConfig 是连续水位：每个集合从水位下一期逐期推进，前面有还没补到的周期就停住（docs/计划/因子连续水位详细设计.md）。
@@ -67,6 +68,12 @@ type CatalogSyncConfig struct {
 	Interval  time.Duration `yaml:"interval"`
 	Offset    time.Duration `yaml:"offset"`
 	StateFile string        `yaml:"state_file"`
+}
+
+// LifecycleConfig 是生命周期控制器的配置：阶段持久化文件与检查周期。
+type LifecycleConfig struct {
+	StateFile string        `yaml:"state_file"`
+	Interval  time.Duration `yaml:"interval"`
 }
 
 // StorageConfig supplies application authentication independently of the
@@ -228,6 +235,7 @@ func Default() *Config {
 			MaxGroupsPerSweep: 20, MaxSpan: 60,
 		},
 		Watermark: WatermarkConfig{StateFile: "./data/engine/watermarks.json", MaxMissingRatio: 0.1, PollInterval: 10 * time.Second, MaxPeriods: 30},
+		Lifecycle: LifecycleConfig{StateFile: "./data/engine/lifecycle.json", Interval: 30 * time.Second},
 	}
 }
 
@@ -267,12 +275,14 @@ func (c *Config) applyDefaults() {
 	}
 	setDuration(&c.Watermark.PollInterval, d.Watermark.PollInterval)
 	setInt(&c.Watermark.MaxPeriods, d.Watermark.MaxPeriods)
+	setString(&c.Lifecycle.StateFile, d.Lifecycle.StateFile)
+	setDuration(&c.Lifecycle.Interval, d.Lifecycle.Interval)
 }
 
 func (c *Config) resolvePaths(root string) {
 	for _, path := range []*string{
 		&c.CatalogSync.StateFile, &c.Storage.AuthSecretFile, &c.EventBus.CredentialFile,
-		&c.Gap.LedgerDir, &c.Watermark.StateFile, &c.SeriesStore.Dir,
+		&c.Gap.LedgerDir, &c.Watermark.StateFile, &c.SeriesStore.Dir, &c.Lifecycle.StateFile,
 	} {
 		value := strings.TrimSpace(*path)
 		if value == "" || filepath.IsAbs(value) || strings.HasPrefix(value, "~") {

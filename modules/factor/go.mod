@@ -12,6 +12,7 @@ require (
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000 // indirect
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/lifecycle v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepolicy v0.0.0-00010101000000-000000000000
 	github.com/prometheus/client_golang v1.23.2
@@ -61,6 +62,8 @@ replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 
 replace github.com/mooyang-code/moox/packages/events => ../../packages/events
+
+replace github.com/mooyang-code/moox/packages/lifecycle => ../../packages/lifecycle
 
 replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
 

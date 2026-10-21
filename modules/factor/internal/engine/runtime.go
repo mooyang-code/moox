@@ -28,6 +28,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -61,6 +62,7 @@ type Runtime struct {
 	data        *localdata.Data
 	admit       *memadmit.Admitter
 	health      *factorhealth.State
+	life        *lifecycle.Controller
 
 	// reconcileMu serializes consumer start/stop; consumerMu only guards the
 	// pointer so status and health reads never wait on EventBus I/O.
@@ -171,6 +173,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.pipeline = base
 	r.runner = &measuredRunner{inner: base, metrics: r.metrics, health: r.monitor, runs: r.runs}
 	r.preload = newPreloader(r.catalog, r.storage, r.data, r.active, func(string) { kickGap() })
+	if r.life, err = r.newLifecycle(); err != nil {
+		return nil, fmt.Errorf("open factor lifecycle: %w", err)
+	}
 
 	r.syncer = &catalogSyncer{
 		client: r.manager, cache: r.catalog, interval: cfg.CatalogSync.Interval, offset: cfg.CatalogSync.Offset,
@@ -223,9 +228,13 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, r.reportMetrics)
 	r.goRun(appCtx, r.preload.Run)
 	r.goRun(appCtx, follower.Run)
+	r.goRun(appCtx, func(ctx context.Context) {
+		r.life.Recover(ctx)
+		r.life.Run(ctx, cfg.Lifecycle.Interval)
+	})
 
 	r.health.SnapshotFunc = r.healthSnapshot
-	if err := factorhealth.Register(s.Service(healthService), r.health, newLocalWriter(r.data, r.storage).routes()...); err != nil {
+	if err := factorhealth.Register(s.Service(healthService), r.health, append(newLocalWriter(r.data, r.storage).routes(), r.lifecycleRoutes()...)...); err != nil {
 		return nil, fmt.Errorf("register factor engine health service: %w", err)
 	}
 	r.health.SetReady(true)
@@ -254,7 +263,7 @@ func (r *Runtime) reconcileConsumer() {
 		consumer, err := eventconsumer.NewConsumer(context.Background(), eventconsumer.ConsumerConfig{
 			URLs: r.cfg.EventBus.URLs, CredentialFile: r.cfg.EventBus.CredentialFile,
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
-			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity,
+			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate,
 		}, r.catalog, &observedStore{Store: r.storage, health: r.monitor}, r.runner, r.locks)
 		if err != nil {
 			log.ErrorContextf(context.Background(), "factor_engine_consumer_start_failed error=%v", err)

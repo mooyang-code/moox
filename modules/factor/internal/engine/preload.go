@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -40,7 +41,48 @@ type preloader struct {
 	kick    chan struct{}
 
 	// prepared 记录每个集合预载成功时的回看根数：目录里的因子变了回看更长就要重新预载（窗口要变长）。
+	mu       sync.Mutex
 	prepared map[string]int
+}
+
+// Ready 报告集合是否已经预载（窗口就绪）：生命周期检查用。
+func (p *preloader) Ready(setID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.prepared[setID]
+	return ok
+}
+
+func (p *preloader) preparedLookback(setID string) (int, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n, ok := p.prepared[setID]
+	return n, ok
+}
+
+func (p *preloader) markPrepared(setID string, lookback int) {
+	p.mu.Lock()
+	p.prepared[setID] = lookback
+	p.mu.Unlock()
+}
+
+// PrepareSet 立刻为一个集合预载（生命周期的 init 动作）；已经预载且回看够长时直接返回。
+func (p *preloader) PrepareSet(ctx context.Context, setID string) error {
+	set, lookup := p.sets.SetByID(setID)
+	if lookup != SetFound {
+		return fmt.Errorf("因子集 %s 不在目录里", setID)
+	}
+	if lookback, ok := p.preparedLookback(setID); ok && lookback >= maxLookbackOf(set) {
+		return nil
+	}
+	if err := p.prepare(ctx, set); err != nil {
+		return err
+	}
+	p.markPrepared(setID, maxLookbackOf(set))
+	if p.onReady != nil {
+		p.onReady(setID)
+	}
+	return nil
 }
 
 func newPreloader(sets preloadCatalog, source SourceDataset, data preloadData, active func() bool, onReady func(string)) *preloader {
@@ -94,7 +136,7 @@ func (p *preloader) once(ctx context.Context) {
 		if lookup != SetFound {
 			continue
 		}
-		if lookback, ok := p.prepared[setID]; ok && lookback >= maxLookbackOf(set) {
+		if lookback, ok := p.preparedLookback(setID); ok && lookback >= maxLookbackOf(set) {
 			continue
 		}
 		if err := p.prepare(ctx, set); err != nil && ctx.Err() == nil {
@@ -105,7 +147,7 @@ func (p *preloader) once(ctx context.Context) {
 			}
 			continue
 		}
-		p.prepared[setID] = maxLookbackOf(set)
+		p.markPrepared(setID, maxLookbackOf(set))
 		if p.onReady != nil {
 			p.onReady(setID)
 		}

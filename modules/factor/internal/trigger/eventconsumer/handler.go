@@ -33,7 +33,13 @@ type Handler struct {
 	cfg      HandlerConfig
 	// continuity 非空时按连续水位逐期推进（设计见 docs/计划/因子连续水位详细设计.md）。
 	continuity *Continuity
+	// gate 非空时，集合没有处于预热或运行（生命周期门禁）就不计算：事件直接 ACK，水位不前进，
+	// 启动之后由下一个事件和追赶循环从水位下一期补算。
+	gate func(setID string) bool
 }
+
+// SetGate 设置生命周期门禁；必须在开始消费之前调用。
+func (h *Handler) SetGate(gate func(setID string) bool) { h.gate = gate }
 
 // SetContinuity 打开连续水位推进；必须在开始消费之前调用。
 func (h *Handler) SetContinuity(continuity *Continuity) { h.continuity = continuity }
@@ -41,6 +47,9 @@ func (h *Handler) SetContinuity(continuity *Continuity) { h.continuity = continu
 // Advance 在集合的通道里按连续水位推进一次（追赶循环与补齐通知调用）。
 func (h *Handler) Advance(ctx context.Context, setID string) error {
 	if h == nil || h.continuity == nil {
+		return nil
+	}
+	if h.gate != nil && !h.gate(setID) {
 		return nil
 	}
 	_, err := h.lanes.Do(ctx, setID, func(laneCtx context.Context) (pipeline.Outcome, error) {
@@ -125,6 +134,9 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 		}
 		if set.SetID == "" || set.SpaceID != message.GetSpaceId() || set.SourceDatasetID != payload.GetDatasetId() || set.Freq != payload.GetFrequency() {
 			return pipeline.Outcome{}, fmt.Errorf("enabled factor set identity does not match collector event")
+		}
+		if h.gate != nil && !h.gate(set.SetID) {
+			return pipeline.Outcome{}, nil
 		}
 		if h.continuity != nil {
 			return pipeline.Outcome{}, h.continuity.onEvent(laneCtx, h, set, factors, event)
