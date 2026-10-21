@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
+	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	marketserverless "github.com/mooyang-code/moox/modules/collector/internal/serverless/market_data"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 )
@@ -74,3 +75,16 @@ func (e *Executor) Invoke(ctx context.Context, req *pb.InvokeMarketFetchReq) (*p
 
 // InFlight 返回正在执行的调用数（指标与健康检查用）。
 func (e *Executor) InFlight() int { return len(e.slots) }
+
+// RunPlan 按计划执行一次定时拉取，占用本地执行端的并发名额。
+func (e *Executor) RunPlan(ctx context.Context, plan *marketfetch.Plan, run marketfetch.PlanRun) (*model.Response, error) {
+	select {
+	case e.slots <- struct{}{}:
+		defer func() { <-e.slots }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	handler := e.newHandler()
+	handler.SpaceID = e.spaceID
+	return handler.RunPlan(ctx, plan, run)
+}

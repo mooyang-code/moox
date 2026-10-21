@@ -28,6 +28,8 @@ type PeriodStat struct {
 	Arrived         int
 	Missing         int
 	MissingSubjects []string
+	// Suspected 是缺失里已判定为疑似下架的标的数（告警不计入）。
+	Suspected       int
 	LateAfterCommit int
 	Duplicates      int
 	Conflicts       int

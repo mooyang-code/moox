@@ -81,7 +81,9 @@ func newFakeExchange(t *testing.T) *fakeExchange {
 	return exchange
 }
 
-func (e *fakeExchange) url() string { return "ws" + strings.TrimPrefix(e.server.URL, "http") + "/stream" }
+func (e *fakeExchange) url() string {
+	return "ws" + strings.TrimPrefix(e.server.URL, "http") + "/stream"
+}
 
 // push 给订阅了 stream 的每条连接发一条收盘 K 线。
 func (e *fakeExchange) push(stream, symbol string, openMS int64) int {
