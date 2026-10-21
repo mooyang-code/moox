@@ -22,6 +22,7 @@ use (
 	./modules/hostagent/proto/hostagentgen
 	./modules/hostgateway
 	./modules/importer
+	./modules/replay
 	./modules/monitor
 	./modules/monitor/proto/monitorgen
 	./modules/storage
@@ -56,6 +57,7 @@ use (
 	./packages/security
 	./packages/seriesformat
 	./packages/seriesimport
+	./packages/seriesreplay
 	./packages/seriesset
 	./packages/servicecatalog
 	./packages/servicehost
