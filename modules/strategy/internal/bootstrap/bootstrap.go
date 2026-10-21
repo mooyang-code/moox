@@ -113,10 +113,16 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 
 	var consumer *eventconsumer.Consumer
+	life, err := newLifecycle(cfg.Database, lifecycleDeps{
+		db: db, eventConnected: eventRuntime.Connected, consumerReady: func() bool { return consumer == nil || consumer.Ready() },
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("打开策略生命周期状态：%w", err)
+	}
 	if inputClient != nil {
 		meta := input.NewMetaCache()
 		meta.Ages = db
-		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof}
+		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life)}
 		// EventBus 暂不可用时消费者在后台重试连接，进程照常启动（未就绪），与出站投递的容错一致。
 		connect := func(ctx context.Context) (*jetstream.Client, error) {
 			jsConfig, err := eventBusConfig(cfg, "moox-strategy-ready")
@@ -140,7 +146,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		loops.Wait()
 		return nil
 	})
-	loops.Add(3)
+	loops.Add(4)
 	go func() {
 		defer loops.Done()
 		runner.Run(background)
@@ -153,6 +159,11 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		defer loops.Done()
 		retentionLoop(background, db, cfg.Retention)
 	}()
+	go func() {
+		defer loops.Done()
+		life.Recover(background)
+		life.Run(background, lifecycleRefreshEvery)
+	}()
 
 	// 只注册到 StrategyMgr 自己的监听；注册到整个 server 会让健康检查端口也能调用管理方法。
 	strategyMgr := s.Service("trpc.moox.strategy.StrategyMgr")
@@ -161,9 +172,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 	strategypb.RegisterStrategyMgrService(strategyMgr, service)
 	healthState := health.New("strategy", "strategy", "", "")
-	healthState.SnapshotFunc = strategyHealthSnapshot(db, eventRuntime, healthState, consumer)
+	healthState.SnapshotFunc = withLifecycle(strategyHealthSnapshot(db, eventRuntime, healthState, consumer), life)
 	healthState.SetReady(true)
-	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState); err != nil {
+	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState, lifecycleRoutes(life)...); err != nil {
 		return nil, nil, fmt.Errorf("注册策略健康检查失败：%w", err)
 	}
 	keep = true

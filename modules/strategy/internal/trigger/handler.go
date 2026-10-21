@@ -47,6 +47,18 @@ type Observer interface {
 	ObservePeriod(instance store.Instance, bar string, barStart, barEnd time.Time, result, reason string)
 }
 
+// Mode 是实例的生命周期模式（设计 6.1、6.3）。
+type Mode int
+
+const (
+	// ModeLive 正常求值，目标交给 Trade 执行。
+	ModeLive Mode = iota
+	// ModeShadow 预热：正常求值，目标带影子标记，Trade 只换算并记录，不下单。
+	ModeShadow
+	// ModeOff 没有处于预热或运行（未启动、暂停、故障）：不求值、不发新目标，持仓不动。
+	ModeOff
+)
+
 // Handler 处理 ViewDataReady：遍历绑定该 View 的启用实例，错误汇总，全部终态落库后才 ACK。
 type Handler struct {
 	Store         *store.Store
@@ -55,6 +67,8 @@ type Handler struct {
 	AttemptBudget int
 	Observer      Observer
 	Logf          func(format string, args ...any)
+	// Gate 非空时按实例的生命周期决定本期怎么处理；为空等同于一直 ModeLive。
+	Gate func(instanceID string) Mode
 
 	mu       sync.Mutex
 	programs map[string]*runtime
@@ -146,6 +160,8 @@ type period struct {
 	validUntil time.Time
 	input      store.InputRecord
 	timing     periodTiming
+	// shadow 为真表示实例在预热：目标事件带影子标记。
+	shadow bool
 }
 
 // periodTiming 是一期处理的分段耗时，成功提交时写入一行日志，用来定位“数据就绪到结果落库”的时间花在哪。
@@ -156,7 +172,18 @@ type periodTiming struct {
 	commit time.Duration // 结果提交
 }
 
+func (h *Handler) mode(instanceID string) Mode {
+	if h.Gate == nil {
+		return ModeLive
+	}
+	return h.Gate(instanceID)
+}
+
 func (h *Handler) process(ctx context.Context, loader Loader, instance store.Instance, message *eventpb.EventMessage, payload *storagepb.ViewDataReady) error {
+	// 没有处于预热或运行的实例不求值、不发新目标（持仓不动）；这一期不留记录，恢复后从下一期继续。
+	if h.mode(instance.InstanceID) == ModeOff {
+		return nil
+	}
 	periodTime := time.Unix(payload.GetPeriodTime(), 0).UTC()
 	rt, rtErr := h.runtimeFor(ctx, instance)
 	var skip *input.SkipError
@@ -196,7 +223,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		}
 		return nil
 	}
-	p := &period{timing: periodTiming{start: h.now()}, loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), viewID: payload.GetViewId(), boundary: boundary, validUntil: validUntil}
+	p := &period{timing: periodTiming{start: h.now()}, shadow: h.mode(instance.InstanceID) == ModeShadow, loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), viewID: payload.GetViewId(), boundary: boundary, validUntil: validUntil}
 	p.input = store.InputRecord{ViewID: payload.GetViewId(), Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, EventID: message.GetEventId()}
 	if skip != nil {
 		return h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
@@ -395,7 +422,7 @@ func (h *Handler) buildResult(p *period, decision engine.Decision, loaded input.
 		InputJSON: inputJSON, TargetsJSON: targetsJSON, RuleStatesJSON: states, SummaryJSON: summary, PublishStatus: store.PublishNone, CreatedAt: now,
 	}
 	if decision.Status == engine.StatusOK && p.instance.LogicalAccountID != nil {
-		event, err := MarshalTargetEvent(p.instance, result, targets)
+		event, err := MarshalTargetEvent(p.instance, result, targets, p.shadow)
 		if err != nil {
 			return store.Result{}, nil, err
 		}

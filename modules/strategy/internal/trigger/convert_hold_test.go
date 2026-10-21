@@ -33,7 +33,7 @@ func TestHoldFlagReachesTargetsJSONAndTradeEvent(t *testing.T) {
 	now := time.Date(2026, 10, 14, 6, 0, 0, 0, time.UTC)
 	instance := store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "crypto", LogicalAccountID: &account}
 	result := store.Result{ResultID: "r1", InstanceID: "i1", SessionID: "sess", BarEndTime: now, ValidUntil: now.Add(time.Hour), CreatedAt: now}
-	data, err := MarshalTargetEvent(instance, result, items)
+	data, err := MarshalTargetEvent(instance, result, items, false)
 	if err != nil {
 		t.Fatal(err)
 	}
