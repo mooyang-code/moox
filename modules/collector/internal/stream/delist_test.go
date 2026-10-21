@@ -72,7 +72,7 @@ func (fakeSource) Unsubscribe([]string, int) ([]byte, error) { return nil, nil }
 func (fakeSource) Decode([]byte, time.Time) ([]Event, error) { return nil, nil }
 func (fakeSource) Keepalive() Keepalive                      { return Keepalive{} }
 
-var _ = marketfetch.PlanExecutorStream
+var _ = marketfetch.PlanExecutorStreaming
 
 func toLower(value string) string {
 	out := []rune(value)

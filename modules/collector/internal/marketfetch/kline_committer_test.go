@@ -75,7 +75,7 @@ func TestKlineCommitterWritesTheSameRowsAsTheSCFPipeline(t *testing.T) {
 	for i := range streamBars {
 		streamBars[i].ProviderSymbol = "" // 推送侧按计划的映射填 provider_symbol
 	}
-	result, err := committer.CommitPeriod(context.Background(), KlineBatch{SpaceID: "crypto", BatchID: "stream|swap|1m", Market: plan.Market, Dataset: plan.Datasets[0], Period: period, Symbols: plan.ExchangeSymbol, Bars: streamBars, Origin: KlineOriginStream})
+	result, err := committer.CommitPeriod(context.Background(), KlineBatch{SpaceID: "crypto", BatchID: "stream|swap|1m", Market: plan.Market, Dataset: plan.Datasets[0], Period: period, Symbols: plan.ExchangeSymbol, Bars: streamBars, Origin: KlineOriginStreaming})
 	require.NoError(t, err)
 	require.Equal(t, 3, result.Rows)
 	require.Empty(t, result.Missing)

@@ -101,7 +101,7 @@ func (r *Runtime) Start(ctx context.Context) {
 func (r *Runtime) Apply(items []PlanItem) error {
 	wanted := map[string]PlanItem{}
 	for _, item := range items {
-		if item.Executor != marketfetch.PlanExecutorStream || item.Plan == nil {
+		if item.Executor != marketfetch.PlanExecutorStreaming || item.Plan == nil {
 			continue
 		}
 		wanted[strings.ToLower(item.Plan.Market.MarketType)] = item

@@ -41,7 +41,7 @@ func spotPlan(from time.Time, subjects ...string) *marketfetch.Plan {
 	for i, subject := range subjects {
 		items[i] = marketfetch.PlanSubject{ID: subject, Index: uint32(i)}
 	}
-	return &marketfetch.Plan{V: 1, Executor: marketfetch.PlanExecutorStream, Fetch: marketfetch.PlanFetch{Concurrency: 1},
+	return &marketfetch.Plan{V: 1, Executor: marketfetch.PlanExecutorStreaming, Fetch: marketfetch.PlanFetch{Concurrency: 1},
 		Market:   marketfetch.PlanMarket{MarketID: "crypto", InstrumentType: "spot", Provider: "binance", SourceID: "spot_http", MarketType: "spot"},
 		Datasets: []marketfetch.PlanDataset{{DatasetID: "bars_1m", Frequency: "1m", LatenessS: 5, Copies: []marketfetch.PlanCopy{{From: from.Unix(), Hash: "h", Count: uint32(len(subjects)), Subjects: items}}}}}
 }
@@ -63,7 +63,7 @@ func TestRuntimeSubscribesAndCommitsAPlannedPeriod(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runtime.Start(ctx)
-	require.NoError(t, runtime.Apply([]stream.PlanItem{{Name: "stream-crypto-spot", Executor: marketfetch.PlanExecutorStream, Market: "spot", Plan: spotPlan(period.Add(-time.Hour), "BTC-USDT", "ETH-USDT")}}))
+	require.NoError(t, runtime.Apply([]stream.PlanItem{{Name: "stream-crypto-spot", Executor: marketfetch.PlanExecutorStreaming, Market: "spot", Plan: spotPlan(period.Add(-time.Hour), "BTC-USDT", "ETH-USDT")}}))
 	require.Eventually(t, runtime.Ready, 3*time.Second, 10*time.Millisecond)
 	status := runtime.Status()
 	require.Len(t, status, 1)
