@@ -89,6 +89,8 @@ var unitProfiles = map[string][]string{
 	"access":       {"access"},
 	"egress-proxy": {"egress-proxy"},
 	"trade":        {"trade"},
+	// WS 推送采集与本地执行端：放在能直连交易所的海外机，独立成单元，首次安装与升级都不动其他单元。
+	"collector-stream": {"collector-stream"},
 }
 
 func configAsset(module, component string) unitAsset {
@@ -146,13 +148,19 @@ var unitSpecs = map[string]unitComponentSpec{
 	"access":       {assets: []unitAsset{configAsset("access", "access")}},
 	"egress-proxy": {assets: []unitAsset{configAsset("egressproxy", "egress-proxy")}},
 	"trade":        {[]string{"moox-trade-cli"}, []unitAsset{configAsset("trade", "trade"), schemaAsset("trade", "trade")}},
+	"collector-stream": {assets: []unitAsset{
+		{"modules/collector/config/stream/app.yaml", "collector-stream/config/app.yaml", false},
+		{"modules/collector/config/stream/trpc_go.yaml", "collector-stream/config/trpc_go.yaml", false},
+		// 数据源配置（WS 地址与限额、REST 端点、Storage 绑定）与 Collector 同一份。
+		{"modules/collector/configs/sources/market/binance.yaml", "collector-stream/config/sources/market/binance.yaml", false},
+	}},
 }
 
 // Components returns the exact process boundary of a deployment unit.
 func Components(profile string) ([]Component, error) {
 	ids, ok := unitProfiles[profile]
 	if !ok {
-		return nil, fmt.Errorf("unsupported deployment profile %q; use host, control, storage, access, egress-proxy, or trade", profile)
+		return nil, fmt.Errorf("unsupported deployment profile %q; use host, control, storage, access, egress-proxy, trade, or collector-stream", profile)
 	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {

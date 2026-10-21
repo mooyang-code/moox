@@ -21,7 +21,7 @@ import (
 // 升级已安装单元或部署新主机时显式选择版本；不带版本时仍使用首次初始化的软件（修复原发布）。
 
 // releaseProfiles 是版本制品包含的单元；storage 需要 CGO 二进制，只在提供时加入。
-var releaseProfiles = []string{"host", "control", "access", "egress-proxy", "trade"}
+var releaseProfiles = []string{"host", "control", "access", "egress-proxy", "trade", "collector-stream"}
 
 var releaseIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,39}$`)
 
@@ -105,7 +105,7 @@ func BuildRelease(ctx context.Context, options ReleaseOptions) (Release, error) 
 		if err := buildCoreLocally(ctx, options.RepositoryRoot, bin, options.Architecture, options.Log); err != nil {
 			return release, err
 		}
-		if err := buildLocalTargets(ctx, options.RepositoryRoot, bin, options.Architecture, options.Log, []string{"access", "egress-proxy", "trade"}); err != nil {
+		if err := buildLocalTargets(ctx, options.RepositoryRoot, bin, options.Architecture, options.Log, []string{"access", "egress-proxy", "trade", "collector-stream"}); err != nil {
 			return release, err
 		}
 	}

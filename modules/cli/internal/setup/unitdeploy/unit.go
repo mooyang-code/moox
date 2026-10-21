@@ -2,6 +2,7 @@ package unitdeploy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"maps"
 	"net"
@@ -13,6 +14,7 @@ import (
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/unitpackage"
 	"github.com/mooyang-code/moox/packages/hostpolicy"
+	"github.com/mooyang-code/moox/packages/security"
 )
 
 func unitComponents(manifest setupconfig.Manifest, hostID, profile string) ([]string, error) {
@@ -51,6 +53,9 @@ const storageNodeID = "storage-node-0"
 // defaultSpaceID 是 Collector 行情调度的默认空间。
 const defaultSpaceID = "crypto"
 
+// collectorStorageAppID 是 Collector 与 SCF 函数写 Storage 的应用身份，collector-stream 沿用它。
+const collectorStorageAppID = "moox-collector"
+
 func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, hostID string, components []string) (map[string]map[string]string, error) {
 	health := map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": identity.HealthAccessKey, "MOOX_HEALTH_AUTH_SECRET_KEY": identity.HealthSecret}
 	environment := make(map[string]map[string]string, len(components))
@@ -83,6 +88,19 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 			// Collector 的行情调度必须有目标空间；与旧部署脚本一致，默认 crypto。
 			values["MOOX_SPACE_ID"] = defaultSpaceID
 			values["MOOX_SPACE_IDS"] = defaultSpaceID
+		}
+		if id == "collector-stream" {
+			// collector-stream 写 Storage 沿用 moox-collector 身份（周期 RPC 只接受 Collector 身份）：
+			// 在本机按 Storage 主密钥派生这一把应用密钥注入，主密钥不放到海外机。
+			if len(identity.StoragePrimarySecret) < 32 {
+				return nil, errors.New("collector-stream requires the original Storage primary secret to derive its app key")
+			}
+			keys, err := json.Marshal(map[string]string{collectorStorageAppID: security.HMACSHA256Hex(identity.StoragePrimarySecret, []byte(collectorStorageAppID))})
+			if err != nil {
+				return nil, err
+			}
+			values["MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"] = string(keys)
+			values["MOOX_SPACE_ID"] = defaultSpaceID
 		}
 		if !slices.Contains([]string{"storage-primary", "storage-node", "storage-view"}, id) {
 			continue

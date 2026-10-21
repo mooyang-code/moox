@@ -1063,3 +1063,33 @@ func TestBusinessCheckRetiredResultIsDisabled(t *testing.T) {
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "disabled", got.BusinessChecks[0].Status)
 }
+
+// collector-stream 心跳中断超过 3 分钟、连续 3 个周期有失败标的（不含疑似下架）时告警。
+func TestBuilderReportsCollectorStreamHeartbeatAndMissingStreaks(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		seedOverviewMetricForInstance(t, db, "stream-hb", "collector", "collector@control", "moox_collector_stream_heartbeat_timestamp_seconds", `{"space_id":"crypto"}`, float64(now.Add(-4*time.Minute).Unix()), now)
+		seedOverviewMetricForInstance(t, db, "stream-streak", "collector", "collector@control", "moox_collector_stream_failed_period_streak", `{"space_id":"crypto","market":"swap","frequency":"1m","dataset_id":"ds_swap"}`, 3, now)
+		seedOverviewMetricForInstance(t, db, "stream-ok", "collector", "collector@control", "moox_collector_stream_failed_period_streak", `{"space_id":"crypto","market":"spot","frequency":"1m","dataset_id":"ds_spot"}`, 2, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	byModule := map[string]BusinessStatus{}
+	for _, check := range got.BusinessChecks {
+		byModule[check.Module] = check
+	}
+	require.Equal(t, "down", byModule["collector_stream"].Status)
+	require.Contains(t, byModule["collector_stream"].Reason, "心跳已中断")
+	require.Equal(t, "down", byModule["collector_stream_missing"].Status)
+	require.Contains(t, byModule["collector_stream_missing"].Reason, "swap/ds_swap 1m 连续 3 期")
+	require.NotContains(t, byModule["collector_stream_missing"].Reason, "ds_spot")
+
+	fresh, _ := openOverviewState(t, func(db *gorm.DB) {
+		seedOverviewMetricForInstance(t, db, "stream-hb", "collector", "collector@control", "moox_collector_stream_heartbeat_timestamp_seconds", `{"space_id":"crypto"}`, float64(now.Add(-20*time.Second).Unix()), now)
+	})
+	got, err = (Builder{Metrics: fresh, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	for _, check := range got.BusinessChecks {
+		require.Equal(t, "healthy", check.Status, check.Module)
+	}
+}

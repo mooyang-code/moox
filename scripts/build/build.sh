@@ -126,6 +126,7 @@ case "${TARGET_MODULE}" in
     build_go modules/cloudnode ./cmd/cli moox-cloudnode-cli 0
     build_go modules/collector ./cmd/server moox-collector 0
     build_go modules/collector ./cmd/cli moox-collector-cli 0
+    build_go modules/collector ./cmd/stream moox-collector-stream 0
     build_go modules/factor ./cmd/mgr moox-factor-mgr 0
     build_go modules/factor ./cmd/cli moox-factor-mgr-cli 0
     build_go modules/factor ./cmd/engine moox-factor-engine 0
@@ -182,6 +183,10 @@ case "${TARGET_MODULE}" in
     ;;
   collector-cli)
     build_go modules/collector ./cmd/cli moox-collector-cli 0
+    ;;
+  collector-stream)
+    # 纯 Go，可交叉编译；部署在海外机（香港）的 collector-stream 单元。
+    build_go modules/collector ./cmd/stream moox-collector-stream 0
     ;;
   collector-scf)
     build_collector_market_data_scf

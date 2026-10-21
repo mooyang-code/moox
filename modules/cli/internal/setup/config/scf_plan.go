@@ -46,6 +46,10 @@ type SCFPlanSpace struct {
 	// Namespace 是函数所在命名空间，默认 moox-<space>-plan。
 	Namespace          string `toml:"namespace"`
 	SymbolsPerFunction int    `toml:"symbols_per_function"`
+	// DefaultIngest（stream|pull）与 DefaultExecutor（scf|local）是新数据集的采集方式初值：
+	// crypto 默认 WS 推送 + 本地执行端补采，其他空间默认 SCF 定时拉取。
+	DefaultIngest   string `toml:"default_ingest"`
+	DefaultExecutor string `toml:"default_executor"`
 }
 
 const (
@@ -97,6 +101,20 @@ func normalizeSCFPlan(plan *SCFPlan) {
 		if space.Namespace == "" && space.SpaceID != "" {
 			space.Namespace = "moox-" + space.SpaceID + "-plan"
 		}
+		space.DefaultIngest = strings.ToLower(strings.TrimSpace(space.DefaultIngest))
+		space.DefaultExecutor = strings.ToLower(strings.TrimSpace(space.DefaultExecutor))
+		if space.DefaultIngest == "" {
+			space.DefaultIngest = "pull"
+			if space.SpaceID == "crypto" {
+				space.DefaultIngest = "stream"
+			}
+		}
+		if space.DefaultExecutor == "" {
+			space.DefaultExecutor = "scf"
+			if space.SpaceID == "crypto" {
+				space.DefaultExecutor = "local"
+			}
+		}
 	}
 	if plan.MemoryMB == 0 {
 		plan.MemoryMB = defaultSCFPlanMemoryMB
@@ -147,6 +165,9 @@ func validateSCFPlan(manifest *Manifest) error {
 		packages[space.PackageName] = space.SpaceID
 		if space.SymbolsPerFunction < 0 || space.SymbolsPerFunction > 200 {
 			return fmt.Errorf("config_invalid: %s.symbols_per_function must be between 0 and 200", path)
+		}
+		if (space.DefaultIngest != "stream" && space.DefaultIngest != "pull") || (space.DefaultExecutor != "scf" && space.DefaultExecutor != "local") {
+			return fmt.Errorf("config_invalid: %s.default_ingest must be stream or pull and default_executor scf or local", path)
 		}
 		if len(space.Markets) == 0 {
 			return fmt.Errorf("config_invalid: %s.markets must not be empty", path)

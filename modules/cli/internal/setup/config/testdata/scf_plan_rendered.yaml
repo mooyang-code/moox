@@ -39,9 +39,13 @@ scf_plan:
       access_id: access@overseas
   spaces:
     crypto:
+      default_executor: local
+      default_ingest: stream
       namespace: moox-crypto-plan
       package_name: moox-collector-crypto-plan
     stockcn:
+      default_executor: scf
+      default_ingest: pull
       namespace: moox-stockcn-plan
       package_name: moox-collector-stockcn-plan
 collector_retention:
