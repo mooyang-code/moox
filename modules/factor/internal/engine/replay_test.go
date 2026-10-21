@@ -179,5 +179,5 @@ func TestReplayOpenRejectsShortWarmupUnlessAllowed(t *testing.T) {
 	req.AllowShortWarmup = true
 	rsp, _, err := m.Open(ctx, req)
 	require.NoError(t, err)
-	require.Equal(t, 2, rsp.ShortWarmup)
+	require.Equal(t, 3, rsp.ShortWarmup, "A、B、GONE 都从第 0 分钟起，早于预热起点的数据都不存在")
 }
