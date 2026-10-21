@@ -245,6 +245,10 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		klineInventory.SetStore(store.NewInventoryRepository(runtime.Store))
 	}
 	klineFreshness := buildKlineFreshnessEvaluator(metricsQuery, cfg, klineInventory, doctorContext.DatasetHealthPolicy.RealtimeTimeSeries)
+	if klineFreshness != nil {
+		// 新上线对象的首次出现时间持久化：Monitor 重启后宽限期不重新计时，部署前的存量对象不给宽限。
+		klineFreshness.SetSubjectFirstSeenStore(store.NewSubjectFirstSeenRepository(runtime.Store))
+	}
 	businessFreshness := buildBusinessFreshnessReporterWithInterval(&monitorobservability.Builder{
 		Metrics: metricsQuery, Hosts: hostStore,
 		Checks: runtime.Repositories.Checks, Topology: runtime.Repositories.Topology, Results: runtime.Repositories.Results, Gateways: runtime.Repositories.Gateways,

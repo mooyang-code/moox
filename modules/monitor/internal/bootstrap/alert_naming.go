@@ -70,6 +70,8 @@ func klineReasonText(report monmetrics.KlineFreshnessReport, now time.Time) stri
 	switch report.Reason {
 	case "fresh":
 		return "数据按时更新"
+	case "new_subjects_pending":
+		return pendingSubjectsText(report)
 	case "no_observation":
 		return "还没有收到任何结果数据：请确认采集任务在运行、结果视图已生成"
 	case "subject_catalog_unavailable":
@@ -112,10 +114,18 @@ func klineReasonText(report monmetrics.KlineFreshnessReport, now time.Time) stri
 		if len(parts) == 0 {
 			return "部分对象数据落后"
 		}
+		if report.PendingCount > 0 {
+			parts = append(parts, "另有"+pendingSubjectsText(report))
+		}
 		return strings.Join(parts, "；")
 	default:
 		return report.Reason
 	}
+}
+
+// pendingSubjectsText 说明新上线对象还在等首根 K 线：不是故障，宽限期过了仍没有数据才会告警。
+func pendingSubjectsText(report monmetrics.KlineFreshnessReport) string {
+	return fmt.Sprintf("%d 个新上线对象等待首根K线（%s 前到，过了仍没有会告警）", report.PendingCount, alerttext.Time(report.PendingUntil))
 }
 
 // datasetReasonText explains a dataset freshness status to people. The

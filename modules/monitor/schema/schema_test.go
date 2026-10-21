@@ -28,6 +28,7 @@ func TestMonitorSchemaCreatesTablesAndIndexes(t *testing.T) {
 			"t_monitor_alert_events",
 			"t_monitor_host_agents",
 			"t_monitor_metric_services", "t_monitor_metric_series", "t_monitor_metric_latest", "t_monitor_metric_ingest_messages",
+			"t_monitor_subject_first_seen",
 		} {
 			if !db.Migrator().HasTable(table) {
 				t.Fatalf("table %s does not exist", table)

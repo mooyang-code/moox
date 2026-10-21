@@ -18,6 +18,8 @@ import (
 type businessFreshnessItem struct {
 	spaceID, checkID, name, reason, diagnostic, rawError string
 	success                                              bool
+	// degraded 只对 success 的项有意义：按通过记录（不触发也不延续告警），页面显示黄色关注，例如新上线对象在等首根 K 线。
+	degraded bool
 }
 
 // maxFreshnessChecks 覆盖 1024 台主机各自的网关/上报检查（每台数条）及业务检查。
@@ -188,6 +190,7 @@ func buildBusinessFreshnessReporterWithInterval(
 					items[report.Rule.SpaceID+"\x00"+report.CheckID] = businessFreshnessItem{
 						spaceID: report.Rule.SpaceID, checkID: report.CheckID, name: name,
 						success: report.Success, reason: reason, diagnostic: report.Diagnostic,
+						degraded: report.Success && report.PendingCount > 0,
 					}
 				}
 			}
@@ -469,6 +472,9 @@ func buildBusinessFreshnessReporterWithInterval(
 			status := domain.CheckStatusDown
 			if item.success {
 				status = domain.CheckStatusOK
+				if item.degraded {
+					status = domain.CheckStatusDegraded
+				}
 			}
 			result := domain.CheckResult{
 				ResultID: domain.ScopedResultID(item.spaceID, item.checkID, now),
