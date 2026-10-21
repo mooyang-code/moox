@@ -7,6 +7,7 @@
 
 - 加密货币空间改为**常驻进程接收交易所 WebSocket 推送的收盘 K 线**，按周期提交 Storage；某个标的到兜底时刻还没收到定稿，就用现有的 REST 取数补齐。SCF 定时拉取的代码和函数保留，默认不启用，可以用命令手动切回。
 - 写成一个**通用的 WS K 线接收框架**：连接管理、订阅、周期闸门、兜底、提交、计划同步、观测都与交易所无关；币安是第一个数据源适配器，以后接 OKX 等只需新增适配器。
+- 同时把"一个行情源能做什么"收进**统一的行情源目录**：每个数据源×市场注册一次，按实现的接口声明能力——全市场标的列表、REST K 线、WS K 线（第 5.9 节）。标的同步、SCF 取数、stream 接收与兜底都从目录取，不再各自写装配开关。stream 进程本身不拉标的列表，标的与 SCF 一样来自 Collector 的采集计划。
 - 进程是服务目录里的新组件 `collector-stream`，放在海外机（香港 compute-1）的部署单元里，由 `moox-runtime` 托管。单点可接受，故障时手动切回 SCF。
 - 合约必须订阅**连续合约 K 线**（`<pair>_perpetual@continuousKline_<周期>`），不能用普通 K 线（`<symbol>@kline_<周期>`）：普通 K 线冷门标的要等下一笔成交或 3 秒才收盘，连续合约 K 线固定在收盘后约 0.1 秒收盘，数值一致。
 - 实测发现现行 SCF 合约数据**有相当一部分不是定稿值**（成交量、成交额、笔数偏少，收盘价不对）。这个问题与 WS 改造无关，单独先修，见第 8 节。
@@ -288,6 +289,48 @@ type Event struct {
 8. 标的命名与 `subject_id` 的映射。
 
 上线前用与本次相同的方法（全量订阅、与稳定后的 REST 基准逐条比对、覆盖整点）验收。
+
+### 5.9 统一的行情源目录（标的列表、REST K 线、WS K 线）
+
+**现状。** 能力接口已经统一在 `marketdata`：`MarketProvider`（描述：provider、source_id、域名、状态）、`InstrumentFetcher`（全市场标的快照 `FetchInstrumentSnapshot`）、`KlineFetcher`（REST K 线 `FetchKlines`），币安的 `MarketDataAdapter` 一个类型同时实现后两者，A 股各数据源也按同样接口实现。不统一的是**装配**——"有哪些数据源、怎样构造"写死在三处：
+
+| 用途 | 位置 | 做法 |
+| --- | --- | --- |
+| 标的同步（自动标签成员、属性维护） | `marketwiring/subject_listers.go` 的 `NewSubjectListers` | 手写币安现货、合约两项，再按 A 股路由配置逐个构造数据源，包成 `subjectsync.Lister` |
+| SCF 取数（加密、可转债、指数） | `marketwiring/market_runtime.go` 的 `newMarketProvider` | 按 `marketID`／`instrumentType`／`providerID`／`sourceID` 的 `if/switch` 构造，每条流水线新建一个只有一个数据源的 `Registry` |
+| SCF 取数（A 股） | `marketwiring/stock_runtime.go` 的 `newStockCNProviderForSource` | 另一套按 provider 名称的 `switch` |
+
+结果是：同一个数据源在三处各构造一次（HTTP 客户端、配置来源也各不相同：标的同步走出口代理客户端，SCF 走函数内的共享客户端）；新增一个交易所要改三处开关，WS 如果再加一处就是第四处。目前实现了标的快照的只有币安与 A 股的新浪、东方财富、百度（指数、可转债、腾讯、通达信只有 K 线），目录能直接看出每个数据源有哪些能力。
+
+**方案：一个目录，按能力取用。**
+
+```go
+// Factory 构造一个数据源实例；Deps 由使用方注入（HTTP 客户端、DNS 路由、配置目录等），
+// 同一个数据源在 Collector（标的同步）、SCF（取数）、collector-stream（接收与兜底）里用同一个工厂。
+type Factory func(Deps) (MarketProvider, error)
+
+type CatalogEntry struct {
+    Key        SourceKey      // provider + source_id，例如 binance/swap_http
+    MarketID   MarketID       // crypto / stockcn …
+    Instrument InstrumentType // spot / swap / equity …
+    New        Factory
+}
+
+// Catalog 是全部数据源的登记表；每个数据源包在 init 或显式 Register 里登记自己。
+type Catalog struct{ entries []CatalogEntry }
+
+func (c *Catalog) Listers(deps Deps) (map[ListerKey]InstrumentFetcher, error) // 实现了 InstrumentFetcher 的
+func (c *Catalog) Kline(key SourceKey, deps Deps) (KlineFetcher, error)      // 实现了 KlineFetcher 的
+// stream 包里：provider.(stream.Provider) 取得 WS 适配器（stream 依赖 marketdata，反过来不依赖）
+```
+
+- **能力由接口决定**：数据源实现了 `InstrumentFetcher` 就能用于标的同步，实现了 `KlineFetcher` 就能用于 SCF 取数和 stream 兜底，实现了 `stream.Provider`（返回第 5.2 节的 `Source`）就能用于 WS 接收。不需要另写能力清单。
+- **一个数据源一处构造**：`NewSubjectListers`、`newMarketProvider`、`newStockCNProviderForSource` 改为从目录取；A 股按路由配置决定启用哪些数据源，仍在工厂里读配置。
+- **标的身份一致**：`subject_id` 与交易所 symbol 的映射只在数据源的标的快照里产生（`Instrument.SubjectID`／`ProviderSymbol`），经标签成员进入采集计划（`ExchangeSymbol`、符号例外）；SCF 取数、WS 订阅、REST 兜底都用计划里的同一个映射，WS 不另写一套。
+- **合约的连续合约 K 线需要 `pair`**：币安合约标的快照已经只保留 `TRADING` 且 `PERPETUAL` 的合约（`binance/client/swap.go`），目前 USDT 永续的 `pair` 与 `symbol` 相同。`Instrument` 增加可选的 `Pair` 字段，由标的快照带出；WS 适配器订阅前校验，`pair` 与 `symbol` 不同的标的按 `pair` 订阅、按 `symbol` 写入。
+- **新增交易所（例如 OKX）只加一个包**：实现 `MarketProvider` + `InstrumentFetcher` + `KlineFetcher` + `stream.Provider`，在目录里登记，标的同步、SCF、stream 都能用；不改 `marketwiring`、`subjectsync`、`stream` 框架。
+
+这一步是纯重构，行为不变，放在 stream 框架之前做（执行计划阶段 2 第一项）。
 
 ## 6. Collector 侧
 

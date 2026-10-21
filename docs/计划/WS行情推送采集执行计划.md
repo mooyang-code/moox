@@ -73,6 +73,13 @@
 
 ## 4. 阶段 2：框架与币安适配器
 
+### 4.0 统一的行情源目录（先做，行为不变）
+
+- `internal/marketdata` 新增 `Catalog`／`CatalogEntry`／`Factory`／`Deps`（设计 5.9）；`Instrument` 增加可选 `Pair`，币安合约标的快照填入。
+- 币安、A 股各数据源（新浪、腾讯、东方财富、百度、通达信）、指数、可转债数据源登记到目录。
+- `marketwiring/subject_listers.go`（`NewSubjectListers`）、`market_runtime.go`（`newMarketProvider`）、`stock_runtime.go`（`newStockCNProviderForSource`）改为从目录按能力取；删除三处 `switch`。
+- 测试：重构前后 `NewSubjectListers` 返回的键集合相同；每个原 `switch` 分支对应的 `(market, instrument, provider, source)` 都能从目录构造出同类型的数据源；未登记的组合报同样的错误；`marketwiring`、`subjectsync`、`marketfetch` 现有测试全部通过。
+
 ### 4.1 新包 `modules/collector/internal/stream`
 
 | 文件 | 内容 |
@@ -93,7 +100,8 @@
 
 ### 4.3 币安适配器（`internal/sources/binance/stream.go`）
 
-- 现货：`stream.binance.com:9443`（备选 `:443`），流名 `<symbol>@kline_<周期>`；合约：`fstream.binance.com/market`，流名 `<pair>_perpetual@continuousKline_<周期>`，标的取 `ps`。
+- 币安的 `MarketDataAdapter` 实现 `stream.Provider`，返回现货或合约的 `Source`，与标的快照、REST K 线共用同一个适配器实例的配置（端点、符号映射）。
+- 现货：`stream.binance.com:9443`（备选 `:443`），流名 `<symbol>@kline_<周期>`；合约：`fstream.binance.com/market`，流名 `<pair>_perpetual@continuousKline_<周期>`（`pair` 取自标的快照，缺省同 symbol），标的取 `ps`。
 - 解码用显式声明全部大小写键的结构体（`e/E`、`t/T`、`v/V`、`q/Q`、`l/L`），转成 `marketdata.NormalizedKline`（与 REST 适配器的字段含义一致：`VolumeShares`=v、`AmountCNY`=q、`TradeCount`=n）。
 - `Fallback().StableAfter`：现货 3 秒，合约 8 秒（阶段 0 可调整）。
 - 配置：`configs/sources/market/binance.yaml` 增加 `stream` 段（地址、限额），与 `spot_base_urls`／`swap_base_urls` 并列。
@@ -231,6 +239,6 @@ CREATE TABLE IF NOT EXISTS t_collector_stream_workers (
 
 ## 11. 交付物清单
 
-- 代码：`internal/stream`、`internal/sources/binance/stream.go`、`marketfetch.KlineCommitter`、对账器执行端抽象、`StreamCollector` 服务、`cmd/stream`、按市场的拉取参数覆盖、setup 渲染默认值、Monitor 告警。
+- 代码：`marketdata.Catalog`（统一行情源目录）与三处装配的改造、`internal/stream`、`internal/sources/binance/stream.go`、`marketfetch.KlineCommitter`、对账器执行端抽象、`StreamCollector` 服务、`cmd/stream`、按市场的拉取参数覆盖、setup 渲染默认值、Monitor 告警。
 - 配置与目录：`collector.sql` 三张表、`catalog.yaml` 新组件与权限、`binance.yaml` 的 `stream` 段、`moox.toml.example`。
 - 文档：采集、命令行工具、监控、部署与运维的更新；本计划与设计的实现状态。
