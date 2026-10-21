@@ -13,7 +13,7 @@
 - ☑ `PlanFetch.NotBeforeMS`（0 或 1000～12000）；`plan_runtime` 在错峰之后再等到收盘 + `not_before_ms`。
 - ☑ 默认配置：crypto 合约 `not_before_ms: 8000`、`lateness_s: 20`，现货 `not_before_ms: 3000`。
 - ☑ 测试：按市场覆盖、`plan_desired` 两市场不同、`not_before_ms` 范围校验、`plan_runtime` 取数开始不早于收盘 + 8 秒。
-- ☐ 发布：先升函数包、再装 Collector 与配置；历史数据重拉（10-16 起到切换的 P，合约 1m/1h、现货 1m），因子补算。
+- ☐ 发布：先升函数包、再装 Collector 与配置。历史数据不重拉（2026-10-21 用户决定：线上数据可删）：删除合约旧的不准数据，从修复生效起重新积累。
 
 ## 阶段 2：框架与币安适配器
 
