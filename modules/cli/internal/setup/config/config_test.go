@@ -283,7 +283,7 @@ func TestLoadRejectsInvalidStorageRetention(t *testing.T) {
 		want string
 	}{
 		{name: "no bars", body: "[storage_retention]\nview_rows_per_series = 0", want: "view.bars"},
-		{name: "incomplete defaults", body: "[storage_retention.defaults]\n\"1m\" = \"7d\"", want: "must cover every frequency"},
+		{name: "incomplete defaults", body: "[storage_retention.defaults]\n\"1m\" = \"7d\"", want: "must cover every standard frequency"},
 		{name: "alias frequency", body: "[storage_retention.spaces.crypto]\n\"1H\" = \"7d\"", want: "not a canonical frequency"},
 		{name: "invalid period", body: "[storage_retention.spaces.crypto]\n\"1m\" = \"7 days\"", want: "retention"},
 		{name: "retention shorter than view bars", body: "[storage_retention.spaces.crypto]\n\"1m\" = \"3d\"", want: "fewer than view.bars"},

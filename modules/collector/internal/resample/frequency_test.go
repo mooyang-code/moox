@@ -30,7 +30,7 @@ func TestParseFixedFrequencyReturnsCanonicalFrequencies(t *testing.T) {
 }
 
 func TestParseFixedFrequencyRejectsNonFixedOrOutOfRangePeriods(t *testing.T) {
-	for _, raw := range []string{"", "0m", "-1m", "1.5h", "30s", "90m", "24h", "1M", "1mo", "1w", "30d", "999999999999999999999m"} {
+	for _, raw := range []string{"", "0m", "-1m", "1.5h", "30s", "7m", "1M", "1mo", "1w", "30d", "999999999999999999999m"} {
 		t.Run(raw, func(t *testing.T) {
 			_, err := ParseFixedFrequency(raw)
 			require.Error(t, err)

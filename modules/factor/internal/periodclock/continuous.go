@@ -12,12 +12,6 @@ import (
 type Continuous struct{}
 
 func (Continuous) Duration(freq string) (time.Duration, error) {
-	switch freq {
-	case "1m", "5m", "15m", "30m", "1h", "4h", "1d":
-	default:
-		return 0, fmt.Errorf("%w: %q", ErrUnsupportedFrequency, freq)
-	}
-
 	duration, err := domain.ParseFrequency(freq)
 	if err != nil {
 		return 0, fmt.Errorf("%w: %q: %v", ErrUnsupportedFrequency, freq, err)
