@@ -57,6 +57,9 @@ const (
 	ModeShadow
 	// ModeOff 没有处于预热或运行（未启动、暂停、故障）：不求值、不发新目标，持仓不动。
 	ModeOff
+	// ModeCatchup 恢复追赶中：只记录周期（因子指纹、版本），不求值、不发目标。引用上一周期因子列的策略需要相邻周期的记录，
+	// 追赶期间不记的话，放行后第一个周期会因 previous_version_unknown 被跳过。
+	ModeCatchup
 )
 
 // Handler 处理 ViewDataReady：遍历绑定该 View 的启用实例，错误汇总，全部终态落库后才 ACK。
@@ -69,6 +72,9 @@ type Handler struct {
 	Logf          func(format string, args ...any)
 	// Gate 非空时按实例的生命周期决定本期怎么处理；为空等同于一直 ModeLive。
 	Gate func(instanceID string) Mode
+	// ReleasedAt 非空时返回实例最近一次放行的时间：BarEnd 不晚于它的周期（放行之前收盘的）只记录、不求值，
+	// 无论事件何时到达、重投多少次，都不会为放行之前的周期发目标。为零表示没有放行过。
+	ReleasedAt func(instanceID string) time.Time
 
 	mu       sync.Mutex
 	programs map[string]*runtime
@@ -181,7 +187,8 @@ func (h *Handler) mode(instanceID string) Mode {
 
 func (h *Handler) process(ctx context.Context, loader Loader, instance store.Instance, message *eventpb.EventMessage, payload *storagepb.ViewDataReady) error {
 	// 没有处于预热或运行的实例不求值、不发新目标（持仓不动）；这一期不留记录，恢复后从下一期继续。
-	if h.mode(instance.InstanceID) == ModeOff {
+	mode := h.mode(instance.InstanceID)
+	if mode == ModeOff {
 		return nil
 	}
 	periodTime := time.Unix(payload.GetPeriodTime(), 0).UTC()
@@ -228,6 +235,12 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	if skip != nil {
 		return h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
 	}
+	// 放行之前收盘的周期只记录、不求值：系统恢复时延迟到达的历史事件、重投，都不会越过放行边界发出目标。
+	if mode != ModeCatchup && h.ReleasedAt != nil {
+		if released := h.ReleasedAt(instance.InstanceID); !released.IsZero() && !boundary.BarEnd.After(released) {
+			mode = ModeCatchup
+		}
+	}
 	latest, hasLatest, err := h.Store.LatestProcessed(ctx, instance.InstanceID, rt.sessionID)
 	if err != nil {
 		return err
@@ -238,7 +251,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		}
 		return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", input.BarEndLabel(calendar, bar, latest.BarEndTime)))
 	}
-	if !validUntil.After(h.now()) {
+	if mode != ModeCatchup && !validUntil.After(h.now()) {
 		return h.commitSkipped(ctx, p, store.SkipExpired, fmt.Sprintf("有效期 %s 已过", input.BarEndLabel(calendar, bar, validUntil)))
 	}
 	var adjacent *readiness.Record
@@ -257,6 +270,15 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	}
 	ready := readiness.Check(rt.resolved.ReadinessBinding(), adjacent, payload)
 	p.input.Factors = ready.Hashes
+	if mode == ModeCatchup && ready.Reason != readiness.ReasonFactorChanged {
+		// 追赶中的周期统一记为 catchup（附上 readiness 的结论供排查）：它们的作用是留下因子指纹，让放行后的第一个周期有相邻记录；
+		// 因子定义变了（factor_changed）仍按原因记录，那需要人工重新启用实例。
+		detail := "恢复追赶：只记录周期，不求值、不发目标"
+		if ready.Reason != "" {
+			detail += "（" + ready.Reason + "：" + ready.Detail + "）"
+		}
+		return h.commitSkipped(ctx, p, store.SkipCatchup, detail)
+	}
 	if ready.Reason != "" {
 		return h.commitSkipped(ctx, p, ready.Reason, ready.Detail)
 	}
@@ -555,4 +577,49 @@ func eventUniverse(payload *storagepb.ViewDataReady) []string {
 
 func advance(calendar, bar string, at time.Time, n int) (time.Time, error) {
 	return input.AdvanceBarEnd(calendar, bar, at, n)
+}
+
+// CatchupProgress 是实例的恢复追赶进度：已处理（含追赶期间只记录的周期）到哪一根，最新已收盘的是哪一根。
+type CatchupProgress struct {
+	// Latest 是实例已处理到的最后一根（BarEnd），没有记录为零；Expected 是 now 之前最近一根已收盘的 bar。
+	Latest, Expected time.Time
+}
+
+// CaughtUp 报告实例已处理到最新已收盘的 bar（含追赶期间只记录的周期）。
+func (p CatchupProgress) CaughtUp() bool { return !p.Expected.IsZero() && !p.Latest.Before(p.Expected) }
+
+// CatchupProgress 读取实例的追赶进度。追赶期间到达的因子完成事件都会作为 skipped(catchup) 记录下来，
+// 所以「已处理到最新已收盘的 bar」同时说明：输入因子已追平、策略自己的消费也没有积压，相邻周期的版本记录已补齐。
+// grace 是采集与因子计算的宽限：最新一根刚收盘时因子结果还在路上，不把它算进追赶目标。
+func (h *Handler) CatchupProgress(ctx context.Context, instanceID string, now time.Time, grace time.Duration) (CatchupProgress, error) {
+	instance, err := h.Store.GetInstance(ctx, instanceID)
+	if err != nil {
+		return CatchupProgress{}, err
+	}
+	h.mu.Lock()
+	if h.programs == nil {
+		h.programs = make(map[string]*runtime)
+	}
+	rt, rtErr := h.runtimeFor(ctx, instance)
+	h.mu.Unlock()
+	var skip *input.SkipError
+	if rtErr != nil && !errors.As(rtErr, &skip) {
+		return CatchupProgress{}, rtErr
+	}
+	if rt == nil || rt.resolved.Bar == "" || rt.sessionID == "" {
+		return CatchupProgress{}, errors.New("实例的绑定快照无法解析")
+	}
+	closed, err := input.ClosedPeriod(rt.resolved.Calendar, rt.resolved.Bar, now.Add(-grace))
+	if err != nil {
+		return CatchupProgress{}, err
+	}
+	out := CatchupProgress{Expected: closed.BarEnd}
+	latest, has, err := h.Store.LatestProcessed(ctx, instanceID, rt.sessionID)
+	if err != nil {
+		return CatchupProgress{}, err
+	}
+	if has {
+		out.Latest = latest.BarEndTime
+	}
+	return out, nil
 }

@@ -337,6 +337,7 @@ func (c *Controller) finishResume(r *record, changes *[]change) {
 	}
 	c.endCatchup(r)
 	r.Pause, r.PausedSince, r.Resume = nil, time.Time{}, ""
+	r.ReleasedAt = c.opts.Now().UTC()
 	if r.Ref == (Ref{}) {
 		r.Hold = HoldNone
 	}
