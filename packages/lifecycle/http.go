@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 )
 
 // 生命周期接口（挂在模块的健康检查端口上，只监听本机，沿用健康检查的签名鉴权）：
@@ -33,13 +34,15 @@ type CommandRequest struct {
 	// Force 用于模块暂停期间对单个对象 resume；ManualRelease 让追平后停在待放行，等 release。
 	Force         bool `json:"force,omitempty"`
 	ManualRelease bool `json:"manual_release,omitempty"`
+	// ExpiresAt 用于 pause：到点自动恢复。
+	ExpiresAt time.Time `json:"expires_at,omitempty"`
 }
 
 // Request 转成控制器的命令请求。
 func (r CommandRequest) Request() Request {
 	return Request{
 		Command: r.Command, Ref: Ref{Kind: r.Kind, ID: r.ID},
-		PauseKind: r.PauseKind, Reason: r.Reason, By: r.By, Force: r.Force, ManualRelease: r.ManualRelease,
+		PauseKind: r.PauseKind, Reason: r.Reason, By: r.By, Force: r.Force, ManualRelease: r.ManualRelease, ExpiresAt: r.ExpiresAt,
 	}
 }
 

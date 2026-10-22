@@ -21,6 +21,7 @@ func setRef(setID string) lifecycle.Ref { return lifecycle.Ref{Kind: factorSetKi
 // newLifecycle 创建引擎的生命周期控制器。
 func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
+		Audit:     func(event string) { log.Infof("%s", event) },
 		Module:    "factor-engine",
 		StateFile: r.cfg.Lifecycle.StateFile,
 		Hooks: lifecycle.Hooks{

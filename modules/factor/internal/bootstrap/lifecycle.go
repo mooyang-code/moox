@@ -20,6 +20,7 @@ const lifecycleRefreshEvery = 30 * time.Second
 
 func newMgrLifecycle(db *store.Store, dbPath string) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
+		Audit:     func(event string) { log.Infof("%s", event) },
 		Module:    "factor-mgr",
 		StateFile: filepath.Join(filepath.Dir(dbPath), "lifecycle.json"),
 		Hooks: lifecycle.Hooks{

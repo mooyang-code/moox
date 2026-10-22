@@ -38,6 +38,7 @@ const catchupGrace = time.Minute
 
 func newLifecycle(dbPath string, deps lifecycleDeps) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
+		Audit:     func(event string) { log.Infof("%s", event) },
 		Module:    "strategy",
 		StateFile: filepath.Join(filepath.Dir(dbPath), lifecycleStateFileName),
 		Hooks: lifecycle.Hooks{

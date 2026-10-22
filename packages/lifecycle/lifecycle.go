@@ -138,6 +138,8 @@ type PauseInfo struct {
 	// By 是操作者（Admin 用户、cli:主机、monitor:auto……）。
 	By    string    `json:"by,omitempty"`
 	Since time.Time `json:"since"`
+	// ExpiresAt 非零表示到点自动恢复（由 Refresh 检查）。
+	ExpiresAt time.Time `json:"expires_at,omitempty"`
 }
 
 // Hold 是持久化在模块自身记录里的控制意图，不依赖阶段推导：系统暂停时即使模块自身检查失败（未就绪）也必须能建立门禁，
@@ -251,6 +253,9 @@ type Options struct {
 	StateFile string
 	Now       func() time.Time
 	Hooks     Hooks
+	// Audit 接收审计事件（重置的开始、每一步、结束、失败、放弃，暂停与恢复命令），含操作者、范围和计划摘要；
+	// 模块把它接到自己的日志，可为 nil。调用时不持有控制器锁。
+	Audit func(event string)
 }
 
 // Controller 管理一个模块的生命周期。
@@ -497,7 +502,40 @@ func (c *Controller) Refresh(ctx context.Context) {
 	_ = c.save()
 	c.mu.Unlock()
 	c.notify(changes)
+	c.resumeExpired(ctx)
 	c.settle(ctx)
+}
+
+// audit 记一条审计事件。
+func (c *Controller) audit(format string, args ...any) {
+	if c.opts.Audit != nil {
+		c.opts.Audit(fmt.Sprintf(format, args...))
+	}
+}
+
+// resumeExpired 恢复到点的定时暂停：和手动 resume 一样先进入恢复追赶，追平后自动放行。
+// 对象在模块暂停期间不单独恢复（先等模块恢复）。
+func (c *Controller) resumeExpired(ctx context.Context) {
+	now := c.opts.Now()
+	c.mu.Lock()
+	var due []Ref
+	expired := func(r *record) bool {
+		return r.Stage == StagePaused && r.Pause != nil && !r.Pause.ExpiresAt.IsZero() && !now.Before(r.Pause.ExpiresAt) && r.Pause.Kind != PauseSystem
+	}
+	if expired(c.self) {
+		due = append(due, Ref{})
+	} else if c.self.Stage != StagePaused {
+		for _, o := range c.objects {
+			if expired(o) {
+				due = append(due, o.Ref)
+			}
+		}
+	}
+	c.mu.Unlock()
+	for _, ref := range due {
+		// 检查有失败项等原因恢复不了时保持暂停，下一轮 Refresh 再试。
+		_, _ = c.Execute(ctx, Request{Command: CmdResume, Ref: ref, By: "lifecycle:expires"})
+	}
 }
 
 // apply 按检查结果推进一个记录的阶段；调用方持有锁。

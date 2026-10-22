@@ -102,3 +102,28 @@ func TestLifecyclePauseResumeReleaseAndCatchup(t *testing.T) {
 	require.NoError(t, runLifecycleCatchup(ctx, lifecycleOptions{Endpoint: srv.URL}, &out))
 	require.Contains(t, out.String(), "没有恢复追赶中的对象")
 }
+
+// pause --for：带到期时间暂停，输出里能看到自动恢复的时间；系统暂停与 --for 同用被拒绝，--for 不能用于其他命令。
+func TestLifecyclePauseForExpiry(t *testing.T) {
+	ctrl, err := lifecycle.New(lifecycle.Options{Module: "trade"})
+	require.NoError(t, err)
+	ctrl.Refresh(context.Background())
+	mux := http.NewServeMux()
+	mux.Handle(lifecycle.StatusPath, ctrl.StatusHandler())
+	mux.Handle(lifecycle.CommandPath, ctrl.CommandHandler())
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	t.Setenv("MOOX_HEALTH_AUTH_ACCESS_KEY", "k")
+	t.Setenv("MOOX_HEALTH_AUTH_SECRET_KEY", "s")
+	ctx := context.Background()
+
+	var out bytes.Buffer
+	opts := lifecycleOptions{Endpoint: srv.URL, By: "ops", ExpiresIn: 2 * time.Hour}
+	require.NoError(t, runLifecycleCommand(ctx, opts, lifecycle.CmdPause, &out))
+	require.Contains(t, out.String(), "自动恢复")
+	require.False(t, ctrl.Snapshot().Self.Pause.ExpiresAt.IsZero())
+
+	opts.PauseKind = "system"
+	require.ErrorContains(t, runLifecycleCommand(ctx, opts, lifecycle.CmdPause, &out), "系统暂停不支持定时恢复")
+	require.ErrorContains(t, runLifecycleCommand(ctx, lifecycleOptions{Endpoint: srv.URL, ExpiresIn: time.Hour}, lifecycle.CmdResume, &out), "--for")
+}
