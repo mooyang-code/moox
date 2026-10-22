@@ -616,19 +616,19 @@ func TestCatchupSubmitsOneJobAndReportsWhenGapsAreFilled(t *testing.T) {
 	backfiller, _, rows, base := newBackfillFixture(t)
 	ctx := context.Background()
 
-	state, err := backfiller.Catchup(ctx, "crypto", base)
+	state, err := backfiller.Catchup(ctx, "crypto", base, time.Time{})
 	require.NoError(t, err)
 	require.Positive(t, state.Missing)
 	require.NotEmpty(t, state.JobID, "有缺口就提交追赶作业")
 	require.False(t, state.CaughtUp())
 
-	again, err := backfiller.Catchup(ctx, "crypto", base)
+	again, err := backfiller.Catchup(ctx, "crypto", base, time.Time{})
 	require.NoError(t, err)
 	require.Empty(t, again.JobID, "已有未结束的作业，不重复提交")
 	require.Equal(t, 1, again.ActiveJobs)
 
 	step(t, backfiller, 3)
-	final, err := backfiller.Catchup(ctx, "crypto", base)
+	final, err := backfiller.Catchup(ctx, "crypto", base, time.Time{})
 	require.NoError(t, err)
 	require.Zero(t, final.Missing)
 	require.True(t, final.CaughtUp(), "补齐且没有未结束的作业")
@@ -642,7 +642,7 @@ func TestCatchupSubmitsOneJobAndReportsWhenGapsAreFilled(t *testing.T) {
 func TestCatchupWithoutGapsIsImmediatelyCaughtUp(t *testing.T) {
 	backfiller, _, rows, base := newBackfillFixture(t)
 	rows.missing = map[string]map[int64]bool{"BTC-USDT": {}, "ETH-USDT": {}}
-	state, err := backfiller.Catchup(context.Background(), "crypto", base)
+	state, err := backfiller.Catchup(context.Background(), "crypto", base, time.Time{})
 	require.NoError(t, err)
 	require.True(t, state.CaughtUp())
 	require.Empty(t, state.JobID)
@@ -658,4 +658,21 @@ func TestBackfillerQuiesceWaitsForRunningChunks(t *testing.T) {
 	require.ErrorIs(t, backfiller.Quiesce(ctx), context.DeadlineExceeded)
 	backfiller.workers.Done()
 	require.NoError(t, backfiller.Quiesce(context.Background()))
+}
+
+// 追赶目标是固定的：目标之后新出现的缺口（实时采集还没恢复）不算进这一轮，否则补采永远追不平。
+func TestCatchupTargetIsFixed(t *testing.T) {
+	backfiller, _, rows, base := newBackfillFixture(t)
+	ctx := context.Background()
+	// 固定目标早于夹具里的所有缺口（缺口在 base+3 分钟之后）：区间内没有缺口，立即追平。
+	state, err := backfiller.Catchup(ctx, "crypto", base, base.Add(2*time.Minute))
+	require.NoError(t, err)
+	require.True(t, state.CaughtUp())
+	require.Empty(t, state.JobID)
+	// 目标覆盖缺口时才提交作业。
+	state, err = backfiller.Catchup(ctx, "crypto", base, base.Add(time.Hour))
+	require.NoError(t, err)
+	require.Positive(t, state.Missing)
+	require.NotEmpty(t, state.JobID)
+	_ = rows
 }

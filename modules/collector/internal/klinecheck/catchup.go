@@ -33,13 +33,17 @@ func (s CatchupState) CaughtUp() bool {
 	return s.Missing == 0 && s.ActiveJobs == 0 && !s.Truncated
 }
 
-// Catchup 评估空间在 since 之后的补采进度：检查缺口，有缺口且没有未结束的作业时提交一个补采作业。
-// 区间展开的分块太多时，把作业缩到最早的一个窗口，其余的后续评估再补。
-func (b *Backfiller) Catchup(ctx context.Context, spaceID string, since time.Time) (CatchupState, error) {
+// Catchup 评估空间在 [since, to) 内的补采进度：检查缺口，有缺口且没有未结束的作业时提交一个补采作业。
+// to 是**固定的追赶目标**（恢复开始的时刻）：恢复模式下实时采集仍然关闭，如果目标跟着当前时间走，
+// 补采的速度赶不上缺口增长的速度（每个标的至少一个分块，一个作业要跑十几分钟，这期间又多出新的缺口），永远追不平。
+// to 为零表示取当前时间。区间展开的分块太多时，把作业缩到最早的一个窗口，其余的后续评估再补。
+func (b *Backfiller) Catchup(ctx context.Context, spaceID string, since, to time.Time) (CatchupState, error) {
 	if b == nil || b.Checker == nil || b.Store == nil {
 		return CatchupState{}, errors.New("backfiller is not initialized")
 	}
-	to := b.now()
+	if to.IsZero() {
+		to = b.now()
+	}
 	if !since.Before(to) {
 		return CatchupState{}, nil
 	}
