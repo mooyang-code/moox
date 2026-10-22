@@ -58,6 +58,7 @@ func init() {
         archive-worker 暂存库、archive-worker 暂存库、Storage 与 Admin 业务部分是要在各自主机上执行的外部步骤：编排器停在那一步并列出命令，执行完用 --external-done <步骤名> 继续。
         失败或中断后用 apply --operation-id <系统重置 ID> 续做，已完成的步骤不重做；不会自动回滚。
   moox-cli system reset status   查看系统重置日志
+  moox-cli system reset abort --yes  放弃未完成的系统重置（计划变化无法续做时用，之后可重新 plan）
 
 生产环境（默认；--env test 或 MOOX_SYSTEM_ENV=test 改成测试环境）apply 要逐字输入系统名（--confirm-name）。
 每个模块用重置专用密钥签名：MOOX_<模块>_HEALTH_RESET_ACCESS_KEY / _SECRET_KEY，没有设置时用 MOOX_HEALTH_RESET_ACCESS_KEY / _SECRET_KEY。
@@ -97,7 +98,14 @@ func init() {
 			return runSystemResetStatus(systemFlags, systemResetFlags, cmd.OutOrStdout())
 		},
 	}
-	reset.AddCommand(plan, apply, status)
+	abort := &cobra.Command{
+		Use: "abort", Short: "放弃未完成的系统重置（只标记日志，不撤销已做的步骤，不动各模块）", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runSystemResetAbort(systemFlags, systemResetFlags, cmd.OutOrStdout())
+		},
+	}
+	abort.Flags().BoolVar(&systemResetFlags.Yes, "yes", false, "确认放弃")
+	reset.AddCommand(plan, apply, status, abort)
 	systemCmd.AddCommand(reset)
 }
 
@@ -121,7 +129,7 @@ func (r systemResetOptions) externalSteps(scope string) []sysctl.ExternalStep {
 	if scope == string(lifecycle.ResetAll) {
 		storageCommands[0] = strings.Replace(storageCommands[0], "--timeout 60m", "--restart=false", 1)
 		storageCommands = append(storageCommands,
-			fmt.Sprintf("moox-cli storage reset-metadata --storage-conf %s --seed %s --yes", r.StorageConf, r.StorageSeed),
+			fmt.Sprintf("moox-cli storage reset-metadata --package-root %s --storage-conf %s --seed %s --yes", r.StoragePkg, r.StorageConf, r.StorageSeed),
 			fmt.Sprintf("启动 Storage（%s/start.sh）并等就绪", r.StoragePkg),
 			"moox-storage-cli activate-datasets --metadata-target ip://127.0.0.1:20100",
 		)
@@ -277,5 +285,21 @@ func runSystemResetStatus(o systemOptions, r systemResetOptions, out io.Writer) 
 	if j.Error != "" {
 		fmt.Fprintf(out, "错误：%s\n", j.Error)
 	}
+	return nil
+}
+
+func runSystemResetAbort(o systemOptions, r systemResetOptions, out io.Writer) error {
+	if !r.Yes {
+		return errors.New("放弃后已经重置完的模块不会恢复，需要加 --yes 确认")
+	}
+	orch, err := o.resetOrchestrator(r, "all", nil)
+	if err != nil {
+		return err
+	}
+	j, err := orch.AbortReset()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "已放弃系统重置 %s。已重置完的模块保持未初始化；卡在重置失败的模块用 moox-cli lifecycle reset-abort 单独处理；模块仍处于系统暂停，要恢复运行用 moox-cli system resume，要重新开始用 system reset plan。\n", j.OperationID)
 	return nil
 }

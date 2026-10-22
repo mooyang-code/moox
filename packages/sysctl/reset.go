@@ -242,8 +242,8 @@ func (o *Orchestrator) PlanReset(ctx context.Context, scope lifecycle.ResetScope
 	}
 	if j, err := o.LoadResetJournal(); err != nil {
 		return SystemResetPlan{}, err
-	} else if j != nil && j.State != "done" {
-		return SystemResetPlan{}, fmt.Errorf("有未完成的系统重置 %s（%s）：用 apply --operation-id 续做", j.OperationID, j.State)
+	} else if j != nil && j.State != "done" && j.State != "aborted" {
+		return SystemResetPlan{}, fmt.Errorf("有未完成的系统重置 %s（%s）：用 apply --operation-id 续做，或 system reset abort 放弃", j.OperationID, j.State)
 	}
 	plan := SystemResetPlan{Scope: scope, SystemName: o.Reset.SystemName, Production: o.Reset.Production}
 	mods := o.resetModules()
@@ -365,16 +365,19 @@ func (o *Orchestrator) openJournal(req ResetApplyRequest) (*ResetJournal, error)
 		if j == nil || j.OperationID != req.OperationID {
 			return nil, fmt.Errorf("没有找到系统重置 %s 的日志", req.OperationID)
 		}
-		if j.State == "done" {
+		switch j.State {
+		case "done":
 			return j, errors.New("这次系统重置已经完成")
+		case "aborted":
+			return j, errors.New("这次系统重置已经放弃，重新执行 system reset plan")
 		}
 		j.State, j.Error = "running", ""
 		return j, nil
 	}
 	if j, err := o.LoadResetJournal(); err != nil {
 		return nil, err
-	} else if j != nil && j.State != "done" {
-		return nil, fmt.Errorf("有未完成的系统重置 %s（%s）：用 --operation-id 续做", j.OperationID, j.State)
+	} else if j != nil && j.State != "done" && j.State != "aborted" {
+		return nil, fmt.Errorf("有未完成的系统重置 %s（%s）：用 --operation-id 续做，或 system reset abort 放弃", j.OperationID, j.State)
 	}
 	var plan SystemResetPlan
 	if err := readJSON(o.planPath(), &plan); err != nil {
@@ -387,6 +390,8 @@ func (o *Orchestrator) openJournal(req ResetApplyRequest) (*ResetJournal, error)
 		return nil, errors.New("令牌已过期：重新执行 system reset plan")
 	case len(plan.Blockers) > 0:
 		return nil, errors.New("计划里有阻止重置的条件：重新执行 system reset plan 查看")
+	case plan.Production != o.Reset.Production || plan.SystemName != o.Reset.SystemName:
+		return nil, fmt.Errorf("环境或系统名和 plan 时不一致（plan：%s %q）：重新执行 system reset plan", envText(plan.Production), plan.SystemName)
 	case plan.Production && req.ConfirmName != plan.SystemName:
 		return nil, fmt.Errorf("生产环境需要逐字输入系统名确认（--confirm-name %s）", plan.SystemName)
 	}
@@ -431,6 +436,13 @@ func (o *Orchestrator) openJournal(req ResetApplyRequest) (*ResetJournal, error)
 	return j, nil
 }
 
+func envText(production bool) string {
+	if production {
+		return "生产"
+	}
+	return "测试"
+}
+
 func externalState(e ExternalStep) ResetStepState {
 	return ResetStepState{Kind: "external", Name: e.Name, Describe: e.Describe, Commands: e.Commands, State: "pending"}
 }
@@ -442,6 +454,21 @@ func (o *Orchestrator) external(name string) (ExternalStep, bool) {
 		}
 	}
 	return ExternalStep{}, false
+}
+
+// AbortReset 放弃未完成的系统重置：只把系统日志标成 aborted，让下一次 plan 可以重新开始。
+// 它不撤销已经做的步骤，也不动各模块——已经重置完的模块保持未初始化，卡在 reset_failed 的模块要用
+// moox-cli lifecycle reset-abort 单独放弃或续做，模块的系统暂停也不会解除（由用户决定恢复还是继续重置）。
+func (o *Orchestrator) AbortReset() (*ResetJournal, error) {
+	j, err := o.LoadResetJournal()
+	if err != nil {
+		return nil, err
+	}
+	if j == nil || j.State == "done" || j.State == "aborted" {
+		return j, errors.New("没有未完成的系统重置")
+	}
+	j.State, j.FinishedAt = "aborted", o.Reset.now().UTC()
+	return j, o.saveJournal(j)
 }
 
 // run 依次执行日志里没完成的步骤。
@@ -550,12 +577,34 @@ func (o *Orchestrator) resetModuleStep(ctx context.Context, j *ResetJournal, ste
 		return errors.New("模块没有配置重置接口")
 	}
 	if step.OpID == "" {
+		// 还没有记下模块的操作 ID：可能是上一次发起后响应丢了（隧道断开、进程被中断），模块已经在后台执行；凭本次系统重置开始之后的时间认领它，不再新建。
+		if st, err := m.Reset.ResetStatus(ctx); err == nil {
+			switch {
+			case st.Operation != nil && st.Operation.Scope == j.Scope && !st.Operation.StartedAt.Before(j.StartedAt):
+				step.OpID = st.Operation.OperationID
+			case st.LastReset != nil && st.LastReset.Scope == j.Scope && !st.LastReset.At.Before(j.StartedAt):
+				step.OpID = st.LastReset.OperationID
+			}
+			if step.OpID != "" {
+				if err := o.saveJournal(j); err != nil {
+					return err
+				}
+				o.logf("%s：认领已经开始的重置 %s", step.Name, step.OpID)
+			}
+		}
+	}
+	if step.OpID == "" {
 		fresh, token, err := o.freshPlan(ctx, m, j.Scope)
 		if err != nil {
 			return err
 		}
 		if fresh.Digest != step.Digest {
 			return errors.New("模块的重置计划和 plan 时不一致（配置或表结构变了）：重新执行 system reset plan")
+		}
+		// 先记下「正在发起」再调用：响应丢失后续做时据此认领模块里已经开始的操作。
+		step.State = "running"
+		if err := o.saveJournal(j); err != nil {
+			return err
 		}
 		st, err := m.Reset.ResetApply(ctx, lifecycle.ResetApplyRequest{Token: token, Scope: j.Scope, By: o.By})
 		if err != nil {

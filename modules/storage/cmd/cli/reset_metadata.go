@@ -66,6 +66,8 @@ func runResetMetadata(args []string, stdout, stderr io.Writer) error {
 	registerCommonFlags(fs, &opts)
 	fs.StringVar(&opts.seedPath, "seed", "", "metadata seed yaml path")
 	var yes, dryRun bool
+	var packageRoot string
+	fs.StringVar(&packageRoot, "package-root", "", "storage package root（配置里的相对路径据此解析，和 reset-view-consumers 一致）")
 	fs.BoolVar(&yes, "yes", false, "确认清空全部业务定义（执行前先备份）；Storage 必须已停止")
 	fs.BoolVar(&dryRun, "dry-run", false, "只列出会删除的行数，不改动")
 	if err := fs.Parse(args); err != nil {
@@ -81,6 +83,7 @@ func runResetMetadata(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	storage = resolveRepairStoragePaths(storage, packageRoot, opts.storageConf)
 	seed := resolveSeedPath(opts.seedPath, opts.storageConf)
 	if seed == "" {
 		return errors.New("需要 --seed（或环境变量 STORAGE_SEED_FILE）：清空之后要立刻导入种子")

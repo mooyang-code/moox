@@ -247,3 +247,87 @@ func TestSystemResetWaitsForTransientBlockers(t *testing.T) {
 	_, err = g.o.ApplyReset(ctx, ResetApplyRequest{Token: plan.Token})
 	require.ErrorContains(t, err, "有进行中的运行")
 }
+
+// 测试环境 plan 的令牌不能在生产配置下用来绕过系统名确认。
+func TestSystemResetRejectsEnvironmentMismatch(t *testing.T) {
+	ctx := context.Background()
+	f := newResetFixture(t, false, nil, Strategy)
+	plan, err := f.o.PlanReset(ctx, lifecycle.ResetData)
+	require.NoError(t, err)
+	f.o.Reset.Production = true
+	_, err = f.o.ApplyReset(ctx, ResetApplyRequest{Token: plan.Token})
+	require.ErrorContains(t, err, "不一致")
+	f.o.Reset.Production, f.o.Reset.SystemName = false, "other"
+	_, err = f.o.ApplyReset(ctx, ResetApplyRequest{Token: plan.Token})
+	require.ErrorContains(t, err, "不一致")
+}
+
+// loseResponse 让模块接受了重置、后台已经在执行，但响应丢失（隧道断开）。
+type loseResponse struct {
+	resetAPI
+	lost *atomic.Bool
+}
+
+func (a loseResponse) ResetApply(ctx context.Context, req lifecycle.ResetApplyRequest) (lifecycle.ResetStatus, error) {
+	st, err := a.resetAPI.ResetApply(ctx, req)
+	if err == nil && a.lost.CompareAndSwap(true, false) {
+		return lifecycle.ResetStatus{}, context.DeadlineExceeded
+	}
+	return st, err
+}
+
+// 响应丢失：模块已经在后台执行，续做时认领它的操作，不新建也不重做已完成的模块。
+func TestSystemResetAdoptsOperationAfterLostResponse(t *testing.T) {
+	ctx := context.Background()
+	f := newResetFixture(t, false, nil, Strategy, Collector)
+	lost := &atomic.Bool{}
+	lost.Store(true)
+	for i := range f.o.Modules {
+		if f.o.Modules[i].Name == Collector {
+			f.o.Modules[i].Reset = loseResponse{resetAPI: resetAPI{c: f.ctrls[Collector]}, lost: lost}
+		}
+	}
+	plan, err := f.o.PlanReset(ctx, lifecycle.ResetData)
+	require.NoError(t, err)
+	j, err := f.o.ApplyReset(ctx, ResetApplyRequest{Token: plan.Token})
+	require.Error(t, err)
+	require.Equal(t, "failed", j.State)
+	require.NoError(t, f.ctrls[Collector].ResetWait(ctx), "模块在后台把重置做完了")
+
+	j, err = f.o.ApplyReset(ctx, ResetApplyRequest{OperationID: j.OperationID})
+	require.NoError(t, err)
+	require.Equal(t, "done", j.State)
+	var collectorRuns, strategyRuns int
+	for _, c := range f.ran.snapshot() {
+		switch c {
+		case "collector:backup":
+			collectorRuns++
+		case "strategy:backup":
+			strategyRuns++
+		}
+	}
+	require.Equal(t, 1, collectorRuns, "认领原操作，没有重新执行")
+	require.Equal(t, 1, strategyRuns)
+}
+
+// 放弃：日志标成 aborted，之后可以重新 plan；已经放弃的不能续做。
+func TestSystemResetAbortAllowsReplan(t *testing.T) {
+	ctx := context.Background()
+	f := newResetFixture(t, false, []ExternalStep{{Name: "storage", Describe: "s", After: Strategy}}, Strategy, Monitor)
+	plan, err := f.o.PlanReset(ctx, lifecycle.ResetData)
+	require.NoError(t, err)
+	j, err := f.o.ApplyReset(ctx, ResetApplyRequest{Token: plan.Token})
+	require.ErrorIs(t, err, ErrAwaitingExternal)
+	_, err = f.o.PlanReset(ctx, lifecycle.ResetData)
+	require.ErrorContains(t, err, "abort")
+
+	aborted, err := f.o.AbortReset()
+	require.NoError(t, err)
+	require.Equal(t, "aborted", aborted.State)
+	_, err = f.o.ApplyReset(ctx, ResetApplyRequest{OperationID: j.OperationID})
+	require.ErrorContains(t, err, "放弃")
+	_, err = f.o.AbortReset()
+	require.Error(t, err, "没有未完成的重置可放弃")
+	_, err = f.o.PlanReset(ctx, lifecycle.ResetData)
+	require.NoError(t, err)
+}
