@@ -500,3 +500,35 @@ func checkInvariants(t *testing.T, s *Store, real map[int]float64) {
 	require.Equal(t, at(cells[0].minute), b.Earliest)
 	require.Equal(t, at(cells[len(cells)-1].minute), b.Latest)
 }
+
+// Wipe 清空数据与元数据（保留布局版本），之后可以重新写入，重新打开也不会报布局不一致。
+func TestWipeClearsEverythingAndKeepsTheStoreUsable(t *testing.T) {
+	dir := t.TempDir()
+	s := openTest(t, dir)
+	write(t, s, "BTC", 0, 3, rowsOf(map[int]float64{0: 100, 1: 101, 2: 102}), false)
+	require.NoError(t, s.SetSyncCursor(testSrc, []byte("cursor")))
+	subjects, err := s.Subjects(testSrc)
+	require.NoError(t, err)
+	require.Equal(t, []string{"BTC"}, subjects)
+
+	require.NoError(t, s.Wipe())
+	subjects, err = s.Subjects(testSrc)
+	require.NoError(t, err)
+	require.Empty(t, subjects)
+	_, ok, err := s.SyncCursor(testSrc)
+	require.NoError(t, err)
+	require.False(t, ok, "同步位点被清掉")
+	_, ok, err = s.Schema(testSrc)
+	require.NoError(t, err)
+	require.False(t, ok, "模式被清掉")
+	require.GreaterOrEqual(t, s.DiskUsage(), int64(0))
+
+	write(t, s, "ETH", 0, 2, rowsOf(map[int]float64{0: 10, 1: 11}), false)
+	subjects, err = s.Subjects(testSrc)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ETH"}, subjects, "清空后可以重新写入")
+	require.NoError(t, s.Close())
+	reopened, err := Open(Options{Dir: dir, BlockCacheBytes: 8 << 20, DisableSync: true})
+	require.NoError(t, err, "布局版本保留，重新打开不报不一致")
+	require.NoError(t, reopened.Close())
+}
