@@ -204,6 +204,25 @@ func (r *GroupBuilder) taskGroupsForRoute(ctx context.Context, task domain.Colle
 	return result, nil
 }
 
+// TaskSeriesTag 返回 kline 采集任务按标签路由（provider、market_type）写入行时用的 series_tag，
+// 与 taskGroupsForRoute 生成的计划使用同一套推导（含 source_id 的解析）。
+func TaskSeriesTag(spaceID string, params *domain.CollectParams, provider, marketType string, resolveSourceID func(string, string) string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	marketType = strings.ToLower(strings.TrimSpace(marketType))
+	marketID, instrumentType := marketIdentity(firstNonEmpty(params.MarketID, spaceID), params.InstrumentType, params.Target.DatasetID)
+	if instrumentType == "" {
+		instrumentType = defaultInstrumentTypeForMarket(marketID, marketType)
+	}
+	sourceID := ""
+	if resolveSourceID != nil {
+		sourceID = resolveSourceID(provider, instrumentType)
+	}
+	if sourceID == "" {
+		sourceID = provider
+	}
+	return collectionItemSeriesTag(spaceID, domain.CollectionItem{Provider: provider, SourceID: sourceID, MarketType: marketType})
+}
+
 func marketIdentity(marketID, instrumentType, datasetID string) (string, string) {
 	marketID = strings.ToLower(strings.TrimSpace(marketID))
 	instrumentType = strings.ToLower(strings.TrimSpace(instrumentType))

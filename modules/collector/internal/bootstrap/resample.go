@@ -25,6 +25,9 @@ type resampleRuntime struct {
 	jobs      *collectorresample.JobRunner
 	publisher *collectorresample.NoticePublisher
 	state     *store.ResampleStateRepository
+	// startEvents 接上事件总线（消费者与发布器）；eventsReady 为真后不再重试。
+	startEvents func() error
+	eventsReady bool
 }
 
 // jobDrainBudget 是定时器每一轮里连续推进历史作业的预算，必须小于一分钟，让下一轮兜底检查如期开始。
@@ -90,27 +93,43 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 
 	if k.EventBus.Enabled() {
 		index := &collectorresample.TaskIndex{Tasks: dbm.Tasks()}
-		consumers, startErr := collectorresample.StartConsumers(process.ctx, collectorresample.ConsumersConfig{
-			URLs: k.EventBus.URLs, CredentialFile: k.EventBus.CredentialFile, SpaceIDs: spaceIDs,
-		}, registry,
-			&collectorresample.PeriodHandler{Registry: registry, Index: index, Engine: engine, Metrics: metrics},
-			&collectorresample.BackfilledHandler{
-				Registry: registry, Index: index, State: dbm.Resample(), SettleAfter: 2 * k.ExecTimeout,
-				NewID: func() string { return xid.New().String() },
-			})
-		if startErr != nil {
-			// 事件总线不可用不影响合成：兜底检查每分钟补齐，补采完成后的重算也要等事件总线恢复。
-			log.WarnContextf(process.ctx, "collector kline resample event consumers disabled: %v", startErr)
-		} else {
-			process.beforeClose = append(process.beforeClose, consumers.Close)
-			if publisher, pubErr := consumers.Publisher(registry); pubErr == nil {
-				runtime.publisher.Relay = publisher
-			} else {
-				log.WarnContextf(process.ctx, "collector backfilled event publisher disabled: %v", pubErr)
+		// 启动时事件总线可能还没起来：每分钟的定时器会重试，直到消费者和发布器都就绪。
+		runtime.startEvents = func() error {
+			consumers, startErr := collectorresample.StartConsumers(process.ctx, collectorresample.ConsumersConfig{
+				URLs: k.EventBus.URLs, CredentialFile: k.EventBus.CredentialFile, SpaceIDs: spaceIDs,
+			}, registry,
+				&collectorresample.PeriodHandler{Registry: registry, Index: index, Engine: engine, Metrics: metrics},
+				&collectorresample.BackfilledHandler{
+					Registry: registry, Index: index, State: dbm.Resample(), SettleAfter: 2 * k.ExecTimeout,
+					NewID: func() string { return xid.New().String() },
+				})
+			if startErr != nil {
+				return startErr
 			}
+			publisher, pubErr := consumers.Publisher(registry)
+			if pubErr != nil {
+				_ = consumers.Close()
+				return pubErr
+			}
+			process.beforeClose = append(process.beforeClose, consumers.Close)
+			runtime.publisher.Relay = publisher
+			return nil
 		}
+		runtime.connectEvents(process.ctx)
 	}
 	return runtime, nil
+}
+
+// connectEvents 尝试接上事件总线；失败不影响合成（兜底检查每分钟补齐），下一分钟再试。
+func (r *resampleRuntime) connectEvents(ctx context.Context) {
+	if r.startEvents == nil || r.eventsReady {
+		return
+	}
+	if err := r.startEvents(); err != nil {
+		log.WarnContextf(ctx, "collector kline resample event bus not ready, retrying every minute: %v", err)
+		return
+	}
+	r.eventsReady = true
 }
 
 // prepare 在启动时做一次目标数据集准备。
@@ -131,6 +150,7 @@ func (r *resampleRuntime) tick(ctx context.Context) {
 			log.WarnContextf(ctx, "collector kline resample %s failed: %v", name, err)
 		}
 	}
+	r.connectEvents(ctx)
 	step("preparation", r.preparer.RunOnce)
 	for _, fallback := range r.fallbacks {
 		fallback := fallback

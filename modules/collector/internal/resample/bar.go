@@ -41,23 +41,27 @@ type SourceBar struct {
 	Volume      *float64
 	QuoteVolume *float64
 	TradeNum    *int64
+	// Amount 是 A 股的成交额；采集拿不到真实成交额时为空。
+	Amount *float64
 }
 
 // Result is one complete target K-line plus the deterministic source-window hash.
 type Result struct {
-	SpaceID         string
-	DatasetID       string
-	SubjectID       string
-	Frequency       string
-	DataTime        time.Time
-	SeriesTag       string
-	Open            float64
-	High            float64
-	Low             float64
-	Close           float64
-	Volume          float64
-	QuoteVolume     float64
-	TradeNum        int64
+	SpaceID     string
+	DatasetID   string
+	SubjectID   string
+	Frequency   string
+	DataTime    time.Time
+	SeriesTag   string
+	Open        float64
+	High        float64
+	Low         float64
+	Close       float64
+	Volume      float64
+	QuoteVolume float64
+	TradeNum    int64
+	// Amount 是 A 股的成交额：桶内有任何一根源 K 线没有真实成交额时为空（写入 NULL）。
+	Amount          *float64
 	SourceWindowEnd time.Time
 	SourceHash      string
 }
@@ -84,6 +88,8 @@ func Aggregate(spec TaskSpec, subjectID string, bucket barclock.Bucket, expected
 	})
 
 	var result Result
+	crypto := hasTradeCount(spec.SpaceID)
+	amount, amountKnown := 0.0, true
 	for index := range ordered {
 		row := &ordered[index]
 		if err := validateSourceBar(spec, subjectID, expected[index], row); err != nil {
@@ -99,14 +105,23 @@ func Aggregate(spec TaskSpec, subjectID string, bucket barclock.Bucket, expected
 		}
 		result.Close = *row.Close
 		result.Volume += *row.Volume
-		result.QuoteVolume += *row.QuoteVolume
-		if *row.TradeNum > math.MaxInt64-result.TradeNum {
-			return Result{}, fmt.Errorf("source row %d: trade_num sum overflows int64", index)
+		if crypto {
+			result.QuoteVolume += *row.QuoteVolume
+			if *row.TradeNum > math.MaxInt64-result.TradeNum {
+				return Result{}, fmt.Errorf("source row %d: trade_num sum overflows int64", index)
+			}
+			result.TradeNum += *row.TradeNum
+		} else if row.Amount == nil {
+			amountKnown = false
+		} else {
+			amount += *row.Amount
 		}
-		result.TradeNum += *row.TradeNum
-		if !finite(result.Volume) || !finite(result.QuoteVolume) {
+		if !finite(result.Volume) || !finite(result.QuoteVolume) || !finite(amount) {
 			return Result{}, fmt.Errorf("source row %d: volume sum is not finite", index)
 		}
+	}
+	if !crypto && amountKnown {
+		result.Amount = &amount
 	}
 
 	result.SpaceID = spec.SpaceID
@@ -158,7 +173,13 @@ func validateSourceBar(spec TaskSpec, subjectID string, expectedTime time.Time, 
 		{name: "low", value: row.Low},
 		{name: "close", value: row.Close},
 		{name: "volume", value: row.Volume},
-		{name: "quote_volume", value: row.QuoteVolume},
+	}
+	crypto := hasTradeCount(spec.SpaceID)
+	if crypto {
+		values = append(values, struct {
+			name  string
+			value *float64
+		}{name: "quote_volume", value: row.QuoteVolume})
 	}
 	for _, field := range values {
 		if field.value == nil {
@@ -168,8 +189,14 @@ func validateSourceBar(spec TaskSpec, subjectID string, expectedTime time.Time, 
 			return fmt.Errorf("field %s must be finite", field.name)
 		}
 	}
-	if *row.Volume < 0 || *row.QuoteVolume < 0 {
+	if *row.Volume < 0 || (crypto && *row.QuoteVolume < 0) {
 		return fmt.Errorf("volume fields must not be negative")
+	}
+	if !crypto {
+		if row.Amount != nil && (!finite(*row.Amount) || *row.Amount < 0) {
+			return fmt.Errorf("amount must be finite and not negative")
+		}
+		return nil
 	}
 	if row.TradeNum == nil {
 		return fmt.Errorf("required field trade_num is missing")
@@ -200,9 +227,15 @@ func hashSourceBars(rows []SourceBar) string {
 		writeHashFloat64(digest, "low", *row.Low)
 		writeHashFloat64(digest, "close", *row.Close)
 		writeHashFloat64(digest, "volume", *row.Volume)
-		writeHashFloat64(digest, "quote_volume", *row.QuoteVolume)
-		writeHashString(digest, "trade_num")
-		writeHashInt64(digest, *row.TradeNum)
+		if row.TradeNum != nil && row.QuoteVolume != nil {
+			writeHashFloat64(digest, "quote_volume", *row.QuoteVolume)
+			writeHashString(digest, "trade_num")
+			writeHashInt64(digest, *row.TradeNum)
+		} else if row.Amount != nil {
+			writeHashFloat64(digest, "amount", *row.Amount)
+		} else {
+			writeHashString(digest, "amount_unknown")
+		}
 	}
 	return hex.EncodeToString(digest.Sum(nil))
 }

@@ -179,6 +179,7 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		},
 	}
 	svc.SetFetchPlanControl(manager)
+	svc.SetSourceIDResolver(marketwiring.DefaultSourceID)
 	control.bind(dbm.FetchPlans(), backfiller, manager, configured)
 	if !process.launch(func() { control.runRecovery(process.ctx) }) {
 		return fmt.Errorf("collector runtime is closing")

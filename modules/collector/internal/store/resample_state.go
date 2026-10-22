@@ -421,13 +421,36 @@ func (r *ResampleStateRepository) RunnableJobs(ctx context.Context, now time.Tim
 	return out, nil
 }
 
-// StartJob 把排队的作业标为运行中并记下总桶数。
-func (r *ResampleStateRepository) StartJob(ctx context.Context, jobID string, totalBuckets int) error {
+// StartJob 把排队且已到最早开始时间的作业原子地标为运行中，并返回此刻的完整作业：
+// 排队作业可能在被读出之后又被补采合并改了范围、标的和最早开始时间，调用方必须用返回的作业继续。
+// 作业已被取消、已被其他执行者领取或还没到开始时间时 started 为假。
+func (r *ResampleStateRepository) StartJob(ctx context.Context, jobID string, now time.Time) (job ResampleJob, started bool, err error) {
+	if err := r.ready(); err != nil {
+		return ResampleJob{}, false, err
+	}
+	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&resampleJobRow{}).Where("c_job_id = ? AND c_status = ? AND c_not_before <= ?", jobID, ResampleJobQueued, now.UTC()).
+			Updates(map[string]any{"c_status": ResampleJobRunning, "c_mtime": time.Now().UTC()})
+		if result.Error != nil || result.RowsAffected == 0 {
+			return result.Error
+		}
+		var row resampleJobRow
+		if err := tx.Where("c_job_id = ?", jobID).Take(&row).Error; err != nil {
+			return err
+		}
+		job, started = row.job(), true
+		return nil
+	})
+	return job, started, err
+}
+
+// SetJobTotal 记下作业覆盖的总桶数。
+func (r *ResampleStateRepository) SetJobTotal(ctx context.Context, jobID string, totalBuckets int) error {
 	if err := r.ready(); err != nil {
 		return err
 	}
-	return r.db.WithContext(ctx).Model(&resampleJobRow{}).Where("c_job_id = ? AND c_status = ?", jobID, ResampleJobQueued).
-		Updates(map[string]any{"c_status": ResampleJobRunning, "c_total_buckets": totalBuckets, "c_mtime": time.Now().UTC()}).Error
+	return r.db.WithContext(ctx).Model(&resampleJobRow{}).Where("c_job_id = ?", jobID).
+		Updates(map[string]any{"c_total_buckets": totalBuckets, "c_mtime": time.Now().UTC()}).Error
 }
 
 // JobProgress 是一轮推进的结果。

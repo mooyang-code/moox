@@ -59,6 +59,7 @@ type Service struct {
 	subjectSyncer           SubjectSyncer
 	klineOps                KlineOps
 	fetchPlanControl        FetchPlanControl
+	sourceIDResolver        func(provider, instrumentType string) string
 	stream                  *StreamService
 	activity                activityLogger
 }
@@ -1288,9 +1289,6 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, task domain
 	if info.DataKind != storagepb.DataKind_DATA_KIND_TIME_SERIES {
 		return fmt.Errorf("source Dataset %s must be time_series", params.SourceDatasetID)
 	}
-	if strings.EqualFold(strings.TrimSpace(info.Attributes["dataset_role"]), "kline_resample_result") {
-		return fmt.Errorf("source Dataset %s cannot be another resample result", params.SourceDatasetID)
-	}
 	actualMarket := strings.ToLower(strings.TrimSpace(info.Attributes["market_type"]))
 	if actualMarket == "" || actualMarket != strings.ToLower(strings.TrimSpace(params.MarketType)) {
 		return fmt.Errorf("source Dataset %s market_type=%s does not match collect_params market_type=%s", params.SourceDatasetID, actualMarket, params.MarketType)
@@ -1309,8 +1307,13 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, task domain
 		expected := map[string]storagepb.FieldValueType{
 			"open": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "high": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 			"low": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "close": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-			"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "quote_volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-			"trade_num": storagepb.FieldValueType_FIELD_VALUE_TYPE_INT,
+			"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		}
+		if strings.EqualFold(task.SpaceID, "stockcn") {
+			expected["amount"] = storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
+		} else {
+			expected["quote_volume"] = storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
+			expected["trade_num"] = storagepb.FieldValueType_FIELD_VALUE_TYPE_INT
 		}
 		missing := make([]string, 0)
 		for column, expectedType := range expected {

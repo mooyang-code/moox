@@ -92,7 +92,7 @@ func (r *JobRunner) tick(ctx context.Context, now time.Time) (int, error) {
 	}
 	defer r.mu.Unlock()
 	cfg := r.Config.withDefaults()
-	jobs, err := r.State.RunnableJobs(ctx, now, cfg.MaxJobsPerRound)
+	jobs, err := r.State.RunnableJobs(ctx, now, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -102,8 +102,14 @@ func (r *JobRunner) tick(ctx context.Context, now time.Time) (int, error) {
 		if ctx.Err() != nil {
 			break
 		}
-		advanced++
-		if err := r.advance(ctx, job, now, cfg); err != nil {
+		if advanced >= cfg.MaxJobsPerRound {
+			break
+		}
+		moved, err := r.advance(ctx, job, now, cfg)
+		if moved {
+			advanced++
+		}
+		if err != nil {
 			log.WarnContextf(ctx, "[Collector] resample job failed round job=%s task=%s: %v", job.JobID, job.TaskID, err)
 			if firstErr == nil {
 				firstErr = err
@@ -113,7 +119,13 @@ func (r *JobRunner) tick(ctx context.Context, now time.Time) (int, error) {
 	return advanced, firstErr
 }
 
-func (r *JobRunner) advance(ctx context.Context, job store.ResampleJob, now time.Time, cfg JobRunnerConfig) error {
+// advance 推进一个作业；moved 表示这一轮确实做了事（停用的任务、还没到开始时间的作业不算，不占每轮的作业名额）。
+func (r *JobRunner) advance(ctx context.Context, job store.ResampleJob, now time.Time, cfg JobRunnerConfig) (moved bool, err error) {
+	err = r.advanceJob(ctx, job, now, cfg, &moved)
+	return moved, err
+}
+
+func (r *JobRunner) advanceJob(ctx context.Context, job store.ResampleJob, now time.Time, cfg JobRunnerConfig, moved *bool) error {
 	collection, err := r.Tasks.GetByTaskID(ctx, job.SpaceID, job.TaskID)
 	if err != nil || collection == nil {
 		return r.fail(ctx, job, fmt.Errorf("task not found: %v", err), true)
@@ -121,15 +133,21 @@ func (r *JobRunner) advance(ctx context.Context, job store.ResampleJob, now time
 	if !collection.Enabled || collection.PrepareState != domain.PrepareStateReady {
 		return nil // 任务停用或还没就绪：作业原地等待
 	}
+	*moved = true
 	task, err := NewTask(*collection)
 	if err != nil {
 		return r.fail(ctx, job, err, true)
 	}
-	end, err := r.effectiveEnd(task, job, now)
-	if err != nil {
-		return r.fail(ctx, job, err, false)
-	}
 	if job.Status == store.ResampleJobQueued {
+		fresh, started, err := r.State.StartJob(ctx, job.JobID, now)
+		if err != nil || !started {
+			return err // 已被取消或最早开始时间被合并推后：下一轮再看
+		}
+		job = fresh
+		end, err := r.effectiveEnd(task, job, now)
+		if err != nil {
+			return r.fail(ctx, job, err, false)
+		}
 		total, countErr := r.countBuckets(task, job.Start, end)
 		if countErr != nil {
 			return r.fail(ctx, job, countErr, false)
@@ -137,10 +155,13 @@ func (r *JobRunner) advance(ctx context.Context, job store.ResampleJob, now time
 		if total > MaxJobBuckets {
 			return r.fail(ctx, job, fmt.Errorf("job covers %d buckets, more than the limit %d", total, MaxJobBuckets), true)
 		}
-		if err := r.State.StartJob(ctx, job.JobID, total); err != nil {
+		if err := r.State.SetJobTotal(ctx, job.JobID, total); err != nil {
 			return err
 		}
-		job.Status = store.ResampleJobRunning
+	}
+	end, err := r.effectiveEnd(task, job, now)
+	if err != nil {
+		return r.fail(ctx, job, err, false)
 	}
 	if job.Status == store.ResampleJobSyncing {
 		return r.finish(ctx, job, task, cfg)
@@ -165,6 +186,10 @@ func (r *JobRunner) advance(ctx context.Context, job store.ResampleJob, now time
 	for _, bucket := range buckets {
 		if ctx.Err() != nil {
 			break
+		}
+		// 每个桶开始前确认作业还在运行：取消之后不再继续写。
+		if current, getErr := r.State.GetJob(ctx, job.SpaceID, job.JobID); getErr == nil && current.Status != store.ResampleJobRunning {
+			return nil
 		}
 		result, runErr := r.Engine.RunBucket(ctx, task, bucket, subjects, job.JobID)
 		if runErr != nil {

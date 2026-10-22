@@ -50,18 +50,30 @@ type Catalog struct {
 	ViewSync ViewSyncWaiter
 }
 
-var klineFields = []struct {
-	name  string
-	type_ storagepb.FieldValueType
-	label string
-}{
-	{"open", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "开盘价"},
-	{"high", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "最高价"},
-	{"low", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "最低价"},
-	{"close", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "收盘价"},
-	{"volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "成交量"},
-	{"quote_volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "报价成交量"},
-	{"trade_num", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, "成交笔数"},
+type klineField struct {
+	name     string
+	type_    storagepb.FieldValueType
+	label    string
+	required bool
+}
+
+var priceFields = []klineField{
+	{"open", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "开盘价", true},
+	{"high", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "最高价", true},
+	{"low", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "最低价", true},
+	{"close", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "收盘价", true},
+	{"volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "成交量", true},
+}
+
+// fieldsFor 返回市场的合成结果字段：加密货币带报价成交量和成交笔数；A 股只有成交额，且可以为空。
+func fieldsFor(spaceID string) []klineField {
+	if hasTradeCount(spaceID) {
+		return append(append([]klineField(nil), priceFields...),
+			klineField{"quote_volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "报价成交量", true},
+			klineField{"trade_num", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, "成交笔数", true})
+	}
+	return append(append([]klineField(nil), priceFields...),
+		klineField{"amount", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "成交额", false})
 }
 
 // PrepareTarget creates or validates the target Dataset, columns, subject
@@ -136,14 +148,14 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		return compensate(err)
 	}
 	_ = subjects
-	for _, field := range klineFields {
+	for _, field := range fieldsFor(task.SpaceID) {
 		if len(params.OutputFields) > 0 && !containsOutputField(params.OutputFields, field.name) {
 			continue
 		}
 		resp, callErr := c.Metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: c.Auth, Column: &storagepb.DatasetColumn{
 			SpaceId: task.SpaceID, DatasetId: targetDatasetID, ColumnName: field.name,
 			OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name,
-			ValueType: field.type_, Required: true, Status: "active", Attributes: map[string]string{"display_name": field.label},
+			ValueType: field.type_, Required: field.required, Status: "active", Attributes: map[string]string{"display_name": field.label},
 		}})
 		if callErr != nil {
 			return compensate(fmt.Errorf("upsert target column %s: %w", field.name, callErr))
@@ -212,7 +224,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		viewResp.View = updatedResp.GetView()
 	}
 	viewColumnIndex := 0
-	for _, field := range klineFields {
+	for _, field := range fieldsFor(task.SpaceID) {
 		if len(params.OutputFields) > 0 && !containsOutputField(params.OutputFields, field.name) {
 			continue
 		}

@@ -272,7 +272,7 @@ func (e *Engine) readSource(ctx context.Context, task *Task, expected []time.Tim
 	if limit <= 0 {
 		limit = defaultMaxReadKeys
 	}
-	fields := []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume, fieldQuoteVolume, fieldTradeNum}
+	fields := sourceFields(task.Spec.SpaceID)
 	groups := make(map[string][]SourceBar, len(subjects))
 	decodeErrs := map[string]error{}
 	for start := 0; start < len(keys); start += limit {
@@ -308,7 +308,8 @@ func (e *Engine) write(ctx context.Context, task *Task, bucket barclock.Bucket, 
 	committed := 0
 	plain := rows
 	plainResults := results
-	if commitRows, commitResults, plainRows, others := e.splitForCommit(ctx, task, bucket, rows, results); len(commitRows) > 0 {
+	// 历史作业是对已有结果的重算：周期已经完成时 Storage 只回执历史终态、不会写入新值，所以一律用普通写入。
+	if commitRows, commitResults, plainRows, others := e.splitForCommit(ctx, task, bucket, rows, results); jobID == "" && len(commitRows) > 0 {
 		if err := e.commit(ctx, task, bucket, commitRows, commitResults); err == nil {
 			committed = len(commitRows)
 			plain, plainResults = plainRows, others
@@ -322,7 +323,10 @@ func (e *Engine) write(ctx context.Context, task *Task, bucket barclock.Bucket, 
 	if err := e.Primary.UpsertFieldsWithSource(ctx, plain, ""); err != nil {
 		return committed, fmt.Errorf("write resample rows: %w", err)
 	}
-	e.recordNotices(ctx, task, bucket, plainResults, jobID)
+	// 通知落库失败时整个桶算失败：事件不确认、作业不推进游标，重试时写入是幂等的，下游不会漏掉这次改写。
+	if err := e.recordNotices(ctx, task, bucket, plainResults, jobID); err != nil {
+		return committed, err
+	}
 	return committed, nil
 }
 
@@ -399,9 +403,9 @@ func (t *Task) series(subjects []string) []seriesset.Series {
 }
 
 // recordNotices 把普通写入记为补写通知，通知下游（因子等）这些标的在 [bucket.Start, bucket.End) 被写入过。
-func (e *Engine) recordNotices(ctx context.Context, task *Task, bucket barclock.Bucket, results []Result, jobID string) {
+func (e *Engine) recordNotices(ctx context.Context, task *Task, bucket barclock.Bucket, results []Result, jobID string) error {
 	if e.State == nil || len(results) == 0 {
-		return
+		return nil
 	}
 	notices := make([]store.BackfillNotice, len(results))
 	for i, result := range results {
@@ -411,8 +415,9 @@ func (e *Engine) recordNotices(ctx context.Context, task *Task, bucket barclock.
 		}
 	}
 	if err := e.State.AddNotices(ctx, notices); err != nil {
-		log.WarnContextf(ctx, "[Collector] record resample notices failed task=%s: %v", task.Spec.TaskID, err)
+		return fmt.Errorf("record resample notices: %w", err)
 	}
+	return nil
 }
 
 // EnsureSnapshot 保证目标数据集登记了与当前标的集合一致的快照：集合变化时登记一份新的，从下一个目标桶起生效。

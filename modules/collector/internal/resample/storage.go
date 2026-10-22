@@ -23,7 +23,22 @@ const (
 	fieldVolume      = "volume"
 	fieldQuoteVolume = "quote_volume"
 	fieldTradeNum    = "trade_num"
+	fieldAmount      = "amount"
 )
+
+// hasTradeCount 判断市场的 K 线是否带报价成交量和成交笔数（加密货币）；A 股只有成交额 amount。
+func hasTradeCount(spaceID string) bool {
+	return !strings.EqualFold(strings.TrimSpace(spaceID), "stockcn")
+}
+
+// sourceFields 是读取源 K 线的字段。
+func sourceFields(spaceID string) []string {
+	fields := []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume}
+	if hasTradeCount(spaceID) {
+		return append(fields, fieldQuoteVolume, fieldTradeNum)
+	}
+	return append(fields, fieldAmount)
+}
 
 // PrimaryStorage is the exact-read and idempotent-write surface required by a
 // local resample worker. The interface is intentionally small for deterministic
@@ -51,12 +66,22 @@ func rowKey(spaceID, datasetID, subjectID, frequency string, at time.Time, serie
 }
 
 func resultRow(result Result) *storagepb.RowFieldUpsert {
+	fields := []*storagepb.FieldValue{
+		doubleField(fieldOpen, result.Open), doubleField(fieldHigh, result.High), doubleField(fieldLow, result.Low),
+		doubleField(fieldClose, result.Close), doubleField(fieldVolume, result.Volume),
+	}
+	switch {
+	case hasTradeCount(result.SpaceID):
+		fields = append(fields, doubleField(fieldQuoteVolume, result.QuoteVolume), intField(fieldTradeNum, result.TradeNum))
+	case result.Amount != nil:
+		fields = append(fields, doubleField(fieldAmount, *result.Amount))
+	default:
+		// 源 K 线没有真实成交额：显式写 NULL，覆盖该行之前可能写过的值。
+		fields = append(fields, &storagepb.FieldValue{FieldId: fieldAmount, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_NullValue{NullValue: storagepb.NullValue_NULL_VALUE_NULL}}})
+	}
 	return &storagepb.RowFieldUpsert{
-		Key: rowKey(result.SpaceID, result.DatasetID, result.SubjectID, result.Frequency, result.DataTime, result.SeriesTag),
-		Fields: []*storagepb.FieldValue{
-			doubleField(fieldOpen, result.Open), doubleField(fieldHigh, result.High), doubleField(fieldLow, result.Low),
-			doubleField(fieldClose, result.Close), doubleField(fieldVolume, result.Volume), doubleField(fieldQuoteVolume, result.QuoteVolume), intField(fieldTradeNum, result.TradeNum),
-		},
+		Key:    rowKey(result.SpaceID, result.DatasetID, result.SubjectID, result.Frequency, result.DataTime, result.SeriesTag),
+		Fields: fields,
 		Attributes: map[string]*storagepb.TypedValue{
 			"resample_task_id":  stringValue(""),
 			"source_dataset_id": stringValue(""),
@@ -145,15 +170,27 @@ func decodeSourceBar(row *storagepb.RowFieldValues) (SourceBar, error) {
 	if err != nil {
 		return SourceBar{}, err
 	}
-	quote, err := requiredDouble(row, fieldQuoteVolume)
-	if err != nil {
-		return SourceBar{}, err
+	bar := SourceBar{SpaceID: row.GetKey().GetSpaceId(), DatasetID: row.GetKey().GetDatasetId(), SubjectID: k.GetSubjectId(), Frequency: k.GetFreq(), DataTime: at.UTC(), SeriesTag: k.GetSeriesTag(), Open: &open, High: &high, Low: &low, Close: &closeValue, Volume: &volume}
+	if hasTradeCount(bar.SpaceID) {
+		quote, err := requiredDouble(row, fieldQuoteVolume)
+		if err != nil {
+			return SourceBar{}, err
+		}
+		trade, err := requiredInt(row, fieldTradeNum)
+		if err != nil {
+			return SourceBar{}, err
+		}
+		bar.QuoteVolume, bar.TradeNum = &quote, &trade
+		return bar, nil
 	}
-	trade, err := requiredInt(row, fieldTradeNum)
-	if err != nil {
-		return SourceBar{}, err
+	// A 股的成交额可以是 NULL（采集只拿到估算值时）：缺失表示未知，不算解码失败。
+	if value, ok := fieldValue(row, fieldAmount); ok && value != nil {
+		if _, isDouble := value.GetValue().(*storagepb.TypedValue_DoubleValue); isDouble {
+			amount := value.GetDoubleValue()
+			bar.Amount = &amount
+		}
 	}
-	return SourceBar{SpaceID: row.GetKey().GetSpaceId(), DatasetID: row.GetKey().GetDatasetId(), SubjectID: k.GetSubjectId(), Frequency: k.GetFreq(), DataTime: at.UTC(), SeriesTag: k.GetSeriesTag(), Open: &open, High: &high, Low: &low, Close: &closeValue, Volume: &volume, QuoteVolume: &quote, TradeNum: &trade}, nil
+	return bar, nil
 }
 
 func requiredDouble(row *storagepb.RowFieldValues, name string) (float64, error) {

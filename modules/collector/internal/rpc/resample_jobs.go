@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
@@ -17,9 +18,6 @@ import (
 	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/rs/xid"
 )
-
-// defaultSeriesTag 是没有登记序列（stockcn 的行情序列固定为 default）时合成源使用的序列标签。
-const stockSeriesTag = "default"
 
 // resampleSource 是由源采集任务推导出的合成源参数。
 type resampleSource struct {
@@ -54,28 +52,28 @@ func (s *Service) resampleSourceOf(ctx context.Context, spaceID, sourceTaskID st
 		out.Frequency, out.SeriesTag, out.Provider, out.MarketType = params.TargetFrequency, params.SourceSeriesTag, params.Provider, params.MarketType
 	case "kline":
 		out.Frequency = params.Frequency
-		series, listErr := s.taskRepo.ListTaskSeries(ctx, task.SpaceID, task.TaskID)
-		if listErr != nil {
-			return resampleSource{}, listErr
+		tagSource, ok := s.datasetSrc.(collectionTaskTagSource)
+		if !ok {
+			return resampleSource{}, errors.New("source tag lookup is unavailable")
 		}
-		tags := map[string]struct{}{}
-		for _, item := range series {
-			tags[item.SeriesTag] = struct{}{}
-			if out.Provider == "" {
-				out.Provider, out.MarketType = item.Provider, item.MarketType
-			}
+		tagIDs := normalizeTagIDs(task.TagIDs)
+		if len(tagIDs) == 0 {
+			return resampleSource{}, fmt.Errorf("source task %q has no tags", sourceTaskID)
 		}
-		switch {
-		case len(tags) == 1:
-			for tag := range tags {
-				out.SeriesTag = tag
+		routes := map[string]struct{}{}
+		for _, tagID := range tagIDs {
+			tag, tagErr := tagSource.GetTag(ctx, task.SpaceID, tagID)
+			if tagErr != nil || tag == nil {
+				return resampleSource{}, fmt.Errorf("load source tag %s: %v", tagID, tagErr)
 			}
-		case len(tags) > 1:
-			return resampleSource{}, fmt.Errorf("source task %q writes %d series tags; a resample needs exactly one", sourceTaskID, len(tags))
-		case strings.EqualFold(task.SpaceID, "stockcn"):
-			out.SeriesTag = stockSeriesTag
-		default:
-			return resampleSource{}, fmt.Errorf("source task %q has no series yet; wait for its collection plan", sourceTaskID)
+			provider := strings.ToLower(strings.TrimSpace(tag.GetSource()))
+			marketType := strings.ToLower(strings.TrimSpace(tag.GetMarketType()))
+			routes[provider+"/"+marketType] = struct{}{}
+			out.Provider, out.MarketType = provider, marketType
+			out.SeriesTag = marketfetch.TaskSeriesTag(task.SpaceID, params, provider, marketType, s.sourceIDResolver)
+		}
+		if len(routes) > 1 {
+			return resampleSource{}, fmt.Errorf("source task %q writes %d series routes; a resample needs exactly one", sourceTaskID, len(routes))
 		}
 	default:
 		return resampleSource{}, fmt.Errorf("source task %q is %s, not a K-line task", sourceTaskID, task.DataType)
