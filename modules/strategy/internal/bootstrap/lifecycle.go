@@ -45,6 +45,7 @@ func newLifecycle(dbPath string, deps lifecycleDeps) (*lifecycle.Controller, err
 			CheckObject: deps.checkInstance,
 			Objects:     deps.instances,
 			Catchup:     deps.catchup,
+			Reset:       strategyResetSpec(deps.db, dbPath),
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
 				log.Infof("strategy_lifecycle_changed kind=%s id=%s from=%s to=%s reason=%s", ref.Kind, ref.ID, from, to, reason)
 			},
@@ -166,6 +167,7 @@ func lifecycleRoutes(c *lifecycle.Controller) []health.Route {
 		{Path: lifecycle.StatusPath, Handler: c.StatusHandler()},
 		{Path: lifecycle.CommandPath, Handler: c.CommandHandler()},
 		{Path: lifecycle.CatchupPath, Handler: c.CatchupHandler()},
+		{Path: lifecycle.ResetPrefix, Handler: c.ResetHandler()},
 	}
 }
 

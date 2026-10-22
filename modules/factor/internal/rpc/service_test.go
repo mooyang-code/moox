@@ -427,3 +427,22 @@ func TestListRecalcJobsFiltersBySetAndPaginates(t *testing.T) {
 	require.EqualValues(t, 3, rsp.GetPageResult().GetTotal())
 	require.True(t, rsp.GetPageResult().GetHasMore())
 }
+
+// 修改类接口受生命周期门禁约束：暂停、重置中时被拒绝；读接口不受影响。
+func TestMutationGateRejectsWritesButNotReads(t *testing.T) {
+	blocked := errors.New("因子管理已暂停")
+	gate := func() error { return blocked }
+	service := NewService(&catalogFake{}, &recalcFake{}, WithMutationGate(gate))
+	ctx := context.Background()
+
+	rsp, err := service.CreateFactorSet(ctx, &factorpb.CreateFactorSetReq{FactorSet: &factorpb.FactorSet{SetId: "s"}})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	require.Contains(t, rsp.GetRetInfo().GetMsg(), "已暂停")
+	del, err := service.DeleteFactor(ctx, &factorpb.DeleteFactorReq{FactorId: "f"})
+	require.NoError(t, err)
+	require.Contains(t, del.GetRetInfo().GetMsg(), "已暂停")
+	recalc, err := service.RecalcFactors(ctx, &factorpb.RecalcFactorsReq{})
+	require.NoError(t, err)
+	require.Contains(t, recalc.GetRetInfo().GetMsg(), "已暂停")
+}

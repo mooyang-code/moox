@@ -23,8 +23,8 @@ func TestProjectSystemColorsAndPhase(t *testing.T) {
 	require.Equal(t, "green", running.Color)
 	require.Equal(t, "healthy", running.Health)
 
-	// 一个模块还只是就绪：系统的运行阶段取最靠前的。
-	mixed := projectSystem([]*pb.HealthComponent{component("因子引擎", "running"), component("策略", "ready")})
+	// 一个模块还只是就绪（有对象但都没启动）：系统的运行阶段取最靠前的。
+	mixed := projectSystem([]*pb.HealthComponent{component("因子引擎", "running"), component("策略", "ready", func(l *pb.HealthLifecycle) { l.Counts = map[string]int32{"ready": 1} })})
 	require.Equal(t, "ready", mixed.Phase)
 	require.Equal(t, "blue", mixed.Color)
 
@@ -82,7 +82,7 @@ func TestProjectSystemPausePhases(t *testing.T) {
 			l.PauseKinds = map[string]int32{kind: 1}
 		}
 	}
-	all := projectSystem([]*pb.HealthComponent{component("因子引擎", "paused", paused("system")), component("策略", "paused", paused("system"))})
+	all := projectSystem([]*pb.HealthComponent{component("factor-engine", "paused", paused("system")), component("strategy", "paused", paused("system")), component("factor-mgr", "ready")})
 	require.Equal(t, "paused", all.Phase)
 	require.Equal(t, "orange", all.Color)
 	require.False(t, all.Degraded, "系统暂停不算降级")
@@ -90,13 +90,14 @@ func TestProjectSystemPausePhases(t *testing.T) {
 	require.Equal(t, int32(2), all.PauseKinds["system"])
 	require.Equal(t, "2026-10-21T10:00:00Z", all.PausedSince)
 
-	partial := projectSystem([]*pb.HealthComponent{component("因子引擎", "running"), component("策略", "paused", paused("manual"))})
+	partial := projectSystem([]*pb.HealthComponent{component("factor-engine", "running"), component("strategy", "paused", paused("manual"))})
 	require.Equal(t, "partially_paused", partial.Phase)
 	require.False(t, partial.Degraded)
-	require.Contains(t, partial.Issues[0], "策略：系统暂停")
+	require.Contains(t, partial.Issues[0], "strategy：系统暂停")
 
 	// 对象级的手动暂停：模块汇总仍是运行，pause_kinds 计数但不降级。
-	object := projectSystem([]*pb.HealthComponent{component("策略", "running", func(l *pb.HealthLifecycle) {
+	object := projectSystem([]*pb.HealthComponent{component("strategy", "running", func(l *pb.HealthLifecycle) {
+		l.Counts = map[string]int32{"running": 2}
 		l.PauseKinds = map[string]int32{"manual": 1}
 	})})
 	require.Equal(t, "running", object.Phase)
@@ -129,4 +130,23 @@ func TestProjectSystemResumingAndReset(t *testing.T) {
 	require.Equal(t, "attention", failed.Health)
 	require.Equal(t, "red", failed.Color)
 	require.Equal(t, []string{"因子引擎：清理本地存储失败"}, failed.Issues)
+}
+
+// 没有对象、自身只是就绪的模块（采集、因子管理）不参与运行阶段的比较，否则系统一直显示「就绪」。
+func TestProjectSystemIgnoresObjectlessReadyModulesForThePhase(t *testing.T) {
+	system := projectSystem([]*pb.HealthComponent{
+		component("因子引擎", "running", func(l *pb.HealthLifecycle) { l.Counts = map[string]int32{"running": 4} }),
+		component("策略", "running", func(l *pb.HealthLifecycle) { l.Counts = map[string]int32{"running": 1} }),
+		component("采集", "ready"),
+		component("因子管理", "ready"),
+	})
+	require.Equal(t, "running", system.Phase)
+	require.Equal(t, "green", system.Color)
+
+	// 有对象但都只是就绪：系统是就绪。
+	ready := projectSystem([]*pb.HealthComponent{
+		component("因子引擎", "ready", func(l *pb.HealthLifecycle) { l.Counts = map[string]int32{"ready": 2} }),
+		component("采集", "ready"),
+	})
+	require.Equal(t, "ready", ready.Phase)
 }

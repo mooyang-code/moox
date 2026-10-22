@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,18 +20,21 @@ import (
 
 // Runtime owns monitor's process-scoped resources and shutdown ordering.
 type Runtime struct {
-	Gateway                  *gatewayclient.Client
-	StorageGateway           *storagegateway.Client
-	StartedAt                time.Time
-	cancel                   context.CancelFunc
-	workers                  sync.WaitGroup
-	closeOnce                sync.Once
-	closeErr                 error
-	Store                    *store.Store
-	Repositories             *store.Repositories
-	MetricStores             *monmetrics.Stores
-	HostRuleCache            *hostmetrics.RuleCache
-	Scheduler                *scheduler.Scheduler
+	Gateway        *gatewayclient.Client
+	StorageGateway *storagegateway.Client
+	StartedAt      time.Time
+	cancel         context.CancelFunc
+	workers        sync.WaitGroup
+	closeOnce      sync.Once
+	closeErr       error
+	Store          *store.Store
+	Repositories   *store.Repositories
+	MetricStores   *monmetrics.Stores
+	HostRuleCache  *hostmetrics.RuleCache
+	Scheduler      *scheduler.Scheduler
+	// life 是 Monitor 的生命周期控制器（在健康检查注册时创建，创建之前为空）：暂停时告警静默，只记录、不推送。
+	life atomic.Pointer[lifecycle.Controller]
+
 	ObservabilityIngestReady atomic.Bool
 	MetricsReporterReady     atomic.Bool
 	observabilityIngestError atomic.Value

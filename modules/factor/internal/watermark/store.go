@@ -88,6 +88,14 @@ func (s *Store) Put(state State) error {
 	return s.flushLocked()
 }
 
+// Reset 清空全部状态并写盘（重置时用）：数据被清空后，旧的连续水位指向已不存在的数据。
+func (s *Store) Reset() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.states = map[string]State{}
+	return s.flushLocked()
+}
+
 // All 返回全部状态（按集合 ID 排序）。
 func (s *Store) All() []State {
 	s.mu.Lock()

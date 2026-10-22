@@ -125,6 +125,20 @@ func Reset(dir string) (int, error) {
 	return removed, nil
 }
 
+// Clear 清空账本：关闭当前打开的文件，删除账本文件，清空内存里的待恢复集合（进程内重置用，不需要停引擎）。
+func (l *Ledger) Clear() (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file != nil {
+		_ = l.file.Close()
+		l.file, l.month = nil, ""
+	}
+	removed, err := Reset(l.dir)
+	l.pending = make(map[key]*Entry)
+	l.degraded = false
+	return removed, err
+}
+
 // Open 打开账本目录并回放全部账本文件重建待恢复集合；giveUp > 0 时，已超过期限的待恢复项立即追加 gave_up
 // 并返回它们（停机期间超期的项不会无声消失，调用方应告警）。
 func Open(dir string, now func() time.Time, giveUp time.Duration) (*Ledger, []Entry, error) {

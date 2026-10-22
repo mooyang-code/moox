@@ -29,6 +29,7 @@ func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
 			Objects:     r.lifecycleObjects,
 			Init:        r.initSet,
 			Catchup:     r.catchupHook,
+			Reset:       r.resetSpec(),
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
 				log.Infof("factor_lifecycle_changed kind=%s id=%s from=%s to=%s reason=%s", ref.Kind, ref.ID, from, to, reason)
 			},
@@ -109,6 +110,7 @@ func (r *Runtime) lifecycleRoutes() []factorhealth.Route {
 		{Path: lifecycle.StatusPath, Handler: r.life.StatusHandler()},
 		{Path: lifecycle.CommandPath, Handler: r.life.CommandHandler()},
 		{Path: lifecycle.CatchupPath, Handler: r.life.CatchupHandler()},
+		{Path: lifecycle.ResetPrefix, Handler: r.life.ResetHandler()},
 	}
 }
 

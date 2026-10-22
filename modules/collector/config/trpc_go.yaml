@@ -33,7 +33,8 @@ server:
       port: 11412
       network: tcp
       protocol: http_no_protocol
-      timeout: 3000
+      # 健康检查端口同时承载生命周期接口：暂停要等在途补采分块结束、SCF 定时器停用确认（最长 5 分钟），请求时限要大于它
+      timeout: 330000
     - name: trpc.moox.collector.metrics.timer
       port: 11412
       network: "*/30 * * * * *"

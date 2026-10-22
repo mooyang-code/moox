@@ -554,3 +554,26 @@ func TestPerMarketFetchYAMLIsStrictlyParsed(t *testing.T) {
 		"    crypto: {package_name: pkg-crypto, markets: {swap: {unknown: 1}}}\n")))
 	require.Error(t, err)
 }
+
+// 暂停要等在途补采分块结束、SCF 定时器停用确认（最长 collectorQuiesceTimeout），健康端口的请求时限必须大于它，
+// 否则线上会出现「已暂停，但在途操作没有结束」（请求在 3 秒时被截断，门禁已关、确认没做完）。
+func TestCollectorHealthRequestTimeoutCoversPauseQuiesce(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config", "trpc_go.yaml"))
+	require.NoError(t, err)
+	var config struct {
+		Server struct {
+			Service []struct {
+				Name    string `yaml:"name"`
+				Timeout int    `yaml:"timeout"`
+			} `yaml:"service"`
+		} `yaml:"server"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &config))
+	for _, service := range config.Server.Service {
+		if service.Name == "trpc.moox.collector.Health" {
+			require.Greater(t, time.Duration(service.Timeout)*time.Millisecond, collectorQuiesceTimeout)
+			return
+		}
+	}
+	t.Fatal("没有找到 trpc.moox.collector.Health 服务")
+}

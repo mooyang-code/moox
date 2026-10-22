@@ -76,19 +76,27 @@ func Initialize(ctx context.Context, s *server.Server, cfg *config.Config) (_ *R
 	if err != nil {
 		return nil, err
 	}
+	life, err := newArchiveLifecycle(runtime.store, cfg.Database.Path)
+	if err != nil {
+		return nil, fmt.Errorf("open archive lifecycle: %w", err)
+	}
+	go func() {
+		life.Recover(ctx)
+		life.Run(ctx, lifecycleRefreshEvery)
+	}()
 	archivepb.RegisterArchiveMgrService(s.Service(mgrService), svc.Mgr())
 	archivepb.RegisterArchiveWorkerService(s.Service(workerService), svc.Worker())
-	if err := registerTimer(s, triggerService, "archive_trigger", triggerTimeout, svc.Trigger); err != nil {
+	if err := registerTimer(s, triggerService, "archive_trigger", triggerTimeout, gated(life, "archive_trigger", svc.Trigger)); err != nil {
 		return nil, err
 	}
-	if err := registerTimer(s, maintainService, "archive_maintain", maintainTimeout, svc.Maintain); err != nil {
+	if err := registerTimer(s, maintainService, "archive_maintain", maintainTimeout, gated(life, "archive_maintain", svc.Maintain)); err != nil {
 		return nil, err
 	}
 	if err := registerMetricsReporter(s, svc); err != nil {
 		return nil, err
 	}
-	runtime.health.SnapshotFunc = runtime.healthSnapshot()
-	if err := archivehealth.Register(s.Service(healthService), runtime.health); err != nil {
+	runtime.health.SnapshotFunc = withLifecycle(runtime.healthSnapshot(), life)
+	if err := archivehealth.Register(s.Service(healthService), runtime.health, lifecycleRoutes(life)...); err != nil {
 		return nil, fmt.Errorf("register archive health service: %w", err)
 	}
 	runtime.health.SetReady(true)

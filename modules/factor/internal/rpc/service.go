@@ -90,6 +90,19 @@ func WithEngineAPI(engine EngineAPI) ServiceOption {
 	return func(s *Service) { s.engine = engine }
 }
 
+// WithMutationGate 设置修改类接口的生命周期门禁：返回错误（暂停、恢复追赶、重置中）时，创建、修改、删除、启停因子与因子集合、
+// 提交与取消重算都被拒绝；读接口与引擎的同步、心跳、领取任务不受影响。不设置表示一直放行。
+func WithMutationGate(gate func() error) ServiceOption {
+	return func(s *Service) { s.mutationGate = gate }
+}
+
+func (s *Service) mutationAllowed() error {
+	if s.mutationGate == nil {
+		return nil
+	}
+	return s.mutationGate()
+}
+
 // WithPreviewer 启用 PreviewFactor；不设置时该接口返回错误。
 func WithPreviewer(previewer Previewer) ServiceOption {
 	return func(s *Service) { s.previewer = previewer }
@@ -102,6 +115,8 @@ type Service struct {
 	engine  EngineAPI
 	// previewer 执行 PreviewFactor 的试算。
 	previewer Previewer
+	// mutationGate 是修改类接口的生命周期门禁（见 WithMutationGate）。
+	mutationGate func() error
 	// filled 暂存补齐通知。
 	filled *FilledInbox
 }
@@ -117,6 +132,9 @@ func NewService(catalog CatalogAPI, recalc RecalcAPI, opts ...ServiceOption) *Se
 }
 
 func (s *Service) CreateFactorSet(ctx context.Context, req *factorpb.CreateFactorSetReq) (*factorpb.CreateFactorSetRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.CreateFactorSetRsp{RetInfo: unavailable(err)}, nil
+	}
 	if req == nil || req.GetFactorSet() == nil {
 		return &factorpb.CreateFactorSetRsp{RetInfo: invalid(fmt.Errorf("factor_set is required"))}, nil
 	}
@@ -138,6 +156,9 @@ func (s *Service) CreateFactorSet(ctx context.Context, req *factorpb.CreateFacto
 }
 
 func (s *Service) UpdateFactorSet(ctx context.Context, req *factorpb.UpdateFactorSetReq) (*factorpb.UpdateFactorSetRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.UpdateFactorSetRsp{RetInfo: unavailable(err)}, nil
+	}
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" {
 		return &factorpb.UpdateFactorSetRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
 	}
@@ -152,6 +173,9 @@ func (s *Service) UpdateFactorSet(ctx context.Context, req *factorpb.UpdateFacto
 }
 
 func (s *Service) SetFactorSetStatus(ctx context.Context, req *factorpb.SetFactorSetStatusReq) (*factorpb.SetFactorSetStatusRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.SetFactorSetStatusRsp{RetInfo: unavailable(err)}, nil
+	}
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" {
 		return &factorpb.SetFactorSetStatusRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
 	}
@@ -170,6 +194,9 @@ func (s *Service) SetFactorSetStatus(ctx context.Context, req *factorpb.SetFacto
 }
 
 func (s *Service) DeleteFactorSet(ctx context.Context, req *factorpb.DeleteFactorSetReq) (*factorpb.DeleteFactorSetRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.DeleteFactorSetRsp{RetInfo: unavailable(err)}, nil
+	}
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" {
 		return &factorpb.DeleteFactorSetRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
 	}
@@ -232,6 +259,9 @@ func (s *Service) ListFactorSets(ctx context.Context, req *factorpb.ListFactorSe
 }
 
 func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorReq) (*factorpb.CreateFactorRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.CreateFactorRsp{RetInfo: unavailable(err)}, nil
+	}
 	if req == nil || req.GetFactor() == nil {
 		return &factorpb.CreateFactorRsp{RetInfo: invalid(fmt.Errorf("factor is required"))}, nil
 	}
@@ -250,6 +280,9 @@ func (s *Service) CreateFactor(ctx context.Context, req *factorpb.CreateFactorRe
 }
 
 func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorReq) (*factorpb.UpdateFactorRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.UpdateFactorRsp{RetInfo: unavailable(err)}, nil
+	}
 	if req == nil || req.GetFactor() == nil {
 		return &factorpb.UpdateFactorRsp{RetInfo: invalid(fmt.Errorf("factor is required"))}, nil
 	}
@@ -268,6 +301,9 @@ func (s *Service) UpdateFactor(ctx context.Context, req *factorpb.UpdateFactorRe
 }
 
 func (s *Service) AddFactorToSet(ctx context.Context, req *factorpb.AddFactorToSetReq) (*factorpb.AddFactorToSetRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.AddFactorToSetRsp{RetInfo: unavailable(err)}, nil
+	}
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetFactorId()) == "" {
 		return &factorpb.AddFactorToSetRsp{RetInfo: invalid(fmt.Errorf("set_id and factor_id are required"))}, nil
 	}
@@ -282,6 +318,9 @@ func (s *Service) AddFactorToSet(ctx context.Context, req *factorpb.AddFactorToS
 }
 
 func (s *Service) RemoveFactorFromSet(ctx context.Context, req *factorpb.RemoveFactorFromSetReq) (*factorpb.RemoveFactorFromSetRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.RemoveFactorFromSetRsp{RetInfo: unavailable(err)}, nil
+	}
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetFactorId()) == "" {
 		return &factorpb.RemoveFactorFromSetRsp{RetInfo: invalid(fmt.Errorf("set_id and factor_id are required"))}, nil
 	}
@@ -295,6 +334,9 @@ func (s *Service) RemoveFactorFromSet(ctx context.Context, req *factorpb.RemoveF
 }
 
 func (s *Service) SetFactorMemberStatus(ctx context.Context, req *factorpb.SetFactorMemberStatusReq) (*factorpb.SetFactorMemberStatusRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.SetFactorMemberStatusRsp{RetInfo: unavailable(err)}, nil
+	}
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetFactorId()) == "" {
 		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(fmt.Errorf("set_id and factor_id are required"))}, nil
 	}
@@ -321,6 +363,9 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, req *factorpb.SetFa
 }
 
 func (s *Service) DeleteFactor(ctx context.Context, req *factorpb.DeleteFactorReq) (*factorpb.DeleteFactorRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.DeleteFactorRsp{RetInfo: unavailable(err)}, nil
+	}
 	if req == nil || strings.TrimSpace(req.GetFactorId()) == "" {
 		return &factorpb.DeleteFactorRsp{RetInfo: invalid(fmt.Errorf("factor_id is required"))}, nil
 	}
@@ -376,6 +421,9 @@ func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq)
 }
 
 func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactorsReq) (*factorpb.RecalcFactorsRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.RecalcFactorsRsp{RetInfo: unavailable(err)}, nil
+	}
 	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetRequestId()) == "" {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("set_id and request_id are required"))}, nil
 	}
@@ -449,6 +497,9 @@ func (s *Service) GetRecalcJob(ctx context.Context, req *factorpb.GetRecalcJobRe
 }
 
 func (s *Service) CancelRecalcJob(ctx context.Context, req *factorpb.CancelRecalcJobReq) (*factorpb.CancelRecalcJobRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.CancelRecalcJobRsp{RetInfo: unavailable(err)}, nil
+	}
 	if req == nil || strings.TrimSpace(req.GetJobId()) == "" {
 		return &factorpb.CancelRecalcJobRsp{RetInfo: invalid(fmt.Errorf("job_id is required"))}, nil
 	}
@@ -540,6 +591,11 @@ func success() *commonpb.RetInfo {
 
 func invalid(err error) *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INVALID_PARAM, Msg: err.Error()}
+}
+
+// unavailable 表示服务暂时不接受这个操作（暂停、重置中）。
+func unavailable(err error) *commonpb.RetInfo {
+	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: err.Error()}
 }
 
 func inner(err error) *commonpb.RetInfo {

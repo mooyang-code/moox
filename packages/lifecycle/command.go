@@ -32,6 +32,18 @@ func (c *Controller) Command(ctx context.Context, cmd Command, ref Ref) (Object,
 
 // Execute 执行命令请求。
 func (c *Controller) Execute(ctx context.Context, req Request) (Object, error) {
+	// 重置期间、重置失败后：只接受检查，其余命令一律拒绝（重置完成或放弃之前不能启动、暂停、恢复任何东西）。
+	if req.Command != CmdCheck {
+		c.mu.Lock()
+		stage := c.self.Stage
+		c.mu.Unlock()
+		if stage == StageResetting || stage == StageResetFailed {
+			c.mu.Lock()
+			obj := c.object(c.recordFor(req.Ref))
+			c.mu.Unlock()
+			return obj, &ErrNotAllowed{Ref: req.Ref, Command: req.Command, Stage: stage, Why: "模块正在重置或重置失败：先完成（reset apply --operation-id）或放弃（reset abort）"}
+		}
+	}
 	switch req.Command {
 	case CmdInit:
 		return c.initCmd(ctx, req.Ref)
@@ -76,9 +88,11 @@ func (c *Controller) initCmd(ctx context.Context, ref Ref) (Object, error) {
 	var changes []change
 	r := c.recordFor(ref)
 	c.checks[ref.key()] = checks
+	afterReset := false
 	if ref == (Ref{}) && r.Hold == HoldPostReset {
 		// 重置后的初始化由用户发起，到这里才解除「等待初始化」。
 		r.Hold = HoldNone
+		afterReset = true
 	}
 	if r.Stage == StageUninitialized || r.Stage == StageNotReady || r.Stage == StageReady {
 		if Passed(checks) {
@@ -91,6 +105,9 @@ func (c *Controller) initCmd(ctx context.Context, ref Ref) (Object, error) {
 	obj := c.object(r)
 	c.mu.Unlock()
 	c.notify(changes)
+	if afterReset && c.opts.Hooks.AfterReset != nil {
+		c.opts.Hooks.AfterReset(ctx)
+	}
 	return obj, nil
 }
 
