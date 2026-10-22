@@ -163,7 +163,7 @@ func TestRegistryEventsReturnsCopy(t *testing.T) {
 
 func TestDatasetRowsRoundTrip(t *testing.T) {
 	registry, _ := DefaultRegistry()
-	payload := &storagepb.DatasetRowsUpserted{SourceNodeId: "node", SourceStoreId: "store", SourceSequence: 1,
+	payload := &storagepb.DatasetRowsUpserted{NodeId: "node", StoreId: "store", Sequence: 1,
 		SpaceId: "space", DatasetId: "dataset",
 		Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{
 			SpaceId: "space", DatasetId: "dataset",

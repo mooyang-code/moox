@@ -78,7 +78,7 @@ func TestDatasetRowsUpsertedValidatesSeriesTagShape(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := &storagepb.DatasetRowsUpserted{SourceNodeId: "node", SourceStoreId: "store", SourceSequence: 1,
+			payload := &storagepb.DatasetRowsUpserted{NodeId: "node", StoreId: "store", Sequence: 1,
 				SpaceId: "space", DatasetId: "dataset",
 				Rows: []*storagepb.RowUpsert{{
 					Key: &storagepb.RowKey{
@@ -198,7 +198,7 @@ func validationOptions(eventID, spaceID, subjectID string) PublishOptions {
 }
 
 func validRowsEvent() *storagepb.DatasetRowsUpserted {
-	return &storagepb.DatasetRowsUpserted{SourceNodeId: "node", SourceStoreId: "store", SourceSequence: 1,
+	return &storagepb.DatasetRowsUpserted{NodeId: "node", StoreId: "store", Sequence: 1,
 		SpaceId: "space", DatasetId: "dataset",
 		Rows: []*storagepb.RowUpsert{{
 			Key: &storagepb.RowKey{

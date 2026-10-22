@@ -67,7 +67,7 @@ func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Mess
 	if len(payload.GetRows()) == 0 {
 		return fmt.Errorf("storage event rows payload is empty")
 	}
-	if !validRequiredToken(payload.GetSourceNodeId()) || !validRequiredToken(payload.GetSourceStoreId()) || payload.GetSourceSequence() == 0 {
+	if !validRequiredToken(payload.GetNodeId()) || !validRequiredToken(payload.GetStoreId()) || payload.GetSequence() == 0 {
 		return fmt.Errorf("storage event source position is required")
 	}
 	if len(payload.GetWriteSource()) > 256 || strings.TrimSpace(payload.GetWriteSource()) != payload.GetWriteSource() {

@@ -40,10 +40,10 @@ func TestSourcePositionSurvivesDataNodeRestart(t *testing.T) {
 			require.NoError(t, proto.Unmarshal(entry.Data, message))
 			payload := new(storagepb.DatasetRowsUpserted)
 			require.NoError(t, proto.Unmarshal(message.Payload, payload))
-			require.Equal(t, "node", payload.SourceNodeId)
-			require.Equal(t, s.sourceStoreID, payload.SourceStoreId)
+			require.Equal(t, "node", payload.NodeId)
+			require.Equal(t, s.sourceStoreID, payload.StoreId)
 			require.Contains(t, message.EventId, s.sourceStoreID)
-			require.Equal(t, entry.ID, payload.SourceSequence)
+			require.Equal(t, entry.ID, payload.Sequence)
 		}
 		if attempt == 1 {
 			require.Greater(t, entries[1].ID, entries[0].ID)
@@ -75,8 +75,8 @@ func TestBuildDatasetRowsUpsertedMessageUsesExplicitOuterContract(t *testing.T) 
 	if payload.GetSpaceId() != "crypto" || payload.GetDatasetId() != "spot_kline" || len(payload.GetRows()) != 1 {
 		t.Fatalf("rows.upserted payload = %v", payload)
 	}
-	if payload.GetSourceNodeId() != "node-1" || payload.GetSourceSequence() != 7 {
-		t.Fatalf("source position = %s/%d", payload.GetSourceNodeId(), payload.GetSourceSequence())
+	if payload.GetNodeId() != "node-1" || payload.GetSequence() != 7 {
+		t.Fatalf("source position = %s/%d", payload.GetNodeId(), payload.GetSequence())
 	}
 	replayed, err := BindOutboxID(data, "node-1", "store", 7)
 	if err != nil || string(replayed) != string(data) {

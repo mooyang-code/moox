@@ -87,7 +87,7 @@ func TestRegistryReconcilesStorageFanoutTopologyAndDeduplicatesPublish(t *testin
 	}
 
 	occurredAt := time.Now().UTC()
-	payload := &storagepb.DatasetRowsUpserted{SourceNodeId: "node-e2e", SourceStoreId: "store-e2e", SourceSequence: 1, SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}}}
+	payload := &storagepb.DatasetRowsUpserted{NodeId: "node-e2e", StoreId: "store-e2e", Sequence: 1, SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", Rows: []*storagepb.RowUpsert{{Key: &storagepb.RowKey{SpaceId: "crypto", DatasetId: "dataset_binance_kline_1m", Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-1", Version: "v1"}}}}}}
 	first, err := publisher.Publish(context.Background(), events.DatasetRowsUpserted, payload, events.PublishOptions{EventID: "storage-e2e-1", OccurredAt: occurredAt, SpaceID: "crypto", SubjectID: "dataset_binance_kline_1m"})
 	if err != nil || first == nil || first.Duplicate {
 		t.Fatalf("first publish ack=%+v err=%v", first, err)

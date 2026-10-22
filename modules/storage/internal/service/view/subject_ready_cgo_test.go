@@ -40,8 +40,8 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 	payload, err := eventmapper.ToEventRows(&pb.RowsUpserted{SpaceId: "space", DatasetId: "market_prices", Rows: []*pb.RowFieldUpsert{row}})
 	require.NoError(t, err)
 	published := false
-	payload.SourceNodeId, payload.SourceSequence = "node", 1
-	payload.SourceStoreId = "store"
+	payload.NodeId, payload.Sequence = "node", 1
+	payload.StoreId = "store"
 	message := &eventpb.EventMessage{EventId: "btc-row", SpaceId: "space", SubjectId: "market_prices", OccurredAt: timestamppb.Now()}
 	// Rebuild writes never journal or emit subject-ready. Only a later live
 	// write against the activated index publishes, and that row is already

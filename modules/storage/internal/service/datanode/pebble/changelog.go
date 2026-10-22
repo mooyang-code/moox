@@ -158,7 +158,7 @@ func (s *Store) ChangeCursor() (*pb.DatasetChangeCursor, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &pb.DatasetChangeCursor{SourceNodeId: s.nodeID, SourceStoreId: s.sourceStoreID, Sequence: next - 1}, nil
+	return &pb.DatasetChangeCursor{NodeId: s.nodeID, StoreId: s.sourceStoreID, Sequence: next - 1}, nil
 }
 
 // ReadDatasetChanges 从游标之后按序读取变更日志。游标早于保留起点、比头部还新、或身份与本存储对不上时返回 gap。
@@ -185,7 +185,7 @@ func (s *Store) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChang
 	if err != nil {
 		return nil, err
 	}
-	if cursor.GetSourceNodeId() != s.nodeID || cursor.GetSourceStoreId() != s.sourceStoreID ||
+	if cursor.GetNodeId() != s.nodeID || cursor.GetStoreId() != s.sourceStoreID ||
 		cursor.GetSequence() > head.GetSequence() || cursor.GetSequence() < trimmed {
 		rsp.Gap = true
 		return rsp, nil
@@ -227,7 +227,7 @@ func (s *Store) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChang
 	if err := iter.Error(); err != nil {
 		return nil, err
 	}
-	rsp.NextCursor = &pb.DatasetChangeCursor{SourceNodeId: s.nodeID, SourceStoreId: s.sourceStoreID, Sequence: last}
+	rsp.NextCursor = &pb.DatasetChangeCursor{NodeId: s.nodeID, StoreId: s.sourceStoreID, Sequence: last}
 	return rsp, nil
 }
 

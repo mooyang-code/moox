@@ -141,11 +141,11 @@ message CountTimeSeriesRowsRsp {
   repeated SubjectRowCount counts = 2;
 }
 
-// DatasetChangeCursor 是行变更日志的读取位点：序号只在 (source_node_id, source_store_id) 内可比较，
+// DatasetChangeCursor 是行变更日志的读取位点：序号只在 (node_id, store_id) 内可比较，
 // 节点更换或存储重建后身份对不上，读取方会收到「断档」。
 message DatasetChangeCursor {
-  string source_node_id = 1;
-  string source_store_id = 2;
+  string node_id = 1;
+  string store_id = 2;
   // sequence 是已处理到的序号；0 表示还没有处理过任何变更（配合 from_head 取基线）。
   uint64 sequence = 3;
 }
