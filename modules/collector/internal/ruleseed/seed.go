@@ -12,6 +12,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
+	"github.com/mooyang-code/moox/modules/collector/internal/resample"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
@@ -143,7 +144,7 @@ func validateTaskSeedItem(item taskSeedItem) (domain.CollectionTask, error) {
 		return domain.CollectionTask{}, fmt.Errorf("collect_params: %w", err)
 	}
 	if dataType == "kline_resample" {
-		if err := params.Validate(); err != nil {
+		if err := resample.ValidateTaskParams(params); err != nil {
 			return domain.CollectionTask{}, fmt.Errorf("collect_params: %w", err)
 		}
 	} else {

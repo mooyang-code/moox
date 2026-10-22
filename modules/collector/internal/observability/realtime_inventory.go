@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/resample"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"github.com/mooyang-code/moox/packages/report"
@@ -101,7 +102,7 @@ func (i *RealtimeInventory) Refresh(ctx context.Context) error {
 		}
 		var validateErr error
 		if params.Collector.DataType == "kline_resample" {
-			validateErr = params.Validate()
+			validateErr = resample.ValidateTaskParams(params)
 		} else {
 			// Direct collection tasks derive Provider/market routing from their
 			// selected Tags. The task definition itself must therefore be valid

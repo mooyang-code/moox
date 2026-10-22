@@ -224,7 +224,8 @@ func (p *CollectParams) ValidateTaskDefinition() error {
 			}
 		}
 	case "kline_resample":
-		return p.ValidateKlineResample()
+		// 合成任务的契约由 resample.ValidateTaskParams 校验（domain 不能反向依赖 resample 包），这里不接受。
+		return fmt.Errorf("kline_resample params must be validated by resample.ValidateTaskParams")
 	default:
 		return fmt.Errorf("unsupported collector data_type: %s", p.Collector.DataType)
 	}
