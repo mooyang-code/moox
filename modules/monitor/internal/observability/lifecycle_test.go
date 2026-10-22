@@ -20,3 +20,22 @@ func TestParseLifecycleFromHealthBody(t *testing.T) {
 	require.Nil(t, ParseLifecycle(`{"module":"storage","details":{}}`), "模块没有生命周期接口")
 	require.Nil(t, ParseLifecycle(`{"details":{"lifecycle":{"stage":"run`), "响应体被截断时不报错、不显示")
 }
+
+func TestParseLifecycleReadsPauseHoldAndCatchup(t *testing.T) {
+	body := `{"status":"ok","details":{"lifecycle":{"stage":"resuming","color":"cyan","self":"resuming","hold":"system_pause",
+		"pause":{"kind":"system","reason":"切换行情源","by":"cli:ops","since":"2026-10-21T10:00:00Z"},
+		"catchup":{"since":"2026-10-21T10:00:00Z","done":6,"total":10,"caught_up":false,"blocked_by":"collector","unfillable":2},
+		"pause_kinds":{"manual":1},
+		"attention":[{"kind":"factor_set","id":"s1","stage":"paused","effective":"paused","pause":{"kind":"manual","reason":"手动暂停"}}]}}}`
+	got := ParseLifecycle(body)
+	require.NotNil(t, got)
+	require.Equal(t, "system_pause", got.Hold)
+	require.Equal(t, "system", got.Pause.Kind)
+	require.Equal(t, "cli:ops", got.Pause.By)
+	require.Equal(t, int64(6), got.Catchup.Done)
+	require.Equal(t, "collector", got.Catchup.BlockedBy)
+	require.Equal(t, 2, got.Catchup.Unfillable)
+	require.Equal(t, 1, got.PauseKinds["manual"])
+	require.Equal(t, "manual", got.Attention[0].Pause.Kind)
+	require.Equal(t, "paused", got.Attention[0].Effective)
+}

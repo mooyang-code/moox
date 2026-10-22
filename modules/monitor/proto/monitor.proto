@@ -90,11 +90,11 @@ message HealthComponent {
 }
 // HealthLifecycle 是模块上报的生命周期状态：模块自身与它管理的对象（因子集合、策略实例）。
 message HealthLifecycle {
-  // 汇总阶段：uninitialized | not_ready | ready | warming | running | paused | fault。
+  // 汇总阶段：uninitialized | not_ready | ready | warming | running | paused | resuming | resetting | reset_failed | fault。
   string stage = 1;
-  // 阶段对应的颜色：gray | red | blue | yellow | green | orange。
+  // 阶段对应的颜色：gray | red | blue | yellow | green | orange | cyan | purple。
   string color = 2;
-  // 有对象暂停、故障或未就绪，而另一些对象在跑。
+  // 有对象自动暂停、故障或未就绪，而另一些对象在跑（手动、系统暂停是用户意图，不算降级）。
   bool degraded = 3;
   string reason = 4;
   // 模块自身的阶段。
@@ -105,6 +105,34 @@ message HealthLifecycle {
   repeated HealthLifecycleObject attention = 7;
   // 重启后自动回到原阶段的对象数。
   int32 recovered = 8;
+  // 模块自身的暂停详情（模块暂停或恢复追赶中）。
+  HealthPause pause = 9;
+  // 控制意图：system_pause | post_reset | 空。
+  string hold = 10;
+  // 暂停的对象（含模块自身）按类型计数：manual | system | auto。
+  map<string, int32> pause_kinds = 11;
+  // 模块自身的恢复追赶进度（模块恢复追赶中）。
+  HealthCatchup catchup = 12;
+}
+// HealthPause 是暂停详情：类型、原因、操作者、开始时间。
+message HealthPause {
+  // manual | system | auto。
+  string kind = 1;
+  string reason = 2;
+  string by = 3;
+  string since = 4;
+}
+// HealthCatchup 是恢复追赶进度：暂停期间缺失的数据补采、增量进入，追平后才放行。
+message HealthCatchup {
+  string since = 1;
+  int64 done = 2;
+  int64 total = 3;
+  bool caught_up = 4;
+  // 被谁阻塞（例如上游模块尚未追平）。
+  string blocked_by = 5;
+  // 暂停区间里确认无法补采的周期数。
+  int32 unfillable = 6;
+  string message = 7;
 }
 message HealthLifecycleObject {
   string kind = 1;
@@ -114,22 +142,36 @@ message HealthLifecycleObject {
   string reason = 5;
   // 失败的检查项（名称：原因；处理办法）。
   repeated string failed_checks = 6;
+  // 暂停详情（暂停与恢复追赶阶段）；恢复追赶进度。
+  HealthPause pause = 7;
+  HealthCatchup catchup = 8;
+  // 考虑模块自身状态后的有效阶段。
+  string effective = 9;
 }
 // HealthSystem 是系统状态：健康面（由各模块状态推导）与运行阶段（只由用户命令推进）两个维度。
 message HealthSystem {
   // 健康面：healthy（没有模块未就绪或故障）| attention。
   string health = 1;
-  // 运行阶段：uninitialized | ready | warming | running；全部在跑时是 running。
+  // 运行阶段：uninitialized | ready | warming | running | paused | partially_paused | resuming | resetting；全部在跑时是 running。
   string phase = 2;
-  // 首页圆点的颜色：红（健康面异常）> 橙（降级）> 黄（预热）> 蓝（就绪）> 绿（运行）> 灰。
+  // 首页圆点的颜色：红（健康面异常）> 紫（重置中）> 青（恢复追赶）> 橙（降级或暂停）> 黄（预热）> 蓝（就绪）> 绿（运行）> 灰。
   string color = 3;
-  // 运行中但有部分对象暂停、故障：首页显示「运行中 · 降级」。
+  // 运行中但有部分对象自动暂停、故障：首页显示「运行中 · 降级」；手动、系统暂停不算降级。
   bool degraded = 4;
   // 受影响的模块与原因，形如「因子引擎：crypto/spot_1m 变更日志断档」。
   repeated string issues = 5;
   // 有模块重启后自动回到原阶段。
   bool auto_recovered = 6;
   int32 module_count = 7;
+  // 暂停的模块与对象按类型计数：manual | system | auto。
+  map<string, int32> pause_kinds = 8;
+  // 最早的暂停时间（RFC3339）。
+  string paused_since = 9;
+  // 恢复追赶中的模块数与其中已追平（待放行）的模块数。
+  int32 resuming_modules = 10;
+  int32 caught_up_modules = 11;
+  // 恢复追赶的进度文字，形如「strategy 被 factor-engine 阻塞」「collector 补采 6/10」。
+  repeated string catchup_notes = 12;
 }
 message HealthDataset {
   string producer = 1;
