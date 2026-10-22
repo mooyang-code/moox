@@ -292,6 +292,12 @@ func (e *Engine) readSource(ctx context.Context, task *Task, expected []time.Tim
 			groups[bar.SubjectID] = append(groups[bar.SubjectID], bar)
 		}
 	}
+	if len(groups) == 0 && len(decodeErrs) == 0 && len(keys) > 0 {
+		// 整批一行都没读到：多半是源数据集、频率或序列标签与实际写入的不一致，记下第一把键便于核对。
+		first := keys[0].GetTimeSeries()
+		log.WarnContextf(ctx, "[Collector] resample source read returned no rows task=%s dataset=%s subject=%s freq=%s data_time=%s series_tag=%q keys=%d",
+			task.Spec.TaskID, keys[0].GetDatasetId(), first.GetSubjectId(), first.GetFreq(), first.GetDataTime(), first.GetSeriesTag(), len(keys))
+	}
 	for subject := range groups {
 		sort.Slice(groups[subject], func(i, j int) bool { return groups[subject][i].DataTime.Before(groups[subject][j].DataTime) })
 	}
