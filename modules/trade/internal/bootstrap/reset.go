@@ -97,6 +97,7 @@ func tradeResetSpec(tradeStore *store.Store, dbPath string, syncAccount func(ctx
 		if err != nil {
 			return lifecycle.ResetPlanInfo{}, nil, err
 		}
+		lifecycle.RegisterSQLiteFile(sqlDB, dbPath)
 		actual, err := lifecycle.BusinessTables(ctx, sqlDB)
 		if err != nil {
 			return lifecycle.ResetPlanInfo{}, nil, err
