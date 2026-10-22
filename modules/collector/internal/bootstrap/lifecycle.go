@@ -42,6 +42,8 @@ type collectorControl struct {
 	manager    *marketfetch.PlanManager
 	spaces     []string
 	recovering map[string]bool
+	// timerWait 是重置前等待 SCF 定时器停用的时限（默认 2 分钟，测试可缩短）。
+	timerWait time.Duration
 	// recoveryTo 是本次恢复的追赶目标：进入恢复追赶的时刻，固定不变（见 Backfiller.Catchup）。
 	recoveryTo time.Time
 }
