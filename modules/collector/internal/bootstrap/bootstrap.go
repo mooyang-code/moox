@@ -174,10 +174,11 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	collectorpb.RegisterStreamCollectorService(streamServer, streamService)
 	svc.SetStreamService(streamService)
 	registerCollectorBackground(ctx, s, cfg, dbm, marketFetchMetrics, process)
-	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService); err != nil {
+	control := &collectorControl{}
+	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService, control); err != nil {
 		return nil, err
 	}
-	if err := registerHealth(s, cfg, dbm, dnsSnapshot); err != nil {
+	if err := registerHealth(s, cfg, dbm, process, control, dnsSnapshot); err != nil {
 		return nil, err
 	}
 	registerMetricsReporter(s, realtimeInventory)
@@ -327,7 +328,7 @@ type dnsStatusProvider interface {
 	Status() collectordns.Status
 }
 
-func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, dns ...dnsStatusProvider) error {
+func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Runtime, control *collectorControl, dns ...dnsStatusProvider) error {
 	if cfg == nil {
 		return nil
 	}
@@ -336,7 +337,22 @@ func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, dns ...dnsS
 	if s == nil {
 		return fmt.Errorf("collector health service is unavailable")
 	}
-	if err := health.Register(s.Service("trpc.moox.collector.Health"), state); err != nil {
+	var routes []health.Route
+	if control != nil && process != nil {
+		life, err := newCollectorLifecycle(cfg.Database.Path, control, func() bool { return dbm != nil })
+		if err != nil {
+			return fmt.Errorf("collector lifecycle state failed to open: %w", err)
+		}
+		state.SnapshotFunc = withCollectorLifecycle(state.SnapshotFunc, life)
+		routes = collectorLifecycleRoutes(life)
+		if !process.launch(func() {
+			life.Recover(process.ctx)
+			life.Run(process.ctx, collectorLifecycleRefresh)
+		}) {
+			return fmt.Errorf("collector runtime is closing")
+		}
+	}
+	if err := health.Register(s.Service("trpc.moox.collector.Health"), state, routes...); err != nil {
 		return fmt.Errorf("collector health server failed to start: %w", err)
 	}
 	return nil

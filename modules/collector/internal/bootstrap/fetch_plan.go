@@ -24,7 +24,7 @@ import (
 )
 
 // registerFetchPlanManager 为配置了 SCF 市场地域的空间启动采集计划对账：每个空间一个独立协程。
-func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *marketfetch.Metrics, svc *collectsvc.Service, stream *collectsvc.StreamService) error {
+func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, results *collectorresult.Manager, metrics *marketfetch.Metrics, svc *collectsvc.Service, stream *collectsvc.StreamService, control *collectorControl) error {
 	spaces := cfg.fetchPlanSpaces()
 	stored, err := dbm.FetchPlans().Spaces(process.ctx)
 	if err != nil {
@@ -61,7 +61,8 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		Checker: checker, Store: dbm.Backfill(), Plans: dbm.FetchPlans(), Invoker: invoker, BaseCtx: process.ctx, Refill: true,
 		Paused: func(ctx context.Context, spaceID string) (bool, error) {
 			paused, err := dbm.FetchPlans().PausedSpaces(ctx)
-			return paused[strings.ToLower(spaceID)], err
+			// 恢复模式：暂停开关仍在（实时采集关闭），但补采要运行，补齐暂停区间。
+			return paused[strings.ToLower(spaceID)] && !control.Recovering(spaceID), err
 		},
 		Functions: func(spaceID string) klinecheck.FunctionProvider {
 			if value, ok := reconcilers.Load(spaceID); ok {
@@ -164,6 +165,10 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		},
 	}
 	svc.SetFetchPlanControl(manager)
+	control.bind(dbm.FetchPlans(), backfiller, manager, configured)
+	if !process.launch(func() { control.runRecovery(process.ctx) }) {
+		return fmt.Errorf("collector runtime is closing")
+	}
 	// 心跳中断时在线指标也要变：定时按心跳超时刷新。
 	if !process.launch(func() {
 		ticker := time.NewTicker(30 * time.Second)

@@ -236,6 +236,8 @@ type Hooks struct {
 // Options 是控制器的参数。
 type Options struct {
 	Module string
+	// QuiesceTimeout 是暂停后等待在途操作结束的时限；为 0 时取 30 秒。
+	QuiesceTimeout time.Duration
 	// StateFile 是阶段持久化文件；为空时只在内存里保存。
 	StateFile string
 	Now       func() time.Time
