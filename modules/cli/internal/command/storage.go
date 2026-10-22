@@ -29,6 +29,7 @@ func init() {
 	storageCmd.AddCommand(storageReconcileViewConsumersCmd)
 	storageCmd.AddCommand(storageForceRebuildViewCmd)
 	storageCmd.AddCommand(storageResetViewConsumersCmd)
+	storageCmd.AddCommand(storageResetMetadataCmd)
 }
 
 // storageRepairViewCmd delegates the maintenance implementation to the
@@ -72,6 +73,16 @@ var storageResetViewConsumersCmd = &cobra.Command{
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runStorageMaintenanceBinaryAction(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), "reset-view-consumers", args)
+	},
+}
+
+var storageResetMetadataCmd = &cobra.Command{
+	Use:                "reset-metadata [flags]",
+	Aliases:            []string{"重置元数据"},
+	Short:              "备份后清空全部业务定义并重新导入种子（Storage 必须已停止）",
+	DisableFlagParsing: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runStorageMaintenanceBinaryAction(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), "reset-metadata", args)
 	},
 }
 
