@@ -56,8 +56,7 @@ func TestCatchupSetSyncsThenFollowsTheWatermark(t *testing.T) {
 	require.NoError(t, store.Put(watermark.State{SetID: "fset_a", SpaceID: "crypto", DatasetID: "dataset_a", Freq: "1m", CommittedThrough: since, Target: since}))
 
 	first := r.catchupSet(ctx, "fset_a", since, now)
-	require.False(t, first.CaughtUp)
-	require.Equal(t, "同步本地数据中", first.Message)
+	require.False(t, first.CaughtUp, "第一次评估：本地数据同步刚开始（或刚完成、目标还没建立），不算追平")
 	waitSynced(t, r, "fset_a", since)
 
 	second := r.catchupSet(ctx, "fset_a", since, now)

@@ -43,6 +43,12 @@ var startDeps = map[string][]string{
 // releaseOrder 是放行顺序：上游到下游，Trade 先于策略。
 var releaseOrder = []string{Collector, FactorEngine, Trade, Strategy}
 
+// selfReleasing 报告模块追平后是否自己放行，不等栅栏。采集只拉取和写入行情，没有下单、发目标、发告警这类副作用，
+// 而它的追赶目标是固定的（恢复开始的时刻）：实时采集在放行前保持关闭，如果等所有模块追平再放行，
+// 这段等待期间的行情又成了新缺口，下游的追赶目标会一直被推远。所以采集补齐暂停区间就恢复实时采集，
+// 等待栅栏的是有副作用的模块（因子发布结果、Trade 与策略下单）。
+func selfReleasing(name string) bool { return name == Collector }
+
 // Lifecycle 是一个模块的生命周期接口（*lifecycle.Client 实现）。
 type Lifecycle interface {
 	Status(ctx context.Context) (lifecycle.Snapshot, error)
@@ -246,7 +252,15 @@ func (o *Orchestrator) Resume(ctx context.Context, opts ResumeOptions) (ResumeRe
 			if err != nil {
 				return result, fmt.Errorf("读取 %s 的追赶进度：%w", m.Name, err)
 			}
-			st.caughtUp, st.note = report.CaughtUp && report.Resuming, catchupNote(report)
+			st.caughtUp, st.note = report.CaughtUp && (report.Resuming || selfReleasing(m.Name)), catchupNote(report)
+			if selfReleasing(m.Name) && !report.Resuming && report.CaughtUp {
+				st.skipped = "已放行"
+				if len(result.Released) == 0 || result.Released[len(result.Released)-1] != m.Name {
+					result.Released = append(result.Released, m.Name)
+					o.logf("%s：补齐暂停区间，已自行放行（恢复实时采集）", m.Name)
+				}
+				continue
+			}
 			if !st.caughtUp {
 				allCaught = false
 			}
@@ -328,7 +342,7 @@ func (o *Orchestrator) startResume(ctx context.Context, m Module) (string, error
 	case stage != lifecycle.StagePaused && snap.Self.Hold != lifecycle.HoldSystemPause:
 		return "没有处于暂停", nil
 	}
-	if _, err := m.API.Exec(ctx, lifecycle.CommandRequest{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem, ManualRelease: true, By: o.By}); err != nil {
+	if _, err := m.API.Exec(ctx, lifecycle.CommandRequest{Command: lifecycle.CmdResume, PauseKind: lifecycle.PauseSystem, ManualRelease: !selfReleasing(m.Name), By: o.By}); err != nil {
 		return "", err
 	}
 	return "", nil

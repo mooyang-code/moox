@@ -500,3 +500,35 @@ func TestPauseCallsQuiesceAfterGateCloses(t *testing.T) {
 	require.Equal(t, StagePaused, stageSeen, "调用 Quiesce 时门禁已经关闭")
 	require.True(t, c.Halted(Ref{}))
 }
+
+// 模块恢复追赶时，参与追赶的对象没有自己的暂停时间：钩子拿到的追赶起点取模块的暂停时间。
+func TestModuleCatchupGivesMembersTheModulePausedSince(t *testing.T) {
+	f := newFake()
+	f.refs = []Ref{set1}
+	f.setObject(set1, pass("ok"))
+	var gotSince []time.Time
+	hooks := f.hooks()
+	hooks.Catchup = func(_ context.Context, ref Ref, since time.Time) (Catchup, error) {
+		if ref == set1 {
+			gotSince = append(gotSince, since)
+		}
+		return Catchup{CaughtUp: false}, nil
+	}
+	now := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	c, err := New(Options{Module: "m", Now: func() time.Time { return now }, Hooks: hooks})
+	require.NoError(t, err)
+	ctx := context.Background()
+	c.Refresh(ctx)
+	for _, cmd := range []Command{CmdInit, CmdStart, CmdConfirm} {
+		_, err = c.Command(ctx, cmd, set1)
+		require.NoError(t, err)
+	}
+	_, err = c.Command(ctx, CmdPause, Ref{})
+	require.NoError(t, err)
+	_, err = c.Command(ctx, CmdResume, Ref{})
+	require.NoError(t, err)
+	require.NotEmpty(t, gotSince)
+	for _, since := range gotSince {
+		require.Equal(t, now, since, "对象的追赶起点是模块的暂停时间，不是零值")
+	}
+}

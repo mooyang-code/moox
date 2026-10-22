@@ -64,6 +64,20 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			// 恢复模式：暂停开关仍在（实时采集关闭），但补采要运行，补齐暂停区间。
 			return paused[strings.ToLower(spaceID)] && !control.Recovering(spaceID), err
 		},
+		// 并发上限：SCF 执行端受补采函数的预留并发硬性限制（5）；空间的数据集全部用本地执行端（collector-stream）补采时
+		// 不受这个限制，可以放大，补采（尤其是暂停恢复后补暂停区间）快得多。
+		MaxInFlightFor: func(ctx context.Context, spaceID string) int {
+			modes, err := dbm.IngestModes().List(ctx, spaceID)
+			if err != nil || len(modes) == 0 {
+				return 0
+			}
+			for _, mode := range modes {
+				if mode.Executor != store.ExecutorLocal {
+					return 0
+				}
+			}
+			return klinecheck.LocalMaxInFlight
+		},
 		Functions: func(spaceID string) klinecheck.FunctionProvider {
 			if value, ok := reconcilers.Load(spaceID); ok {
 				return value.(*marketfetch.PlanReconciler)

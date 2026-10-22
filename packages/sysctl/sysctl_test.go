@@ -161,10 +161,11 @@ func TestResumeWaitsForUpstreamAndReleasesBehindABarrier(t *testing.T) {
 	require.Less(t, f.index("trade:resume"), f.index("factor-engine:resume"), "Trade 一开始就追赶")
 	require.Less(t, f.index("collector:resume"), f.index("factor-engine:resume"))
 	require.Less(t, f.index("factor-engine:resume"), f.index("strategy:resume"))
-	// 栅栏：所有 resume 之后才有 release，release 之间按顺序。
-	lastResume := max(f.index("collector:resume"), f.index("factor-engine:resume"), f.index("strategy:resume"), f.index("trade:resume"))
-	require.Greater(t, f.index("collector:release"), lastResume)
-	require.Less(t, f.index("collector:release"), f.index("factor-engine:release"))
+	// 采集没有副作用，补齐暂停区间就自己放行（恢复实时采集），不发 release，也不等栅栏。
+	require.Equal(t, -1, f.index("collector:release"), "采集自行放行")
+	// 栅栏：所有有副作用的模块都 resume 并追平之后才有 release，release 之间按顺序。
+	lastResume := max(f.index("factor-engine:resume"), f.index("strategy:resume"), f.index("trade:resume"))
+	require.Greater(t, f.index("factor-engine:release"), lastResume)
 	require.Less(t, f.index("factor-engine:release"), f.index("trade:release"))
 	require.Less(t, f.index("trade:release"), f.index("strategy:release"))
 	for _, name := range all {
@@ -173,20 +174,41 @@ func TestResumeWaitsForUpstreamAndReleasesBehindABarrier(t *testing.T) {
 	}
 }
 
-// 有模块一直追不平：超时后不放行任何模块，报告原因。
+// 有模块一直追不平：超时后不放行任何有副作用的模块，报告原因。
 func TestResumeTimeoutReleasesNothingByDefault(t *testing.T) {
-	f := newFixture(t, Collector, Strategy)
+	f := newFixture(t, Trade, Strategy)
 	ctx := context.Background()
 	_, err := f.o.Pause(ctx, "")
 	require.NoError(t, err)
-	*f.caught[Collector] = true // 策略永远追不平（它依赖因子，这里没有因子模块：直接按自己的进度）
+	*f.caught[Trade] = true // 策略永远追不平
 	result, err := f.o.Resume(ctx, ResumeOptions{Timeout: time.Nanosecond})
 	require.NoError(t, err)
 	require.True(t, result.TimedOut)
 	require.Empty(t, result.Released, "超时不自动放行")
 	require.Contains(t, result.Pending, Strategy)
-	require.Contains(t, result.Pending, Collector)
-	require.Zero(t, f.index("collector:release")+1)
+	require.Contains(t, result.Pending, Trade)
+	require.Equal(t, -1, f.index("trade:release"))
+}
+
+// 采集只拉取行情、没有副作用：补齐暂停区间就自己放行，不等其他模块；即使其他模块一直追不平，
+// 采集也已经恢复实时采集（否则等待期间的行情又成了新缺口，下游的追赶目标会一直被推远）。
+func TestCollectorReleasesItselfWithoutWaitingForTheBarrier(t *testing.T) {
+	f := newFixture(t, Collector, Trade)
+	ctx := context.Background()
+	_, err := f.o.Pause(ctx, "")
+	require.NoError(t, err)
+	*f.caught[Collector] = true // Trade 一直没追平
+	result, err := f.o.Resume(ctx, ResumeOptions{Timeout: time.Nanosecond})
+	require.NoError(t, err)
+	require.True(t, result.TimedOut)
+	require.Equal(t, []string{Collector}, result.Released, "采集已自行放行")
+	require.NotContains(t, result.Pending, Collector)
+	require.Contains(t, result.Pending, Trade)
+	snap, _ := f.apis[Collector].Status(ctx)
+	require.Equal(t, lifecycle.StageReady, snap.Self.Stage)
+	require.Equal(t, -1, f.index("collector:release"), "不是栅栏放行的")
+	trade, _ := f.apis[Trade].Status(ctx)
+	require.Equal(t, lifecycle.StageResuming, trade.Self.Stage)
 }
 
 // --release-partial：超时后只放行已追平的模块，未追平的继续追赶。

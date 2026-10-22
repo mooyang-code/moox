@@ -75,6 +75,10 @@ type Request struct {
 	Deep      bool
 	// AssumeMissing 不读取行，把范围内全部应有的 K 线都当作缺失（强制重拉）。
 	AssumeMissing bool
+	// IncludeOpenBar 让 From 落在某根 K 线中间时，把这根（开始时间早于 From、收盘晚于 From）也算进应有的 K 线。
+	// 恢复追赶用它：暂停那一刻正在走的那根 K 线（例如 07:06:45 暂停时的 07:06 那根 1m、07:00 那根 1h）是在暂停期间收盘的，
+	// 暂停期间没有采到，但它的开始时间早于暂停时间，按默认的「向上对齐」会被漏掉。
+	IncludeOpenBar bool
 	// BeforeFirstPlan 让范围可以早于每个数据集最早的采集计划生效点（见 extendEarliestSegments）；默认只检查计划覆盖的时间。
 	BeforeFirstPlan bool
 }
@@ -170,6 +174,9 @@ func (c *Checker) Check(ctx context.Context, request Request) (*Result, error) {
 			continue
 		}
 		from, to := request.From.UTC(), request.To.UTC()
+		if request.IncludeOpenBar {
+			from = alignDown(frequency, from)
+		}
 		if from.Unix() < item.segment.From {
 			from = time.Unix(item.segment.From, 0).UTC()
 		}
@@ -278,6 +285,9 @@ func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID,
 		return nil, 0, 0, err
 	}
 	from, to := request.From.UTC(), request.To.UTC()
+	if request.IncludeOpenBar {
+		from = alignDown(frequency, from)
+	}
 	if from.Unix() < segment.From {
 		from = time.Unix(segment.From, 0).UTC()
 	}

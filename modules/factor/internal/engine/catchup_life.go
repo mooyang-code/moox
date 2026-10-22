@@ -63,6 +63,13 @@ func (t *catchupTracker) update(setID string, since time.Time, mutate func(*catc
 	}
 }
 
+// snapshot 读取 job 当前的同步状态（后台同步协程会并发修改它，必须在锁内读）。
+func (t *catchupTracker) snapshot(job *catchupJob) (state, errText string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return job.state, job.err
+}
+
 func (t *catchupTracker) drop(setID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -113,12 +120,13 @@ func (r *Runtime) catchupSet(ctx context.Context, setID string, since, now time.
 		r.catchups.put(setID, job)
 		go r.syncForCatchup(setID, since)
 	}
+	state, errText := r.catchups.snapshot(job)
 	switch {
-	case job.err != "":
-		out.Message = "同步本地数据失败：" + job.err
+	case errText != "":
+		out.Message = "同步本地数据失败：" + errText
 		r.catchups.drop(setID) // 下一次评估重试
 		return out
-	case job.state != "synced":
+	case state != "synced":
 		out.Message = "同步本地数据中"
 		return out
 	}

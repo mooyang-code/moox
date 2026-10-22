@@ -42,6 +42,8 @@ type collectorControl struct {
 	manager    *marketfetch.PlanManager
 	spaces     []string
 	recovering map[string]bool
+	// recoveryTo 是本次恢复的追赶目标：进入恢复追赶的时刻，固定不变（见 Backfiller.Catchup）。
+	recoveryTo time.Time
 }
 
 func (c *collectorControl) bind(plans *store.FetchPlanRepository, backfiller *klinecheck.Backfiller, manager *marketfetch.PlanManager, spaces []string) {
@@ -61,13 +63,14 @@ func (c *collectorControl) setRecovering(on bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if on {
+		c.recoveryTo = time.Now().UTC()
 		c.recovering = map[string]bool{}
 		for _, space := range c.spaces {
 			c.recovering[strings.ToLower(space)] = true
 		}
 		return
 	}
-	c.recovering = nil
+	c.recovering, c.recoveryTo = nil, time.Time{}
 }
 
 func (c *collectorControl) snapshot() (*store.FetchPlanRepository, []string) {
@@ -147,15 +150,15 @@ func (c *collectorControl) quiesce(ctx context.Context) error {
 // catchup 汇总各空间暂停区间的补采进度。
 func (c *collectorControl) catchup(ctx context.Context, since time.Time) (lifecycle.Catchup, error) {
 	c.mu.Lock()
-	backfiller, spaces := c.backfiller, append([]string(nil), c.spaces...)
+	backfiller, spaces, to := c.backfiller, append([]string(nil), c.spaces...), c.recoveryTo
 	c.mu.Unlock()
-	out := lifecycle.Catchup{CaughtUp: true}
+	out := lifecycle.Catchup{CaughtUp: true, Target: to}
 	if backfiller == nil {
 		return out, nil
 	}
 	var expected, missing int64
 	for _, space := range spaces {
-		state, err := backfiller.Catchup(ctx, space, since)
+		state, err := backfiller.Catchup(ctx, space, since, to)
 		if err != nil {
 			return lifecycle.Catchup{Message: fmt.Sprintf("空间 %s：%v", space, err)}, err
 		}
