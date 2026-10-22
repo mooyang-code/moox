@@ -28,6 +28,7 @@ func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
 			CheckObject: r.checkSet,
 			Objects:     r.lifecycleObjects,
 			Init:        r.initSet,
+			Catchup:     r.catchupHook,
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
 				log.Infof("factor_lifecycle_changed kind=%s id=%s from=%s to=%s reason=%s", ref.Kind, ref.ID, from, to, reason)
 			},

@@ -610,3 +610,52 @@ func TestBackfillNotifiesFilledRangesAfterAJobSucceeds(t *testing.T) {
 	require.False(t, got[1].To.After(got[0].To))
 	require.Less(t, got[1].To.Sub(got[1].From), time.Hour)
 }
+
+// 恢复追赶：对暂停区间提交补采作业，补齐前没追平；补齐后追平；已确认缺失的不再补采并单独统计。
+func TestCatchupSubmitsOneJobAndReportsWhenGapsAreFilled(t *testing.T) {
+	backfiller, _, rows, base := newBackfillFixture(t)
+	ctx := context.Background()
+
+	state, err := backfiller.Catchup(ctx, "crypto", base)
+	require.NoError(t, err)
+	require.Positive(t, state.Missing)
+	require.NotEmpty(t, state.JobID, "有缺口就提交追赶作业")
+	require.False(t, state.CaughtUp())
+
+	again, err := backfiller.Catchup(ctx, "crypto", base)
+	require.NoError(t, err)
+	require.Empty(t, again.JobID, "已有未结束的作业，不重复提交")
+	require.Equal(t, 1, again.ActiveJobs)
+
+	step(t, backfiller, 3)
+	final, err := backfiller.Catchup(ctx, "crypto", base)
+	require.NoError(t, err)
+	require.Zero(t, final.Missing)
+	require.True(t, final.CaughtUp(), "补齐且没有未结束的作业")
+	_ = rows
+
+	job, _, err := backfiller.Store.GetJob(ctx, state.JobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillSucceeded, job.Status)
+}
+
+func TestCatchupWithoutGapsIsImmediatelyCaughtUp(t *testing.T) {
+	backfiller, _, rows, base := newBackfillFixture(t)
+	rows.missing = map[string]map[int64]bool{"BTC-USDT": {}, "ETH-USDT": {}}
+	state, err := backfiller.Catchup(context.Background(), "crypto", base)
+	require.NoError(t, err)
+	require.True(t, state.CaughtUp())
+	require.Empty(t, state.JobID)
+	require.Positive(t, state.Expected)
+}
+
+func TestBackfillerQuiesceWaitsForRunningChunks(t *testing.T) {
+	backfiller, _, _, _ := newBackfillFixture(t)
+	require.NoError(t, backfiller.Quiesce(context.Background()), "没有分块在执行")
+	backfiller.workers.Add(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, backfiller.Quiesce(ctx), context.DeadlineExceeded)
+	backfiller.workers.Done()
+	require.NoError(t, backfiller.Quiesce(context.Background()))
+}

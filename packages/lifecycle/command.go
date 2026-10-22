@@ -47,7 +47,11 @@ func (c *Controller) Execute(ctx context.Context, req Request) (Object, error) {
 			c.mu.Unlock()
 		case err == nil && req.Command == CmdPause && obj.Stage == StagePaused && c.opts.Hooks.Quiesce != nil:
 			// 门禁已经关闭；等在途操作结束才算真正停下。
-			qctx, cancel := context.WithTimeout(ctx, quiesceTimeout)
+			timeout := c.opts.QuiesceTimeout
+			if timeout <= 0 {
+				timeout = quiesceTimeout
+			}
+			qctx, cancel := context.WithTimeout(ctx, timeout)
 			qerr := c.opts.Hooks.Quiesce(qctx, req.Ref)
 			cancel()
 			if qerr != nil {
@@ -333,6 +337,7 @@ func (c *Controller) finishResume(r *record, changes *[]change) {
 	}
 	c.endCatchup(r)
 	r.Pause, r.PausedSince, r.Resume = nil, time.Time{}, ""
+	r.ReleasedAt = c.opts.Now().UTC()
 	if r.Ref == (Ref{}) {
 		r.Hold = HoldNone
 	}

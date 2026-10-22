@@ -195,6 +195,8 @@ type Object struct {
 	Catchup *Catchup `json:"catchup,omitempty"`
 	// Hold 只在模块自身记录里有意义。
 	Hold Hold `json:"hold,omitempty"`
+	// ReleasedAt 是最近一次放行的时间：下单类模块据此只对放行之后收盘的周期出目标，放行之前的周期只记录、不求值。
+	ReleasedAt time.Time `json:"released_at,omitempty"`
 	// Recovered 为真表示这次是重启后自动回到原阶段（首页提示「已自动恢复」）。
 	Recovered bool    `json:"recovered,omitempty"`
 	Checks    []Check `json:"checks,omitempty"`
@@ -236,6 +238,8 @@ type Hooks struct {
 // Options 是控制器的参数。
 type Options struct {
 	Module string
+	// QuiesceTimeout 是暂停后等待在途操作结束的时限；为 0 时取 30 秒。
+	QuiesceTimeout time.Duration
 	// StateFile 是阶段持久化文件；为空时只在内存里保存。
 	StateFile string
 	Now       func() time.Time
@@ -262,6 +266,7 @@ type record struct {
 	Resume      Stage      `json:"resume,omitempty"`
 	Recovered   bool       `json:"recovered,omitempty"`
 	Hold        Hold       `json:"hold,omitempty"`
+	ReleasedAt  time.Time  `json:"released_at,omitempty"`
 	// 以下是进程内的恢复追赶状态，重启后清零（重启时恢复追赶回到暂停，要重新 resume）。
 	catchup       *Catchup
 	catchupMember bool // 模块恢复追赶时，参与本次恢复的原活动对象

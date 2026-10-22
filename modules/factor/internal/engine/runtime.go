@@ -54,16 +54,19 @@ type Runtime struct {
 	// continuity 维护各集合的连续水位；advanceKick 唤醒追赶循环（补齐通知）。
 	continuity  *eventconsumer.Continuity
 	advanceKick chan string
-	filled      *filledPeriods
-	lease       *leaseState
-	syncer      *catalogSyncer
-	preload     *preloader
-	series      *seriesstore.Store
-	data        *localdata.Data
-	admit       *memadmit.Admitter
-	health      *factorhealth.State
-	life        *lifecycle.Controller
-	replays     *replayManager
+	// appCtx 是引擎运行期的上下文；catchups 记录恢复追赶中各集合的本地数据同步进展。
+	appCtx   context.Context
+	catchups catchupTracker
+	filled   *filledPeriods
+	lease    *leaseState
+	syncer   *catalogSyncer
+	preload  *preloader
+	series   *seriesstore.Store
+	data     *localdata.Data
+	admit    *memadmit.Admitter
+	health   *factorhealth.State
+	life     *lifecycle.Controller
+	replays  *replayManager
 
 	// reconcileMu serializes consumer start/stop; consumerMu only guards the
 	// pointer so status and health reads never wait on EventBus I/O.
@@ -97,6 +100,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		lease: &leaseState{}, health: factorhealth.New("factor-engine", cfg.Engine.ID, version, ""),
 	}
 	appCtx, cancel := context.WithCancel(ctx)
+	r.appCtx = appCtx
 	r.cancel = cancel
 	defer func() {
 		if err != nil {

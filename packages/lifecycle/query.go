@@ -104,6 +104,19 @@ func (c *Controller) Halted(ref Ref) bool {
 	return o != nil && (o.Stage == StagePaused || o.Stage == StageResuming || o.Stage == StageFault)
 }
 
+// ReleasedAt 返回对象最近一次放行的时间（没有放行过为零）。
+func (c *Controller) ReleasedAt(ref Ref) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ref == (Ref{}) {
+		return c.self.ReleasedAt
+	}
+	if r := c.objects[ref.key()]; r != nil {
+		return r.ReleasedAt
+	}
+	return time.Time{}
+}
+
 // Warming 报告对象是否处于预热（预热期间不真实下单）。
 func (c *Controller) Warming(ref Ref) bool { return c.Stage(ref) == StageWarming }
 
@@ -128,7 +141,7 @@ func (c *Controller) effective(r *record) Stage {
 func (c *Controller) object(r *record) Object {
 	obj := Object{
 		Ref: r.Ref, Stage: r.Stage, Effective: c.effective(r), Color: c.effective(r).Color(), Reason: r.Reason, Since: r.Since,
-		Pause: r.Pause, PausedSince: r.PausedSince, Resume: r.Resume, Recovered: r.Recovered, Hold: r.Hold,
+		Pause: r.Pause, PausedSince: r.PausedSince, Resume: r.Resume, Recovered: r.Recovered, Hold: r.Hold, ReleasedAt: r.ReleasedAt,
 		Checks: append([]Check(nil), c.checks[r.key()]...),
 	}
 	if r.catchup != nil {
