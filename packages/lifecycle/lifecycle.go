@@ -4,9 +4,11 @@
 //
 //	未初始化 → 未就绪 / 就绪 → 预热 → 运行；运行中可以暂停、自动暂停、故障。
 //
-// 阶段只由两类事件推进：用户命令（init、start、confirm、pause、resume）和启动前检查的结果。
+// 阶段只由两类事件推进：用户命令（init、start、confirm、pause、resume、release）和启动前检查的结果。
 // 就绪是检查通过，不会自动进入预热；预热要用户 start，进入运行要用户 confirm。
 // 运行中检查失败的对象只暂停它自己（自动暂停），检查重新通过后自动回到暂停前的阶段。
+// 恢复是两段式：resume 先进入恢复追赶（补齐暂停期间缺失的数据，不计算、不下单），追平后 release 放行才回到暂停前的阶段；
+// 单个模块的恢复在追平后自动放行，系统级恢复由编排器等所有模块追平后统一放行。
 // 阶段持久化在模块自己的状态文件里，重启后跑检查，通过就回到重启前的阶段。
 package lifecycle
 
@@ -32,6 +34,9 @@ const (
 	StageWarming       Stage = "warming"       // 黄：预热，用真实数据跑完整链路，不真实下单
 	StageRunning       Stage = "running"       // 绿：用户确认后运行
 	StagePaused        Stage = "paused"        // 橙：手动暂停，或受上游故障影响自动暂停
+	StageResuming      Stage = "resuming"      // 青：恢复追赶，补齐暂停期间缺失的数据；不计算、不下单
+	StageResetting     Stage = "resetting"     // 紫：重置进行中
+	StageResetFailed   Stage = "reset_failed"  // 红：重置某一步失败，模块保持停用
 	StageFault         Stage = "fault"         // 红：运行中出现自身无法恢复的错误
 )
 
@@ -40,7 +45,7 @@ func (s Stage) Color() string {
 	switch s {
 	case StageUninitialized:
 		return "gray"
-	case StageNotReady, StageFault:
+	case StageNotReady, StageFault, StageResetFailed:
 		return "red"
 	case StageReady:
 		return "blue"
@@ -50,6 +55,10 @@ func (s Stage) Color() string {
 		return "green"
 	case StagePaused:
 		return "orange"
+	case StageResuming:
+		return "cyan"
+	case StageResetting:
+		return "purple"
 	}
 	return "gray"
 }
@@ -95,7 +104,69 @@ const (
 	CmdConfirm Command = "confirm"
 	CmdPause   Command = "pause"
 	CmdResume  Command = "resume"
+	// CmdRelease 放行：恢复追赶已追平的对象回到暂停前的阶段。
+	CmdRelease Command = "release"
 )
+
+// PauseKind 是暂停的类型。手动暂停只有用户 resume 才会恢复；自动暂停是检查失败触发的，检查通过后自动恢复；
+// 系统暂停是系统级暂停动作带下来的，系统恢复只恢复这一类，不动用户先前单独手动暂停的对象。
+type PauseKind string
+
+const (
+	PauseManual PauseKind = "manual"
+	PauseAuto   PauseKind = "auto"
+	PauseSystem PauseKind = "system"
+)
+
+// rank 是暂停类型的优先级：已有高优先级的暂停时，低优先级的暂停不覆盖它。
+func (k PauseKind) rank() int {
+	switch k {
+	case PauseManual:
+		return 3
+	case PauseSystem:
+		return 2
+	case PauseAuto:
+		return 1
+	}
+	return 0
+}
+
+// PauseInfo 是暂停详情：类型、原因、操作者与开始时间。
+type PauseInfo struct {
+	Kind   PauseKind `json:"kind"`
+	Reason string    `json:"reason,omitempty"`
+	// By 是操作者（Admin 用户、cli:主机、monitor:auto……）。
+	By    string    `json:"by,omitempty"`
+	Since time.Time `json:"since"`
+}
+
+// Hold 是持久化在模块自身记录里的控制意图，不依赖阶段推导：系统暂停时即使模块自身检查失败（未就绪）也必须能建立门禁，
+// 重置完成后必须等用户 init，Refresh 不得自动初始化模块自身。
+type Hold string
+
+const (
+	HoldNone        Hold = ""
+	HoldSystemPause Hold = "system_pause"
+	HoldPostReset   Hold = "post_reset"
+)
+
+// Catchup 是恢复追赶的进度，由模块的 Catchup 钩子报告。
+type Catchup struct {
+	// Since 是暂停起点（最早的那次暂停），追赶从这里开始核对。
+	Since time.Time `json:"since"`
+	// Target 是追赶目标（最新已完成周期）；追赶期间会前移，追平指在放行那一刻无缺口。
+	Target time.Time `json:"target,omitempty"`
+	Done   int64     `json:"done,omitempty"`
+	Total  int64     `json:"total,omitempty"`
+	// CaughtUp 为真表示本对象已追平。
+	CaughtUp bool `json:"caught_up"`
+	// BlockedBy 是被阻塞的原因（例如上游模块尚未追平）。
+	BlockedBy string `json:"blocked_by,omitempty"`
+	// Unfillable 是暂停区间里确认无法补采的周期数（源头确实没有）。
+	Unfillable int `json:"unfillable,omitempty"`
+	// Message 是人读的进度说明。
+	Message string `json:"message,omitempty"`
+}
 
 // Ref 指向一个对象；Kind 为空表示模块自身。
 type Ref struct {
@@ -108,14 +179,22 @@ func (r Ref) key() string { return r.Kind + "/" + r.ID }
 // Object 是一个对象（或模块自身）的当前状态。
 type Object struct {
 	Ref
-	Stage  Stage  `json:"stage"`
-	Color  string `json:"color"`
-	Reason string `json:"reason,omitempty"`
+	Stage Stage `json:"stage"`
+	// Effective 是考虑模块自身状态后的有效阶段：模块暂停、恢复追赶、重置时，处于计算中的对象实际都不在计算。
+	Effective Stage  `json:"effective"`
+	Color     string `json:"color"`
+	Reason    string `json:"reason,omitempty"`
 	// Since 是进入当前阶段的时间。
 	Since time.Time `json:"since"`
-	// AutoPaused 为真表示暂停是检查失败触发的，检查通过后自动恢复；Resume 是暂停前的阶段。
-	AutoPaused bool  `json:"auto_paused,omitempty"`
-	Resume     Stage `json:"resume,omitempty"`
+	// Pause 是暂停详情（暂停与恢复追赶阶段存在）；PausedSince 是最早一次暂停的时间，恢复追赶据此核对缺失区间。
+	Pause       *PauseInfo `json:"pause,omitempty"`
+	PausedSince time.Time  `json:"paused_since,omitempty"`
+	// Resume 是暂停前的阶段（放行后回到它）。
+	Resume Stage `json:"resume,omitempty"`
+	// Catchup 是恢复追赶的进度（恢复追赶阶段，或模块恢复追赶中参与追赶的对象）。
+	Catchup *Catchup `json:"catchup,omitempty"`
+	// Hold 只在模块自身记录里有意义。
+	Hold Hold `json:"hold,omitempty"`
 	// Recovered 为真表示这次是重启后自动回到原阶段（首页提示「已自动恢复」）。
 	Recovered bool    `json:"recovered,omitempty"`
 	Checks    []Check `json:"checks,omitempty"`
@@ -144,6 +223,9 @@ type Hooks struct {
 	Objects func() []Ref
 	// Init 执行初始化动作（可为 nil）；ref 为空表示模块自身。
 	Init func(ctx context.Context, ref Ref) error
+	// Catchup 报告一个对象（ref 为空是模块自身）的恢复追赶进度；since 是最早一次暂停的时间。
+	// 为 nil 表示没有数据需要追赶，恢复后立即视为追平。钩子应只写历史数据，不下单、不发目标。
+	Catchup func(ctx context.Context, ref Ref, since time.Time) (Catchup, error)
 	// OnChange 在阶段变化后调用（日志、指标），可为 nil；在持有控制器锁时不会被调用。
 	OnChange func(ref Ref, from, to Stage, reason string)
 }
@@ -169,12 +251,18 @@ type Controller struct {
 
 type record struct {
 	Ref
-	Stage      Stage     `json:"stage"`
-	Reason     string    `json:"reason,omitempty"`
-	Since      time.Time `json:"since"`
-	AutoPaused bool      `json:"auto_paused,omitempty"`
-	Resume     Stage     `json:"resume,omitempty"`
-	Recovered  bool      `json:"recovered,omitempty"`
+	Stage       Stage      `json:"stage"`
+	Reason      string     `json:"reason,omitempty"`
+	Since       time.Time  `json:"since"`
+	Pause       *PauseInfo `json:"pause,omitempty"`
+	PausedSince time.Time  `json:"paused_since,omitempty"`
+	Resume      Stage      `json:"resume,omitempty"`
+	Recovered   bool       `json:"recovered,omitempty"`
+	Hold        Hold       `json:"hold,omitempty"`
+	// 以下是进程内的恢复追赶状态，重启后清零（重启时恢复追赶回到暂停，要重新 resume）。
+	catchup       *Catchup
+	catchupMember bool // 模块恢复追赶时，参与本次恢复的原活动对象
+	autoRelease   bool // 追平后自动放行（单模块恢复）；系统级恢复为 false，等编排器统一 release
 	// Persisted 记录这个对象重启前所处的阶段（等待启动后检查）。
 	Pending Stage `json:"pending,omitempty"`
 }
@@ -224,14 +312,21 @@ func New(opts Options) (*Controller, error) {
 	}
 	restore := func(r record) *record {
 		out := r
-		if r.Stage.Active() || r.Stage == StagePaused {
+		switch {
+		case r.Stage.Active() || r.Stage == StagePaused:
 			// 重启后先未就绪，跑完检查再回到原阶段。
 			out.Pending = r.Stage
-			if r.Stage == StagePaused {
-				out.Pending = r.Stage
-			}
 			out.Stage = StageNotReady
 			out.Reason = "重启后等待启动前检查"
+		case r.Stage == StageResuming:
+			// 恢复追赶是进程内的任务，不跨重启续做：回到暂停，暂停起点不变，重启后再 resume。
+			out.Pending = StagePaused
+			out.Stage = StageNotReady
+			out.Reason = "重启后等待启动前检查"
+		case r.Stage == StageResetting:
+			// 重置进行中进程退出：停在重置失败，等 reset 续做。
+			out.Stage = StageResetFailed
+			out.Reason = "重置被重启中断"
 		}
 		return &out
 	}
@@ -347,7 +442,7 @@ func (c *Controller) runChecks(ctx context.Context, ref Ref) []Check {
 func (c *Controller) Refresh(ctx context.Context) {
 	// 模块自身是基础设施，第一次检查时自动初始化；需要用户 init 的是它管理的对象。
 	c.mu.Lock()
-	selfUninit := c.self.Stage == StageUninitialized
+	selfUninit := c.self.Stage == StageUninitialized && c.self.Hold != HoldPostReset
 	c.mu.Unlock()
 	if selfUninit {
 		_, _ = c.initCmd(ctx, Ref{})
@@ -381,6 +476,7 @@ func (c *Controller) Refresh(ctx context.Context) {
 	_ = c.save()
 	c.mu.Unlock()
 	c.notify(changes)
+	c.settle(ctx)
 }
 
 // apply 按检查结果推进一个记录的阶段；调用方持有锁。
@@ -409,17 +505,22 @@ func (c *Controller) apply(r *record, checks []Check, changes *[]change) {
 	case StageWarming, StageRunning:
 		if !passed {
 			// 只暂停受影响的对象，记下暂停前的阶段。
-			r.Resume, r.AutoPaused = r.Stage, true
+			r.Resume = r.Stage
+			r.Pause = &PauseInfo{Kind: PauseAuto, Reason: failure, By: "lifecycle:auto", Since: c.opts.Now().UTC()}
+			c.markPausedSince(r)
 			c.set(r, StagePaused, failure, changes)
 		}
 	case StagePaused:
-		if r.AutoPaused && passed {
-			back := r.Resume
-			r.AutoPaused, r.Resume = false, ""
-			c.set(r, back, "检查恢复，自动回到暂停前的阶段", changes)
-		} else if r.AutoPaused {
+		if r.Pause != nil && r.Pause.Kind == PauseAuto && passed {
+			// 检查恢复：走同一条恢复路径（追赶 → 放行），没有缺口时追赶瞬间完成。
+			c.beginResume(r, true, changes)
+			r.Reason = "检查恢复，自动回到暂停前的阶段"
+		} else if r.Pause != nil && r.Pause.Kind == PauseAuto {
 			r.Reason = failure
+			r.Pause.Reason = failure
 		}
+	case StageResuming, StageResetting, StageResetFailed:
+		// 恢复追赶由 settle 推进；重置由重置流程推进。
 	case StageFault:
 		// 故障要用户 resume（检查通过后）才恢复。
 	}
@@ -435,286 +536,4 @@ func firstFailure(checks []Check) string {
 		}
 	}
 	return ""
-}
-
-// ---------------------------------------------------------------- 命令
-
-// Command 执行一个用户命令并返回对象的新状态。ref 为空表示模块自身。
-func (c *Controller) Command(ctx context.Context, cmd Command, ref Ref) (Object, error) {
-	switch cmd {
-	case CmdInit:
-		return c.initCmd(ctx, ref)
-	case CmdCheck:
-		return c.checkCmd(ctx, ref)
-	case CmdStart, CmdConfirm, CmdPause, CmdResume:
-		return c.transition(ctx, cmd, ref)
-	}
-	return Object{}, fmt.Errorf("未知命令 %q", cmd)
-}
-
-func (c *Controller) initCmd(ctx context.Context, ref Ref) (Object, error) {
-	if c.opts.Hooks.Init != nil {
-		if err := c.opts.Hooks.Init(ctx, ref); err != nil {
-			return Object{}, fmt.Errorf("初始化失败：%w", err)
-		}
-	}
-	checks := c.runChecks(ctx, ref)
-	c.mu.Lock()
-	var changes []change
-	r := c.recordFor(ref)
-	c.checks[ref.key()] = checks
-	if r.Stage == StageUninitialized || r.Stage == StageNotReady || r.Stage == StageReady {
-		if Passed(checks) {
-			c.set(r, StageReady, "", &changes)
-		} else {
-			c.set(r, StageNotReady, firstFailure(checks), &changes)
-		}
-	}
-	_ = c.save()
-	obj := c.object(r)
-	c.mu.Unlock()
-	c.notify(changes)
-	return obj, nil
-}
-
-func (c *Controller) checkCmd(ctx context.Context, ref Ref) (Object, error) {
-	checks := c.runChecks(ctx, ref)
-	c.mu.Lock()
-	var changes []change
-	r := c.recordFor(ref)
-	c.checks[ref.key()] = checks
-	c.apply(r, checks, &changes)
-	_ = c.save()
-	obj := c.object(r)
-	c.mu.Unlock()
-	c.notify(changes)
-	return obj, nil
-}
-
-func (c *Controller) transition(ctx context.Context, cmd Command, ref Ref) (Object, error) {
-	checks := c.runChecks(ctx, ref)
-	c.mu.Lock()
-	var changes []change
-	r := c.recordFor(ref)
-	c.checks[ref.key()] = checks
-	deny := func(why string) (Object, error) {
-		obj := c.object(r)
-		c.mu.Unlock()
-		return obj, &ErrNotAllowed{Ref: ref, Command: cmd, Stage: r.Stage, Why: why}
-	}
-	switch cmd {
-	case CmdStart:
-		if r.Stage != StageReady {
-			return deny("只有就绪的对象才能启动；先 init 并让检查通过")
-		}
-		if !Passed(checks) {
-			return deny("检查有失败项：" + firstFailure(checks))
-		}
-		c.set(r, StageWarming, "", &changes)
-	case CmdConfirm:
-		if r.Stage != StageWarming {
-			return deny("只有预热中的对象才能确认进入运行")
-		}
-		if !Passed(checks) {
-			return deny("检查有失败项：" + firstFailure(checks))
-		}
-		c.set(r, StageRunning, "", &changes)
-	case CmdPause:
-		if !r.Stage.Active() {
-			return deny("只有预热或运行中的对象才能暂停")
-		}
-		r.Resume, r.AutoPaused = r.Stage, false
-		c.set(r, StagePaused, "手动暂停", &changes)
-	case CmdResume:
-		switch {
-		case r.Stage == StagePaused || r.Stage == StageFault:
-		default:
-			return deny("只有暂停或故障的对象才能恢复")
-		}
-		if !Passed(checks) {
-			return deny("检查有失败项：" + firstFailure(checks))
-		}
-		back := r.Resume
-		if back == "" {
-			back = StageReady
-		}
-		r.AutoPaused, r.Resume = false, ""
-		c.set(r, back, "手动恢复", &changes)
-	}
-	_ = c.save()
-	obj := c.object(r)
-	c.mu.Unlock()
-	c.notify(changes)
-	return obj, nil
-}
-
-// Fault 报告对象运行中出现自身无法恢复的错误：进入故障，要用户 resume。
-func (c *Controller) Fault(ref Ref, err error) {
-	c.mu.Lock()
-	r := c.recordFor(ref)
-	var changes []change
-	if r.Stage.Active() {
-		r.Resume = r.Stage
-	}
-	c.set(r, StageFault, err.Error(), &changes)
-	_ = c.save()
-	c.mu.Unlock()
-	c.notify(changes)
-}
-
-// ---------------------------------------------------------------- 查询
-
-// Stage 返回对象的当前阶段（不存在时为未初始化）。
-func (c *Controller) Stage(ref Ref) Stage {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if ref == (Ref{}) {
-		return c.self.Stage
-	}
-	if r := c.objects[ref.key()]; r != nil {
-		return r.Stage
-	}
-	return StageUninitialized
-}
-
-// Allowed 报告对象是否在计算（预热或运行）：处理周期事件前用它做门禁。
-// 模块自身暂停或故障时（模块级 pause，或自身检查失败后自动暂停）整个模块都不计算，不管对象各自处于什么阶段。
-func (c *Controller) Allowed(ref Ref) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.self.Stage == StagePaused || c.self.Stage == StageFault {
-		return false
-	}
-	if r := c.objects[ref.key()]; r != nil {
-		return r.Stage.Active()
-	}
-	return false
-}
-
-// Warming 报告对象是否处于预热（预热期间不真实下单）。
-func (c *Controller) Warming(ref Ref) bool { return c.Stage(ref) == StageWarming }
-
-func (c *Controller) object(r *record) Object {
-	return Object{
-		Ref: r.Ref, Stage: r.Stage, Color: r.Stage.Color(), Reason: r.Reason, Since: r.Since,
-		AutoPaused: r.AutoPaused, Resume: r.Resume, Recovered: r.Recovered, Checks: append([]Check(nil), c.checks[r.key()]...),
-	}
-}
-
-// Snapshot 返回模块的状态快照。
-func (c *Controller) Snapshot() Snapshot {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	snap := Snapshot{Module: c.opts.Module, Self: c.object(c.self), UpdatedAt: c.opts.Now().UTC()}
-	keys := make([]string, 0, len(c.objects))
-	for k := range c.objects {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		snap.Objects = append(snap.Objects, c.object(c.objects[k]))
-	}
-	snap.Stage, snap.Reason, snap.Degraded = c.summarize(snap)
-	snap.Color = snap.Stage.Color()
-	return snap
-}
-
-// summarize 推导汇总阶段：模块自身没有通过检查就是未就绪 / 未初始化；有对象时，
-// 故障 > 未就绪 > 暂停 > 预热 > 运行 > 就绪 > 未初始化；只要有对象没在预期阶段（暂停、故障、未就绪）就标记降级。
-func (c *Controller) summarize(s Snapshot) (Stage, string, bool) {
-	if s.Self.Stage == StageUninitialized || s.Self.Stage == StageNotReady || s.Self.Stage == StageFault {
-		return s.Self.Stage, s.Self.Reason, false
-	}
-	if len(s.Objects) == 0 {
-		return s.Self.Stage, s.Self.Reason, false
-	}
-	rank := map[Stage]int{StageFault: 6, StageNotReady: 5, StagePaused: 4, StageWarming: 3, StageRunning: 2, StageReady: 1, StageUninitialized: 0}
-	worst, reason := s.Objects[0].Stage, s.Objects[0].Reason
-	degraded := false
-	running := 0
-	for _, o := range s.Objects {
-		if rank[o.Stage] > rank[worst] {
-			worst, reason = o.Stage, o.Reason
-		}
-		if o.Stage == StagePaused || o.Stage == StageFault || o.Stage == StageNotReady {
-			degraded = true
-		}
-		if o.Stage.Active() {
-			running++
-		}
-	}
-	// 有对象在跑、另一些对象暂停或故障：汇总取在跑的阶段，标记降级（首页显示「运行中 · 降级」）。
-	if degraded && running > 0 {
-		best := StageRunning
-		for _, o := range s.Objects {
-			if o.Stage == StageWarming {
-				best = StageWarming
-			}
-		}
-		return best, reason, true
-	}
-	return worst, reason, degraded
-}
-
-// Recover 在模块启动完成后调用一次：立刻跑检查，让重启前处于预热、运行的对象在检查通过后回到原阶段。
-func (c *Controller) Recover(ctx context.Context) { c.Refresh(ctx) }
-
-// Run 按 interval 周期调用 Refresh，直到 ctx 结束。
-func (c *Controller) Run(ctx context.Context, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			c.Refresh(ctx)
-		}
-	}
-}
-
-// Compact 是放进 /healthz 响应（details.lifecycle）的精简快照：Monitor 据此汇总首页状态。
-// 只列出需要关注的对象（暂停、故障、未就绪），运行与预热的对象只计数，响应体不随对象数增长。
-type Compact struct {
-	Stage    Stage  `json:"stage"`
-	Color    string `json:"color"`
-	Degraded bool   `json:"degraded,omitempty"`
-	Reason   string `json:"reason,omitempty"`
-	// Self 是模块自身的阶段。
-	Self Stage `json:"self"`
-	// Counts 是各阶段的对象数。
-	Counts    map[Stage]int `json:"counts,omitempty"`
-	Attention []Object      `json:"attention,omitempty"`
-	// Recovered 是重启后自动回到原阶段的对象数（首页提示「已自动恢复」）。
-	Recovered int `json:"recovered,omitempty"`
-}
-
-// maxAttention 是精简快照里最多列出的需要关注的对象数。
-const maxAttention = 6
-
-// Compact 返回精简快照。
-func (c *Controller) Compact() Compact {
-	snap := c.Snapshot()
-	out := Compact{Stage: snap.Stage, Color: snap.Color, Degraded: snap.Degraded, Reason: snap.Reason, Self: snap.Self.Stage, Counts: map[Stage]int{}}
-	for _, o := range snap.Objects {
-		out.Counts[o.Stage]++
-		if o.Recovered {
-			out.Recovered++
-		}
-		if (o.Stage == StagePaused || o.Stage == StageFault || o.Stage == StageNotReady) && len(out.Attention) < maxAttention {
-			o.Checks = failedChecks(o.Checks)
-			out.Attention = append(out.Attention, o)
-		}
-	}
-	return out
-}
-
-func failedChecks(checks []Check) []Check {
-	var out []Check
-	for _, c := range checks {
-		if c.Status == CheckFail {
-			out = append(out, c)
-		}
-	}
-	return out
 }

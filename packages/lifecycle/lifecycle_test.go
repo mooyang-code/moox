@@ -116,6 +116,7 @@ func TestStartConfirmPauseResumeFlow(t *testing.T) {
 	f.setObject(set1, pass("ok"))
 	c := newController(t, f, "")
 	ctx := context.Background()
+	c.Refresh(ctx) // 模块自身第一次检查时自动初始化；自身未就绪时不放行任何对象
 	_, err := c.Command(ctx, CmdInit, set1)
 	require.NoError(t, err)
 
@@ -181,7 +182,7 @@ func TestAutoPauseOnlyAffectedObjectAndAutoResume(t *testing.T) {
 	require.Equal(t, StagePaused, c.Stage(set1))
 	require.Equal(t, StageWarming, c.Stage(set2), "别的对象照常")
 	snap := c.Snapshot()
-	require.True(t, snap.Objects[0].AutoPaused)
+	require.Equal(t, PauseAuto, snap.Objects[0].Pause.Kind)
 	require.Equal(t, StageRunning, snap.Objects[0].Resume)
 	require.Contains(t, snap.Objects[0].Reason, "变更日志断档")
 	require.True(t, snap.Degraded)
