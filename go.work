@@ -63,6 +63,7 @@ use (
 	./packages/servicehost
 	./packages/storagepb
 	./packages/storagepolicy
+	./packages/sysctl
 	./packages/tdx
 	./packages/timerjob
 	./packages/tradeeventpb

@@ -18,6 +18,8 @@ replace github.com/mooyang-code/moox/packages/seriesformat => ../../packages/ser
 
 replace github.com/mooyang-code/moox/packages/lifecycle => ../../packages/lifecycle
 
+replace github.com/mooyang-code/moox/packages/sysctl => ../../packages/sysctl
+
 require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
@@ -36,6 +38,7 @@ require (
 	github.com/mooyang-code/moox/packages/seriesreplay v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepolicy v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/sysctl v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.9.1

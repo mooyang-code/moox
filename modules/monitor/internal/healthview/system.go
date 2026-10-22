@@ -62,7 +62,7 @@ func projectLifecycle(l *lifecycleSource) *pb.HealthLifecycle {
 }
 
 // lifecycleModules 是提供生命周期接口的模块（组件 ID）。
-var lifecycleModules = map[string]bool{"factor-engine": true, "strategy": true, "trade": true}
+var lifecycleModules = map[string]bool{"collector": true, "factor-engine": true, "strategy": true, "trade": true}
 
 // phaseRank 是运行阶段的先后：系统的运行阶段取各模块中最靠前的（只要有一个模块还没到运行，系统就没有完全运行）。
 var phaseRank = map[string]int{"uninitialized": 0, "not_ready": 0, "ready": 1, "warming": 2, "running": 3}
