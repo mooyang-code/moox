@@ -171,7 +171,7 @@ func validateTaskSpec(spec TaskSpec) error {
 	if spec.SourceDatasetID == spec.TargetDatasetID {
 		return fmt.Errorf("source and target Dataset IDs must differ")
 	}
-	if spec.Alignment != AlignmentEpochUTC {
+	if spec.Alignment != "" && spec.Alignment != AlignmentEpochUTC {
 		return fmt.Errorf("alignment must be %s", AlignmentEpochUTC)
 	}
 	if err := ValidateResamplePair(spec.SourceFrequency, spec.TargetFrequency); err != nil {

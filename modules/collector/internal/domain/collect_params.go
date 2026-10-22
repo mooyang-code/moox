@@ -132,9 +132,6 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 	if dataType == "kline_resample" {
 		p.SourceFrequency = normalizeFrequency(p.SourceFrequency)
 		p.TargetFrequency = normalizeFrequency(p.TargetFrequency)
-		if p.Alignment == "" {
-			p.Alignment = ResampleAlignmentEpochUTC
-		}
 	}
 	if dataType == "kline" {
 		p.Frequency = normalizeFrequency(p.Frequency)

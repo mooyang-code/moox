@@ -1,11 +1,13 @@
 package resample
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/frequency"
 )
 
@@ -37,17 +39,23 @@ func ValidateResamplePair(source, target FixedFrequency) error {
 	if err := validateFixedFrequency(target); err != nil {
 		return fmt.Errorf("target frequency: %w", err)
 	}
-	// Resampleable frequencies run from 1m to 1d, so a larger target is always
-	// a whole multiple of the source and holds at most 1440 source bars.
 	if target.Duration <= source.Duration {
 		return fmt.Errorf("target frequency must be greater than source frequency")
+	}
+	// 目标周期必须是源周期的整数倍（例如 30m 不能合成 45m）；整除一天由频率语法保证。
+	if target.Duration%source.Duration != 0 {
+		return fmt.Errorf("target frequency %s must be a whole multiple of source frequency %s", target.Storage, source.Storage)
 	}
 	return nil
 }
 
-// ValidateTaskParams validates the resample runtime contract after the result
-// Dataset identity has been assigned from space_id and task_id.
-func ValidateTaskParams(params *domain.CollectParams) error {
+// ValidateTaskParams 是合成任务参数的唯一校验入口（创建、更新、种子导入、启动清单都调用它），在提交时就拒绝不可能完成的合成：
+//   - 目标周期必须是源周期的整数倍；
+//   - 市场必须登记了分桶方式（crypto 按 epoch_utc；A 股按交易日历 session），没有交易日历的市场不能合成；
+//   - 交易时段市场的日内源周期、目标周期必须整除每个交易时段，除不尽的（如 A 股 45m）直接拒绝并列出可选周期。
+//
+// 结果 Dataset 身份在 space_id 与 task_id 确定后才分配，所以调用方要先分配好 target_dataset_id。
+func ValidateTaskParams(spaceID string, params *domain.CollectParams) error {
 	if params == nil {
 		return fmt.Errorf("resample collect params are required")
 	}
@@ -63,9 +71,6 @@ func ValidateTaskParams(params *domain.CollectParams) error {
 	if strings.TrimSpace(params.SourceSeriesTag) == "" {
 		return fmt.Errorf("source_series_tag is required")
 	}
-	if strings.TrimSpace(params.Alignment) != AlignmentEpochUTC {
-		return fmt.Errorf("alignment must be %s", AlignmentEpochUTC)
-	}
 	source, err := ParseFixedFrequency(params.SourceFrequency)
 	if err != nil {
 		return fmt.Errorf("source_frequency: %w", err)
@@ -75,6 +80,23 @@ func ValidateTaskParams(params *domain.CollectParams) error {
 		return fmt.Errorf("target_frequency: %w", err)
 	}
 	if err := ValidateResamplePair(source, target); err != nil {
+		return err
+	}
+	market, err := barclock.MarketFor(spaceID)
+	if err != nil {
+		return err
+	}
+	if alignment := strings.TrimSpace(params.Alignment); alignment != "" && alignment != market.Alignment {
+		return fmt.Errorf("alignment must be %s for market %s", market.Alignment, market.ID)
+	}
+	clock, err := market.Clock(target.Duration)
+	if err == nil {
+		err = clock.ValidateSource(source.Duration)
+	}
+	if err != nil {
+		if errors.Is(err, barclock.ErrPeriodNotDivisible) {
+			return fmt.Errorf("%w；市场 %s 可选的日内周期：%s，1d 按交易日一天一根", err, market.ID, strings.Join(market.AllowedIntraday(), "、"))
+		}
 		return err
 	}
 	return ValidateTargetDatasetID(params.TargetDatasetID)

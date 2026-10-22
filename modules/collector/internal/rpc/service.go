@@ -1264,7 +1264,7 @@ func validateCollectionTask(task domain.CollectionTask) error {
 		return fmt.Errorf("invalid collect_params: %w", err)
 	}
 	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
-		if err := collectorresample.ValidateTaskParams(params); err != nil {
+		if err := collectorresample.ValidateTaskParams(task.SpaceID, params); err != nil {
 			return fmt.Errorf("invalid collect_params: %w", err)
 		}
 	} else {

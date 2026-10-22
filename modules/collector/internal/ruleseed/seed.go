@@ -144,7 +144,7 @@ func validateTaskSeedItem(item taskSeedItem) (domain.CollectionTask, error) {
 		return domain.CollectionTask{}, fmt.Errorf("collect_params: %w", err)
 	}
 	if dataType == "kline_resample" {
-		if err := resample.ValidateTaskParams(params); err != nil {
+		if err := resample.ValidateTaskParams(spaceID, params); err != nil {
 			return domain.CollectionTask{}, fmt.Errorf("collect_params: %w", err)
 		}
 	} else {

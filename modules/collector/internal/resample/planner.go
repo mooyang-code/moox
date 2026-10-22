@@ -32,7 +32,7 @@ func PlanTask(ctx context.Context, source subjectSource, instances *store.TaskIn
 	}
 	resultIDs := taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
 	params.TargetDatasetID = resultIDs.DatasetID
-	if err := ValidateTaskParams(params); err != nil {
+	if err := ValidateTaskParams(task.SpaceID, params); err != nil {
 		return err
 	}
 	taskParams, canonicalErr := params.CanonicalJSON()

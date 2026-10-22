@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/barclock"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -76,6 +77,10 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if err != nil {
 		return err
 	}
+	market, err := barclock.MarketFor(task.SpaceID)
+	if err != nil {
+		return err
+	}
 	ids := taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
 	params.TargetDatasetID = ids.DatasetID
 	targetDatasetID, targetViewID := ids.DatasetID, ids.ViewID
@@ -84,7 +89,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
 		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": source.DataSourceID,
 		"source_freq": params.SourceFrequency, "source_series_tag": params.SourceSeriesTag,
-		"target_freq": targetFreq.Storage, "alignment": params.Alignment,
+		"target_freq": targetFreq.Storage, "alignment": market.Alignment,
 	}
 	createdDataset, createdView := false, false
 	compensate := func(original error) error {
