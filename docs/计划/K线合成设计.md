@@ -1,8 +1,18 @@
 # K 线合成设计
 
-状态：设计稿 v2（2026-10-22），尚未编码。项目尚未上线，接口与数据约定直接修改，不考虑兼容。
-v2 在 v1（支持 45m 等非标准周期）的基础上，补充了触发与执行方式的重写：以事件为主路径、按根数做兜底检查、新增补采完成事件、
-提供历史合成 CLI。实现后以[采集](../模块/采集.md)第 7 节为准。
+状态：已实现（分支 `feat/kline-resample`，2026-10-22；设计稿 v2 起，经两轮 Codex 设计审查）。项目尚未上线，接口与数据约定直接修改，不考虑兼容。
+实现后以[采集](../模块/采集.md)第 7 节为准。v2 在 v1（支持 45m 等非标准周期）的基础上，补充了触发与执行方式的重写：
+以事件为主路径、按根数做兜底检查、新增补采完成事件、提供历史合成 CLI。
+
+实现与设计稿的差异：
+
+- **目标快照由兜底检查登记**：设计稿写“随源数据集快照在 `plan_reconciler` 里登记”。实现里 `Engine.EnsureSnapshot` 在每分钟的兜底检查里比较源数据集的标的集合与最近一份快照，
+  变化时登记新快照（生效点 = 当前时间之后的第一个目标桶边界），效果相同且不与采集计划对账耦合。
+- **迟到容忍是常量**：目标周期的迟到容忍固定为收盘后 2 分钟（`resample.TargetLatenessSeconds`，创建目标数据集时写入 `allowed_lateness_seconds` 属性），不是 `kline_resample.target_lateness` 配置项。
+  已有的目标数据集没有该属性时 Storage 用默认值，周期提交被拒绝会自动改用普通写入。
+- **配置项**：实现的是 `exec_timeout`、`fallback_lookback_bars`、`fallback_grace`、`fallback_max_buckets`、`history_buckets_per_round`、`history_max_jobs`、`max_read_keys`、`event_bus`。
+- **事件总线接入**：Collector 作为 NATS 客户端订阅两个事件、发布补采完成事件，需要事件总线用户 `collector-eventbus` 及凭据文件；没有配置 `event_bus` 时合成只靠兜底检查（延迟约 1 分钟）。
+- **Storage 周期提交的对齐校验移到 Primary 层**：DataNode 的 `periodAligned` 只要求整分钟，日内快照生效点是否按 epoch 对齐由 Primary 按数据集 `alignment` 属性判断。
 
 ## 结论
 

@@ -6,6 +6,7 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -115,7 +116,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			// display text. Derive a short stable suffix from the target ID so
 			// independent resample targets do not collide on metadata creation.
 			Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-			Freq: targetFreq.Storage, Status: "draft", Attributes: attrs, SubjectTags: append([]string(nil), source.SubjectTags...),
+			Freq: targetFreq.Storage, Status: "draft", Attributes: withLateness(attrs), SubjectTags: append([]string(nil), source.SubjectTags...),
 		}})
 		if createErr != nil {
 			return fmt.Errorf("create target Dataset: %w", createErr)
@@ -423,6 +424,14 @@ func validateTargetView(view *storagepb.View, task domain.CollectionTask, params
 		}
 	}
 	return nil
+}
+
+// withLateness 在创建目标数据集时声明周期的迟到容忍（收盘后 2 分钟）：Storage 据此算周期截止，写入目标与引擎的截止判断一致。
+// 它不属于创建后校验的不可变契约（attrs），已有的目标数据集没有它时 Storage 用默认值，周期提交失败会自动改用普通写入。
+func withLateness(attrs map[string]string) map[string]string {
+	out := cloneStringMap(attrs)
+	out["allowed_lateness_seconds"] = strconv.Itoa(TargetLatenessSeconds)
+	return out
 }
 
 func cloneStringMap(input map[string]string) map[string]string {

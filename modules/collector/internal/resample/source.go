@@ -3,7 +3,6 @@ package resample
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
@@ -36,11 +35,4 @@ func SourceSubjects(ctx context.Context, source subjectSource, task *Task) ([]st
 		}
 	}
 	return uniqueSorted(ids), nil
-}
-
-// sortedCopy 返回升序的副本。
-func sortedCopy(values []string) []string {
-	out := append([]string(nil), values...)
-	sort.Strings(out)
-	return out
 }
