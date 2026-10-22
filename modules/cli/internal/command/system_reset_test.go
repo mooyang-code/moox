@@ -74,8 +74,8 @@ func TestSystemResetEndToEnd(t *testing.T) {
 	apply := systemResetOptions{StateDir: reset.StateDir, Env: "production", SystemName: "moox-prod", Token: token, ConfirmName: "moox-prod", Yes: true, AdminDB: "/admin.db", StoragePkg: "/pkg", StorageConf: "/pkg/storage.yaml"}
 	out.Reset()
 	require.NoError(t, runSystemResetApply(ctx, opts, apply, &out), "停在外部步骤不算失败")
-	require.Contains(t, out.String(), "请先完成外部步骤 storage")
-	require.Contains(t, out.String(), "--external-done storage")
+	require.Contains(t, out.String(), "请先完成外部步骤 archive-worker")
+	require.Contains(t, out.String(), "staging.db")
 	require.Equal(t, lifecycle.StageUninitialized, strategyCtrl.Snapshot().Self.Stage)
 	require.Equal(t, lifecycle.StagePaused, monitorCtrl.Snapshot().Self.Stage, "Monitor 排在 Storage 之后")
 
@@ -90,7 +90,13 @@ func TestSystemResetEndToEnd(t *testing.T) {
 	require.Contains(t, out.String(), "等待人工")
 
 	out.Reset()
-	cont := systemResetOptions{StateDir: reset.StateDir, Env: "production", SystemName: "moox-prod", OperationID: opID, ExternalDone: []string{"storage"}, Yes: true, AdminDB: "/admin.db"}
+	cont := systemResetOptions{StateDir: reset.StateDir, Env: "production", SystemName: "moox-prod", OperationID: opID, ExternalDone: []string{"archive-worker"}, Yes: true, AdminDB: "/admin.db"}
+	require.NoError(t, runSystemResetApply(ctx, opts, cont, &out))
+	require.Contains(t, out.String(), "请先完成外部步骤 storage")
+	require.Contains(t, out.String(), "--external-done storage")
+	require.Equal(t, lifecycle.StagePaused, monitorCtrl.Snapshot().Self.Stage, "Monitor 排在 Storage 之后")
+	cont.ExternalDone = []string{"storage"}
+	out.Reset()
 	require.NoError(t, runSystemResetApply(ctx, opts, cont, &out))
 	require.Contains(t, out.String(), "请先完成外部步骤 admin")
 	cont.ExternalDone = []string{"admin"}

@@ -55,7 +55,7 @@ func init() {
         连接每个模块取各自的重置计划，列出每一步、保留项、不备份项和阻止条件，给出 10 分钟内有效、只能用一次的令牌。
   moox-cli system reset apply --token <令牌> --confirm-name <系统名> --yes
         系统暂停后按下游到上游逐个重置模块：策略 → Trade → 因子引擎 → 因子管理 → 采集 → 归档 →（Storage）→ Monitor →（Admin 业务部分）。
-        Storage 与 Admin 业务部分是要在各自主机上执行的外部步骤：编排器停在那一步并列出命令，执行完用 --external-done <步骤名> 继续。
+        archive-worker 暂存库、archive-worker 暂存库、Storage 与 Admin 业务部分是要在各自主机上执行的外部步骤：编排器停在那一步并列出命令，执行完用 --external-done <步骤名> 继续。
         失败或中断后用 apply --operation-id <系统重置 ID> 续做，已完成的步骤不重做；不会自动回滚。
   moox-cli system reset status   查看系统重置日志
 
@@ -89,7 +89,7 @@ func init() {
 	af.StringVar(&systemResetFlags.Token, "token", "", "plan 给出的令牌")
 	af.StringVar(&systemResetFlags.ConfirmName, "confirm-name", "", "生产环境：逐字输入系统名")
 	af.StringVar(&systemResetFlags.OperationID, "operation-id", "", "续做未完成的系统重置")
-	af.StringSliceVar(&systemResetFlags.ExternalDone, "external-done", nil, "已经人工执行完的外部步骤名（storage、admin）")
+	af.StringSliceVar(&systemResetFlags.ExternalDone, "external-done", nil, "已经人工执行完的外部步骤名（archive-worker、storage、admin）")
 	af.BoolVar(&systemResetFlags.Yes, "yes", false, "确认执行（会删除数据，不可撤销；各模块先备份）")
 	status := &cobra.Command{
 		Use: "status", Short: "查看系统重置日志", Args: cobra.NoArgs,
@@ -128,6 +128,13 @@ func (r systemResetOptions) externalSteps(scope string) []sysctl.ExternalStep {
 		describe = "Storage：清行数据、事件流、View 消费者和元数据定义，重新导入种子（在 Storage 主机上执行）"
 	}
 	return []sysctl.ExternalStep{
+		// 暂存库记着每个归档任务的水位和永久分区状态；不清的话重建同名任务会沿用旧水位，甚至重新载入旧文件。
+		{Name: "archive-worker", Describe: "归档 worker：停止并删除暂存库（在 archive-worker 所在主机上执行）", After: sysctl.Archive, Commands: []string{
+			"停止 archive-worker（moox-archive-worker 进程或它的 systemd 单元）",
+			"删除它状态目录里的暂存库：rm -f <state_dir>/.state/staging.db <state_dir>/.state/staging.db-wal <state_dir>/.state/staging.db-shm（要留底先 cp）",
+			"已归档的 Parquet/CSV 文件默认不动；要彻底重来时手工清理归档目录",
+			"系统重置全部完成后再启动 archive-worker",
+		}},
 		{Name: "storage", Describe: describe, After: sysctl.Archive, Commands: storageCommands},
 		{Name: "admin", Describe: "Admin 业务部分：活动日志、采集发布租约（all 再加业务空间，默认空间保留；在 Admin 主机上执行）",
 			Commands: []string{fmt.Sprintf("moox-admin-cli reset-business --db-path %s --scope %s --yes", r.AdminDB, scope)}},

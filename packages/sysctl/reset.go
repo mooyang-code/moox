@@ -69,6 +69,10 @@ type ResetConfig struct {
 	Production bool
 	// External 是外部步骤。
 	External []ExternalStep
+	// BlockerWait 是模块重置前等待暂时性阻止条件消失的时限（默认 3 分钟）：
+	// 系统暂停刚结束时，Collector 的 SCF 定时器还没确认停用、在途操作还没落地，这类阻止条件几秒到几分钟内会自己消失。
+	// 超时仍有阻止条件才失败（实盘持仓这类不会自己消失的，也只是多等这一段时间）。
+	BlockerWait time.Duration
 	// Now 可替换（测试用）。
 	Now func() time.Time
 }
@@ -280,25 +284,31 @@ func (o *Orchestrator) PlanReset(ctx context.Context, scope lifecycle.ResetScope
 
 // planModule 取一个模块的计划；模块处于重置中或重置失败时直接报错。
 func (o *Orchestrator) planModule(ctx context.Context, m Module, scope lifecycle.ResetScope) (ModuleResetPlan, error) {
+	mp, _, err := o.planModuleToken(ctx, m, scope)
+	return mp, err
+}
+
+// planModuleToken 同 planModule，另外返回模块给出的一次性令牌（发起模块重置用）。
+func (o *Orchestrator) planModuleToken(ctx context.Context, m Module, scope lifecycle.ResetScope) (ModuleResetPlan, string, error) {
 	if m.Reset == nil {
-		return ModuleResetPlan{}, errors.New("没有配置重置接口（缺重置专用密钥）")
+		return ModuleResetPlan{}, "", errors.New("没有配置重置接口（缺重置专用密钥）")
 	}
 	snap, err := m.API.Status(ctx)
 	if err != nil {
-		return ModuleResetPlan{}, fmt.Errorf("读取状态：%w", err)
+		return ModuleResetPlan{}, "", fmt.Errorf("读取状态：%w", err)
 	}
 	if st := snap.Self.Stage; st == lifecycle.StageResetting || st == lifecycle.StageResetFailed {
-		return ModuleResetPlan{}, fmt.Errorf("模块处于%s，先处理上一次的重置", st)
+		return ModuleResetPlan{}, "", fmt.Errorf("模块处于%s，先处理上一次的重置", st)
 	}
 	p, err := m.Reset.ResetPlan(ctx, scope)
 	if err != nil {
-		return ModuleResetPlan{}, fmt.Errorf("取重置计划：%w", err)
+		return ModuleResetPlan{}, "", fmt.Errorf("取重置计划：%w", err)
 	}
 	mp := ModuleResetPlan{Name: m.Name, Keeps: p.Keeps, Notes: p.Notes, Blockers: p.Blockers, Digest: p.Digest, Stats: p.Stats}
 	for _, s := range p.Steps {
 		mp.Steps = append(mp.Steps, s.Name+"："+s.Describe)
 	}
-	return mp, nil
+	return mp, p.Token, nil
 }
 
 func planDigest(p SystemResetPlan) string {
@@ -508,6 +518,31 @@ func hasStep(j *ResetJournal, module string) bool {
 	return false
 }
 
+// freshPlan 重新取模块的计划；有阻止条件时在 BlockerWait 内重试（暂时性的会自己消失），超时仍有才失败。
+func (o *Orchestrator) freshPlan(ctx context.Context, m Module, scope lifecycle.ResetScope) (ModuleResetPlan, string, error) {
+	wait := o.Reset.BlockerWait
+	if wait <= 0 {
+		wait = 3 * time.Minute
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		mp, token, err := o.planModuleToken(ctx, m, scope)
+		if err != nil {
+			return mp, "", err
+		}
+		if len(mp.Blockers) == 0 {
+			return mp, token, nil
+		}
+		if time.Now().After(deadline) {
+			return mp, "", fmt.Errorf("现在不能重置：%s", strings.Join(mp.Blockers, "；"))
+		}
+		o.logf("%s：等待阻止条件消失：%s", m.Name, strings.Join(mp.Blockers, "；"))
+		if err := o.sleep(ctx); err != nil {
+			return mp, "", err
+		}
+	}
+}
+
 // resetModuleStep 重置一个模块：新步骤先取新计划核对摘要再发起；已经发起过的凭模块 operation_id 续做。
 func (o *Orchestrator) resetModuleStep(ctx context.Context, j *ResetJournal, step *ResetStepState) error {
 	m, ok := o.module(step.Name)
@@ -515,21 +550,14 @@ func (o *Orchestrator) resetModuleStep(ctx context.Context, j *ResetJournal, ste
 		return errors.New("模块没有配置重置接口")
 	}
 	if step.OpID == "" {
-		fresh, err := o.planModule(ctx, m, j.Scope)
+		fresh, token, err := o.freshPlan(ctx, m, j.Scope)
 		if err != nil {
 			return err
-		}
-		if len(fresh.Blockers) > 0 {
-			return fmt.Errorf("现在不能重置：%s", strings.Join(fresh.Blockers, "；"))
 		}
 		if fresh.Digest != step.Digest {
 			return errors.New("模块的重置计划和 plan 时不一致（配置或表结构变了）：重新执行 system reset plan")
 		}
-		p, err := m.Reset.ResetPlan(ctx, j.Scope)
-		if err != nil {
-			return err
-		}
-		st, err := m.Reset.ResetApply(ctx, lifecycle.ResetApplyRequest{Token: p.Token, Scope: j.Scope, By: o.By})
+		st, err := m.Reset.ResetApply(ctx, lifecycle.ResetApplyRequest{Token: token, Scope: j.Scope, By: o.By})
 		if err != nil {
 			return err
 		}

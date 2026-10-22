@@ -25,6 +25,8 @@ func (a resetAPI) ResetStatus(context.Context) (lifecycle.ResetStatus, error) {
 	return a.c.ResetStatus(), nil
 }
 
+var statsCounter atomic.Int64
+
 type resetFixture struct {
 	o        *Orchestrator
 	ran      *callLog
@@ -60,7 +62,7 @@ func newResetFixture(t *testing.T, production bool, external []ExternalStep, nam
 				if extra.Load() {
 					steps = append(steps, step("seed"))
 				}
-				return lifecycle.ResetPlanInfo{Blockers: bl.Load().([]string)}, steps, nil
+				return lifecycle.ResetPlanInfo{Blockers: bl.Load().([]string), Stats: map[string]any{"rows": statsCounter.Add(1)}}, steps, nil
 			}},
 		}})
 		require.NoError(t, err)
@@ -212,4 +214,36 @@ func TestSystemResetAutoExternalExpiryAndMissingAPI(t *testing.T) {
 	plan, err = g.o.PlanReset(ctx, lifecycle.ResetData)
 	require.NoError(t, err)
 	require.Contains(t, plan.Blockers[0], "重置专用密钥")
+}
+
+// 阻止条件是暂时性的（例如 SCF 定时器刚暂停还没确认停用）：在时限内消失就继续，超时仍在才失败；统计值每次都变也不影响摘要。
+func TestSystemResetWaitsForTransientBlockers(t *testing.T) {
+	ctx := context.Background()
+	f := newResetFixture(t, false, nil, Strategy, Collector)
+	f.o.Reset.BlockerWait = time.Minute
+	plan, err := f.o.PlanReset(ctx, lifecycle.ResetData)
+	require.NoError(t, err)
+
+	// Collector 在 plan 之后出现阻止条件，两次轮询后消失。
+	var polls atomic.Int32
+	f.blockers[Collector].Store([]string{"定时器还没有确认停用"})
+	f.o.Sleep = func(ctx context.Context, d time.Duration) error {
+		if polls.Add(1) == 2 {
+			f.blockers[Collector].Store([]string(nil))
+		}
+		return ctx.Err()
+	}
+	j, err := f.o.ApplyReset(ctx, ResetApplyRequest{Token: plan.Token})
+	require.NoError(t, err)
+	require.Equal(t, "done", j.State)
+	require.GreaterOrEqual(t, polls.Load(), int32(2))
+
+	// 一直不消失：超时失败，信息里带阻止条件。
+	g := newResetFixture(t, false, nil, Strategy)
+	g.o.Reset.BlockerWait = time.Millisecond
+	plan, err = g.o.PlanReset(ctx, lifecycle.ResetData)
+	require.NoError(t, err)
+	g.blockers[Strategy].Store([]string{"有进行中的运行"})
+	_, err = g.o.ApplyReset(ctx, ResetApplyRequest{Token: plan.Token})
+	require.ErrorContains(t, err, "有进行中的运行")
 }
