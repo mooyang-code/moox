@@ -10,6 +10,14 @@ replace github.com/mooyang-code/moox/modules/archive/proto/archivegen => ../arch
 
 replace github.com/mooyang-code/moox/modules/collector/proto/collectorgen => ../collector/proto/collectorgen
 
+replace github.com/mooyang-code/moox/packages/seriesimport => ../../packages/seriesimport
+
+replace github.com/mooyang-code/moox/packages/seriesreplay => ../../packages/seriesreplay
+
+replace github.com/mooyang-code/moox/packages/seriesformat => ../../packages/seriesformat
+
+replace github.com/mooyang-code/moox/packages/lifecycle => ../../packages/lifecycle
+
 require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
@@ -22,6 +30,10 @@ require (
 	github.com/mooyang-code/moox/packages/hostpolicy v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/notification v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/lifecycle v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/seriesformat v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/seriesimport v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/seriesreplay v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepolicy v0.0.0-00010101000000-000000000000
 	github.com/pkg/sftp v1.13.10

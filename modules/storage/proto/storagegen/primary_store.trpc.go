@@ -37,6 +37,8 @@ type PrimaryStoreService interface {
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq) (*ReadTimeSeriesRowsRsp, error)
 
 	CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesRowsReq) (*CountTimeSeriesRowsRsp, error)
+	// ReadDatasetChanges ReadDatasetChanges 按序读取持久化的行变更日志，因子机的本地副本据此同步修正。
+	ReadDatasetChanges(ctx context.Context, req *ReadDatasetChangesReq) (*ReadDatasetChangesRsp, error)
 
 	ReportCollectorPeriodCompleted(ctx context.Context, req *ReportCollectorPeriodCompletedReq) (*ReportCollectorPeriodCompletedRsp, error)
 
@@ -211,6 +213,24 @@ func PrimaryStoreService_CountTimeSeriesRows_Handler(svr interface{}, ctx contex
 	return rsp, nil
 }
 
+func PrimaryStoreService_ReadDatasetChanges_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReadDatasetChangesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(PrimaryStoreService).ReadDatasetChanges(ctx, reqbody.(*ReadDatasetChangesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func PrimaryStoreService_ReportCollectorPeriodCompleted_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &ReportCollectorPeriodCompletedReq{}
 	filters, err := f(req)
@@ -343,6 +363,10 @@ var PrimaryStoreServer_ServiceDesc = server.ServiceDesc{
 			Func: PrimaryStoreService_CountTimeSeriesRows_Handler,
 		},
 		{
+			Name: "/trpc.moox.storage.PrimaryStore/ReadDatasetChanges",
+			Func: PrimaryStoreService_ReadDatasetChanges_Handler,
+		},
+		{
 			Name: "/trpc.moox.storage.PrimaryStore/ReportCollectorPeriodCompleted",
 			Func: PrimaryStoreService_ReportCollectorPeriodCompleted_Handler,
 		},
@@ -404,6 +428,11 @@ func (s *UnimplementedPrimaryStore) ReadTimeSeriesRows(ctx context.Context, req 
 func (s *UnimplementedPrimaryStore) CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesRowsReq) (*CountTimeSeriesRowsRsp, error) {
 	return nil, errors.New("rpc CountTimeSeriesRows of service PrimaryStore is not implemented")
 }
+
+// ReadDatasetChanges ReadDatasetChanges 按序读取持久化的行变更日志，因子机的本地副本据此同步修正。
+func (s *UnimplementedPrimaryStore) ReadDatasetChanges(ctx context.Context, req *ReadDatasetChangesReq) (*ReadDatasetChangesRsp, error) {
+	return nil, errors.New("rpc ReadDatasetChanges of service PrimaryStore is not implemented")
+}
 func (s *UnimplementedPrimaryStore) ReportCollectorPeriodCompleted(ctx context.Context, req *ReportCollectorPeriodCompletedReq) (*ReportCollectorPeriodCompletedRsp, error) {
 	return nil, errors.New("rpc ReportCollectorPeriodCompleted of service PrimaryStore is not implemented")
 }
@@ -446,6 +475,8 @@ type PrimaryStoreClientProxy interface {
 	ReadTimeSeriesRows(ctx context.Context, req *ReadTimeSeriesRowsReq, opts ...client.Option) (rsp *ReadTimeSeriesRowsRsp, err error)
 
 	CountTimeSeriesRows(ctx context.Context, req *CountTimeSeriesRowsReq, opts ...client.Option) (rsp *CountTimeSeriesRowsRsp, err error)
+	// ReadDatasetChanges ReadDatasetChanges 按序读取持久化的行变更日志，因子机的本地副本据此同步修正。
+	ReadDatasetChanges(ctx context.Context, req *ReadDatasetChangesReq, opts ...client.Option) (rsp *ReadDatasetChangesRsp, err error)
 
 	ReportCollectorPeriodCompleted(ctx context.Context, req *ReportCollectorPeriodCompletedReq, opts ...client.Option) (rsp *ReportCollectorPeriodCompletedRsp, err error)
 
@@ -641,6 +672,26 @@ func (c *PrimaryStoreClientProxyImpl) CountTimeSeriesRows(ctx context.Context, r
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CountTimeSeriesRowsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *PrimaryStoreClientProxyImpl) ReadDatasetChanges(ctx context.Context, req *ReadDatasetChangesReq, opts ...client.Option) (*ReadDatasetChangesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.storage.PrimaryStore/ReadDatasetChanges")
+	msg.WithCalleeServiceName(PrimaryStoreServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("storage")
+	msg.WithCalleeService("PrimaryStore")
+	msg.WithCalleeMethod("ReadDatasetChanges")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReadDatasetChangesRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -63,11 +64,17 @@ func run(args []string, out io.Writer) error {
 		return health(args, out)
 	case "reset-gap-ledger":
 		return resetGapLedger(args, out)
+	case "reconcile":
+		return reconcile(args, out)
+	case "tune":
+		return tune(args, out)
+	case "backfill":
+		return backfill(args, out)
 	case "version":
 		_, err := fmt.Fprintf(out, "moox-factor-engine %s %s %s\n", Version, GitCommit, BuildTime)
 		return err
 	default:
-		return fmt.Errorf("unknown command %q (serve, service, run-once, health, reset-gap-ledger, version)", command)
+		return fmt.Errorf("unknown command %q (serve, service, run-once, health, reset-gap-ledger, reconcile, backfill, tune, version)", command)
 	}
 }
 
@@ -236,6 +243,129 @@ func resetGapLedger(args []string, out io.Writer) error {
 		return err
 	}
 	return json.NewEncoder(out).Encode(map[string]any{"status": "ok", "ledger_dir": cfg.Gap.LedgerDir, "files_removed": removed})
+}
+
+// reconcile 对账一个因子集合的源数据：本地时序存储与 Storage 保留期内的数据比对并整段替换，完成后重建变更日志位点。
+// 变更日志断档（离线超过保留期、Storage 节点更换）时引擎把该数据源判为未就绪，由人工执行本命令。
+// 本地存储同一时刻只能由一个进程打开，必须在引擎停止后执行。
+func reconcile(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("reconcile", flag.ContinueOnError)
+	app := fs.String("config", "config/engine.yaml", "factor engine config")
+	healthAddr := fs.String("health-addr", "127.0.0.1:11417", "引擎健康检查地址；能连上说明引擎还在运行，拒绝执行")
+	set := fs.String("set", "", "要对账的因子集合 ID")
+	var subjects listFlag
+	fs.Var(&subjects, "subject", "只对账这个标的（可重复）；不写表示本地有数据的全部标的")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*set) == "" {
+		return errors.New("--set 是必填项")
+	}
+	cfg, err := engine.Load(*app)
+	if err != nil {
+		return err
+	}
+	if conn, dialErr := net.DialTimeout("tcp", *healthAddr, time.Second); dialErr == nil {
+		_ = conn.Close()
+		return fmt.Errorf("因子引擎仍在运行（%s 可以连上）：先停止引擎再对账（本地存储同一时刻只能由一个进程打开）", *healthAddr)
+	}
+	summary, err := engine.Reconcile(context.Background(), cfg, engine.ReconcileRequest{
+		SetID: *set, Subjects: subjects,
+		Progress: func(done, total int) {
+			if done == total || done%50 == 0 {
+				fmt.Fprintf(os.Stderr, "对账进度 %d/%d\n", done, total)
+			}
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(out).Encode(summary)
+}
+
+// backfill 把集合源数据的本地历史从 Storage 回补到指定根数（Storage 保留期内有多少补多少）；引擎必须已停止。
+func backfill(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("backfill", flag.ContinueOnError)
+	app := fs.String("config", "config/engine.yaml", "factor engine config")
+	healthAddr := fs.String("health-addr", "127.0.0.1:11417", "引擎健康检查地址；能连上说明引擎还在运行，拒绝执行")
+	set := fs.String("set", "", "要回补的因子集合 ID")
+	bars := fs.Int("bars", 0, "每个标的本地连续历史的目标根数（以本地最新一根往前数）")
+	var subjects listFlag
+	fs.Var(&subjects, "subject", "只回补这个标的（可重复）；不写表示本地有数据的全部标的")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*set) == "" || *bars <= 0 {
+		return errors.New("--set 与 --bars 是必填项")
+	}
+	cfg, err := engine.Load(*app)
+	if err != nil {
+		return err
+	}
+	if conn, dialErr := net.DialTimeout("tcp", *healthAddr, time.Second); dialErr == nil {
+		_ = conn.Close()
+		return fmt.Errorf("因子引擎仍在运行（%s 可以连上）：先停止引擎再回补（本地存储同一时刻只能由一个进程打开）", *healthAddr)
+	}
+	summary, err := engine.Backfill(context.Background(), cfg, engine.BackfillRequest{
+		SetID: *set, Bars: *bars, Subjects: subjects,
+		Progress: func(done, total int) {
+			if done == total || done%50 == 0 {
+				fmt.Fprintf(os.Stderr, "回补进度 %d/%d\n", done, total)
+			}
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(out).Encode(summary)
+}
+
+// tune 按本机内存给出内存配置建议（设计第 8 节）；--write 把建议写进 engine.yaml（只写还没设置过的项，--force 覆盖）。
+func tune(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("tune", flag.ContinueOnError)
+	app := fs.String("config", "config/engine.yaml", "factor engine config")
+	memory := fs.Int64("memory-gib", 0, "总内存（GiB）；不写则探测本机")
+	sets := fs.Int("sets", 4, "计划启用的因子集合数（决定计算并行数）")
+	cpus := fs.Int("cpus", runtime.NumCPU(), "CPU 核数")
+	write := fs.Bool("write", false, "把建议写进配置文件")
+	force := fs.Bool("force", false, "覆盖已经设置过的值")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	total := *memory << 30
+	if total == 0 {
+		detected, err := engine.DetectTotalMemory()
+		if err != nil {
+			return fmt.Errorf("探测总内存失败：%w（可用 --memory-gib 指定）", err)
+		}
+		total = detected
+	}
+	cfg, err := engine.Load(*app)
+	if err != nil {
+		return err
+	}
+	plan := engine.PlanMemory(total, *cpus, *sets, int64(cfg.SeriesStore.BlockCache))
+	if _, err := io.WriteString(out, plan.Summary()); err != nil {
+		return err
+	}
+	if !*write {
+		_, err = fmt.Fprintln(out, "加 --write 写入配置文件")
+		return err
+	}
+	changes, err := engine.TuneConfig(*app, plan, *force)
+	if err != nil {
+		return err
+	}
+	if len(changes) == 0 {
+		_, err = fmt.Fprintln(out, "配置里的相关项都已设置，没有改动（--force 可覆盖）")
+		return err
+	}
+	for _, change := range changes {
+		if _, err := fmt.Fprintf(out, "已写入 %s：%s → %s\n", change.Path, change.Old, change.New); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func signHealthRequest(request *http.Request) error {

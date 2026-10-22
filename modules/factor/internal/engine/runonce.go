@@ -73,23 +73,16 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	pipelineConfig := pipeline.Config{
-		ReadBatchSubjects: cfg.Pipeline.ReadBatchSubjects, ReadWorkers: cfg.Pipeline.ReadWorkers,
-		ReadTimeout:     cfg.Pipeline.ReadTimeout,
-		BulkReadWorkers: cfg.Pipeline.BulkReadWorkers, ReadRetryBackoff: cfg.Pipeline.ReadRetryBackoff, ReadBreakerFailures: cfg.Pipeline.ReadBreakerFailures,
-		WarmupBatchSubjects: cfg.Pipeline.WarmupBatchSubjects, WarmupWorkers: cfg.Pipeline.WarmupWorkers, WarmupBatchPause: cfg.Pipeline.WarmupBatchPause, WriteBatchRows: cfg.Pipeline.WriteBatchRows,
-		ComputeWorkers: cfg.Compute.Workers, MaxMemory: int64(cfg.Compute.MaxMemory),
+	pipelineConfig := pipeline.Config{WriteBatchRows: cfg.Pipeline.WriteBatchRows, ComputeWorkers: cfg.Compute.Workers, MaxMemory: int64(cfg.Compute.MaxMemory)}
+	// 诊断入口跑在独立进程里，不能打开引擎正在使用的本地存储：直接读 Storage 的窗口计算；
+	// 它同样写因子结果，跳过的项记入账本，由引擎的跳过恢复补算。
+	ledger, _, ledgerErr := gapledger.Open(cfg.Gap.LedgerDir, time.Now, 0)
+	if ledgerErr != nil {
+		return pipeline.Outcome{}, fmt.Errorf("open factor gap ledger: %w", ledgerErr)
 	}
-	// 与引擎同样执行空洞检查并记账本：这个入口同样会写因子结果，不能绕过空洞防护。
-	if cfg.Gap.Enabled {
-		ledger, _, ledgerErr := gapledger.Open(cfg.Gap.LedgerDir, time.Now, 0)
-		if ledgerErr != nil {
-			return pipeline.Outcome{}, fmt.Errorf("open factor gap ledger: %w", ledgerErr)
-		}
-		defer ledger.Close()
-		pipelineConfig.GapCheck, pipelineConfig.MassRatio, pipelineConfig.GapSink = true, cfg.Gap.MassRatio, ledger
-	}
-	runner := pipeline.NewRunner(storage, clock, pipelineConfig)
+	defer ledger.Close()
+	pipelineConfig.GapSink = ledger
+	runner := pipeline.NewRunner(storage, pipeline.NewStorageData(storage), clock, pipelineConfig)
 	return recalcexec.NewExecutor(runner, recalcexec.WithClock(clock)).RunChunk(ctx, recalcexec.Selection{
 		Set: set.Set, Factors: factors, Subjects: subjects, Columns: columns,
 	}, start, start.Add(duration))

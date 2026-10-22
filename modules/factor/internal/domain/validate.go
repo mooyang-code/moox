@@ -107,6 +107,10 @@ type SourceColumn struct {
 
 // ValidateMembership checks a definition against one set's source columns, the
 // other members' outputs and the result dataset's existing column origins.
+// FilledColumn 是因子表达式里可以引用的虚拟输入列（不属于源数据集的字段）：本地时序存储里该行是填充行时为 1，否则为 0。
+// 默认把填充值当正常值参与计算，需要排除填充值的因子用它判断。与 serieswindow.FilledColumn 一致。
+const FilledColumn = "is_filled"
+
 // resultColumnOrigins maps a result column to the factor that owns it; a column
 // owned by the same factor is reused rather than reported as a conflict.
 // 输入列必须存在且为数值类型；params 与 let 的名称不能与源列重名（设计 4.2）。
@@ -121,6 +125,9 @@ func ValidateMembership(set FactorSet, def FactorDef, sourceColumns []SourceColu
 		sourceSet[strings.TrimSpace(column.Name)] = column
 	}
 	for _, column := range def.InputColumns {
+		if column == FilledColumn {
+			continue // 虚拟列：该行是填充行（交易所缺数据的周期按规则填充，本地存储带标记）时为 1，否则为 0
+		}
 		source, exists := sourceSet[column]
 		if !exists {
 			return fmt.Errorf("unknown input column %q", column)

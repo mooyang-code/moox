@@ -24,6 +24,41 @@ export interface HealthComponent {
   status_since?: string;
   probe_url?: string;
   recent_probes?: HealthSignal[];
+  /** 模块自己的生命周期状态；模块没有生命周期接口时没有这一项。 */
+  lifecycle?: HealthLifecycle;
+}
+/** 生命周期阶段：未初始化、未就绪、就绪、预热、运行、暂停、故障。 */
+export type LifecycleStage = "uninitialized" | "not_ready" | "ready" | "warming" | "running" | "paused" | "fault";
+export type LifecycleColor = "gray" | "red" | "blue" | "yellow" | "green" | "orange";
+export interface HealthLifecycleObject {
+  kind?: string;
+  id?: string;
+  stage?: LifecycleStage;
+  color?: LifecycleColor;
+  reason?: string;
+  failed_checks?: string[];
+}
+export interface HealthLifecycle {
+  stage?: LifecycleStage;
+  color?: LifecycleColor;
+  /** 运行中，但有对象暂停、故障或未就绪。 */
+  degraded?: boolean;
+  reason?: string;
+  self_stage?: LifecycleStage;
+  counts?: Record<string, number>;
+  attention?: HealthLifecycleObject[];
+  recovered?: number;
+}
+/** 系统状态：健康面（由各模块状态推导）与运行阶段（只由用户命令推进）。 */
+export interface HealthSystem {
+  health?: "healthy" | "attention";
+  phase?: "uninitialized" | "ready" | "warming" | "running";
+  color?: LifecycleColor;
+  degraded?: boolean;
+  /** 受影响的模块与原因，形如「因子引擎：crypto_1m 变更同步：变更日志断档」。 */
+  issues?: string[];
+  auto_recovered?: boolean;
+  module_count?: number;
 }
 export interface HealthObject {
   type?: "component" | "dataset" | "host" | "business";
@@ -188,6 +223,8 @@ export interface HealthOverview {
   /** 最近 incident_window_hours 小时的告警经过，按触发时间倒序。 */
   incidents?: AlertIncident[];
   incident_window_hours?: number;
+  /** 系统状态：由各模块上报的生命周期状态汇总；没有模块上报时没有这一项。 */
+  system?: HealthSystem;
 }
 export interface NotificationSummary {
   channel_count?: number;

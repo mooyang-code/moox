@@ -362,6 +362,8 @@ func resultDatasetSpec() ResultDatasetSpec {
 }
 
 type primaryFake struct {
+	changeRequests      []*storagepb.ReadDatasetChangesReq
+	changesRsp          *storagepb.ReadDatasetChangesRsp
 	pages               []*storagepb.ReadTimeSeriesRowsRsp
 	readRequests        []*storagepb.ReadTimeSeriesRowsReq
 	readErr             error
@@ -464,6 +466,14 @@ func (f *metadataFake) DeleteDataset(_ context.Context, req *storagepb.DeleteDat
 		return f.deleteRsp, nil
 	}
 	return &storagepb.DeleteDatasetRsp{RetInfo: successRet()}, nil
+}
+
+func (f *primaryFake) ReadDatasetChanges(_ context.Context, req *storagepb.ReadDatasetChangesReq, _ ...client.Option) (*storagepb.ReadDatasetChangesRsp, error) {
+	f.changeRequests = append(f.changeRequests, proto.Clone(req).(*storagepb.ReadDatasetChangesReq))
+	if f.changesRsp != nil {
+		return f.changesRsp, nil
+	}
+	return &storagepb.ReadDatasetChangesRsp{RetInfo: successRet()}, nil
 }
 
 func (f *primaryFake) ReadTimeSeriesRows(ctx context.Context, req *storagepb.ReadTimeSeriesRowsReq, _ ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error) {
@@ -608,4 +618,37 @@ func TestCarriedTimeAndJSONFieldsKeepTheirStorageType(t *testing.T) {
 	jsonValue, err := encodeValue(typedValueToAny(&storagepb.TypedValue{Value: &storagepb.TypedValue_JsonValue{JsonValue: `{"a":1}`}}))
 	require.NoError(t, err)
 	require.Equal(t, `{"a":1}`, jsonValue.GetJsonValue())
+}
+
+func TestReadDatasetChangesMapsRequestAndResponse(t *testing.T) {
+	primary := &primaryFake{changesRsp: &storagepb.ReadDatasetChangesRsp{
+		RetInfo: successRet(), HasMore: true,
+		NextCursor: &storagepb.DatasetChangeCursor{SourceNodeId: "n1", SourceStoreId: "s1", Sequence: 9},
+		Changes: []*storagepb.DatasetChange{{Sequence: 8, DatasetId: "d", Ranges: []*storagepb.DatasetChangeRange{
+			{SubjectId: "BTC", Freq: "1m", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-01T00:05:00Z"},
+		}}},
+	}}
+	c := NewClient(primary, &metadataFake{}, &commonpb.AuthInfo{AppId: "factor"})
+	got, err := c.ReadDatasetChanges(context.Background(), "crypto", "d", &ChangeCursor{NodeID: "n1", StoreID: "s1", Sequence: 7}, false, 100)
+	require.NoError(t, err)
+	require.Equal(t, uint32(100), primary.changeRequests[0].GetLimit())
+	require.Equal(t, uint64(7), primary.changeRequests[0].GetCursor().GetSequence())
+	require.False(t, primary.changeRequests[0].GetFromHead())
+	require.True(t, got.HasMore)
+	require.Equal(t, ChangeCursor{NodeID: "n1", StoreID: "s1", Sequence: 9}, got.Next)
+	require.Len(t, got.Changes, 1)
+	require.Equal(t, "BTC", got.Changes[0].Ranges[0].Subject)
+	require.Equal(t, time.Date(2026, 10, 1, 0, 5, 0, 0, time.UTC), got.Changes[0].Ranges[0].End)
+
+	_, err = c.ReadDatasetChanges(context.Background(), "crypto", "d", nil, true, 0)
+	require.NoError(t, err)
+	require.True(t, primary.changeRequests[1].GetFromHead())
+
+	primary.changesRsp = &storagepb.ReadDatasetChangesRsp{RetInfo: successRet(), Gap: true}
+	got, err = c.ReadDatasetChanges(context.Background(), "crypto", "d", &ChangeCursor{Sequence: 1}, false, 0)
+	require.NoError(t, err)
+	require.True(t, got.Gap)
+
+	_, err = c.ReadDatasetChanges(context.Background(), "", "d", nil, true, 0)
+	require.Error(t, err)
 }

@@ -82,11 +82,11 @@ func TestLoadValidManifest(t *testing.T) {
 	assert.Equal(t, "1m", snapshot.Manifest.StorageView.MaintenanceCheckInterval)
 	assert.Equal(t, "1h", snapshot.Manifest.StorageView.CapacityCheckInterval)
 	assert.Equal(t, "1h0m0s", snapshot.Manifest.StorageView.CapacityCheckJitter)
-	assert.Equal(t, int64(1<<30), snapshot.Manifest.StorageView.MaxViewFileBytes)
+	assert.Equal(t, int64(4<<30), snapshot.Manifest.StorageView.MaxViewFileBytes)
 	policy := snapshot.Manifest.StoragePolicy()
 	assert.Equal(t, storagepolicy.Default().Retention, policy.Retention, "an omitted [storage_retention] uses the recommended retention")
-	assert.Equal(t, uint64(5000), policy.View.Bars)
-	assert.Equal(t, uint64(6000), policy.View.TrimBars)
+	assert.Equal(t, uint64(10000), policy.View.Bars)
+	assert.Equal(t, uint64(12000), policy.View.TrimBars)
 	require.NoError(t, policy.Validate())
 	assert.Equal(t, 50, snapshot.Manifest.LocalLogs.MaxSizeMB)
 	assert.Equal(t, 5, snapshot.Manifest.LocalLogs.BackupCount)
@@ -217,7 +217,7 @@ view_rows_per_series = 777
 	// replaces the recommended space overrides instead of merging with them.
 	period, source, err = policy.Retention.Resolve("stockcn", "1m")
 	require.NoError(t, err)
-	assert.Equal(t, "168h", period.String())
+	assert.Equal(t, "192h", period.String())
 	assert.Equal(t, storagepolicy.SourceDefault, source)
 }
 

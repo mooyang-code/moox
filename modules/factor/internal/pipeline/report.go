@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -114,14 +113,9 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 		if err != nil {
 			return Outcome{StageDurations: outcome.StageDurations}, err
 		}
-		// 回看窗口的 K 线空洞检查：有洞的因子对该标的当期失败（不计算、不写值），并按周期记入账本。
-		if r.cfg.GapCheck {
-			loaded.Gaps = r.checkGaps(ctx, plan, loaded)
-			r.noteGaps(ctx, plan, loaded)
-		}
-		// 补算与含空洞失效写入使用每次执行唯一的提交 ID：Storage 对相同提交 ID、相同内容直接返回成功而不再写字段，
-		// 这类写入必须保证「期望重写就一定重写」。普通实时写入保持内容寻址去重。
-		if plan.CommitSalt == "" && (plan.Mode == ModeRecalc || loaded.Gaps.Len() > 0) {
+		// 补算使用每次执行唯一的提交 ID：Storage 对相同提交 ID、相同内容直接返回成功而不再写字段，
+		// 补算必须保证「期望重写就一定重写」。普通实时写入保持内容寻址去重。
+		if plan.CommitSalt == "" && plan.Mode == ModeRecalc {
 			plan.CommitSalt = newCommitSalt()
 		}
 		stage = time.Now()
@@ -140,8 +134,8 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 		items = assembled.Items
 		// 先记账本、再写结果与 marker：崩溃后事件重投时，同一条目按唯一键合并，不会丢账。
 		if !plan.FillOnly {
-			r.recordGaps(ctx, plan, loaded.Gaps)
 			r.recordWarming(ctx, plan, loaded.WarmingSubjects)
+			r.recordUnavailable(ctx, plan, loaded)
 			// 上游失败的待办是这一期补齐的唯一依据（水位随后前进，不会再回头），记不进账本就不能继续。
 			if err := r.recordUpstream(ctx, plan); err != nil {
 				return Outcome{StageDurations: outcome.StageDurations}, err
@@ -191,20 +185,6 @@ func newCommitSalt() string {
 		return time.Now().UTC().Format("20060102150405.000000000")
 	}
 	return hex.EncodeToString(buf)
-}
-
-// recordGaps 把本次因空洞跳过的 (因子, 标的, 周期) 写入账本。写入失败只记日志，不影响周期推进。
-func (r *Runner) recordGaps(ctx context.Context, plan Plan, gaps GapReport) {
-	if r.cfg.GapSink == nil || gaps.Len() == 0 {
-		return
-	}
-	entries := gaps.entries4Ledger(plan)
-	if len(entries) == 0 {
-		return
-	}
-	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
-		log.ErrorContextf(ctx, "factor_gap_record_failed set_id=%s entries=%d error=%v", plan.Set.SetID, len(entries), err)
-	}
 }
 
 // recordWarming 把实时周期里因预热中被跳过的 (因子, 标的, 周期) 记入账本：这些结果本期没有算，marker 照常按失败标的上报，
@@ -264,31 +244,40 @@ func (r *Runner) recordUpstream(ctx context.Context, plan Plan) error {
 	return nil
 }
 
-// noteGaps 输出有空洞的结构化日志；整期大面积缺失（有空洞或上游失败的标的占预期的比例达到 MassRatio）输出 ERROR，
-// 由监控告警接入，人工介入确认数据源。
-func (r *Runner) noteGaps(ctx context.Context, plan Plan, loaded LoadResult) {
-	affected := loaded.Gaps.AffectedSubjects()
-	if plan.Mode == ModeLive {
-		for _, entry := range loaded.Gaps.entries4Ledger(plan) {
-			log.WarnContextf(ctx, "factor_window_gap set=%s factor=%s subject=%s period=%s missing=%s",
-				entry.SetID, entry.FactorID, entry.Subject, entry.Period.Format(time.RFC3339), formatTimes(entry.Missing))
-		}
-	}
-	if r.cfg.MassRatio <= 0 || plan.Mode != ModeLive || len(plan.Expected) == 0 {
+// recordUnavailable 把实时周期里同步之后本地仍没有目标周期行（数据还没到、或同步失败）的 (因子, 标的, 周期) 记入账本：
+// 补采补齐之后由「只填充」补算补上，与上游失败同一种恢复。记账失败只记日志，不影响周期推进。
+func (r *Runner) recordUnavailable(ctx context.Context, plan Plan, loaded LoadResult) {
+	if r.cfg.GapSink == nil || plan.Mode != ModeLive || len(plan.Factors) == 0 {
 		return
 	}
-	failed := uniqueSorted(append(append([]string(nil), affected...), plan.UpstreamFailed...))
-	ratio := float64(len(failed)) / float64(len(plan.Expected))
-	if ratio >= r.cfg.MassRatio {
-		log.ErrorContextf(ctx, "factor_gap_mass set=%s period=%s ratio=%.3f affected=%d expected=%d",
-			plan.Set.SetID, plan.PeriodTime.Format(time.RFC3339), ratio, len(failed), len(plan.Expected))
+	skip := make(map[string]struct{}, len(plan.UpstreamFailed)+len(loaded.WarmingSubjects))
+	for _, subject := range plan.UpstreamFailed {
+		skip[subject] = struct{}{}
 	}
-}
-
-func formatTimes(values []time.Time) string {
-	parts := make([]string, 0, len(values))
-	for _, value := range values {
-		parts = append(parts, value.UTC().Format(time.RFC3339))
+	for _, subject := range loaded.WarmingSubjects {
+		skip[subject] = struct{}{}
 	}
-	return strings.Join(parts, ",")
+	target, err := planTarget(r.clock, plan)
+	if err != nil {
+		log.ErrorContextf(ctx, "factor_unavailable_record_failed set_id=%s error=%v", plan.Set.SetID, err)
+		return
+	}
+	var entries []GapEntry
+	for _, subject := range loaded.FailedSubjects {
+		if _, done := skip[subject]; done {
+			continue
+		}
+		for _, factor := range plan.Factors {
+			entries = append(entries, GapEntry{
+				SetID: plan.Set.SetID, Subject: subject, Period: target.UTC(), FactorID: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor),
+				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonUpstream,
+			})
+		}
+	}
+	if len(entries) == 0 {
+		return
+	}
+	if err := r.cfg.GapSink.RecordGaps(ctx, entries); err != nil {
+		log.ErrorContextf(ctx, "factor_unavailable_record_failed set_id=%s period=%s entries=%d error=%v", plan.Set.SetID, target.UTC().Format(time.RFC3339), len(entries), err)
+	}
 }

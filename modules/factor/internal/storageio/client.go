@@ -16,6 +16,7 @@ var ErrInfra = errors.New("storage infrastructure failure")
 
 type PrimaryStoreClient interface {
 	ReadTimeSeriesRows(context.Context, *storagepb.ReadTimeSeriesRowsReq, ...client.Option) (*storagepb.ReadTimeSeriesRowsRsp, error)
+	ReadDatasetChanges(context.Context, *storagepb.ReadDatasetChangesReq, ...client.Option) (*storagepb.ReadDatasetChangesRsp, error)
 	WriteFactorRows(context.Context, *storagepb.PrimaryWriteFactorRowsReq, ...client.Option) (*storagepb.PrimaryWriteFactorRowsRsp, error)
 	ReportFactorPeriodComputed(context.Context, *storagepb.ReportFactorPeriodComputedReq, ...client.Option) (*storagepb.ReportFactorPeriodComputedRsp, error)
 	GetFactorPeriodComputed(context.Context, *storagepb.GetFactorPeriodComputedReq, ...client.Option) (*storagepb.GetFactorPeriodComputedRsp, error)

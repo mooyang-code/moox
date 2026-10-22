@@ -18,7 +18,8 @@ import (
 	"github.com/mooyang-code/moox/packages/requestauth"
 )
 
-const maxBodyExcerptBytes = 2048
+// 健康响应里带着生命周期状态（details.lifecycle），要放得下完整的 JSON 才能被 Monitor 解析。
+const maxBodyExcerptBytes = 4096
 
 type HTTPRunner struct {
 	HealthSigner *HealthSigner

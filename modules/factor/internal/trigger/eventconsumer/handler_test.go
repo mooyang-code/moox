@@ -84,6 +84,25 @@ func TestHandlerAcksWhenNoEnabledSet(t *testing.T) {
 	require.Empty(t, runner.plans)
 }
 
+func TestHandlerGateClosedAcksWithoutComputing(t *testing.T) {
+	set := enabledTestSet()
+	periodStore := &handlerPeriodStore{}
+	runner := new(handlerRunner)
+	handler := NewHandler(&handlerSetLocator{set: set, found: true}, periodStore, runner, new(testSetLocks), HandlerConfig{})
+	t.Cleanup(handler.Close)
+	open := false
+	handler.SetGate(func(string) bool { return open })
+
+	result := handler.Handle(context.Background(), collectorDelivery(t, "event-gate-1"))
+	require.Equal(t, jetstream.ACK, result.Decision)
+	require.Empty(t, runner.plans, "门禁关闭时不计算")
+
+	open = true
+	result = handler.Handle(context.Background(), collectorDelivery(t, "event-gate-2"))
+	require.Equal(t, jetstream.ACK, result.Decision)
+	require.NotEmpty(t, runner.plans, "门禁打开后正常计算")
+}
+
 func TestHandlerAcksWhenComputedAlreadyExists(t *testing.T) {
 	set := enabledTestSet()
 	periodStore := &handlerPeriodStore{exists: true}

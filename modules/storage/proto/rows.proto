@@ -141,6 +141,56 @@ message CountTimeSeriesRowsRsp {
   repeated SubjectRowCount counts = 2;
 }
 
+// DatasetChangeCursor 是行变更日志的读取位点：序号只在 (source_node_id, source_store_id) 内可比较，
+// 节点更换或存储重建后身份对不上，读取方会收到「断档」。
+message DatasetChangeCursor {
+  string source_node_id = 1;
+  string source_store_id = 2;
+  // sequence 是已处理到的序号；0 表示还没有处理过任何变更（配合 from_head 取基线）。
+  uint64 sequence = 3;
+}
+
+// DatasetChangeRange 是一个标的在一次写入里受影响的时间点范围（含两端，RFC3339 UTC）。
+message DatasetChangeRange {
+  string subject_id = 1;
+  string freq = 2;
+  string start_time = 3;
+  string end_time = 4;
+}
+
+// DatasetChange 是一次写入对一个数据集造成的变更。本地副本据此得知哪些区间被写入或修正。
+message DatasetChange {
+  uint64 sequence = 1;
+  string space_id = 2;
+  string dataset_id = 3;
+  repeated DatasetChangeRange ranges = 4;
+  string created_at = 5;
+}
+
+// ReadDatasetChangesReq 从持久化的变更日志里按序读取变更。日志与行写入在同一个 Pebble batch 里提交，
+// 保留一段时间（默认 7 天）；游标早于保留起点或身份对不上时返回 gap。
+message ReadDatasetChangesReq {
+  common.AuthInfo auth_info = 1;
+  string space_id = 2;
+  // dataset_id 必填：PrimaryStore 据此找到数据集所在的 DataNode；只返回这个数据集的变更，游标仍按该节点的全部变更推进。
+  string dataset_id = 3;
+  DatasetChangeCursor cursor = 4;
+  // from_head 为真时不返回变更，只返回当前日志头部的位点：基线先取位点、再读数据，之后从这个位点继续读。
+  bool from_head = 5;
+  // limit 是最多扫描的日志条数，默认 500，最大 2000。
+  uint32 limit = 6;
+}
+
+message ReadDatasetChangesRsp {
+  common.RetInfo ret_info = 1;
+  repeated DatasetChange changes = 2;
+  // next_cursor 是读完本批之后的位点，原样放进下一次请求。
+  DatasetChangeCursor next_cursor = 3;
+  bool has_more = 4;
+  // gap 为真表示游标早于日志保留起点，或游标身份与当前存储对不上，调用方要走对账。
+  bool gap = 5;
+}
+
 message ReadTimeSeriesRowsRsp {
   common.RetInfo ret_info = 1;
   repeated TimeSeriesRow rows = 2;

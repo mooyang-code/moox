@@ -45,6 +45,13 @@ func newMemoryStorage(subjects []string, target time.Time, periods int) *memoryS
 	return store
 }
 
+// data 把内存里的源数据适配成管线的数据层（每次 Load 计一次读取）。
+func (s *memoryStorage) data() Data {
+	return &frameData{read: func(ctx context.Context, plan Plan, start time.Time) (map[string]*storageio.Frame, error) {
+		return s.ReadWindow(ctx, storageio.ReadRequest{Subjects: plan.Available, Start: start, End: plan.TargetEnd, Columns: plan.CarryColumns})
+	}}
+}
+
 func (*memoryStorage) DatasetColumns(context.Context, string, string) ([]string, error) {
 	return nil, nil
 }
@@ -136,7 +143,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 
 	t.Run("writes result rows and complete marker", func(t *testing.T) {
 		store := newMemoryStorage(subjects, target, 10)
-		runner := NewRunner(store, clock, Config{ComputeWorkers: 2})
+		runner := NewRunner(store, store.data(), clock, Config{ComputeWorkers: 2})
 		plan, err := BuildLivePlan(clock, e2eLiveInput(target, subjects, []domain.FactorDef{mean}))
 		require.NoError(t, err)
 
@@ -168,7 +175,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 
 	t.Run("duplicate delivery is idempotent", func(t *testing.T) {
 		store := newMemoryStorage(subjects, target, 10)
-		runner := NewRunner(store, clock, Config{ComputeWorkers: 2})
+		runner := NewRunner(store, store.data(), clock, Config{ComputeWorkers: 2})
 		plan, err := BuildLivePlan(clock, e2eLiveInput(target, subjects, []domain.FactorDef{mean}))
 		require.NoError(t, err)
 
@@ -183,7 +190,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 
 	t.Run("upstream failed subject degrades the period", func(t *testing.T) {
 		store := newMemoryStorage(subjects, target, 10)
-		runner := NewRunner(store, clock, Config{ComputeWorkers: 2})
+		runner := NewRunner(store, store.data(), clock, Config{ComputeWorkers: 2})
 		input := e2eLiveInput(target, subjects, []domain.FactorDef{mean})
 		input.UpstreamFailed = []string{"SOL"}
 		plan, err := BuildLivePlan(clock, input)
@@ -200,7 +207,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 
 	t.Run("failing factor writes null column and degrades", func(t *testing.T) {
 		store := newMemoryStorage(subjects, target, 10)
-		runner := NewRunner(store, clock, Config{ComputeWorkers: 2})
+		runner := NewRunner(store, store.data(), clock, Config{ComputeWorkers: 2})
 		plan, err := BuildLivePlan(clock, e2eLiveInput(target, subjects, []domain.FactorDef{broken, mean}))
 		require.NoError(t, err)
 
@@ -222,7 +229,7 @@ func TestLivePeriodEndToEnd(t *testing.T) {
 
 	t.Run("no enabled member still reports the period", func(t *testing.T) {
 		store := newMemoryStorage(subjects, target, 10)
-		runner := NewRunner(store, clock, Config{ComputeWorkers: 2})
+		runner := NewRunner(store, store.data(), clock, Config{ComputeWorkers: 2})
 		plan, err := BuildLivePlan(clock, e2eLiveInput(target, subjects, []domain.FactorDef{}))
 		require.NoError(t, err)
 
@@ -243,7 +250,7 @@ func TestSameDefinitionInTwoSetsComputesIntoEachResultDataset(t *testing.T) {
 	mean := e2eMean()
 	clock := periodclock.Continuous{}
 	store := newMemoryStorage(subjects, target, 10)
-	runner := NewRunner(store, clock, Config{ComputeWorkers: 2})
+	runner := NewRunner(store, store.data(), clock, Config{ComputeWorkers: 2})
 
 	for _, set := range []domain.FactorSet{
 		{SetID: "set_1m", ResultDatasetID: "dataset_factor_bars_1m"},

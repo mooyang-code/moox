@@ -38,10 +38,28 @@ compute:
   workers: 4
   max_memory: 1GiB
 
+# 本地时序存储（Pebble，数据永不删除）：K 线先同步到这里，实时计算、补算、重算都从本地读，Storage 只补增量和修正。
+seriesstore:
+  dir: ./data/seriesstore
+  block_cache: 512MiB           # Pebble 块缓存，计入进程内存预算
+
+# 内存列式滑动窗口：每个数据源一份，保留集合内最大回看根数。max_memory 是所有窗口常驻内存的上限，
+# 新启用的集合会超出时拒绝启用；0 表示不限制。初始化（moox-cli setup）按探测到的内存写入。
+window:
+  max_memory: 0
+  headroom: 0                   # 每个序列数组的余量根数，0 取窗口长度的 1/4（至少 16）
+
+# 进程内存预算：常驻的窗口与块缓存先扣除，计算、重算向它预留；0 表示不限制。初始化按「总内存 × 60%」写入。
+memory:
+  total_budget: 0
+
+# 与 Storage 的同步：每期只拉增量；follow_interval 是读取行变更日志、应用修正的间隔。
+sync:
+  workers: 4
+  batch_subjects: 100           # 每批标的数，Storage 单次最多 100 个
+  follow_interval: 30s
+
 pipeline:
-  read_batch_subjects: 100
-  read_workers: 4
-  read_timeout: 60s
   write_batch_rows: 1000
   period_budget_min: 60s
   period_budget_max: 15m
@@ -50,18 +68,15 @@ recalc:
   chunk_periods: 500
   poll_interval: 5s
 
-# 跳过账本与恢复（始终开启）：回看窗口有空洞、或实时周期里标的还在预热而跳过的结果，账本永久记录，定时只填充重算。
-# enabled 只控制 K 线空洞检查：有空洞的因子对该标的当期失败（按失败标的上报并带 gap_subjects）。
-# 默认关闭：Storage、策略、Trade 都升级到支持 gap_subjects 与保持标记之后才打开。
+# 跳过账本与恢复：实时周期里标的本期数据取不到（上游失败、同步失败）、或内存窗口还没载入完成而跳过的结果，
+# 账本永久记录，定时只填充重算。本地数据写入时保证连续，窗口里不会再有空洞。
 gap:
-  enabled: true                 # 回看窗口空洞检查：WS 推送采集上线前必须打开（下游 Storage、策略、Trade 已支持 gap_subjects）
   ledger_dir: ./data/gap        # 账本目录（按月一个 JSONL，永不自动删除），纳入备份
   sweep_interval: 5m
   settle: 5m                    # 发现后至少等这么久再尝试恢复，给自动补采留时间
   give_up_after: 6h             # 超过它仍补不上：记 gave_up 并告警，交给人工补采与补算
   max_groups_per_sweep: 20      # 每轮最多运行的恢复批数（区间相同的时序分组合并成一批，每批最多 100 个标的）
   max_span: 60                  # 每组一次最多处理的周期数，避免长时间占住集合锁
-  mass_ratio: 0.2               # 有空洞或上游失败的标的占预期的比例达到它时输出 ERROR（整期大面积缺失）
 
 # 连续水位：每个集合从水位下一期逐期推进，前面有还没补到的周期（零提交、缺失超过阈值）就停住，不跳期。
 watermark:

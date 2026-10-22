@@ -142,8 +142,10 @@ func TestStorageOperationsUseSSHNativeGatewayAndIndependentRoleAuth(t *testing.T
 	csv := filepath.Join(dir, "prices.csv")
 	require.NoError(t, os.WriteFile(csv, []byte("time,close\n2026-10-09T00:00:00Z,12.5\n"), 0600))
 	var written map[string]any
-	require.NoError(t, json.Unmarshal(run("storage", "import", "--file", csv, "--manifest", manifest, "--space", "crypto", "--dataset", "prices", "--subject", "BTC-USDT", "--freq", "1m", "--time-column", "time"), &written))
-	require.Equal(t, float64(1), written["written_rows"])
+	require.NoError(t, json.Unmarshal(run("import", "--path", csv, "--manifest", manifest, "--space", "crypto", "--dataset", "prices", "--subject", "BTC-USDT", "--freq", "1m",
+		"--time-column", "time", "--target", "storage", "--job-db", filepath.Join(dir, "importer.db")), &written))
+	require.Equal(t, "imported", written["status"])
+	require.Equal(t, float64(1), written["rows"])
 	require.Equal(t, int32(1), wire.creates.Load())
 	require.Equal(t, int32(1), wire.writes.Load())
 	require.Equal(t, int32(1), wire.markers.Load())

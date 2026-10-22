@@ -84,3 +84,15 @@ func (d Decimal) Validate(maxScale int, allowNegative bool) error {
 	}
 	return nil
 }
+
+// RoundDown 向零截断到 scale 位小数（数量按精度取整、除法结果收敛为有限小数时用）。
+func (d Decimal) RoundDown(scale int) Decimal {
+	if scale < 0 {
+		scale = 0
+	}
+	factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
+	scaled := new(big.Rat).Mul(d.rat(), new(big.Rat).SetInt(factor))
+	// big.Int.Quo 向零取整。
+	whole := new(big.Int).Quo(scaled.Num(), scaled.Denom())
+	return Decimal{v: new(big.Rat).SetFrac(whole, factor)}
+}

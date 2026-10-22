@@ -1544,6 +1544,7 @@ components:
           - RestoreDatasetRows
           - ReadTimeSeriesRows
           - CountTimeSeriesRows
+          - ReadDatasetChanges
           - ReportCollectorPeriodCompleted
           - ReportFactorPeriodComputed
           - AppendDatasetSyncPoint
@@ -1553,6 +1554,7 @@ components:
           - ReadRows
           - ReadTimeSeriesRows
           - CountTimeSeriesRows
+          - ReadDatasetChanges
           - GetFactorPeriodComputed
         # 周期提交按（数据集，周期，序列）覆盖行并幂等置位完成位图，周期封口后返回回执而不再写入，重复提交安全。
         idempotent_methods:
@@ -1571,6 +1573,7 @@ components:
               - RestoreDatasetRows
               - ReadTimeSeriesRows
               - CountTimeSeriesRows
+              - ReadDatasetChanges
               - ReportCollectorPeriodCompleted
               - ReportFactorPeriodComputed
               - AppendDatasetSyncPoint
@@ -1961,6 +1964,7 @@ principals:
       - service: trpc.moox.storage.PrimaryStore
         methods:
           - ReadTimeSeriesRows
+          - ReadDatasetChanges
           - WriteFactorRows
           - ReportFactorPeriodComputed
           - GetFactorPeriodComputed

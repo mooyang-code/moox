@@ -15,6 +15,8 @@ type Metrics struct {
 	GapSkipped        prometheus.Counter
 	GapGaveUp         prometheus.Counter
 	GapLedgerDegraded prometheus.Gauge
+	// SeriesChangeGaps 是本地时序存储的变更日志同步位点断档的次数（需要对账）。
+	SeriesChangeGaps prometheus.Counter
 }
 
 func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
@@ -56,13 +58,16 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 		GapLedgerDegraded: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "factor_gap_ledger_degraded", Help: "1 when the last window-gap ledger write failed.",
 		}),
+		SeriesChangeGaps: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "factor_series_change_gaps_total", Help: "Number of times a local series source lost its change-log cursor and needs reconciliation.",
+		}),
 	}
 	if err := registerer.Register(metrics.PeriodDuration); err != nil {
 		return nil, err
 	}
 	collectors := []prometheus.Collector{
 		metrics.PeriodLag, metrics.PeriodTotal, metrics.Failures, metrics.LaneBacklog, metrics.CompileErrors, metrics.LastPeriodTime,
-		metrics.GapPending, metrics.GapSkipped, metrics.GapGaveUp, metrics.GapLedgerDegraded,
+		metrics.GapPending, metrics.GapSkipped, metrics.GapGaveUp, metrics.GapLedgerDegraded, metrics.SeriesChangeGaps,
 	}
 	for _, collector := range collectors {
 		if err := registerer.Register(collector); err != nil {

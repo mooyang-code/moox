@@ -83,6 +83,36 @@ func (s *Service) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeri
 	return node.CountTimeSeriesRows(ctx, &pb.CountTimeSeriesRowsReq{AuthInfo: auth, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Selectors: req.GetSelectors(), TimeRange: req.GetTimeRange()})
 }
 
+// ReadDatasetChanges 读取数据集所在 DataNode 的持久化行变更日志：from_head 取基线位点，否则从游标之后按序读。
+// 游标身份对不上或早于日志保留起点时响应里 gap 为真，调用方走对账。
+func (s *Service) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error) {
+	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" {
+		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
+	}
+	if !req.GetFromHead() && req.GetCursor() == nil {
+		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("cursor is required unless from_head is set"))}, nil
+	}
+	if err := s.authorizeRequest(req.GetAuthInfo()); err != nil {
+		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	ctx = s.requestContext(ctx)
+	node, err := s.rangeNode(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode range runtime is unavailable"))}, nil
+	}
+	auth, err := s.signAuth(req.GetAuthInfo())
+	if err != nil {
+		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	return node.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{
+		AuthInfo: auth, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(),
+		Cursor: req.GetCursor(), FromHead: req.GetFromHead(), Limit: req.GetLimit(),
+	})
+}
+
 func (s *Service) rangeNode(ctx context.Context, spaceID, datasetID string) (rangeDataNodeClient, error) {
 	node, err := s.resolve(ctx, spaceID, datasetID)
 	if err != nil {

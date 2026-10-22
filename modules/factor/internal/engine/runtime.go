@@ -12,10 +12,13 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/gapledger"
 	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
+	"github.com/mooyang-code/moox/modules/factor/internal/localdata"
+	"github.com/mooyang-code/moox/modules/factor/internal/memadmit"
 	"github.com/mooyang-code/moox/modules/factor/internal/observability"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
+	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger/eventconsumer"
@@ -25,6 +28,7 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -53,8 +57,13 @@ type Runtime struct {
 	filled      *filledPeriods
 	lease       *leaseState
 	syncer      *catalogSyncer
-	prewarm     *prewarmer
+	preload     *preloader
+	series      *seriesstore.Store
+	data        *localdata.Data
+	admit       *memadmit.Admitter
 	health      *factorhealth.State
+	life        *lifecycle.Controller
+	replays     *replayManager
 
 	// reconcileMu serializes consumer start/stop; consumerMu only guards the
 	// pointer so status and health reads never wait on EventBus I/O.
@@ -116,14 +125,21 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		return nil, fmt.Errorf("register factor pipeline metrics: %w", err)
 	}
 	clock := periodclock.Continuous{}
+	// 本地时序存储与内存窗口（设计第 3、4 节）：窗口与块缓存是常驻内存，先从进程预算里扣除，计算再向准入器预留。
+	r.admit = memadmit.New(int64(cfg.Memory.TotalBudget))
+	r.admit.SetResident("seriesstore_block_cache", int64(cfg.SeriesStore.BlockCache))
+	if r.series, err = seriesstore.Open(seriesstore.Options{Dir: cfg.SeriesStore.Dir, BlockCacheBytes: int64(cfg.SeriesStore.BlockCache)}); err != nil {
+		return nil, fmt.Errorf("open factor series store: %w", err)
+	}
+	r.data = localdata.New(localdata.Config{
+		Store: r.series, Storage: r.storage, Clock: clock, Admit: r.admit,
+		Workers: cfg.Sync.Workers, BatchSubjects: cfg.Sync.BatchSubjects, Headroom: cfg.Window.Headroom, WindowMax: int64(cfg.Window.MaxMemory),
+	})
 	pipelineConfig := pipeline.Config{
-		ReadBatchSubjects: cfg.Pipeline.ReadBatchSubjects, ReadWorkers: cfg.Pipeline.ReadWorkers,
-		ReadTimeout:     cfg.Pipeline.ReadTimeout,
-		BulkReadWorkers: cfg.Pipeline.BulkReadWorkers, ReadRetryBackoff: cfg.Pipeline.ReadRetryBackoff, ReadBreakerFailures: cfg.Pipeline.ReadBreakerFailures,
-		WarmupBatchSubjects: cfg.Pipeline.WarmupBatchSubjects, WarmupWorkers: cfg.Pipeline.WarmupWorkers, WarmupBatchPause: cfg.Pipeline.WarmupBatchPause, WriteBatchRows: cfg.Pipeline.WriteBatchRows,
-		WriteRetryBackoff: 300 * time.Millisecond, ComputeWorkers: cfg.Compute.Workers, MaxMemory: int64(cfg.Compute.MaxMemory),
-		OnCompileError:   func(setID, factorID string) { r.metrics.CompileErrors.WithLabelValues(setID, factorID).Inc() },
-		BackgroundWarmup: true,
+		WriteBatchRows: cfg.Pipeline.WriteBatchRows, WriteRetryBackoff: 300 * time.Millisecond,
+		ComputeWorkers: cfg.Compute.Workers, MaxMemory: int64(cfg.Compute.MaxMemory),
+		OnCompileError:  func(setID, factorID string) { r.metrics.CompileErrors.WithLabelValues(setID, factorID).Inc() },
+		MemoryAdmission: r.admit, AdmissionTimeout: cfg.Pipeline.PeriodBudgetMax,
 	}
 	// 跳过账本与恢复始终开启：预热中被跳过的周期也靠它补算。gap.enabled 只控制回看窗口的空洞检查。
 	ledger, expired, err := gapledger.Open(cfg.Gap.LedgerDir, time.Now, cfg.Gap.GiveUpAfter)
@@ -133,7 +149,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.gap = ledger
 	logExpired(expired, cfg.Gap.GiveUpAfter)
 	r.metrics.GapGaveUp.Add(float64(len(expired)))
-	log.InfoContextf(ctx, "factor_gap_ledger_opened dir=%s pending=%d ignored_lines=%d expired=%d gap_check=%t", cfg.Gap.LedgerDir, ledger.PendingCount(), ledger.Ignored(), len(expired), cfg.Gap.Enabled)
+	log.InfoContextf(ctx, "factor_gap_ledger_opened dir=%s pending=%d ignored_lines=%d expired=%d", cfg.Gap.LedgerDir, ledger.PendingCount(), ledger.Ignored(), len(expired))
 	// 记入预热中跳过的项、或者一批预热完成时唤醒跳过恢复：集合预热已就绪时这些项不用再等 Settle。
 	gapKick := make(chan struct{}, 1)
 	kickGap := func() {
@@ -143,9 +159,6 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		}
 	}
 	pipelineConfig.GapSink = warmingKickSink{GapSink: ledger, kick: kickGap}
-	if cfg.Gap.Enabled {
-		pipelineConfig.GapCheck, pipelineConfig.MassRatio = true, cfg.Gap.MassRatio
-	}
 	watermarks, err := watermark.Open(cfg.Watermark.StateFile)
 	if err != nil {
 		return nil, fmt.Errorf("open factor watermarks: %w", err)
@@ -157,10 +170,13 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	}
 	r.advanceKick, r.filled = make(chan string, 64), newFilledPeriods(time.Now)
 	r.manager.OnFilled = func(filled []*factorpb.PeriodsFilled) { r.onFilled(filled, kickGap) }
-	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, clock, pipelineConfig)
+	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, r.data, clock, pipelineConfig)
 	r.pipeline = base
 	r.runner = &measuredRunner{inner: base, metrics: r.metrics, health: r.monitor, runs: r.runs}
-	r.prewarm = newPrewarmer(r.catalog, r.storage, base, r.active)
+	r.preload = newPreloader(r.catalog, r.storage, r.data, r.active, func(string) { kickGap() })
+	if r.life, err = r.newLifecycle(); err != nil {
+		return nil, fmt.Errorf("open factor lifecycle: %w", err)
+	}
 
 	r.syncer = &catalogSyncer{
 		client: r.manager, cache: r.catalog, interval: cfg.CatalogSync.Interval, offset: cfg.CatalogSync.Offset,
@@ -198,8 +214,11 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 			}
 		},
 	}
-	// 预热完成后立刻补算预热期间跳过的那几期，不等 Settle 与下一轮轮询。
-	r.pipeline.OnWarmupDone(func(string) { kickGap() })
+	follower := &seriesFollower{
+		data: r.data, sets: r.catalog, source: r.storage, exec: executor, periods: committedThrough{r.continuity},
+		active: r.active, interval: cfg.Sync.FollowInterval, chunk: cfg.Recalc.ChunkPeriods, now: time.Now,
+		onGapped: func(seriesstore.Source) { r.metrics.SeriesChangeGaps.Inc() }, blocked: map[seriesstore.Source]bool{},
+	}
 
 	r.goRun(appCtx, filler.Run)
 	r.goRun(appCtx, r.runCatchup)
@@ -208,11 +227,20 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, recalc.Run)
 	r.goRun(appCtx, r.superviseConsumer)
 	r.goRun(appCtx, r.reportMetrics)
-	r.goRun(appCtx, r.pipeline.RunWarmup)
-	r.goRun(appCtx, r.prewarm.Run)
+	r.goRun(appCtx, r.preload.Run)
+	r.goRun(appCtx, follower.Run)
+	r.replays = newReplayManager(ReplayDeps{
+		Sets: r.catalog, Source: r.storage, Columns: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
+		BatchOK: func() int { return cfg.Pipeline.WriteBatchRows },
+	})
+	r.goRun(appCtx, r.replays.Run)
+	r.goRun(appCtx, func(ctx context.Context) {
+		r.life.Recover(ctx)
+		r.life.Run(ctx, cfg.Lifecycle.Interval)
+	})
 
 	r.health.SnapshotFunc = r.healthSnapshot
-	if err := factorhealth.Register(s.Service(healthService), r.health); err != nil {
+	if err := factorhealth.Register(s.Service(healthService), r.health, append(append(newLocalWriter(r.data, r.storage).routes(), r.lifecycleRoutes()...), r.replays.routes()...)...); err != nil {
 		return nil, fmt.Errorf("register factor engine health service: %w", err)
 	}
 	r.health.SetReady(true)
@@ -227,13 +255,13 @@ func (r *Runtime) active() bool { return r.catalog.Loaded() && !r.lease.Conflict
 
 // reconcileConsumer starts the period consumer when the engine becomes active,
 // stops it on a lease conflict and refreshes its set filters otherwise. While
-// active it also kicks the prewarmer, so a new lease holder or a newly enabled
-// set starts loading its lookback windows before its first live period.
+// active it also kicks the preloader, so a new lease holder or a newly enabled
+// set starts loading its window before its first live period.
 func (r *Runtime) reconcileConsumer() {
 	r.reconcileMu.Lock()
 	defer r.reconcileMu.Unlock()
 	if r.active() {
-		r.prewarm.Kick()
+		r.preload.Kick()
 	}
 	current := r.currentConsumer()
 	switch {
@@ -241,7 +269,7 @@ func (r *Runtime) reconcileConsumer() {
 		consumer, err := eventconsumer.NewConsumer(context.Background(), eventconsumer.ConsumerConfig{
 			URLs: r.cfg.EventBus.URLs, CredentialFile: r.cfg.EventBus.CredentialFile,
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
-			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity,
+			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate,
 		}, r.catalog, &observedStore{Store: r.storage, health: r.monitor}, r.runner, r.locks)
 		if err != nil {
 			log.ErrorContextf(context.Background(), "factor_engine_consumer_start_failed error=%v", err)
@@ -387,6 +415,9 @@ func (r *Runtime) healthSnapshot(context.Context) healthz.Response {
 	if lease.LastError != "" {
 		details["heartbeat_error"] = lease.LastError
 	}
+	if r.life != nil {
+		details["lifecycle"] = r.life.Compact()
+	}
 	return healthz.Response{Module: "factor-engine", Ready: check.Healthy, Status: state, Time: time.Now().UTC(), Details: details}
 }
 
@@ -418,6 +449,9 @@ func (r *Runtime) Close() error {
 		r.reconcileMu.Unlock()
 		if r.gap != nil {
 			r.err = errors.Join(r.err, r.gap.Close())
+		}
+		if r.series != nil {
+			r.err = errors.Join(r.err, r.series.Close())
 		}
 		if r.gateway != nil {
 			r.err = errors.Join(r.err, r.gateway.Close())
@@ -486,4 +520,16 @@ func withWarmup(lanes []domain.LaneStatus, setIDs []string, warmups []pipeline.W
 		kept[i].ExpectedSubjects = int32(warmup.ExpectedSubjects)
 	}
 	return kept
+}
+
+// committedThrough 把连续水位适配成失效重算需要的「已经算过的最后一期」。
+type committedThrough struct{ c *eventconsumer.Continuity }
+
+func (c committedThrough) CommittedThrough(setID string) (time.Time, bool) {
+	for _, state := range c.c.States() {
+		if state.SetID == setID && !state.CommittedThrough.IsZero() {
+			return state.CommittedThrough, true
+		}
+	}
+	return time.Time{}, false
 }

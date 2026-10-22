@@ -89,7 +89,7 @@ $S rollback --host control --unit prod --backup /data/moox/prod/binary-backup-co
 
 ## 服务目录变化：必须整体发布
 
-`packages/servicecatalog/catalog.yaml`（新增或删除 RPC 路由、改 ACL、改方法超时都算）内嵌在 **Admin、Monitor、每台主机的 host-gateway** 里。
+`packages/servicecatalog/catalog.yaml`（新增或删除 RPC 路由、改 ACL、改方法超时、改外部白名单都算）内嵌在 **Admin、Monitor、每台主机的 host-gateway** 里，外部调用方（因子引擎等）的白名单还内嵌在 **Access**（存储机、海外机各一个）里：只改外部白名单时漏装 Access，调用会报 `access caller is not allowed for this method`（2026-10-21 因子引擎调 `ReadDatasetChanges` 时遇到）。
 Monitor 要求自己内嵌的目录与 Admin 提供的逐字节一致，不一致就停掉放置同步，三台主机的“网关心跳”告警同时出现；host-gateway 用内嵌目录校验路由快照。
 
 ```bash
@@ -109,7 +109,8 @@ $S catalog-changed --host control                    # 用台账里最近一次 
    脚本不打印 `RESULT/READY`）。此时控制机上的组件跨主机调用全部中断，要立刻装 Admin，Admin 就绪后在控制机执行
    `/data/moox/host/current/bin/moox-runtime start --plan /data/moox/host/current/runtime.json --components host-gateway` 拉起网关（2026-10-15 实测中断约 50 秒）。
    存储机和海外机的网关不受影响。
-4. 核对：Admin 数据库的 `t_host_gateway_status` 里三台主机 `c_expected_hash == c_applied_hash` 且 `c_last_error` 为空；Monitor 日志每分钟有 `placement sync updated N checks`、没有 `catalog differs`。
+4. 外部白名单有变化时，再装存储机与海外机的 `access`（构建目标 `access`，一台一台来）。
+5. 核对：Admin 数据库的 `t_host_gateway_status` 里三台主机 `c_expected_hash == c_applied_hash` 且 `c_last_error` 为空；Monitor 日志每分钟有 `placement sync updated N checks`、没有 `catalog differs`。
 
 只想发布别的改动、而目录改动还不想发布时，在构建树里去掉目录改动再构建（不要把半截目录发出去）。
 

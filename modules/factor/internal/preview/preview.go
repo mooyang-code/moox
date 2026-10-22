@@ -69,7 +69,7 @@ type Service struct {
 func New(source Source, workers int) *Service {
 	clock := periodclock.Continuous{}
 	return &Service{source: source, clock: clock, now: time.Now,
-		runner: pipeline.NewRunner(source, clock, pipeline.Config{ComputeWorkers: workers, ReadTimeout: 30 * time.Second, MaxMemory: MaxMemory})}
+		runner: pipeline.NewRunner(source, pipeline.NewStorageData(source), clock, pipeline.Config{ComputeWorkers: workers, MaxMemory: MaxMemory})}
 }
 
 // Preview 计算 [对齐后的当前周期 - Periods 期, 当前周期) 的结果。

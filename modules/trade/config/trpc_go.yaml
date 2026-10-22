@@ -21,7 +21,8 @@ server:
       port: 11210
       network: tcp
       protocol: http_no_protocol
-      timeout: 3000
+      # 健康检查端口同时承载生命周期与逐期回放接口（/v1/lifecycle、/v1/replay）
+      timeout: 30000
       ######## unified Trade console RPC ########
     - name: trpc.moox.trade.TradeConsoleService
       ip: 127.0.0.1

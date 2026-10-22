@@ -16,6 +16,7 @@ require (
 	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/healthz v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/lifecycle v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/jetstream v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketcalendar v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
@@ -118,6 +119,8 @@ require (
 replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
+
+replace github.com/mooyang-code/moox/packages/lifecycle => ../../packages/lifecycle
 
 replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
 

@@ -79,8 +79,8 @@ func ResultItems(items []engine.Item) []store.ResultItem {
 	return out
 }
 
-// MarshalTargetEvent 构造发给 Trade 的目标权重事件（事件契约不变）。
-func MarshalTargetEvent(instance store.Instance, result store.Result, targets []TargetJSON) ([]byte, error) {
+// MarshalTargetEvent 构造发给 Trade 的目标权重事件；shadow 为真表示预热中的影子目标。
+func MarshalTargetEvent(instance store.Instance, result store.Result, targets []TargetJSON, shadow bool) ([]byte, error) {
 	if instance.LogicalAccountID == nil {
 		return nil, fmt.Errorf("观察实例没有组合账户，不能构造目标事件")
 	}
@@ -96,7 +96,7 @@ func MarshalTargetEvent(instance store.Instance, result store.Result, targets []
 		TargetId: result.ResultID, InstanceId: result.InstanceID, LogicalAccountId: *instance.LogicalAccountID,
 		SessionId: result.SessionID, StrategyId: instance.StrategyID,
 		BarEndTime: timestamppb.New(result.BarEndTime), EffectiveAt: timestamppb.New(result.BarEndTime), ValidUntil: timestamppb.New(result.ValidUntil),
-		Targets: payloadTargets,
+		Targets: payloadTargets, Shadow: shadow,
 	}
 	return registry.MarshalMessage(events.LogicalAccountTargetWeightRequested, payload, events.PublishOptions{EventID: result.ResultID, OccurredAt: result.CreatedAt, SpaceID: instance.SpaceID, SubjectID: *instance.LogicalAccountID})
 }

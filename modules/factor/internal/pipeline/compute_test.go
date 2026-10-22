@@ -43,7 +43,7 @@ func framesForBars(subjects []string, target time.Time, bars int) LoadResult {
 		}
 		frames[subject] = frame
 	}
-	return LoadResult{Frames: frames, Available: append([]string(nil), subjects...)}
+	return mustView(LoadResult{Frames: frames, Available: append([]string(nil), subjects...)})
 }
 
 // framesFor 为每个标的造目标时刻的一根 K 线，close = 10。
@@ -55,11 +55,11 @@ func framesFor(subjects []string, target time.Time) LoadResult {
 			Rows: [][]any{{target, "venue:binance", 10.0}},
 		}
 	}
-	return LoadResult{Frames: frames, Available: append([]string(nil), subjects...)}
+	return mustView(LoadResult{Frames: frames, Available: append([]string(nil), subjects...)})
 }
 
 func newComputeRunner(cfg Config) *Runner {
-	return NewRunner(&fakeStore{}, periodclock.Continuous{}, cfg)
+	return NewRunner(&fakeStore{}, nil, periodclock.Continuous{}, cfg)
 }
 
 // valueAt 取某个结果在某个时刻的第一个输出值。
@@ -82,6 +82,7 @@ func TestComputeTimeSeriesComputesTargetRowsOnly(t *testing.T) {
 	plan := computePlan(target, []domain.FactorDef{mean, double}, []string{"BTC", "ETH"})
 	loaded := framesForBars(plan.Available, target, 3)
 	loaded.Frames["ETH"].Rows = loaded.Frames["ETH"].Rows[1:] // ETH 只有 2 根：窗口不完整
+	loaded = withView(t, loaded)
 
 	computation, err := newComputeRunner(Config{ComputeWorkers: 2}).Compute(context.Background(), plan, loaded)
 
@@ -148,29 +149,6 @@ func TestComputeRecalcOutputsEveryTargetPeriod(t *testing.T) {
 	}
 }
 
-// 严格截面因子在补算块里只跳过有标的有洞的那个周期，其余周期照常计算。
-func TestComputeRecalcCrossSectionSkipsOnlyGapPeriods(t *testing.T) {
-	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	factor := testPipelineFactor("spread", domain.FactorTypeCrossSection, 2, false)
-	plan := recalcPlan(start, []domain.FactorDef{factor}, []string{"BTC", "ETH"})
-	loaded := recalcFrames(plan.Available, start, 3)
-	gapPeriod := start.Add(time.Minute)
-	loaded.Gaps.add(GapKey{FactorID: factor.FactorID, Subject: "ETH", Period: gapPeriod}, []time.Time{start}, "venue:binance")
-
-	computation, err := newComputeRunner(Config{}).Compute(context.Background(), plan, loaded)
-
-	require.NoError(t, err)
-	periods := computation.CrossPeriods[factor.FactorID]
-	require.Equal(t, periodOK, periods[start.Unix()])
-	require.Equal(t, periodGap, periods[gapPeriod.Unix()])
-	require.Equal(t, periodOK, periods[start.Add(2*time.Minute).Unix()])
-	item := computation.Results[factor.FactorID][""]
-	require.Len(t, item.Rows, 4, "两个周期 × 两个标的")
-	for _, row := range item.Rows {
-		require.False(t, row[0].(time.Time).Equal(gapPeriod))
-	}
-}
-
 // 引擎侧编译失败只影响该因子：对全部标的失败并计数，其他因子照常（设计 7.6）。
 func TestComputeEngineCompileFailureFailsOnlyThatFactor(t *testing.T) {
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
@@ -195,16 +173,14 @@ func TestComputeEngineCompileFailureFailsOnlyThatFactor(t *testing.T) {
 	require.Equal(t, 10.0, valueAt(t, computation.Results["good"]["BTC"], target))
 }
 
-// 非数值的源值让整个程序失败：本期全部因子按计算失败处理。
-func TestComputeRejectsNonNumericSourceValues(t *testing.T) {
+// 因子输入列不是数值字段（窗口里没有）：整个程序失败，本期全部因子按计算失败处理。
+func TestComputeRejectsInputColumnMissingFromWindow(t *testing.T) {
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
-	factor := testPipelineFactor("mean", domain.FactorTypeTimeSeries, 1, false)
+	factor := domain.MustDefinition("lastnote", "lastnote", "outputs:\n  lastnote_value: note * 2\n")
 	plan := computePlan(target, []domain.FactorDef{factor}, []string{"BTC"})
-	loaded := framesFor(plan.Available, target)
-	loaded.Frames["BTC"].Rows[0][2] = "n/a"
-	computation, err := newComputeRunner(Config{}).Compute(context.Background(), plan, loaded)
+	computation, err := newComputeRunner(Config{}).Compute(context.Background(), plan, framesFor(plan.Available, target))
 	require.NoError(t, err)
-	require.ErrorContains(t, computation.Results[factor.FactorID]["BTC"].Err, "不是数值")
+	require.ErrorContains(t, computation.Results[factor.FactorID]["BTC"].Err, "窗口缺少输入列")
 	require.Equal(t, "degraded", computation.FactorStates[factor.FactorID].Status)
 }
 
@@ -247,6 +223,7 @@ func TestComputeIsDeterministicAcrossWorkersAndTags(t *testing.T) {
 			frame.Rows = append(frame.Rows, []any{row[0], "venue:okx", float64(s*7%13) + float64(i)/3})
 		}
 	}
+	loaded = withView(t, loaded)
 	single, err := newComputeRunner(Config{ComputeWorkers: 1}).Compute(context.Background(), plan, loaded)
 	require.NoError(t, err)
 	parallel, err := newComputeRunner(Config{ComputeWorkers: 8}).Compute(context.Background(), plan, loaded)
@@ -272,5 +249,15 @@ func recalcFrames(subjects []string, start time.Time, targetPeriods int) LoadRes
 		}
 		frames[subject] = frame
 	}
-	return LoadResult{Frames: frames, Available: append([]string(nil), subjects...)}
+	return mustView(LoadResult{Frames: frames, Available: append([]string(nil), subjects...)})
+}
+
+// mustView 按 Frames 生成列式视图；帧里有非数值值时 panic（用于构造合法的测试输入）。
+func mustView(loaded LoadResult) LoadResult {
+	view, err := viewFromFrames(loaded.Frames, 60)
+	if err != nil {
+		panic(err)
+	}
+	loaded.View = view
+	return loaded
 }

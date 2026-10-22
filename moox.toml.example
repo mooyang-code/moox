@@ -32,42 +32,42 @@ backup_count = 5
 # Dataset 原始数据按 (空间, 频率) 保留：空间配置优先，没有时用 defaults；defaults 必须覆盖全部频率。
 # 取值为 <n>h、<n>d 或 forever。保留期缩短会删除数据。
 [storage_retention]
-view_rows_per_series = 5000   # 每个序列 View 保留最近 N 根；超过 ceil(1.2 × N) 根时整理
+view_rows_per_series = 10000  # 每个序列 View 保留最近 N 根；超过 ceil(1.2 × N) 根时整理
 
 # 7×24 小时交易的空间（crypto 等，以及没有单独配置的空间）
 [storage_retention.defaults]
-"30s" = "48h"
-"1m" = "7d"
-"5m" = "30d"
-"15m" = "90d"
-"30m" = "180d"
-"1h" = "365d"
-"4h" = "1095d"
+"30s" = "90h"
+"1m" = "8d"
+"5m" = "35d"
+"15m" = "105d"
+"30m" = "210d"
+"1h" = "420d"
+"4h" = "1700d"
 "1d" = "forever"
 "1w" = "forever"
 "1mo" = "forever"
 
 # 有交易时段的市场同样根数需要更多自然日
 [storage_retention.spaces.stockcn]
-"1m" = "45d"
-"5m" = "240d"
-"15m" = "730d"
+"1m" = "60d"
+"5m" = "300d"
+"15m" = "900d"
 "30m" = "forever"
 "1h" = "forever"
 "4h" = "forever"
 
 [storage_retention.spaces.stockhk]
-"1m" = "30d"
-"5m" = "240d"
-"15m" = "730d"
+"1m" = "45d"
+"5m" = "300d"
+"15m" = "900d"
 "30m" = "forever"
 "1h" = "forever"
 "4h" = "forever"
 
 [storage_retention.spaces.stockus]
-"1m" = "30d"
-"5m" = "240d"
-"15m" = "730d"
+"1m" = "40d"
+"5m" = "300d"
+"15m" = "900d"
 "30m" = "forever"
 "1h" = "forever"
 "4h" = "forever"
@@ -81,7 +81,7 @@ view_rows_per_series = 5000   # 每个序列 View 保留最近 N 根；超过 ce
 maintenance_check_interval = "1m"
 capacity_check_interval = "1h"
 capacity_check_jitter = "1h"
-max_view_file_bytes = 1073741824
+max_view_file_bytes = 4294967296
 
 # Collector 的旧执行明细、terminal retry 和 period snapshot 按独立期限回收。
 # 活动工作以及未获 Storage complete/degraded 确认的 K 线目标不会被删除。

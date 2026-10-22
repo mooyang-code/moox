@@ -33,6 +33,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/rpc"
 	traderuntime "github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/secretclient"
+	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
@@ -388,6 +389,8 @@ func initialize(
 		},
 	)
 	if err := registerHealth(
+		runtimeCtx,
+		cfg.Database.Path,
 		serverInstance,
 		tradeStore,
 		manager,
@@ -695,6 +698,8 @@ func registerEquitySamplerTimer(
 }
 
 func registerHealth(
+	runtimeCtx context.Context,
+	databasePath string,
 	serverInstance *server.Server,
 	tradeStore *store.Store,
 	manager *traderuntime.Manager,
@@ -727,7 +732,11 @@ func registerHealth(
 		PaperMatcherWorker: paperMatcherWorker.State,
 		PaperAccountErrors: paperMatcher.AccountErrors,
 	}
-	state.SnapshotFunc = health.SnapshotFunc(
+	life, err := newLifecycle(databasePath, readiness)
+	if err != nil {
+		return fmt.Errorf("trade lifecycle state failed to open: %w", err)
+	}
+	snapshot := health.SnapshotFunc(
 		state,
 		readiness,
 		"trade",
@@ -736,9 +745,22 @@ func registerHealth(
 		"",
 		startedAt,
 	)
+	state.SnapshotFunc = func(ctx context.Context) healthz.Response {
+		response := snapshot(ctx)
+		if response.Details == nil {
+			response.Details = map[string]any{}
+		}
+		response.Details["lifecycle"] = life.Compact()
+		return response
+	}
+	go func() {
+		life.Recover(runtimeCtx)
+		life.Run(runtimeCtx, lifecycleRefreshEvery)
+	}()
 	if err := health.Register(
 		serverInstance.Service("trpc.moox.trade.Health"),
 		state,
+		lifecycleRoutes(life, tradeStore)...,
 	); err != nil {
 		return fmt.Errorf("trade health server failed to register: %w", err)
 	}

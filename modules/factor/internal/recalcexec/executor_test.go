@@ -234,7 +234,7 @@ func TestChunkNarrowsToMemoryBudget(t *testing.T) {
 	require.Less(t, fit, 6)
 
 	storage := &recalcPipelineStore{}
-	runner := pipeline.NewRunner(storage, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
+	runner := pipeline.NewRunner(storage, pipeline.NewStorageData(storage), periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
 	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(6), WithMemoryBudget(full.Total()/2))
 	var records []progressRecord
 	err = executor.Run(context.Background(), Window{Start: start, End: start.Add(6 * time.Minute)}, fixedSource(selection), recordProgress(&records, 0))
@@ -253,7 +253,7 @@ func TestChunkNarrowsToMemoryBudget(t *testing.T) {
 func TestChunkReadRangeIncludesLookback(t *testing.T) {
 	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	storage := &recalcPipelineStore{}
-	runner := pipeline.NewRunner(storage, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
+	runner := pipeline.NewRunner(storage, pipeline.NewStorageData(storage), periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
 	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(3))
 	selection := pipelineSelection(
 		testRecalcFactor("short", domain.MemberStatusEnabled, 2),
@@ -275,7 +275,7 @@ func TestChunkReadRangeIncludesLookback(t *testing.T) {
 
 func TestRecalcDoesNotReportMarker(t *testing.T) {
 	storage := &recalcPipelineStore{}
-	runner := pipeline.NewRunner(storage, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
+	runner := pipeline.NewRunner(storage, pipeline.NewStorageData(storage), periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
 	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}))
 	period := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 

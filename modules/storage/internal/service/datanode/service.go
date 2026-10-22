@@ -191,6 +191,22 @@ func (s *Service) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeri
 	return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Counts: counts}, nil
 }
 
+// ReadDatasetChanges 从持久化的行变更日志里按序读取变更，由 PrimaryStore 转发。
+func (s *Service) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error) {
+	if req == nil {
+		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request is required"))}, nil
+	}
+	if err := s.validateAuth(req.GetAuthInfo()); err != nil {
+		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	}
+	rsp, err := s.store.ReadDatasetChanges(ctx, req)
+	if err != nil {
+		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.Error(errorCode(err), err)}, nil
+	}
+	rsp.RetInfo = retinfo.Success("success")
+	return rsp, nil
+}
+
 func (s *Service) GetNodeState(ctx context.Context, req *pb.GetNodeStateReq) (*pb.GetNodeStateRsp, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

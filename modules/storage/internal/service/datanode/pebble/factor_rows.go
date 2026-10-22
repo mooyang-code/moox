@@ -80,7 +80,7 @@ func (s *Store) WriteFactorRows(ctx context.Context, spaceID, datasetID, commitI
 		return uint64(len(normalized)), nil
 	}
 	var receipt *commitReceipt
-	entries, err := s.writeFieldsEventLocked(ctx, normalized, "", func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
+	entries, err := s.writeFieldsEventLocked(ctx, normalized, "", false, func(spaceID, datasetID string, rows []*pb.RowFieldUpsert) ([]byte, error) {
 		return BuildDatasetRowsUpsertedMessageWithKind(s.nodeID, "", WriteKindFactorResult, spaceID, datasetID, rows)
 	}, func(batch *cpebble.Batch, entries []*OutboxEntry) error {
 		if len(entries) != 1 {

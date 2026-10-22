@@ -323,3 +323,15 @@ CREATE TABLE IF NOT EXISTS t_monitor_task_inventory (
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_id = 1)
 );
+
+-- 活跃对象第一次出现在采集对象清单里的时间：K 线新鲜度据此给新上线对象一段等待首根 K 线的宽限期。
+-- c_baseline=1 表示数据集首次被观察时就已存在的对象（部署前的存量），不给宽限。
+CREATE TABLE IF NOT EXISTS t_monitor_subject_first_seen (
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_subject_id TEXT NOT NULL,
+    c_first_seen_at DATETIME NOT NULL,
+    c_baseline INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (c_space_id, c_dataset_id, c_subject_id),
+    CHECK (c_baseline IN (0, 1))
+);

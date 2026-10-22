@@ -19,6 +19,7 @@ import {
   shortTime,
   statusLine,
   strategyRows,
+  systemStage,
   toSeconds,
   toneIcon,
   toneOf
@@ -722,5 +723,49 @@ describe("home tiles", () => {
     for (const lag of ["70", "125"])
       expect(factorRows(sets(lag), "crypto", names, NOW)[0]).toMatchObject({ lag: "已追平", tone: "ok" });
     expect(factorRows(sets("400"), "crypto", names, NOW)[0]).toMatchObject({ lag: "落后 5 分钟", tone: "warn" });
+  });
+});
+
+describe("systemStage", () => {
+  it("没有模块上报生命周期状态时不显示", () => {
+    expect(systemStage(undefined)).toBeUndefined();
+    expect(systemStage({} as HealthOverview)).toBeUndefined();
+  });
+
+  it("按运行阶段显示名称与颜色", () => {
+    expect(systemStage({ system: { phase: "running", color: "green", health: "healthy" } })).toEqual({
+      color: "green",
+      label: "运行中",
+      issues: [],
+      recovered: false
+    });
+    expect(systemStage({ system: { phase: "warming", color: "yellow", health: "healthy" } })?.label).toBe("预热中");
+    expect(systemStage({ system: { phase: "ready", color: "blue", health: "healthy" } })?.label).toBe("就绪");
+  });
+
+  it("降级与健康面异常分别提示，并列出原因", () => {
+    const degraded = systemStage({
+      system: {
+        phase: "running",
+        color: "orange",
+        degraded: true,
+        health: "healthy",
+        issues: ["因子引擎：crypto_1m 变更同步：变更日志断档"]
+      }
+    });
+    expect(degraded?.label).toBe("运行中 · 降级");
+    expect(degraded?.issues).toEqual(["因子引擎：crypto_1m 变更同步：变更日志断档"]);
+
+    const bad = systemStage({ system: { phase: "running", color: "red", health: "attention", issues: ["Trade：数据库不可用"] } });
+    expect(bad?.label).toBe("运行中 · 有模块未就绪");
+    expect(bad?.color).toBe("red");
+  });
+
+  it("原因最多显示 3 条，其余折叠；自动恢复要提示", () => {
+    const stage = systemStage({
+      system: { phase: "running", color: "orange", degraded: true, auto_recovered: true, issues: ["a", "b", "c", "d", "e"] }
+    });
+    expect(stage?.issues).toEqual(["a", "b", "c", "另有 2 项"]);
+    expect(stage?.recovered).toBe(true);
   });
 });

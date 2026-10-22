@@ -327,7 +327,7 @@ func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpe
 		return BuildDatasetRowsUpsertedMessageForSourceWithWriteSource(s.nodeID, sourceEventID, writeSource, spaceID, datasetID, rows)
 	}
 	s.outboxMu.Lock()
-	_, err = s.writeFieldsEventLocked(ctx, normalizedRows, strings.TrimSpace(sourceEventID), writeEvent, func(batch *cpebble.Batch, _ []*OutboxEntry) error {
+	_, err = s.writeFieldsEventLocked(ctx, normalizedRows, strings.TrimSpace(sourceEventID), true, writeEvent, func(batch *cpebble.Batch, _ []*OutboxEntry) error {
 		if created {
 			if err := s.writePeriodRecord(batch, base, exp, false); err != nil {
 				return err

@@ -29,7 +29,14 @@ const (
 	SourceRecord  = "record"
 
 	// DefaultViewBars is the number of bars a series View keeps.
-	DefaultViewBars = 5000
+	DefaultViewBars = 10_000
+
+	// DefaultMaxViewFileBytes 是单个 View 文件的容量阈值：1 万根的 1m K 线 View 约 1.1GB，阈值要留出余量，
+	// 否则会反复触发「达到容量上限、重建只保留最新」。
+	DefaultMaxViewFileBytes = int64(4) << 30
+
+	// systemSpace 是 MooX 系统数据空间，保留期不受 view.bars 覆盖校验约束。
+	systemSpace = "mooxsys"
 
 	maxBars = 1_000_000
 	// maxViewBars 是 View 每序列保留行数的上限，与读接口单次 latest_per_series 的上限一致，重建回填才能兑现配置。
@@ -128,22 +135,22 @@ func TrimBarsFor(bars uint64) uint64 {
 func Default() Policy {
 	sessionMarket := func(minute string) map[string]string {
 		return map[string]string{
-			"1m": minute, "5m": "240d", "15m": "730d",
+			"1m": minute, "5m": "300d", "15m": "900d",
 			"30m": Forever, "1h": Forever, "4h": Forever,
 		}
 	}
 	policy := Policy{
 		Retention: Retention{
 			Defaults: map[string]string{
-				"30s": "48h", "1m": "7d", "5m": "30d", "15m": "90d", "30m": "180d",
-				"1h": "365d", "4h": "1095d", "1d": Forever, "1w": Forever, "1mo": Forever,
+				"30s": "90h", "1m": "8d", "5m": "35d", "15m": "105d", "30m": "210d",
+				"1h": "420d", "4h": "1700d", "1d": Forever, "1w": Forever, "1mo": Forever,
 			},
 			Spaces: map[string]map[string]string{
-				"stockcn": sessionMarket("45d"),
-				"stockhk": sessionMarket("30d"),
-				"stockus": sessionMarket("30d"),
+				"stockcn": sessionMarket("60d"),
+				"stockhk": sessionMarket("45d"),
+				"stockus": sessionMarket("40d"),
 				// 主机资源历史（1m）只保留短期：排障看最近几天，长期趋势不靠它。
-				"mooxsys": {"1m": "7d"},
+				"mooxsys": {"30s": "48h", "1m": "7d"},
 			},
 		},
 		View: View{
@@ -152,7 +159,7 @@ func Default() Policy {
 			MaintenanceCheckInterval: "1m",
 			CapacityCheckInterval:    "1h",
 			CapacityCheckJitter:      "1h",
-			MaxViewFileBytes:         1 << 30,
+			MaxViewFileBytes:         DefaultMaxViewFileBytes,
 		},
 	}
 	normalized, err := policy.normalized()
@@ -214,6 +221,10 @@ func (p Policy) Coverage() (errs, warnings []string) {
 	}
 	sort.Strings(spaces)
 	for _, space := range spaces {
+		// 系统数据空间（主机资源历史）的保留期独立于 K 线：只保留短期供排障，不要求装满 View 的根数。
+		if space == systemSpace {
+			continue
+		}
 		for _, freq := range frequencypkg.Strings() {
 			if raw, ok := normalized.Retention.Spaces[space][freq]; ok {
 				check("retention.spaces."+space+"."+freq, raw, freq, space)

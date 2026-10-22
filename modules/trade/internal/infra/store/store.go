@@ -144,7 +144,7 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		"t_logical_accounts":            {}, "t_logical_account_members": {},
 		"t_logical_account_targets": {}, "t_operator_actions": {},
 		"t_paper_account_configs": {}, "t_account_equity_points": {},
-		"t_paper_balance_projections": {}, "t_paper_asset_balances": {},
+		"t_paper_balance_projections": {}, "t_paper_asset_balances": {}, "t_shadow_targets": {}, "t_replay_sessions": {}, "t_replay_periods": {}, "t_replay_orders": {},
 		"t_logical_account_equity_points":   {},
 		"t_logical_account_target_receipts": {},
 	}

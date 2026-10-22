@@ -63,6 +63,7 @@
       "component_id": "cloudnode",
       "host_id": "control",
       "instances": [],
+      "lifecycle": null,
       "name": "云节点服务",
       "probe": {
         "checked_at": "",
@@ -94,6 +95,7 @@
           "version": "v2"
         }
       ],
+      "lifecycle": null,
       "name": "目录中的控制台入口",
       "probe": {
         "checked_at": "2026-10-09T12:00:00Z",
@@ -117,6 +119,7 @@
       "component_id": "eventbus",
       "host_id": "control",
       "instances": [],
+      "lifecycle": null,
       "name": "消息总线",
       "probe": {
         "checked_at": "",
@@ -140,6 +143,7 @@
       "component_id": "web-host",
       "host_id": "control",
       "instances": [],
+      "lifecycle": null,
       "name": "控制台前端",
       "probe": {
         "checked_at": "2026-10-09T12:00:00Z",
@@ -163,6 +167,7 @@
       "component_id": "web-host",
       "host_id": "offline",
       "instances": [],
+      "lifecycle": null,
       "name": "控制台前端",
       "probe": {
         "checked_at": "",
@@ -364,6 +369,7 @@
     "unknown_count": 2,
     "unregistered_count": 1
   },
+  "system": null,
   "topology_known": true,
   "unregistered": [
     {
@@ -378,6 +384,7 @@
           "version": "dev"
         }
       ],
+      "lifecycle": null,
       "name": "unknown-collector-name",
       "probe": {
         "checked_at": "",

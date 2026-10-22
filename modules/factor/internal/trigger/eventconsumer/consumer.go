@@ -29,6 +29,8 @@ type ConsumerConfig struct {
 	ReadColumnTimeout  time.Duration
 	// Continuity 非空时按连续水位逐期推进。
 	Continuity *Continuity
+	// Gate 非空时是生命周期门禁：集合没有处于预热或运行就不计算。
+	Gate func(setID string) bool
 }
 
 // ackWaitHeartbeats is how many InProgress heartbeats may be missed before a
@@ -140,6 +142,7 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 	if cfg.Continuity != nil {
 		handler.SetContinuity(cfg.Continuity)
 	}
+	handler.SetGate(cfg.Gate)
 	runCtx, cancel := context.WithCancel(ctx)
 	c.client, c.consumer, c.handler, c.cancel = client, consumer, handler, cancel
 	c.runner = jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{

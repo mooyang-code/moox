@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
-	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 )
 
@@ -39,10 +38,8 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 	if err != nil {
 		return nil, AssembleReport{}, err
 	}
-	gaps := loaded.Gaps
 	applied := make(map[ItemKey]bool)
 	failedItems := make(map[ItemKey]bool) // 任一序列失败的项：不能因为另一序列成功就确认
-	subjectTags := make(map[string][]string)
 	rows := make(map[resultKey]*assembledRow)
 	factorColumns := make([]string, 0)
 	columnSet := make(map[string]struct{})
@@ -76,9 +73,6 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 				return nil, AssembleReport{}, fmt.Errorf("source frame for %q row %d data_time: %w", subject, rowNo, timeErr)
 			}
 			tagValue, tagOK := values[positions["series_tag"]].(string)
-			if tagOK {
-				subjectTags[subject] = appendUniqueString(subjectTags[subject], tagValue)
-			}
 			if !inTargetRange(plan, target, at) {
 				continue
 			}
@@ -131,10 +125,6 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 					if !inTargetRange(plan, target, at) {
 						continue
 					}
-					// 该周期窗口有洞的标的不接受结果（部分全集的截面因子 panel 里已排除它，这里兜底）。
-					if gaps.Invalid(factor.FactorID, subject, at) {
-						continue
-					}
 					if applyFactorValues(rows, resultKey{subject: subject, at: at.UTC(), tag: tag}, factor, outputs, factorColumns, plan.FillOnly) {
 						applied[ItemKey{FactorID: factor.FactorID, Subject: subject, Period: at.UTC()}] = true
 					} else {
@@ -163,11 +153,6 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 				if !inTargetRange(plan, target, at) {
 					continue
 				}
-				// 回看窗口有 K 线空洞的周期不接受计算结果：因子字段保持 NULL（填充时不写）。空洞是周期级的，
-				// 不能走下面的「标的级失败」，那会把整个补算块里该标的该因子的所有周期都清成 NULL。
-				if gaps.Invalid(factor.FactorID, subject, at) {
-					continue
-				}
 				if applyFactorValues(rows, resultKey{subject: subject, at: at.UTC(), tag: tag}, factor, outputs, factorColumns, plan.FillOnly) {
 					applied[ItemKey{FactorID: factor.FactorID, Subject: subject, Period: at.UTC()}] = true
 				} else {
@@ -193,10 +178,6 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 		}
 	}
 
-	if !plan.FillOnly {
-		// 目标源行不存在时没有行可以承载失效：按已知源序列补一行只含因子列的 NULL 行，清掉该键可能已有的旧值。
-		addGapNullRows(rows, plan, gaps, subjectTags, r.clock)
-	}
 	out := make([]storageio.ResultRow, 0, len(rows))
 	for _, row := range rows {
 		if len(row.fields) == 0 {
@@ -434,61 +415,9 @@ type AssembleReport struct {
 	Items map[ItemKey]ItemStatus
 }
 
-// addGapNullRows 对「窗口有洞但目标源行不存在」的 (因子, 标的, 周期) 补一行只含该因子列的 NULL 行：目标键没有源行就没有行可以
-// 承载失效，旧值会一直留着。序列取该标的帧里出现过的 series_tag，没有就用空串（K 线数据集的默认序列）。
-func addGapNullRows(rows map[resultKey]*assembledRow, plan Plan, gaps GapReport, subjectTags map[string][]string, clock periodclock.Clock) {
-	if gaps.Len() == 0 {
-		return
-	}
-	factors := make(map[string]domain.FactorDef, len(plan.Factors))
-	for _, factor := range plan.Factors {
-		factors[factor.FactorID] = factor
-	}
-	keys := make([]GapKey, 0, len(gaps.entries))
-	for key := range gaps.entries {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].Subject != keys[j].Subject {
-			return keys[i].Subject < keys[j].Subject
-		}
-		if !keys[i].Period.Equal(keys[j].Period) {
-			return keys[i].Period.Before(keys[j].Period)
-		}
-		return keys[i].FactorID < keys[j].FactorID
-	})
-	target, err := planTarget(clock, plan)
-	if err != nil {
-		return
-	}
-	for _, key := range keys {
-		factor, ok := factors[key.FactorID]
-		if !ok || !inTargetRange(plan, target, key.Period) {
-			continue
-		}
-		tags := subjectTags[key.Subject]
-		if len(tags) == 0 {
-			tags = []string{""}
-		}
-		for _, tag := range tags {
-			rowKey := resultKey{subject: key.Subject, at: key.Period.UTC(), tag: tag}
-			row, exists := rows[rowKey]
-			if !exists {
-				row = &assembledRow{key: rowKey, fields: make(map[string]any)}
-				rows[rowKey] = row
-			}
-			for _, column := range factor.Outputs {
-				if _, set := row.fields[column]; !set {
-					row.fields[column] = nil
-				}
-			}
-		}
-	}
-}
-
-// assembleReport 汇总每个 (因子, 标的, 周期) 的结果：有洞 gap；取得有效值 written；其余（计算错误、无效值、没有源行）failed。
+// assembleReport 汇总每个 (因子, 标的, 周期) 的结果：取得有效值 written；其余（计算错误、无效值、没有源行）failed。
 func (r *Runner) assembleReport(plan Plan, loaded LoadResult, computation Computation, applied map[ItemKey]bool) (AssembleReport, error) {
-	targets, err := r.gapTargets(plan)
+	targets, err := r.itemTargets(plan)
 	if err != nil {
 		return AssembleReport{}, err
 	}
@@ -496,14 +425,9 @@ func (r *Runner) assembleReport(plan Plan, loaded LoadResult, computation Comput
 	subjects := intersectLists(plan.Expected, loaded.Available)
 	for _, factor := range plan.Factors {
 		for _, target := range targets {
-			crossOutcome := computation.CrossPeriods[factor.FactorID][target.UTC().Unix()]
 			for _, subject := range subjects {
 				key := ItemKey{FactorID: factor.FactorID, Subject: subject, Period: target.UTC()}
 				switch {
-				case loaded.Gaps.Invalid(factor.FactorID, subject, target):
-					report.Items[key] = ItemGap
-				case factor.FactorType == domain.FactorTypeCrossSection && crossOutcome == periodGap:
-					report.Items[key] = ItemGap
 				case applied[key]:
 					report.Items[key] = ItemWritten
 				default:
@@ -513,4 +437,16 @@ func (r *Runner) assembleReport(plan Plan, loaded LoadResult, computation Comput
 		}
 	}
 	return report, nil
+}
+
+// itemTargets 是本次计划要汇报的目标周期。
+func (r *Runner) itemTargets(plan Plan) ([]time.Time, error) {
+	if plan.Mode == ModeRecalc {
+		return periodRange(r.clock, plan.TargetStart, plan.TargetEnd, plan.Set.Freq)
+	}
+	target, err := planTarget(r.clock, plan)
+	if err != nil {
+		return nil, err
+	}
+	return []time.Time{target}, nil
 }

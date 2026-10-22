@@ -18,7 +18,8 @@ server:
       port: 11417
       network: tcp
       protocol: http_no_protocol
-      timeout: 3000
+      # 健康检查端口同时承载导入服务的本地写入接口（/v1/series/...），一批最多 64MiB，写入要比健康检查慢得多
+      timeout: 120000
 
 plugins:
   metrics:
