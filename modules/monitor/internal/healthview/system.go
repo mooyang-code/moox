@@ -62,7 +62,10 @@ func projectLifecycle(l *lifecycleSource) *pb.HealthLifecycle {
 }
 
 // lifecycleModules 是提供生命周期接口的模块（组件 ID）。
-var lifecycleModules = map[string]bool{"collector": true, "factor-engine": true, "strategy": true, "trade": true}
+var lifecycleModules = map[string]bool{"collector": true, "factor-engine": true, "strategy": true, "trade": true, "factor-mgr": true, "monitor": true, "archive-mgr": true}
+
+// systemPausable 是系统级暂停（moox-cli system pause）覆盖的模块（组件 ID）。
+var systemPausable = map[string]bool{"collector": true, "factor-engine": true, "strategy": true, "trade": true}
 
 // phaseRank 是运行阶段的先后：系统的运行阶段取各模块中最靠前的（只要有一个模块还没到运行，系统就没有完全运行）。
 var phaseRank = map[string]int{"uninitialized": 0, "not_ready": 0, "ready": 1, "warming": 2, "running": 3}
@@ -76,8 +79,8 @@ var phaseRank = map[string]int{"uninitialized": 0, "not_ready": 0, "ready": 1, "
 // 没有任何模块上报生命周期状态时返回 nil。
 func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 	type module struct {
-		name string
-		l    *pb.HealthLifecycle
+		id, name string
+		l        *pb.HealthLifecycle
 	}
 	var modules []module
 	var unreachable []string
@@ -92,7 +95,7 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 			if name == "" {
 				name = c.GetComponentId()
 			}
-			modules = append(modules, module{name: name, l: c.GetLifecycle()})
+			modules = append(modules, module{id: c.GetComponentId(), name: name, l: c.GetLifecycle()})
 		}
 	}
 	if len(modules) == 0 && len(unreachable) == 0 {
@@ -110,7 +113,7 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 	if len(modules) == 0 {
 		phase, phaseName = 0, "uninitialized"
 	}
-	var pausedModules, resuming, caughtUp, resetting int
+	var pausedModules, pausableModules, resuming, caughtUp, resetting int
 	var pausedSince string
 	for _, m := range modules {
 		l := m.l
@@ -132,9 +135,17 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 		for kind, n := range l.PauseKinds {
 			out.PauseKinds[kind] += n
 		}
+		// 系统暂停动作只覆盖采集、因子引擎、策略、Trade：「全部暂停」按它们来判断，
+		// 因子管理、Monitor 这类不参与系统暂停的模块不能让系统永远停在「部分暂停」。
+		pausable := systemPausable[m.id]
+		if pausable {
+			pausableModules++
+		}
 		switch l.Stage {
 		case "paused":
-			pausedModules++
+			if pausable {
+				pausedModules++
+			}
 			note := firstNonEmpty(l.Reason, "已暂停")
 			if l.Pause != nil && l.Pause.Since != "" && (pausedSince == "" || l.Pause.Since < pausedSince) {
 				pausedSince = l.Pause.Since
@@ -155,6 +166,11 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 		if l.Recovered > 0 {
 			out.AutoRecovered = true
 		}
+		// 没有对象、自身只是「就绪」的模块（采集、因子管理这类没有预热和运行阶段的模块）不参与运行阶段的比较：
+		// 它们没有「启动」这一步，让它们拉低运行阶段会让整个系统一直显示「就绪」。
+		if l.Stage == "ready" && len(l.Counts) == 0 {
+			continue
+		}
 		if rank, ok := phaseRank[l.Stage]; ok && rank < phase {
 			phase, phaseName = rank, l.Stage
 			if l.Stage == "not_ready" {
@@ -170,7 +186,7 @@ func projectSystem(components []*pb.HealthComponent) *pb.HealthSystem {
 		out.Phase = "resetting"
 	case resuming > 0:
 		out.Phase = "resuming"
-	case pausedModules > 0 && pausedModules == len(modules):
+	case pausedModules > 0 && pausedModules == pausableModules:
 		out.Phase = "paused"
 	case pausedModules > 0:
 		out.Phase = "partially_paused"

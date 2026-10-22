@@ -11,12 +11,10 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/notifier"
 	monitorplacement "github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
-	"github.com/mooyang-code/moox/packages/notification"
 	"trpc.group/trpc-go/trpc-database/timer"
 	"trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -53,9 +51,7 @@ func buildProbeRunner(cfg *config.Config, gateway *gatewayclient.Client) probe.M
 
 func monitorResultHook(runtime *Runtime) func(context.Context, domain.Check, domain.CheckResult) {
 	evaluator := alerting.NewEvaluator(runtime.Repositories.Alerts, alerting.Options{
-		Sender: func(ctx context.Context) (notification.Sender, error) {
-			return notifier.Sender(ctx, runtime.Repositories.Notifications)
-		},
+		Sender: runtime.alertSender,
 	})
 	return func(ctx context.Context, check domain.Check, result domain.CheckResult) {
 		if err := evaluator.Evaluate(ctx, check, result); err != nil {
