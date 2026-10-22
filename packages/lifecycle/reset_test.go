@@ -128,7 +128,9 @@ func TestResetApplyRequiresPausedModuleAndValidSingleUseToken(t *testing.T) {
 	_, err = f.c.ResetApply(ctx, ResetApplyRequest{Token: plan.Token, Scope: ResetData})
 	require.ErrorAs(t, err, &denied, "范围和令牌不符")
 
-	plan2 := plan // 没暂停时被拒绝的那个令牌，暂停之后依然有效
+	// 范围和令牌不符的请求会消耗掉这个令牌（防止猜测），重新 plan 拿新的。
+	plan2, err := f.c.ResetPlan(ctx, ResetAll)
+	require.NoError(t, err)
 	st, err := f.c.ResetApply(ctx, ResetApplyRequest{Token: plan2.Token, Scope: ResetAll, By: "ops"})
 	require.NoError(t, err)
 	require.Equal(t, StageResetting, st.Stage)
