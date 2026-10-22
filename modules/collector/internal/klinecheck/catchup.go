@@ -47,7 +47,7 @@ func (b *Backfiller) Catchup(ctx context.Context, spaceID string, since, to time
 	if !since.Before(to) {
 		return CatchupState{}, nil
 	}
-	result, err := b.Checker.Check(ctx, Request{SpaceID: spaceID, From: since, To: to})
+	result, err := b.Checker.Check(ctx, Request{SpaceID: spaceID, From: since, To: to, IncludeOpenBar: true})
 	if err != nil {
 		return CatchupState{}, fmt.Errorf("检查暂停区间的缺口：%w", err)
 	}
@@ -61,7 +61,7 @@ func (b *Backfiller) Catchup(ctx context.Context, spaceID string, since, to time
 	}
 	end := to
 	for {
-		jobID, _, err := b.submit(ctx, JobRequest{SpaceID: spaceID, From: since, To: end}, recoverySource, MaxChunksPerJob)
+		jobID, _, err := b.submit(ctx, JobRequest{SpaceID: spaceID, From: since, To: end, IncludeOpenBar: true}, recoverySource, MaxChunksPerJob)
 		if errors.Is(err, errTooManyChunks) && end.Sub(since) > autoScanWindow {
 			// 缺口太多：缩短区间，只提交最早的一段，追赶是逐窗口推进的。
 			end = since.Add(end.Sub(since) / 2)

@@ -267,6 +267,10 @@ func (c *Controller) settle(ctx context.Context) {
 	since := map[string]time.Time{}
 	for _, ref := range refs {
 		since[ref.key()] = c.recordFor(ref).PausedSince
+		if since[ref.key()].IsZero() {
+			// 模块恢复追赶时，参与追赶的对象继续运行阶段、没有自己的暂停时间：取模块的暂停时间作为追赶起点。
+			since[ref.key()] = c.self.PausedSince
+		}
 	}
 	c.mu.Unlock()
 	if len(refs) == 0 {
@@ -292,7 +296,7 @@ func (c *Controller) settle(ctx context.Context) {
 		r := c.recordFor(ref)
 		res := results[ref.key()]
 		cu := res.catchup
-		cu.Since = r.PausedSince
+		cu.Since = since[ref.key()]
 		if res.err != nil {
 			cu.CaughtUp = false
 			cu.Message = "追赶进度读取失败：" + res.err.Error()

@@ -676,3 +676,37 @@ func TestCatchupTargetIsFixed(t *testing.T) {
 	require.NotEmpty(t, state.JobID)
 	_ = rows
 }
+
+// 暂停那一刻正在走的 K 线（开始时间早于暂停时间）是在暂停期间收盘的，恢复追赶要把它算进去。
+func TestCatchupIncludesTheBarOpenAtPauseTime(t *testing.T) {
+	backfiller, _, rows, base := newBackfillFixture(t)
+	rows.missing = map[string]map[int64]bool{"BTC-USDT": {base.Add(time.Minute).Unix(): true}, "ETH-USDT": {}}
+	since := base.Add(time.Minute + 30*time.Second) // 暂停时 base+1m 那根还没收盘
+	ctx := context.Background()
+
+	plain, err := backfiller.Checker.Check(ctx, Request{SpaceID: "crypto", From: since, To: base.Add(10 * time.Minute)})
+	require.NoError(t, err)
+	require.Zero(t, plain.Missing, "默认向上对齐：开始时间早于 From 的那根被漏掉")
+
+	state, err := backfiller.Catchup(ctx, "crypto", since, base.Add(10*time.Minute))
+	require.NoError(t, err)
+	require.Equal(t, 1, state.Missing, "恢复追赶包含暂停时正在走的那根")
+	require.NotEmpty(t, state.JobID)
+}
+
+// 并发上限：默认 5（与 SCF 补采函数的预留并发一致）；MaxInFlightFor 按空间覆盖（全部本地执行端的空间可以放大）。
+func TestMaxInFlightPerSpace(t *testing.T) {
+	b := &Backfiller{}
+	ctx := context.Background()
+	require.Equal(t, DefaultMaxInFlight, b.maxInFlight(ctx, "crypto"))
+	b.MaxInFlight = 7
+	require.Equal(t, 7, b.maxInFlight(ctx, "crypto"))
+	b.MaxInFlightFor = func(_ context.Context, space string) int {
+		if space == "crypto" {
+			return LocalMaxInFlight
+		}
+		return 0
+	}
+	require.Equal(t, LocalMaxInFlight, b.maxInFlight(ctx, "crypto"))
+	require.Equal(t, 7, b.maxInFlight(ctx, "stockcn"), "返回 0 表示用默认")
+}
