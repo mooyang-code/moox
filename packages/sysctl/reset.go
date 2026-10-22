@@ -393,16 +393,27 @@ func (o *Orchestrator) openJournal(req ResetApplyRequest) (*ResetJournal, error)
 	for _, m := range plan.Modules {
 		digests[m.Name] = m.Digest
 	}
+	// 外部步骤的说明和命令以 plan 时为准（命令随范围不同），位置以配置为准。
+	planned := map[string]ExternalPlan{}
+	for _, e := range plan.External {
+		planned[e.Name] = e
+	}
+	externalStep := func(e ExternalStep) ResetStepState {
+		if p, ok := planned[e.Name]; ok {
+			e.Describe, e.Commands = p.Describe, p.Commands
+		}
+		return externalState(e)
+	}
 	for _, name := range resetOrder {
 		if d, ok := digests[name]; ok {
 			j.Steps = append(j.Steps, ResetStepState{Kind: "module", Name: name, Digest: d, State: "pending"})
 		}
 		for _, e := range o.externalAfter(name) {
-			j.Steps = append(j.Steps, externalState(e))
+			j.Steps = append(j.Steps, externalStep(e))
 		}
 	}
 	for _, e := range o.externalLast() {
-		j.Steps = append(j.Steps, externalState(e))
+		j.Steps = append(j.Steps, externalStep(e))
 	}
 	if err := o.saveJournal(j); err != nil {
 		return nil, err

@@ -17,12 +17,14 @@ import (
 
 type systemOptions struct {
 	Collector, Factor, Strategy, Trade string
-	Reason                             string
-	By                                 string
-	Timeout                            time.Duration
-	ReleasePartial                     bool
-	Yes                                bool
-	JSON                               bool
+	// FactorMgr、Archive、Monitor 只在系统重置里参与（暂停/恢复不涉及它们）。
+	FactorMgr, Archive, Monitor string
+	Reason                      string
+	By                          string
+	Timeout                     time.Duration
+	ReleasePartial              bool
+	Yes                         bool
+	JSON                        bool
 }
 
 var systemFlags systemOptions
@@ -32,13 +34,15 @@ var systemCmd = &cobra.Command{
 	Short: "系统级暂停与恢复（按依赖顺序逐个模块，恢复先追赶补采、全部追平后统一放行）",
 	Long: `系统级暂停与恢复。各模块的健康检查地址用 --collector / --factor / --strategy / --trade 指定（可以是 SSH 隧道的本地端口），
 也可以用环境变量 MOOX_COLLECTOR_HEALTH_ENDPOINT / MOOX_FACTOR_HEALTH_ENDPOINT / MOOX_STRATEGY_HEALTH_ENDPOINT / MOOX_TRADE_HEALTH_ENDPOINT；
-没有指定地址的模块不参与。鉴权密钥按模块取环境变量 MOOX_<COLLECTOR|FACTOR|STRATEGY|TRADE>_HEALTH_AUTH_ACCESS_KEY / _SECRET_KEY，
+没有指定地址的模块不参与。系统重置另外用 --factor-mgr / --archive / --monitor（环境变量 MOOX_FACTORMGR_ / MOOX_ARCHIVE_ / MOOX_MONITOR_HEALTH_ENDPOINT）。鉴权密钥按模块取环境变量 MOOX_<COLLECTOR|FACTOR|STRATEGY|TRADE>_HEALTH_AUTH_ACCESS_KEY / _SECRET_KEY，
 没有设置时用 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY。
 
   moox-cli system status                  各模块的阶段与暂停详情、恢复追赶进度
   moox-cli system pause  [--reason 原因]  下游到上游逐个暂停：策略 → Trade → 因子引擎 → 采集
   moox-cli system resume [--timeout 30m]  先追赶后放行：采集补采暂停区间，因子同步并补算，策略记录周期，Trade 与交易所对账；
                                           所有模块都追平之后按上游到下游放行（Trade 先于策略）
+
+  moox-cli system reset plan|apply|status  系统级重置（删除运行数据，--scope all 再删业务配置），见 moox-cli system reset --help
 
 命令幂等：中途断开后再执行一次就按各模块当前状态继续。追赶超时只报告，不自动放行；
 --release-partial --yes 在超时后放行已追平的模块，让未追平的继续追赶。`,
@@ -51,6 +55,9 @@ func init() {
 	pf.StringVar(&systemFlags.Factor, "factor", os.Getenv("MOOX_FACTOR_HEALTH_ENDPOINT"), "因子引擎的健康检查地址")
 	pf.StringVar(&systemFlags.Strategy, "strategy", os.Getenv("MOOX_STRATEGY_HEALTH_ENDPOINT"), "策略模块的健康检查地址")
 	pf.StringVar(&systemFlags.Trade, "trade", os.Getenv("MOOX_TRADE_HEALTH_ENDPOINT"), "Trade 的健康检查地址")
+	pf.StringVar(&systemFlags.FactorMgr, "factor-mgr", os.Getenv("MOOX_FACTORMGR_HEALTH_ENDPOINT"), "因子管理的健康检查地址（系统重置用）")
+	pf.StringVar(&systemFlags.Archive, "archive", os.Getenv("MOOX_ARCHIVE_HEALTH_ENDPOINT"), "归档管理的健康检查地址（系统重置用）")
+	pf.StringVar(&systemFlags.Monitor, "monitor", os.Getenv("MOOX_MONITOR_HEALTH_ENDPOINT"), "Monitor 的健康检查地址（系统重置用）")
 	pf.StringVar(&systemFlags.By, "by", "", "操作者（默认 cli:<主机名>）")
 	pf.BoolVar(&systemFlags.JSON, "json", false, "以 JSON 输出（status）")
 
@@ -91,6 +98,21 @@ func healthAPI(prefix, endpoint string) *lifecycle.Client {
 	return &lifecycle.Client{Endpoint: endpoint, AuthVersion: get("VERSION"), AccessKey: get("ACCESS_KEY"), SecretKey: get("SECRET_KEY")}
 }
 
+// resetAPI 返回用重置专用密钥签名的客户端：模块自己的环境变量优先，没有设置时用通用的；都没有设置返回 nil。
+func resetAPI(prefix, endpoint string) sysctl.ResetAPI {
+	get := func(name string) string {
+		if v := os.Getenv("MOOX_" + prefix + "_HEALTH_RESET_" + name); v != "" {
+			return v
+		}
+		return os.Getenv("MOOX_HEALTH_RESET_" + name)
+	}
+	access, secret := get("ACCESS_KEY"), get("SECRET_KEY")
+	if access == "" || secret == "" {
+		return nil
+	}
+	return &lifecycle.Client{Endpoint: endpoint, AuthVersion: os.Getenv("MOOX_HEALTH_AUTH_VERSION"), AccessKey: access, SecretKey: secret}
+}
+
 func (o systemOptions) orchestrator(out io.Writer) *sysctl.Orchestrator {
 	by := o.By
 	if by == "" {
@@ -103,11 +125,14 @@ func (o systemOptions) orchestrator(out io.Writer) *sysctl.Orchestrator {
 		{sysctl.FactorEngine, "FACTOR", o.Factor},
 		{sysctl.Strategy, "STRATEGY", o.Strategy},
 		{sysctl.Trade, "TRADE", o.Trade},
+		{sysctl.FactorMgr, "FACTORMGR", o.FactorMgr},
+		{sysctl.Archive, "ARCHIVE", o.Archive},
+		{sysctl.Monitor, "MONITOR", o.Monitor},
 	} {
 		if m.endpoint == "" {
 			continue
 		}
-		modules = append(modules, sysctl.Module{Name: m.name, API: healthAPI(m.prefix, m.endpoint)})
+		modules = append(modules, sysctl.Module{Name: m.name, API: healthAPI(m.prefix, m.endpoint), Reset: resetAPI(m.prefix, m.endpoint)})
 	}
 	return &sysctl.Orchestrator{Modules: modules, By: by, Out: out}
 }

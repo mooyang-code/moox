@@ -185,6 +185,12 @@ func resetStateText(s string) string {
 		return "完成"
 	case "failed":
 		return "失败"
+	case "running":
+		return "进行中"
+	case "pending":
+		return "待执行"
+	case "awaiting":
+		return "等待人工"
 	}
 	return s
 }
