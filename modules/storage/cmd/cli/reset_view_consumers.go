@@ -113,6 +113,15 @@ func resetViewConsumers(ctx context.Context, opts resetViewConsumersOptions, std
 		defer unlock()
 	}
 	storage = resolveRepairStoragePaths(storage, packageRoot, opts.storageConf)
+	if opts.resetAllStorageData {
+		// 要删除的 Pebble 路径在停服务、清事件流之前就校验：线上第一次执行时，路径校验放在清事件流之后，
+		// 被拒绝时 Storage 已停、事件流已清空，留下半个重置。
+		for _, path := range []string{storage.Devices.PebblePath, filepath.Join(packageRoot, "data", "storage-node", "pebble")} {
+			if _, err := validateResetPrimaryPath(path, packageRoot); err != nil {
+				return err
+			}
+		}
+	}
 	dbPath := metadataDBPath(storage)
 	views, err := listResetViewRecords(ctx, dbPath)
 	if err != nil {
@@ -437,10 +446,16 @@ func validateResetPrimaryPath(path, packageRoot string) (string, error) {
 		return "", fmt.Errorf("refusing to delete Primary path outside package root: %s", cleanPath)
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
-	if len(parts) < 2 || parts[0] != "data" || cleanPath == cleanRoot {
-		return "", fmt.Errorf("refusing to delete unsafe Primary path %s; expected a child of %s/data", cleanPath, cleanRoot)
+	switch {
+	case cleanPath == cleanRoot:
+	case len(parts) >= 2 && parts[0] == "data":
+		// 单目录布局：<包根>/data/...
+		return cleanPath, nil
+	case len(parts) >= 3 && parts[1] == "var" && (parts[0] == "storage-node" || parts[0] == "storage-primary" || parts[0] == "storage-view"):
+		// 原生部署：每个角色有自己的目录，数据在 <包根>/<组件>/var/...（Pebble 是 storage-node/var/storage/pebble）。
+		return cleanPath, nil
 	}
-	return cleanPath, nil
+	return "", fmt.Errorf("refusing to delete unsafe Primary path %s; expected a child of %s/data or %s/<storage-node|storage-primary|storage-view>/var", cleanPath, cleanRoot, cleanRoot)
 }
 
 // waitResetViewReady waits for storage-view to be ready and, when
