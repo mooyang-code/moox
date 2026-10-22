@@ -85,6 +85,22 @@ func (p *preloader) PrepareSet(ctx context.Context, setID string) error {
 	return nil
 }
 
+// Refresh 重新同步一个集合的本地数据并重载窗口，不看「已经预载」的短路：恢复追赶要把暂停期间的缺口补进来。
+func (p *preloader) Refresh(ctx context.Context, setID string) error {
+	set, lookup := p.sets.SetByID(setID)
+	if lookup != SetFound {
+		return fmt.Errorf("因子集 %s 不在目录里", setID)
+	}
+	if err := p.prepare(ctx, set); err != nil {
+		return err
+	}
+	p.markPrepared(setID, maxLookbackOf(set))
+	if p.onReady != nil {
+		p.onReady(setID)
+	}
+	return nil
+}
+
 func newPreloader(sets preloadCatalog, source SourceDataset, data preloadData, active func() bool, onReady func(string)) *preloader {
 	return &preloader{sets: sets, source: source, data: data, active: active, onReady: onReady, kick: make(chan struct{}, 1), prepared: map[string]int{}}
 }
