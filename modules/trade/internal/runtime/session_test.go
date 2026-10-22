@@ -233,9 +233,12 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 		"GetAccountSnapshot",
 		"ListRecentFills",
 	}, adapter.callSnapshot())
-	stored, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
-	require.NoError(t, err)
-	require.True(t, stored.Ready)
+	// 激活前缓冲的持仓事件在 READY 交接时才应用，应用期间持久化状态会短暂回到未就绪、等完整同步确认后再就绪：
+	// session.Ready() 为真时库里的就绪位可能还没落定，要等它稳定为真。
+	require.Eventually(t, func() bool {
+		stored, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+		return err == nil && stored.Ready
+	}, 2*time.Second, 10*time.Millisecond)
 	var positionUpdatedAt int64
 	require.NoError(t, tradeStore.DBForTest().Raw(`
 		SELECT c_exchange_updated_at FROM t_trading_positions
@@ -248,7 +251,7 @@ func TestExchangeSessionStartsInExactOrderBuffersThenClearsReadyOnDisconnect(
 	adapter.disconnect <- disconnectErr
 	require.ErrorIs(t, <-done, disconnectErr)
 	require.False(t, session.Ready())
-	stored, err = tradeStore.GetTradingAccountByID(context.Background(), "account-1")
+	stored, err := tradeStore.GetTradingAccountByID(context.Background(), "account-1")
 	require.NoError(t, err)
 	require.False(t, stored.Ready)
 	require.Contains(t, stored.LastError, "private stream disconnected")
