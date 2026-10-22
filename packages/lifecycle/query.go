@@ -141,7 +141,7 @@ func (c *Controller) effective(r *record) Stage {
 func (c *Controller) object(r *record) Object {
 	obj := Object{
 		Ref: r.Ref, Stage: r.Stage, Effective: c.effective(r), Color: c.effective(r).Color(), Reason: r.Reason, Since: r.Since,
-		Pause: r.Pause, PausedSince: r.PausedSince, Resume: r.Resume, Recovered: r.Recovered, Hold: r.Hold, ReleasedAt: r.ReleasedAt,
+		Pause: r.Pause, PausedSince: r.PausedSince, Resume: r.Resume, Recovered: r.Recovered, Hold: r.Hold, ReleasedAt: r.ReleasedAt, LastReset: r.LastReset,
 		Checks: append([]Check(nil), c.checks[r.key()]...),
 	}
 	if r.catchup != nil {
@@ -247,6 +247,8 @@ type Compact struct {
 	Hold  Hold       `json:"hold,omitempty"`
 	// Catchup 是模块自身的恢复追赶进度（模块恢复追赶中）。
 	Catchup *Catchup `json:"catchup,omitempty"`
+	// LastReset 是最近一次完成的重置。
+	LastReset *ResetRecord `json:"last_reset,omitempty"`
 	// Counts 是各阶段的对象数；PauseKinds 是暂停的对象（含模块自身）按类型计数。
 	Counts     map[Stage]int     `json:"counts,omitempty"`
 	PauseKinds map[PauseKind]int `json:"pause_kinds,omitempty"`
@@ -263,7 +265,7 @@ func (c *Controller) Compact() Compact {
 	snap := c.Snapshot()
 	out := Compact{
 		Stage: snap.Stage, Color: snap.Color, Degraded: snap.Degraded, Reason: snap.Reason,
-		Self: snap.Self.Stage, Pause: snap.Self.Pause, Hold: snap.Self.Hold, Catchup: snap.Self.Catchup,
+		Self: snap.Self.Stage, Pause: snap.Self.Pause, Hold: snap.Self.Hold, Catchup: snap.Self.Catchup, LastReset: snap.Self.LastReset,
 		Counts: map[Stage]int{},
 	}
 	countPause := func(o Object) {

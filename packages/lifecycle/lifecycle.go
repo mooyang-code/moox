@@ -197,6 +197,8 @@ type Object struct {
 	Hold Hold `json:"hold,omitempty"`
 	// ReleasedAt 是最近一次放行的时间：下单类模块据此只对放行之后收盘的周期出目标，放行之前的周期只记录、不求值。
 	ReleasedAt time.Time `json:"released_at,omitempty"`
+	// LastReset 是最近一次完成的重置（只在模块自身记录里有意义）。
+	LastReset *ResetRecord `json:"last_reset,omitempty"`
 	// Recovered 为真表示这次是重启后自动回到原阶段（首页提示「已自动恢复」）。
 	Recovered bool    `json:"recovered,omitempty"`
 	Checks    []Check `json:"checks,omitempty"`
@@ -228,6 +230,8 @@ type Hooks struct {
 	// Catchup 报告一个对象（ref 为空是模块自身）的恢复追赶进度；since 是最早一次暂停的时间。
 	// 为 nil 表示没有数据需要追赶，恢复后立即视为追平。钩子应只写历史数据，不下单、不发目标。
 	Catchup func(ctx context.Context, ref Ref, since time.Time) (Catchup, error)
+	// Reset 是模块的重置实现（见 reset.go）；为 nil 表示模块不支持重置。
+	Reset *ResetSpec
 	// Quiesce 在对象暂停之后调用（门禁已经关闭）：等待该对象在途的写操作结束（例如 Trade 已提交的订单请求）。
 	// 返回错误表示在途操作没有在时限内结束；对象仍然是暂停，调用方可以稍后再确认。为 nil 表示没有需要等待的在途操作。
 	Quiesce func(ctx context.Context, ref Ref) error
@@ -254,19 +258,22 @@ type Controller struct {
 	self    *record
 	objects map[string]*record
 	checks  map[string][]Check
+
+	reset resetState
 }
 
 type record struct {
 	Ref
-	Stage       Stage      `json:"stage"`
-	Reason      string     `json:"reason,omitempty"`
-	Since       time.Time  `json:"since"`
-	Pause       *PauseInfo `json:"pause,omitempty"`
-	PausedSince time.Time  `json:"paused_since,omitempty"`
-	Resume      Stage      `json:"resume,omitempty"`
-	Recovered   bool       `json:"recovered,omitempty"`
-	Hold        Hold       `json:"hold,omitempty"`
-	ReleasedAt  time.Time  `json:"released_at,omitempty"`
+	Stage       Stage        `json:"stage"`
+	Reason      string       `json:"reason,omitempty"`
+	Since       time.Time    `json:"since"`
+	Pause       *PauseInfo   `json:"pause,omitempty"`
+	PausedSince time.Time    `json:"paused_since,omitempty"`
+	Resume      Stage        `json:"resume,omitempty"`
+	Recovered   bool         `json:"recovered,omitempty"`
+	Hold        Hold         `json:"hold,omitempty"`
+	ReleasedAt  time.Time    `json:"released_at,omitempty"`
+	LastReset   *ResetRecord `json:"last_reset,omitempty"`
 	// 以下是进程内的恢复追赶状态，重启后清零（重启时恢复追赶回到暂停，要重新 resume）。
 	catchup       *Catchup
 	catchupMember bool // 模块恢复追赶时，参与本次恢复的原活动对象
@@ -303,6 +310,9 @@ func New(opts Options) (*Controller, error) {
 	c.self = &record{Stage: StageUninitialized, Since: opts.Now().UTC()}
 	if opts.StateFile == "" {
 		return c, nil
+	}
+	if err := c.loadJournal(); err != nil {
+		return nil, err
 	}
 	raw, err := os.ReadFile(opts.StateFile)
 	if errors.Is(err, os.ErrNotExist) {
