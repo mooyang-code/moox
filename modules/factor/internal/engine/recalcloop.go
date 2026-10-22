@@ -61,6 +61,10 @@ func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
 		job.Window.Start.Format(time.RFC3339), job.Window.End.Format(time.RFC3339), job.Window.Progress.Format(time.RFC3339))
 	err = l.runJob(ctx, &job)
 	switch {
+	case errors.Is(err, recalcexec.ErrGated):
+		// 集合被暂停（或在恢复追赶、重置）：不报失败，任务租约到期后由放行后的引擎继续；按没有任务处理，避免立刻重新领取。
+		log.InfoContextf(ctx, "factor_recalc_gated job_id=%s set_id=%s", job.JobID, job.Set.Set.SetID)
+		return false, nil
 	case err == nil:
 		log.InfoContextf(ctx, "factor_recalc_done job_id=%s", job.JobID)
 	case errors.Is(err, ErrLeaseConflict), errors.Is(err, errReportFailed):

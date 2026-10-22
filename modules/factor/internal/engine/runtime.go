@@ -201,7 +201,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 
 	executor := recalcexec.NewExecutor(r.runner,
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks), recalcexec.WithClock(clock),
-		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)))
+		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate))
 	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval}
 	filler := &gapFiller{
 		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
@@ -269,7 +269,7 @@ func (r *Runtime) reconcileConsumer() {
 		consumer, err := eventconsumer.NewConsumer(context.Background(), eventconsumer.ConsumerConfig{
 			URLs: r.cfg.EventBus.URLs, CredentialFile: r.cfg.EventBus.CredentialFile,
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
-			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate,
+			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate, CatchupGate: r.catchupGate,
 		}, r.catalog, &observedStore{Store: r.storage, health: r.monitor}, r.runner, r.locks)
 		if err != nil {
 			log.ErrorContextf(context.Background(), "factor_engine_consumer_start_failed error=%v", err)

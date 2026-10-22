@@ -158,6 +158,21 @@ func (c *Continuity) onEvent(ctx context.Context, h *Handler, set domain.FactorS
 	return c.advance(ctx, h, set, factors, step, &event)
 }
 
+// NoteTarget 显式把集合的追赶目标推到 period（取已有目标与 period 中较晚的）。
+// 暂停期间的实时事件在连续水位目标更新之前就被 ACK，目标会停在暂停前；恢复追赶时由这里显式建立目标，
+// 不等下一条实时事件。集合还没有水位记录（从未跑过实时周期）时不建立：连续性从第一次实时事件起保证。
+func (c *Continuity) NoteTarget(setID string, period time.Time) error {
+	state, ok := c.cfg.Store.Get(setID)
+	if !ok || state.CommittedThrough.IsZero() || !period.After(state.Target) {
+		return nil
+	}
+	state.Target = period
+	if err := c.cfg.Store.Put(state); err != nil {
+		return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
+	}
+	return nil
+}
+
 // advanceSet 在没有事件时推进（追赶循环、补齐通知）。
 func (c *Continuity) advanceSet(ctx context.Context, h *Handler, setID string) error {
 	state, ok := c.cfg.Store.Get(setID)

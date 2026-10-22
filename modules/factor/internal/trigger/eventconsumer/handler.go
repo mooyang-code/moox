@@ -36,10 +36,15 @@ type Handler struct {
 	// gate 非空时，集合没有处于预热或运行（生命周期门禁）就不计算：事件直接 ACK，水位不前进，
 	// 启动之后由下一个事件和追赶循环从水位下一期补算。
 	gate func(setID string) bool
+	// catchupGate 非空时，实时门禁关闭的集合在恢复追赶中仍可推进连续水位（只写历史周期）。
+	catchupGate func(setID string) bool
 }
 
 // SetGate 设置生命周期门禁；必须在开始消费之前调用。
 func (h *Handler) SetGate(gate func(setID string) bool) { h.gate = gate }
+
+// SetCatchupGate 设置恢复追赶的门禁：Advance（连续水位追赶）在实时门禁关闭时，只要追赶门禁放行就可以推进。
+func (h *Handler) SetCatchupGate(gate func(setID string) bool) { h.catchupGate = gate }
 
 // SetContinuity 打开连续水位推进；必须在开始消费之前调用。
 func (h *Handler) SetContinuity(continuity *Continuity) { h.continuity = continuity }
@@ -49,7 +54,7 @@ func (h *Handler) Advance(ctx context.Context, setID string) error {
 	if h == nil || h.continuity == nil {
 		return nil
 	}
-	if h.gate != nil && !h.gate(setID) {
+	if h.gate != nil && !h.gate(setID) && (h.catchupGate == nil || !h.catchupGate(setID)) {
 		return nil
 	}
 	_, err := h.lanes.Do(ctx, setID, func(laneCtx context.Context) (pipeline.Outcome, error) {
