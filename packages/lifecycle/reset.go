@@ -368,6 +368,11 @@ func (c *Controller) ResetApply(ctx context.Context, req ResetApplyRequest) (Res
 	}
 	c.reset.running = true
 	c.reset.done = make(chan struct{})
+	if resume {
+		c.audit("lifecycle_reset_resume module=%s operation_id=%s scope=%s by=%s", c.opts.Module, op.OperationID, op.Scope, req.By)
+	} else {
+		c.audit("lifecycle_reset_start module=%s operation_id=%s scope=%s by=%s digest=%s steps=%d", c.opts.Module, op.OperationID, op.Scope, req.By, op.Digest, len(op.Steps))
+	}
 	go c.runReset(context.WithoutCancel(ctx), op, steps)
 	return c.resetStatusLocked(), nil
 }
@@ -386,6 +391,7 @@ func (c *Controller) runReset(ctx context.Context, op *ResetOperation, steps []R
 		op.State, op.Error = "failed", fmt.Sprintf("第 %d 步 %s 失败：%v", i+1, op.Steps[i].Name, err)
 		_ = c.saveJournal(op)
 		c.reset.mu.Unlock()
+		c.audit("lifecycle_reset_failed module=%s operation_id=%s step=%s error=%v", c.opts.Module, op.OperationID, op.Steps[i].Name, err)
 		c.mu.Lock()
 		var changes []change
 		c.set(c.self, StageResetFailed, op.Error, &changes)
@@ -412,8 +418,10 @@ func (c *Controller) runReset(ctx context.Context, op *ResetOperation, steps []R
 			fail(i, fmt.Errorf("写重置日志：%w", err))
 			return
 		}
+		c.audit("lifecycle_reset_step module=%s operation_id=%s step=%s done=%d/%d", c.opts.Module, op.OperationID, step.Name, i+1, len(steps))
 	}
 	c.finishReset(op)
+	c.audit("lifecycle_reset_done module=%s operation_id=%s scope=%s by=%s", c.opts.Module, op.OperationID, op.Scope, op.By)
 }
 
 // finishReset 完成重置：回到未初始化，保持「重置后等待初始化」，对象全部清掉（它们的定义已被删除）。
@@ -478,6 +486,7 @@ func (c *Controller) ResetAbort(ctx context.Context, by string) (ResetStatus, er
 	_ = c.save()
 	c.mu.Unlock()
 	c.notify(changes)
+	c.audit("lifecycle_reset_abort module=%s operation_id=%s by=%s", c.opts.Module, op.OperationID, by)
 	return c.resetStatusLocked(), nil
 }
 

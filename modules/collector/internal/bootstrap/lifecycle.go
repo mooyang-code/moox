@@ -206,6 +206,7 @@ func (c *collectorControl) runRecovery(ctx context.Context) {
 
 func newCollectorLifecycle(dbPath string, control *collectorControl, ready func() bool, reset *lifecycle.ResetSpec) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
+		Audit:          func(event string) { log.Infof("%s", event) },
 		Module:         "collector",
 		StateFile:      filepath.Join(filepath.Dir(dbPath), collectorLifecycleStateFile),
 		QuiesceTimeout: collectorQuiesceTimeout,

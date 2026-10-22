@@ -532,3 +532,42 @@ func TestModuleCatchupGivesMembersTheModulePausedSince(t *testing.T) {
 		require.Equal(t, now, since, "对象的追赶起点是模块的暂停时间，不是零值")
 	}
 }
+
+// 定时恢复：暂停时带到期时间，到点后下一轮 Refresh 自动进入恢复追赶，追平后放行；系统暂停与过去的时间被拒绝。
+func TestPauseExpiresAutoResumes(t *testing.T) {
+	f := newFake()
+	f.refs = []Ref{set1}
+	f.setObject(set1, pass("ok"))
+	cu := newCatchupFake()
+	hooks := f.hooks()
+	hooks.Catchup = cu.hook
+	now := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	c, err := New(Options{Module: "factor-engine", Now: func() time.Time { return now }, Hooks: hooks})
+	require.NoError(t, err)
+	ctx := context.Background()
+	c.Refresh(ctx)
+	for _, cmd := range []Command{CmdInit, CmdStart, CmdConfirm} {
+		_, err := c.Command(ctx, cmd, set1)
+		require.NoError(t, err)
+	}
+
+	_, err = c.Execute(ctx, Request{Command: CmdPause, Ref: set1, PauseKind: PauseSystem, ExpiresAt: now.Add(time.Hour)})
+	require.ErrorContains(t, err, "系统暂停不支持定时恢复")
+	_, err = c.Execute(ctx, Request{Command: CmdPause, Ref: set1, ExpiresAt: now.Add(-time.Minute)})
+	require.ErrorContains(t, err, "晚于现在")
+
+	obj, err := c.Execute(ctx, Request{Command: CmdPause, Ref: set1, Reason: "夜里停一会", ExpiresAt: now.Add(2 * time.Hour)})
+	require.NoError(t, err)
+	require.Equal(t, now.Add(2*time.Hour), obj.Pause.ExpiresAt)
+
+	now = now.Add(time.Hour)
+	c.Refresh(ctx)
+	require.Equal(t, StagePaused, c.Stage(set1), "没到点不恢复")
+
+	now = now.Add(time.Hour)
+	c.Refresh(ctx)
+	require.Equal(t, StageResuming, c.Stage(set1), "到点进入恢复追赶，不是直接放行")
+	cu.set(set1, true)
+	c.Refresh(ctx)
+	require.True(t, c.Allowed(set1), "追平后自动放行")
+}

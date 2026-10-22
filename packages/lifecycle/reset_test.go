@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,6 +28,8 @@ type resetFixture struct {
 	failStep atomic.Value // string：这一步返回错误
 	blockers atomic.Value // []string
 	now      time.Time
+	audit    []string // 审计事件
+	auditMu  sync.Mutex
 }
 
 func newResetFixture(t *testing.T) *resetFixture {
@@ -44,6 +48,7 @@ func newResetFixture(t *testing.T) *resetFixture {
 	}
 	c, err := New(Options{
 		Module: "demo", StateFile: filepath.Join(f.dir, "lifecycle.json"), Now: func() time.Time { return f.now },
+		Audit: func(e string) { f.auditMu.Lock(); f.audit = append(f.audit, e); f.auditMu.Unlock() },
 		Hooks: Hooks{
 			Objects:     func() []Ref { return []Ref{set1} },
 			CheckObject: func(context.Context, Ref) []Check { return []Check{{Name: "x", Status: CheckPass}} },
@@ -431,4 +436,25 @@ INSERT INTO t_child (c_parent) VALUES (1), (2);`)
 	require.NoError(t, statErr)
 	entries, _ := filepath.Glob(filepath.Join(dir, "reset-backups", "*"))
 	require.Len(t, entries, 2, "只保留最近 2 份")
+}
+
+// 审计事件：暂停、重置开始、每一步、结束、失败、放弃都带操作者和范围。
+func TestResetAuditEvents(t *testing.T) {
+	f := newResetFixture(t)
+	f.pause(t)
+	f.failStep.Store("clear")
+	plan, err := f.c.ResetPlan(context.Background(), ResetData)
+	require.NoError(t, err)
+	_, err = f.c.ResetApply(context.Background(), ResetApplyRequest{Token: plan.Token, Scope: ResetData, By: "ops"})
+	require.NoError(t, err)
+	require.NoError(t, f.c.ResetWait(context.Background()))
+	_, err = f.c.ResetAbort(context.Background(), "ops")
+	require.NoError(t, err)
+
+	f.auditMu.Lock()
+	defer f.auditMu.Unlock()
+	all := strings.Join(f.audit, "\n")
+	for _, want := range []string{"lifecycle_pause", "lifecycle_reset_start", "scope=data", "by=ops", "lifecycle_reset_step", "step=backup", "lifecycle_reset_failed", "step=clear", "lifecycle_reset_abort"} {
+		require.Contains(t, all, want)
+	}
 }

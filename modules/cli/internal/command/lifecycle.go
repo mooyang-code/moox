@@ -27,6 +27,8 @@ type lifecycleOptions struct {
 	By            string
 	Force         bool
 	ManualRelease bool
+	// ExpiresIn 用于 pause：这么久之后自动恢复（0 表示不自动恢复）。
+	ExpiresIn time.Duration
 }
 
 var (
@@ -71,6 +73,7 @@ func init() {
 	pf.StringVar(&lifecycleFlags.PauseKind, "pause-kind", "", "pause：暂停类型 manual（默认）| system；resume：只恢复该类型的暂停")
 	pf.StringVar(&lifecycleFlags.By, "by", "", "操作者（默认 cli:<主机名>）")
 	pf.BoolVar(&lifecycleFlags.Force, "force", false, "resume：模块暂停期间只放行单个对象的追赶")
+	pf.DurationVar(&lifecycleFlags.ExpiresIn, "for", 0, "pause：这么久之后自动恢复（先追赶再放行），例如 2h；不能用于系统暂停")
 	pf.BoolVar(&lifecycleFlags.ManualRelease, "manual-release", false, "resume：追平后不自动放行，等 release")
 
 	lifecycleCmd.AddCommand(&cobra.Command{
@@ -165,6 +168,12 @@ func runLifecycleCommand(ctx context.Context, o lifecycleOptions, cmd lifecycle.
 		Command: cmd, Kind: ref.Kind, ID: ref.ID,
 		PauseKind: lifecycle.PauseKind(o.PauseKind), Reason: o.Reason, By: by, Force: o.Force, ManualRelease: o.ManualRelease,
 	}
+	if o.ExpiresIn > 0 {
+		if cmd != lifecycle.CmdPause {
+			return errors.New("--for 只用于 pause")
+		}
+		req.ExpiresAt = time.Now().Add(o.ExpiresIn)
+	}
 	obj, err := o.client().Exec(ctx, req)
 	if err != nil {
 		return err
@@ -220,6 +229,9 @@ func printObject(out io.Writer, name string, obj lifecycle.Object) {
 		line += "（" + pauseKindText(obj.Pause.Kind)
 		if obj.Pause.By != "" {
 			line += "，" + obj.Pause.By
+		}
+		if !obj.Pause.ExpiresAt.IsZero() {
+			line += "，到 " + obj.Pause.ExpiresAt.Local().Format("01-02 15:04") + " 自动恢复"
 		}
 		line += "）"
 	}

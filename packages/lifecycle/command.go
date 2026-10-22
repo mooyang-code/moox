@@ -23,6 +23,9 @@ type Request struct {
 	Force bool
 	// ManualRelease 为真时追平后不自动放行，等 release（系统级恢复由编排器统一放行）。
 	ManualRelease bool
+	// ExpiresAt 用于 pause：到点自动恢复（进入恢复追赶，追平后放行）。只用于手动、自动暂停；
+	// 系统暂停要经栅栏统一放行，不能由某个模块自己到点恢复。
+	ExpiresAt time.Time
 }
 
 // Command 执行一个用户命令并返回对象的新状态。ref 为空表示模块自身。
@@ -69,6 +72,9 @@ func (c *Controller) Execute(ctx context.Context, req Request) (Object, error) {
 			if qerr != nil {
 				return obj, fmt.Errorf("已暂停，但在途操作没有结束：%w", qerr)
 			}
+		}
+		if err == nil {
+			c.audit("lifecycle_%s module=%s ref=%s/%s kind=%s by=%s reason=%q", req.Command, c.opts.Module, req.Ref.Kind, req.Ref.ID, req.PauseKind, req.By, req.Reason)
 		}
 		return obj, err
 	case CmdRelease:
@@ -189,6 +195,15 @@ func (c *Controller) transition(ctx context.Context, req Request) (Object, error
 			return deny(fmt.Sprintf("未知的暂停类型 %q", kind))
 		}
 		info := &PauseInfo{Kind: kind, Reason: req.Reason, By: req.By, Since: c.opts.Now().UTC()}
+		if !req.ExpiresAt.IsZero() {
+			switch {
+			case kind == PauseSystem:
+				return deny("系统暂停不支持定时恢复：要经 system resume 先追赶再统一放行")
+			case !req.ExpiresAt.After(info.Since):
+				return deny("定时恢复的时间必须晚于现在")
+			}
+			info.ExpiresAt = req.ExpiresAt.UTC()
+		}
 		reason := pauseReason(kind, req.Reason)
 		switch {
 		case r.Stage == StagePaused:
