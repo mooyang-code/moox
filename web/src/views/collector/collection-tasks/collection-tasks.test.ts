@@ -63,15 +63,37 @@ describe("collector task workbench", () => {
     expect(source).toContain(".moox-page:deep(.arco-spin){display:block;width:100%;min-width:0;}");
   });
 
-  it("keeps resample backfill in the task surface", () => {
+  it("keeps resample creation and history jobs in the task surface", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
-    const backfill = fs.readFileSync(path.resolve(__dirname, "resample-backfill.vue"), "utf8");
+    const drawer = fs.readFileSync(path.resolve(__dirname, "resample-jobs-drawer.vue"), "utf8");
     expect(source).toContain("kline_resample");
-    expect(source).toContain("ResampleBackfillDialog");
-    expect(source).toContain("sourceRetention");
-    expect(backfill).toContain("开始回填");
-    expect(backfill).toContain("内部行情 `crypto`");
-    expect(backfill).not.toContain("ruleId");
+    expect(source).toContain("ResampleJobsDrawer");
+    expect(source).toContain('title="合成来源"');
+    // 行操作：新建合成、历史合成；旧的回填弹窗与收盘等待已删除。
+    expect(source).toContain("新建合成");
+    expect(source).toContain("历史合成");
+    expect(source).toContain("onAddResample(record)");
+    expect(source).not.toContain("ResampleBackfillDialog");
+    expect(source).not.toContain("settleDelay");
+    expect(source).not.toContain("收盘等待");
+    expect(drawer).toContain("提交作业");
+    expect(drawer).toContain("跳过样例");
+    expect(drawer).toContain("取消");
+    expect(drawer).not.toContain("ruleId");
+  });
+
+  it("derives the resample source from a selected source task instead of free-text fields", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
+    expect(source).toContain('label="源采集任务"');
+    expect(source).toContain("previewKlineResampleSource");
+    expect(source).toContain("继承源任务，共");
+    // 源周期、序列标签不再是输入框，也不再从源数据集回填标签。
+    expect(source).not.toContain("sourceFrequencyValue");
+    expect(source).not.toContain("sourceSeriesTagValue");
+    expect(source).not.toContain("loadSourceSubjectTags");
+    expect(source).not.toContain("sourceTagsPending");
+    // 合成任务的参数创建后不可修改：更新时原样回传。
+    expect(source).toContain('if (input.dataType === "kline_resample") return { ...original };');
   });
   it("shows output fields in both task detail and edit surfaces", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
@@ -81,18 +103,5 @@ describe("collector task workbench", () => {
     expect(source).toContain("detailOutputFieldLabels");
     expect(source).toContain("selectedOutputFields.value = input.outputFields || []");
     expect(source).toContain("outputFields: selectedOutputFields.value");
-  });
-
-  it("clears source-derived tags on switch and waits for the backfill before saving", () => {
-    const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
-    const loader = source.slice(
-      source.indexOf("function loadSourceSubjectTags"),
-      source.indexOf("async function fetchSourceSubjectTags")
-    );
-    expect(loader).toContain("subjectTagIds.value = []");
-    expect(loader).toContain("sourceTagsPending = task");
-    const submit = source.slice(source.indexOf("async function handleOk"));
-    expect(submit.indexOf("await sourceTagsPending")).toBeGreaterThan(-1);
-    expect(submit.indexOf("await sourceTagsPending")).toBeLessThan(submit.indexOf("currentTaskInput()"));
   });
 });

@@ -30,7 +30,7 @@
           :data="taskList"
           :bordered="{ cell: true }"
           :loading="loading"
-          :scroll="{ x: 1450 }"
+          :scroll="{ x: 1600 }"
           :pagination="paginationConfig"
           @page-change="onPageChange"
           @page-size-change="onPageSizeChange"
@@ -53,6 +53,9 @@
             <a-table-column title="频率" :width="90">
               <template #cell="{ record }">{{ taskFrequency(record) }}</template>
             </a-table-column>
+            <a-table-column title="合成来源" :width="200">
+              <template #cell="{ record }">{{ resampleSourceSummary(record) }}</template>
+            </a-table-column>
             <a-table-column title="结果状态" :width="120" align="center">
               <template #cell="{ record }">
                 <a-tag size="small" :color="resultStatusColor(record)">{{ resultStatusLabel(record) }}</a-tag>
@@ -68,7 +71,7 @@
                 </a-tag>
               </template>
             </a-table-column>
-            <a-table-column title="操作" :width="220" align="center" fixed="right">
+            <a-table-column title="操作" :width="340" align="center" fixed="right">
               <template #cell="{ record }">
                 <a-space wrap>
                   <a-button
@@ -78,9 +81,18 @@
                   >
                     {{ record.enabled ? "禁用" : "启用" }}
                   </a-button>
-                  <a-button v-if="record.data_type === 'kline_resample'" type="text" size="mini" @click="openBackfill(record)">
+                  <a-button
+                    v-if="record.data_type === 'kline' || record.data_type === 'kline_resample'"
+                    type="primary"
+                    status="success"
+                    size="mini"
+                    @click="onAddResample(record)"
+                  >
+                    新建合成
+                  </a-button>
+                  <a-button v-if="record.data_type === 'kline_resample'" type="text" size="mini" @click="openJobs(record)">
                     <template #icon><icon-refresh /></template>
-                    回填
+                    历史合成
                   </a-button>
                   <a-button type="primary" size="mini" @click="onUpdate(record)">
                     <template #icon><icon-edit /></template>
@@ -191,7 +203,26 @@
                     option.label
                   }}</a-option>
                 </a-select>
-                <a-input v-else v-model="frequencyValue" placeholder="例如 1m、5m、1h" allow-clear :disabled="editing" />
+                <a-input
+                  v-else
+                  v-model="frequencyValue"
+                  :placeholder="editor.data_type === 'kline_resample' ? '例如 45m、2h、1d' : '例如 1m、5m、1h'"
+                  allow-clear
+                  :disabled="editing"
+                />
+                <span v-if="editor.data_type === 'kline_resample' && !editing && frequencyHints.length" class="field-hint">
+                  可选：
+                  <a-tag
+                    v-for="item in frequencyHints"
+                    :key="item"
+                    size="small"
+                    class="frequency-hint-tag"
+                    :color="normalizedTargetFrequency === item ? 'arcoblue' : undefined"
+                    @click="frequencyValue = item"
+                  >
+                    {{ item }}
+                  </a-tag>
+                </span>
               </a-form-item>
             </a-col>
           </a-row>
@@ -202,11 +233,7 @@
             <h3>采集范围</h3>
             <span>确定本任务要处理的标的或源数据</span>
           </header>
-          <a-form-item
-            v-if="editor.data_type === 'kline' || editor.data_type === 'kline_resample'"
-            label="采集标的"
-            :required="editor.data_type === 'kline'"
-          >
+          <a-form-item v-if="editor.data_type === 'kline'" label="采集标的" required>
             <a-select
               v-model="subjectTagIds"
               placeholder="请选择一个或多个标签"
@@ -214,65 +241,52 @@
               allow-search
               allow-clear
               multiple
-              :disabled="editing || editor.data_type === 'kline_resample'"
+              :disabled="editing"
             >
               <a-option v-for="tag in tags" :key="tag.tag_id" :value="tag.tag_id">
                 {{ tag.tag_name }}（{{ tag.source || "-" }} / {{ tag.market_type || "-" }}）
               </a-option>
             </a-select>
-            <span class="field-hint"
-              >Provider
-              和市场由标签固定绑定；同一任务的标签必须来自同一来源和市场。重采样任务继承源行情的标的范围，不可修改。</span
-            >
+            <span class="field-hint">Provider 和市场由标签固定绑定；同一任务的标签必须来自同一来源和市场。</span>
           </a-form-item>
-          <a-alert v-else type="info" show-icon>当前执行任务类型没有标的范围，此项留空。</a-alert>
+          <a-alert v-else-if="editor.data_type !== 'kline_resample'" type="info" show-icon
+            >当前执行任务类型没有标的范围，此项留空。</a-alert
+          >
 
           <template v-if="editor.data_type === 'kline_resample'">
-            <a-form-item :label="taskFieldLabel('source_dataset_id', '源行情')" required>
+            <a-form-item label="源采集任务" required>
               <a-select
-                v-model="sourceIdValue"
-                placeholder="请选择源行情"
-                @change="loadSourceSubjectTags"
-                :loading="loadingSources"
+                v-model="sourceTaskId"
+                placeholder="选择要合成的源采集任务"
                 allow-search
-                allow-clear
+                :loading="loadingSourceTasks"
                 :disabled="editing"
               >
-                <a-option v-for="source in resampleSourceOptions" :key="source.source_id" :value="source.source_id">{{
-                  source.name || "源行情"
-                }}</a-option>
+                <a-option
+                  v-for="option in sourceTaskOptions"
+                  :key="option.task_id"
+                  :value="option.task_id"
+                  :disabled="Boolean(option.reason)"
+                >
+                  {{ option.label }}<span v-if="option.reason" class="field-hint">（{{ option.reason }}）</span>
+                </a-option>
               </a-select>
+              <span class="field-hint"
+                >合成的源是已有的采集任务（或另一个合成任务）；源周期和序列标签由系统带出，不需要手填。</span
+              >
             </a-form-item>
-            <a-row :gutter="16">
-              <a-col :span="12"
-                ><a-form-item :label="taskFieldLabel('source_frequency', '源周期')" required
-                  ><a-input
-                    v-model="sourceFrequencyValue"
-                    placeholder="例如 1m、5m、1h"
-                    allow-clear
-                    :disabled="editing" /></a-form-item
-              ></a-col>
-              <a-col :span="12"
-                ><a-form-item :label="taskFieldLabel('source_series_tag', '序列标签')" required
-                  ><a-input
-                    v-model="sourceSeriesTagValue"
-                    placeholder="例如 venue:binance"
-                    allow-clear
-                    :disabled="editing" /></a-form-item
-              ></a-col>
-            </a-row>
-            <a-form-item :label="taskFieldLabel('settle_delay_ms', '收盘等待（毫秒）')">
-              <a-input-number
-                v-model="settleDelayMSValue"
-                :min="0"
-                :max="86400000"
-                :precision="0"
-                placeholder="留空使用默认值"
-                allow-clear
-                :disabled="editing"
-                style="width: 100%"
-              />
-            </a-form-item>
+            <a-descriptions v-if="resamplePreview" :column="2" size="small" bordered class="resample-source-info">
+              <a-descriptions-item label="源数据集">{{ resamplePreview.source_dataset_id || "-" }}</a-descriptions-item>
+              <a-descriptions-item label="源周期">{{ resamplePreview.source_frequency || "-" }}</a-descriptions-item>
+              <a-descriptions-item label="序列标签">{{ resamplePreview.source_series_tag || "-" }}</a-descriptions-item>
+              <a-descriptions-item label="采集标的"
+                >继承源任务，共 {{ resamplePreview.subject_count ?? 0 }} 个标的</a-descriptions-item
+              >
+              <a-descriptions-item v-if="resamplePreview.alignment" label="分桶方式" :span="2">
+                {{ resamplePreview.alignment === "session" ? "按交易时段从开盘起切分" : "按 UTC 固定网格切分" }}
+              </a-descriptions-item>
+            </a-descriptions>
+            <a-alert v-if="resampleError" type="error" show-icon class="resample-error">{{ resampleError }}</a-alert>
           </template>
         </section>
 
@@ -391,6 +405,15 @@
         <a-descriptions-item label="标签">{{ taskTagSummary(detailData) }}</a-descriptions-item>
         <a-descriptions-item label="来源 / 市场">{{ taskRouteSummary(detailData) }}</a-descriptions-item>
         <a-descriptions-item label="频率">{{ taskFrequency(detailData) }}</a-descriptions-item>
+        <template v-if="detailData.data_type === 'kline_resample'">
+          <a-descriptions-item label="源任务">{{ resampleSourceSummary(detailData) }}</a-descriptions-item>
+          <a-descriptions-item label="源周期 / 序列标签">
+            {{ stringParam(detailData, "source_frequency") || "-" }} / {{ stringParam(detailData, "source_series_tag") || "-" }}
+          </a-descriptions-item>
+        </template>
+        <a-descriptions-item v-if="detailDependents.length" label="依赖它的合成任务" :span="2">
+          {{ detailDependents.map(item => `${item.task_name || item.task_id}（${taskFrequency(item)}）`).join("、") }}
+        </a-descriptions-item>
         <a-descriptions-item label="结果状态">{{ resultStatusLabel(detailData) }}</a-descriptions-item>
         <a-descriptions-item label="输出字段" :span="2">
           <div v-if="detailOutputFieldLabels.length" class="selected-output-tags">
@@ -425,16 +448,13 @@
       </a-radio-group>
     </a-modal>
 
-    <ResampleBackfillDialog
-      v-if="backfillTarget"
-      v-model:visible="backfillVisible"
+    <ResampleJobsDrawer
+      v-if="jobsTarget"
+      v-model:visible="jobsVisible"
       :space-id="selectedSpaceId || ''"
-      :task-id="backfillTarget.taskId"
-      :target-frequency="backfillTarget.targetFrequency"
-      :source-retention="backfillTarget.sourceRetention"
-      :active-backfill="activeBackfill"
-      @started="onBackfillChanged"
-      @cancelled="onBackfillChanged"
+      :task-id="jobsTarget.taskId"
+      :task-name="jobsTarget.taskName"
+      :target-frequency="jobsTarget.targetFrequency"
     />
   </div>
 </template>
@@ -453,10 +473,11 @@ import {
   GetTaskDetail,
   GetTaskList,
   UpdateTask,
-  getKlineResampleBackfillStatus,
-  type DataTypeConfig
+  previewKlineResampleSource,
+  type DataTypeConfig,
+  type ResampleSourcePreview
 } from "@/api/collector";
-import { getDataset, getView, listDataNodes, listDatasets, listFieldGroups, listFields, listTags } from "@/api/storage/metadata";
+import { getDataset, getView, listDataNodes, listFieldGroups, listFields, listTags } from "@/api/storage/metadata";
 import type { DataNode, Field, FieldGroup, Tag } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
@@ -464,23 +485,21 @@ import { storeToRefs } from "pinia";
 import {
   buildCollectionTaskParams,
   buildCollectionTaskPayload,
-  collectionSourceMatches,
   collectionTaskResultLabel,
   inspectCollectionTaskResults,
   collectionTaskNameError,
   KLINE_OUTPUT_FIELD_IDS,
   normalizeCollectionTask,
-  normalizeMarket,
   parseCollectionTaskInput,
   taskFrequency,
-  type CollectionSourceOption,
   type CollectionTaskDataType,
   type CollectionTaskInput,
   type CollectionTaskMarket,
   type CollectionTaskRecord
 } from "./collection-task-params";
-import ResampleBackfillDialog from "./resample-backfill.vue";
-import type { ResampleBackfillSummary } from "./resample-backfill";
+import ResampleJobsDrawer from "./resample-jobs-drawer.vue";
+import { sourceCandidateReason } from "./resample-jobs";
+import { frequencyMinutes, normalizeFrequency } from "@/utils/frequency";
 import { groupPath } from "@/views/data/fields/field-workbench";
 
 type EnabledFilter = "" | "true" | "false";
@@ -499,13 +518,16 @@ type EditorForm = {
 
 const loading = ref(false);
 const submitLoading = ref(false);
-const loadingSources = ref(false);
+const loadingSourceTasks = ref(false);
 const loadingTags = ref(false);
 const loadingTypeFields = ref(false);
 const loadingDataNodes = ref(false);
 const taskList = ref<CollectionTaskRecord[]>([]);
 const dataTypeConfigs = ref<DataTypeConfig[]>([]);
-const sourceOptions = ref<CollectionSourceOption[]>([]);
+const sourceTasks = ref<CollectionTaskRecord[]>([]);
+const sourceTaskId = ref("");
+const resamplePreview = ref<ResampleSourcePreview | null>(null);
+const resampleError = ref("");
 const tags = ref<Tag[]>([]);
 const taskTypeFields = ref<import("@/api/collector").DataTypeFieldConfig[]>([]);
 const dataNodes = ref<DataNode[]>([]);
@@ -518,9 +540,8 @@ const deleteVisible = ref(false);
 const deleteLoading = ref(false);
 const deleteResultData = ref(false);
 const deleteTarget = ref<CollectionTaskRecord>();
-const backfillVisible = ref(false);
-const activeBackfill = ref<ResampleBackfillSummary | null>(null);
-const backfillTarget = ref<{ taskId: string; targetFrequency: string; sourceRetention: string }>();
+const jobsVisible = ref(false);
+const jobsTarget = ref<{ taskId: string; taskName: string; targetFrequency: string }>();
 
 const frequencyValue = ref("");
 const subjectTagIds = ref<string[]>([]);
@@ -588,10 +609,6 @@ const detailOutputFieldLabels = computed(() => {
     return { id, name: field?.name || id };
   });
 });
-const sourceIdValue = ref("");
-const sourceFrequencyValue = ref("");
-const sourceSeriesTagValue = ref("");
-const settleDelayMSValue = ref<number>();
 const resultConfig = reactive({
   data_node_id: "",
   description: ""
@@ -637,10 +654,24 @@ const editingRecord = ref<CollectionTaskRecord | null>(null);
 const availableDataTypeConfigs = computed(() =>
   dataTypeConfigs.value.filter(config => !["instrument", "symbol"].includes(config.data_type))
 );
-const resampleSourceOptions = computed(() =>
-  sourceOptions.value.filter(source =>
-    collectionSourceMatches(source, editor.provider, "kline_resample", undefined, sourceFrequencyValue.value)
-  )
+const normalizedTargetFrequency = computed(() => normalizeFrequency(frequencyValue.value));
+// 候选源任务：同空间已启用的采集任务与合成任务（合成任务可以再作为源逐级合成）；填了目标频率后，不能合成它的置灰并说明原因。
+const sourceTaskOptions = computed(() =>
+  sourceTasks.value
+    .filter(task => task.enabled && task.task_id !== editor.task_id)
+    .map(task => ({
+      task_id: task.task_id,
+      label: `${task.task_name || task.task_id} · ${taskFrequency(task)} · ${taskRouteSummary(task)}`,
+      reason: sourceCandidateReason(taskFrequency(task), normalizedTargetFrequency.value)
+    }))
+);
+// 预览给出的该市场可选目标周期：只列比源周期长的。
+const frequencyHints = computed(() => {
+  const source = frequencyMinutes(resamplePreview.value?.source_frequency || "");
+  return (resamplePreview.value?.allowed_frequencies || []).filter(item => frequencyMinutes(item) > source);
+});
+const detailDependents = computed(() =>
+  detailData.value ? sourceTasks.value.filter(task => stringParam(task, "source_task_id") === detailData.value?.task_id) : []
 );
 const frequencyOptions = computed(() => {
   const field = taskTypeFields.value.find(item => item.field_key === "intervals");
@@ -728,10 +759,9 @@ function resetEditor() {
   editor.creator = account.value?.user?.userName || "";
   frequencyValue.value = "";
   subjectTagIds.value = [];
-  sourceIdValue.value = "";
-  sourceFrequencyValue.value = "";
-  sourceSeriesTagValue.value = "";
-  settleDelayMSValue.value = undefined;
+  sourceTaskId.value = "";
+  resamplePreview.value = null;
+  resampleError.value = "";
   selectedOutputFields.value = [];
   taskTypeFields.value = [];
   resultConfig.data_node_id = "";
@@ -759,10 +789,22 @@ function onUpdate(record: CollectionTaskRecord) {
   editor.creator = record.creator;
   frequencyValue.value = input.frequency;
   subjectTagIds.value = input.subjectTags || [];
-  sourceIdValue.value = input.sourceId || "";
-  sourceFrequencyValue.value = input.sourceFrequency || "";
-  sourceSeriesTagValue.value = input.sourceSeriesTag || "";
-  settleDelayMSValue.value = input.settleDelayMS;
+  sourceTaskId.value = input.sourceTaskId || "";
+  resampleError.value = "";
+  // 已有合成任务：只读展示创建时由源任务推导并保存的源参数。
+  resamplePreview.value =
+    input.dataType === "kline_resample"
+      ? {
+          source_dataset_id: input.sourceId || "",
+          source_frequency: input.sourceFrequency || "",
+          source_series_tag: input.sourceSeriesTag || "",
+          subject_count: 0,
+          market_id: "",
+          provider: input.provider,
+          market_type: input.market,
+          alignment: ""
+        }
+      : null;
   selectedOutputFields.value = input.outputFields || [];
   outputFieldDraft.value = selectedOutputFields.value.slice();
   editorVisible.value = true;
@@ -775,11 +817,23 @@ function onDataTypeChange() {
   editor.provider = "";
   frequencyValue.value = "";
   subjectTagIds.value = [];
-  sourceIdValue.value = "";
-  sourceFrequencyValue.value = "";
-  sourceSeriesTagValue.value = "";
-  settleDelayMSValue.value = undefined;
+  sourceTaskId.value = "";
+  resamplePreview.value = null;
+  resampleError.value = "";
   void loadTaskTypeFields();
+  if (editor.data_type === "kline_resample") void loadSourceTasks();
+}
+
+// 行操作“新建合成”：以这个任务作为源，打开新建表单。
+function onAddResample(record: CollectionTaskRecord) {
+  editorMode.value = "create";
+  resetEditor();
+  editor.data_type = "kline_resample";
+  sourceTaskId.value = record.task_id;
+  editorVisible.value = true;
+  void loadTaskTypeFields();
+  void loadSourceTasks();
+  scheduleResamplePreview();
 }
 
 function openOutputFieldPicker() {
@@ -907,10 +961,7 @@ function currentTaskInput(): CollectionTaskInput {
     market: (firstTag?.market_type || editor.market_type) as CollectionTaskMarket,
     frequency: frequencyValue.value,
     subjectTags: subjectTagIds.value.slice(),
-    sourceId: sourceIdValue.value,
-    sourceFrequency: sourceFrequencyValue.value,
-    sourceSeriesTag: sourceSeriesTagValue.value,
-    settleDelayMS: settleDelayMSValue.value,
+    sourceTaskId: sourceTaskId.value,
     outputFields: selectedOutputFields.value
   };
 }
@@ -930,14 +981,9 @@ async function validateEditor() {
     if (input.dataType === "kline" && !subjectTagIds.value.length) {
       throw new Error("请选择标的标签");
     }
-    if (input.dataType === "kline_resample" && !sourceIdValue.value.trim()) {
-      throw new Error("请选择源行情");
-    }
-    if (input.dataType === "kline_resample" && !sourceFrequencyValue.value.trim()) {
-      throw new Error("请输入源周期");
-    }
-    if (input.dataType === "kline_resample" && !sourceSeriesTagValue.value.trim()) {
-      throw new Error("请输入序列标签");
+    if (input.dataType === "kline_resample" && !editing.value) {
+      if (!sourceTaskId.value.trim()) throw new Error("请选择源采集任务");
+      if (resampleError.value) throw new Error(resampleError.value);
     }
     if (!frequencyValue.value.trim()) throw new Error("请输入采集频率");
     return true;
@@ -949,8 +995,6 @@ async function validateEditor() {
 
 async function handleOk(): Promise<boolean> {
   if (!(await validateEditor())) return false;
-  // 来源回填还没返回时先等它，保存用的是回填之后的标签与市场。
-  if (sourceTagsPending) await sourceTagsPending;
   // 提交快照：预检（getDataset）等待期间用户可能取消并重新打开表单，旧提交只能用它自己的输入，
   // 不能把旧输入与新表单的任务名称、结果配置混合提交，也不能关闭新窗口。
   const submission = editorScope.begin();
@@ -960,12 +1004,6 @@ async function handleOk(): Promise<boolean> {
   try {
     if (editorMode.value === "create") {
       const input = currentTaskInput();
-      if (!input.subjectTags?.length && input.dataType === "kline_resample" && input.sourceId) {
-        const sourceDataset = await getDataset({ space_id: editorSnapshot.space_id, dataset_id: input.sourceId });
-        if (!submission.isCurrent()) return false;
-        input.subjectTags = (sourceDataset.dataset?.subject_tags || []).slice();
-        subjectTagIds.value = input.subjectTags;
-      }
       const task = buildCollectionTaskPayload(
         input,
         {
@@ -1081,45 +1119,73 @@ async function getDataTypeConfigs() {
 
 let sourceListRequestToken = 0;
 
-async function loadSources() {
-  const sources: CollectionSourceOption[] = [];
+async function loadSourceTasks() {
   const spaceId = selectedSpaceId.value;
   const token = ++sourceListRequestToken;
   if (!spaceId) {
-    sourceOptions.value = [];
-    loadingSources.value = false;
+    sourceTasks.value = [];
+    loadingSourceTasks.value = false;
     return;
   }
-  loadingSources.value = true;
+  loadingSourceTasks.value = true;
   try {
+    const tasks: CollectionTaskRecord[] = [];
     for (let page = 1; ; page += 1) {
-      const response = await listDatasets({
-        space_id: spaceId,
-        page: { page, size: 500 }
-      });
+      const response = await GetTaskList({ space_id: spaceId, page: { page, size: 200 } });
       // 整次分页固定发起空间：切换空间或有更新的请求后，旧响应整体丢弃
       if (token !== sourceListRequestToken || spaceId !== selectedSpaceId.value) return;
-      for (const source of response.datasets || []) {
-        if (source.status !== "active") continue;
-        sources.push({
-          source_id: source.dataset_id,
-          name: source.name,
-          data_source_id: source.data_source_id,
-          data_kind: source.data_kind,
-          attributes: source.attributes,
-          freq: source.freq,
-          retention: source.retention
-        });
-      }
-      if (!response.page_result?.has_more || (response.datasets || []).length === 0) break;
+      const batch = (response.tasks || []).map(normalizeCollectionTask);
+      tasks.push(...batch.filter(task => task.data_type === "kline" || task.data_type === "kline_resample"));
+      if (!response.page?.has_more || batch.length === 0) break;
     }
-    sourceOptions.value = sources;
+    sourceTasks.value = tasks;
   } catch (error) {
     if (token !== sourceListRequestToken) return;
-    sourceOptions.value = [];
-    Message.error(error instanceof Error ? error.message : "获取标的来源失败");
+    sourceTasks.value = [];
+    Message.error(error instanceof Error ? error.message : "获取源采集任务失败");
   } finally {
-    if (token === sourceListRequestToken) loadingSources.value = false;
+    if (token === sourceListRequestToken) loadingSourceTasks.value = false;
+  }
+}
+
+function stringParam(task: CollectionTaskRecord, key: string): string {
+  const value = task.collect_params?.[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+// 列表“合成来源”列：源任务名 → 目标频率；老任务没有 source_task_id 时显示源数据集。
+function resampleSourceSummary(task: CollectionTaskRecord): string {
+  if (task.data_type !== "kline_resample") return "-";
+  const sourceId = stringParam(task, "source_task_id");
+  const source = sourceTasks.value.find(item => item.task_id === sourceId);
+  const from = source ? source.task_name || source.task_id : sourceId || stringParam(task, "source_dataset_id") || "-";
+  return `${from} → ${taskFrequency(task)}`;
+}
+
+// 预览：选源任务或改目标频率后，向后端取推导出的源参数并按合成规则校验（防抖）。
+let previewTimer: ReturnType<typeof setTimeout> | undefined;
+let previewToken = 0;
+function scheduleResamplePreview() {
+  if (previewTimer) clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => void refreshResamplePreview(), 300);
+}
+
+async function refreshResamplePreview() {
+  const token = ++previewToken;
+  resampleError.value = "";
+  if (!selectedSpaceId.value || !sourceTaskId.value) {
+    resamplePreview.value = null;
+    return;
+  }
+  try {
+    const preview = await previewKlineResampleSource(selectedSpaceId.value, sourceTaskId.value, normalizedTargetFrequency.value);
+    if (token !== previewToken) return;
+    resamplePreview.value = preview;
+    resampleError.value = preview.validation_error || "";
+  } catch (error) {
+    if (token !== previewToken) return;
+    resamplePreview.value = null;
+    resampleError.value = error instanceof Error ? error.message : "读取源任务失败";
   }
 }
 
@@ -1151,37 +1217,6 @@ async function loadTags() {
   }
 }
 
-let sourceTagsRequestToken = 0;
-// 进行中的来源回填：保存前必须等它结束，否则会提交"新来源 + 旧标签/市场"。
-let sourceTagsPending: Promise<void> | null = null;
-
-function loadSourceSubjectTags(): Promise<void> {
-  if (editing.value || editor.data_type !== "kline_resample") return Promise.resolve();
-  // 来源一变，由它派生的标签与市场先作废，回填成功后再写入；回填失败时不会残留上一个来源的值。
-  subjectTagIds.value = [];
-  const token = ++sourceTagsRequestToken;
-  if (!selectedSpaceId.value || !sourceIdValue.value) return Promise.resolve();
-  const task = fetchSourceSubjectTags(token, selectedSpaceId.value, sourceIdValue.value);
-  sourceTagsPending = task;
-  void task.finally(() => {
-    if (sourceTagsPending === task) sourceTagsPending = null;
-  });
-  return task;
-}
-
-async function fetchSourceSubjectTags(token: number, spaceId: string, sourceId: string) {
-  try {
-    const dataset = await getDataset({ space_id: spaceId, dataset_id: sourceId });
-    // 连续切换来源时响应可能乱序：只采纳仍对应当前空间与当前来源的最新一次响应。
-    if (token !== sourceTagsRequestToken || spaceId !== selectedSpaceId.value || sourceId !== sourceIdValue.value) return;
-    subjectTagIds.value = (dataset.dataset?.subject_tags || []).slice();
-    // 重采样的市场类型取自源行情，后端据此校验源数据集。
-    editor.market_type = normalizeMarket(dataset.dataset?.attributes?.market_type || "");
-  } catch (error) {
-    if (token === sourceTagsRequestToken) Message.error(error instanceof Error ? error.message : "获取源行情标签失败");
-  }
-}
-
 async function loadTaskSubjectTags(record: CollectionTaskRecord) {
   if (record.tag_ids.length) {
     subjectTagIds.value = record.tag_ids.slice();
@@ -1205,6 +1240,8 @@ const PRESERVED_TASK_PARAM_KEYS = ["symbols_per_function", "allowed_lateness_sec
 
 function buildCollectionTaskParamsForUpdate(input: CollectionTaskInput) {
   const original = editingRecord.value?.collect_params ?? {};
+  // 合成任务的参数创建后不可修改：更新时原样回传，只改名称、描述和启用状态。
+  if (input.dataType === "kline_resample") return { ...original };
   const preserved: Record<string, unknown> = {};
   if (input.dataType === "kline") {
     for (const key of PRESERVED_TASK_PARAM_KEYS) {
@@ -1319,35 +1356,15 @@ async function handleDeleteOk(): Promise<boolean> {
   }
 }
 
-async function openBackfill(record: CollectionTaskRecord) {
-  try {
-    const input = parseCollectionTaskInput(record);
-    if (input.dataType !== "kline_resample") throw new Error("当前任务不是 K 线重采样任务");
-    const source = sourceOptions.value.find(item => item.source_id === input.sourceId);
-    backfillTarget.value = {
-      taskId: record.task_id,
-      targetFrequency: input.frequency,
-      sourceRetention: source?.retention || ""
-    };
-    activeBackfill.value = null;
-    backfillVisible.value = true;
-    activeBackfill.value = await getKlineResampleBackfillStatus(selectedSpaceId.value || record.space_id || "", record.task_id);
-  } catch (error) {
-    Message.error(error instanceof Error ? error.message : "读取回填状态失败");
-  }
-}
-
-async function onBackfillChanged() {
-  await getTaskList();
-  if (backfillTarget.value) {
-    activeBackfill.value = await getKlineResampleBackfillStatus(selectedSpaceId.value || "", backfillTarget.value.taskId);
-  }
+function openJobs(record: CollectionTaskRecord) {
+  jobsTarget.value = { taskId: record.task_id, taskName: record.task_name, targetFrequency: taskFrequency(record) };
+  jobsVisible.value = true;
 }
 
 watch(selectedSpaceId, () => {
   tagListRequestToken += 1;
   sourceListRequestToken += 1;
-  sourceOptions.value = [];
+  sourceTasks.value = [];
   if (editorVisible.value && editor.space_id !== selectedSpaceId.value) {
     editorVisible.value = false;
     outputFieldsVisible.value = false;
@@ -1369,25 +1386,21 @@ watch(selectedSpaceId, () => {
     void loadDataNodes();
   }
   void getTaskList();
-  void loadSources();
+  void loadSourceTasks();
   void loadTags();
 });
 
-watch(
-  () => [editor.provider, frequencyValue.value, sourceFrequencyValue.value],
-  () => {
-    if (sourceIdValue.value && !resampleSourceOptions.value.some(source => source.source_id === sourceIdValue.value)) {
-      sourceIdValue.value = "";
-    }
-  }
-);
+// 选了源任务或改了目标频率：刷新预览与校验提示。
+watch([sourceTaskId, normalizedTargetFrequency], () => {
+  if (editorVisible.value && editor.data_type === "kline_resample" && !editing.value) scheduleResamplePreview();
+});
 
 onMounted(() => {
   // 空间尚未初始化时请求会被 Console 拒绝；初始化完成后由上面的空间监听补载。
   if (!selectedSpaceId.value) return;
   void getTaskList();
   void getDataTypeConfigs();
-  void loadSources();
+  void loadSourceTasks();
   void loadTags();
   void loadDataNodes();
 });

@@ -6,6 +6,7 @@ export interface TaskResultTab {
   task: CollectorTask;
   taskId: string;
   title: string;
+  resample: boolean;
   viewIds: string[];
   state: TaskResultState;
 }
@@ -22,10 +23,43 @@ export function buildTaskResultTabs(tasks: CollectorTask[]): TaskResultTab[] {
   return sortTasksByCreatedAt(tasks).map(task => ({
     task,
     taskId: task.task_id,
-    title: task.task_name?.trim() || task.task_id,
+    title: (task.task_name?.trim() || task.task_id) + (isResampleTask(task) ? " · 合成" : ""),
+    resample: isResampleTask(task),
     viewIds: getTaskResultViewIds(task),
     state: getTaskResultState(task)
   }));
+}
+
+export function isResampleTask(task: CollectorTask): boolean {
+  return task.data_type === "kline_resample";
+}
+
+/** 合成任务的目标频率（collect_params.target_frequency）。 */
+export function resampleTargetFrequency(task: CollectorTask): string {
+  const value = task.collect_params?.target_frequency;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/** 合成任务的源任务 ID；老任务没有 source_task_id 时为空。 */
+export function resampleSourceTaskId(task: CollectorTask): string {
+  const value = task.collect_params?.source_task_id;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * 合成结果还没有数据时的空状态说明：任务还在准备时说明在准备数据集；已就绪则说明在等第一个目标桶收盘。
+ * 预计时间按 UTC 固定网格给出（交易时段市场遇到休市会顺延），1d 等长周期的第一个桶可能要等很久，说清楚避免被当成故障。
+ */
+export function resampleEmptyDescription(task: CollectorTask, frequencyMinutes: number, now = new Date()): string {
+  const prepareState = String(task.prepare_state || "").toLowerCase();
+  if (prepareState && prepareState !== "ready") return "正在准备结果数据集，请稍后刷新";
+  if (frequencyMinutes <= 0) return "等待第一个目标桶收盘";
+  const size = frequencyMinutes * 60 * 1000;
+  const next = new Date((Math.floor(now.getTime() / size) + 1) * size);
+  const hh = String(next.getUTCHours()).padStart(2, "0");
+  const mm = String(next.getUTCMinutes()).padStart(2, "0");
+  const day = frequencyMinutes >= 24 * 60 ? `${next.getUTCMonth() + 1}-${next.getUTCDate()} ` : "";
+  return `等待第一个目标桶收盘（预计 ${day}${hh}:${mm} UTC，交易时段市场遇休市会顺延）`;
 }
 
 export function getTaskResultViewIds(task: CollectorTask): string[] {
