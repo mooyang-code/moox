@@ -130,3 +130,67 @@ func signedHealthRequest(t *testing.T, method, path string, timestamp int64, non
 	req.Header.Set("X-Moox-Health-Auth", "moox-health-v1/"+accessKey+"/"+strconv.FormatInt(timestamp, 10)+"/"+nonce+"/"+signature)
 	return req
 }
+
+// reset 权限由服务端的密钥映射决定：只有用重置专用密钥签名的请求带 reset 权限，运行时密钥没有；
+// 客户端不能自称权限，重置密钥必须成对配置并且不能和运行时密钥相同。
+func TestResetPermissionComesFromTheServerSideKeyMapping(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	cfg := AuthConfig{Version: "moox-health-v1", AccessKey: "runtime", SecretKey: "runtime-secret", ResetAccessKey: "ops", ResetSecretKey: "ops-secret", MaxNonces: 16}
+	a, err := NewAuthenticator(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.now = func() time.Time { return now }
+	var got atomic.Int32 // 1 = 带 reset 权限，2 = 不带
+	handler := a.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requestauth.HasPermission(r.Context(), requestauth.PermissionReset) {
+			got.Store(1)
+		} else {
+			got.Store(2)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	call := func(nonceByte, access, secret string) int {
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, signedHealthRequest(t, http.MethodPost, "/v1/lifecycle/reset/apply", now.Unix(), strings.Repeat(nonceByte, 64), access, secret))
+		return rr.Code
+	}
+
+	if code := call("a", "runtime", "runtime-secret"); code != http.StatusNoContent || got.Load() != 2 {
+		t.Fatalf("运行时密钥应通过且没有 reset 权限：%d %d", code, got.Load())
+	}
+	if code := call("b", "ops", "ops-secret"); code != http.StatusNoContent || got.Load() != 1 {
+		t.Fatalf("重置专用密钥应带 reset 权限：%d %d", code, got.Load())
+	}
+	if code := call("c", "ops", "runtime-secret"); code != http.StatusUnauthorized {
+		t.Fatalf("重置访问密钥配运行时密钥签名应被拒绝：%d", code)
+	}
+	if code := call("d", "stranger", "ops-secret"); code != http.StatusUnauthorized {
+		t.Fatalf("未知访问密钥应被拒绝：%d", code)
+	}
+
+	for name, bad := range map[string]AuthConfig{
+		"只配一半":   {Version: "v", AccessKey: "a", SecretKey: "s", ResetAccessKey: "ops"},
+		"和运行时相同": {Version: "v", AccessKey: "a", SecretKey: "s", ResetAccessKey: "a", ResetSecretKey: "x"},
+	} {
+		if _, err := NewAuthenticator(bad); err == nil {
+			t.Fatalf("%s：应拒绝这样的配置", name)
+		}
+	}
+	// 没有配置重置密钥：任何请求都不带 reset 权限。
+	plain, err := NewAuthenticator(AuthConfig{Version: "moox-health-v1", AccessKey: "runtime", SecretKey: "runtime-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain.now = func() time.Time { return now }
+	rr := httptest.NewRecorder()
+	plain.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requestauth.HasPermission(r.Context(), requestauth.PermissionReset) {
+			t.Error("没有配置重置密钥时不应有 reset 权限")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})).ServeHTTP(rr, signedHealthRequest(t, http.MethodGet, "/x", now.Unix(), strings.Repeat("e", 64), "runtime", "runtime-secret"))
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("code = %d", rr.Code)
+	}
+}

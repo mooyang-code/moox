@@ -280,3 +280,23 @@ func TestSyncerFailureMarksCache(t *testing.T) {
 
 	require.Equal(t, "dial tcp: timeout", cache.Status().SyncError)
 }
+
+// Clear 清空目录缓存并写盘：重启后读到的也是空目录（loaded=false，等下一次同步）。
+func TestCatalogCacheClearEmptiesMemoryAndDisk(t *testing.T) {
+	cache, stateFile := newTestCache(t)
+	_, err := cache.Apply(CatalogSnapshot{Hash: "h", Sets: []domain.EngineSet{uncompiled(engineSet("fset_a", "dataset_a", true, "bias"))}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"fset_a"}, cache.SetIDs())
+
+	require.NoError(t, cache.Clear())
+	require.Empty(t, cache.SetIDs())
+	require.False(t, cache.Loaded())
+
+	again, err := NewCatalogCache(stateFile)
+	require.NoError(t, err)
+	loaded, err := again.Load()
+	require.NoError(t, err)
+	if loaded {
+		require.Empty(t, again.SetIDs(), "磁盘上的快照也是空的")
+	}
+}

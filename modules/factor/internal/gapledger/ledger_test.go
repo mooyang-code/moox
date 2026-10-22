@@ -207,3 +207,21 @@ func TestLedgerHasPendingInPeriod(t *testing.T) {
 	require.False(t, ledger.HasPendingIn("fset", t0))
 	require.True(t, ledger.HasPendingIn("fset", t0.Add(time.Minute)))
 }
+
+func TestLedgerClearRemovesFilesAndKeepsWorking(t *testing.T) {
+	dir := t.TempDir()
+	ledger, _, err := Open(dir, time.Now, 0)
+	require.NoError(t, err)
+	require.NoError(t, ledger.RecordGaps(context.Background(), []pipeline.GapEntry{{SetID: "s", Subject: "A", Period: time.Unix(60, 0).UTC(), FactorID: "f", DefinitionHash: "h"}}))
+	require.Equal(t, 1, ledger.PendingCount())
+
+	removed, err := ledger.Clear()
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	require.Zero(t, ledger.PendingCount())
+	files, _ := filepath.Glob(filepath.Join(dir, "factor-gap-*.jsonl"))
+	require.Empty(t, files)
+
+	require.NoError(t, ledger.RecordGaps(context.Background(), []pipeline.GapEntry{{SetID: "s", Subject: "B", Period: time.Unix(120, 0).UTC(), FactorID: "f", DefinitionHash: "h"}}))
+	require.Equal(t, 1, ledger.PendingCount(), "清空后可以继续记账")
+}

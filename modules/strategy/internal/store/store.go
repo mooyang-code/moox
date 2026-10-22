@@ -167,6 +167,14 @@ func (s *Store) Ping(ctx context.Context) error {
 	return s.db.WithContext(ctx).Exec("SELECT 1").Error
 }
 
+// SQLDB 返回底层数据库连接（重置时备份与清表用，由生命周期的重置实现调用）。
+func (s *Store) SQLDB() (*sql.DB, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("策略数据库未打开")
+	}
+	return s.db.DB()
+}
+
 // ApplySchema 执行建表 SQL 并校验结果。
 func (s *Store) ApplySchema(sql string) error {
 	if s == nil || s.db == nil {

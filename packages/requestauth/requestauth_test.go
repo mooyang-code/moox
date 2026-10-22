@@ -1,6 +1,7 @@
 package requestauth
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -156,5 +157,22 @@ func TestVerifyRejectsMalformedSignature(t *testing.T) {
 		if err := Verify("secret", testMaterial(), signature); err == nil {
 			t.Fatalf("Verify() accepted %q", signature)
 		}
+	}
+}
+
+func TestPermissionsOnlyComeFromTheContextTheServerSet(t *testing.T) {
+	ctx := context.Background()
+	if HasPermission(ctx, PermissionReset) {
+		t.Fatal("默认没有任何权限")
+	}
+	if WithPermissions(ctx) != ctx {
+		t.Fatal("没有权限时应原样返回")
+	}
+	granted := WithPermissions(ctx, PermissionReset)
+	if !HasPermission(granted, PermissionReset) {
+		t.Fatal("应带有 reset 权限")
+	}
+	if HasPermission(granted, Permission("other")) {
+		t.Fatal("不应带有其他权限")
 	}
 }

@@ -17,7 +17,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/notifier"
 	monitorobservability "github.com/mooyang-code/moox/modules/monitor/internal/observability"
 	monitorplacement "github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
@@ -25,7 +24,6 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/watchdog"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
-	"github.com/mooyang-code/moox/packages/notification"
 	"github.com/mooyang-code/moox/packages/report"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -112,9 +110,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 		presenceFailures[key] = struct{}{}
 	}
-	presenceProvider := func(ctx context.Context) (notification.Sender, error) {
-		return notifier.Sender(ctx, runtime.Repositories.Notifications)
-	}
+	presenceProvider := runtime.alertSender
 	// The scanner and sample path use separate failure callbacks so a failed
 	// transition is audited exactly once.
 	// 两条路径共用同一个按主机串行的投递门，保证上下线通知顺序与主机当前状态一致。
@@ -148,9 +144,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 		hostStore.SetAlertEvaluator(&hostmetrics.AlertEvaluator{
 			Cache: hostRuleCache, Repository: runtime.Repositories.Alerts,
-			Notification: func(ctx context.Context) (notification.Sender, error) {
-				return notifier.Sender(ctx, runtime.Repositories.Notifications)
-			},
+			Notification: runtime.alertSender,
 		})
 	} else {
 		hostStore = hostmetrics.NewStore(nil, nil)
@@ -175,7 +169,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		metricsQuery = monmetrics.NewQueryService(metricStores.Messages, storageMetadata)
 		metricsQuery.Catalog().SetNoDataAfter(time.Duration(maxInt(cfg.Metrics.NoDataIntervals, 1)) * monmetrics.ServiceReportInterval)
 	}
-	if err := registerHealth(s, cfg, runtime, hostStore); err != nil {
+	if err := registerHealth(runtimeCtx, s, cfg, runtime, hostStore); err != nil {
 		_ = runtime.Close()
 		return nil, err
 	}

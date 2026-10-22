@@ -9,19 +9,34 @@ import (
 	"github.com/mooyang-code/moox/modules/monitor/internal/health"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	"github.com/mooyang-code/moox/packages/healthz"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store) error {
+func registerHealth(ctx context.Context, s *server.Server, cfg *config.Config, runtime *Runtime, hostStore *hostmetrics.Store) error {
 	if cfg == nil {
 		return nil
 	}
 	state := health.New("monitor", cfg.Instance.InstanceID, "", "")
 	state.SetReady(true)
 	state.SnapshotFunc = monitorHealthSnapshot(cfg, runtime, hostStore)
+	var life *lifecycle.Controller
+	if runtime != nil && runtime.Store != nil {
+		var err error
+		if life, err = newMonitorLifecycle(runtime.Store, cfg.Database.Path); err != nil {
+			return fmt.Errorf("monitor lifecycle state failed to open: %w", err)
+		}
+		runtime.life.Store(life)
+		state.SnapshotFunc = withMonitorLifecycle(state.SnapshotFunc, life)
+		runtime.Go(func() {
+			life.Recover(ctx)
+			life.Run(ctx, monitorLifecycleRefresh)
+		})
+	}
 	healthAuth, err := healthz.NewAuthenticator(healthz.AuthConfig{
 		Version: cfg.HealthAuth.Version, AccessKey: cfg.HealthAuth.AccessKey, SecretKey: cfg.HealthAuth.SecretKey,
+		ResetAccessKey: cfg.HealthAuth.ResetAccessKey, ResetSecretKey: cfg.HealthAuth.ResetSecretKey,
 		ClockSkew: time.Minute, NonceTTL: 2 * time.Minute,
 	})
 	if err != nil {
@@ -31,6 +46,13 @@ func registerHealth(s *server.Server, cfg *config.Config, runtime *Runtime, host
 	handler.Handle("/healthz", healthAuth.Wrap(healthz.LivenessHandler(state.Snapshot)))
 	handler.Handle("/readyz", healthAuth.Wrap(healthz.ReadinessHandler(state.Snapshot)))
 	handler.Handle("/metrics", healthAuth.Wrap(promhttp.Handler()))
+	if life != nil {
+		// 前缀路由不限方法：生命周期命令与重置都是 POST。
+		handler.HandlePrefix(lifecycle.StatusPath, healthAuth.Wrap(life.StatusHandler()))
+		handler.HandlePrefix(lifecycle.CommandPath, healthAuth.Wrap(life.CommandHandler()))
+		handler.HandlePrefix(lifecycle.CatchupPath, healthAuth.Wrap(life.CatchupHandler()))
+		handler.HandlePrefix(lifecycle.ResetPrefix, healthAuth.Wrap(life.ResetHandler()))
+	}
 	if s == nil {
 		return fmt.Errorf("monitor health service is unavailable")
 	}

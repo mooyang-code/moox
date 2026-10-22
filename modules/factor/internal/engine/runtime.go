@@ -53,6 +53,7 @@ type Runtime struct {
 	gap      *gapledger.Ledger
 	// continuity 维护各集合的连续水位；advanceKick 唤醒追赶循环（补齐通知）。
 	continuity  *eventconsumer.Continuity
+	watermarks  *watermark.Store
 	advanceKick chan string
 	// appCtx 是引擎运行期的上下文；catchups 记录恢复追赶中各集合的本地数据同步进展。
 	appCtx   context.Context
@@ -167,6 +168,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if err != nil {
 		return nil, fmt.Errorf("open factor watermarks: %w", err)
 	}
+	r.watermarks = watermarks
 	if r.continuity, err = eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{
 		Store: watermarks, Reader: r.storage, MaxMissingRatio: cfg.Watermark.MaxMissingRatio, SetRatios: cfg.Watermark.SetRatios, MaxPeriods: cfg.Watermark.MaxPeriods,
 	}); err != nil {
@@ -178,6 +180,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.pipeline = base
 	r.runner = &measuredRunner{inner: base, metrics: r.metrics, health: r.monitor, runs: r.runs}
 	r.preload = newPreloader(r.catalog, r.storage, r.data, r.active, func(string) { kickGap() })
+	r.preload.blocked = func() bool { return r.life != nil && r.life.Halted(lifecycle.Ref{}) }
 	if r.life, err = r.newLifecycle(); err != nil {
 		return nil, fmt.Errorf("open factor lifecycle: %w", err)
 	}
