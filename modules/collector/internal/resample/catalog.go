@@ -109,6 +109,10 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		if original == nil {
 			return nil
 		}
+		// View 还没追上只是需要等：资源的 ID 是确定的，保留它们，下一轮准备时继续等，不能每轮删了重建。
+		if errors.Is(original, ErrTargetViewNotReady) {
+			return original
+		}
 		if cleanupErr := c.cleanupCreatedTarget(ctx, task.SpaceID, targetDatasetID, targetViewID, createdView, createdDataset); cleanupErr != nil {
 			return errors.Join(original, cleanupErr)
 		}
