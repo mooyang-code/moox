@@ -35,6 +35,9 @@ const (
 	// 否则会反复触发「达到容量上限、重建只保留最新」。
 	DefaultMaxViewFileBytes = int64(4) << 30
 
+	// systemSpace 是 MooX 系统数据空间，保留期不受 view.bars 覆盖校验约束。
+	systemSpace = "mooxsys"
+
 	maxBars = 1_000_000
 	// maxViewBars 是 View 每序列保留行数的上限，与读接口单次 latest_per_series 的上限一致，重建回填才能兑现配置。
 	maxViewBars = 10_000
@@ -147,7 +150,7 @@ func Default() Policy {
 				"stockhk": sessionMarket("45d"),
 				"stockus": sessionMarket("40d"),
 				// 主机资源历史（1m）只保留短期：排障看最近几天，长期趋势不靠它。
-				"mooxsys": {"1m": "8d"},
+				"mooxsys": {"30s": "48h", "1m": "7d"},
 			},
 		},
 		View: View{
@@ -218,6 +221,10 @@ func (p Policy) Coverage() (errs, warnings []string) {
 	}
 	sort.Strings(spaces)
 	for _, space := range spaces {
+		// 系统数据空间（主机资源历史）的保留期独立于 K 线：只保留短期供排障，不要求装满 View 的根数。
+		if space == systemSpace {
+			continue
+		}
 		for _, freq := range frequencypkg.Strings() {
 			if raw, ok := normalized.Retention.Spaces[space][freq]; ok {
 				check("retention.spaces."+space+"."+freq, raw, freq, space)

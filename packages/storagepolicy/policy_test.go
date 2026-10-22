@@ -38,8 +38,8 @@ func TestResolvePrefersSpaceOverride(t *testing.T) {
 		{"stockcn", "1m", "1440h", SourceSpace},
 		{"stockhk", "1m", "1080h", SourceSpace},
 		{"stockcn", "1d", Forever, SourceDefault},
-		{"mooxsys", "30s", "90h", SourceDefault},
-		{"mooxsys", "1m", "192h", SourceSpace},
+		{"mooxsys", "30s", "48h", SourceSpace},
+		{"mooxsys", "1m", "168h", SourceSpace},
 		{"newspace", "5m", "840h", SourceDefault},
 	}
 	for _, tc := range cases {
@@ -141,5 +141,18 @@ func TestCoverageRejectsShort7x24RetentionAndWarnsForSessionMarkets(t *testing.T
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "retention.spaces.stockcn.1m") {
 		t.Fatalf("warnings = %v", warnings)
+	}
+}
+
+// 系统数据空间（mooxsys）的保留期独立于 K 线：短于 view.bars 也不报覆盖错误；其他空间照常校验。
+func TestCoverageSkipsSystemSpace(t *testing.T) {
+	p := Default()
+	errs, _ := p.Coverage()
+	if len(errs) != 0 {
+		t.Fatalf("默认策略（mooxsys 30s 48h）不应有覆盖错误：%v", errs)
+	}
+	p.Retention.Spaces["crypto"] = map[string]string{"30s": "48h"}
+	if errs, _ := p.Coverage(); len(errs) == 0 {
+		t.Fatal("其他空间的保留期不足仍要报覆盖错误")
 	}
 }
