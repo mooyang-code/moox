@@ -10,22 +10,18 @@ import (
 	"sort"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/packages/barclock"
 )
 
-const AlignmentEpochUTC = "epoch_utc"
-
-// TaskSpec is the immutable input/output contract required by Bars.
+// TaskSpec 是聚合所需的不可变输入输出契约。
 type TaskSpec struct {
-	// InstanceID identifies the TaskInstance being processed.
-	InstanceID      string
+	TaskID          string
 	SpaceID         string
 	SourceDatasetID string
 	SourceFrequency FixedFrequency
 	SourceSeriesTag string
 	TargetDatasetID string
 	TargetFrequency FixedFrequency
-	Alignment       string
 	OutputFields    []string
 }
 
@@ -66,57 +62,17 @@ type Result struct {
 	SourceHash      string
 }
 
-// ExpectedSourceTimes returns the exact source RowKey timestamps for [start, end).
-func ExpectedSourceTimes(start, end time.Time, source FixedFrequency) ([]time.Time, error) {
-	if err := validateFixedFrequency(source); err != nil {
-		return nil, fmt.Errorf("source frequency: %w", err)
-	}
-	start = start.UTC()
-	end = end.UTC()
-	if start.IsZero() || end.IsZero() || !end.After(start) {
-		return nil, fmt.Errorf("source window must be non-empty")
-	}
-	if !start.Equal(start.Truncate(time.Minute)) || !end.Equal(end.Truncate(time.Minute)) {
-		return nil, fmt.Errorf("source window must use whole-minute UTC boundaries")
-	}
-	duration := end.Sub(start)
-	if duration%source.Duration != 0 {
-		return nil, fmt.Errorf("source window must contain whole source periods")
-	}
-	count := int(duration / source.Duration)
-	if count <= 0 || count > maxSourceBars {
-		return nil, fmt.Errorf("source window must contain between 1 and %d rows", maxSourceBars)
-	}
-	times := make([]time.Time, count)
-	for index := range times {
-		times[index] = start.Add(time.Duration(index) * source.Duration)
-	}
-	return times, nil
-}
-
-// Bars validates and aggregates one complete source window into one target K-line.
-func Bars(spec TaskSpec, subjectID string, start, end time.Time, rows []SourceBar) (Result, error) {
+// Aggregate 把一个桶内全部应有的源 K 线聚合成一根目标 K 线。
+// expected 是桶内应有的源 K 线开盘时刻（升序，由 barclock 按市场的交易时段给出）；rows 必须与它一一对应，少一根都不输出半根。
+func Aggregate(spec TaskSpec, subjectID string, bucket barclock.Bucket, expected []time.Time, rows []SourceBar) (Result, error) {
 	if err := validateTaskSpec(spec); err != nil {
 		return Result{}, err
 	}
 	if subjectID == "" {
 		return Result{}, fmt.Errorf("subject ID is required")
 	}
-	start = start.UTC()
-	end = end.UTC()
-	if end.Sub(start) != spec.TargetFrequency.Duration {
-		return Result{}, fmt.Errorf("source window must equal one target bucket")
-	}
-	if !domain.IsEpochTimeAligned(start, spec.TargetFrequency.Duration) || !domain.IsEpochTimeAligned(end, spec.TargetFrequency.Duration) {
-		return Result{}, fmt.Errorf("source window must be epoch UTC aligned")
-	}
-	bucketStart, bucketEnd := BucketAt(end, time.Unix(0, 0).UTC(), spec.TargetFrequency)
-	if !bucketStart.Equal(start) || !bucketEnd.Equal(end) {
-		return Result{}, fmt.Errorf("source window must be epoch UTC aligned")
-	}
-	expected, err := ExpectedSourceTimes(start, end, spec.SourceFrequency)
-	if err != nil {
-		return Result{}, err
+	if len(expected) == 0 {
+		return Result{}, fmt.Errorf("bucket %s has no expected source bars", bucket.Key.Format(time.RFC3339))
 	}
 	if len(rows) != len(expected) {
 		return Result{}, fmt.Errorf("source window requires %d rows, got %d", len(expected), len(rows))
@@ -157,30 +113,24 @@ func Bars(spec TaskSpec, subjectID string, start, end time.Time, rows []SourceBa
 	result.DatasetID = spec.TargetDatasetID
 	result.SubjectID = subjectID
 	result.Frequency = spec.TargetFrequency.Storage
-	result.DataTime = start
+	result.DataTime = bucket.Key.UTC()
 	result.SeriesTag = spec.SourceSeriesTag
-	result.SourceWindowEnd = end
+	result.SourceWindowEnd = bucket.End.UTC()
 	result.SourceHash = hashSourceBars(ordered)
 	return result, nil
 }
 
 func validateTaskSpec(spec TaskSpec) error {
-	if spec.InstanceID == "" || spec.SpaceID == "" || spec.SourceDatasetID == "" || spec.SourceSeriesTag == "" || spec.TargetDatasetID == "" {
-		return fmt.Errorf("resample instance identity, source, target, and series tag are required")
+	if spec.TaskID == "" || spec.SpaceID == "" || spec.SourceDatasetID == "" || spec.SourceSeriesTag == "" || spec.TargetDatasetID == "" {
+		return fmt.Errorf("resample task identity, source, target, and series tag are required")
 	}
 	if spec.SourceDatasetID == spec.TargetDatasetID {
 		return fmt.Errorf("source and target Dataset IDs must differ")
 	}
-	if spec.Alignment != "" && spec.Alignment != AlignmentEpochUTC {
-		return fmt.Errorf("alignment must be %s", AlignmentEpochUTC)
-	}
 	if err := ValidateResamplePair(spec.SourceFrequency, spec.TargetFrequency); err != nil {
 		return err
 	}
-	if err := ValidateTargetDatasetID(spec.TargetDatasetID); err != nil {
-		return err
-	}
-	return nil
+	return ValidateTargetDatasetID(spec.TargetDatasetID)
 }
 
 func validateSourceBar(spec TaskSpec, subjectID string, expectedTime time.Time, row *SourceBar) error {

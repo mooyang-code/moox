@@ -2,213 +2,236 @@ package resample
 
 import (
 	"context"
-	"errors"
-	"path/filepath"
+	"fmt"
 	"testing"
 	"time"
 
-	"github.com/avast/retry-go"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
-	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
-	collectorschema "github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type runnerSource struct {
-	subjects  []domain.Subject
-	retention string
+type fakeSource struct{ subjects []string }
+
+func (f fakeSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
+	return storagesource.DatasetInfo{SubjectTags: []string{"tag"}}, nil
 }
 
-func (s runnerSource) GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error) {
-	return storagesource.DatasetInfo{DataSourceID: "crypto", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES, Status: "active", Freq: "1m", Retention: s.retention, SubjectTags: []string{"test"}, Attributes: map[string]string{"market_type": "spot"}}, nil
-}
-func (s runnerSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
-	return s.subjects, nil
-}
-
-func TestRunnerTickPlansAndProcessesRealtimeBucket(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "collector.db")
-	db, err := store.Open(&store.Options{Path: path})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
-	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc","settle_delay_ms":0}`
-	taskID := "rule-5m"
-	resultIDs := taskresult.ResultIDs("crypto", taskID)
-	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{SpaceID: "crypto", TaskID: taskID, DataType: "kline_resample", CollectParams: params, ResultDatasetID: resultIDs.DatasetID, ResultViewID: resultIDs.ViewID, PrepareState: domain.PrepareStateReady, Enabled: true}))
-	start := time.Unix(300, 0).UTC()
-	now := start.Add(5 * time.Minute)
-	fake := &fakePrimary{}
-	for i := 0; i < 5; i++ {
-		at := start.Add(time.Duration(i) * time.Minute)
-		fields := []*storagepb.FieldValue{}
-		for _, item := range []struct {
-			name  string
-			value float64
-		}{{"open", 1}, {"high", 2}, {"low", 0.5}, {"close", 1.5}, {"volume", 1}, {"quote_volume", 2}} {
-			fields = append(fields, &storagepb.FieldValue{FieldId: item.name, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_DoubleValue{DoubleValue: item.value}}})
-		}
-		fields = append(fields, &storagepb.FieldValue{FieldId: "trade_num", Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_IntValue{IntValue: 1}}})
-		fake.rows = append(fake.rows, &storagepb.RowFieldValues{Key: rowKey("crypto", "source_bars", "BTC", "1m", at, "venue:binance"), Fields: fields})
+func (f fakeSource) ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error) {
+	out := make([]domain.Subject, len(f.subjects))
+	for i, id := range f.subjects {
+		out[i] = domain.Subject{SubjectID: id}
 	}
-	runner := &Runner{Tasks: db.Tasks(), Instances: db.TaskInstances(), Source: runnerSource{subjects: []domain.Subject{{SubjectID: "BTC", Status: "active"}}}, Primary: fake, Readiness: db.PeriodReadiness(), Config: RunnerConfig{SpaceID: "crypto", WorkerConcurrency: 1, WorkerJobTimeout: time.Second, RepairLookbackBuckets: 0}}
-	require.NoError(t, runner.Tick(context.Background(), now))
-	require.Len(t, fake.writes, 1)
-	reports, err := db.PeriodReadiness().FinalizeDue(context.Background(), now.Add(time.Hour), 10)
-	require.NoError(t, err)
-	var completedTargetPeriod bool
-	for _, report := range reports {
-		if report.Readiness.DatasetID == resultIDs.DatasetID && report.Readiness.PeriodTime.Equal(start) {
-			completedTargetPeriod = true
-			require.Equal(t, domain.PeriodStatusComplete, report.Readiness.Status)
-		}
-	}
-	require.True(t, completedTargetPeriod, "resample success must complete its tagged readiness item")
-	instances, _, err := db.TaskInstances().List(context.Background(), store.TaskInstanceFilter{SpaceID: "crypto", CollectionTaskID: "rule-5m", Page: 1, PageSize: 10})
-	require.NoError(t, err)
-	require.Len(t, instances, 1)
-	targets, err := db.TaskInstances().ListWriteTargets(context.Background(), "crypto", instances[0].InstanceID)
-	require.NoError(t, err)
-	require.Len(t, targets, 1)
-	require.Equal(t, taskID, targets[0].TaskID)
-	require.Equal(t, resultIDs.DatasetID, targets[0].DatasetID)
-	require.Equal(t, resultIDs.ViewID, targets[0].ViewID)
+	return out, nil
 }
 
-func TestIsResampleSourceIncompleteUnwrapsRetryError(t *testing.T) {
-	retryErr := retry.Error{errors.New("transient"), ErrResampleSourceIncomplete}
-	require.True(t, isResampleSourceIncomplete(retryErr))
+type fakeSync struct {
+	appended []string
+	ready    bool
 }
 
-func TestEnsureReadinessForClaimsUsesClaimedCursor(t *testing.T) {
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
-	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`
-	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-5m", DataType: "kline_resample", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}
-	require.NoError(t, db.Tasks().Create(context.Background(), rule))
-	cursor := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
-	result := domain.NewResampleTaskResult(cursor)
-	encoded, err := result.Marshal()
-	require.NoError(t, err)
-	resultIDs := taskresult.ResultIDs(rule.SpaceID, rule.TaskID)
-	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "task-btc", Provider: "moox", MarketType: "spot", DataType: "kline_resample", SubjectID: "BTC", Frequency: "5m", TaskParams: params, Result: encoded}
-	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{instance}))
-	require.NoError(t, db.TaskInstances().UpsertWriteTargets(context.Background(), []domain.WriteTarget{{ID: "wt-task-btc", SpaceID: "crypto", InstanceID: "task-btc", TaskID: rule.TaskID, DatasetID: resultIDs.DatasetID, ViewID: resultIDs.ViewID, Status: "pending"}}))
-	stored, err := db.TaskInstances().Get(context.Background(), "crypto", "task-btc")
-	require.NoError(t, err)
-	claimResult, err := domain.ParseResampleTaskResult(stored.Result)
-	require.NoError(t, err)
-	claimResult.ActiveOrigin = domain.ResampleOriginRealtime
-	claimResult.ActiveBucket = &cursor
-	runner := &Runner{Instances: db.TaskInstances(), Readiness: db.PeriodReadiness()}
-	require.NoError(t, runner.ensureReadinessForClaims(context.Background(), []store.ResampleTaskClaim{{Instance: stored, Result: claimResult}}, []domain.CollectionTask{rule}))
-	require.NoError(t, db.PeriodReadiness().MarkSubjectSuccess(context.Background(), domain.PeriodKey{SpaceID: "crypto", DatasetID: resultIDs.DatasetID, Frequency: "5m", PeriodTime: cursor, SeriesTag: "venue:binance"}, "BTC", localResampleFunction, writeSource, time.Now().UTC()))
-	reports, err := db.PeriodReadiness().FinalizeDue(context.Background(), time.Now().UTC(), 10)
-	require.NoError(t, err)
-	require.Len(t, reports, 1)
-	require.Equal(t, cursor, reports[0].Readiness.PeriodTime.UTC())
-}
-
-func TestResampleBackfillSyncIgnoresSubjectAddedAfterRequestStart(t *testing.T) {
-	started := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
-	result := domain.NewResampleTaskResult(started)
-	result.Backfill = &domain.ResampleBackfill{RequestID: "request-1", Start: started, End: started.Add(time.Hour), NextBucket: started.Add(time.Hour), State: domain.ResampleBackfillSyncing}
-	encoded, err := result.Marshal()
-	require.NoError(t, err)
-	requestID, ready := resampleBackfillSyncRequest([]domain.TaskInstance{
-		{Result: encoded},
-		{Result: `{"schema_version":1,"state":"idle","state_version":0}`},
-	})
-	require.True(t, ready)
-	require.Equal(t, "request-1", requestID)
-}
-
-type syncPointPrimary struct {
-	fakePrimary
-	appendCalls []string
-	waitReq     *storagepb.WaitViewSyncPointReq
-}
-
-func (s *syncPointPrimary) AppendDatasetSyncPoint(_ context.Context, spaceID, datasetID, requestID, source string) error {
-	s.appendCalls = append(s.appendCalls, spaceID+"/"+datasetID+"/"+requestID+"/"+source)
+func (f *fakeSync) AppendDatasetSyncPoint(_ context.Context, _, _, requestID, _ string) error {
+	f.appended = append(f.appended, requestID)
 	return nil
 }
 
-func (s *syncPointPrimary) WaitViewSyncPoint(_ context.Context, req *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error) {
-	s.waitReq = req
-	return &storagepb.WaitViewSyncPointRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Ready: true}, nil
+func (f *fakeSync) WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error) {
+	return &storagepb.WaitViewSyncPointRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Ready: f.ready}, nil
 }
 
-func TestCompleteBackfillWaitsForViewFenceBeforeSyncing(t *testing.T) {
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
-	params := `{"provider":"moox","market_type":"spot","source_dataset_id":"source_bars","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_spot_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc"}`
-	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-5m", DataType: "kline_resample", CollectParams: params, PrepareState: domain.PrepareStateReady, Enabled: true}))
-	started := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
-	result := domain.NewResampleTaskResult(started)
-	result.Backfill = &domain.ResampleBackfill{RequestID: "request-1", Start: started, End: started.Add(time.Hour), NextBucket: started.Add(time.Hour), State: domain.ResampleBackfillSyncing}
-	encoded, err := result.Marshal()
-	require.NoError(t, err)
-	resultIDs := taskresult.ResultIDs("crypto", "rule-5m")
-	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), []domain.TaskInstance{{SpaceID: "crypto", InstanceID: "task-btc", Provider: "moox", MarketType: "spot", DataType: "kline_resample", SubjectID: "BTC", Frequency: "5m", Result: encoded}}))
-	require.NoError(t, db.TaskInstances().UpsertWriteTargets(context.Background(), []domain.WriteTarget{{ID: "wt-task-btc", SpaceID: "crypto", InstanceID: "task-btc", TaskID: "rule-5m", DatasetID: resultIDs.DatasetID, ViewID: resultIDs.ViewID, Status: "pending"}}))
-	primary := &syncPointPrimary{}
-	runner := &Runner{Instances: db.TaskInstances(), Primary: primary}
-	rule, err := db.Tasks().GetByTaskID(context.Background(), "crypto", "rule-5m")
-	require.NoError(t, err)
-	require.NoError(t, runner.completeBackfills(context.Background(), []domain.CollectionTask{*rule}))
-	require.Equal(t, []string{"crypto/" + resultIDs.DatasetID + "/request-1/catchup"}, primary.appendCalls)
-	require.NotNil(t, primary.waitReq)
-	require.Equal(t, resultIDs.ViewID, primary.waitReq.GetViewId())
-	require.Equal(t, "request-1", primary.waitReq.GetRequestId())
-	instance, err := db.TaskInstances().Get(context.Background(), "crypto", "task-btc")
-	require.NoError(t, err)
-	updated, err := domain.ParseResampleTaskResult(instance.Result)
-	require.NoError(t, err)
-	require.Equal(t, domain.ResampleBackfillComplete, updated.Backfill.State)
-}
-
-func TestSourceRetentionExpiredIsTerminal(t *testing.T) {
-	source := runnerSource{retention: "1h"}
-	expired, reason := sourceRetentionExpired(context.Background(), source, "crypto", "source", time.Now().UTC().Add(-2*time.Hour))
-	require.True(t, expired)
-	require.Contains(t, reason, "retention expired")
-	expired, _ = sourceRetentionExpired(context.Background(), runnerSource{retention: "forever"}, "crypto", "source", time.Unix(0, 0).UTC())
-	require.False(t, expired, "a Dataset kept forever never expires a bucket")
-}
-
-func TestChooseRepairBucketUsesDurableWindowCursor(t *testing.T) {
-	target := 90 * time.Minute
-	oldest := time.Unix(0, 0).UTC()
-	latest := oldest.Add(3 * target)
-
-	assert.Equal(t, oldest, chooseRepairBucket(domain.ResampleTaskResult{}, oldest, latest, target))
-	middle := latest.Add(-target)
-	result := domain.ResampleTaskResult{RepairNextBucket: &middle}
-	assert.Equal(t, middle, chooseRepairBucket(result, oldest, latest, target))
-	stale := oldest.Add(-target)
-	result.RepairNextBucket = &stale
-	assert.Equal(t, oldest, chooseRepairBucket(result, oldest, latest, target))
-	unaligned := oldest.Add(time.Minute)
-	result.RepairNextBucket = &unaligned
-	assert.Equal(t, oldest, chooseRepairBucket(result, oldest, latest, target))
-}
-
-func TestRepairScanCursorAdvancesAcrossSkippedTimerTicks(t *testing.T) {
-	cursor := 0
-	starts := make([]int, 0, 4)
-	for i := 0; i < 4; i++ {
-		start := repairScanStart(cursor, 4)
-		starts = append(starts, start)
-		cursor = repairScanAdvance(start, 1, 4)
+// seedTask 在库里建一个就绪的合成任务，并给源数据集铺好 [from, to) 内每根 5m。
+func seedTask(t *testing.T, mgr *store.Store, storage *fakeStorage, subjects []string, from, to time.Time) {
+	t.Helper()
+	params := `{"provider":"binance","market_type":"spot","source_dataset_id":"dataset_src","source_frequency":"5m","source_series_tag":"venue:binance","target_dataset_id":"dataset_task","target_frequency":"15m"}`
+	require.NoError(t, mgr.Tasks().Create(context.Background(), domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "task", DataType: "kline_resample", CollectParams: params, Enabled: true,
+		ResultDatasetID: "dataset_task", ResultViewID: "view_task", PrepareState: domain.PrepareStateReady,
+	}))
+	for at := from; at.Before(to); at = at.Add(5 * time.Minute) {
+		for _, subject := range subjects {
+			storage.putSource("crypto", "dataset_src", subject, "5m", "venue:binance", at, 1, 2, 0.5, 1, 1, 1, 1)
+		}
 	}
-	assert.Equal(t, []int{0, 1, 2, 3}, starts)
+}
+
+func TestFallbackFillsOnlyMissingSubjectsOfRecentClosedBuckets(t *testing.T) {
+	mgr := openState(t)
+	storage := newFakeStorage()
+	now := utc("2026-10-21T10:36:30Z")
+	seedTask(t, mgr, storage, []string{"BTC", "ETH"}, utc("2026-10-21T09:00:00Z"), utc("2026-10-21T10:30:00Z"))
+	engine := &Engine{Primary: storage, State: mgr.Resample(), Now: func() time.Time { return now }}
+	fallback := &Fallback{Tasks: mgr.Tasks(), Source: fakeSource{subjects: []string{"BTC", "ETH"}}, Engine: engine, Config: FallbackConfig{SpaceID: "crypto", LookbackBars: 3}}
+
+	// 最近 3 个已收盘的桶（收盘不晚于 now−60s）：10:00、10:15 已收盘；10:30 的桶 10:45 才收盘。再往前是 09:45。
+	require.NoError(t, fallback.Tick(context.Background(), now))
+	for _, start := range []string{"2026-10-21T09:45:00Z", "2026-10-21T10:00:00Z", "2026-10-21T10:15:00Z"} {
+		for _, subject := range []string{"BTC", "ETH"} {
+			require.NotNil(t, storage.target("crypto", "dataset_task", subject, "15m", "venue:binance", utc(start)), "%s %s", subject, start)
+		}
+	}
+	require.Nil(t, storage.target("crypto", "dataset_task", "BTC", "15m", "venue:binance", utc("2026-10-21T10:30:00Z")), "未收盘的桶不合成")
+	require.Nil(t, storage.target("crypto", "dataset_task", "BTC", "15m", "venue:binance", utc("2026-10-21T09:30:00Z")), "超出最近 3 根的不管")
+
+	// 再检查一次：已经有行，不再写。
+	before := len(storage.upserts)
+	require.NoError(t, fallback.Tick(context.Background(), now))
+	require.Equal(t, before, len(storage.upserts), "兜底检查没有缺口时什么都不写")
+
+	// 删掉一行，只补这一个标的。
+	delete(storage.rows, keyText(rowKey("crypto", "dataset_task", "ETH", "15m", utc("2026-10-21T10:00:00Z"), "venue:binance")))
+	require.NoError(t, fallback.Tick(context.Background(), now))
+	last := storage.upserts[len(storage.upserts)-1]
+	require.Len(t, last, 1)
+	require.Equal(t, "ETH", last[0].GetKey().GetTimeSeries().GetSubjectId())
+}
+
+func TestFallbackSkipsGraceWindowAndUnpreparedTasks(t *testing.T) {
+	mgr := openState(t)
+	storage := newFakeStorage()
+	seedTask(t, mgr, storage, []string{"BTC"}, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T10:30:00Z"))
+	now := utc("2026-10-21T10:15:30Z") // 10:00 桶刚收盘 30 秒，在事件主路径的宽限内
+	engine := &Engine{Primary: storage, State: mgr.Resample(), Now: func() time.Time { return now }}
+	fallback := &Fallback{Tasks: mgr.Tasks(), Source: fakeSource{subjects: []string{"BTC"}}, Engine: engine, Config: FallbackConfig{SpaceID: "crypto", LookbackBars: 1}}
+	require.NoError(t, fallback.Tick(context.Background(), now))
+	require.Empty(t, storage.upserts, "收盘后 1 分钟内留给事件主路径")
+
+	require.NoError(t, mgr.Tasks().SetPrepareState(context.Background(), "crypto", "task", domain.PrepareStateWaitingView, ""))
+	require.NoError(t, fallback.Tick(context.Background(), now.Add(2*time.Minute)))
+	require.Empty(t, storage.upserts, "没有就绪的任务不检查")
+}
+
+func submit(t *testing.T, mgr *store.Store, task *Task, start, end time.Time, subjects []string, now time.Time) store.ResampleJob {
+	t.Helper()
+	n := 0
+	job, _, err := SubmitJob(context.Background(), mgr.Resample(), task, SubmitJobRequest{SpaceID: "crypto", TaskID: "task", RequestID: "req", Start: start, End: end, Subjects: subjects}, func() string {
+		n++
+		return fmt.Sprintf("job-%d", n)
+	}, now)
+	require.NoError(t, err)
+	return job
+}
+
+func TestSubmitJobAlignsOutwardAndEnforcesBucketLimit(t *testing.T) {
+	mgr := openState(t)
+	task := makeTask(t, "crypto", "5m", "15m")
+	now := utc("2026-10-22T00:00:00Z")
+	job := submit(t, mgr, task, utc("2026-10-21T10:01:00Z"), utc("2026-10-21T10:31:00Z"), nil, now)
+	require.Equal(t, utc("2026-10-21T10:00:00Z"), job.Start)
+	require.Equal(t, utc("2026-10-21T10:45:00Z"), job.End, "向外对齐到目标桶：10:31 落在 10:30–10:45")
+	require.Equal(t, 3, job.TotalBuckets)
+
+	_, _, err := SubmitJob(context.Background(), mgr.Resample(), task, SubmitJobRequest{SpaceID: "crypto", TaskID: "task", RequestID: "big", Start: utc("2025-01-01T00:00:00Z"), End: utc("2026-01-01T00:00:00Z")}, func() string { return "x" }, now)
+	require.ErrorContains(t, err, "more than")
+	_, _, err = SubmitJob(context.Background(), mgr.Resample(), task, SubmitJobRequest{SpaceID: "crypto", TaskID: "task", RequestID: "bad", Start: now, End: now}, func() string { return "y" }, now)
+	require.ErrorContains(t, err, "after start")
+}
+
+func TestJobRunnerBackfillsRangeWithCursorSyncAndSkips(t *testing.T) {
+	mgr := openState(t)
+	storage := newFakeStorage()
+	seedTask(t, mgr, storage, []string{"BTC", "ETH"}, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T11:00:00Z"))
+	// ETH 在 10:15 桶缺一根源数据。
+	delete(storage.rows, keyText(rowKey("crypto", "dataset_src", "ETH", "5m", utc("2026-10-21T10:25:00Z"), "venue:binance")))
+	now := utc("2026-10-21T12:00:00Z")
+	engine := &Engine{Primary: storage, State: mgr.Resample(), Now: func() time.Time { return now }}
+	sync := &fakeSync{ready: true}
+	flushed := 0
+	runner := &JobRunner{State: mgr.Resample(), Tasks: mgr.Tasks(), Source: fakeSource{subjects: []string{"BTC", "ETH"}}, Engine: engine, Sync: sync,
+		Flush: func(context.Context) error { flushed++; return nil }, Config: JobRunnerConfig{BucketsPerRound: 2}}
+	task := makeTask(t, "crypto", "5m", "15m")
+	job := submit(t, mgr, task, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T11:00:00Z"), nil, now)
+	require.Equal(t, 4, job.TotalBuckets)
+
+	// 每轮最多推进 2 个桶：第一轮后游标在 10:30。
+	require.NoError(t, runner.Tick(context.Background(), now))
+	progress, err := mgr.Resample().GetJob(context.Background(), "crypto", job.JobID)
+	require.NoError(t, err)
+	require.Equal(t, store.ResampleJobRunning, progress.Status)
+	require.Equal(t, 2, progress.DoneBuckets)
+	require.Equal(t, utc("2026-10-21T10:30:00Z"), progress.NextBucket)
+
+	require.NoError(t, runner.Tick(context.Background(), now))
+	progress, _ = mgr.Resample().GetJob(context.Background(), "crypto", job.JobID)
+	require.Equal(t, store.ResampleJobSyncing, progress.Status, "范围推进完成后进入同步")
+	require.EqualValues(t, 7, progress.Written, "4 个桶 × 2 个标的，减去 ETH 跳过的 1 个")
+	require.EqualValues(t, 1, progress.Skipped)
+	require.Len(t, progress.SkippedSamples, 1)
+	require.Contains(t, progress.SkippedSamples[0], "ETH")
+
+	require.NoError(t, runner.Tick(context.Background(), now))
+	progress, _ = mgr.Resample().GetJob(context.Background(), "crypto", job.JobID)
+	require.Equal(t, store.ResampleJobSucceeded, progress.Status)
+	require.Equal(t, []string{job.JobID}, sync.appended, "同步点的 request_id 是作业 ID")
+	require.GreaterOrEqual(t, flushed, 1)
+
+	// 历史作业的普通写入都记为补写通知，作业 ID 在通知里。
+	notices, err := mgr.Resample().UnsealedNotices(context.Background(), 100)
+	require.NoError(t, err)
+	require.Len(t, notices, 7)
+	require.Equal(t, job.JobID, notices[0].JobID)
+	require.Equal(t, "dataset_task", notices[0].DatasetID)
+}
+
+func TestJobRunnerClipsToLatestClosedBucketAndHonorsCancelAndNotBefore(t *testing.T) {
+	mgr := openState(t)
+	storage := newFakeStorage()
+	seedTask(t, mgr, storage, []string{"BTC"}, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T11:00:00Z"))
+	now := utc("2026-10-21T10:32:00Z") // 10:30 的桶还没收盘
+	engine := &Engine{Primary: storage, State: mgr.Resample(), Now: func() time.Time { return now }}
+	runner := &JobRunner{State: mgr.Resample(), Tasks: mgr.Tasks(), Source: fakeSource{subjects: []string{"BTC"}}, Engine: engine}
+	task := makeTask(t, "crypto", "5m", "15m")
+	job := submit(t, mgr, task, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T11:00:00Z"), nil, now)
+	require.NoError(t, runner.Tick(context.Background(), now))
+	require.NoError(t, runner.Tick(context.Background(), now))
+	progress, _ := mgr.Resample().GetJob(context.Background(), "crypto", job.JobID)
+	require.Equal(t, store.ResampleJobSucceeded, progress.Status, "没有同步点存储时直接成功")
+	require.EqualValues(t, 2, progress.Written, "只合成已收盘的 10:00 与 10:15 两个桶")
+	require.Nil(t, storage.target("crypto", "dataset_task", "BTC", "15m", "venue:binance", utc("2026-10-21T10:30:00Z")))
+
+	// 取消后不再推进。
+	second := store.ResampleJob{JobID: "later", SpaceID: "crypto", TaskID: "task", RequestID: "later", Origin: store.ResampleOriginManual,
+		Start: utc("2026-10-21T10:00:00Z"), End: utc("2026-10-21T10:15:00Z"), NotBefore: now.Add(time.Hour)}
+	_, _, err := mgr.Resample().SubmitJob(context.Background(), second)
+	require.NoError(t, err)
+	require.NoError(t, runner.Tick(context.Background(), now))
+	waiting, _ := mgr.Resample().GetJob(context.Background(), "crypto", "later")
+	require.Equal(t, store.ResampleJobQueued, waiting.Status, "没到最早开始时间不开始")
+	_, err = mgr.Resample().CancelJob(context.Background(), "crypto", "later")
+	require.NoError(t, err)
+	require.NoError(t, runner.Tick(context.Background(), now.Add(2*time.Hour)))
+	cancelled, _ := mgr.Resample().GetJob(context.Background(), "crypto", "later")
+	require.Equal(t, store.ResampleJobCancelled, cancelled.Status)
+}
+
+func TestJobRunnerFailsJobsWithoutTaskAndRetriesTransientErrors(t *testing.T) {
+	mgr := openState(t)
+	storage := newFakeStorage()
+	seedTask(t, mgr, storage, []string{"BTC"}, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T10:30:00Z"))
+	now := utc("2026-10-21T12:00:00Z")
+	engine := &Engine{Primary: storage, State: mgr.Resample(), Now: func() time.Time { return now }}
+	runner := &JobRunner{State: mgr.Resample(), Tasks: mgr.Tasks(), Source: fakeSource{subjects: []string{"BTC"}}, Engine: engine}
+	task := makeTask(t, "crypto", "5m", "15m")
+
+	storage.readErr = fmt.Errorf("storage down")
+	job := submit(t, mgr, task, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T10:30:00Z"), nil, now)
+	for i := 0; i < maxJobFailures-1; i++ {
+		require.Error(t, runner.Tick(context.Background(), now))
+	}
+	progress, _ := mgr.Resample().GetJob(context.Background(), "crypto", job.JobID)
+	require.Equal(t, store.ResampleJobRunning, progress.Status, "瞬时错误保留状态等待重试")
+	require.Contains(t, progress.LastError, "storage down")
+	storage.readErr = nil
+	require.NoError(t, runner.Tick(context.Background(), now))
+	require.NoError(t, runner.Tick(context.Background(), now))
+	progress, _ = mgr.Resample().GetJob(context.Background(), "crypto", job.JobID)
+	require.Equal(t, store.ResampleJobSucceeded, progress.Status)
+
+	orphan := store.ResampleJob{JobID: "orphan", SpaceID: "crypto", TaskID: "gone", RequestID: "o", Start: utc("2026-10-21T10:00:00Z"), End: utc("2026-10-21T10:15:00Z"), NotBefore: now}
+	_, _, err := mgr.Resample().SubmitJob(context.Background(), orphan)
+	require.NoError(t, err)
+	require.Error(t, runner.Tick(context.Background(), now))
+	failed, _ := mgr.Resample().GetJob(context.Background(), "crypto", "orphan")
+	require.Equal(t, store.ResampleJobFailed, failed.Status)
 }

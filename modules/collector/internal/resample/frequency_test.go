@@ -66,31 +66,3 @@ func TestValidateResamplePairRequiresALargerTarget(t *testing.T) {
 		})
 	}
 }
-
-func TestBucketAtUsesTheLatestClosedEpochAlignedBucket(t *testing.T) {
-	target, err := ParseFixedFrequency("4h")
-	require.NoError(t, err)
-	origin := time.Unix(0, 0).UTC()
-
-	start, end := BucketAt(time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC), origin, target)
-	assert.Equal(t, time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC), start)
-	assert.Equal(t, time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC), end)
-
-	start, end = BucketAt(time.Date(2026, 8, 29, 7, 59, 59, 0, time.UTC), origin, target)
-	assert.Equal(t, time.Date(2026, 8, 29, 0, 0, 0, 0, time.UTC), start)
-	assert.Equal(t, time.Date(2026, 8, 29, 4, 0, 0, 0, time.UTC), end)
-}
-
-func TestBucketAtUsesDurationGridInsteadOfWallClockModulo(t *testing.T) {
-	target, err := ParseFixedFrequency("15m")
-	require.NoError(t, err)
-	origin := time.Unix(0, 0).UTC().Add(5 * time.Minute)
-
-	start, end := BucketAt(origin.Add(40*time.Minute), origin, target)
-	assert.Equal(t, origin.Add(15*time.Minute), start)
-	assert.Equal(t, origin.Add(30*time.Minute), end)
-
-	start, end = BucketAt(origin.Add(-time.Minute), origin, target)
-	assert.Equal(t, origin.Add(-30*time.Minute), start)
-	assert.Equal(t, origin.Add(-15*time.Minute), end)
-}

@@ -11,8 +11,6 @@ import (
 	"github.com/mooyang-code/moox/packages/frequency"
 )
 
-const maxSourceBars = 10_080
-
 // FixedFrequency is one canonical frequency that can be resampled: a fixed,
 // whole-minute bar from 1m to 1d.
 type FixedFrequency struct {
@@ -100,21 +98,6 @@ func ValidateTaskParams(spaceID string, params *domain.CollectParams) error {
 		return err
 	}
 	return ValidateTargetDatasetID(params.TargetDatasetID)
-}
-
-// BucketAt returns the latest fully closed target bucket at effectiveNow on
-// the fixed grid anchored at origin.
-func BucketAt(effectiveNow, origin time.Time, target FixedFrequency) (start, end time.Time) {
-	if validateFixedFrequency(target) != nil || effectiveNow.IsZero() || origin.IsZero() {
-		return time.Time{}, time.Time{}
-	}
-	elapsed := effectiveNow.Sub(origin)
-	periods := elapsed / target.Duration
-	if elapsed%target.Duration < 0 {
-		periods--
-	}
-	end = origin.Add(periods * target.Duration).UTC()
-	return end.Add(-target.Duration), end
 }
 
 func validateFixedFrequency(frequency FixedFrequency) error {

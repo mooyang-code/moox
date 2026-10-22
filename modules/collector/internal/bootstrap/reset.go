@@ -14,7 +14,7 @@ import (
 
 // Collector 的重置（设计 5.2）。
 //
-//	data：清运行数据——补采作业与分块、自动补采水位、历史扫描、行情源缺失、周期就绪、任务实例与写入目标、流采集工作进程心跳；
+//	data：清运行数据——补采作业与分块、自动补采水位、历史扫描、行情源缺失、合成快照与历史作业、补写通知与事件发件箱、流采集工作进程心跳；
 //	      保留采集任务、采集计划、采集方式、标的排除（配置）；
 //	all ：再清采集任务（含标签、序列）、采集计划、采集方式、标的排除，回到新部署的状态（采集任务由启动时的种子重新写入）。
 //
@@ -25,8 +25,8 @@ import (
 var (
 	collectorDataTables = []string{
 		"t_collector_kline_backfill_jobs", "t_collector_kline_backfill_chunks", "t_collector_backfill_watermarks",
-		"t_collector_history_scans", "t_collector_source_absences", "t_period_readiness", "t_period_readiness_items",
-		"t_collector_task_instances", "t_collector_instance_write_targets", "t_collector_stream_workers",
+		"t_collector_history_scans", "t_collector_source_absences", "t_collector_resample_snapshots", "t_collector_resample_jobs", "t_collector_backfill_notices", "t_collector_event_outbox",
+		"t_collector_stream_workers",
 	}
 	collectorConfigTables = []string{
 		"t_collector_tasks", "t_collector_task_tags", "t_collector_task_series", "t_collector_fetch_plans",

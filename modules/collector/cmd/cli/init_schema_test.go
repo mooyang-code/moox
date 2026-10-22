@@ -38,7 +38,7 @@ func TestRunInitCommandAppliesCollectorSchema(t *testing.T) {
 	if err := runInitCommand([]string{"init", "--db-path", dbPath}, &stdout, &stderr); err != nil {
 		t.Fatalf("runInitCommand() error = %v, stderr = %s", err, stderr.String())
 	}
-	assertTableExists(t, dbPath, "t_collector_task_instances")
+	assertTableExists(t, dbPath, "t_collector_resample_jobs")
 	assertTableNotExists(t, dbPath, "t_collector_execution_logs")
 	if stdout.String() == "" {
 		t.Fatalf("runInitCommand() wrote empty stdout")

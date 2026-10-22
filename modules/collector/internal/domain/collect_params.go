@@ -35,7 +35,8 @@ type CollectParams struct {
 	SourceSeriesTag string          `json:"source_series_tag,omitempty"`
 	TargetFrequency string          `json:"target_frequency,omitempty"`
 	Alignment       string          `json:"alignment,omitempty"`
-	SettleDelayMS   *int64          `json:"settle_delay_ms,omitempty"`
+	// SourceTaskID 是合成的源采集任务：创建时由它推导 source_dataset_id、source_frequency、source_series_tag。
+	SourceTaskID string `json:"source_task_id,omitempty"`
 	// SymbolsPerFunction 是定时模式下每个函数负责的标的数；0 表示使用默认值。
 	SymbolsPerFunction int `json:"symbols_per_function,omitempty"`
 	// AllowedLatenessSeconds 是结果数据集的允许迟到时间；0 表示使用空间默认值（crypto 15 秒，stockcn 90 秒）。
@@ -170,7 +171,7 @@ func validateCollectParamsShape(raw string, fallbackDataType string) error {
 	}
 	resample := strings.EqualFold(strings.TrimSpace(fallbackDataType), "kline_resample")
 	standardOnly := []string{"frequency"}
-	resampleOnly := []string{"source_dataset_id", "source_frequency", "source_series_tag", "target_frequency", "alignment", "settle_delay_ms"}
+	resampleOnly := []string{"source_task_id", "source_dataset_id", "source_frequency", "source_series_tag", "target_frequency", "alignment"}
 	for _, key := range standardOnly {
 		if _, exists := values[key]; exists && resample {
 			return fmt.Errorf("parse collect params: field %q is not valid for kline_resample", key)

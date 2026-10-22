@@ -2,7 +2,6 @@ package domain
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -123,8 +122,7 @@ func TestParseCollectParamsAcceptsKlineResampleContract(t *testing.T) {
 		"source_series_tag":" venue:binance ",
 		"target_dataset_id":" dataset_spot_kline_derived_4h ",
 		"target_frequency":"240m",
-		"alignment":" EPOCH_UTC ",
-		"settle_delay_ms":10000
+		"alignment":" EPOCH_UTC "
 	}`, "", "", "kline_resample")
 	require.NoError(t, err)
 
@@ -137,7 +135,6 @@ func TestParseCollectParamsAcceptsKlineResampleContract(t *testing.T) {
 	assert.Equal(t, "dataset_spot_kline_derived_4h", params.Target.DatasetID)
 	assert.Equal(t, "4h", params.TargetFrequency)
 	assert.Equal(t, "epoch_utc", params.Alignment)
-	assert.Equal(t, time.Second*10, params.SettleDelay())
 }
 
 func TestParseCollectParamsRejectsResampleRepairOverride(t *testing.T) {
@@ -165,26 +162,21 @@ func TestKlineResampleCanonicalJSONOmitsRuntimeRepairPolicy(t *testing.T) {
 	assert.NotContains(t, raw, "repair")
 }
 
-func TestKlineResampleSettleDelayPreservesExplicitZero(t *testing.T) {
-	params, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc","settle_delay_ms":0}`, "", "", "kline_resample")
-	require.NoError(t, err)
-	assert.NotNil(t, params.SettleDelayMS)
-	assert.EqualValues(t, 0, *params.SettleDelayMS)
-	assert.Equal(t, time.Duration(0), params.SettleDelay())
-	assert.Equal(t, time.Duration(0), params.SettleDelayOr(10*time.Second))
-	raw, err := params.CanonicalJSON()
-	require.NoError(t, err)
-	assert.Contains(t, raw, `"settle_delay_ms":0`)
-}
-
 func TestKlineResampleValidateIsRejectedInDomain(t *testing.T) {
 	params, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target","target_frequency":"5m","alignment":"epoch_utc"}`, "", "", "kline_resample")
 	require.NoError(t, err)
 	require.ErrorContains(t, params.Validate(), "resample.ValidateTaskParams")
 }
 
-func TestKlineResampleSettleDelayOverflowIsCapped(t *testing.T) {
-	tooLargeDelay, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target_kline_derived_5m","target_frequency":"5m","alignment":"epoch_utc","settle_delay_ms":288230376151711744}`, "", "", "kline_resample")
+func TestKlineResampleRejectsRemovedSettleDelay(t *testing.T) {
+	_, err := ParseCollectParams(`{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_target","target_frequency":"5m","settle_delay_ms":1000}`, "", "", "kline_resample")
+	require.ErrorContains(t, err, "unknown field")
+}
+
+func TestKlineResampleAcceptsSourceTaskID(t *testing.T) {
+	params, err := ParseCollectParams(`{"source_task_id":"src-task","target_frequency":"45m"}`, "", "", "kline_resample")
 	require.NoError(t, err)
-	assert.Equal(t, MaxResampleSettleDelay, tooLargeDelay.SettleDelayOr(0))
+	assert.Equal(t, "src-task", params.SourceTaskID)
+	_, err = ParseCollectParams(`{"source_task_id":"src-task","frequency":"1m"}`, "", "", "kline")
+	require.Error(t, err, "source_task_id 只用于合成任务")
 }
