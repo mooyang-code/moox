@@ -737,7 +737,7 @@ func registerHealth(
 		PaperMatcherWorker: paperMatcherWorker.State,
 		PaperAccountErrors: paperMatcher.AccountErrors,
 	}
-	life, err := newLifecycle(databasePath, readiness, targetWorker.Quiesce)
+	life, err := newLifecycle(databasePath, readiness, targetWorker.Quiesce, tradeCatchup(tradeStore, targetWorker, time.Now))
 	if err != nil {
 		return fmt.Errorf("trade lifecycle state failed to open: %w", err)
 	}
