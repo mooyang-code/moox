@@ -170,9 +170,11 @@ func initialize(
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
 		Equity: equityService,
 	}
+	// 生命周期在 registerHealth 里才创建，门禁先建好，创建后绑定；绑定之前放行。
+	lifeGate := &lifecycleGate{}
 	targetWorker := &traderuntime.TargetWorker{
 		Store: tradeStore, Executor: targetExecutor, Interval: time.Second,
-		Metrics: tradeStore.ModuleMetrics(),
+		Metrics: tradeStore.ModuleMetrics(), Gate: lifeGate.Open,
 	}
 	factsObserver := &accountsync.LogicalAccountFactsObserver{
 		Store: tradeStore,
@@ -302,6 +304,7 @@ func initialize(
 				Store: tradeStore, WakeTarget: targetWorker.WakeTarget,
 				SetReady:       targetConsumerReady.Store,
 				WeightResolver: weightResolver,
+				Intake:         lifeGate.Open,
 			})
 		})
 	}
@@ -402,6 +405,7 @@ func initialize(
 		cfg.EventBus.Enabled,
 		eventBus,
 		&targetConsumerReady,
+		lifeGate,
 	); err != nil {
 		cancelRuntime()
 		if eventBus != nil {
@@ -711,6 +715,7 @@ func registerHealth(
 	eventBusEnabled bool,
 	eventBus *jetstream.Client,
 	targetConsumerReady *atomic.Bool,
+	lifeGate *lifecycleGate,
 ) error {
 	state := health.New("trade", "trade", "", "")
 	readiness := health.Readiness{
@@ -732,10 +737,11 @@ func registerHealth(
 		PaperMatcherWorker: paperMatcherWorker.State,
 		PaperAccountErrors: paperMatcher.AccountErrors,
 	}
-	life, err := newLifecycle(databasePath, readiness)
+	life, err := newLifecycle(databasePath, readiness, targetWorker.Quiesce)
 	if err != nil {
 		return fmt.Errorf("trade lifecycle state failed to open: %w", err)
 	}
+	lifeGate.Bind(life)
 	snapshot := health.SnapshotFunc(
 		state,
 		readiness,

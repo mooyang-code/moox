@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -445,4 +446,57 @@ func TestHTTPPauseKindAndCatchup(t *testing.T) {
 
 	code, _ = post(CommandRequest{Command: CmdRelease, Kind: set1.Kind, ID: set1.ID})
 	require.Equal(t, http.StatusConflict, code, "没追平不能放行")
+}
+
+// Halted 只在有意停下时为真：自身未就绪（检查抖动）不算，暂停、恢复追赶、重置、故障才算。
+func TestHaltedOnlyForDeliberateStops(t *testing.T) {
+	f := newFake()
+	f.module = []Check{fail("依赖", "EventBus 短暂不可用")}
+	c := newController(t, f, "")
+	ctx := context.Background()
+	c.Refresh(ctx)
+	require.Equal(t, StageNotReady, c.Stage(Ref{}))
+	require.False(t, c.Halted(Ref{}), "检查失败的未就绪不算有意停下")
+
+	f.mu.Lock()
+	f.module = nil
+	f.mu.Unlock()
+	c.Refresh(ctx)
+	require.False(t, c.Halted(Ref{}))
+	_, err := c.Execute(ctx, Request{Command: CmdPause, Reason: "维护"})
+	require.NoError(t, err)
+	require.True(t, c.Halted(Ref{}))
+	_, err = c.Command(ctx, CmdResume, Ref{})
+	require.NoError(t, err)
+	require.False(t, c.Halted(Ref{}))
+
+	_, err = c.Execute(ctx, Request{Command: CmdPause, PauseKind: PauseSystem})
+	require.NoError(t, err)
+	c.mu.Lock()
+	c.self.Stage = StageResetting
+	c.mu.Unlock()
+	require.True(t, c.Halted(Ref{}))
+}
+
+// 暂停后调用 Quiesce 等在途操作结束；没结束时命令返回错误但对象已经暂停。
+func TestPauseCallsQuiesceAfterGateCloses(t *testing.T) {
+	f := newFake()
+	var stageSeen Stage
+	var c *Controller
+	hooks := f.hooks()
+	hooks.Quiesce = func(_ context.Context, ref Ref) error {
+		stageSeen = c.Stage(ref)
+		return errors.New("还有 2 个订单请求在途")
+	}
+	c, err := New(Options{Module: "trade", Hooks: hooks})
+	require.NoError(t, err)
+	ctx := context.Background()
+	c.Refresh(ctx)
+
+	obj, err := c.Command(ctx, CmdPause, Ref{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "已暂停，但在途操作没有结束")
+	require.Equal(t, StagePaused, obj.Stage)
+	require.Equal(t, StagePaused, stageSeen, "调用 Quiesce 时门禁已经关闭")
+	require.True(t, c.Halted(Ref{}))
 }

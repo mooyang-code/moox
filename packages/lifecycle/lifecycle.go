@@ -226,6 +226,9 @@ type Hooks struct {
 	// Catchup 报告一个对象（ref 为空是模块自身）的恢复追赶进度；since 是最早一次暂停的时间。
 	// 为 nil 表示没有数据需要追赶，恢复后立即视为追平。钩子应只写历史数据，不下单、不发目标。
 	Catchup func(ctx context.Context, ref Ref, since time.Time) (Catchup, error)
+	// Quiesce 在对象暂停之后调用（门禁已经关闭）：等待该对象在途的写操作结束（例如 Trade 已提交的订单请求）。
+	// 返回错误表示在途操作没有在时限内结束；对象仍然是暂停，调用方可以稍后再确认。为 nil 表示没有需要等待的在途操作。
+	Quiesce func(ctx context.Context, ref Ref) error
 	// OnChange 在阶段变化后调用（日志、指标），可为 nil；在持有控制器锁时不会被调用。
 	OnChange func(ref Ref, from, to Stage, reason string)
 }

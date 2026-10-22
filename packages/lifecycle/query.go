@@ -84,6 +84,26 @@ func (c *Controller) CatchupAllowed(ref Ref) bool {
 	return false
 }
 
+// Halted 报告 ref（空表示模块自身）是否被有意停下：暂停、恢复追赶、重置、重置失败、故障，或者带着控制意图。
+// 它和 Allowed 不同：自身未初始化、未就绪不算「有意停下」。Trade 这类下单的模块用它做门禁——
+// 就绪检查的抖动不应该让执行和目标接收停掉，只有用户（或系统）有意停下才停。
+func (c *Controller) Halted(ref Ref) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.self.Hold != HoldNone {
+		return true
+	}
+	switch c.self.Stage {
+	case StagePaused, StageResuming, StageResetting, StageResetFailed, StageFault:
+		return true
+	}
+	if ref == (Ref{}) {
+		return false
+	}
+	o := c.objects[ref.key()]
+	return o != nil && (o.Stage == StagePaused || o.Stage == StageResuming || o.Stage == StageFault)
+}
+
 // Warming 报告对象是否处于预热（预热期间不真实下单）。
 func (c *Controller) Warming(ref Ref) bool { return c.Stage(ref) == StageWarming }
 

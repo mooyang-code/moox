@@ -25,6 +25,9 @@ type TargetOptions struct {
 	SetReady       func(bool)
 	WeightResolver TargetWeightResolver
 	ResolveTimeout time.Duration
+	// Intake 非空时是生命周期门禁：返回 false（暂停、恢复追赶、重置）时拒绝新的真实目标，
+	// 并回执「系统暂停」；影子目标只是记录，不受影响。
+	Intake func() bool
 }
 
 // TargetWeightResolver converts the strategy-owned target weights into the
@@ -105,6 +108,9 @@ func HandleTarget(
 	}
 	if request.GetShadow() {
 		return handleShadowTarget(ctx, opts, message.GetSpaceId(), message.GetOccurredAt().AsTime().UnixMilli(), request, now)
+	}
+	if opts.Intake != nil && !opts.Intake() {
+		return targetRejection("system_paused", errors.New("trade is paused: new targets are rejected"))
 	}
 	requestHash, err := targetapp.RequestHash(request)
 	if err != nil {

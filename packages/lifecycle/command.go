@@ -6,6 +6,9 @@ import (
 	"time"
 )
 
+// quiesceTimeout 是暂停后等待在途操作结束的时限。
+const quiesceTimeout = 30 * time.Second
+
 // Request 是一个命令请求。
 type Request struct {
 	Command Command
@@ -36,11 +39,20 @@ func (c *Controller) Execute(ctx context.Context, req Request) (Object, error) {
 		return c.checkCmd(ctx, req.Ref)
 	case CmdStart, CmdConfirm, CmdPause, CmdResume:
 		obj, err := c.transition(ctx, req)
-		if err == nil && req.Command == CmdResume {
+		switch {
+		case err == nil && req.Command == CmdResume:
 			c.settle(ctx)
 			c.mu.Lock()
 			obj = c.object(c.recordFor(req.Ref))
 			c.mu.Unlock()
+		case err == nil && req.Command == CmdPause && obj.Stage == StagePaused && c.opts.Hooks.Quiesce != nil:
+			// 门禁已经关闭；等在途操作结束才算真正停下。
+			qctx, cancel := context.WithTimeout(ctx, quiesceTimeout)
+			qerr := c.opts.Hooks.Quiesce(qctx, req.Ref)
+			cancel()
+			if qerr != nil {
+				return obj, fmt.Errorf("已暂停，但在途操作没有结束：%w", qerr)
+			}
 		}
 		return obj, err
 	case CmdRelease:
