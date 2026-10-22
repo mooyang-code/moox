@@ -230,6 +230,9 @@ type Hooks struct {
 	// Catchup 报告一个对象（ref 为空是模块自身）的恢复追赶进度；since 是最早一次暂停的时间。
 	// 为 nil 表示没有数据需要追赶，恢复后立即视为追平。钩子应只写历史数据，不下单、不发目标。
 	Catchup func(ctx context.Context, ref Ref, since time.Time) (Catchup, error)
+	// AfterReset 在重置完成后用户第一次 init 模块自身（解除「重置后等待初始化」）时调用，可为 nil。
+	// 模块用它放开重置期间一直保持关闭的东西（例如 Collector 的采集暂停开关）：重置结束不等于可以马上工作，要等用户明确 init。
+	AfterReset func(ctx context.Context)
 	// Reset 是模块的重置实现（见 reset.go）；为 nil 表示模块不支持重置。
 	Reset *ResetSpec
 	// Quiesce 在对象暂停之后调用（门禁已经关闭）：等待该对象在途的写操作结束（例如 Trade 已提交的订单请求）。

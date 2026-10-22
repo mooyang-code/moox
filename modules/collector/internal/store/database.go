@@ -3,6 +3,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	stdlog "log"
 	"os"
@@ -18,6 +20,14 @@ import (
 )
 
 // Store owns the Collector SQLite connection and repositories.
+// SQLDB 返回底层数据库连接（重置时备份与清表用，由生命周期的重置实现调用）。
+func (s *Store) SQLDB() (*sql.DB, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("collector store is not open")
+	}
+	return s.db.DB()
+}
+
 type Store struct {
 	db         *gorm.DB
 	path       string

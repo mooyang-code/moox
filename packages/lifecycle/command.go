@@ -88,9 +88,11 @@ func (c *Controller) initCmd(ctx context.Context, ref Ref) (Object, error) {
 	var changes []change
 	r := c.recordFor(ref)
 	c.checks[ref.key()] = checks
+	afterReset := false
 	if ref == (Ref{}) && r.Hold == HoldPostReset {
 		// 重置后的初始化由用户发起，到这里才解除「等待初始化」。
 		r.Hold = HoldNone
+		afterReset = true
 	}
 	if r.Stage == StageUninitialized || r.Stage == StageNotReady || r.Stage == StageReady {
 		if Passed(checks) {
@@ -103,6 +105,9 @@ func (c *Controller) initCmd(ctx context.Context, ref Ref) (Object, error) {
 	obj := c.object(r)
 	c.mu.Unlock()
 	c.notify(changes)
+	if afterReset && c.opts.Hooks.AfterReset != nil {
+		c.opts.Hooks.AfterReset(ctx)
+	}
 	return obj, nil
 }
 

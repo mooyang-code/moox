@@ -339,7 +339,7 @@ func registerHealth(s *server.Server, cfg *Config, dbm *store.Store, process *Ru
 	}
 	var routes []health.Route
 	if control != nil && process != nil {
-		life, err := newCollectorLifecycle(cfg.Database.Path, control, func() bool { return dbm != nil })
+		life, err := newCollectorLifecycle(cfg.Database.Path, control, func() bool { return dbm != nil }, collectorResetSpec(dbm, cfg.Database.Path, control))
 		if err != nil {
 			return fmt.Errorf("collector lifecycle state failed to open: %w", err)
 		}

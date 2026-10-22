@@ -189,10 +189,16 @@ func TestResetSuccessLeavesModuleUninitializedUntilInit(t *testing.T) {
 	require.Equal(t, StageUninitialized, f.c.Stage(Ref{}), "Refresh 不自动初始化模块自身")
 	require.False(t, f.c.Allowed(set1))
 	require.False(t, f.c.CatchupAllowed(set1))
+	var afterResetCalls atomic.Int32
+	f.c.opts.Hooks.AfterReset = func(context.Context) { afterResetCalls.Add(1) }
 	obj, err := f.c.Command(ctx, CmdInit, Ref{})
 	require.NoError(t, err)
 	require.Equal(t, StageReady, obj.Stage)
 	require.Equal(t, HoldNone, obj.Hold)
+	require.Equal(t, int32(1), afterResetCalls.Load(), "重置后第一次 init 触发 AfterReset")
+	_, err = f.c.Command(ctx, CmdInit, Ref{})
+	require.NoError(t, err)
+	require.Equal(t, int32(1), afterResetCalls.Load(), "之后的 init 不再触发")
 	require.NotNil(t, obj.LastReset)
 }
 
