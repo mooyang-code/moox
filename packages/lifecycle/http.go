@@ -35,7 +35,7 @@ type CommandRequest struct {
 	Force         bool `json:"force,omitempty"`
 	ManualRelease bool `json:"manual_release,omitempty"`
 	// ExpiresAt 用于 pause：到点自动恢复。
-	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
 
 // Request 转成控制器的命令请求。
