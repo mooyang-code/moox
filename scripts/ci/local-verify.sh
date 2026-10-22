@@ -39,10 +39,6 @@ if ((${#missing[@]} > 0)); then
   [[ " ${missing[*]} " == *" rg "* ]] && echo "提示：ripgrep 请用 brew install ripgrep 安装（shell 里的 rg 别名不会被 make 继承）。" >&2
   exit 1
 fi
-python3 -c 'import yaml' 2>/dev/null || {
-  echo "缺少 Python 依赖 PyYAML：python3 -m pip install pyyaml" >&2
-  exit 1
-}
 
 bash scripts/ci/check-go-version.sh
 

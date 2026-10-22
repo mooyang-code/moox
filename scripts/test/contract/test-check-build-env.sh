@@ -103,7 +103,7 @@ for bad in 22.11.0 22.12.9 20.18.0 18.20.4 21.7.0; do
   grep -q "\[不符\] *Node.js" "${TMP}/out.txt" || fail "Node ${bad} 要报不符"
 done
 
-# ---------------------------------------------------------------- verify 场景：make / rg / PyYAML / jq / rsync
+# ---------------------------------------------------------------- verify 场景：make / rg / jq / rsync
 if run_check "--profile verify" MOOX_BUILD_ENV_OS=linux MOOX_BUILD_ENV_PM=dnf; then fail "缺 make、rg 等应失败"; fi
 for tool in "make" "ripgrep" "jq" "rsync"; do grep -q "\[缺少\] *${tool}" "${TMP}/out.txt" || fail "verify 场景要报缺少 ${tool}"; done
 grep -q 'sudo dnf install -y ripgrep' "${TMP}/out.txt" || fail "dnf 下 ripgrep 的建议不对"

@@ -7,7 +7,7 @@
 #     build    构建纯 Go 的 Linux 二进制（交叉编译）：git、固定版本的 Go
 #     cgo      build + 构建 Storage（DuckDB，需要 CGO）：Docker 在运行
 #     web      build + 构建前端与 Web Host：Node、pnpm
-#     verify   build + 推送前本地预检（scripts/ci/local-verify.sh）：make、rg、python3 + PyYAML、jq、rsync、Node、pnpm
+#     verify   build + 推送前本地预检（scripts/ci/local-verify.sh）：make、rg、python3、jq、rsync、Node、pnpm
 #     release  cgo + 发布到线上主机：ssh、scp
 #     all      以上全部
 #   --json     输出 JSON，方便 Agent 解析；退出码仍表示有没有缺项。
@@ -80,7 +80,6 @@ install_hint() {
       case "${PM}" in brew) printf 'brew install rsync   # 系统自带的版本也可用' ;; apt-get) printf 'sudo apt-get install -y rsync' ;; dnf|yum) printf 'sudo %s install -y rsync' "${PM}" ;; pacman) printf 'sudo pacman -S --noconfirm rsync' ;; zypper) printf 'sudo zypper install -y rsync' ;; apk) printf 'sudo apk add rsync' ;; winget) printf 'Git Bash 没有 rsync：改在 WSL 里运行' ;; *) printf '安装 rsync' ;; esac ;;
     python3)
       case "${PM}" in brew) printf 'brew install python' ;; apt-get) printf 'sudo apt-get install -y python3 python3-pip' ;; dnf|yum) printf 'sudo %s install -y python3 python3-pip' "${PM}" ;; pacman) printf 'sudo pacman -S --noconfirm python python-pip' ;; zypper) printf 'sudo zypper install -y python3 python3-pip' ;; apk) printf 'sudo apk add python3 py3-pip' ;; winget) printf 'winget install --id Python.Python.3.12 -e' ;; *) printf '安装 Python 3：https://www.python.org/downloads/' ;; esac ;;
-    pyyaml) printf 'python3 -m pip install --user pyyaml   # Linux 用包管理器的 python3-yaml 也可以；报 externally-managed-environment（如 Homebrew 的 Python）时：python3 -m venv ~/.venvs/moox && ~/.venvs/moox/bin/pip install pyyaml，并把 ~/.venvs/moox/bin 放到 PATH 最前' ;;
     node)
       case "${PM}" in brew) printf 'brew install node@24 && brew link --overwrite node@24   # 需要 Node %s' "${NODE_RANGE}" ;; apt-get|dnf|yum|pacman|zypper|apk) printf '用 nvm 或 NodeSource 装 Node 24：https://nodejs.org/en/download （发行版自带的版本通常太旧，需要 %s）' "${NODE_RANGE}" ;; winget) printf 'winget install --id OpenJS.NodeJS -e   # 需要 Node %s' "${NODE_RANGE}" ;; *) printf '安装 Node：https://nodejs.org/en/download （需要 %s）' "${NODE_RANGE}" ;; esac ;;
     pnpm) printf 'corepack enable && corepack prepare pnpm@10.28.2 --activate   # 或 npm install -g pnpm@10.28.2' ;;
@@ -196,12 +195,6 @@ check_rg() {
   else record rg "ripgrep" missing "" "PATH 里有可执行文件 rg（shell 别名不算）" "$(install_hint rg)"; fi
 }
 
-check_pyyaml() {
-  if ! has python3; then record pyyaml "PyYAML" missing "" "python3 -c 'import yaml'" "$(install_hint pyyaml)"; return; fi
-  if python3 -c 'import yaml' >/dev/null 2>&1; then record pyyaml "PyYAML" ok "$(python3 -c 'import yaml; print(yaml.__version__)' 2>/dev/null)" "python3 -c 'import yaml'" ""
-  else record pyyaml "PyYAML" missing "" "python3 -c 'import yaml'" "$(install_hint pyyaml)"; fi
-}
-
 check_docker() {
   if ! has docker; then
     record docker "Docker" missing "" "docker 命令" "$(install_hint docker)"
@@ -242,7 +235,6 @@ if wants verify; then
   simple_tool make "make" make 'make --version'
   check_rg
   simple_tool python3 "Python 3" python3 'python3 --version'
-  check_pyyaml
   simple_tool jq "jq" jq 'jq --version'
   simple_tool rsync "rsync" rsync 'rsync --version'
 fi
