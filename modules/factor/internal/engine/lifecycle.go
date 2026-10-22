@@ -35,8 +35,15 @@ func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
 	})
 }
 
-// gate 是周期处理前的门禁：集合没有处于预热或运行就不计算。
+// gate 是实时周期处理前的门禁：集合没有处于预热或运行就不计算。
 func (r *Runtime) gate(setID string) bool { return r.life.Allowed(setRef(setID)) }
+
+// catchupGate 是恢复追赶的门禁：只写历史数据（连续水位追赶、历史周期补算）；暂停、重置期间一律关闭。
+func (r *Runtime) catchupGate(setID string) bool { return r.life.CatchupAllowed(setRef(setID)) }
+
+// writeGate 是后台写结果路径（补算作业、缺口恢复、失效重算）的门禁：实时计算或恢复追赶允许时才写。
+// 这几条路径原先只看目录与租约（active），集合暂停后仍会写结果，现在统一并入生命周期门禁。
+func (r *Runtime) writeGate(setID string) bool { return r.gate(setID) || r.catchupGate(setID) }
 
 func (r *Runtime) lifecycleObjects() []lifecycle.Ref {
 	ids := r.catalog.SetIDs()
@@ -100,6 +107,7 @@ func (r *Runtime) lifecycleRoutes() []factorhealth.Route {
 	return []factorhealth.Route{
 		{Path: lifecycle.StatusPath, Handler: r.life.StatusHandler()},
 		{Path: lifecycle.CommandPath, Handler: r.life.CommandHandler()},
+		{Path: lifecycle.CatchupPath, Handler: r.life.CatchupHandler()},
 	}
 }
 

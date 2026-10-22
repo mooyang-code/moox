@@ -223,6 +223,8 @@ type logicalTargetConvergerStub struct {
 	calls  []string
 	wake   chan struct{}
 	result targetapp.Result
+	// after 非空时在每次收敛结束时调用（测试用来模拟收敛过程中发生的暂停）。
+	after func()
 }
 
 func (s *logicalTargetConvergerStub) Converge(
@@ -238,6 +240,9 @@ func (s *logicalTargetConvergerStub) Converge(
 		case s.wake <- struct{}{}:
 		default:
 		}
+	}
+	if s.after != nil {
+		s.after()
 	}
 	return s.result, nil
 }
@@ -416,4 +421,56 @@ func TestTargetWorkerAccountErrorIsDiagnosticAndRecovers(t *testing.T) {
 	bad = false
 	require.NoError(t, worker.runOnce(context.Background()))
 	require.Empty(t, worker.Snapshot().TargetErrors)
+}
+
+// 生命周期门禁关闭（暂停）时目标不再收敛，不触碰存储；放开后恢复收敛。
+func TestTargetWorkerGateClosedDoesNotConverge(t *testing.T) {
+	targets := &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{
+		{SpaceID: "space-1", LogicalAccountID: "logical-1", Status: targetapp.StatusPending},
+	}}
+	converger := &logicalTargetConvergerStub{result: targetapp.Result{Status: targetapp.StatusConverged}}
+	open := false
+	worker := &TargetWorker{Store: targets, Executor: converger, Gate: func() bool { return open }}
+
+	require.NoError(t, worker.runOnce(context.Background()))
+	require.NoError(t, worker.runTargets(context.Background(), []targetKey{{"space-1", "logical-1"}}))
+	require.Empty(t, converger.calls, "暂停时一次收敛都不做")
+
+	open = true
+	require.NoError(t, worker.runOnce(context.Background()))
+	require.Equal(t, []string{"space-1/logical-1"}, converger.calls)
+}
+
+// 批量收敛中途被暂停：已经开始的那一个照常结束，后面的目标不再收敛。
+func TestTargetWorkerPauseMidBatchStopsRemainingTargets(t *testing.T) {
+	targets := &logicalTargetStoreStub{records: []store.LogicalAccountTargetRecord{
+		{SpaceID: "space-1", LogicalAccountID: "logical-1", Status: targetapp.StatusPending},
+		{SpaceID: "space-1", LogicalAccountID: "logical-2", Status: targetapp.StatusPending},
+	}}
+	open := true
+	converger := &logicalTargetConvergerStub{result: targetapp.Result{Status: targetapp.StatusConverged}}
+	converger.after = func() { open = false } // 第一个收敛结束时被暂停
+	worker := &TargetWorker{Store: targets, Executor: converger, Gate: func() bool { return open }}
+
+	require.NoError(t, worker.runOnce(context.Background()))
+	require.Equal(t, []string{"space-1/logical-1"}, converger.calls)
+}
+
+// Quiesce 等在途的收敛（订单提交）结束；超时时报告仍有多少在途。
+func TestTargetWorkerQuiesceWaitsForInflightConvergence(t *testing.T) {
+	worker := &TargetWorker{}
+	require.NoError(t, worker.Quiesce(context.Background()), "没有在途")
+
+	worker.inflight.Add(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	err := worker.Quiesce(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Contains(t, err.Error(), "1 个目标")
+
+	go func() {
+		time.Sleep(40 * time.Millisecond)
+		worker.inflight.Add(-1)
+	}()
+	require.NoError(t, worker.Quiesce(context.Background()), "在途结束后返回")
 }

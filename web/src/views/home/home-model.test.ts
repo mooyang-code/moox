@@ -761,6 +761,43 @@ describe("systemStage", () => {
     expect(bad?.color).toBe("red");
   });
 
+  it("暂停、部分暂停与重置中", () => {
+    const paused = systemStage({
+      system: {
+        phase: "paused",
+        color: "orange",
+        health: "healthy",
+        issues: ["策略：系统暂停：切换行情源"],
+        pause_kinds: { system: 2 }
+      }
+    });
+    expect(paused).toEqual({ color: "orange", label: "已暂停", issues: ["策略：系统暂停：切换行情源"], recovered: false });
+    expect(systemStage({ system: { phase: "partially_paused", color: "orange", health: "healthy" } })?.label).toBe("部分暂停");
+    const resetting = systemStage({ system: { phase: "resetting", color: "purple", health: "healthy" } });
+    expect(resetting?.label).toBe("重置中");
+    expect(resetting?.color).toBe("purple");
+  });
+
+  it("恢复追赶：显示追平进度与各模块说明，全部追平后提示待放行", () => {
+    const resuming = systemStage({
+      system: {
+        phase: "resuming",
+        color: "cyan",
+        health: "healthy",
+        resuming_modules: 3,
+        caught_up_modules: 1,
+        catchup_notes: ["因子引擎：补采 6/10", "策略：被 factor_set/crypto_1m 阻塞"]
+      }
+    });
+    expect(resuming?.label).toBe("恢复中 · 追赶 1/3 个模块");
+    expect(resuming?.color).toBe("cyan");
+    expect(resuming?.issues).toEqual(["因子引擎：补采 6/10", "策略：被 factor_set/crypto_1m 阻塞"]);
+    const done = systemStage({
+      system: { phase: "resuming", color: "cyan", health: "healthy", resuming_modules: 3, caught_up_modules: 3 }
+    });
+    expect(done?.label).toBe("恢复中 · 已追平，待放行");
+  });
+
   it("原因最多显示 3 条，其余折叠；自动恢复要提示", () => {
     const stage = systemStage({
       system: { phase: "running", color: "orange", degraded: true, auto_recovered: true, issues: ["a", "b", "c", "d", "e"] }

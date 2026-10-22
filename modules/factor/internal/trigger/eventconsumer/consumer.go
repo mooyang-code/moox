@@ -31,6 +31,8 @@ type ConsumerConfig struct {
 	Continuity *Continuity
 	// Gate 非空时是生命周期门禁：集合没有处于预热或运行就不计算。
 	Gate func(setID string) bool
+	// CatchupGate 非空时是恢复追赶的门禁：Gate 不放行但 CatchupGate 放行的集合，只允许连续水位追赶（历史周期），实时事件仍不处理。
+	CatchupGate func(setID string) bool
 }
 
 // ackWaitHeartbeats is how many InProgress heartbeats may be missed before a
@@ -143,6 +145,7 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 		handler.SetContinuity(cfg.Continuity)
 	}
 	handler.SetGate(cfg.Gate)
+	handler.SetCatchupGate(cfg.CatchupGate)
 	runCtx, cancel := context.WithCancel(ctx)
 	c.client, c.consumer, c.handler, c.cancel = client, consumer, handler, cancel
 	c.runner = jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{

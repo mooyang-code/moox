@@ -457,11 +457,15 @@ const PHASE_LABELS: Record<string, string> = {
   uninitialized: "未初始化",
   ready: "就绪",
   warming: "预热中",
-  running: "运行中"
+  running: "运行中",
+  paused: "已暂停",
+  partially_paused: "部分暂停",
+  resuming: "恢复中",
+  resetting: "重置中"
 };
 
 export interface SystemStage {
-  /** 圆点颜色：红（健康面异常）、橙（降级）、黄（预热）、蓝（就绪）、绿（运行）、灰。 */
+  /** 圆点颜色：红（健康面异常）、紫（重置中）、青（恢复追赶）、橙（降级或暂停）、黄（预热）、蓝（就绪）、绿（运行）、灰。 */
   color: LifecycleColor;
   /** 形如「运行中 · 降级」「预热中」「就绪」。 */
   label: string;
@@ -478,7 +482,13 @@ export function systemStage(overview?: HealthOverview): SystemStage | undefined 
   let label = PHASE_LABELS[system.phase] || system.phase;
   if (system.health === "attention") label = `${label} · 有模块未就绪`;
   else if (system.degraded) label += " · 降级";
-  const all = system.issues || [];
+  else if (system.phase === "resuming") {
+    // 恢复追赶：显示「追平几个、共几个」，全部追平后提示待放行。
+    const total = system.resuming_modules || 0;
+    const caught = system.caught_up_modules || 0;
+    label += total > 0 && caught >= total ? " · 已追平，待放行" : ` · 追赶 ${caught}/${total} 个模块`;
+  }
+  const all = [...(system.issues || []), ...(system.phase === "resuming" ? system.catchup_notes || [] : [])];
   const issues = all.slice(0, 3);
   if (all.length > 3) issues.push(`另有 ${all.length - 3} 项`);
   return { color: system.color || "gray", label, issues, recovered: Boolean(system.auto_recovered) };
