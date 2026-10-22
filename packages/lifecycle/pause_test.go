@@ -571,3 +571,13 @@ func TestPauseExpiresAutoResumes(t *testing.T) {
 	c.Refresh(ctx)
 	require.True(t, c.Allowed(set1), "追平后自动放行")
 }
+
+// 没有到期时间的命令请求不带 expires_at：旧版本模块按已知字段严格解析请求，多一个字段就返回 400（线上 Monitor 就因此拒绝过新版命令行）。
+func TestCommandRequestOmitsZeroExpiry(t *testing.T) {
+	raw, err := json.Marshal(CommandRequest{Command: CmdPause, PauseKind: PauseSystem, By: "ops"})
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "expires_at")
+	raw, err = json.Marshal(CommandRequest{Command: CmdPause, ExpiresAt: time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)})
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "expires_at")
+}
