@@ -55,6 +55,14 @@ type Store struct {
 	db  *sql.DB
 }
 
+// SQLDB 返回底层数据库连接（重置时备份与清表用，由生命周期的重置实现调用）。
+func (s *Store) SQLDB() (*sql.DB, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("archive store is not open")
+	}
+	return s.db, nil
+}
+
 // Open 打开（必要时创建）SQLite 库。新库以 auto_vacuum = INCREMENTAL 创建。
 func Open(path string) (*Store, error) {
 	if strings.TrimSpace(path) == "" {
