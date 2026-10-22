@@ -101,7 +101,7 @@ func tradeCatchup(accounts accountLister, worker interface{ Quiesce(context.Cont
 	}
 }
 
-func newLifecycle(dbPath string, readiness health.Readiness, quiesce func(context.Context) error, catchup func(context.Context, lifecycle.Ref, time.Time) (lifecycle.Catchup, error)) (*lifecycle.Controller, error) {
+func newLifecycle(dbPath string, readiness health.Readiness, quiesce func(context.Context) error, catchup func(context.Context, lifecycle.Ref, time.Time) (lifecycle.Catchup, error), reset *lifecycle.ResetSpec) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
 		Module:    "trade",
 		StateFile: filepath.Join(filepath.Dir(dbPath), lifecycleStateFileName),
@@ -117,6 +117,7 @@ func newLifecycle(dbPath string, readiness health.Readiness, quiesce func(contex
 			// 暂停之后等在途的订单提交结束才算真正停下；不撤单、不平仓。
 			Quiesce: func(ctx context.Context, _ lifecycle.Ref) error { return quiesce(ctx) },
 			Catchup: catchup,
+			Reset:   reset,
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
 				log.Infof("trade_lifecycle_changed from=%s to=%s reason=%s", from, to, reason)
 			},
@@ -129,6 +130,7 @@ func lifecycleRoutes(life *lifecycle.Controller, tradeStore *store.Store) []heal
 		{Path: lifecycle.StatusPath, Handler: life.StatusHandler()},
 		{Path: lifecycle.CommandPath, Handler: life.CommandHandler()},
 		{Path: lifecycle.CatchupPath, Handler: life.CatchupHandler()},
+		{Path: lifecycle.ResetPrefix, Handler: life.ResetHandler()},
 		{Path: shadowTargetsPath, Handler: shadowTargetsHandler(tradeStore)},
 	}
 	routes = append(routes, replayRoutes(&replayapp.Service{Store: tradeStore})...)

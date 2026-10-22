@@ -406,6 +406,7 @@ func initialize(
 		eventBus,
 		&targetConsumerReady,
 		lifeGate,
+		accountSyncer{service: syncService}.SyncAccount,
 	); err != nil {
 		cancelRuntime()
 		if eventBus != nil {
@@ -716,6 +717,7 @@ func registerHealth(
 	eventBus *jetstream.Client,
 	targetConsumerReady *atomic.Bool,
 	lifeGate *lifecycleGate,
+	syncAccount func(ctx context.Context, accountID string) error,
 ) error {
 	state := health.New("trade", "trade", "", "")
 	readiness := health.Readiness{
@@ -737,7 +739,7 @@ func registerHealth(
 		PaperMatcherWorker: paperMatcherWorker.State,
 		PaperAccountErrors: paperMatcher.AccountErrors,
 	}
-	life, err := newLifecycle(databasePath, readiness, targetWorker.Quiesce, tradeCatchup(tradeStore, targetWorker, time.Now))
+	life, err := newLifecycle(databasePath, readiness, targetWorker.Quiesce, tradeCatchup(tradeStore, targetWorker, time.Now), tradeResetSpec(tradeStore, databasePath, syncAccount))
 	if err != nil {
 		return fmt.Errorf("trade lifecycle state failed to open: %w", err)
 	}
