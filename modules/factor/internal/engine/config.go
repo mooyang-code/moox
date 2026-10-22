@@ -110,6 +110,27 @@ type WindowConfig struct {
 	MaxMemory ByteSize `yaml:"max_memory"`
 	// Headroom 是每个序列数组余量的根数，0 取窗口长度的 1/4（至少 16）。
 	Headroom int `yaml:"headroom"`
+	// Lookback 是回看数量 N 的全局默认（设计 8.1）：窗口长度、本地要保有的根数、集合内因子回看的上限。默认 1 万。
+	Lookback int `yaml:"lookback"`
+	// LookbackOverrides 按数据源覆盖 N，键是 "space/dataset/freq"，例如 "crypto/spot_kline_1h/1h": 8000。
+	LookbackOverrides map[string]int `yaml:"lookback_overrides"`
+}
+
+// MaxLookbackLimit 是回看数量 N 的绝对上限，与表达式引擎的回看上限一致。
+const MaxLookbackLimit = 100000
+
+// DefaultLookback 是回看数量 N 的默认值。
+const DefaultLookback = 10000
+
+// LookbackFor 返回数据源的回看数量 N：先看按数据源的覆盖，再取全局默认。
+func (c WindowConfig) LookbackFor(spaceID, datasetID, freq string) int {
+	if n, ok := c.LookbackOverrides[spaceID+"/"+datasetID+"/"+freq]; ok && n > 0 {
+		return n
+	}
+	if c.Lookback > 0 {
+		return c.Lookback
+	}
+	return DefaultLookback
 }
 
 // MemoryConfig 是进程级内存预算（设计 4.4）：常驻窗口与块缓存先扣除，计算、回放、重算向准入器预留。
@@ -255,6 +276,7 @@ func (c *Config) applyDefaults() {
 	if c.SeriesStore.BlockCache == 0 {
 		c.SeriesStore.BlockCache = d.SeriesStore.BlockCache
 	}
+	setInt(&c.Window.Lookback, DefaultLookback)
 	setInt(&c.Sync.Workers, d.Sync.Workers)
 	setInt(&c.Sync.BatchSubjects, d.Sync.BatchSubjects)
 	setDuration(&c.Sync.FollowInterval, d.Sync.FollowInterval)
@@ -319,6 +341,11 @@ func (c *Config) Validate() error {
 	require(c.Sync.Workers > 0 && c.Sync.BatchSubjects > 0 && c.Sync.BatchSubjects <= 100 && c.Sync.FollowInterval > 0,
 		"sync.workers must be positive, sync.batch_subjects must be within [1, 100] and sync.follow_interval must be positive")
 	require(c.Window.MaxMemory >= 0 && c.Window.Headroom >= 0 && c.Memory.TotalBudget >= 0, "window.max_memory, window.headroom and memory.total_budget must not be negative")
+	require(c.Window.Lookback >= 1 && c.Window.Lookback <= MaxLookbackLimit, fmt.Sprintf("window.lookback must be within [1, %d]", MaxLookbackLimit))
+	for key, n := range c.Window.LookbackOverrides {
+		require(strings.Count(key, "/") == 2 && n >= 1 && n <= MaxLookbackLimit,
+			fmt.Sprintf("window.lookback_overrides[%q] must be keyed space/dataset/freq and within [1, %d]", key, MaxLookbackLimit))
+	}
 	require(c.Watermark.MaxMissingRatio > 0 && c.Watermark.MaxMissingRatio < 1 && c.Watermark.PollInterval > 0 && c.Watermark.MaxPeriods > 0,
 		"watermark.max_missing_ratio must be within (0, 1), poll_interval and max_periods must be positive")
 	for setID, ratio := range c.Watermark.SetRatios {

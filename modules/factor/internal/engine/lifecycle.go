@@ -2,10 +2,12 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
+	"github.com/mooyang-code/moox/modules/factor/internal/localdata"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/packages/lifecycle"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -76,15 +78,49 @@ func (r *Runtime) checkSet(ctx context.Context, ref lifecycle.Ref) []lifecycle.C
 	if r.preload.Ready(ref.ID) {
 		checks = append(checks, r.coverageCheck(ctx, src))
 	}
-	if err := r.data.Blocked(src); err != nil {
+	checks = append(checks, r.blockedCheck(src, ref.ID))
+	if gaps := r.data.LongGaps(src); len(gaps) > 0 {
+		first := gaps[0]
 		checks = append(checks, lifecycle.Check{
-			Name: "变更同步", Status: lifecycle.CheckFail, Message: err.Error(),
-			Remedy: fmt.Sprintf("先停止引擎，再执行 moox-factor-engine reconcile --set %s", ref.ID),
+			Name: "长缺口", Status: lifecycle.CheckWarn,
+			Message: gapMessage(len(gaps), first),
+			Remedy:  "确认交易所是否仍有该标的的行情；不需要时把它从集合的标的列表里移除，或在因子里用 is_filled 排除填充值",
 		})
-	} else {
-		checks = append(checks, lifecycle.Check{Name: "变更同步", Status: lifecycle.CheckPass})
 	}
 	return checks
+}
+
+func gapMessage(count int, first localdata.LongGap) string {
+	if first.Stale {
+		return fmt.Sprintf("%d 个标的长时间没有新数据（例如 %s 已 %s 没有新行情）", count, first.Subject, first.Duration.Round(time.Minute))
+	}
+	return fmt.Sprintf("%d 个标的的窗口里有长缺口（例如 %s 连续填充 %d 根、约 %s），填充值仍参与计算", count, first.Subject, first.Rows, first.Duration.Round(time.Minute))
+}
+
+// blockedCheck 把数据源当前不能计算的原因翻成检查项：零数据标的要导入或移除，因子回看超过 N 要调 N，变更日志断档要对账。
+func (r *Runtime) blockedCheck(src seriesstore.Source, setID string) lifecycle.Check {
+	err := r.data.Blocked(src)
+	if err == nil {
+		return lifecycle.Check{Name: "变更同步", Status: lifecycle.CheckPass}
+	}
+	var noData *localdata.NoDataError
+	var over *localdata.LookbackExceededError
+	switch {
+	case errors.As(err, &noData):
+		return lifecycle.Check{
+			Name: "本地数据", Status: lifecycle.CheckFail, Message: err.Error(),
+			Remedy: fmt.Sprintf("导入历史数据：moox-cli import --target factor --space %s --dataset %s --freq %s --path <历史文件>；或把这些标的从集合的标的列表里移除", src.SpaceID, src.DatasetID, src.Freq),
+		}
+	case errors.As(err, &over):
+		return lifecycle.Check{
+			Name: "回看数量", Status: lifecycle.CheckFail, Message: err.Error(),
+			Remedy: fmt.Sprintf("在 engine.yaml 里调大 window.lookback（或 window.lookback_overrides 的 %s/%s/%s），重启引擎", src.SpaceID, src.DatasetID, src.Freq),
+		}
+	}
+	return lifecycle.Check{
+		Name: "变更同步", Status: lifecycle.CheckFail, Message: err.Error(),
+		Remedy: fmt.Sprintf("先停止引擎，再执行 moox-factor-engine reconcile --set %s", setID),
+	}
 }
 
 // initSet 为集合准备本地数据（读字段、取同步基线、补到最新已收盘的一根、载入窗口）；模块自身没有动作。

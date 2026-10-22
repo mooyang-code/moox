@@ -134,6 +134,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.data = localdata.New(localdata.Config{
 		Store: r.series, Storage: r.storage, Clock: clock, Admit: r.admit,
 		Workers: cfg.Sync.Workers, BatchSubjects: cfg.Sync.BatchSubjects, Headroom: cfg.Window.Headroom, WindowMax: int64(cfg.Window.MaxMemory),
+		Lookback: func(src seriesstore.Source) int { return cfg.Window.LookbackFor(src.SpaceID, src.DatasetID, src.Freq) },
 	})
 	pipelineConfig := pipeline.Config{
 		WriteBatchRows: cfg.Pipeline.WriteBatchRows, WriteRetryBackoff: 300 * time.Millisecond,
@@ -449,6 +450,9 @@ func (r *Runtime) Close() error {
 		r.reconcileMu.Unlock()
 		if r.gap != nil {
 			r.err = errors.Join(r.err, r.gap.Close())
+		}
+		if r.data != nil {
+			r.data.Drain() // 热路径的后台落盘要写完，再关闭本地存储
 		}
 		if r.series != nil {
 			r.err = errors.Join(r.err, r.series.Close())

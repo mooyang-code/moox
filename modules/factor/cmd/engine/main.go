@@ -327,6 +327,8 @@ func tune(args []string, out io.Writer) error {
 	memory := fs.Int64("memory-gib", 0, "总内存（GiB）；不写则探测本机")
 	sets := fs.Int("sets", 4, "计划启用的因子集合数（决定计算并行数）")
 	cpus := fs.Int("cpus", runtime.NumCPU(), "CPU 核数")
+	series := fs.Int("series", 0, "计划启用的序列总数（标的数 × series_tag 数，所有数据源合计）；给出后按回看数量 N 估算窗口内存并与建议的窗口上限比较")
+	fields := fs.Int("fields", 7, "数据集的数值字段数（用于窗口内存估算）")
 	write := fs.Bool("write", false, "把建议写进配置文件")
 	force := fs.Bool("force", false, "覆盖已经设置过的值")
 	if err := fs.Parse(args); err != nil {
@@ -347,6 +349,17 @@ func tune(args []string, out io.Writer) error {
 	plan := engine.PlanMemory(total, *cpus, *sets, int64(cfg.SeriesStore.BlockCache))
 	if _, err := io.WriteString(out, plan.Summary()); err != nil {
 		return err
+	}
+	if *series > 0 {
+		estimate := engine.WindowEstimate(*series, cfg.Window.Lookback, *fields, cfg.Window.Headroom)
+		if _, err := fmt.Fprintf(out, "窗口内存估算        %d 个序列 × 回看数量 N=%d（%d 个数值字段）≈ %.2fGiB\n", *series, cfg.Window.Lookback, *fields, float64(estimate)/(1<<30)); err != nil {
+			return err
+		}
+		if warn := plan.CheckWindowEstimate(estimate); warn != "" {
+			if _, err := fmt.Fprintf(out, "警告：%s\n", warn); err != nil {
+				return err
+			}
+		}
 	}
 	if !*write {
 		_, err = fmt.Fprintln(out, "加 --write 写入配置文件")

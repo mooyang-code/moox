@@ -32,6 +32,8 @@ type fakeStorage struct {
 	changes []storageio.Change
 	results map[string]storageio.ResultRow
 	markers []storageio.PeriodMarker
+	// retention 是源数据集的保留期（如 "8d"）；空表示 forever。
+	retention string
 }
 
 func newFakeStorage() *fakeStorage {
@@ -69,6 +71,15 @@ func (f *fakeStorage) ListColumns(context.Context, string, string) ([]storageio.
 		{ColumnName: "close", ValueType: storageio.ColumnTypeDouble},
 		{ColumnName: "volume", ValueType: storageio.ColumnTypeDouble},
 	}, nil
+}
+
+// GetDataset 返回源数据集信息；retention 为空时按 forever（保留期不限制）。
+func (f *fakeStorage) GetDataset(context.Context, string, string) (storageio.DatasetInfo, error) {
+	retention := f.retention
+	if retention == "" {
+		retention = "forever"
+	}
+	return storageio.DatasetInfo{Retention: retention}, nil
 }
 
 func (f *fakeStorage) ReadWindow(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
@@ -186,6 +197,7 @@ func (fx *fixture) live(t *testing.T, target time.Time, subjects []string) pipel
 	require.NoError(t, err)
 	outcome, err := fx.runner.Run(context.Background(), plan)
 	require.NoError(t, err)
+	fx.data.Drain() // 热路径的写盘与计算并行，断言磁盘内容之前先等它落完
 	return outcome
 }
 
@@ -459,9 +471,9 @@ func TestLiveCatchUpOlderPeriodReadsDiskNotTruncatedWindow(t *testing.T) {
 	require.InDelta(t, (106+107+108)/3.0, fx.result("BTC", 8).Fields["mean3"], 1e-9)
 }
 
-// 本地数据覆盖：连续根数不足回看、而 Storage 在本地最早一根之前还有数据的标的列为不足；
-// 本地最早一根就是 Storage 首根的新标的放行；导入更早的历史后不再不足。
-func TestCoverageFlagsShortSubjectsButNotNewListings(t *testing.T) {
+// 回看变长后，本地不足的标的在 Prepare 时从 Storage 往前补齐（设计 5.2 启动加载，决定 24）；
+// 新上市的标的（本地最早一根就是 Storage 首根）不需要补，覆盖检查也放行。
+func TestPrepareBackfillsShortSubjectsAndCoverageAllowsNewListings(t *testing.T) {
 	fx := newFixture(t, mean3())
 	subjects := []string{"BTC", "NEW"}
 	fx.st.put("BTC", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
@@ -472,28 +484,38 @@ func TestCoverageFlagsShortSubjectsButNotNewListings(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, short, "回看 3 根，本地各有 3 根")
 
-	fx.set.Factors = []domain.FactorDef{mean5()} // 回看变长，本地仍是 3 根
+	fx.set.Factors = []domain.FactorDef{mean5()} // 回看变长，本地原来只有 3 根
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, subjects))
 	short, err = fx.data.Coverage(context.Background(), src)
 	require.NoError(t, err)
-	require.Len(t, short, 1)
-	require.Equal(t, "BTC", short[0].Subject)
-	require.Equal(t, 3, short[0].Have)
-	require.Equal(t, 5, short[0].Want)
+	require.Empty(t, short, "BTC 已从 Storage 补到 5 根，NEW 是新上市")
+	b, ok, err := fx.data.Store().Bounds(src, "BTC")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, at(5), b.Earliest, "往前补到 5 根")
+	n, ok, err := fx.data.Store().Bounds(src, "NEW")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, at(7), n.Earliest, "新上市的标的 Storage 里也只有这些，没有可补的")
+}
 
-	// 导入更早的历史（与本地最早一根相接）后，BTC 够了。
-	fields, _, err := fx.data.Store().Schema(src)
+// 回看数量 N 超过数据集保留期能容纳的根数时，Storage 的首根可能是被保留期截断的，新上市豁免不成立（设计 6.2）。
+func TestCoverageDoesNotExemptWhenLookbackExceedsRetention(t *testing.T) {
+	fx := newFixture(t, mean3())
+	fx.st.retention = "1h" // 1m 频率下只能容纳 60 根
+	fx.data.cfg.Lookback = func(seriesstore.Source) int { return 100 }
+	fx.set.Factors = []domain.FactorDef{mean3()}
+	fx.st.put("NEW", 100, 7, 8, 9)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"NEW"}))
+	src := seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}
+	short, err := fx.data.Coverage(context.Background(), src)
 	require.NoError(t, err)
-	hist := seriesstore.NewColumns(fields, 3)
-	for m := 4; m < 7; m++ {
-		values := make([]seriesstore.Value, len(fields))
-		for i := range fields {
-			values[i] = seriesstore.Float(float64(100 + m))
-		}
-		hist.AppendRow(at(m), "", false, values...)
-	}
-	_, err = fx.data.Store().WriteRange(context.Background(), src, seriesstore.SubjectWrite{Subject: "BTC", From: at(4), To: at(7), Rows: hist}, seriesstore.WriteOptions{})
-	require.NoError(t, err)
+	require.Len(t, short, 1, "N=100 超过保留期容量 60 根，不能把不足 N 根当作新上市")
+	require.Equal(t, 100, short[0].Want)
+
+	// 保留期放宽到能容纳 N 之后豁免成立。
+	fx.st.retention = "7d"
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"NEW"}))
 	short, err = fx.data.Coverage(context.Background(), src)
 	require.NoError(t, err)
 	require.Empty(t, short)

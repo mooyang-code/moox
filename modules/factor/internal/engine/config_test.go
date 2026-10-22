@@ -131,3 +131,14 @@ func TestEngineConfigGapSeriesDefaultsAndValidation(t *testing.T) {
 		require.ErrorContains(t, err, bad.want, bad.body)
 	}
 }
+
+func TestWindowLookbackConfig(t *testing.T) {
+	window := WindowConfig{Lookback: 10000, LookbackOverrides: map[string]int{"crypto/spot_1h/1h": 8000}}
+	require.Equal(t, 8000, window.LookbackFor("crypto", "spot_1h", "1h"))
+	require.Equal(t, 10000, window.LookbackFor("crypto", "spot_1m", "1m"))
+	require.Equal(t, DefaultLookback, WindowConfig{}.LookbackFor("crypto", "x", "1m"))
+
+	cfg := Default()
+	cfg.applyDefaults()
+	require.Equal(t, DefaultLookback, cfg.Window.Lookback, "没写 window.lookback 时默认 1 万")
+}

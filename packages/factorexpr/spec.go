@@ -21,8 +21,10 @@ const (
 	MaxFactorNodes = 4096
 	MaxParams      = 16
 	MaxOutputs     = 64
-	MaxWindow      = 5000
-	MaxLookback    = 5000
+	// MaxWindow 与 MaxLookback 是包内的绝对上限（回看数量 N 的上限，设计 8.1）。实际的上限由数据源的回看数量 N 决定，
+	// 因子引擎在准备数据源时按 Lookback ≤ N 校验；单个函数的窗口参数不超过 N 已被这条隐含（窗口 n 的回看就是 n）。
+	MaxWindow   = 100000
+	MaxLookback = 100000
 	// MaxIdentifierRunes 是输入列名与输出列名的长度上限；它与 MaxFactorNodes 一起给规范文本的长度定了上界。
 	MaxIdentifierRunes = 64
 	// maxIntegerParam 保证整数参数能被 float64 精确表示。

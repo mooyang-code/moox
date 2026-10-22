@@ -64,13 +64,13 @@ func TestTypeAndNameChecks(t *testing.T) {
 		{"too few arguments", `ts_mean(close)`, "需要 2 个参数，写了 1 个"},
 		{"too many arguments", `pct_change(close, 1, 2)`, "需要 1～2 个参数"},
 		{"float window", `ts_mean(close, 2.5)`, "整数常量"},
-		{"zero window", `ts_mean(close, 0)`, "1～5000 的整数常量"},
-		{"huge window", `ts_mean(close, 6000)`, "1～5000 的整数常量"},
+		{"zero window", `ts_mean(close, 0)`, "1～100000 的整数常量"},
+		{"huge window", `ts_mean(close, 100001)`, "1～100000 的整数常量"},
 		{"series window", `ts_mean(close, volume)`, "整数常量"},
 		{"division gives float window", `ts_mean(close, 10 / 2)`, "整数常量"},
 		{"constant series argument", `ts_mean(1, 20)`, "必须依赖输入列"},
-		{"std window too small", `ts_std(close, 1)`, "2～5000"},
-		{"skew window too small", `ts_skew(close, 2)`, "3～5000"},
+		{"std window too small", `ts_std(close, 1)`, "2～100000"},
+		{"skew window too small", `ts_skew(close, 2)`, "3～100000"},
 		{"quantile out of range", `ts_quantile(close, 20, 1.5)`, "0～1 之间的常量"},
 		{"quantile not constant", `ts_quantile(close, 20, volume)`, "0～1 之间的常量"},
 		{"sma m not less than n", `sma(close, 5, 5)`, "m 必须小于 n"},
@@ -84,8 +84,8 @@ func TestTypeAndNameChecks(t *testing.T) {
 		{"bool output", `close > 1`, "输出必须是数值"},
 		{"bool constant output", `true`, "输出必须是数值"},
 		{"huge integer literal", `close * 99999999999999999`, "超出范围"},
-		{"lookback overflow", `ts_mean(ts_mean(close, 3000), 3000)`, "超过上限 5000"},
-		{"recursive lookback overflow", `ema(close, 5000)`, "超过上限 5000"},
+		{"lookback overflow", `ts_mean(ts_mean(close, 60000), 60000)`, "超过上限 100000"},
+		{"recursive lookback overflow", `ema(close, 100000)`, "超过上限 100000"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
@@ -59,6 +60,17 @@ type Window struct {
 	mu        sync.RWMutex
 	series    map[seriesKey]*series
 	bySubject map[string][]string // 标的 -> 排好序的 tag
+
+	// 读租约的观测（设计 4.1「读租约」）：租约只能覆盖单次计算，长期持有会让旧一代数组一直驻留。
+	leases     atomic.Int64
+	peakHeld   atomic.Int64 // 释放过的租约里持有最久的一次（纳秒）
+	warnAfter  time.Duration
+	onSlowHold func(held time.Duration)
+}
+
+// SetLeaseWarn 设置租约持有时长的告警：释放时持有超过 after 就调用 fn。窗口建好后、开始计算前调用一次。
+func (w *Window) SetLeaseWarn(after time.Duration, fn func(held time.Duration)) {
+	w.warnAfter, w.onSlowHold = after, fn
 }
 
 // New 创建窗口。fields 是要保留的数值字段（INT、BOOL 转成 float64）。
@@ -117,18 +129,44 @@ type Stats struct {
 	Series int
 	Rows   int
 	Bytes  int64
+	// Leases 是现在还没释放的读租约数；PeakLeaseHeld 是释放过的租约里持有最久的一次。
+	Leases        int
+	PeakLeaseHeld time.Duration
 }
 
 // Stats 返回窗口当前的序列数、行数与占用字节数。
 func (w *Window) Stats() Stats {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
-	st := Stats{Series: len(w.series)}
+	st := Stats{Series: len(w.series), Leases: int(w.leases.Load()), PeakLeaseHeld: time.Duration(w.peakHeld.Load())}
 	for _, s := range w.series {
 		st.Rows += s.n
 		st.Bytes += int64(cap(s.filled)) * int64(len(w.fields)*8+1)
 	}
 	return st
+}
+
+// FilledRuns 返回窗口内最长连续填充行不少于 minRows 的标的及其连续填充的根数（一个标的有多个 series_tag 时取最长的）。
+// 用来发现长缺口：缺失行只在之后有真实数据时才写，所以长缺口出现在窗口中间，直到滚出窗口之前填充值一直参与计算（设计 3.4）。
+func (w *Window) FilledRuns(minRows int) map[string]int {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	out := map[string]int{}
+	for key, s := range w.series {
+		run, longest := 0, 0
+		for i := s.start; i < s.start+s.n; i++ {
+			if s.filled[i] {
+				run++
+				longest = max(longest, run)
+			} else {
+				run = 0
+			}
+		}
+		if longest >= minRows && longest > out[key.subject] {
+			out[key.subject] = longest
+		}
+	}
+	return out
 }
 
 // Subjects 返回窗口里有数据的标的（已排序）。
@@ -167,6 +205,29 @@ func (w *Window) Latest(subject string) (time.Time, bool) {
 }
 
 // ---------------------------------------------------------------- 载入
+
+// Retain 只保留名单里的标的，其余标的的序列从窗口里移除（标的被移出集合之后释放它们占的内存，设计 6.2）。返回移除的标的数。
+// 已经抓到的读租约不受影响，数组由 GC 在租约释放后回收。
+func (w *Window) Retain(subjects []string) int {
+	keep := make(map[string]struct{}, len(subjects))
+	for _, s := range subjects {
+		keep[s] = struct{}{}
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	removed := 0
+	for subject, tags := range w.bySubject {
+		if _, ok := keep[subject]; ok {
+			continue
+		}
+		for _, tag := range tags {
+			delete(w.series, seriesKey{subject, tag})
+		}
+		delete(w.bySubject, subject)
+		removed++
+	}
+	return removed
+}
 
 // Load 从本地存储载入标的各序列最近 Lookback 根；已有的序列整体替换。没有本地数据的标的不在窗口里。
 func (w *Window) Load(ctx context.Context, store *seriesstore.Store, subjects []string) error {
@@ -413,11 +474,37 @@ type View struct {
 	Fields    []string
 	fieldIdx  map[string]int
 	bySubject map[string][]SeriesView
+
+	// win 与 acquired 只在来自窗口的租约上有值；Release 之后清空。
+	win      *Window
+	acquired time.Time
+	released atomic.Bool
+}
+
+// Release 结束这次读租约，调用方在用完视图（本次计算结束）后调用，可重复调用。
+// 持有超过 SetLeaseWarn 设置的时长会触发告警回调。来自磁盘读取的视图没有租约，调用无效果。
+func (v *View) Release() {
+	if v == nil || v.win == nil || !v.released.CompareAndSwap(false, true) {
+		return
+	}
+	w := v.win
+	held := time.Since(v.acquired)
+	w.leases.Add(-1)
+	for {
+		peak := w.peakHeld.Load()
+		if int64(held) <= peak || w.peakHeld.CompareAndSwap(peak, int64(held)) {
+			break
+		}
+	}
+	if w.warnAfter > 0 && held > w.warnAfter && w.onSlowHold != nil {
+		w.onSlowHold(held)
+	}
 }
 
 // Acquire 抓取标的各序列截至 endSec（含）的视图。窗口里没有的标的不在视图里。
 func (w *Window) Acquire(subjects []string, endSec int64) *View {
-	v := &View{Step: w.step, Fields: w.fields, fieldIdx: w.index, bySubject: make(map[string][]SeriesView, len(subjects))}
+	v := &View{Step: w.step, Fields: w.fields, fieldIdx: w.index, bySubject: make(map[string][]SeriesView, len(subjects)), win: w, acquired: time.Now()}
+	w.leases.Add(1)
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	for _, subject := range subjects {

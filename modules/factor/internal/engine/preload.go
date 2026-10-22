@@ -2,8 +2,12 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,9 +44,26 @@ type preloader struct {
 	onReady func(setID string)
 	kick    chan struct{}
 
-	// prepared 记录每个集合预载成功时的回看根数：目录里的因子变了回看更长就要重新预载（窗口要变长）。
+	// prepared 记录每个集合预载成功时的状态：目录里的因子变了回看更长、集合的标的列表变了，都要重新预载（设计 6.2 移除标的）。
 	mu       sync.Mutex
-	prepared map[string]int
+	prepared map[string]preparedState
+}
+
+// preparedState 是集合预载成功时的回看根数和标的范围的指纹。
+type preparedState struct {
+	lookback int
+	scope    string
+}
+
+// scopeOf 是集合标的范围的指纹：只列出标的的集合看标的列表；全部标的的集合不看（标的清单来自数据集，由重启或 init 刷新）。
+func scopeOf(set domain.EngineSet) string {
+	if set.Set.SubjectMode != domain.SubjectModeInclude {
+		return set.Set.SubjectMode
+	}
+	subjects := append([]string(nil), set.Set.Subjects...)
+	sort.Strings(subjects)
+	sum := sha256.Sum256([]byte(strings.Join(subjects, "\x00")))
+	return set.Set.SubjectMode + ":" + hex.EncodeToString(sum[:8])
 }
 
 // Ready 报告集合是否已经预载（窗口就绪）：生命周期检查用。
@@ -53,16 +74,17 @@ func (p *preloader) Ready(setID string) bool {
 	return ok
 }
 
-func (p *preloader) preparedLookback(setID string) (int, bool) {
+// upToDate 报告集合是否已经按当前的回看和标的范围预载好。
+func (p *preloader) upToDate(set domain.EngineSet) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	n, ok := p.prepared[setID]
-	return n, ok
+	state, ok := p.prepared[set.Set.SetID]
+	return ok && state.lookback >= maxLookbackOf(set) && state.scope == scopeOf(set)
 }
 
-func (p *preloader) markPrepared(setID string, lookback int) {
+func (p *preloader) markPrepared(set domain.EngineSet) {
 	p.mu.Lock()
-	p.prepared[setID] = lookback
+	p.prepared[set.Set.SetID] = preparedState{lookback: maxLookbackOf(set), scope: scopeOf(set)}
 	p.mu.Unlock()
 }
 
@@ -72,13 +94,13 @@ func (p *preloader) PrepareSet(ctx context.Context, setID string) error {
 	if lookup != SetFound {
 		return fmt.Errorf("因子集 %s 不在目录里", setID)
 	}
-	if lookback, ok := p.preparedLookback(setID); ok && lookback >= maxLookbackOf(set) {
+	if p.upToDate(set) {
 		return nil
 	}
 	if err := p.prepare(ctx, set); err != nil {
 		return err
 	}
-	p.markPrepared(setID, maxLookbackOf(set))
+	p.markPrepared(set)
 	if p.onReady != nil {
 		p.onReady(setID)
 	}
@@ -86,7 +108,7 @@ func (p *preloader) PrepareSet(ctx context.Context, setID string) error {
 }
 
 func newPreloader(sets preloadCatalog, source SourceDataset, data preloadData, active func() bool, onReady func(string)) *preloader {
-	return &preloader{sets: sets, source: source, data: data, active: active, onReady: onReady, kick: make(chan struct{}, 1), prepared: map[string]int{}}
+	return &preloader{sets: sets, source: source, data: data, active: active, onReady: onReady, kick: make(chan struct{}, 1), prepared: map[string]preparedState{}}
 }
 
 // Kick 让预载循环尽快检查一次，不阻塞。引擎成为活动引擎、目录变化时调用。
@@ -136,7 +158,7 @@ func (p *preloader) once(ctx context.Context) {
 		if lookup != SetFound {
 			continue
 		}
-		if lookback, ok := p.preparedLookback(setID); ok && lookback >= maxLookbackOf(set) {
+		if p.upToDate(set) {
 			continue
 		}
 		if err := p.prepare(ctx, set); err != nil && ctx.Err() == nil {
@@ -147,7 +169,7 @@ func (p *preloader) once(ctx context.Context) {
 			}
 			continue
 		}
-		p.markPrepared(setID, maxLookbackOf(set))
+		p.markPrepared(set)
 		if p.onReady != nil {
 			p.onReady(setID)
 		}

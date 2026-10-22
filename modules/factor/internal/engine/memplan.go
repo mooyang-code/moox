@@ -58,6 +58,23 @@ func PlanMemory(total int64, cpus, sets int, blockCache int64) MemoryPlan {
 	return plan
 }
 
+// WindowEstimate 是按回看数量 N 估算的窗口内存（设计 8.1，决定 21）：序列数 × (N + 余量) × (数值字段数 × 8 + 1) 字节，
+// 与 serieswindow.BytesPerSeries 一致。headroom 为 0 时取窗口长度的 1/4（至少 16 根）。
+func WindowEstimate(series, lookback, numericFields, headroom int) int64 {
+	if headroom <= 0 {
+		headroom = max(lookback/4, 16)
+	}
+	return int64(series) * int64(lookback+headroom) * int64(numericFields*8+1)
+}
+
+// CheckWindowEstimate 把窗口内存估算与建议的窗口上限比较，超过时给出警告（空串表示放得下）。
+func (p MemoryPlan) CheckWindowEstimate(estimate int64) string {
+	if estimate <= p.Window {
+		return ""
+	}
+	return fmt.Sprintf("窗口内存估算 %s，超过建议的窗口上限 %s：调小 window.lookback、减少标的数，或加内存", formatBytes(estimate), formatBytes(p.Window))
+}
+
 // Summary 是供人看的多行说明。
 func (p MemoryPlan) Summary() string {
 	var b strings.Builder

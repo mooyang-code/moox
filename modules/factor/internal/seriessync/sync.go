@@ -28,8 +28,18 @@ type Storage interface {
 type Spec struct {
 	Source seriesstore.Source
 	Fields []seriesstore.Field
-	// Lookback 是本地还没有某个标的时一次性拉取的根数（集合内各因子的最大回看根数）。
+	// Lookback 是本地还没有某个标的时一次性拉取的根数（回看数量 N）。
 	Lookback int
+	// Subjects 非空时是集合的标的范围：变更跟进只处理范围内的标的，被移出集合的标的不再同步（设计 6.2）。nil 表示不过滤。
+	Subjects map[string]struct{}
+}
+
+func (s Spec) inScope(subject string) bool {
+	if s.Subjects == nil {
+		return true
+	}
+	_, ok := s.Subjects[subject]
+	return ok
 }
 
 // Names 是数据源字段名。
@@ -52,6 +62,77 @@ type Syncer struct {
 	BatchSubjects int
 	// ChangePageSize 是每次读取变更日志的条数。
 	ChangePageSize int
+
+	// pulled 记录最近由拉取写入本地的区间及拉取前的变更日志链头位置 H0（设计 5.2「变更跟进的规则」第 1 条）。
+	pulledMu sync.Mutex
+	pulled   map[seriesstore.Source]map[string][]pulledSpan
+}
+
+// pulledSpan 是一次拉取覆盖的区间 [from, to)：拉取读到的行至少反映了序号不超过 h0 的全部变更。
+type pulledSpan struct {
+	from, to    time.Time
+	h0          uint64
+	node, store string
+}
+
+// maxPulledPerSubject 限制每个标的保留的拉取记录数（跟进正常推进时每次都会清理，这只是防止跟进长期停摆时无限增长）。
+const maxPulledPerSubject = 256
+
+func (s *Syncer) notePulled(src seriesstore.Source, subject string, sp pulledSpan) {
+	s.pulledMu.Lock()
+	defer s.pulledMu.Unlock()
+	if s.pulled == nil {
+		s.pulled = map[seriesstore.Source]map[string][]pulledSpan{}
+	}
+	bySubject := s.pulled[src]
+	if bySubject == nil {
+		bySubject = map[string][]pulledSpan{}
+		s.pulled[src] = bySubject
+	}
+	list := append(bySubject[subject], sp)
+	if len(list) > maxPulledPerSubject {
+		list = list[len(list)-maxPulledPerSubject:]
+	}
+	bySubject[subject] = list
+}
+
+// coveredByPull 判断序号为 seq 的变更区间 [from, to) 是否已经被一次拉取反映：拉取前的链头位置不小于该变更的序号，
+// 并且拉取覆盖了整个区间。位点之后发生的修正（序号大于 H0）不会被判为已反映。
+func (s *Syncer) coveredByPull(src seriesstore.Source, subject string, seq uint64, cursor storageio.ChangeCursor, from, to time.Time) bool {
+	s.pulledMu.Lock()
+	defer s.pulledMu.Unlock()
+	for _, sp := range s.pulled[src][subject] {
+		if sp.node == cursor.NodeID && sp.store == cursor.StoreID && sp.h0 >= seq && !sp.from.After(from) && !sp.to.Before(to) {
+			return true
+		}
+	}
+	return false
+}
+
+// prunePulled 清掉已经不可能再用到的拉取记录：同步位点越过 H0 之后读不到序号更小的变更；身份变了的记录作废。
+func (s *Syncer) prunePulled(src seriesstore.Source, cursor storageio.ChangeCursor) {
+	s.pulledMu.Lock()
+	defer s.pulledMu.Unlock()
+	bySubject := s.pulled[src]
+	for subject, list := range bySubject {
+		kept := list[:0]
+		for _, sp := range list {
+			if sp.node == cursor.NodeID && sp.store == cursor.StoreID && sp.h0 > cursor.Sequence {
+				kept = append(kept, sp)
+			}
+		}
+		if len(kept) == 0 {
+			delete(bySubject, subject)
+		} else {
+			bySubject[subject] = kept
+		}
+	}
+}
+
+func (s *Syncer) clearPulled(src seriesstore.Source) {
+	s.pulledMu.Lock()
+	defer s.pulledMu.Unlock()
+	delete(s.pulled, src)
 }
 
 func (s *Syncer) workers() int       { return max(s.Workers, 1) }
@@ -80,9 +161,61 @@ type PullResult struct {
 // 缺的周期在写入时按字段填充规则写成缺失行。一次拉取的所有标的在同一个本地 batch 里提交。
 func (s *Syncer) Pull(ctx context.Context, spec Spec, subjects []string, end time.Time) (PullResult, error) {
 	res := PullResult{Written: map[string]seriesstore.WriteResult{}}
-	step, err := seriesstore.Step(spec.Source.Freq)
+	staged, err := s.PullStaged(ctx, spec, subjects, end)
 	if err != nil {
 		return res, err
+	}
+	res.Failed = staged.Failed
+	if len(staged.Writes) > 0 {
+		written, err := staged.Commit(ctx, staged.Writes)
+		if err != nil {
+			return res, err
+		}
+		res.Written = written
+	}
+	return res, nil
+}
+
+// StagedPull 是已经从 Storage 取回、还没写进本地存储的一次拉取：调用方可以先拿 Writes 里的行更新内存窗口、触发计算，
+// 再提交写盘（设计 5.2，决定 25 实时尾部并行落盘）。
+type StagedPull struct {
+	// Writes 是要写入本地的行（按标的排序）。Failed 是读取失败的标的（本期按失败处理，之后补算）。
+	Writes []seriesstore.SubjectWrite
+	Failed []string
+
+	syncer *Syncer
+	spec   Spec
+	end    time.Time
+	h0     *storageio.ChangeCursor
+}
+
+// Commit 把 writes（Writes 的全部或一部分）写进本地存储，同一个 batch 提交，并记下这些区间已被这次拉取反映。
+func (sp *StagedPull) Commit(ctx context.Context, writes []seriesstore.SubjectWrite) (map[string]seriesstore.WriteResult, error) {
+	out := map[string]seriesstore.WriteResult{}
+	if len(writes) == 0 {
+		return out, nil
+	}
+	results, err := sp.syncer.Store.WriteBatch(ctx, sp.spec.Source, writes, seriesstore.WriteOptions{FillGaps: true})
+	if err != nil {
+		return nil, fmt.Errorf("%w: 写入本地时序存储 %s：%v", storageio.ErrInfra, sp.spec.Source, err)
+	}
+	for _, r := range results {
+		out[r.Subject] = r
+	}
+	if sp.h0 != nil {
+		for _, w := range writes {
+			sp.syncer.notePulled(sp.spec.Source, w.Subject, pulledSpan{from: w.From, to: sp.end, h0: sp.h0.Sequence, node: sp.h0.NodeID, store: sp.h0.StoreID})
+		}
+	}
+	return out, nil
+}
+
+// PullStaged 做 Pull 的取数部分，不写本地存储。
+func (s *Syncer) PullStaged(ctx context.Context, spec Spec, subjects []string, end time.Time) (*StagedPull, error) {
+	staged := &StagedPull{syncer: s, spec: spec}
+	step, err := seriesstore.Step(spec.Source.Freq)
+	if err != nil {
+		return nil, err
 	}
 	end = end.UTC()
 	byFrom := map[time.Time][]string{}
@@ -90,7 +223,7 @@ func (s *Syncer) Pull(ctx context.Context, spec Spec, subjects []string, end tim
 		from := end.Add(-time.Duration(max(spec.Lookback, 1)) * step)
 		b, ok, err := s.Store.Bounds(spec.Source, subject)
 		if err != nil {
-			return res, err
+			return nil, err
 		}
 		if ok {
 			from = b.Latest.Add(step)
@@ -123,6 +256,15 @@ func (s *Syncer) Pull(ctx context.Context, spec Spec, subjects []string, end tim
 		from    time.Time
 		rows    *seriesstore.Columns
 		err     error
+	}
+	// 拉取前先取变更日志的链头位置 H0：之后读到的行至少反映了序号不超过 H0 的全部变更，跟进据此跳过已反映的变更。
+	// 取不到时不记录，跟进按旧办法比对重拉，不影响正确性。
+	var h0 *storageio.ChangeCursor
+	if len(jobs) > 0 {
+		if head, err := s.Storage.ReadDatasetChanges(ctx, spec.Source.SpaceID, spec.Source.DatasetID, nil, true, 0); err == nil {
+			c := head.Next
+			h0 = &c
+		}
 	}
 	results := make(chan fetched, len(subjects))
 	work := make(chan job)
@@ -171,23 +313,17 @@ func (s *Syncer) Pull(ctx context.Context, spec Spec, subjects []string, end tim
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return res, err
+		return nil, err
 	}
-	if len(writes) > 0 {
-		sort.Slice(writes, func(i, j int) bool { return writes[i].Subject < writes[j].Subject })
-		results, err := s.Store.WriteBatch(ctx, spec.Source, writes, seriesstore.WriteOptions{FillGaps: true})
-		if err != nil {
-			return res, fmt.Errorf("%w: 写入本地时序存储 %s：%v", storageio.ErrInfra, spec.Source, err)
-		}
-		for _, r := range results {
-			res.Written[r.Subject] = r
-		}
-	}
+	sort.Slice(writes, func(i, j int) bool { return writes[i].Subject < writes[j].Subject })
+	staged.Writes = writes
+	staged.end = end
+	staged.h0 = h0
 	for subject := range failed {
-		res.Failed = append(res.Failed, subject)
+		staged.Failed = append(staged.Failed, subject)
 	}
-	sort.Strings(res.Failed)
-	return res, nil
+	sort.Strings(staged.Failed)
+	return staged, nil
 }
 
 // ---------------------------------------------------------------- 变更日志
@@ -228,6 +364,7 @@ func (s *Syncer) Baseline(ctx context.Context, src seriesstore.Source) (storagei
 	if err := s.Store.SetSyncCursor(src, encodeCursor(head.Next)); err != nil {
 		return storageio.ChangeCursor{}, err
 	}
+	s.clearPulled(src)
 	return head.Next, nil
 }
 
@@ -237,6 +374,20 @@ type FollowResult struct {
 	Applied map[string]seriesstore.WriteResult
 	// Gap 为真表示同步位点早于日志保留起点或身份对不上：本数据源要走对账。
 	Gap bool
+	// Stats 是本次跟进的统计，用来观察跟进的开销。
+	Stats FollowStats
+}
+
+// FollowStats 是一次跟进的统计。
+type FollowStats struct {
+	// Pages 是读取的变更日志页数；Changes 是读到的变更条数。
+	Pages, Changes int
+	// Skipped 是因为已被拉取反映而跳过的（标的，区间）数；OutOfScope 是因标的已不在集合内而忽略的数。
+	Skipped, OutOfScope int
+	// Refetched 是需要重拉比对的（标的，区间）数；Replaced 是比对后内容不同、整段替换的数。
+	Refetched, Replaced int
+	// Requests 是向 Storage 发出的请求数（含变更日志页与窗口读取）。
+	Requests int
 }
 
 // Follow 从同步位点之后按序读取 Storage 的行变更，对本地已有的区间重拉并整段替换；位点随写入原子推进。
@@ -252,17 +403,22 @@ func (s *Syncer) Follow(ctx context.Context, spec Spec) (FollowResult, error) {
 	}
 	for {
 		page, err := s.Storage.ReadDatasetChanges(ctx, spec.Source.SpaceID, spec.Source.DatasetID, &cursor, false, s.pageSize())
+		res.Stats.Requests++
 		if err != nil {
 			return res, err
 		}
 		if page.Gap {
 			res.Gap = true
+			s.clearPulled(spec.Source)
 			return res, nil
 		}
-		applied, err := s.applyChanges(ctx, spec, page, encodeCursor(page.Next))
+		res.Stats.Pages++
+		res.Stats.Changes += len(page.Changes)
+		applied, err := s.applyChanges(ctx, spec, page, encodeCursor(page.Next), &res.Stats)
 		if err != nil {
 			return res, err
 		}
+		s.prunePulled(spec.Source, page.Next)
 		for subject, r := range applied {
 			if prev, seen := res.Applied[subject]; seen {
 				r.Changed = unionSpan(prev.Changed, r.Changed)
@@ -293,9 +449,9 @@ func unionSpan(a, b seriesstore.Span) seriesstore.Span {
 	return out
 }
 
-// applyChanges 处理一页变更：按标的合并区间，重拉 Storage、与本地比对，不同的才整段替换；
-// 位点与这一页的写入同一个 batch 提交，没有写入时单独推进位点。
-func (s *Syncer) applyChanges(ctx context.Context, spec Spec, page storageio.Changes, next []byte) (map[string]seriesstore.WriteResult, error) {
+// applyChanges 处理一页变更：先跳过已被拉取反映的、标的已不在集合内的，其余按标的合并区间，批量重拉 Storage、与本地比对，
+// 不同的才整段替换；位点与这一页的写入同一个 batch 提交，没有写入时单独推进位点。
+func (s *Syncer) applyChanges(ctx context.Context, spec Spec, page storageio.Changes, next []byte, stats *FollowStats) (map[string]seriesstore.WriteResult, error) {
 	step, err := seriesstore.Step(spec.Source.Freq)
 	if err != nil {
 		return nil, err
@@ -309,15 +465,24 @@ func (s *Syncer) applyChanges(ctx context.Context, spec Spec, page storageio.Cha
 			if r.Freq != spec.Source.Freq {
 				continue
 			}
-			spans[r.Subject] = append(spans[r.Subject], seriesstore.Span{From: r.Start, To: r.End.Add(step)})
+			if !spec.inScope(r.Subject) {
+				stats.OutOfScope++
+				continue
+			}
+			span := seriesstore.Span{From: r.Start, To: r.End.Add(step)}
+			if s.coveredByPull(spec.Source, r.Subject, change.Sequence, page.Next, span.From, span.To) {
+				stats.Skipped++
+				continue
+			}
+			spans[r.Subject] = append(spans[r.Subject], span)
 		}
 	}
-	var writes []seriesstore.SubjectWrite
 	subjects := make([]string, 0, len(spans))
 	for subject := range spans {
 		subjects = append(subjects, subject)
 	}
 	sort.Strings(subjects)
+	var jobs []refetchJob
 	for _, subject := range subjects {
 		b, ok, err := s.Store.Bounds(spec.Source, subject)
 		if err != nil {
@@ -338,15 +503,15 @@ func (s *Syncer) applyChanges(ctx context.Context, spec Spec, page storageio.Cha
 			if !lo.Before(hi) {
 				continue
 			}
-			write, changed, err := s.refetch(ctx, spec, subject, lo, hi)
-			if err != nil {
-				return nil, err
-			}
-			if changed {
-				writes = append(writes, write)
-			}
+			jobs = append(jobs, refetchJob{subject: subject, lo: lo, hi: hi})
 		}
 	}
+	stats.Refetched += len(jobs)
+	writes, err := s.refetchBatch(ctx, spec, jobs, stats)
+	if err != nil {
+		return nil, err
+	}
+	stats.Replaced += len(writes)
 	out := map[string]seriesstore.WriteResult{}
 	opts := seriesstore.WriteOptions{FillGaps: true, Cursor: next, RecordPending: true, PendingReason: "storage_change"}
 	if len(writes) == 0 {
@@ -369,6 +534,117 @@ func (s *Syncer) applyChanges(ctx context.Context, spec Spec, page storageio.Cha
 		out[w.Subject] = r
 	}
 	return out, nil
+}
+
+// refetchJob 是一个需要重拉比对的（标的，区间 [lo, hi)）。
+type refetchJob struct {
+	subject string
+	lo, hi  time.Time
+}
+
+// refetchBatch 批量重拉并与本地比对（设计 5.2「变更跟进的规则」第 2 条）：区间相同的标的合并成一批，每批最多 batchSubjects 个标的一次请求，
+// 批之间按 workers 并行。返回内容与本地不同、要整段替换的写入。
+// 保留期之外的数据 Storage 已经清理，本地的历史不能被「Storage 没有」改写成填充行，所以只重拉 Storage 现存的区间。
+func (s *Syncer) refetchBatch(ctx context.Context, spec Spec, jobs []refetchJob, stats *FollowStats) ([]seriesstore.SubjectWrite, error) {
+	if len(jobs) == 0 {
+		return nil, nil
+	}
+	type key struct{ lo, hi time.Time }
+	groups := map[key][]string{}
+	var keys []key
+	for _, j := range jobs {
+		k := key{j.lo, j.hi}
+		if _, seen := groups[k]; !seen {
+			keys = append(keys, k)
+		}
+		groups[k] = append(groups[k], j.subject)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if !keys[i].lo.Equal(keys[j].lo) {
+			return keys[i].lo.Before(keys[j].lo)
+		}
+		return keys[i].hi.Before(keys[j].hi)
+	})
+	type task struct {
+		k        key
+		subjects []string
+		frames   map[string]*storageio.Frame
+		err      error
+	}
+	var tasks []*task
+	for _, k := range keys {
+		group := groups[k]
+		sort.Strings(group)
+		for i := 0; i < len(group); i += s.batchSubjects() {
+			tasks = append(tasks, &task{k: k, subjects: group[i:min(i+s.batchSubjects(), len(group))]})
+		}
+	}
+	stats.Requests += len(tasks)
+	work := make(chan *task)
+	var wg sync.WaitGroup
+	for i := 0; i < min(s.workers(), len(tasks)); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range work {
+				t.frames, t.err = s.Storage.ReadWindow(ctx, storageio.ReadRequest{
+					SpaceID: spec.Source.SpaceID, DatasetID: spec.Source.DatasetID, Freq: spec.Source.Freq,
+					Subjects: t.subjects, Start: t.k.lo, End: t.k.hi, Columns: spec.names(),
+				})
+			}
+		}()
+	}
+	for _, t := range tasks {
+		work <- t
+	}
+	close(work)
+	wg.Wait()
+	var writes []seriesstore.SubjectWrite
+	for _, t := range tasks {
+		if t.err != nil {
+			return nil, t.err
+		}
+		for _, subject := range t.subjects {
+			remote, err := FrameToColumns(spec.Fields, t.frames[subject])
+			if err != nil {
+				return nil, err
+			}
+			lo := t.k.lo
+			// Storage 的行不是从区间起点开始（或区间内一行都没有）：可能是被修正删掉了，也可能是保留期已经清理了。
+			// 只有这种少见的情形才单独查一次 Storage 的最早时间，来区分；正常的比对不需要。
+			if remote.Len() == 0 || time.Unix(remote.Times[0], 0).UTC().After(lo) {
+				stats.Requests++
+				earliest, has, err := s.Storage.EarliestPeriod(ctx, spec.Source.SpaceID, spec.Source.DatasetID, spec.Source.Freq, []string{subject}, spec.names())
+				if err != nil {
+					return nil, err
+				}
+				if !has {
+					continue // Storage 完全没有这个标的的数据：本地不动
+				}
+				if earliest.After(lo) {
+					lo = earliest
+				}
+				if !lo.Before(t.k.hi) {
+					continue
+				}
+			}
+			local, err := s.Store.ReadRange(ctx, spec.Source, []string{subject}, lo, t.k.hi)
+			if err != nil {
+				return nil, err
+			}
+			if sameRealRows(local[subject], remote) {
+				continue
+			}
+			writes = append(writes, seriesstore.SubjectWrite{Subject: subject, From: lo, To: t.k.hi, Rows: remote})
+		}
+	}
+	sort.SliceStable(writes, func(i, j int) bool {
+		if writes[i].Subject != writes[j].Subject {
+			return writes[i].Subject < writes[j].Subject
+		}
+		return writes[i].From.Before(writes[j].From)
+	})
+	return writes, nil
 }
 
 func mergeSpans(in []seriesstore.Span) []seriesstore.Span {
