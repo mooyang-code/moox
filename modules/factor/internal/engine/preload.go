@@ -82,6 +82,13 @@ func (p *preloader) upToDate(set domain.EngineSet) bool {
 	return ok && state.lookback >= maxLookbackOf(set) && state.scope == scopeOf(set)
 }
 
+// unmark 在重新预载之前清掉集合的成功记录：重新预载失败时集合不能还当作已就绪（旧的标的列表缓存会让后续重试被跳过）。
+func (p *preloader) unmark(setID string) {
+	p.mu.Lock()
+	delete(p.prepared, setID)
+	p.mu.Unlock()
+}
+
 func (p *preloader) markPrepared(set domain.EngineSet) {
 	p.mu.Lock()
 	p.prepared[set.Set.SetID] = preparedState{lookback: maxLookbackOf(set), scope: scopeOf(set)}
@@ -97,6 +104,7 @@ func (p *preloader) PrepareSet(ctx context.Context, setID string) error {
 	if p.upToDate(set) {
 		return nil
 	}
+	p.unmark(setID)
 	if err := p.prepare(ctx, set); err != nil {
 		return err
 	}
@@ -161,6 +169,7 @@ func (p *preloader) once(ctx context.Context) {
 		if p.upToDate(set) {
 			continue
 		}
+		p.unmark(setID)
 		if err := p.prepare(ctx, set); err != nil && ctx.Err() == nil {
 			if errors.Is(err, localdata.ErrChangeGap) {
 				log.ErrorContextf(ctx, "factor_preload_blocked set_id=%s error=%v（请执行 moox-factor-engine reconcile 对账）", setID, err)

@@ -98,3 +98,24 @@ func TestLongGapThreshold(t *testing.T) {
 	require.Equal(t, 25, LongGapThreshold(time.Hour))
 	require.Equal(t, 3, LongGapThreshold(24*time.Hour), "日线按 3 期")
 }
+
+// 标的被移出集合期间 Storage 里的修正不会被跟进；重新加入时要先把本地保有的历史与 Storage 对账（审查意见 3）。
+func TestReaddedSubjectIsResynced(t *testing.T) {
+	fx := newFixture(t, mean3())
+	fx.data.cfg.Lookback = func(seriesstore.Source) int { return 10 }
+	fx.set.Set.SubjectMode = domain.SubjectModeInclude
+	fx.set.Set.Subjects = []string{"A", "B"}
+	fx.st.put("A", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	fx.st.put("B", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"A", "B"}))
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"A"}))
+
+	fx.st.put("B", 900, 5) // B 被移出期间发生的修正
+	_, err := fx.data.Follow(context.Background())
+	require.NoError(t, err) // 跟进过滤了 B，位点照常推进
+
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"A", "B"}))
+	got, err := fx.data.Store().ReadRange(context.Background(), startupSrc, []string{"B"}, at(5), at(6))
+	require.NoError(t, err)
+	require.Equal(t, 905.0, got["B"].ValueAt(got["B"].FieldIndex("close"), 0).F, "重新加入时补上了被移出期间的修正")
+}

@@ -129,6 +129,16 @@ func (s *Syncer) prunePulled(src seriesstore.Source, cursor storageio.ChangeCurs
 	}
 }
 
+// HasPulled 报告数据源下某标的是否还留有拉取记录（观测与测试用）。
+func (s *Syncer) HasPulled(src seriesstore.Source, subject string) bool {
+	s.pulledMu.Lock()
+	defer s.pulledMu.Unlock()
+	return len(s.pulled[src][subject]) > 0
+}
+
+// ClearPulled 清掉数据源的拉取记录：本地数据被拉取之外的途径覆盖（导入、对账）之后，不能再用「拉取已反映」跳过变更。
+func (s *Syncer) ClearPulled(src seriesstore.Source) { s.clearPulled(src) }
+
 func (s *Syncer) clearPulled(src seriesstore.Source) {
 	s.pulledMu.Lock()
 	defer s.pulledMu.Unlock()
@@ -815,6 +825,38 @@ func (s *Syncer) Reconcile(ctx context.Context, spec Spec, subjects []string, pr
 	}
 	res.Followed = follow.Applied
 	return res, nil
+}
+
+// Resync 对账指定标的在本地数据范围内与 Storage 保留期的重叠区间（不动同步位点）：标的重新加入集合时，
+// 它被移出期间 Storage 里的修正没有被跟进，本地保有的历史可能是旧值。内容不同的整段替换并记失效重算。
+func (s *Syncer) Resync(ctx context.Context, spec Spec, subjects []string) (map[string]seriesstore.WriteResult, error) {
+	step, err := seriesstore.Step(spec.Source.Freq)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]seriesstore.WriteResult{}
+	for _, subject := range subjects {
+		b, ok, err := s.Store.Bounds(spec.Source, subject)
+		if err != nil {
+			return out, err
+		}
+		if !ok {
+			continue
+		}
+		write, changed, err := s.refetch(ctx, spec, subject, b.Earliest, b.Latest.Add(step))
+		if err != nil {
+			return out, err
+		}
+		if !changed {
+			continue
+		}
+		r, err := s.Store.WriteBatch(ctx, spec.Source, []seriesstore.SubjectWrite{write}, seriesstore.WriteOptions{FillGaps: true, RecordPending: true, PendingReason: "resync"})
+		if err != nil {
+			return out, fmt.Errorf("%w: 重新对账写入本地 %s/%s：%v", storageio.ErrInfra, spec.Source, subject, err)
+		}
+		out[subject] = r[0]
+	}
+	return out, nil
 }
 
 // Backfill 把标的在本地最早一根之前的历史从 Storage 补到最多 bars 根（以本地最新一根往前数；Storage 保留期内有多少补多少）。

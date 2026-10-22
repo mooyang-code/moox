@@ -230,6 +230,10 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineSet, subjects []str
 	d.settleFlush(st)
 	st.set = set.Set
 	st.setIDv.Store(set.Set.SetID)
+	previous := make(map[string]struct{}, len(st.subjects))
+	for _, subject := range st.subjects {
+		previous[subject] = struct{}{}
+	}
 	st.spec = seriessync.Spec{Source: src, Fields: fields, Lookback: lookback}
 	if set.Set.SubjectMode == domain.SubjectModeInclude {
 		// 标的范围由集合列出：被移出集合的标的不再跟进变更（设计 6.2）。全部标的的集合不过滤。
@@ -305,6 +309,20 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineSet, subjects []str
 	}
 	if len(pull.Failed) > 0 && len(pull.Failed) == len(subjects) {
 		return fmt.Errorf("%w：所有标的同步失败", storageio.ErrInfra)
+	}
+	// 重新加入集合的标的：移出期间 Storage 里的修正没有被跟进，先把本地已有的历史与 Storage 对账（只在同一进程里见过它被移出时）。
+	if len(previous) > 0 {
+		var readded []string
+		for _, subject := range subjects {
+			if _, was := previous[subject]; !was {
+				readded = append(readded, subject)
+			}
+		}
+		if len(readded) > 0 {
+			if _, err := d.syncer.Resync(ctx, st.spec, readded); err != nil {
+				return fmt.Errorf("重新对账重新加入集合的标的：%w", err)
+			}
+		}
 	}
 	// 本地不足 N 根的标的从 Storage 往前补（保留期内有多少补多少，决定 24）；已经够的只是一次本地比对。
 	if short, err := d.shortOfLookback(st, subjects, lookback); err != nil {
@@ -639,6 +657,9 @@ type flushJob struct {
 	done     chan struct{}
 	subjects []string
 	err      error
+	// staged 与 writes 留着，落盘失败时下一次操作先原样重试一次。
+	staged *seriessync.StagedPull
+	writes []seriesstore.SubjectWrite
 }
 
 // flushTimeout 是一次后台落盘的上限。
@@ -668,7 +689,7 @@ func (d *Data) startFlush(ctx context.Context, st *source, staged *seriessync.St
 	if len(writes) == 0 {
 		return
 	}
-	job := &flushJob{done: make(chan struct{}), subjects: make([]string, len(writes))}
+	job := &flushJob{done: make(chan struct{}), subjects: make([]string, len(writes)), staged: staged, writes: writes}
 	for i, w := range writes {
 		job.subjects[i] = w.Subject
 	}
@@ -710,6 +731,18 @@ func (d *Data) settleFlush(st *source) {
 		return
 	}
 	log.Errorf("factor_flush_failed source=%s subjects=%d error=%v", st.spec.Source, len(job.subjects), job.err)
+	// 先原样重试一次：窗口里的行已经用来计算并发布了，能写成功就保持本地与已发布的结果一致，
+	// 之后 Storage 对这些行的修正（序号大于拉取前的链头位置）仍会被跟进重拉。重试也失败才丢掉没落盘的行。
+	if job.staged != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), flushTimeout)
+		_, retryErr := job.staged.Commit(ctx, job.writes)
+		cancel()
+		if retryErr == nil {
+			log.Infof("factor_flush_retry_ok source=%s subjects=%d", st.spec.Source, len(job.subjects))
+			return
+		}
+		log.Errorf("factor_flush_retry_failed source=%s error=%v", st.spec.Source, retryErr)
+	}
 	if st.window != nil {
 		for _, subject := range job.subjects {
 			if err := st.window.Reload(context.Background(), d.cfg.Store, subject); err != nil {
@@ -990,6 +1023,7 @@ func (d *Data) Reconcile(ctx context.Context, src seriesstore.Source, subjects [
 	if err != nil {
 		return res, err
 	}
+	d.syncer.ClearPulled(src)
 	if st.window != nil {
 		local, err := d.cfg.Store.Subjects(src)
 		if err != nil {
@@ -1040,6 +1074,7 @@ func (d *Data) WriteLocal(ctx context.Context, src seriesstore.Source, writes []
 	if err != nil {
 		return nil, err
 	}
+	d.syncer.ClearPulled(src) // 本地数据被拉取之外的途径覆盖了：不能再用「拉取已反映」跳过变更
 	if st.window != nil {
 		for _, r := range results {
 			if r.Changed.Empty() {
