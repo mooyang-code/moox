@@ -14,7 +14,7 @@ func TestPreloaderRepreparesWhenSubjectListChanges(t *testing.T) {
 	p := newPreloader(nil, nil, nil, nil, nil)
 	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1", SubjectMode: domain.SubjectModeInclude, Subjects: []string{"A", "B"}}}
 	require.False(t, p.upToDate(set))
-	p.markPrepared(set)
+	p.markPrepared(set, set.Set.Subjects)
 	require.True(t, p.upToDate(set))
 
 	reordered := set
@@ -26,7 +26,7 @@ func TestPreloaderRepreparesWhenSubjectListChanges(t *testing.T) {
 	require.False(t, p.upToDate(removed), "标的被移出后要重新预载")
 
 	all := domain.EngineSet{Set: domain.FactorSet{SetID: "s2", SubjectMode: domain.SubjectModeAll}}
-	p.markPrepared(all)
+	p.markPrepared(all, nil)
 	require.True(t, p.upToDate(all))
 }
 
@@ -74,4 +74,44 @@ func (includeSubjects) DatasetColumns(context.Context, string, string) ([]string
 }
 func (includeSubjects) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
 	return nil, nil
+}
+
+type recordingPrepare struct{ calls [][]string }
+
+func (r *recordingPrepare) Prepare(_ context.Context, _ domain.EngineSet, subjects []string) error {
+	r.calls = append(r.calls, append([]string(nil), subjects...))
+	return nil
+}
+
+type mutableSubjects struct{ list []string }
+
+func (m *mutableSubjects) DatasetColumns(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+func (m *mutableSubjects) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	return append([]string(nil), m.list...), nil
+}
+
+// 「全部标的」的集合：用户在数据集的标签里删除标的后，清单变了，下一轮预载要重新准备，窗口才会释放它（设计 6.2）。
+func TestPreloaderRepreparesWhenDatasetSubjectsChange(t *testing.T) {
+	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1", SubjectMode: domain.SubjectModeAll}}
+	source := &mutableSubjects{list: []string{"A", "B", "C"}}
+	data := &recordingPrepare{}
+	p := newPreloader(oneSet{set}, source, data, nil, nil)
+	ctx := context.Background()
+
+	p.once(ctx)
+	require.Equal(t, [][]string{{"A", "B", "C"}}, data.calls)
+	p.once(ctx)
+	require.Len(t, data.calls, 1, "清单没变，不重新预载")
+
+	source.list = []string{"A", "C"} // 用户把 B 在标签里设为删除状态
+	p.once(ctx)
+	require.Equal(t, [][]string{{"A", "B", "C"}, {"A", "C"}}, data.calls, "清单少了 B，重新预载，传入的是新清单")
+	p.once(ctx)
+	require.Len(t, data.calls, 2)
+
+	source.list = []string{"A", "C", "D"} // 新增标的同样会触发
+	p.once(ctx)
+	require.Len(t, data.calls, 3)
 }

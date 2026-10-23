@@ -235,12 +235,11 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineSet, subjects []str
 		previous[subject] = struct{}{}
 	}
 	st.spec = seriessync.Spec{Source: src, Fields: fields, Lookback: lookback}
-	if set.Set.SubjectMode == domain.SubjectModeInclude {
-		// 标的范围由集合列出：被移出集合的标的不再跟进变更（设计 6.2）。全部标的的集合不过滤。
-		st.spec.Subjects = make(map[string]struct{}, len(subjects))
-		for _, subject := range subjects {
-			st.spec.Subjects[subject] = struct{}{}
-		}
+	// 标的范围：集合列出的标的，或「全部标的」集合下数据集里状态为 active 的标的。被移出的标的（集合里去掉，或在数据集的标签里
+	// 删除）不再跟进变更（设计 6.2）；清单变化时预载会重新准备并刷新这个范围。
+	st.spec.Subjects = make(map[string]struct{}, len(subjects))
+	for _, subject := range subjects {
+		st.spec.Subjects[subject] = struct{}{}
 	}
 	st.types = seriessync.ValueTypes(columns)
 	st.numeric = numeric
