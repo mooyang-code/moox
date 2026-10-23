@@ -138,7 +138,7 @@ func TestInitSchemaIsRepeatableOnPopulatedDatabase(t *testing.T) {
 	}
 }
 
-// 缺少新表与触发器的旧库（版本 13）重放 InitSchema 后补齐，并从此开始计数。
+// 缺少新表与触发器的当前版本库重放 InitSchema 后补齐，并从此开始计数。
 func TestInitSchemaUpgradesDatabaseWithoutRevisionObjects(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)

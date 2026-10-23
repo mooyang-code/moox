@@ -590,3 +590,11 @@ git diff --check
 恢复其他服务时发现正式环境已部署 `feat/factor-dynamic-params` 的 `b875e7ff`，而该分支尚未进入本计划的 main 基线。因子库因此与首轮主线构建不一致。为保留已经上线的功能和数据，将 `b875e7ff` 合入当前 worktree，补齐动态调参、分类、成员别名、相关 API/权限和前端，再统一构建部署；没有重置因子库。冲突仅涉及 CLI 文档与服务目录黄金摘要，均保留两侧功能后解决。
 
 Access 重新签发的身份包包含完整外部验证密钥集合；安装时已将整组 `secrets/access/` 投影到两个 Access 单元并重新封存，避免新验证清单引用缺失文件。
+
+### 11.2 发布验收发现的既有 Storage 约束缺陷
+
+合入的生产版本中，Factor 为同一成员的输出列和参数列使用相同 `origin_id=member.Alias`，但 Storage 的 `t_dataset_columns` 仍对 `(space_id, dataset_id, origin_type, origin_id)` 强制唯一。这会阻止同成员的第二列创建，并导致现有数据中以列名代替成员来源的 8 列在 Factor 启动对账时失败。此问题可在空 SQLite 通过真实 Storage 服务测试复现，与云函数重命名无关，但会阻止本次正式环境验收。
+
+本次补齐最小修复：元数据 schema 版本升至 14，来源唯一性改为仅约束非 factor 列，保留列名唯一性；增加同成员两个输出与一个参数共存、默认 View 投影和字段来源仍唯一的回归测试。不增加兼容或自动迁移代码。生产在备份和停止写入后按新定义重建该元数据表，纠正 8 列及 View 属性副本；View 的列来源仍为列名，保留 hash/revision/index_id、因子库和全部结果行。
+
+云函数最终版本的线上验收已通过：44 个实例回读、租约保护的无副作用 Job、真实 SCF 出口探针、GC dry-run 及旧 RPC 拒绝；Collector、Monitor、采集流和 Web 已恢复就绪。待约束修复部署后完成最终全主机验收。

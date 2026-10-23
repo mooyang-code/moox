@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS t_schema_meta (
 );
 
 INSERT INTO t_schema_meta (c_key, c_value)
-VALUES ('schema_version', '13')
+VALUES ('schema_version', '14')
 ON CONFLICT(c_key) DO NOTHING;
 
 -- ************ Space ************
@@ -626,12 +626,15 @@ CREATE TABLE IF NOT EXISTS t_dataset_columns (
     CHECK (c_value_type IN ('string', 'int', 'double', 'bool', 'time', 'json', 'bytes')),
     CHECK (c_status IN ('active', 'disabled', 'building', 'archived', 'deleted')),
     FOREIGN KEY (c_space_id, c_dataset_id) REFERENCES t_datasets (c_space_id, c_dataset_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    UNIQUE (c_space_id, c_dataset_id, c_column_name),
-    UNIQUE (c_space_id, c_dataset_id, c_origin_type, c_origin_id)
+    UNIQUE (c_space_id, c_dataset_id, c_column_name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_dataset_columns_dataset ON t_dataset_columns (c_space_id, c_dataset_id, c_status);
 CREATE INDEX IF NOT EXISTS idx_t_dataset_columns_origin ON t_dataset_columns (c_space_id, c_origin_type, c_origin_id);
+-- 同一因子成员可以同时拥有多个输出列和参数列；字段与系统来源仍然唯一。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_t_dataset_columns_non_factor_origin
+ON t_dataset_columns (c_space_id, c_dataset_id, c_origin_type, c_origin_id)
+WHERE c_origin_type <> 'factor';
 
 CREATE TRIGGER IF NOT EXISTS trg_t_dataset_columns_mtime
 AFTER UPDATE ON t_dataset_columns

@@ -145,6 +145,58 @@ func TestFactorResultColumnUsesOriginFactorIDWithoutFactorEntity(t *testing.T) {
 	require.Equal(t, "bias", rsp.GetColumn().GetOriginId())
 }
 
+func TestFactorMemberCanOwnMultipleOutputsAndParameterColumns(t *testing.T) {
+	store, service, dataset := newFactorResultActivationFixture(t, "factor_result")
+	activateFactorResultFixture(t, service, dataset)
+	ctx := context.Background()
+	for _, item := range []struct{ name, kind string }{
+		{"bias_short", "output"}, {"bias_long", "output"}, {"Bias__window", "param"},
+	} {
+		column := &pb.DatasetColumn{
+			SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ColumnName: item.name,
+			OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR,
+			OriginId:   "Bias", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			Attributes: map[string]string{
+				"display_name": item.name, "factor_output": item.name, "origin_factor_id": "Bias",
+				"member_alias": "Bias", "column_kind": item.kind,
+			},
+		}
+		rsp, err := service.UpsertDatasetColumn(ctx, &pb.UpsertDatasetColumnReq{Column: column})
+		require.NoError(t, err)
+		require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+		require.Equal(t, "Bias", rsp.GetColumn().GetOriginId())
+	}
+	columns, _, err := store.ListDatasetColumns(ctx, dataset.GetSpaceId(), dataset.GetDatasetId(), nil)
+	require.NoError(t, err)
+	var memberColumns []string
+	for _, column := range columns {
+		if column.GetOriginId() == "Bias" {
+			memberColumns = append(memberColumns, column.GetColumnName())
+		}
+	}
+	require.ElementsMatch(t, []string{"bias_short", "bias_long", "Bias__window"}, memberColumns)
+	view, err := store.GetView(ctx, dataset.GetSpaceId(), "view_factor_btc_1m")
+	require.NoError(t, err)
+	var projectedColumns []string
+	for _, column := range view.GetColumns() {
+		if column.GetAttributes()["member_alias"] == "Bias" {
+			projectedColumns = append(projectedColumns, column.GetColumnName())
+			require.Equal(t, column.GetColumnName(), column.GetOriginId())
+			require.Equal(t, "Bias", column.GetAttributes()["origin_factor_id"])
+		}
+	}
+	require.ElementsMatch(t, memberColumns, projectedColumns)
+	// 字段来源仍然唯一；只允许因子成员拥有多列。
+	rsp, err := service.UpsertDatasetColumn(ctx, &pb.UpsertDatasetColumnReq{Column: &pb.DatasetColumn{
+		SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ColumnName: "close_alias",
+		OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD,
+		OriginId:   "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		Attributes: map[string]string{"display_name": "收盘副本"},
+	}})
+	require.NoError(t, err)
+	require.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+}
+
 func TestFactorResultDatasetAcceptsCarriedSourceColumns(t *testing.T) {
 	_, service, dataset := newFactorResultActivationFixture(t, "factor_result")
 	column := &pb.DatasetColumn{

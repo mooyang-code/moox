@@ -11,14 +11,14 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestMetadataSchemaV13Contract(t *testing.T) {
+func TestMetadataSchemaV14Contract(t *testing.T) {
 	sql, err := os.ReadFile("metadata.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(sql)
 	for _, want := range []string{
-		"VALUES ('schema_version', '13')",
+		"VALUES ('schema_version', '14')",
 		"CREATE TABLE IF NOT EXISTS t_tags (",
 		"CREATE TABLE IF NOT EXISTS t_subject_tags (",
 		"c_subject_tags_json TEXT NOT NULL DEFAULT '[]'",
@@ -93,7 +93,7 @@ func TestMetadataSchemaV13Contract(t *testing.T) {
 	}
 }
 
-func TestMetadataSchemaV13DDLExecutes(t *testing.T) {
+func TestMetadataSchemaV14DDLExecutes(t *testing.T) {
 	schema, err := os.ReadFile("metadata.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -112,8 +112,8 @@ func TestMetadataSchemaV13DDLExecutes(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT c_value FROM t_schema_meta WHERE c_key = 'schema_version'`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != "13" {
-		t.Fatalf("persisted schema version = %q, want 12", version)
+	if version != "14" {
+		t.Fatalf("persisted schema version = %q, want 14", version)
 	}
 	var foreignKeysEnabled int
 	if err := db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&foreignKeysEnabled); err != nil {
