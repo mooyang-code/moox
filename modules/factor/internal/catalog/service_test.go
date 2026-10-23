@@ -957,7 +957,7 @@ func (f *earliestPeriodFake) EarliestDatasetPeriod(_ context.Context, spaceID, d
 
 func (f *recalcFake) PrepareEnableBackfill(ctx context.Context, set domain.FactorSet, member domain.MemberDef, start, end time.Time) (store.RecalcJob, error) {
 	factor := member.Factor
-	stored, err := f.db.GetMember(ctx, set.SetID, factor.FactorID)
+	stored, err := f.db.GetMember(ctx, set.SetID, member.Alias)
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
@@ -971,8 +971,8 @@ func (f *recalcFake) PrepareEnableBackfill(ctx context.Context, set domain.Facto
 		prefix = "enable-"
 	}
 	return store.RecalcJob{
-		JobID: prefix + factor.FactorID, RequestID: prefix + factor.FactorID,
-		SetID: set.SetID, Members: []string{factor.FactorID}, Subjects: []string{"BTC-USDT"},
+		JobID: prefix + member.Alias, RequestID: prefix + member.Alias,
+		SetID: set.SetID, Members: []string{member.Alias}, Subjects: []string{"BTC-USDT"},
 		StartTime: start.Unix(), EndTime: end.Unix(), Status: store.RecalcStatusAccepted,
 	}, nil
 }
