@@ -21,7 +21,7 @@ type cliConfig struct {
 	FactorID   string
 	StartTime  time.Time
 	EndTime    time.Time
-	FactorIDs  []string
+	Members    []string
 	Subjects   []string
 	RequestID  string
 	RPCTarget  string
@@ -89,7 +89,7 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.StringVar(&cfg.RequestID, "request-id", "", "idempotent request id (generated when omitted)")
 		fs.StringVar(&start, "start", "", "inclusive start timestamp RFC3339")
 		fs.StringVar(&end, "end", "", "exclusive end timestamp RFC3339")
-		fs.Var((*listFlag)(&cfg.FactorIDs), "factor", "factor id (repeatable)")
+		fs.Var((*listFlag)(&cfg.Members), "member", "要补算的成员别名（可重复；不填为全部启用成员）")
 		fs.Var((*listFlag)(&cfg.Subjects), "subject", "subject id (repeatable)")
 	case "status":
 		fs.StringVar(&cfg.RPCTarget, "target", os.Getenv("MOOX_FACTOR_RPC_TARGET"), "FactorMgr tRPC target")

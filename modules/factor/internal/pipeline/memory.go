@@ -32,21 +32,21 @@ type MemoryEstimate struct {
 
 func (m MemoryEstimate) Total() int64 { return m.Read + m.Compute + m.Result + m.Assemble }
 
-// EstimateChunkMemory 在读取之前按定义、序列数（标的数 × 标签数的估计）、目标周期数与携带列数估算峰值内存。
-// 编译失败的定义不参与（它们本期按失败处理，不占计算内存）。
-func EstimateChunkMemory(factors []domain.FactorDef, series, periods, carryColumns int) (MemoryEstimate, error) {
+// EstimateChunkMemory 在读取之前按成员、序列数（标的数 × 标签数的估计）、目标周期数与携带列数估算峰值内存。
+// 编译失败的定义不参与（它们本期按失败处理，不占计算内存）。参数槽按声明范围取最坏回看，所以估算是上界。
+func EstimateChunkMemory(members []domain.MemberDef, series, periods, carryColumns int) (MemoryEstimate, error) {
 	if series <= 0 || periods <= 0 {
 		return MemoryEstimate{}, nil
 	}
-	inputs := make([]factorexpr.ProgramInput, 0, len(factors))
+	inputs := make([]factorexpr.ProgramInput, 0, len(members))
 	outputs := 0
-	for _, factor := range factors {
-		def, err := domain.CompileDefinition(factor)
+	for _, member := range members {
+		def, err := domain.CompileDefinition(member.Factor)
 		if err != nil {
 			continue
 		}
-		inputs = append(inputs, factorexpr.ProgramInput{FactorID: def.FactorID, Factor: def.Compiled()})
-		outputs += len(def.Outputs)
+		inputs = append(inputs, factorexpr.ProgramInput{Key: member.Alias, FactorID: def.FactorID, Factor: def.Compiled()})
+		outputs += len(def.Outputs) + len(def.Compiled().Params)
 	}
 	if len(inputs) == 0 {
 		return MemoryEstimate{}, nil
@@ -73,7 +73,7 @@ func EstimateChunkMemory(factors []domain.FactorDef, series, periods, carryColum
 
 // MaxPeriodsWithin 返回不超过 limit、估算峰值内存不超过 budget 的最大目标周期数；1 个周期也超限时返回 ErrMemoryBudget。
 // 估算随周期数单调增长，二分查找。budget ≤ 0 表示不限制。
-func MaxPeriodsWithin(factors []domain.FactorDef, series, carryColumns, limit int, budget int64) (int, error) {
+func MaxPeriodsWithin(factors []domain.MemberDef, series, carryColumns, limit int, budget int64) (int, error) {
 	if budget <= 0 || limit <= 1 {
 		if budget > 0 {
 			if err := withinBudget(factors, series, 1, carryColumns, budget); err != nil {
@@ -102,11 +102,11 @@ func MaxPeriodsWithin(factors []domain.FactorDef, series, carryColumns, limit in
 }
 
 // CheckChunkMemory 检查一次计算（series 条序列 × periods 个目标周期）的估算峰值内存是否不超过 budget，超限返回 ErrMemoryBudget。
-func CheckChunkMemory(factors []domain.FactorDef, series, periods, carryColumns int, budget int64) error {
+func CheckChunkMemory(factors []domain.MemberDef, series, periods, carryColumns int, budget int64) error {
 	return withinBudget(factors, series, periods, carryColumns, budget)
 }
 
-func withinBudget(factors []domain.FactorDef, series, periods, carryColumns int, budget int64) error {
+func withinBudget(factors []domain.MemberDef, series, periods, carryColumns int, budget int64) error {
 	estimate, err := EstimateChunkMemory(factors, series, periods, carryColumns)
 	if err != nil {
 		return err

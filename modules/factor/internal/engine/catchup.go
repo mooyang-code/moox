@@ -44,25 +44,29 @@ func (r *Runtime) runCatchup(ctx context.Context) {
 // 唤醒追赶与跳过恢复。
 func (r *Runtime) onFilled(filled []*factorpb.PeriodsFilled, kickGap func()) {
 	for _, item := range filled {
-		set, _, found, err := r.catalog.EnabledSetByDataset(context.Background(), item.GetSpaceId(), item.GetDatasetId(), item.GetFrequency())
-		if err != nil || !found {
-			continue
-		}
-		clock, err := periodclock.ForSpace(set.SpaceID)
+		// 同一个源数据集上的每个集合（各策略实例的私有集合）都要知道这段周期已补齐。
+		sets, err := r.catalog.EnabledSetsByDataset(context.Background(), item.GetSpaceId(), item.GetDatasetId(), item.GetFrequency())
 		if err != nil {
 			continue
 		}
-		step, err := clock.Duration(set.Freq)
-		if err != nil {
-			continue
-		}
-		from, to := time.Unix(item.GetFrom(), 0).UTC(), time.Unix(item.GetTo(), 0).UTC()
-		r.continuity.NoteAbsent(set.SetID, from, to, step, item.GetAbsentSubjects())
-		r.filled.add(set.SetID, from, to)
-		log.Infof("factor_periods_filled set_id=%s from=%s to=%s absent=%s", set.SetID, from.Format(time.RFC3339), to.Format(time.RFC3339), strings.Join(item.GetAbsentSubjects(), ","))
-		select {
-		case r.advanceKick <- set.SetID:
-		default:
+		for _, engineSet := range sets {
+			set := engineSet.Set
+			clock, err := periodclock.ForSpace(set.SpaceID)
+			if err != nil {
+				continue
+			}
+			step, err := clock.Duration(set.Freq)
+			if err != nil {
+				continue
+			}
+			from, to := time.Unix(item.GetFrom(), 0).UTC(), time.Unix(item.GetTo(), 0).UTC()
+			r.continuity.NoteAbsent(set.SetID, from, to, step, item.GetAbsentSubjects())
+			r.filled.add(set.SetID, from, to)
+			log.Infof("factor_periods_filled set_id=%s from=%s to=%s absent=%s", set.SetID, from.Format(time.RFC3339), to.Format(time.RFC3339), strings.Join(item.GetAbsentSubjects(), ","))
+			select {
+			case r.advanceKick <- set.SetID:
+			default:
+			}
 		}
 	}
 	if kickGap != nil {

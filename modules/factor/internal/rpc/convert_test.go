@@ -14,7 +14,7 @@ import (
 func TestConvertFactorDefRoundTrip(t *testing.T) {
 	createdAt := time.Date(2026, time.October, 4, 10, 11, 12, 0, time.UTC)
 	updatedAt := createdAt.Add(time.Minute)
-	want := domain.MustDefinition("rolling_mean", "Rolling mean", "params: {window: 3}\noutputs:\n  mean_close: cs_rank(ts_mean(close - open, window))\n")
+	want := domain.MustDefinition("rolling_mean", "Rolling mean", "params:\n  window: {type: int, min: 2, max: 3, default: 3}\noutputs:\n  mean_close: cs_rank(ts_mean(close - open, window))\n")
 	want.AllowPartialUniverse, want.CreatedAt, want.UpdatedAt = true, createdAt, updatedAt
 
 	pb := factorwire.DefToPB(want)
@@ -22,6 +22,7 @@ func TestConvertFactorDefRoundTrip(t *testing.T) {
 	require.Equal(t, []string{"close", "open"}, pb.GetInputColumns())
 	require.Equal(t, int32(3), pb.GetLookbackPeriods())
 	require.Equal(t, domain.DefinitionHash(want), pb.GetDefinitionHash())
+	require.Equal(t, []*factorpb.FactorParamDecl{{Name: "window", Type: "int", Min: 2, Max: 3, DefaultValue: 3}}, pb.GetParams())
 	got, err := factorwire.DefFromPB(pb)
 
 	require.NoError(t, err)
@@ -123,7 +124,7 @@ func TestConvertRecalcJobRoundTrip(t *testing.T) {
 		JobID:        "request-1",
 		RequestID:    "request-1",
 		SetID:        "fset_binance_kline_1m",
-		FactorIDs:    []string{"rolling_mean"},
+		Members:      []string{"rolling_mean"},
 		Subjects:     []string{"BTCUSDT"},
 		StartTime:    start,
 		EndTime:      start.Add(time.Hour),
@@ -156,7 +157,7 @@ func recalcJobFromPB(pb *factorpb.RecalcJob) (RecalcJob, error) {
 	job.JobID = pb.GetJobId()
 	job.RequestID = pb.GetRequestId()
 	job.SetID = pb.GetSetId()
-	job.FactorIDs = factorwire.CloneStrings(pb.GetFactorIds())
+	job.Members = factorwire.CloneStrings(pb.GetMembers())
 	job.Subjects = factorwire.CloneStrings(pb.GetSubjects())
 	job.Status = pb.GetStatus()
 	job.Error = pb.GetError()

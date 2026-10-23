@@ -26,9 +26,9 @@ type RecalcJob struct {
 	JobID           string    `json:"job_id"`
 	RequestID       string    `json:"request_id"`
 	SetID           string    `json:"set_id"`
-	FactorIDs       []string  `json:"factor_ids"`
+	Members         []string  `json:"members"`
 	Subjects        []string  `json:"subjects"`
-	FactorsOmitted  bool      `json:"-"`
+	MembersOmitted  bool      `json:"-"`
 	SubjectsOmitted bool      `json:"-"`
 	StartTime       int64     `json:"start_time"`
 	EndTime         int64     `json:"end_time"`
@@ -44,17 +44,17 @@ type RecalcJob struct {
 
 // recalcJobColumns is the column list every recalc job read selects, in the
 // order of recalcJobRow.
-const recalcJobColumns = `c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
-	 c_factors_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error,
+const recalcJobColumns = `c_job_id, c_request_id, c_set_id, c_members_json, c_subjects_json,
+	 c_members_omitted, c_subjects_omitted, c_start_time, c_end_time, c_status, c_progress_time, c_error,
 	 c_engine_id, c_lease_token, c_lease_expires_at, c_ctime, c_mtime`
 
 type recalcJobRow struct {
 	JobID           string    `gorm:"column:c_job_id"`
 	RequestID       string    `gorm:"column:c_request_id"`
 	SetID           string    `gorm:"column:c_set_id"`
-	FactorIDsJSON   string    `gorm:"column:c_factor_ids_json"`
+	MembersJSON     string    `gorm:"column:c_members_json"`
 	SubjectsJSON    string    `gorm:"column:c_subjects_json"`
-	FactorsOmitted  bool      `gorm:"column:c_factors_omitted"`
+	MembersOmitted  bool      `gorm:"column:c_members_omitted"`
 	SubjectsOmitted bool      `gorm:"column:c_subjects_omitted"`
 	StartTime       int64     `gorm:"column:c_start_time"`
 	EndTime         int64     `gorm:"column:c_end_time"`
@@ -69,9 +69,9 @@ type recalcJobRow struct {
 }
 
 func (r recalcJobRow) job() (RecalcJob, error) {
-	factorIDs, err := unmarshalStringSlice(r.FactorIDsJSON)
+	members, err := unmarshalStringSlice(r.MembersJSON)
 	if err != nil {
-		return RecalcJob{}, fmt.Errorf("decode recalc factor ids: %w", err)
+		return RecalcJob{}, fmt.Errorf("decode recalc members: %w", err)
 	}
 	subjects, err := unmarshalStringSlice(r.SubjectsJSON)
 	if err != nil {
@@ -79,8 +79,8 @@ func (r recalcJobRow) job() (RecalcJob, error) {
 	}
 	return RecalcJob{
 		JobID: r.JobID, RequestID: r.RequestID, SetID: r.SetID,
-		FactorIDs: factorIDs, Subjects: subjects,
-		FactorsOmitted: r.FactorsOmitted, SubjectsOmitted: r.SubjectsOmitted, StartTime: r.StartTime,
+		Members: members, Subjects: subjects,
+		MembersOmitted: r.MembersOmitted, SubjectsOmitted: r.SubjectsOmitted, StartTime: r.StartTime,
 		EndTime: r.EndTime, Status: r.Status, ProgressTime: r.ProgressTime,
 		Error: r.Error, EngineID: r.EngineID, LeaseToken: r.LeaseToken, LeaseExpiresAt: r.LeaseExpiresAt,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
@@ -93,7 +93,7 @@ func (s *Store) CreateRecalcJob(ctx context.Context, job RecalcJob) (RecalcJob, 
 	if s == nil || s.db == nil {
 		return RecalcJob{}, fmt.Errorf("factor database is not open")
 	}
-	job, factorIDsJSON, subjectsJSON, err := normalizeRecalcJob(job)
+	job, membersJSON, subjectsJSON, err := normalizeRecalcJob(job)
 	if err != nil {
 		return RecalcJob{}, err
 	}
@@ -101,7 +101,7 @@ func (s *Store) CreateRecalcJob(ctx context.Context, job RecalcJob) (RecalcJob, 
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var err error
 		var created bool
-		stored, created, err = insertRecalcJob(tx, job, factorIDsJSON, subjectsJSON)
+		stored, created, err = insertRecalcJob(tx, job, membersJSON, subjectsJSON)
 		if err == nil && !created && !sameRecalcRequest(stored, job) {
 			err = fmt.Errorf("%w: request_id %q belongs to a different recalc request", ErrConflict, job.RequestID)
 		}
@@ -115,28 +115,28 @@ func (s *Store) CreateRecalcJob(ctx context.Context, job RecalcJob) (RecalcJob, 
 
 // EnableMemberWithRecalcJob atomically accepts a member's initial backfill and
 // makes the member visible to live trigger selection.
-func (s *Store) EnableMemberWithRecalcJob(ctx context.Context, setID, factorID, expectedStatus string, job RecalcJob) (RecalcJob, error) {
+func (s *Store) EnableMemberWithRecalcJob(ctx context.Context, setID, alias, expectedStatus string, job RecalcJob) (RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return RecalcJob{}, fmt.Errorf("factor database is not open")
 	}
 	setID = strings.TrimSpace(setID)
-	factorID = strings.TrimSpace(factorID)
-	if setID == "" || factorID == "" || setID != strings.TrimSpace(job.SetID) ||
+	alias = strings.TrimSpace(alias)
+	if setID == "" || alias == "" || setID != strings.TrimSpace(job.SetID) ||
 		expectedStatus != domain.MemberStatusDisabled || job.Status != RecalcStatusAccepted {
 		return RecalcJob{}, fmt.Errorf("factor activation request is invalid")
 	}
-	job, factorIDsJSON, subjectsJSON, err := normalizeRecalcJob(job)
+	job, membersJSON, subjectsJSON, err := normalizeRecalcJob(job)
 	if err != nil {
 		return RecalcJob{}, err
 	}
-	if !containsString(job.FactorIDs, factorID) {
-		return RecalcJob{}, fmt.Errorf("factor activation job does not include factor %q", factorID)
+	if !containsString(job.Members, alias) {
+		return RecalcJob{}, fmt.Errorf("factor activation job does not include member %q", alias)
 	}
 	var stored RecalcJob
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 同一个因子集连续启用多个成员时，只保留一个还没开始跑的回填任务，把新成员并进去：
 		// 每个成员各建一个全量回填任务，会让同一个窗口被重复读 N 遍（11 个因子就是 11 遍）。
-		merged, mergeErr := mergeQueuedEnableBackfill(tx, job, factorID)
+		merged, mergeErr := mergeQueuedEnableBackfill(tx, job, alias)
 		if mergeErr != nil {
 			return mergeErr
 		}
@@ -145,7 +145,7 @@ func (s *Store) EnableMemberWithRecalcJob(ctx context.Context, setID, factorID, 
 		if merged != nil {
 			stored, created = *merged, true
 		} else {
-			stored, created, insertErr = insertRecalcJob(tx, job, factorIDsJSON, subjectsJSON)
+			stored, created, insertErr = insertRecalcJob(tx, job, membersJSON, subjectsJSON)
 			if insertErr != nil {
 				return insertErr
 			}
@@ -155,8 +155,8 @@ func (s *Store) EnableMemberWithRecalcJob(ctx context.Context, setID, factorID, 
 		}
 		result := tx.Exec(`
 			UPDATE t_factor_set_members SET c_status = ?, c_mtime = ?
-			WHERE c_set_id = ? AND c_factor_id = ? AND c_status = ?
-		`, domain.MemberStatusEnabled, time.Now().UTC(), setID, factorID, expectedStatus)
+			WHERE c_set_id = ? AND c_member_alias = ? AND c_status = ?
+		`, domain.MemberStatusEnabled, time.Now().UTC(), setID, alias, expectedStatus)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -166,7 +166,7 @@ func (s *Store) EnableMemberWithRecalcJob(ctx context.Context, setID, factorID, 
 		var current struct {
 			Status string `gorm:"column:c_status"`
 		}
-		lookup := tx.Raw(`SELECT c_status FROM t_factor_set_members WHERE c_set_id = ? AND c_factor_id = ?`, setID, factorID).Scan(&current)
+		lookup := tx.Raw(`SELECT c_status FROM t_factor_set_members WHERE c_set_id = ? AND c_member_alias = ?`, setID, alias).Scan(&current)
 		if lookup.Error != nil {
 			return lookup.Error
 		}
@@ -176,7 +176,7 @@ func (s *Store) EnableMemberWithRecalcJob(ctx context.Context, setID, factorID, 
 		if !created && current.Status == domain.MemberStatusEnabled {
 			return nil
 		}
-		return fmt.Errorf("%w: member %q of set %q status is %q, expected %q", ErrConflict, factorID, setID, current.Status, expectedStatus)
+		return fmt.Errorf("%w: member %q of set %q status is %q, expected %q", ErrConflict, alias, setID, current.Status, expectedStatus)
 	})
 	if err != nil {
 		return RecalcJob{}, err
@@ -189,13 +189,13 @@ const enableBackfillRequestPrefix = "factor-enable-"
 
 // mergeQueuedEnableBackfill 把新启用的成员并进同一因子集里排队中、尚未被引擎领取的回填任务，窗口取两者的并集；
 // 没有可合并的任务时返回 nil，由调用方新建。手工补算（请求号不是 factor-enable- 开头）、已领取或已结束的任务不合并。
-func mergeQueuedEnableBackfill(tx *gorm.DB, job RecalcJob, factorID string) (*RecalcJob, error) {
+func mergeQueuedEnableBackfill(tx *gorm.DB, job RecalcJob, alias string) (*RecalcJob, error) {
 	var row recalcJobRow
 	lookup := tx.Raw(`
 		SELECT `+recalcJobColumns+`
 		FROM t_factor_recalc_jobs
 		WHERE c_set_id = ? AND c_status = ? AND c_engine_id = '' AND c_lease_token = '' AND c_request_id LIKE ?
-		  AND c_subjects_omitted = 0 AND c_factors_omitted = 0
+		  AND c_subjects_omitted = 0 AND c_members_omitted = 0
 		ORDER BY c_ctime, c_job_id LIMIT 1
 	`, job.SetID, RecalcStatusAccepted, enableBackfillRequestPrefix+"%").Scan(&row)
 	if lookup.Error != nil {
@@ -211,27 +211,27 @@ func mergeQueuedEnableBackfill(tx *gorm.DB, job RecalcJob, factorID string) (*Re
 	if len(existing.Subjects) != len(job.Subjects) {
 		return nil, nil
 	}
-	factors := append([]string(nil), existing.FactorIDs...)
-	if !containsString(factors, factorID) {
-		factors = append(factors, factorID)
+	members := append([]string(nil), existing.Members...)
+	if !containsString(members, alias) {
+		members = append(members, alias)
 	}
-	sort.Strings(factors)
-	factorsJSON, err := marshalStringSlice(factors)
+	sort.Strings(members)
+	membersJSON, err := marshalStringSlice(members)
 	if err != nil {
 		return nil, err
 	}
 	start, end := min(existing.StartTime, job.StartTime), max(existing.EndTime, job.EndTime)
 	result := tx.Exec(`
-		UPDATE t_factor_recalc_jobs SET c_factor_ids_json = ?, c_start_time = ?, c_end_time = ?, c_mtime = ?
+		UPDATE t_factor_recalc_jobs SET c_members_json = ?, c_start_time = ?, c_end_time = ?, c_mtime = ?
 		WHERE c_job_id = ? AND c_status = ? AND c_engine_id = '' AND c_lease_token = ''
-	`, factorsJSON, start, end, time.Now().UTC(), existing.JobID, RecalcStatusAccepted)
+	`, membersJSON, start, end, time.Now().UTC(), existing.JobID, RecalcStatusAccepted)
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	if result.RowsAffected == 0 {
 		return nil, nil
 	}
-	existing.FactorIDs, existing.StartTime, existing.EndTime = factors, start, end
+	existing.Members, existing.StartTime, existing.EndTime = members, start, end
 	return &existing, nil
 }
 
@@ -247,13 +247,13 @@ func normalizeRecalcJob(job RecalcJob) (RecalcJob, string, string, error) {
 	if job.Status == "" {
 		job.Status = RecalcStatusAccepted
 	}
-	if job.FactorIDs == nil {
-		job.FactorIDs = []string{}
+	if job.Members == nil {
+		job.Members = []string{}
 	}
 	if job.Subjects == nil {
 		job.Subjects = []string{}
 	}
-	factorIDsJSON, err := marshalStringSlice(job.FactorIDs)
+	membersJSON, err := marshalStringSlice(job.Members)
 	if err != nil {
 		return RecalcJob{}, "", "", err
 	}
@@ -261,20 +261,20 @@ func normalizeRecalcJob(job RecalcJob) (RecalcJob, string, string, error) {
 	if err != nil {
 		return RecalcJob{}, "", "", err
 	}
-	return job, factorIDsJSON, subjectsJSON, nil
+	return job, membersJSON, subjectsJSON, nil
 }
 
-func insertRecalcJob(tx *gorm.DB, job RecalcJob, factorIDsJSON, subjectsJSON string) (RecalcJob, bool, error) {
+func insertRecalcJob(tx *gorm.DB, job RecalcJob, membersJSON, subjectsJSON string) (RecalcJob, bool, error) {
 	now := time.Now().UTC()
 	result := tx.Exec(`
 		INSERT INTO t_factor_recalc_jobs
-		(c_job_id, c_request_id, c_set_id, c_factor_ids_json, c_subjects_json,
-		 c_factors_omitted, c_subjects_omitted,
+		(c_job_id, c_request_id, c_set_id, c_members_json, c_subjects_json,
+		 c_members_omitted, c_subjects_omitted,
 		 c_start_time, c_end_time, c_status, c_progress_time, c_error, c_ctime, c_mtime)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_request_id) DO NOTHING
-	`, job.JobID, job.RequestID, job.SetID, factorIDsJSON, subjectsJSON,
-		job.FactorsOmitted, job.SubjectsOmitted,
+	`, job.JobID, job.RequestID, job.SetID, membersJSON, subjectsJSON,
+		job.MembersOmitted, job.SubjectsOmitted,
 		job.StartTime, job.EndTime, job.Status, job.ProgressTime, job.Error, now, now)
 	if result.Error != nil {
 		return RecalcJob{}, false, result.Error
@@ -297,10 +297,10 @@ func insertRecalcJob(tx *gorm.DB, job RecalcJob, factorIDsJSON, subjectsJSON str
 func sameRecalcRequest(left, right RecalcJob) bool {
 	if left.RequestID != right.RequestID || left.SetID != right.SetID ||
 		left.StartTime != right.StartTime || left.EndTime != right.EndTime ||
-		left.FactorsOmitted != right.FactorsOmitted || left.SubjectsOmitted != right.SubjectsOmitted {
+		left.MembersOmitted != right.MembersOmitted || left.SubjectsOmitted != right.SubjectsOmitted {
 		return false
 	}
-	return (left.FactorsOmitted || sameStringValues(left.FactorIDs, right.FactorIDs)) &&
+	return (left.MembersOmitted || sameStringValues(left.Members, right.Members)) &&
 		(left.SubjectsOmitted || sameStringValues(left.Subjects, right.Subjects))
 }
 

@@ -2,8 +2,9 @@ package domain
 
 import "time"
 
-// FactorPeriodState is one factor's outcome for the most recent live period.
+// FactorPeriodState is one member's outcome for the most recent live period.
 type FactorPeriodState struct {
+	MemberAlias    string
 	FactorID       string
 	Status         string
 	FailedSubjects []string
@@ -11,6 +12,9 @@ type FactorPeriodState struct {
 	DefinitionHash string
 	// GapSubjects 是 FailedSubjects 中因回看窗口 K 线空洞而失败的标的（子集）。
 	GapSubjects []string
+	// ParamsSource、ParamsDigest 是这一期冻结参数的来源与摘要。
+	ParamsSource string
+	ParamsDigest string
 }
 
 // SetRunSummary is the latest live period of one factor set as reported by
@@ -82,10 +86,10 @@ type EngineInfo struct {
 }
 
 // EngineSet is one enabled factor set as the engine computes it: the set, its
-// enabled member definitions (with source) and whether its result dataset is
-// ready to receive writes.
+// enabled members (alias with definition and source) and whether its result
+// dataset is ready to receive writes.
 type EngineSet struct {
 	Set         FactorSet
-	Factors     []FactorDef
+	Members     []MemberDef
 	ResultReady bool
 }

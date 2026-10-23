@@ -64,6 +64,24 @@ type FactorMgrService interface {
 	ListFactorFunctions(ctx context.Context, req *ListFactorFunctionsReq) (*ListFactorFunctionsRsp, error)
 
 	NotifyPeriodsFilled(ctx context.Context, req *NotifyPeriodsFilledReq) (*NotifyPeriodsFilledRsp, error)
+
+	ListFactorCategories(ctx context.Context, req *ListFactorCategoriesReq) (*ListFactorCategoriesRsp, error)
+
+	UpsertFactorCategory(ctx context.Context, req *UpsertFactorCategoryReq) (*UpsertFactorCategoryRsp, error)
+
+	DeleteFactorCategory(ctx context.Context, req *DeleteFactorCategoryReq) (*DeleteFactorCategoryRsp, error)
+
+	SetFactorCategory(ctx context.Context, req *SetFactorCategoryReq) (*SetFactorCategoryRsp, error)
+
+	EnsureInstanceFactorSet(ctx context.Context, req *EnsureInstanceFactorSetReq) (*EnsureInstanceFactorSetRsp, error)
+
+	SetInstanceFactorSetEnabled(ctx context.Context, req *SetInstanceFactorSetEnabledReq) (*SetInstanceFactorSetEnabledRsp, error)
+
+	ReleaseInstanceFactorSet(ctx context.Context, req *ReleaseInstanceFactorSetReq) (*ReleaseInstanceFactorSetRsp, error)
+
+	SubmitFactorParams(ctx context.Context, req *SubmitFactorParamsReq) (*SubmitFactorParamsRsp, error)
+
+	GetFactorParams(ctx context.Context, req *GetFactorParamsReq) (*GetFactorParamsRsp, error)
 }
 
 func FactorMgrService_CreateFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -480,6 +498,168 @@ func FactorMgrService_NotifyPeriodsFilled_Handler(svr interface{}, ctx context.C
 	return rsp, nil
 }
 
+func FactorMgrService_ListFactorCategories_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListFactorCategoriesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).ListFactorCategories(ctx, reqbody.(*ListFactorCategoriesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_UpsertFactorCategory_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UpsertFactorCategoryReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).UpsertFactorCategory(ctx, reqbody.(*UpsertFactorCategoryReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_DeleteFactorCategory_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteFactorCategoryReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).DeleteFactorCategory(ctx, reqbody.(*DeleteFactorCategoryReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_SetFactorCategory_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetFactorCategoryReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).SetFactorCategory(ctx, reqbody.(*SetFactorCategoryReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_EnsureInstanceFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &EnsureInstanceFactorSetReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).EnsureInstanceFactorSet(ctx, reqbody.(*EnsureInstanceFactorSetReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_SetInstanceFactorSetEnabled_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetInstanceFactorSetEnabledReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).SetInstanceFactorSetEnabled(ctx, reqbody.(*SetInstanceFactorSetEnabledReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_ReleaseInstanceFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReleaseInstanceFactorSetReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).ReleaseInstanceFactorSet(ctx, reqbody.(*ReleaseInstanceFactorSetReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_SubmitFactorParams_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SubmitFactorParamsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).SubmitFactorParams(ctx, reqbody.(*SubmitFactorParamsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorMgrService_GetFactorParams_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetFactorParamsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).GetFactorParams(ctx, reqbody.(*GetFactorParamsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // FactorMgrServer_ServiceDesc descriptor for server.RegisterService.
 var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.factor.FactorMgr",
@@ -577,6 +757,42 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.factor.FactorMgr/NotifyPeriodsFilled",
 			Func: FactorMgrService_NotifyPeriodsFilled_Handler,
 		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/ListFactorCategories",
+			Func: FactorMgrService_ListFactorCategories_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/UpsertFactorCategory",
+			Func: FactorMgrService_UpsertFactorCategory_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/DeleteFactorCategory",
+			Func: FactorMgrService_DeleteFactorCategory_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/SetFactorCategory",
+			Func: FactorMgrService_SetFactorCategory_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/EnsureInstanceFactorSet",
+			Func: FactorMgrService_EnsureInstanceFactorSet_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/SetInstanceFactorSetEnabled",
+			Func: FactorMgrService_SetInstanceFactorSetEnabled_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/ReleaseInstanceFactorSet",
+			Func: FactorMgrService_ReleaseInstanceFactorSet_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/SubmitFactorParams",
+			Func: FactorMgrService_SubmitFactorParams_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/GetFactorParams",
+			Func: FactorMgrService_GetFactorParams_Handler,
+		},
 	},
 }
 
@@ -596,6 +812,12 @@ type FactorEngineService interface {
 	PullRecalcJob(ctx context.Context, req *PullRecalcJobReq) (*PullRecalcJobRsp, error)
 
 	ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq) (*ReportRecalcProgressRsp, error)
+
+	FreezeFactorParams(ctx context.Context, req *FreezeFactorParamsReq) (*FreezeFactorParamsRsp, error)
+
+	ReportOfflineFreezes(ctx context.Context, req *ReportOfflineFreezesReq) (*ReportOfflineFreezesRsp, error)
+
+	ListParamIntervals(ctx context.Context, req *ListParamIntervalsReq) (*ListParamIntervalsRsp, error)
 }
 
 func FactorEngineService_SyncEngineCatalog_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -670,6 +892,60 @@ func FactorEngineService_ReportRecalcProgress_Handler(svr interface{}, ctx conte
 	return rsp, nil
 }
 
+func FactorEngineService_FreezeFactorParams_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &FreezeFactorParamsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorEngineService).FreezeFactorParams(ctx, reqbody.(*FreezeFactorParamsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorEngineService_ReportOfflineFreezes_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReportOfflineFreezesReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorEngineService).ReportOfflineFreezes(ctx, reqbody.(*ReportOfflineFreezesReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func FactorEngineService_ListParamIntervals_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListParamIntervalsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorEngineService).ListParamIntervals(ctx, reqbody.(*ListParamIntervalsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // FactorEngineServer_ServiceDesc descriptor for server.RegisterService.
 var FactorEngineServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.factor.FactorEngine",
@@ -690,6 +966,18 @@ var FactorEngineServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.factor.FactorEngine/ReportRecalcProgress",
 			Func: FactorEngineService_ReportRecalcProgress_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorEngine/FreezeFactorParams",
+			Func: FactorEngineService_FreezeFactorParams_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorEngine/ReportOfflineFreezes",
+			Func: FactorEngineService_ReportOfflineFreezes_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorEngine/ListParamIntervals",
+			Func: FactorEngineService_ListParamIntervals_Handler,
 		},
 	},
 }
@@ -774,6 +1062,33 @@ func (s *UnimplementedFactorMgr) ListFactorFunctions(ctx context.Context, req *L
 func (s *UnimplementedFactorMgr) NotifyPeriodsFilled(ctx context.Context, req *NotifyPeriodsFilledReq) (*NotifyPeriodsFilledRsp, error) {
 	return nil, errors.New("rpc NotifyPeriodsFilled of service FactorMgr is not implemented")
 }
+func (s *UnimplementedFactorMgr) ListFactorCategories(ctx context.Context, req *ListFactorCategoriesReq) (*ListFactorCategoriesRsp, error) {
+	return nil, errors.New("rpc ListFactorCategories of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) UpsertFactorCategory(ctx context.Context, req *UpsertFactorCategoryReq) (*UpsertFactorCategoryRsp, error) {
+	return nil, errors.New("rpc UpsertFactorCategory of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) DeleteFactorCategory(ctx context.Context, req *DeleteFactorCategoryReq) (*DeleteFactorCategoryRsp, error) {
+	return nil, errors.New("rpc DeleteFactorCategory of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) SetFactorCategory(ctx context.Context, req *SetFactorCategoryReq) (*SetFactorCategoryRsp, error) {
+	return nil, errors.New("rpc SetFactorCategory of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) EnsureInstanceFactorSet(ctx context.Context, req *EnsureInstanceFactorSetReq) (*EnsureInstanceFactorSetRsp, error) {
+	return nil, errors.New("rpc EnsureInstanceFactorSet of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) SetInstanceFactorSetEnabled(ctx context.Context, req *SetInstanceFactorSetEnabledReq) (*SetInstanceFactorSetEnabledRsp, error) {
+	return nil, errors.New("rpc SetInstanceFactorSetEnabled of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) ReleaseInstanceFactorSet(ctx context.Context, req *ReleaseInstanceFactorSetReq) (*ReleaseInstanceFactorSetRsp, error) {
+	return nil, errors.New("rpc ReleaseInstanceFactorSet of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) SubmitFactorParams(ctx context.Context, req *SubmitFactorParamsReq) (*SubmitFactorParamsRsp, error) {
+	return nil, errors.New("rpc SubmitFactorParams of service FactorMgr is not implemented")
+}
+func (s *UnimplementedFactorMgr) GetFactorParams(ctx context.Context, req *GetFactorParamsReq) (*GetFactorParamsRsp, error) {
+	return nil, errors.New("rpc GetFactorParams of service FactorMgr is not implemented")
+}
 
 type UnimplementedFactorEngine struct{}
 
@@ -788,6 +1103,15 @@ func (s *UnimplementedFactorEngine) PullRecalcJob(ctx context.Context, req *Pull
 }
 func (s *UnimplementedFactorEngine) ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq) (*ReportRecalcProgressRsp, error) {
 	return nil, errors.New("rpc ReportRecalcProgress of service FactorEngine is not implemented")
+}
+func (s *UnimplementedFactorEngine) FreezeFactorParams(ctx context.Context, req *FreezeFactorParamsReq) (*FreezeFactorParamsRsp, error) {
+	return nil, errors.New("rpc FreezeFactorParams of service FactorEngine is not implemented")
+}
+func (s *UnimplementedFactorEngine) ReportOfflineFreezes(ctx context.Context, req *ReportOfflineFreezesReq) (*ReportOfflineFreezesRsp, error) {
+	return nil, errors.New("rpc ReportOfflineFreezes of service FactorEngine is not implemented")
+}
+func (s *UnimplementedFactorEngine) ListParamIntervals(ctx context.Context, req *ListParamIntervalsReq) (*ListParamIntervalsRsp, error) {
+	return nil, errors.New("rpc ListParamIntervals of service FactorEngine is not implemented")
 }
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
@@ -843,6 +1167,24 @@ type FactorMgrClientProxy interface {
 	ListFactorFunctions(ctx context.Context, req *ListFactorFunctionsReq, opts ...client.Option) (rsp *ListFactorFunctionsRsp, err error)
 
 	NotifyPeriodsFilled(ctx context.Context, req *NotifyPeriodsFilledReq, opts ...client.Option) (rsp *NotifyPeriodsFilledRsp, err error)
+
+	ListFactorCategories(ctx context.Context, req *ListFactorCategoriesReq, opts ...client.Option) (rsp *ListFactorCategoriesRsp, err error)
+
+	UpsertFactorCategory(ctx context.Context, req *UpsertFactorCategoryReq, opts ...client.Option) (rsp *UpsertFactorCategoryRsp, err error)
+
+	DeleteFactorCategory(ctx context.Context, req *DeleteFactorCategoryReq, opts ...client.Option) (rsp *DeleteFactorCategoryRsp, err error)
+
+	SetFactorCategory(ctx context.Context, req *SetFactorCategoryReq, opts ...client.Option) (rsp *SetFactorCategoryRsp, err error)
+
+	EnsureInstanceFactorSet(ctx context.Context, req *EnsureInstanceFactorSetReq, opts ...client.Option) (rsp *EnsureInstanceFactorSetRsp, err error)
+
+	SetInstanceFactorSetEnabled(ctx context.Context, req *SetInstanceFactorSetEnabledReq, opts ...client.Option) (rsp *SetInstanceFactorSetEnabledRsp, err error)
+
+	ReleaseInstanceFactorSet(ctx context.Context, req *ReleaseInstanceFactorSetReq, opts ...client.Option) (rsp *ReleaseInstanceFactorSetRsp, err error)
+
+	SubmitFactorParams(ctx context.Context, req *SubmitFactorParamsReq, opts ...client.Option) (rsp *SubmitFactorParamsRsp, err error)
+
+	GetFactorParams(ctx context.Context, req *GetFactorParamsReq, opts ...client.Option) (rsp *GetFactorParamsRsp, err error)
 }
 
 type FactorMgrClientProxyImpl struct {
@@ -1314,6 +1656,186 @@ func (c *FactorMgrClientProxyImpl) NotifyPeriodsFilled(ctx context.Context, req 
 	return rsp, nil
 }
 
+func (c *FactorMgrClientProxyImpl) ListFactorCategories(ctx context.Context, req *ListFactorCategoriesReq, opts ...client.Option) (*ListFactorCategoriesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ListFactorCategories")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("ListFactorCategories")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListFactorCategoriesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) UpsertFactorCategory(ctx context.Context, req *UpsertFactorCategoryReq, opts ...client.Option) (*UpsertFactorCategoryRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/UpsertFactorCategory")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("UpsertFactorCategory")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UpsertFactorCategoryRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) DeleteFactorCategory(ctx context.Context, req *DeleteFactorCategoryReq, opts ...client.Option) (*DeleteFactorCategoryRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/DeleteFactorCategory")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("DeleteFactorCategory")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteFactorCategoryRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) SetFactorCategory(ctx context.Context, req *SetFactorCategoryReq, opts ...client.Option) (*SetFactorCategoryRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/SetFactorCategory")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("SetFactorCategory")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SetFactorCategoryRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) EnsureInstanceFactorSet(ctx context.Context, req *EnsureInstanceFactorSetReq, opts ...client.Option) (*EnsureInstanceFactorSetRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/EnsureInstanceFactorSet")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("EnsureInstanceFactorSet")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &EnsureInstanceFactorSetRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) SetInstanceFactorSetEnabled(ctx context.Context, req *SetInstanceFactorSetEnabledReq, opts ...client.Option) (*SetInstanceFactorSetEnabledRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/SetInstanceFactorSetEnabled")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("SetInstanceFactorSetEnabled")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SetInstanceFactorSetEnabledRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) ReleaseInstanceFactorSet(ctx context.Context, req *ReleaseInstanceFactorSetReq, opts ...client.Option) (*ReleaseInstanceFactorSetRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/ReleaseInstanceFactorSet")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("ReleaseInstanceFactorSet")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReleaseInstanceFactorSetRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) SubmitFactorParams(ctx context.Context, req *SubmitFactorParamsReq, opts ...client.Option) (*SubmitFactorParamsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/SubmitFactorParams")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("SubmitFactorParams")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SubmitFactorParamsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) GetFactorParams(ctx context.Context, req *GetFactorParamsReq, opts ...client.Option) (*GetFactorParamsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/GetFactorParams")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("GetFactorParams")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetFactorParamsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // FactorEngineClientProxy defines service client proxy
 type FactorEngineClientProxy interface {
 	SyncEngineCatalog(ctx context.Context, req *SyncEngineCatalogReq, opts ...client.Option) (rsp *SyncEngineCatalogRsp, err error)
@@ -1323,6 +1845,12 @@ type FactorEngineClientProxy interface {
 	PullRecalcJob(ctx context.Context, req *PullRecalcJobReq, opts ...client.Option) (rsp *PullRecalcJobRsp, err error)
 
 	ReportRecalcProgress(ctx context.Context, req *ReportRecalcProgressReq, opts ...client.Option) (rsp *ReportRecalcProgressRsp, err error)
+
+	FreezeFactorParams(ctx context.Context, req *FreezeFactorParamsReq, opts ...client.Option) (rsp *FreezeFactorParamsRsp, err error)
+
+	ReportOfflineFreezes(ctx context.Context, req *ReportOfflineFreezesReq, opts ...client.Option) (rsp *ReportOfflineFreezesRsp, err error)
+
+	ListParamIntervals(ctx context.Context, req *ListParamIntervalsReq, opts ...client.Option) (rsp *ListParamIntervalsRsp, err error)
 }
 
 type FactorEngineClientProxyImpl struct {
@@ -1408,6 +1936,66 @@ func (c *FactorEngineClientProxyImpl) ReportRecalcProgress(ctx context.Context, 
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ReportRecalcProgressRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorEngineClientProxyImpl) FreezeFactorParams(ctx context.Context, req *FreezeFactorParamsReq, opts ...client.Option) (*FreezeFactorParamsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/FreezeFactorParams")
+	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorEngine")
+	msg.WithCalleeMethod("FreezeFactorParams")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &FreezeFactorParamsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorEngineClientProxyImpl) ReportOfflineFreezes(ctx context.Context, req *ReportOfflineFreezesReq, opts ...client.Option) (*ReportOfflineFreezesRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/ReportOfflineFreezes")
+	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorEngine")
+	msg.WithCalleeMethod("ReportOfflineFreezes")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReportOfflineFreezesRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorEngineClientProxyImpl) ListParamIntervals(ctx context.Context, req *ListParamIntervalsReq, opts ...client.Option) (*ListParamIntervalsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorEngine/ListParamIntervals")
+	msg.WithCalleeServiceName(FactorEngineServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorEngine")
+	msg.WithCalleeMethod("ListParamIntervals")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListParamIntervalsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

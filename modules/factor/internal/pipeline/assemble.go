@@ -43,15 +43,16 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 	rows := make(map[resultKey]*assembledRow)
 	factorColumns := make([]string, 0)
 	columnSet := make(map[string]struct{})
-	for _, factor := range plan.Factors {
-		for _, output := range factor.Outputs {
-			if _, exists := columnSet[output]; exists {
-				return nil, AssembleReport{}, fmt.Errorf("duplicate factor output column %q", output)
+	for _, member := range plan.Members {
+		for _, column := range append(member.OutputColumns(), member.ParamColumns()...) {
+			if _, exists := columnSet[column]; exists {
+				return nil, AssembleReport{}, fmt.Errorf("duplicate factor result column %q", column)
 			}
-			columnSet[output] = struct{}{}
-			factorColumns = append(factorColumns, output)
+			columnSet[column] = struct{}{}
 		}
+		factorColumns = append(factorColumns, member.OutputColumns()...)
 	}
+	params := planParams(plan)
 	carryColumns := append([]string(nil), plan.CarryColumns...)
 	if !plan.WriteCarry {
 		carryColumns = nil
@@ -84,10 +85,14 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 			for _, column := range carryColumns {
 				fields[column] = values[positions[column]]
 			}
-			// 只填充时不预置因子列：没有取得有效值的因子列不写，不会把已有的值覆盖成 NULL。
+			// 只填充时不预置因子列：没有取得有效值的因子列不写，不会把已有的值覆盖成 NULL。参数列写这一期实际用的值，
+			// 只填充时随取得有效值的成员一起写。
 			if !plan.FillOnly {
 				for _, column := range factorColumns {
 					fields[column] = nil
+				}
+				for _, member := range params {
+					member.put(fields, subject)
 				}
 			}
 			if _, exists := rows[key]; exists {
@@ -98,38 +103,39 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 	}
 
 	failedFactorSubjects := make(map[string]map[string]struct{})
-	for _, factor := range plan.Factors {
-		bySubject := computation.Results[factor.FactorID]
-		if factor.FactorType == domain.FactorTypeCrossSection {
+	for _, member := range plan.Members {
+		bySubject := computation.Results[member.Alias]
+		memberParams := params[member.Alias]
+		if member.Factor.FactorType == domain.FactorTypeCrossSection {
 			if item, ok := bySubject[""]; ok {
 				if item.Err != nil {
 					for _, subject := range plan.Available {
-						markFactorSubjectFailure(computation, failedFactorSubjects, factor, subject)
+						markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
 					}
 					continue
 				}
-				if err := validateResultColumns(item, factor, true); err != nil {
+				if err := validateResultColumns(item, member, true); err != nil {
 					for _, subject := range plan.Available {
-						markFactorSubjectFailure(computation, failedFactorSubjects, factor, subject)
+						markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
 					}
 					continue
 				}
 				for rowNo, result := range item.Rows {
-					at, tag, subject, outputs, decodeErr := decodeResultRow(result, factor, true)
+					at, tag, subject, outputs, decodeErr := decodeResultRow(result, true)
 					if decodeErr != nil {
-						return nil, AssembleReport{}, fmt.Errorf("factor %q cross-section result row %d: %w", factor.FactorID, rowNo, decodeErr)
+						return nil, AssembleReport{}, fmt.Errorf("member %q cross-section result row %d: %w", member.Alias, rowNo, decodeErr)
 					}
 					if !subjectIn(plan.Available, subject) {
-						return nil, AssembleReport{}, fmt.Errorf("factor %q returned unexpected subject %q", factor.FactorID, subject)
+						return nil, AssembleReport{}, fmt.Errorf("member %q returned unexpected subject %q", member.Alias, subject)
 					}
 					if !inTargetRange(plan, target, at) {
 						continue
 					}
-					if applyFactorValues(rows, resultKey{subject: subject, at: at.UTC(), tag: tag}, factor, outputs, factorColumns, plan.FillOnly) {
-						applied[ItemKey{FactorID: factor.FactorID, Subject: subject, Period: at.UTC()}] = true
+					if applyFactorValues(rows, resultKey{subject: subject, at: at.UTC(), tag: tag}, member, memberParams, outputs, factorColumns, plan.FillOnly) {
+						applied[ItemKey{Member: member.Alias, Subject: subject, Period: at.UTC()}] = true
 					} else {
-						failedItems[ItemKey{FactorID: factor.FactorID, Subject: subject, Period: at.UTC()}] = true
-						markFactorSubjectFailure(computation, failedFactorSubjects, factor, subject)
+						failedItems[ItemKey{Member: member.Alias, Subject: subject, Period: at.UTC()}] = true
+						markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
 					}
 				}
 			}
@@ -138,33 +144,33 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 
 		for subject, item := range bySubject {
 			if item.Err != nil {
-				markFactorSubjectFailure(computation, failedFactorSubjects, factor, subject)
+				markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
 				continue
 			}
-			if err := validateResultColumns(item, factor, false); err != nil {
-				markFactorSubjectFailure(computation, failedFactorSubjects, factor, subject)
+			if err := validateResultColumns(item, member, false); err != nil {
+				markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
 				continue
 			}
 			for rowNo, result := range item.Rows {
-				at, tag, _, outputs, decodeErr := decodeResultRow(result, factor, false)
+				at, tag, _, outputs, decodeErr := decodeResultRow(result, false)
 				if decodeErr != nil {
-					return nil, AssembleReport{}, fmt.Errorf("factor %q subject %q result row %d: %w", factor.FactorID, subject, rowNo, decodeErr)
+					return nil, AssembleReport{}, fmt.Errorf("member %q subject %q result row %d: %w", member.Alias, subject, rowNo, decodeErr)
 				}
 				if !inTargetRange(plan, target, at) {
 					continue
 				}
-				if applyFactorValues(rows, resultKey{subject: subject, at: at.UTC(), tag: tag}, factor, outputs, factorColumns, plan.FillOnly) {
-					applied[ItemKey{FactorID: factor.FactorID, Subject: subject, Period: at.UTC()}] = true
+				if applyFactorValues(rows, resultKey{subject: subject, at: at.UTC(), tag: tag}, member, memberParams, outputs, factorColumns, plan.FillOnly) {
+					applied[ItemKey{Member: member.Alias, Subject: subject, Period: at.UTC()}] = true
 				} else {
-					failedItems[ItemKey{FactorID: factor.FactorID, Subject: subject, Period: at.UTC()}] = true
-					markFactorSubjectFailure(computation, failedFactorSubjects, factor, subject)
+					failedItems[ItemKey{Member: member.Alias, Subject: subject, Period: at.UTC()}] = true
+					markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
 				}
 			}
 		}
 	}
 
-	for _, factor := range plan.Factors {
-		failedSubjects := failedFactorSubjects[factor.FactorID]
+	for _, member := range plan.Members {
+		failedSubjects := failedFactorSubjects[member.Alias]
 		if len(failedSubjects) == 0 || plan.FillOnly {
 			continue
 		}
@@ -172,8 +178,8 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 			if _, failed := failedSubjects[key.subject]; !failed {
 				continue
 			}
-			for _, output := range factor.Outputs {
-				row.fields[output] = nil
+			for _, column := range member.OutputColumns() {
+				row.fields[column] = nil
 			}
 		}
 	}
@@ -258,12 +264,12 @@ func parseDataTime(value any) (time.Time, error) {
 	}
 }
 
-func validateResultColumns(item ItemResult, factor domain.FactorDef, cross bool) error {
+func validateResultColumns(item ItemResult, member domain.MemberDef, cross bool) error {
 	want := []string{"data_time", "series_tag"}
 	if cross {
 		want = append(want, "subject_id")
 	}
-	want = append(want, factor.Outputs...)
+	want = append(want, member.OutputColumns()...)
 	if len(item.Columns) != len(want) {
 		return fmt.Errorf("got %d columns, want %d", len(item.Columns), len(want))
 	}
@@ -280,7 +286,7 @@ func validateResultColumns(item ItemResult, factor domain.FactorDef, cross bool)
 	return nil
 }
 
-func decodeResultRow(values []any, factor domain.FactorDef, cross bool) (time.Time, string, string, []any, error) {
+func decodeResultRow(values []any, cross bool) (time.Time, string, string, []any, error) {
 	at, err := parseDataTime(values[0])
 	if err != nil {
 		return time.Time{}, "", "", nil, err
@@ -302,7 +308,8 @@ func decodeResultRow(values []any, factor domain.FactorDef, cross bool) (time.Ti
 	return at, tag, subject, values[index:], nil
 }
 
-func applyFactorValues(rows map[resultKey]*assembledRow, key resultKey, factor domain.FactorDef, values []any, allFactorColumns []string, fillOnly bool) bool {
+func applyFactorValues(rows map[resultKey]*assembledRow, key resultKey, member domain.MemberDef, params memberParamColumns, values []any,
+	allFactorColumns []string, fillOnly bool) bool {
 	valid := true
 	for _, value := range values {
 		if _, ok := numericOrNull(value); !ok {
@@ -323,16 +330,44 @@ func applyFactorValues(rows map[resultKey]*assembledRow, key resultKey, factor d
 		}
 		rows[key] = row
 	}
+	columns := member.OutputColumns()
 	if !valid {
-		for _, column := range factor.Outputs {
+		for _, column := range columns {
 			row.fields[column] = nil
 		}
 		return false
 	}
-	for i, column := range factor.Outputs {
+	for i, column := range columns {
 		row.fields[column] = normalizeNumeric(values[i])
 	}
+	params.put(row.fields, key.subject)
 	return true
+}
+
+// memberParamColumns 是一个成员的参数列与本次计算的快照：每行写“这个标的这一期实际用的值”。
+type memberParamColumns struct {
+	names    []string
+	columns  []string
+	snapshot domain.ParamSnapshot
+}
+
+func (m memberParamColumns) put(fields map[string]any, subject string) {
+	for i, name := range m.names {
+		fields[m.columns[i]] = m.snapshot.Value(name, subject)
+	}
+}
+
+// planParams 返回每个成员的参数列与本次计算的快照。
+func planParams(plan Plan) map[string]memberParamColumns {
+	out := make(map[string]memberParamColumns, len(plan.Members))
+	for _, member := range plan.Members {
+		names := member.ParamNames()
+		if len(names) == 0 {
+			continue
+		}
+		out[member.Alias] = memberParamColumns{names: names, columns: member.ParamColumns(), snapshot: snapshotOf(plan, member)}
+	}
+	return out
 }
 
 func numericOrNull(value any) (float64, bool) {
@@ -388,17 +423,17 @@ func normalizeNumeric(value any) any {
 	return value
 }
 
-func markFactorSubjectFailure(computation Computation, failed map[string]map[string]struct{}, factor domain.FactorDef, subject string) {
-	if failed[factor.FactorID] == nil {
-		failed[factor.FactorID] = make(map[string]struct{})
+func markFactorSubjectFailure(computation Computation, failed map[string]map[string]struct{}, member domain.MemberDef, subject string) {
+	if failed[member.Alias] == nil {
+		failed[member.Alias] = make(map[string]struct{})
 	}
-	failed[factor.FactorID][subject] = struct{}{}
-	state := computation.FactorStates[factor.FactorID]
-	state.FactorID = factor.FactorID
+	failed[member.Alias][subject] = struct{}{}
+	state := computation.FactorStates[member.Alias]
+	state.Member, state.FactorID = member.Alias, member.Factor.FactorID
 	state.Status = "degraded"
-	state.SourceHash = factor.SpecHash
+	state.SourceHash = member.Factor.SpecHash
 	state.FailedSubjects = uniqueSorted(append(state.FailedSubjects, subject))
-	computation.FactorStates[factor.FactorID] = state
+	computation.FactorStates[member.Alias] = state
 }
 
 func subjectIn(subjects []string, wanted string) bool {
@@ -423,10 +458,10 @@ func (r *Runner) assembleReport(plan Plan, loaded LoadResult, computation Comput
 	}
 	report := AssembleReport{Items: make(map[ItemKey]ItemStatus)}
 	subjects := intersectLists(plan.Expected, loaded.Available)
-	for _, factor := range plan.Factors {
+	for _, member := range plan.Members {
 		for _, target := range targets {
 			for _, subject := range subjects {
-				key := ItemKey{FactorID: factor.FactorID, Subject: subject, Period: target.UTC()}
+				key := ItemKey{Member: member.Alias, Subject: subject, Period: target.UTC()}
 				switch {
 				case applied[key]:
 					report.Items[key] = ItemWritten

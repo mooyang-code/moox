@@ -17,6 +17,11 @@ type Metrics struct {
 	GapLedgerDegraded prometheus.Gauge
 	// SeriesChangeGaps 是本地时序存储的变更日志同步位点断档的次数（需要对账）。
 	SeriesChangeGaps prometheus.Counter
+	// 参数冻结（因子动态调参执行计划 2.10）：按来源统计的冻结次数、成员连续沿用的期数、离线冻结次数与补报冲突次数。
+	ParamFreezes          *prometheus.CounterVec
+	ParamCarriedPeriods   *prometheus.GaugeVec
+	ParamOfflineFreezes   *prometheus.CounterVec
+	ParamOfflineConflicts *prometheus.CounterVec
 }
 
 func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
@@ -61,6 +66,18 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 		SeriesChangeGaps: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "factor_series_change_gaps_total", Help: "Number of times a local series source lost its change-log cursor and needs reconciliation.",
 		}),
+		ParamFreezes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "factor_param_freezes_total", Help: "每个成员每期冻结参数的次数，按来源（requested、carried、carried_offline、default）。",
+		}, []string{"set_id", "source"}),
+		ParamCarriedPeriods: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "factor_param_carried_periods", Help: "成员连续沿用（没有新提交）参数的期数；提交生效后归零。",
+		}, []string{"set_id", "member"}),
+		ParamOfflineFreezes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "factor_param_offline_freezes_total", Help: "FactorMgr 不可达时引擎在本地冻结参数的成员期数。",
+		}, []string{"set_id"}),
+		ParamOfflineConflicts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "factor_param_offline_conflicts_total", Help: "补报离线冻结时管理端已有不同记录的成员期数（以管理端为准，需要手工重算）。",
+		}, []string{"set_id"}),
 	}
 	if err := registerer.Register(metrics.PeriodDuration); err != nil {
 		return nil, err
@@ -68,6 +85,7 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 	collectors := []prometheus.Collector{
 		metrics.PeriodLag, metrics.PeriodTotal, metrics.Failures, metrics.LaneBacklog, metrics.CompileErrors, metrics.LastPeriodTime,
 		metrics.GapPending, metrics.GapSkipped, metrics.GapGaveUp, metrics.GapLedgerDegraded, metrics.SeriesChangeGaps,
+		metrics.ParamFreezes, metrics.ParamCarriedPeriods, metrics.ParamOfflineFreezes, metrics.ParamOfflineConflicts,
 	}
 	for _, collector := range collectors {
 		if err := registerer.Register(collector); err != nil {

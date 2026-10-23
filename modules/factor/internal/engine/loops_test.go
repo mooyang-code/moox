@@ -284,7 +284,7 @@ func (f runnerFunc) Run(ctx context.Context, plan pipeline.Plan) (pipeline.Outco
 func TestRecalcLoopCompilesJobDefinitions(t *testing.T) {
 	job := testJob("BTC")
 	job.Set = uncompiled(job.Set)
-	require.Nil(t, job.Set.Factors[0].Compiled())
+	require.Nil(t, job.Set.Members[0].Factor.Compiled())
 	client := &jobClientFake{job: job, found: true}
 	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
 	loop := newTestLoop(client, runner, &sourceFake{})
@@ -294,8 +294,8 @@ func TestRecalcLoopCompilesJobDefinitions(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, runner.plans, 3)
 	for _, plan := range runner.plans {
-		require.NotNil(t, plan.Factors[0].Compiled())
-		require.Equal(t, 2, plan.Factors[0].LookbackPeriods)
+		require.NotNil(t, plan.Members[0].Factor.Compiled())
+		require.Equal(t, 2, plan.Members[0].Factor.LookbackPeriods)
 	}
 }
 

@@ -22,8 +22,8 @@ func TestRunTrackerKeepsNewestPeriodAndComputesLag(t *testing.T) {
 	tracker.record("fset_b", t1, "degraded", pipeline.Outcome{
 		FailedSubjects: []string{"ETHUSDT"},
 		Factors: []storageio.FactorState{
-			{FactorID: "momentum", Status: "complete", SourceHash: "abc"},
-			{FactorID: "rank", Status: "degraded", FailedSubjects: []string{"ETHUSDT"}},
+			{Member: "momentum", FactorID: "momentum", Status: "complete", SourceHash: "abc"},
+			{Member: "rank", FactorID: "rank", Status: "degraded", FailedSubjects: []string{"ETHUSDT"}},
 		},
 	}, completed)
 
@@ -40,8 +40,8 @@ func TestRunTrackerKeepsNewestPeriodAndComputesLag(t *testing.T) {
 	degraded := tracker.latest("fset_b", t1)
 	require.Equal(t, []string{"ETHUSDT"}, degraded.FailedSubjects)
 	require.Equal(t, []domain.FactorPeriodState{
-		{FactorID: "momentum", Status: "complete", SpecHash: "abc"},
-		{FactorID: "rank", Status: "degraded", FailedSubjects: []string{"ETHUSDT"}},
+		{MemberAlias: "momentum", FactorID: "momentum", Status: "complete", SpecHash: "abc"},
+		{MemberAlias: "rank", FactorID: "rank", Status: "degraded", FailedSubjects: []string{"ETHUSDT"}},
 	}, degraded.Factors)
 }
 
@@ -53,16 +53,16 @@ func TestRunTrackerUpgradesLatestPeriodOnceRepairIsDone(t *testing.T) {
 	warmingRun := pipeline.Outcome{
 		Status: "degraded", Warming: 2, FailedSubjects: []string{"BTC", "ETH", "XRP"},
 		Factors: []storageio.FactorState{
-			{FactorID: "ma", Status: "degraded", FailedSubjects: []string{"BTC", "ETH", "XRP"}},
-			{FactorID: "rank", Status: "skipped", FailedSubjects: []string{"BTC", "ETH", "XRP"}},
-			{FactorID: "vol", Status: "degraded"},
+			{Member: "ma", FactorID: "ma", Status: "degraded", FailedSubjects: []string{"BTC", "ETH", "XRP"}},
+			{Member: "rank", FactorID: "rank", Status: "skipped", FailedSubjects: []string{"BTC", "ETH", "XRP"}},
+			{Member: "vol", FactorID: "vol", Status: "degraded"},
 		},
 	}
 	items := func(subjects ...string) []pipeline.ItemKey {
 		var out []pipeline.ItemKey
 		for _, factor := range []string{"ma", "rank"} {
 			for _, subject := range subjects {
-				out = append(out, pipeline.ItemKey{FactorID: factor, Subject: subject, Period: period})
+				out = append(out, pipeline.ItemKey{Member: factor, Subject: subject, Period: period})
 			}
 		}
 		return out
@@ -88,31 +88,31 @@ func TestRunTrackerUpgradesLatestPeriodOnceRepairIsDone(t *testing.T) {
 	require.Equal(t, []string{"XRP"}, summary.FailedSubjects, "XRP 没有待办（上游失败），补算不覆盖")
 	require.Equal(t, "degraded", summary.LastStatus)
 	require.Equal(t, []domain.FactorPeriodState{
-		{FactorID: "ma", Status: "degraded", FailedSubjects: []string{"XRP"}},
-		{FactorID: "rank", Status: "skipped", FailedSubjects: []string{"XRP"}},
-		{FactorID: "vol", Status: "degraded"},
+		{MemberAlias: "ma", FactorID: "ma", Status: "degraded", FailedSubjects: []string{"XRP"}},
+		{MemberAlias: "rank", FactorID: "rank", Status: "skipped", FailedSubjects: []string{"XRP"}},
+		{MemberAlias: "vol", FactorID: "vol", Status: "degraded"},
 	}, summary.Factors, "整因子失败（没有列出标的）保持原状")
 
 	// 没有补算之外的失败：补齐后记为完成。
 	clean := pipeline.Outcome{
 		Status: "degraded", Warming: 2, FailedSubjects: []string{"BTC", "ETH"},
 		Factors: []storageio.FactorState{
-			{FactorID: "ma", Status: "degraded", FailedSubjects: []string{"BTC", "ETH"}, GapSubjects: []string{"ETH"}},
-			{FactorID: "rank", Status: "skipped", GapSubjects: []string{"BTC"}},
+			{Member: "ma", FactorID: "ma", Status: "degraded", FailedSubjects: []string{"BTC", "ETH"}, GapSubjects: []string{"ETH"}},
+			{Member: "rank", FactorID: "rank", Status: "skipped", GapSubjects: []string{"BTC"}},
 		},
 	}
 	next := period.Add(time.Hour)
 	tracker.record("fset", next, "degraded", clean, live.Add(time.Hour))
 	require.False(t, tracker.repair("fset", RepairedPeriod{Period: period, Repaired: items("XRP"), Done: true}, repaired), "已经有更新的一期")
 	nextItems := []pipeline.ItemKey{
-		{FactorID: "ma", Subject: "BTC", Period: next}, {FactorID: "ma", Subject: "ETH", Period: next},
-		{FactorID: "rank", Subject: "BTC", Period: next}, {FactorID: "rank", Subject: "ETH", Period: next},
+		{Member: "ma", Subject: "BTC", Period: next}, {Member: "ma", Subject: "ETH", Period: next},
+		{Member: "rank", Subject: "BTC", Period: next}, {Member: "rank", Subject: "ETH", Period: next},
 	}
 	require.True(t, tracker.repair("fset", RepairedPeriod{Period: next, Repaired: nextItems, Done: true}, repaired.Add(time.Hour)))
 	summary = tracker.latest("fset", repaired.Add(time.Hour))
 	require.Equal(t, "complete", summary.LastStatus)
 	require.Empty(t, summary.FailedSubjects)
-	require.Equal(t, []domain.FactorPeriodState{{FactorID: "ma", Status: "complete"}, {FactorID: "rank", Status: "complete"}}, summary.Factors)
+	require.Equal(t, []domain.FactorPeriodState{{MemberAlias: "ma", FactorID: "ma", Status: "complete"}, {MemberAlias: "rank", FactorID: "rank", Status: "complete"}}, summary.Factors)
 	require.False(t, tracker.repair("fset", RepairedPeriod{Period: next, Repaired: nextItems, Done: true}, repaired.Add(2*time.Hour)), "已完成的期次不再改写")
 	require.Equal(t, repaired.Add(time.Hour).Unix(), tracker.latest("fset", repaired).CompletedAt)
 }
@@ -123,10 +123,10 @@ func TestRunTrackerKeepsUnwrittenItemsOfSkippedFactor(t *testing.T) {
 	tracker := newRunTracker()
 	tracker.record("fset", period, "degraded", pipeline.Outcome{
 		Status:  "degraded",
-		Factors: []storageio.FactorState{{FactorID: "rank", Status: "skipped", GapSubjects: []string{"A"}}, {FactorID: "ma", Status: "degraded", FailedSubjects: []string{"A"}, GapSubjects: []string{"A"}}},
+		Factors: []storageio.FactorState{{Member: "rank", FactorID: "rank", Status: "skipped", GapSubjects: []string{"A"}}, {Member: "ma", FactorID: "ma", Status: "degraded", FailedSubjects: []string{"A"}, GapSubjects: []string{"A"}}},
 	}, period.Add(time.Hour))
 	at := func(factor, subject string) pipeline.ItemKey {
-		return pipeline.ItemKey{FactorID: factor, Subject: subject, Period: period}
+		return pipeline.ItemKey{Member: factor, Subject: subject, Period: period}
 	}
 	require.True(t, tracker.repair("fset", RepairedPeriod{
 		Period: period, Repaired: []pipeline.ItemKey{at("rank", "A"), at("ma", "A")},
@@ -135,8 +135,8 @@ func TestRunTrackerKeepsUnwrittenItemsOfSkippedFactor(t *testing.T) {
 	summary := tracker.latest("fset", period)
 	require.Equal(t, "degraded", summary.LastStatus)
 	require.Equal(t, []domain.FactorPeriodState{
-		{FactorID: "rank", Status: "skipped", FailedSubjects: []string{"B"}},
-		{FactorID: "ma", Status: "complete"},
+		{MemberAlias: "rank", FactorID: "rank", Status: "skipped", FailedSubjects: []string{"B"}},
+		{MemberAlias: "ma", FactorID: "ma", Status: "complete"},
 	}, summary.Factors, "时序因子 C 的值实时路径已经写过，补算没写成不影响")
 }
 

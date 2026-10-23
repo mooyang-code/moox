@@ -28,12 +28,12 @@ func (h *Hub) Snapshot(ctx context.Context, knownHash string) (string, bool, []d
 		if err != nil {
 			return "", false, nil, fmt.Errorf("list enabled members of %s: %w", set.SetID, err)
 		}
-		factors := make([]domain.FactorDef, 0, len(members))
+		defs := make([]domain.MemberDef, 0, len(members))
 		for _, member := range members {
-			factors = append(factors, member.Factor)
+			defs = append(defs, member.Def())
 		}
-		sort.Slice(factors, func(i, j int) bool { return factors[i].FactorID < factors[j].FactorID })
-		sets = append(sets, domain.EngineSet{Set: set, Factors: factors, ResultReady: h.isReady(set.SetID)})
+		sort.Slice(defs, func(i, j int) bool { return defs[i].Alias < defs[j].Alias })
+		sets = append(sets, domain.EngineSet{Set: set, Members: defs, ResultReady: h.isReady(set.SetID)})
 	}
 	sort.Slice(sets, func(i, j int) bool { return sets[i].Set.SetID < sets[j].Set.SetID })
 	hash, err := CatalogHash(sets)
@@ -54,13 +54,16 @@ type hashedSet struct {
 	SubjectMode     string         `json:"subject_mode"`
 	Subjects        []string       `json:"subjects"`
 	ResultDatasetID string         `json:"result_dataset_id"`
+	OwnerInstanceID string         `json:"owner_instance_id"`
 	Status          string         `json:"status"`
 	ResultReady     bool           `json:"result_ready"`
-	Factors         []hashedFactor `json:"factors"`
+	Members         []hashedMember `json:"members"`
 }
 
-type hashedFactor struct {
+type hashedMember struct {
+	Alias                string `json:"alias"`
 	FactorID             string `json:"factor_id"`
+	CategoryID           string `json:"category_id"`
 	Name                 string `json:"name"`
 	SpecHash             string `json:"spec_hash"`
 	DefinitionHash       string `json:"definition_hash"`
@@ -73,18 +76,19 @@ type hashedFactor struct {
 func CatalogHash(sets []domain.EngineSet) (string, error) {
 	hashed := make([]hashedSet, 0, len(sets))
 	for _, set := range sets {
-		factors := make([]hashedFactor, 0, len(set.Factors))
-		for _, factor := range set.Factors {
-			factors = append(factors, hashedFactor{
-				FactorID: factor.FactorID, Name: factor.Name, SpecHash: factor.SpecHash,
+		members := make([]hashedMember, 0, len(set.Members))
+		for _, member := range set.Members {
+			factor := member.Factor
+			members = append(members, hashedMember{
+				Alias: member.Alias, FactorID: factor.FactorID, CategoryID: factor.CategoryID, Name: factor.Name, SpecHash: factor.SpecHash,
 				DefinitionHash: domain.DefinitionHash(factor), AllowPartialUniverse: factor.AllowPartialUniverse,
 			})
 		}
 		hashed = append(hashed, hashedSet{
 			SetID: set.Set.SetID, SpaceID: set.Set.SpaceID, SourceDatasetID: set.Set.SourceDatasetID,
 			Freq: set.Set.Freq, SubjectMode: set.Set.SubjectMode, Subjects: set.Set.Subjects,
-			ResultDatasetID: set.Set.ResultDatasetID, Status: set.Set.Status, ResultReady: set.ResultReady,
-			Factors: factors,
+			ResultDatasetID: set.Set.ResultDatasetID, OwnerInstanceID: set.Set.OwnerInstanceID, Status: set.Set.Status,
+			ResultReady: set.ResultReady, Members: members,
 		})
 	}
 	raw, err := json.Marshal(hashed)

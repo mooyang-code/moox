@@ -27,7 +27,7 @@ func executorSelection(subjects ...string) Selection {
 			SetID: "fset_bars_1m", SpaceID: "crypto", SourceDatasetID: "dataset_bars_1m", Freq: "1m",
 			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.SetStatusEnabled,
 		},
-		Factors: []domain.FactorDef{member.def}, Subjects: subjects, Columns: []string{"close"},
+		Members: domain.AsMembers(member.def), Subjects: subjects, Columns: []string{"close"},
 	}
 }
 
@@ -219,7 +219,7 @@ func pipelineSelection(factors ...recalcMember) Selection {
 			SubjectMode: domain.SubjectModeInclude, Subjects: []string{"BTC"},
 			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.SetStatusEnabled,
 		},
-		Factors: defs, Subjects: []string{"BTC"}, Columns: []string{"close"},
+		Members: domain.AsMembers(defs...), Subjects: []string{"BTC"}, Columns: []string{"close"},
 	}
 }
 
@@ -227,9 +227,9 @@ func pipelineSelection(factors ...recalcMember) Selection {
 func TestChunkNarrowsToMemoryBudget(t *testing.T) {
 	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	selection := pipelineSelection(testRecalcFactor("mean", domain.MemberStatusEnabled, 3))
-	full, err := pipeline.EstimateChunkMemory(selection.Factors, len(selection.Subjects), 6, len(selection.Columns))
+	full, err := pipeline.EstimateChunkMemory(selection.Members, len(selection.Subjects), 6, len(selection.Columns))
 	require.NoError(t, err)
-	fit, err := pipeline.MaxPeriodsWithin(selection.Factors, len(selection.Subjects), len(selection.Columns), 6, full.Total()/2)
+	fit, err := pipeline.MaxPeriodsWithin(selection.Members, len(selection.Subjects), len(selection.Columns), 6, full.Total()/2)
 	require.NoError(t, err)
 	require.Less(t, fit, 6)
 
@@ -334,7 +334,7 @@ func TestRunChunkWithRereadsSelectionAndCallsAfterUnderLock(t *testing.T) {
 	locks := &countingLocks{}
 	runner := &recordingRunner{onRun: func(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
 		require.True(t, locks.held, "运行必须在集合锁内")
-		return pipeline.Outcome{Status: "complete", Items: map[pipeline.ItemKey]pipeline.ItemStatus{{FactorID: "f", Subject: "BTC"}: pipeline.ItemWritten}}, nil
+		return pipeline.Outcome{Status: "complete", Items: map[pipeline.ItemKey]pipeline.ItemStatus{{Member: "f", Subject: "BTC"}: pipeline.ItemWritten}}, nil
 	}}
 	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithLocks(locks))
 	calls := 0
@@ -359,7 +359,7 @@ func TestRunChunkWithRereadsSelectionAndCallsAfterUnderLock(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, calls, "锁外探测一次，锁内重读一次")
 	require.True(t, afterHeld, "after 在持有集合锁时调用")
-	require.Equal(t, pipeline.ItemWritten, outcome.Items[pipeline.ItemKey{FactorID: "f", Subject: "BTC"}])
+	require.Equal(t, pipeline.ItemWritten, outcome.Items[pipeline.ItemKey{Member: "f", Subject: "BTC"}])
 	plans := runner.snapshot()
 	require.Len(t, plans, 1)
 	require.True(t, plans[0].FillOnly)

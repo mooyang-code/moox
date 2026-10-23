@@ -120,7 +120,7 @@ func e2eLiveInput(target time.Time, subjects []string, factors []domain.FactorDe
 			SetID: "set_e2e", SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m",
 			SubjectMode: domain.SubjectModeAll, ResultDatasetID: "dataset_factor_bars_1m", Status: domain.SetStatusEnabled,
 		},
-		Factors: factors, PeriodTime: target, Universe: subjects, CarryColumns: []string{"close"}, TriggerEventID: "evt-1",
+		Members: domain.AsMembers(factors...), PeriodTime: target, Universe: subjects, CarryColumns: []string{"close"}, TriggerEventID: "evt-1",
 	}
 }
 

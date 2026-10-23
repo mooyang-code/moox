@@ -25,7 +25,7 @@ func TestCreateSetCreatesAndActivatesResultDataset(t *testing.T) {
 	set, err := svc.CreateSet(context.Background(), newSet())
 	require.NoError(t, err)
 	require.Equal(t, domain.SetID("dataset_prices", "1m"), set.SetID)
-	require.Equal(t, domain.ResultDatasetID("dataset_prices", "1m"), set.ResultDatasetID)
+	require.Equal(t, domain.ResultDatasetID(domain.SetID("dataset_prices", "1m")), set.ResultDatasetID)
 	require.Equal(t, domain.SetStatusEnabled, set.Status)
 	require.Equal(t, "storage-node-0", meta.createdSpec.DataNodeID)
 	require.Equal(t, storageio.DatasetRoleFactorResult, meta.createdSpec.Attributes["dataset_role"])
@@ -152,7 +152,7 @@ func TestReconcileResumesDurableResultDatasetPurge(t *testing.T) {
 	require.Equal(t, domain.SetStatusDeleting, pending.Status)
 	_, err = svc.SetSetStatus(context.Background(), set.SetID, domain.SetStatusEnabled)
 	require.ErrorContains(t, err, "purge is pending")
-	_, err = svc.AddFactorToSet(context.Background(), set.SetID, "momentum")
+	_, err = svc.AddFactorToSet(context.Background(), set.SetID, "", "momentum")
 	require.ErrorContains(t, err, "purge is pending")
 
 	// Reconcile runs at startup and periodically. It resumes after failures at
@@ -186,9 +186,9 @@ func TestDeletingSetRejectsLifecycleMutation(t *testing.T) {
 	// still cannot alter the pending purge into an enabled or stuck state.
 	factor, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
-	_, err = svc.AddFactorToSet(context.Background(), set.SetID, factor.FactorID)
+	_, err = svc.AddFactorToSet(context.Background(), set.SetID, "", factor.FactorID)
 	require.ErrorContains(t, err, "purge is pending")
-	_, err = db.AddMember(context.Background(), set.SetID, factor.FactorID)
+	_, err = db.AddMember(context.Background(), set.SetID, factor.FactorID, factor.FactorID)
 	require.NoError(t, err)
 	_, _, err = svc.SetFactorMemberStatus(context.Background(), set.SetID, factor.FactorID, domain.MemberStatusEnabled)
 	require.ErrorContains(t, err, "purge is pending")
@@ -242,7 +242,7 @@ func TestCreateFactorRunsStaticValidation(t *testing.T) {
 	require.Error(t, err)
 	_, err = svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
-	resultColumns, err := meta.ListColumns(context.Background(), "crypto", domain.ResultDatasetID("dataset_prices", "1m"))
+	resultColumns, err := meta.ListColumns(context.Background(), "crypto", domain.ResultDatasetID(domain.SetID("dataset_prices", "1m")))
 	require.NoError(t, err)
 	require.NotContains(t, metadataColumnNames(resultColumns), "momentum")
 }
@@ -253,14 +253,14 @@ func TestAddFactorToSetValidatesAgainstSourceColumns(t *testing.T) {
 	unknown := factorWithSpec("unknown_input", "outputs:\n  unknown_input: missing\n")
 	_, err := svc.CreateFactor(context.Background(), unknown)
 	require.NoError(t, err)
-	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "unknown_input")
+	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "unknown_input")
 	require.ErrorContains(t, err, "unknown input column")
 
 	collide := factorWithSpec("collide", "outputs:\n  close: close * 2\n")
 	_, err = svc.CreateFactor(context.Background(), collide)
 	require.NoError(t, err)
-	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "collide")
-	require.ErrorContains(t, err, "collides with a source column")
+	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "collide")
+	require.ErrorContains(t, err, "与源列重名")
 	_, err = db.GetMember(context.Background(), testSetID(), "collide")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
@@ -273,7 +273,7 @@ func TestAddFactorToSetRejectsPendingOrDeletingSet(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.SetSetStatus(context.Background(), testSetID(), domain.SetStatusEnabled, domain.SetStatusDisabled))
 	require.NoError(t, db.SetSetStatus(context.Background(), testSetID(), domain.SetStatusDisabled, domain.SetStatusDeleting))
-	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "momentum")
+	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum")
 	require.ErrorContains(t, err, "purge is pending")
 
 	pending := domain.FactorSet{
@@ -281,7 +281,7 @@ func TestAddFactorToSetRejectsPendingOrDeletingSet(t *testing.T) {
 		SubjectMode: domain.SubjectModeAll, Subjects: []string{}, ResultDatasetID: "dataset_factor_pending", Status: domain.SetStatusPending,
 	}
 	require.NoError(t, db.CreateSet(context.Background(), pending))
-	_, err = svc.AddFactorToSet(context.Background(), pending.SetID, "momentum")
+	_, err = svc.AddFactorToSet(context.Background(), pending.SetID, "", "momentum")
 	require.ErrorContains(t, err, "not ready")
 }
 
@@ -294,13 +294,13 @@ func TestAddFactorToSetRejectsOutputOwnedByOtherFactor(t *testing.T) {
 	_, err := svc.CreateFactor(context.Background(), other)
 	require.NoError(t, err)
 	// A retained result column from a removed "other" member.
-	require.NoError(t, meta.UpsertColumns(context.Background(), "crypto", domain.ResultDatasetID("dataset_prices", "1m"),
-		appendFactorColumns(nil, domain.MustDefinition(other.FactorID, other.Name, other.Spec))))
+	require.NoError(t, meta.UpsertColumns(context.Background(), "crypto", domain.ResultDatasetID(domain.SetID("dataset_prices", "1m")),
+		appendFactorColumns(nil, domain.MemberDef{Alias: other.FactorID, Factor: domain.MustDefinition(other.FactorID, other.Name, other.Spec)})))
 	_, err = svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
 
-	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "momentum")
-	require.ErrorContains(t, err, "already owned")
+	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum")
+	require.ErrorContains(t, err, "已属于")
 }
 
 func TestAddFactorToSetDoesNotAddColumnsOrSubmitRecalc(t *testing.T) {
@@ -313,7 +313,7 @@ func TestAddFactorToSetDoesNotAddColumnsOrSubmitRecalc(t *testing.T) {
 	require.NoError(t, err)
 	meta.writeOps = nil
 
-	member, err := svc.AddFactorToSet(context.Background(), testSetID(), "momentum")
+	member, err := svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum")
 	require.NoError(t, err)
 	require.Equal(t, domain.MemberStatusDisabled, member.Status)
 	require.Equal(t, "momentum", member.Factor.FactorID)
@@ -330,7 +330,7 @@ func TestReaddAfterRemoveReusesRetainedColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.RemoveFactorFromSet(context.Background(), testSetID(), "momentum"))
 
-	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "momentum")
+	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum")
 	require.NoError(t, err)
 	_, _, err = svc.SetFactorMemberStatus(context.Background(), testSetID(), "momentum", domain.MemberStatusEnabled)
 	require.NoError(t, err)
@@ -360,7 +360,7 @@ func TestEnableMemberRevalidatesThenAddsColumnsThenSubmitsRecalc(t *testing.T) {
 	require.Equal(t, time.Date(2026, 9, 4, 10, 3, 0, 0, time.UTC), recalc.start)
 	require.Equal(t, time.Date(2026, 10, 4, 10, 3, 0, 0, time.UTC), recalc.end)
 	var output storageio.ColumnInfo
-	for _, col := range meta.columns[resultKey("crypto", domain.ResultDatasetID("dataset_prices", "1m"))] {
+	for _, col := range meta.columns[resultKey("crypto", domain.ResultDatasetID(domain.SetID("dataset_prices", "1m")))] {
 		if col.ColumnName == "momentum" {
 			output = col
 		}
@@ -368,6 +368,7 @@ func TestEnableMemberRevalidatesThenAddsColumnsThenSubmitsRecalc(t *testing.T) {
 	require.Equal(t, storageio.ColumnOriginFactor, output.OriginType)
 	require.Equal(t, map[string]string{
 		"display_name": "momentum", "factor_output": "momentum", "origin_factor_id": "momentum",
+		"member_alias": "momentum", "factor_id": "momentum", "category_id": domain.DefaultCategoryID, "column_kind": ColumnKindOutput, "output_name": "momentum",
 	}, output.Attributes)
 }
 
@@ -462,7 +463,7 @@ func TestDisableMemberKeepsColumns(t *testing.T) {
 	meta := newMetadataFake()
 	svc := newReadyService(t, db, meta)
 	addMember(t, svc, testSetID(), "momentum", domain.MemberStatusEnabled)
-	before := append([]storageio.ColumnInfo(nil), meta.columns[resultKey("crypto", domain.ResultDatasetID("dataset_prices", "1m"))]...)
+	before := append([]storageio.ColumnInfo(nil), meta.columns[resultKey("crypto", domain.ResultDatasetID(domain.SetID("dataset_prices", "1m")))]...)
 	meta.writeOps = nil
 
 	member, jobID, err := svc.SetFactorMemberStatus(context.Background(), testSetID(), "momentum", domain.MemberStatusDisabled)
@@ -470,7 +471,7 @@ func TestDisableMemberKeepsColumns(t *testing.T) {
 	require.Equal(t, domain.MemberStatusDisabled, member.Status)
 	require.Empty(t, jobID)
 	require.Empty(t, meta.writeOps)
-	require.Equal(t, before, meta.columns[resultKey("crypto", domain.ResultDatasetID("dataset_prices", "1m"))])
+	require.Equal(t, before, meta.columns[resultKey("crypto", domain.ResultDatasetID(domain.SetID("dataset_prices", "1m")))])
 }
 
 func TestRemoveRequiresDisabledMember(t *testing.T) {
@@ -501,7 +502,7 @@ func TestSameDefinitionEnablesIndependentlyInTwoSets(t *testing.T) {
 	require.NoError(t, err)
 	hourlyID := domain.SetID(hourlySource.DatasetID, "1h")
 	addMember(t, svc, testSetID(), "momentum", domain.MemberStatusEnabled)
-	_, err = svc.AddFactorToSet(context.Background(), hourlyID, "momentum")
+	_, err = svc.AddFactorToSet(context.Background(), hourlyID, "", "momentum")
 	require.NoError(t, err)
 
 	first, err := db.GetMember(context.Background(), testSetID(), "momentum")
@@ -584,7 +585,7 @@ func TestListFactorsWithAndWithoutSet(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, all, 2)
 	require.Empty(t, all[0].Usages) // loose sorts first
-	require.Equal(t, []domain.FactorUsage{{SetID: testSetID(), Status: domain.MemberStatusEnabled}}, all[1].Usages)
+	require.Equal(t, []domain.FactorUsage{{SetID: testSetID(), MemberAlias: "momentum", Status: domain.MemberStatusEnabled}}, all[1].Usages)
 
 	inSet, err := svc.ListFactors(context.Background(), testSetID(), domain.MemberStatusDisabled)
 	require.NoError(t, err)
@@ -599,10 +600,15 @@ func TestAddAndUpdateDoNotInterleave(t *testing.T) {
 	svc := newReadyService(t, db, newMetadataFake())
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
+	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum")
+	require.NoError(t, err)
 	unlock, err := svc.Locks().LockFactorContext(context.Background(), "momentum")
 	require.NoError(t, err)
 	done := make(chan error, 3)
-	go func() { _, err := svc.AddFactorToSet(context.Background(), testSetID(), "momentum"); done <- err }()
+	go func() {
+		_, err := svc.AddFactorToSet(context.Background(), testSetID(), "slow", "momentum")
+		done <- err
+	}()
 	go func() { _, err := svc.UpdateFactor(context.Background(), testFactor()); done <- err }()
 	go func() {
 		_, _, err := svc.SetFactorMemberStatus(context.Background(), testSetID(), "momentum", domain.MemberStatusDisabled)
@@ -632,7 +638,7 @@ func TestReconcileSetAddsNewSourceColumns(t *testing.T) {
 
 	require.NoError(t, svc.ReconcileSet(context.Background(), domain.SetID("dataset_prices", "1m")))
 	require.Equal(t, []string{"upsert_columns"}, meta.writeOps)
-	require.ElementsMatch(t, []storageio.ColumnInfo{sourceColumn("close"), sourceColumn("volume")}, meta.columns[resultKey("crypto", domain.ResultDatasetID("dataset_prices", "1m"))])
+	require.ElementsMatch(t, []storageio.ColumnInfo{sourceColumn("close"), sourceColumn("volume")}, meta.columns[resultKey("crypto", domain.ResultDatasetID(domain.SetID("dataset_prices", "1m")))])
 }
 
 func TestReconcileRejectsSourceColumnCollisionWithEnabledMember(t *testing.T) {
@@ -646,7 +652,7 @@ func TestReconcileRejectsSourceColumnCollisionWithEnabledMember(t *testing.T) {
 	meta.writeOps = nil
 
 	err := svc.ReconcileSet(context.Background(), domain.SetID("dataset_prices", "1m"))
-	require.ErrorContains(t, err, `source column "momentum" collides with enabled factor output`)
+	require.ErrorContains(t, err, `source column "momentum" collides with enabled member momentum`)
 	require.Empty(t, meta.writeOps)
 }
 
@@ -760,7 +766,7 @@ func addMember(t *testing.T, svc *Service, setID, factorID, status string) {
 		_, err = svc.CreateFactor(ctx, factorWithSpec(factorID, "outputs:\n  "+factorID+": ts_mean(close, 3)\n"))
 		require.NoError(t, err)
 	}
-	_, err := svc.AddFactorToSet(ctx, setID, factorID)
+	_, err := svc.AddFactorToSet(ctx, setID, "", factorID)
 	require.NoError(t, err)
 	if status == domain.MemberStatusEnabled {
 		_, _, err = svc.SetFactorMemberStatus(ctx, setID, factorID, domain.MemberStatusEnabled)
@@ -949,7 +955,8 @@ func (f *earliestPeriodFake) EarliestDatasetPeriod(_ context.Context, spaceID, d
 	return f.period, f.found, f.err
 }
 
-func (f *recalcFake) PrepareEnableBackfill(ctx context.Context, set domain.FactorSet, factor domain.FactorDef, start, end time.Time) (store.RecalcJob, error) {
+func (f *recalcFake) PrepareEnableBackfill(ctx context.Context, set domain.FactorSet, member domain.MemberDef, start, end time.Time) (store.RecalcJob, error) {
+	factor := member.Factor
 	stored, err := f.db.GetMember(ctx, set.SetID, factor.FactorID)
 	if err != nil {
 		return store.RecalcJob{}, err
@@ -965,7 +972,7 @@ func (f *recalcFake) PrepareEnableBackfill(ctx context.Context, set domain.Facto
 	}
 	return store.RecalcJob{
 		JobID: prefix + factor.FactorID, RequestID: prefix + factor.FactorID,
-		SetID: set.SetID, FactorIDs: []string{factor.FactorID}, Subjects: []string{"BTC-USDT"},
+		SetID: set.SetID, Members: []string{factor.FactorID}, Subjects: []string{"BTC-USDT"},
 		StartTime: start.Unix(), EndTime: end.Unix(), Status: store.RecalcStatusAccepted,
 	}, nil
 }
@@ -1094,5 +1101,5 @@ func TestEnableMemberReturnsTheStoredJobWhenMergedIntoAQueuedBackfill(t *testing
 
 	job, err := db.GetRecalcJob(context.Background(), second)
 	require.NoError(t, err, "返回的任务号必须能读到")
-	require.ElementsMatch(t, []string{"momentum", "bias"}, job.FactorIDs)
+	require.ElementsMatch(t, []string{"momentum", "bias"}, job.Members)
 }

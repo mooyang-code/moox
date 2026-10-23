@@ -21,10 +21,10 @@ func TestSnapshotOnlyEnabledSetsAndMembersWithSource(t *testing.T) {
 	require.NotEmpty(t, hash)
 	require.Len(t, sets, 1)
 	require.Equal(t, "set_a", sets[0].Set.SetID)
-	require.Len(t, sets[0].Factors, 1)
-	require.Equal(t, "bias", sets[0].Factors[0].FactorID)
-	require.NotEmpty(t, sets[0].Factors[0].Spec)
-	require.Equal(t, []string{"bias_value"}, sets[0].Factors[0].Outputs)
+	require.Len(t, sets[0].Members, 1)
+	require.Equal(t, "bias", sets[0].Members[0].Factor.FactorID)
+	require.NotEmpty(t, sets[0].Members[0].Factor.Spec)
+	require.Equal(t, []string{"bias_value"}, sets[0].Members[0].Factor.Outputs)
 	require.False(t, sets[0].ResultReady)
 }
 
@@ -76,11 +76,11 @@ func TestCatalogHashChanges(t *testing.T) {
 }
 
 func TestCatalogHashIgnoresTimestamps(t *testing.T) {
-	sets := []domain.EngineSet{{Set: domain.FactorSet{SetID: "set_a"}, Factors: []domain.FactorDef{testFactor("bias")}}}
+	sets := []domain.EngineSet{{Set: domain.FactorSet{SetID: "set_a"}, Members: domain.AsMembers(testFactor("bias"))}}
 	first, err := CatalogHash(sets)
 	require.NoError(t, err)
 	sets[0].Set.UpdatedAt = sets[0].Set.UpdatedAt.Add(1)
-	sets[0].Factors[0].UpdatedAt = sets[0].Factors[0].UpdatedAt.Add(1)
+	sets[0].Members[0].Factor.UpdatedAt = sets[0].Members[0].Factor.UpdatedAt.Add(1)
 
 	second, err := CatalogHash(sets)
 

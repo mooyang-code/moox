@@ -43,6 +43,7 @@ type Runtime struct {
 	gateway  *gatewayclient.Client
 	storage  *storageio.Client
 	manager  *ManagerClient
+	params   *paramFreezer
 	catalog  *CatalogCache
 	pipeline *pipeline.Runner
 	runner   *measuredRunner
@@ -175,6 +176,11 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	}); err != nil {
 		return nil, err
 	}
+	if r.params, err = newParamFreezer(r.manager, cfg.Params.StateFile, cfg.Params.FreezeTimeout); err != nil {
+		return nil, err
+	}
+	r.params.onOffline = func(setID string) { r.metrics.ParamOfflineFreezes.WithLabelValues(setID).Inc() }
+	r.params.onConflict = func(freeze domain.ParamFreeze) { r.metrics.ParamOfflineConflicts.WithLabelValues(freeze.SetID).Inc() }
 	r.advanceKick, r.filled = make(chan string, 64), newFilledPeriods(time.Now)
 	r.manager.OnFilled = func(filled []*factorpb.PeriodsFilled) { r.onFilled(filled, kickGap) }
 	base := pipeline.NewRunner(&observedStore{Store: r.storage, health: r.monitor}, r.data, clock, pipelineConfig)
@@ -210,11 +216,11 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	executor := recalcexec.NewExecutor(r.runner,
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks), recalcexec.WithClock(clock),
 		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate))
-	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval}
+	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval, params: r.params}
 	filler := &gapFiller{
 		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
 		active: r.active, cfg: cfg.Gap, now: time.Now, onGaveUp: func(n int) { r.metrics.GapGaveUp.Add(float64(n)) },
-		kick: gapKick, warmup: r.pipeline.WarmupStatuses, filled: r.filled.covers,
+		kick: gapKick, warmup: r.pipeline.WarmupStatuses, filled: r.filled.covers, params: r.params,
 		// 补齐的最新一期记入运行摘要（并立刻补发心跳）：预热中跳过的那一期补算后，因子管理服务马上把它记为完成。
 		onRepaired: func(setID string, period RepairedPeriod) {
 			if r.runs.repair(setID, period, time.Now()) {
@@ -226,6 +232,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		data: r.data, sets: r.catalog, source: r.storage, exec: executor, periods: committedThrough{r.continuity},
 		active: r.active, interval: cfg.Sync.FollowInterval, chunk: cfg.Recalc.ChunkPeriods, now: time.Now,
 		onGapped: func(seriesstore.Source) { r.metrics.SeriesChangeGaps.Inc() }, blocked: map[seriesstore.Source]bool{},
+		params: r.params,
 	}
 
 	r.goRun(appCtx, filler.Run)
@@ -237,8 +244,9 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.goRun(appCtx, r.reportMetrics)
 	r.goRun(appCtx, r.preload.Run)
 	r.goRun(appCtx, follower.Run)
+	r.goRun(appCtx, func(ctx context.Context) { r.params.Run(ctx, cfg.Engine.HeartbeatInterval) })
 	r.replays = newReplayManager(ReplayDeps{
-		Sets: r.catalog, Source: r.storage, Columns: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
+		Sets: r.catalog, Params: r.params, Source: r.storage, Columns: r.storage, Store: r.series, Runner: r.pipeline, Admit: r.admit,
 		BatchOK: func() int { return cfg.Pipeline.WriteBatchRows },
 	})
 	r.goRun(appCtx, r.replays.Run)
@@ -278,6 +286,7 @@ func (r *Runtime) reconcileConsumer() {
 			URLs: r.cfg.EventBus.URLs, CredentialFile: r.cfg.EventBus.CredentialFile,
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
 			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate, CatchupGate: r.catchupGate,
+			Params: r.params,
 		}, r.catalog, &observedStore{Store: r.storage, health: r.monitor}, r.runner, r.locks)
 		if err != nil {
 			log.ErrorContextf(context.Background(), "factor_engine_consumer_start_failed error=%v", err)

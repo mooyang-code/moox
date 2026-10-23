@@ -256,8 +256,8 @@ func TestHandleFactorPeriodComputedPublishesResultViewReady(t *testing.T) {
 		DatasetId: "factor-results", Frequency: "1m", PeriodTime: 1786032000, Status: "degraded",
 		SourceDatasetId: "prices", UniverseSubjectIds: []string{"ETH-USDT", "BTC-USDT"}, FailedSubjects: []string{"BTC-USDT"},
 		Factors: []*storageeventpb.FactorPeriodState{
-			{FactorId: "z-factor", Status: "degraded", FailedSubjects: []string{"ETH-USDT", "BTC-USDT"}, SourceHash: "hash-z", DefinitionHash: "def-z", GapSubjects: []string{"BTC-USDT"}},
-			{FactorId: "a-factor", Status: "complete", SourceHash: "hash-a", DefinitionHash: "def-a"},
+			{MemberAlias: "z-factor", FactorId: "z-factor", ParamsSource: "default", Status: "degraded", FailedSubjects: []string{"ETH-USDT", "BTC-USDT"}, SourceHash: "hash-z", DefinitionHash: "def-z", GapSubjects: []string{"BTC-USDT"}},
+			{MemberAlias: "a-factor", FactorId: "a-factor", ParamsSource: "default", Status: "complete", SourceHash: "hash-a", DefinitionHash: "def-a"},
 		},
 		ComputedAt: timestamppb.New(occurredAt), TriggerEventId: "source-ready-1",
 	}
@@ -332,7 +332,7 @@ func TestHandleFactorPeriodComputedViewPreservesFactorUniverse(t *testing.T) {
 	payload := &storageeventpb.FactorPeriodComputed{
 		DatasetId: "factor-results", SourceDatasetId: "prices", Frequency: "1m", PeriodTime: at.Unix(), Status: "degraded",
 		UniverseSubjectIds: []string{"BTC-USDT", "ETH-USDT"}, FailedSubjects: []string{"ETH-USDT"},
-		Factors: []*storageeventpb.FactorPeriodState{{FactorId: "factor", Status: "degraded", FailedSubjects: []string{"ETH-USDT"}, SourceHash: "hash", DefinitionHash: "def"}},
+		Factors: []*storageeventpb.FactorPeriodState{{MemberAlias: "factor", FactorId: "factor", ParamsSource: "default", Status: "degraded", FailedSubjects: []string{"ETH-USDT"}, SourceHash: "hash", DefinitionHash: "def"}},
 	}
 	if err := service.HandleFactorPeriodComputed(context.Background(), periodMessage("factor-result", at), payload); err != nil {
 		t.Fatal(err)

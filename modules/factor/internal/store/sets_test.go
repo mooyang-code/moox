@@ -45,7 +45,7 @@ func addTestMember(t *testing.T, s *Store, setID, factorID, status string) {
 	if _, err := s.GetFactor(ctx, factorID); err != nil {
 		require.NoError(t, s.CreateFactor(ctx, testFactorDef(factorID)))
 	}
-	_, err := s.AddMember(ctx, setID, factorID)
+	_, err := s.AddMember(ctx, setID, factorID, factorID)
 	require.NoError(t, err)
 	if status == domain.MemberStatusEnabled {
 		require.NoError(t, s.SetMemberStatus(ctx, setID, factorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
@@ -63,15 +63,22 @@ func TestCreateFactorsRollsBackCatalogImportOnConflict(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestCreateSetRejectsDuplicateSourceFreq(t *testing.T) {
+// 同一个源数据集与频率可以有多个集合（各策略实例的私有集合）；集合 ID 与结果数据集仍各自唯一。
+func TestCreateSetAllowsSharedSourceButUniqueResult(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusEnabled)))
 
+	private := testSet("set_prices_private", domain.SetStatusPending)
+	private.ResultDatasetID, private.OwnerInstanceID = "dataset_factor_private", "inst-1"
+	require.NoError(t, s.CreateSet(ctx, private))
+	owned, err := s.GetSetByOwner(ctx, "inst-1")
+	require.NoError(t, err)
+	require.Equal(t, "set_prices_private", owned.SetID)
+
 	duplicate := testSet("set_prices_duplicate", domain.SetStatusPending)
-	duplicate.ResultDatasetID = "dataset_factor_duplicate"
-	err := s.CreateSet(ctx, duplicate)
-	require.ErrorIs(t, err, ErrConflict)
+	duplicate.ResultDatasetID = "dataset_factor_private"
+	require.ErrorIs(t, s.CreateSet(ctx, duplicate), ErrConflict)
 }
 
 func TestDeleteSetFailsWhenMembersExist(t *testing.T) {
@@ -141,7 +148,7 @@ func TestLifecycleStatusWritesUseExpectedStatus(t *testing.T) {
 
 	factor := testFactorDef("factor_close")
 	require.NoError(t, s.CreateFactor(ctx, factor))
-	_, err = s.AddMember(ctx, set.SetID, factor.FactorID)
+	_, err = s.AddMember(ctx, set.SetID, factor.FactorID, factor.FactorID)
 	require.NoError(t, err)
 	require.NoError(t, s.SetMemberStatus(ctx, set.SetID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
 	require.ErrorIs(t, s.SetMemberStatus(ctx, set.SetID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusDisabled), ErrConflict)

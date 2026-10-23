@@ -26,7 +26,7 @@ func engineSet(setID, datasetID string, ready bool, factorIDs ...string) domain.
 			SetID: setID, SpaceID: "crypto", SourceDatasetID: datasetID, Freq: "1m",
 			SubjectMode: domain.SubjectModeAll, ResultDatasetID: "result_" + datasetID, Status: domain.SetStatusEnabled,
 		},
-		Factors: factors, ResultReady: ready,
+		Members: domain.AsMembers(factors...), ResultReady: ready,
 	}
 }
 
@@ -54,7 +54,7 @@ func uncompiled(set domain.EngineSet) domain.EngineSet {
 func TestCatalogApplyCompilesAndPersists(t *testing.T) {
 	cache, stateFile := newTestCache(t)
 	set := uncompiled(engineSet("fset_a", "dataset_a", true, "bias"))
-	require.Nil(t, set.Factors[0].Compiled())
+	require.Nil(t, set.Members[0].Factor.Compiled())
 
 	changed, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{set}})
 
@@ -62,8 +62,8 @@ func TestCatalogApplyCompilesAndPersists(t *testing.T) {
 	require.True(t, changed)
 	got, lookup := cache.SetByID("fset_a")
 	require.Equal(t, SetFound, lookup)
-	require.NotNil(t, got.Factors[0].Compiled())
-	require.Equal(t, 2, got.Factors[0].LookbackPeriods)
+	require.NotNil(t, got.Members[0].Factor.Compiled())
+	require.Equal(t, 2, got.Members[0].Factor.LookbackPeriods)
 	info, err := os.Stat(stateFile)
 	require.NoError(t, err)
 	require.False(t, info.IsDir())
@@ -85,13 +85,13 @@ func TestCatalogLoadFromStateFile(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, loaded)
 	require.Equal(t, "hash-1", restarted.Status().Hash)
-	set, factors, found, err := restarted.EnabledSetByDataset(context.Background(), "crypto", "dataset_a", "1m")
+	sets, err := restarted.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
 	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, "fset_a", set.SetID)
-	require.Len(t, factors, 1)
-	require.NotNil(t, factors[0].Compiled(), "加载快照时重新编译")
-	require.Equal(t, []string{"bias_value"}, factors[0].Outputs)
+	require.Len(t, sets, 1)
+	require.Equal(t, "fset_a", sets[0].Set.SetID)
+	require.Len(t, sets[0].Members, 1)
+	require.NotNil(t, sets[0].Members[0].Factor.Compiled(), "加载快照时重新编译")
+	require.Equal(t, []string{"bias_value"}, sets[0].Members[0].Factor.Outputs)
 }
 
 // 派生字段以编译结果为准：快照里的派生字段即使被改动，也按 spec 重新推导。
@@ -99,14 +99,14 @@ func TestCatalogLoadFromStateFile(t *testing.T) {
 func TestCatalogRederivesFieldsAndKeepsUncompilableDefinitions(t *testing.T) {
 	cache, _ := newTestCache(t)
 	set := uncompiled(engineSet("fset_a", "dataset_a", true, "bias", "cci"))
-	set.Factors[0].LookbackPeriods, set.Factors[0].Outputs = 999, []string{"forged"}
-	set.Factors[1].Spec = "outputs:\n  cci_value: future_function(close)\n"
+	set.Members[0].Factor.LookbackPeriods, set.Members[0].Factor.Outputs = 999, []string{"forged"}
+	set.Members[1].Factor.Spec = "outputs:\n  cci_value: future_function(close)\n"
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{set}})
 	require.NoError(t, err)
 	got, _ := cache.SetByID("fset_a")
-	require.Equal(t, 2, got.Factors[0].LookbackPeriods)
-	require.Equal(t, []string{"bias_value"}, got.Factors[0].Outputs)
-	require.Nil(t, got.Factors[1].Compiled())
+	require.Equal(t, 2, got.Members[0].Factor.LookbackPeriods)
+	require.Equal(t, []string{"bias_value"}, got.Members[0].Factor.Outputs)
+	require.Nil(t, got.Members[1].Factor.Compiled())
 }
 
 func TestCatalogLoadWithoutStateFile(t *testing.T) {
@@ -116,7 +116,7 @@ func TestCatalogLoadWithoutStateFile(t *testing.T) {
 
 	require.NoError(t, err)
 	require.False(t, loaded)
-	_, _, _, err = cache.EnabledSetByDataset(context.Background(), "crypto", "dataset_a", "1m")
+	_, err = cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
 	require.ErrorIs(t, err, storageio.ErrInfra, "events wait until a catalog exists")
 }
 
@@ -133,9 +133,9 @@ func TestCatalogApplyFailureKeepsPreviousSnapshot(t *testing.T) {
 
 	require.Error(t, err)
 	require.Equal(t, "hash-1", cache.Status().Hash)
-	_, _, found, err := cache.EnabledSetByDataset(context.Background(), "crypto", "dataset_a", "1m")
+	sets, err := cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
 	require.NoError(t, err)
-	require.True(t, found)
+	require.Len(t, sets, 1)
 }
 
 func TestCatalogNotModifiedKeepsSets(t *testing.T) {
@@ -157,9 +157,9 @@ func TestCatalogSyncFailureKeepsServing(t *testing.T) {
 
 	cache.MarkSyncFailed(errors.New("manager unreachable"))
 
-	_, _, found, err := cache.EnabledSetByDataset(context.Background(), "crypto", "dataset_a", "1m")
+	sets, err := cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
 	require.NoError(t, err)
-	require.True(t, found)
+	require.Len(t, sets, 1)
 	status := cache.Status()
 	require.False(t, status.SyncErrorSince.IsZero())
 	require.Equal(t, "manager unreachable", status.SyncError)
@@ -174,9 +174,29 @@ func TestCatalogNotReadySetReturnsInfraError(t *testing.T) {
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", false, "bias")}})
 	require.NoError(t, err)
 
-	_, _, _, err = cache.EnabledSetByDataset(context.Background(), "crypto", "dataset_a", "1m")
-
+	sets, err := cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
+	require.NoError(t, err)
+	require.Len(t, sets, 1)
+	require.False(t, sets[0].ResultReady, "结果数据集没就绪的集合交给调用方重投")
+	_, found, err := cache.EnabledSet(context.Background(), "fset_a")
 	require.ErrorIs(t, err, storageio.ErrInfra)
+	require.False(t, found)
+}
+
+// 同一源数据集上的多个集合（各策略实例的私有集合）都返回。
+func TestCatalogReturnsEverySetOverDataset(t *testing.T) {
+	cache, _ := newTestCache(t)
+	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{
+		engineSet("fset_a", "dataset_a", true, "bias"), engineSet("fset_i_x", "dataset_a", true, "cci"), engineSet("fset_b", "dataset_b", true, "bias"),
+	}})
+	require.NoError(t, err)
+	sets, err := cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_a", "1m")
+	require.NoError(t, err)
+	var ids []string
+	for _, set := range sets {
+		ids = append(ids, set.Set.SetID)
+	}
+	require.ElementsMatch(t, []string{"fset_a", "fset_i_x"}, ids)
 }
 
 func TestCatalogUnknownDatasetNotFound(t *testing.T) {
@@ -184,10 +204,10 @@ func TestCatalogUnknownDatasetNotFound(t *testing.T) {
 	_, err := cache.Apply(CatalogSnapshot{Hash: "hash-1", Sets: []domain.EngineSet{engineSet("fset_a", "dataset_a", true, "bias")}})
 	require.NoError(t, err)
 
-	_, _, found, err := cache.EnabledSetByDataset(context.Background(), "crypto", "dataset_other", "1m")
+	sets, err := cache.EnabledSetsByDataset(context.Background(), "crypto", "dataset_other", "1m")
 
 	require.NoError(t, err)
-	require.False(t, found)
+	require.Empty(t, sets)
 }
 
 func TestCatalogFilterSubjects(t *testing.T) {

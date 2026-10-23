@@ -11,39 +11,47 @@ import (
 )
 
 type memberRow struct {
-	SetID     string    `gorm:"column:c_set_id"`
-	FactorID  string    `gorm:"column:c_factor_id"`
-	Status    string    `gorm:"column:c_status"`
-	CreatedAt time.Time `gorm:"column:c_ctime"`
-	UpdatedAt time.Time `gorm:"column:c_mtime"`
+	SetID             string    `gorm:"column:c_set_id"`
+	MemberAlias       string    `gorm:"column:c_member_alias"`
+	FactorID          string    `gorm:"column:c_factor_id"`
+	Status            string    `gorm:"column:c_status"`
+	CarryAlertPeriods int       `gorm:"column:c_carry_alert_periods"`
+	CreatedAt         time.Time `gorm:"column:c_ctime"`
+	UpdatedAt         time.Time `gorm:"column:c_mtime"`
 }
 
 func (r memberRow) domain() domain.FactorSetMember {
 	return domain.FactorSetMember{
-		SetID: r.SetID, FactorID: r.FactorID, Status: r.Status, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		SetID: r.SetID, MemberAlias: r.MemberAlias, FactorID: r.FactorID, Status: r.Status,
+		CarryAlertPeriods: r.CarryAlertPeriods, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 }
+
+const memberColumns = `c_set_id, c_member_alias, c_factor_id, c_status, c_carry_alert_periods, c_ctime, c_mtime`
 
 // joinedMemberRow is one member row joined with its definition.
 type joinedMemberRow struct {
-	MemberStatus    string       `gorm:"column:m_status"`
-	MemberCreatedAt time.Time    `gorm:"column:m_ctime"`
-	MemberUpdatedAt time.Time    `gorm:"column:m_mtime"`
-	MemberSetID     string       `gorm:"column:m_set_id"`
-	Def             factorDefRow `gorm:"embedded"`
+	MemberSetID       string       `gorm:"column:m_set_id"`
+	MemberAlias       string       `gorm:"column:m_member_alias"`
+	MemberStatus      string       `gorm:"column:m_status"`
+	CarryAlertPeriods int          `gorm:"column:m_carry_alert_periods"`
+	MemberCreatedAt   time.Time    `gorm:"column:m_ctime"`
+	MemberUpdatedAt   time.Time    `gorm:"column:m_mtime"`
+	Def               factorDefRow `gorm:"embedded"`
 }
 
-const joinedMemberColumns = `m.c_set_id AS m_set_id, m.c_status AS m_status, m.c_ctime AS m_ctime, m.c_mtime AS m_mtime,
-	 d.c_factor_id, d.c_name, d.c_spec, d.c_spec_hash, d.c_allow_partial_universe, d.c_ctime, d.c_mtime`
+const joinedMemberColumns = `m.c_set_id AS m_set_id, m.c_member_alias AS m_member_alias, m.c_status AS m_status,
+	 m.c_carry_alert_periods AS m_carry_alert_periods, m.c_ctime AS m_ctime, m.c_mtime AS m_mtime,
+	 d.c_factor_id, d.c_name, d.c_category_id, d.c_spec, d.c_spec_hash, d.c_allow_partial_universe, d.c_ctime, d.c_mtime`
 
-// AddMember attaches a definition to a factor set as a disabled member.
-func (s *Store) AddMember(ctx context.Context, setID, factorID string) (domain.FactorSetMember, error) {
+// AddMember attaches a definition to a factor set as a disabled member under alias.
+func (s *Store) AddMember(ctx context.Context, setID, alias, factorID string) (domain.FactorSetMember, error) {
 	if s == nil || s.db == nil {
 		return domain.FactorSetMember{}, fmt.Errorf("factor database is not open")
 	}
-	setID, factorID = strings.TrimSpace(setID), strings.TrimSpace(factorID)
-	if setID == "" || factorID == "" {
-		return domain.FactorSetMember{}, fmt.Errorf("set id and factor id are required")
+	setID, alias, factorID = strings.TrimSpace(setID), strings.TrimSpace(alias), strings.TrimSpace(factorID)
+	if setID == "" || alias == "" || factorID == "" {
+		return domain.FactorSetMember{}, fmt.Errorf("set id, member alias and factor id are required")
 	}
 	now := time.Now().UTC()
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -59,81 +67,100 @@ func (s *Store) AddMember(ctx context.Context, setID, factorID string) (domain.F
 			}
 		}
 		err := tx.Exec(`
-			INSERT INTO t_factor_set_members (c_set_id, c_factor_id, c_status, c_ctime, c_mtime)
-			VALUES (?, ?, ?, ?, ?)
-		`, setID, factorID, domain.MemberStatusDisabled, now, now).Error
+			INSERT INTO t_factor_set_members (c_set_id, c_member_alias, c_factor_id, c_status, c_carry_alert_periods, c_ctime, c_mtime)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, setID, alias, factorID, domain.MemberStatusDisabled, domain.DefaultCarryAlertPeriods, now, now).Error
 		if err != nil && isUniqueConstraint(err) {
-			return fmt.Errorf("%w: factor %q is already a member of set %q", ErrConflict, factorID, setID)
+			return fmt.Errorf("%w: member %q already exists in set %q", ErrConflict, alias, setID)
 		}
 		return err
 	})
 	if err != nil {
 		return domain.FactorSetMember{}, err
 	}
-	return s.GetMember(ctx, setID, factorID)
+	return s.GetMember(ctx, setID, alias)
 }
 
 // RemoveMember detaches a disabled member. Enabled members must be disabled first.
-func (s *Store) RemoveMember(ctx context.Context, setID, factorID string) error {
+func (s *Store) RemoveMember(ctx context.Context, setID, alias string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("factor database is not open")
 	}
-	setID, factorID = strings.TrimSpace(setID), strings.TrimSpace(factorID)
+	setID, alias = strings.TrimSpace(setID), strings.TrimSpace(alias)
 	result := s.db.WithContext(ctx).Exec(
-		"DELETE FROM t_factor_set_members WHERE c_set_id = ? AND c_factor_id = ? AND c_status = ?",
-		setID, factorID, domain.MemberStatusDisabled)
+		"DELETE FROM t_factor_set_members WHERE c_set_id = ? AND c_member_alias = ? AND c_status = ?",
+		setID, alias, domain.MemberStatusDisabled)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected > 0 {
 		return nil
 	}
-	member, err := s.GetMember(ctx, setID, factorID)
+	member, err := s.GetMember(ctx, setID, alias)
 	if err != nil {
 		return err
 	}
-	return fmt.Errorf("%w: member %q of set %q is %s; disable it before removal", ErrConflict, factorID, setID, member.Status)
+	return fmt.Errorf("%w: member %q of set %q is %s; disable it before removal", ErrConflict, alias, setID, member.Status)
 }
 
 // SetMemberStatus changes a member's status only if it still matches expectedStatus.
-func (s *Store) SetMemberStatus(ctx context.Context, setID, factorID, expectedStatus, status string) error {
+func (s *Store) SetMemberStatus(ctx context.Context, setID, alias, expectedStatus, status string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("factor database is not open")
 	}
-	setID, factorID = strings.TrimSpace(setID), strings.TrimSpace(factorID)
-	if setID == "" || factorID == "" {
-		return fmt.Errorf("set id and factor id are required")
+	setID, alias = strings.TrimSpace(setID), strings.TrimSpace(alias)
+	if setID == "" || alias == "" {
+		return fmt.Errorf("set id and member alias are required")
 	}
 	if !validMemberStatus(expectedStatus) || !validMemberStatus(status) {
 		return fmt.Errorf("invalid member status transition %q to %q", expectedStatus, status)
 	}
 	result := s.db.WithContext(ctx).Exec(`
 		UPDATE t_factor_set_members SET c_status = ?, c_mtime = ?
-		WHERE c_set_id = ? AND c_factor_id = ? AND c_status = ?
-	`, status, time.Now().UTC(), setID, factorID, expectedStatus)
+		WHERE c_set_id = ? AND c_member_alias = ? AND c_status = ?
+	`, status, time.Now().UTC(), setID, alias, expectedStatus)
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected > 0 {
 		return nil
 	}
-	member, err := s.GetMember(ctx, setID, factorID)
+	member, err := s.GetMember(ctx, setID, alias)
 	if err != nil {
 		return err
 	}
-	return fmt.Errorf("%w: member %q of set %q status is %q, expected %q", ErrConflict, factorID, setID, member.Status, expectedStatus)
+	return fmt.Errorf("%w: member %q of set %q status is %q, expected %q", ErrConflict, alias, setID, member.Status, expectedStatus)
+}
+
+// SetMemberCarryAlert changes how many carried periods in a row raise an alert.
+func (s *Store) SetMemberCarryAlert(ctx context.Context, setID, alias string, periods int) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("factor database is not open")
+	}
+	if periods <= 0 {
+		return fmt.Errorf("carry alert periods must be positive")
+	}
+	result := s.db.WithContext(ctx).Exec(`
+		UPDATE t_factor_set_members SET c_carry_alert_periods = ?, c_mtime = ? WHERE c_set_id = ? AND c_member_alias = ?
+	`, periods, time.Now().UTC(), strings.TrimSpace(setID), strings.TrimSpace(alias))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // GetMember returns one membership row.
-func (s *Store) GetMember(ctx context.Context, setID, factorID string) (domain.FactorSetMember, error) {
+func (s *Store) GetMember(ctx context.Context, setID, alias string) (domain.FactorSetMember, error) {
 	if s == nil || s.db == nil {
 		return domain.FactorSetMember{}, fmt.Errorf("factor database is not open")
 	}
 	var row memberRow
 	result := s.db.WithContext(ctx).Raw(`
-		SELECT c_set_id, c_factor_id, c_status, c_ctime, c_mtime FROM t_factor_set_members
-		WHERE c_set_id = ? AND c_factor_id = ?
-	`, strings.TrimSpace(setID), strings.TrimSpace(factorID)).Scan(&row)
+		SELECT `+memberColumns+` FROM t_factor_set_members WHERE c_set_id = ? AND c_member_alias = ?
+	`, strings.TrimSpace(setID), strings.TrimSpace(alias)).Scan(&row)
 	if result.Error != nil {
 		return domain.FactorSetMember{}, result.Error
 	}
@@ -144,7 +171,7 @@ func (s *Store) GetMember(ctx context.Context, setID, factorID string) (domain.F
 }
 
 // ListMembers returns one set's members joined with their definitions, sorted
-// by factor id. An empty status returns members in every status.
+// by member alias. An empty status returns members in every status.
 func (s *Store) ListMembers(ctx context.Context, setID, status string) ([]domain.SetMember, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
@@ -157,7 +184,7 @@ func (s *Store) ListMembers(ctx context.Context, setID, status string) ([]domain
 		query += " AND m.c_status = ?"
 		args = append(args, status)
 	}
-	query += " ORDER BY m.c_factor_id"
+	query += " ORDER BY m.c_member_alias"
 	var rows []joinedMemberRow
 	if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
 		return nil, err
@@ -170,8 +197,8 @@ func (s *Store) ListMembers(ctx context.Context, setID, status string) ([]domain
 		}
 		members = append(members, domain.SetMember{
 			FactorSetMember: domain.FactorSetMember{
-				SetID: row.MemberSetID, FactorID: def.FactorID, Status: row.MemberStatus,
-				CreatedAt: row.MemberCreatedAt, UpdatedAt: row.MemberUpdatedAt,
+				SetID: row.MemberSetID, MemberAlias: row.MemberAlias, FactorID: def.FactorID, Status: row.MemberStatus,
+				CarryAlertPeriods: row.CarryAlertPeriods, CreatedAt: row.MemberCreatedAt, UpdatedAt: row.MemberUpdatedAt,
 			},
 			Factor: def,
 		})
@@ -179,26 +206,26 @@ func (s *Store) ListMembers(ctx context.Context, setID, status string) ([]domain
 	return members, nil
 }
 
-// ListUsages maps each definition to the sets that reference it. With no
+// ListUsages maps each definition to the set members that reference it. With no
 // factor ids it returns the usages of every definition.
 func (s *Store) ListUsages(ctx context.Context, factorIDs ...string) (map[string][]domain.FactorUsage, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("factor database is not open")
 	}
-	query := "SELECT c_set_id, c_factor_id, c_status, c_ctime, c_mtime FROM t_factor_set_members"
+	query := "SELECT " + memberColumns + " FROM t_factor_set_members"
 	var args []any
 	if len(factorIDs) > 0 {
 		query += " WHERE c_factor_id IN ?"
 		args = append(args, factorIDs)
 	}
-	query += " ORDER BY c_factor_id, c_set_id"
+	query += " ORDER BY c_factor_id, c_set_id, c_member_alias"
 	var rows []memberRow
 	if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	usages := make(map[string][]domain.FactorUsage)
 	for _, row := range rows {
-		usages[row.FactorID] = append(usages[row.FactorID], domain.FactorUsage{SetID: row.SetID, Status: row.Status})
+		usages[row.FactorID] = append(usages[row.FactorID], domain.FactorUsage{SetID: row.SetID, MemberAlias: row.MemberAlias, Status: row.Status})
 	}
 	return usages, nil
 }

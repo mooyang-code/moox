@@ -1,33 +1,48 @@
 # 时序因子示例（表达式写法，语法见 docs/模块/因子.md）。一个文件可以包含多个因子：
-# factor_id 是全局唯一的标识，name 是展示名，spec 是定义；列表参数会展开成多个输出列。
+# factor_id 是全局唯一的标识，name 是展示名，category_id/category_name 是分类（可选），spec 是定义。
+# params 声明可调参数：取值类型、范围与默认值。策略每期可以在范围内调整参数（因子动态调参），
+# 回看按范围的最坏情况推导；输出列名固定，不随参数变化。
 - factor_id: Bias
   name: Bias
+  category_id: momentum
+  category_name: 动量类
   spec: |
-    params: {window: [5, 20]}
+    params:
+      window: {type: int, min: 2, max: 120, default: 20}
     outputs:
-      bias_{window}: close / ts_mean(close, window) - 1
+      bias: close / ts_mean(close, window) - 1
 
 - factor_id: Cci
   name: CCI
+  category_id: momentum
+  category_name: 动量类
   spec: |
-    params: {window: 20}
+    params:
+      window: {type: int, min: 2, max: 120, default: 20}
     let:
       tp: (high + low + close) / 3
       m: ts_mean(tp, window)
     outputs:
       cci: (tp - m) / (0.015 * ts_mean(abs(tp - m), window))
 
+# 同一个定义可以用不同的成员别名加入因子集多次（例如 ma_fast、ma_slow），各自调参，结果列为“别名_输出名”。
 - factor_id: ma
   name: 移动平均
+  category_id: trend
+  category_name: 趋势类
   spec: |
-    params: {window: [5, 10, 20]}
+    params:
+      window: {type: int, min: 2, max: 120, default: 20}
     outputs:
-      ma_{window}: ts_mean(close, window)
+      ma: ts_mean(close, window)
 
 # 递推平滑移动平均 SMA(close, n, m)：alpha = m / n。递推算子按收敛精度截断回看，SMA(20, 1) 回看 405 期。
 - factor_id: sma
   name: SMA
+  category_id: trend
+  category_name: 趋势类
   spec: |
-    params: {window: [20]}
+    params:
+      n: {type: int, min: 5, max: 20, default: 20}
     outputs:
-      sma_{window}: sma(close, window, 1)
+      sma: sma(close, n, 1)

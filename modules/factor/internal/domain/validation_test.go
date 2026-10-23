@@ -11,7 +11,7 @@ import (
 func TestNormalizeFactorDefinitionDerivesContract(t *testing.T) {
 	got, err := NormalizeFactorDefinition(FactorDef{
 		FactorID: " excess_return ", Name: " 超额收益 ",
-		Spec: "\n\nparams: {window: [5, 20]}\noutputs:\n  er_{window}: ts_mean(nav - benchmark_return, window)\n\n",
+		Spec: "\n\nparams: {window: {type: int, min: 5, max: 20, default: 5}}\noutputs:\n  er: ts_mean(nav - benchmark_return, window)\n\n",
 	})
 	require.NoError(t, err)
 	require.Equal(t, "excess_return", got.FactorID)
@@ -20,7 +20,7 @@ func TestNormalizeFactorDefinitionDerivesContract(t *testing.T) {
 	require.Equal(t, SpecHash(got.Spec), got.SpecHash)
 	require.Equal(t, FactorTypeTimeSeries, got.FactorType)
 	require.Equal(t, []string{"benchmark_return", "nav"}, got.InputColumns)
-	require.Equal(t, []string{"er_5", "er_20"}, got.Outputs)
+	require.Equal(t, []string{"er"}, got.Outputs)
 	require.Equal(t, 20, got.LookbackPeriods)
 	require.NotNil(t, got.Compiled())
 }

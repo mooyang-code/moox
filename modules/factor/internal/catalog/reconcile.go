@@ -75,14 +75,14 @@ func (s *Service) reconcileResultColumns(ctx context.Context, set domain.FactorS
 	if err != nil {
 		return fmt.Errorf("list enabled members: %w", err)
 	}
-	factors := make([]domain.FactorDef, 0, len(members))
+	defs := make([]domain.MemberDef, 0, len(members))
 	for _, member := range members {
-		factors = append(factors, member.Factor)
+		defs = append(defs, member.Def())
 	}
-	return s.ensureResultColumns(ctx, set, source, columns, factors...)
+	return s.ensureResultColumns(ctx, set, source, columns, defs...)
 }
 
-func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet, source storageio.DatasetInfo, sourceColumns []storageio.ColumnInfo, factors ...domain.FactorDef) error {
+func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet, source storageio.DatasetInfo, sourceColumns []storageio.ColumnInfo, members ...domain.MemberDef) error {
 	if s.metadata == nil {
 		return errors.New("Storage metadata is required")
 	}
@@ -117,14 +117,14 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet,
 	for _, col := range sourceColumns {
 		sourceNames[col.ColumnName] = struct{}{}
 	}
-	for _, factor := range factors {
-		for _, output := range factor.Outputs {
-			if _, exists := sourceNames[output]; exists {
-				return fmt.Errorf("source column %q collides with enabled factor output", output)
+	for _, member := range members {
+		for _, column := range append(member.OutputColumns(), member.ParamColumns()...) {
+			if _, exists := sourceNames[column]; exists {
+				return fmt.Errorf("source column %q collides with enabled member %s", column, member.Alias)
 			}
 		}
 	}
-	wanted = appendFactorColumns(wanted, factors...)
+	wanted = appendFactorColumns(wanted, members...)
 	known := make(map[string]storageio.ColumnInfo, len(current))
 	for _, col := range current {
 		known[col.ColumnName] = col
@@ -161,7 +161,8 @@ func compatibleResultColumn(existing, wanted storageio.ColumnInfo) bool {
 	}
 	if wanted.OriginType == storageio.ColumnOriginFactor {
 		return existing.Attributes["origin_factor_id"] == wanted.Attributes["origin_factor_id"] &&
-			existing.Attributes["factor_output"] == wanted.Attributes["factor_output"]
+			existing.Attributes["factor_output"] == wanted.Attributes["factor_output"] &&
+			existing.Attributes["column_kind"] == wanted.Attributes["column_kind"]
 	}
 	return true
 }

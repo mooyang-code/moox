@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -16,10 +17,10 @@ import (
 
 // RunOnceRequest computes one period of one set for diagnosis.
 type RunOnceRequest struct {
-	SetID     string
-	FactorIDs []string
-	Subjects  []string
-	Period    time.Time
+	SetID    string
+	Members  []string
+	Subjects []string
+	Period   time.Time
 }
 
 // RunOnce refreshes the catalog when the manager is reachable (falling back to
@@ -45,14 +46,15 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	if _, err := cache.Load(); err != nil {
 		return pipeline.Outcome{}, err
 	}
-	if manager, err := NewManagerClient(gateway, cfg.Manager.Timeout, domain.EngineIdentity{EngineID: cfg.Engine.ID, BootID: "run-once"}); err == nil {
+	manager, managerErr := NewManagerClient(gateway, cfg.Manager.Timeout, domain.EngineIdentity{EngineID: cfg.Engine.ID, BootID: "run-once"})
+	if managerErr == nil {
 		_ = (&catalogSyncer{client: manager, cache: cache}).SyncOnce(ctx)
 	}
 	set, err := cache.Set(strings.TrimSpace(req.SetID))
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
-	factors, err := selectSetFactors(set, req.FactorIDs)
+	members, err := selectSetMembers(set, req.Members)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
@@ -83,8 +85,15 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	defer ledger.Close()
 	pipelineConfig.GapSink = ledger
 	runner := pipeline.NewRunner(storage, pipeline.NewStorageData(storage), clock, pipelineConfig)
+	// 诊断计算按这一期的冻结记录取参数（取不到时按默认值，并提示）。诊断进程不持有引擎租约时取冻结记录会被拒绝。
+	var intervals map[string][]domain.ParamInterval
+	if managerErr == nil {
+		if intervals, err = manager.ListParamIntervals(ctx, set.Set.SetID, start, start); err != nil {
+			fmt.Fprintf(os.Stderr, "读取冻结参数失败，按默认参数计算：%v\n", err)
+		}
+	}
 	return recalcexec.NewExecutor(runner, recalcexec.WithClock(clock)).RunChunk(ctx, recalcexec.Selection{
-		Set: set.Set, Factors: factors, Subjects: subjects, Columns: columns,
+		Set: set.Set, Members: members, Subjects: subjects, Columns: columns, Intervals: intervals,
 	}, start, start.Add(duration))
 }
 
@@ -103,13 +112,14 @@ func (c *CatalogCache) Set(setID string) (domain.EngineSet, error) {
 	return domain.EngineSet{}, fmt.Errorf("factor set %q is not enabled in the catalog", setID)
 }
 
-func selectSetFactors(set domain.EngineSet, factorIDs []string) ([]domain.FactorDef, error) {
-	members := make([]domain.SetMember, 0, len(set.Factors))
-	for _, factor := range set.Factors {
+func selectSetMembers(set domain.EngineSet, aliases []string) ([]domain.MemberDef, error) {
+	members := make([]domain.SetMember, 0, len(set.Members))
+	for _, member := range set.Members {
 		members = append(members, domain.SetMember{
-			FactorSetMember: domain.FactorSetMember{SetID: set.Set.SetID, FactorID: factor.FactorID, Status: domain.MemberStatusEnabled},
-			Factor:          factor,
+			FactorSetMember: domain.FactorSetMember{SetID: set.Set.SetID, MemberAlias: member.Alias, FactorID: member.Factor.FactorID,
+				Status: domain.MemberStatusEnabled},
+			Factor: member.Factor,
 		})
 	}
-	return domain.SelectEnabledFactors(members, factorIDs)
+	return domain.SelectEnabledMembers(members, aliases)
 }

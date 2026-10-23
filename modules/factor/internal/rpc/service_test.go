@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -142,7 +143,7 @@ func TestListFactorSetsMembersOmitSource(t *testing.T) {
 	catalog := &catalogFake{
 		set: domain.FactorSet{SetID: "fset_a", Status: domain.SetStatusEnabled},
 		members: []domain.SetMember{{
-			FactorSetMember: domain.FactorSetMember{SetID: "fset_a", FactorID: "a", Status: domain.MemberStatusEnabled},
+			FactorSetMember: domain.FactorSetMember{SetID: "fset_a", MemberAlias: "a", FactorID: "a", Status: domain.MemberStatusEnabled},
 			Factor:          domain.FactorDef{FactorID: "a", Spec: "src-a", SpecHash: "h-a"},
 		}},
 		sets: []domain.FactorSet{{SetID: "fset_a", Status: domain.SetStatusEnabled}},
@@ -177,7 +178,7 @@ func TestAddFactorToSetAndRemoveSurfaceCatalogErrors(t *testing.T) {
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, missing.GetRetInfo().GetCode())
 
 	catalog.err = errors.New("member is enabled; disable it before removal")
-	removed, err := svc.RemoveFactorFromSet(context.Background(), &factorpb.RemoveFactorFromSetReq{SetId: "fset_a", FactorId: "a"})
+	removed, err := svc.RemoveFactorFromSet(context.Background(), &factorpb.RemoveFactorFromSetReq{SetId: "fset_a", MemberAlias: "a"})
 	require.NoError(t, err)
 	require.NotEqual(t, commonpb.ErrorCode_SUCCESS, removed.GetRetInfo().GetCode())
 
@@ -249,7 +250,7 @@ func TestRecalcFactorsSubmitsAlignedRange(t *testing.T) {
 
 	rsp, err := svc.RecalcFactors(context.Background(), &factorpb.RecalcFactorsReq{
 		SetId:     catalog.set.SetID,
-		FactorIds: []string{"rolling_mean"},
+		Members:   []string{"rolling_mean"},
 		Subjects:  []string{"BTCUSDT"},
 		StartTime: "2026-10-04T10:00:00+00:00",
 		EndTime:   "2026-10-04T10:05:00Z",
@@ -278,6 +279,9 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 		"AddFactorToSet", "RemoveFactorFromSet", "SetFactorMemberStatus",
 		"RecalcFactors", "ListRecalcJobs", "GetRecalcJob", "CancelRecalcJob", "GetStatus",
 		"ValidateFactorSpec", "PreviewFactor", "ListFactorFunctions", "NotifyPeriodsFilled",
+		"ListFactorCategories", "UpsertFactorCategory", "DeleteFactorCategory", "SetFactorCategory",
+		"EnsureInstanceFactorSet", "SetInstanceFactorSetEnabled", "ReleaseInstanceFactorSet",
+		"SubmitFactorParams", "GetFactorParams",
 	}
 	got := make([]string, 0, service.Methods().Len())
 	for i := 0; i < service.Methods().Len(); i++ {
@@ -295,6 +299,11 @@ type catalogFake struct {
 	listSetID         string
 	listStatus        string
 	err               error
+	instanceRequest   catalog.InstanceSetRequest
+	writer            string
+	submissions       []catalog.ParamSubmission
+	intervals         []domain.ParamInterval
+	frozenThrough     time.Time
 }
 
 func (f *catalogFake) CreateSet(_ context.Context, in domain.FactorSet) (domain.FactorSet, error) {
@@ -335,25 +344,63 @@ func (f *catalogFake) ListFactors(_ context.Context, setID, status string) ([]do
 	f.listSetID, f.listStatus = setID, status
 	return f.infos, nil
 }
-func (f *catalogFake) AddFactorToSet(_ context.Context, setID, factorID string) (domain.SetMember, error) {
+func (f *catalogFake) AddFactorToSet(_ context.Context, setID, alias, factorID string) (domain.SetMember, error) {
 	if f.err != nil {
 		return domain.SetMember{}, f.err
 	}
+	if alias == "" {
+		alias = factorID
+	}
 	return domain.SetMember{
-		FactorSetMember: domain.FactorSetMember{SetID: setID, FactorID: factorID, Status: domain.MemberStatusDisabled},
+		FactorSetMember: domain.FactorSetMember{SetID: setID, MemberAlias: alias, FactorID: factorID, Status: domain.MemberStatusDisabled},
 		Factor:          domain.FactorDef{FactorID: factorID},
 	}, nil
 }
 func (f *catalogFake) RemoveFactorFromSet(context.Context, string, string) error { return f.err }
 func (f *catalogFake) SetFactorMemberStatus(_ context.Context, setID, factorID, status string) (domain.SetMember, string, error) {
 	member := domain.SetMember{
-		FactorSetMember: domain.FactorSetMember{SetID: setID, FactorID: factorID, Status: status},
+		FactorSetMember: domain.FactorSetMember{SetID: setID, MemberAlias: factorID, FactorID: factorID, Status: status},
 		Factor:          domain.FactorDef{FactorID: factorID},
 	}
 	if status == domain.MemberStatusEnabled {
 		return member, "factor-enable-" + factorID, nil
 	}
 	return member, "", nil
+}
+func (f *catalogFake) ListCategories(context.Context) ([]domain.FactorCategory, error) {
+	return nil, f.err
+}
+func (f *catalogFake) UpsertCategory(_ context.Context, category domain.FactorCategory) (domain.FactorCategory, error) {
+	return category, f.err
+}
+func (f *catalogFake) DeleteCategory(context.Context, string) error { return f.err }
+func (f *catalogFake) SetFactorCategory(_ context.Context, factorID, categoryID string) (domain.FactorDef, error) {
+	return domain.FactorDef{FactorID: factorID, CategoryID: categoryID}, f.err
+}
+func (f *catalogFake) EnsureInstanceSet(_ context.Context, request catalog.InstanceSetRequest) (catalog.InstanceSet, error) {
+	f.instanceRequest = request
+	return catalog.InstanceSet{Set: domain.FactorSet{SetID: domain.InstanceSetID(request.InstanceID), SpaceID: request.SpaceID}}, f.err
+}
+func (f *catalogFake) SetInstanceSetEnabled(context.Context, string, bool) (domain.FactorSet, error) {
+	return f.set, f.err
+}
+func (f *catalogFake) ReleaseInstanceSet(context.Context, string) error { return f.err }
+func (f *catalogFake) SubmitParams(_ context.Context, writer string, submissions []catalog.ParamSubmission) ([]catalog.ParamSubmitResult, error) {
+	f.writer, f.submissions = writer, submissions
+	results := make([]catalog.ParamSubmitResult, 0, len(submissions))
+	for _, submission := range submissions {
+		results = append(results, catalog.ParamSubmitResult{MemberAlias: submission.MemberAlias, Result: catalog.SubmitAccepted})
+	}
+	return results, f.err
+}
+func (f *catalogFake) ListParamIntervals(context.Context, string, string, time.Time, time.Time) ([]domain.ParamInterval, error) {
+	return f.intervals, f.err
+}
+func (f *catalogFake) ListParamRequests(context.Context, string, string, time.Time, time.Time, int) ([]domain.ParamRequest, error) {
+	return nil, f.err
+}
+func (f *catalogFake) FrozenThrough(context.Context, string) (time.Time, bool, error) {
+	return f.frozenThrough, !f.frozenThrough.IsZero(), f.err
 }
 
 type recalcFake struct {
@@ -373,7 +420,7 @@ type recalcFake struct {
 func (f *recalcFake) Submit(_ context.Context, setID string, factorIDs, subjects []string, requestID string, start, end time.Time) (RecalcJob, error) {
 	f.submitCalls++
 	f.setID, f.factorIDs, f.subjects, f.requestID, f.start, f.end = setID, factorIDs, subjects, requestID, start, end
-	f.job = RecalcJob{JobID: requestID, RequestID: requestID, SetID: setID, FactorIDs: factorIDs, Subjects: subjects, StartTime: start, EndTime: end}
+	f.job = RecalcJob{JobID: requestID, RequestID: requestID, SetID: setID, Members: factorIDs, Subjects: subjects, StartTime: start, EndTime: end}
 	return f.job, nil
 }
 func (f *recalcFake) List(_ context.Context, setID string, statuses []string) ([]RecalcJob, error) {
@@ -393,18 +440,18 @@ func (f *recalcFake) Cancel(context.Context, string) (RecalcJob, error) {
 func TestSetFactorMemberStatusReturnsBackfillJobOnEnable(t *testing.T) {
 	svc := NewService(&catalogFake{}, &recalcFake{})
 
-	enabled, err := svc.SetFactorMemberStatus(context.Background(), &factorpb.SetFactorMemberStatusReq{SetId: "fset_a", FactorId: "momentum", Status: domain.MemberStatusEnabled})
+	enabled, err := svc.SetFactorMemberStatus(context.Background(), &factorpb.SetFactorMemberStatusReq{SetId: "fset_a", MemberAlias: "momentum", Status: domain.MemberStatusEnabled})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, enabled.GetRetInfo().GetCode())
 	require.Equal(t, "factor-enable-momentum", enabled.GetBackfillJob().GetJobId())
 	require.Equal(t, "enabled", enabled.GetMember().GetStatus())
 	require.Equal(t, "fset_a", enabled.GetMember().GetSetId())
 
-	disabled, err := svc.SetFactorMemberStatus(context.Background(), &factorpb.SetFactorMemberStatusReq{SetId: "fset_a", FactorId: "momentum", Status: domain.MemberStatusDisabled})
+	disabled, err := svc.SetFactorMemberStatus(context.Background(), &factorpb.SetFactorMemberStatusReq{SetId: "fset_a", MemberAlias: "momentum", Status: domain.MemberStatusDisabled})
 	require.NoError(t, err)
 	require.Nil(t, disabled.GetBackfillJob())
 
-	invalid, err := svc.SetFactorMemberStatus(context.Background(), &factorpb.SetFactorMemberStatusReq{SetId: "fset_a", FactorId: "momentum", Status: "bogus"})
+	invalid, err := svc.SetFactorMemberStatus(context.Background(), &factorpb.SetFactorMemberStatusReq{SetId: "fset_a", MemberAlias: "momentum", Status: "bogus"})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, invalid.GetRetInfo().GetCode())
 }

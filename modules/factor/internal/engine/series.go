@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -35,10 +36,11 @@ type seriesFollower struct {
 	onGapped func(src seriesstore.Source)
 	// blocked 记录断档的数据源，用于避免每轮重复告警。
 	blocked map[seriesstore.Source]bool
+	// params 提供重算区间的冻结参数（可为 nil：全部按默认参数）。
+	params paramIntervalSource
 }
 
 type seriesSets interface {
-	EnabledSetByDataset(ctx context.Context, spaceID, datasetID, freq string) (domain.FactorSet, []domain.FactorDef, bool, error)
 	SetByID(setID string) (domain.EngineSet, SetLookup)
 }
 
@@ -82,30 +84,51 @@ func (f *seriesFollower) tick(ctx context.Context) {
 	f.recompute(ctx)
 }
 
-// recompute 处理各数据源待办的失效重算区间。
+// recompute 处理各数据源待办的失效重算区间。同一个数据源可以被多个集合共用（各策略实例的私有集合）：
+// 待办对每个集合都要重算，全部成功之后才清掉。
 func (f *seriesFollower) recompute(ctx context.Context) {
+	bySource := map[seriesstore.Source][]string{}
+	var sources []seriesstore.Source
 	for _, info := range f.data.Sources() {
+		if _, seen := bySource[info.Source]; !seen {
+			sources = append(sources, info.Source)
+		}
+		bySource[info.Source] = append(bySource[info.Source], info.SetID)
+	}
+	for _, src := range sources {
 		if ctx.Err() != nil || (f.active != nil && !f.active()) {
 			return
 		}
-		pending, err := f.data.Store().Pending(info.Source)
+		pending, err := f.data.Store().Pending(src)
 		if err != nil {
-			log.WarnContextf(ctx, "factor_series_pending_read_failed source=%s error=%v", info.Source, err)
+			log.WarnContextf(ctx, "factor_series_pending_read_failed source=%s error=%v", src, err)
 			continue
 		}
 		if len(pending) == 0 {
 			continue
 		}
-		if err := f.recomputeSource(ctx, info, pending); err != nil && ctx.Err() == nil && !errors.Is(err, recalcexec.ErrGated) {
-			log.WarnContextf(ctx, "factor_series_recompute_failed set_id=%s error=%v", info.SetID, err)
+		done := true
+		for _, setID := range bySource[src] {
+			if err := f.recomputeSet(ctx, setID, pending); err != nil {
+				done = false
+				if ctx.Err() == nil && !errors.Is(err, recalcexec.ErrGated) {
+					log.WarnContextf(ctx, "factor_series_recompute_failed set_id=%s error=%v", setID, err)
+				}
+			}
+		}
+		if !done {
+			continue
+		}
+		if err := f.data.Store().ClearPending(src, pending); err != nil {
+			log.WarnContextf(ctx, "factor_series_pending_clear_failed source=%s error=%v", src, err)
 		}
 	}
 }
 
-func (f *seriesFollower) recomputeSource(ctx context.Context, info localdata.SourceInfo, pending []seriesstore.PendingSpan) error {
-	set, lookup := f.sets.SetByID(info.SetID)
+func (f *seriesFollower) recomputeSet(ctx context.Context, setID string, pending []seriesstore.PendingSpan) error {
+	set, lookup := f.sets.SetByID(setID)
 	if lookup != SetFound {
-		return nil // 集合已停用或删除：待办留着，重新启用后再处理
+		return nil // 集合已停用或删除：不影响同源的其他集合
 	}
 	step, err := seriesstore.Step(set.Set.Freq)
 	if err != nil {
@@ -113,10 +136,10 @@ func (f *seriesFollower) recomputeSource(ctx context.Context, info localdata.Sou
 	}
 	lookback := maxLookbackOf(set)
 	cross := false
-	for _, factor := range set.Factors {
-		cross = cross || factor.FactorType == domain.FactorTypeCrossSection
+	for _, member := range set.Members {
+		cross = cross || member.Factor.FactorType == domain.FactorTypeCrossSection
 	}
-	committed, hasCommitted := f.periods.CommittedThrough(info.SetID)
+	committed, hasCommitted := f.periods.CommittedThrough(setID)
 
 	// 失效范围向后扩展到受影响的回看窗口：[from, to + (L−1)×周期)；有连续水位时再截断到水位之前（水位之后的周期由实时与追赶用新数据算）。
 	// 没有水位（集合还没有跑过实时周期）时水位不能代表「算过的范围」（可能做过人工补算），不截断，按请求的范围重算，待办不能丢。
@@ -158,7 +181,7 @@ func (f *seriesFollower) recomputeSource(ctx context.Context, info localdata.Sou
 			start = end
 		}
 	}
-	return f.data.Store().ClearPending(info.Source, pending)
+	return nil
 }
 
 // run 在 [start, end) 上重算一批标的的全部因子（非只填充，覆盖已经算出的旧值）。截面因子用集合的全部标的重算。
@@ -188,7 +211,14 @@ func (f *seriesFollower) run(ctx context.Context, set domain.EngineSet, changed 
 			}
 		}
 		sort.Strings(subjects)
-		return recalcexec.Selection{Set: current.Set, Factors: current.Factors, Subjects: subjects, Columns: columns}, nil
+		// 失效重算的是已经算过的周期：按当时冻结的参数重算。
+		var intervals map[string][]domain.ParamInterval
+		if f.params != nil {
+			if intervals, err = f.params.Intervals(ctx, current.Set.SetID, start, end); err != nil {
+				return recalcexec.Selection{}, fmt.Errorf("%w: read frozen params: %v", storageio.ErrInfra, err)
+			}
+		}
+		return recalcexec.Selection{Set: current.Set, Members: current.Members, Subjects: subjects, Columns: columns, Intervals: intervals}, nil
 	}
 	_, err := f.exec.RunChunkWith(ctx, source, start, end, func(_ recalcexec.Selection, outcome pipeline.Outcome, runErr error) {
 		if runErr == nil && outcome.Status == "degraded" {

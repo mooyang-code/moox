@@ -27,7 +27,11 @@ type hubFake struct {
 	progress    time.Time
 	reportedErr string
 	err         error
+	// noLease 让 HoldsLease 返回 false（调用方不是持有租约的引擎）。
+	noLease bool
 }
+
+func (f *hubFake) HoldsLease(domain.EngineIdentity) bool { return !f.noLease }
 
 func (f *hubFake) Snapshot(_ context.Context, knownHash string) (string, bool, []domain.EngineSet, error) {
 	if knownHash == f.hash {
@@ -57,14 +61,14 @@ var testEngine = &factorpb.EngineIdentity{EngineId: "factor-engine@mac", BootId:
 func engineSetFixture() domain.EngineSet {
 	return domain.EngineSet{
 		Set:         domain.FactorSet{SetID: "fset_a", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m", Status: domain.SetStatusEnabled},
-		Factors:     []domain.FactorDef{domain.MustDefinition("bias", "bias", "outputs:\n  bias: close / ts_mean(close, 5)\n")},
+		Members:     domain.AsMembers(domain.MustDefinition("bias", "bias", "outputs:\n  bias: close / ts_mean(close, 5)\n")),
 		ResultReady: true,
 	}
 }
 
 func TestSyncEngineCatalogReturnsSetsWithSpec(t *testing.T) {
 	hub := &hubFake{hash: "hash-1", sets: []domain.EngineSet{engineSetFixture()}}
-	svc := NewEngineService(hub, nil)
+	svc := NewEngineService(hub, nil, nil)
 
 	rsp, err := svc.SyncEngineCatalog(context.Background(), &factorpb.SyncEngineCatalogReq{Engine: testEngine})
 
@@ -74,11 +78,11 @@ func TestSyncEngineCatalogReturnsSetsWithSpec(t *testing.T) {
 	require.False(t, rsp.GetNotModified())
 	require.Len(t, rsp.GetSets(), 1)
 	require.True(t, rsp.GetSets()[0].GetResultReady())
-	require.Contains(t, rsp.GetSets()[0].GetFactors()[0].GetSpec(), "ts_mean(close, 5)")
+	require.Contains(t, rsp.GetSets()[0].GetMembers()[0].GetFactor().GetSpec(), "ts_mean(close, 5)")
 }
 
 func TestSyncEngineCatalogNotModified(t *testing.T) {
-	svc := NewEngineService(&hubFake{hash: "hash-1", sets: []domain.EngineSet{engineSetFixture()}}, nil)
+	svc := NewEngineService(&hubFake{hash: "hash-1", sets: []domain.EngineSet{engineSetFixture()}}, nil, nil)
 
 	rsp, err := svc.SyncEngineCatalog(context.Background(), &factorpb.SyncEngineCatalogReq{Engine: testEngine, KnownHash: "hash-1"})
 
@@ -88,7 +92,7 @@ func TestSyncEngineCatalogNotModified(t *testing.T) {
 }
 
 func TestSyncEngineCatalogRequiresEngineID(t *testing.T) {
-	svc := NewEngineService(&hubFake{}, nil)
+	svc := NewEngineService(&hubFake{}, nil, nil)
 
 	rsp, err := svc.SyncEngineCatalog(context.Background(), &factorpb.SyncEngineCatalogReq{})
 
@@ -98,7 +102,7 @@ func TestSyncEngineCatalogRequiresEngineID(t *testing.T) {
 
 func TestEngineHeartbeatPassesStatus(t *testing.T) {
 	hub := &hubFake{}
-	svc := NewEngineService(hub, nil)
+	svc := NewEngineService(hub, nil, nil)
 	syncedAt := time.Unix(1000, 0).UTC()
 
 	rsp, err := svc.EngineHeartbeat(context.Background(), &factorpb.EngineHeartbeatReq{Engine: testEngine, Status: &factorpb.EngineRuntimeStatus{
@@ -121,7 +125,7 @@ func TestEngineHeartbeatPassesStatus(t *testing.T) {
 }
 
 func TestEngineHeartbeatConflictMapsToRetCode(t *testing.T) {
-	svc := NewEngineService(&hubFake{err: fmt.Errorf("%w: factor-engine@other", enginehub.ErrLeaseConflict)}, nil)
+	svc := NewEngineService(&hubFake{err: fmt.Errorf("%w: factor-engine@other", enginehub.ErrLeaseConflict)}, nil, nil)
 
 	rsp, err := svc.EngineHeartbeat(context.Background(), &factorpb.EngineHeartbeatReq{Engine: testEngine})
 
@@ -134,7 +138,7 @@ func TestPullRecalcJobReturnsLeaseAndSet(t *testing.T) {
 		JobID: "job-1", SetID: "fset_a", StartTime: 60, EndTime: 600, ProgressTime: 120,
 		Status: store.RecalcStatusRunning, EngineID: "factor-engine@mac", LeaseToken: "token-1",
 	}}
-	svc := NewEngineService(hub, nil)
+	svc := NewEngineService(hub, nil, nil)
 
 	rsp, err := svc.PullRecalcJob(context.Background(), &factorpb.PullRecalcJobReq{Engine: testEngine})
 
@@ -148,7 +152,7 @@ func TestPullRecalcJobReturnsLeaseAndSet(t *testing.T) {
 }
 
 func TestPullRecalcJobNotFound(t *testing.T) {
-	svc := NewEngineService(&hubFake{}, nil)
+	svc := NewEngineService(&hubFake{}, nil, nil)
 
 	rsp, err := svc.PullRecalcJob(context.Background(), &factorpb.PullRecalcJobReq{Engine: testEngine})
 
@@ -159,7 +163,7 @@ func TestPullRecalcJobNotFound(t *testing.T) {
 
 func TestReportRecalcProgressConvertsRFC3339(t *testing.T) {
 	hub := &hubFake{job: store.RecalcJob{JobID: "job-1"}}
-	svc := NewEngineService(hub, nil)
+	svc := NewEngineService(hub, nil, nil)
 	progress := time.Unix(300, 0).UTC()
 
 	rsp, err := svc.ReportRecalcProgress(context.Background(), &factorpb.ReportRecalcProgressReq{
@@ -174,7 +178,7 @@ func TestReportRecalcProgressConvertsRFC3339(t *testing.T) {
 }
 
 func TestReportRecalcProgressRejectsBadTime(t *testing.T) {
-	svc := NewEngineService(&hubFake{}, nil)
+	svc := NewEngineService(&hubFake{}, nil, nil)
 
 	rsp, err := svc.ReportRecalcProgress(context.Background(), &factorpb.ReportRecalcProgressReq{
 		JobId: "job-1", LeaseToken: "token-1", ProgressTime: "yesterday",
@@ -185,7 +189,7 @@ func TestReportRecalcProgressRejectsBadTime(t *testing.T) {
 }
 
 func TestReportRecalcProgressStaleTokenIsConflict(t *testing.T) {
-	svc := NewEngineService(&hubFake{err: fmt.Errorf("%w: stale", store.ErrConflict)}, nil)
+	svc := NewEngineService(&hubFake{err: fmt.Errorf("%w: stale", store.ErrConflict)}, nil, nil)
 
 	rsp, err := svc.ReportRecalcProgress(context.Background(), &factorpb.ReportRecalcProgressReq{
 		JobId: "job-1", LeaseToken: "token-1", ProgressTime: time.Unix(300, 0).UTC().Format(time.RFC3339),
@@ -285,10 +289,10 @@ func TestPeriodsFilledAreDeliveredOnTheNextHeartbeat(t *testing.T) {
 	bad, _ := service.NotifyPeriodsFilled(context.Background(), &factorpb.NotifyPeriodsFilledReq{Filled: []*factorpb.PeriodsFilled{{SpaceId: "crypto", DatasetId: "ds", Frequency: "1m", From: 120, To: 60}}})
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
 
-	conflict := NewEngineService(&hubFake{err: fmt.Errorf("%w: other", enginehub.ErrLeaseConflict)}, inbox)
+	conflict := NewEngineService(&hubFake{err: fmt.Errorf("%w: other", enginehub.ErrLeaseConflict)}, nil, inbox)
 	beat, _ := conflict.EngineHeartbeat(context.Background(), &factorpb.EngineHeartbeatReq{Engine: testEngine, Status: &factorpb.EngineRuntimeStatus{}})
 	require.Empty(t, beat.GetFilled(), "不持有租约的引擎拿不到通知")
-	holder := NewEngineService(&hubFake{}, inbox)
+	holder := NewEngineService(&hubFake{}, nil, inbox)
 	beat, _ = holder.EngineHeartbeat(context.Background(), &factorpb.EngineHeartbeatReq{Engine: testEngine, Status: &factorpb.EngineRuntimeStatus{}})
 	require.Len(t, beat.GetFilled(), 1)
 	require.Equal(t, []string{"A"}, beat.GetFilled()[0].GetAbsentSubjects())

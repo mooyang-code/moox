@@ -13,7 +13,7 @@ import (
 func seedJob(t *testing.T, db *store.Store, jobID, setID string, factorIDs ...string) {
 	t.Helper()
 	_, err := db.CreateRecalcJob(context.Background(), store.RecalcJob{
-		JobID: jobID, RequestID: jobID, SetID: setID, FactorIDs: factorIDs, StartTime: 0, EndTime: 600,
+		JobID: jobID, RequestID: jobID, SetID: setID, Members: factorIDs, StartTime: 0, EndTime: 600,
 	})
 	require.NoError(t, err)
 }
@@ -51,9 +51,9 @@ func TestPullReturnsJobWithEnabledSelection(t *testing.T) {
 	require.NotEmpty(t, job.LeaseToken)
 	require.Equal(t, "set_a", set.Set.SetID)
 	require.True(t, set.ResultReady)
-	require.Len(t, set.Factors, 1)
-	require.Equal(t, "cci", set.Factors[0].FactorID)
-	require.NotEmpty(t, set.Factors[0].Spec)
+	require.Len(t, set.Members, 1)
+	require.Equal(t, "cci", set.Members[0].Factor.FactorID)
+	require.NotEmpty(t, set.Members[0].Factor.Spec)
 }
 
 func TestPullDefaultsToAllEnabledMembers(t *testing.T) {
@@ -67,7 +67,7 @@ func TestPullDefaultsToAllEnabledMembers(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, set.Factors, 2)
+	require.Len(t, set.Members, 2)
 }
 
 func TestPullFailsJobWhenSelectedFactorDisabled(t *testing.T) {

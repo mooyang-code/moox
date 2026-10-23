@@ -43,6 +43,8 @@ type ReplayDeps struct {
 	Sets interface {
 		SetByID(string) (domain.EngineSet, SetLookup)
 	}
+	// Params 提供回放区间的冻结参数（复现历史时用；闭环回放由每期请求带参数）。为 nil 时按默认参数。
+	Params  paramIntervalSource
 	Source  SourceDataset
 	Columns interface {
 		ListColumns(ctx context.Context, spaceID, datasetID string) ([]storageio.ColumnInfo, error)
@@ -87,23 +89,30 @@ type replaySession struct {
 	release  func()
 	// quote 是成交价取法：next_open（下一根开盘，默认）或 close（本期收盘）。
 	quote string
+	// intervals 是回放区间（含预热）的冻结参数：请求没有带参数的期次按它计算（复现当时实际用的参数）。
+	intervals map[string][]domain.ParamInterval
 
 	mu       sync.Mutex
 	cache    map[int64]*replayPeriod
 	lastUsed time.Time
 }
 
-// replayPeriod 是一期的计算结果（缓存，下一期取上一期的因子值用）。
+// replayPeriod 是一期的计算结果（缓存，下一期取上一期的因子值用）；digest 是这一期所用参数的摘要。
 type replayPeriod struct {
 	values pipeline.FactorValues
 	states map[string]ReplayFactorState
+	digest string
 }
 
-// ReplayFactorState 是一个因子本期的状态：complete、degraded（部分标的失败）或 skipped（截面因子整体跳过）。
+// ReplayFactorState 是一个成员本期的状态：complete、degraded（部分标的失败）或 skipped（截面因子整体跳过）。
 type ReplayFactorState struct {
 	Status         string   `json:"status"`
+	FactorID       string   `json:"factor_id"`
 	DefinitionHash string   `json:"definition_hash"`
 	FailedSubjects []string `json:"failed_subjects,omitempty"`
+	// ParamsSource、ParamsDigest 是这一期所用参数的来源（requested 表示由请求带来）与摘要。
+	ParamsSource string `json:"params_source,omitempty"`
+	ParamsDigest string `json:"params_digest,omitempty"`
 }
 
 // ReplayOpenRequest 是 POST /v1/replay/open 的请求体。
@@ -123,11 +132,13 @@ type ReplayOpenRequest struct {
 	AllowShortWarmup bool `json:"allow_short_warmup,omitempty"`
 }
 
-// ReplayFactor 描述回放固定下来的一个因子。
+// ReplayFactor 描述回放固定下来的一个成员：Outputs 是它在结果数据集里的列名，Params 是它的参数列名。
 type ReplayFactor struct {
+	Member         string   `json:"member"`
 	FactorID       string   `json:"factor_id"`
 	DefinitionHash string   `json:"definition_hash"`
 	Outputs        []string `json:"outputs"`
+	Params         []string `json:"params,omitempty"`
 }
 
 // ReplayExcluded 是被排除出回放的标的及原因。
@@ -217,7 +228,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	if lookup != SetFound {
 		return ReplayOpenResponse{}, http.StatusNotFound, fmt.Errorf("因子集合 %s 不在引擎目录里（未启用或结果数据集未就绪）", req.SetID)
 	}
-	set.Factors = CompileFactors(set.Factors)
+	set.Members = CompileMembers(set.Members)
 	step, err := seriesstore.Step(set.Set.Freq)
 	if err != nil {
 		return ReplayOpenResponse{}, http.StatusBadRequest, err
@@ -323,10 +334,16 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		}
 		types = seriessync.ValueTypes(columns)
 	}
+	var intervals map[string][]domain.ParamInterval
+	if m.deps.Params != nil {
+		if intervals, err = m.deps.Params.Intervals(ctx, set.Set.SetID, start, to); err != nil {
+			return ReplayOpenResponse{}, http.StatusBadGateway, fmt.Errorf("读取冻结参数：%w", err)
+		}
+	}
 	session := &replaySession{
 		id: req.ReplayID, set: set, src: src, clock: clock, step: step, from: from, to: to, start: start,
 		subjects: subjects, numeric: numeric, lookback: lookback, carry: carry, types: types, view: view, cols: snapshot,
-		earliest: earliest, release: release, quote: quote, cache: map[int64]*replayPeriod{}, lastUsed: m.deps.Now(),
+		earliest: earliest, release: release, quote: quote, intervals: intervals, cache: map[int64]*replayPeriod{}, lastUsed: m.deps.Now(),
 	}
 	cleanup = nil
 	m.mu.Lock()
@@ -336,8 +353,9 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		ReplayID: req.ReplayID, Subjects: subjects, Excluded: excluded, Periods: periods, Start: start.Format(time.RFC3339),
 		StepSecs: int64(step / time.Second), Bytes: need, Fields: numeric, ShortWarmup: shortCount, ShortSamples: shortSamples,
 	}
-	for _, factor := range set.Factors {
-		rsp.Factors = append(rsp.Factors, ReplayFactor{FactorID: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor), Outputs: append([]string(nil), factor.Outputs...)})
+	for _, member := range set.Members {
+		rsp.Factors = append(rsp.Factors, ReplayFactor{Member: member.Alias, FactorID: member.Factor.FactorID,
+			DefinitionHash: domain.DefinitionHash(member.Factor), Outputs: member.OutputColumns(), Params: member.ParamColumns()})
 	}
 	return rsp, http.StatusOK, nil
 }
@@ -351,6 +369,9 @@ type ReplayStepRequest struct {
 	SourceColumns []string `json:"source_columns,omitempty"`
 	// WriteFactors 为真时把本期因子结果写回结果数据集（会话打开时也要声明 write_factors）。
 	WriteFactors bool `json:"write_factors,omitempty"`
+	// Params 是闭环回放这一期各成员的参数快照（别名 → 快照，因子动态调参执行计划 2.9）：由策略回放在上一期求值后产出。
+	// 没有给出的成员按会话打开时读取的冻结记录计算（复现当时实际用的参数），再没有就用默认值。
+	Params map[string]domain.ParamSnapshot `json:"params,omitempty"`
 }
 
 // ReplaySubjectFrame 是一个标的本期的数据。
@@ -419,13 +440,21 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 	defer s.mu.Unlock()
 	s.lastUsed = m.deps.Now()
 	started := time.Now()
-	current, plan, comp, err := s.compute(ctx, m.deps.Runner, period)
+	params, err := s.params(period, req.Params)
+	if err != nil {
+		return ReplayStepResponse{}, http.StatusBadRequest, err
+	}
+	current, plan, comp, err := s.compute(ctx, m.deps.Runner, period, params)
 	if err != nil {
 		return ReplayStepResponse{}, http.StatusInternalServerError, err
 	}
 	previous := s.cache[period.Add(-s.step).Unix()]
 	if previous == nil && !period.Add(-s.step).Before(s.start) {
-		if previous, _, _, err = s.compute(ctx, m.deps.Runner, period.Add(-s.step)); err != nil {
+		prevParams, err := s.params(period.Add(-s.step), nil)
+		if err != nil {
+			return ReplayStepResponse{}, http.StatusInternalServerError, err
+		}
+		if previous, _, _, err = s.compute(ctx, m.deps.Runner, period.Add(-s.step), prevParams); err != nil {
 			return ReplayStepResponse{}, http.StatusInternalServerError, err
 		}
 	}
@@ -528,9 +557,75 @@ func (s *replaySession) sourceColumns(requested []string) []string {
 	return out
 }
 
-// compute 用快照算一期（实时计算路径）；已经算过的周期直接取缓存（调用方持有会话锁）。
-func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, period time.Time) (*replayPeriod, pipeline.Plan, pipeline.Computation, error) {
+// params 返回一期各成员用的参数：请求带来的快照（校验合法）优先，其次是冻结记录（沿用最近的区间），都没有时为默认值。
+func (s *replaySession) params(period time.Time, requested map[string]domain.ParamSnapshot) (map[string]domain.ParamFreeze, error) {
+	for alias := range requested {
+		found := false
+		for _, member := range s.set.Members {
+			found = found || member.Alias == alias
+		}
+		if !found {
+			return nil, fmt.Errorf("集合里没有成员 %s", alias)
+		}
+	}
+	out := make(map[string]domain.ParamFreeze, len(s.set.Members))
+	for _, member := range s.set.Members {
+		if snapshot, ok := requested[member.Alias]; ok {
+			if err := domain.CheckSnapshotNumbers(snapshot); err != nil {
+				return nil, err
+			}
+			if err := domain.ValidateSnapshot(member, snapshot, s.set.Set.InScope); err != nil {
+				return nil, err
+			}
+			out[member.Alias] = domain.ParamFreeze{SetID: s.set.Set.SetID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: snapshot,
+				SnapshotHash: snapshot.Hash(), Source: domain.ParamsRequested}
+			continue
+		}
+		var previous *domain.ParamInterval
+		for i := range s.intervals[member.Alias] {
+			interval := s.intervals[member.Alias][i]
+			if interval.Covers(period) {
+				out[member.Alias] = domain.ParamFreeze{SetID: s.set.Set.SetID, MemberAlias: member.Alias, PeriodTime: period,
+					Snapshot: interval.Snapshot, SnapshotHash: interval.SnapshotHash, Source: interval.Source}
+				previous = nil
+				break
+			}
+			if interval.End.Before(period) {
+				previous = &s.intervals[member.Alias][i]
+			}
+		}
+		if _, ok := out[member.Alias]; !ok && previous != nil {
+			source := domain.ParamsCarried
+			if previous.Source == domain.ParamsDefault {
+				source = domain.ParamsDefault
+			}
+			out[member.Alias] = domain.ParamFreeze{SetID: s.set.Set.SetID, MemberAlias: member.Alias, PeriodTime: period,
+				Snapshot: previous.Snapshot, SnapshotHash: previous.SnapshotHash, Source: source}
+		}
+	}
+	return out, nil
+}
+
+func paramsDigest(params map[string]domain.ParamFreeze) string {
+	aliases := make([]string, 0, len(params))
+	for alias := range params {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	var b strings.Builder
+	for _, alias := range aliases {
+		b.WriteString(alias + "=" + params[alias].Snapshot.Hash() + ";")
+	}
+	return b.String()
+}
+
+// compute 用快照算一期（实时计算路径）；同一期、同一组参数已经算过时直接取缓存（调用方持有会话锁）。
+func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, period time.Time, params map[string]domain.ParamFreeze) (*replayPeriod, pipeline.Plan, pipeline.Computation, error) {
+	digest := paramsDigest(params)
 	cached := s.cache[period.Unix()]
+	if cached != nil && cached.digest != digest {
+		cached = nil
+	}
 	// 本期的标的全集只含这一期已经上市（本地最早一根不晚于本期）的标的：未来才出现的标的不能改变早期周期的截面与「缺数」判定。
 	var universe []string
 	for _, subject := range s.subjects {
@@ -539,7 +634,7 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 		}
 	}
 	plan, err := pipeline.BuildLivePlan(s.clock, pipeline.LiveInput{
-		Set: s.set.Set, Factors: s.set.Factors, PeriodTime: period, Universe: universe, CarryColumns: s.carry,
+		Set: s.set.Set, Members: s.set.Members, Params: params, PeriodTime: period, Universe: universe, CarryColumns: s.carry,
 	})
 	if err != nil {
 		return nil, pipeline.Plan{}, pipeline.Computation{}, err
@@ -564,10 +659,11 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 		return nil, plan, computation, err
 	}
 	states := make(map[string]ReplayFactorState, len(computation.FactorStates))
-	for id, state := range computation.FactorStates {
-		states[id] = ReplayFactorState{Status: state.Status, DefinitionHash: state.DefinitionHash, FailedSubjects: state.FailedSubjects}
+	for alias, state := range computation.FactorStates {
+		states[alias] = ReplayFactorState{Status: state.Status, FactorID: state.FactorID, DefinitionHash: state.DefinitionHash,
+			FailedSubjects: state.FailedSubjects, ParamsSource: state.ParamsSource, ParamsDigest: state.ParamsDigest}
 	}
-	result := &replayPeriod{values: values, states: states}
+	result := &replayPeriod{values: values, states: states, digest: digest}
 	s.cache[period.Unix()] = result
 	return result, plan, computation, nil
 }

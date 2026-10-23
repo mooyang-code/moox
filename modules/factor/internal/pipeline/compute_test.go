@@ -27,7 +27,7 @@ func testPipelineFactor(id, factorType string, lookback int, partial bool) domai
 func computePlan(target time.Time, factors []domain.FactorDef, subjects []string) Plan {
 	return Plan{
 		Mode: ModeLive, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"},
-		Factors: factors, TargetStart: target.Add(-time.Minute), TargetEnd: target.Add(time.Minute),
+		Members: domain.AsMembers(factors...), TargetStart: target.Add(-time.Minute), TargetEnd: target.Add(time.Minute),
 		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), CarryColumns: []string{"close"}, WriteCarry: true,
 	}
 }
@@ -235,7 +235,7 @@ func TestComputeIsDeterministicAcrossWorkersAndTags(t *testing.T) {
 func recalcPlan(start time.Time, factors []domain.FactorDef, subjects []string) Plan {
 	return Plan{
 		Mode: ModeRecalc, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", ResultDatasetID: "dataset_factor_bars", Freq: "1m"},
-		Factors: factors, TargetStart: start, TargetEnd: start.Add(3 * time.Minute),
+		Members: domain.AsMembers(factors...), TargetStart: start, TargetEnd: start.Add(3 * time.Minute),
 		Expected: append([]string(nil), subjects...), Available: append([]string(nil), subjects...), CarryColumns: []string{"close"}, WriteCarry: true,
 	}
 }

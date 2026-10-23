@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/memadmit"
@@ -32,6 +34,10 @@ type measuredRunner struct {
 	metrics *observability.Metrics
 	health  *Health
 	runs    *runTracker
+
+	// carried 是每个成员连续沿用参数的期数（集合/别名 → 期数），实时周期按冻结来源更新。
+	carriedMu sync.Mutex
+	carried   map[string]int
 }
 
 func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.Outcome, error) {
@@ -68,6 +74,7 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 			r.metrics.LastPeriodTime.WithLabelValues(setID).Set(float64(periodTime.Unix()))
 			r.runs.record(setID, periodTime, status, outcome, time.Now())
 		}
+		r.recordParams(setID, outcome)
 	}
 	for _, factor := range outcome.Factors {
 		if factor.Status != "complete" {
@@ -75,8 +82,8 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 			if reason == "" {
 				reason = "failed"
 			}
-			r.metrics.Failures.WithLabelValues(setID, factor.FactorID, reason).Inc()
-			log.ErrorContextf(ctx, "factor_compute_failed set_id=%s factor_id=%s reason=%s", setID, factor.FactorID, reason)
+			r.metrics.Failures.WithLabelValues(setID, factor.Member, reason).Inc()
+			log.ErrorContextf(ctx, "factor_compute_failed set_id=%s member=%s factor_id=%s reason=%s", setID, factor.Member, factor.FactorID, reason)
 		}
 	}
 	if err != nil {
@@ -86,6 +93,30 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 		log.InfoContextf(ctx, "factor_period_done set_id=%s period_time=%s status=%s rows=%d warming=%d duration=%s %s", setID, periodTime.UTC().Format(time.RFC3339), status, outcome.RowsWritten, outcome.Warming, time.Since(started), stageSummary(outcome.StageDurations))
 	}
 	return outcome, err
+}
+
+// recordParams 按每个成员这一期冻结参数的来源计数，并维护连续沿用的期数：沿用（含离线沿用）加一，
+// 新提交生效时归零；默认值（从未提交过）不算沿用。
+func (r *measuredRunner) recordParams(setID string, outcome pipeline.Outcome) {
+	r.carriedMu.Lock()
+	defer r.carriedMu.Unlock()
+	if r.carried == nil {
+		r.carried = map[string]int{}
+	}
+	for _, state := range outcome.Factors {
+		if state.ParamsSource == "" {
+			continue
+		}
+		r.metrics.ParamFreezes.WithLabelValues(setID, state.ParamsSource).Inc()
+		key := setID + "/" + state.Member
+		switch state.ParamsSource {
+		case domain.ParamsCarried, domain.ParamsCarriedOffline:
+			r.carried[key]++
+		default:
+			r.carried[key] = 0
+		}
+		r.metrics.ParamCarriedPeriods.WithLabelValues(setID, state.Member).Set(float64(r.carried[key]))
+	}
 }
 
 // pipelineStages is the order a period runs through; the log line lists the

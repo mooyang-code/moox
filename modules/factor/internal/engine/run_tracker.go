@@ -63,7 +63,10 @@ func (t *runTracker) record(setID string, periodTime time.Time, status string, o
 	factors := make([]domain.FactorPeriodState, 0, len(outcome.Factors))
 	for _, factor := range outcome.Factors {
 		factors = append(factors, domain.FactorPeriodState{
+			MemberAlias:    factor.Member,
 			FactorID:       factor.FactorID,
+			ParamsSource:   factor.ParamsSource,
+			ParamsDigest:   factor.ParamsDigest,
 			Status:         factor.Status,
 			FailedSubjects: factor.FailedSubjects,
 			SpecHash:       factor.SourceHash,
@@ -115,10 +118,10 @@ func addItems(into map[string]map[string]struct{}, items []pipeline.ItemKey, per
 		if into == nil {
 			into = make(map[string]map[string]struct{})
 		}
-		if into[item.FactorID] == nil {
-			into[item.FactorID] = make(map[string]struct{})
+		if into[item.Member] == nil {
+			into[item.Member] = make(map[string]struct{})
 		}
-		into[item.FactorID][item.Subject] = struct{}{}
+		into[item.Member][item.Subject] = struct{}{}
 	}
 	return into
 }
@@ -135,13 +138,13 @@ func (run trackedRun) withRepairs(completedAt time.Time) trackedRun {
 	complete := true
 	factors := make([]domain.FactorPeriodState, len(run.factors))
 	for i, factor := range run.factors {
-		fixed := run.repaired[factor.FactorID]
+		fixed := run.repaired[factor.MemberAlias]
 		next := factor
 		next.FailedSubjects = subjectsWithout(factor.FailedSubjects, fixed)
 		next.GapSubjects = subjectsWithout(factor.GapSubjects, fixed)
 		// 整因子跳过的因子实时路径一行没写：补算重算时没写成的标的仍然缺结果。
 		if factor.Status == "skipped" {
-			next.FailedSubjects = mergeSubjects(next.FailedSubjects, run.unwritten[factor.FactorID], fixed)
+			next.FailedSubjects = mergeSubjects(next.FailedSubjects, run.unwritten[factor.MemberAlias], fixed)
 		}
 		// 只因标的失败（含预热中、空洞）而不完整的因子，这些标的都补齐后记为完成；没有列出标的的整因子失败保持原状。
 		if next.Status != "complete" && len(factor.FailedSubjects)+len(factor.GapSubjects) > 0 && len(next.FailedSubjects)+len(next.GapSubjects) == 0 {

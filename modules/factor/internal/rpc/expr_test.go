@@ -17,15 +17,17 @@ import (
 func TestValidateFactorSpecReturnsDerivedContract(t *testing.T) {
 	svc := NewService(&catalogFake{}, &recalcFake{})
 	rsp, err := svc.ValidateFactorSpec(context.Background(), &factorpb.ValidateFactorSpecReq{
-		Spec: "params: {window: [5, 20]}\noutputs:\n  m_{window}: ts_mean(close, window)\n",
+		Spec: "params:\n  window: {type: int, min: 5, max: 20, default: 10}\noutputs:\n  m: ts_mean(close, window)\n",
 	})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	require.True(t, rsp.GetValid())
 	require.Equal(t, domain.FactorTypeTimeSeries, rsp.GetFactorType())
 	require.Equal(t, []string{"close"}, rsp.GetInputColumns())
-	require.Equal(t, []string{"m_5", "m_20"}, rsp.GetOutputs())
-	require.Equal(t, int32(20), rsp.GetLookbackPeriods())
+	require.Equal(t, []string{"m"}, rsp.GetOutputs())
+	require.Equal(t, int32(20), rsp.GetLookbackPeriods(), "回看按参数取值范围的最坏情况")
+	require.Len(t, rsp.GetParams(), 1)
+	require.Equal(t, 10.0, rsp.GetParams()[0].GetDefaultValue())
 	require.NotEmpty(t, rsp.GetCanonical())
 	require.NotEmpty(t, rsp.GetDefinitionHash())
 }

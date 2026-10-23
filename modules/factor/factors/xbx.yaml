@@ -1,8 +1,11 @@
 # 因子库（表达式写法）：11 个因子。
 # 格式见 docs/计划/因子表达式引擎详细设计.md 9.5：一个文件可以包含多个因子。
+# 分类：动量类（momentum）、成交量类（volume）、波动类（volatility）。
 # 窗口是可调参数（因子动态调参执行计划 2.2）：默认 20，策略可在 2～120 内每期调整；回看按上限 120 推导。
 - factor_id: Bias
   name: Bias
+  category_id: momentum
+  category_name: 动量类
   spec: |
     params: {window: {type: int, min: 2, max: 120, default: 20}}
     outputs:
@@ -10,6 +13,8 @@
 
 - factor_id: BiasQ
   name: Bias 分位
+  category_id: momentum
+  category_name: 动量类
   spec: |
     params: {window: {type: int, min: 2, max: 120, default: 20}}
     outputs:
@@ -17,6 +22,8 @@
 
 - factor_id: Cci
   name: CCI
+  category_id: momentum
+  category_name: 动量类
   spec: |
     params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:
@@ -27,6 +34,8 @@
 
 - factor_id: MinMax
   name: MinMax
+  category_id: momentum
+  category_name: 动量类
   spec: |
     params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:
@@ -37,6 +46,8 @@
 
 - factor_id: QuoteVolumeMean
   name: 成交额均值
+  category_id: volume
+  category_name: 成交量类
   spec: |
     params: {window: {type: int, min: 2, max: 120, default: 20}}
     outputs:
@@ -44,6 +55,8 @@
 
 - factor_id: QuoteVolumeMeanQ
   name: 成交额均值分位
+  category_id: volume
+  category_name: 成交量类
   spec: |
     params: {window: {type: int, min: 2, max: 120, default: 20}}
     outputs:
@@ -51,6 +64,8 @@
 
 - factor_id: VolumeMeanQ
   name: 成交量均值分位
+  category_id: volume
+  category_name: 成交量类
   spec: |
     params: {window: {type: int, min: 2, max: 120, default: 20}}
     outputs:
@@ -58,6 +73,8 @@
 
 - factor_id: ZfAbsMean
   name: 上涨振幅均值分位
+  category_id: volatility
+  category_name: 波动类
   spec: |
     params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:
@@ -68,6 +85,8 @@
 
 - factor_id: ZfMeanQ
   name: 振幅均值分位
+  category_id: volatility
+  category_name: 波动类
   spec: |
     params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:
@@ -77,6 +96,8 @@
 
 - factor_id: ZfStd
   name: 带符号振幅标准差
+  category_id: volatility
+  category_name: 波动类
   spec: |
     params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:
@@ -86,6 +107,8 @@
 
 - factor_id: ZscoreAbsMeanQ
   name: 绝对 Z 分数均值分位
+  category_id: volatility
+  category_name: 波动类
   spec: |
     params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:

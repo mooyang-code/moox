@@ -20,7 +20,7 @@ func TestEnableMemberWithRecalcJobIsAtomicAndIdempotent(t *testing.T) {
 	addTestMember(t, s, set.SetID, factor.FactorID, domain.MemberStatusDisabled)
 	job := RecalcJob{
 		JobID: "enable-request", RequestID: "enable-request", SetID: set.SetID,
-		FactorIDs: []string{factor.FactorID}, Subjects: []string{"BTC"},
+		Members: []string{factor.FactorID}, Subjects: []string{"BTC"},
 		StartTime: 100, EndTime: 200, Status: RecalcStatusAccepted,
 	}
 
@@ -67,14 +67,14 @@ func TestConcurrentRecalcJobRequestIDIsIdempotent(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, firstStore.Close()); require.NoError(t, secondStore.Close()) })
 
 	jobs := []RecalcJob{
-		{JobID: "job-a", RequestID: "request-race", SetID: "set", FactorIDs: []string{"a"}, Subjects: []string{"BTC"}, FactorsOmitted: true, SubjectsOmitted: true, StartTime: 1, EndTime: 2},
-		{JobID: "job-b", RequestID: "request-race", SetID: "set", FactorIDs: []string{"a", "b"}, Subjects: []string{"BTC", "ETH"}, FactorsOmitted: true, SubjectsOmitted: true, StartTime: 1, EndTime: 2},
+		{JobID: "job-a", RequestID: "request-race", SetID: "set", Members: []string{"a"}, Subjects: []string{"BTC"}, MembersOmitted: true, SubjectsOmitted: true, StartTime: 1, EndTime: 2},
+		{JobID: "job-b", RequestID: "request-race", SetID: "set", Members: []string{"a", "b"}, Subjects: []string{"BTC", "ETH"}, MembersOmitted: true, SubjectsOmitted: true, StartTime: 1, EndTime: 2},
 	}
 	results := concurrentCreate(t, firstStore, secondStore, jobs)
 	require.NoError(t, results[0].err)
 	require.NoError(t, results[1].err)
 	require.Equal(t, results[0].job.JobID, results[1].job.JobID)
-	require.Equal(t, results[0].job.FactorIDs, results[1].job.FactorIDs)
+	require.Equal(t, results[0].job.Members, results[1].job.Members)
 	require.Equal(t, results[0].job.Subjects, results[1].job.Subjects)
 }
 
@@ -86,8 +86,8 @@ func TestConcurrentDifferentRecalcPayloadConflicts(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, firstStore.Close()); require.NoError(t, secondStore.Close()) })
 	jobs := []RecalcJob{
-		{JobID: "job-a", RequestID: "request-conflict", SetID: "set", FactorIDs: []string{"a"}, StartTime: 1, EndTime: 2},
-		{JobID: "job-b", RequestID: "request-conflict", SetID: "set", FactorIDs: []string{"b"}, StartTime: 1, EndTime: 2},
+		{JobID: "job-a", RequestID: "request-conflict", SetID: "set", Members: []string{"a"}, StartTime: 1, EndTime: 2},
+		{JobID: "job-b", RequestID: "request-conflict", SetID: "set", Members: []string{"b"}, StartTime: 1, EndTime: 2},
 	}
 	results := concurrentCreate(t, firstStore, secondStore, jobs)
 	require.NotEqual(t, results[0].err == nil, results[1].err == nil)
@@ -221,7 +221,7 @@ func TestEnableMemberMergesIntoTheQueuedBackfillOfTheSameSet(t *testing.T) {
 	}
 	enable := func(factorID string, start, end int64) RecalcJob {
 		job, err := s.EnableMemberWithRecalcJob(ctx, set.SetID, factorID, domain.MemberStatusDisabled, RecalcJob{
-			RequestID: "factor-enable-" + factorID, SetID: set.SetID, FactorIDs: []string{factorID}, Subjects: []string{},
+			RequestID: "factor-enable-" + factorID, SetID: set.SetID, Members: []string{factorID}, Subjects: []string{},
 			StartTime: start, EndTime: end, Status: RecalcStatusAccepted,
 		})
 		require.NoError(t, err)
@@ -233,7 +233,7 @@ func TestEnableMemberMergesIntoTheQueuedBackfillOfTheSameSet(t *testing.T) {
 	third := enable("cci", 100, 200)
 	require.Equal(t, first.JobID, second.JobID)
 	require.Equal(t, first.JobID, third.JobID)
-	require.Equal(t, []string{"bias", "cci", "momentum"}, third.FactorIDs)
+	require.Equal(t, []string{"bias", "cci", "momentum"}, third.Members)
 	require.Equal(t, int64(90), third.StartTime, "窗口取并集")
 	require.Equal(t, int64(210), third.EndTime)
 
@@ -260,7 +260,7 @@ func TestEnableMemberDoesNotMergeIntoRunningManualOrOtherSetJobs(t *testing.T) {
 	}
 	enable := func(setID, factorID, request string) RecalcJob {
 		job, err := s.EnableMemberWithRecalcJob(ctx, setID, factorID, domain.MemberStatusDisabled, RecalcJob{
-			RequestID: request, SetID: setID, FactorIDs: []string{factorID}, Subjects: []string{},
+			RequestID: request, SetID: setID, Members: []string{factorID}, Subjects: []string{},
 			StartTime: 100, EndTime: 200, Status: RecalcStatusAccepted,
 		})
 		require.NoError(t, err)
@@ -290,5 +290,5 @@ func TestEnableMemberDoesNotMergeIntoRunningManualOrOtherSetJobs(t *testing.T) {
 	require.NotEqual(t, first.JobID, second.JobID, "运行中的任务不并入")
 	third := enable("set_a", "f3", "factor-enable-f3")
 	require.Equal(t, second.JobID, third.JobID, "新的排队任务可以再并入后来的成员")
-	require.Equal(t, []string{"f2", "f3"}, third.FactorIDs)
+	require.Equal(t, []string{"f2", "f3"}, third.Members)
 }

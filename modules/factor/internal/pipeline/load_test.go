@@ -57,7 +57,7 @@ func TestLoadSkipsDataLayerWithoutAvailableSubjects(t *testing.T) {
 func TestLoadRecalcReadsFromLookbackStart(t *testing.T) {
 	start := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	plan := Plan{Mode: ModeRecalc, Set: domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m"},
-		Factors:     []domain.FactorDef{{FactorID: "short", LookbackPeriods: 5}, {FactorID: "long", LookbackPeriods: 20}},
+		Members:     domain.AsMembers(domain.FactorDef{FactorID: "short", LookbackPeriods: 5}, domain.FactorDef{FactorID: "long", LookbackPeriods: 20}),
 		TargetStart: start, TargetEnd: start.Add(3 * time.Minute), Expected: []string{"BTC"}, Available: []string{"BTC"}, CarryColumns: []string{"close"}}
 	got, err := ReadStart(periodclock.Continuous{}, plan)
 	require.NoError(t, err)
@@ -65,7 +65,7 @@ func TestLoadRecalcReadsFromLookbackStart(t *testing.T) {
 
 	live, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
 		Set:     domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.SetStatusEnabled, SubjectMode: domain.SubjectModeAll},
-		Factors: []domain.FactorDef{{FactorID: "short", LookbackPeriods: 5}, {FactorID: "long", LookbackPeriods: 20}}, PeriodTime: start, Universe: []string{"BTC"}, CarryColumns: []string{"close"},
+		Members: domain.AsMembers(domain.FactorDef{FactorID: "short", LookbackPeriods: 5}, domain.FactorDef{FactorID: "long", LookbackPeriods: 20}), PeriodTime: start, Universe: []string{"BTC"}, CarryColumns: []string{"close"},
 	})
 	require.NoError(t, err)
 	got, err = ReadStart(periodclock.Continuous{}, live)

@@ -36,6 +36,7 @@ type Config struct {
 	Gap           GapConfig                        `yaml:"gap"`
 	Watermark     WatermarkConfig                  `yaml:"watermark"`
 	Lifecycle     LifecycleConfig                  `yaml:"lifecycle"`
+	Params        ParamsConfig                     `yaml:"params"`
 }
 
 // WatermarkConfig 是连续水位：每个集合从水位下一期逐期推进，前面有还没补到的周期就停住（docs/计划/因子连续水位详细设计.md）。
@@ -68,6 +69,13 @@ type CatalogSyncConfig struct {
 	Interval  time.Duration `yaml:"interval"`
 	Offset    time.Duration `yaml:"offset"`
 	StateFile string        `yaml:"state_file"`
+}
+
+// ParamsConfig 是参数冻结（因子动态调参执行计划 2.4）：开算前向 FactorMgr 冻结参数，FreezeTimeout 内都失败时
+// 在本地按沿用规则冻结（离线冻结记在 StateFile，恢复后补报）。
+type ParamsConfig struct {
+	StateFile     string        `yaml:"state_file"`
+	FreezeTimeout time.Duration `yaml:"freeze_timeout"`
 }
 
 // LifecycleConfig 是生命周期控制器的配置：阶段持久化文件与检查周期。
@@ -257,6 +265,7 @@ func Default() *Config {
 		},
 		Watermark: WatermarkConfig{StateFile: "./data/engine/watermarks.json", MaxMissingRatio: 0.1, PollInterval: 10 * time.Second, MaxPeriods: 30},
 		Lifecycle: LifecycleConfig{StateFile: "./data/engine/lifecycle.json", Interval: 30 * time.Second},
+		Params:    ParamsConfig{StateFile: "./data/engine/params.json", FreezeTimeout: 5 * time.Second},
 	}
 }
 
@@ -299,12 +308,14 @@ func (c *Config) applyDefaults() {
 	setInt(&c.Watermark.MaxPeriods, d.Watermark.MaxPeriods)
 	setString(&c.Lifecycle.StateFile, d.Lifecycle.StateFile)
 	setDuration(&c.Lifecycle.Interval, d.Lifecycle.Interval)
+	setString(&c.Params.StateFile, d.Params.StateFile)
+	setDuration(&c.Params.FreezeTimeout, d.Params.FreezeTimeout)
 }
 
 func (c *Config) resolvePaths(root string) {
 	for _, path := range []*string{
 		&c.CatalogSync.StateFile, &c.Storage.AuthSecretFile, &c.EventBus.CredentialFile,
-		&c.Gap.LedgerDir, &c.Watermark.StateFile, &c.SeriesStore.Dir, &c.Lifecycle.StateFile,
+		&c.Gap.LedgerDir, &c.Watermark.StateFile, &c.SeriesStore.Dir, &c.Lifecycle.StateFile, &c.Params.StateFile,
 	} {
 		value := strings.TrimSpace(*path)
 		if value == "" || filepath.IsAbs(value) || strings.HasPrefix(value, "~") {

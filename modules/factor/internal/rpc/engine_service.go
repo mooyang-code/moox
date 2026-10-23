@@ -23,18 +23,93 @@ type EngineHub interface {
 	Heartbeat(ctx context.Context, id domain.EngineIdentity, status domain.EngineStatus) (time.Duration, error)
 	Pull(ctx context.Context, id domain.EngineIdentity) (store.RecalcJob, domain.EngineSet, bool, error)
 	Report(ctx context.Context, id domain.EngineIdentity, jobID, leaseToken string, progress time.Time, status, errText string) (store.RecalcJob, error)
+	HoldsLease(id domain.EngineIdentity) bool
+}
+
+// ParamAPI 是引擎用到的参数冻结能力（由目录服务实现）。
+type ParamAPI interface {
+	FreezeParams(ctx context.Context, setIDs []string, period time.Time) (map[string][]domain.ParamFreeze, error)
+	ApplyOfflineFreezes(ctx context.Context, freezes []domain.ParamFreeze) ([]domain.ParamFreeze, error)
+	ListParamIntervals(ctx context.Context, setID, alias string, from, to time.Time) ([]domain.ParamInterval, error)
 }
 
 // EngineService implements the internal FactorEngine contract used only by
 // moox-factor-engine.
 type EngineService struct {
 	hub    EngineHub
+	params ParamAPI
 	filled *FilledInbox
 }
 
 // NewEngineService 构造服务；filled 非空时心跳响应带上暂存的补齐通知。
-func NewEngineService(hub EngineHub, filled *FilledInbox) *EngineService {
-	return &EngineService{hub: hub, filled: filled}
+func NewEngineService(hub EngineHub, params ParamAPI, filled *FilledInbox) *EngineService {
+	return &EngineService{hub: hub, params: params, filled: filled}
+}
+
+// FreezeFactorParams 冻结一组集合在一期的参数；只有持有引擎租约的进程可以调用。
+func (s *EngineService) FreezeFactorParams(ctx context.Context, req *factorpb.FreezeFactorParamsReq) (*factorpb.FreezeFactorParamsRsp, error) {
+	if !s.hub.HoldsLease(factorwire.EngineIdentityFromPB(req.GetEngine())) {
+		return &factorpb.FreezeFactorParamsRsp{RetInfo: engineError(enginehub.ErrLeaseConflict)}, nil
+	}
+	if len(req.GetSetIds()) == 0 || req.GetPeriodTime() <= 0 {
+		return &factorpb.FreezeFactorParamsRsp{RetInfo: invalid(fmt.Errorf("set_ids 与 period_time 必填"))}, nil
+	}
+	period := time.Unix(req.GetPeriodTime(), 0).UTC()
+	frozen, err := s.params.FreezeParams(ctx, req.GetSetIds(), period)
+	if err != nil {
+		return &factorpb.FreezeFactorParamsRsp{RetInfo: engineError(err)}, nil
+	}
+	rsp := &factorpb.FreezeFactorParamsRsp{RetInfo: success()}
+	for _, setID := range req.GetSetIds() {
+		item := &factorpb.SetParamFreeze{SetId: setID}
+		for _, freeze := range frozen[setID] {
+			item.Members = append(item.Members, factorwire.FreezeToPB(freeze))
+		}
+		rsp.Sets = append(rsp.Sets, item)
+	}
+	return rsp, nil
+}
+
+// ReportOfflineFreezes 合并引擎离线冻结的期次；返回管理端已有不同记录的期次。
+func (s *EngineService) ReportOfflineFreezes(ctx context.Context, req *factorpb.ReportOfflineFreezesReq) (*factorpb.ReportOfflineFreezesRsp, error) {
+	if !s.hub.HoldsLease(factorwire.EngineIdentityFromPB(req.GetEngine())) {
+		return &factorpb.ReportOfflineFreezesRsp{RetInfo: engineError(enginehub.ErrLeaseConflict)}, nil
+	}
+	freezes := make([]domain.ParamFreeze, 0, len(req.GetFreezes()))
+	for _, item := range req.GetFreezes() {
+		snapshot := factorwire.SnapshotFromPB(item.GetParams())
+		freezes = append(freezes, domain.ParamFreeze{SetID: item.GetSetId(), MemberAlias: item.GetMemberAlias(),
+			PeriodTime: time.Unix(item.GetPeriodTime(), 0).UTC(), Snapshot: snapshot, SnapshotHash: snapshot.Hash(), Source: domain.ParamsCarriedOffline})
+	}
+	conflicts, err := s.params.ApplyOfflineFreezes(ctx, freezes)
+	if err != nil {
+		return &factorpb.ReportOfflineFreezesRsp{RetInfo: engineError(err)}, nil
+	}
+	rsp := &factorpb.ReportOfflineFreezesRsp{RetInfo: success()}
+	for _, conflict := range conflicts {
+		rsp.Conflicts = append(rsp.Conflicts, &factorpb.OfflineFreeze{SetId: conflict.SetID, MemberAlias: conflict.MemberAlias,
+			PeriodTime: conflict.PeriodTime.Unix(), Params: factorwire.SnapshotToPB(conflict.Snapshot), Source: conflict.Source})
+	}
+	return rsp, nil
+}
+
+// ListParamIntervals 返回集合在 [from, to] 内的冻结区间（补算读取已应用参数）。
+func (s *EngineService) ListParamIntervals(ctx context.Context, req *factorpb.ListParamIntervalsReq) (*factorpb.ListParamIntervalsRsp, error) {
+	if !s.hub.HoldsLease(factorwire.EngineIdentityFromPB(req.GetEngine())) {
+		return &factorpb.ListParamIntervalsRsp{RetInfo: engineError(enginehub.ErrLeaseConflict)}, nil
+	}
+	if strings.TrimSpace(req.GetSetId()) == "" || req.GetTo() < req.GetFrom() {
+		return &factorpb.ListParamIntervalsRsp{RetInfo: invalid(fmt.Errorf("set_id 必填，且时间范围要有效"))}, nil
+	}
+	intervals, err := s.params.ListParamIntervals(ctx, req.GetSetId(), "", time.Unix(req.GetFrom(), 0).UTC(), time.Unix(req.GetTo(), 0).UTC())
+	if err != nil {
+		return &factorpb.ListParamIntervalsRsp{RetInfo: engineError(err)}, nil
+	}
+	rsp := &factorpb.ListParamIntervalsRsp{RetInfo: success()}
+	for _, interval := range intervals {
+		rsp.Intervals = append(rsp.Intervals, factorwire.IntervalToPB(interval))
+	}
+	return rsp, nil
 }
 
 func (s *EngineService) SyncEngineCatalog(ctx context.Context, req *factorpb.SyncEngineCatalogReq) (*factorpb.SyncEngineCatalogRsp, error) {

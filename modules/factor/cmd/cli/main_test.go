@@ -45,12 +45,12 @@ func TestParseImportCatalogDefaultsToFactorsDirectory(t *testing.T) {
 func TestParseRecalcRangeAndSelectors(t *testing.T) {
 	cfg, err := parseArgs([]string{
 		"recalc", "--set", "fset_bars_1m", "--start", "2026-10-04T00:00:00Z",
-		"--end", "2026-10-04T01:00:00Z", "--factor", "Bias", "--factor", "Cci",
+		"--end", "2026-10-04T01:00:00Z", "--member", "Bias", "--member", "Cci",
 		"--subject", "BTC,ETH",
 	})
 	require.NoError(t, err)
 	require.Equal(t, time.Hour, cfg.EndTime.Sub(cfg.StartTime))
-	require.Equal(t, []string{"Bias", "Cci"}, cfg.FactorIDs)
+	require.Equal(t, []string{"Bias", "Cci"}, cfg.Members)
 	require.Equal(t, []string{"BTC", "ETH"}, cfg.Subjects)
 	require.Empty(t, cfg.DBPath)
 }
@@ -89,9 +89,10 @@ func TestRunInitCreatesFactorSchema(t *testing.T) {
 const testLibrary = `- factor_id: Bias
   name: Bias
   spec: |
-    params: {window: 5}
+    params:
+      window: {type: int, min: 2, max: 60, default: 5}
     outputs:
-      bias_{window}: close / ts_mean(close, window)
+      bias: close / ts_mean(close, window)
 - factor_id: Cci
   name: CCI
   spec: |
@@ -129,7 +130,7 @@ func TestImportCatalogCreatesDefinitionsOnly(t *testing.T) {
 	defs, err := db.ListFactors(t.Context())
 	require.NoError(t, err)
 	require.Len(t, defs, 2)
-	require.Equal(t, []string{"bias_5"}, defs[0].Outputs)
+	require.Equal(t, []string{"bias"}, defs[0].Outputs)
 	usages, err := db.ListUsages(t.Context(), "Bias")
 	require.NoError(t, err)
 	require.Empty(t, usages["Bias"])

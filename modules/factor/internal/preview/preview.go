@@ -42,6 +42,8 @@ type Request struct {
 	Factor   domain.FactorDef // 已经 NormalizeFactorDefinition 编译过
 	Subjects []string
 	Periods  int
+	// Params 是试算用的参数快照（默认值加按标的覆盖）；为空时用定义的默认值。
+	Params domain.ParamSnapshot
 }
 
 // Row 是一个 (标的, 标签, 周期) 的输出；Values 与 Result.Columns 一一对应，null 为 nil。
@@ -80,6 +82,17 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 	factor := req.Factor
 	if factor.Compiled() == nil {
 		return Result{}, errors.New("定义尚未编译")
+	}
+	member := domain.MemberDef{Alias: factor.FactorID, Factor: factor}
+	params := map[string]domain.ParamFreeze{}
+	if len(req.Params) > 0 {
+		if err := domain.CheckSnapshotNumbers(req.Params); err != nil {
+			return Result{}, err
+		}
+		if err := domain.ValidateSnapshot(member, req.Params, req.Set.InScope); err != nil {
+			return Result{}, err
+		}
+		params[member.Alias] = domain.ParamFreeze{MemberAlias: member.Alias, Snapshot: req.Params, Source: domain.ParamsRequested}
 	}
 	periods := req.Periods
 	if periods <= 0 {
@@ -133,11 +146,11 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 		return Result{}, err
 	}
 	// 读取之前按标的数估算峰值内存，超限直接拒绝，避免长窗口 × 大全集的试算耗尽管理端内存。
-	if err := pipeline.CheckChunkMemory([]domain.FactorDef{factor}, len(computed), periods, len(factor.InputColumns), MaxMemory); err != nil {
+	if err := pipeline.CheckChunkMemory([]domain.MemberDef{member}, len(computed), periods, len(factor.InputColumns), MaxMemory); err != nil {
 		return Result{}, fmt.Errorf("试算范围太大，请减少期数或标的：%w", err)
 	}
 	plan := pipeline.Plan{
-		Mode: pipeline.ModeRecalc, Set: set, Factors: []domain.FactorDef{factor},
+		Mode: pipeline.ModeRecalc, Set: set, Members: []domain.MemberDef{member}, Params: params,
 		TargetStart: end.Add(-time.Duration(periods) * duration), TargetEnd: end,
 		Expected: computed, Available: computed, CarryColumns: factor.InputColumns,
 	}
@@ -171,7 +184,7 @@ func collect(factor domain.FactorDef, computation pipeline.Computation, shown []
 		wanted[subject] = true
 	}
 	result := Result{Columns: append([]string(nil), factor.Outputs...)}
-	for key, item := range computation.Results[factor.FactorID] {
+	for key, item := range computation.Results[factor.FactorID] { // 试算的成员别名就是定义 ID
 		if item.Err != nil {
 			return Result{}, item.Err
 		}

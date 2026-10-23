@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -55,6 +56,13 @@ type gapFiller struct {
 	// lastTried 记录每个组最近一次尝试的时间：一轮只处理 MaxGroupsPerSweep 个组，按「最久没试过的优先」轮转，
 	// 前面一直补不上的组不会让后面已经补齐的组长期得不到执行机会。
 	lastTried map[string]time.Time
+	// params 提供历史周期的冻结参数（可为 nil：全部按默认参数）。
+	params paramIntervalSource
+}
+
+// paramIntervalSource 取集合在一段周期上的冻结区间（别名 → 按起点排序，含区间之前最近的一个，供沿用）。
+type paramIntervalSource interface {
+	Intervals(ctx context.Context, setID string, from, to time.Time) (map[string][]domain.ParamInterval, error)
 }
 
 // Run 按 SweepInterval 轮询、或者被唤醒（预热完成、记入预热中跳过的项），直到 ctx 结束。
@@ -161,7 +169,7 @@ func (g *gapFiller) tick(ctx context.Context) {
 			g.cancel([]gapledger.Entry{entry}, "set_gone")
 			continue
 		}
-		cross := factorIsCross(set, entry.FactorID)
+		cross := memberIsCross(set, entry.Member)
 		gk := groupKey{set: entry.Set, cross: cross}
 		if cross {
 			gk.period = entry.Period.Unix()
@@ -279,18 +287,18 @@ func logExpired(expired []gapledger.Entry, giveUp time.Duration) {
 	}
 }
 
-func factorIsCross(set domain.EngineSet, factorID string) bool {
-	for _, factor := range set.Factors {
-		if factor.FactorID == factorID {
-			return factor.FactorType == domain.FactorTypeCrossSection
+func memberIsCross(set domain.EngineSet, alias string) bool {
+	for _, member := range set.Members {
+		if member.Alias == alias {
+			return member.Factor.FactorType == domain.FactorTypeCrossSection
 		}
 	}
 	return false
 }
 
 // refresh 在集合锁内按最新的集合与账本重读一组待办：丢掉已终结的，定义哈希与当前不同的记为 cancelled（definition_changed），
-// 因子已不在集合里的记为 cancelled（factor_removed）。返回仍可恢复的待办与对应的因子定义。
-func (g *gapFiller) refresh(setID string, entries []gapledger.Entry, cross bool) (domain.EngineSet, SetLookup, []gapledger.Entry, []domain.FactorDef) {
+// 成员已不在集合里的记为 cancelled（factor_removed）。返回仍可恢复的待办与对应的成员。
+func (g *gapFiller) refresh(setID string, entries []gapledger.Entry, cross bool) (domain.EngineSet, SetLookup, []gapledger.Entry, []domain.MemberDef) {
 	set, lookup := g.sets.SetByID(setID)
 	if lookup != SetFound {
 		if lookup == SetGone {
@@ -298,35 +306,47 @@ func (g *gapFiller) refresh(setID string, entries []gapledger.Entry, cross bool)
 		}
 		return set, lookup, nil, nil
 	}
-	defs := make(map[string]domain.FactorDef, len(set.Factors))
-	for _, factor := range set.Factors {
-		defs[factor.FactorID] = factor
+	defs := make(map[string]domain.MemberDef, len(set.Members))
+	for _, member := range set.Members {
+		defs[member.Alias] = member
 	}
 	var use []gapledger.Entry
 	var removed, changed []gapledger.Entry
-	factors := make(map[string]domain.FactorDef)
+	members := make(map[string]domain.MemberDef)
 	for _, entry := range entries {
-		def, ok := defs[entry.FactorID]
+		member, ok := defs[entry.Member]
 		switch {
 		case !ok:
 			removed = append(removed, entry)
-		case domain.DefinitionHash(def) != entry.Hash:
+		case domain.DefinitionHash(member.Factor) != entry.Hash:
 			changed = append(changed, entry)
-		case (def.FactorType == domain.FactorTypeCrossSection) != cross:
+		case (member.Factor.FactorType == domain.FactorTypeCrossSection) != cross:
 			continue
 		default:
 			use = append(use, entry)
-			factors[entry.FactorID] = def
+			members[entry.Member] = member
 		}
 	}
 	g.cancel(removed, "factor_removed")
 	g.cancel(changed, "definition_changed")
-	list := make([]domain.FactorDef, 0, len(factors))
-	for _, def := range factors {
-		list = append(list, def)
+	list := make([]domain.MemberDef, 0, len(members))
+	for _, member := range members {
+		list = append(list, member)
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].FactorID < list[j].FactorID })
+	sort.Slice(list, func(i, j int) bool { return list[i].Alias < list[j].Alias })
 	return set, SetFound, use, list
+}
+
+// intervals 取集合在 [start, end) 上的冻结区间：恢复的是历史周期，要用当时冻结的参数。
+func (g *gapFiller) intervals(ctx context.Context, setID string, start, end time.Time) (map[string][]domain.ParamInterval, error) {
+	if g.params == nil {
+		return nil, nil
+	}
+	intervals, err := g.params.Intervals(ctx, setID, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read frozen params: %v", storageio.ErrInfra, err)
+	}
+	return intervals, nil
 }
 
 func (g *gapFiller) cancel(entries []gapledger.Entry, reason string) {
@@ -373,7 +393,7 @@ func (g *gapFiller) fillSubjects(ctx context.Context, set domain.EngineSet, subj
 		if g.active != nil && !g.active() {
 			return recalcexec.Selection{}, nil // 取得集合锁后租约已丢失：不运行
 		}
-		current, lookup, use, factors := g.refresh(setID, pending(), false)
+		current, lookup, use, members := g.refresh(setID, pending(), false)
 		if lookup != SetFound || len(use) == 0 {
 			return recalcexec.Selection{}, nil
 		}
@@ -381,8 +401,13 @@ func (g *gapFiller) fillSubjects(ctx context.Context, set domain.EngineSet, subj
 		if err != nil {
 			return recalcexec.Selection{}, fmt.Errorf("list source dataset columns: %w", err)
 		}
+		intervals, err := g.intervals(ctx, setID, start, end)
+		if err != nil {
+			return recalcexec.Selection{}, err
+		}
 		return recalcexec.Selection{
-			Set: current.Set, Factors: factors, Subjects: entrySubjects(use), Columns: columns, FillOnly: true, FillCarry: anyWarming(use),
+			Set: current.Set, Members: members, Subjects: entrySubjects(use), Columns: columns, Intervals: intervals,
+			FillOnly: true, FillCarry: anyWarming(use),
 		}, nil
 	}
 	after := func(selection recalcexec.Selection, outcome pipeline.Outcome, runErr error) {
@@ -462,7 +487,7 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineSet, entries
 				pending = append(pending, entry)
 			}
 		}
-		current, lookup, use, factors := g.refresh(setID, pending, true)
+		current, lookup, use, members := g.refresh(setID, pending, true)
 		if lookup != SetFound || len(use) == 0 {
 			return recalcexec.Selection{}, nil
 		}
@@ -470,7 +495,12 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineSet, entries
 		if err != nil {
 			return recalcexec.Selection{}, fmt.Errorf("list source dataset columns: %w", err)
 		}
-		return recalcexec.Selection{Set: current.Set, Factors: factors, Subjects: universe, Columns: columns, FillOnly: true, FillCarry: anyWarming(use)}, nil
+		intervals, err := g.intervals(ctx, setID, periodStart, end)
+		if err != nil {
+			return recalcexec.Selection{}, err
+		}
+		return recalcexec.Selection{Set: current.Set, Members: members, Subjects: universe, Columns: columns, Intervals: intervals,
+			FillOnly: true, FillCarry: anyWarming(use)}, nil
 	}
 	after := func(selection recalcexec.Selection, outcome pipeline.Outcome, runErr error) {
 		if runErr != nil {
@@ -491,16 +521,16 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineSet, entries
 // confirm 在集合锁内确认：Selection 里的因子、区间内、逐项结果为 written 的待办追加 repaired。
 // gap 与 failed 保持待恢复，下一轮再试。
 func (g *gapFiller) confirm(current []gapledger.Entry, selection recalcexec.Selection, outcome pipeline.Outcome, start, end time.Time) {
-	selected := make(map[string]struct{}, len(selection.Factors))
-	for _, factor := range selection.Factors {
-		selected[factor.FactorID] = struct{}{}
+	selected := make(map[string]struct{}, len(selection.Members))
+	for _, member := range selection.Members {
+		selected[member.Alias] = struct{}{}
 	}
 	var repaired []gapledger.Ref
 	for _, entry := range current {
-		if _, ok := selected[entry.FactorID]; !ok || entry.Period.Before(start) || !entry.Period.Before(end) {
+		if _, ok := selected[entry.Member]; !ok || entry.Period.Before(start) || !entry.Period.Before(end) {
 			continue
 		}
-		if outcome.Items[pipeline.ItemKey{FactorID: entry.FactorID, Subject: entry.Subject, Period: entry.Period}] == pipeline.ItemWritten {
+		if outcome.Items[pipeline.ItemKey{Member: entry.Member, Subject: entry.Subject, Period: entry.Period}] == pipeline.ItemWritten {
 			repaired = append(repaired, entry.Ref())
 		}
 	}
@@ -521,12 +551,12 @@ func (g *gapFiller) confirm(current []gapledger.Entry, selection recalcexec.Sele
 		if byPeriod[at] == nil {
 			byPeriod[at] = &RepairedPeriod{Period: time.Unix(at, 0).UTC()}
 		}
-		byPeriod[at].Repaired = append(byPeriod[at].Repaired, pipeline.ItemKey{FactorID: ref.FactorID, Subject: ref.Subject, Period: ref.Period})
+		byPeriod[at].Repaired = append(byPeriod[at].Repaired, pipeline.ItemKey{Member: ref.Member, Subject: ref.Subject, Period: ref.Period})
 	}
 	// 这次重算没有写成的项也带上：截面恢复重算整个冻结全集，账本里只有当初有洞的标的；别的标的这次没写成，
 	// 而实时路径当时整因子跳过、也没写，这一期的结果仍然缺它们，不能因为账本清空就记为完成。
 	for key, status := range outcome.Items {
-		if _, ok := selected[key.FactorID]; !ok || status == pipeline.ItemWritten {
+		if _, ok := selected[key.Member]; !ok || status == pipeline.ItemWritten {
 			continue
 		}
 		if period := byPeriod[key.Period.UTC().Unix()]; period != nil {

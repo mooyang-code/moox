@@ -20,10 +20,10 @@ func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
 		FailedSubjects: uniqueSorted(append(append([]string(nil), plan.UpstreamFailed...), loaded.FailedSubjects...)),
 		StageDurations: make(map[string]time.Duration),
 	}
-	for _, factor := range plan.Factors {
-		state, ok := computation.FactorStates[factor.FactorID]
+	for _, member := range plan.Members {
+		state, ok := computation.FactorStates[member.Alias]
 		if !ok {
-			state = storageio.FactorState{FactorID: factor.FactorID, Status: "degraded", SourceHash: factor.SpecHash, DefinitionHash: domain.DefinitionHash(factor)}
+			state = memberState(plan, member, "degraded", nil)
 		}
 		state.FailedSubjects = uniqueSorted(state.FailedSubjects)
 		outcome.Factors = append(outcome.Factors, state)
@@ -37,7 +37,7 @@ func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
 	if computation.BudgetHit {
 		outcome.Status = "degraded"
 	}
-	sort.Slice(outcome.Factors, func(i, j int) bool { return outcome.Factors[i].FactorID < outcome.Factors[j].FactorID })
+	sort.Slice(outcome.Factors, func(i, j int) bool { return outcome.Factors[i].Member < outcome.Factors[j].Member })
 	return outcome
 }
 
@@ -87,15 +87,12 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	outcome.StageDurations["plan"] = time.Since(planStarted)
 	loaded := LoadResult{Frames: map[string]*storageio.Frame{}, Available: append([]string(nil), plan.Available...)}
 	computation := Computation{Results: map[string]map[string]ItemResult{}, FactorStates: map[string]storageio.FactorState{}}
-	for _, factor := range plan.Factors {
-		computation.FactorStates[factor.FactorID] = storageio.FactorState{
-			FactorID: factor.FactorID, Status: "complete", SourceHash: factor.SpecHash,
-			DefinitionHash: domain.DefinitionHash(factor),
-		}
+	for _, member := range plan.Members {
+		computation.FactorStates[member.Alias] = memberState(plan, member, "complete", nil)
 	}
 	rowsWritten := 0
 	var items map[ItemKey]ItemStatus
-	if len(plan.Factors) > 0 {
+	if len(plan.Members) > 0 {
 		stage := time.Now()
 		var err error
 		// 读取之前做内存预检（设计 7.5）：补算超限以资源错误失败；实时周期本期全部因子按计算失败上报，不读取。
@@ -192,7 +189,7 @@ func newCommitSalt() string {
 // 之后由空洞恢复按「只填充」补算写入。不记账的话，引擎重启后第一期的结果会永久缺失，1h 及更长周期就是整整一根。
 // 截面因子也逐标的记录：恢复按周期分组，用 marker 里冻结的全集重算。写入失败只记日志，不影响周期推进。
 func (r *Runner) recordWarming(ctx context.Context, plan Plan, warming []string) {
-	if r.cfg.GapSink == nil || plan.Mode != ModeLive || len(warming) == 0 || len(plan.Factors) == 0 {
+	if r.cfg.GapSink == nil || plan.Mode != ModeLive || len(warming) == 0 || len(plan.Members) == 0 {
 		return
 	}
 	target, err := planTarget(r.clock, plan)
@@ -200,15 +197,15 @@ func (r *Runner) recordWarming(ctx context.Context, plan Plan, warming []string)
 		log.ErrorContextf(ctx, "factor_warming_record_failed set_id=%s error=%v", plan.Set.SetID, err)
 		return
 	}
-	hashes := make([]string, len(plan.Factors))
-	for i, factor := range plan.Factors {
-		hashes[i] = domain.DefinitionHash(factor)
+	hashes := make([]string, len(plan.Members))
+	for i, member := range plan.Members {
+		hashes[i] = domain.DefinitionHash(member.Factor)
 	}
-	entries := make([]GapEntry, 0, len(warming)*len(plan.Factors))
+	entries := make([]GapEntry, 0, len(warming)*len(plan.Members))
 	for _, subject := range warming {
-		for i, factor := range plan.Factors {
+		for i, member := range plan.Members {
 			entries = append(entries, GapEntry{
-				SetID: plan.Set.SetID, Subject: subject, Period: target.UTC(), FactorID: factor.FactorID, DefinitionHash: hashes[i],
+				SetID: plan.Set.SetID, Subject: subject, Period: target.UTC(), Member: member.Alias, DefinitionHash: hashes[i],
 				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonWarming,
 			})
 		}
@@ -222,18 +219,18 @@ func (r *Runner) recordWarming(ctx context.Context, plan Plan, warming []string)
 // 补采补齐之后由空洞恢复按「只填充」补算；不记账的话这些标的的这一期永远不会补算（原事件的失败名单已过时，不能重放）。
 // 记账失败返回基础设施错误：这一期不写结果、水位不前进，由重投或追赶重试。
 func (r *Runner) recordUpstream(ctx context.Context, plan Plan) error {
-	if r.cfg.GapSink == nil || plan.Mode != ModeLive || len(plan.UpstreamFailed) == 0 || len(plan.Factors) == 0 {
+	if r.cfg.GapSink == nil || plan.Mode != ModeLive || len(plan.UpstreamFailed) == 0 || len(plan.Members) == 0 {
 		return nil
 	}
 	target, err := planTarget(r.clock, plan)
 	if err != nil {
 		return err
 	}
-	entries := make([]GapEntry, 0, len(plan.UpstreamFailed)*len(plan.Factors))
+	entries := make([]GapEntry, 0, len(plan.UpstreamFailed)*len(plan.Members))
 	for _, subject := range plan.UpstreamFailed {
-		for _, factor := range plan.Factors {
+		for _, member := range plan.Members {
 			entries = append(entries, GapEntry{
-				SetID: plan.Set.SetID, Subject: subject, Period: target.UTC(), FactorID: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor),
+				SetID: plan.Set.SetID, Subject: subject, Period: target.UTC(), Member: member.Alias, DefinitionHash: domain.DefinitionHash(member.Factor),
 				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonUpstream,
 			})
 		}
@@ -248,7 +245,7 @@ func (r *Runner) recordUpstream(ctx context.Context, plan Plan) error {
 // recordUnavailable 把实时周期里同步之后本地仍没有目标周期行（数据还没到、或同步失败）的 (因子, 标的, 周期) 记入账本：
 // 补采补齐之后由「只填充」补算补上，与上游失败同一种恢复。记账失败只记日志，不影响周期推进。
 func (r *Runner) recordUnavailable(ctx context.Context, plan Plan, loaded LoadResult) {
-	if r.cfg.GapSink == nil || plan.Mode != ModeLive || len(plan.Factors) == 0 {
+	if r.cfg.GapSink == nil || plan.Mode != ModeLive || len(plan.Members) == 0 {
 		return
 	}
 	skip := make(map[string]struct{}, len(plan.UpstreamFailed)+len(loaded.WarmingSubjects))
@@ -268,9 +265,9 @@ func (r *Runner) recordUnavailable(ctx context.Context, plan Plan, loaded LoadRe
 		if _, done := skip[subject]; done {
 			continue
 		}
-		for _, factor := range plan.Factors {
+		for _, member := range plan.Members {
 			entries = append(entries, GapEntry{
-				SetID: plan.Set.SetID, Subject: subject, Period: target.UTC(), FactorID: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor),
+				SetID: plan.Set.SetID, Subject: subject, Period: target.UTC(), Member: member.Alias, DefinitionHash: domain.DefinitionHash(member.Factor),
 				TriggerEventID: plan.TriggerEventID, Reason: SkipReasonUpstream,
 			})
 		}

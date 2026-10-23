@@ -67,13 +67,13 @@ func (r *Runner) WarmupStatuses() []WarmupStatus {
 }
 
 func readWindowStart(clock periodclock.Clock, plan Plan) (time.Time, error) {
-	if plan.Mode != ModeRecalc || len(plan.Factors) == 0 {
+	if plan.Mode != ModeRecalc || len(plan.Members) == 0 {
 		return plan.TargetStart, nil
 	}
 	maxLookback := 1
-	for _, factor := range plan.Factors {
-		if factor.LookbackPeriods > maxLookback {
-			maxLookback = factor.LookbackPeriods
+	for _, member := range plan.Members {
+		if member.Factor.LookbackPeriods > maxLookback {
+			maxLookback = member.Factor.LookbackPeriods
 		}
 	}
 	window, err := clock.Window(plan.TargetStart, plan.Set.Freq, maxLookback)

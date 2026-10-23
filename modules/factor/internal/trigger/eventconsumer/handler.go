@@ -38,7 +38,12 @@ type Handler struct {
 	gate func(setID string) bool
 	// catchupGate 非空时，实时门禁关闭的集合在恢复追赶中仍可推进连续水位（只写历史周期）。
 	catchupGate func(setID string) bool
+	// params 在开算一期之前冻结集合的参数（因子动态调参执行计划 2.4）；为空时全部按默认参数计算。
+	params trigger.ParamFreezer
 }
+
+// SetParamFreezer 设置参数冻结；必须在开始消费之前调用。
+func (h *Handler) SetParamFreezer(params trigger.ParamFreezer) { h.params = params }
 
 // SetGate 设置生命周期门禁；必须在开始消费之前调用。
 func (h *Handler) SetGate(gate func(setID string) bool) { h.gate = gate }
@@ -124,38 +129,54 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: fmt.Errorf("collector period event is empty")}
 	}
 
-	setID := domain.SetID(payload.GetDatasetId(), payload.GetFrequency())
 	event := periodEvent{
 		periodTime: time.Unix(payload.GetPeriodTime(), 0).UTC(), eventID: message.GetEventId(),
 		universe: payload.GetUniverseSubjectIds(), failed: payload.GetFailedSubjects(),
 	}
-	_, err = h.lanes.Do(ctx, setID, func(laneCtx context.Context) (pipeline.Outcome, error) {
-		set, factors, found, lookupErr := h.sets.EnabledSetByDataset(laneCtx, message.GetSpaceId(), payload.GetDatasetId(), payload.GetFrequency())
-		if lookupErr != nil {
-			return pipeline.Outcome{}, fmt.Errorf("%w: lookup enabled factor set: %v", storageio.ErrInfra, lookupErr)
+	// 同一个源数据集可以有多个集合（各策略实例的私有集合）：事件分给每个启用的集合，各自在自己的串行通道里计算。
+	// 任一集合遇到基础设施错误时整条事件重投；已经算完的集合靠“同一触发事件的 marker 已存在”跳过。
+	sets, lookupErr := h.sets.EnabledSetsByDataset(ctx, message.GetSpaceId(), payload.GetDatasetId(), payload.GetFrequency())
+	if lookupErr != nil {
+		err = fmt.Errorf("%w: lookup enabled factor sets: %v", storageio.ErrInfra, lookupErr)
+	}
+	var errs []error
+	if err != nil {
+		errs = append(errs, err)
+	}
+	for _, engineSet := range sets {
+		set, members := engineSet.Set, engineSet.Members
+		if !engineSet.ResultReady {
+			errs = append(errs, fmt.Errorf("%w: result dataset of factor set %s is not ready", storageio.ErrInfra, set.SetID))
+			continue
 		}
-		if !found || set.Status != domain.SetStatusEnabled {
-			return pipeline.Outcome{}, nil
+		_, setErr := h.lanes.Do(ctx, set.SetID, func(laneCtx context.Context) (pipeline.Outcome, error) {
+			if set.Status != domain.SetStatusEnabled {
+				return pipeline.Outcome{}, nil
+			}
+			if set.SetID == "" || set.SpaceID != message.GetSpaceId() || set.SourceDatasetID != payload.GetDatasetId() || set.Freq != payload.GetFrequency() {
+				return pipeline.Outcome{}, fmt.Errorf("enabled factor set identity does not match collector event")
+			}
+			if h.gate != nil && !h.gate(set.SetID) {
+				return pipeline.Outcome{}, nil
+			}
+			if h.continuity != nil {
+				return pipeline.Outcome{}, h.continuity.onEvent(laneCtx, h, set, members, event)
+			}
+			return h.computePeriod(laneCtx, set, members, event.periodTime, event.universe, event.failed, event.eventID)
+		})
+		if setErr != nil {
+			errs = append(errs, fmt.Errorf("factor set %s: %w", set.SetID, setErr))
 		}
-		if set.SetID == "" || set.SpaceID != message.GetSpaceId() || set.SourceDatasetID != payload.GetDatasetId() || set.Freq != payload.GetFrequency() {
-			return pipeline.Outcome{}, fmt.Errorf("enabled factor set identity does not match collector event")
-		}
-		if h.gate != nil && !h.gate(set.SetID) {
-			return pipeline.Outcome{}, nil
-		}
-		if h.continuity != nil {
-			return pipeline.Outcome{}, h.continuity.onEvent(laneCtx, h, set, factors, event)
-		}
-		return h.computePeriod(laneCtx, set, factors, event.periodTime, event.universe, event.failed, event.eventID)
-	})
+	}
+	err = errors.Join(errs...)
 	if err == nil {
 		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	}
 	if errors.Is(err, storageio.ErrInfra) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		log.WarnContextf(ctx, "factor_period_retry set_id=%s period_time=%d error=%v", setID, payload.GetPeriodTime(), err)
+		log.WarnContextf(ctx, "factor_period_retry dataset_id=%s period_time=%d error=%v", payload.GetDatasetId(), payload.GetPeriodTime(), err)
 		return jetstream.HandlerResult{Decision: jetstream.RETRY, Delay: h.cfg.NakDelay, Err: err}
 	}
-	log.ErrorContextf(ctx, "factor_period_rejected set_id=%s period_time=%d error=%v", setID, payload.GetPeriodTime(), err)
+	log.ErrorContextf(ctx, "factor_period_rejected dataset_id=%s period_time=%d error=%v", payload.GetDatasetId(), payload.GetPeriodTime(), err)
 	return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 }
 
@@ -167,8 +188,9 @@ type periodEvent struct {
 	failed     []string
 }
 
-// computePeriod 计算一期：已经算过（同一触发事件的 marker 已存在）就跳过。
-func (h *Handler) computePeriod(ctx context.Context, set domain.FactorSet, factors []domain.FactorDef, period time.Time, universe, failed []string, triggerEventID string) (pipeline.Outcome, error) {
+// computePeriod 计算一期：已经算过（同一触发事件的 marker 已存在）就跳过；开算之前先冻结这一期的参数
+// （冻结是幂等的：重投、重启后重算拿到同一份）。
+func (h *Handler) computePeriod(ctx context.Context, set domain.FactorSet, members []domain.MemberDef, period time.Time, universe, failed []string, triggerEventID string) (pipeline.Outcome, error) {
 	exists, existsErr := h.store.ComputedExists(ctx, set.SpaceID, set.ResultDatasetID, triggerEventID, period.Unix())
 	if existsErr != nil {
 		return pipeline.Outcome{}, fmt.Errorf("%w: check computed factor period: %v", storageio.ErrInfra, existsErr)
@@ -176,14 +198,28 @@ func (h *Handler) computePeriod(ctx context.Context, set domain.FactorSet, facto
 	if exists {
 		return pipeline.Outcome{}, nil
 	}
-	plan, err := h.livePlan(ctx, set, factors, period, universe, failed, triggerEventID)
+	var params map[string]domain.ParamFreeze
+	if h.params != nil && len(members) > 0 {
+		aligned := period
+		if clock, err := periodclock.ForSpace(set.SpaceID); err == nil {
+			if value, err := clock.Align(period, set.Freq); err == nil {
+				aligned = value
+			}
+		}
+		frozen, err := h.params.Freeze(ctx, set, members, aligned)
+		if err != nil {
+			return pipeline.Outcome{}, fmt.Errorf("%w: freeze factor params: %v", storageio.ErrInfra, err)
+		}
+		params = frozen
+	}
+	plan, err := h.livePlan(ctx, set, members, params, period, universe, failed, triggerEventID)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
 	return h.runner.Run(ctx, plan)
 }
 
-func (h *Handler) livePlan(ctx context.Context, set domain.FactorSet, factors []domain.FactorDef, period time.Time, universe, failed []string, triggerEventID string) (pipeline.Plan, error) {
+func (h *Handler) livePlan(ctx context.Context, set domain.FactorSet, members []domain.MemberDef, params map[string]domain.ParamFreeze, period time.Time, universe, failed []string, triggerEventID string) (pipeline.Plan, error) {
 	clock, clockErr := periodclock.ForSpace(set.SpaceID)
 	if clockErr != nil {
 		return pipeline.Plan{}, clockErr
@@ -199,7 +235,7 @@ func (h *Handler) livePlan(ctx context.Context, set domain.FactorSet, factors []
 		return pipeline.Plan{}, budgetErr
 	}
 	return pipeline.BuildLivePlan(clock, pipeline.LiveInput{
-		Set: set, Factors: factors, PeriodTime: period, Universe: universe, UpstreamFailed: failed,
+		Set: set, Members: members, Params: params, PeriodTime: period, Universe: universe, UpstreamFailed: failed,
 		CarryColumns: carryColumns, TriggerEventID: triggerEventID, Budget: budget,
 	})
 }

@@ -972,6 +972,15 @@ components:
           - PreviewFactor
           - ListFactorFunctions
           - NotifyPeriodsFilled
+          - ListFactorCategories
+          - UpsertFactorCategory
+          - DeleteFactorCategory
+          - SetFactorCategory
+          - EnsureInstanceFactorSet
+          - SetInstanceFactorSetEnabled
+          - ReleaseInstanceFactorSet
+          - SubmitFactorParams
+          - GetFactorParams
         read_only_methods:
           - GetFactorSet
           - ListFactorSets
@@ -983,6 +992,8 @@ components:
           - ValidateFactorSpec
           - PreviewFactor
           - ListFactorFunctions
+          - ListFactorCategories
+          - GetFactorParams
         acl:
           - methods:
               - CreateFactorSet
@@ -1007,9 +1018,15 @@ components:
               - ValidateFactorSpec
               - PreviewFactor
               - ListFactorFunctions
+              - ListFactorCategories
+              - UpsertFactorCategory
+              - DeleteFactorCategory
+              - SetFactorCategory
+              - GetFactorParams
             callers:
               - console
               - moox-cli
+          # 策略实例的私有因子集与参数提交（因子动态调参）：只有策略服务是参数写入方。
           - methods:
               - GetFactorSet
               - ListFactorSets
@@ -1017,6 +1034,12 @@ components:
               - ListFactors
               - ListRecalcJobs
               - GetStatus
+              - ListFactorCategories
+              - EnsureInstanceFactorSet
+              - SetInstanceFactorSetEnabled
+              - ReleaseInstanceFactorSet
+              - SubmitFactorParams
+              - GetFactorParams
             callers:
               - strategy
           # 补采补齐通知：因子据此立即推进连续水位并补算上游失败的标的。
@@ -1033,6 +1056,9 @@ components:
           - EngineHeartbeat
           - PullRecalcJob
           - ReportRecalcProgress
+          - FreezeFactorParams
+          - ReportOfflineFreezes
+          - ListParamIntervals
         acl: []
     doctor:
       role: factor-mgr
@@ -1985,6 +2011,9 @@ principals:
           - EngineHeartbeat
           - PullRecalcJob
           - ReportRecalcProgress
+          - FreezeFactorParams
+          - ReportOfflineFreezes
+          - ListParamIntervals
   - id: archive-worker
     allow:
       - service: trpc.moox.storage.PrimaryStore

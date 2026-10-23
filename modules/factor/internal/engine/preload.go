@@ -201,8 +201,8 @@ func (p *preloader) Run(ctx context.Context) {
 
 func maxLookbackOf(set domain.EngineSet) int {
 	n := 1
-	for _, f := range set.Factors {
-		n = max(n, f.LookbackPeriods)
+	for _, member := range set.Members {
+		n = max(n, member.Factor.LookbackPeriods)
 	}
 	return n
 }

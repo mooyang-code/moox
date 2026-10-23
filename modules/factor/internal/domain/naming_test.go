@@ -9,11 +9,11 @@ import (
 )
 
 const baseSpec = `# 动量
-params: {window: 20}
+params: {window: {type: int, min: 1, max: 60, default: 20}}
 let:
   r: close / delay(close, window) - 1
 outputs:
-  mom_{window}: r
+  mom: r
 `
 
 func baseFactor(t *testing.T) FactorDef {
@@ -30,15 +30,16 @@ func withSpec(t *testing.T, spec string, partial bool) FactorDef {
 	return def
 }
 
-// DefinitionHash 是计算契约的指纹：改窗口、改表达式、改输出名、改 allow_partial_universe 都要变（设计 9.3）。
+// DefinitionHash 是计算契约的指纹：改参数声明、改表达式、改输出名、改 allow_partial_universe 都要变（设计 9.3）。
 func TestDefinitionHashChangesWithEveryContractField(t *testing.T) {
 	want := DefinitionHash(baseFactor(t))
 	require.NotEmpty(t, want)
 	require.Equal(t, want, DefinitionHash(baseFactor(t)), "同一定义的指纹必须稳定")
 	changes := map[string]string{
-		"窗口":  strings.Replace(baseSpec, "window: 20", "window: 30", 1),
-		"表达式": strings.Replace(baseSpec, "close / delay", "open / delay", 1),
-		"输出名": strings.Replace(baseSpec, "mom_{window}", "momentum_{window}", 1),
+		"默认窗口": strings.Replace(baseSpec, "default: 20", "default: 30", 1),
+		"窗口范围": strings.Replace(baseSpec, "max: 60", "max: 90", 1),
+		"表达式":  strings.Replace(baseSpec, "close / delay", "open / delay", 1),
+		"输出名":  strings.Replace(baseSpec, "mom: r", "momentum: r", 1),
 	}
 	for name, spec := range changes {
 		require.NotEqual(t, want, DefinitionHash(withSpec(t, spec, false)), name)
@@ -49,18 +50,18 @@ func TestDefinitionHashChangesWithEveryContractField(t *testing.T) {
 	require.NotEqual(t, DefinitionHash(withSpec(t, cross, false)), DefinitionHash(withSpec(t, cross, true)), "allow_partial_universe")
 }
 
-// 不影响结果的改动（标识、名称、时间戳、注释、格式、let 名）不改变指纹，但会改变 SpecHash。
+// 不影响结果的改动（标识、名称、分类、时间戳、注释、格式、let 名）不改变指纹，但会改变 SpecHash。
 func TestDefinitionHashIgnoresNonContractChanges(t *testing.T) {
 	base := baseFactor(t)
 	want := DefinitionHash(base)
 	same := withSpec(t, `params:
-  window: 20
+  window: {type: int, min: 1, max: 60, default: 20}
 let:
   ret: close/delay(close,window)-1   # 改了 let 名与格式
 outputs:
-  mom_{window}: ret
+  mom: ret
 `, false)
-	same.FactorID, same.Name = "other", "另一个名字"
+	same.FactorID, same.Name, same.CategoryID = "other", "另一个名字", "momentum"
 	same.CreatedAt, same.UpdatedAt = time.Unix(1, 0), time.Unix(2, 0)
 	require.Equal(t, want, DefinitionHash(same))
 	require.NotEqual(t, base.SpecHash, same.SpecHash, "SpecHash 跟随原文")

@@ -24,6 +24,10 @@ type fakeFactorJSONClient struct {
 	usages        []factorAPIUsage
 	existingSet   *setupFactorSet
 	setStatus     string
+	// existingCategory 是已有定义的分类；categories、movedCategories 记录分类的建立与改动。
+	existingCategory string
+	categories       []string
+	movedCategories  []string
 }
 
 // fakeDefinitionHash 模拟 FactorMgr 编译后的 definition_hash：忽略首尾空白。
@@ -66,6 +70,7 @@ func (f *fakeFactorJSONClient) CallGatewayJSON(_ context.Context, service string
 		} else {
 			result.Factor.FactorID = f.existing.FactorID
 			result.Factor.Name = f.existing.Name
+			result.Factor.CategoryID = f.existingCategory
 			result.Factor.DefinitionHash = fakeDefinitionHash(f.existing.Spec)
 			result.Usages = append([]factorAPIUsage(nil), f.usages...)
 		}
@@ -76,9 +81,14 @@ func (f *fakeFactorJSONClient) CallGatewayJSON(_ context.Context, service string
 		f.createdBodies = append(f.createdBodies, factor)
 		f.createdIDs = append(f.createdIDs, factor["factor_id"].(string))
 	case "trpc.moox.factor.FactorMgr/AddFactorToSet":
-		f.addedMembers = append(f.addedMembers, request["set_id"].(string)+"/"+request["factor_id"].(string))
+		f.addedMembers = append(f.addedMembers, request["set_id"].(string)+"/"+request["member_alias"].(string)+"="+request["factor_id"].(string))
 	case "trpc.moox.factor.FactorMgr/SetFactorMemberStatus":
-		f.statuses = append(f.statuses, request["status"].(string))
+		f.statuses = append(f.statuses, request["member_alias"].(string)+"="+request["status"].(string))
+	case "trpc.moox.factor.FactorMgr/UpsertFactorCategory":
+		category := request["category"].(map[string]any)
+		f.categories = append(f.categories, category["category_id"].(string)+"="+category["name"].(string))
+	case "trpc.moox.factor.FactorMgr/SetFactorCategory":
+		f.movedCategories = append(f.movedCategories, request["factor_id"].(string)+"="+request["category_id"].(string))
 	}
 	return nil
 }
@@ -86,9 +96,10 @@ func (f *fakeFactorJSONClient) CallGatewayJSON(_ context.Context, service string
 const testLibrary = `- factor_id: bias
   name: Bias 偏离
   spec: |
-    params: {window: 5}
+    params:
+      window: {type: int, min: 2, max: 60, default: 5}
     outputs:
-      bias_{window}: close / ts_mean(close, window)
+      bias: close / ts_mean(close, window)
 - factor_id: Cci
   name: CCI
   spec: |
@@ -218,8 +229,8 @@ func TestApplyCreatesSetsThenDefinitionsThenMembers(t *testing.T) {
 		"trpc.moox.factor.FactorMgr/AddFactorToSet",
 		"trpc.moox.factor.FactorMgr/SetFactorMemberStatus",
 	}, client.calls)
-	require.Equal(t, []string{"enabled"}, client.statuses)
-	require.Equal(t, []string{"fset_prices_1m/Bias"}, client.addedMembers)
+	require.Equal(t, []string{"Bias=enabled"}, client.statuses)
+	require.Equal(t, []string{"fset_prices_1m/Bias=Bias"}, client.addedMembers, "初始化的成员别名就是 factor_id")
 	require.Equal(t, []string{"fset_prices_1m"}, client.createdSetIDs)
 	require.Len(t, client.createdBodies, 1)
 	require.NotContains(t, client.createdBodies[0], "set_id")
@@ -262,7 +273,30 @@ func TestApplySkipsIdenticalDefinition(t *testing.T) {
 	require.Equal(t, 0, result.Imported)
 	require.Equal(t, 1, result.Unchanged)
 	require.Empty(t, client.createdIDs)
-	require.Equal(t, []string{"fset_prices_1m/Bias"}, client.addedMembers)
+	require.Equal(t, []string{"fset_prices_1m/Bias=Bias"}, client.addedMembers)
+}
+
+// 因子库里的分类先建立（同一分类只调一次），新定义带上分类；已有定义的分类不同时改成因子库里的（分类不进 definition_hash）。
+// 同一定义以其他别名加入的成员（策略实例的私有集合里常见）不算初始化的成员。
+func TestApplySyncsCategoriesAndIgnoresOtherAliases(t *testing.T) {
+	plan := testSetupPlan()
+	plan.Definitions[0].CategoryID, plan.Definitions[0].CategoryName = "momentum", "动量类"
+	plan.Definitions = append(plan.Definitions, setupFactorDefinition{FactorID: "Cci", Name: "CCI", Spec: "outputs:\n  cci: close\n",
+		CategoryID: "momentum", CategoryName: "动量类"})
+	client := &fakeFactorJSONClient{}
+	_, err := (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
+	require.NoError(t, err)
+	require.Equal(t, []string{"momentum=动量类"}, client.categories)
+	require.Equal(t, "momentum", client.createdBodies[0]["category_id"])
+
+	existing := plan.Definitions[0]
+	client = &fakeFactorJSONClient{existingSet: &plan.Sets[0], existing: &existing, existingCategory: "uncategorized",
+		usages: []factorAPIUsage{{SetID: "fset_prices_1m", MemberAlias: "bias_fast", Status: "enabled"}}}
+	plan.Definitions = plan.Definitions[:1]
+	_, err = (&remoteSetupFactor{client: client}).Apply(context.Background(), plan)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Bias=momentum"}, client.movedCategories)
+	require.Equal(t, []string{"fset_prices_1m/Bias=Bias"}, client.addedMembers, "别名 bias_fast 的成员不是初始化的成员")
 }
 
 func TestApplyComparesDefinitionHashAndName(t *testing.T) {

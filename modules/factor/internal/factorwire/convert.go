@@ -19,6 +19,7 @@ func SetToPB(set domain.FactorSet) *factorpb.FactorSet {
 		SubjectMode:     set.SubjectMode,
 		Subjects:        CloneStrings(set.Subjects),
 		ResultDatasetId: set.ResultDatasetID,
+		OwnerInstanceId: set.OwnerInstanceID,
 		Status:          set.Status,
 		CreatedAt:       FormatTime(set.CreatedAt),
 		UpdatedAt:       FormatTime(set.UpdatedAt),
@@ -45,6 +46,7 @@ func SetFromPB(pb *factorpb.FactorSet) (domain.FactorSet, error) {
 		SubjectMode:     pb.GetSubjectMode(),
 		Subjects:        CloneStrings(pb.GetSubjects()),
 		ResultDatasetID: pb.GetResultDatasetId(),
+		OwnerInstanceID: pb.GetOwnerInstanceId(),
 		Status:          pb.GetStatus(),
 		CreatedAt:       createdAt,
 		UpdatedAt:       updatedAt,
@@ -52,9 +54,18 @@ func SetFromPB(pb *factorpb.FactorSet) (domain.FactorSet, error) {
 }
 
 func DefToPB(factor domain.FactorDef) *factorpb.FactorDef {
+	var params []*factorpb.FactorParamDecl
+	if compiled := factor.Compiled(); compiled != nil {
+		for _, param := range compiled.Params {
+			params = append(params, &factorpb.FactorParamDecl{Name: param.Name, Type: string(param.Type), Min: param.Min,
+				Max: param.Max, DefaultValue: param.Default})
+		}
+	}
 	return &factorpb.FactorDef{
 		FactorId:             factor.FactorID,
 		Name:                 factor.Name,
+		CategoryId:           factor.CategoryID,
+		Params:               params,
 		FactorType:           factor.FactorType,
 		Spec:                 factor.Spec,
 		SpecHash:             factor.SpecHash,
@@ -84,6 +95,7 @@ func DefFromPB(pb *factorpb.FactorDef) (domain.FactorDef, error) {
 	def := domain.FactorDef{
 		FactorID:             pb.GetFactorId(),
 		Name:                 pb.GetName(),
+		CategoryID:           pb.GetCategoryId(),
 		Spec:                 pb.GetSpec(),
 		SpecHash:             pb.GetSpecHash(),
 		AllowPartialUniverse: pb.GetAllowPartialUniverse(),
@@ -106,11 +118,14 @@ func RunSummaryToPB(summary domain.SetRunSummary) *factorpb.SetRunSummary {
 	for _, factor := range summary.Factors {
 		factors = append(factors, &factorpb.FactorPeriodState{
 			FactorId:       factor.FactorID,
+			MemberAlias:    factor.MemberAlias,
 			Status:         factor.Status,
 			FailedSubjects: CloneStrings(factor.FailedSubjects),
 			SpecHash:       factor.SpecHash,
 			DefinitionHash: factor.DefinitionHash,
 			GapSubjects:    CloneStrings(factor.GapSubjects),
+			ParamsSource:   factor.ParamsSource,
+			ParamsDigest:   factor.ParamsDigest,
 		})
 	}
 	return &factorpb.SetRunSummary{
@@ -127,9 +142,10 @@ func RunSummaryFromPB(pb *factorpb.SetRunSummary) domain.SetRunSummary {
 	factors := make([]domain.FactorPeriodState, 0, len(pb.GetFactors()))
 	for _, factor := range pb.GetFactors() {
 		factors = append(factors, domain.FactorPeriodState{
-			FactorID: factor.GetFactorId(), Status: factor.GetStatus(),
+			FactorID: factor.GetFactorId(), MemberAlias: factor.GetMemberAlias(), Status: factor.GetStatus(),
 			FailedSubjects: CloneStrings(factor.GetFailedSubjects()), SpecHash: factor.GetSpecHash(),
 			DefinitionHash: factor.GetDefinitionHash(), GapSubjects: CloneStrings(factor.GetGapSubjects()),
+			ParamsSource: factor.GetParamsSource(), ParamsDigest: factor.GetParamsDigest(),
 		})
 	}
 	return domain.SetRunSummary{
@@ -209,13 +225,13 @@ func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, 
 	}, nil
 }
 
-// EngineSetToPB includes each factor's spec: the engine compiles it.
+// EngineSetToPB includes each member's definition spec: the engine compiles it.
 func EngineSetToPB(set domain.EngineSet) *factorpb.EngineSet {
-	factors := make([]*factorpb.FactorDef, 0, len(set.Factors))
-	for _, factor := range set.Factors {
-		factors = append(factors, DefToPB(factor))
+	members := make([]*factorpb.EngineMember, 0, len(set.Members))
+	for _, member := range set.Members {
+		members = append(members, &factorpb.EngineMember{MemberAlias: member.Alias, Factor: DefToPB(member.Factor)})
 	}
-	return &factorpb.EngineSet{FactorSet: SetToPB(set.Set), Factors: factors, ResultReady: set.ResultReady}
+	return &factorpb.EngineSet{FactorSet: SetToPB(set.Set), Members: members, ResultReady: set.ResultReady}
 }
 
 func EngineSetFromPB(pb *factorpb.EngineSet) (domain.EngineSet, error) {
@@ -223,15 +239,73 @@ func EngineSetFromPB(pb *factorpb.EngineSet) (domain.EngineSet, error) {
 	if err != nil {
 		return domain.EngineSet{}, err
 	}
-	factors := make([]domain.FactorDef, 0, len(pb.GetFactors()))
-	for _, raw := range pb.GetFactors() {
-		factor, err := DefFromPB(raw)
+	members := make([]domain.MemberDef, 0, len(pb.GetMembers()))
+	for _, raw := range pb.GetMembers() {
+		factor, err := DefFromPB(raw.GetFactor())
 		if err != nil {
-			return domain.EngineSet{}, fmt.Errorf("factor %s: %w", raw.GetFactorId(), err)
+			return domain.EngineSet{}, fmt.Errorf("member %s: %w", raw.GetMemberAlias(), err)
 		}
-		factors = append(factors, factor)
+		members = append(members, domain.MemberDef{Alias: raw.GetMemberAlias(), Factor: factor})
 	}
-	return domain.EngineSet{Set: set, Factors: factors, ResultReady: pb.GetResultReady()}, nil
+	return domain.EngineSet{Set: set, Members: members, ResultReady: pb.GetResultReady()}, nil
+}
+
+// SnapshotToPB 把参数快照转换成线上格式。
+func SnapshotToPB(snapshot domain.ParamSnapshot) map[string]*factorpb.ParamValue {
+	out := make(map[string]*factorpb.ParamValue, len(snapshot))
+	for name, value := range snapshot {
+		item := &factorpb.ParamValue{DefaultValue: value.Default}
+		if len(value.Overrides) > 0 {
+			item.Overrides = make(map[string]float64, len(value.Overrides))
+			for subject, override := range value.Overrides {
+				item.Overrides[subject] = override
+			}
+		}
+		out[name] = item
+	}
+	return out
+}
+
+// SnapshotFromPB 把线上格式的参数快照还原。
+func SnapshotFromPB(params map[string]*factorpb.ParamValue) domain.ParamSnapshot {
+	out := make(domain.ParamSnapshot, len(params))
+	for name, value := range params {
+		item := domain.ParamValue{Default: value.GetDefaultValue()}
+		if len(value.GetOverrides()) > 0 {
+			item.Overrides = make(map[string]float64, len(value.GetOverrides()))
+			for subject, override := range value.GetOverrides() {
+				item.Overrides[subject] = override
+			}
+		}
+		out[name] = item
+	}
+	return out
+}
+
+// IntervalToPB 转换一个冻结区间。
+func IntervalToPB(interval domain.ParamInterval) *factorpb.ParamIntervalInfo {
+	return &factorpb.ParamIntervalInfo{MemberAlias: interval.MemberAlias, StartPeriod: interval.Start.Unix(), EndPeriod: interval.End.Unix(),
+		Params: SnapshotToPB(interval.Snapshot), Source: interval.Source, SnapshotHash: interval.SnapshotHash}
+}
+
+// IntervalFromPB 还原一个冻结区间。
+func IntervalFromPB(setID string, pb *factorpb.ParamIntervalInfo) domain.ParamInterval {
+	snapshot := SnapshotFromPB(pb.GetParams())
+	return domain.ParamInterval{SetID: setID, MemberAlias: pb.GetMemberAlias(), Start: time.Unix(pb.GetStartPeriod(), 0).UTC(),
+		End: time.Unix(pb.GetEndPeriod(), 0).UTC(), Snapshot: snapshot, SnapshotHash: snapshot.Hash(), Source: pb.GetSource()}
+}
+
+// FreezeToPB 转换一个成员一期的冻结结果。
+func FreezeToPB(freeze domain.ParamFreeze) *factorpb.MemberParamFreeze {
+	return &factorpb.MemberParamFreeze{MemberAlias: freeze.MemberAlias, Params: SnapshotToPB(freeze.Snapshot), Source: freeze.Source,
+		SnapshotHash: freeze.SnapshotHash, RequestId: freeze.RequestID}
+}
+
+// FreezeFromPB 还原一个成员一期的冻结结果。
+func FreezeFromPB(setID string, period time.Time, pb *factorpb.MemberParamFreeze) domain.ParamFreeze {
+	snapshot := SnapshotFromPB(pb.GetParams())
+	return domain.ParamFreeze{SetID: setID, MemberAlias: pb.GetMemberAlias(), PeriodTime: period.UTC(), Snapshot: snapshot,
+		SnapshotHash: snapshot.Hash(), Source: pb.GetSource(), RequestID: pb.GetRequestId()}
 }
 
 func FormatTime(value time.Time) string {

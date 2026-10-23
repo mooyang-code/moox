@@ -160,7 +160,7 @@ func runOnce(args []string, out io.Writer) error {
 	setID := fs.String("set", "", "factor set id")
 	period := fs.String("period", "", "period start timestamp RFC3339")
 	var factors, subjects listFlag
-	fs.Var(&factors, "factor", "factor id (repeatable)")
+	fs.Var(&factors, "member", "member alias (repeatable; all members when omitted)")
 	fs.Var(&subjects, "subject", "subject id (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -177,7 +177,7 @@ func runOnce(args []string, out io.Writer) error {
 		return err
 	}
 	outcome, err := engine.RunOnce(context.Background(), cfg, engine.RunOnceRequest{
-		SetID: *setID, FactorIDs: factors, Subjects: subjects, Period: at.UTC(),
+		SetID: *setID, Members: factors, Subjects: subjects, Period: at.UTC(),
 	})
 	if err != nil {
 		return err
