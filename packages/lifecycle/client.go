@@ -39,6 +39,48 @@ func (c *Client) Do(ctx context.Context, cmd Command, ref Ref) (Object, error) {
 	return obj, err
 }
 
+// Exec 执行带参数的命令请求（暂停类型、原因、操作者……）。
+func (c *Client) Exec(ctx context.Context, req CommandRequest) (Object, error) {
+	var obj Object
+	err := c.do(ctx, http.MethodPost, CommandPath, req, &obj)
+	return obj, err
+}
+
+// Catchup 读取恢复追赶的进度。
+func (c *Client) Catchup(ctx context.Context) (CatchupReport, error) {
+	var rep CatchupReport
+	err := c.do(ctx, http.MethodGet, CatchupPath, nil, &rep)
+	return rep, err
+}
+
+// ResetPlan 请求重置计划与令牌（要用重置专用密钥）。
+func (c *Client) ResetPlan(ctx context.Context, scope ResetScope) (ResetPlan, error) {
+	var plan ResetPlan
+	err := c.do(ctx, http.MethodPost, ResetPrefix+"plan", map[string]any{"scope": scope}, &plan)
+	return plan, err
+}
+
+// ResetApply 发起或续做重置。
+func (c *Client) ResetApply(ctx context.Context, req ResetApplyRequest) (ResetStatus, error) {
+	var st ResetStatus
+	err := c.do(ctx, http.MethodPost, ResetPrefix+"apply", req, &st)
+	return st, err
+}
+
+// ResetStatus 读取重置状态。
+func (c *Client) ResetStatus(ctx context.Context) (ResetStatus, error) {
+	var st ResetStatus
+	err := c.do(ctx, http.MethodGet, ResetPrefix+"status", nil, &st)
+	return st, err
+}
+
+// ResetAbort 放弃失败的重置。
+func (c *Client) ResetAbort(ctx context.Context, by string) (ResetStatus, error) {
+	var st ResetStatus
+	err := c.do(ctx, http.MethodPost, ResetPrefix+"abort", map[string]any{"by": by}, &st)
+	return st, err
+}
+
 // Get 调用模块健康端口上的其他只读接口（例如 Trade 的影子目标），path 可带查询串。
 func (c *Client) Get(ctx context.Context, path string, out any) error {
 	return c.do(ctx, http.MethodGet, path, nil, out)

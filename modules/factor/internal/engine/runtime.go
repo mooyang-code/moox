@@ -53,17 +53,21 @@ type Runtime struct {
 	gap      *gapledger.Ledger
 	// continuity 维护各集合的连续水位；advanceKick 唤醒追赶循环（补齐通知）。
 	continuity  *eventconsumer.Continuity
+	watermarks  *watermark.Store
 	advanceKick chan string
-	filled      *filledPeriods
-	lease       *leaseState
-	syncer      *catalogSyncer
-	preload     *preloader
-	series      *seriesstore.Store
-	data        *localdata.Data
-	admit       *memadmit.Admitter
-	health      *factorhealth.State
-	life        *lifecycle.Controller
-	replays     *replayManager
+	// appCtx 是引擎运行期的上下文；catchups 记录恢复追赶中各集合的本地数据同步进展。
+	appCtx   context.Context
+	catchups catchupTracker
+	filled   *filledPeriods
+	lease    *leaseState
+	syncer   *catalogSyncer
+	preload  *preloader
+	series   *seriesstore.Store
+	data     *localdata.Data
+	admit    *memadmit.Admitter
+	health   *factorhealth.State
+	life     *lifecycle.Controller
+	replays  *replayManager
 
 	// reconcileMu serializes consumer start/stop; consumerMu only guards the
 	// pointer so status and health reads never wait on EventBus I/O.
@@ -97,6 +101,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		lease: &leaseState{}, health: factorhealth.New("factor-engine", cfg.Engine.ID, version, ""),
 	}
 	appCtx, cancel := context.WithCancel(ctx)
+	r.appCtx = appCtx
 	r.cancel = cancel
 	defer func() {
 		if err != nil {
@@ -164,6 +169,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if err != nil {
 		return nil, fmt.Errorf("open factor watermarks: %w", err)
 	}
+	r.watermarks = watermarks
 	if r.continuity, err = eventconsumer.NewContinuity(eventconsumer.ContinuityConfig{
 		Store: watermarks, Reader: r.storage, MaxMissingRatio: cfg.Watermark.MaxMissingRatio, SetRatios: cfg.Watermark.SetRatios, MaxPeriods: cfg.Watermark.MaxPeriods,
 	}); err != nil {
@@ -175,6 +181,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.pipeline = base
 	r.runner = &measuredRunner{inner: base, metrics: r.metrics, health: r.monitor, runs: r.runs}
 	r.preload = newPreloader(r.catalog, r.storage, r.data, r.active, func(string) { kickGap() })
+	r.preload.blocked = func() bool { return r.life != nil && r.life.Halted(lifecycle.Ref{}) }
 	if r.life, err = r.newLifecycle(); err != nil {
 		return nil, fmt.Errorf("open factor lifecycle: %w", err)
 	}
@@ -202,7 +209,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 
 	executor := recalcexec.NewExecutor(r.runner,
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks), recalcexec.WithClock(clock),
-		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)))
+		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate))
 	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval}
 	filler := &gapFiller{
 		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
@@ -270,7 +277,7 @@ func (r *Runtime) reconcileConsumer() {
 		consumer, err := eventconsumer.NewConsumer(context.Background(), eventconsumer.ConsumerConfig{
 			URLs: r.cfg.EventBus.URLs, CredentialFile: r.cfg.EventBus.CredentialFile,
 			FetchMaxWait: r.cfg.EventBus.FetchMaxWait, PeriodBudgetMin: r.cfg.Pipeline.PeriodBudgetMin,
-			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate,
+			PeriodBudgetMax: r.cfg.Pipeline.PeriodBudgetMax, Continuity: r.continuity, Gate: r.gate, CatchupGate: r.catchupGate,
 		}, r.catalog, &observedStore{Store: r.storage, health: r.monitor}, r.runner, r.locks)
 		if err != nil {
 			log.ErrorContextf(context.Background(), "factor_engine_consumer_start_failed error=%v", err)

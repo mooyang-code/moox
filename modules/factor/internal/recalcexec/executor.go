@@ -61,7 +61,11 @@ const defaultChunkPeriods = 2000
 // maxChunkRetryBackoff 是同一个补算分块两次重试之间等待的上限。
 const maxChunkRetryBackoff = 2 * time.Minute
 
+// ErrGated 表示集合被生命周期门禁挡住（暂停、重置……），这一块没有运行；调用方不应把它当作失败。
+var ErrGated = errors.New("factor set is gated by lifecycle")
+
 type config struct {
+	gate         func(setID string) bool
 	chunkPeriods int
 	memoryBudget int64
 	chunkRetries int
@@ -81,11 +85,16 @@ func WithChunkRetry(attempts int, backoff time.Duration) Option {
 	return func(cfg *config) { cfg.chunkRetries, cfg.retryBackoff = attempts, backoff }
 }
 func WithClock(clock periodclock.Clock) Option { return func(cfg *config) { cfg.clock = clock } }
-func WithLocks(locks SetLocker) Option         { return func(cfg *config) { cfg.locks = locks } }
+
+// WithGate 设置生命周期门禁：每个分块真正写结果之前（已持有集合锁）检查，集合不允许写结果时返回 ErrGated。
+// 补算、缺口恢复、失效重算都经过这个执行器，所以暂停、恢复追赶、重置期间这些后台路径不会越过门禁写结果。
+func WithGate(gate func(setID string) bool) Option { return func(cfg *config) { cfg.gate = gate } }
+func WithLocks(locks SetLocker) Option             { return func(cfg *config) { cfg.locks = locks } }
 
 // Executor runs a recalc window in chunks without touching any job store; the
 // caller persists progress through ProgressFunc.
 type Executor struct {
+	gate         func(setID string) bool
 	runner       Runner
 	locks        SetLocker
 	clock        periodclock.Clock
@@ -109,7 +118,7 @@ func NewExecutor(runner Runner, options ...Option) *Executor {
 		cfg.chunkRetries = 1
 	}
 	return &Executor{
-		runner: runner, locks: cfg.locks, clock: cfg.clock,
+		gate: cfg.gate, runner: runner, locks: cfg.locks, clock: cfg.clock,
 		chunkPeriods: cfg.chunkPeriods, memoryBudget: cfg.memoryBudget, chunkRetries: cfg.chunkRetries, retryBackoff: cfg.retryBackoff,
 	}
 }
@@ -198,6 +207,9 @@ func (e *Executor) RunChunkWith(ctx context.Context, source SelectionSource, sta
 	if len(selection.Subjects) == 0 {
 		return pipeline.Outcome{}, nil
 	}
+	if e.gate != nil && !e.gate(selection.Set.SetID) {
+		return pipeline.Outcome{}, ErrGated
+	}
 	outcome, runErr := e.runner.Run(ctx, plan(selection, start, end))
 	if after != nil {
 		after(selection, outcome, runErr)
@@ -260,6 +272,9 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	chunkEnd, err := e.chunkEnd(selection, start, windowEnd)
 	if err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
+	}
+	if e.gate != nil && !e.gate(selection.Set.SetID) {
+		return time.Time{}, pipeline.Outcome{}, false, ErrGated
 	}
 	outcome, err := e.runner.Run(ctx, plan(selection, start, chunkEnd))
 	return chunkEnd, outcome, false, err

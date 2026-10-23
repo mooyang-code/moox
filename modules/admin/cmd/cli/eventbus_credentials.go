@@ -32,8 +32,8 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 )
 
-var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer", "storage-eventbus", "archive-eventbus", "factor-eventbus", "strategy-eventbus", "trade-eventbus"}
-var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-observability-consumer": "eventbus_monitor_observability_consumer", "storage-eventbus": "eventbus_storage", "archive-eventbus": "eventbus_archive", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy", "trade-eventbus": "eventbus_trade"}
+var eventBusRoles = []string{"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer", "storage-eventbus", "archive-eventbus", "factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus"}
+var eventBusKeys = map[string]string{"eventbus-internal-admin": "eventbus_internal_admin", "hostagent-publisher": "eventbus_hostagent_publisher", "metrics-publisher": "eventbus_metrics_publisher", "monitor-observability-consumer": "eventbus_monitor_observability_consumer", "storage-eventbus": "eventbus_storage", "archive-eventbus": "eventbus_archive", "factor-eventbus": "eventbus_factor", "strategy-eventbus": "eventbus_strategy", "trade-eventbus": "eventbus_trade", "collector-eventbus": "eventbus_collector"}
 var localEventBusRoles = map[string]bool{
 	"eventbus-internal-admin":        true,
 	"metrics-publisher":              true,
@@ -403,6 +403,7 @@ func eventBusRoleFiles() map[string]string {
 		"factor-eventbus":                "factor-eventbus.yaml",
 		"strategy-eventbus":              "strategy-eventbus.yaml",
 		"trade-eventbus":                 "trade-eventbus.yaml",
+		"collector-eventbus":             "collector-eventbus.yaml",
 	}
 }
 
@@ -417,6 +418,31 @@ func eventBusRoleURL(role, publicURL string) (string, error) {
 	return "tls://" + net.JoinHostPort("127.0.0.1", parsed.Port()), nil
 }
 
+// collectorEventBusSpaces 是 Collector 合成消费者按空间创建持久消费者的空间；新增空间时同步修改。
+var collectorEventBusSpaces = []string{"crypto", "stockcn"}
+
+// collectorEventBusPublish 是 Collector 的发布权限：发布补采完成事件，以及合成的两个持久消费者
+// （源周期完成在 MOOX_STORAGE、补采完成在 MOOX_COLLECTOR，每个空间各一个）所需的 JetStream 接口。
+func collectorEventBusPublish() string {
+	allow := []string{`"moox.event.collector.kline.backfilled.v1.>"`, `"$JS.API.STREAM.NAMES"`}
+	for _, space := range collectorEventBusSpaces {
+		for _, consumer := range []struct{ stream, name string }{
+			{"MOOX_STORAGE", "collector_resample_period_" + space + "_v1"},
+			{"MOOX_COLLECTOR", "collector_resample_backfilled_" + space + "_v1"},
+		} {
+			allow = append(allow,
+				fmt.Sprintf(`"$JS.API.CONSUMER.INFO.*.%s"`, consumer.name),
+				fmt.Sprintf(`"$JS.API.CONSUMER.CREATE.%s.%s"`, consumer.stream, consumer.name),
+				fmt.Sprintf(`"$JS.API.CONSUMER.CREATE.%s.%s.>"`, consumer.stream, consumer.name),
+				fmt.Sprintf(`"$JS.API.CONSUMER.DURABLE.CREATE.%s.%s"`, consumer.stream, consumer.name),
+				fmt.Sprintf(`"$JS.API.CONSUMER.MSG.NEXT.%s.%s"`, consumer.stream, consumer.name),
+				fmt.Sprintf(`"$JS.ACK.%s.%s.>"`, consumer.stream, consumer.name),
+			)
+		}
+	}
+	return strings.Join(allow, ", ")
+}
+
 func usersYAML(tokens map[string]string) string { // ACLs are deliberately subject-scoped; publisher roles never receive broad JetStream API access.
 	return fmt.Sprintf("users:\n"+
 		"  - username: eventbus-internal-admin\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"$JS.EVENT.ADVISORY.API\"]}\n"+
@@ -427,8 +453,9 @@ func usersYAML(tokens map[string]string) string { // ACLs are deliberately subje
 		"  - username: archive-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.moox_archive_kline_v2\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.moox_archive_kline_v2\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.moox_archive_kline_v2.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.moox_archive_kline_v2\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.moox_archive_kline_v2\", \"$JS.ACK.MOOX_STORAGE.moox_archive_kline_v2.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
 		"  - username: factor-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.factor_collector_period_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.factor_collector_period_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.factor_collector_period_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.factor_collector_period_v1\", \"$JS.ACK.MOOX_STORAGE.factor_collector_period_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"moox.event.storage.collector.period.completed.v1.>\"]}\n      responses: {max_messages: 1, expires: 10s}\n"+
 		"  - username: strategy-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"moox.event.trade.target.weight_requested.v1.>\", \"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.strategy_view_data_ready_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_data_ready_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.strategy_view_data_ready_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_STORAGE.strategy_view_data_ready_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_STORAGE.strategy_view_data_ready_v1\", \"$JS.ACK.MOOX_STORAGE.strategy_view_data_ready_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\", \"moox.event.storage.view.data.ready.v1.>\"]}\n"+
-		"  - username: trade-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.trade_target_weight_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_TRADE.trade_target_weight_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_weight_v1\", \"$JS.ACK.MOOX_TRADE.trade_target_weight_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n",
-		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-observability-consumer"], tokens["storage-eventbus"], tokens["archive-eventbus"], tokens["factor-eventbus"], tokens["strategy-eventbus"], tokens["trade-eventbus"])
+		"  - username: trade-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [\"$JS.API.STREAM.NAMES\", \"$JS.API.CONSUMER.INFO.*.trade_target_weight_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1\", \"$JS.API.CONSUMER.CREATE.MOOX_TRADE.trade_target_weight_v1.>\", \"$JS.API.CONSUMER.DURABLE.CREATE.MOOX_TRADE.trade_target_weight_v1\", \"$JS.API.CONSUMER.MSG.NEXT.MOOX_TRADE.trade_target_weight_v1\", \"$JS.ACK.MOOX_TRADE.trade_target_weight_v1.>\"]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n"+
+		"  - username: collector-eventbus\n    password: %s\n    permissions:\n      publish: {allow: [%s]}\n      subscribe: {allow: [\"_INBOX.>\"]}\n",
+		tokens["eventbus-internal-admin"], tokens["hostagent-publisher"], tokens["metrics-publisher"], tokens["monitor-observability-consumer"], tokens["storage-eventbus"], tokens["archive-eventbus"], tokens["factor-eventbus"], tokens["strategy-eventbus"], tokens["trade-eventbus"], tokens["collector-eventbus"], collectorEventBusPublish())
 }
 func atomicSecretFile(path string, data []byte) error {
 	dir := filepath.Dir(path)

@@ -89,8 +89,6 @@ jobs:
       - name: Install verification tools
         run: |
           sudo apt-get update && sudo apt-get install --yes ripgrep
-          # SCF 打包契约测试（scripts/build/build-collector-scf-package.sh）需要 PyYAML。
-          python3 -m pip install --quiet pyyaml
       - name: Check pinned Go toolchain
         run: bash scripts/ci/check-go-version.sh
       # 托管运行器没有 proto 代码生成工具，跳过 proto-check；自托管运行器的 verify-trusted 仍执行完整检查。

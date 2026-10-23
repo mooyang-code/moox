@@ -21,6 +21,14 @@ type lifecycleOptions struct {
 	Kind, ID string
 	Set      string
 	JSON     bool
+	// 暂停与恢复的参数。
+	Reason        string
+	PauseKind     string
+	By            string
+	Force         bool
+	ManualRelease bool
+	// ExpiresIn 用于 pause：这么久之后自动恢复（0 表示不自动恢复）。
+	ExpiresIn time.Duration
 }
 
 var (
@@ -39,8 +47,15 @@ var lifecycleCmd = &cobra.Command{
   moox-cli lifecycle init   [--set <id>]         执行初始化（因子集合：载入本地窗口）
   moox-cli lifecycle start  [--set <id>]         启动：进入预热
   moox-cli lifecycle confirm [--set <id>]        确认预热结果：进入运行
-  moox-cli lifecycle pause  [--set <id>]         暂停
-  moox-cli lifecycle resume [--set <id>]         恢复
+  moox-cli lifecycle pause  [--set <id>] [--reason 原因] [--pause-kind manual|system]
+                                                 暂停（默认手动暂停：只有用户 resume 才恢复；可在就绪、预热、运行时暂停）
+  moox-cli lifecycle resume [--set <id>] [--pause-kind system] [--force] [--manual-release]
+                                                 恢复：先进入恢复追赶（补齐暂停期间缺失的数据，不计算、不下单），追平后自动放行回到暂停前的阶段；
+                                                 --manual-release 追平后停在待放行，等 release（系统级恢复用）；
+                                                 --pause-kind system 只恢复系统暂停（不动手动暂停）；
+                                                 --force 在模块暂停期间只放行单个对象的追赶
+  moox-cli lifecycle release [--set <id>]        放行：恢复追赶已追平的对象回到暂停前的阶段
+  moox-cli lifecycle catchup                     查看恢复追赶的进度
 
 不指定 --set / --kind --id 时作用于模块自身。--endpoint 指向模块的健康检查地址
 （可以是 SSH 隧道的本地端口），鉴权密钥取自环境变量 MOOX_HEALTH_AUTH_ACCESS_KEY / MOOX_HEALTH_AUTH_SECRET_KEY。`,
@@ -54,6 +69,12 @@ func init() {
 	pf.StringVar(&lifecycleFlags.Kind, "kind", "", "对象类型（factor_set、strategy_instance……）")
 	pf.StringVar(&lifecycleFlags.ID, "id", "", "对象 ID")
 	pf.BoolVar(&lifecycleFlags.JSON, "json", false, "以 JSON 输出")
+	pf.StringVar(&lifecycleFlags.Reason, "reason", "", "暂停原因（写进暂停详情）")
+	pf.StringVar(&lifecycleFlags.PauseKind, "pause-kind", "", "pause：暂停类型 manual（默认）| system；resume：只恢复该类型的暂停")
+	pf.StringVar(&lifecycleFlags.By, "by", "", "操作者（默认 cli:<主机名>）")
+	pf.BoolVar(&lifecycleFlags.Force, "force", false, "resume：模块暂停期间只放行单个对象的追赶")
+	pf.DurationVar(&lifecycleFlags.ExpiresIn, "for", 0, "pause：这么久之后自动恢复（先追赶再放行），例如 2h；不能用于系统暂停")
+	pf.BoolVar(&lifecycleFlags.ManualRelease, "manual-release", false, "resume：追平后不自动放行，等 release")
 
 	lifecycleCmd.AddCommand(&cobra.Command{
 		Use: "status", Short: "查看生命周期状态", Args: cobra.NoArgs,
@@ -70,7 +91,13 @@ func init() {
 	shadow.Flags().StringVar(&shadowSpace, "space", "", "空间 ID")
 	shadow.Flags().IntVar(&shadowLimit, "limit", 20, "最多显示的条数")
 	lifecycleCmd.AddCommand(shadow)
-	for _, name := range []lifecycle.Command{lifecycle.CmdCheck, lifecycle.CmdInit, lifecycle.CmdStart, lifecycle.CmdConfirm, lifecycle.CmdPause, lifecycle.CmdResume} {
+	lifecycleCmd.AddCommand(&cobra.Command{
+		Use: "catchup", Short: "查看恢复追赶的进度", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runLifecycleCatchup(cmd.Context(), lifecycleFlags, cmd.OutOrStdout())
+		},
+	})
+	for _, name := range []lifecycle.Command{lifecycle.CmdCheck, lifecycle.CmdInit, lifecycle.CmdStart, lifecycle.CmdConfirm, lifecycle.CmdPause, lifecycle.CmdResume, lifecycle.CmdRelease} {
 		name := name
 		lifecycleCmd.AddCommand(&cobra.Command{
 			Use: string(name), Short: "生命周期命令：" + string(name), Args: cobra.NoArgs,
@@ -132,7 +159,22 @@ func runLifecycleCommand(ctx context.Context, o lifecycleOptions, cmd lifecycle.
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
-	obj, err := o.client().Do(ctx, cmd, ref)
+	by := o.By
+	if by == "" {
+		host, _ := os.Hostname()
+		by = "cli:" + host
+	}
+	req := lifecycle.CommandRequest{
+		Command: cmd, Kind: ref.Kind, ID: ref.ID,
+		PauseKind: lifecycle.PauseKind(o.PauseKind), Reason: o.Reason, By: by, Force: o.Force, ManualRelease: o.ManualRelease,
+	}
+	if o.ExpiresIn > 0 {
+		if cmd != lifecycle.CmdPause {
+			return errors.New("--for 只用于 pause")
+		}
+		req.ExpiresAt = time.Now().Add(o.ExpiresIn)
+	}
+	obj, err := o.client().Exec(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -183,10 +225,26 @@ func printObject(out io.Writer, name string, obj lifecycle.Object) {
 	if obj.Recovered {
 		line += "（已自动恢复）"
 	}
-	if obj.AutoPaused {
-		line += "（检查失败自动暂停）"
+	if obj.Pause != nil {
+		line += "（" + pauseKindText(obj.Pause.Kind)
+		if obj.Pause.By != "" {
+			line += "，" + obj.Pause.By
+		}
+		if !obj.Pause.ExpiresAt.IsZero() {
+			line += "，到 " + obj.Pause.ExpiresAt.Local().Format("01-02 15:04") + " 自动恢复"
+		}
+		line += "）"
+	}
+	if obj.Effective != "" && obj.Effective != obj.Stage {
+		line += "，有效：" + stageText(obj.Effective)
+	}
+	if obj.Hold != lifecycle.HoldNone {
+		line += "，控制意图：" + string(obj.Hold)
 	}
 	fmt.Fprintln(out, line)
+	if cu := obj.Catchup; cu != nil {
+		fmt.Fprintf(out, "      追赶：%s\n", catchupLine(cu))
+	}
 	if obj.Reason != "" {
 		fmt.Fprintf(out, "      原因：%s\n", obj.Reason)
 	}
@@ -219,10 +277,69 @@ func stageText(s lifecycle.Stage) string {
 		return "运行"
 	case lifecycle.StagePaused:
 		return "暂停"
+	case lifecycle.StageResuming:
+		return "恢复追赶"
+	case lifecycle.StageResetting:
+		return "重置中"
+	case lifecycle.StageResetFailed:
+		return "重置失败"
 	case lifecycle.StageFault:
 		return "故障"
 	}
 	return string(s)
+}
+
+func pauseKindText(k lifecycle.PauseKind) string {
+	switch k {
+	case lifecycle.PauseManual:
+		return "手动暂停"
+	case lifecycle.PauseSystem:
+		return "系统暂停"
+	case lifecycle.PauseAuto:
+		return "检查失败自动暂停"
+	}
+	return string(k)
+}
+
+func catchupLine(cu *lifecycle.Catchup) string {
+	switch {
+	case cu.CaughtUp:
+		return "已追平，待放行"
+	case cu.BlockedBy != "":
+		return "被 " + cu.BlockedBy + " 阻塞"
+	case cu.Total > 0:
+		return fmt.Sprintf("%d/%d", cu.Done, cu.Total)
+	case cu.Message != "":
+		return cu.Message
+	}
+	return "追赶中"
+}
+
+// runLifecycleCatchup 读恢复追赶的进度。
+func runLifecycleCatchup(ctx context.Context, o lifecycleOptions, out io.Writer) error {
+	rep, err := o.client().Catchup(ctx)
+	if err != nil {
+		return err
+	}
+	if o.JSON {
+		return writeLifecycleJSON(out, rep)
+	}
+	if !rep.Resuming {
+		fmt.Fprintf(out, "模块 %s：没有恢复追赶中的对象\n", rep.Module)
+		return nil
+	}
+	state := "追赶中"
+	if rep.CaughtUp {
+		state = "已全部追平，待放行"
+	}
+	fmt.Fprintf(out, "模块 %s：%s\n", rep.Module, state)
+	if rep.Self != nil {
+		printObject(out, "模块自身", *rep.Self)
+	}
+	for _, obj := range rep.Objects {
+		printObject(out, obj.Kind+"/"+obj.ID, obj)
+	}
+	return nil
 }
 
 func writeLifecycleJSON(out io.Writer, v any) error {

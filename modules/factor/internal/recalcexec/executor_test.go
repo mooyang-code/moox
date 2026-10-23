@@ -406,3 +406,26 @@ func TestRunChunkWithSkipsWhenSelectionBecomesEmpty(t *testing.T) {
 	require.Empty(t, runner.snapshot())
 	require.False(t, afterCalled)
 }
+
+// 生命周期门禁关闭时，补算、缺口恢复、失效重算都不写结果，并以 ErrGated 返回而不是失败。
+func TestExecutorGateStopsWritesBeforeRunner(t *testing.T) {
+	runner := &recordingRunner{}
+	open := false
+	executor := NewExecutor(runner, WithClock(periodclock.Continuous{}), WithChunkPeriods(2),
+		WithGate(func(setID string) bool { return open && setID == "fset_bars_1m" }))
+	var records []progressRecord
+
+	err := executor.Run(context.Background(), testWindow(4), fixedSource(executorSelection("BTC")), recordProgress(&records, 0))
+	require.ErrorIs(t, err, ErrGated)
+	require.Empty(t, runner.snapshot(), "门禁关闭时 runner 一次都不会被调用")
+	require.Empty(t, records, "没有分块完成，不上报进度")
+
+	_, err = executor.RunChunkWith(context.Background(), fixedSource(executorSelection("BTC")),
+		testWindow(1).Start, testWindow(1).End, nil)
+	require.ErrorIs(t, err, ErrGated)
+	require.Empty(t, runner.snapshot())
+
+	open = true
+	require.NoError(t, executor.Run(context.Background(), testWindow(4), fixedSource(executorSelection("BTC")), recordProgress(&records, 0)))
+	require.Len(t, runner.snapshot(), 2, "门禁放开后正常运行")
+}

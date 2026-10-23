@@ -149,11 +149,29 @@ func TestStockClockReportsCalendarCoverageInsteadOfGuessing(t *testing.T) {
 	}
 }
 
-func TestStockClockDoesNotGuessIntradayAlignment(t *testing.T) {
+func TestStockIntradayClockSplitsEachSession(t *testing.T) {
 	clock := stockClock(t, october)
-	for _, freq := range []frequency.Frequency{frequency.Minute5, frequency.Minute30, frequency.Hour1} {
+	// 1h：09:30～10:30、10:30～11:30、13:00～14:00、14:00～15:00，10:45 时最新收线的是 09:30～10:30。
+	got, err := clock.LatestClosed(at("2026-10-16", "10:45:00"), frequency.Hour1)
+	requireBar(t, got, err, at("2026-10-16", "09:30:00"), at("2026-10-16", "10:30:00"))
+	// 午休时最新一根是上午最后一根；下一根是下午第一根，不跨午休。
+	got, err = clock.LatestClosed(at("2026-10-16", "12:00:00"), frequency.Hour1)
+	requireBar(t, got, err, at("2026-10-16", "10:30:00"), at("2026-10-16", "11:30:00"))
+	got, err = clock.Next(got, frequency.Hour1)
+	requireBar(t, got, err, at("2026-10-16", "13:00:00"), at("2026-10-16", "14:00:00"))
+	// 30m 的 BarAt：下午 13:40 属于 13:30 开盘的那一根。
+	got, err = clock.BarAt(at("2026-10-16", "13:40:00"), frequency.Minute30)
+	requireBar(t, got, err, at("2026-10-16", "13:30:00"), at("2026-10-16", "14:00:00"))
+	// 周五收盘后的下一根是下周一开盘。
+	got, err = clock.Next(Bar{Open: at("2026-10-16", "14:00:00"), Close: at("2026-10-16", "15:00:00")}, frequency.Hour1)
+	requireBar(t, got, err, at("2026-10-19", "09:30:00"), at("2026-10-19", "10:30:00"))
+}
+
+func TestStockIntradayClockRejectsPeriodsThatDoNotDivideSessions(t *testing.T) {
+	clock := stockClock(t, october)
+	for _, freq := range []frequency.Frequency{"45m", frequency.Hour4} {
 		if _, err := clock.LatestClosed(at("2026-10-16", "10:45:00"), freq); !errors.Is(err, ErrAlignmentUnconfirmed) {
-			t.Fatalf("%s on an exchange calendar must be reported as unconfirmed, got %v", freq, err)
+			t.Fatalf("%s does not divide the sessions and must be reported as unconfirmed, got %v", freq, err)
 		}
 	}
 }

@@ -23,20 +23,11 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestValidateResampleBackfillWindowRejectsOpenOrExpiredSourceWindow(t *testing.T) {
+func TestCheckSourceRetentionRejectsRangeOlderThanRetainedSource(t *testing.T) {
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
-	request := domain.ResampleBackfillRequest{RequestID: "r1", Start: now.Add(-2 * time.Hour), End: now.Add(-time.Hour)}
-	require.ErrorContains(t, validateResampleBackfillWindow(request, time.Hour, 10*time.Second, storagesource.DatasetInfo{Retention: "1h"}, now), "older than source Dataset retention")
-
-	request.Start = now.Add(-2 * time.Hour)
-	request.End = now.Add(time.Hour)
-	require.ErrorContains(t, validateResampleBackfillWindow(request, time.Hour, 0, storagesource.DatasetInfo{Retention: "forever"}, now), "closed bucket")
-}
-
-func TestValidateResampleBackfillWindowAcceptsClosedRetainedWindow(t *testing.T) {
-	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
-	request := domain.ResampleBackfillRequest{RequestID: "r1", Start: now.Add(-3 * time.Hour), End: now.Add(-time.Hour)}
-	require.NoError(t, validateResampleBackfillWindow(request, time.Hour, 10*time.Second, storagesource.DatasetInfo{Retention: "24h"}, now))
+	require.ErrorContains(t, checkSourceRetention(storagesource.DatasetInfo{Retention: "1h"}, now.Add(-2*time.Hour), now), "older than source Dataset retention")
+	require.NoError(t, checkSourceRetention(storagesource.DatasetInfo{Retention: "24h"}, now.Add(-3*time.Hour), now))
+	require.NoError(t, checkSourceRetention(storagesource.DatasetInfo{Retention: "forever"}, now.Add(-1000*time.Hour), now))
 }
 
 type validationDatasetSource map[string]storagesource.DatasetInfo
@@ -917,7 +908,7 @@ func TestUpdateTaskOnlyChangesMutableFields(t *testing.T) {
 func TestValidateCollectionTaskUpdateAllowsOnlyMutableFields(t *testing.T) {
 	base := domain.CollectionTask{
 		SpaceID: "crypto", TaskID: "resample-1", TaskName: "original", DataType: "kline_resample", Enabled: true,
-		CollectParams:   `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1h","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4h","alignment":"epoch_utc","settle_delay_ms":10000}`,
+		CollectParams:   `{"provider":"moox","market_type":"spot","source_dataset_id":"source","source_frequency":"1h","source_series_tag":"venue:binance","target_dataset_id":"target","target_frequency":"4h","alignment":"epoch_utc"}`,
 		ResultDatasetID: "target", ResultViewID: "view_target",
 	}
 
@@ -1000,36 +991,6 @@ func TestValidateCollectionTaskDatasetsAcceptsExchangeSourceForMooxResample(t *t
 	require.NoError(t, service.validateCollectionTaskDatasets(context.Background(), rule))
 }
 
-func TestGetKlineResampleBackfillKeepsMixedActiveRequestCancelable(t *testing.T) {
-	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.ApplySchema(collectorschema.AllSQL()))
-	start := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
-	makeInstance := func(taskID string, state domain.ResampleBackfillState) domain.TaskInstance {
-		result := domain.NewResampleTaskResult(start)
-		result.LastError = "source retention expired"
-		result.Backfill = &domain.ResampleBackfill{RequestID: "request-1", Start: start, End: start.Add(time.Hour), NextBucket: start, State: state}
-		encoded, marshalErr := result.Marshal()
-		require.NoError(t, marshalErr)
-		return domain.TaskInstance{SpaceID: "crypto", InstanceID: taskID, DataType: "kline_resample", Result: encoded}
-	}
-	instances := []domain.TaskInstance{makeInstance("failed", domain.ResampleBackfillFailed), makeInstance("syncing", domain.ResampleBackfillSyncing)}
-	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{SpaceID: "crypto", TaskID: "rule-5m", TaskName: "rule-5m", DataType: "kline_resample", Enabled: true, PrepareState: domain.PrepareStateReady}))
-	require.NoError(t, db.TaskInstances().UpsertMany(context.Background(), instances))
-	require.NoError(t, db.TaskInstances().UpsertWriteTargets(context.Background(), []domain.WriteTarget{
-		{ID: "wt-failed", SpaceID: "crypto", InstanceID: "failed", TaskID: "rule-5m", DatasetID: "target", Status: "pending"},
-		{ID: "wt-syncing", SpaceID: "crypto", InstanceID: "syncing", TaskID: "rule-5m", DatasetID: "target", Status: "pending"},
-	}))
-	service := &Service{instanceRepo: db.TaskInstances()}
-	rsp, err := service.GetKlineResampleBackfill(context.Background(), &pb.GetKlineResampleBackfillReq{SpaceId: "crypto", TaskId: "rule-5m", RequestId: "request-1"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Equal(t, "syncing", rsp.GetState())
-	require.EqualValues(t, 1, rsp.GetFailed())
-	require.EqualValues(t, 1, rsp.GetSyncing())
-}
-
 func TestCollectionTaskDefinitionHashCanonicalizesKlineDefinition(t *testing.T) {
 	left := domain.CollectionTask{
 		SpaceID: "crypto", DataType: "kline", TagIDs: []string{"tag-b", "tag-a"},
@@ -1063,11 +1024,13 @@ func TestDeleteTaskRefusesResultDatasetStillReferencedByAnotherTask(t *testing.T
 	ids := taskresult.ResultIDs(owner.SpaceID, owner.TaskID)
 	owner.ResultDatasetID, owner.ResultViewID = ids.DatasetID, ids.ViewID
 	require.NoError(t, db.Tasks().Create(ctx, owner))
+	// 手工写入的运行态让另一个任务也指向同一个结果数据集：删除前的保护必须拒绝。
 	other := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-other", TaskName: "other", DataType: "kline", Enabled: true}
 	require.NoError(t, db.Tasks().Create(ctx, other))
-	instance := domain.TaskInstance{SpaceID: "crypto", InstanceID: "shared-dataset-ref", Provider: "binance", MarketType: "spot", DataType: "kline", SubjectID: "BTC-USDT", Frequency: "1m"}
-	require.NoError(t, db.TaskInstances().UpsertMany(ctx, []domain.TaskInstance{instance}))
-	require.NoError(t, db.TaskInstances().UpsertWriteTargets(ctx, []domain.WriteTarget{{ID: "other-target", SpaceID: "crypto", InstanceID: instance.InstanceID, TaskID: other.TaskID, DatasetID: ids.DatasetID, Status: "pending"}}))
+	sqlDB, sqlErr := db.SQLDB()
+	require.NoError(t, sqlErr)
+	_, sqlErr = sqlDB.ExecContext(ctx, `UPDATE t_collector_tasks SET c_result_dataset_id = ? WHERE c_task_id = ?`, ids.DatasetID, other.TaskID)
+	require.NoError(t, sqlErr)
 
 	metadata := newTaskResultMetadataFake(ids, owner.TaskID)
 	service := &Service{persistence: db, taskRepo: db.Tasks(), resultManager: taskresult.NewManagerWithAPI(metadata, &storagepb.AuthInfo{AppId: "collector"})}

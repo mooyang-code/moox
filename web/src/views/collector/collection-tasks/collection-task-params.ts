@@ -48,25 +48,25 @@ export interface CollectionTaskInput {
   market: CollectionTaskMarket;
   frequency: string;
   subjectTags?: string[];
+  // 合成的源采集任务：创建时只提交它与目标频率，源数据集、源周期、序列标签由后端推导。
+  sourceTaskId?: string;
+  // 以下三项只用于展示已有合成任务（由后端推导后保存），不参与创建。
   sourceId?: string;
   sourceFrequency?: string;
   sourceSeriesTag?: string;
-  settleDelayMS?: number;
   outputFields?: string[];
   tagIds?: string[];
 }
 
 export interface KlineResampleParams extends Record<string, unknown> {
-  provider: string;
-  market_type: CollectionTaskMarket;
-  source_dataset_id: string;
-  source_frequency: string;
-  source_series_tag: string;
+  source_task_id?: string;
+  provider?: string;
+  market_type?: CollectionTaskMarket;
+  source_dataset_id?: string;
+  source_frequency?: string;
+  source_series_tag?: string;
   target_frequency: string;
-  alignment: "epoch_utc";
-  settle_delay_ms?: number;
   output_fields?: string[];
-  subject_tags?: string[];
 }
 
 export interface CollectionTaskFields {
@@ -130,47 +130,27 @@ export function buildCollectionTaskParams(input: CollectionTaskInput): Record<st
 }
 
 export function buildKlineResampleParams(input: CollectionTaskInput & { outputFields?: string[] }): KlineResampleParams {
-  const sourceId = input.sourceId?.trim();
-  const sourceFrequency = input.sourceFrequency?.trim();
-  const sourceSeriesTag = input.sourceSeriesTag?.trim();
-  const provider = input.provider.trim().toLowerCase();
-  const market = input.market;
+  const sourceTaskId = input.sourceTaskId?.trim();
   const frequency = input.frequency.trim();
-  if (!frequency) throw new Error("请输入采集频率");
-  if (!sourceId || !sourceFrequency || !sourceSeriesTag) {
-    throw new Error("请填写源行情、源周期和序列标签");
-  }
-  const params: KlineResampleParams = {
-    provider,
-    market_type: market,
-    source_dataset_id: sourceId,
-    source_frequency: sourceFrequency,
-    source_series_tag: sourceSeriesTag,
-    target_frequency: frequency,
-    alignment: "epoch_utc"
-  };
-  const subjectTags = normalizeSubjectTags(input.subjectTags);
-  if (subjectTags.length > 0) params.subject_tags = subjectTags;
-  if (Number.isFinite(input.settleDelayMS) && (input.settleDelayMS as number) >= 0) {
-    params.settle_delay_ms = Math.trunc(input.settleDelayMS as number);
-  }
+  if (!frequency) throw new Error("请输入目标频率");
+  if (!sourceTaskId) throw new Error("请选择源采集任务");
+  const params: KlineResampleParams = { source_task_id: sourceTaskId, target_frequency: normalizeFrequency(frequency) };
   const outputFields = [...new Set((input.outputFields || []).map(value => value.trim()).filter(Boolean))];
   if (outputFields.length) params.output_fields = outputFields;
   return params;
 }
 
 export function parseKlineResampleParams(params: Record<string, unknown>): KlineResampleParams {
+  const provider = stringValue(params.provider);
   return {
-    provider: stringValue(params.provider),
-    market_type: normalizeMarket(stringValue(params.market_type)),
+    ...(stringValue(params.source_task_id) ? { source_task_id: stringValue(params.source_task_id) } : {}),
+    ...(provider ? { provider } : {}),
+    ...(provider || stringValue(params.market_type) ? { market_type: normalizeMarket(stringValue(params.market_type)) } : {}),
     source_dataset_id: stringValue(params.source_dataset_id),
     source_frequency: stringValue(params.source_frequency),
     source_series_tag: stringValue(params.source_series_tag),
     target_frequency: stringValue(params.target_frequency),
-    alignment: "epoch_utc",
-    ...(numberValue(params.settle_delay_ms) !== undefined ? { settle_delay_ms: numberValue(params.settle_delay_ms) } : {}),
-    ...(stringArrayValue(params.output_fields).length ? { output_fields: stringArrayValue(params.output_fields) } : {}),
-    ...(stringArrayValue(params.subject_tags).length ? { subject_tags: stringArrayValue(params.subject_tags) } : {})
+    ...(stringArrayValue(params.output_fields).length ? { output_fields: stringArrayValue(params.output_fields) } : {})
   };
 }
 
@@ -222,13 +202,13 @@ export function parseCollectionTaskInput(
     const resample = parseKlineResampleParams(params);
     return {
       dataType,
-      provider: resample.provider,
-      market: resample.market_type,
+      provider: resample.provider || "",
+      market: resample.market_type || "spot",
       frequency: resample.target_frequency,
+      sourceTaskId: resample.source_task_id,
       sourceId: resample.source_dataset_id,
       sourceFrequency: resample.source_frequency,
       sourceSeriesTag: resample.source_series_tag,
-      settleDelayMS: resample.settle_delay_ms,
       outputFields: resample.output_fields || []
     };
   }
@@ -312,11 +292,6 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : value === undefined || value === null ? "" : String(value).trim();
-}
-
-function numberValue(value: unknown): number | undefined {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : undefined;
 }
 
 function normalizeSubjectTags(tags?: string[]): string[] {

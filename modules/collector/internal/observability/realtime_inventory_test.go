@@ -97,3 +97,16 @@ func TestRealtimeInventoryFailureRetainsPreviousSnapshot(t *testing.T) {
 	require.Error(t, inventory.Refresh(context.Background()))
 	require.Equal(t, previous, registry.items)
 }
+
+func TestRealtimeInventoryAcceptsResampleTargetWithoutFrequencySuffix(t *testing.T) {
+	// 回归：结果数据集 ID 由任务派生、不带频率后缀，清单刷新曾因后缀检查失败并让 Collector 起不来。
+	params := `{"provider":"binance","market_type":"spot","source_dataset_id":"dataset_src","source_frequency":"1m","source_series_tag":"venue:binance","target_dataset_id":"dataset_resample_task","target_frequency":"5m","alignment":"epoch_utc"}`
+	task := domain.CollectionTask{SpaceID: "crypto", TaskID: "resample-task", DataType: "kline_resample", CollectParams: params, Enabled: true, PrepareState: domain.PrepareStateReady}
+	registry := &registryStub{}
+	inventory := NewRealtimeInventory(&ruleSourceStub{rules: []domain.CollectionTask{task}}, registry)
+
+	require.NoError(t, inventory.Refresh(context.Background()))
+	require.Equal(t, []report.DatasetExpectation{
+		{Key: report.DatasetKey{SpaceID: "crypto", DatasetID: "dataset_resample_task", Freq: "5m"}, Interval: 5 * time.Minute},
+	}, registry.items)
+}

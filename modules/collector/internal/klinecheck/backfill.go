@@ -22,8 +22,11 @@ import (
 )
 
 const (
-	// DefaultMaxInFlight 是每个空间同时执行的补采分块数上限，与补采函数的预留并发一致。
+	// DefaultMaxInFlight 是每个空间同时执行的补采分块数上限，与补采函数的预留并发一致（SCF 执行端由平台硬性限制）。
 	DefaultMaxInFlight = 5
+	// LocalMaxInFlight 是全部数据集都用本地执行端（collector-stream）补采的空间的并发上限：不受 SCF 预留并发限制，
+	// 只受行情源 REST 限频约束（补采分块很小，权重低）。
+	LocalMaxInFlight = 12
 	// MaxChunkBars 是一个分块最多拉取的 K 线数。
 	MaxChunkBars = 1000
 	// MaxChunksPerJob 防止一次作业展开出无法完成的分块数。
@@ -51,6 +54,8 @@ type JobRequest struct {
 	SubjectID string
 	From      time.Time
 	To        time.Time
+	// IncludeOpenBar 见 Request.IncludeOpenBar：恢复追赶的范围从暂停那一刻开始，要包含当时正在走的那根 K 线。
+	IncludeOpenBar bool
 	// Force 为 true 时不检查缺口，范围内应有的 K 线全部重拉。
 	Force bool
 	// Watermark 非空表示这是自动补采作业：作业成功后才把该数据集的扫描水位推进到 To。
@@ -119,7 +124,9 @@ type Backfiller struct {
 	// BaseCtx 是异步执行分块的上下文（进程生命周期）。
 	BaseCtx     context.Context
 	MaxInFlight int
-	Now         func() time.Time
+	// MaxInFlightFor 非空时按空间决定并发上限（返回值不大于 0 表示用 MaxInFlight / 默认值）。
+	MaxInFlightFor func(ctx context.Context, spaceID string) int
+	Now            func() time.Time
 
 	mu       sync.Mutex
 	lastScan map[string]time.Time
@@ -146,7 +153,12 @@ func (b *Backfiller) now() time.Time {
 	return time.Now().UTC()
 }
 
-func (b *Backfiller) maxInFlight() int {
+func (b *Backfiller) maxInFlight(ctx context.Context, spaceID string) int {
+	if b.MaxInFlightFor != nil {
+		if n := b.MaxInFlightFor(ctx, spaceID); n > 0 {
+			return n
+		}
+	}
 	if b.MaxInFlight > 0 {
 		return b.MaxInFlight
 	}
@@ -191,7 +203,7 @@ func (b *Backfiller) submit(ctx context.Context, request JobRequest, source stri
 	if b == nil || b.Checker == nil || b.Store == nil {
 		return "", 0, fmt.Errorf("backfiller is not initialized")
 	}
-	result, err := b.Checker.Check(ctx, Request{SpaceID: request.SpaceID, DatasetID: request.DatasetID, SubjectID: request.SubjectID, From: request.From, To: request.To, AssumeMissing: request.Force, BeforeFirstPlan: request.Force})
+	result, err := b.Checker.Check(ctx, Request{SpaceID: request.SpaceID, DatasetID: request.DatasetID, SubjectID: request.SubjectID, From: request.From, To: request.To, AssumeMissing: request.Force, BeforeFirstPlan: request.Force, IncludeOpenBar: request.IncludeOpenBar})
 	if err != nil {
 		return "", 0, err
 	}
@@ -331,7 +343,7 @@ func (b *Backfiller) Tick(ctx context.Context, spaceID string) error {
 		if err != nil {
 			return err
 		}
-		if free := b.maxInFlight() - inFlight; free > 0 {
+		if free := b.maxInFlight(ctx, spaceID) - inFlight; free > 0 {
 			latestEnd := b.now().Add(chunkInvokeLimit + chunkSafetyMargin)
 			claimed, err := b.Store.ClaimChunks(ctx, job.JobID, free, latestEnd)
 			if err != nil {

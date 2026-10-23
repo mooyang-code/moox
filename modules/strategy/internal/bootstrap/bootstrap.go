@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/health"
@@ -113,8 +114,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	}
 
 	var consumer *eventconsumer.Consumer
+	var handlerRef atomic.Pointer[trigger.Handler]
 	life, err := newLifecycle(cfg.Database, lifecycleDeps{
 		db: db, eventConnected: eventRuntime.Connected, consumerReady: func() bool { return consumer == nil || consumer.Ready() },
+		handler: &handlerRef,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("打开策略生命周期状态：%w", err)
@@ -122,7 +125,8 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if inputClient != nil {
 		meta := input.NewMetaCache()
 		meta.Ages = db
-		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life)}
+		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life), ReleasedAt: releasedAt(life)}
+		handlerRef.Store(handler)
 		// EventBus 暂不可用时消费者在后台重试连接，进程照常启动（未就绪），与出站投递的容错一致。
 		connect := func(ctx context.Context) (*jetstream.Client, error) {
 			jsConfig, err := eventBusConfig(cfg, "moox-strategy-ready")

@@ -45,6 +45,8 @@ func eventBusRole(id string) string {
 		return "trade-eventbus"
 	case "factor-engine":
 		return "factor-eventbus"
+	case "collector":
+		return "collector-eventbus"
 	}
 	return ""
 }
@@ -253,6 +255,14 @@ func projectEventBus(root *os.Root, options *PrepareOptions, components []string
 				return err
 			}
 			if err := setValue(observability, "credential_file", credential); err != nil {
+				return err
+			}
+		} else if id == "collector" {
+			bus := member(member(document, "kline_resample"), "event_bus")
+			if err := setValue(bus, "urls", []string{options.EventBusURL}); err != nil {
+				return err
+			}
+			if err := setValue(bus, "credential_file", credential); err != nil {
 				return err
 			}
 		} else if id == "strategy" || id == "trade" || id == "factor-engine" {

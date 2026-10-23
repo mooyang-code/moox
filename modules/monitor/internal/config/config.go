@@ -49,6 +49,9 @@ type HealthAuthConfig struct {
 	Version   string `yaml:"version"`
 	AccessKey string `yaml:"access_key"`
 	SecretKey string `yaml:"secret_key"`
+	// ResetAccessKey 与 ResetSecretKey 是重置专用的第二对密钥（见 healthz.AuthConfig）：只配置在允许运维触发重置的进程上。
+	ResetAccessKey string `yaml:"reset_access_key"`
+	ResetSecretKey string `yaml:"reset_secret_key"`
 }
 
 type InstanceConfig struct {
@@ -410,6 +413,12 @@ func (c *Config) applyEnv() {
 	}
 	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_AUTH_SECRET_KEY")); v != "" {
 		c.HealthAuth.SecretKey = v
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_RESET_ACCESS_KEY")); v != "" {
+		c.HealthAuth.ResetAccessKey = v
+	}
+	if v := strings.TrimSpace(os.Getenv("MOOX_HEALTH_RESET_SECRET_KEY")); v != "" {
+		c.HealthAuth.ResetSecretKey = v
 	}
 	if v := os.Getenv("MOOX_MONITOR_INSTANCE_ID"); v != "" {
 		c.Instance.InstanceID = v

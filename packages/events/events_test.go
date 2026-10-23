@@ -18,6 +18,7 @@ func TestBuiltInEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
+		"event.collector.kline.backfilled@1",
 		"event.observability.host.snapshot.reported@1",
 		"event.observability.metrics.snapshot.reported@1",
 		"event.storage.collector.period.completed@1",
@@ -28,6 +29,7 @@ func TestBuiltInEvents(t *testing.T) {
 		"event.trade.target.weight_requested@1",
 	}
 	wantOwners := map[string]string{
+		"event.collector.kline.backfilled@1":              "collector",
 		"event.observability.host.snapshot.reported@1":    "hostagent",
 		"event.observability.metrics.snapshot.reported@1": "service",
 		"event.storage.collector.period.completed@1":      "storage",
@@ -258,5 +260,37 @@ func validFactorPeriodComputed(now *timestamppb.Timestamp) *storagepb.FactorPeri
 		UniverseSubjectIds: []string{"BTC-USDT"},
 		Factors:            []*storagepb.FactorPeriodState{{FactorId: "factor-1", Status: "complete", SourceHash: "hash-1", DefinitionHash: "def-1"}},
 		ComputedAt:         now, TriggerEventId: "collector-completed-1",
+	}
+}
+
+func TestCollectorKlineBackfilledRoundTripAndValidation(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	start := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	payload := &storagepb.CollectorKlineBackfilled{
+		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC", "ETH"},
+		Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Hour)),
+		Origin: "auto", JobId: "job-1", SyncRequestId: "batch-1", ConfirmedAt: timestamppb.New(start.Add(2 * time.Hour)),
+	}
+	raw, err := registry.MarshalMessage(CollectorKlineBackfilled, payload, PublishOptions{EventID: "batch-1", OccurredAt: start, SpaceID: "crypto", SubjectID: "dataset_src"})
+	require.NoError(t, err)
+	message, err := registry.UnmarshalMessage(raw)
+	require.NoError(t, err)
+	subject, err := registry.SubjectForMessage(message)
+	require.NoError(t, err)
+	require.Contains(t, subject, "moox.event.collector.kline.backfilled.v1.")
+	require.Equal(t, "MOOX_COLLECTOR", CollectorKlineBackfilled.Stream())
+
+	for name, mutate := range map[string]func(*storagepb.CollectorKlineBackfilled){
+		"dataset mismatch": func(p *storagepb.CollectorKlineBackfilled) { p.DatasetId = "other" },
+		"no subjects":      func(p *storagepb.CollectorKlineBackfilled) { p.SubjectIds = nil },
+		"empty range":      func(p *storagepb.CollectorKlineBackfilled) { p.End = p.Start },
+		"bad origin":       func(p *storagepb.CollectorKlineBackfilled) { p.Origin = "other" },
+		"no sync request":  func(p *storagepb.CollectorKlineBackfilled) { p.SyncRequestId = "" },
+	} {
+		broken := proto.Clone(payload).(*storagepb.CollectorKlineBackfilled)
+		mutate(broken)
+		_, err := registry.Encode(CollectorKlineBackfilled, broken, PublishOptions{EventID: "batch-1", OccurredAt: start, SpaceID: "crypto", SubjectID: "dataset_src"})
+		require.Error(t, err, name)
 	}
 }

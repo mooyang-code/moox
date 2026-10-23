@@ -138,7 +138,7 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
 
 	registerMetricsReporter(nil, nil)
-	assert.NoError(t, registerHealth(nil, nil, rt, nil))
+	assert.NoError(t, registerHealth(context.Background(), nil, nil, rt, nil))
 }
 
 func TestMonitorSyncHandlerPropagatesTimerFailure(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/frequency"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
@@ -15,8 +16,8 @@ var (
 	ErrCalendarNotCovered = errors.New("日历未覆盖")
 	// ErrNoTradingCalendar 表示数据所在市场没有可用的交易日历（任务清单没有声明，或声明了未内嵌的日历）。
 	ErrNoTradingCalendar = errors.New("没有交易日历")
-	// ErrAlignmentUnconfirmed 表示交易所市场上这个周期的 K 线按什么时刻对齐没有可确认的约定：只支持 1 分钟和日线以上，
-	// 其余日内周期（5m～4h）既可能按交易时段对齐（09:30/10:30/13:00/14:00），也可能按整点，没有实际数据前不做推断。
+	// ErrAlignmentUnconfirmed 表示交易所市场上这个周期的 K 线没有可确认的分桶：日内周期按交易时段从开盘起切分（合成的约定），
+	// 周期不能整除每个交易时段（如 A 股的 45m、4h）时没有这样的桶，不做推断。
 	ErrAlignmentUnconfirmed = errors.New("周期对齐未确认")
 	// ErrOutsideSession 表示 K 线时间不落在任何交易时段（或不是交易日），无法识别是哪一根。
 	ErrOutsideSession = errors.New("K线时间不在交易时段内")
@@ -48,6 +49,8 @@ type MarketClock struct {
 	location *time.Location
 	days     TradingDays
 	sessions []sessionSpan
+	// rawSessions 是原样的交易时段文本，交给 barclock 按时段切分日内周期。
+	rawSessions []string
 }
 
 // sessionSpan 是一个交易时段，用距本地零点的时长表示。
@@ -72,7 +75,7 @@ func NewExchangeClock(days TradingDays, location *time.Location, sessions []stri
 	if days == nil || location == nil {
 		return MarketClock{}, ErrNoTradingCalendar
 	}
-	clock := MarketClock{exchange: true, location: location, days: days}
+	clock := MarketClock{exchange: true, location: location, days: days, rawSessions: append([]string(nil), sessions...)}
 	for _, raw := range sessions {
 		open, close, ok := strings.Cut(strings.TrimSpace(raw), "-")
 		start, startErr := clockOfDay(open)
@@ -142,7 +145,18 @@ func (c MarketClock) BarAt(dataTime time.Time, freq frequency.Frequency) (Bar, e
 	case isDailyOrLonger(freq):
 		return c.periodBar(localMidnight(dataTime.In(c.location)), freq)
 	default:
-		return Bar{}, fmt.Errorf("%w：%s", ErrAlignmentUnconfirmed, freq)
+		session, err := c.sessionClock(freq)
+		if err != nil {
+			return Bar{}, err
+		}
+		bucket, ok, err := session.BucketAt(dataTime)
+		if err != nil {
+			return Bar{}, c.bucketError(err)
+		}
+		if !ok {
+			return Bar{}, fmt.Errorf("%w：%s", ErrOutsideSession, dataTime.In(c.location).Format("2006-01-02 15:04"))
+		}
+		return barOf(bucket), nil
 	}
 }
 
@@ -161,7 +175,15 @@ func (c MarketClock) LatestClosed(now time.Time, freq frequency.Frequency) (Bar,
 	case isDailyOrLonger(freq):
 		return c.latestClosedPeriod(now, freq)
 	default:
-		return Bar{}, fmt.Errorf("%w：%s", ErrAlignmentUnconfirmed, freq)
+		session, err := c.sessionClock(freq)
+		if err != nil {
+			return Bar{}, err
+		}
+		bucket, err := session.LatestClosed(now)
+		if err != nil {
+			return Bar{}, c.bucketError(err)
+		}
+		return barOf(bucket), nil
 	}
 }
 
@@ -181,7 +203,15 @@ func (c MarketClock) Next(bar Bar, freq frequency.Frequency) (Bar, error) {
 		}
 		return c.periodBar(next, freq)
 	default:
-		return Bar{}, fmt.Errorf("%w：%s", ErrAlignmentUnconfirmed, freq)
+		session, err := c.sessionClock(freq)
+		if err != nil {
+			return Bar{}, err
+		}
+		bucket, err := session.Next(barclock.Bucket{Key: bar.Open, Start: bar.Open, End: bar.Close})
+		if err != nil {
+			return Bar{}, c.bucketError(err)
+		}
+		return barOf(bucket), nil
 	}
 }
 
@@ -205,6 +235,31 @@ func (c MarketClock) ClosedBarsAfter(latest Bar, until time.Time, freq frequency
 		cursor = next
 	}
 	return count, first, nil
+}
+
+// sessionClock 返回日内周期 freq 按交易时段切分的时钟；周期不能整除交易时段时返回 ErrAlignmentUnconfirmed。
+func (c MarketClock) sessionClock(freq frequency.Frequency) (barclock.Clock, error) {
+	duration := freq.Duration()
+	if duration <= 0 {
+		return nil, fmt.Errorf("%w：%s", ErrAlignmentUnconfirmed, freq)
+	}
+	clock, err := barclock.NewSession(c.days, c.location, c.rawSessions, duration)
+	if err != nil {
+		return nil, fmt.Errorf("%w：%s（%v）", ErrAlignmentUnconfirmed, freq, err)
+	}
+	return clock, nil
+}
+
+// bucketError 把 barclock 的日历错误换成本包的错误，页面按“日历未覆盖”显示。
+func (c MarketClock) bucketError(err error) error {
+	if errors.Is(err, barclock.ErrOutOfCoverage) || errors.Is(err, barclock.ErrNoBucket) {
+		return fmt.Errorf("%w：%v", ErrCalendarNotCovered, err)
+	}
+	return err
+}
+
+func barOf(bucket barclock.Bucket) Bar {
+	return Bar{Open: bucket.Start.UTC(), Close: bucket.End.UTC()}
 }
 
 func isDailyOrLonger(freq frequency.Frequency) bool {

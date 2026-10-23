@@ -3,6 +3,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
@@ -302,6 +303,14 @@ func (s *Store) Transaction(ctx context.Context, fn func(*Tx) error) error {
 
 func (s *Store) DBForTest() *gorm.DB {
 	return s.db
+}
+
+// SQLDB 返回底层数据库连接（重置时备份与清表用，由生命周期的重置实现调用）。
+func (s *Store) SQLDB() (*sql.DB, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("trade store is not open")
+	}
+	return s.db.DB()
 }
 
 func writeError(err error) error {

@@ -44,16 +44,16 @@ func TestOperationalStatsSpaceCapped(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	require.NoError(t, s.ApplySchema(schema.AllSQL()))
-	for _, status := range []string{"succeeded", "failed", "running"} {
-		require.NoError(t, s.db.Exec(`INSERT INTO t_collector_task_instances (c_space_id, c_instance_id, c_data_type, c_subject_id, c_frequency) VALUES ('crypto', ?, 'kline', ?, '1m')`, "instance-"+status, "subject-"+status).Error)
+	for _, subject := range []string{"a", "b", "c"} {
+		require.NoError(t, s.db.Exec(`INSERT INTO t_collector_backfill_notices (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_start, c_end, c_origin) VALUES ('crypto', 'd', '1m', ?, '2026-10-21 10:00:00', '2026-10-21 11:00:00', 'auto')`, subject).Error)
 	}
-	require.NoError(t, s.db.Exec(`INSERT INTO t_collector_task_instances (c_space_id, c_instance_id, c_data_type, c_subject_id, c_frequency) VALUES ('other', 'instance-other', 'kline', 'subject-other', '1m')`).Error)
+	require.NoError(t, s.db.Exec(`INSERT INTO t_collector_backfill_notices (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_start, c_end, c_origin) VALUES ('other', 'd', '1m', 'x', '2026-10-21 10:00:00', '2026-10-21 11:00:00', 'auto')`).Error)
 	stats, err := s.OperationalStats(context.Background(), "crypto", 2)
 	require.NoError(t, err)
-	require.Equal(t, OperationalRowCount{Count: 2, Capped: true}, stats.Rows["instances"])
+	require.Equal(t, OperationalRowCount{Count: 2, Capped: true}, stats.Rows["backfill_notices"])
 	uncapped, err := s.OperationalStats(context.Background(), "crypto", 3)
 	require.NoError(t, err)
-	require.Equal(t, OperationalRowCount{Count: 3, Capped: false}, uncapped.Rows["instances"])
+	require.Equal(t, OperationalRowCount{Count: 3, Capped: false}, uncapped.Rows["backfill_notices"])
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

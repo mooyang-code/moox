@@ -8,12 +8,27 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-func Handler(state *State) http.Handler {
-	return healthz.StandardMux(state.Snapshot, promhttp.Handler())
+// Route 是挂在健康检查端口上的额外路由（同样要过健康检查的签名鉴权，只监听本机）。
+type Route struct {
+	Path    string
+	Handler http.Handler
 }
 
-func Register(service server.Service, state *State) error {
-	handler, err := healthz.WrapFromEnv(Handler(state))
+func Handler(state *State, routes ...Route) http.Handler {
+	standard := healthz.StandardMux(state.Snapshot, promhttp.Handler())
+	mux, ok := standard.(*healthz.Mux)
+	if !ok {
+		return standard
+	}
+	for _, route := range routes {
+		// 前缀路由不限方法：exact 路由只接受 GET，而生命周期命令是 POST。
+		mux.HandlePrefix(route.Path, route.Handler)
+	}
+	return mux
+}
+
+func Register(service server.Service, state *State, routes ...Route) error {
+	handler, err := healthz.WrapFromEnv(Handler(state, routes...))
 	if err != nil {
 		return err
 	}

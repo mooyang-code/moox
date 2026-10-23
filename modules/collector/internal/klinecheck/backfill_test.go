@@ -610,3 +610,103 @@ func TestBackfillNotifiesFilledRangesAfterAJobSucceeds(t *testing.T) {
 	require.False(t, got[1].To.After(got[0].To))
 	require.Less(t, got[1].To.Sub(got[1].From), time.Hour)
 }
+
+// 恢复追赶：对暂停区间提交补采作业，补齐前没追平；补齐后追平；已确认缺失的不再补采并单独统计。
+func TestCatchupSubmitsOneJobAndReportsWhenGapsAreFilled(t *testing.T) {
+	backfiller, _, rows, base := newBackfillFixture(t)
+	ctx := context.Background()
+
+	state, err := backfiller.Catchup(ctx, "crypto", base, time.Time{})
+	require.NoError(t, err)
+	require.Positive(t, state.Missing)
+	require.NotEmpty(t, state.JobID, "有缺口就提交追赶作业")
+	require.False(t, state.CaughtUp())
+
+	again, err := backfiller.Catchup(ctx, "crypto", base, time.Time{})
+	require.NoError(t, err)
+	require.Empty(t, again.JobID, "已有未结束的作业，不重复提交")
+	require.Equal(t, 1, again.ActiveJobs)
+
+	step(t, backfiller, 3)
+	final, err := backfiller.Catchup(ctx, "crypto", base, time.Time{})
+	require.NoError(t, err)
+	require.Zero(t, final.Missing)
+	require.True(t, final.CaughtUp(), "补齐且没有未结束的作业")
+	_ = rows
+
+	job, _, err := backfiller.Store.GetJob(ctx, state.JobID)
+	require.NoError(t, err)
+	require.Equal(t, store.BackfillSucceeded, job.Status)
+}
+
+func TestCatchupWithoutGapsIsImmediatelyCaughtUp(t *testing.T) {
+	backfiller, _, rows, base := newBackfillFixture(t)
+	rows.missing = map[string]map[int64]bool{"BTC-USDT": {}, "ETH-USDT": {}}
+	state, err := backfiller.Catchup(context.Background(), "crypto", base, time.Time{})
+	require.NoError(t, err)
+	require.True(t, state.CaughtUp())
+	require.Empty(t, state.JobID)
+	require.Positive(t, state.Expected)
+}
+
+func TestBackfillerQuiesceWaitsForRunningChunks(t *testing.T) {
+	backfiller, _, _, _ := newBackfillFixture(t)
+	require.NoError(t, backfiller.Quiesce(context.Background()), "没有分块在执行")
+	backfiller.workers.Add(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, backfiller.Quiesce(ctx), context.DeadlineExceeded)
+	backfiller.workers.Done()
+	require.NoError(t, backfiller.Quiesce(context.Background()))
+}
+
+// 追赶目标是固定的：目标之后新出现的缺口（实时采集还没恢复）不算进这一轮，否则补采永远追不平。
+func TestCatchupTargetIsFixed(t *testing.T) {
+	backfiller, _, rows, base := newBackfillFixture(t)
+	ctx := context.Background()
+	// 固定目标早于夹具里的所有缺口（缺口在 base+3 分钟之后）：区间内没有缺口，立即追平。
+	state, err := backfiller.Catchup(ctx, "crypto", base, base.Add(2*time.Minute))
+	require.NoError(t, err)
+	require.True(t, state.CaughtUp())
+	require.Empty(t, state.JobID)
+	// 目标覆盖缺口时才提交作业。
+	state, err = backfiller.Catchup(ctx, "crypto", base, base.Add(time.Hour))
+	require.NoError(t, err)
+	require.Positive(t, state.Missing)
+	require.NotEmpty(t, state.JobID)
+	_ = rows
+}
+
+// 暂停那一刻正在走的 K 线（开始时间早于暂停时间）是在暂停期间收盘的，恢复追赶要把它算进去。
+func TestCatchupIncludesTheBarOpenAtPauseTime(t *testing.T) {
+	backfiller, _, rows, base := newBackfillFixture(t)
+	rows.missing = map[string]map[int64]bool{"BTC-USDT": {base.Add(time.Minute).Unix(): true}, "ETH-USDT": {}}
+	since := base.Add(time.Minute + 30*time.Second) // 暂停时 base+1m 那根还没收盘
+	ctx := context.Background()
+
+	plain, err := backfiller.Checker.Check(ctx, Request{SpaceID: "crypto", From: since, To: base.Add(10 * time.Minute)})
+	require.NoError(t, err)
+	require.Zero(t, plain.Missing, "默认向上对齐：开始时间早于 From 的那根被漏掉")
+
+	state, err := backfiller.Catchup(ctx, "crypto", since, base.Add(10*time.Minute))
+	require.NoError(t, err)
+	require.Equal(t, 1, state.Missing, "恢复追赶包含暂停时正在走的那根")
+	require.NotEmpty(t, state.JobID)
+}
+
+// 并发上限：默认 5（与 SCF 补采函数的预留并发一致）；MaxInFlightFor 按空间覆盖（全部本地执行端的空间可以放大）。
+func TestMaxInFlightPerSpace(t *testing.T) {
+	b := &Backfiller{}
+	ctx := context.Background()
+	require.Equal(t, DefaultMaxInFlight, b.maxInFlight(ctx, "crypto"))
+	b.MaxInFlight = 7
+	require.Equal(t, 7, b.maxInFlight(ctx, "crypto"))
+	b.MaxInFlightFor = func(_ context.Context, space string) int {
+		if space == "crypto" {
+			return LocalMaxInFlight
+		}
+		return 0
+	}
+	require.Equal(t, LocalMaxInFlight, b.maxInFlight(ctx, "crypto"))
+	require.Equal(t, 7, b.maxInFlight(ctx, "stockcn"), "返回 0 表示用默认")
+}

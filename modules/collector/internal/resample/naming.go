@@ -7,10 +7,8 @@ import (
 
 const maxTargetDatasetIDLength = 50
 
-// ValidateTargetDatasetID validates the internal task-owned result Dataset ID.
-// The variadic argument is intentionally ignored: result identity belongs to
-// the task, never to a frequency-specific naming suffix.
-func ValidateTargetDatasetID(datasetID string, _ ...string) error {
+// ValidateTargetDatasetID 校验任务自有的结果 Dataset ID：结果身份属于任务，不带频率后缀。
+func ValidateTargetDatasetID(datasetID string) error {
 	if datasetID == "" {
 		return fmt.Errorf("target dataset ID is required")
 	}

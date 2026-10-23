@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/health"
@@ -28,16 +29,24 @@ type lifecycleDeps struct {
 	db             *store.Store
 	eventConnected func() bool
 	consumerReady  func() bool
+	// handler 在生命周期之后才创建（它的门禁依赖控制器），创建后绑定；追赶进度从它读取。
+	handler *atomic.Pointer[trigger.Handler]
 }
+
+// catchupGrace 是恢复追赶目标之前留的宽限：最新一根刚收盘时因子结果还在路上，不把它算进追赶目标。
+const catchupGrace = time.Minute
 
 func newLifecycle(dbPath string, deps lifecycleDeps) (*lifecycle.Controller, error) {
 	return lifecycle.New(lifecycle.Options{
+		Audit:     func(event string) { log.Infof("%s", event) },
 		Module:    "strategy",
 		StateFile: filepath.Join(filepath.Dir(dbPath), lifecycleStateFileName),
 		Hooks: lifecycle.Hooks{
 			CheckModule: deps.checkModule,
 			CheckObject: deps.checkInstance,
 			Objects:     deps.instances,
+			Catchup:     deps.catchup,
+			Reset:       strategyResetSpec(deps.db, dbPath),
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
 				log.Infof("strategy_lifecycle_changed kind=%s id=%s from=%s to=%s reason=%s", ref.Kind, ref.ID, from, to, reason)
 			},
@@ -58,6 +67,42 @@ func (d lifecycleDeps) instances() []lifecycle.Ref {
 		refs = append(refs, instanceRef(instance.InstanceID))
 	}
 	return refs
+}
+
+// catchup 报告实例的恢复追赶进度：追赶期间到达的因子完成事件都按 skipped(catchup) 记录，已处理到最新已收盘的 bar 就是追平
+// （输入因子追平、策略自己的消费没有积压、相邻周期的版本记录已补齐）。模块自身没有数据要追赶。
+func (d lifecycleDeps) catchup(ctx context.Context, ref lifecycle.Ref, since time.Time) (lifecycle.Catchup, error) {
+	out := lifecycle.Catchup{Since: since, CaughtUp: true}
+	if ref == (lifecycle.Ref{}) {
+		return out, nil
+	}
+	var handler *trigger.Handler
+	if d.handler != nil {
+		handler = d.handler.Load()
+	}
+	if handler == nil {
+		out.CaughtUp, out.Message = false, "触发处理器尚未启动"
+		return out, nil
+	}
+	progress, err := handler.CatchupProgress(ctx, ref.ID, time.Now().UTC(), catchupGrace)
+	if err != nil {
+		out.CaughtUp, out.Message = false, "读取追赶进度失败："+err.Error()
+		return out, nil
+	}
+	out.Target = progress.Expected
+	out.CaughtUp = progress.CaughtUp()
+	if !out.CaughtUp {
+		out.BlockedBy = "输入因子"
+		out.Message = "等待最新已收盘的因子结果（已处理到 " + formatBar(progress.Latest) + "，目标 " + formatBar(progress.Expected) + "）"
+	}
+	return out, nil
+}
+
+func formatBar(t time.Time) string {
+	if t.IsZero() {
+		return "无"
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 func (d lifecycleDeps) checkModule(ctx context.Context) []lifecycle.Check {
@@ -93,10 +138,14 @@ func (d lifecycleDeps) checkInstance(ctx context.Context, ref lifecycle.Ref) []l
 	return checks
 }
 
-// triggerGate 把控制器的阶段翻译成处理器的模式：运行是正式目标，预热是影子目标，其他都不求值。
+// triggerGate 把控制器的阶段翻译成处理器的模式：运行是正式目标，预热是影子目标，其他都不求值
+// （暂停、恢复追赶、重置、故障，以及模块自身未就绪，对象各自的阶段不变但都不求值）。
 func triggerGate(c *lifecycle.Controller) func(string) trigger.Mode {
 	return func(instanceID string) trigger.Mode {
 		if !c.Allowed(instanceRef(instanceID)) { // 模块自身暂停或故障时，所有实例都不求值
+			if c.CatchupAllowed(instanceRef(instanceID)) {
+				return trigger.ModeCatchup // 恢复追赶：只记录周期，不求值、不发目标
+			}
 			return trigger.ModeOff
 		}
 		switch c.Stage(instanceRef(instanceID)) {
@@ -109,10 +158,17 @@ func triggerGate(c *lifecycle.Controller) func(string) trigger.Mode {
 	}
 }
 
+// releasedAt 把控制器记录的放行时间交给处理器：放行之前收盘的周期只记录、不求值。
+func releasedAt(c *lifecycle.Controller) func(string) time.Time {
+	return func(instanceID string) time.Time { return c.ReleasedAt(instanceRef(instanceID)) }
+}
+
 func lifecycleRoutes(c *lifecycle.Controller) []health.Route {
 	return []health.Route{
 		{Path: lifecycle.StatusPath, Handler: c.StatusHandler()},
 		{Path: lifecycle.CommandPath, Handler: c.CommandHandler()},
+		{Path: lifecycle.CatchupPath, Handler: c.CatchupHandler()},
+		{Path: lifecycle.ResetPrefix, Handler: c.ResetHandler()},
 	}
 }
 

@@ -1,5 +1,4 @@
 import { callControl } from "@/api/admin/http";
-import type { ResampleBackfillSummary } from "@/views/collector/collection-tasks/resample-backfill";
 
 export interface CollectorPage {
   page?: number;
@@ -108,12 +107,49 @@ export interface DeleteTaskRequest {
   delete_result_data: boolean;
 }
 
-export interface KlineResampleBackfillRequest {
+// 历史合成作业：范围 [start, end) 按目标桶推进，状态 queued / running / syncing / succeeded / failed / cancelled。
+export interface ResampleJob {
+  job_id: string;
+  task_id: string;
+  request_id: string;
+  origin: "manual" | "source_backfill" | string;
+  subjects?: string[];
+  start: string;
+  end: string;
+  next_bucket: string;
+  not_before: string;
+  status: string;
+  total_buckets: number;
+  done_buckets: number;
+  written: number;
+  skipped: number;
+  skipped_samples?: string[];
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SubmitResampleJobRequest {
   space_id: string;
   task_id: string;
   request_id: string;
   start: string;
   end: string;
+  subjects?: string[];
+}
+
+// 由源采集任务推导出的合成源参数，以及目标频率的校验结果。
+export interface ResampleSourcePreview {
+  source_dataset_id: string;
+  source_frequency: string;
+  source_series_tag: string;
+  subject_count: number;
+  market_id: string;
+  provider: string;
+  market_type: string;
+  alignment: "epoch_utc" | "session" | string;
+  allowed_frequencies?: string[];
+  validation_error?: string;
 }
 
 export interface DataTypeConfig {
@@ -180,56 +216,56 @@ export async function GetDataTypeConfigWithFields(dataType: string): Promise<{ d
   });
 }
 
-export async function startKlineResampleBackfill(request: KlineResampleBackfillRequest) {
-  return callControl<KlineResampleBackfillRequest, Record<string, unknown>>("collector", "StartKlineResampleBackfill", request);
+export async function submitKlineResampleJob(
+  request: SubmitResampleJobRequest
+): Promise<{ job?: ResampleJob; created?: boolean }> {
+  return callControl<SubmitResampleJobRequest, { job?: ResampleJob; created?: boolean }>(
+    "collector",
+    "SubmitKlineResampleJob",
+    request
+  );
 }
 
-export async function cancelKlineResampleBackfill(
-  request: Pick<KlineResampleBackfillRequest, "space_id" | "task_id" | "request_id">
-) {
-  return callControl<typeof request, Record<string, unknown>>("collector", "CancelKlineResampleBackfill", request);
+export async function getKlineResampleJob(spaceId: string, jobId: string): Promise<ResampleJob | undefined> {
+  const response = await callControl<{ space_id: string; job_id: string }, { job?: ResampleJob }>(
+    "collector",
+    "GetKlineResampleJob",
+    {
+      space_id: spaceId,
+      job_id: jobId
+    }
+  );
+  return response.job;
 }
 
-export async function getKlineResampleBackfillStatus(
+export async function listKlineResampleJobs(spaceId: string, taskId = "", status = "", limit = 50): Promise<ResampleJob[]> {
+  const response = await callControl<
+    { space_id: string; task_id: string; status: string; limit: number },
+    { jobs?: ResampleJob[] }
+  >("collector", "ListKlineResampleJobs", { space_id: spaceId, task_id: taskId, status, limit });
+  return response.jobs || [];
+}
+
+export async function cancelKlineResampleJob(spaceId: string, jobId: string): Promise<ResampleJob | undefined> {
+  const response = await callControl<{ space_id: string; job_id: string }, { job?: ResampleJob }>(
+    "collector",
+    "CancelKlineResampleJob",
+    {
+      space_id: spaceId,
+      job_id: jobId
+    }
+  );
+  return response.job;
+}
+
+export async function previewKlineResampleSource(
   spaceId: string,
-  taskId: string,
-  requestId = ""
-): Promise<ResampleBackfillSummary | null> {
-  let response: {
-    request_id?: string;
-    start?: string;
-    end?: string;
-    next_bucket?: string;
-    state?: ResampleBackfillSummary["state"];
-    participants?: number;
-    running?: number;
-    waiting_source?: number;
-    syncing?: number;
-    complete?: number;
-    canceled?: number;
-    failed?: number;
-  };
-  try {
-    response = await callControl<{ space_id: string; task_id: string; request_id?: string }, typeof response>(
-      "collector",
-      "GetKlineResampleBackfill",
-      { space_id: spaceId, task_id: taskId, request_id: requestId }
-    );
-  } catch (error) {
-    if (error instanceof Error && /backfill request not found/i.test(error.message)) return null;
-    throw error;
-  }
-  if (!response.request_id) return null;
-  const participants = Number(response.participants || 0);
-  const active = Number(response.running || 0) + Number(response.waiting_source || 0) + Number(response.syncing || 0);
-  const terminal = Number(response.complete || 0) + Number(response.canceled || 0) + Number(response.failed || 0);
-  if (participants > 0 && active === 0 && terminal >= participants) return null;
-  return {
-    requestId: String(response.request_id),
-    start: String(response.start || ""),
-    end: String(response.end || ""),
-    nextBucket: String(response.next_bucket || ""),
-    state: response.state || "running",
-    participants: Number(response.participants || 0)
-  };
+  sourceTaskId: string,
+  targetFrequency = ""
+): Promise<ResampleSourcePreview> {
+  return callControl<{ space_id: string; source_task_id: string; target_frequency: string }, ResampleSourcePreview>(
+    "collector",
+    "PreviewKlineResampleSource",
+    { space_id: spaceId, source_task_id: sourceTaskId, target_frequency: targetFrequency }
+  );
 }

@@ -670,3 +670,29 @@ func logicalTargetDeliveryWithTimes(
 		RawMessageID: targetID, ContentType: events.ContentType,
 	}
 }
+
+// Trade 暂停（生命周期门禁关闭）时，新的真实目标被拒绝并终止投递；放开后照常接收。
+func TestHandleTargetRejectsWhileIntakeClosed(t *testing.T) {
+	tradeStore := openTargetStore(t)
+	seedLogicalTargetAccount(t, tradeStore, true, true)
+	now := time.Now().UTC()
+	opts := targetOptions(tradeStore, now)
+	open := false
+	opts.Intake = func() bool { return open }
+	opts.WakeTarget = func(string, string) { t.Error("暂停时被拒绝的目标不能唤醒执行") }
+
+	delivery := logicalTargetDelivery(t, now, "target-paused", "runner-1", "logical-1", nil)
+	result := HandleTarget(context.Background(), delivery, opts)
+	require.Equal(t, jetstream.TERM, result.Decision)
+	var business *targetBusinessError
+	require.ErrorAs(t, result.Err, &business)
+	require.Equal(t, "system_paused", business.code)
+	_, err := tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.Error(t, err, "被拒绝的目标不落库")
+
+	open = true
+	woke := false
+	opts.WakeTarget = func(string, string) { woke = true }
+	require.Equal(t, jetstream.ACK, HandleTarget(context.Background(), delivery, opts).Decision)
+	require.True(t, woke)
+}

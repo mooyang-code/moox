@@ -31,6 +31,7 @@ use (
 	./modules/strategy/proto/strategygen
 	./modules/trade
 	./modules/trade/proto/tradegen
+	./packages/barclock
 	./packages/cloudprovider
 	./packages/clsreporter
 	./packages/commonpb
@@ -63,6 +64,7 @@ use (
 	./packages/servicehost
 	./packages/storagepb
 	./packages/storagepolicy
+	./packages/sysctl
 	./packages/tdx
 	./packages/timerjob
 	./packages/tradeeventpb

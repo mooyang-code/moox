@@ -30,9 +30,9 @@ func TestPreloaderRepreparesWhenSubjectListChanges(t *testing.T) {
 	require.True(t, p.upToDate(all))
 }
 
-type failingPrepare struct{ fail bool }
+type flakyPrepare struct{ fail bool }
 
-func (f *failingPrepare) Prepare(context.Context, domain.EngineSet, []string) error {
+func (f *flakyPrepare) Prepare(context.Context, domain.EngineSet, []string) error {
 	if f.fail {
 		return errors.New("预载失败")
 	}
@@ -49,7 +49,7 @@ func (o oneSet) SetByID(string) (domain.EngineSet, SetLookup) {
 // 重新预载失败后，集合不能还当作已预载：后面按提示改回原来的标的列表时才会重新预载（审查意见 4）。
 func TestFailedRepreparationClearsPreparedState(t *testing.T) {
 	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1", SubjectMode: domain.SubjectModeInclude, Subjects: []string{"A"}}}
-	data := &failingPrepare{}
+	data := &flakyPrepare{}
 	p := newPreloader(oneSet{set}, includeSubjects{}, data, nil, nil)
 	require.NoError(t, p.PrepareSet(context.Background(), "s1"))
 	require.True(t, p.Ready("s1"))

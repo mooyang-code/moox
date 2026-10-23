@@ -187,7 +187,7 @@ func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, dom
 	params := &domain.CollectParams{
 		Provider: "moox", MarketType: "spot",
 		SourceDatasetID: "source-bars", SourceFrequency: "1m", SourceSeriesTag: "venue:binance",
-		TargetDatasetID: "caller-selected-target", TargetFrequency: "5m", Alignment: domain.ResampleAlignmentEpochUTC,
+		TargetDatasetID: "caller-selected-target", TargetFrequency: "5m", Alignment: "epoch_utc",
 	}
 	source := storagesource.DatasetInfo{DataSourceID: "crypto", DataNodeID: "node-1"}
 	subjects := []domain.Subject{{SubjectID: "BTC", Status: "active"}}

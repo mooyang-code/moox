@@ -30,11 +30,10 @@ import (
 
 // Dependencies contains external service endpoints used by CollectMgr.
 type Dependencies struct {
-	DatasetSource              datasetSource
-	RealtimeInventory          RealtimeInventory
-	DefaultResampleSettleDelay time.Duration
-	ResultManager              *taskresult.Manager
-	ResultDataNodeID           string
+	DatasetSource     datasetSource
+	RealtimeInventory RealtimeInventory
+	ResultManager     *taskresult.Manager
+	ResultDataNodeID  string
 }
 
 // RealtimeInventory reconciles the derived expected Dataset registry.
@@ -46,24 +45,23 @@ type RealtimeInventory interface {
 // Service implements the independent CollectMgr RPC service.
 type Service struct {
 	pb.UnimplementedCollectMgr
-	persistence                *store.Store
-	taskRepo                   *store.TaskRepository
-	instanceRepo               *store.TaskInstanceRepository
-	datasetSrc                 datasetSource
-	inventory                  RealtimeInventory
-	defaultResampleSettleDelay time.Duration
-	resultManager              *taskresult.Manager
-	resultDataNodeID           string
-	inventorySnapshotMu        sync.Mutex
-	inventorySnapshots         map[string]*taskResultInventorySnapshot
-	inventorySnapshotBuilds    map[string]int
-	createTaskMu               ctxMutex
-	taskMutationLocks          keyedTaskLocker
-	subjectSyncer              SubjectSyncer
-	klineOps                   KlineOps
-	fetchPlanControl           FetchPlanControl
-	stream                     *StreamService
-	activity                   activityLogger
+	persistence             *store.Store
+	taskRepo                *store.TaskRepository
+	datasetSrc              datasetSource
+	inventory               RealtimeInventory
+	resultManager           *taskresult.Manager
+	resultDataNodeID        string
+	inventorySnapshotMu     sync.Mutex
+	inventorySnapshots      map[string]*taskResultInventorySnapshot
+	inventorySnapshotBuilds map[string]int
+	createTaskMu            ctxMutex
+	taskMutationLocks       keyedTaskLocker
+	subjectSyncer           SubjectSyncer
+	klineOps                KlineOps
+	fetchPlanControl        FetchPlanControl
+	sourceIDResolver        func(provider, instrumentType string) string
+	stream                  *StreamService
+	activity                activityLogger
 }
 
 // ctxMutex 是可响应 context 取消的互斥锁：等待者超时或被取消后立即返回，而不是一直排队。
@@ -132,8 +130,6 @@ func taskMutationKey(spaceID, taskID string) string {
 	return strings.TrimSpace(spaceID) + "\x00" + strings.TrimSpace(taskID)
 }
 
-const defaultResampleSettleDelay = 10 * time.Second
-
 type datasetSource interface {
 	GetDataset(context.Context, string, string) (storagesource.DatasetInfo, error)
 	ResolveSubjects(context.Context, string, []string) ([]domain.Subject, error)
@@ -141,19 +137,13 @@ type datasetSource interface {
 
 // New creates a collector management service.
 func New(persistence *store.Store, deps Dependencies) *Service {
-	settleDelay := deps.DefaultResampleSettleDelay
-	if settleDelay < 0 {
-		settleDelay = defaultResampleSettleDelay
-	}
 	return &Service{
-		persistence:                persistence,
-		taskRepo:                   persistence.Tasks(),
-		instanceRepo:               persistence.TaskInstances(),
-		datasetSrc:                 deps.DatasetSource,
-		inventory:                  deps.RealtimeInventory,
-		defaultResampleSettleDelay: settleDelay,
-		resultManager:              deps.ResultManager,
-		resultDataNodeID:           strings.TrimSpace(deps.ResultDataNodeID),
+		persistence:      persistence,
+		taskRepo:         persistence.Tasks(),
+		datasetSrc:       deps.DatasetSource,
+		inventory:        deps.RealtimeInventory,
+		resultManager:    deps.ResultManager,
+		resultDataNodeID: strings.TrimSpace(deps.ResultDataNodeID),
 	}
 }
 
@@ -325,6 +315,9 @@ func (s *Service) CreateTask(ctx context.Context, req *pb.CreateTaskReq) (*pb.Cr
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "result.view_id cannot be specified when creating a task")}, nil
 	}
 	task := fromPBTask(req.GetTask())
+	if err := s.deriveResampleSource(ctx, &task); err != nil {
+		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+	}
 	if err := validateCreateTaskResultIdentity(task.CollectParams); err != nil {
 		return &pb.CreateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
@@ -776,181 +769,6 @@ func (s *Service) GetDataTypeConfigWithFields(ctx context.Context, req *pb.GetDa
 	}, nil
 }
 
-func (s *Service) StartKlineResampleBackfill(ctx context.Context, req *pb.StartKlineResampleBackfillReq) (*pb.StartKlineResampleBackfillRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetRequestId()) == "" {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id, task_id and request_id are required")}, nil
-	}
-	start, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(req.GetStart()))
-	if err != nil {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "start must be RFC3339")}, nil
-	}
-	end, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(req.GetEnd()))
-	if err != nil {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "end must be RFC3339")}, nil
-	}
-	task, err := s.taskRepo.GetByTaskID(ctx, req.GetSpaceId(), req.GetTaskId())
-	if err != nil {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, err.Error())}, nil
-	}
-	if !strings.EqualFold(task.DataType, "kline_resample") {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task is not kline_resample")}, nil
-	}
-	if !task.Enabled {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "task is disabled")}, nil
-	}
-	if task.PrepareState != domain.PrepareStateReady {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("task is not ready (prepare_state=%s)", task.PrepareState))}, nil
-	}
-	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
-	if err != nil {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
-	}
-	target, err := collectorresample.ParseFixedFrequency(params.TargetFrequency)
-	if err != nil {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
-	}
-	backfill := domain.ResampleBackfillRequest{RequestID: req.GetRequestId(), Start: start.UTC(), End: end.UTC()}
-	var source storagesource.DatasetInfo
-	if s.datasetSrc != nil {
-		var sourceErr error
-		source, sourceErr = s.datasetSrc.GetDataset(ctx, req.GetSpaceId(), params.SourceDatasetID)
-		if sourceErr != nil {
-			return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, sourceErr.Error())}, nil
-		}
-	}
-	settleDelay := s.defaultResampleSettleDelay
-	if settleDelay < 0 {
-		settleDelay = defaultResampleSettleDelay
-	}
-	if err := validateResampleBackfillWindow(backfill, target.Duration, params.SettleDelayOr(settleDelay), source, time.Now().UTC()); err != nil {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
-	}
-	if _, err := s.instanceRepo.StartResampleBackfill(ctx, req.GetSpaceId(), req.GetTaskId(), backfill); err != nil {
-		return &pb.StartKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
-	}
-	return &pb.StartKlineResampleBackfillRsp{RetInfo: retOK()}, nil
-}
-
-func validateResampleBackfillWindow(request domain.ResampleBackfillRequest, target time.Duration, settleDelay time.Duration, source storagesource.DatasetInfo, now time.Time) error {
-	if err := request.ValidateForFrequency(target); err != nil {
-		return err
-	}
-	now = now.UTC()
-	if now.IsZero() {
-		now = time.Now().UTC()
-	}
-	if request.End.Add(settleDelay).After(now) {
-		return fmt.Errorf("backfill end must be a closed bucket after settle delay")
-	}
-	if window, bounded := source.RetentionWindow(); bounded && request.Start.Before(now.Add(-window)) {
-		return fmt.Errorf("backfill start is older than source Dataset retention %s", source.Retention)
-	}
-	return nil
-}
-
-func (s *Service) CancelKlineResampleBackfill(ctx context.Context, req *pb.CancelKlineResampleBackfillReq) (*pb.CancelKlineResampleBackfillRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetRequestId()) == "" {
-		return &pb.CancelKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id, task_id and request_id are required")}, nil
-	}
-	if _, err := s.instanceRepo.CancelResampleBackfill(ctx, req.GetSpaceId(), req.GetTaskId(), req.GetRequestId()); err != nil {
-		return &pb.CancelKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
-	}
-	return &pb.CancelKlineResampleBackfillRsp{RetInfo: retOK()}, nil
-}
-
-// GetKlineResampleBackfill returns one durable, server-side aggregate instead
-// of forcing callers to scan an unbounded TaskInstance history.
-func (s *Service) GetKlineResampleBackfill(ctx context.Context, req *pb.GetKlineResampleBackfillReq) (*pb.GetKlineResampleBackfillRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetTaskId()) == "" {
-		return &pb.GetKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "space_id and task_id are required")}, nil
-	}
-	instances := make([]domain.TaskInstance, 0)
-	for page := 1; ; page++ {
-		rows, total, err := s.instanceRepo.List(ctx, store.TaskInstanceFilter{SpaceID: req.GetSpaceId(), CollectionTaskID: req.GetTaskId(), DataType: "kline_resample", Page: page, PageSize: 1000})
-		if err != nil {
-			return &pb.GetKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
-		}
-		instances = append(instances, rows...)
-		if len(rows) == 0 || int64(len(instances)) >= total {
-			break
-		}
-	}
-	requestID := strings.TrimSpace(req.GetRequestId())
-	if requestID == "" {
-		for _, instance := range instances {
-			result, err := domain.ParseResampleTaskResult(instance.Result)
-			if err == nil && result.Backfill != nil && result.Backfill.RequestID != "" {
-				requestID = result.Backfill.RequestID
-				break
-			}
-		}
-	}
-	if requestID == "" {
-		return &pb.GetKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "backfill request not found")}, nil
-	}
-	response := &pb.GetKlineResampleBackfillRsp{RetInfo: retOK(), RequestId: requestID}
-	for _, instance := range instances {
-		result, err := domain.ParseResampleTaskResult(instance.Result)
-		if err != nil || result.Backfill == nil || result.Backfill.RequestID != requestID {
-			continue
-		}
-		backfill := result.Backfill
-		response.Participants++
-		if response.Start == "" {
-			response.Start = backfill.Start.UTC().Format(time.RFC3339Nano)
-			response.End = backfill.End.UTC().Format(time.RFC3339Nano)
-		}
-		next := backfill.NextBucket.UTC().Format(time.RFC3339Nano)
-		if response.NextBucket == "" || next < response.NextBucket {
-			response.NextBucket = next
-		}
-		switch backfill.State {
-		case domain.ResampleBackfillRunning:
-			response.Running++
-		case domain.ResampleBackfillWaitingSource:
-			response.WaitingSource++
-		case domain.ResampleBackfillSyncing:
-			response.Syncing++
-		case domain.ResampleBackfillComplete:
-			response.Complete++
-		case domain.ResampleBackfillFailed:
-			response.Failed++
-		case domain.ResampleBackfillCanceled:
-			response.Canceled++
-		}
-		if len(response.Errors) < 20 && strings.TrimSpace(result.LastError) != "" {
-			response.Errors = append(response.Errors, result.LastError)
-		}
-	}
-	if response.Participants == 0 {
-		return &pb.GetKlineResampleBackfillRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "backfill request not found")}, nil
-	}
-	// An active participant must remain visible even when another participant
-	// has already failed. This lets the operator cancel the remaining work and
-	// retry the request instead of seeing a terminal state that is not actually
-	// terminal for the whole request.
-	if response.Syncing > 0 {
-		response.State = string(domain.ResampleBackfillSyncing)
-	} else if response.WaitingSource > 0 {
-		response.State = string(domain.ResampleBackfillWaitingSource)
-	} else if response.Running > 0 {
-		response.State = string(domain.ResampleBackfillRunning)
-	} else if response.Failed == response.Participants {
-		response.State = string(domain.ResampleBackfillFailed)
-	} else if response.Canceled == response.Participants {
-		response.State = string(domain.ResampleBackfillCanceled)
-	} else if response.Complete == response.Participants {
-		response.State = string(domain.ResampleBackfillComplete)
-	} else if response.Failed > 0 {
-		response.State = string(domain.ResampleBackfillFailed)
-	} else if response.Canceled > 0 {
-		response.State = string(domain.ResampleBackfillCanceled)
-	} else {
-		response.State = string(domain.ResampleBackfillRunning)
-	}
-	return response, nil
-}
-
 func normalizeCollectionTask(task domain.CollectionTask) domain.CollectionTask {
 	task.SpaceID = strings.TrimSpace(task.SpaceID)
 	task.TaskID = strings.TrimSpace(task.TaskID)
@@ -1264,7 +1082,7 @@ func validateCollectionTask(task domain.CollectionTask) error {
 		return fmt.Errorf("invalid collect_params: %w", err)
 	}
 	if strings.EqualFold(strings.TrimSpace(task.DataType), "kline_resample") {
-		if err := collectorresample.ValidateTaskParams(params); err != nil {
+		if err := collectorresample.ValidateTaskParams(task.SpaceID, params); err != nil {
 			return fmt.Errorf("invalid collect_params: %w", err)
 		}
 	} else {
@@ -1471,9 +1289,6 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, task domain
 	if info.DataKind != storagepb.DataKind_DATA_KIND_TIME_SERIES {
 		return fmt.Errorf("source Dataset %s must be time_series", params.SourceDatasetID)
 	}
-	if strings.EqualFold(strings.TrimSpace(info.Attributes["dataset_role"]), "kline_resample_result") {
-		return fmt.Errorf("source Dataset %s cannot be another resample result", params.SourceDatasetID)
-	}
 	actualMarket := strings.ToLower(strings.TrimSpace(info.Attributes["market_type"]))
 	if actualMarket == "" || actualMarket != strings.ToLower(strings.TrimSpace(params.MarketType)) {
 		return fmt.Errorf("source Dataset %s market_type=%s does not match collect_params market_type=%s", params.SourceDatasetID, actualMarket, params.MarketType)
@@ -1492,8 +1307,13 @@ func (s *Service) validateResampleSourceDataset(ctx context.Context, task domain
 		expected := map[string]storagepb.FieldValueType{
 			"open": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "high": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
 			"low": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "close": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-			"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "quote_volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
-			"trade_num": storagepb.FieldValueType_FIELD_VALUE_TYPE_INT,
+			"volume": storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+		}
+		if strings.EqualFold(task.SpaceID, "stockcn") {
+			expected["amount"] = storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
+		} else {
+			expected["quote_volume"] = storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
+			expected["trade_num"] = storagepb.FieldValueType_FIELD_VALUE_TYPE_INT
 		}
 		missing := make([]string, 0)
 		for column, expectedType := range expected {

@@ -3,7 +3,9 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
@@ -36,6 +38,11 @@ type TargetWorker struct {
 	Now             func() time.Time
 	ConvergeTimeout time.Duration
 	Metrics         TargetRunMetrics
+	// Gate 非空时是生命周期门禁：返回 false（系统或手动暂停、恢复追赶、重置）时不再收敛任何目标，
+	// 已经提交的订单请求照常结束，由 Quiesce 等待。暂停不撤单、不平仓，未收敛的目标保持原状。
+	Gate func() bool
+	// inflight 是正在收敛（可能正在向交易所提交订单）的目标数。
+	inflight atomic.Int64
 
 	wakeOnce   sync.Once
 	wake       chan struct{}
@@ -163,7 +170,30 @@ func (w *TargetWorker) setResult(err error) {
 	}
 }
 
+// open 报告生命周期门禁是否放行。
+func (w *TargetWorker) open() bool { return w.Gate == nil || w.Gate() }
+
+// Quiesce 等待在途的收敛（订单提交）结束；门禁关闭之后调用，才能确认没有订单还在路上。
+func (w *TargetWorker) Quiesce(ctx context.Context) error {
+	if w == nil {
+		return nil
+	}
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for w.inflight.Load() > 0 {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("仍有 %d 个目标在收敛：%w", w.inflight.Load(), ctx.Err())
+		case <-ticker.C:
+		}
+	}
+	return nil
+}
+
 func (w *TargetWorker) runOnce(ctx context.Context) error {
+	if !w.open() {
+		return nil
+	}
 	statuses := []string{targetapp.StatusPending, targetapp.StatusConverging, targetapp.StatusBlocked, targetapp.StatusConverged}
 	w.expiredMu.Lock()
 	if w.expiredRetry == nil {
@@ -223,6 +253,9 @@ func (w *TargetWorker) runOnce(ctx context.Context) error {
 }
 
 func (w *TargetWorker) runTargets(ctx context.Context, keys []targetKey) error {
+	if !w.open() {
+		return nil
+	}
 	var runErrors []error
 	for _, key := range keys {
 		if err := ctx.Err(); err != nil {
@@ -278,12 +311,18 @@ func (w *TargetWorker) runRecords(ctx context.Context, records []store.LogicalAc
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		// 批量中途被暂停：后面的目标不再收敛（已经开始的那一个照常结束）。
+		if !w.open() {
+			return errors.Join(runErrors...)
+		}
 		candidateCtx, cancel := context.WithTimeout(ctx, timeout)
+		w.inflight.Add(1)
 		result, convergeErr := w.Executor.Converge(
 			candidateCtx,
 			record.SpaceID,
 			record.LogicalAccountID,
 		)
+		w.inflight.Add(-1)
 		cancel()
 		if err := ctx.Err(); err != nil {
 			return err

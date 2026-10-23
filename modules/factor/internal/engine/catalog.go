@@ -93,6 +93,17 @@ func (c *CatalogCache) Apply(snapshot CatalogSnapshot) (bool, error) {
 	return changed, nil
 }
 
+// Clear 清空目录缓存并写盘（重置用）：目录是 FactorMgr 配置的副本，重置后由下一次同步重新取得。
+func (c *CatalogCache) Clear() error {
+	if err := c.persist(catalogState{SyncedAt: c.now().UTC()}); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.loaded, c.hash, c.sets = false, "", nil
+	c.mu.Unlock()
+	return nil
+}
+
 // MarkSyncFailed records a failed sync; the current snapshot stays in use.
 func (c *CatalogCache) MarkSyncFailed(err error) {
 	c.mu.Lock()

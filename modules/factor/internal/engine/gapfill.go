@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -237,7 +238,7 @@ func (g *gapFiller) tick(ctx context.Context) {
 		} else {
 			err = g.fillSubjects(ctx, set, batch.subjects, batch.start, batch.end)
 		}
-		if err != nil && ctx.Err() == nil {
+		if err != nil && ctx.Err() == nil && !errors.Is(err, recalcexec.ErrGated) {
 			log.WarnContextf(ctx, "factor_gap_fill_failed set_id=%s cross=%t subjects=%d first=%s error=%v", batch.set, batch.cross, len(batch.subjects), firstSubject(batch), err)
 		}
 	}

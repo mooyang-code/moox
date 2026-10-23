@@ -42,6 +42,9 @@ func (s *Service) RegisterSeriesSnapshot(ctx context.Context, req *pb.PrimaryReg
 	if err := validateCollectorPeriodDataset(ctx, req.GetAuthInfo(), scope); err != nil {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
+	if err := validateSnapshotAlignment(ctx, req); err != nil {
+		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
+	}
 	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
 	if err != nil {
 		return &pb.PrimaryRegisterSeriesSnapshotRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
@@ -153,6 +156,42 @@ func rejectCollectorPeriodWriteCredential(auth *pb.AuthInfo) error {
 	return nil
 }
 
+// periodDatasetRoles 是可以使用周期提交与快照登记的数据集角色：采集的原始 K 线，以及合成出来的 K 线。
+var periodDatasetRoles = map[string]bool{"raw_collection": true, "kline_resample_result": true}
+
+// datasetAlignment 是数据集声明的分桶方式：session 表示按交易时段从开盘起切分，其余（含未声明）按 epoch UTC。
+func datasetAlignment(ctx context.Context, spaceID, datasetID string) string {
+	snapshot := metadata.RequestSnapshotFromContext(ctx)
+	if snapshot == nil {
+		return ""
+	}
+	dataset, ok := snapshot.GetDataset(spaceID, datasetID)
+	if !ok || dataset == nil {
+		return ""
+	}
+	return strings.TrimSpace(dataset.GetAttributes()["alignment"])
+}
+
+// validateSnapshotAlignment 检查快照生效点与频率边界对齐：epoch 数据集的日内周期按 epoch 对齐；
+// session 数据集（A 股等）的桶从各交易时段开盘起切分，不在 epoch 边界上，DataNode 只要求整分钟。
+func validateSnapshotAlignment(ctx context.Context, req *pb.PrimaryRegisterSeriesSnapshotReq) error {
+	if datasetAlignment(ctx, req.GetSpaceId(), req.GetDatasetId()) == "session" {
+		return nil
+	}
+	parsed, err := frequencypkg.Parse(req.GetFrequency())
+	if err != nil {
+		return nil // 频率本身的校验在 DataNode
+	}
+	step := int64(parsed.Duration() / time.Second)
+	if step <= 0 || step >= 24*60*60 {
+		return nil // 日、周、月的边界取决于市场时区，DataNode 只要求整分钟
+	}
+	if at := req.GetEffectiveFrom(); at > 0 && at%step != 0 {
+		return errors.New("effective_from must be aligned to the frequency boundary")
+	}
+	return nil
+}
+
 func validateCollectorPeriodDataset(ctx context.Context, auth *pb.AuthInfo, expectation *pb.DatasetPeriodExpectation) error {
 	if auth == nil || !isOwnedAppID(auth.GetAppId(), "collector") {
 		return errors.New("period RPC requires Collector caller identity")
@@ -169,8 +208,8 @@ func validateCollectorPeriodDataset(ctx context.Context, auth *pb.AuthInfo, expe
 		return errors.New("period Dataset is not present in the request metadata snapshot")
 	}
 	attrs := dataset.GetAttributes()
-	if attrs["owner_module"] != "collector" || attrs["dataset_role"] != "raw_collection" {
-		return errors.New("period Dataset must be Collector-owned raw_collection data")
+	if attrs["owner_module"] != "collector" || !periodDatasetRoles[attrs["dataset_role"]] {
+		return errors.New("period Dataset must be Collector-owned raw_collection or kline_resample_result data")
 	}
 	if dataset.GetDataKind() != pb.DataKind_DATA_KIND_TIME_SERIES {
 		return errors.New("period Dataset must be time_series")

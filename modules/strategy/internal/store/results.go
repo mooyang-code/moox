@@ -22,6 +22,8 @@ const (
 const (
 	SkipOutOfOrder = "out_of_order"
 	SkipExpired    = "expired"
+	// SkipCatchup 是恢复追赶中记录的周期：只记因子指纹（供下一期的相邻周期检查），不求值、不发目标。
+	SkipCatchup = "catchup"
 )
 
 // PublishStatus 是结果的投递状态。

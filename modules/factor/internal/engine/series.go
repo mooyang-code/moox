@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -95,7 +96,7 @@ func (f *seriesFollower) recompute(ctx context.Context) {
 		if len(pending) == 0 {
 			continue
 		}
-		if err := f.recomputeSource(ctx, info, pending); err != nil && ctx.Err() == nil {
+		if err := f.recomputeSource(ctx, info, pending); err != nil && ctx.Err() == nil && !errors.Is(err, recalcexec.ErrGated) {
 			log.WarnContextf(ctx, "factor_series_recompute_failed set_id=%s error=%v", info.SetID, err)
 		}
 	}

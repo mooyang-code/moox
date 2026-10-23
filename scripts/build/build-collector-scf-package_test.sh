@@ -13,11 +13,14 @@ TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moox-collector-scf-package-test.XXXXXX")"
 trap 'rm -rf "${TMP_ROOT}"' EXIT
 FAKE_BIN="${TMP_ROOT}/bin"
 mkdir -p "${FAKE_BIN}"
-cat >"${FAKE_BIN}/go" <<'EOF'
+REAL_GO="$(command -v go)"
+# 打包脚本用 go build -o 构建 SCF 二进制（这里替换成占位文件），用 go run 跑配置检查（交给真正的 go）。
+cat >"${FAKE_BIN}/go" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-while (($#)); do
-  if [[ "$1" == "-o" ]]; then printf '#!/usr/bin/env bash\n' >"$2"; chmod +x "$2"; exit 0; fi
+if [[ "\${1:-}" == "run" ]]; then exec "${REAL_GO}" "\$@"; fi
+while ((\$#)); do
+  if [[ "\$1" == "-o" ]]; then printf '#!/usr/bin/env bash\n' >"\$2"; chmod +x "\$2"; exit 0; fi
   shift
 done
 exit 1

@@ -40,6 +40,9 @@ type preloader struct {
 	source SourceDataset
 	data   preloadData
 	active func() bool
+	// blocked 非空且返回 true 时不预载：模块暂停、恢复追赶、重置期间预载循环不能自己把数据拉回本地
+	//（恢复追赶由生命周期的追赶钩子显式刷新，重置期间更不能把刚清掉的数据重新写进去）。
+	blocked func() bool
 	// onReady 在一个集合预载成功后调用（唤醒跳过恢复补算预载期间跳过的周期）。
 	onReady func(setID string)
 	kick    chan struct{}
@@ -142,8 +145,32 @@ func (p *preloader) PrepareSet(ctx context.Context, setID string) error {
 	return nil
 }
 
+// Refresh 重新同步一个集合的本地数据并重载窗口，不看「已经预载」的短路：恢复追赶要把暂停期间的缺口补进来。
+func (p *preloader) Refresh(ctx context.Context, setID string) error {
+	set, lookup := p.sets.SetByID(setID)
+	if lookup != SetFound {
+		return fmt.Errorf("因子集 %s 不在目录里", setID)
+	}
+	subjects, err := p.prepare(ctx, set)
+	if err != nil {
+		return err
+	}
+	p.markPrepared(set, subjects)
+	if p.onReady != nil {
+		p.onReady(setID)
+	}
+	return nil
+}
+
 func newPreloader(sets preloadCatalog, source SourceDataset, data preloadData, active func() bool, onReady func(string)) *preloader {
 	return &preloader{sets: sets, source: source, data: data, active: active, onReady: onReady, kick: make(chan struct{}, 1), prepared: map[string]preparedState{}}
+}
+
+// Forget 忘掉所有集合的预载记录（重置清空本地数据之后，每个集合要重新预载）。
+func (p *preloader) Forget() {
+	p.mu.Lock()
+	p.prepared = map[string]preparedState{}
+	p.mu.Unlock()
 }
 
 // Kick 让预载循环尽快检查一次，不阻塞。引擎成为活动引擎、目录变化时调用。
@@ -183,6 +210,9 @@ func maxLookbackOf(set domain.EngineSet) int {
 // once 为目录里还没预载（或回看变长了）的因子集预载数据。已经预载好的集合每轮只是一次内存比对。
 func (p *preloader) once(ctx context.Context) {
 	if p.active != nil && !p.active() {
+		return
+	}
+	if p.blocked != nil && p.blocked() {
 		return
 	}
 	for _, setID := range p.sets.SetIDs() {

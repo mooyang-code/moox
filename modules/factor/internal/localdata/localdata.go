@@ -143,6 +143,22 @@ func New(cfg Config) *Data {
 	}
 }
 
+// Reset 丢弃内存里的全部数据源（窗口、同步状态）并释放常驻内存登记（重置时用，之后要对每个集合重新 Prepare）。
+func (d *Data) Reset() {
+	d.Drain() // 热路径的后台落盘先写完：之后本地存储要被清空，不能让它在清空之后再写进去
+	d.mu.Lock()
+	sources := d.sources
+	d.sources = map[seriesstore.Source]*source{}
+	d.mu.Unlock()
+	for src, st := range sources {
+		st.ready.Store(false)
+		st.win.Store(nil)
+		if d.cfg.Admit != nil {
+			d.cfg.Admit.SetResident("window:"+src.String(), 0)
+		}
+	}
+}
+
 // Store 返回本地时序存储。
 func (d *Data) Store() *seriesstore.Store { return d.cfg.Store }
 

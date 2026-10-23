@@ -100,6 +100,26 @@ message ViewDataReady {
   repeated FactorPeriodState factors = 14;
 }
 
+// CollectorKlineBackfilled announces, without row data, that K-line rows of a
+// Dataset were written after their period had already ended: a backfill chunk
+// was verified (origin auto, manual or force), or a resample wrote rows outside
+// period tracking (origin resample). Consumers re-derive what depends on
+// [start, end) for subject_ids. Consumers that read a View wait for
+// sync_request_id first, because the View indexes rows asynchronously.
+message CollectorKlineBackfilled {
+  string dataset_id = 1;
+  string frequency = 2;
+  repeated string subject_ids = 3;
+  // start is inclusive and end is exclusive.
+  google.protobuf.Timestamp start = 4;
+  google.protobuf.Timestamp end = 5;
+  string origin = 6;
+  string job_id = 7;
+  // sync_request_id names the Dataset sync point appended before this event.
+  string sync_request_id = 8;
+  google.protobuf.Timestamp confirmed_at = 9;
+}
+
 // DatasetSyncPoint is an ordered import/catchup fence in a Dataset outbox.
 message DatasetSyncPoint {
   string sync_point_id = 1;

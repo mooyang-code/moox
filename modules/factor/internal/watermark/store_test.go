@@ -24,3 +24,16 @@ func TestStorePersistsStates(t *testing.T) {
 	require.Equal(t, []string{"A"}, state.Universe)
 	require.Len(t, reopened.All(), 1)
 }
+
+func TestStoreResetClearsStatesAndTheFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "watermarks.json")
+	store, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, store.Put(State{SetID: "a", CommittedThrough: time.Unix(60, 0).UTC()}))
+	require.Len(t, store.All(), 1)
+	require.NoError(t, store.Reset())
+	require.Empty(t, store.All())
+	again, err := Open(path)
+	require.NoError(t, err)
+	require.Empty(t, again.All(), "文件里也是空的")
+}

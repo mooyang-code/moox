@@ -3,6 +3,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	stdlog "log"
 	"os"
@@ -18,17 +20,24 @@ import (
 )
 
 // Store owns the Collector SQLite connection and repositories.
+// SQLDB 返回底层数据库连接（重置时备份与清表用，由生命周期的重置实现调用）。
+func (s *Store) SQLDB() (*sql.DB, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("collector store is not open")
+	}
+	return s.db.DB()
+}
+
 type Store struct {
 	db         *gorm.DB
 	path       string
 	taskRepo   *TaskRepository
-	taskItems  *TaskInstanceRepository
-	periods    *PeriodReadinessRepository
 	fetchPlans *FetchPlanRepository
 	ingest     *IngestModeRepository
 	workers    *StreamWorkerRepository
 	exclusions *SubjectExclusionRepository
 	backfill   *BackfillRepository
+	resample   *ResampleStateRepository
 }
 
 // DeleteTaskRuntime removes all Collector-owned execution state for one task
@@ -39,28 +48,11 @@ func (s *Store) DeleteTaskRuntime(ctx context.Context, spaceID, taskID string) e
 	}
 	spaceID, taskID = strings.TrimSpace(spaceID), strings.TrimSpace(taskID)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 目标级的就绪状态属于目标任务，先于 WriteTarget 关系本身删除。
-		if err := tx.Exec(`DELETE FROM t_period_readiness_items WHERE c_write_target_id IN (SELECT c_write_target_id FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_task_id = ?)`, spaceID, taskID).Error; err != nil {
+		// 合成任务的目标快照与历史作业属于任务本身。
+		if err := tx.Exec(`DELETE FROM t_collector_resample_snapshots WHERE c_space_id = ? AND c_task_id = ?`, spaceID, taskID).Error; err != nil {
 			return err
 		}
-		if err := tx.Exec(`DELETE FROM t_collector_instance_write_targets WHERE c_space_id = ? AND c_task_id = ?`, spaceID, taskID).Error; err != nil {
-			return err
-		}
-
-		// Resample instances are durable local work records, but their ownership
-		// also lives in WriteTarget. Once this task's target is removed, delete
-		// only resample instances that have become true orphans. Shared market
-		// fetch execution history is retained.
-		if err := tx.Exec(`DELETE FROM t_collector_task_instances WHERE c_space_id = ? AND c_data_type = 'kline_resample' AND NOT EXISTS (SELECT 1 FROM t_collector_instance_write_targets targets WHERE targets.c_space_id = t_collector_task_instances.c_space_id AND targets.c_instance_id = t_collector_task_instances.c_instance_id)`, spaceID).Error; err != nil {
-			return err
-		}
-
-		// A readiness parent without items can otherwise be interpreted by the
-		// finalizer as an already-complete period.
-		if err := tx.Exec(`DELETE FROM t_period_readiness WHERE c_space_id = ? AND NOT EXISTS (SELECT 1 FROM t_period_readiness_items WHERE c_readiness_id = t_period_readiness.c_id)`, spaceID).Error; err != nil {
-			return err
-		}
-		return nil
+		return tx.Exec(`DELETE FROM t_collector_resample_jobs WHERE c_space_id = ? AND c_task_id = ?`, spaceID, taskID).Error
 	})
 }
 
@@ -77,8 +69,8 @@ func (s *Store) HasOtherDatasetWriteTargets(ctx context.Context, spaceID, datase
 		return false, fmt.Errorf("space_id, dataset_id and task_id are required")
 	}
 	var count int64
-	if err := s.db.WithContext(ctx).Table("t_collector_instance_write_targets").
-		Where("c_space_id = ? AND c_dataset_id = ? AND c_task_id <> ?", spaceID, datasetID, taskID).
+	if err := s.db.WithContext(ctx).Table("t_collector_tasks").
+		Where("c_space_id = ? AND c_result_dataset_id = ? AND c_task_id <> ?", spaceID, datasetID, taskID).
 		Count(&count).Error; err != nil {
 		return false, err
 	}
@@ -111,13 +103,12 @@ func Open(opts *Options) (*Store, error) {
 	}
 	s := &Store{db: db, path: dbPath}
 	s.taskRepo = NewTaskRepository(db)
-	s.taskItems = NewTaskInstanceRepository(db)
-	s.periods = NewPeriodReadinessRepository(db)
 	s.fetchPlans = NewFetchPlanRepository(db)
 	s.ingest = NewIngestModeRepository(db)
 	s.workers = NewStreamWorkerRepository(db)
 	s.exclusions = NewSubjectExclusionRepository(db)
 	s.backfill = NewBackfillRepository(db)
+	s.resample = NewResampleStateRepository(db)
 	applySQLitePoolConfig(db, opts)
 	log.Infof("初始化 Collector SQLite 数据库: %s", dbPath)
 	return s, nil
@@ -129,22 +120,6 @@ func (s *Store) Tasks() *TaskRepository {
 		return nil
 	}
 	return s.taskRepo
-}
-
-// TaskInstances returns the task instance repository.
-func (s *Store) TaskInstances() *TaskInstanceRepository {
-	if s == nil {
-		return nil
-	}
-	return s.taskItems
-}
-
-// PeriodReadiness returns the durable period completion repository.
-func (s *Store) PeriodReadiness() *PeriodReadinessRepository {
-	if s == nil {
-		return nil
-	}
-	return s.periods
 }
 
 // FetchPlans returns the SCF fetch plan repository.
@@ -177,6 +152,14 @@ func (s *Store) SubjectExclusions() *SubjectExclusionRepository {
 		return nil
 	}
 	return s.exclusions
+}
+
+// Resample returns the repository of resample snapshots, history jobs, backfill notices and the local event outbox.
+func (s *Store) Resample() *ResampleStateRepository {
+	if s == nil {
+		return nil
+	}
+	return s.resample
 }
 
 // Backfill returns the K-line backfill job repository.

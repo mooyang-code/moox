@@ -24,7 +24,7 @@ func TestUniqueResampleDisplayNameIsValidAndStable(t *testing.T) {
 }
 
 func TestValidateTargetDatasetIDRequiresTaskOwnedLowerSnakeIdentity(t *testing.T) {
-	require.NoError(t, ValidateTargetDatasetID("dataset_collector_0123456789abcdef", "4h"))
+	require.NoError(t, ValidateTargetDatasetID("dataset_collector_0123456789abcdef"))
 
 	tests := []struct {
 		name string

@@ -68,187 +68,12 @@ CREATE TABLE IF NOT EXISTS t_collector_task_series (
 
 CREATE INDEX IF NOT EXISTS idx_collector_task_series_subject ON t_collector_task_series (c_space_id, c_subject_id);
 
-CREATE TABLE IF NOT EXISTS t_collector_task_instances (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL DEFAULT '',
-    c_instance_id TEXT NOT NULL,
-    c_run_id TEXT NOT NULL DEFAULT '',
-    c_request_key TEXT NOT NULL DEFAULT '',
-    c_provider TEXT NOT NULL DEFAULT '',
-    c_provider_symbol TEXT NOT NULL DEFAULT '',
-    c_market_type TEXT NOT NULL DEFAULT '',
-    c_data_type TEXT NOT NULL DEFAULT '',
-    c_subject_id TEXT NOT NULL DEFAULT '',
-    c_frequency TEXT NOT NULL DEFAULT '',
-    c_target_data_time DATETIME,
-    c_source_id TEXT NOT NULL DEFAULT '',
-    c_series_tag TEXT NOT NULL DEFAULT '',
-    c_function_name TEXT NOT NULL DEFAULT '',
-    c_last_exec_status INTEGER NOT NULL DEFAULT 1,
-    c_task_params TEXT NOT NULL DEFAULT '{}',
-    c_last_exec_time DATETIME,
-    c_result TEXT NOT NULL DEFAULT '{}',
-    c_is_deleted INTEGER NOT NULL DEFAULT 0,
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_instances_space_instance
-ON t_collector_task_instances (c_space_id, c_instance_id);
-
-CREATE INDEX IF NOT EXISTS idx_collector_instances_subject
-ON t_collector_task_instances (c_space_id, c_subject_id, c_frequency);
-
-CREATE INDEX IF NOT EXISTS idx_collector_instances_storage_write
-ON t_collector_task_instances (c_space_id, c_subject_id, c_frequency, c_series_tag, c_function_name, c_is_deleted);
-
-CREATE INDEX IF NOT EXISTS idx_collector_instances_provider_status
-ON t_collector_task_instances (c_space_id, c_provider, c_last_exec_status);
-
-CREATE INDEX IF NOT EXISTS idx_collector_instances_market_subject
-ON t_collector_task_instances (c_space_id, c_market_type, c_data_type, c_subject_id, c_frequency);
-
-CREATE INDEX IF NOT EXISTS idx_collector_instances_function ON t_collector_task_instances (c_space_id, c_function_name);
-
-CREATE INDEX IF NOT EXISTS idx_collector_instances_exec ON t_collector_task_instances (c_last_exec_status);
-
-CREATE INDEX IF NOT EXISTS idx_collector_instances_deleted ON t_collector_task_instances (c_is_deleted);
-
-CREATE INDEX IF NOT EXISTS idx_collector_instances_ctime ON t_collector_task_instances (c_ctime DESC);
-CREATE INDEX IF NOT EXISTS idx_collector_instances_space_page
-ON t_collector_task_instances (c_space_id, c_id DESC);
-CREATE INDEX IF NOT EXISTS idx_collector_instances_list_page
-ON t_collector_task_instances (c_space_id, c_is_deleted, c_id DESC);
-CREATE INDEX IF NOT EXISTS idx_collector_instances_space_status_page
-ON t_collector_task_instances (c_space_id, c_last_exec_status, c_id DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_collector_instances_run_request
-ON t_collector_task_instances (c_space_id, c_run_id, c_request_key)
-WHERE c_run_id <> '' AND c_request_key <> '';
-CREATE INDEX IF NOT EXISTS idx_collector_instances_run
-ON t_collector_task_instances (c_space_id, c_run_id, c_instance_id, c_last_exec_status);
-
-CREATE INDEX IF NOT EXISTS idx_collector_instances_terminal_cleanup_space
-ON t_collector_task_instances (c_space_id, c_mtime, c_id)
-WHERE c_run_id <> '' AND c_last_exec_status IN (2, 3);
-
-CREATE TABLE IF NOT EXISTS t_collector_instance_write_targets (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_write_target_id TEXT NOT NULL,
-    c_instance_id TEXT NOT NULL,
-    c_task_id TEXT NOT NULL,
-    c_dataset_id TEXT NOT NULL,
-    c_view_id TEXT NOT NULL DEFAULT '',
-    c_output_fields_json TEXT NOT NULL DEFAULT '[]',
-    c_series_index INTEGER NOT NULL DEFAULT 0,
-    c_series_hash TEXT NOT NULL DEFAULT '',
-    c_expected_count INTEGER NOT NULL DEFAULT 0,
-    c_status TEXT NOT NULL DEFAULT 'pending',
-    c_attempt INTEGER NOT NULL DEFAULT 0,
-    c_next_retry_at DATETIME,
-    c_last_error TEXT NOT NULL DEFAULT '',
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (c_space_id, c_write_target_id),
-    UNIQUE (c_space_id, c_instance_id, c_task_id),
-    FOREIGN KEY (c_space_id, c_instance_id) REFERENCES t_collector_task_instances (c_space_id, c_instance_id) ON DELETE CASCADE,
-    FOREIGN KEY (c_space_id, c_task_id) REFERENCES t_collector_tasks (c_space_id, c_task_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_collector_write_targets_task
-ON t_collector_instance_write_targets (c_space_id, c_task_id, c_status);
-
-CREATE INDEX IF NOT EXISTS idx_collector_write_targets_dataset
-ON t_collector_instance_write_targets (c_space_id, c_dataset_id, c_status);
-
-CREATE INDEX IF NOT EXISTS idx_collector_write_targets_dataset_target
-ON t_collector_instance_write_targets (c_space_id, c_dataset_id, c_write_target_id);
-
-CREATE INDEX IF NOT EXISTS idx_collector_write_targets_dataset_instance
-ON t_collector_instance_write_targets (c_space_id, c_dataset_id, c_instance_id);
-
-CREATE INDEX IF NOT EXISTS idx_collector_write_targets_retention_space
-ON t_collector_instance_write_targets (c_space_id, c_mtime, c_id);
-
 CREATE TRIGGER IF NOT EXISTS update_collector_tasks_mtime
 AFTER UPDATE ON t_collector_tasks
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_collector_tasks SET c_mtime = STRFTIME('%Y-%m-%d %H:%M:%f', 'now') WHERE rowid = NEW.rowid;
 END;
-
-CREATE TRIGGER IF NOT EXISTS update_collector_instances_mtime
-AFTER UPDATE ON t_collector_task_instances
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_collector_task_instances SET c_mtime = STRFTIME('%Y-%m-%d %H:%M:%f', 'now') WHERE rowid = NEW.rowid;
-END;
-
--- Period readiness is the Collector's durable answer to whether all
--- expected Storage writes for one market period have reached a terminal
--- state. The task identity/source columns make the expected assignment
--- immutable even when the next scheduler reconciliation moves a task.
-CREATE TABLE IF NOT EXISTS t_period_readiness (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_dataset_id TEXT NOT NULL,
-    c_frequency TEXT NOT NULL,
-    c_work_type TEXT NOT NULL DEFAULT 'collection',
-    c_period_time DATETIME NOT NULL,
-    c_deadline_at DATETIME NOT NULL,
-    c_status TEXT NOT NULL DEFAULT 'waiting',
-    c_report_state TEXT NOT NULL DEFAULT 'waiting',
-    c_event_id TEXT NOT NULL DEFAULT '',
-    c_collected_at DATETIME,
-    c_payload_json TEXT NOT NULL DEFAULT '{}',
-    c_committed_positions_json TEXT NOT NULL DEFAULT '[]',
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_status IN ('waiting', 'complete', 'degraded')),
-    CHECK (c_report_state IN ('waiting', 'pending', 'reported')),
-    UNIQUE (c_space_id, c_dataset_id, c_frequency, c_period_time)
-);
-
-CREATE INDEX IF NOT EXISTS idx_period_readiness_report ON t_period_readiness (c_report_state, c_deadline_at);
-
-CREATE INDEX IF NOT EXISTS idx_period_readiness_pending_scope
-ON t_period_readiness (c_space_id, c_report_state, c_dataset_id, c_frequency);
-
-CREATE INDEX IF NOT EXISTS idx_period_readiness_waiting_scope
-ON t_period_readiness (c_space_id, c_report_state, c_deadline_at, c_id);
-
-CREATE INDEX IF NOT EXISTS idx_period_readiness_completed_scope
-ON t_period_readiness (c_space_id, c_dataset_id, c_frequency, c_status, c_period_time DESC, c_id DESC);
-
-CREATE INDEX IF NOT EXISTS idx_period_readiness_retention
-ON t_period_readiness (c_space_id, c_report_state, c_collected_at, c_id);
-
-CREATE INDEX IF NOT EXISTS idx_period_readiness_item_retention
-ON t_period_readiness (c_space_id, c_report_state, c_dataset_id, c_frequency, c_period_time DESC, c_id DESC);
-
-CREATE TABLE IF NOT EXISTS t_period_readiness_items (
-    c_readiness_id INTEGER NOT NULL,
-    c_instance_id TEXT NOT NULL,
-    c_write_target_id TEXT NOT NULL,
-    c_subject_id TEXT NOT NULL,
-    c_series_tag TEXT NOT NULL DEFAULT '',
-    c_function_name TEXT NOT NULL DEFAULT '',
-    c_write_source TEXT NOT NULL DEFAULT '',
-    c_required_fields_json TEXT NOT NULL DEFAULT '[]',
-    c_state TEXT NOT NULL DEFAULT 'pending',
-    c_updated_at DATETIME NOT NULL,
-    PRIMARY KEY (c_readiness_id, c_write_target_id),
-    CHECK (c_state IN ('pending', 'success', 'timed_out')),
-    FOREIGN KEY (c_readiness_id) REFERENCES t_period_readiness (c_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_period_readiness_items_state ON t_period_readiness_items (c_readiness_id, c_state);
-
-CREATE INDEX IF NOT EXISTS idx_period_readiness_items_target
-ON t_period_readiness_items (c_readiness_id, c_write_target_id, c_state);
-
-CREATE INDEX IF NOT EXISTS idx_period_readiness_items_write_target
-ON t_period_readiness_items (c_write_target_id, c_readiness_id);
 
 -- SCF 定时采集的采集计划：每个空间同一时间最多一份未生效的计划，最近一份已生效的计划即“已生效状态”。
 CREATE TABLE IF NOT EXISTS t_collector_fetch_plans (
@@ -440,3 +265,98 @@ CREATE TABLE IF NOT EXISTS t_collector_subject_exclusions (
     c_expires_at DATETIME,
     PRIMARY KEY (c_space_id, c_subject_id, c_market_type)
 );
+
+-- 合成目标数据集的标的快照（按生效点追加）：一个目标桶落在哪份快照内，用周期提交写入；
+-- 生效点之前的桶和快照之外的标的用普通写入。c_effective_from 是 Unix 秒，等于 Storage 登记的生效点。
+CREATE TABLE IF NOT EXISTS t_collector_resample_snapshots (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_task_id TEXT NOT NULL,
+    c_effective_from INTEGER NOT NULL,
+    c_series_hash TEXT NOT NULL,
+    c_subjects TEXT NOT NULL DEFAULT '[]',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (c_space_id, c_task_id, c_effective_from)
+);
+
+-- 历史合成作业：范围 [c_start, c_end) 按目标桶推进，c_next_bucket 是游标，进程重启后从游标继续。
+-- c_origin 取 manual（CLI、控制台）或 source_backfill（源数据补采完成后触发）；c_not_before 之前不开始。
+CREATE TABLE IF NOT EXISTS t_collector_resample_jobs (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_job_id TEXT NOT NULL,
+    c_space_id TEXT NOT NULL,
+    c_task_id TEXT NOT NULL,
+    c_request_id TEXT NOT NULL,
+    c_origin TEXT NOT NULL DEFAULT 'manual',
+    c_subjects TEXT NOT NULL DEFAULT '[]',
+    c_start DATETIME NOT NULL,
+    c_end DATETIME NOT NULL,
+    c_next_bucket DATETIME NOT NULL,
+    c_not_before DATETIME NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'queued',
+    c_total_buckets INTEGER NOT NULL DEFAULT 0,
+    c_done_buckets INTEGER NOT NULL DEFAULT 0,
+    c_written INTEGER NOT NULL DEFAULT 0,
+    c_skipped INTEGER NOT NULL DEFAULT 0,
+    c_skipped_samples TEXT NOT NULL DEFAULT '[]',
+    c_last_error TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_origin IN ('manual', 'source_backfill')),
+    CHECK (c_status IN ('queued', 'running', 'syncing', 'succeeded', 'failed', 'cancelled')),
+    UNIQUE (c_job_id),
+    UNIQUE (c_space_id, c_task_id, c_request_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_collector_resample_jobs_task ON t_collector_resample_jobs (c_space_id, c_task_id, c_status);
+CREATE INDEX IF NOT EXISTS idx_t_collector_resample_jobs_status ON t_collector_resample_jobs (c_status, c_id);
+
+CREATE TRIGGER IF NOT EXISTS trg_t_collector_resample_jobs_mtime
+AFTER UPDATE ON t_collector_resample_jobs
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_collector_resample_jobs SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
+END;
+
+-- 补写通知：补采分块读回确认成功（以及合成在周期结束后的补写）时，与状态更新在同一事务里记录。
+-- 发布协程按（空间、数据集、频率、来源、作业）合并成批，c_batch_id 为空表示还没有成批。
+CREATE TABLE IF NOT EXISTS t_collector_backfill_notices (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_space_id TEXT NOT NULL,
+    c_dataset_id TEXT NOT NULL,
+    c_frequency TEXT NOT NULL,
+    c_subject_id TEXT NOT NULL,
+    c_start DATETIME NOT NULL,
+    c_end DATETIME NOT NULL,
+    c_origin TEXT NOT NULL,
+    c_job_id TEXT NOT NULL DEFAULT '',
+    c_batch_id TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_collector_backfill_notices_batch ON t_collector_backfill_notices (c_batch_id, c_id);
+
+-- Collector 本地事件发件箱：事件成批后与通知的封存在同一事务里写入，发布协程推送到 JetStream，
+-- 以 c_event_id 作为 Msg-Id 去重；发布成功才标记 c_published。
+CREATE TABLE IF NOT EXISTS t_collector_event_outbox (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_event_id TEXT NOT NULL,
+    c_space_id TEXT NOT NULL,
+    c_event_name TEXT NOT NULL,
+    c_subject_token TEXT NOT NULL,
+    c_payload BLOB NOT NULL,
+    c_published INTEGER NOT NULL DEFAULT 0,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (c_event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_collector_event_outbox_pending ON t_collector_event_outbox (c_published, c_id);
+
+-- 已删除的旧结构：逐标的合成实例、实例写入目标、周期就绪（合成改为按数据集 × 桶批量执行，目标周期由 Storage 跟踪）。
+-- 保留这些语句让已有的库在升级后清掉旧表；新库里它们什么都不做。
+DROP TRIGGER IF EXISTS update_collector_instances_mtime;
+DROP TABLE IF EXISTS t_period_readiness_items;
+DROP TABLE IF EXISTS t_period_readiness;
+DROP TABLE IF EXISTS t_collector_instance_write_targets;
+DROP TABLE IF EXISTS t_collector_task_instances;

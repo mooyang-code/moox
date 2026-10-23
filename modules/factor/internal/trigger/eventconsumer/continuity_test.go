@@ -310,3 +310,30 @@ func TestContinuityNoteAbsentConcurrentWithAdvance(t *testing.T) {
 	<-done
 	require.Equal(t, minuteAt(20), h.state().CommittedThrough)
 }
+
+// 实时门禁关闭（恢复追赶、暂停）时：只有追赶门禁放行，连续水位才会追赶；两个门禁都关则不动。
+func TestAdvanceFollowsCatchupGateWhenRealtimeGateClosed(t *testing.T) {
+	h := newContinuityHarness(t)
+	universe := subjectsN(20)
+	h.event(0, universe, nil)
+	h.rows.set(minuteAt(1), universe...)
+	h.rows.set(minuteAt(2), universe...)
+	h.event(2, universe, nil) // 实时事件到 t0+2，t0+1 由追赶补算
+	computed := len(h.runner.plans)
+
+	// 之后的周期只在读回里，没有事件：模拟暂停期间错过的周期。
+	h.rows.set(minuteAt(3), universe...)
+	h.rows.set(minuteAt(4), universe...)
+	h.handler.SetGate(func(string) bool { return false })
+	catchup := false
+	h.handler.SetCatchupGate(func(string) bool { return catchup })
+	require.NoError(t, h.cont.NoteTarget(h.setID, minuteAt(4)))
+
+	require.NoError(t, h.handler.Advance(context.Background(), h.setID))
+	require.Len(t, h.runner.plans, computed, "两个门禁都关：不追赶")
+
+	catchup = true
+	require.NoError(t, h.handler.Advance(context.Background(), h.setID))
+	require.Greater(t, len(h.runner.plans), computed, "追赶门禁放行：只靠追赶补算历史周期")
+	require.Equal(t, minuteAt(4), h.state().CommittedThrough)
+}

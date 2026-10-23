@@ -3,6 +3,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +21,14 @@ var ErrConflict = errors.New("factor store conflict")
 // Store owns the Factor SQLite connection.
 type Store struct {
 	db *gorm.DB
+}
+
+// SQLDB 返回底层数据库连接（重置时备份与清表用，由生命周期的重置实现调用）。
+func (s *Store) SQLDB() (*sql.DB, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("factor store is not open")
+	}
+	return s.db.DB()
 }
 
 // Options configures the Factor SQLite store.
