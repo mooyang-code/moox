@@ -1224,6 +1224,9 @@ components:
           - ListReplays
           - ListReplayBars
           - CancelReplay
+          - GetStrategyDisplaySettings
+          - SetStrategyDisplaySettings
+          - ListStrategyParamSubmissions
         read_only_methods:
           - GetStrategy
           - ListStrategies
@@ -1236,6 +1239,8 @@ components:
           - GetReplay
           - ListReplays
           - ListReplayBars
+          - GetStrategyDisplaySettings
+          - ListStrategyParamSubmissions
         acl:
           - methods:
               - CreateStrategy
@@ -1258,6 +1263,9 @@ components:
               - ListReplays
               - ListReplayBars
               - CancelReplay
+              - GetStrategyDisplaySettings
+              - SetStrategyDisplaySettings
+              - ListStrategyParamSubmissions
             callers:
               - console
               - moox-cli

@@ -151,8 +151,12 @@ func (s *Service) EnsureInstanceSet(ctx context.Context, request InstanceSetRequ
 }
 
 // SetInstanceSetEnabled 停用或重新启用实例的私有因子集（实例停用时停止计算，成员与已写入的数据保留）。
+// 实例没有私有因子集（没有声明因子）时停用直接返回，启用报错。
 func (s *Service) SetInstanceSetEnabled(ctx context.Context, instanceID string, enabled bool) (domain.FactorSet, error) {
 	set, err := s.db.GetSetByOwner(ctx, instanceID)
+	if errors.Is(err, gorm.ErrRecordNotFound) && !enabled {
+		return domain.FactorSet{}, nil
+	}
 	if err != nil {
 		return domain.FactorSet{}, err
 	}

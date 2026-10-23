@@ -187,12 +187,13 @@ func (s *Store) ListInstances(ctx context.Context, spaceID string, enabled *bool
 	return instances, nil
 }
 
-// EnabledInstancesByView 返回绑定某个 View 的启用实例，供事件路由。
+// EnabledInstancesByView 返回事件路由到某个 View 的启用实例：按启用时固化的解析里的 View 路由（声明了 factors 的实例
+// 路由到它的私有因子集的结果 View，而不是它绑定的 K 线 View）；没有固化解析时用实例绑定的 View。
 func (s *Store) EnabledInstancesByView(ctx context.Context, spaceID, viewID string) ([]Instance, error) {
 	var rows []instanceRow
 	if err := s.db.WithContext(ctx).Raw(`
 		SELECT `+instanceColumns+` FROM t_strategy_instances
-		WHERE c_space_id = ? AND c_view_id = ? AND c_enabled = 1 AND c_deleted_at IS NULL
+		WHERE c_space_id = ? AND COALESCE(NULLIF(json_extract(c_resolved_json, '$.view_id'), ''), c_view_id) = ? AND c_enabled = 1 AND c_deleted_at IS NULL
 		ORDER BY c_instance_id
 	`, spaceID, viewID).Scan(&rows).Error; err != nil {
 		return nil, err
@@ -382,10 +383,16 @@ func requireMatchingSession(tx *gorm.DB, instance instanceRow, sessionID string)
 		return err
 	}
 	var resolved struct {
-		ViewID string `json:"view_id"`
+		ViewID       string `json:"view_id"`
+		SourceViewID string `json:"source_view_id"`
 	}
 	_ = json.Unmarshal([]byte(session.ResolvedJSON), &resolved)
-	if definitionHash != session.DSLHash || resolved.ViewID != instance.ViewID {
+	// 声明了 factors 的会话绑定的是私有因子集的 View，实例绑定的 K 线 View 记在 source_view_id。
+	boundView := resolved.ViewID
+	if resolved.SourceViewID != "" {
+		boundView = resolved.SourceViewID
+	}
+	if definitionHash != session.DSLHash || boundView != instance.ViewID {
 		return errors.New("实例在启用期间被修改，请重新启用")
 	}
 	return nil

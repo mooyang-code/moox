@@ -30,6 +30,11 @@ type Resolver interface {
 	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, string, error)
 }
 
+// InstanceResolver 是声明了 factors 的策略启用时用的解析：先为实例建立私有因子集，再绑定它的结果 View。
+type InstanceResolver interface {
+	ResolveInstance(ctx context.Context, instanceID, spaceID, viewID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
+}
+
 // Owner 是 Trade 组合账户的会话所有权接口。
 type Owner interface {
 	ClaimSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
@@ -51,10 +56,12 @@ type ReplayWaker interface {
 type Service struct {
 	Store    *store.Store
 	Resolver Resolver
-	Owner    Owner
-	Replays  ReplayWaker
-	Alerts   Alerter
-	Now      func() time.Time
+	// Factors 是 FactorMgr 的私有因子集接口：停用、改绑与删除实例时同步其私有因子集；nil 表示未接线（没有声明 factors 的部署）。
+	Factors input.FactorSets
+	Owner   Owner
+	Replays ReplayWaker
+	Alerts  Alerter
+	Now     func() time.Time
 
 	// locks 是按定义 ID 的锁，引用计数归零即删除，不随出现过的定义无限增长。
 	locksMu sync.Mutex

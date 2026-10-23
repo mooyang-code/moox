@@ -186,6 +186,39 @@ message ListReplayBarsRsp { common.RetInfo ret_info = 1; repeated ReplayBar bars
 message CancelReplayReq { string replay_id = 1; }
 message CancelReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; }
 
+// DisplayHidden 是实例外显设置里隐藏的内容（默认全部展示）：按因子分类、成员别名与列名勾选隐藏；参数列跟随所属成员显示与隐藏。
+// 只影响控制台展示与默认导出，不影响 View 的列和策略能读到的数据。
+message DisplayHidden {
+  repeated string categories = 1;
+  repeated string members = 2;
+  repeated string columns = 3;
+}
+message GetStrategyDisplaySettingsReq { string instance_id = 1; }
+message GetStrategyDisplaySettingsRsp { common.RetInfo ret_info = 1; DisplayHidden hidden = 2; }
+message SetStrategyDisplaySettingsReq { string instance_id = 1; DisplayHidden hidden = 2; }
+message SetStrategyDisplaySettingsRsp { common.RetInfo ret_info = 1; DisplayHidden hidden = 2; }
+
+// ParamSubmission 是策略为下一期因子参数做的一次提交：产出它的结果、目标期次、完整快照与终态。
+// status：pending（待提交）、accepted、too_late（该期已冻结）、rejected、abandoned（实例停用或超过重试期限）。
+// 某期实际是否采用以 FactorMgr 的冻结记录为准（GetFactorParams）。
+message ParamSubmission {
+  string request_id = 1;
+  string instance_id = 2;
+  string result_id = 3;
+  string set_id = 4;
+  int64 period_time = 5;     // 参数生效的目标期次（Unix 毫秒）
+  int64 based_on_period = 6; // 产出参数的期次
+  string params_json = 7;    // {成员别名: {参数名: {default, overrides}}}
+  string notes = 8;
+  string status = 9;
+  int32 attempts = 10;
+  string outcome_json = 11;  // [{member, result, reason}]
+  string created_at = 12;
+  string updated_at = 13;
+}
+message ListStrategyParamSubmissionsReq { string instance_id = 1; int32 limit = 2; }
+message ListStrategyParamSubmissionsRsp { common.RetInfo ret_info = 1; repeated ParamSubmission submissions = 2; }
+
 service StrategyMgr {
   rpc CreateStrategy(CreateStrategyReq) returns (CreateStrategyRsp);
   rpc UpdateStrategy(UpdateStrategyReq) returns (UpdateStrategyRsp);
@@ -207,4 +240,7 @@ service StrategyMgr {
   rpc ListReplays(ListReplaysReq) returns (ListReplaysRsp);
   rpc ListReplayBars(ListReplayBarsReq) returns (ListReplayBarsRsp);
   rpc CancelReplay(CancelReplayReq) returns (CancelReplayRsp);
+  rpc GetStrategyDisplaySettings(GetStrategyDisplaySettingsReq) returns (GetStrategyDisplaySettingsRsp);
+  rpc SetStrategyDisplaySettings(SetStrategyDisplaySettingsReq) returns (SetStrategyDisplaySettingsRsp);
+  rpc ListStrategyParamSubmissions(ListStrategyParamSubmissionsReq) returns (ListStrategyParamSubmissionsRsp);
 }

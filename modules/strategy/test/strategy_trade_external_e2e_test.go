@@ -73,7 +73,7 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	hash := dsl.Hash([]byte(externalDSL))
 	require.NoError(t, repo.CreateDefinition(ctx, store.Definition{StrategyID: "strategy-e2e", Name: "external_e2e", DSLYaml: externalDSL, DSLHash: hash, CreatedAt: now}))
 	require.NoError(t, repo.CreateInstance(ctx, store.Instance{InstanceID: "instance-e2e", StrategyID: "strategy-e2e", SpaceID: "space-e2e", ViewID: "factor_view", LogicalAccountID: &logical, CreatedAt: now}))
-	resolved := input.Resolved{CompletionKind: events.FactorPeriodComputed.Name(), ViewID: "factor_view", DatasetID: "factor_ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias"}, ViewColumns: []string{"bias", "close"}}
+	resolved := input.Resolved{CompletionKind: events.FactorPeriodComputed.Name(), ViewID: "factor_view", DatasetID: "factor_ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, Member: "bias", FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias"}, ViewColumns: []string{"bias", "close"}}
 	resolvedJSON, err := json.Marshal(resolved)
 	require.NoError(t, err)
 	require.NoError(t, repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "instance-e2e", DSLHash: hash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, externalDSL))

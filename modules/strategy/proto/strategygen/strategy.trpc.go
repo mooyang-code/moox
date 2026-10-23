@@ -58,6 +58,12 @@ type StrategyMgrService interface {
 	ListReplayBars(ctx context.Context, req *ListReplayBarsReq) (*ListReplayBarsRsp, error)
 
 	CancelReplay(ctx context.Context, req *CancelReplayReq) (*CancelReplayRsp, error)
+
+	GetStrategyDisplaySettings(ctx context.Context, req *GetStrategyDisplaySettingsReq) (*GetStrategyDisplaySettingsRsp, error)
+
+	SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq) (*SetStrategyDisplaySettingsRsp, error)
+
+	ListStrategyParamSubmissions(ctx context.Context, req *ListStrategyParamSubmissionsReq) (*ListStrategyParamSubmissionsRsp, error)
 }
 
 func StrategyMgrService_CreateStrategy_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -420,6 +426,60 @@ func StrategyMgrService_CancelReplay_Handler(svr interface{}, ctx context.Contex
 	return rsp, nil
 }
 
+func StrategyMgrService_GetStrategyDisplaySettings_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetStrategyDisplaySettingsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).GetStrategyDisplaySettings(ctx, reqbody.(*GetStrategyDisplaySettingsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StrategyMgrService_SetStrategyDisplaySettings_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetStrategyDisplaySettingsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).SetStrategyDisplaySettings(ctx, reqbody.(*SetStrategyDisplaySettingsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StrategyMgrService_ListStrategyParamSubmissions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListStrategyParamSubmissionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).ListStrategyParamSubmissions(ctx, reqbody.(*ListStrategyParamSubmissionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // StrategyMgrServer_ServiceDesc descriptor for server.RegisterService.
 var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.strategy.StrategyMgr",
@@ -505,6 +565,18 @@ var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.strategy.StrategyMgr/CancelReplay",
 			Func: StrategyMgrService_CancelReplay_Handler,
 		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/GetStrategyDisplaySettings",
+			Func: StrategyMgrService_GetStrategyDisplaySettings_Handler,
+		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/SetStrategyDisplaySettings",
+			Func: StrategyMgrService_SetStrategyDisplaySettings_Handler,
+		},
+		{
+			Name: "/trpc.moox.strategy.StrategyMgr/ListStrategyParamSubmissions",
+			Func: StrategyMgrService_ListStrategyParamSubmissions_Handler,
+		},
 	},
 }
 
@@ -579,6 +651,15 @@ func (s *UnimplementedStrategyMgr) ListReplayBars(ctx context.Context, req *List
 func (s *UnimplementedStrategyMgr) CancelReplay(ctx context.Context, req *CancelReplayReq) (*CancelReplayRsp, error) {
 	return nil, errors.New("rpc CancelReplay of service StrategyMgr is not implemented")
 }
+func (s *UnimplementedStrategyMgr) GetStrategyDisplaySettings(ctx context.Context, req *GetStrategyDisplaySettingsReq) (*GetStrategyDisplaySettingsRsp, error) {
+	return nil, errors.New("rpc GetStrategyDisplaySettings of service StrategyMgr is not implemented")
+}
+func (s *UnimplementedStrategyMgr) SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq) (*SetStrategyDisplaySettingsRsp, error) {
+	return nil, errors.New("rpc SetStrategyDisplaySettings of service StrategyMgr is not implemented")
+}
+func (s *UnimplementedStrategyMgr) ListStrategyParamSubmissions(ctx context.Context, req *ListStrategyParamSubmissionsReq) (*ListStrategyParamSubmissionsRsp, error) {
+	return nil, errors.New("rpc ListStrategyParamSubmissions of service StrategyMgr is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -627,6 +708,12 @@ type StrategyMgrClientProxy interface {
 	ListReplayBars(ctx context.Context, req *ListReplayBarsReq, opts ...client.Option) (rsp *ListReplayBarsRsp, err error)
 
 	CancelReplay(ctx context.Context, req *CancelReplayReq, opts ...client.Option) (rsp *CancelReplayRsp, err error)
+
+	GetStrategyDisplaySettings(ctx context.Context, req *GetStrategyDisplaySettingsReq, opts ...client.Option) (rsp *GetStrategyDisplaySettingsRsp, err error)
+
+	SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq, opts ...client.Option) (rsp *SetStrategyDisplaySettingsRsp, err error)
+
+	ListStrategyParamSubmissions(ctx context.Context, req *ListStrategyParamSubmissionsReq, opts ...client.Option) (rsp *ListStrategyParamSubmissionsRsp, err error)
 }
 
 type StrategyMgrClientProxyImpl struct {
@@ -1032,6 +1119,66 @@ func (c *StrategyMgrClientProxyImpl) CancelReplay(ctx context.Context, req *Canc
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CancelReplayRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) GetStrategyDisplaySettings(ctx context.Context, req *GetStrategyDisplaySettingsReq, opts ...client.Option) (*GetStrategyDisplaySettingsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/GetStrategyDisplaySettings")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("GetStrategyDisplaySettings")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &GetStrategyDisplaySettingsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) SetStrategyDisplaySettings(ctx context.Context, req *SetStrategyDisplaySettingsReq, opts ...client.Option) (*SetStrategyDisplaySettingsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/SetStrategyDisplaySettings")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("SetStrategyDisplaySettings")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SetStrategyDisplaySettingsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) ListStrategyParamSubmissions(ctx context.Context, req *ListStrategyParamSubmissionsReq, opts ...client.Option) (*ListStrategyParamSubmissionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/ListStrategyParamSubmissions")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("ListStrategyParamSubmissions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListStrategyParamSubmissionsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

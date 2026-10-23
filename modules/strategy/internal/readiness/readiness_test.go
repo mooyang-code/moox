@@ -18,7 +18,7 @@ func factorEvent(states ...*storagepb.FactorPeriodState) *storagepb.ViewDataRead
 }
 
 func state(id, status, hash string, failed ...string) *storagepb.FactorPeriodState {
-	return &storagepb.FactorPeriodState{FactorId: id, Status: status, DefinitionHash: hash, FailedSubjects: failed}
+	return &storagepb.FactorPeriodState{MemberAlias: id, FactorId: id, Status: status, DefinitionHash: hash, FailedSubjects: failed}
 }
 
 // 设计文档 3.3 表格逐行覆盖。

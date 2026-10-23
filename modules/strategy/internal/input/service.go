@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
@@ -12,6 +13,79 @@ import (
 // Service 把解析与装配封装成管理接口可用的形式。
 type Service struct {
 	Client Client
+	// Sets 是 FactorMgr 的私有因子集接口；nil 时不能启用声明了 factors 的策略。
+	Sets FactorSets
+	// ReadyWait 与 ReadyStep 是私有因子集的结果 View 补齐成员列的最长等待与探测间隔（列由 Storage 异步扩展进 View）；
+	// 零值表示不等待。
+	ReadyWait time.Duration
+	ReadyStep time.Duration
+}
+
+// ResolveInstance 启用实例时的解析：没有声明 factors 的策略直接解析 viewID；声明了 factors 的先为实例建立私有因子集
+// （成员恰好是声明的因子，实例是唯一的参数写入方），等它的结果 View 补齐列后绑定该 View。
+func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID, viewID string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
+	if len(strategy.Factors) == 0 {
+		return s.Resolve(ctx, spaceID, viewID, strategy)
+	}
+	if s.Client == nil || s.Sets == nil {
+		return Resolved{}, nil, errors.New("Factor 依赖未配置，不能启用声明了 factors 的策略")
+	}
+	if err := dsl.Validate(&strategy); err != nil {
+		return Resolved{}, nil, err
+	}
+	source, err := s.Client.GetView(ctx, spaceID, viewID)
+	if err != nil {
+		return Resolved{}, nil, err
+	}
+	if source.DatasetID == "" || source.Frequency == "" {
+		return Resolved{}, nil, fmt.Errorf("View %s 没有数据集或频率", viewID)
+	}
+	definitions := make(map[string]FactorInfo, len(strategy.Factors))
+	for _, factorID := range strategy.FactorIDs() {
+		info, err := s.Client.GetFactor(ctx, factorID)
+		if err != nil {
+			return Resolved{}, nil, err
+		}
+		definitions[factorID] = info
+	}
+	if err := CheckFactorParams(strategy, definitions); err != nil {
+		return Resolved{}, nil, err
+	}
+	set, err := s.Sets.EnsureInstanceFactorSet(ctx, InstanceFactorSetRequest{
+		InstanceID: instanceID, SpaceID: spaceID, SourceDatasetID: source.DatasetID, Freq: strings.ToLower(source.Frequency), Members: strategy.Factors,
+	})
+	if err != nil {
+		return Resolved{}, nil, err
+	}
+	deadline := time.Now().Add(s.ReadyWait)
+	for {
+		resolved, program, err := Resolve(ctx, s.Client, spaceID, set.ViewID, strategy)
+		if err == nil {
+			resolved.SourceViewID, resolved.FactorSetID = viewID, set.SetID
+			resolved.FactorParams = make(map[string][]ParamDecl, len(strategy.Factors))
+			for _, decl := range strategy.Factors {
+				resolved.FactorParams[decl.Alias] = definitions[decl.FactorID].Params
+			}
+			return resolved, program, nil
+		}
+		if !waitingForColumns(err) || !time.Now().Add(s.ReadyStep).Before(deadline) {
+			return Resolved{}, nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return Resolved{}, nil, ctx.Err()
+		case <-time.After(s.ReadyStep):
+		}
+	}
+}
+
+// waitingForColumns 报告解析失败是否只是私有因子集的结果 View 还没补齐成员列（或 View 尚未建出），稍后会好。
+func waitingForColumns(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := err.Error()
+	return errors.Is(err, ErrViewNotFound) || strings.Contains(text, "不存在于 View") || strings.Contains(text, "没有数据集或频率")
 }
 
 // Resolve 解析绑定并编译策略。

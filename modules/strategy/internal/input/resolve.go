@@ -119,6 +119,7 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 		return Resolved{}, nil, err
 	}
 	missing := make([]string, 0)
+	hashes := map[string]string{} // factor_id → definition_hash：同一定义的多个成员只读一次
 	for _, name := range referenced {
 		column, ok := columns[name]
 		if !ok {
@@ -126,19 +127,22 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 			continue
 		}
 		binding := ColumnBinding{Source: SourceDataset}
-		if factorID := strings.TrimSpace(column.Attributes["origin_factor_id"]); factorID != "" {
-			binding = ColumnBinding{Source: SourceFactor, FactorID: factorID, FactorOutput: strings.TrimSpace(column.Attributes["factor_output"])}
-			hash, ok := resolved.Factors[factorID]
+		if member, factorID := factorColumnIdentity(column.Attributes); member != "" {
+			binding = ColumnBinding{Source: SourceFactor, Member: member, FactorID: factorID, FactorOutput: strings.TrimSpace(column.Attributes["factor_output"])}
+			hash, ok := resolved.Factors[member]
 			if !ok {
-				factor, err := client.GetFactor(ctx, factorID)
-				if err != nil {
-					return Resolved{}, nil, err
+				if hash, ok = hashes[factorID]; !ok {
+					factor, err := client.GetFactor(ctx, factorID)
+					if err != nil {
+						return Resolved{}, nil, err
+					}
+					if factor.DefinitionHash == "" {
+						return Resolved{}, nil, fmt.Errorf("因子 %s 没有 definition_hash，请升级 Factor 管理端", factorID)
+					}
+					hash = factor.DefinitionHash
+					hashes[factorID] = hash
 				}
-				if factor.DefinitionHash == "" {
-					return Resolved{}, nil, fmt.Errorf("因子 %s 没有 definition_hash，请升级 Factor 管理端", factorID)
-				}
-				hash = factor.DefinitionHash
-				resolved.Factors[factorID] = hash
+				resolved.Factors[member] = hash
 			}
 			binding.DefinitionHash = hash
 		}
@@ -318,12 +322,29 @@ func retentionBars(retention, calendar, bar string) (int, bool) {
 	return int((time.Duration(hours) * time.Hour) / duration), true
 }
 
-// previousFactors 返回经 bars[-1] 读取的因子列所属的因子（排序）；没有时返回 nil。
+// factorColumnIdentity 返回因子列的成员别名与定义 ID：成员别名取 member_alias（共享集合的成员别名就是定义 ID），
+// 定义 ID 取 factor_id；不是因子列时别名为空。
+func factorColumnIdentity(attributes map[string]string) (string, string) {
+	member := strings.TrimSpace(attributes["member_alias"])
+	if member == "" {
+		member = strings.TrimSpace(attributes["origin_factor_id"])
+	}
+	if member == "" || strings.TrimSpace(attributes["column_kind"]) == "param" {
+		return "", ""
+	}
+	factorID := strings.TrimSpace(attributes["factor_id"])
+	if factorID == "" {
+		factorID = member
+	}
+	return member, factorID
+}
+
+// previousFactors 返回经 bars[-1] 读取的因子列所属的成员（排序）；没有时返回 nil。
 func previousFactors(columns map[string]ColumnBinding, program *dsl.Program) []string {
 	ids := make([]string, 0)
 	for _, column := range program.PreviousColumns {
-		if binding := columns[column]; binding.Source == SourceFactor && binding.FactorID != "" {
-			ids = append(ids, binding.FactorID)
+		if binding := columns[column]; binding.Source == SourceFactor && binding.Member != "" {
+			ids = append(ids, binding.Member)
 		}
 	}
 	if len(ids) == 0 {

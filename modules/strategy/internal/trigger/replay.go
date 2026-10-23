@@ -271,9 +271,9 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 
 	// 就绪判定：回放固定了因子版本，上一根的版本证据取固定下来的指纹。
 	event := &storagepb.ViewDataReady{Status: "complete"}
-	for factorID, factorState := range req.FactorStates {
+	for member, factorState := range req.FactorStates {
 		event.Factors = append(event.Factors, &storagepb.FactorPeriodState{
-			FactorId: factorID, Status: factorState.Status, DefinitionHash: factorState.DefinitionHash, FailedSubjects: factorState.FailedSubjects,
+			MemberAlias: member, FactorId: member, Status: factorState.Status, DefinitionHash: factorState.DefinitionHash, FailedSubjects: factorState.FailedSubjects,
 		})
 	}
 	var adjacent *readiness.Record
@@ -355,7 +355,7 @@ func replayValues(resolved input.Resolved, program *dsl.Program, source map[stri
 			if output == "" {
 				output = name
 			}
-			if v, has := factors[binding.FactorID][output]; has {
+			if v, has := factors[binding.Member][output]; has {
 				values[name] = v
 			}
 		default:

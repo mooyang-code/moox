@@ -121,6 +121,8 @@ type Subject struct {
 type FactorInfo struct {
 	FactorID       string
 	DefinitionHash string
+	// Params 是定义声明的可调参数。
+	Params []ParamDecl
 }
 
 // Row 是 View 的一行：数值列已转为 float64，无法解析的列不出现。
@@ -170,9 +172,10 @@ type Client interface {
 	GetFactor(ctx context.Context, factorID string) (FactorInfo, error)
 }
 
-// ColumnBinding 是一个被引用列的来源。
+// ColumnBinding 是一个被引用列的来源。因子列以成员别名标识（同一定义可以用不同别名出现多次），FactorID 是它引用的定义。
 type ColumnBinding struct {
 	Source         string `json:"source"`
+	Member         string `json:"member,omitempty"`
 	FactorID       string `json:"factor_id,omitempty"`
 	FactorOutput   string `json:"factor_output,omitempty"`
 	DefinitionHash string `json:"definition_hash,omitempty"`
@@ -186,7 +189,13 @@ const (
 
 // Resolved 是启用时固化的绑定解析，保存在实例与会话的 resolved_json 中。
 type Resolved struct {
-	ViewID          string                   `json:"view_id"`
+	ViewID string `json:"view_id"`
+	// SourceViewID 与 FactorSetID 只在策略声明了 factors 时有值：实例绑定的 K 线 View，以及为实例建立的私有因子集。
+	// 此时 ViewID 是私有因子集的结果 View（事件路由与求值都用它）。
+	SourceViewID string `json:"source_view_id,omitempty"`
+	FactorSetID  string `json:"factor_set_id,omitempty"`
+	// FactorParams 是各成员（别名）的因子定义声明的可调参数：启用时固化，参数输出据此补齐默认值、取整与限幅。
+	FactorParams    map[string][]ParamDecl   `json:"factor_params,omitempty"`
 	DatasetID       string                   `json:"dataset_id"`
 	SourceDatasetID string                   `json:"source_dataset_id,omitempty"`
 	Bar             string                   `json:"bar"`
@@ -194,8 +203,9 @@ type Resolved struct {
 	MarketType      string                   `json:"market_type,omitempty"`
 	Spot            bool                     `json:"spot"`
 	Columns         map[string]ColumnBinding `json:"columns"`
-	Factors         map[string]string        `json:"factors,omitempty"`
-	// PreviousFactors 是经 bars[-1] 读取的因子列所属的因子（排序）：只有它们需要上一根的版本证据。由编译结果派生
+	// Factors 是引用的因子成员（别名）及其固化的 definition_hash。
+	Factors map[string]string `json:"factors,omitempty"`
+	// PreviousFactors 是经 bars[-1] 读取的因子列所属的成员（排序）：只有它们需要上一根的版本证据。由编译结果派生
 	// （Resolve 与 Compile 填入），不进快照。
 	PreviousFactors []string `json:"-"`
 	// CompletionKind 是触发本实例的完成事件类型：因子结果 View 为 factor_period.computed，K 线 View 为 collector.period.completed。
@@ -204,11 +214,11 @@ type Resolved struct {
 	ViewColumns    []string `json:"view_columns"`
 }
 
-// ColumnsOfFactor 返回由某个因子产出的被引用列。
-func (r Resolved) ColumnsOfFactor(factorID string) []string {
+// ColumnsOfFactor 返回由某个因子成员（别名）产出的被引用列。
+func (r Resolved) ColumnsOfFactor(member string) []string {
 	columns := make([]string, 0)
 	for name, binding := range r.Columns {
-		if binding.FactorID == factorID {
+		if binding.Source == SourceFactor && binding.Member == member {
 			columns = append(columns, name)
 		}
 	}
