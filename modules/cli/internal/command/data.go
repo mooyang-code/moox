@@ -3,7 +3,6 @@ package command
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -109,25 +108,9 @@ func dataPrimaryAuth(path string) (*pb.AuthInfo, error) {
 }
 
 func storagePrimaryRoleAuth(path, appID string) (*pb.AuthInfo, error) {
-	secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET"))
-	if secret == "" {
-		raw, err := os.ReadFile(filepath.Clean(path))
-		if err != nil {
-			return nil, fmt.Errorf("读取 Storage 鉴权文件失败: %w", err)
-		}
-		normalized, err := normalizeStorageInternalAuth(string(raw))
-		if err != nil {
-			return nil, fmt.Errorf("Storage 鉴权文件无效: %w", err)
-		}
-		for _, line := range strings.Split(normalized, "\n") {
-			if value, ok := strings.CutPrefix(line, "MOOX_STORAGE_PRIMARY_AUTH_SECRET="); ok {
-				secret = value
-				break
-			}
-		}
-	}
-	if secret == "" {
-		return nil, fmt.Errorf("缺少 MOOX_STORAGE_PRIMARY_AUTH_SECRET")
+	secret, err := resolveStoragePrimarySecret(path)
+	if err != nil {
+		return nil, err
 	}
 	return &pb.AuthInfo{AppId: appID, AppKey: security.HMACSHA256Hex(secret, []byte(appID))}, nil
 }
