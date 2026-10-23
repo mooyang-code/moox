@@ -177,6 +177,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, watermarks...)
+	params, err := b.buildFactorParamHealth(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, params...)
 	rejections, err := b.buildDeadlineRejectionHealth(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err

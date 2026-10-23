@@ -139,6 +139,19 @@ func (c *CatalogCache) Status() CatalogStatus {
 	}
 }
 
+// Sets 返回快照里全部集合（成员是副本）。
+func (c *CatalogCache) Sets() []domain.EngineSet {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]domain.EngineSet, 0, len(c.sets))
+	for _, set := range c.sets {
+		copied := set
+		copied.Members = append([]domain.MemberDef(nil), set.Members...)
+		out = append(out, copied)
+	}
+	return out
+}
+
 // SetIDs lists the enabled sets of the snapshot.
 func (c *CatalogCache) SetIDs() []string {
 	c.mu.RLock()

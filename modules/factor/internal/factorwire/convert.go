@@ -195,10 +195,16 @@ func EngineStatusToPB(status domain.EngineStatus) *factorpb.EngineRuntimeStatus 
 		watermarks = append(watermarks, &factorpb.SetWatermarkStatus{SetId: item.SetID, CommittedThrough: FormatTime(item.CommittedThrough), Target: FormatTime(item.Target),
 			BlockedSince: FormatTime(item.BlockedSince), BlockedPeriod: FormatTime(item.BlockedPeriod), BlockedReason: item.BlockedReason})
 	}
+	health := make([]*factorpb.MemberParamHealth, 0, len(status.ParamHealth))
+	for _, item := range status.ParamHealth {
+		health = append(health, &factorpb.MemberParamHealth{SetId: item.SetID, MemberAlias: item.Member, CarriedPeriods: int32(item.CarriedPeriods),
+			AlertAfter: int32(item.AlertAfter), LastOfflineAt: FormatTime(item.LastOfflineAt)})
+	}
 	return &factorpb.EngineRuntimeStatus{
 		ConsumerRunning: status.ConsumerRunning, ComputeWorkers: status.ComputeWorkers, ExprVersion: status.ExprVersion,
 		Lanes: LanesToPB(status.Lanes), RecentRuns: runs,
 		CatalogHash: status.CatalogHash, CatalogSyncedAt: FormatTime(status.CatalogSyncedAt), Watermarks: watermarks,
+		ParamHealth: health, OfflinePending: int32(status.OfflinePending),
 	}
 }
 
@@ -219,9 +225,16 @@ func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, 
 		blockedPeriod, _ := ParseTime(item.GetBlockedPeriod())
 		watermarks = append(watermarks, domain.SetWatermark{SetID: item.GetSetId(), CommittedThrough: committed, Target: target, BlockedSince: blockedSince, BlockedPeriod: blockedPeriod, BlockedReason: item.GetBlockedReason()})
 	}
+	health := make([]domain.MemberParamHealth, 0, len(pb.GetParamHealth()))
+	for _, item := range pb.GetParamHealth() {
+		offlineAt, _ := ParseTime(item.GetLastOfflineAt())
+		health = append(health, domain.MemberParamHealth{SetID: item.GetSetId(), Member: item.GetMemberAlias(), CarriedPeriods: int(item.GetCarriedPeriods()),
+			AlertAfter: int(item.GetAlertAfter()), LastOfflineAt: offlineAt})
+	}
 	return domain.EngineStatus{
 		ConsumerRunning: pb.GetConsumerRunning(), ComputeWorkers: pb.GetComputeWorkers(), ExprVersion: pb.GetExprVersion(),
 		Lanes: LanesFromPB(pb.GetLanes()), RecentRuns: runs, CatalogHash: pb.GetCatalogHash(), CatalogSyncedAt: syncedAt, Watermarks: watermarks,
+		ParamHealth: health, OfflinePending: int(pb.GetOfflinePending()),
 	}, nil
 }
 
@@ -229,7 +242,7 @@ func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, 
 func EngineSetToPB(set domain.EngineSet) *factorpb.EngineSet {
 	members := make([]*factorpb.EngineMember, 0, len(set.Members))
 	for _, member := range set.Members {
-		members = append(members, &factorpb.EngineMember{MemberAlias: member.Alias, Factor: DefToPB(member.Factor)})
+		members = append(members, &factorpb.EngineMember{MemberAlias: member.Alias, Factor: DefToPB(member.Factor), CarryAlertPeriods: int32(member.CarryAlertPeriods)})
 	}
 	return &factorpb.EngineSet{FactorSet: SetToPB(set.Set), Members: members, ResultReady: set.ResultReady}
 }
@@ -245,7 +258,7 @@ func EngineSetFromPB(pb *factorpb.EngineSet) (domain.EngineSet, error) {
 		if err != nil {
 			return domain.EngineSet{}, fmt.Errorf("member %s: %w", raw.GetMemberAlias(), err)
 		}
-		members = append(members, domain.MemberDef{Alias: raw.GetMemberAlias(), Factor: factor})
+		members = append(members, domain.MemberDef{Alias: raw.GetMemberAlias(), Factor: factor, CarryAlertPeriods: int(raw.GetCarryAlertPeriods())})
 	}
 	return domain.EngineSet{Set: set, Members: members, ResultReady: pb.GetResultReady()}, nil
 }

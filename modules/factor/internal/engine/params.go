@@ -116,6 +116,8 @@ type paramFreezer struct {
 
 	mu    sync.Mutex
 	state paramState
+	// lastOffline 是各成员最近一次离线冻结的时间（集合/别名 → 时间），监控据此告警；只在内存里，重启后清空。
+	lastOffline map[string]time.Time
 }
 
 func newParamFreezer(manager paramManager, file string, timeout time.Duration) (*paramFreezer, error) {
@@ -206,6 +208,10 @@ func (f *paramFreezer) freezeOffline(set domain.FactorSet, members []domain.Memb
 				snapshot = last.Snapshot
 			}
 			f.state.Offline = append(f.state.Offline, offlineFreeze{SetID: set.SetID, Member: member.Alias, Period: period.UTC(), Snapshot: snapshot})
+			if f.lastOffline == nil {
+				f.lastOffline = map[string]time.Time{}
+			}
+			f.lastOffline[lastKey(set.SetID, member.Alias)] = time.Now().UTC()
 			if f.onOffline != nil {
 				f.onOffline(set.SetID)
 			}
@@ -257,6 +263,13 @@ func (f *paramFreezer) Flush(ctx context.Context) error {
 	defer f.mu.Unlock()
 	f.state.Offline = f.state.Offline[len(pending):]
 	return f.persistLocked()
+}
+
+// LastOffline 返回成员最近一次离线冻结的时间（没有为零值）。
+func (f *paramFreezer) LastOffline(setID, member string) time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastOffline[lastKey(setID, member)]
 }
 
 // OfflinePending 返回待补报的离线冻结数。

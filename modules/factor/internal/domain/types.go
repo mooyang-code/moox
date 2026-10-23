@@ -103,7 +103,9 @@ type SetMember struct {
 }
 
 // Def 返回成员的计算视图。
-func (m SetMember) Def() MemberDef { return MemberDef{Alias: m.MemberAlias, Factor: m.Factor} }
+func (m SetMember) Def() MemberDef {
+	return MemberDef{Alias: m.MemberAlias, Factor: m.Factor, CarryAlertPeriods: m.CarryAlertPeriods}
+}
 
 // AsMembers 把定义按“别名即定义 ID”转成成员，用于命令行工具和测试里不需要别名的场合。
 func AsMembers(defs ...FactorDef) []MemberDef {
@@ -118,6 +120,16 @@ func AsMembers(defs ...FactorDef) []MemberDef {
 type MemberDef struct {
 	Alias  string    `json:"alias"`
 	Factor FactorDef `json:"factor"`
+	// CarryAlertPeriods 是连续沿用参数超过多少期告警（0 取 DefaultCarryAlertPeriods）；只用于监控，不影响计算。
+	CarryAlertPeriods int `json:"carry_alert_periods,omitempty"`
+}
+
+// CarryAlertAfter 返回连续沿用多少期之后告警。
+func (m MemberDef) CarryAlertAfter() int {
+	if m.CarryAlertPeriods > 0 {
+		return m.CarryAlertPeriods
+	}
+	return DefaultCarryAlertPeriods
 }
 
 // OutputColumn 返回输出 output 在结果数据集里的列名：别名与定义 ID 相同时就是输出名，否则是“别名_输出名”。

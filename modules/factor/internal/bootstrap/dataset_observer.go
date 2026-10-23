@@ -38,6 +38,34 @@ type factorDatasetObserver struct {
 	observed map[string]observedPeriod
 	// blocked 是各集合连续水位阻塞的起始时间（0 表示没有阻塞），Monitor 据此对停滞超过 30 分钟告警。
 	blocked *prometheus.GaugeVec
+	// carryAlert 是成员连续沿用参数是否超过告警阈值（1 是），offlineFreeze 是集合最近一次离线冻结的 Unix 时间（0 表示没有）。
+	carryAlert    *prometheus.GaugeVec
+	offlineFreeze *prometheus.GaugeVec
+	// carryExported、offlineExported 记下已经导出过的序列（成员 → 空间、集合 → 空间），状态恢复后清零。
+	carryExported   map[paramMemberKey]string
+	offlineExported map[string]string
+}
+
+type paramMemberKey struct{ set, member string }
+
+// 参数监控指标（因子动态调参执行计划 2.10）。
+const (
+	carryAlertMetric    = "moox_factor_param_carry_alert"
+	offlineFreezeMetric = "moox_factor_param_offline_freeze_timestamp_seconds"
+)
+
+func newParamGauges(registerer prometheus.Registerer) (carry, offline *prometheus.GaugeVec) {
+	register := func(gauge *prometheus.GaugeVec) *prometheus.GaugeVec {
+		if err := registerer.Register(gauge); err != nil {
+			if existing, ok := err.(prometheus.AlreadyRegisteredError); ok {
+				return existing.ExistingCollector.(*prometheus.GaugeVec)
+			}
+		}
+		return gauge
+	}
+	carry = register(prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: carryAlertMetric, Help: "成员连续沿用参数的期数超过告警阈值为 1，否则为 0。"}, []string{"space_id", "set_id", "member"}))
+	offline = register(prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: offlineFreezeMetric, Help: "集合最近一次因 FactorMgr 不可达而离线冻结参数的 Unix 时间，0 表示没有。"}, []string{"space_id", "set_id"}))
+	return carry, offline
 }
 
 // watermarkBlockedMetric 是因子集合连续水位阻塞起始时间的指标。
@@ -118,6 +146,7 @@ func (o *factorDatasetObserver) observe(ctx context.Context) error {
 			o.blocked.WithLabelValues(key.SpaceID, item.SetID).Set(value)
 		}
 	}
+	o.observeParams(keys, status)
 	finishedAt := o.now().UTC()
 	for _, run := range status.RecentRuns {
 		key, expected := keys[run.SetID]

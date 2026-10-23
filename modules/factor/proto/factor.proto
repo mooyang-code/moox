@@ -571,6 +571,8 @@ message EngineIdentity {
 message EngineMember {
   string member_alias = 1;
   FactorDef factor = 2;
+  // carry_alert_periods 是连续沿用参数超过多少期告警（0 取默认值）。
+  int32 carry_alert_periods = 3;
 }
 
 message EngineSet {
@@ -600,6 +602,17 @@ message EngineRuntimeStatus {
   string expr_version = 9;
   // watermarks 是各集合的连续水位：已连续算完到哪一期、已知的最新一期、是否阻塞在还没补到的周期上。
   repeated SetWatermarkStatus watermarks = 10;
+  // param_health 是各成员的参数状态；offline_pending 是还没补报给管理端的离线冻结数。
+  repeated MemberParamHealth param_health = 11;
+  int32 offline_pending = 12;
+}
+
+message MemberParamHealth {
+  string set_id = 1;
+  string member_alias = 2;
+  int32 carried_periods = 3;
+  int32 alert_after = 4;
+  string last_offline_at = 5;
 }
 
 message SetWatermarkStatus {

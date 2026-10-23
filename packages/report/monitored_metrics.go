@@ -45,6 +45,8 @@ var healthMetricNames = map[string]struct{}{
 	"moox_collector_period_pending_total":                                      {},
 	"moox_collector_stream_online":                                             {},
 	"moox_factor_set_watermark_blocked_since_timestamp_seconds":                {},
+	"moox_factor_param_carry_alert":                                            {},
+	"moox_factor_param_offline_freeze_timestamp_seconds":                       {},
 	"moox_storage_period_deadline_rejected_timestamp_seconds":                  {},
 	"moox_collector_stream_heartbeat_timestamp_seconds":                        {},
 	"moox_collector_stream_failed_period_streak":                               {},

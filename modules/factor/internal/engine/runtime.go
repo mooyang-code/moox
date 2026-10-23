@@ -346,6 +346,7 @@ func (r *Runtime) engineStatus() domain.EngineStatus {
 		}
 	}
 	status.Lanes = withWarmup(status.Lanes, r.catalog.SetIDs(), r.pipeline.WarmupStatuses())
+	status.ParamHealth, status.OfflinePending = r.paramHealth()
 	if r.continuity != nil {
 		for _, state := range r.continuity.States() {
 			status.Watermarks = append(status.Watermarks, domain.SetWatermark{SetID: state.SetID, CommittedThrough: state.CommittedThrough, Target: state.Target,

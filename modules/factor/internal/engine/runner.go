@@ -119,6 +119,13 @@ func (r *measuredRunner) recordParams(setID string, outcome pipeline.Outcome) {
 	}
 }
 
+// carriedPeriods 返回成员当前连续沿用参数的期数（没有记录为 0）。
+func (r *measuredRunner) carriedPeriods(setID, member string) int {
+	r.carriedMu.Lock()
+	defer r.carriedMu.Unlock()
+	return r.carried[setID+"/"+member]
+}
+
 // pipelineStages is the order a period runs through; the log line lists the
 // per-stage time so slow reads, compute and writes can be told apart.
 var pipelineStages = []string{"plan", "load", "compute", "assemble", "write", "report"}
