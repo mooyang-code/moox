@@ -119,8 +119,8 @@ type WindowConfig struct {
 // MaxLookbackLimit 是回看数量 N 的绝对上限，与表达式引擎的回看上限一致。
 const MaxLookbackLimit = 100000
 
-// DefaultLookback 是回看数量 N 的默认值。
-const DefaultLookback = 10000
+// DefaultWindowBars 是回看数量 N 的默认值。
+const DefaultWindowBars = 10000
 
 // LookbackFor 返回数据源的回看数量 N：先看按数据源的覆盖，再取全局默认。
 func (c WindowConfig) LookbackFor(spaceID, datasetID, freq string) int {
@@ -130,7 +130,7 @@ func (c WindowConfig) LookbackFor(spaceID, datasetID, freq string) int {
 	if c.Lookback > 0 {
 		return c.Lookback
 	}
-	return DefaultLookback
+	return DefaultWindowBars
 }
 
 // MemoryConfig 是进程级内存预算（设计 4.4）：常驻窗口与块缓存先扣除，计算、回放、重算向准入器预留。
@@ -276,7 +276,7 @@ func (c *Config) applyDefaults() {
 	if c.SeriesStore.BlockCache == 0 {
 		c.SeriesStore.BlockCache = d.SeriesStore.BlockCache
 	}
-	setInt(&c.Window.Lookback, DefaultLookback)
+	setInt(&c.Window.Lookback, DefaultWindowBars)
 	setInt(&c.Sync.Workers, d.Sync.Workers)
 	setInt(&c.Sync.BatchSubjects, d.Sync.BatchSubjects)
 	setDuration(&c.Sync.FollowInterval, d.Sync.FollowInterval)
