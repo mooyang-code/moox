@@ -640,12 +640,7 @@ func (s *Service) validateMembership(ctx context.Context, set domain.FactorSet, 
 	origins := make(map[string]string)
 	for _, column := range resultColumns {
 		if column.OriginType == storageio.ColumnOriginFactor {
-			// 列的 origin_id 是列名（Storage 要求每个来源只对应一列）；列归属的成员记在 member_alias 属性里。
-			owner := column.Attributes["member_alias"]
-			if owner == "" {
-				owner = column.OriginID
-			}
-			origins[column.ColumnName] = owner
+			origins[column.ColumnName] = column.OriginID
 		}
 	}
 	if err := domain.ValidateMembership(set, member, sourceColumns(columns), siblings, origins); err != nil {
@@ -812,9 +807,8 @@ func sourceColumns(columns []storageio.ColumnInfo) []domain.SourceColumn {
 	return out
 }
 
-// 结果列的属性：列归属的成员（member_alias）、定义 ID、分类，以及列是输出值还是参数取值。Storage 要求因子结果列的
-// origin_id、origin_factor_id 与 factor_output 都等于列名（同一数据集里每个来源只对应一列），所以成员与定义信息
-// 放在 member_alias、factor_id 属性里。
+// 结果列的属性：列归属的成员（origin_factor_id 与 origin_id 都是成员别名，Storage 要求两者一致、factor_output
+// 与列名一致）、定义 ID、分类，以及列是输出值还是参数取值。
 const (
 	ColumnKindOutput = "output"
 	ColumnKindParam  = "param"
@@ -831,7 +825,7 @@ func appendFactorColumns(columns []storageio.ColumnInfo, members ...domain.Membe
 		}
 		seen[column] = struct{}{}
 		attributes := map[string]string{
-			"display_name": column, "factor_output": column, "origin_factor_id": column,
+			"display_name": column, "factor_output": column, "origin_factor_id": member.Alias,
 			"member_alias": member.Alias, "factor_id": member.Factor.FactorID, "category_id": member.Factor.CategoryID,
 			"column_kind": kind,
 		}
@@ -841,7 +835,7 @@ func appendFactorColumns(columns []storageio.ColumnInfo, members ...domain.Membe
 			attributes["output_name"] = name
 		}
 		columns = append(columns, storageio.ColumnInfo{
-			ColumnName: column, OriginType: storageio.ColumnOriginFactor, OriginID: column,
+			ColumnName: column, OriginType: storageio.ColumnOriginFactor, OriginID: member.Alias,
 			ValueType: storageio.ColumnTypeDouble, Status: storageio.ColumnStatusActive, Attributes: attributes,
 		})
 	}

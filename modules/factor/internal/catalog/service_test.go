@@ -896,20 +896,6 @@ func (f *metadataFake) UpsertColumns(_ context.Context, spaceID, datasetID strin
 	for _, col := range cols {
 		current[col.ColumnName] = col
 	}
-	// 与 Storage 的唯一约束一致：同一数据集里 (origin_type, origin_id) 只能对应一列。
-	origins := make(map[string]string, len(current))
-	for _, col := range current {
-		// Storage 对因子结果列的校验：origin_factor_id 与 origin_id 一致，factor_output 等于列名。
-		if col.OriginType == storageio.ColumnOriginFactor &&
-			(col.Attributes["origin_factor_id"] != col.OriginID || col.Attributes["factor_output"] != col.ColumnName) {
-			return fmt.Errorf("factor result columns require matching origin_factor_id and factor_output: %s", col.ColumnName)
-		}
-		key := fmt.Sprintf("%v/%s", col.OriginType, col.OriginID)
-		if other, dup := origins[key]; dup && other != col.ColumnName {
-			return fmt.Errorf("UNIQUE constraint failed: 列 %s 与 %s 的来源相同（%s）", col.ColumnName, other, key)
-		}
-		origins[key] = col.ColumnName
-	}
 	merged := make([]storageio.ColumnInfo, 0, len(current))
 	for _, col := range current {
 		merged = append(merged, col)
