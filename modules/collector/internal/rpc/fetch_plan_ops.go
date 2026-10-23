@@ -45,6 +45,11 @@ type FetchPlanControl interface {
 // SetFetchPlanControl 注入采集计划管理器；没有配置采集计划的部署不注入。
 func (s *Service) SetFetchPlanControl(control FetchPlanControl) { s.fetchPlanControl = control }
 
+// SetSourceIDResolver 注入 provider 与品种到 source_id 的解析，合成任务据此推导源任务写入时用的 series_tag。
+func (s *Service) SetSourceIDResolver(resolve func(provider, instrumentType string) string) {
+	s.sourceIDResolver = resolve
+}
+
 // SetFetchPlanPaused 暂停或恢复空间的采集，见 proto 里的说明。管理器每分钟同步一次空间集合，
 // 所以保存开关后要过约 1 分钟才会开始停用定时器；调用方轮询 timers_disabled 等待确认。
 func (s *Service) SetFetchPlanPaused(ctx context.Context, req *pb.SetFetchPlanPausedReq) (*pb.SetFetchPlanPausedRsp, error) {

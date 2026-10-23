@@ -178,7 +178,7 @@ func (s *Service) pruneTaskResultInventorySnapshotsLocked(now time.Time) {
 }
 
 func (s *Service) buildTaskResultInventorySnapshot(ctx context.Context, spaceID string, pageSize int) (*taskResultInventorySnapshot, error) {
-	if s == nil || s.taskRepo == nil || s.persistence == nil || s.persistence.PeriodReadiness() == nil {
+	if s == nil || s.taskRepo == nil || s.persistence == nil {
 		return nil, fmt.Errorf("task-result inventory dependencies are not initialized")
 	}
 	tasks, err := s.taskRepo.ListKlineResultTasks(ctx, spaceID, maxTaskResultInventoryEntries)
@@ -307,9 +307,6 @@ func (s *Service) taskResultInventoryEntry(ctx context.Context, task domain.Coll
 	entry.ViewLastDataTime = strings.TrimSpace(inspection.LastDataTime)
 	if entry.OwnershipVerified {
 		s.setCanaryCandidate(entry, task, params, s.singleTaskCanarySeries(ctx, task))
-		if err := s.populateLatestCompletedPeriod(ctx, entry, task, ids.DatasetID, frequency); err != nil {
-			return nil, err
-		}
 	}
 	return entry, nil
 }
@@ -334,7 +331,7 @@ func (s *Service) inspectDisabledTaskResult(ctx context.Context, entry *pb.TaskR
 		return nil
 	}
 	s.setCanaryCandidate(entry, task, params, series)
-	return s.populateLatestCompletedPeriod(ctx, entry, task, ids.DatasetID, entry.GetFrequency())
+	return nil
 }
 
 func (s *Service) singleTaskCanarySeries(ctx context.Context, task domain.CollectionTask) *domain.TaskSeries {
@@ -368,28 +365,6 @@ func (s *Service) setCanaryCandidate(entry *pb.TaskResultInventoryEntry, task do
 	entry.SeriesHash = task.SeriesHash
 	entry.ExpectedCount = 1
 	entry.OutputFields = append([]string(nil), params.OutputFields...)
-}
-
-func (s *Service) populateLatestCompletedPeriod(ctx context.Context, entry *pb.TaskResultInventoryEntry, task domain.CollectionTask, datasetID, frequency string) error {
-	if s == nil || s.persistence == nil {
-		return fmt.Errorf("period state persistence is not initialized")
-	}
-	// 直接行情任务的周期由 Storage 裁决，不再查询周期状态；Monitor 只按 View 最新数据时间判断新鲜度。
-	if !strings.EqualFold(task.DataType, "kline_resample") {
-		return nil
-	}
-	if s.persistence.PeriodReadiness() == nil {
-		return fmt.Errorf("period readiness repository is not initialized")
-	}
-	latest, err := s.persistence.PeriodReadiness().LatestCompletedPeriod(ctx, task.SpaceID, datasetID, frequency)
-	if err != nil {
-		return fmt.Errorf("read latest completed resample period: %w", err)
-	}
-	if latest != nil && !latest.PeriodTime.IsZero() {
-		entry.LatestCompletedPeriod = latest.PeriodTime.UTC().Format(time.RFC3339Nano)
-		entry.LatestCompletedStatus = latest.Status
-	}
-	return nil
 }
 
 // allowedLatenessSeconds 返回任务结果数据集的允许迟到时间：任务参数优先，否则取空间默认值。

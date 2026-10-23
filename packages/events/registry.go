@@ -76,6 +76,10 @@ var (
 	CollectorPeriodCompleted = declareEvent("event.storage.collector.period.completed", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.CollectorPeriodCompleted{}
 	}, validateCollectorPeriodCompleted)
+	// CollectorKlineBackfilled 在 K 线于周期结束后被补写（补采分块读回确认、合成的补写）时由 Collector 发布，只带元数据，不带行情数据。
+	CollectorKlineBackfilled = declareEvent("event.collector.kline.backfilled", 1, "MOOX_COLLECTOR", "collector", func() proto.Message {
+		return &storagepb.CollectorKlineBackfilled{}
+	}, validateCollectorKlineBackfilled)
 	FactorPeriodComputed = declareEvent("event.storage.dataset.factor_period.computed", 1, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.FactorPeriodComputed{}
 	}, validateFactorPeriodComputed)

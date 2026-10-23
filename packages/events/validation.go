@@ -262,6 +262,40 @@ func validateCommittedPositions(positions []*storagepb.CommittedPosition, label 
 	return nil
 }
 
+func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*storagepb.CollectorKlineBackfilled)
+	if !ok {
+		return fmt.Errorf("collector kline backfilled payload has type %T", value)
+	}
+	if !validRequiredToken(payload.GetDatasetId()) || message == nil || payload.GetDatasetId() != message.GetSubjectId() {
+		return fmt.Errorf("collector kline backfilled dataset_id does not match subject_id")
+	}
+	if !validRequiredToken(payload.GetFrequency()) || !validRequiredToken(payload.GetSyncRequestId()) {
+		return fmt.Errorf("collector kline backfilled frequency and sync_request_id are required")
+	}
+	if len(payload.GetSubjectIds()) == 0 {
+		return fmt.Errorf("collector kline backfilled subject_ids are required")
+	}
+	for _, subject := range payload.GetSubjectIds() {
+		if !validRequiredToken(subject) {
+			return fmt.Errorf("collector kline backfilled subject_id %q is invalid", subject)
+		}
+	}
+	start, end := payload.GetStart(), payload.GetEnd()
+	if start == nil || end == nil || start.CheckValid() != nil || end.CheckValid() != nil || !end.AsTime().After(start.AsTime()) {
+		return fmt.Errorf("collector kline backfilled range is invalid")
+	}
+	if payload.GetConfirmedAt() == nil || payload.GetConfirmedAt().CheckValid() != nil {
+		return fmt.Errorf("collector kline backfilled confirmed_at is invalid")
+	}
+	switch payload.GetOrigin() {
+	case "auto", "manual", "force", "resample":
+		return nil
+	default:
+		return fmt.Errorf("collector kline backfilled origin %q is invalid", payload.GetOrigin())
+	}
+}
+
 func validateDatasetSyncPoint(message *eventpb.EventMessage, value proto.Message) error {
 	payload, ok := value.(*storagepb.DatasetSyncPoint)
 	if !ok {

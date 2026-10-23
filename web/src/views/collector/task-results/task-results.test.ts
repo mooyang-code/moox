@@ -9,6 +9,9 @@ import {
   buildTaskResultTabs,
   getTaskResultState,
   resolveActiveTask,
+  resampleEmptyDescription,
+  resampleSourceTaskId,
+  resampleTargetFrequency,
   selectTaskIdFromQuery
 } from "./task-results-model";
 
@@ -79,5 +82,32 @@ describe("collector result workflow", () => {
     const results = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     expect(results).toContain("resolveActiveTask(tasks.value, taskDetails.value, activeTaskId.value)");
     expect(results).not.toMatch(/resultTabs\.value\[0\]\?\.task\b/);
+  });
+
+  it("marks resample tasks and explains why a fresh resample result is empty", () => {
+    const resample: CollectorTask = {
+      task_id: "res-1",
+      task_name: "45m 合成",
+      data_type: "kline_resample",
+      create_time: "2026-10-22T00:00:00Z",
+      collect_params: { source_task_id: "src-1", target_frequency: "45m" },
+      prepare_state: "ready",
+      result: { view_id: "view-res", status: "active" }
+    };
+    const [tab] = buildTaskResultTabs([resample]);
+    expect(tab.title).toBe("45m 合成 · 合成");
+    expect(tab.resample).toBe(true);
+    expect(buildTaskResultTabs([{ task_id: "plain", task_name: "采集" }])[0].resample).toBe(false);
+    expect(resampleSourceTaskId(resample)).toBe("src-1");
+    expect(resampleTargetFrequency(resample)).toBe("45m");
+
+    expect(resampleEmptyDescription({ ...resample, prepare_state: "waiting_view" }, 45)).toBe("正在准备结果数据集，请稍后刷新");
+    // 45m 网格上 10:20 之后的下一个边界是 10:30。
+    expect(resampleEmptyDescription(resample, 45, new Date("2026-10-22T10:20:00Z"))).toContain("预计 10:30 UTC");
+    expect(resampleEmptyDescription(resample, 1440, new Date("2026-10-22T10:20:00Z"))).toContain("预计 10-23 00:00 UTC");
+
+    const page = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
+    expect(page).toContain("合成自");
+    expect(page).toContain("历史合成进行中");
   });
 });

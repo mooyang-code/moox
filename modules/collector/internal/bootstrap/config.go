@@ -29,7 +29,6 @@ type Config struct {
 	SCFMarkets         map[string]map[string][]string     `yaml:"scf_markets"`
 	SCFPlan            SCFPlanConfig                      `yaml:"scf_plan"`
 	CollectorRetention CollectorRetentionConfig           `yaml:"collector_retention"`
-	PeriodReadiness    PeriodReadinessConfig              `yaml:"period_readiness"`
 	KlineResample      KlineResampleConfig                `yaml:"kline_resample"`
 	Health             HealthConfig                       `yaml:"health"`
 	DNS                DNSConfig                          `yaml:"dns"`
@@ -110,30 +109,37 @@ func (c CollectorRetentionConfig) timeout() time.Duration {
 	return value
 }
 
-// PeriodReadinessConfig controls the durable Collector period completion
-// projection and its retry/retention loops.
-type PeriodReadinessConfig struct {
-	Grace           time.Duration `yaml:"grace"`
-	ReportInterval  time.Duration `yaml:"report_interval"`
-	ItemRetention   int           `yaml:"item_retention"`
-	ParentRetention time.Duration `yaml:"parent_retention"`
+// KlineResampleConfig 是本地 K 线合成的进程级执行策略。任务身份与源/目标语义仍在 CollectionTask 里。
+type KlineResampleConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// ScanTimeout 是定时器每一步（准备、兜底检查）的预算。
+	ScanTimeout time.Duration `yaml:"scan_timeout"`
+	// ExecTimeout 是按桶执行（读源到写完）的硬超时；补采触发的作业会推迟 2×ExecTimeout 再开始。
+	ExecTimeout time.Duration `yaml:"exec_timeout"`
+	// FallbackLookbackBars 是兜底检查每个任务查看的最近已收盘目标 K 线根数。
+	FallbackLookbackBars int `yaml:"fallback_lookback_bars"`
+	// FallbackGrace 是兜底检查给事件主路径留出的收盘后时间。
+	FallbackGrace time.Duration `yaml:"fallback_grace"`
+	// FallbackMaxBuckets 是一次兜底检查最多补多少个桶。
+	FallbackMaxBuckets int `yaml:"fallback_max_buckets"`
+	// HistoryBucketsPerRound 是历史合成作业每轮最多推进的桶数；HistoryMaxJobs 是每轮最多推进的作业数。
+	HistoryBucketsPerRound int `yaml:"history_buckets_per_round"`
+	HistoryMaxJobs         int `yaml:"history_max_jobs"`
+	// MaxReadKeys 是单次读取源/目标行的键数上限。
+	MaxReadKeys int `yaml:"max_read_keys"`
+	// EventBus 配置后，合成订阅源数据集的周期完成事件与补采完成事件，并发布补采完成事件；不配置则只靠兜底检查。
+	EventBus ResampleEventBusConfig `yaml:"event_bus"`
 }
 
-// KlineResampleConfig controls the local derived-kline scheduler. Task
-// identity and source/target semantics remain in CollectionTask; these values are
-// process-wide execution policy.
-type KlineResampleConfig struct {
-	Enabled                     bool          `yaml:"enabled"`
-	ScanTimeout                 time.Duration `yaml:"scan_timeout"`
-	WorkerConcurrency           int           `yaml:"worker_concurrency"`
-	MaxClaimsPerTick            int           `yaml:"max_claims_per_tick"`
-	WorkerSubjectBatchSize      int           `yaml:"worker_subject_batch_size"`
-	WorkerJobTimeout            time.Duration `yaml:"worker_job_timeout"`
-	WorkerPollInterval          time.Duration `yaml:"worker_poll_interval"`
-	WorkerMaxSourceKeysPerClaim int           `yaml:"worker_max_source_keys_per_claim"`
-	StaleRunningAfter           time.Duration `yaml:"stale_running_after"`
-	DefaultSettleDelay          time.Duration `yaml:"default_settle_delay"`
-	RepairLookbackBuckets       int           `yaml:"repair_lookback_buckets"`
+// ResampleEventBusConfig 是合成使用的事件总线连接。凭据文件存放用户名与密码，权限必须是 0600。
+type ResampleEventBusConfig struct {
+	URLs           []string `yaml:"urls"`
+	CredentialFile string   `yaml:"credential_file"`
+}
+
+// Enabled 报告是否配置了事件总线。
+func (c ResampleEventBusConfig) Enabled() bool {
+	return len(c.URLs) > 0 || strings.TrimSpace(c.CredentialFile) != ""
 }
 
 // HealthConfig controls the lightweight HTTP health endpoint.
@@ -212,9 +218,6 @@ func Load(path string) (*Config, error) {
 	if err := cfg.validateKlineResample(); err != nil {
 		return nil, err
 	}
-	if err := cfg.validatePeriodReadiness(); err != nil {
-		return nil, err
-	}
 	if err := cfg.validateCollectorRetention(); err != nil {
 		return nil, err
 	}
@@ -287,14 +290,12 @@ func (c *Config) validateEgressProxy() error {
 }
 
 func (c *Config) validateKlineResample() error {
-	if c.KlineResample.ScanTimeout <= 0 || c.KlineResample.WorkerJobTimeout <= 0 || c.KlineResample.WorkerPollInterval <= 0 || c.KlineResample.StaleRunningAfter <= 0 || c.KlineResample.DefaultSettleDelay < 0 {
-		return fmt.Errorf("kline_resample durations must be positive, except default_settle_delay")
+	k := c.KlineResample
+	if k.ScanTimeout <= 0 || k.ExecTimeout <= 0 || k.FallbackGrace <= 0 {
+		return fmt.Errorf("kline_resample durations must be positive")
 	}
-	if c.KlineResample.WorkerConcurrency <= 0 || c.KlineResample.WorkerConcurrency > 250 || c.KlineResample.MaxClaimsPerTick < 3 || c.KlineResample.MaxClaimsPerTick > 1000 || c.KlineResample.WorkerSubjectBatchSize <= 0 || c.KlineResample.WorkerSubjectBatchSize > 200 || c.KlineResample.WorkerMaxSourceKeysPerClaim <= 0 {
-		return fmt.Errorf("kline_resample worker quantities are invalid")
-	}
-	if c.KlineResample.RepairLookbackBuckets < 0 || c.KlineResample.RepairLookbackBuckets > 10 {
-		return fmt.Errorf("kline_resample.repair_lookback_buckets must be between 0 and 10")
+	if k.FallbackLookbackBars <= 0 || k.FallbackLookbackBars > 100 || k.FallbackMaxBuckets <= 0 || k.HistoryBucketsPerRound <= 0 || k.HistoryMaxJobs <= 0 || k.MaxReadKeys <= 0 {
+		return fmt.Errorf("kline_resample quantities are invalid")
 	}
 	return nil
 }
@@ -316,16 +317,6 @@ func (c *Config) validateCollectorRetention() error {
 	return nil
 }
 
-func (c *Config) validatePeriodReadiness() error {
-	if c.PeriodReadiness.ItemRetention < 1 {
-		return fmt.Errorf("period_readiness.item_retention must be positive")
-	}
-	if c.PeriodReadiness.ParentRetention <= 0 || c.PeriodReadiness.ParentRetention > 365*24*time.Hour {
-		return fmt.Errorf("period_readiness.parent_retention must be greater than 0 and at most 365 days")
-	}
-	return nil
-}
-
 // Default returns safe local defaults.
 func Default() *Config {
 	return &Config{
@@ -343,19 +334,13 @@ func Default() *Config {
 		SubjectSync: subjectsync.DefaultConfig(),
 		Stream:      defaultStreamConfig(),
 		SCFAccess:   gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
-		PeriodReadiness: PeriodReadinessConfig{
-			Grace: 2 * time.Minute, ReportInterval: 5 * time.Second,
-			ItemRetention: 60, ParentRetention: 7 * 24 * time.Hour,
-		},
 		CollectorRetention: CollectorRetentionConfig{
 			MaintenanceInterval: "1m", MaintenanceOffset: "35s", MaintenanceTimeout: "20s", MaxRowsPerPass: 50000,
 		},
 		KlineResample: KlineResampleConfig{
-			Enabled: false, ScanTimeout: 30 * time.Second, WorkerConcurrency: 2, MaxClaimsPerTick: 100,
-			WorkerSubjectBatchSize: 50, WorkerJobTimeout: 30 * time.Second,
-			WorkerPollInterval: 5 * time.Second, WorkerMaxSourceKeysPerClaim: 20000,
-			StaleRunningAfter: 2 * time.Minute, DefaultSettleDelay: 10 * time.Second,
-			RepairLookbackBuckets: 3,
+			Enabled: false, ScanTimeout: 30 * time.Second, ExecTimeout: 30 * time.Second,
+			FallbackLookbackBars: 3, FallbackGrace: time.Minute, FallbackMaxBuckets: 200,
+			HistoryBucketsPerRound: 20, HistoryMaxJobs: 8, MaxReadKeys: 5000,
 		},
 		Health: HealthConfig{
 			Addr: ":11412",

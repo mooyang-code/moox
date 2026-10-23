@@ -21,8 +21,8 @@ type OperationalStats struct {
 }
 
 var operationalTables = map[string]string{
-	"instances":     "t_collector_task_instances",
-	"write_targets": "t_collector_instance_write_targets",
+	"resample_jobs":    "t_collector_resample_jobs",
+	"backfill_notices": "t_collector_backfill_notices",
 }
 
 // OperationalStats caps each count scan. Capped counts are explicit lower bounds;

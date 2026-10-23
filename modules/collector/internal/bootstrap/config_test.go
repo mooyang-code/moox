@@ -109,14 +109,37 @@ func TestMarketFetchSpaceIDsPrefersPluralEnvironment(t *testing.T) {
 func TestLoadKlineResampleConfig(t *testing.T) {
 	cfg, err := Load(writeCollectorConfig(t, `kline_resample:
   enabled: true
-  repair_lookback_buckets: 5
-  worker_subject_batch_size: 20
+  fallback_lookback_bars: 5
+  event_bus:
+    urls: ["nats://127.0.0.1:4222"]
+    credential_file: ./secrets/collector-eventbus.yaml
 `))
 	require.NoError(t, err)
 	assert.True(t, cfg.KlineResample.Enabled)
-	assert.Equal(t, 5, cfg.KlineResample.RepairLookbackBuckets)
-	assert.Equal(t, 100, cfg.KlineResample.MaxClaimsPerTick)
-	assert.Equal(t, 20, cfg.KlineResample.WorkerSubjectBatchSize)
+	assert.Equal(t, 5, cfg.KlineResample.FallbackLookbackBars)
+	assert.Equal(t, 200, cfg.KlineResample.FallbackMaxBuckets, "未写的项取默认值")
+	assert.Equal(t, 30*time.Second, cfg.KlineResample.ExecTimeout)
+	assert.True(t, cfg.KlineResample.EventBus.Enabled())
+}
+
+func TestLoadKlineResampleDefaultsHaveNoEventBus(t *testing.T) {
+	cfg, err := Load(writeCollectorConfig(t, "kline_resample:\n  enabled: true\n"))
+	require.NoError(t, err)
+	assert.False(t, cfg.KlineResample.EventBus.Enabled(), "没配置事件总线时合成只靠兜底检查")
+	assert.Equal(t, 3, cfg.KlineResample.FallbackLookbackBars)
+	assert.Equal(t, time.Minute, cfg.KlineResample.FallbackGrace)
+}
+
+func TestLoadRejectsRemovedResampleWorkerSettings(t *testing.T) {
+	_, err := Load(writeCollectorConfig(t, "kline_resample:\n  worker_concurrency: 2\n"))
+	require.Error(t, err, "旧的认领/租约类配置已删除，严格解析会拒绝")
+}
+
+func TestLoadRejectsInvalidResampleQuantities(t *testing.T) {
+	for _, body := range []string{"kline_resample:\n  fallback_lookback_bars: 0\n", "kline_resample:\n  exec_timeout: 0s\n", "kline_resample:\n  history_buckets_per_round: 0\n"} {
+		_, err := Load(writeCollectorConfig(t, body))
+		require.Error(t, err, body)
+	}
 }
 
 func TestLoadCollectorRetentionDefaultsAndOverrides(t *testing.T) {
@@ -150,40 +173,9 @@ func TestLoadAcceptsMinimumCollectorRetentionBudget(t *testing.T) {
 	assert.Equal(t, 1, cfg.CollectorRetention.MaxRowsPerPass)
 }
 
-func TestLoadRejectsInvalidPeriodReadinessRetention(t *testing.T) {
-	for _, body := range []string{
-		"period_readiness:\n  item_retention: 0\n",
-		"period_readiness:\n  parent_retention: -1h\n",
-		"period_readiness:\n  parent_retention: 8761h\n",
-	} {
-		_, err := Load(writeCollectorConfig(t, body))
-		require.Error(t, err, body)
-		assert.Contains(t, err.Error(), "period_readiness")
-	}
-}
-
-func TestLoadRejectsInvalidKlineResampleRepairLookback(t *testing.T) {
-	_, err := Load(writeCollectorConfig(t, `kline_resample:
-  repair_lookback_buckets: 11
-`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "repair_lookback_buckets")
-}
-
-func TestLoadRejectsExcessiveKlineResampleConcurrency(t *testing.T) {
-	_, err := Load(writeCollectorConfig(t, `kline_resample:
-  worker_concurrency: 251
-`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "worker quantities")
-}
-
-func TestLoadRejectsExcessiveKlineResampleClaims(t *testing.T) {
-	_, err := Load(writeCollectorConfig(t, `kline_resample:
-  max_claims_per_tick: 1001
-`))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "worker quantities")
+func TestLoadRejectsRemovedPeriodReadinessConfig(t *testing.T) {
+	_, err := Load(writeCollectorConfig(t, "period_readiness:\n  item_retention: 60\n"))
+	require.Error(t, err, "周期就绪已删除，严格解析会拒绝旧配置")
 }
 
 func TestLoadRejectsLegacyStorageTargets(t *testing.T) {

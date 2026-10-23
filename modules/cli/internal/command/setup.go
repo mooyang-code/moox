@@ -90,6 +90,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupMetadataImportCommand(deps),
 		newSetupExportSkillConfigCommand(deps),
 		newSetupFirewallCommand(deps),
+		newSetupStorageAuthCommand(deps),
 	)
 	return cmd
 }

@@ -1,6 +1,7 @@
 package storagepolicy
 
 import (
+	"encoding/json"
 	"math"
 	"strings"
 	"testing"
@@ -49,8 +50,52 @@ func TestResolvePrefersSpaceOverride(t *testing.T) {
 			t.Errorf("Resolve(%s, %s) = %s/%s, %v; want %s/%s", tc.space, tc.freq, period, source, err, tc.want, tc.source)
 		}
 	}
-	if _, _, err := retention.Resolve("crypto", "2h"); err == nil {
-		t.Fatal("an unknown frequency must not resolve")
+	if _, _, err := retention.Resolve("crypto", "7m"); err == nil {
+		t.Fatal("a frequency outside the grammar must not resolve")
+	}
+}
+
+func TestResolveFallsBackToLargestStandardFrequencyNotLonger(t *testing.T) {
+	retention := Default().Retention
+	cases := []struct{ freq, standard string }{
+		{"45m", "30m"}, {"2h", "1h"}, {"12h", "4h"}, {"3m", "1m"}, {"10m", "5m"}, {"20m", "15m"},
+	}
+	for _, tc := range cases {
+		got, source, err := retention.Resolve("crypto", tc.freq)
+		want, _, wantErr := retention.Resolve("crypto", tc.standard)
+		if err != nil || wantErr != nil || got != want || source != SourceDefault {
+			t.Errorf("Resolve(crypto, %s) = %v/%s, %v; want the %s retention %v", tc.freq, got, source, err, tc.standard, want)
+		}
+	}
+	// 精确配置优先于回落。
+	exact := Default().Retention
+	exact.Defaults = copyMap(exact.Defaults)
+	exact.Defaults["45m"] = "99h"
+	if got, _, err := exact.Resolve("crypto", "45m"); err != nil || got.String() != "99h" {
+		t.Fatalf("an exact default must win over the fallback, got %v, %v", got, err)
+	}
+	// 空间覆盖的标准档先于默认的回落；回落只取时长不超过自己的标准档，20m 不会取 30m。
+	spaced := Default().Retention
+	spaced.Spaces = map[string]map[string]string{"crypto": {"30m": "11h"}}
+	if got, source, err := spaced.Resolve("crypto", "45m"); err != nil || got.String() != "11h" || source != SourceSpace {
+		t.Fatalf("45m should use the space 30m override, got %v/%s, %v", got, source, err)
+	}
+	want, _, _ := spaced.Resolve("crypto", "15m")
+	if got, _, err := spaced.Resolve("crypto", "20m"); err != nil || got != want {
+		t.Fatalf("20m should fall back to 15m, got %v, %v", got, err)
+	}
+}
+
+func TestValidateAcceptsNonStandardCanonicalFrequencies(t *testing.T) {
+	policy := Default()
+	policy.Retention.Defaults = copyMap(policy.Retention.Defaults)
+	policy.Retention.Defaults["45m"] = "30d"
+	if _, err := Parse(mustMarshal(t, policy)); err != nil {
+		t.Fatalf("a canonical non-standard frequency should be accepted: %v", err)
+	}
+	policy.Retention.Defaults["60m"] = "30d"
+	if _, err := Parse(mustMarshal(t, policy)); err == nil {
+		t.Fatal("an alias must be rejected as a retention key")
 	}
 }
 
@@ -191,4 +236,13 @@ func TestRetentionBarsAndMinRetention(t *testing.T) {
 	if MinRetentionFor("stockcn", "1m", 5000).Duration <= MinRetentionFor("crypto", "1m", 5000).Duration {
 		t.Fatal("session market needs a longer calendar span for the same bars")
 	}
+}
+
+func mustMarshal(t *testing.T, policy Policy) []byte {
+	t.Helper()
+	raw, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }

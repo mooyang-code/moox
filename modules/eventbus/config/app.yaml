@@ -72,3 +72,13 @@ streams:
     max_age: 168h
     duplicates: 2m
     max_bytes: 134217728
+  - name: MOOX_COLLECTOR
+    # Collector 在 K 线于周期结束后被补写时发布的元数据事件（不带行情数据），供合成与因子按事件重算。
+    subjects: ["moox.event.collector.kline.backfilled.v1.>"]
+    retention: limits
+    discard: old
+    storage: file
+    replicas: 1
+    max_age: 72h
+    duplicates: 2m
+    max_bytes: 134217728

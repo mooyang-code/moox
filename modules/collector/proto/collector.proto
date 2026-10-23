@@ -225,49 +225,107 @@ message GetDataTypeConfigWithFieldsRsp {
   DataTypeConfigDetail detail = 2;
 }
 
-message StartKlineResampleBackfillReq {
+// ResampleJob 是一个历史合成作业：范围 [start, end) 按目标桶推进，next_bucket 是游标。
+message ResampleJob {
+  string job_id = 1;
+  string task_id = 2;
+  string request_id = 3;
+  // manual（CLI、控制台）或 source_backfill（源数据补采完成后触发）。
+  string origin = 4;
+  // 为空表示全部标的。
+  repeated string subjects = 5;
+  string start = 6;
+  string end = 7;
+  string next_bucket = 8;
+  // 最早开始时间，之前不开始。
+  string not_before = 9;
+  // queued / running / syncing / succeeded / failed / cancelled
+  string status = 10;
+  uint32 total_buckets = 11;
+  uint32 done_buckets = 12;
+  uint64 written = 13;
+  uint64 skipped = 14;
+  repeated string skipped_samples = 15;
+  string last_error = 16;
+  string created_at = 17;
+  string updated_at = 18;
+}
+
+message SubmitKlineResampleJobReq {
   string space_id = 1;
   string task_id = 2;
+  // 同一任务内唯一，重复提交返回已有作业。
   string request_id = 3;
   string start = 4;
   string end = 5;
+  // 为空表示全部标的。
+  repeated string subjects = 6;
 }
 
-message StartKlineResampleBackfillRsp {
+message SubmitKlineResampleJobRsp {
   common.RetInfo ret_info = 1;
+  ResampleJob job = 2;
+  // false 表示 request_id 已存在，返回的是已有作业。
+  bool created = 3;
 }
 
-message CancelKlineResampleBackfillReq {
+message GetKlineResampleJobReq {
   string space_id = 1;
-  string task_id = 2;
-  string request_id = 3;
+  string job_id = 2;
 }
 
-message CancelKlineResampleBackfillRsp {
+message GetKlineResampleJobRsp {
   common.RetInfo ret_info = 1;
+  ResampleJob job = 2;
 }
 
-message GetKlineResampleBackfillReq {
+message ListKlineResampleJobsReq {
   string space_id = 1;
+  // 为空表示该空间全部合成任务。
   string task_id = 2;
-  string request_id = 3;
+  // 为空表示全部状态。
+  string status = 3;
+  uint32 limit = 4;
 }
 
-message GetKlineResampleBackfillRsp {
+message ListKlineResampleJobsRsp {
   common.RetInfo ret_info = 1;
-  string request_id = 2;
-  string start = 3;
-  string end = 4;
-  string next_bucket = 5;
-  string state = 6;
-  uint64 participants = 7;
-  uint64 running = 8;
-  uint64 waiting_source = 9;
-  uint64 syncing = 10;
-  uint64 complete = 11;
-  uint64 failed = 12;
-  repeated string errors = 13;
-  uint64 canceled = 14;
+  repeated ResampleJob jobs = 2;
+}
+
+message CancelKlineResampleJobReq {
+  string space_id = 1;
+  string job_id = 2;
+}
+
+message CancelKlineResampleJobRsp {
+  common.RetInfo ret_info = 1;
+  ResampleJob job = 2;
+}
+
+// PreviewKlineResampleSource 由源采集任务推导合成的源参数，并按合成规则校验目标频率；创建合成任务前用它填表单。
+message PreviewKlineResampleSourceReq {
+  string space_id = 1;
+  string source_task_id = 2;
+  // 可选；给出时校验它能否由源周期合成。
+  string target_frequency = 3;
+}
+
+message PreviewKlineResampleSourceRsp {
+  common.RetInfo ret_info = 1;
+  string source_dataset_id = 2;
+  string source_frequency = 3;
+  string source_series_tag = 4;
+  uint32 subject_count = 5;
+  string market_id = 6;
+  string provider = 7;
+  string market_type = 8;
+  // epoch_utc（24 小时连续市场）或 session（交易时段市场）。
+  string alignment = 9;
+  // 该市场允许的日内目标周期（规范频率）；1d 另外也允许。
+  repeated string allowed_frequencies = 10;
+  // 目标频率不满足合成规则时的原因；为空表示通过或未给出目标频率。
+  string validation_error = 11;
 }
 
 message SyncSubjectsReq {
@@ -824,9 +882,11 @@ service CollectMgr {
   // ----- 数据类型配置 -----
   rpc GetDataTypeConfigs(GetDataTypeConfigsReq) returns (GetDataTypeConfigsRsp);
   rpc GetDataTypeConfigWithFields(GetDataTypeConfigWithFieldsReq) returns (GetDataTypeConfigWithFieldsRsp);
-  rpc StartKlineResampleBackfill(StartKlineResampleBackfillReq) returns (StartKlineResampleBackfillRsp);
-  rpc CancelKlineResampleBackfill(CancelKlineResampleBackfillReq) returns (CancelKlineResampleBackfillRsp);
-  rpc GetKlineResampleBackfill(GetKlineResampleBackfillReq) returns (GetKlineResampleBackfillRsp);
+  rpc SubmitKlineResampleJob(SubmitKlineResampleJobReq) returns (SubmitKlineResampleJobRsp);
+  rpc GetKlineResampleJob(GetKlineResampleJobReq) returns (GetKlineResampleJobRsp);
+  rpc ListKlineResampleJobs(ListKlineResampleJobsReq) returns (ListKlineResampleJobsRsp);
+  rpc CancelKlineResampleJob(CancelKlineResampleJobReq) returns (CancelKlineResampleJobRsp);
+  rpc PreviewKlineResampleSource(PreviewKlineResampleSourceReq) returns (PreviewKlineResampleSourceRsp);
   // 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
   rpc SyncSubjects(SyncSubjectsReq) returns (SyncSubjectsRsp);
 

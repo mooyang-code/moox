@@ -74,13 +74,10 @@ func seriesEffectiveKey(spaceID, datasetID, frequency string, from int64) []byte
 	return []byte(seriesEffectivePrefixFor(spaceID, datasetID, frequency) + fmt.Sprintf("%020d", from))
 }
 
-func periodAligned(frequency frequencypkg.Frequency, at int64) bool {
-	step := int64(frequency.Duration() / time.Second)
-	if step <= 0 || step >= 24*60*60 {
-		// 日、周、月的边界取决于市场时区，Storage 只要求整分钟，避免明显错位。
-		return at > 0 && at%60 == 0
-	}
-	return at > 0 && at%step == 0
+// periodAligned 只要求生效点是正的整分钟：日内周期是否按 epoch 对齐取决于数据集的分桶方式（session 市场的桶从各交易时段开盘起切分，
+// 不在 epoch 边界上），这一层不认识数据集属性，对齐由 Primary 服务层按数据集声明的 alignment 检查。
+func periodAligned(_ frequencypkg.Frequency, at int64) bool {
+	return at > 0 && at%60 == 0
 }
 
 // RegisterSeriesSnapshot 保存完整标的列表，并在生效表追加“从 effectiveFrom 起使用该快照”。

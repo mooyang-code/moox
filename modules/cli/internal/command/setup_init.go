@@ -465,7 +465,7 @@ func validateSetupMetadataDependencies(seed metadataSeed) error {
 		}
 		if kind, kindErr := parseDataKind(item.DataKind); kindErr == nil && kind == storagepb.DataKind_DATA_KIND_TIME_SERIES {
 			if !frequencypkg.IsCanonical(item.Freq) {
-				return fmt.Errorf("dataset %s/%s freq %q is not canonical; use one of %s", item.SpaceID, item.DatasetID, item.Freq, strings.Join(frequencypkg.Strings(), ", "))
+				return fmt.Errorf("dataset %s/%s freq %q is not canonical; use one of %s", item.SpaceID, item.DatasetID, item.Freq, strings.Join(frequencypkg.StandardStrings(), ", "))
 			}
 		}
 		datasetDefinitions[setupMetadataKey(item.SpaceID, item.DatasetID)] = item
