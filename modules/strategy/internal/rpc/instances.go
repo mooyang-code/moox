@@ -152,7 +152,7 @@ func (s *Service) UpdateStrategyInstance(ctx context.Context, req *strategypb.Up
 	}
 	if !current.Enabled && (updated.StrategyID != current.StrategyID || updated.ViewID != current.ViewID) {
 		// 改绑策略或 View 后私有因子集的成员或数据源可能不同：先删掉旧的，下次启用重新建立。
-		if err := s.releaseFactorSet(ctx, current.InstanceID); err != nil {
+		if err := s.releaseFactorSet(ctx, current); err != nil {
 			return &strategypb.UpdateStrategyInstanceRsp{RetInfo: failure(fmt.Errorf("删除实例旧的私有因子集失败：%w", err))}, nil
 		}
 	}
@@ -251,7 +251,7 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 		}
 	}
 	// 先删私有因子集（幂等）：失败时实例保持原样，可以重试；实例软删除之后就没有入口再清理它了。
-	if err := s.releaseFactorSet(ctx, instance.InstanceID); err != nil {
+	if err := s.releaseFactorSet(ctx, instance); err != nil {
 		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: failure(fmt.Errorf("删除实例的私有因子集失败：%w", err))}, nil
 	}
 	if err := s.Store.SoftDeleteInstance(ctx, instance.InstanceID, s.nowTime()); err != nil {

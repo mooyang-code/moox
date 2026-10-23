@@ -2,7 +2,9 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
@@ -22,12 +24,37 @@ func (s *Service) resolveForInstance(ctx context.Context, instance store.Instanc
 	return resolver.ResolveInstance(ctx, instance.InstanceID, instance.SpaceID, instance.ViewID, strategy)
 }
 
-// releaseFactorSet 删除实例的私有因子集（幂等）；没有接线 Factor 时无事可做。
-func (s *Service) releaseFactorSet(ctx context.Context, instanceID string) error {
+// releaseFactorSet 删除实例的私有因子集（幂等）；没有接线 Factor 时无事可做。其他未删除的实例还绑定着它的结果 View 时
+// 拒绝：删除私有因子集会连同默认结果 View 一起删掉，读取方就会永久失去 View 与历史结果。
+func (s *Service) releaseFactorSet(ctx context.Context, instance store.Instance) error {
 	if s.Factors == nil {
 		return nil
 	}
-	return s.Factors.ReleaseInstanceFactorSet(ctx, instanceID)
+	if err := s.ensureNoViewReaders(ctx, instance); err != nil {
+		return err
+	}
+	return s.Factors.ReleaseInstanceFactorSet(ctx, instance.InstanceID)
+}
+
+// ensureNoViewReaders 检查是否还有别的实例绑定了 owner 的私有结果 View（取自 owner 固化的解析结果）。
+func (s *Service) ensureNoViewReaders(ctx context.Context, owner store.Instance) error {
+	var resolved struct {
+		ViewID      string `json:"view_id"`
+		FactorSetID string `json:"factor_set_id"`
+	}
+	if len(owner.ResolvedJSON) == 0 || json.Unmarshal(owner.ResolvedJSON, &resolved) != nil || resolved.FactorSetID == "" || resolved.ViewID == "" {
+		return nil
+	}
+	instances, err := s.Store.ListInstances(ctx, owner.SpaceID, nil)
+	if err != nil {
+		return err
+	}
+	for _, other := range instances {
+		if other.InstanceID != owner.InstanceID && other.ViewID == resolved.ViewID {
+			return fmt.Errorf("实例 %s 还绑定着私有结果 View %s，请先改绑或删除它", other.InstanceID, resolved.ViewID)
+		}
+	}
+	return nil
 }
 
 // pauseFactorSet 停用实例的私有因子集：尽力而为，失败不阻止实例停用（再次启用时会重新对齐并启用）。

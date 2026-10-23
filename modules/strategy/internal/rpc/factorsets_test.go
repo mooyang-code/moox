@@ -170,3 +170,33 @@ func TestRejectedDeleteAndRebindKeepFactorSet(t *testing.T) {
 		t.Fatalf("改绑到不存在的策略被拒绝，不应释放私有因子集：%v", factors.released)
 	}
 }
+
+// 别的实例还绑定着私有结果 View 时，删除拥有者被拒绝，私有因子集不会被释放（否则读取方永久失去 View）。
+func TestDeleteOwnerRejectedWhileAnotherInstanceReadsItsView(t *testing.T) {
+	h := newHarness(t)
+	h.service.Resolver = &tunedResolver{fakeResolver: h.resolver}
+	factors := &factorSetsFake{}
+	h.service.Factors = factors
+	h.createStrategy("s1", tunedDSL)
+	h.createStrategy("s2", demoDSL)
+	created := h.createInstance("i1", "s1", "view_a", "", true)
+	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
+	// i2 只读绑定 i1 的私有结果 View（启用时固化的 view_id）。
+	reader := h.createInstance("i2", "s2", "view_factor_i1", "", false)
+	requireOK(t, int32(reader.GetRetInfo().GetCode()), reader.GetRetInfo().GetMsg())
+	h.setEnabled("i1", false)
+
+	rejected, _ := h.service.DeleteStrategyInstance(h.ctx, &strategypb.DeleteStrategyInstanceReq{InstanceId: "i1"})
+	requireFail(t, int32(rejected.GetRetInfo().GetCode()), rejected.GetRetInfo().GetMsg(), "还绑定着")
+	if len(factors.released) != 0 {
+		t.Fatalf("还有读取方时不应释放私有因子集：%v", factors.released)
+	}
+	// 读取方删除之后再删拥有者就可以。
+	deletedReader, _ := h.service.DeleteStrategyInstance(h.ctx, &strategypb.DeleteStrategyInstanceReq{InstanceId: "i2"})
+	requireOK(t, int32(deletedReader.GetRetInfo().GetCode()), deletedReader.GetRetInfo().GetMsg())
+	deleted, _ := h.service.DeleteStrategyInstance(h.ctx, &strategypb.DeleteStrategyInstanceReq{InstanceId: "i1"})
+	requireOK(t, int32(deleted.GetRetInfo().GetCode()), deleted.GetRetInfo().GetMsg())
+	if n := len(factors.released); n == 0 || factors.released[n-1] != "i1" {
+		t.Fatalf("读取方删除后应释放拥有者的私有因子集：%v", factors.released)
+	}
+}

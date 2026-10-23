@@ -390,14 +390,17 @@ func renamePlacementComponents(blocks []block, report *MigrateReport) {
 			continue
 		}
 		for j := 1; j < len(blocks[i].lines); j++ {
-			if _, _, ok := keyValue(blocks[i].lines[j]); !ok {
+			// 多行数组的续行没有 key = value，所以逐行处理（跳过注释行）；双引号与单引号字符串都改。
+			if strings.HasPrefix(strings.TrimSpace(blocks[i].lines[j]), "#") {
 				continue
 			}
 			for from, to := range legacyComponents {
-				quoted := `"` + from + `"`
-				if strings.Contains(blocks[i].lines[j], quoted) {
-					blocks[i].lines[j] = strings.ReplaceAll(blocks[i].lines[j], quoted, `"`+to+`"`)
-					counts[from]++
+				for _, quote := range []string{`"`, `'`} {
+					old := quote + from + quote
+					if strings.Contains(blocks[i].lines[j], old) {
+						blocks[i].lines[j] = strings.ReplaceAll(blocks[i].lines[j], old, quote+to+quote)
+						counts[from]++
+					}
 				}
 			}
 		}

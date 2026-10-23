@@ -1103,3 +1103,29 @@ func TestEnableMemberReturnsTheStoredJobWhenMergedIntoAQueuedBackfill(t *testing
 	require.NoError(t, err, "返回的任务号必须能读到")
 	require.ElementsMatch(t, []string{"momentum", "bias"}, job.Members)
 }
+
+// 结果数据集清理失败时参数冻结历史还在：参数记录在数据集清理成功之后才删，集合停在 deleting 可以重试。
+func TestDeleteSetKeepsParamHistoryWhenPurgeFails(t *testing.T) {
+	ctx := context.Background()
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := NewService(db, meta)
+	set, err := svc.CreateSet(ctx, newSet())
+	require.NoError(t, err)
+	require.NoError(t, db.SetSetStatus(ctx, set.SetID, domain.SetStatusEnabled, domain.SetStatusDisabled))
+	at := time.Unix(1_800_000_000, 0).UTC()
+	_, err = db.FreezeParams(ctx, set.SetID, at, at.Add(-time.Minute),
+		[]store.FreezeMember{{Alias: "fast", Defaults: domain.ParamSnapshot{"window": {Default: 20}}}})
+	require.NoError(t, err)
+	meta.deleteErrs = 1
+
+	require.Error(t, svc.DeleteSet(ctx, set.SetID, true))
+	intervals, err := db.ListParamIntervals(ctx, set.SetID, "", at.Add(-time.Hour), at.Add(time.Hour))
+	require.NoError(t, err)
+	require.Len(t, intervals, 1, "清理失败时冻结历史必须保留")
+
+	require.NoError(t, svc.Reconcile(ctx))
+	intervals, err = db.ListParamIntervals(ctx, set.SetID, "", at.Add(-time.Hour), at.Add(time.Hour))
+	require.NoError(t, err)
+	require.Empty(t, intervals)
+}

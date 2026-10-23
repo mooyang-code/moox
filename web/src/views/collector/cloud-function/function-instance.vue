@@ -201,7 +201,7 @@
       v-model="functionPackageManageVisible"
       mode="modal"
       :package-type="currentPackageType"
-      :biz-type="currentWorkloadType"
+      :workload-type="currentWorkloadType"
       @refresh="loadData"
     />
 

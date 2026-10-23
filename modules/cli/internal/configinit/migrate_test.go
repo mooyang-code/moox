@@ -167,3 +167,28 @@ func TestMigrateRenamesLegacyPlacementComponent(t *testing.T) {
 	require.NotContains(t, string(plain), `"cloudnode"`)
 	require.Contains(t, string(plain), `"cloudfunction"`)
 }
+
+// 单引号字符串与多行数组里的旧组件身份同样改名，注释行不动。
+func TestRenameLegacyPlacementComponentHandlesQuotesAndMultilineArrays(t *testing.T) {
+	blocks := splitBlocks(strings.Split(strings.Join([]string{
+		"[placements]",
+		"# 旧名字 \"cloudnode\" 只在注释里，不动",
+		"control = ['admin', 'cloudnode']",
+		"storage = [",
+		"  \"access\",",
+		"  \"cloudnode\",",
+		"]",
+		"",
+	}, "\n"), "\n"))
+	var report MigrateReport
+	renamePlacementComponents(blocks, &report)
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.lines...)
+	}
+	text := strings.Join(out, "\n")
+	require.Contains(t, text, "control = ['admin', 'cloudfunction']")
+	require.Contains(t, text, "  \"cloudfunction\",")
+	require.Contains(t, text, "# 旧名字 \"cloudnode\" 只在注释里，不动")
+	require.Equal(t, []ComponentRename{{From: "cloudnode", To: "cloudfunction", Changes: 2}}, report.Components)
+}
