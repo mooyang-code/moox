@@ -349,11 +349,37 @@ func ownedResult(result *gorm.DB) error {
 }
 
 // FinishChunk 记录分块的结果；分块已不属于该次尝试时返回 ErrChunkLost。
+// 分块成功时在同一事务里记录补写通知（数据集、标的、时间段、来源），供合成与因子按事件重算。
 func (r *BackfillRepository) FinishChunk(ctx context.Context, id int64, attempt int, status string, rows int, lastError string) error {
 	if err := r.ready(); err != nil {
 		return err
 	}
-	return ownedResult(r.chunkOwned(ctx, id, attempt).Updates(map[string]any{"c_status": status, "c_rows": rows, "c_last_error": lastError, "c_mtime": time.Now().UTC()}))
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		update := tx.Model(&backfillChunkRow{}).Where("c_id = ? AND c_attempts = ? AND c_status = ?", id, attempt, BackfillRunning).
+			Updates(map[string]any{"c_status": status, "c_rows": rows, "c_last_error": lastError, "c_mtime": time.Now().UTC()})
+		if err := ownedResult(update); err != nil {
+			return err
+		}
+		if status != BackfillSucceeded {
+			return nil
+		}
+		var chunk backfillChunkRow
+		if err := tx.Where("c_id = ?", id).Take(&chunk).Error; err != nil {
+			return err
+		}
+		var job backfillJobRow
+		if err := tx.Where("c_job_id = ?", chunk.JobID).Take(&job).Error; err != nil {
+			return err
+		}
+		origin := job.Source
+		if job.Kind == BackfillKindForce {
+			origin = BackfillKindForce
+		}
+		return addNoticesTx(tx, []BackfillNotice{{
+			SpaceID: job.SpaceID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, SubjectID: chunk.SubjectID,
+			Start: chunk.From, End: chunk.To, Origin: origin, JobID: chunk.JobID,
+		}})
+	})
 }
 
 // RequeueChunk 把执行完但复查仍缺的分块退回待执行，记下这次仍缺的 K 线，尝试次数照常累计。

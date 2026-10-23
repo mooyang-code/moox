@@ -14,7 +14,7 @@ import (
 
 // Collector 的重置（设计 5.2）。
 //
-//	data：清运行数据——补采作业与分块、自动补采水位、历史扫描、行情源缺失、周期就绪、任务实例与写入目标、流采集工作进程心跳；
+//	data：清运行数据——补采作业与分块、自动补采水位、历史扫描、行情源缺失、合成快照与历史作业、补写通知与事件发件箱、流采集工作进程心跳；
 //	      保留采集任务、采集计划、采集方式、标的排除（配置）；
 //	all ：再清采集任务（含标签、序列）、采集计划、采集方式、标的排除，回到新部署的状态（采集任务由启动时的种子重新写入）。
 //
@@ -25,8 +25,8 @@ import (
 var (
 	collectorDataTables = []string{
 		"t_collector_kline_backfill_jobs", "t_collector_kline_backfill_chunks", "t_collector_backfill_watermarks",
-		"t_collector_history_scans", "t_collector_source_absences", "t_period_readiness", "t_period_readiness_items",
-		"t_collector_task_instances", "t_collector_instance_write_targets", "t_collector_stream_workers",
+		"t_collector_history_scans", "t_collector_source_absences", "t_collector_resample_snapshots", "t_collector_resample_jobs", "t_collector_backfill_notices", "t_collector_event_outbox",
+		"t_collector_stream_workers",
 	}
 	collectorConfigTables = []string{
 		"t_collector_tasks", "t_collector_task_tags", "t_collector_task_series", "t_collector_fetch_plans",
@@ -43,6 +43,7 @@ func collectorResetSpec(db *store.Store, dbPath string, control *collectorContro
 		if err != nil {
 			return lifecycle.ResetPlanInfo{}, nil, err
 		}
+		lifecycle.RegisterSQLiteFile(sqlDB, dbPath)
 		actual, err := lifecycle.BusinessTables(ctx, sqlDB)
 		if err != nil {
 			return lifecycle.ResetPlanInfo{}, nil, err
@@ -54,9 +55,6 @@ func collectorResetSpec(db *store.Store, dbPath string, control *collectorContro
 		if unclassified, _ := lifecycle.ClassifyTables(actual, collectorDataTables, collectorConfigTables, collectorStateTables); len(unclassified) > 0 {
 			info.Blockers = append(info.Blockers, "有未归类的表，先更新重置清单："+lifecycle.JoinTables(unclassified))
 		}
-		if waiting := control.timersNotDisabled(); len(waiting) > 0 {
-			info.Blockers = append(info.Blockers, "空间 "+strings.Join(waiting, "、")+" 的 SCF 定时器还没有确认停用：先暂停并等定时器停用，否则删除采集计划后定时器会成为孤儿")
-		}
 		tables := append([]string(nil), collectorDataTables...)
 		if scope == lifecycle.ResetAll {
 			tables = append(tables, collectorConfigTables...)
@@ -67,6 +65,11 @@ func collectorResetSpec(db *store.Store, dbPath string, control *collectorContro
 			info.Stats = map[string]any{"rows": rows}
 		}
 		steps := []lifecycle.ResetStep{
+			// 定时器停用是暂停动作的一部分，只有暂停之后才成立，所以不能放进 plan 的阻止项（plan 时模块还在运行，永远发不出令牌）；
+			// 放在第一步：删除采集计划之前必须确认，否则定时器会成为没人管理的孤儿。
+			{Name: "verify_scf_timers_disabled", Describe: "核验所有空间的 SCF 定时器已停用", Run: func(ctx context.Context, _ string) error {
+				return control.waitTimersDisabled(ctx)
+			}},
 			{Name: "quiesce_backfill", Describe: "等待在途的补采分块结束", Run: func(ctx context.Context, _ string) error {
 				waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 				defer cancel()
@@ -110,6 +113,29 @@ func (c *collectorControl) timersNotDisabled() []string {
 		}
 	}
 	return waiting
+}
+
+// waitTimersDisabled 等所有空间的 SCF 定时器确认停用（暂停刚结束时可能还差几秒），超时报错。
+func (c *collectorControl) waitTimersDisabled(ctx context.Context) error {
+	wait := c.timerWait
+	if wait <= 0 {
+		wait = 2 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		waiting := c.timersNotDisabled()
+		if len(waiting) == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("空间 %s 的 SCF 定时器还没有确认停用：先暂停并等定时器停用，否则删除采集计划后定时器会成为孤儿", strings.Join(waiting, "、"))
+		case <-ticker.C:
+		}
+	}
 }
 
 func (c *collectorControl) quiesceBackfill(ctx context.Context) error {

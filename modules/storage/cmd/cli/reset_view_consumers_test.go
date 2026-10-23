@@ -119,7 +119,15 @@ func TestValidateResetPrimaryPathRequiresPackageDataChild(t *testing.T) {
 	if _, err := validateResetPrimaryPath(filepath.Join(root, "data", "storage-node", "pebble"), root); err != nil {
 		t.Fatalf("expected package data path to be allowed: %v", err)
 	}
-	for _, path := range []string{root, filepath.Dir(root), filepath.Join(root, "config"), filepath.Join(root, "data")} {
+	// 原生部署：Pebble 在 <包根>/storage-node/var/storage/pebble（线上第一次执行时就因为只认 data/ 而在清事件流之后才被拒绝）。
+	if _, err := validateResetPrimaryPath(filepath.Join(root, "storage-node", "var", "storage", "pebble"), root); err != nil {
+		t.Fatalf("expected native component var path to be allowed: %v", err)
+	}
+	for _, path := range []string{
+		root, filepath.Dir(root), filepath.Join(root, "config"), filepath.Join(root, "data"),
+		filepath.Join(root, "storage-node"), filepath.Join(root, "storage-node", "var"), filepath.Join(root, "storage-node", "config"),
+		filepath.Join(root, "other", "var", "storage"), filepath.Join(root, "data", "..", "..", "etc"),
+	} {
 		if _, err := validateResetPrimaryPath(path, root); err == nil {
 			t.Fatalf("expected unsafe primary path %q to be rejected", path)
 		}

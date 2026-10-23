@@ -458,3 +458,40 @@ func TestResetAuditEvents(t *testing.T) {
 		require.Contains(t, all, want)
 	}
 }
+
+// 应用的库把连接池限制为 1 条：重置的备份、统计、清表不能占着它，否则健康检查的 SELECT 1 排不上队，
+// 就绪探测失败，守护进程会把正在重置的模块重启（线上策略库 1.8 GB 就这样被中断）。
+func TestSQLiteResetHelpersDoNotNeedTheApplicationConnection(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "demo.db")+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	db.SetMaxOpenConns(1)
+	_, err = db.Exec(`CREATE TABLE t_big (c_id INTEGER PRIMARY KEY AUTOINCREMENT, c_v TEXT);
+INSERT INTO t_big (c_v) VALUES ('a'), ('b'), ('c');`)
+	require.NoError(t, err)
+
+	RegisterSQLiteFile(db, filepath.Join(dir, "demo.db"))
+	// 唯一的连接被应用占着（比如一条长查询）。
+	busy, err := db.Conn(context.Background())
+	require.NoError(t, err)
+	defer busy.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	// 独占连接时，原连接上的操作会一直排队直到超时；专用连接上的这些操作不受影响。
+	blocked, cancelBlocked := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancelBlocked()
+	require.Error(t, db.PingContext(blocked), "前提：应用连接确实被占着")
+
+	rows, err := TableRows(ctx, db, []string{"t_big"})
+	require.NoError(t, err)
+	require.Equal(t, int64(3), rows["t_big"])
+	backupDir, err := ResetBackupDir(dir, "reset-20261022T090000-bb", 3)
+	require.NoError(t, err)
+	_, err = SQLiteBackup(ctx, db, backupDir, "demo.db")
+	require.NoError(t, err)
+	deleted, err := ClearTables(ctx, db, []string{"t_big"})
+	require.NoError(t, err)
+	require.Equal(t, int64(3), deleted["t_big"])
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -56,7 +57,7 @@ func TestCollectorResetKeepsPauseFlagUntilTheFirstInit(t *testing.T) {
 	plan, err := life.ResetPlan(ctx, lifecycle.ResetAll)
 	require.NoError(t, err)
 	require.Empty(t, plan.Blockers)
-	require.Len(t, plan.Steps, 3)
+	require.Len(t, plan.Steps, 4)
 	_, err = life.ResetApply(ctx, lifecycle.ResetApplyRequest{Token: plan.Token, Scope: lifecycle.ResetAll, By: "ops"})
 	require.NoError(t, err)
 	require.NoError(t, life.ResetWait(ctx))
@@ -76,14 +77,29 @@ func TestCollectorResetKeepsPauseFlagUntilTheFirstInit(t *testing.T) {
 	require.Empty(t, paused, "重置后第一次 init 放开采集")
 }
 
-// SCF 定时器还没有确认停用时拒绝重置：删掉采集计划后定时器会成为没人管理的孤儿。
-func TestCollectorResetBlocksWhileTimersAreStillEnabled(t *testing.T) {
+// SCF 定时器还没有确认停用时，重置在第一步失败而不是删除采集计划：否则定时器会成为没人管理的孤儿。
+// plan 阶段（模块还在运行）不把它当阻止项，否则永远发不出令牌。
+func TestCollectorResetFailsFirstStepWhileTimersAreStillEnabled(t *testing.T) {
 	life, control, _, _ := newCollectorResetEnv(t)
 	control.manager = &marketfetch.PlanManager{}
-	plan, err := life.ResetPlan(context.Background(), lifecycle.ResetData)
+	control.timerWait = 50 * time.Millisecond
+	ctx := context.Background()
+	plan, err := life.ResetPlan(ctx, lifecycle.ResetData)
 	require.NoError(t, err)
-	require.Len(t, plan.Blockers, 1)
-	require.Contains(t, plan.Blockers[0], "crypto")
-	require.Contains(t, plan.Blockers[0], "孤儿")
-	require.Empty(t, plan.Token)
+	require.Empty(t, plan.Blockers, "plan 阶段发得出令牌")
+	require.NotEmpty(t, plan.Token)
+	require.Equal(t, "verify_scf_timers_disabled", plan.Steps[0].Name)
+
+	_, err = life.Command(ctx, lifecycle.CmdPause, lifecycle.Ref{})
+	if err != nil {
+		t.Logf("暂停返回：%v", err) // 定时器没有停用时暂停会提示在途操作没结束，但门禁已关闭
+	}
+	_, err = life.ResetApply(ctx, lifecycle.ResetApplyRequest{Token: plan.Token, Scope: lifecycle.ResetData, By: "ops"})
+	require.NoError(t, err)
+	require.NoError(t, life.ResetWait(ctx))
+	st := life.ResetStatus()
+	require.Equal(t, "failed", st.Operation.State)
+	require.Contains(t, st.Operation.Error, "孤儿")
+	require.Equal(t, "failed", st.Operation.Steps[0].State)
+	require.Equal(t, "pending", st.Operation.Steps[1].State, "后面的步骤没有执行")
 }

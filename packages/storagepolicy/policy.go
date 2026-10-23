@@ -116,12 +116,46 @@ func (r Retention) Resolve(spaceID, freq string) (Period, string, error) {
 		period, err := ParsePeriod(raw)
 		return period, SourceSpace, err
 	}
-	raw, ok := r.Defaults[freq]
+	if raw, ok := r.Defaults[freq]; ok {
+		period, err := ParsePeriod(raw)
+		return period, SourceDefault, err
+	}
+	// 未单独配置的频率（例如合成出来的 45m）沿用时长不超过它的最大标准档的保留期：先空间覆盖，再默认。
+	fallback, ok := fallbackStandard(freq)
+	if !ok {
+		return Period{}, "", fmt.Errorf("no retention for frequency %q", freq)
+	}
+	if raw, ok := r.Spaces[spaceID][fallback]; ok {
+		period, err := ParsePeriod(raw)
+		return period, SourceSpace, err
+	}
+	raw, ok := r.Defaults[fallback]
 	if !ok {
 		return Period{}, "", fmt.Errorf("no retention for frequency %q", freq)
 	}
 	period, err := ParsePeriod(raw)
 	return period, SourceDefault, err
+}
+
+// fallbackStandard 返回时长不超过 freq 的最大标准档（45m → 30m，2h → 1h，12h → 4h）；标准档自身没有回落。
+func fallbackStandard(freq string) (string, bool) {
+	parsed, err := frequencypkg.Parse(freq)
+	if err != nil || string(parsed) != freq {
+		return "", false
+	}
+	target := parsed.NominalDuration()
+	best := ""
+	var bestDuration time.Duration
+	for _, candidate := range frequencypkg.Standard() {
+		duration := candidate.NominalDuration()
+		if duration <= target && duration > bestDuration {
+			best, bestDuration = string(candidate), duration
+		}
+	}
+	if best == "" || best == freq {
+		return "", false
+	}
+	return best, true
 }
 
 // TrimBarsFor returns ceil(1.2 × bars), the count at which a View is trimmed.
@@ -212,7 +246,7 @@ func (p Policy) Coverage() (errs, warnings []string) {
 			errs = append(errs, message)
 		}
 	}
-	for _, freq := range frequencypkg.Strings() {
+	for _, freq := range sortedKeys(normalized.Retention.Defaults) {
 		check("retention.defaults."+freq, normalized.Retention.Defaults[freq], freq, "")
 	}
 	spaces := make([]string, 0, len(normalized.Retention.Spaces))
@@ -225,10 +259,8 @@ func (p Policy) Coverage() (errs, warnings []string) {
 		if space == systemSpace {
 			continue
 		}
-		for _, freq := range frequencypkg.Strings() {
-			if raw, ok := normalized.Retention.Spaces[space][freq]; ok {
-				check("retention.spaces."+space+"."+freq, raw, freq, space)
-			}
+		for _, freq := range sortedKeys(normalized.Retention.Spaces[space]) {
+			check("retention.spaces."+space+"."+freq, normalized.Retention.Spaces[space][freq], freq, space)
 		}
 	}
 	return errs, warnings
@@ -237,10 +269,10 @@ func (p Policy) Coverage() (errs, warnings []string) {
 // normalized validates the policy and renders every period canonically.
 func (p Policy) normalized() (Policy, error) {
 	out := Policy{View: p.View, Retention: Retention{Defaults: map[string]string{}}}
-	for _, freq := range frequencypkg.Strings() {
+	for _, freq := range frequencypkg.StandardStrings() {
 		raw, ok := p.Retention.Defaults[freq]
 		if !ok {
-			return Policy{}, fmt.Errorf("retention.defaults must cover every frequency; %q is missing", freq)
+			return Policy{}, fmt.Errorf("retention.defaults must cover every standard frequency; %q is missing", freq)
 		}
 		period, err := ParsePeriod(raw)
 		if err != nil {
@@ -248,10 +280,15 @@ func (p Policy) normalized() (Policy, error) {
 		}
 		out.Retention.Defaults[freq] = period.String()
 	}
-	for freq := range p.Retention.Defaults {
+	for freq, raw := range p.Retention.Defaults {
 		if !frequencypkg.IsCanonical(freq) {
 			return Policy{}, fmt.Errorf("retention.defaults: %q is not a canonical frequency", freq)
 		}
+		period, err := ParsePeriod(raw)
+		if err != nil {
+			return Policy{}, fmt.Errorf("retention.defaults.%s: %w", freq, err)
+		}
+		out.Retention.Defaults[freq] = period.String()
 	}
 	if len(p.Retention.Spaces) > 0 {
 		out.Retention.Spaces = make(map[string]map[string]string, len(p.Retention.Spaces))
@@ -342,4 +379,20 @@ func (p Policy) Encode() ([]byte, error) {
 		return nil, err
 	}
 	return append(raw, '\n'), nil
+}
+
+func sortedKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		left, _ := frequencypkg.Parse(keys[i])
+		right, _ := frequencypkg.Parse(keys[j])
+		if left.NominalDuration() != right.NominalDuration() {
+			return left.NominalDuration() < right.NominalDuration()
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
 }

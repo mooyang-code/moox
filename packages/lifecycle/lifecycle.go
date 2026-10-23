@@ -139,7 +139,7 @@ type PauseInfo struct {
 	By    string    `json:"by,omitempty"`
 	Since time.Time `json:"since"`
 	// ExpiresAt 非零表示到点自动恢复（由 Refresh 检查）。
-	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	ExpiresAt time.Time `json:"expires_at,omitzero"`
 }
 
 // Hold 是持久化在模块自身记录里的控制意图，不依赖阶段推导：系统暂停时即使模块自身检查失败（未就绪）也必须能建立门禁，

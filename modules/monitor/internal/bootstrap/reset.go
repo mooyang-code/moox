@@ -38,6 +38,7 @@ func monitorResetSpec(db *store.Store, dbPath string) *lifecycle.ResetSpec {
 		if err != nil {
 			return lifecycle.ResetPlanInfo{}, nil, err
 		}
+		lifecycle.RegisterSQLiteFile(sqlDB, dbPath)
 		actual, err := lifecycle.BusinessTables(ctx, sqlDB)
 		if err != nil {
 			return lifecycle.ResetPlanInfo{}, nil, err

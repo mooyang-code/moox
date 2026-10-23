@@ -2,13 +2,10 @@ package resample
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,7 +13,6 @@ import (
 )
 
 var ErrResampleSourceIncomplete = errors.New("resample source window incomplete")
-var ErrResampleSourceWindowTooLarge = errors.New("resample source window too large")
 
 const (
 	writeSource      = "collector:kline_resample"
@@ -27,7 +23,22 @@ const (
 	fieldVolume      = "volume"
 	fieldQuoteVolume = "quote_volume"
 	fieldTradeNum    = "trade_num"
+	fieldAmount      = "amount"
 )
+
+// hasTradeCount 判断市场的 K 线是否带报价成交量和成交笔数（加密货币）；A 股只有成交额 amount。
+func hasTradeCount(spaceID string) bool {
+	return !strings.EqualFold(strings.TrimSpace(spaceID), "stockcn")
+}
+
+// sourceFields 是读取源 K 线的字段。
+func sourceFields(spaceID string) []string {
+	fields := []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume}
+	if hasTradeCount(spaceID) {
+		return append(fields, fieldQuoteVolume, fieldTradeNum)
+	}
+	return append(fields, fieldAmount)
+}
 
 // PrimaryStorage is the exact-read and idempotent-write surface required by a
 // local resample worker. The interface is intentionally small for deterministic
@@ -48,79 +59,6 @@ type SyncPointStorage interface {
 
 // BucketStorage reads one source bucket and writes its target row only when the
 // source hash changed. It is safe to retry after a crash between write and CAS.
-type BucketStorage struct {
-	Primary       PrimaryStorage
-	MaxSourceKeys int
-}
-
-// ProcessBucket performs one complete target bucket operation.
-func (s BucketStorage) ProcessBucket(ctx context.Context, spec TaskSpec, subjectID string, start, end time.Time) (Result, bool, error) {
-	if s.Primary == nil {
-		return Result{}, false, fmt.Errorf("resample Primary storage is required")
-	}
-	times, err := ExpectedSourceTimes(start, end, spec.SourceFrequency)
-	if err != nil {
-		return Result{}, false, err
-	}
-	if s.MaxSourceKeys > 0 && len(times) > s.MaxSourceKeys {
-		return Result{}, false, fmt.Errorf("%w: %d keys exceeds max_source_keys=%d", ErrResampleSourceWindowTooLarge, len(times), s.MaxSourceKeys)
-	}
-	keys := make([]*storagepb.RowKey, 0, len(times))
-	for _, at := range times {
-		keys = append(keys, rowKey(spec.SpaceID, spec.SourceDatasetID, subjectID, spec.SourceFrequency.Storage, at, spec.SourceSeriesTag))
-	}
-	rows, err := s.Primary.ReadRows(ctx, keys, []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume, fieldQuoteVolume, fieldTradeNum}, nil)
-	if err != nil {
-		return Result{}, false, err
-	}
-	sourceBars := make([]SourceBar, 0, len(rows))
-	for _, row := range rows {
-		bar, decodeErr := decodeSourceBar(row)
-		if decodeErr != nil {
-			// A malformed or incomplete source row is equivalent to a missing
-			// source bar for retry/retention policy. Keep Storage transport and
-			// target write errors outside this class so they remain transient.
-			return Result{}, false, fmt.Errorf("%w: %v", ErrResampleSourceIncomplete, decodeErr)
-		}
-		sourceBars = append(sourceBars, bar)
-	}
-	result, err := Bars(spec, subjectID, start, end, sourceBars)
-	if err != nil {
-		return Result{}, false, fmt.Errorf("%w: %v", ErrResampleSourceIncomplete, err)
-	}
-	targetKey := rowKey(spec.SpaceID, spec.TargetDatasetID, subjectID, spec.TargetFrequency.Storage, result.DataTime, spec.SourceSeriesTag)
-	// PrimaryStore requires at least one field ID even when only an attribute
-	// is needed. Request the canonical K-line fields alongside source_hash;
-	// this remains a single bounded read and keeps the idempotency check valid.
-	existing, err := s.Primary.ReadRows(ctx, []*storagepb.RowKey{targetKey}, []string{fieldOpen, fieldHigh, fieldLow, fieldClose, fieldVolume, fieldQuoteVolume, fieldTradeNum}, []string{"source_hash", "resample_revision", attrOutputFields})
-	if err != nil {
-		return Result{}, false, err
-	}
-	// 幂等标识 = 源数据哈希 + 输出字段集合：任务扩大输出字段后，源数据没变也必须补写新增字段，
-	// 否则补算游标会在缺字段的历史桶上继续推进。
-	fieldsSignature := outputFieldsSignature(spec.OutputFields)
-	if len(existing) > 0 &&
-		typedString(existing[0].GetAttributes()["source_hash"]) == result.SourceHash &&
-		typedString(existing[0].GetAttributes()[attrOutputFields]) == fieldsSignature {
-		return result, false, nil
-	}
-	// 事件 ID 要包含这次修订所基于的版本序号（现存目标行的 resample_revision）：只用内容哈希（或前后哈希）时，源数据
-	// A→B→A→B 的第四次写入会得到与第二次相同的 ID，被 Storage 的去重记录吞掉，结果停在 A。序号每次修订递增，
-	// 同一次修订的崩溃重试基于同一个旧序号与同一个新哈希，ID 不变，仍然幂等。
-	previousRevision := int64(0)
-	if len(existing) > 0 {
-		previousRevision, _ = strconv.ParseInt(typedString(existing[0].GetAttributes()["resample_revision"]), 10, 64)
-	}
-	row := resultRowWithSpec(result, spec)
-	row.Attributes["resample_revision"] = stringValue(strconv.FormatInt(previousRevision+1, 10))
-	row.Attributes[attrOutputFields] = stringValue(fieldsSignature)
-	eventID := sourceEventID(spec.InstanceID, targetKey, strconv.FormatInt(previousRevision, 10), result.SourceHash+"|"+fieldsSignature)
-	if err := s.Primary.UpsertFieldsWithSource(ctx, []*storagepb.RowFieldUpsert{row}, eventID); err != nil {
-		return Result{}, false, err
-	}
-	return result, true, nil
-}
-
 func rowKey(spaceID, datasetID, subjectID, frequency string, at time.Time, seriesTag string) *storagepb.RowKey {
 	return &storagepb.RowKey{SpaceId: spaceID, DatasetId: datasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
 		SubjectId: subjectID, Freq: frequency, DataTime: at.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,
@@ -128,12 +66,22 @@ func rowKey(spaceID, datasetID, subjectID, frequency string, at time.Time, serie
 }
 
 func resultRow(result Result) *storagepb.RowFieldUpsert {
+	fields := []*storagepb.FieldValue{
+		doubleField(fieldOpen, result.Open), doubleField(fieldHigh, result.High), doubleField(fieldLow, result.Low),
+		doubleField(fieldClose, result.Close), doubleField(fieldVolume, result.Volume),
+	}
+	switch {
+	case hasTradeCount(result.SpaceID):
+		fields = append(fields, doubleField(fieldQuoteVolume, result.QuoteVolume), intField(fieldTradeNum, result.TradeNum))
+	case result.Amount != nil:
+		fields = append(fields, doubleField(fieldAmount, *result.Amount))
+	default:
+		// 源 K 线没有真实成交额：显式写 NULL，覆盖该行之前可能写过的值。
+		fields = append(fields, &storagepb.FieldValue{FieldId: fieldAmount, Value: &storagepb.TypedValue{Value: &storagepb.TypedValue_NullValue{NullValue: storagepb.NullValue_NULL_VALUE_NULL}}})
+	}
 	return &storagepb.RowFieldUpsert{
-		Key: rowKey(result.SpaceID, result.DatasetID, result.SubjectID, result.Frequency, result.DataTime, result.SeriesTag),
-		Fields: []*storagepb.FieldValue{
-			doubleField(fieldOpen, result.Open), doubleField(fieldHigh, result.High), doubleField(fieldLow, result.Low),
-			doubleField(fieldClose, result.Close), doubleField(fieldVolume, result.Volume), doubleField(fieldQuoteVolume, result.QuoteVolume), intField(fieldTradeNum, result.TradeNum),
-		},
+		Key:    rowKey(result.SpaceID, result.DatasetID, result.SubjectID, result.Frequency, result.DataTime, result.SeriesTag),
+		Fields: fields,
 		Attributes: map[string]*storagepb.TypedValue{
 			"resample_task_id":  stringValue(""),
 			"source_dataset_id": stringValue(""),
@@ -159,7 +107,7 @@ func resultRowWithSpec(result Result, spec TaskSpec) *storagepb.RowFieldUpsert {
 		}
 		row.Fields = fields
 	}
-	row.Attributes["resample_task_id"] = stringValue(spec.InstanceID)
+	row.Attributes["resample_task_id"] = stringValue(spec.TaskID)
 	row.Attributes["source_dataset_id"] = stringValue(spec.SourceDatasetID)
 	row.Attributes["source_freq"] = stringValue(spec.SourceFrequency.Storage)
 	return row
@@ -193,16 +141,6 @@ func outputFieldsSignature(fields []string) string {
 	return strings.Join(names, ",")
 }
 
-func sourceEventID(instanceID string, key *storagepb.RowKey, previousRevision, hash string) string {
-	keyText := ""
-	if key != nil && key.GetTimeSeries() != nil {
-		k := key.GetTimeSeries()
-		keyText = strings.Join([]string{key.GetSpaceId(), key.GetDatasetId(), k.GetSubjectId(), k.GetFreq(), k.GetDataTime(), k.GetSeriesTag()}, "\x00")
-	}
-	sum := sha256.Sum256([]byte(strings.Join([]string{instanceID, keyText, previousRevision, hash}, "\x00")))
-	return "resample-" + hex.EncodeToString(sum[:])[:32]
-}
-
 func decodeSourceBar(row *storagepb.RowFieldValues) (SourceBar, error) {
 	if row == nil || row.GetKey() == nil || row.GetKey().GetTimeSeries() == nil {
 		return SourceBar{}, fmt.Errorf("source row key is invalid")
@@ -232,15 +170,27 @@ func decodeSourceBar(row *storagepb.RowFieldValues) (SourceBar, error) {
 	if err != nil {
 		return SourceBar{}, err
 	}
-	quote, err := requiredDouble(row, fieldQuoteVolume)
-	if err != nil {
-		return SourceBar{}, err
+	bar := SourceBar{SpaceID: row.GetKey().GetSpaceId(), DatasetID: row.GetKey().GetDatasetId(), SubjectID: k.GetSubjectId(), Frequency: k.GetFreq(), DataTime: at.UTC(), SeriesTag: k.GetSeriesTag(), Open: &open, High: &high, Low: &low, Close: &closeValue, Volume: &volume}
+	if hasTradeCount(bar.SpaceID) {
+		quote, err := requiredDouble(row, fieldQuoteVolume)
+		if err != nil {
+			return SourceBar{}, err
+		}
+		trade, err := requiredInt(row, fieldTradeNum)
+		if err != nil {
+			return SourceBar{}, err
+		}
+		bar.QuoteVolume, bar.TradeNum = &quote, &trade
+		return bar, nil
 	}
-	trade, err := requiredInt(row, fieldTradeNum)
-	if err != nil {
-		return SourceBar{}, err
+	// A 股的成交额可以是 NULL（采集只拿到估算值时）：缺失表示未知，不算解码失败。
+	if value, ok := fieldValue(row, fieldAmount); ok && value != nil {
+		if _, isDouble := value.GetValue().(*storagepb.TypedValue_DoubleValue); isDouble {
+			amount := value.GetDoubleValue()
+			bar.Amount = &amount
+		}
 	}
-	return SourceBar{SpaceID: row.GetKey().GetSpaceId(), DatasetID: row.GetKey().GetDatasetId(), SubjectID: k.GetSubjectId(), Frequency: k.GetFreq(), DataTime: at.UTC(), SeriesTag: k.GetSeriesTag(), Open: &open, High: &high, Low: &low, Close: &closeValue, Volume: &volume, QuoteVolume: &quote, TradeNum: &trade}, nil
+	return bar, nil
 }
 
 func requiredDouble(row *storagepb.RowFieldValues, name string) (float64, error) {

@@ -42,41 +42,39 @@ describe("collection task params", () => {
     ).toThrow("请选择标的标签");
   });
 
-  it("builds resample inputs and preserves an explicit zero delay", () => {
+  it("builds resample inputs from the source task only", () => {
     const params = buildCollectionTaskParams({
       dataType: "kline_resample",
-      provider: "moox",
+      provider: "",
       market: "spot",
-      frequency: "5m",
-      sourceId: "source-bars",
-      sourceFrequency: "1m",
-      sourceSeriesTag: "venue:binance",
-      settleDelayMS: 0
+      frequency: "45m",
+      sourceTaskId: "task-5m"
     });
 
-    expect(params).toMatchObject({
-      source_dataset_id: "source-bars",
-      target_frequency: "5m",
-      alignment: "epoch_utc",
-      settle_delay_ms: 0
+    // 源数据集、源周期、序列标签由后端推导，前端只提交源任务与目标频率；没有收盘等待与对齐方式。
+    expect(params).toEqual({ source_task_id: "task-5m", target_frequency: "45m" });
+    expect(params).not.toHaveProperty("settle_delay_ms");
+    expect(params).not.toHaveProperty("alignment");
+    expect(params).not.toHaveProperty("source_dataset_id");
+
+    expect(
+      buildCollectionTaskParams({ dataType: "kline_resample", provider: "", market: "spot", frequency: "60m", sourceTaskId: "t" })
+    ).toMatchObject({
+      target_frequency: "1h"
     });
-    expect(params).not.toHaveProperty("target_dataset_id");
+    expect(() =>
+      buildCollectionTaskParams({ dataType: "kline_resample", provider: "", market: "spot", frequency: "45m" })
+    ).toThrow("请选择源采集任务");
+    expect(() =>
+      buildCollectionTaskParams({ dataType: "kline_resample", provider: "", market: "spot", frequency: " ", sourceTaskId: "t" })
+    ).toThrow("请输入采集频率");
 
     const payload = buildCollectionTaskPayload(
-      {
-        dataType: "kline_resample",
-        provider: "moox",
-        market: "spot",
-        frequency: "5m",
-        sourceId: "source-bars",
-        sourceFrequency: "1m",
-        sourceSeriesTag: "venue:binance"
-      },
-      { task_name: "重采样", description: "", space_id: "crypto", creator: "admin", enabled: true }
+      { dataType: "kline_resample", provider: "", market: "spot", frequency: "5m", sourceTaskId: "task-1m" },
+      { task_name: "合成", description: "", space_id: "crypto", creator: "admin", enabled: true }
     );
     expect(payload).not.toHaveProperty("provider");
-    expect(payload).not.toHaveProperty("market_type");
-    expect(payload.collect_params).toMatchObject({ provider: "moox", market_type: "spot" });
+    expect(payload.collect_params).toEqual({ source_task_id: "task-1m", target_frequency: "5m" });
   });
 
   it("parses resample routing from collect_params", () => {
@@ -90,7 +88,7 @@ describe("collection task params", () => {
         source_frequency: "1m",
         source_series_tag: "venue:binance",
         target_frequency: "5m",
-        alignment: "epoch_utc"
+        source_task_id: "task-1m"
       }
     });
 
@@ -99,9 +97,10 @@ describe("collection task params", () => {
       market_type: "spot",
       source_dataset_id: "source-bars",
       source_series_tag: "venue:binance",
-      target_frequency: "5m"
+      target_frequency: "5m",
+      source_task_id: "task-1m"
     });
-    expect(parseCollectionTaskInput(task)).toMatchObject({ provider: "moox", market: "spot" });
+    expect(parseCollectionTaskInput(task)).toMatchObject({ provider: "moox", market: "spot", sourceTaskId: "task-1m" });
   });
 
   it("emits result_config separately from the task payload", () => {

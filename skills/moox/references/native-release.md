@@ -8,7 +8,7 @@
 ## 先确认再动手
 
 - 用户明确说“发布/部署/上线某某”才发布，并且只发布他点名的组件；不要顺手带上别的组件。发布前向用户复述：哪些组件、哪些主机、是否涉及服务目录。
-- 只用 SSH 公钥（脚本固定 `BatchMode=yes`、禁用密码登录）。不读取、不使用 `moox.toml` 里的账号密码；不处理 EventBus 等凭据。
+- 只用 SSH 公钥（脚本固定 `BatchMode=yes`、禁用密码登录）。不读取、不使用 `moox.toml` 里的账号密码。EventBus 凭据只在用户明确要求时处理，并且只通过 Admin CLI（`skills/moox/scripts/eventbus-credentials.sh`），按 [`eventbus-credentials.md`](eventbus-credentials.md) 的“新增角色”步骤做：先备份，不打印、不落盘任何令牌或私钥到仓库和聊天。
 - 破坏性运维（重置 View、清数据、清事件）不是发布，单独向用户确认，见 [`cli-operations.md`](cli-operations.md)。
 - 前提：改动已提交并推送、测试通过。脚本会拒绝“工作区有未提交改动”和“提交还没推送”，因为线上二进制必须能对应到一个提交。
 

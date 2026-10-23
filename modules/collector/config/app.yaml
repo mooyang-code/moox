@@ -15,12 +15,6 @@ database:
 storage:
   result_data_node_id: storage-node-0
 
-period_readiness:
-  grace: 2m
-  report_interval: 5s
-  item_retention: 60
-  parent_retention: 168h
-
 collector_retention:
   maintenance_interval: 1m
   # 每分钟整点由 K 线调度占用唯一的 SQLite 连接；清理从第 35 秒开始，并在下一个整点前结束。
@@ -29,19 +23,24 @@ collector_retention:
   max_rows_per_pass: 50000
 
 kline_resample:
-  # Disabled by default; enable explicitly for a deployment after target
-  # Dataset/View and a small subject canary have been verified.
+  # 默认关闭；部署后先在目标数据集与 View 就绪、小范围标的验证通过后再显式开启。
   enabled: false
+  # 定时器每一步（准备、兜底检查）的预算。
   scan_timeout: 30s
-  worker_concurrency: 2
-  max_claims_per_tick: 100
-  worker_subject_batch_size: 50
-  worker_job_timeout: 30s
-  worker_poll_interval: 5s
-  worker_max_source_keys_per_claim: 20000
-  stale_running_after: 2m
-  default_settle_delay: 10s
-  repair_lookback_buckets: 3
+  # 按桶执行（读源到写完）的硬超时；补采触发的合成作业会推迟 2 倍该时间再开始。
+  exec_timeout: 30s
+  # 兜底检查：每分钟第 5 秒，检查每个任务最近这么多根已收盘的目标 K 线，补上缺的标的。
+  fallback_lookback_bars: 3
+  fallback_grace: 60s
+  fallback_max_buckets: 200
+  # 历史合成作业：每个作业每轮最多推进的桶数、每轮最多推进的作业数。
+  history_buckets_per_round: 20
+  history_max_jobs: 8
+  max_read_keys: 5000
+  # 配置后订阅源数据集的周期完成事件与补采完成事件（事件是主路径）；不配置则只靠兜底检查，延迟约 1 分钟。
+  event_bus:
+    urls: []
+    credential_file: ""
 
 health:
   addr: ":11412"

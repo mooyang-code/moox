@@ -446,7 +446,7 @@ func normalizeDatasetForCreate(item *pb.Dataset) (*pb.Dataset, error) {
 	item.Retention, item.RetentionSource = "", ""
 	item.Freq = strings.TrimSpace(item.GetFreq())
 	if item.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES && !frequencypkg.IsCanonical(item.GetFreq()) {
-		return nil, fmt.Errorf("time_series dataset freq must be one of %s: %q", strings.Join(frequencypkg.Strings(), ", "), item.GetFreq())
+		return nil, fmt.Errorf("time_series dataset freq must be one of %s: %q", strings.Join(frequencypkg.StandardStrings(), ", "), item.GetFreq())
 	}
 	return item, nil
 }

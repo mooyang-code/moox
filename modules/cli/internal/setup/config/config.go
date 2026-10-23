@@ -157,7 +157,7 @@ type EgressDNS struct {
 // time-series Dataset keeps its rows, by space and frequency, and how many
 // bars a View keeps. An omitted defaults or spaces table takes the
 // recommended values from storagepolicy.Default; a given table is used as is,
-// so defaults must cover every frequency.
+// so defaults must cover every standard frequency.
 type StorageRetention struct {
 	ViewBars uint64                       `toml:"view_rows_per_series" json:"view_rows_per_series"`
 	Defaults map[string]string            `toml:"defaults" json:"defaults"`

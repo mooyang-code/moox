@@ -3,12 +3,15 @@ package lifecycle
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 // 重置用的 SQLite 小工具：备份、列出业务表、清表。各模块的存储层用同一份实现。
@@ -41,10 +44,62 @@ func ResetBackupDir(baseDir, operationID string, keep int) (string, error) {
 	return dir, nil
 }
 
+// driverConnector 用应用已经在用的驱动按 DSN 另开连接，不需要自己注册驱动（避免和各模块导入的 sqlite 驱动重复注册）。
+type driverConnector struct {
+	drv driver.Driver
+	dsn string
+}
+
+func (c driverConnector) Connect(context.Context) (driver.Conn, error) { return c.drv.Open(c.dsn) }
+func (c driverConnector) Driver() driver.Driver                        { return c.drv }
+
+var sqliteFiles sync.Map // *sql.DB → 库文件路径
+
+// RegisterSQLiteFile 登记应用库连接对应的文件路径。重置的长耗时操作要另开连接（见 dedicated），
+// 而应用连接可能正被长查询占着，没法再向它查询文件路径，所以由模块在拿到连接时登记。
+func RegisterSQLiteFile(db *sql.DB, path string) {
+	if db != nil && path != "" {
+		sqliteFiles.Store(db, path)
+	}
+}
+
+// dedicated 为重置的长耗时操作（备份、清表、统计）另开一条连接。
+// 应用的库几乎都把连接池限制为 1 条：备份一个几个 GB 的库会占满这唯一的连接，健康检查的 SELECT 1 排不上队，
+// 就绪探测失败、守护进程把正在重置的模块重启了（线上策略库 1.8 GB 就这样被中断）。
+// SQLite 是 WAL 模式，读写互不阻塞，另开连接不影响应用；内存库或读不到文件路径时退回用原连接。
+func dedicated(ctx context.Context, db *sql.DB) (*sql.DB, func()) {
+	file := ""
+	if v, ok := sqliteFiles.Load(db); ok {
+		file = v.(string)
+	} else {
+		// 没有登记时向应用连接查询路径；它被占着就最多等 3 秒，退回用原连接。
+		probe, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		if rows, err := db.QueryContext(probe, "PRAGMA database_list"); err == nil {
+			for rows.Next() {
+				var seq int
+				var name, path string
+				if err := rows.Scan(&seq, &name, &path); err == nil && name == "main" {
+					file = path
+				}
+			}
+			_ = rows.Close()
+		}
+	}
+	if file == "" {
+		return db, func() {}
+	}
+	conn := sql.OpenDB(driverConnector{drv: db.Driver(), dsn: file + "?_pragma=busy_timeout(120000)&_pragma=foreign_keys(ON)"})
+	conn.SetMaxOpenConns(1)
+	return conn, func() { _ = conn.Close() }
+}
+
 // SQLiteBackup 用 VACUUM INTO 把数据库完整备份到 dir/name（一致性快照，可直接作为库文件使用）。
 func SQLiteBackup(ctx context.Context, db *sql.DB, dir, name string) (string, error) {
 	path := filepath.Join(dir, name)
 	_ = os.Remove(path) // 续做时重新备份：VACUUM INTO 要求目标不存在
+	db, release := dedicated(ctx, db)
+	defer release()
 	if _, err := db.ExecContext(ctx, "VACUUM INTO ?", path); err != nil {
 		return "", fmt.Errorf("备份数据库到 %s：%w", path, err)
 	}
@@ -72,6 +127,8 @@ func BusinessTables(ctx context.Context, db *sql.DB) ([]string, error) {
 // TableRows 统计各表行数（只用于计划展示）。
 func TableRows(ctx context.Context, db *sql.DB, tables []string) (map[string]int64, error) {
 	out := make(map[string]int64, len(tables))
+	db, release := dedicated(ctx, db)
+	defer release()
 	for _, t := range tables {
 		if !identPattern.MatchString(t) {
 			return nil, fmt.Errorf("非法表名 %q", t)
@@ -92,6 +149,8 @@ func ClearTables(ctx context.Context, db *sql.DB, tables []string) (map[string]i
 			return nil, fmt.Errorf("非法表名 %q", t)
 		}
 	}
+	db, release := dedicated(ctx, db)
+	defer release()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
