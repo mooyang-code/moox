@@ -8,6 +8,7 @@ import (
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
+	"github.com/mooyang-code/moox/packages/storagepolicy"
 )
 
 // ConfigForm 是配置页「修改配置」里可以改的项：只放常用设置，用中文表单呈现，不暴露配置文件原文。
@@ -46,10 +47,22 @@ type FormHost struct {
 
 // FormRetention 是数据保留期。取值为 <n>h、<n>d 或 forever；空间里留空表示跟随默认。
 type FormRetention struct {
-	ViewBars    uint64            `json:"view_rows_per_series"`
-	Frequencies []string          `json:"frequencies,omitempty"`
-	Defaults    map[string]string `json:"defaults"`
-	Spaces      []FormSpace       `json:"spaces"`
+	ViewBars uint64 `json:"view_rows_per_series"`
+	// ViewFileBytes 是单个 View 文件的大小上限（[storage_view] max_view_file_bytes）。
+	ViewFileBytes int64             `json:"max_view_file_bytes"`
+	Frequencies   []string          `json:"frequencies,omitempty"`
+	Defaults      map[string]string `json:"defaults"`
+	Spaces        []FormSpace       `json:"spaces"`
+	// Recommended 是系统推荐的保留期（storagepolicy.Default）：页面的「恢复推荐值」用它填表。
+	Recommended FormRecommended `json:"recommended"`
+}
+
+// FormRecommended 是推荐的保留期与 View 根数。
+type FormRecommended struct {
+	ViewBars      uint64                       `json:"view_rows_per_series"`
+	ViewFileBytes int64                        `json:"max_view_file_bytes"`
+	Defaults      map[string]string            `json:"defaults"`
+	Spaces        map[string]map[string]string `json:"spaces"`
 }
 
 // FormSpace 是某个市场单独设置的保留期。
@@ -79,11 +92,25 @@ func formFrom(m setupconfig.Manifest) ConfigForm {
 		})
 	}
 	form.Retention.ViewBars = m.StorageRetention.ViewBars
+	form.Retention.ViewFileBytes = m.StorageView.MaxViewFileBytes
 	form.Retention.Frequencies = retentionFrequencies
 	form.Retention.Defaults = copyMap(m.StorageRetention.Defaults)
-	ids := make([]string, 0, len(m.StorageRetention.Spaces))
+	recommended := storagepolicy.Default()
+	form.Retention.Recommended = FormRecommended{ViewBars: recommended.View.Bars, ViewFileBytes: recommended.View.MaxViewFileBytes, Defaults: copyMap(recommended.Retention.Defaults), Spaces: map[string]map[string]string{}}
+	for id, values := range recommended.Retention.Spaces {
+		form.Retention.Recommended.Spaces[id] = copyMap(values)
+	}
+	// 表格列 = 当前配置里有的空间 ∪ 推荐里有的空间：配置里被清空的空间也要能重新填回来。
+	known := map[string]bool{}
+	ids := make([]string, 0, len(m.StorageRetention.Spaces)+len(recommended.Retention.Spaces))
 	for id := range m.StorageRetention.Spaces {
+		known[id] = true
 		ids = append(ids, id)
+	}
+	for id := range recommended.Retention.Spaces {
+		if !known[id] {
+			ids = append(ids, id)
+		}
 	}
 	// 先按常见市场的顺序，其余按名称。
 	order := map[string]int{"crypto": 0, "stockcn": 1, "stockhk": 2, "stockus": 3, "mooxsys": 4}
@@ -156,6 +183,9 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 	}
 
 	set("storage_retention", "view_rows_per_series", strconv.FormatUint(form.Retention.ViewBars, 10))
+	if form.Retention.ViewFileBytes > 0 {
+		set("storage_view", "max_view_file_bytes", strconv.FormatInt(form.Retention.ViewFileBytes, 10))
+	}
 	for freq := range form.Retention.Defaults {
 		if err := retentionCell(freq, ""); err != nil {
 			return nil, err
@@ -172,7 +202,9 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 		set("storage_retention.defaults", freq, tomlString(strings.TrimSpace(value)))
 	}
 	for _, space := range form.Retention.Spaces {
-		if _, ok := current.StorageRetention.Spaces[space.ID]; !ok {
+		_, inCurrent := current.StorageRetention.Spaces[space.ID]
+		_, inRecommended := storagepolicy.Default().Retention.Spaces[space.ID]
+		if !inCurrent && !inRecommended {
 			return nil, fmt.Errorf("配置里没有空间 %q 的保留期", space.ID)
 		}
 		section := "storage_retention.spaces." + space.ID

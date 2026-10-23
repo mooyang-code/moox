@@ -2,6 +2,7 @@ package storagepolicy
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -199,6 +200,41 @@ func TestCoverageSkipsSystemSpace(t *testing.T) {
 	p.Retention.Spaces["crypto"] = map[string]string{"30s": "48h"}
 	if errs, _ := p.Coverage(); len(errs) == 0 {
 		t.Fatal("其他空间的保留期不足仍要报覆盖错误")
+	}
+}
+
+// 保留期能装下的 bar 数：7×24 市场精确，交易时段市场是估算；永久保留不限；向上取整的最小保留期能装下指定根数。
+func TestRetentionBarsAndMinRetention(t *testing.T) {
+	policy := Default()
+	bars, forever, estimated, err := policy.RetentionBars("crypto", "1h")
+	if err != nil || forever || estimated || bars != 420*24 {
+		t.Fatalf("crypto 1h: bars=%v forever=%v estimated=%v err=%v", bars, forever, estimated, err)
+	}
+	bars, forever, estimated, err = policy.RetentionBars("crypto", "1m")
+	if err != nil || forever || estimated || bars != 8*24*60 {
+		t.Fatalf("crypto 1m: bars=%v forever=%v estimated=%v err=%v", bars, forever, estimated, err)
+	}
+	if _, forever, _, err = policy.RetentionBars("crypto", "1d"); err != nil || !forever {
+		t.Fatalf("crypto 1d should be forever: forever=%v err=%v", forever, err)
+	}
+	if _, _, estimated, err = policy.RetentionBars("stockcn", "1m"); err != nil || !estimated {
+		t.Fatalf("stockcn 1m should be an estimate: estimated=%v err=%v", estimated, err)
+	}
+	if _, _, _, err = policy.RetentionBars("crypto", "7m"); err == nil {
+		t.Fatal("unknown frequency should error")
+	}
+
+	need := MinRetentionFor("crypto", "1h", 5000)
+	if need.Duration != 5000*time.Hour {
+		t.Fatalf("5000 1h bars need 5000h, got %v", need.Duration)
+	}
+	need = MinRetentionFor("crypto", "1m", 5000)
+	if want := time.Duration(math.Ceil(5000.0/60)) * time.Hour; need.Duration != want {
+		t.Fatalf("5000 1m bars need %v, got %v", want, need.Duration)
+	}
+	// 交易时段市场按日历折回自然时间，比 7×24 要长。
+	if MinRetentionFor("stockcn", "1m", 5000).Duration <= MinRetentionFor("crypto", "1m", 5000).Duration {
+		t.Fatal("session market needs a longer calendar span for the same bars")
 	}
 }
 

@@ -230,3 +230,5 @@ trpc.group/trpc-go/trpc-go v1.0.4 h1:DaTTeaSf5Ah/dtQ8nAKKV2zaO7b7EB6qWLNWlMwLSsc
 trpc.group/trpc-go/trpc-go v1.0.4/go.mod h1:lZOyo/G6nv2eBEPeDmbEfRhQDCOB65WsTqKqsgC2paA=
 trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 h1:xSqncQDYiUeNQSCz8RMdF7pVJWZImJ/RK+FgtSMFjss=
 trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1/go.mod h1:BasNP/F0p0Y/fcbQMMw4TJzhYKv+dVPlnxiQaWZUpWs=
+github.com/expr-lang/expr v1.17.8 h1:W1loDTT+0PQf5YteHSTpju2qfUfNoBt4yw9+wOEU9VM=
+github.com/expr-lang/expr v1.17.8/go.mod h1:8/vRC7+7HBzESEqt5kKpYXxrxkr31SaO8r40VO/1IT4=
