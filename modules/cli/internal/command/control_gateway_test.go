@@ -10,7 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/testfixture"
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	cloudnodepb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	directorypb "github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"

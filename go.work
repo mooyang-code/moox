@@ -7,8 +7,8 @@ use (
 	./modules/archive
 	./modules/archive/proto/archivegen
 	./modules/cli
-	./modules/cloudnode
-	./modules/cloudnode/proto/cloudnodegen
+	./modules/cloudfunction
+	./modules/cloudfunction/proto/cloudfunctiongen
 	./modules/collector
 	./modules/collector/proto/collectorgen
 	./modules/consoleproxy

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	cloudnodepb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	commonpb "github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"google.golang.org/protobuf/proto"

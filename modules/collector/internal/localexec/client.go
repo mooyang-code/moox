@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	cloudnodepb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"

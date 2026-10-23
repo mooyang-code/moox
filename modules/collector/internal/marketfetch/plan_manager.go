@@ -11,7 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	cloudnodepb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"trpc.group/trpc-go/trpc-go/log"
 )

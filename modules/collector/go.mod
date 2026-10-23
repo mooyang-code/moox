@@ -5,7 +5,7 @@ go 1.27.2
 require (
 	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
-	github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/collector/proto/collectorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/egressproxy/proto/egressgen v0.0.0-00010101000000-000000000000
@@ -128,7 +128,7 @@ require (
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
 
-replace github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen => ../cloudnode/proto/cloudnodegen
+replace github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen => ../cloudfunction/proto/cloudfunctiongen
 
 replace github.com/mooyang-code/moox/modules/factor/proto/factorgen => ../factor/proto/factorgen
 
