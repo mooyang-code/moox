@@ -93,7 +93,7 @@ func NewEpoch(period time.Duration) (Clock, error) {
 	return epochClock{period: period}, nil
 }
 
-func (c epochClock) Alignment() string      { return AlignmentEpochUTC }
+func (c epochClock) Alignment() string     { return AlignmentEpochUTC }
 func (c epochClock) Period() time.Duration { return c.period }
 
 func (c epochClock) bucket(start time.Time) Bucket {

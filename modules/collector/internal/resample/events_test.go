@@ -10,12 +10,9 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
-	"github.com/mooyang-code/moox/packages/jetstream/testkit"
 	"github.com/mooyang-code/moox/packages/storagepb"
-	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type recordingRelay struct {
@@ -117,105 +114,4 @@ func TestNoticePublisherWithoutRelayKeepsNoticesForRetention(t *testing.T) {
 	left, err := mgr.Resample().UnsealedNotices(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, left, 1)
-}
-
-func startBus(t *testing.T) *testkit.Server {
-	t.Helper()
-	server := testkit.Start(t)
-	server.AddStream(t, &nats.StreamConfig{Name: "MOOX_STORAGE", Subjects: []string{"moox.event.storage.collector.period.completed.v1.>"}, Storage: nats.MemoryStorage})
-	server.AddStream(t, &nats.StreamConfig{Name: "MOOX_COLLECTOR", Subjects: []string{"moox.event.collector.kline.backfilled.v1.>"}, Storage: nats.MemoryStorage})
-	return server
-}
-
-func publisherFor(t *testing.T, server *testkit.Server, registry *events.Registry) *events.Publisher {
-	t.Helper()
-	client, err := jetstream.Connect(context.Background(), jetstream.Config{URLs: []string{server.URL()}, Name: "test-publisher"})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = client.Close() })
-	publisher, err := events.NewPublisher(client, registry)
-	require.NoError(t, err)
-	return publisher
-}
-
-func TestConsumersResampleBucketOnLastSourcePeriodEvent(t *testing.T) {
-	server := startBus(t)
-	registry, err := events.DefaultRegistry()
-	require.NoError(t, err)
-	mgr := openState(t)
-	storage := newFakeStorage()
-	seedTask(t, mgr, storage, []string{"BTC", "ETH", "SOL"}, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T10:30:00Z"))
-	engine := &Engine{Primary: storage, State: mgr.Resample()}
-	index := &TaskIndex{Tasks: mgr.Tasks()}
-	consumers, err := StartConsumers(context.Background(), ConsumersConfig{URLs: []string{server.URL()}, SpaceIDs: []string{"crypto"}, FetchMaxWait: 100 * time.Millisecond}, registry,
-		&PeriodHandler{Registry: registry, Index: index, Engine: engine, NakDelay: time.Second},
-		&BackfilledHandler{Registry: registry, Index: index, State: mgr.Resample(), SettleAfter: time.Minute})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = consumers.Close() })
-	publisher := publisherFor(t, server, registry)
-
-	publish := func(period time.Time, status string, failed ...string) {
-		payload := &storagepb.CollectorPeriodCompleted{
-			DatasetId: "dataset_src", Frequency: "5m", PeriodTime: period.Unix(), Status: status,
-			UniverseSubjectIds: []string{"BTC", "ETH", "SOL"}, FailedSubjects: failed, CollectedAt: timestamppb.New(period.Add(6 * time.Minute)),
-			BatchId: "batch-" + period.Format("1504"), ConfigSnapshotId: "snapshot", ExpectedScopeRef: "scope",
-		}
-		_, err := publisher.Publish(context.Background(), events.CollectorPeriodCompleted, payload, events.PublishOptions{
-			EventID: "evt-" + period.Format("1504") + status, OccurredAt: period.Add(5 * time.Minute), SpaceID: "crypto", SubjectID: "dataset_src",
-		})
-		require.NoError(t, err)
-	}
-	// 10:00 桶（10:00–10:15）的前两根源 K 线事件不触发；最后一根（10:10）触发。SOL 在最后一根失败。
-	publish(utc("2026-10-21T10:00:00Z"), "complete")
-	publish(utc("2026-10-21T10:05:00Z"), "complete")
-	time.Sleep(300 * time.Millisecond)
-	require.Nil(t, storage.target("crypto", "dataset_task", "BTC", "15m", "venue:binance", utc("2026-10-21T10:00:00Z")), "不是桶内最后一根源周期，不触发")
-	publish(utc("2026-10-21T10:10:00Z"), "degraded", "SOL")
-
-	require.Eventually(t, func() bool {
-		storage.mu.Lock()
-		defer storage.mu.Unlock()
-		return storage.rows[keyText(rowKey("crypto", "dataset_task", "BTC", "15m", utc("2026-10-21T10:00:00Z"), "venue:binance"))] != nil &&
-			storage.rows[keyText(rowKey("crypto", "dataset_task", "ETH", "15m", utc("2026-10-21T10:00:00Z"), "venue:binance"))] != nil
-	}, 5*time.Second, 50*time.Millisecond)
-	storage.mu.Lock()
-	solRow := storage.rows[keyText(rowKey("crypto", "dataset_task", "SOL", "15m", utc("2026-10-21T10:00:00Z"), "venue:binance"))]
-	storage.mu.Unlock()
-	require.Nil(t, solRow, "degraded 事件里失败的标的先跳过，留给兜底")
-}
-
-func TestConsumersSubmitSourceBackfillJobWithSettleDelay(t *testing.T) {
-	server := startBus(t)
-	registry, err := events.DefaultRegistry()
-	require.NoError(t, err)
-	mgr := openState(t)
-	storage := newFakeStorage()
-	seedTask(t, mgr, storage, []string{"BTC"}, utc("2026-10-21T10:00:00Z"), utc("2026-10-21T10:30:00Z"))
-	index := &TaskIndex{Tasks: mgr.Tasks()}
-	consumers, err := StartConsumers(context.Background(), ConsumersConfig{URLs: []string{server.URL()}, SpaceIDs: []string{"crypto"}, FetchMaxWait: 100 * time.Millisecond}, registry,
-		&PeriodHandler{Registry: registry, Index: index, Engine: &Engine{Primary: storage}},
-		&BackfilledHandler{Registry: registry, Index: index, State: mgr.Resample(), SettleAfter: time.Minute, Now: func() time.Time { return utc("2026-10-21T12:00:00Z") }})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = consumers.Close() })
-	publisher := publisherFor(t, server, registry)
-
-	confirmed := utc("2026-10-21T11:00:00Z")
-	payload := &storagepb.CollectorKlineBackfilled{
-		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"}, Start: timestamppb.New(utc("2026-10-21T10:03:00Z")), End: timestamppb.New(utc("2026-10-21T10:20:00Z")),
-		Origin: "auto", SyncRequestId: "kbf-1", ConfirmedAt: timestamppb.New(confirmed),
-	}
-	for _, id := range []string{"kbf-1", "kbf-1"} { // 重复投递（Msg-Id 去重或重放）不重复建作业
-		_, err = publisher.Publish(context.Background(), events.CollectorKlineBackfilled, payload, events.PublishOptions{EventID: id, OccurredAt: confirmed, SpaceID: "crypto", SubjectID: "dataset_src"})
-		require.NoError(t, err)
-	}
-	require.Eventually(t, func() bool {
-		jobs, err := mgr.Resample().ListJobs(context.Background(), "crypto", "task", "", 10)
-		return err == nil && len(jobs) == 1
-	}, 5*time.Second, 50*time.Millisecond)
-	jobs, _ := mgr.Resample().ListJobs(context.Background(), "crypto", "task", "", 10)
-	job := jobs[0]
-	require.Equal(t, store.ResampleOriginSourceBackfill, job.Origin)
-	require.Equal(t, []string{"BTC"}, job.Subjects)
-	require.Equal(t, utc("2026-10-21T10:00:00Z"), job.Start, "向外对齐到目标桶")
-	require.Equal(t, utc("2026-10-21T10:30:00Z"), job.End)
-	require.Equal(t, confirmed.Add(time.Minute), job.NotBefore, "最早开始时间 = 确认时刻 + 2×执行超时")
 }

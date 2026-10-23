@@ -86,7 +86,7 @@ func formatClock(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d", int(d/time.Hour), int(d%time.Hour/time.Minute))
 }
 
-func (c *sessionClock) Alignment() string      { return AlignmentSession }
+func (c *sessionClock) Alignment() string     { return AlignmentSession }
 func (c *sessionClock) Period() time.Duration { return c.period }
 
 func (c *sessionClock) dateOf(t time.Time) marketcalendar.CivilDate {

@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
+	"github.com/mooyang-code/moox/modules/collector/internal/resample/eventconsumer"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/prometheus/client_golang/prometheus"
@@ -95,13 +96,16 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 		index := &collectorresample.TaskIndex{Tasks: dbm.Tasks()}
 		// 启动时事件总线可能还没起来：每分钟的定时器会重试，直到消费者和发布器都就绪。
 		runtime.startEvents = func() error {
-			consumers, startErr := collectorresample.StartConsumers(process.ctx, collectorresample.ConsumersConfig{
+			consumers, startErr := eventconsumer.Start(process.ctx, eventconsumer.ConsumersConfig{
 				URLs: k.EventBus.URLs, CredentialFile: k.EventBus.CredentialFile, SpaceIDs: spaceIDs,
 			}, registry,
-				&collectorresample.PeriodHandler{Registry: registry, Index: index, Engine: engine, Metrics: metrics},
-				&collectorresample.BackfilledHandler{
-					Registry: registry, Index: index, State: dbm.Resample(), SettleAfter: 2 * k.ExecTimeout,
-					NewID: func() string { return xid.New().String() },
+				&eventconsumer.PeriodHandler{Registry: registry, Trigger: &collectorresample.PeriodTrigger{Index: index, Engine: engine, Metrics: metrics}},
+				&eventconsumer.BackfilledHandler{
+					Registry: registry,
+					Trigger: &collectorresample.BackfillTrigger{
+						Index: index, State: dbm.Resample(), SettleAfter: 2 * k.ExecTimeout,
+						NewID: func() string { return xid.New().String() },
+					},
 				})
 			if startErr != nil {
 				return startErr
