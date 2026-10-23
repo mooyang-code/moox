@@ -26,7 +26,8 @@ func (p *pool) put(buffer []float64) {
 	p.live -= int64(len(buffer)) * 8
 }
 
-// Estimate 是一次执行的内存估算（字节）。PeakBuffers 与执行时实际的峰值完全一致：两者按同样的顺序分配、回收。
+// Estimate 是一次执行的内存估算（字节）。PeakBuffers 按同样的顺序分配、回收，是执行时峰值的上界：
+// 参数取值相同的成员在运行时去重后少算一些节点，实际峰值只会更低；没有可去重的节点时两者完全一致。
 type Estimate struct {
 	Panel       int64
 	PeakBuffers int64
@@ -64,14 +65,14 @@ func EstimateMemory(program *factorexpr.Program, series, length, start, end int)
 	return estimate, nil
 }
 
-// computed 报告节点是否需要自己的缓冲区：输入列直接引用面板，常量按标量广播。
+// computed 报告节点是否需要自己的缓冲区：输入列直接引用面板，常量与只由参数决定的节点按标量广播。
 func computed(node *factorexpr.ProgramNode) bool {
-	return node.Op != factorexpr.OpColumn && node.Op != factorexpr.OpConst
+	return node.Op != factorexpr.OpColumn && node.Op != factorexpr.OpConst && !node.Scalar
 }
 
 func checkNeed(program *factorexpr.Program, need []factorexpr.Interval, length int) error {
 	for index, interval := range need {
-		if interval.Empty() || program.Nodes[index].Op == factorexpr.OpConst {
+		if interval.Empty() || program.Nodes[index].Op == factorexpr.OpConst || program.Nodes[index].Scalar {
 			continue
 		}
 		if interval.Start < 0 || interval.End >= length {

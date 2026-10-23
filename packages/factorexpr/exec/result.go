@@ -2,6 +2,8 @@ package exec
 
 // Column 是一个输出列在目标区间上的值：序列 s 在目标下标 t 的值位于 Values[s*Len()+(t−Start)]。
 type Column struct {
+	// Key 是成员的内部身份（ProgramInput.Key），FactorID 是它的定义。
+	Key      string
 	FactorID string
 	Name     string
 	Values   []float64
@@ -13,8 +15,10 @@ type Result struct {
 	Series     []SeriesKey
 	Columns    []Column
 	present    []bool
-	// PeakBufferBytes 是执行中同时存活的节点缓冲区峰值，与 EstimateMemory 的 PeakBuffers 一致。
+	// PeakBufferBytes 是执行中同时存活的节点缓冲区峰值，不超过 EstimateMemory 的 PeakBuffers。
 	PeakBufferBytes int64
+	// DedupedNodes 是因参数取值相同（运行时去重）而没有单独计算的节点数，用于观察去重效果。
+	DedupedNodes int
 }
 
 // Len 返回目标区间的长度。
@@ -33,12 +37,17 @@ func (r *runner) result(start, end int) *Result {
 	seriesCount := len(r.panel.series)
 	result := &Result{Start: start, End: end, Series: r.panel.series, PeakBufferBytes: r.pool.peak,
 		present: make([]bool, seriesCount*length)}
+	for index, canonical := range r.alias {
+		if canonical != index {
+			result.DedupedNodes++
+		}
+	}
 	for s := 0; s < seriesCount; s++ {
 		copy(result.present[s*length:(s+1)*length], r.panel.present[s*r.panel.length+start:s*r.panel.length+end+1])
 	}
 	for _, output := range r.program.Outputs {
-		node := r.nodes[output.Node]
-		column := Column{FactorID: output.FactorID, Name: output.Name, Values: make([]float64, seriesCount*length)}
+		node := r.nodes[r.alias[output.Node]]
+		column := Column{Key: output.Key, FactorID: output.FactorID, Name: output.Name, Values: make([]float64, seriesCount*length)}
 		for s := 0; s < seriesCount; s++ {
 			for t := start; t <= end; t++ {
 				column.Values[s*length+t-start] = node.at(s, t)

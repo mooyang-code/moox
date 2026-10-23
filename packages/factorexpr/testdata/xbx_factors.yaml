@@ -1,29 +1,29 @@
 # 生产因子库的 11 个因子（表达式写法）及其编译元数据。
-# 测试断言推导出的输入列、输出列与回看与生产一致。
+# 测试断言推导出的输入列、输出列与回看（窗口参数按声明上限 120 取最坏情况）与生产一致。
 - factor_id: Bias
   inputs: [close]
-  outputs: [bias_20]
-  lookback: 20
+  outputs: [bias]
+  lookback: 120
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     outputs:
-      bias_{window}: close / ts_mean(close, window)
+      bias: close / ts_mean(close, window)
 
 - factor_id: BiasQ
   inputs: [close]
-  outputs: [bias_q_20]
-  lookback: 39
+  outputs: [bias_q]
+  lookback: 239
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     outputs:
-      bias_q_{window}: ts_rank(close / ts_mean(close, window) - 1, window)
+      bias_q: ts_rank(close / ts_mean(close, window) - 1, window)
 
 - factor_id: Cci
   inputs: [close, high, low]
   outputs: [cci]
-  lookback: 39
+  lookback: 239
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:
       tp: (high + low + close) / 3
       m: ts_mean(tp, window)
@@ -32,85 +32,85 @@
 
 - factor_id: MinMax
   inputs: [close, high, low]
-  outputs: [minmax_20]
-  lookback: 20
+  outputs: [minmax]
+  lookback: 120
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:
       tp: (high + low + close) / 3
       lo: ts_min(tp, window)
     outputs:
-      minmax_{window}: (tp - lo) / (ts_max(tp, window) - lo) - 0.5
+      minmax: (tp - lo) / (ts_max(tp, window) - lo) - 0.5
 
 - factor_id: QuoteVolumeMean
   inputs: [quote_volume]
-  outputs: [quote_volume_mean_20]
-  lookback: 20
+  outputs: [quote_volume_mean]
+  lookback: 120
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     outputs:
-      quote_volume_mean_{window}: ts_mean(quote_volume, window)
+      quote_volume_mean: ts_mean(quote_volume, window)
 
 - factor_id: QuoteVolumeMeanQ
   inputs: [quote_volume]
-  outputs: [quote_volume_mean_q_20]
-  lookback: 39
+  outputs: [quote_volume_mean_q]
+  lookback: 239
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     outputs:
-      quote_volume_mean_q_{window}: ts_rank(ts_mean(quote_volume, window), window)
+      quote_volume_mean_q: ts_rank(ts_mean(quote_volume, window), window)
 
 - factor_id: VolumeMeanQ
   inputs: [volume]
-  outputs: [volume_mean_q_20]
-  lookback: 39
+  outputs: [volume_mean_q]
+  lookback: 239
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     outputs:
-      volume_mean_q_{window}: ts_rank(ts_mean(volume, window), window)
+      volume_mean_q: ts_rank(ts_mean(volume, window), window)
 
 - factor_id: ZfAbsMean
   inputs: [close, high, low, open]
-  outputs: [zf_abs_mean_20]
-  lookback: 40
+  outputs: [zf_abs_mean]
+  lookback: 240
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:
       tp: (close + high + low) / 3
       amp: (high - low) / open
     outputs:
-      zf_abs_mean_{window}: ts_rank(ts_mean(where(pct_change(tp) > 0, amp, 0), window), window)
+      zf_abs_mean: ts_rank(ts_mean(where(pct_change(tp) > 0, amp, 0), window), window)
 
 - factor_id: ZfMeanQ
   inputs: [high, low, open]
-  outputs: [zf_mean_q_20]
-  lookback: 39
+  outputs: [zf_mean_q]
+  lookback: 239
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:
       amp: (high - low) / open
     outputs:
-      zf_mean_q_{window}: ts_rank(ts_mean(amp, window), window)
+      zf_mean_q: ts_rank(ts_mean(amp, window), window)
 
 - factor_id: ZfStd
   inputs: [close, high, low, open]
-  outputs: [zf_std_20]
-  lookback: 21
+  outputs: [zf_std]
+  lookback: 121
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:
       amp: (high - low) / open
     outputs:
-      zf_std_{window}: ts_std(where(pct_change(close) > 0, amp, -amp), window)
+      zf_std: ts_std(where(pct_change(close) > 0, amp, -amp), window)
 
 - factor_id: ZscoreAbsMeanQ
   inputs: [close]
-  outputs: [zscore_abs_mean_q_20]
-  lookback: 58
+  outputs: [zscore_abs_mean_q]
+  lookback: 358
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:
       m: ts_mean(close, window)
       s: ts_std(close, window)
     outputs:
-      zscore_abs_mean_q_{window}: ts_rank(ts_mean(abs((close - m) / s), window), window)
+      zscore_abs_mean_q: ts_rank(ts_mean(abs((close - m) / s), window), window)

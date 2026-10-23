@@ -95,7 +95,12 @@ func TestProgramSharesLetWithinFactor(t *testing.T) {
 func TestProgramRejects(t *testing.T) {
 	a := mustCompile(t, "outputs:\n  x: close\n")
 	b := mustCompile(t, "outputs:\n  x: open\n")
-	if _, err := NewProgram([]ProgramInput{{FactorID: "a", Factor: a}, {FactorID: "b", Factor: b}}); err == nil || !strings.Contains(err.Error(), "重复") {
+	// 输出列名只在成员内唯一：不同成员可以有同名输出，写入时再映射到各自集合的列名。
+	if _, err := NewProgram([]ProgramInput{{FactorID: "a", Factor: a}, {FactorID: "b", Factor: b}}); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := NewProgram([]ProgramInput{{Key: "m", FactorID: "a", Factor: a}, {Key: "m", FactorID: "b", Factor: b}}); err == nil ||
+		!strings.Contains(err.Error(), "重复") {
 		t.Fatalf("err = %v", err)
 	}
 	if _, err := NewProgram([]ProgramInput{{FactorID: "a"}}); err == nil {

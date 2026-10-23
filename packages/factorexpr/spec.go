@@ -17,7 +17,7 @@ const (
 	MaxSpecBytes       = 64 << 10
 	MaxExpressionRunes = 4096
 	MaxExpressionNodes = 512
-	// MaxFactorNodes 是一个因子展开参数、内联 let 之后全部输出的表达式树节点总数上限（去重之前）。
+	// MaxFactorNodes 是一个因子内联 let 之后全部输出的表达式树节点总数上限（去重之前）。
 	MaxFactorNodes = 4096
 	MaxParams      = 16
 	MaxOutputs     = 64
@@ -60,21 +60,49 @@ type Spec struct {
 	Outputs []Binding
 }
 
-// Param 是一个命名常量；List 为真时按列表展开（设计 3.2）。
+// ParamType 是参数的取值类型。
+type ParamType string
+
+const (
+	ParamInt   ParamType = "int"
+	ParamFloat ParamType = "float"
+)
+
+// Param 是一个可调参数的声明（因子动态调参执行计划 2.2）：类型、闭区间 [Min, Max] 与默认值。
+// 每期的取值由参数快照提供，不在定义里；从未提交过快照时取 Default。
 type Param struct {
-	Name   string
-	Values []Number
-	List   bool
-	Line   int
+	Name    string
+	Type    ParamType
+	Min     float64
+	Max     float64
+	Default float64
+	Line    int
 }
 
-// Number 是参数或字面量的数值。
+// IsInt 报告参数是否为整数类型。
+func (p Param) IsInt() bool { return p.Type == ParamInt }
+
+// Check 检查一个取值是否合法：有限、在范围内，整数参数必须是整数。
+func (p Param) Check(value float64) error {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return fmt.Errorf("参数 %s 的取值必须是有限数", p.Name)
+	}
+	if p.IsInt() && value != math.Trunc(value) {
+		return fmt.Errorf("参数 %s 是整数参数，取值 %s 不是整数", p.Name, formatFloat(value))
+	}
+	if value < p.Min || value > p.Max {
+		return fmt.Errorf("参数 %s 的取值 %s 超出范围 [%s, %s]", p.Name, formatFloat(value), formatFloat(p.Min), formatFloat(p.Max))
+	}
+	return nil
+}
+
+// Number 是字面量的数值。
 type Number struct {
 	Value float64
 	IsInt bool
 }
 
-// Binding 是 let 或 outputs 中的一项：名称（输出为列名模板）与表达式原文。
+// Binding 是 let 或 outputs 中的一项：名称（输出为静态列名）与表达式原文。
 type Binding struct {
 	Name   string
 	Source string
@@ -181,7 +209,7 @@ func parseParams(node *yaml.Node) ([]Param, error) {
 		return nil, nil
 	}
 	if node.Kind != yaml.MappingNode {
-		return nil, errorf("params", node.Line, "必须是映射：参数名 → 数值或数值列表")
+		return nil, errorf("params", node.Line, "必须是映射：参数名 → {type, min, max, default}")
 	}
 	if len(node.Content)/2 > MaxParams {
 		return nil, errorf("params", node.Line, "参数不能超过 %d 个", MaxParams)
@@ -195,38 +223,69 @@ func parseParams(node *yaml.Node) ([]Param, error) {
 			return nil, errorf(path, key.Line, "重复的参数")
 		}
 		seen[key.Value] = true
-		param := Param{Name: key.Value, Line: key.Line}
-		switch value.Kind {
-		case yaml.ScalarNode:
-			number, err := parseNumber(path, value)
-			if err != nil {
-				return nil, err
-			}
-			param.Values = []Number{number}
-		case yaml.SequenceNode:
-			if len(value.Content) == 0 {
-				return nil, errorf(path, value.Line, "列表不能为空")
-			}
-			if len(value.Content) > MaxOutputs {
-				return nil, errorf(path, value.Line, "列表不能超过 %d 个值", MaxOutputs)
-			}
-			param.List = true
-			for _, item := range value.Content {
-				if item.Kind != yaml.ScalarNode {
-					return nil, errorf(path, item.Line, "列表里只能是数值")
-				}
-				number, err := parseNumber(path, item)
-				if err != nil {
-					return nil, err
-				}
-				param.Values = append(param.Values, number)
-			}
-		default:
-			return nil, errorf(path, value.Line, "必须是数值或数值列表")
+		param, err := parseParam(path, key, value)
+		if err != nil {
+			return nil, err
 		}
 		params = append(params, param)
 	}
 	return params, nil
+}
+
+// parseParam 解析一个参数声明：{type: int|float, min, max, default}，四项都必填。
+func parseParam(path string, key, node *yaml.Node) (Param, error) {
+	if node.Kind != yaml.MappingNode {
+		return Param{}, errorf(path, node.Line, "参数声明必须是映射 {type, min, max, default}")
+	}
+	param := Param{Name: key.Value, Line: key.Line}
+	numbers := map[string]Number{}
+	for i := 0; i < len(node.Content); i += 2 {
+		field, value := node.Content[i], node.Content[i+1]
+		fieldPath := path + "." + field.Value
+		if _, duplicate := numbers[field.Value]; duplicate || (field.Value == "type" && param.Type != "") {
+			return Param{}, errorf(fieldPath, field.Line, "重复的键")
+		}
+		switch field.Value {
+		case "type":
+			switch ParamType(value.Value) {
+			case ParamInt, ParamFloat:
+				param.Type = ParamType(value.Value)
+			default:
+				return Param{}, errorf(fieldPath, value.Line, "type 只能是 int 或 float")
+			}
+		case "min", "max", "default":
+			if value.Kind != yaml.ScalarNode {
+				return Param{}, errorf(fieldPath, value.Line, "必须是数值")
+			}
+			number, err := parseNumber(fieldPath, value)
+			if err != nil {
+				return Param{}, err
+			}
+			numbers[field.Value] = number
+		default:
+			return Param{}, errorf(fieldPath, field.Line, "未知的键，只允许 type、min、max、default")
+		}
+	}
+	if param.Type == "" {
+		return Param{}, errorf(path, node.Line, "缺少 type")
+	}
+	for _, name := range []string{"min", "max", "default"} {
+		number, ok := numbers[name]
+		if !ok {
+			return Param{}, errorf(path, node.Line, "缺少 %s", name)
+		}
+		if param.IsInt() && !number.IsInt {
+			return Param{}, errorf(path+"."+name, node.Line, "整数参数的 %s 必须是整数", name)
+		}
+	}
+	param.Min, param.Max, param.Default = numbers["min"].Value, numbers["max"].Value, numbers["default"].Value
+	if param.Min > param.Max {
+		return Param{}, errorf(path, node.Line, "min 不能大于 max")
+	}
+	if param.Default < param.Min || param.Default > param.Max {
+		return Param{}, errorf(path+".default", node.Line, "默认值必须在 [min, max] 内")
+	}
+	return param, nil
 }
 
 func parseNumber(path string, node *yaml.Node) (Number, error) {

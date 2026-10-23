@@ -56,7 +56,8 @@ func TestLibraryMetadataMatchesProduction(t *testing.T) {
 	}
 }
 
-// 11 个因子合并成一个集合程序时，共用的子表达式只保留一个节点。
+// 11 个因子合并成一个集合程序时，不含参数的子表达式（输入列、tp、amp 等）只保留一个节点；含窗口参数的节点
+// 按成员各有参数槽（ts_mean(close, $window) 在 Bias、BiasQ、ZscoreAbsMeanQ 里各一个），取值相同时由执行器在运行时去重。
 func TestLibraryProgramSharesSubexpressions(t *testing.T) {
 	var inputs []ProgramInput
 	for _, entry := range loadLibrary(t) {
@@ -70,23 +71,33 @@ func TestLibraryProgramSharesSubexpressions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if program.Lookback != 58 {
-		t.Errorf("program lookback = %d, want 58", program.Lookback)
+	if program.Lookback != 358 {
+		t.Errorf("program lookback = %d, want 358", program.Lookback)
 	}
 	if want := []string{"close", "high", "low", "open", "quote_volume", "volume"}; !reflect.DeepEqual(program.Columns, want) {
 		t.Errorf("columns = %v, want %v", program.Columns, want)
 	}
+	if len(program.Params) != 11 {
+		t.Errorf("program has %d param slots, want 11", len(program.Params))
+	}
 	counts := map[string]int{}
 	for _, node := range program.Nodes {
 		if node.Op == "ts_mean" && len(node.Args) == 1 && program.Nodes[node.Args[0]].Column == "close" {
-			counts["ts_mean(close,20)"]++
+			counts["ts_mean(close,$window)"]++
+		}
+		if node.Op == "div" && len(node.Args) == 2 && program.Nodes[node.Args[1]].Value == 3 {
+			counts["tp"]++
 		}
 		if node.Op == OpColumn {
 			counts["col:"+node.Column]++
 		}
 	}
-	if counts["ts_mean(close,20)"] != 1 {
-		t.Errorf("ts_mean(close, 20) appears %d times, want 1", counts["ts_mean(close,20)"])
+	if counts["ts_mean(close,$window)"] != 3 {
+		t.Errorf("ts_mean(close, $window) appears %d times, want 3", counts["ts_mean(close,$window)"])
+	}
+	// Cci、MinMax 的 (high + low + close) / 3 与 ZfAbsMean 的 (close + high + low) / 3 书写顺序不同，各一个。
+	if counts["tp"] != 2 {
+		t.Errorf("tp appears %d times, want 2", counts["tp"])
 	}
 	for _, column := range program.Columns {
 		if counts["col:"+column] != 1 {
