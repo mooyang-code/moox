@@ -640,7 +640,12 @@ func (s *Service) validateMembership(ctx context.Context, set domain.FactorSet, 
 	origins := make(map[string]string)
 	for _, column := range resultColumns {
 		if column.OriginType == storageio.ColumnOriginFactor {
-			origins[column.ColumnName] = column.OriginID
+			// 列的 origin_id 是列名（Storage 要求每个来源只对应一列）；列归属的成员记在 member_alias 属性里。
+			owner := column.Attributes["member_alias"]
+			if owner == "" {
+				owner = column.OriginID
+			}
+			origins[column.ColumnName] = owner
 		}
 	}
 	if err := domain.ValidateMembership(set, member, sourceColumns(columns), siblings, origins); err != nil {
@@ -807,8 +812,8 @@ func sourceColumns(columns []storageio.ColumnInfo) []domain.SourceColumn {
 	return out
 }
 
-// 结果列的属性：列归属的成员（origin_factor_id 与 origin_id 都是成员别名，Storage 要求两者一致、factor_output
-// 与列名一致）、定义 ID、分类，以及列是输出值还是参数取值。
+// 结果列的属性：列归属的成员（origin_factor_id 与 member_alias 都是成员别名）、定义 ID、分类，以及列是输出值还是
+// 参数取值。Storage 要求列的 origin_id 与 factor_output 都等于列名（同一数据集里每个来源只对应一列）。
 const (
 	ColumnKindOutput = "output"
 	ColumnKindParam  = "param"
@@ -835,7 +840,7 @@ func appendFactorColumns(columns []storageio.ColumnInfo, members ...domain.Membe
 			attributes["output_name"] = name
 		}
 		columns = append(columns, storageio.ColumnInfo{
-			ColumnName: column, OriginType: storageio.ColumnOriginFactor, OriginID: member.Alias,
+			ColumnName: column, OriginType: storageio.ColumnOriginFactor, OriginID: column,
 			ValueType: storageio.ColumnTypeDouble, Status: storageio.ColumnStatusActive, Attributes: attributes,
 		})
 	}
