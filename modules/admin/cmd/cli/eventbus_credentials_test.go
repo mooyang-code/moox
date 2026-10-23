@@ -54,8 +54,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 11 {
-		t.Fatalf("eventbus records=%d, want 11", count)
+	if count != 12 {
+		t.Fatalf("eventbus records=%d, want 12", count)
 	}
 }
 
@@ -79,8 +79,17 @@ func TestEventbusCredentialsFactorConsumer(t *testing.T) {
 	require.Equal(t, []string{
 		"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer",
 		"storage-eventbus", "archive-eventbus",
-		"factor-eventbus", "strategy-eventbus", "trade-eventbus",
+		"factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus",
 	}, eventBusRoles)
+	collectorACL := eventBusACLBlock(yaml, "collector-eventbus")
+	for _, permission := range []string{
+		"moox.event.collector.kline.backfilled.v1.>",
+		"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.collector_resample_period_crypto_v1",
+		"$JS.API.CONSUMER.MSG.NEXT.MOOX_COLLECTOR.collector_resample_backfilled_stockcn_v1",
+		"$JS.ACK.MOOX_COLLECTOR.collector_resample_backfilled_crypto_v1.>",
+	} {
+		require.Contains(t, aclLine(collectorACL, "publish:"), permission)
+	}
 }
 
 func TestEventBusCredentialsExportAndRotate(t *testing.T) {
@@ -277,6 +286,7 @@ func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testi
 		"factor-eventbus.yaml":       "token: factor-token\n",
 		"strategy-eventbus.yaml":     "token: strategy-token\n",
 		"trade-eventbus.yaml":        "token: trade-token\n",
+		"collector-eventbus.yaml":    "token: collector-token\n",
 	}
 	for name, content := range roleFiles {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))

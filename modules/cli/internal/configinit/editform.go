@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
+	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 )
 
 // ConfigForm 是配置页「修改配置」里可以改的项：只放常用设置，用中文表单呈现，不暴露配置文件原文。
@@ -58,8 +59,8 @@ type FormSpace struct {
 	Values map[string]string `json:"values"`
 }
 
-// retentionFrequencies 是保留期表格的行顺序（与示例模板一致）。
-var retentionFrequencies = []string{"30s", "1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w", "1mo"}
+// retentionFrequencies 是保留期表格的行（标准档，从短到长）；其他整除一天的频率沿用时长不超过它的标准档，需要单独配置时在配置文件里手写。
+var retentionFrequencies = frequencypkg.StandardStrings()
 
 var spaceNames = map[string]string{"crypto": "加密货币", "stockcn": "A 股", "stockhk": "港股", "stockus": "美股", "mooxsys": "系统数据"}
 

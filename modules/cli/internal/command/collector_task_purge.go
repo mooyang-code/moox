@@ -56,7 +56,7 @@ type collectorTaskPurgeSummary struct {
 	DBPath                    string `json:"db_path"`
 	BackupPath                string `json:"backup_path,omitempty"`
 	TaskCount                 int64  `json:"task_count"`
-	TaskInstanceCount         int64  `json:"task_instance_count"`
+	ResampleJobCount          int64  `json:"resample_job_count"`
 	FetchBatchCount           int64  `json:"fetch_batch_count"`
 	FetchRetryCount           int64  `json:"fetch_retry_count"`
 	LocalResultReferenceCount int    `json:"local_result_reference_count"`
@@ -342,7 +342,7 @@ func inspectCollectorTaskPurge(dbPath string, summary *collectorTaskPurgeSummary
 		out   *int64
 	}{
 		{name: "tasks", table: "t_collector_tasks", out: &summary.TaskCount},
-		{name: "task instances", table: "t_collector_task_instances", out: &summary.TaskInstanceCount},
+		{name: "resample jobs", table: "t_collector_resample_jobs", out: &summary.ResampleJobCount},
 		{name: "fetch batches", table: "t_collector_fetch_batches", out: &summary.FetchBatchCount},
 		{name: "fetch retries", table: "t_collector_fetch_retry_items", out: &summary.FetchRetryCount},
 	} {

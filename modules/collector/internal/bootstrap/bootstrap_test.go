@@ -24,7 +24,7 @@ func TestObserveCollectorMaintenanceSpaceRefreshesMetricsAndReportsFailure(t *te
 	reg := prometheus.NewRegistry()
 	m := marketfetch.NewMetrics(reg)
 	now := time.Now().UTC()
-	require.NoError(t, observeCollectorMaintenanceSpace(context.Background(), db, m, "crypto", now, map[string]int64{"period_readiness": 2}))
+	require.NoError(t, observeCollectorMaintenanceSpace(context.Background(), db, m, "crypto", now, map[string]int64{"backfill_notices": 2}))
 	families, err := reg.Gather()
 	require.NoError(t, err)
 	values := map[string]float64{}
@@ -32,7 +32,7 @@ func TestObserveCollectorMaintenanceSpaceRefreshesMetricsAndReportsFailure(t *te
 		for _, metric := range family.Metric {
 			if family.GetName() == "moox_collector_maintenance_deleted_rows" {
 				for _, label := range metric.Label {
-					if label.GetName() == "table" && label.GetValue() == "period_readiness" {
+					if label.GetName() == "table" && label.GetValue() == "backfill_notices" {
 						values["deleted"] = metric.GetGauge().GetValue()
 					}
 				}

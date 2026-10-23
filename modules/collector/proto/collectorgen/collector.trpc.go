@@ -170,11 +170,15 @@ type CollectMgrService interface {
 
 	GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq) (*GetDataTypeConfigWithFieldsRsp, error)
 
-	StartKlineResampleBackfill(ctx context.Context, req *StartKlineResampleBackfillReq) (*StartKlineResampleBackfillRsp, error)
+	SubmitKlineResampleJob(ctx context.Context, req *SubmitKlineResampleJobReq) (*SubmitKlineResampleJobRsp, error)
 
-	CancelKlineResampleBackfill(ctx context.Context, req *CancelKlineResampleBackfillReq) (*CancelKlineResampleBackfillRsp, error)
+	GetKlineResampleJob(ctx context.Context, req *GetKlineResampleJobReq) (*GetKlineResampleJobRsp, error)
 
-	GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq) (*GetKlineResampleBackfillRsp, error)
+	ListKlineResampleJobs(ctx context.Context, req *ListKlineResampleJobsReq) (*ListKlineResampleJobsRsp, error)
+
+	CancelKlineResampleJob(ctx context.Context, req *CancelKlineResampleJobReq) (*CancelKlineResampleJobRsp, error)
+
+	PreviewKlineResampleSource(ctx context.Context, req *PreviewKlineResampleSourceReq) (*PreviewKlineResampleSourceRsp, error)
 	// SyncSubjects 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
 	SyncSubjects(ctx context.Context, req *SyncSubjectsReq) (*SyncSubjectsRsp, error)
 	// CheckKline ----- K 线完整性检查与补采 -----
@@ -373,14 +377,14 @@ func CollectMgrService_GetDataTypeConfigWithFields_Handler(svr interface{}, ctx 
 	return rsp, nil
 }
 
-func CollectMgrService_StartKlineResampleBackfill_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &StartKlineResampleBackfillReq{}
+func CollectMgrService_SubmitKlineResampleJob_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SubmitKlineResampleJobReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).StartKlineResampleBackfill(ctx, reqbody.(*StartKlineResampleBackfillReq))
+		return svr.(CollectMgrService).SubmitKlineResampleJob(ctx, reqbody.(*SubmitKlineResampleJobReq))
 	}
 
 	var rsp interface{}
@@ -391,14 +395,14 @@ func CollectMgrService_StartKlineResampleBackfill_Handler(svr interface{}, ctx c
 	return rsp, nil
 }
 
-func CollectMgrService_CancelKlineResampleBackfill_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CancelKlineResampleBackfillReq{}
+func CollectMgrService_GetKlineResampleJob_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &GetKlineResampleJobReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).CancelKlineResampleBackfill(ctx, reqbody.(*CancelKlineResampleBackfillReq))
+		return svr.(CollectMgrService).GetKlineResampleJob(ctx, reqbody.(*GetKlineResampleJobReq))
 	}
 
 	var rsp interface{}
@@ -409,14 +413,50 @@ func CollectMgrService_CancelKlineResampleBackfill_Handler(svr interface{}, ctx 
 	return rsp, nil
 }
 
-func CollectMgrService_GetKlineResampleBackfill_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetKlineResampleBackfillReq{}
+func CollectMgrService_ListKlineResampleJobs_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListKlineResampleJobsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(CollectMgrService).GetKlineResampleBackfill(ctx, reqbody.(*GetKlineResampleBackfillReq))
+		return svr.(CollectMgrService).ListKlineResampleJobs(ctx, reqbody.(*ListKlineResampleJobsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_CancelKlineResampleJob_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &CancelKlineResampleJobReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).CancelKlineResampleJob(ctx, reqbody.(*CancelKlineResampleJobReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func CollectMgrService_PreviewKlineResampleSource_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PreviewKlineResampleSourceReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(CollectMgrService).PreviewKlineResampleSource(ctx, reqbody.(*PreviewKlineResampleSourceReq))
 	}
 
 	var rsp interface{}
@@ -775,16 +815,24 @@ var CollectMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: CollectMgrService_GetDataTypeConfigWithFields_Handler,
 		},
 		{
-			Name: "/trpc.moox.collector.CollectMgr/StartKlineResampleBackfill",
-			Func: CollectMgrService_StartKlineResampleBackfill_Handler,
+			Name: "/trpc.moox.collector.CollectMgr/SubmitKlineResampleJob",
+			Func: CollectMgrService_SubmitKlineResampleJob_Handler,
 		},
 		{
-			Name: "/trpc.moox.collector.CollectMgr/CancelKlineResampleBackfill",
-			Func: CollectMgrService_CancelKlineResampleBackfill_Handler,
+			Name: "/trpc.moox.collector.CollectMgr/GetKlineResampleJob",
+			Func: CollectMgrService_GetKlineResampleJob_Handler,
 		},
 		{
-			Name: "/trpc.moox.collector.CollectMgr/GetKlineResampleBackfill",
-			Func: CollectMgrService_GetKlineResampleBackfill_Handler,
+			Name: "/trpc.moox.collector.CollectMgr/ListKlineResampleJobs",
+			Func: CollectMgrService_ListKlineResampleJobs_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/CancelKlineResampleJob",
+			Func: CollectMgrService_CancelKlineResampleJob_Handler,
+		},
+		{
+			Name: "/trpc.moox.collector.CollectMgr/PreviewKlineResampleSource",
+			Func: CollectMgrService_PreviewKlineResampleSource_Handler,
 		},
 		{
 			Name: "/trpc.moox.collector.CollectMgr/SyncSubjects",
@@ -916,14 +964,20 @@ func (s *UnimplementedCollectMgr) GetDataTypeConfigs(ctx context.Context, req *G
 func (s *UnimplementedCollectMgr) GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq) (*GetDataTypeConfigWithFieldsRsp, error) {
 	return nil, errors.New("rpc GetDataTypeConfigWithFields of service CollectMgr is not implemented")
 }
-func (s *UnimplementedCollectMgr) StartKlineResampleBackfill(ctx context.Context, req *StartKlineResampleBackfillReq) (*StartKlineResampleBackfillRsp, error) {
-	return nil, errors.New("rpc StartKlineResampleBackfill of service CollectMgr is not implemented")
+func (s *UnimplementedCollectMgr) SubmitKlineResampleJob(ctx context.Context, req *SubmitKlineResampleJobReq) (*SubmitKlineResampleJobRsp, error) {
+	return nil, errors.New("rpc SubmitKlineResampleJob of service CollectMgr is not implemented")
 }
-func (s *UnimplementedCollectMgr) CancelKlineResampleBackfill(ctx context.Context, req *CancelKlineResampleBackfillReq) (*CancelKlineResampleBackfillRsp, error) {
-	return nil, errors.New("rpc CancelKlineResampleBackfill of service CollectMgr is not implemented")
+func (s *UnimplementedCollectMgr) GetKlineResampleJob(ctx context.Context, req *GetKlineResampleJobReq) (*GetKlineResampleJobRsp, error) {
+	return nil, errors.New("rpc GetKlineResampleJob of service CollectMgr is not implemented")
 }
-func (s *UnimplementedCollectMgr) GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq) (*GetKlineResampleBackfillRsp, error) {
-	return nil, errors.New("rpc GetKlineResampleBackfill of service CollectMgr is not implemented")
+func (s *UnimplementedCollectMgr) ListKlineResampleJobs(ctx context.Context, req *ListKlineResampleJobsReq) (*ListKlineResampleJobsRsp, error) {
+	return nil, errors.New("rpc ListKlineResampleJobs of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) CancelKlineResampleJob(ctx context.Context, req *CancelKlineResampleJobReq) (*CancelKlineResampleJobRsp, error) {
+	return nil, errors.New("rpc CancelKlineResampleJob of service CollectMgr is not implemented")
+}
+func (s *UnimplementedCollectMgr) PreviewKlineResampleSource(ctx context.Context, req *PreviewKlineResampleSourceReq) (*PreviewKlineResampleSourceRsp, error) {
+	return nil, errors.New("rpc PreviewKlineResampleSource of service CollectMgr is not implemented")
 }
 
 // SyncSubjects 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
@@ -1124,11 +1178,15 @@ type CollectMgrClientProxy interface {
 
 	GetDataTypeConfigWithFields(ctx context.Context, req *GetDataTypeConfigWithFieldsReq, opts ...client.Option) (rsp *GetDataTypeConfigWithFieldsRsp, err error)
 
-	StartKlineResampleBackfill(ctx context.Context, req *StartKlineResampleBackfillReq, opts ...client.Option) (rsp *StartKlineResampleBackfillRsp, err error)
+	SubmitKlineResampleJob(ctx context.Context, req *SubmitKlineResampleJobReq, opts ...client.Option) (rsp *SubmitKlineResampleJobRsp, err error)
 
-	CancelKlineResampleBackfill(ctx context.Context, req *CancelKlineResampleBackfillReq, opts ...client.Option) (rsp *CancelKlineResampleBackfillRsp, err error)
+	GetKlineResampleJob(ctx context.Context, req *GetKlineResampleJobReq, opts ...client.Option) (rsp *GetKlineResampleJobRsp, err error)
 
-	GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq, opts ...client.Option) (rsp *GetKlineResampleBackfillRsp, err error)
+	ListKlineResampleJobs(ctx context.Context, req *ListKlineResampleJobsReq, opts ...client.Option) (rsp *ListKlineResampleJobsRsp, err error)
+
+	CancelKlineResampleJob(ctx context.Context, req *CancelKlineResampleJobReq, opts ...client.Option) (rsp *CancelKlineResampleJobRsp, err error)
+
+	PreviewKlineResampleSource(ctx context.Context, req *PreviewKlineResampleSourceReq, opts ...client.Option) (rsp *PreviewKlineResampleSourceRsp, err error)
 	// SyncSubjects 立即同步币安/东财的标的标签成员（及可选的标的属性），不等整点定时任务。
 	SyncSubjects(ctx context.Context, req *SyncSubjectsReq, opts ...client.Option) (rsp *SyncSubjectsRsp, err error)
 	// CheckKline ----- K 线完整性检查与补采 -----
@@ -1354,60 +1412,100 @@ func (c *CollectMgrClientProxyImpl) GetDataTypeConfigWithFields(ctx context.Cont
 	return rsp, nil
 }
 
-func (c *CollectMgrClientProxyImpl) StartKlineResampleBackfill(ctx context.Context, req *StartKlineResampleBackfillReq, opts ...client.Option) (*StartKlineResampleBackfillRsp, error) {
+func (c *CollectMgrClientProxyImpl) SubmitKlineResampleJob(ctx context.Context, req *SubmitKlineResampleJobReq, opts ...client.Option) (*SubmitKlineResampleJobRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/StartKlineResampleBackfill")
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/SubmitKlineResampleJob")
 	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("collector")
 	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("StartKlineResampleBackfill")
+	msg.WithCalleeMethod("SubmitKlineResampleJob")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &StartKlineResampleBackfillRsp{}
+	rsp := &SubmitKlineResampleJobRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *CollectMgrClientProxyImpl) CancelKlineResampleBackfill(ctx context.Context, req *CancelKlineResampleBackfillReq, opts ...client.Option) (*CancelKlineResampleBackfillRsp, error) {
+func (c *CollectMgrClientProxyImpl) GetKlineResampleJob(ctx context.Context, req *GetKlineResampleJobReq, opts ...client.Option) (*GetKlineResampleJobRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/CancelKlineResampleBackfill")
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetKlineResampleJob")
 	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("collector")
 	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("CancelKlineResampleBackfill")
+	msg.WithCalleeMethod("GetKlineResampleJob")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &CancelKlineResampleBackfillRsp{}
+	rsp := &GetKlineResampleJobRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *CollectMgrClientProxyImpl) GetKlineResampleBackfill(ctx context.Context, req *GetKlineResampleBackfillReq, opts ...client.Option) (*GetKlineResampleBackfillRsp, error) {
+func (c *CollectMgrClientProxyImpl) ListKlineResampleJobs(ctx context.Context, req *ListKlineResampleJobsReq, opts ...client.Option) (*ListKlineResampleJobsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/GetKlineResampleBackfill")
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/ListKlineResampleJobs")
 	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("collector")
 	msg.WithCalleeService("CollectMgr")
-	msg.WithCalleeMethod("GetKlineResampleBackfill")
+	msg.WithCalleeMethod("ListKlineResampleJobs")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &GetKlineResampleBackfillRsp{}
+	rsp := &ListKlineResampleJobsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) CancelKlineResampleJob(ctx context.Context, req *CancelKlineResampleJobReq, opts ...client.Option) (*CancelKlineResampleJobRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/CancelKlineResampleJob")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("CancelKlineResampleJob")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &CancelKlineResampleJobRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *CollectMgrClientProxyImpl) PreviewKlineResampleSource(ctx context.Context, req *PreviewKlineResampleSourceReq, opts ...client.Option) (*PreviewKlineResampleSourceRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.collector.CollectMgr/PreviewKlineResampleSource")
+	msg.WithCalleeServiceName(CollectMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("collector")
+	msg.WithCalleeService("CollectMgr")
+	msg.WithCalleeMethod("PreviewKlineResampleSource")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PreviewKlineResampleSourceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

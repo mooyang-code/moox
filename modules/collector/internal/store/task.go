@@ -14,6 +14,24 @@ import (
 
 const MaxEnabledTasks = 1000
 
+const (
+	defaultPageSize = 50
+	maxPageSize     = 1000
+)
+
+func normalizePage(page int, size int) (int, int) {
+	if page <= 0 {
+		page = 1
+	}
+	if size <= 0 {
+		size = defaultPageSize
+	}
+	if size > maxPageSize {
+		size = maxPageSize
+	}
+	return page, size
+}
+
 // TaskFilter describes collection task list filters.
 type TaskFilter struct {
 	SpaceID  string

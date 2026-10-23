@@ -91,8 +91,9 @@ func TestDefaultProvidesOnlyProcessDefaults(t *testing.T) {
 
 func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 	cfg := loadRepositoryConfig(t)
-	require.Len(t, cfg.Streams, 3)
+	require.Len(t, cfg.Streams, 4)
 	want := map[string]string{
+		"MOOX_COLLECTOR":     "limits",
 		"MOOX_OBSERVABILITY": "limits",
 		"MOOX_STORAGE":       "limits",
 		"MOOX_TRADE":         "work_queue",
@@ -105,6 +106,9 @@ func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 		assert.Equal(t, retention, stream.Retention, stream.Name)
 		if stream.Name == "MOOX_TRADE" {
 			assert.Equal(t, []string{"moox.event.trade.target.weight_requested.v1.>"}, stream.Subjects)
+		}
+		if stream.Name == "MOOX_COLLECTOR" {
+			assert.Equal(t, []string{"moox.event.collector.kline.backfilled.v1.>"}, stream.Subjects)
 		}
 		if stream.Name == "MOOX_STORAGE" {
 			assert.Equal(t, []string{

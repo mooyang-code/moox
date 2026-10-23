@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -14,13 +15,14 @@ var ruleIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 // supportedBar 报告 DSL 是否支持这个周期：只支持定长的分钟、小时与日线（30 秒、周线、月线不支持）。
 func supportedBar(bar frequencypkg.Frequency) bool {
-	return bar != frequencypkg.Second30 && bar != frequencypkg.Week1 && bar != frequencypkg.Month1
+	duration := bar.Duration()
+	return duration >= time.Minute && duration <= 24*time.Hour
 }
 
-// supportedBars 返回 DSL 支持的周期，从短到长。
+// supportedBars 返回 DSL 提示用的标准周期，从短到长（其余整除一天的周期如 45m 也被接受）。
 func supportedBars() []string {
 	bars := make([]string, 0)
-	for _, bar := range frequencypkg.All() {
+	for _, bar := range frequencypkg.Standard() {
 		if supportedBar(bar) {
 			bars = append(bars, string(bar))
 		}

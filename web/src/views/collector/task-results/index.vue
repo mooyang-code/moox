@@ -26,6 +26,19 @@
             <a-tab-pane v-for="tab in resultTabs" :key="tab.taskId" :title="tab.title" />
           </a-tabs>
 
+          <div v-if="activeResample" class="resample-source-line">
+            合成自
+            <a-link v-if="activeSourceTaskId && activeSourceKnown" @click="switchToTask(activeSourceTaskId)">{{
+              activeSourceName
+            }}</a-link>
+            <span v-else>{{ activeSourceName }}</span>
+            → {{ activeTargetFrequency || "-" }}
+          </div>
+          <a-alert v-if="activeJobSummary" type="info" show-icon class="result-refresh-warning">
+            历史合成进行中（{{ activeJobSummary.done }} /
+            {{ activeJobSummary.total }} 桶）；可在“采集任务”页该任务的“历史合成”里查看或取消。
+          </a-alert>
+
           <a-alert v-if="!detailError && activeState === 'stale'" type="info" show-icon class="result-refresh-warning">
             结果状态待刷新，当前展示的是最近一次读取的状态。
           </a-alert>
@@ -35,7 +48,11 @@
           </a-alert>
           <a-empty
             v-else-if="!detailError && (!activeViewReadable || activeViewIds.length === 0)"
-            description="结果准备中，请稍后刷新"
+            :description="
+              activeResample && activeTask
+                ? resampleEmptyDescription(activeTask, activeFrequencyMinutes)
+                : '结果准备中，请稍后刷新'
+            "
           >
             <template #extra>
               <a-button type="outline" @click="goToTaskDetail">查看任务详情</a-button>
@@ -73,13 +90,18 @@ import { Message } from "@arco-design/web-vue";
 import { ControlRequestError } from "@/api/admin/http";
 import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
 import { useRoute, useRouter } from "vue-router";
-import { GetTaskDetail, GetTaskList, type CollectorTask } from "@/api/collector";
+import { GetTaskDetail, GetTaskList, listKlineResampleJobs, type CollectorTask } from "@/api/collector";
+import { frequencyMinutes } from "@/utils/frequency";
 import { useSpaceStore } from "@/store/modules/space";
 import ViewBrowse from "@/views/data/view-browse/index.vue";
 import {
   buildResultsQuery,
   buildTaskResultTabs,
   getTaskResultState,
+  isResampleTask,
+  resampleEmptyDescription,
+  resampleSourceTaskId,
+  resampleTargetFrequency,
   resolveActiveTask,
   selectTaskIdFromQuery,
   type TaskResultState
@@ -118,6 +140,46 @@ const activeViewReadable = computed(
     (activeState.value === "ready" || activeState.value === "stale") &&
     readableViewIdsByTask.value[activeTaskId.value] === activeViewIds.value.join("\u0000")
 );
+
+const activeResample = computed(() => (activeTask.value ? isResampleTask(activeTask.value) : false));
+const activeTargetFrequency = computed(() => (activeTask.value ? resampleTargetFrequency(activeTask.value) : ""));
+const activeFrequencyMinutes = computed(() => frequencyMinutes(activeTargetFrequency.value));
+const activeSourceTaskId = computed(() => (activeTask.value ? resampleSourceTaskId(activeTask.value) : ""));
+const activeSourceKnown = computed(() => tasks.value.some(task => task.task_id === activeSourceTaskId.value));
+const activeSourceName = computed(() => {
+  const source = tasks.value.find(task => task.task_id === activeSourceTaskId.value);
+  if (source) return source.task_name?.trim() || source.task_id;
+  const dataset = activeTask.value?.collect_params?.source_dataset_id;
+  return activeSourceTaskId.value || (typeof dataset === "string" && dataset) || "-";
+});
+const activeJobSummary = ref<{ done: number; total: number } | null>(null);
+let jobSummarySequence = 0;
+
+// 合成任务有进行中的历史合成作业时提示进度（切换任务、刷新结果时读取）。
+async function refreshJobSummary() {
+  const sequence = ++jobSummarySequence;
+  const task = activeTask.value;
+  activeJobSummary.value = null;
+  if (!task || !isResampleTask(task) || !selectedSpaceId.value) return;
+  try {
+    const jobs = await listKlineResampleJobs(selectedSpaceId.value, task.task_id, "", 5);
+    if (sequence !== jobSummarySequence) return;
+    const active = jobs.filter(job => ["queued", "running", "syncing"].includes(job.status));
+    if (active.length) {
+      activeJobSummary.value = {
+        done: active.reduce((sum, job) => sum + Number(job.done_buckets || 0), 0),
+        total: active.reduce((sum, job) => sum + Number(job.total_buckets || 0), 0)
+      };
+    }
+  } catch {
+    // 作业进度只是辅助信息，读取失败不影响结果展示。
+  }
+}
+
+function switchToTask(taskId: string) {
+  activeTaskId.value = taskId;
+  onTaskChange(taskId);
+}
 
 function queryTaskId(value: unknown) {
   return Array.isArray(value) ? String(value[0] || "") : String(value || "");
@@ -269,9 +331,15 @@ function onPageChange(page: number) {
   void load(page, { honorQuery: false });
 }
 
+watch(
+  () => [activeTaskId.value, tasks.value.length],
+  () => void refreshJobSummary()
+);
+
 async function refreshActiveTask() {
   const taskId = activeTaskId.value;
   if (!taskId) return;
+  void refreshJobSummary();
   const ownershipVerified = await loadTaskDetail(taskId);
   if (ownershipVerified && taskId === activeTaskId.value) viewRefreshKey.value += 1;
 }
@@ -332,6 +400,11 @@ watch(
 </script>
 
 <style scoped>
+.resample-source-line {
+  margin-bottom: 8px;
+  color: var(--color-text-2);
+  font-size: 13px;
+}
 .task-results-page {
   width: 100%;
   max-width: 100%;

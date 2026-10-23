@@ -6,6 +6,7 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/barclock"
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -48,18 +50,30 @@ type Catalog struct {
 	ViewSync ViewSyncWaiter
 }
 
-var klineFields = []struct {
-	name  string
-	type_ storagepb.FieldValueType
-	label string
-}{
-	{"open", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "开盘价"},
-	{"high", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "最高价"},
-	{"low", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "最低价"},
-	{"close", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "收盘价"},
-	{"volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "成交量"},
-	{"quote_volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "报价成交量"},
-	{"trade_num", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, "成交笔数"},
+type klineField struct {
+	name     string
+	type_    storagepb.FieldValueType
+	label    string
+	required bool
+}
+
+var priceFields = []klineField{
+	{"open", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "开盘价", true},
+	{"high", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "最高价", true},
+	{"low", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "最低价", true},
+	{"close", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "收盘价", true},
+	{"volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "成交量", true},
+}
+
+// fieldsFor 返回市场的合成结果字段：加密货币带报价成交量和成交笔数；A 股只有成交额，且可以为空。
+func fieldsFor(spaceID string) []klineField {
+	if hasTradeCount(spaceID) {
+		return append(append([]klineField(nil), priceFields...),
+			klineField{"quote_volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "报价成交量", true},
+			klineField{"trade_num", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, "成交笔数", true})
+	}
+	return append(append([]klineField(nil), priceFields...),
+		klineField{"amount", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "成交额", false})
 }
 
 // PrepareTarget creates or validates the target Dataset, columns, subject
@@ -76,6 +90,10 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 	if err != nil {
 		return err
 	}
+	market, err := barclock.MarketFor(task.SpaceID)
+	if err != nil {
+		return err
+	}
 	ids := taskresult.PersistedResultIDs(task.SpaceID, task.TaskID, task.ResultDatasetID, task.ResultViewID)
 	params.TargetDatasetID = ids.DatasetID
 	targetDatasetID, targetViewID := ids.DatasetID, ids.ViewID
@@ -84,12 +102,16 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		"storage_model": "wide_common_metrics", "dataset_role": "kline_resample_result",
 		"source_dataset_id": params.SourceDatasetID, "source_data_source_id": source.DataSourceID,
 		"source_freq": params.SourceFrequency, "source_series_tag": params.SourceSeriesTag,
-		"target_freq": targetFreq.Storage, "alignment": params.Alignment,
+		"target_freq": targetFreq.Storage, "alignment": market.Alignment,
 	}
 	createdDataset, createdView := false, false
 	compensate := func(original error) error {
 		if original == nil {
 			return nil
+		}
+		// View 还没追上只是需要等：资源的 ID 是确定的，保留它们，下一轮准备时继续等，不能每轮删了重建。
+		if errors.Is(original, ErrTargetViewNotReady) {
+			return original
 		}
 		if cleanupErr := c.cleanupCreatedTarget(ctx, task.SpaceID, targetDatasetID, targetViewID, createdView, createdDataset); cleanupErr != nil {
 			return errors.Join(original, cleanupErr)
@@ -110,7 +132,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 			// display text. Derive a short stable suffix from the target ID so
 			// independent resample targets do not collide on metadata creation.
 			Name: uniqueResampleDisplayName(targetDatasetID), Description: "Collector生成的K线重采样结果", DataKind: storagepb.DataKind_DATA_KIND_TIME_SERIES,
-			Freq: targetFreq.Storage, Status: "draft", Attributes: attrs, SubjectTags: append([]string(nil), source.SubjectTags...),
+			Freq: targetFreq.Storage, Status: "draft", Attributes: withLateness(attrs), SubjectTags: append([]string(nil), source.SubjectTags...),
 		}})
 		if createErr != nil {
 			return fmt.Errorf("create target Dataset: %w", createErr)
@@ -130,14 +152,14 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		return compensate(err)
 	}
 	_ = subjects
-	for _, field := range klineFields {
+	for _, field := range fieldsFor(task.SpaceID) {
 		if len(params.OutputFields) > 0 && !containsOutputField(params.OutputFields, field.name) {
 			continue
 		}
 		resp, callErr := c.Metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: c.Auth, Column: &storagepb.DatasetColumn{
 			SpaceId: task.SpaceID, DatasetId: targetDatasetID, ColumnName: field.name,
 			OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name,
-			ValueType: field.type_, Required: true, Status: "active", Attributes: map[string]string{"display_name": field.label},
+			ValueType: field.type_, Required: field.required, Status: "active", Attributes: map[string]string{"display_name": field.label},
 		}})
 		if callErr != nil {
 			return compensate(fmt.Errorf("upsert target column %s: %w", field.name, callErr))
@@ -206,7 +228,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		viewResp.View = updatedResp.GetView()
 	}
 	viewColumnIndex := 0
-	for _, field := range klineFields {
+	for _, field := range fieldsFor(task.SpaceID) {
 		if len(params.OutputFields) > 0 && !containsOutputField(params.OutputFields, field.name) {
 			continue
 		}
@@ -418,6 +440,14 @@ func validateTargetView(view *storagepb.View, task domain.CollectionTask, params
 		}
 	}
 	return nil
+}
+
+// withLateness 在创建目标数据集时声明周期的迟到容忍（收盘后 2 分钟）：Storage 据此算周期截止，写入目标与引擎的截止判断一致。
+// 它不属于创建后校验的不可变契约（attrs），已有的目标数据集没有它时 Storage 用默认值，周期提交失败会自动改用普通写入。
+func withLateness(attrs map[string]string) map[string]string {
+	out := cloneStringMap(attrs)
+	out["allowed_lateness_seconds"] = strconv.Itoa(TargetLatenessSeconds)
+	return out
 }
 
 func cloneStringMap(input map[string]string) map[string]string {

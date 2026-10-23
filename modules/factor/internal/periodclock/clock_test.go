@@ -60,13 +60,15 @@ func TestDurationSupportedFrequencies(t *testing.T) {
 		"1h":  time.Hour,
 		"4h":  4 * time.Hour,
 		"1d":  24 * time.Hour,
+		"45m": 45 * time.Minute,
+		"2h":  2 * time.Hour,
 	} {
 		got, err := clock.Duration(frequency)
 		require.NoError(t, err, frequency)
 		require.Equal(t, want, got, frequency)
 	}
 
-	_, err := clock.Duration("2h")
+	_, err := clock.Duration("7m")
 	require.Error(t, err)
 }
 

@@ -117,8 +117,8 @@ type operationalStatsSource interface {
 	OperationalStats(context.Context, string, int) (store.OperationalStats, error)
 }
 
-var operationalTableKinds = []string{"instances", "write_targets"}
-var maintenanceTableKinds = []string{"period_readiness", "backfill_jobs"}
+var operationalTableKinds = []string{"resample_jobs", "backfill_notices"}
+var maintenanceTableKinds = []string{"backfill_notices", "backfill_jobs", "resample_jobs"}
 
 // RefreshOperationalStats publishes only a complete observation. On failure it
 // retains last-good values and marks them stale rather than inventing zeros.

@@ -69,19 +69,6 @@ func TestGetTaskResultInventoryPagesOwnedResultsAndRepresentsLifecycle(t *testin
 		metadata.datasets[ids.DatasetID] = owned.datasets[ids.DatasetID]
 		metadata.views[ids.ViewID] = owned.views[ids.ViewID]
 	}
-	periodTime := now.Add(-time.Minute)
-	// A newer local resample-readiness row is not authoritative for a direct
-	// market-fetch task and must not advance its inventory watermark.
-	legacyPeriodTime := periodTime.Add(time.Minute)
-	legacyPeriodKey := domain.PeriodKey{SpaceID: "crypto", DatasetID: activeIDs.DatasetID, Frequency: "1m", PeriodTime: legacyPeriodTime}
-	_, err = db.PeriodReadiness().EnsurePeriod(ctx, domain.PeriodSeed{
-		PeriodKey: legacyPeriodKey, DeadlineAt: now,
-		Tasks: []domain.PeriodTaskSeed{{InstanceID: "instance", WriteTargetID: "target", SubjectID: "BTC-USDT"}},
-	})
-	require.NoError(t, err)
-	require.NoError(t, db.PeriodReadiness().MarkSubjectSuccess(ctx, legacyPeriodKey, "BTC-USDT", "", "", now.Add(-30*time.Second)))
-	_, err = db.PeriodReadiness().FinalizeDue(ctx, now, 10)
-	require.NoError(t, err)
 	service := &Service{
 		persistence:   db,
 		taskRepo:      db.Tasks(),
