@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -156,4 +158,17 @@ func TestImportSelectsOneDefinitionFromFile(t *testing.T) {
 	require.ErrorContains(t, err, "没有因子 Missing")
 	require.NoError(t, runImport(t.Context(), cliConfig{ConfigPath: configPath, File: library, FactorID: "Cci"}, &output))
 	require.Contains(t, output.String(), `"definition_hash":"sha256:`)
+}
+
+func TestParsePurgeDatasetRequiresSpaceAndDataset(t *testing.T) {
+	if _, err := parseArgs([]string{"purge-dataset", "--space", "crypto"}); err == nil {
+		t.Fatal("缺少 --dataset 应被拒绝")
+	}
+	cfg, err := parseArgs([]string{"purge-dataset", "--space", "crypto", "--dataset", "dataset_factor_x", "--yes"})
+	if err != nil || cfg.SpaceID != "crypto" || cfg.DatasetID != "dataset_factor_x" || !cfg.Yes {
+		t.Fatalf("解析不符：%+v err=%v", cfg, err)
+	}
+	if err := runPurgeDataset(context.Background(), cliConfig{SpaceID: "crypto", DatasetID: "d"}, io.Discard); err == nil {
+		t.Fatal("没有 --yes 应被拒绝")
+	}
 }

@@ -398,6 +398,44 @@ func runStatus(ctx context.Context, cli cliConfig, out io.Writer) error {
 	return err
 }
 
+// runPurgeDataset 删除一个因子结果数据集（行与元数据）：用于清理已经没有因子集引用的孤立结果数据集
+// （例如重建因子库后遗留的旧结果）。仍被因子集引用的数据集会被拒绝；只允许因子结果数据集。
+func runPurgeDataset(ctx context.Context, cli cliConfig, out io.Writer) error {
+	if !cli.Yes {
+		return errors.New("purge-dataset permanently deletes the dataset and its rows; re-run with --yes")
+	}
+	config, err := loadRuntimeConfig(cli.ConfigPath)
+	if err != nil {
+		return err
+	}
+	if cli.DBPath != "" {
+		config.DatabasePath = cli.DBPath
+	}
+	db, err := store.Open(&store.Options{Path: config.DatabasePath})
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	sets, err := db.ListSets(ctx)
+	if err != nil {
+		return err
+	}
+	for _, set := range sets {
+		if set.SpaceID == cli.SpaceID && set.ResultDatasetID == cli.DatasetID {
+			return fmt.Errorf("dataset %s is still the result of factor set %s", cli.DatasetID, set.SetID)
+		}
+	}
+	storage, closeStorage, err := newStorageClient(config)
+	if err != nil {
+		return err
+	}
+	defer closeStorage()
+	if err := storage.DeleteDataset(ctx, cli.SpaceID, cli.DatasetID); err != nil {
+		return fmt.Errorf("purge dataset %s: %w", cli.DatasetID, err)
+	}
+	return json.NewEncoder(out).Encode(map[string]any{"ok": true, "space_id": cli.SpaceID, "dataset_id": cli.DatasetID})
+}
+
 func newRequestID() (string, error) {
 	var value [16]byte
 	if _, err := rand.Read(value[:]); err != nil {
