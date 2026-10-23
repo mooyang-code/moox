@@ -25,11 +25,6 @@ type PeriodReader interface {
 	ReadWindow(context.Context, storageio.ReadRequest) (map[string]*storageio.Frame, error)
 }
 
-// SetLookup 按集合 ID 找到它的源数据集（追赶时没有事件）。
-type SetLookup interface {
-	EnabledSetByDataset(context.Context, string, string, string) (domain.FactorSet, []domain.FactorDef, bool, error)
-}
-
 // ContinuityConfig 是连续水位的参数。
 type ContinuityConfig struct {
 	Store  *watermark.Store
@@ -127,7 +122,7 @@ func (c *Continuity) ratioFor(setID string) float64 {
 }
 
 // onEvent 记下事件带来的最新周期与期望标的，然后推进。
-func (c *Continuity) onEvent(ctx context.Context, h *Handler, set domain.FactorSet, factors []domain.FactorDef, event periodEvent) error {
+func (c *Continuity) onEvent(ctx context.Context, h *Handler, set domain.FactorSet, members []domain.MemberDef, event periodEvent) error {
 	clock, err := periodclock.ForSpace(set.SpaceID)
 	if err != nil {
 		return err
@@ -155,7 +150,7 @@ func (c *Continuity) onEvent(ctx context.Context, h *Handler, set domain.FactorS
 	if err := c.cfg.Store.Put(state); err != nil {
 		return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
 	}
-	return c.advance(ctx, h, set, factors, step, &event)
+	return c.advance(ctx, h, set, members, step, &event)
 }
 
 // NoteTarget 显式把集合的追赶目标推到 period（取已有目标与 period 中较晚的）。
@@ -179,10 +174,11 @@ func (c *Continuity) advanceSet(ctx context.Context, h *Handler, setID string) e
 	if !ok || !state.Behind() {
 		return nil
 	}
-	set, factors, found, err := h.sets.EnabledSetByDataset(ctx, state.SpaceID, state.DatasetID, state.Freq)
-	if err != nil || !found || set.Status != domain.SetStatusEnabled || set.SetID != setID {
+	engineSet, found, err := h.sets.EnabledSet(ctx, setID)
+	if err != nil || !found || engineSet.Set.Status != domain.SetStatusEnabled || !engineSet.ResultReady {
 		return err
 	}
+	set, members := engineSet.Set, engineSet.Members
 	clock, err := periodclock.ForSpace(set.SpaceID)
 	if err != nil {
 		return err
@@ -191,11 +187,11 @@ func (c *Continuity) advanceSet(ctx context.Context, h *Handler, setID string) e
 	if err != nil {
 		return err
 	}
-	return c.advance(ctx, h, set, factors, step, nil)
+	return c.advance(ctx, h, set, members, step, nil)
 }
 
 // advance 从水位下一期逐期处理到最新已知周期（一次至多 MaxPeriods 期）。
-func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorSet, factors []domain.FactorDef, step time.Duration, event *periodEvent) error {
+func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorSet, members []domain.MemberDef, step time.Duration, event *periodEvent) error {
 	state, _ := c.cfg.Store.Get(set.SetID)
 	for processed := 0; state.Behind() && processed < c.cfg.MaxPeriods; processed++ {
 		period := state.CommittedThrough.Add(step)
@@ -203,7 +199,7 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorS
 		if event != nil && event.periodTime.Equal(period) {
 			universe, failed, triggerID = event.universe, event.failed, event.eventID
 		} else {
-			missing, err := c.readback(ctx, h, set, factors, period, universe)
+			missing, err := c.readback(ctx, h, set, members, period, universe)
 			if err != nil {
 				return err
 			}
@@ -233,7 +229,7 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorS
 			if err := c.cfg.Store.Put(state); err != nil {
 				return fmt.Errorf("%w: save factor watermark: %v", storageio.ErrInfra, err)
 			}
-			if _, err := h.computePeriod(ctx, set, factors, period, withoutSubjects(universe, confirmed), unconfirmed, triggerID); err != nil {
+			if _, err := h.computePeriod(ctx, set, members, period, withoutSubjects(universe, confirmed), unconfirmed, triggerID); err != nil {
 				return err
 			}
 		}
@@ -308,7 +304,7 @@ func (c *Continuity) invalid(setID string, expected, missing []string, confirmed
 }
 
 // readback 读回一期源数据，返回还没有行的期望标的。
-func (c *Continuity) readback(ctx context.Context, h *Handler, set domain.FactorSet, factors []domain.FactorDef, period time.Time, universe []string) ([]string, error) {
+func (c *Continuity) readback(ctx context.Context, h *Handler, set domain.FactorSet, members []domain.MemberDef, period time.Time, universe []string) ([]string, error) {
 	var subjects []string
 	for _, subject := range uniqueStrings(universe) {
 		if set.InScope(subject) {
@@ -319,9 +315,9 @@ func (c *Continuity) readback(ctx context.Context, h *Handler, set domain.Factor
 		return nil, nil
 	}
 	column := "close"
-	for _, factor := range factors {
-		if len(factor.InputColumns) > 0 {
-			column = factor.InputColumns[0]
+	for _, member := range members {
+		if len(member.Factor.InputColumns) > 0 {
+			column = member.Factor.InputColumns[0]
 			break
 		}
 	}

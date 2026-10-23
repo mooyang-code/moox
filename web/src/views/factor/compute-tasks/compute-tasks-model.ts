@@ -23,6 +23,10 @@ export interface ActionState {
 }
 
 const enabledAction: ActionState = { disabled: false, reason: "" };
+const PRIVATE_SET_REASON = "策略实例的私有因子集，成员与状态由实例维护";
+
+/** 策略实例的私有因子集：成员恰好是策略 factors 声明的因子，随实例启用、停用与删除自动维护。 */
+export const isPrivateSet = (set: Pick<FactorSet, "owner_instance_id">) => Boolean(set.owner_instance_id);
 const blocked = (reason: string): ActionState => ({ disabled: true, reason });
 
 export function filterSets(sets: FactorSetInfo[], filters: TaskFilters, labelOf: (set: FactorSet) => string) {
@@ -70,7 +74,8 @@ export function deleteState(info: Pick<FactorSetInfo, "factor_set" | "members">)
   return enabledAction;
 }
 
-export function addFactorState(set: Pick<FactorSet, "status">): ActionState {
+export function addFactorState(set: Pick<FactorSet, "status"> & Partial<Pick<FactorSet, "owner_instance_id">>): ActionState {
+  if (isPrivateSet(set)) return blocked(PRIVATE_SET_REASON);
   return isLocked(set) ? blocked(lockedReason(set.status)) : enabledAction;
 }
 
@@ -82,8 +87,20 @@ export interface MemberActions {
   remove: ActionState;
 }
 
-export function memberActions(set: Pick<FactorSet, "status">, member: Pick<FactorMember, "status">): MemberActions {
+export function memberActions(
+  set: Pick<FactorSet, "status"> & Partial<Pick<FactorSet, "owner_instance_id">>,
+  member: Pick<FactorMember, "status">
+): MemberActions {
   const enabled = member.status === "enabled";
+  if (isPrivateSet(set)) {
+    return {
+      toggleLabel: enabled ? "停用" : "启用",
+      toggleTarget: enabled ? "disabled" : "enabled",
+      toggle: blocked(PRIVATE_SET_REASON),
+      edit: blocked(PRIVATE_SET_REASON),
+      remove: blocked(PRIVATE_SET_REASON)
+    };
+  }
   return {
     toggleLabel: enabled ? "停用" : "启用",
     toggleTarget: enabled ? "disabled" : "enabled",
@@ -97,6 +114,23 @@ export function memberActions(set: Pick<FactorSet, "status">, member: Pick<Facto
   };
 }
 
-export function memberPeriodState(info: Pick<FactorSetInfo, "last_run">, factorId: string): FactorPeriodState | undefined {
-  return info.last_run?.factors?.find(item => item.factor_id === factorId);
+/** 成员本期的状态：周期状态以成员别名为单位（同一定义可以用不同别名出现多次）。 */
+export function memberPeriodState(info: Pick<FactorSetInfo, "last_run">, memberAlias: string): FactorPeriodState | undefined {
+  return info.last_run?.factors?.find(item => (item.member_alias || item.factor_id) === memberAlias);
+}
+
+/** 参数来源的展示：requested 提交生效、carried 沿用、carried_offline 引擎离线沿用、default 默认值。 */
+export function paramsSourceLabel(source?: string): { label: string; color: string } | null {
+  switch (source) {
+    case "requested":
+      return { label: "参数已更新", color: "green" };
+    case "carried":
+      return { label: "沿用参数", color: "gray" };
+    case "carried_offline":
+      return { label: "离线沿用", color: "orangered" };
+    case "default":
+      return { label: "默认参数", color: "arcoblue" };
+    default:
+      return null;
+  }
 }

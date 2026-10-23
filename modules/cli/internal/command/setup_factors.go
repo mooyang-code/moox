@@ -37,12 +37,17 @@ type setupFactorDefinition struct {
 	Name                 string
 	Spec                 string
 	AllowPartialUniverse bool
+	// CategoryID 是因子分类（空为未分类）；CategoryName 非空时初始化会建立或更新这个分类。
+	CategoryID   string
+	CategoryName string
 }
 
-// libraryEntry 是 YAML 因子库文件里的一项：[{factor_id, name, spec, allow_partial_universe}]。
+// libraryEntry 是 YAML 因子库文件里的一项：[{factor_id, name, category_id, category_name, spec, allow_partial_universe}]。
 type libraryEntry struct {
 	FactorID             string `yaml:"factor_id"`
 	Name                 string `yaml:"name"`
+	CategoryID           string `yaml:"category_id"`
+	CategoryName         string `yaml:"category_name"`
 	Spec                 string `yaml:"spec"`
 	AllowPartialUniverse bool   `yaml:"allow_partial_universe"`
 }
@@ -66,6 +71,10 @@ func readFactorLibrary(path string) (map[string]libraryEntry, error) {
 	library := make(map[string]libraryEntry, len(entries))
 	for index, entry := range entries {
 		entry.FactorID, entry.Name = strings.TrimSpace(entry.FactorID), strings.TrimSpace(entry.Name)
+		entry.CategoryID, entry.CategoryName = strings.TrimSpace(entry.CategoryID), strings.TrimSpace(entry.CategoryName)
+		if entry.CategoryName != "" && entry.CategoryID == "" {
+			return nil, fmt.Errorf("factor library %s item %d sets category_name without category_id", path, index+1)
+		}
 		if entry.FactorID == "" || entry.Name == "" || strings.TrimSpace(entry.Spec) == "" {
 			return nil, fmt.Errorf("factor library %s item %d requires factor_id, name and spec", path, index+1)
 		}
@@ -192,6 +201,7 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) (setupFact
 		}
 		plan.Definitions = append(plan.Definitions, setupFactorDefinition{
 			FactorID: factorID, Name: entry.Name, Spec: entry.Spec, AllowPartialUniverse: entry.AllowPartialUniverse,
+			CategoryID: entry.CategoryID, CategoryName: entry.CategoryName,
 		})
 	}
 	sort.Slice(plan.Definitions, func(i, j int) bool { return plan.Definitions[i].FactorID < plan.Definitions[j].FactorID })
@@ -301,14 +311,16 @@ type factorAPIRetInfo struct {
 type factorAPIDef struct {
 	FactorID             string `json:"factor_id"`
 	Name                 string `json:"name"`
+	CategoryID           string `json:"category_id"`
 	AllowPartialUniverse bool   `json:"allow_partial_universe"`
 	DefinitionHash       string `json:"definition_hash"`
 }
 
 // factorAPIUsage mirrors the FactorUsage proto JSON.
 type factorAPIUsage struct {
-	SetID  string `json:"set_id"`
-	Status string `json:"status"`
+	SetID       string `json:"set_id"`
+	MemberAlias string `json:"member_alias"`
+	Status      string `json:"status"`
 }
 
 // factorAPIInfo mirrors the FactorInfo proto JSON (ListFactors element).
@@ -402,8 +414,26 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 			}
 		}
 	}
+	// 分类先于定义：定义引用的分类必须存在。同一分类在多个定义上出现时名称以第一次为准。
+	categories := map[string]string{}
+	for _, def := range plan.Definitions {
+		if def.CategoryName == "" {
+			continue
+		}
+		if _, done := categories[def.CategoryID]; done {
+			continue
+		}
+		categories[def.CategoryID] = def.CategoryName
+		upserted := factorAPIResponse{}
+		if err := r.call(ctx, "UpsertFactorCategory", map[string]any{"category": map[string]any{
+			"category_id": def.CategoryID, "name": def.CategoryName,
+		}}, &upserted); err != nil {
+			return summary, err
+		}
+	}
 	// usages[factor_id][set_id] is the current membership status, kept in step
 	// with the calls below so one GetFactor per definition is enough.
+	// 初始化的成员别名就是 factor_id（共享集合不需要别名）；同一定义以其他别名加入的成员不算。
 	usages := make(map[string]map[string]string, len(plan.Definitions))
 	for _, def := range plan.Definitions {
 		get := factorAPIResponse{}
@@ -416,7 +446,7 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 			create := factorAPIResponse{}
 			if createErr := r.call(ctx, "CreateFactor", map[string]any{"factor": map[string]any{
 				"factor_id": def.FactorID, "name": def.Name, "spec": def.Spec,
-				"allow_partial_universe": def.AllowPartialUniverse,
+				"allow_partial_universe": def.AllowPartialUniverse, "category_id": def.CategoryID,
 			}}, &create); createErr != nil {
 				return summary, createErr
 			}
@@ -436,8 +466,17 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 		if get.Factor.Name != def.Name || get.Factor.DefinitionHash != validated.DefinitionHash {
 			return summary, fmt.Errorf("factor %q already exists with a different definition; update moox.toml or replace it explicitly", def.FactorID)
 		}
+		// 分类只是元数据（不进 definition_hash），不同时直接改成因子库里的分类。
+		if def.CategoryID != "" && get.Factor.CategoryID != def.CategoryID {
+			moved := factorAPIResponse{}
+			if err := r.call(ctx, "SetFactorCategory", map[string]any{"factor_id": def.FactorID, "category_id": def.CategoryID}, &moved); err != nil {
+				return summary, err
+			}
+		}
 		for _, usage := range get.Usages {
-			usages[def.FactorID][usage.SetID] = usage.Status
+			if usage.MemberAlias == "" || usage.MemberAlias == def.FactorID {
+				usages[def.FactorID][usage.SetID] = usage.Status
+			}
 		}
 		summary.Unchanged++
 	}
@@ -449,7 +488,7 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 			continue
 		}
 		added := factorAPIResponse{}
-		if err := r.call(ctx, "AddFactorToSet", map[string]any{"set_id": member.SetID, "factor_id": member.FactorID}, &added); err != nil {
+		if err := r.call(ctx, "AddFactorToSet", map[string]any{"set_id": member.SetID, "factor_id": member.FactorID, "member_alias": member.FactorID}, &added); err != nil {
 			return summary, err
 		}
 		usages[member.FactorID][member.SetID] = "disabled"
@@ -462,7 +501,7 @@ func (r *remoteSetupFactor) Apply(ctx context.Context, plan setupFactorPlan) (se
 		}
 		status := factorAPIResponse{}
 		if err := r.call(ctx, "SetFactorMemberStatus", map[string]any{
-			"set_id": member.SetID, "factor_id": member.FactorID, "status": member.Status,
+			"set_id": member.SetID, "member_alias": member.FactorID, "status": member.Status,
 		}, &status); err != nil {
 			return summary, err
 		}

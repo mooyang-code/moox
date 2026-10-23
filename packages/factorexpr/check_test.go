@@ -104,9 +104,8 @@ func TestLetAndParamResolution(t *testing.T) {
 		{"forward reference", "let:\n  a: b + 1\n  b: close\noutputs: {o: a}\n", "之后（或它自身）定义的 let b"},
 		{"self reference", "let:\n  a: a + 1\noutputs: {o: a}\n", "之后（或它自身）定义的 let a"},
 		{"let called as function", "let:\n  tp: close\noutputs: {o: tp(1)}\n", "tp 是 let 中间量，不是函数"},
-		{"param called as function", "params: {w: 5}\noutputs: {o: w(close)}\n", "w 是参数，不是函数"},
+		{"param called as function", "params: {w: {type: int, min: 1, max: 9, default: 5}}\noutputs: {o: w(close)}\n", "w 是参数，不是函数"},
 		{"error inside let", "let:\n  m: ts_mean(close)\noutputs: {o: m}\n", "let.m"},
-		{"list value annotated", "params: {window: [1, 20]}\noutputs:\n  s_{window}: ts_std(close, window)\n", "参数 window=1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -189,10 +188,10 @@ func TestConstantFolding(t *testing.T) {
 			t.Errorf("%s: canonical = %s, want %s", tc.expression, got, tc.canonical)
 		}
 	}
-	// 整数参数相乘仍是整数，可以当窗口；参数参与运算后的回看按代入后的值计算。
-	factor := mustCompile(t, "params: {window: 10}\noutputs:\n  o: ts_mean(close, window * 2)\n")
-	if factor.Lookback != 20 {
-		t.Fatalf("lookback = %d, want 20", factor.Lookback)
+	// 参数参与的逐元素运算不折叠（取值每期才知道），常量部分照常折叠。
+	factor := mustCompile(t, "params: {k: {type: float, min: 0, max: 5, default: 2}}\noutputs:\n  o: close * (k + 1 * 2)\n")
+	if got := factor.Outputs[0].Root.Canonical(); got != "mul(close,add($k,2))" {
+		t.Fatalf("canonical = %s", got)
 	}
 }
 

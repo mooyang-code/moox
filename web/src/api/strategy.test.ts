@@ -16,7 +16,10 @@ vi.mock("@/api/admin/http", () => ({ callControl, ControlRequestError }));
 import {
   createInstance,
   getReplay,
+  getStrategyDisplaySettings,
   getStrategyResult,
+  listStrategyParamSubmissions,
+  setStrategyDisplaySettings,
   listInstances,
   listReplays,
   listStrategies,
@@ -191,5 +194,48 @@ describe("strategy API", () => {
     callControl.mockResolvedValueOnce({ replay: { replay_id: "p1" } });
     await getReplay("p1", { silent: true });
     expect(callControl).toHaveBeenLastCalledWith("strategy", "GetReplay", { replay_id: "p1" }, { silentError: true });
+  });
+});
+
+describe("strategy factor parameters API", () => {
+  beforeEach(() => callControl.mockReset());
+
+  it("reads and saves the display settings with empty defaults", async () => {
+    callControl.mockResolvedValueOnce({});
+    await expect(getStrategyDisplaySettings("i-1")).resolves.toEqual({ categories: [], members: [], columns: [] });
+    expect(callControl).toHaveBeenLastCalledWith("strategy", "GetStrategyDisplaySettings", { instance_id: "i-1" }, undefined);
+
+    const hidden = { categories: ["volume"], members: [], columns: ["fast_bias"] };
+    callControl.mockResolvedValueOnce({ hidden });
+    await expect(setStrategyDisplaySettings("i-1", hidden)).resolves.toEqual(hidden);
+    expect(callControl).toHaveBeenLastCalledWith(
+      "strategy",
+      "SetStrategyDisplaySettings",
+      { instance_id: "i-1", hidden },
+      undefined
+    );
+  });
+
+  it("lists parameter submissions with numeric periods", async () => {
+    callControl.mockResolvedValueOnce({
+      submissions: [
+        {
+          request_id: "p-1",
+          instance_id: "i-1",
+          set_id: "fset_i1",
+          period_time: "1761206400000",
+          status: "accepted",
+          attempts: 1
+        }
+      ]
+    });
+    const rows = await listStrategyParamSubmissions("i-1", 50, { silent: true });
+    expect(callControl).toHaveBeenLastCalledWith(
+      "strategy",
+      "ListStrategyParamSubmissions",
+      { instance_id: "i-1", limit: 50 },
+      { silentError: true }
+    );
+    expect(rows[0]).toMatchObject({ request_id: "p-1", period_time: 1761206400000, status: "accepted", params_json: "{}" });
   });
 });

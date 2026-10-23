@@ -170,6 +170,10 @@ func decodeStrategy(root *yaml.Node) (Strategy, error) {
 			strategy.Rules, err = decodeRules(f.value)
 		case "portfolio":
 			strategy.Portfolio, err = decodePortfolio(f.value)
+		case "factors":
+			strategy.Factors, err = decodeFactors(f.value)
+		case "factor_params":
+			strategy.FactorParams, err = decodeFactorParams(f.value)
 		default:
 			return Strategy{}, fmt.Errorf("策略 DSL 包含未知字段 %q", f.key)
 		}

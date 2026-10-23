@@ -66,6 +66,10 @@ func TestMgrResetAllAndMutationGate(t *testing.T) {
 	for _, table := range append(append([]string{}, mgrDataTables...), mgrConfigTables...) {
 		var n int
 		require.NoError(t, sqlDB.QueryRow("SELECT COUNT(*) FROM "+table).Scan(&n))
+		if table == "t_factor_categories" {
+			require.Equal(t, 1, n, "只剩补回的默认分类")
+			continue
+		}
 		require.Zero(t, n, table)
 	}
 	_, err = life.Command(ctx, lifecycle.CmdInit, lifecycle.Ref{})

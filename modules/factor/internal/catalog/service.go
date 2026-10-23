@@ -20,7 +20,7 @@ import (
 // RecalcSubmitter durably accepts an initial historical backfill before the
 // factor becomes visible to live triggers.
 type RecalcSubmitter interface {
-	PrepareEnableBackfill(ctx context.Context, set domain.FactorSet, factor domain.FactorDef, start, end time.Time) (store.RecalcJob, error)
+	PrepareEnableBackfill(ctx context.Context, set domain.FactorSet, member domain.MemberDef, start, end time.Time) (store.RecalcJob, error)
 }
 
 type EarliestPeriodProvider interface {
@@ -88,11 +88,15 @@ func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.Fa
 	in.SpaceID = strings.TrimSpace(in.SpaceID)
 	in.SourceDatasetID = strings.TrimSpace(in.SourceDatasetID)
 	in.Freq = strings.ToLower(strings.TrimSpace(in.Freq))
+	in.OwnerInstanceID = strings.TrimSpace(in.OwnerInstanceID)
 	if in.SetID == "" {
 		in.SetID = domain.SetID(in.SourceDatasetID, in.Freq)
+		if in.OwnerInstanceID != "" {
+			in.SetID = domain.InstanceSetID(in.OwnerInstanceID)
+		}
 	}
 	if in.ResultDatasetID == "" {
-		in.ResultDatasetID = domain.ResultDatasetID(in.SourceDatasetID, in.Freq)
+		in.ResultDatasetID = domain.ResultDatasetID(in.SetID)
 	}
 	if in.SubjectMode == "" {
 		in.SubjectMode = domain.SubjectModeAll
@@ -145,6 +149,11 @@ func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.Fa
 	}
 
 	spec := resultDatasetSpec(in, source, columns)
+	if in.OwnerInstanceID != "" {
+		spec.Name = domain.InstanceDatasetName(in.OwnerInstanceID)
+		spec.Description = "Private factor results of strategy instance " + in.OwnerInstanceID
+		spec.Attributes["owner_instance_id"] = in.OwnerInstanceID
+	}
 	if err := s.metadata.CreateResultDataset(ctx, spec); err != nil {
 		return domain.FactorSet{}, fmt.Errorf("create factor result dataset: %w", err)
 	}
@@ -242,6 +251,9 @@ func (s *Service) DeleteSet(ctx context.Context, setID string, purge bool) error
 	if memberCount != 0 {
 		return errors.New("factor set must not contain members before deletion")
 	}
+	if err := s.db.DeleteSetParams(ctx, setID); err != nil {
+		return fmt.Errorf("delete factor set params: %w", err)
+	}
 	if purge {
 		if s.metadata == nil {
 			return errors.New("Storage metadata is required to purge the result dataset")
@@ -323,8 +335,12 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 		}
 	}
 	setIDs := make([]string, 0, len(referencing))
+	seenSets := map[string]bool{}
 	for _, usage := range referencing {
-		setIDs = append(setIDs, usage.SetID)
+		if !seenSets[usage.SetID] {
+			seenSets[usage.SetID] = true
+			setIDs = append(setIDs, usage.SetID)
+		}
 	}
 	sort.Strings(setIDs)
 	for _, setID := range setIDs {
@@ -334,13 +350,13 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 		}
 		defer unlockSet()
 	}
-	for _, setID := range setIDs {
-		set, err := s.db.GetSet(ctx, setID)
+	for _, usage := range referencing {
+		set, err := s.db.GetSet(ctx, usage.SetID)
 		if err != nil {
 			return domain.FactorDef{}, err
 		}
-		if _, err := s.validateMembership(ctx, set, factor); err != nil {
-			return domain.FactorDef{}, fmt.Errorf("factor set %q: %w", setID, err)
+		if _, err := s.validateMembership(ctx, set, domain.MemberDef{Alias: usage.MemberAlias, Factor: factor}); err != nil {
+			return domain.FactorDef{}, fmt.Errorf("factor set %q member %q: %w", usage.SetID, usage.MemberAlias, err)
 		}
 	}
 	if err := s.db.UpdateFactor(ctx, factor); err != nil {
@@ -416,11 +432,14 @@ func (s *Service) ListFactors(ctx context.Context, setID, status string) ([]doma
 	return infos, nil
 }
 
-// AddFactorToSet attaches a definition to a set as a disabled member after
-// validating it against the set's source dataset. It neither adds result
-// columns nor submits a backfill.
-func (s *Service) AddFactorToSet(ctx context.Context, setID, factorID string) (domain.SetMember, error) {
-	setID, factorID = strings.TrimSpace(setID), strings.TrimSpace(factorID)
+// AddFactorToSet attaches a definition to a set as a disabled member under
+// alias (the definition id when empty) after validating it against the set's
+// source dataset. It neither adds result columns nor submits a backfill.
+func (s *Service) AddFactorToSet(ctx context.Context, setID, alias, factorID string) (domain.SetMember, error) {
+	setID, alias, factorID = strings.TrimSpace(setID), strings.TrimSpace(alias), strings.TrimSpace(factorID)
+	if alias == "" {
+		alias = factorID
+	}
 	unlock, err := s.lockMemberContext(ctx, setID, factorID)
 	if err != nil {
 		return domain.SetMember{}, err
@@ -438,10 +457,10 @@ func (s *Service) AddFactorToSet(ctx context.Context, setID, factorID string) (d
 	if err != nil {
 		return domain.SetMember{}, err
 	}
-	if _, err := s.validateMembership(ctx, set, factor); err != nil {
+	if _, err := s.validateMembership(ctx, set, domain.MemberDef{Alias: alias, Factor: factor}); err != nil {
 		return domain.SetMember{}, err
 	}
-	member, err := s.db.AddMember(ctx, setID, factorID)
+	member, err := s.db.AddMember(ctx, setID, alias, factorID)
 	if err != nil {
 		return domain.SetMember{}, err
 	}
@@ -449,9 +468,9 @@ func (s *Service) AddFactorToSet(ctx context.Context, setID, factorID string) (d
 }
 
 // RemoveFactorFromSet detaches a disabled member; result columns are kept.
-func (s *Service) RemoveFactorFromSet(ctx context.Context, setID, factorID string) error {
-	setID, factorID = strings.TrimSpace(setID), strings.TrimSpace(factorID)
-	unlock, err := s.lockMemberContext(ctx, setID, factorID)
+func (s *Service) RemoveFactorFromSet(ctx context.Context, setID, alias string) error {
+	setID, alias = strings.TrimSpace(setID), strings.TrimSpace(alias)
+	unlock, _, err := s.lockExistingMember(ctx, setID, alias)
 	if err != nil {
 		return err
 	}
@@ -463,15 +482,15 @@ func (s *Service) RemoveFactorFromSet(ctx context.Context, setID, factorID strin
 	if set.Status == domain.SetStatusDeleting {
 		return errors.New("factor set purge is pending")
 	}
-	return s.db.RemoveMember(ctx, setID, factorID)
+	return s.db.RemoveMember(ctx, setID, alias)
 }
 
 // SetFactorMemberStatus enables or disables one member. Enabling re-validates,
 // adds result columns, accepts a backfill and returns its job id; disabling only
 // stops writes and keeps the columns.
-func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, factorID, status string) (domain.SetMember, string, error) {
-	setID, factorID = strings.TrimSpace(setID), strings.TrimSpace(factorID)
-	unlock, err := s.lockMemberContext(ctx, setID, factorID)
+func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, alias, status string) (domain.SetMember, string, error) {
+	setID, alias = strings.TrimSpace(setID), strings.TrimSpace(alias)
+	unlock, factorID, err := s.lockExistingMember(ctx, setID, alias)
 	if err != nil {
 		return domain.SetMember{}, "", err
 	}
@@ -486,7 +505,7 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, factorID, st
 	if status != domain.MemberStatusEnabled && status != domain.MemberStatusDisabled {
 		return domain.SetMember{}, "", fmt.Errorf("status must be %q or %q", domain.MemberStatusEnabled, domain.MemberStatusDisabled)
 	}
-	member, err := s.db.GetMember(ctx, setID, factorID)
+	member, err := s.db.GetMember(ctx, setID, alias)
 	if err != nil {
 		return domain.SetMember{}, "", err
 	}
@@ -499,10 +518,10 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, factorID, st
 		return result, "", nil
 	}
 	if status == domain.MemberStatusDisabled {
-		if err := s.db.SetMemberStatus(ctx, setID, factorID, member.Status, status); err != nil {
+		if err := s.db.SetMemberStatus(ctx, setID, alias, member.Status, status); err != nil {
 			return domain.SetMember{}, "", err
 		}
-		return s.reloadMember(ctx, setID, factorID, factor)
+		return s.reloadMember(ctx, setID, alias, factor)
 	}
 	if set.Status == domain.SetStatusPending {
 		return domain.SetMember{}, "", errors.New("factor set is not ready")
@@ -512,7 +531,8 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, factorID, st
 	}
 	// Definitions may have been edited and source columns may have changed while
 	// the member was disabled, so enabling repeats the full membership checks.
-	members, err := s.validateMembership(ctx, set, factor)
+	enabling := domain.MemberDef{Alias: alias, Factor: factor}
+	members, err := s.validateMembership(ctx, set, enabling)
 	if err != nil {
 		return domain.SetMember{}, "", err
 	}
@@ -524,39 +544,60 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, factorID, st
 	if err != nil {
 		return domain.SetMember{}, "", err
 	}
-	activeFactors := make([]domain.FactorDef, 0, len(members)+1)
+	active := make([]domain.MemberDef, 0, len(members)+1)
 	for _, candidate := range members {
 		if candidate.Status == domain.MemberStatusEnabled {
-			activeFactors = append(activeFactors, candidate.Factor)
+			active = append(active, candidate.Def())
 		}
 	}
-	activeFactors = replaceFactor(activeFactors, factor)
-	if err := s.ensureResultColumns(ctx, set, source, columns, activeFactors...); err != nil {
+	active = replaceMember(active, enabling)
+	if err := s.ensureResultColumns(ctx, set, source, columns, active...); err != nil {
 		return domain.SetMember{}, "", err
 	}
 	s.markReady(set.SetID, true)
 	// Persist the accepted backfill and expose the member in one SQLite
 	// transaction so neither the worker nor live triggers can observe half of
 	// the activation.
-	job, err := s.recalc.PrepareEnableBackfill(ctx, set, factor, start, end)
+	job, err := s.recalc.PrepareEnableBackfill(ctx, set, enabling, start, end)
 	if err != nil {
 		return domain.SetMember{}, "", fmt.Errorf("prepare factor backfill: %w", err)
 	}
 	// 同一因子集排队中的回填任务会把新成员并进去，真正入库的任务号可能不是刚生成的那个，所以返回入库后的任务号。
-	stored, err := s.db.EnableMemberWithRecalcJob(ctx, setID, factorID, member.Status, job)
+	stored, err := s.db.EnableMemberWithRecalcJob(ctx, setID, alias, member.Status, job)
 	if err != nil {
 		return domain.SetMember{}, "", err
 	}
-	updated, _, err := s.reloadMember(ctx, setID, factorID, factor)
+	updated, _, err := s.reloadMember(ctx, setID, alias, factor)
 	return updated, stored.JobID, err
 }
 
-func (s *Service) reloadMember(ctx context.Context, setID, factorID string, factor domain.FactorDef) (domain.SetMember, string, error) {
-	member, err := s.db.GetMember(ctx, setID, factorID)
+func (s *Service) reloadMember(ctx context.Context, setID, alias string, factor domain.FactorDef) (domain.SetMember, string, error) {
+	member, err := s.db.GetMember(ctx, setID, alias)
 	if err != nil {
 		return domain.SetMember{}, "", err
 	}
 	return domain.SetMember{FactorSetMember: member, Factor: factor}, "", nil
+}
+
+// lockExistingMember 找到成员引用的定义，按固定顺序（定义锁、集合锁）加锁后再确认成员仍引用同一定义。
+func (s *Service) lockExistingMember(ctx context.Context, setID, alias string) (func(), string, error) {
+	member, err := s.db.GetMember(ctx, setID, alias)
+	if err != nil {
+		return nil, "", err
+	}
+	unlock, err := s.lockMemberContext(ctx, setID, member.FactorID)
+	if err != nil {
+		return nil, "", err
+	}
+	current, err := s.db.GetMember(ctx, setID, alias)
+	if err != nil || current.FactorID != member.FactorID {
+		unlock()
+		if err == nil {
+			err = fmt.Errorf("%w: member %q changed concurrently", store.ErrConflict, alias)
+		}
+		return nil, "", err
+	}
+	return unlock, member.FactorID, nil
 }
 
 // lockMemberContext takes the definition lock and then the set lock, the fixed
@@ -577,9 +618,9 @@ func (s *Service) lockMemberContext(ctx context.Context, setID, factorID string)
 	}, nil
 }
 
-// validateMembership runs the dataset-dependent checks of one definition
-// against one set and returns the set's current members.
-func (s *Service) validateMembership(ctx context.Context, set domain.FactorSet, factor domain.FactorDef) ([]domain.SetMember, error) {
+// validateMembership runs the dataset-dependent checks of one member against
+// one set and returns the set's current members.
+func (s *Service) validateMembership(ctx context.Context, set domain.FactorSet, member domain.MemberDef) ([]domain.SetMember, error) {
 	_, columns, err := s.sourceDataset(ctx, set)
 	if err != nil {
 		return nil, err
@@ -588,9 +629,9 @@ func (s *Service) validateMembership(ctx context.Context, set domain.FactorSet, 
 	if err != nil {
 		return nil, err
 	}
-	siblings := make([]domain.FactorDef, 0, len(members))
-	for _, member := range members {
-		siblings = append(siblings, member.Factor)
+	siblings := make([]domain.MemberDef, 0, len(members))
+	for _, sibling := range members {
+		siblings = append(siblings, sibling.Def())
 	}
 	resultColumns, err := s.metadata.ListColumns(ctx, set.SpaceID, set.ResultDatasetID)
 	if err != nil {
@@ -602,7 +643,7 @@ func (s *Service) validateMembership(ctx context.Context, set domain.FactorSet, 
 			origins[column.ColumnName] = column.OriginID
 		}
 	}
-	if err := domain.ValidateMembership(set, factor, sourceColumns(columns), siblings, origins); err != nil {
+	if err := domain.ValidateMembership(set, member, sourceColumns(columns), siblings, origins); err != nil {
 		return nil, err
 	}
 	return members, nil
@@ -700,7 +741,8 @@ func (s *Service) markReady(setID string, ready bool) {
 
 func sameSetIdentity(existing, requested domain.FactorSet) error {
 	if existing.SpaceID != requested.SpaceID || existing.SourceDatasetID != requested.SourceDatasetID ||
-		existing.Freq != requested.Freq || existing.ResultDatasetID != requested.ResultDatasetID {
+		existing.Freq != requested.Freq || existing.ResultDatasetID != requested.ResultDatasetID ||
+		existing.OwnerInstanceID != requested.OwnerInstanceID {
 		return fmt.Errorf("factor set %q conflicts with the requested source identity", requested.SetID)
 	}
 	return nil
@@ -765,33 +807,56 @@ func sourceColumns(columns []storageio.ColumnInfo) []domain.SourceColumn {
 	return out
 }
 
-func appendFactorColumns(columns []storageio.ColumnInfo, factors ...domain.FactorDef) []storageio.ColumnInfo {
+// 结果列的属性：列归属的成员（origin_factor_id 与 origin_id 都是成员别名，Storage 要求两者一致、factor_output
+// 与列名一致）、定义 ID、分类，以及列是输出值还是参数取值。
+const (
+	ColumnKindOutput = "output"
+	ColumnKindParam  = "param"
+)
+
+func appendFactorColumns(columns []storageio.ColumnInfo, members ...domain.MemberDef) []storageio.ColumnInfo {
 	seen := make(map[string]struct{}, len(columns))
 	for _, col := range columns {
 		seen[col.ColumnName] = struct{}{}
 	}
-	for _, factor := range factors {
-		for _, output := range factor.Outputs {
-			if _, exists := seen[output]; exists {
-				continue
-			}
-			seen[output] = struct{}{}
-			columns = append(columns, storageio.ColumnInfo{
-				ColumnName: output, OriginType: storageio.ColumnOriginFactor, OriginID: factor.FactorID,
-				ValueType: storageio.ColumnTypeDouble, Status: storageio.ColumnStatusActive,
-				Attributes: map[string]string{"display_name": output, "factor_output": output, "origin_factor_id": factor.FactorID},
-			})
+	add := func(member domain.MemberDef, column, kind, name string) {
+		if _, exists := seen[column]; exists {
+			return
+		}
+		seen[column] = struct{}{}
+		attributes := map[string]string{
+			"display_name": column, "factor_output": column, "origin_factor_id": member.Alias,
+			"member_alias": member.Alias, "factor_id": member.Factor.FactorID, "category_id": member.Factor.CategoryID,
+			"column_kind": kind,
+		}
+		if kind == ColumnKindParam {
+			attributes["param_name"] = name
+		} else {
+			attributes["output_name"] = name
+		}
+		columns = append(columns, storageio.ColumnInfo{
+			ColumnName: column, OriginType: storageio.ColumnOriginFactor, OriginID: member.Alias,
+			ValueType: storageio.ColumnTypeDouble, Status: storageio.ColumnStatusActive, Attributes: attributes,
+		})
+	}
+	for _, member := range members {
+		for i, output := range member.Factor.Outputs {
+			add(member, member.OutputColumns()[i], ColumnKindOutput, output)
+		}
+		names := member.ParamNames()
+		for i, column := range member.ParamColumns() {
+			add(member, column, ColumnKindParam, names[i])
 		}
 	}
 	return columns
 }
 
-func replaceFactor(factors []domain.FactorDef, next domain.FactorDef) []domain.FactorDef {
-	for i, factor := range factors {
-		if factor.FactorID == next.FactorID {
-			factors[i] = next
-			return factors
+func replaceMember(members []domain.MemberDef, next domain.MemberDef) []domain.MemberDef {
+	for i, member := range members {
+		if member.Alias == next.Alias {
+			members[i] = next
+			return members
 		}
 	}
-	return append(factors, next)
+	return append(members, next)
 }

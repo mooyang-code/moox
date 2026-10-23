@@ -50,6 +50,7 @@ func BuildFactorPeriodComputedMessage(spaceID string, marker *pb.FactorPeriodCom
 		factors = append(factors, &storageeventpb.FactorPeriodState{
 			FactorId: state.GetFactorId(), Status: state.GetStatus(), FailedSubjects: append([]string(nil), state.GetFailedSubjects()...),
 			SourceHash: state.GetSourceHash(), DefinitionHash: state.GetDefinitionHash(), GapSubjects: append([]string(nil), state.GetGapSubjects()...),
+			MemberAlias: state.GetMemberAlias(), ParamsSource: state.GetParamsSource(), ParamsDigest: state.GetParamsDigest(),
 		})
 	}
 	payload := &storageeventpb.FactorPeriodComputed{

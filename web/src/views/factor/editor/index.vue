@@ -50,6 +50,13 @@
                 <a-form-item field="name" label="展示名" required>
                   <a-input v-model="form.name" :max-length="64" placeholder="Bias 偏离" />
                 </a-form-item>
+                <a-form-item field="category_id" label="分类">
+                  <a-select v-model="form.category_id" allow-clear placeholder="未分类（可在因子定义页管理分类）">
+                    <a-option v-for="category in categories" :key="category.category_id" :value="category.category_id">
+                      {{ category.name }}
+                    </a-option>
+                  </a-select>
+                </a-form-item>
               </div>
             </a-form>
 
@@ -85,6 +92,7 @@
                 <a-descriptions-item label="回看周期数">{{ derived.lookback_periods }}</a-descriptions-item>
                 <a-descriptions-item label="输入列">{{ (derived.input_columns || []).join(", ") }}</a-descriptions-item>
                 <a-descriptions-item label="输出列">{{ (derived.outputs || []).join(", ") }}</a-descriptions-item>
+                <a-descriptions-item label="可调参数" :span="2">{{ paramText(derived.params) }}</a-descriptions-item>
                 <a-descriptions-item label="定义指纹" :span="2">
                   <span class="mono">{{ derived.definition_hash }}</span>
                 </a-descriptions-item>
@@ -229,8 +237,24 @@ import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, onMounted, reactive, ref, watch, onBeforeUnmount } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
-import { createFactor, getFactor, listFactorFunctions, previewFactor, updateFactor, validateFactorSpec } from "@/api/factor";
-import type { FactorFunction, FactorSetInfo, FactorUsage, PreviewFactorRsp, ValidateFactorSpecRsp } from "@/api/factor/types";
+import {
+  createFactor,
+  getFactor,
+  listFactorCategories,
+  listFactorFunctions,
+  previewFactor,
+  updateFactor,
+  validateFactorSpec
+} from "@/api/factor";
+import type {
+  FactorCategory,
+  FactorParamDecl,
+  FactorFunction,
+  FactorSetInfo,
+  FactorUsage,
+  PreviewFactorRsp,
+  ValidateFactorSpecRsp
+} from "@/api/factor/types";
 import { listDatasetColumns, listDatasets } from "@/api/storage/metadata";
 import type { Dataset } from "@/api/storage/types";
 import { AsyncCodeEditor } from "@/components/code-editor/async";
@@ -238,6 +262,7 @@ import { RequestGate } from "@/utils/request-gate";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import { factorTypeLabel } from "@/views/factor/shared/status";
 import { isBuiltinTemplate, specTemplate, type FactorTemplateKind } from "./editor-template";
+import { describeParams } from "@/views/factor/shared/params";
 import {
   FUNCTION_CATEGORY_LABELS,
   blankFactorForm,
@@ -316,6 +341,7 @@ const fileName = computed(() => `${form.factor_id.trim() || "untitled"}.yaml`);
 /** 最近一次通过的编译结果；定义改动后、新结果回来前继续显示旧结果，避免面板闪烁。 */
 const lastValid = ref<ValidateFactorSpecRsp | null>(null);
 const derived = computed(() => (compile.value.status === "valid" ? compile.value.result : lastValid.value));
+const paramText = (params?: FactorParamDecl[]) => describeParams(params);
 const errorLine = computed(() =>
   compile.value.status === "invalid" && compile.value.spec === specKey(form) ? diagnosticDocLine(compile.value.result) : 0
 );
@@ -442,6 +468,17 @@ async function validateNow() {
     if (validateGate.isCurrent(token)) {
       compile.value = { status: "error", message: error instanceof Error ? error.message : "接口调用失败" };
     }
+  }
+}
+
+const categories = ref<FactorCategory[]>([]);
+
+/** 分类只用于归类与筛选；加载失败不影响编辑与保存（保存时不带分类即保持原分类）。 */
+async function loadCategories() {
+  try {
+    categories.value = await listFactorCategories();
+  } catch {
+    categories.value = [];
   }
 }
 
@@ -627,6 +664,7 @@ onMounted(() => {
   void load();
   void loadReferenceDatasets();
   void loadFunctions();
+  void loadCategories();
 });
 
 // 保存作用域：页面卸载或切换因子都会使进行中的保存失效，迟到的响应不能再导航

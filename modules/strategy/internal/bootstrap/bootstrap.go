@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/health"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	strategyoutbox "github.com/mooyang-code/moox/modules/strategy/internal/outbox"
+	"github.com/mooyang-code/moox/modules/strategy/internal/paramsubmit"
 	"github.com/mooyang-code/moox/modules/strategy/internal/replay"
 	"github.com/mooyang-code/moox/modules/strategy/internal/rpc"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
@@ -84,7 +85,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	ranged := *live
 	ranged.PageSize = uint32(cfg.Replay.PageSize)
 	var replayClient input.Client = &ranged
-	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient}}
+	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient, Sets: live, ReadyWait: factorSetReadyWait, ReadyStep: factorSetReadyStep}, Factors: live}
 	service.Owner = tradeowner.New(cfg.Trade, gateway)
 	runner := &replay.Runner{Store: db, Client: replayClient, ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
 	service.Replays = runner
@@ -150,7 +151,13 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		loops.Wait()
 		return nil
 	})
-	loops.Add(4)
+	loops.Add(5)
+	submitter := &paramsubmit.Submitter{Store: db, Factors: live, Allowed: paramSubmitAllowed(triggerGate(life)), OnResult: observer.ParamSubmitted,
+		OnError: func(requestID string, err error) { log.Warnf("因子参数提交 %s 未完成：%v", requestID, err) }}
+	go func() {
+		defer loops.Done()
+		submitter.Run(background)
+	}()
 	go func() {
 		defer loops.Done()
 		runner.Run(background)
@@ -192,6 +199,17 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	return s, closeFn, nil
 }
 
+// 私有因子集的结果 View 由 Storage 异步补齐成员列：启用实例时最多等这么久。
+const (
+	factorSetReadyWait = 90 * time.Second
+	factorSetReadyStep = 3 * time.Second
+)
+
+// paramSubmitAllowed 把触发闸门转成参数提交的闸门：模块暂停、实例暂停时不提交（ModeOff），其余模式照常。
+func paramSubmitAllowed(gate func(string) trigger.Mode) func(string) bool {
+	return func(instanceID string) bool { return gate(instanceID) != trigger.ModeOff }
+}
+
 func reconcileLoop(ctx context.Context, service *rpc.Service) {
 	ticker := time.NewTicker(reconcileInterval)
 	defer ticker.Stop()
@@ -219,6 +237,11 @@ func retentionLoop(ctx context.Context, repo *store.Store, cfg RetentionConfig) 
 			log.Warnf("清理过期解释明细失败：%v", err)
 		} else if deleted > 0 {
 			log.Infof("已清理 %d 条过期解释明细", deleted)
+		}
+		if deleted, err := repo.DeleteParamSubmissionsBefore(ctx, now.AddDate(0, 0, -cfg.ResultItemsDays)); err != nil {
+			log.Warnf("清理过期因子参数提交记录失败：%v", err)
+		} else if deleted > 0 {
+			log.Infof("已清理 %d 条过期因子参数提交记录", deleted)
 		}
 		if deleted, err := repo.DeleteReplaysBefore(ctx, now.AddDate(0, 0, -cfg.ReplaysDays)); err != nil {
 			log.Warnf("清理过期回放失败：%v", err)

@@ -50,7 +50,7 @@ func TestAssembleDerivedTagWritesFactorColumnsOnly(t *testing.T) {
 	plan := computePlan(target, []domain.FactorDef{factor}, []string{"BTC"})
 	loaded := framesFor([]string{"BTC"}, target)
 	computation := Computation{
-		Results:      map[string]map[string]ItemResult{factor.FactorID: {"": {FactorID: factor.FactorID, Columns: []string{"data_time", "series_tag", "subject_id", "spread_value"}, Rows: [][]any{{target, "binance-okx", "BTC", 1.5}}}}},
+		Results:      map[string]map[string]ItemResult{factor.FactorID: {"": {Member: factor.FactorID, Columns: []string{"data_time", "series_tag", "subject_id", "spread_value"}, Rows: [][]any{{target, "binance-okx", "BTC", 1.5}}}}},
 		FactorStates: map[string]storageio.FactorState{factor.FactorID: {FactorID: factor.FactorID, Status: "complete", SourceHash: factor.SpecHash}},
 	}
 	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
@@ -70,7 +70,7 @@ func TestAssembleFailedFactorWritesNull(t *testing.T) {
 	factor := testPipelineFactor("momentum", domain.FactorTypeTimeSeries, 2, false)
 	plan := computePlan(target, []domain.FactorDef{factor}, []string{"BTC"})
 	loaded := framesFor([]string{"BTC"}, target)
-	computation := Computation{Results: map[string]map[string]ItemResult{factor.FactorID: {"BTC": {FactorID: factor.FactorID, Err: errors.New("compute failed")}}}, FactorStates: map[string]storageio.FactorState{factor.FactorID: {FactorID: factor.FactorID, Status: "degraded"}}}
+	computation := Computation{Results: map[string]map[string]ItemResult{factor.FactorID: {"BTC": {Member: factor.FactorID, Err: errors.New("compute failed")}}}, FactorStates: map[string]storageio.FactorState{factor.FactorID: {FactorID: factor.FactorID, Status: "degraded"}}}
 	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
 	require.NoError(t, err)
 	require.Contains(t, rows[0].Fields, factor.Outputs[0])
@@ -96,7 +96,7 @@ func TestAssembleRecalcWritesOnlySelectedFactors(t *testing.T) {
 	plan.Mode = ModeRecalc
 	loaded := framesFor([]string{"BTC"}, target)
 	computation := successfulComputation(selected, []string{"data_time", "series_tag", selected.Outputs[0]}, [][]any{{target, "venue:binance", 1.0}})
-	computation.FactorStates[unselected.FactorID] = storageio.FactorState{FactorID: unselected.FactorID, Status: "complete"}
+	computation.FactorStates[unselected.FactorID] = storageio.FactorState{Member: unselected.FactorID, FactorID: unselected.FactorID, Status: "complete"}
 	rows, err := NewRunner(&outputStore{}, nil, periodclock.Continuous{}, Config{}).Assemble(plan, loaded, computation)
 	require.NoError(t, err)
 	require.NotContains(t, rows[0].Fields, unselected.Outputs[0])
@@ -135,7 +135,7 @@ func TestWritePermanentErrorIsNotRetriedNorInfra(t *testing.T) {
 
 func TestOutcomeStatusDegradedWhenAnyFactorFailed(t *testing.T) {
 	factor := domain.FactorDef{FactorID: "bad"}
-	outcome := outcomeFor(Plan{Factors: []domain.FactorDef{factor}}, LoadResult{}, Computation{FactorStates: map[string]storageio.FactorState{"bad": {FactorID: "bad", Status: "degraded"}}})
+	outcome := outcomeFor(Plan{Members: domain.AsMembers(factor)}, LoadResult{}, Computation{FactorStates: map[string]storageio.FactorState{"bad": {Member: "bad", FactorID: "bad", Status: "degraded"}}})
 	require.Equal(t, "degraded", outcome.Status)
 }
 
@@ -179,7 +179,7 @@ func TestNoEnabledFactorsWithUpstreamFailureReportsDegraded(t *testing.T) {
 
 func successfulComputation(factor domain.FactorDef, columns []string, rows [][]any) Computation {
 	return Computation{
-		Results:      map[string]map[string]ItemResult{factor.FactorID: {"BTC": {FactorID: factor.FactorID, Columns: columns, Rows: rows}}},
+		Results:      map[string]map[string]ItemResult{factor.FactorID: {"BTC": {Member: factor.FactorID, Columns: columns, Rows: rows}}},
 		FactorStates: map[string]storageio.FactorState{factor.FactorID: {FactorID: factor.FactorID, Status: "complete", SourceHash: factor.SpecHash}},
 	}
 }

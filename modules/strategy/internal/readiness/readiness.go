@@ -28,7 +28,7 @@ const (
 
 // Binding 是启用时固化的、与就绪判定有关的绑定信息。
 type Binding struct {
-	// Factors 是实例引用的因子及其固化的 definition_hash；只引用源列时为空。
+	// Factors 是实例引用的因子成员（别名）及其固化的 definition_hash；只引用源列时为空。
 	Factors map[string]string
 	// PreviousFactors 是经 bars[-1] 读取的因子列所属的因子：上一根的值可能来自旧版本，需要上一根的版本证据；
 	// 只经 bars[-1] 读取 K 线列时为空。
@@ -125,11 +125,18 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 	return result
 }
 
+// indexFactors 按成员别名索引事件里的因子状态（同一定义可以用不同别名出现多次）。
 func indexFactors(event *storagepb.ViewDataReady) map[string]*storagepb.FactorPeriodState {
 	states := make(map[string]*storagepb.FactorPeriodState, len(event.GetFactors()))
 	for _, state := range event.GetFactors() {
-		id := strings.TrimSpace(state.GetFactorId())
-		if state == nil || id == "" {
+		if state == nil {
+			continue
+		}
+		id := strings.TrimSpace(state.GetMemberAlias())
+		if id == "" {
+			id = strings.TrimSpace(state.GetFactorId())
+		}
+		if id == "" {
 			continue
 		}
 		states[id] = state

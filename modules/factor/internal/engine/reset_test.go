@@ -41,7 +41,7 @@ func TestEngineResetClearsLocalStateInProcess(t *testing.T) {
 	r.cfg.Gap.LedgerDir = filepath.Join(dir, "gap")
 	ledger, _, err := gapledger.Open(r.cfg.Gap.LedgerDir, time.Now, 0)
 	require.NoError(t, err)
-	require.NoError(t, ledger.RecordGaps(ctx, []pipeline.GapEntry{{SetID: "fset_a", Subject: "BTC", Period: t0, FactorID: "f", DefinitionHash: "h", Reason: pipeline.SkipReasonUpstream}}))
+	require.NoError(t, ledger.RecordGaps(ctx, []pipeline.GapEntry{{SetID: "fset_a", Subject: "BTC", Period: t0, Member: "f", DefinitionHash: "h", Reason: pipeline.SkipReasonUpstream}}))
 	r.gap = ledger
 	require.Equal(t, 1, ledger.PendingCount())
 	r.data = localdata.New(localdata.Config{})

@@ -32,6 +32,7 @@ const baseDef = {
 type Def = typeof baseDef & { factor_id: string; outputs: string[] };
 type Member = {
   set_id: string;
+  member_alias: string;
   factor_id: string;
   status: "enabled" | "disabled";
   factor: Def;
@@ -46,6 +47,7 @@ let createdFactor: Record<string, unknown> | null = null;
 function member(def: Def, status: Member["status"]): Member {
   return {
     set_id: factorSet.set_id,
+    member_alias: def.factor_id,
     factor_id: def.factor_id,
     status,
     factor: def,
@@ -145,19 +147,19 @@ async function mockGateway(route: Route) {
     return route.fulfill({ json: ok({ member: added }) });
   }
   if (method === "RemoveFactorFromSet") {
-    members = members.filter(item => item.factor_id !== body.factor_id);
+    members = members.filter(item => item.member_alias !== body.member_alias);
     return route.fulfill({ json: ok() });
   }
   if (method === "SetFactorMemberStatus") {
-    members = members.map(item => (item.factor_id === body.factor_id ? { ...item, status: body.status } : item));
-    const updated = members.find(item => item.factor_id === body.factor_id);
+    members = members.map(item => (item.member_alias === body.member_alias ? { ...item, status: body.status } : item));
+    const updated = members.find(item => item.member_alias === body.member_alias);
     const backfill_job =
       body.status === "enabled"
         ? {
             job_id: "backfill-1",
             request_id: "backfill-1",
             set_id: factorSet.set_id,
-            factor_ids: [body.factor_id],
+            members: [body.member_alias],
             subjects: [],
             start_time: "",
             end_time: "",
@@ -213,7 +215,7 @@ async function mockGateway(route: Route) {
       job_id: body.request_id || "job-1",
       request_id: body.request_id || "job-1",
       set_id: body.set_id,
-      factor_ids: body.factor_ids || [],
+      members: body.members || [],
       subjects: body.subjects || [],
       start_time: body.start_time,
       end_time: body.end_time,

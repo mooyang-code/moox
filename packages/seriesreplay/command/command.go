@@ -1,6 +1,6 @@
 // Package command 是回放命令行的共用实现：moox-replay 与 moox-cli replay 都调用它。
 //
-//	start    --set <因子集合> --instance <策略实例> --from <起> --to <止> [--replay <ID>] [--quote next_open|close] [--write-factors] ...
+//	start    [--set <因子集合>] --instance <策略实例> --from <起> --to <止> [--replay <ID>] [--quote next_open|close] [--write-factors] ...
 //	         开始一次回放；用同样的参数（或只给 --replay）再次执行就是续跑。前台运行，Ctrl-C 中断后可续跑。
 //	pause    --replay <ID>   暂停（运行进程在周期边界停下）
 //	resume   --replay <ID>   继续被暂停的回放
@@ -94,7 +94,7 @@ func start(ctx context.Context, args []string, out io.Writer) error {
 	var c common
 	c.bind(fs)
 	var spec seriesreplay.Spec
-	fs.StringVar(&spec.SetID, "set", "", "计算因子帧的因子集合 ID")
+	fs.StringVar(&spec.SetID, "set", "", "计算因子帧的因子集合 ID（实例声明了 factors 时可省略，取实例的私有因子集）")
 	fs.StringVar(&spec.InstanceID, "instance", "", "提供策略定义与数据源绑定的策略实例 ID")
 	fs.StringVar(&spec.From, "from", "", "回放起点（RFC3339，含）")
 	fs.StringVar(&spec.To, "to", "", "回放终点（RFC3339，不含）；本地数据必须包含终点之后的一根")

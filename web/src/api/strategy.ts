@@ -1,6 +1,8 @@
 import { callControl, ControlRequestError } from "@/api/admin/http";
 import type {
+  DisplayHidden,
   InstrumentTarget,
+  ParamSubmission,
   PageRequest,
   PageResponse,
   Replay,
@@ -373,4 +375,58 @@ export async function listReplayBars(
 export async function cancelReplay(replay_id: string) {
   const response = await call<{ replay_id: string }, { replay?: Replay }>("CancelReplay", { replay_id });
   return normalizeReplay(response.replay);
+}
+
+function normalizeHidden(value: any): DisplayHidden {
+  return { categories: value?.categories ?? [], members: value?.members ?? [], columns: value?.columns ?? [] };
+}
+
+/** 读取实例的外显设置（隐藏的分类、成员与列；没有设置时全部展示）。 */
+export async function getStrategyDisplaySettings(instance_id: string): Promise<DisplayHidden> {
+  const response = await call<{ instance_id: string }, { hidden?: DisplayHidden }>("GetStrategyDisplaySettings", { instance_id });
+  return normalizeHidden(response.hidden);
+}
+
+/** 保存实例的外显设置；改了立即生效，不进会话快照与哈希。 */
+export async function setStrategyDisplaySettings(instance_id: string, hidden: DisplayHidden): Promise<DisplayHidden> {
+  const response = await call<{ instance_id: string; hidden: DisplayHidden }, { hidden?: DisplayHidden }>(
+    "SetStrategyDisplaySettings",
+    {
+      instance_id,
+      hidden
+    }
+  );
+  return normalizeHidden(response.hidden);
+}
+
+function normalizeSubmission(value: any): ParamSubmission {
+  return {
+    request_id: value?.request_id ?? "",
+    instance_id: value?.instance_id ?? "",
+    result_id: value?.result_id ?? "",
+    set_id: value?.set_id ?? "",
+    period_time: Number(value?.period_time ?? 0),
+    based_on_period: Number(value?.based_on_period ?? 0),
+    params_json: value?.params_json || "{}",
+    notes: value?.notes ?? "",
+    status: value?.status ?? "pending",
+    attempts: Number(value?.attempts ?? 0),
+    outcome_json: value?.outcome_json || "[]",
+    created_at: value?.created_at ?? "",
+    updated_at: value?.updated_at ?? ""
+  };
+}
+
+/** 实例最近的因子参数提交记录（目标期次倒序）。 */
+export async function listStrategyParamSubmissions(
+  instance_id: string,
+  limit = 100,
+  options: RequestOptions = {}
+): Promise<ParamSubmission[]> {
+  const response = await call<{ instance_id: string; limit: number }, { submissions?: ParamSubmission[] }>(
+    "ListStrategyParamSubmissions",
+    { instance_id, limit },
+    options
+  );
+  return (response.submissions ?? []).map(normalizeSubmission);
 }

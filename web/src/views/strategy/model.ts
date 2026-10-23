@@ -205,6 +205,9 @@ export function parseSummary(raw?: string): ResultSummary {
 export interface ResolvedColumn {
   name: string;
   source: string;
+  /** 因子列所属的成员别名；参数列另带参数名。 */
+  member: string;
+  param: string;
   factor_id: string;
   factor_output: string;
   definition_hash: string;
@@ -230,6 +233,8 @@ export function parseResolved(raw?: string): ResolvedBinding | null {
     .map(([name, binding]) => ({
       name,
       source: binding?.source ?? "",
+      member: binding?.member ?? "",
+      param: binding?.param ?? "",
       factor_id: binding?.factor_id ?? "",
       factor_output: binding?.factor_output ?? "",
       definition_hash: binding?.definition_hash ?? ""

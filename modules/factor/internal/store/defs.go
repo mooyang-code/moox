@@ -13,6 +13,7 @@ import (
 type factorDefRow struct {
 	FactorID             string    `gorm:"column:c_factor_id"`
 	Name                 string    `gorm:"column:c_name"`
+	CategoryID           string    `gorm:"column:c_category_id"`
 	Spec                 string    `gorm:"column:c_spec"`
 	SpecHash             string    `gorm:"column:c_spec_hash"`
 	AllowPartialUniverse int       `gorm:"column:c_allow_partial_universe"`
@@ -24,7 +25,7 @@ type factorDefRow struct {
 // 派生字段为空，由调用方的校验报错，避免一个坏定义让列表接口整体失败。
 func (r factorDefRow) domain() (domain.FactorDef, error) {
 	def := domain.FactorDef{
-		FactorID: r.FactorID, Name: r.Name, Spec: r.Spec, SpecHash: r.SpecHash,
+		FactorID: r.FactorID, Name: r.Name, CategoryID: r.CategoryID, Spec: r.Spec, SpecHash: r.SpecHash,
 		AllowPartialUniverse: r.AllowPartialUniverse != 0, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 	if compiled, err := domain.CompileDefinition(def); err == nil {
@@ -68,14 +69,20 @@ func insertFactor(tx *gorm.DB, def domain.FactorDef) error {
 		def.CreatedAt = now
 	}
 	def.UpdatedAt = now
+	if def.CategoryID == "" {
+		def.CategoryID = domain.DefaultCategoryID
+	}
 	err := tx.Exec(`
 		INSERT INTO t_factor_defs
-		(c_factor_id, c_name, c_spec, c_spec_hash, c_allow_partial_universe, c_ctime, c_mtime)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, def.FactorID, def.Name, def.Spec, def.SpecHash, boolInt(def.AllowPartialUniverse), def.CreatedAt, def.UpdatedAt).Error
+		(c_factor_id, c_name, c_category_id, c_spec, c_spec_hash, c_allow_partial_universe, c_ctime, c_mtime)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, def.FactorID, def.Name, def.CategoryID, def.Spec, def.SpecHash, boolInt(def.AllowPartialUniverse), def.CreatedAt, def.UpdatedAt).Error
 	if err != nil {
 		if isUniqueConstraint(err) {
 			return fmt.Errorf("%w: factor id already exists", ErrConflict)
+		}
+		if isForeignKeyConstraint(err) {
+			return fmt.Errorf("%w: category %q does not exist", ErrConflict, def.CategoryID)
 		}
 		return err
 	}
@@ -100,13 +107,17 @@ func (s *Store) UpdateFactor(ctx context.Context, def domain.FactorDef) error {
 	if def.FactorID == "" {
 		return fmt.Errorf("factor id is required")
 	}
+	// 分类为空表示不改分类（分类另有 SetFactorCategory 修改）。
 	result := s.db.WithContext(ctx).Exec(`
-		UPDATE t_factor_defs SET c_name = ?, c_spec = ?, c_spec_hash = ?, c_allow_partial_universe = ?, c_mtime = ?
+		UPDATE t_factor_defs SET c_name = ?, c_category_id = COALESCE(NULLIF(?, ''), c_category_id), c_spec = ?, c_spec_hash = ?, c_allow_partial_universe = ?, c_mtime = ?
 		WHERE c_factor_id = ?
 		 AND NOT EXISTS (SELECT 1 FROM t_factor_set_members WHERE c_factor_id = ? AND c_status = ?)
-	`, def.Name, def.Spec, def.SpecHash, boolInt(def.AllowPartialUniverse), time.Now().UTC(), def.FactorID,
+	`, def.Name, def.CategoryID, def.Spec, def.SpecHash, boolInt(def.AllowPartialUniverse), time.Now().UTC(), def.FactorID,
 		def.FactorID, domain.MemberStatusEnabled)
 	if result.Error != nil {
+		if isForeignKeyConstraint(result.Error) {
+			return fmt.Errorf("%w: category %q does not exist", ErrConflict, def.CategoryID)
+		}
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
@@ -161,7 +172,26 @@ func (s *Store) DeleteFactor(ctx context.Context, factorID string) error {
 	return nil
 }
 
-const factorDefColumns = `c_factor_id, c_name, c_spec, c_spec_hash, c_allow_partial_universe, c_ctime, c_mtime`
+const factorDefColumns = `c_factor_id, c_name, c_category_id, c_spec, c_spec_hash, c_allow_partial_universe, c_ctime, c_mtime`
+
+// SetFactorCategory changes only a definition's category; it is metadata and allowed while members are enabled.
+func (s *Store) SetFactorCategory(ctx context.Context, factorID, categoryID string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("factor database is not open")
+	}
+	result := s.db.WithContext(ctx).Exec(`UPDATE t_factor_defs SET c_category_id = ?, c_mtime = ? WHERE c_factor_id = ?`,
+		strings.TrimSpace(categoryID), time.Now().UTC(), strings.TrimSpace(factorID))
+	if result.Error != nil {
+		if isForeignKeyConstraint(result.Error) {
+			return fmt.Errorf("%w: category %q does not exist", ErrConflict, categoryID)
+		}
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
 
 func factorDefRowsToDomain(rows []factorDefRow) ([]domain.FactorDef, error) {
 	defs := make([]domain.FactorDef, 0, len(rows))

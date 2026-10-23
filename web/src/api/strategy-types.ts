@@ -151,3 +151,32 @@ export interface StartedReplay {
   first_bar_end: string;
   last_bar_end: string;
 }
+
+/** 实例外显设置里隐藏的内容（默认全部展示）：只影响控制台展示与默认导出，不影响 View 的列和策略能读到的数据。 */
+export interface DisplayHidden {
+  categories: string[];
+  members: string[];
+  columns: string[];
+}
+
+/** 参数提交的状态：pending 待提交，accepted 已接受，too_late 该期已冻结，rejected 被拒绝，abandoned 实例停用或超过重试期限。 */
+export type ParamSubmissionStatus = "pending" | "accepted" | "too_late" | "rejected" | "abandoned";
+
+/** 策略为下一期因子参数做的一次提交；某期实际是否采用以因子管理端的冻结记录为准。 */
+export interface ParamSubmission {
+  request_id: string;
+  instance_id: string;
+  result_id: string;
+  set_id: string;
+  /** 参数生效的目标期次（Unix 毫秒）。 */
+  period_time: number;
+  based_on_period: number;
+  /** {成员别名: {参数名: {default, overrides}}} */
+  params_json: string;
+  notes: string;
+  status: ParamSubmissionStatus;
+  attempts: number;
+  outcome_json: string;
+  created_at: string;
+  updated_at: string;
+}

@@ -28,13 +28,16 @@ type SetLocker interface {
 	LockContext(context.Context, string) (func(), error)
 }
 
-// Selection is the input of one recalc chunk: the set, the factors to compute,
+// Selection is the input of one recalc chunk: the set, the members to compute,
 // the resolved subjects and the source columns carried into the result.
 type Selection struct {
 	Set      domain.FactorSet
-	Factors  []domain.FactorDef
+	Members  []domain.MemberDef
 	Subjects []string
 	Columns  []string
+	// Intervals 是各成员的冻结区间（别名 → 按起点排序），补算按它分参数段：段内各期每个成员的快照都相同，
+	// 一段一次计算。没有冻结记录的期次沿用它之前最近的区间，再之前没有就用默认参数。
+	Intervals map[string][]domain.ParamInterval
 	// FillOnly 只填充：窗口检查通过才计算并写入，有洞与失败都不写任何字段，也不写 carry 列。用于 K 线空洞补齐后的恢复。
 	FillOnly bool
 	// FillCarry 让只填充同时按源数据写 carry 列：预热中被跳过的周期在实时路径上一行都没写，恢复时要把 carry 列一并补上。
@@ -174,7 +177,26 @@ func (e *Executor) RunChunk(ctx context.Context, selection Selection, start, end
 		return pipeline.Outcome{}, err
 	}
 	defer unlock()
-	return e.runner.Run(ctx, plan(selection, start, end))
+	return e.runSegments(ctx, selection, start, end)
+}
+
+// runSegments 把 [start, end) 按参数段依次计算，合并各段的结果。
+func (e *Executor) runSegments(ctx context.Context, selection Selection, start, end time.Time) (pipeline.Outcome, error) {
+	duration, err := e.duration(selection.Set)
+	if err != nil {
+		return pipeline.Outcome{}, err
+	}
+	var merged pipeline.Outcome
+	for at := start; at.Before(end); {
+		segmentEnd, params := paramSegment(selection, at, end, duration)
+		outcome, err := e.runner.Run(ctx, plan(selection, params, at, segmentEnd))
+		merged = mergeOutcome(merged, outcome)
+		if err != nil {
+			return merged, err
+		}
+		at = segmentEnd
+	}
+	return merged, nil
 }
 
 // RunChunkWith 先取集合锁，再在锁内调用 source 重新取得集合、因子、标的与源列，运行一个显式区间，并在仍持有锁时调用
@@ -210,7 +232,7 @@ func (e *Executor) RunChunkWith(ctx context.Context, source SelectionSource, sta
 	if e.gate != nil && !e.gate(selection.Set.SetID) {
 		return pipeline.Outcome{}, ErrGated
 	}
-	outcome, runErr := e.runner.Run(ctx, plan(selection, start, end))
+	outcome, runErr := e.runSegments(ctx, selection, start, end)
 	if after != nil {
 		after(selection, outcome, runErr)
 	}
@@ -276,27 +298,37 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 	if e.gate != nil && !e.gate(selection.Set.SetID) {
 		return time.Time{}, pipeline.Outcome{}, false, ErrGated
 	}
-	outcome, err := e.runner.Run(ctx, plan(selection, start, chunkEnd))
-	return chunkEnd, outcome, false, err
+	// 一次只算一个参数段：分块在参数变化处截断，进度按段推进，段内各期的快照相同。
+	duration, err := e.duration(selection.Set)
+	if err != nil {
+		return time.Time{}, pipeline.Outcome{}, false, err
+	}
+	segmentEnd, params := paramSegment(selection, start, chunkEnd, duration)
+	outcome, err := e.runner.Run(ctx, plan(selection, params, start, segmentEnd))
+	return segmentEnd, outcome, false, err
 }
 
-func (e *Executor) chunkEnd(selection Selection, start, windowEnd time.Time) (time.Time, error) {
-	set := selection.Set
+func (e *Executor) duration(set domain.FactorSet) (time.Duration, error) {
 	clock := e.clock
 	if clock == nil {
 		var err error
 		if clock, err = periodclock.ForSpace(set.SpaceID); err != nil {
-			return time.Time{}, err
+			return 0, err
 		}
 	}
-	duration, err := clock.Duration(set.Freq)
+	return clock.Duration(set.Freq)
+}
+
+func (e *Executor) chunkEnd(selection Selection, start, windowEnd time.Time) (time.Time, error) {
+	set := selection.Set
+	duration, err := e.duration(set)
 	if err != nil {
 		return time.Time{}, err
 	}
 	periods := e.chunkPeriods
 	if e.memoryBudget > 0 {
 		// 序列数按标的数估计（crypto 每个标的一个 series_tag）。
-		fit, err := pipeline.MaxPeriodsWithin(selection.Factors, len(selection.Subjects), len(selection.Columns), periods, e.memoryBudget)
+		fit, err := pipeline.MaxPeriodsWithin(selection.Members, len(selection.Subjects), len(selection.Columns), periods, e.memoryBudget)
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -326,9 +358,92 @@ func (e *Executor) lock(ctx context.Context, setID string) (func(), error) {
 	return unlock, nil
 }
 
-func plan(selection Selection, start, end time.Time) pipeline.Plan {
+// paramSegment 返回从 start 起参数不变的一段 [start, segmentEnd)（不超过 limit）与这一段各成员的冻结参数。
+// 某成员在 start 有冻结区间时，段在区间结束处截断；没有时沿用之前最近的区间（没有就用默认参数），段在下一个区间开始处截断。
+func paramSegment(selection Selection, start, limit time.Time, duration time.Duration) (time.Time, map[string]domain.ParamFreeze) {
+	end := limit
+	params := make(map[string]domain.ParamFreeze, len(selection.Members))
+	for _, member := range selection.Members {
+		var previous *domain.ParamInterval
+		covered := false
+		for i := range selection.Intervals[member.Alias] {
+			interval := selection.Intervals[member.Alias][i]
+			switch {
+			case interval.Covers(start):
+				covered = true
+				params[member.Alias] = domain.ParamFreeze{SetID: selection.Set.SetID, MemberAlias: member.Alias, PeriodTime: start,
+					Snapshot: interval.Snapshot, SnapshotHash: interval.SnapshotHash, Source: interval.Source}
+				if stop := interval.End.Add(duration); stop.Before(end) {
+					end = stop
+				}
+			case interval.End.Before(start):
+				previous = &selection.Intervals[member.Alias][i]
+			case interval.Start.After(start) && !covered:
+				if interval.Start.Before(end) {
+					end = interval.Start
+				}
+			}
+			if covered || interval.Start.After(start) {
+				break
+			}
+		}
+		if !covered && previous != nil {
+			params[member.Alias] = domain.ParamFreeze{SetID: selection.Set.SetID, MemberAlias: member.Alias, PeriodTime: start,
+				Snapshot: previous.Snapshot, SnapshotHash: previous.SnapshotHash, Source: carriedSource(previous.Source)}
+		}
+	}
+	if !end.After(start) {
+		end = start.Add(duration)
+	}
+	return end, params
+}
+
+// carriedSource 是沿用 previous 来源的区间时的来源：从未提交过（默认值）沿用的仍是默认值。
+func carriedSource(previous string) string {
+	if previous == domain.ParamsDefault {
+		return domain.ParamsDefault
+	}
+	return domain.ParamsCarried
+}
+
+// mergeOutcome 合并两个参数段的结果：失败标的取并集、状态取较差的一个、逐项结果合并。
+func mergeOutcome(into, next pipeline.Outcome) pipeline.Outcome {
+	if into.Status == "" {
+		return next
+	}
+	if next.Status == "degraded" {
+		into.Status = "degraded"
+	}
+	into.FailedSubjects = append(into.FailedSubjects, next.FailedSubjects...)
+	into.RowsWritten += next.RowsWritten
+	into.Warming += next.Warming
+	if into.Items == nil && next.Items != nil {
+		into.Items = map[pipeline.ItemKey]pipeline.ItemStatus{}
+	}
+	for key, status := range next.Items {
+		into.Items[key] = status
+	}
+	byMember := make(map[string]int, len(into.Factors))
+	for i, state := range into.Factors {
+		byMember[state.Member] = i
+	}
+	for _, state := range next.Factors {
+		i, ok := byMember[state.Member]
+		if !ok {
+			into.Factors = append(into.Factors, state)
+			continue
+		}
+		if state.Status != "complete" {
+			into.Factors[i].Status = state.Status
+		}
+		into.Factors[i].FailedSubjects = append(into.Factors[i].FailedSubjects, state.FailedSubjects...)
+	}
+	return into
+}
+
+func plan(selection Selection, params map[string]domain.ParamFreeze, start, end time.Time) pipeline.Plan {
 	return pipeline.Plan{
-		Mode: pipeline.ModeRecalc, Set: selection.Set, Factors: selection.Factors,
+		Mode: pipeline.ModeRecalc, Set: selection.Set, Members: selection.Members, Params: params,
 		TargetStart: start, TargetEnd: end,
 		Expected:     append([]string(nil), selection.Subjects...),
 		Available:    append([]string(nil), selection.Subjects...),
@@ -344,15 +459,15 @@ func DegradedNote(outcome pipeline.Outcome) string {
 	if outcome.Status != "degraded" {
 		return ""
 	}
-	var factors []string
+	var members []string
 	for _, factor := range outcome.Factors {
 		if factor.Status != "complete" {
-			factors = append(factors, factor.FactorID)
+			members = append(members, factor.Member)
 		}
 	}
 	note := fmt.Sprintf("%s failed_subjects=%d", degradedPrefix, len(outcome.FailedSubjects))
-	if len(factors) > 0 {
-		note += " factors=" + strings.Join(factors, ",")
+	if len(members) > 0 {
+		note += " members=" + strings.Join(members, ",")
 	}
 	return note
 }

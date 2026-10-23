@@ -139,6 +139,19 @@ func (c *CatalogCache) Status() CatalogStatus {
 	}
 }
 
+// Sets 返回快照里全部集合（成员是副本）。
+func (c *CatalogCache) Sets() []domain.EngineSet {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]domain.EngineSet, 0, len(c.sets))
+	for _, set := range c.sets {
+		copied := set
+		copied.Members = append([]domain.MemberDef(nil), set.Members...)
+		out = append(out, copied)
+	}
+	return out
+}
+
 // SetIDs lists the enabled sets of the snapshot.
 func (c *CatalogCache) SetIDs() []string {
 	c.mu.RLock()
@@ -150,25 +163,39 @@ func (c *CatalogCache) SetIDs() []string {
 	return ids
 }
 
-// EnabledSetByDataset implements trigger.SetLocator from the snapshot. A set
-// whose result dataset is not ready, or a missing snapshot, is a transient
-// infrastructure condition so the event is retried rather than dropped.
-func (c *CatalogCache) EnabledSetByDataset(_ context.Context, spaceID, datasetID, freq string) (domain.FactorSet, []domain.FactorDef, bool, error) {
+// EnabledSetsByDataset implements trigger.SetLocator from the snapshot: every
+// enabled set over the source dataset (各策略实例的私有集合可以共用一个源数据集). A missing
+// snapshot is a transient infrastructure condition so the event is retried
+// rather than dropped; sets whose result dataset is not ready are returned
+// with ResultReady false and retried by the caller.
+func (c *CatalogCache) EnabledSetsByDataset(_ context.Context, spaceID, datasetID, freq string) ([]domain.EngineSet, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if !c.loaded {
-		return domain.FactorSet{}, nil, false, fmt.Errorf("%w: factor catalog has not been loaded", storageio.ErrInfra)
+		return nil, fmt.Errorf("%w: factor catalog has not been loaded", storageio.ErrInfra)
 	}
+	var out []domain.EngineSet
 	for _, set := range c.sets {
 		if set.Set.SpaceID != spaceID || set.Set.SourceDatasetID != datasetID || set.Set.Freq != freq {
 			continue
 		}
-		if !set.ResultReady {
-			return domain.FactorSet{}, nil, false, fmt.Errorf("%w: result dataset of factor set %s is not ready", storageio.ErrInfra, set.Set.SetID)
-		}
-		return set.Set, append([]domain.FactorDef(nil), set.Factors...), true, nil
+		copied := set
+		copied.Members = append([]domain.MemberDef(nil), set.Members...)
+		out = append(out, copied)
 	}
-	return domain.FactorSet{}, nil, false, nil
+	return out, nil
+}
+
+// EnabledSet implements trigger.SetLocator: the enabled set with this id.
+func (c *CatalogCache) EnabledSet(_ context.Context, setID string) (domain.EngineSet, bool, error) {
+	set, lookup := c.SetByID(setID)
+	switch lookup {
+	case SetFound:
+		return set, true, nil
+	case SetNotReady:
+		return domain.EngineSet{}, false, fmt.Errorf("%w: factor set %s is not ready", storageio.ErrInfra, setID)
+	}
+	return domain.EngineSet{}, false, nil
 }
 
 // SetLookup 是按集合 ID 查目录的结果。
@@ -198,7 +225,7 @@ func (c *CatalogCache) SetByID(setID string) (domain.EngineSet, SetLookup) {
 			return domain.EngineSet{}, SetNotReady
 		}
 		copied := set
-		copied.Factors = append([]domain.FactorDef(nil), set.Factors...)
+		copied.Members = append([]domain.MemberDef(nil), set.Members...)
 		return copied, SetFound
 	}
 	return domain.EngineSet{}, SetGone
@@ -225,19 +252,18 @@ func compileSets(sets []domain.EngineSet) []domain.EngineSet {
 	out := make([]domain.EngineSet, len(sets))
 	for i, set := range sets {
 		out[i] = set
-		out[i].Factors = CompileFactors(set.Factors)
+		out[i].Members = CompileMembers(set.Members)
 	}
 	return out
 }
 
-// CompileFactors 编译一组定义；编译失败的定义原样返回。
-func CompileFactors(factors []domain.FactorDef) []domain.FactorDef {
-	out := make([]domain.FactorDef, len(factors))
-	for i, factor := range factors {
-		if compiled, err := domain.CompileDefinition(factor); err == nil {
-			out[i] = compiled
-		} else {
-			out[i] = factor
+// CompileMembers 编译一组成员的定义；编译失败的定义原样返回。
+func CompileMembers(members []domain.MemberDef) []domain.MemberDef {
+	out := make([]domain.MemberDef, len(members))
+	for i, member := range members {
+		out[i] = member
+		if compiled, err := domain.CompileDefinition(member.Factor); err == nil {
+			out[i].Factor = compiled
 		}
 	}
 	return out

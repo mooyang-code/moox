@@ -337,6 +337,9 @@ func TestConsoleGlobalWritesRequireAdministrator(t *testing.T) {
 		// 因子定义是全局的，会被所有空间的因子集引用：只有全局管理员可以保存。
 		{"/api/admin/factor-mgr/CreateFactor", 1, http.StatusForbidden},
 		{"/api/admin/factor-mgr/UpdateFactor", 1, http.StatusForbidden},
+		{"/api/admin/factor-mgr/UpsertFactorCategory", 1, http.StatusForbidden},
+		{"/api/admin/factor-mgr/DeleteFactorCategory", 1, http.StatusForbidden},
+		{"/api/admin/factor-mgr/SetFactorCategory", 1, http.StatusForbidden},
 		// 策略定义是全局的：空间管理员不能改被其他空间实例引用的定义；读取仍按空间授权。
 		{"/api/admin/strategy/CreateStrategy", 1, http.StatusForbidden},
 		{"/api/admin/strategy/UpdateStrategy", 1, http.StatusForbidden},

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseDSL, rankedTemplate, signalTemplate, summarizeDSL } from "./dsl";
+import { parseDSL, rankedTemplate, signalTemplate, summarizeDSL, tunedTemplate } from "./dsl";
 
 describe("strategy DSL preview", () => {
   it("parses the v3 templates without diagnostics", () => {
@@ -13,7 +13,7 @@ describe("strategy DSL preview", () => {
     expect(ranked.preview?.universe).toContain("排除 BTC-USDT");
     const signal = parseDSL(signalTemplate);
     expect(signal.diagnostics).toEqual([]);
-    expect(signalTemplate).toContain("bars[-1].bias_20");
+    expect(signalTemplate).toContain("bars[-1].bias");
   });
 
   it("reports structural problems before saving", () => {
@@ -34,5 +34,19 @@ describe("strategy DSL preview", () => {
     const result = parseDSL("name: test\nrules: *missing\n");
     expect(result.preview).toBeNull();
     expect(result.diagnostics.length).toBeGreaterThan(0);
+  });
+});
+
+describe("tuned template", () => {
+  it("declares factor members and next-period parameters and passes the local precheck", () => {
+    const tuned = parseDSL(tunedTemplate);
+    expect(tuned.diagnostics).toEqual([]);
+    expect(tuned.preview?.rules.map(rule => rule.id)).toEqual(["bias_spread"]);
+    expect(tunedTemplate).toContain("factors:");
+    expect(tunedTemplate).toContain("factor_params:");
+    // 同一定义用两个别名；列名是 <别名>_<输出名>。
+    expect(tunedTemplate).toContain("fast: {factor: Bias}");
+    expect(tunedTemplate).toContain("slow: {factor: Bias}");
+    expect(tunedTemplate).toContain("fast_bias");
   });
 });

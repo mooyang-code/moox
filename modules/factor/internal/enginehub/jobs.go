@@ -79,11 +79,11 @@ func (h *Hub) runnableSet(ctx context.Context, job store.RecalcJob) (domain.Engi
 	if err != nil {
 		return domain.EngineSet{}, err
 	}
-	factors, err := domain.SelectEnabledFactors(members, job.FactorIDs)
+	selected, err := domain.SelectEnabledMembers(members, job.Members)
 	if err != nil {
 		return domain.EngineSet{}, err
 	}
-	return domain.EngineSet{Set: set, Factors: factors, ResultReady: h.isReady(set.SetID)}, nil
+	return domain.EngineSet{Set: set, Members: selected, ResultReady: h.isReady(set.SetID)}, nil
 }
 
 func (h *Hub) unreadySets(ctx context.Context) (map[string]bool, error) {

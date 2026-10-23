@@ -127,7 +127,7 @@ type harness struct {
 
 func newHarness(t *testing.T, dslYaml string, account *string) *harness {
 	t.Helper()
-	resolved := input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1"}, ViewColumns: []string{"close", "m"}}
+	resolved := input.Resolved{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewID: "view_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1"}, ViewColumns: []string{"close", "m"}}
 	return newHarnessWith(t, dslYaml, account, resolved)
 }
 
@@ -181,7 +181,7 @@ func (h *harness) event(n int, hashes map[string]string, statuses ...string) (*e
 	}
 	factors := make([]*storagepb.FactorPeriodState, 0, len(hashes))
 	for id, hash := range hashes {
-		factors = append(factors, &storagepb.FactorPeriodState{FactorId: id, Status: status, DefinitionHash: hash})
+		factors = append(factors, &storagepb.FactorPeriodState{MemberAlias: id, FactorId: id, Status: status, DefinitionHash: hash})
 	}
 	message := &eventpb.EventMessage{EventId: fmt.Sprintf("event-%d", n), EventName: "event.storage.view.data_ready", SpaceId: "space"}
 	payload := &storagepb.ViewDataReady{CompletionKind: events.CollectorPeriodCompleted.Name(), ViewId: "view_a", Frequency: "1h", PeriodTime: barStart(n).Unix(), Status: "complete", UniverseSubjectIds: []string{"A", "B", "C"}, Factors: factors}

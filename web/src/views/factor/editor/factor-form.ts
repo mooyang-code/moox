@@ -34,10 +34,12 @@ export interface FactorFormState {
   name: string;
   spec: string;
   allow_partial_universe: boolean;
+  /** 因子分类（空表示不改：新建取“未分类”，编辑保持原分类）。 */
+  category_id: string;
 }
 
 export function blankFactorForm(): FactorFormState {
-  return { factor_id: "", name: "", spec: TIMESERIES_SPEC_TEMPLATE, allow_partial_universe: false };
+  return { factor_id: "", name: "", spec: TIMESERIES_SPEC_TEMPLATE, allow_partial_universe: false, category_id: "" };
 }
 
 export function formFromDefinition(def: FactorDef): FactorFormState {
@@ -45,7 +47,8 @@ export function formFromDefinition(def: FactorDef): FactorFormState {
     factor_id: def.factor_id,
     name: def.name,
     spec: def.spec || "",
-    allow_partial_universe: Boolean(def.allow_partial_universe)
+    allow_partial_universe: Boolean(def.allow_partial_universe),
+    category_id: def.category_id || ""
   };
 }
 
@@ -153,12 +156,14 @@ export function checklistBlockers(items: ChecklistItem[]) {
 
 /** 提交体：不带派生字段、set_id、status，也不带参考数据集。 */
 export function buildFactorPayload(form: FactorFormState, factorType?: FactorType): FactorInput {
-  return {
+  const payload: FactorInput = {
     factor_id: form.factor_id.trim(),
     name: form.name.trim(),
     spec: form.spec,
     allow_partial_universe: factorType === "cross_section" ? form.allow_partial_universe : false
   };
+  if (form.category_id) payload.category_id = form.category_id;
+  return payload;
 }
 
 /** 函数参考面板的分组与搜索。 */

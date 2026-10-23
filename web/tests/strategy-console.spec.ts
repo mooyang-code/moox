@@ -22,7 +22,7 @@ async function installShell(page: Page) {
 test("strategy definitions render the DSL v3 contract", async ({ page }) => {
   await installShell(page);
   const dsl =
-    "name: 动量策略\nbar: 1h\nrules:\n  - id: momentum\n    name: 动量选币\n    type: rank\n    score: rank(bias_q_20)\n    select: {top: 5}\n    weight: {total: 0.8}\n";
+    "name: 动量策略\nbar: 1h\nrules:\n  - id: momentum\n    name: 动量选币\n    type: rank\n    score: rank(bias_q)\n    select: {top: 5}\n    weight: {total: 0.8}\n";
   await page.route("**/api/admin/strategy/ListStrategies", route =>
     route.fulfill({
       json: {

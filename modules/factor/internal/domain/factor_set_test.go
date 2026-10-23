@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,9 +37,23 @@ func TestSetIDAndResultDatasetID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.setID, SetID(tt.datasetID, tt.freq))
-			require.Equal(t, tt.resultID, ResultDatasetID(tt.datasetID, tt.freq))
+			require.Equal(t, tt.resultID, ResultDatasetID(SetID(tt.datasetID, tt.freq)))
 		})
 	}
+}
+
+// 私有集合的 ID 由实例 ID 的摘要推出：满足 Storage 的小写下划线规则与 50 个字符上限，同一实例总是同一个 ID。
+func TestInstanceSetIDFitsStorageRules(t *testing.T) {
+	instanceID := "5f0c3a4e-8d2b-4c1a-9e7f-1234567890ab"
+	setID := InstanceSetID(instanceID)
+	require.Equal(t, setID, InstanceSetID(instanceID))
+	require.NotEqual(t, setID, InstanceSetID("another"))
+	require.True(t, strings.HasPrefix(setID, "fset_i"))
+	dataset := ResultDatasetID(setID)
+	require.LessOrEqual(t, len(dataset), 50)
+	require.Regexp(t, `^dataset_factor_i[0-9a-f]{20}$`, dataset)
+	require.Equal(t, "view_factor_"+strings.TrimPrefix(setID, "fset_"), ResultViewID(setID))
+	require.LessOrEqual(t, len([]rune(InstanceDatasetName(instanceID))), 10)
 }
 
 func TestFactorDefUsesDatasetPipelineFields(t *testing.T) {
@@ -70,7 +85,7 @@ func TestValidateSetRequiresCanonicalIdentityAndScope(t *testing.T) {
 		SourceDatasetID: "dataset_binance_kline_1m",
 		Freq:            "1m",
 		SubjectMode:     SubjectModeAll,
-		ResultDatasetID: ResultDatasetID("dataset_binance_kline_1m", "1m"),
+		ResultDatasetID: ResultDatasetID(SetID("dataset_binance_kline_1m", "1m")),
 		Status:          SetStatusPending,
 	}
 	require.NoError(t, ValidateSet(set))
@@ -78,11 +93,20 @@ func TestValidateSetRequiresCanonicalIdentityAndScope(t *testing.T) {
 	set.ResultDatasetID = "dataset_other"
 	require.ErrorContains(t, ValidateSet(set), "result_dataset_id")
 
-	set.ResultDatasetID = ResultDatasetID(set.SourceDatasetID, set.Freq)
+	set.ResultDatasetID = ResultDatasetID(set.SetID)
 	set.SubjectMode = SubjectModeInclude
 	require.ErrorContains(t, ValidateSet(set), "at least one subject")
 	set.Subjects = []string{"BTC", "BTC"}
 	require.ErrorContains(t, ValidateSet(set), "duplicate subject")
+
+	// 私有集合的 ID 必须由实例推出。
+	private := set
+	private.SubjectMode, private.Subjects = SubjectModeAll, nil
+	private.OwnerInstanceID = "inst-1"
+	require.ErrorContains(t, ValidateSet(private), "set_id must be")
+	private.SetID = InstanceSetID("inst-1")
+	private.ResultDatasetID = ResultDatasetID(private.SetID)
+	require.NoError(t, ValidateSet(private))
 }
 
 func TestValidateDefinitionPartialUniverseOnlyForCrossSection(t *testing.T) {
@@ -98,48 +122,67 @@ func TestValidateDefinitionPartialUniverseOnlyForCrossSection(t *testing.T) {
 
 func TestValidateDefinitionDoesNotNeedSourceColumns(t *testing.T) {
 	factor := compiledFactor(t, "f", "outputs: {value: any_column_name}")
+	require.Equal(t, DefaultCategoryID, factor.CategoryID)
 	_, err := ValidateDefinition(factor)
 	require.NoError(t, err)
 }
 
 var closeColumns = []SourceColumn{{Name: "close", Numeric: true}, {Name: "symbol_name", Numeric: false}}
 
+func member(factor FactorDef) MemberDef { return MemberDef{Alias: factor.FactorID, Factor: factor} }
+
 func TestValidateMembershipRejectsUnknownOrNonNumericInput(t *testing.T) {
 	factor := compiledFactor(t, "f", "outputs: {value: missing}")
-	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, closeColumns, nil, nil), "unknown input")
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, member(factor), closeColumns, nil, nil), "unknown input")
 	factor = compiledFactor(t, "f", "outputs: {value: symbol_name}")
-	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, closeColumns, nil, nil), "not numeric")
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, member(factor), closeColumns, nil, nil), "not numeric")
 }
 
 func TestValidateMembershipRejectsOutputCollidingWithSourceColumn(t *testing.T) {
 	factor := compiledFactor(t, "f", "outputs: {close: close * 2}")
-	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, closeColumns, nil, nil), "source column")
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, member(factor), closeColumns, nil, nil), "与源列重名")
 }
 
 func TestValidateMembershipRejectsNamesShadowingSourceColumns(t *testing.T) {
-	param := compiledFactor(t, "f", "params: {close: 3}\noutputs:\n  value: ts_mean(open, close)\n")
+	param := compiledFactor(t, "f", "params: {close: {type: int, min: 2, max: 9, default: 3}}\noutputs:\n  value: ts_mean(open, close)\n")
 	columns := append([]SourceColumn{{Name: "open", Numeric: true}}, closeColumns...)
-	require.ErrorContains(t, ValidateMembership(FactorSet{}, param, columns, nil, nil), "参数 close")
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, member(param), columns, nil, nil), "参数 close")
 }
 
-func TestValidateMembershipRejectsDuplicateOutputInSetExcludingSelf(t *testing.T) {
+func TestValidateMembershipRejectsDuplicateColumnInSetExcludingSelf(t *testing.T) {
 	factor := validFactor(t)
 	sibling := compiledFactor(t, "sibling", "outputs: {value: close + 1}")
-	require.ErrorContains(t, ValidateMembership(FactorSet{}, factor, closeColumns, []FactorDef{sibling}, nil), "duplicate output")
-	// A definition never conflicts with itself.
-	require.NoError(t, ValidateMembership(FactorSet{}, factor, closeColumns, []FactorDef{factor}, nil))
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, member(factor), closeColumns, []MemberDef{member(sibling)}, nil), "重复")
+	// A member never conflicts with itself.
+	require.NoError(t, ValidateMembership(FactorSet{}, member(factor), closeColumns, []MemberDef{member(factor)}, nil))
+	// 同一定义用不同别名加入：列名带别名前缀，互不冲突。
+	fast := MemberDef{Alias: "fast", Factor: factor}
+	slow := MemberDef{Alias: "slow", Factor: factor}
+	require.NoError(t, ValidateMembership(FactorSet{}, fast, closeColumns, []MemberDef{slow}, nil))
 }
 
-func TestValidateMembershipRejectsOutputOwnedByOtherFactor(t *testing.T) {
+func TestValidateMembershipRejectsColumnOwnedByOtherMember(t *testing.T) {
 	factor := validFactor(t)
-	err := ValidateMembership(FactorSet{}, factor, closeColumns, nil, map[string]string{"value": "Other"})
-	require.ErrorContains(t, err, "already owned")
+	err := ValidateMembership(FactorSet{}, member(factor), closeColumns, nil, map[string]string{"value": "Other"})
+	require.ErrorContains(t, err, "已属于")
 }
 
-func TestValidateMembershipAllowsReaddOfSameFactor(t *testing.T) {
+func TestValidateMembershipAllowsReaddOfSameMember(t *testing.T) {
 	factor := validFactor(t)
-	require.NoError(t, ValidateMembership(FactorSet{}, factor, closeColumns, nil,
+	require.NoError(t, ValidateMembership(FactorSet{}, member(factor), closeColumns, nil,
 		map[string]string{"value": factor.FactorID}))
+}
+
+func TestMemberColumns(t *testing.T) {
+	factor := compiledFactor(t, "Boll", "params: {w: {type: int, min: 2, max: 50, default: 20}}\noutputs:\n  up: ts_mean(close, w)\n  down: ts_mean(close, w) * 2\n")
+	require.Equal(t, []string{"up", "down"}, member(factor).OutputColumns())
+	fast := MemberDef{Alias: "fast", Factor: factor}
+	require.Equal(t, []string{"fast_up", "fast_down"}, fast.OutputColumns())
+	require.Equal(t, []string{"fast__w"}, fast.ParamColumns())
+	require.Equal(t, "fset_x/fast", fast.Key("fset_x"))
+	// 参数列与源列冲突、别名不合法都拒绝。
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, MemberDef{Alias: "x__y", Factor: factor}, closeColumns, nil, nil), "别名")
+	require.ErrorContains(t, ValidateMembership(FactorSet{}, fast, append(closeColumns, SourceColumn{Name: "fast__w", Numeric: true}), nil, nil), "与源列重名")
 }
 
 func TestSetInScope(t *testing.T) {

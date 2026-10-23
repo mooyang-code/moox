@@ -20,7 +20,8 @@ func programText(p *Program, index int) string {
 
 func programTree(p *Program, index int) *Node {
 	node := p.Nodes[index]
-	tree := &Node{Op: node.Op, Kind: node.Kind, Column: node.Column, Value: node.Value, Ints: node.Ints, Floats: node.Floats}
+	tree := &Node{Op: node.Op, Kind: node.Kind, Column: node.Column, Param: node.Param, Value: node.Value, Ints: node.Ints,
+		IntParams: node.IntParams, Floats: node.Floats, FloatParams: node.FloatParams}
 	for _, arg := range node.Args {
 		tree.Args = append(tree.Args, programTree(p, arg))
 	}
@@ -104,5 +105,24 @@ func TestNeedStaysWithinProgramLookback(t *testing.T) {
 	}
 	if _, err := p.Need(5, 4); err == nil {
 		t.Fatal("empty target should be rejected")
+	}
+}
+
+// 参数槽按声明范围取最坏扩展：窗口取上限，delay 的整体前移取下限、扩展取上限。
+func TestNeedWithParamSlots(t *testing.T) {
+	p := program(t, "params:\n  w: {type: int, min: 2, max: 10, default: 5}\n  k: {type: int, min: 1, max: 4, default: 2}\n"+
+		"outputs:\n  a: ts_mean(close, w)\n  b: delay(open, k)\n")
+	need, err := p.Need(50, 59)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]Interval{
+		"close": {41, 59},
+		"open":  {46, 58},
+	}
+	for canonical, want := range cases {
+		if got := need[nodeByCanonical(t, p, canonical)]; got != want {
+			t.Errorf("%s need = %+v, want %+v", canonical, got, want)
+		}
 	}
 }

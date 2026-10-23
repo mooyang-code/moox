@@ -18,9 +18,13 @@ const (
 )
 
 type Plan struct {
-	Mode           Mode
-	Set            domain.FactorSet
-	Factors        []domain.FactorDef
+	Mode Mode
+	Set  domain.FactorSet
+	// Members 是本次计算的成员（别名加定义）。
+	Members []domain.MemberDef
+	// Params 是本次计算各成员的冻结参数（别名 → 冻结记录）：实时是这一期的冻结，补算是一个参数段（段内各期快照相同）。
+	// 没有的成员按默认参数计算。目标期的快照覆盖整个回看区间。
+	Params         map[string]domain.ParamFreeze
 	PeriodTime     time.Time // 实时模式的目标周期 T；补算为零值
 	TargetStart    time.Time
 	TargetEnd      time.Time
@@ -110,13 +114,13 @@ type Computation struct {
 	BudgetHit    bool
 }
 
-// ItemResult 是一个因子在一个标的（截面因子为空串）上的逐行结果：列为 data_time、series_tag、
-// （截面因子）subject_id 与各输出列，值为 null 或 float64；Err 非空表示计算失败。
+// ItemResult 是一个成员在一个标的（截面因子为空串）上的逐行结果：列为 data_time、series_tag、
+// （截面因子）subject_id 与各输出列（结果数据集里的列名），值为 null 或 float64；Err 非空表示计算失败。
 type ItemResult struct {
-	FactorID string
-	Columns  []string
-	Rows     [][]any
-	Err      error
+	Member  string
+	Columns []string
+	Rows    [][]any
+	Err     error
 }
 
 // periodOutcome 是截面因子一个目标周期的结果。
@@ -128,11 +132,11 @@ const (
 	periodFailed periodOutcome = "failed"
 )
 
-// ItemKey 标识补算或填充里的一个 (因子, 标的, 周期)。
+// ItemKey 标识补算或填充里的一个 (成员, 标的, 周期)。
 type ItemKey struct {
-	FactorID string
-	Subject  string
-	Period   time.Time
+	Member  string
+	Subject string
+	Period  time.Time
 }
 
 // ItemStatus 是一个 (因子, 标的, 周期) 的结果：written 已取得有效值并写入，failed 计算错误、无效值或没有源行。

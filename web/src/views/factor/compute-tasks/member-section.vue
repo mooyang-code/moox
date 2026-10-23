@@ -19,13 +19,15 @@
 
     <a-empty v-if="!props.info.members.length" description="还没有因子。点击「添加因子」，从「因子定义」中选择。" />
     <ul v-else class="member-list">
-      <li v-for="row in rows" :key="row.member.factor_id" class="member-row">
+      <li v-for="row in rows" :key="row.alias" class="member-row">
         <div class="member-row__main">
           <div class="member-row__name">
-            <strong>{{ row.member.factor_id }}</strong>
+            <strong>{{ row.alias }}</strong>
+            <span v-if="row.alias !== row.member.factor_id" class="member-row__definition">定义 {{ row.member.factor_id }}</span>
             <a-tag size="small">{{ factorTypeLabel(row.member.factor.factor_type) }}</a-tag>
           </div>
-          <div class="member-row__outputs">输出 {{ row.member.factor.outputs.join(", ") || "-" }}</div>
+          <div class="member-row__outputs">输出 {{ row.outputs.join(", ") || "-" }}</div>
+          <div v-if="row.params.length" class="member-row__outputs">参数列 {{ row.params.join(", ") }}</div>
         </div>
         <a-tag size="small" :color="memberStatusTag(row.member.status).color">{{
           memberStatusTag(row.member.status).label
@@ -34,6 +36,7 @@
           {{ periodStatusTag(row.period.status).label }}
         </a-tag>
         <span v-else class="member-row__period-empty">-</span>
+        <a-tag v-if="row.paramsTag" size="small" :color="row.paramsTag.color">{{ row.paramsTag.label }}</a-tag>
         <a-space size="mini" class="member-row__actions">
           <a-tooltip :content="row.actions.edit.reason" :disabled="!row.actions.edit.disabled">
             <span>
@@ -47,7 +50,7 @@
             content="停用后不再计算该因子，已写入的结果列保留。确认停用？"
             @ok="toggle(row.member, row.actions.toggleTarget)"
           >
-            <a-button size="mini" type="text" status="danger" :loading="pending === row.member.factor_id">
+            <a-button size="mini" type="text" status="danger" :loading="pending === row.alias">
               {{ row.actions.toggleLabel }}
             </a-button>
           </a-popconfirm>
@@ -63,7 +66,7 @@
                   type="text"
                   status="success"
                   :disabled="row.actions.toggle.disabled"
-                  :loading="pending === row.member.factor_id"
+                  :loading="pending === row.alias"
                 >
                   {{ row.actions.toggleLabel }}
                 </a-button>
@@ -102,7 +105,14 @@ import { useFactorStore } from "@/store/modules/factor";
 import { barLagText, formatPeriod } from "@/views/factor/shared/health";
 import { factorTypeLabel, memberStatusTag, periodStatusTag } from "@/views/factor/shared/status";
 import AddFactorModal from "./add-factor-modal.vue";
-import { addFactorState, ENABLE_ENGINE_HINT, memberActions, memberCounts, memberPeriodState } from "./compute-tasks-model";
+import {
+  addFactorState,
+  ENABLE_ENGINE_HINT,
+  memberActions,
+  memberCounts,
+  memberPeriodState,
+  paramsSourceLabel
+} from "./compute-tasks-model";
 
 defineOptions({ name: "FactorMemberSection" });
 
@@ -117,11 +127,19 @@ const backfill = ref<{ factorId: string; jobId: string } | null>(null);
 const counts = computed(() => memberCounts(props.info));
 const addState = computed(() => addFactorState(props.info.factor_set));
 const rows = computed(() =>
-  props.info.members.map(member => ({
-    member,
-    actions: memberActions(props.info.factor_set, member),
-    period: memberPeriodState(props.info, member.factor_id)
-  }))
+  props.info.members.map(member => {
+    const alias = member.member_alias || member.factor_id;
+    const period = memberPeriodState(props.info, alias);
+    return {
+      member,
+      alias,
+      actions: memberActions(props.info.factor_set, member),
+      period,
+      outputs: member.output_columns?.length ? member.output_columns : member.factor.outputs,
+      params: member.param_columns ?? [],
+      paramsTag: paramsSourceLabel(period?.params_source)
+    };
+  })
 );
 
 function reload() {
@@ -137,16 +155,15 @@ function editDefinition(member: FactorMember) {
 }
 
 async function toggle(member: FactorMember, target: MemberStatus) {
-  pending.value = member.factor_id;
+  const alias = member.member_alias || member.factor_id;
+  pending.value = alias;
   try {
-    const result = await setFactorMemberStatus(member.set_id, member.factor_id, target);
+    const result = await setFactorMemberStatus(member.set_id, alias, target);
     if (target === "enabled") {
-      backfill.value = result.backfill_job ? { factorId: member.factor_id, jobId: result.backfill_job.job_id } : null;
-      Message.success(
-        result.backfill_job ? `因子 ${member.factor_id} 已启用，历史回填已开始` : `因子 ${member.factor_id} 已启用`
-      );
+      backfill.value = result.backfill_job ? { factorId: alias, jobId: result.backfill_job.job_id } : null;
+      Message.success(result.backfill_job ? `因子 ${alias} 已启用，历史回填已开始` : `因子 ${alias} 已启用`);
     } else {
-      Message.success(`因子 ${member.factor_id} 已停用`);
+      Message.success(`因子 ${alias} 已停用`);
     }
     await reload();
   } catch (error) {
@@ -158,8 +175,9 @@ async function toggle(member: FactorMember, target: MemberStatus) {
 
 async function remove(member: FactorMember) {
   try {
-    await removeFactorFromSet(member.set_id, member.factor_id);
-    Message.success(`因子 ${member.factor_id} 已从计算任务移除，结果列保留`);
+    const alias = member.member_alias || member.factor_id;
+    await removeFactorFromSet(member.set_id, alias);
+    Message.success(`因子 ${alias} 已从计算任务移除，结果列保留`);
     await reload();
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "移除因子失败");
@@ -225,6 +243,7 @@ function openBackfill() {
   gap: var(--moox-space-2);
 }
 
+.member-row__definition,
 .member-row__outputs,
 .member-row__period-empty,
 .member-section__hint {

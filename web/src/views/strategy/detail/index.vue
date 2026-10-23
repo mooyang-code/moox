@@ -83,6 +83,9 @@
           <a-collapse-item key="bindings" header="输入绑定（会话固化的 View 列与因子指纹）"
             ><ResolvedTable :resolved-json="store.instance.resolved_json"
           /></a-collapse-item>
+          <a-collapse-item v-if="hasFactors" key="factor-params" header="因子参数（私有因子集、冻结记录、提交记录与外显设置）">
+            <StrategyFactorParams :instance="store.instance" />
+          </a-collapse-item>
           <a-collapse-item key="definition" header="DSL 定义">
             <pre class="code-block">{{ store.strategy?.dsl_yaml || definitionEmptyText }}</pre>
           </a-collapse-item>
@@ -101,6 +104,8 @@ import InstanceResults from "@/views/strategy/components/strategy-instance-resul
 import OperationPanel from "@/views/strategy/components/strategy-operation-panel.vue";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
+import StrategyFactorParams from "@/views/strategy/components/strategy-factor-params.vue";
+import { parseFactorBinding } from "@/views/strategy/factor-params-model";
 import { instancesLink, replayLink } from "@/views/strategy/links";
 import { useInstanceResults } from "@/views/strategy/use-instance-results";
 
@@ -146,6 +151,7 @@ const {
   }
 });
 
+const hasFactors = computed(() => Boolean(store.instance && parseFactorBinding(store.instance.resolved_json)));
 const definitionHint = computed(() =>
   store.strategyStatus === "missing" ? "定义已删除" : store.strategyStatus === "error" ? "定义读取失败" : "定义读取中"
 );

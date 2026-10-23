@@ -331,16 +331,23 @@ func validateStoragePeriod(message *eventpb.EventMessage, routeID, frequency str
 	return nil
 }
 
+// validateFactorStates 校验周期标记里逐成员的状态：成员身份是 member_alias（同一定义可以用不同别名出现多次），
+// factor_id 是它引用的定义；参数来源必须是已知的取值。
 func validateFactorStates(states []*storagepb.FactorPeriodState, subjects map[string]struct{}, status, label string) error {
 	seen := make(map[string]struct{}, len(states))
 	for i, state := range states {
-		if state == nil || !validRequiredToken(state.GetFactorId()) {
+		if state == nil || !validRequiredToken(state.GetFactorId()) || !validRequiredToken(state.GetMemberAlias()) {
 			return fmt.Errorf("%s factor %d identity is invalid", label, i)
 		}
-		if _, ok := seen[state.GetFactorId()]; ok {
-			return fmt.Errorf("%s factor_id %q is duplicated", label, state.GetFactorId())
+		if _, ok := seen[state.GetMemberAlias()]; ok {
+			return fmt.Errorf("%s member_alias %q is duplicated", label, state.GetMemberAlias())
 		}
-		seen[state.GetFactorId()] = struct{}{}
+		seen[state.GetMemberAlias()] = struct{}{}
+		switch state.GetParamsSource() {
+		case "requested", "carried", "carried_offline", "default":
+		default:
+			return fmt.Errorf("%s member %q params_source %q is invalid", label, state.GetMemberAlias(), state.GetParamsSource())
+		}
 		if !validCompletionStatus(state.GetStatus()) && state.GetStatus() != "skipped" {
 			return fmt.Errorf("%s factor %q status %q is invalid", label, state.GetFactorId(), state.GetStatus())
 		}

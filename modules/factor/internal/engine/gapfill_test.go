@@ -75,7 +75,7 @@ func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.Selecti
 	}
 	f.calls = append(f.calls, runCall{selection: selection, start: start, end: end})
 	outcome := pipeline.Outcome{Items: map[pipeline.ItemKey]pipeline.ItemStatus{}}
-	for _, factor := range selection.Factors {
+	for _, member := range selection.Members {
 		for _, subject := range selection.Subjects {
 			for at := start; at.Before(end); at = at.Add(time.Minute) {
 				status := pipeline.ItemWritten
@@ -85,7 +85,7 @@ func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.Selecti
 				case f.status != nil:
 					status = f.status(selection, at)
 				}
-				outcome.Items[pipeline.ItemKey{FactorID: factor.FactorID, Subject: subject, Period: at}] = status
+				outcome.Items[pipeline.ItemKey{Member: member.Alias, Subject: subject, Period: at}] = status
 			}
 		}
 	}
@@ -120,7 +120,7 @@ func newGapFixture(t *testing.T, universe fakeUniverse, factors ...domain.Factor
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ledger.Close() })
 	f.ledger = ledger
-	set := domain.EngineSet{Set: domain.FactorSet{SetID: "fset", SpaceID: "crypto", SourceDatasetID: "bars", ResultDatasetID: "result", Freq: "1m"}, Factors: factors, ResultReady: true}
+	set := domain.EngineSet{Set: domain.FactorSet{SetID: "fset", SpaceID: "crypto", SourceDatasetID: "bars", ResultDatasetID: "result", Freq: "1m"}, Members: domain.AsMembers(factors...), ResultReady: true}
 	f.sets = &fakeSets{sets: map[string]domain.EngineSet{"fset": set}, lookups: map[string]SetLookup{}}
 	f.filler = &gapFiller{
 		ledger: ledger, sets: f.sets, source: fakeColumns{}, exec: f.chunks, universe: universe, clock: periodclock.Continuous{},
@@ -138,7 +138,7 @@ func (f *gapFixture) record(t *testing.T, at time.Time, subject string, minute i
 	var entries []pipeline.GapEntry
 	for _, factor := range factors {
 		entries = append(entries, pipeline.GapEntry{SetID: "fset", Subject: subject, Period: gapT0.Add(time.Duration(minute) * time.Minute),
-			FactorID: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor), TriggerEventID: trigger})
+			Member: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor), TriggerEventID: trigger})
 	}
 	require.NoError(t, f.ledger.RecordGaps(context.Background(), entries))
 	f.now = saved
@@ -263,7 +263,7 @@ func (f *gapFixture) recordWarming(t *testing.T, subject string, minute int, tri
 	var entries []pipeline.GapEntry
 	for _, factor := range factors {
 		entries = append(entries, pipeline.GapEntry{SetID: "fset", Subject: subject, Period: gapT0.Add(time.Duration(minute) * time.Minute),
-			FactorID: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor), TriggerEventID: trigger, Reason: pipeline.SkipReasonWarming})
+			Member: factor.FactorID, DefinitionHash: domain.DefinitionHash(factor), TriggerEventID: trigger, Reason: pipeline.SkipReasonWarming})
 	}
 	saved := f.now
 	f.now = gapT0
@@ -391,8 +391,8 @@ func TestGapFillerReportsUnwrittenCrossSectionItems(t *testing.T) {
 	f.now = gapT0.Add(6 * time.Minute)
 	f.filler.tick(context.Background())
 	require.True(t, got.Done)
-	require.Equal(t, []pipeline.ItemKey{{FactorID: "rank", Subject: "A", Period: gapT0}}, got.Repaired)
-	require.Equal(t, []pipeline.ItemKey{{FactorID: "rank", Subject: "B", Period: gapT0}}, got.Unwritten)
+	require.Equal(t, []pipeline.ItemKey{{Member: "rank", Subject: "A", Period: gapT0}}, got.Repaired)
+	require.Equal(t, []pipeline.ItemKey{{Member: "rank", Subject: "B", Period: gapT0}}, got.Unwritten)
 }
 
 // 记账时有预热中跳过的项就唤醒跳过恢复；只有空洞跳过的不唤醒。
@@ -402,7 +402,7 @@ func TestWarmingKickSinkKicksOnWarmingEntries(t *testing.T) {
 	t.Cleanup(func() { _ = ledger.Close() })
 	kicks := 0
 	sink := warmingKickSink{GapSink: ledger, kick: func() { kicks++ }}
-	entry := pipeline.GapEntry{SetID: "fset", Subject: "BTC", Period: gapT0, FactorID: "ma", DefinitionHash: "h"}
+	entry := pipeline.GapEntry{SetID: "fset", Subject: "BTC", Period: gapT0, Member: "ma", DefinitionHash: "h"}
 	require.NoError(t, sink.RecordGaps(context.Background(), []pipeline.GapEntry{entry}))
 	require.Zero(t, kicks)
 	entry.Subject, entry.Reason = "ETH", pipeline.SkipReasonWarming

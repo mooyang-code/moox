@@ -90,13 +90,16 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 			return fmt.Errorf("validate factor for set %s: %w", cfg.SetID, err)
 		}
 	}
+	if err := ensureCategories(ctx, db, []factorlib.Entry{entry}); err != nil {
+		return err
+	}
 	if err := db.CreateFactor(ctx, factor); err != nil {
 		return err
 	}
 	result := map[string]any{"ok": true, "factor_id": factor.FactorID, "spec_hash": factor.SpecHash,
 		"definition_hash": domain.DefinitionHash(factor)}
 	if target != nil {
-		if _, err := db.AddMember(ctx, target.set.SetID, factor.FactorID); err != nil {
+		if _, err := db.AddMember(ctx, target.set.SetID, factor.FactorID, factor.FactorID); err != nil {
 			return fmt.Errorf("add factor to set: %w", err)
 		}
 		result["set_id"], result["member_status"] = target.set.SetID, domain.MemberStatusDisabled
@@ -120,10 +123,23 @@ func selectEntry(entries []factorlib.Entry, factorID string) (factorlib.Entry, e
 	return factorlib.Entry{}, fmt.Errorf("文件里没有因子 %s", factorID)
 }
 
+// ensureCategories 建立或更新因子库里声明了名称的分类。
+func ensureCategories(ctx context.Context, db *store.Store, entries []factorlib.Entry) error {
+	for _, entry := range entries {
+		if entry.CategoryID == "" || entry.CategoryName == "" {
+			continue
+		}
+		if _, err := db.UpsertCategory(ctx, domain.FactorCategory{CategoryID: entry.CategoryID, Name: entry.CategoryName}); err != nil {
+			return fmt.Errorf("因子 %s 的分类 %s：%w", entry.FactorID, entry.CategoryID, err)
+		}
+	}
+	return nil
+}
+
 // entryDefinition 把库里的定义规范化并编译。
 func entryDefinition(entry factorlib.Entry) (domain.FactorDef, error) {
 	factor, err := domain.NormalizeFactorDefinition(domain.FactorDef{
-		FactorID: entry.FactorID, Name: entry.Name, Spec: entry.Spec, AllowPartialUniverse: entry.AllowPartialUniverse,
+		FactorID: entry.FactorID, Name: entry.Name, CategoryID: entry.CategoryID, Spec: entry.Spec, AllowPartialUniverse: entry.AllowPartialUniverse,
 	})
 	if err != nil {
 		return domain.FactorDef{}, fmt.Errorf("因子 %s（%s）：%w", entry.FactorID, entry.File, err)
@@ -191,6 +207,9 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 		}
 		prepared = append(prepared, factor)
 	}
+	if err := ensureCategories(ctx, db, entries); err != nil {
+		return err
+	}
 	if err := db.CreateFactors(ctx, prepared); err != nil {
 		return fmt.Errorf("import factor catalog: %w", err)
 	}
@@ -198,7 +217,7 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	for _, factor := range prepared {
 		item := map[string]string{"factor_id": factor.FactorID, "spec_hash": factor.SpecHash}
 		if target != nil {
-			if _, err := db.AddMember(ctx, target.set.SetID, factor.FactorID); err != nil {
+			if _, err := db.AddMember(ctx, target.set.SetID, factor.FactorID, factor.FactorID); err != nil {
 				return fmt.Errorf("add factor %s to set: %w", factor.FactorID, err)
 			}
 			item["member_status"] = domain.MemberStatusDisabled
@@ -216,7 +235,7 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 type importTarget struct {
 	set           domain.FactorSet
 	sourceColumns []domain.SourceColumn
-	siblings      []domain.FactorDef
+	siblings      []domain.MemberDef
 }
 
 func loadImportTarget(ctx context.Context, db *store.Store, runtime runtimeConfig, setID string) (*importTarget, error) {
@@ -236,9 +255,9 @@ func loadImportTarget(ctx context.Context, db *store.Store, runtime runtimeConfi
 	if err != nil {
 		return nil, err
 	}
-	siblings := make([]domain.FactorDef, 0, len(members))
+	siblings := make([]domain.MemberDef, 0, len(members))
 	for _, member := range members {
-		siblings = append(siblings, member.Factor)
+		siblings = append(siblings, member.Def())
 	}
 	columns, err := storage.ListColumns(ctx, set.SpaceID, set.SourceDatasetID)
 	if err != nil {
@@ -252,11 +271,15 @@ func loadImportTarget(ctx context.Context, db *store.Store, runtime runtimeConfi
 	return &importTarget{set: set, sourceColumns: sourceColumns, siblings: siblings}, nil
 }
 
-// validate runs the dataset-dependent membership checks; result-dataset column
-// ownership is checked later when FactorMgr enables the member.
+// validate runs the dataset-dependent membership checks of a member aliased by
+// its definition id; result-dataset column ownership is checked later when
+// FactorMgr enables the member.
 func (t *importTarget) validate(factor domain.FactorDef, pending []domain.FactorDef) error {
-	siblings := append(append([]domain.FactorDef(nil), t.siblings...), pending...)
-	return domain.ValidateMembership(t.set, factor, t.sourceColumns, siblings, nil)
+	siblings := append([]domain.MemberDef(nil), t.siblings...)
+	for _, def := range pending {
+		siblings = append(siblings, domain.MemberDef{Alias: def.FactorID, Factor: def})
+	}
+	return domain.ValidateMembership(t.set, domain.MemberDef{Alias: factor.FactorID, Factor: factor}, t.sourceColumns, siblings, nil)
 }
 
 func validateImportableSet(set domain.FactorSet) error {
@@ -338,7 +361,7 @@ func runRecalc(ctx context.Context, cli cliConfig, out io.Writer) error {
 		options = append(options, recalc.WithSubjectProvider(storage))
 	}
 	svc := recalc.NewService(db, options...)
-	job, err := svc.Submit(ctx, cli.SetID, cli.FactorIDs, cli.Subjects, requestID, cli.StartTime, cli.EndTime)
+	job, err := svc.Submit(ctx, cli.SetID, cli.Members, cli.Subjects, requestID, cli.StartTime, cli.EndTime)
 	if err != nil {
 		return err
 	}
@@ -373,6 +396,44 @@ func runStatus(ctx context.Context, cli cliConfig, out io.Writer) error {
 	}
 	_, err = fmt.Fprintln(out, string(raw))
 	return err
+}
+
+// runPurgeDataset 删除一个因子结果数据集（行与元数据）：用于清理已经没有因子集引用的孤立结果数据集
+// （例如重建因子库后遗留的旧结果）。仍被因子集引用的数据集会被拒绝；只允许因子结果数据集。
+func runPurgeDataset(ctx context.Context, cli cliConfig, out io.Writer) error {
+	if !cli.Yes {
+		return errors.New("purge-dataset permanently deletes the dataset and its rows; re-run with --yes")
+	}
+	config, err := loadRuntimeConfig(cli.ConfigPath)
+	if err != nil {
+		return err
+	}
+	if cli.DBPath != "" {
+		config.DatabasePath = cli.DBPath
+	}
+	db, err := store.Open(&store.Options{Path: config.DatabasePath})
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	sets, err := db.ListSets(ctx)
+	if err != nil {
+		return err
+	}
+	for _, set := range sets {
+		if set.SpaceID == cli.SpaceID && set.ResultDatasetID == cli.DatasetID {
+			return fmt.Errorf("dataset %s is still the result of factor set %s", cli.DatasetID, set.SetID)
+		}
+	}
+	storage, closeStorage, err := newStorageClient(config)
+	if err != nil {
+		return err
+	}
+	defer closeStorage()
+	if err := storage.DeleteDataset(ctx, cli.SpaceID, cli.DatasetID); err != nil {
+		return fmt.Errorf("purge dataset %s: %w", cli.DatasetID, err)
+	}
+	return json.NewEncoder(out).Encode(map[string]any{"ok": true, "space_id": cli.SpaceID, "dataset_id": cli.DatasetID})
 }
 
 func newRequestID() (string, error) {

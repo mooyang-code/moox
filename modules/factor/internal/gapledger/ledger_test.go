@@ -21,7 +21,7 @@ func gap(subject string, minute int, factors ...string) []pipeline.GapEntry {
 	var out []pipeline.GapEntry
 	for _, factor := range factors {
 		out = append(out, pipeline.GapEntry{
-			SetID: "fset", Subject: subject, Period: t0.Add(time.Duration(minute) * time.Minute), FactorID: factor, DefinitionHash: "h-" + factor,
+			SetID: "fset", Subject: subject, Period: t0.Add(time.Duration(minute) * time.Minute), Member: factor, DefinitionHash: "h-" + factor,
 			TriggerEventID: "evt",
 		})
 	}
@@ -52,7 +52,7 @@ func TestLedgerReplayRebuildsPendingSet(t *testing.T) {
 	reopened, _ := open(t, dir, c, 0)
 	got := reopened.Pending()
 	require.Len(t, got, 2)
-	require.Equal(t, "b", got[0].FactorID, "BTC 的因子 a 已 repaired，回放后不再待恢复")
+	require.Equal(t, "b", got[0].Member, "BTC 的因子 a 已 repaired，回放后不再待恢复")
 	require.Equal(t, "evt", got[0].Trigger)
 }
 
@@ -172,8 +172,8 @@ func TestLedgerKeepsWarmingReasonAndCountsOnlyGapSkips(t *testing.T) {
 	dir, c := t.TempDir(), &clock{now: t0}
 	ledger, _ := open(t, dir, c, 0)
 	warming := []pipeline.GapEntry{
-		{SetID: "fset", Subject: "ETH", Period: t0, FactorID: "a", DefinitionHash: "h-a", TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming},
-		{SetID: "fset", Subject: "ETH", Period: t0, FactorID: "b", DefinitionHash: "h-b", TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming},
+		{SetID: "fset", Subject: "ETH", Period: t0, Member: "a", DefinitionHash: "h-a", TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming},
+		{SetID: "fset", Subject: "ETH", Period: t0, Member: "b", DefinitionHash: "h-b", TriggerEventID: "evt", Reason: pipeline.SkipReasonWarming},
 	}
 	require.NoError(t, ledger.RecordGaps(context.Background(), append(gap("BTC", 0, "a"), warming...)))
 	require.Equal(t, 3, ledger.PendingCount())
@@ -183,7 +183,7 @@ func TestLedgerKeepsWarmingReasonAndCountsOnlyGapSkips(t *testing.T) {
 	reopened, _ := open(t, dir, c, 0)
 	reasons := map[string]string{}
 	for _, entry := range reopened.Pending() {
-		reasons[entry.Subject+"|"+entry.FactorID] = entry.Reason
+		reasons[entry.Subject+"|"+entry.Member] = entry.Reason
 	}
 	require.Equal(t, map[string]string{"BTC|a": "", "ETH|a": pipeline.SkipReasonWarming, "ETH|b": pipeline.SkipReasonWarming}, reasons)
 }
@@ -212,7 +212,7 @@ func TestLedgerClearRemovesFilesAndKeepsWorking(t *testing.T) {
 	dir := t.TempDir()
 	ledger, _, err := Open(dir, time.Now, 0)
 	require.NoError(t, err)
-	require.NoError(t, ledger.RecordGaps(context.Background(), []pipeline.GapEntry{{SetID: "s", Subject: "A", Period: time.Unix(60, 0).UTC(), FactorID: "f", DefinitionHash: "h"}}))
+	require.NoError(t, ledger.RecordGaps(context.Background(), []pipeline.GapEntry{{SetID: "s", Subject: "A", Period: time.Unix(60, 0).UTC(), Member: "f", DefinitionHash: "h"}}))
 	require.Equal(t, 1, ledger.PendingCount())
 
 	removed, err := ledger.Clear()
@@ -222,6 +222,6 @@ func TestLedgerClearRemovesFilesAndKeepsWorking(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(dir, "factor-gap-*.jsonl"))
 	require.Empty(t, files)
 
-	require.NoError(t, ledger.RecordGaps(context.Background(), []pipeline.GapEntry{{SetID: "s", Subject: "B", Period: time.Unix(120, 0).UTC(), FactorID: "f", DefinitionHash: "h"}}))
+	require.NoError(t, ledger.RecordGaps(context.Background(), []pipeline.GapEntry{{SetID: "s", Subject: "B", Period: time.Unix(120, 0).UTC(), Member: "f", DefinitionHash: "h"}}))
 	require.Equal(t, 1, ledger.PendingCount(), "清空后可以继续记账")
 }

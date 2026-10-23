@@ -147,10 +147,13 @@ func runFunctions(args []string, out io.Writer) error {
 
 // ---------------------------------------------------------------- 因子库
 
-// libraryEntry 与 modules/factor/factors/*.yaml 的格式相同：[{factor_id, name, spec, allow_partial_universe}]。
+// libraryEntry 与 modules/factor/factors/*.yaml 的格式相同：[{factor_id, name, category_id, category_name, spec, allow_partial_universe}]；
+// 分类只用于入库，离线工具读入后忽略。
 type libraryEntry struct {
 	FactorID             string `yaml:"factor_id"`
 	Name                 string `yaml:"name"`
+	CategoryID           string `yaml:"category_id"`
+	CategoryName         string `yaml:"category_name"`
 	Spec                 string `yaml:"spec"`
 	AllowPartialUniverse bool   `yaml:"allow_partial_universe"`
 }
@@ -208,6 +211,14 @@ type checkError struct {
 	Message string `json:"message"`
 }
 
+type paramInfo struct {
+	Name    string  `json:"name"`
+	Type    string  `json:"type"`
+	Min     float64 `json:"min"`
+	Max     float64 `json:"max"`
+	Default float64 `json:"default"`
+}
+
 type checkResult struct {
 	FactorID     string   `json:"factor_id"`
 	OK           bool     `json:"ok"`
@@ -217,8 +228,10 @@ type checkResult struct {
 	Lookback     int      `json:"lookback,omitempty"`
 	// OutputLookbacks 是每个输出列自己的回看；Lookback 是其中的最大值，也是引擎做空洞检查用的窗口。
 	OutputLookbacks map[string]int `json:"output_lookbacks,omitempty"`
-	Canonical       string         `json:"canonical,omitempty"`
-	Error           *checkError    `json:"error,omitempty"`
+	// Params 是可调参数的声明：类型、范围与默认值。
+	Params    []paramInfo `json:"params,omitempty"`
+	Canonical string      `json:"canonical,omitempty"`
+	Error     *checkError `json:"error,omitempty"`
 }
 
 func runCheck(args []string, out io.Writer) error {
@@ -260,6 +273,10 @@ func runCheck(args []string, out io.Writer) error {
 			result.OutputLookbacks = map[string]int{}
 			for _, output := range factor.Outputs {
 				result.OutputLookbacks[output.Name] = max(output.Root.Lookback, 1)
+			}
+			for _, param := range factor.Params {
+				result.Params = append(result.Params, paramInfo{Name: param.Name, Type: string(param.Type), Min: param.Min,
+					Max: param.Max, Default: param.Default})
 			}
 			result.Canonical = factor.CanonicalText()
 		}
@@ -439,8 +456,9 @@ func runEval(args []string, out io.Writer) error {
 	output := fs.String("output", "", "输出 CSV（默认标准输出）")
 	freqText := fs.String("freq", "", "源数据频率（1m、5m、15m、30m、1h、4h、1d，必填）")
 	workers := fs.Int("workers", 4, "并行度")
-	var ids listFlag
+	var ids, paramFlags listFlag
 	fs.Var(&ids, "factor-id", "要试算的因子（可重复或逗号分隔，必填）")
+	fs.Var(&paramFlags, "param", "参数取值 因子ID.参数名=值（可重复或逗号分隔），对全部标的生效；没给的参数用默认值")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -460,6 +478,7 @@ func runEval(args []string, out io.Writer) error {
 	}
 	var inputs []factorexpr.ProgramInput
 	lookbacks := map[string]int{}
+	factors := map[string]*factorexpr.Factor{}
 	for _, entry := range entries {
 		factor, err := factorexpr.Compile(entry.Spec)
 		if err != nil {
@@ -467,6 +486,11 @@ func runEval(args []string, out io.Writer) error {
 		}
 		inputs = append(inputs, factorexpr.ProgramInput{FactorID: entry.FactorID, Factor: factor})
 		lookbacks[entry.FactorID] = factor.Lookback
+		factors[entry.FactorID] = factor
+	}
+	values, err := parseParamFlags(paramFlags, factors)
+	if err != nil {
+		return err
 	}
 	program, err := factorexpr.NewProgram(inputs)
 	if err != nil {
@@ -518,7 +542,18 @@ func runEval(args []string, out io.Writer) error {
 		}
 		panel.MarkPresent(s, t)
 	}
-	result, err := exec.Run(context.Background(), program, panel, exec.Options{Start: pad, End: pad + len(times) - 1, Workers: *workers})
+	params := map[string][]float64{}
+	for factorID, given := range values {
+		for name, value := range given {
+			vector := make([]float64, len(panel.Series()))
+			for i := range vector {
+				vector[i] = value
+			}
+			params[factorexpr.ParamSlot(factorID, name)] = vector
+		}
+	}
+	result, err := exec.Run(context.Background(), program, panel, exec.Options{Start: pad, End: pad + len(times) - 1,
+		Workers: *workers, Params: params})
 	if err != nil {
 		return err
 	}
@@ -564,4 +599,33 @@ func runEval(args []string, out io.Writer) error {
 	}
 	w.Flush()
 	return w.Error()
+}
+
+// parseParamFlags 解析 --param 因子ID.参数名=值，并按因子检查完整取值（缺的参数取默认值）：范围、类型与算子的联合约束。
+func parseParamFlags(flags []string, factors map[string]*factorexpr.Factor) (map[string]map[string]float64, error) {
+	values := map[string]map[string]float64{}
+	for _, raw := range flags {
+		name, text, ok := strings.Cut(raw, "=")
+		factorID, param, dotted := strings.Cut(name, ".")
+		if !ok || !dotted {
+			return nil, fmt.Errorf("--param 的格式是 因子ID.参数名=值，得到 %q", raw)
+		}
+		if factors[factorID] == nil {
+			return nil, fmt.Errorf("--param %s：没有试算因子 %s", raw, factorID)
+		}
+		value, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
+		if err != nil {
+			return nil, fmt.Errorf("--param %s：值不是数值", raw)
+		}
+		if values[factorID] == nil {
+			values[factorID] = factors[factorID].Defaults()
+		}
+		values[factorID][param] = value
+	}
+	for factorID, given := range values {
+		if err := factors[factorID].CheckParams(given); err != nil {
+			return nil, fmt.Errorf("--param %s：%w", factorID, err)
+		}
+	}
+	return values, nil
 }

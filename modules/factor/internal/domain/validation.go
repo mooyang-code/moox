@@ -10,6 +10,10 @@ func NormalizeFactorDefinition(factor FactorDef) (FactorDef, error) {
 	factor.FactorID = strings.TrimSpace(factor.FactorID)
 	factor.Name = strings.TrimSpace(factor.Name)
 	factor.Spec = strings.TrimSpace(factor.Spec)
+	factor.CategoryID = strings.TrimSpace(factor.CategoryID)
+	if factor.CategoryID == "" {
+		factor.CategoryID = DefaultCategoryID
+	}
 	if factor.FactorID == "" || factor.Name == "" || factor.Spec == "" {
 		return FactorDef{}, fmt.Errorf("factor_id, name and spec are required")
 	}

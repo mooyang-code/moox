@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/catalog"
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/factorwire"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
@@ -30,10 +31,21 @@ type CatalogAPI interface {
 	DeleteFactor(ctx context.Context, factorID string) error
 	GetFactor(ctx context.Context, factorID string) (domain.FactorInfo, error)
 	ListFactors(ctx context.Context, setID, status string) ([]domain.FactorInfo, error)
-	AddFactorToSet(ctx context.Context, setID, factorID string) (domain.SetMember, error)
-	RemoveFactorFromSet(ctx context.Context, setID, factorID string) error
+	AddFactorToSet(ctx context.Context, setID, alias, factorID string) (domain.SetMember, error)
+	RemoveFactorFromSet(ctx context.Context, setID, alias string) error
 	// SetFactorMemberStatus returns the backfill job id when the member is enabled.
-	SetFactorMemberStatus(ctx context.Context, setID, factorID, status string) (domain.SetMember, string, error)
+	SetFactorMemberStatus(ctx context.Context, setID, alias, status string) (domain.SetMember, string, error)
+	ListCategories(ctx context.Context) ([]domain.FactorCategory, error)
+	UpsertCategory(ctx context.Context, category domain.FactorCategory) (domain.FactorCategory, error)
+	DeleteCategory(ctx context.Context, categoryID string) error
+	SetFactorCategory(ctx context.Context, factorID, categoryID string) (domain.FactorDef, error)
+	EnsureInstanceSet(ctx context.Context, request catalog.InstanceSetRequest) (catalog.InstanceSet, error)
+	SetInstanceSetEnabled(ctx context.Context, instanceID string, enabled bool) (domain.FactorSet, error)
+	ReleaseInstanceSet(ctx context.Context, instanceID string) error
+	SubmitParams(ctx context.Context, writer string, submissions []catalog.ParamSubmission) ([]catalog.ParamSubmitResult, error)
+	ListParamIntervals(ctx context.Context, setID, alias string, from, to time.Time) ([]domain.ParamInterval, error)
+	ListParamRequests(ctx context.Context, setID, alias string, from, to time.Time, limit int) ([]domain.ParamRequest, error)
+	FrozenThrough(ctx context.Context, setID string) (time.Time, bool, error)
 }
 
 // RecalcJob is the RPC-facing representation of one durable recalc request.
@@ -41,7 +53,7 @@ type RecalcJob struct {
 	JobID        string
 	RequestID    string
 	SetID        string
-	FactorIDs    []string
+	Members      []string
 	Subjects     []string
 	StartTime    time.Time
 	EndTime      time.Time
@@ -57,7 +69,7 @@ type RecalcJob struct {
 func JobFromStore(job store.RecalcJob) RecalcJob {
 	return RecalcJob{
 		JobID: job.JobID, RequestID: job.RequestID, SetID: job.SetID,
-		FactorIDs: append([]string(nil), job.FactorIDs...), Subjects: append([]string(nil), job.Subjects...),
+		Members: append([]string(nil), job.Members...), Subjects: append([]string(nil), job.Subjects...),
 		StartTime: unixTime(job.StartTime), EndTime: unixTime(job.EndTime), ProgressTime: unixTime(job.ProgressTime),
 		Status: job.Status, Error: job.Error, EngineID: job.EngineID, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt,
 	}
@@ -72,7 +84,7 @@ func unixTime(value int64) time.Time {
 
 // RecalcAPI isolates asynchronous recalculation orchestration from RPC.
 type RecalcAPI interface {
-	Submit(ctx context.Context, setID string, factorIDs, subjects []string, requestID string, start, end time.Time) (RecalcJob, error)
+	Submit(ctx context.Context, setID string, members, subjects []string, requestID string, start, end time.Time) (RecalcJob, error)
 	List(ctx context.Context, setID string, statuses []string) ([]RecalcJob, error)
 	Get(ctx context.Context, jobID string) (RecalcJob, error)
 	Cancel(ctx context.Context, jobID string) (RecalcJob, error)
@@ -148,6 +160,9 @@ func (s *Service) CreateFactorSet(ctx context.Context, req *factorpb.CreateFacto
 		}
 		return &factorpb.CreateFactorSetRsp{RetInfo: invalid(err)}, nil
 	}
+	if in.OwnerInstanceID != "" {
+		return &factorpb.CreateFactorSetRsp{RetInfo: invalid(fmt.Errorf("私有因子集由策略实例启用时自动建立，不能手工创建"))}, nil
+	}
 	set, err := s.catalog.CreateSet(ctx, in)
 	if err != nil {
 		return &factorpb.CreateFactorSetRsp{RetInfo: inner(err)}, nil
@@ -165,6 +180,9 @@ func (s *Service) UpdateFactorSet(ctx context.Context, req *factorpb.UpdateFacto
 	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
 		return &factorpb.UpdateFactorSetRsp{RetInfo: invalid(err)}, nil
 	}
+	if err := s.rejectOwnedSet(ctx, req.GetSetId()); err != nil {
+		return &factorpb.UpdateFactorSetRsp{RetInfo: invalid(err)}, nil
+	}
 	set, err := s.catalog.UpdateSetSubjects(ctx, req.GetSetId(), req.GetSubjectMode(), factorwire.CloneStrings(req.GetSubjects()))
 	if err != nil {
 		return &factorpb.UpdateFactorSetRsp{RetInfo: inner(err)}, nil
@@ -180,6 +198,9 @@ func (s *Service) SetFactorSetStatus(ctx context.Context, req *factorpb.SetFacto
 		return &factorpb.SetFactorSetStatusRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
 	}
 	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+		return &factorpb.SetFactorSetStatusRsp{RetInfo: invalid(err)}, nil
+	}
+	if err := s.rejectOwnedSet(ctx, req.GetSetId()); err != nil {
 		return &factorpb.SetFactorSetStatusRsp{RetInfo: invalid(err)}, nil
 	}
 	status := req.GetStatus()
@@ -310,7 +331,10 @@ func (s *Service) AddFactorToSet(ctx context.Context, req *factorpb.AddFactorToS
 	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
 		return &factorpb.AddFactorToSetRsp{RetInfo: invalid(err)}, nil
 	}
-	member, err := s.catalog.AddFactorToSet(ctx, req.GetSetId(), req.GetFactorId())
+	if err := s.rejectOwnedSet(ctx, req.GetSetId()); err != nil {
+		return &factorpb.AddFactorToSetRsp{RetInfo: invalid(err)}, nil
+	}
+	member, err := s.catalog.AddFactorToSet(ctx, req.GetSetId(), req.GetMemberAlias(), req.GetFactorId())
 	if err != nil {
 		return &factorpb.AddFactorToSetRsp{RetInfo: inner(err)}, nil
 	}
@@ -321,13 +345,16 @@ func (s *Service) RemoveFactorFromSet(ctx context.Context, req *factorpb.RemoveF
 	if err := s.mutationAllowed(); err != nil {
 		return &factorpb.RemoveFactorFromSetRsp{RetInfo: unavailable(err)}, nil
 	}
-	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetFactorId()) == "" {
-		return &factorpb.RemoveFactorFromSetRsp{RetInfo: invalid(fmt.Errorf("set_id and factor_id are required"))}, nil
+	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetMemberAlias()) == "" {
+		return &factorpb.RemoveFactorFromSetRsp{RetInfo: invalid(fmt.Errorf("set_id and member_alias are required"))}, nil
 	}
 	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
 		return &factorpb.RemoveFactorFromSetRsp{RetInfo: invalid(err)}, nil
 	}
-	if err := s.catalog.RemoveFactorFromSet(ctx, req.GetSetId(), req.GetFactorId()); err != nil {
+	if err := s.rejectOwnedSet(ctx, req.GetSetId()); err != nil {
+		return &factorpb.RemoveFactorFromSetRsp{RetInfo: invalid(err)}, nil
+	}
+	if err := s.catalog.RemoveFactorFromSet(ctx, req.GetSetId(), req.GetMemberAlias()); err != nil {
 		return &factorpb.RemoveFactorFromSetRsp{RetInfo: inner(err)}, nil
 	}
 	return &factorpb.RemoveFactorFromSetRsp{RetInfo: success()}, nil
@@ -337,17 +364,20 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, req *factorpb.SetFa
 	if err := s.mutationAllowed(); err != nil {
 		return &factorpb.SetFactorMemberStatusRsp{RetInfo: unavailable(err)}, nil
 	}
-	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetFactorId()) == "" {
-		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(fmt.Errorf("set_id and factor_id are required"))}, nil
+	if req == nil || strings.TrimSpace(req.GetSetId()) == "" || strings.TrimSpace(req.GetMemberAlias()) == "" {
+		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(fmt.Errorf("set_id and member_alias are required"))}, nil
 	}
 	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(err)}, nil
+	}
+	if err := s.rejectOwnedSet(ctx, req.GetSetId()); err != nil {
 		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(err)}, nil
 	}
 	status := req.GetStatus()
 	if status != domain.MemberStatusEnabled && status != domain.MemberStatusDisabled {
 		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(fmt.Errorf("status must be %q or %q", domain.MemberStatusEnabled, domain.MemberStatusDisabled))}, nil
 	}
-	member, backfillJobID, err := s.catalog.SetFactorMemberStatus(ctx, req.GetSetId(), req.GetFactorId(), status)
+	member, backfillJobID, err := s.catalog.SetFactorMemberStatus(ctx, req.GetSetId(), req.GetMemberAlias(), status)
 	if err != nil {
 		return &factorpb.SetFactorMemberStatusRsp{RetInfo: inner(err)}, nil
 	}
@@ -455,7 +485,7 @@ func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactors
 	if _, err := clock.Align(end, set.Freq); err != nil {
 		return &factorpb.RecalcFactorsRsp{RetInfo: invalid(fmt.Errorf("end_time must be aligned to %s: %w", set.Freq, err))}, nil
 	}
-	job, err := s.recalc.Submit(ctx, req.GetSetId(), factorwire.CloneStrings(req.GetFactorIds()), factorwire.CloneStrings(req.GetSubjects()), req.GetRequestId(), start, end)
+	job, err := s.recalc.Submit(ctx, req.GetSetId(), factorwire.CloneStrings(req.GetMembers()), factorwire.CloneStrings(req.GetSubjects()), req.GetRequestId(), start, end)
 	if err != nil {
 		return &factorpb.RecalcFactorsRsp{RetInfo: inner(err)}, nil
 	}

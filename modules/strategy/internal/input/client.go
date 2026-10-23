@@ -431,7 +431,11 @@ func (c *RPCClient) GetFactor(ctx context.Context, factorID string) (FactorInfo,
 	if factor == nil || factor.GetFactorId() == "" {
 		return FactorInfo{}, fmt.Errorf("因子 %s 不存在", factorID)
 	}
-	return FactorInfo{FactorID: factor.GetFactorId(), DefinitionHash: strings.TrimSpace(factor.GetDefinitionHash())}, nil
+	info := FactorInfo{FactorID: factor.GetFactorId(), DefinitionHash: strings.TrimSpace(factor.GetDefinitionHash())}
+	for _, param := range factor.GetParams() {
+		info.Params = append(info.Params, ParamDecl{Name: param.GetName(), Type: param.GetType(), Min: param.GetMin(), Max: param.GetMax(), Default: param.GetDefaultValue()})
+	}
+	return info, nil
 }
 
 // ServiceError 是 Storage 或 Factor 返回的业务错误。Error 只给中文概述（操作与错误码的含义）；服务端的原文可能是

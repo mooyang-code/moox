@@ -21,10 +21,13 @@ type cliConfig struct {
 	FactorID   string
 	StartTime  time.Time
 	EndTime    time.Time
-	FactorIDs  []string
+	Members    []string
 	Subjects   []string
 	RequestID  string
 	RPCTarget  string
+	SpaceID    string
+	DatasetID  string
+	Yes        bool
 }
 
 func main() {
@@ -50,6 +53,8 @@ func run(ctx context.Context, args []string, out io.Writer) error {
 		return runRecalc(ctx, cfg, out)
 	case "status":
 		return runStatus(ctx, cfg, out)
+	case "purge-dataset":
+		return runPurgeDataset(ctx, cfg, out)
 	default:
 		return fmt.Errorf("unknown command %q", cfg.Command)
 	}
@@ -89,8 +94,15 @@ func parseArgs(args []string) (cliConfig, error) {
 		fs.StringVar(&cfg.RequestID, "request-id", "", "idempotent request id (generated when omitted)")
 		fs.StringVar(&start, "start", "", "inclusive start timestamp RFC3339")
 		fs.StringVar(&end, "end", "", "exclusive end timestamp RFC3339")
-		fs.Var((*listFlag)(&cfg.FactorIDs), "factor", "factor id (repeatable)")
+		fs.Var((*listFlag)(&cfg.Members), "member", "要补算的成员别名（可重复；不填为全部启用成员）")
 		fs.Var((*listFlag)(&cfg.Subjects), "subject", "subject id (repeatable)")
+	case "purge-dataset":
+		cfg.DBPath = ""
+		fs.StringVar(&cfg.DBPath, "db", "", "Factor SQLite database (overrides config)")
+		fs.StringVar(&cfg.ConfigPath, "config", cfg.ConfigPath, "Factor runtime configuration")
+		fs.StringVar(&cfg.SpaceID, "space", "", "Space of the factor result dataset")
+		fs.StringVar(&cfg.DatasetID, "dataset", "", "factor result dataset id to delete (rows and metadata)")
+		fs.BoolVar(&cfg.Yes, "yes", false, "confirm the irreversible deletion")
 	case "status":
 		fs.StringVar(&cfg.RPCTarget, "target", os.Getenv("MOOX_FACTOR_RPC_TARGET"), "FactorMgr tRPC target")
 	default:
@@ -101,6 +113,11 @@ func parseArgs(args []string) (cliConfig, error) {
 	}
 	if fs.NArg() > 0 {
 		return cliConfig{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	if cfg.Command == "purge-dataset" {
+		if strings.TrimSpace(cfg.SpaceID) == "" || strings.TrimSpace(cfg.DatasetID) == "" {
+			return cliConfig{}, errors.New("--space and --dataset are required")
+		}
 	}
 	if cfg.Command == "recalc" {
 		if strings.TrimSpace(cfg.SetID) == "" {

@@ -65,6 +65,9 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if s.Resolver == nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("Storage 与 Factor 依赖未配置，不能回放"))}, nil
 	}
+	if len(strategy.Factors) > 0 {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("声明了 factors 的策略暂不支持回放：因子随参数逐期变化，需要闭环回放"))}, nil
+	}
 	// 先做一次低成本计数：排队已满时不必再解析绑定、让 Storage 现算覆盖统计；事务内的计数仍是最终判定。
 	if active, err := s.Store.CountActiveReplays(ctx, scoped); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil

@@ -109,7 +109,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 	factorService := factorrpc.NewService(catalogService, recalcRPCAdapter{service: recalcService}, factorrpc.WithEngineAPI(hub), factorrpc.WithMutationGate(mutationGate(life)),
 		factorrpc.WithPreviewer(preview.New(storage, previewWorkers)), factorrpc.WithFilledInbox(filled))
 	factorpb.RegisterFactorMgrService(s.Service(factorMgrService), factorService)
-	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub, filled))
+	factorpb.RegisterFactorEngineService(s.Service(factorEngineService), factorrpc.NewEngineService(hub, catalogService, filled))
 
 	runtime.health.SnapshotFunc = withLifecycle(runtime.healthSnapshot(db), life)
 	if err := registerMetricsReporter(s, hub); err != nil {
@@ -214,6 +214,12 @@ func startCatalogReconciler(ctx context.Context, service *catalog.Service, inter
 				if err := service.Reconcile(reconcileCtx); err != nil && reconcileCtx.Err() == nil {
 					log.ErrorContextf(reconcileCtx, "factor catalog reconciliation failed: %v", err)
 				}
+				// 参数请求原文与保留期之外的冻结区间顺带清理（因子动态调参执行计划 2.6）。
+				if removed, err := service.CleanupParams(reconcileCtx); err != nil && reconcileCtx.Err() == nil {
+					log.ErrorContextf(reconcileCtx, "factor param cleanup failed: %v", err)
+				} else if removed > 0 {
+					log.InfoContextf(reconcileCtx, "factor_param_cleanup removed=%d", removed)
+				}
 			}
 		}
 	}()
@@ -226,18 +232,18 @@ func startCatalogReconciler(ctx context.Context, service *catalog.Service, inter
 
 type recalcSubmitter struct{ service *recalc.Service }
 
-func (s recalcSubmitter) PrepareEnableBackfill(ctx context.Context, set domain.FactorSet, factor domain.FactorDef, start, end time.Time) (store.RecalcJob, error) {
+func (s recalcSubmitter) PrepareEnableBackfill(ctx context.Context, set domain.FactorSet, member domain.MemberDef, start, end time.Time) (store.RecalcJob, error) {
 	requestID, err := newRequestID()
 	if err != nil {
 		return store.RecalcJob{}, err
 	}
-	return s.service.PrepareEnableBackfill(ctx, set.SetID, factor.FactorID, requestID, start, end)
+	return s.service.PrepareEnableBackfill(ctx, set.SetID, member.Alias, requestID, start, end)
 }
 
 type recalcRPCAdapter struct{ service *recalc.Service }
 
-func (a recalcRPCAdapter) Submit(ctx context.Context, setID string, factorIDs, subjects []string, requestID string, start, end time.Time) (factorrpc.RecalcJob, error) {
-	job, err := a.service.Submit(ctx, setID, factorIDs, subjects, requestID, start, end)
+func (a recalcRPCAdapter) Submit(ctx context.Context, setID string, members, subjects []string, requestID string, start, end time.Time) (factorrpc.RecalcJob, error) {
+	job, err := a.service.Submit(ctx, setID, members, subjects, requestID, start, end)
 	return factorrpc.JobFromStore(job), err
 }
 

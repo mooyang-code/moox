@@ -33,6 +33,8 @@ type ConsumerConfig struct {
 	Gate func(setID string) bool
 	// CatchupGate 非空时是恢复追赶的门禁：Gate 不放行但 CatchupGate 放行的集合，只允许连续水位追赶（历史周期），实时事件仍不处理。
 	CatchupGate func(setID string) bool
+	// Params 非空时在开算每一期之前冻结参数；为空时全部按默认参数计算。
+	Params trigger.ParamFreezer
 }
 
 // ackWaitHeartbeats is how many InProgress heartbeats may be missed before a
@@ -146,6 +148,7 @@ func NewConsumer(ctx context.Context, cfg ConsumerConfig, sets trigger.SetLocato
 	}
 	handler.SetGate(cfg.Gate)
 	handler.SetCatchupGate(cfg.CatchupGate)
+	handler.SetParamFreezer(cfg.Params)
 	runCtx, cancel := context.WithCancel(ctx)
 	c.client, c.consumer, c.handler, c.cancel = client, consumer, handler, cancel
 	c.runner = jetstream.NewRunner(consumer, handler, jetstream.RunnerConfig{

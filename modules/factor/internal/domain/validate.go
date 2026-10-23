@@ -12,6 +12,28 @@ var ReservedColumns = []string{"subject_id", "freq", "data_time", "series_tag"}
 
 var factorIDPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// aliasPattern 是成员别名：与定义 ID 同一字符集，最长 32 个字符（列名“别名__参数名”要留出空间）。
+var aliasPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,31}$`)
+
+// categoryIDPattern 是分类 ID。
+var categoryIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+
+// ValidateAlias 检查成员别名。
+func ValidateAlias(alias string) error {
+	if !aliasPattern.MatchString(alias) || strings.Contains(alias, "__") {
+		return fmt.Errorf("成员别名 %q 不合法：字母开头，只含字母、数字、下划线，最长 32 个字符，不能含连续下划线", alias)
+	}
+	return nil
+}
+
+// ValidateCategory 检查分类。
+func ValidateCategory(category FactorCategory) error {
+	if !categoryIDPattern.MatchString(category.CategoryID) {
+		return fmt.Errorf("分类 ID %q 不合法：小写字母开头，只含小写字母、数字、下划线，最长 32 个字符", category.CategoryID)
+	}
+	return validateName(category.Name)
+}
+
 // ValidateSet checks the stable identity and subject-scope contract of a set.
 func ValidateSet(set FactorSet) error {
 	for name, value := range map[string]string{
@@ -25,11 +47,18 @@ func ValidateSet(set FactorSet) error {
 	if _, err := ParseFrequency(set.Freq); err != nil {
 		return fmt.Errorf("invalid freq %q: %w", set.Freq, err)
 	}
-	if set.SetID != SetID(set.SourceDatasetID, set.Freq) {
-		return fmt.Errorf("set_id must be %q", SetID(set.SourceDatasetID, set.Freq))
+	if set.OwnerInstanceID != strings.TrimSpace(set.OwnerInstanceID) {
+		return fmt.Errorf("owner_instance_id must not have surrounding whitespace")
 	}
-	if set.ResultDatasetID != ResultDatasetID(set.SourceDatasetID, set.Freq) {
-		return fmt.Errorf("result_dataset_id must be %q", ResultDatasetID(set.SourceDatasetID, set.Freq))
+	wantSetID := SetID(set.SourceDatasetID, set.Freq)
+	if set.OwnerInstanceID != "" {
+		wantSetID = InstanceSetID(set.OwnerInstanceID)
+	}
+	if set.SetID != wantSetID {
+		return fmt.Errorf("set_id must be %q", wantSetID)
+	}
+	if set.ResultDatasetID != ResultDatasetID(set.SetID) {
+		return fmt.Errorf("result_dataset_id must be %q", ResultDatasetID(set.SetID))
 	}
 	switch set.SubjectMode {
 	case SubjectModeAll:
@@ -69,6 +98,9 @@ func ValidateDefinition(def FactorDef) (FactorDef, error) {
 	}
 	if err := validateName(def.Name); err != nil {
 		return def, err
+	}
+	if !categoryIDPattern.MatchString(def.CategoryID) {
+		return def, fmt.Errorf("category_id %q 不合法", def.CategoryID)
 	}
 	if strings.TrimSpace(def.Spec) == "" {
 		return def, fmt.Errorf("spec is required")
@@ -111,15 +143,20 @@ type SourceColumn struct {
 // 默认把填充值当正常值参与计算，需要排除填充值的因子用它判断。与 serieswindow.FilledColumn 一致。
 const FilledColumn = "is_filled"
 
-// resultColumnOrigins maps a result column to the factor that owns it; a column
-// owned by the same factor is reused rather than reported as a conflict.
-// 输入列必须存在且为数值类型；params 与 let 的名称不能与源列重名（设计 4.2）。
-func ValidateMembership(set FactorSet, def FactorDef, sourceColumns []SourceColumn,
-	siblings []FactorDef, resultColumnOrigins map[string]string) error {
-	def, err := CompileDefinition(def)
+// resultColumnOrigins maps a result column to the member alias that owns it; a
+// column owned by the same member is reused rather than reported as a conflict.
+// 输入列必须存在且为数值类型；params 与 let 的名称不能与源列重名（设计 4.2）。结果列包括输出列与参数列，
+// 都不能与源列、其他成员的列或结果数据集里别的成员拥有的列重名。
+func ValidateMembership(set FactorSet, member MemberDef, sourceColumns []SourceColumn,
+	siblings []MemberDef, resultColumnOrigins map[string]string) error {
+	if err := ValidateAlias(member.Alias); err != nil {
+		return err
+	}
+	def, err := CompileDefinition(member.Factor)
 	if err != nil {
 		return fmt.Errorf("spec 编译失败：%w", err)
 	}
+	member.Factor = def
 	sourceSet := make(map[string]SourceColumn, len(sourceColumns))
 	for _, column := range sourceColumns {
 		sourceSet[strings.TrimSpace(column.Name)] = column
@@ -148,31 +185,57 @@ func ValidateMembership(set FactorSet, def FactorDef, sourceColumns []SourceColu
 			}
 		}
 	}
-	for _, column := range def.Outputs {
-		if _, collision := sourceSet[column]; collision {
-			return fmt.Errorf("output column %q collides with a source column", column)
+	own := memberColumns(member)
+	for _, column := range own {
+		if !validResultColumn(column) {
+			return fmt.Errorf("结果列名 %q 不合法（别名加输出名或参数名太长，或不是合法标识符）", column)
 		}
-		if origin, owned := resultColumnOrigins[column]; owned && origin != def.FactorID {
-			return fmt.Errorf("output column %q is already owned by factor %q in result dataset", column, origin)
+		if isReservedColumn(column) {
+			return fmt.Errorf("结果列 %s 是系统列", column)
+		}
+		if _, collision := sourceSet[column]; collision {
+			return fmt.Errorf("结果列 %q 与源列重名", column)
+		}
+		if origin, owned := resultColumnOrigins[column]; owned && origin != member.Alias {
+			return fmt.Errorf("结果列 %q 已属于结果数据集里的成员 %q", column, origin)
 		}
 	}
 	for _, sibling := range siblings {
-		if sibling.FactorID == def.FactorID {
+		if sibling.Alias == member.Alias {
 			continue
 		}
-		compiledSibling, err := CompileDefinition(sibling)
+		compiledSibling, err := CompileDefinition(sibling.Factor)
 		if err != nil {
 			continue // 兄弟定义编译失败时由它自己的校验报错
 		}
-		for _, output := range compiledSibling.Outputs {
-			for _, column := range def.Outputs {
-				if output == column {
-					return fmt.Errorf("duplicate output %q in factor set %s", output, set.SetID)
+		sibling.Factor = compiledSibling
+		for _, column := range memberColumns(sibling) {
+			for _, mine := range own {
+				if column == mine {
+					return fmt.Errorf("结果列 %q 在因子集 %s 的成员 %s 与 %s 中重复", column, set.SetID, sibling.Alias, member.Alias)
 				}
 			}
 		}
 	}
 	return nil
+}
+
+// memberColumns 返回成员在结果数据集里的全部列：输出列与参数列。
+func memberColumns(member MemberDef) []string {
+	return append(member.OutputColumns(), member.ParamColumns()...)
+}
+
+var resultColumnPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
+
+func validResultColumn(name string) bool { return resultColumnPattern.MatchString(name) }
+
+func isReservedColumn(name string) bool {
+	for _, reserved := range ReservedColumns {
+		if name == reserved {
+			return true
+		}
+	}
+	return false
 }
 
 // InScope reports whether the subject belongs to this set's configured universe.

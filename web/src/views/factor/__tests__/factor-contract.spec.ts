@@ -126,7 +126,7 @@ describe("factor pages contract", () => {
   });
 
   it("changes member status only through setFactorMemberStatus and surfaces the backfill job", () => {
-    expect(memberSection).toContain("setFactorMemberStatus(member.set_id, member.factor_id, target)");
+    expect(memberSection).toContain("setFactorMemberStatus(member.set_id, alias, target)");
     expect(memberSection).toContain("removeFactorFromSet");
     expect(memberSection).toContain("backfill_job");
     expect(memberModel).toContain("需要先停用");

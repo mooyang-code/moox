@@ -11,8 +11,10 @@ import (
 )
 
 type LiveInput struct {
-	Set            domain.FactorSet
-	Factors        []domain.FactorDef
+	Set     domain.FactorSet
+	Members []domain.MemberDef
+	// Params 是这一期各成员的冻结参数（别名 → 冻结记录）。
+	Params         map[string]domain.ParamFreeze
 	PeriodTime     time.Time
 	Universe       []string
 	UpstreamFailed []string
@@ -39,17 +41,17 @@ func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	factors := make([]domain.FactorDef, 0, len(input.Factors))
+	members := make([]domain.MemberDef, 0, len(input.Members))
 	maxLookback := 1
-	for _, factor := range input.Factors {
-		factor.InputColumns = append([]string(nil), factor.InputColumns...)
-		factor.Outputs = append([]string(nil), factor.Outputs...)
-		factors = append(factors, factor)
-		if factor.LookbackPeriods > maxLookback {
-			maxLookback = factor.LookbackPeriods
+	for _, member := range input.Members {
+		member.Factor.InputColumns = append([]string(nil), member.Factor.InputColumns...)
+		member.Factor.Outputs = append([]string(nil), member.Factor.Outputs...)
+		members = append(members, member)
+		if member.Factor.LookbackPeriods > maxLookback {
+			maxLookback = member.Factor.LookbackPeriods
 		}
 	}
-	sort.Slice(factors, func(i, j int) bool { return factors[i].FactorID < factors[j].FactorID })
+	sort.Slice(members, func(i, j int) bool { return members[i].Alias < members[j].Alias })
 	window, err := clock.Window(target, input.Set.Freq, maxLookback)
 	if err != nil {
 		return Plan{}, err
@@ -67,7 +69,7 @@ func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
 		}
 	}
 	return Plan{
-		Mode: ModeLive, Set: input.Set, Factors: factors, PeriodTime: target,
+		Mode: ModeLive, Set: input.Set, Members: members, Params: input.Params, PeriodTime: target,
 		TargetStart: window[0], TargetEnd: target.Add(duration),
 		Expected: expected, Available: available, UpstreamFailed: upstreamFailed,
 		CarryColumns: uniqueSorted(input.CarryColumns), WriteCarry: true,

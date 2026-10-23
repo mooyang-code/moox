@@ -140,11 +140,24 @@ func (s *Service) UpdateStrategyInstance(ctx context.Context, req *strategypb.Up
 	updated := current
 	updated.StrategyID = strings.TrimSpace(v.GetStrategyId())
 	updated.ViewID = strings.TrimSpace(v.GetViewId())
-	updated.LogicalAccountID = optionalString(v.GetLogicalAccountId())
-	updated.UpdatedAt = s.nowTime()
+	// 释放旧私有因子集之前先核对所有会让更新失败的条件，避免先破坏因子集、再返回失败。
+	if current.Enabled {
+		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例必须先停用才能修改"))}, nil
+	}
+	if current.SessionID != nil {
+		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例的启用或停用操作尚未完成"))}, nil
+	}
 	if def, err := s.Store.GetDefinition(ctx, updated.StrategyID); err != nil || def.DeletedAt != nil {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("策略定义 %s 不存在", updated.StrategyID))}, nil
 	}
+	if !current.Enabled && (updated.StrategyID != current.StrategyID || updated.ViewID != current.ViewID) {
+		// 改绑策略或 View 后私有因子集的成员或数据源可能不同：先删掉旧的，下次启用重新建立。
+		if err := s.releaseFactorSet(ctx, current.InstanceID); err != nil {
+			return &strategypb.UpdateStrategyInstanceRsp{RetInfo: failure(fmt.Errorf("删除实例旧的私有因子集失败：%w", err))}, nil
+		}
+	}
+	updated.LogicalAccountID = optionalString(v.GetLogicalAccountId())
+	updated.UpdatedAt = s.nowTime()
 	if err := s.Store.UpdateInstance(ctx, updated); err != nil {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
 	}
@@ -227,6 +240,19 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 	defer unlock()
 	if instance.SpaceID != scoped {
 		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
+	}
+	// 持锁后先核对实例状态：启用中或启停尚未完成的实例不能删，此时不能动它的私有因子集。
+	if instance.DeletedAt == nil {
+		if instance.Enabled {
+			return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(errors.New("实例必须先停用才能删除"))}, nil
+		}
+		if instance.SessionID != nil {
+			return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(errors.New("实例的停用操作尚未完成，请稍后再删除"))}, nil
+		}
+	}
+	// 先删私有因子集（幂等）：失败时实例保持原样，可以重试；实例软删除之后就没有入口再清理它了。
+	if err := s.releaseFactorSet(ctx, instance.InstanceID); err != nil {
+		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: failure(fmt.Errorf("删除实例的私有因子集失败：%w", err))}, nil
 	}
 	if err := s.Store.SoftDeleteInstance(ctx, instance.InstanceID, s.nowTime()); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -345,7 +371,7 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		if s.Resolver == nil {
 			return reload(), errors.New("Storage 与 Factor 依赖未配置，不能启用实例")
 		}
-		resolved, _, err := s.Resolver.Resolve(ctx, instance.SpaceID, instance.ViewID, strategy)
+		resolved, _, err := s.resolveForInstance(ctx, instance, strategy)
 		if err != nil {
 			return reload(), err
 		}
@@ -407,10 +433,15 @@ func checkLiveCalendar(resolved input.Resolved, now time.Time) error {
 // sessionView 返回会话固化的解析结果里的 View（与存储层启用时的核对口径一致）；解析失败时返回空串。
 func sessionView(session store.Session) string {
 	var resolved struct {
-		ViewID string `json:"view_id"`
+		ViewID       string `json:"view_id"`
+		SourceViewID string `json:"source_view_id"`
 	}
 	if err := json.Unmarshal([]byte(session.ResolvedJSON), &resolved); err != nil {
 		return ""
+	}
+	// 声明了 factors 的会话绑定的是私有因子集的 View：与实例比较的是它绑定的 K 线 View。
+	if resolved.SourceViewID != "" {
+		return resolved.SourceViewID
 	}
 	return resolved.ViewID
 }
@@ -431,6 +462,7 @@ func (s *Service) disable(ctx context.Context, instance store.Instance) (store.I
 	if err := s.Store.DisableInstance(ctx, instance.InstanceID, instance.SessionID, pending, "", s.nowTime()); err != nil {
 		return reload(), err
 	}
+	s.pauseFactorSet(ctx, instance.InstanceID)
 	if releaseNeeded {
 		if s.Owner == nil {
 			return reload(), errors.New("未接线 Trade，无法释放账户会话；请接线后重试停用")

@@ -38,7 +38,7 @@ func seedSet(t *testing.T, db *store.Store, setID string, members map[string]str
 		if _, err := db.GetFactor(ctx, factorID); err != nil {
 			require.NoError(t, db.CreateFactor(ctx, testFactor(factorID)))
 		}
-		_, err := db.AddMember(ctx, setID, factorID)
+		_, err := db.AddMember(ctx, setID, factorID, factorID)
 		require.NoError(t, err)
 		if status == domain.MemberStatusEnabled {
 			require.NoError(t, db.SetMemberStatus(ctx, setID, factorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))

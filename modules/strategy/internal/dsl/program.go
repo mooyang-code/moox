@@ -68,8 +68,10 @@ func (r *CompiledRule) PreviousColumns() []string {
 
 // Program 是启用实例时编译出的可执行策略；它只存在于内存，重启后由 DSL 文本与 View 列重新编译。
 type Program struct {
-	Strategy        Strategy
-	Rules           []CompiledRule
+	Strategy Strategy
+	Rules    []CompiledRule
+	// Params 是 factor_params 的已编译表达式（按别名、参数名排序）。
+	Params          []CompiledParam
 	Columns         []string
 	PreviousColumns []string
 	UsesPreviousBar bool
@@ -119,6 +121,19 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 		}
 		program.Rules = append(program.Rules, compiled)
 	}
+	params, err := compileParams(strategy, available)
+	if err != nil {
+		return nil, err
+	}
+	for _, param := range params {
+		for _, column := range param.Columns() {
+			allColumns[column] = struct{}{}
+		}
+		for _, column := range param.PreviousColumns() {
+			allPrevious[column] = struct{}{}
+		}
+	}
+	program.Params = params
 	program.Columns = sortedKeys(allColumns)
 	program.PreviousColumns = sortedKeys(allPrevious)
 	program.UsesPreviousBar = len(program.PreviousColumns) > 0
@@ -145,6 +160,9 @@ func ReferencedColumns(strategy Strategy) ([]string, error) {
 				set[column] = struct{}{}
 			}
 		}
+	}
+	if err := referencedParamColumns(strategy, set); err != nil {
+		return nil, err
 	}
 	return sortedKeys(set), nil
 }

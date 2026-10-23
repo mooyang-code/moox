@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,6 +97,9 @@ type ReplayBinding struct {
 	SourceColumns []string `json:"source_columns"`
 	// PreviousDepth 是策略引用上一根（bars[-1]）的深度：0 或 1。
 	PreviousDepth int `json:"previous_depth"`
+	// FactorSetID 是声明了 factors 的实例的私有因子集（回放用它计算因子）；Tuned 为真表示策略逐期输出下一期的因子参数（闭环回放）。
+	FactorSetID string `json:"factor_set_id,omitempty"`
+	Tuned       bool   `json:"tuned,omitempty"`
 }
 
 func (e *ReplayEvaluator) handleBind(rw http.ResponseWriter, r *http.Request) {
@@ -128,7 +132,7 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 	if err != nil {
 		return ReplayBinding{}, err
 	}
-	resolved, program, err := input.Resolve(ctx, e.Client, instance.SpaceID, instance.ViewID, strategy)
+	resolved, program, err := e.resolveForReplay(ctx, instance, strategy)
 	if err != nil {
 		return ReplayBinding{}, err
 	}
@@ -165,6 +169,7 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 		InstanceID: instanceID, StrategyID: instance.StrategyID, SpaceID: instance.SpaceID, ViewID: instance.ViewID,
 		DSLHash: definition.DSLHash, Bar: resolved.Bar, Calendar: resolved.Calendar, Spot: resolved.Spot, MinAgeBars: resolved.MinAgeBars,
 		Factors: resolved.Factors, Columns: resolved.Columns, SourceColumns: columns, PreviousDepth: depth,
+		FactorSetID: resolved.FactorSetID, Tuned: len(program.Params) > 0,
 	}, nil
 }
 
@@ -209,6 +214,14 @@ type ReplayDecision struct {
 	Summary    json.RawMessage `json:"summary,omitempty"`
 	BarEnd     string          `json:"bar_end"`
 	DSLHash    string          `json:"dsl_hash"`
+	// NextParams 是本期求出的下一期因子参数（成员别名 → 参数名 → 取值）：只含求出参数的成员，且只在本期 ok 时给出。
+	NextParams map[string]map[string]ReplayParamValue `json:"next_params,omitempty"`
+}
+
+// ReplayParamValue 是一个参数一期的取值：统一值加按标的覆盖。
+type ReplayParamValue struct {
+	Default   float64            `json:"default"`
+	Overrides map[string]float64 `json:"overrides,omitempty"`
 }
 
 func (e *ReplayEvaluator) handleEvaluate(rw http.ResponseWriter, r *http.Request) {
@@ -271,9 +284,9 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 
 	// 就绪判定：回放固定了因子版本，上一根的版本证据取固定下来的指纹。
 	event := &storagepb.ViewDataReady{Status: "complete"}
-	for factorID, factorState := range req.FactorStates {
+	for member, factorState := range req.FactorStates {
 		event.Factors = append(event.Factors, &storagepb.FactorPeriodState{
-			FactorId: factorID, Status: factorState.Status, DefinitionHash: factorState.DefinitionHash, FailedSubjects: factorState.FailedSubjects,
+			MemberAlias: member, FactorId: member, Status: factorState.Status, DefinitionHash: factorState.DefinitionHash, FailedSubjects: factorState.FailedSubjects,
 		})
 	}
 	var adjacent *readiness.Record
@@ -340,7 +353,24 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 	if err != nil {
 		return skipped(input.SkipConfigError, err.Error())
 	}
-	return finish(decision, "")
+	out, err := finish(decision, "")
+	if err != nil || decision.Status != engine.StatusOK || len(program.Params) == 0 {
+		return out, err
+	}
+	outcome := engine.EvaluateParams(program, frame, resolved.FactorParams)
+	if len(outcome.Params) > 0 {
+		out.NextParams = make(map[string]map[string]ReplayParamValue, len(outcome.Params))
+		for alias, params := range outcome.Params {
+			out.NextParams[alias] = make(map[string]ReplayParamValue, len(params))
+			for name, value := range params {
+				out.NextParams[alias][name] = ReplayParamValue{Default: value.Default, Overrides: value.Overrides}
+			}
+		}
+	}
+	if len(outcome.Notes) > 0 {
+		out.Detail = strings.Join(outcome.Notes, "；")
+	}
+	return out, nil
 }
 
 // replayValues 把一个标的的源列与因子输出按策略引用的列名装配成引擎的行：数据集列取源列，因子列取因子输出。
@@ -355,7 +385,7 @@ func replayValues(resolved input.Resolved, program *dsl.Program, source map[stri
 			if output == "" {
 				output = name
 			}
-			if v, has := factors[binding.FactorID][output]; has {
+			if v, has := factors[binding.Member][output]; has {
 				values[name] = v
 			}
 		default:

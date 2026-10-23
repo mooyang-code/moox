@@ -15,16 +15,16 @@ func TestMemberUniqueAndForeignKeys(t *testing.T) {
 	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusEnabled)))
 	require.NoError(t, s.CreateFactor(ctx, testFactorDef("factor_close")))
 
-	member, err := s.AddMember(ctx, "set_prices", "factor_close")
+	member, err := s.AddMember(ctx, "set_prices", "factor_close", "factor_close")
 	require.NoError(t, err)
 	require.Equal(t, domain.MemberStatusDisabled, member.Status)
 	require.NotZero(t, member.CreatedAt)
 
-	_, err = s.AddMember(ctx, "set_prices", "factor_close")
+	_, err = s.AddMember(ctx, "set_prices", "factor_close", "factor_close")
 	require.ErrorIs(t, err, ErrConflict)
-	_, err = s.AddMember(ctx, "set_prices", "missing")
+	_, err = s.AddMember(ctx, "set_prices", "missing", "missing")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
-	_, err = s.AddMember(ctx, "missing", "factor_close")
+	_, err = s.AddMember(ctx, "missing", "factor_close", "factor_close")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
@@ -116,8 +116,8 @@ func TestListUsagesAggregatesAcrossSets(t *testing.T) {
 	usages, err := s.ListUsages(ctx, "bias", "unused")
 	require.NoError(t, err)
 	require.Equal(t, []domain.FactorUsage{
-		{SetID: "set_1h", Status: domain.MemberStatusDisabled},
-		{SetID: "set_1m", Status: domain.MemberStatusEnabled},
+		{SetID: "set_1h", MemberAlias: "bias", Status: domain.MemberStatusDisabled},
+		{SetID: "set_1m", MemberAlias: "bias", Status: domain.MemberStatusEnabled},
 	}, usages["bias"])
 	require.Empty(t, usages["unused"])
 

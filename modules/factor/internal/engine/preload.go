@@ -68,15 +68,17 @@ func subjectsSig(subjects []string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// scopeOf 是集合标的范围的指纹：只列出标的的集合看标的列表；全部标的的集合不看（标的清单来自数据集，由重启或 init 刷新）。
+// scopeOf 是集合预载范围的指纹：数据源（空间、源数据集、频率）加标的范围。私有因子集改绑 View 后集合 ID 不变、数据源变了，
+// 必须重新预载；只列出标的的集合还看标的列表，全部标的的集合不看（标的清单来自数据集，由重启或 init 刷新）。
 func scopeOf(set domain.EngineSet) string {
+	source := set.Set.SpaceID + "/" + set.Set.SourceDatasetID + "/" + set.Set.Freq + "/"
 	if set.Set.SubjectMode != domain.SubjectModeInclude {
-		return set.Set.SubjectMode
+		return source + set.Set.SubjectMode
 	}
 	subjects := append([]string(nil), set.Set.Subjects...)
 	sort.Strings(subjects)
 	sum := sha256.Sum256([]byte(strings.Join(subjects, "\x00")))
-	return set.Set.SubjectMode + ":" + hex.EncodeToString(sum[:8])
+	return source + set.Set.SubjectMode + ":" + hex.EncodeToString(sum[:8])
 }
 
 // Ready 报告集合是否已经预载（窗口就绪）：生命周期检查用。
@@ -201,8 +203,8 @@ func (p *preloader) Run(ctx context.Context) {
 
 func maxLookbackOf(set domain.EngineSet) int {
 	n := 1
-	for _, f := range set.Factors {
-		n = max(n, f.LookbackPeriods)
+	for _, member := range set.Members {
+		n = max(n, member.Factor.LookbackPeriods)
 	}
 	return n
 }

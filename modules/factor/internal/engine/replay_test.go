@@ -43,6 +43,11 @@ var rt0 = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 
 func newReplayManagerForTest(t *testing.T) (*replayManager, domain.EngineSet) {
 	t.Helper()
+	return newReplayManagerWithSet(t, uncompiled(engineSet("fset_replay", "dataset_a", true, "bias")))
+}
+
+func newReplayManagerWithSet(t *testing.T, set domain.EngineSet) (*replayManager, domain.EngineSet) {
+	t.Helper()
 	store, err := seriesstore.Open(seriesstore.Options{Dir: t.TempDir(), BlockCacheBytes: 8 << 20, DisableSync: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
@@ -62,8 +67,6 @@ func newReplayManagerForTest(t *testing.T) (*replayManager, domain.EngineSet) {
 	write("A", 20)
 	write("B", 20)
 	write("GONE", 8) // 数据到不了回放终点：被排除
-	set := engineSet("fset_replay", "dataset_a", true, "bias")
-	set = uncompiled(set)
 	runner := pipeline.NewRunner(nil, nil, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
 	return newReplayManager(ReplayDeps{
 		Sets: replaySets{set: set}, Source: replaySource{}, Columns: replayColumns{}, Store: store, Runner: runner,

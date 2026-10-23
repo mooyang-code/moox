@@ -19,7 +19,7 @@ func factorDefToPBListed(factor domain.FactorDef, includeSpec bool) *factorpb.Fa
 func usagesToPB(usages []domain.FactorUsage) []*factorpb.FactorUsage {
 	out := make([]*factorpb.FactorUsage, 0, len(usages))
 	for _, usage := range usages {
-		out = append(out, &factorpb.FactorUsage{SetId: usage.SetID, Status: usage.Status})
+		out = append(out, &factorpb.FactorUsage{SetId: usage.SetID, MemberAlias: usage.MemberAlias, Status: usage.Status})
 	}
 	return out
 }
@@ -35,13 +35,18 @@ func factorInfosToPB(infos []domain.FactorInfo, includeSpec bool) []*factorpb.Fa
 }
 
 func memberToPB(member domain.SetMember, includeSpec bool) *factorpb.FactorMember {
+	def := member.Def()
 	return &factorpb.FactorMember{
-		SetId:     member.SetID,
-		FactorId:  member.FactorID,
-		Status:    member.Status,
-		Factor:    factorDefToPBListed(member.Factor, includeSpec),
-		CreatedAt: factorwire.FormatTime(member.CreatedAt),
-		UpdatedAt: factorwire.FormatTime(member.UpdatedAt),
+		SetId:             member.SetID,
+		MemberAlias:       member.MemberAlias,
+		FactorId:          member.FactorID,
+		Status:            member.Status,
+		Factor:            factorDefToPBListed(member.Factor, includeSpec),
+		CarryAlertPeriods: int32(member.CarryAlertPeriods),
+		OutputColumns:     def.OutputColumns(),
+		ParamColumns:      def.ParamColumns(),
+		CreatedAt:         factorwire.FormatTime(member.CreatedAt),
+		UpdatedAt:         factorwire.FormatTime(member.UpdatedAt),
 	}
 }
 
@@ -66,7 +71,7 @@ func recalcJobToPB(job RecalcJob) *factorpb.RecalcJob {
 		JobId:        job.JobID,
 		RequestId:    job.RequestID,
 		SetId:        job.SetID,
-		FactorIds:    factorwire.CloneStrings(job.FactorIDs),
+		Members:      factorwire.CloneStrings(job.Members),
 		Subjects:     factorwire.CloneStrings(job.Subjects),
 		StartTime:    factorwire.FormatTime(job.StartTime),
 		EndTime:      factorwire.FormatTime(job.EndTime),

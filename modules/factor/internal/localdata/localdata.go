@@ -101,12 +101,19 @@ type coverageKey struct {
 	lookback int
 }
 
-type source struct {
-	setIDv atomic.Value // string：集合 ID，Prepare 时写入
+// setReg 是一个集合在数据源上的登记：它的标的范围与回看。同一数据源可以被多个集合（例如各策略实例的私有集合）共用，
+// 数据源按全部登记集合的标的并集与最大回看准备。
+type setReg struct {
+	lookback int
+	subjects []string
+}
 
+type source struct {
 	// mu 串行同一个数据源的同步、跟进变更与对账。
-	mu      sync.Mutex
-	set     domain.FactorSet
+	mu sync.Mutex
+	// regs 是登记在这个数据源上的集合（Prepare 时写入、ReleaseSet 时删除）；regsMu 让状态上报在不持有 mu 时也能读。
+	regsMu  sync.Mutex
+	regs    map[string]setReg
 	spec    seriessync.Spec
 	types   map[string]string
 	numeric []string
@@ -124,11 +131,10 @@ type source struct {
 	// 要求数据源是 7×24 市场，并且 N 不超过数据集保留期能容纳的根数。
 	exemptNew bool
 
-	// ready、expected、win 在不持有 mu 时也会被读取（实时周期判断要不要等、状态上报），所以用原子量；
+	// ready、win 在不持有 mu 时也会被读取（实时周期判断要不要等、状态上报），所以用原子量；
 	// 准备窗口、跟进变更这类长操作持有 mu 期间，实时周期看到 ready 为假就直接按预热处理，不会被它挡住。
-	ready    atomic.Bool
-	expected atomic.Int64
-	win      atomic.Pointer[serieswindow.Window]
+	ready atomic.Bool
+	win   atomic.Pointer[serieswindow.Window]
 }
 
 // New 创建数据层。
@@ -175,27 +181,47 @@ func (d *Data) lookup(src seriesstore.Source) *source {
 	return d.sources[src]
 }
 
-func (st *source) setID() string {
-	id, _ := st.setIDv.Load().(string)
-	return id
+// registered 返回登记在数据源上的集合（按集合 ID 排序）及其登记。
+func (st *source) registered() ([]string, map[string]setReg) {
+	st.regsMu.Lock()
+	defer st.regsMu.Unlock()
+	ids := make([]string, 0, len(st.regs))
+	regs := make(map[string]setReg, len(st.regs))
+	for id, reg := range st.regs {
+		ids = append(ids, id)
+		regs[id] = reg
+	}
+	sort.Strings(ids)
+	return ids, regs
 }
 
-func maxLookback(factors []domain.FactorDef) int {
+func maxLookback(members []domain.MemberDef) int {
 	n := 1
-	for _, f := range factors {
-		n = max(n, f.LookbackPeriods)
+	for _, member := range members {
+		n = max(n, member.Factor.LookbackPeriods)
 	}
 	return n
 }
 
-// lookbackFor 返回数据源的回看数量 N（决定 23）；没有配置时取集合内因子的最大回看。
-func (d *Data) lookbackFor(src seriesstore.Source, factors []domain.FactorDef) int {
+// lookbackFor 返回数据源的回看数量 N（决定 23）；没有配置时取成员的最大回看。
+func (d *Data) lookbackFor(src seriesstore.Source, members []domain.MemberDef) int {
 	if d.cfg.Lookback != nil {
 		if n := d.cfg.Lookback(src); n > 0 {
 			return n
 		}
 	}
-	return maxLookback(factors)
+	return maxLookback(members)
+}
+
+// ReleaseSet 取消集合在数据源上的登记（集合离开目录时）；数据源下次准备时按其余集合的范围与回看收缩。
+func (d *Data) ReleaseSet(set domain.FactorSet) {
+	st := d.lookup(sourceOf(set))
+	if st == nil {
+		return
+	}
+	st.regsMu.Lock()
+	delete(st.regs, set.SetID)
+	st.regsMu.Unlock()
 }
 
 // lockSource 取数据源锁并度量等待时间：实时同步等锁超过阈值（默认 1 秒）说明导入、跟进或对账占着锁，记告警（设计 4.1）。
@@ -230,13 +256,13 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineSet, subjects []str
 	if len(fields) == 0 {
 		return fmt.Errorf("源数据集 %s/%s 没有可用的字段", src.SpaceID, src.DatasetID)
 	}
-	lookback := d.lookbackFor(src, set.Factors)
+	setLookback := d.lookbackFor(src, set.Members)
 	numeric := serieswindow.NumericFields(fields)
 
 	d.mu.Lock()
 	st := d.sources[src]
 	if st == nil {
-		st = &source{}
+		st = &source{regs: map[string]setReg{}}
 		d.sources[src] = st
 	}
 	d.mu.Unlock()
@@ -244,8 +270,22 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineSet, subjects []str
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	d.settleFlush(st)
-	st.set = set.Set
-	st.setIDv.Store(set.Set.SetID)
+	// 登记本集合，再按全部登记集合的标的并集与最大回看准备数据源。
+	st.regsMu.Lock()
+	st.regs[set.Set.SetID] = setReg{lookback: setLookback, subjects: append([]string(nil), subjects...)}
+	lookback, union := 1, map[string]struct{}{}
+	for _, reg := range st.regs {
+		lookback = max(lookback, reg.lookback)
+		for _, subject := range reg.subjects {
+			union[subject] = struct{}{}
+		}
+	}
+	st.regsMu.Unlock()
+	subjects = make([]string, 0, len(union))
+	for subject := range union {
+		subjects = append(subjects, subject)
+	}
+	sort.Strings(subjects)
 	previous := make(map[string]struct{}, len(st.subjects))
 	for _, subject := range st.subjects {
 		previous[subject] = struct{}{}
@@ -259,12 +299,11 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineSet, subjects []str
 	}
 	st.types = seriessync.ValueTypes(columns)
 	st.numeric = numeric
-	st.expected.Store(int64(len(subjects)))
 	st.subjects = append([]string(nil), subjects...)
 	st.covered = nil
 
 	// 因子的回看都不能超过回看数量 N（设计 8.1）。
-	if over := factorsOverLookback(set.Factors, lookback); over != nil {
+	if over := factorsOverLookback(set.Members, lookback); over != nil {
 		st.ready.Store(false)
 		st.blocked = over
 		return over
@@ -385,14 +424,14 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineSet, subjects []str
 	return nil
 }
 
-// factorsOverLookback 返回回看超过 N 的因子（没有则为 nil）。
-func factorsOverLookback(factors []domain.FactorDef, n int) *LookbackExceededError {
+// factorsOverLookback 返回回看超过 N 的成员（没有则为 nil）。
+func factorsOverLookback(members []domain.MemberDef, n int) *LookbackExceededError {
 	var names []string
 	most := 0
-	for _, f := range factors {
-		if f.LookbackPeriods > n {
-			names = append(names, f.FactorID)
-			most = max(most, f.LookbackPeriods)
+	for _, member := range members {
+		if member.Factor.LookbackPeriods > n {
+			names = append(names, member.Alias)
+			most = max(most, member.Factor.LookbackPeriods)
 		}
 	}
 	if len(names) == 0 {
@@ -484,7 +523,8 @@ func (d *Data) Sources() []SourceInfo {
 	defer d.mu.Unlock()
 	out := make([]SourceInfo, 0, len(d.sources))
 	for src, st := range d.sources {
-		if id := st.setID(); id != "" {
+		ids, _ := st.registered()
+		for _, id := range ids {
 			out = append(out, SourceInfo{Source: src, SetID: id})
 		}
 	}
@@ -943,18 +983,27 @@ func (d *Data) WindowStatuses() []pipeline.WarmupStatus {
 	defer d.mu.Unlock()
 	var out []pipeline.WarmupStatus
 	for _, st := range d.sources {
-		if st.setID() == "" {
-			continue
-		}
-		expected := int(st.expected.Load())
-		status := pipeline.WarmupStatus{SetID: st.setID(), State: pipeline.WarmupWarming, ExpectedSubjects: expected}
+		ids, regs := st.registered()
+		var loaded map[string]struct{}
 		if window := st.win.Load(); window != nil {
-			status.WarmSubjects = min(len(window.Subjects()), expected)
+			loaded = make(map[string]struct{}, len(window.Subjects()))
+			for _, subject := range window.Subjects() {
+				loaded[subject] = struct{}{}
+			}
 		}
-		if st.ready.Load() {
-			status.State = pipeline.WarmupReady
+		for _, id := range ids {
+			reg := regs[id]
+			status := pipeline.WarmupStatus{SetID: id, State: pipeline.WarmupWarming, ExpectedSubjects: len(reg.subjects)}
+			for _, subject := range reg.subjects {
+				if _, ok := loaded[subject]; ok {
+					status.WarmSubjects++
+				}
+			}
+			if st.ready.Load() {
+				status.State = pipeline.WarmupReady
+			}
+			out = append(out, status)
 		}
-		out = append(out, status)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].SetID < out[j].SetID })
 	return out
@@ -1060,7 +1109,7 @@ func (d *Data) ReconcileSet(ctx context.Context, set domain.EngineSet, subjects 
 	if err != nil {
 		return seriessync.ReconcileResult{}, fmt.Errorf("读取源数据集字段：%w", err)
 	}
-	spec := seriessync.Spec{Source: src, Fields: seriessync.FieldsFromColumns(columns), Lookback: d.lookbackFor(src, set.Factors)}
+	spec := seriessync.Spec{Source: src, Fields: seriessync.FieldsFromColumns(columns), Lookback: d.lookbackFor(src, set.Members)}
 	return d.syncer.Reconcile(ctx, spec, subjects, progress)
 }
 
@@ -1186,7 +1235,7 @@ func (d *Data) BackfillSet(ctx context.Context, set domain.EngineSet, subjects [
 	if err != nil {
 		return 0, fmt.Errorf("读取源数据集字段：%w", err)
 	}
-	spec := seriessync.Spec{Source: src, Fields: seriessync.FieldsFromColumns(columns), Lookback: d.lookbackFor(src, set.Factors)}
+	spec := seriessync.Spec{Source: src, Fields: seriessync.FieldsFromColumns(columns), Lookback: d.lookbackFor(src, set.Members)}
 	if len(subjects) == 0 {
 		if subjects, err = d.cfg.Store.Subjects(src); err != nil {
 			return 0, err

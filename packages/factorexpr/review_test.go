@@ -11,30 +11,19 @@ import (
 
 // 以下用例来自阶段 1 的 Codex 审查（2026-10-17），防止资源耗尽与语义问题回归。
 
-// 组合数必须在生成任何组合之前检查：4 个参数各 64 个值有 1677 万种组合。
-func TestExpansionLimitCheckedBeforeMaterializing(t *testing.T) {
-	values := make([]string, 64)
-	for i := range values {
-		values[i] = strconv.Itoa(i + 1)
+// 输出数有上限，在编译任何表达式之前检查。
+func TestOutputLimitCheckedBeforeCompiling(t *testing.T) {
+	text := "outputs:\n"
+	for i := 0; i <= MaxOutputs; i++ {
+		text += "  o" + strconv.Itoa(i) + ": close\n"
 	}
-	text := "params:\n"
-	for _, name := range []string{"a", "b", "c", "d"} {
-		text += "  " + name + ": [" + strings.Join(values, ", ") + "]\n"
-	}
-	text += "outputs:\n  o_{a}_{b}_{c}_{d}: close\n"
 	start := time.Now()
 	_, err := Compile(text)
-	if err == nil || !strings.Contains(err.Error(), "超过 64 个") {
+	if err == nil || !strings.Contains(err.Error(), "不能超过 64 个") {
 		t.Fatalf("err = %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("rejecting took %v", elapsed)
-	}
-	// 输出数本身也计入：2 个输出 × 33 个值 = 66 个。
-	values = values[:33]
-	_, err = Compile("params:\n  w: [" + strings.Join(values, ", ") + "]\noutputs:\n  a_{w}: close * w\n  b_{w}: open * w\n")
-	if err == nil || !strings.Contains(err.Error(), "超过 64 个") {
-		t.Fatalf("err = %v", err)
 	}
 }
 

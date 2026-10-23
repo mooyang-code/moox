@@ -41,6 +41,7 @@ func (s *Service) ValidateFactorSpec(_ context.Context, req *factorpb.ValidateFa
 		RetInfo: success(), Valid: true, FactorType: def.FactorType,
 		InputColumns: factorwire.CloneStrings(def.InputColumns), Outputs: factorwire.CloneStrings(def.Outputs),
 		LookbackPeriods: int32(def.LookbackPeriods), Canonical: compiled.CanonicalText(), DefinitionHash: domain.DefinitionHash(def),
+		Params: factorwire.DefToPB(def).GetParams(),
 	}, nil
 }
 
@@ -77,6 +78,7 @@ func (s *Service) PreviewFactor(ctx context.Context, req *factorpb.PreviewFactor
 	}
 	result, err := s.previewer.Preview(ctx, preview.Request{
 		Set: set, Factor: def, Subjects: factorwire.CloneStrings(req.GetSubjects()), Periods: int(req.GetPeriods()),
+		Params: factorwire.SnapshotFromPB(req.GetParams()),
 	})
 	if err != nil {
 		return &factorpb.PreviewFactorRsp{RetInfo: invalid(err)}, nil

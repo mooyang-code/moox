@@ -69,7 +69,7 @@
               <a-empty v-if="!running.length" description="没有进行中的补算" />
               <ul v-else class="side-list">
                 <li v-for="job in running" :key="job.job_id">
-                  <a-link @click="go(recalcTarget(job))">{{ job.factor_ids.join(", ") || "全部已启用因子" }}</a-link>
+                  <a-link @click="go(recalcTarget(job))">{{ job.members.join(", ") || "全部已启用因子" }}</a-link>
                   <a-progress :percent="progressPercent(job) / 100" size="small" />
                 </li>
               </ul>

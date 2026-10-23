@@ -9,14 +9,14 @@ import (
 func TestParseSpecKeepsDocumentOrder(t *testing.T) {
 	spec, err := ParseSpec(`
 params:
-  window: 20
-  fast: [5, 10]
+  window: {type: int, min: 2, max: 50, default: 20}
+  fast: {type: int, min: 2, max: 10, default: 5}
 let:
   tp: (high + low + close) / 3
   m: ts_mean(tp, window)
 outputs:
-  z_{fast}: tp - m
-  a_{fast}: m
+  z: tp - m
+  a: m
 `)
 	if err != nil {
 		t.Fatal(err)
@@ -31,14 +31,11 @@ outputs:
 	for _, b := range spec.Outputs {
 		names = append(names, b.Name)
 	}
-	if got := strings.Join(names, ","); got != "window,fast,tp,m,z_{fast},a_{fast}" {
+	if got := strings.Join(names, ","); got != "window,fast,tp,m,z,a" {
 		t.Fatalf("order = %s", got)
 	}
-	if spec.Params[0].List || !spec.Params[1].List || len(spec.Params[1].Values) != 2 {
+	if !spec.Params[0].IsInt() || spec.Params[0].Default != 20 || spec.Params[1].Max != 10 {
 		t.Fatalf("params = %+v", spec.Params)
-	}
-	if !spec.Params[0].Values[0].IsInt || spec.Params[0].Values[0].Value != 20 {
-		t.Fatalf("window = %+v", spec.Params[0].Values[0])
 	}
 	if spec.Lets[1].Line != 7 {
 		t.Fatalf("let m line = %d, want 7", spec.Lets[1].Line)
@@ -53,19 +50,19 @@ func TestParseSpecAcceptsNullSectionsAndFloats(t *testing.T) {
 	if len(spec.Params) != 0 || len(spec.Lets) != 0 {
 		t.Fatalf("spec = %+v", spec)
 	}
-	spec, err = ParseSpec("params: {k: 0.015}\noutputs: {o: close * k}")
+	spec, err = ParseSpec("params: {k: {type: float, min: 0, max: 1, default: 0.015}}\noutputs: {o: close * k}")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if spec.Params[0].Values[0].IsInt || spec.Params[0].Values[0].Value != 0.015 {
-		t.Fatalf("k = %+v", spec.Params[0].Values[0])
+	if spec.Params[0].IsInt() || spec.Params[0].Default != 0.015 {
+		t.Fatalf("k = %+v", spec.Params[0])
 	}
 }
 
 func TestParseSpecRejects(t *testing.T) {
 	tooManyParams := "params:\n"
 	for i := 0; i <= MaxParams; i++ {
-		tooManyParams += fmt.Sprintf("  p%d: %d\n", i, i)
+		tooManyParams += fmt.Sprintf("  p%d: {type: int, min: 0, max: 99, default: %d}\n", i, i)
 	}
 	tooManyParams += "outputs: {o: close}\n"
 	cases := []struct {
@@ -78,23 +75,23 @@ func TestParseSpecRejects(t *testing.T) {
 		{"not a mapping", "- close\n", "必须是 YAML 映射"},
 		{"unknown key", "foo: 1\noutputs: {o: close}\n", "未知的键"},
 		{"duplicate key", "outputs: {a: close}\noutputs: {b: close}\n", "重复的键"},
-		{"anchor", "params: &p {window: 20}\noutputs: {o: close}\n", "锚点"},
+		{"anchor", "params: &p {window: {type: int, min: 0, max: 99, default: 1}}\noutputs: {o: close}\n", "锚点"},
 		{"alias", "let:\n  a: close\n  b: *x\noutputs: {o: a}\n", "YAML"},
 		{"tag", "outputs: {o: !!str close}\n", "标签"},
-		{"no outputs", "params: {window: 20}\n", "至少需要一个输出"},
+		{"no outputs", "params: {window: {type: int, min: 0, max: 99, default: 1}}\n", "至少需要一个输出"},
 		{"outputs not mapping", "outputs: [close]\n", "必须是映射"},
-		{"string param", "params: {w: abc}\noutputs: {o: close}\n", "必须是数值"},
-		{"bool param", "params: {w: true}\noutputs: {o: close}\n", "必须是数值"},
-		{"nan param", "params: {w: .nan}\noutputs: {o: close}\n", "有限数"},
-		{"inf param", "params: {w: .inf}\noutputs: {o: close}\n", "有限数"},
-		{"huge int param", "params: {w: 99999999999999999}\noutputs: {o: close}\n", "超出范围"},
-		{"empty list", "params: {w: []}\noutputs: {o: close}\n", "列表不能为空"},
-		{"nested list", "params: {w: [[1]]}\noutputs: {o: close}\n", "只能是数值"},
+		{"string param", "params: {w: {type: int, min: abc, max: 1, default: 1}}\noutputs: {o: close}\n", "必须是数值"},
+		{"bool param", "params: {w: {type: int, min: 0, max: true, default: 1}}\noutputs: {o: close}\n", "必须是数值"},
+		{"nan param", "params: {w: {type: float, min: 0, max: .nan, default: 1}}\noutputs: {o: close}\n", "有限数"},
+		{"inf param", "params: {w: {type: float, min: 0, max: .inf, default: 1}}\noutputs: {o: close}\n", "有限数"},
+		{"huge int param", "params: {w: {type: int, min: 0, max: 99999999999999999, default: 1}}\noutputs: {o: close}\n", "超出范围"},
+		{"list param", "params: {w: [1, 2]}\noutputs: {o: close}\n", "参数声明必须是映射"},
+		{"nested value", "params: {w: {type: int, min: [1], max: 2, default: 1}}\noutputs: {o: close}\n", "必须是数值"},
 		{"too many params", tooManyParams, "不能超过"},
-		{"uppercase param", "params: {Window: 20}\noutputs: {o: close}\n", "小写字母开头"},
-		{"param named like function", "params: {abs: 1}\noutputs: {o: close}\n", "与函数重名"},
-		{"param named like reserved column", "params: {data_time: 1}\noutputs: {o: close}\n", "系统列"},
-		{"let shadows param", "params: {x: 1}\nlet: {x: close}\noutputs: {o: x}\n", "已在 params.x 中使用"},
+		{"uppercase param", "params: {Window: {type: int, min: 0, max: 99, default: 1}}\noutputs: {o: close}\n", "小写字母开头"},
+		{"param named like function", "params: {abs: {type: int, min: 0, max: 99, default: 1}}\noutputs: {o: close}\n", "与函数重名"},
+		{"param named like reserved column", "params: {data_time: {type: int, min: 0, max: 99, default: 1}}\noutputs: {o: close}\n", "系统列"},
+		{"let shadows param", "params: {x: {type: int, min: 0, max: 99, default: 1}}\nlet: {x: close}\noutputs: {o: x}\n", "已在 params.x 中使用"},
 		{"duplicate let", "let:\n  a: close\n  a: open\noutputs: {o: a}\n", "重复的名称"},
 		{"empty expression", "outputs: {o: ''}\n", "表达式不能为空"},
 		{"null expression", "outputs:\n  o:\n", "表达式不能为空"},

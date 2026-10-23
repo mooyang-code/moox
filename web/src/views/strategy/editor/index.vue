@@ -12,6 +12,7 @@
         <a-space
           ><a-button :disabled="loading || saving" @click="loadTemplate('ranked')">截面选股模板</a-button
           ><a-button :disabled="loading || saving" @click="loadTemplate('signal')">择时模板</a-button
+          ><a-button :disabled="loading || saving" @click="loadTemplate('tuned')">动态调参模板</a-button
           ><a-button type="primary" :disabled="!loaded || loading" :loading="saving" @click="save">保存定义</a-button></a-space
         >
       </div>
@@ -72,7 +73,7 @@ import { createStrategy, getStrategy, updateStrategy } from "@/api/strategy";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import TrialPanel from "@/views/strategy/components/strategy-trial-panel.vue";
-import { parseDSL, rankedTemplate, signalTemplate } from "@/views/strategy/dsl";
+import { parseDSL, rankedTemplate, signalTemplate, tunedTemplate } from "@/views/strategy/dsl";
 
 defineOptions({ name: "StrategyEditor" });
 const route = useRoute();
@@ -114,10 +115,10 @@ async function load() {
     if (requestId === loadRequest) loading.value = false;
   }
 }
-function loadTemplate(kind: "ranked" | "signal") {
+function loadTemplate(kind: "ranked" | "signal" | "tuned") {
   if (!loaded.value) return;
   if (dirty.value && !window.confirm("当前 DSL 尚未保存，确认替换？")) return;
-  source.value = kind === "ranked" ? rankedTemplate : signalTemplate;
+  source.value = kind === "ranked" ? rankedTemplate : kind === "tuned" ? tunedTemplate : signalTemplate;
 }
 async function save() {
   error.value = "";

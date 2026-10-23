@@ -100,6 +100,14 @@ func (f *Function) Shift(ints []int) int {
 	return f.shift(ints)
 }
 
+// Validate 做参数之间的联合校验，返回不满足时的原因；没有联合约束或满足时返回空串。
+func (f *Function) Validate(ints []int, floats []float64) string {
+	if f == nil || f.validate == nil {
+		return ""
+	}
+	return f.validate(ints, floats)
+}
+
 // Operator 报告它是否为运算符（只能通过运算符书写，不能按名字调用）。
 func (f *Function) Operator() bool { return f != nil && f.operator }
 

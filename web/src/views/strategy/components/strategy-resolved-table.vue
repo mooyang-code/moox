@@ -36,10 +36,8 @@
               }}</a-tag></template
             ></a-table-column
           >
-          <a-table-column title="因子" :width="200"
-            ><template #cell="{ record }">{{
-              record.factor_id ? `${record.factor_id}${record.factor_output ? ` · ${record.factor_output}` : ""}` : "-"
-            }}</template></a-table-column
+          <a-table-column title="因子" :width="240"
+            ><template #cell="{ record }">{{ factorText(record) }}</template></a-table-column
           >
           <a-table-column title="定义指纹" :width="160"
             ><template #cell="{ record }"
@@ -57,6 +55,15 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { parseResolved, shortHash } from "@/views/strategy/model";
+
+/** 因子列的来源：成员别名（别名与定义不同时带上定义 ID）；参数列标明是哪个参数。 */
+function factorText(column: { member?: string; param?: string; factor_id: string; factor_output: string }) {
+  if (!column.factor_id && !column.member) return "-";
+  const member = column.member || column.factor_id;
+  const definition = column.factor_id && column.factor_id !== member ? `（定义 ${column.factor_id}）` : "";
+  const what = column.param ? `参数 ${column.param}` : column.factor_output || "";
+  return `${member}${definition}${what ? ` · ${what}` : ""}`;
+}
 const props = defineProps<{ resolvedJson: string; emptyText?: string }>();
 const binding = computed(() => parseResolved(props.resolvedJson));
 </script>

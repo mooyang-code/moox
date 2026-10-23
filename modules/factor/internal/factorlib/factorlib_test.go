@@ -13,10 +13,11 @@ import (
 func TestRepositoryLibrariesCompile(t *testing.T) {
 	cases := map[string]map[string]int{
 		"../../factors": {
-			"Bias": 20, "BiasQ": 39, "Cci": 39, "MinMax": 20, "QuoteVolumeMean": 20, "QuoteVolumeMeanQ": 39,
-			"VolumeMeanQ": 39, "ZfAbsMean": 40, "ZfMeanQ": 39, "ZfStd": 21, "ZscoreAbsMeanQ": 58,
+			// 回看按窗口上限 120 推导（参数可在范围内逐期调整）。
+			"Bias": 120, "BiasQ": 239, "Cci": 239, "MinMax": 120, "QuoteVolumeMean": 120, "QuoteVolumeMeanQ": 239,
+			"VolumeMeanQ": 239, "ZfAbsMean": 240, "ZfMeanQ": 239, "ZfStd": 121, "ZscoreAbsMeanQ": 358,
 		},
-		"../../../../examples/factors": {"Bias": 20, "Cci": 39, "ma": 20, "sma": 405},
+		"../../../../examples/factors": {"Bias": 120, "Cci": 239, "ma": 120, "sma": 405},
 	}
 	for dir, lookbacks := range cases {
 		entries, err := LoadDir(dir)

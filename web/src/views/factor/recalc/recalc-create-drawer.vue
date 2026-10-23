@@ -14,7 +14,7 @@
       <a-alert v-if="blocker" type="warning" show-icon class="drawer-alert">{{ blocker }}</a-alert>
       <a-form layout="vertical" :model="form">
         <a-form-item label="因子（仅已启用成员）" required>
-          <a-select v-model="form.factor_ids" multiple allow-clear placeholder="选择要补算的因子">
+          <a-select v-model="form.members" multiple allow-clear placeholder="选择要补算的因子">
             <a-option v-for="id in candidates" :key="id" :value="id">{{ id }}</a-option>
           </a-select>
         </a-form-item>
@@ -73,7 +73,7 @@ const quickItems = [
 
 const submitting = ref(false);
 const form = reactive({
-  factor_ids: [] as string[],
+  members: [] as string[],
   subject_mode: "all" as SubjectMode,
   subjects: [] as string[],
   start_time: undefined as number | undefined,
@@ -88,7 +88,7 @@ const estimate = computed(() =>
     freq: freq.value,
     start: form.start_time,
     end: form.end_time,
-    factorCount: form.factor_ids.length,
+    factorCount: form.members.length,
     subjectMode: form.subject_mode,
     subjectCount: form.subjects.length
   })
@@ -111,7 +111,7 @@ function applyQuick(kind: "periods" | "day" | "week") {
 }
 
 function prepare() {
-  form.factor_ids = [...candidates.value];
+  form.members = [...candidates.value];
   form.subject_mode = "all";
   form.subjects = [];
   form.request_id = "";
@@ -121,7 +121,7 @@ function prepare() {
 async function submit() {
   const current = props.info?.factor_set;
   if (!current || blocker.value) return false;
-  if (!form.factor_ids.length) {
+  if (!form.members.length) {
     Message.warning("请至少选择一个因子");
     return false;
   }
@@ -146,7 +146,7 @@ async function submit() {
   try {
     const job = await recalcFactors({
       set_id: current.set_id,
-      factor_ids: [...form.factor_ids],
+      members: [...form.members],
       subjects: form.subject_mode === "include" ? [...form.subjects] : [],
       start_time: new Date(form.start_time).toISOString(),
       end_time: new Date(form.end_time).toISOString(),

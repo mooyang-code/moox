@@ -1,5 +1,5 @@
 // Package factorlib 读取 YAML 因子库（docs/计划/因子表达式引擎详细设计.md 9.5）：每个 *.yaml 文件是
-// [{factor_id, name, spec}] 列表，一个文件可以包含多个因子。
+// [{factor_id, name, category_id, category_name, spec}] 列表，一个文件可以包含多个因子。
 package factorlib
 
 import (
@@ -19,7 +19,10 @@ import (
 type Entry struct {
 	FactorID string `yaml:"factor_id"`
 	Name     string `yaml:"name"`
-	Spec     string `yaml:"spec"`
+	// CategoryID 是因子分类（可选，默认未分类）；CategoryName 非空时导入会建立或更新这个分类。
+	CategoryID   string `yaml:"category_id"`
+	CategoryName string `yaml:"category_name"`
+	Spec         string `yaml:"spec"`
 	// AllowPartialUniverse 只对截面因子有意义，默认 false。
 	AllowPartialUniverse bool `yaml:"allow_partial_universe"`
 	// File 是定义所在的文件，不来自 YAML。
@@ -49,6 +52,7 @@ func LoadFile(path string) ([]Entry, error) {
 	for i := range entries {
 		entry := &entries[i]
 		entry.FactorID, entry.Name, entry.File = strings.TrimSpace(entry.FactorID), strings.TrimSpace(entry.Name), path
+		entry.CategoryID, entry.CategoryName = strings.TrimSpace(entry.CategoryID), strings.TrimSpace(entry.CategoryName)
 		if entry.FactorID == "" || entry.Name == "" || strings.TrimSpace(entry.Spec) == "" {
 			return nil, fmt.Errorf("因子库 %s 第 %d 项缺少 factor_id、name 或 spec", path, i+1)
 		}

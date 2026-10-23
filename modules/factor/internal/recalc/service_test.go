@@ -38,7 +38,7 @@ func TestSubmitRetriesOmittedSelectorsAfterEnvironmentChanges(t *testing.T) {
 	end := start.Add(5 * time.Minute)
 	accepted, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "stable-omitted", start, end)
 	require.NoError(t, err)
-	require.Equal(t, []string{"close_factor"}, accepted.FactorIDs)
+	require.Equal(t, []string{"close_factor"}, accepted.Members)
 	require.Equal(t, []string{"BTC"}, accepted.Subjects)
 
 	addRecalcMember(t, db, "fset_bars_1m", testRecalcFactor("new_factor", domain.MemberStatusEnabled, 1))
@@ -65,7 +65,7 @@ func TestEnableBackfillAcceptsDisabledFactorWithAtomicVisibility(t *testing.T) {
 	svc := NewService(db, WithClock(periodclock.Continuous{}))
 	job, err := svc.PrepareEnableBackfill(context.Background(), "fset_bars_1m", "new_factor", "enable-new-factor", start, start.Add(3*time.Minute))
 	require.NoError(t, err)
-	require.Equal(t, []string{"new_factor"}, job.FactorIDs)
+	require.Equal(t, []string{"new_factor"}, job.Members)
 	require.Equal(t, []string{"BTC"}, job.Subjects)
 	stored, err := db.EnableMemberWithRecalcJob(context.Background(), "fset_bars_1m", "new_factor", domain.MemberStatusDisabled, job)
 	require.NoError(t, err)
@@ -105,7 +105,7 @@ func TestRecalcUsesSelectedFactorsOnly(t *testing.T) {
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	job, err := svc.Submit(context.Background(), "fset_bars_1m", []string{"two"}, nil, "req-1", start, start.Add(time.Minute))
 	require.NoError(t, err)
-	require.Equal(t, []string{"two"}, job.FactorIDs)
+	require.Equal(t, []string{"two"}, job.Members)
 	require.Equal(t, []string{"BTC"}, job.Subjects)
 }
 
@@ -139,7 +139,7 @@ func seedRecalcSet(t *testing.T, db *store.Store, mode string, subjects []string
 func addRecalcMember(t *testing.T, db *store.Store, setID string, member recalcMember) {
 	t.Helper()
 	require.NoError(t, db.CreateFactor(context.Background(), member.def))
-	_, err := db.AddMember(context.Background(), setID, member.def.FactorID)
+	_, err := db.AddMember(context.Background(), setID, member.def.FactorID, member.def.FactorID)
 	require.NoError(t, err)
 	if member.status == domain.MemberStatusEnabled {
 		require.NoError(t, db.SetMemberStatus(context.Background(), setID, member.def.FactorID,
@@ -163,7 +163,7 @@ func TestRecalcRejectsFactorThatIsNotAMember(t *testing.T) {
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 
 	_, err := svc.Submit(context.Background(), "fset_bars_1m", []string{"outsider"}, nil, "req-outsider", start, start.Add(time.Minute))
-	require.ErrorContains(t, err, "not a member")
+	require.ErrorContains(t, err, "不在因子集里")
 }
 
 func TestRecalcRejectsDisabledMember(t *testing.T) {
@@ -191,5 +191,5 @@ func TestRecalcDefaultsToAllEnabledMembers(t *testing.T) {
 
 	job, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-default", start, start.Add(time.Minute))
 	require.NoError(t, err)
-	require.Equal(t, []string{"a_factor", "c_factor"}, job.FactorIDs)
+	require.Equal(t, []string{"a_factor", "c_factor"}, job.Members)
 }

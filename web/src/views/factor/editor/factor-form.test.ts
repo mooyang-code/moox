@@ -149,8 +149,15 @@ describe("payload", () => {
       factor_id: "Rank",
       name: "动量排名",
       spec: CROSS_SECTION_SPEC_TEMPLATE,
-      allow_partial_universe: true
+      allow_partial_universe: true,
+      category_id: ""
     });
+  });
+
+  it("sends the category only when one is chosen", () => {
+    const form = { ...blankFactorForm(), factor_id: "bias", name: "Bias" };
+    expect(buildFactorPayload(form, "timeseries")).not.toHaveProperty("category_id");
+    expect(buildFactorPayload({ ...form, category_id: "momentum" }, "timeseries").category_id).toBe("momentum");
   });
 });
 

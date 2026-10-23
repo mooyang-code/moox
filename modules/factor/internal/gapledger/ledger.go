@@ -52,16 +52,16 @@ type line struct {
 type key struct {
 	set, subject string
 	period       int64
-	factorID     string
+	member       string
 	hash         string
 }
 
-// Entry 是一条待恢复项：一个标的、一个周期、一个因子（带定义哈希）。
+// Entry 是一条待恢复项：一个标的、一个周期、一个成员（带定义哈希）。
 type Entry struct {
 	Set       string
 	Subject   string
 	Period    time.Time
-	FactorID  string
+	Member    string
 	Hash      string
 	SkipID    string
 	FirstSeen time.Time
@@ -72,20 +72,20 @@ type Entry struct {
 
 // Ref 精确指向一条待恢复项：确认时必须带上读取待办时的 SkipID，期间被再次失效（SkipID 已变）的项不会被移除。
 type Ref struct {
-	Set      string
-	Subject  string
-	Period   time.Time
-	FactorID string
-	Hash     string
-	SkipID   string
+	Set     string
+	Subject string
+	Period  time.Time
+	Member  string
+	Hash    string
+	SkipID  string
 }
 
 func (e Entry) Ref() Ref {
-	return Ref{Set: e.Set, Subject: e.Subject, Period: e.Period, FactorID: e.FactorID, Hash: e.Hash, SkipID: e.SkipID}
+	return Ref{Set: e.Set, Subject: e.Subject, Period: e.Period, Member: e.Member, Hash: e.Hash, SkipID: e.SkipID}
 }
 
 func refKey(ref Ref) key {
-	return key{set: ref.Set, subject: ref.Subject, period: ref.Period.UTC().Unix(), factorID: ref.FactorID, hash: ref.Hash}
+	return key{set: ref.Set, subject: ref.Subject, period: ref.Period.UTC().Unix(), member: ref.Member, hash: ref.Hash}
 }
 
 // Ledger 是账本。内存里的待恢复集合始终是权威：写盘失败只记错误并标记降级，不影响本进程内的恢复与判断。
@@ -202,7 +202,7 @@ func (l *Ledger) replay() error {
 // apply 把一行应用到内存里的待恢复集合（回放与实时共用，保证两者一致）。
 func (l *Ledger) apply(entry line) {
 	for _, factor := range entry.Factors {
-		k := key{set: entry.Set, subject: entry.Subject, period: entry.Period.UTC().Unix(), factorID: factor.ID, hash: factor.Hash}
+		k := key{set: entry.Set, subject: entry.Subject, period: entry.Period.UTC().Unix(), member: factor.ID, hash: factor.Hash}
 		switch entry.Event {
 		case EventSkip:
 			if existing := l.pending[k]; existing != nil {
@@ -215,7 +215,7 @@ func (l *Ledger) apply(entry line) {
 				continue
 			}
 			l.pending[k] = &Entry{
-				Set: entry.Set, Subject: entry.Subject, Period: entry.Period.UTC(), FactorID: factor.ID, Hash: factor.Hash,
+				Set: entry.Set, Subject: entry.Subject, Period: entry.Period.UTC(), Member: factor.ID, Hash: factor.Hash,
 				SkipID: entry.SkipID, FirstSeen: entry.At.UTC(), Trigger: entry.Trigger,
 				Reason: entry.Reason,
 			}
@@ -253,7 +253,7 @@ func (l *Ledger) RecordGaps(_ context.Context, entries []pipeline.GapEntry) erro
 			groups[gk] = row
 			order = append(order, gk)
 		}
-		row.Factors = append(row.Factors, FactorRef{ID: entry.FactorID, Hash: entry.DefinitionHash})
+		row.Factors = append(row.Factors, FactorRef{ID: entry.Member, Hash: entry.DefinitionHash})
 	}
 	lines := make([]line, 0, len(order))
 	for _, gk := range order {
@@ -309,7 +309,7 @@ func (l *Ledger) pendingLocked(match func(Entry) bool) []Entry {
 		case !a.Period.Equal(b.Period):
 			return a.Period.Before(b.Period)
 		default:
-			return a.FactorID < b.FactorID
+			return a.Member < b.Member
 		}
 	})
 	return out
@@ -390,7 +390,7 @@ func (l *Ledger) terminate(event, reason string, refs []Ref) error {
 			groups[gk] = row
 			order = append(order, gk)
 		}
-		row.Factors = append(row.Factors, FactorRef{ID: ref.FactorID, Hash: ref.Hash})
+		row.Factors = append(row.Factors, FactorRef{ID: ref.Member, Hash: ref.Hash})
 	}
 	lines := make([]line, 0, len(order))
 	for _, gk := range order {

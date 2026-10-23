@@ -53,8 +53,10 @@ type instanceObserver struct {
 	datasets *report.DatasetMetrics
 	module   *report.ModuleMetrics
 	periods  *prometheus.CounterVec
-	now      func() time.Time
-	logf     func(format string, args ...any)
+	// paramSubmits 统计因子参数提交的终态。
+	paramSubmits *prometheus.CounterVec
+	now          func() time.Time
+	logf         func(format string, args ...any)
 
 	mu       sync.Mutex
 	expected map[string]report.DatasetExpectation
@@ -98,7 +100,14 @@ func newInstanceObserver(repo *store.Store, registerer prometheus.Registerer, lo
 		cancelled.WithLabelValues(reason).Add(float64(count))
 	})
 	repo.SetSentAfterCancelObserver(sentAfterCancel.Inc)
-	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}, lastOkBarEnd: map[string]time.Time{}, basesLoaded: map[string]bool{}, accumulatingSince: map[string]time.Time{}}, nil
+	paramSubmits := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "moox_strategy_param_submit_total", Help: "策略提交的因子参数终态数，按结果分类（accepted、too_late、rejected、abandoned）。"}, []string{"result"})
+	if err := registerer.Register(paramSubmits); err != nil {
+		return nil, fmt.Errorf("注册因子参数提交指标失败：%w", err)
+	}
+	for _, status := range []string{store.ParamAccepted, store.ParamTooLate, store.ParamRejected, store.ParamAbandoned} {
+		paramSubmits.WithLabelValues(status)
+	}
+	return &instanceObserver{store: repo, datasets: datasets, module: module, periods: periods, paramSubmits: paramSubmits, now: time.Now, logf: logf, expected: map[string]report.DatasetExpectation{}, lastBarEnd: map[string]time.Time{}, lastOkBarEnd: map[string]time.Time{}, basesLoaded: map[string]bool{}, accumulatingSince: map[string]time.Time{}}, nil
 }
 
 // datasetKey 由实例派生 Monitor 的数据集标识；不合法的空间或周期返回 false。数据集标识只接受小写：实例 ID 区分大小写，
@@ -410,5 +419,12 @@ func (o *instanceObserver) Alert(instance store.Instance, reason string) {
 func (o *instanceObserver) log(format string, args ...any) {
 	if o.logf != nil {
 		o.logf(format, args...)
+	}
+}
+
+// ParamSubmitted 记录一条因子参数提交的终态。
+func (o *instanceObserver) ParamSubmitted(status string) {
+	if o != nil && o.paramSubmits != nil {
+		o.paramSubmits.WithLabelValues(status).Inc()
 	}
 }

@@ -12,9 +12,11 @@ import (
 const testLibrary = `- factor_id: Ma
   name: 均值
   spec: |
-    params: {window: [2, 3]}
+    params: {window: {type: int, min: 1, max: 3, default: 2}}
     outputs:
-      ma_{window}: ts_mean(close, window)
+      ma_2: ts_mean(close, 2)
+      ma_3: ts_mean(close, 3)
+      ma_w: ts_mean(close, window)
 - factor_id: Rank
   name: 截面排名
   spec: |
@@ -51,10 +53,13 @@ func TestCheckReportsDerivedFieldsAndErrors(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[0]), &ma); err != nil {
 		t.Fatal(err)
 	}
-	if ma.OutputLookbacks["ma_2"] != 2 || ma.OutputLookbacks["ma_3"] != 3 {
+	if ma.OutputLookbacks["ma_2"] != 2 || ma.OutputLookbacks["ma_3"] != 3 || ma.OutputLookbacks["ma_w"] != 3 {
 		t.Fatalf("output lookbacks = %+v", ma.OutputLookbacks)
 	}
-	if !ma.OK || ma.FactorType != "timeseries" || ma.Lookback != 3 || strings.Join(ma.Outputs, ",") != "ma_2,ma_3" || strings.Join(ma.InputColumns, ",") != "close" {
+	if len(ma.Params) != 1 || ma.Params[0].Name != "window" || ma.Params[0].Default != 2 || ma.Params[0].Max != 3 {
+		t.Fatalf("params = %+v", ma.Params)
+	}
+	if !ma.OK || ma.FactorType != "timeseries" || ma.Lookback != 3 || strings.Join(ma.Outputs, ",") != "ma_2,ma_3,ma_w" || strings.Join(ma.InputColumns, ",") != "close" {
 		t.Fatalf("ma = %+v", ma)
 	}
 	if err := json.Unmarshal([]byte(lines[2]), &bad); err != nil {
@@ -82,14 +87,26 @@ func TestEvalTimeSeriesStrictWindowAndGrid(t *testing.T) {
 	if err := run([]string{"eval", "--library", library, "--factor-id", "Ma", "--input", bars, "--freq", "1m"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	want := "data_time,subject_id,series_tag,ma_2,ma_3\n" +
-		"2026-10-01T00:00:00Z,S,,,\n" +
-		"2026-10-01T00:01:00Z,S,,1.5,\n" +
-		"2026-10-01T00:02:00Z,S,,3,2.3333333333333335\n" +
-		"2026-10-01T00:04:00Z,S,,,\n" +
-		"2026-10-01T00:05:00Z,S,,,\n"
+	want := "data_time,subject_id,series_tag,ma_2,ma_3,ma_w\n" +
+		"2026-10-01T00:00:00Z,S,,,,\n" +
+		"2026-10-01T00:01:00Z,S,,1.5,,1.5\n" +
+		"2026-10-01T00:02:00Z,S,,3,2.3333333333333335,3\n" +
+		"2026-10-01T00:04:00Z,S,,,,\n" +
+		"2026-10-01T00:05:00Z,S,,,,\n"
 	if out.String() != want {
 		t.Fatalf("got\n%s\nwant\n%s", out.String(), want)
+	}
+	// --param 改变参数取值：ma_w 按 window = 3 计算，与 ma_3 相同。
+	out.Reset()
+	if err := run([]string{"eval", "--library", library, "--factor-id", "Ma", "--input", bars, "--freq", "1m", "--param", "Ma.window=3"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "2026-10-01T00:02:00Z,S,,3,2.3333333333333335,2.3333333333333335\n") {
+		t.Fatalf("param eval = %s", out.String())
+	}
+	if err := run([]string{"eval", "--library", library, "--factor-id", "Ma", "--input", bars, "--freq", "1m", "--param", "Ma.window=9"}, &out); err == nil ||
+		!strings.Contains(err.Error(), "超出范围") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -147,9 +164,9 @@ func TestEvalListingHeadIsNotAGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, line := range []string{
-		"2026-10-03T00:00:00Z,B,,,\n",
-		"2026-10-04T00:00:00Z,B,,15,\n",
-		"2026-10-04T00:00:00Z,A,,3.5,3\n",
+		"2026-10-03T00:00:00Z,B,,,,\n",
+		"2026-10-04T00:00:00Z,B,,15,,15\n",
+		"2026-10-04T00:00:00Z,A,,3.5,3,3.5\n",
 	} {
 		if !strings.Contains(out.String(), line) {
 			t.Fatalf("missing %q in\n%s", line, out.String())

@@ -30,8 +30,9 @@ FactorMgr 接口。因子定义与因子集解耦：`moox-factor-mgr-cli import`
 CLI 离线操作。`moox-cli setup factors` 从 `moox.toml` 的 `[[factors.sets]]`、
 `[[factors.definitions]]`、`[[factors.members]]` 依次补齐因子集、定义和成员，重复执行只补缺
 不删除；旧的 `[[factors.items]]` 已移除。
-Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、
-`run-once` 和 `status`。
+Factor CLI 的支持命令为 `init`、`import`、`import-catalog`、`recalc`、`status` 和 `purge-dataset`。
+`purge-dataset --space <空间> --dataset <数据集> --yes` 用因子管理端自己的网关身份删除一个因子结果数据集（行和元数据，不可恢复）：
+只用于清理没有因子集引用的孤立结果数据集（例如重建因子库后遗留的旧结果），仍被因子集引用的会被拒绝。
 
 ## 清理 Storage View 积压并触发 A/B 重建
 

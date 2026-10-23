@@ -183,6 +183,9 @@ func (h *Hub) holdsLease(id domain.EngineIdentity, now time.Time) bool {
 		now.Before(h.engine.lastSeen.Add(h.engineTTL))
 }
 
+// HoldsLease 报告 id 是否是当前持有引擎租约的进程（冻结参数等只允许持有租约的引擎调用）。
+func (h *Hub) HoldsLease(id domain.EngineIdentity) bool { return h.holdsLease(id, h.now().UTC()) }
+
 func (h *Hub) isReady(setID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()

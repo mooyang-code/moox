@@ -61,8 +61,8 @@ describe("definitions model", () => {
       setId => labels[setId] ?? setId
     );
     expect(chips).toEqual([
-      { setId: "set_a", label: "现货K线 · 1m", status: "enabled", statusLabel: "已启用" },
-      { setId: "set_gone", label: "set_gone", status: "disabled", statusLabel: "已停用" }
+      { key: "set_a/", setId: "set_a", label: "现货K线 · 1m", status: "enabled", statusLabel: "已启用" },
+      { key: "set_gone/", setId: "set_gone", label: "set_gone", status: "disabled", statusLabel: "已停用" }
     ]);
   });
 

@@ -60,12 +60,12 @@ const SkipReasonWarming = "warming"
 // 补采补齐后由只填充补算补上。
 const SkipReasonUpstream = "upstream_failed"
 
-// GapEntry 是写入账本的一条跳过记录：一个标的、一个周期、一个因子。
+// GapEntry 是写入账本的一条跳过记录：一个标的、一个周期、一个成员。
 type GapEntry struct {
 	SetID          string
 	Subject        string
 	Period         time.Time
-	FactorID       string
+	Member         string
 	DefinitionHash string
 	// TriggerEventID 是触发本期的上游事件，截面因子的恢复据此读取冻结全集；人工补算为空。
 	TriggerEventID string

@@ -128,6 +128,8 @@ type CommitRequest struct {
 	// ExpectedLatestResultID 非 nil 时要求本实例本会话当前最新处理记录的 ID 等于它（空串表示期望没有记录）。
 	ExpectedLatestResultID *string
 	Now                    time.Time
+	// Params 非 nil 时与结果同事务写入待提交的因子参数（声明了 factor_params 的实例每期产出下一期的参数）。
+	Params *ParamSubmission
 }
 
 func validateResult(result Result) error {
@@ -250,6 +252,11 @@ func (s *Store) CommitResult(ctx context.Context, request CommitRequest) (Result
 		}
 		if err := insertItems(tx, result.ResultID, result.CreatedAt.UTC(), request.Items); err != nil {
 			return err
+		}
+		if request.Params != nil {
+			if err := insertParamSubmission(tx, result, *request.Params, now); err != nil {
+				return fmt.Errorf("%w：%v", ErrResultInvalid, err)
+			}
 		}
 		if result.Status == StatusOK && result.PublishStatus == PublishPending {
 			cancel := tx.Exec(`UPDATE t_strategy_results SET c_publish_status = 'cancelled' WHERE c_instance_id = ? AND c_session_id = ? AND c_bar_end_time < ? AND c_publish_status = 'pending'`, result.InstanceID, result.SessionID, millis(result.BarEndTime))

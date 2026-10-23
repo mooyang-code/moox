@@ -9,7 +9,8 @@ import (
 )
 
 func lookbackPlan(spaceID, freq string, window int) setupFactorPlan {
-	spec := "params: {window: " + strconv.Itoa(window) + "}\noutputs:\n  bias_{window}: close / ts_mean(close, window)\n"
+	// 回看按参数上限推导：上限就是 window。
+	spec := "params:\n  window: {type: int, min: 2, max: " + strconv.Itoa(window) + ", default: 2}\noutputs:\n  bias: close / ts_mean(close, window)\n"
 	setID := "fset_prices_" + freq
 	return setupFactorPlan{
 		Sets:        []setupFactorSet{{SetID: setID, SpaceID: spaceID, SourceDatasetID: "dataset_prices", Freq: freq}},

@@ -62,7 +62,7 @@
                 </template>
               </a-table-column>
               <a-table-column title="因子" :width="180" :ellipsis="true" :tooltip="true">
-                <template #cell="{ record }">{{ record.job.factor_ids.join(", ") || "全部已启用因子" }}</template>
+                <template #cell="{ record }">{{ record.job.members.join(", ") || "全部已启用因子" }}</template>
               </a-table-column>
               <a-table-column title="时间范围" :width="260">
                 <template #cell="{ record }">

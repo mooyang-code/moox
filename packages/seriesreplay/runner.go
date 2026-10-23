@@ -69,6 +69,21 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (Run, error) {
 	if err != nil {
 		return Run{}, fmt.Errorf("固定策略版本：%w", err)
 	}
+	if binding.FactorSetID != "" {
+		if spec.SetID == "" {
+			spec.SetID = binding.FactorSetID
+		} else if spec.SetID != binding.FactorSetID {
+			return Run{}, fmt.Errorf("实例 %s 声明了 factors，回放用它的私有因子集 %s，不能指定其他因子集合 %s", spec.InstanceID, binding.FactorSetID, spec.SetID)
+		}
+	}
+	if spec.SetID == "" {
+		return Run{}, errors.New("set_id 是必填项（实例没有声明 factors 时要指定计算因子帧的因子集合）")
+	}
+	// 闭环回放用的是回放里策略逐期产出的参数，正式结果数据集里的值依据的是冻结记录：写回会让结果与冻结记录对不上
+	// （后续补算又会按冻结记录改回去），所以调参策略的回放不写回因子结果。
+	if spec.WriteFactors && (binding.FactorSetID != "" || binding.Tuned) {
+		return Run{}, fmt.Errorf("实例 %s 的策略会逐期调整因子参数，闭环回放用的是回放中的参数，不能写回因子结果（去掉 write_factors）", spec.InstanceID)
+	}
 	run, created, err := r.Store.CreateRun(spec, 0)
 	if err != nil {
 		return Run{}, err
@@ -221,6 +236,11 @@ func (r *Runner) processPeriod(ctx context.Context, spec Spec, binding StrategyB
 	if err == nil && existing.Complete {
 		return periodOutcome{record: existing, alreadyDone: true}, nil
 	}
+	// 这一期因子要用的参数：上一期结束时生效的参数（闭环回放：策略逐期产出下一期的参数，缺值沿用）。
+	params, paramsErr := r.stepParams(spec, step, t, previous, hasPrevious)
+	if paramsErr != nil {
+		return periodOutcome{}, paramsErr
+	}
 	rec := existing
 	if errors.Is(err, ErrNotFound) {
 		// 上一期的策略状态：续跑时从上一期的记录读（它一定已经完成，因为周期按顺序推进）。
@@ -236,7 +256,7 @@ func (r *Runner) processPeriod(ctx context.Context, spec Spec, binding StrategyB
 			state = prior.State
 		}
 		startedFactor := time.Now()
-		frame, err := r.factorStep(ctx, spec, binding, t, false)
+		frame, err := r.factorStep(ctx, spec, binding, t, false, params)
 		if err != nil {
 			return periodOutcome{}, err
 		}
@@ -247,6 +267,7 @@ func (r *Runner) processPeriod(ctx context.Context, spec Spec, binding StrategyB
 			return periodOutcome{}, fmt.Errorf("策略求值 %s：%w", t.Format(time.RFC3339), err)
 		}
 		advance := buildAdvance(spec.ReplayID, t.Add(step), decision, frame)
+		decision.EffectiveParams = mergeParams(params, decision.NextParams)
 		rec = Record{ReplayID: spec.ReplayID, Period: t.Unix(), Decision: decision, State: decision.State, Advance: advance, FactorMillis: factorMs, StrategyMs: time.Since(startedStrategy).Milliseconds()}
 		if err := r.Store.SaveRecord(rec); err != nil {
 			return periodOutcome{}, err
@@ -267,7 +288,7 @@ func (r *Runner) processPeriod(ctx context.Context, spec Spec, binding StrategyB
 		rec.TradeAcked = true
 	}
 	if spec.WriteFactors && !rec.FactorWritten {
-		if _, err := r.factorStep(ctx, spec, binding, t, true); err != nil {
+		if _, err := r.factorStep(ctx, spec, binding, t, true, params); err != nil {
 			return periodOutcome{}, fmt.Errorf("写回因子结果 %s：%w", t.Format(time.RFC3339), err)
 		}
 		if err := r.Store.MarkFactorWritten(spec.ReplayID, t.Unix()); err != nil {
@@ -282,8 +303,8 @@ func (r *Runner) processPeriod(ctx context.Context, spec Spec, binding StrategyB
 }
 
 // factorStep 取一期的因子帧；因子引擎重启后会话已经不在（404），重新建立会话再取一次。
-func (r *Runner) factorStep(ctx context.Context, spec Spec, binding StrategyBinding, t time.Time, write bool) (FactorStepResponse, error) {
-	request := FactorStepRequest{ReplayID: spec.ReplayID, Period: t.Format(time.RFC3339), SourceColumns: binding.SourceColumns, WriteFactors: write}
+func (r *Runner) factorStep(ctx context.Context, spec Spec, binding StrategyBinding, t time.Time, write bool, params MemberParams) (FactorStepResponse, error) {
+	request := FactorStepRequest{ReplayID: spec.ReplayID, Period: t.Format(time.RFC3339), SourceColumns: binding.SourceColumns, WriteFactors: write, Params: params}
 	frame, err := r.Factor.Step(ctx, request)
 	var httpErr *HTTPError
 	if errors.As(err, &httpErr) && httpErr.Status == http.StatusNotFound {
@@ -341,8 +362,8 @@ func mustParse(value string) time.Time {
 
 func validateSpec(spec *Spec) error {
 	spec.ReplayID, spec.SetID, spec.InstanceID = strings.TrimSpace(spec.ReplayID), strings.TrimSpace(spec.SetID), strings.TrimSpace(spec.InstanceID)
-	if spec.ReplayID == "" || spec.SetID == "" || spec.InstanceID == "" {
-		return errors.New("replay_id、set_id、instance_id 都是必填项")
+	if spec.ReplayID == "" || spec.InstanceID == "" {
+		return errors.New("replay_id 与 instance_id 是必填项")
 	}
 	from, err := time.Parse(time.RFC3339, spec.From)
 	if err != nil {
@@ -384,11 +405,41 @@ func bindingDrift(pinned, now StrategyBinding) string {
 	return ""
 }
 
-// factorDrift 检查策略引用的因子在因子集合里存在且指纹一致。
+// stepParams 返回周期 t 因子要用的参数：上一期结束时生效的参数（EffectiveParams）。第一期没有，交给因子引擎按冻结记录或默认值。
+func (r *Runner) stepParams(spec Spec, step time.Duration, t time.Time, previous Record, hasPrevious bool) (MemberParams, error) {
+	switch {
+	case hasPrevious:
+		return previous.Decision.EffectiveParams, nil
+	case t.After(mustParse(spec.From)):
+		prior, err := r.Store.GetRecord(spec.ReplayID, t.Add(-step).Unix())
+		if err != nil {
+			return nil, fmt.Errorf("读取上一期记录：%w", err)
+		}
+		return prior.Decision.EffectiveParams, nil
+	}
+	return nil, nil
+}
+
+// mergeParams 把本期求出的下一期参数按成员并入生效参数：求出参数的成员整份替换，其余沿用。
+func mergeParams(effective, next MemberParams) MemberParams {
+	if len(effective) == 0 && len(next) == 0 {
+		return nil
+	}
+	out := make(MemberParams, len(effective)+len(next))
+	for member, params := range effective {
+		out[member] = params
+	}
+	for member, params := range next {
+		out[member] = params
+	}
+	return out
+}
+
+// factorDrift 检查策略引用的因子成员（键是成员别名）在因子集合里存在且指纹一致。
 func factorDrift(strategy map[string]string, set []FactorInfo) string {
 	byID := make(map[string]string, len(set))
 	for _, f := range set {
-		byID[f.FactorID] = f.DefinitionHash
+		byID[f.Member] = f.DefinitionHash
 	}
 	ids := make([]string, 0, len(strategy))
 	for id := range strategy {

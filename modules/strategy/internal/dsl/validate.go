@@ -67,6 +67,9 @@ func Validate(s *Strategy) error {
 	if err := validatePortfolio(&s.Portfolio); err != nil {
 		return err
 	}
+	if err := validateFactors(s); err != nil {
+		return err
+	}
 	if len(s.Rules) == 0 {
 		return errors.New("策略 DSL 至少需要一条规则")
 	}

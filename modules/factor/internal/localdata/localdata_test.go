@@ -184,7 +184,7 @@ func newFixture(t *testing.T, factors ...domain.FactorDef) *fixture {
 	fx.set = domain.EngineSet{
 		Set: domain.FactorSet{SetID: "set1", SpaceID: "crypto", SourceDatasetID: "spot", Freq: "1m", SubjectMode: domain.SubjectModeAll,
 			ResultDatasetID: "factor_spot", Status: domain.SetStatusEnabled},
-		Factors: factors,
+		Members: domain.AsMembers(factors...),
 	}
 	return fx
 }
@@ -192,7 +192,7 @@ func newFixture(t *testing.T, factors ...domain.FactorDef) *fixture {
 func (fx *fixture) live(t *testing.T, target time.Time, subjects []string) pipeline.Outcome {
 	t.Helper()
 	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{
-		Set: fx.set.Set, Factors: fx.set.Factors, PeriodTime: target, Universe: subjects, CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
+		Set: fx.set.Set, Members: fx.set.Members, PeriodTime: target, Universe: subjects, CarryColumns: []string{"close", "volume"}, TriggerEventID: "evt",
 	})
 	require.NoError(t, err)
 	outcome, err := fx.runner.Run(context.Background(), plan)
@@ -313,7 +313,7 @@ func TestFilledRowsAreMarkedAndUsableInFactors(t *testing.T) {
 	require.InDelta(t, (109+109+111)/3.0, fx.result("BTC", 11).Fields["mean3"], 1e-9)
 	require.Equal(t, 0.0, fx.result("BTC", 11).Fields["isf"])
 
-	plan := pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Factors: fx.set.Factors, TargetStart: at(10), TargetEnd: at(11),
+	plan := pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, TargetStart: at(10), TargetEnd: at(11),
 		Expected: subjects, Available: subjects, CarryColumns: []string{"close", "volume"}, WriteCarry: true}
 	_, err := fx.runner.Run(context.Background(), plan)
 	require.NoError(t, err)
@@ -332,7 +332,7 @@ func TestRecalcReadsLocalStoreOnly(t *testing.T) {
 	fx.st.mu.Lock()
 	fx.st.rows = map[string][]bar{} // Storage 里的数据没了：补算仍然能算（读本地）
 	fx.st.mu.Unlock()
-	plan := pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Factors: fx.set.Factors, TargetStart: at(9), TargetEnd: at(10),
+	plan := pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, TargetStart: at(9), TargetEnd: at(10),
 		Expected: subjects, Available: subjects, CarryColumns: []string{"close", "volume"}, WriteCarry: true}
 	outcome, err := fx.runner.Run(context.Background(), plan)
 	require.NoError(t, err)
@@ -484,7 +484,7 @@ func TestPrepareBackfillsShortSubjectsAndCoverageAllowsNewListings(t *testing.T)
 	require.NoError(t, err)
 	require.Empty(t, short, "回看 3 根，本地各有 3 根")
 
-	fx.set.Factors = []domain.FactorDef{mean5()} // 回看变长，本地原来只有 3 根
+	fx.set.Members = domain.AsMembers(mean5()) // 回看变长，本地原来只有 3 根
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, subjects))
 	short, err = fx.data.Coverage(context.Background(), src)
 	require.NoError(t, err)
@@ -504,7 +504,7 @@ func TestCoverageDoesNotExemptWhenLookbackExceedsRetention(t *testing.T) {
 	fx := newFixture(t, mean3())
 	fx.st.retention = "1h" // 1m 频率下只能容纳 60 根
 	fx.data.cfg.Lookback = func(seriesstore.Source) int { return 100 }
-	fx.set.Factors = []domain.FactorDef{mean3()}
+	fx.set.Members = domain.AsMembers(mean3())
 	fx.st.put("NEW", 100, 7, 8, 9)
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"NEW"}))
 	src := seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}

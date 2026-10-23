@@ -22,6 +22,8 @@ type fakeFactor struct {
 	writes   []string
 	failOnce map[string]error
 	gone     bool
+	// params 记录每期（不含写回）请求带来的参数快照。
+	params map[string]MemberParams
 }
 
 func (f *fakeFactor) Open(_ context.Context, req FactorOpenRequest) (FactorOpenResponse, error) {
@@ -29,7 +31,7 @@ func (f *fakeFactor) Open(_ context.Context, req FactorOpenRequest) (FactorOpenR
 	defer f.mu.Unlock()
 	f.opens++
 	f.gone = false
-	return FactorOpenResponse{ReplayID: req.ReplayID, Subjects: []string{"A"}, StepSecs: 60, Factors: []FactorInfo{{FactorID: "f", DefinitionHash: "h1"}}}, nil
+	return FactorOpenResponse{ReplayID: req.ReplayID, Subjects: []string{"A"}, StepSecs: 60, Factors: []FactorInfo{{Member: "f", FactorID: "f", DefinitionHash: "h1"}}}, nil
 }
 
 func (f *fakeFactor) Step(_ context.Context, req FactorStepRequest) (FactorStepResponse, error) {
@@ -46,6 +48,10 @@ func (f *fakeFactor) Step(_ context.Context, req FactorStepRequest) (FactorStepR
 		f.writes = append(f.writes, req.Period)
 	} else {
 		f.steps = append(f.steps, req.Period)
+		if f.params == nil {
+			f.params = map[string]MemberParams{}
+		}
+		f.params[req.Period] = req.Params
 	}
 	return FactorStepResponse{Period: req.Period, Subjects: map[string]FactorSubject{"A": {Close: 100, Exec: 101, Factors: map[string]map[string]float64{"f": {"m": 1}}}}, States: map[string]FactorState{"f": {Status: "complete", DefinitionHash: "h1"}}}, nil
 }
@@ -56,6 +62,10 @@ type fakeStrategy struct {
 	mu     sync.Mutex
 	states []string
 	hash   string
+	// next 非空时，按周期产出下一期的因子参数（返回 nil 表示这一期不产出）。
+	next func(period time.Time) MemberParams
+	// setID 非空时，绑定带实例的私有因子集。
+	setID string
 }
 
 func (s *fakeStrategy) Bind(context.Context, string) (StrategyBinding, error) {
@@ -63,7 +73,7 @@ func (s *fakeStrategy) Bind(context.Context, string) (StrategyBinding, error) {
 	if hash == "" {
 		hash = "dsl1"
 	}
-	return StrategyBinding{InstanceID: "i1", DSLHash: hash, Factors: map[string]string{"f": "h1"}, PreviousDepth: 1, SourceColumns: []string{"close"}}, nil
+	return StrategyBinding{InstanceID: "i1", DSLHash: hash, Factors: map[string]string{"f": "h1"}, PreviousDepth: 1, SourceColumns: []string{"close"}, FactorSetID: s.setID, Tuned: s.next != nil}, nil
 }
 
 // 决策：状态里记录已处理的周期数；偶数周期 ok、奇数周期跳过。
@@ -82,6 +92,9 @@ func (s *fakeStrategy) Evaluate(_ context.Context, req StrategyEvaluateRequest) 
 	if period.Minute()%2 == 1 {
 		decision.Status, decision.SkipReason, decision.Targets = "skipped", "factor_skipped", nil
 		decision.State = req.State
+	}
+	if s.next != nil && decision.Status == "ok" {
+		decision.NextParams = s.next(period)
 	}
 	return decision, nil
 }

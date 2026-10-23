@@ -57,6 +57,8 @@ var adminOnlyMethods = map[string]bool{
 	"monitor/ListNotificationChannels": true,
 	"secret/ExportSecrets":             true, "secret/ImportSecrets": true,
 	"factor-mgr/CreateFactor": true, "factor-mgr/UpdateFactor": true,
+	// 因子分类与因子的分类归属同样没有空间归属（全局分类，所有空间的因子共用）。
+	"factor-mgr/UpsertFactorCategory": true, "factor-mgr/DeleteFactorCategory": true, "factor-mgr/SetFactorCategory": true,
 	// 策略定义没有空间归属（按全局 strategy_id 定位），实例与回放按空间授权：空间管理员改定义会影响其他空间已引用它的实例。
 	"strategy/CreateStrategy": true, "strategy/UpdateStrategy": true, "strategy/DeleteStrategy": true,
 	"cloudfunction/CreateCloudAccount": true, "cloudfunction/UpdateCloudAccount": true, "cloudfunction/DeleteCloudAccount": true,

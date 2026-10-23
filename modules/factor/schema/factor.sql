@@ -8,36 +8,59 @@ CREATE TABLE IF NOT EXISTS t_factor_sets (
     c_subject_mode TEXT NOT NULL DEFAULT 'all',
     c_subjects_json TEXT NOT NULL DEFAULT '[]',
     c_result_dataset_id TEXT NOT NULL,
+    -- 私有集合所属的策略实例（唯一的参数写入方）；空串表示没有写入方，成员永远用默认参数
+    c_owner_instance_id TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'pending',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_subject_mode IN ('all', 'include')),
     CHECK (c_status IN ('pending', 'enabled', 'disabled', 'deleting')),
-    UNIQUE (c_space_id, c_source_dataset_id, c_freq),
     UNIQUE (c_result_dataset_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_t_factor_sets_owner ON t_factor_sets (c_owner_instance_id);
+
+-- 因子分类（例如动量类、波动类）：只是元数据，用于因子库查找与按类展示
+CREATE TABLE IF NOT EXISTS t_factor_categories (
+    c_category_id TEXT NOT NULL PRIMARY KEY,
+    c_name TEXT NOT NULL,
+    c_sort_order INTEGER NOT NULL DEFAULT 0,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT OR IGNORE INTO t_factor_categories (c_category_id, c_name, c_sort_order) VALUES ('uncategorized', '未分类', 1000);
 
 -- 因子定义：只描述算法，与因子集无关，无运行状态。c_spec 是表达式定义文本（YAML），
 -- 因子类型、输入列、输出列与回看由编译 c_spec 派生，不落库
 CREATE TABLE IF NOT EXISTS t_factor_defs (
     c_factor_id TEXT NOT NULL PRIMARY KEY,
     c_name TEXT NOT NULL,
+    c_category_id TEXT NOT NULL DEFAULT 'uncategorized',
     c_spec TEXT NOT NULL,
     c_spec_hash TEXT NOT NULL,
     c_allow_partial_universe INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_allow_partial_universe IN (0, 1))
+    CHECK (c_allow_partial_universe IN (0, 1)),
+    FOREIGN KEY (c_category_id) REFERENCES t_factor_categories (c_category_id) ON DELETE RESTRICT
 );
 
--- 因子集成员：定义在某个因子集中的运行实例，启停状态属于成员
+CREATE INDEX IF NOT EXISTS idx_t_factor_defs_category ON t_factor_defs (c_category_id);
+
+-- 因子集成员：定义在某个因子集中的运行实例，身份是集合内唯一的别名（同一定义可以用不同别名加入多次），
+-- 启停状态属于成员
 CREATE TABLE IF NOT EXISTS t_factor_set_members (
     c_set_id TEXT NOT NULL,
+    c_member_alias TEXT NOT NULL,
     c_factor_id TEXT NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'disabled',
+    -- 连续沿用参数多少期后告警
+    c_carry_alert_periods INTEGER NOT NULL DEFAULT 10,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_set_id, c_factor_id),
+    PRIMARY KEY (c_set_id, c_member_alias),
+    CHECK (c_carry_alert_periods > 0),
     CHECK (c_status IN ('enabled', 'disabled')),
     FOREIGN KEY (c_set_id) REFERENCES t_factor_sets (c_set_id),
     FOREIGN KEY (c_factor_id) REFERENCES t_factor_defs (c_factor_id) ON DELETE RESTRICT
@@ -50,9 +73,9 @@ CREATE TABLE IF NOT EXISTS t_factor_recalc_jobs (
     c_job_id TEXT NOT NULL PRIMARY KEY,
     c_request_id TEXT NOT NULL,
     c_set_id TEXT NOT NULL,
-    c_factor_ids_json TEXT NOT NULL DEFAULT '[]',
+    c_members_json TEXT NOT NULL DEFAULT '[]',
     c_subjects_json TEXT NOT NULL DEFAULT '[]',
-    c_factors_omitted INTEGER NOT NULL DEFAULT 0 CHECK (c_factors_omitted IN (0, 1)),
+    c_members_omitted INTEGER NOT NULL DEFAULT 0 CHECK (c_members_omitted IN (0, 1)),
     c_subjects_omitted INTEGER NOT NULL DEFAULT 0 CHECK (c_subjects_omitted IN (0, 1)),
     c_start_time INTEGER NOT NULL,
     c_end_time INTEGER NOT NULL,
@@ -86,6 +109,60 @@ CREATE TABLE IF NOT EXISTS t_factor_engine_heartbeat (
     CHECK (c_id = 1)
 );
 
+-- 参数请求：写入方为成员某一期提交的完整快照（因子动态调参执行计划 2.4）。c_seq 是库内序号，冻结时按它选
+-- 截止前的最后一份；请求原文只用于审计与排查，已应用的参数以冻结记录为准。保留 30 天。
+CREATE TABLE IF NOT EXISTS t_factor_param_requests (
+    c_seq INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_request_id TEXT NOT NULL,
+    c_set_id TEXT NOT NULL,
+    c_member_alias TEXT NOT NULL,
+    c_period_time INTEGER NOT NULL,
+    c_based_on_period INTEGER NOT NULL DEFAULT 0,
+    c_snapshot_hash TEXT NOT NULL,
+    c_writer TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'accepted',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('accepted', 'applied', 'superseded', 'not_applied')),
+    UNIQUE (c_request_id, c_set_id, c_member_alias)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_factor_param_requests_period
+ON t_factor_param_requests (c_set_id, c_member_alias, c_period_time, c_seq);
+CREATE INDEX IF NOT EXISTS idx_t_factor_param_requests_ctime ON t_factor_param_requests (c_ctime);
+
+-- 参数快照：按内容摘要去重、不可变；请求与冻结记录都引用它
+CREATE TABLE IF NOT EXISTS t_factor_param_snapshots (
+    c_snapshot_hash TEXT NOT NULL PRIMARY KEY,
+    c_snapshot_json TEXT NOT NULL,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 冻结记录：成员每一期最终采用的参数，是唯一事实来源。快照与来源相同的连续期次压缩成一个区间
+-- [c_start_period, c_end_period]（两端都含）；只有每期都改参数的成员才每期一行。
+CREATE TABLE IF NOT EXISTS t_factor_param_freezes (
+    c_set_id TEXT NOT NULL,
+    c_member_alias TEXT NOT NULL,
+    c_start_period INTEGER NOT NULL,
+    c_end_period INTEGER NOT NULL,
+    c_snapshot_hash TEXT NOT NULL,
+    c_source TEXT NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_set_id, c_member_alias, c_start_period),
+    CHECK (c_end_period >= c_start_period),
+    CHECK (c_source IN ('requested', 'carried', 'carried_offline', 'default')),
+    FOREIGN KEY (c_snapshot_hash) REFERENCES t_factor_param_snapshots (c_snapshot_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_factor_param_freezes_end
+ON t_factor_param_freezes (c_set_id, c_member_alias, c_end_period);
+
+-- 每个集合已冻结到的最新一期：晚于它的期次才接受参数请求
+CREATE TABLE IF NOT EXISTS t_factor_param_frozen_periods (
+    c_set_id TEXT NOT NULL PRIMARY KEY,
+    c_frozen_through INTEGER NOT NULL,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TRIGGER IF NOT EXISTS trg_t_factor_sets_mtime
 AFTER UPDATE ON t_factor_sets
 FOR EACH ROW
@@ -108,7 +185,7 @@ FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_factor_set_members SET c_mtime = CURRENT_TIMESTAMP
-    WHERE c_set_id = OLD.c_set_id AND c_factor_id = OLD.c_factor_id;
+    WHERE c_set_id = OLD.c_set_id AND c_member_alias = OLD.c_member_alias;
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_t_factor_recalc_jobs_mtime
@@ -117,4 +194,12 @@ FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
     UPDATE t_factor_recalc_jobs SET c_mtime = CURRENT_TIMESTAMP WHERE c_job_id = OLD.c_job_id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_t_factor_categories_mtime
+AFTER UPDATE ON t_factor_categories
+FOR EACH ROW
+WHEN NEW.c_mtime = OLD.c_mtime
+BEGIN
+    UPDATE t_factor_categories SET c_mtime = CURRENT_TIMESTAMP WHERE c_category_id = OLD.c_category_id;
 END;

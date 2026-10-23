@@ -9,14 +9,35 @@ import (
 	"github.com/mooyang-code/moox/packages/factorexpr"
 )
 
-// SetID derives the canonical FactorSet ID from its source and frequency.
+// SetID derives the FactorSet ID of a set without a writer from its source and frequency.
 func SetID(sourceDatasetID, freq string) string {
 	return "fset_" + sourceSuffix(sourceDatasetID, freq)
 }
 
-// ResultDatasetID derives the canonical result Dataset ID for a FactorSet.
-func ResultDatasetID(sourceDatasetID, freq string) string {
-	return "dataset_factor_" + sourceSuffix(sourceDatasetID, freq)
+// InstanceSetID derives the private FactorSet ID of a strategy instance. 实例 ID 是 UUID，不满足 Storage 的小写
+// 下划线标识规则，也太长，所以取它的摘要：结果数据集 ID 不超过 Storage 的 50 个字符上限。
+func InstanceSetID(instanceID string) string {
+	return "fset_" + instanceSuffix(instanceID)
+}
+
+// ResultDatasetID derives the result Dataset ID from a FactorSet ID.
+func ResultDatasetID(setID string) string {
+	return "dataset_factor_" + strings.TrimPrefix(strings.TrimSpace(setID), "fset_")
+}
+
+// ResultViewID 是结果数据集的默认 View（Storage 激活结果数据集时按 view_ + 数据集后缀创建）。
+func ResultViewID(setID string) string {
+	return "view_factor_" + strings.TrimPrefix(strings.TrimSpace(setID), "fset_")
+}
+
+func instanceSuffix(instanceID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(instanceID)))
+	return "i" + hex.EncodeToString(sum[:])[:20]
+}
+
+// InstanceDatasetName 是私有结果数据集的展示名（Storage 限 10 个字符、空间内唯一）。
+func InstanceDatasetName(instanceID string) string {
+	return "策略因子" + instanceSuffix(instanceID)[1:7]
 }
 
 // SpecHash returns the content identity of a definition text.

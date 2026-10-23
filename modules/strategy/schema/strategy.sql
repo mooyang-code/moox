@@ -163,3 +163,43 @@ CREATE TABLE IF NOT EXISTS t_strategy_age_passed (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (c_space_id, c_view_id, c_index_id, c_min_age_bars, c_subject_id)
 );
+
+-- 因子参数的待提交记录：策略每期求出下一期的参数后，与结果在同一个事务里落库，由独立的投递循环调用
+-- FactorMgr.SubmitFactorParams 并记录终态。pending 退避重试到被接受、被拒绝或该期已冻结（too_late）；
+-- c_period_time 是参数生效的目标期次（Unix 毫秒）。
+CREATE TABLE IF NOT EXISTS t_strategy_param_submissions (
+    c_request_id TEXT NOT NULL PRIMARY KEY,
+    c_instance_id TEXT NOT NULL,
+    c_session_id TEXT NOT NULL,
+    c_result_id TEXT NOT NULL,
+    c_set_id TEXT NOT NULL,
+    c_period_time INTEGER NOT NULL,
+    c_based_on_period INTEGER NOT NULL,
+    c_params_json TEXT NOT NULL,
+    c_notes TEXT NOT NULL DEFAULT '',
+    c_status TEXT NOT NULL DEFAULT 'pending',
+    c_attempts INTEGER NOT NULL DEFAULT 0,
+    c_next_attempt DATETIME NOT NULL,
+    c_outcome_json TEXT NOT NULL DEFAULT '[]',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (c_status IN ('pending', 'accepted', 'too_late', 'rejected', 'abandoned')),
+    FOREIGN KEY (c_result_id) REFERENCES t_strategy_results (c_result_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_strategy_param_submissions_pending
+ON t_strategy_param_submissions (c_next_attempt, c_request_id)
+WHERE c_status = 'pending';
+
+CREATE INDEX IF NOT EXISTS idx_t_strategy_param_submissions_instance
+ON t_strategy_param_submissions (c_instance_id, c_period_time);
+
+-- 实例的外显设置：只存隐藏的内容（默认全部展示）。只影响控制台展示与默认导出，不影响 View 的列和策略能读到的数据，
+-- 不进会话快照与哈希，改了立即生效。c_hidden_json 形如 {"categories": [...], "members": [...], "columns": [...]}。
+CREATE TABLE IF NOT EXISTS t_strategy_display_settings (
+    c_instance_id TEXT NOT NULL PRIMARY KEY,
+    c_hidden_json TEXT NOT NULL DEFAULT '{}',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (c_instance_id) REFERENCES t_strategy_instances (c_instance_id) ON DELETE CASCADE
+);

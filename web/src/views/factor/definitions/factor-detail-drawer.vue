@@ -15,12 +15,19 @@
           <a-descriptions-item label="因子 ID">{{ factor.factor_id }}</a-descriptions-item>
           <a-descriptions-item label="展示名">{{ factor.name }}</a-descriptions-item>
           <a-descriptions-item label="类型">{{ factorTypeLabel(factor.factor_type) }}</a-descriptions-item>
+          <a-descriptions-item label="分类">{{ categoryName(props.categories ?? [], factor.category_id) }}</a-descriptions-item>
           <a-descriptions-item label="回看周期数">{{ factor.lookback_periods }}</a-descriptions-item>
           <a-descriptions-item v-if="factor.factor_type === 'cross_section'" label="允许部分对象" :span="2">
             {{ factor.allow_partial_universe ? "是" : "否" }}
           </a-descriptions-item>
           <a-descriptions-item label="输入列" :span="2">{{ factor.input_columns.join(", ") || "-" }}</a-descriptions-item>
           <a-descriptions-item label="输出列" :span="2">{{ factor.outputs.join(", ") || "-" }}</a-descriptions-item>
+          <a-descriptions-item label="可调参数" :span="2">
+            <ul v-if="factor.params?.length" class="param-list">
+              <li v-for="param in factor.params" :key="param.name">{{ describeParam(param) }}</li>
+            </ul>
+            <span v-else>{{ describeParams(factor.params) }}</span>
+          </a-descriptions-item>
           <a-descriptions-item label="定义指纹" :span="2">
             <span class="source-hash">{{ factor.definition_hash || "-" }}</span>
           </a-descriptions-item>
@@ -34,8 +41,8 @@
           <h3>使用情况</h3>
           <span v-if="!chips.length" class="detail-empty">未被使用</span>
           <a-space v-else wrap>
-            <a-tag v-for="chip in chips" :key="chip.setId" class="usage-tag" @click="emit('openTask', chip.setId)">
-              {{ chip.label }} · {{ chip.statusLabel }}
+            <a-tag v-for="chip in chips" :key="chip.key" class="usage-tag" @click="emit('openTask', chip.setId)">
+              {{ chip.label }}{{ chip.alias ? ` · ${chip.alias}` : "" }} · {{ chip.statusLabel }}
             </a-tag>
           </a-space>
         </section>
@@ -59,7 +66,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { getFactor } from "@/api/factor";
-import type { FactorDef, FactorUsage } from "@/api/factor/types";
+import type { FactorCategory, FactorDef, FactorUsage } from "@/api/factor/types";
+import { categoryName, describeParam, describeParams } from "@/views/factor/shared/params";
 import { AsyncCodeEditor } from "@/components/code-editor/async";
 import { useFactorStore } from "@/store/modules/factor";
 import { RequestGate } from "@/utils/request-gate";
@@ -69,7 +77,7 @@ import { usageChips } from "./definitions-model";
 
 defineOptions({ name: "FactorDetailDrawer" });
 
-const props = defineProps<{ factorId: string }>();
+const props = defineProps<{ factorId: string; categories?: FactorCategory[] }>();
 const emit = defineEmits<{ (e: "close"): void; (e: "openTask", setId: string): void }>();
 
 const store = useFactorStore();
@@ -136,6 +144,11 @@ watch(
 
 .usage-tag {
   cursor: pointer;
+}
+
+.param-list {
+  margin: 0;
+  padding-left: 18px;
 }
 
 .source-hash {
