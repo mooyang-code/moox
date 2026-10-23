@@ -192,3 +192,21 @@ func TestFreezeDoesNotCarryAcrossDeclarationChange(t *testing.T) {
 	require.Equal(t, domain.ParamsDefault, freezes[0].Source)
 	require.Equal(t, 2.0, freezes[0].Snapshot.Value("k", "BTC"))
 }
+
+// 从没提交生效过的成员，经过一次离线冻结之后来源链是 carried_offline；之后的沿用仍是默认值（来源 default），
+// 不能被当成“沿用旧提交”触发连续沿用告警；真正提交过的成员沿用才记 carried。
+func TestFreezeAfterOfflineKeepsDefaultSourceForNeverRequestedMember(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.Equal(t, domain.ParamsDefault, freeze(t, s, period(0)).Source)
+	_, err := s.ApplyOfflineFreezes(ctx, []domain.ParamFreeze{{SetID: "set", MemberAlias: "fast", PeriodTime: period(1),
+		Snapshot: snapshotOf(20), SnapshotHash: snapshotOf(20).Hash(), Source: domain.ParamsCarriedOffline}},
+		func(at time.Time) time.Time { return at.Add(-time.Minute) })
+	require.NoError(t, err)
+	require.Equal(t, domain.ParamsDefault, freeze(t, s, period(2)).Source, "从没提交过：沿用的仍是默认值")
+
+	_, err = submit(t, s, "r", period(3), 30)
+	require.NoError(t, err)
+	require.Equal(t, domain.ParamsRequested, freeze(t, s, period(3)).Source)
+	require.Equal(t, domain.ParamsCarried, freeze(t, s, period(4)).Source, "提交过之后的沿用才算 carried")
+}
