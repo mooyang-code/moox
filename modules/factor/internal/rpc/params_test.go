@@ -82,3 +82,27 @@ func TestGetFactorParamsReturnsIntervalsAndFrozenThrough(t *testing.T) {
 	require.Equal(t, int64(60), rsp.GetIntervals()[0].GetStartPeriod())
 	require.Equal(t, 30.0, rsp.GetIntervals()[0].GetParams()["window"].GetDefaultValue())
 }
+
+// 策略实例的私有因子集不能手工维护成员与状态，也不能手工创建；共享因子集不受影响。
+func TestOwnedSetsRejectManualMaintenance(t *testing.T) {
+	fake := &catalogFake{set: domain.FactorSet{SetID: "fset_i1", SpaceID: "crypto", OwnerInstanceID: "inst-1"}}
+	svc := NewService(fake, &recalcFake{})
+	ctx := context.Background()
+	add, _ := svc.AddFactorToSet(ctx, &factorpb.AddFactorToSetReq{SetId: "fset_i1", FactorId: "bias"})
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, add.GetRetInfo().GetCode())
+	require.Contains(t, add.GetRetInfo().GetMsg(), "私有因子集")
+	remove, _ := svc.RemoveFactorFromSet(ctx, &factorpb.RemoveFactorFromSetReq{SetId: "fset_i1", MemberAlias: "bias"})
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, remove.GetRetInfo().GetCode())
+	status, _ := svc.SetFactorMemberStatus(ctx, &factorpb.SetFactorMemberStatusReq{SetId: "fset_i1", MemberAlias: "bias", Status: domain.MemberStatusEnabled})
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, status.GetRetInfo().GetCode())
+	setStatus, _ := svc.SetFactorSetStatus(ctx, &factorpb.SetFactorSetStatusReq{SetId: "fset_i1", Status: domain.SetStatusDisabled})
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, setStatus.GetRetInfo().GetCode())
+	update, _ := svc.UpdateFactorSet(ctx, &factorpb.UpdateFactorSetReq{SetId: "fset_i1", SubjectMode: "all"})
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, update.GetRetInfo().GetCode())
+	create, _ := svc.CreateFactorSet(ctx, &factorpb.CreateFactorSetReq{FactorSet: &factorpb.FactorSet{SetId: "fset_x", SpaceId: "crypto", SourceDatasetId: "ds", Freq: "1m", OwnerInstanceId: "inst-2"}})
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, create.GetRetInfo().GetCode())
+
+	shared := NewService(&catalogFake{set: domain.FactorSet{SetID: "fset_shared", SpaceID: "crypto"}}, &recalcFake{})
+	ok, _ := shared.AddFactorToSet(ctx, &factorpb.AddFactorToSetReq{SetId: "fset_shared", FactorId: "bias"})
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, ok.GetRetInfo().GetCode())
+}

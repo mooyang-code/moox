@@ -37,6 +37,7 @@
             :refresh-key="refreshKey"
             :view-owner-modules="['factor']"
             :view-roles="['factor_result']"
+            :hidden-columns="hiddenColumns"
             :auto-refresh-interval-ms="60000"
             empty-description="结果视图准备中"
             empty-rows-description="计算任务已准备，尚未产生数据"
@@ -67,7 +68,9 @@ import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import type { FactorSetInfo } from "@/api/factor/types";
-import { listViews } from "@/api/storage/metadata";
+import { listViewColumns, listViews } from "@/api/storage/metadata";
+import { getStrategyDisplaySettings } from "@/api/strategy";
+import { hiddenColumnNames } from "@/views/strategy/factor-params-model";
 import type { View } from "@/api/storage/types";
 import { RequestGate } from "@/utils/request-gate";
 import ViewBrowse from "@/views/data/view-browse/index.vue";
@@ -91,6 +94,8 @@ const activeInfo = computed(() => available.value.find((item: FactorSetInfo) => 
 const summary = computed(() => resultSummary(activeInfo.value ?? {}));
 
 const resultView = ref<View | null>(null);
+/** 策略实例私有因子集的外显设置里隐藏的列（只影响这里的展示）；读取失败时全部展示。 */
+const hiddenColumns = ref<string[]>([]);
 const viewLoading = ref(false);
 const refreshKey = ref(0);
 const readAt = ref("");
@@ -118,10 +123,25 @@ async function loadResultView() {
     });
     if (!viewGate.isCurrent(token)) return;
     resultView.value = pickResultView(rsp.views || [], current);
+    await loadHiddenColumns(current, token);
   } catch (error) {
     if (viewGate.isCurrent(token)) Message.error(error instanceof Error ? error.message : "结果视图加载失败");
   } finally {
     if (viewGate.isCurrent(token)) viewLoading.value = false;
+  }
+}
+
+async function loadHiddenColumns(current: FactorSetInfo["factor_set"], token: number) {
+  hiddenColumns.value = [];
+  if (!current.owner_instance_id || !resultView.value) return;
+  try {
+    const [hidden, columns] = await Promise.all([
+      getStrategyDisplaySettings(current.owner_instance_id),
+      listViewColumns({ space_id: current.space_id, view_id: resultView.value.view_id, page: { page: 1, size: 1000 } })
+    ]);
+    if (viewGate.isCurrent(token)) hiddenColumns.value = hiddenColumnNames(columns.columns || [], hidden);
+  } catch {
+    // 外显设置只影响展示：读取失败时全部展示。
   }
 }
 

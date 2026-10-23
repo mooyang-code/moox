@@ -188,7 +188,7 @@
                     >
                   </a-table-column>
                   <a-table-column
-                    v-for="column in tableColumnNames"
+                    v-for="column in visibleColumnNames"
                     :key="column"
                     :width="dynamicColumnWidth(column)"
                     :ellipsis="true"
@@ -281,7 +281,7 @@
                     >
                   </a-table-column>
                   <a-table-column
-                    v-for="column in tableColumnNames"
+                    v-for="column in visibleColumnNames"
                     :key="column"
                     :width="dynamicColumnWidth(column)"
                     :ellipsis="true"
@@ -484,6 +484,8 @@ const props = withDefaults(
     activeViewId?: string;
     refreshKey?: number;
     hideTechnicalIdentity?: boolean;
+    /** 表格里隐藏的列（只影响展示，不影响查询、筛选与排序用到的列）。 */
+    hiddenColumns?: string[];
   }>(),
   {
     embedded: false,
@@ -500,7 +502,8 @@ const props = withDefaults(
     viewIds: undefined,
     activeViewId: "",
     refreshKey: 0,
-    hideTechnicalIdentity: false
+    hideTechnicalIdentity: false,
+    hiddenColumns: () => []
   }
 );
 
@@ -550,6 +553,11 @@ const fields = ref<Field[]>([]);
 const activeViewKey = ref("");
 const tableRows = ref<ViewBrowseTableRow[]>([]);
 const tableColumnNames = ref<string[]>([]);
+const visibleColumnNames = computed(() => {
+  if (!props.hiddenColumns.length) return tableColumnNames.value;
+  const hidden = new Set(props.hiddenColumns);
+  return tableColumnNames.value.filter(name => !hidden.has(name));
+});
 const detailRow = ref<ViewBrowseTableRow>();
 const detailVisible = ref(false);
 const rebuildLogsVisible = ref(false);

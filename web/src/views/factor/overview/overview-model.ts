@@ -134,15 +134,16 @@ export interface TaskCard {
 }
 
 function memberChips(info: FactorSetInfo): MemberChip[] {
-  const states = new Map((info.last_run?.factors ?? []).map(state => [state.factor_id, state]));
+  const states = new Map((info.last_run?.factors ?? []).map(state => [state.member_alias || state.factor_id, state]));
   return info.members.map(member => {
-    const state = states.get(member.factor_id);
-    if (member.status === "disabled") return { factorId: member.factor_id, ...memberStatusTag("disabled") };
-    if (!state) return { factorId: member.factor_id, label: "等待周期", color: "gray" };
+    const alias = member.member_alias || member.factor_id;
+    const state = states.get(alias);
+    if (member.status === "disabled") return { factorId: alias, ...memberStatusTag("disabled") };
+    if (!state) return { factorId: alias, label: "等待周期", color: "gray" };
     const tag = periodStatusTag(state.status);
     const failed = state.failed_subjects?.length ?? 0;
     return {
-      factorId: member.factor_id,
+      factorId: alias,
       label: state.status === "degraded" && failed ? `${tag.label} · ${failed} 个对象失败` : tag.label,
       color: tag.color
     };

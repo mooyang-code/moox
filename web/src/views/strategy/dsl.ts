@@ -1,6 +1,6 @@
 import { parseDocument } from "yaml";
 
-/** 截面选股模板：只用因子库已有的列（Binance 现货因子结果 View）；bias_20 = close / MA20。 */
+/** 截面选股模板：只用因子库已有的列（Binance 现货因子结果 View）；bias = close / MA（窗口默认 20）。 */
 export const rankedTemplate = `name: binance_spot_momentum
 bar: 1m
 
@@ -12,8 +12,8 @@ rules:
   - id: long_momentum
     name: 多头动量选币
     type: rank
-    filter: "quote_volume_mean_20 > 20000 && close > 0"
-    score: "0.6 * rank(bias_q_20) + 0.4 * rank(quote_volume_mean_q_20)"
+    filter: "quote_volume_mean > 20000 && close > 0"
+    score: "0.6 * rank(bias_q) + 0.4 * rank(quote_volume_mean_q)"
     select: {top: 5, buffer: 2}
     weight: {total: 0.8, method: equal, cap: 0.3}
 
@@ -21,8 +21,8 @@ rules:
     name: BTC 上穿均线
     type: signal
     pool: [BTC-USDT]
-    entry: "bars[-1].bias_20 <= 1 && bars[0].bias_20 > 1"
-    exit: "bars[0].bias_20 < 1"
+    entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
+    exit: "bars[0].bias < 1"
     weight: {total: 0.2}
 
 portfolio:
@@ -41,12 +41,48 @@ rules:
     name: 主流币均线择时
     type: signal
     pool: [BTC-USDT, ETH-USDT]
-    entry: "bars[-1].bias_20 <= 1 && bars[0].bias_20 > 1"
-    exit: "bars[0].bias_20 < 1"
+    entry: "bars[-1].bias <= 1 && bars[0].bias > 1"
+    exit: "bars[0].bias < 1"
     weight: {total: 0.6}
 
 portfolio:
   leverage: 1
+`;
+
+/**
+ * 动态调参模板：策略声明自己的因子成员（同一定义可以用不同别名，参数各自调整），启用实例时自动建立私有因子集；
+ * 规则按 <别名>_<输出名> 引用因子值，按 <别名>__<参数名> 读取这一期实际用的参数；factor_params 每期求出下一期的参数
+ * （default 是各标的取值的中位数，per_subject 可选，与统一值不同的标的进入覆盖；没有写出的参数取因子定义的默认值）。
+ */
+export const tunedTemplate = `name: tuned_bias
+bar: 1m
+
+factors:
+  fast: {factor: Bias}
+  slow: {factor: Bias}
+  vol: {factor: ZfStd}
+
+factor_params:
+  fast:
+    window:
+      default: "20"
+      per_subject: "10 + 30 * rank(vol_zf_std)"
+  slow:
+    window: "60"
+
+rules:
+  - id: bias_spread
+    name: 快慢偏离差
+    type: rank
+    filter: "fast_bias > 0 && slow_bias > 0"
+    score: "rank(fast_bias) - rank(slow_bias)"
+    select: {top: 5}
+    weight: {total: 1, method: equal, cap: 0.3}
+
+portfolio:
+  leverage: 1
+  min_universe: 20
+  max_missing: 0.2
 `;
 
 export interface DSLDiagnostic {

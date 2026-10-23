@@ -44,8 +44,10 @@ export const useFactorStore = defineStore("factorStore", () => {
   const current = computed(() => sets.value.find(item => item.factor_set.set_id === currentSetId.value));
 
   /** 计算任务的展示名：数据集名称 · 频率；取不到名称时回落为 source_dataset_id。 */
-  function setLabel(set: Pick<FactorSet, "source_dataset_id" | "freq">) {
-    return `${datasetNames.value[set.source_dataset_id] || set.source_dataset_id} · ${set.freq}`;
+  function setLabel(set: Pick<FactorSet, "source_dataset_id" | "freq"> & Partial<Pick<FactorSet, "owner_instance_id">>) {
+    const base = `${datasetNames.value[set.source_dataset_id] || set.source_dataset_id} · ${set.freq}`;
+    // 策略实例的私有因子集与共享因子集同源同频，加上实例标识才分得开。
+    return set.owner_instance_id ? `${base} · 实例 ${set.owner_instance_id.slice(0, 8)}` : base;
   }
 
   /** 该空间的因子集是否已经成功加载过（页面重新挂载时据此跳过重置）。 */

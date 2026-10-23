@@ -34,6 +34,12 @@
             <a-option value="timeseries">时序</a-option>
             <a-option value="cross_section">横截面</a-option>
           </a-select>
+          <a-select v-model="filters.category" placeholder="分类" allow-clear style="width: 140px">
+            <a-option value="">全部分类</a-option>
+            <a-option v-for="category in categories" :key="category.category_id" :value="category.category_id">
+              {{ category.name }}
+            </a-option>
+          </a-select>
           <a-select v-model="filters.usage" placeholder="使用情况" style="width: 140px">
             <a-option value="all">全部（{{ counts.all }}）</a-option>
             <a-option value="using">使用中（{{ counts.using }}）</a-option>
@@ -43,6 +49,7 @@
             <template #icon><icon-search /></template>
             查询
           </a-button>
+          <a-button @click="categoryVisible = true">管理分类</a-button>
         </a-space>
 
         <a-table
@@ -67,6 +74,12 @@
             <a-table-column title="类型" :width="100">
               <template #cell="{ record }">{{ factorTypeLabel(record.factor.factor_type) }}</template>
             </a-table-column>
+            <a-table-column title="分类" :width="110">
+              <template #cell="{ record }">{{ record.category }}</template>
+            </a-table-column>
+            <a-table-column title="可调参数" :width="160" :ellipsis="true" :tooltip="true">
+              <template #cell="{ record }">{{ record.paramNames }}</template>
+            </a-table-column>
             <a-table-column title="输入列" :width="180" :ellipsis="true" :tooltip="true">
               <template #cell="{ record }">{{ record.factor.input_columns.join(", ") }}</template>
             </a-table-column>
@@ -80,10 +93,10 @@
                 <a-space v-else wrap size="mini">
                   <button
                     v-for="chip in record.chips"
-                    :key="chip.setId"
+                    :key="chip.key"
                     type="button"
                     class="usage-chip"
-                    :title="`${chip.label}（${chip.statusLabel}）`"
+                    :title="`${chip.label}${chip.alias ? ` · ${chip.alias}` : ''}（${chip.statusLabel}）`"
                     @click="openTask(chip.setId)"
                   >
                     <span class="usage-dot" :class="`usage-dot--${chip.status}`"></span>
@@ -123,7 +136,8 @@
       </template>
     </div>
 
-    <FactorDetailDrawer :factor-id="detailId" @close="detailId = ''" @open-task="openTask" />
+    <FactorDetailDrawer :factor-id="detailId" :categories="categories" @close="detailId = ''" @open-task="openTask" />
+    <CategoryManager v-model:visible="categoryVisible" :categories="categories" @changed="loadCategories" />
   </div>
 </template>
 
@@ -131,8 +145,9 @@
 import { computed, onActivated, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
-import { deleteFactor, listFactors } from "@/api/factor";
-import type { FactorInfo, FactorSetInfo } from "@/api/factor/types";
+import { deleteFactor, listFactorCategories, listFactors } from "@/api/factor";
+import type { FactorCategory, FactorInfo, FactorSetInfo } from "@/api/factor/types";
+import { categoryName } from "@/views/factor/shared/params";
 import { RequestGate } from "@/utils/request-gate";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
 import { factorTypeLabel } from "@/views/factor/shared/status";
@@ -145,6 +160,7 @@ import {
   usageCounts,
   type DefinitionFilters
 } from "./definitions-model";
+import CategoryManager from "./category-manager.vue";
 import FactorDetailDrawer from "./factor-detail-drawer.vue";
 
 defineOptions({ name: "FactorDefinitions" });
@@ -155,7 +171,9 @@ const router = useRouter();
 const { store, spaceId } = useFactorScope({ poll: false });
 
 // filters 是表单里的草稿，applied 是点「查询」后生效的条件，与采集任务页一致。
-const filters = reactive<DefinitionFilters>({ type: "", usage: "all", keyword: "" });
+const filters = reactive<DefinitionFilters>({ type: "", usage: "all", keyword: "", category: "" });
+const categories = ref<FactorCategory[]>([]);
+const categoryVisible = ref(false);
 const applied = reactive<DefinitionFilters>({ ...filters });
 const items = ref<FactorInfo[]>([]);
 const loading = ref(false);
@@ -173,6 +191,8 @@ function setLabelOf(setId: string) {
 const rows = computed(() =>
   filterDefinitions(items.value, applied).map(item => ({
     factor: item.factor,
+    category: categoryName(categories.value, item.factor.category_id),
+    paramNames: (item.factor.params ?? []).map(param => param.name).join(", ") || "-",
     chips: usageChips(item.usages, setLabelOf),
     edit: definitionEditState(item),
     remove: definitionDeleteState(item)
@@ -182,6 +202,15 @@ const rows = computed(() =>
 function search() {
   Object.assign(applied, filters);
   void load();
+}
+
+/** 分类只用于归类与筛选；加载失败时分类显示为 ID，不影响列表。 */
+async function loadCategories() {
+  try {
+    categories.value = await listFactorCategories();
+  } catch {
+    categories.value = [];
+  }
 }
 
 /** 列表默认不带源码（D24）；详情抽屉再按需 GetFactor。 */
@@ -234,7 +263,10 @@ let fresh = true;
 watch(
   spaceId,
   next => {
-    if (next) void load();
+    if (next) {
+      void load();
+      void loadCategories();
+    }
   },
   { immediate: true }
 );

@@ -160,6 +160,9 @@ func (s *Service) CreateFactorSet(ctx context.Context, req *factorpb.CreateFacto
 		}
 		return &factorpb.CreateFactorSetRsp{RetInfo: invalid(err)}, nil
 	}
+	if in.OwnerInstanceID != "" {
+		return &factorpb.CreateFactorSetRsp{RetInfo: invalid(fmt.Errorf("私有因子集由策略实例启用时自动建立，不能手工创建"))}, nil
+	}
 	set, err := s.catalog.CreateSet(ctx, in)
 	if err != nil {
 		return &factorpb.CreateFactorSetRsp{RetInfo: inner(err)}, nil
@@ -177,6 +180,9 @@ func (s *Service) UpdateFactorSet(ctx context.Context, req *factorpb.UpdateFacto
 	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
 		return &factorpb.UpdateFactorSetRsp{RetInfo: invalid(err)}, nil
 	}
+	if err := s.rejectOwnedSet(ctx, req.GetSetId()); err != nil {
+		return &factorpb.UpdateFactorSetRsp{RetInfo: invalid(err)}, nil
+	}
 	set, err := s.catalog.UpdateSetSubjects(ctx, req.GetSetId(), req.GetSubjectMode(), factorwire.CloneStrings(req.GetSubjects()))
 	if err != nil {
 		return &factorpb.UpdateFactorSetRsp{RetInfo: inner(err)}, nil
@@ -192,6 +198,9 @@ func (s *Service) SetFactorSetStatus(ctx context.Context, req *factorpb.SetFacto
 		return &factorpb.SetFactorSetStatusRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
 	}
 	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+		return &factorpb.SetFactorSetStatusRsp{RetInfo: invalid(err)}, nil
+	}
+	if err := s.rejectOwnedSet(ctx, req.GetSetId()); err != nil {
 		return &factorpb.SetFactorSetStatusRsp{RetInfo: invalid(err)}, nil
 	}
 	status := req.GetStatus()
@@ -322,6 +331,9 @@ func (s *Service) AddFactorToSet(ctx context.Context, req *factorpb.AddFactorToS
 	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
 		return &factorpb.AddFactorToSetRsp{RetInfo: invalid(err)}, nil
 	}
+	if err := s.rejectOwnedSet(ctx, req.GetSetId()); err != nil {
+		return &factorpb.AddFactorToSetRsp{RetInfo: invalid(err)}, nil
+	}
 	member, err := s.catalog.AddFactorToSet(ctx, req.GetSetId(), req.GetMemberAlias(), req.GetFactorId())
 	if err != nil {
 		return &factorpb.AddFactorToSetRsp{RetInfo: inner(err)}, nil
@@ -339,6 +351,9 @@ func (s *Service) RemoveFactorFromSet(ctx context.Context, req *factorpb.RemoveF
 	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
 		return &factorpb.RemoveFactorFromSetRsp{RetInfo: invalid(err)}, nil
 	}
+	if err := s.rejectOwnedSet(ctx, req.GetSetId()); err != nil {
+		return &factorpb.RemoveFactorFromSetRsp{RetInfo: invalid(err)}, nil
+	}
 	if err := s.catalog.RemoveFactorFromSet(ctx, req.GetSetId(), req.GetMemberAlias()); err != nil {
 		return &factorpb.RemoveFactorFromSetRsp{RetInfo: inner(err)}, nil
 	}
@@ -353,6 +368,9 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, req *factorpb.SetFa
 		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(fmt.Errorf("set_id and member_alias are required"))}, nil
 	}
 	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
+		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(err)}, nil
+	}
+	if err := s.rejectOwnedSet(ctx, req.GetSetId()); err != nil {
 		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(err)}, nil
 	}
 	status := req.GetStatus()

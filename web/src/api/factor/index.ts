@@ -1,6 +1,7 @@
 import { callFactor } from "./http";
 import type {
   EngineStatus,
+  FactorCategory,
   FactorDef,
   FactorInput,
   FactorMember,
@@ -11,6 +12,8 @@ import type {
   ListFactorsReq,
   ListFactorsRsp,
   GetFactorRsp,
+  GetFactorParamsReq,
+  GetFactorParamsRsp,
   ListRecalcJobsReq,
   ListRecalcJobsRsp,
   ListFactorFunctionsRsp,
@@ -69,28 +72,65 @@ export function listFactors(params: ListFactorsReq = {}) {
   return callFactor<ListFactorsReq, FactorRetRsp<ListFactorsRsp>>("ListFactors", params);
 }
 
-export async function addFactorToSet(set_id: string, factor_id: string) {
-  const rsp = await callFactor<{ set_id: string; factor_id: string }, FactorRetRsp<{ member: FactorMember }>>("AddFactorToSet", {
-    set_id,
-    factor_id
-  });
+/** 把定义加入因子集；member_alias 缺省时取定义 ID（共享集合不需要别名）。 */
+export async function addFactorToSet(set_id: string, factor_id: string, member_alias?: string) {
+  const body: { set_id: string; factor_id: string; member_alias?: string } = { set_id, factor_id };
+  if (member_alias && member_alias !== factor_id) body.member_alias = member_alias;
+  const rsp = await callFactor<typeof body, FactorRetRsp<{ member: FactorMember }>>("AddFactorToSet", body);
   return rsp.member;
 }
 
-export function removeFactorFromSet(set_id: string, factor_id: string) {
-  return callFactor<{ set_id: string; factor_id: string }, FactorRetRsp>("RemoveFactorFromSet", { set_id, factor_id });
+/** 成员以集合内唯一的别名标识（共享集合里别名就是定义 ID）。 */
+export function removeFactorFromSet(set_id: string, member_alias: string) {
+  return callFactor<{ set_id: string; member_alias: string }, FactorRetRsp>("RemoveFactorFromSet", { set_id, member_alias });
 }
 
 export async function setFactorMemberStatus(
   set_id: string,
-  factor_id: string,
+  member_alias: string,
   status: string
 ): Promise<SetFactorMemberStatusResult> {
-  const rsp = await callFactor<{ set_id: string; factor_id: string; status: string }, FactorRetRsp<SetFactorMemberStatusResult>>(
-    "SetFactorMemberStatus",
-    { set_id, factor_id, status }
-  );
+  const rsp = await callFactor<
+    { set_id: string; member_alias: string; status: string },
+    FactorRetRsp<SetFactorMemberStatusResult>
+  >("SetFactorMemberStatus", { set_id, member_alias, status });
   return { member: rsp.member, backfill_job: rsp.backfill_job };
+}
+
+export async function listFactorCategories() {
+  const rsp = await callFactor<Record<string, never>, FactorRetRsp<{ categories: FactorCategory[] }>>("ListFactorCategories", {});
+  return rsp.categories || [];
+}
+
+export async function upsertFactorCategory(category: Pick<FactorCategory, "category_id" | "name"> & { sort_order?: number }) {
+  const rsp = await callFactor<{ category: typeof category }, FactorRetRsp<{ category: FactorCategory }>>(
+    "UpsertFactorCategory",
+    {
+      category
+    }
+  );
+  return rsp.category;
+}
+
+export function deleteFactorCategory(category_id: string) {
+  return callFactor<{ category_id: string }, FactorRetRsp>("DeleteFactorCategory", { category_id });
+}
+
+/** 修改定义的分类（分类只是元数据，不进 definition_hash，不影响已启用的成员）。 */
+export async function setFactorCategory(factor_id: string, category_id: string) {
+  const rsp = await callFactor<{ factor_id: string; category_id: string }, FactorRetRsp<{ factor: FactorDef }>>(
+    "SetFactorCategory",
+    {
+      factor_id,
+      category_id
+    }
+  );
+  return rsp.factor;
+}
+
+/** 读取因子集的冻结记录（每期实际用的参数）与可选的提交审计。 */
+export function getFactorParams(params: GetFactorParamsReq) {
+  return callFactor<GetFactorParamsReq, FactorRetRsp<GetFactorParamsRsp>>("GetFactorParams", params);
 }
 
 export function deleteFactor(factor_id: string) {

@@ -18,7 +18,30 @@ export interface FactorSet {
   status: FactorSetStatus;
   created_at?: string;
   updated_at?: string;
+  /** 非空表示策略实例的私有因子集：该实例是唯一的参数写入方；为空是共享因子集，成员永远用默认参数。 */
+  owner_instance_id?: string;
 }
+
+/** 因子定义声明的可调参数（由编译 spec 派生，只读）。 */
+export interface FactorParamDecl {
+  name: string;
+  type: "int" | "float";
+  min: number;
+  max: number;
+  default_value: number;
+}
+
+/** 因子分类：只是元数据，用于查找与按类展示。 */
+export interface FactorCategory {
+  category_id: string;
+  name: string;
+  sort_order?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** 未分类的分类 ID（服务端内置，不能删除）。 */
+export const UNCATEGORIZED = "uncategorized";
 
 /** 因子定义：spec 是 YAML 表达式定义；类型、输入列、输出列与回看由服务端编译得到，只读。 */
 export interface FactorDef {
@@ -34,13 +57,16 @@ export interface FactorDef {
   allow_partial_universe: boolean;
   /** 计算契约指纹：只改注释、格式不变，影响结果的改动都会变。 */
   definition_hash?: string;
+  category_id?: string;
+  /** spec 声明的可调参数（派生，只读）。 */
+  params?: FactorParamDecl[];
   created_at: string;
   updated_at: string;
 }
 
 /** createFactor / updateFactor 的提交体：派生字段与时间戳由服务端生成，定义不带 set_id 与状态。 */
 export type FactorInput = Pick<FactorDef, "factor_id" | "name"> &
-  Partial<Pick<FactorDef, "allow_partial_universe">> & { spec: string };
+  Partial<Pick<FactorDef, "allow_partial_universe" | "category_id">> & { spec: string };
 
 /** 编译诊断：path 是字段路径（如 outputs.bias_20），line/column 是 spec 内的行列（从 1 开始）。 */
 export interface FactorSpecDiagnostic {
@@ -61,6 +87,7 @@ export interface ValidateFactorSpecRsp {
   lookback_periods?: number;
   canonical?: string;
   definition_hash?: string;
+  params?: FactorParamDecl[];
 }
 
 export interface PreviewFactorReq {
@@ -114,6 +141,8 @@ export interface ListFactorFunctionsRsp {
 export interface FactorUsage {
   set_id: string;
   status: MemberStatus;
+  /** 成员在这个集合里的别名（同一定义可以用不同别名出现多次）。 */
+  member_alias?: string;
 }
 
 export interface FactorInfo {
@@ -123,18 +152,32 @@ export interface FactorInfo {
 
 export interface FactorMember {
   set_id: string;
+  /** 成员身份：集合内唯一的别名；共享集合里就是定义 ID。 */
+  member_alias: string;
   factor_id: string;
   status: MemberStatus;
   factor: FactorDef;
   created_at: string;
   updated_at: string;
+  /** 连续沿用参数超过多少期告警。 */
+  carry_alert_periods?: number;
+  /** 成员在结果数据集里的列名（派生，只读）：输出列与参数列。 */
+  output_columns?: string[];
+  param_columns?: string[];
 }
+
+/** 一期冻结参数的来源：requested 提交生效、carried 沿用、carried_offline 引擎离线沿用、default 从未提交过。 */
+export type ParamsSource = "requested" | "carried" | "carried_offline" | "default";
 
 export interface FactorPeriodState {
   factor_id: string;
+  /** 成员别名：周期状态以成员为单位。 */
+  member_alias?: string;
   status: PeriodFactorStatus;
   failed_subjects?: string[];
   spec_hash?: string;
+  params_source?: ParamsSource;
+  params_digest?: string;
 }
 
 export interface SetRunSummary {
@@ -192,7 +235,8 @@ export interface EngineStatus {
 
 export interface RecalcFactorsReq {
   set_id: string;
-  factor_ids: string[];
+  /** 要补算的成员别名；空表示全部已启用成员。 */
+  members: string[];
   subjects: string[];
   start_time: string;
   end_time: string;
@@ -203,7 +247,7 @@ export interface RecalcJob {
   job_id: string;
   request_id: string;
   set_id: string;
-  factor_ids: string[];
+  members: string[];
   subjects: string[];
   start_time: string;
   end_time: string;
@@ -259,4 +303,49 @@ export interface GetFactorRsp {
 export interface SetFactorMemberStatusResult {
   member: FactorMember;
   backfill_job?: RecalcJob;
+}
+
+/** 一个参数一期的取值：统一值加按标的覆盖。 */
+export interface ParamValue {
+  default_value: number;
+  overrides?: Record<string, number>;
+}
+
+/** 冻结记录：快照与来源相同的连续期次 [start_period, end_period]（Unix 秒，两端都含）。 */
+export interface ParamInterval {
+  member_alias: string;
+  start_period: number | string;
+  end_period: number | string;
+  params: Record<string, ParamValue>;
+  source: ParamsSource;
+  snapshot_hash: string;
+}
+
+/** 参数请求（审计）：accepted 已接受、applied 被某期采用、superseded 同期被后一份取代、not_applied 未生效。 */
+export interface ParamRequestInfo {
+  seq: number | string;
+  request_id: string;
+  member_alias: string;
+  period_time: number | string;
+  based_on_period?: number | string;
+  params: Record<string, ParamValue>;
+  status: "accepted" | "applied" | "superseded" | "not_applied";
+  writer: string;
+  created_at: string;
+}
+
+export interface GetFactorParamsReq {
+  set_id: string;
+  member_alias?: string;
+  from?: number;
+  to?: number;
+  include_requests?: boolean;
+  limit?: number;
+}
+
+export interface GetFactorParamsRsp {
+  intervals: ParamInterval[];
+  requests?: ParamRequestInfo[];
+  /** 集合已冻结到的最新一期（Unix 秒）。 */
+  frozen_through?: number | string;
 }

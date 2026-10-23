@@ -6,6 +6,10 @@ import { callFactor } from "./http";
 import {
   addFactorToSet,
   cancelRecalcJob,
+  deleteFactorCategory,
+  getFactorParams,
+  listFactorCategories,
+  upsertFactorCategory,
   createFactor,
   createFactorSet,
   deleteFactor,
@@ -16,6 +20,7 @@ import {
   listFactorSets,
   recalcFactors,
   removeFactorFromSet,
+  setFactorCategory,
   setFactorMemberStatus,
   setFactorSetStatus,
   updateFactor,
@@ -90,10 +95,10 @@ describe("FactorMgr factor-set API", () => {
     expect(call).toHaveBeenLastCalledWith("AddFactorToSet", { set_id: "set-1", factor_id: "f1" });
   });
 
-  it("removeFactorFromSet posts set_id and factor_id", async () => {
+  it("removeFactorFromSet posts set_id and the member alias", async () => {
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" } });
     await removeFactorFromSet("set-1", "f1");
-    expect(call).toHaveBeenLastCalledWith("RemoveFactorFromSet", { set_id: "set-1", factor_id: "f1" });
+    expect(call).toHaveBeenLastCalledWith("RemoveFactorFromSet", { set_id: "set-1", member_alias: "f1" });
   });
 
   it("setFactorMemberStatus returns the backfill job", async () => {
@@ -103,7 +108,40 @@ describe("FactorMgr factor-set API", () => {
       member,
       backfill_job: { job_id: "factor-enable-1" }
     });
-    expect(call).toHaveBeenLastCalledWith("SetFactorMemberStatus", { set_id: "set-1", factor_id: "f1", status: "enabled" });
+    expect(call).toHaveBeenLastCalledWith("SetFactorMemberStatus", { set_id: "set-1", member_alias: "f1", status: "enabled" });
+  });
+
+  it("addFactorToSet sends an alias only when it differs from the definition id", async () => {
+    call.mockResolvedValue({ ret_info: { code: 0, msg: "" }, member: { set_id: "set-1" } });
+    await addFactorToSet("set-1", "bias");
+    expect(call).toHaveBeenLastCalledWith("AddFactorToSet", { set_id: "set-1", factor_id: "bias" });
+    await addFactorToSet("set-1", "bias", "bias");
+    expect(call).toHaveBeenLastCalledWith("AddFactorToSet", { set_id: "set-1", factor_id: "bias" });
+    await addFactorToSet("set-1", "bias", "fast");
+    expect(call).toHaveBeenLastCalledWith("AddFactorToSet", { set_id: "set-1", factor_id: "bias", member_alias: "fast" });
+  });
+
+  it("manages categories, factor category and parameter history", async () => {
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, categories: [{ category_id: "momentum", name: "动量类" }] });
+    await expect(listFactorCategories()).resolves.toEqual([{ category_id: "momentum", name: "动量类" }]);
+    expect(call).toHaveBeenLastCalledWith("ListFactorCategories", {});
+
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, category: { category_id: "volume", name: "成交量类" } });
+    await upsertFactorCategory({ category_id: "volume", name: "成交量类" });
+    expect(call).toHaveBeenLastCalledWith("UpsertFactorCategory", { category: { category_id: "volume", name: "成交量类" } });
+
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" } });
+    await deleteFactorCategory("volume");
+    expect(call).toHaveBeenLastCalledWith("DeleteFactorCategory", { category_id: "volume" });
+
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor: { factor_id: "bias", category_id: "momentum" } });
+    await expect(setFactorCategory("bias", "momentum")).resolves.toEqual({ factor_id: "bias", category_id: "momentum" });
+    expect(call).toHaveBeenLastCalledWith("SetFactorCategory", { factor_id: "bias", category_id: "momentum" });
+
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, intervals: [], frozen_through: "180" });
+    const rsp = await getFactorParams({ set_id: "set-1", include_requests: true });
+    expect(call).toHaveBeenLastCalledWith("GetFactorParams", { set_id: "set-1", include_requests: true });
+    expect(rsp.frozen_through).toBe("180");
   });
 
   it("getFactor returns usages", async () => {
