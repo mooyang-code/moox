@@ -85,3 +85,8 @@ watermark:
   set_ratios: {}                # 按集合 ID 覆盖阈值
   poll_interval: 10s            # 阻塞或落后时读回 Storage 继续推进的间隔（保底）
   max_periods: 30               # 一次推进最多处理的周期数
+
+# 动态调参：开算前向 FactorMgr 冻结这一期的参数；FactorMgr 不可达时本地按沿用规则冻结，并持久记下待补报的离线冻结。
+params:
+  state_file: ./data/engine/params.json
+  freeze_timeout: 5s            # 冻结调用的最长等待（含重试），超时按离线冻结处理

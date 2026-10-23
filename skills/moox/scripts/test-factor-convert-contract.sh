@@ -14,7 +14,7 @@ fail() { echo "factor convert contract: $*" >&2; exit 1; }
 
 "${FX}" check --library "${REPO_ROOT}/modules/factor/factors/xbx.yaml" > "${TMP}/check.jsonl"
 [[ "$(grep -c '"ok":true' "${TMP}/check.jsonl")" == 11 ]] || fail "生产因子库应当 11 个全部编译通过"
-grep -q '"factor_id":"ZscoreAbsMeanQ".*"lookback":58' "${TMP}/check.jsonl" || fail "ZscoreAbsMeanQ 的回看应推导为 58"
+grep -q '"factor_id":"ZscoreAbsMeanQ".*"lookback":358' "${TMP}/check.jsonl" || fail "ZscoreAbsMeanQ 的回看应按参数上限推导为 358"
 "${FX}" functions --json | python3 -c 'import json,sys; names={f["name"] for f in json.load(sys.stdin)}; assert {"ts_mean","cs_rank","where","ema"} <= names'
 
 python3 "${CHECK}" synthetic --subjects 3 --bars 120 --output "${TMP}/bars.csv"
@@ -24,15 +24,15 @@ cat > "${TMP}/lib.yaml" <<'EOF'
 - factor_id: Bias
   name: Bias
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     outputs:
-      bias_{window}: close / ts_mean(close, window)
+      bias: close / ts_mean(close, window)
 - factor_id: BiasWrong
   name: 多减了 1 的 Bias
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     outputs:
-      bias_{window}: close / ts_mean(close, window) - 1
+      bias: close / ts_mean(close, window) - 1
 EOF
 "${FX}" eval --library "${TMP}/lib.yaml" --factor-id Bias --input "${TMP}/bars.csv" --freq 1m --output "${TMP}/a.csv"
 "${FX}" eval --library "${REPO_ROOT}/modules/factor/factors/xbx.yaml" --factor-id Bias --input "${TMP}/bars.csv" --freq 1m --output "${TMP}/b.csv"

@@ -28,7 +28,7 @@ CSV 统一格式：`data_time`（RFC3339 UTC）、`subject_id`、`series_tag`、
 | --- | --- | --- |
 | 定义形式 | 一个 `.py` 文件，`compute(df, params, context)` 返回 DataFrame | 因子库 YAML 里的一项 `{factor_id, name, spec, allow_partial_universe}` |
 | 元数据 | 目录里手填 `factor_type`、`input_columns`、`outputs`、`params`、`lookback_periods` | 只写 spec；类型、输入列、输出列、回看全部由编译推导 |
-| 参数 | `params` 字典，常见 `window` / `windows` / `output_names` | `params:` 命名常量；列表参数展开成多个输出，列名模板写 `{参数名}` |
+| 参数 | `params` 字典，常见 `window` / `windows` / `output_names` | `params:` 声明可调参数（类型、范围、默认值）；输出列名固定，不再有列表参数与 `{参数名}` 列名模板；策略可在运行中每期调整取值 |
 | 中间量 | 局部变量 | `let:`，有序，后面的可以引用前面的 |
 | 输出 | DataFrame 的列 | `outputs:` 输出列名 → 表达式，最多展开成 64 列 |
 | 分组 | 时序因子要自己 `groupby("series_tag")`；截面因子自己 `groupby(data_time)` | 自动：时序算子按 (subject_id, series_tag) 序列滚动，截面算子按 (data_time, series_tag) 分组 |
@@ -40,18 +40,20 @@ CSV 统一格式：`data_time`（RFC3339 UTC）、`subject_id`、`series_tag`、
 ## 3. 表达式规格
 
 ```yaml
-params: {window: [5, 20]}          # 可选：命名常量；列表会展开成多个输出（多个列表参数取笛卡尔积）
+params:                            # 可选：可调参数的声明；type 为 int 或 float，min/max/default 必填
+  window: {type: int, min: 2, max: 120, default: 20}
 let:                               # 可选：有序中间量，只能引用前面的 let、params 和输入列
   ma: ts_mean(close, window)
-outputs:                           # 必填：输出列名 → 表达式
-  bias_{window}: close / ma - 1    # 展开为 bias_5、bias_20；列表参数必须出现在列名里
+outputs:                           # 必填：输出列名 → 表达式；名字固定，不随参数变化
+  bias: close / ma - 1
 ```
 
 - 输入列就是表达式里出现的源数据列名（`open`、`high`、`low`、`close`、`volume`、`quote_volume` 等，以源数据集实际的列为准），不用声明。
 - `params`、`let` 的名字：小写字母开头，只含小写字母、数字、下划线，最长 32 个字符，不能与函数、系统列
   （`subject_id`、`freq`、`data_time`、`series_tag`）或 `true`/`false`/`nil` 重名。输出列名：字母或下划线开头，只含字母数字下划线，最长 64 个字符。
 - 语法：数字、`true`/`false`、标识符、`+ - * / % **`、比较 `== != < <= > >=`、`and`/`or`/`not`、`c ? a : b` 和函数调用；其余一律拒绝。
-- 窗口、位移、分位数等参数必须是编译期常量（字面量或 `params`）。
+- 窗口、位移等结构位置只接受整数字面量或**整数参数**（范围必须落在算子允许范围内），回看按参数范围上限推导，所以策略调参时窗口永远够用；其余数值位置可以放字面量或任意参数。
+- 参数声明进因子指纹（`definition_hash`），取值不进：改范围、默认值会改变指纹，策略调整取值不会。同一定义可用不同成员别名加入因子集多次，各自调参，结果列为 `<别名>_<输出名>`。
 - NaN 语义：任一输入为 NaN 结果即为 NaN（`where`、`fill_nan`、`is_nan` 除外）；除以 0 为 NaN；比较运算遇到 NaN 结果也是 NaN。
 - 回看由编译推导：`ts_*` 为 L(x)+n−1，`delay`/`delta`/`pct_change` 为 L(x)+k，嵌套相加（`ts_rank(ts_mean(x, 20), 20)` 是 39）；
   `ema`/`sma` 截断到起点权重低于 1e−9 的 K 根（`ema(x, 20)` 为 208）。
@@ -134,7 +136,7 @@ outputs:                           # 必填：输出列名 → 表达式
 | `df.groupby(["data_time", "series_tag"])[x].rank(pct=True)` | `cs_rank(x)` |
 | 截面 `(x - mean) / std`（ddof=1） | `cs_zscore(x)` |
 | 截面 `x - mean` / `x / x.abs().sum()` | `cs_demean(x)` / `cs_scale(x)` |
-| `params["window"]`、`params["windows"]` + `output_names` | `params: {window: 20}`、`params: {window: [5, 20]}` + 列名模板 `name_{window}` |
+| `params["window"]`、`params["windows"]` + `output_names` | `params: {window: {type: int, min: 2, max: 120, default: 20}}`，每个旧窗口值对应一个成员别名（如 `ma_fast`、`ma_slow`）或一个输出，输出名固定 |
 
 **不支持、不能硬转的写法**：不定长窗口（`expanding()`、`cumsum()`、`cummax()`）、前向填充（`ffill`）、未来数据（`shift(-k)`）、
 `ewm(adjust=True)`、`rank` 的非 average 并列方式、任意 `rolling().apply(自定义函数)`、跨标的的时序运算、读取外部文件或网络。
@@ -193,12 +195,12 @@ outputs:                           # 必填：输出列名 → 表达式
 - factor_id: ZfAbsMean          # 与原 factor_id 相同
   name: 上涨振幅均值分位          # 展示名
   spec: |
-    params: {window: 20}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     let:
       tp: (close + high + low) / 3
       amp: (high - low) / open
     outputs:
-      zf_abs_mean_{window}: ts_rank(ts_mean(where(pct_change(tp) > 0, amp, 0), window), window)
+      zf_abs_mean: ts_rank(ts_mean(where(pct_change(tp) > 0, amp, 0), window), window)
 ```
 
 逐条对照第 4、6 节；拿不准某个函数的细节时运行 `factor-expr.sh functions` 看说明。
@@ -259,7 +261,7 @@ SKILL_ROOT='/absolute/path/resolved-from-the-loaded-SKILL.md'
 W=./factor-convert/ZfAbsMean
 "$SKILL_ROOT/scripts/factor-expr.sh" check --library "$W/lib.yaml" > "$W/check.jsonl"
 python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" --actual "$W/dsl.csv" \
-  --freq 1m --check "$W/check.jsonl" --factor-id ZfAbsMean --discrete zf_abs_mean_20 --report "$W/report.json"
+  --freq 1m --check "$W/check.jsonl" --factor-id ZfAbsMean --discrete zf_abs_mean --report "$W/report.json"
 ```
 
 真实数据和合成数据都要通过（退出码 0）。未通过时：
@@ -331,7 +333,7 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
    moox-cli data rows export --file ./moox.toml --space crypto --dataset <源数据集> --subject BTC-USDT --freq 1m \
      --start-time <起> --end-time <止> --columns open,high,low,close,volume,quote_volume --output src.json
    moox-cli data rows export --file ./moox.toml --space crypto --dataset <因子结果数据集> --subject BTC-USDT --freq 1m \
-     --start-time <起> --end-time <止> --columns zf_abs_mean_20 --output prod.json
+     --start-time <起> --end-time <止> --columns zf_abs_mean --output prod.json
    python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv src.json --output src.csv
    python3 "$SKILL_ROOT/scripts/factor_py_check.py" rows-to-csv prod.json --output prod.csv
    "$SKILL_ROOT/scripts/factor-expr.sh" eval --library lib.yaml --factor-id ZfAbsMean --input src.csv --freq 1m --output local.csv
@@ -346,7 +348,7 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
 生产因子库 `modules/factor/factors/xbx.yaml` 就是由下列旧因子按本流程转来的；在 400 根 × 4 个标的的合成数据上 `compare` 全部通过
 （ZfAbsMean 有 7 个排名并列跳变，< 1%）。
 
-| factor_id | 旧 Python 核心（均为 `min_periods=1`，按 series_tag 分组） | DSL 输出 | lookback |
+| factor_id | 旧 Python 核心（均为 `min_periods=1`，按 series_tag 分组） | DSL 输出 | lookback（window=20 时；生产按参数上限 120 推导） |
 | --- | --- | --- | --- |
 | Bias | `close / rolling_mean(close, w)` | `close / ts_mean(close, window)` | 20 |
 | BiasQ | `rolling_rank(close / mean - 1, w)` | `ts_rank(close / ts_mean(close, window) - 1, window)` | 39 |

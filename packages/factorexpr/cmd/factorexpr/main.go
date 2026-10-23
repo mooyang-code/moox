@@ -147,10 +147,13 @@ func runFunctions(args []string, out io.Writer) error {
 
 // ---------------------------------------------------------------- 因子库
 
-// libraryEntry 与 modules/factor/factors/*.yaml 的格式相同：[{factor_id, name, spec, allow_partial_universe}]。
+// libraryEntry 与 modules/factor/factors/*.yaml 的格式相同：[{factor_id, name, category_id, category_name, spec, allow_partial_universe}]；
+// 分类只用于入库，离线工具读入后忽略。
 type libraryEntry struct {
 	FactorID             string `yaml:"factor_id"`
 	Name                 string `yaml:"name"`
+	CategoryID           string `yaml:"category_id"`
+	CategoryName         string `yaml:"category_name"`
 	Spec                 string `yaml:"spec"`
 	AllowPartialUniverse bool   `yaml:"allow_partial_universe"`
 }
