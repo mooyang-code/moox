@@ -57,3 +57,15 @@ func TestTuneConfigWritesOnlyUnsetValuesAndKeepsComments(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, changes, 3, "force 覆盖已有值")
 }
+
+func TestWindowEstimateMatchesDocExamples(t *testing.T) {
+	// 设计 4.2 / 8.1：2000 个序列、N = 1 万、7 个数值字段约 1.4GB；N = 5 万约 7.1GB。
+	gb := func(n int64) float64 { return float64(n) / 1e9 }
+	require.InDelta(t, 1.425, gb(WindowEstimate(2000, 10000, 7, 0)), 0.001)
+	require.InDelta(t, 7.125, gb(WindowEstimate(2000, 50000, 7, 0)), 0.001)
+	require.Equal(t, int64(10)*int64(40+16)*int64(2*8+1), WindowEstimate(10, 40, 2, 0), "余量至少 16 根")
+
+	plan := PlanMemory(16<<30, 8, 4, 512<<20)
+	require.Empty(t, plan.CheckWindowEstimate(plan.Window))
+	require.Contains(t, plan.CheckWindowEstimate(plan.Window+1), "超过建议的窗口上限")
+}

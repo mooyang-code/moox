@@ -20,7 +20,7 @@ type rangeNode struct {
 
 func (n *rangeNode) ReadDatasetChanges(_ context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error) {
 	n.changes = req
-	return &pb.ReadDatasetChangesRsp{RetInfo: successRetInfo(), NextCursor: &pb.DatasetChangeCursor{SourceNodeId: "n", SourceStoreId: "s", Sequence: 7}}, nil
+	return &pb.ReadDatasetChangesRsp{RetInfo: successRetInfo(), NextCursor: &pb.DatasetChangeCursor{NodeId: "n", StoreId: "s", Sequence: 7}}, nil
 }
 
 func (n *rangeNode) ReadTimeSeriesRows(_ context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
@@ -192,7 +192,7 @@ func TestReadRowsOmitsMissingRowsAndKeepsRequestOrder(t *testing.T) {
 func TestReadDatasetChangesRoutesToTheDataNode(t *testing.T) {
 	node := &rangeNode{}
 	svc := newRangeService(t, node)
-	cursor := &pb.DatasetChangeCursor{SourceNodeId: "n", SourceStoreId: "s", Sequence: 3}
+	cursor := &pb.DatasetChangeCursor{NodeId: "n", StoreId: "s", Sequence: 3}
 	rsp, err := svc.ReadDatasetChanges(context.Background(), &pb.ReadDatasetChangesReq{
 		AuthInfo: &pb.AuthInfo{AppId: "factor", AppKey: "key"}, SpaceId: "space", DatasetId: "market", Cursor: cursor, Limit: 100,
 	})

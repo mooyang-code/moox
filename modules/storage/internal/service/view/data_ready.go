@@ -375,7 +375,7 @@ func (s *Service) makeAppliedDurableBeforeAck() error {
 }
 
 func (s *Service) noteAppliedFromPayload(spaceID string, payload *storagepb.DatasetRowsUpserted) {
-	if payload == nil || payload.GetSourceSequence() == 0 || payload.GetSourceNodeId() == "" || payload.GetSourceStoreId() == "" {
+	if payload == nil || payload.GetSequence() == 0 || payload.GetNodeId() == "" || payload.GetStoreId() == "" {
 		return
 	}
 	views := s.viewsForDataset(spaceID, payload.GetDatasetId(), true)
@@ -391,10 +391,10 @@ func (s *Service) noteAppliedFromPayload(spaceID string, payload *storagepb.Data
 		// 还没有；随后激活提交、进程退出，重启后活动索引是新索引，围栏却缺了这一行，对应的周期事件会一直等下去。
 		runtime.mu.Lock()
 		if activeID := runtime.active; activeID != "" {
-			s.NoteAppliedPosition(view.GetSpaceId(), view.GetViewId(), activeID, payload.GetSourceNodeId(), payload.GetSourceStoreId(), payload.GetSourceSequence())
+			s.NoteAppliedPosition(view.GetSpaceId(), view.GetViewId(), activeID, payload.GetNodeId(), payload.GetStoreId(), payload.GetSequence())
 		}
 		if nextID := runtime.next; nextID != "" {
-			s.NoteAppliedPosition(view.GetSpaceId(), view.GetViewId(), nextID, payload.GetSourceNodeId(), payload.GetSourceStoreId(), payload.GetSourceSequence())
+			s.NoteAppliedPosition(view.GetSpaceId(), view.GetViewId(), nextID, payload.GetNodeId(), payload.GetStoreId(), payload.GetSequence())
 		}
 		runtime.mu.Unlock()
 	}

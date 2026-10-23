@@ -623,7 +623,7 @@ func TestCarriedTimeAndJSONFieldsKeepTheirStorageType(t *testing.T) {
 func TestReadDatasetChangesMapsRequestAndResponse(t *testing.T) {
 	primary := &primaryFake{changesRsp: &storagepb.ReadDatasetChangesRsp{
 		RetInfo: successRet(), HasMore: true,
-		NextCursor: &storagepb.DatasetChangeCursor{SourceNodeId: "n1", SourceStoreId: "s1", Sequence: 9},
+		NextCursor: &storagepb.DatasetChangeCursor{NodeId: "n1", StoreId: "s1", Sequence: 9},
 		Changes: []*storagepb.DatasetChange{{Sequence: 8, DatasetId: "d", Ranges: []*storagepb.DatasetChangeRange{
 			{SubjectId: "BTC", Freq: "1m", StartTime: "2026-10-01T00:00:00Z", EndTime: "2026-10-01T00:05:00Z"},
 		}}},

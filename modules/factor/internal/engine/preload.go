@@ -2,8 +2,12 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,9 +47,36 @@ type preloader struct {
 	onReady func(setID string)
 	kick    chan struct{}
 
-	// prepared 记录每个集合预载成功时的回看根数：目录里的因子变了回看更长就要重新预载（窗口要变长）。
+	// prepared 记录每个集合预载成功时的状态：目录里的因子变了回看更长、集合的标的列表变了，都要重新预载（设计 6.2 移除标的）。
 	mu       sync.Mutex
-	prepared map[string]int
+	prepared map[string]preparedState
+}
+
+// preparedState 是集合预载成功时的回看根数和标的范围的指纹。
+type preparedState struct {
+	lookback int
+	scope    string
+	// subjects 是预载时标的清单的指纹：「全部标的」的集合标的来自数据集，用户在数据集的标签里删除（或新增）标的后清单会变，
+	// 变了要重新预载，窗口才会释放被删除的标的（设计 6.2）。
+	subjects string
+}
+
+func subjectsSig(subjects []string) string {
+	sorted := append([]string(nil), subjects...)
+	sort.Strings(sorted)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\x00")))
+	return hex.EncodeToString(sum[:8])
+}
+
+// scopeOf 是集合标的范围的指纹：只列出标的的集合看标的列表；全部标的的集合不看（标的清单来自数据集，由重启或 init 刷新）。
+func scopeOf(set domain.EngineSet) string {
+	if set.Set.SubjectMode != domain.SubjectModeInclude {
+		return set.Set.SubjectMode
+	}
+	subjects := append([]string(nil), set.Set.Subjects...)
+	sort.Strings(subjects)
+	sum := sha256.Sum256([]byte(strings.Join(subjects, "\x00")))
+	return set.Set.SubjectMode + ":" + hex.EncodeToString(sum[:8])
 }
 
 // Ready 报告集合是否已经预载（窗口就绪）：生命周期检查用。
@@ -56,17 +87,41 @@ func (p *preloader) Ready(setID string) bool {
 	return ok
 }
 
-func (p *preloader) preparedLookback(setID string) (int, bool) {
+// upToDate 报告集合是否已经按当前的回看和标的范围预载好。
+func (p *preloader) upToDate(set domain.EngineSet) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	n, ok := p.prepared[setID]
-	return n, ok
+	state, ok := p.prepared[set.Set.SetID]
+	return ok && state.lookback >= maxLookbackOf(set) && state.scope == scopeOf(set)
 }
 
-func (p *preloader) markPrepared(setID string, lookback int) {
+// unmark 在重新预载之前清掉集合的成功记录：重新预载失败时集合不能还当作已就绪（旧的标的列表缓存会让后续重试被跳过）。
+func (p *preloader) unmark(setID string) {
 	p.mu.Lock()
-	p.prepared[setID] = lookback
+	delete(p.prepared, setID)
 	p.mu.Unlock()
+}
+
+func (p *preloader) markPrepared(set domain.EngineSet, subjects []string) {
+	p.mu.Lock()
+	p.prepared[set.Set.SetID] = preparedState{lookback: maxLookbackOf(set), scope: scopeOf(set), subjects: subjectsSig(subjects)}
+	p.mu.Unlock()
+}
+
+// subjectsChanged 报告「全部标的」的集合的标的清单（数据集里状态为 active 的标的）自上次预载以来是否变了。
+// 列清单失败时按没变处理，下一轮再查，不因一次失败去重新预载。
+func (p *preloader) subjectsChanged(ctx context.Context, set domain.EngineSet) bool {
+	if set.Set.SubjectMode == domain.SubjectModeInclude || p.source == nil {
+		return false
+	}
+	subjects, err := setSubjects(ctx, p.source, set, nil)
+	if err != nil {
+		return false
+	}
+	p.mu.Lock()
+	state, ok := p.prepared[set.Set.SetID]
+	p.mu.Unlock()
+	return ok && state.subjects != "" && state.subjects != subjectsSig(subjects)
 }
 
 // PrepareSet 立刻为一个集合预载（生命周期的 init 动作）；已经预载且回看够长时直接返回。
@@ -75,13 +130,15 @@ func (p *preloader) PrepareSet(ctx context.Context, setID string) error {
 	if lookup != SetFound {
 		return fmt.Errorf("因子集 %s 不在目录里", setID)
 	}
-	if lookback, ok := p.preparedLookback(setID); ok && lookback >= maxLookbackOf(set) {
+	if p.upToDate(set) && !p.subjectsChanged(ctx, set) {
 		return nil
 	}
-	if err := p.prepare(ctx, set); err != nil {
+	p.unmark(setID)
+	subjects, err := p.prepare(ctx, set)
+	if err != nil {
 		return err
 	}
-	p.markPrepared(setID, maxLookbackOf(set))
+	p.markPrepared(set, subjects)
 	if p.onReady != nil {
 		p.onReady(setID)
 	}
@@ -94,10 +151,11 @@ func (p *preloader) Refresh(ctx context.Context, setID string) error {
 	if lookup != SetFound {
 		return fmt.Errorf("因子集 %s 不在目录里", setID)
 	}
-	if err := p.prepare(ctx, set); err != nil {
+	subjects, err := p.prepare(ctx, set)
+	if err != nil {
 		return err
 	}
-	p.markPrepared(setID, maxLookbackOf(set))
+	p.markPrepared(set, subjects)
 	if p.onReady != nil {
 		p.onReady(setID)
 	}
@@ -105,13 +163,13 @@ func (p *preloader) Refresh(ctx context.Context, setID string) error {
 }
 
 func newPreloader(sets preloadCatalog, source SourceDataset, data preloadData, active func() bool, onReady func(string)) *preloader {
-	return &preloader{sets: sets, source: source, data: data, active: active, onReady: onReady, kick: make(chan struct{}, 1), prepared: map[string]int{}}
+	return &preloader{sets: sets, source: source, data: data, active: active, onReady: onReady, kick: make(chan struct{}, 1), prepared: map[string]preparedState{}}
 }
 
 // Forget 忘掉所有集合的预载记录（重置清空本地数据之后，每个集合要重新预载）。
 func (p *preloader) Forget() {
 	p.mu.Lock()
-	p.prepared = map[string]int{}
+	p.prepared = map[string]preparedState{}
 	p.mu.Unlock()
 }
 
@@ -165,10 +223,12 @@ func (p *preloader) once(ctx context.Context) {
 		if lookup != SetFound {
 			continue
 		}
-		if lookback, ok := p.preparedLookback(setID); ok && lookback >= maxLookbackOf(set) {
+		if p.upToDate(set) && !p.subjectsChanged(ctx, set) {
 			continue
 		}
-		if err := p.prepare(ctx, set); err != nil && ctx.Err() == nil {
+		p.unmark(setID)
+		subjects, err := p.prepare(ctx, set)
+		if err != nil && ctx.Err() == nil {
 			if errors.Is(err, localdata.ErrChangeGap) {
 				log.ErrorContextf(ctx, "factor_preload_blocked set_id=%s error=%v（请执行 moox-factor-engine reconcile 对账）", setID, err)
 			} else {
@@ -176,24 +236,27 @@ func (p *preloader) once(ctx context.Context) {
 			}
 			continue
 		}
-		p.markPrepared(setID, maxLookbackOf(set))
+		if err != nil {
+			continue
+		}
+		p.markPrepared(set, subjects)
 		if p.onReady != nil {
 			p.onReady(setID)
 		}
 	}
 }
 
-func (p *preloader) prepare(ctx context.Context, set domain.EngineSet) error {
+func (p *preloader) prepare(ctx context.Context, set domain.EngineSet) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, preloadTimeout)
 	defer cancel()
 	started := time.Now()
 	subjects, err := setSubjects(ctx, p.source, set, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := p.data.Prepare(ctx, set, subjects); err != nil {
-		return fmt.Errorf("预载集合 %s：%w", set.Set.SetID, err)
+		return nil, fmt.Errorf("预载集合 %s：%w", set.Set.SetID, err)
 	}
 	log.InfoContextf(ctx, "factor_preload_done set_id=%s subjects=%d lookback=%d duration=%s", set.Set.SetID, len(subjects), maxLookbackOf(set), time.Since(started).Round(time.Millisecond))
-	return nil
+	return subjects, nil
 }

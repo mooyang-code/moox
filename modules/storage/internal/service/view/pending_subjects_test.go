@@ -52,7 +52,7 @@ func TestFromScratchRebuildDoesNotJournalOrPublishSubjectReady(t *testing.T) {
 	row := viewFreshnessRow("BTC", "1m", "venue:test", "2026-09-08T10:04:00Z")
 	payload, err := eventmapper.ToEventRows(&pb.RowsUpserted{SpaceId: "space", DatasetId: "market_prices", Rows: []*pb.RowFieldUpsert{row}})
 	require.NoError(t, err)
-	payload.SourceNodeId, payload.SourceStoreId, payload.SourceSequence = "node", "store", 1
+	payload.NodeId, payload.StoreId, payload.Sequence = "node", "store", 1
 	message := &eventpb.EventMessage{EventId: "source", SpaceId: "space", SubjectId: "market_prices", OccurredAt: timestamppb.Now()}
 	require.NoError(t, svc.HandleDatasetRows(ctx, message, payload))
 	require.Equal(t, 1, engine.writes["prices-next"])
@@ -188,7 +188,7 @@ func TestSystemMetricsFromScratchDoesNotJournalPendingSubjects(t *testing.T) {
 	}
 	payload, err := eventmapper.ToEventRows(&pb.RowsUpserted{SpaceId: "mooxsys", DatasetId: "dataset_mooxsys_host_resource", Rows: []*pb.RowFieldUpsert{row}})
 	require.NoError(t, err)
-	payload.SourceNodeId, payload.SourceStoreId, payload.SourceSequence = "node", "store", 1
+	payload.NodeId, payload.StoreId, payload.Sequence = "node", "store", 1
 	message := &eventpb.EventMessage{EventId: "source", SpaceId: "mooxsys", SubjectId: "dataset_mooxsys_host_resource", OccurredAt: timestamppb.Now()}
 	require.NoError(t, svc.HandleDatasetRows(ctx, message, payload))
 	require.Equal(t, 1, engine.writes[indexID])

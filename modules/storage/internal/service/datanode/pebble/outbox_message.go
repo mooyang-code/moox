@@ -94,16 +94,16 @@ func BindOutboxID(data []byte, nodeID, storeID string, outboxID uint64) ([]byte,
 	if err := proto.Unmarshal(eventMessage.GetPayload(), rows); err != nil {
 		return nil, fmt.Errorf("decode outbox rows: %w", err)
 	}
-	if rows.SourceStoreId != "" {
-		if rows.SourceStoreId != storeID || rows.SourceNodeId != nodeID || rows.SourceSequence != outboxID {
+	if rows.StoreId != "" {
+		if rows.StoreId != storeID || rows.NodeId != nodeID || rows.Sequence != outboxID {
 			return nil, fmt.Errorf("cannot rebind an assigned outbox source position")
 		}
 	} else if strings.HasPrefix(eventMessage.EventId, "storage-source-") {
 		// Source-derived dedupe IDs must not cross a recreated DataNode store.
 		eventMessage.EventId += "-" + storeID
 	}
-	rows.SourceNodeId, rows.SourceSequence = nodeID, outboxID
-	rows.SourceStoreId = storeID
+	rows.NodeId, rows.Sequence = nodeID, outboxID
+	rows.StoreId = storeID
 	eventMessage.Payload, err = proto.MarshalOptions{Deterministic: true}.Marshal(rows)
 	if err != nil {
 		return nil, err

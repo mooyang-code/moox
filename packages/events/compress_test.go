@@ -32,7 +32,7 @@ func rowsPayload(count int) *storagepb.DatasetRowsUpserted {
 			Kind: &storagepb.RowKey_Record{Record: &storagepb.RecordRowKey{RecordId: "record-" + strings.Repeat("x", 40), Version: "v1"}},
 		}})
 	}
-	return &storagepb.DatasetRowsUpserted{SourceNodeId: "node", SourceStoreId: "store", SourceSequence: 1, SpaceId: "space", DatasetId: "dataset", Rows: rows}
+	return &storagepb.DatasetRowsUpserted{NodeId: "node", StoreId: "store", Sequence: 1, SpaceId: "space", DatasetId: "dataset", Rows: rows}
 }
 
 // 发布器默认压缩：压缩发布的信封经 DecodeRaw 透明解压，与未压缩的解码结果一致；低于阈值的小信封保持原样。

@@ -51,7 +51,7 @@ func (c *Client) ReadDatasetChanges(ctx context.Context, spaceID, datasetID stri
 	}
 	req := &storagepb.ReadDatasetChangesReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID, FromHead: fromHead, Limit: uint32(max(limit, 0))}
 	if cursor != nil {
-		req.Cursor = &storagepb.DatasetChangeCursor{SourceNodeId: cursor.NodeID, SourceStoreId: cursor.StoreID, Sequence: cursor.Sequence}
+		req.Cursor = &storagepb.DatasetChangeCursor{NodeId: cursor.NodeID, StoreId: cursor.StoreID, Sequence: cursor.Sequence}
 	}
 	rsp, err := c.primary.ReadDatasetChanges(ctx, req)
 	if err != nil {
@@ -65,7 +65,7 @@ func (c *Client) ReadDatasetChanges(ctx context.Context, spaceID, datasetID stri
 	}
 	out := Changes{HasMore: rsp.GetHasMore(), Gap: rsp.GetGap()}
 	if next := rsp.GetNextCursor(); next != nil {
-		out.Next = ChangeCursor{NodeID: next.GetSourceNodeId(), StoreID: next.GetSourceStoreId(), Sequence: next.GetSequence()}
+		out.Next = ChangeCursor{NodeID: next.GetNodeId(), StoreID: next.GetStoreId(), Sequence: next.GetSequence()}
 	}
 	for _, change := range rsp.GetChanges() {
 		item := Change{Sequence: change.GetSequence(), DatasetID: change.GetDatasetId()}

@@ -218,7 +218,7 @@ func TestAppliedFenceUpdateIsAtomicWithActivationInheritance(t *testing.T) {
 	go func() {
 		defer close(done)
 		for seq := uint64(1); seq <= 20000; seq++ {
-			service.noteAppliedFromPayload("quant", &storageeventpb.DatasetRowsUpserted{DatasetId: "prices", SourceNodeId: "node-a", SourceStoreId: "store-a", SourceSequence: seq})
+			service.noteAppliedFromPayload("quant", &storageeventpb.DatasetRowsUpserted{DatasetId: "prices", NodeId: "node-a", StoreId: "store-a", Sequence: seq})
 		}
 	}()
 	for {

@@ -65,7 +65,7 @@ func TestChangeLogPagingAndHasMore(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		require.NoError(t, s.UpsertFields(ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
 	}
-	cursor := &pb.DatasetChangeCursor{SourceNodeId: "node-1", SourceStoreId: mustHead(t, s).GetSourceStoreId()}
+	cursor := &pb.DatasetChangeCursor{NodeId: "node-1", StoreId: mustHead(t, s).GetStoreId()}
 	var seen []uint64
 	for {
 		rsp, err := s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: cursor, Limit: 2})
@@ -96,7 +96,7 @@ func TestChangeLogGapDetection(t *testing.T) {
 		require.NoError(t, s.UpsertFields(ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
 	}
 	head := mustHead(t, s)
-	start := &pb.DatasetChangeCursor{SourceNodeId: head.GetSourceNodeId(), SourceStoreId: head.GetSourceStoreId(), Sequence: 0}
+	start := &pb.DatasetChangeCursor{NodeId: head.GetNodeId(), StoreId: head.GetStoreId(), Sequence: 0}
 
 	// 清理掉前两条（把 cutoff 放到未来，全部过期后再写新的）。
 	removed, err := s.CleanupChangeLog(ctx, time.Now().Add(time.Minute))
@@ -110,7 +110,7 @@ func TestChangeLogGapDetection(t *testing.T) {
 	require.True(t, rsp.GetGap())
 
 	// 游标正好在清理边界上：没有断档，读到之后的新变更。
-	edge := &pb.DatasetChangeCursor{SourceNodeId: head.GetSourceNodeId(), SourceStoreId: head.GetSourceStoreId(), Sequence: 4}
+	edge := &pb.DatasetChangeCursor{NodeId: head.GetNodeId(), StoreId: head.GetStoreId(), Sequence: 4}
 	rsp, err = s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: edge})
 	require.NoError(t, err)
 	require.False(t, rsp.GetGap())
@@ -118,11 +118,11 @@ func TestChangeLogGapDetection(t *testing.T) {
 	require.Equal(t, uint64(5), rsp.GetChanges()[0].GetSequence())
 
 	// 身份对不上（存储重建或节点更换）：断档。
-	rsp, err = s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: &pb.DatasetChangeCursor{SourceNodeId: "node-2", SourceStoreId: head.GetSourceStoreId(), Sequence: 5}})
+	rsp, err = s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: &pb.DatasetChangeCursor{NodeId: "node-2", StoreId: head.GetStoreId(), Sequence: 5}})
 	require.NoError(t, err)
 	require.True(t, rsp.GetGap())
 	// 比头部还新：断档。
-	rsp, err = s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: &pb.DatasetChangeCursor{SourceNodeId: "node-1", SourceStoreId: head.GetSourceStoreId(), Sequence: 99}})
+	rsp, err = s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: &pb.DatasetChangeCursor{NodeId: "node-1", StoreId: head.GetStoreId(), Sequence: 99}})
 	require.NoError(t, err)
 	require.True(t, rsp.GetGap())
 }
@@ -135,7 +135,7 @@ func TestChangeLogCleanupKeepsRecentEntries(t *testing.T) {
 	removed, err := s.CleanupChangeLog(ctx, time.Now().Add(-s.ChangeLogRetention()))
 	require.NoError(t, err)
 	require.Equal(t, 0, removed)
-	rsp, err := s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: &pb.DatasetChangeCursor{SourceNodeId: "node-1", SourceStoreId: mustHead(t, s).GetSourceStoreId()}})
+	rsp, err := s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: &pb.DatasetChangeCursor{NodeId: "node-1", StoreId: mustHead(t, s).GetStoreId()}})
 	require.NoError(t, err)
 	require.Len(t, rsp.GetChanges(), 1)
 }

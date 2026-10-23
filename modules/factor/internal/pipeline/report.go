@@ -120,6 +120,7 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 		}
 		stage = time.Now()
 		computation, err = r.Compute(ctx, plan, loaded)
+		loaded.View.Release() // 读租约只覆盖单次计算（设计 4.1）
 		outcome.StageDurations["compute"] = time.Since(stage)
 		if err != nil {
 			return Outcome{StageDurations: outcome.StageDurations}, err
