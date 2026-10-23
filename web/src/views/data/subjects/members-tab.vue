@@ -54,12 +54,12 @@
     </a-alert>
 
     <a-table
-      row-key="subject.subject_id"
+      row-key="row_key"
       v-model:selected-keys="selectedKeys"
       size="small"
       :bordered="{ cell: true }"
       :loading="loading"
-      :data="rows"
+      :data="tableRows"
       :pagination="pagination"
       :row-selection="{ type: 'checkbox', showCheckedAll: true }"
       :expandable="{ width: 44 }"
@@ -189,6 +189,9 @@ const props = defineProps<{ spaceId: string; initialTagId?: string }>();
 
 const tags = ref<Tag[]>([]);
 const rows = ref<TagMember[]>([]);
+// a-table 的 row-key 只认记录上的一级属性，不支持 "subject.subject_id" 这样的路径（所有行的 key 都成了 undefined，点一行就全选）。
+// 给每行补一个一级的 row_key，选中集合里存的仍是对象 ID。
+const tableRows = computed(() => rows.value.map(member => ({ ...member, row_key: member.subject?.subject_id ?? "" })));
 const loading = ref(false);
 const selectedTagId = ref(props.initialTagId || "");
 const statusFilter = ref("");
