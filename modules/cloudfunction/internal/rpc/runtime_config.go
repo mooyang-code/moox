@@ -57,62 +57,62 @@ var managedEnvironmentKeys = map[string]struct{}{
 	"MOOX_METRICS_EVENTBUS_CREDENTIAL_FILE": {},
 }
 
-func (s *Service) SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *pb.BatchUpdateNodeRuntimeConfigsReq) (*pb.SubmitNodeBatchRsp, error) {
+func (s *Service) SubmitUpdateFunctionInstanceRuntimeConfigs(ctx context.Context, req *pb.SubmitUpdateFunctionInstanceRuntimeConfigsReq) (*pb.SubmitFunctionJobRsp, error) {
 	spaceID, err := spacecontext.MustFromContext(ctx)
 	if err != nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if req == nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
+		return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
 	}
-	items := req.GetNodes()
-	if ret := validateNodeBatchSize(len(items), "nodes"); ret != nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: ret}, nil
+	items := req.GetInstances()
+	if ret := validateFunctionJobSize(len(items), "instances"); ret != nil {
+		return &pb.SubmitFunctionJobRsp{RetInfo: ret}, nil
 	}
-	jobID := "node-batch-" + uuid.NewString()
-	creates := make([]store.NodeBatchItemCreate, 0, len(items))
+	jobID := "function-job-" + uuid.NewString()
+	creates := make([]store.FunctionJobItemCreate, 0, len(items))
 	seen := make(map[string]struct{}, len(items))
 	for index, item := range items {
 		if ret := s.preflightRuntimeConfig(ctx, spaceID, item); ret != nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: ret}, nil
+			return &pb.SubmitFunctionJobRsp{RetInfo: ret}, nil
 		}
-		nodeID := strings.TrimSpace(item.GetNodeId())
-		if _, ok := seen[nodeID]; ok {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "nodes contains duplicate node_id")}, nil
+		instanceID := strings.TrimSpace(item.GetInstanceId())
+		if _, ok := seen[instanceID]; ok {
+			return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "instances contains duplicate instance_id")}, nil
 		}
-		seen[nodeID] = struct{}{}
-		lifecycleID, err := s.catalog.NodeLifecycleID(ctx, spaceID, nodeID)
+		seen[instanceID] = struct{}{}
+		lifecycleID, err := s.catalog.InstanceLifecycleID(ctx, spaceID, instanceID)
 		if err != nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
+			return &pb.SubmitFunctionJobRsp{RetInfo: retFromError(err)}, nil
 		}
 		itemID := fmt.Sprintf("%s-%03d", jobID, index)
 		item.LifecycleId = lifecycleID
 		item.OperationId = itemID
 		rawBytes, err := protojson.Marshal(item)
 		if err != nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid runtime config request")}, nil
+			return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid runtime config request")}, nil
 		}
-		creates = append(creates, store.NodeBatchItemCreate{ItemID: itemID, ItemIndex: index, NodeID: nodeID, RequestJSON: string(rawBytes)})
+		creates = append(creates, store.FunctionJobItemCreate{ItemID: itemID, ItemIndex: index, InstanceID: instanceID, RequestJSON: string(rawBytes)})
 	}
-	if err := s.catalog.CreateNodeBatch(ctx, store.NodeBatchCreate{SpaceID: spaceID, JobID: jobID, Operation: nodeBatchOperationRuntimeConfig, Items: creates}); err != nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
+	if err := s.catalog.CreateFunctionJob(ctx, store.FunctionJobCreate{SpaceID: spaceID, JobID: jobID, Operation: functionJobOperationRuntimeConfig, Items: creates}); err != nil {
+		return &pb.SubmitFunctionJobRsp{RetInfo: retFromError(err)}, nil
 	}
-	return &pb.SubmitNodeBatchRsp{RetInfo: retOK(), JobId: jobID, Operation: pb.NodeBatchOperation_NODE_BATCH_OPERATION_UPDATE_RUNTIME_CONFIGS, TotalCount: int32(len(creates))}, nil
+	return &pb.SubmitFunctionJobRsp{RetInfo: retOK(), JobId: jobID, Operation: pb.FunctionJobOperation_FUNCTION_JOB_OPERATION_UPDATE_RUNTIME_CONFIGS, TotalCount: int32(len(creates))}, nil
 }
 
-func (s *Service) preflightRuntimeConfig(ctx context.Context, spaceID string, item *pb.NodeRuntimeConfigPatch) *pb.RetInfo {
-	if item == nil || strings.TrimSpace(item.GetNodeId()) == "" {
-		return retErr(pb.ErrorCode_INVALID_PARAM, "node_id is required")
+func (s *Service) preflightRuntimeConfig(ctx context.Context, spaceID string, item *pb.FunctionInstanceRuntimeConfigPatch) *pb.RetInfo {
+	if item == nil || strings.TrimSpace(item.GetInstanceId()) == "" {
+		return retErr(pb.ErrorCode_INVALID_PARAM, "instance_id is required")
 	}
-	node, err := s.catalog.GetNode(ctx, spaceID, item.GetNodeId())
+	instance, err := s.catalog.GetInstance(ctx, spaceID, item.GetInstanceId())
 	if err != nil {
 		return retFromError(err)
 	}
-	if node == nil {
-		return retErr(pb.ErrorCode_NOT_FOUND, "node not found")
+	if instance == nil {
+		return retErr(pb.ErrorCode_NOT_FOUND, "instance not found")
 	}
-	if node.PackageID != "" {
-		pkg, packageErr := s.catalog.GetPackage(ctx, spaceID, node.PackageID)
+	if instance.PackageID != "" {
+		pkg, packageErr := s.catalog.GetPackage(ctx, spaceID, instance.PackageID)
 		if packageErr != nil {
 			return retFromError(packageErr)
 		}
@@ -120,8 +120,8 @@ func (s *Service) preflightRuntimeConfig(ctx context.Context, spaceID string, it
 			return ret
 		}
 	}
-	if node.NodeType != "scf-event" || node.TriggerType != "timer" {
-		return retErr(pb.ErrorCode_INVALID_PARAM, "runtime config patch requires scf-event timer node")
+	if instance.FunctionType != "scf-event" || instance.TriggerType != "timer" {
+		return retErr(pb.ErrorCode_INVALID_PARAM, "runtime config patch requires scf-event timer instance")
 	}
 	if strings.TrimSpace(item.GetTimerCron()) == "" {
 		return retErr(pb.ErrorCode_INVALID_PARAM, "timer_cron is required")
@@ -173,44 +173,44 @@ func isSupportedTimerCron(cron string) bool {
 	}
 }
 
-func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, item *pb.NodeRuntimeConfigPatch) (string, error) {
-	node, err := s.catalog.GetNode(ctx, spaceID, item.GetNodeId())
-	if err != nil || node == nil {
+func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, item *pb.FunctionInstanceRuntimeConfigPatch) (string, error) {
+	instance, err := s.catalog.GetInstance(ctx, spaceID, item.GetInstanceId())
+	if err != nil || instance == nil {
 		if err != nil {
 			return "", err
 		}
-		return "", fmt.Errorf("node not found: %s", item.GetNodeId())
+		return "", fmt.Errorf("instance not found: %s", item.GetInstanceId())
 	}
-	durable := isNodeBatchDurableOperation(ctx)
+	durable := isFunctionJobDurableOperation(ctx)
 	retainClaim := durable
 	if durable {
 		if strings.TrimSpace(item.GetLifecycleId()) == "" || strings.TrimSpace(item.GetOperationId()) == "" {
 			return "", fmt.Errorf("runtime config item lifecycle identity is missing; resubmit the update")
 		}
-		if node.LifecycleID != item.GetLifecycleId() {
-			return "", store.ErrNodeLifecycleMismatch
+		if instance.LifecycleID != item.GetLifecycleId() {
+			return "", store.ErrInstanceLifecycleMismatch
 		}
-		if err := s.catalog.ClaimNodeMutation(ctx, spaceID, node.NodeID, item.GetLifecycleId(), item.GetOperationId()); err != nil {
+		if err := s.catalog.ClaimInstanceMutation(ctx, spaceID, instance.InstanceID, item.GetLifecycleId(), item.GetOperationId()); err != nil {
 			return "", err
 		}
 		defer func() {
 			if !retainClaim {
-				_ = s.catalog.ReleaseNodeMutationClaim(context.WithoutCancel(ctx), spaceID, node.NodeID, item.GetLifecycleId(), item.GetOperationId())
+				_ = s.catalog.ReleaseInstanceMutationClaim(context.WithoutCancel(ctx), spaceID, instance.InstanceID, item.GetLifecycleId(), item.GetOperationId())
 			}
 		}()
 	}
-	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
+	account, err := s.catalog.GetAccount(ctx, instance.CloudAccountID)
 	if err != nil || account == nil {
 		if err != nil {
 			return "", err
 		}
-		return "", fmt.Errorf("cloud account unavailable for node %s", node.NodeID)
+		return "", fmt.Errorf("cloud account unavailable for instance %s", instance.InstanceID)
 	}
 	client, err := s.scfClient(ctx, *account)
 	if err != nil {
 		return "", err
 	}
-	ref := tencentscf.FunctionRef{Region: node.Region, FunctionName: firstString(node.FunctionName, node.NodeID), Namespace: firstString(node.Namespace, "default")}
+	ref := tencentscf.FunctionRef{Region: instance.Region, FunctionName: firstString(instance.FunctionName, instance.InstanceID), Namespace: firstString(instance.Namespace, "default")}
 	unlock := lockSCFFunction(ref)
 	defer unlock()
 	info, err := client.GetFunction(ctx, ref)
@@ -228,7 +228,7 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 	// 缺少日志上报配置的采集函数（例如日志服务开通之前创建的）在这次更新里补齐。
 	// 停用定时器的更新不顺带开通日志服务：停用必须能在任何情况下完成。
 	if item.GetTimerEnabled() {
-		needsEnvironmentUpdate = s.applyCLSEnvironment(ctx, *account, node, environment) || needsEnvironmentUpdate
+		needsEnvironmentUpdate = s.applyCLSEnvironment(ctx, *account, instance, environment) || needsEnvironmentUpdate
 	}
 	if item.GetTimerEnabled() {
 		if environment["MOOX_FETCH_TIMEOUT_SECONDS"] != strconv.Itoa(tencent.CollectorTimerTimeoutSeconds) {
@@ -246,7 +246,7 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 	mutationError := func(err error) error {
 		if err != nil && (providerMutationStarted || isAmbiguousSCFProviderOutcome(err)) {
 			retainClaim = true
-			return fmt.Errorf("%w: runtime config update for %s: %w", errNodeMutationReconciliationRequired, node.NodeID, err)
+			return fmt.Errorf("%w: runtime config update for %s: %w", errInstanceMutationReconciliationRequired, instance.InstanceID, err)
 		}
 		return err
 	}
@@ -291,13 +291,13 @@ func (s *Service) executeRuntimeConfigItem(ctx context.Context, spaceID string, 
 	if timeout > 0 {
 		metadata["timeout_seconds"] = timeout
 	}
-	if err := s.catalog.UpdateNodeRuntimeMetadata(ctx, spaceID, node.NodeID, metadata); err != nil {
+	if err := s.catalog.UpdateInstanceRuntimeMetadata(ctx, spaceID, instance.InstanceID, metadata); err != nil {
 		return "", mutationError(err)
 	}
 	if !durable {
 		retainClaim = false
 	}
-	return fmt.Sprintf("updated runtime config and timer for %s", node.NodeID), nil
+	return fmt.Sprintf("updated runtime config and timer for %s", instance.InstanceID), nil
 }
 
 func assignmentRuntimeMetadata(managed map[string]string) (map[string]any, error) {

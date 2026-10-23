@@ -61,7 +61,7 @@ func (s *Service) DeleteCloudAccount(ctx context.Context, req *pb.DeleteCloudAcc
 func (s *Service) ListCloudRegions(ctx context.Context, req *pb.ListCloudRegionsReq) (*pb.ListCloudRegionsRsp, error) {
 	regions := make([]*pb.CloudRegion, 0, len(tencent.SCFRegions()))
 	for _, region := range tencent.SCFRegions() {
-		regions = append(regions, &pb.CloudRegion{Code: region.Code, Name: region.Name, Tag: region.Tag, MaxNodes: 128, MaxNamespacesPerRegion: 32, MaxFunctionsPerNamespace: 1024})
+		regions = append(regions, &pb.CloudRegion{Code: region.Code, Name: region.Name, Tag: region.Tag, MaxInstances: 128, MaxNamespacesPerRegion: 32, MaxFunctionsPerNamespace: 1024})
 	}
 	return &pb.ListCloudRegionsRsp{RetInfo: retOK(), Regions: regions, Total: int64(len(regions))}, nil
 }

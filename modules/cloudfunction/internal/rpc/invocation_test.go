@@ -22,11 +22,11 @@ func TestInvokeFunction_ValidatesInput(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 
-	rsp, err = svc.InvokeFunction(context.Background(), &pb.InvokeFunctionReq{NodeId: "node-1"})
+	rsp, err = svc.InvokeFunction(context.Background(), &pb.InvokeFunctionReq{InstanceId: "instance-1"})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 
-	rsp, err = svc.InvokeFunction(ctx, &pb.InvokeFunctionReq{NodeId: "missing"})
+	rsp, err = svc.InvokeFunction(ctx, &pb.InvokeFunctionReq{InstanceId: "missing"})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_NOT_FOUND, rsp.GetRetInfo().GetCode())
 }
@@ -36,8 +36,8 @@ func TestInvokeFunction_WithEventData(t *testing.T) {
 	require.NoError(t, catalog.UpsertAccount(context.Background(), store.CloudAccount{
 		AccountID: "acct-1", Provider: "tencent", CredentialSecretID: "secret-1",
 	}))
-	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
-		SpaceID: "crypto", NodeID: "node-1", CloudAccountID: "acct-1", Region: "ap-guangzhou",
+	require.NoError(t, catalog.UpsertInstance(context.Background(), store.FunctionInstance{
+		SpaceID: "crypto", InstanceID: "instance-1", CloudAccountID: "acct-1", Region: "ap-guangzhou",
 	}))
 	svc := &Service{
 		catalog:            catalog,
@@ -48,7 +48,7 @@ func TestInvokeFunction_WithEventData(t *testing.T) {
 	require.NoError(t, err)
 
 	rsp, err := svc.InvokeFunction(ctx, &pb.InvokeFunctionReq{
-		NodeId: "node-1", EventData: event,
+		InstanceId: "instance-1", EventData: event,
 	})
 	require.NoError(t, err)
 	// Real SCF call is skipped; inner error is expected without network.

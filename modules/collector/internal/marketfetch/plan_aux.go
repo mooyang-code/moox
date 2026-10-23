@@ -88,7 +88,7 @@ func (r *PlanReconciler) waitAux(ctx context.Context, kind string, names []strin
 	return items, terminal, err
 }
 
-// auxJobWarnAge 是在途作业的告警年龄：CloudNode 批量作业含排队时间，且会重新领取需要对账的项恢复执行，
+// auxJobWarnAge 是在途作业的告警年龄：FunctionInstance 批量作业含排队时间，且会重新领取需要对账的项恢复执行，
 // 年龄不能证明作业已经结束，所以超龄只告警，只有确认到终态才解除互斥。
 const auxJobWarnAge = 20 * time.Minute
 

@@ -13,25 +13,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReplaceNodeBatchItemPublishFenceCASChangesOnlyFenceEnvelope(t *testing.T) {
+func TestReplaceFunctionJobItemPublishFenceCASChangesOnlyFenceEnvelope(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	request := `{"nodeId":"node-a","packageId":"pkg-new","lifecycleId":"generation-1","operationId":"item-1","environment":{"TOKEN":"secret"},"config":{"timeout":"60"},"collectorPublishLeaseId":"cli-lease","collectorPublishFencingToken":"7"}`
-	require.NoError(t, repo.CreateNodeBatch(ctx, NodeBatchCreate{
-		SpaceID: "crypto", JobID: "fence-cas", Operation: "deploy_nodes",
-		Items: []NodeBatchItemCreate{{ItemID: "item-1", ItemIndex: 0, NodeID: "node-a", RequestJSON: request}},
+	request := `{"instanceId":"instance-a","packageId":"pkg-new","lifecycleId":"generation-1","operationId":"item-1","environment":{"TOKEN":"secret"},"config":{"timeout":"60"},"collectorPublishLeaseId":"cli-lease","collectorPublishFencingToken":"7"}`
+	require.NoError(t, repo.CreateFunctionJob(ctx, FunctionJobCreate{
+		SpaceID: "crypto", JobID: "fence-cas", Operation: "deploy_instances",
+		Items: []FunctionJobItemCreate{{ItemID: "item-1", ItemIndex: 0, InstanceID: "instance-a", RequestJSON: request}},
 	}))
-	items, err := repo.TakePendingNodeBatchItems(ctx, 1)
+	items, err := repo.TakePendingFunctionJobItems(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 
-	updated, err := repo.ReplaceNodeBatchItemPublishFence(ctx, "crypto", "fence-cas", "item-1", "cli-lease", 7, "recovery-lease", 8)
+	updated, err := repo.ReplaceFunctionJobItemPublishFence(ctx, "crypto", "fence-cas", "item-1", "cli-lease", 7, "recovery-lease", 8)
 	require.NoError(t, err)
 	require.True(t, updated.PublishLeaseRecoveryOwned)
 	var before, after map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal([]byte(request), &before))
 	require.NoError(t, json.Unmarshal([]byte(updated.RequestJSON), &after))
-	assert.Equal(t, before["nodeId"], after["nodeId"])
+	assert.Equal(t, before["instanceId"], after["instanceId"])
 	assert.Equal(t, before["packageId"], after["packageId"])
 	assert.Equal(t, before["lifecycleId"], after["lifecycleId"])
 	assert.Equal(t, before["operationId"], after["operationId"])
@@ -40,26 +40,26 @@ func TestReplaceNodeBatchItemPublishFenceCASChangesOnlyFenceEnvelope(t *testing.
 	assert.JSONEq(t, `"recovery-lease"`, string(after["collectorPublishLeaseId"]))
 	assert.JSONEq(t, `"8"`, string(after["collectorPublishFencingToken"]))
 
-	_, err = repo.ReplaceNodeBatchItemPublishFence(ctx, "crypto", "fence-cas", "item-1", "cli-lease", 7, "another", 9)
+	_, err = repo.ReplaceFunctionJobItemPublishFence(ctx, "crypto", "fence-cas", "item-1", "cli-lease", 7, "another", 9)
 	require.ErrorContains(t, err, "fence changed")
 }
 
 func TestRecoveredPublishLeaseReleaseMarkerSurvivesUntilExactTerminalRelease(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	request := `{"nodeId":"node-a","lifecycleId":"generation-1","operationId":"item-1","collectorPublishLeaseId":"recovery-lease","collectorPublishFencingToken":"8"}`
-	require.NoError(t, repo.CreateNodeBatch(ctx, NodeBatchCreate{
-		SpaceID: "crypto", JobID: "lease-release", Operation: "deploy_nodes",
-		Items: []NodeBatchItemCreate{{ItemID: "item-1", ItemIndex: 0, NodeID: "node-a", RequestJSON: request}},
+	request := `{"instanceId":"instance-a","lifecycleId":"generation-1","operationId":"item-1","collectorPublishLeaseId":"recovery-lease","collectorPublishFencingToken":"8"}`
+	require.NoError(t, repo.CreateFunctionJob(ctx, FunctionJobCreate{
+		SpaceID: "crypto", JobID: "lease-release", Operation: "deploy_instances",
+		Items: []FunctionJobItemCreate{{ItemID: "item-1", ItemIndex: 0, InstanceID: "instance-a", RequestJSON: request}},
 	}))
-	items, err := repo.TakePendingNodeBatchItems(ctx, 1)
+	items, err := repo.TakePendingFunctionJobItems(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
-	_, err = repo.ReplaceNodeBatchItemPublishFence(ctx, "crypto", "lease-release", "item-1", "recovery-lease", 8, "recovery-lease-2", 9)
+	_, err = repo.ReplaceFunctionJobItemPublishFence(ctx, "crypto", "lease-release", "item-1", "recovery-lease", 8, "recovery-lease-2", 9)
 	require.NoError(t, err)
-	require.NoError(t, repo.CompleteNodeBatchItem(ctx, "crypto", "lease-release", "item-1", "done", nil))
+	require.NoError(t, repo.CompleteFunctionJobItem(ctx, "crypto", "lease-release", "item-1", "done", nil))
 
-	pending, err := repo.ListTerminalNodeBatchItemsForPublishLeaseRelease(ctx, 10)
+	pending, err := repo.ListTerminalFunctionJobItemsForPublishLeaseRelease(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
 	require.True(t, pending[0].PublishLeaseRecoveryOwned)
@@ -69,22 +69,22 @@ func TestRecoveredPublishLeaseReleaseMarkerSurvivesUntilExactTerminalRelease(t *
 	require.NoError(t, json.Unmarshal(envelope["collectorPublishFencingToken"], &tokenText))
 	token, err := strconv.ParseInt(tokenText, 10, 64)
 	require.NoError(t, err)
-	require.NoError(t, repo.MarkNodeBatchItemPublishLeaseReleased(ctx, "crypto", "lease-release", "item-1", "recovery-lease-2", token))
+	require.NoError(t, repo.MarkFunctionJobItemPublishLeaseReleased(ctx, "crypto", "lease-release", "item-1", "recovery-lease-2", token))
 
-	pending, err = repo.ListTerminalNodeBatchItemsForPublishLeaseRelease(ctx, 10)
+	pending, err = repo.ListTerminalFunctionJobItemsForPublishLeaseRelease(ctx, 10)
 	require.NoError(t, err)
 	assert.Empty(t, pending)
 }
 
-func TestCreateNodeBatchIsAtomic(t *testing.T) {
+func TestCreateFunctionJobIsAtomic(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
 
-	err := repo.CreateNodeBatch(ctx, NodeBatchCreate{
+	err := repo.CreateFunctionJob(ctx, FunctionJobCreate{
 		SpaceID:   "crypto",
 		JobID:     "job-atomic",
-		Operation: "create_nodes",
-		Items: []NodeBatchItemCreate{
+		Operation: "create_instances",
+		Items: []FunctionJobItemCreate{
 			{ItemID: "item-0", ItemIndex: 0, RequestJSON: `{"index":0}`},
 			{ItemID: "item-1", ItemIndex: 0, RequestJSON: `{"index":1}`},
 		},
@@ -92,55 +92,55 @@ func TestCreateNodeBatchIsAtomic(t *testing.T) {
 	require.Error(t, err)
 
 	var jobCount, itemCount int64
-	require.NoError(t, repo.db.Model(&NodeBatch{}).Where("c_job_id = ?", "job-atomic").Count(&jobCount).Error)
-	require.NoError(t, repo.db.Model(&NodeBatchItem{}).Where("c_job_id = ?", "job-atomic").Count(&itemCount).Error)
+	require.NoError(t, repo.db.Model(&FunctionJob{}).Where("c_job_id = ?", "job-atomic").Count(&jobCount).Error)
+	require.NoError(t, repo.db.Model(&FunctionJobItem{}).Where("c_job_id = ?", "job-atomic").Count(&itemCount).Error)
 	assert.Zero(t, jobCount)
 	assert.Zero(t, itemCount)
 }
 
-func TestCreateNodeBatchRejectsStableNodeWhilePreviousCreateIsPending(t *testing.T) {
+func TestCreateFunctionJobRejectsStableInstanceWhilePreviousCreateIsPending(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	require.NoError(t, repo.CreateNodeBatch(ctx, NodeBatchCreate{
-		SpaceID: "crypto", JobID: "job-first", Operation: "create_nodes",
-		Items: []NodeBatchItemCreate{{ItemID: "item-first", ItemIndex: 0, NodeID: "stable-node", RequestJSON: `{}`}},
+	require.NoError(t, repo.CreateFunctionJob(ctx, FunctionJobCreate{
+		SpaceID: "crypto", JobID: "job-first", Operation: "create_instances",
+		Items: []FunctionJobItemCreate{{ItemID: "item-first", ItemIndex: 0, InstanceID: "stable-instance", RequestJSON: `{}`}},
 	}))
-	err := repo.CreateNodeBatch(ctx, NodeBatchCreate{
-		SpaceID: "crypto", JobID: "job-second", Operation: "create_nodes",
-		Items: []NodeBatchItemCreate{{ItemID: "item-second", ItemIndex: 0, NodeID: "stable-node", RequestJSON: `{}`}},
+	err := repo.CreateFunctionJob(ctx, FunctionJobCreate{
+		SpaceID: "crypto", JobID: "job-second", Operation: "create_instances",
+		Items: []FunctionJobItemCreate{{ItemID: "item-second", ItemIndex: 0, InstanceID: "stable-instance", RequestJSON: `{}`}},
 	})
 	require.ErrorContains(t, err, "already has a pending create batch")
 }
 
-func TestTakePendingNodeBatchItemsMarksWholeBatchRunning(t *testing.T) {
+func TestTakePendingFunctionJobItemsMarksWholeBatchRunning(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	createNodeBatchFixture(t, repo, "crypto", "job-running", 3)
+	createFunctionJobFixture(t, repo, "crypto", "job-running", 3)
 
-	items, err := repo.TakePendingNodeBatchItems(ctx, 3)
+	items, err := repo.TakePendingFunctionJobItems(ctx, 3)
 	require.NoError(t, err)
 	require.Len(t, items, 3)
 	for _, item := range items {
-		assert.Equal(t, NodeBatchRunning, item.Status)
+		assert.Equal(t, FunctionJobRunning, item.Status)
 		assert.NotNil(t, item.StartedAt)
 	}
 
-	aggregate, err := repo.GetNodeBatch(ctx, "crypto", "job-running")
+	aggregate, err := repo.GetFunctionJob(ctx, "crypto", "job-running")
 	require.NoError(t, err)
 	require.NotNil(t, aggregate)
-	assert.Equal(t, NodeBatchRunning, aggregate.Job.Status)
+	assert.Equal(t, FunctionJobRunning, aggregate.Job.Status)
 	assert.Equal(t, 3, aggregate.RunningCount)
 }
 
-func TestTakePendingNodeBatchItemsReturnsStableNonOverlappingBatches(t *testing.T) {
+func TestTakePendingFunctionJobItemsReturnsStableNonOverlappingBatches(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	createNodeBatchFixture(t, repo, "crypto", "job-batches", 10)
+	createFunctionJobFixture(t, repo, "crypto", "job-batches", 10)
 
 	var gotSizes []int
 	var gotIDs []string
 	for range 4 {
-		items, err := repo.TakePendingNodeBatchItems(ctx, 3)
+		items, err := repo.TakePendingFunctionJobItems(ctx, 3)
 		require.NoError(t, err)
 		gotSizes = append(gotSizes, len(items))
 		for i, item := range items {
@@ -159,253 +159,253 @@ func TestTakePendingNodeBatchItemsReturnsStableNonOverlappingBatches(t *testing.
 		"job-batches-item-09",
 	}, gotIDs)
 
-	empty, err := repo.TakePendingNodeBatchItems(ctx, 3)
+	empty, err := repo.TakePendingFunctionJobItems(ctx, 3)
 	require.NoError(t, err)
 	assert.Empty(t, empty)
 }
 
-func TestTakePendingNodeBatchItemsRejectsNonPositiveLimit(t *testing.T) {
+func TestTakePendingFunctionJobItemsRejectsNonPositiveLimit(t *testing.T) {
 	repo := newTestCatalog(t)
-	_, err := repo.TakePendingNodeBatchItems(context.Background(), 0)
+	_, err := repo.TakePendingFunctionJobItems(context.Background(), 0)
 	require.Error(t, err)
 }
 
-func TestCompleteNodeBatchItemBuildsSuccessStatus(t *testing.T) {
+func TestCompleteFunctionJobItemBuildsSuccessStatus(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	createNodeBatchFixture(t, repo, "crypto", "job-success", 2)
-	items, err := repo.TakePendingNodeBatchItems(ctx, 2)
+	createFunctionJobFixture(t, repo, "crypto", "job-success", 2)
+	items, err := repo.TakePendingFunctionJobItems(ctx, 2)
 	require.NoError(t, err)
 
-	require.NoError(t, repo.CompleteNodeBatchItem(ctx, "crypto", "job-success", items[0].ItemID, "created node 0", nil))
-	require.NoError(t, repo.CompleteNodeBatchItem(ctx, "crypto", "job-success", items[1].ItemID, "created node 1", nil))
+	require.NoError(t, repo.CompleteFunctionJobItem(ctx, "crypto", "job-success", items[0].ItemID, "created instance 0", nil))
+	require.NoError(t, repo.CompleteFunctionJobItem(ctx, "crypto", "job-success", items[1].ItemID, "created instance 1", nil))
 
-	aggregate, err := repo.GetNodeBatch(ctx, "crypto", "job-success")
+	aggregate, err := repo.GetFunctionJob(ctx, "crypto", "job-success")
 	require.NoError(t, err)
 	require.NotNil(t, aggregate)
-	assert.Equal(t, NodeBatchSuccess, aggregate.Job.Status)
+	assert.Equal(t, FunctionJobSuccess, aggregate.Job.Status)
 	assert.Equal(t, 2, aggregate.SuccessCount)
 	assert.NotNil(t, aggregate.Job.CompletedAt)
-	assert.Equal(t, "created node 0", aggregate.Items[0].ResultSummary)
+	assert.Equal(t, "created instance 0", aggregate.Items[0].ResultSummary)
 }
 
-func TestCompleteNodeBatchItemBuildsPartialStatus(t *testing.T) {
+func TestCompleteFunctionJobItemBuildsPartialStatus(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	createNodeBatchFixture(t, repo, "crypto", "job-partial", 2)
-	items, err := repo.TakePendingNodeBatchItems(ctx, 2)
+	createFunctionJobFixture(t, repo, "crypto", "job-partial", 2)
+	items, err := repo.TakePendingFunctionJobItems(ctx, 2)
 	require.NoError(t, err)
 
-	require.NoError(t, repo.CompleteNodeBatchItem(ctx, "crypto", "job-partial", items[0].ItemID, "created", nil))
-	require.NoError(t, repo.CompleteNodeBatchItem(ctx, "crypto", "job-partial", items[1].ItemID, "", errors.New("SCF rejected request")))
+	require.NoError(t, repo.CompleteFunctionJobItem(ctx, "crypto", "job-partial", items[0].ItemID, "created", nil))
+	require.NoError(t, repo.CompleteFunctionJobItem(ctx, "crypto", "job-partial", items[1].ItemID, "", errors.New("SCF rejected request")))
 
-	aggregate, err := repo.GetNodeBatch(ctx, "crypto", "job-partial")
+	aggregate, err := repo.GetFunctionJob(ctx, "crypto", "job-partial")
 	require.NoError(t, err)
 	require.NotNil(t, aggregate)
-	assert.Equal(t, NodeBatchPartial, aggregate.Job.Status)
+	assert.Equal(t, FunctionJobPartial, aggregate.Job.Status)
 	assert.Equal(t, 1, aggregate.SuccessCount)
 	assert.Equal(t, 1, aggregate.FailedCount)
 	assert.NotNil(t, aggregate.Job.CompletedAt)
 	assert.Equal(t, "SCF rejected request", aggregate.Items[1].ErrorMessage)
 }
 
-func TestRequeueInterruptedNodeBatchItemsReturnsRunningItemsToPending(t *testing.T) {
+func TestRequeueInterruptedFunctionJobItemsReturnsRunningItemsToPending(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	createNodeBatchFixture(t, repo, "crypto", "job-requeue", 3)
-	items, err := repo.TakePendingNodeBatchItems(ctx, 2)
+	createFunctionJobFixture(t, repo, "crypto", "job-requeue", 3)
+	items, err := repo.TakePendingFunctionJobItems(ctx, 2)
 	require.NoError(t, err)
-	require.NoError(t, repo.CompleteNodeBatchItem(ctx, "crypto", "job-requeue", items[0].ItemID, "done", nil))
+	require.NoError(t, repo.CompleteFunctionJobItem(ctx, "crypto", "job-requeue", items[0].ItemID, "done", nil))
 
-	count, err := repo.RequeueInterruptedNodeBatchItems(ctx)
+	count, err := repo.RequeueInterruptedFunctionJobItems(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), count)
 
-	aggregate, err := repo.GetNodeBatch(ctx, "crypto", "job-requeue")
+	aggregate, err := repo.GetFunctionJob(ctx, "crypto", "job-requeue")
 	require.NoError(t, err)
 	require.NotNil(t, aggregate)
-	assert.Equal(t, NodeBatchPending, aggregate.Job.Status)
+	assert.Equal(t, FunctionJobPending, aggregate.Job.Status)
 	assert.Equal(t, 2, aggregate.PendingCount)
 	assert.Equal(t, 1, aggregate.SuccessCount)
 	assert.Zero(t, aggregate.RunningCount)
 	for _, item := range aggregate.Items {
-		if item.Status == NodeBatchPending {
+		if item.Status == FunctionJobPending {
 			assert.Nil(t, item.StartedAt)
 		}
 	}
 }
 
-func TestDefinitiveNodeMutationFailureReleasesClaimForNextOperation(t *testing.T) {
+func TestDefinitiveInstanceMutationFailureReleasesClaimForNextOperation(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	item, node := createNodeMutationBatchFixture(t, repo, "job-definitive")
-	require.NoError(t, repo.ClaimNodeMutation(ctx, node.SpaceID, node.NodeID, node.LifecycleID, item.ItemID))
-	taken, err := repo.TakePendingNodeBatchItems(ctx, 1)
+	item, instance := createInstanceMutationBatchFixture(t, repo, "job-definitive")
+	require.NoError(t, repo.ClaimInstanceMutation(ctx, instance.SpaceID, instance.InstanceID, instance.LifecycleID, item.ItemID))
+	taken, err := repo.TakePendingFunctionJobItems(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, taken, 1)
 
-	require.NoError(t, repo.CompleteNodeBatchItem(ctx, item.SpaceID, item.JobID, item.ItemID, "", errors.New("permission denied before provider mutation")))
-	aggregate, err := repo.GetNodeBatch(ctx, item.SpaceID, item.JobID)
+	require.NoError(t, repo.CompleteFunctionJobItem(ctx, item.SpaceID, item.JobID, item.ItemID, "", errors.New("permission denied before provider mutation")))
+	aggregate, err := repo.GetFunctionJob(ctx, item.SpaceID, item.JobID)
 	require.NoError(t, err)
 	require.NotNil(t, aggregate)
-	assert.Equal(t, NodeBatchFailed, aggregate.Items[0].Status)
-	require.NoError(t, repo.ClaimNodeMutation(ctx, node.SpaceID, node.NodeID, node.LifecycleID, "next-operation"))
+	assert.Equal(t, FunctionJobFailed, aggregate.Items[0].Status)
+	require.NoError(t, repo.ClaimInstanceMutation(ctx, instance.SpaceID, instance.InstanceID, instance.LifecycleID, "next-operation"))
 }
 
-func TestInterruptedNodeMutationResumesSameOperationAndKeepsClaim(t *testing.T) {
+func TestInterruptedInstanceMutationResumesSameOperationAndKeepsClaim(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	item, node := createNodeMutationBatchFixture(t, repo, "job-crash-resume")
-	require.NoError(t, repo.ClaimNodeMutation(ctx, node.SpaceID, node.NodeID, node.LifecycleID, item.ItemID))
+	item, instance := createInstanceMutationBatchFixture(t, repo, "job-crash-resume")
+	require.NoError(t, repo.ClaimInstanceMutation(ctx, instance.SpaceID, instance.InstanceID, instance.LifecycleID, item.ItemID))
 
-	firstTake, err := repo.TakePendingNodeBatchItems(ctx, 1)
+	firstTake, err := repo.TakePendingFunctionJobItems(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, firstTake, 1)
 	assert.True(t, firstTake[0].ResumeClaim)
-	count, err := repo.RequeueInterruptedNodeBatchItems(ctx)
+	count, err := repo.RequeueInterruptedFunctionJobItems(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), count)
-	var queued NodeBatchItem
+	var queued FunctionJobItem
 	require.NoError(t, repo.db.Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", item.SpaceID, item.JobID, item.ItemID).First(&queued).Error)
-	assert.Equal(t, NodeBatchReconciliationRequired, queued.Status)
-	require.NoError(t, repo.db.Model(&NodeBatchItem{}).
+	assert.Equal(t, FunctionJobReconciliationRequired, queued.Status)
+	require.NoError(t, repo.db.Model(&FunctionJobItem{}).
 		Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", item.SpaceID, item.JobID, item.ItemID).
-		Update("c_mtime", time.Now().UTC().Add(-nodeBatchReconciliationRetryDelay-time.Second)).Error)
+		Update("c_mtime", time.Now().UTC().Add(-functionJobReconciliationRetryDelay-time.Second)).Error)
 
-	resumed, err := repo.TakePendingNodeBatchItems(ctx, 1)
+	resumed, err := repo.TakePendingFunctionJobItems(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, resumed, 1)
 	assert.Equal(t, item.ItemID, resumed[0].ItemID)
 	assert.True(t, resumed[0].ResumeClaim)
-	require.NoError(t, repo.ClaimNodeMutation(ctx, node.SpaceID, node.NodeID, node.LifecycleID, item.ItemID))
-	require.ErrorIs(t, repo.ClaimNodeMutation(ctx, node.SpaceID, node.NodeID, node.LifecycleID, "new-operation"), ErrNodeMutationClaimed)
+	require.NoError(t, repo.ClaimInstanceMutation(ctx, instance.SpaceID, instance.InstanceID, instance.LifecycleID, item.ItemID))
+	require.ErrorIs(t, repo.ClaimInstanceMutation(ctx, instance.SpaceID, instance.InstanceID, instance.LifecycleID, "new-operation"), ErrInstanceMutationClaimed)
 }
 
-func TestAmbiguousNodeMutationRemainsFencedUntilSameOperationReconciles(t *testing.T) {
+func TestAmbiguousInstanceMutationRemainsFencedUntilSameOperationReconciles(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	item, node := createNodeMutationBatchFixture(t, repo, "job-ambiguous")
-	taken, err := repo.TakePendingNodeBatchItems(ctx, 1)
+	item, instance := createInstanceMutationBatchFixture(t, repo, "job-ambiguous")
+	taken, err := repo.TakePendingFunctionJobItems(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, taken, 1)
-	require.NoError(t, repo.ClaimNodeMutation(ctx, node.SpaceID, node.NodeID, node.LifecycleID, item.ItemID))
-	require.NoError(t, repo.RequireNodeBatchItemReconciliation(ctx, item.SpaceID, item.JobID, item.ItemID, "provider outcome is ambiguous"))
-	require.ErrorIs(t, repo.ClaimNodeMutation(ctx, node.SpaceID, node.NodeID, node.LifecycleID, "new-operation"), ErrNodeMutationClaimed)
+	require.NoError(t, repo.ClaimInstanceMutation(ctx, instance.SpaceID, instance.InstanceID, instance.LifecycleID, item.ItemID))
+	require.NoError(t, repo.RequireFunctionJobItemReconciliation(ctx, item.SpaceID, item.JobID, item.ItemID, "provider outcome is ambiguous"))
+	require.ErrorIs(t, repo.ClaimInstanceMutation(ctx, instance.SpaceID, instance.InstanceID, instance.LifecycleID, "new-operation"), ErrInstanceMutationClaimed)
 
-	var stored NodeBatchItem
+	var stored FunctionJobItem
 	require.NoError(t, repo.db.Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", item.SpaceID, item.JobID, item.ItemID).First(&stored).Error)
-	assert.Equal(t, NodeBatchReconciliationRequired, stored.Status)
+	assert.Equal(t, FunctionJobReconciliationRequired, stored.Status)
 	assert.Nil(t, stored.CompletedAt)
 
-	require.NoError(t, repo.db.Model(&NodeBatchItem{}).
+	require.NoError(t, repo.db.Model(&FunctionJobItem{}).
 		Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", item.SpaceID, item.JobID, item.ItemID).
-		Update("c_mtime", time.Now().UTC().Add(-nodeBatchReconciliationRetryDelay-time.Second)).Error)
-	resumed, err := repo.TakePendingNodeBatchItems(ctx, 1)
+		Update("c_mtime", time.Now().UTC().Add(-functionJobReconciliationRetryDelay-time.Second)).Error)
+	resumed, err := repo.TakePendingFunctionJobItems(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, resumed, 1)
 	assert.True(t, resumed[0].ResumeClaim)
-	require.NoError(t, repo.ClaimNodeMutation(ctx, node.SpaceID, node.NodeID, node.LifecycleID, item.ItemID))
-	require.NoError(t, repo.UpdateNodeDeployment(ctx, node.SpaceID, node.NodeID, "pkg-next", "v2", nil, nil, false, node.LifecycleID, item.ItemID))
-	require.NoError(t, repo.CompleteNodeBatchItem(ctx, item.SpaceID, item.JobID, item.ItemID, "reconciled", nil))
-	require.NoError(t, repo.ClaimNodeMutation(ctx, node.SpaceID, node.NodeID, node.LifecycleID, "new-operation"))
+	require.NoError(t, repo.ClaimInstanceMutation(ctx, instance.SpaceID, instance.InstanceID, instance.LifecycleID, item.ItemID))
+	require.NoError(t, repo.UpdateInstanceDeployment(ctx, instance.SpaceID, instance.InstanceID, "pkg-next", "v2", nil, nil, false, instance.LifecycleID, item.ItemID))
+	require.NoError(t, repo.CompleteFunctionJobItem(ctx, item.SpaceID, item.JobID, item.ItemID, "reconciled", nil))
+	require.NoError(t, repo.ClaimInstanceMutation(ctx, instance.SpaceID, instance.InstanceID, instance.LifecycleID, "new-operation"))
 }
 
-func TestDeletedNodeGenerationRemainsFencedUntilBatchItemCompletes(t *testing.T) {
+func TestDeletedInstanceGenerationRemainsFencedUntilBatchItemCompletes(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	item, node := createNodeMutationBatchFixture(t, repo, "job-delete-commit-gap", "delete_nodes")
-	taken, err := repo.TakePendingNodeBatchItems(ctx, 1)
+	item, instance := createInstanceMutationBatchFixture(t, repo, "job-delete-commit-gap", "delete_instances")
+	taken, err := repo.TakePendingFunctionJobItems(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, taken, 1)
-	require.NoError(t, repo.ClaimNodeDelete(ctx, node.SpaceID, node.NodeID, node.LifecycleID, item.ItemID))
-	require.NoError(t, repo.CompleteNodeDelete(ctx, node.SpaceID, node.NodeID, node.LifecycleID, item.ItemID))
+	require.NoError(t, repo.ClaimInstanceDelete(ctx, instance.SpaceID, instance.InstanceID, instance.LifecycleID, item.ItemID))
+	require.NoError(t, repo.CompleteInstanceDelete(ctx, instance.SpaceID, instance.InstanceID, instance.LifecycleID, item.ItemID))
 
-	tombstone, err := repo.GetNodeIncludingDeleted(ctx, node.SpaceID, node.NodeID)
+	tombstone, err := repo.GetInstanceIncludingDeleted(ctx, instance.SpaceID, instance.InstanceID)
 	require.NoError(t, err)
 	require.NotNil(t, tombstone)
 	assert.True(t, tombstone.IsDeleted)
 	assert.Equal(t, item.ItemID, tombstone.LifecycleOperationID)
-	require.ErrorIs(t, repo.UpsertNode(ctx, CloudNode{SpaceID: node.SpaceID, NodeID: node.NodeID, PackageID: "new-package"}), ErrNodeDeleteClaimed)
+	require.ErrorIs(t, repo.UpsertInstance(ctx, FunctionInstance{SpaceID: instance.SpaceID, InstanceID: instance.InstanceID, PackageID: "new-package"}), ErrInstanceDeleteClaimed)
 
-	count, err := repo.RequeueInterruptedNodeBatchItems(ctx)
+	count, err := repo.RequeueInterruptedFunctionJobItems(ctx)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, count)
-	require.NoError(t, repo.db.Model(&NodeBatchItem{}).
+	require.NoError(t, repo.db.Model(&FunctionJobItem{}).
 		Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", item.SpaceID, item.JobID, item.ItemID).
-		Update("c_mtime", time.Now().UTC().Add(-nodeBatchReconciliationRetryDelay-time.Second)).Error)
-	resumed, err := repo.TakePendingNodeBatchItems(ctx, 1)
+		Update("c_mtime", time.Now().UTC().Add(-functionJobReconciliationRetryDelay-time.Second)).Error)
+	resumed, err := repo.TakePendingFunctionJobItems(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, resumed, 1)
 	assert.True(t, resumed[0].ResumeClaim)
-	require.NoError(t, repo.CompleteNodeBatchItem(ctx, item.SpaceID, item.JobID, item.ItemID, "deleted", nil))
-	require.NoError(t, repo.UpsertNode(ctx, CloudNode{SpaceID: node.SpaceID, NodeID: node.NodeID, PackageID: "new-package"}))
-	current, err := repo.GetNode(ctx, node.SpaceID, node.NodeID)
+	require.NoError(t, repo.CompleteFunctionJobItem(ctx, item.SpaceID, item.JobID, item.ItemID, "deleted", nil))
+	require.NoError(t, repo.UpsertInstance(ctx, FunctionInstance{SpaceID: instance.SpaceID, InstanceID: instance.InstanceID, PackageID: "new-package"}))
+	current, err := repo.GetInstance(ctx, instance.SpaceID, instance.InstanceID)
 	require.NoError(t, err)
 	require.NotNil(t, current)
-	assert.NotEqual(t, node.LifecycleID, current.LifecycleID)
+	assert.NotEqual(t, instance.LifecycleID, current.LifecycleID)
 }
 
-func createNodeMutationBatchFixture(t *testing.T, repo *CatalogRepository, jobID string, operation ...string) (NodeBatchItem, CloudNode) {
+func createInstanceMutationBatchFixture(t *testing.T, repo *CatalogRepository, jobID string, operation ...string) (FunctionJobItem, FunctionInstance) {
 	t.Helper()
 	ctx := context.Background()
-	batchOperation := "deploy_nodes"
+	batchOperation := "deploy_instances"
 	if len(operation) > 0 {
 		batchOperation = operation[0]
 	}
-	node := CloudNode{SpaceID: "crypto", NodeID: jobID + "-node", PackageID: "pkg-old"}
-	require.NoError(t, repo.UpsertNode(ctx, node))
-	storedNode, err := repo.GetNode(ctx, node.SpaceID, node.NodeID)
+	instance := FunctionInstance{SpaceID: "crypto", InstanceID: jobID + "-instance", PackageID: "pkg-old"}
+	require.NoError(t, repo.UpsertInstance(ctx, instance))
+	storedInstance, err := repo.GetInstance(ctx, instance.SpaceID, instance.InstanceID)
 	require.NoError(t, err)
-	require.NotNil(t, storedNode)
+	require.NotNil(t, storedInstance)
 	itemID := jobID + "-item-00"
-	request := fmt.Sprintf(`{"lifecycleId":%q,"operationId":%q}`, storedNode.LifecycleID, itemID)
-	require.NoError(t, repo.CreateNodeBatch(ctx, NodeBatchCreate{
-		SpaceID:   storedNode.SpaceID,
+	request := fmt.Sprintf(`{"lifecycleId":%q,"operationId":%q}`, storedInstance.LifecycleID, itemID)
+	require.NoError(t, repo.CreateFunctionJob(ctx, FunctionJobCreate{
+		SpaceID:   storedInstance.SpaceID,
 		JobID:     jobID,
 		Operation: batchOperation,
-		Items:     []NodeBatchItemCreate{{ItemID: itemID, ItemIndex: 0, NodeID: storedNode.NodeID, RequestJSON: request}},
+		Items:     []FunctionJobItemCreate{{ItemID: itemID, ItemIndex: 0, InstanceID: storedInstance.InstanceID, RequestJSON: request}},
 	}))
-	return NodeBatchItem{SpaceID: storedNode.SpaceID, JobID: jobID, ItemID: itemID, NodeID: storedNode.NodeID}, *storedNode
+	return FunctionJobItem{SpaceID: storedInstance.SpaceID, JobID: jobID, ItemID: itemID, InstanceID: storedInstance.InstanceID}, *storedInstance
 }
 
-func TestGetNodeBatchIsSpaceScoped(t *testing.T) {
+func TestGetFunctionJobIsSpaceScoped(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	createNodeBatchFixture(t, repo, "crypto", "same-job-id", 1)
-	createNodeBatchFixture(t, repo, "stocks", "same-job-id", 2)
+	createFunctionJobFixture(t, repo, "crypto", "same-job-id", 1)
+	createFunctionJobFixture(t, repo, "stocks", "same-job-id", 2)
 
-	crypto, err := repo.GetNodeBatch(ctx, "crypto", "same-job-id")
+	crypto, err := repo.GetFunctionJob(ctx, "crypto", "same-job-id")
 	require.NoError(t, err)
 	require.NotNil(t, crypto)
 	assert.Equal(t, 1, crypto.Job.TotalCount)
 	assert.Len(t, crypto.Items, 1)
 
-	stocks, err := repo.GetNodeBatch(ctx, "stocks", "same-job-id")
+	stocks, err := repo.GetFunctionJob(ctx, "stocks", "same-job-id")
 	require.NoError(t, err)
 	require.NotNil(t, stocks)
 	assert.Equal(t, 2, stocks.Job.TotalCount)
 	assert.Len(t, stocks.Items, 2)
 
-	missing, err := repo.GetNodeBatch(ctx, "forex", "same-job-id")
+	missing, err := repo.GetFunctionJob(ctx, "forex", "same-job-id")
 	require.NoError(t, err)
 	assert.Nil(t, missing)
 }
 
-func createNodeBatchFixture(t *testing.T, repo *CatalogRepository, spaceID, jobID string, count int) {
+func createFunctionJobFixture(t *testing.T, repo *CatalogRepository, spaceID, jobID string, count int) {
 	t.Helper()
-	items := make([]NodeBatchItemCreate, 0, count)
+	items := make([]FunctionJobItemCreate, 0, count)
 	for i := range count {
-		items = append(items, NodeBatchItemCreate{
+		items = append(items, FunctionJobItemCreate{
 			ItemID:      fmt.Sprintf("%s-item-%02d", jobID, i),
 			ItemIndex:   i,
-			NodeID:      fmt.Sprintf("node-%02d", i),
+			InstanceID:  fmt.Sprintf("instance-%02d", i),
 			RequestJSON: fmt.Sprintf(`{"index":%d}`, i),
 		})
 	}
-	require.NoError(t, repo.CreateNodeBatch(context.Background(), NodeBatchCreate{
+	require.NoError(t, repo.CreateFunctionJob(context.Background(), FunctionJobCreate{
 		SpaceID:   spaceID,
 		JobID:     jobID,
-		Operation: "create_nodes",
+		Operation: "create_instances",
 		Items:     items,
 	}))
 }

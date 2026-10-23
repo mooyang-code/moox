@@ -31,7 +31,7 @@ func TestRetFromError_ShouldMapKnownErrors(t *testing.T) {
 		code pb.ErrorCode
 		msg  string
 	}{
-		{store.ErrPollingNodeNotFound, pb.ErrorCode_NOT_FOUND, "cloud node not found"},
+		{store.ErrPollingInstanceNotFound, pb.ErrorCode_NOT_FOUND, "cloud instance not found"},
 		{gorm.ErrRecordNotFound, pb.ErrorCode_NOT_FOUND, "resource not found"},
 		{errors.New("boom"), pb.ErrorCode_INNER_ERR, "internal error"},
 	}
@@ -43,7 +43,7 @@ func TestRetFromError_ShouldMapKnownErrors(t *testing.T) {
 }
 
 func TestNew_ShouldApplyOptions(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "cloudnode.db")
+	dbPath := filepath.Join(t.TempDir(), "cloudfunction.db")
 	mgr, err := store.Open(&config.DatabaseConfig{Path: dbPath})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mgr.Close() })

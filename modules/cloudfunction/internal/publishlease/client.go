@@ -27,7 +27,7 @@ type Validator interface {
 	Validate(context.Context, string, string, int64) error
 }
 
-// Client borrows CloudNode's process gateway. Mutations are sent once.
+// Client borrows FunctionInstance's process gateway. Mutations are sent once.
 type Client struct{ gateway gatewayclient.Invoker }
 
 func New(gateway gatewayclient.Invoker) *Client { return &Client{gateway: gateway} }

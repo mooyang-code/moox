@@ -34,8 +34,8 @@ describe("page toolbar cleanup contract", () => {
 
   it("removes refresh and reset controls reviewed beside create or query actions", () => {
     const forbiddenToolbarMarkers: Record<string, string[]> = {
-      "collector/cloud-node/cloud-node.vue": ['@click="reset"'],
-      "collector/cloud-node/function-package-manage.vue": ['@click="resetSearch"'],
+      "collector/cloud-function/function-instance.vue": ['@click="reset"'],
+      "collector/cloud-function/function-package-manage.vue": ['@click="resetSearch"'],
       "collector/collection-tasks/collection-tasks.vue": ['@click="reset"'],
       "container/ssh-hosts/ssh-hosts.vue": ['@click="reset"'],
       "data/subjects/index.vue": ['<a-button :disabled="!selectedSpaceId" @click="load">', '<a-button @click="loadSymbols">'],

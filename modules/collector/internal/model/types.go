@@ -29,7 +29,7 @@ type CloudFunctionEvent struct {
 	Source      string `json:"source,omitempty"`
 }
 
-// Response is the function response returned to CloudNode.
+// Response is the function response returned to FunctionInstance.
 type Response struct {
 	Success   bool        `json:"success"`
 	Message   string      `json:"message,omitempty"`

@@ -9,9 +9,9 @@ server:
     - masking
     - opentelemetry
     - prometheus
-  # CloudNode SCF inventory scans may inspect many functions across regions.
+  # FunctionInstance SCF inventory scans may inspect many functions across regions.
   # Keep the Admin BFF envelope aligned with the 900s SCF budget plus transport
-  # headroom used by the CloudNode route.
+  # headroom used by the FunctionInstance route.
   timeout: 960000
   admin:
     ip: 127.0.0.1
@@ -24,7 +24,7 @@ server:
       port: 11000
       network: tcp
       protocol: http_no_protocol
-      # The control gateway also carries long-running CloudNode previews.
+      # The control gateway also carries long-running FunctionInstance previews.
       # Keep its request deadline above the deployment route timeout.
       timeout: 960000
     - name: trpc.moox.admin.Health

@@ -7,7 +7,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	pb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
-	cloudnodeschema "github.com/mooyang-code/moox/modules/cloudfunction/schema"
+	cloudfunctionschema "github.com/mooyang-code/moox/modules/cloudfunction/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -17,7 +17,7 @@ func newTestCatalog(t *testing.T) *CatalogRepository {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.Exec(cloudnodeschema.AllSQL()).Error)
+	require.NoError(t, db.Exec(cloudfunctionschema.AllSQL()).Error)
 	return NewCatalogRepository(db)
 }
 
@@ -45,70 +45,65 @@ func TestCatalogRepository_AccountCRUD(t *testing.T) {
 	assert.Nil(t, missing)
 }
 
-func TestCatalogRepository_NodeLifecycle(t *testing.T) {
+func TestCatalogRepository_InstanceLifecycle(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
 
-	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
-		SpaceID: "crypto", NodeID: "node-a", CloudAccountID: "acct-1",
-		NodeType: "scf-event", Region: "ap-guangzhou", Namespace: "default",
+	require.NoError(t, repo.UpsertInstance(ctx, FunctionInstance{
+		SpaceID: "crypto", InstanceID: "instance-a", CloudAccountID: "acct-1",
+		FunctionType: "scf-event", Region: "ap-guangzhou", Namespace: "default",
 		DeploymentID: "dep-1",
 	}))
-	node, err := repo.GetNode(ctx, "crypto", "node-a")
+	instance, err := repo.GetInstance(ctx, "crypto", "instance-a")
 	require.NoError(t, err)
-	require.NotNil(t, node)
-	assert.Equal(t, "tencent-scf", node.Provider)
+	require.NotNil(t, instance)
+	assert.Equal(t, "tencent-scf", instance.Provider)
 
-	nodes, total, err := repo.ListNodes(ctx, "crypto", &pb.GetNodeListReq{
-		NodeId: "node", Region: "ap-guangzhou",
-		Keyword: "node", Page: &pb.Page{Page: 1, Size: 10},
+	instances, total, err := repo.ListInstances(ctx, "crypto", &pb.ListFunctionInstancesReq{
+		InstanceId: "instance", Region: "ap-guangzhou",
+		Keyword: "instance", Page: &pb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), total)
-	assert.Len(t, nodes, 1)
+	assert.Len(t, instances, 1)
 
-	matched, err := repo.FindNodeForInvocation(ctx, "crypto", "dep-1", "collect.kline")
-	require.NoError(t, err)
-	require.NotNil(t, matched)
-	assert.Equal(t, "node-a", matched.NodeID)
-
-	require.NoError(t, repo.UpdateNodeDeployment(ctx, "crypto", "node-a", "pkg-1", "v2", nil, map[string]string{"MOOX_FETCH_MAX_INFLIGHT_REQUESTS": "7"}, true))
-	updated, err := repo.GetNode(ctx, "crypto", "node-a")
+	require.NoError(t, repo.UpdateInstanceDeployment(ctx, "crypto", "instance-a", "pkg-1", "v2", nil, map[string]string{"MOOX_FETCH_MAX_INFLIGHT_REQUESTS": "7"}, true))
+	updated, err := repo.GetInstance(ctx, "crypto", "instance-a")
 	require.NoError(t, err)
 	require.NotNil(t, updated)
-	assert.Equal(t, "scf-event", updated.NodeType)
+	assert.Equal(t, "scf-event", updated.FunctionType)
 	var metadata map[string]any
 	require.NoError(t, json.Unmarshal([]byte(updated.Metadata), &metadata))
 	assert.Equal(t, true, metadata["collector_publish_fenced"])
-	require.NoError(t, repo.DeleteNodes(ctx, "crypto", []string{"node-a"}))
-	deleted, err := repo.GetNode(ctx, "crypto", "node-a")
+	require.NoError(t, repo.DeleteInstances(ctx, "crypto", []string{"instance-a"}))
+	deleted, err := repo.GetInstance(ctx, "crypto", "instance-a")
 	require.NoError(t, err)
 	assert.Nil(t, deleted)
 }
 
-func TestCatalogRepository_ListNodesFiltersBizType(t *testing.T) {
+func TestCatalogRepository_ListInstancesFiltersWorkloadType(t *testing.T) {
 	repo := newTestCatalog(t)
 	ctx := context.Background()
-	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
-		SpaceID: "crypto", NodeID: "collector-0", NodeType: "scf-event",
+	require.NoError(t, repo.UpsertInstance(ctx, FunctionInstance{
+		SpaceID: "crypto", InstanceID: "collector-0", FunctionType: "scf-event",
 		Region:   "ap-guangzhou",
-		Metadata: `{"biz_type":"data_collector","function_name_prefix":"collector","index":0}`,
+		Metadata: `{"workload_type":"data_collector","function_name_prefix":"collector","index":0}`,
 	}))
-	require.NoError(t, repo.UpsertNode(ctx, CloudNode{
-		SpaceID: "crypto", NodeID: "factor-0", NodeType: "scf-event",
+	require.NoError(t, repo.UpsertInstance(ctx, FunctionInstance{
+		SpaceID: "crypto", InstanceID: "factor-0", FunctionType: "scf-event",
 		Region:   "ap-guangzhou",
-		Metadata: `{"biz_type":"factor_calculator","function_name_prefix":"collector","index":0}`,
+		Metadata: `{"workload_type":"factor_calculator","function_name_prefix":"collector","index":0}`,
 	}))
 
-	nodes, total, err := repo.ListNodes(ctx, "crypto", &pb.GetNodeListReq{
-		NodeType: "scf-event", Region: "ap-guangzhou", BizType: "data_collector",
+	instances, total, err := repo.ListInstances(ctx, "crypto", &pb.ListFunctionInstancesReq{
+		FunctionType: "scf-event", Region: "ap-guangzhou", WorkloadType: "data_collector",
 		Page: &pb.Page{Page: 1, Size: 10},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), total)
-	require.Len(t, nodes, 1)
-	assert.Equal(t, "collector-0", nodes[0].NodeID)
-	assert.JSONEq(t, `{"biz_type":"data_collector","function_name_prefix":"collector","index":0}`, nodes[0].Metadata)
+	require.Len(t, instances, 1)
+	assert.Equal(t, "collector-0", instances[0].InstanceID)
+	assert.JSONEq(t, `{"workload_type":"data_collector","function_name_prefix":"collector","index":0}`, instances[0].Metadata)
 }
 
 func TestPageFromCommon_NormalizesBounds(t *testing.T) {
@@ -118,12 +113,6 @@ func TestPageFromCommon_NormalizesBounds(t *testing.T) {
 	page, size = pageFromCommon(&pb.Page{Page: 0, Size: 5000})
 	assert.Equal(t, 1, page)
 	assert.Equal(t, 1000, size)
-}
-
-func TestFindNodeForInvocation_RequiresSpaceID(t *testing.T) {
-	repo := newTestCatalog(t)
-	_, err := repo.FindNodeForInvocation(context.Background(), "", "", "")
-	assert.Error(t, err)
 }
 
 func TestCatalogRepository_PackageCRUD(t *testing.T) {

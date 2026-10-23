@@ -13,14 +13,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestListCloudNodesPaginatesAndParsesMetadata(t *testing.T) {
+func TestListFunctionInstancesPaginatesAndParsesMetadata(t *testing.T) {
 	var pages []int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/admin/cloudnode/GetNodeList", r.URL.Path)
+		assert.Equal(t, "/api/admin/cloudfunction/ListFunctionInstances", r.URL.Path)
 		var body struct {
 			CloudAccountID string `json:"cloud_account_id"`
 			Region         string `json:"region"`
-			NodeType       string `json:"node_type"`
+			FunctionType   string `json:"function_type"`
 			Page           struct {
 				Page int `json:"page"`
 				Size int `json:"size"`
@@ -29,15 +29,15 @@ func TestListCloudNodesPaginatesAndParsesMetadata(t *testing.T) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, "account-a", body.CloudAccountID)
 		assert.Equal(t, "ap-guangzhou", body.Region)
-		assert.Equal(t, "scf-event", body.NodeType)
+		assert.Equal(t, "scf-event", body.FunctionType)
 		pages = append(pages, body.Page.Page)
 		index := body.Page.Page - 1
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ret_info": map[string]any{"code": 0, "msg": "ok"},
 			"items": []map[string]any{{
-				"node_id":    fmt.Sprintf("fleet-%d", index),
-				"package_id": "pkg-old",
-				"metadata":   map[string]any{"function_name_prefix": "fleet", "index": index},
+				"instance_id": fmt.Sprintf("fleet-%d", index),
+				"package_id":  "pkg-old",
+				"metadata":    map[string]any{"function_name_prefix": "fleet", "index": index},
 			}},
 			"page": map[string]any{
 				"page":     body.Page.Page,
@@ -50,49 +50,70 @@ func TestListCloudNodesPaginatesAndParsesMetadata(t *testing.T) {
 	defer server.Close()
 
 	client := collectorTestClient(server)
-	nodes, err := client.ListCloudNodes(context.Background(), CloudNodeListFilter{
+	instances, err := client.ListFunctionInstances(context.Background(), FunctionInstanceListFilter{
 		CloudAccountID: "account-a",
 		Region:         "ap-guangzhou",
-		NodeType:       "scf-event",
+		FunctionType:   "scf-event",
 	})
 	require.NoError(t, err)
-	require.Len(t, nodes, 2)
+	require.Len(t, instances, 2)
 	assert.Equal(t, []int{1, 2}, pages)
-	assert.Equal(t, "fleet-1", nodes[1].NodeID)
-	assert.Equal(t, float64(1), nodes[1].Metadata["index"])
+	assert.Equal(t, "fleet-1", instances[1].InstanceID)
+	assert.Equal(t, float64(1), instances[1].Metadata["index"])
 }
 
-func TestListCloudNodesPassesScopedTimerReadbackFilters(t *testing.T) {
+func TestListFunctionInstancesPassesScopedTimerReadbackFilters(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		assert.Equal(t, "account-a", body["cloud_account_id"])
 		assert.Equal(t, "ap-singapore", body["region"])
 		assert.Equal(t, "default", body["namespace"])
-		assert.Equal(t, "timer-1", body["node_id"])
-		assert.Equal(t, "scf-event", body["node_type"])
+		assert.Equal(t, "timer-1", body["instance_id"])
+		assert.Equal(t, "scf-event", body["function_type"])
 		assert.Equal(t, "timer", body["trigger_type"])
-		assert.Empty(t, body["biz_type"])
+		assert.Empty(t, body["workload_type"])
 		assert.Equal(t, float64(4), body["page"].(map[string]any)["size"])
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[],"page":{"has_more":false}}`))
 	}))
 	defer server.Close()
 
-	_, err := collectorTestClient(server).ListCloudNodes(context.Background(), CloudNodeListFilter{
+	_, err := collectorTestClient(server).ListFunctionInstances(context.Background(), FunctionInstanceListFilter{
 		CloudAccountID: "account-a",
 		Namespace:      "default",
 		Region:         "ap-singapore",
-		NodeID:         "timer-1",
-		NodeType:       "scf-event",
+		InstanceID:     "timer-1",
+		FunctionType:   "scf-event",
 		TriggerType:    "timer",
 		PageSize:       4,
 	})
 	require.NoError(t, err)
 }
 
+func TestInvokeFunctionSeparatesResourceIdentityFromExecutionPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/admin/cloudfunction/InvokeFunction", r.URL.Path)
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, "function-resource", body["instance_id"])
+		assert.NotContains(t, body, "node_id")
+		event := body["event_data"].(map[string]any)
+		assert.Equal(t, "executor-source", event["node_id"])
+		assert.Equal(t, "collection-task-instance", event["instance_id"])
+		_, _ = w.Write([]byte(`{"ret_info":{"code":0},"scf":{"code":0,"result":{"ok":true}}}`))
+	}))
+	defer server.Close()
+
+	result, err := collectorTestClient(server).InvokeFunction(context.Background(), "function-resource", map[string]any{
+		"node_id": "executor-source", "instance_id": "collection-task-instance",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, true, result["ok"])
+}
+
 func TestListCloudAccounts_ParsesSuccessResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/admin/cloudnode/ListCloudAccounts", r.URL.Path)
+		assert.Equal(t, "/api/admin/cloudfunction/ListCloudAccounts", r.URL.Path)
 		_, _ = w.Write([]byte(`{"ret_info":{"code":0,"msg":"ok"},"accounts":[{"account_id":"a1","provider":"tencent"}]}`))
 	}))
 	defer server.Close()
@@ -106,7 +127,7 @@ func TestListCloudAccounts_ParsesSuccessResponse(t *testing.T) {
 
 func TestCreateCloudAccount_RegistersRegionLocalBucket(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/admin/cloudnode/CreateCloudAccount", r.URL.Path)
+		assert.Equal(t, "/api/admin/cloudfunction/CreateCloudAccount", r.URL.Path)
 		var body struct {
 			Account CloudAccountInput `json:"account"`
 		}
@@ -246,7 +267,7 @@ func collectorTestClient(server *httptest.Server) *Client {
 func TestLatestPackageWalksPagesToFindTheExactName(t *testing.T) {
 	var pages []int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/admin/cloudnode/GetPackageList", r.URL.Path)
+		assert.Equal(t, "/api/admin/cloudfunction/GetPackageList", r.URL.Path)
 		var body struct {
 			PackageName string `json:"package_name"`
 			Page        struct {

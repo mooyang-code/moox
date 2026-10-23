@@ -11,63 +11,63 @@ import (
 )
 
 const (
-	NodeBatchPending                  = "pending"
-	NodeBatchRunning                  = "running"
-	NodeBatchReconciliationRequired   = "reconciliation_required"
-	NodeBatchSuccess                  = "success"
-	NodeBatchFailed                   = "failed"
-	NodeBatchPartial                  = "partial"
-	nodeBatchReconciliationRetryDelay = 10 * time.Second
+	FunctionJobPending                  = "pending"
+	FunctionJobRunning                  = "running"
+	FunctionJobReconciliationRequired   = "reconciliation_required"
+	FunctionJobSuccess                  = "success"
+	FunctionJobFailed                   = "failed"
+	FunctionJobPartial                  = "partial"
+	functionJobReconciliationRetryDelay = 10 * time.Second
 )
 
-var errNodeBatchClaimConflict = errors.New("node batch item claim conflict")
+var errFunctionJobClaimConflict = errors.New("instance batch item claim conflict")
 
-type NodeBatchItemCreate struct {
+type FunctionJobItemCreate struct {
 	ItemID      string
 	ItemIndex   int
-	NodeID      string
+	InstanceID  string
 	RequestJSON string
 }
 
-type NodeBatchCreate struct {
+type FunctionJobCreate struct {
 	SpaceID   string
 	JobID     string
 	Operation string
-	Items     []NodeBatchItemCreate
+	Items     []FunctionJobItemCreate
 }
 
-type NodeBatchAggregate struct {
-	Job          NodeBatch
-	Items        []NodeBatchItem
+type FunctionJobAggregate struct {
+	Job          FunctionJob
+	Items        []FunctionJobItem
 	PendingCount int
 	RunningCount int
 	SuccessCount int
 	FailedCount  int
 }
 
-func (r *CatalogRepository) CreateNodeBatch(ctx context.Context, input NodeBatchCreate) error {
+func (r *CatalogRepository) CreateFunctionJob(ctx context.Context, input FunctionJobCreate) error {
 	now := time.Now().UTC()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// A config-driven publish can be retried while the first async create
-		// job is still pending. Reserve stable node IDs in the batch table so
+		// job is still pending. Reserve stable instance IDs in the batch table so
 		// two jobs cannot race the same SCF function name.
 		for _, item := range input.Items {
 			var conflict int64
-			if err := tx.Table("t_cloud_node_batch_items AS i").
-				Joins("JOIN t_cloud_node_batches AS b ON b.c_space_id = i.c_space_id AND b.c_job_id = i.c_job_id").
-				Where("i.c_space_id = ? AND i.c_node_id = ? AND i.c_status IN ? AND b.c_operation = ?", input.SpaceID, item.NodeID, []string{NodeBatchPending, NodeBatchRunning, NodeBatchReconciliationRequired}, "create_nodes").
+			if err := tx.Table("t_cloud_function_job_items AS i").
+				Joins("JOIN t_cloud_function_jobs AS b ON b.c_space_id = i.c_space_id AND b.c_job_id = i.c_job_id").
+				Where("i.c_space_id = ? AND i.c_instance_id = ? AND i.c_status IN ? AND b.c_operation = ?", input.SpaceID, item.InstanceID, []string{FunctionJobPending, FunctionJobRunning, FunctionJobReconciliationRequired}, "create_instances").
 				Count(&conflict).Error; err != nil {
 				return err
 			}
 			if conflict > 0 {
-				return fmt.Errorf("node %s already has a pending create batch", item.NodeID)
+				return fmt.Errorf("instance %s already has a pending create batch", item.InstanceID)
 			}
 		}
-		job := NodeBatch{
+		job := FunctionJob{
 			SpaceID:    input.SpaceID,
 			JobID:      input.JobID,
 			Operation:  input.Operation,
-			Status:     NodeBatchPending,
+			Status:     FunctionJobPending,
 			TotalCount: len(input.Items),
 			CreateTime: now,
 			ModifyTime: now,
@@ -76,15 +76,15 @@ func (r *CatalogRepository) CreateNodeBatch(ctx context.Context, input NodeBatch
 			return err
 		}
 
-		items := make([]NodeBatchItem, 0, len(input.Items))
+		items := make([]FunctionJobItem, 0, len(input.Items))
 		for _, item := range input.Items {
-			items = append(items, NodeBatchItem{
+			items = append(items, FunctionJobItem{
 				SpaceID:     input.SpaceID,
 				JobID:       input.JobID,
 				ItemID:      item.ItemID,
 				ItemIndex:   item.ItemIndex,
-				NodeID:      item.NodeID,
-				Status:      NodeBatchPending,
+				InstanceID:  item.InstanceID,
+				Status:      FunctionJobPending,
 				RequestJSON: item.RequestJSON,
 				CreateTime:  now,
 				ModifyTime:  now,
@@ -97,16 +97,16 @@ func (r *CatalogRepository) CreateNodeBatch(ctx context.Context, input NodeBatch
 	})
 }
 
-func (r *CatalogRepository) TakePendingNodeBatchItems(ctx context.Context, limit int) ([]NodeBatchItem, error) {
+func (r *CatalogRepository) TakePendingFunctionJobItems(ctx context.Context, limit int) ([]FunctionJobItem, error) {
 	if limit <= 0 {
-		return nil, fmt.Errorf("node batch item limit must be positive")
+		return nil, fmt.Errorf("instance batch item limit must be positive")
 	}
 
 	for {
-		var claimed []NodeBatchItem
+		var claimed []FunctionJobItem
 		err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			eligibleReconciliationAt := time.Now().UTC().Add(-nodeBatchReconciliationRetryDelay)
-			if err := tx.Where("c_status = ? OR (c_status = ? AND c_mtime <= ?)", NodeBatchPending, NodeBatchReconciliationRequired, eligibleReconciliationAt).
+			eligibleReconciliationAt := time.Now().UTC().Add(-functionJobReconciliationRetryDelay)
+			if err := tx.Where("c_status = ? OR (c_status = ? AND c_mtime <= ?)", FunctionJobPending, FunctionJobReconciliationRequired, eligibleReconciliationAt).
 				Order("c_id ASC").
 				Limit(limit).
 				Find(&claimed).Error; err != nil {
@@ -120,17 +120,17 @@ func (r *CatalogRepository) TakePendingNodeBatchItems(ctx context.Context, limit
 			for index := range claimed {
 				item := &claimed[index]
 				var err error
-				item.ResumeClaim, err = nodeBatchItemOwnsLifecycleClaim(tx, *item)
+				item.ResumeClaim, err = functionJobItemOwnsLifecycleClaim(tx, *item)
 				if err != nil {
 					return err
 				}
 				ids = append(ids, item.ID)
 			}
 			now := time.Now().UTC()
-			result := tx.Model(&NodeBatchItem{}).
-				Where("c_id IN ? AND c_status IN ?", ids, []string{NodeBatchPending, NodeBatchReconciliationRequired}).
+			result := tx.Model(&FunctionJobItem{}).
+				Where("c_id IN ? AND c_status IN ?", ids, []string{FunctionJobPending, FunctionJobReconciliationRequired}).
 				Updates(map[string]any{
-					"c_status":     NodeBatchRunning,
+					"c_status":     FunctionJobRunning,
 					"c_started_at": now,
 					"c_mtime":      now,
 				})
@@ -138,12 +138,12 @@ func (r *CatalogRepository) TakePendingNodeBatchItems(ctx context.Context, limit
 				return result.Error
 			}
 			if result.RowsAffected != int64(len(claimed)) {
-				return errNodeBatchClaimConflict
+				return errFunctionJobClaimConflict
 			}
 
 			seenJobs := make(map[string]struct{}, len(claimed))
 			for i := range claimed {
-				claimed[i].Status = NodeBatchRunning
+				claimed[i].Status = FunctionJobRunning
 				claimed[i].StartedAt = &now
 				claimed[i].ModifyTime = now
 				key := claimed[i].SpaceID + "\x00" + claimed[i].JobID
@@ -151,15 +151,15 @@ func (r *CatalogRepository) TakePendingNodeBatchItems(ctx context.Context, limit
 					continue
 				}
 				seenJobs[key] = struct{}{}
-				if err := tx.Model(&NodeBatch{}).
+				if err := tx.Model(&FunctionJob{}).
 					Where("c_space_id = ? AND c_job_id = ?", claimed[i].SpaceID, claimed[i].JobID).
-					Updates(map[string]any{"c_status": NodeBatchRunning, "c_mtime": now}).Error; err != nil {
+					Updates(map[string]any{"c_status": FunctionJobRunning, "c_mtime": now}).Error; err != nil {
 					return err
 				}
 			}
 			return nil
 		})
-		if errors.Is(err, errNodeBatchClaimConflict) {
+		if errors.Is(err, errFunctionJobClaimConflict) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
@@ -169,7 +169,7 @@ func (r *CatalogRepository) TakePendingNodeBatchItems(ctx context.Context, limit
 	}
 }
 
-func nodeBatchItemOwnsLifecycleClaim(tx *gorm.DB, item NodeBatchItem) (bool, error) {
+func functionJobItemOwnsLifecycleClaim(tx *gorm.DB, item FunctionJobItem) (bool, error) {
 	var request struct {
 		LifecycleID string `json:"lifecycleId"`
 		OperationID string `json:"operationId"`
@@ -178,25 +178,25 @@ func nodeBatchItemOwnsLifecycleClaim(tx *gorm.DB, item NodeBatchItem) (bool, err
 		return false, nil
 	}
 	var count int64
-	err := tx.Model(&CloudNode{}).
-		Where("c_space_id = ? AND c_node_id = ? AND c_lifecycle_id = ? AND c_lifecycle_operation_id = ?", item.SpaceID, item.NodeID, request.LifecycleID, request.OperationID).
+	err := tx.Model(&FunctionInstance{}).
+		Where("c_space_id = ? AND c_instance_id = ? AND c_lifecycle_id = ? AND c_lifecycle_operation_id = ?", item.SpaceID, item.InstanceID, request.LifecycleID, request.OperationID).
 		Count(&count).Error
 	return count == 1, err
 }
 
-// RequireNodeBatchItemReconciliation keeps an ambiguous provider mutation
+// RequireFunctionJobItemReconciliation keeps an ambiguous provider mutation
 // attached to its durable operation. The same item can resume after the delay;
 // other operation IDs remain blocked by the lifecycle claim.
-func (r *CatalogRepository) RequireNodeBatchItemReconciliation(
+func (r *CatalogRepository) RequireFunctionJobItemReconciliation(
 	ctx context.Context,
 	spaceID, jobID, itemID, errorMessage string,
 ) error {
 	now := time.Now().UTC()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&NodeBatchItem{}).
-			Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ? AND c_status = ?", spaceID, jobID, itemID, NodeBatchRunning).
+		result := tx.Model(&FunctionJobItem{}).
+			Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ? AND c_status = ?", spaceID, jobID, itemID, FunctionJobRunning).
 			Updates(map[string]any{
-				"c_status":        NodeBatchReconciliationRequired,
+				"c_status":        FunctionJobReconciliationRequired,
 				"c_error_message": errorMessage,
 				"c_completed_at":  nil,
 				"c_started_at":    nil,
@@ -206,37 +206,37 @@ func (r *CatalogRepository) RequireNodeBatchItemReconciliation(
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return fmt.Errorf("running node batch item not found: %s", itemID)
+			return fmt.Errorf("running instance batch item not found: %s", itemID)
 		}
-		counts, err := countNodeBatchItems(tx, spaceID, jobID)
+		counts, err := countFunctionJobItems(tx, spaceID, jobID)
 		if err != nil {
 			return err
 		}
-		jobStatus, completedAt := aggregateNodeBatchStatus(counts, now)
-		return tx.Model(&NodeBatch{}).
+		jobStatus, completedAt := aggregateFunctionJobStatus(counts, now)
+		return tx.Model(&FunctionJob{}).
 			Where("c_space_id = ? AND c_job_id = ?", spaceID, jobID).
 			Updates(map[string]any{"c_status": jobStatus, "c_completed_at": completedAt, "c_mtime": now}).Error
 	})
 }
 
-func (r *CatalogRepository) CompleteNodeBatchItem(
+func (r *CatalogRepository) CompleteFunctionJobItem(
 	ctx context.Context,
 	spaceID, jobID, itemID, resultSummary string,
 	executeErr error,
 ) error {
 	now := time.Now().UTC()
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var item NodeBatchItem
+		var item FunctionJobItem
 		if err := tx.Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", spaceID, jobID, itemID).First(&item).Error; err != nil {
 			return err
 		}
-		status := NodeBatchSuccess
+		status := FunctionJobSuccess
 		errorMessage := ""
 		if executeErr != nil {
-			status = NodeBatchFailed
+			status = FunctionJobFailed
 			errorMessage = executeErr.Error()
 		}
-		result := tx.Model(&NodeBatchItem{}).
+		result := tx.Model(&FunctionJobItem{}).
 			Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", spaceID, jobID, itemID).
 			Updates(map[string]any{
 				"c_status":         status,
@@ -249,18 +249,18 @@ func (r *CatalogRepository) CompleteNodeBatchItem(
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return fmt.Errorf("node batch item not found: %s", itemID)
+			return fmt.Errorf("instance batch item not found: %s", itemID)
 		}
-		if err := releaseTerminalNodeBatchMutationClaim(tx, item, now); err != nil {
+		if err := releaseTerminalFunctionJobMutationClaim(tx, item, now); err != nil {
 			return err
 		}
 
-		counts, err := countNodeBatchItems(tx, spaceID, jobID)
+		counts, err := countFunctionJobItems(tx, spaceID, jobID)
 		if err != nil {
 			return err
 		}
-		jobStatus, completedAt := aggregateNodeBatchStatus(counts, now)
-		return tx.Model(&NodeBatch{}).
+		jobStatus, completedAt := aggregateFunctionJobStatus(counts, now)
+		return tx.Model(&FunctionJob{}).
 			Where("c_space_id = ? AND c_job_id = ?", spaceID, jobID).
 			Updates(map[string]any{
 				"c_status":       jobStatus,
@@ -270,7 +270,7 @@ func (r *CatalogRepository) CompleteNodeBatchItem(
 	})
 }
 
-func releaseTerminalNodeBatchMutationClaim(tx *gorm.DB, item NodeBatchItem, now time.Time) error {
+func releaseTerminalFunctionJobMutationClaim(tx *gorm.DB, item FunctionJobItem, now time.Time) error {
 	var request struct {
 		LifecycleID string `json:"lifecycleId"`
 		OperationID string `json:"operationId"`
@@ -281,16 +281,16 @@ func releaseTerminalNodeBatchMutationClaim(tx *gorm.DB, item NodeBatchItem, now 
 	if request.LifecycleID == "" || request.OperationID == "" || request.OperationID != item.ItemID {
 		return nil
 	}
-	return tx.Model(&CloudNode{}).
-		Where("c_space_id = ? AND c_node_id = ? AND c_lifecycle_id = ? AND c_lifecycle_operation_id = ?", item.SpaceID, item.NodeID, request.LifecycleID, request.OperationID).
+	return tx.Model(&FunctionInstance{}).
+		Where("c_space_id = ? AND c_instance_id = ? AND c_lifecycle_id = ? AND c_lifecycle_operation_id = ?", item.SpaceID, item.InstanceID, request.LifecycleID, request.OperationID).
 		Updates(map[string]any{"c_lifecycle_operation_id": "", "c_mtime": now}).Error
 }
 
-func (r *CatalogRepository) RequeueInterruptedNodeBatchItems(ctx context.Context) (int64, error) {
+func (r *CatalogRepository) RequeueInterruptedFunctionJobItems(ctx context.Context) (int64, error) {
 	var requeued int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var interrupted []NodeBatchItem
-		if err := tx.Where("c_status = ?", NodeBatchRunning).
+		var interrupted []FunctionJobItem
+		if err := tx.Where("c_status = ?", FunctionJobRunning).
 			Order("c_id ASC").
 			Find(&interrupted).Error; err != nil {
 			return err
@@ -300,18 +300,18 @@ func (r *CatalogRepository) RequeueInterruptedNodeBatchItems(ctx context.Context
 		}
 
 		now := time.Now().UTC()
-		seenJobs := make(map[string]NodeBatchItem, len(interrupted))
+		seenJobs := make(map[string]FunctionJobItem, len(interrupted))
 		for _, item := range interrupted {
-			status := NodeBatchPending
-			hasClaim, err := nodeBatchItemOwnsLifecycleClaim(tx, item)
+			status := FunctionJobPending
+			hasClaim, err := functionJobItemOwnsLifecycleClaim(tx, item)
 			if err != nil {
 				return err
 			}
 			if hasClaim {
-				status = NodeBatchReconciliationRequired
+				status = FunctionJobReconciliationRequired
 			}
-			result := tx.Model(&NodeBatchItem{}).
-				Where("c_id = ? AND c_status = ?", item.ID, NodeBatchRunning).
+			result := tx.Model(&FunctionJobItem{}).
+				Where("c_id = ? AND c_status = ?", item.ID, FunctionJobRunning).
 				Updates(map[string]any{"c_status": status, "c_started_at": nil, "c_mtime": now})
 			if result.Error != nil {
 				return result.Error
@@ -321,16 +321,16 @@ func (r *CatalogRepository) RequeueInterruptedNodeBatchItems(ctx context.Context
 		}
 
 		for _, item := range seenJobs {
-			counts, err := countNodeBatchItems(tx, item.SpaceID, item.JobID)
+			counts, err := countFunctionJobItems(tx, item.SpaceID, item.JobID)
 			if err != nil {
 				return err
 			}
-			status := NodeBatchPending
+			status := FunctionJobPending
 			if counts.Running > 0 {
-				status = NodeBatchRunning
+				status = FunctionJobRunning
 			}
-			if err := tx.Model(&NodeBatch{}).
-				Where("c_space_id = ? AND c_job_id = ? AND c_status NOT IN ?", item.SpaceID, item.JobID, []string{NodeBatchSuccess, NodeBatchFailed, NodeBatchPartial}).
+			if err := tx.Model(&FunctionJob{}).
+				Where("c_space_id = ? AND c_job_id = ? AND c_status NOT IN ?", item.SpaceID, item.JobID, []string{FunctionJobSuccess, FunctionJobFailed, FunctionJobPartial}).
 				Updates(map[string]any{"c_status": status, "c_completed_at": nil, "c_mtime": now}).Error; err != nil {
 				return err
 			}
@@ -340,9 +340,9 @@ func (r *CatalogRepository) RequeueInterruptedNodeBatchItems(ctx context.Context
 	return requeued, err
 }
 
-func (r *CatalogRepository) GetNodeBatch(ctx context.Context, spaceID, jobID string) (*NodeBatchAggregate, error) {
-	var job NodeBatch
-	var items []NodeBatchItem
+func (r *CatalogRepository) GetFunctionJob(ctx context.Context, spaceID, jobID string) (*FunctionJobAggregate, error) {
+	var job FunctionJob
+	var items []FunctionJobItem
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.
 			Where("c_space_id = ? AND c_job_id = ?", spaceID, jobID).
@@ -360,56 +360,56 @@ func (r *CatalogRepository) GetNodeBatch(ctx context.Context, spaceID, jobID str
 	if err != nil {
 		return nil, err
 	}
-	aggregate := &NodeBatchAggregate{Job: job, Items: items}
+	aggregate := &FunctionJobAggregate{Job: job, Items: items}
 	for _, item := range items {
 		switch item.Status {
-		case NodeBatchPending:
+		case FunctionJobPending:
 			aggregate.PendingCount++
-		case NodeBatchRunning:
+		case FunctionJobRunning:
 			aggregate.RunningCount++
-		case NodeBatchReconciliationRequired:
+		case FunctionJobReconciliationRequired:
 			aggregate.RunningCount++
-		case NodeBatchSuccess:
+		case FunctionJobSuccess:
 			aggregate.SuccessCount++
-		case NodeBatchFailed:
+		case FunctionJobFailed:
 			aggregate.FailedCount++
 		}
 	}
 	return aggregate, nil
 }
 
-type nodeBatchItemCounts struct {
+type functionJobItemCounts struct {
 	Pending int
 	Running int
 	Success int
 	Failed  int
 }
 
-func countNodeBatchItems(tx *gorm.DB, spaceID, jobID string) (nodeBatchItemCounts, error) {
-	var counts nodeBatchItemCounts
+func countFunctionJobItems(tx *gorm.DB, spaceID, jobID string) (functionJobItemCounts, error) {
+	var counts functionJobItemCounts
 	err := tx.Raw(`
 SELECT
     SUM(CASE WHEN c_status = ? THEN 1 ELSE 0 END) AS pending,
     SUM(CASE WHEN c_status IN (?, ?) THEN 1 ELSE 0 END) AS running,
     SUM(CASE WHEN c_status = ? THEN 1 ELSE 0 END) AS success,
     SUM(CASE WHEN c_status = ? THEN 1 ELSE 0 END) AS failed
-FROM t_cloud_node_batch_items
+FROM t_cloud_function_job_items
 WHERE c_space_id = ? AND c_job_id = ?
 
-`, NodeBatchPending, NodeBatchRunning, NodeBatchReconciliationRequired, NodeBatchSuccess, NodeBatchFailed, spaceID, jobID).
+`, FunctionJobPending, FunctionJobRunning, FunctionJobReconciliationRequired, FunctionJobSuccess, FunctionJobFailed, spaceID, jobID).
 		Scan(&counts).Error
 	return counts, err
 }
 
-func aggregateNodeBatchStatus(counts nodeBatchItemCounts, completedAt time.Time) (string, *time.Time) {
+func aggregateFunctionJobStatus(counts functionJobItemCounts, completedAt time.Time) (string, *time.Time) {
 	if counts.Pending > 0 || counts.Running > 0 {
-		return NodeBatchRunning, nil
+		return FunctionJobRunning, nil
 	}
 	if counts.Success > 0 && counts.Failed == 0 {
-		return NodeBatchSuccess, &completedAt
+		return FunctionJobSuccess, &completedAt
 	}
 	if counts.Failed > 0 && counts.Success == 0 {
-		return NodeBatchFailed, &completedAt
+		return FunctionJobFailed, &completedAt
 	}
-	return NodeBatchPartial, &completedAt
+	return FunctionJobPartial, &completedAt
 }

@@ -27,7 +27,7 @@ vi.mock("@/api/admin/activity", () => ({
     ]
   }))
 }));
-vi.mock("@/api/cloud-node", () => ({ getNodeList: vi.fn(async () => ({ items: [], total: 46 })) }));
+vi.mock("@/api/function-instance", () => ({ listFunctionInstances: vi.fn(async () => ({ items: [], total: 46 })) }));
 vi.mock("@/api/factor", () => ({
   listFactorSets: vi.fn(async () => ({
     factor_sets: [
@@ -168,7 +168,7 @@ describe("home page", () => {
     expect(wrapper.findAll(".weights .meter")).toHaveLength(2);
     expect(text).toContain("现货K线 · 1m");
     expect(text).toContain("现货K线 1h：新增 1 个");
-    expect(text).toContain("云节点 46");
+    expect(text).toContain("云函数实例 46");
   });
 
   it("lists problems in a fixed-size tile and links each one to where it is handled", async () => {

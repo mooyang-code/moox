@@ -29,7 +29,7 @@ func newTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestCollectorTrimsHistoryAndCallsCloudNode(t *testing.T) {
+func TestCollectorTrimsHistoryAndCallsCloudFunction(t *testing.T) {
 	db := newTestDB(t)
 	now := time.Date(2026, 10, 8, 3, 47, 0, 0, time.UTC)
 	for _, row := range []struct{ when string }{{"2026-06-01 00:00:00"}, {"2026-10-01 00:00:00"}} {
@@ -46,12 +46,12 @@ func TestCollectorTrimsHistoryAndCallsCloudNode(t *testing.T) {
 	calls := 0
 	collector, err := NewCollector(db, gatewayFunc(func(_ context.Context, service, method string, req, rsp any) error {
 		calls++
-		require.Equal(t, "trpc.moox.cloudnode.CloudNodeMgr", service)
+		require.Equal(t, "trpc.moox.cloudfunction.CloudFunctionMgr", service)
 		require.Equal(t, "CollectGarbage", method)
 		raw, err := json.Marshal(req)
 		require.NoError(t, err)
 		require.JSONEq(t, `{"dry_run":false}`, string(raw))
-		rsp.(*cloudNodeGarbageSummary).Packages = 2
+		rsp.(*cloudFunctionGarbageSummary).Packages = 2
 		return nil
 	}))
 	require.NoError(t, err)
@@ -66,18 +66,18 @@ func TestCollectorTrimsHistoryAndCallsCloudNode(t *testing.T) {
 	require.EqualValues(t, 1, sessions, "a session left connected beyond the retention is removed too")
 }
 
-func TestCollectorReportsCloudNodeFailureAfterTrimmingHistory(t *testing.T) {
+func TestCollectorReportsCloudFunctionFailureAfterTrimmingHistory(t *testing.T) {
 	db := newTestDB(t)
 	require.NoError(t, db.Exec(`INSERT INTO t_login_history (c_user_id, c_username, c_client_ip, c_login_result, c_ctime) VALUES ('u1', 'admin', '127.0.0.1', 'success', '2026-01-01 00:00:00')`).Error)
 	collector, err := NewCollector(db, gatewayFunc(func(_ context.Context, _, _ string, _, rsp any) error {
-		rsp.(*cloudNodeGarbageSummary).RetInfo.Code = 999
-		rsp.(*cloudNodeGarbageSummary).RetInfo.Msg = "list cloud accounts: boom"
+		rsp.(*cloudFunctionGarbageSummary).RetInfo.Code = 999
+		rsp.(*cloudFunctionGarbageSummary).RetInfo.Msg = "list cloud accounts: boom"
 		return nil
 	}))
 	require.NoError(t, err)
 
 	err = collector.Run(context.Background())
-	require.ErrorContains(t, err, "collect CloudNode garbage: list cloud accounts: boom")
+	require.ErrorContains(t, err, "collect FunctionInstance garbage: list cloud accounts: boom")
 	var logins int64
 	require.NoError(t, db.Table("t_login_history").Count(&logins).Error)
 	require.Zero(t, logins)
@@ -88,8 +88,8 @@ func TestCollectorRequiresAdminGatewayAndReportsRoutingFailure(t *testing.T) {
 	_, err := NewCollector(db, nil)
 	require.ErrorContains(t, err, "admin gateway")
 	collector, err := NewCollector(db, gatewayFunc(func(context.Context, string, string, any, any) error {
-		return errors.New("no active CloudNode placement")
+		return errors.New("no active FunctionInstance placement")
 	}))
 	require.NoError(t, err)
-	require.ErrorContains(t, collector.Run(context.Background()), "no active CloudNode placement")
+	require.ErrorContains(t, collector.Run(context.Background()), "no active FunctionInstance placement")
 }

@@ -1,5 +1,5 @@
-PROTO_FILES := cloudnode.proto
-OUTPUT_DIR := ./cloudnodegen
+PROTO_FILES := cloudfunction.proto
+OUTPUT_DIR := ./cloudfunctiongen
 COMMON_PROTO_DIR := ../../../packages/commonpb
 
 .PHONY: all clean

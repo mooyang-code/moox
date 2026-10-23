@@ -37,7 +37,7 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 
 | 主机 | 单元 | 组件 id（二进制名 `moox-<id>`） |
 | --- | --- | --- |
-| 控制机 | `prod` | `admin` `eventbus` `monitor` `collector` `cloudnode` `factor-mgr` `strategy` `web-host` `console-proxy` |
+| 控制机 | `prod` | `admin` `eventbus` `monitor` `collector` `cloudfunction` `factor-mgr` `strategy` `web-host` `console-proxy` |
 | Storage 主机 | `storage` | `storage-primary` `storage-node` `storage-view`（**同一份二进制，三个文件名**） |
 | 每台主机 | `host` | `host-gateway` `host-agent` |
 | 存储机、海外机 | `access` | `access` |
@@ -45,7 +45,7 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 | 因子机 | systemd 用户单元 | `moox-factor-engine`（不在 `/data/moox` 里，见下） |
 
 构建目标是 `scripts/build/build.sh` 的参数，和组件 id 基本一致（`host-gateway` 目标同时产出 server、cli 和 `moox-runtime`；`admin`、`monitor`、`collector`、
-`factor-mgr`、`strategy`、`trade`、`cloudnode` 目标同时产出对应的 `-cli`；`storage-cli`、`factor-engine`、`hostagent` 是独立目标）。
+`factor-mgr`、`strategy`、`trade`、`cloudfunction` 目标同时产出对应的 `-cli`；`storage-cli`、`factor-engine`、`hostagent` 是独立目标）。
 CGO 只有 Storage 需要（DuckDB），脚本对 `storage*` 目标自动在 Docker 编译镜像里开启 CGO 构建，其余一律在本机交叉编译且关闭 CGO；**不要在宿主机上直接 `CGO_ENABLED=1` 交叉编译 Storage**，需要先启动 Docker（macOS：`colima start`）。
 
 ## 标准流程（单个或几个组件）

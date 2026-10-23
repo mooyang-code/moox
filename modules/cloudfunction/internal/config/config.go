@@ -1,4 +1,4 @@
-// Package config loads moox-cloudnode process configuration.
+// Package config loads moox-cloudfunction process configuration.
 package config
 
 import (
@@ -15,12 +15,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config is the root moox-cloudnode configuration.
+// Config is the root moox-cloudfunction configuration.
 type Config struct {
 	GatewayClient gatewayclient.FileConfig `yaml:"gateway_client"`
 	sourcePath    string                   `yaml:"-"`
 	Database      DatabaseConfig           `yaml:"database"`
-	NodeBatch     NodeBatchConfig          `yaml:"node_batch"`
+	FunctionJob   FunctionJobConfig        `yaml:"function_job"`
 	TencentSCF    TencentSCFConfig         `yaml:"tencent_scf"`
 	// CLS 控制日志服务的自动开通与函数环境下发：默认开启，初始化后创建的 SCF 采集函数自动带上日志上报配置。
 	CLS    clsprovision.Config `yaml:"cls"`
@@ -38,8 +38,8 @@ type DatabaseConfig struct {
 	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
 }
 
-// NodeBatchConfig controls asynchronous SCF node batch execution.
-type NodeBatchConfig struct {
+// FunctionJobConfig controls asynchronous SCF instance batch execution.
+type FunctionJobConfig struct {
 	BatchSize    int           `yaml:"batch_size"`
 	PollInterval time.Duration `yaml:"poll_interval"`
 }
@@ -50,7 +50,7 @@ type TencentSCFConfig struct {
 	DefaultNamespace string `yaml:"default_namespace"`
 	DefaultRuntime   string `yaml:"default_runtime"`
 	// APIRateLimits 按接口名覆盖进程内令牌桶的速率（次/秒）；未写的接口使用官方限频的 75%。
-	// 值必须大于 0 且不超过官方限频，接口名必须是 CloudNode 调用的 SCF 接口。
+	// 值必须大于 0 且不超过官方限频，接口名必须是 FunctionInstance 调用的 SCF 接口。
 	APIRateLimits map[string]float64 `yaml:"api_rate_limits"`
 }
 
@@ -79,7 +79,7 @@ func Load(path string) (*Config, error) {
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, fmt.Errorf("cloudnode config must contain exactly one YAML document")
+		return nil, fmt.Errorf("cloudfunction config must contain exactly one YAML document")
 	}
 	cfg.applyEnv()
 	if err := cfg.Validate(); err != nil {
@@ -92,17 +92,17 @@ func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is required")
 	}
-	if c.GatewayClient.Caller != "cloudnode" {
-		return fmt.Errorf("gateway_client.caller must be cloudnode")
+	if c.GatewayClient.Caller != "cloudfunction" {
+		return fmt.Errorf("gateway_client.caller must be cloudfunction")
 	}
 	if err := c.GatewayClient.Validate(); err != nil {
 		return err
 	}
-	if c.NodeBatch.BatchSize < 1 || c.NodeBatch.BatchSize > 10 {
-		return fmt.Errorf("node_batch.batch_size must be between 1 and 10")
+	if c.FunctionJob.BatchSize < 1 || c.FunctionJob.BatchSize > 10 {
+		return fmt.Errorf("function_job.batch_size must be between 1 and 10")
 	}
-	if c.NodeBatch.PollInterval < 100*time.Millisecond || c.NodeBatch.PollInterval > 10*time.Second {
-		return fmt.Errorf("node_batch.poll_interval must be between 100ms and 10s")
+	if c.FunctionJob.PollInterval < 100*time.Millisecond || c.FunctionJob.PollInterval > 10*time.Second {
+		return fmt.Errorf("function_job.poll_interval must be between 100ms and 10s")
 	}
 	if err := tencentscf.ValidateRateLimits(c.TencentSCF.APIRateLimits); err != nil {
 		return err
@@ -114,13 +114,13 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) applyEnv() {
-	if v := os.Getenv("MOOX_CLOUDNODE_DB_PATH"); v != "" {
+	if v := os.Getenv("MOOX_CLOUDFUNCTION_DB_PATH"); v != "" {
 		c.Database.Path = v
 	}
-	if v := os.Getenv("MOOX_CLOUDNODE_PPROF_ADDR"); v != "" {
+	if v := os.Getenv("MOOX_CLOUDFUNCTION_PPROF_ADDR"); v != "" {
 		c.Debug.PprofAddr = v
 	}
-	if v := os.Getenv("MOOX_CLOUDNODE_HEALTH_ADDR"); v != "" {
+	if v := os.Getenv("MOOX_CLOUDFUNCTION_HEALTH_ADDR"); v != "" {
 		c.Health.Addr = v
 	}
 }
@@ -128,16 +128,16 @@ func (c *Config) applyEnv() {
 // Default returns safe local defaults.
 func Default() *Config {
 	return &Config{
-		GatewayClient: gatewayclient.FileConfig{Caller: "cloudnode", KeyFile: "../../secrets/caller-cloudnode.key"},
+		GatewayClient: gatewayclient.FileConfig{Caller: "cloudfunction", KeyFile: "../../secrets/caller-cloudfunction.key"},
 		Database: DatabaseConfig{
 			Type:            "sqlite",
-			Path:            "./data/moox_cloudnode.db",
+			Path:            "./data/moox_cloudfunction.db",
 			MaxIdleConns:    1,
 			MaxOpenConns:    1,
 			ConnMaxLifetime: time.Hour,
 			ConnMaxIdleTime: 10 * time.Minute,
 		},
-		NodeBatch: NodeBatchConfig{
+		FunctionJob: FunctionJobConfig{
 			BatchSize:    3,
 			PollInterval: 500 * time.Millisecond,
 		},
@@ -157,10 +157,10 @@ func Default() *Config {
 // OpenGateway creates the process client shared by credential and lease calls.
 func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
 	if c == nil || c.sourcePath == "" {
-		return nil, fmt.Errorf("cloudnode gateway client requires a loaded module configuration")
+		return nil, fmt.Errorf("cloudfunction gateway client requires a loaded module configuration")
 	}
-	if c.GatewayClient.Caller != "cloudnode" {
-		return nil, fmt.Errorf("gateway_client.caller must be cloudnode")
+	if c.GatewayClient.Caller != "cloudfunction" {
+		return nil, fmt.Errorf("gateway_client.caller must be cloudfunction")
 	}
 	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
 }

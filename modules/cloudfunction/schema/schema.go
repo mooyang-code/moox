@@ -1,14 +1,14 @@
-// Package schema embeds the CloudNode SQLite schema.
+// Package schema embeds the FunctionInstance SQLite schema.
 package schema
 
 import _ "embed"
 
-// cloudnodeSQL is the CloudNode control-plane schema.
+// cloudfunctionSQL is the FunctionInstance control-plane schema.
 //
-//go:embed cloudnode.sql
-var cloudnodeSQL string
+//go:embed cloudfunction.sql
+var cloudfunctionSQL string
 
-// AllSQL returns the full CloudNode schema.
+// AllSQL returns the full FunctionInstance schema.
 func AllSQL() string {
-	return cloudnodeSQL
+	return cloudfunctionSQL
 }

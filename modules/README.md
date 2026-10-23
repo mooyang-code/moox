@@ -10,7 +10,7 @@ MooX 的业务模块。每个模块是独立的 Go module（由仓库根目录 `
 | [eventbus](./eventbus/) | `moox-eventbus` | NATS JetStream 事件总线 | [事件总线](../docs/模块/事件总线.md) |
 | [storage](./storage/) | `moox-storage-{primary,node,view,access}`、`moox-storage-cli` | 元数据、事实存储、View、外部访问代理 | [存储](../docs/模块/存储.md) |
 | [collector](./collector/) | `moox-collector`、`moox-collector-scf`、`moox-collector-cli` | 采集控制面与 SCF 运行时 | [采集](../docs/模块/采集.md) |
-| [cloudnode](./cloudnode/) | `moox-cloudnode`、`moox-cloudnode-cli` | 云账户、SCF 节点与代码包 | [云节点](../docs/模块/云节点.md) |
+| [cloudfunction](./cloudfunction/) | `moox-cloudfunction`、`moox-cloudfunction-cli` | 云账户、SCF 实例与代码包 | [云函数管理](../docs/模块/云函数管理.md) |
 | [factor](./factor/) | `moox-factor-mgr`、`moox-factor-engine`、`moox-factor-mgr-cli` | 因子管理与计算 | [因子](../docs/模块/因子.md) |
 | [strategy](./strategy/) | `moox-strategy`、`moox-strategy-cli` | 策略 DSL 与目标权重 | [策略](../docs/模块/策略.md) |
 | [trade](./trade/) | `moox-trade`、`moox-trade-cli` | 交易执行与交易事实 | [交易](../docs/模块/交易.md) |

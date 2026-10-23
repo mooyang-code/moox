@@ -19,7 +19,7 @@ import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import CollectionTasks from "@/views/collector/collection-tasks/collection-tasks.vue";
 import RuntimeStatus from "@/views/collector/runtime-status/runtime-status.vue";
 import BackfillJobs from "@/views/collector/backfill-jobs/index.vue";
-import CloudNode from "@/views/collector/cloud-node/cloud-node.vue";
+import FunctionInstance from "@/views/collector/cloud-function/function-instance.vue";
 import TaskResults from "@/views/collector/task-results/index.vue";
 
 type CollectorTaskTab = "tasks" | "status" | "backfills" | "executors" | "results";
@@ -48,7 +48,7 @@ const activeComponent = computed(
       tasks: CollectionTasks,
       status: RuntimeStatus,
       backfills: BackfillJobs,
-      executors: CloudNode,
+      executors: FunctionInstance,
       results: TaskResults
     })[activeTab.value]
 );

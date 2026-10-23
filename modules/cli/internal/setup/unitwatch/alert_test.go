@@ -154,12 +154,12 @@ func TestAlertsBarrierIsRateLimited(t *testing.T) {
 
 // 持续未就绪超过 5 分钟才告警；身份不符与停止被打断提醒人工处理。
 func TestAlertsManualConditions(t *testing.T) {
-	h, sink, run := alertHost(t, map[string][]string{"prod": {"monitor", "cloudnode", "factor-mgr"}}, hostpolicy.Watchdog{})
+	h, sink, run := alertHost(t, map[string][]string{"prod": {"monitor", "cloudfunction", "factor-mgr"}}, hostpolicy.Watchdog{})
 	h.respond = func(component string) (unitruntime.Result, error) {
 		switch component {
 		case "monitor":
 			return unitruntime.Result{Components: []unitruntime.Status{{State: "running", PID: 3}}}, nil
-		case "cloudnode":
+		case "cloudfunction":
 			return unitruntime.Result{Components: []unitruntime.Status{{State: "draining", PID: 4}}}, nil
 		}
 		return unitruntime.Result{}, errIdentityForTest
@@ -169,7 +169,7 @@ func TestAlertsManualConditions(t *testing.T) {
 		h.now = h.now.Add(time.Minute)
 	}
 	got := titles(sink.messages)
-	require.Contains(t, got, "【MooX 守护】control · cloudnode · 需要人工处理")
+	require.Contains(t, got, "【MooX 守护】control · cloudfunction · 需要人工处理")
 	require.Contains(t, got, "【MooX 守护】control · monitor · 持续未就绪")
 	require.Len(t, got, 2, "身份错误在这里用的是普通错误，归为检查失败，不提醒；每种问题只发一次")
 }

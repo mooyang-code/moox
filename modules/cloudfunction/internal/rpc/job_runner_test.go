@@ -20,8 +20,8 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-func TestNodeBatchRunnerRunsTakenBatchWithTRPCGoAndWait(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+func TestFunctionJobRunnerRunsTakenBatchWithTRPCGoAndWait(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	createRunnerBatch(t, catalog, "runner-concurrent", 7)
 	var active atomic.Int32
 	var maxActive atomic.Int32
@@ -31,7 +31,7 @@ func TestNodeBatchRunnerRunsTakenBatchWithTRPCGoAndWait(t *testing.T) {
 	var batchSizes []int
 	svc := &Service{
 		catalog: catalog,
-		executeNodeBatchItem: func(context.Context, store.NodeBatchItem) (string, error) {
+		executeFunctionJobItem: func(context.Context, store.FunctionJobItem) (string, error) {
 			current := active.Add(1)
 			for {
 				previous := maxActive.Load()
@@ -44,7 +44,7 @@ func TestNodeBatchRunnerRunsTakenBatchWithTRPCGoAndWait(t *testing.T) {
 			active.Add(-1)
 			return "done", nil
 		},
-		nodeBatchTakenHook: func(items []store.NodeBatchItem) {
+		functionJobTakenHook: func(items []store.FunctionJobItem) {
 			batchesMu.Lock()
 			batchSizes = append(batchSizes, len(items))
 			batchesMu.Unlock()
@@ -52,7 +52,7 @@ func TestNodeBatchRunnerRunsTakenBatchWithTRPCGoAndWait(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, svc.StartNodeBatchRunner(ctx, 3, 100*time.Millisecond))
+	require.NoError(t, svc.StartFunctionJobRunner(ctx, 3, 100*time.Millisecond))
 	for range 3 {
 		select {
 		case <-started:
@@ -62,22 +62,22 @@ func TestNodeBatchRunnerRunsTakenBatchWithTRPCGoAndWait(t *testing.T) {
 	}
 	assert.Equal(t, int32(3), maxActive.Load())
 	close(release)
-	waitForNodeBatchTerminal(t, catalog, "runner-concurrent")
+	waitForFunctionJobTerminal(t, catalog, "runner-concurrent")
 	assert.Equal(t, int32(3), maxActive.Load())
 	batchesMu.Lock()
 	assert.Equal(t, []int{3, 3, 1}, batchSizes)
 	batchesMu.Unlock()
 }
 
-func TestNodeBatchRunnerDoesNotTakeNextBatchUntilCurrentBatchFinishes(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+func TestFunctionJobRunnerDoesNotTakeNextBatchUntilCurrentBatchFinishes(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	createRunnerBatch(t, catalog, "runner-barrier", 4)
 	block := make(chan struct{})
 	firstStarted := make(chan struct{})
 	var once sync.Once
 	svc := &Service{
 		catalog: catalog,
-		executeNodeBatchItem: func(_ context.Context, item store.NodeBatchItem) (string, error) {
+		executeFunctionJobItem: func(_ context.Context, item store.FunctionJobItem) (string, error) {
 			if item.ItemIndex == 0 {
 				once.Do(func() { close(firstStarted) })
 				<-block
@@ -87,49 +87,49 @@ func TestNodeBatchRunnerDoesNotTakeNextBatchUntilCurrentBatchFinishes(t *testing
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, svc.StartNodeBatchRunner(ctx, 3, 100*time.Millisecond))
+	require.NoError(t, svc.StartFunctionJobRunner(ctx, 3, 100*time.Millisecond))
 	select {
 	case <-firstStarted:
 	case <-time.After(time.Second):
 		t.Fatal("first batch did not start")
 	}
 	require.Eventually(t, func() bool {
-		aggregate, err := catalog.GetNodeBatch(context.Background(), "crypto", "runner-barrier")
+		aggregate, err := catalog.GetFunctionJob(context.Background(), "crypto", "runner-barrier")
 		return err == nil && aggregate.PendingCount == 1 && aggregate.RunningCount == 1 && aggregate.SuccessCount == 2
 	}, time.Second, 10*time.Millisecond)
 	close(block)
-	waitForNodeBatchTerminal(t, catalog, "runner-barrier")
+	waitForFunctionJobTerminal(t, catalog, "runner-barrier")
 }
 
-func TestNodeBatchRunnerCompletesOtherItemsAfterOneFailure(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+func TestFunctionJobRunnerCompletesOtherItemsAfterOneFailure(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	createRunnerBatch(t, catalog, "runner-partial", 3)
 	svc := &Service{
 		catalog: catalog,
-		executeNodeBatchItem: func(_ context.Context, item store.NodeBatchItem) (string, error) {
+		executeFunctionJobItem: func(_ context.Context, item store.FunctionJobItem) (string, error) {
 			if item.ItemIndex == 1 {
 				return "", errors.New("provider rejected item")
 			}
-			return fmt.Sprintf("done %s", item.NodeID), nil
+			return fmt.Sprintf("done %s", item.InstanceID), nil
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, svc.StartNodeBatchRunner(ctx, 3, 100*time.Millisecond))
-	aggregate := waitForNodeBatchTerminal(t, catalog, "runner-partial")
-	assert.Equal(t, store.NodeBatchPartial, aggregate.Job.Status)
+	require.NoError(t, svc.StartFunctionJobRunner(ctx, 3, 100*time.Millisecond))
+	aggregate := waitForFunctionJobTerminal(t, catalog, "runner-partial")
+	assert.Equal(t, store.FunctionJobPartial, aggregate.Job.Status)
 	assert.Equal(t, 2, aggregate.SuccessCount)
 	assert.Equal(t, 1, aggregate.FailedCount)
 }
 
-func TestNodeBatchRunnerRetriesTransientProviderFailure(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+func TestFunctionJobRunnerRetriesTransientProviderFailure(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	createRunnerBatch(t, catalog, "runner-provider-retry", 1)
 	var calls atomic.Int32
 	svc := &Service{
 		catalog: catalog,
-		executeNodeBatchItem: func(context.Context, store.NodeBatchItem) (string, error) {
-			if calls.Add(1) < nodeBatchProviderAttempts {
+		executeFunctionJobItem: func(context.Context, store.FunctionJobItem) (string, error) {
+			if calls.Add(1) < functionJobProviderAttempts {
 				return "", errors.New("ClientError.NetworkError: TLS handshake timeout")
 			}
 			return "done after retry", nil
@@ -137,29 +137,29 @@ func TestNodeBatchRunnerRetriesTransientProviderFailure(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, svc.StartNodeBatchRunner(ctx, 1, 100*time.Millisecond))
+	require.NoError(t, svc.StartFunctionJobRunner(ctx, 1, 100*time.Millisecond))
 
-	aggregate := waitForNodeBatchTerminal(t, catalog, "runner-provider-retry")
-	assert.Equal(t, store.NodeBatchSuccess, aggregate.Job.Status)
-	assert.Equal(t, int32(nodeBatchProviderAttempts), calls.Load())
+	aggregate := waitForFunctionJobTerminal(t, catalog, "runner-provider-retry")
+	assert.Equal(t, store.FunctionJobSuccess, aggregate.Job.Status)
+	assert.Equal(t, int32(functionJobProviderAttempts), calls.Load())
 	assert.Equal(t, "done after retry", aggregate.Items[0].ResultSummary)
 }
 
 func TestDeployBatchReconcilesAfterSuccessfulCodeMutationAndLaterFailure(t *testing.T) {
 	for _, failureStage := range []string{"configuration", "timer trigger"} {
 		t.Run(failureStage, func(t *testing.T) {
-			catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-			seedGenericNodeItemPackage(t, catalog)
-			node := store.CloudNode{
-				SpaceID: "crypto", NodeID: "node-partial-deploy", CloudAccountID: "account-a",
-				PackageID: "old-package", NodeType: "scf-event", Provider: "tencent-scf",
+			catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
+			seedGenericInstanceItemPackage(t, catalog)
+			instance := store.FunctionInstance{
+				SpaceID: "crypto", InstanceID: "instance-partial-deploy", CloudAccountID: "account-a",
+				PackageID: "old-package", FunctionType: "scf-event", Provider: "tencent-scf",
 				Region: "ap-guangzhou", Namespace: "collector", FunctionName: "collector-partial-deploy",
 				Metadata: `{"handler":"main"}`,
 			}
 			if failureStage == "timer trigger" {
-				node.TriggerType = "timer"
+				instance.TriggerType = "timer"
 			}
-			require.NoError(t, catalog.UpsertNode(context.Background(), node))
+			require.NoError(t, catalog.UpsertInstance(context.Background(), instance))
 
 			fake := &fakeSCFClient{
 				getResults: []fakeSCFGetResult{{info: &tencentscf.FunctionInfo{
@@ -174,23 +174,23 @@ func TestDeployBatchReconcilesAfterSuccessfulCodeMutationAndLaterFailure(t *test
 				fake.timerErr = providerFailure
 				fake.timerInfoSet = true
 			}
-			svc := newNodeItemTestService(catalog, fake)
+			svc := newInstanceItemTestService(catalog, fake)
 
-			submitted, err := svc.SubmitDeployNodes(nodeBatchContext("crypto"), &pb.BatchDeployNodesReq{
-				Deployments: []*pb.NodeDeployItem{{NodeId: node.NodeID, PackageId: "moox-collector_dev"}},
+			submitted, err := svc.SubmitDeployFunctionInstances(functionJobContext("crypto"), &pb.SubmitDeployFunctionInstancesReq{
+				Deployments: []*pb.FunctionInstanceDeployItem{{InstanceId: instance.InstanceID, PackageId: "moox-collector_dev"}},
 			})
 			require.NoError(t, err)
 			require.Equal(t, pb.ErrorCode_SUCCESS, submitted.GetRetInfo().GetCode())
 
 			runnerCtx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
-			require.NoError(t, svc.StartNodeBatchRunner(runnerCtx, 1, 100*time.Millisecond))
-			var aggregate *store.NodeBatchAggregate
+			require.NoError(t, svc.StartFunctionJobRunner(runnerCtx, 1, 100*time.Millisecond))
+			var aggregate *store.FunctionJobAggregate
 			require.Eventually(t, func() bool {
 				var getErr error
-				aggregate, getErr = catalog.GetNodeBatch(context.Background(), "crypto", submitted.GetJobId())
+				aggregate, getErr = catalog.GetFunctionJob(context.Background(), "crypto", submitted.GetJobId())
 				return getErr == nil && aggregate != nil && len(aggregate.Items) == 1 &&
-					aggregate.Items[0].Status == store.NodeBatchReconciliationRequired
+					aggregate.Items[0].Status == store.FunctionJobReconciliationRequired
 			}, 3*time.Second, 10*time.Millisecond)
 
 			assert.Equal(t, 0, aggregate.FailedCount)
@@ -205,11 +205,11 @@ func TestDeployBatchReconcilesAfterSuccessfulCodeMutationAndLaterFailure(t *test
 			}
 			fake.mu.Unlock()
 
-			persistedNode, getErr := catalog.GetNode(context.Background(), "crypto", node.NodeID)
+			persistedInstance, getErr := catalog.GetInstance(context.Background(), "crypto", instance.InstanceID)
 			require.NoError(t, getErr)
-			require.NotNil(t, persistedNode)
-			assert.Equal(t, "old-package", persistedNode.PackageID, "catalog state must not claim the partial deployment completed")
-			assert.Error(t, catalog.ClaimNodeMutation(context.Background(), "crypto", node.NodeID, persistedNode.LifecycleID, "replacement-operation"),
+			require.NotNil(t, persistedInstance)
+			assert.Equal(t, "old-package", persistedInstance.PackageID, "catalog state must not claim the partial deployment completed")
+			assert.Error(t, catalog.ClaimInstanceMutation(context.Background(), "crypto", instance.InstanceID, persistedInstance.LifecycleID, "replacement-operation"),
 				"the exact operation claim must remain held until reconciliation")
 		})
 	}
@@ -264,52 +264,52 @@ func TestCollectorPublishOperationClaimIsRetainedAfterAmbiguousProviderFailure(t
 	assert.EqualValues(t, 1, validator.ends.Load(), "a deterministic failure can release its claim immediately")
 }
 
-func TestNodeBatchRunnerRevalidatesFenceBeforeProviderRetry(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+func TestFunctionJobRunnerRevalidatesFenceBeforeProviderRetry(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
-	request, err := protojson.Marshal(validCreateNodeItem(t, "node-fenced"))
+	request, err := protojson.Marshal(validCreateInstanceItem(t, "instance-fenced"))
 	require.NoError(t, err)
 	validator := &testPublishLeaseValidator{rejectAt: 2}
 	var providerCalls atomic.Int32
 	svc := &Service{
 		catalog:               catalog,
 		publishLeaseValidator: validator,
-		executeNodeBatchItem: func(context.Context, store.NodeBatchItem) (string, error) {
+		executeFunctionJobItem: func(context.Context, store.FunctionJobItem) (string, error) {
 			providerCalls.Add(1)
 			return "", errors.New("ClientError.NetworkError: TLS handshake timeout")
 		},
 	}
-	item := store.NodeBatchItem{SpaceID: "crypto", RequestJSON: string(request)}
+	item := store.FunctionJobItem{SpaceID: "crypto", RequestJSON: string(request)}
 
-	_, err = svc.dispatchNodeBatchItemWithRetry(context.Background(), &item, nodeBatchOperationCreate)
+	_, err = svc.dispatchFunctionJobItemWithRetry(context.Background(), &item, functionJobOperationCreate)
 
 	require.ErrorContains(t, err, "lease is no longer current")
 	assert.EqualValues(t, 2, validator.calls.Load())
 	assert.EqualValues(t, 1, providerCalls.Load(), "a superseded token must stop retries before the next Provider call")
 }
 
-func TestNodeBatchRecoversStalePublishFenceOnSameDurableItem(t *testing.T) {
-	db := newNodeSCFTestDB(t)
+func TestFunctionJobRecoversStalePublishFenceOnSameDurableItem(t *testing.T) {
+	db := newInstanceSCFTestDB(t)
 	catalog := store.NewCatalogRepository(db)
 	seedSCFAccountAndPackage(t, catalog)
-	node := store.CloudNode{
-		SpaceID: "crypto", NodeID: "node-stale-fence", CloudAccountID: "account-a", PackageID: "moox-collector_dev",
-		NodeType: "scf-event", Provider: "tencent-scf", Region: "ap-guangzhou", Namespace: "collector",
-		FunctionName: "node-stale-fence", Metadata: `{"biz_type":"market_fetcher","collector_publish_fenced":true}`,
+	instance := store.FunctionInstance{
+		SpaceID: "crypto", InstanceID: "instance-stale-fence", CloudAccountID: "account-a", PackageID: "moox-collector_dev",
+		FunctionType: "scf-event", Provider: "tencent-scf", Region: "ap-guangzhou", Namespace: "collector",
+		FunctionName: "instance-stale-fence", Metadata: `{"workload_type":"market_fetcher","collector_publish_fenced":true}`,
 	}
-	require.NoError(t, catalog.UpsertNode(context.Background(), node))
+	require.NoError(t, catalog.UpsertInstance(context.Background(), instance))
 	validator := &takeoverPublishLeaseValidator{}
-	claimed := make(chan *pb.NodeDeployItem, 1)
+	claimed := make(chan *pb.FunctionInstanceDeployItem, 1)
 	continueMutation := make(chan struct{})
 	service := &Service{
 		catalog:               catalog,
 		publishLeaseValidator: validator,
-		executeNodeBatchItem: func(ctx context.Context, batchItem store.NodeBatchItem) (string, error) {
-			request := &pb.NodeDeployItem{}
+		executeFunctionJobItem: func(ctx context.Context, batchItem store.FunctionJobItem) (string, error) {
+			request := &pb.FunctionInstanceDeployItem{}
 			if err := protojson.Unmarshal([]byte(batchItem.RequestJSON), request); err != nil {
 				return "", err
 			}
-			if err := catalog.ClaimNodeMutation(ctx, batchItem.SpaceID, request.GetNodeId(), request.GetLifecycleId(), request.GetOperationId()); err != nil {
+			if err := catalog.ClaimInstanceMutation(ctx, batchItem.SpaceID, request.GetInstanceId(), request.GetLifecycleId(), request.GetOperationId()); err != nil {
 				return "", err
 			}
 			claimed <- request
@@ -322,25 +322,25 @@ func TestNodeBatchRecoversStalePublishFenceOnSameDurableItem(t *testing.T) {
 		},
 	}
 
-	submitted, err := service.SubmitDeployNodes(nodeBatchContext("crypto"), &pb.BatchDeployNodesReq{
-		Deployments: []*pb.NodeDeployItem{{
-			NodeId: node.NodeID, PackageId: node.PackageID,
+	submitted, err := service.SubmitDeployFunctionInstances(functionJobContext("crypto"), &pb.SubmitDeployFunctionInstancesReq{
+		Deployments: []*pb.FunctionInstanceDeployItem{{
+			InstanceId: instance.InstanceID, PackageId: instance.PackageID,
 			CollectorPublishLeaseId: "cli-lease", CollectorPublishFencingToken: 7,
 		}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, submitted.GetRetInfo().GetCode())
 
-	items, err := catalog.TakePendingNodeBatchItems(context.Background(), 1)
+	items, err := catalog.TakePendingFunctionJobItems(context.Background(), 1)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
-	require.NoError(t, service.runTakenNodeBatch(context.Background(), items))
-	aggregate, err := catalog.GetNodeBatch(context.Background(), "crypto", submitted.GetJobId())
+	require.NoError(t, service.runTakenFunctionJob(context.Background(), items))
+	aggregate, err := catalog.GetFunctionJob(context.Background(), "crypto", submitted.GetJobId())
 	require.NoError(t, err)
 	require.NotNil(t, aggregate)
-	require.Equal(t, store.NodeBatchReconciliationRequired, aggregate.Items[0].Status)
-	assert.False(t, aggregate.Items[0].PublishLeaseRecoveryOwned, "a held lease must not be mistaken for one acquired by CloudNode")
-	oldRequest := &pb.NodeDeployItem{}
+	require.Equal(t, store.FunctionJobReconciliationRequired, aggregate.Items[0].Status)
+	assert.False(t, aggregate.Items[0].PublishLeaseRecoveryOwned, "a held lease must not be mistaken for one acquired by FunctionInstance")
+	oldRequest := &pb.FunctionInstanceDeployItem{}
 	require.NoError(t, protojson.Unmarshal([]byte(aggregate.Items[0].RequestJSON), oldRequest))
 	assert.Equal(t, "cli-lease", oldRequest.GetCollectorPublishLeaseId())
 	assert.EqualValues(t, 7, oldRequest.GetCollectorPublishFencingToken())
@@ -351,29 +351,29 @@ func TestNodeBatchRecoversStalePublishFenceOnSameDurableItem(t *testing.T) {
 	}
 
 	validator.allowAcquire.Store(true)
-	require.NoError(t, db.Model(&store.NodeBatchItem{}).
+	require.NoError(t, db.Model(&store.FunctionJobItem{}).
 		Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", "crypto", submitted.GetJobId(), aggregate.Items[0].ItemID).
 		Update("c_mtime", time.Now().UTC().Add(-20*time.Second)).Error)
-	items, err = catalog.TakePendingNodeBatchItems(context.Background(), 1)
+	items, err = catalog.TakePendingFunctionJobItems(context.Background(), 1)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
-	assert.False(t, items[0].ResumeClaim, "the first stale-lease attempt did not acquire a node lifecycle claim")
+	assert.False(t, items[0].ResumeClaim, "the first stale-lease attempt did not acquire a instance lifecycle claim")
 
 	finished := make(chan error, 1)
-	go func() { finished <- service.runTakenNodeBatch(context.Background(), items) }()
-	var recovered *pb.NodeDeployItem
+	go func() { finished <- service.runTakenFunctionJob(context.Background(), items) }()
+	var recovered *pb.FunctionInstanceDeployItem
 	select {
 	case recovered = <-claimed:
 	case <-time.After(time.Second):
 		t.Fatal("same durable item did not resume after the old operation claim expired")
 	}
-	require.Equal(t, "node-stale-fence", recovered.GetNodeId())
+	require.Equal(t, "instance-stale-fence", recovered.GetInstanceId())
 	require.Equal(t, oldRequest.GetLifecycleId(), recovered.GetLifecycleId())
 	require.Equal(t, oldRequest.GetOperationId(), recovered.GetOperationId())
 	require.Equal(t, "recovery-lease", recovered.GetCollectorPublishLeaseId())
 	require.EqualValues(t, 8, recovered.GetCollectorPublishFencingToken())
 
-	require.Error(t, catalog.ClaimNodeMutation(context.Background(), "crypto", node.NodeID, recovered.GetLifecycleId(), "competing-operation"),
+	require.Error(t, catalog.ClaimInstanceMutation(context.Background(), "crypto", instance.InstanceID, recovered.GetLifecycleId(), "competing-operation"),
 		"the recovered item must retain its original lifecycle claim against concurrent work")
 	close(continueMutation)
 	select {
@@ -383,11 +383,11 @@ func TestNodeBatchRecoversStalePublishFenceOnSameDurableItem(t *testing.T) {
 		t.Fatal("reconciled item did not reach a terminal state")
 	}
 
-	aggregate, err = catalog.GetNodeBatch(context.Background(), "crypto", submitted.GetJobId())
+	aggregate, err = catalog.GetFunctionJob(context.Background(), "crypto", submitted.GetJobId())
 	require.NoError(t, err)
-	require.Equal(t, store.NodeBatchSuccess, aggregate.Job.Status)
+	require.Equal(t, store.FunctionJobSuccess, aggregate.Job.Status)
 	assert.False(t, aggregate.Items[0].PublishLeaseRecoveryOwned, "terminal transition must release and clear only the recovery-owned lease")
-	finalRequest := &pb.NodeDeployItem{}
+	finalRequest := &pb.FunctionInstanceDeployItem{}
 	require.NoError(t, protojson.Unmarshal([]byte(aggregate.Items[0].RequestJSON), finalRequest))
 	assert.Equal(t, recovered.GetLifecycleId(), finalRequest.GetLifecycleId())
 	assert.Equal(t, recovered.GetOperationId(), finalRequest.GetOperationId())
@@ -396,7 +396,7 @@ func TestNodeBatchRecoversStalePublishFenceOnSameDurableItem(t *testing.T) {
 	assert.EqualValues(t, 1, validator.releaseCalls.Load())
 	assert.Equal(t, "recovery-lease", validator.releasedLeaseID)
 	assert.EqualValues(t, 8, validator.releasedToken)
-	assert.Empty(t, validator.releasedOriginalLease, "CloudNode must never release the original CLI lease")
+	assert.Empty(t, validator.releasedOriginalLease, "FunctionInstance must never release the original CLI lease")
 }
 
 type takeoverPublishLeaseValidator struct {
@@ -450,60 +450,60 @@ func (v *takeoverPublishLeaseValidator) ReleaseLease(_ context.Context, lease *p
 	return nil
 }
 
-func TestNodeBatchRecoveryRenewsLeaseAcrossShortReconciliationAttempts(t *testing.T) {
-	db := newNodeSCFTestDB(t)
+func TestFunctionJobRecoveryRenewsLeaseAcrossShortReconciliationAttempts(t *testing.T) {
+	db := newInstanceSCFTestDB(t)
 	catalog := store.NewCatalogRepository(db)
 	seedSCFAccountAndPackage(t, catalog)
-	node := store.CloudNode{
-		SpaceID: "crypto", NodeID: "node-short-reconcile", CloudAccountID: "account-a", PackageID: "moox-collector_dev",
-		NodeType: "scf-event", Provider: "tencent-scf", Region: "ap-guangzhou", Namespace: "collector",
-		FunctionName: "node-short-reconcile", Metadata: `{"biz_type":"market_fetcher","collector_publish_fenced":true}`,
+	instance := store.FunctionInstance{
+		SpaceID: "crypto", InstanceID: "instance-short-reconcile", CloudAccountID: "account-a", PackageID: "moox-collector_dev",
+		FunctionType: "scf-event", Provider: "tencent-scf", Region: "ap-guangzhou", Namespace: "collector",
+		FunctionName: "instance-short-reconcile", Metadata: `{"workload_type":"market_fetcher","collector_publish_fenced":true}`,
 	}
-	require.NoError(t, catalog.UpsertNode(context.Background(), node))
-	current, err := catalog.GetNode(context.Background(), "crypto", node.NodeID)
+	require.NoError(t, catalog.UpsertInstance(context.Background(), instance))
+	current, err := catalog.GetInstance(context.Background(), "crypto", instance.InstanceID)
 	require.NoError(t, err)
 	itemID := "item-short-reconcile"
-	request, err := protojson.Marshal(&pb.NodeDeployItem{
-		NodeId: node.NodeID, PackageId: "moox-collector_dev", LifecycleId: current.LifecycleID, OperationId: itemID,
+	request, err := protojson.Marshal(&pb.FunctionInstanceDeployItem{
+		InstanceId: instance.InstanceID, PackageId: "moox-collector_dev", LifecycleId: current.LifecycleID, OperationId: itemID,
 		CollectorPublishLeaseId: "cli-lease", CollectorPublishFencingToken: 7,
 	})
 	require.NoError(t, err)
-	require.NoError(t, catalog.ClaimNodeMutation(context.Background(), "crypto", node.NodeID, current.LifecycleID, itemID))
-	require.NoError(t, catalog.CreateNodeBatch(context.Background(), store.NodeBatchCreate{
-		SpaceID: "crypto", JobID: "job-short-reconcile", Operation: nodeBatchOperationDeploy,
-		Items: []store.NodeBatchItemCreate{{ItemID: itemID, NodeID: node.NodeID, RequestJSON: string(request)}},
+	require.NoError(t, catalog.ClaimInstanceMutation(context.Background(), "crypto", instance.InstanceID, current.LifecycleID, itemID))
+	require.NoError(t, catalog.CreateFunctionJob(context.Background(), store.FunctionJobCreate{
+		SpaceID: "crypto", JobID: "job-short-reconcile", Operation: functionJobOperationDeploy,
+		Items: []store.FunctionJobItemCreate{{ItemID: itemID, InstanceID: instance.InstanceID, RequestJSON: string(request)}},
 	}))
 	validator := &takeoverPublishLeaseValidator{}
 	validator.allowAcquire.Store(true)
 	var executions atomic.Int32
 	service := &Service{
 		catalog: catalog, publishLeaseValidator: validator,
-		executeNodeBatchItem: func(context.Context, store.NodeBatchItem) (string, error) {
+		executeFunctionJobItem: func(context.Context, store.FunctionJobItem) (string, error) {
 			if executions.Add(1) == 1 {
-				return "", fmt.Errorf("%w: provider state needs verification", errNodeMutationReconciliationRequired)
+				return "", fmt.Errorf("%w: provider state needs verification", errInstanceMutationReconciliationRequired)
 			}
 			return "", errors.New("provider readback permission denied")
 		},
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		items, takeErr := catalog.TakePendingNodeBatchItems(context.Background(), 1)
+		items, takeErr := catalog.TakePendingFunctionJobItems(context.Background(), 1)
 		require.NoError(t, takeErr)
 		require.Len(t, items, 1)
-		require.NoError(t, service.runTakenNodeBatch(context.Background(), items))
-		aggregate, getErr := catalog.GetNodeBatch(context.Background(), "crypto", "job-short-reconcile")
+		require.NoError(t, service.runTakenFunctionJob(context.Background(), items))
+		aggregate, getErr := catalog.GetFunctionJob(context.Background(), "crypto", "job-short-reconcile")
 		require.NoError(t, getErr)
-		require.Equal(t, store.NodeBatchReconciliationRequired, aggregate.Items[0].Status)
+		require.Equal(t, store.FunctionJobReconciliationRequired, aggregate.Items[0].Status)
 		if attempt == 0 {
-			require.NoError(t, db.Model(&store.NodeBatchItem{}).
+			require.NoError(t, db.Model(&store.FunctionJobItem{}).
 				Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", "crypto", "job-short-reconcile", itemID).
 				Update("c_mtime", time.Now().UTC().Add(-20*time.Second)).Error)
 		}
 	}
 	assert.EqualValues(t, 2, validator.renewLeaseCalls.Load(), "every short recovered attempt renews the lease before beginning another operation")
 	assert.Zero(t, validator.releaseCalls.Load(), "a nonterminal reconciliation must retain its recovery lease")
-	assert.Error(t, catalog.ClaimNodeMutation(context.Background(), "crypto", node.NodeID, current.LifecycleID, "competing-operation"),
-		"the node lifecycle claim must remain held during reconciliation")
+	assert.Error(t, catalog.ClaimInstanceMutation(context.Background(), "crypto", instance.InstanceID, current.LifecycleID, "competing-operation"),
+		"the instance lifecycle claim must remain held during reconciliation")
 }
 
 type expiredRecoveryLeaseValidator struct {
@@ -546,84 +546,84 @@ func (*expiredRecoveryLeaseValidator) ReleaseLease(context.Context, *publishleas
 	return nil
 }
 
-func TestNodeBatchRecoveryReacquiresExpiredRecoveryLease(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+func TestFunctionJobRecoveryReacquiresExpiredRecoveryLease(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
 	ctx := context.Background()
-	node := store.CloudNode{
-		SpaceID: "crypto", NodeID: "node-expired-recovery-lease", CloudAccountID: "account-a", PackageID: "moox-collector_dev",
-		NodeType: "scf-event", Provider: "tencent-scf", Region: "ap-guangzhou", Namespace: "collector",
-		FunctionName: "node-expired-recovery-lease", Metadata: `{"biz_type":"market_fetcher","collector_publish_fenced":true}`,
+	instance := store.FunctionInstance{
+		SpaceID: "crypto", InstanceID: "instance-expired-recovery-lease", CloudAccountID: "account-a", PackageID: "moox-collector_dev",
+		FunctionType: "scf-event", Provider: "tencent-scf", Region: "ap-guangzhou", Namespace: "collector",
+		FunctionName: "instance-expired-recovery-lease", Metadata: `{"workload_type":"market_fetcher","collector_publish_fenced":true}`,
 	}
-	require.NoError(t, catalog.UpsertNode(ctx, node))
-	current, err := catalog.GetNode(ctx, "crypto", node.NodeID)
+	require.NoError(t, catalog.UpsertInstance(ctx, instance))
+	current, err := catalog.GetInstance(ctx, "crypto", instance.InstanceID)
 	require.NoError(t, err)
 	itemID := "item-expired-recovery-lease"
-	request, err := protojson.Marshal(&pb.NodeDeployItem{
-		NodeId: node.NodeID, PackageId: "moox-collector_dev", LifecycleId: current.LifecycleID, OperationId: itemID,
+	request, err := protojson.Marshal(&pb.FunctionInstanceDeployItem{
+		InstanceId: instance.InstanceID, PackageId: "moox-collector_dev", LifecycleId: current.LifecycleID, OperationId: itemID,
 		CollectorPublishLeaseId: "cli-lease", CollectorPublishFencingToken: 7,
 	})
 	require.NoError(t, err)
-	require.NoError(t, catalog.ClaimNodeMutation(ctx, "crypto", node.NodeID, current.LifecycleID, itemID))
-	require.NoError(t, catalog.CreateNodeBatch(ctx, store.NodeBatchCreate{
-		SpaceID: "crypto", JobID: "job-expired-recovery-lease", Operation: nodeBatchOperationDeploy,
-		Items: []store.NodeBatchItemCreate{{ItemID: itemID, NodeID: node.NodeID, RequestJSON: string(request)}},
+	require.NoError(t, catalog.ClaimInstanceMutation(ctx, "crypto", instance.InstanceID, current.LifecycleID, itemID))
+	require.NoError(t, catalog.CreateFunctionJob(ctx, store.FunctionJobCreate{
+		SpaceID: "crypto", JobID: "job-expired-recovery-lease", Operation: functionJobOperationDeploy,
+		Items: []store.FunctionJobItemCreate{{ItemID: itemID, InstanceID: instance.InstanceID, RequestJSON: string(request)}},
 	}))
-	items, err := catalog.TakePendingNodeBatchItems(ctx, 1)
+	items, err := catalog.TakePendingFunctionJobItems(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
-	recovered, err := catalog.ReplaceNodeBatchItemPublishFence(ctx, "crypto", "job-expired-recovery-lease", itemID, "cli-lease", 7, "recovery-lease", 8)
+	recovered, err := catalog.ReplaceFunctionJobItemPublishFence(ctx, "crypto", "job-expired-recovery-lease", itemID, "cli-lease", 7, "recovery-lease", 8)
 	require.NoError(t, err)
 	validator := &expiredRecoveryLeaseValidator{}
 	service := &Service{
 		catalog: catalog, publishLeaseValidator: validator,
-		executeNodeBatchItem: func(context.Context, store.NodeBatchItem) (string, error) { return "reconciled", nil },
+		executeFunctionJobItem: func(context.Context, store.FunctionJobItem) (string, error) { return "reconciled", nil },
 	}
-	summary, err := service.dispatchNodeBatchItemWithRetry(ctx, recovered, nodeBatchOperationDeploy)
+	summary, err := service.dispatchFunctionJobItemWithRetry(ctx, recovered, functionJobOperationDeploy)
 	require.NoError(t, err)
 	assert.Equal(t, "reconciled", summary)
 	assert.EqualValues(t, 1, validator.acquireCalls.Load(), "a stale recovery-owned lease must trigger a compare-and-swap takeover")
 	validator.mu.Lock()
 	assert.Equal(t, []int64{9}, validator.beginTokens)
 	validator.mu.Unlock()
-	requestAfterRecovery := &pb.NodeDeployItem{}
+	requestAfterRecovery := &pb.FunctionInstanceDeployItem{}
 	require.NoError(t, protojson.Unmarshal([]byte(recovered.RequestJSON), requestAfterRecovery))
 	assert.EqualValues(t, 9, requestAfterRecovery.GetCollectorPublishFencingToken())
 }
 
-func TestNodeBatchRunnerWaitsForExistingMutationClaimWithoutPoisoningResume(t *testing.T) {
-	for _, operation := range []string{nodeBatchOperationDeploy, nodeBatchOperationDelete} {
+func TestFunctionJobRunnerWaitsForExistingMutationClaimWithoutPoisoningResume(t *testing.T) {
+	for _, operation := range []string{functionJobOperationDeploy, functionJobOperationDelete} {
 		t.Run(operation, func(t *testing.T) {
-			db := newNodeSCFTestDB(t)
+			db := newInstanceSCFTestDB(t)
 			catalog := store.NewCatalogRepository(db)
 			ctx := context.Background()
-			nodeID := "node-claim-wait-" + operation
-			require.NoError(t, catalog.UpsertNode(ctx, store.CloudNode{SpaceID: "crypto", NodeID: nodeID, PackageID: "pkg-old"}))
-			node, err := catalog.GetNode(ctx, "crypto", nodeID)
+			instanceID := "instance-claim-wait-" + operation
+			require.NoError(t, catalog.UpsertInstance(ctx, store.FunctionInstance{SpaceID: "crypto", InstanceID: instanceID, PackageID: "pkg-old"}))
+			instance, err := catalog.GetInstance(ctx, "crypto", instanceID)
 			require.NoError(t, err)
 			jobID := "job-claim-wait-" + operation
 			itemID := jobID + "-000"
 			var request []byte
-			if operation == nodeBatchOperationDelete {
-				request, err = protojson.Marshal(&pb.NodeDeleteItem{NodeId: nodeID, LifecycleId: node.LifecycleID, OperationId: itemID})
+			if operation == functionJobOperationDelete {
+				request, err = protojson.Marshal(&pb.FunctionInstanceDeleteItem{InstanceId: instanceID, LifecycleId: instance.LifecycleID, OperationId: itemID})
 			} else {
-				request, err = protojson.Marshal(&pb.NodeDeployItem{NodeId: nodeID, LifecycleId: node.LifecycleID, OperationId: itemID})
+				request, err = protojson.Marshal(&pb.FunctionInstanceDeployItem{InstanceId: instanceID, LifecycleId: instance.LifecycleID, OperationId: itemID})
 			}
 			require.NoError(t, err)
-			require.NoError(t, catalog.CreateNodeBatch(ctx, store.NodeBatchCreate{
+			require.NoError(t, catalog.CreateFunctionJob(ctx, store.FunctionJobCreate{
 				SpaceID: "crypto", JobID: jobID, Operation: operation,
-				Items: []store.NodeBatchItemCreate{{ItemID: itemID, NodeID: nodeID, RequestJSON: string(request)}},
+				Items: []store.FunctionJobItemCreate{{ItemID: itemID, InstanceID: instanceID, RequestJSON: string(request)}},
 			}))
-			require.NoError(t, catalog.ClaimNodeMutation(ctx, "crypto", nodeID, node.LifecycleID, "previous-durable-item"))
+			require.NoError(t, catalog.ClaimInstanceMutation(ctx, "crypto", instanceID, instance.LifecycleID, "previous-durable-item"))
 			var calls atomic.Int32
 			service := &Service{
 				catalog: catalog,
-				executeNodeBatchItem: func(_ context.Context, item store.NodeBatchItem) (string, error) {
+				executeFunctionJobItem: func(_ context.Context, item store.FunctionJobItem) (string, error) {
 					var claimErr error
-					if operation == nodeBatchOperationDelete {
-						claimErr = catalog.ClaimNodeDelete(ctx, "crypto", nodeID, node.LifecycleID, item.ItemID)
+					if operation == functionJobOperationDelete {
+						claimErr = catalog.ClaimInstanceDelete(ctx, "crypto", instanceID, instance.LifecycleID, item.ItemID)
 					} else {
-						claimErr = catalog.ClaimNodeMutation(ctx, "crypto", nodeID, node.LifecycleID, item.ItemID)
+						claimErr = catalog.ClaimInstanceMutation(ctx, "crypto", instanceID, instance.LifecycleID, item.ItemID)
 					}
 					if claimErr != nil {
 						return "", claimErr
@@ -632,82 +632,82 @@ func TestNodeBatchRunnerWaitsForExistingMutationClaimWithoutPoisoningResume(t *t
 					return "", errors.New("permission denied before provider mutation")
 				},
 			}
-			items, err := catalog.TakePendingNodeBatchItems(ctx, 1)
+			items, err := catalog.TakePendingFunctionJobItems(ctx, 1)
 			require.NoError(t, err)
-			require.NoError(t, service.runTakenNodeBatch(ctx, items))
-			aggregate, err := catalog.GetNodeBatch(ctx, "crypto", jobID)
+			require.NoError(t, service.runTakenFunctionJob(ctx, items))
+			aggregate, err := catalog.GetFunctionJob(ctx, "crypto", jobID)
 			require.NoError(t, err)
-			require.Equal(t, store.NodeBatchReconciliationRequired, aggregate.Items[0].Status)
-			require.NoError(t, catalog.ReleaseNodeMutationClaim(ctx, "crypto", nodeID, node.LifecycleID, "previous-durable-item"))
-			require.NoError(t, db.Model(&store.NodeBatchItem{}).
+			require.Equal(t, store.FunctionJobReconciliationRequired, aggregate.Items[0].Status)
+			require.NoError(t, catalog.ReleaseInstanceMutationClaim(ctx, "crypto", instanceID, instance.LifecycleID, "previous-durable-item"))
+			require.NoError(t, db.Model(&store.FunctionJobItem{}).
 				Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", "crypto", jobID, itemID).
 				Update("c_mtime", time.Now().UTC().Add(-11*time.Second)).Error)
-			items, err = catalog.TakePendingNodeBatchItems(ctx, 1)
+			items, err = catalog.TakePendingFunctionJobItems(ctx, 1)
 			require.NoError(t, err)
 			require.Len(t, items, 1)
 			assert.False(t, items[0].ResumeClaim, "a claim-wait retry must not pretend this item already owns the claim")
-			require.NoError(t, service.runTakenNodeBatch(ctx, items))
-			aggregate, err = catalog.GetNodeBatch(ctx, "crypto", jobID)
+			require.NoError(t, service.runTakenFunctionJob(ctx, items))
+			aggregate, err = catalog.GetFunctionJob(ctx, "crypto", jobID)
 			require.NoError(t, err)
-			assert.Equal(t, store.NodeBatchFailed, aggregate.Job.Status, "a deterministic error after acquiring the claim must terminate")
+			assert.Equal(t, store.FunctionJobFailed, aggregate.Job.Status, "a deterministic error after acquiring the claim must terminate")
 			assert.Contains(t, aggregate.Items[0].ErrorMessage, "permission denied")
 			assert.EqualValues(t, 1, calls.Load(), "the provider mutation should start only after the previous owner releases its claim")
-			require.NoError(t, catalog.ClaimNodeMutation(ctx, "crypto", nodeID, node.LifecycleID, "next-operation"), "terminal completion must release the acquired claim")
+			require.NoError(t, catalog.ClaimInstanceMutation(ctx, "crypto", instanceID, instance.LifecycleID, "next-operation"), "terminal completion must release the acquired claim")
 		})
 	}
 }
 
-func TestNodeBatchDeleteRequiresFenceEvenWhenPackageRecordIsMissing(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
-		SpaceID: "crypto", NodeID: "moox-fetcher-crypto-invoke-0", FunctionName: "moox-fetcher-crypto-invoke-0",
-		PackageID: "deleted-package", NodeType: "scf-event", Metadata: "{\"collector_publish_fenced\":true,\"biz_type\":\"market_fetcher\"}",
+func TestFunctionJobDeleteRequiresFenceEvenWhenPackageRecordIsMissing(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
+	require.NoError(t, catalog.UpsertInstance(context.Background(), store.FunctionInstance{
+		SpaceID: "crypto", InstanceID: "moox-fetcher-crypto-invoke-0", FunctionName: "moox-fetcher-crypto-invoke-0",
+		PackageID: "deleted-package", FunctionType: "scf-event", Metadata: "{\"collector_publish_fenced\":true,\"workload_type\":\"market_fetcher\"}",
 	}))
-	request, err := protojson.Marshal(&pb.NodeDeleteItem{NodeId: "moox-fetcher-crypto-invoke-0"})
+	request, err := protojson.Marshal(&pb.FunctionInstanceDeleteItem{InstanceId: "moox-fetcher-crypto-invoke-0"})
 	require.NoError(t, err)
-	service := &Service{catalog: catalog, executeNodeBatchItem: func(context.Context, store.NodeBatchItem) (string, error) {
+	service := &Service{catalog: catalog, executeFunctionJobItem: func(context.Context, store.FunctionJobItem) (string, error) {
 		return "deleted", nil
 	}}
 
-	_, err = service.dispatchNodeBatchItem(context.Background(), &store.NodeBatchItem{
+	_, err = service.dispatchFunctionJobItem(context.Background(), &store.FunctionJobItem{
 		SpaceID: "crypto", RequestJSON: string(request),
-	}, nodeBatchOperationDelete)
+	}, functionJobOperationDelete)
 	require.ErrorContains(t, err, "requires a publish lease and fencing token")
 }
 
-func TestNodeBatchDeleteUsesFencingClaim(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
-		SpaceID: "crypto", NodeID: "moox-fetcher-crypto-invoke-0", FunctionName: "moox-fetcher-crypto-invoke-0",
-		PackageID: "deleted-package", NodeType: "scf-event", Metadata: "{\"collector_publish_fenced\":true,\"biz_type\":\"market_fetcher\"}",
+func TestFunctionJobDeleteUsesFencingClaim(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
+	require.NoError(t, catalog.UpsertInstance(context.Background(), store.FunctionInstance{
+		SpaceID: "crypto", InstanceID: "moox-fetcher-crypto-invoke-0", FunctionName: "moox-fetcher-crypto-invoke-0",
+		PackageID: "deleted-package", FunctionType: "scf-event", Metadata: "{\"collector_publish_fenced\":true,\"workload_type\":\"market_fetcher\"}",
 	}))
-	request, err := protojson.Marshal(&pb.NodeDeleteItem{
-		NodeId: "moox-fetcher-crypto-invoke-0", CollectorPublishLeaseId: "lease-test", CollectorPublishFencingToken: 7,
+	request, err := protojson.Marshal(&pb.FunctionInstanceDeleteItem{
+		InstanceId: "moox-fetcher-crypto-invoke-0", CollectorPublishLeaseId: "lease-test", CollectorPublishFencingToken: 7,
 	})
 	require.NoError(t, err)
 	validator := &testPublishLeaseValidator{}
 	service := &Service{
 		catalog: catalog, publishLeaseValidator: validator,
-		executeNodeBatchItem: func(context.Context, store.NodeBatchItem) (string, error) { return "deleted", nil },
+		executeFunctionJobItem: func(context.Context, store.FunctionJobItem) (string, error) { return "deleted", nil },
 	}
 
-	_, err = service.dispatchNodeBatchItem(context.Background(), &store.NodeBatchItem{
+	_, err = service.dispatchFunctionJobItem(context.Background(), &store.FunctionJobItem{
 		SpaceID: "crypto", RequestJSON: string(request),
-	}, nodeBatchOperationDelete)
+	}, functionJobOperationDelete)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, validator.calls.Load())
 }
 
-func TestNodeBatchHoldsPublishOperationClaimUntilMutationReturns(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+func TestFunctionJobHoldsPublishOperationClaimUntilMutationReturns(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
-	request, err := protojson.Marshal(validCreateNodeItem(t, "node-operation-claim"))
+	request, err := protojson.Marshal(validCreateInstanceItem(t, "instance-operation-claim"))
 	require.NoError(t, err)
 	claimStarted, mutationStarted, release, ended := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
 	validator := &blockingPublishLeaseValidator{started: claimStarted, ended: ended}
 	service := &Service{
 		catalog: catalog, publishLeaseValidator: validator,
-		executeNodeBatchItem: func(ctx context.Context, _ store.NodeBatchItem) (string, error) {
+		executeFunctionJobItem: func(ctx context.Context, _ store.FunctionJobItem) (string, error) {
 			close(mutationStarted)
 			select {
 			case <-release:
@@ -719,9 +719,9 @@ func TestNodeBatchHoldsPublishOperationClaimUntilMutationReturns(t *testing.T) {
 	}
 	finished := make(chan error, 1)
 	go func() {
-		_, dispatchErr := service.dispatchNodeBatchItem(context.Background(), &store.NodeBatchItem{
+		_, dispatchErr := service.dispatchFunctionJobItem(context.Background(), &store.FunctionJobItem{
 			SpaceID: "crypto", RequestJSON: string(request),
-		}, nodeBatchOperationCreate)
+		}, functionJobOperationCreate)
 		finished <- dispatchErr
 	}()
 	select {
@@ -769,7 +769,7 @@ func TestRecoveredPublishLeaseRenewalLossRetainsOperationClaim(t *testing.T) {
 
 	select {
 	case err := <-result:
-		require.ErrorIs(t, err, errNodeMutationReconciliationRequired)
+		require.ErrorIs(t, err, errInstanceMutationReconciliationRequired)
 	case <-time.After(time.Second):
 		t.Fatal("lost recovery lease renewal did not cancel the active operation")
 	}
@@ -839,14 +839,14 @@ func (*blockingPublishLeaseValidator) ReleaseLease(context.Context, *publishleas
 	return nil
 }
 
-func TestNodeBatchRunnerRetriesProviderTimeoutWithFreshAttemptContext(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+func TestFunctionJobRunnerRetriesProviderTimeoutWithFreshAttemptContext(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	createRunnerBatch(t, catalog, "runner-timeout-retry", 1)
 	var calls atomic.Int32
 	svc := &Service{
 		catalog: catalog,
-		executeNodeBatchItem: func(ctx context.Context, _ store.NodeBatchItem) (string, error) {
-			if calls.Add(1) < nodeBatchProviderAttempts {
+		executeFunctionJobItem: func(ctx context.Context, _ store.FunctionJobItem) (string, error) {
+			if calls.Add(1) < functionJobProviderAttempts {
 				return "", context.DeadlineExceeded
 			}
 			if err := ctx.Err(); err != nil {
@@ -857,61 +857,61 @@ func TestNodeBatchRunnerRetriesProviderTimeoutWithFreshAttemptContext(t *testing
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, svc.StartNodeBatchRunner(ctx, 1, 100*time.Millisecond))
+	require.NoError(t, svc.StartFunctionJobRunner(ctx, 1, 100*time.Millisecond))
 
-	aggregate := waitForNodeBatchTerminal(t, catalog, "runner-timeout-retry")
-	assert.Equal(t, store.NodeBatchSuccess, aggregate.Job.Status)
-	assert.Equal(t, int32(nodeBatchProviderAttempts), calls.Load())
+	aggregate := waitForFunctionJobTerminal(t, catalog, "runner-timeout-retry")
+	assert.Equal(t, store.FunctionJobSuccess, aggregate.Job.Status)
+	assert.Equal(t, int32(functionJobProviderAttempts), calls.Load())
 	assert.Equal(t, "done after timeout retry", aggregate.Items[0].ResultSummary)
 }
 
-func TestNodeBatchRunnerDoesNotRetryPermanentProviderFailure(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+func TestFunctionJobRunnerDoesNotRetryPermanentProviderFailure(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	createRunnerBatch(t, catalog, "runner-provider-permanent", 1)
 	var calls atomic.Int32
 	svc := &Service{
 		catalog: catalog,
-		executeNodeBatchItem: func(context.Context, store.NodeBatchItem) (string, error) {
+		executeFunctionJobItem: func(context.Context, store.FunctionJobItem) (string, error) {
 			calls.Add(1)
 			return "", errors.New("LimitExceeded.Function: function quota reached")
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, svc.StartNodeBatchRunner(ctx, 1, 100*time.Millisecond))
+	require.NoError(t, svc.StartFunctionJobRunner(ctx, 1, 100*time.Millisecond))
 
-	aggregate := waitForNodeBatchTerminal(t, catalog, "runner-provider-permanent")
-	assert.Equal(t, store.NodeBatchFailed, aggregate.Job.Status)
+	aggregate := waitForFunctionJobTerminal(t, catalog, "runner-provider-permanent")
+	assert.Equal(t, store.FunctionJobFailed, aggregate.Job.Status)
 	assert.Equal(t, int32(1), calls.Load())
 }
 
-func TestNodeBatchRunnerRetainsAmbiguousMutationClaimUntilSameItemReconciles(t *testing.T) {
-	db := newNodeSCFTestDB(t)
+func TestFunctionJobRunnerRetainsAmbiguousMutationClaimUntilSameItemReconciles(t *testing.T) {
+	db := newInstanceSCFTestDB(t)
 	catalog := store.NewCatalogRepository(db)
 	ctx := context.Background()
 	jobID := "runner-ambiguous-mutation"
 	itemID := jobID + "-000"
-	const nodeID = "runner-ambiguous-node"
-	require.NoError(t, catalog.UpsertNode(ctx, store.CloudNode{SpaceID: "crypto", NodeID: nodeID, PackageID: "pkg-old"}))
-	node, err := catalog.GetNode(ctx, "crypto", nodeID)
+	const instanceID = "runner-ambiguous-instance"
+	require.NoError(t, catalog.UpsertInstance(ctx, store.FunctionInstance{SpaceID: "crypto", InstanceID: instanceID, PackageID: "pkg-old"}))
+	instance, err := catalog.GetInstance(ctx, "crypto", instanceID)
 	require.NoError(t, err)
-	require.NotNil(t, node)
-	raw, err := protojson.Marshal(&pb.NodeDeployItem{NodeId: nodeID, LifecycleId: node.LifecycleID, OperationId: itemID})
+	require.NotNil(t, instance)
+	raw, err := protojson.Marshal(&pb.FunctionInstanceDeployItem{InstanceId: instanceID, LifecycleId: instance.LifecycleID, OperationId: itemID})
 	require.NoError(t, err)
-	require.NoError(t, catalog.CreateNodeBatch(ctx, store.NodeBatchCreate{
-		SpaceID: "crypto", JobID: jobID, Operation: nodeBatchOperationDeploy,
-		Items: []store.NodeBatchItemCreate{{ItemID: itemID, ItemIndex: 0, NodeID: nodeID, RequestJSON: string(raw)}},
+	require.NoError(t, catalog.CreateFunctionJob(ctx, store.FunctionJobCreate{
+		SpaceID: "crypto", JobID: jobID, Operation: functionJobOperationDeploy,
+		Items: []store.FunctionJobItemCreate{{ItemID: itemID, ItemIndex: 0, InstanceID: instanceID, RequestJSON: string(raw)}},
 	}))
 
 	var calls atomic.Int32
 	svc := &Service{
 		catalog: catalog,
-		executeNodeBatchItem: func(_ context.Context, item store.NodeBatchItem) (string, error) {
+		executeFunctionJobItem: func(_ context.Context, item store.FunctionJobItem) (string, error) {
 			call := calls.Add(1)
-			if err := catalog.ClaimNodeMutation(ctx, "crypto", nodeID, node.LifecycleID, item.ItemID); err != nil {
+			if err := catalog.ClaimInstanceMutation(ctx, "crypto", instanceID, instance.LifecycleID, item.ItemID); err != nil {
 				return "", err
 			}
-			if call <= nodeBatchProviderAttempts {
+			if call <= functionJobProviderAttempts {
 				return "", errors.New("ClientError.NetworkError: connection reset after request submission")
 			}
 			return "reconciled", nil
@@ -919,72 +919,72 @@ func TestNodeBatchRunnerRetainsAmbiguousMutationClaimUntilSameItemReconciles(t *
 	}
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, svc.StartNodeBatchRunner(runnerCtx, 1, 100*time.Millisecond))
+	require.NoError(t, svc.StartFunctionJobRunner(runnerCtx, 1, 100*time.Millisecond))
 	require.Eventually(t, func() bool {
-		aggregate, getErr := catalog.GetNodeBatch(ctx, "crypto", jobID)
-		return getErr == nil && aggregate != nil && aggregate.Items[0].Status == store.NodeBatchReconciliationRequired
+		aggregate, getErr := catalog.GetFunctionJob(ctx, "crypto", jobID)
+		return getErr == nil && aggregate != nil && aggregate.Items[0].Status == store.FunctionJobReconciliationRequired
 	}, 4*time.Second, 10*time.Millisecond)
-	require.ErrorIs(t, catalog.ClaimNodeMutation(ctx, "crypto", nodeID, node.LifecycleID, "new-operation"), store.ErrNodeMutationClaimed)
+	require.ErrorIs(t, catalog.ClaimInstanceMutation(ctx, "crypto", instanceID, instance.LifecycleID, "new-operation"), store.ErrInstanceMutationClaimed)
 
-	require.NoError(t, db.Model(&store.NodeBatchItem{}).
+	require.NoError(t, db.Model(&store.FunctionJobItem{}).
 		Where("c_space_id = ? AND c_job_id = ? AND c_item_id = ?", "crypto", jobID, itemID).
 		Update("c_mtime", time.Now().UTC().Add(-11*time.Second)).Error)
-	aggregate := waitForNodeBatchTerminal(t, catalog, jobID)
-	assert.Equal(t, store.NodeBatchSuccess, aggregate.Job.Status)
+	aggregate := waitForFunctionJobTerminal(t, catalog, jobID)
+	assert.Equal(t, store.FunctionJobSuccess, aggregate.Job.Status)
 	assert.Equal(t, "reconciled", aggregate.Items[0].ResultSummary)
-	assert.True(t, calls.Load() > nodeBatchProviderAttempts)
-	require.NoError(t, catalog.ClaimNodeMutation(ctx, "crypto", nodeID, node.LifecycleID, "new-operation"))
+	assert.True(t, calls.Load() > functionJobProviderAttempts)
+	require.NoError(t, catalog.ClaimInstanceMutation(ctx, "crypto", instanceID, instance.LifecycleID, "new-operation"))
 }
 
-func TestNodeBatchRunnerDoesNotRetryValidationTimeout(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+func TestFunctionJobRunnerDoesNotRetryValidationTimeout(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	createRunnerBatch(t, catalog, "runner-validation-timeout", 1)
 	var calls atomic.Int32
 	svc := &Service{
 		catalog: catalog,
-		executeNodeBatchItem: func(context.Context, store.NodeBatchItem) (string, error) {
+		executeFunctionJobItem: func(context.Context, store.FunctionJobItem) (string, error) {
 			calls.Add(1)
 			return "", errors.New("validation deadline exceeded for cron")
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, svc.StartNodeBatchRunner(ctx, 1, 100*time.Millisecond))
+	require.NoError(t, svc.StartFunctionJobRunner(ctx, 1, 100*time.Millisecond))
 
-	aggregate := waitForNodeBatchTerminal(t, catalog, "runner-validation-timeout")
-	assert.Equal(t, store.NodeBatchFailed, aggregate.Job.Status)
+	aggregate := waitForFunctionJobTerminal(t, catalog, "runner-validation-timeout")
+	assert.Equal(t, store.FunctionJobFailed, aggregate.Job.Status)
 	assert.Equal(t, int32(1), calls.Load())
 }
 
-func TestNodeBatchRunnerStopsWithRuntimeContext(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+func TestFunctionJobRunnerStopsWithRuntimeContext(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	createRunnerBatch(t, catalog, "runner-stopped", 1)
 	var calls atomic.Int32
 	svc := &Service{
 		catalog: catalog,
-		executeNodeBatchItem: func(context.Context, store.NodeBatchItem) (string, error) {
+		executeFunctionJobItem: func(context.Context, store.FunctionJobItem) (string, error) {
 			calls.Add(1)
 			return "done", nil
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	require.NoError(t, svc.StartNodeBatchRunner(ctx, 1, 100*time.Millisecond))
+	require.NoError(t, svc.StartFunctionJobRunner(ctx, 1, 100*time.Millisecond))
 	time.Sleep(30 * time.Millisecond)
 	assert.Zero(t, calls.Load())
-	aggregate, err := catalog.GetNodeBatch(context.Background(), "crypto", "runner-stopped")
+	aggregate, err := catalog.GetFunctionJob(context.Background(), "crypto", "runner-stopped")
 	require.NoError(t, err)
 	assert.Equal(t, 1, aggregate.PendingCount)
 }
 
-func TestNodeBatchRunnerLeavesRunningItemForStartupRecoveryWhenCanceledDuringExecution(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+func TestFunctionJobRunnerLeavesRunningItemForStartupRecoveryWhenCanceledDuringExecution(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	createRunnerBatch(t, catalog, "runner-canceled-active", 1)
 	started := make(chan struct{})
 	returned := make(chan struct{})
 	svc := &Service{
 		catalog: catalog,
-		executeNodeBatchItem: func(ctx context.Context, _ store.NodeBatchItem) (string, error) {
+		executeFunctionJobItem: func(ctx context.Context, _ store.FunctionJobItem) (string, error) {
 			close(started)
 			<-ctx.Done()
 			close(returned)
@@ -992,101 +992,101 @@ func TestNodeBatchRunnerLeavesRunningItemForStartupRecoveryWhenCanceledDuringExe
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	require.NoError(t, svc.StartNodeBatchRunner(ctx, 1, 100*time.Millisecond))
+	require.NoError(t, svc.StartFunctionJobRunner(ctx, 1, 100*time.Millisecond))
 	select {
 	case <-started:
 	case <-time.After(time.Second):
-		t.Fatal("node batch item did not start")
+		t.Fatal("instance batch item did not start")
 	}
 
 	cancel()
 	select {
 	case <-returned:
 	case <-time.After(time.Second):
-		t.Fatal("node batch executor did not observe runtime cancellation")
+		t.Fatal("instance batch executor did not observe runtime cancellation")
 	}
 
 	require.Never(t, func() bool {
-		aggregate, err := catalog.GetNodeBatch(context.Background(), "crypto", "runner-canceled-active")
+		aggregate, err := catalog.GetFunctionJob(context.Background(), "crypto", "runner-canceled-active")
 		return err != nil || aggregate == nil ||
 			aggregate.PendingCount != 0 || aggregate.RunningCount != 1 ||
 			aggregate.SuccessCount != 0 || aggregate.FailedCount != 0
 	}, 250*time.Millisecond, 10*time.Millisecond)
 }
 
-func TestNodeBatchRunnerRequeuesInterruptedItemsAtStartup(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+func TestFunctionJobRunnerRequeuesInterruptedItemsAtStartup(t *testing.T) {
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	createRunnerBatch(t, catalog, "runner-requeue", 1)
-	taken, err := catalog.TakePendingNodeBatchItems(context.Background(), 1)
+	taken, err := catalog.TakePendingFunctionJobItems(context.Background(), 1)
 	require.NoError(t, err)
 	require.Len(t, taken, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	svc := &Service{catalog: catalog}
 
-	require.NoError(t, svc.StartNodeBatchRunner(ctx, 1, time.Second))
+	require.NoError(t, svc.StartFunctionJobRunner(ctx, 1, time.Second))
 
-	aggregate, err := catalog.GetNodeBatch(context.Background(), "crypto", "runner-requeue")
+	aggregate, err := catalog.GetFunctionJob(context.Background(), "crypto", "runner-requeue")
 	require.NoError(t, err)
-	assert.Equal(t, store.NodeBatchPending, aggregate.Job.Status)
+	assert.Equal(t, store.FunctionJobPending, aggregate.Job.Status)
 	assert.Equal(t, 1, aggregate.PendingCount)
 	assert.Nil(t, aggregate.Items[0].StartedAt)
 }
 
-func TestNodeBatchRunnerNeverLogsRequestPayload(t *testing.T) {
+func TestFunctionJobRunnerNeverLogsRequestPayload(t *testing.T) {
 	var logs bytes.Buffer
 	original := log.GetDefaultLogger()
 	log.SetLogger(&bufferLogger{out: &logs})
 	t.Cleanup(func() { log.SetLogger(original) })
 
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
-	raw, err := protojson.Marshal(&pb.NodeDeployItem{
-		NodeId: "node-a", PackageId: "pkg-a",
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
+	raw, err := protojson.Marshal(&pb.FunctionInstanceDeployItem{
+		InstanceId: "instance-a", PackageId: "pkg-a",
 		Environment: map[string]string{"SECRET": "must-not-appear-in-logs"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, catalog.CreateNodeBatch(context.Background(), store.NodeBatchCreate{
-		SpaceID: "crypto", JobID: "runner-log-redaction", Operation: nodeBatchOperationDeploy,
-		Items: []store.NodeBatchItemCreate{{
-			ItemID: "item-0", NodeID: "node-a", RequestJSON: string(raw),
+	require.NoError(t, catalog.CreateFunctionJob(context.Background(), store.FunctionJobCreate{
+		SpaceID: "crypto", JobID: "runner-log-redaction", Operation: functionJobOperationDeploy,
+		Items: []store.FunctionJobItemCreate{{
+			ItemID: "item-0", InstanceID: "instance-a", RequestJSON: string(raw),
 		}},
 	}))
 	svc := &Service{
 		catalog: catalog,
-		executeNodeBatchItem: func(context.Context, store.NodeBatchItem) (string, error) {
+		executeFunctionJobItem: func(context.Context, store.FunctionJobItem) (string, error) {
 			return "", errors.New("provider failed")
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	require.NoError(t, svc.StartNodeBatchRunner(ctx, 1, 100*time.Millisecond))
-	waitForNodeBatchTerminal(t, catalog, "runner-log-redaction")
+	require.NoError(t, svc.StartFunctionJobRunner(ctx, 1, 100*time.Millisecond))
+	waitForFunctionJobTerminal(t, catalog, "runner-log-redaction")
 	assert.NotContains(t, logs.String(), "must-not-appear-in-logs")
 	assert.NotContains(t, logs.String(), `"SECRET"`)
 }
 
 func createRunnerBatch(t *testing.T, catalog *store.CatalogRepository, jobID string, count int) {
 	t.Helper()
-	items := make([]store.NodeBatchItemCreate, 0, count)
+	items := make([]store.FunctionJobItemCreate, 0, count)
 	for index := range count {
-		raw, err := protojson.Marshal(&pb.NodeCreateItem{Region: "local", PackageId: fmt.Sprintf("pkg-%d", index)})
+		raw, err := protojson.Marshal(&pb.FunctionInstanceCreateItem{Region: "local", PackageId: fmt.Sprintf("pkg-%d", index)})
 		require.NoError(t, err)
-		items = append(items, store.NodeBatchItemCreate{
+		items = append(items, store.FunctionJobItemCreate{
 			ItemID: fmt.Sprintf("%s-%03d", jobID, index), ItemIndex: index,
-			NodeID: fmt.Sprintf("node-%03d", index), RequestJSON: string(raw),
+			InstanceID: fmt.Sprintf("instance-%03d", index), RequestJSON: string(raw),
 		})
 	}
-	require.NoError(t, catalog.CreateNodeBatch(context.Background(), store.NodeBatchCreate{
-		SpaceID: "crypto", JobID: jobID, Operation: nodeBatchOperationCreate, Items: items,
+	require.NoError(t, catalog.CreateFunctionJob(context.Background(), store.FunctionJobCreate{
+		SpaceID: "crypto", JobID: jobID, Operation: functionJobOperationCreate, Items: items,
 	}))
 }
 
-func waitForNodeBatchTerminal(t *testing.T, catalog *store.CatalogRepository, jobID string) *store.NodeBatchAggregate {
+func waitForFunctionJobTerminal(t *testing.T, catalog *store.CatalogRepository, jobID string) *store.FunctionJobAggregate {
 	t.Helper()
-	var aggregate *store.NodeBatchAggregate
+	var aggregate *store.FunctionJobAggregate
 	require.Eventually(t, func() bool {
 		var err error
-		aggregate, err = catalog.GetNodeBatch(context.Background(), "crypto", jobID)
+		aggregate, err = catalog.GetFunctionJob(context.Background(), "crypto", jobID)
 		return err == nil && aggregate != nil &&
 			aggregate.PendingCount == 0 && aggregate.RunningCount == 0
 	}, 3*time.Second, 10*time.Millisecond)

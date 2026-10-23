@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 )
 
-var ErrPollingNodeNotFound = errors.New("polling node not found")
+var ErrPollingInstanceNotFound = errors.New("polling instance not found")
 
 type CatalogRepository struct {
 	db  *gorm.DB

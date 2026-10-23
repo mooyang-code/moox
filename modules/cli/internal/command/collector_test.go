@@ -11,11 +11,30 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
+	metricsreport "github.com/mooyang-code/moox/packages/report"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-go/errs"
 )
+
+func TestCollectorEgressReportPreservesHostAndProcessIdentities(t *testing.T) {
+	for _, tc := range []struct{ name, host, process, wantHost, wantProcess string }{
+		{"defaults", "", "", "moox-cli", "moox-cli"},
+		{"distinct identities", "operator-host", "probe-process", "operator-host", "probe-process"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("MOOX_NODE_ID", tc.host)
+			t.Setenv("MOOX_INSTANCE_ID", tc.process)
+			cfg := collectorEgressReportConfig()
+			assert.Equal(t, tc.wantHost, cfg.NodeID)
+			assert.Equal(t, tc.wantProcess, cfg.InstanceID)
+			_, err := metricsreport.NewHandlerWithRegistry(cfg, prometheus.NewRegistry())
+			require.NoError(t, err)
+		})
+	}
+}
 
 func TestCollectorStoragePrimaryAuthSecretUsesNormalizedControlFile(t *testing.T) {
 	secret, err := collectorStoragePrimaryAuthSecret([]byte("MOOX_STORAGE_PRIMARY_AUTH_SECRET=primary-secret\nMOOX_STORAGE_VIEW_AUTH_SECRET=view-secret\n"))
@@ -43,22 +62,22 @@ func TestEgressProbeResponseDataAcceptsStructuredAndRawResponses(t *testing.T) {
 }
 
 func TestSelectCollectorProbeNodesKeepsCryptoSemanticsAndStockTimersOnly(t *testing.T) {
-	nodes := []adminclient.CloudNode{
-		{NodeID: "timer-a", PackageID: "pkg", TriggerType: "timer", Metadata: map[string]any{"deployment_ready": true}},
-		{NodeID: "invoke-a", PackageID: "pkg", TriggerType: "invoke", Metadata: map[string]any{"deployment_ready": true}},
+	nodes := []adminclient.FunctionInstance{
+		{InstanceID: "timer-a", PackageID: "pkg", TriggerType: "timer", Metadata: map[string]any{"deployment_ready": true}},
+		{InstanceID: "invoke-a", PackageID: "pkg", TriggerType: "invoke", Metadata: map[string]any{"deployment_ready": true}},
 	}
 
-	assert.Len(t, selectCollectorProbeNodes(nodes, false), 2)
-	stockNodes := selectCollectorProbeNodes(nodes, true)
-	require.Len(t, stockNodes, 1)
-	assert.Equal(t, "timer-a", stockNodes[0].NodeID)
+	assert.Len(t, selectCollectorProbeInstances(nodes, false), 2)
+	stockInstances := selectCollectorProbeInstances(nodes, true)
+	require.Len(t, stockInstances, 1)
+	assert.Equal(t, "timer-a", stockInstances[0].InstanceID)
 }
 
 func TestCollectorEgressProbeReportKeepsOnlyDiagnosticCounts(t *testing.T) {
 	report := &collectorProbeReport{
 		Results: []collectorProbeResult{
-			{NodeID: "node-a", OutboundIP: "198.51.100.1"},
-			{NodeID: "node-b", OutboundIP: "198.51.100.1"},
+			{InstanceID: "node-a", OutboundIP: "198.51.100.1"},
+			{InstanceID: "node-b", OutboundIP: "198.51.100.1"},
 		},
 		ExpectedCount: 170,
 		EligibleCount: 2,
@@ -135,13 +154,13 @@ func TestDefaultStockCNCollectorTasksRequireExplicitActivation(t *testing.T) {
 
 func TestDeleteCollectorFunctionsFiltersNamespace(t *testing.T) {
 	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/admin/cloudnode/GetNodeList", r.URL.Path)
+		require.Equal(t, "/api/admin/cloudfunction/ListFunctionInstances", r.URL.Path)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ret_info": map[string]any{"code": 0},
-			"items": []adminclient.CloudNode{
-				{NodeID: "legacy-default", Namespace: "default", NodeType: "scf-event", BizType: "market_fetcher"},
-				{NodeID: "new-crypto", Namespace: "moox-crypto", NodeType: "scf-event", BizType: "market_fetcher"},
-				{NodeID: "deleted-default", Namespace: "default", IsDeleted: true, NodeType: "scf-event", BizType: "market_fetcher"},
+			"items": []adminclient.FunctionInstance{
+				{InstanceID: "legacy-default", Namespace: "default", FunctionType: "scf-event", WorkloadType: "market_fetcher"},
+				{InstanceID: "new-crypto", Namespace: "moox-crypto", FunctionType: "scf-event", WorkloadType: "market_fetcher"},
+				{InstanceID: "deleted-default", Namespace: "default", IsDeleted: true, FunctionType: "scf-event", WorkloadType: "market_fetcher"},
 			},
 		})
 	}))
@@ -156,7 +175,7 @@ func TestDeleteCollectorFunctionsFiltersNamespace(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "default", summary.Namespace)
 	assert.Equal(t, 1, summary.TotalCount)
-	assert.Equal(t, []string{"legacy-default"}, summary.NodeIDs)
+	assert.Equal(t, []string{"legacy-default"}, summary.InstanceIDs)
 }
 
 func TestDeleteCollectorFunctionsRequiresWaitForFencedAsyncBatch(t *testing.T) {
@@ -165,8 +184,8 @@ func TestDeleteCollectorFunctionsRequiresWaitForFencedAsyncBatch(t *testing.T) {
 		calls = append(calls, r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/admin/cloudnode/GetNodeList":
-			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fetcher-1","node_type":"scf-event","biz_type":"market_fetcher","namespace":"default"}],"page":{"has_more":false}}`))
+		case "/api/admin/cloudfunction/ListFunctionInstances":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"instance_id":"fetcher-1","function_type":"scf-event","workload_type":"market_fetcher","namespace":"default"}],"page":{"has_more":false}}`))
 		case "/api/admin/publishlease/AcquireCollectorPublishLease":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"space_id":"crypto","lease_id":"lease-1","fencing_token":"1","expires_at":"2026-10-03T12:02:00Z"}`))
 		default:
@@ -193,7 +212,7 @@ func TestDeleteCollectorFunctionsAcquiresLeaseBeforeTargetSnapshot(t *testing.T)
 		case "/api/admin/publishlease/AcquireCollectorPublishLease":
 			leaseHeld = true
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"space_id":"crypto","lease_id":"lease-1","fencing_token":"17","expires_at":"2026-10-03T20:02:00Z"}`))
-		case "/api/admin/cloudnode/GetNodeList":
+		case "/api/admin/cloudfunction/ListFunctionInstances":
 			assert.True(t, leaseHeld, "target snapshot must be read inside the publish lease")
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[],"page":{"has_more":false}}`))
 		case "/api/admin/publishlease/ReleaseCollectorPublishLease":
@@ -213,37 +232,37 @@ func TestDeleteCollectorFunctionsAcquiresLeaseBeforeTargetSnapshot(t *testing.T)
 	require.Equal(t, "nothing_to_delete", summary.Status)
 	assert.Equal(t, []string{
 		"/api/admin/publishlease/AcquireCollectorPublishLease",
-		"/api/admin/cloudnode/GetNodeList",
+		"/api/admin/cloudfunction/ListFunctionInstances",
 		"/api/admin/publishlease/ReleaseCollectorPublishLease",
 	}, calls, "even an empty snapshot is protected and released under the lease")
 }
 
-func TestDeleteCollectorFunctionsHoldsLeaseUntilNodeBatchCompletes(t *testing.T) {
+func TestDeleteCollectorFunctionsHoldsLeaseUntilFunctionJobCompletes(t *testing.T) {
 	statusReads := 0
 	var sawFence bool
 	var released bool
 	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/admin/cloudnode/GetNodeList":
-			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"node_id":"fetcher-1","node_type":"scf-event","biz_type":"market_fetcher","namespace":"default"}],"page":{"has_more":false}}`))
+		case "/api/admin/cloudfunction/ListFunctionInstances":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"items":[{"instance_id":"fetcher-1","function_type":"scf-event","workload_type":"market_fetcher","namespace":"default"}],"page":{"has_more":false}}`))
 		case "/api/admin/publishlease/AcquireCollectorPublishLease":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"space_id":"crypto","lease_id":"lease-1","fencing_token":"17","expires_at":"2026-10-03T20:02:00Z"}`))
-		case "/api/admin/cloudnode/SubmitDeleteNodes":
+		case "/api/admin/cloudfunction/SubmitDeleteFunctionInstances":
 			var request struct {
 				LeaseID string `json:"collector_publish_lease_id"`
 				Token   int64  `json:"collector_publish_fencing_token"`
 			}
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 			sawFence = request.LeaseID == "lease-1" && request.Token == 17
-			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"delete-1","operation":"NODE_BATCH_OPERATION_DELETE_NODES","total_count":1}`))
-		case "/api/admin/cloudnode/GetNodeBatchChange":
+			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"job_id":"delete-1","operation":"FUNCTION_JOB_OPERATION_DELETE_INSTANCES","total_count":1}`))
+		case "/api/admin/cloudfunction/GetFunctionJob":
 			statusReads++
-			status := "NODE_BATCH_STATUS_RUNNING"
+			status := "FUNCTION_JOB_STATUS_RUNNING"
 			if statusReads > 1 {
-				status = "NODE_BATCH_STATUS_SUCCESS"
+				status = "FUNCTION_JOB_STATUS_SUCCESS"
 			}
-			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job":{"job_id":"delete-1","operation":"NODE_BATCH_OPERATION_DELETE_NODES","status":%q,"success_count":1,"total_count":1},"items":[]}`, status)
+			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job":{"job_id":"delete-1","operation":"FUNCTION_JOB_OPERATION_DELETE_INSTANCES","status":%q,"success_count":1,"total_count":1},"items":[]}`, status)
 		case "/api/admin/publishlease/ReleaseCollectorPublishLease":
 			released = true
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"released":true}`))
@@ -258,16 +277,16 @@ func TestDeleteCollectorFunctionsHoldsLeaseUntilNodeBatchCompletes(t *testing.T)
 		ControlURL: server.URL, SpaceID: "crypto", Confirm: true, Wait: true,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "NODE_BATCH_STATUS_SUCCESS", summary.Status)
+	assert.Equal(t, "FUNCTION_JOB_STATUS_SUCCESS", summary.Status)
 	assert.True(t, sawFence)
 	assert.True(t, released)
 	assert.GreaterOrEqual(t, statusReads, 2)
 }
 
 func TestDeleteCollectorFunctionsChunksFleetAndWaitsEveryAcceptedBatch(t *testing.T) {
-	nodes := make([]adminclient.CloudNode, 170)
+	nodes := make([]adminclient.FunctionInstance, 170)
 	for index := range nodes {
-		nodes[index] = adminclient.CloudNode{NodeID: fmt.Sprintf("fetcher-%03d", index), Namespace: "default", NodeType: "scf-event", BizType: "market_fetcher"}
+		nodes[index] = adminclient.FunctionInstance{InstanceID: fmt.Sprintf("fetcher-%03d", index), Namespace: "default", FunctionType: "scf-event", WorkloadType: "market_fetcher"}
 	}
 	var submittedSizes []int
 	var statusReads = map[string]int{}
@@ -275,34 +294,34 @@ func TestDeleteCollectorFunctionsChunksFleetAndWaitsEveryAcceptedBatch(t *testin
 	server := newControlFixtureServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/admin/cloudnode/GetNodeList":
+		case "/api/admin/cloudfunction/ListFunctionInstances":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ret_info": map[string]any{"code": 0}, "items": nodes, "page": map[string]any{"has_more": false}})
 		case "/api/admin/publishlease/AcquireCollectorPublishLease":
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"space_id":"stockcn","lease_id":"lease-1","fencing_token":"17","expires_at":"2026-10-03T20:02:00Z"}`))
-		case "/api/admin/cloudnode/SubmitDeleteNodes":
+		case "/api/admin/cloudfunction/SubmitDeleteFunctionInstances":
 			var request struct {
-				NodeIDs []string `json:"node_ids"`
+				InstanceIDs []string `json:"instance_ids"`
 			}
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
-			submittedSizes = append(submittedSizes, len(request.NodeIDs))
+			submittedSizes = append(submittedSizes, len(request.InstanceIDs))
 			jobID := fmt.Sprintf("delete-%d", len(submittedSizes))
-			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job_id":%q,"operation":"NODE_BATCH_OPERATION_DELETE_NODES","total_count":%d}`, jobID, len(request.NodeIDs))
-		case "/api/admin/cloudnode/GetNodeBatchChange":
+			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job_id":%q,"operation":"FUNCTION_JOB_OPERATION_DELETE_INSTANCES","total_count":%d}`, jobID, len(request.InstanceIDs))
+		case "/api/admin/cloudfunction/GetFunctionJob":
 			var request struct {
 				JobID string `json:"job_id"`
 			}
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 			statusReads[request.JobID]++
 			total := map[string]int{"delete-1": 100, "delete-2": 70}[request.JobID]
-			status := "NODE_BATCH_STATUS_SUCCESS"
+			status := "FUNCTION_JOB_STATUS_SUCCESS"
 			failed, success := 0, total
 			if request.JobID == "delete-1" {
-				status, failed, success = "NODE_BATCH_STATUS_FAILED", 100, 0
+				status, failed, success = "FUNCTION_JOB_STATUS_FAILED", 100, 0
 			} else if statusReads[request.JobID] == 1 {
-				status = "NODE_BATCH_STATUS_RUNNING"
+				status = "FUNCTION_JOB_STATUS_RUNNING"
 				success = 0
 			}
-			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job":{"job_id":%q,"operation":"NODE_BATCH_OPERATION_DELETE_NODES","status":%q,"success_count":%d,"failed_count":%d,"total_count":%d},"items":[]}`, request.JobID, status, success, failed, total)
+			_, _ = fmt.Fprintf(w, `{"ret_info":{"code":0},"job":{"job_id":%q,"operation":"FUNCTION_JOB_OPERATION_DELETE_INSTANCES","status":%q,"success_count":%d,"failed_count":%d,"total_count":%d},"items":[]}`, request.JobID, status, success, failed, total)
 		case "/api/admin/publishlease/ReleaseCollectorPublishLease":
 			released = true
 			_, _ = w.Write([]byte(`{"ret_info":{"code":0},"released":true}`))
@@ -316,7 +335,7 @@ func TestDeleteCollectorFunctionsChunksFleetAndWaitsEveryAcceptedBatch(t *testin
 	summary, err := deleteCollectorFunctions(context.Background(), collectorDeleteOptions{
 		ControlURL: server.URL, SpaceID: "stockcn", Confirm: true, Wait: true,
 	})
-	require.ErrorContains(t, err, "delete-1 finished with status NODE_BATCH_STATUS_FAILED")
+	require.ErrorContains(t, err, "delete-1 finished with status FUNCTION_JOB_STATUS_FAILED")
 	assert.Equal(t, []int{100, 70}, submittedSizes)
 	assert.Equal(t, "delete-1,delete-2", summary.JobID)
 	assert.Equal(t, 100, summary.FailedCount)
@@ -335,11 +354,11 @@ func TestCollectorPublishUnknownSubmissionErrorsAreAmbiguous(t *testing.T) {
 		{name: "native server timeout", err: errs.NewFrameError(errs.RetServerTimeout, "timed out"), want: true},
 		{name: "native authentication", err: errs.NewFrameError(errs.RetServerAuthFail, "denied"), want: false},
 		{name: "gateway 503", err: fmt.Errorf("control returned HTTP 503 Service Unavailable"), want: true},
-		{name: "service 500", err: fmt.Errorf("SubmitCreateNodes: code 500: internal error"), want: true},
-		{name: "missing job id", err: fmt.Errorf("SubmitCreateNodes: empty job_id"), want: true},
-		{name: "malformed operation", err: fmt.Errorf("SubmitCreateNodes: operation: unknown enum"), want: true},
+		{name: "service 500", err: fmt.Errorf("SubmitCreateFunctionInstances: code 500: internal error"), want: true},
+		{name: "missing job id", err: fmt.Errorf("SubmitCreateFunctionInstances: empty job_id"), want: true},
+		{name: "malformed operation", err: fmt.Errorf("SubmitCreateFunctionInstances: operation: unknown enum"), want: true},
 		{name: "authorization rejection", err: fmt.Errorf("control returned HTTP 403 Forbidden"), want: false},
-		{name: "business rejection", err: fmt.Errorf("SubmitCreateNodes: code 409: lease stale"), want: false},
+		{name: "business rejection", err: fmt.Errorf("SubmitCreateFunctionInstances: code 409: lease stale"), want: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			assert.Equal(t, test.want, isAmbiguousCollectorPublishOutcome(test.err))

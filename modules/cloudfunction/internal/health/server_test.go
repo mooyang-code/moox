@@ -10,22 +10,22 @@ import (
 )
 
 func TestState_New_ShouldInitializeModuleMetadata(t *testing.T) {
-	state := New("cloudnode", "instance-1", "v1", "abc")
+	state := New("cloudfunction", "instance-1", "v1", "abc")
 	require.NotNil(t, state)
-	assert.Equal(t, "cloudnode", state.Module)
+	assert.Equal(t, "cloudfunction", state.Module)
 	assert.Equal(t, "instance-1", state.InstanceID)
 	assert.False(t, state.Ready())
 }
 
 func TestHandler_ReadinessEndpoint_NotReady_ShouldReturn503(t *testing.T) {
-	state := New("cloudnode", "test", "dev", "local")
+	state := New("cloudfunction", "test", "dev", "local")
 	rec := httptest.NewRecorder()
 	Handler(state).ServeHTTP(rec, httptest.NewRequest("GET", "/readyz", nil))
 	assert.Equal(t, 503, rec.Code)
 }
 
 func TestHandler_ReadinessEndpoint_Ready_ShouldReturn200(t *testing.T) {
-	state := New("cloudnode", "test", "dev", "local")
+	state := New("cloudfunction", "test", "dev", "local")
 	state.SetReady(true)
 	rec := httptest.NewRecorder()
 	Handler(state).ServeHTTP(rec, httptest.NewRequest("GET", "/readyz", nil))
@@ -33,14 +33,14 @@ func TestHandler_ReadinessEndpoint_Ready_ShouldReturn200(t *testing.T) {
 }
 
 func TestHandler_LivenessEndpoint_ShouldReturn200(t *testing.T) {
-	state := New("cloudnode", "test", "dev", "local")
+	state := New("cloudfunction", "test", "dev", "local")
 	rec := httptest.NewRecorder()
 	Handler(state).ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	assert.Equal(t, 200, rec.Code)
 }
 
 func TestHandler_MetricsEndpoint_ShouldExposePrometheusMetrics(t *testing.T) {
-	state := New("cloudnode", "test", "dev", "local")
+	state := New("cloudfunction", "test", "dev", "local")
 	rec := httptest.NewRecorder()
 	Handler(state).ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
 	require.Equal(t, 200, rec.Code)
@@ -48,7 +48,7 @@ func TestHandler_MetricsEndpoint_ShouldExposePrometheusMetrics(t *testing.T) {
 }
 
 func TestRegister_NilService_ShouldReturnError(t *testing.T) {
-	state := New("cloudnode", "test", "dev", "local")
+	state := New("cloudfunction", "test", "dev", "local")
 	err := Register(nil, state)
 	require.Error(t, err)
 }

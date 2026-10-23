@@ -1,35 +1,38 @@
-import type { CloudNodeDeleteSnapshot } from "@/api/cloud-node";
-import type { CloudNode } from "./cloud-node-model";
+import type { FunctionInstanceDeleteSnapshot } from "@/api/function-instance";
+import type { FunctionInstance } from "./function-instance-model";
 
-export type CloudNodeDeleteSnapshotMap = Record<string, CloudNodeDeleteSnapshot>;
+export type FunctionInstanceDeleteSnapshotMap = Record<string, FunctionInstanceDeleteSnapshot>;
 
 export function updateDeleteSelection(
-  current: CloudNodeDeleteSnapshotMap,
-  nodes: CloudNode[],
+  current: FunctionInstanceDeleteSnapshotMap,
+  instances: FunctionInstance[],
   selected: boolean
-): CloudNodeDeleteSnapshotMap {
+): FunctionInstanceDeleteSnapshotMap {
   const next = { ...current };
-  for (const node of nodes) {
+  for (const instance of instances) {
     if (selected) {
-      if (!next[node.node_id]) {
-        next[node.node_id] = {
-          node_id: node.node_id,
-          package_id: node.package_id,
-          deployment_id: node.deployment_id,
-          modify_time: node.modify_time
+      if (!next[instance.instance_id]) {
+        next[instance.instance_id] = {
+          instance_id: instance.instance_id,
+          package_id: instance.package_id,
+          deployment_id: instance.deployment_id,
+          modify_time: instance.modify_time
         };
       }
     } else {
-      delete next[node.node_id];
+      delete next[instance.instance_id];
     }
   }
   return next;
 }
 
-export function captureDeleteSelection(keys: string[], snapshots: CloudNodeDeleteSnapshotMap): CloudNodeDeleteSnapshot[] {
-  return keys.map(nodeId => {
-    const snapshot = snapshots[nodeId];
-    if (!snapshot) throw new Error(`节点 ${nodeId} 缺少选择时的身份快照`);
+export function captureDeleteSelection(
+  keys: string[],
+  snapshots: FunctionInstanceDeleteSnapshotMap
+): FunctionInstanceDeleteSnapshot[] {
+  return keys.map(instanceId => {
+    const snapshot = snapshots[instanceId];
+    if (!snapshot) throw new Error(`实例 ${instanceId} 缺少选择时的身份快照`);
     return { ...snapshot };
   });
 }

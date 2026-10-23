@@ -1,4 +1,4 @@
-// Package clsprovision 让 CloudNode 在创建或更新 SCF 采集函数时自动带上日志服务（CLS）配置：
+// Package clsprovision 让 FunctionInstance 在创建或更新 SCF 采集函数时自动带上日志服务（CLS）配置：
 // 首次使用时幂等开通 CLS（服务、日志集、主题、采集日志字段索引），再把上报所需的环境变量补进函数环境。
 // 整个过程对用户无感知，任何失败都只记日志，绝不阻断函数的创建与更新。
 package clsprovision
@@ -70,7 +70,7 @@ func (p *Provisioner) writer(management Credential) (Credential, error) {
 	id, file := strings.TrimSpace(p.cfg.WriterSecretID), strings.TrimSpace(p.cfg.WriterSecretKeyFile)
 	if id == "" {
 		p.warnOnce.Do(func() {
-			log.Warnf("cloudnode cls: functions report with the cloud account management key; configure cls.writer_secret_id and cls.writer_secret_key_file with a CLS write-only key")
+			log.Warnf("cloudfunction cls: functions report with the cloud account management key; configure cls.writer_secret_id and cls.writer_secret_key_file with a CLS write-only key")
 		})
 		return management, nil
 	}
@@ -146,12 +146,12 @@ func (p *Provisioner) Apply(ctx context.Context, accountID string, credential Cr
 	}
 	resolved, err := p.resolve(ctx, accountID, credential)
 	if err != nil {
-		log.WarnContextf(ctx, "cloudnode cls provision skipped account=%s: %v", accountID, err)
+		log.WarnContextf(ctx, "cloudfunction cls provision skipped account=%s: %v", accountID, err)
 		return false
 	}
 	writer, err := p.writer(credential)
 	if err != nil {
-		log.WarnContextf(ctx, "cloudnode cls skipped account=%s: %v", accountID, err)
+		log.WarnContextf(ctx, "cloudfunction cls skipped account=%s: %v", accountID, err)
 		return false
 	}
 	environment["MOOX_CLS_ENABLED"] = "true"
@@ -212,7 +212,7 @@ func (p *Provisioner) resolve(ctx context.Context, accountID string, credential 
 		return p.remember(entry, settings{}, fmt.Errorf("prepare cls resources failed"))
 	}
 	if result.LogsetCreated || result.TopicCreated || result.IndexFieldsChanged {
-		log.InfoContextf(ctx, "cloudnode cls provisioned account=%s logset=%s topic=%s created_logset=%t created_topic=%t index_fields_changed=%t",
+		log.InfoContextf(ctx, "cloudfunction cls provisioned account=%s logset=%s topic=%s created_logset=%t created_topic=%t index_fields_changed=%t",
 			accountID, result.LogsetID, result.TopicID, result.LogsetCreated, result.TopicCreated, result.IndexFieldsChanged)
 	}
 	return p.remember(entry, settings{logsetID: result.LogsetID, topicID: result.TopicID}, nil)

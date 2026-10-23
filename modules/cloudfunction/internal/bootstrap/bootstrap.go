@@ -1,4 +1,4 @@
-// Package bootstrap wires the independent moox-cloudnode process.
+// Package bootstrap wires the independent moox-cloudfunction process.
 package bootstrap
 
 import (
@@ -16,9 +16,9 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudfunction/internal/health"
 	"github.com/mooyang-code/moox/modules/cloudfunction/internal/providers/tencentscf"
 	"github.com/mooyang-code/moox/modules/cloudfunction/internal/publishlease"
-	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudfunction/internal/rpc"
+	cloudfunctionrpc "github.com/mooyang-code/moox/modules/cloudfunction/internal/rpc"
 	"github.com/mooyang-code/moox/modules/cloudfunction/internal/store"
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
+	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/cloudfunction/schema"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
@@ -30,16 +30,16 @@ import (
 	"trpc.group/trpc-go/trpc-go/server"
 )
 
-// Runtime owns CloudNode process resources and their shutdown order.
+// Runtime owns FunctionInstance process resources and their shutdown order.
 type Runtime struct {
-	StartedAt       time.Time
-	Store           *store.Store
-	DebugServer     *http.Server
-	NodeBatchCancel context.CancelFunc
-	NodeBatchWait   func()
-	Gateway         *gatewayclient.Client
-	closeOnce       sync.Once
-	closeErr        error
+	StartedAt         time.Time
+	Store             *store.Store
+	DebugServer       *http.Server
+	FunctionJobCancel context.CancelFunc
+	FunctionJobWait   func()
+	Gateway           *gatewayclient.Client
+	closeOnce         sync.Once
+	closeErr          error
 }
 
 func (r *Runtime) Close(ctx context.Context) error {
@@ -50,11 +50,11 @@ func (r *Runtime) Close(ctx context.Context) error {
 		ctx = trpc.BackgroundContext()
 	}
 	r.closeOnce.Do(func() {
-		if r.NodeBatchCancel != nil {
-			r.NodeBatchCancel()
+		if r.FunctionJobCancel != nil {
+			r.FunctionJobCancel()
 		}
-		if r.NodeBatchWait != nil {
-			r.NodeBatchWait()
+		if r.FunctionJobWait != nil {
+			r.FunctionJobWait()
 		}
 		if r.DebugServer != nil {
 			r.closeErr = r.DebugServer.Shutdown(ctx)
@@ -78,11 +78,11 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if ctx == nil {
 		ctx = trpc.BackgroundContext()
 	}
-	log.InfoContextf(ctx, "开始初始化 moox-cloudnode...")
+	log.InfoContextf(ctx, "开始初始化 moox-cloudfunction...")
 
 	cfg, err := config.Load("./config/app.yaml")
 	if err != nil {
-		log.ErrorContextf(ctx, "加载 cloudnode 配置失败: %v", err)
+		log.ErrorContextf(ctx, "加载 cloudfunction 配置失败: %v", err)
 		return nil, err
 	}
 	if err := tencentscf.ConfigureRateLimits(cfg.TencentSCF.APIRateLimits); err != nil {
@@ -92,7 +92,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 
 	dbm, err := store.Open(&cfg.Database)
 	if err != nil {
-		log.ErrorContextf(ctx, "初始化 cloudnode 数据库失败: %v", err)
+		log.ErrorContextf(ctx, "初始化 cloudfunction 数据库失败: %v", err)
 		return nil, err
 	}
 	runtime.Store = dbm
@@ -106,37 +106,37 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 	}()
 	if err := dbm.ApplySchema(schema.AllSQL()); err != nil {
-		log.ErrorContextf(ctx, "初始化 cloudnode schema 失败: %v", err)
+		log.ErrorContextf(ctx, "初始化 cloudfunction schema 失败: %v", err)
 		return nil, err
 	}
-	runtime.Gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "cloudnode directory refresh failed: %v", err) })
+	runtime.Gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "cloudfunction directory refresh failed: %v", err) })
 	if err != nil {
-		return nil, fmt.Errorf("initialize cloudnode gateway: %w", err)
+		return nil, fmt.Errorf("initialize cloudfunction gateway: %w", err)
 	}
 	moduleMetrics, err := registerMetricsReporter(s)
 	if err != nil {
 		return nil, err
 	}
 
-	opts := []cloudnoderpc.Option{
-		cloudnoderpc.WithModuleMetrics(moduleMetrics),
-		cloudnoderpc.WithCollectorPublishLeaseValidator(publishlease.New(runtime.Gateway)),
+	opts := []cloudfunctionrpc.Option{
+		cloudfunctionrpc.WithModuleMetrics(moduleMetrics),
+		cloudfunctionrpc.WithCollectorPublishLeaseValidator(publishlease.New(runtime.Gateway)),
 	}
 	credentialResolver, err := cloudcredential.New(runtime.Gateway)
 	if err != nil {
 		return nil, err
 	}
-	opts = append(opts, cloudnoderpc.WithCredentialResolver(credentialResolver))
+	opts = append(opts, cloudfunctionrpc.WithCredentialResolver(credentialResolver))
 	// 日志服务（CLS）自动开通与下发：创建或更新采集函数时补齐上报环境，失败不阻断。
-	opts = append(opts, cloudnoderpc.WithCLSEnvironment(clsprovision.New(cfg.CLS, nil)))
-	svc := cloudnoderpc.New(dbm, opts...)
-	nodeBatchCtx, nodeBatchCancel := context.WithCancel(ctx)
-	runtime.NodeBatchCancel = nodeBatchCancel
-	if err := startNodeBatchRunner(nodeBatchCtx, svc, cfg); err != nil {
+	opts = append(opts, cloudfunctionrpc.WithCLSEnvironment(clsprovision.New(cfg.CLS, nil)))
+	svc := cloudfunctionrpc.New(dbm, opts...)
+	functionJobCtx, functionJobCancel := context.WithCancel(ctx)
+	runtime.FunctionJobCancel = functionJobCancel
+	if err := startFunctionJobRunner(functionJobCtx, svc, cfg); err != nil {
 		return nil, err
 	}
-	runtime.NodeBatchWait = svc.WaitNodeBatchRunner
-	cloudnodepb.RegisterCloudNodeMgrService(s.Service("trpc.moox.cloudnode.CloudNodeMgr"), svc)
+	runtime.FunctionJobWait = svc.WaitFunctionJobRunner
+	cloudfunctionpb.RegisterCloudFunctionMgrService(s.Service("trpc.moox.cloudfunction.CloudFunctionMgr"), svc)
 	if err := registerHealth(s, cfg, dbm); err != nil {
 		return nil, err
 	}
@@ -155,35 +155,35 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 			_ = runtime.Close(closeCtx)
 		}()
 	}
-	log.InfoContextf(ctx, "moox-cloudnode 初始化完成")
+	log.InfoContextf(ctx, "moox-cloudfunction 初始化完成")
 	return s, nil
 }
 
-func startNodeBatchRunner(ctx context.Context, svc *cloudnoderpc.Service, cfg *config.Config) error {
+func startFunctionJobRunner(ctx context.Context, svc *cloudfunctionrpc.Service, cfg *config.Config) error {
 	if svc == nil {
-		return fmt.Errorf("cloudnode node batch service is required")
+		return fmt.Errorf("cloudfunction instance batch service is required")
 	}
 	if cfg == nil {
-		return fmt.Errorf("cloudnode config is required")
+		return fmt.Errorf("cloudfunction config is required")
 	}
-	return svc.StartNodeBatchRunner(ctx, cfg.NodeBatch.BatchSize, cfg.NodeBatch.PollInterval)
+	return svc.StartFunctionJobRunner(ctx, cfg.FunctionJob.BatchSize, cfg.FunctionJob.PollInterval)
 }
 
 func registerMetricsReporter(s *server.Server) (*report.ModuleMetrics, error) {
 	if s == nil {
-		return nil, fmt.Errorf("cloudnode metrics reporter requires a tRPC server")
+		return nil, fmt.Errorf("cloudfunction metrics reporter requires a tRPC server")
 	}
-	moduleMetrics, err := report.NewModuleMetrics(prometheus.DefaultRegisterer, "cloudnode", report.HealthCheckIDsForModule("cloudnode"))
+	moduleMetrics, err := report.NewModuleMetrics(prometheus.DefaultRegisterer, "cloudfunction", report.HealthCheckIDsForModule("cloudfunction"))
 	if err != nil {
 		return nil, err
 	}
-	h, err := report.NewHandler(report.DefaultConfig("cloudnode", "cloudnode"))
+	h, err := report.NewHandler(report.DefaultConfig("cloudfunction", "cloudfunction"))
 	if err != nil {
 		return nil, err
 	}
-	service := s.Service("trpc.moox.cloudnode.metrics.timer")
+	service := s.Service("trpc.moox.cloudfunction.metrics.timer")
 	if service == nil {
-		return nil, fmt.Errorf("cloudnode metrics timer service is not configured")
+		return nil, fmt.Errorf("cloudfunction metrics timer service is not configured")
 	}
 	timer.RegisterHandlerService(service, h.Handle)
 	return moduleMetrics, nil
@@ -193,22 +193,22 @@ func registerHealth(s *server.Server, cfg *config.Config, dbm *store.Store) erro
 	if cfg == nil {
 		return nil
 	}
-	state := health.New("cloudnode", "cloudnode", "", "")
-	state.SnapshotFunc = cloudnodeHealthSnapshot(cfg, dbm, state)
+	state := health.New("cloudfunction", "cloudfunction", "", "")
+	state.SnapshotFunc = cloudfunctionHealthSnapshot(cfg, dbm, state)
 	if s == nil {
-		return fmt.Errorf("cloudnode health service is unavailable")
+		return fmt.Errorf("cloudfunction health service is unavailable")
 	}
-	if err := health.Register(s.Service("trpc.moox.cloudnode.Health"), state); err != nil {
-		return fmt.Errorf("cloudnode health server failed to start: %w", err)
+	if err := health.Register(s.Service("trpc.moox.cloudfunction.Health"), state); err != nil {
+		return fmt.Errorf("cloudfunction health server failed to start: %w", err)
 	}
 	return nil
 }
 
-func cloudnodeHealthSnapshot(cfg *config.Config, dbm *store.Store, state *health.State) healthz.SnapshotFunc {
+func cloudfunctionHealthSnapshot(cfg *config.Config, dbm *store.Store, state *health.State) healthz.SnapshotFunc {
 	return func(ctx context.Context) healthz.Response {
 		databaseReady := dbm != nil && dbm.Ping(ctx) == nil
 		state.SetReady(databaseReady)
-		rsp := healthz.Base("cloudnode", "cloudnode", "", "", state.StartedAt, databaseReady)
+		rsp := healthz.Base("cloudfunction", "cloudfunction", "", "", state.StartedAt, databaseReady)
 		rsp.Details = map[string]any{
 			"database": databaseReady,
 		}
@@ -237,9 +237,9 @@ func startDebugServer(ctx context.Context, addr string) *http.Server {
 
 	server := &http.Server{Addr: addr, Handler: mux}
 	go func() {
-		log.InfoContextf(ctx, "cloudnode pprof listening on %s", addr)
+		log.InfoContextf(ctx, "cloudfunction pprof listening on %s", addr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.ErrorContextf(ctx, "cloudnode pprof server failed: %v", err)
+			log.ErrorContextf(ctx, "cloudfunction pprof server failed: %v", err)
 		}
 	}()
 	return server

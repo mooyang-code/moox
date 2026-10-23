@@ -1,5 +1,5 @@
 <template>
-  <div class="cloud-node-table">
+  <div class="function-instance-table">
     <slot />
   </div>
 </template>

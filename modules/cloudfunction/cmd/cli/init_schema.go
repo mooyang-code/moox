@@ -7,12 +7,12 @@ import (
 	"io"
 	"strings"
 
-	cloudnodeconfig "github.com/mooyang-code/moox/modules/cloudfunction/internal/config"
+	cloudfunctionconfig "github.com/mooyang-code/moox/modules/cloudfunction/internal/config"
 	"github.com/mooyang-code/moox/modules/cloudfunction/internal/store"
-	cloudnodeschema "github.com/mooyang-code/moox/modules/cloudfunction/schema"
+	cloudfunctionschema "github.com/mooyang-code/moox/modules/cloudfunction/schema"
 )
 
-const defaultInitDBPath = "./data/moox_cloudnode.db"
+const defaultInitDBPath = "./data/moox_cloudfunction.db"
 
 type initResult struct {
 	Module string `json:"module"`
@@ -45,11 +45,11 @@ func runInitCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected init arguments: %s", strings.Join(fs.Args(), " "))
 	}
-	if err := applySchema(dbPath, cloudnodeschema.AllSQL()); err != nil {
+	if err := applySchema(dbPath, cloudfunctionschema.AllSQL()); err != nil {
 		return err
 	}
 	return json.NewEncoder(stdout).Encode(initResult{
-		Module: "cloudnode",
+		Module: "cloudfunction",
 		Action: "init",
 		Status: "ok",
 		DBPath: dbPath,
@@ -70,7 +70,7 @@ func applySchema(dbPath string, rawSQL string) error {
 	if dbPath == "" {
 		return fmt.Errorf("db path is required")
 	}
-	db, err := store.Open(&cloudnodeconfig.DatabaseConfig{Path: dbPath})
+	db, err := store.Open(&cloudfunctionconfig.DatabaseConfig{Path: dbPath})
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}

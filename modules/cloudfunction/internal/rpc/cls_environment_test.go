@@ -29,8 +29,8 @@ func TestApplyCLSEnvironmentOnlyTouchesMarketFetchFunctions(t *testing.T) {
 	recorder := &recordingCLSEnvironment{}
 	svc := &Service{clsEnvironment: recorder, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}}
 	account := store.CloudAccount{AccountID: "acct"}
-	fetcher := &store.CloudNode{Metadata: `{"biz_type":"market_fetcher"}`}
-	other := &store.CloudNode{Metadata: `{"biz_type":"strategy"}`}
+	fetcher := &store.FunctionInstance{Metadata: `{"workload_type":"market_fetcher"}`}
+	other := &store.FunctionInstance{Metadata: `{"workload_type":"strategy"}`}
 
 	environment := map[string]string{}
 	require.True(t, svc.applyCLSEnvironment(context.Background(), account, fetcher, environment))
@@ -44,7 +44,7 @@ func TestApplyCLSEnvironmentOnlyTouchesMarketFetchFunctions(t *testing.T) {
 }
 
 func TestApplyCLSEnvironmentNeverBlocksOnCredentialOrConfigurationGaps(t *testing.T) {
-	fetcher := &store.CloudNode{Metadata: `{"biz_type":"market_fetcher"}`}
+	fetcher := &store.FunctionInstance{Metadata: `{"workload_type":"market_fetcher"}`}
 	environment := map[string]string{}
 	// 未配置 CLS 下发：空操作。
 	require.False(t, (&Service{}).applyCLSEnvironment(context.Background(), store.CloudAccount{}, fetcher, environment))
@@ -67,7 +67,7 @@ func (fullCLSEnvironment) Apply(_ context.Context, _ string, _ clsprovision.Cred
 func TestApplyCLSEnvironmentSkipsInjectionThatWouldOverflowTheEnvironmentLimit(t *testing.T) {
 	recorder := fullCLSEnvironment{}
 	svc := &Service{clsEnvironment: recorder, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}}
-	fetcher := &store.CloudNode{NodeID: "fn", Metadata: `{"biz_type":"market_fetcher"}`}
+	fetcher := &store.FunctionInstance{InstanceID: "fn", Metadata: `{"workload_type":"market_fetcher"}`}
 	// 原环境已经接近平台上限：补齐 CLS 变量会超限，应放弃注入而不是让后续校验失败。
 	environment := map[string]string{"MOOX_SPACE_ID": "crypto", "FILLER": strings.Repeat("x", tencent.SCFEnvironmentLimitBytes-150)}
 	before := len(environment)

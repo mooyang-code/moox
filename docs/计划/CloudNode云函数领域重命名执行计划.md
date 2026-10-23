@@ -1,12 +1,12 @@
 # CloudNode 云函数领域重命名执行计划
 
-v2（2026-10-23，计划稿，尚未实施）。本计划把 CloudNode 的模块身份、云函数实例模型与异步管理作业统一命名，并保持云函数代码包、函数实例和单次调用的概念独立。
+v3（2026-10-23，实施中）。本计划把 CloudNode 的模块身份、云函数实例模型与异步管理作业统一命名，并保持云函数代码包、函数实例和单次调用的概念独立。
 
 v2 相对 v1 的变化：消除 `function_type` 撞名；删除无调用方的 `UpdateNode`、同步 `BatchDeleteNodes` 及遗留字段；`biz_type` 统一为 `workload_type`；写出全部请求/响应类型名；前端目录改为 `cloud-function/` 下分实例与代码包；schema 索引和触发器按基准命名；定下默认函数名前缀与模块文档文件名；补全残留扫描范围、断链检查、提交拆分和已有环境的离线转换草稿。
 
 代码基线：`origin/main@3da2faedc979fab121f01e6278acc24c56cba5cf`。计划所在分支：`codex/cloudnode-naming-review`。实施前重新核对主线变化，以下文件和接口清单以此基线为准。
 
-当前只交付执行计划，不修改业务代码、数据库、云端函数或部署配置。现行行为见[云节点模块文档](../模块/云节点.md)，现行协议见 [cloudnode.proto](../../modules/cloudnode/proto/cloudnode.proto)，现行表结构见 [cloudnode.sql](../../modules/cloudnode/schema/cloudnode.sql)。
+用户已授权按计划编码、独立 Agent 审查、编译并发布正式环境；正式环境是未上线的新项目，允许重置数据，不实现旧协议兼容和数据迁移。现行行为见[云节点模块文档](../模块/云函数管理.md)，现行协议见 [cloudnode.proto](../../modules/cloudfunction/proto/cloudfunction.proto)，现行表结构见 [cloudnode.sql](../../modules/cloudfunction/schema/cloudfunction.sql)。
 
 ## 1. 决策状态与目标
 
@@ -68,7 +68,7 @@ v2 相对 v1 的变化：消除 `function_type` 撞名；删除无调用方的 `
 - Storage DataNode、主机/进程身份、Collector 任务实例和采集批次。
 - 新增云厂商、容器运行时、统一计算资源抽象或部署历史表。
 - 重新设计函数类型、包版本策略、运行配置结构或状态机。
-- 自动删除数据库、COS 对象、云端函数，或重建已有函数。
+- 自动删除 COS 对象或云端函数；数据库重置遵循 §8 的本次发布授权。
 - `packages/wirecompress/dicts/default-v1.zdict` 是带版本号的压缩字典，内含旧服务名样本，本轮不重新训练。
 
 ## 2. 命名映射与协议契约
@@ -324,7 +324,7 @@ END;
 | Collector `t_collector_fetch_plans.c_plan/c_progress` | 基线结构使用函数名称和进度映射，本轮不改表结构，不改已有云端函数名 |
 | 部署状态、网关目录和 caller 密钥资产 | 由新的组件定义重新生成和安装，不沿用只含旧 caller 的身份包 |
 
-新版本启动逻辑不自动识别或迁移旧库。已有环境的切换在 §8 中用一次性离线转换处理；修改默认 DB 路径不能被当成数据已经转换完成。
+新版本启动逻辑不自动识别或迁移旧库。正式环境按 §8 停机后使用新 schema 重建相关运行数据，不实现旧库转换。
 
 ## 4. 代码与配置影响清单
 
@@ -375,67 +375,67 @@ END;
 ### 阶段 0：准备与冻结
 
 - [x] 确认模块名为 `cloudfunction`，统一 §1.2 和全部命令示例。
-- [ ] 核对主线新增协议、schema、部署规则；把基线差异补充到计划，而非重复覆盖近期实现。
-- [ ] 保存旧名称内容与路径清单，标明代码、生成物、当前文档、历史材料和共享 `node_id` 保留项。
-- [ ] 用 `rg` 再次确认 §2.5 的删除项仍无调用方。
-- [ ] 确认本次实施不修改已有云端函数名称、账号 ID、包 ID、实例逻辑 ID 的值。
-- [ ] 仓库里误提交的 Mach-O 二进制 `modules/admin/cmd/cli/cli`、`modules/storage/cmd/cli/cli`、`modules/importer/importer` 会干扰残留扫描，确认无用后在独立提交中删除并补 `.gitignore`。
+- [x] 核对主线新增协议、schema、部署规则；把基线差异补充到计划，而非重复覆盖近期实现。
+- [x] 保存旧名称内容与路径清单，标明代码、生成物、当前文档、历史材料和共享 `node_id` 保留项。
+- [x] 用 `rg` 再次确认 §2.5 的删除项仍无调用方。
+- [x] 确认本次实施不修改已有云端函数名称、账号 ID、包 ID、实例逻辑 ID 的值。
+- [x] 仓库里误提交的 Mach-O 二进制 `modules/admin/cmd/cli/cli`、`modules/storage/cmd/cli/cli`、`modules/importer/importer` 会干扰残留扫描，确认无用后在独立提交中删除并补 `.gitignore`。
 
 ### 阶段 1：协议和 schema
 
-- [ ] 移动模块及生成模块，更新 `go.work`、`go.mod` 与 proto Makefile（作为第一个提交）。
-- [ ] 按 §2 修改 API 与 JSON 字段，删除 §2.5 的接口与字段，保留所需的手写生成包辅助代码。
-- [ ] 按 §3 修改三张表、全部索引与触发器名、FK，保留账号、包的完整定义。
-- [ ] 更新 SQL embed、`schema_test.go` 与 schema CLI，运行空库初始化和协议包测试。
+- [x] 移动模块及生成模块，更新 `go.work`、`go.mod` 与 proto Makefile（作为第一个提交）。
+- [x] 按 §2 修改 API 与 JSON 字段，删除 §2.5 的接口与字段，保留所需的手写生成包辅助代码。
+- [x] 按 §3 修改三张表、全部索引与触发器名、FK，保留账号、包的完整定义。
+- [x] 更新 SQL embed、`schema_test.go` 与 schema CLI，运行空库初始化和协议包测试。
 
 ### 阶段 2：核心服务
 
-- [ ] 完成 store 的模型、方法、SQL 字符串和冲突键修改，删除 `invocation.go` 与 `DeleteNodesWithPreflight`。
-- [ ] 完成 RPC 实例管理、SCF 导入（含 `scf_type`、`workload_type`）、调用、作业提交/查询/执行及垃圾回收的类型修改。
-- [ ] 修改持久化请求写入/读取、metadata 键、操作值、作业 ID 前缀和恢复 holder 前缀。
-- [ ] 保持锁粒度、生命周期围栏、创建预留和接管规则，覆盖重启后新格式作业恢复。
-- [ ] 配置 `function_job`、新数据库路径、caller 校验、健康/metrics 服务名、限频指标名和默认函数名前缀同步。
+- [x] 完成 store 的模型、方法、SQL 字符串和冲突键修改，删除 `invocation.go` 与 `DeleteNodesWithPreflight`。
+- [x] 完成 RPC 实例管理、SCF 导入（含 `scf_type`、`workload_type`）、调用、作业提交/查询/执行及垃圾回收的类型修改。
+- [x] 修改持久化请求写入/读取、metadata 键、操作值、作业 ID 前缀和恢复 holder 前缀。
+- [x] 保持锁粒度、生命周期围栏、创建预留和接管规则，覆盖重启后新格式作业恢复。
+- [x] 配置 `function_job`、新数据库路径、caller 校验、健康/metrics 服务名、限频指标名和默认函数名前缀同步。
 
 ### 阶段 3：调用链和权限
 
-- [ ] 服务目录使用新 RPC 全名；更新所有方法列表、只读方法和调用方 ACL，去掉删除的方法。
-- [ ] 同时更新 SecretMgr 和 CollectorPublishLease 中允许调用的旧 `cloudnode` 身份。
-- [ ] Admin 控制台权限与垃圾回收改用新服务和字段；继续禁止 console 调用垃圾回收及内部租约方法。
-- [ ] Collector 管理请求及创建 metadata、CLI 的手写 JSON 和作业枚举解析同步；外层资源 ID 与执行载荷 ID 分别处理。
-- [ ] 复核请求空间、签名 caller、超时预算、发布租约错误分类和进行中作业状态。
+- [x] 服务目录使用新 RPC 全名；更新所有方法列表、只读方法和调用方 ACL，去掉删除的方法。
+- [x] 同时更新 SecretMgr 和 CollectorPublishLease 中允许调用的旧 `cloudnode` 身份。
+- [x] Admin 控制台权限与垃圾回收改用新服务和字段；继续禁止 console 调用垃圾回收及内部租约方法。
+- [x] Collector 管理请求及创建 metadata、CLI 的手写 JSON 和作业枚举解析同步；外层资源 ID 与执行载荷 ID 分别处理。
+- [x] 复核请求空间、签名 caller、超时预算、发布租约错误分类和进行中作业状态。
 
 ### 阶段 4：前端
 
-- [ ] 页面文案明确区分“云函数实例”“代码包”“管理作业”，维护包到实例的关联展示。
-- [ ] 目录与文件：
+- [x] 页面文案明确区分“云函数实例”“代码包”“管理作业”，维护包到实例的关联展示。
+- [x] 目录与文件：
   - `views/collector/cloud-node/` → `views/collector/cloud-function/`，其中 `cloud-node.vue` → `function-instance.vue`，`function-package-manage.vue` 保持文件名；`cloud-node-model.ts`、`cloud-node-batch-poller.ts` 及测试 → `function-instance-model.ts`、`function-job-poller.ts`。
   - `api/cloud-node.ts` → `api/function-instance.ts`；`utils/cloud-node-batch-change.ts` → `utils/function-job-change.ts`；`function-package.ts` 和云账号 API 保持领域名称。
   - `tests/cloud-node-workflows.spec.ts` → `tests/cloud-function-workflows.spec.ts`，同步 `web/vitest.config.ts` 的文件列表。
   - 同步 `web/scripts/check-detail-page-style.mjs` 中的页面路径。
-- [ ] 资源 ID、批量选择、删除快照、执行前复核、作业结果/状态枚举、`workload_type`、`scf_type`、`max_instances` 全部切换；删除 `ip_address`、`tag` 字段。
-- [ ] 现有 `/collector/tasks?tab=executors` 页面入口可保留，菜单组织不随后台模块目录重建。
-- [ ] 修改实际 `/api/admin/cloudfunction/*` 路由及免空间正则，清理仍写 `/api/service/cloudnode/*` 的过时命令文案。
+- [x] 资源 ID、批量选择、删除快照、执行前复核、作业结果/状态枚举、`workload_type`、`scf_type`、`max_instances` 全部切换；删除 `ip_address`、`tag` 字段。
+- [x] 现有 `/collector/tasks?tab=executors` 页面入口可保留，菜单组织不随后台模块目录重建。
+- [x] 修改实际 `/api/admin/cloudfunction/*` 路由及免空间正则，清理仍写 `/api/service/cloudnode/*` 的过时命令文案。
 
 ### 阶段 5：运行身份、部署和监控
 
-- [ ] `gateway_client.caller`、`caller-cloudfunction.key`、组件 ID、二进制和模块路径一致。
-- [ ] 健康检查 `11411`、原生 tRPC `11401` 等现有端口及 960 秒 RPC 预算保持，改名不分配新端口。
+- [x] `gateway_client.caller`、`caller-cloudfunction.key`、组件 ID、二进制和模块路径一致。
+- [x] 健康检查 `11411`、原生 tRPC `11401` 等现有端口及 960 秒 RPC 预算保持，改名不分配新端口。
 - [ ] 重生成 unit package、caller 身份包和主机网关配置，审查各主机目录版本变化后更新黄金摘要。
 - [ ] 重建并更新所有接收该目录的 `host-gateway` 二进制。网关用编译时内嵌 catalog 校验快照中的全部服务，旧二进制会拒绝包含新服务名的整份目录；只更新配置或只更新 control 主机均不充分。
 - [ ] 按内嵌 servicecatalog 的直接及传递依赖核对制品集合，包含管理 CLI、运行管理工具、Admin、Access、Monitor 和 gatewayclient 消费者；发布使用同一提交生成的整套制品。
-- [ ] 修改新服务环境变量、默认 DB 文件、数据目录与 doctor 配置路径。
-- [ ] 修改模块健康 ID、`moox_cloudnode_*` 指标前缀以及 Collector/Monitor 成对使用的 `reason=cloudnode`。
-- [ ] E2E 环境变量、默认数据库路径和直接查询 SQL 同步。
-- [ ] 新建函数的默认名前缀改为 `moox-cloudfunction`；显式指定及已存在的云端函数名保持原值。
+- [x] 修改新服务环境变量、默认 DB 文件、数据目录与 doctor 配置路径。
+- [x] 修改模块健康 ID、`moox_cloudnode_*` 指标前缀以及 Collector/Monitor 成对使用的 `reason=cloudnode`。
+- [x] E2E 环境变量、默认数据库路径和直接查询 SQL 同步。
+- [x] 新建函数的默认名前缀改为 `moox-cloudfunction`；显式指定及已存在的云端函数名保持原值。
 
 ### 阶段 6：文档和制品
 
-- [ ] `docs/模块/云节点.md` 改名为 `docs/模块/云函数管理.md`，内容改为“云函数管理”；更新根/模块 README、总体设计表格和 VitePress 导航。
-- [ ] 更新全部指向 `云节点.md` 与 `modules/cloudnode/` 的链接（基线 10 个文件链接 `云节点.md`，7 个文档引用 `modules/cloudnode/` 路径）。`docs/.vitepress/config.ts` 设置了 `ignoreDeadLinks: true`，构建不会报断链，必须用 §7.3 的命令显式检查。
-- [ ] 现行部署与使用文档更新到新命令；历史故障记录与历史计划保留原始日志和原名，其中的链接改到新路径，补充命名对应说明即可。
-- [ ] 本计划的基线旧路径链接在代码移动后改为有效新路径，或改为不含链接的历史路径文字。
-- [ ] 前端构建后再生成 statik，随后构建 web-host，避免页面仍调用旧服务。
-- [ ] 按 §7.3 检查旧模块路径、服务字符串、表名、字段、枚举、配置键、脚本目标和文件名残留。
+- [x] `docs/模块/云节点.md` 改名为 `docs/模块/云函数管理.md`，内容改为“云函数管理”；更新根/模块 README、总体设计表格和 VitePress 导航。
+- [x] 更新全部指向 `云节点.md` 与 `modules/cloudnode/` 的链接（基线 10 个文件链接 `云节点.md`，7 个文档引用 `modules/cloudnode/` 路径）。`docs/.vitepress/config.ts` 设置了 `ignoreDeadLinks: true`，构建不会报断链，必须用 §7.3 的命令显式检查。
+- [x] 现行部署与使用文档更新到新命令；历史故障记录与历史计划保留原始日志和原名，其中的链接改到新路径，补充命名对应说明即可。
+- [x] 本计划的基线旧路径链接在代码移动后改为有效新路径，或改为不含链接的历史路径文字。
+- [x] 前端构建后再生成 statik，随后构建 web-host，避免页面仍调用旧服务。
+- [x] 按 §7.3 检查旧模块路径、服务字符串、表名、字段、枚举、配置键、脚本目标和文件名残留。
 
 ## 6. 验证矩阵
 
@@ -533,97 +533,36 @@ git diff --check
 
 `make proto-check` 会先执行全仓协议生成，再要求整个工作树干净。正确顺序是：完成生成与审查 → 提交源文件、文档和生成物 → 在干净工作树执行 `make proto-check`，或在未完成其他质量门禁时执行包含它的 `make verify`。若生成检查产生差异，检查生成工具/输入，修正并提交后再重跑受影响检查。
 
-## 8. 已有环境的切换安排
+## 8. 正式环境发布安排（按用户最新授权）
 
-本节是未来部署任务的准备要求，不在当前文档任务中执行。新安装环境直接初始化新 schema；已有环境采用**一次性离线转换**保留数据。重新初始化会丢失云账号的密钥引用和代码包记录，还要依赖 SCF 导入重建实例目录，不作为默认方案。
+用户于 2026-10-23 明确：项目尚未上线，不考虑兼容和平滑迁移，线上数据可以删除。本节替代 v2 的离线转换草稿；不编写历史表、旧 JSON 或旧组件身份的迁移代码。
 
-1. 盘点已有实例、代码包、非终态作业、发布租约和新旧组件 placements，记录待保留数据及对应云端函数名称。
-2. 在发布窗口暂停新的管理变更入口及自动写入来源，包括 Collector 对账/发布和 Admin 定时 GC；等待在途作业完成并确认操作占用释放。仍处于恢复/未知状态的作业先完成再协调，不直接删库或跳过围栏。
-3. 排空后停止旧 CloudNode 及相关写入进程，按现有维护/停用机制禁止守护进程重新拉起，确认旧进程退出且数据库没有并发写入，再保存一致的数据与配置快照。数据库、Admin 部署身份、网关配置和 caller 密钥包作为同一版本组处理；停止与恢复哪些组件应记录到部署清单。
-4. 在快照副本上执行离线转换（草稿见下），通过检查后再用于目标环境。转换脚本不加入业务进程启动逻辑，也不建立长期双版本兼容层。
-5. 转换保持账号/包/实例 ID 的实际值、云函数名称与 COS 对象位置；Admin placements 的组件身份按新部署配置重新生成。
-6. 在维护窗口安装同一版本的服务、管理/运行工具、前端制品、部署配置、身份包和网关目录，更新所有接收目录的 host-gateway 二进制。旧网关不能接受新目录，新网关也不应继续使用旧目录；按匹配的制品和配置组切换后启动，不以混合版本维持管理请求。验证新身份、健康检查及各主机目录接受状态。
-7. 验收账号/包/实例列表、作业提交查询、受控部署/配置更新、SCF 调用、Timer 回读、GC dry_run 和监控归属；确认旧组件不会被守护进程再次拉起，再恢复自动写入和管理入口。
-8. 回退时停止新管理写入并恢复同一套旧制品、配置和数据快照。若发布后已经发生云端创建/部署/删除，本地快照无法回退云端副作用，需先核对云端实际状态并恢复目录一致性。
+1. 完成本计划的实现与测试，另起 Agent 审查代码，修复发现的问题后复验；提交并推送全部源码。发布制品必须能追溯至该提交。
+2. 按仓库 `skills/moox` 的原生发布流程盘点生产主机、单元、进程、网关目录、caller 身份及配置。确认所有使用内嵌服务目录的制品，并同一提交构建。
+3. 在维护窗口暂停 Collector 的自动发布及相关旧进程和守护拉起，确认没有旧进程继续写入。管理作业和待释放租约不跨版本恢复；清理相关作业数据前确认旧云端请求已结束，必要时等待操作占用失效。
+4. 使用新 schema 初始化云函数目录和作业数据。账号、代码包等结构不变的数据可保留；需要重置的实例目录由现有 SCF 导入与 Collector 对账流程重建。不改变云端函数名称，不自动删除云端函数或 COS 对象。
+5. 同步替换组件 ID、服务名、目录、环境变量、runtime 计划、部署记录与 caller 身份。新版本不保留旧服务别名；确认守护计划不再拉起旧组件。
+6. 发布 CloudFunction、Collector、Admin、Monitor、CLI、Web 及服务目录依赖的制品，更新所有主机的 host-gateway、gateway CLI、runtime 与相关 Access。依据实际依赖和生产盘点落实完整清单。
+7. 核对新进程及二进制 SHA、健康检查、全部主机目录 expected/applied hash、账号/包/实例查询、作业提交查询、受控调用、Timer 回读及 GC dry_run；记录数据重建结果和发布台账。
+8. 如发布失败，先停止新版本写入；根据实际云端状态恢复整套匹配的代码、配置与数据，不能只回退一个服务目录消费者。
 
-离线转换草稿。做法是先执行新 schema 建出新表、新索引和新触发器，再复制实例数据、删除旧对象，而不是 `ALTER TABLE … RENAME`：改名会让 SQLite 把外键引用改写成带引号的表名、保留旧列顺序，转换后的 `sqlite_master` 与新装环境不一致。实施时以最终 schema 为准逐项补齐，并在快照副本上验证：
-
-```sql
--- 前置断言：排空后两条查询都必须为 0，否则中止转换
-SELECT COUNT(*) FROM t_cloud_node_batches WHERE c_status NOT IN ('success', 'failed', 'partial');
-SELECT COUNT(*) FROM t_cloud_node_batch_items WHERE c_status NOT IN ('success', 'failed');
-
-BEGIN;
--- 1. 执行新版 cloudfunction.sql：建出三张新表，账号表、代码包表已存在只补建新名索引与触发器
-
--- 2. 复制实例；metadata 键 node_id → instance_id、biz_type → workload_type，删除 ip_address、tag。
---    json_patch 遇到值为 null 的键会删除该键，旧键缺失的行不会写出 null。
-INSERT INTO t_cloud_function_instances (
-    c_id, c_space_id, c_instance_id, c_lifecycle_id, c_lifecycle_operation_id, c_provider,
-    c_cloud_account_id, c_package_id, c_package_version, c_deployment_id, c_function_type,
-    c_trigger_type, c_region, c_namespace, c_function_name, c_metadata, c_is_deleted, c_ctime, c_mtime
-)
-SELECT
-    c_id, c_space_id, c_node_id, c_lifecycle_id, c_lifecycle_operation_id, c_provider,
-    c_cloud_account_id, c_package_id, c_package_version, c_deployment_id, c_node_type,
-    c_trigger_type, c_region, c_namespace, c_function_name,
-    CASE WHEN json_valid(c_metadata) THEN json_remove(
-        json_patch(c_metadata, json_object(
-            'instance_id', json_extract(c_metadata, '$.node_id'),
-            'workload_type', json_extract(c_metadata, '$.biz_type')
-        )),
-        '$.node_id', '$.biz_type', '$.ip_address', '$.tag'
-    ) ELSE c_metadata END,
-    c_is_deleted, c_ctime, c_mtime
-FROM t_cloud_nodes;
-
--- 3. 已结束作业没有保留价值，不复制，也就不必转换 c_request_json 中的旧 JSON 键
-DROP TABLE t_cloud_node_batch_items;
-DROP TABLE t_cloud_node_batches;
-DROP TABLE t_cloud_nodes;
-
--- 4. 删除账号表、代码包表上的旧名索引与触发器（实例与作业的旧对象已随旧表删除）
-DROP INDEX idx_cloud_accounts_account_id;
-DROP INDEX idx_cloud_accounts_provider;
-DROP INDEX idx_cloud_packages_space_package;
-DROP INDEX idx_cloud_packages_workload;
-DROP INDEX idx_cloud_packages_deleted;
-DROP TRIGGER update_cloud_accounts_mtime;
-DROP TRIGGER update_cloud_packages_mtime;
-COMMIT;
-
-PRAGMA foreign_key_check;
-PRAGMA integrity_check;
-```
-
-转换后再执行一遍新版 schema，确认不产生新对象；再与按新 schema 初始化的空库比对 `sqlite_master` 中的表、索引和触发器定义，应当完全一致。抽查实例数、实例 ID、函数名、包关联与 metadata 键。
-
-草稿试跑记录（2026-10-23，计划编写时，SQLite 3.53.1 内存库）：
-
-- 目标 schema（§3.2 片段加按 §3.2 改名的账号表、代码包表）载入空库，得到 5 张表、10 个索引（5 个 UNIQUE）、3 个触发器，与 §3.1 一致。
-- 用基线 `cloudnode.sql` 建库，写入账号、代码包、引用该包的实例（metadata 含 `node_id`、`biz_type`、`tag`）及一个已成功结束的作业和明细。两条前置断言均为 0。
-- 执行转换后 `foreign_key_check` 为空，`integrity_check` 为 `ok`；再执行一遍目标 schema 不产生新对象；`sqlite_master` 中的表、索引、触发器定义与按目标 schema 新建的空库完全一致。
-- 实例的 `c_instance_id`、`c_function_type` 正确；metadata 转为 `{"instance_id":…,"workload_type":…}`，`tag` 已删除。`json_patch` 表达式另测了空对象、只含 `node_id`、非 JSON 三种输入：缺少旧键时不写出 null，非 JSON 原样保留。
-
-这次只用了样例数据，没有覆盖真实环境的数据分布；切换前仍须按第 4 步在快照副本上验证。
-
-环境切换在代码实施和演练完成后单独执行，记录实际数据处理方式、发布版本及结果。本轮只交付计划文档。
+本次不以混合版本维持服务，不依赖旧作业历史，不把旧 DB 路径存在视为新库已初始化。发布结果记录在实施记录中。
 
 ## 9. 最终交付与完成标准
 
-- [ ] 最终模块名已经确定，文档和代码没有互相矛盾的命名。
-- [ ] 五张业务表准确表达账号、代码包、实例、作业、作业明细；没有混淆包与实例。
-- [ ] 管理域中的 `CloudNode/NodeBatch` 及旧协议、字段、表和组件身份已统一替换；同一协议中没有取值不同的同名字段。
-- [ ] §2.5 的无调用方接口、字段和函数已删除。
-- [ ] Collector 任务实例、共享执行来源、Storage 节点和 Monitor 主机/进程身份没有被误改。
-- [ ] 全部管理调用方、ACL、动态 JSON、持久化 reader/writer 和部署资产同步切换。
-- [ ] 实例创建与发布围栏、异步恢复、Timer、调用和 GC 的原有业务约束通过回归。
-- [ ] 所有模块 schema 均可载入空 SQLite，完整性和外键检查通过。
-- [ ] 新协议生成物、前端嵌入物与源码一致；旧名残留与文档断链已按清单审查。
-- [ ] 现行文档、导航和构建示例可用；历史记录保留其基线语义。
+- [x] 最终模块名已经确定，文档和代码没有互相矛盾的命名。
+- [x] 五张业务表准确表达账号、代码包、实例、作业、作业明细；没有混淆包与实例。
+- [x] 管理域中的 `CloudNode/NodeBatch` 及旧协议、字段、表和组件身份已统一替换；同一协议中没有取值不同的同名字段。
+- [x] §2.5 的无调用方接口、字段和函数已删除。
+- [x] Collector 任务实例、共享执行来源、Storage 节点和 Monitor 主机/进程身份没有被误改。
+- [x] 全部管理调用方、ACL、动态 JSON、持久化 reader/writer 和部署资产同步切换。
+- [x] 实例创建与发布围栏、异步恢复、Timer、调用和 GC 的原有业务约束通过回归。
+- [x] 所有模块 schema 均可载入空 SQLite，完整性和外键检查通过。
+- [x] 新协议生成物、前端嵌入物与源码一致；旧名残留与文档断链已按清单审查。
+- [x] 现行文档、导航和构建示例可用；历史记录保留其基线语义。
 - [ ] 按仓库要求提交本次改动并推送工作分支，记录 commit、测试结果和尚未进行的发布步骤。
 
-本版进度：阶段 0 的代码盘点、领域模型讨论、模块名确认与无调用方接口的核对已完成；代码实施前仍需刷新主线基线，阶段 1～8 均未执行。
+本版进度：已刷新主线，代码基线仍为 `3da2faed`；阶段 0～6 的代码与文档实施已完成，已完成独立 Agent 审查及问题修复。正在收尾全量验证、生成一致性检查及正式环境发布；具体结果见实施记录。
 
 ## 10. 评审记录
 
@@ -631,3 +570,15 @@ PRAGMA integrity_check;
 | --- | --- | --- |
 | 2026-10-23 | 对照基线代码审查 v1 | 提出 6 项必须修改、6 项建议补充，已全部纳入 v2（见文首的 v2 变化说明） |
 | 2026-10-23 | Codex 只读审查 v2（提交 `bec9d979`，模型 gpt-6-astra） | 对照仓库代码核对现状事实、命名映射与删除项、阶段依赖、验证矩阵和 §8 转换草稿，只报会导致实施失败或丢数据的问题；结论为“可以定稿”，无修改意见 |
+
+| 2026-10-23 | 实施后独立 Agent 代码审查 | 发现 CLI 出口探针误改共享主机/进程身份，以及 Job 唯一索引命名遗漏；均已修复，新增身份字段回归用例。复核协议、生成物、动态 JSON、恢复与 GC、Web、ACL、部署身份后，无未修复的 P1/P2 问题。 |
+
+## 11. 实施记录
+
+- 在 `codex/cloudnode-naming-review` 的独立 worktree 实施；目录移动提交 `4c296f0a`，误提交二进制清理提交 `12421b68`。
+- 代码包保持 `FunctionPackage` 与 `t_cloud_function_packages`；实例和管理作业分别统一为 `FunctionInstance`、`FunctionJob` / `FunctionJobItem`。删除无调用方旧接口与实例 IP/tag 字段。
+- 全部模块 SQL 已逐个连续两次载入空 SQLite，通过外键和完整性检查；CloudFunction 为 5 张表、10 个显式索引、3 个触发器。
+- Web 单元测试 133 个文件、839 个用例通过；类型检查、生产构建、statik 生成及文档生产构建通过。部署包、主机身份、单元安装/运行/引导测试通过。
+- `check:detail-pages` 存在基线失败：未修改的 `web/src/views/factor/editor/index.vue` 表格缺少 cell 边框；文件与计划基线逐字节相同。本次修改的云函数页面通过对应检查。
+- 生产盘点：实际主机为 `control`、`storage`、`overseas`；不按历史文档把主机重命名。发布期间保留云账号、代码包与云端函数/COS 对象，重建本地实例与 Job 目录；所有生产操作使用 SSH 公钥。
+- 尚待记录：全量 Go 测试、干净树协议检查、正式制品提交、部署与线上验收结果。

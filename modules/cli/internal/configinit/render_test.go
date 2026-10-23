@@ -72,7 +72,7 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 		t.Fatalf("主机 = %+v", manifest.HostCatalog)
 	}
 	// 角色到组件的映射与示例模板的放置一致。
-	if !slices.Equal(manifest.Placements["control"], []string{"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"}) ||
+	if !slices.Equal(manifest.Placements["control"], []string{"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"}) ||
 		!slices.Equal(manifest.Placements["storage"], []string{"storage-primary", "storage-node", "storage-view", "access"}) ||
 		!slices.Equal(manifest.Placements["overseas"], []string{"trade", "access", "egress-proxy", "collector-stream"}) {
 		t.Fatalf("放置 = %+v", manifest.Placements)

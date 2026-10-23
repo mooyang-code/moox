@@ -15,15 +15,15 @@ import (
 
 const (
 	// packageGarbageGrace keeps an unused package long enough for the publish
-	// that uploaded it to create or deploy its nodes. Orphaned COS objects use
+	// that uploaded it to create or deploy its instances. Orphaned COS objects use
 	// the same grace so an upload in progress is never removed.
 	packageGarbageGrace = 6 * time.Hour
-	// deletedNodeRetention keeps soft-deleted node rows long enough for a
+	// deletedInstanceRetention keeps soft-deleted instance rows long enough for a
 	// retried delete to stay idempotent.
-	deletedNodeRetention = 24 * time.Hour
-	// nodeBatchRetention keeps finished batches for publish diagnosis.
-	nodeBatchRetention = 7 * 24 * time.Hour
-	// packageObjectPrefix is the only COS prefix CloudNode writes; garbage
+	deletedInstanceRetention = 24 * time.Hour
+	// functionJobRetention keeps finished batches for publish diagnosis.
+	functionJobRetention = 7 * 24 * time.Hour
+	// packageObjectPrefix is the only COS prefix FunctionInstance writes; garbage
 	// collection never touches other objects in the bucket.
 	packageObjectPrefix = "moox/cloud-packages/"
 )
@@ -40,9 +40,9 @@ type packageObjectStore interface {
 	Delete(ctx context.Context, key string) error
 }
 
-// CollectGarbage removes CloudNode data that nothing uses any more: packages
-// no live node runs (their COS objects included), COS objects no package
-// record references, soft-deleted nodes and finished node batches.
+// CollectGarbage removes FunctionInstance data that nothing uses any more: packages
+// no live instance runs (their COS objects included), COS objects no package
+// record references, soft-deleted instances and finished instance batches.
 func (s *Service) CollectGarbage(ctx context.Context, req *pb.CollectGarbageReq) (*pb.CollectGarbageRsp, error) {
 	now := time.Now().UTC()
 	gc := &garbageCollection{service: s, dryRun: req.GetDryRun(), rsp: &pb.CollectGarbageRsp{}, stores: map[string]packageObjectStore{}}
@@ -52,19 +52,19 @@ func (s *Service) CollectGarbage(ctx context.Context, req *pb.CollectGarbageReq)
 	if err := gc.orphanObjects(ctx, now.Add(-packageGarbageGrace)); err != nil {
 		return &pb.CollectGarbageRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	nodes, err := s.catalog.PurgeDeletedNodes(ctx, now.Add(-deletedNodeRetention), gc.dryRun)
+	instances, err := s.catalog.PurgeDeletedInstances(ctx, now.Add(-deletedInstanceRetention), gc.dryRun)
 	if err != nil {
-		return &pb.CollectGarbageRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "purge deleted nodes: "+err.Error())}, nil
+		return &pb.CollectGarbageRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "purge deleted instances: "+err.Error())}, nil
 	}
-	gc.rsp.DeletedNodes = uint32(nodes)
-	batches, err := s.catalog.PurgeFinishedNodeBatches(ctx, now.Add(-nodeBatchRetention), gc.dryRun)
+	gc.rsp.DeletedInstances = uint32(instances)
+	batches, err := s.catalog.PurgeFinishedFunctionJobs(ctx, now.Add(-functionJobRetention), gc.dryRun)
 	if err != nil {
-		return &pb.CollectGarbageRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "purge finished node batches: "+err.Error())}, nil
+		return &pb.CollectGarbageRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "purge finished instance batches: "+err.Error())}, nil
 	}
-	gc.rsp.NodeBatches = uint32(batches)
+	gc.rsp.FunctionJobs = uint32(batches)
 	gc.rsp.RetInfo = retOK()
-	log.InfoContextf(ctx, "[CloudNode-GC] dry_run=%t packages=%d cos_objects=%d cos_bytes=%d deleted_nodes=%d node_batches=%d skipped=%q",
-		gc.dryRun, gc.rsp.Packages, gc.rsp.CosObjects, gc.rsp.CosBytes, gc.rsp.DeletedNodes, gc.rsp.NodeBatches, gc.rsp.Skipped)
+	log.InfoContextf(ctx, "[CloudFunction-GC] dry_run=%t packages=%d cos_objects=%d cos_bytes=%d deleted_instances=%d function_jobs=%d skipped=%q",
+		gc.dryRun, gc.rsp.Packages, gc.rsp.CosObjects, gc.rsp.CosBytes, gc.rsp.DeletedInstances, gc.rsp.FunctionJobs, gc.rsp.Skipped)
 	return gc.rsp, nil
 }
 
@@ -82,14 +82,14 @@ func (gc *garbageCollection) skip(format string, args ...any) {
 }
 
 func (gc *garbageCollection) packages(ctx context.Context, cutoff time.Time) error {
-	active, err := gc.service.catalog.HasActiveNodeBatches(ctx)
+	active, err := gc.service.catalog.HasActiveFunctionJobs(ctx)
 	if err != nil {
-		return fmt.Errorf("check active node batches: %w", err)
+		return fmt.Errorf("check active instance batches: %w", err)
 	}
 	if active {
 		// A running batch may be deploying any package, including one that no
-		// node runs yet; collect packages on the next run.
-		gc.skip("packages: a node batch is still running")
+		// instance runs yet; collect packages on the next run.
+		gc.skip("packages: a instance batch is still running")
 		return nil
 	}
 	packages, err := gc.service.catalog.ListGarbagePackages(ctx, cutoff)

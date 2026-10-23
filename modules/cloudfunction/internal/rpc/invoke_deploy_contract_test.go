@@ -17,7 +17,7 @@ func TestMarketFetcherPackageWorkloadIdentityCannotBypassTimerContract(t *testin
 	for _, workload := range []string{" MARKET_FETCHER ", " Market_Fetcher"} {
 		for _, operation := range []string{"create", "deploy"} {
 			t.Run(operation+workload, func(t *testing.T) {
-				catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+				catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 				seedSCFAccountAndPackage(t, catalog)
 				pkg, err := catalog.GetPackage(context.Background(), "crypto", "moox-collector_dev")
 				require.NoError(t, err)
@@ -28,10 +28,10 @@ func TestMarketFetcherPackageWorkloadIdentityCannotBypassTimerContract(t *testin
 				fake := &fakeSCFClient{currentEnvironment: env, currentTimeout: 60}
 				svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
 				if operation == "create" {
-					_, err = svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: pkg.PackageID, TriggerType: "timer", Config: map[string]string{"timeout": "15"}, Environment: env}, 0)
+					_, err = svc.executeCreateInstanceItem(context.Background(), "crypto", &pb.FunctionInstanceCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: pkg.PackageID, TriggerType: "timer", Config: map[string]string{"timeout": "15"}, Environment: env}, 0)
 				} else {
-					require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "timer", CloudAccountID: "account-a", TriggerType: "timer", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "timer"}))
-					_, err = svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{NodeId: "timer", PackageId: pkg.PackageID, Config: map[string]string{"timeout": "15"}})
+					require.NoError(t, catalog.UpsertInstance(context.Background(), store.FunctionInstance{SpaceID: "crypto", InstanceID: "timer", CloudAccountID: "account-a", TriggerType: "timer", FunctionType: "scf-event", Region: "ap-singapore", FunctionName: "timer"}))
+					_, err = svc.executeDeployInstanceItem(context.Background(), "crypto", &pb.FunctionInstanceDeployItem{InstanceId: "timer", PackageId: pkg.PackageID, Config: map[string]string{"timeout": "15"}})
 				}
 				require.ErrorContains(t, err, "Timer runtime timeout")
 				require.Empty(t, fake.created)
@@ -51,13 +51,13 @@ func completeInvokeEnvironment(timeout string) map[string]string {
 func TestMarketFetcherInvokeCreateRejectsIncompleteBasicEnvironmentBeforeCloudAPI(t *testing.T) {
 	for _, key := range []string{"MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", "MOOX_EVENTBUS_NATS_PASSWORD", "MOOX_CALLER"} {
 		t.Run(key, func(t *testing.T) {
-			catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+			catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 			seedSCFAccountAndPackage(t, catalog)
 			calls := 0
 			svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { calls++; return &fakeSCFClient{} }}
 			env := completeInvokeEnvironment("90")
 			delete(env, key)
-			_, err := svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"timeout": "90"}, Environment: env}, 0)
+			_, err := svc.executeCreateInstanceItem(context.Background(), "crypto", &pb.FunctionInstanceCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"timeout": "90"}, Environment: env}, 0)
 			require.ErrorContains(t, err, key)
 			require.Zero(t, calls)
 		})
@@ -76,9 +76,9 @@ func TestMarketFetcherInvokeDeployValidatesBasicEnvironmentWithoutTimerRules(t *
 		{"valid Invoke shares Access without Timer timeout", "", "", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+			catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 			seedSCFAccountAndPackage(t, catalog)
-			require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "invoke", CloudAccountID: "account-a", TriggerType: "invoke", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "invoke"}))
+			require.NoError(t, catalog.UpsertInstance(context.Background(), store.FunctionInstance{SpaceID: "crypto", InstanceID: "invoke", CloudAccountID: "account-a", TriggerType: "invoke", FunctionType: "scf-event", Region: "ap-singapore", FunctionName: "invoke"}))
 			env := completeTimerEnvironment()
 			env["MOOX_FETCH_TIMEOUT_SECONDS"] = "90"
 			if test.key != "" {
@@ -86,7 +86,7 @@ func TestMarketFetcherInvokeDeployValidatesBasicEnvironmentWithoutTimerRules(t *
 			}
 			fake := &fakeSCFClient{currentEnvironment: env, currentTimeout: 90}
 			svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
-			_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{NodeId: "invoke", PackageId: "moox-collector_dev", Config: map[string]string{"timeout": "90"}})
+			_, err := svc.executeDeployInstanceItem(context.Background(), "crypto", &pb.FunctionInstanceDeployItem{InstanceId: "invoke", PackageId: "moox-collector_dev", Config: map[string]string{"timeout": "90"}})
 			if test.wantError {
 				require.Error(t, err)
 				require.Empty(t, fake.updated)
@@ -131,7 +131,7 @@ func TestMarketFetcherInvokeTimeoutContractBeforeCloudMutation(t *testing.T) {
 	} {
 		for _, operation := range []string{"create", "deploy"} {
 			t.Run(operation+"/"+test.name, func(t *testing.T) {
-				catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+				catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 				seedSCFAccountAndPackage(t, catalog)
 				env := completeInvokeEnvironment("90")
 				delete(env, "MOOX_FETCH_TIMEOUT_SECONDS")
@@ -149,10 +149,10 @@ func TestMarketFetcherInvokeTimeoutContractBeforeCloudMutation(t *testing.T) {
 				if operation == "create" {
 					env["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
 					fake.getResults = []fakeSCFGetResult{{err: errors.New("ResourceNotFound.FunctionName")}}
-					_, err = svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"memory_size": "64", "timeout": test.outer}, Environment: env}, 0)
+					_, err = svc.executeCreateInstanceItem(context.Background(), "crypto", &pb.FunctionInstanceCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"memory_size": "64", "timeout": test.outer}, Environment: env}, 0)
 				} else {
-					require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "invoke", CloudAccountID: "account-a", TriggerType: "invoke", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "invoke"}))
-					_, err = svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{NodeId: "invoke", PackageId: "moox-collector_dev", Config: map[string]string{"timeout": test.outer}})
+					require.NoError(t, catalog.UpsertInstance(context.Background(), store.FunctionInstance{SpaceID: "crypto", InstanceID: "invoke", CloudAccountID: "account-a", TriggerType: "invoke", FunctionType: "scf-event", Region: "ap-singapore", FunctionName: "invoke"}))
+					_, err = svc.executeDeployInstanceItem(context.Background(), "crypto", &pb.FunctionInstanceDeployItem{InstanceId: "invoke", PackageId: "moox-collector_dev", Config: map[string]string{"timeout": test.outer}})
 				}
 				if test.wantError {
 					require.ErrorContains(t, err, "Invoke runtime timeout")
@@ -192,7 +192,7 @@ func TestMarketFetcherInvokeReadbackAcceptsHandlerFallback(t *testing.T) {
 	} {
 		for _, operation := range []string{"create", "deploy"} {
 			t.Run(operation+"/"+test.name, func(t *testing.T) {
-				catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+				catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 				seedSCFAccountAndPackage(t, catalog)
 				requestEnv := completeInvokeEnvironment("60")
 				requestEnv["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
@@ -211,23 +211,23 @@ func TestMarketFetcherInvokeReadbackAcceptsHandlerFallback(t *testing.T) {
 				svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
 				var err error
 				if operation == "create" {
-					item := &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"timeout": strconv.FormatInt(test.outer, 10)}, Environment: requestEnv, CreateReservationId: reservationID}
-					_, err = svc.executeCreateNodeItem(context.Background(), "crypto", item, 0)
+					item := &pb.FunctionInstanceCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"timeout": strconv.FormatInt(test.outer, 10)}, Environment: requestEnv, CreateReservationId: reservationID}
+					_, err = svc.executeCreateInstanceItem(context.Background(), "crypto", item, 0)
 					require.NoError(t, err)
-					node, err := catalog.GetNode(context.Background(), "crypto", cloudNodeFromCreateItem("crypto", item, 0).NodeID)
+					instance, err := catalog.GetInstance(context.Background(), "crypto", functionInstanceFromCreateItem("crypto", item, 0).InstanceID)
 					require.NoError(t, err)
-					require.True(t, parseJSONMap(node.Metadata)["deployment_ready"].(bool))
+					require.True(t, parseJSONMap(instance.Metadata)["deployment_ready"].(bool))
 				} else {
-					require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "invoke", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "invoke", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "invoke"}))
+					require.NoError(t, catalog.UpsertInstance(context.Background(), store.FunctionInstance{SpaceID: "crypto", InstanceID: "invoke", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "invoke", FunctionType: "scf-event", Region: "ap-singapore", FunctionName: "invoke"}))
 					initialEnv := copyStringMap(requestEnv)
 					initialEnv["MOOX_CODE_PACKAGE_ID"] = "old-package"
 					active := &tencentscf.FunctionInfo{Status: "Active", Environment: initialEnv, Timeout: test.outer}
 					fake.getResults = []fakeSCFGetResult{{info: active}, {info: active}, {info: active}, {info: &tencentscf.FunctionInfo{Status: "Active", Environment: remoteEnv, Timeout: test.outer}}}
-					_, err = svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{NodeId: "invoke", PackageId: "moox-collector_dev"})
+					_, err = svc.executeDeployInstanceItem(context.Background(), "crypto", &pb.FunctionInstanceDeployItem{InstanceId: "invoke", PackageId: "moox-collector_dev"})
 					require.NoError(t, err)
-					node, err := catalog.GetNode(context.Background(), "crypto", "invoke")
+					instance, err := catalog.GetInstance(context.Background(), "crypto", "invoke")
 					require.NoError(t, err)
-					require.Equal(t, "moox-collector_dev", node.PackageID)
+					require.Equal(t, "moox-collector_dev", instance.PackageID)
 				}
 			})
 		}
@@ -237,7 +237,7 @@ func TestMarketFetcherInvokeReadbackAcceptsHandlerFallback(t *testing.T) {
 func TestMarketFetcherInvokeCreateValidatesReadbackTimeoutBeforeReady(t *testing.T) {
 	for _, path := range []string{"existing", "created", "ambiguous create"} {
 		t.Run(path, func(t *testing.T) {
-			catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+			catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 			seedSCFAccountAndPackage(t, catalog)
 			requestEnv := completeInvokeEnvironment("60")
 			requestEnv["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
@@ -257,16 +257,16 @@ func TestMarketFetcherInvokeCreateValidatesReadbackTimeoutBeforeReady(t *testing
 				fake.createErr = context.DeadlineExceeded
 			}
 			svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
-			item := &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"timeout": "60"}, Environment: requestEnv}
+			item := &pb.FunctionInstanceCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "invoke", Config: map[string]string{"timeout": "60"}, Environment: requestEnv}
 			if path == "existing" || path == "ambiguous create" {
 				item.CreateReservationId = reservationID
 			}
-			_, err := svc.executeCreateNodeItem(context.Background(), "crypto", item, 0)
+			_, err := svc.executeCreateInstanceItem(context.Background(), "crypto", item, 0)
 			require.ErrorContains(t, err, "Invoke runtime timeout")
-			node, err := catalog.GetNode(context.Background(), "crypto", cloudNodeFromCreateItem("crypto", item, 0).NodeID)
+			instance, err := catalog.GetInstance(context.Background(), "crypto", functionInstanceFromCreateItem("crypto", item, 0).InstanceID)
 			require.NoError(t, err)
-			require.NotNil(t, node, "mismatched readback must leave a discoverable cleanup reservation")
-			require.False(t, metadataBool(parseJSONMap(node.Metadata), "deployment_ready"), "mismatched readback cannot persist deployment_ready")
+			require.NotNil(t, instance, "mismatched readback must leave a discoverable cleanup reservation")
+			require.False(t, metadataBool(parseJSONMap(instance.Metadata), "deployment_ready"), "mismatched readback cannot persist deployment_ready")
 			require.Empty(t, fake.configured)
 			if path == "existing" {
 				require.Empty(t, fake.created)
@@ -278,9 +278,9 @@ func TestMarketFetcherInvokeCreateValidatesReadbackTimeoutBeforeReady(t *testing
 func TestMarketFetcherInvokeDeployValidatesVerifiedTimeoutWithoutDesiredTimeout(t *testing.T) {
 	for _, drift := range []string{"outer", "environment"} {
 		t.Run(drift, func(t *testing.T) {
-			catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+			catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 			seedSCFAccountAndPackage(t, catalog)
-			require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "invoke", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "invoke", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "invoke"}))
+			require.NoError(t, catalog.UpsertInstance(context.Background(), store.FunctionInstance{SpaceID: "crypto", InstanceID: "invoke", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "invoke", FunctionType: "scf-event", Region: "ap-singapore", FunctionName: "invoke"}))
 			env := completeInvokeEnvironment("90")
 			verifiedEnv := copyStringMap(env)
 			verifiedEnv["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
@@ -298,13 +298,13 @@ func TestMarketFetcherInvokeDeployValidatesVerifiedTimeoutWithoutDesiredTimeout(
 				{info: &tencentscf.FunctionInfo{Status: "Active", Environment: verifiedEnv, Timeout: verifiedTimeout}},
 			}}
 			svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
-			_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{NodeId: "invoke", PackageId: "moox-collector_dev"})
+			_, err := svc.executeDeployInstanceItem(context.Background(), "crypto", &pb.FunctionInstanceDeployItem{InstanceId: "invoke", PackageId: "moox-collector_dev"})
 			require.ErrorContains(t, err, "Invoke runtime timeout")
 			require.Len(t, fake.updated, 1)
 			require.Len(t, fake.configured, 1)
-			node, err := catalog.GetNode(context.Background(), "crypto", "invoke")
+			instance, err := catalog.GetInstance(context.Background(), "crypto", "invoke")
 			require.NoError(t, err)
-			require.Equal(t, "old-package", node.PackageID, "failed verification cannot persist the new package")
+			require.Equal(t, "old-package", instance.PackageID, "failed verification cannot persist the new package")
 		})
 	}
 }

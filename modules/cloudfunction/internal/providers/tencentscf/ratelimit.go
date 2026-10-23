@@ -18,7 +18,7 @@ import (
 )
 
 // 腾讯云云 API 默认按「API + 接入地域 + 子账号」限频（https://cloud.tencent.com/document/product/1278/109059）。
-// CloudNode 是唯一调用 SCF 管理接口的进程，进程内令牌桶即全局限流。
+// FunctionInstance 是唯一调用 SCF 管理接口的进程，进程内令牌桶即全局限流。
 
 // officialRateLimits 是云函数各接口的官方默认限频（次/秒），来源：https://cloud.tencent.com/document/product/583/17235。
 var officialRateLimits = map[string]float64{
@@ -55,12 +55,12 @@ var ErrRateLimitWaitExceedsDeadline = errors.New("tencent api rate limit wait ex
 
 var (
 	apiWaitSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "moox_cloudnode_tencent_api_wait_seconds",
+		Name:    "moox_cloudfunction_tencent_api_wait_seconds",
 		Help:    "Time spent waiting for a local rate limit token before calling a Tencent Cloud API.",
 		Buckets: []float64{0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10},
 	}, []string{"action"})
 	apiThrottledTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "moox_cloudnode_tencent_api_throttled_total",
+		Name: "moox_cloudfunction_tencent_api_throttled_total",
 		Help: "Tencent Cloud API calls rejected with RequestLimitExceeded.",
 	}, []string{"action"})
 )
@@ -167,7 +167,7 @@ func (c *Client) call(ctx context.Context, region, action string, fn func(contex
 		if errors.As(err, &sdkErr) {
 			requestID = sdkErr.GetRequestId()
 		}
-		log.WarnContextf(ctx, "[CloudNode-TencentSCF] %s 被腾讯云限频 attempt=%d/%d request_id=%s", action, attempt+1, rateLimitRetries+1, requestID)
+		log.WarnContextf(ctx, "[CloudFunction-TencentSCF] %s 被腾讯云限频 attempt=%d/%d request_id=%s", action, attempt+1, rateLimitRetries+1, requestID)
 		if attempt >= rateLimitRetries {
 			return err
 		}

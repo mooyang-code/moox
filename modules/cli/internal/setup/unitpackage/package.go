@@ -84,7 +84,7 @@ type unitComponentSpec struct {
 
 var unitProfiles = map[string][]string{
 	"host":         {"host-gateway", "host-agent"},
-	"control":      {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "archive-mgr", "strategy"},
+	"control":      {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy"},
 	"storage":      {"storage-primary", "storage-node", "storage-view"},
 	"access":       {"access"},
 	"egress-proxy": {"egress-proxy"},
@@ -120,7 +120,7 @@ var unitSpecs = map[string]unitComponentSpec{
 		// A 股行情供应商（sina 等）的路由配置，Collector 启动时必须能读到。
 		{"modules/collector/configs/scf/stockcn/sources", "collector/configs/scf/stockcn/sources", true},
 	}},
-	"cloudnode": {[]string{"moox-cloudnode-cli"}, []unitAsset{configAsset("cloudnode", "cloudnode"), schemaAsset("cloudnode", "cloudnode")}},
+	"cloudfunction": {[]string{"moox-cloudfunction-cli"}, []unitAsset{configAsset("cloudfunction", "cloudfunction"), schemaAsset("cloudfunction", "cloudfunction")}},
 	"factor-mgr": {[]string{"moox-factor-mgr-cli"}, []unitAsset{
 		{"modules/factor/config/app.yaml", "factor-mgr/config/app.yaml", false},
 		{"modules/factor/config/trpc_go.yaml", "factor-mgr/config/trpc_go.yaml", false},

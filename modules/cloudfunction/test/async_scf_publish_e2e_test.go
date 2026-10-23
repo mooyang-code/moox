@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/cloudfunction/internal/config"
-	cloudnoderpc "github.com/mooyang-code/moox/modules/cloudfunction/internal/rpc"
+	cloudfunctionrpc "github.com/mooyang-code/moox/modules/cloudfunction/internal/rpc"
 	"github.com/mooyang-code/moox/modules/cloudfunction/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudfunction/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
@@ -18,7 +18,7 @@ import (
 )
 
 func TestAsyncSCFPublishSubmitRunnerAndStatus(t *testing.T) {
-	dbm, err := store.Open(&config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "cloudnode.db")})
+	dbm, err := store.Open(&config.DatabaseConfig{Path: filepath.Join(t.TempDir(), "cloudfunction.db")})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, dbm.Close()) })
 	require.NoError(t, dbm.ApplySchema(schema.AllSQL()))
@@ -40,19 +40,19 @@ func TestAsyncSCFPublishSubmitRunnerAndStatus(t *testing.T) {
 		Status:         "available",
 	}))
 
-	svc := cloudnoderpc.New(dbm)
+	svc := cloudfunctionrpc.New(dbm)
 	ctx, cancel := context.WithCancel(spacecontext.WithSpaceID(context.Background(), "crypto"))
 	t.Cleanup(cancel)
 
-	items := make([]*pb.NodeCreateItem, 0, 7)
+	items := make([]*pb.FunctionInstanceCreateItem, 0, 7)
 	for index := 0; index < 7; index++ {
 		metadata, metadataErr := structpb.NewStruct(map[string]any{
 			"function_name_prefix": "collector-e2e",
 			"index":                index,
-			"biz_type":             "market_fetcher",
+			"workload_type":        "market_fetcher",
 		})
 		require.NoError(t, metadataErr)
-		items = append(items, &pb.NodeCreateItem{
+		items = append(items, &pb.FunctionInstanceCreateItem{
 			CloudAccountId: "local-account",
 			Region:         "local",
 			Namespace:      "default",
@@ -62,37 +62,37 @@ func TestAsyncSCFPublishSubmitRunnerAndStatus(t *testing.T) {
 		})
 	}
 
-	submit, err := svc.SubmitCreateNodes(ctx, &pb.BatchCreateNodesReq{Nodes: items})
+	submit, err := svc.SubmitCreateFunctionInstances(ctx, &pb.SubmitCreateFunctionInstancesReq{Instances: items})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, submit.GetRetInfo().GetCode())
 	require.NotEmpty(t, submit.GetJobId())
 	require.EqualValues(t, len(items), submit.GetTotalCount())
 
-	before, err := svc.GetNodeBatchChange(ctx, &pb.GetNodeBatchChangeReq{JobId: submit.GetJobId()})
+	before, err := svc.GetFunctionJob(ctx, &pb.GetFunctionJobReq{JobId: submit.GetJobId()})
 	require.NoError(t, err)
-	require.Equal(t, pb.NodeBatchStatus_NODE_BATCH_STATUS_PENDING, before.GetJob().GetStatus())
-	require.NoError(t, svc.StartNodeBatchRunner(ctx, 3, 100*time.Millisecond))
+	require.Equal(t, pb.FunctionJobStatus_FUNCTION_JOB_STATUS_PENDING, before.GetJob().GetStatus())
+	require.NoError(t, svc.StartFunctionJobRunner(ctx, 3, 100*time.Millisecond))
 
 	require.Eventually(t, func() bool {
-		status, statusErr := svc.GetNodeBatchChange(ctx, &pb.GetNodeBatchChangeReq{JobId: submit.GetJobId()})
+		status, statusErr := svc.GetFunctionJob(ctx, &pb.GetFunctionJobReq{JobId: submit.GetJobId()})
 		if statusErr != nil || status.GetJob() == nil {
 			return false
 		}
-		if status.GetJob().GetStatus() == pb.NodeBatchStatus_NODE_BATCH_STATUS_FAILED ||
-			status.GetJob().GetStatus() == pb.NodeBatchStatus_NODE_BATCH_STATUS_PARTIAL {
+		if status.GetJob().GetStatus() == pb.FunctionJobStatus_FUNCTION_JOB_STATUS_FAILED ||
+			status.GetJob().GetStatus() == pb.FunctionJobStatus_FUNCTION_JOB_STATUS_PARTIAL {
 			t.Logf("unexpected terminal status: %s", status.GetJob().GetStatus())
 			for _, item := range status.GetItems() {
 				t.Logf("item %s: %s", item.GetItemId(), item.GetErrorMessage())
 			}
 			return false
 		}
-		return status.GetJob().GetStatus() == pb.NodeBatchStatus_NODE_BATCH_STATUS_SUCCESS &&
+		return status.GetJob().GetStatus() == pb.FunctionJobStatus_FUNCTION_JOB_STATUS_SUCCESS &&
 			status.GetJob().GetSuccessCount() == int32(len(items)) &&
 			len(status.GetItems()) == len(items)
 	}, 5*time.Second, 50*time.Millisecond, fmt.Sprintf("job %s did not finish", submit.GetJobId()))
 
-	nodes, total, err := catalog.ListNodes(context.Background(), "crypto", &pb.GetNodeListReq{})
+	instances, total, err := catalog.ListInstances(context.Background(), "crypto", &pb.ListFunctionInstancesReq{})
 	require.NoError(t, err)
 	require.EqualValues(t, len(items), total)
-	require.Len(t, nodes, len(items))
+	require.Len(t, instances, len(items))
 }

@@ -16,15 +16,15 @@ import (
 func main() {
 	ctx := trpc.BackgroundContext()
 	s := trpc.NewServer()
-	trpclog.InstallServiceName("cloudnode")
+	trpclog.InstallServiceName("cloudfunction")
 
 	server, err := bootstrap.Initialize(ctx, s)
 	if err != nil {
-		log.Fatalf("moox-cloudnode 初始化失败: %v", err)
+		log.Fatalf("moox-cloudfunction 初始化失败: %v", err)
 	}
 
-	log.Info("启动 moox-cloudnode tRPC 服务器...")
+	log.Info("启动 moox-cloudfunction tRPC 服务器...")
 	if err := server.Serve(); err != nil {
-		log.Fatalf("moox-cloudnode 服务器出错: %v", err)
+		log.Fatalf("moox-cloudfunction 服务器出错: %v", err)
 	}
 }

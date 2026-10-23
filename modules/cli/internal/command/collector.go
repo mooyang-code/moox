@@ -29,7 +29,7 @@ const (
 	// per-region platform limit remains enforced by setup validation.
 	maxCollectorPublishNodeCount    = 1000
 	collectorRuntimeConfigBatchSize = 100
-	collectorMaxNodeBatchItems      = 100
+	collectorMaxFunctionJobItems    = 100
 )
 
 type collectorPackageOptions struct {
@@ -54,7 +54,7 @@ type collectorDeleteOptions struct {
 	File             string
 	SpaceID          string
 	Namespace        string
-	NodePrefix       string
+	InstancePrefix   string
 	Region           string
 	Confirm          bool
 	DryRun           bool
@@ -77,7 +77,7 @@ var collectorProbeFlags collectorProbeOptions
 var collectorFunctionDeleteCmd = &cobra.Command{
 	Use:   "delete",
 	Short: "异步删除当前 space 中全部 SCF 云函数",
-	Long: "列出当前 space 的 scf-event 节点，并通过 CloudNode 提交可恢复查询的异步删除任务；可按命名空间和地域筛选。\n" +
+	Long: "列出当前 space 的 scf-event 实例，并通过 FunctionInstance 提交可恢复查询的异步删除任务；可按命名空间和地域筛选。\n" +
 		"必须显式指定 --confirm；使用 --dry-run 只列出目标而不提交删除。",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -139,19 +139,19 @@ var collectorFunctionPackageCmd = &cobra.Command{
 }
 
 type collectorDeleteSummary struct {
-	SpaceID       string                            `json:"space_id"`
-	Namespace     string                            `json:"namespace"`
-	Region        string                            `json:"region,omitempty"`
-	NodeType      string                            `json:"node_type"`
-	DryRun        bool                              `json:"dry_run"`
-	TotalCount    int                               `json:"total_count"`
-	NodeIDs       []string                          `json:"node_ids,omitempty"`
-	JobID         string                            `json:"job_id,omitempty"`
-	Operation     string                            `json:"operation,omitempty"`
-	Status        string                            `json:"status,omitempty"`
-	SuccessCount  int                               `json:"success_count,omitempty"`
-	FailedCount   int                               `json:"failed_count,omitempty"`
-	FailedResults []adminclient.NodeBatchItemResult `json:"failed_results,omitempty"`
+	SpaceID       string                              `json:"space_id"`
+	Namespace     string                              `json:"namespace"`
+	Region        string                              `json:"region,omitempty"`
+	FunctionType  string                              `json:"function_type"`
+	DryRun        bool                                `json:"dry_run"`
+	TotalCount    int                                 `json:"total_count"`
+	InstanceIDs   []string                            `json:"instance_ids,omitempty"`
+	JobID         string                              `json:"job_id,omitempty"`
+	Operation     string                              `json:"operation,omitempty"`
+	Status        string                              `json:"status,omitempty"`
+	SuccessCount  int                                 `json:"success_count,omitempty"`
+	FailedCount   int                                 `json:"failed_count,omitempty"`
+	FailedResults []adminclient.FunctionJobItemResult `json:"failed_results,omitempty"`
 }
 
 func init() {
@@ -170,10 +170,10 @@ func init() {
 	deleteFlags.StringVar(&collectorDeleteFlags.ServiceSecretKey, "service-secret-key", "", "后台服务签名鉴权 secret_key; 默认取 MOOX_GATEWAY_SERVICE_SECRET_KEY")
 	deleteFlags.StringVar(&collectorDeleteFlags.File, "file", "", "optional moox.toml; enables manifest-backed service auth/CA")
 	deleteFlags.StringVar(&collectorDeleteFlags.SpaceID, "space-id", "", "space id; 默认取 MOOX_SPACE_ID")
-	deleteFlags.StringVar(&collectorDeleteFlags.Namespace, "namespace", "", "只删除指定 SCF 命名空间中的节点")
-	deleteFlags.StringVar(&collectorDeleteFlags.NodePrefix, "node-prefix", "", "只删除节点 ID 以该前缀开头的 SCF 节点")
-	deleteFlags.StringVar(&collectorDeleteFlags.Region, "region", "", "只删除指定地域的 SCF 节点")
-	deleteFlags.BoolVar(&collectorDeleteFlags.Confirm, "confirm", false, "确认删除当前筛选范围内的 SCF 节点")
+	deleteFlags.StringVar(&collectorDeleteFlags.Namespace, "namespace", "", "只删除指定 SCF 命名空间中的实例")
+	deleteFlags.StringVar(&collectorDeleteFlags.InstancePrefix, "instance-prefix", "", "只删除实例 ID 以该前缀开头的 SCF 实例")
+	deleteFlags.StringVar(&collectorDeleteFlags.Region, "region", "", "只删除指定地域的 SCF 实例")
+	deleteFlags.BoolVar(&collectorDeleteFlags.Confirm, "confirm", false, "确认删除当前筛选范围内的 SCF 实例")
 	deleteFlags.BoolVar(&collectorDeleteFlags.DryRun, "dry-run", false, "只列出目标，不提交删除任务")
 	deleteFlags.BoolVar(&collectorDeleteFlags.Wait, "wait", true, "提交后等待异步任务完成")
 	probeFlags := collectorFunctionProbeCmd.Flags()
@@ -280,7 +280,7 @@ func collectorUnknownBatchOutcome(message string, cause error) error {
 	return errors.Join(errCollectorBatchOutcomeUnknown, fmt.Errorf("%s: %w", message, cause))
 }
 
-func waitCollectorBatchTerminalChange(ctx context.Context, client *adminclient.Client, jobID string) (*adminclient.NodeBatchChangeResponse, error) {
+func waitCollectorBatchTerminalChange(ctx context.Context, client *adminclient.Client, jobID string) (*adminclient.FunctionJobChangeResponse, error) {
 	if strings.TrimSpace(jobID) == "" {
 		return nil, nil
 	}
@@ -288,11 +288,11 @@ func waitCollectorBatchTerminalChange(ctx context.Context, client *adminclient.C
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
-		var change *adminclient.NodeBatchChangeResponse
+		var change *adminclient.FunctionJobChangeResponse
 		var lastErr error
 		for attempt := 0; attempt < 3; attempt++ {
 			statusCtx, statusCancel := context.WithTimeout(ctx, statusRequestTimeout)
-			candidate, err := client.GetNodeBatchChange(statusCtx, jobID)
+			candidate, err := client.GetFunctionJob(statusCtx, jobID)
 			statusCancel()
 			if err == nil {
 				change = candidate
@@ -307,15 +307,15 @@ func waitCollectorBatchTerminalChange(ctx context.Context, client *adminclient.C
 			}
 		}
 		if lastErr != nil {
-			return nil, collectorUnknownBatchOutcome(fmt.Sprintf("GetNodeBatchChange for batch %s", jobID), lastErr)
+			return nil, collectorUnknownBatchOutcome(fmt.Sprintf("GetFunctionJob for batch %s", jobID), lastErr)
 		}
 		if change == nil || change.Job == nil {
 			return nil, collectorUnknownBatchOutcome(fmt.Sprintf("batch %s returned empty status", jobID), nil)
 		}
 		switch strings.ToUpper(strings.TrimSpace(change.Job.Status)) {
-		case "NODE_BATCH_STATUS_SUCCESS", "SUCCESS", "SUCCEEDED":
+		case "FUNCTION_JOB_STATUS_SUCCESS", "SUCCESS", "SUCCEEDED":
 			return change, nil
-		case "NODE_BATCH_STATUS_FAILED", "FAILED", "NODE_BATCH_STATUS_PARTIAL", "PARTIAL":
+		case "FUNCTION_JOB_STATUS_FAILED", "FAILED", "FUNCTION_JOB_STATUS_PARTIAL", "PARTIAL":
 			return change, nil
 		}
 		select {
@@ -350,15 +350,15 @@ func mergeBatchStatus(current, next string) string {
 		return current
 	}
 	if strings.Contains(current, "FAILED") || strings.Contains(next, "FAILED") || strings.Contains(current, "PARTIAL") || strings.Contains(next, "PARTIAL") {
-		return "NODE_BATCH_STATUS_PARTIAL"
+		return "FUNCTION_JOB_STATUS_PARTIAL"
 	}
 	if strings.Contains(current, "RUNNING") || strings.Contains(next, "RUNNING") {
-		return "NODE_BATCH_STATUS_RUNNING"
+		return "FUNCTION_JOB_STATUS_RUNNING"
 	}
 	if strings.Contains(current, "PENDING") || strings.Contains(next, "PENDING") {
-		return "NODE_BATCH_STATUS_PENDING"
+		return "FUNCTION_JOB_STATUS_PENDING"
 	}
-	return "NODE_BATCH_STATUS_PARTIAL"
+	return "FUNCTION_JOB_STATUS_PARTIAL"
 }
 
 func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) (summaryResult *collectorDeleteSummary, retErr error) {
@@ -371,10 +371,10 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 		return nil, fmt.Errorf("--space-id is required")
 	}
 	if !opts.DryRun && !opts.Confirm {
-		return nil, fmt.Errorf("refusing to delete SCF nodes without --confirm (use --dry-run to inspect targets)")
+		return nil, fmt.Errorf("refusing to delete SCF instances without --confirm (use --dry-run to inspect targets)")
 	}
 	if !opts.DryRun && !opts.Wait {
-		return nil, fmt.Errorf("market_fetcher deletion requires --wait so the publish lease covers the asynchronous CloudNode batch")
+		return nil, fmt.Errorf("market_fetcher deletion requires --wait so the publish lease covers the asynchronous FunctionInstance batch")
 	}
 
 	gateway, err := openCommandGateway(ctx, opts.File, nil)
@@ -386,17 +386,17 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 	namespace := strings.TrimSpace(opts.Namespace)
 	region := strings.TrimSpace(opts.Region)
 	if opts.DryRun {
-		nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{
-			NodeType: "scf-event",
-			BizType:  "market_fetcher",
-			Region:   region,
+		nodes, err := client.ListFunctionInstances(ctx, adminclient.FunctionInstanceListFilter{
+			FunctionType: "scf-event",
+			WorkloadType: "market_fetcher",
+			Region:       region,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("list active SCF nodes: %w", err)
+			return nil, fmt.Errorf("list active SCF instances: %w", err)
 		}
-		nodeIDs := collectorDeleteTargetNodeIDs(nodes, namespace, strings.TrimSpace(opts.NodePrefix))
-		summary := collectorDeleteResult(spaceID, namespace, region, true, nodeIDs)
-		if len(nodeIDs) == 0 {
+		instanceIDs := collectorDeleteTargetInstanceIDs(nodes, namespace, strings.TrimSpace(opts.InstancePrefix))
+		summary := collectorDeleteResult(spaceID, namespace, region, true, instanceIDs)
+		if len(instanceIDs) == 0 {
 			summary.Status = "nothing_to_delete"
 		} else {
 			summary.Status = "dry_run"
@@ -416,27 +416,27 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 		retErr = errors.Join(retErr, leaseGuard.Close())
 	}()
 	ctx = leaseCtx
-	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{
-		NodeType: "scf-event",
-		BizType:  "market_fetcher",
-		Region:   region,
+	nodes, err := client.ListFunctionInstances(ctx, adminclient.FunctionInstanceListFilter{
+		FunctionType: "scf-event",
+		WorkloadType: "market_fetcher",
+		Region:       region,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list active SCF nodes under publish lease: %w", err)
+		return nil, fmt.Errorf("list active SCF instances under publish lease: %w", err)
 	}
-	nodeIDs := collectorDeleteTargetNodeIDs(nodes, namespace, strings.TrimSpace(opts.NodePrefix))
-	summary := collectorDeleteResult(spaceID, namespace, region, false, nodeIDs)
-	if len(nodeIDs) == 0 {
+	instanceIDs := collectorDeleteTargetInstanceIDs(nodes, namespace, strings.TrimSpace(opts.InstancePrefix))
+	summary := collectorDeleteResult(spaceID, namespace, region, false, instanceIDs)
+	if len(instanceIDs) == 0 {
 		summary.Status = "nothing_to_delete"
 		return summary, nil
 	}
 
-	jobIDs := make([]string, 0, (len(nodeIDs)+collectorMaxNodeBatchItems-1)/collectorMaxNodeBatchItems)
+	jobIDs := make([]string, 0, (len(instanceIDs)+collectorMaxFunctionJobItems-1)/collectorMaxFunctionJobItems)
 	var submitErr error
 	unknownSubmission := false
-	for offset := 0; offset < len(nodeIDs); offset += collectorMaxNodeBatchItems {
-		end := min(offset+collectorMaxNodeBatchItems, len(nodeIDs))
-		resp, submitErrForBatch := client.SubmitDeleteNodes(ctx, nodeIDs[offset:end])
+	for offset := 0; offset < len(instanceIDs); offset += collectorMaxFunctionJobItems {
+		end := min(offset+collectorMaxFunctionJobItems, len(instanceIDs))
+		resp, submitErrForBatch := client.SubmitDeleteFunctionInstances(ctx, instanceIDs[offset:end])
 		if submitErrForBatch != nil {
 			submitErr = fmt.Errorf("submit SCF deletion batch for nodes %d-%d: %w", offset+1, end, submitErrForBatch)
 			unknownSubmission = isAmbiguousCollectorPublishOutcome(submitErrForBatch)
@@ -455,7 +455,7 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 		jobIDs = append(jobIDs, resp.JobID)
 	}
 	summary.JobID = strings.Join(jobIDs, ",")
-	summary.Operation = "delete_nodes"
+	summary.Operation = "delete_instances"
 	summary.Status = ""
 	allTerminal := !unknownSubmission
 	var waitErrs []error
@@ -475,7 +475,7 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 		summary.SuccessCount += change.Job.SuccessCount
 		summary.FailedCount += change.Job.FailedCount
 		for _, item := range change.Items {
-			if item.Status != "NODE_BATCH_ITEM_STATUS_SUCCESS" {
+			if item.Status != "FUNCTION_JOB_ITEM_STATUS_SUCCESS" {
 				summary.FailedResults = append(summary.FailedResults, item)
 			}
 		}
@@ -503,31 +503,31 @@ func deleteCollectorFunctions(ctx context.Context, opts collectorDeleteOptions) 
 	return summary, retErr
 }
 
-func collectorDeleteTargetNodeIDs(nodes []adminclient.CloudNode, namespace, nodePrefix string) []string {
-	nodeIDs := make([]string, 0, len(nodes))
+func collectorDeleteTargetInstanceIDs(nodes []adminclient.FunctionInstance, namespace, instancePrefix string) []string {
+	instanceIDs := make([]string, 0, len(nodes))
 	for _, node := range nodes {
-		if node.IsDeleted || strings.TrimSpace(node.NodeID) == "" || (namespace != "" && strings.TrimSpace(node.Namespace) != namespace) || (nodePrefix != "" && !strings.HasPrefix(node.NodeID, nodePrefix)) {
+		if node.IsDeleted || strings.TrimSpace(node.InstanceID) == "" || (namespace != "" && strings.TrimSpace(node.Namespace) != namespace) || (instancePrefix != "" && !strings.HasPrefix(node.InstanceID, instancePrefix)) {
 			continue
 		}
-		nodeIDs = append(nodeIDs, node.NodeID)
+		instanceIDs = append(instanceIDs, node.InstanceID)
 	}
-	return nodeIDs
+	return instanceIDs
 }
 
-func collectorDeleteResult(spaceID, namespace, region string, dryRun bool, nodeIDs []string) *collectorDeleteSummary {
+func collectorDeleteResult(spaceID, namespace, region string, dryRun bool, instanceIDs []string) *collectorDeleteSummary {
 	return &collectorDeleteSummary{
-		SpaceID:    spaceID,
-		Namespace:  namespace,
-		Region:     region,
-		NodeType:   "scf-event",
-		DryRun:     dryRun,
-		TotalCount: len(nodeIDs),
-		NodeIDs:    nodeIDs,
+		SpaceID:      spaceID,
+		Namespace:    namespace,
+		Region:       region,
+		FunctionType: "scf-event",
+		DryRun:       dryRun,
+		TotalCount:   len(instanceIDs),
+		InstanceIDs:  instanceIDs,
 	}
 }
 
 type collectorProbeResult struct {
-	NodeID          string `json:"node_id"`
+	InstanceID      string `json:"instance_id"`
 	Region          string `json:"region"`
 	FunctionName    string `json:"function_name"`
 	GroupID         int    `json:"group_id,omitempty"`
@@ -559,20 +559,20 @@ func probeCollectorEgress(ctx context.Context, opts collectorProbeOptions) (*col
 	}
 	defer gateway.Close()
 	client := &adminclient.Client{Gateway: gateway, SpaceID: spaceID}
-	nodes, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{Region: opts.Region, NodeType: "scf-event", BizType: "market_fetcher"})
+	nodes, err := client.ListFunctionInstances(ctx, adminclient.FunctionInstanceListFilter{Region: opts.Region, FunctionType: "scf-event", WorkloadType: "market_fetcher"})
 	if err != nil {
 		return nil, err
 	}
 	stockCN := strings.EqualFold(spaceID, "stockcn")
 	expectedCount := 0
-	eligible := selectCollectorProbeNodes(nodes, stockCN)
+	eligible := selectCollectorProbeInstances(nodes, stockCN)
 	if len(eligible) == 0 {
-		return nil, fmt.Errorf("no active market_fetcher SCF nodes are available for egress probe")
+		return nil, fmt.Errorf("no active market_fetcher SCF instances are available for egress probe")
 	}
-	return probeCollectorEgressNodes(ctx, client, eligible, stockCN, expectedCount)
+	return probeCollectorEgressInstances(ctx, client, eligible, stockCN, expectedCount)
 }
 
-func probeCollectorEgressNodes(ctx context.Context, client *adminclient.Client, eligible []adminclient.CloudNode, stockCN bool, expectedCount int) (*collectorProbeReport, error) {
+func probeCollectorEgressInstances(ctx context.Context, client *adminclient.Client, eligible []adminclient.FunctionInstance, stockCN bool, expectedCount int) (*collectorProbeReport, error) {
 	report := &collectorProbeReport{Results: make([]collectorProbeResult, len(eligible)), ExpectedCount: expectedCount, EligibleCount: len(eligible)}
 	sem := make(chan struct{}, 5)
 	var wg sync.WaitGroup
@@ -585,7 +585,7 @@ func probeCollectorEgressNodes(ctx context.Context, client *adminclient.Client, 
 			select {
 			case sem <- struct{}{}:
 			case <-ctx.Done():
-				report.Results[index] = collectorProbeResult{NodeID: node.NodeID, Region: node.Region, FunctionName: node.FunctionName, CheckedAt: time.Now().UTC().Format(time.RFC3339Nano), Error: ctx.Err().Error()}
+				report.Results[index] = collectorProbeResult{InstanceID: node.InstanceID, Region: node.Region, FunctionName: node.FunctionName, CheckedAt: time.Now().UTC().Format(time.RFC3339Nano), Error: ctx.Err().Error()}
 				failed.Add(1)
 				return
 			}
@@ -593,12 +593,12 @@ func probeCollectorEgressNodes(ctx context.Context, client *adminclient.Client, 
 			started := time.Now()
 			groupID, _ := metadataIntValue(node.Metadata, "group_id")
 			groupCount, _ := metadataIntValue(node.Metadata, "group_count")
-			result := collectorProbeResult{NodeID: node.NodeID, Region: node.Region, FunctionName: node.FunctionName, GroupID: groupID, GroupCount: groupCount, CheckedAt: started.UTC().Format(time.RFC3339Nano)}
+			result := collectorProbeResult{InstanceID: node.InstanceID, Region: node.Region, FunctionName: node.FunctionName, GroupID: groupID, GroupCount: groupCount, CheckedAt: started.UTC().Format(time.RFC3339Nano)}
 			provider, marketType := "binance", "spot"
 			if stockCN {
 				provider, marketType = "sina", "stockcn"
 			}
-			response, invokeErr := client.InvokeFunction(ctx, node.NodeID, map[string]any{"action": "egress_probe", "data": map[string]any{"provider": provider, "market_type": marketType, "node_id": node.NodeID}})
+			response, invokeErr := client.InvokeFunction(ctx, node.InstanceID, map[string]any{"action": "egress_probe", "data": map[string]any{"provider": provider, "market_type": marketType, "node_id": node.InstanceID}})
 			result.LatencyMS = time.Since(started).Milliseconds()
 			if invokeErr != nil {
 				result.Error = invokeErr.Error()
@@ -644,10 +644,10 @@ func probeCollectorEgressNodes(ctx context.Context, client *adminclient.Client, 
 	return report, nil
 }
 
-func selectCollectorProbeNodes(nodes []adminclient.CloudNode, timerOnly bool) []adminclient.CloudNode {
-	eligible := make([]adminclient.CloudNode, 0, len(nodes))
+func selectCollectorProbeInstances(nodes []adminclient.FunctionInstance, timerOnly bool) []adminclient.FunctionInstance {
+	eligible := make([]adminclient.FunctionInstance, 0, len(nodes))
 	for _, node := range nodes {
-		if !collectorProbeNodeEligible(node) {
+		if !collectorProbeInstanceEligible(node) {
 			continue
 		}
 		if timerOnly && !strings.EqualFold(strings.TrimSpace(node.TriggerType), "timer") {
@@ -658,19 +658,14 @@ func selectCollectorProbeNodes(nodes []adminclient.CloudNode, timerOnly bool) []
 	return eligible
 }
 
-func collectorProbeNodeEligible(node adminclient.CloudNode) bool {
-	if node.IsDeleted || strings.TrimSpace(node.NodeID) == "" || strings.TrimSpace(node.PackageID) == "" {
+func collectorProbeInstanceEligible(node adminclient.FunctionInstance) bool {
+	if node.IsDeleted || strings.TrimSpace(node.InstanceID) == "" || strings.TrimSpace(node.PackageID) == "" {
 		return false
 	}
 	if ready, ok := node.Metadata["deployment_ready"].(bool); ok {
 		return ready
 	}
-	switch status := strings.ToLower(strings.TrimSpace(fmt.Sprint(node.Status))); status {
-	case "2", "online", "active", "running", "ready", "node_status_online", "cloud_node_status_online":
-		return true
-	default:
-		return false
-	}
+	return false
 }
 
 // publishCollectorEgressMetric makes the one-time diagnostic visible to the
@@ -694,12 +689,7 @@ func publishCollectorEgressMetric(parent context.Context, gate *collectorProbeRe
 	for kind, value := range values {
 		functions.WithLabelValues("stockcn", "stockcn_equity_kline_1m_v4", kind).Set(float64(max(value, 0)))
 	}
-	cfg := metricsreport.DefaultConfig("collector", "moox-cli")
-	cfg.SpaceID = "stockcn"
-	cfg.InstanceID = firstNonEmpty(os.Getenv("MOOX_INSTANCE_ID"), "moox-cli")
-	cfg.NodeID = firstNonEmpty(os.Getenv("MOOX_NODE_ID"), "moox-cli")
-	cfg.BootID = "cli-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 10)
-	reporter, err := metricsreport.NewHandlerWithRegistry(cfg, registry)
+	reporter, err := metricsreport.NewHandlerWithRegistry(collectorEgressReportConfig(), registry)
 	if err != nil {
 		return
 	}
@@ -714,12 +704,21 @@ func publishCollectorEgressMetric(parent context.Context, gate *collectorProbeRe
 	_ = reporter.Handle(ctx)
 }
 
+func collectorEgressReportConfig() metricsreport.Config {
+	cfg := metricsreport.DefaultConfig("collector", "moox-cli")
+	cfg.SpaceID = "stockcn"
+	cfg.InstanceID = firstNonEmpty(os.Getenv("MOOX_INSTANCE_ID"), "moox-cli")
+	cfg.NodeID = firstNonEmpty(os.Getenv("MOOX_NODE_ID"), "moox-cli")
+	cfg.BootID = "cli-" + strconv.FormatInt(time.Now().UTC().UnixNano(), 10)
+	return cfg
+}
+
 func metricsEventBusConfigured() bool {
 	return firstNonEmpty(os.Getenv("MOOX_METRICS_EVENTBUS_URL"), os.Getenv("MOOX_EVENTBUS_URL"), os.Getenv("NATS_URL")) != ""
 }
 
 // egressProbeResponseData accepts both the normal JSON Struct response and
-// the fallback raw string emitted by CloudNode when Tencent returns a JSON
+// the fallback raw string emitted by FunctionInstance when Tencent returns a JSON
 // string rather than an object. Keeping this normalization here makes the
 // deployment probe useful without exposing provider-specific response shapes.
 func egressProbeResponseData(response map[string]any) (map[string]any, bool) {

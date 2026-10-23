@@ -18,7 +18,7 @@ import (
 	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
+	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/storageio"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -37,7 +37,7 @@ import (
 
 type collectorGatewayWire struct {
 	adminpb.UnimplementedCollectorPublishLease
-	cloudnodepb.UnimplementedCloudNodeMgr
+	cloudfunctionpb.UnimplementedCloudFunctionMgr
 	storagepb.UnimplementedMetadata
 	storagepb.UnimplementedPrimaryStore
 	directorypb.UnimplementedDirectory
@@ -53,10 +53,10 @@ func (w *collectorGatewayWire) GetDirectory(_ context.Context, req *directorypb.
 		return &directorypb.GetDirectoryRsp{Version: w.directory.Version}, nil
 	}
 	return &directorypb.GetDirectoryRsp{Changed: true, Version: w.directory.Version, Services: map[string]*directorypb.ServiceHosts{
-		"trpc.moox.storage.Metadata":            {HostIds: []string{"control"}},
-		"trpc.moox.storage.PrimaryStore":        {HostIds: []string{"control"}},
-		"trpc.moox.cloudnode.CloudNodeMgr":      {HostIds: []string{"control"}},
-		"trpc.moox.admin.CollectorPublishLease": {HostIds: []string{"control"}},
+		"trpc.moox.storage.Metadata":               {HostIds: []string{"control"}},
+		"trpc.moox.storage.PrimaryStore":           {HostIds: []string{"control"}},
+		"trpc.moox.cloudfunction.CloudFunctionMgr": {HostIds: []string{"control"}},
+		"trpc.moox.admin.CollectorPublishLease":    {HostIds: []string{"control"}},
 	}, Hosts: map[string]*directorypb.DirectoryHost{"control": {Address: "control.example.test"}}}, nil
 }
 
@@ -73,9 +73,9 @@ func (w *collectorGatewayWire) verify(ctx context.Context, service, method strin
 	if err != nil {
 		return err
 	}
-	if service == "trpc.moox.cloudnode.CloudNodeMgr" || service == "trpc.moox.admin.CollectorPublishLease" {
+	if service == "trpc.moox.cloudfunction.CloudFunctionMgr" || service == "trpc.moox.admin.CollectorPublishLease" {
 		if headers.Get("X-Space-Id") != "crypto" {
-			return errors.New("CloudNode space metadata changed")
+			return errors.New("FunctionInstance space metadata changed")
 		}
 	} else {
 		role, ok := request.(interface{ GetAuthInfo() *storagepb.AuthInfo })
@@ -324,14 +324,14 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	encoded, err := hostgatewayconfig.Encode(host)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(hostPath, encoded, 0600))
-	directory := servicecatalog.Directory{Services: map[string][]string{"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"}, "trpc.moox.cloudnode.CloudNodeMgr": {"control"}, "trpc.moox.admin.CollectorPublishLease": {"control"}}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
+	directory := servicecatalog.Directory{Services: map[string][]string{"trpc.moox.storage.Metadata": {"control"}, "trpc.moox.storage.PrimaryStore": {"control"}, "trpc.moox.cloudfunction.CloudFunctionMgr": {"control"}, "trpc.moox.admin.CollectorPublishLease": {"control"}}, Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}}
 	directory.Version, err = directory.VersionHash()
 	require.NoError(t, err)
 	wire := &collectorGatewayWire{credentials: credentials, directory: directory, nonces: map[string]bool{}, calls: map[string]int{}}
 	svc := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener), server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
 	storagepb.RegisterMetadataService(svc, wire)
 	storagepb.RegisterPrimaryStoreService(svc, wire)
-	cloudnodepb.RegisterCloudNodeMgrService(svc, wire)
+	cloudfunctionpb.RegisterCloudFunctionMgrService(svc, wire)
 	adminpb.RegisterCollectorPublishLeaseService(svc, wire)
 	directorypb.RegisterDirectoryService(svc, wire)
 	go func() { _ = svc.Serve() }()
@@ -484,16 +484,16 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	nodes, err := invoker.ListMarketFetchers(t.Context(), "crypto")
 	require.NoError(t, err)
 	require.Len(t, nodes, 1)
-	result, err := invoker.Invoke(t.Context(), "crypto", "node-1", map[string]any{"action": "probe"}, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
+	result, err := invoker.Invoke(t.Context(), "crypto", "node-1", map[string]any{"action": "probe"}, cloudfunctionpb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
 	require.NoError(t, err)
 	require.Equal(t, "request-1", result.RequestID)
 	job, err := invoker.GetRuntimeConfigBatchStatus(t.Context(), "crypto", "job-1")
 	require.NoError(t, err)
 	require.Equal(t, "job-1", job.GetJobId())
-	_, err = invoker.SubmitRuntimeConfigs(t.Context(), "crypto", []*cloudnodepb.NodeRuntimeConfigPatch{{NodeId: "node-1"}})
+	_, err = invoker.SubmitRuntimeConfigs(t.Context(), "crypto", []*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{{InstanceId: "node-1"}})
 	require.ErrorIs(t, err, scfinvoker.ErrRuntimeConfigSubmissionUnknown)
 	wire.mu.Lock()
-	cloudCalls := wire.calls["SubmitUpdateNodeRuntimeConfigs"]
+	cloudCalls := wire.calls["SubmitUpdateFunctionInstanceRuntimeConfigs"]
 	wire.mu.Unlock()
 	require.Equal(t, 1, cloudCalls, "runtime config writes are sent once")
 	_, err = adapter.GetDataset(t.Context(), &storagepb.GetDatasetReq{AuthInfo: auth}, client.WithTarget("ip://192.0.2.99:1"))
@@ -507,26 +507,26 @@ func TestCollectorGatewayUsesDeploymentIdentityForAllStorageCapabilities(t *test
 	require.Error(t, err)
 }
 
-func (w *collectorGatewayWire) GetNodeList(ctx context.Context, req *cloudnodepb.GetNodeListReq) (*cloudnodepb.GetNodeListRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.cloudnode.CloudNodeMgr", "GetNodeList", req); err != nil {
+func (w *collectorGatewayWire) ListFunctionInstances(ctx context.Context, req *cloudfunctionpb.ListFunctionInstancesReq) (*cloudfunctionpb.ListFunctionInstancesRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.cloudfunction.CloudFunctionMgr", "ListFunctionInstances", req); err != nil {
 		return nil, err
 	}
-	return &cloudnodepb.GetNodeListRsp{Items: []*cloudnodepb.CloudNode{{NodeId: "node-1", PackageId: "package-1", DeploymentId: "deployment-1"}}}, nil
+	return &cloudfunctionpb.ListFunctionInstancesRsp{Items: []*cloudfunctionpb.FunctionInstance{{InstanceId: "node-1", PackageId: "package-1", DeploymentId: "deployment-1"}}}, nil
 }
-func (w *collectorGatewayWire) InvokeFunction(ctx context.Context, req *cloudnodepb.InvokeFunctionReq) (*cloudnodepb.InvokeFunctionRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.cloudnode.CloudNodeMgr", "InvokeFunction", req); err != nil {
+func (w *collectorGatewayWire) InvokeFunction(ctx context.Context, req *cloudfunctionpb.InvokeFunctionReq) (*cloudfunctionpb.InvokeFunctionRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.cloudfunction.CloudFunctionMgr", "InvokeFunction", req); err != nil {
 		return nil, err
 	}
-	return &cloudnodepb.InvokeFunctionRsp{Scf: &cloudnodepb.ScfInvokeResult{RequestId: "request-1"}}, nil
+	return &cloudfunctionpb.InvokeFunctionRsp{Scf: &cloudfunctionpb.ScfInvokeResult{RequestId: "request-1"}}, nil
 }
-func (w *collectorGatewayWire) GetNodeBatchChange(ctx context.Context, req *cloudnodepb.GetNodeBatchChangeReq) (*cloudnodepb.GetNodeBatchChangeRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.cloudnode.CloudNodeMgr", "GetNodeBatchChange", req); err != nil {
+func (w *collectorGatewayWire) GetFunctionJob(ctx context.Context, req *cloudfunctionpb.GetFunctionJobReq) (*cloudfunctionpb.GetFunctionJobRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.cloudfunction.CloudFunctionMgr", "GetFunctionJob", req); err != nil {
 		return nil, err
 	}
-	return &cloudnodepb.GetNodeBatchChangeRsp{Job: &cloudnodepb.NodeBatchSummary{JobId: req.GetJobId()}}, nil
+	return &cloudfunctionpb.GetFunctionJobRsp{Job: &cloudfunctionpb.FunctionJobSummary{JobId: req.GetJobId()}}, nil
 }
-func (w *collectorGatewayWire) SubmitUpdateNodeRuntimeConfigs(ctx context.Context, req *cloudnodepb.BatchUpdateNodeRuntimeConfigsReq) (*cloudnodepb.SubmitNodeBatchRsp, error) {
-	if err := w.verify(ctx, "trpc.moox.cloudnode.CloudNodeMgr", "SubmitUpdateNodeRuntimeConfigs", req); err != nil {
+func (w *collectorGatewayWire) SubmitUpdateFunctionInstanceRuntimeConfigs(ctx context.Context, req *cloudfunctionpb.SubmitUpdateFunctionInstanceRuntimeConfigsReq) (*cloudfunctionpb.SubmitFunctionJobRsp, error) {
+	if err := w.verify(ctx, "trpc.moox.cloudfunction.CloudFunctionMgr", "SubmitUpdateFunctionInstanceRuntimeConfigs", req); err != nil {
 		return nil, err
 	}
 	return nil, errs.NewFrameError(errs.RetServerSystemErr, "lost response after accepting write")

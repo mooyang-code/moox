@@ -27,7 +27,7 @@ go run ./tools/zstddict scan  -dict default-v2.zdict
 取样方式：
 
 - tRPC 样本：在各主机回环口（主机网关 11002、各服务上游口）和 Access 明文口抓包，按 tRPC 帧切出请求体和响应体。
-  **只取白名单服务**（存储、因子、归档、策略、监控、采集、出口代理、EventBus），不取 admin、cloudnode、host-agent、trade；
+  **只取白名单服务**（存储、因子、归档、策略、监控、采集、出口代理、EventBus），不取 admin、cloudfunction、host-agent、trade；
   丢弃正文含 `secret|passw|token|webhook|api_key|credential|hmac|authorization` 的样本；按内容去重。
 - 事件样本：EventBus 的 JetStream 文件流块文件（压缩方式 none）可以直接只读拷贝，解析记录得到信封，不需要任何凭据。
 - 语料放在本机临时目录，**不进仓库**；用完删除。

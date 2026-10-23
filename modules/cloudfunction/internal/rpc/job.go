@@ -13,265 +13,265 @@ import (
 )
 
 const (
-	nodeBatchOperationCreate        = "create_nodes"
-	nodeBatchOperationDeploy        = "deploy_nodes"
-	nodeBatchOperationDelete        = "delete_nodes"
-	nodeBatchOperationRuntimeConfig = "update_runtime_configs"
-	maxNodeBatchItems               = 100
+	functionJobOperationCreate        = "create_instances"
+	functionJobOperationDeploy        = "deploy_instances"
+	functionJobOperationDelete        = "delete_instances"
+	functionJobOperationRuntimeConfig = "update_runtime_configs"
+	maxFunctionJobItems               = 100
 )
 
-func (s *Service) SubmitCreateNodes(ctx context.Context, req *pb.BatchCreateNodesReq) (*pb.SubmitNodeBatchRsp, error) {
+func (s *Service) SubmitCreateFunctionInstances(ctx context.Context, req *pb.SubmitCreateFunctionInstancesReq) (*pb.SubmitFunctionJobRsp, error) {
 	spaceID, err := spacecontext.MustFromContext(ctx)
 	if err != nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
-	items := req.GetNodes()
-	if ret := validateNodeBatchSize(len(items), "nodes"); ret != nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: ret}, nil
+	items := req.GetInstances()
+	if ret := validateFunctionJobSize(len(items), "instances"); ret != nil {
+		return &pb.SubmitFunctionJobRsp{RetInfo: ret}, nil
 	}
 
-	jobID := "node-batch-" + uuid.NewString()
-	creates := make([]store.NodeBatchItemCreate, 0, len(items))
-	seenNodes := make(map[string]struct{}, len(items))
+	jobID := "function-job-" + uuid.NewString()
+	creates := make([]store.FunctionJobItemCreate, 0, len(items))
+	seenInstances := make(map[string]struct{}, len(items))
 	for index, item := range items {
 		if item == nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "nodes item is required")}, nil
+			return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "instances item is required")}, nil
 		}
 		// The control plane owns this nonce; callers cannot reuse another request's
 		// reservation identity. It is persisted in the durable request for retries.
 		item.CreateReservationId = uuid.NewString()
-		node, ret := s.preflightCreateNode(ctx, spaceID, item, index)
+		instance, ret := s.preflightCreateInstance(ctx, spaceID, item, index)
 		if ret != nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: ret}, nil
+			return &pb.SubmitFunctionJobRsp{RetInfo: ret}, nil
 		}
-		if existing, err := s.catalog.GetNode(ctx, spaceID, node.NodeID); err != nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
+		if existing, err := s.catalog.GetInstance(ctx, spaceID, instance.InstanceID); err != nil {
+			return &pb.SubmitFunctionJobRsp{RetInfo: retFromError(err)}, nil
 		} else if existing != nil && !existing.IsDeleted {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node already exists: "+node.NodeID)}, nil
+			return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "instance already exists: "+instance.InstanceID)}, nil
 		}
-		if _, exists := seenNodes[node.NodeID]; exists {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "nodes contains duplicate node_id")}, nil
+		if _, exists := seenInstances[instance.InstanceID]; exists {
+			return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "instances contains duplicate instance_id")}, nil
 		}
-		seenNodes[node.NodeID] = struct{}{}
+		seenInstances[instance.InstanceID] = struct{}{}
 		raw, err := protojson.Marshal(item)
 		if err != nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid node request")}, nil
+			return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid instance request")}, nil
 		}
-		creates = append(creates, store.NodeBatchItemCreate{
+		creates = append(creates, store.FunctionJobItemCreate{
 			ItemID:      fmt.Sprintf("%s-%03d", jobID, index),
 			ItemIndex:   index,
-			NodeID:      node.NodeID,
+			InstanceID:  instance.InstanceID,
 			RequestJSON: string(raw),
 		})
 	}
-	if err := s.catalog.CreateNodeBatch(ctx, store.NodeBatchCreate{
-		SpaceID: spaceID, JobID: jobID, Operation: nodeBatchOperationCreate, Items: creates,
+	if err := s.catalog.CreateFunctionJob(ctx, store.FunctionJobCreate{
+		SpaceID: spaceID, JobID: jobID, Operation: functionJobOperationCreate, Items: creates,
 	}); err != nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
+		return &pb.SubmitFunctionJobRsp{RetInfo: retFromError(err)}, nil
 	}
-	return &pb.SubmitNodeBatchRsp{
+	return &pb.SubmitFunctionJobRsp{
 		RetInfo: retOK(), JobId: jobID,
-		Operation:  pb.NodeBatchOperation_NODE_BATCH_OPERATION_CREATE_NODES,
+		Operation:  pb.FunctionJobOperation_FUNCTION_JOB_OPERATION_CREATE_INSTANCES,
 		TotalCount: int32(len(creates)),
 	}, nil
 }
 
-func (s *Service) SubmitDeployNodes(ctx context.Context, req *pb.BatchDeployNodesReq) (*pb.SubmitNodeBatchRsp, error) {
+func (s *Service) SubmitDeployFunctionInstances(ctx context.Context, req *pb.SubmitDeployFunctionInstancesReq) (*pb.SubmitFunctionJobRsp, error) {
 	spaceID, err := spacecontext.MustFromContext(ctx)
 	if err != nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if req == nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
+		return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
 	}
 	items := req.GetDeployments()
-	if ret := validateNodeBatchSize(len(items), "deployments"); ret != nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: ret}, nil
+	if ret := validateFunctionJobSize(len(items), "deployments"); ret != nil {
+		return &pb.SubmitFunctionJobRsp{RetInfo: ret}, nil
 	}
-	nodeIDs := make([]string, 0, len(items))
+	instanceIDs := make([]string, 0, len(items))
 	for _, item := range items {
 		if item != nil {
-			nodeIDs = append(nodeIDs, strings.TrimSpace(item.GetNodeId()))
+			instanceIDs = append(instanceIDs, strings.TrimSpace(item.GetInstanceId()))
 		}
 	}
-	unlockNodes := lockSCFNodes(spaceID, nodeIDs)
-	defer unlockNodes()
+	unlockInstances := lockFunctionInstances(spaceID, instanceIDs)
+	defer unlockInstances()
 
-	jobID := "node-batch-" + uuid.NewString()
-	creates := make([]store.NodeBatchItemCreate, 0, len(items))
-	seenNodes := make(map[string]struct{}, len(items))
+	jobID := "function-job-" + uuid.NewString()
+	creates := make([]store.FunctionJobItemCreate, 0, len(items))
+	seenInstances := make(map[string]struct{}, len(items))
 	for index, item := range items {
-		if ret := s.preflightDeployNode(ctx, spaceID, item); ret != nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: ret}, nil
+		if ret := s.preflightDeployInstance(ctx, spaceID, item); ret != nil {
+			return &pb.SubmitFunctionJobRsp{RetInfo: ret}, nil
 		}
-		nodeID := strings.TrimSpace(item.GetNodeId())
-		if _, exists := seenNodes[nodeID]; exists {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "deployments contains duplicate node_id")}, nil
+		instanceID := strings.TrimSpace(item.GetInstanceId())
+		if _, exists := seenInstances[instanceID]; exists {
+			return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "deployments contains duplicate instance_id")}, nil
 		}
-		seenNodes[nodeID] = struct{}{}
-		node, err := s.catalog.GetNode(ctx, spaceID, nodeID)
+		seenInstances[instanceID] = struct{}{}
+		instance, err := s.catalog.GetInstance(ctx, spaceID, instanceID)
 		if err != nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
+			return &pb.SubmitFunctionJobRsp{RetInfo: retFromError(err)}, nil
 		}
-		if node == nil || node.IsDeleted {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "node not found: "+nodeID)}, nil
+		if instance == nil || instance.IsDeleted {
+			return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "instance not found: "+instanceID)}, nil
 		}
-		lifecycleID, ensureErr := s.catalog.NodeLifecycleID(ctx, spaceID, nodeID)
+		lifecycleID, ensureErr := s.catalog.InstanceLifecycleID(ctx, spaceID, instanceID)
 		if ensureErr != nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(ensureErr)}, nil
+			return &pb.SubmitFunctionJobRsp{RetInfo: retFromError(ensureErr)}, nil
 		}
-		if node.LifecycleID != "" && node.LifecycleID != lifecycleID {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node lifecycle changed while scheduling deploy: "+nodeID)}, nil
+		if instance.LifecycleID != "" && instance.LifecycleID != lifecycleID {
+			return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "instance lifecycle changed while scheduling deploy: "+instanceID)}, nil
 		}
 		item.LifecycleId = lifecycleID
 		item.OperationId = fmt.Sprintf("%s-%03d", jobID, index)
 		raw, err := protojson.Marshal(item)
 		if err != nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid deployment request")}, nil
+			return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid deployment request")}, nil
 		}
-		creates = append(creates, store.NodeBatchItemCreate{
+		creates = append(creates, store.FunctionJobItemCreate{
 			ItemID:      fmt.Sprintf("%s-%03d", jobID, index),
 			ItemIndex:   index,
-			NodeID:      nodeID,
+			InstanceID:  instanceID,
 			RequestJSON: string(raw),
 		})
 	}
-	if err := s.catalog.CreateNodeBatch(ctx, store.NodeBatchCreate{
-		SpaceID: spaceID, JobID: jobID, Operation: nodeBatchOperationDeploy, Items: creates,
+	if err := s.catalog.CreateFunctionJob(ctx, store.FunctionJobCreate{
+		SpaceID: spaceID, JobID: jobID, Operation: functionJobOperationDeploy, Items: creates,
 	}); err != nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
+		return &pb.SubmitFunctionJobRsp{RetInfo: retFromError(err)}, nil
 	}
-	return &pb.SubmitNodeBatchRsp{
+	return &pb.SubmitFunctionJobRsp{
 		RetInfo: retOK(), JobId: jobID,
-		Operation:  pb.NodeBatchOperation_NODE_BATCH_OPERATION_DEPLOY_NODES,
+		Operation:  pb.FunctionJobOperation_FUNCTION_JOB_OPERATION_DEPLOY_INSTANCES,
 		TotalCount: int32(len(creates)),
 	}, nil
 }
 
-// SubmitDeleteNodes enqueues remote SCF deletion and catalog cleanup as a durable node batch.
-func (s *Service) SubmitDeleteNodes(ctx context.Context, req *pb.BatchDeleteNodesReq) (*pb.SubmitNodeBatchRsp, error) {
+// SubmitDeleteFunctionInstances enqueues remote SCF deletion and catalog cleanup as a durable instance batch.
+func (s *Service) SubmitDeleteFunctionInstances(ctx context.Context, req *pb.SubmitDeleteFunctionInstancesReq) (*pb.SubmitFunctionJobRsp, error) {
 	spaceID, err := spacecontext.MustFromContext(ctx)
 	if err != nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	if req == nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
+		return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
 	}
-	nodeIDs := compactStrings(req.GetNodeIds())
-	if ret := validateNodeBatchSize(len(nodeIDs), "node_ids"); ret != nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: ret}, nil
+	instanceIDs := compactStrings(req.GetInstanceIds())
+	if ret := validateFunctionJobSize(len(instanceIDs), "instance_ids"); ret != nil {
+		return &pb.SubmitFunctionJobRsp{RetInfo: ret}, nil
 	}
-	unlockNodes := lockSCFNodes(spaceID, nodeIDs)
-	defer unlockNodes()
-	jobID := "node-batch-" + uuid.NewString()
-	items := make([]store.NodeBatchItemCreate, 0, len(nodeIDs))
-	seen := make(map[string]struct{}, len(nodeIDs))
-	for index, nodeID := range nodeIDs {
-		if _, ok := seen[nodeID]; ok {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_ids contains duplicate node_id")}, nil
+	unlockInstances := lockFunctionInstances(spaceID, instanceIDs)
+	defer unlockInstances()
+	jobID := "function-job-" + uuid.NewString()
+	items := make([]store.FunctionJobItemCreate, 0, len(instanceIDs))
+	seen := make(map[string]struct{}, len(instanceIDs))
+	for index, instanceID := range instanceIDs {
+		if _, ok := seen[instanceID]; ok {
+			return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "instance_ids contains duplicate instance_id")}, nil
 		}
-		seen[nodeID] = struct{}{}
-		node, err := s.catalog.GetNode(ctx, spaceID, nodeID)
+		seen[instanceID] = struct{}{}
+		instance, err := s.catalog.GetInstance(ctx, spaceID, instanceID)
 		if err != nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
+			return &pb.SubmitFunctionJobRsp{RetInfo: retFromError(err)}, nil
 		}
-		if node == nil || node.IsDeleted {
+		if instance == nil || instance.IsDeleted {
 			if !collectorPublishLeaseFieldsPresent(req.GetCollectorPublishLeaseId(), req.GetCollectorPublishFencingToken()) {
-				return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "node not found: "+nodeID)}, nil
+				return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "instance not found: "+instanceID)}, nil
 			}
-			// Persist fenced no-op deletes too. A node may have disappeared between
+			// Persist fenced no-op deletes too. A instance may have disappeared between
 			// the caller's snapshot and scheduling; the worker still opens the
 			// control-plane operation and then treats the missing generation as done.
 			lifecycleID := ""
-			if node != nil {
-				lifecycleID = node.LifecycleID
+			if instance != nil {
+				lifecycleID = instance.LifecycleID
 			} else {
-				deletedNode, deletedErr := s.catalog.GetNodeIncludingDeleted(ctx, spaceID, nodeID)
+				deletedInstance, deletedErr := s.catalog.GetInstanceIncludingDeleted(ctx, spaceID, instanceID)
 				if deletedErr != nil {
-					return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(deletedErr)}, nil
+					return &pb.SubmitFunctionJobRsp{RetInfo: retFromError(deletedErr)}, nil
 				}
-				if deletedNode != nil {
-					lifecycleID = deletedNode.LifecycleID
+				if deletedInstance != nil {
+					lifecycleID = deletedInstance.LifecycleID
 				}
 			}
 			if lifecycleID == "" {
 				lifecycleID = uuid.NewString()
 			}
-			raw, err := protojson.Marshal(&pb.NodeDeleteItem{
-				NodeId: nodeID, CollectorPublishLeaseId: req.GetCollectorPublishLeaseId(),
+			raw, err := protojson.Marshal(&pb.FunctionInstanceDeleteItem{
+				InstanceId: instanceID, CollectorPublishLeaseId: req.GetCollectorPublishLeaseId(),
 				CollectorPublishFencingToken: req.GetCollectorPublishFencingToken(),
 				LifecycleId:                  lifecycleID, OperationId: fmt.Sprintf("%s-%03d", jobID, index),
 			})
 			if err != nil {
-				return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid delete request")}, nil
+				return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid delete request")}, nil
 			}
-			items = append(items, store.NodeBatchItemCreate{ItemID: fmt.Sprintf("%s-%03d", jobID, index), ItemIndex: index, NodeID: nodeID, RequestJSON: string(raw)})
+			items = append(items, store.FunctionJobItemCreate{ItemID: fmt.Sprintf("%s-%03d", jobID, index), ItemIndex: index, InstanceID: instanceID, RequestJSON: string(raw)})
 			continue
 		}
-		lifecycleID, ensureErr := s.catalog.NodeLifecycleID(ctx, spaceID, nodeID)
+		lifecycleID, ensureErr := s.catalog.InstanceLifecycleID(ctx, spaceID, instanceID)
 		if ensureErr != nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(ensureErr)}, nil
+			return &pb.SubmitFunctionJobRsp{RetInfo: retFromError(ensureErr)}, nil
 		}
-		if node.LifecycleID != "" && node.LifecycleID != lifecycleID {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node lifecycle changed while scheduling delete: "+nodeID)}, nil
+		if instance.LifecycleID != "" && instance.LifecycleID != lifecycleID {
+			return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "instance lifecycle changed while scheduling delete: "+instanceID)}, nil
 		}
-		raw, err := protojson.Marshal(&pb.NodeDeleteItem{
-			NodeId: nodeID, CollectorPublishLeaseId: req.GetCollectorPublishLeaseId(),
+		raw, err := protojson.Marshal(&pb.FunctionInstanceDeleteItem{
+			InstanceId: instanceID, CollectorPublishLeaseId: req.GetCollectorPublishLeaseId(),
 			CollectorPublishFencingToken: req.GetCollectorPublishFencingToken(),
 			LifecycleId:                  lifecycleID,
 			OperationId:                  fmt.Sprintf("%s-%03d", jobID, index),
 		})
 		if err != nil {
-			return &pb.SubmitNodeBatchRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid delete request")}, nil
+			return &pb.SubmitFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "invalid delete request")}, nil
 		}
-		items = append(items, store.NodeBatchItemCreate{ItemID: fmt.Sprintf("%s-%03d", jobID, index), ItemIndex: index, NodeID: nodeID, RequestJSON: string(raw)})
+		items = append(items, store.FunctionJobItemCreate{ItemID: fmt.Sprintf("%s-%03d", jobID, index), ItemIndex: index, InstanceID: instanceID, RequestJSON: string(raw)})
 	}
-	if err := s.catalog.CreateNodeBatch(ctx, store.NodeBatchCreate{SpaceID: spaceID, JobID: jobID, Operation: nodeBatchOperationDelete, Items: items}); err != nil {
-		return &pb.SubmitNodeBatchRsp{RetInfo: retFromError(err)}, nil
+	if err := s.catalog.CreateFunctionJob(ctx, store.FunctionJobCreate{SpaceID: spaceID, JobID: jobID, Operation: functionJobOperationDelete, Items: items}); err != nil {
+		return &pb.SubmitFunctionJobRsp{RetInfo: retFromError(err)}, nil
 	}
-	return &pb.SubmitNodeBatchRsp{RetInfo: retOK(), JobId: jobID, Operation: pb.NodeBatchOperation_NODE_BATCH_OPERATION_DELETE_NODES, TotalCount: int32(len(items))}, nil
+	return &pb.SubmitFunctionJobRsp{RetInfo: retOK(), JobId: jobID, Operation: pb.FunctionJobOperation_FUNCTION_JOB_OPERATION_DELETE_INSTANCES, TotalCount: int32(len(items))}, nil
 }
 
-func (s *Service) GetNodeBatchChange(ctx context.Context, req *pb.GetNodeBatchChangeReq) (*pb.GetNodeBatchChangeRsp, error) {
+func (s *Service) GetFunctionJob(ctx context.Context, req *pb.GetFunctionJobReq) (*pb.GetFunctionJobRsp, error) {
 	spaceID, err := spacecontext.MustFromContext(ctx)
 	if err != nil {
-		return &pb.GetNodeBatchChangeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
+		return &pb.GetFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
 	jobID := strings.TrimSpace(req.GetJobId())
 	if jobID == "" {
-		return &pb.GetNodeBatchChangeRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "job_id is required")}, nil
+		return &pb.GetFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "job_id is required")}, nil
 	}
-	aggregate, err := s.catalog.GetNodeBatch(ctx, spaceID, jobID)
+	aggregate, err := s.catalog.GetFunctionJob(ctx, spaceID, jobID)
 	if err != nil {
-		return &pb.GetNodeBatchChangeRsp{RetInfo: retFromError(err)}, nil
+		return &pb.GetFunctionJobRsp{RetInfo: retFromError(err)}, nil
 	}
 	if aggregate == nil {
-		return &pb.GetNodeBatchChangeRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "node batch not found")}, nil
+		return &pb.GetFunctionJobRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "instance batch not found")}, nil
 	}
 	completed := aggregate.SuccessCount + aggregate.FailedCount
 	progress := 0
 	if aggregate.Job.TotalCount > 0 {
 		progress = completed * 100 / aggregate.Job.TotalCount
 	}
-	rsp := &pb.GetNodeBatchChangeRsp{
+	rsp := &pb.GetFunctionJobRsp{
 		RetInfo: retOK(),
-		Job: &pb.NodeBatchSummary{
-			JobId: jobID, Operation: nodeBatchOperationToPB(aggregate.Job.Operation),
-			Status:     nodeBatchStatusToPB(aggregate.Job.Status),
+		Job: &pb.FunctionJobSummary{
+			JobId: jobID, Operation: functionJobOperationToPB(aggregate.Job.Operation),
+			Status:     functionJobStatusToPB(aggregate.Job.Status),
 			TotalCount: int32(aggregate.Job.TotalCount), PendingCount: int32(aggregate.PendingCount),
 			RunningCount: int32(aggregate.RunningCount), SuccessCount: int32(aggregate.SuccessCount),
 			FailedCount: int32(aggregate.FailedCount), ProgressPercent: int32(progress),
 			CreatedAt: formatTime(aggregate.Job.CreateTime),
 		},
-		Items: make([]*pb.NodeBatchItemResult, 0, len(aggregate.Items)),
+		Items: make([]*pb.FunctionJobItemResult, 0, len(aggregate.Items)),
 	}
 	if aggregate.Job.CompletedAt != nil {
 		rsp.Job.CompletedAt = formatTime(*aggregate.Job.CompletedAt)
 	}
 	for _, item := range aggregate.Items {
-		out := &pb.NodeBatchItemResult{
-			ItemId: item.ItemID, NodeId: item.NodeID,
-			Status:        nodeBatchItemStatusToPB(item.Status),
+		out := &pb.FunctionJobItemResult{
+			ItemId: item.ItemID, InstanceId: item.InstanceID,
+			Status:        functionJobItemStatusToPB(item.Status),
 			ResultSummary: item.ResultSummary, ErrorMessage: item.ErrorMessage,
 		}
 		if item.StartedAt != nil {
@@ -285,62 +285,62 @@ func (s *Service) GetNodeBatchChange(ctx context.Context, req *pb.GetNodeBatchCh
 	return rsp, nil
 }
 
-func validateNodeBatchSize(count int, field string) *pb.RetInfo {
-	if count < 1 || count > maxNodeBatchItems {
-		return retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("%s must contain 1..%d items", field, maxNodeBatchItems))
+func validateFunctionJobSize(count int, field string) *pb.RetInfo {
+	if count < 1 || count > maxFunctionJobItems {
+		return retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("%s must contain 1..%d items", field, maxFunctionJobItems))
 	}
 	return nil
 }
 
-func (s *Service) preflightCreateNode(
+func (s *Service) preflightCreateInstance(
 	ctx context.Context,
 	spaceID string,
-	item *pb.NodeCreateItem,
+	item *pb.FunctionInstanceCreateItem,
 	index int,
-) (store.CloudNode, *pb.RetInfo) {
+) (store.FunctionInstance, *pb.RetInfo) {
 	if item == nil {
-		return store.CloudNode{}, retErr(pb.ErrorCode_INVALID_PARAM, "nodes item is required")
+		return store.FunctionInstance{}, retErr(pb.ErrorCode_INVALID_PARAM, "instances item is required")
 	}
-	node := cloudNodeFromCreateItem(spaceID, item, index)
-	if err := validateTriggerType(node.NodeType, item.GetTriggerType()); err != nil {
-		return store.CloudNode{}, retErr(pb.ErrorCode_INVALID_PARAM, err.Error())
+	instance := functionInstanceFromCreateItem(spaceID, item, index)
+	if err := validateTriggerType(instance.FunctionType, item.GetTriggerType()); err != nil {
+		return store.FunctionInstance{}, retErr(pb.ErrorCode_INVALID_PARAM, err.Error())
 	}
-	if strings.TrimSpace(node.CloudAccountID) == "" || strings.TrimSpace(node.Region) == "" || strings.TrimSpace(node.PackageID) == "" {
-		return store.CloudNode{}, retErr(pb.ErrorCode_INVALID_PARAM, "nodes.cloud_account_id, region and package_id are required")
+	if strings.TrimSpace(instance.CloudAccountID) == "" || strings.TrimSpace(instance.Region) == "" || strings.TrimSpace(instance.PackageID) == "" {
+		return store.FunctionInstance{}, retErr(pb.ErrorCode_INVALID_PARAM, "instances.cloud_account_id, region and package_id are required")
 	}
-	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
+	account, err := s.catalog.GetAccount(ctx, instance.CloudAccountID)
 	if err != nil {
-		return store.CloudNode{}, retFromError(err)
+		return store.FunctionInstance{}, retFromError(err)
 	}
 	if account == nil {
-		return store.CloudNode{}, retErr(pb.ErrorCode_NOT_FOUND, "cloud account not found")
+		return store.FunctionInstance{}, retErr(pb.ErrorCode_NOT_FOUND, "cloud account not found")
 	}
-	pkg, err := s.catalog.GetPackage(ctx, spaceID, node.PackageID)
+	pkg, err := s.catalog.GetPackage(ctx, spaceID, instance.PackageID)
 	if err != nil {
-		return store.CloudNode{}, retFromError(err)
+		return store.FunctionInstance{}, retFromError(err)
 	}
 	if pkg == nil {
-		return store.CloudNode{}, retErr(pb.ErrorCode_NOT_FOUND, "package not found")
+		return store.FunctionInstance{}, retErr(pb.ErrorCode_NOT_FOUND, "package not found")
 	}
 	if pkg.Status != "available" {
-		return store.CloudNode{}, retErr(pb.ErrorCode_INVALID_PARAM, "package is not available")
+		return store.FunctionInstance{}, retErr(pb.ErrorCode_INVALID_PARAM, "package is not available")
 	}
 	if ret := validateCollectorPublishLeaseAtSubmit(pkg, item.GetCollectorPublishLeaseId(), item.GetCollectorPublishFencingToken()); ret != nil {
-		return store.CloudNode{}, ret
+		return store.FunctionInstance{}, ret
 	}
-	return node, nil
+	return instance, nil
 }
 
-func (s *Service) preflightDeployNode(ctx context.Context, spaceID string, item *pb.NodeDeployItem) *pb.RetInfo {
-	if item == nil || strings.TrimSpace(item.GetNodeId()) == "" || strings.TrimSpace(item.GetPackageId()) == "" {
-		return retErr(pb.ErrorCode_INVALID_PARAM, "deployments.node_id and package_id are required")
+func (s *Service) preflightDeployInstance(ctx context.Context, spaceID string, item *pb.FunctionInstanceDeployItem) *pb.RetInfo {
+	if item == nil || strings.TrimSpace(item.GetInstanceId()) == "" || strings.TrimSpace(item.GetPackageId()) == "" {
+		return retErr(pb.ErrorCode_INVALID_PARAM, "deployments.instance_id and package_id are required")
 	}
-	node, err := s.catalog.GetNode(ctx, spaceID, item.GetNodeId())
+	instance, err := s.catalog.GetInstance(ctx, spaceID, item.GetInstanceId())
 	if err != nil {
 		return retFromError(err)
 	}
-	if node == nil {
-		return retErr(pb.ErrorCode_NOT_FOUND, "node not found")
+	if instance == nil {
+		return retErr(pb.ErrorCode_NOT_FOUND, "instance not found")
 	}
 	pkg, err := s.catalog.GetPackage(ctx, spaceID, item.GetPackageId())
 	if err != nil {
@@ -355,7 +355,7 @@ func (s *Service) preflightDeployNode(ctx context.Context, spaceID string, item 
 	if validateCollectorPublishLeaseAtSubmit(pkg, item.GetCollectorPublishLeaseId(), item.GetCollectorPublishFencingToken()) != nil {
 		return retErr(pb.ErrorCode_NO_PERMISSION, "collector market_fetcher deployment requires a publish lease and fencing token")
 	}
-	if currentPackage, packageErr := s.catalog.GetPackage(ctx, spaceID, node.PackageID); packageErr != nil {
+	if currentPackage, packageErr := s.catalog.GetPackage(ctx, spaceID, instance.PackageID); packageErr != nil {
 		return retFromError(packageErr)
 	} else if ret := validateCollectorPublishLeaseAtSubmit(currentPackage, item.GetCollectorPublishLeaseId(), item.GetCollectorPublishFencingToken()); ret != nil {
 		return ret
@@ -363,51 +363,51 @@ func (s *Service) preflightDeployNode(ctx context.Context, spaceID string, item 
 	return nil
 }
 
-func nodeBatchOperationToPB(operation string) pb.NodeBatchOperation {
+func functionJobOperationToPB(operation string) pb.FunctionJobOperation {
 	switch operation {
-	case nodeBatchOperationCreate:
-		return pb.NodeBatchOperation_NODE_BATCH_OPERATION_CREATE_NODES
-	case nodeBatchOperationDeploy:
-		return pb.NodeBatchOperation_NODE_BATCH_OPERATION_DEPLOY_NODES
-	case nodeBatchOperationDelete:
-		return pb.NodeBatchOperation_NODE_BATCH_OPERATION_DELETE_NODES
-	case nodeBatchOperationRuntimeConfig:
-		return pb.NodeBatchOperation_NODE_BATCH_OPERATION_UPDATE_RUNTIME_CONFIGS
+	case functionJobOperationCreate:
+		return pb.FunctionJobOperation_FUNCTION_JOB_OPERATION_CREATE_INSTANCES
+	case functionJobOperationDeploy:
+		return pb.FunctionJobOperation_FUNCTION_JOB_OPERATION_DEPLOY_INSTANCES
+	case functionJobOperationDelete:
+		return pb.FunctionJobOperation_FUNCTION_JOB_OPERATION_DELETE_INSTANCES
+	case functionJobOperationRuntimeConfig:
+		return pb.FunctionJobOperation_FUNCTION_JOB_OPERATION_UPDATE_RUNTIME_CONFIGS
 	default:
-		return pb.NodeBatchOperation_NODE_BATCH_OPERATION_UNSPECIFIED
+		return pb.FunctionJobOperation_FUNCTION_JOB_OPERATION_UNSPECIFIED
 	}
 }
 
-func nodeBatchStatusToPB(status string) pb.NodeBatchStatus {
+func functionJobStatusToPB(status string) pb.FunctionJobStatus {
 	switch status {
-	case store.NodeBatchPending:
-		return pb.NodeBatchStatus_NODE_BATCH_STATUS_PENDING
-	case store.NodeBatchRunning:
-		return pb.NodeBatchStatus_NODE_BATCH_STATUS_RUNNING
-	case store.NodeBatchSuccess:
-		return pb.NodeBatchStatus_NODE_BATCH_STATUS_SUCCESS
-	case store.NodeBatchFailed:
-		return pb.NodeBatchStatus_NODE_BATCH_STATUS_FAILED
-	case store.NodeBatchPartial:
-		return pb.NodeBatchStatus_NODE_BATCH_STATUS_PARTIAL
+	case store.FunctionJobPending:
+		return pb.FunctionJobStatus_FUNCTION_JOB_STATUS_PENDING
+	case store.FunctionJobRunning:
+		return pb.FunctionJobStatus_FUNCTION_JOB_STATUS_RUNNING
+	case store.FunctionJobSuccess:
+		return pb.FunctionJobStatus_FUNCTION_JOB_STATUS_SUCCESS
+	case store.FunctionJobFailed:
+		return pb.FunctionJobStatus_FUNCTION_JOB_STATUS_FAILED
+	case store.FunctionJobPartial:
+		return pb.FunctionJobStatus_FUNCTION_JOB_STATUS_PARTIAL
 	default:
-		return pb.NodeBatchStatus_NODE_BATCH_STATUS_UNSPECIFIED
+		return pb.FunctionJobStatus_FUNCTION_JOB_STATUS_UNSPECIFIED
 	}
 }
 
-func nodeBatchItemStatusToPB(status string) pb.NodeBatchItemStatus {
+func functionJobItemStatusToPB(status string) pb.FunctionJobItemStatus {
 	switch status {
-	case store.NodeBatchPending:
-		return pb.NodeBatchItemStatus_NODE_BATCH_ITEM_STATUS_PENDING
-	case store.NodeBatchRunning:
-		return pb.NodeBatchItemStatus_NODE_BATCH_ITEM_STATUS_RUNNING
-	case store.NodeBatchReconciliationRequired:
-		return pb.NodeBatchItemStatus_NODE_BATCH_ITEM_STATUS_RUNNING
-	case store.NodeBatchSuccess:
-		return pb.NodeBatchItemStatus_NODE_BATCH_ITEM_STATUS_SUCCESS
-	case store.NodeBatchFailed:
-		return pb.NodeBatchItemStatus_NODE_BATCH_ITEM_STATUS_FAILED
+	case store.FunctionJobPending:
+		return pb.FunctionJobItemStatus_FUNCTION_JOB_ITEM_STATUS_PENDING
+	case store.FunctionJobRunning:
+		return pb.FunctionJobItemStatus_FUNCTION_JOB_ITEM_STATUS_RUNNING
+	case store.FunctionJobReconciliationRequired:
+		return pb.FunctionJobItemStatus_FUNCTION_JOB_ITEM_STATUS_RUNNING
+	case store.FunctionJobSuccess:
+		return pb.FunctionJobItemStatus_FUNCTION_JOB_ITEM_STATUS_SUCCESS
+	case store.FunctionJobFailed:
+		return pb.FunctionJobItemStatus_FUNCTION_JOB_ITEM_STATUS_FAILED
 	default:
-		return pb.NodeBatchItemStatus_NODE_BATCH_ITEM_STATUS_UNSPECIFIED
+		return pb.FunctionJobItemStatus_FUNCTION_JOB_ITEM_STATUS_UNSPECIFIED
 	}
 }

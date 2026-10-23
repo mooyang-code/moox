@@ -77,7 +77,7 @@ export default defineConfig({
         items: [
           { text: '存储', link: '/模块/存储' },
           { text: '采集', link: '/模块/采集' },
-          { text: '云节点', link: '/模块/云节点' },
+          { text: '云函数管理', link: '/模块/云函数管理' },
           { text: '归档', link: '/模块/归档' },
         ],
       },

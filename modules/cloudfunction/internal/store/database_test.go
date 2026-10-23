@@ -10,7 +10,7 @@ import (
 )
 
 func TestInitializeDoesNotCreateSchema(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "cloudnode.db")
+	dbPath := filepath.Join(t.TempDir(), "cloudfunction.db")
 	mgr, err := Open(&config.DatabaseConfig{Path: dbPath})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -22,12 +22,12 @@ func TestInitializeDoesNotCreateSchema(t *testing.T) {
 		t.Fatalf("query table count: %v", err)
 	}
 	if count != 0 {
-		t.Fatalf("Initialize() created %d cloudnode tables, want 0", count)
+		t.Fatalf("Initialize() created %d cloudfunction tables, want 0", count)
 	}
 }
 
 func TestInitializeCapsSQLitePoolToSingleConnection(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "cloudnode.db")
+	dbPath := filepath.Join(t.TempDir(), "cloudfunction.db")
 	mgr, err := Open(&config.DatabaseConfig{
 		Path:         dbPath,
 		MaxOpenConns: 50,
@@ -48,7 +48,7 @@ func TestInitializeCapsSQLitePoolToSingleConnection(t *testing.T) {
 }
 
 func TestOpenDisablesGORMQueryLogging(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "cloudnode.db")
+	dbPath := filepath.Join(t.TempDir(), "cloudfunction.db")
 	mgr, err := Open(&config.DatabaseConfig{Path: dbPath})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -61,7 +61,7 @@ func TestOpenDisablesGORMQueryLogging(t *testing.T) {
 }
 
 func TestOpenRestrictsDatabaseFileToOwner(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "cloudnode.db")
+	dbPath := filepath.Join(t.TempDir(), "cloudfunction.db")
 	mgr, err := Open(&config.DatabaseConfig{Path: dbPath})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)

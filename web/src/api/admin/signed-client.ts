@@ -100,7 +100,7 @@ function independentOfSelectedSpace(url: string | undefined): boolean {
 
 /** 与空间无关的全局服务（仅全局管理员可用，没有空间归属）：不参与“切换空间即取消”，否则全局单例读取会被无故打断。 */
 const GLOBAL_SERVICE =
-  /\/api\/admin\/(?:(?:auth|space|ssh|secret|sysdeploy|setup|monitor)\/|storage\/(?:ListSpaces|GetDataNode|ListDataNodes)$|cloudnode\/(?:ListCloudAccounts|GetCloudAccount|ListCloudRegions)$)/;
+  /\/api\/admin\/(?:(?:auth|space|ssh|secret|sysdeploy|setup|monitor)\/|storage\/(?:ListSpaces|GetDataNode|ListDataNodes)$|cloudfunction\/(?:ListCloudAccounts|GetCloudAccount|ListCloudRegions)$)/;
 
 let lastSpaceInitFinished = 0;
 let spaceInitInflight: Promise<void> | null = null;

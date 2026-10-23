@@ -6,20 +6,25 @@ const { callControl, MockControlRequestError } = vi.hoisted(() => {
 });
 vi.mock("@/api/admin/http", () => ({ callControl, ControlRequestError: MockControlRequestError }));
 
-import { batchDeleteNodes, getNodeBatchChange, importSCFFunctions, previewSCFFunctions } from "./cloud-node";
+import { deleteFunctionInstances, getFunctionJob, importSCFFunctions, previewSCFFunctions } from "./function-instance";
 
-describe("cloud node batch API", () => {
+describe("cloud instance batch API", () => {
   beforeEach(() => {
     callControl.mockReset();
   });
   afterEach(() => vi.useRealTimers());
 
-  function deleteSnapshot(node_id: string) {
-    return { node_id, package_id: `pkg-${node_id}`, deployment_id: `dep-${node_id}`, modify_time: "2026-10-03T10:00:00Z" };
+  function deleteSnapshot(instance_id: string) {
+    return {
+      instance_id,
+      package_id: `pkg-${instance_id}`,
+      deployment_id: `dep-${instance_id}`,
+      modify_time: "2026-10-03T10:00:00Z"
+    };
   }
 
-  function deleteRequest(node_ids: string[]) {
-    return { space_id: "crypto", node_ids, node_snapshots: node_ids.map(deleteSnapshot) };
+  function deleteRequest(instance_ids: string[]) {
+    return { space_id: "crypto", instance_ids, instance_snapshots: instance_ids.map(deleteSnapshot) };
   }
 
   function mockDeleteWorkflow(poll: (jobId: string) => unknown, submit?: (index: number) => unknown) {
@@ -28,12 +33,13 @@ describe("cloud node batch API", () => {
       if (method === "AcquireCollectorPublishLease" || method === "RenewCollectorPublishLease") {
         return { lease_id: "lease-1", fencing_token: "9" };
       }
-      if (method === "GetNodeList") return { items: [deleteSnapshot(request.node_id)], total: 1, page: { has_more: false } };
-      if (method === "SubmitDeleteNodes") {
+      if (method === "ListFunctionInstances")
+        return { items: [deleteSnapshot(request.instance_id)], total: 1, page: { has_more: false } };
+      if (method === "SubmitDeleteFunctionInstances") {
         submissions++;
         return submit ? submit(submissions) : { job_id: `delete-${submissions}` };
       }
-      if (method === "GetNodeBatchChange") return poll(request.job_id);
+      if (method === "GetFunctionJob") return poll(request.job_id);
       if (method === "ReleaseCollectorPublishLease") return { released: true };
       throw new Error(`Unexpected method: ${method}`);
     });
@@ -41,12 +47,12 @@ describe("cloud node batch API", () => {
 
   it("splits 170 deletes into bounded jobs under the same publish fence", async () => {
     mockDeleteWorkflow(jobId => ({
-      job: { status: "NODE_BATCH_STATUS_SUCCESS", success_count: jobId === "delete-1" ? 100 : 70 }
+      job: { status: "FUNCTION_JOB_STATUS_SUCCESS", success_count: jobId === "delete-1" ? 100 : 70 }
     }));
-    const nodeIds = Array.from({ length: 170 }, (_, index) => `node-${index}`);
-    await expect(batchDeleteNodes(deleteRequest(nodeIds))).resolves.toEqual({ processed_count: 170 });
-    const submissions = callControl.mock.calls.filter(([, method]) => method === "SubmitDeleteNodes");
-    expect(submissions.map(([, , request]) => request.node_ids)).toEqual([nodeIds.slice(0, 100), nodeIds.slice(100)]);
+    const instanceIds = Array.from({ length: 170 }, (_, index) => `instance-${index}`);
+    await expect(deleteFunctionInstances(deleteRequest(instanceIds))).resolves.toEqual({ processed_count: 170 });
+    const submissions = callControl.mock.calls.filter(([, method]) => method === "SubmitDeleteFunctionInstances");
+    expect(submissions.map(([, , request]) => request.instance_ids)).toEqual([instanceIds.slice(0, 100), instanceIds.slice(100)]);
     for (const [, , request] of submissions) {
       expect(request).toMatchObject({ collector_publish_lease_id: "lease-1", collector_publish_fencing_token: "9" });
     }
@@ -59,10 +65,10 @@ describe("cloud node batch API", () => {
     mockDeleteWorkflow(jobId => ({
       job:
         jobId === "delete-1"
-          ? { status: "NODE_BATCH_STATUS_FAILED", failed_count: 100 }
-          : { status: laterTerminal ? "NODE_BATCH_STATUS_SUCCESS" : "NODE_BATCH_STATUS_RUNNING", success_count: 70 }
+          ? { status: "FUNCTION_JOB_STATUS_FAILED", failed_count: 100 }
+          : { status: laterTerminal ? "FUNCTION_JOB_STATUS_SUCCESS" : "FUNCTION_JOB_STATUS_RUNNING", success_count: 70 }
     }));
-    const result = batchDeleteNodes(deleteRequest(Array.from({ length: 170 }, (_, i) => `node-${i}`)));
+    const result = deleteFunctionInstances(deleteRequest(Array.from({ length: 170 }, (_, i) => `instance-${i}`)));
     const rejected = expect(result).rejects.toThrow("100 个节点未完成");
     await vi.advanceTimersByTimeAsync(31_000);
     expect(callControl.mock.calls.some(([, method]) => method === "RenewCollectorPublishLease")).toBe(true);
@@ -79,30 +85,30 @@ describe("cloud node batch API", () => {
 
   it("retries unknown poll outcomes and renews beyond 30 minutes", async () => {
     vi.useFakeTimers();
-    mockDeleteWorkflow(() => ({ job: { status: "NODE_BATCH_STATUS_RUNNING" } }));
-    const result = batchDeleteNodes(deleteRequest(["node-1"]));
+    mockDeleteWorkflow(() => ({ job: { status: "FUNCTION_JOB_STATUS_RUNNING" } }));
+    const result = deleteFunctionInstances(deleteRequest(["instance-1"]));
     const resolved = expect(result).resolves.toEqual({ processed_count: 1 });
     await vi.advanceTimersByTimeAsync(31 * 60_000);
     expect(callControl.mock.calls.filter(([, method]) => method === "RenewCollectorPublishLease").length).toBeGreaterThan(30);
     expect(callControl.mock.calls.some(([, method]) => method === "ReleaseCollectorPublishLease")).toBe(false);
     const implementation = callControl.getMockImplementation()!;
     callControl.mockImplementation((service, method, request) => {
-      if (method === "GetNodeBatchChange") return { job: { status: "NODE_BATCH_STATUS_SUCCESS", success_count: 1 } };
+      if (method === "GetFunctionJob") return { job: { status: "FUNCTION_JOB_STATUS_SUCCESS", success_count: 1 } };
       return implementation(service, method, request);
     });
     await vi.advanceTimersByTimeAsync(250);
     await resolved;
   });
 
-  it("verifies the selected node version under the lease before submitting deletion", async () => {
-    mockDeleteWorkflow(() => ({ job: { status: "NODE_BATCH_STATUS_SUCCESS", success_count: 1 } }));
+  it("verifies the selected instance version under the lease before submitting deletion", async () => {
+    mockDeleteWorkflow(() => ({ job: { status: "FUNCTION_JOB_STATUS_SUCCESS", success_count: 1 } }));
     const normal = callControl.getMockImplementation()!;
     callControl.mockImplementation((service, method, request) => {
-      if (method === "GetNodeList") {
+      if (method === "ListFunctionInstances") {
         return {
           items: [
             {
-              ...deleteSnapshot(request.node_id),
+              ...deleteSnapshot(request.instance_id),
               package_id: "new-package",
               deployment_id: "new-deployment",
               modify_time: "2026-10-03T11:00:00Z"
@@ -114,10 +120,10 @@ describe("cloud node batch API", () => {
       return normal(service, method, request);
     });
 
-    await expect(batchDeleteNodes(deleteRequest(["node-1"]))).rejects.toThrow("已发生变化，请刷新");
+    await expect(deleteFunctionInstances(deleteRequest(["instance-1"]))).rejects.toThrow("已发生变化，请刷新");
     const methods = callControl.mock.calls.map(([, method]) => method);
-    expect(methods.indexOf("AcquireCollectorPublishLease")).toBeLessThan(methods.indexOf("GetNodeList"));
-    expect(methods).not.toContain("SubmitDeleteNodes");
+    expect(methods.indexOf("AcquireCollectorPublishLease")).toBeLessThan(methods.indexOf("ListFunctionInstances"));
+    expect(methods).not.toContain("SubmitDeleteFunctionInstances");
     expect(methods).toContain("ReleaseCollectorPublishLease");
   });
 
@@ -126,11 +132,11 @@ describe("cloud node batch API", () => {
     mockDeleteWorkflow(() => {
       throw new MockControlRequestError("permission denied");
     });
-    const result = batchDeleteNodes(deleteRequest(["node-1"]));
+    const result = deleteFunctionInstances(deleteRequest(["instance-1"]));
     const rejected = expect(result).rejects.toThrow("删除批次状态无法确认");
     await vi.advanceTimersByTimeAsync(10_000);
     await rejected;
-    expect(callControl.mock.calls.filter(([, method]) => method === "GetNodeBatchChange")).toHaveLength(3);
+    expect(callControl.mock.calls.filter(([, method]) => method === "GetFunctionJob")).toHaveLength(3);
     expect(callControl.mock.calls.some(([, method]) => method === "ReleaseCollectorPublishLease")).toBe(false);
   });
 
@@ -140,9 +146,9 @@ describe("cloud node batch API", () => {
     mockDeleteWorkflow(() => {
       polls++;
       if (polls < 3) throw new Error("network reset");
-      return { job: { status: "NODE_BATCH_STATUS_SUCCESS", success_count: 1 } };
+      return { job: { status: "FUNCTION_JOB_STATUS_SUCCESS", success_count: 1 } };
     });
-    const result = batchDeleteNodes(deleteRequest(["node-1"]));
+    const result = deleteFunctionInstances(deleteRequest(["instance-1"]));
     const resolved = expect(result).resolves.toEqual({ processed_count: 1 });
     await vi.advanceTimersByTimeAsync(5_000);
     await resolved;
@@ -157,8 +163,8 @@ describe("cloud node batch API", () => {
     mockDeleteWorkflow(
       () => ({
         job: firstJobTerminal
-          ? { status: "NODE_BATCH_STATUS_SUCCESS", success_count: 100 }
-          : { status: "NODE_BATCH_STATUS_RUNNING" }
+          ? { status: "FUNCTION_JOB_STATUS_SUCCESS", success_count: 100 }
+          : { status: "FUNCTION_JOB_STATUS_RUNNING" }
       }),
       index =>
         index === 1
@@ -172,24 +178,24 @@ describe("cloud node batch API", () => {
       if (method === "RenewCollectorPublishLease") return Promise.reject(new MockControlRequestError("lease conflict"));
       return normal(service, method, request);
     });
-    const result = batchDeleteNodes(deleteRequest(Array.from({ length: 170 }, (_, index) => `node-${index}`)));
+    const result = deleteFunctionInstances(deleteRequest(Array.from({ length: 170 }, (_, index) => `instance-${index}`)));
     const completion = result.then(
       () => undefined,
       error => error
     );
     await vi.advanceTimersByTimeAsync(31_000);
-    expect(callControl.mock.calls.filter(([, method]) => method === "SubmitDeleteNodes")).toHaveLength(1);
+    expect(callControl.mock.calls.filter(([, method]) => method === "SubmitDeleteFunctionInstances")).toHaveLength(1);
     expect(callControl.mock.calls.some(([, method]) => method === "ReleaseCollectorPublishLease")).toBe(false);
     finishSubmission?.();
     await vi.advanceTimersByTimeAsync(1);
-    expect(callControl.mock.calls.filter(([, method]) => method === "SubmitDeleteNodes")).toHaveLength(1);
+    expect(callControl.mock.calls.filter(([, method]) => method === "SubmitDeleteFunctionInstances")).toHaveLength(1);
     firstJobTerminal = true;
     await vi.advanceTimersByTimeAsync(1_000);
     const error = await completion;
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toContain("续租失败");
-    expect(callControl.mock.calls.filter(([, method]) => method === "SubmitDeleteNodes")).toHaveLength(1);
-    expect(callControl.mock.calls.filter(([, method]) => method === "GetNodeBatchChange").length).toBeGreaterThan(1);
+    expect(callControl.mock.calls.filter(([, method]) => method === "SubmitDeleteFunctionInstances")).toHaveLength(1);
+    expect(callControl.mock.calls.filter(([, method]) => method === "GetFunctionJob").length).toBeGreaterThan(1);
     expect(callControl.mock.calls.filter(([, method]) => method === "ReleaseCollectorPublishLease")).toHaveLength(1);
   });
 
@@ -197,13 +203,13 @@ describe("cloud node batch API", () => {
     vi.useFakeTimers();
     let terminal = false;
     mockDeleteWorkflow(
-      () => ({ job: { status: terminal ? "NODE_BATCH_STATUS_SUCCESS" : "NODE_BATCH_STATUS_RUNNING", success_count: 100 } }),
+      () => ({ job: { status: terminal ? "FUNCTION_JOB_STATUS_SUCCESS" : "FUNCTION_JOB_STATUS_RUNNING", success_count: 100 } }),
       index => {
         if (index === 2) throw new Error("submission outcome unknown");
         return { job_id: "delete-1" };
       }
     );
-    const result = batchDeleteNodes(deleteRequest(Array.from({ length: 170 }, (_, i) => `node-${i}`)));
+    const result = deleteFunctionInstances(deleteRequest(Array.from({ length: 170 }, (_, i) => `instance-${i}`)));
     const rejected = expect(result).rejects.toThrow("submission outcome unknown");
     await vi.advanceTimersByTimeAsync(31_000);
     expect(callControl.mock.calls.some(([, method]) => method === "RenewCollectorPublishLease")).toBe(true);
@@ -215,9 +221,9 @@ describe("cloud node batch API", () => {
 
   it("allows explicit abort without releasing a running job", async () => {
     vi.useFakeTimers();
-    mockDeleteWorkflow(() => ({ job: { status: "NODE_BATCH_STATUS_RUNNING" } }));
+    mockDeleteWorkflow(() => ({ job: { status: "FUNCTION_JOB_STATUS_RUNNING" } }));
     const controller = new AbortController();
-    const result = batchDeleteNodes(deleteRequest(["node-1"]), { signal: controller.signal });
+    const result = deleteFunctionInstances(deleteRequest(["instance-1"]), { signal: controller.signal });
     const rejected = expect(result).rejects.toThrow();
     await vi.advanceTimersByTimeAsync(31_000);
     controller.abort();
@@ -229,11 +235,11 @@ describe("cloud node batch API", () => {
     expect(callControl.mock.calls.some(([, method]) => method === "ReleaseCollectorPublishLease")).toBe(false);
   });
 
-  it.each(["SubmitDeleteNodes", "GetNodeBatchChange"])(
+  it.each(["SubmitDeleteFunctionInstances", "GetFunctionJob"])(
     "renews while %s is unresolved and aborts promptly",
     async blockedMethod => {
       vi.useFakeTimers();
-      mockDeleteWorkflow(() => ({ job: { status: "NODE_BATCH_STATUS_SUCCESS", success_count: 1 } }));
+      mockDeleteWorkflow(() => ({ job: { status: "FUNCTION_JOB_STATUS_SUCCESS", success_count: 1 } }));
       const normal = callControl.getMockImplementation()!;
       callControl.mockImplementation((service, method, request) => {
         if (method === blockedMethod)
@@ -243,7 +249,7 @@ describe("cloud node batch API", () => {
         return normal(service, method, request);
       });
       const controller = new AbortController();
-      const result = batchDeleteNodes(deleteRequest(["node-1"]), { signal: controller.signal });
+      const result = deleteFunctionInstances(deleteRequest(["instance-1"]), { signal: controller.signal });
       const rejected = expect(result).rejects.toThrow();
       await vi.advanceTimersByTimeAsync(31_000);
       expect(callControl.mock.calls.some(([, method]) => method === "RenewCollectorPublishLease")).toBe(true);
@@ -254,13 +260,14 @@ describe("cloud node batch API", () => {
   );
 
   it("does not treat an HTTP error response as proof that submission was rejected", async () => {
-    mockDeleteWorkflow(() => ({ job: { status: "NODE_BATCH_STATUS_SUCCESS", success_count: 1 } }));
+    mockDeleteWorkflow(() => ({ job: { status: "FUNCTION_JOB_STATUS_SUCCESS", success_count: 1 } }));
     const implementation = callControl.getMockImplementation()!;
     callControl.mockImplementation((service, method, request) => {
-      if (method === "SubmitDeleteNodes") return Promise.reject({ message: "upstream error", response: { status: 500 } });
+      if (method === "SubmitDeleteFunctionInstances")
+        return Promise.reject({ message: "upstream error", response: { status: 500 } });
       return implementation(service, method, request);
     });
-    await expect(batchDeleteNodes(deleteRequest(["node-1"]))).rejects.toThrow("upstream error");
+    await expect(deleteFunctionInstances(deleteRequest(["instance-1"]))).rejects.toThrow("upstream error");
     expect(callControl.mock.calls.some(([, method]) => method === "ReleaseCollectorPublishLease")).toBe(false);
   });
 
@@ -269,14 +276,14 @@ describe("cloud node batch API", () => {
     let terminal = false;
     let renewals = 0;
     mockDeleteWorkflow(() => ({
-      job: { status: terminal ? "NODE_BATCH_STATUS_SUCCESS" : "NODE_BATCH_STATUS_RUNNING", success_count: 1 }
+      job: { status: terminal ? "FUNCTION_JOB_STATUS_SUCCESS" : "FUNCTION_JOB_STATUS_RUNNING", success_count: 1 }
     }));
     const normal = callControl.getMockImplementation()!;
     callControl.mockImplementation((service, method, request) => {
       if (method === "RenewCollectorPublishLease" && ++renewals === 1) return Promise.reject(new Error("lost renewal"));
       return normal(service, method, request);
     });
-    const result = batchDeleteNodes(deleteRequest(["node-1"]));
+    const result = deleteFunctionInstances(deleteRequest(["instance-1"]));
     const completion = result.then(
       () => undefined,
       error => error
@@ -298,17 +305,17 @@ describe("cloud node batch API", () => {
       items: [
         { item_id: "i1", status: 3 },
         { item_id: "i2", status: "4" },
-        { item_id: "i3", status: "NODE_BATCH_ITEM_STATUS_RUNNING" }
+        { item_id: "i3", status: "FUNCTION_JOB_ITEM_STATUS_RUNNING" }
       ]
     });
 
-    const result = await getNodeBatchChange("job-1");
+    const result = await getFunctionJob("job-1");
 
-    expect(result.job.status).toBe("NODE_BATCH_STATUS_SUCCESS");
+    expect(result.job.status).toBe("FUNCTION_JOB_STATUS_SUCCESS");
     expect(result.items.map(item => item.status)).toEqual([
-      "NODE_BATCH_ITEM_STATUS_SUCCESS",
-      "NODE_BATCH_ITEM_STATUS_FAILED",
-      "NODE_BATCH_ITEM_STATUS_RUNNING"
+      "FUNCTION_JOB_ITEM_STATUS_SUCCESS",
+      "FUNCTION_JOB_ITEM_STATUS_FAILED",
+      "FUNCTION_JOB_ITEM_STATUS_RUNNING"
     ]);
   });
 
@@ -323,7 +330,7 @@ describe("cloud node batch API", () => {
     expect(preview.functions).toHaveLength(1);
     expect(callControl).toHaveBeenNthCalledWith(
       1,
-      "cloudnode",
+      "cloudfunction",
       "PreviewSCFFunctions",
       { account_id: "account-1" },
       { timeout: 960000 }
@@ -331,7 +338,7 @@ describe("cloud node batch API", () => {
     callControl.mockResolvedValueOnce({ created: 1, restored: 0, unchanged: 0, failed: 0, results: [] });
     await importSCFFunctions("account-1", [preview.functions[0].function]);
     expect(callControl).toHaveBeenLastCalledWith(
-      "cloudnode",
+      "cloudfunction",
       "ImportSCFFunctions",
       {
         account_id: "account-1",
@@ -342,18 +349,18 @@ describe("cloud node batch API", () => {
   });
 
   it("holds the publish lease until the async delete batch is terminal", async () => {
-    mockDeleteWorkflow(() => ({ job: { status: "NODE_BATCH_STATUS_SUCCESS", success_count: 1 } }));
-    await expect(batchDeleteNodes(deleteRequest(["timer-1"]))).resolves.toEqual({ processed_count: 1 });
+    mockDeleteWorkflow(() => ({ job: { status: "FUNCTION_JOB_STATUS_SUCCESS", success_count: 1 } }));
+    await expect(deleteFunctionInstances(deleteRequest(["timer-1"]))).resolves.toEqual({ processed_count: 1 });
 
     expect(callControl).toHaveBeenNthCalledWith(1, "publishlease", "AcquireCollectorPublishLease", {
       space_id: "crypto",
       holder_id: expect.any(String)
     });
     const methods = callControl.mock.calls.map(([, method]) => method);
-    expect(methods.indexOf("AcquireCollectorPublishLease")).toBeLessThan(methods.indexOf("GetNodeList"));
-    expect(methods.indexOf("GetNodeList")).toBeLessThan(methods.indexOf("SubmitDeleteNodes"));
-    expect(callControl).toHaveBeenCalledWith("cloudnode", "SubmitDeleteNodes", {
-      node_ids: ["timer-1"],
+    expect(methods.indexOf("AcquireCollectorPublishLease")).toBeLessThan(methods.indexOf("ListFunctionInstances"));
+    expect(methods.indexOf("ListFunctionInstances")).toBeLessThan(methods.indexOf("SubmitDeleteFunctionInstances"));
+    expect(callControl).toHaveBeenCalledWith("cloudfunction", "SubmitDeleteFunctionInstances", {
+      instance_ids: ["timer-1"],
       collector_publish_lease_id: "lease-1",
       collector_publish_fencing_token: "9"
     });
@@ -370,7 +377,7 @@ describe("cloud node batch API", () => {
       .mockResolvedValueOnce({ items: [deleteSnapshot("timer-1")] })
       .mockRejectedValueOnce({ message: "network reset" });
 
-    await expect(batchDeleteNodes(deleteRequest(["timer-1"]))).rejects.toThrow("network reset");
+    await expect(deleteFunctionInstances(deleteRequest(["timer-1"]))).rejects.toThrow("network reset");
     expect(callControl.mock.calls.some(([, method]) => method === "ReleaseCollectorPublishLease")).toBe(false);
   });
 });

@@ -13,38 +13,38 @@ import (
 )
 
 func (s *Service) InvokeFunction(ctx context.Context, req *pb.InvokeFunctionReq) (*pb.InvokeFunctionRsp, error) {
-	if req.GetNodeId() == "" {
-		return &pb.InvokeFunctionRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "node_id is required")}, nil
+	if req.GetInstanceId() == "" {
+		return &pb.InvokeFunctionRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "instance_id is required")}, nil
 	}
 	spaceID, err := spacecontext.MustFromContext(ctx)
 	if err != nil {
 		return &pb.InvokeFunctionRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
-	node, err := s.catalog.GetNode(ctx, spaceID, req.GetNodeId())
+	instance, err := s.catalog.GetInstance(ctx, spaceID, req.GetInstanceId())
 	if err != nil {
 		return &pb.InvokeFunctionRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
-	if node == nil {
-		return &pb.InvokeFunctionRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "node not found")}, nil
+	if instance == nil {
+		return &pb.InvokeFunctionRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "instance not found")}, nil
 	}
 	event := map[string]any{}
 	if req.GetEventData() != nil {
 		event = req.GetEventData().AsMap()
 	}
-	rsp, err := s.invokeNode(ctx, node, event, scfInvokeTypeToString(req.GetScfInvokeType()), req.GetQualifier())
+	rsp, err := s.invokeInstance(ctx, instance, event, scfInvokeTypeToString(req.GetScfInvokeType()), req.GetQualifier())
 	if err != nil {
 		return &pb.InvokeFunctionRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, err.Error())}, nil
 	}
 	return rsp, nil
 }
 
-func (s *Service) invokeNode(ctx context.Context, node *store.CloudNode, eventData any, invokeType string, qualifier string) (*pb.InvokeFunctionRsp, error) {
-	account, err := s.catalog.GetAccount(ctx, node.CloudAccountID)
+func (s *Service) invokeInstance(ctx context.Context, instance *store.FunctionInstance, eventData any, invokeType string, qualifier string) (*pb.InvokeFunctionRsp, error) {
+	account, err := s.catalog.GetAccount(ctx, instance.CloudAccountID)
 	if err != nil {
 		return nil, err
 	}
 	if account == nil {
-		return nil, fmt.Errorf("cloud account not found: %s", node.CloudAccountID)
+		return nil, fmt.Errorf("cloud account not found: %s", instance.CloudAccountID)
 	}
 	if account.Provider != "tencent" {
 		return nil, fmt.Errorf("unsupported cloud provider: %s", account.Provider)
@@ -64,9 +64,9 @@ func (s *Service) invokeNode(ctx context.Context, node *store.CloudNode, eventDa
 		return nil, fmt.Errorf("scf client is not configured")
 	}
 	resp, err := client.InvokeFunction(ctx, tencentscf.InvokeFunctionRequest{
-		Region:       node.Region,
-		FunctionName: firstString(node.FunctionName, node.NodeID),
-		Namespace:    firstString(node.Namespace, "default"),
+		Region:       instance.Region,
+		FunctionName: firstString(instance.FunctionName, instance.InstanceID),
+		Namespace:    firstString(instance.Namespace, "default"),
 		Qualifier:    qualifier,
 		InvokeType:   invokeType,
 		EventData:    eventData,

@@ -13,7 +13,7 @@ import (
 )
 
 func TestPreviewAndImportSCFFunctionsAreSpaceScopedAndIdempotent(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	require.NoError(t, catalog.UpsertAccount(context.Background(), store.CloudAccount{AccountID: "account-a", Provider: "tencent", CredentialSecretID: "secret"}))
 	fake := &fakeSCFClient{
 		inventory:  []tencentscf.DiscoveryFunction{{FunctionRef: tencentscf.FunctionRef{Region: "ap-guangzhou", Namespace: "default", FunctionName: "moox-fetcher-crypto-market-0"}, Status: "Active", Runtime: "Go1", Type: "Event"}},
@@ -26,7 +26,7 @@ func TestPreviewAndImportSCFFunctionsAreSpaceScopedAndIdempotent(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_SUCCESS, preview.GetRetInfo().GetCode())
 	require.Len(t, preview.GetFunctions(), 18)
 	// The fake inventory is returned for every supported region, so duplicate
-	// identities are blocked rather than silently overwriting one node.
+	// identities are blocked rather than silently overwriting one instance.
 	for _, candidate := range preview.GetFunctions() {
 		require.False(t, candidate.GetImportable())
 		require.Contains(t, candidate.GetReason(), "same function name")
@@ -43,14 +43,14 @@ func TestPreviewAndImportSCFFunctionsAreSpaceScopedAndIdempotent(t *testing.T) {
 	importRsp, err := svc.ImportSCFFunctions(ctx, &pb.ImportSCFFunctionsReq{AccountId: "account-a", Functions: []*pb.SCFFunctionRef{{Region: "ap-guangzhou", Namespace: "default", FunctionName: "moox-fetcher-crypto-market-0"}}})
 	require.NoError(t, err)
 	require.Equal(t, int32(1), importRsp.GetCreated())
-	node, err := catalog.GetNode(ctx, "crypto", "moox-fetcher-crypto-market-0")
+	instance, err := catalog.GetInstance(ctx, "crypto", "moox-fetcher-crypto-market-0")
 	require.NoError(t, err)
-	require.Equal(t, "pkg-1", node.PackageID)
-	require.NotContains(t, node.Metadata, "MOOX_SECRET")
+	require.Equal(t, "pkg-1", instance.PackageID)
+	require.NotContains(t, instance.Metadata, "MOOX_SECRET")
 }
 
 func TestPreviewSCFFunctionsBlocksHTTPMarketFetcher(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	require.NoError(t, catalog.UpsertAccount(context.Background(), store.CloudAccount{AccountID: "account-http", Provider: "tencent", CredentialSecretID: "secret"}))
 	fake := &fakeSCFClient{
 		inventory:       []tencentscf.DiscoveryFunction{{FunctionRef: tencentscf.FunctionRef{Region: "ap-guangzhou", Namespace: "default", FunctionName: "moox-fetcher-crypto-market-http"}, Status: "Active", Runtime: "Go1", Type: "HTTP"}},

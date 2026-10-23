@@ -194,7 +194,7 @@
           </a-select>
           <template #extra>
             <span style="color: #86909c; font-size: 12px">
-              仅支持COS方式上传，请选择云账户。上传由独立 cloudnode 服务处理。
+              仅支持COS方式上传，请选择云账户。上传由独立 cloudfunction 服务处理。
             </span>
           </template>
         </a-form-item>
@@ -379,7 +379,7 @@ const props = defineProps<{
   modelValue?: boolean;
   mode?: "page" | "modal";
   packageType?: string | number; // 用于过滤代码包类型
-  bizType?: string; // 用于过滤业务类型
+  workloadType?: string; // 用于过滤业务类型
 }>();
 
 // Emits
@@ -434,7 +434,7 @@ const isCheckingVersion = ref(false);
 const searchForm = reactive<PackageListRequest>({
   page: 1,
   page_size: 10,
-  biz_type: props.bizType // 根据传入的 bizType 初始化过滤条件
+  workload_type: props.workloadType // 根据传入的 workloadType 初始化过滤条件
 });
 
 // 分页信息
@@ -457,7 +457,7 @@ const defaultUploadForm = {
   description: "",
   runtime: "Python3.9",
   package_type: 1,
-  biz_type: "",
+  workload_type: "",
   cloud_account_id: ""
 };
 
@@ -516,8 +516,8 @@ onMounted(async () => {
 });
 
 const initializePackageManage = async () => {
-  if (props.bizType) {
-    searchForm.biz_type = props.bizType;
+  if (props.workloadType) {
+    searchForm.workload_type = props.workloadType;
   }
   await Promise.all([loadPackageList(), loadCloudAccounts()]);
 };
@@ -562,7 +562,7 @@ const loadCloudAccounts = async () => {
   } catch (error) {
     console.error("加载云账户列表失败:", error);
     cloudAccountOptions.value = [];
-    Message.error(error instanceof Error ? error.message : "加载云账户失败：请确认已登录且 moox-cloudnode 服务已部署");
+    Message.error(error instanceof Error ? error.message : "加载云账户失败：请确认已登录且 moox-cloudfunction 服务已部署");
   }
 };
 
@@ -580,13 +580,13 @@ const handlePageSizeChange = (pageSize: number) => {
 
 // 新增
 const onAdd = () => {
-  // 根据传入的 packageType 和 bizType 设置默认值
+  // 根据传入的 packageType 和 workloadType 设置默认值
   const defaultPackageType = resolvePackageType(props.packageType);
-  const defaultBizType = props.bizType || "";
+  const defaultWorkloadType = props.workloadType || "";
   Object.assign(uploadForm, {
     ...defaultUploadForm,
     package_type: defaultPackageType,
-    biz_type: defaultBizType,
+    workload_type: defaultWorkloadType,
     package_name: packageNameForType(defaultPackageType)
   });
   fileList.value = [];
@@ -885,7 +885,7 @@ const handleUploadOk = async () => {
   }
 };
 
-// 统一上传处理（独立 cloudnode 服务）
+// 统一上传处理（独立 cloudfunction 服务）
 const handleUpload = async (spaceId: string, isStale: () => boolean) => {
   try {
     const originalFilename = fileList.value[0]?.file?.name || "";

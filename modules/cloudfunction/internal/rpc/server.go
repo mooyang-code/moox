@@ -14,21 +14,21 @@ import (
 	"gorm.io/gorm"
 )
 
-// Service is the independent cloudnode service implementation.
+// Service is the independent cloudfunction service implementation.
 type Service struct {
-	pb.UnimplementedCloudNodeMgr
+	pb.UnimplementedCloudFunctionMgr
 	catalog            *store.CatalogRepository
 	clsEnvironment     clsEnvironment
 	credentialResolver interface {
 		Resolve(context.Context, store.CloudAccount) (cloudcredential.TencentCredential, error)
 	}
-	scfClientFactory      func(cloudcredential.TencentCredential) scfProvisioner
-	executeNodeBatchItem  func(context.Context, store.NodeBatchItem) (string, error)
-	nodeBatchTakenHook    func([]store.NodeBatchItem)
-	moduleMetrics         *report.ModuleMetrics
-	publishLeaseValidator CollectorPublishLeaseValidator
-	packageObjectsFactory func(store.CloudAccount, cloudcredential.TencentCredential) packageObjectStore
-	nodeBatchWorkers      sync.WaitGroup
+	scfClientFactory       func(cloudcredential.TencentCredential) scfProvisioner
+	executeFunctionJobItem func(context.Context, store.FunctionJobItem) (string, error)
+	functionJobTakenHook   func([]store.FunctionJobItem)
+	moduleMetrics          *report.ModuleMetrics
+	publishLeaseValidator  CollectorPublishLeaseValidator
+	packageObjectsFactory  func(store.CloudAccount, cloudcredential.TencentCredential) packageObjectStore
+	functionJobWorkers     sync.WaitGroup
 }
 
 type scfProvisioner interface {
@@ -54,7 +54,7 @@ func WithCollectorPublishLeaseValidator(validator CollectorPublishLeaseValidator
 	return func(s *Service) { s.publishLeaseValidator = validator }
 }
 
-// WithCLSEnvironment 让 CloudNode 在创建与更新 SCF 采集函数时自动补齐日志服务（CLS）上报环境。
+// WithCLSEnvironment 让 FunctionInstance 在创建与更新 SCF 采集函数时自动补齐日志服务（CLS）上报环境。
 func WithCLSEnvironment(provisioner clsEnvironment) Option {
 	return func(s *Service) { s.clsEnvironment = provisioner }
 }
@@ -70,7 +70,7 @@ func WithCredentialResolver(resolver interface {
 	return func(s *Service) { s.credentialResolver = resolver }
 }
 
-// New creates a cloudnode RPC service.
+// New creates a cloudfunction RPC service.
 func New(dbm *store.Store, opts ...Option) *Service {
 	svc := &Service{
 		catalog:               dbm.Catalog(),
@@ -97,8 +97,8 @@ func retErr(code pb.ErrorCode, msg string) *pb.RetInfo {
 
 func retFromError(err error) *pb.RetInfo {
 	switch {
-	case errors.Is(err, store.ErrPollingNodeNotFound):
-		return retErr(pb.ErrorCode_NOT_FOUND, "cloud node not found")
+	case errors.Is(err, store.ErrPollingInstanceNotFound):
+		return retErr(pb.ErrorCode_NOT_FOUND, "cloud instance not found")
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		return retErr(pb.ErrorCode_NOT_FOUND, "resource not found")
 	default:

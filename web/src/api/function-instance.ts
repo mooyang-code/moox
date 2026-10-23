@@ -1,11 +1,11 @@
 import { callControl, ControlRequestError } from "@/api/admin/http";
 export { withOptionalSpace } from "@/api/space-context";
 
-export interface CloudNode {
+export interface FunctionInstance {
   id?: number;
   space_id?: string;
-  node_id: string;
-  node_type: string;
+  instance_id: string;
+  function_type: string;
   trigger_type?: string;
   cloud_account_id: string;
   region: string;
@@ -15,9 +15,7 @@ export interface CloudNode {
   package_id?: string;
   package_version?: string;
   deployment_id?: string;
-  biz_type?: string;
-  tag?: string;
-  ip_address?: string;
+  workload_type?: string;
   metadata?: Record<string, unknown>;
   is_deleted?: boolean;
   create_time?: string;
@@ -28,7 +26,7 @@ export interface CloudRegion {
   code: string;
   name: string;
   tag: string;
-  max_nodes?: number;
+  max_instances?: number;
   max_namespaces_per_region?: number;
   max_functions_per_namespace?: number;
 }
@@ -43,11 +41,11 @@ export interface SCFFunctionCandidate {
   function: SCFFunctionRef;
   status: string;
   runtime: string;
-  function_type: string;
+  scf_type: string;
   package_id: string;
-  node_id: string;
+  instance_id: string;
   trigger_type: string;
-  biz_type: string;
+  workload_type: string;
   import_state: string | number;
   importable: boolean;
   reason: string;
@@ -65,7 +63,7 @@ export interface SCFPreviewResponse {
 
 export interface SCFFunctionImportResult {
   function: SCFFunctionRef;
-  node_id: string;
+  instance_id: string;
   action: string;
   error_message: string;
 }
@@ -79,7 +77,7 @@ export interface SCFImportResponse {
 }
 
 // SCF request-response calls may use the full 900s function timeout. Keep
-// the browser-side deadline aligned with the Admin/CloudNode transport budget.
+// the browser-side deadline aligned with the Admin/FunctionInstance transport budget.
 const scfSyncRequestConfig = { timeout: 960000 };
 
 export interface Page {
@@ -94,54 +92,53 @@ export interface PageResult {
   has_more?: boolean;
 }
 
-export interface GetNodeListRequest {
-  node_id?: string;
+export interface ListFunctionInstancesRequest {
+  instance_id?: string;
   cloud_account_id?: string;
   namespace?: string;
   region?: string;
-  node_type?: string;
+  function_type?: string;
   trigger_type?: string;
-  biz_type?: string;
-  tag?: string;
+  workload_type?: string;
   keyword?: string;
   page?: Page | number;
   page_size?: number;
 }
 
-export interface BatchDeleteNodesRequest {
+export interface SubmitDeleteFunctionInstancesRequest {
   space_id: string;
-  node_ids: string[];
-  node_snapshots: CloudNodeDeleteSnapshot[];
+  instance_ids: string[];
+  instance_snapshots: FunctionInstanceDeleteSnapshot[];
 }
 
-export interface CloudNodeDeleteSnapshot {
-  node_id: string;
+export interface FunctionInstanceDeleteSnapshot {
+  instance_id: string;
   package_id?: string;
   deployment_id?: string;
   modify_time?: string;
 }
 
-export type NodeBatchStatus =
-  | "NODE_BATCH_STATUS_PENDING"
-  | "NODE_BATCH_STATUS_RUNNING"
-  | "NODE_BATCH_STATUS_SUCCESS"
-  | "NODE_BATCH_STATUS_FAILED"
-  | "NODE_BATCH_STATUS_PARTIAL";
+export type FunctionJobStatus =
+  | "FUNCTION_JOB_STATUS_PENDING"
+  | "FUNCTION_JOB_STATUS_RUNNING"
+  | "FUNCTION_JOB_STATUS_SUCCESS"
+  | "FUNCTION_JOB_STATUS_FAILED"
+  | "FUNCTION_JOB_STATUS_PARTIAL";
 
-export type NodeBatchItemStatus =
-  | "NODE_BATCH_ITEM_STATUS_PENDING"
-  | "NODE_BATCH_ITEM_STATUS_RUNNING"
-  | "NODE_BATCH_ITEM_STATUS_SUCCESS"
-  | "NODE_BATCH_ITEM_STATUS_FAILED";
+export type FunctionJobItemStatus =
+  | "FUNCTION_JOB_ITEM_STATUS_PENDING"
+  | "FUNCTION_JOB_ITEM_STATUS_RUNNING"
+  | "FUNCTION_JOB_ITEM_STATUS_SUCCESS"
+  | "FUNCTION_JOB_ITEM_STATUS_FAILED";
 
-export interface SubmitNodeBatchResponse {
+export interface SubmitFunctionJobResponse {
   job_id: string;
   operation: string;
   total_count: number;
 }
 
-export interface NodeBatchSummary extends SubmitNodeBatchResponse {
-  status: NodeBatchStatus;
+export interface FunctionJobSummary extends SubmitFunctionJobResponse {
+  status: FunctionJobStatus;
   pending_count: number;
   running_count: number;
   success_count: number;
@@ -151,22 +148,22 @@ export interface NodeBatchSummary extends SubmitNodeBatchResponse {
   completed_at?: string;
 }
 
-export interface NodeBatchItemResult {
+export interface FunctionJobItemResult {
   item_id: string;
-  node_id: string;
-  status: NodeBatchItemStatus;
+  instance_id: string;
+  status: FunctionJobItemStatus;
   result_summary?: string;
   error_message?: string;
   started_at?: string;
   completed_at?: string;
 }
 
-export interface GetNodeBatchChangeResponse {
-  job: NodeBatchSummary;
-  items: NodeBatchItemResult[];
+export interface GetFunctionJobResponse {
+  job: FunctionJobSummary;
+  items: FunctionJobItemResult[];
 }
 
-export interface BatchDeleteNodesResponse {
+export interface DeleteFunctionInstancesResponse {
   processed_count: number;
 }
 
@@ -182,31 +179,31 @@ function normalizePageParams<T extends { page?: Page | number; page_size?: numbe
   return normalized;
 }
 
-export const getNodeList = async (
-  params: GetNodeListRequest = {}
-): Promise<{ items: CloudNode[]; total: number; page?: PageResult }> => {
-  const rsp = await callControl<GetNodeListRequest, { items?: CloudNode[]; page?: PageResult }>(
-    "cloudnode",
-    "GetNodeList",
+export const listFunctionInstances = async (
+  params: ListFunctionInstancesRequest = {}
+): Promise<{ items: FunctionInstance[]; total: number; page?: PageResult }> => {
+  const rsp = await callControl<ListFunctionInstancesRequest, { items?: FunctionInstance[]; page?: PageResult }>(
+    "cloudfunction",
+    "ListFunctionInstances",
     normalizePageParams(params)
   );
   return { items: rsp.items ?? [], total: rsp.page?.total ?? 0, page: rsp.page };
 };
 
 const BATCH_STATUS_NAMES = [
-  "NODE_BATCH_STATUS_UNSPECIFIED",
-  "NODE_BATCH_STATUS_PENDING",
-  "NODE_BATCH_STATUS_RUNNING",
-  "NODE_BATCH_STATUS_SUCCESS",
-  "NODE_BATCH_STATUS_FAILED",
-  "NODE_BATCH_STATUS_PARTIAL"
+  "FUNCTION_JOB_STATUS_UNSPECIFIED",
+  "FUNCTION_JOB_STATUS_PENDING",
+  "FUNCTION_JOB_STATUS_RUNNING",
+  "FUNCTION_JOB_STATUS_SUCCESS",
+  "FUNCTION_JOB_STATUS_FAILED",
+  "FUNCTION_JOB_STATUS_PARTIAL"
 ];
 const BATCH_ITEM_STATUS_NAMES = [
-  "NODE_BATCH_ITEM_STATUS_UNSPECIFIED",
-  "NODE_BATCH_ITEM_STATUS_PENDING",
-  "NODE_BATCH_ITEM_STATUS_RUNNING",
-  "NODE_BATCH_ITEM_STATUS_SUCCESS",
-  "NODE_BATCH_ITEM_STATUS_FAILED"
+  "FUNCTION_JOB_ITEM_STATUS_UNSPECIFIED",
+  "FUNCTION_JOB_ITEM_STATUS_PENDING",
+  "FUNCTION_JOB_ITEM_STATUS_RUNNING",
+  "FUNCTION_JOB_ITEM_STATUS_SUCCESS",
+  "FUNCTION_JOB_ITEM_STATUS_FAILED"
 ];
 
 // 后端 JSON 以数字输出枚举；在 API 边界统一转换为枚举名，页面只比较名称。
@@ -216,31 +213,31 @@ const enumName = <T extends string>(value: unknown, names: string[]): T => {
   return value as T;
 };
 
-export const getNodeBatchChange = async (jobId: string): Promise<GetNodeBatchChangeResponse> => {
-  const rsp = await callControl<{ job_id: string }, GetNodeBatchChangeResponse>("cloudnode", "GetNodeBatchChange", {
+export const getFunctionJob = async (jobId: string): Promise<GetFunctionJobResponse> => {
+  const rsp = await callControl<{ job_id: string }, GetFunctionJobResponse>("cloudfunction", "GetFunctionJob", {
     job_id: jobId
   });
   return {
     ...rsp,
-    job: { ...rsp.job, status: enumName<NodeBatchStatus>(rsp.job.status, BATCH_STATUS_NAMES) },
+    job: { ...rsp.job, status: enumName<FunctionJobStatus>(rsp.job.status, BATCH_STATUS_NAMES) },
     items: (rsp.items ?? []).map(item => ({
       ...item,
-      status: enumName<NodeBatchItemStatus>(item.status, BATCH_ITEM_STATUS_NAMES)
+      status: enumName<FunctionJobItemStatus>(item.status, BATCH_ITEM_STATUS_NAMES)
     }))
   };
 };
 
-export const batchDeleteNodes = async (
-  data: BatchDeleteNodesRequest,
+export const deleteFunctionInstances = async (
+  data: SubmitDeleteFunctionInstancesRequest,
   options: { signal?: AbortSignal } = {}
-): Promise<BatchDeleteNodesResponse> => {
+): Promise<DeleteFunctionInstancesResponse> => {
   const spaceId = data.space_id.trim();
-  if (!spaceId) throw new Error("删除采集云节点时必须指定空间");
-  const snapshots = new Map(data.node_snapshots.map(snapshot => [snapshot.node_id, snapshot]));
+  if (!spaceId) throw new Error("删除采集云函数实例时必须指定空间");
+  const snapshots = new Map(data.instance_snapshots.map(snapshot => [snapshot.instance_id, snapshot]));
   if (
-    data.node_ids.length === 0 ||
-    snapshots.size !== data.node_ids.length ||
-    data.node_ids.some(nodeId => !snapshots.has(nodeId))
+    data.instance_ids.length === 0 ||
+    snapshots.size !== data.instance_ids.length ||
+    data.instance_ids.some(instanceId => !snapshots.has(instanceId))
   ) {
     throw new Error("删除目标快照不完整，请刷新后重新选择");
   }
@@ -290,11 +287,11 @@ export const batchDeleteNodes = async (
       });
   }, 1_000);
   try {
-    for (const snapshot of data.node_snapshots) {
+    for (const snapshot of data.instance_snapshots) {
       signal?.throwIfAborted();
       await assertCurrentDeleteSnapshot(spaceId, snapshot, signal);
     }
-    for (let offset = 0; offset < data.node_ids.length; offset += 100) {
+    for (let offset = 0; offset < data.instance_ids.length; offset += 100) {
       signal?.throwIfAborted();
       if (leaseError) break;
       try {
@@ -302,16 +299,16 @@ export const batchDeleteNodes = async (
         unknownSubmission = true;
         const submitted = await waitWithAbort(
           callControl<
-            { node_ids: string[]; collector_publish_lease_id: string; collector_publish_fencing_token: string },
-            SubmitNodeBatchResponse
-          >("cloudnode", "SubmitDeleteNodes", {
-            node_ids: data.node_ids.slice(offset, offset + 100),
+            { instance_ids: string[]; collector_publish_lease_id: string; collector_publish_fencing_token: string },
+            SubmitFunctionJobResponse
+          >("cloudfunction", "SubmitDeleteFunctionInstances", {
+            instance_ids: data.instance_ids.slice(offset, offset + 100),
             collector_publish_lease_id: lease.lease_id,
             collector_publish_fencing_token: String(lease.fencing_token)
           }),
           signal
         );
-        if (!submitted.job_id) throw new Error("删除批次响应缺少 job_id，请在云节点批次中查看结果");
+        if (!submitted.job_id) throw new Error("删除批次响应缺少 job_id，请在云函数实例批次中查看结果");
         pending.add(submitted.job_id);
         unknownSubmission = false;
       } catch (error) {
@@ -324,17 +321,17 @@ export const batchDeleteNodes = async (
       for (const jobId of pending) {
         if (unresolvedPollErrors.has(jobId)) continue;
         try {
-          const status = await waitWithAbort(getNodeBatchChange(jobId), signal);
+          const status = await waitWithAbort(getFunctionJob(jobId), signal);
           consecutivePollFailures.delete(jobId);
           if (
-            status.job.status === "NODE_BATCH_STATUS_SUCCESS" ||
-            status.job.status === "NODE_BATCH_STATUS_FAILED" ||
-            status.job.status === "NODE_BATCH_STATUS_PARTIAL"
+            status.job.status === "FUNCTION_JOB_STATUS_SUCCESS" ||
+            status.job.status === "FUNCTION_JOB_STATUS_FAILED" ||
+            status.job.status === "FUNCTION_JOB_STATUS_PARTIAL"
           ) {
             pending.delete(jobId);
             processedCount += status.job.success_count ?? 0;
             failedCount += status.job.failed_count ?? 0;
-            if (status.job.status !== "NODE_BATCH_STATUS_SUCCESS" && !submissionError) {
+            if (status.job.status !== "FUNCTION_JOB_STATUS_SUCCESS" && !submissionError) {
               submissionError = new Error("删除云函数失败");
             }
           }
@@ -377,13 +374,16 @@ export const batchDeleteNodes = async (
 
 async function assertCurrentDeleteSnapshot(
   spaceId: string,
-  expected: CloudNodeDeleteSnapshot,
+  expected: FunctionInstanceDeleteSnapshot,
   signal?: AbortSignal
 ): Promise<void> {
   const pageSize = 100;
   for (let page = 1; ; page++) {
-    const current = await waitWithAbort(getNodeList({ node_id: expected.node_id, page, page_size: pageSize }), signal);
-    const match = current.items.find(item => item.node_id === expected.node_id);
+    const current = await waitWithAbort(
+      listFunctionInstances({ instance_id: expected.instance_id, page, page_size: pageSize }),
+      signal
+    );
+    const match = current.items.find(item => item.instance_id === expected.instance_id);
     if (match) {
       const sameIdentity =
         (match.space_id ?? spaceId) === spaceId &&
@@ -391,10 +391,10 @@ async function assertCurrentDeleteSnapshot(
         (match.deployment_id ?? "") === (expected.deployment_id ?? "") &&
         (match.modify_time ?? "") === (expected.modify_time ?? "");
       if (sameIdentity) return;
-      throw new Error(`节点 ${expected.node_id} 已发生变化，请刷新后重新选择删除目标`);
+      throw new Error(`节点 ${expected.instance_id} 已发生变化，请刷新后重新选择删除目标`);
     }
     if (!current.page?.has_more) {
-      throw new Error(`节点 ${expected.node_id} 已不存在，请刷新后重新选择删除目标`);
+      throw new Error(`节点 ${expected.instance_id} 已不存在，请刷新后重新选择删除目标`);
     }
   }
 }
@@ -411,7 +411,7 @@ function waitWithAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<
 
 export const listCloudRegions = async (provider = "tencent"): Promise<CloudRegion[]> => {
   const rsp = await callControl<{ provider?: string }, { regions?: CloudRegion[] }>(
-    "cloudnode",
+    "cloudfunction",
     "ListCloudRegions",
     provider ? { provider } : {}
   );
@@ -420,7 +420,7 @@ export const listCloudRegions = async (provider = "tencent"): Promise<CloudRegio
 
 export const previewSCFFunctions = async (accountId: string): Promise<SCFPreviewResponse> => {
   const rsp = await callControl<{ account_id: string }, SCFPreviewResponse>(
-    "cloudnode",
+    "cloudfunction",
     "PreviewSCFFunctions",
     {
       account_id: accountId
@@ -432,7 +432,7 @@ export const previewSCFFunctions = async (accountId: string): Promise<SCFPreview
 
 export const importSCFFunctions = async (accountId: string, functions: SCFFunctionRef[]): Promise<SCFImportResponse> => {
   const rsp = await callControl<{ account_id: string; functions: SCFFunctionRef[] }, SCFImportResponse>(
-    "cloudnode",
+    "cloudfunction",
     "ImportSCFFunctions",
     { account_id: accountId, functions },
     scfSyncRequestConfig

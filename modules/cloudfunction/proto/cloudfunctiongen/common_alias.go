@@ -1,4 +1,4 @@
-package cloudnodepb
+package cloudfunctionpb
 
 import commonpb "github.com/mooyang-code/moox/packages/commonpb"
 

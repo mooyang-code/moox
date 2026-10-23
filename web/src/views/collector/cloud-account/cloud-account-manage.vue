@@ -66,7 +66,7 @@
                   编辑
                 </a-button>
                 <a-popconfirm
-                  content="确定要删除该云账户吗？删除后相关的云函数节点将无法使用。"
+                  content="确定要删除该云账户吗？删除后相关的云函数实例将无法使用。"
                   ok-text="确定"
                   cancel-text="取消"
                   @ok="() => onDelete(record)"
@@ -221,7 +221,7 @@ const loadAccountList = async () => {
     total.value = accountList.value.length;
   } catch (error) {
     console.error("加载云账户列表失败:", error);
-    Message.error(error instanceof Error ? error.message : "加载云账户失败：请确认已登录且 moox-cloudnode 服务已部署");
+    Message.error(error instanceof Error ? error.message : "加载云账户失败：请确认已登录且 moox-cloudfunction 服务已部署");
   } finally {
     loading.value = false;
   }

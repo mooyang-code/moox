@@ -17,7 +17,7 @@ for module in \
   modules/hostagent \
   modules/monitor \
   modules/collector \
-  modules/cloudnode \
+  modules/cloudfunction \
   modules/storage \
   modules/factor \
   modules/trade

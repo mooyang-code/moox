@@ -2,7 +2,7 @@
   <div class="moox-page">
     <a-spin :loading="loading">
       <div class="moox-inner">
-        <a-space class="cloud-node-action-bar" wrap>
+        <a-space class="cloud-function-action-bar" wrap>
           <a-button type="primary" status="danger" @click="batchDelete" :disabled="batchChangeProcessing">
             <template #icon><icon-delete /></template>
             <span>批量删除</span>
@@ -17,16 +17,16 @@
           </a-button>
           <a-button type="outline" @click="onSCFSyncOpen">
             <template #icon><icon-sync /></template>
-            <span>同步云节点</span>
+            <span>同步云函数实例</span>
           </a-button>
         </a-space>
-        <a-space class="cloud-node-filter-bar" wrap>
+        <a-space class="cloud-function-filter-bar" wrap>
           <a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear>
             <a-option v-for="account in cloudAccountOptions" :key="account.account_id" :value="account.account_id">
               {{ account.account_name }} ({{ getProviderName(account.provider) }})
             </a-option>
           </a-select>
-          <a-input v-model="form.nodeId" placeholder="请输入节点ID" allow-clear />
+          <a-input v-model="form.instanceId" placeholder="请输入实例ID" allow-clear />
           <a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear>
             <a-option v-for="region in regionOptions" :key="region.code" :value="region.code">
               {{ region.name }}
@@ -40,7 +40,7 @@
               </a-tag>
             </a-option>
           </a-select>
-          <a-select placeholder="节点类型" v-model="form.nodeType" style="width: 180px" allow-clear>
+          <a-select placeholder="实例类型" v-model="form.functionType" style="width: 180px" allow-clear>
             <a-option value="scf-event">云函数（事件型）</a-option>
             <a-option value="scf-web">云函数（Web型）</a-option>
             <a-option value="server">服务器</a-option>
@@ -65,10 +65,10 @@
               <span>
                 {{
                   batchChangeProcessing
-                    ? "云节点批量变更处理中"
+                    ? "云函数实例批量变更处理中"
                     : batchPollingTimedOut
                       ? "已停止自动查询任务进度"
-                      : "云节点批量变更已完成"
+                      : "云函数实例批量变更已完成"
                 }}
               </span>
             </a-space>
@@ -100,17 +100,17 @@
           :closable="true"
           @close="clearDeleteSelection"
         >
-          <template #title> 已选择 {{ selectedKeys.length }} 个节点 </template>
+          <template #title> 已选择 {{ selectedKeys.length }} 个实例 </template>
           <div style="font-size: 12px; color: #86909c">
-            提示：批量操作只会对当前选中的节点生效。切换页面时会保留其他页的选择状态。
+            提示：批量操作只会对当前选中的实例生效。切换页面时会保留其他页的选择状态。
           </div>
         </a-alert>
 
-        <CloudNodeTable :loading="loading" :selected-count="selectedKeys.length">
+        <FunctionInstanceTable :loading="loading" :selected-count="selectedKeys.length">
           <a-table
-            row-key="node_id"
+            row-key="instance_id"
             size="small"
-            :data="cloudNodeList"
+            :data="cloudFunctionList"
             :bordered="{ cell: true }"
             :loading="loading"
             :scroll="{ x: '100%', y: '100%', minWidth: 1200 }"
@@ -123,16 +123,16 @@
             @page-size-change="onPageSizeChange"
           >
             <template #columns>
-              <a-table-column title="节点ID" data-index="node_id" :width="360">
+              <a-table-column title="实例ID" data-index="instance_id" :width="360">
                 <template #cell="{ record }">
-                  <a-link class="node-id-link" @click="onViewNodeDetail(record)">{{ record.node_id }}</a-link>
+                  <a-link class="instance-id-link" @click="onViewInstanceDetail(record)">{{ record.instance_id }}</a-link>
                 </template>
               </a-table-column>
               <a-table-column title="命名空间" data-index="namespace" :width="90"></a-table-column>
-              <a-table-column title="节点类型" data-index="node_type" :width="135">
+              <a-table-column title="实例类型" data-index="function_type" :width="135">
                 <template #cell="{ record }">
-                  <a-tag size="small" :color="getNodeTypeColor(record.node_type)">
-                    {{ getNodeTypeLabel(record.node_type) }}
+                  <a-tag size="small" :color="getFunctionTypeColor(record.function_type)">
+                    {{ getFunctionTypeLabel(record.function_type) }}
                   </a-tag>
                 </template>
               </a-table-column>
@@ -146,8 +146,12 @@
               </a-table-column>
               <a-table-column title="标签" data-index="tag" :width="80">
                 <template #cell="{ record }">
-                  <a-tag v-if="record.tag" size="small" :color="record.tag === '国内' ? 'blue' : 'orange'">
-                    {{ record.tag }}
+                  <a-tag
+                    v-if="getRegionTag(record.region)"
+                    size="small"
+                    :color="getRegionTag(record.region) === '国内' ? 'blue' : 'orange'"
+                  >
+                    {{ getRegionTag(record.region) }}
                   </a-tag>
                   <span v-else>-</span>
                 </template>
@@ -167,13 +171,13 @@
               <a-table-column title="操作" :width="72" align="center" fixed="right">
                 <template #cell="{ record }">
                   <a-popconfirm
-                    content="确定要删除该节点吗？删除后将无法恢复。"
+                    content="确定要删除该实例吗？删除后将无法恢复。"
                     ok-text="确定"
                     cancel-text="取消"
                     @ok="() => onDelete(record)"
                     position="tr"
                   >
-                    <a-tooltip content="删除节点">
+                    <a-tooltip content="删除实例">
                       <a-button type="primary" size="mini" status="danger" :disabled="batchChangeProcessing">
                         <template #icon><icon-delete /></template>
                       </a-button>
@@ -183,7 +187,7 @@
               </a-table-column>
             </template>
           </a-table>
-        </CloudNodeTable>
+        </FunctionInstanceTable>
       </div>
     </a-spin>
 
@@ -197,32 +201,32 @@
       v-model="functionPackageManageVisible"
       mode="modal"
       :package-type="currentPackageType"
-      :biz-type="currentBizType"
+      :biz-type="currentWorkloadType"
       @refresh="loadData"
     />
 
-    <!-- 节点详情弹窗 -->
-    <a-modal v-model:visible="nodeDetailVisible" title="云函数节点详情" :width="800" :footer="false" :mask-closable="true">
-      <div v-if="selectedNodeDetail">
+    <!-- 实例详情弹窗 -->
+    <a-modal v-model:visible="instanceDetailVisible" title="云函数实例详情" :width="800" :footer="false" :mask-closable="true">
+      <div v-if="selectedInstanceDetail">
         <a-descriptions :column="2" bordered :label-style="{ fontWeight: 'bold', width: '140px' }">
-          <a-descriptions-item label="节点ID">
-            {{ selectedNodeDetail.node_id }}
+          <a-descriptions-item label="实例ID">
+            {{ selectedInstanceDetail.instance_id }}
           </a-descriptions-item>
           <a-descriptions-item label="云账户ID">
-            {{ selectedNodeDetail.cloud_account_id }}
+            {{ selectedInstanceDetail.cloud_account_id }}
           </a-descriptions-item>
           <a-descriptions-item label="命名空间">
-            {{ selectedNodeDetail.namespace || "-" }}
+            {{ selectedInstanceDetail.namespace || "-" }}
           </a-descriptions-item>
-          <a-descriptions-item label="节点类型">
-            <a-tag bordered size="small" :color="getNodeTypeColor(selectedNodeDetail.node_type)">
-              {{ getNodeTypeLabel(selectedNodeDetail.node_type) }}
+          <a-descriptions-item label="实例类型">
+            <a-tag bordered size="small" :color="getFunctionTypeColor(selectedInstanceDetail.function_type)">
+              {{ getFunctionTypeLabel(selectedInstanceDetail.function_type) }}
             </a-tag>
           </a-descriptions-item>
           <a-descriptions-item label="触发方式">
-            {{ getTriggerTypeLabel(selectedNodeDetail.trigger_type) }}
+            {{ getTriggerTypeLabel(selectedInstanceDetail.trigger_type) }}
           </a-descriptions-item>
-          <template v-if="selectedNodeDetail.trigger_type === 'timer'">
+          <template v-if="selectedInstanceDetail.trigger_type === 'timer'">
             <a-descriptions-item label="Timer 状态">
               <a-tag size="small" :color="timerAvailableColor(selectedTimerMetadata.timer_available_status)">
                 {{ timerAvailableLabel(selectedTimerMetadata.timer_available_status) }}
@@ -248,20 +252,24 @@
             </a-descriptions-item>
           </template>
           <a-descriptions-item label="地区">
-            {{ getRegionName(selectedNodeDetail.region) }}
+            {{ getRegionName(selectedInstanceDetail.region) }}
           </a-descriptions-item>
           <a-descriptions-item label="标签">
-            <a-tag v-if="selectedNodeDetail.tag" size="small" :color="selectedNodeDetail.tag === '国内' ? 'blue' : 'orange'">
-              {{ selectedNodeDetail.tag }}
+            <a-tag
+              v-if="getRegionTag(selectedInstanceDetail.region)"
+              size="small"
+              :color="getRegionTag(selectedInstanceDetail.region) === '国内' ? 'blue' : 'orange'"
+            >
+              {{ getRegionTag(selectedInstanceDetail.region) }}
             </a-tag>
             <span v-else>-</span>
           </a-descriptions-item>
           <a-descriptions-item label="代码包版本">
-            {{ selectedNodeDetail.package_version || "-" }}
+            {{ selectedInstanceDetail.package_version || "-" }}
           </a-descriptions-item>
           <a-descriptions-item label="元数据" :span="2">
             <div
-              v-if="selectedNodeDetail.metadata"
+              v-if="selectedInstanceDetail.metadata"
               style="
                 max-height: 200px;
                 overflow-y: auto;
@@ -272,15 +280,15 @@
                 border-radius: 4px;
               "
             >
-              {{ formatMetadata(selectedNodeDetail.metadata) }}
+              {{ formatMetadata(selectedInstanceDetail.metadata) }}
             </div>
             <span v-else>-</span>
           </a-descriptions-item>
           <a-descriptions-item label="创建时间">
-            {{ formatDateTime(selectedNodeDetail.create_time) }}
+            {{ formatDateTime(selectedInstanceDetail.create_time) }}
           </a-descriptions-item>
           <a-descriptions-item label="更新时间">
-            {{ formatDateTime(selectedNodeDetail.modify_time) }}
+            {{ formatDateTime(selectedInstanceDetail.modify_time) }}
           </a-descriptions-item>
         </a-descriptions>
       </div>
@@ -375,40 +383,40 @@ import { Message, Modal } from "@arco-design/web-vue";
 import { getFunctionPackageDetail, downloadPackageByURL, type FunctionPackage } from "@/api/function-package";
 import { getCloudAccountList, type CloudAccount } from "@/api/cloud-account";
 import {
-  batchDeleteNodes,
-  getNodeBatchChange,
-  getNodeList,
+  deleteFunctionInstances,
+  getFunctionJob,
+  listFunctionInstances,
   listCloudRegions,
-  type BatchDeleteNodesRequest,
-  type GetNodeBatchChangeResponse
-} from "@/api/cloud-node";
+  type SubmitDeleteFunctionInstancesRequest,
+  type GetFunctionJobResponse
+} from "@/api/function-instance";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { getNodeBatchJobId, setNodeBatchJobId } from "@/utils/cloud-node-batch-change";
+import { getFunctionJobId, setFunctionJobId } from "@/utils/function-job-change";
 import CloudAccountManage from "../cloud-account/cloud-account-manage.vue";
 import FunctionPackageManage from "./function-package-manage.vue";
 import SCFSyncDialog from "./scf-sync-dialog.vue";
-import CloudNodeTable from "./components/cloud-node-table.vue";
-import { createCloudNodeBatchPoller } from "./cloud-node-batch-poller";
-import { captureDeleteSelection, updateDeleteSelection, type CloudNodeDeleteSnapshotMap } from "./delete-selection";
+import FunctionInstanceTable from "./components/function-instance-table.vue";
+import { createFunctionJobPoller } from "./function-job-poller";
+import { captureDeleteSelection, updateDeleteSelection, type FunctionInstanceDeleteSnapshotMap } from "./delete-selection";
 import {
   formatDateTime,
   formatFileSize,
   formatMetadata,
   getBatchChangeTypeText,
-  getNodeTypeColor,
+  getFunctionTypeColor,
   getTriggerTypeLabel,
-  getNodeTypeLabel,
+  getFunctionTypeLabel,
   getPackageStatusColor,
   getPackageStatusLabel,
   getPackageTypeColor,
   getPackageTypeLabel,
   getProviderName,
-  normalizeCloudNodes,
+  normalizeFunctionInstances,
   parseMetadata,
-  type CloudNode,
+  type FunctionInstance,
   type RegionInfo
-} from "./cloud-node-model";
+} from "./function-instance-model";
 
 // 状态管理
 const spaceStore = useSpaceStore();
@@ -419,22 +427,23 @@ const loading = ref(false);
 const listGuard = createLatestRequestGuard();
 const batchChangeProcessing = ref(false);
 const batchPollingTimedOut = ref(false);
-const currentBatchChangeStatus = ref<GetNodeBatchChangeResponse | null>(null);
-const batchPoller = createCloudNodeBatchPoller(getNodeBatchChange);
+const currentBatchChangeStatus = ref<GetFunctionJobResponse | null>(null);
+const batchPoller = createFunctionJobPoller(getFunctionJob);
 
 const form = reactive({
   cloudAccountId: "",
-  nodeId: "",
+  instanceId: "",
   region: "",
-  nodeType: ""
+  functionType: ""
 });
 
 // 数据列表
-const cloudNodeList = ref<CloudNode[]>([]);
+const cloudFunctionList = ref<FunctionInstance[]>([]);
 const selectedKeys = ref<string[]>([]);
-const selectedNodeSnapshots = ref<CloudNodeDeleteSnapshotMap>({});
+const selectedInstanceSnapshots = ref<FunctionInstanceDeleteSnapshotMap>({});
 const cloudAccountOptions = ref<CloudAccount[]>([]);
-const regionOptions = ref<RegionInfo[]>([]); // 地区选项
+const regionOptions = ref<RegionInfo[]>([]);
+const getRegionTag = (region: string) => regionOptions.value.find(item => item.code === region)?.tag || ""; // 地区选项
 const scfSyncVisible = ref(false);
 const REGION_UNLIMITED = "all";
 
@@ -459,16 +468,16 @@ const paginationConfig = computed(() => ({
   pageSizeOptions: pagination.value.pageSizeOptions
 }));
 
-// 当前页面是采集云节点管理页，代码包固定按采集器类型过滤。
+// 当前页面是采集云函数实例管理页，代码包固定按采集器类型过滤。
 const currentPackageType = computed(() => 1);
 
-// Short-lived market-fetch SCF nodes are registered under this shared type.
-const currentBizType = computed(() => "market_fetcher");
+// Short-lived market-fetch SCF instances are registered under this shared type.
+const currentWorkloadType = computed(() => "market_fetcher");
 
 // 生命周期钩子
 onMounted(async () => {
-  // 根据路由设置默认的节点类型筛选条件
-  form.nodeType = "";
+  // 根据路由设置默认的实例类型筛选条件
+  form.functionType = "";
 
   await spaceStore.loadSpaces();
   if (selectedSpaceId.value) {
@@ -478,7 +487,7 @@ onMounted(async () => {
   }
   await loadCloudAccounts();
   await loadRegions(); // 加载地区列表
-  const jobId = getNodeBatchJobId(route.query);
+  const jobId = getFunctionJobId(route.query);
   if (jobId) {
     await startBatchPolling(jobId);
   }
@@ -492,18 +501,18 @@ watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   currentBatchChangeStatus.value = null;
   batchChangeProcessing.value = false;
   batchPollingTimedOut.value = false;
-  if (getNodeBatchJobId(route.query)) {
+  if (getFunctionJobId(route.query)) {
     await replaceRouteJobId();
   }
   // 切换空间：立即清空列表、分页与详情，避免旧空间数据残留
   loading.value = false;
-  cloudNodeList.value = [];
+  cloudFunctionList.value = [];
   pagination.value.total = 0;
-  selectedNodeDetail.value = null;
+  selectedInstanceDetail.value = null;
   pagination.value.current = 1;
   clearDeleteSelection();
   if (!spaceId) {
-    cloudNodeList.value = [];
+    cloudFunctionList.value = [];
     pagination.value.total = 0;
     return;
   }
@@ -516,15 +525,15 @@ onBeforeUnmount(() => {
   currentBatchChangeStatus.value = null;
 });
 
-const replaceRouteJobId = (jobId?: string) => router.replace({ query: setNodeBatchJobId(route.query, jobId) });
+const replaceRouteJobId = (jobId?: string) => router.replace({ query: setFunctionJobId(route.query, jobId) });
 
-const showBatchResult = (data: GetNodeBatchChangeResponse) => {
+const showBatchResult = (data: GetFunctionJobResponse) => {
   if (data.job.failed_count === 0) {
-    Message.success(`${getBatchChangeTypeText(data.job.operation)}成功！共处理 ${data.job.total_count} 个节点`);
+    Message.success(`${getBatchChangeTypeText(data.job.operation)}成功！共处理 ${data.job.total_count} 个实例`);
     return;
   }
 
-  const failedItems = data.items.filter(item => item.status === "NODE_BATCH_ITEM_STATUS_FAILED");
+  const failedItems = data.items.filter(item => item.status === "FUNCTION_JOB_ITEM_STATUS_FAILED");
   const content = () =>
     h("div", { style: { maxHeight: "400px", overflowY: "auto" } }, [
       h("div", { style: { marginBottom: "var(--moox-space-3)" } }, [
@@ -547,7 +556,7 @@ const showBatchResult = (data: GetNodeBatchChangeResponse) => {
             }
           },
           [
-            h("div", { style: { fontWeight: "bold" } }, item.node_id || item.item_id),
+            h("div", { style: { fontWeight: "bold" } }, item.instance_id || item.item_id),
             h("div", { style: { color: "#ff4d4f", fontSize: "12px" } }, item.error_message || "未知错误")
           ]
         )
@@ -555,7 +564,7 @@ const showBatchResult = (data: GetNodeBatchChangeResponse) => {
     ]);
 
   Modal.error({
-    title: data.job.status === "NODE_BATCH_STATUS_PARTIAL" ? "批量变更部分失败" : "批量变更失败",
+    title: data.job.status === "FUNCTION_JOB_STATUS_PARTIAL" ? "批量变更部分失败" : "批量变更失败",
     content,
     width: 700,
     maskClosable: false
@@ -579,7 +588,7 @@ const startBatchPolling = async (jobId: string) => {
       showBatchResult(data);
     },
     onError: error => {
-      console.warn("查询云节点批量变更进度失败，将继续重试:", error);
+      console.warn("查询云函数实例批量变更进度失败，将继续重试:", error);
     },
     onPollingTimeout: () => {
       batchChangeProcessing.value = false;
@@ -601,26 +610,26 @@ const handleCloseBatchChangeAlert = () => {
 // 批量删除
 const batchDelete = () => {
   if (selectedKeys.value.length === 0) {
-    Message.warning("请选择要删除的节点");
+    Message.warning("请选择要删除的实例");
     return;
   }
 
-  const nodeIds = [...selectedKeys.value];
-  let request: BatchDeleteNodesRequest;
+  const instanceIds = [...selectedKeys.value];
+  let request: SubmitDeleteFunctionInstancesRequest;
   try {
     request = {
       space_id: selectedSpaceId.value ?? "",
-      node_ids: nodeIds,
-      node_snapshots: captureDeleteSelection(nodeIds, selectedNodeSnapshots.value)
+      instance_ids: instanceIds,
+      instance_snapshots: captureDeleteSelection(instanceIds, selectedInstanceSnapshots.value)
     };
   } catch (error) {
-    Message.warning(error instanceof Error ? error.message : "节点身份快照不完整，请刷新后重新选择");
+    Message.warning(error instanceof Error ? error.message : "实例身份快照不完整，请刷新后重新选择");
     return;
   }
 
   Modal.warning({
     title: "批量删除确认",
-    content: `确定要删除选中的 ${selectedKeys.value.length} 个节点吗？删除后将无法恢复。`,
+    content: `确定要删除选中的 ${selectedKeys.value.length} 个实例吗？删除后将无法恢复。`,
     hideCancel: false,
     onOk: async () => {
       await executeBatchDelete(request);
@@ -629,13 +638,13 @@ const batchDelete = () => {
 };
 
 // 执行批量删除
-const executeBatchDelete = async (request: BatchDeleteNodesRequest) => {
+const executeBatchDelete = async (request: SubmitDeleteFunctionInstancesRequest) => {
   try {
-    const total = request.node_ids.length;
-    const rsp = await batchDeleteNodes(request);
+    const total = request.instance_ids.length;
+    const rsp = await deleteFunctionInstances(request);
     clearDeleteSelection();
     await loadData();
-    Message.success(`已删除 ${rsp.processed_count} / ${total} 个节点`);
+    Message.success(`已删除 ${rsp.processed_count} / ${total} 个实例`);
   } catch (error: any) {
     console.error("批量删除失败:", error);
     Message.error("批量删除失败: " + (error?.message || "未知错误"));
@@ -645,7 +654,7 @@ const executeBatchDelete = async (request: BatchDeleteNodesRequest) => {
 // 加载数据（使用后端分页）
 const loadData = async (showEmptyTip = false) => {
   if (!selectedSpaceId.value) {
-    cloudNodeList.value = [];
+    cloudFunctionList.value = [];
     pagination.value.total = 0;
     return;
   }
@@ -653,21 +662,21 @@ const loadData = async (showEmptyTip = false) => {
   const request = listGuard.begin();
   loading.value = true;
   try {
-    const response = await getNodeList({
-      node_id: form.nodeId,
+    const response = await listFunctionInstances({
+      instance_id: form.instanceId,
       cloud_account_id: form.cloudAccountId,
       region: form.region,
-      node_type: form.nodeType,
-      biz_type: currentBizType.value, // 根据路由添加业务类型过滤
+      function_type: form.functionType,
+      workload_type: currentWorkloadType.value, // 根据路由添加业务类型过滤
       page: pagination.value.current,
       page_size: pagination.value.pageSize
     });
 
     if (!request.isLatest() || requestSpaceId !== selectedSpaceId.value) return;
     const data = response.items || [];
-    cloudNodeList.value = normalizeCloudNodes(Array.isArray(data) ? data : [data].filter(Boolean));
-    pagination.value.total = response.total || cloudNodeList.value.length;
-    if (showEmptyTip && cloudNodeList.value.length === 0) {
+    cloudFunctionList.value = normalizeFunctionInstances(Array.isArray(data) ? data : [data].filter(Boolean));
+    pagination.value.total = response.total || cloudFunctionList.value.length;
+    if (showEmptyTip && cloudFunctionList.value.length === 0) {
       Message.info("查询结果为空");
     }
   } catch (error) {
@@ -686,7 +695,7 @@ const loadCloudAccounts = async () => {
     cloudAccountOptions.value = Array.isArray(accounts) ? accounts : [accounts].filter(Boolean);
   } catch (error) {
     console.error("加载云账户失败:", error);
-    Message.error(error instanceof Error ? error.message : "加载云账户失败：请确认已登录且 moox-cloudnode 服务已部署");
+    Message.error(error instanceof Error ? error.message : "加载云账户失败：请确认已登录且 moox-cloudfunction 服务已部署");
   }
 };
 
@@ -745,58 +754,58 @@ const select = (_rowKeys: string[], rowKey: string) => {
   const index = selectedKeys.value.indexOf(rowKey);
   if (index > -1) {
     selectedKeys.value.splice(index, 1);
-    const row = cloudNodeList.value.find(node => node.node_id === rowKey);
-    if (row) selectedNodeSnapshots.value = updateDeleteSelection(selectedNodeSnapshots.value, [row], false);
+    const row = cloudFunctionList.value.find(instance => instance.instance_id === rowKey);
+    if (row) selectedInstanceSnapshots.value = updateDeleteSelection(selectedInstanceSnapshots.value, [row], false);
   } else {
-    const row = cloudNodeList.value.find(node => node.node_id === rowKey);
+    const row = cloudFunctionList.value.find(instance => instance.instance_id === rowKey);
     if (row) {
       selectedKeys.value.push(rowKey);
-      selectedNodeSnapshots.value = updateDeleteSelection(selectedNodeSnapshots.value, [row], true);
+      selectedInstanceSnapshots.value = updateDeleteSelection(selectedInstanceSnapshots.value, [row], true);
     }
   }
 };
 
 const selectAll = (checked: boolean) => {
   if (checked) {
-    const currentPageKeys = cloudNodeList.value.map(item => item.node_id);
+    const currentPageKeys = cloudFunctionList.value.map(item => item.instance_id);
     currentPageKeys.forEach(key => {
       if (!selectedKeys.value.includes(key)) {
         selectedKeys.value.push(key);
       }
     });
-    selectedNodeSnapshots.value = updateDeleteSelection(selectedNodeSnapshots.value, cloudNodeList.value, true);
+    selectedInstanceSnapshots.value = updateDeleteSelection(selectedInstanceSnapshots.value, cloudFunctionList.value, true);
   } else {
-    const currentPageKeys = cloudNodeList.value.map(item => item.node_id);
+    const currentPageKeys = cloudFunctionList.value.map(item => item.instance_id);
     selectedKeys.value = selectedKeys.value.filter(key => !currentPageKeys.includes(key));
-    selectedNodeSnapshots.value = updateDeleteSelection(selectedNodeSnapshots.value, cloudNodeList.value, false);
+    selectedInstanceSnapshots.value = updateDeleteSelection(selectedInstanceSnapshots.value, cloudFunctionList.value, false);
   }
 };
 
 const clearDeleteSelection = () => {
   selectedKeys.value = [];
-  selectedNodeSnapshots.value = {};
+  selectedInstanceSnapshots.value = {};
 };
 
 // 单个操作（保留原有实现）
 
-const onDelete = async (record: CloudNode) => {
+const onDelete = async (record: FunctionInstance) => {
   try {
     const snapshot = updateDeleteSelection({}, [record], true);
-    const rsp = await batchDeleteNodes({
+    const rsp = await deleteFunctionInstances({
       space_id: selectedSpaceId.value ?? "",
-      node_ids: [record.node_id],
-      node_snapshots: captureDeleteSelection([record.node_id], snapshot)
+      instance_ids: [record.instance_id],
+      instance_snapshots: captureDeleteSelection([record.instance_id], snapshot)
     });
     await loadData();
-    Message.success(rsp.processed_count > 0 ? "删除成功" : "节点无需删除");
+    Message.success(rsp.processed_count > 0 ? "删除成功" : "实例无需删除");
   } catch (error: any) {
     Message.error("删除失败: " + (error?.message || "未知错误"));
   }
 };
 
-const onViewNodeDetail = (record: CloudNode) => {
-  selectedNodeDetail.value = record;
-  nodeDetailVisible.value = true;
+const onViewInstanceDetail = (record: FunctionInstance) => {
+  selectedInstanceDetail.value = record;
+  instanceDetailVisible.value = true;
 };
 
 // 云账户管理
@@ -813,10 +822,10 @@ const onFunctionPackageManage = () => {
   functionPackageManageVisible.value = true;
 };
 
-// 节点详情
-const nodeDetailVisible = ref(false);
-const selectedNodeDetail = ref<CloudNode | null>(null);
-const selectedTimerMetadata = computed(() => parseMetadata(selectedNodeDetail.value?.metadata));
+// 实例详情
+const instanceDetailVisible = ref(false);
+const selectedInstanceDetail = ref<FunctionInstance | null>(null);
+const selectedTimerMetadata = computed(() => parseMetadata(selectedInstanceDetail.value?.metadata));
 const timerMetadataText = (key: string) => {
   const value = selectedTimerMetadata.value[key];
   if (value === undefined || value === null || value === "") return "-";
@@ -845,10 +854,10 @@ const packageDetail = ref<FunctionPackage | null>(null);
 const downloadProgress = ref<Record<string, number>>({});
 
 // 显示代码包详情
-const onShowPackageDetail = async (record: CloudNode) => {
+const onShowPackageDetail = async (record: FunctionInstance) => {
   // 如果没有package_id，则不显示
   if (!record.package_id) {
-    Message.warning("该节点未关联代码包");
+    Message.warning("该实例未关联代码包");
     return;
   }
 
@@ -917,4 +926,4 @@ const onDownloadPackage = async (pkg: FunctionPackage) => {
 };
 </script>
 
-<style scoped src="./cloud-node.scss"></style>
+<style scoped src="./function-instance.scss"></style>

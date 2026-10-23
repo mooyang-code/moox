@@ -9,8 +9,8 @@ import (
 )
 
 func TestIsInitCommand_ShouldDetectInitSubcommand(t *testing.T) {
-	assert.True(t, isInitCommand([]string{"moox-cloudnode", "init"}))
-	assert.False(t, isInitCommand([]string{"moox-cloudnode", "serve"}))
+	assert.True(t, isInitCommand([]string{"moox-cloudfunction", "init"}))
+	assert.False(t, isInitCommand([]string{"moox-cloudfunction", "serve"}))
 }
 
 func TestPrintInitError_ShouldWriteJSON(t *testing.T) {
@@ -19,8 +19,8 @@ func TestPrintInitError_ShouldWriteJSON(t *testing.T) {
 	assert.Contains(t, stderr.String(), "init_failed")
 }
 
-func TestRunInitCommandAppliesCloudNodeSchema(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "cloudnode.db")
+func TestRunInitCommandAppliesCloudFunctionSchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "cloudfunction.db")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	if err := runInitCommand([]string{"init", "--db-path", dbPath}, &stdout, &stderr); err != nil {

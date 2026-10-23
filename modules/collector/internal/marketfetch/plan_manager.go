@@ -11,7 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
+	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -67,10 +67,10 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	var patches []*cloudnodepb.NodeRuntimeConfigPatch
-	exists := map[string]scfinvoker.Node{}
+	var patches []*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch
+	exists := map[string]scfinvoker.FunctionInstance{}
 	for _, node := range nodes {
-		exists[node.NodeID] = node
+		exists[node.InstanceID] = node
 	}
 	lease, err := r.ensureLease(ctx)
 	if err != nil {
@@ -89,7 +89,7 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		if enabled, known := metadataBoolValue(node.Metadata, "timer_actual_enabled"); known && !enabled {
 			continue
 		}
-		patches = append(patches, &cloudnodepb.NodeRuntimeConfigPatch{NodeId: name, TimerEnabled: false, TimerCron: "0 * * * * * *", CollectorPublishLeaseId: lease.LeaseID, CollectorPublishFencingToken: lease.FencingToken})
+		patches = append(patches, &cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{InstanceId: name, TimerEnabled: false, TimerCron: "0 * * * * * *", CollectorPublishLeaseId: lease.LeaseID, CollectorPublishFencingToken: lease.FencingToken})
 	}
 	if err := r.invalidateConfirmations(ctx, openRecord); err != nil {
 		return false, err
@@ -98,7 +98,7 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		r.releaseLease(ctx)
 		return r.finishDisable(deferred)
 	}
-	// CloudNode 单个作业最多 100 项：分批提交，全部确认后才算停用完成。
+	// FunctionInstance 单个作业最多 100 项：分批提交，全部确认后才算停用完成。
 	for start := 0; start < len(patches); start += runtimeConfigBatchSize {
 		batch := patches[start:min(start+runtimeConfigBatchSize, len(patches))]
 		jobID, err := r.Cloud.SubmitRuntimeConfigs(ctx, r.SpaceID, batch)
@@ -107,7 +107,7 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		}
 		batchNames := make([]string, 0, len(batch))
 		for _, patch := range batch {
-			batchNames = append(batchNames, patch.GetNodeId())
+			batchNames = append(batchNames, patch.GetInstanceId())
 		}
 		items, terminal, err := r.waitAux(ctx, auxJobKindDisable, batchNames, jobID)
 		if err != nil || !terminal {
@@ -115,7 +115,7 @@ func (r *PlanReconciler) DisableAll(ctx context.Context) (bool, error) {
 		}
 		for _, item := range items {
 			if !item.Success {
-				return false, fmt.Errorf("disable timer of %s: %s", item.NodeID, item.Message)
+				return false, fmt.Errorf("disable timer of %s: %s", item.InstanceID, item.Message)
 			}
 		}
 	}
@@ -167,9 +167,9 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	exists := map[string]scfinvoker.Node{}
+	exists := map[string]scfinvoker.FunctionInstance{}
 	for _, node := range nodes {
-		exists[node.NodeID] = node
+		exists[node.InstanceID] = node
 	}
 	names := make([]string, 0, len(functions))
 	for name := range functions {
@@ -177,7 +177,7 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 	}
 	sort.Strings(names)
 	deferred := 0
-	var patches []*cloudnodepb.NodeRuntimeConfigPatch
+	var patches []*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch
 	for _, name := range names {
 		function := functions[name]
 		if function.Cron == "" {
@@ -196,7 +196,7 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 		if envErr != nil {
 			return false, fmt.Errorf("function %s: %w", name, envErr)
 		}
-		patches = append(patches, &cloudnodepb.NodeRuntimeConfigPatch{NodeId: name, ManagedEnvironment: environment, TimerEnabled: true, TimerCron: function.Cron})
+		patches = append(patches, &cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{InstanceId: name, ManagedEnvironment: environment, TimerEnabled: true, TimerCron: function.Cron})
 	}
 	if len(patches) == 0 {
 		r.lastVerified = time.Time{}
@@ -212,7 +212,7 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 		batchNames := make([]string, 0, len(batch))
 		for _, patch := range batch {
 			patch.CollectorPublishLeaseId, patch.CollectorPublishFencingToken = lease.LeaseID, lease.FencingToken
-			batchNames = append(batchNames, patch.GetNodeId())
+			batchNames = append(batchNames, patch.GetInstanceId())
 		}
 		jobID, err := r.Cloud.SubmitRuntimeConfigs(ctx, r.SpaceID, batch)
 		if err != nil {
@@ -225,7 +225,7 @@ func (r *PlanReconciler) EnableAll(ctx context.Context) (bool, error) {
 		for _, item := range items {
 			if !item.Success {
 				allOK = false
-				log.WarnContextf(ctx, "collector fetch plan enable timer of %s failed: %s", item.NodeID, item.Message)
+				log.WarnContextf(ctx, "collector fetch plan enable timer of %s failed: %s", item.InstanceID, item.Message)
 			}
 		}
 	}
@@ -507,14 +507,14 @@ func (r *PlanReconciler) upgradeBeforeEnable(ctx context.Context) error {
 	}
 	nodes, err := r.Cloud.ListTimerMarketFetchersFresh(ctx, r.SpaceID)
 	if err != nil {
-		// 读不到云端就无法确认代码已经升级：同样不放行，等下一轮。这是 CloudNode 调用失败，必须记入失败，
+		// 读不到云端就无法确认代码已经升级：同样不放行，等下一轮。这是 FunctionInstance 调用失败，必须记入失败，
 		// 否则 EnableAll 里按“升级等待”收尾时会把它当成无失败而清掉既有的失败原因。
-		return r.fail("cloudnode", fmt.Errorf("%w: cannot read back the fleet: %v", errCodeUpgradePending, err))
+		return r.fail("cloudfunction", fmt.Errorf("%w: cannot read back the fleet: %v", errCodeUpgradePending, err))
 	}
 	prefix := "moox-fetch" + PlanFleetMarker + planNameSanitizer.Replace(strings.ToLower(r.SpaceID)) + "-"
 	stale := 0
 	for _, node := range nodes {
-		if !strings.HasPrefix(node.NodeID, prefix) || strings.TrimSpace(node.PackageID) == "" || node.PackageID == pkg {
+		if !strings.HasPrefix(node.InstanceID, prefix) || strings.TrimSpace(node.PackageID) == "" || node.PackageID == pkg {
 			continue
 		}
 		// 云端已确认不存在的函数没有代码可升级，交给对账清理和重建，不能因此永久阻塞整个空间。

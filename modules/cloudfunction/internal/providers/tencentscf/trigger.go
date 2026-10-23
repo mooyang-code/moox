@@ -34,7 +34,7 @@ type TimerTriggerInfo struct {
 	Message         string
 }
 
-// GetTimerTrigger is a read-only provider lookup used by CloudNode's health
+// GetTimerTrigger is a read-only provider lookup used by FunctionInstance's health
 // refresh. It intentionally does not repair drift; Collector/Monitor should
 // be able to report a manually disabled or deleted trigger before the next
 // reconciliation decides to apply the desired state.
@@ -80,7 +80,7 @@ func (c *Client) EnsureTimerTrigger(ctx context.Context, req TimerTriggerRequest
 		}
 		return info, nil
 	}
-	log.InfoContextf(ctx, "[CloudNode-TencentSCF] update timer trigger function=%s trigger=%s", req.FunctionName, req.Name)
+	log.InfoContextf(ctx, "[CloudFunction-TencentSCF] update timer trigger function=%s trigger=%s", req.FunctionName, req.Name)
 	client, err := c.newClient(req.Region)
 	if err != nil {
 		return nil, err
@@ -139,7 +139,7 @@ func (c *Client) DeleteTimerTrigger(ctx context.Context, req TimerTriggerRequest
 }
 
 func (c *Client) createTimerTrigger(ctx context.Context, req TimerTriggerRequest, qualifier, message string) (*TimerTriggerInfo, error) {
-	log.InfoContextf(ctx, "[CloudNode-TencentSCF] create timer trigger function=%s trigger=%s", req.FunctionName, req.Name)
+	log.InfoContextf(ctx, "[CloudFunction-TencentSCF] create timer trigger function=%s trigger=%s", req.FunctionName, req.Name)
 	client, err := c.newClient(req.Region)
 	if err != nil {
 		return nil, err
@@ -174,7 +174,7 @@ func (c *Client) createTimerTrigger(ctx context.Context, req TimerTriggerRequest
 }
 
 // validateTimerTriggerInfo is deliberately strict. A successful Tencent
-// update request is not enough: CloudNode persists the assignment only after
+// update request is not enough: FunctionInstance persists the assignment only after
 // the provider readback matches the requested schedule and is Available.
 func validateTimerTriggerInfo(info *TimerTriggerInfo, req TimerTriggerRequest, qualifier, message string) error {
 	if info == nil {

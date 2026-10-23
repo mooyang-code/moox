@@ -303,13 +303,13 @@ func TestEverySDKCallGoesThroughCall(t *testing.T) {
 		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(".", name), nil, 0)
 		require.NoError(t, err)
 		var stack []ast.Node
-		ast.Inspect(file, func(node ast.Node) bool {
-			if node == nil {
+		ast.Inspect(file, func(instance ast.Node) bool {
+			if instance == nil {
 				stack = stack[:len(stack)-1]
 				return true
 			}
-			stack = append(stack, node)
-			call, ok := node.(*ast.CallExpr)
+			stack = append(stack, instance)
+			call, ok := instance.(*ast.CallExpr)
 			if !ok {
 				return true
 			}

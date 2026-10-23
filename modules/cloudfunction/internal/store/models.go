@@ -2,10 +2,10 @@ package store
 
 import "time"
 
-type CloudNode struct {
+type FunctionInstance struct {
 	ID                   int       `gorm:"column:c_id;primaryKey;autoIncrement"`
 	SpaceID              string    `gorm:"column:c_space_id"`
-	NodeID               string    `gorm:"column:c_node_id"`
+	InstanceID           string    `gorm:"column:c_instance_id"`
 	LifecycleID          string    `gorm:"column:c_lifecycle_id"`
 	LifecycleOperationID string    `gorm:"column:c_lifecycle_operation_id"`
 	Provider             string    `gorm:"column:c_provider"`
@@ -13,7 +13,7 @@ type CloudNode struct {
 	PackageID            string    `gorm:"column:c_package_id"`
 	PackageVersion       string    `gorm:"column:c_package_version"`
 	DeploymentID         string    `gorm:"column:c_deployment_id"`
-	NodeType             string    `gorm:"column:c_node_type"`
+	FunctionType         string    `gorm:"column:c_function_type"`
 	TriggerType          string    `gorm:"column:c_trigger_type"`
 	Region               string    `gorm:"column:c_region"`
 	Namespace            string    `gorm:"column:c_namespace"`
@@ -24,7 +24,7 @@ type CloudNode struct {
 	ModifyTime           time.Time `gorm:"column:c_mtime"`
 }
 
-func (*CloudNode) TableName() string { return "t_cloud_nodes" }
+func (*FunctionInstance) TableName() string { return "t_cloud_function_instances" }
 
 type CloudAccount struct {
 	ID                 int       `gorm:"column:c_id;primaryKey;autoIncrement"`
@@ -69,7 +69,7 @@ type FunctionPackage struct {
 
 func (*FunctionPackage) TableName() string { return "t_cloud_function_packages" }
 
-type NodeBatch struct {
+type FunctionJob struct {
 	ID          int        `gorm:"column:c_id;primaryKey;autoIncrement"`
 	SpaceID     string     `gorm:"column:c_space_id"`
 	JobID       string     `gorm:"column:c_job_id"`
@@ -81,15 +81,15 @@ type NodeBatch struct {
 	ModifyTime  time.Time  `gorm:"column:c_mtime"`
 }
 
-func (*NodeBatch) TableName() string { return "t_cloud_node_batches" }
+func (*FunctionJob) TableName() string { return "t_cloud_function_jobs" }
 
-type NodeBatchItem struct {
+type FunctionJobItem struct {
 	ID                        int        `gorm:"column:c_id;primaryKey;autoIncrement"`
 	SpaceID                   string     `gorm:"column:c_space_id"`
 	JobID                     string     `gorm:"column:c_job_id"`
 	ItemID                    string     `gorm:"column:c_item_id"`
 	ItemIndex                 int        `gorm:"column:c_item_index"`
-	NodeID                    string     `gorm:"column:c_node_id"`
+	InstanceID                string     `gorm:"column:c_instance_id"`
 	Status                    string     `gorm:"column:c_status"`
 	RequestJSON               string     `gorm:"column:c_request_json"`
 	PublishLeaseRecoveryOwned bool       `gorm:"column:c_publish_lease_recovery_owned;not null;default:false"`
@@ -102,4 +102,4 @@ type NodeBatchItem struct {
 	ResumeClaim               bool       `gorm:"-"`
 }
 
-func (*NodeBatchItem) TableName() string { return "t_cloud_node_batch_items" }
+func (*FunctionJobItem) TableName() string { return "t_cloud_function_job_items" }

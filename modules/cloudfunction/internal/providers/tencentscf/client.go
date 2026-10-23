@@ -1,4 +1,4 @@
-// Package tencentscf wraps Tencent SCF APIs for CloudNode.
+// Package tencentscf wraps Tencent SCF APIs for FunctionInstance.
 package tencentscf
 
 import (
@@ -28,7 +28,7 @@ type Client struct {
 
 // Tencent SCF allows a function to run for up to 900 seconds. Keep the
 // provider request envelope slightly longer so the 900-second function result
-// can still traverse the CloudNode transport before the client gives up.
+// can still traverse the FunctionInstance transport before the client gives up.
 const scfRequestTimeoutSeconds = 960
 
 // FunctionRef identifies a Tencent SCF function.
@@ -84,7 +84,7 @@ type CreateFunctionResponse struct {
 
 // DeleteFunction deletes an SCF function by its exact identity.
 func (c *Client) DeleteFunction(ctx context.Context, ref FunctionRef) error {
-	log.InfoContextf(ctx, "[CloudNode-TencentSCF] delete function=%s namespace=%s region=%s", ref.FunctionName, ref.Namespace, ref.Region)
+	log.InfoContextf(ctx, "[CloudFunction-TencentSCF] delete function=%s namespace=%s region=%s", ref.FunctionName, ref.Namespace, ref.Region)
 	client, err := c.newClient(ref.Region)
 	if err != nil {
 		return err
@@ -324,7 +324,7 @@ func (c *Client) EnsureNamespace(ctx context.Context, region, namespace string) 
 
 // GetFunction returns Tencent SCF function metadata.
 func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInfo, error) {
-	log.InfoContextf(ctx, "[CloudNode-TencentSCF] get function=%s namespace=%s region=%s", req.FunctionName, req.Namespace, req.Region)
+	log.InfoContextf(ctx, "[CloudFunction-TencentSCF] get function=%s namespace=%s region=%s", req.FunctionName, req.Namespace, req.Region)
 	scfClient, err := c.newClient(req.Region)
 	if err != nil {
 		return nil, err
@@ -377,7 +377,7 @@ func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInf
 		out.VpcID = deref(response.Response.VpcConfig.VpcId)
 		out.SubnetID = deref(response.Response.VpcConfig.SubnetId)
 	}
-	// Keep the CloudNode field flat, but do not discard this readback:
+	// Keep the FunctionInstance field flat, but do not discard this readback:
 	// market-fetch deployment verification requires the provider's accepted
 	// value rather than merely the requested value.
 	out.MaxInstanceConcurrency = functionMaxInstanceConcurrency(response.Response)
@@ -392,7 +392,7 @@ func functionMaxInstanceConcurrency(response *scf.GetFunctionResponseParams) int
 }
 
 func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunctionConfigurationRequest) (*UpdateFunctionConfigurationResponse, error) {
-	log.InfoContextf(ctx, "[CloudNode-TencentSCF] update function configuration function=%s namespace=%s region=%s", req.FunctionName, req.Namespace, req.Region)
+	log.InfoContextf(ctx, "[CloudFunction-TencentSCF] update function configuration function=%s namespace=%s region=%s", req.FunctionName, req.Namespace, req.Region)
 	scfClient, err := c.newClient(req.Region)
 	if err != nil {
 		return nil, err
@@ -453,7 +453,7 @@ func (c *Client) CreateFunction(ctx context.Context, req CreateFunctionRequest) 
 	if req.COSBucket == "" || req.COSRegion == "" || req.COSObject == "" {
 		return nil, fmt.Errorf("cos package is required")
 	}
-	log.InfoContextf(ctx, "[CloudNode-TencentSCF] create function=%s namespace=%s region=%s cos=%s/%s", req.FunctionName, req.Namespace, req.Region, req.COSBucket, req.COSObject)
+	log.InfoContextf(ctx, "[CloudFunction-TencentSCF] create function=%s namespace=%s region=%s cos=%s/%s", req.FunctionName, req.Namespace, req.Region, req.COSBucket, req.COSObject)
 	scfClient, err := c.newClient(req.Region)
 	if err != nil {
 		return nil, err
@@ -481,7 +481,7 @@ func (c *Client) UpdateFunctionCode(ctx context.Context, req UpdateFunctionCodeR
 	if len(req.ZipFile) == 0 && (req.COSBucket == "" || req.COSRegion == "" || req.COSObject == "") {
 		return nil, fmt.Errorf("zip file or cos package is required")
 	}
-	log.InfoContextf(ctx, "[CloudNode-TencentSCF] update function code function=%s namespace=%s region=%s zip_bytes=%d cos=%s/%s", req.FunctionName, req.Namespace, req.Region, len(req.ZipFile), req.COSBucket, req.COSObject)
+	log.InfoContextf(ctx, "[CloudFunction-TencentSCF] update function code function=%s namespace=%s region=%s zip_bytes=%d cos=%s/%s", req.FunctionName, req.Namespace, req.Region, len(req.ZipFile), req.COSBucket, req.COSObject)
 	scfClient, err := c.newClient(req.Region)
 	if err != nil {
 		return nil, err
@@ -590,7 +590,7 @@ func environmentVariables(values map[string]string) []*scf.Variable {
 
 // InvokeFunction invokes a Tencent SCF function.
 func (c *Client) InvokeFunction(ctx context.Context, req InvokeFunctionRequest) (*InvokeFunctionResponse, error) {
-	log.DebugContextf(ctx, "[CloudNode-TencentSCF] invoke function=%s namespace=%s region=%s", req.FunctionName, req.Namespace, req.Region)
+	log.DebugContextf(ctx, "[CloudFunction-TencentSCF] invoke function=%s namespace=%s region=%s", req.FunctionName, req.Namespace, req.Region)
 	scfClient, err := c.newClient(req.Region)
 	if err != nil {
 		return nil, err
@@ -653,7 +653,7 @@ func (c *Client) newClient(region string) (*scf.Client, error) {
 	clientProfile.HttpProfile.Endpoint = scfEndpoint(region)
 	// Instrument snapshots can legitimately use the configured 300-second
 	// Invoke function budget. Keep the provider HTTP deadline above that budget
-	// so CloudNode does not abort a healthy long-running SCF invocation first.
+	// so FunctionInstance does not abort a healthy long-running SCF invocation first.
 	clientProfile.HttpProfile.ReqTimeout = scfRequestTimeoutSeconds
 	credential := common.NewCredential(c.secretID, c.secretKey)
 	return scf.NewClient(credential, region, clientProfile)

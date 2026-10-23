@@ -1,12 +1,12 @@
-package cloudnodepb
+package cloudfunctionpb
 
 import "testing"
 
-func TestNodeBatchProtoContract(t *testing.T) {
-	_ = NodeBatchOperation_NODE_BATCH_OPERATION_CREATE_NODES
-	_ = NodeBatchStatus_NODE_BATCH_STATUS_RUNNING
-	_ = NodeBatchItemStatus_NODE_BATCH_ITEM_STATUS_FAILED
-	_ = &SubmitNodeBatchRsp{}
-	_ = &GetNodeBatchChangeReq{}
-	_ = &GetNodeBatchChangeRsp{}
+func TestFunctionJobProtoContract(t *testing.T) {
+	_ = FunctionJobOperation_FUNCTION_JOB_OPERATION_CREATE_INSTANCES
+	_ = FunctionJobStatus_FUNCTION_JOB_STATUS_RUNNING
+	_ = FunctionJobItemStatus_FUNCTION_JOB_ITEM_STATUS_FAILED
+	_ = &SubmitFunctionJobRsp{}
+	_ = &GetFunctionJobReq{}
+	_ = &GetFunctionJobRsp{}
 }

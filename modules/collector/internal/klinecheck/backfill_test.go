@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
+	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -38,7 +38,7 @@ type healingInvoker struct {
 	healOne bool
 }
 
-func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string]any, _ cloudnodepb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
+func (h *healingInvoker) Invoke(_ context.Context, _, _ string, event map[string]any, _ cloudfunctionpb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.events = append(h.events, event)
@@ -541,7 +541,7 @@ func TestBackfillRefillDrainsAJobWithoutWaitingForTheNextTick(t *testing.T) {
 
 type failingInvoker struct{}
 
-func (failingInvoker) Invoke(context.Context, string, string, map[string]any, cloudnodepb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
+func (failingInvoker) Invoke(context.Context, string, string, map[string]any, cloudfunctionpb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
 	return scfinvoker.InvocationResult{}, errors.New("SCF must not be invoked")
 }
 

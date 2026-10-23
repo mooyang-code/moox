@@ -298,7 +298,7 @@ components:
               - ListSecrets
               - GetSecretValue
             callers:
-              - cloudnode
+              - cloudfunction
               - trade
               - moox-cli
       - path: trpc.moox.ops.SysDeploy
@@ -409,7 +409,7 @@ components:
               - console
               - moox-cli
               - collector
-              - cloudnode
+              - cloudfunction
           - methods:
               - ValidateCollectorPublishLease
               - BeginCollectorPublishOperation
@@ -417,7 +417,7 @@ components:
               - EndCollectorPublishOperation
             callers:
               - admin
-              - cloudnode
+              - cloudfunction
       - path: trpc.moox.admin.ActivityLog
         port: 11113
         console_name: activity
@@ -759,7 +759,7 @@ components:
       dependencies:
         - eventbus
         - storage-primary
-        - cloudnode
+        - cloudfunction
       transport: reporter
       functional_observability: active
       config_paths:
@@ -819,9 +819,9 @@ components:
       recovery_action_ids:
         - restart_service_manually
       required_in_default_profile: false
-  - id: cloudnode
-    name: 云节点服务
-    binary: moox-cloudnode
+  - id: cloudfunction
+    name: 云函数管理服务
+    binary: moox-cloudfunction
     scope: any
     replicas: single
     protected: false
@@ -830,21 +830,19 @@ components:
       port: 11411
       ready_body: '"ready":true'
     services:
-      - path: trpc.moox.cloudnode.CloudNodeMgr
+      - path: trpc.moox.cloudfunction.CloudFunctionMgr
         port: 11401
-        console_name: cloudnode
+        console_name: cloudfunction
         timeout_ms: 960000
         max_body_bytes: 33554432
         methods:
-          - GetNodeList
-          - UpdateNode
+          - ListFunctionInstances
           - InvokeFunction
-          - SubmitCreateNodes
-          - SubmitDeployNodes
-          - SubmitDeleteNodes
-          - GetNodeBatchChange
-          - BatchDeleteNodes
-          - SubmitUpdateNodeRuntimeConfigs
+          - SubmitCreateFunctionInstances
+          - SubmitDeployFunctionInstances
+          - SubmitDeleteFunctionInstances
+          - GetFunctionJob
+          - SubmitUpdateFunctionInstanceRuntimeConfigs
           - ListCloudAccounts
           - CreateCloudAccount
           - UpdateCloudAccount
@@ -860,8 +858,8 @@ components:
           - CompletePackageUpload
           - CollectGarbage
         read_only_methods:
-          - GetNodeList
-          - GetNodeBatchChange
+          - ListFunctionInstances
+          - GetFunctionJob
           - ListCloudAccounts
           - ListCloudRegions
           - PreviewSCFFunctions
@@ -870,15 +868,13 @@ components:
           - GetPackageDownloadURL
         acl:
           - methods:
-              - GetNodeList
-              - UpdateNode
+              - ListFunctionInstances
               - InvokeFunction
-              - SubmitCreateNodes
-              - SubmitDeployNodes
-              - SubmitDeleteNodes
-              - GetNodeBatchChange
-              - BatchDeleteNodes
-              - SubmitUpdateNodeRuntimeConfigs
+              - SubmitCreateFunctionInstances
+              - SubmitDeployFunctionInstances
+              - SubmitDeleteFunctionInstances
+              - GetFunctionJob
+              - SubmitUpdateFunctionInstanceRuntimeConfigs
               - ListCloudAccounts
               - CreateCloudAccount
               - UpdateCloudAccount
@@ -896,13 +892,13 @@ components:
               - console
               - moox-cli
           - methods:
-              - GetNodeList
+              - ListFunctionInstances
               - InvokeFunction
-              - SubmitCreateNodes
-              - SubmitDeployNodes
-              - SubmitDeleteNodes
-              - GetNodeBatchChange
-              - SubmitUpdateNodeRuntimeConfigs
+              - SubmitCreateFunctionInstances
+              - SubmitDeployFunctionInstances
+              - SubmitDeleteFunctionInstances
+              - GetFunctionJob
+              - SubmitUpdateFunctionInstanceRuntimeConfigs
               - GetPackageList
             callers:
               - collector
@@ -911,7 +907,7 @@ components:
             callers:
               - admin
     doctor:
-      role: cloudnode
+      role: cloudfunction
       description: Cloud job dispatch and execution coordinator
       duties:
         - dispatch and track cloud jobs
@@ -925,10 +921,10 @@ components:
       transport: reporter
       functional_observability: active
       config_paths:
-        - cloudnode/config/app.yaml
-        - cloudnode/config/trpc_go.yaml
+        - cloudfunction/config/app.yaml
+        - cloudfunction/config/trpc_go.yaml
       writable_paths:
-        - data/cloudnode
+        - data/cloudfunction
       recovery_action_ids:
         - restart_service_manually
       required_in_default_profile: true

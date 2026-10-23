@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
+	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	pb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -21,7 +21,7 @@ type Client struct {
 }
 
 // Invoke 把事件交给本地执行端执行；nodeID 只用于日志（本地执行端不需要建函数）。
-func (c *Client) Invoke(ctx context.Context, spaceID, _ string, event map[string]any, _ cloudnodepb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
+func (c *Client) Invoke(ctx context.Context, spaceID, _ string, event map[string]any, _ cloudfunctionpb.ScfInvokeType) (scfinvoker.InvocationResult, error) {
 	if c == nil || c.Gateway == nil {
 		return scfinvoker.InvocationResult{}, errors.New("local executor client requires the process gateway client")
 	}

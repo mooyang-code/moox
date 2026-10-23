@@ -34,7 +34,7 @@ func TestClientNativeLeaseAndOperationLifecycle(t *testing.T) {
 			require.Equal(t, "operation-1", request.(*adminpb.CollectorPublishOperationReq).GetOperationId())
 			proto.Merge(response.(proto.Message), &adminpb.CollectorPublishOperationRsp{RetInfo: &adminpb.RetInfo{}, Active: method != "EndCollectorPublishOperation"})
 		case "AcquireCollectorPublishLease":
-			require.Equal(t, "cloudnode-recovery/job-1/item-1", request.(*adminpb.AcquireCollectorPublishLeaseReq).GetHolderId())
+			require.Equal(t, "cloudfunction-recovery/job-1/item-1", request.(*adminpb.AcquireCollectorPublishLeaseReq).GetHolderId())
 			require.EqualValues(t, 7, request.(*adminpb.AcquireCollectorPublishLeaseReq).GetExpectedFencingToken())
 			proto.Merge(response.(proto.Message), &adminpb.CollectorPublishLeaseRsp{RetInfo: &adminpb.RetInfo{}, SpaceId: "crypto", LeaseId: "lease-new", FencingToken: 8})
 		case "RenewCollectorPublishLease":
@@ -52,7 +52,7 @@ func TestClientNativeLeaseAndOperationLifecycle(t *testing.T) {
 	require.NoError(t, client.BeginOperation(t.Context(), "crypto", "lease-1", 7, "operation-1"))
 	require.NoError(t, client.RenewOperation(t.Context(), "crypto", "operation-1", 7))
 	require.NoError(t, client.EndOperation(t.Context(), "crypto", "operation-1", 7))
-	lease, err := client.AcquireLease(t.Context(), "crypto", "cloudnode-recovery/job-1/item-1", 7)
+	lease, err := client.AcquireLease(t.Context(), "crypto", "cloudfunction-recovery/job-1/item-1", 7)
 	require.NoError(t, err)
 	require.Equal(t, &Lease{SpaceID: "crypto", LeaseID: "lease-new", FencingToken: 8}, lease)
 	require.NoError(t, client.RenewLease(t.Context(), lease))

@@ -1,4 +1,4 @@
-package cloudnodepb
+package cloudfunctionpb
 
 import (
 	"fmt"
@@ -6,8 +6,8 @@ import (
 )
 
 func (r *InvokeFunctionReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.NodeId) == "" {
-		return fmt.Errorf("node_id is required")
+	if r == nil || strings.TrimSpace(r.InstanceId) == "" {
+		return fmt.Errorf("instance_id is required")
 	}
 	return nil
 }

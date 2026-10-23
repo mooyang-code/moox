@@ -261,7 +261,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		}
 		// Timer-triggered market SCFs intentionally do not publish a per-batch
 		// completion event. Their health is derived from Storage/Dataset freshness
-		// and the CloudNode/Collector coordination checks, so an EventBus outage
+		// and the FunctionInstance/Collector coordination checks, so an EventBus outage
 		// must not create a false "missing completion" alert.
 		return errors.Join(marketErr, freshnessErr)
 	}

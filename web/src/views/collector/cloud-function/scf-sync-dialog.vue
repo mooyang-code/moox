@@ -1,11 +1,11 @@
 <template>
   <a-modal
     :visible="visible"
-    title="同步云节点列表"
+    title="同步云函数实例列表"
     :width="1120"
     :mask-closable="false"
     :ok-loading="importing"
-    :ok-text="`导入 ${selectedCandidates.length} 个节点`"
+    :ok-text="`导入 ${selectedCandidates.length} 个实例`"
     :ok-button-props="{ disabled: selectedCandidates.length === 0 || scanning || importing }"
     @cancel="close"
     @ok="importSelected"
@@ -33,7 +33,7 @@
     <div v-if="importing" class="import-loading" role="status" aria-live="polite">
       <div class="import-loading__header">
         <a-spin :size="20" />
-        <span>正在导入 {{ selectedCandidates.length }} 个节点，请稍候...</span>
+        <span>正在导入 {{ selectedCandidates.length }} 个实例，请稍候...</span>
       </div>
       <a-progress :percent="1" :animation="true" :show-text="false" status="normal" />
     </div>
@@ -59,8 +59,8 @@
         <a-table-column title="Namespace" data-index="namespace" :width="130" />
         <a-table-column title="函数名" data-index="function_name" :width="280" />
         <a-table-column title="状态" data-index="status" :width="100" />
-        <a-table-column title="类型" data-index="function_type" :width="90" />
-        <a-table-column title="节点状态" :width="110">
+        <a-table-column title="类型" data-index="scf_type" :width="90" />
+        <a-table-column title="实例状态" :width="110">
           <template #cell="{ record }">{{ stateLabel(record.import_state) }}</template>
         </a-table-column>
         <a-table-column title="说明" data-index="reason" min-width="260" />
@@ -81,7 +81,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { importSCFFunctions, previewSCFFunctions, type SCFFunctionCandidate, type SCFRegionScanError } from "@/api/cloud-node";
+import {
+  importSCFFunctions,
+  previewSCFFunctions,
+  type SCFFunctionCandidate,
+  type SCFRegionScanError
+} from "@/api/function-instance";
 import type { CloudAccount } from "@/api/cloud-account";
 import { createSubmitScope } from "@/utils/submit-scope";
 
@@ -132,11 +137,11 @@ watch(accountId, (next, previous) => {
 const close = () => emit("update:visible", false);
 const stateLabel = (state: string | number) => {
   const labels: Record<string, string> = {
-    SCF_FUNCTION_IMPORT_STATE_NEW: "新节点",
+    SCF_FUNCTION_IMPORT_STATE_NEW: "新实例",
     SCF_FUNCTION_IMPORT_STATE_EXISTING: "已存在",
     SCF_FUNCTION_IMPORT_STATE_DELETED: "可恢复",
     SCF_FUNCTION_IMPORT_STATE_BLOCKED: "不可导入",
-    "1": "新节点",
+    "1": "新实例",
     "2": "已存在",
     "3": "可恢复",
     "4": "不可导入"
@@ -201,7 +206,7 @@ const importSelected = async () => {
     }
   } catch (error) {
     if (!submission.isCurrent()) return;
-    Message.error(error instanceof Error ? error.message : "导入云节点失败");
+    Message.error(error instanceof Error ? error.message : "导入云函数实例失败");
   } finally {
     if (submission.isCurrent()) importing.value = false;
   }

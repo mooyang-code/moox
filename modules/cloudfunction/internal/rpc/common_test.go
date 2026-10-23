@@ -25,12 +25,12 @@ func TestPageFromCommon_ShouldNormalizeBounds(t *testing.T) {
 
 func TestMetadataHelpers_ShouldParseMixedTypes(t *testing.T) {
 	meta := map[string]any{
-		"name":    "node-a",
+		"name":    "instance-a",
 		"count":   float64(3),
 		"enabled": true,
 		"tags":    []any{"collect.kline"},
 	}
-	assert.Equal(t, "node-a", metadataString(meta, "name"))
+	assert.Equal(t, "instance-a", metadataString(meta, "name"))
 	assert.True(t, metadataBool(meta, "enabled"))
 }
 

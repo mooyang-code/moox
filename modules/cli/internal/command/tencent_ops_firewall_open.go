@@ -34,7 +34,7 @@ var lighthouseFirewallOpenCmd = &cobra.Command{
 	Use:   "open",
 	Short: "通过控制面云账户凭证开放轻量防火墙端口",
 	Long: `通过控制面后台 API 获取云账户明文凭证（reveal），自动调用 firewall add 开放端口。
-云账户归属独立 moox-cloudnode 服务，命令通过 /api/service/cloudnode/* 的 HMAC 签名鉴权从控制面获取凭证。
+云账户归属独立 moox-cloudfunction 服务，命令通过 /api/service/cloudfunction/* 的 HMAC 签名鉴权从控制面获取凭证。
 
 示例：
   moox-cli ops tencent lighthouse firewall open \

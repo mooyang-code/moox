@@ -98,7 +98,7 @@ func registerAuthCacheCleanupTimer(s *server.Server, cleaner authCacheCleaner) e
 const garbageCollectionTimerService = "trpc.moox.admin.garbage_collection.timer"
 
 // garbageCollectionTimeout bounds one daily run, which lists and deletes COS
-// objects through CloudNode.
+// objects through FunctionInstance.
 const garbageCollectionTimeout = 15 * time.Minute
 
 func registerGarbageCollectionTimer(s *server.Server, collector *garbage.Collector) error {

@@ -83,13 +83,13 @@ func TestLeaseDAORecoveryCannotRetakeFenceAfterNewPublisher(t *testing.T) {
 	require.NoError(t, err)
 
 	recoveryAt := now.Add(operationClaimTTL + time.Second)
-	recovered, err := dao.AcquireRecovery(ctx, "crypto", "cloudnode-recovery/job-1/item-1", original.FencingToken, recoveryAt)
+	recovered, err := dao.AcquireRecovery(ctx, "crypto", "cloudfunction-recovery/job-1/item-1", original.FencingToken, recoveryAt)
 	require.NoError(t, err)
 	require.EqualValues(t, original.FencingToken+1, recovered.FencingToken)
 
 	// A lost response can retry the same recovery request without incrementing
 	// the token again or losing ownership of the durable item.
-	retried, err := dao.AcquireRecovery(ctx, "crypto", "cloudnode-recovery/job-1/item-1", original.FencingToken, recoveryAt.Add(time.Second))
+	retried, err := dao.AcquireRecovery(ctx, "crypto", "cloudfunction-recovery/job-1/item-1", original.FencingToken, recoveryAt.Add(time.Second))
 	require.NoError(t, err)
 	require.Equal(t, recovered.LeaseID, retried.LeaseID)
 	require.EqualValues(t, recovered.FencingToken, retried.FencingToken)
@@ -101,7 +101,7 @@ func TestLeaseDAORecoveryCannotRetakeFenceAfterNewPublisher(t *testing.T) {
 	newPublisher, err := dao.Acquire(ctx, "crypto", "new-publisher", recoveryAt.Add(3*time.Second))
 	require.NoError(t, err)
 	require.EqualValues(t, recovered.FencingToken+1, newPublisher.FencingToken)
-	_, err = dao.AcquireRecovery(ctx, "crypto", "cloudnode-recovery/job-1/item-1", original.FencingToken, recoveryAt.Add(4*time.Second))
+	_, err = dao.AcquireRecovery(ctx, "crypto", "cloudfunction-recovery/job-1/item-1", original.FencingToken, recoveryAt.Add(4*time.Second))
 	require.ErrorIs(t, err, ErrLeaseSuperseded, "old durable work must not reacquire a higher fence and replay after newer work")
 }
 
@@ -119,7 +119,7 @@ func TestLeaseDAOOperationClaimFencesNewPublisherUntilOperationEnds(t *testing.T
 	require.NoError(t, err)
 	require.True(t, released)
 	_, err = dao.Acquire(ctx, "stockcn", "publisher-b", now.Add(3*time.Second))
-	require.ErrorIs(t, err, ErrLeaseHeld, "an in-flight CloudNode operation must outlive its CLI lease release")
+	require.ErrorIs(t, err, ErrLeaseHeld, "an in-flight FunctionInstance operation must outlive its CLI lease release")
 
 	_, err = dao.RenewOperation(ctx, "stockcn", claim.OperationID, first.FencingToken, now.Add(4*time.Second))
 	require.NoError(t, err, "the in-flight operation may renew its claim after CLI lease release")
@@ -132,7 +132,7 @@ func TestLeaseDAOOperationClaimFencesNewPublisherUntilOperationEnds(t *testing.T
 }
 
 func TestLeaseDAOBeginsConcurrentOperationsWithoutSnapshotConflicts(t *testing.T) {
-	// CloudNode begins one operation per deploy item in parallel. Production
+	// FunctionInstance begins one operation per deploy item in parallel. Production
 	// opens Admin SQLite in WAL mode with a pool, where a read-then-insert
 	// transaction fails with SQLITE_BUSY_SNAPSHOT once another item commits.
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "admin.db")+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)"), &gorm.Config{})
@@ -187,7 +187,7 @@ func TestLeaseDAORejectsOperationForStaleLease(t *testing.T) {
 	require.Zero(t, claims)
 }
 
-func TestLeaseDAOOperationClaimExpiresAfterCloudNodeCrash(t *testing.T) {
+func TestLeaseDAOOperationClaimExpiresAfterCloudFunctionCrash(t *testing.T) {
 	dao := newLeaseTestDAO(t)
 	ctx := context.Background()
 	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
@@ -207,17 +207,17 @@ func TestLeaseDAOWaitsForExpiredLeaseOperationClaimBeforeHigherFence(t *testing.
 	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 	first, err := dao.Acquire(ctx, "stockcn", "cli-publisher", now)
 	require.NoError(t, err)
-	_, err = dao.BeginOperation(ctx, "stockcn", first.LeaseID, "cloudnode-item-1", first.FencingToken, now.Add(time.Second))
+	_, err = dao.BeginOperation(ctx, "stockcn", first.LeaseID, "cloudfunction-item-1", first.FencingToken, now.Add(time.Second))
 	require.NoError(t, err)
 
 	leaseExpiredAt := now.Add(leaseTTL + time.Millisecond)
 	_, err = dao.Renew(ctx, "stockcn", first.LeaseID, first.FencingToken, leaseExpiredAt)
 	require.ErrorIs(t, err, ErrLeaseStale, "the original CLI lease can no longer be renewed")
-	_, err = dao.Acquire(ctx, "stockcn", "cloudnode-recovery", leaseExpiredAt)
+	_, err = dao.Acquire(ctx, "stockcn", "cloudfunction-recovery", leaseExpiredAt)
 	require.ErrorIs(t, err, ErrLeaseHeld, "the old operation claim still fences a takeover before its TTL")
 
 	claimExpiredAt := now.Add(time.Second + operationClaimTTL + time.Millisecond)
-	second, err := dao.Acquire(ctx, "stockcn", "cloudnode-recovery", claimExpiredAt)
+	second, err := dao.Acquire(ctx, "stockcn", "cloudfunction-recovery", claimExpiredAt)
 	require.NoError(t, err)
 	require.EqualValues(t, first.FencingToken+1, second.FencingToken)
 }

@@ -14,8 +14,8 @@ import (
 // SQLITE_BUSY_SNAPSHOT in WAL mode once a concurrent writer commits.
 
 var (
-	activeNodeBatchStatuses   = []string{NodeBatchPending, NodeBatchRunning, NodeBatchReconciliationRequired}
-	finishedNodeBatchStatuses = []string{NodeBatchSuccess, NodeBatchFailed, NodeBatchPartial}
+	activeFunctionJobStatuses   = []string{FunctionJobPending, FunctionJobRunning, FunctionJobReconciliationRequired}
+	finishedFunctionJobStatuses = []string{FunctionJobSuccess, FunctionJobFailed, FunctionJobPartial}
 )
 
 // garbageCutoff formats a cutoff like the stored UTC timestamps
@@ -24,21 +24,21 @@ func garbageCutoff(cutoff time.Time) string {
 	return cutoff.UTC().Format("2006-01-02 15:04:05")
 }
 
-// unusedPackageCondition matches packages that no live node runs.
+// unusedPackageCondition matches packages that no live instance runs.
 const unusedPackageCondition = `NOT EXISTS (
-	SELECT 1 FROM t_cloud_nodes AS node
-	WHERE node.c_is_deleted = ? AND node.c_space_id = t_cloud_function_packages.c_space_id
-	  AND node.c_package_id = t_cloud_function_packages.c_package_id
+	SELECT 1 FROM t_cloud_function_instances AS instance
+	WHERE instance.c_is_deleted = ? AND instance.c_space_id = t_cloud_function_packages.c_space_id
+	  AND instance.c_package_id = t_cloud_function_packages.c_package_id
 )`
 
-// HasActiveNodeBatches reports whether a node batch may still deploy a package.
-func (r *CatalogRepository) HasActiveNodeBatches(ctx context.Context) (bool, error) {
+// HasActiveFunctionJobs reports whether a instance batch may still deploy a package.
+func (r *CatalogRepository) HasActiveFunctionJobs(ctx context.Context) (bool, error) {
 	var count int64
-	err := r.db.WithContext(ctx).Model(&NodeBatch{}).Where("c_status IN ?", activeNodeBatchStatuses).Count(&count).Error
+	err := r.db.WithContext(ctx).Model(&FunctionJob{}).Where("c_status IN ?", activeFunctionJobStatuses).Count(&count).Error
 	return count > 0, err
 }
 
-// ListGarbagePackages returns packages that no live node runs and that were
+// ListGarbagePackages returns packages that no live instance runs and that were
 // deleted or created before cutoff.
 func (r *CatalogRepository) ListGarbagePackages(ctx context.Context, cutoff time.Time) ([]FunctionPackage, error) {
 	var packages []FunctionPackage
@@ -49,7 +49,7 @@ func (r *CatalogRepository) ListGarbagePackages(ctx context.Context, cutoff time
 	return packages, err
 }
 
-// PurgePackage removes a package record unless a live node started running it
+// PurgePackage removes a package record unless a live instance started running it
 // after it was listed.
 func (r *CatalogRepository) PurgePackage(ctx context.Context, pkg FunctionPackage) (bool, error) {
 	result := r.db.WithContext(ctx).Where("c_id = ?", pkg.ID).Where(unusedPackageCondition, false).Delete(&FunctionPackage{})
@@ -76,28 +76,28 @@ func (r *CatalogRepository) PackageObjectKeys(ctx context.Context) (map[string]m
 	return keys, nil
 }
 
-// PurgeDeletedNodes removes soft-deleted node rows last changed before cutoff.
+// PurgeDeletedInstances removes soft-deleted instance rows last changed before cutoff.
 // With dryRun it only counts them.
-func (r *CatalogRepository) PurgeDeletedNodes(ctx context.Context, cutoff time.Time, dryRun bool) (int64, error) {
-	query := r.db.WithContext(ctx).Model(&CloudNode{}).Where("c_is_deleted = ? AND c_mtime < ?", true, garbageCutoff(cutoff))
+func (r *CatalogRepository) PurgeDeletedInstances(ctx context.Context, cutoff time.Time, dryRun bool) (int64, error) {
+	query := r.db.WithContext(ctx).Model(&FunctionInstance{}).Where("c_is_deleted = ? AND c_mtime < ?", true, garbageCutoff(cutoff))
 	if dryRun {
 		var count int64
 		err := query.Count(&count).Error
 		return count, err
 	}
-	result := query.Delete(&CloudNode{})
+	result := query.Delete(&FunctionInstance{})
 	return result.RowsAffected, result.Error
 }
 
-// PurgeFinishedNodeBatches removes node batches that finished before cutoff,
+// PurgeFinishedFunctionJobs removes instance batches that finished before cutoff,
 // together with their items. A batch whose item still owes a publish lease
 // release is kept for the release worker. With dryRun it only counts them.
-func (r *CatalogRepository) PurgeFinishedNodeBatches(ctx context.Context, cutoff time.Time, dryRun bool) (int64, error) {
-	finished := r.db.Model(&NodeBatch{}).Select("c_space_id", "c_job_id").
-		Where("c_status IN ? AND c_completed_at IS NOT NULL AND c_completed_at < ?", finishedNodeBatchStatuses, garbageCutoff(cutoff)).
+func (r *CatalogRepository) PurgeFinishedFunctionJobs(ctx context.Context, cutoff time.Time, dryRun bool) (int64, error) {
+	finished := r.db.Model(&FunctionJob{}).Select("c_space_id", "c_job_id").
+		Where("c_status IN ? AND c_completed_at IS NOT NULL AND c_completed_at < ?", finishedFunctionJobStatuses, garbageCutoff(cutoff)).
 		Where(`NOT EXISTS (
-			SELECT 1 FROM t_cloud_node_batch_items AS item
-			WHERE item.c_space_id = t_cloud_node_batches.c_space_id AND item.c_job_id = t_cloud_node_batches.c_job_id
+			SELECT 1 FROM t_cloud_function_job_items AS item
+			WHERE item.c_space_id = t_cloud_function_jobs.c_space_id AND item.c_job_id = t_cloud_function_jobs.c_job_id
 			  AND item.c_publish_lease_recovery_owned = ?
 		)`, true)
 	if dryRun {
@@ -107,10 +107,10 @@ func (r *CatalogRepository) PurgeFinishedNodeBatches(ctx context.Context, cutoff
 	}
 	var purged int64
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("(c_space_id, c_job_id) IN (?)", finished).Delete(&NodeBatchItem{}).Error; err != nil {
+		if err := tx.Where("(c_space_id, c_job_id) IN (?)", finished).Delete(&FunctionJobItem{}).Error; err != nil {
 			return err
 		}
-		result := tx.Where("(c_space_id, c_job_id) IN (?)", finished).Delete(&NodeBatch{})
+		result := tx.Where("(c_space_id, c_job_id) IN (?)", finished).Delete(&FunctionJob{})
 		purged = result.RowsAffected
 		return result.Error
 	})

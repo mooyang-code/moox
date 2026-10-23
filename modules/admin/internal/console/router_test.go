@@ -130,7 +130,7 @@ func TestConsoleRejectsMachineMethodsAndNonCatalogAliasesBeforeDispatch(t *testi
 	router := newTestRouter(t, nil, gateway).buildControlRouter()
 	for _, suffix := range []string{
 		"secret/GetSecretValue", "SecretMgr/getsecretvalue", "trpc.moox.ops.SecretMgr/GetSecretValue",
-		"cloudnode/CollectGarbage", "publishlease/ValidateCollectorPublishLease",
+		"cloudfunction/CollectGarbage", "publishlease/ValidateCollectorPublishLease",
 		"publishlease/BeginCollectorPublishOperation", "sysdeploy/SyncHostPlacements", "sysdeploy/DeleteHost",
 		"trade/ReleaseLogicalAccountOwner", "trade/ClaimLogicalAccountOwner", "trade/RebindLogicalAccountOwner",
 		"trade_owner/ReleaseLogicalAccountOwner", "trade_console/ListOrders", "collectmgr/GetTaskList",
@@ -341,9 +341,9 @@ func TestConsoleGlobalWritesRequireAdministrator(t *testing.T) {
 		{"/api/admin/strategy/CreateStrategy", 1, http.StatusForbidden},
 		{"/api/admin/strategy/UpdateStrategy", 1, http.StatusForbidden},
 		{"/api/admin/strategy/DeleteStrategy", 1, http.StatusForbidden},
-		{"/api/admin/cloudnode/CreateCloudAccount", 1, http.StatusForbidden},
-		{"/api/admin/cloudnode/UpdateCloudAccount", 1, http.StatusForbidden},
-		{"/api/admin/cloudnode/DeleteCloudAccount", 1, http.StatusForbidden},
+		{"/api/admin/cloudfunction/CreateCloudAccount", 1, http.StatusForbidden},
+		{"/api/admin/cloudfunction/UpdateCloudAccount", 1, http.StatusForbidden},
+		{"/api/admin/cloudfunction/DeleteCloudAccount", 1, http.StatusForbidden},
 		{"/api/admin/factor-mgr/ListFactors", 1, http.StatusForbidden}, // 无空间的 Factor 请求本来就要管理员
 		// 推送渠道的完整 Webhook URL 是凭据：只有全局管理员能列出、增删；概览仍对所有登录用户开放。
 		{"/api/admin/monitor/ListNotificationChannels", 1, http.StatusForbidden},
@@ -409,7 +409,7 @@ func TestConsoleCatalogReadOnlyDrivesSpaceMutationClass(t *testing.T) {
 		mutates bool
 	}{
 		{"/api/admin/collector/GetTaskList", false},
-		{"/api/admin/cloudnode/GetNodeList", false},
+		{"/api/admin/cloudfunction/ListFunctionInstances", false},
 		{"/api/admin/collector/CreateTask", true},
 	} {
 		_, secret, key, sid := setupRequestAuthTest(t)

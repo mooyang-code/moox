@@ -1,28 +1,28 @@
-import type { GetNodeBatchChangeResponse, NodeBatchStatus } from "@/api/cloud-node";
+import type { GetFunctionJobResponse, FunctionJobStatus } from "@/api/function-instance";
 
-const terminalStatuses = new Set<NodeBatchStatus>([
-  "NODE_BATCH_STATUS_SUCCESS",
-  "NODE_BATCH_STATUS_FAILED",
-  "NODE_BATCH_STATUS_PARTIAL"
+const terminalStatuses = new Set<FunctionJobStatus>([
+  "FUNCTION_JOB_STATUS_SUCCESS",
+  "FUNCTION_JOB_STATUS_FAILED",
+  "FUNCTION_JOB_STATUS_PARTIAL"
 ]);
 
-export interface CloudNodeBatchPollerCallbacks {
-  onUpdate?: (response: GetNodeBatchChangeResponse) => void;
-  onTerminal?: (response: GetNodeBatchChangeResponse) => void;
+export interface FunctionJobPollerCallbacks {
+  onUpdate?: (response: GetFunctionJobResponse) => void;
+  onTerminal?: (response: GetFunctionJobResponse) => void;
   onError?: (error: unknown) => void;
   onPollingTimeout?: (jobId: string) => void;
 }
 
-export interface CloudNodeBatchPoller {
-  start(jobId: string, callbacks?: CloudNodeBatchPollerCallbacks): Promise<void>;
+export interface FunctionJobPoller {
+  start(jobId: string, callbacks?: FunctionJobPollerCallbacks): Promise<void>;
   stop(): void;
   dispose(): void;
 }
 
-export function createCloudNodeBatchPoller(
-  query: (jobId: string) => Promise<GetNodeBatchChangeResponse>,
+export function createFunctionJobPoller(
+  query: (jobId: string) => Promise<GetFunctionJobResponse>,
   options: { intervalMs?: number; timeoutMs?: number } = {}
-): CloudNodeBatchPoller {
+): FunctionJobPoller {
   const intervalMs = options.intervalMs ?? 2000;
   const timeoutMs = options.timeoutMs ?? 30 * 60 * 1000;
   let generation = 0;
@@ -37,7 +37,7 @@ export function createCloudNodeBatchPoller(
     timeout = undefined;
   };
 
-  const start = async (jobId: string, callbacks: CloudNodeBatchPollerCallbacks = {}) => {
+  const start = async (jobId: string, callbacks: FunctionJobPollerCallbacks = {}) => {
     stop();
     const activeGeneration = generation;
     let timedOut = false;

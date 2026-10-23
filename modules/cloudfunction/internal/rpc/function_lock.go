@@ -12,7 +12,7 @@ type functionLockRegistry struct {
 	locks map[string]*sync.Mutex
 }
 
-var scfNodeLocks = functionLockRegistry{locks: make(map[string]*sync.Mutex)}
+var scfInstanceLocks = functionLockRegistry{locks: make(map[string]*sync.Mutex)}
 
 var scfFunctionLocks = functionLockRegistry{locks: make(map[string]*sync.Mutex)}
 
@@ -29,24 +29,24 @@ func lockSCFFunction(ref tencentscf.FunctionRef) func() {
 	return lock.Unlock
 }
 
-func lockSCFNode(spaceID, nodeID string) func() {
-	key := spaceID + "\x00" + nodeID
-	scfNodeLocks.mu.Lock()
-	lock := scfNodeLocks.locks[key]
+func lockFunctionInstance(spaceID, instanceID string) func() {
+	key := spaceID + "\x00" + instanceID
+	scfInstanceLocks.mu.Lock()
+	lock := scfInstanceLocks.locks[key]
 	if lock == nil {
 		lock = &sync.Mutex{}
-		scfNodeLocks.locks[key] = lock
+		scfInstanceLocks.locks[key] = lock
 	}
-	scfNodeLocks.mu.Unlock()
+	scfInstanceLocks.mu.Unlock()
 	lock.Lock()
 	return lock.Unlock
 }
 
-func lockSCFNodes(spaceID string, nodeIDs []string) func() {
-	ordered := orderedUniqueSCFNodeIDs(nodeIDs)
+func lockFunctionInstances(spaceID string, instanceIDs []string) func() {
+	ordered := orderedUniqueSCFInstanceIDs(instanceIDs)
 	unlock := make([]func(), 0, len(ordered))
-	for _, nodeID := range ordered {
-		unlock = append(unlock, lockSCFNode(spaceID, nodeID))
+	for _, instanceID := range ordered {
+		unlock = append(unlock, lockFunctionInstance(spaceID, instanceID))
 	}
 	return func() {
 		for i := len(unlock) - 1; i >= 0; i-- {
@@ -55,15 +55,15 @@ func lockSCFNodes(spaceID string, nodeIDs []string) func() {
 	}
 }
 
-func orderedUniqueSCFNodeIDs(nodeIDs []string) []string {
-	ordered := append([]string(nil), nodeIDs...)
+func orderedUniqueSCFInstanceIDs(instanceIDs []string) []string {
+	ordered := append([]string(nil), instanceIDs...)
 	sort.Strings(ordered)
 	unique := ordered[:0]
-	for _, nodeID := range ordered {
-		if nodeID == "" || (len(unique) > 0 && unique[len(unique)-1] == nodeID) {
+	for _, instanceID := range ordered {
+		if instanceID == "" || (len(unique) > 0 && unique[len(unique)-1] == instanceID) {
 			continue
 		}
-		unique = append(unique, nodeID)
+		unique = append(unique, instanceID)
 	}
 	return unique
 }

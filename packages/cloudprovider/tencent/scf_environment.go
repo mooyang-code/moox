@@ -21,7 +21,7 @@ const CollectorTimerTimeoutSeconds = 60
 var accessInstanceName = regexp.MustCompile(`^access@[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 
 // ValidateCollectorTimerEnvironment is shared by publication and merged
-// CloudNode deployment, so partial deploy patches cannot bypass create gates.
+// FunctionInstance deployment, so partial deploy patches cannot bypass create gates.
 func ValidateCollectorTimerEnvironment(values map[string]string) error {
 	return ValidateCollectorMarketFetchEnvironment(values)
 }
@@ -163,7 +163,7 @@ func SCFEnvironmentBytes(values map[string]string) int {
 }
 
 // ValidateSCFEnvironment checks the complete merged environment without exposing
-// credential values in a release or CloudNode error.
+// credential values in a release or FunctionInstance error.
 func ValidateSCFEnvironment(values map[string]string) error {
 	if value, exists := values["MOOX_STORAGE_PRIMARY_AUTH_SECRET"]; exists {
 		return fmt.Errorf("SCF environment must not contain MOOX_STORAGE_PRIMARY_AUTH_SECRET (value length: %d)", len(value))

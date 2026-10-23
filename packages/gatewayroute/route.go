@@ -15,7 +15,7 @@ import (
 
 const (
 	defaultTimeoutMS int64 = 5000
-	// CloudNode SCF request-response calls may consume the full 900s function
+	// FunctionInstance SCF request-response calls may consume the full 900s function
 	// timeout. Keep a bounded proxy ceiling while leaving room for transport
 	// overhead and the public Gateway write timeout.
 	maxTimeoutMS        int64 = 960000

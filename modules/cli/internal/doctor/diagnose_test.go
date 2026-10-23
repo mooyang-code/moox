@@ -67,7 +67,7 @@ func TestDiagnoseSpecsOnlyCreateChecksSupportedByBuiltInSignals(t *testing.T) {
 	}
 	for _, id := range []string{
 		"module.health_check:archive:archive-materialize",
-		"module.health_check:cloudnode:cloudnode-jobs",
+		"module.health_check:cloudfunction:cloudfunction-jobs",
 		"module.health_check:collector:collector-market-data",
 		"module.health_check:factor:factor-calculation",
 		"module.health_check:strategy:strategy-targets",

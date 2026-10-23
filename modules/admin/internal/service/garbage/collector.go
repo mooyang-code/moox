@@ -33,10 +33,10 @@ func NewCollector(db *gorm.DB, gateway gatewayclient.Invoker) (*Collector, error
 	return &Collector{db: db, gateway: gateway, now: time.Now}, nil
 }
 
-// Run trims Admin history and collects CloudNode garbage. One failing part
+// Run trims Admin history and collects FunctionInstance garbage. One failing part
 // does not stop the other; their errors are joined.
 func (c *Collector) Run(ctx context.Context) error {
-	return errors.Join(c.trimHistory(ctx), c.collectCloudNode(ctx))
+	return errors.Join(c.trimHistory(ctx), c.collectCloudFunction(ctx))
 }
 
 func (c *Collector) trimHistory(ctx context.Context) error {
@@ -55,30 +55,30 @@ func (c *Collector) trimHistory(ctx context.Context) error {
 	return nil
 }
 
-func (c *Collector) collectCloudNode(ctx context.Context) error {
-	var summary cloudNodeGarbageSummary
-	if err := c.gateway.Invoke(ctx, "trpc.moox.cloudnode.CloudNodeMgr", "CollectGarbage", struct {
+func (c *Collector) collectCloudFunction(ctx context.Context) error {
+	var summary cloudFunctionGarbageSummary
+	if err := c.gateway.Invoke(ctx, "trpc.moox.cloudfunction.CloudFunctionMgr", "CollectGarbage", struct {
 		DryRun bool `json:"dry_run"`
 	}{}, &summary); err != nil {
-		return fmt.Errorf("collect CloudNode garbage: %w", err)
+		return fmt.Errorf("collect FunctionInstance garbage: %w", err)
 	}
 	if summary.RetInfo.Code != 0 {
-		return fmt.Errorf("collect CloudNode garbage: %s", summary.RetInfo.Msg)
+		return fmt.Errorf("collect FunctionInstance garbage: %s", summary.RetInfo.Msg)
 	}
-	log.InfoContextf(ctx, "[Garbage] cloudnode packages=%d cos_objects=%d cos_bytes=%s deleted_nodes=%d node_batches=%d skipped=%v", summary.Packages, summary.COSObjects, summary.COSBytes, summary.DeletedNodes, summary.NodeBatches, summary.Skipped)
+	log.InfoContextf(ctx, "[Garbage] cloudfunction packages=%d cos_objects=%d cos_bytes=%s deleted_instances=%d function_jobs=%d skipped=%v", summary.Packages, summary.COSObjects, summary.COSBytes, summary.DeletedInstances, summary.FunctionJobs, summary.Skipped)
 	return nil
 }
 
 // Admin keeps business modules behind the generic native gateway boundary.
-type cloudNodeGarbageSummary struct {
+type cloudFunctionGarbageSummary struct {
 	RetInfo struct {
 		Code int    `json:"code"`
 		Msg  string `json:"msg"`
 	} `json:"ret_info"`
-	Packages     uint32      `json:"packages"`
-	COSObjects   uint32      `json:"cos_objects"`
-	COSBytes     json.Number `json:"cos_bytes"`
-	DeletedNodes uint32      `json:"deleted_nodes"`
-	NodeBatches  uint32      `json:"node_batches"`
-	Skipped      []string    `json:"skipped"`
+	Packages         uint32      `json:"packages"`
+	COSObjects       uint32      `json:"cos_objects"`
+	COSBytes         json.Number `json:"cos_bytes"`
+	DeletedInstances uint32      `json:"deleted_instances"`
+	FunctionJobs     uint32      `json:"function_jobs"`
+	Skipped          []string    `json:"skipped"`
 }

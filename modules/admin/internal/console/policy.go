@@ -14,7 +14,7 @@ const globalAdminRole = 2
 // 也有全局运维接口，请求里没有空间时按全局运维处理。
 func requiresSpaceHeader(serviceID string) bool {
 	switch serviceID {
-	case "trade", "strategy", "collector", "cloudnode", "archive":
+	case "trade", "strategy", "collector", "cloudfunction", "archive":
 		return true
 	}
 	return false
@@ -59,7 +59,7 @@ var adminOnlyMethods = map[string]bool{
 	"factor-mgr/CreateFactor": true, "factor-mgr/UpdateFactor": true,
 	// 策略定义没有空间归属（按全局 strategy_id 定位），实例与回放按空间授权：空间管理员改定义会影响其他空间已引用它的实例。
 	"strategy/CreateStrategy": true, "strategy/UpdateStrategy": true, "strategy/DeleteStrategy": true,
-	"cloudnode/CreateCloudAccount": true, "cloudnode/UpdateCloudAccount": true, "cloudnode/DeleteCloudAccount": true,
+	"cloudfunction/CreateCloudAccount": true, "cloudfunction/UpdateCloudAccount": true, "cloudfunction/DeleteCloudAccount": true,
 }
 
 func adminOnlyMethod(serviceID, method string) bool { return adminOnlyMethods[serviceID+"/"+method] }

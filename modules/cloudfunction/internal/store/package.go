@@ -24,8 +24,8 @@ func (r *CatalogRepository) ListPackages(ctx context.Context, spaceID string, re
 	if req.GetPackageType() != pb.PackageType_PACKAGE_TYPE_UNSPECIFIED {
 		q = q.Where("c_package_type = ?", packageTypeToDB(req.GetPackageType()))
 	}
-	if req.GetBizType() != "" {
-		q = q.Where("c_workload_type LIKE ?", "%"+req.GetBizType()+"%")
+	if req.GetWorkloadType() != "" {
+		q = q.Where("c_workload_type LIKE ?", "%"+req.GetWorkloadType()+"%")
 	}
 	if req.Status != nil {
 		q = q.Where("c_status = ?", packageStatusToDB(req.GetStatus()))

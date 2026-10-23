@@ -23,7 +23,7 @@ type scfFunctionInspection struct {
 	function tencentscf.DiscoveryFunction
 	info     *tencentscf.FunctionInfo
 	trigger  string
-	node     *store.CloudNode
+	instance *store.FunctionInstance
 	state    pb.SCFFunctionImportState
 	reason   string
 }
@@ -144,12 +144,12 @@ func scanSCFInventory(ctx context.Context, discovery scfInventoryProvider, regio
 
 func (s *Service) inspectSCFFunction(ctx context.Context, spaceID, accountID string, client scfProvisioner, function tencentscf.DiscoveryFunction) scfFunctionInspection {
 	inspection := scfFunctionInspection{function: function, state: pb.SCFFunctionImportState_SCF_FUNCTION_IMPORT_STATE_BLOCKED}
-	node, err := s.catalog.GetNodeIncludingDeleted(ctx, spaceID, function.FunctionName)
+	instance, err := s.catalog.GetInstanceIncludingDeleted(ctx, spaceID, function.FunctionName)
 	if err != nil {
-		inspection.reason = "read existing node failed"
+		inspection.reason = "read existing instance failed"
 		return inspection
 	}
-	inspection.node = node
+	inspection.instance = instance
 	if info, getErr := client.GetFunction(ctx, function.FunctionRef); getErr != nil {
 		inspection.reason = "read function configuration failed"
 		return inspection
@@ -192,12 +192,12 @@ func (s *Service) inspectSCFFunction(ctx context.Context, spaceID, accountID str
 		inspection.reason = "function type is not Event"
 		return inspection
 	}
-	if node == nil {
+	if instance == nil {
 		inspection.state = pb.SCFFunctionImportState_SCF_FUNCTION_IMPORT_STATE_NEW
-	} else if node.CloudAccountID != accountID || node.Region != function.Region || node.Namespace != function.Namespace || node.FunctionName != function.FunctionName {
-		inspection.reason = "existing node identity belongs to another cloud account or SCF location"
+	} else if instance.CloudAccountID != accountID || instance.Region != function.Region || instance.Namespace != function.Namespace || instance.FunctionName != function.FunctionName {
+		inspection.reason = "existing instance identity belongs to another cloud account or SCF location"
 		return inspection
-	} else if node.IsDeleted {
+	} else if instance.IsDeleted {
 		inspection.state = pb.SCFFunctionImportState_SCF_FUNCTION_IMPORT_STATE_DELETED
 	} else {
 		inspection.state = pb.SCFFunctionImportState_SCF_FUNCTION_IMPORT_STATE_EXISTING
@@ -218,14 +218,14 @@ func inspectionsToPB(items []scfFunctionInspection) []*pb.SCFFunctionCandidate {
 			functionType = firstString(item.info.Type, functionType)
 			status = firstString(item.info.Status, status)
 		}
-		bizType := ""
+		workloadType := ""
 		if item.state != pb.SCFFunctionImportState_SCF_FUNCTION_IMPORT_STATE_BLOCKED {
-			bizType = "market_fetcher"
+			workloadType = "market_fetcher"
 		}
 		result = append(result, &pb.SCFFunctionCandidate{
 			Function: &pb.SCFFunctionRef{Region: item.function.Region, Namespace: item.function.Namespace, FunctionName: item.function.FunctionName},
-			Status:   status, Runtime: runtime, FunctionType: functionType, PackageId: packageID,
-			NodeId: item.function.FunctionName, TriggerType: item.trigger, BizType: bizType,
+			Status:   status, Runtime: runtime, ScfType: functionType, PackageId: packageID,
+			InstanceId: item.function.FunctionName, TriggerType: item.trigger, WorkloadType: workloadType,
 			ImportState: item.state, Importable: item.state != pb.SCFFunctionImportState_SCF_FUNCTION_IMPORT_STATE_BLOCKED,
 			Reason: item.reason,
 		})
@@ -299,7 +299,7 @@ func (s *Service) ImportSCFFunctions(ctx context.Context, req *pb.ImportSCFFunct
 			continue
 		}
 		if _, exists := seen[ref.GetFunctionName()]; exists {
-			item.ErrorMessage = "duplicate function name would collide with another node"
+			item.ErrorMessage = "duplicate function name would collide with another instance"
 			response.Failed++
 			response.Results = append(response.Results, item)
 			continue
@@ -318,7 +318,7 @@ func (s *Service) ImportSCFFunctions(ctx context.Context, req *pb.ImportSCFFunct
 		}
 		seen[ref.GetFunctionName()] = struct{}{}
 		result, action, err := s.importSCFFunction(ctx, spaceID, *account, client, ref)
-		item.NodeId = ref.GetFunctionName()
+		item.InstanceId = ref.GetFunctionName()
 		item.Action = action
 		if err != nil {
 			item.ErrorMessage = err.Error()
@@ -343,78 +343,78 @@ func scfRefKey(ref tencentscf.FunctionRef) string {
 	return ref.Region + "\x00" + ref.Namespace + "\x00" + ref.FunctionName
 }
 
-func (s *Service) importSCFFunction(ctx context.Context, spaceID string, account store.CloudAccount, client scfProvisioner, ref *pb.SCFFunctionRef) (store.CloudNode, string, error) {
+func (s *Service) importSCFFunction(ctx context.Context, spaceID string, account store.CloudAccount, client scfProvisioner, ref *pb.SCFFunctionRef) (store.FunctionInstance, string, error) {
 	functionRef := tencentscf.FunctionRef{Region: ref.GetRegion(), Namespace: ref.GetNamespace(), FunctionName: ref.GetFunctionName()}
-	unlockNode := lockSCFNode(spaceID, ref.GetFunctionName())
-	defer unlockNode()
+	unlockInstance := lockFunctionInstance(spaceID, ref.GetFunctionName())
+	defer unlockInstance()
 	unlockFunction := lockSCFFunction(functionRef)
 	defer unlockFunction()
 	info, err := client.GetFunction(ctx, functionRef)
 	if err != nil {
-		return store.CloudNode{}, "", fmt.Errorf("read function configuration failed")
+		return store.FunctionInstance{}, "", fmt.Errorf("read function configuration failed")
 	}
 	if info == nil {
-		return store.CloudNode{}, "", fmt.Errorf("read function configuration returned empty result")
+		return store.FunctionInstance{}, "", fmt.Errorf("read function configuration returned empty result")
 	}
 	if !strings.EqualFold(strings.TrimSpace(info.Status), "active") {
-		return store.CloudNode{}, "", fmt.Errorf("function is not Active")
+		return store.FunctionInstance{}, "", fmt.Errorf("function is not Active")
 	}
 	if strings.TrimSpace(info.Environment["MOOX_SPACE_ID"]) != spaceID {
-		return store.CloudNode{}, "", fmt.Errorf("function belongs to another Space")
+		return store.FunctionInstance{}, "", fmt.Errorf("function belongs to another Space")
 	}
 	packageID := strings.TrimSpace(info.Environment["MOOX_CODE_PACKAGE_ID"])
 	if packageID == "" {
-		return store.CloudNode{}, "", fmt.Errorf("MOOX_CODE_PACKAGE_ID is missing")
+		return store.FunctionInstance{}, "", fmt.Errorf("MOOX_CODE_PACKAGE_ID is missing")
 	}
 	if !isMarketFetcherFunction(ref.GetFunctionName(), spaceID, info.Environment) {
-		return store.CloudNode{}, "", fmt.Errorf("function is not a MooX market fetcher")
+		return store.FunctionInstance{}, "", fmt.Errorf("function is not a MooX market fetcher")
 	}
 	functionType := strings.ToLower(strings.TrimSpace(info.Type))
 	if functionType == "http" {
-		return store.CloudNode{}, "", fmt.Errorf("HTTP 型函数不参与 Collector 调度")
+		return store.FunctionInstance{}, "", fmt.Errorf("HTTP 型函数不参与 Collector 调度")
 	}
 	if functionType != "event" {
-		return store.CloudNode{}, "", fmt.Errorf("function type is not Event")
+		return store.FunctionInstance{}, "", fmt.Errorf("function type is not Event")
 	}
 	triggerType := "invoke"
 	if trigger, triggerErr := client.GetTimerTrigger(ctx, functionRef, timerTriggerName); triggerErr != nil {
-		return store.CloudNode{}, "", fmt.Errorf("read timer trigger failed")
+		return store.FunctionInstance{}, "", fmt.Errorf("read timer trigger failed")
 	} else if trigger != nil {
 		triggerType = "timer"
 	}
-	existing, err := s.catalog.GetNodeIncludingDeleted(ctx, spaceID, ref.GetFunctionName())
+	existing, err := s.catalog.GetInstanceIncludingDeleted(ctx, spaceID, ref.GetFunctionName())
 	if err != nil {
-		return store.CloudNode{}, "", fmt.Errorf("read existing node failed")
+		return store.FunctionInstance{}, "", fmt.Errorf("read existing instance failed")
 	}
 	if existing != nil && (existing.Region != ref.GetRegion() || existing.Namespace != ref.GetNamespace() || existing.FunctionName != ref.GetFunctionName() || existing.CloudAccountID != account.AccountID) {
-		return store.CloudNode{}, "", fmt.Errorf("node identity collides with a different cloud account, SCF region or namespace")
+		return store.FunctionInstance{}, "", fmt.Errorf("instance identity collides with a different cloud account, SCF region or namespace")
 	}
 	metadataMap := map[string]any{}
 	if existing != nil {
 		metadataMap = parseJSONMap(existing.Metadata)
 	}
-	for key, value := range map[string]any{"biz_type": "market_fetcher", "collector_publish_fenced": true, "function_type": functionType, "runtime": info.Runtime, "deployment_ready": true, "imported_from_scf": true} {
+	for key, value := range map[string]any{"workload_type": "market_fetcher", "collector_publish_fenced": true, "function_type": functionType, "runtime": info.Runtime, "deployment_ready": true, "imported_from_scf": true} {
 		metadataMap[key] = value
 	}
 	metadata, err := json.Marshal(metadataMap)
 	if err != nil {
-		return store.CloudNode{}, "", err
+		return store.FunctionInstance{}, "", err
 	}
-	node := store.CloudNode{SpaceID: spaceID, NodeID: ref.GetFunctionName(), Provider: "tencent-scf", CloudAccountID: account.AccountID, PackageID: packageID, NodeType: "scf-event", TriggerType: triggerType, Region: ref.GetRegion(), Namespace: ref.GetNamespace(), FunctionName: ref.GetFunctionName(), Metadata: string(metadata), IsDeleted: false}
+	instance := store.FunctionInstance{SpaceID: spaceID, InstanceID: ref.GetFunctionName(), Provider: "tencent-scf", CloudAccountID: account.AccountID, PackageID: packageID, FunctionType: "scf-event", TriggerType: triggerType, Region: ref.GetRegion(), Namespace: ref.GetNamespace(), FunctionName: ref.GetFunctionName(), Metadata: string(metadata), IsDeleted: false}
 	if existing != nil {
-		node.PackageVersion = existing.PackageVersion
-		node.DeploymentID = existing.DeploymentID
+		instance.PackageVersion = existing.PackageVersion
+		instance.DeploymentID = existing.DeploymentID
 	}
-	if err := s.catalog.UpsertNode(ctx, node); err != nil {
-		return store.CloudNode{}, "", fmt.Errorf("upsert node failed")
+	if err := s.catalog.UpsertInstance(ctx, instance); err != nil {
+		return store.FunctionInstance{}, "", fmt.Errorf("upsert instance failed")
 	}
 	if existing == nil {
-		return node, "created", nil
+		return instance, "created", nil
 	}
 	if existing.IsDeleted {
-		return node, "restored", nil
+		return instance, "restored", nil
 	}
-	return node, "unchanged", nil
+	return instance, "unchanged", nil
 }
 
 func isMarketFetcherFunction(name, spaceID string, environment map[string]string) bool {

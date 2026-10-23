@@ -23,8 +23,8 @@
   overflow-x: hidden;
 }
 
-.cloud-node-action-bar,
-.cloud-node-filter-bar {
+.cloud-function-action-bar,
+.cloud-function-filter-bar {
   display: flex;
   width: 100%;
   max-width: 100%;
@@ -33,7 +33,7 @@
   margin-bottom: var(--moox-space-tight);
 }
 
-.node-workloads {
+.instance-workloads {
   display: flex;
   min-width: 0;
   flex-wrap: nowrap;
@@ -41,11 +41,11 @@
   overflow: hidden;
 }
 
-.node-workloads :deep(.arco-tag) {
+.instance-workloads :deep(.arco-tag) {
   flex: 0 0 auto;
 }
 
-.cloud-node-table :deep(.arco-table-td-content),
-.node-id-link {
+.function-instance-table :deep(.arco-table-td-content),
+.instance-id-link {
   white-space: nowrap;
 }

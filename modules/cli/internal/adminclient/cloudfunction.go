@@ -22,7 +22,7 @@ var newPackageUploadHTTPClient = func() *http.Client {
 	// Tencent COS occasionally advertises an HTTP/2 endpoint that replies with
 	// a plaintext HTTP response during the TLS handshake. The default Go
 	// transport then reports "server gave HTTP response to HTTPS client" and a
-	// publish fails before CloudNode can finish the package transaction. Keep
+	// publish fails before FunctionInstance can finish the package transaction. Keep
 	// package uploads on an explicit HTTP/1.1 transport; the URL remains HTTPS
 	// and certificate verification is unchanged.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -43,7 +43,7 @@ type CloudAccount struct {
 }
 
 // CloudAccountInput registers one Tencent credential and its package-upload
-// COS location with CloudNode. The same account can operate SCF in every
+// COS location with FunctionInstance. The same account can operate SCF in every
 // configured region. It never contains SecretID/SecretKey.
 type CloudAccountInput struct {
 	AccountID          string `json:"account_id"`
@@ -61,7 +61,7 @@ type UploadPackageRequest struct {
 	Description      string `json:"description,omitempty"`
 	Runtime          string `json:"runtime"`
 	PackageType      int    `json:"package_type"`
-	BizType          string `json:"biz_type,omitempty"`
+	WorkloadType     string `json:"workload_type,omitempty"`
 	OriginalFilename string `json:"original_filename,omitempty"`
 	CloudAccountID   string `json:"cloud_account_id"`
 }
@@ -84,9 +84,9 @@ type UploadPackageResponse struct {
 	PackageID string `json:"package_id"`
 }
 
-type NodeCreateItem struct {
+type FunctionInstanceCreateItem struct {
 	CloudAccountID               string            `json:"cloud_account_id"`
-	NodeType                     string            `json:"node_type"`
+	FunctionType                 string            `json:"function_type"`
 	TriggerType                  string            `json:"trigger_type,omitempty"`
 	Runtime                      string            `json:"runtime,omitempty"`
 	Handler                      string            `json:"handler,omitempty"`
@@ -101,8 +101,8 @@ type NodeCreateItem struct {
 	CollectorPublishFencingToken int64             `json:"collector_publish_fencing_token,omitempty"`
 }
 
-type NodeDeployItem struct {
-	NodeID                       string            `json:"node_id"`
+type FunctionInstanceDeployItem struct {
+	InstanceID                   string            `json:"instance_id"`
 	PackageID                    string            `json:"package_id"`
 	Config                       map[string]string `json:"config,omitempty"`
 	Environment                  map[string]string `json:"environment,omitempty"`
@@ -110,28 +110,27 @@ type NodeDeployItem struct {
 	CollectorPublishFencingToken int64             `json:"collector_publish_fencing_token,omitempty"`
 }
 
-type CloudNode struct {
-	NodeID         string         `json:"node_id"`
+type FunctionInstance struct {
+	InstanceID     string         `json:"instance_id"`
 	CloudAccountID string         `json:"cloud_account_id"`
 	PackageID      string         `json:"package_id"`
 	Region         string         `json:"region"`
 	Namespace      string         `json:"namespace"`
-	NodeType       string         `json:"node_type"`
+	FunctionType   string         `json:"function_type"`
 	TriggerType    string         `json:"trigger_type"`
-	BizType        string         `json:"biz_type"`
+	WorkloadType   string         `json:"workload_type"`
 	FunctionName   string         `json:"function_name"`
 	Metadata       map[string]any `json:"metadata"`
-	Status         any            `json:"status"`
 	IsDeleted      bool           `json:"is_deleted"`
 }
 
-type CloudNodeListFilter struct {
+type FunctionInstanceListFilter struct {
 	CloudAccountID string
 	Namespace      string
 	Region         string
-	NodeID         string
-	NodeType       string
-	BizType        string
+	InstanceID     string
+	FunctionType   string
+	WorkloadType   string
 	TriggerType    string
 	PageSize       int
 }
@@ -324,13 +323,13 @@ func (c *Client) ListEnabledTasks(ctx context.Context, spaceID string) ([]Collec
 	return c.ListTasks(ctx, spaceID, "", &enabled)
 }
 
-type SubmitNodeBatchResponse struct {
+type SubmitFunctionJobResponse struct {
 	JobID      string `json:"job_id"`
 	Operation  string `json:"operation"`
 	TotalCount int    `json:"total_count"`
 }
 
-type NodeBatchSummary struct {
+type FunctionJobSummary struct {
 	JobID           string `json:"job_id"`
 	Operation       string `json:"operation"`
 	Status          string `json:"status"`
@@ -344,9 +343,9 @@ type NodeBatchSummary struct {
 	CompletedAt     string `json:"completed_at,omitempty"`
 }
 
-type NodeBatchItemResult struct {
+type FunctionJobItemResult struct {
 	ItemID        string `json:"item_id"`
-	NodeID        string `json:"node_id"`
+	InstanceID    string `json:"instance_id"`
 	Status        string `json:"status"`
 	ResultSummary string `json:"result_summary,omitempty"`
 	ErrorMessage  string `json:"error_message,omitempty"`
@@ -354,41 +353,41 @@ type NodeBatchItemResult struct {
 	CompletedAt   string `json:"completed_at,omitempty"`
 }
 
-type NodeBatchChangeResponse struct {
-	Job   *NodeBatchSummary     `json:"job"`
-	Items []NodeBatchItemResult `json:"items"`
+type FunctionJobChangeResponse struct {
+	Job   *FunctionJobSummary     `json:"job"`
+	Items []FunctionJobItemResult `json:"items"`
 }
 
 var (
-	nodeBatchOperationNames = map[int]string{
-		0: "NODE_BATCH_OPERATION_UNSPECIFIED",
-		1: "NODE_BATCH_OPERATION_CREATE_NODES",
-		2: "NODE_BATCH_OPERATION_DEPLOY_NODES",
-		3: "NODE_BATCH_OPERATION_DELETE_NODES",
-		4: "NODE_BATCH_OPERATION_UPDATE_RUNTIME_CONFIGS",
+	functionJobOperationNames = map[int]string{
+		0: "FUNCTION_JOB_OPERATION_UNSPECIFIED",
+		1: "FUNCTION_JOB_OPERATION_CREATE_INSTANCES",
+		2: "FUNCTION_JOB_OPERATION_DEPLOY_INSTANCES",
+		3: "FUNCTION_JOB_OPERATION_DELETE_INSTANCES",
+		4: "FUNCTION_JOB_OPERATION_UPDATE_RUNTIME_CONFIGS",
 	}
-	nodeBatchStatusNames = map[int]string{
-		0: "NODE_BATCH_STATUS_UNSPECIFIED",
-		1: "NODE_BATCH_STATUS_PENDING",
-		2: "NODE_BATCH_STATUS_RUNNING",
-		3: "NODE_BATCH_STATUS_SUCCESS",
-		4: "NODE_BATCH_STATUS_FAILED",
-		5: "NODE_BATCH_STATUS_PARTIAL",
+	functionJobStatusNames = map[int]string{
+		0: "FUNCTION_JOB_STATUS_UNSPECIFIED",
+		1: "FUNCTION_JOB_STATUS_PENDING",
+		2: "FUNCTION_JOB_STATUS_RUNNING",
+		3: "FUNCTION_JOB_STATUS_SUCCESS",
+		4: "FUNCTION_JOB_STATUS_FAILED",
+		5: "FUNCTION_JOB_STATUS_PARTIAL",
 	}
-	nodeBatchItemStatusNames = map[int]string{
-		0: "NODE_BATCH_ITEM_STATUS_UNSPECIFIED",
-		1: "NODE_BATCH_ITEM_STATUS_PENDING",
-		2: "NODE_BATCH_ITEM_STATUS_RUNNING",
-		3: "NODE_BATCH_ITEM_STATUS_SUCCESS",
-		4: "NODE_BATCH_ITEM_STATUS_FAILED",
+	functionJobItemStatusNames = map[int]string{
+		0: "FUNCTION_JOB_ITEM_STATUS_UNSPECIFIED",
+		1: "FUNCTION_JOB_ITEM_STATUS_PENDING",
+		2: "FUNCTION_JOB_ITEM_STATUS_RUNNING",
+		3: "FUNCTION_JOB_ITEM_STATUS_SUCCESS",
+		4: "FUNCTION_JOB_ITEM_STATUS_FAILED",
 	}
 )
 
-func (s *NodeBatchSummary) UnmarshalJSON(data []byte) error {
+func (s *FunctionJobSummary) UnmarshalJSON(data []byte) error {
 	var wire struct {
+		Status          any    `json:"status"`
 		JobID           string `json:"job_id"`
 		Operation       any    `json:"operation"`
-		Status          any    `json:"status"`
 		TotalCount      int    `json:"total_count"`
 		PendingCount    int    `json:"pending_count"`
 		RunningCount    int    `json:"running_count"`
@@ -401,15 +400,15 @@ func (s *NodeBatchSummary) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
-	operation, err := normalizeProtoEnum(wire.Operation, nodeBatchOperationNames)
+	operation, err := normalizeProtoEnum(wire.Operation, functionJobOperationNames)
 	if err != nil {
-		return fmt.Errorf("node batch operation: %w", err)
+		return fmt.Errorf("function job operation: %w", err)
 	}
-	status, err := normalizeProtoEnum(wire.Status, nodeBatchStatusNames)
+	status, err := normalizeProtoEnum(wire.Status, functionJobStatusNames)
 	if err != nil {
-		return fmt.Errorf("node batch status: %w", err)
+		return fmt.Errorf("function job status: %w", err)
 	}
-	*s = NodeBatchSummary{
+	*s = FunctionJobSummary{
 		JobID: wire.JobID, Operation: operation, Status: status,
 		TotalCount: wire.TotalCount, PendingCount: wire.PendingCount,
 		RunningCount: wire.RunningCount, SuccessCount: wire.SuccessCount,
@@ -419,11 +418,11 @@ func (s *NodeBatchSummary) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (item *NodeBatchItemResult) UnmarshalJSON(data []byte) error {
+func (item *FunctionJobItemResult) UnmarshalJSON(data []byte) error {
 	var wire struct {
-		ItemID        string `json:"item_id"`
-		NodeID        string `json:"node_id"`
 		Status        any    `json:"status"`
+		ItemID        string `json:"item_id"`
+		InstanceID    string `json:"instance_id"`
 		ResultSummary string `json:"result_summary"`
 		ErrorMessage  string `json:"error_message"`
 		StartedAt     string `json:"started_at"`
@@ -432,12 +431,12 @@ func (item *NodeBatchItemResult) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
-	status, err := normalizeProtoEnum(wire.Status, nodeBatchItemStatusNames)
+	status, err := normalizeProtoEnum(wire.Status, functionJobItemStatusNames)
 	if err != nil {
-		return fmt.Errorf("node batch item status: %w", err)
+		return fmt.Errorf("function job item status: %w", err)
 	}
-	*item = NodeBatchItemResult{
-		ItemID: wire.ItemID, NodeID: wire.NodeID, Status: status,
+	*item = FunctionJobItemResult{
+		ItemID: wire.ItemID, InstanceID: wire.InstanceID, Status: status,
 		ResultSummary: wire.ResultSummary, ErrorMessage: wire.ErrorMessage,
 		StartedAt: wire.StartedAt, CompletedAt: wire.CompletedAt,
 	}
@@ -468,8 +467,8 @@ func normalizeProtoEnum(value any, names map[int]string) (string, error) {
 	}
 }
 
-// ListCloudNodes returns every catalog node matching the server-side fleet filters.
-func (c *Client) ListCloudNodes(ctx context.Context, filter CloudNodeListFilter) ([]CloudNode, error) {
+// ListFunctionInstances returns every catalog instance matching the server-side fleet filters.
+func (c *Client) ListFunctionInstances(ctx context.Context, filter FunctionInstanceListFilter) ([]FunctionInstance, error) {
 	pageSize := filter.PageSize
 	if pageSize == 0 {
 		pageSize = 500
@@ -477,15 +476,15 @@ func (c *Client) ListCloudNodes(ctx context.Context, filter CloudNodeListFilter)
 	if pageSize < 1 || pageSize > 1000 {
 		return nil, fmt.Errorf("cloud node page size must be between 1 and 1000")
 	}
-	var nodes []CloudNode
+	var instances []FunctionInstance
 	for page := 1; ; page++ {
-		raw, err := c.callCloudNodeJSON(ctx, "GetNodeList", map[string]any{
+		raw, err := c.callCloudFunctionJSON(ctx, "ListFunctionInstances", map[string]any{
 			"cloud_account_id": filter.CloudAccountID,
 			"namespace":        filter.Namespace,
 			"region":           filter.Region,
-			"node_id":          filter.NodeID,
-			"node_type":        filter.NodeType,
-			"biz_type":         filter.BizType,
+			"instance_id":      filter.InstanceID,
+			"function_type":    filter.FunctionType,
+			"workload_type":    filter.WorkloadType,
 			"trigger_type":     filter.TriggerType,
 			"page":             map[string]int{"page": page, "size": pageSize},
 		})
@@ -493,8 +492,8 @@ func (c *Client) ListCloudNodes(ctx context.Context, filter CloudNodeListFilter)
 			return nil, err
 		}
 		var resp struct {
-			RetInfo *retInfo    `json:"ret_info"`
-			Items   []CloudNode `json:"items"`
+			RetInfo *retInfo           `json:"ret_info"`
+			Items   []FunctionInstance `json:"items"`
 			Page    struct {
 				HasMore bool `json:"has_more"`
 			} `json:"page"`
@@ -503,24 +502,24 @@ func (c *Client) ListCloudNodes(ctx context.Context, filter CloudNodeListFilter)
 			return nil, err
 		}
 		if resp.RetInfo == nil || !isRetInfoSuccess(resp.RetInfo.Code) {
-			return nil, fmt.Errorf("GetNodeList rejected")
+			return nil, fmt.Errorf("ListFunctionInstances rejected")
 		}
-		nodes = append(nodes, resp.Items...)
+		instances = append(instances, resp.Items...)
 		if !resp.Page.HasMore {
-			return nodes, nil
+			return instances, nil
 		}
 	}
 }
 
-// InvokeFunction executes a request-response CloudNode SCF invocation. It is
+// InvokeFunction executes a request-response FunctionInstance SCF invocation. It is
 // intentionally small because the short-lived fetcher only needs the probe
 // action during deployment validation.
-func (c *Client) InvokeFunction(ctx context.Context, nodeID string, event map[string]any) (map[string]any, error) {
-	if strings.TrimSpace(nodeID) == "" {
-		return nil, fmt.Errorf("node_id is required")
+func (c *Client) InvokeFunction(ctx context.Context, instanceID string, event map[string]any) (map[string]any, error) {
+	if strings.TrimSpace(instanceID) == "" {
+		return nil, fmt.Errorf("instance_id is required")
 	}
-	raw, err := c.callCloudNodeJSON(ctx, "InvokeFunction", map[string]any{
-		"node_id": nodeID, "event_data": event, "scf_invoke_type": "SCF_INVOKE_TYPE_REQUEST_RESPONSE",
+	raw, err := c.callCloudFunctionJSON(ctx, "InvokeFunction", map[string]any{
+		"instance_id": instanceID, "event_data": event, "scf_invoke_type": "SCF_INVOKE_TYPE_REQUEST_RESPONSE",
 	})
 	if err != nil {
 		return nil, err
@@ -547,23 +546,23 @@ func (c *Client) InvokeFunction(ctx context.Context, nodeID string, event map[st
 		// Preserve provider execution metadata when a synchronous invocation
 		// returns an empty RetMsg. This is particularly useful for deployment
 		// probes: an empty payload is not success, and the request id/message
-		// are the only actionable clues available from CloudNode.
+		// are the only actionable clues available from FunctionInstance.
 		return map[string]any{
-			"_cloudnode_code":       response.SCF.Code,
-			"_cloudnode_message":    response.SCF.Message,
-			"_cloudnode_request_id": response.SCF.RequestID,
+			"_cloudfunction_code":       response.SCF.Code,
+			"_cloudfunction_message":    response.SCF.Message,
+			"_cloudfunction_request_id": response.SCF.RequestID,
 		}, nil
 	}
 	return response.SCF.Result, nil
 }
 
-// ListCloudAccounts 调 cloudnode/ListCloudAccounts，返回脱敏账户列表。
+// ListCloudAccounts 调 cloudfunction/ListCloudAccounts，返回脱敏账户列表。
 func (c *Client) ListCloudAccounts(ctx context.Context, provider string) ([]CloudAccount, error) {
 	body := map[string]string{}
 	if provider != "" {
 		body["provider"] = provider
 	}
-	raw, err := c.callCloudNodeJSON(ctx, "ListCloudAccounts", body)
+	raw, err := c.callCloudFunctionJSON(ctx, "ListCloudAccounts", body)
 	if err != nil {
 		return nil, err
 	}
@@ -585,8 +584,8 @@ func (c *Client) LatestPackage(ctx context.Context, name string) (id string, fou
 	// 服务端按名称模糊匹配、按创建先后倒序：逐页找第一个名称完全相同的，不能只看第一页
 	// （更新的、名称包含该名称的其他包可能把精确匹配挤到后面）。
 	for page := 1; ; page++ {
-		raw, err := c.callCloudNodeJSON(ctx, "GetPackageList", map[string]any{
-			"package_name": name, "biz_type": "market_fetcher", "status": "PACKAGE_STATUS_AVAILABLE", "page": map[string]any{"page": page, "size": 50},
+		raw, err := c.callCloudFunctionJSON(ctx, "GetPackageList", map[string]any{
+			"package_name": name, "workload_type": "market_fetcher", "status": "PACKAGE_STATUS_AVAILABLE", "page": map[string]any{"page": page, "size": 50},
 		})
 		if err != nil {
 			return "", false, err
@@ -619,9 +618,9 @@ func (c *Client) LatestPackage(ctx context.Context, name string) (id string, fou
 }
 
 // CreateCloudAccount registers a cloud account before a fleet publish. COS
-// bucket creation remains CloudNode's responsibility during package upload.
+// bucket creation remains FunctionInstance's responsibility during package upload.
 func (c *Client) CreateCloudAccount(ctx context.Context, input CloudAccountInput) (*CloudAccount, error) {
-	raw, err := c.callCloudNodeJSON(ctx, "CreateCloudAccount", map[string]CloudAccountInput{"account": input})
+	raw, err := c.callCloudFunctionJSON(ctx, "CreateCloudAccount", map[string]CloudAccountInput{"account": input})
 	if err != nil {
 		return nil, err
 	}
@@ -643,7 +642,7 @@ func (c *Client) CreateCloudAccount(ctx context.Context, input CloudAccountInput
 
 // UploadPackage 两阶段上传：InitPackageUpload -> COS PUT -> CompletePackageUpload。
 func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, data []byte) (*UploadPackageResponse, error) {
-	raw, err := c.callCloudNodeJSON(ctx, "InitPackageUpload", req)
+	raw, err := c.callCloudFunctionJSON(ctx, "InitPackageUpload", req)
 	if err != nil {
 		return nil, err
 	}
@@ -682,7 +681,7 @@ func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, da
 		"file_md5":   hex.EncodeToString(sum[:]),
 		"file_size":  len(data),
 	}
-	raw, err = c.callCloudNodeJSON(ctx, "CompletePackageUpload", completeBody)
+	raw, err = c.callCloudFunctionJSON(ctx, "CompletePackageUpload", completeBody)
 	if err != nil {
 		return nil, err
 	}
@@ -698,64 +697,64 @@ func (c *Client) UploadPackage(ctx context.Context, req UploadPackageRequest, da
 	return &UploadPackageResponse{PackageID: initResp.PackageID}, nil
 }
 
-func (c *Client) SubmitCreateNodes(ctx context.Context, nodes []NodeCreateItem) (*SubmitNodeBatchResponse, error) {
-	nodes = c.withPublishFenceToCreateItems(nodes)
-	raw, err := c.callCloudNodeJSON(ctx, "SubmitCreateNodes", map[string]any{"nodes": nodes})
+func (c *Client) SubmitCreateFunctionInstances(ctx context.Context, instances []FunctionInstanceCreateItem) (*SubmitFunctionJobResponse, error) {
+	instances = c.withPublishFenceToCreateItems(instances)
+	raw, err := c.callCloudFunctionJSON(ctx, "SubmitCreateFunctionInstances", map[string]any{"instances": instances})
 	if err != nil {
 		return nil, err
 	}
-	return parseSubmitNodeBatchResponse(raw, "SubmitCreateNodes")
+	return parseSubmitFunctionJobResponse(raw, "SubmitCreateFunctionInstances")
 }
 
-func (c *Client) SubmitDeployNodes(ctx context.Context, deployments []NodeDeployItem) (*SubmitNodeBatchResponse, error) {
+func (c *Client) SubmitDeployFunctionInstances(ctx context.Context, deployments []FunctionInstanceDeployItem) (*SubmitFunctionJobResponse, error) {
 	deployments = c.withPublishFenceToDeployItems(deployments)
-	raw, err := c.callCloudNodeJSON(ctx, "SubmitDeployNodes", map[string]any{"deployments": deployments})
+	raw, err := c.callCloudFunctionJSON(ctx, "SubmitDeployFunctionInstances", map[string]any{"deployments": deployments})
 	if err != nil {
 		return nil, err
 	}
-	return parseSubmitNodeBatchResponse(raw, "SubmitDeployNodes")
+	return parseSubmitFunctionJobResponse(raw, "SubmitDeployFunctionInstances")
 }
 
-// SubmitDeleteNodes submits durable remote SCF deletion tasks for catalog nodes.
-func (c *Client) SubmitDeleteNodes(ctx context.Context, nodeIDs []string) (*SubmitNodeBatchResponse, error) {
-	body := map[string]any{"node_ids": nodeIDs}
+// SubmitDeleteFunctionInstances submits durable remote SCF deletion tasks for catalog instances.
+func (c *Client) SubmitDeleteFunctionInstances(ctx context.Context, instanceIDs []string) (*SubmitFunctionJobResponse, error) {
+	body := map[string]any{"instance_ids": instanceIDs}
 	if fence := c.CollectorPublishFence(); fence != nil {
 		body["collector_publish_lease_id"] = fence.LeaseID
 		body["collector_publish_fencing_token"] = fence.FencingToken
 	}
-	raw, err := c.callCloudNodeJSON(ctx, "SubmitDeleteNodes", body)
+	raw, err := c.callCloudFunctionJSON(ctx, "SubmitDeleteFunctionInstances", body)
 	if err != nil {
 		return nil, err
 	}
-	return parseSubmitNodeBatchResponse(raw, "SubmitDeleteNodes")
+	return parseSubmitFunctionJobResponse(raw, "SubmitDeleteFunctionInstances")
 }
 
-func (c *Client) GetNodeBatchChange(ctx context.Context, jobID string) (*NodeBatchChangeResponse, error) {
+func (c *Client) GetFunctionJob(ctx context.Context, jobID string) (*FunctionJobChangeResponse, error) {
 	if strings.TrimSpace(jobID) == "" {
-		return nil, fmt.Errorf("GetNodeBatchChange: job_id is required")
+		return nil, fmt.Errorf("GetFunctionJob: job_id is required")
 	}
-	raw, err := c.callCloudNodeJSON(ctx, "GetNodeBatchChange", map[string]any{"job_id": jobID})
+	raw, err := c.callCloudFunctionJSON(ctx, "GetFunctionJob", map[string]any{"job_id": jobID})
 	if err != nil {
 		return nil, err
 	}
 	var resp struct {
-		RetInfo *retInfo              `json:"ret_info"`
-		Job     *NodeBatchSummary     `json:"job"`
-		Items   []NodeBatchItemResult `json:"items"`
+		RetInfo *retInfo                `json:"ret_info"`
+		Job     *FunctionJobSummary     `json:"job"`
+		Items   []FunctionJobItemResult `json:"items"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, err
 	}
-	if err := validateCloudNodeRetInfo(resp.RetInfo, "GetNodeBatchChange"); err != nil {
+	if err := validateCloudFunctionRetInfo(resp.RetInfo, "GetFunctionJob"); err != nil {
 		return nil, err
 	}
 	if resp.Job == nil || strings.TrimSpace(resp.Job.JobID) == "" {
-		return nil, fmt.Errorf("GetNodeBatchChange: empty job")
+		return nil, fmt.Errorf("GetFunctionJob: empty job")
 	}
-	return &NodeBatchChangeResponse{Job: resp.Job, Items: resp.Items}, nil
+	return &FunctionJobChangeResponse{Job: resp.Job, Items: resp.Items}, nil
 }
 
-func parseSubmitNodeBatchResponse(raw []byte, method string) (*SubmitNodeBatchResponse, error) {
+func parseSubmitFunctionJobResponse(raw []byte, method string) (*SubmitFunctionJobResponse, error) {
 	var resp struct {
 		RetInfo    *retInfo `json:"ret_info"`
 		JobID      string   `json:"job_id"`
@@ -765,24 +764,24 @@ func parseSubmitNodeBatchResponse(raw []byte, method string) (*SubmitNodeBatchRe
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, err
 	}
-	if err := validateCloudNodeRetInfo(resp.RetInfo, method); err != nil {
+	if err := validateCloudFunctionRetInfo(resp.RetInfo, method); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(resp.JobID) == "" {
 		return nil, fmt.Errorf("%s: empty job_id", method)
 	}
-	operation, err := normalizeProtoEnum(resp.Operation, nodeBatchOperationNames)
+	operation, err := normalizeProtoEnum(resp.Operation, functionJobOperationNames)
 	if err != nil {
 		return nil, fmt.Errorf("%s: operation: %w", method, err)
 	}
-	return &SubmitNodeBatchResponse{
+	return &SubmitFunctionJobResponse{
 		JobID:      resp.JobID,
 		Operation:  operation,
 		TotalCount: resp.TotalCount,
 	}, nil
 }
 
-func validateCloudNodeRetInfo(info *retInfo, method string) error {
+func validateCloudFunctionRetInfo(info *retInfo, method string) error {
 	if info == nil {
 		return fmt.Errorf("%s: missing ret_info", method)
 	}

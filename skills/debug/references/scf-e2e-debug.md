@@ -14,7 +14,7 @@ Use this reference when a MooX collector cloud function does not run on its Time
 
 Collect these before acting:
 
-- Function name, namespace, region, Timer cron, and the CloudNode node ID.
+- Function name, namespace, region, Timer cron, and the FunctionInstance node ID.
 - Cloud account ID, COS bucket/region, package ID and version.
 - Space, collection task ID, result Dataset/View, frequency and the failing period time.
 - CLS topic ID and a narrow time range around the failed Timer tick (CLS timestamps are in milliseconds).
@@ -24,7 +24,7 @@ Never paste SecretKey, service auth secret, SSH password or signed headers into 
 ## Fast Triage
 
 1. No package: local build or COS upload failed.
-2. No function or Timer disabled: CloudNode node batch or Tencent SCF API failed.
+2. No function or Timer disabled: FunctionInstance node batch or Tencent SCF API failed.
 3. Timer fires but nothing is fetched: the plan in the function environment has no entry for this period (check `moox-cli collector fetch-plan`), or the event time is past the lateness deadline.
 4. Fetch succeeds but no Storage rows: Access write failed (principal/method allowlist, wrong Storage application key).
 5. Rows written but the View is empty: inspect the View consumer and `storage-view` logs.
@@ -36,7 +36,7 @@ Never paste SecretKey, service auth secret, SSH password or signed headers into 
 moox-cli collector function upload --package-name moox-collector-crypto-plan --version <version> --collector-root modules/collector
 ```
 
-The package carries no credentials; runtime addresses and secrets come from the function environment written by Collector and CloudNode. Uploading a new version under the same package name makes Collector roll the functions forward (it resolves the latest package every 30 seconds).
+The package carries no credentials; runtime addresses and secrets come from the function environment written by Collector and FunctionInstance. Uploading a new version under the same package name makes Collector roll the functions forward (it resolves the latest package every 30 seconds).
 
 ## Inspect Functions
 
@@ -53,7 +53,7 @@ bin/moox-cli collector function timer-inventory \
 
 ```bash
 rg -n "fetch plan|backfill|readback" /data/moox/run/logs/collector.log
-rg -n "SubmitUpdateNodeRuntimeConfigs|EnsureTimerTrigger|UpdateFunctionConfiguration" /data/moox/run/logs/cloudnode.log
+rg -n "SubmitUpdateFunctionInstanceRuntimeConfigs|EnsureTimerTrigger|UpdateFunctionConfiguration" /data/moox/run/logs/cloudfunction.log
 ```
 
 Check these boundaries:

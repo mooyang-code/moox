@@ -38,42 +38,42 @@ func collectorPublishLeaseFieldsPresent(leaseID string, token int64) bool {
 	return strings.TrimSpace(leaseID) != "" && token > 0
 }
 
-func nodeBatchRequestPublishFence(item *store.NodeBatchItem, operation string) (collectorPublishFence, error) {
+func functionJobRequestPublishFence(item *store.FunctionJobItem, operation string) (collectorPublishFence, error) {
 	if item == nil {
-		return collectorPublishFence{}, fmt.Errorf("node batch item is required")
+		return collectorPublishFence{}, fmt.Errorf("instance batch item is required")
 	}
 	var leaseID string
 	var token int64
 	switch operation {
-	case nodeBatchOperationCreate:
-		request := &pb.NodeCreateItem{}
+	case functionJobOperationCreate:
+		request := &pb.FunctionInstanceCreateItem{}
 		if err := protojson.Unmarshal([]byte(item.RequestJSON), request); err != nil {
-			return collectorPublishFence{}, fmt.Errorf("decode create-node publish fence: %w", err)
+			return collectorPublishFence{}, fmt.Errorf("decode create-instance publish fence: %w", err)
 		}
 		leaseID, token = request.GetCollectorPublishLeaseId(), request.GetCollectorPublishFencingToken()
-	case nodeBatchOperationDeploy:
-		request := &pb.NodeDeployItem{}
+	case functionJobOperationDeploy:
+		request := &pb.FunctionInstanceDeployItem{}
 		if err := protojson.Unmarshal([]byte(item.RequestJSON), request); err != nil {
-			return collectorPublishFence{}, fmt.Errorf("decode deploy-node publish fence: %w", err)
+			return collectorPublishFence{}, fmt.Errorf("decode deploy-instance publish fence: %w", err)
 		}
 		leaseID, token = request.GetCollectorPublishLeaseId(), request.GetCollectorPublishFencingToken()
-	case nodeBatchOperationDelete:
-		request := &pb.NodeDeleteItem{}
+	case functionJobOperationDelete:
+		request := &pb.FunctionInstanceDeleteItem{}
 		if err := protojson.Unmarshal([]byte(item.RequestJSON), request); err != nil {
-			return collectorPublishFence{}, fmt.Errorf("decode delete-node publish fence: %w", err)
+			return collectorPublishFence{}, fmt.Errorf("decode delete-instance publish fence: %w", err)
 		}
 		leaseID, token = request.GetCollectorPublishLeaseId(), request.GetCollectorPublishFencingToken()
-	case nodeBatchOperationRuntimeConfig:
-		request := &pb.NodeRuntimeConfigPatch{}
+	case functionJobOperationRuntimeConfig:
+		request := &pb.FunctionInstanceRuntimeConfigPatch{}
 		if err := protojson.Unmarshal([]byte(item.RequestJSON), request); err != nil {
 			return collectorPublishFence{}, fmt.Errorf("decode runtime-config publish fence: %w", err)
 		}
 		leaseID, token = request.GetCollectorPublishLeaseId(), request.GetCollectorPublishFencingToken()
 	default:
-		return collectorPublishFence{}, fmt.Errorf("unsupported node batch operation %q", operation)
+		return collectorPublishFence{}, fmt.Errorf("unsupported instance batch operation %q", operation)
 	}
 	if !collectorPublishLeaseFieldsPresent(leaseID, token) {
-		return collectorPublishFence{}, fmt.Errorf("node batch item has no complete publish fence")
+		return collectorPublishFence{}, fmt.Errorf("instance batch item has no complete publish fence")
 	}
 	return collectorPublishFence{leaseID: leaseID, fencingToken: token}, nil
 }
@@ -99,15 +99,15 @@ func recoveredPublishLeaseFromContext(ctx context.Context) *publishlease.Lease {
 	return lease
 }
 
-func (s *Service) nodeBatchPublishFence(ctx context.Context, item store.NodeBatchItem, operation string) (collectorPublishFence, bool, error) {
+func (s *Service) functionJobPublishFence(ctx context.Context, item store.FunctionJobItem, operation string) (collectorPublishFence, bool, error) {
 	var leaseID string
 	var fencingToken int64
 	requiresLease := false
 	switch operation {
-	case nodeBatchOperationCreate:
-		request := &pb.NodeCreateItem{}
+	case functionJobOperationCreate:
+		request := &pb.FunctionInstanceCreateItem{}
 		if err := protojson.Unmarshal([]byte(item.RequestJSON), request); err != nil {
-			return collectorPublishFence{}, false, fmt.Errorf("decode fenced create-node request: %w", err)
+			return collectorPublishFence{}, false, fmt.Errorf("decode fenced create-instance request: %w", err)
 		}
 		if strings.TrimSpace(request.GetPackageId()) == "" {
 			return collectorPublishFence{}, false, nil
@@ -118,12 +118,12 @@ func (s *Service) nodeBatchPublishFence(ctx context.Context, item store.NodeBatc
 		}
 		requiresLease = requiresCollectorPublishLease(pkg)
 		leaseID, fencingToken = request.GetCollectorPublishLeaseId(), request.GetCollectorPublishFencingToken()
-	case nodeBatchOperationDeploy:
-		request := &pb.NodeDeployItem{}
+	case functionJobOperationDeploy:
+		request := &pb.FunctionInstanceDeployItem{}
 		if err := protojson.Unmarshal([]byte(item.RequestJSON), request); err != nil {
 			return collectorPublishFence{}, false, fmt.Errorf("decode fenced deploy request: %w", err)
 		}
-		if strings.TrimSpace(request.GetNodeId()) == "" || strings.TrimSpace(request.GetPackageId()) == "" {
+		if strings.TrimSpace(request.GetInstanceId()) == "" || strings.TrimSpace(request.GetPackageId()) == "" {
 			return collectorPublishFence{}, false, nil
 		}
 		pkg, err := s.catalog.GetPackage(ctx, item.SpaceID, request.GetPackageId())
@@ -131,61 +131,61 @@ func (s *Service) nodeBatchPublishFence(ctx context.Context, item store.NodeBatc
 			return collectorPublishFence{}, false, err
 		}
 		requiresLease = requiresCollectorPublishLease(pkg)
-		node, nodeErr := s.catalog.GetNode(ctx, item.SpaceID, request.GetNodeId())
-		if nodeErr != nil {
-			return collectorPublishFence{}, false, nodeErr
+		instance, instanceErr := s.catalog.GetInstance(ctx, item.SpaceID, request.GetInstanceId())
+		if instanceErr != nil {
+			return collectorPublishFence{}, false, instanceErr
 		}
-		if isFencedCollectorNode(node, nil) {
+		if isFencedCollectorInstance(instance, nil) {
 			requiresLease = true
-		} else if node != nil && !requiresLease {
-			oldPackage, packageErr := s.catalog.GetPackage(ctx, item.SpaceID, node.PackageID)
+		} else if instance != nil && !requiresLease {
+			oldPackage, packageErr := s.catalog.GetPackage(ctx, item.SpaceID, instance.PackageID)
 			if packageErr != nil {
 				return collectorPublishFence{}, false, packageErr
 			}
 			requiresLease = requiresCollectorPublishLease(oldPackage)
 		}
 		leaseID, fencingToken = request.GetCollectorPublishLeaseId(), request.GetCollectorPublishFencingToken()
-	case nodeBatchOperationDelete:
-		request := &pb.NodeDeleteItem{}
+	case functionJobOperationDelete:
+		request := &pb.FunctionInstanceDeleteItem{}
 		if err := protojson.Unmarshal([]byte(item.RequestJSON), request); err != nil {
 			return collectorPublishFence{}, false, fmt.Errorf("decode fenced delete request: %w", err)
 		}
 		leaseID, fencingToken = request.GetCollectorPublishLeaseId(), request.GetCollectorPublishFencingToken()
 		// A durable deletion submitted under a publish lease stays fenced even
-		// if its node disappeared before the worker claims the operation. The
-		// lifecycle identity check in executeDeleteNodeItem then rejects a
+		// if its instance disappeared before the worker claims the operation. The
+		// lifecycle identity check in executeDeleteInstanceItem then rejects a
 		// replacement generation without ever touching its provider function.
 		requiresLease = collectorPublishLeaseFieldsPresent(leaseID, fencingToken)
-		node, err := s.catalog.GetNode(ctx, item.SpaceID, request.GetNodeId())
+		instance, err := s.catalog.GetInstance(ctx, item.SpaceID, request.GetInstanceId())
 		if err != nil {
 			return collectorPublishFence{}, false, err
 		}
-		requiresLease = requiresLease || isFencedCollectorNode(node, nil)
-		if node != nil && !requiresLease {
-			pkg, packageErr := s.catalog.GetPackage(ctx, item.SpaceID, node.PackageID)
+		requiresLease = requiresLease || isFencedCollectorInstance(instance, nil)
+		if instance != nil && !requiresLease {
+			pkg, packageErr := s.catalog.GetPackage(ctx, item.SpaceID, instance.PackageID)
 			if packageErr != nil {
 				return collectorPublishFence{}, false, packageErr
 			}
 			requiresLease = requiresCollectorPublishLease(pkg)
 		}
-	case nodeBatchOperationRuntimeConfig:
-		request := &pb.NodeRuntimeConfigPatch{}
+	case functionJobOperationRuntimeConfig:
+		request := &pb.FunctionInstanceRuntimeConfigPatch{}
 		if err := protojson.Unmarshal([]byte(item.RequestJSON), request); err != nil {
 			return collectorPublishFence{}, false, fmt.Errorf("decode fenced runtime-config request: %w", err)
 		}
-		if strings.TrimSpace(request.GetNodeId()) == "" {
+		if strings.TrimSpace(request.GetInstanceId()) == "" {
 			return collectorPublishFence{}, false, nil
 		}
-		node, err := s.catalog.GetNode(ctx, item.SpaceID, request.GetNodeId())
+		instance, err := s.catalog.GetInstance(ctx, item.SpaceID, request.GetInstanceId())
 		if err != nil {
 			return collectorPublishFence{}, false, err
 		}
-		if node != nil {
-			pkg, packageErr := s.catalog.GetPackage(ctx, item.SpaceID, node.PackageID)
+		if instance != nil {
+			pkg, packageErr := s.catalog.GetPackage(ctx, item.SpaceID, instance.PackageID)
 			if packageErr != nil {
 				return collectorPublishFence{}, false, packageErr
 			}
-			requiresLease = isFencedCollectorNode(node, pkg)
+			requiresLease = isFencedCollectorInstance(instance, pkg)
 		}
 		leaseID, fencingToken = request.GetCollectorPublishLeaseId(), request.GetCollectorPublishFencingToken()
 	default:
@@ -220,7 +220,7 @@ func (s *Service) withCollectorPublishOperationRenewalInterval(ctx context.Conte
 			if errors.Is(err, publishlease.ErrLeaseStale) {
 				return "", fmt.Errorf("%w: renew recovery-owned collector publish lease before operation: %w", errStaleCollectorPublishFenceBeforeOperation, err)
 			}
-			return "", fmt.Errorf("%w: renew recovery-owned collector publish lease before operation: %w", errNodeMutationReconciliationRequired, err)
+			return "", fmt.Errorf("%w: renew recovery-owned collector publish lease before operation: %w", errInstanceMutationReconciliationRequired, err)
 		}
 	}
 	operationID := uuid.NewString()
@@ -267,11 +267,11 @@ func (s *Service) withCollectorPublishOperationRenewalInterval(ctx context.Conte
 		executeErr = errors.Join(executeErr, fmt.Errorf("renew collector publish operation claim: %w", renewErr))
 	}
 	if renewErr != nil || isAmbiguousSCFProviderOutcome(executeErr) {
-		// The provider may have accepted the request even if CloudNode lost the
+		// The provider may have accepted the request even if FunctionInstance lost the
 		// response. Keep the durable claim until its TTL so a higher fencing token
 		// cannot race a late provider-side mutation.
 		if renewErr != nil {
-			return result, fmt.Errorf("%w: %w", errNodeMutationReconciliationRequired, executeErr)
+			return result, fmt.Errorf("%w: %w", errInstanceMutationReconciliationRequired, executeErr)
 		}
 		return result, executeErr
 	}
@@ -288,18 +288,18 @@ func isAmbiguousSCFProviderOutcome(err error) bool {
 	return err != nil && (isTransientSCFProviderError(err) || errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF))
 }
 
-func isFencedCollectorNode(node *store.CloudNode, pkg *store.FunctionPackage) bool {
+func isFencedCollectorInstance(instance *store.FunctionInstance, pkg *store.FunctionPackage) bool {
 	if requiresCollectorPublishLease(pkg) {
 		return true
 	}
-	if node == nil {
+	if instance == nil {
 		return false
 	}
-	metadata := parseJSONMap(node.Metadata)
-	if metadata["collector_publish_fenced"] == true || strings.EqualFold(metadataString(metadata, "biz_type"), "market_fetcher") {
+	metadata := parseJSONMap(instance.Metadata)
+	if metadata["collector_publish_fenced"] == true || strings.EqualFold(metadataString(metadata, "workload_type"), "market_fetcher") {
 		return true
 	}
-	return isMarketFetcherFunction(firstString(node.FunctionName, node.NodeID), node.SpaceID, nil)
+	return isMarketFetcherFunction(firstString(instance.FunctionName, instance.InstanceID), instance.SpaceID, nil)
 }
 
 func validateCollectorPublishLeaseAtSubmit(pkg *store.FunctionPackage, leaseID string, token int64) *pb.RetInfo {

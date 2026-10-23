@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { normalizeCloudNodes, parseMetadata } from "./cloud-node-model";
+import { normalizeFunctionInstances, parseMetadata } from "./function-instance-model";
 
-describe("cloud node model", () => {
-  it("normalizes canonical node payloads", () => {
-    const [node] = normalizeCloudNodes([{ node_id: "n1", package_version: "v2" }]);
-    expect(node.package_version).toBe("v2");
+describe("cloud instance model", () => {
+  it("normalizes canonical instance payloads", () => {
+    const [instance] = normalizeFunctionInstances([{ instance_id: "n1", package_version: "v2" }]);
+    expect(instance.package_version).toBe("v2");
   });
 
   it("parses metadata defensively", () => {

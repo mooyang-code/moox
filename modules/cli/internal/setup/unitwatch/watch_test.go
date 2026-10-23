@@ -150,7 +150,7 @@ func TestRunReportsPersistentBarrier(t *testing.T) {
 
 // 各种检查结果的分类；拉起时附带运行输出日志里的崩溃线索；主机重启清理的残留汇总进报告。
 func TestRunClassifiesOutcomesAndCollectsEvidence(t *testing.T) {
-	h := newFakeHost(t, map[string][]string{"prod": {"admin", "monitor", "collector", "strategy", "factor-mgr", "cloudnode"}})
+	h := newFakeHost(t, map[string][]string{"prod": {"admin", "monitor", "collector", "strategy", "factor-mgr", "cloudfunction"}})
 	log := "starting\npanic: runtime error: index out of range [3] with length 3\n\ngoroutine 1 [running]:\nfatal error: concurrent map writes\n"
 	require.NoError(t, os.WriteFile(filepath.Join(h.root, "run", "logs", "monitor.log"), []byte(log), 0o600))
 	h.respond = func(component string) (unitruntime.Result, error) {
@@ -164,7 +164,7 @@ func TestRunClassifiesOutcomesAndCollectsEvidence(t *testing.T) {
 			return unitruntime.Result{Components: []unitruntime.Status{{State: "paused"}}}, nil
 		case "factor-mgr":
 			return unitruntime.Result{Components: []unitruntime.Status{{State: "running", PID: 44}}}, nil
-		case "cloudnode":
+		case "cloudfunction":
 			return unitruntime.Result{Components: []unitruntime.Status{{State: "draining", PID: 45}}}, nil
 		}
 		return healthy(1), nil
@@ -175,7 +175,7 @@ func TestRunClassifiesOutcomesAndCollectsEvidence(t *testing.T) {
 	require.Equal(t, OutcomeRestarted, got["collector"])
 	require.Equal(t, OutcomeSkippedPaused, got["strategy"])
 	require.Equal(t, OutcomeNotReady, got["factor-mgr"])
-	require.Equal(t, OutcomeSkippedDraining, got["cloudnode"])
+	require.Equal(t, OutcomeSkippedDraining, got["cloudfunction"])
 	for _, c := range report.Components {
 		if c.Component == "monitor" {
 			require.Equal(t, []string{"panic: runtime error: index out of range [3] with length 3", "fatal error: concurrent map writes"}, c.Evidence)

@@ -210,7 +210,7 @@ test("groups cloud nodes under collection tasks", async ({ page }) => {
   await page.goto("/#/collector/tasks?tab=executors");
   await expect(page.getByLabel("采集任务")).toBeVisible();
   await expect(page.getByText("执行器", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "云节点" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "云函数实例" })).toHaveCount(0);
 });
 
 test("shows task-owned real data and the K-line modal", async ({ page }) => {

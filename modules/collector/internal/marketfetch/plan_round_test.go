@@ -55,7 +55,7 @@ func TestWaitJobWithinReturnsNotFinishedInsteadOfAnError(t *testing.T) {
 
 	// 作业已经结束时，短时限下也能拿到结果。
 	h.cloud.runningAll = false
-	h.cloud.jobs["job-2"] = []scfinvoker.BatchItemResult{{NodeID: "fn", Success: true}}
+	h.cloud.jobs["job-2"] = []scfinvoker.BatchItemResult{{InstanceID: "fn", Success: true}}
 	fresh, cancelFresh := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelFresh()
 	_, terminal, err = r.waitJobWithin(fresh, "job-2")
@@ -89,7 +89,7 @@ func TestWaitJobWithinBoundsASlowQueryAndKeepsRealErrors(t *testing.T) {
 	require.False(t, terminal)
 	require.Less(t, time.Since(started), time.Second)
 
-	// 查询本身出错（不是超时）：原样返回，照旧记为 cloudnode 失败。
+	// 查询本身出错（不是超时）：原样返回，照旧记为 cloudfunction 失败。
 	h.cloud.hangBatch = false
 	h.cloud.batchErr = errors.New("get batch results: gateway unavailable")
 	_, _, err = r.waitJobWithin(context.Background(), "job-1")
@@ -97,7 +97,7 @@ func TestWaitJobWithinBoundsASlowQueryAndKeepsRealErrors(t *testing.T) {
 
 	// 作业已结束：正常返回结果。
 	h.cloud.batchErr = nil
-	h.cloud.jobs["job-9"] = []scfinvoker.BatchItemResult{{NodeID: "fn", Success: true}}
+	h.cloud.jobs["job-9"] = []scfinvoker.BatchItemResult{{InstanceID: "fn", Success: true}}
 	items, terminal, err := r.waitJobWithin(context.Background(), "job-9")
 	require.NoError(t, err)
 	require.True(t, terminal)
@@ -111,7 +111,7 @@ func TestSlowCloudJobIsInFlightNotAFailure(t *testing.T) {
 	r.JobWait = 90 * time.Second // 生产环境从未设置，默认 90 秒比单轮时限还长
 	h.cloud.runningAll = true
 
-	// 单轮时限 2 秒（生产是 55 秒）：旧实现一直等到 ctx 到期，再返回 context deadline exceeded 并记为 cloudnode 失败；
+	// 单轮时限 2 秒（生产是 55 秒）：旧实现一直等到 ctx 到期，再返回 context deadline exceeded 并记为 cloudfunction 失败；
 	// 现在等到剩余时间的四分之三就把作业交给下一轮，本轮正常结束。
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -146,7 +146,7 @@ func TestPublishLeaseHeldIsClassifiedSeparatelyAndRecoversWhileThePlanIsStillOpe
 	err := r.Reconcile(context.Background())
 	require.ErrorIs(t, err, scfinvoker.ErrCollectorPublishLeaseHeld)
 	require.Equal(t, float64(1), failureLabel(metrics, ReasonPublishLeaseHeld))
-	require.Zero(t, failureLabel(metrics, "cloudnode"))
+	require.Zero(t, failureLabel(metrics, "cloudfunction"))
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
 	first := since()
 	require.Equal(t, float64(h.now.Unix()), first)
@@ -174,9 +174,9 @@ func TestOnlyAnExplicitConflictGetsTheLeaseHeldGrace(t *testing.T) {
 		reason string
 	}{
 		"admin says held":     {heldError(), ReasonPublishLeaseHeld},
-		"permission denied":   {errors.New("collector publish lease rejected: collector publish lease requires space owner or admin"), "cloudnode"},
-		"admin unreachable":   {errors.New("dial tcp 127.0.0.1:11002: connect: connection refused"), "cloudnode"},
-		"incomplete response": {errors.New("collector publish lease response identity is incomplete or inconsistent"), "cloudnode"},
+		"permission denied":   {errors.New("collector publish lease rejected: collector publish lease requires space owner or admin"), "cloudfunction"},
+		"admin unreachable":   {errors.New("dial tcp 127.0.0.1:11002: connect: connection refused"), "cloudfunction"},
+		"incomplete response": {errors.New("collector publish lease response identity is incomplete or inconsistent"), "cloudfunction"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newPlanHarness(t, 60)
@@ -204,12 +204,12 @@ func TestStaleReservationCleanupLeaseConflictIsClassifiedAsHeld(t *testing.T) {
 		name = fn
 		break
 	}
-	// 遗留预留需要受租约保护的删除作业：此时租约被占用，应归为「被占用」而不是 cloudnode。
-	h.cloud.unready[name] = scfinvoker.Node{NodeID: name, FunctionName: name, TriggerType: "timer", ModifiedAt: h.now.Add(-time.Hour)}
+	// 遗留预留需要受租约保护的删除作业：此时租约被占用，应归为「被占用」而不是 cloudfunction。
+	h.cloud.unready[name] = scfinvoker.FunctionInstance{InstanceID: name, FunctionName: name, TriggerType: "timer", ModifiedAt: h.now.Add(-time.Hour)}
 	h.cloud.acquireErr = heldError()
 	require.ErrorIs(t, r.Reconcile(context.Background()), scfinvoker.ErrCollectorPublishLeaseHeld)
 	require.Equal(t, float64(1), failureLabel(metrics, ReasonPublishLeaseHeld))
-	require.Zero(t, failureLabel(metrics, "cloudnode"))
+	require.Zero(t, failureLabel(metrics, "cloudfunction"))
 }
 
 // appliedFleet 把计划推进到生效，让云端读回与计划一致，并再对账一轮记录一次成功。
@@ -221,7 +221,7 @@ func appliedFleet(t *testing.T, h *planHarness, r *PlanReconciler) {
 	require.NoError(t, h.reconcile(r))
 	require.Nil(t, h.open())
 	for name, patch := range h.cloud.patches {
-		h.cloud.nodes[name] = scfinvoker.Node{NodeID: name, Metadata: map[string]any{
+		h.cloud.nodes[name] = scfinvoker.FunctionInstance{InstanceID: name, Metadata: map[string]any{
 			"assignment_hash": patch.GetManagedEnvironment()["MOOX_MARKET_FETCH_ASSIGNMENT_HASH"], "timer_actual_enabled": true,
 			"access_address": patch.GetManagedEnvironment()["MOOX_ACCESS_ADDRESS"], "access_id": patch.GetManagedEnvironment()["MOOX_ACCESS_ID"], "access_key_id": patch.GetManagedEnvironment()["MOOX_CALLER_KEY_ID"],
 			"timer_available_status": "Available", "timer_actual_cron": patch.GetTimerCron(), "timer_actual_qualifier": timerTriggerQualifier, "timer_actual_message": timerTriggerMessage,
@@ -309,10 +309,10 @@ func TestUpgradePendingBeforeEnableStillFinishesTheRound(t *testing.T) {
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("crypto")))
 
 	// 其他错误不是等待，不恢复健康。
-	_ = r.fail("cloudnode", errors.New("boom"))
+	_ = r.fail("cloudfunction", errors.New("boom"))
 	r.roundFailCount = r.failCount
 	r.finishRound(errors.New("enable timers: boom"))
-	require.Equal(t, float64(1), failureLabel(metrics, "cloudnode"))
+	require.Equal(t, float64(1), failureLabel(metrics, "cloudfunction"))
 }
 
 func TestDriftRepairThatFinishedWithFailuresIsStillAFailure(t *testing.T) {
@@ -321,23 +321,23 @@ func TestDriftRepairThatFinishedWithFailuresIsStillAFailure(t *testing.T) {
 	metrics := roundMetrics(h, r)
 	appliedFleet(t, h, r)
 	name := tamperOneNode(h)
-	h.cloud.failNodes[name] = true
+	h.cloud.failInstances[name] = true
 	h.now = h.now.Add(2 * time.Hour)
 	verifiedBefore := r.lastVerified
 
 	require.Error(t, h.reconcile(r))
-	require.Equal(t, float64(1), failureLabel(metrics, "cloudnode"))
+	require.Equal(t, float64(1), failureLabel(metrics, "cloudfunction"))
 	require.Equal(t, verifiedBefore, r.lastVerified, "有失败项：不更新读回时间，下一轮继续修复")
 	require.Zero(t, r.aux.count(), "已到终态的失败作业不留在在途集合")
 }
 
-func TestCloudJobQueryErrorsStayCloudnodeFailures(t *testing.T) {
+func TestCloudJobQueryErrorsStayCloudfunctionFailures(t *testing.T) {
 	h := newPlanHarness(t, 60)
 	r := h.reconciler()
 	metrics := roundMetrics(h, r)
 	h.cloud.batchErr = errors.New("get batch results: gateway unavailable")
 	require.Error(t, r.Reconcile(context.Background()))
-	require.Equal(t, float64(1), failureLabel(metrics, "cloudnode"))
+	require.Equal(t, float64(1), failureLabel(metrics, "cloudfunction"))
 	require.Zero(t, failureLabel(metrics, ReasonPublishLeaseHeld))
 }
 
@@ -348,8 +348,8 @@ func TestFinishRoundDoesNotClearFailuresRecordedBetweenRounds(t *testing.T) {
 	// 同一 tick 内对账之前的步骤（启用、升级）失败：对账本身没报错，也不能把它当成「本轮无失败」清掉。
 	_ = r.fail("package", errors.New("resolve code package: unavailable"))
 	require.NoError(t, r.Reconcile(context.Background()))
-	require.Equal(t, float64(1), failureLabel(metrics, "package"), "package 是独立的失败原因，不再归为 cloudnode")
-	require.Zero(t, failureLabel(metrics, "cloudnode"))
+	require.Equal(t, float64(1), failureLabel(metrics, "package"), "package 是独立的失败原因，不再归为 cloudfunction")
+	require.Zero(t, failureLabel(metrics, "cloudfunction"))
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
 
 	// 下一轮没有任何失败：恢复。
@@ -363,7 +363,7 @@ func TestEnableAllReadbackFailureIsRecordedAndNotClearedByTheUpgradeWait(t *test
 	r := h.reconciler()
 	metrics := roundMetrics(h, r)
 	appliedFleet(t, h, r)
-	// 上一轮因租约被占用失败；本 tick 的启用前升级读不到云端：这是 CloudNode 调用失败，
+	// 上一轮因租约被占用失败；本 tick 的启用前升级读不到云端：这是 FunctionInstance 调用失败，
 	// 即使它以“升级等待”收尾，也不能把既有失败当成无失败清掉。
 	_ = r.fail(ReasonPublishLeaseHeld, heldError())
 	r.roundFailCount = r.failCount
@@ -372,7 +372,7 @@ func TestEnableAllReadbackFailureIsRecordedAndNotClearedByTheUpgradeWait(t *test
 	done, err := r.EnableAll(context.Background())
 	require.False(t, done)
 	require.ErrorIs(t, err, errCodeUpgradePending)
-	require.Equal(t, float64(1), failureLabel(metrics, "cloudnode"))
+	require.Equal(t, float64(1), failureLabel(metrics, "cloudfunction"))
 	require.Zero(t, failureLabel(metrics, ReasonPublishLeaseHeld))
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
 }

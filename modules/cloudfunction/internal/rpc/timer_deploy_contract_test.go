@@ -31,13 +31,13 @@ func completeTimerEnvironment() map[string]string {
 
 func TestMarketFetcherPackageTimerCreateCannotBypassTimeoutContract(t *testing.T) {
 	for _, test := range []struct{ name, outer, runtime, metadata, missing string }{
-		{"short matching", "15", "15", `{"biz_type":"market_fetcher","function_mode":"kline"}`, ""},
+		{"short matching", "15", "15", `{"workload_type":"market_fetcher","function_mode":"kline"}`, ""},
 		{"missing mode and runtime", "15", "", `{}`, ""},
-		{"missing biz_type", "15", "60", `{"function_mode":"kline"}`, ""},
+		{"missing workload_type", "15", "60", `{"function_mode":"kline"}`, ""},
 		{"missing Storage app keys", "60", "60", `{}`, "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+			catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 			seedSCFAccountAndPackage(t, catalog)
 			calls := 0
 			svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { calls++; return &fakeSCFClient{} }}
@@ -46,7 +46,7 @@ func TestMarketFetcherPackageTimerCreateCannotBypassTimeoutContract(t *testing.T
 			env := completeTimerEnvironment()
 			env["MOOX_FETCH_TIMEOUT_SECONDS"] = test.runtime
 			delete(env, test.missing)
-			_, err := svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "timer", Config: map[string]string{"timeout": test.outer}, Environment: env, Metadata: metadata}, 0)
+			_, err := svc.executeCreateInstanceItem(context.Background(), "crypto", &pb.FunctionInstanceCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "timer", Config: map[string]string{"timeout": test.outer}, Environment: env, Metadata: metadata}, 0)
 			if test.missing != "" {
 				require.ErrorContains(t, err, test.missing)
 			} else {
@@ -58,26 +58,26 @@ func TestMarketFetcherPackageTimerCreateCannotBypassTimeoutContract(t *testing.T
 }
 
 func TestMarketFetcherPackageTimerCreateUsesSafeDefaultsWithoutOptionalMetadata(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
 	env := completeTimerEnvironment()
 	env["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
 	delete(env, "MOOX_FETCH_TIMEOUT_SECONDS")
 	fake := &fakeSCFClient{getResults: []fakeSCFGetResult{{err: errors.New("ResourceNotFound.FunctionName")}, {info: &tencentscf.FunctionInfo{Status: "Active", MemorySize: 64, Timeout: 60, Environment: env}}}}
 	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
-	_, err := svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "timer", Config: map[string]string{"memory_size": "64"}, Environment: env}, 0)
+	_, err := svc.executeCreateInstanceItem(context.Background(), "crypto", &pb.FunctionInstanceCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "timer", Config: map[string]string{"memory_size": "64"}, Environment: env}, 0)
 	require.NoError(t, err)
 	require.Len(t, fake.created, 1)
 	require.Equal(t, int64(60), fake.created[0].Timeout)
 }
 
 func TestMarketFetcherLegacyInstrumentTimerDeployRetainsSeparateTimeout(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
-	require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "legacy", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "timer", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "legacy", Metadata: `{"function_mode":"instrument_snapshot"}`}))
+	require.NoError(t, catalog.UpsertInstance(context.Background(), store.FunctionInstance{SpaceID: "crypto", InstanceID: "legacy", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "timer", FunctionType: "scf-event", Region: "ap-singapore", FunctionName: "legacy", Metadata: `{"function_mode":"instrument_snapshot"}`}))
 	fake := &fakeSCFClient{currentEnvironment: map[string]string{"MOOX_CODE_PACKAGE_ID": "old-package"}, currentTimeout: 15}
 	svc := &Service{catalog: catalog, credentialResolver: fakeCredentialResolver{credential: cloudcredential.TencentCredential{SecretID: "id", SecretKey: "key"}}, scfClientFactory: func(cloudcredential.TencentCredential) scfProvisioner { return fake }}
-	_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{NodeId: "legacy", PackageId: "moox-collector_dev", Config: map[string]string{"timeout": "15"}})
+	_, err := svc.executeDeployInstanceItem(context.Background(), "crypto", &pb.FunctionInstanceDeployItem{InstanceId: "legacy", PackageId: "moox-collector_dev", Config: map[string]string{"timeout": "15"}})
 	require.NoError(t, err)
 	require.Len(t, fake.configured, 1)
 	require.Equal(t, int64(15), fake.configured[0].Timeout)
@@ -96,9 +96,9 @@ func TestMarketFetcherTimerDeployValidatesFinalContractBeforeCodeUpdate(t *testi
 		{"Storage app keys", "MOOX_STORAGE_PRIMARY_AUTH_APP_KEYS_JSON", false, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+			catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 			seedSCFAccountAndPackage(t, catalog)
-			require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{SpaceID: "crypto", NodeID: "timer", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "timer", NodeType: "scf-event", Region: "ap-singapore", FunctionName: "timer", CreateTime: time.Now(), Metadata: `{}`}))
+			require.NoError(t, catalog.UpsertInstance(context.Background(), store.FunctionInstance{SpaceID: "crypto", InstanceID: "timer", CloudAccountID: "account-a", PackageID: "old-package", TriggerType: "timer", FunctionType: "scf-event", Region: "ap-singapore", FunctionName: "timer", CreateTime: time.Now(), Metadata: `{}`}))
 			env := completeTimerEnvironment()
 			delete(env, test.missing)
 			fake := &fakeSCFClient{currentEnvironment: env, currentTimeout: 60}
@@ -109,7 +109,7 @@ func TestMarketFetcherTimerDeployValidatesFinalContractBeforeCodeUpdate(t *testi
 				config["timeout"] = "15"
 				patch["MOOX_FETCH_TIMEOUT_SECONDS"] = "15"
 			}
-			_, err := svc.executeDeployNodeItem(context.Background(), "crypto", &pb.NodeDeployItem{NodeId: "timer", PackageId: "moox-collector_dev", Config: config, Environment: patch})
+			_, err := svc.executeDeployInstanceItem(context.Background(), "crypto", &pb.FunctionInstanceDeployItem{InstanceId: "timer", PackageId: "moox-collector_dev", Config: config, Environment: patch})
 			if test.wantSuccess {
 				require.NoError(t, err)
 				require.Len(t, fake.updated, 1)
@@ -128,10 +128,10 @@ func TestMarketFetcherTimerDeployValidatesFinalContractBeforeCodeUpdate(t *testi
 	}
 }
 
-// 上线时发现：环境里不带 CLS 配置的 Timer 函数创建被环境校验拒绝，因为 CloudNode 的自动补齐发生在校验之后。
+// 上线时发现：环境里不带 CLS 配置的 Timer 函数创建被环境校验拒绝，因为 FunctionInstance 的自动补齐发生在校验之后。
 // 补齐必须先于校验：提交的环境没有 CLS 变量也能创建，且创建出的函数带齐 CLS 配置。
 func TestMarketFetcherTimerCreateWithoutCLSEnvironmentGetsItInjectedBeforeValidation(t *testing.T) {
-	catalog := store.NewCatalogRepository(newNodeSCFTestDB(t))
+	catalog := store.NewCatalogRepository(newInstanceSCFTestDB(t))
 	seedSCFAccountAndPackage(t, catalog)
 	submitted := completeTimerEnvironment()
 	submitted["MOOX_CODE_PACKAGE_ID"] = "moox-collector_dev"
@@ -149,8 +149,8 @@ func TestMarketFetcherTimerCreateWithoutCLSEnvironmentGetsItInjectedBeforeValida
 		clsEnvironment:   clsSettingsEnvironment{},
 	}
 	metadata := &structpb.Struct{}
-	require.NoError(t, metadata.UnmarshalJSON([]byte(`{"biz_type":"market_fetcher","function_mode":"kline"}`)))
-	_, err := svc.executeCreateNodeItem(context.Background(), "crypto", &pb.NodeCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "timer", Config: map[string]string{"memory_size": "64"}, Environment: submitted, Metadata: metadata}, 0)
+	require.NoError(t, metadata.UnmarshalJSON([]byte(`{"workload_type":"market_fetcher","function_mode":"kline"}`)))
+	_, err := svc.executeCreateInstanceItem(context.Background(), "crypto", &pb.FunctionInstanceCreateItem{CloudAccountId: "account-a", Region: "ap-singapore", PackageId: "moox-collector_dev", TriggerType: "timer", Config: map[string]string{"memory_size": "64"}, Environment: submitted, Metadata: metadata}, 0)
 	require.NoError(t, err)
 	require.Len(t, fake.created, 1)
 	require.Equal(t, "true", fake.created[0].Environment["MOOX_CLS_ENABLED"])

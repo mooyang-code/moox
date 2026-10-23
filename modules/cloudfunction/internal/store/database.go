@@ -1,4 +1,4 @@
-// Package store owns CloudNode's SQLite connection and persistence repositories.
+// Package store owns FunctionInstance's SQLite connection and persistence repositories.
 package store
 
 import (
@@ -15,15 +15,15 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Store owns the CloudNode SQLite connection and repositories.
+// Store owns the FunctionInstance SQLite connection and repositories.
 type Store struct {
 	db      *gorm.DB
 	catalog *CatalogRepository
 }
 
-// Open opens the CloudNode SQLite store. Schema creation is handled by bootstrap.
+// Open opens the FunctionInstance SQLite store. Schema creation is handled by bootstrap.
 func Open(dbCfg *config.DatabaseConfig) (*Store, error) {
-	dbPath := "./data/moox_cloudnode.db"
+	dbPath := "./data/moox_cloudfunction.db"
 	if dbCfg != nil && dbCfg.Path != "" {
 		dbPath = dbCfg.Path
 	}
@@ -40,15 +40,15 @@ func Open(dbCfg *config.DatabaseConfig) (*Store, error) {
 		if sqlDB, dbErr := db.DB(); dbErr == nil {
 			_ = sqlDB.Close()
 		}
-		return nil, fmt.Errorf("restrict cloudnode database permissions: %w", err)
+		return nil, fmt.Errorf("restrict cloudfunction database permissions: %w", err)
 	}
 	s := &Store{db: db, catalog: NewCatalogRepository(db)}
 	applySQLitePoolConfig(db, dbCfg)
-	log.Infof("初始化 CloudNode SQLite 数据库: %s", dbPath)
+	log.Infof("初始化 FunctionInstance SQLite 数据库: %s", dbPath)
 	return s, nil
 }
 
-// Catalog returns the CloudNode catalog repository.
+// Catalog returns the FunctionInstance catalog repository.
 func (s *Store) Catalog() *CatalogRepository {
 	if s == nil {
 		return nil
@@ -59,10 +59,10 @@ func (s *Store) Catalog() *CatalogRepository {
 // ApplySchema applies schema SQL during service initialization.
 func (s *Store) ApplySchema(sql string) error {
 	if s == nil || s.db == nil {
-		return fmt.Errorf("cloudnode database is not open")
+		return fmt.Errorf("cloudfunction database is not open")
 	}
 	if strings.TrimSpace(sql) == "" {
-		return fmt.Errorf("cloudnode schema sql is empty")
+		return fmt.Errorf("cloudfunction schema sql is empty")
 	}
 	return s.db.Exec(sql).Error
 }
@@ -70,7 +70,7 @@ func (s *Store) ApplySchema(sql string) error {
 // Ping verifies that the database is available.
 func (s *Store) Ping(ctx context.Context) error {
 	if s == nil || s.db == nil {
-		return fmt.Errorf("cloudnode database is not open")
+		return fmt.Errorf("cloudfunction database is not open")
 	}
 	return s.db.WithContext(ctx).Exec("SELECT 1").Error
 }
@@ -110,7 +110,7 @@ func applySQLitePoolConfig(db *gorm.DB, cfg *config.DatabaseConfig) {
 	}
 	if cfg != nil {
 		if cfg.MaxOpenConns > 1 || cfg.MaxIdleConns > 1 {
-			log.Warnf("CloudNode SQLite 强制使用单连接写入队列: configured max_open_conns=%d max_idle_conns=%d", cfg.MaxOpenConns, cfg.MaxIdleConns)
+			log.Warnf("FunctionInstance SQLite 强制使用单连接写入队列: configured max_open_conns=%d max_idle_conns=%d", cfg.MaxOpenConns, cfg.MaxIdleConns)
 		}
 		if cfg.ConnMaxLifetime > 0 {
 			sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)

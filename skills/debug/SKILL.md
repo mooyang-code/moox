@@ -30,7 +30,7 @@ Use this order unless evidence points elsewhere:
 
 1. Local build: the SCF package contains `main`, `sources/` and (for stockcn) market assets.
 2. Package upload: COS object exists and region/bucket/key match the publish request.
-3. SCF function: name, namespace, region, runtime, handler and environment match the CloudNode node.
+3. SCF function: name, namespace, region, runtime, handler and environment match the FunctionInstance node.
 4. Timer: the trigger is enabled with the expected cron (`collector function timer-inventory`).
 5. Plan: the function environment carries the current fetch plan (`collector fetch-plan`).
 6. Execution: CLS logs show per-subject provider results.

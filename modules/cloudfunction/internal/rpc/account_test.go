@@ -8,7 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/cloudfunction/internal/spacecontext"
 	"github.com/mooyang-code/moox/modules/cloudfunction/internal/store"
 	pb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
-	cloudnodeschema "github.com/mooyang-code/moox/modules/cloudfunction/schema"
+	cloudfunctionschema "github.com/mooyang-code/moox/modules/cloudfunction/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -18,7 +18,7 @@ func newCatalogForAccountTests(t *testing.T) *store.CatalogRepository {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.Exec(cloudnodeschema.AllSQL()).Error)
+	require.NoError(t, db.Exec(cloudfunctionschema.AllSQL()).Error)
 	return store.NewCatalogRepository(db)
 }
 

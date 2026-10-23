@@ -16,26 +16,26 @@ import (
 )
 
 // Use the production handler without HTTP headers or a space injection filter.
-func TestNativeGatewayMetadataScopesProductionNodeList(t *testing.T) {
+func TestNativeGatewayMetadataScopesProductionInstanceList(t *testing.T) {
 	catalog := newCatalogForAccountTests(t)
 	for _, space := range []string{"crypto", "stock"} {
-		require.NoError(t, catalog.UpsertNode(context.Background(), store.CloudNode{
-			SpaceID: space, NodeID: space + "-node", NodeType: "scf-event", Region: "ap-singapore",
+		require.NoError(t, catalog.UpsertInstance(context.Background(), store.FunctionInstance{
+			SpaceID: space, InstanceID: space + "-instance", FunctionType: "scf-event", Region: "ap-singapore",
 		}))
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	service := server.New(server.WithTransport(transport.NewServerTransport()), server.WithListener(listener),
 		server.WithAddress(listener.Addr().String()), server.WithNetwork("tcp"), server.WithProtocol("trpc"))
-	pb.RegisterCloudNodeMgrService(service, &Service{catalog: catalog})
+	pb.RegisterCloudFunctionMgrService(service, &Service{catalog: catalog})
 	go func() { _ = service.Serve() }()
 	t.Cleanup(func() { require.NoError(t, service.Close(nil)) })
-	proxy := pb.NewCloudNodeMgrClientProxy(client.WithTarget("ip://"+listener.Addr().String()),
+	proxy := pb.NewCloudFunctionMgrClientProxy(client.WithTarget("ip://"+listener.Addr().String()),
 		client.WithProtocol("trpc"), client.WithNetwork("tcp"), client.WithTransport(transport.NewClientTransport()),
 		client.WithTimeout(5*time.Second))
 	for _, space := range []string{"crypto", "stock", ""} {
 		t.Run(space, func(t *testing.T) {
-			response, callErr := proxy.GetNodeList(t.Context(), &pb.GetNodeListReq{},
+			response, callErr := proxy.ListFunctionInstances(t.Context(), &pb.ListFunctionInstancesReq{},
 				client.WithMetaData(spacecontext.SpaceIDHeader, []byte(space)))
 			require.NoError(t, callErr)
 			if space == "" {
@@ -45,7 +45,7 @@ func TestNativeGatewayMetadataScopesProductionNodeList(t *testing.T) {
 			}
 			require.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
 			require.Len(t, response.GetItems(), 1)
-			require.Equal(t, space+"-node", response.GetItems()[0].GetNodeId())
+			require.Equal(t, space+"-instance", response.GetItems()[0].GetInstanceId())
 		})
 	}
 }

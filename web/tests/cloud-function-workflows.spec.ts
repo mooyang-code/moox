@@ -1,31 +1,31 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { getNodeBatchJobId, setNodeBatchJobId } from "@/utils/cloud-node-batch-change";
+import { getFunctionJobId, setFunctionJobId } from "@/utils/function-job-change";
 
-describe("cloud node workflows", () => {
+describe("cloud instance workflows", () => {
   it("restores polling from job_id in the route", () => {
-    expect(getNodeBatchJobId({ job_id: "node-batch-1" })).toBe("node-batch-1");
-    expect(getNodeBatchJobId({ job_id: ["node-batch-2", "ignored"] })).toBe("node-batch-2");
-    expect(setNodeBatchJobId({ tab: "nodes" }, "node-batch-3")).toEqual({
-      tab: "nodes",
-      job_id: "node-batch-3"
+    expect(getFunctionJobId({ job_id: "function-job-1" })).toBe("function-job-1");
+    expect(getFunctionJobId({ job_id: ["function-job-2", "ignored"] })).toBe("function-job-2");
+    expect(setFunctionJobId({ tab: "instances" }, "function-job-3")).toEqual({
+      tab: "instances",
+      job_id: "function-job-3"
     });
-    expect(setNodeBatchJobId({ tab: "nodes", job_id: "node-batch-3" })).toEqual({ tab: "nodes" });
+    expect(setFunctionJobId({ tab: "instances", job_id: "function-job-3" })).toEqual({ tab: "instances" });
   });
 
   it("disposes polling and submits one backend job without client chunks", () => {
-    const source = readFileSync(resolve(__dirname, "../src/views/collector/cloud-node/cloud-node.vue"), "utf8");
+    const source = readFileSync(resolve(__dirname, "../src/views/collector/cloud-function/function-instance.vue"), "utf8");
 
     expect(source).toContain("batchPoller.dispose()");
-    expect(source).toContain("getNodeBatchJobId(route.query)");
+    expect(source).toContain("getFunctionJobId(route.query)");
     expect(source).not.toContain("chunkTasks");
     expect(source).not.toContain("makeCompletedBatchChangeStatus");
-    expect(source).not.toContain("completeCloudNodeBatchChange");
+    expect(source).not.toContain("completeCloudFunctionJobChange");
   });
 
   it("stops a space-scoped batch poll when the selected space changes", () => {
-    const source = readFileSync(resolve(__dirname, "../src/views/collector/cloud-node/cloud-node.vue"), "utf8");
+    const source = readFileSync(resolve(__dirname, "../src/views/collector/cloud-function/function-instance.vue"), "utf8");
     const watcherStart = source.indexOf("watch(selectedSpaceId");
     const watcher = source.slice(watcherStart, source.indexOf("onBeforeUnmount(() =>", watcherStart));
 

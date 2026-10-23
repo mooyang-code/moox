@@ -1,14 +1,12 @@
 import { PACKAGE_STATUS_LABEL, PACKAGE_TYPE_LABEL } from "@/api/function-package";
 
-export interface CloudNode {
-  node_id: string;
+export interface FunctionInstance {
+  instance_id: string;
   cloud_account_id: string;
   namespace: string;
-  node_type: string;
+  function_type: string;
   trigger_type: string;
   region: string;
-  tag: string;
-  ip_address: string;
   package_id?: string;
   deployment_id?: string;
   package_version?: string;
@@ -21,19 +19,17 @@ export interface RegionInfo {
   code: string;
   name: string;
   tag: string;
-  max_nodes?: number;
+  max_instances?: number;
 }
 
-export function normalizeCloudNodes(items: Array<Partial<CloudNode>>): CloudNode[] {
+export function normalizeFunctionInstances(items: Array<Partial<FunctionInstance>>): FunctionInstance[] {
   return items.map(item => ({
-    node_id: String(item.node_id || ""),
+    instance_id: String(item.instance_id || ""),
     cloud_account_id: String(item.cloud_account_id || ""),
     namespace: String(item.namespace || ""),
-    node_type: String(item.node_type || ""),
+    function_type: String(item.function_type || ""),
     trigger_type: String(item.trigger_type || ""),
     region: String(item.region || ""),
-    tag: String(item.tag || ""),
-    ip_address: String(item.ip_address || ""),
     package_id: String(item.package_id || ""),
     deployment_id: String(item.deployment_id || ""),
     package_version: String(item.package_version || ""),
@@ -59,17 +55,15 @@ export function parseMetadata(value: unknown): Record<string, unknown> {
 export const getBatchChangeTypeText = (value: string) =>
   (
     ({
-      CREATE_NODE: "批量创建节点",
-      DEPLOY_NODE: "批量部署节点",
-      NODE_BATCH_OPERATION_CREATE_NODES: "批量创建节点",
-      NODE_BATCH_OPERATION_DEPLOY_NODES: "批量部署节点"
+      FUNCTION_JOB_OPERATION_CREATE_INSTANCES: "批量创建实例",
+      FUNCTION_JOB_OPERATION_DEPLOY_INSTANCES: "批量部署实例"
     }) as Record<string, string>
   )[value] || value;
 
 export const getProviderName = (value: string) => ({ tencent: "腾讯云", aliyun: "阿里云", aws: "AWS" })[value] || value;
-export const getNodeTypeLabel = (value: string) =>
+export const getFunctionTypeLabel = (value: string) =>
   ({ "scf-event": "云函数（事件型）", "scf-web": "云函数（Web型）", server: "服务器" })[value] || value;
-export const getNodeTypeColor = (value: string) =>
+export const getFunctionTypeColor = (value: string) =>
   ({ "scf-event": "blue", "scf-web": "cyan", server: "orange" })[value] || "gray";
 export const getTriggerTypeLabel = (value: string) => ({ timer: "定时器", invoke: "手动调用" })[value] || value || "-";
 

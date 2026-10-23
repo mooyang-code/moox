@@ -8,7 +8,7 @@ server:
     - validation
     - prometheus
   # SCF request-response invocations may use the full 900s function timeout.
-  # Keep the CloudNode RPC envelope longer than the provider request timeout.
+  # Keep the FunctionInstance RPC envelope longer than the provider request timeout.
   timeout: 960000
   admin:
     ip: 127.0.0.1
@@ -16,20 +16,20 @@ server:
     read_timeout: 3000
     write_timeout: 960000
   service:
-    - name: trpc.moox.cloudnode.CloudNodeMgr
+    - name: trpc.moox.cloudfunction.CloudFunctionMgr
       ip: 127.0.0.1
       port: 11401
       network: tcp
       protocol: trpc
       transport: go-net
       timeout: 960000
-    - name: trpc.moox.cloudnode.Health
+    - name: trpc.moox.cloudfunction.Health
       ip: 127.0.0.1
       port: 11411
       network: tcp
       protocol: http_no_protocol
       timeout: 3000
-    - name: trpc.moox.cloudnode.metrics.timer
+    - name: trpc.moox.cloudfunction.metrics.timer
       port: 11413
       network: "*/30 * * * * *"
       protocol: timer

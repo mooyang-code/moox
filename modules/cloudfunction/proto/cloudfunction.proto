@@ -1,13 +1,13 @@
 syntax = "proto3";
 
-package trpc.moox.cloudnode;
+package trpc.moox.cloudfunction;
 
 import "moox_common.proto";
 import "google/protobuf/struct.proto";
 
-option go_package = "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen;cloudnodepb";
+option go_package = "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen;cloudfunctionpb";
 
-// CloudNodeMgr 管理云账号、云函数代码包、云函数节点及其批量变更和调用。
+// CloudFunctionMgr 管理云账号、云函数代码包、云函数实例及其批量变更和调用。
 // loopback 11401 提供原生 tRPC，由主机网关按调用方 ACL 转发。
 // 控制台经 Admin 转发，Collector 和 CLI 使用各自签名身份；空间标识取自 X-Space-Id 元数据。
 //
@@ -34,29 +34,29 @@ enum ScfInvokeType {
   SCF_INVOKE_TYPE_EVENT = 2;
 }
 
-enum NodeBatchOperation {
-  NODE_BATCH_OPERATION_UNSPECIFIED = 0;
-  NODE_BATCH_OPERATION_CREATE_NODES = 1;
-  NODE_BATCH_OPERATION_DEPLOY_NODES = 2;
-  NODE_BATCH_OPERATION_DELETE_NODES = 3;
-  NODE_BATCH_OPERATION_UPDATE_RUNTIME_CONFIGS = 4;
+enum FunctionJobOperation {
+  FUNCTION_JOB_OPERATION_UNSPECIFIED = 0;
+  FUNCTION_JOB_OPERATION_CREATE_INSTANCES = 1;
+  FUNCTION_JOB_OPERATION_DEPLOY_INSTANCES = 2;
+  FUNCTION_JOB_OPERATION_DELETE_INSTANCES = 3;
+  FUNCTION_JOB_OPERATION_UPDATE_RUNTIME_CONFIGS = 4;
 }
 
-enum NodeBatchStatus {
-  NODE_BATCH_STATUS_UNSPECIFIED = 0;
-  NODE_BATCH_STATUS_PENDING = 1;
-  NODE_BATCH_STATUS_RUNNING = 2;
-  NODE_BATCH_STATUS_SUCCESS = 3;
-  NODE_BATCH_STATUS_FAILED = 4;
-  NODE_BATCH_STATUS_PARTIAL = 5;
+enum FunctionJobStatus {
+  FUNCTION_JOB_STATUS_UNSPECIFIED = 0;
+  FUNCTION_JOB_STATUS_PENDING = 1;
+  FUNCTION_JOB_STATUS_RUNNING = 2;
+  FUNCTION_JOB_STATUS_SUCCESS = 3;
+  FUNCTION_JOB_STATUS_FAILED = 4;
+  FUNCTION_JOB_STATUS_PARTIAL = 5;
 }
 
-enum NodeBatchItemStatus {
-  NODE_BATCH_ITEM_STATUS_UNSPECIFIED = 0;
-  NODE_BATCH_ITEM_STATUS_PENDING = 1;
-  NODE_BATCH_ITEM_STATUS_RUNNING = 2;
-  NODE_BATCH_ITEM_STATUS_SUCCESS = 3;
-  NODE_BATCH_ITEM_STATUS_FAILED = 4;
+enum FunctionJobItemStatus {
+  FUNCTION_JOB_ITEM_STATUS_UNSPECIFIED = 0;
+  FUNCTION_JOB_ITEM_STATUS_PENDING = 1;
+  FUNCTION_JOB_ITEM_STATUS_RUNNING = 2;
+  FUNCTION_JOB_ITEM_STATUS_SUCCESS = 3;
+  FUNCTION_JOB_ITEM_STATUS_FAILED = 4;
 }
 
 enum SCFFunctionImportState {
@@ -67,23 +67,21 @@ enum SCFFunctionImportState {
   SCF_FUNCTION_IMPORT_STATE_BLOCKED = 4;
 }
 
-// CloudNode 云节点。
-message CloudNode {
+// FunctionInstance 云函数实例。
+message FunctionInstance {
   int32 id = 1;
   string space_id = 2;
-  string node_id = 3;
+  string instance_id = 3;
   string cloud_account_id = 4;
   string package_id = 5;
   string package_version = 6;
   string deployment_id = 7;
   string namespace = 9;
-  string node_type = 10;
+  string function_type = 10;
   string provider = 11;
   string function_name = 12;
-  string biz_type = 13;
+  string workload_type = 13;
   string region = 14;
-  string tag = 15;
-  string ip_address = 16;
   google.protobuf.Struct metadata = 18;
   bool is_deleted = 25;
   string create_time = 26;     // RFC3339
@@ -101,11 +99,11 @@ message SCFFunctionCandidate {
   SCFFunctionRef function = 1;
   string status = 2;
   string runtime = 3;
-  string function_type = 4;
+  string scf_type = 4;
   string package_id = 5;
-  string node_id = 6;
+  string instance_id = 6;
   string trigger_type = 7;
-  string biz_type = 8;
+  string workload_type = 8;
   SCFFunctionImportState import_state = 9;
   bool importable = 10;
   string reason = 11;
@@ -133,7 +131,7 @@ message ImportSCFFunctionsReq {
 
 message SCFFunctionImportResult {
   SCFFunctionRef function = 1;
-  string node_id = 2;
+  string instance_id = 2;
   string action = 3;
   string error_message = 4;
 }
@@ -147,14 +145,13 @@ message ImportSCFFunctionsRsp {
   int32 failed = 6;
 }
 
-message GetNodeListReq {
-  string node_id = 1;
+message ListFunctionInstancesReq {
+  string instance_id = 1;
   string cloud_account_id = 2;
   string namespace = 3;
   string region = 4;
-  string node_type = 5;
-  string biz_type = 6;
-  string tag = 7;
+  string function_type = 5;
+  string workload_type = 6;
   string trigger_type = 8;
   string keyword = 9;
   common.Page page = 10;
@@ -163,22 +160,14 @@ message GetNodeListReq {
   bool refresh_readback = 11;
 }
 
-message GetNodeListRsp {
+message ListFunctionInstancesRsp {
   common.RetInfo ret_info = 1;
-  repeated CloudNode items = 2;
+  repeated FunctionInstance items = 2;
   common.PageResult page = 3;
 }
 
-message UpdateNodeReq {
-  CloudNode node = 1;
-}
-
-message UpdateNodeRsp {
-  common.RetInfo ret_info = 1;
-}
-
 message InvokeFunctionReq {
-  string node_id = 1;
+  string instance_id = 1;
   google.protobuf.Struct event_data = 2;
   ScfInvokeType scf_invoke_type = 3;
   string qualifier = 4;
@@ -199,9 +188,9 @@ message InvokeFunctionRsp {
   ScfInvokeResult scf = 2;
 }
 
-message NodeCreateItem {
+message FunctionInstanceCreateItem {
   string cloud_account_id = 1;
-  string node_type = 2;
+  string function_type = 2;
   string runtime = 3;
   string handler = 4;
   map<string, string> config = 5;
@@ -217,25 +206,25 @@ message NodeCreateItem {
   string create_reservation_id = 15;
 }
 
-message BatchCreateNodesReq {
-  repeated NodeCreateItem nodes = 1;
+message SubmitCreateFunctionInstancesReq {
+  repeated FunctionInstanceCreateItem instances = 1;
 }
 
-message SubmitNodeBatchRsp {
+message SubmitFunctionJobRsp {
   common.RetInfo ret_info = 1;
   string job_id = 2;
-  NodeBatchOperation operation = 3;
+  FunctionJobOperation operation = 3;
   int32 total_count = 4;
 }
 
-message GetNodeBatchChangeReq {
+message GetFunctionJobReq {
   string job_id = 1;
 }
 
-message NodeBatchSummary {
+message FunctionJobSummary {
   string job_id = 1;
-  NodeBatchOperation operation = 2;
-  NodeBatchStatus status = 3;
+  FunctionJobOperation operation = 2;
+  FunctionJobStatus status = 3;
   int32 total_count = 4;
   int32 pending_count = 5;
   int32 running_count = 6;
@@ -246,35 +235,30 @@ message NodeBatchSummary {
   string completed_at = 11;
 }
 
-message NodeBatchItemResult {
+message FunctionJobItemResult {
   string item_id = 1;
-  string node_id = 2;
-  NodeBatchItemStatus status = 3;
+  string instance_id = 2;
+  FunctionJobItemStatus status = 3;
   string result_summary = 4;
   string error_message = 5;
   string started_at = 6;
   string completed_at = 7;
 }
 
-message GetNodeBatchChangeRsp {
+message GetFunctionJobRsp {
   common.RetInfo ret_info = 1;
-  NodeBatchSummary job = 2;
-  repeated NodeBatchItemResult items = 3;
+  FunctionJobSummary job = 2;
+  repeated FunctionJobItemResult items = 3;
 }
 
-message BatchDeleteNodesReq {
-  repeated string node_ids = 1;
+message SubmitDeleteFunctionInstancesReq {
+  repeated string instance_ids = 1;
   string collector_publish_lease_id = 2;
   int64 collector_publish_fencing_token = 3;
 }
 
-message BatchDeleteNodesRsp {
-  common.RetInfo ret_info = 1;
-  int32 processed_count = 2;
-}
-
-message NodeRuntimeConfigPatch {
-  string node_id = 1;
+message FunctionInstanceRuntimeConfigPatch {
+  string instance_id = 1;
   map<string, string> managed_environment = 2;
   bool timer_enabled = 3;
   string timer_cron = 4;
@@ -284,20 +268,20 @@ message NodeRuntimeConfigPatch {
   string operation_id = 8;
 }
 
-message BatchUpdateNodeRuntimeConfigsReq {
-  repeated NodeRuntimeConfigPatch nodes = 1;
+message SubmitUpdateFunctionInstanceRuntimeConfigsReq {
+  repeated FunctionInstanceRuntimeConfigPatch instances = 1;
 }
 
-message NodeDeleteItem {
-  string node_id = 1;
+message FunctionInstanceDeleteItem {
+  string instance_id = 1;
   string collector_publish_lease_id = 2;
   int64 collector_publish_fencing_token = 3;
   string lifecycle_id = 4;
   string operation_id = 5;
 }
 
-message NodeDeployItem {
-  string node_id = 1;
+message FunctionInstanceDeployItem {
+  string instance_id = 1;
   string package_id = 2;
   map<string, string> config = 3;
   map<string, string> environment = 4;
@@ -307,8 +291,8 @@ message NodeDeployItem {
   string operation_id = 8;
 }
 
-message BatchDeployNodesReq {
-  repeated NodeDeployItem deployments = 1;
+message SubmitDeployFunctionInstancesReq {
+  repeated FunctionInstanceDeployItem deployments = 1;
 }
 
 message CloudAccountSummary {
@@ -376,7 +360,7 @@ message CloudRegion {
   string code = 1;
   string name = 2;
   string tag = 3;
-  int32 max_nodes = 4;
+  int32 max_instances = 4;
   int32 max_namespaces_per_region = 5;
   int32 max_functions_per_namespace = 6;
 }
@@ -398,7 +382,7 @@ message PackageListItem {
   string description = 4;
   string runtime = 5;
   PackageType package_type = 6;
-  string biz_type = 7;
+  string workload_type = 7;
   int64 file_size = 8;
   string file_md5 = 9;
   string cloud_account_id = 10;
@@ -412,7 +396,7 @@ message GetPackageListReq {
   string package_name = 1;
   string runtime = 2;
   PackageType package_type = 3;
-  string biz_type = 4;
+  string workload_type = 4;
   optional PackageStatus status = 5;
   common.Page page = 6;
 }
@@ -491,7 +475,7 @@ message InitPackageUploadReq {
   string description = 3;
   string runtime = 4;
   PackageType package_type = 5;
-  string biz_type = 6;
+  string workload_type = 6;
   string original_filename = 7;
   string cloud_account_id = 8;
 }
@@ -515,7 +499,7 @@ message CompletePackageUploadRsp {
   PackageDetail detail = 2;
 }
 
-// CollectGarbageReq 清理 CloudNode 中已无任何节点使用的数据。dry_run 只统计、不删除。
+// CollectGarbageReq 清理 CloudFunction 中已无任何实例使用的数据。dry_run 只统计、不删除。
 message CollectGarbageReq {
   bool dry_run = 1;
 }
@@ -528,25 +512,23 @@ message CollectGarbageRsp {
   // cos_objects 和 cos_bytes 统计删除的 COS 对象，包括没有记录引用的孤立对象。
   uint32 cos_objects = 3;
   uint64 cos_bytes = 4;
-  // deleted_nodes 是彻底清除的已删除节点记录数。
-  uint32 deleted_nodes = 5;
-  // node_batches 是清除的已结束节点批次数，批次明细随批次一起删除。
-  uint32 node_batches = 6;
+  // deleted_instances 是彻底清除的已删除实例记录数。
+  uint32 deleted_instances = 5;
+  // function_jobs 是清除的已结束实例批次数，批次明细随批次一起删除。
+  uint32 function_jobs = 6;
   // skipped 列出本次跳过的清理项及原因，例如仍有进行中的批次时暂不清理代码包。
   repeated string skipped = 7;
 }
 
-service CloudNodeMgr {
-  rpc GetNodeList(GetNodeListReq) returns (GetNodeListRsp);
-  rpc UpdateNode(UpdateNodeReq) returns (UpdateNodeRsp);
+service CloudFunctionMgr {
+  rpc ListFunctionInstances(ListFunctionInstancesReq) returns (ListFunctionInstancesRsp);
   rpc InvokeFunction(InvokeFunctionReq) returns (InvokeFunctionRsp);
 
-  rpc SubmitCreateNodes(BatchCreateNodesReq) returns (SubmitNodeBatchRsp);
-  rpc SubmitDeployNodes(BatchDeployNodesReq) returns (SubmitNodeBatchRsp);
-  rpc SubmitDeleteNodes(BatchDeleteNodesReq) returns (SubmitNodeBatchRsp);
-  rpc GetNodeBatchChange(GetNodeBatchChangeReq) returns (GetNodeBatchChangeRsp);
-  rpc BatchDeleteNodes(BatchDeleteNodesReq) returns (BatchDeleteNodesRsp);
-  rpc SubmitUpdateNodeRuntimeConfigs(BatchUpdateNodeRuntimeConfigsReq) returns (SubmitNodeBatchRsp);
+  rpc SubmitCreateFunctionInstances(SubmitCreateFunctionInstancesReq) returns (SubmitFunctionJobRsp);
+  rpc SubmitDeployFunctionInstances(SubmitDeployFunctionInstancesReq) returns (SubmitFunctionJobRsp);
+  rpc SubmitDeleteFunctionInstances(SubmitDeleteFunctionInstancesReq) returns (SubmitFunctionJobRsp);
+  rpc GetFunctionJob(GetFunctionJobReq) returns (GetFunctionJobRsp);
+  rpc SubmitUpdateFunctionInstanceRuntimeConfigs(SubmitUpdateFunctionInstanceRuntimeConfigsReq) returns (SubmitFunctionJobRsp);
 
   rpc ListCloudAccounts(ListCloudAccountsReq) returns (ListCloudAccountsRsp);
   rpc CreateCloudAccount(CreateCloudAccountReq) returns (CreateCloudAccountRsp);

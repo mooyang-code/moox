@@ -1,19 +1,19 @@
-# MooX CloudNode service configuration.
+# MooX FunctionInstance service configuration.
 
 gateway_client:
-  caller: cloudnode
+  caller: cloudfunction
   key_id: ""
-  key_file: ../../secrets/caller-cloudnode.key
+  key_file: ../../secrets/caller-cloudfunction.key
 
 database:
   type: sqlite
-  path: ./data/moox_cloudnode.db
+  path: ./data/moox_cloudfunction.db
   max_idle_conns: 1
   max_open_conns: 1
   conn_max_lifetime: 1h
   conn_max_idle_time: 10m
 
-node_batch:
+function_job:
   batch_size: 3
   poll_interval: 500ms
 
@@ -38,6 +38,6 @@ cls:
   partitions: 1
   timeout_ms: 3000
   # 函数上报日志使用的专用凭证（建议是只有该主题写入权限的 CAM 子账号密钥）；两项必须同时配置，密钥放在 0600 的文件里。
-  # 不配置时退回使用云账号的管理密钥（能工作，但函数环境泄露会扩大到云资源控制面），CloudNode 会记一次告警。
+  # 不配置时退回使用云账号的管理密钥（能工作，但函数环境泄露会扩大到云资源控制面），FunctionInstance 会记一次告警。
   # writer_secret_id: ""
   # writer_secret_key_file: ../../secrets/cls-writer.key

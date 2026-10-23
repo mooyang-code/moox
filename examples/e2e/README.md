@@ -1,16 +1,16 @@
 # MooX E2E
 
-本目录只描述当前短时行情采集链路。旧常驻 SCF 和 CloudNode JobItem 已删除，不能用于验证
+本目录只描述当前短时行情采集链路。旧常驻 SCF 和 FunctionInstance JobItem 已删除，不能用于验证
 当前 Collector。
 
 ## 本地闭环
 
 Collector 的短时 E2E 使用嵌入式 JetStream、真实 Collector SQLite、假 Binance、假 Storage
-Primary 和 CloudNode 调用替身。它必须验证：
+Primary 和 FunctionInstance 调用替身。它必须验证：
 
 ```text
 BatchInvocation planned
-  -> CloudNode InvokeFunction(Event)
+  -> FunctionInstance InvokeFunction(Event)
   -> SCF completion published
   -> Collector Completion Consumer ACK
   -> TaskInstance freshness / RetryItem / Storage watermark
@@ -23,13 +23,13 @@ cd modules/collector
 go test -race -count=1 ./test -run ShortLivedMarketFetch
 ```
 
-本地 E2E 的成功证据是 `batch_id`、模拟的 CloudNode `request_id`、Completion 状态、
+本地 E2E 的成功证据是 `batch_id`、模拟的 FunctionInstance `request_id`、Completion 状态、
 RetryItem 状态和 Storage watermark；不读取 `cloud_job_item_id`。
 
 ## 真实 SCF 验收
 
 发布前先完成配置校验、Collector 部署和短时 SCF 发布。函数必须为 64MB、10 秒、异步自动
-重试为 0，并在 CloudNode 中显示 Active。
+重试为 0，并在 FunctionInstance 中显示 Active。
 
 ```bash
 ./bin/moox-cli collector function probe-egress \
@@ -55,6 +55,6 @@ RetryItem 状态和 Storage watermark；不读取 `cloud_job_item_id`。
 
 ## 删除旧验收
 
-本项目不迁移旧 JobItem 数据。发布前删除旧 Collector/CloudNode/Monitor SQLite、旧 JobItem
+本项目不迁移旧 JobItem 数据。发布前删除旧 Collector/FunctionInstance/Monitor SQLite、旧 JobItem
 历史目录、旧 Job stream 和旧 Collector SCF 函数，然后重新初始化短时 Fetcher。旧 E2E
 runner 已删除，不能在 `make verify-pr` 或发布脚本中调用。

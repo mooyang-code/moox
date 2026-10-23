@@ -266,7 +266,7 @@ host = "factor"
 
 # host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。
 [placements]
-control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"]
+control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"]
 storage = ["storage-primary", "storage-node", "storage-view", "access"]
 # collector-stream 接收交易所 WS 推送并提供本地执行端，必须放在能直连交易所的海外机；首次安装用 setup deploy-unit --profile collector-stream。
 overseas = ["trade", "access", "egress-proxy", "collector-stream"]
