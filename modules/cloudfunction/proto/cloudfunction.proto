@@ -1,0 +1,552 @@
+syntax = "proto3";
+
+package trpc.moox.cloudfunction;
+
+import "moox_common.proto";
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen;cloudfunctionpb";
+
+// CloudFunctionMgr 管理云账号、云函数代码包、云函数实例及其批量变更和调用。
+// loopback 11401 提供原生 tRPC，由主机网关按调用方 ACL 转发。
+// 控制台经 Admin 转发，Collector 和 CLI 使用各自签名身份；空间标识取自 X-Space-Id 元数据。
+//
+// 响应设计：每个响应首字段 common.RetInfo（code/msg），code=SUCCESS(0) 表示成功。
+
+enum PackageStatus {
+  PACKAGE_STATUS_UNSPECIFIED = 0;
+  PACKAGE_STATUS_PENDING = 1;
+  PACKAGE_STATUS_AVAILABLE = 2;
+  PACKAGE_STATUS_FAILED = 3;
+  PACKAGE_STATUS_DELETED = 4;
+}
+
+enum PackageType {
+  PACKAGE_TYPE_UNSPECIFIED = 0;
+  PACKAGE_TYPE_COLLECTOR = 1;
+  PACKAGE_TYPE_FACTOR = 2;
+  PACKAGE_TYPE_CUSTOM = 3;
+}
+
+enum ScfInvokeType {
+  SCF_INVOKE_TYPE_UNSPECIFIED = 0;
+  SCF_INVOKE_TYPE_REQUEST_RESPONSE = 1;
+  SCF_INVOKE_TYPE_EVENT = 2;
+}
+
+enum FunctionJobOperation {
+  FUNCTION_JOB_OPERATION_UNSPECIFIED = 0;
+  FUNCTION_JOB_OPERATION_CREATE_INSTANCES = 1;
+  FUNCTION_JOB_OPERATION_DEPLOY_INSTANCES = 2;
+  FUNCTION_JOB_OPERATION_DELETE_INSTANCES = 3;
+  FUNCTION_JOB_OPERATION_UPDATE_RUNTIME_CONFIGS = 4;
+}
+
+enum FunctionJobStatus {
+  FUNCTION_JOB_STATUS_UNSPECIFIED = 0;
+  FUNCTION_JOB_STATUS_PENDING = 1;
+  FUNCTION_JOB_STATUS_RUNNING = 2;
+  FUNCTION_JOB_STATUS_SUCCESS = 3;
+  FUNCTION_JOB_STATUS_FAILED = 4;
+  FUNCTION_JOB_STATUS_PARTIAL = 5;
+}
+
+enum FunctionJobItemStatus {
+  FUNCTION_JOB_ITEM_STATUS_UNSPECIFIED = 0;
+  FUNCTION_JOB_ITEM_STATUS_PENDING = 1;
+  FUNCTION_JOB_ITEM_STATUS_RUNNING = 2;
+  FUNCTION_JOB_ITEM_STATUS_SUCCESS = 3;
+  FUNCTION_JOB_ITEM_STATUS_FAILED = 4;
+}
+
+enum SCFFunctionImportState {
+  SCF_FUNCTION_IMPORT_STATE_UNSPECIFIED = 0;
+  SCF_FUNCTION_IMPORT_STATE_NEW = 1;
+  SCF_FUNCTION_IMPORT_STATE_EXISTING = 2;
+  SCF_FUNCTION_IMPORT_STATE_DELETED = 3;
+  SCF_FUNCTION_IMPORT_STATE_BLOCKED = 4;
+}
+
+// FunctionInstance 云函数实例。
+message FunctionInstance {
+  int32 id = 1;
+  string space_id = 2;
+  string instance_id = 3;
+  string cloud_account_id = 4;
+  string package_id = 5;
+  string package_version = 6;
+  string deployment_id = 7;
+  string namespace = 9;
+  string function_type = 10;
+  string provider = 11;
+  string function_name = 12;
+  string workload_type = 13;
+  string region = 14;
+  google.protobuf.Struct metadata = 18;
+  bool is_deleted = 25;
+  string create_time = 26;     // RFC3339
+  string modify_time = 27;     // RFC3339
+  string trigger_type = 28;    // invoke or timer
+}
+
+message SCFFunctionRef {
+  string region = 1;
+  string namespace = 2;
+  string function_name = 3;
+}
+
+message SCFFunctionCandidate {
+  SCFFunctionRef function = 1;
+  string status = 2;
+  string runtime = 3;
+  string scf_type = 4;
+  string package_id = 5;
+  string instance_id = 6;
+  string trigger_type = 7;
+  string workload_type = 8;
+  SCFFunctionImportState import_state = 9;
+  bool importable = 10;
+  string reason = 11;
+}
+
+message SCFRegionScanError {
+  string region = 1;
+  string message = 2;
+}
+
+message PreviewSCFFunctionsReq {
+  string account_id = 1;
+}
+
+message PreviewSCFFunctionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated SCFFunctionCandidate functions = 2;
+  repeated SCFRegionScanError region_errors = 3;
+}
+
+message ImportSCFFunctionsReq {
+  string account_id = 1;
+  repeated SCFFunctionRef functions = 2;
+}
+
+message SCFFunctionImportResult {
+  SCFFunctionRef function = 1;
+  string instance_id = 2;
+  string action = 3;
+  string error_message = 4;
+}
+
+message ImportSCFFunctionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated SCFFunctionImportResult results = 2;
+  int32 created = 3;
+  int32 restored = 4;
+  int32 unchanged = 5;
+  int32 failed = 6;
+}
+
+message ListFunctionInstancesReq {
+  string instance_id = 1;
+  string cloud_account_id = 2;
+  string namespace = 3;
+  string region = 4;
+  string function_type = 5;
+  string workload_type = 6;
+  string trigger_type = 8;
+  string keyword = 9;
+  common.Page page = 10;
+  // 为 true 时同步读回云端函数与定时器的实际状态（忽略读回间隔与 market_fetcher 的跳过规则），
+  // 供 Collector 的周期性云端校验使用；默认只返回目录记录。
+  bool refresh_readback = 11;
+}
+
+message ListFunctionInstancesRsp {
+  common.RetInfo ret_info = 1;
+  repeated FunctionInstance items = 2;
+  common.PageResult page = 3;
+}
+
+message InvokeFunctionReq {
+  string instance_id = 1;
+  google.protobuf.Struct event_data = 2;
+  ScfInvokeType scf_invoke_type = 3;
+  string qualifier = 4;
+}
+
+message ScfInvokeResult {
+  int32 code = 1;
+  string message = 2;
+  string request_id = 3;
+  google.protobuf.Struct result = 4;
+  int64 duration = 5;
+  int64 bill_duration = 6;
+  int64 memory_usage = 7;
+}
+
+message InvokeFunctionRsp {
+  common.RetInfo ret_info = 1;
+  ScfInvokeResult scf = 2;
+}
+
+message FunctionInstanceCreateItem {
+  string cloud_account_id = 1;
+  string function_type = 2;
+  string runtime = 3;
+  string handler = 4;
+  map<string, string> config = 5;
+  map<string, string> environment = 6;
+  string region = 7;
+  string namespace = 8;
+  string package_id = 9;
+  string deployment_id = 10;
+  google.protobuf.Struct metadata = 11;
+  string trigger_type = 12;
+  string collector_publish_lease_id = 13;
+  int64 collector_publish_fencing_token = 14;
+  string create_reservation_id = 15;
+}
+
+message SubmitCreateFunctionInstancesReq {
+  repeated FunctionInstanceCreateItem instances = 1;
+}
+
+message SubmitFunctionJobRsp {
+  common.RetInfo ret_info = 1;
+  string job_id = 2;
+  FunctionJobOperation operation = 3;
+  int32 total_count = 4;
+}
+
+message GetFunctionJobReq {
+  string job_id = 1;
+}
+
+message FunctionJobSummary {
+  string job_id = 1;
+  FunctionJobOperation operation = 2;
+  FunctionJobStatus status = 3;
+  int32 total_count = 4;
+  int32 pending_count = 5;
+  int32 running_count = 6;
+  int32 success_count = 7;
+  int32 failed_count = 8;
+  int32 progress_percent = 9;
+  string created_at = 10;
+  string completed_at = 11;
+}
+
+message FunctionJobItemResult {
+  string item_id = 1;
+  string instance_id = 2;
+  FunctionJobItemStatus status = 3;
+  string result_summary = 4;
+  string error_message = 5;
+  string started_at = 6;
+  string completed_at = 7;
+}
+
+message GetFunctionJobRsp {
+  common.RetInfo ret_info = 1;
+  FunctionJobSummary job = 2;
+  repeated FunctionJobItemResult items = 3;
+}
+
+message SubmitDeleteFunctionInstancesReq {
+  repeated string instance_ids = 1;
+  string collector_publish_lease_id = 2;
+  int64 collector_publish_fencing_token = 3;
+}
+
+message FunctionInstanceRuntimeConfigPatch {
+  string instance_id = 1;
+  map<string, string> managed_environment = 2;
+  bool timer_enabled = 3;
+  string timer_cron = 4;
+  string collector_publish_lease_id = 5;
+  int64 collector_publish_fencing_token = 6;
+  string lifecycle_id = 7;
+  string operation_id = 8;
+}
+
+message SubmitUpdateFunctionInstanceRuntimeConfigsReq {
+  repeated FunctionInstanceRuntimeConfigPatch instances = 1;
+}
+
+message FunctionInstanceDeleteItem {
+  string instance_id = 1;
+  string collector_publish_lease_id = 2;
+  int64 collector_publish_fencing_token = 3;
+  string lifecycle_id = 4;
+  string operation_id = 5;
+}
+
+message FunctionInstanceDeployItem {
+  string instance_id = 1;
+  string package_id = 2;
+  map<string, string> config = 3;
+  map<string, string> environment = 4;
+  string collector_publish_lease_id = 5;
+  int64 collector_publish_fencing_token = 6;
+  string lifecycle_id = 7;
+  string operation_id = 8;
+}
+
+message SubmitDeployFunctionInstancesReq {
+  repeated FunctionInstanceDeployItem deployments = 1;
+}
+
+message CloudAccountSummary {
+  int32 id = 1;
+  string account_id = 2;
+  string account_name = 3;
+  string provider = 4;
+  string credential_secret_id = 5;
+  string app_id = 6;
+  string cos_region = 7;
+  string cos_bucket = 8;
+  string extra_config = 9;
+  bool is_deleted = 10;
+  string create_time = 11;
+  string modify_time = 12;
+}
+
+message CloudAccountInput {
+  string account_id = 1;
+  string account_name = 2;
+  string provider = 3;
+  string credential_secret_id = 4;
+  string app_id = 5;
+  string cos_region = 6;
+  string cos_bucket = 7;
+  string extra_config = 8;
+}
+
+message ListCloudAccountsReq {
+  string provider = 1;
+}
+
+message ListCloudAccountsRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudAccountSummary accounts = 2;
+  int64 total = 3;
+}
+
+message CreateCloudAccountReq {
+  CloudAccountInput account = 1;
+}
+
+message CreateCloudAccountRsp {
+  common.RetInfo ret_info = 1;
+  CloudAccountSummary account = 2;
+}
+
+message UpdateCloudAccountReq {
+  CloudAccountInput account = 1;
+}
+
+message UpdateCloudAccountRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message DeleteCloudAccountReq {
+  string account_id = 1;
+}
+
+message DeleteCloudAccountRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message CloudRegion {
+  string code = 1;
+  string name = 2;
+  string tag = 3;
+  int32 max_instances = 4;
+  int32 max_namespaces_per_region = 5;
+  int32 max_functions_per_namespace = 6;
+}
+
+message ListCloudRegionsReq {
+  string provider = 1;
+}
+
+message ListCloudRegionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated CloudRegion regions = 2;
+  int64 total = 3;
+}
+
+message PackageListItem {
+  string package_id = 1;
+  string package_name = 2;
+  string version = 3;
+  string description = 4;
+  string runtime = 5;
+  PackageType package_type = 6;
+  string workload_type = 7;
+  int64 file_size = 8;
+  string file_md5 = 9;
+  string cloud_account_id = 10;
+  string cos_region = 11;
+  PackageStatus status = 12;
+  string last_deploy_time = 13;
+  string created_time = 14;
+}
+
+message GetPackageListReq {
+  string package_name = 1;
+  string runtime = 2;
+  PackageType package_type = 3;
+  string workload_type = 4;
+  optional PackageStatus status = 5;
+  common.Page page = 6;
+}
+
+message GetPackageListRsp {
+  common.RetInfo ret_info = 1;
+  repeated PackageListItem items = 2;
+  common.PageResult page = 3;
+}
+
+message PackageDetail {
+  int64 id = 1;
+  string space_id = 2;
+  string package_id = 3;
+  string package_name = 4;
+  string version = 5;
+  string description = 6;
+  string runtime = 7;
+  PackageType package_type = 8;
+  string original_filename = 9;
+  int64 file_size = 10;
+  string file_md5 = 11;
+  string cloud_account_id = 12;
+  string cos_region = 13;
+  string cos_bucket = 14;
+  string cos_path = 15;
+  string cos_url = 16;
+  PackageStatus status = 17;
+  int32 upload_progress = 18;
+  string error_message = 19;
+  string last_deploy_time = 20;
+  bool is_deleted = 21;
+  string created_time = 22;
+  string updated_time = 23;
+}
+
+message GetPackageDetailReq {
+  string package_id = 1;
+}
+
+message GetPackageDetailRsp {
+  common.RetInfo ret_info = 1;
+  PackageDetail detail = 2;
+}
+
+message DeletePackageReq {
+  string package_id = 1;
+}
+
+message DeletePackageRsp {
+  common.RetInfo ret_info = 1;
+}
+
+message PackageDownloadURL {
+  string package_id = 1;
+  string package_name = 2;
+  string version = 3;
+  string filename = 4;
+  string download_url = 5;
+  int64 file_size = 6;
+  string file_md5 = 7;
+}
+
+message GetPackageDownloadURLReq {
+  string package_id = 1;
+}
+
+message GetPackageDownloadURLRsp {
+  common.RetInfo ret_info = 1;
+  PackageDownloadURL url = 2;
+}
+
+message InitPackageUploadReq {
+  string package_name = 1;
+  string version = 2;
+  string description = 3;
+  string runtime = 4;
+  PackageType package_type = 5;
+  string workload_type = 6;
+  string original_filename = 7;
+  string cloud_account_id = 8;
+}
+
+message InitPackageUploadRsp {
+  common.RetInfo ret_info = 1;
+  string package_id = 2;
+  string upload_url = 3;
+  string cos_path = 4;
+  int64 expires_at = 5;
+}
+
+message CompletePackageUploadReq {
+  string package_id = 1;
+  string file_md5 = 2;
+  int64 file_size = 3;
+}
+
+message CompletePackageUploadRsp {
+  common.RetInfo ret_info = 1;
+  PackageDetail detail = 2;
+}
+
+// CollectGarbageReq 清理 CloudFunction 中已无任何实例使用的数据。dry_run 只统计、不删除。
+message CollectGarbageReq {
+  bool dry_run = 1;
+}
+
+// CollectGarbageRsp 汇总一次清理删除（或 dry_run 时将删除）的数量。
+message CollectGarbageRsp {
+  common.RetInfo ret_info = 1;
+  // packages 是删除的代码包记录数；记录对应的 COS 对象一并删除。
+  uint32 packages = 2;
+  // cos_objects 和 cos_bytes 统计删除的 COS 对象，包括没有记录引用的孤立对象。
+  uint32 cos_objects = 3;
+  uint64 cos_bytes = 4;
+  // deleted_instances 是彻底清除的已删除实例记录数。
+  uint32 deleted_instances = 5;
+  // function_jobs 是清除的已结束实例批次数，批次明细随批次一起删除。
+  uint32 function_jobs = 6;
+  // skipped 列出本次跳过的清理项及原因，例如仍有进行中的批次时暂不清理代码包。
+  repeated string skipped = 7;
+}
+
+service CloudFunctionMgr {
+  rpc ListFunctionInstances(ListFunctionInstancesReq) returns (ListFunctionInstancesRsp);
+  rpc InvokeFunction(InvokeFunctionReq) returns (InvokeFunctionRsp);
+
+  rpc SubmitCreateFunctionInstances(SubmitCreateFunctionInstancesReq) returns (SubmitFunctionJobRsp);
+  rpc SubmitDeployFunctionInstances(SubmitDeployFunctionInstancesReq) returns (SubmitFunctionJobRsp);
+  rpc SubmitDeleteFunctionInstances(SubmitDeleteFunctionInstancesReq) returns (SubmitFunctionJobRsp);
+  rpc GetFunctionJob(GetFunctionJobReq) returns (GetFunctionJobRsp);
+  rpc SubmitUpdateFunctionInstanceRuntimeConfigs(SubmitUpdateFunctionInstanceRuntimeConfigsReq) returns (SubmitFunctionJobRsp);
+
+  rpc ListCloudAccounts(ListCloudAccountsReq) returns (ListCloudAccountsRsp);
+  rpc CreateCloudAccount(CreateCloudAccountReq) returns (CreateCloudAccountRsp);
+  rpc UpdateCloudAccount(UpdateCloudAccountReq) returns (UpdateCloudAccountRsp);
+  rpc DeleteCloudAccount(DeleteCloudAccountReq) returns (DeleteCloudAccountRsp);
+
+  rpc ListCloudRegions(ListCloudRegionsReq) returns (ListCloudRegionsRsp);
+
+  rpc PreviewSCFFunctions(PreviewSCFFunctionsReq) returns (PreviewSCFFunctionsRsp);
+  rpc ImportSCFFunctions(ImportSCFFunctionsReq) returns (ImportSCFFunctionsRsp);
+
+  rpc GetPackageList(GetPackageListReq) returns (GetPackageListRsp);
+  rpc GetPackageDetail(GetPackageDetailReq) returns (GetPackageDetailRsp);
+  rpc DeletePackage(DeletePackageReq) returns (DeletePackageRsp);
+  rpc GetPackageDownloadURL(GetPackageDownloadURLReq) returns (GetPackageDownloadURLRsp);
+  rpc InitPackageUpload(InitPackageUploadReq) returns (InitPackageUploadRsp);
+  rpc CompletePackageUpload(CompletePackageUploadReq) returns (CompletePackageUploadRsp);
+
+  // CollectGarbage 只供 Admin 的每日清理定时器调用，不对浏览器开放。
+  rpc CollectGarbage(CollectGarbageReq) returns (CollectGarbageRsp);
+}

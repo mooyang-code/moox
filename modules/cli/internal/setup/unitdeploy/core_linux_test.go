@@ -229,7 +229,7 @@ ssh = {username="fixture",password="synthetic-ssh-password"}
 address = "127.0.0.3"
 ssh = {username="fixture",password="synthetic-ssh-password"}
 [placements]
-control = ["admin","eventbus","console-proxy","web-host","monitor","collector","cloudnode","factor-mgr","strategy","access","egress-proxy","trade","storage-primary","storage-node","storage-view"]
+control = ["admin","eventbus","console-proxy","web-host","monitor","collector","cloudfunction","factor-mgr","strategy","access","egress-proxy","trade","storage-primary","storage-node","storage-view"]
 storage = ["access"]
 compute1 = ["access"]
 `, deployment, filepath.Join(deployment, "units", "prod"), filepath.Join(deployment, "storage"), target.Port)

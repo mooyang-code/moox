@@ -13,7 +13,7 @@ import (
 
 // moduleHealthNames names each built-in module health check for people.
 var moduleHealthNames = map[string]string{
-	"cloudnode-jobs":        "云节点任务执行",
+	"cloudfunction-jobs":    "云函数实例任务执行",
 	"collector-market-data": "行情采集",
 	"factor-calculation":    "因子计算",
 	"strategy-targets":      "策略目标生成",

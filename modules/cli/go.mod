@@ -109,7 +109,7 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
-	github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/monitor/proto/monitorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/doctor v0.0.0-00010101000000-000000000000
@@ -181,7 +181,7 @@ replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tra
 
 replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
 
-replace github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen => ../cloudnode/proto/cloudnodegen
+replace github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen => ../cloudfunction/proto/cloudfunctiongen
 
 replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
 

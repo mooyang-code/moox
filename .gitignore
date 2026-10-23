@@ -114,3 +114,8 @@ docs/.vitepress/cache/
 
 # local build toolchain cache
 /.toolchain/
+
+# Module-local build outputs
+/modules/admin/cmd/cli/cli
+/modules/storage/cmd/cli/cli
+/modules/importer/importer

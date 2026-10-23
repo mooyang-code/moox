@@ -8,23 +8,23 @@ import (
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestIsDeployedRequiresPostDeployMarkerWhenDeploymentIDIsEmpty(t *testing.T) {
-	if isDeployed(&cloudnodepb.CloudNode{PackageId: "pkg-1"}) {
+	if isDeployed(&cloudfunctionpb.FunctionInstance{PackageId: "pkg-1"}) {
 		t.Fatal("package-only node must not be invokable before deploy")
 	}
-	if !isDeployed(&cloudnodepb.CloudNode{PackageId: "pkg-1", DeploymentId: "dep-1"}) {
+	if !isDeployed(&cloudfunctionpb.FunctionInstance{PackageId: "pkg-1", DeploymentId: "dep-1"}) {
 		t.Fatal("node with deployment id should be invokable")
 	}
 	metadata, err := structpb.NewStruct(map[string]any{"deployment_ready": true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !isDeployed(&cloudnodepb.CloudNode{PackageId: "pkg-1", Metadata: metadata}) {
+	if !isDeployed(&cloudfunctionpb.FunctionInstance{PackageId: "pkg-1", Metadata: metadata}) {
 		t.Fatal("node with local deployment marker should be invokable")
 	}
 }
@@ -95,10 +95,10 @@ func (f gatewayFunc) Invoke(ctx context.Context, service, method string, req, rs
 	return f(ctx, service, method, req, rsp)
 }
 
-func TestCloudNodeGatewayKeepsSubmissionUnknownAndBusinessRejectionDistinct(t *testing.T) {
+func TestCloudFunctionGatewayKeepsSubmissionUnknownAndBusinessRejectionDistinct(t *testing.T) {
 	for _, scenario := range []struct {
 		name, job string
-		code      cloudnodepb.ErrorCode
+		code      cloudfunctionpb.ErrorCode
 		transport error
 		unknown   bool
 	}{
@@ -107,22 +107,22 @@ func TestCloudNodeGatewayKeepsSubmissionUnknownAndBusinessRejectionDistinct(t *t
 		{name: "blank job", job: "  ", unknown: true},
 		{name: "connection lost", transport: errors.New("response connection lost"), unknown: true},
 		{name: "timeout", transport: context.DeadlineExceeded, unknown: true},
-		{name: "business rejection", code: cloudnodepb.ErrorCode(14)},
+		{name: "business rejection", code: cloudfunctionpb.ErrorCode(14)},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			calls := 0
 			c := New(Config{Gateway: gatewayFunc(func(ctx context.Context, service, method string, req, rsp any) error {
 				calls++
-				require.Equal(t, "trpc.moox.cloudnode.CloudNodeMgr", service)
-				require.Equal(t, "SubmitUpdateNodeRuntimeConfigs", method)
+				require.Equal(t, "trpc.moox.cloudfunction.CloudFunctionMgr", service)
+				require.Equal(t, "SubmitUpdateFunctionInstanceRuntimeConfigs", method)
 				require.Equal(t, "crypto", gatewayclient.CallMetadataFromContext(ctx).SpaceID)
-				require.Equal(t, "timer-1", req.(*cloudnodepb.BatchUpdateNodeRuntimeConfigsReq).GetNodes()[0].GetNodeId())
-				response := rsp.(*cloudnodepb.SubmitNodeBatchRsp)
+				require.Equal(t, "timer-1", req.(*cloudfunctionpb.SubmitUpdateFunctionInstanceRuntimeConfigsReq).GetInstances()[0].GetInstanceId())
+				response := rsp.(*cloudfunctionpb.SubmitFunctionJobRsp)
 				response.JobId = scenario.job
-				response.RetInfo = &cloudnodepb.RetInfo{Code: scenario.code, Msg: "business rejection"}
+				response.RetInfo = &cloudfunctionpb.RetInfo{Code: scenario.code, Msg: "business rejection"}
 				return scenario.transport
 			})})
-			job, err := c.SubmitRuntimeConfigs(context.Background(), "crypto", []*cloudnodepb.NodeRuntimeConfigPatch{{NodeId: "timer-1"}})
+			job, err := c.SubmitRuntimeConfigs(context.Background(), "crypto", []*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{{InstanceId: "timer-1"}})
 			require.Equal(t, 1, calls, "writes are never reissued")
 			if scenario.name == "accepted" {
 				require.NoError(t, err)
@@ -134,7 +134,7 @@ func TestCloudNodeGatewayKeepsSubmissionUnknownAndBusinessRejectionDistinct(t *t
 		})
 	}
 	for _, ctx := range []context.Context{context.Background(), func() context.Context { ctx, cancel := context.WithCancel(context.Background()); cancel(); return ctx }()} {
-		_, err := (&Client{}).SubmitRuntimeConfigs(ctx, "crypto", []*cloudnodepb.NodeRuntimeConfigPatch{{NodeId: "timer-1"}})
+		_, err := (&Client{}).SubmitRuntimeConfigs(ctx, "crypto", []*cloudfunctionpb.FunctionInstanceRuntimeConfigPatch{{InstanceId: "timer-1"}})
 		require.Error(t, err)
 		require.NotErrorIs(t, err, ErrRuntimeConfigSubmissionUnknown)
 	}

@@ -60,11 +60,11 @@
   ],
   "components": [
     {
-      "component_id": "cloudnode",
+      "component_id": "cloudfunction",
       "host_id": "control",
       "instances": [],
       "lifecycle": null,
-      "name": "云节点服务",
+      "name": "云函数管理服务",
       "probe": {
         "checked_at": "",
         "raw_error": "",

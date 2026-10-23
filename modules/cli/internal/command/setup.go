@@ -204,7 +204,7 @@ func newSetupAttachSCFVPCCommand(deps setupDeps) *cobra.Command {
 
 // newSetupInvokeSCFCommand invokes a single function directly through SCF's
 // control API. It is useful for connectivity proof when the optional
-// CloudNode control service is temporarily unavailable.
+// FunctionInstance control service is temporarily unavailable.
 func newSetupInvokeSCFCommand(deps setupDeps) *cobra.Command {
 	var file, region, namespace, functionName, eventJSON string
 	cmd := &cobra.Command{
@@ -363,7 +363,7 @@ du -xh --max-depth=2 "$root/data" "$root/logs" 2>/dev/null | sort -h | tail -40 
 printf 'staged archives:\n'
 ls -lh /tmp/moox-control-*.tar.gz /tmp/moox-storage-*.tar.gz 2>/dev/null || true
 printf 'recent service errors:\n'
-for name in cloudnode eventbus collector factor gateway storage storage-primary storage-view storage-node; do
+for name in cloudfunction eventbus collector factor gateway storage storage-primary storage-view storage-node; do
   for log in "$root/logs/$name/stdout.log" "$root/logs/$name/stderr.log" "$root/logs/$name.log"; do
     if [ -f "$log" ]; then echo "--- $log"; tail -30 "$log"; fi
   done

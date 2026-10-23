@@ -191,7 +191,7 @@ func (d *DAO) BeginOperation(ctx context.Context, spaceID, leaseID, operationID 
 		SpaceID: spaceID, OperationID: operationID, LeaseID: leaseID, FencingToken: token,
 		ExpiresAtUnix: now.Add(operationClaimTTL).UnixMilli(),
 	}
-	// CloudNode begins operations for many deploy items in parallel. One
+	// FunctionInstance begins operations for many deploy items in parallel. One
 	// statement takes the write lock before it checks the lease; a deferred
 	// read-then-insert transaction fails with SQLITE_BUSY_SNAPSHOT in WAL mode
 	// once another item commits, and busy_timeout does not retry that.

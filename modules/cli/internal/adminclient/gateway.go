@@ -43,6 +43,6 @@ func (c *Client) callCollectorJSON(ctx context.Context, method string, body, res
 	return c.CallGatewayJSON(ctx, "trpc.moox.collector.CollectMgr", method, body, response)
 }
 
-func (c *Client) callCloudNodeJSON(ctx context.Context, method string, body any) ([]byte, error) {
-	return c.gatewayJSON(ctx, "trpc.moox.cloudnode.CloudNodeMgr", method, body)
+func (c *Client) callCloudFunctionJSON(ctx context.Context, method string, body any) ([]byte, error) {
+	return c.gatewayJSON(ctx, "trpc.moox.cloudfunction.CloudFunctionMgr", method, body)
 }

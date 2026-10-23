@@ -25,7 +25,7 @@ type SCFPlanConfig struct {
 	Namespace   string `yaml:"namespace"`
 	MemoryMB    int    `yaml:"memory_mb"`
 	// BaseEnvironmentFile 是可选的额外非受管环境（JSON 对象），含密钥时权限应为 0600。空间身份与 Storage 应用密钥
-	// 由 Collector 自己生成（密钥由控制机身份里的 Storage 主密钥派生），日志服务由 CloudNode 创建函数时补齐，
+	// 由 Collector 自己生成（密钥由控制机身份里的 Storage 主密钥派生），日志服务由 FunctionInstance 创建函数时补齐，
 	// 所以通常不需要这个文件。
 	BaseEnvironmentFile string `yaml:"base_environment_file"`
 	SymbolsPerFunction  int    `yaml:"symbols_per_function"`

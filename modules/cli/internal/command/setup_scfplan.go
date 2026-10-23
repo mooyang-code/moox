@@ -110,7 +110,7 @@ func (a adminSCFPlanPackages) Upload(ctx context.Context, space setupconfig.SCFP
 	}
 	response, err := a.client(space.SpaceID).UploadPackage(ctx, adminclient.UploadPackageRequest{
 		PackageName: space.PackageName, Version: version, Runtime: "Go1",
-		PackageType: adminclient.ResolvePackageType("data_collector"), BizType: "market_fetcher",
+		PackageType: adminclient.ResolvePackageType("data_collector"), WorkloadType: "market_fetcher",
 		CloudAccountID: cloudAccountID, OriginalFilename: filepath.Base(result.Path),
 	}, data)
 	if err != nil {

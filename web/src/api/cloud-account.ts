@@ -31,7 +31,7 @@ export type CloudAccount = CloudAccountSummary;
 
 export const getCloudAccountList = async (): Promise<CloudAccountSummary[]> => {
   const rsp = await callControl<Record<string, never>, { accounts?: CloudAccountSummary[] }>(
-    "cloudnode",
+    "cloudfunction",
     "ListCloudAccounts",
     {}
   );
@@ -40,7 +40,7 @@ export const getCloudAccountList = async (): Promise<CloudAccountSummary[]> => {
 
 export const createCloudAccount = async (account: CloudAccountInput): Promise<CloudAccountSummary> => {
   const rsp = await callControl<{ account: CloudAccountInput }, { account?: CloudAccountSummary }>(
-    "cloudnode",
+    "cloudfunction",
     "CreateCloudAccount",
     { account }
   );
@@ -48,13 +48,13 @@ export const createCloudAccount = async (account: CloudAccountInput): Promise<Cl
 };
 
 export const updateCloudAccount = async (account_id: string, account: Partial<CloudAccountInput>): Promise<void> => {
-  await callControl<{ account: Partial<CloudAccountInput> }, Record<string, never>>("cloudnode", "UpdateCloudAccount", {
+  await callControl<{ account: Partial<CloudAccountInput> }, Record<string, never>>("cloudfunction", "UpdateCloudAccount", {
     account: { account_id, ...account }
   });
 };
 
 export const deleteCloudAccount = async (accountId: string): Promise<void> => {
-  await callControl<{ account_id: string }, Record<string, never>>("cloudnode", "DeleteCloudAccount", {
+  await callControl<{ account_id: string }, Record<string, never>>("cloudfunction", "DeleteCloudAccount", {
     account_id: accountId
   });
 };

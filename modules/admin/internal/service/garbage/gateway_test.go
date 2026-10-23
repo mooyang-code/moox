@@ -55,7 +55,7 @@ func TestGarbageUsesProvisionedAdminIdentityThroughNativeGateway(t *testing.T) {
 		}
 		return filters.Filter(ctx, raw, func(ctx context.Context, input any) (any, error) {
 			message := codec.Message(ctx)
-			if message.ServerRPCName() != "/trpc.moox.cloudnode.CloudNodeMgr/CollectGarbage" || message.SerializationType() != codec.SerializationTypeJSON {
+			if message.ServerRPCName() != "/trpc.moox.cloudfunction.CloudFunctionMgr/CollectGarbage" || message.SerializationType() != codec.SerializationTypeJSON {
 				return nil, errors.New("unexpected admin garbage call")
 			}
 			headers := http.Header{}
@@ -63,7 +63,7 @@ func TestGarbageUsesProvisionedAdminIdentityThroughNativeGateway(t *testing.T) {
 				headers.Set(name, string(value))
 			}
 			body := input.(*codec.Body).Data
-			claims, err := gatewayauth.Verify(credentials, gatewayauth.Request{Method: "POST", Path: message.ServerRPCName(), TargetNode: "control", Callee: "trpc.moox.cloudnode.CloudNodeMgr", Func: "CollectGarbage", Body: body}, headers, time.Now())
+			claims, err := gatewayauth.Verify(credentials, gatewayauth.Request{Method: "POST", Path: message.ServerRPCName(), TargetNode: "control", Callee: "trpc.moox.cloudfunction.CloudFunctionMgr", Func: "CollectGarbage", Body: body}, headers, time.Now())
 			if err != nil {
 				return nil, err
 			}
@@ -79,13 +79,13 @@ func TestGarbageUsesProvisionedAdminIdentityThroughNativeGateway(t *testing.T) {
 				return nil, errors.New("nonce reused")
 			}
 			nonces[claims.Nonce] = true
-			return &codec.Body{Data: []byte(`{"ret_info":{"code":0},"packages":2,"cos_objects":3,"cos_bytes":"250","deleted_nodes":1}`)}, nil
+			return &codec.Body{Data: []byte(`{"ret_info":{"code":0},"packages":2,"cos_objects":3,"cos_bytes":"250","deleted_instances":1}`)}, nil
 		})
 	}}}}
 	require.NoError(t, service.Register(descriptor, struct{}{}))
 	go func() { _ = service.Serve() }()
 	t.Cleanup(func() { _ = service.Close(nil) })
-	directory := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}, Services: map[string][]string{"trpc.moox.cloudnode.CloudNodeMgr": {"control"}}}
+	directory := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"control": {Address: "control.example.test"}}, Services: map[string][]string{"trpc.moox.cloudfunction.CloudFunctionMgr": {"control"}}}
 	directory.Version, err = directory.VersionHash()
 	require.NoError(t, err)
 	private, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -106,6 +106,6 @@ func TestGarbageUsesProvisionedAdminIdentityThroughNativeGateway(t *testing.T) {
 	count := len(nonces)
 	mu.Unlock()
 	require.Equal(t, 2, count)
-	err = gateway.Invoke(t.Context(), "trpc.moox.cloudnode.CloudNodeMgr", "GetNodeList", struct{}{}, &struct{}{})
+	err = gateway.Invoke(t.Context(), "trpc.moox.cloudfunction.CloudFunctionMgr", "ListFunctionInstances", struct{}{}, &struct{}{})
 	require.ErrorContains(t, err, "not allowed")
 }

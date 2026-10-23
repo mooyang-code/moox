@@ -16,7 +16,7 @@ MooX 是单用户、自托管系统。唯一的登录用户拥有全部管理能
 | [Storage](docs/模块/存储.md) | `moox-storage-{primary,node,view}` | 元数据、字段级事实存储、可重建 View |
 | [Access](modules/access/README.md) | `moox-access` | 外部签名 tRPC 接入、逐方法权限与防重放，经主机网关调用服务 |
 | [Collector](docs/模块/采集.md) | `moox-collector`、SCF 函数 | 采集任务、周期批次、云函数调度与对账、标的同步 |
-| [CloudNode](docs/模块/云节点.md) | `moox-cloudnode` | 云账户、SCF 节点、代码包与发布 |
+| [CloudFunction](docs/模块/云函数管理.md) | `moox-cloudfunction` | 云账户、SCF 实例、代码包与发布 |
 | [Factor](docs/模块/因子.md) | `moox-factor-mgr`、`moox-factor-engine` | 因子表达式定义与计算任务、增量计算与补算 |
 | [Strategy](docs/模块/策略.md) | `moox-strategy` | 声明式策略 DSL，按周期产出目标权重 |
 | [Trade](docs/模块/交易.md) | `moox-trade` | 账户、目标收敛下单、订单成交持仓、模拟盘 |

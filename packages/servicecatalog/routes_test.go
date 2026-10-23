@@ -22,7 +22,7 @@ func productionTopology() Topology {
 		}
 	}
 	for host, ids := range map[string][]string{
-		"control":   {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"},
+		"control":   {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"},
 		"storage":   {"storage-primary", "storage-node", "storage-view", "access"},
 		"compute-1": {"access", "egress-proxy", "trade", "collector-stream"},
 	} {
@@ -110,9 +110,9 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":   {194, []string{"access", "admin", "cloudnode", "collector", "collector-stream", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "50bf0f33c81061f5c7c7b23bd3f6c021fcee0dec70908c6754e77534c5d70c59"},
-		"storage":   {96, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "a537d270697f40e6f12a024f9807acffc598563ca823c34f16690b92213be4b4"},
-		"compute-1": {38, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "f4c9039d40728218f4158c1b7ebd13b57c79e858ab14071b70900685eb0b8ce7"},
+		"control":   {192, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "832e6a9469c807735fac33c2342ae0b6f57d950ae533c9824c6b9bb59db64e19"},
+		"storage":   {96, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "f82d253dce0822c850d1d2ba10a87030ff5b55e8fa457d68a67676272de06ff9"},
+		"compute-1": {38, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "c70f86fd7005fda74ffae56c86dd6c2d0f93dfa707150492d6b6977487bf5f9b"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
@@ -123,7 +123,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 			t.Fatalf("invalid snapshot for %s", host.ID)
 		}
 		if len(compiled.Routes) != want[host.ID].routes || !slices.Equal(compiled.VerificationCallers, want[host.ID].callers) || compiled.Hash != want[host.ID].hash {
-			t.Fatalf("review snapshot change for %s: routes=%d callers=%v hash=%s", host.ID, len(compiled.Routes), compiled.VerificationCallers, compiled.Hash)
+			t.Errorf("review snapshot change for %s: routes=%d callers=%v hash=%s", host.ID, len(compiled.Routes), compiled.VerificationCallers, compiled.Hash)
 		}
 		if !slices.Equal(compiled.Directory.Services["trpc.moox.storage.PrimaryStore"], []string{"storage"}) || !slices.Equal(compiled.Directory.Services["trpc.moox.trade.TradeConsoleService"], []string{"compute-1"}) || !slices.Equal(compiled.Directory.Services["trpc.moox.hostagent.HostAgentMgr"], []string{"compute-1", "control", "storage"}) {
 			t.Fatal("directory does not represent the topology")
@@ -235,7 +235,7 @@ func TestHashTracksRemoteDirectoryAndLocalACLChanges(t *testing.T) {
 		t.Fatal("remote address change did not invalidate snapshots")
 	}
 	p = productionTopology()
-	servicePtr(&c, "trpc.moox.cloudnode.CloudNodeMgr").ACL[1].Callers = append(servicePtr(&c, "trpc.moox.cloudnode.CloudNodeMgr").ACL[1].Callers, "monitor")
+	servicePtr(&c, "trpc.moox.cloudfunction.CloudFunctionMgr").ACL[1].Callers = append(servicePtr(&c, "trpc.moox.cloudfunction.CloudFunctionMgr").ACL[1].Callers, "monitor")
 	changed, err = c.Compile(p, "control")
 	if err != nil {
 		t.Fatal(err)

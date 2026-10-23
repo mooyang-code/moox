@@ -250,7 +250,7 @@ describe("installSpaceAwareSignedClient", () => {
     installSpaceAwareSignedClient(client as never);
     const read = client.post("/api/admin/collector/GetTask", {});
     void client.post("/api/admin/sysdeploy/GetCatalog", {});
-    void client.post("/api/admin/cloudnode/ListCloudAccounts", {});
+    void client.post("/api/admin/cloudfunction/ListCloudAccounts", {});
     void client.post("/api/admin/collector/CreateTask", {});
     const outcome = read.then(
       () => "resolved",

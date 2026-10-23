@@ -20,7 +20,7 @@ export interface FunctionPackage {
   description: string;
   runtime: string;
   package_type: PackageType | number;
-  biz_type: string;
+  workload_type: string;
   original_filename?: string;
   file_size: number;
   file_md5: string;
@@ -45,7 +45,7 @@ export interface UploadPackageRequest {
   description?: string;
   runtime: string;
   package_type: PackageType | number;
-  biz_type?: string;
+  workload_type?: string;
   original_filename?: string;
   cloud_account_id?: string;
 }
@@ -54,7 +54,7 @@ export interface PackageListRequest {
   package_name?: string;
   runtime?: string;
   package_type?: PackageType | number;
-  biz_type?: string;
+  workload_type?: string;
   status?: PackageStatus | number;
   page?: number | { page?: number; size?: number };
   page_size?: number;
@@ -126,7 +126,7 @@ export const initPackageUpload = async (
   spaceId = readSelectedSpaceId()
 ): Promise<InitPackageUploadResponse> => {
   return callControl<UploadPackageRequest, InitPackageUploadResponse>(
-    "cloudnode",
+    "cloudfunction",
     "InitPackageUpload",
     data,
     spaceHeaders(spaceId)
@@ -140,7 +140,7 @@ export const completePackageUpload = async (
   spaceId = readSelectedSpaceId()
 ): Promise<FunctionPackage | null> => {
   const rsp = await callControl<{ package_id: string; file_md5: string; file_size: number }, { detail?: FunctionPackage }>(
-    "cloudnode",
+    "cloudfunction",
     "CompletePackageUpload",
     { package_id: packageId, file_md5: fileMd5, file_size: fileSize },
     spaceHeaders(spaceId)
@@ -176,7 +176,7 @@ export const getFunctionPackageList = async (
   }
   delete normalized.page_size;
   const rsp = await callControl<PackageListRequest, { items?: FunctionPackage[]; page?: { total?: number } }>(
-    "cloudnode",
+    "cloudfunction",
     "GetPackageList",
     normalized
   );
@@ -184,19 +184,19 @@ export const getFunctionPackageList = async (
 };
 
 export const getFunctionPackageDetail = async (packageId: string): Promise<FunctionPackage | null> => {
-  const rsp = await callControl<{ package_id: string }, { detail?: FunctionPackage }>("cloudnode", "GetPackageDetail", {
+  const rsp = await callControl<{ package_id: string }, { detail?: FunctionPackage }>("cloudfunction", "GetPackageDetail", {
     package_id: packageId
   });
   return rsp.detail ?? null;
 };
 
 export const deleteFunctionPackage = async (packageId: string): Promise<void> => {
-  await callControl<{ package_id: string }, Record<string, never>>("cloudnode", "DeletePackage", { package_id: packageId });
+  await callControl<{ package_id: string }, Record<string, never>>("cloudfunction", "DeletePackage", { package_id: packageId });
 };
 
 export const getPackageDownloadURL = async (packageId: string) => {
   const rsp = await callControl<{ package_id: string }, { url?: { download_url?: string } }>(
-    "cloudnode",
+    "cloudfunction",
     "GetPackageDownloadURL",
     { package_id: packageId }
   );

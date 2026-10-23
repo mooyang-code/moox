@@ -1,0 +1,674 @@
+// Package tencentscf wraps Tencent SCF APIs for FunctionInstance.
+package tencentscf
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
+	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
+	scf "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/scf/v20180416"
+	"trpc.group/trpc-go/trpc-go/log"
+)
+
+// Client is a Tencent SCF provider client.
+type Client struct {
+	secretID  string
+	secretKey string
+	// limitKey 标识限流配额的归属：腾讯云按子账号限频，同一账号轮换密钥后新旧 Client 必须共用同一组令牌桶。
+	limitKey    string
+	namespaceMu sync.Mutex
+	namespaces  map[string]struct{}
+}
+
+// Tencent SCF allows a function to run for up to 900 seconds. Keep the
+// provider request envelope slightly longer so the 900-second function result
+// can still traverse the FunctionInstance transport before the client gives up.
+const scfRequestTimeoutSeconds = 960
+
+// FunctionRef identifies a Tencent SCF function.
+type FunctionRef struct {
+	Region       string
+	FunctionName string
+	Namespace    string
+}
+
+// FunctionInfo describes the current Tencent SCF function state.
+type FunctionInfo struct {
+	RequestID  string
+	Status     string
+	Runtime    string
+	Type       string
+	ModTime    string
+	CodeSize   int64
+	MemorySize int64
+	Timeout    int64
+	// MaxInstanceConcurrency is the static per-instance concurrency guard used
+	// by short-lived market-fetch Timer functions. Zero means not requested.
+	MaxInstanceConcurrency int64
+	PublicNetStatus        string
+	FixedEgressIP          string
+	VpcID                  string
+	SubnetID               string
+	Environment            map[string]string
+}
+
+// CreateFunctionRequest creates a Tencent SCF function from a COS package.
+type CreateFunctionRequest struct {
+	FunctionRef
+	Runtime                string
+	Handler                string
+	Description            string
+	MemorySize             int64
+	Timeout                int64
+	MaxInstanceConcurrency int64
+	Environment            map[string]string
+	COSBucket              string
+	COSRegion              string
+	COSObject              string
+	Type                   string
+	PublicNetStatus        string
+	VpcID                  string
+	SubnetID               string
+}
+
+// CreateFunctionResponse describes a Tencent SCF function creation.
+type CreateFunctionResponse struct {
+	RequestID string
+}
+
+// DeleteFunction deletes an SCF function by its exact identity.
+func (c *Client) DeleteFunction(ctx context.Context, ref FunctionRef) error {
+	log.InfoContextf(ctx, "[CloudFunction-TencentSCF] delete function=%s namespace=%s region=%s", ref.FunctionName, ref.Namespace, ref.Region)
+	client, err := c.newClient(ref.Region)
+	if err != nil {
+		return err
+	}
+	request := scf.NewDeleteFunctionRequest()
+	request.FunctionName = common.StringPtr(ref.FunctionName)
+	request.Namespace = common.StringPtr(ref.Namespace)
+	return c.call(ctx, ref.Region, "DeleteFunction", func(ctx context.Context) error {
+		_, err := client.DeleteFunctionWithContext(ctx, request)
+		return err
+	})
+}
+
+// UpdateFunctionCodeRequest updates a Tencent SCF function with a local zip.
+type UpdateFunctionCodeRequest struct {
+	FunctionRef
+	Handler   string
+	ZipFile   []byte
+	COSBucket string
+	COSRegion string
+	COSObject string
+}
+
+// UpdateFunctionCodeResponse describes a Tencent SCF code update.
+type UpdateFunctionCodeResponse struct {
+	RequestID string
+}
+
+type UpdateFunctionConfigurationRequest struct {
+	FunctionRef
+	Environment            map[string]string
+	MemorySize             int64
+	Timeout                int64
+	MaxInstanceConcurrency int64
+	PublicNetStatus        string
+	VpcID                  string
+	SubnetID               string
+	// ClearVPC explicitly sends an empty VpcConfig during an update, removing
+	// the function's VPC binding. Omitting VpcConfig otherwise keeps
+	// the current SCF network unchanged for ordinary environment updates.
+	ClearVPC bool
+	// ClearNativeCLS explicitly sends empty CLS ids during an update, removing
+	// any historical SCF-native log destination. MooX uses the shared tRPC CLS
+	// writer instead.
+	ClearNativeCLS bool
+}
+
+type UpdateFunctionConfigurationResponse struct {
+	RequestID string
+}
+
+type UpdateFunctionEventInvokeConfigRequest struct {
+	FunctionRef
+	RetryNum int64
+	// MsgTTL is required by Tencent when updating async invoke config. Keep a
+	// short bounded retention window because the durable retry state lives in
+	// MooX EventBus, not in SCF's provider queue.
+	MsgTTL int64
+}
+
+type UpdateFunctionEventInvokeConfigResponse struct {
+	RequestID string
+}
+
+func (c *Client) UpdateFunctionEventInvokeConfig(ctx context.Context, req UpdateFunctionEventInvokeConfigRequest) (*UpdateFunctionEventInvokeConfigResponse, error) {
+	client, err := c.newClient(req.Region)
+	if err != nil {
+		return nil, err
+	}
+	request := scf.NewUpdateFunctionEventInvokeConfigRequest()
+	request.FunctionName = common.StringPtr(req.FunctionName)
+	request.Namespace = common.StringPtr(req.Namespace)
+	msgTTL := req.MsgTTL
+	if msgTTL <= 0 {
+		// Tencent currently caps this field at six hours (21600 seconds).
+		msgTTL = 21600
+	}
+	request.AsyncTriggerConfig = &scf.AsyncTriggerConfig{RetryConfig: []*scf.RetryConfig{{RetryNum: common.Int64Ptr(req.RetryNum)}}, MsgTTL: common.Int64Ptr(msgTTL)}
+	var response *scf.UpdateFunctionEventInvokeConfigResponse
+	if err := c.call(ctx, req.Region, "UpdateFunctionEventInvokeConfig", func(ctx context.Context) (callErr error) {
+		response, callErr = client.UpdateFunctionEventInvokeConfigWithContext(ctx, request)
+		return callErr
+	}); err != nil {
+		return nil, err
+	}
+	out := &UpdateFunctionEventInvokeConfigResponse{}
+	if response.Response != nil {
+		out.RequestID = deref(response.Response.RequestId)
+	}
+	return out, nil
+}
+
+// PutReservedConcurrencyConfigRequest 设置函数的预留并发内存配额（MB）：并发实例数 × 函数内存。
+type PutReservedConcurrencyConfigRequest struct {
+	FunctionRef
+	ReservedConcurrencyMem int64
+}
+
+// PutReservedConcurrencyConfig 为函数预留并发配额。预留配额同时是该函数并发上限，用于硬性限制补采函数的实例数。
+func (c *Client) PutReservedConcurrencyConfig(ctx context.Context, req PutReservedConcurrencyConfigRequest) error {
+	client, err := c.newClient(req.Region)
+	if err != nil {
+		return err
+	}
+	request := scf.NewPutReservedConcurrencyConfigRequest()
+	request.FunctionName = common.StringPtr(req.FunctionName)
+	request.Namespace = common.StringPtr(req.Namespace)
+	request.ReservedConcurrencyMem = common.Uint64Ptr(uint64(req.ReservedConcurrencyMem))
+	return c.call(ctx, req.Region, "PutReservedConcurrencyConfig", func(ctx context.Context) error {
+		_, err := client.PutReservedConcurrencyConfigWithContext(ctx, request)
+		return err
+	})
+}
+
+// InvokeFunctionRequest describes a SCF invocation.
+type InvokeFunctionRequest struct {
+	Region       string
+	FunctionName string
+	Namespace    string
+	Qualifier    string
+	InvokeType   string
+	EventData    any
+}
+
+// InvokeFunctionResponse describes a SCF invocation result.
+type InvokeFunctionResponse struct {
+	RequestID    string
+	Code         int32
+	Message      string
+	ReturnResult string
+	Duration     int64
+	BillDuration int64
+	MemoryUsage  int64
+}
+
+// New creates a Tencent SCF client. accountID 是云账号标识，用作限流配额的归属；
+// 为空时退回按 SecretID 区分。
+func New(accountID string, secretID string, secretKey string) *Client {
+	limitKey := strings.TrimSpace(accountID)
+	if limitKey == "" {
+		limitKey = "secret:" + secretID
+	}
+	return &Client{secretID: secretID, secretKey: secretKey, limitKey: limitKey, namespaces: make(map[string]struct{})}
+}
+
+// EnsureNamespace makes the configured namespace available before a function
+// create. Tencent's CreateFunction API does not create a user namespace
+// implicitly, so a first deployment would otherwise fail with
+// ResourceNotFound.Namespace. The client keeps a process-local cache and
+// serializes the list/create sequence to make concurrent fleet creation
+// idempotent.
+func (c *Client) EnsureNamespace(ctx context.Context, region, namespace string) error {
+	region = strings.TrimSpace(region)
+	namespace = strings.TrimSpace(namespace)
+	if region == "" || namespace == "" {
+		return fmt.Errorf("SCF region and namespace are required")
+	}
+	if strings.EqualFold(namespace, "default") {
+		// Tencent provisions the default namespace in every region.
+		return nil
+	}
+	key := region + "\x00" + namespace
+	c.namespaceMu.Lock()
+	defer c.namespaceMu.Unlock()
+	if _, ok := c.namespaces[key]; ok {
+		return nil
+	}
+	scfClient, err := c.newClient(region)
+	if err != nil {
+		return err
+	}
+	for offset := int64(0); ; {
+		request := scf.NewListNamespacesRequest()
+		request.Limit = common.Int64Ptr(100)
+		request.Offset = common.Int64Ptr(offset)
+		var response *scf.ListNamespacesResponse
+		listErr := c.call(ctx, region, "ListNamespaces", func(ctx context.Context) (callErr error) {
+			response, callErr = scfClient.ListNamespacesWithContext(ctx, request)
+			return callErr
+		})
+		if listErr != nil {
+			return fmt.Errorf("list SCF namespaces in %s: %w", region, listErr)
+		}
+		if response == nil || response.Response == nil {
+			break
+		}
+		for _, item := range response.Response.Namespaces {
+			if item != nil && item.Name != nil && strings.EqualFold(strings.TrimSpace(*item.Name), namespace) {
+				c.namespaces[key] = struct{}{}
+				return nil
+			}
+		}
+		count := int64(len(response.Response.Namespaces))
+		if count == 0 || count < 100 || (response.Response.TotalCount != nil && offset+count >= *response.Response.TotalCount) {
+			break
+		}
+		offset += count
+	}
+	request := scf.NewCreateNamespaceRequest()
+	request.Namespace = common.StringPtr(namespace)
+	request.Description = common.StringPtr("MooX managed SCF namespace")
+	if err = c.call(ctx, region, "CreateNamespace", func(ctx context.Context) error {
+		_, callErr := scfClient.CreateNamespaceWithContext(ctx, request)
+		return callErr
+	}); err != nil {
+		// A concurrent deployment or an operator may have created it after the
+		// list call. Re-list once before surfacing the provider error.
+		for retryOffset := int64(0); ; {
+			listRequest := scf.NewListNamespacesRequest()
+			listRequest.Limit = common.Int64Ptr(100)
+			listRequest.Offset = common.Int64Ptr(retryOffset)
+			var listResponse *scf.ListNamespacesResponse
+			listErr := c.call(ctx, region, "ListNamespaces", func(ctx context.Context) (callErr error) {
+				listResponse, callErr = scfClient.ListNamespacesWithContext(ctx, listRequest)
+				return callErr
+			})
+			if listErr != nil || listResponse == nil || listResponse.Response == nil {
+				break
+			}
+			for _, item := range listResponse.Response.Namespaces {
+				if item != nil && item.Name != nil && strings.EqualFold(strings.TrimSpace(*item.Name), namespace) {
+					c.namespaces[key] = struct{}{}
+					return nil
+				}
+			}
+			count := int64(len(listResponse.Response.Namespaces))
+			if count == 0 || count < 100 || (listResponse.Response.TotalCount != nil && retryOffset+count >= *listResponse.Response.TotalCount) {
+				break
+			}
+			retryOffset += count
+		}
+		return fmt.Errorf("create SCF namespace %s in %s: %w", namespace, region, err)
+	}
+	c.namespaces[key] = struct{}{}
+	return nil
+}
+
+// GetFunction returns Tencent SCF function metadata.
+func (c *Client) GetFunction(ctx context.Context, req FunctionRef) (*FunctionInfo, error) {
+	log.InfoContextf(ctx, "[CloudFunction-TencentSCF] get function=%s namespace=%s region=%s", req.FunctionName, req.Namespace, req.Region)
+	scfClient, err := c.newClient(req.Region)
+	if err != nil {
+		return nil, err
+	}
+	request := scf.NewGetFunctionRequest()
+	request.FunctionName = common.StringPtr(req.FunctionName)
+	request.Namespace = common.StringPtr(req.Namespace)
+	var response *scf.GetFunctionResponse
+	if err := c.call(ctx, req.Region, "GetFunction", func(ctx context.Context) (callErr error) {
+		response, callErr = scfClient.GetFunctionWithContext(ctx, request)
+		return callErr
+	}); err != nil {
+		return nil, err
+	}
+	out := &FunctionInfo{}
+	if response.Response == nil {
+		return out, nil
+	}
+	out.RequestID = deref(response.Response.RequestId)
+	out.Status = deref(response.Response.Status)
+	out.Runtime = deref(response.Response.Runtime)
+	out.Type = deref(response.Response.Type)
+	out.ModTime = deref(response.Response.ModTime)
+	if response.Response.Environment != nil {
+		out.Environment = make(map[string]string, len(response.Response.Environment.Variables))
+		for _, variable := range response.Response.Environment.Variables {
+			if variable != nil {
+				out.Environment[deref(variable.Key)] = deref(variable.Value)
+			}
+		}
+	}
+	if response.Response.CodeSize != nil {
+		out.CodeSize = int64(*response.Response.CodeSize)
+	}
+	if response.Response.MemorySize != nil {
+		out.MemorySize = int64(*response.Response.MemorySize)
+	}
+	if response.Response.Timeout != nil {
+		out.Timeout = int64(*response.Response.Timeout)
+	}
+	if response.Response.PublicNetConfig != nil {
+		out.PublicNetStatus = deref(response.Response.PublicNetConfig.PublicNetStatus)
+		if response.Response.PublicNetConfig.EipConfig != nil {
+			if len(response.Response.PublicNetConfig.EipConfig.EipAddress) > 0 {
+				out.FixedEgressIP = deref(response.Response.PublicNetConfig.EipConfig.EipAddress[0])
+			}
+		}
+	}
+	if response.Response.VpcConfig != nil {
+		out.VpcID = deref(response.Response.VpcConfig.VpcId)
+		out.SubnetID = deref(response.Response.VpcConfig.SubnetId)
+	}
+	// Keep the FunctionInstance field flat, but do not discard this readback:
+	// market-fetch deployment verification requires the provider's accepted
+	// value rather than merely the requested value.
+	out.MaxInstanceConcurrency = functionMaxInstanceConcurrency(response.Response)
+	return out, nil
+}
+
+func functionMaxInstanceConcurrency(response *scf.GetFunctionResponseParams) int64 {
+	if response == nil || response.InstanceConcurrencyConfig == nil || response.InstanceConcurrencyConfig.MaxConcurrency == nil {
+		return 0
+	}
+	return int64(*response.InstanceConcurrencyConfig.MaxConcurrency)
+}
+
+func (c *Client) UpdateFunctionConfiguration(ctx context.Context, req UpdateFunctionConfigurationRequest) (*UpdateFunctionConfigurationResponse, error) {
+	log.InfoContextf(ctx, "[CloudFunction-TencentSCF] update function configuration function=%s namespace=%s region=%s", req.FunctionName, req.Namespace, req.Region)
+	scfClient, err := c.newClient(req.Region)
+	if err != nil {
+		return nil, err
+	}
+	if !validVPCPair(req.VpcID, req.SubnetID) {
+		return nil, fmt.Errorf("vpc_id and subnet_id must be provided together")
+	}
+	request := scf.NewUpdateFunctionConfigurationRequest()
+	request.FunctionName = common.StringPtr(req.FunctionName)
+	request.Namespace = common.StringPtr(req.Namespace)
+	request.Environment = &scf.Environment{Variables: environmentVariables(req.Environment)}
+	if req.MemorySize > 0 {
+		request.MemorySize = common.Int64Ptr(req.MemorySize)
+	}
+	if req.Timeout > 0 {
+		request.Timeout = common.Int64Ptr(req.Timeout)
+	}
+	if req.MaxInstanceConcurrency > 0 {
+		request.InstanceConcurrencyConfig = &scf.InstanceConcurrencyConfig{DynamicEnabled: common.StringPtr("FALSE"), MaxConcurrency: common.Uint64Ptr(uint64(req.MaxInstanceConcurrency))}
+	}
+	if status := strings.ToUpper(strings.TrimSpace(req.PublicNetStatus)); status != "" {
+		// Tencent requires EipConfig whenever PublicNetConfig is sent. DISABLE
+		// keeps ordinary SCF public egress while avoiding a fixed-EIP allocation.
+		request.PublicNetConfig = &scf.PublicNetConfigIn{
+			PublicNetStatus: common.StringPtr(status),
+			EipConfig:       &scf.EipConfigIn{EipStatus: common.StringPtr("DISABLE")},
+		}
+	}
+	if req.ClearVPC {
+		request.VpcConfig = &scf.VpcConfig{VpcId: common.StringPtr(""), SubnetId: common.StringPtr("")}
+	} else if strings.TrimSpace(req.VpcID) != "" || strings.TrimSpace(req.SubnetID) != "" {
+		request.VpcConfig = &scf.VpcConfig{VpcId: common.StringPtr(strings.TrimSpace(req.VpcID)), SubnetId: common.StringPtr(strings.TrimSpace(req.SubnetID))}
+	}
+	if req.ClearNativeCLS {
+		request.ClsLogsetId = common.StringPtr("")
+		request.ClsTopicId = common.StringPtr("")
+		// Leaving both CLS IDs unset selects SCF's default delivery, which
+		// auto-creates SCF_logset/SCF_logtopic resources. IgnoreSysLog is the
+		// provider switch that actually disables that native path.
+		request.IgnoreSysLog = common.BoolPtr(true)
+	}
+	var response *scf.UpdateFunctionConfigurationResponse
+	if err := c.call(ctx, req.Region, "UpdateFunctionConfiguration", func(ctx context.Context) (callErr error) {
+		response, callErr = scfClient.UpdateFunctionConfigurationWithContext(ctx, request)
+		return callErr
+	}); err != nil {
+		return nil, err
+	}
+	out := &UpdateFunctionConfigurationResponse{}
+	if response.Response != nil {
+		out.RequestID = deref(response.Response.RequestId)
+	}
+	return out, nil
+}
+
+// CreateFunction creates Tencent SCF function code from a COS package.
+func (c *Client) CreateFunction(ctx context.Context, req CreateFunctionRequest) (*CreateFunctionResponse, error) {
+	if req.COSBucket == "" || req.COSRegion == "" || req.COSObject == "" {
+		return nil, fmt.Errorf("cos package is required")
+	}
+	log.InfoContextf(ctx, "[CloudFunction-TencentSCF] create function=%s namespace=%s region=%s cos=%s/%s", req.FunctionName, req.Namespace, req.Region, req.COSBucket, req.COSObject)
+	scfClient, err := c.newClient(req.Region)
+	if err != nil {
+		return nil, err
+	}
+	if !validVPCPair(req.VpcID, req.SubnetID) {
+		return nil, fmt.Errorf("vpc_id and subnet_id must be provided together")
+	}
+	request := buildCreateFunctionRequest(req)
+	var response *scf.CreateFunctionResponse
+	if err := c.call(ctx, req.Region, "CreateFunction", func(ctx context.Context) (callErr error) {
+		response, callErr = scfClient.CreateFunctionWithContext(ctx, request)
+		return callErr
+	}); err != nil {
+		return nil, err
+	}
+	out := &CreateFunctionResponse{}
+	if response.Response != nil {
+		out.RequestID = deref(response.Response.RequestId)
+	}
+	return out, nil
+}
+
+// UpdateFunctionCode updates Tencent SCF function code from a zip payload.
+func (c *Client) UpdateFunctionCode(ctx context.Context, req UpdateFunctionCodeRequest) (*UpdateFunctionCodeResponse, error) {
+	if len(req.ZipFile) == 0 && (req.COSBucket == "" || req.COSRegion == "" || req.COSObject == "") {
+		return nil, fmt.Errorf("zip file or cos package is required")
+	}
+	log.InfoContextf(ctx, "[CloudFunction-TencentSCF] update function code function=%s namespace=%s region=%s zip_bytes=%d cos=%s/%s", req.FunctionName, req.Namespace, req.Region, len(req.ZipFile), req.COSBucket, req.COSObject)
+	scfClient, err := c.newClient(req.Region)
+	if err != nil {
+		return nil, err
+	}
+	request := buildUpdateFunctionCodeRequest(req)
+	var response *scf.UpdateFunctionCodeResponse
+	if err := c.call(ctx, req.Region, "UpdateFunctionCode", func(ctx context.Context) (callErr error) {
+		response, callErr = scfClient.UpdateFunctionCodeWithContext(ctx, request)
+		return callErr
+	}); err != nil {
+		return nil, err
+	}
+	out := &UpdateFunctionCodeResponse{}
+	if response.Response != nil {
+		out.RequestID = deref(response.Response.RequestId)
+	}
+	return out, nil
+}
+
+func buildCreateFunctionRequest(req CreateFunctionRequest) *scf.CreateFunctionRequest {
+	request := scf.NewCreateFunctionRequest()
+	request.FunctionName = common.StringPtr(req.FunctionName)
+	request.Namespace = common.StringPtr(req.Namespace)
+	request.CodeSource = common.StringPtr("Cos")
+	request.Code = &scf.Code{
+		CosBucketName:   common.StringPtr(req.COSBucket),
+		CosBucketRegion: common.StringPtr(req.COSRegion),
+		CosObjectName:   common.StringPtr(req.COSObject),
+	}
+	if req.Runtime != "" {
+		request.Runtime = common.StringPtr(req.Runtime)
+	}
+	if req.Handler != "" {
+		request.Handler = common.StringPtr(req.Handler)
+	}
+	if req.Description != "" {
+		request.Description = common.StringPtr(req.Description)
+	}
+	if req.MemorySize > 0 {
+		request.MemorySize = common.Int64Ptr(req.MemorySize)
+	}
+	if req.Timeout > 0 {
+		request.Timeout = common.Int64Ptr(req.Timeout)
+	}
+	if req.MaxInstanceConcurrency > 0 {
+		request.InstanceConcurrencyConfig = &scf.InstanceConcurrencyConfig{DynamicEnabled: common.StringPtr("FALSE"), MaxConcurrency: common.Uint64Ptr(uint64(req.MaxInstanceConcurrency))}
+	}
+	if len(req.Environment) > 0 {
+		request.Environment = &scf.Environment{Variables: environmentVariables(req.Environment)}
+	}
+	// Disable SCF's creation-time default delivery. The application writer is
+	// explicitly configured in trpc_go.yaml instead.
+	request.AutoCreateClsTopic = common.StringPtr("FALSE")
+	request.AutoDeployClsTopicIndex = common.StringPtr("FALSE")
+	if req.Type != "" {
+		request.Type = common.StringPtr(req.Type)
+	}
+	if status := strings.ToUpper(strings.TrimSpace(req.PublicNetStatus)); status != "" {
+		request.PublicNetConfig = &scf.PublicNetConfigIn{
+			PublicNetStatus: common.StringPtr(status),
+			EipConfig:       &scf.EipConfigIn{EipStatus: common.StringPtr("DISABLE")},
+		}
+	}
+	if strings.TrimSpace(req.VpcID) != "" || strings.TrimSpace(req.SubnetID) != "" {
+		request.VpcConfig = &scf.VpcConfig{VpcId: common.StringPtr(strings.TrimSpace(req.VpcID)), SubnetId: common.StringPtr(strings.TrimSpace(req.SubnetID))}
+	}
+	return request
+}
+
+func validVPCPair(vpcID, subnetID string) bool {
+	return (strings.TrimSpace(vpcID) == "") == (strings.TrimSpace(subnetID) == "")
+}
+
+func buildUpdateFunctionCodeRequest(req UpdateFunctionCodeRequest) *scf.UpdateFunctionCodeRequest {
+	request := scf.NewUpdateFunctionCodeRequest()
+	request.FunctionName = common.StringPtr(req.FunctionName)
+	request.Namespace = common.StringPtr(req.Namespace)
+	if req.Handler != "" {
+		request.Handler = common.StringPtr(req.Handler)
+	}
+	if len(req.ZipFile) > 0 {
+		request.ZipFile = common.StringPtr(base64.StdEncoding.EncodeToString(req.ZipFile))
+	} else {
+		request.CosBucketName = common.StringPtr(req.COSBucket)
+		request.CosBucketRegion = common.StringPtr(req.COSRegion)
+		request.CosObjectName = common.StringPtr(req.COSObject)
+	}
+	return request
+}
+
+func environmentVariables(values map[string]string) []*scf.Variable {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]*scf.Variable, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, &scf.Variable{
+			Key:   common.StringPtr(key),
+			Value: common.StringPtr(values[key]),
+		})
+	}
+	return out
+}
+
+// InvokeFunction invokes a Tencent SCF function.
+func (c *Client) InvokeFunction(ctx context.Context, req InvokeFunctionRequest) (*InvokeFunctionResponse, error) {
+	log.DebugContextf(ctx, "[CloudFunction-TencentSCF] invoke function=%s namespace=%s region=%s", req.FunctionName, req.Namespace, req.Region)
+	scfClient, err := c.newClient(req.Region)
+	if err != nil {
+		return nil, err
+	}
+	request := scf.NewInvokeRequest()
+	request.FunctionName = common.StringPtr(req.FunctionName)
+	request.Namespace = common.StringPtr(req.Namespace)
+	if req.Qualifier != "" {
+		request.Qualifier = common.StringPtr(req.Qualifier)
+	}
+	invokeType := req.InvokeType
+	if invokeType == "" || invokeType == "sync" {
+		invokeType = "RequestResponse"
+	}
+	request.InvocationType = common.StringPtr(invokeType)
+	raw, err := json.Marshal(req.EventData)
+	if err != nil {
+		return nil, fmt.Errorf("marshal event data: %w", err)
+	}
+	request.ClientContext = common.StringPtr(string(raw))
+
+	var response *scf.InvokeResponse
+	if err := c.call(ctx, req.Region, "Invoke", func(ctx context.Context) (callErr error) {
+		response, callErr = scfClient.InvokeWithContext(ctx, request)
+		return callErr
+	}); err != nil {
+		return nil, err
+	}
+	out := &InvokeFunctionResponse{}
+	if response.Response == nil {
+		return out, nil
+	}
+	out.RequestID = deref(response.Response.RequestId)
+	if response.Response.Result == nil {
+		return out, nil
+	}
+	result := response.Response.Result
+	out.Message = deref(result.ErrMsg)
+	out.ReturnResult = deref(result.RetMsg)
+	if result.InvokeResult != nil {
+		out.Code = int32(*result.InvokeResult)
+	}
+	if result.FunctionRequestId != nil {
+		out.RequestID = *result.FunctionRequestId
+	}
+	if result.Duration != nil {
+		out.Duration = int64(*result.Duration)
+	}
+	if result.BillDuration != nil {
+		out.BillDuration = int64(*result.BillDuration)
+	}
+	if result.MemUsage != nil {
+		out.MemoryUsage = *result.MemUsage
+	}
+	return out, nil
+}
+
+func (c *Client) newClient(region string) (*scf.Client, error) {
+	clientProfile := profile.NewClientProfile()
+	clientProfile.HttpProfile.Endpoint = scfEndpoint(region)
+	// Instrument snapshots can legitimately use the configured 300-second
+	// Invoke function budget. Keep the provider HTTP deadline above that budget
+	// so FunctionInstance does not abort a healthy long-running SCF invocation first.
+	clientProfile.HttpProfile.ReqTimeout = scfRequestTimeoutSeconds
+	credential := common.NewCredential(c.secretID, c.secretKey)
+	return scf.NewClient(credential, region, clientProfile)
+}
+
+func scfEndpoint(region string) string {
+	if strings.HasSuffix(strings.TrimSpace(region), "-fsi") {
+		return "scf." + strings.TrimSpace(region) + ".tencentcloudapi.com"
+	}
+	return "scf.tencentcloudapi.com"
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}

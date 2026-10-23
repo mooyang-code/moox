@@ -18,7 +18,7 @@ type ModuleHealthCheck struct {
 }
 
 var builtInModuleHealthChecks = []ModuleHealthCheck{
-	{ID: "cloudnode-jobs", Module: "cloudnode", MaxLag: 5 * time.Minute, Enabled: true},
+	{ID: "cloudfunction-jobs", Module: "cloudfunction", MaxLag: 5 * time.Minute, Enabled: true},
 	{ID: "collector-market-data", Module: "collector", MaxLag: 5 * time.Minute, Enabled: true},
 	{ID: "factor-calculation", Module: "factor", MaxLag: 10 * time.Minute, Enabled: true},
 	{ID: "strategy-targets", Module: "strategy", MaxLag: 10 * time.Minute, Enabled: true},

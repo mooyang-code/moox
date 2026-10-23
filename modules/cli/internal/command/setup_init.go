@@ -278,8 +278,8 @@ func provisionSetupCLS(ctx context.Context, source clsprepare.AccountSource, fac
 }
 
 // defaultSetupRegisterCloudAccounts makes the single declarative SCF account
-// in moox.toml a real CloudNode catalog record. The Tencent credential itself
-// is owned by Admin; CloudNode stores only its secret reference and COS
+// in moox.toml a real FunctionInstance catalog record. The Tencent credential itself
+// is owned by Admin; FunctionInstance stores only its secret reference and COS
 // metadata, never the SecretKey. SCF regions are execution targets, not
 // separate cloud accounts.
 func defaultSetupRegisterCloudAccounts(ctx context.Context, snapshot *setupconfig.Snapshot) (*setupCloudAccountSummary, error) {

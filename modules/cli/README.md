@@ -31,7 +31,7 @@ key_file: caller-moox-cli.key
 
 `data kline get --file /absolute/path/moox.toml --config /absolute/path/data-access.yaml ...` 使用前者选择 SSH 主机，后者只包含 Storage 读取角色凭据与数据集目录；`setup export-skill-config` 不导出网关签名密钥。Collector 清单使用对象调用，任务 CRUD 使用原始 JSON 转发，两者复用金丝雀命令持有的同一 SSH 网关客户端。
 
-CloudNode 的节点、账号、代码包登记、发布、批次查询与函数调用均使用同一 SSH 网关入口。相关命令的 `--file` 默认 `./moox.toml`，用于选择可信 SSH 主机；COS 文件上传仍使用返回的预签名 HTTPS 地址。函数调用采用服务目录中的超时预算，命令取消后的发布清理可继续复用隧道，命令退出统一关闭连接。Admin 的租约与密钥方法使用同一 SSH 客户端。
+FunctionInstance 的节点、账号、代码包登记、发布、批次查询与函数调用均使用同一 SSH 网关入口。相关命令的 `--file` 默认 `./moox.toml`，用于选择可信 SSH 主机；COS 文件上传仍使用返回的预签名 HTTPS 地址。函数调用采用服务目录中的超时预算，命令取消后的发布清理可继续复用隧道，命令退出统一关闭连接。Admin 的租约与密钥方法使用同一 SSH 客户端。
 
 Admin 的密钥、发布租约、Setup、部署诊断和浏览器测试空间管理复用命令持有的 SSH 网关客户端。`doctor bootstrap/diagnose --file <moox.toml>` 从同一操作员身份访问 SysDeploy；Monitor 与 Storage 管理入口同样复用这一客户端。发布和部署回滚在操作取消后仍可用独立清理上下文复用连接；命令结束时统一释放。
 

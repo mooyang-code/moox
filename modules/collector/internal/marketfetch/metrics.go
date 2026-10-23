@@ -201,7 +201,7 @@ func (m *Metrics) ObserveAssignmentSuccess(spaceID string, reconciledAt int64) {
 	m.ClearAssignmentFailure(spaceID)
 }
 
-// ObserveAssignmentPending exposes the asynchronous CloudNode batch window so
+// ObserveAssignmentPending exposes the asynchronous FunctionInstance batch window so
 // Monitor can distinguish a short reconciliation from a failed coordination.
 func (m *Metrics) ObserveAssignmentPending(spaceID string, pending bool, since time.Time) {
 	if m == nil || strings.TrimSpace(spaceID) == "" {
@@ -278,10 +278,10 @@ func (m *Metrics) trackFailureSince(spaceID, reason string) {
 // ReasonPublishLeaseHeld 是 Admin 明确答复「发布租约或在途操作占用仍被持有」时的失败原因。
 const ReasonPublishLeaseHeld = "publish_lease_held"
 
-// assignmentFailureReasons 是协调失败原因的白名单，与 fail 的调用点一一对应；白名单之外的一律按 cloudnode 上报。
+// assignmentFailureReasons 是协调失败原因的白名单，与 fail 的调用点一一对应；白名单之外的一律按 cloudfunction 上报。
 // Monitor 的 coordinationFailureTexts 为每个原因给出告警文案，新增原因时两边要一起改。
 var assignmentFailureReasons = []string{
-	"cloudnode", "environment", "rules", "store", "storage", "package", "dataset", "activity", "preflight", "capacity",
+	"cloudfunction", "environment", "rules", "store", "storage", "package", "dataset", "activity", "preflight", "capacity",
 	ReasonPublishLeaseHeld,
 }
 
@@ -292,7 +292,7 @@ func normalizeAssignmentFailureReason(reason string) string {
 			return reason
 		}
 	}
-	return "cloudnode"
+	return "cloudfunction"
 }
 
 // ObservePeriodPendingSnapshot aggregates pending reports without exposing

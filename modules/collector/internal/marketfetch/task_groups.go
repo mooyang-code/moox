@@ -16,7 +16,7 @@ const (
 	timerTriggerType      = "timer"
 	timerTriggerQualifier = "$LATEST"
 	timerTriggerMessage   = "market_fetch_timer_v1"
-	// runtimeConfigBatchSize 是 CloudNode 单个作业最多的项数。
+	// runtimeConfigBatchSize 是 FunctionInstance 单个作业最多的项数。
 	runtimeConfigBatchSize = 100
 )
 

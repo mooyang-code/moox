@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
@@ -101,7 +101,7 @@ type FunctionProvider interface {
 
 // Invoker 同步调用函数。
 type Invoker interface {
-	Invoke(ctx context.Context, spaceID, nodeID string, event map[string]any, invokeType cloudnodepb.ScfInvokeType) (scfinvoker.InvocationResult, error)
+	Invoke(ctx context.Context, spaceID, nodeID string, event map[string]any, invokeType cloudfunctionpb.ScfInvokeType) (scfinvoker.InvocationResult, error)
 }
 
 // Backfiller 管理补采作业：展开分块、通过补采函数执行、复查缺口。
@@ -587,7 +587,7 @@ func (b *Backfiller) runChunk(ctx context.Context, spaceID string, chunk store.B
 		return
 	}
 	callCtx, cancel := context.WithTimeout(ctx, chunkInvokeLimit)
-	result, err := invoker.Invoke(callCtx, spaceID, functionName, event, cloudnodepb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
+	result, err := invoker.Invoke(callCtx, spaceID, functionName, event, cloudfunctionpb.ScfInvokeType_SCF_INVOKE_TYPE_REQUEST_RESPONSE)
 	cancel()
 	if err != nil {
 		// 同步调用超时或断连时结果不明：不标记失败，名额保留到最迟结束时间后，由重新认领再执行。

@@ -38,8 +38,8 @@ type collectorTimerInventoryOptions struct {
 	Region           string
 }
 
-type collectorTimerInventoryNode struct {
-	NodeID               string `json:"node_id"`
+type collectorTimerInventoryInstance struct {
+	InstanceID           string `json:"instance_id"`
 	CloudAccountID       string `json:"cloud_account_id"`
 	Namespace            string `json:"namespace"`
 	Region               string `json:"region"`
@@ -59,16 +59,16 @@ type collectorTimerInventoryNode struct {
 }
 
 type collectorTimerInventorySummary struct {
-	SpaceID             string                        `json:"space_id"`
-	CloudAccountID      string                        `json:"cloud_account_id"`
-	Namespace           string                        `json:"namespace"`
-	Region              string                        `json:"region"`
-	StartedAt           string                        `json:"started_at"`
-	ObservedAt          string                        `json:"observed_at"`
-	TimerCount          int                           `json:"timer_count"`
-	Complete            bool                          `json:"complete"`
-	IntegrityIssueCount int                           `json:"integrity_issue_count"`
-	Nodes               []collectorTimerInventoryNode `json:"nodes"`
+	SpaceID             string                            `json:"space_id"`
+	CloudAccountID      string                            `json:"cloud_account_id"`
+	Namespace           string                            `json:"namespace"`
+	Region              string                            `json:"region"`
+	StartedAt           string                            `json:"started_at"`
+	ObservedAt          string                            `json:"observed_at"`
+	TimerCount          int                               `json:"timer_count"`
+	Complete            bool                              `json:"complete"`
+	IntegrityIssueCount int                               `json:"integrity_issue_count"`
+	Instances           []collectorTimerInventoryInstance `json:"instances"`
 }
 
 var collectorTimerInventoryFlags collectorTimerInventoryOptions
@@ -123,14 +123,14 @@ func inspectCollectorTimerInventory(ctx context.Context, client *adminclient.Cli
 	startedAt := collectorTimerInventoryNow().UTC()
 	summary := &collectorTimerInventorySummary{
 		SpaceID: opts.SpaceID, CloudAccountID: opts.CloudAccountID, Namespace: opts.Namespace, Region: opts.Region,
-		StartedAt: startedAt.Format(time.RFC3339Nano), Nodes: []collectorTimerInventoryNode{},
+		StartedAt: startedAt.Format(time.RFC3339Nano), Instances: []collectorTimerInventoryInstance{},
 	}
-	catalog, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{
+	catalog, err := client.ListFunctionInstances(ctx, adminclient.FunctionInstanceListFilter{
 		CloudAccountID: opts.CloudAccountID,
 		Namespace:      opts.Namespace,
 		Region:         opts.Region,
-		NodeType:       "scf-event",
-		BizType:        "market_fetcher",
+		FunctionType:   "scf-event",
+		WorkloadType:   "market_fetcher",
 		TriggerType:    "timer",
 		PageSize:       collectorTimerInventoryCatalogPageSize,
 	})
@@ -138,29 +138,29 @@ func inspectCollectorTimerInventory(ctx context.Context, client *adminclient.Cli
 		return summary, fmt.Errorf("list scoped market_fetcher Timer catalog: %w", err)
 	}
 	complete := true
-	seenNodeIDs := make(map[string]struct{}, len(catalog))
-	targets := make([]adminclient.CloudNode, 0, len(catalog))
+	seenInstanceIDs := make(map[string]struct{}, len(catalog))
+	targets := make([]adminclient.FunctionInstance, 0, len(catalog))
 	for _, node := range catalog {
 		if node.IsDeleted {
 			continue
 		}
-		if !collectorTimerNodeMatchesScope(node, opts) || !collectorTimerNodeIsMarketFetcher(node) {
+		if !collectorTimerInstanceMatchesScope(node, opts) || !collectorTimerInstanceIsMarketFetcher(node) {
 			summary.IntegrityIssueCount++
 			complete = false
 			continue
 		}
-		if _, duplicate := seenNodeIDs[node.NodeID]; duplicate {
+		if _, duplicate := seenInstanceIDs[node.InstanceID]; duplicate {
 			summary.IntegrityIssueCount++
 			complete = false
 			continue
 		}
-		seenNodeIDs[node.NodeID] = struct{}{}
+		seenInstanceIDs[node.InstanceID] = struct{}{}
 		targets = append(targets, node)
 	}
 	if len(targets) == 0 {
 		complete = false
 	}
-	readbacks := readCollectorTimerNodes(ctx, client, opts, targets)
+	readbacks := readCollectorTimerInstances(ctx, client, opts, targets)
 	observedAt := collectorTimerInventoryNow().UTC()
 	summary.ObservedAt = observedAt.Format(time.RFC3339Nano)
 	for index, target := range targets {
@@ -178,15 +178,15 @@ func inspectCollectorTimerInventory(ctx context.Context, client *adminclient.Cli
 		if !valid {
 			complete = false
 		}
-		summary.Nodes = append(summary.Nodes, row)
+		summary.Instances = append(summary.Instances, row)
 	}
-	summary.TimerCount = len(summary.Nodes)
+	summary.TimerCount = len(summary.Instances)
 	summary.Complete = complete
-	sort.Slice(summary.Nodes, func(i, j int) bool {
-		if summary.Nodes[i].Region != summary.Nodes[j].Region {
-			return summary.Nodes[i].Region < summary.Nodes[j].Region
+	sort.Slice(summary.Instances, func(i, j int) bool {
+		if summary.Instances[i].Region != summary.Instances[j].Region {
+			return summary.Instances[i].Region < summary.Instances[j].Region
 		}
-		return summary.Nodes[i].NodeID < summary.Nodes[j].NodeID
+		return summary.Instances[i].InstanceID < summary.Instances[j].InstanceID
 	})
 	if !complete {
 		return summary, fmt.Errorf("Timer inventory is incomplete: empty scope, provider readback, configuration match, or available status check failed")
@@ -195,12 +195,12 @@ func inspectCollectorTimerInventory(ctx context.Context, client *adminclient.Cli
 }
 
 type collectorTimerInventoryReadback struct {
-	node           adminclient.CloudNode
+	node           adminclient.FunctionInstance
 	found          bool
 	integrityIssue bool
 }
 
-func readCollectorTimerNodes(ctx context.Context, client *adminclient.Client, opts collectorTimerInventoryOptions, targets []adminclient.CloudNode) []collectorTimerInventoryReadback {
+func readCollectorTimerInstances(ctx context.Context, client *adminclient.Client, opts collectorTimerInventoryOptions, targets []adminclient.FunctionInstance) []collectorTimerInventoryReadback {
 	results := make([]collectorTimerInventoryReadback, len(targets))
 	if len(targets) == 0 {
 		return results
@@ -214,12 +214,12 @@ func readCollectorTimerNodes(ctx context.Context, client *adminclient.Client, op
 			defer workers.Done()
 			for index := range jobs {
 				target := targets[index]
-				matches, err := client.ListCloudNodes(ctx, adminclient.CloudNodeListFilter{
+				matches, err := client.ListFunctionInstances(ctx, adminclient.FunctionInstanceListFilter{
 					CloudAccountID: opts.CloudAccountID,
 					Namespace:      opts.Namespace,
 					Region:         opts.Region,
-					NodeID:         target.NodeID,
-					NodeType:       "scf-event",
+					InstanceID:     target.InstanceID,
+					FunctionType:   "scf-event",
 					TriggerType:    "timer",
 					PageSize:       collectorTimerInventoryPageSize,
 				})
@@ -227,9 +227,9 @@ func readCollectorTimerNodes(ctx context.Context, client *adminclient.Client, op
 					results[index].node = target
 					continue
 				}
-				var exact *adminclient.CloudNode
+				var exact *adminclient.FunctionInstance
 				for itemIndex := range matches {
-					if matches[itemIndex].NodeID != target.NodeID {
+					if matches[itemIndex].InstanceID != target.InstanceID {
 						continue
 					}
 					if exact != nil {
@@ -238,7 +238,7 @@ func readCollectorTimerNodes(ctx context.Context, client *adminclient.Client, op
 					}
 					exact = &matches[itemIndex]
 				}
-				if exact == nil || exact.IsDeleted || !collectorTimerNodeMatchesScope(*exact, opts) || !collectorTimerNodeIsMarketFetcher(*exact) {
+				if exact == nil || exact.IsDeleted || !collectorTimerInstanceMatchesScope(*exact, opts) || !collectorTimerInstanceIsMarketFetcher(*exact) {
 					results[index] = collectorTimerInventoryReadback{node: target, integrityIssue: true}
 					continue
 				}
@@ -254,11 +254,11 @@ func readCollectorTimerNodes(ctx context.Context, client *adminclient.Client, op
 	return results
 }
 
-func collectorTimerInventoryRow(node adminclient.CloudNode, startedAt, observedAt time.Time) (collectorTimerInventoryNode, bool) {
+func collectorTimerInventoryRow(node adminclient.FunctionInstance, startedAt, observedAt time.Time) (collectorTimerInventoryInstance, bool) {
 	desiredEnabled, hasDesiredEnabled := collectorMetadataBool(node.Metadata, "timer_enabled")
 	actualEnabled, hasActualEnabled := collectorMetadataBool(node.Metadata, "timer_actual_enabled")
-	row := collectorTimerInventoryNode{
-		NodeID: node.NodeID, CloudAccountID: node.CloudAccountID, Namespace: node.Namespace, Region: node.Region,
+	row := collectorTimerInventoryInstance{
+		InstanceID: node.InstanceID, CloudAccountID: node.CloudAccountID, Namespace: node.Namespace, Region: node.Region,
 		FunctionName: node.FunctionName, DesiredCron: metadataStringValue(node.Metadata, "timer_cron"),
 		ActualCron:      metadataStringValue(node.Metadata, "timer_actual_cron"),
 		AvailableStatus: metadataStringValue(node.Metadata, "timer_available_status"),
@@ -286,17 +286,17 @@ func collectorTimerInventoryRow(node adminclient.CloudNode, startedAt, observedA
 	return row, valid
 }
 
-func collectorTimerNodeMatchesScope(node adminclient.CloudNode, opts collectorTimerInventoryOptions) bool {
-	return strings.TrimSpace(node.NodeID) != "" &&
+func collectorTimerInstanceMatchesScope(node adminclient.FunctionInstance, opts collectorTimerInventoryOptions) bool {
+	return strings.TrimSpace(node.InstanceID) != "" &&
 		strings.TrimSpace(node.CloudAccountID) == strings.TrimSpace(opts.CloudAccountID) &&
 		strings.TrimSpace(node.Namespace) == strings.TrimSpace(opts.Namespace) &&
 		strings.TrimSpace(node.Region) == strings.TrimSpace(opts.Region) &&
-		strings.EqualFold(strings.TrimSpace(node.NodeType), "scf-event") &&
+		strings.EqualFold(strings.TrimSpace(node.FunctionType), "scf-event") &&
 		strings.EqualFold(strings.TrimSpace(node.TriggerType), "timer")
 }
 
-func collectorTimerNodeIsMarketFetcher(node adminclient.CloudNode) bool {
-	return strings.EqualFold(strings.TrimSpace(node.BizType), "market_fetcher")
+func collectorTimerInstanceIsMarketFetcher(node adminclient.FunctionInstance) bool {
+	return strings.EqualFold(strings.TrimSpace(node.WorkloadType), "market_fetcher")
 }
 
 func timerInventoryAvailable(status string) bool {

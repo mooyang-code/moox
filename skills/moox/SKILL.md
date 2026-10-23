@@ -45,7 +45,7 @@ Host Agent and EventBus credentials:
 - `modules/eventbus`: embedded NATS JetStream broker.
 - `modules/storage`: metadata (primary), field-level facts and outbox (node), rebuildable views (view).
 - `modules/collector`: collection tasks, period batch planning, SCF Timer runtime and reconciliation.
-- `modules/cloudnode`: cloud accounts, SCF nodes, code packages and function publishing.
+- `modules/cloudfunction`: cloud accounts, SCF nodes, code packages and function publishing.
 - `modules/factor`: factor manager and the expression factor engine (`packages/factorexpr`).
 - `modules/strategy`, `modules/trade`, `modules/monitor`, `modules/hostagent`, `modules/archive`.
 - `docs`: 总体设计、部署与运维和 `docs/模块/` 下的模块设计文档.
@@ -136,7 +136,7 @@ Runtime data can be deleted and rebuilt from `examples/` and service flows. Do n
 
 ## Development Rules
 
-- Prefer the new protocol under `modules/storage/proto/*.proto`, `modules/admin/proto/*.proto`, `modules/collector/proto/*.proto`, and `modules/cloudnode/proto/*.proto`; shared response/auth/page types live in `packages/commonpb`.
+- Prefer the new protocol under `modules/storage/proto/*.proto`, `modules/admin/proto/*.proto`, `modules/collector/proto/*.proto`, and `modules/cloudfunction/proto/*.proto`; shared response/auth/page types live in `packages/commonpb`.
 - Do not add new compatibility proto packages for deleted call paths; update callers to the current module proto instead.
 - Do not reintroduce `object_id` into public APIs. Use Space, DataSource, Subject, DataSet, View, Field, and Factor.
 - Use `subject_id` for normalized subject identity. Source-specific symbols are derived by each collector adapter from the canonical subject ID; do not persist source symbol mappings in metadata.

@@ -31,7 +31,7 @@ EventBus TLS CA、server 证书和每个 NATS role token 是**一份权威材料
 | EventBus 与 control 上的服务 | control 各组件发布目录的 `secrets/eventbus/` | `setup bootstrap --stage control --release <版本>` |
 | 每台主机的 Host Agent | `host` 单元发布目录的 `host-agent/config/eventbus.yaml` | 每台主机 `setup deploy-host --release <版本>` |
 | Storage / Trade 等业务单元 | 该单元发布目录的 `<组件>/secrets/eventbus/` | `setup deploy-unit --profile <单元> --release <版本>` |
-| Collector SCF / CloudNode worker SCF | 函数环境 `MOOX_EVENTBUS_NATS_URL/USERNAME/PASSWORD` 与 `MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64` | **重新发布 SCF 包**；禁止 `MOOX_EVENTBUS_NATS_TLS_CA_FILE` |
+| Collector SCF / CloudFunction worker SCF | 函数环境 `MOOX_EVENTBUS_NATS_URL/USERNAME/PASSWORD` 与 `MOOX_EVENTBUS_NATS_TLS_CA_PEM_B64` | **重新发布 SCF 包**；禁止 `MOOX_EVENTBUS_NATS_TLS_CA_FILE` |
 | 外置因子引擎 | 引擎配置里的 `factor-eventbus` 角色文件 | 重新导出并重启引擎 |
 
 [`native-release.md`](native-release.md) 的二进制发布不更新配置和凭据：只发布二进制，各主机会继续用旧 CA 和旧 token。

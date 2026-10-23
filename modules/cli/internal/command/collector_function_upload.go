@@ -28,7 +28,7 @@ var collectorFunctionUploadFlags collectorFunctionUploadOptions
 var collectorFunctionUploadCmd = &cobra.Command{
 	Use:   "upload",
 	Short: "构建（或使用现成的）SCF 代码包并只上传，不创建函数",
-	Long: "采集计划函数由 Collector 的对账协程自动创建，只需要一个可用的代码包。本命令构建或读取代码包 zip、校验后上传到 CloudNode。" +
+	Long: "采集计划函数由 Collector 的对账协程自动创建，只需要一个可用的代码包。本命令构建或读取代码包 zip、校验后上传到 FunctionInstance。" +
 		"--package-name 必须与 moox.toml 里该空间的 scf_plan.spaces.package_name 一致：Collector 总是使用该名称的最新可用版本，" +
 		"上传后落后的函数会自动升级，不需要改配置或重启。",
 	Args: cobra.NoArgs,
@@ -77,7 +77,7 @@ func runCollectorFunctionUpload(ctx context.Context, out io.Writer, opts collect
 	client := &adminclient.Client{Gateway: gateway, SpaceID: opts.SpaceID}
 	response, err := client.UploadPackage(ctx, adminclient.UploadPackageRequest{
 		PackageName: opts.PackageName, Version: defaultFlag(opts.Version, "dev"), Runtime: opts.Runtime,
-		PackageType: adminclient.ResolvePackageType("data_collector"), BizType: "market_fetcher",
+		PackageType: adminclient.ResolvePackageType("data_collector"), WorkloadType: "market_fetcher",
 		CloudAccountID: opts.CloudAccountID, OriginalFilename: filepath.Base(zipPath),
 	}, data)
 	if err != nil {

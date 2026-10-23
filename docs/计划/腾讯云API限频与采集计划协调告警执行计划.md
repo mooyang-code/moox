@@ -1,6 +1,6 @@
 # 腾讯云 API 限频与采集计划协调告警执行计划
 
-v3（2026-10-20，阶段 1～5 已编码，阶段 6 发布验收待执行；v2 已吸收一轮 Codex 审查，实现中按下文「实现中的调整」修订）。起因是 2026-10-20 23:23 的「行情采集 scf_timer 协调」严重告警。实现后以[云节点](../模块/云节点.md)、[采集](../模块/采集.md)与[监控](../模块/监控.md)为准。
+v3（2026-10-20，阶段 1～5 已编码，阶段 6 发布验收待执行；v2 已吸收一轮 Codex 审查，实现中按下文「实现中的调整」修订）。起因是 2026-10-20 23:23 的「行情采集 scf_timer 协调」严重告警。实现后以[云节点](../模块/云函数管理.md)、[采集](../模块/采集.md)与[监控](../模块/监控.md)为准。
 
 ## 1. 背景与线上现象
 
@@ -56,7 +56,7 @@ CloudNode 用到的接口及其默认限频（[云函数 API 概览](https://clo
 
 两条路径打的都是 `ListTriggers`（20 次/秒）：
 
-- **回读**：Collector 核对时带 `refresh_readback`，CloudNode 显式回读不截断，42 个函数全部要读。每个函数并发调用 `GetFunction` 和 `ListTriggers`，并发槽是 `timerReadbackBatchSize*2 = 8`（[node.go:82](../../modules/cloudnode/internal/rpc/node.go)），`ListTriggers` 瞬时速率远超 20。
+- **回读**：Collector 核对时带 `refresh_readback`，CloudNode 显式回读不截断，42 个函数全部要读。每个函数并发调用 `GetFunction` 和 `ListTriggers`，并发槽是 `timerReadbackBatchSize*2 = 8`（[node.go:82](../../modules/cloudfunction/internal/rpc/instance.go)），`ListTriggers` 瞬时速率远超 20。
 - **下发**：`EnsureTimerTrigger` 先调一次 `ListTriggers`，`UpdateTrigger` 之后再由 `waitForTimerTrigger` 每 200ms 轮询一次 `ListTriggers`，最长轮询 5 秒。单项轮询是 5 次/秒，批次执行器每次并行处理 3 项，合计 15 次/秒。
 
 **自我维持的循环**：只要有函数读失败，就计为 `unverified`，Collector 把下次核对从 1 小时（`planVerifyInterval`）提前到 5 分钟（`planVerifyRetry`）。下一轮又是一次突发，又被限频。日志里每 6 分钟一次的 `cloud readback incomplete unverified=12～16` 就是这个循环。
@@ -68,8 +68,8 @@ CloudNode 用到的接口及其默认限频（[云函数 API 概览](https://clo
 `CollectorPublishLease` 由 Admin 签发，作用是保证同一空间同一时刻只有一个发布方修改采集函数：
 
 - **租约**：有效期 2 分钟，需要续租。`FencingToken` 单调递增，CloudNode 提交变更时校验，已过期或被取代的发布方会被拒绝。
-- **操作占用**：用来绑定一个在途的异步批次作业。每次续期都把有效期延长到「当前时间 + 6 分钟」（`operationClaimTTL`），CloudNode 每 30 秒续期一次（[publish_fence.go:28](../../modules/cloudnode/internal/rpc/publish_fence.go)）。结果不确定时，占用会保留到 TTL 到期。只要还有未结束的占用，任何人都拿不到新租约（[lease.go](../../modules/admin/internal/service/publishlease/lease.go)）。
-- **冲突的持续时间没有固定上界**：它等于旧作业的剩余执行时间再加最多 6 分钟。CloudNode 批次单项的总预算是 16 分钟（3 次尝试，每次最长 5 分钟，[node_batch_runner.go:18](../../modules/cloudnode/internal/rpc/node_batch_runner.go)）。这次线上冲突持续了约 6 分钟。
+- **操作占用**：用来绑定一个在途的异步批次作业。每次续期都把有效期延长到「当前时间 + 6 分钟」（`operationClaimTTL`），CloudNode 每 30 秒续期一次（[publish_fence.go:28](../../modules/cloudfunction/internal/rpc/publish_fence.go)）。结果不确定时，占用会保留到 TTL 到期。只要还有未结束的占用，任何人都拿不到新租约（[lease.go](../../modules/admin/internal/service/publishlease/lease.go)）。
+- **冲突的持续时间没有固定上界**：它等于旧作业的剩余执行时间再加最多 6 分钟。CloudNode 批次单项的总预算是 16 分钟（3 次尝试，每次最长 5 分钟，[node_batch_runner.go:18](../../modules/cloudfunction/internal/rpc/job_runner.go)）。这次线上冲突持续了约 6 分钟。
 - **错误类别**：Admin 用 `CONFLICT` 表示被占用或被取代，用 `NO_PERMISSION`、`INVALID_PARAM` 和内部错误表示其他情况（[service.go:25](../../modules/admin/internal/service/publishlease/service.go)）。但 Collector 的 `collectorLeaseFromResponse` 把所有非成功响应合并成一个普通错误（[scfinvoker/client.go:388](../../modules/collector/internal/scfinvoker/client.go)），错误类别在这里丢失了。
 - Collector 的持有者 ID 每个进程随机生成一次，所以重启后的新进程必须等旧作业的占用结束才能拿到租约。这是预期行为，本计划不改租约语义。
 
@@ -118,13 +118,13 @@ CloudNode 用到的接口及其默认限频（[云函数 API 概览](https://clo
 **做法**
 
 - 新增 `modules/cloudnode/internal/providers/tencentscf/ratelimit.go`，使用 `golang.org/x/time/rate`。cloudnode 的 `go.mod` 目前没有这个依赖，需要新增，版本对齐工作区里 Admin 等模块使用的 v0.15.0。
-- 限流器必须是**进程级注册表**，不能挂在 `Client` 上，因为 `scfClient` 每次调用都会 `tencentscf.New(...)` 新建一个 `Client`（[node.go:1268](../../modules/cloudnode/internal/rpc/node.go)）。
+- 限流器必须是**进程级注册表**，不能挂在 `Client` 上，因为 `scfClient` 每次调用都会 `tencentscf.New(...)` 新建一个 `Client`（[node.go:1268](../../modules/cloudfunction/internal/rpc/instance.go)）。
 - **注册表的键是 `云账号 ID + endpoint + action`**。不用 SecretID：同一子账号轮换密钥时，新旧密钥共用腾讯云的配额，而轮换窗口内新旧 `Client` 会同时存在，按 SecretID 分桶会让放行量翻倍。`tencentscf.New` 增加云账号 ID 参数，由 `scfClient(ctx, account)` 传入 `account.ID`。
 - **突发容量设为 1**。`x/time/rate` 的桶初始是满的，如果突发容量等于速率，第一秒内能放行「桶里的令牌 + 当秒补充的令牌」，约等于两倍速率，仍会超限。突发容量为 1 时，请求被均匀摊开，任意一秒窗口都不超过配置速率。
 - 默认速率取官方限频的 75%：20 次/秒的接口取 **15**，100 次/秒的接口取 **75**。未在表中登记的接口按 15 处理，偏保守。
 - 加一个统一入口 `c.call(ctx, action string, fn func(ctx context.Context) error) error`，执行顺序是：取令牌，再执行 `fn`。provider 目录里所有 SDK 的 `XxxWithContext` 调用都改走这个入口，覆盖 §2.1 表中的全部接口。加一个单测扫描 provider 目录，禁止出现绕过 `call` 直接调用 SDK `WithContext(` 的写法。
-- `call` **不额外设置超时**，只沿用调用方的 ctx。否则会破坏 `Invoke` 现有的 960 秒 HTTP 预算（[client.go:30](../../modules/cloudnode/internal/providers/tencentscf/client.go)）。
-- **取令牌等待超时的错误要可识别**：`rate.Limiter.Wait` 在预计等待会超过 ctx 截止时间时，会立即返回一个普通错误（`would exceed context deadline`），此时 `ctx.Err()` 可能仍是 nil。`call` 要把它包成哨兵错误 `ErrRateLimitWaitExceedsDeadline`，`isTransientSCFProviderError`（[node_batch_runner.go:324](../../modules/cloudnode/internal/rpc/node_batch_runner.go)）把它视为瞬时错误，交给外层重试。
+- `call` **不额外设置超时**，只沿用调用方的 ctx。否则会破坏 `Invoke` 现有的 960 秒 HTTP 预算（[client.go:30](../../modules/cloudfunction/internal/providers/tencentscf/client.go)）。
+- **取令牌等待超时的错误要可识别**：`rate.Limiter.Wait` 在预计等待会超过 ctx 截止时间时，会立即返回一个普通错误（`would exceed context deadline`），此时 `ctx.Err()` 可能仍是 nil。`call` 要把它包成哨兵错误 `ErrRateLimitWaitExceedsDeadline`，`isTransientSCFProviderError`（[node_batch_runner.go:324](../../modules/cloudfunction/internal/rpc/job_runner.go)）把它视为瞬时错误，交给外层重试。
 - 配置放在 CloudNode 已有的 `tencent_scf` 段下，可以按接口覆盖默认值：
 
   ```yaml
@@ -162,7 +162,7 @@ CloudNode 用到的接口及其默认限频（[云函数 API 概览](https://clo
 
 **做法**
 
-- `waitForTimerTrigger`（[trigger.go:186](../../modules/cloudnode/internal/providers/tencentscf/trigger.go)）改为：
+- `waitForTimerTrigger`（[trigger.go:186](../../modules/cloudfunction/internal/providers/tencentscf/trigger.go)）改为：
   - 用 `context.WithTimeout(ctx, 5*time.Second)` 生成局部 ctx，**传给每次 `findTimerTrigger` 调用**。这样取令牌、限频重试、SDK 请求都受 5 秒约束，不会因为一次慢查询越过预算。父 ctx 剩余时间不足 5 秒时，以父 ctx 为准。
   - 第一次立即查询，之后按 500ms、1s、2s 退避。最坏情况从约 25 次 `ListTriggers` 降到 4 次左右。
   - 局部预算耗尽时，返回最后一次读到的结果，与现在的行为一致，由调用方校验。父 ctx 被取消时返回父 ctx 的错误。真正的查询错误原样返回。三种情况要区分开。
@@ -222,7 +222,7 @@ CloudNode 用到的接口及其默认限频（[云函数 API 概览](https://clo
 
 ## 9. 阶段 5：文档
 
-- [云节点](../模块/云节点.md)：腾讯云接口限流（维度、默认值、突发容量、`tencent_scf.api_rate_limits` 配置、本地指标）。
+- [云节点](../模块/云函数管理.md)：腾讯云接口限流（维度、默认值、突发容量、`tencent_scf.api_rate_limits` 配置、本地指标）。
 - [采集](../模块/采集.md)：协调失败原因增加 `publish_lease_held`，删除 `submit_timeout`；说明重启后短时间租约冲突属于预期；作业未结束按进行中处理。
 - [监控](../模块/监控.md)：`timer_coordination_lease_grace` 及新文案。
 - [部署与运维](../部署与运维.md)的故障表增加两行：「协调告警：发布租约被占用」和「CloudNode 日志出现 `RequestLimitExceeded`」，分别写明原因与处理方法。

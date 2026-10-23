@@ -48,12 +48,12 @@ func (c *Client) CollectorPublishFence() *CollectorPublishFence {
 	return &CollectorPublishFence{LeaseID: c.publishLease.LeaseID, FencingToken: c.publishLease.FencingToken}
 }
 
-func (c *Client) withPublishFenceToCreateItems(items []NodeCreateItem) []NodeCreateItem {
+func (c *Client) withPublishFenceToCreateItems(items []FunctionInstanceCreateItem) []FunctionInstanceCreateItem {
 	fence := c.CollectorPublishFence()
 	if fence == nil {
 		return items
 	}
-	items = append([]NodeCreateItem(nil), items...)
+	items = append([]FunctionInstanceCreateItem(nil), items...)
 	for index := range items {
 		items[index].CollectorPublishLeaseID = fence.LeaseID
 		items[index].CollectorPublishFencingToken = fence.FencingToken
@@ -61,12 +61,12 @@ func (c *Client) withPublishFenceToCreateItems(items []NodeCreateItem) []NodeCre
 	return items
 }
 
-func (c *Client) withPublishFenceToDeployItems(items []NodeDeployItem) []NodeDeployItem {
+func (c *Client) withPublishFenceToDeployItems(items []FunctionInstanceDeployItem) []FunctionInstanceDeployItem {
 	fence := c.CollectorPublishFence()
 	if fence == nil {
 		return items
 	}
-	items = append([]NodeDeployItem(nil), items...)
+	items = append([]FunctionInstanceDeployItem(nil), items...)
 	for index := range items {
 		items[index].CollectorPublishLeaseID = fence.LeaseID
 		items[index].CollectorPublishFencingToken = fence.FencingToken

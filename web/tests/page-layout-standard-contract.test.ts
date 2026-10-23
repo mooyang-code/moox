@@ -168,14 +168,14 @@ describe("page layout standards", () => {
   });
 
   it("normalizes special list workbenches", () => {
-    const cloudNodes = read("collector/cloud-node/cloud-node.vue");
+    const cloudFunctions = read("collector/cloud-function/function-instance.vue");
     const factorResults = read("factor/results/index.vue");
     const positions = read("trading/position-detail/position-detail.vue");
     const viewBrowse = read("data/view-browse/index.vue");
 
-    const cloudNodeActions = extractBlock(cloudNodes, '<a-space class="cloud-node-action-bar" wrap>', "</a-space>");
-    const cloudNodeFilters = extractBlock(cloudNodes, '<a-space class="cloud-node-filter-bar" wrap>', "</a-space>");
-    expectStrictOrder(cloudNodeActions, [
+    const cloudFunctionActions = extractBlock(cloudFunctions, '<a-space class="cloud-function-action-bar" wrap>', "</a-space>");
+    const cloudFunctionFilters = extractBlock(cloudFunctions, '<a-space class="cloud-function-filter-bar" wrap>', "</a-space>");
+    expectStrictOrder(cloudFunctionActions, [
       '<a-button type="primary" status="danger" @click="batchDelete" :disabled="batchChangeProcessing">',
       "<span>批量删除</span>",
       '<a-button type="outline" @click="onCloudAccountManage">',
@@ -183,20 +183,20 @@ describe("page layout standards", () => {
       '<a-button type="outline" @click="onFunctionPackageManage">',
       "<span>代码包版本</span>"
     ]);
-    expectStrictOrder(cloudNodeFilters, [
+    expectStrictOrder(cloudFunctionFilters, [
       '<a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear>',
-      '<a-input v-model="form.nodeId" placeholder="请输入节点ID" allow-clear />',
+      '<a-input v-model="form.instanceId" placeholder="请输入实例ID" allow-clear />',
       '<a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear>',
-      '<a-select placeholder="节点类型" v-model="form.nodeType" style="width: 180px" allow-clear>',
+      '<a-select placeholder="实例类型" v-model="form.functionType" style="width: 180px" allow-clear>',
       '<a-button type="primary" @click="search">',
       "<icon-search />",
       "<span>查询</span>"
     ]);
-    expect(cloudNodes).not.toContain('class="cloud-node-toolbar"');
-    expect(cloudNodes).not.toContain(".moox-inner .a-row");
-    expect(cloudNodes).not.toContain("<h2>云节点</h2>");
-    expectStrictOrder(cloudNodes, [cloudNodeActions, cloudNodeFilters, "<a-table"]);
-    const toolbarRule = cloudNodes.match(/\.cloud-node-action-bar\s*,\s*\.cloud-node-filter-bar\s*\{([^}]*)\}/);
+    expect(cloudFunctions).not.toContain('class="cloud-function-toolbar"');
+    expect(cloudFunctions).not.toContain(".moox-inner .a-row");
+    expect(cloudFunctions).not.toContain("<h2>云函数实例</h2>");
+    expectStrictOrder(cloudFunctions, [cloudFunctionActions, cloudFunctionFilters, "<a-table"]);
+    const toolbarRule = cloudFunctions.match(/\.cloud-function-action-bar\s*,\s*\.cloud-function-filter-bar\s*\{([^}]*)\}/);
     expect(toolbarRule).not.toBeNull();
     const toolbarDeclarations = toolbarRule?.[1] || "";
     for (const [property, value] of [
@@ -209,15 +209,15 @@ describe("page layout standards", () => {
     ]) {
       expect(toolbarDeclarations).toContain(`${property}: ${value};`);
     }
-    expect(cloudNodes).toMatch(/\.moox-page\s*\{[^}]*contain:\s*inline-size;[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*auto;/);
-    expect(cloudNodes).toMatch(
+    expect(cloudFunctions).toMatch(/\.moox-page\s*\{[^}]*contain:\s*inline-size;[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*auto;/);
+    expect(cloudFunctions).toMatch(
       /\.moox-page :deep\(\.arco-spin\),\s*\.moox-page :deep\(\.arco-spin-children\)\s*\{[^}]*overflow-x:\s*hidden;/
     );
-    expect(cloudNodes).toMatch(/\.moox-inner\s*\{[^}]*overflow-x:\s*hidden;/);
-    expect(cloudNodes).not.toContain("width: calc(100% - 72px)");
-    expect(cloudNodes).not.toMatch(/\.cloud-node-toolbar\s*\{[^}]*flex:\s*1;/);
-    expect(cloudNodes).not.toMatch(/\.cloud-node-toolbar\s*\{[^}]*justify-content:\s*flex-end;/);
-    expect(cloudNodes).not.toMatch(/@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*?\.page-head\s*\{[^}]*flex-direction:\s*column;/);
+    expect(cloudFunctions).toMatch(/\.moox-inner\s*\{[^}]*overflow-x:\s*hidden;/);
+    expect(cloudFunctions).not.toContain("width: calc(100% - 72px)");
+    expect(cloudFunctions).not.toMatch(/\.cloud-function-toolbar\s*\{[^}]*flex:\s*1;/);
+    expect(cloudFunctions).not.toMatch(/\.cloud-function-toolbar\s*\{[^}]*justify-content:\s*flex-end;/);
+    expect(cloudFunctions).not.toMatch(/@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*?\.page-head\s*\{[^}]*flex-direction:\s*column;/);
 
     expect(factorResults).toContain('class="result-toolbar"');
     expect(factorResults).toContain("#status-extra");
@@ -239,7 +239,7 @@ describe("page layout standards", () => {
     const dataImport = read("data/import/index.vue");
     const strategyDefinitions = read("strategy/definitions/index.vue");
     const hostMonitor = read("ops/host-workbench/host-monitor.vue");
-    const packageManage = read("collector/cloud-node/function-package-manage.vue");
+    const packageManage = read("collector/cloud-function/function-package-manage.vue");
 
     expect(theme).toMatch(/\$space-2:\s*8px;/);
     expect(theme).toMatch(/\$space-4:\s*16px;/);

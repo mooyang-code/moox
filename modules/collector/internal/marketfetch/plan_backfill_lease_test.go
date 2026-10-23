@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	cloudnodepb "github.com/mooyang-code/moox/modules/cloudnode/proto/cloudnodegen"
+	cloudfunctionpb "github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
 	"github.com/stretchr/testify/require"
 )
@@ -66,7 +66,7 @@ func TestBackfillJobThatFinishesInTimeReleasesTheLease(t *testing.T) {
 func TestBackfillSubmitFailureReleasesTheLease(t *testing.T) {
 	h, r, _ := backfillHarness(t)
 	h.cloud.submitErr = nil
-	h.cloud.failNodes = map[string]bool{}
+	h.cloud.failInstances = map[string]bool{}
 	// 提交本身失败（没有作业产生）：租约立即释放，不留在途记录。
 	r.Cloud = &submitFailingCloud{fakePlanCloud: h.cloud}
 	_, err := r.EnsureBackfillFunction(context.Background(), "spot")
@@ -78,13 +78,13 @@ func TestBackfillSubmitFailureReleasesTheLease(t *testing.T) {
 
 type submitFailingCloud struct{ *fakePlanCloud }
 
-func (c *submitFailingCloud) SubmitCreateNodes(context.Context, string, []*cloudnodepb.NodeCreateItem) (string, error) {
+func (c *submitFailingCloud) SubmitCreateFunctionInstances(context.Context, string, []*cloudfunctionpb.FunctionInstanceCreateItem) (string, error) {
 	return "", errors.New("submit create nodes: gateway unavailable")
 }
 
 func TestBackfillUpgradeStillRunningKeepsTheLease(t *testing.T) {
 	h, r, name := backfillHarness(t)
-	h.cloud.backfill = map[string]scfinvoker.Node{name: {NodeID: name, PackageID: "pkg-v1", Metadata: testBackfillMetadata()}}
+	h.cloud.backfill = map[string]scfinvoker.FunctionInstance{name: {InstanceID: name, PackageID: "pkg-v1", Metadata: testBackfillMetadata()}}
 	_, err := r.EnsureBackfillFunction(context.Background(), "spot")
 	require.NoError(t, err)
 
@@ -113,7 +113,7 @@ func TestBackfillUpgradeStillRunningKeepsTheLease(t *testing.T) {
 func TestBackfillStaleReservationCleanupStillRunningKeepsTheLease(t *testing.T) {
 	h, r, name := backfillHarness(t)
 	// 创建失败后遗留的预留，已超过等待时长：补采路径要先走受租约保护的删除作业。
-	h.cloud.unready[name] = scfinvoker.Node{NodeID: name, FunctionName: name, TriggerType: "invoke", ModifiedAt: h.now.Add(-time.Hour)}
+	h.cloud.unready[name] = scfinvoker.FunctionInstance{InstanceID: name, FunctionName: name, TriggerType: "invoke", ModifiedAt: h.now.Add(-time.Hour)}
 	h.cloud.runningAll = true
 
 	_, err := r.EnsureBackfillFunction(context.Background(), "spot")
@@ -227,7 +227,7 @@ func TestBackfillGivesUpOnAJobThatNeverReachesATerminalState(t *testing.T) {
 			require.ErrorIs(t, err, errBackfillJobRunning)
 			require.Equal(t, 1, h.cloud.submits)
 
-			// 超过 CloudNode 单项预算（16 分钟）很久仍无法确认终态：不再等，释放租约、移除在途记录，按云端实际状态判断；
+			// 超过 FunctionInstance 单项预算（16 分钟）很久仍无法确认终态：不再等，释放租约、移除在途记录，按云端实际状态判断；
 			// 旧作业即使还活着，也会被新租约的围栏令牌隔离。
 			h.now = h.now.Add(2 * time.Minute)
 			got, err := r.EnsureBackfillFunction(context.Background(), "spot")

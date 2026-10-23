@@ -38,8 +38,8 @@ assert_loopback_server_services() {
 # 检查用 tRPC 自己的配置加载，按框架默认值和 server 级继承判断最终生效的传输层。
 (cd packages/healthz && go run ./cmd/trpctransportcheck ../../modules) || fail "tcp+trpc server must declare transport: go-net"
 
-modules=(admin cloudnode collector eventbus factor hostagent monitor storage strategy trade)
-validation_modules=(admin cloudnode collector eventbus factor hostagent monitor storage strategy trade)
+modules=(admin cloudfunction collector eventbus factor hostagent monitor storage strategy trade)
+validation_modules=(admin cloudfunction collector eventbus factor hostagent monitor storage strategy trade)
 
 contains() {
   local needle="$1"

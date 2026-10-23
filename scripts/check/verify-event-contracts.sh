@@ -47,8 +47,8 @@ reject '(^|[[:space:]])([A-Za-z0-9_]*_durable|durable):' \
 reject 'PublishRaw\(|Client\.Publish\(' \
   "business modules bypass the typed Event API" --glob '*.go' --glob '!**/*_test.go' modules
 reject '\.NewConsumer\(' \
-  "CloudNode bypasses the Registry-owned event Consumer API" \
-  --glob '*.go' --glob '!**/*_test.go' modules/cloudnode
+  "FunctionInstance bypasses the Registry-owned event Consumer API" \
+  --glob '*.go' --glob '!**/*_test.go' modules/cloudfunction
 reject 'MooxMessage|packages/messagepb|messagepb|moox_message|messagepb\.MessageKind' \
   "legacy MooxMessage symbols remain" "${production[@]}" .
 reject 'wrapperspb\.BytesValue|google\.protobuf\.BytesValue' \
@@ -100,8 +100,8 @@ reject 'KLineColumns|DependsFromSource|DefaultLookback|signal_multi_params|c_per
   examples/factors modules/factor/internal modules/factor/proto modules/factor/schema \
   modules/factor/cmd modules/factor/factors
 reject 'NATSURL|EmbeddedJetStreamConfig|yaml:"nats_url"|yaml:"embedded"' \
-  "CloudNode still exposes duplicate or embedded JetStream settings" \
-  --glob '*.go' modules/cloudnode/internal
+  "FunctionInstance still exposes duplicate or embedded JetStream settings" \
+  --glob '*.go' modules/cloudfunction/internal
 reject '^[[:space:]]+(consumer|rebalance_consumer|max_ack_pending|ack_wait|ack_wait_ms):' \
   "code-owned Consumer identity or ack settings remain in business YAML" \
   --glob '*.yaml' \
@@ -116,7 +116,7 @@ reject '^[[:space:]]+(consumer|rebalance_consumer|max_ack_pending|ack_wait|ack_w
 (cd modules/storage && CGO_ENABLED=1 go test ./internal/config ./cmd/server ./internal/eventmapper ./internal/service/datanode/... ./internal/service/view/... ./internal/service/e2e)
 (cd modules/monitor && go test ./internal/config ./internal/metrics/... ./internal/hostmetrics/... ./test)
 (cd modules/factor && CGO_ENABLED=1 go test ./internal/store ./internal/bootstrap ./internal/catalog ./internal/periodclock ./internal/trigger ./internal/pipeline ./internal/recalc ./internal/storageio)
-(cd modules/cloudnode && CGO_ENABLED=1 go test ./internal/config ./internal/rpc)
+(cd modules/cloudfunction && CGO_ENABLED=1 go test ./internal/config ./internal/rpc)
 # Strategy E2E tests are build-tagged e2e_external and require deployed services;
 # this local contract gate covers the package-level storage and outbox tests.
 (cd modules/strategy && CGO_ENABLED=1 go test ./internal/store ./internal/outbox)

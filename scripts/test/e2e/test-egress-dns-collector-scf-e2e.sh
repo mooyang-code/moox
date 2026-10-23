@@ -10,7 +10,7 @@ fi
 
 : "${MOOX_COLLECTOR_APP_CONFIG:?deployed Collector app.yaml path is required}"
 : "${MOOX_COLLECTOR_SSH:?MOOX_COLLECTOR_SSH is required for live Collector refresh/readback}"
-: "${MOOX_CLOUDNODE_SSH:?MOOX_CLOUDNODE_SSH is required for CloudNode readback}"
+: "${MOOX_CLOUDFUNCTION_SSH:?MOOX_CLOUDFUNCTION_SSH is required for FunctionInstance readback}"
 
 cd "${REPO_ROOT}"
 
@@ -58,16 +58,16 @@ if [[ -n "${MOOX_COLLECTOR_SSH:-}" ]]; then
   fi
 fi
 
-# Read back the durable CloudNode metadata written by the live Collector
+# Read back the durable FunctionInstance metadata written by the live Collector
 # reconciler. The live SSH host is required in production mode above; CI can
 # still run this script without production mode and will skip the remote leg.
-if [[ -n "${MOOX_CLOUDNODE_SSH:-}" ]]; then
-	cloudnode_db="${MOOX_CLOUDNODE_DB_PATH:-/home/ubuntu/moox/prod/data/cloudnode/moox_cloudnode.db}"
+if [[ -n "${MOOX_CLOUDFUNCTION_SSH:-}" ]]; then
+	cloudfunction_db="${MOOX_CLOUDFUNCTION_DB_PATH:-/home/ubuntu/moox/prod/data/cloudfunction/moox_cloudfunction.db}"
 	converged=0
 	propagation_hash=""
 	for attempt in $(seq 1 36); do
 		health_ok=1
-		# DNS answers can rotate while the asynchronous CloudNode batch is still
+		# DNS answers can rotate while the asynchronous FunctionInstance batch is still
     # applying. Re-read the live Collector snapshot on every attempt so the
     # proof follows the current authoritative hash instead of failing against
 		# a hash captured before a normal five-minute refresh.
@@ -79,7 +79,7 @@ if [[ -n "${MOOX_CLOUDNODE_SSH:-}" ]]; then
 				[[ "${current_live_hash}" =~ ^[0-9a-f]{16}$ && ("${current_live_source}" == "egress" || "${current_live_source}" == "hybrid") && "${current_live_route_count}" == "${expected_domain_count}" && -z "${current_live_error_category}" ]]; then
 				health_ok=1
 				if [[ "${current_live_hash}" != "${live_hash}" ]]; then
-          printf 'Collector live DNS hash advanced from %s to %s while CloudNode propagation was pending\n' "${live_hash:-<empty>}" "${current_live_hash}"
+          printf 'Collector live DNS hash advanced from %s to %s while FunctionInstance propagation was pending\n' "${live_hash:-<empty>}" "${current_live_hash}"
         fi
         live_hash="${current_live_hash}"
 			fi
@@ -95,24 +95,24 @@ if [[ -n "${MOOX_CLOUDNODE_SSH:-}" ]]; then
     # partially cleared readback must stay in the denominator and fail the
     # enabled/populated/hash checks instead of disappearing from the proof.
 		propagation_hash="${live_hash}"
-    sql="select count(*), coalesce(sum(case when json_extract(c_metadata,'\$.timer_enabled')=1 then 1 else 0 end),0), coalesce(sum(case when trim(coalesce(json_extract(c_metadata,'\$.dns_hash'),'')) <> '' then 1 else 0 end),0), count(distinct nullif(trim(json_extract(c_metadata,'\$.dns_hash')),'')), coalesce(sum(case when trim(coalesce(json_extract(c_metadata,'\$.dns_hash'),'')) = '${propagation_hash}' then 1 else 0 end),0) from t_cloud_nodes where c_is_deleted=0 and c_space_id='crypto' and c_trigger_type='timer' and json_extract(c_metadata,'\$.biz_type')='market_fetcher' and json_extract(c_metadata,'\$.deployment_ready')=1 and not (coalesce(json_extract(c_metadata,'\$.timer_actual_type'),'')='timer' and coalesce(json_extract(c_metadata,'\$.timer_actual_enabled'),1)=0)"
-    printf -v query_command 'timeout 10s sqlite3 -separator %q %q %q' '|' "${cloudnode_db}" "${sql}"
-    if ! readback=$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 "${MOOX_CLOUDNODE_SSH}" \
+    sql="select count(*), coalesce(sum(case when json_extract(c_metadata,'\$.timer_enabled')=1 then 1 else 0 end),0), coalesce(sum(case when trim(coalesce(json_extract(c_metadata,'\$.dns_hash'),'')) <> '' then 1 else 0 end),0), count(distinct nullif(trim(json_extract(c_metadata,'\$.dns_hash')),'')), coalesce(sum(case when trim(coalesce(json_extract(c_metadata,'\$.dns_hash'),'')) = '${propagation_hash}' then 1 else 0 end),0) from t_cloud_function_instances where c_is_deleted=0 and c_space_id='crypto' and c_trigger_type='timer' and json_extract(c_metadata,'\$.workload_type')='market_fetcher' and json_extract(c_metadata,'\$.deployment_ready')=1 and not (coalesce(json_extract(c_metadata,'\$.timer_actual_type'),'')='timer' and coalesce(json_extract(c_metadata,'\$.timer_actual_enabled'),1)=0)"
+    printf -v query_command 'timeout 10s sqlite3 -separator %q %q %q' '|' "${cloudfunction_db}" "${sql}"
+    if ! readback=$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 "${MOOX_CLOUDFUNCTION_SSH}" \
       "${query_command}" 2>/dev/null); then
-      printf 'CloudNode readback unavailable (attempt %s/36), retrying\n' "${attempt}"
+      printf 'FunctionInstance readback unavailable (attempt %s/36), retrying\n' "${attempt}"
       [[ "${attempt}" == "36" ]] || sleep 10
       continue
     fi
     IFS='|' read -r total_timers enabled_timers populated_timers distinct_hashes matching_hashes <<<"${readback}"
     if [[ "${total_timers}" =~ ^[1-9][0-9]*$ && "${enabled_timers}" == "${total_timers}" && "${populated_timers}" == "${total_timers}" && "${distinct_hashes}" == "1" && "${matching_hashes}" == "${total_timers}" ]]; then
-      printf 'CloudNode readback: deployed_timer_nodes=%s enabled=%s populated_dns_routes=%s distinct_dns_hashes=%s live_hash=%s\n' "${total_timers}" "${enabled_timers}" "${populated_timers}" "${distinct_hashes}" "${propagation_hash}"
+      printf 'FunctionInstance readback: deployed_timer_nodes=%s enabled=%s populated_dns_routes=%s distinct_dns_hashes=%s live_hash=%s\n' "${total_timers}" "${enabled_timers}" "${populated_timers}" "${distinct_hashes}" "${propagation_hash}"
       converged=1
       break
     fi
-    printf 'CloudNode readback still rolling: deployed=%s enabled=%s populated=%s distinct=%s matching_live=%s (attempt %s/36)\n' "${total_timers:-0}" "${enabled_timers:-0}" "${populated_timers:-0}" "${distinct_hashes:-0}" "${matching_hashes:-0}" "${attempt}"
+    printf 'FunctionInstance readback still rolling: deployed=%s enabled=%s populated=%s distinct=%s matching_live=%s (attempt %s/36)\n' "${total_timers:-0}" "${enabled_timers:-0}" "${populated_timers:-0}" "${distinct_hashes:-0}" "${matching_hashes:-0}" "${attempt}"
     [[ "${attempt}" == "36" ]] || sleep 10
   done
-  [[ "${converged}" == "1" ]] || { echo "CloudNode readback did not converge to the live Collector DNS hash ${propagation_hash}" >&2; exit 1; }
+  [[ "${converged}" == "1" ]] || { echo "FunctionInstance readback did not converge to the live Collector DNS hash ${propagation_hash}" >&2; exit 1; }
 fi
 
 printf 'PASS: Egress ResolveDomains and Collector managed SCF environment E2E\n'

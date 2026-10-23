@@ -46,7 +46,7 @@ address = "43.132.204.177"
 ssh = { port = 22, username = "ubuntu" }
 
 [placements]
-control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudnode", "factor-mgr", "strategy"]
+control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"]
 storage = ["storage-primary", "storage-node", "storage-view", "access"]
 overseas = ["trade", "egress-proxy"]
 

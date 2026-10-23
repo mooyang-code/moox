@@ -293,7 +293,7 @@ func TestBuilderTreatsRecentPublishLeaseHeldAsCoordinationInProgress(t *testing.
 	require.Len(t, got.BusinessChecks, 1)
 	require.Equal(t, "healthy", got.BusinessChecks[0].Status)
 	require.Contains(t, got.BusinessChecks[0].Reason, "发布租约被占用")
-	require.NotContains(t, got.BusinessChecks[0].Reason, "CloudNode 服务调用失败")
+	require.NotContains(t, got.BusinessChecks[0].Reason, "FunctionInstance 服务调用失败")
 }
 
 func TestBuilderAlertsWhenPublishLeaseStaysHeldPastTheGrace(t *testing.T) {
@@ -337,7 +337,7 @@ func TestBuilderLeaseGraceDoesNotHideAnotherInstancesRealFailure(t *testing.T) {
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
 		seedLeaseHeldFailure(t, db, "mixed", now, time.Minute)
 		// 另一个 Collector 实例同时报告真实故障：聚合后原因集合包含两者，租约宽限不能把它盖住。
-		seedOverviewMetricForInstance(t, db, "mixed-other", "collector", "collector@standby", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"cloudnode"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "mixed-other", "collector", "collector@standby", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"cloudfunction"}`, 1, now)
 	})
 	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
@@ -349,16 +349,16 @@ func TestBuilderLeaseGraceDoesNotHideAnotherInstancesRealFailure(t *testing.T) {
 func TestBuilderExplainsEachCoordinationFailureReasonWithItsOwnText(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	for reason, want := range map[string]string{
-		"cloudnode":   "配置服务调用失败",
-		"environment": "函数运行环境生成失败",
-		"rules":       "采集规则读取失败",
-		"store":       "本地数据库读写失败",
-		"storage":     "标的快照登记失败",
-		"package":     "代码包解析失败",
-		"dataset":     "允许迟到）设置失败",
-		"activity":    "活动日志未写入",
-		"preflight":   "创建新采集计划前的检查未通过",
-		"capacity":    "无法放进函数",
+		"cloudfunction": "配置服务调用失败",
+		"environment":   "函数运行环境生成失败",
+		"rules":         "采集规则读取失败",
+		"store":         "本地数据库读写失败",
+		"storage":       "标的快照登记失败",
+		"package":       "代码包解析失败",
+		"dataset":       "允许迟到）设置失败",
+		"activity":      "活动日志未写入",
+		"preflight":     "创建新采集计划前的检查未通过",
+		"capacity":      "无法放进函数",
 	} {
 		t.Run(reason, func(t *testing.T) {
 			query, _ := openOverviewState(t, func(db *gorm.DB) {
@@ -373,8 +373,8 @@ func TestBuilderExplainsEachCoordinationFailureReasonWithItsOwnText(t *testing.T
 			require.Len(t, got.BusinessChecks, 1)
 			require.Equal(t, "down", got.BusinessChecks[0].Status)
 			require.Contains(t, got.BusinessChecks[0].Reason, want)
-			if reason != "cloudnode" {
-				require.NotContains(t, got.BusinessChecks[0].Reason, "CloudNode 服务调用失败", "非 CloudNode 的故障不能显示成 CloudNode 调用失败")
+			if reason != "cloudfunction" {
+				require.NotContains(t, got.BusinessChecks[0].Reason, "FunctionInstance 服务调用失败", "非 FunctionInstance 的故障不能显示成 FunctionInstance 调用失败")
 				require.NotContains(t, got.BusinessChecks[0].Reason, "配置服务调用失败")
 			}
 		})
@@ -385,7 +385,7 @@ func TestCoordinationFailureTextFallsBackToAGenericHint(t *testing.T) {
 	require.Contains(t, coordinationFailureText(map[string]bool{"something_new": true}), "采集计划协调失败")
 	require.Contains(t, coordinationFailureText(nil), "采集计划协调失败")
 	// 多个原因同时出现：按表中的优先级取第一个。
-	require.Contains(t, coordinationFailureText(map[string]bool{"store": true, "cloudnode": true}), "配置服务调用失败")
+	require.Contains(t, coordinationFailureText(map[string]bool{"store": true, "cloudfunction": true}), "配置服务调用失败")
 }
 
 func TestBuilderMixedLeaseHeldAndAnotherReasonUsesTheOtherReasonsText(t *testing.T) {
@@ -438,7 +438,7 @@ func TestBuilderOnlyLeaseHeldGetsTheGraceNotOtherFailureReasons(t *testing.T) {
 		seedOverviewMetricForInstance(t, db, "other-required", "collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 34, now)
 		seedOverviewMetricForInstance(t, db, "other-active", "collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 34, now)
 		seedOverviewMetricForInstance(t, db, "other-health", "collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto"}`, 0, now)
-		seedOverviewMetricForInstance(t, db, "other-reason", "collector", "collector@control", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"cloudnode"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "other-reason", "collector", "collector@control", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"cloudfunction"}`, 1, now)
 		// 失败刚刚开始，但原因不是「被占用」：Admin 不可达、无权限等照常告警。
 		seedOverviewMetricForInstance(t, db, "other-since", "collector", "collector@control", "moox_collector_market_fetch_coordination_failure_since_timestamp_seconds", `{"space_id":"crypto"}`, float64(now.Add(-time.Minute).Unix()), now)
 	})
@@ -449,16 +449,16 @@ func TestBuilderOnlyLeaseHeldGetsTheGraceNotOtherFailureReasons(t *testing.T) {
 	require.Contains(t, got.BusinessChecks[0].Reason, "配置服务调用失败")
 }
 
-func TestBuilderDoesNotMislabelCloudNodeFailureAsCapacityShortage(t *testing.T) {
+func TestBuilderDoesNotMislabelCloudFunctionFailureAsCapacityShortage(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, _ := openOverviewState(t, func(db *gorm.DB) {
 		labels := `{"space_id":"crypto","dataset_id":"bars","frequency":"1m"}`
-		seedOverviewMetricForInstance(t, db, "cloudnode-required", "collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 34, now)
-		seedOverviewMetricForInstance(t, db, "cloudnode-active", "collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 0, now)
-		seedOverviewMetricForInstance(t, db, "cloudnode-health", "collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto"}`, 0, now)
-		seedOverviewMetricForInstance(t, db, "cloudnode-reason", "collector", "collector@control", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"cloudnode"}`, 1, now)
-		seedOverviewMetricForInstance(t, db, "cloudnode-capacity-total", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_total", `{"space_id":"crypto"}`, 60, now)
-		seedOverviewMetricForInstance(t, db, "cloudnode-capacity-required", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_required", `{"space_id":"crypto"}`, 34, now)
+		seedOverviewMetricForInstance(t, db, "cloudfunction-required", "collector", "collector@control", "moox_collector_market_fetch_assignment_required", labels, 34, now)
+		seedOverviewMetricForInstance(t, db, "cloudfunction-active", "collector", "collector@control", "moox_collector_market_fetch_assignment_active", labels, 0, now)
+		seedOverviewMetricForInstance(t, db, "cloudfunction-health", "collector", "collector@control", "moox_collector_market_fetch_coordination_healthy", `{"space_id":"crypto"}`, 0, now)
+		seedOverviewMetricForInstance(t, db, "cloudfunction-reason", "collector", "collector@control", "moox_collector_market_fetch_coordination_failure", `{"space_id":"crypto","reason":"cloudfunction"}`, 1, now)
+		seedOverviewMetricForInstance(t, db, "cloudfunction-capacity-total", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_total", `{"space_id":"crypto"}`, 60, now)
+		seedOverviewMetricForInstance(t, db, "cloudfunction-capacity-required", "collector", "collector@control", "moox_collector_market_fetch_timer_capacity_required", `{"space_id":"crypto"}`, 34, now)
 	})
 	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
 	require.NoError(t, err)
@@ -1008,7 +1008,7 @@ func openOverviewState(t *testing.T, seed func(*gorm.DB)) (*monmetrics.QueryServ
 
 func seedOverviewMetric(t *testing.T, db *gorm.DB, id, name, labels string, value float64, observedAt time.Time) {
 	t.Helper()
-	seedOverviewMetricForInstance(t, db, id, "cloudnode", "cloudnode@node-a", name, labels, value, observedAt)
+	seedOverviewMetricForInstance(t, db, id, "cloudfunction", "cloudfunction@node-a", name, labels, value, observedAt)
 }
 
 func seedOverviewMetricForInstance(

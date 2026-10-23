@@ -139,7 +139,7 @@ func main() {
 		{"monitor/ListHostAgents", "/api/admin/monitor/ListHostAgents", "", `{}`},
 		{"strategy/ListStrategies(crypto)", "/api/admin/strategy/ListStrategies", "crypto", `{"page":{"page":1,"page_size":5}}`},
 		{"factor-mgr/ListFactorSets", "/api/admin/factor-mgr/ListFactorSets", "crypto", `{"page":{"page":1,"size":5}}`},
-		{"cloudnode/GetNodeList(crypto)", "/api/admin/cloudnode/GetNodeList", "crypto", `{}`},
+		{"cloudfunction/ListFunctionInstances(crypto)", "/api/admin/cloudfunction/ListFunctionInstances", "crypto", `{}`},
 		{"trade/ListTradingAccounts(crypto)", "/api/admin/trade/ListTradingAccounts", "crypto", `{"page":{"page":1,"size":5}}`},
 	}
 	failed := 0

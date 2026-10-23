@@ -73,7 +73,7 @@ func TestMetricsClearAssignmentPending(t *testing.T) {
 func TestMetricsUseFixedErrorReasons(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics := NewMetrics(registry)
-	for _, reason := range []string{"capacity", "rules", "symbols", "dns", "cloudnode", "environment"} {
+	for _, reason := range []string{"capacity", "rules", "symbols", "dns", "cloudfunction", "environment"} {
 		metrics.ObserveAssignmentError("crypto", reason)
 	}
 	families, err := registry.Gather()
@@ -88,7 +88,7 @@ func TestMetricsUseFixedErrorReasons(t *testing.T) {
 					continue
 				}
 				switch label.GetValue() {
-				case "capacity", "rules", "symbols", "dns", "cloudnode", "environment":
+				case "capacity", "rules", "symbols", "dns", "cloudfunction", "environment":
 				default:
 					t.Fatalf("unexpected error reason %q", label.GetValue())
 				}
@@ -109,12 +109,12 @@ func TestMetricsKeepOnlyCurrentCoordinationFailureReason(t *testing.T) {
 	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", ReasonPublishLeaseHeld)))
 
-	metrics.ObserveAssignmentFailure("crypto", "cloudnode")
+	metrics.ObserveAssignmentFailure("crypto", "cloudfunction")
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", ReasonPublishLeaseHeld)))
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "cloudnode")))
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "cloudfunction")))
 
 	metrics.ObserveAssignmentSuccess("crypto", 1722772800)
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "cloudnode")))
+	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", "cloudfunction")))
 }
 
 func TestMetricsExposeLowCardinalityFeedDimensions(t *testing.T) {
@@ -183,9 +183,9 @@ func metricLabels(metric *dto.Metric) map[string]string {
 
 func TestMetricsFailureReasonWhitelist(t *testing.T) {
 	require.Equal(t, ReasonPublishLeaseHeld, normalizeAssignmentFailureReason(ReasonPublishLeaseHeld))
-	// 白名单之外（包括已删除的 submit_timeout 与随手写的 publish_lease）一律归为 cloudnode。
-	require.Equal(t, "cloudnode", normalizeAssignmentFailureReason("submit_timeout"))
-	require.Equal(t, "cloudnode", normalizeAssignmentFailureReason("publish_lease"))
+	// 白名单之外（包括已删除的 submit_timeout 与随手写的 publish_lease）一律归为 cloudfunction。
+	require.Equal(t, "cloudfunction", normalizeAssignmentFailureReason("submit_timeout"))
+	require.Equal(t, "cloudfunction", normalizeAssignmentFailureReason("publish_lease"))
 	require.Equal(t, "rules", normalizeAssignmentFailureReason(" rules "))
 }
 
@@ -203,7 +203,7 @@ func TestMetricsFailureSinceTracksTheFirstAppearanceOfTheCurrentReason(t *testin
 	metrics.ObserveAssignmentFailure("crypto", ReasonPublishLeaseHeld)
 	require.Equal(t, float64(1_700_000_000), since())
 	// 原因变化：重新计时。
-	metrics.ObserveAssignmentFailure("crypto", "cloudnode")
+	metrics.ObserveAssignmentFailure("crypto", "cloudfunction")
 	require.Equal(t, float64(1_700_000_180), since())
 	// 其他空间互不影响。
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("stockcn")))
@@ -230,8 +230,8 @@ func TestMetricsRoundOKRestoresHealthAndClearsFailureWithoutTouchingLastSuccess(
 	require.NotPanics(t, func() { (*Metrics)(nil).ObserveAssignmentRoundOK("crypto") })
 }
 
-// fail 调用点用到的每个原因都必须在白名单里：白名单之外的原因会被悄悄归为 cloudnode，
-// Monitor 就会把 Collector 本地数据库、Storage 等故障显示成“CloudNode 服务调用失败”。
+// fail 调用点用到的每个原因都必须在白名单里：白名单之外的原因会被悄悄归为 cloudfunction，
+// Monitor 就会把 Collector 本地数据库、Storage 等故障显示成“FunctionInstance 服务调用失败”。
 func TestEveryFailureReasonUsedByTheReconcilerIsWhitelisted(t *testing.T) {
 	allowed := map[string]bool{}
 	for _, reason := range assignmentFailureReasons {
@@ -257,7 +257,7 @@ func TestEveryFailureReasonUsedByTheReconcilerIsWhitelisted(t *testing.T) {
 			reason, err := strconv.Unquote(literal.Value)
 			require.NoError(t, err)
 			used[reason]++
-			require.Truef(t, allowed[reason], "%s: fail(%q, …) 的原因不在 assignmentFailureReasons 白名单里，会被归为 cloudnode", name, reason)
+			require.Truef(t, allowed[reason], "%s: fail(%q, …) 的原因不在 assignmentFailureReasons 白名单里，会被归为 cloudfunction", name, reason)
 			return true
 		})
 	}

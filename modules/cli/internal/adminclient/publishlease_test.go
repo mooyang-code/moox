@@ -33,7 +33,7 @@ func TestCollectorPublishLeaseLifecycleAndFencePropagation(t *testing.T) {
 	require.Equal(t, "lease-1", lease.LeaseID)
 
 	client.SetCollectorPublishLease(lease)
-	items := client.withPublishFenceToDeployItems([]NodeDeployItem{{NodeID: "node-1", PackageID: "pkg-1"}})
+	items := client.withPublishFenceToDeployItems([]FunctionInstanceDeployItem{{InstanceID: "node-1", PackageID: "pkg-1"}})
 	require.Equal(t, "lease-1", items[0].CollectorPublishLeaseID)
 	require.EqualValues(t, 7, items[0].CollectorPublishFencingToken)
 
@@ -50,10 +50,10 @@ func TestCollectorPublishLeaseLifecycleAndFencePropagation(t *testing.T) {
 	}, methods)
 }
 
-func TestSubmitDeleteNodesCarriesPublishFence(t *testing.T) {
+func TestSubmitDeleteFunctionInstancesCarriesPublishFence(t *testing.T) {
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/admin/cloudnode/SubmitDeleteNodes", r.URL.Path)
+		require.Equal(t, "/api/admin/cloudfunction/SubmitDeleteFunctionInstances", r.URL.Path)
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte("{\"ret_info\":{\"code\":0,\"msg\":\"ok\"},\"job_id\":\"job-1\",\"operation\":3,\"total_count\":1}"))
@@ -62,10 +62,10 @@ func TestSubmitDeleteNodesCarriesPublishFence(t *testing.T) {
 
 	client := collectorTestClient(server)
 	client.SetCollectorPublishLease(&CollectorPublishLease{SpaceID: "crypto", LeaseID: "lease-1", FencingToken: 17})
-	response, err := client.SubmitDeleteNodes(context.Background(), []string{"node-1"})
+	response, err := client.SubmitDeleteFunctionInstances(context.Background(), []string{"node-1"})
 	require.NoError(t, err)
 	require.Equal(t, "job-1", response.JobID)
-	require.Equal(t, "NODE_BATCH_OPERATION_DELETE_NODES", response.Operation)
+	require.Equal(t, "FUNCTION_JOB_OPERATION_DELETE_INSTANCES", response.Operation)
 	require.Equal(t, "lease-1", body["collector_publish_lease_id"])
 	require.EqualValues(t, 17, body["collector_publish_fencing_token"])
 }

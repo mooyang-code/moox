@@ -191,7 +191,7 @@ func buildCoreLocally(ctx context.Context, repository, bin, arch string, log io.
 	if err := run(filepath.Join(repository, "web-host"), "make", "statik"); err != nil {
 		return err
 	}
-	for _, target := range []string{"host-gateway", "hostagent", "admin", "eventbus", "console-proxy", "web-host", "monitor", "collector", "cloudnode", "factor-mgr", "archive-mgr", "strategy"} {
+	for _, target := range []string{"host-gateway", "hostagent", "admin", "eventbus", "console-proxy", "web-host", "monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy"} {
 		if err := run(repository, "bash", filepath.Join(repository, "scripts/build/build.sh"), target); err != nil {
 			return err
 		}

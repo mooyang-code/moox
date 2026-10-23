@@ -59,7 +59,7 @@ func (s *Services) closeGateways() {
 }
 
 // StartBackgroundServices 启动 admin 本地基础服务。
-// 云节点、云函数包和采集管理已拆到独立服务，admin 只保留网关转发和基础管理能力。
+// 云函数实例、云函数包和采集管理已拆到独立服务，admin 只保留网关转发和基础管理能力。
 func StartBackgroundServices(ctx context.Context, cfg *Config) (*Services, error) {
 	log.Info("正在启动后台服务...")
 
@@ -148,7 +148,7 @@ func startBackgroundWorkers(ctx context.Context, services *Services) error {
 	log.Info("[Bootstrap] 正在启动后台服务...")
 	_ = ctx
 	_ = services
-	// CloudNode/Collector 已拆为独立服务，由 admin 网关转发。
+	// FunctionInstance/Collector 已拆为独立服务，由 admin 网关转发。
 	// SSH 直连端点（WebSocket/SFTP 上传下载）通过统一网关 rawhandler（/api/admin/ssh/*）提供。
 
 	log.Info("[Bootstrap] 所有后台服务已启动")
