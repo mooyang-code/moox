@@ -148,3 +148,22 @@ func TestMigrateImportsSCFPlanAndEntryHostNetwork(t *testing.T) {
 	_, err = MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, SCFImport: bad})
 	require.ErrorContains(t, err, "没有主机 nope")
 }
+
+// 旧组件身份 cloudnode 改名为 cloudfunction 之后，[placements] 里的旧名字会让所有命令拒绝配置；migrate 把它改成新名字。
+func TestMigrateRenamesLegacyPlacementComponent(t *testing.T) {
+	text := legacyText(t)
+	require.Contains(t, text, `"cloudfunction"`)
+	text = strings.Replace(text, `"cloudfunction"`, `"cloudnode"`, 1)
+	path, root, keys := migrateFixture(t, text)
+
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "compute-1", RenameTo: "overseas", Write: true})
+	require.NoError(t, err)
+	require.Equal(t, []ComponentRename{{From: "cloudnode", To: "cloudfunction", Changes: 1}}, report.Components)
+	require.True(t, report.Valid && report.Written)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	require.NotContains(t, string(plain), `"cloudnode"`)
+	require.Contains(t, string(plain), `"cloudfunction"`)
+}
