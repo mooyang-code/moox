@@ -89,6 +89,8 @@ type setupFactorPlan struct {
 	Sets        []setupFactorSet
 	Definitions []setupFactorDefinition
 	Members     []setupFactorMember
+	// Warnings 是不阻止初始化但用户应该知道的配置关联问题（例如交易时段市场的保留期估算装不下因子回看根数）。
+	Warnings []string
 }
 
 func (p setupFactorPlan) empty() bool {
@@ -105,6 +107,8 @@ type setupFactorSummary struct {
 	MembersAdded     int  `json:"members_added"`
 	MembersEnabled   int  `json:"members_enabled"`
 	MembersUnchanged int  `json:"members_unchanged"`
+	// Warnings 是配置关联的提醒（例如保留期与因子回看根数），不阻止初始化。
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type setupInitFactor interface {
@@ -219,6 +223,12 @@ func loadSetupFactors(manifest setupconfig.Manifest, repoRoot string) (setupFact
 		}
 		return plan.Members[i].FactorID < plan.Members[j].FactorID
 	})
+	// 保留期必须大于因子的最大回看根数：两处配置是关联的，初始化时核对。
+	errs, warnings := factorRetentionFindings(manifest.StoragePolicy(), plan)
+	if len(errs) > 0 {
+		return plan, fmt.Errorf("config_invalid: %s", joinFindings(errs))
+	}
+	plan.Warnings = warnings
 	return plan, nil
 }
 

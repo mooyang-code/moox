@@ -186,6 +186,7 @@ func runSetupInit(
 		return setupInitSummary{}, err
 	}
 	var factorSummary *setupFactorSummary
+	reportFactorWarnings(factorPlan.Warnings)
 	if !factorPlan.empty() {
 		factorService, openErr := deps.openInitFactor(ctx, snapshot)
 		if openErr != nil {
@@ -199,6 +200,7 @@ func runSetupInit(
 		if closeErr != nil {
 			return setupInitSummary{}, closeErr
 		}
+		appliedSummary.Warnings = factorPlan.Warnings
 		factorSummary = &appliedSummary
 	}
 	adminStatus, err = deps.statusSpaces(ctx, snapshot, bundle.Spaces)
@@ -356,6 +358,7 @@ func newSetupFactorsCommand(deps setupDeps) *cobra.Command {
 				return err
 			}
 			summary := setupFactorSummary{Enabled: !plan.empty(), Definitions: len(plan.Definitions), Members: len(plan.Members)}
+			reportFactorWarnings(plan.Warnings)
 			if !plan.empty() {
 				service, openErr := deps.openInitFactor(cmd.Context(), snapshot)
 				if openErr != nil {
@@ -369,6 +372,7 @@ func newSetupFactorsCommand(deps setupDeps) *cobra.Command {
 				if closeErr != nil {
 					return closeErr
 				}
+				summary.Warnings = plan.Warnings
 			}
 			if err := snapshot.VerifyUnchanged(); err != nil {
 				return fmt.Errorf("config_changed")

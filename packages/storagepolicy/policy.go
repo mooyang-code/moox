@@ -188,25 +188,12 @@ func (p Policy) Coverage() (errs, warnings []string) {
 		if period.Forever {
 			return
 		}
-		f, _ := frequencypkg.Parse(freq)
-		barLength := f.Duration()
-		if barLength == 0 {
-			barLength = 31 * 24 * time.Hour
-		}
-		bars := float64(period.Duration) / float64(barLength)
-		minutes := map[string]float64{"stockcn": 240, "stockhk": 330, "stockus": 390}[space]
-		if minutes > 0 {
-			if barLength < 24*time.Hour {
-				bars *= minutes / (24 * 60) * 5 / 7
-			} else if barLength == 24*time.Hour {
-				bars *= 5.0 / 7
-			}
-		}
+		bars, estimated := barsWithin(period, freq, space)
 		if bars >= float64(normalized.View.Bars) {
 			return
 		}
 		message := fmt.Sprintf("%s = %s provides approximately %.0f bars, fewer than view.bars = %d", path, raw, bars, normalized.View.Bars)
-		if minutes > 0 {
+		if estimated {
 			warnings = append(warnings, message)
 		} else {
 			errs = append(errs, message)
@@ -232,6 +219,50 @@ func (p Policy) Coverage() (errs, warnings []string) {
 		}
 	}
 	return errs, warnings
+}
+
+// barsWithin 估算保留期能装下多少根 bar。7×24 市场按固定速率精确计算；交易时段市场（股票）按日历估算，estimated 为真。
+func barsWithin(period Period, freq, space string) (bars float64, estimated bool) {
+	f, _ := frequencypkg.Parse(freq)
+	barLength := f.Duration()
+	if barLength == 0 {
+		barLength = 31 * 24 * time.Hour
+	}
+	bars = float64(period.Duration) / float64(barLength)
+	minutes := map[string]float64{"stockcn": 240, "stockhk": 330, "stockus": 390}[space]
+	if minutes > 0 {
+		if barLength < 24*time.Hour {
+			bars *= minutes / (24 * 60) * 5 / 7
+		} else if barLength == 24*time.Hour {
+			bars *= 5.0 / 7
+		}
+	}
+	return bars, minutes > 0
+}
+
+// RetentionBars 返回空间 × 频率的保留期大约能装下多少根 bar；永久保留时 forever 为真。
+// 保留期要覆盖 View 的根数，也要大于因子的最大回看根数（引擎要从 Storage 预载这么多历史）。
+func (p Policy) RetentionBars(spaceID, freq string) (bars float64, forever, estimated bool, err error) {
+	period, _, err := p.Retention.Resolve(spaceID, freq)
+	if err != nil {
+		return 0, false, false, err
+	}
+	if period.Forever {
+		return 0, true, false, nil
+	}
+	bars, estimated = barsWithin(period, freq, spaceID)
+	return bars, false, estimated, nil
+}
+
+// MinRetentionFor 返回装下 bars 根 bar 至少需要的保留期（7×24 市场精确，交易时段市场按日历估算折回自然时间），向上取整到整小时。
+func MinRetentionFor(spaceID, freq string, bars int) Period {
+	one, _ := barsWithin(Period{Duration: time.Hour * 24 * 365}, freq, spaceID)
+	if one <= 0 {
+		return Period{}
+	}
+	perYear := time.Hour * 24 * 365
+	need := time.Duration(float64(perYear) * float64(bars) / one)
+	return Period{Duration: (need + time.Hour - 1) / time.Hour * time.Hour}
 }
 
 // normalized validates the policy and renders every period canonically.

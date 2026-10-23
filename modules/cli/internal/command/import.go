@@ -175,6 +175,11 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 	if wantFactor && !opts.DryRun {
 		targets = append(targets, &target.Factor{Endpoint: opts.Engine, AuthVersion: engine.AuthVersion, AccessKey: engine.AccessKey, SecretKey: engine.SecretKey})
 	}
+	if wantStorage && strings.EqualFold(strings.TrimSpace(opts.Format), "csv") {
+		if retention, ok := loadImportRetention(opts.Manifest, opts.Space, opts.Freq); ok {
+			warnImportRetention(os.Stderr, opts.Paths, opts.TimeColumn, opts.Space, opts.Freq, retention, time.Now())
+		}
+	}
 	cps, err := checkpoint.Open(opts.JobDB)
 	if err != nil {
 		return err
