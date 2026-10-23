@@ -28,28 +28,24 @@ v1（2026-10-23，计划稿，尚未实施）。本计划把 CloudNode 的模块
 - `lifecycle_id` 标识该逻辑身份对应的一次资源生命周期，`lifecycle_operation_id` 参与并发变更围栏；不得用实例 ID 或作业 ID 替代它们。
 - Job 表示控制面的管理作业；Item 表示其中一项实例变更。函数调用、采集批次与采集任务实例使用各自的既有模型。
 
-### 1.2 模块名的暂定选择
+### 1.2 已确认的模块名
 
-模块最终使用 `cloudfunction` 还是 `serverless` 尚未明确确认。本稿采用推荐的 **`cloudfunction`** 写出可执行路径和命令；这一选择是计划假设，不能记为用户已确认。
+用户已确认模块名为 **`cloudfunction`**。当前实现直接管理腾讯云 SCF 的函数、代码包、触发器和调用，这个名称与现有职责一致。本文路径、协议与命令统一采用该名称。
 
-当前实现直接管理腾讯云 SCF 的函数、代码包、触发器和调用，因此 `cloudfunction` 更贴合现有职责。若模块要承接更广的 Serverless 资源管理，可选择 `serverless`。选用后者时仅替换下表中的模块身份及相关进程标识，§1.1 的实体和表名保持不变。
-
-| 项目 | 本稿暂定值 | 如选择 serverless |
-| --- | --- | --- |
-| 模块目录/组件 ID/caller | `cloudfunction` | `serverless` |
-| 服务二进制 | `moox-cloudfunction` | `moox-serverless` |
-| schema CLI 二进制 | `moox-cloudfunction-cli` | `moox-serverless-cli` |
-| 协议文件/生成目录 | `cloudfunction.proto` / `cloudfunctiongen` | `serverless.proto` / `serverlessgen` |
-| protobuf package | `trpc.moox.cloudfunction` | `trpc.moox.serverless` |
-| RPC 服务 | `CloudFunctionMgr` | `ServerlessMgr` |
-| 默认 Go 协议包别名 | `cloudfunctionpb` | `serverlesspb` |
-| 数据库文件 | `moox_cloudfunction.db` | `moox_serverless.db` |
-| schema 文件 | `cloudfunction.sql` | `serverless.sql` |
-| 环境变量前缀 | `MOOX_CLOUDFUNCTION_` | `MOOX_SERVERLESS_` |
-| 控制台服务路由 | `/api/admin/cloudfunction/*` | `/api/admin/serverless/*` |
-| 中文模块名称 | 云函数管理 | Serverless 管理 |
-
-实施阶段 0 必须冻结这项选择，并把本文所有暂定路径统一为最终值；随后再执行移动目录与协议生成。
+| 项目 | 确认值 |
+| --- | --- |
+| 模块目录/组件 ID/caller | `cloudfunction` |
+| 服务二进制 | `moox-cloudfunction` |
+| schema CLI 二进制 | `moox-cloudfunction-cli` |
+| 协议文件/生成目录 | `cloudfunction.proto` / `cloudfunctiongen` |
+| protobuf package | `trpc.moox.cloudfunction` |
+| RPC 服务 | `CloudFunctionMgr` |
+| 默认 Go 协议包别名 | `cloudfunctionpb` |
+| 数据库文件 | `moox_cloudfunction.db` |
+| schema 文件 | `cloudfunction.sql` |
+| 环境变量前缀 | `MOOX_CLOUDFUNCTION_` |
+| 控制台服务路由 | `/api/admin/cloudfunction/*` |
+| 中文模块名称 | 云函数管理 |
 
 ### 1.3 实施范围
 
@@ -299,7 +295,7 @@ END;
 
 | 阶段 | 工作 | 依赖 | 阶段完成条件 |
 | --- | --- | --- | --- |
-| 0 | 冻结模块名与边界、刷新基线清单 | 无 | 命名矩阵唯一，暂定项清零，确认相关分支变化 |
+| 0 | 核对已确认命名与边界、刷新基线清单 | 无 | 命名矩阵唯一，确认相关分支变化 |
 | 1 | 移动模块、冻结新 proto 与 schema | 0 | 生成路径正确，目标 schema 可载入，生成包可编译 |
 | 2 | 完成服务内部实例/作业重命名 | 1 | 核心模块及嵌套协议模块测试通过 |
 | 3 | 更新目录、Admin、Collector、CLI | 1、2 | 管理调用与鉴权端到端一致，动态 JSON 与共享载荷边界有回归覆盖 |
@@ -311,7 +307,7 @@ END;
 
 ### 阶段 0：准备与冻结
 
-- [ ] 最终选择 `cloudfunction` 或 `serverless`，更新 §1.2 和全部命令示例。
+- [x] 确认模块名为 `cloudfunction`，统一 §1.2 和全部命令示例。
 - [ ] 核对主线新增协议、schema、部署规则；把基线差异补充到计划，而非重复覆盖近期实现。
 - [ ] 保存旧名称内容与路径清单，标明代码、生成物、当前文档、历史材料和共享 `node_id` 保留项。
 - [ ] 确认本次实施不修改已有云端函数名称、账号 ID、包 ID、实例逻辑 ID 的值。
@@ -362,7 +358,7 @@ END;
 
 ### 阶段 6：文档和制品
 
-- [ ] 当前模块文档改为“云函数管理”或“Serverless 管理”，更新根/模块 README、总体设计表格和 VitePress 导航。
+- [ ] 当前模块文档改为“云函数管理”，更新根/模块 README、总体设计表格和 VitePress 导航。
 - [ ] 现行部署与使用文档更新到新命令；历史故障记录保留原始日志和原名，补充命名对应说明即可。
 - [ ] 本计划的基线旧路径链接在代码移动后改为有效新路径，或改为不含链接的历史路径文字。
 - [ ] 前端构建后再生成 statik，随后构建 web-host，避免页面仍调用旧服务。
@@ -391,7 +387,7 @@ END;
 
 ## 7. 实施后的命令清单
 
-以下命令面向后续代码实施，不代表本次计划编写已执行。默认从仓库根运行，模块名先按 `cloudfunction` 展示；生成需要 `trpc-open`、`protoc`、`protoc-gen-go` 等工具。
+以下命令面向后续代码实施，不代表本次计划编写已执行。默认从仓库根运行，使用已确认的模块名 `cloudfunction`；生成需要 `trpc-open`、`protoc`、`protoc-gen-go` 等工具。
 
 ### 7.1 协议、schema 与局部回归
 
@@ -485,4 +481,4 @@ git diff --check
 - [ ] 现行文档、导航和构建示例可用；历史记录保留其基线语义。
 - [ ] 按仓库要求提交本次改动并推送工作分支，记录 commit、测试结果和尚未进行的发布步骤。
 
-本版进度：阶段 0 的代码盘点与领域模型讨论已完成；模块名待明确，阶段 1～8 均未执行。
+本版进度：阶段 0 的代码盘点、领域模型讨论与模块名确认已完成；代码实施前仍需刷新主线基线，阶段 1～8 均未执行。
