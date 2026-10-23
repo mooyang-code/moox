@@ -72,3 +72,18 @@ func TestEvaluateParamsRoundsIntegersAndSkipsMemberOnFailure(t *testing.T) {
 		t.Fatalf("应说明失败的成员：%v", outcome.Notes)
 	}
 }
+
+// 参数表达式引用的历史列（bars[-1]）缺值的标的不参与统一值与覆盖，不能把缺失读成 0 拉低中位数；上游失败的标的同样不参与。
+func TestEvaluateParamsSkipsSubjectsMissingReferencedColumns(t *testing.T) {
+	program := paramProgram(t, "  fast:\n    window:\n      default: bars[-1].vol\n      per_subject: bars[-1].vol + 1\n")
+	frame := Frame{Universe: []string{"A", "B", "C"}, Rows: map[string]Row{
+		"A": {Values: map[string]float64{"close": 1, "vol": 30}, Previous: map[string]float64{"vol": 30}},
+		"B": {Values: map[string]float64{"close": 1, "vol": 30}},                                          // 新标的，没有上一根
+		"C": {Values: map[string]float64{"close": 1, "vol": 50}, Previous: map[string]float64{"vol": 50}}, // 上游失败
+	}, FailedColumns: map[string]map[string]string{"vol": {"C": FailedSource}}}
+	outcome := EvaluateParams(program, frame, biasDecls)
+	got := outcome.Params["fast"]["window"]
+	if got.Default != 30 || len(got.Overrides) != 1 || got.Overrides["A"] != 31 {
+		t.Fatalf("缺数的标的不应参与：%+v", got)
+	}
+}

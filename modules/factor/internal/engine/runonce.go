@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -85,12 +84,20 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	defer ledger.Close()
 	pipelineConfig.GapSink = ledger
 	runner := pipeline.NewRunner(storage, pipeline.NewStorageData(storage), clock, pipelineConfig)
-	// 诊断计算按这一期的冻结记录取参数（取不到时按默认值，并提示）。诊断进程不持有引擎租约时取冻结记录会被拒绝。
+	// 带可调参数的成员必须按这一期的冻结记录计算。诊断进程不持有引擎租约，读取冻结记录会被管理端拒绝；
+	// 此时用默认参数写正式结果会覆盖按冻结参数算出的值，所以直接拒绝，请改用补算（持有租约的引擎按冻结记录执行）。
 	var intervals map[string][]domain.ParamInterval
-	if managerErr == nil {
-		if intervals, err = manager.ListParamIntervals(ctx, set.Set.SetID, start, start); err != nil {
-			fmt.Fprintf(os.Stderr, "读取冻结参数失败，按默认参数计算：%v\n", err)
+	for _, member := range members {
+		if len(domain.DefaultSnapshot(member.Factor)) == 0 {
+			continue
 		}
+		if managerErr != nil {
+			return pipeline.Outcome{}, fmt.Errorf("成员 %s 带可调参数，需要读取冻结参数，但无法连接因子管理端：%w", member.Alias, managerErr)
+		}
+		if intervals, err = manager.ListParamIntervals(ctx, set.Set.SetID, start, start); err != nil {
+			return pipeline.Outcome{}, fmt.Errorf("成员 %s 带可调参数，读取冻结参数失败，拒绝按默认参数写入正式结果（请改用补算）：%w", member.Alias, err)
+		}
+		break
 	}
 	return recalcexec.NewExecutor(runner, recalcexec.WithClock(clock)).RunChunk(ctx, recalcexec.Selection{
 		Set: set.Set, Members: members, Subjects: subjects, Columns: columns, Intervals: intervals,

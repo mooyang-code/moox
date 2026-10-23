@@ -56,7 +56,7 @@ func EvaluateParams(program *dsl.Program, frame Frame, decls map[string][]dsl.Pa
 		}
 		for _, param := range byMember[alias] {
 			decl, known := findDecl(decls[alias], param.Name)
-			value, note, ok := evaluateParam(param, ids, frame.Rows)
+			value, note, ok := evaluateParam(param, ids, frame.Rows, frame.FailedColumns)
 			if !ok {
 				outcome.Notes = append(outcome.Notes, fmt.Sprintf("成员 %s 的参数 %s 求值失败（%s），本期不提交该成员的参数", alias, param.Name, note))
 				failed = true
@@ -97,7 +97,7 @@ func findDecl(decls []dsl.ParamDecl, name string) (dsl.ParamDecl, bool) {
 
 // evaluateParam 求出一个参数的统一值与覆盖。不引用任何列的表达式只求值一次；引用列的表达式在各标的上求值，
 // 统一值取有效值的中位数。
-func evaluateParam(param dsl.CompiledParam, ids []string, rows map[string]Row) (ParamValue, string, bool) {
+func evaluateParam(param dsl.CompiledParam, ids []string, rows map[string]Row, failed map[string]map[string]string) (ParamValue, string, bool) {
 	value := ParamValue{}
 	constant := len(param.Default.AllColumns()) == 0 && len(param.Default.AllPreviousColumns()) == 0 && len(param.Default.Normalizers) == 0
 	if constant {
@@ -108,7 +108,7 @@ func evaluateParam(param dsl.CompiledParam, ids []string, rows map[string]Row) (
 		}
 		value.Default = number
 	} else {
-		result := evaluateNumeric(param.Default, ids, rows)
+		result := evaluateNumeric(param.Default, usableIDs(param.Default, ids, rows, failed), rows)
 		numbers := make([]float64, 0, len(result.values))
 		for _, id := range ids {
 			if number, ok := result.values[id]; ok {
@@ -121,8 +121,9 @@ func evaluateParam(param dsl.CompiledParam, ids []string, rows map[string]Row) (
 		value.Default = median(numbers)
 	}
 	if param.PerSubject != nil {
-		result := evaluateNumeric(param.PerSubject, ids, rows)
-		for _, id := range ids {
+		usable := usableIDs(param.PerSubject, ids, rows, failed)
+		result := evaluateNumeric(param.PerSubject, usable, rows)
+		for _, id := range usable {
 			number, ok := result.values[id]
 			if !ok || number == value.Default {
 				continue
@@ -134,6 +135,19 @@ func evaluateParam(param dsl.CompiledParam, ids []string, rows map[string]Row) (
 		}
 	}
 	return value, "", true
+}
+
+// usableIDs 去掉表达式引用的列（含 bars[-1] 的历史列）缺值或上游失败的标的：和规则求值一样，缺数的标的不参与，
+// 否则缺失的历史值会被当成 0 算进中位数与截面函数，提交一个错误的参数。
+func usableIDs(expression *dsl.Expression, ids []string, rows map[string]Row, failed map[string]map[string]string) []string {
+	columns, previous := expression.AllColumns(), expression.AllPreviousColumns()
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if missingReason(id, rows[id], columns, previous, failed) == "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func median(values []float64) float64 {

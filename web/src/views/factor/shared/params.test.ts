@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FactorParamDecl, ParamInterval } from "@/api/factor/types";
+import type { FactorParamDecl, ParamInterval, ParamValue } from "@/api/factor/types";
 import { categoryName, describeParam, describeParams, paramsSourceText, paramTimeline, paramValueText } from "./params";
 
 const window: FactorParamDecl = { name: "window", type: "int", min: 2, max: 120, default_value: 20 };
@@ -8,6 +8,9 @@ describe("factor params helpers", () => {
   it("describes declared parameters with type, range and default", () => {
     expect(describeParam(window)).toBe("window（整数，2 ~ 120，默认 20）");
     expect(describeParam({ name: "k", type: "float", min: 0.5, max: 4, default_value: 2 })).toBe("k（小数，0.5 ~ 4，默认 2）");
+    // 后端 ProtoJSON 会省略值为 0 的字段：min、default 为 0 时不能显示 undefined。
+    expect(describeParam({ name: "z", type: "float", max: 5 } as FactorParamDecl)).toBe("z（小数，0 ~ 5，默认 0）");
+    expect(paramValueText({} as ParamValue)).toBe("0");
     expect(describeParams([window, { name: "k", type: "float", min: 0.5, max: 4, default_value: 2 }])).toContain("；");
     expect(describeParams([])).toContain("无");
     expect(describeParams(undefined)).toContain("无");

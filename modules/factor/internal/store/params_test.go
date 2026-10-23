@@ -161,3 +161,34 @@ func TestCleanupParams(t *testing.T) {
 	require.NoError(t, s.db.Raw("SELECT COUNT(*) FROM t_factor_param_snapshots").Scan(&snapshots).Error)
 	require.Equal(t, int64(1), snapshots)
 }
+
+// 每个成员的最后一个区间在清理后仍保留：长期没有冻结之后恢复，沿用的基线不能丢。
+func TestCleanupKeepsLastIntervalOfEachMember(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	_, err := submit(t, s, "r", period(0), 30)
+	require.NoError(t, err)
+	got := freeze(t, s, period(0))
+	require.Equal(t, 30.0, got.Snapshot.Value("window", "BTC"))
+	_, err = s.CleanupParams(ctx, time.Now().Add(time.Hour), map[string]time.Time{"set": period(100)})
+	require.NoError(t, err)
+	intervals, err := s.ListParamIntervals(ctx, "set", "", period(0), period(200))
+	require.NoError(t, err)
+	require.Len(t, intervals, 1)
+	carried := freeze(t, s, period(101))
+	require.Equal(t, domain.ParamsCarried, carried.Source)
+	require.Equal(t, 30.0, carried.Snapshot.Value("window", "BTC"))
+}
+
+// 参数声明在两期之间变过（新增参数）：旧快照缺参数，不能沿用，改回当前声明的默认值。
+func TestFreezeDoesNotCarryAcrossDeclarationChange(t *testing.T) {
+	s := openTestStore(t)
+	first := freeze(t, s, period(0))
+	require.Equal(t, domain.ParamsDefault, first.Source)
+	defaults := domain.ParamSnapshot{"window": {Default: 20}, "k": {Default: 2}}
+	freezes, err := s.FreezeParams(context.Background(), "set", period(1), period(0), []FreezeMember{{Alias: "fast", Defaults: defaults}})
+	require.NoError(t, err)
+	require.Len(t, freezes, 1)
+	require.Equal(t, domain.ParamsDefault, freezes[0].Source)
+	require.Equal(t, 2.0, freezes[0].Snapshot.Value("k", "BTC"))
+}

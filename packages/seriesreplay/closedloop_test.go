@@ -27,7 +27,7 @@ func TestClosedLoopCarriesParamsIntoNextStep(t *testing.T) {
 		}
 		return nil
 	}
-	_, err := r.Run(context.Background(), spec(6))
+	_, err := r.Run(context.Background(), noWrite(spec(6)))
 	require.NoError(t, err)
 	at := func(minute int) string { return t0.Add(time.Duration(minute) * time.Minute).Format(time.RFC3339) }
 	require.Nil(t, f.params[at(0)], "第一期交给因子引擎")
@@ -42,20 +42,34 @@ func TestClosedLoopCarriesParamsIntoNextStep(t *testing.T) {
 	require.Equal(t, window(30), rec.Decision.EffectiveParams)
 }
 
-// 中断后续跑：生效参数随周期记录保存，续跑从上一期记录恢复，不丢参数；写回因子结果时用与求值同一份参数。
+// 中断后续跑：生效参数随周期记录保存，续跑从上一期记录恢复，不丢参数。
 func TestClosedLoopResumeRestoresEffectiveParams(t *testing.T) {
 	r, f, s, tr := newRunner(t)
 	s.next = func(period time.Time) MemberParams { return window(float64(10 + period.Minute())) }
 	tr.failNext = errors.New("trade 暂时不可达")
 	// 第 0 期 Trade 推进失败，第 0 期记录（含生效参数）已落库。
-	_, err := r.Run(context.Background(), spec(3))
+	_, err := r.Run(context.Background(), noWrite(spec(3)))
 	require.Error(t, err)
-	_, err = r.Run(context.Background(), spec(3))
+	_, err = r.Run(context.Background(), noWrite(spec(3)))
 	require.NoError(t, err)
 	at := func(minute int) string { return t0.Add(time.Duration(minute) * time.Minute).Format(time.RFC3339) }
 	require.Equal(t, window(10), f.params[at(1)], "续跑后第 1 期仍带着第 0 期产出的参数")
 	require.Equal(t, window(10), f.params[at(2)])
-	require.Len(t, f.writes, 3)
+}
+
+// noWrite 去掉写回因子结果：调参策略的闭环回放不允许写回（见 TestTunedReplayRejectsWriteFactors）。
+func noWrite(s Spec) Spec {
+	s.WriteFactors = false
+	return s
+}
+
+// 调参策略的闭环回放用的是回放中的参数，写回会让正式结果与冻结记录对不上：拒绝。
+func TestTunedReplayRejectsWriteFactors(t *testing.T) {
+	r, f, s, _ := newRunner(t)
+	s.next = func(time.Time) MemberParams { return window(10) }
+	_, err := r.Run(context.Background(), spec(2))
+	require.ErrorContains(t, err, "write_factors")
+	require.Empty(t, f.writes)
 }
 
 func TestFactorDriftMatchesByMemberAlias(t *testing.T) {
@@ -69,7 +83,7 @@ func TestFactorDriftMatchesByMemberAlias(t *testing.T) {
 func TestRunUsesInstancePrivateFactorSet(t *testing.T) {
 	r, _, s, _ := newRunner(t)
 	s.setID = "fset_i1"
-	omitted := spec(2)
+	omitted := noWrite(spec(2))
 	omitted.SetID = ""
 	run, err := r.Run(context.Background(), omitted)
 	require.NoError(t, err)
@@ -81,7 +95,7 @@ func TestRunUsesInstancePrivateFactorSet(t *testing.T) {
 	require.ErrorContains(t, err, "私有因子集")
 
 	r3, _, _, _ := newRunner(t)
-	missing := spec(2)
+	missing := noWrite(spec(2))
 	missing.SetID = ""
 	_, err = r3.Run(context.Background(), missing)
 	require.ErrorContains(t, err, "set_id")

@@ -373,6 +373,26 @@ func (c *MetricCatalog) FindSeriesAt(ctx context.Context, seriesID, serviceName,
 	return rows, nil
 }
 
+// FindMetricSeriesAfterAt 按 series_id 升序返回一个指标名下 series_id 大于 after 的一页序列（最多 500 条）。
+// 需要读完一个指标的全部序列时，用最后一条的 series_id 作为下一页的 after，直到返回不足一页。
+func (c *MetricCatalog) FindMetricSeriesAfterAt(ctx context.Context, metricName, after string, limit int, now time.Time) ([]MetricSeries, error) {
+	if c == nil || c.messageStore == nil || c.messageStore.db == nil {
+		return nil, ErrMetricsStoreUnavailable
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	var rows []MetricSeries
+	err := c.messageStore.db.WithContext(ctx).Model(&MetricSeries{}).
+		Where("c_metric_name = ? AND c_series_id > ?", metricName, after).
+		Order("c_series_id ASC").Limit(limit).Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	c.markSeriesStaleAt(rows, now)
+	return rows, nil
+}
+
 // FindSeriesByMetricNamesAt applies the finite metric-family filter before the
 // result limit. Doctor uses this to avoid dynamic Dataset series crowding out
 // the small module-level contract.

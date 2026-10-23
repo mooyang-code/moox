@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -54,4 +55,22 @@ func TestBuilderFactorParamsHealthyWhenAlertsClear(t *testing.T) {
 	checks := factorParamChecks(got)
 	require.Equal(t, "healthy", checks["carry"].Status)
 	require.Equal(t, "healthy", checks["offline_freeze"].Status)
+}
+
+// 目录一次最多返回 500 条序列：成员很多时排序靠后的异常成员也要被检查到。
+func TestBuilderFactorParamsReadsAllSeriesPages(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query, _ := openOverviewState(t, func(db *gorm.DB) {
+		for i := 0; i < 500; i++ {
+			seedOverviewMetricForInstance(t, db, fmt.Sprintf("carry-%03d", i), "factor", "factor-mgr@control", "moox_factor_param_carry_alert",
+				fmt.Sprintf(`{"space_id":"crypto","set_id":"fset_a","member":"m%03d"}`, i), 0, now)
+		}
+		seedOverviewMetricForInstance(t, db, "carry-zzz", "factor", "factor-mgr@control", "moox_factor_param_carry_alert",
+			`{"space_id":"crypto","set_id":"fset_a","member":"last"}`, 1, now)
+	})
+	got, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	checks := factorParamChecks(got)
+	require.Equal(t, "down", checks["carry"].Status)
+	require.Contains(t, checks["carry"].Reason, "fset_a/last")
 }

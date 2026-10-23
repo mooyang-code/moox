@@ -145,3 +145,28 @@ func TestFactorSettingsRequireInScopeInstance(t *testing.T) {
 	list, _ := h.service.ListStrategyParamSubmissions(h.ctx, &strategypb.ListStrategyParamSubmissionsReq{InstanceId: "i1"})
 	requireOK(t, int32(list.GetRetInfo().GetCode()), list.GetRetInfo().GetMsg())
 }
+
+// 启用中的实例不能删除，也不能改绑；这些请求被拒绝之前不能动它的私有因子集。
+func TestRejectedDeleteAndRebindKeepFactorSet(t *testing.T) {
+	h := newHarness(t)
+	h.service.Resolver = &tunedResolver{fakeResolver: h.resolver}
+	factors := &factorSetsFake{}
+	h.service.Factors = factors
+	h.createStrategy("s1", tunedDSL)
+	created := h.createInstance("i1", "s1", "view_a", "", true)
+	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
+
+	rejected, _ := h.service.DeleteStrategyInstance(h.ctx, &strategypb.DeleteStrategyInstanceReq{InstanceId: "i1"})
+	requireFail(t, int32(rejected.GetRetInfo().GetCode()), rejected.GetRetInfo().GetMsg(), "先停用")
+	if len(factors.released) != 0 {
+		t.Fatalf("启用中的实例被拒绝删除，不应释放私有因子集：%v", factors.released)
+	}
+
+	h.setEnabled("i1", false)
+	missing, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{
+		InstanceId: "i1", StrategyId: "no-such-strategy", ViewId: "view_b"}})
+	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "不存在")
+	if len(factors.released) != 0 {
+		t.Fatalf("改绑到不存在的策略被拒绝，不应释放私有因子集：%v", factors.released)
+	}
+}

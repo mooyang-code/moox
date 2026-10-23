@@ -140,6 +140,16 @@ func (s *Service) UpdateStrategyInstance(ctx context.Context, req *strategypb.Up
 	updated := current
 	updated.StrategyID = strings.TrimSpace(v.GetStrategyId())
 	updated.ViewID = strings.TrimSpace(v.GetViewId())
+	// 释放旧私有因子集之前先核对所有会让更新失败的条件，避免先破坏因子集、再返回失败。
+	if current.Enabled {
+		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例必须先停用才能修改"))}, nil
+	}
+	if current.SessionID != nil {
+		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例的启用或停用操作尚未完成"))}, nil
+	}
+	if def, err := s.Store.GetDefinition(ctx, updated.StrategyID); err != nil || def.DeletedAt != nil {
+		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("策略定义 %s 不存在", updated.StrategyID))}, nil
+	}
 	if !current.Enabled && (updated.StrategyID != current.StrategyID || updated.ViewID != current.ViewID) {
 		// 改绑策略或 View 后私有因子集的成员或数据源可能不同：先删掉旧的，下次启用重新建立。
 		if err := s.releaseFactorSet(ctx, current.InstanceID); err != nil {
@@ -148,9 +158,6 @@ func (s *Service) UpdateStrategyInstance(ctx context.Context, req *strategypb.Up
 	}
 	updated.LogicalAccountID = optionalString(v.GetLogicalAccountId())
 	updated.UpdatedAt = s.nowTime()
-	if def, err := s.Store.GetDefinition(ctx, updated.StrategyID); err != nil || def.DeletedAt != nil {
-		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("策略定义 %s 不存在", updated.StrategyID))}, nil
-	}
 	if err := s.Store.UpdateInstance(ctx, updated); err != nil {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
 	}
@@ -233,6 +240,15 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 	defer unlock()
 	if instance.SpaceID != scoped {
 		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
+	}
+	// 持锁后先核对实例状态：启用中或启停尚未完成的实例不能删，此时不能动它的私有因子集。
+	if instance.DeletedAt == nil {
+		if instance.Enabled {
+			return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(errors.New("实例必须先停用才能删除"))}, nil
+		}
+		if instance.SessionID != nil {
+			return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(errors.New("实例的停用操作尚未完成，请稍后再删除"))}, nil
+		}
 	}
 	// 先删私有因子集（幂等）：失败时实例保持原样，可以重试；实例软删除之后就没有入口再清理它了。
 	if err := s.releaseFactorSet(ctx, instance.InstanceID); err != nil {

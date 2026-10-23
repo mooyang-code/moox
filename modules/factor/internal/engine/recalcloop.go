@@ -88,14 +88,6 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 	set := job.Set
 	// 补算任务自带定义，领取时现场编译（设计 8）。
 	set.Members = CompileMembers(set.Members)
-	// 补算按冻结记录计算（因子动态调参执行计划 2.7）：领取时取整个窗口的冻结区间，执行器按参数段切块。
-	var intervals map[string][]domain.ParamInterval
-	if l.params != nil {
-		var err error
-		if intervals, err = l.params.Intervals(ctx, set.Set.SetID, job.Window.Start, job.Window.End); err != nil {
-			return fmt.Errorf("read frozen params: %w", err)
-		}
-	}
 	lastNote := ""
 	report := func(ctx context.Context, progress time.Time, outcome pipeline.Outcome) (bool, error) {
 		status := jobStatusRunning
@@ -125,6 +117,14 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 		columns, err := l.source.DatasetColumns(ctx, set.Set.SpaceID, set.Set.SourceDatasetID)
 		if err != nil {
 			return recalcexec.Selection{}, fmt.Errorf("list source dataset columns: %w", err)
+		}
+		// 补算按冻结记录计算（因子动态调参执行计划 2.7）。冻结区间在每个分块持锁后重新读取：补算期间实时线程可能
+		// 又冻结了新的期次，用任务开始时的旧区间会把它们当成“没有冻结记录”而错用沿用的参数。
+		var intervals map[string][]domain.ParamInterval
+		if l.params != nil {
+			if intervals, err = l.params.Intervals(ctx, set.Set.SetID, job.Window.Start, job.Window.End); err != nil {
+				return recalcexec.Selection{}, fmt.Errorf("read frozen params: %w", err)
+			}
 		}
 		return recalcexec.Selection{Set: set.Set, Members: set.Members, Subjects: subjects, Columns: columns, Intervals: intervals}, nil
 	}

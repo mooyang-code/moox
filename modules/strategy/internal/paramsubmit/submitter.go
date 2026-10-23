@@ -22,6 +22,7 @@ const (
 	DefaultMaxAge     = time.Hour
 	DefaultMaxBackoff = 30 * time.Second
 	initialBackoff    = time.Second
+	pausedRecheck     = 10 * time.Second
 	submissionTimeout = 10 * time.Second
 )
 
@@ -109,9 +110,6 @@ func (s *Submitter) finish(ctx context.Context, submission store.ParamSubmission
 }
 
 func (s *Submitter) deliver(ctx context.Context, submission store.ParamSubmission) error {
-	if s.Allowed != nil && !s.Allowed(submission.InstanceID) {
-		return nil
-	}
 	// 实例停用、换了会话或已删除后，旧的参数不再有意义：放弃，不去影响私有因子集。
 	instance, err := s.Store.GetInstance(ctx, submission.InstanceID)
 	if err != nil || !instance.Enabled || instance.DeletedAt != nil || instance.SessionID == nil || *instance.SessionID != submission.SessionID {
@@ -122,6 +120,10 @@ func (s *Submitter) deliver(ctx context.Context, submission store.ParamSubmissio
 	}
 	if s.now().Sub(submission.PeriodTime) > s.maxAge() {
 		return s.finish(ctx, submission, store.ParamAbandoned, []input.MemberSubmitResult{{Result: store.ParamAbandoned, Reason: "超过重试期限仍没有得到结果"}})
+	}
+	// 暂停（模块或实例）时不提交，因子沿用上一期；推迟扫描，避免暂停实例的积压记录占满每批的前几条，挡住其他实例的投递。
+	if s.Allowed != nil && !s.Allowed(submission.InstanceID) {
+		return s.Store.DeferParamSubmission(ctx, submission.RequestID, s.now().Add(pausedRecheck), s.now())
 	}
 	members := map[string]map[string]input.ParamValue{}
 	if err := json.Unmarshal(submission.ParamsJSON, &members); err != nil {

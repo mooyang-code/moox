@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
@@ -181,15 +183,30 @@ func (s *Service) FreezeParams(ctx context.Context, setIDs []string, period time
 // ApplyOfflineFreezes 合并引擎离线冻结的期次，返回管理端已有不同记录的期次（引擎据此重算）。
 func (s *Service) ApplyOfflineFreezes(ctx context.Context, freezes []domain.ParamFreeze) ([]domain.ParamFreeze, error) {
 	sets := map[string]domain.FactorSet{}
+	gone := map[string]bool{}
 	for _, freeze := range freezes {
-		if _, ok := sets[freeze.SetID]; ok {
+		if _, ok := sets[freeze.SetID]; ok || gone[freeze.SetID] {
 			continue
 		}
 		set, err := s.db.GetSet(ctx, freeze.SetID)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// 补报前集合已被删除或释放：这些期次不会再有人用，丢弃，不能让它们卡住其他集合的补报。
+			gone[freeze.SetID] = true
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
 		sets[freeze.SetID] = set
+	}
+	if len(gone) > 0 {
+		kept := make([]domain.ParamFreeze, 0, len(freezes))
+		for _, freeze := range freezes {
+			if !gone[freeze.SetID] {
+				kept = append(kept, freeze)
+			}
+		}
+		freezes = kept
 	}
 	var previousErr error
 	conflicts, err := s.db.ApplyOfflineFreezes(ctx, freezes, func(period time.Time) time.Time {

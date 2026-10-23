@@ -79,6 +79,11 @@ func (r *Runner) Run(ctx context.Context, spec Spec) (Run, error) {
 	if spec.SetID == "" {
 		return Run{}, errors.New("set_id 是必填项（实例没有声明 factors 时要指定计算因子帧的因子集合）")
 	}
+	// 闭环回放用的是回放里策略逐期产出的参数，正式结果数据集里的值依据的是冻结记录：写回会让结果与冻结记录对不上
+	// （后续补算又会按冻结记录改回去），所以调参策略的回放不写回因子结果。
+	if spec.WriteFactors && (binding.FactorSetID != "" || binding.Tuned) {
+		return Run{}, fmt.Errorf("实例 %s 的策略会逐期调整因子参数，闭环回放用的是回放中的参数，不能写回因子结果（去掉 write_factors）", spec.InstanceID)
+	}
 	run, created, err := r.Store.CreateRun(spec, 0)
 	if err != nil {
 		return Run{}, err

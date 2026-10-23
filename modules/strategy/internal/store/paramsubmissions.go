@@ -143,6 +143,14 @@ func (s *Store) RetryParamSubmission(ctx context.Context, requestID string, next
 	`, next.UTC(), at.UTC(), requestID).Error
 }
 
+// DeferParamSubmission 把一条待提交参数推迟到 next 再看，不计一次尝试（模块或实例暂停时用）。
+func (s *Store) DeferParamSubmission(ctx context.Context, requestID string, next, at time.Time) error {
+	return s.db.WithContext(ctx).Exec(`
+		UPDATE t_strategy_param_submissions SET c_next_attempt = ?, c_mtime = ?
+		WHERE c_request_id = ? AND c_status = 'pending'
+	`, next.UTC(), at.UTC(), requestID).Error
+}
+
 // ListParamSubmissions 返回实例最近的参数提交记录（按目标期次倒序）。
 func (s *Store) ListParamSubmissions(ctx context.Context, instanceID string, limit int) ([]ParamSubmission, error) {
 	if limit <= 0 || limit > 500 {

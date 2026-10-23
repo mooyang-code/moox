@@ -179,3 +179,23 @@ func TestSubmitterAbandonsAndHonorsPause(t *testing.T) {
 		t.Fatalf("实例停用应放弃：%+v", got)
 	}
 }
+
+// 暂停的记录被推迟扫描（不占每批的前几条，不计失败次数）；恢复后到了时间照常提交。
+func TestSubmitterDefersPausedRecords(t *testing.T) {
+	db, submitter, fake := harness(t)
+	submitter.Allowed = func(string) bool { return false }
+	if n, err := submitter.RunOnce(context.Background()); err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	submitter.Allowed = nil
+	if n, _ := submitter.RunOnce(context.Background()); n != 0 {
+		t.Fatalf("推迟期间不应再被扫到：%d", n)
+	}
+	if got := status(t, db); got.Attempts != 0 {
+		t.Fatalf("推迟不计尝试：%+v", got)
+	}
+	submitter.Now = func() time.Time { return now.Add(pausedRecheck + time.Second) }
+	if n, err := submitter.RunOnce(context.Background()); err != nil || n != 1 || len(fake.calls) != 1 {
+		t.Fatalf("恢复后应提交：n=%d err=%v calls=%d", n, err, len(fake.calls))
+	}
+}

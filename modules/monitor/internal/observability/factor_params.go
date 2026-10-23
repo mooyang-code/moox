@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
 )
 
 // factorOfflineFreezeWindow 是“引擎离线冻结参数”的告警窗口：最近这段时间内出现过就告警。
@@ -56,9 +58,18 @@ func (b Builder) buildFactorParamHealth(ctx context.Context, spaceID string, now
 
 // factorParamSeries 读取一个指标的全部序列，按空间收集满足 alert 的序列描述；seen 是出现过序列的空间。
 func (b Builder) factorParamSeries(ctx context.Context, spaceID string, now time.Time, metric string, alert func(float64, map[string]string) (string, bool), describe func(map[string]string) string) (map[string][]string, map[string]bool, error) {
-	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", metric, "", 2000, now)
-	if err != nil {
-		return nil, nil, err
+	// 目录一次最多返回 500 条：按 series_id 翻页读完整个指标，成员很多时排序靠后的异常成员也要参与检查。
+	var series []monmetrics.MetricSeries
+	for after := ""; ; {
+		page, err := b.Metrics.Catalog().FindMetricSeriesAfterAt(ctx, metric, after, 500, now)
+		if err != nil {
+			return nil, nil, err
+		}
+		series = append(series, page...)
+		if len(page) < 500 {
+			break
+		}
+		after = page[len(page)-1].SeriesID
 	}
 	alerts, seen := map[string][]string{}, map[string]bool{}
 	for _, item := range series {

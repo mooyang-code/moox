@@ -227,11 +227,9 @@ function openResults() {
   if (binding.value) void router.push({ path: "/factor/results", query: { set: binding.value.setId } });
 }
 
-watch(
-  () => [props.instance.instance_id, props.instance.session_id],
-  () => void load(),
-  { immediate: true }
-);
+// 多源 watch 按每个源逐个比较：父页面每 10 秒整体替换实例对象时，实例与会话没变就不重新加载，
+// 否则会把用户还没保存的外显设置覆盖掉（单个返回新数组的 getter 每次都会判为变化）。
+watch([() => props.instance.instance_id, () => props.instance.session_id], () => void load(), { immediate: true });
 </script>
 
 <style scoped>

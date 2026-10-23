@@ -231,6 +231,10 @@ func freezeMember(tx *gorm.DB, setID string, member FreezeMember, period, previo
 		if err != nil {
 			return domain.ParamFreeze{}, err
 		}
+		// 成员的参数声明在两期之间变过（增删参数），旧快照缺参数或多参数，不能再沿用：改回当前声明的默认值。
+		if ok && !sameParamNames(last.Snapshot, member.Defaults) {
+			ok = false
+		}
 		if ok {
 			// 从未提交过时沿用的仍是默认值，来源记为 default（连续沿用的告警只看真正提交过之后的沿用）。
 			freeze.Snapshot, freeze.Source = last.Snapshot, domain.ParamsCarried
@@ -254,6 +258,19 @@ func freezeMember(tx *gorm.DB, setID string, member FreezeMember, period, previo
 		}
 	}
 	return freeze, nil
+}
+
+// sameParamNames 判断两份快照的参数名集合是否一致。
+func sameParamNames(a, b domain.ParamSnapshot) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name := range a {
+		if _, ok := b[name]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func latestAcceptedRequest(tx *gorm.DB, setID, alias string, period time.Time) (*domain.ParamRequest, error) {
@@ -453,7 +470,11 @@ func (s *Store) CleanupParams(ctx context.Context, requestsBefore time.Time, fre
 			if before.IsZero() {
 				continue
 			}
-			result := tx.Exec(`DELETE FROM t_factor_param_freezes WHERE c_set_id = ? AND c_end_period < ?`, setID, before.Unix())
+			// 每个成员的最后一个区间始终保留：长期停用或引擎停摆后恢复，沿用的基线不能丢。
+			result := tx.Exec(`DELETE FROM t_factor_param_freezes WHERE c_set_id = ? AND c_end_period < ?
+				AND c_end_period < (SELECT MAX(f2.c_end_period) FROM t_factor_param_freezes f2
+					WHERE f2.c_set_id = t_factor_param_freezes.c_set_id AND f2.c_member_alias = t_factor_param_freezes.c_member_alias)`,
+				setID, before.Unix())
 			if result.Error != nil {
 				return result.Error
 			}
