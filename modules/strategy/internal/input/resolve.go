@@ -129,6 +129,9 @@ func Resolve(ctx context.Context, client Client, spaceID, viewID string, strateg
 		binding := ColumnBinding{Source: SourceDataset}
 		if member, factorID := factorColumnIdentity(column.Attributes); member != "" {
 			binding = ColumnBinding{Source: SourceFactor, Member: member, FactorID: factorID, FactorOutput: strings.TrimSpace(column.Attributes["factor_output"])}
+			if strings.TrimSpace(column.Attributes["column_kind"]) == "param" {
+				binding.Param = strings.TrimSpace(column.Attributes["param_name"])
+			}
 			hash, ok := resolved.Factors[member]
 			if !ok {
 				if hash, ok = hashes[factorID]; !ok {
@@ -322,14 +325,14 @@ func retentionBars(retention, calendar, bar string) (int, bool) {
 	return int((time.Duration(hours) * time.Hour) / duration), true
 }
 
-// factorColumnIdentity 返回因子列的成员别名与定义 ID：成员别名取 member_alias（共享集合的成员别名就是定义 ID），
-// 定义 ID 取 factor_id；不是因子列时别名为空。
+// factorColumnIdentity 返回因子列（输出列或参数列）的成员别名与定义 ID：成员别名取 member_alias（共享集合的成员别名就是
+// 定义 ID），定义 ID 取 factor_id；不是因子列时别名为空。
 func factorColumnIdentity(attributes map[string]string) (string, string) {
 	member := strings.TrimSpace(attributes["member_alias"])
 	if member == "" {
 		member = strings.TrimSpace(attributes["origin_factor_id"])
 	}
-	if member == "" || strings.TrimSpace(attributes["column_kind"]) == "param" {
+	if member == "" {
 		return "", ""
 	}
 	factorID := strings.TrimSpace(attributes["factor_id"])

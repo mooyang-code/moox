@@ -174,8 +174,10 @@ type Client interface {
 
 // ColumnBinding 是一个被引用列的来源。因子列以成员别名标识（同一定义可以用不同别名出现多次），FactorID 是它引用的定义。
 type ColumnBinding struct {
-	Source         string `json:"source"`
-	Member         string `json:"member,omitempty"`
+	Source string `json:"source"`
+	Member string `json:"member,omitempty"`
+	// Param 非空表示这一列是成员的参数列（这一期这个标的实际用的参数值），值为参数名；否则是因子输出列。
+	Param          string `json:"param,omitempty"`
 	FactorID       string `json:"factor_id,omitempty"`
 	FactorOutput   string `json:"factor_output,omitempty"`
 	DefinitionHash string `json:"definition_hash,omitempty"`

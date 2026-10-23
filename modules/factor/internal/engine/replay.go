@@ -663,6 +663,7 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 		states[alias] = ReplayFactorState{Status: state.Status, FactorID: state.FactorID, DefinitionHash: state.DefinitionHash,
 			FailedSubjects: state.FailedSubjects, ParamsSource: state.ParamsSource, ParamsDigest: state.ParamsDigest}
 	}
+	addParamValues(values, s.set.Members, universe, params)
 	result := &replayPeriod{values: values, states: states, digest: digest}
 	s.cache[period.Unix()] = result
 	return result, plan, computation, nil
@@ -798,4 +799,32 @@ func uniqueStrings(in []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// addParamValues 把这一期各标的实际用的参数值并进因子帧（成员 → 参数列名 → 值）：与实时结果里的参数列一致，
+// 策略回放读 <别名>__<参数名> 拿到的是这一期真正生效的参数。
+func addParamValues(values pipeline.FactorValues, members []domain.MemberDef, universe []string, params map[string]domain.ParamFreeze) {
+	for _, member := range members {
+		freeze, ok := params[member.Alias]
+		names, columns := member.ParamNames(), member.ParamColumns()
+		for _, subject := range universe {
+			bySubject := values[subject]
+			if bySubject == nil {
+				bySubject = map[string]map[string]float64{}
+				values[subject] = bySubject
+			}
+			byMember := bySubject[member.Alias]
+			if byMember == nil {
+				byMember = map[string]float64{}
+				bySubject[member.Alias] = byMember
+			}
+			for i, name := range names {
+				if ok {
+					byMember[columns[i]] = freeze.Snapshot.Value(name, subject)
+				} else if declared := domain.DefaultSnapshot(member.Factor); declared != nil {
+					byMember[columns[i]] = declared.Value(name, subject)
+				}
+			}
+		}
+	}
 }

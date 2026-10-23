@@ -8,7 +8,8 @@ import "encoding/json"
 // Spec 是一次回放的规格。
 type Spec struct {
 	ReplayID string `json:"replay_id"`
-	// SetID 是计算因子帧的因子集合，InstanceID 是提供策略定义与数据源绑定的策略实例。
+	// SetID 是计算因子帧的因子集合，InstanceID 是提供策略定义与数据源绑定的策略实例。实例声明了 factors 时因子集合就是
+	// 实例的私有因子集：SetID 可以省略（取实例的），写了必须与实例的一致。
 	SetID      string `json:"set_id"`
 	InstanceID string `json:"instance_id"`
 	// From、To 是回放区间（RFC3339，左闭右开），决策周期是 data_time 落在其中的每一根 K 线。
@@ -50,8 +51,9 @@ type FactorOpenRequest struct {
 	AllowShortWarmup bool `json:"allow_short_warmup,omitempty"`
 }
 
-// FactorInfo 是回放固定下来的一个因子。
+// FactorInfo 是回放固定下来的一个因子成员。Member 是成员别名（同一定义可以用不同别名出现多次，参数各自调整）。
 type FactorInfo struct {
+	Member         string   `json:"member,omitempty"`
 	FactorID       string   `json:"factor_id"`
 	DefinitionHash string   `json:"definition_hash"`
 	Outputs        []string `json:"outputs"`
@@ -85,7 +87,19 @@ type FactorStepRequest struct {
 	Period        string   `json:"period"`
 	SourceColumns []string `json:"source_columns,omitempty"`
 	WriteFactors  bool     `json:"write_factors,omitempty"`
+	// Params 是闭环回放这一期各成员的参数快照（成员别名 → 参数名 → 取值），由上一期的策略求值产出；没有的成员由因子引擎
+	// 按冻结记录或默认值计算。
+	Params MemberParams `json:"params,omitempty"`
 }
+
+// ParamValue 是一个参数一期的取值：统一值加按标的覆盖。
+type ParamValue struct {
+	Default   float64            `json:"default"`
+	Overrides map[string]float64 `json:"overrides,omitempty"`
+}
+
+// MemberParams 是各成员的完整参数快照：成员别名 → 参数名 → 取值。
+type MemberParams map[string]map[string]ParamValue
 
 // FactorSubject 是一个标的本期的因子帧。
 type FactorSubject struct {
@@ -132,6 +146,9 @@ type StrategyBinding struct {
 	Factors       map[string]string `json:"factors"`
 	SourceColumns []string          `json:"source_columns"`
 	PreviousDepth int               `json:"previous_depth"`
+	// FactorSetID 是声明了 factors 的实例的私有因子集；Tuned 为真表示策略逐期输出下一期的因子参数（闭环回放）。
+	FactorSetID string `json:"factor_set_id,omitempty"`
+	Tuned       bool   `json:"tuned,omitempty"`
 }
 
 // StrategyEvaluateRequest 是 POST /v1/replay/evaluate 的请求体。
@@ -171,6 +188,11 @@ type StrategyDecision struct {
 	Summary    json.RawMessage  `json:"summary,omitempty"`
 	BarEnd     string           `json:"bar_end"`
 	DSLHash    string           `json:"dsl_hash"`
+	// NextParams 是策略这一期求出的下一期因子参数（只含求出参数的成员）；回放服务把它并进生效参数，下一期交给因子引擎。
+	NextParams MemberParams `json:"next_params,omitempty"`
+	// EffectiveParams 是到本期为止生效的参数：回放服务把 NextParams 按成员并入上一期的生效参数后保存，
+	// 没有求出参数的成员沿用上一期（缺值沿用），续跑时据此恢复。
+	EffectiveParams MemberParams `json:"effective_params,omitempty"`
 }
 
 // ---------------------------------------------------------------- Trade
