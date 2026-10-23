@@ -6,7 +6,7 @@
 
 | 文档 | 当前阅读方式 |
 | --- | --- |
-| [CloudNode 云函数领域重命名执行计划](CloudNode云函数领域重命名执行计划.md) | 执行计划 v1（2026-10-23，尚未实施）：模块名已确认 `cloudfunction`；区分代码包 `FunctionPackage`、函数实例 `FunctionInstance` 与管理作业 `FunctionJob/Item`；实例表改为 `t_cloud_function_instances`，作业表使用 `t_cloud_function_jobs` / `t_cloud_function_job_items`，账号与代码包表保留；覆盖协议、持久化、调用方、鉴权、前端、部署、监控和验收 |
+| [CloudNode 云函数领域重命名执行计划](CloudNode云函数领域重命名执行计划.md) | 执行计划 v2（2026-10-23，尚未实施）：模块名已确认 `cloudfunction`；区分代码包 `FunctionPackage`、函数实例 `FunctionInstance` 与管理作业 `FunctionJob/Item`；实例表改为 `t_cloud_function_instances`，作业表使用 `t_cloud_function_jobs` / `t_cloud_function_job_items`，账号与代码包表保留，索引与触发器按基准命名；删除无调用方的 `UpdateNode`、同步 `BatchDeleteNodes` 及遗留字段，`biz_type` 统一为 `workload_type`；覆盖协议、持久化、调用方、鉴权、前端、部署、监控、验收与已有环境的离线转换 |
 | [策略模块评审与设计](策略模块评审与设计.md) | 重建前的问题与目标；DSL、实例、会话、结果、回放已经实现，现状见[策略](../模块/策略.md) |
 | [策略模块执行计划](策略模块执行计划.md) | 历史实施清单，不再整体标为待编码；逐项验收需结合其记录基线 |
 | [数据保留与配置发布](数据保留与配置发布.md) | 策略、清理和配置命令已实现；原生发布布局与旧配置发布仍需统一 |
