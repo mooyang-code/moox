@@ -812,8 +812,9 @@ func sourceColumns(columns []storageio.ColumnInfo) []domain.SourceColumn {
 	return out
 }
 
-// 结果列的属性：列归属的成员（origin_factor_id 与 member_alias 都是成员别名）、定义 ID、分类，以及列是输出值还是
-// 参数取值。Storage 要求列的 origin_id 与 factor_output 都等于列名（同一数据集里每个来源只对应一列）。
+// 结果列的属性：列归属的成员（member_alias）、定义 ID、分类，以及列是输出值还是参数取值。Storage 要求因子结果列的
+// origin_id、origin_factor_id 与 factor_output 都等于列名（同一数据集里每个来源只对应一列），所以成员与定义信息
+// 放在 member_alias、factor_id 属性里。
 const (
 	ColumnKindOutput = "output"
 	ColumnKindParam  = "param"
@@ -830,7 +831,7 @@ func appendFactorColumns(columns []storageio.ColumnInfo, members ...domain.Membe
 		}
 		seen[column] = struct{}{}
 		attributes := map[string]string{
-			"display_name": column, "factor_output": column, "origin_factor_id": member.Alias,
+			"display_name": column, "factor_output": column, "origin_factor_id": column,
 			"member_alias": member.Alias, "factor_id": member.Factor.FactorID, "category_id": member.Factor.CategoryID,
 			"column_kind": kind,
 		}
