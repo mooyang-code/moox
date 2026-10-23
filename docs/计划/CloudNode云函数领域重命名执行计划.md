@@ -1,12 +1,12 @@
 # CloudNode 云函数领域重命名执行计划
 
-v3（2026-10-23，实施中）。本计划把 CloudNode 的模块身份、云函数实例模型与异步管理作业统一命名，并保持云函数代码包、函数实例和单次调用的概念独立。
+v3（2026-10-23，已实施并发布）。本计划把 CloudNode 的模块身份、云函数实例模型与异步管理作业统一命名，并保持云函数代码包、函数实例和单次调用的概念独立。
 
 v2 相对 v1 的变化：消除 `function_type` 撞名；删除无调用方的 `UpdateNode`、同步 `BatchDeleteNodes` 及遗留字段；`biz_type` 统一为 `workload_type`；写出全部请求/响应类型名；前端目录改为 `cloud-function/` 下分实例与代码包；schema 索引和触发器按基准命名；定下默认函数名前缀与模块文档文件名；补全残留扫描范围、断链检查、提交拆分和已有环境的离线转换草稿。
 
 代码基线：`origin/main@3da2faedc979fab121f01e6278acc24c56cba5cf`。计划所在分支：`codex/cloudnode-naming-review`。实施前重新核对主线变化，以下文件和接口清单以此基线为准。
 
-用户已授权按计划编码、独立 Agent 审查、编译并发布正式环境；正式环境是未上线的新项目，允许重置数据，不实现旧协议兼容和数据迁移。现行行为见[云节点模块文档](../模块/云函数管理.md)，现行协议见 [cloudnode.proto](../../modules/cloudfunction/proto/cloudfunction.proto)，现行表结构见 [cloudnode.sql](../../modules/cloudfunction/schema/cloudfunction.sql)。
+用户已授权按计划编码、独立 Agent 审查、编译并发布正式环境；正式环境是未上线的新项目，允许重置数据，不实现旧协议兼容和数据迁移。现行行为见[云函数管理模块文档](../模块/云函数管理.md)，现行协议见 [cloudfunction.proto](../../modules/cloudfunction/proto/cloudfunction.proto)，现行表结构见 [cloudfunction.sql](../../modules/cloudfunction/schema/cloudfunction.sql)。
 
 ## 1. 决策状态与目标
 
@@ -420,9 +420,9 @@ END;
 
 - [x] `gateway_client.caller`、`caller-cloudfunction.key`、组件 ID、二进制和模块路径一致。
 - [x] 健康检查 `11411`、原生 tRPC `11401` 等现有端口及 960 秒 RPC 预算保持，改名不分配新端口。
-- [ ] 重生成 unit package、caller 身份包和主机网关配置，审查各主机目录版本变化后更新黄金摘要。
-- [ ] 重建并更新所有接收该目录的 `host-gateway` 二进制。网关用编译时内嵌 catalog 校验快照中的全部服务，旧二进制会拒绝包含新服务名的整份目录；只更新配置或只更新 control 主机均不充分。
-- [ ] 按内嵌 servicecatalog 的直接及传递依赖核对制品集合，包含管理 CLI、运行管理工具、Admin、Access、Monitor 和 gatewayclient 消费者；发布使用同一提交生成的整套制品。
+- [x] 重生成 unit package、caller 身份包和主机网关配置，审查各主机目录版本变化后更新黄金摘要。
+- [x] 重建并更新所有接收该目录的 `host-gateway` 二进制。网关用编译时内嵌 catalog 校验快照中的全部服务，旧二进制会拒绝包含新服务名的整份目录；只更新配置或只更新 control 主机均不充分。
+- [x] 按内嵌 servicecatalog 的直接及传递依赖核对制品集合，包含管理 CLI、运行管理工具、Admin、Access、Monitor 和 gatewayclient 消费者；发布使用同一提交生成的整套制品。
 - [x] 修改新服务环境变量、默认 DB 文件、数据目录与 doctor 配置路径。
 - [x] 修改模块健康 ID、`moox_cloudnode_*` 指标前缀以及 Collector/Monitor 成对使用的 `reason=cloudnode`。
 - [x] E2E 环境变量、默认数据库路径和直接查询 SQL 同步。
@@ -461,7 +461,7 @@ END;
 
 ## 7. 实施后的命令清单
 
-以下命令面向后续代码实施，不代表本次计划编写已执行。默认从仓库根运行；生成需要 `trpc-open`、`protoc`、`protoc-gen-go` 等工具。
+以下命令是实施与复核入口，本次执行结果见 §11。默认从仓库根运行；生成需要 `trpc-open`、`protoc`、`protoc-gen-go` 等工具。
 
 ### 7.1 协议、schema 与局部回归
 
@@ -560,9 +560,9 @@ git diff --check
 - [x] 所有模块 schema 均可载入空 SQLite，完整性和外键检查通过。
 - [x] 新协议生成物、前端嵌入物与源码一致；旧名残留与文档断链已按清单审查。
 - [x] 现行文档、导航和构建示例可用；历史记录保留其基线语义。
-- [ ] 按仓库要求提交本次改动并推送工作分支，记录 commit、测试结果和尚未进行的发布步骤。
+- [x] 按仓库要求提交本次改动并推送工作分支，记录 commit、测试和正式环境验收结果。
 
-本版进度：已刷新主线，代码基线仍为 `3da2faed`；阶段 0～6 的代码与文档实施已完成，已完成独立 Agent 审查及问题修复。正在收尾全量验证、生成一致性检查及正式环境发布；具体结果见实施记录。
+本版进度：代码实施、独立 Agent 审查、全量验证和正式环境发布均完成。云函数整套制品提交为 `df39c005`（含已有生产分支 `b875e7ff`），验收期间补齐的 Storage 约束修复制品为 `98404dd7`；具体结果见实施记录。
 
 ## 10. 评审记录
 
@@ -570,8 +570,9 @@ git diff --check
 | --- | --- | --- |
 | 2026-10-23 | 对照基线代码审查 v1 | 提出 6 项必须修改、6 项建议补充，已全部纳入 v2（见文首的 v2 变化说明） |
 | 2026-10-23 | Codex 只读审查 v2（提交 `bec9d979`，模型 gpt-6-astra） | 对照仓库代码核对现状事实、命名映射与删除项、阶段依赖、验证矩阵和 §8 转换草稿，只报会导致实施失败或丢数据的问题；结论为“可以定稿”，无修改意见 |
-
 | 2026-10-23 | 实施后独立 Agent 代码审查 | 发现 CLI 出口探针误改共享主机/进程身份，以及 Job 唯一索引命名遗漏；均已修复，新增身份字段回归用例。复核协议、生成物、动态 JSON、恢复与 GC、Web、ACL、部署身份后，无未修复的 P1/P2 问题。 |
+| 2026-10-23 | 最终合并版本独立 Agent 复审 | 动态参数分支独有的 278 个文件保持与生产提交一致，共同修改的 ACL/Catalog/Monitor 保留双方功能；control 测试夹具的 192 条路由及黄金摘要正确，statik 内 319 个文件与前端产物逐字节一致，无未修复的 P1/P2 问题。 |
+| 2026-10-23 | Storage 约束修复独立 Agent 复审 | 已复现并修复同成员输出与参数列的唯一约束冲突；部分索引、Schema v14、真实 SQLite/Storage 回归测试及相关文档复核通过，无未修复的 P1/P2 问题。 |
 
 ## 11. 实施记录
 
@@ -579,9 +580,9 @@ git diff --check
 - 代码包保持 `FunctionPackage` 与 `t_cloud_function_packages`；实例和管理作业分别统一为 `FunctionInstance`、`FunctionJob` / `FunctionJobItem`。删除无调用方旧接口与实例 IP/tag 字段。
 - 全部模块 SQL 已逐个连续两次载入空 SQLite，通过外键和完整性检查；CloudFunction 为 5 张表、10 个显式索引、3 个触发器。
 - Web 单元测试 133 个文件、839 个用例通过；类型检查、生产构建、statik 生成及文档生产构建通过。部署包、主机身份、单元安装/运行/引导测试通过。
-- `check:detail-pages` 存在基线失败：未修改的 `web/src/views/factor/editor/index.vue` 表格缺少 cell 边框；文件与计划基线逐字节相同。本次修改的云函数页面通过对应检查。
+- `check:detail-pages` 存在基线失败：未修改的 `web/src/views/factor/editor/index.vue` 表格缺少 cell 边框；首轮文件与计划基线逐字节相同；合入已有生产分支后仍有该项失败。本次修改的云函数页面通过对应检查。
 - 生产盘点：实际主机为 `control`、`storage`、`overseas`；不按历史文档把主机重命名。发布期间保留云账号、代码包与云端函数/COS 对象，重建本地实例与 Job 目录；所有生产操作使用 SSH 公钥。
-- 尚待记录：全量 Go 测试、干净树协议检查、正式制品提交、部署与线上验收结果。
+- 最终提交及验收结果见 §11.3；前述 Web 用例数为合入生产分支前的首轮结果。
 
 ### 11.1 正式环境基线补齐
 
@@ -597,4 +598,18 @@ Access 重新签发的身份包包含完整外部验证密钥集合；安装时�
 
 本次补齐最小修复：元数据 schema 版本升至 14，来源唯一性改为仅约束非 factor 列，保留列名唯一性；增加同成员两个输出与一个参数共存、默认 View 投影和字段来源仍唯一的回归测试。不增加兼容或自动迁移代码。生产在备份和停止写入后按新定义重建该元数据表，纠正 8 列及 View 属性副本；View 的列来源仍为列名，保留 hash/revision/index_id、因子库和全部结果行。
 
-云函数最终版本的线上验收已通过：44 个实例回读、租约保护的无副作用 Job、真实 SCF 出口探针、GC dry-run 及旧 RPC 拒绝；Collector、Monitor、采集流和 Web 已恢复就绪。待约束修复部署后完成最终全主机验收。
+云函数最终版本的线上验收已通过：44 个实例回读、租约保护的无副作用 Job、真实 SCF 出口探针、GC dry-run 及旧 RPC 拒绝；Collector、Monitor、采集流和 Web 已恢复就绪。约束修复已部署，Factor/Strategy 已恢复就绪，最终全主机验收结果见 §11.3。
+
+### 11.3 最终发布与验收结果
+
+2026-10-23 完成三台正式环境主机 `control`、`storage`、`overseas` 的发布。工作分支 `codex/cloudnode-naming-review` 的全部代码已提交推送：`6a2cfff0` 实现云函数改名，`df39c005` 合入已部署的因子动态调参功能，`98404dd7` 修复上线验收发现的 Storage 既有约束问题。
+
+- **构建与回归**：`df39c005` 的全部 72 个 Go module 测试/vet、136 个 Web 测试文件的 860 个用例、格式/lint、协议干净树生成检查、架构文档与文档生产构建通过；全部 18 个 schema 连续两次载入空 SQLite 并通过完整性/FK 检查。34 个 Linux 制品及 7 个部署包构建通过，前端 statik 与 319 个 Web 产物一致。Storage 修复后再次完成全模块测试/vet、真实服务回归、Schema 与 DataNode 契约检查，并重建 Storage 服务和 CLI、更新 Storage 部署包。
+- **制品一致性**：整套服务目录和身份包来自 `df39c005`；三台主机的网关、管理工具及全部目录消费者同步更新。Storage 的 4 个安装文件随后更新至 `98404dd7`（primary/node/view 为同一服务制品，另含 CLI）；该补丁不改变服务目录。最终核对 24 个运行服务、44 个安装文件的 SHA，全部匹配对应已提交制品，所有组件 `ready=true`。单元清单无未封存差异，三台主机 watchdog 均启用且试运行正常；全部活跃配置、身份清单及部署 schema 的旧组件名扫描无残留。
+- **网关与监控**：三台主机的 `expected_hash == applied_hash`、`last_error` 为空；实际生产路由数为 control 211、storage 96、overseas 38（与测试夹具的组件放置不同）。云函数 placement 和 reporter 检查均为 `ok`，已收到 `cloudfunction` 运行指标，旧组件监控身份已清理。验收时修正了 EventBus 指标凭据文件中残留的旧目录 CA 路径，未轮换密钥，重新封存并重启验证通过。
+- **云函数业务**：保留 1 个云账号、1 个代码包及 44 个现有云端函数；本地实例目录通过 SCF 导入重建，第二轮对账确认 44 个实例均正常。实例/账号/包查询、Timer 实时回读、发布租约保护的无副作用异步 Job、真实 SCF 同步出口探针、GC dry-run 和旧 RPC 拒绝均通过。没有删除云端函数或 COS 对象。
+- **生产基线保留**：Factor 的 1 个因子集、11 个定义、4 个成员及 4 个分类保留，因子分类/因子集 RPC 成功，引擎心跳恢复。Storage 修复先在生产元数据副本上演练，再停写备份并完成事务修复；196 条列记录、View hash/revision/index_id 和全部结果行保留。因子管理、策略、Collector、采集流与 Web 全部恢复。恢复顺序先启动 Collector，再启动依赖其计划同步的 collector-stream。
+- **线上前端**：HTTP 返回的首页、云函数实例分包、因子分类分包与本地生产构建逐字节 SHA 一致。
+- **保留的既有门禁失败**：`pnpm --dir web run check:detail-pages` 仍报告已有因子编辑页表格缺少 cell 边框；本次未扩大范围修复该样式问题，其余上述检查通过。
+
+正式主机保留发布前数据库/配置备份、逐文件二进制备份和 native-release 发布台账；私有身份与接口验收响应仅保存在主机私有目录，不进入仓库。不存在未完成的发布步骤。
