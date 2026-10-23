@@ -36,6 +36,18 @@ EventBus TLS CA、server 证书和每个 NATS role token 是**一份权威材料
 
 [`native-release.md`](native-release.md) 的二进制发布不更新配置和凭据：只发布二进制，各主机会继续用旧 CA 和旧 token。
 
+## 新增角色（不轮换现有令牌）
+
+给一个新的客户端（例如 `collector-eventbus`）开通事件总线权限，不需要轮换 CA 和现有令牌，在控制机上这样做；全程不打印令牌：
+
+1. 备份：Admin 数据库（`sqlite3` 的 backup，不要直接 `cp` 带 WAL 的库）、EventBus 的 `users.yaml` 与 `app.yaml`、要改的客户端 `app.yaml`，放进 `/data/moox/prod/eventbus-backup-<标签>-<时间>/`。
+2. 用新构建的 `moox-admin-cli`（先 `native-release.sh install ... --no-restart` 装到控制机）执行
+   `eventbus-credentials ensure --db-path <admin.db> --encryption-key-file /data/moox/identity/admin-master.key --node-id control`：它只给缺少的角色生成令牌，已有令牌原样保留。
+3. `export` 到一个 0700 的临时目录，**比较新旧 `users.yaml` 里每个旧角色的令牌与权限块**（只比对，不打印令牌）；旧角色应当全部不变。线上 `users.yaml` 以现有文件为准，只追加新角色的块，不要整份覆盖：导出的块是按当前代码生成的，可能比线上多删了仍在使用的旧权限。
+4. 新角色的凭据文件放到使用方发布目录的 `secrets/eventbus/`（0600，`ca_file` 指向该目录里的 `ca.pem`，`urls` 用公网 `tls://<EventBus公网>:4222`）；使用方配置里引用它。
+5. 给 EventBus 配置新增流（如有），安装与代码一致的 `moox-eventbus` 并重启；EventBus 重启会让所有客户端短暂重连。
+6. 重启使用方，确认 JetStream 里出现它的持久消费者、日志没有 `Authorization Violation`，再删除临时导出目录。
+
 ## 轮换时的强制顺序
 
 1. `rotate` 后立刻 `export`。比较新 CA 的 SHA-256，不要打印 PEM 或 token。
