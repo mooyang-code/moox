@@ -367,3 +367,69 @@ func TestEncryptFileIsIdempotent(t *testing.T) {
 		t.Fatal("校验不过的配置不应加密")
 	}
 }
+
+// 表单带上系统推荐值，表格列包含推荐里有、当前配置里被清空的空间：「恢复推荐值」按钮靠它填表。
+func TestEditorFormOffersRecommendedRetentionAndEverySpace(t *testing.T) {
+	h := startEditor(t, nil)
+	_, reply, _ := h.call("config/form", struct{}{}, nil)
+	rec := reply.Form.Retention.Recommended
+	if rec.ViewBars != 10000 || rec.Defaults["1h"] != "10080h" || rec.Spaces["stockcn"]["1m"] != "1440h" || rec.Spaces["mooxsys"]["30s"] != "48h" {
+		t.Fatalf("推荐值 = %+v", rec)
+	}
+	ids := map[string]bool{}
+	for _, space := range reply.Form.Retention.Spaces {
+		ids[space.ID] = true
+	}
+	for _, want := range []string{"stockcn", "stockhk", "stockus", "mooxsys"} {
+		if !ids[want] {
+			t.Fatalf("表格应包含空间 %s: %v", want, ids)
+		}
+	}
+}
+
+// 当前配置里没有的空间（比如之前整段清掉了）也能填回推荐值并保存；留空的格子不会凭空多出键。
+func TestEditorSavesRecommendedValuesForASpaceMissingFromTheConfig(t *testing.T) {
+	h := startEditor(t, nil)
+	_, reply, _ := h.call("config/form", struct{}{}, nil)
+	form := *reply.Form
+	rec := form.Retention.Recommended
+	form.Retention.Spaces = append([]FormSpace(nil), form.Retention.Spaces...)
+	found := false
+	for i := range form.Retention.Spaces {
+		if form.Retention.Spaces[i].ID == "stockhk" {
+			found = true
+			form.Retention.Spaces[i].Values = copyMap(rec.Spaces["stockhk"])
+		}
+	}
+	if !found {
+		t.Fatal("表单里应有 stockhk 列")
+	}
+	form.Retention.Defaults = copyMap(rec.Defaults)
+	form.Retention.ViewBars = rec.ViewBars
+	form.Retention.ViewFileBytes = rec.ViewFileBytes
+	status, _, text := h.call("config/update", form, nil)
+	if status != http.StatusOK {
+		t.Fatalf("保存: %d %s", status, text)
+	}
+	manifest, err := setupconfig.Parse([]byte(h.plain()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.StorageRetention.Spaces["stockhk"]["1m"] != rec.Spaces["stockhk"]["1m"] || manifest.StorageRetention.Defaults["1h"] != "10080h" || manifest.StorageRetention.ViewBars != 10000 || manifest.StorageView.MaxViewFileBytes != 4294967296 {
+		t.Fatalf("推荐值没有写进配置: %+v", manifest.StorageRetention)
+	}
+	// 表单里没有的空间仍然拒绝。
+	form.Retention.Spaces = append(form.Retention.Spaces, FormSpace{ID: "ghost", Values: map[string]string{"1m": "7d"}})
+	if status, _, _ := h.call("config/update", form, nil); status != http.StatusUnprocessableEntity {
+		t.Fatal("推荐里也没有的空间应拒绝")
+	}
+}
+
+// 保存成功要弹窗告诉用户，并且能关掉；顶部提示条保留。
+func TestEditorPageHasASaveSuccessDialog(t *testing.T) {
+	for _, want := range []string{`id="modal"`, `role="dialog"`, `保存成功`, `function openModal(`, `openModal('保存成功'`, `id="modal-ok"`, `恢复推荐值`} {
+		if !strings.Contains(editorSource, want) {
+			t.Fatalf("配置页缺少 %q", want)
+		}
+	}
+}
