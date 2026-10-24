@@ -1,53 +1,51 @@
 <template>
-  <div class="moox-page factor-definitions-page">
-    <div class="moox-inner">
-      <div class="page-head definitions-head">
-        <div class="page-head__title">
-          <h2>因子定义</h2>
-          <InfoTip
-            text="因子定义只描述算法本身：代码、参数、输入输出列。它不属于任何计算任务；要让因子运行，请到「计算任务」里添加并启用。"
-          />
+  <div class="moox-page definitions-page">
+    <div class="moox-inner definitions-inner">
+      <div class="toolbar">
+        <div class="toolbar-main">
+          <h2 class="page-title">因子定义</h2>
+          <a-button class="mobile-category-trigger" @click="mobileTreeVisible = true"
+            ><template #icon><icon-menu /></template>因子分类</a-button
+          >
+          <div class="keyword-control">
+            <a-input-search
+              v-model="searchKeyword"
+              class="keyword-input"
+              allow-clear
+              placeholder="搜索因子 ID 或名称"
+              @input="scheduleSearch"
+              @search="commitSearch"
+              @clear="commitSearch"
+            />
+          </div>
+          <div class="filter-control">
+            <a-select v-model="filters.type" class="filter-select" allow-clear placeholder="因子类型" @change="clearSelection">
+              <a-option value="timeseries">时序</a-option>
+              <a-option value="cross_section">横截面</a-option>
+            </a-select>
+          </div>
+          <div class="filter-control">
+            <a-select v-model="usageFilter" class="filter-select" allow-clear placeholder="使用情况" @change="clearSelection">
+              <a-option value="using">使用中（{{ counts.using }}）</a-option>
+              <a-option value="idle">未使用（{{ counts.idle }}）</a-option>
+            </a-select>
+          </div>
+          <a-button type="primary" :disabled="!spaceId" @click="commitSearch">
+            <template #icon><icon-search /></template>查询
+          </a-button>
+        </div>
+        <div class="toolbar-actions">
+          <a-button type="primary" status="success" :disabled="!spaceId" @click="createFactor">
+            <template #icon><icon-plus /></template>新增因子
+          </a-button>
         </div>
       </div>
 
+      <a-alert class="definitions-policy-alert" type="info" show-icon>
+        因子定义只描述算法本身；要让因子运行，请到「计算任务」里添加并启用。被启用中的计算任务使用的定义不能编辑，仍被使用的不能删除。
+      </a-alert>
       <a-alert v-if="!spaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
       <template v-else>
-        <a-alert v-if="loadError" type="error" show-icon class="definitions-alert">
-          {{ loadError }}
-          <template #action><a-button size="mini" @click="load">重试</a-button></template>
-        </a-alert>
-
-        <a-space class="task-toolbar" wrap>
-          <a-button class="mobile-category-trigger" @click="mobileTreeVisible = true">
-            <template #icon><icon-menu /></template>因子分类
-          </a-button>
-          <a-button type="primary" status="success" @click="createFactor">
-            <template #icon><icon-plus /></template>
-            新增因子
-          </a-button>
-          <a-input
-            v-model="filters.keyword"
-            placeholder="按因子 ID 或模块名筛选"
-            allow-clear
-            style="width: 200px"
-            @press-enter="search"
-          />
-          <a-select v-model="filters.type" placeholder="因子类型" style="width: 120px">
-            <a-option value="">全部类型</a-option>
-            <a-option value="timeseries">时序</a-option>
-            <a-option value="cross_section">横截面</a-option>
-          </a-select>
-          <a-select v-model="filters.usage" placeholder="使用情况" style="width: 140px">
-            <a-option value="all">全部（{{ counts.all }}）</a-option>
-            <a-option value="using">使用中（{{ counts.using }}）</a-option>
-            <a-option value="idle">未使用（{{ counts.idle }}）</a-option>
-          </a-select>
-          <a-button type="primary" @click="search">
-            <template #icon><icon-search /></template>
-            查询
-          </a-button>
-        </a-space>
-
         <section class="definitions-workbench">
           <aside class="category-panel">
             <FactorCategoryTree
@@ -62,111 +60,51 @@
               @delete="confirmDeleteCategory"
             />
           </aside>
+
           <main class="definitions-main">
-            <a-table
-              row-key="factor_id"
-              size="small"
-              :bordered="{ cell: true }"
-              :data="rows"
-              :loading="loading"
-              :pagination="{ pageSize: 20, hideOnSinglePage: true }"
-              :scroll="{ x: 'max-content' }"
-              class="definitions-table"
-              @row-click="(record: DefinitionRow) => (detailId = record.factor.factor_id)"
+            <DefinitionBatchBar
+              :selected-count="selectedKeys.length"
+              :categories="treeCategories"
+              :loading="batchLoading"
+              @move="moveSelected"
+              @clear="selectedKeys = []"
+            />
+            <a-alert v-if="loadError" type="error" class="table-error"
+              >因子定义加载失败：{{ loadError }} <a-link @click="load">重试</a-link></a-alert
             >
-              <template #empty>
-                <a-empty description="没有符合条件的因子定义" />
-              </template>
-              <template #columns>
-                <a-table-column title="因子 ID" :width="190">
-                  <template #cell="{ record }">
-                    <a-link @click.stop="detailId = record.factor.factor_id">{{ record.factor.factor_id }}</a-link>
-                    <div class="cell-sub">模块 {{ record.factor.name }}</div>
-                  </template>
-                </a-table-column>
-                <a-table-column title="类型" :width="100">
-                  <template #cell="{ record }">{{ factorTypeLabel(record.factor.factor_type) }}</template>
-                </a-table-column>
-                <a-table-column title="分类" :width="110">
-                  <template #cell="{ record }">{{ record.category }}</template>
-                </a-table-column>
-                <a-table-column title="可调参数" :width="160" :ellipsis="true" :tooltip="true">
-                  <template #cell="{ record }">{{ record.paramNames }}</template>
-                </a-table-column>
-                <a-table-column title="输入列" :width="180" :ellipsis="true" :tooltip="true">
-                  <template #cell="{ record }">{{ record.factor.input_columns.join(", ") }}</template>
-                </a-table-column>
-                <a-table-column title="输出列" :width="180" :ellipsis="true" :tooltip="true">
-                  <template #cell="{ record }">{{ record.factor.outputs.join(", ") }}</template>
-                </a-table-column>
-                <a-table-column title="回看周期" data-index="factor.lookback_periods" :width="90" />
-                <a-table-column title="使用情况" :width="300">
-                  <template #cell="{ record }">
-                    <span v-if="!record.chips.length" class="usage-empty">未被使用</span>
-                    <a-space v-else wrap size="mini" @click.stop>
-                      <button
-                        v-for="chip in record.chips"
-                        :key="chip.key"
-                        type="button"
-                        class="usage-chip"
-                        :title="`${chip.label}${chip.alias ? ` · ${chip.alias}` : ''}（${chip.statusLabel}）`"
-                        @click.stop="openTask(chip.setId)"
-                      >
-                        <span class="usage-dot" :class="`usage-dot--${chip.status}`"></span>
-                        {{ chip.label }}
-                      </button>
-                    </a-space>
-                  </template>
-                </a-table-column>
-                <a-table-column title="操作" :width="200" align="center" fixed="right">
-                  <template #cell="{ record }">
-                    <div class="row-actions" @click.stop>
-                      <a-space>
-                        <a-button size="mini" type="text" @click="detailId = record.factor.factor_id">详情</a-button>
-                        <a-tooltip :content="record.edit.reason" :disabled="!record.edit.disabled">
-                          <span>
-                            <a-button
-                              size="mini"
-                              type="text"
-                              :disabled="record.edit.disabled"
-                              @click="editFactor(record.factor.factor_id)"
-                            >
-                              编辑
-                            </a-button>
-                          </span>
-                        </a-tooltip>
-                        <a-tooltip :content="record.remove.reason" :disabled="!record.remove.disabled">
-                          <span>
-                            <a-popconfirm content="删除后不可恢复，确认继续？" @ok="removeFactor(record.factor.factor_id)">
-                              <a-button size="mini" type="text" status="danger" :disabled="record.remove.disabled">删除</a-button>
-                            </a-popconfirm>
-                          </span>
-                        </a-tooltip>
-                      </a-space>
-                    </div>
-                  </template>
-                </a-table-column>
-              </template>
-            </a-table>
+            <DefinitionTable
+              :rows="rows"
+              :loading="loading"
+              :pagination="pagination"
+              :selected-keys="selectedKeys"
+              :empty-text="emptyText"
+              @select="selectedKeys = $event"
+              @detail="detailId = $event"
+              @edit="editFactor"
+              @remove="removeFactor"
+              @open-task="openTask"
+              @page-change="pagination.current = $event"
+              @page-size-change="changePageSize"
+            />
           </main>
         </section>
       </template>
-    </div>
 
-    <a-drawer v-model:visible="mobileTreeVisible" title="因子分类" width="280px" :footer="false">
-      <FactorCategoryTree
-        :categories="treeCategories"
-        :counts="treeCounts"
-        :total="filteredWithoutCategory.length"
-        :selected="selectedCategory"
-        :saving="categorySaving"
-        @select="selectCategory"
-        @create="createCategory"
-        @rename="renameCategory"
-        @delete="confirmDeleteCategory"
-      />
-    </a-drawer>
-    <FactorDetailDrawer :factor-id="detailId" :categories="categories" @close="detailId = ''" @open-task="openTask" />
+      <a-drawer v-model:visible="mobileTreeVisible" title="因子分类" width="280px" :footer="false">
+        <FactorCategoryTree
+          :categories="treeCategories"
+          :counts="treeCounts"
+          :total="filteredWithoutCategory.length"
+          :selected="selectedCategory"
+          :saving="categorySaving"
+          @select="selectCategory"
+          @create="createCategory"
+          @rename="renameCategory"
+          @delete="confirmDeleteCategory"
+        />
+      </a-drawer>
+      <FactorDetailDrawer :factor-id="detailId" :categories="categories" @close="detailId = ''" @open-task="openTask" />
+    </div>
   </div>
 </template>
 
@@ -183,23 +121,22 @@ import {
   upsertFactorCategory
 } from "@/api/factor";
 import type { FactorCategory, FactorInfo, FactorSetInfo } from "@/api/factor/types";
-import { categoryName } from "@/views/factor/shared/params";
 import { RequestGate } from "@/utils/request-gate";
-import InfoTip from "@/views/factor/shared/info-tip.vue";
-import { factorTypeLabel } from "@/views/factor/shared/status";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import {
   categoryCounts,
   categoryOf,
-  definitionDeleteState,
-  definitionEditState,
+  definitionRows,
   deleteCategoryMovingFactors,
   filterDefinitions,
+  moveFactorsToCategory,
   orderedCategories,
-  usageChips,
   usageCounts,
-  type DefinitionFilters
+  type DefinitionFilters,
+  type UsageFilter
 } from "./definitions-model";
+import DefinitionBatchBar from "./definition-batch-bar.vue";
+import DefinitionTable from "./definition-table.vue";
 import FactorCategoryTree from "./factor-category-tree.vue";
 import FactorDetailDrawer from "./factor-detail-drawer.vue";
 
@@ -211,24 +148,39 @@ const route = useRoute();
 const router = useRouter();
 const { store, spaceId } = useFactorScope({ poll: false });
 
-// filters 是表单里的草稿，applied 是点「查询」后生效的条件，与采集任务页一致；分类由左侧树即时决定。
+// 与字段页一致：关键词输入后 300ms 生效（回车或点查询立即生效），下拉筛选改动即生效；分类由左侧树决定。
 const filters = reactive<DefinitionFilters>({ type: "", usage: "all", keyword: "" });
-const applied = reactive<DefinitionFilters>({ ...filters });
+const searchKeyword = ref("");
 const categories = ref<FactorCategory[]>([]);
 const categorySaving = ref(false);
+const batchLoading = ref(false);
 const mobileTreeVisible = ref(false);
 const items = ref<FactorInfo[]>([]);
 const loading = ref(false);
 const loadError = ref("");
 const detailId = ref("");
+const selectedKeys = ref<string[]>([]);
+const pagination = reactive({ current: 1, pageSize: 20, pageSizeOptions: [20, 50, 100], showPageSize: true, showTotal: true });
 const gate = new RequestGate();
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** 使用情况下拉清空时回到“全部”。 */
+const usageFilter = computed<UsageFilter | undefined>({
+  get: () => (filters.usage === "all" ? undefined : filters.usage),
+  set: value => {
+    filters.usage = value || "all";
+  }
+});
 
 const selectedCategory = computed(() => (typeof route.query.category === "string" ? route.query.category : ""));
 const counts = computed(() => usageCounts(items.value));
 /** 先按关键词、类型、使用情况过滤，分类树据此计数；再按选中的分类过滤出表格。 */
-const filteredWithoutCategory = computed(() => filterDefinitions(items.value, { ...applied, category: "" }));
+const filteredWithoutCategory = computed(() => filterDefinitions(items.value, { ...filters, category: "" }));
 const treeCounts = computed(() => categoryCounts(filteredWithoutCategory.value));
 const treeCategories = computed(() => orderedCategories(categories.value));
+const emptyText = computed(() =>
+  filters.keyword || filters.type || filters.usage !== "all" ? "没有符合条件的因子定义" : "当前范围暂无因子定义"
+);
 
 function setLabelOf(setId: string) {
   const info = store.sets.find((item: FactorSetInfo) => item.factor_set.set_id === setId);
@@ -236,28 +188,39 @@ function setLabelOf(setId: string) {
 }
 
 const rows = computed(() =>
-  filteredWithoutCategory.value
-    .filter(item => !selectedCategory.value || categoryOf(item.factor) === selectedCategory.value)
-    .map(item => ({
-      factor: item.factor,
-      category: categoryName(categories.value, item.factor.category_id),
-      paramNames: (item.factor.params ?? []).map(param => param.name).join(", ") || "-",
-      chips: usageChips(item.usages, setLabelOf),
-      edit: definitionEditState(item),
-      remove: definitionDeleteState(item)
-    }))
+  definitionRows(
+    filteredWithoutCategory.value.filter(item => !selectedCategory.value || categoryOf(item.factor) === selectedCategory.value),
+    categories.value,
+    setLabelOf
+  )
 );
-type DefinitionRow = (typeof rows.value)[number];
 
-function search() {
-  Object.assign(applied, filters);
-  void load();
+function clearSelection() {
+  selectedKeys.value = [];
+  pagination.current = 1;
+}
+
+function scheduleSearch() {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(commitSearch, 300);
+}
+
+function commitSearch() {
+  if (searchTimer) clearTimeout(searchTimer);
+  filters.keyword = searchKeyword.value.trim();
+  clearSelection();
+}
+
+function changePageSize(size: number) {
+  pagination.pageSize = size;
+  pagination.current = 1;
 }
 
 /** 选中的分类写进 ?category=；路由声明了 reuseOnQuery，页面不重建，关键词等筛选保持。 */
 function selectCategory(categoryId: string) {
   mobileTreeVisible.value = false;
   if (categoryId === selectedCategory.value) return;
+  clearSelection();
   const query = { ...route.query };
   if (categoryId) query.category = categoryId;
   else delete query.category;
@@ -336,6 +299,23 @@ async function deleteCategory(category: FactorCategory) {
   }
 }
 
+async function moveSelected(categoryId: string) {
+  batchLoading.value = true;
+  try {
+    const result = await moveFactorsToCategory([...selectedKeys.value], categoryId, setFactorCategory);
+    if (result.failed) {
+      const reason = result.error instanceof Error ? result.error.message : "未知错误";
+      Message.error(`已移动 ${result.moved.length} 个，因子 ${result.failed} 移动失败（${reason}）`);
+    } else {
+      Message.success(`已移动 ${result.moved.length} 个因子`);
+      selectedKeys.value = [];
+    }
+  } finally {
+    batchLoading.value = false;
+    await load();
+  }
+}
+
 /** 列表默认不带源码（D24）；详情抽屉再按需 GetFactor。 */
 async function load() {
   const token = gate.next();
@@ -351,6 +331,8 @@ async function load() {
     if (!gate.isCurrent(token)) return;
     items.value = all;
     loadError.value = "";
+    const present = new Set(all.map(item => item.factor.factor_id));
+    selectedKeys.value = selectedKeys.value.filter(id => present.has(id));
   } catch (error) {
     if (gate.isCurrent(token)) loadError.value = error instanceof Error ? error.message : "因子定义加载失败";
   } finally {
@@ -386,6 +368,7 @@ let fresh = true;
 watch(
   spaceId,
   next => {
+    selectedKeys.value = [];
     if (next) {
       void load();
       void loadCategories();
@@ -404,97 +387,119 @@ onActivated(() => {
 });
 </script>
 
-<style scoped lang="scss">
-@use "../shared/factor-page.scss";
-
-.definitions-head {
-  margin-bottom: var(--moox-space-3);
+<style scoped>
+.definitions-inner {
+  display: flex;
+  min-height: calc(100vh - 116px);
+  flex-direction: column;
 }
-
-.definitions-alert {
-  margin-bottom: var(--moox-space-3);
+.toolbar {
+  display: flex;
+  min-height: 32px;
+  margin-bottom: var(--moox-space-2);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--moox-space-4);
 }
-
-.task-toolbar {
-  margin-bottom: var(--moox-space-toolbar-table);
+.toolbar-main {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--moox-space-2);
 }
-
+.page-title {
+  flex: 0 0 auto;
+  margin: 0 var(--moox-space-2) 0 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+.toolbar-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--moox-space-2);
+  white-space: nowrap;
+}
+.keyword-control {
+  min-width: 220px;
+  flex: 1 1 360px;
+}
+.filter-control {
+  width: 140px;
+  flex: 0 0 140px;
+}
+.keyword-input,
+.filter-select {
+  width: 100%;
+}
 .mobile-category-trigger {
   display: none;
 }
-
+.definitions-policy-alert {
+  margin-bottom: var(--moox-space-2);
+}
 .definitions-workbench {
   display: grid;
-  min-height: 520px;
-  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 560px;
+  flex: 1;
+  grid-template-columns: 240px minmax(0, 1fr);
   border: 1px solid var(--color-border-2);
   background: var(--color-bg-2);
 }
-
 .category-panel {
   min-height: 0;
   overflow: auto;
   border-right: 1px solid var(--color-border-2);
   background: var(--color-fill-1);
 }
-
 .definitions-main {
   min-width: 0;
   overflow: hidden;
 }
-
-.definitions-table :deep(.arco-table-tr) {
-  cursor: pointer;
+.table-error {
+  margin: var(--moox-space-2);
 }
-
-.cell-sub {
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-
-.usage-empty {
-  color: var(--color-text-3);
-}
-
-.usage-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 1px 8px;
-  color: var(--color-text-2);
-  font-size: 12px;
-  background: var(--color-fill-2);
-  border: 1px solid var(--color-border-2);
-  border-radius: 10px;
-  cursor: pointer;
-}
-
-.usage-chip:hover {
-  border-color: rgb(var(--primary-6));
-}
-
-.usage-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--color-neutral-5);
-}
-
-.usage-dot--enabled {
-  background: rgb(var(--success-6));
-}
-
 @media (max-width: 900px) {
   .category-panel {
     display: none;
   }
-
   .definitions-workbench {
     grid-template-columns: minmax(0, 1fr);
   }
-
   .mobile-category-trigger {
     display: inline-flex;
+  }
+  .toolbar {
+    flex-wrap: wrap;
+    gap: var(--moox-space-2);
+  }
+  .toolbar-main {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+  }
+  .toolbar-actions {
+    margin-left: auto;
+  }
+  .keyword-control {
+    min-width: 220px;
+    flex: 1 1 260px;
+  }
+  .filter-control {
+    width: auto;
+    flex: 1 1 130px;
+  }
+}
+@media (max-width: 560px) {
+  .toolbar-main,
+  .toolbar-actions {
+    width: 100%;
+  }
+  .toolbar-actions {
+    justify-content: flex-end;
+  }
+  .definitions-workbench {
+    min-height: 480px;
   }
 }
 </style>

@@ -7,6 +7,7 @@ import {
   type MemberStatus
 } from "@/api/factor/types";
 import { memberStatusTag } from "@/views/factor/shared/status";
+import { categoryName } from "@/views/factor/shared/params";
 
 export type UsageFilter = "all" | "using" | "idle";
 
@@ -128,4 +129,51 @@ export async function deleteCategoryMovingFactors(categoryId: string, allItems: 
   }
   await api.deleteCategory(categoryId);
   return { deleted: true, moved };
+}
+
+/** 定义表格的一行：factor_id 与 updated_at 提到顶层，供表格按列排序。 */
+export interface DefinitionRow {
+  factor_id: string;
+  updated_at: string;
+  factor: FactorInfo["factor"];
+  category: string;
+  paramNames: string;
+  chips: UsageChip[];
+  edit: ActionState;
+  remove: ActionState;
+}
+
+export function definitionRows(
+  items: FactorInfo[],
+  categories: FactorCategory[],
+  labelOf: (setId: string) => string
+): DefinitionRow[] {
+  return items.map(item => ({
+    factor_id: item.factor.factor_id,
+    updated_at: item.factor.updated_at,
+    factor: item.factor,
+    category: categoryName(categories, item.factor.category_id),
+    paramNames: (item.factor.params ?? []).map(param => param.name).join(", ") || "-",
+    chips: usageChips(item.usages, labelOf),
+    edit: definitionEditState(item),
+    remove: definitionDeleteState(item)
+  }));
+}
+
+/** 批量移动分类：逐个调用，中途失败就停止，返回已移动的定义与失败的那个。 */
+export async function moveFactorsToCategory(
+  factorIds: string[],
+  categoryId: string,
+  setCategory: CategoryDeleteApi["setCategory"]
+) {
+  const moved: string[] = [];
+  for (const factorId of factorIds) {
+    try {
+      await setCategory(factorId, categoryId);
+      moved.push(factorId);
+    } catch (error) {
+      return { moved, failed: factorId, error };
+    }
+  }
+  return { moved };
 }

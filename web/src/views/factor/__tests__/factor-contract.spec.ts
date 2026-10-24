@@ -136,17 +136,27 @@ describe("factor pages contract", () => {
     expect(factorEditor).not.toContain('v-model="form.status"');
   });
 
-  it("lays out the definitions toolbar like the collector task toolbar", () => {
-    const toolbar = definitionsPage.slice(definitionsPage.indexOf('class="task-toolbar"'), definitionsPage.indexOf("<a-table"));
-    const positions = ["新增因子", 'v-model="filters.keyword"', 'v-model="filters.type"', 'v-model="filters.usage"', "查询"].map(
-      text => toolbar.indexOf(text)
+  it("lays out the definitions page like the fields workbench", () => {
+    // 与字段管理一致：标题、搜索、筛选、查询在左，新增在右；下方提示条；左侧分类树，右侧批量栏加表格
+    const toolbar = definitionsPage.slice(
+      definitionsPage.indexOf('class="toolbar"'),
+      definitionsPage.indexOf("definitions-policy-alert")
     );
+    const positions = [
+      'class="page-title"',
+      "a-input-search",
+      'v-model="filters.type"',
+      'v-model="usageFilter"',
+      "查询",
+      "toolbar-actions",
+      "新增因子"
+    ].map(text => toolbar.indexOf(text));
     expect(positions.every(position => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
-    expect(definitionsPage).toContain('<a-space class="task-toolbar" wrap>');
-    expect(toolbar).not.toContain("a-input-search");
-    expect(toolbar).not.toContain("a-radio-group");
-    expect(definitionsPage).toContain('filterDefinitions(items.value, { ...applied, category: "" })');
+    for (const text of ['class="definitions-workbench"', "<FactorCategoryTree", "<DefinitionBatchBar", "<DefinitionTable"]) {
+      expect(definitionsPage).toContain(text);
+    }
+    expect(definitionsPage).toContain('filterDefinitions(items.value, { ...filters, category: "" })');
   });
 
   it("derives the factor type from the compiled spec and shows partial universe only for cross sections", () => {

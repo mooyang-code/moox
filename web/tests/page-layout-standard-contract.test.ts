@@ -72,7 +72,10 @@ describe("page layout standards", () => {
     expect(staticMenuSource).not.toContain('"0504"');
     expect(staticMenuSource).not.toContain("/trading/logical-accounts");
     // 策略菜单与因子计算一致：总览 → 定义 → 运行（实例 / 结果 / 回放 工作台）。
-    const strategyOverviewPos = staticMenuSource.indexOf('"/strategy/overview", "strategy-overview"', staticMenuSource.indexOf('directory("0250"'));
+    const strategyOverviewPos = staticMenuSource.indexOf(
+      '"/strategy/overview", "strategy-overview"',
+      staticMenuSource.indexOf('directory("0250"')
+    );
     const strategyDefinitionsPos = staticMenuSource.indexOf('"/strategy/definitions"');
     const strategyTasksPos = staticMenuSource.indexOf('"/strategy/tasks"');
     expect(strategyOverviewPos).toBeGreaterThan(-1);
@@ -113,8 +116,9 @@ describe("page layout standards", () => {
     expect(running).not.toContain('class="filters"');
   });
 
+  // 因子定义页没有标签页，按字段管理的工作台布局用提示条说明规则，不在此列。
   it("keeps factor tab explanations in info tips instead of rows under the tabs", () => {
-    for (const file of ["factor/compute-tasks/index.vue", "factor/recalc/index.vue", "factor/definitions/index.vue"]) {
+    for (const file of ["factor/compute-tasks/index.vue", "factor/recalc/index.vue"]) {
       const source = read(file);
       expect(source).toContain("InfoTip");
       expect(source).not.toContain('class="tab-hint"');
@@ -209,7 +213,9 @@ describe("page layout standards", () => {
     ]) {
       expect(toolbarDeclarations).toContain(`${property}: ${value};`);
     }
-    expect(cloudFunctions).toMatch(/\.moox-page\s*\{[^}]*contain:\s*inline-size;[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*auto;/);
+    expect(cloudFunctions).toMatch(
+      /\.moox-page\s*\{[^}]*contain:\s*inline-size;[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*auto;/
+    );
     expect(cloudFunctions).toMatch(
       /\.moox-page :deep\(\.arco-spin\),\s*\.moox-page :deep\(\.arco-spin-children\)\s*\{[^}]*overflow-x:\s*hidden;/
     );
@@ -217,7 +223,9 @@ describe("page layout standards", () => {
     expect(cloudFunctions).not.toContain("width: calc(100% - 72px)");
     expect(cloudFunctions).not.toMatch(/\.cloud-function-toolbar\s*\{[^}]*flex:\s*1;/);
     expect(cloudFunctions).not.toMatch(/\.cloud-function-toolbar\s*\{[^}]*justify-content:\s*flex-end;/);
-    expect(cloudFunctions).not.toMatch(/@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*?\.page-head\s*\{[^}]*flex-direction:\s*column;/);
+    expect(cloudFunctions).not.toMatch(
+      /@media\s*\(max-width:\s*768px\)\s*\{[\s\S]*?\.page-head\s*\{[^}]*flex-direction:\s*column;/
+    );
 
     expect(factorResults).toContain('class="result-toolbar"');
     expect(factorResults).toContain("#status-extra");

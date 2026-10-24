@@ -96,6 +96,7 @@ const TreeStub = defineComponent({
   props: ["categories", "counts", "total", "selected"],
   template: "<div />"
 });
+const BatchBarStub = defineComponent({ name: "DefinitionBatchBar", props: ["selectedCount", "categories"], template: "<div />" });
 const DrawerStub = defineComponent({ name: "FactorDetailDrawer", props: ["factorId", "categories"], template: "<div />" });
 
 function mountPage() {
@@ -112,11 +113,13 @@ function mountPage() {
           template: "<button @click=\"$emit('click', $event)\"><slot /></button>"
         }),
         "a-link": defineComponent({ emits: ["click"], template: "<a @click=\"$emit('click', $event)\"><slot /></a>" }),
-        "a-input": defineComponent({
+        "a-input-search": defineComponent({
           props: ["modelValue"],
-          emits: ["update:modelValue"],
-          template: '<input class="keyword" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />'
+          emits: ["update:modelValue", "input", "search"],
+          template:
+            '<input class="keyword" :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value); $emit(\'input\')" />'
         }),
+        DefinitionBatchBar: BatchBarStub,
         "a-space": { template: "<div><slot /></div>" },
         "a-tooltip": { template: "<div><slot /></div>" },
         "a-popconfirm": { template: "<div><slot /></div>" },
@@ -127,7 +130,7 @@ function mountPage() {
 }
 
 function rowIds(wrapper: ReturnType<typeof mountPage>) {
-  return wrapper.findAll(".row").map(row => row.find("a").text());
+  return wrapper.findAll(".row").map(row => row.find(".factor-name span").text());
 }
 
 describe("factor definitions page", () => {
@@ -204,10 +207,7 @@ describe("factor definitions page", () => {
     await flushPromises();
     const drawer = wrapper.findComponent(DrawerStub);
     const firstRow = wrapper.findAll(".row")[0];
-    await firstRow
-      .findAll("button")
-      .find(button => button.text() === "编辑")!
-      .trigger("click");
+    await firstRow.get("button[aria-label='编辑定义']").trigger("click");
     expect(drawer.props("factorId")).toBe("");
     expect(mocks.push).toHaveBeenCalledWith("/factor/definitions/Ma/edit");
 
@@ -240,6 +240,26 @@ describe("factor definitions page", () => {
     await flushPromises();
     expect(mocks.upsertFactorCategory).toHaveBeenCalledWith({ category_id: "trend", name: "趋势", sort_order: 7 });
     expect(done).toHaveBeenCalled();
+  });
+
+  it("勾选后批量移动分类：逐个调用并刷新、清空勾选", async () => {
+    mocks.spaceId!.value = "crypto";
+    const wrapper = mountPage();
+    await flushPromises();
+    wrapper.findComponent({ name: "DefinitionTable" }).vm.$emit("select", ["Ma", "Rsi"]);
+    await flushPromises();
+    const bar = wrapper.findComponent(BatchBarStub);
+    expect(bar.props("selectedCount")).toBe(2);
+    // 其他用例留下的页面实例也会调 listFactors，这里只看这次移动带来的刷新
+    const before = mocks.listFactors.mock.calls.length;
+    bar.vm.$emit("move", "trend");
+    await flushPromises();
+    expect(mocks.setFactorCategory.mock.calls).toEqual([
+      ["Ma", "trend"],
+      ["Rsi", "trend"]
+    ]);
+    expect(mocks.listFactors.mock.calls.length).toBe(before + 1);
+    expect(bar.props("selectedCount")).toBe(0);
   });
 
   it("迁移中途失败时不删除分类", async () => {

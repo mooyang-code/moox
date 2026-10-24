@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { FactorDef, FactorInfo, FactorUsage } from "@/api/factor/types";
 import {
   categoryCounts,
+  definitionRows,
   deleteCategoryMovingFactors,
+  moveFactorsToCategory,
   definitionDeleteState,
   definitionEditState,
   filterDefinitions,
@@ -96,13 +98,16 @@ describe("definitions model", () => {
 
 describe("definitions page contract", () => {
   const page = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
+  const table = fs.readFileSync(path.resolve(__dirname, "definition-table.vue"), "utf8");
 
   it("definitions page has no enable/disable action and no status column", () => {
-    expect(page).not.toContain("setFactorMemberStatus");
-    expect(page).not.toContain('title="状态"');
-    expect(page).not.toContain('title="最近周期"');
-    expect(page).toContain('title="使用情况"');
-    expect(page).toContain("未被使用");
+    for (const source of [page, table]) {
+      expect(source).not.toContain("setFactorMemberStatus");
+      expect(source).not.toContain('title="状态"');
+      expect(source).not.toContain('title="最近周期"');
+    }
+    expect(table).toContain('title="使用情况"');
+    expect(table).toContain("未被使用");
   });
 
   it("reads definitions without the spec and fetches it only for the detail view", () => {
@@ -152,5 +157,30 @@ describe("分类树", () => {
     const result = await deleteCategoryMovingFactors("trend", items, { setCategory, deleteCategory });
     expect(result).toMatchObject({ deleted: false, moved: ["A"], failed: "C" });
     expect(deleteCategory).not.toHaveBeenCalled();
+  });
+});
+
+describe("定义表格与批量移动", () => {
+  it("表格行把 factor_id、updated_at 提到顶层并带分类名、参数与操作状态", () => {
+    const item: FactorInfo = {
+      factor: def("Rsi", {
+        category_id: "momentum",
+        updated_at: "t1",
+        params: [{ name: "window", type: "int", min: 2, max: 120, default_value: 14 }]
+      }),
+      usages: [{ set_id: "s1", status: "enabled" }]
+    };
+    const [row] = definitionRows([item], [{ category_id: "momentum", name: "动量类" }], id => `任务 ${id}`);
+    expect(row).toMatchObject({ factor_id: "Rsi", updated_at: "t1", category: "动量类", paramNames: "window" });
+    expect(row.chips[0].label).toBe("任务 s1");
+    expect(row.edit.disabled).toBe(true);
+    expect(row.remove.disabled).toBe(true);
+  });
+
+  it("逐个移动，中途失败就停止", async () => {
+    const setCategory = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("boom"));
+    const result = await moveFactorsToCategory(["A", "B", "C"], "trend", setCategory);
+    expect(result).toMatchObject({ moved: ["A"], failed: "B" });
+    expect(setCategory).toHaveBeenCalledTimes(2);
   });
 });
