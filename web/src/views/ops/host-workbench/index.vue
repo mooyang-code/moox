@@ -156,9 +156,10 @@ watch(
 
 onMounted(async () => {
   await loadMonitorData();
+  // 只有主机列表页签的 host_id 链接才直接打开终端；监控页签的 host_id 只用来定位主机，不能建连。
   const hostId = typeof route.query.host_id === "string" ? route.query.host_id : "";
   const target = hosts.value.find(item => item.host_id === hostId);
-  if (target && sshAvailability(target).ok) openTerminal(hostId);
+  if (activeTab.value === "hosts" && target && sshAvailability(target).ok) openTerminal(hostId);
 });
 
 onBeforeUnmount(() => {

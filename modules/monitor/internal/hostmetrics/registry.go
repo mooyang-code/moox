@@ -156,6 +156,9 @@ func (r *Registry) Observe(ctx context.Context, observation HostObservation) (Ob
 			}
 			result.Updated = true
 			result.Current = true
+			// 同一台登记主机上旧采集器已失联并发过通知，新采集器开始上报就是这台主机恢复了：
+			// 恢复事件沿用旧采集器的 ID，与失联通知是同一条告警。
+			result.Transition = r.replacementRecovery(tx, registered, observation)
 			return nil
 		}
 		if err != nil {
@@ -205,6 +208,42 @@ func (r *Registry) recoveryNotifiable(tx *gorm.DB, registered map[string]bool, o
 		return true
 	}
 	return other == 0
+}
+
+// replacementRecovery 在新采集器首次上报时判断是否要补发主机恢复：登记主机上没有任何在线采集器，
+// 且最近上报的那个旧采集器处于失联状态（它的失联已经通知过）。
+func (r *Registry) replacementRecovery(tx *gorm.DB, registered map[string]bool, observation HostObservation) *PresenceTransition {
+	if registered == nil || observation.HostID == "" || !registered[observation.HostID] {
+		return nil
+	}
+	var reachable int64
+	if err := tx.Model(&hostAgentRecord{}).
+		Where("c_host_id = ? AND c_agent_id <> ? AND c_status = ?", observation.HostID, observation.AgentID, PresenceReachable).
+		Count(&reachable).Error; err != nil || reachable > 0 {
+		return nil
+	}
+	var prior hostAgentRecord
+	if err := tx.Where("c_host_id = ? AND c_agent_id <> ? AND c_status = ?", observation.HostID, observation.AgentID, PresenceUnreachable).
+		Order("c_last_seen_at DESC, c_agent_id DESC").First(&prior).Error; err != nil {
+		return nil
+	}
+	return &PresenceTransition{
+		HostID: observation.HostID, AgentID: prior.AgentID, Hostname: observation.Hostname,
+		From: PresenceUnreachable, To: PresenceReachable, ObservedAt: observation.OccurredAt,
+	}
+}
+
+// HostHasOtherReachableAgent 返回这台主机上除 agentID 外是否还有在线的采集器。
+func (r *Registry) HostHasOtherReachableAgent(ctx context.Context, hostID, agentID string) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("host agent registry is unavailable")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var count int64
+	err := r.db.WithContext(ctx).Model(&hostAgentRecord{}).
+		Where("c_host_id = ? AND c_agent_id <> ? AND c_status = ?", hostID, agentID, PresenceReachable).Count(&count).Error
+	return count > 0, err
 }
 
 // Status 返回 agent 当前的在线状态；未登记时返回空串。

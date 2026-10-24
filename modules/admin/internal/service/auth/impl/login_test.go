@@ -158,3 +158,26 @@ func TestGetLoginSalt_ExistingValidSalt_ShouldReuse(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, first.GetSalt(), second.GetSalt())
 }
+
+// 令牌签发失败时接口返回登录失败，不能留下“登录成功”的活动日志。
+func TestLogin_TokenFailureDoesNotWriteLoginLog(t *testing.T) {
+	svc, password, _ := newAuthServiceForLoginTest(t)
+	svc.cfg.JWT.SecretKey = ""
+	ctx := context.Background()
+
+	saltRsp, err := svc.GetLoginSalt(ctx, &pb.GetLoginSaltReq{Username: "admin"})
+	require.NoError(t, err)
+	loginRsp, err := svc.Login(ctx, &pb.LoginReq{
+		Username:     "admin",
+		PasswordHash: encryptLoginPassword(t, password, saltRsp.GetSalt(), saltRsp.GetTimestamp()),
+		Salt:         saltRsp.GetSalt(),
+		Timestamp:    saltRsp.GetTimestamp(),
+		ClientIp:     "127.0.0.1",
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, pb.ErrorCode_SUCCESS, loginRsp.GetRetInfo().GetCode(), "空签名密钥必须让登录失败")
+
+	_, total, err := svc.loginLog.List(ctx, activitylog.Filter{Global: true, Category: model.LoginLogCategory})
+	require.NoError(t, err)
+	assert.EqualValues(t, 0, total)
+}

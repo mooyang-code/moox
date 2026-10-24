@@ -5,6 +5,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -239,4 +240,19 @@ func TestExternalProfilesAreRecognised(t *testing.T) {
 	assert.True(t, isExternalProfile("factor-engine"))
 	assert.True(t, isExternalProfile("archive-worker"))
 	assert.False(t, isExternalProfile("access"))
+}
+
+// 用户级 systemd 连不上时，stop、disable 与查询都会失败；空输出不能被当作“已停止”。
+func TestExternalStopScriptFailsWhenSystemdIsUnreachable(t *testing.T) {
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "systemctl"), []byte("#!/bin/sh\nexit 1\n"), 0o755))
+	run := func() error {
+		command := exec.Command("sh", "-c", externalStopScript, "moox-external", "moox-factor-engine")
+		command.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+		return command.Run()
+	}
+	require.Error(t, run(), "systemd 不可达时不能算停止成功")
+
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "systemctl"), []byte("#!/bin/sh\ncase \"$2\" in is-active) echo inactive; exit 3;; is-enabled) echo disabled; exit 1;; esac\nexit 0\n"), 0o755))
+	require.NoError(t, run(), "systemd 可达且服务已停止、未自启")
 }

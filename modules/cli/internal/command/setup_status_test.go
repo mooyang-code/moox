@@ -196,3 +196,13 @@ func TestDeploymentChangeForOrdinaryComponentOnlyTouchesRegistry(t *testing.T) {
 	_, err = changeDeploymentStatus(t.Context(), env, "nowhere", "admin", true, true)
 	require.ErrorContains(t, err, "没有主机")
 }
+
+func TestHostEnableDoesNotStartProgramsWhenRegistryChangeFails(t *testing.T) {
+	env, registry, calls := statusFixture()
+	registry.hosts["factor"] = "disabled"
+	registry.failSet = true
+	report, err := changeHostStatus(t.Context(), env, "factor", true, true)
+	require.ErrorContains(t, err, "admin refused")
+	assert.Empty(t, *calls, "登记没改成功就不能启动外部程序")
+	assert.Equal(t, "skipped", report.Steps[1].Result)
+}

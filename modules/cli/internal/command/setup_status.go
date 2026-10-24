@@ -170,8 +170,9 @@ func changeHostStatus(ctx context.Context, env statusEnv, hostID string, enable,
 		if stepErr != nil {
 			step.Result = "failed: " + stepErr.Error()
 			report.Status, report.Error = "failed", stepErr.Error()
-			// 停用时任何一个程序没停住就不改登记；启用时登记已改，其余程序继续尝试启动。
-			failed = !enable
+			// 停用时任何一个程序没停住就不改登记；启用时只有登记步骤成功后才启动程序，
+			// 登记失败则不启动任何程序，登记成功后某个程序启动失败不影响其余程序继续尝试。
+			failed = !enable || strings.HasPrefix(step.Action, "set-host-status")
 			continue
 		}
 		step.Result = "ok"

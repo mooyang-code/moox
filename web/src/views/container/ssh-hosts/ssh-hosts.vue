@@ -12,7 +12,7 @@
         :data="rows"
         :bordered="{ cell: true }"
         :pagination="false"
-        :scroll="{ x: '100%', minWidth: 900 }"
+        :scroll="{ x: '100%', minWidth: 1200 }"
       >
         <template #columns>
           <a-table-column title="名称" :width="160">
@@ -21,7 +21,16 @@
             </template>
           </a-table-column>
           <a-table-column title="主机 ID" data-index="hostId" :width="120" />
-          <a-table-column title="地址" data-index="displayAddress" :width="170" />
+          <a-table-column title="地址" data-index="displayAddress" :width="150" />
+          <a-table-column title="内网地址" :width="140">
+            <template #cell="{ record }">{{ record.host.private_address || "-" }}</template>
+          </a-table-column>
+          <a-table-column title="地域" :width="120">
+            <template #cell="{ record }">{{ record.host.region || "-" }}</template>
+          </a-table-column>
+          <a-table-column title="可达性" :width="100" align="center">
+            <template #cell="{ record }">{{ record.host.reachability === "outbound" ? "只能出站" : "可直达" }}</template>
+          </a-table-column>
           <a-table-column title="SSH" :width="170">
             <template #cell="{ record }">{{ sshText(record) }}</template>
           </a-table-column>

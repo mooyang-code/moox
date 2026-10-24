@@ -84,9 +84,6 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	// 更新用户登录信息
 	s.userDAO.UpdateUserLoginInfo(ctx, user.UserID, req.ClientIp)
 
-	// 成功登录写入全局活动日志
-	s.recordLoginLog(ctx, user, req)
-
 	sessionID, err := mooxsecurity.RandomHex(16)
 	if err != nil {
 		return loginInternalError(), nil
@@ -127,6 +124,9 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 			},
 		}, nil
 	}
+
+	// 会话与令牌都签发成功后才写入全局活动日志，登录失败不留“登录成功”记录
+	s.recordLoginLog(ctx, user, req)
 
 	// 构造用户信息（安全转义）
 	userInfo := authutils.BuildSafeUserInfo(user)

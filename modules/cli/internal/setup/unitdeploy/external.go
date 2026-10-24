@@ -182,9 +182,7 @@ done`, append([]string{stage, installSecrets}, moves...)...); err != nil {
 func verifyExternal(ctx context.Context, target setupssh.Client, unit string, disabled bool) error {
 	if disabled {
 		// 停用状态下安装脚本不会启动服务；这里确保它也不会开机自启、不在运行。
-		if err := runExternal(ctx, target, "keep the disabled external program stopped", `systemctl --user stop "$1" >/dev/null 2>&1 || true
-systemctl --user disable "$1" >/dev/null 2>&1 || true
-[ "$(systemctl --user is-enabled "$1" 2>/dev/null || true)" != enabled ] && [ "$(systemctl --user is-active "$1" 2>/dev/null || true)" != active ]`, unit); err != nil {
+		if err := runExternal(ctx, target, "keep the disabled external program stopped", externalStopScript, unit); err != nil {
 			return errors.New("disabled external program is still enabled or running")
 		}
 		return nil

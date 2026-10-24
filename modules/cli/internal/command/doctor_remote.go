@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"os/exec"
 	"path/filepath"
@@ -100,6 +101,10 @@ func (r *doctorRemote) Relay(auth doctorcli.HealthAuth) *doctorcli.RelayProber {
 func (r *doctorRemote) Close() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for id, definition := range r.manifest.HostCatalog {
+		definition.SSH.Password = ""
+		r.manifest.HostCatalog[id] = definition
+	}
 	for id, client := range r.clients {
 		_ = client.Close()
 		delete(r.clients, id)
@@ -116,6 +121,15 @@ func loadDoctorRemote(file string, localNodeID string, gateway any) *doctorRemot
 	if err != nil {
 		return nil
 	}
-	defer clearSetupSecrets(snapshot)
-	return newDoctorRemote(snapshot.Manifest, localNodeID, gateway)
+	return newDoctorRemoteFromSnapshot(snapshot, localNodeID, gateway)
+}
+
+// newDoctorRemoteFromSnapshot 先复制主机目录（SSH 密码要留到建立连接时使用），再清掉快照里的其余凭据；
+// 复制出来的密码在 Close 时清除。
+func newDoctorRemoteFromSnapshot(snapshot *setupconfig.Snapshot, localNodeID string, gateway any) *doctorRemote {
+	manifest := snapshot.Manifest
+	catalog := maps.Clone(manifest.HostCatalog)
+	clearSetupSecrets(snapshot)
+	manifest.HostCatalog = catalog
+	return newDoctorRemote(manifest, localNodeID, gateway)
 }

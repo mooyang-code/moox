@@ -155,3 +155,29 @@ func TestPresenceTransitionsAreNotFilteredWhileTopologyIsUnknown(t *testing.T) {
 		})
 	}
 }
+
+// 旧采集器失联并通知后，同一主机上换了新采集器开始上报：补发主机恢复（沿用旧采集器的告警标识）。
+func TestNewAgentOfAnUnreachableRegisteredHostRecoversTheHost(t *testing.T) {
+	ctx := context.Background()
+	r := NewRegistry(openRegistryTestDB(t))
+	r.SetRegisteredHosts(func(context.Context) (map[string]bool, error) { return map[string]bool{"control": true}, nil })
+	t0 := time.Date(2026, 10, 24, 1, 0, 0, 0, time.UTC)
+	observeAgent(t, r, "control", "OLD", t0)
+	transitions, err := r.MarkUnreachable(ctx, t0.Add(4*time.Minute), DefaultHostStaleAfter)
+	require.NoError(t, err)
+	require.Len(t, transitions, 1)
+
+	back := observeAgent(t, r, "control", "NEW", t0.Add(10*time.Minute))
+	require.NotNil(t, back.Transition, "换了新采集器后主机恢复要通知")
+	require.Equal(t, "OLD", back.Transition.AgentID)
+	require.Equal(t, PresenceReachable, back.Transition.To)
+
+	// 主机上已有采集器在线时，再来一个新采集器不是恢复。
+	other := observeAgent(t, r, "control", "THIRD", t0.Add(11*time.Minute))
+	require.Nil(t, other.Transition)
+	// 没有登记的主机不产生恢复。
+	observeAgent(t, r, "gone", "G1", t0)
+	_, err = r.MarkUnreachable(ctx, t0.Add(20*time.Minute), DefaultHostStaleAfter)
+	require.NoError(t, err)
+	require.Nil(t, observeAgent(t, r, "gone", "G2", t0.Add(30*time.Minute)).Transition)
+}

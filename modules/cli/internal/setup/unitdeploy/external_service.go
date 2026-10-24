@@ -17,15 +17,20 @@ func ExternalProgramUnit(component string) (unit string, ok bool) {
 	return program.unit, ok
 }
 
+// externalStopScript 停止并取消自启，再核对结果。先确认能连上用户级 systemd（连不上时 stop/disable/查询都会失败，
+// 空输出不能当作“已停止”）；服务没安装属于已停止。
+const externalStopScript = `systemctl --user list-units --no-legend >/dev/null 2>&1 || exit 1
+systemctl --user stop "$1" >/dev/null 2>&1 || true
+systemctl --user disable "$1" >/dev/null 2>&1 || true
+[ "$(systemctl --user is-active "$1" 2>/dev/null || true)" != active ] && [ "$(systemctl --user is-enabled "$1" 2>/dev/null || true)" != enabled ]`
+
 // StopExternalService 停止外部程序并取消开机自启，核对已停止后才返回成功；服务本来就没安装也算停止。
 func StopExternalService(ctx context.Context, target setupssh.Client, component string) error {
 	unit, ok := ExternalProgramUnit(component)
 	if !ok {
 		return fmt.Errorf("%s 不是外部程序", component)
 	}
-	return runExternal(ctx, target, "stop and disable "+component, `systemctl --user stop "$1" >/dev/null 2>&1 || true
-systemctl --user disable "$1" >/dev/null 2>&1 || true
-[ "$(systemctl --user is-active "$1" 2>/dev/null || true)" != active ] && [ "$(systemctl --user is-enabled "$1" 2>/dev/null || true)" != enabled ]`, unit)
+	return runExternal(ctx, target, "stop and disable "+component, externalStopScript, unit)
 }
 
 // StartExternalService 启用并启动外部程序，再用安装目录里的健康凭据执行本机健康检查，等到就绪才返回。
