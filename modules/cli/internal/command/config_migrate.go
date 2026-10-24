@@ -11,7 +11,7 @@ import (
 )
 
 func newConfigMigrateCommand() *cobra.Command {
-	var file, renameHost, importSCF, tlsMode, addDeployment, reachability string
+	var file, renameHost, importSCF, tlsMode, addDeployment, reachability, factorsEnabled string
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "migrate",
@@ -21,6 +21,7 @@ func newConfigMigrateCommand() *cobra.Command {
 - 给 control、storage、overseas、factor 主机补上中文名 label（已有的不动）；
 - 把 [deployments] 里已改名的旧组件身份改成当前名字（cloudnode → cloudfunction）；
 - 加 --rename-host 旧ID=新ID 时把主机 ID 改名（主机表、[deployments]、access_host 与 host 引用）；
+- 加 --set-factors-enabled true|false 时设置 [factors] enabled；
 - 加 --set-reachability 主机ID=direct|outbound 时设置主机可达性；
 - 加 --add-deployment 主机ID=组件ID[,组件ID] 时把组件并入该主机的 [deployments]（已有的不重复）；
 - 加 --import-scf <JSON> 时整体替换 [scf_plan]（云账号、地域网络与入口主机、空间与市场），并给入口主机补上 region 与 private_address。
@@ -38,6 +39,7 @@ func newConfigMigrateCommand() *cobra.Command {
 				}
 				opts.TLSModeHost, opts.TLSMode = strings.TrimSpace(host), strings.TrimSpace(mode)
 			}
+			opts.FactorsEnabled = strings.TrimSpace(factorsEnabled)
 			if reachability != "" {
 				host, mode, ok := strings.Cut(reachability, "=")
 				if !ok {
@@ -74,6 +76,7 @@ func newConfigMigrateCommand() *cobra.Command {
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "moox.toml 路径（因子库目录相对它所在的仓库根目录解析）")
 	cmd.Flags().StringVar(&renameHost, "rename-host", "", "把主机 ID 改名，写成 旧ID=新ID，例如 legacy-1=overseas")
 	cmd.Flags().StringVar(&importSCF, "import-scf", "", "用这份 JSON 整体替换 [scf_plan]，并给入口主机补上 region 与 private_address")
+	cmd.Flags().StringVar(&factorsEnabled, "set-factors-enabled", "", "设置 [factors] enabled，取 true 或 false（true 时 setup init / setup factors 才会导入因子）")
 	cmd.Flags().StringVar(&reachability, "set-reachability", "", "设置主机的可达性，写成 主机ID=direct|outbound（只能出站的内网机器用 outbound）")
 	cmd.Flags().StringVar(&addDeployment, "add-deployment", "", "把组件加进主机的 [deployments]，写成 主机ID=组件ID[,组件ID]，例如 factor=factor-engine,archive-worker")
 	cmd.Flags().StringVar(&tlsMode, "set-tls-mode", "", "设置主机的控制台证书模式，写成 主机ID=auto|public|internal")

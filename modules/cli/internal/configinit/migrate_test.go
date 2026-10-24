@@ -356,3 +356,21 @@ func TestMigrateSetsHostReachability(t *testing.T) {
 	_, err = MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, ReachabilityHost: "overseas", Reachability: "sideways"})
 	require.ErrorContains(t, err, "direct 或 outbound")
 }
+
+func TestMigrateSetsFactorsEnabled(t *testing.T) {
+	text := regexp.MustCompile(`(?m)^enabled = true$`).ReplaceAllString(sampleText(t), "enabled = false")
+	path, root, keys := migrateFixture(t, text)
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true, FactorsEnabled: "true"})
+	require.NoError(t, err)
+	require.Equal(t, "true", report.FactorsEnabled)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	manifest, err := setupconfig.Parse(plain)
+	require.NoError(t, err)
+	require.True(t, manifest.Factors.Enabled)
+
+	_, err = MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, FactorsEnabled: "yes"})
+	require.ErrorContains(t, err, "true 或 false")
+}

@@ -32,6 +32,8 @@ type MigrateOptions struct {
 	RenameFrom, RenameTo string
 	// TLSModeHost / TLSMode 非空时设置该主机的控制台证书模式（--set-tls-mode 主机=auto|public|internal）。
 	TLSModeHost, TLSMode string
+	// FactorsEnabled 非空（"true"/"false"）时设置 [factors] enabled（--set-factors-enabled）。
+	FactorsEnabled string
 	// ReachabilityHost / Reachability 非空时设置该主机的可达性（--set-reachability 主机=direct|outbound）。
 	ReachabilityHost, Reachability string
 	// AddDeploymentHost / AddDeploymentComponents 非空时把这些组件加进该主机的 [deployments] 条目（--add-deployment 主机=组件,组件）。
@@ -103,6 +105,8 @@ type MigrateReport struct {
 	Deployments bool              `json:"deployments,omitempty"`
 	SCF         *SCFImportReport  `json:"scf,omitempty"`
 	TLSMode     map[string]string `json:"tls_mode,omitempty"`
+	// FactorsEnabled 记录 --set-factors-enabled 的结果。
+	FactorsEnabled string `json:"factors_enabled,omitempty"`
 	// Reachability 记录 --set-reachability 的结果。
 	Reachability map[string]string `json:"reachability,omitempty"`
 	// AddedDeployments 记录 --add-deployment 新增到各主机的组件。
@@ -148,6 +152,12 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 			return report, err
 		}
 		report.TLSMode = map[string]string{opts.TLSModeHost: opts.TLSMode}
+	}
+	if opts.FactorsEnabled != "" {
+		if migrated, err = setFactorsEnabled(migrated, opts.FactorsEnabled); err != nil {
+			return report, err
+		}
+		report.FactorsEnabled = opts.FactorsEnabled
 	}
 	if opts.ReachabilityHost != "" {
 		if migrated, err = setHostReachability(migrated, opts.ReachabilityHost, opts.Reachability); err != nil {
@@ -807,6 +817,24 @@ func setBlockKey(b *block, key, value string) {
 		}
 	}
 	b.lines = append(b.lines[:at], append([]string{line}, b.lines[at:]...)...)
+}
+
+// setFactorsEnabled 设置 [factors] 的 enabled；没有 [factors] 表时报错，不凭空创建。
+func setFactorsEnabled(plain []byte, value string) ([]byte, error) {
+	if value != "true" && value != "false" {
+		return nil, errors.New("--set-factors-enabled 的取值只能是 true 或 false")
+	}
+	blocks := splitBlocks(strings.Split(string(plain), "\n"))
+	i := slices.IndexFunc(blocks, func(b block) bool { return b.header == "factors" && !b.array })
+	if i < 0 {
+		return nil, errors.New("moox.toml 里没有 [factors]")
+	}
+	setBlockKey(&blocks[i], "enabled", value)
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.lines...)
+	}
+	return []byte(strings.Join(out, "\n")), nil
 }
 
 // setHostReachability 设置 [hosts.<host>] 的 reachability：direct 表示可直达（删除该键），outbound 表示只能出站。
