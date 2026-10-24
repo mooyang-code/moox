@@ -248,10 +248,8 @@ func (s *ServiceImpl) DeleteEventBusConsumers(ctx context.Context, req *pb.Delet
 	rsp := &pb.DeleteEventBusConsumersRsp{RetInfo: retOK()}
 	for _, durable := range durables {
 		rsp.Attempted = true
-		deleteCtx, cancelDelete := eventBusRequest(ctx)
-		err := session.DeleteConsumer(req.GetStream(), durable, nats.Context(deleteCtx))
-		cancelDelete()
-		if errors.Is(err, nats.ErrConsumerNotFound) {
+		removed, err := deleteConsumerWithRetry(ctx, session, req.GetStream(), durable)
+		if !removed && err == nil {
 			continue
 		}
 		if err != nil {
@@ -263,6 +261,47 @@ func (s *ServiceImpl) DeleteEventBusConsumers(ctx context.Context, req *pb.Delet
 	}
 	log.WarnContextf(ctx, "eventbus ops 已删除消费者 stream=%s deleted=%v", req.GetStream(), rsp.Deleted)
 	return rsp, nil
+}
+
+// 服务端删除消费者目录时，消费者的状态文件可能刚好还在落盘，会返回“directory not empty”；
+// 这是瞬时冲突，稍后重试即可。
+const (
+	eventBusDeleteAttempts = 5
+	eventBusDeleteBackoff  = 100 * time.Millisecond
+)
+
+func isTransientConsumerDeleteError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "directory not empty")
+}
+
+// deleteConsumerWithRetry 删除一个消费者并返回是否由本次调用删掉：
+// 消费者本来就不存在返回 (false, nil)；瞬时冲突后重试时发现已不存在，说明前一次其实已经删掉，返回 (true, nil)。
+func deleteConsumerWithRetry(ctx context.Context, session eventBusSession, stream, durable string) (bool, error) {
+	var err error
+	conflicted := false
+	for attempt := 0; attempt < eventBusDeleteAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return false, ctx.Err()
+			case <-time.After(eventBusDeleteBackoff * time.Duration(attempt)):
+			}
+		}
+		deleteCtx, cancel := eventBusRequest(ctx)
+		err = session.DeleteConsumer(stream, durable, nats.Context(deleteCtx))
+		cancel()
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, nats.ErrConsumerNotFound):
+			return conflicted, nil
+		case isTransientConsumerDeleteError(err):
+			conflicted = true
+		default:
+			return false, err
+		}
+	}
+	return false, err
 }
 
 // PurgeEventBusSubjects 清除流里指定主题的消息；主题必须是数据集事件的确切主题。

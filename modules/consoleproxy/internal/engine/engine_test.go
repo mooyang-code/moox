@@ -458,9 +458,18 @@ func TestFailedStartupReleasesListenerAndOwnership(t *testing.T) {
 	if err := e.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	listener, err := net.Listen("tcp", net.JoinHostPort(c.Public.Bind, strconv.Itoa(c.Public.Port)))
-	if err != nil {
-		t.Fatalf("stopped engine retained TCP listener: %v", err)
+	// 监听器在操作系统层面的释放可能略晚于 Stop 返回；持续占用才算泄漏。
+	address := net.JoinHostPort(c.Public.Bind, strconv.Itoa(c.Public.Port))
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		listener, err := net.Listen("tcp", address)
+		if err == nil {
+			listener.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stopped engine retained TCP listener: %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	listener.Close()
 }

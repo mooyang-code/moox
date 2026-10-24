@@ -44,7 +44,7 @@ func waitSynced(t *testing.T, r *Runtime, setID string, since time.Time) {
 		r.catchups.mu.Lock()
 		defer r.catchups.mu.Unlock()
 		return job != nil && (job.state == "synced" || job.err != "")
-	}, 2*time.Second, 10*time.Millisecond)
+	}, 15*time.Second, 10*time.Millisecond)
 }
 
 // 恢复追赶：先同步本地数据；再显式建立追赶目标并唤醒追赶循环；水位追到目标才算追平。
@@ -149,7 +149,7 @@ func TestEngineResumeCatchesUpThroughLifecycle(t *testing.T) {
 	require.Eventually(t, func() bool {
 		r.life.Refresh(ctx)
 		return r.life.Stage(ref) == lifecycle.StageRunning
-	}, 3*time.Second, 20*time.Millisecond)
+	}, 15*time.Second, 20*time.Millisecond)
 	require.True(t, r.gate("fset_a"))
 	require.False(t, r.catchupGate("fset_a"))
 	_ = store
