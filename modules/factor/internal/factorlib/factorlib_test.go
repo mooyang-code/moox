@@ -13,9 +13,11 @@ import (
 func TestRepositoryLibrariesCompile(t *testing.T) {
 	cases := map[string]map[string]int{
 		"../../factors": {
-			// 回看按窗口上限 120 推导（参数可在范围内逐期调整）。
+			// 回看按窗口上限推导（参数可在范围内逐期调整）：Ema 上限 4825，其余 120。
 			"Bias": 120, "BiasQ": 239, "Cci": 239, "MinMax": 120, "QuoteVolumeMean": 120, "QuoteVolumeMeanQ": 239,
 			"VolumeMeanQ": 239, "ZfAbsMean": 240, "ZfMeanQ": 239, "ZfStd": 121, "ZscoreAbsMeanQ": 358,
+			// 常用技术指标（common.yaml）：EMA、MACD、RSI 带指数衰减，回看按截断到起点权重低于 1e-9 的根数推导。
+			"Ma": 120, "Ema": 49995, "Macd": 362, "Rsi": 2478, "Roc": 121, "Boll": 120, "Atr": 121, "ReturnStd": 121, "Vwap": 120,
 		},
 		"../../../../examples/factors": {"Bias": 120, "Cci": 239, "ma": 120, "sma": 405},
 	}

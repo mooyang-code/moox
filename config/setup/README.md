@@ -36,10 +36,14 @@ moox-cli setup init \
 启用 SCF 时，每个采集地域都要有一台同地域、带私网地址的 Access 主机；函数在该地域 VPC 里经
 Access 私网地址认领和写入，规则见 `skills/moox/references/private-network.md`。
 
-默认因子配置位于仓库根目录的 `moox.toml.example`，当前把 `Bias`、`Cci`、`MinMax`、`QuoteVolumeMean`
+默认因子配置位于仓库根目录的 `moox.toml.example`，当前把 `xbx.yaml` 里的 `Bias`、`Cci`、`MinMax`、`QuoteVolumeMean`，
+以及 `common.yaml` 里的常用技术指标（MA、EMA、MACD、RSI、ROC、BOLL、ATR、收益率波动、VWAP）
 加入币安现货、合约 1m 采集任务结果（`dataset_dasftksvjhj2jom4vhd0`、`dataset_dasftksvjhj2jom4vhdg`）的因子集。示例用 `[[factors.definitions]]`
 声明因子、用 `[[factors.members]]` 声明因子集成员。将示例复制为
 `moox.toml` 后，`setup init` 会导入因子定义、创建成员并启用它们；因子库文件路径相对
 `factors.source_dir` 解析。若不需要默认因子，设置 `factors.enabled = false`。如果 Storage
 已存在且 `setup init` 因元数据契约差异停止，可改用 `moox-cli setup factors --file ./moox.toml`
-单独导入因子。
+单独导入因子。已经在运行的环境要补上后来新增的默认因子时，先执行
+`moox-cli config migrate --file ./moox.toml --add-default-factors`（预览，确认后加 `--yes` 写回，原文件自动备份），
+把样例里有、配置里还没有的定义与成员补进 `moox.toml`，再执行 `moox-cli setup factors --file ./moox.toml` 导入；
+已有的定义与成员不会被改动。
