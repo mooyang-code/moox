@@ -717,7 +717,10 @@ const filterFieldOptions = computed(() =>
 const detailColumns = computed(() => {
   const row = detailRow.value;
   if (!row) return [];
-  const names = rowsToColumnNames([rowToSyntheticRecord(row)], tableColumnNames.value);
+  // 调用方指定了显示列时只列这些列：其余列没有投影，列出来只会是一排“-”。
+  const names = props.displayColumns
+    ? visibleColumnNames.value
+    : rowsToColumnNames([rowToSyntheticRecord(row)], tableColumnNames.value);
   return names.map(name => ({ name: columnTitle(name), value: row.values[name] || "-" }));
 });
 const normalizedKlineLimit = computed(() => normalizeKlineLimit(klineLimit.value));
