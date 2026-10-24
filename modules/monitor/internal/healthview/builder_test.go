@@ -48,7 +48,10 @@ func TestOverviewV2MixedFactsSnapshot(t *testing.T) {
 	require.Len(t, view.Components, 5)
 	require.Equal(t, "目录中的控制台入口", view.Components[1].Name)
 	require.Equal(t, "healthy", view.Components[1].Status, "page failure must not overwrite proxy readiness")
-	require.Equal(t, "control", view.Hosts[1].HostId, "hostname alone must not consume the registered control host")
+	require.Len(t, view.Hosts, 2, "没有 host_id 的采集器不进入主机列表")
+	require.Equal(t, "control", view.Hosts[0].HostId, "hostname alone must not consume the registered control host")
+	require.Equal(t, "unknown", view.Hosts[0].Status, "登记主机没有上报采集器时显示未上报")
+	require.Equal(t, "offline", view.Hosts[1].HostId)
 	require.Equal(t, int32(1), view.Summary.Components.HealthyCount)
 	require.Equal(t, int32(1), view.Summary.UnregisteredCount)
 	wire, err := protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}.Marshal(view)
@@ -186,4 +189,31 @@ func TestSeriesLimitAlertIsAWarning(t *testing.T) {
 	require.Equal(t, "metrics_ingest", object.Kind)
 	require.Equal(t, "warning", alertSeverity("metrics_ingest:series_limit", object))
 	require.Equal(t, "critical", alertSeverity("dataset:storage:bars:1m", alertObject("crypto", "dataset:storage:bars:1m", observability.Overview{})), "数据集告警仍是严重")
+}
+
+// 同一台登记主机有新旧两个采集器时只取最近上报的；旧的超时不产生失联告警；没有 host_id 或未登记的采集器不进入主机列表。
+func TestOnlyTheLatestAgentOfEachRegisteredHostSummarizesTheHost(t *testing.T) {
+	now := time.Now()
+	facts := observability.Overview{TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{
+		{HostID: "control", Status: "enabled"}, {HostID: "storage", Status: "enabled"},
+	}, Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "host-agent", Status: "enabled"}, {HostID: "storage", ComponentID: "host-agent", Status: "enabled"}}}, Hosts: []observability.HostStatus{
+		{HostID: "control", AgentID: "OLD1", Status: "down", LastSeenAt: now.Add(-48 * time.Hour)},
+		{HostID: "control", AgentID: "NEW1", Status: "healthy", LastSeenAt: now},
+		{HostID: "", AgentID: "NOHOST", Hostname: "control", Status: "down", LastSeenAt: now.Add(-time.Hour)},
+		{HostID: "compute-1", AgentID: "GONE", Status: "down", LastSeenAt: now.Add(-time.Hour)},
+	}}
+	view := projectFacts(facts)
+	require.Len(t, view.Hosts, 2)
+	require.Equal(t, "control", view.Hosts[0].HostId)
+	require.Equal(t, "NEW1", view.Hosts[0].AgentId, "旧采集器不参与汇总")
+	require.Equal(t, "healthy", view.Hosts[0].Status)
+	require.Equal(t, "storage", view.Hosts[1].HostId)
+	require.Equal(t, "unknown", view.Hosts[1].Status, "登记主机没有采集器上报时显示未上报")
+	require.Empty(t, view.Alerts, "旧采集器、无主机、未登记的采集器超时都不产生失联告警")
+
+	facts.Hosts[1].Status = "down"
+	facts.Hosts[1].LastSeenAt = now.Add(-10 * time.Minute)
+	view = projectFacts(facts)
+	require.Len(t, view.Alerts, 1)
+	require.Equal(t, "host-presence:NEW1", view.Alerts[0].Id, "只有当前选中的采集器失联才告警")
 }

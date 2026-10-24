@@ -79,6 +79,8 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 		_ = runtime.Close()
 		return nil, err
 	}
+	// 只有登记主机上最近上报的采集器才产生上下线事件与通知；拓扑还没有同步过时不过滤。
+	hostRegistry.SetRegisteredHosts(registeredHosts(runtime.Repositories.Topology))
 
 	var presenceFailureMu sync.Mutex
 	presenceFailures := make(map[string]struct{})
@@ -340,4 +342,34 @@ func loadMonitorDatasetHealthPolicy(cfg *config.Config) (report.DatasetHealthPol
 		return report.DatasetHealthPolicy{}, fmt.Errorf("monitor Dataset health policy path is required")
 	}
 	return report.LoadDatasetHealthPolicy(cfg.Metrics.DatasetHealthPolicyPath)
+}
+
+// registeredHostsTTL 是登记主机集合的缓存时长：采集事件很频繁，拓扑快照的解析与校验不必每次都做。
+const registeredHostsTTL = 10 * time.Second
+
+// registeredHosts 从最近一次完整的部署拓扑读出登记主机；还没有拓扑快照时返回 nil（不按登记过滤）。
+func registeredHosts(topology *store.TopologyRepository) func(context.Context) (map[string]bool, error) {
+	var mu sync.Mutex
+	var cached map[string]bool
+	var loadedAt time.Time
+	return func(ctx context.Context) (map[string]bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !loadedAt.IsZero() && time.Since(loadedAt) < registeredHostsTTL {
+			return cached, nil
+		}
+		snapshot, err := topology.Snapshot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		hosts := map[string]bool(nil)
+		if snapshot != nil && len(snapshot.Hosts) > 0 {
+			hosts = make(map[string]bool, len(snapshot.Hosts))
+			for _, host := range snapshot.Hosts {
+				hosts[host.HostID] = true
+			}
+		}
+		cached, loadedAt = hosts, time.Now()
+		return hosts, nil
+	}
 }

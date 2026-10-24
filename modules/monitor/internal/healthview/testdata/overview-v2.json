@@ -191,32 +191,6 @@
   "generated_at": "2026-10-09T12:00:00Z",
   "hosts": [
     {
-      "address": "",
-      "agent_id": "STANDALONE",
-      "cpu_available": false,
-      "cpu_cores": 0,
-      "cpu_percent": 0,
-      "cpu_threshold": 0,
-      "disk_available": false,
-      "disk_mountpoint": "",
-      "disk_percent": 0,
-      "disk_threshold": 0,
-      "disk_total_bytes": "0",
-      "disk_used_bytes": "0",
-      "gateway_signals": [],
-      "host_id": "",
-      "hostname": "control",
-      "last_reported_at": "2026-10-09T12:00:00Z",
-      "memory_available": false,
-      "memory_percent": 0,
-      "memory_threshold": 0,
-      "memory_total_bytes": "0",
-      "memory_used_bytes": "0",
-      "metrics_available": false,
-      "reason": "主机连接正常",
-      "status": "healthy"
-    },
-    {
       "address": "control.test",
       "agent_id": "",
       "cpu_available": false,
@@ -365,7 +339,7 @@
       "unchecked_count": 1,
       "unknown_count": 1
     },
-    "healthy_count": 2,
+    "healthy_count": 1,
     "unknown_count": 2,
     "unregistered_count": 1
   },

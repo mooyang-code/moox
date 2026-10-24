@@ -202,3 +202,60 @@ func TestChecksProbeOutboundHostThroughRelay(t *testing.T) {
 	}
 	t.Fatal("outbound host check not found")
 }
+
+// 只能出站主机上的外部程序组件：生成经 control 中转的 readyz 检查（健康端口 11417、11418），不用本机回环；
+// 中转许可包含这两个端口，调用方是 monitor 与 moox-cli。
+func TestChecksProbeExternalProgramsOnOutboundHostThroughRelay(t *testing.T) {
+	snapshot := testSnapshot(t)
+	snapshot.LocalHostID = "control"
+	snapshot.Hosts = append(snapshot.Hosts, &adminpb.DeploymentHost{HostId: "factor", Address: "192.168.0.103", Status: "enabled", Reachability: "outbound"})
+	snapshot.Deployments = append(snapshot.Deployments,
+		&adminpb.ComponentDeployment{HostId: "factor", ComponentId: "host-agent", Status: "enabled"},
+		&adminpb.ComponentDeployment{HostId: "factor", ComponentId: "factor-engine", Status: "enabled"},
+		&adminpb.ComponentDeployment{HostId: "factor", ComponentId: "archive-worker", Status: "enabled"},
+	)
+	checks, err := Checks(snapshot, testHTTPS())
+	require.NoError(t, err)
+	urls := map[string]string{}
+	for _, check := range checks {
+		urls[check.CheckID] = check.URL
+	}
+	require.Contains(t, urls["deployment:factor:factor-engine"], "//factor.moox-relay:11417/readyz")
+	require.Contains(t, urls["deployment:factor:archive-worker"], "//factor.moox-relay:11418/readyz")
+	for _, id := range []string{"deployment:factor:factor-engine", "deployment:factor:archive-worker"} {
+		require.NotContains(t, urls[id], "127.0.0.1", "不设 loopback，经中转探测")
+	}
+
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	topology := servicecatalog.Topology{ControlHostID: "control", Hosts: []servicecatalog.Host{
+		{ID: "control", Address: "198.51.100.10", Status: servicecatalog.Enabled},
+		{ID: "factor", Address: "192.168.0.103", Status: servicecatalog.Enabled, Reachability: servicecatalog.ReachabilityOutbound},
+	}}
+	for _, host := range topology.Hosts {
+		for _, id := range []string{"host-gateway", "host-agent"} {
+			topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: host.ID, ComponentID: id, Status: servicecatalog.Enabled})
+		}
+	}
+	for _, id := range []string{"admin", "console-proxy", "web-host", "eventbus"} {
+		topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: "control", ComponentID: id, Status: servicecatalog.Enabled})
+	}
+	topology.Deployments = append(topology.Deployments,
+		servicecatalog.Deployment{HostID: "factor", ComponentID: "factor-engine", Status: servicecatalog.Enabled},
+		servicecatalog.Deployment{HostID: "factor", ComponentID: "archive-worker", Status: servicecatalog.Enabled})
+	compiled, err := catalog.Compile(topology, "control")
+	require.NoError(t, err)
+	var ports []int
+	for _, relay := range compiled.Relays {
+		if relay.HostID != "factor" {
+			continue
+		}
+		for _, port := range relay.Ports {
+			if port.Port == 11417 || port.Port == 11418 {
+				ports = append(ports, port.Port)
+				require.ElementsMatch(t, []string{"monitor", "moox-cli"}, port.Callers)
+			}
+		}
+	}
+	require.ElementsMatch(t, []int{11417, 11418}, ports)
+}

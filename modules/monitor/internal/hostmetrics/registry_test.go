@@ -97,3 +97,61 @@ func openRegistryTestDB(t *testing.T) *gorm.DB {
 
 	return db
 }
+
+func observeAgent(t *testing.T, r *Registry, host, agent string, at time.Time) ObserveResult {
+	t.Helper()
+	result, err := r.Observe(context.Background(), HostObservation{HostID: host, AgentID: agent, Hostname: agent + "-host", BootID: "boot", OccurredAt: at, EventID: agent + at.String()})
+	require.NoError(t, err)
+	return result
+}
+
+// 只有登记主机上最近上报的采集器才产生失联与恢复事件：旧采集器超时、没有 host_id、未登记主机的采集器都只更新状态。
+func TestOnlyTheLatestAgentOfARegisteredHostProducesPresenceTransitions(t *testing.T) {
+	ctx := context.Background()
+	r := NewRegistry(openRegistryTestDB(t))
+	r.SetRegisteredHosts(func(context.Context) (map[string]bool, error) { return map[string]bool{"control": true}, nil })
+	t0 := time.Date(2026, 10, 24, 1, 0, 0, 0, time.UTC)
+	observeAgent(t, r, "control", "OLD", t0)
+	observeAgent(t, r, "control", "NEW", t0.Add(time.Hour))
+	observeAgent(t, r, "", "NOHOST", t0.Add(time.Hour))
+	observeAgent(t, r, "gone", "UNREGISTERED", t0.Add(time.Hour))
+
+	transitions, err := r.MarkUnreachable(ctx, t0.Add(time.Hour+4*time.Minute), DefaultHostStaleAfter)
+	require.NoError(t, err)
+	require.Len(t, transitions, 1, "旧采集器的失联不产生事件")
+	require.Equal(t, "NEW", transitions[0].AgentID)
+	require.Equal(t, PresenceUnreachable, transitions[0].To)
+	for _, agent := range []string{"OLD", "NOHOST", "UNREGISTERED"} {
+		status, err := r.Status(ctx, agent)
+		require.NoError(t, err)
+		require.Equal(t, PresenceUnreachable, status, agent+" 的状态仍然要更新")
+	}
+
+	// 最新采集器恢复要通知；被取代的旧采集器回来而新采集器仍在线时不通知。
+	back := observeAgent(t, r, "control", "NEW", t0.Add(time.Hour+5*time.Minute))
+	require.NotNil(t, back.Transition)
+	require.Equal(t, PresenceReachable, back.Transition.To)
+	oldBack := observeAgent(t, r, "control", "OLD", t0.Add(time.Hour+6*time.Minute))
+	require.Nil(t, oldBack.Transition, "同一主机另有采集器在线时，旧采集器恢复不通知")
+	unregisteredBack := observeAgent(t, r, "gone", "UNREGISTERED", t0.Add(time.Hour+6*time.Minute))
+	require.Nil(t, unregisteredBack.Transition)
+}
+
+// 拓扑还不知道（提供者返回 nil）或读取失败时不过滤，保持原有行为：不能因此漏发告警。
+func TestPresenceTransitionsAreNotFilteredWhileTopologyIsUnknown(t *testing.T) {
+	ctx := context.Background()
+	for name, provider := range map[string]func(context.Context) (map[string]bool, error){
+		"unknown": func(context.Context) (map[string]bool, error) { return nil, nil },
+		"failed":  func(context.Context) (map[string]bool, error) { return nil, context.DeadlineExceeded },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := NewRegistry(openRegistryTestDB(t))
+			r.SetRegisteredHosts(provider)
+			t0 := time.Date(2026, 10, 24, 1, 0, 0, 0, time.UTC)
+			observeAgent(t, r, "", "ANY", t0)
+			transitions, err := r.MarkUnreachable(ctx, t0.Add(10*time.Minute), DefaultHostStaleAfter)
+			require.NoError(t, err)
+			require.Len(t, transitions, 1)
+		})
+	}
+}
