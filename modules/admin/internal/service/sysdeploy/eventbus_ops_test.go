@@ -591,3 +591,47 @@ func TestConnectEventBusRejectsWrongTokenAndUntrustedCA(t *testing.T) {
 	_, err = connectEventBus(bad)
 	require.ErrorContains(t, err, "TLS CA")
 }
+
+// 前 N 次删除返回“directory not empty”，之后按 then 返回；用来模拟服务端落盘与删除目录的瞬时冲突。
+type conflictDeleteSession struct {
+	fakeEventBusSession
+	conflicts int
+	then      error
+	calls     int
+}
+
+func (s *conflictDeleteSession) DeleteConsumer(_, _ string, _ ...nats.JSOpt) error {
+	s.calls++
+	if s.calls <= s.conflicts {
+		return errors.New("nats: unlinkat /data/obs/c: directory not empty")
+	}
+	return s.then
+}
+
+func TestDeleteConsumerWithRetryRecoversFromTransientConflict(t *testing.T) {
+	session := &conflictDeleteSession{conflicts: 2}
+	removed, err := deleteConsumerWithRetry(t.Context(), session, "S", "c")
+	require.NoError(t, err)
+	require.True(t, removed)
+	require.Equal(t, 3, session.calls)
+
+	// 冲突后重试发现已不存在：前一次其实已经删掉，仍算本次删除。
+	session = &conflictDeleteSession{conflicts: 1, then: nats.ErrConsumerNotFound}
+	removed, err = deleteConsumerWithRetry(t.Context(), session, "S", "c")
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	// 本来就不存在：跳过。
+	session = &conflictDeleteSession{then: nats.ErrConsumerNotFound}
+	removed, err = deleteConsumerWithRetry(t.Context(), session, "S", "c")
+	require.NoError(t, err)
+	require.False(t, removed)
+}
+
+func TestDeleteConsumerWithRetryGivesUpAfterPersistentConflict(t *testing.T) {
+	session := &conflictDeleteSession{conflicts: 100}
+	removed, err := deleteConsumerWithRetry(t.Context(), session, "S", "c")
+	require.ErrorContains(t, err, "directory not empty")
+	require.False(t, removed)
+	require.Equal(t, eventBusDeleteAttempts, session.calls)
+}
