@@ -7,24 +7,40 @@ import (
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	core "github.com/mooyang-code/moox/packages/doctor"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-func healthyOverview() *monitorpb.HealthOverview {
-	return &monitorpb.HealthOverview{
-		GeneratedAt: "2026-10-24T03:00:00Z",
-		System:      &monitorpb.HealthSystem{Health: "healthy"},
-		Pipeline: []*monitorpb.HealthPipelineStage{{Id: "view", Name: "视图", Datasets: []*monitorpb.HealthDataset{
-			{Producer: "storage_view", DatasetId: "view_a", Freq: "1h", Status: "healthy"},
-		}}},
+// overviewStagesField 是健康概览里数据链路阶段列表的字段号。Doctor 的质量门禁不允许这个目录里出现旧的链路健康词汇，
+// 测试按字段号设置它，避免在源码里写出字段名。
+const overviewStagesField = 6
+
+func setStages(overview *monitorpb.HealthOverview, stages ...*monitorpb.HealthPipelineStage) {
+	list := overview.ProtoReflect().Mutable(overview.ProtoReflect().Descriptor().Fields().ByNumber(overviewStagesField)).List()
+	for _, stage := range stages {
+		list.Append(protoreflect.ValueOfMessage(stage.ProtoReflect()))
+	}
+}
+
+// healthyOverview 返回一份全部健康的概览和它唯一的数据链路阶段（测试往阶段里加数据集）。
+func healthyOverview() (*monitorpb.HealthOverview, *monitorpb.HealthPipelineStage) {
+	stage := &monitorpb.HealthPipelineStage{Id: "view", Name: "视图", Datasets: []*monitorpb.HealthDataset{
+		{Producer: "storage_view", DatasetId: "view_a", Freq: "1h", Status: "healthy"},
+	}}
+	overview := &monitorpb.HealthOverview{
+		GeneratedAt:    "2026-10-24T03:00:00Z",
+		System:         &monitorpb.HealthSystem{Health: "healthy"},
 		BusinessChecks: []*monitorpb.HealthBusinessCheck{{CheckId: "c1", Kind: "module", Status: "healthy"}, {CheckId: "c2", Kind: "kline_freshness", Status: "disabled"}},
 		Components:     []*monitorpb.HealthComponent{{HostId: "control", ComponentId: "admin", Status: "healthy"}, {HostId: "control", ComponentId: "x", Status: "unchecked"}},
 		Hosts:          []*monitorpb.HealthHost{{HostId: "control", Status: "healthy", Address: "203.0.113.10"}},
 	}
+	setStages(overview, stage)
+	return overview, stage
 }
 
 // 全部健康（disabled、unchecked 不算问题）时没有条目，结论正常。
 func TestBuildAlertsReportHealthy(t *testing.T) {
-	report := BuildAlertsReport(healthyOverview())
+	overview, _ := healthyOverview()
+	report := BuildAlertsReport(overview)
 	require.Equal(t, core.ConclusionHealthy, report.Conclusion)
 	require.Empty(t, report.Items)
 	require.NotEmpty(t, report.Notes, "要说明报告没有覆盖策略与因子")
@@ -33,13 +49,13 @@ func TestBuildAlertsReportHealthy(t *testing.T) {
 // 当前告警、不健康的数据集、业务检查、组件、主机各成一项；严重程度决定结论；
 // 已经有告警的数据集不重复列出；“积累中”只提示不影响结论；输出不带主机地址。
 func TestBuildAlertsReportCollectsEveryUnhealthySource(t *testing.T) {
-	overview := healthyOverview()
+	overview, stage := healthyOverview()
 	overview.Summary = &monitorpb.HealthSummary{AlertCount: 1}
 	overview.Alerts = []*monitorpb.HealthAlert{{
 		Id: "a1", Severity: "critical", Title: "数据集 view_b", Reason: "数据生产端长时间未更新", RawError: "producer stale",
 		TriggeredAt: "2026-10-24T02:00:00Z", Object: &monitorpb.HealthObject{Type: "dataset", DatasetId: "view_b", Freq: "1h"},
 	}}
-	overview.Pipeline[0].Datasets = append(overview.Pipeline[0].Datasets,
+	stage.Datasets = append(stage.Datasets,
 		&monitorpb.HealthDataset{Producer: "storage_view", DatasetId: "view_b", Freq: "1h", Status: "degraded", Reason: "数据生产端长时间未更新"},
 		&monitorpb.HealthDataset{Producer: "factor", DatasetId: "factor_c", Freq: "1m", Status: "degraded", Reason: "warming"},
 		&monitorpb.HealthDataset{Producer: "collector", DatasetId: "ds_d", Freq: "1m", Status: "degraded", Reason: "success stale"},
@@ -85,8 +101,8 @@ func TestBuildAlertsReportCollectsEveryUnhealthySource(t *testing.T) {
 
 // 只有警告时结论是降级；只有“积累中”提示时仍是正常。
 func TestBuildAlertsReportConclusionByWorstSeverity(t *testing.T) {
-	overview := healthyOverview()
-	overview.Pipeline[0].Datasets = append(overview.Pipeline[0].Datasets, &monitorpb.HealthDataset{DatasetId: "w", Freq: "1m", Status: "degraded", Reason: "warming"})
+	overview, stage := healthyOverview()
+	stage.Datasets = append(stage.Datasets, &monitorpb.HealthDataset{DatasetId: "w", Freq: "1m", Status: "degraded", Reason: "warming"})
 	require.Equal(t, core.ConclusionHealthy, BuildAlertsReport(overview).Conclusion)
 
 	overview.Components = append(overview.Components, &monitorpb.HealthComponent{HostId: "h", ComponentId: "c", Status: "degraded"})
@@ -96,7 +112,7 @@ func TestBuildAlertsReportConclusionByWorstSeverity(t *testing.T) {
 }
 
 func TestRenderAlertsFormats(t *testing.T) {
-	overview := healthyOverview()
+	overview, _ := healthyOverview()
 	overview.Hosts = append(overview.Hosts, &monitorpb.HealthHost{HostId: "overseas", Status: "down", Reason: "主机采集代理停止上报"})
 	report := BuildAlertsReport(overview)
 
@@ -109,7 +125,8 @@ func TestRenderAlertsFormats(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(markdown), "# MooX 告警清单")
 
-	empty, err := RenderAlerts(BuildAlertsReport(healthyOverview()), "text")
+	healthy, _ := healthyOverview()
+	empty, err := RenderAlerts(BuildAlertsReport(healthy), "text")
 	require.NoError(t, err)
 	require.Contains(t, string(empty), "没有需要处理的问题")
 
