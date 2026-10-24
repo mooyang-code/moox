@@ -77,17 +77,17 @@ describe("collector task workbench", () => {
   it("keeps only primary row actions inline and folds the rest into the more menu", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
     expect(source).toContain("<a-dropdown");
-    expect(source).toContain('confirmEnableChange(record)');
-    expect(source).toContain('openJobs(record)');
-    expect(source).toContain('openDelete(record)');
+    expect(source).toContain("confirmEnableChange(record)");
+    expect(source).toContain("openJobs(record)");
+    expect(source).toContain("openDelete(record)");
     expect(source).toContain("action-danger");
     // 平铺的操作按钮只剩「新建合成」与「修改」
-    expect(source).not.toContain('status="record.enabled ? \'warning\' : \'success\'');
+    expect(source).not.toContain("status=\"record.enabled ? 'warning' : 'success'");
   });
 
   it("orders the more menu with resample history last and in its own color", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
-    const content = source.slice(source.indexOf('<template #content>'), source.indexOf("</a-dropdown>"));
+    const content = source.slice(source.indexOf("<template #content>"), source.indexOf("</a-dropdown>"));
     const positions = [
       content.indexOf("confirmEnableChange(record)"),
       content.indexOf('class="action-danger" @click="openDelete(record)"'),
@@ -95,7 +95,7 @@ describe("collector task workbench", () => {
     ];
     expect(positions.every(position => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
-    expect(content).toContain('历史合成');
+    expect(content).toContain("历史合成");
   });
 
   it("opens the create and edit forms and the detail view as drawers with readonly summaries", () => {

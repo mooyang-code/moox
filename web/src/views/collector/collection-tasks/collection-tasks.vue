@@ -88,12 +88,7 @@
                   >
                     新建合成
                   </a-button>
-                  <a-button
-                    type="primary"
-                    size="mini"
-                    :disabled="togglingTaskId === record.task_id"
-                    @click="onUpdate(record)"
-                  >
+                  <a-button type="primary" size="mini" :disabled="togglingTaskId === record.task_id" @click="onUpdate(record)">
                     <template #icon><icon-edit /></template>
                     修改
                   </a-button>
@@ -112,11 +107,7 @@
                         </span>
                       </a-doption>
                       <a-doption class="action-danger" @click="openDelete(record)">删除</a-doption>
-                      <a-doption
-                        v-if="record.data_type === 'kline_resample'"
-                        class="action-resample"
-                        @click="openJobs(record)"
-                      >
+                      <a-doption v-if="record.data_type === 'kline_resample'" class="action-resample" @click="openJobs(record)">
                         历史合成
                       </a-doption>
                     </template>
@@ -294,12 +285,7 @@
               </div>
             </div>
             <a-form-item v-else label="源采集任务" required>
-              <a-select
-                v-model="sourceTaskId"
-                placeholder="选择要合成的源采集任务"
-                allow-search
-                :loading="loadingSourceTasks"
-              >
+              <a-select v-model="sourceTaskId" placeholder="选择要合成的源采集任务" allow-search :loading="loadingSourceTasks">
                 <a-option
                   v-for="option in sourceTaskOptions"
                   :key="option.task_id"
@@ -469,12 +455,7 @@
             <a-descriptions-item label="来源 / 市场">{{ taskRouteSummary(detailData) }}</a-descriptions-item>
             <a-descriptions-item label="数据范围标签" :span="2">{{ taskTagSummary(detailData) }}</a-descriptions-item>
           </a-descriptions>
-          <a-descriptions
-            v-if="detailData.data_type === 'kline_resample'"
-            :column="2"
-            bordered
-            class="detail-resample-info"
-          >
+          <a-descriptions v-if="detailData.data_type === 'kline_resample'" :column="2" bordered class="detail-resample-info">
             <a-descriptions-item label="源任务">{{ resampleSourceSummary(detailData) }}</a-descriptions-item>
             <a-descriptions-item label="源周期 / 序列标签">
               {{ stringParam(detailData, "source_frequency") || "-" }} / {{ stringParam(detailData, "source_series_tag") || "-" }}
@@ -482,11 +463,7 @@
           </a-descriptions>
           <div v-if="detailDependents.length" class="detail-dependents">
             <span class="field-hint">依赖它的合成任务：</span>
-            <a-link
-              v-for="item in detailDependents"
-              :key="item.task_id"
-              @click="locateTask(item)"
-            >
+            <a-link v-for="item in detailDependents" :key="item.task_id" @click="locateTask(item)">
               {{ item.task_name || item.task_id }}（{{ taskFrequency(item) }}）
             </a-link>
           </div>
@@ -506,7 +483,9 @@
             <a-descriptions-item label="结果状态">
               <a-tag size="small" :color="resultStatusColor(detailData)">{{ resultStatusLabel(detailData) }}</a-tag>
             </a-descriptions-item>
-            <a-descriptions-item label="最近数据时间">{{ formatDateTime(detailData.result?.last_data_time) }}</a-descriptions-item>
+            <a-descriptions-item label="最近数据时间">{{
+              formatDateTime(detailData.result?.last_data_time)
+            }}</a-descriptions-item>
             <a-descriptions-item label="任务描述" :span="2">{{ detailData.description || "-" }}</a-descriptions-item>
             <a-descriptions-item v-if="detailData.last_error" label="准备信息" :span="2">
               {{ detailData.last_error }}
