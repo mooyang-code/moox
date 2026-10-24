@@ -41,6 +41,27 @@ func (c *Client) GetDoctorContext(ctx context.Context, req *monitorpb.GetDoctorC
 	return rsp, nil
 }
 
+// GetHealthOverview 只读取 Monitor 的健康概览；spaceID 为空时看全部空间。
+func (c *Client) GetHealthOverview(ctx context.Context, spaceID string) (*monitorpb.HealthOverview, error) {
+	if c == nil || c.gateway == nil {
+		return nil, fmt.Errorf("Monitor 客户端不可用")
+	}
+	rsp := &monitorpb.GetHealthOverviewRsp{}
+	if err := c.gateway.Invoke(ctx, "trpc.moox.monitor.MonitorMgr", "GetHealthOverview", &monitorpb.GetHealthOverviewReq{SpaceId: spaceID}, rsp); err != nil {
+		return nil, err
+	}
+	if rsp.GetRetInfo() == nil {
+		return nil, fmt.Errorf("Monitor GetHealthOverview 没有返回状态")
+	}
+	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
+		return nil, fmt.Errorf("Monitor GetHealthOverview 失败：%s", rsp.GetRetInfo().GetMsg())
+	}
+	if rsp.GetOverview() == nil {
+		return nil, fmt.Errorf("Monitor 返回了空的健康概览")
+	}
+	return rsp.GetOverview(), nil
+}
+
 // Placement contains catalog-derived health information for one canonical component.
 type Placement struct {
 	HostID        string

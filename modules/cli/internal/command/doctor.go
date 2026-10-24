@@ -43,7 +43,58 @@ func init() {
 
 func newDoctorCommand(deps doctorCommandDeps) *cobra.Command {
 	cmd := &cobra.Command{Use: "doctor", Short: "Run bounded MooX deployment checks", SilenceUsage: true}
-	cmd.AddCommand(newDoctorModeCommand("bootstrap", deps), newDoctorModeCommand("diagnose", deps), newDoctorViewConsumerRepairCommand())
+	cmd.AddCommand(newDoctorModeCommand("bootstrap", deps), newDoctorModeCommand("diagnose", deps), newDoctorAlertsCommand(deps), newDoctorViewConsumerRepairCommand())
+	return cmd
+}
+
+// newDoctorAlertsCommand 读取 Monitor 的健康概览，输出首页“需要处理”里属于监控的部分（当前告警与不健康的数据集、
+// 业务检查、组件、主机），默认 JSON，便于 Agent 逐项处理；退出码同其他 doctor 子命令（0 正常、1 降级、2 异常、3 无法判断）。
+func newDoctorAlertsCommand(deps doctorCommandDeps) *cobra.Command {
+	var space, format, output, file string
+	cmd := &cobra.Command{
+		Use:          "alerts",
+		Short:        "读取 Monitor 的告警与不健康项，供 Agent 处理",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		PreRunE: func(_ *cobra.Command, _ []string) error {
+			return validateDoctorFlags(format, output, nil)
+		},
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			gateway, err := openCommandGateway(cmd.Context(), file, nil)
+			if err != nil {
+				return err
+			}
+			defer gateway.Close()
+			newClient := deps.newClient
+			if newClient == nil {
+				newClient = doctorcli.New
+			}
+			overview, err := newClient(gateway).GetHealthOverview(cmd.Context(), space)
+			if err != nil {
+				return err
+			}
+			alerts := doctorcli.BuildAlertsReport(overview)
+			rendered, err := doctorcli.RenderAlerts(alerts, format)
+			if err != nil {
+				return err
+			}
+			if output != "" {
+				if err := doctorcli.WriteAtomic(output, rendered); err != nil {
+					return err
+				}
+			} else if _, err := cmd.OutOrStdout().Write(rendered); err != nil {
+				return err
+			}
+			if code := doctorExitCode(alerts.Conclusion); code != 0 {
+				return doctorExitError{code: code}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&file, "file", "./moox.toml", "deployment manifest for the operator SSH gateway")
+	cmd.Flags().StringVar(&space, "space", "", "只看某个空间；为空时看全部")
+	cmd.Flags().StringVar(&format, "format", "json", "报告格式：json、text 或 markdown")
+	cmd.Flags().StringVar(&output, "output", "", "把报告原子写入该路径")
 	return cmd
 }
 

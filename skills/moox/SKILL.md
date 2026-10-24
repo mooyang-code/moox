@@ -1,6 +1,6 @@
 ---
 name: moox
-description: Use when working in the MooX monorepo, releasing or deploying MooX binaries to the production hosts (发布, 部署, 上线, rollout, rollback, 回滚, native release, service catalog rollout, host-gateway/Admin/Monitor/Storage/factor-engine release), operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, factor expression DSL (因子表达式, 因子 DSL), converting legacy Python factors (Python 因子转换, pandas 因子迁移) with offline check/eval/compare and writing them into the system, Tencent Cloud firewall changes, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance.
+description: Use when working in the MooX monorepo, releasing or deploying MooX binaries to the production hosts (发布, 部署, 上线, rollout, rollback, 回滚, native release, service catalog rollout, host-gateway/Admin/Monitor/Storage/factor-engine release), operating moox-cli, or querying MooX采集数据 such as BTC-USDT crypto market queries and K-line/K线行情. Also covers quant storage, collector cloud functions, Linux amd64/arm64 Host Agent monitoring, rootless deployment, EventBus credentials, EventBus rotate, Authorization Violation, FIN-WAIT-2, certificate signature failure, View watermark catch-up, repair-view, Factor period diagnostics and Recalc, factor expression DSL (因子表达式, 因子 DSL), converting legacy Python factors (Python 因子转换, pandas 因子迁移) with offline check/eval/compare and writing them into the system, 首页“需要处理”/监控告警排查 (moox-cli doctor alerts, monitor-db-check), Tencent Cloud firewall changes, CCN/云联网, SCF 公网, SCF VPC, 内网组网, private-network, MOOX_ACCESS_ADDRESS, and control-plane maintenance.
 ---
 
 # MooX Quant Data System
@@ -101,6 +101,14 @@ When crypto K-line or Factor periods stall, read
 Factor separately. Collector completion events drive Factor reads from Storage PrimaryStore;
 the Factor durable is `factor_collector_period_v1`. Use set-labeled period and lane metrics to
 distinguish event backlog, Storage failures, and compute errors (`factor_compile_errors_total`).
+
+### Home "Needs Attention" And Monitor Alerts
+
+用户说首页提示“N 项需要处理”、监控告警、数据“长时间未更新”、组件或主机异常时，读 [`references/monitor-attention.md`](references/monitor-attention.md)，
+按其中的流程执行：`moox-cli doctor alerts`（默认 JSON，`--format text` 给人看）取当前告警与不健康项，退出码 0/1/2/3 表示正常/降级/异常/无法判断；
+需要深挖时用只读的 `scripts/monitor-db-check.sh`（经 SSH 公钥查 Monitor 数据库的告警状态、失效检查、孤儿规则、静默视图序列和清理日志，契约测试 `scripts/test-monitor-db-check.sh`）；
+`doctor bootstrap` 检查新部署各模块的安装与配置，`doctor diagnose` 按 Monitor 事实诊断模块。先判断每项是真问题、已删除对象的残留还是重启造成的瞬时现象，
+不要手改 `monitor.db`、不要手删检查或规则、不要把重启当修复手段。
 
 ### Factor Expressions And Python Factor Conversion
 
