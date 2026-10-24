@@ -67,6 +67,15 @@ export const getFunctionTypeColor = (value: string) =>
   ({ "scf-event": "blue", "scf-web": "cyan", server: "orange" })[value] || "gray";
 export const getTriggerTypeLabel = (value: string) => ({ timer: "定时器", invoke: "手动调用" })[value] || value || "-";
 
+export function getTimerAvailableLabel(value: unknown) {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "available") return "可用";
+  if (normalized === "") return "未知";
+  return String(value);
+}
+export const getTimerAvailableColor = (value: unknown) =>
+  String(value || "").toLowerCase() === "available" ? "green" : "orange";
+
 export function getPackageTypeColor(value: number | string) {
   return (
     (

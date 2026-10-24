@@ -49,3 +49,17 @@
 .instance-id-link {
   white-space: nowrap;
 }
+
+/* 单元格左右内边距从默认 16px 收到 8px，列宽按内容紧凑排布。 */
+.function-instance-table :deep(.arco-table-th .arco-table-cell),
+.function-instance-table :deep(.arco-table-td .arco-table-cell) {
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
+.instance-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--moox-space-1);
+  white-space: nowrap;
+}
