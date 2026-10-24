@@ -228,6 +228,20 @@ describe("deployment page", () => {
     await flushPromises();
     expect(router.currentRoute.value.query.tab).toBe("services");
   });
+  it("draws the topology from the catalog and opens the shared component drawer from a node", async () => {
+    const { page, router } = await render({ tab: "topology" });
+    expect(page.findAll(".host-card").map(item => item.attributes("data-host-id"))).toEqual(["c-main", "storage"]);
+    expect(page.find('[aria-label="reader"]').exists()).toBe(true);
+    expect(page.findAll("path.edge")).toHaveLength(4);
+    await page.get('[aria-label="storage 外部接入 异常"]').trigger("click");
+    expect(page.get(".focus-bar").text()).toContain("被调用 1");
+    expect(page.get(".focus-bar").text()).toContain("reader");
+    await page.findAll(".focus-bar button")[0].trigger("click");
+    expect(page.get(".drawer").text()).toContain("storage.example.test");
+    await page.findAll('[role="tab"]')[1].trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.query.tab).toBe("routes");
+  });
   it("preserves a route read failure and unknown health without inventing an empty route list", async () => {
     vi.mocked(getHostRoutes).mockRejectedValue(new Error("route unavailable"));
     vi.mocked(monitorApi.getOverview).mockRejectedValue(new Error("monitor unavailable"));

@@ -43,7 +43,7 @@ export function useDeployments() {
   let appliedLocator = "";
   const query = (value: unknown) => (typeof value === "string" ? value : "");
   const tab = computed({
-    get: () => (route.query.tab === "routes" ? "routes" : "services"),
+    get: () => (route.query.tab === "routes" || route.query.tab === "topology" ? route.query.tab : "services"),
     set: (value: string) => {
       void router.replace({ query: { ...route.query, tab: value } });
     }
@@ -263,6 +263,7 @@ export function useDeployments() {
     filter,
     showDisabled,
     selectedHostId,
+    groups,
     visibleGroups,
     selectedGroup,
     currentRoutes,
