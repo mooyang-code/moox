@@ -113,7 +113,7 @@
             :data="cloudFunctionList"
             :bordered="{ cell: true }"
             :loading="loading"
-            :scroll="{ x: '100%', y: '100%', minWidth: 1260 }"
+            :scroll="{ x: '100%', y: '100%', minWidth: 1100 }"
             :pagination="paginationConfig"
             :row-selection="batchChangeProcessing ? undefined : { type: 'checkbox', showCheckedAll: true }"
             :selected-keys="selectedKeys"
@@ -123,23 +123,34 @@
             @page-size-change="onPageSizeChange"
           >
             <template #columns>
-              <a-table-column title="实例ID" data-index="instance_id" :width="330">
+              <a-table-column title="实例ID" data-index="instance_id" :width="360">
                 <template #cell="{ record }">
                   <a-link class="instance-id-link" @click="onViewInstanceDetail(record)">{{ record.instance_id }}</a-link>
                 </template>
               </a-table-column>
-              <a-table-column title="命名空间" data-index="namespace" :width="140"></a-table-column>
-              <a-table-column title="实例类型" data-index="function_type" :width="130">
+              <a-table-column title="命名空间" data-index="namespace" :width="136"></a-table-column>
+              <a-table-column title="实例类型" data-index="function_type" :width="122">
                 <template #cell="{ record }">
                   <a-tag size="small" :color="getFunctionTypeColor(record.function_type)">
                     {{ getFunctionTypeLabel(record.function_type) }}
                   </a-tag>
                 </template>
               </a-table-column>
-              <a-table-column title="触发方式" data-index="trigger_type" :width="80">
-                <template #cell="{ record }">{{ getTriggerTypeLabel(record.trigger_type) }}</template>
+              <a-table-column title="触发方式" data-index="trigger_type" :width="104">
+                <template #cell="{ record }">
+                  <span class="instance-trigger">
+                    {{ getTriggerTypeLabel(record.trigger_type) }}
+                    <a-tag
+                      v-if="record.trigger_type === 'timer'"
+                      size="small"
+                      :color="getTimerAvailableColor(parseMetadata(record.metadata).timer_available_status)"
+                    >
+                      {{ getTimerAvailableLabel(parseMetadata(record.metadata).timer_available_status) }}
+                    </a-tag>
+                  </span>
+                </template>
               </a-table-column>
-              <a-table-column title="地区" data-index="region" :width="130">
+              <a-table-column title="地区" data-index="region" :width="116">
                 <template #cell="{ record }">
                   {{ getRegionName(record.region) }}
                   <a-tag
@@ -151,19 +162,7 @@
                   </a-tag>
                 </template>
               </a-table-column>
-              <a-table-column title="Timer 状态" data-index="timer_status" :width="100">
-                <template #cell="{ record }">
-                  <a-tag
-                    v-if="record.trigger_type === 'timer'"
-                    size="small"
-                    :color="getTimerAvailableColor(parseMetadata(record.metadata).timer_available_status)"
-                  >
-                    {{ getTimerAvailableLabel(parseMetadata(record.metadata).timer_available_status) }}
-                  </a-tag>
-                  <span v-else>-</span>
-                </template>
-              </a-table-column>
-              <a-table-column title="代码包版本" data-index="package_version" :width="100">
+              <a-table-column title="代码包版本" data-index="package_version" :width="92">
                 <template #cell="{ record }">
                   <a-link
                     v-if="record.package_version && record.package_version !== '-'"
@@ -175,12 +174,12 @@
                   <span v-else>-</span>
                 </template>
               </a-table-column>
-              <a-table-column title="最近协调时间" data-index="reconciled_at" :width="170">
+              <a-table-column title="最近协调时间" data-index="reconciled_at" :width="124">
                 <template #cell="{ record }">
-                  {{ getReconciledAtText(record) }}
+                  <span :title="getReconciledAtText(record, true)">{{ getReconciledAtText(record) }}</span>
                 </template>
               </a-table-column>
-              <a-table-column title="操作" :width="64" align="center" fixed="right">
+              <a-table-column title="操作" :width="56" align="center" fixed="right">
                 <template #cell="{ record }">
                   <a-popconfirm
                     content="确定要删除该实例吗？删除后将无法恢复。"
@@ -413,6 +412,7 @@ import { createFunctionJobPoller } from "./function-job-poller";
 import { captureDeleteSelection, updateDeleteSelection, type FunctionInstanceDeleteSnapshotMap } from "./delete-selection";
 import {
   formatDateTime,
+  formatShortDateTime,
   formatFileSize,
   formatMetadata,
   getBatchChangeTypeText,
@@ -846,9 +846,11 @@ const timerMetadataText = (key: string) => {
   return String(value);
 };
 // 表格里的最近协调时间：只有 Timer 实例才有。
-const getReconciledAtText = (record: FunctionInstance) => {
+// 表格里用短格式节省宽度，完整时间放在悬浮提示里。
+const getReconciledAtText = (record: FunctionInstance, full = false) => {
   const value = record.trigger_type === "timer" ? parseMetadata(record.metadata).runtime_config_reconciled_at : "";
-  return typeof value === "string" && value ? formatDateTime(value) : "-";
+  if (typeof value !== "string" || !value) return "-";
+  return full ? formatDateTime(value) : formatShortDateTime(value);
 };
 const timerEnabledLabel = () => {
   const value = timerMetadataText("timer_enabled");
