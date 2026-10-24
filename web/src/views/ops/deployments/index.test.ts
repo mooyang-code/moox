@@ -229,8 +229,9 @@ describe("deployment page", () => {
     expect(router.currentRoute.value.query.tab).toBe("services");
   });
   it("draws the topology from the catalog and opens the shared component drawer from a node", async () => {
-    const { page, router } = await render({ tab: "topology" });
+    const { page, router } = await render({ tab: "topology", host_id: "storage" });
     expect(page.findAll(".host-card").map(item => item.attributes("data-host-id"))).toEqual(["c-main", "storage"]);
+    expect(page.get('.host-card[data-host-id="storage"]').classes()).toContain("located");
     expect(page.find('[aria-label="reader"]').exists()).toBe(true);
     expect(page.findAll("path.edge")).toHaveLength(4);
     await page.get('[aria-label="storage 外部接入 异常"]').trigger("click");

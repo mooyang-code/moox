@@ -68,7 +68,11 @@
           v-for="host in topology.hosts"
           :key="host.host.host_id"
           class="host-card"
-          :class="{ control: host.isControl, disabled: host.host.status === 'disabled' }"
+          :class="{
+            control: host.isControl,
+            disabled: host.host.status === 'disabled',
+            located: host.host.host_id === props.locatedHost
+          }"
           :data-host-id="host.host.host_id"
           :style="box(host)"
         >
@@ -167,6 +171,8 @@ const props = defineProps<{
   catalog?: ComponentCatalog;
   groups: { host: DeploymentHost; rows: PlacementRow[] }[];
   controlHostId: string;
+  /** 链接里 host_id 定位的主机，在拓扑中描边高亮 */
+  locatedHost?: string;
 }>();
 const emit = defineEmits<{ detail: [key: string] }>();
 const STATUS_LEGEND = [
@@ -386,6 +392,10 @@ function box(host: TopologyHost) {
 }
 .host-card.disabled {
   opacity: 0.6;
+}
+.host-card.located {
+  border-color: rgb(var(--primary-6));
+  box-shadow: 0 0 0 2px rgba(var(--primary-6), 0.15);
 }
 .host-head {
   display: flex;

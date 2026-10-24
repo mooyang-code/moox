@@ -211,6 +211,7 @@
             :catalog="catalog"
             :groups="groups"
             :control-host-id="controlHostId"
+            :located-host="requestedHost"
             @detail="drawerKey = $event"
           />
           <p v-else class="empty">正在读取部署清单</p>
