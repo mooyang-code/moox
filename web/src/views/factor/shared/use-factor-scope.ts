@@ -117,10 +117,11 @@ export function useFactorScope(options: FactorScopeOptions = {}) {
     if (requireSet && canWriteRoute() && hasSet(value)) store.select(value);
   });
 
+  // 计算任务变了：因子条件 fc 只属于原来的任务。selectSet 自己也会去掉 fc，但它的跳转还没生效时这里会用旧 query 合并，必须同样去掉。
   watch(
     () => store.currentSetId,
     value => {
-      if (requireSet && canWriteRoute() && value !== routeSetId.value) void navigate({ set: value || undefined });
+      if (requireSet && canWriteRoute() && value !== routeSetId.value) void navigate({ set: value || undefined, fc: undefined });
     }
   );
 

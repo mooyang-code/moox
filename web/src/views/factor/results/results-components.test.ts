@@ -214,7 +214,7 @@ describe("列设置抽屉", () => {
     expect(wrapper.emitted("update:settings")?.[0]).toEqual([{ ...settings, hiddenSystem: ["freq"] }]);
     await box("request_id").setValue(true);
     expect(wrapper.emitted("update:settings")?.[1]).toEqual([{ ...settings, market: ["open", "close", "request_id"] }]);
-    await box("open").setValue(false);
+    await box("开盘（open）").setValue(false);
     expect(wrapper.emitted("update:settings")?.[2]).toEqual([{ ...settings, market: ["close"] }]);
   });
 

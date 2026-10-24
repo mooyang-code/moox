@@ -61,8 +61,13 @@ export const systemMenu = [
 
   directory("0240", "0", "/factor/overview", "factor-compute", "factor-compute", 3, { svgIcon: "experiment", icon: "" }),
   menu("024001", "0240", "/factor/overview", "factor-overview", "factor-overview", "factor/overview/index", 1),
-  menu("024002", "0240", "/factor/definitions", "factor-definitions", "factor-definitions", "factor/definitions/index", 2),
-  menu("024003", "0240", "/factor/tasks", "factor-tasks", "factor-tasks", "factor/task-management/index", 3),
+  // 菜单路由会覆盖 route.ts 里的同名声明，reuseOnQuery 必须写在这里：query 变化时复用页面，不丢未进 URL 的筛选。
+  menu("024002", "0240", "/factor/definitions", "factor-definitions", "factor-definitions", "factor/definitions/index", 2, {
+    reuseOnQuery: true
+  }),
+  menu("024003", "0240", "/factor/tasks", "factor-tasks", "factor-tasks", "factor/task-management/index", 3, {
+    reuseOnQuery: true
+  }),
 
   directory("0250", "0", "/strategy/overview", "strategy", "strategy", 4, { svgIcon: "mind-mapping", icon: "" }),
   menu("025001", "0250", "/strategy/overview", "strategy-overview", "strategy-overview", "strategy/overview/index", 1),
@@ -73,9 +78,12 @@ export const systemMenu = [
     "strategy-definitions",
     "strategy-definitions",
     "strategy/definitions/index",
-    2
+    2,
+    { reuseOnQuery: true }
   ),
-  menu("025003", "0250", "/strategy/tasks", "strategy-tasks", "strategy-tasks", "strategy/workbench/index", 3),
+  menu("025003", "0250", "/strategy/tasks", "strategy-tasks", "strategy-tasks", "strategy/workbench/index", 3, {
+    reuseOnQuery: true
+  }),
 
   directory("05", "0", "/trading/accounts", "trading", "trading", 5, { svgIcon: "balance-inquiry", icon: "" }),
   menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-workbench/index", 1),

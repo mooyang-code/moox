@@ -22,7 +22,7 @@
           :key="column"
           :model-value="props.settings.market.includes(column)"
           @change="toggleMarket(column, $event)"
-          >{{ column }}</a-checkbox
+          >{{ marketLabel(column) }}</a-checkbox
         >
       </a-space>
       <template v-if="props.scope.otherSource.length">
@@ -33,7 +33,7 @@
             :key="column"
             :model-value="props.settings.market.includes(column)"
             @change="toggleMarket(column, $event)"
-            >{{ column }}</a-checkbox
+            >{{ marketLabel(column) }}</a-checkbox
           >
         </a-space>
       </template>
@@ -78,7 +78,7 @@
 import { ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { MAX_PINNED, type ColumnSettings } from "./column-settings";
-import { LOCKED_SYSTEM_KEYS, SYSTEM_KEYS, SYSTEM_KEY_LABELS, type FactorScope } from "./factor-scope";
+import { LOCKED_SYSTEM_KEYS, MARKET_COLUMN_LABELS, SYSTEM_KEYS, SYSTEM_KEY_LABELS, type FactorScope } from "./factor-scope";
 import FactorPickerModal from "./factor-picker-modal.vue";
 
 const props = defineProps<{ visible: boolean; scope: FactorScope; settings: ColumnSettings }>();
@@ -137,6 +137,11 @@ function move(index: number, offset: number) {
   if (target < 0 || target >= next.length) return;
   [next[index], next[target]] = [next[target], next[index]];
   update({ pinned: next });
+}
+
+function marketLabel(column: string) {
+  const label = MARKET_COLUMN_LABELS[column];
+  return label ? `${label}（${column}）` : column;
 }
 
 function pinnedTitle(column: string) {

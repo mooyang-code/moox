@@ -51,7 +51,7 @@
 
     <div v-if="props.mode === 'condition'" class="picker-condition">
       <span class="picker-target">{{ selected || "请先在上面选择一个输出列" }}</span>
-      <a-select v-model="op" class="picker-op" :options="CONDITION_OPS" />
+      <a-select v-model="op" :options="CONDITION_OPS" style="width: 100px" />
       <template v-if="op === 'range'">
         <a-input v-model="minText" class="picker-value" placeholder="下限" allow-clear @press-enter="confirm" />
         <span>～</span>
@@ -212,10 +212,6 @@ watch(
 .picker-target {
   min-width: 180px;
   font-family: var(--moox-font-mono, monospace);
-}
-
-.picker-op {
-  width: 100px;
 }
 
 .picker-value {

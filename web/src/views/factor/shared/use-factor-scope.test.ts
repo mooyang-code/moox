@@ -203,6 +203,19 @@ describe("useFactorScope", () => {
     expect(hoisted.replace).toHaveBeenCalledWith({ path: "/factor/tasks", query: { tab: "results", set: "b" } });
   });
 
+  it("drops the previous set's factor conditions even when the store change lands before the route update", async () => {
+    vi.mocked(listFactorSets).mockResolvedValue(sets([info("a"), info("b")]));
+    hoisted.route.query = { tab: "results", set: "a", fc: "x" };
+    const { scope } = mountScope({ requireSet: true });
+    await flushPromises();
+    hoisted.replace.mockClear();
+    // 路由替换是异步的：selectSet 之后 route.query 仍是旧值，store 监听随后又发起一次跳转
+    scope.selectSet("b");
+    await nextTick();
+    for (const [target] of hoisted.replace.mock.calls) expect(target.query.fc).toBeUndefined();
+    expect(hoisted.replace.mock.calls.length).toBeGreaterThan(0);
+  });
+
   it("polls through usePolling only while a space is selected", async () => {
     vi.mocked(listFactorSets).mockResolvedValue(sets([info("a")]));
     mountScope();

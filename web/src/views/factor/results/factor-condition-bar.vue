@@ -73,7 +73,6 @@ function onPick(payload: { condition?: FactorCondition }) {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--moox-space-2);
-  margin-top: var(--moox-space-2);
 }
 
 .bar-label {

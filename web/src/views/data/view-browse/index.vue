@@ -105,8 +105,6 @@
                 </div>
               </div>
 
-              <slot name="query-extra" />
-
               <div class="query-actions">
                 <a-button size="small" type="primary" :loading="loading" @click="applyQueryControls">查询</a-button>
                 <a-button
@@ -121,6 +119,10 @@
                 </a-button>
                 <a-button size="small" @click="resetQueryControls">清空</a-button>
                 <slot name="toolbar-extra" />
+              </div>
+
+              <div v-if="$slots['query-extra']" class="query-extra">
+                <slot name="query-extra" />
               </div>
             </section>
           </QueryControls>
@@ -1805,6 +1807,12 @@ watch(selectedSpaceId, () => {
 .operator-button:hover {
   border-color: rgb(var(--primary-6));
   color: rgb(var(--primary-6));
+}
+
+/* 调用方追加的检索行（例如因子条件）横跨整行，放在栅格与操作按钮下方。 */
+.query-extra {
+  grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .query-actions {

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { staticRoutes } from "./route";
+import { systemMenu } from "@/api/modules/system/static-menu";
 import { routeViewKey } from "@/layout/components/Main/route-view-key";
+import { staticRoutes } from "./route";
 
-type RouteLike = { path: string; meta?: Record<string, unknown>; children?: RouteLike[] };
+type RouteLike = { path: string; meta?: Record<string, unknown>; children?: RouteLike[] | null };
 
 function findRoute(routes: RouteLike[], path: string): RouteLike | undefined {
   for (const route of routes) {
@@ -13,11 +14,16 @@ function findRoute(routes: RouteLike[], path: string): RouteLike | undefined {
   return undefined;
 }
 
-describe("因子页面路由", () => {
+const reusePaths = ["/factor/definitions", "/factor/tasks", "/strategy/definitions", "/strategy/tasks"];
+
+describe("query 变化时复用的页面", () => {
   // 定义页的 ?category=、结果页的 ?fc= 和 ?set= 改写时不能重建页面，否则未进 URL 的筛选会丢失。
-  it.each(["/factor/definitions", "/factor/tasks"])("%s 在 query 变化时复用组件", path => {
-    const route = findRoute(staticRoutes as unknown as RouteLike[], path);
-    expect(route?.meta?.reuseOnQuery).toBe(true);
-    expect(routeViewKey({ path, fullPath: `${path}?a=1`, meta: route?.meta })).toBe(path);
+  // 线上实际注册的是菜单路由（会覆盖 route.ts 的同名声明），所以两处都要声明。
+  it.each(reusePaths)("%s 在菜单与静态路由里都声明了 reuseOnQuery", path => {
+    const menuEntry = (systemMenu as RouteLike[]).find(item => item.path === path);
+    const staticEntry = findRoute(staticRoutes as unknown as RouteLike[], path);
+    expect(menuEntry?.meta?.reuseOnQuery).toBe(true);
+    expect(staticEntry?.meta?.reuseOnQuery).toBe(true);
+    expect(routeViewKey({ path, fullPath: `${path}?a=1`, meta: menuEntry?.meta })).toBe(path);
   });
 });

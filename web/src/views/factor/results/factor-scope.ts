@@ -15,6 +15,17 @@ export const SYSTEM_KEY_LABELS: Record<string, string> = {
 };
 /** 默认显示的基础行情列（与视图实际字段取交集）：crypto 有成交额 quote_volume、成交笔数 trade_num，A 股与指数用 amount。 */
 export const BASE_MARKET_COLUMNS = ["open", "high", "low", "close", "volume", "quote_volume", "trade_num", "amount"];
+/** 列设置里行情列的中文名；没有的直接显示字段名。 */
+export const MARKET_COLUMN_LABELS: Record<string, string> = {
+  open: "开盘",
+  high: "最高",
+  low: "最低",
+  close: "收盘",
+  volume: "成交量",
+  quote_volume: "成交额",
+  trade_num: "成交笔数",
+  amount: "成交额"
+};
 /** 因子值弹窗与选择弹窗每页的输出项数。 */
 export const FACTOR_PAGE_SIZE = 20;
 
