@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
@@ -36,6 +37,9 @@ type staleCheckPolicy struct {
 	DisabledRetention time.Duration
 	// MaxPerRun 是每轮最多清理的检查数，避免一次清太多。
 	MaxPerRun int
+	// Retain 返回 true 的检查不清理：业务新鲜度评估每轮都会把它补建出来（例如规则存在但关闭了新鲜度监控的 K 线检查），
+	// 清掉只会白白删建一次。为空时不保留任何检查。
+	Retain func(check *domain.Check) bool
 }
 
 func (p staleCheckPolicy) withDefaults() staleCheckPolicy {
@@ -69,6 +73,9 @@ func pruneStaleChecks(ctx context.Context, repositories *store.Repositories, now
 		}
 		check := &checks[index]
 		if check.Source != domain.CheckSourceObservability || check.GroupName != "business" {
+			continue
+		}
+		if policy.Retain != nil && policy.Retain(check) {
 			continue
 		}
 		stale, err := checkIsStale(ctx, repositories, check, now, policy)
@@ -186,4 +193,18 @@ func hasUnresolvedAlert(ctx context.Context, repositories *store.Repositories, c
 		}
 	}
 	return false, nil
+}
+
+// recreatedCheck 判断检查是否会被业务新鲜度评估补建：规则存在但关闭了新鲜度监控的 K 线检查。没有成功评估过时不知道哪些会被补建，
+// 保守地保留所有 K 线检查；没有评估器时 K 线检查不会被补建。
+func (r *Runtime) recreatedCheck(check *domain.Check) bool {
+	if r == nil || r.klineFreshness == nil || !strings.HasPrefix(check.CheckID, "kline_freshness:") {
+		return false
+	}
+	disabled, known := r.klineFreshness.RuleDisabledCheckIDs()
+	if !known {
+		return true
+	}
+	_, recreated := disabled[check.CheckID]
+	return recreated
 }

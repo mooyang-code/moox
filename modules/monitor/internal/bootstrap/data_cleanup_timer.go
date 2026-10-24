@@ -94,7 +94,7 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 	}
 	if runtime != nil && runtime.Repositories != nil {
 		ops.pruneChecks = func(ctx context.Context, now time.Time) error {
-			_, err := pruneStaleChecks(ctx, runtime.Repositories, now, staleCheckPolicy{})
+			_, err := pruneStaleChecks(ctx, runtime.Repositories, now, staleCheckPolicy{Retain: runtime.recreatedCheck})
 			return err
 		}
 	}

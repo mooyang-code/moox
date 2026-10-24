@@ -32,6 +32,8 @@ type Runtime struct {
 	MetricStores   *monmetrics.Stores
 	HostRuleCache  *hostmetrics.RuleCache
 	Scheduler      *scheduler.Scheduler
+	// klineFreshness 是 K 线新鲜度评估器（没有评估器时为空）；清理失效检查时用它识别会被补建的 K 线检查。
+	klineFreshness *monmetrics.KlineFreshnessEvaluator
 	// life 是 Monitor 的生命周期控制器（在健康检查注册时创建，创建之前为空）：暂停时告警静默，只记录、不推送。
 	life atomic.Pointer[lifecycle.Controller]
 
