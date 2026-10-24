@@ -1,6 +1,6 @@
 # 控制主机 bootstrap 编排
 
-`moox-runtime bootstrap --request PATH` 在目标 Linux 主机执行。输入是原生 CLI 生成的规范 0600 JSON：共享 `hostbundle.Topology`、部署根，以及 host/control 两个软件包的生产者摘要、独立单元根、逐组件私密环境和配置覆盖文件。它不读取或接收操作员 `moox.toml`。两个单元根必须是部署根下独立的物理目录；control 放置必须包含 Admin 与 EventBus，并满足服务目录约束。
+`moox-runtime bootstrap --request PATH` 在目标 Linux 主机执行。输入是原生 CLI 生成的规范 0600 JSON：共享 `hostbundle.Topology`、部署根，以及 host/control 两个软件包的生产者摘要、独立单元根、逐组件私密环境和配置覆盖文件。它不读取或接收操作员 `moox.toml`。两个单元根必须是部署根下独立的物理目录；control 部署必须包含 Admin 与 EventBus，并满足服务目录约束。
 
 请求摘要绑定规范拓扑、实际环境、软件包摘要和覆盖文件内容。进入停机前核验两个软件包，覆盖内容在内存中固定，后续写入本次尝试的私密目录。流程始终持有主机维护锁，并先记录两个旧 current、原先运行的组件和尝试标识，再建立跨单元持久 bootstrap 标记。已有单元必须同时存在，空环境则同时为空。
 
@@ -20,7 +20,7 @@
 
 实际服务场景使用完整 control 软件包中的 Admin、EventBus、Web Host、Console Proxy，以及完整 host 单元；没有声称验证全部九个 control 组件或三主机系统。顶层 `moox-cli setup bootstrap --stage core` 已连接核心子集的配置生产、SSH 传输与操作员身份安装，完整原生流程、其余主机部署、生产历史状态归档、其他阶段的进程强杀、最终审查与正式验收仍待完成。
 
-请求可显式指定 `control.components` 为完整放置清单的唯一子集，必须包含 Admin 和 EventBus；身份包仍按完整拓扑验证。核心子集升级到完整集合可以复用已有数据库、MooX CA 和 EventBus 身份，不能把仍在放置清单中的已安装组件缩减掉。全局健康/JWT 凭据在 `identity/runtime.json` 持久绑定，变化或既有部署缺失该绑定时在启停前拒绝，不能因本机状态丢失自动替换凭据。完成日志与 current 已不匹配的旧请求在设置 bootstrap 标记前拒绝。
+请求可显式指定 `control.components` 为完整部署清单的唯一子集，必须包含 Admin 和 EventBus；身份包仍按完整拓扑验证。核心子集升级到完整集合可以复用已有数据库、MooX CA 和 EventBus 身份，不能把仍在部署清单中的已安装组件缩减掉。全局健康/JWT 凭据在 `identity/runtime.json` 持久绑定，变化或既有部署缺失该绑定时在启停前拒绝，不能因本机状态丢失自动替换凭据。完成日志与 current 已不匹配的旧请求在设置 bootstrap 标记前拒绝。
 
 代理首次 internal CA 必须由请求的 `proxy_ca.create` 显式授权，或以 `proxy_ca.import_directory` 提供关闭后的规范源树；源树只需 `console-proxy/data` 和 `console-proxy/certs`，必须包含原始发布的根证书和指纹。创建和导入互斥，常规服务配置不接受初始化权限。`identity/console-proxy/receipt.json` 先记录 pending，完整材料在同级 `material/` 同步并原子发布后记录 ready；该目录独立于发布快照和候选清理。未发布的生成阶段可恢复，消费后材料丢失、损坏或主机不匹配则拒绝自动重新生成。升级复制最新关闭发布的状态，同时校验根身份与持久凭据一致；public-only 不生成多余 internal CA。
 

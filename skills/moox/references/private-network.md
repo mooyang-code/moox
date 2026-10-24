@@ -6,7 +6,7 @@
 ## moox.toml 怎么写
 
 - `[scf_plan.spaces.markets]` 列出每个市场使用的 SCF 地域。
-- 用到的每个地域都要有一台主机：`[hosts.<id>]` 配置了 `region` 与 `private_address`，并在 `[placements]` 里带 `access` 组件。
+- 用到的每个地域都要有一台主机：`[hosts.<id>]` 配置了 `region` 与 `private_address`，并在 `[deployments]` 里带 `access` 组件。
 - `[scf_plan.regions.<region>]` 写该地域的 `vpc_id`、`subnet_id`；同地域有多台带私网地址的 Access 主机时，用 `access_host` 指定入口主机。
 - 用不到的地域不要写进 `scf_plan.regions`，校验会拒绝。
 

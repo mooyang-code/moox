@@ -15,14 +15,14 @@ import (
 
 // EventBusEndpoint 是控制面登记的 EventBus 所在位置。
 type EventBusEndpoint struct {
-	// HostID 是 EventBus 当前放置的主机。
+	// HostID 是 EventBus 当前部署的主机。
 	HostID string
 	// URL 是其他主机访问用的对外地址：tls://<主机地址>:<目录里的端口>。
 	URL string
 }
 
-// ResolveEventBusEndpoint 按组件部署找出 EventBus 的位置。EventBus 可能不在 Admin 所在的主机上，所以地址跟随放置，
-// 并要求恰好一个启用的放置；签发凭据和代为维护都不改动拓扑。
+// ResolveEventBusEndpoint 按组件部署找出 EventBus 的位置。EventBus 可能不在 Admin 所在的主机上，所以地址跟随部署，
+// 并要求恰好一个启用的部署；签发凭据和代为维护都不改动拓扑。
 func ResolveEventBusEndpoint(ctx context.Context, db *gorm.DB, controlHostID string) (EventBusEndpoint, error) {
 	dao, err := NewTopologyDAO(db, controlHostID)
 	if err != nil {

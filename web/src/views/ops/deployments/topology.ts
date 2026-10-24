@@ -2,8 +2,8 @@ import type { ComponentCatalog, DeploymentHost } from "@/api/admin/types";
 import type { HealthStatus } from "@/api/monitor";
 import type { DeploymentRow } from "./model";
 
-// 服务拓扑：调用关系只依据组件目录（ACL、principals）、主机与放置推导，不凭印象补关系；
-// 数据流向是总体设计第 5、6 节的固定链路（事件订阅不在目录里），按实际放置落到节点上。
+// 服务拓扑：调用关系只依据组件目录（ACL、principals）、主机与部署推导，不凭印象补关系；
+// 数据流向是总体设计第 5、6 节的固定链路（事件订阅不在目录里），按实际部署落到节点上。
 // 坐标在这里一次算好，HTML 节点和 SVG 连线共用，刷新时不抖动，也能在无 DOM 环境下测试。
 
 export type TopologyLayer = "entry" | "control" | "business" | "storage" | "infra" | "other";

@@ -612,7 +612,7 @@ func newSetupTrustBrowserCommand(deps setupDeps) *cobra.Command {
 
 func newSetupApplyCommand(deps setupDeps) *cobra.Command {
 	var file string
-	cmd := &cobra.Command{Use: "apply", Short: "写入初始用户、云凭据和主机", RunE: func(cmd *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: "apply", Short: "写入初始用户与云凭据", RunE: func(cmd *cobra.Command, _ []string) error {
 		snapshot, err := deps.load(file)
 		if err != nil {
 			return err

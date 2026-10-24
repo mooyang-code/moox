@@ -18,7 +18,7 @@ import (
 
 const pageSize = 100
 
-// 与 SysDeploy 的规模上限一致：最多 1024 台主机，每台最多放置全部组件。
+// 与 SysDeploy 的规模上限一致：最多 1024 台主机，每台最多部署全部组件。
 const (
 	maxHosts       = domain.MaxTopologyHosts
 	maxDeployments = domain.MaxTopologyDeployments

@@ -139,10 +139,10 @@ func TestDisabledHostAgentDoesNotTurnAnEnabledHostIntoSilenceFailure(t *testing.
 	require.Empty(t, view.Alerts)
 }
 
-// 主机从拓扑中删除（改名后移除旧主机）：旧主机上的采集代理不再显示，也不再报失联；拓扑未知时照常显示。
+// 主机从拓扑中删除（移除旧主机）：旧主机上的采集代理不再显示，也不再报失联；拓扑未知时照常显示。
 func TestAgentOfRemovedHostIsNeitherListedNorAlerted(t *testing.T) {
 	facts := observability.Overview{TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "overseas", Status: "enabled"}}}, Hosts: []observability.HostStatus{
-		{HostID: "compute-1", AgentID: "OLD1", Status: "down", LastSeenAt: time.Now().Add(-time.Hour)},
+		{HostID: "legacy-1", AgentID: "OLD1", Status: "down", LastSeenAt: time.Now().Add(-time.Hour)},
 		{HostID: "overseas", AgentID: "NEW1", Status: "healthy", LastSeenAt: time.Now()},
 	}}
 	view := projectFacts(facts)
@@ -200,7 +200,7 @@ func TestOnlyTheLatestAgentOfEachRegisteredHostSummarizesTheHost(t *testing.T) {
 		{HostID: "control", AgentID: "OLD1", Status: "down", LastSeenAt: now.Add(-48 * time.Hour)},
 		{HostID: "control", AgentID: "NEW1", Status: "healthy", LastSeenAt: now},
 		{HostID: "", AgentID: "NOHOST", Hostname: "control", Status: "down", LastSeenAt: now.Add(-time.Hour)},
-		{HostID: "compute-1", AgentID: "GONE", Status: "down", LastSeenAt: now.Add(-time.Hour)},
+		{HostID: "legacy-1", AgentID: "GONE", Status: "down", LastSeenAt: now.Add(-time.Hour)},
 	}}
 	view := projectFacts(facts)
 	require.Len(t, view.Hosts, 2)

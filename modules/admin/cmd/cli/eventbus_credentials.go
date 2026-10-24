@@ -160,7 +160,7 @@ func parseCredentialToken(raw string) string {
 	return ""
 }
 
-// EventBus 的地址跟随组件放置（可能在与 Admin 不同的主机上）；签发凭据不改动拓扑。
+// EventBus 的地址跟随组件部署（可能在与 Admin 不同的主机上）；签发凭据不改动拓扑。
 func eventBusNATSURL(db *gorm.DB, controlHostID string) (string, error) {
 	endpoint, err := sysdeploy.ResolveEventBusEndpoint(context.Background(), db, controlHostID)
 	return endpoint.URL, err

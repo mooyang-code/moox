@@ -33,20 +33,20 @@ func TestPresenceDistinguishesHostLossFromAgentStop(t *testing.T) {
 	}
 
 	send("storage", "agent-s", hostmetrics.PresenceUnreachable)
-	send("compute-1", "agent-c", hostmetrics.PresenceUnreachable)
+	send("overseas", "agent-c", hostmetrics.PresenceUnreachable)
 	gatewayUp["storage"] = false // 恢复时网关状态无关，按离线时的判断选标题
 	send("storage", "agent-s", hostmetrics.PresenceReachable)
-	send("compute-1", "agent-c", hostmetrics.PresenceReachable)
+	send("overseas", "agent-c", hostmetrics.PresenceReachable)
 
 	require.Len(t, sender.messages, 4)
 	require.Equal(t, "主机 storage · host-agent 停止上报", sender.messages[0].Title)
 	require.Equal(t, notification.SeverityWarning, sender.messages[0].Severity)
 	require.Contains(t, sender.messages[0].Body, "主机网关心跳正常")
-	require.Equal(t, "主机 compute-1 · 失联", sender.messages[1].Title)
+	require.Equal(t, "主机 overseas · 失联", sender.messages[1].Title)
 	require.Equal(t, notification.SeverityCritical, sender.messages[1].Severity)
 	require.Contains(t, sender.messages[1].Body, "主机网关心跳也已停止")
 	require.Equal(t, "主机 storage · host-agent 已恢复上报", sender.messages[2].Title)
-	require.Equal(t, "主机 compute-1 · 已恢复在线", sender.messages[3].Title)
+	require.Equal(t, "主机 overseas · 已恢复在线", sender.messages[3].Title)
 }
 
 // 网关心跳判断：Monitor 缓存的网关状态要新鲜，且网关最近心跳在 2 分钟内；读不到、过期、读取出错都按“没有心跳”。
@@ -64,12 +64,12 @@ func TestGatewayHeartbeatAlive(t *testing.T) {
 	}
 	require.NoError(t, repos.Gateways.Reconcile(t.Context(), []domain.GatewayObservation{
 		{HostID: "storage", StatusJSON: status(now.Add(-30 * time.Second))},
-		{HostID: "compute-1", StatusJSON: status(now.Add(-5 * time.Minute))},
+		{HostID: "overseas", StatusJSON: status(now.Add(-5 * time.Minute))},
 		{HostID: "broken", ReadError: "admin unavailable"},
 	}, now))
 	alive := gatewayHeartbeatAlive(repos.Gateways)
 	require.True(t, alive(t.Context(), "storage", now))
-	require.False(t, alive(t.Context(), "compute-1", now), "网关心跳已超过 2 分钟")
+	require.False(t, alive(t.Context(), "overseas", now), "网关心跳已超过 2 分钟")
 	require.False(t, alive(t.Context(), "broken", now), "Admin 状态读取失败")
 	require.False(t, alive(t.Context(), "unknown", now), "没有登记")
 	require.False(t, alive(t.Context(), "storage", now.Add(5*time.Minute)), "Monitor 缓存本身过期")

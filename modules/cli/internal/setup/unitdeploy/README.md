@@ -16,9 +16,9 @@ control 必须相互独立，且不能占用 `bootstrap`、`bootstrap-input`、`
 命名空间；使用自定义路径不会额外创建硬编码的 `control/`。Storage 根仍须位于部署根下，
 其跨部署根布局与跨主机角色路由继续由 G13 完成。
 
-核心阶段保留全部主机、放置和签名身份，只安装控制机的 Admin、EventBus、Host Gateway、
+核心阶段保留全部主机、部署和签名身份，只安装控制机的 Admin、EventBus、Host Gateway、
 Host Agent。输出 `stage=core-ready`，不能据此认定完整部署成功。待 Storage、Access、
-出口代理、交易和计算依赖就绪后，外层流程才升级完整 control 放置并激活 Console Proxy。
+出口代理、交易和计算依赖就绪后，外层流程才升级完整 control 部署并激活 Console Proxy。
 已有的完整控制服务不能通过核心请求被缩减。
 
 `--state-dir` 默认为 `~/.local/state/moox/setup/<部署绑定摘要>`；其中保留 0700 目录、
@@ -61,8 +61,9 @@ Linux 场景还在运行中的控制主机验证真实主机部署、按角色�
 PID 保持、暂停保留、缺失进程修复、激活完成窗口接管及回滚后新建候选。其他两台主机仍
 只参与拓扑；这不是三主机实际安装验收。
 
-`setup deploy-unit --host HOST --profile access|egress-proxy|trade|storage` 使用同一持久
-状态与操作员身份，只选择该主机在对应软件包内实际放置的组件。出口配置和 Storage
+`setup deploy-unit --host HOST --profile access|egress-proxy|trade|collector-stream|storage|factor-engine|archive-worker` 使用同一持久
+状态与操作员身份，只选择该主机在对应软件包内实际部署的组件。`factor-engine`、`archive-worker` 是外部程序：软件包随 release 交付，
+经 SSH 以 systemd 用户服务安装并核对 linger，主机或部署已停用时只安装文件、不启动。出口配置和 Storage
 策略由可信配置快照产生，配置字节及私有环境摘要绑定原始操作；重试拒绝变更后重新接管。
 客户端材料只包含所需签名身份、EventBus 角色和公开 CA，运行时使用发布内的独立副本。
 同架构助手复用原始 core 制品，其他架构只接受原目标 host 包验证过的助手。

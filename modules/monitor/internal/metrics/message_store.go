@@ -271,7 +271,7 @@ type ReporterDeployment struct{ NodeID, ServiceName string }
 // The newest reporter per registered deployment survives cleanup, so a stopped
 // component cannot become "never reported". A nil registration list means
 // discovery is still unknown; an empty non-nil list is authoritative.
-// maxRegisteredDeployments 与拓扑上限一致（1024 台主机，每台最多放置全部组件）。
+// maxRegisteredDeployments 与拓扑上限一致（1024 台主机，每台最多部署全部组件）。
 const maxRegisteredDeployments = 1024 * 24
 
 func (r *MetricMessageStore) PruneRetiredSeries(ctx context.Context, now time.Time, registered []ReporterDeployment) (int64, error) {

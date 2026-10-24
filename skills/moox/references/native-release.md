@@ -22,8 +22,8 @@ MOOX_RELEASE_HOST_STORAGE=ubuntu@<存储机>
 MOOX_RELEASE_HOST_OVERSEAS=ubuntu@<海外机>
 ```
 
-主机命名统一为控制机（control）、存储机（storage）、海外机（overseas）、因子机（factor）；生产海外机的主机 ID 目前仍是 `compute-1`，
-改名步骤见 `docs/部署与运维.md` 第 1 节。实际地址见 `docs/计划/网关与服务部署重构设计.md` 的主机表；因子机是内网机器，运行因子引擎。配置好后先只读验证：
+主机命名统一为控制机（control）、存储机（storage）、海外机（overseas）、因子机（factor），登记与启停见 [`host-registry.md`](host-registry.md)。
+因子机是内网机器，运行因子引擎与归档 Worker（外部程序，经 `setup deploy-unit` 安装，不走本脚本）。配置好后先只读验证：
 
 ```bash
 S=skills/moox/scripts/native-release.sh
@@ -90,7 +90,7 @@ $S rollback --host control --unit prod --backup /data/moox/prod/binary-backup-co
 ## 服务目录变化：必须整体发布
 
 `packages/servicecatalog/catalog.yaml`（新增或删除 RPC 路由、改 ACL、改方法超时、改外部白名单都算）内嵌在 **Admin、Monitor、每台主机的 host-gateway** 里，外部调用方（因子引擎等）的白名单还内嵌在 **Access**（存储机、海外机各一个）里：只改外部白名单时漏装 Access，调用会报 `access caller is not allowed for this method`（2026-10-21 因子引擎调 `ReadDatasetChanges` 时遇到）。
-Monitor 要求自己内嵌的目录与 Admin 提供的逐字节一致，不一致就停掉放置同步，三台主机的“网关心跳”告警同时出现；host-gateway 用内嵌目录校验路由快照。
+Monitor 要求自己内嵌的目录与 Admin 提供的逐字节一致，不一致就停掉部署同步，三台主机的“网关心跳”告警同时出现；host-gateway 用内嵌目录校验路由快照。
 
 ```bash
 $S catalog-changed --since <上次整体发布目录的提交>   # 退出码 10 = 目录变了，必须整体发布
@@ -103,14 +103,14 @@ $S catalog-changed --host control                    # 用台账里最近一次 
 
 1. 构建 `host-gateway admin monitor`（同一个提交）。
 2. 三台主机的 `host` 单元：**`moox-host-gateway` 和 `moox-host-gateway-cli` 都装**（旧 cli 会拒绝新快照），重启 `host-gateway`；一台一台来，间隔约 15 秒，控制机最后。
-3. Admin 与 Monitor 连着装（先 Admin 后 Monitor），间隔不超过 1～2 分钟：两者之间 Monitor 与 Admin 的目录不一致，放置同步会停摆，窗口越短越好。
+3. Admin 与 Monitor 连着装（先 Admin 后 Monitor），间隔不超过 1～2 分钟：两者之间 Monitor 与 Admin 的目录不一致，部署同步会停摆，窗口越短越好。
    **控制机的 host-gateway 装完后可能起不来**：它启动时从还是旧版的 Admin 取初始路由快照，新目录校验不过就退出
    （日志 `initial host snapshot unavailable: invalid host gateway snapshot: route differs from catalog or directory`，`status` 里 `host-gateway stopped`，
    脚本不打印 `RESULT/READY`）。此时控制机上的组件跨主机调用全部中断，要立刻装 Admin，Admin 就绪后在控制机执行
    `/data/moox/host/current/bin/moox-runtime start --plan /data/moox/host/current/runtime.json --components host-gateway` 拉起网关（2026-10-15 实测中断约 50 秒）。
    存储机和海外机的网关不受影响。
 4. 外部白名单有变化时，再装存储机与海外机的 `access`（构建目标 `access`，一台一台来）。
-5. 核对：Admin 数据库的 `t_host_gateway_status` 里三台主机 `c_expected_hash == c_applied_hash` 且 `c_last_error` 为空；Monitor 日志每分钟有 `placement sync updated N checks`、没有 `catalog differs`。
+5. 核对：Admin 数据库的 `t_host_gateway_status` 里三台主机 `c_expected_hash == c_applied_hash` 且 `c_last_error` 为空；Monitor 日志每分钟有 `monitor deployment sync updated N checks`、没有 `catalog differs`。
 
 只想发布别的改动、而目录改动还不想发布时，在构建树里去掉目录改动再构建（不要把半截目录发出去）。
 

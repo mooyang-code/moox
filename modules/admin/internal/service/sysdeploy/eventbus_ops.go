@@ -59,7 +59,7 @@ type eventBusTarget struct {
 	caPEM   string
 }
 
-// resolveEventBusTarget 按组件放置与库里的管理员令牌得出连接目标。EventBus 与 Admin 在同一主机时走本机回环
+// resolveEventBusTarget 按组件部署与库里的管理员令牌得出连接目标。EventBus 与 Admin 在同一主机时走本机回环
 // （管理员角色的证书覆盖 127.0.0.1），否则走对外地址。
 func (s *ServiceImpl) resolveEventBusTarget(ctx context.Context) (eventBusTarget, error) {
 	endpoint, err := ResolveEventBusEndpoint(ctx, s.db, s.adminNodeID)

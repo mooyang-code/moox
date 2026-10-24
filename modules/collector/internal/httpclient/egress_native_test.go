@@ -154,7 +154,7 @@ func TestEgressTransportNativeGatewayE2E(t *testing.T) {
 	})
 	ready := filepath.Join(root, "gateway.ready")
 	credential := gatewayauth.Credentials{Caller: "collector", KeyID: "assigned-egress-collector-13", Secret: "fixture-egress-collector-key-at-least-32-bytes"}
-	cmd := exec.Command(binary, "-mode=egress-native", "-node-id=compute-1", "-upstream-addr="+listener.Addr().String(), "-ready-file="+ready, "-nonce-dir="+filepath.Join(root, "nonces"), "-key-id="+credential.KeyID)
+	cmd := exec.Command(binary, "-mode=egress-native", "-node-id=overseas", "-upstream-addr="+listener.Addr().String(), "-ready-file="+ready, "-nonce-dir="+filepath.Join(root, "nonces"), "-key-id="+credential.KeyID)
 	cmd.Env = append(os.Environ(), "MOOX_GATEWAY_E2E_SERVICE_SECRET="+credential.Secret)
 	logFile, err := os.Create(filepath.Join(root, "gateway.log"))
 	require.NoError(t, err)
@@ -186,12 +186,12 @@ func TestEgressTransportNativeGatewayE2E(t *testing.T) {
 	defer ca.Close()
 	caFile := filepath.Join(root, "ca.crt")
 	require.NoError(t, os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Certificate().Raw}), 0600))
-	directory := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"compute-1": {Address: "127.0.0.1"}}, Services: map[string][]string{fixtureService: {"compute-1"}}}
+	directory := servicecatalog.Directory{Hosts: map[string]servicecatalog.DirectoryHost{"overseas": {Address: "127.0.0.1"}}, Services: map[string][]string{fixtureService: {"overseas"}}}
 	directory.Version, err = directory.VersionHash()
 	require.NoError(t, err)
 	for _, serialization := range []int{codec.SerializationTypePB, codec.SerializationTypeJSON} {
 		t.Run(fmt.Sprint(serialization), func(t *testing.T) {
-			gateway, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: credential, LocalHostID: "compute-1", LocalAddress: address, CAFile: caFile, Source: directoryFixture{directory}, Serialization: serialization})
+			gateway, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.Internal, Credentials: credential, LocalHostID: "overseas", LocalAddress: address, CAFile: caFile, Source: directoryFixture{directory}, Serialization: serialization})
 			require.NoError(t, err)
 			defer gateway.Close()
 			client, err := httpclient.NewEgressHTTPClient(gateway, []string{"*.binance.com", "data-api.binance.vision"})

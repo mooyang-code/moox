@@ -36,8 +36,8 @@ Host Agent and EventBus credentials:
 
 ## Repository Layout
 
-- `modules/cli`: `moox-cli` (setup and native unit deployment, SCF publish, data import, doctor).
-- `modules/admin`: control plane (auth, spaces, component catalog and host placements, gateway control, PKI and keys, SSH, setup) and the browser API gateway.
+- `modules/cli`: `moox-cli` (setup, host registration and native unit deployment, SCF publish, data import, doctor).
+- `modules/admin`: control plane (auth, spaces, component catalog, host registry and deployments, gateway control, PKI and keys, console SSH, setup) and the browser API gateway.
 - `modules/hostgateway`: per-host service gateway (signed native tRPC: loopback `11002`, cross-host TLS `11003`); the only gateway.
 - `modules/access`: signed entry for external callers (SCF, factor engine, Skill) on `11004`, with per-caller method allowlists from `packages/servicecatalog`.
 - `modules/egressproxy`: restricted HTTPS egress and DNS resolution for Collector.
@@ -101,6 +101,13 @@ When crypto K-line or Factor periods stall, read
 Factor separately. Collector completion events drive Factor reads from Storage PrimaryStore;
 the Factor durable is `factor_collector_period_v1`. Use set-labeled period and lane metrics to
 distinguish event backlog, Storage failures, and compute errors (`factor_compile_errors_total`).
+
+### Host Registry, Naming And External Programs
+
+用户要新增、部署、启停或移除机器，或安装、退役因子引擎与归档 Worker（外部程序，systemd 用户服务）时，读
+[`references/host-registry.md`](references/host-registry.md)：主机 ID 与中文名（控制机 control、存储机 storage、海外机 overseas、因子机 factor）、
+`setup deploy-host` / `deploy-unit` / `host enable|disable` / `deployment enable|disable` / `remove-host`、全新部署的清理清单。
+管理台对这些对象只读；所有写操作先预览，用户确认后才加 `--yes`。
 
 ### Home "Needs Attention" And Monitor Alerts
 
@@ -189,7 +196,7 @@ whether it exists and must never read, parse, print, copy, or source it outside
 `moox-cli setup`.
 
 Run `setup validate`, `setup bootstrap --stage core`, `setup deploy-host` for every
-other host, `setup deploy-unit` for the Storage/Access/egress-proxy/Trade placements,
+other host, `setup deploy-unit` for the Storage/Access/egress-proxy/Trade/collector-stream deployments,
 `setup bootstrap --stage control`, and finally `setup init --config-dir
 ./config/setup --storage-host <host-name>` to create or verify the default Admin
 spaces and Storage metadata, activate Datasets, and verify the result. Keep
@@ -197,10 +204,12 @@ spaces and Storage metadata, activate Datasets, and verify the result. Keep
 context. When SCF is enabled, configure the same-region Access hosts described in
 [`references/private-network.md`](references/private-network.md).
 
-`t_hosts` and `t_placements` are the source of truth for service placement;
-SysDeploy v1 and its deployment seed have been removed. CLI deployment
-registration uses `SyncHostPlacements` with a full business component list;
-Admin adds host components and preserves persisted enablement state.
+`t_hosts` and `t_deployments` are the source of truth for hosts and component
+deployments. CLI deployment registration uses `SyncHostDeployments` with a full
+business component list; Admin adds host components and preserves persisted
+enablement state. The console is read-only for hosts and deployments: adding,
+deploying, enabling, disabling and removing machines happens only through
+`moox-cli` (see [`references/host-registry.md`](references/host-registry.md)).
 `/#/ops/storage/nodes` remains the separate PrimaryStore topology and is never
 silently synchronized. SCF receives active service deployments from the control
 plane rather than embedding addresses at package time.

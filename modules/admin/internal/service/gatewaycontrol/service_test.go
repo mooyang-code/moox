@@ -56,7 +56,7 @@ func newControlFixture(t *testing.T) *controlFixture {
 	require.NoError(t, f.topology.SyncHosts(context.Background(), []sysdeploy.HostSpec{
 		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host", "collector"}},
 		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-node", "storage-view"}},
-		{HostID: "compute-1", Address: "compute.example.test", Components: []string{"access", "trade"}},
+		{HostID: "overseas", Address: "compute.example.test", Components: []string{"access", "trade"}},
 	}))
 	f.keys, err = keys.NewStore(f.db, fixtureMaster)
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestSnapshotsCoverActualKeysAndOnlyTargetHostPermissions(t *testing.T) {
 	storage := f.snapshot(t, "storage")
 	require.NotEmpty(t, storage.Hash)
 	for _, key := range storage.VerificationKeys {
-		require.NotContains(t, []string{"scf-collector", "factor-engine", "moox-skill", "admin", "host-gateway@compute-1"}, key.Caller)
+		require.NotContains(t, []string{"scf-collector", "factor-engine", "moox-skill", "admin", "host-gateway@overseas"}, key.Caller)
 	}
 	unchanged, err := f.service.PullSnapshot(hostContext("storage"), &pb.PullSnapshotReq{HostId: "storage", CurrentHash: storage.Hash})
 	require.NoError(t, err)

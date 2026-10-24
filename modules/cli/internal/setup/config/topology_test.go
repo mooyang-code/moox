@@ -88,7 +88,7 @@ func TestFactorEngineSectionIsRejectedWithMigrationHint(t *testing.T) {
 func TestDefaultHostLabel(t *testing.T) {
 	for id, want := range map[string]string{
 		"control": "控制机", "storage": "存储机", "overseas": "海外机", "factor": "因子机",
-		"overseas-2": "海外机 2", "storage-10": "存储机 10", "compute-1": "", "ops": "", "overseas2": "",
+		"overseas-2": "海外机 2", "storage-10": "存储机 10", "legacy-1": "", "ops": "", "overseas2": "",
 	} {
 		assert.Equal(t, want, DefaultHostLabel(id), id)
 	}

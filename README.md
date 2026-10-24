@@ -42,7 +42,7 @@ make build                                              # 构建全部二进制�
 
 ./bin/moox-cli setup validate --file ./moox.toml
 ./bin/moox-cli setup bootstrap --stage core --file ./moox.toml --source-dir .
-# core-ready 仅表示核心控制面就绪；随后按放置部署 host、业务单元和完整 control。
+# core-ready 仅表示核心控制面就绪；随后按部署登记 host、业务单元和完整 control。
 ```
 
 完整流程与注意事项见[部署与运维](docs/部署与运维.md)。

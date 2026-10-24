@@ -129,8 +129,8 @@ func TestDeleteHostRemovesSSHCredential(t *testing.T) {
 	empty := spec
 	empty.Components = nil
 	require.NoError(t, dao.SyncHostDeployments(ctx, empty))
-	require.NoError(t, dao.DeleteHost(ctx, "compute-1"))
-	_, err := secretdao.GetSystemSecret(dao.db, sshTestKey, secretmodel.SSHHostSecretID("compute-1"))
+	require.NoError(t, dao.DeleteHost(ctx, "overseas"))
+	_, err := secretdao.GetSystemSecret(dao.db, sshTestKey, secretmodel.SSHHostSecretID("overseas"))
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
@@ -157,17 +157,17 @@ func TestServiceClosesSessionsAfterSyncAndDelete(t *testing.T) {
 	service.SetSessionCloser(closer)
 	ctx := context.Background()
 
-	rsp, err := service.SyncHostDeployments(ctx, &pb.SyncHostDeploymentsReq{HostId: "compute-1", Address: "compute.example.test", ComponentIds: []string{"trade", "access"}, Label: "海外机", SshPort: 22, SshUser: "u", SshAuthType: "password", SshSecret: "p"})
+	rsp, err := service.SyncHostDeployments(ctx, &pb.SyncHostDeploymentsReq{HostId: "overseas", Address: "compute.example.test", ComponentIds: []string{"trade", "access"}, Label: "海外机", SshPort: 22, SshUser: "u", SshAuthType: "password", SshSecret: "p"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
-	require.Equal(t, []string{"compute-1"}, closer.hosts)
+	require.Equal(t, []string{"overseas"}, closer.hosts)
 
-	bad, err := service.SyncHostDeployments(ctx, &pb.SyncHostDeploymentsReq{HostId: "compute-1", Address: "compute.example.test", ComponentIds: []string{"trade", "access"}, SshPort: 22, SshUser: "u", SshAuthType: "password"})
+	bad, err := service.SyncHostDeployments(ctx, &pb.SyncHostDeploymentsReq{HostId: "overseas", Address: "compute.example.test", ComponentIds: []string{"trade", "access"}, SshPort: 22, SshUser: "u", SshAuthType: "password"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
 	require.Len(t, closer.hosts, 1, "失败的同步不关闭会话")
 
-	list, err := service.ListHosts(ctx, &pb.ListDeploymentHostsReq{HostId: "compute-1"})
+	list, err := service.ListHosts(ctx, &pb.ListDeploymentHostsReq{HostId: "overseas"})
 	require.NoError(t, err)
 	require.Len(t, list.GetHosts(), 1)
 	require.Equal(t, "海外机", list.GetHosts()[0].GetLabel())

@@ -14,7 +14,7 @@ func productionTopology() Topology {
 	t := Topology{ControlHostID: "control", Hosts: []Host{
 		{ID: "control", Address: "203.0.113.10", Status: Enabled},
 		{ID: "storage", Address: "146.56.196.204", PrivateAddress: "10.206.0.5", Region: "ap-nanjing", Status: Enabled},
-		{ID: "compute-1", Address: "43.132.204.177", PrivateAddress: "172.19.32.13", Region: "ap-hongkong", Status: Enabled},
+		{ID: "overseas", Address: "43.132.204.177", PrivateAddress: "172.19.32.13", Region: "ap-hongkong", Status: Enabled},
 	}}
 	for _, host := range t.Hosts {
 		for _, id := range []string{"host-gateway", "host-agent"} {
@@ -24,7 +24,7 @@ func productionTopology() Topology {
 	for host, ids := range map[string][]string{
 		"control":   {"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"},
 		"storage":   {"storage-primary", "storage-node", "storage-view", "access"},
-		"compute-1": {"access", "egress-proxy", "trade", "collector-stream"},
+		"overseas": {"access", "egress-proxy", "trade", "collector-stream"},
 	} {
 		for _, id := range ids {
 			t.Deployments = append(t.Deployments, Deployment{HostID: host, ComponentID: id, Status: Enabled})
@@ -46,11 +46,11 @@ func TestTopologyRejectsInvalidDeploymentsAtomically(t *testing.T) {
 			}
 		}},
 		{"single replicas", func(c *Catalog, p *Topology) {
-			p.Deployments = append(p.Deployments, Deployment{HostID: "compute-1", ComponentID: "collector", Status: Enabled})
+			p.Deployments = append(p.Deployments, Deployment{HostID: "overseas", ComponentID: "collector", Status: Enabled})
 		}},
 		{"single on disabled host still counts", func(c *Catalog, p *Topology) {
 			p.Hosts[2].Status = Disabled
-			p.Deployments = append(p.Deployments, Deployment{HostID: "compute-1", ComponentID: "collector", Status: Enabled})
+			p.Deployments = append(p.Deployments, Deployment{HostID: "overseas", ComponentID: "collector", Status: Enabled})
 		}},
 		{"same-host port conflict", func(c *Catalog, p *Topology) { componentPtr(c, "access").Health.Port = 11012 }},
 		{"unknown host", func(c *Catalog, p *Topology) { p.Deployments[0].HostID = "unknown" }},
@@ -97,7 +97,7 @@ func TestTopologyRejectsInvalidDeploymentsAtomically(t *testing.T) {
 func TestPortCollisionIsPerHostAndDisabledDeploymentHasNoListener(t *testing.T) {
 	c, p := mustCatalog(t), productionTopology()
 	componentPtr(&c, "egress-proxy").Health.Port = 20211 // same as storage-view, on another host
-	p.Deployments = append(p.Deployments, Deployment{HostID: "compute-1", ComponentID: "collector", Status: Disabled})
+	p.Deployments = append(p.Deployments, Deployment{HostID: "overseas", ComponentID: "collector", Status: Disabled})
 	if err := c.ValidateTopology(p); err != nil {
 		t.Fatal(err)
 	}
@@ -110,9 +110,9 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":   {185, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "bfd99147238273775c11a61b51fbfb40121aa976585890699272d5ed27b40105"},
-		"storage":   {96, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "0df54789f42dd9806c6ac0ec46a96f94c72a55e4afaadf196870ca525e67f5ef"},
-		"compute-1": {38, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "c70f86fd7005fda74ffae56c86dd6c2d0f93dfa707150492d6b6977487bf5f9b"},
+		"control":   {185, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "8748bca2a9716ee50a78daec2a950e21dd6c22ad1d0667ebb6bb77b63445d45a"},
+		"storage":   {96, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "ed85207e84fe8c3ba34c9638268b9f5f765effc110b349c11ae9273285ccfeb0"},
+		"overseas": {38, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "f82ea3d40b5f3cfdfa3188507f36e4c4e6f90a83ec5b724a927b75db19f82a41"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
@@ -125,7 +125,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		if len(compiled.Routes) != want[host.ID].routes || !slices.Equal(compiled.VerificationCallers, want[host.ID].callers) || compiled.Hash != want[host.ID].hash {
 			t.Errorf("review snapshot change for %s: routes=%d callers=%v hash=%s", host.ID, len(compiled.Routes), compiled.VerificationCallers, compiled.Hash)
 		}
-		if !slices.Equal(compiled.Directory.Services["trpc.moox.storage.PrimaryStore"], []string{"storage"}) || !slices.Equal(compiled.Directory.Services["trpc.moox.trade.TradeConsoleService"], []string{"compute-1"}) || !slices.Equal(compiled.Directory.Services["trpc.moox.hostagent.HostAgentMgr"], []string{"compute-1", "control", "storage"}) {
+		if !slices.Equal(compiled.Directory.Services["trpc.moox.storage.PrimaryStore"], []string{"storage"}) || !slices.Equal(compiled.Directory.Services["trpc.moox.trade.TradeConsoleService"], []string{"overseas"}) || !slices.Equal(compiled.Directory.Services["trpc.moox.hostagent.HostAgentMgr"], []string{"control", "overseas", "storage"}) {
 			t.Fatal("directory does not represent the topology")
 		}
 		if len(compiled.Directory.Hosts) != 3 {
@@ -151,7 +151,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 					t.Fatalf("compiled ACL widened: %s %s/%s", caller, route.ServicePath, route.Method)
 				}
 			}
-			if route.ServicePath == GatewayControlPath && !slices.Equal(route.Callers, []string{"host-gateway@compute-1", "host-gateway@control", "host-gateway@storage"}) {
+			if route.ServicePath == GatewayControlPath && !slices.Equal(route.Callers, []string{"host-gateway@control", "host-gateway@overseas", "host-gateway@storage"}) {
 				t.Fatal("GatewayControl key scope is incorrect")
 			}
 		}
@@ -160,7 +160,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 				t.Fatalf("unexpanded or external verification scope %q", caller)
 			}
 		}
-		if (host.ID == "compute-1") && slices.Contains(compiled.VerificationCallers, "access") {
+		if (host.ID == "overseas") && slices.Contains(compiled.VerificationCallers, "access") {
 			t.Fatal("access must not have permission to trade or egress")
 		}
 		if (host.ID == "storage" || host.ID == "control") && !slices.Contains(compiled.VerificationCallers, "access") {
@@ -172,7 +172,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 
 func TestCompilePreservesMethodSpecificPermissionBoundaries(t *testing.T) {
 	c := mustCatalog(t)
-	compiled, err := c.Compile(productionTopology(), "compute-1")
+	compiled, err := c.Compile(productionTopology(), "overseas")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,14 +248,14 @@ func TestHashTracksRemoteDirectoryAndLocalACLChanges(t *testing.T) {
 func TestDisabledHostAndDeploymentWithdrawRoutes(t *testing.T) {
 	c, p := mustCatalog(t), productionTopology()
 	p.Hosts[2].Status = Disabled
-	compiled, err := c.Compile(p, "compute-1")
+	compiled, err := c.Compile(p, "overseas")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !compiled.Disabled || len(compiled.Routes) != 0 || len(compiled.VerificationCallers) != 0 {
 		t.Fatal("disabled host retains routes or keys")
 	}
-	if _, exists := compiled.Directory.Hosts["compute-1"]; exists {
+	if _, exists := compiled.Directory.Hosts["overseas"]; exists {
 		t.Fatal("disabled host retained in directory")
 	}
 	if len(compiled.Directory.Services["trpc.moox.trade.TradeConsoleService"]) != 0 {
@@ -265,7 +265,7 @@ func TestDisabledHostAndDeploymentWithdrawRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(control.VerificationCallers, "host-gateway@compute-1") {
+	if !slices.Contains(control.VerificationCallers, "host-gateway@overseas") {
 		t.Fatal("disabled host cannot fetch disabled snapshot")
 	}
 	p = productionTopology()
@@ -369,10 +369,10 @@ func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if control.Directory.Hosts["compute-1"].Relay != "control" || control.Directory.Hosts["storage"].Relay != "" {
+	if control.Directory.Hosts["overseas"].Relay != "control" || control.Directory.Hosts["storage"].Relay != "" {
 		t.Fatalf("directory relay = %+v", control.Directory.Hosts)
 	}
-	if len(control.Relays) != 1 || control.Relays[0].HostID != "compute-1" {
+	if len(control.Relays) != 1 || control.Relays[0].HostID != "overseas" {
 		t.Fatalf("relays = %+v", control.Relays)
 	}
 	relay := control.Relays[0]
@@ -394,7 +394,7 @@ func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(storage.Relays) != 0 || storage.Directory.Hosts["compute-1"].Relay != "control" || storage.Hash == baseline.Hash {
+	if len(storage.Relays) != 0 || storage.Directory.Hosts["overseas"].Relay != "control" || storage.Hash == baseline.Hash {
 		t.Fatal("direct host must see the relay in its directory but carry no allowlist")
 	}
 	p.Hosts[2].Status = Disabled

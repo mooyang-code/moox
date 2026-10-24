@@ -22,5 +22,5 @@ curl --fail http://127.0.0.1:11425/healthz
 EventBus CA 或 `hostagent-publisher` 口令轮换会立刻让旧副本失效。只升级 Host Agent 二进制、只在 control 上 `export`、
 或只重启 EventBus，都不够。完整副本清单和验收步骤见 [`eventbus-credentials.md`](eventbus-credentials.md)。
 
-对 **moox.toml 里每一台主机** 都要重新安装 `host` 单元，包括 compute 节点和只出站的主机。确认 Monitor 收到新样本，
+对 **moox.toml 里每一台主机** 都要重新安装 `host` 单元，包括海外机、因子机等只出站的主机。确认 Monitor 收到新样本，
 且日志里没有 `Authorization Violation` / `certificate signature failure` 后才算完成。

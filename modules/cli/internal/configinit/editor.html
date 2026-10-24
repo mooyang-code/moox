@@ -253,7 +253,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     var body = $('servers').tBodies[0];
     body.replaceChildren();
     (view.servers || []).forEach(function (server) {
-      var uses = el('span', { class: 'uses' }, (server.uses.length ? server.uses : ['未放置服务']).map(function (u) { return el('span', { text: u }); }));
+      var uses = el('span', { class: 'uses' }, (server.uses.length ? server.uses : ['未部署服务']).map(function (u) { return el('span', { text: u }); }));
       body.append(el('tr', {}, [
         el('td', {}, [uses]),
         el('td', { class: 'mono', text: server.address }),

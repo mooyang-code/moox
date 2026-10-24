@@ -67,7 +67,7 @@ type Environment struct {
 
 const maxFieldBytes = 512
 
-// normalize 检查填写内容，并借助 env 把服务器换算成主机与组件放置；格式与拓扑的语义校验交给 config.Parse。
+// normalize 检查填写内容，并借助 env 把服务器换算成主机与组件部署；格式与拓扑的语义校验交给 config.Parse。
 // 秘密字段原样保留（密码里的空格是有意义的），只拒绝控制字符与超长。
 func (r *Request) normalize(ctx context.Context, env Environment) error {
 	r.Admin.Username = strings.TrimSpace(r.Admin.Username)
@@ -179,7 +179,7 @@ func canShare(role Role, with string) bool {
 	return false
 }
 
-// host 校验一台腾讯云服务器的填写内容，用公网 IP 识别它，并换算成带组件放置的主机。
+// host 校验一台腾讯云服务器的填写内容，用公网 IP 识别它，并换算成带组件部署的主机。
 func (s *Server) host(ctx context.Context, env Environment, keys Keys, role Role, catalog servicecatalog.Catalog) (Host, error) {
 	s.Address = strings.TrimSpace(s.Address)
 	s.SSHUser = strings.TrimSpace(s.SSHUser)

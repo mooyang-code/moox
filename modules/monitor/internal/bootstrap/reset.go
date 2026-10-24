@@ -13,7 +13,7 @@ import (
 //
 //	data：清运行数据——探测结果、网关观测、主机代理登记、告警状态与事件、指标序列与最新值、入库消息、数据到达记录、组件健康、任务清单、标的首见；
 //	      保留探测定义与拓扑、告警规则、指标服务登记（配置）；
-//	all ：再清探测定义与拓扑、告警规则、指标服务登记（它们由服务目录和策略文件在启动与放置同步时重新生成）。
+//	all ：再清探测定义与拓扑、告警规则、指标服务登记（它们由服务目录和策略文件在启动与部署同步时重新生成）。
 //
 // **通知渠道（含 Webhook）两个范围都不清**：Webhook 是凭据，不属于「回到默认配置」的业务配置；清掉会让告警无处可发。
 // 渠道的默认值来自 moox.toml 的 [notification]，用 moox-cli config notification --publish 同步。
@@ -45,7 +45,7 @@ func monitorResetSpec(db *store.Store, dbPath string) *lifecycle.ResetSpec {
 		}
 		info := lifecycle.ResetPlanInfo{
 			Keeps: []string{"数据库表结构", "通知渠道（Webhook 是凭据，默认值来自 moox.toml 的 [notification]）", "发布内的配置文件", "生命周期状态文件"},
-			Notes: []string{"重置期间告警静默（只记录、不推送）；重置后探测定义、拓扑、规则由服务目录与策略文件在启动与放置同步时重新生成"},
+			Notes: []string{"重置期间告警静默（只记录、不推送）；重置后探测定义、拓扑、规则由服务目录与策略文件在启动与部署同步时重新生成"},
 		}
 		if unclassified, _ := lifecycle.ClassifyTables(actual, monitorDataTables, monitorConfigTables, monitorBootstrapTables); len(unclassified) > 0 {
 			info.Blockers = append(info.Blockers, "有未归类的表，先更新重置清单："+lifecycle.JoinTables(unclassified))

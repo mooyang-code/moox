@@ -15,20 +15,20 @@ func TestRemoveRegisteredHostClearsDeploymentsAndDeletesHost(t *testing.T) {
 		calls = append(calls, service+"/"+method)
 		switch service + "/" + method {
 		case "trpc.moox.ops.SysDeploy/ListHosts":
-			require.Equal(t, "compute-1", req.(*pb.ListDeploymentHostsReq).GetHostId())
+			require.Equal(t, "legacy-1", req.(*pb.ListDeploymentHostsReq).GetHostId())
 			rsp.(*pb.ListDeploymentHostsRsp).RetInfo = &pb.RetInfo{}
-			rsp.(*pb.ListDeploymentHostsRsp).Hosts = []*pb.DeploymentHost{{HostId: "compute-1", Address: "198.51.100.7", Region: "ap-hongkong", Reachability: "direct"}}
+			rsp.(*pb.ListDeploymentHostsRsp).Hosts = []*pb.DeploymentHost{{HostId: "legacy-1", Address: "198.51.100.7", Region: "ap-hongkong", Reachability: "direct"}}
 		case "trpc.moox.ops.SysDeploy/ListDeployments":
 			rsp.(*pb.ListDeploymentsRsp).RetInfo = &pb.RetInfo{}
-			rsp.(*pb.ListDeploymentsRsp).Deployments = []*pb.ComponentDeployment{{HostId: "compute-1", ComponentId: "trade"}, {HostId: "compute-1", ComponentId: "access"}}
+			rsp.(*pb.ListDeploymentsRsp).Deployments = []*pb.ComponentDeployment{{HostId: "legacy-1", ComponentId: "trade"}, {HostId: "legacy-1", ComponentId: "access"}}
 		case "trpc.moox.ops.SysDeploy/SyncHostDeployments":
 			request := req.(*pb.SyncHostDeploymentsReq)
-			require.Equal(t, "compute-1", request.GetHostId())
+			require.Equal(t, "legacy-1", request.GetHostId())
 			require.Equal(t, "198.51.100.7", request.GetAddress())
 			require.Empty(t, request.GetComponentIds(), "先清空业务组件部署")
 			rsp.(*pb.SyncHostDeploymentsRsp).RetInfo = &pb.RetInfo{}
 		case "trpc.moox.ops.SysDeploy/DeleteHost":
-			require.Equal(t, "compute-1", req.(*pb.DeleteDeploymentHostReq).GetHostId())
+			require.Equal(t, "legacy-1", req.(*pb.DeleteDeploymentHostReq).GetHostId())
 			rsp.(*pb.DeleteDeploymentHostRsp).RetInfo = &pb.RetInfo{}
 		default:
 			t.Fatalf("unexpected call %s/%s", service, method)
@@ -36,10 +36,10 @@ func TestRemoveRegisteredHostClearsDeploymentsAndDeletesHost(t *testing.T) {
 		return nil
 	})
 	client := New(gateway)
-	host, found, err := client.RegisteredHostByID(t.Context(), "compute-1")
+	host, found, err := client.RegisteredHostByID(t.Context(), "legacy-1")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, RegisteredHost{HostID: "compute-1", Address: "198.51.100.7", Components: []string{"access", "trade"}}, host)
+	require.Equal(t, RegisteredHost{HostID: "legacy-1", Address: "198.51.100.7", Components: []string{"access", "trade"}}, host)
 
 	calls = nil
 	require.NoError(t, client.RemoveRegisteredHost(t.Context(), host))

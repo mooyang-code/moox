@@ -18,7 +18,7 @@ func topologySpecs() []HostSpec {
 	return []HostSpec{
 		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host", "collector"}},
 		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-node", "storage-view"}},
-		{HostID: "compute-1", Address: "compute.example.test", Components: []string{"trade", "access"}},
+		{HostID: "overseas", Address: "compute.example.test", Components: []string{"trade", "access"}},
 	}
 }
 
@@ -38,7 +38,7 @@ func topologyDAO(t *testing.T) *TopologyDAO {
 func TestTopologySyncPreservesStateAndRebuildsDirectory(t *testing.T) {
 	dao, ctx := topologyDAO(t), context.Background()
 	require.NoError(t, dao.SetDeploymentStatus(ctx, "control", "collector", servicecatalog.Disabled))
-	require.NoError(t, dao.SetHostStatus(ctx, "compute-1", servicecatalog.Disabled))
+	require.NoError(t, dao.SetHostStatus(ctx, "overseas", servicecatalog.Disabled))
 	control := topologySpecs()[0]
 	control.Description = "updated metadata"
 	control.Components = append(control.Components, "monitor")
@@ -49,7 +49,7 @@ func TestTopologySyncPreservesStateAndRebuildsDirectory(t *testing.T) {
 	hosts, deployments, err := dao.Read(ctx)
 	require.NoError(t, err)
 	for _, h := range hosts {
-		if h.HostID == "compute-1" {
+		if h.HostID == "overseas" {
 			require.Equal(t, servicecatalog.Disabled, h.Status)
 		}
 	}
@@ -57,12 +57,12 @@ func TestTopologySyncPreservesStateAndRebuildsDirectory(t *testing.T) {
 		if p.HostID == "control" && p.ComponentID == "collector" {
 			require.Equal(t, servicecatalog.Disabled, p.Status)
 		}
-		require.False(t, p.HostID == "compute-1" && p.ComponentID == "trade", "components removed from the full list are deleted")
+		require.False(t, p.HostID == "overseas" && p.ComponentID == "trade", "components removed from the full list are deleted")
 	}
 	compiled, err := dao.Compile(ctx, "control")
 	require.NoError(t, err)
 	require.NoError(t, compiled.Directory.Validate())
-	require.NotContains(t, compiled.Directory.Hosts, "compute-1")
+	require.NotContains(t, compiled.Directory.Hosts, "overseas")
 	require.NotContains(t, compiled.Directory.Services, "trpc.moox.collector.CollectMgr")
 	// The same offline DAO is used to recover a disabled deployment.
 	require.NoError(t, dao.SetDeploymentStatus(ctx, "control", "collector", servicecatalog.Enabled))
@@ -123,20 +123,20 @@ func TestTopologyProtectsControlAndDeletesOnlyEmptyHosts(t *testing.T) {
 	require.Error(t, dao.SetDeploymentStatus(ctx, "control", "admin", servicecatalog.Disabled))
 	require.Error(t, dao.SetDeploymentStatus(ctx, "storage", "host-gateway", servicecatalog.Disabled))
 	require.Error(t, dao.DeleteHost(ctx, "control"))
-	require.Error(t, dao.DeleteHost(ctx, "compute-1"))
+	require.Error(t, dao.DeleteHost(ctx, "overseas"))
 	require.ErrorIs(t, dao.SetHostStatus(ctx, "unknown", servicecatalog.Enabled), gorm.ErrRecordNotFound)
 	require.ErrorIs(t, dao.SetDeploymentStatus(ctx, "storage", "collector", servicecatalog.Enabled), gorm.ErrRecordNotFound)
 	compute := topologySpecs()[2]
 	compute.Components = nil
 	require.NoError(t, dao.SyncHostDeployments(ctx, compute))
-	require.NoError(t, dao.db.Create(&HostGatewayStatus{HostID: "compute-1", InstanceID: "previous-process"}).Error)
-	require.NoError(t, dao.DeleteHost(ctx, "compute-1"))
+	require.NoError(t, dao.db.Create(&HostGatewayStatus{HostID: "overseas", InstanceID: "previous-process"}).Error)
+	require.NoError(t, dao.DeleteHost(ctx, "overseas"))
 	hosts, deployments, err := dao.Read(ctx)
 	require.NoError(t, err)
-	require.False(t, slices.ContainsFunc(hosts, func(h HostRecord) bool { return h.HostID == "compute-1" }))
-	require.False(t, slices.ContainsFunc(deployments, func(p DeploymentRecord) bool { return p.HostID == "compute-1" }))
+	require.False(t, slices.ContainsFunc(hosts, func(h HostRecord) bool { return h.HostID == "overseas" }))
+	require.False(t, slices.ContainsFunc(deployments, func(p DeploymentRecord) bool { return p.HostID == "overseas" }))
 	var count int64
-	require.NoError(t, dao.db.Model(&HostGatewayStatus{}).Where("c_host_id = ?", "compute-1").Count(&count).Error)
+	require.NoError(t, dao.db.Model(&HostGatewayStatus{}).Where("c_host_id = ?", "overseas").Count(&count).Error)
 	require.Zero(t, count)
 }
 

@@ -114,7 +114,7 @@ func TestProxyRejectsReplayTamperingWrongInstanceUnknownCallerAndNonceFailure(t 
 		target     string
 		body       []byte
 	}{
-		{credential, "storage", body}, {credential, "access@compute-1", body}, {credential, "access@storage", []byte("tampered")},
+		{credential, "storage", body}, {credential, "access@overseas", body}, {credential, "access@storage", []byte("tampered")},
 		{gatewayauth.Credentials{Caller: "scf-collector", KeyID: "unknown-key", Secret: credential.Secret}, "access@storage", body},
 	} {
 		_, err := proxy.Forward(signedContext(t, wrong.credential, wrong.target, primaryService, "CommitTimeSeriesBatch", wrong.body), &codec.Body{Data: body})

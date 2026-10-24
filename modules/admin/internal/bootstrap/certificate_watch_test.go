@@ -196,7 +196,7 @@ func TestCertificateWatchEnvironmentUsesLiveAllHostInventoryAndOnlyCurrentCAs(t 
 	hosts, err := configured.Hosts(context.Background())
 	require.NoError(t, err)
 	require.Len(t, hosts, 2, "disabled hosts still need valid certificates")
-	require.NoError(t, db.Exec("INSERT INTO t_hosts (c_host_id, c_address) VALUES ('compute-1', '192.0.2.3')").Error)
+	require.NoError(t, db.Exec("INSERT INTO t_hosts (c_host_id, c_address) VALUES ('overseas', '192.0.2.3')").Error)
 	hosts, err = configured.Hosts(context.Background())
 	require.NoError(t, err)
 	require.Len(t, hosts, 3, "each run must query current registrations")

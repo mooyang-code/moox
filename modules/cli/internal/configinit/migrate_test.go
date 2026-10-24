@@ -14,13 +14,13 @@ import (
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
 )
 
-// legacyText 把当前格式的示例配置改回旧格式：因子定义带旧字段、没有中文名、海外机叫 compute-1。
+// legacyText 把当前格式的示例配置改回旧格式：因子定义带旧字段、没有中文名、海外机叫 legacy-1。
 func legacyText(t *testing.T) string {
 	t.Helper()
 	text := sampleText(t)
 	require.Contains(t, text, "[hosts.overseas]")
-	text = strings.ReplaceAll(text, "[hosts.overseas]", "[hosts.compute-1]")
-	text = regexp.MustCompile(`(?m)^overseas = `).ReplaceAllString(text, "compute-1 = ")
+	text = strings.ReplaceAll(text, "[hosts.overseas]", "[hosts.legacy-1]")
+	text = regexp.MustCompile(`(?m)^overseas = `).ReplaceAllString(text, "legacy-1 = ")
 	text = regexp.MustCompile(`(?m)^label = .*\n`).ReplaceAllString(text, "")
 	text = regexp.MustCompile(`(?m)^factor_id = "(\w+)"\nfile = "xbx.yaml"\n`).ReplaceAllString(text,
 		"factor_id = \"$1\"\nfactor_type = \"timeseries\"\nfile = \"$1.py\"\nname = \"$1\"\noutputs = [\n  \"x_5\",\n  \"x_20\",\n]\nparams_json = '{\"window\":20}'\nlookback_periods = 20\n")
@@ -48,14 +48,14 @@ func TestMigratePreviewsWithoutWritingAndReportsNoValues(t *testing.T) {
 	before, err := os.ReadFile(path)
 	require.NoError(t, err)
 
-	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "compute-1", RenameTo: "overseas"})
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "legacy-1", RenameTo: "overseas"})
 	require.NoError(t, err)
 	require.True(t, report.Encrypted && report.Changed && report.Valid)
 	require.False(t, report.Written)
 	require.Len(t, report.Factors, 4)
 	require.Equal(t, FactorMigration{FactorID: "Bias", File: "xbx.yaml", RemovedKeys: []string{"factor_type", "lookback_periods", "name", "outputs", "params_json"}}, report.Factors[0])
 	require.Equal(t, []HostLabelMigration{{"control", "控制机"}, {"storage", "存储机"}, {"overseas", "海外机"}}, report.Labels)
-	require.Equal(t, &HostRename{From: "compute-1", To: "overseas", Changes: 2}, report.Rename)
+	require.Equal(t, &HostRename{From: "legacy-1", To: "overseas", Changes: 2}, report.Rename)
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, before, after, "预览不能改动文件")
@@ -67,7 +67,7 @@ func TestMigrateWritesBackupAndReencryptsCurrentFormat(t *testing.T) {
 	require.NoError(t, err)
 	now := func() time.Time { return time.Date(2026, 10, 18, 9, 30, 0, 0, time.UTC) }
 
-	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "compute-1", RenameTo: "overseas", Write: true, Now: now})
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "legacy-1", RenameTo: "overseas", Write: true, Now: now})
 	require.NoError(t, err)
 	require.True(t, report.Written)
 	require.Equal(t, path+".bak-20261018093000", report.Backup)
@@ -84,7 +84,7 @@ func TestMigrateWritesBackupAndReencryptsCurrentFormat(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "海外机", manifest.HostByID("overseas").Label)
 	require.Equal(t, []string{"trade", "access", "egress-proxy", "collector-stream"}, manifest.Deployments["overseas"])
-	require.NotContains(t, string(plain), "compute-1")
+	require.NotContains(t, string(plain), "legacy-1")
 	require.NotContains(t, string(plain), "factor_type")
 	require.Contains(t, string(plain), "# 主机命名", "注释保持不动")
 
@@ -101,11 +101,11 @@ func TestMigrateRejectsUnknownFactorsAndBadRenames(t *testing.T) {
 	require.ErrorContains(t, err, "因子库里没有因子 Missing")
 
 	path, root, keys = migrateFixture(t, text)
-	for _, rename := range [][2]string{{"nope", "overseas"}, {"compute-1", "storage"}, {"compute-1", "Bad ID"}} {
+	for _, rename := range [][2]string{{"nope", "overseas"}, {"legacy-1", "storage"}, {"legacy-1", "Bad ID"}} {
 		_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: rename[0], RenameTo: rename[1]})
 		require.Error(t, err, rename)
 	}
-	// 不改名时 compute-1 不在命名表里，不补中文名，但仍能通过校验。
+	// 不改名时 legacy-1 不在命名表里，不补中文名，但仍能通过校验。
 	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys})
 	require.NoError(t, err)
 	require.Nil(t, report.Rename)
@@ -156,7 +156,7 @@ func TestMigrateRenamesLegacyDeploymentComponent(t *testing.T) {
 	text = strings.Replace(text, `"cloudfunction"`, `"cloudnode"`, 1)
 	path, root, keys := migrateFixture(t, text)
 
-	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "compute-1", RenameTo: "overseas", Write: true})
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "legacy-1", RenameTo: "overseas", Write: true})
 	require.NoError(t, err)
 	require.Equal(t, []ComponentRename{{From: "cloudnode", To: "cloudfunction", Changes: 1}}, report.Components)
 	require.True(t, report.Valid && report.Written)
@@ -177,7 +177,7 @@ func TestMigrateRenamesLegacyPlacementsTable(t *testing.T) {
 	require.ErrorContains(t, err, "[placements] 已改名为 [deployments]")
 	path, root, keys := migrateFixture(t, text)
 
-	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "compute-1", RenameTo: "overseas", Write: true})
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "legacy-1", RenameTo: "overseas", Write: true})
 	require.NoError(t, err)
 	require.True(t, report.Deployments && report.Valid && report.Written)
 	sealed, err := os.ReadFile(path)
@@ -195,7 +195,7 @@ func TestMigrateRenamesLegacyPlacementsTable(t *testing.T) {
 func TestMigrateRejectsBothPlacementsAndDeployments(t *testing.T) {
 	text := legacyText(t) + "\n[placements]\ncontrol = [\"admin\"]\n"
 	path, root, keys := migrateFixture(t, text)
-	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "compute-1", RenameTo: "overseas"})
+	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "legacy-1", RenameTo: "overseas"})
 	require.ErrorContains(t, err, "同时有 [placements] 与 [deployments]")
 }
 
