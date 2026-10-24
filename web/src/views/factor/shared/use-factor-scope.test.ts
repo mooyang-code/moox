@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import { defineComponent, nextTick } from "vue";
+import { defineComponent, h, KeepAlive, nextTick, ref } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 import type { FactorSetInfo } from "@/api/factor/types";
 
@@ -165,6 +165,42 @@ describe("useFactorScope", () => {
     hoisted.route.query = { set: "b" };
     await nextTick();
     expect(store.currentSetId).toBe("b");
+  });
+
+  it("re-syncs ?set= changed while deactivated when the page is activated again", async () => {
+    vi.mocked(listFactorSets).mockResolvedValue(sets([info("a"), info("b")]));
+    const store = useFactorStore();
+    hoisted.route.query = { tab: "results", set: "a" };
+    const Scoped = defineComponent({
+      setup() {
+        useFactorScope({ requireSet: true, poll: false });
+        return () => null;
+      }
+    });
+    const shown = ref(true);
+    mount(defineComponent({ setup: () => () => h(KeepAlive, null, shown.value ? h(Scoped) : null) }));
+    await flushPromises();
+    expect(store.currentSetId).toBe("a");
+
+    shown.value = false;
+    await nextTick();
+    hoisted.route.query = { tab: "results", set: "b" };
+    await nextTick();
+    expect(store.currentSetId).toBe("a");
+
+    shown.value = true;
+    await flushPromises();
+    expect(store.currentSetId).toBe("b");
+  });
+
+  it("selectSet drops the previous set's job and factor conditions", async () => {
+    vi.mocked(listFactorSets).mockResolvedValue(sets([info("a"), info("b")]));
+    hoisted.route.query = { tab: "results", set: "a", fc: "x" };
+    const { scope } = mountScope({ requireSet: true });
+    await flushPromises();
+    hoisted.replace.mockClear();
+    scope.selectSet("b");
+    expect(hoisted.replace).toHaveBeenCalledWith({ path: "/factor/tasks", query: { tab: "results", set: "b" } });
   });
 
   it("polls through usePolling only while a space is selected", async () => {

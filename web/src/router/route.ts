@@ -64,13 +64,13 @@ export const staticRoutes = [
         path: "/factor/definitions",
         name: "factor-definitions",
         component: () => import("@/views/factor/definitions/index.vue"),
-        meta: { title: "factor-definitions" }
+        meta: { title: "factor-definitions", reuseOnQuery: true }
       },
       {
         path: "/factor/tasks",
         name: "factor-tasks",
         component: () => import("@/views/factor/task-management/index.vue"),
-        meta: { title: "factor-tasks" }
+        meta: { title: "factor-tasks", reuseOnQuery: true }
       },
       {
         path: "/factor/definitions/new",

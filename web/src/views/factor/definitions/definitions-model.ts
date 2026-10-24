@@ -1,4 +1,11 @@
-import type { FactorInfo, FactorType, FactorUsage, MemberStatus } from "@/api/factor/types";
+import {
+  UNCATEGORIZED,
+  type FactorCategory,
+  type FactorInfo,
+  type FactorType,
+  type FactorUsage,
+  type MemberStatus
+} from "@/api/factor/types";
 import { memberStatusTag } from "@/views/factor/shared/status";
 
 export type UsageFilter = "all" | "using" | "idle";
@@ -29,7 +36,7 @@ export function filterDefinitions(items: FactorInfo[], filters: DefinitionFilter
     if (filters.type && factor.factor_type !== filters.type) return false;
     if (filters.usage === "using" && !usages.length) return false;
     if (filters.usage === "idle" && usages.length) return false;
-    if (filters.category && (factor.category_id || "uncategorized") !== filters.category) return false;
+    if (filters.category && categoryOf(factor) !== filters.category) return false;
     if (!keyword) return true;
     return factor.factor_id.toLowerCase().includes(keyword) || factor.name.toLowerCase().includes(keyword);
   });
@@ -68,4 +75,57 @@ export function definitionEditState(item: Pick<FactorInfo, "usages">): ActionSta
 /** 仍被任一计算任务引用时不能删除（D21）。 */
 export function definitionDeleteState(item: Pick<FactorInfo, "usages">): ActionState {
   return item.usages.length > 0 ? { disabled: true, reason: "仍被计算任务使用，需先从计算任务中移除" } : allowed;
+}
+
+/** 分类 ID 合法形式：小写字母开头，只含小写字母、数字、下划线，最长 32 位。 */
+export const CATEGORY_ID_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
+
+export function categoryOf(factor: Pick<FactorInfo["factor"], "category_id">) {
+  return factor.category_id || UNCATEGORIZED;
+}
+
+/** 分类树的顺序：按 sort_order，未分类固定最后（清单里没有时补上）。 */
+export function orderedCategories(categories: FactorCategory[]): FactorCategory[] {
+  const rest = categories
+    .filter(item => item.category_id !== UNCATEGORIZED)
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+  const uncategorized = categories.find(item => item.category_id === UNCATEGORIZED) ?? {
+    category_id: UNCATEGORIZED,
+    name: "未分类"
+  };
+  return [...rest, uncategorized];
+}
+
+/** 各分类的数量：传入的是已按关键词、类型、使用情况过滤（但未按分类过滤）的定义。 */
+export function categoryCounts(items: FactorInfo[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const { factor } of items) {
+    const id = categoryOf(factor);
+    counts[id] = (counts[id] ?? 0) + 1;
+  }
+  return counts;
+}
+
+export interface CategoryDeleteApi {
+  setCategory: (factorId: string, categoryId: string) => Promise<unknown>;
+  deleteCategory: (categoryId: string) => Promise<unknown>;
+}
+
+/**
+ * 删除分类：后端只允许删除空分类，所以先把其中的定义（取自未经筛选的全量清单）逐个改到未分类，
+ * 全部成功后再删除。中途失败就停止，不删除分类，返回失败的定义。
+ */
+export async function deleteCategoryMovingFactors(categoryId: string, allItems: FactorInfo[], api: CategoryDeleteApi) {
+  const moving = allItems.filter(item => categoryOf(item.factor) === categoryId).map(item => item.factor.factor_id);
+  const moved: string[] = [];
+  for (const factorId of moving) {
+    try {
+      await api.setCategory(factorId, UNCATEGORIZED);
+      moved.push(factorId);
+    } catch (error) {
+      return { deleted: false, moved, failed: factorId, error };
+    }
+  }
+  await api.deleteCategory(categoryId);
+  return { deleted: true, moved };
 }

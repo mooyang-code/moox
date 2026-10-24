@@ -114,7 +114,7 @@ import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { getFactorParams, listFactorCategories } from "@/api/factor";
 import type { FactorCategory, ParamInterval } from "@/api/factor/types";
-import { listViewColumns } from "@/api/storage/metadata";
+import { listAllViewColumns } from "@/api/storage/metadata";
 import { getStrategyDisplaySettings, listStrategyParamSubmissions, setStrategyDisplaySettings } from "@/api/strategy";
 import type { DisplayHidden, ParamSubmission, StrategyInstance } from "@/api/strategy-types";
 import { useSpaceStore } from "@/store/modules/space";
@@ -195,8 +195,8 @@ async function loadColumns(viewId: string) {
   const space = spaceStore.selectedSpaceId;
   if (!space || !viewId) return;
   try {
-    const rsp = await listViewColumns({ space_id: space, view_id: viewId, page: { page: 1, size: 1000 } });
-    columnOptions.value = (rsp.columns ?? []).map(column => column.column_name).sort();
+    const columns = await listAllViewColumns(space, viewId);
+    columnOptions.value = columns.map(column => column.column_name).sort();
   } catch {
     columnOptions.value = [];
   }

@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./composables/view-browse-catalog", () => ({ loadTargetedViewCatalog: mocks.catalog }));
 vi.mock("@/api/storage/metadata", () => ({
   listDatasetColumns: vi.fn().mockResolvedValue({ columns: [] }),
-  listViewColumns: mocks.columns,
+  listAllViewColumns: mocks.columns,
   listFields: vi.fn().mockResolvedValue({ fields: [] }),
   listFactors: vi.fn().mockResolvedValue({ factors: [] }),
   listAllDatasets: vi.fn(),
@@ -81,7 +81,7 @@ describe("View result refresh", () => {
       views: [{ view_id: "view-known", dataset_id: "dataset-known" }],
       datasets: [{ dataset_id: "dataset-known", data_kind: "DATA_KIND_TIME_SERIES" }]
     });
-    mocks.columns.mockReset().mockResolvedValue({ columns: [] });
+    mocks.columns.mockReset().mockResolvedValue([]);
     mocks.queryTimeSeries.mockReset().mockResolvedValue({ rows: [{ key: { subject_id: "BTC", freq: "1m" } }] });
     mocks.queryRecords.mockReset().mockResolvedValue({ rows: [{ key: { record_id: "record-known" } }] });
     mocks.messageError.mockReset();
@@ -136,13 +136,13 @@ describe("View result refresh", () => {
   });
 
   it("queues a refresh requested while the View context is still loading", async () => {
-    const columns = deferred<{ columns: [] }>();
+    const columns = deferred<never[]>();
     mocks.columns.mockReturnValue(columns.promise);
     const wrapper = mountPage();
     await flushPromises();
     await wrapper.setProps({ refreshKey: 1 });
     expect(mocks.queryTimeSeries).not.toHaveBeenCalled();
-    columns.resolve({ columns: [] });
+    columns.resolve([]);
     await flushPromises();
     expect(mocks.queryTimeSeries).toHaveBeenCalledTimes(2);
     wrapper.unmount();

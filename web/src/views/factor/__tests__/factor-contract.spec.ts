@@ -146,7 +146,7 @@ describe("factor pages contract", () => {
     expect(definitionsPage).toContain('<a-space class="task-toolbar" wrap>');
     expect(toolbar).not.toContain("a-input-search");
     expect(toolbar).not.toContain("a-radio-group");
-    expect(definitionsPage).toContain("filterDefinitions(items.value, applied)");
+    expect(definitionsPage).toContain('filterDefinitions(items.value, { ...applied, category: "" })');
   });
 
   it("derives the factor type from the compiled spec and shows partial universe only for cross sections", () => {

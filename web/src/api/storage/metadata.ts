@@ -228,6 +228,17 @@ export function listDataNodes(params: { status?: string; page?: Page }) {
   return callMetadata<typeof params, RetRsp & { items: DataNodeListItem[]; page_result: PageResult }>("ListDataNodes", params);
 }
 
+/** 分页读取 View 的全部列：因子结果视图会有几千列，单页 1000 列不够。 */
+export async function listAllViewColumns(spaceId: string, viewId: string) {
+  const items: ViewColumn[] = [];
+  for (let pageNo = 1; pageNo <= 100; pageNo += 1) {
+    const rsp = await listViewColumns({ space_id: spaceId, view_id: viewId, page: { page: pageNo, size: 1000 } });
+    items.push(...(rsp.columns || []));
+    if (!rsp.page_result?.has_more || !(rsp.columns || []).length) break;
+  }
+  return items;
+}
+
 /** 分页读取空间内全部数据集（最多 20 页 × 500 条）。 */
 export async function listAllDatasets(spaceId: string, options?: StorageCallOptions) {
   const items: Dataset[] = [];
