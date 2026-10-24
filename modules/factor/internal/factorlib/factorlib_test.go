@@ -16,6 +16,8 @@ func TestRepositoryLibrariesCompile(t *testing.T) {
 			// 回看按窗口上限 120 推导（参数可在范围内逐期调整）。
 			"Bias": 120, "BiasQ": 239, "Cci": 239, "MinMax": 120, "QuoteVolumeMean": 120, "QuoteVolumeMeanQ": 239,
 			"VolumeMeanQ": 239, "ZfAbsMean": 240, "ZfMeanQ": 239, "ZfStd": 121, "ZscoreAbsMeanQ": 358,
+			// 常用技术指标（common.yaml）：EMA、MACD、RSI 带指数衰减，回看按截断根数推导，窗口上限因此比普通均线小。
+			"Ma": 120, "Ema": 415, "Macd": 362, "Rsi": 406, "Roc": 121, "Boll": 120, "Atr": 61, "ReturnStd": 121, "Vwap": 120,
 		},
 		"../../../../examples/factors": {"Bias": 120, "Cci": 239, "ma": 120, "sma": 405},
 	}

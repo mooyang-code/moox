@@ -1,0 +1,101 @@
+# 因子库（表达式写法）：常用技术指标，只用 K 线的开高低收与成交量，所有指标都是时序因子。
+# 格式同 xbx.yaml：一个文件可以包含多个因子；窗口是可调参数，策略可在范围内逐期调整，回看按参数上限推导。
+# 分类：趋势类（trend）、动量类（momentum）、波动类（volatility）、成交量类（volume）。
+# 带指数衰减的指标（EMA、MACD、RSI）按截断到起点权重低于 1e-9 的根数取回看，所以窗口上限比普通均线小，避免预热过长。
+- factor_id: Ma
+  name: 简单移动平均（MA）
+  category_id: trend
+  category_name: 趋势类
+  spec: |
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
+    outputs:
+      ma: ts_mean(close, window)
+
+- factor_id: Ema
+  name: 指数移动平均（EMA）
+  category_id: trend
+  category_name: 趋势类
+  spec: |
+    params: {window: {type: int, min: 2, max: 40, default: 20}}
+    outputs:
+      ema: ema(close, window)
+
+- factor_id: Macd
+  name: 指数平滑异同移动平均（MACD）
+  category_id: trend
+  category_name: 趋势类
+  spec: |
+    let:
+      dif: ema(close, 12) - ema(close, 26)
+      dea: ema(dif, 9)
+    outputs:
+      macd_dif: dif
+      macd_dea: dea
+      macd_hist: 2 * (dif - dea)
+
+- factor_id: Rsi
+  name: 相对强弱指数（RSI）
+  category_id: momentum
+  category_name: 动量类
+  spec: |
+    params: {window: {type: int, min: 2, max: 20, default: 14}}
+    let:
+      d: delta(close, 1)
+      gain: where(d > 0, d, 0)
+    outputs:
+      rsi: 100 * sma(gain, window, 1) / sma(abs(d), window, 1)
+
+- factor_id: Roc
+  name: 变动率（ROC）
+  category_id: momentum
+  category_name: 动量类
+  spec: |
+    params: {window: {type: int, min: 1, max: 120, default: 12}}
+    outputs:
+      roc: pct_change(close, window)
+
+- factor_id: Boll
+  name: 布林带（BOLL）
+  category_id: volatility
+  category_name: 波动类
+  spec: |
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
+    let:
+      mid: ts_mean(close, window)
+      band: 2 * ts_std(close, window)
+    outputs:
+      boll_mid: mid
+      boll_up: mid + band
+      boll_low: mid - band
+      boll_pctb: (close - (mid - band)) / (2 * band)
+
+- factor_id: Atr
+  name: 平均真实波幅（ATR）
+  category_id: volatility
+  category_name: 波动类
+  spec: |
+    params: {window: {type: int, min: 2, max: 60, default: 14}}
+    let:
+      tr: max(high - low, max(abs(high - delay(close, 1)), abs(low - delay(close, 1))))
+      atr_v: ts_mean(tr, window)
+    outputs:
+      atr: atr_v
+      atr_pct: atr_v / close
+
+- factor_id: ReturnStd
+  name: 收益率波动
+  category_id: volatility
+  category_name: 波动类
+  spec: |
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
+    outputs:
+      return_std: ts_std(pct_change(close), window)
+
+- factor_id: Vwap
+  name: 成交量加权均价（VWAP）
+  category_id: volume
+  category_name: 成交量类
+  spec: |
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
+    outputs:
+      vwap: ts_sum(quote_volume, window) / ts_sum(volume, window)

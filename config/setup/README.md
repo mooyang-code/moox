@@ -36,7 +36,8 @@ moox-cli setup init \
 启用 SCF 时，每个采集地域都要有一台同地域、带私网地址的 Access 主机；函数在该地域 VPC 里经
 Access 私网地址认领和写入，规则见 `skills/moox/references/private-network.md`。
 
-默认因子配置位于仓库根目录的 `moox.toml.example`，当前把 `Bias`、`Cci`、`MinMax`、`QuoteVolumeMean`
+默认因子配置位于仓库根目录的 `moox.toml.example`，当前把 `xbx.yaml` 里的 `Bias`、`Cci`、`MinMax`、`QuoteVolumeMean`，
+以及 `common.yaml` 里的常用技术指标（MA、EMA、MACD、RSI、ROC、BOLL、ATR、收益率波动、VWAP）
 加入币安现货、合约 1m 采集任务结果（`dataset_dasftksvjhj2jom4vhd0`、`dataset_dasftksvjhj2jom4vhdg`）的因子集。示例用 `[[factors.definitions]]`
 声明因子、用 `[[factors.members]]` 声明因子集成员。将示例复制为
 `moox.toml` 后，`setup init` 会导入因子定义、创建成员并启用它们；因子库文件路径相对

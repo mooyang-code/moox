@@ -35,6 +35,7 @@ func migrateFixture(t *testing.T, text string) (path, root string, keys *configc
 	library := filepath.Join(root, "modules", "factor", "factors")
 	require.NoError(t, os.MkdirAll(library, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(library, "xbx.yaml"), []byte("- factor_id: Bias\n  spec: x\n- factor_id: Cci\n  spec: x\n- factor_id: MinMax\n  spec: x\n- factor_id: QuoteVolumeMean\n  spec: x\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(library, "common.yaml"), []byte("- factor_id: Ma\n  spec: x\n- factor_id: Ema\n  spec: x\n- factor_id: Macd\n  spec: x\n- factor_id: Rsi\n  spec: x\n- factor_id: Roc\n  spec: x\n- factor_id: Boll\n  spec: x\n- factor_id: Atr\n  spec: x\n- factor_id: ReturnStd\n  spec: x\n- factor_id: Vwap\n  spec: x\n"), 0o644))
 	keys = &configcrypt.MemoryStore{}
 	sealed, err := configcrypt.Encrypt([]byte(text), keys)
 	require.NoError(t, err)
