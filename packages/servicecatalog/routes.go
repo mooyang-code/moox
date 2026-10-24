@@ -302,7 +302,7 @@ func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
 }
 
 // relayTargets 计算各台已启用出站主机的中转许可：跨主机端口的调用方是该主机上全部路由调用方的并集，
-// 组件健康端口只允许 Monitor。
+// 组件健康端口只允许 Monitor 与 moox-cli（部署与诊断要等外部程序就绪）。
 func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
 	var relays []RelayTarget
 	for _, host := range t.Hosts {
@@ -342,15 +342,18 @@ func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
 		}
 		sort.Ints(ports)
 		for _, port := range ports {
-			target.Ports = append(target.Ports, RelayPort{Port: port, Callers: []string{"monitor"}})
+			target.Ports = append(target.Ports, RelayPort{Port: port, Callers: slices.Clone(healthRelayCallers)})
 		}
 		relays = append(relays, target)
 	}
 	return relays
 }
 
+// healthRelayCallers 是能经中转连接出站主机组件健康端口的调用方：Monitor 探测，moox-cli 部署与诊断。
+var healthRelayCallers = []string{"monitor", "moox-cli"}
+
 // ValidRelay 校验一条中转许可：端口不重复，跨主机端口的调用方是合法 ID 且不重复，
-// 其余端口必须是服务目录里某个组件的健康端口并且只对 Monitor 开放。
+// 其余端口必须是服务目录里某个组件的健康端口并且只对 Monitor 与 moox-cli 开放。
 func (c Catalog) ValidRelay(r RelayTarget) bool {
 	if !ValidHostID(r.HostID) || len(r.Ports) > 64 {
 		return false
@@ -362,7 +365,7 @@ func (c Catalog) ValidRelay(r RelayTarget) bool {
 		}
 		seen[port.Port] = true
 		if port.Port != HostGatewayRemotePort {
-			if !slices.Equal(port.Callers, []string{"monitor"}) || !c.HealthPort(port.Port) {
+			if !slices.Equal(port.Callers, healthRelayCallers) || !c.HealthPort(port.Port) {
 				return false
 			}
 			continue

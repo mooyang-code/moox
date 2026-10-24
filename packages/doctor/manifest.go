@@ -53,6 +53,9 @@ type Component struct {
 	WritablePaths            []string                `yaml:"writable_paths" json:"writable_paths"`
 	RecoveryActionIDs        []string                `yaml:"recovery_action_ids" json:"recovery_action_ids"`
 	RequiredInDefaultProfile bool                    `yaml:"required_in_default_profile" json:"required_in_default_profile"`
+	// Supervisor 是进程托管方式：moox_runtime（moox-runtime 看护）或 systemd_user（systemd 用户服务，Unit 是单元名）。
+	Supervisor string `yaml:"supervisor" json:"supervisor"`
+	Unit       string `yaml:"unit,omitempty" json:"unit,omitempty"`
 }
 
 var allowedRecoveryActions = map[string]bool{
@@ -92,6 +95,10 @@ func loadManifest(raw []byte, source string) (Manifest, error) {
 	manifest := Manifest{Version: catalog.Version, Components: make([]Component, 0, len(catalog.Components))}
 	for _, component := range catalog.Components {
 		metadata := component.Doctor
+		supervisor := metadata.Supervisor
+		if supervisor == "" {
+			supervisor = servicecatalog.SupervisorMooxRuntime
+		}
 		healthPath := ""
 		switch component.Health.Kind {
 		case "readyz":
@@ -107,6 +114,7 @@ func loadManifest(raw []byte, source string) (Manifest, error) {
 			FunctionalObservability: FunctionalObservability(metadata.FunctionalObservability),
 			HealthPath:              healthPath, ConfigPaths: metadata.ConfigPaths, WritablePaths: metadata.WritablePaths,
 			RecoveryActionIDs: metadata.RecoveryActionIDs, RequiredInDefaultProfile: metadata.RequiredInDefaultProfile,
+			Supervisor: supervisor, Unit: metadata.Unit,
 		})
 	}
 	sum := sha256.Sum256(raw)
@@ -174,6 +182,9 @@ func (c Component) validate() error {
 	case FunctionalObservabilityActive, FunctionalObservabilityDeferred, FunctionalObservabilityNotApplicable:
 	default:
 		return fmt.Errorf("invalid functional_observability %q", c.FunctionalObservability)
+	}
+	if err := servicecatalog.ValidateSupervisor(c.Supervisor, c.Unit); err != nil {
+		return err
 	}
 	if strings.HasPrefix(c.ServiceName, "storage-") && c.FunctionalObservability != FunctionalObservabilityDeferred {
 		return fmt.Errorf("storage service %q must remain deferred", c.ServiceName)

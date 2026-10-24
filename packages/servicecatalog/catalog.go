@@ -43,6 +43,9 @@ type Component struct {
 	Health   Health    `yaml:"health" json:"health"`
 	Services []Service `yaml:"services,omitempty" json:"services,omitempty"`
 	Doctor   Doctor    `yaml:"doctor" json:"doctor"`
+	// ExternalProgram 标记运行在登记主机上、但不经主机网关路由的外部程序（因子引擎、归档 worker）：
+	// 它以同名外部身份（Principal）经 Access 访问系统，没有自己的服务与监听端口，只有一个本机健康端口。
+	ExternalProgram bool `yaml:"external_program,omitempty" json:"external_program,omitempty"`
 }
 
 type Health struct {
@@ -98,7 +101,16 @@ type Doctor struct {
 	WritablePaths            []string `yaml:"writable_paths" json:"writable_paths"`
 	RecoveryActionIDs        []string `yaml:"recovery_action_ids" json:"recovery_action_ids"`
 	RequiredInDefaultProfile bool     `yaml:"required_in_default_profile" json:"required_in_default_profile"`
+	// Supervisor 是进程的托管方式：moox_runtime（默认，由 moox-runtime 看护）或 systemd_user（systemd 用户服务）。
+	Supervisor string `yaml:"supervisor,omitempty" json:"supervisor,omitempty"`
+	// Unit 是 systemd 用户服务的单元名，只有 systemd_user 托管的组件才有。
+	Unit string `yaml:"unit,omitempty" json:"unit,omitempty"`
 }
+
+const (
+	SupervisorMooxRuntime = "moox_runtime"
+	SupervisorSystemdUser = "systemd_user"
+)
 
 //go:embed catalog.yaml
 var embedded []byte

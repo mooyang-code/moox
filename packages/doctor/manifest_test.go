@@ -120,6 +120,9 @@ func TestManifestValidation(t *testing.T) {
 		{name: "unsafe path", mutate: func(m *Manifest) { m.Components[0].ConfigPaths = []string{"../secret"} }},
 		{name: "unknown dependency", mutate: func(m *Manifest) { m.Components[0].Dependencies = []string{"missing"} }},
 		{name: "unknown recovery", mutate: func(m *Manifest) { m.Components[0].RecoveryActionIDs = []string{"shell_anything"} }},
+		{name: "systemd without unit", mutate: func(m *Manifest) { m.Components[0].Supervisor = servicecatalog.SupervisorSystemdUser }},
+		{name: "unit without systemd", mutate: func(m *Manifest) { m.Components[0].Unit = "moox-monitor" }},
+		{name: "unknown supervisor", mutate: func(m *Manifest) { m.Components[0].Supervisor = "launchd" }},
 		{name: "storage active", mutate: func(m *Manifest) {
 			m.Components[0].ServiceName = "storage-primary"
 			m.Components[0].FunctionalObservability = FunctionalObservabilityActive
@@ -152,5 +155,30 @@ func TestManifestChecksumStable(t *testing.T) {
 	}
 	if one.Checksum == "" || one.Checksum != two.Checksum {
 		t.Fatalf("checksums %q and %q", one.Checksum, two.Checksum)
+	}
+}
+
+// 外部程序由 systemd 用户服务托管，其余组件默认由 moox-runtime 看护。
+func TestEmbeddedManifestSupervisors(t *testing.T) {
+	t.Parallel()
+
+	manifest, err := LoadEmbeddedManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, component := range manifest.Components {
+		switch component.ComponentID {
+		case "factor-engine", "archive-worker":
+			if component.Supervisor != servicecatalog.SupervisorSystemdUser || component.Unit != "moox-"+component.ComponentID {
+				t.Fatalf("%s supervisor = %q unit = %q", component.ComponentID, component.Supervisor, component.Unit)
+			}
+			if component.Transport != TransportHealthOnly {
+				t.Fatalf("%s transport = %q", component.ComponentID, component.Transport)
+			}
+		default:
+			if component.Supervisor != servicecatalog.SupervisorMooxRuntime || component.Unit != "" {
+				t.Fatalf("%s supervisor = %q unit = %q", component.ComponentID, component.Supervisor, component.Unit)
+			}
+		}
 	}
 }

@@ -326,9 +326,6 @@ func TestConsoleGlobalWritesRequireAdministrator(t *testing.T) {
 		role   int
 		status int
 	}{
-		{"/api/admin/sysdeploy/SetDeploymentStatus", 1, http.StatusForbidden},
-		{"/api/admin/sysdeploy/SetHostStatus", 1, http.StatusForbidden},
-		{"/api/admin/sysdeploy/SetDeploymentStatus", 2, http.StatusOK},
 		{"/api/admin/sysdeploy/ListDeployments", 1, http.StatusOK},
 		// SSH 主机配置与会话等价于登录主机：普通用户连读都不行。
 		{"/api/admin/ssh/ListHosts", 1, http.StatusForbidden},
@@ -459,9 +456,8 @@ func TestConsoleStorageBindsAuthorizedSpaceAndProtectsGlobalMethods(t *testing.T
 		{"header space injected when body has none", "/api/admin/storage/ListDatasets", "space-1", `{}`, 1, http.StatusOK},
 		{"empty space id is replaced by header space", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":""}`, 1, http.StatusOK},
 		{"body space ok", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, 1, http.StatusOK},
-		{"node write needs admin even with space header", "/api/admin/storage/UpdateDataNode", "space-1", `{"space_id":"space-1","node_id":"n1"}`, 1, http.StatusForbidden},
 		{"node read needs admin", "/api/admin/storage/ListDataNodes", "", `{}`, 1, http.StatusForbidden},
-		{"admin node write", "/api/admin/storage/UpdateDataNode", "", `{"node_id":"n1"}`, 2, http.StatusOK},
+		{"admin node read", "/api/admin/storage/ListDataNodes", "", `{}`, 2, http.StatusOK},
 		{"space delete denied for member", "/api/admin/space/DeleteSpace", "", `{"space_id":"space-2"}`, 1, http.StatusForbidden},
 		{"space update denied for member", "/api/admin/space/UpdateSpace", "space-1", `{"space":{"space_id":"space-1"}}`, 1, http.StatusForbidden},
 		{"members need membership", "/api/admin/space/ListSpaceMembers", "", `{"space_id":"space-2"}`, 1, http.StatusForbidden},
@@ -587,5 +583,28 @@ func TestStorageTopLevelSpaceMethodsMatchProto(t *testing.T) {
 		request, ok := requests[method]
 		require.True(t, ok, "%s 不在 storage proto 中", method)
 		require.True(t, messages[request], "%s 的请求消息 %s 没有顶层 space_id，不能回填", method, request)
+	}
+}
+
+// 部署、数据节点与归档 worker 的写操作只留给 moox-cli：控制台没有这些路由，任何角色都得到 404。
+func TestConsoleHasNoDeploymentWriteRoutes(t *testing.T) {
+	for _, path := range []string{
+		"/api/admin/sysdeploy/SetHostStatus",
+		"/api/admin/sysdeploy/SetDeploymentStatus",
+		"/api/admin/sysdeploy/SyncHostDeployments",
+		"/api/admin/sysdeploy/DeleteHost",
+		"/api/admin/storage/UpdateDataNode",
+		"/api/admin/storage/DeleteDataNode",
+		"/api/admin/archive/RetireArchiveWorker",
+	} {
+		for _, role := range []int{1, 2, 3} {
+			_, secret, key, sid := setupRequestAuthTest(t)
+			testTokenRole = role
+			gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })
+			rr := httptest.NewRecorder()
+			router := newTestRouter(t, nil, gateway).buildControlRouter()
+			router.ServeHTTP(rr, browserRequest(t, secret, key, sid, path, "", []byte(`{}`)))
+			require.Equal(t, http.StatusNotFound, rr.Code, "%s role=%d", path, role)
+		}
 	}
 }

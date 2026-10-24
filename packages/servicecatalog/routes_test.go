@@ -110,8 +110,8 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":   {192, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "3e830137fed314810ec87932f8102ef51379516ac176c3569e701b8e3e3a8daf"},
-		"storage":   {96, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "f82d253dce0822c850d1d2ba10a87030ff5b55e8fa457d68a67676272de06ff9"},
+		"control":   {192, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "818b8ecaf89a7882f76624b474f9c9b76ca2b4357a26124a4eaf5fd527eb4429"},
+		"storage":   {96, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "0df54789f42dd9806c6ac0ec46a96f94c72a55e4afaadf196870ca525e67f5ef"},
 		"compute-1": {38, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "c70f86fd7005fda74ffae56c86dd6c2d0f93dfa707150492d6b6977487bf5f9b"},
 	}
 	for _, host := range p.Hosts {
@@ -333,7 +333,7 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 		t.Fatalf("archive-mgr routes = %d, want 19", len(routes))
 	}
 	retire := routes["trpc.moox.archive.ArchiveMgr/RetireArchiveWorker"]
-	if !slices.Equal(retire.Callers, []string{"console", "moox-cli"}) || retire.ReadOnly {
+	if !slices.Equal(retire.Callers, []string{"moox-cli"}) || retire.ReadOnly {
 		t.Fatalf("RetireArchiveWorker route = %+v", retire)
 	}
 	create := routes["trpc.moox.archive.ArchiveMgr/CreateArchiveTask"]
@@ -386,7 +386,7 @@ func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
 		t.Fatal("component health ports are missing")
 	}
 	for _, port := range relay.Ports[1:] {
-		if !slices.Equal(port.Callers, []string{"monitor"}) {
+		if !slices.Equal(port.Callers, []string{"monitor", "moox-cli"}) {
 			t.Fatalf("health port %d open to %v", port.Port, port.Callers)
 		}
 	}
@@ -411,5 +411,61 @@ func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
 	p.Hosts[1].Reachability = "inbound"
 	if _, err := c.Compile(p, "control"); err == nil {
 		t.Fatal("unknown reachability accepted")
+	}
+}
+
+// 因子机是只能出站的主机：外部程序没有网关路由，只通过 Access 访问系统；它们的健康端口进入中转许可，只对 Monitor 与 moox-cli 开放。
+func TestOutboundFactorHostRelaysExternalProgramHealthPorts(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	p.Hosts = append(p.Hosts, Host{ID: "factor", Address: "192.168.0.103", Status: Enabled, Reachability: ReachabilityOutbound})
+	for _, id := range []string{"host-gateway", "host-agent", "factor-engine", "archive-worker"} {
+		p.Deployments = append(p.Deployments, Deployment{HostID: "factor", ComponentID: id, Status: Enabled})
+	}
+	if err := c.ValidateTopology(p); err != nil {
+		t.Fatal(err)
+	}
+	control, err := c.Compile(p, "control")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var relay *RelayTarget
+	for i := range control.Relays {
+		if control.Relays[i].HostID == "factor" {
+			relay = &control.Relays[i]
+		}
+	}
+	if relay == nil || !c.ValidRelay(*relay) {
+		t.Fatalf("factor relay = %+v", control.Relays)
+	}
+	for _, port := range []int{11417, 11418, 11012, 11425} {
+		if !relay.Allowed("monitor", port) || !relay.Allowed("moox-cli", port) || relay.Allowed("collector", port) {
+			t.Fatalf("health port %d is not limited to monitor and moox-cli: %+v", port, relay.Ports)
+		}
+	}
+	if relay.Allowed("moox-cli", 22) || relay.Allowed("monitor", 22) {
+		t.Fatal("ssh port must not be relayed")
+	}
+	// 外部程序不是网关调用方：全部路由的调用方里没有它们，外部身份只经 access 进入。
+	for _, route := range control.Routes {
+		if slices.Contains(route.Callers, "factor-engine") || slices.Contains(route.Callers, "archive-worker") {
+			t.Fatalf("external program is a gateway caller: %+v", route)
+		}
+	}
+	if slices.Contains(control.VerificationCallers, "factor-engine") || slices.Contains(control.VerificationCallers, "archive-worker") {
+		t.Fatalf("external program is a verification caller: %v", control.VerificationCallers)
+	}
+	// 停用主机后，中转许可随之撤销。
+	for i := range p.Hosts {
+		if p.Hosts[i].ID == "factor" {
+			p.Hosts[i].Status = Disabled
+		}
+	}
+	if control, err = c.Compile(p, "control"); err != nil {
+		t.Fatal(err)
+	}
+	for _, relay := range control.Relays {
+		if relay.HostID == "factor" {
+			t.Fatalf("disabled factor host keeps relay: %+v", relay)
+		}
 	}
 }
