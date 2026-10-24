@@ -91,13 +91,27 @@ func TestPinHostKeyTrustsFirstKeyPerEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "SHA256:first", pinned, "同一地址端口已有指纹时不被覆盖")
 
-	// 地址或端口变了：旧指纹自然失效，重新信任第一次看到的密钥。
+	// 只认登记的当前端点：端口还没改时，别的端点的连接直接失败，不写任何东西。
+	_, err = d.PinHostKey("storage", "198.51.100.7:2222", "SHA256:early")
+	require.ErrorIs(t, err, ErrHostChanged)
+
+	// 同步把端口改成 2222：旧指纹自然失效，重新信任新端点上第一次看到的密钥。
+	require.NoError(t, db.Exec("UPDATE t_hosts SET c_ssh_port = 2222 WHERE c_host_id = 'storage'").Error)
 	pinned, err = d.PinHostKey("storage", "198.51.100.7:2222", "SHA256:moved")
 	require.NoError(t, err)
 	assert.Equal(t, "SHA256:moved", pinned)
-	pinned, err = d.PinHostKey("storage", "198.51.100.7:22", "SHA256:late")
+
+	// 改端口之前发起的旧连接此时才到：它不能把旧指纹写回，新端点的指纹保持不变。
+	_, err = d.PinHostKey("storage", "198.51.100.7:22", "SHA256:late")
+	require.ErrorIs(t, err, ErrHostChanged)
+	pinned, err = d.PinHostKey("storage", "198.51.100.7:2222", "SHA256:other")
 	require.NoError(t, err)
-	assert.Equal(t, "SHA256:late", pinned, "旧端点的连接不能把旧指纹写回")
+	assert.Equal(t, "SHA256:moved", pinned)
+
+	// 地址改变同理。
+	require.NoError(t, db.Exec("UPDATE t_hosts SET c_address = '198.51.100.99' WHERE c_host_id = 'storage'").Error)
+	_, err = d.PinHostKey("storage", "198.51.100.7:2222", "SHA256:stale-address")
+	require.ErrorIs(t, err, ErrHostChanged)
 
 	_, err = d.PinHostKey("missing", "198.51.100.7:22", "SHA256:x")
 	require.ErrorIs(t, err, ErrHostNotFound)

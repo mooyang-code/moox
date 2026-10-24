@@ -6,7 +6,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// 服务器角色。录入页按用途收集服务器，不让用户挑组件；角色到组件的映射取自示例模板的放置段。
+// 服务器角色。录入页按用途收集服务器，不让用户挑组件；角色到组件的映射取自示例模板的部署段。
 const (
 	RoleStorage  = "storage"
 	RoleControl  = "control"
@@ -83,9 +83,9 @@ var roleCatalog = []Role{
 		Toggle:    &Toggle{Label: "我要使用加密货币行情", Hint: "加密货币需要海外服务器；只做 A 股、港股、美股可以不配置。"},
 	},
 	{
-		Key: RoleFactor, Title: "因子计算机", Optional: true, hostID: "factor",
-		Purpose: "计算因子，需要较高性能。可以是这台电脑，也可以是家里的另一台机器（Linux、macOS 或 Windows），不要求是腾讯云。",
-		Specs:   []string{"8 核以上 · 16 GB 以上"},
+		Key: RoleFactor, Title: "因子机", exampleHost: "factor", Optional: true,
+		Purpose: "计算因子，需要较高性能。可以是家里或局域网里的一台 Linux 机器，不要求是腾讯云；它只出站连接，管理台通过管理台服务器的网关与它通信。",
+		Specs:   []string{"8 核以上 · 16 GB 以上 · Linux"},
 		Toggle:  &Toggle{Label: "现在配置", Hint: "以后也可以再加。"},
 	},
 }
@@ -110,7 +110,7 @@ func loadRoles() ([]Role, error) {
 			host, ok := example.Hosts[role.exampleHost]
 			placed, placedOK := example.Deployments[role.exampleHost]
 			if !ok || !placedOK {
-				return nil, fmt.Errorf("示例配置里没有主机 %s 或它的放置，请同步模板", role.exampleHost)
+				return nil, fmt.Errorf("示例配置里没有主机 %s 或它的部署，请同步模板", role.exampleHost)
 			}
 			role.hostID = role.exampleHost
 			role.tlsMode = host.TLSMode

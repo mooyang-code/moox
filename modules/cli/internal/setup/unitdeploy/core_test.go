@@ -14,7 +14,8 @@ import (
 
 func TestCoreRequestUsesConfiguredControlRootAndPrivateAdministrator(t *testing.T) {
 	manifest := setupconfig.Manifest{Admin: setupconfig.Admin{Username: "admin", Password: "synthetic-bootstrap-password"}, Paths: setupconfig.Paths{DeployRoot: "/data/moox", ControlRoot: "/data/moox/units/prod"}}
-	request := coreRequest(manifest, runtimeIdentity{}, unitpackage.Result{}, unitpackage.Result{})
+	request, err := coreRequest(manifest, runtimeIdentity{}, unitpackage.Result{}, unitpackage.Result{})
+	require.NoError(t, err)
 	require.Equal(t, manifest.Paths.ControlRoot, request.Control.UnitRoot)
 	require.Equal(t, "/data/moox/host", request.Host.UnitRoot)
 	require.Equal(t, manifest.Admin.Username, request.InitialAdmin.Username)

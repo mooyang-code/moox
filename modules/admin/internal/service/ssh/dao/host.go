@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
@@ -69,25 +71,43 @@ func (d *HostDAO) Target(ctx context.Context, hostID string) (model.Target, erro
 	return model.Target{HostID: row.HostID, Address: row.Address, Port: row.SSHPort, User: row.SSHUser, Credential: credential}, nil
 }
 
-// PinHostKey 原子地确定主机在该地址与端口上受信任的指纹：没有记录或记录属于别的地址、端口时记录新的指纹，
-// 已有同一地址与端口的记录则保持不变。返回生效的指纹。
-// 指纹以“地址:端口 指纹”存进 t_hosts.c_ssh_fingerprint；单条带条件的 UPDATE 保证并发的首次连接只有一个会写入，
-// 其余读到的是它写入的值，所以不需要按主机加锁，改地址或端口也不会被旧连接把旧指纹写回。
+// ErrHostChanged 主机的地址或 SSH 端口在连接期间被改动，这条连接不再有效。
+var ErrHostChanged = errors.New("主机的连接信息已变化，请重新连接")
+
+// PinHostKey 原子地确定主机在“地址:端口”上受信任的指纹，并且只认主机当前登记的端点：
+//   - 端点不是当前登记的（连接期间被同步改了地址或端口）：返回 ErrHostChanged，不写任何东西，旧连接无法把旧指纹写回；
+//   - 记录为空，或记录属于别的端点：记录这次看到的指纹（首次信任）；
+//   - 已有同一端点的记录：保持不变。
+//
+// 返回生效的指纹。指纹以“地址:端口 指纹”存进 t_hosts.c_ssh_fingerprint；带条件的单条 UPDATE 保证并发的首次连接只有一个会写入，
+// 其余读到的是它写入的值，所以不需要按主机加锁。
 func (d *HostDAO) PinHostKey(hostID, endpoint, fingerprint string) (string, error) {
+	address, portText, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("无效的主机端点 %q: %w", endpoint, err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		return "", fmt.Errorf("无效的主机端点 %q: %w", endpoint, err)
+	}
 	prefix := endpoint + " "
 	if err := d.db.Exec(`UPDATE t_hosts SET c_ssh_fingerprint = ?
-		WHERE c_host_id = ? AND (c_ssh_fingerprint = '' OR substr(c_ssh_fingerprint, 1, ?) <> ?)`,
-		prefix+fingerprint, hostID, len(prefix), prefix).Error; err != nil {
+		WHERE c_host_id = ? AND c_address = ? AND c_ssh_port = ?
+		AND (c_ssh_fingerprint = '' OR substr(c_ssh_fingerprint, 1, ?) <> ?)`,
+		prefix+fingerprint, hostID, address, port, len(prefix), prefix).Error; err != nil {
 		return "", err
 	}
-	var rows []struct{ Fingerprint string }
-	if err := d.db.Raw("SELECT c_ssh_fingerprint AS fingerprint FROM t_hosts WHERE c_host_id = ?", hostID).Scan(&rows).Error; err != nil {
+	var rows []hostRow
+	if err := d.db.Where("c_host_id = ?", hostID).Find(&rows).Error; err != nil {
 		return "", err
 	}
 	if len(rows) == 0 {
 		return "", ErrHostNotFound
 	}
-	pinned, ok := strings.CutPrefix(rows[0].Fingerprint, prefix)
+	if rows[0].Address != address || rows[0].SSHPort != port {
+		return "", ErrHostChanged
+	}
+	pinned, ok := strings.CutPrefix(rows[0].SSHFingerprint, prefix)
 	if !ok {
 		return "", errors.New("host key pin was not recorded")
 	}

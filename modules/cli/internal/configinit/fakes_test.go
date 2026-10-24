@@ -66,7 +66,7 @@ func (p *fakeProber) Probe(_ context.Context, target FactorServer) (ProbeReport,
 	if p.err != nil {
 		return ProbeReport{}, p.err
 	}
-	if p.hostKey != "" && p.trusted != p.hostKey && target.Mode == FactorRemote {
+	if p.hostKey != "" && p.trusted != p.hostKey {
 		return ProbeReport{HostKey: p.hostKey}, nil
 	}
 	return p.report, nil

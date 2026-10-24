@@ -43,9 +43,8 @@ type Options struct {
 
 // Result 只含「写到哪里、有哪些主机」，不含任何值。
 type Result struct {
-	Path         string   `json:"path"`
-	Hosts        []string `json:"hosts"`
-	FactorEngine string   `json:"factor_engine,omitempty"`
+	Path  string   `json:"path"`
+	Hosts []string `json:"hosts"`
 }
 
 // Run 起一个只绑回环地址的一次性页面，等用户提交，渲染并写出 moox.toml（0600，不覆盖已有文件）。
@@ -176,7 +175,7 @@ func (s *session) checkFactor(w http.ResponseWriter, r *http.Request) {
 	s.checkTarget(w, r, target)
 }
 
-// trustFactor 在用户确认指纹后记录因子计算机的主机密钥，再检测一次。
+// trustFactor 在用户确认指纹后记录因子机的主机密钥，再检测一次。
 func (s *session) trustFactor(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Target      FactorServer `json:"target"`
@@ -186,9 +185,6 @@ func (s *session) trustFactor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target, err := request.Target.normalize()
-	if err == nil && target.Mode != FactorRemote {
-		err = fmt.Errorf("这台电脑不需要确认指纹")
-	}
 	if err == nil {
 		err = checkText("主机指纹", strings.TrimSpace(request.Fingerprint), true)
 	}
@@ -250,7 +246,7 @@ func (s *session) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.done = true
-	result := Result{Path: s.output, FactorEngine: request.factorEngine}
+	result := Result{Path: s.output}
 	for _, host := range request.hosts {
 		result.Hosts = append(result.Hosts, host.ID)
 	}

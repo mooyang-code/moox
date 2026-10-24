@@ -35,11 +35,21 @@ func (c *Client) SyncHostDeployments(ctx context.Context, snapshot *setupconfig.
 		}
 	}
 	slices.Sort(components)
+	request := &pb.SyncHostDeploymentsReq{
+		HostId: hostID, Label: host.Label, Address: host.Address, PrivateAddress: host.PrivateAddress,
+		Region: host.Region, Reachability: servicecatalog.ReachabilityName(host.Reachability), ComponentIds: components,
+	}
+	// 直达主机配了密码或私钥才把 SSH 登录信息交给控制台；其余主机的 SSH 在控制台里置灰（Admin 同时清除旧凭据）。
+	ssh, err := host.ConsoleSSH()
+	if err != nil {
+		return err
+	}
+	if ssh != nil {
+		request.SshPort, request.SshUser, request.SshAuthType = int32(ssh.Port), ssh.User, ssh.AuthType
+		request.SshSecret, request.SshPassphrase = ssh.Secret, ssh.Passphrase
+	}
 	response := &pb.SyncHostDeploymentsRsp{}
-	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "SyncHostDeployments", &pb.SyncHostDeploymentsReq{
-		HostId: hostID, Address: host.Address, PrivateAddress: host.PrivateAddress,
-		Region: host.Region, Reachability: servicecatalog.ReachabilityName(host.Reachability), Description: host.Label, ComponentIds: components,
-	}, response); err != nil {
+	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "SyncHostDeployments", request, response); err != nil {
 		return err
 	}
 	if err := checkRetInfo(response.GetRetInfo()); err != nil {

@@ -223,3 +223,72 @@ func TestRenameLegacyDeploymentComponentHandlesQuotesAndMultilineArrays(t *testi
 	require.Contains(t, text, "# 旧名字 \"cloudnode\" 只在注释里，不动")
 	require.Equal(t, []ComponentRename{{From: "cloudnode", To: "cloudfunction", Changes: 2}}, report.Components)
 }
+
+// legacyFactorText 在当前格式的示例配置上加回旧的因子机写法：[hosts.factor] 只登记登录方式，[factor_engine] 指向它。
+func legacyFactorText(t *testing.T, engine string) string {
+	t.Helper()
+	text := sampleText(t)
+	require.Contains(t, text, "\n[egress_proxy]\n")
+	legacy := "[hosts.factor]\naddress = \"192.168.0.103\"\nssh = { port = 22, username = \"builder\", password = \"pw\" }\n\n" +
+		"# 因子引擎所在的机器：local 表示运行 moox-cli 的这台电脑。\n[factor_engine]\nhost = \"" + engine + "\"\n\n"
+	return strings.Replace(text, "[egress_proxy]\n", legacy+"[egress_proxy]\n", 1)
+}
+
+// 旧的 [factor_engine] 转成该主机的只能出站与两个外部程序部署，说明注释一并去掉；重复执行结果不变。
+func TestMigrateConvertsFactorEngineIntoAnOutboundDeploymentHost(t *testing.T) {
+	text := legacyFactorText(t, "factor")
+	_, err := setupconfig.Parse([]byte(text))
+	require.ErrorContains(t, err, "[factor_engine] 已取消", "夹具必须是旧格式")
+	path, root, keys := migrateFixture(t, text)
+
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true})
+	require.NoError(t, err)
+	require.Equal(t, &FactorEngineMigration{Host: "factor"}, report.FactorEngine)
+	require.True(t, report.Valid && report.Written)
+	require.Contains(t, report.Labels, HostLabelMigration{Host: "factor", Label: "因子机"})
+
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	require.NotContains(t, string(plain), "factor_engine")
+	require.NotContains(t, string(plain), "因子引擎所在的机器")
+	snapshot, err := setupconfig.Parse(plain)
+	require.NoError(t, err)
+	host := snapshot.HostByID("factor")
+	require.Equal(t, "outbound", host.Reachability)
+	require.Equal(t, "因子机", host.Label)
+	require.Equal(t, []string{"factor-engine", "archive-worker"}, snapshot.Deployments["factor"])
+
+	again, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys})
+	require.NoError(t, err)
+	require.False(t, again.Changed || again.FactorEngine != nil, "已转换的配置不再变化")
+}
+
+func TestMigrateKeepsExistingFactorDeploymentsAndAddsMissingOnes(t *testing.T) {
+	text := legacyFactorText(t, "factor")
+	text = regexp.MustCompile(`(?m)^(overseas = .*)$`).ReplaceAllString(text, "$1\nfactor = [\"factor-engine\"]")
+	path, root, keys := migrateFixture(t, text)
+	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true})
+	require.NoError(t, err)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	snapshot, err := setupconfig.Parse(plain)
+	require.NoError(t, err)
+	require.Equal(t, []string{"factor-engine", "archive-worker"}, snapshot.Deployments["factor"])
+}
+
+func TestMigrateRejectsLocalFactorEngine(t *testing.T) {
+	path, root, keys := migrateFixture(t, legacyFactorText(t, "local"))
+	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys})
+	require.ErrorContains(t, err, "\"local\" 已不再支持")
+	require.ErrorContains(t, err, "Linux")
+}
+
+func TestMigrateRejectsFactorEngineWithUnknownHost(t *testing.T) {
+	path, root, keys := migrateFixture(t, legacyFactorText(t, "missing"))
+	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys})
+	require.ErrorContains(t, err, "没有登记在 [hosts.missing]")
+}

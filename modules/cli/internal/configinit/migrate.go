@@ -22,9 +22,6 @@ import (
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
-// 按角色命名的主机 ID 对应的中文名（docs/部署与运维.md「主机命名」）。
-var hostLabels = map[string]string{"control": "控制机", "storage": "存储机", "overseas": "海外机", "factor": "因子机"}
-
 const defaultFactorSourceDir = "modules/factor/factors"
 
 // MigrateOptions 控制 config migrate 的行为。
@@ -55,6 +52,11 @@ type FactorMigration struct {
 type HostLabelMigration struct {
 	Host  string `json:"host"`
 	Label string `json:"label"`
+}
+
+// FactorEngineMigration 记录旧的 [factor_engine] 被转成了哪台主机的只能出站与外部程序部署。
+type FactorEngineMigration struct {
+	Host string `json:"host"`
 }
 
 // HostRename 记录主机 ID 改名涉及的位置数。
@@ -88,6 +90,8 @@ type MigrateReport struct {
 	Factors   []FactorMigration    `json:"factors,omitempty"`
 	Labels    []HostLabelMigration `json:"labels,omitempty"`
 	Rename    *HostRename          `json:"rename,omitempty"`
+	// FactorEngine 不为空表示旧的 [factor_engine] 已转成该主机的 reachability = "outbound" 与两个外部程序部署。
+	FactorEngine *FactorEngineMigration `json:"factor_engine,omitempty"`
 	// Components 记录 [deployments] 里被改成当前名字的旧组件身份（例如 cloudnode → cloudfunction）及位置数。
 	Components []ComponentRename `json:"components,omitempty"`
 	// Deployments 为 true 表示旧的 [placements] 表被改名为 [deployments]。
@@ -350,6 +354,10 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 	if err := renameLegacyPlacements(blocks, report); err != nil {
 		return nil, err
 	}
+	var err error
+	if blocks, err = migrateFactorEngine(blocks, report); err != nil {
+		return nil, err
+	}
 	if renameFrom != "" || renameTo != "" {
 		if err := renameHost(blocks, renameFrom, renameTo, report); err != nil {
 			return nil, err
@@ -372,8 +380,8 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 		if !ok || blocks[i].array || strings.Contains(id, ".") {
 			continue
 		}
-		label, known := hostLabels[id]
-		if !known || blockHasKey(blocks[i], "label") {
+		label := setupconfig.DefaultHostLabel(id)
+		if label == "" || blockHasKey(blocks[i], "label") {
 			continue
 		}
 		b := &blocks[i]
@@ -386,6 +394,92 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 	}
 	return []byte(strings.Join(out, "\n")), nil
 }
+
+// factorExternalPrograms 是因子机上部署的两个外部程序组件。
+var factorExternalPrograms = []string{"factor-engine", "archive-worker"}
+
+// migrateFactorEngine 把旧的 [factor_engine] host = "<主机>" 转成该主机的 reachability = "outbound"
+// 和 factor-engine、archive-worker 两个部署，并删除 [factor_engine]；local 已不再支持。重复执行结果不变。
+func migrateFactorEngine(blocks []block, report *MigrateReport) ([]block, error) {
+	at := slices.IndexFunc(blocks, func(b block) bool { return b.header == "factor_engine" && !b.array })
+	if at < 0 {
+		return blocks, nil
+	}
+	host := ""
+	for _, line := range blocks[at].lines[1:] {
+		if key, value, ok := keyValue(line); ok && key == "host" {
+			host = strings.TrimSpace(quotedValue(value))
+		}
+	}
+	switch {
+	case host == "":
+		return nil, errors.New("[factor_engine] 没有写 host：把因子机登记成 [hosts.factor]，加 reachability = \"outbound\"，并在 [deployments] 里部署 factor-engine 与 archive-worker，然后删除 [factor_engine]")
+	case host == "local":
+		return nil, errors.New("[factor_engine] host = \"local\" 已不再支持：因子引擎只运行在 Linux 主机上。请把因子机登记成 [hosts.factor]（加 reachability = \"outbound\"），在 [deployments] 里部署 factor-engine 与 archive-worker，然后删除 [factor_engine]")
+	}
+	hostAt := slices.IndexFunc(blocks, func(b block) bool { return b.header == "hosts."+host && !b.array })
+	if hostAt < 0 {
+		return nil, fmt.Errorf("[factor_engine] 指向的主机 %s 没有登记在 [hosts.%s]", host, host)
+	}
+	setBlockKey(&blocks[hostAt], "reachability", `"outbound"`)
+	deployAt := slices.IndexFunc(blocks, func(b block) bool { return b.header == "deployments" && !b.array })
+	if deployAt < 0 {
+		return nil, errors.New("moox.toml 里没有 [deployments]，无法部署因子机上的外部程序")
+	}
+	if err := ensureDeployments(&blocks[deployAt], host, factorExternalPrograms); err != nil {
+		return nil, err
+	}
+	// [factor_engine] 前面紧挨着的说明注释属于它，一并删除。
+	previous := blocks[at-1]
+	for len(previous.lines) > 0 && strings.HasPrefix(strings.TrimSpace(previous.lines[len(previous.lines)-1]), "#") {
+		previous.lines = previous.lines[:len(previous.lines)-1]
+	}
+	blocks[at-1] = previous
+	blocks = slices.Delete(blocks, at, at+1)
+	report.FactorEngine = &FactorEngineMigration{Host: host}
+	return blocks, nil
+}
+
+// ensureDeployments 保证 [deployments] 里主机 host 的单行数组包含 components；没有这个键时追加一行。
+func ensureDeployments(b *block, host string, components []string) error {
+	for i := 1; i < len(b.lines); i++ {
+		key, value, ok := keyValue(b.lines[i])
+		if !ok || key != host {
+			continue
+		}
+		if valueEnd(b.lines, i) != i || !strings.HasSuffix(strings.TrimSpace(value), "]") {
+			return fmt.Errorf("[deployments] 里 %s 的组件列表写成了多行，请手工加上 %s 后再运行", host, strings.Join(components, "、"))
+		}
+		var wanted []string
+		for _, match := range componentPattern.FindAllStringSubmatch(value, -1) {
+			wanted = append(wanted, match[1])
+		}
+		for _, component := range components {
+			if !slices.Contains(wanted, component) {
+				wanted = append(wanted, component)
+			}
+		}
+		quoted := make([]string, len(wanted))
+		for j, id := range wanted {
+			quoted[j] = fmt.Sprintf("%q", id)
+		}
+		b.lines[i] = host + " = [" + strings.Join(quoted, ", ") + "]"
+		return nil
+	}
+	quoted := make([]string, len(components))
+	for j, id := range components {
+		quoted[j] = fmt.Sprintf("%q", id)
+	}
+	line := host + " = [" + strings.Join(quoted, ", ") + "]"
+	end := len(b.lines)
+	for end > 1 && strings.TrimSpace(b.lines[end-1]) == "" {
+		end--
+	}
+	b.lines = append(b.lines[:end], append([]string{line}, b.lines[end:]...)...)
+	return nil
+}
+
+var componentPattern = regexp.MustCompile(`["']([^"']+)["']`)
 
 // renameLegacyPlacements 把旧的 [placements] 表改名为 [deployments]；两张表同时存在时拒绝，避免悄悄丢掉其中一份。
 func renameLegacyPlacements(blocks []block, report *MigrateReport) error {

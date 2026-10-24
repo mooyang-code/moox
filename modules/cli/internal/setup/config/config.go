@@ -225,18 +225,26 @@ type Host struct {
 	TLSMode        string
 	// Reachability 为空表示可直达，outbound 表示只能出站。
 	Reachability string
-	// Label 是主机的中文名（例如“海外机”），登记为 Admin 的主机描述，用于界面展示。
+	// Label 是主机的中文名（例如“海外机”），登记到 Admin 用于界面展示；配置里没写时按主机 ID 生成。
 	Label string
+	// PrivateKeyFile 与 PrivateKeyPassphrase 来自 ssh 段，只用于同步控制台终端的登录信息。
+	PrivateKeyFile       string
+	PrivateKeyPassphrase string `json:"-"`
 }
 
+// SSHConfig 是登录主机的方式。password 与 private_key_file 都用于 moox-cli 自己连接主机；
+// 直达主机配了其中之一（私钥优先），才会同步给控制台用作终端登录，没配的主机在控制台里置灰。
 type SSHConfig struct {
 	Port     int    `toml:"port"`
 	Username string `toml:"username"`
 	Password string `toml:"password" json:"-"`
+	// PrivateKeyFile 是运行 moox-cli 的机器上的私钥文件路径，支持以 ~ 开头。
+	PrivateKeyFile       string `toml:"private_key_file"`
+	PrivateKeyPassphrase string `toml:"private_key_passphrase" json:"-"`
 }
 
 type HostDefinition struct {
-	// Label 是主机的中文名，例如“控制机”“存储机”“海外机”“因子机”；英文 ID 是表名里的主机 ID。
+	// Label 是主机的中文名，例如“控制机”“存储机”“海外机”“因子机”；不写时按主机 ID 生成（overseas-2 → 海外机 2）。
 	Label          string `toml:"label"`
 	Address        string `toml:"address"`
 	PrivateAddress string `toml:"private_address"`
@@ -246,15 +254,6 @@ type HostDefinition struct {
 	// Reachability：direct（默认）或 outbound（只能出站，例如家庭网络，经 control 网关反向连接）。
 	Reachability string    `toml:"reachability"`
 	SSH          SSHConfig `toml:"ssh"`
-}
-
-// FactorEngineLocal 表示因子引擎运行在执行 moox-cli 的这台电脑上。
-const FactorEngineLocal = "local"
-
-// FactorEngineReference 记录因子引擎所在的机器：local，或 [hosts.*] 里的主机 ID。
-// 该主机只登记登录方式，不放置组件时不属于 MooX 部署拓扑。
-type FactorEngineReference struct {
-	Host string `toml:"host"`
 }
 
 type SCFCloudAccountConfig struct {
@@ -319,7 +318,6 @@ type Manifest struct {
 	Factors            FactorSetup               `toml:"factors"`
 	SCFPlan            SCFPlan                   `toml:"scf_plan"`
 	HostCatalog        map[string]HostDefinition `toml:"hosts"`
-	FactorEngineRef    FactorEngineReference     `toml:"factor_engine"`
 }
 
 type Snapshot struct {
@@ -471,7 +469,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		case "placements":
 			return fmt.Errorf("config_invalid: [placements] 已改名为 [deployments]；运行 moox-cli config migrate 转换")
 		case "factor_engine":
-			return fmt.Errorf("config_invalid: factor_engine accepts only host = \"local\" or <host-id>; SSH credentials belong to hosts.<host-id>.ssh")
+			return fmt.Errorf("config_invalid: [factor_engine] 已取消：因子机是普通主机，请在 [hosts.<主机ID>] 设置 reachability = \"outbound\"，并在 [deployments] 里为它部署 factor-engine 与 archive-worker；运行 moox-cli config migrate 转换")
 		}
 		return fmt.Errorf("config_invalid: unknown field %s", first)
 	}
@@ -490,12 +488,12 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		definition.TLSMode = strings.ToLower(strings.TrimSpace(definition.TLSMode))
 		definition.Reachability = strings.ToLower(strings.TrimSpace(definition.Reachability))
 		definition.SSH.Username = strings.TrimSpace(definition.SSH.Username)
+		definition.SSH.PrivateKeyFile = strings.TrimSpace(definition.SSH.PrivateKeyFile)
 		if !md.IsDefined("hosts", id, "ssh", "port") {
 			definition.SSH.Port = 22
 		}
 		out.HostCatalog[id] = definition
 	}
-	out.FactorEngineRef.Host = strings.TrimSpace(out.FactorEngineRef.Host)
 	out.Paths = out.Paths.Resolved()
 	if !md.IsDefined("factors", "enabled") {
 		out.Factors.Enabled = false

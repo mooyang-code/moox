@@ -416,16 +416,6 @@ button.ghost.away { visibility: hidden; }
     b.toggle = el('input', { type: 'checkbox' }); b.toggle.checked = true;
     right.append(el('label', { class: 'toggle' }, [b.toggle, el('span', {}, [el('b', { text: r.toggle.label }), el('small', { text: r.toggle.hint })])]));
     var body = el('div');
-    b.mode = el('div', { class: 'choices row' });
-    [{ value: 'local', label: '这台电脑', hint: '就是现在打开这个页面的电脑' }, { value: 'remote', label: '另一台机器', hint: '通过 SSH 登录，局域网里的也可以' }].forEach(function (option, i) {
-      var radio = el('input', { type: 'radio', name: 'factor-mode', value: option.value }); radio.checked = i === 1;
-      b.mode.append(el('label', { class: 'choice' + (i === 1 ? ' on' : '') }, [radio, el('span', {}, [el('b', { text: option.label }), el('small', { text: option.hint })])]));
-      radio.addEventListener('change', function () {
-        Array.prototype.forEach.call(b.mode.querySelectorAll('.choice'), function (c) { c.classList.toggle('on', c.querySelector('input').checked); });
-        b.ssh.wrap.hidden = mode() === 'local';
-        resetReport();
-      });
-    });
     b.ssh = sshFields(r);
     [b.ssh.ip, b.ssh.user, b.ssh.port, b.ssh.pass].forEach(function (f) { f.input.addEventListener('input', resetReport); });
     b.trust = el('div', { class: 'trust' }); b.trust.hidden = true;
@@ -433,18 +423,16 @@ button.ghost.away { visibility: hidden; }
     b.check = el('button', { type: 'button', text: '检测环境' });
     b.hint = el('span', { class: 'hint', text: '检测系统、CPU、内存和磁盘是否满足要求' });
     var checkRow = el('div', { class: 'fields two' }, [b.trust, b.checks, el('div', { class: 'actions-inline' }, [b.check, b.hint])]);
-    body.append(b.mode, b.ssh.wrap, checkRow);
+    body.append(b.ssh.wrap, checkRow);
     right.append(body);
     b.toggle.addEventListener('change', function () { body.hidden = !b.toggle.checked; });
     b.check.addEventListener('click', function () { runCheck('factor/check', factorTarget()); });
     blocks.factor = b;
     return right;
   }
-  function mode() { return blocks.factor.mode.querySelector('input:checked').value; }
   function factorTarget() {
     var b = blocks.factor;
-    if (mode() === 'local') return { mode: 'local', address: '', ssh_port: 0, ssh_user: '', ssh_password: '' };
-    return { mode: 'remote', address: b.ssh.ip.input.value.trim(), ssh_port: parseInt(b.ssh.port.input.value, 10) || 22, ssh_user: b.ssh.user.input.value.trim(), ssh_password: b.ssh.pass.input.value };
+    return { address: b.ssh.ip.input.value.trim(), ssh_port: parseInt(b.ssh.port.input.value, 10) || 22, ssh_user: b.ssh.user.input.value.trim(), ssh_password: b.ssh.pass.input.value };
   }
   function resetReport() { var b = blocks.factor; state.report = null; b.checks.hidden = true; b.trust.hidden = true; }
   function runCheck(path, body) {
@@ -489,7 +477,7 @@ button.ghost.away { visibility: hidden; }
   function serverCount() {
     var n = 0;
     ['storage', 'control', 'overseas'].forEach(function (k) { if (cloudEnabled(k)) n++; });
-    if (blocks.factor.toggle.checked && mode() === 'remote') n++;
+    if (blocks.factor.toggle.checked) n++;
     return n;
   }
   function checkServers() {
@@ -502,8 +490,8 @@ button.ghost.away { visibility: hidden; }
       if (!b.ssh.user.input.value.trim() || !b.ssh.pass.input.value) problems.push('请填写' + r.title + '的 SSH 用户名和密码');
     });
     if (blocks.factor.toggle.checked) {
-      if (!state.report) problems.push('请先给因子计算机做一次环境检测');
-      else if (!state.report.ok) problems.push('因子计算机的环境检测还没有通过');
+      if (!state.report) problems.push('请先给因子机做一次环境检测');
+      else if (!state.report.ok) problems.push('因子机的环境检测还没有通过');
     }
     return problems[0] || '';
   }
@@ -534,7 +522,7 @@ button.ghost.away { visibility: hidden; }
       }
       t.append(el('tr', {}, [el('th', { text: r.title }), cell]));
     });
-    var factor = blocks.factor.toggle.checked ? (mode() === 'local' ? el('td', { text: '这台电脑' }) : el('td', {}, [el('span', { class: 'mono', text: factorTarget().address }), osName(state.report)])) : el('td', { class: 'muted', text: '暂不配置' });
+    var factor = blocks.factor.toggle.checked ? el('td', {}, [el('span', { class: 'mono', text: factorTarget().address }), osName(state.report)]) : el('td', { class: 'muted', text: '暂不配置' });
     t.append(el('tr', {}, [el('th', { text: role('factor').title }), factor]));
     var a = $('review-account');
     a.replaceChildren(

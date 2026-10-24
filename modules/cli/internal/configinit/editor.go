@@ -52,15 +52,14 @@ type EditorResult struct {
 
 // Overview 是配置页的概览：秘密只给出「有没有」，要看具体值时再单独取。
 type Overview struct {
-	Encrypted    bool         `json:"encrypted"`
-	KeyStore     string       `json:"key_store"`
-	Servers      []ServerView `json:"servers"`
-	FactorEngine string       `json:"factor_engine"`
-	SecretID     string       `json:"secret_id"`
-	Region       string       `json:"region"`
-	Admin        string       `json:"admin"`
-	Channel      string       `json:"channel"`
-	HasWebhook   bool         `json:"has_webhook"`
+	Encrypted  bool         `json:"encrypted"`
+	KeyStore   string       `json:"key_store"`
+	Servers    []ServerView `json:"servers"`
+	SecretID   string       `json:"secret_id"`
+	Region     string       `json:"region"`
+	Admin      string       `json:"admin"`
+	Channel    string       `json:"channel"`
+	HasWebhook bool         `json:"has_webhook"`
 }
 
 // ServerView 是一台主机的概览。
@@ -412,12 +411,6 @@ func describe(m setupconfig.Manifest, encrypted bool, where string) Overview {
 		Region: regionName(m.TencentCloud.Region), Admin: m.Admin.Username,
 		Channel: map[string]string{"wecom": "企业微信群机器人", "feishu": "飞书群机器人"}[m.Notification.ChannelType], HasWebhook: m.Notification.WebhookURL != "",
 	}
-	switch {
-	case m.FactorEngineIsLocal():
-		view.FactorEngine = "这台电脑"
-	case m.FactorEngineRef.Host != "":
-		view.FactorEngine = m.FactorEngineHost().Address
-	}
 	ids := make([]string, 0, len(m.HostCatalog))
 	for id := range m.HostCatalog {
 		ids = append(ids, id)
@@ -433,16 +426,13 @@ func describe(m setupconfig.Manifest, encrypted bool, where string) Overview {
 		for _, use := range []struct {
 			label      string
 			components []string
-		}{{"管理台", []string{"admin"}}, {"数据存储", []string{"storage-primary"}}, {"海外接入与交易", []string{"trade", "egress-proxy", "collector-stream"}}} {
+		}{{"管理台", []string{"admin"}}, {"数据存储", []string{"storage-primary"}}, {"海外接入与交易", []string{"trade", "egress-proxy", "collector-stream"}}, {"因子计算", []string{"factor-engine"}}} {
 			for _, component := range use.components {
 				if slices.Contains(placed, component) {
 					server.Uses = append(server.Uses, use.label)
 					break
 				}
 			}
-		}
-		if id == m.FactorEngineRef.Host {
-			server.Uses = append(server.Uses, "因子计算")
 		}
 		view.Servers = append(view.Servers, server)
 	}

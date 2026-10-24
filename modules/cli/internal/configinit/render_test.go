@@ -71,17 +71,17 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 	if len(manifest.HostCatalog) != 3 || manifest.HostCatalog["storage"].SSH.Password != "pw-storage" || manifest.HostCatalog["control"].Address != "198.51.100.10" {
 		t.Fatalf("主机 = %+v", manifest.HostCatalog)
 	}
-	// 角色到组件的映射与示例模板的放置一致。
+	// 角色到组件的映射与示例模板的部署一致。
 	if !slices.Equal(manifest.Deployments["control"], []string{"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"}) ||
 		!slices.Equal(manifest.Deployments["storage"], []string{"storage-primary", "storage-node", "storage-view", "access"}) ||
 		!slices.Equal(manifest.Deployments["overseas"], []string{"trade", "access", "egress-proxy", "collector-stream"}) {
-		t.Fatalf("放置 = %+v", manifest.Deployments)
+		t.Fatalf("部署 = %+v", manifest.Deployments)
 	}
 	if manifest.EventBus.PublicAddress != "198.51.100.10" {
 		t.Fatalf("EventBus 地址应由 eventbus 所在主机推出，实际 %q", manifest.EventBus.PublicAddress)
 	}
-	if manifest.FactorEngineRef.Host != "" {
-		t.Fatal("没配因子计算机时不应有因子引擎位置")
+	if _, ok := manifest.HostCatalog["factor"]; ok {
+		t.Fatal("没配因子机时不应登记 factor 主机")
 	}
 }
 
@@ -125,7 +125,7 @@ func TestRenderKeepsTheExampleDefaultsAndComments(t *testing.T) {
 			t.Fatalf("应保留示例里的 %q", want)
 		}
 	}
-	for _, leftover := range []string{"203.0.113.", "192.0.2.30", "[hosts.factor]", "[factor_engine]"} {
+	for _, leftover := range []string{"203.0.113.", "192.0.2.30", "[hosts.factor]", "[factor_engine]", "factor-engine"} {
 		if strings.Contains(text, leftover) {
 			t.Fatalf("不应残留示例里的 %q", leftover)
 		}
@@ -167,55 +167,51 @@ func TestControlCanShareAServerWithStorageOrOverseas(t *testing.T) {
 	}
 }
 
-// 远程因子计算机只登记登录方式，不是部署主机，也不再写 [compile_host]（编译在本机进行）。
-func TestRemoteFactorMachineIsRecordedButNotDeployed(t *testing.T) {
+// 因子机是只能出站的普通部署主机，部署 factor-engine 与 archive-worker，带中文名；不是腾讯云服务器，不写地域和云厂商。
+func TestFactorMachineIsAnOutboundDeploymentHost(t *testing.T) {
 	request := sampleRequest()
-	request.Servers.Factor = &FactorServer{Mode: FactorRemote, Address: "192.168.0.103", SSHPort: 2222, SSHUser: "builder", SSHPassword: "pw-build"}
+	request.Servers.Factor = &FactorServer{Address: "192.168.0.103", SSHPort: 2222, SSHUser: "builder", SSHPassword: "pw-build"}
 	manifest := render(t, request)
-	if host := manifest.HostByID("factor"); host.Port != 2222 || host.Password != "pw-build" {
-		t.Fatalf("因子计算机的登录方式 = %+v", host)
+	host := manifest.HostByID("factor")
+	if host.Port != 2222 || host.Password != "pw-build" || host.Reachability != "outbound" || host.Label != "因子机" {
+		t.Fatalf("因子机 = %+v", host)
 	}
-	if manifest.FactorEngineRef.Host != "factor" || manifest.FactorEngineHost().Address != "192.168.0.103" {
-		t.Fatalf("因子引擎位置 = %+v", manifest.FactorEngineRef)
+	if definition := manifest.HostCatalog["factor"]; definition.Region != "" || definition.Provider != "" || definition.Label != "因子机" {
+		t.Fatalf("因子机不是腾讯云服务器，不应写地域和云厂商，但要写中文名: %+v", definition)
 	}
-	if host := manifest.HostCatalog["factor"]; host.Region != "" || host.Provider != "" {
-		t.Fatalf("因子计算机不是腾讯云服务器，不应写地域和云厂商: %+v", host)
+	if !slices.Equal(manifest.Deployments["factor"], []string{"factor-engine", "archive-worker"}) {
+		t.Fatalf("因子机应部署两个外部程序: %+v", manifest.Deployments["factor"])
 	}
-	for _, host := range manifest.Hosts() {
-		if host.Name == "factor" {
-			t.Fatal("因子计算机不应成为部署主机")
+	deployed := false
+	for _, h := range manifest.Hosts() {
+		deployed = deployed || h.Name == "factor"
+	}
+	if !deployed {
+		t.Fatal("因子机应是部署主机")
+	}
+}
+
+func TestRenderedHostsCarryChineseLabels(t *testing.T) {
+	manifest := render(t, sampleRequest())
+	for id, want := range map[string]string{"control": "控制机", "storage": "存储机", "overseas": "海外机"} {
+		if got := manifest.HostCatalog[id].Label; got != want {
+			t.Fatalf("%s 的中文名 = %q，应为 %q", id, got, want)
 		}
 	}
 }
 
-func TestNonLinuxFactorMachineIsRecorded(t *testing.T) {
+func TestNonLinuxFactorMachineIsRejected(t *testing.T) {
 	request := sampleRequest()
-	request.Servers.Factor = &FactorServer{Mode: FactorRemote, Address: "192.168.0.20", SSHUser: "me", SSHPassword: "pw"}
-	manifest, _ := renderWith(t, request, &fakeProber{report: ProbeReport{OK: true, OS: "darwin"}})
-	if manifest.FactorEngineHost().Address != "192.168.0.20" {
-		t.Fatalf("因子计算机应登记在 hosts 里: %+v", manifest.HostCatalog)
-	}
-}
-
-func TestLocalFactorMachineOnlyRecordsLocal(t *testing.T) {
-	request := sampleRequest()
-	request.Servers.Factor = &FactorServer{Mode: FactorLocal, Address: "ignored", SSHPassword: "ignored"}
-	prober := &fakeProber{report: ProbeReport{OK: true, OS: "darwin"}}
-	manifest, text := renderWith(t, request, prober)
-	if !manifest.FactorEngineIsLocal() {
-		t.Fatalf("本机应只记 local: %+v", manifest.FactorEngineRef)
-	}
-	if strings.Contains(text, "ignored") || strings.Contains(text, "[hosts.factor]") {
-		t.Fatal("本机模式不应写入地址和密码")
-	}
-	if len(prober.targets) != 1 || prober.targets[0].Mode != FactorLocal {
-		t.Fatalf("提交时应检测本机环境: %+v", prober.targets)
+	request.Servers.Factor = &FactorServer{Address: "192.168.0.20", SSHUser: "me", SSHPassword: "pw"}
+	macOS := &fakeProber{report: ProbeReport{OK: false, OS: "darwin", Items: []CheckItem{{Name: "系统", Status: CheckFail, Detail: "macOS。因子引擎只支持 Linux"}}}}
+	if err := renderErr(request, macOS); err == nil || !strings.Contains(err.Error(), "只支持 Linux") {
+		t.Fatalf("非 Linux 的因子机应被拒绝并说明原因，实际 %v", err)
 	}
 }
 
 func TestFactorMachineMustPassTheEnvironmentCheck(t *testing.T) {
 	request := sampleRequest()
-	request.Servers.Factor = &FactorServer{Mode: FactorRemote, Address: "192.168.0.103", SSHUser: "u", SSHPassword: "p"}
+	request.Servers.Factor = &FactorServer{Address: "192.168.0.103", SSHUser: "u", SSHPassword: "p"}
 	failing := &fakeProber{report: ProbeReport{OK: false, Items: []CheckItem{{Name: "内存", Status: CheckFail, Detail: "内存不足"}}}}
 	if err := renderErr(request, failing); err == nil || !strings.Contains(err.Error(), "内存") {
 		t.Fatalf("环境检测失败时应拒绝并说明原因，实际 %v", err)
@@ -242,9 +238,9 @@ func TestSameAddressIsExplained(t *testing.T) {
 		t.Fatalf("存储与海外同 IP 时应说明需要分开，实际 %v", err)
 	}
 	request = sampleRequest()
-	request.Servers.Factor = &FactorServer{Mode: FactorRemote, Address: "198.51.100.11", SSHUser: "u", SSHPassword: "p"}
-	if err := renderErr(request, nil); err == nil || !strings.Contains(err.Error(), "因子计算机") {
-		t.Fatalf("因子计算机和存储服务器同 IP 时应拒绝，实际 %v", err)
+	request.Servers.Factor = &FactorServer{Address: "198.51.100.11", SSHUser: "u", SSHPassword: "p"}
+	if err := renderErr(request, nil); err == nil || !strings.Contains(err.Error(), "因子机") {
+		t.Fatalf("因子机和存储服务器同 IP 时应拒绝，实际 %v", err)
 	}
 }
 
@@ -317,9 +313,9 @@ func TestRenderRejectsInputThatCouldBreakTheFile(t *testing.T) {
 		"存储服务器不能共用":       func(r *Request) { r.Servers.Storage.SharedWith = RoleOverseas },
 		"管理台共用未知角色":       func(r *Request) { r.Servers.Control.SharedWith = "nowhere" },
 		"管理台不能与因子机共用":     func(r *Request) { r.Servers.Control.SharedWith = RoleFactor },
-		"因子机位置未知":         func(r *Request) { r.Servers.Factor = &FactorServer{Mode: "cloud"} },
+		"因子机缺地址":          func(r *Request) { r.Servers.Factor = &FactorServer{SSHUser: "u", SSHPassword: "p"} },
 		"因子机缺密码": func(r *Request) {
-			r.Servers.Factor = &FactorServer{Mode: FactorRemote, Address: "192.168.0.9", SSHUser: "u"}
+			r.Servers.Factor = &FactorServer{Address: "192.168.0.9", SSHUser: "u"}
 		},
 		"SSH 端口越界":       func(r *Request) { r.Servers.Storage.SSHPort = 70000 },
 		"webhook 不是官方域名": func(r *Request) { r.Notification.WebhookURL = "https://evil.example/x" },

@@ -256,6 +256,8 @@ func execute(ctx context.Context, root *os.Root, input inputs, j *journal, lock 
 		return err
 	}
 	metadata, err := offlineAdmin(ctx, filepath.Join(extracted.Directory, "bin/moox-admin-cli"), filepath.Join(attempt.Name(), "topology.json"), filepath.Join(checkpoint, "admin/data/admin.db"), master, pki, filepath.Join(attempt.Name(), "bundles"), lock)
+	// 拓扑文件里带着主机的 SSH 登录凭据，用完即删；重试会重新生成。
+	_ = attempt.Remove("topology.json")
 	if err != nil {
 		return err
 	}
