@@ -32,6 +32,8 @@ type MigrateOptions struct {
 	RenameFrom, RenameTo string
 	// TLSModeHost / TLSMode 非空时设置该主机的控制台证书模式（--set-tls-mode 主机=auto|public|internal）。
 	TLSModeHost, TLSMode string
+	// ReachabilityHost / Reachability 非空时设置该主机的可达性（--set-reachability 主机=direct|outbound）。
+	ReachabilityHost, Reachability string
 	// AddDeploymentHost / AddDeploymentComponents 非空时把这些组件加进该主机的 [deployments] 条目（--add-deployment 主机=组件,组件）。
 	AddDeploymentHost       string
 	AddDeploymentComponents []string
@@ -101,6 +103,8 @@ type MigrateReport struct {
 	Deployments bool              `json:"deployments,omitempty"`
 	SCF         *SCFImportReport  `json:"scf,omitempty"`
 	TLSMode     map[string]string `json:"tls_mode,omitempty"`
+	// Reachability 记录 --set-reachability 的结果。
+	Reachability map[string]string `json:"reachability,omitempty"`
 	// AddedDeployments 记录 --add-deployment 新增到各主机的组件。
 	AddedDeployments map[string][]string `json:"added_deployments,omitempty"`
 	Changed          bool                `json:"changed"`
@@ -144,6 +148,12 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 			return report, err
 		}
 		report.TLSMode = map[string]string{opts.TLSModeHost: opts.TLSMode}
+	}
+	if opts.ReachabilityHost != "" {
+		if migrated, err = setHostReachability(migrated, opts.ReachabilityHost, opts.Reachability); err != nil {
+			return report, err
+		}
+		report.Reachability = map[string]string{opts.ReachabilityHost: opts.Reachability}
 	}
 	if opts.AddDeploymentHost != "" {
 		var added []string
@@ -797,6 +807,34 @@ func setBlockKey(b *block, key, value string) {
 		}
 	}
 	b.lines = append(b.lines[:at], append([]string{line}, b.lines[at:]...)...)
+}
+
+// setHostReachability 设置 [hosts.<host>] 的 reachability：direct 表示可直达（删除该键），outbound 表示只能出站。
+func setHostReachability(plain []byte, host, mode string) ([]byte, error) {
+	if mode != "direct" && mode != "outbound" {
+		return nil, errors.New("--set-reachability 的取值只能是 direct 或 outbound")
+	}
+	blocks := splitBlocks(strings.Split(string(plain), "\n"))
+	i := slices.IndexFunc(blocks, func(b block) bool { return b.header == "hosts."+host && !b.array })
+	if i < 0 {
+		return nil, fmt.Errorf("moox.toml 里没有主机 %s", host)
+	}
+	if mode == "outbound" {
+		setBlockKey(&blocks[i], "reachability", `"outbound"`)
+	} else {
+		lines := blocks[i].lines[:1]
+		for _, line := range blocks[i].lines[1:] {
+			if key, _, ok := keyValue(line); !ok || key != "reachability" {
+				lines = append(lines, line)
+			}
+		}
+		blocks[i].lines = lines
+	}
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.lines...)
+	}
+	return []byte(strings.Join(out, "\n")), nil
 }
 
 // addHostDeployments 把组件并入 [deployments] 里该主机的列表（没有就新建条目，已有的组件不重复），返回实际新增的组件。

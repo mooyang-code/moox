@@ -329,3 +329,30 @@ func TestMigrateAddDeploymentRejectsUnknownHostAndComponent(t *testing.T) {
 	_, err = MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, AddDeploymentHost: "storage", AddDeploymentComponents: []string{"no-such-component"}})
 	require.Error(t, err, "未知组件由配置校验拒绝")
 }
+
+func TestMigrateSetsHostReachability(t *testing.T) {
+	path, root, keys := migrateFixture(t, legacyFactorText(t, "factor"))
+	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true})
+	require.NoError(t, err)
+	read := func() setupconfig.Manifest {
+		sealed, err := os.ReadFile(path)
+		require.NoError(t, err)
+		plain, err := configcrypt.Decrypt(sealed, keys)
+		require.NoError(t, err)
+		snapshot, err := setupconfig.Parse(plain)
+		require.NoError(t, err)
+		return snapshot
+	}
+	require.Equal(t, "outbound", read().HostByID("factor").Reachability)
+
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true, Now: func() time.Time { return time.Now().Add(time.Hour) }, ReachabilityHost: "overseas", Reachability: "outbound"})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"overseas": "outbound"}, report.Reachability)
+	require.Equal(t, "outbound", read().HostByID("overseas").Reachability)
+
+	_, err = MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true, Now: func() time.Time { return time.Now().Add(2 * time.Hour) }, ReachabilityHost: "overseas", Reachability: "direct"})
+	require.NoError(t, err)
+	require.Empty(t, read().HostByID("overseas").Reachability)
+	_, err = MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, ReachabilityHost: "overseas", Reachability: "sideways"})
+	require.ErrorContains(t, err, "direct 或 outbound")
+}
