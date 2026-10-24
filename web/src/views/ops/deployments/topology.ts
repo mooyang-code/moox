@@ -35,6 +35,8 @@ const LAYER_OF: Record<string, TopologyLayer> = {
   "collector-stream": "business",
   cloudfunction: "business",
   "factor-mgr": "business",
+  "factor-engine": "business",
+  "archive-worker": "business",
   "archive-mgr": "business",
   strategy: "business",
   trade: "business",
@@ -50,10 +52,8 @@ const EXTERNAL_LABELS: Record<string, { name: string; note: string }> = {
   // 数据流向经过的外部节点排在一起，避免流向线横穿其他外部节点。
   market: { name: "行情源", note: "交易所 / 行情接口" },
   "scf-collector": { name: "SCF 采集函数", note: "腾讯云函数" },
-  "factor-engine": { name: "因子引擎", note: "操作员机器" },
   console: { name: "管理台", note: "浏览器 · HTTPS 9527" },
   "moox-cli": { name: "moox-cli", note: "运维命令行" },
-  "archive-worker": { name: "归档 Worker", note: "外部进程" },
   "collector-operator": { name: "采集运维", note: "外部调用方" },
   "moox-skill": { name: "Skill", note: "外部调用方" }
 };
@@ -93,8 +93,8 @@ export const DATA_FLOW: FlowStep[] = [
   { from: "collector-stream", to: "storage-primary", kind: "data", stage: "WS 推送", label: "写入 K 线" },
   { from: "storage-primary", to: "storage-node", kind: "data", stage: "存储", label: "写入事实存储，到点固化采集周期" },
   { from: "storage-node", to: "storage-view", kind: "event", stage: "存储", label: "行变更与周期标记，构建 View" },
-  { from: "storage-node", to: "ext:factor-engine", kind: "event", stage: "因子", label: "采集周期完成，触发因子计算" },
-  { from: "ext:factor-engine", to: "access", kind: "data", stage: "因子", label: "写回因子结果", near: "storage-primary" },
+  { from: "storage-node", to: "factor-engine", kind: "event", stage: "因子", label: "采集周期完成，触发因子计算" },
+  { from: "factor-engine", to: "access", kind: "data", stage: "因子", label: "写回因子结果", near: "storage-primary" },
   { from: "storage-view", to: "strategy", kind: "event", stage: "策略交易", label: "View 数据就绪，计算目标权重" },
   { from: "strategy", to: "trade", kind: "event", stage: "策略交易", label: "目标权重请求，收敛下单" }
 ];
@@ -279,12 +279,12 @@ export function buildTopology(input: TopologyInput): Topology {
     }
   }
   for (const principal of input.catalog?.principals || []) {
-    const source = nodeById.get(`ext:${principal.id}`);
-    if (!source) continue;
+    const sources = sourcesOf(principal.id, placed, nodeById);
+    const category = categoryOf(principal.id, componentIds.has(principal.id));
     for (const grant of principal.allow) {
       const componentId = owner.get(grant.service);
       for (const target of (componentId && placed.get(componentId)) || [])
-        link(source, target, "entry", grant.service, "经外部接入 access :11004 转发");
+        for (const source of sources) link(source, target, category, grant.service, "经外部接入 access :11004 转发");
     }
   }
   for (const entry of ENTRY_LINKS) {
@@ -315,7 +315,7 @@ function collectExternals(catalog?: ComponentCatalog) {
     for (const service of component.services || [])
       for (const grant of service.acl)
         for (const caller of grant.callers) if (!componentIds.has(caller) && caller !== "host-gateway@*") ids.add(caller);
-  for (const principal of catalog?.principals || []) ids.add(principal.id);
+  for (const principal of catalog?.principals || []) if (!componentIds.has(principal.id)) ids.add(principal.id);
   const order = Object.keys(EXTERNAL_LABELS);
   return [...ids]
     .sort((a, b) => rank(order, a) - rank(order, b) || a.localeCompare(b))

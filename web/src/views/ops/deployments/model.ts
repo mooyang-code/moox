@@ -44,9 +44,6 @@ export function deploymentRows(
       };
     });
 }
-export function canToggleDeployment(host: DeploymentHost, row: DeploymentRow) {
-  return host.status === "enabled" && !!row.definition && !row.definition.protected;
-}
 export function componentPorts(component?: CatalogComponent) {
   return [
     ...new Set([

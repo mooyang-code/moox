@@ -13,7 +13,7 @@
       <div class="card-head">
         <div class="identity">
           <strong>{{ row.displayName }}</strong>
-          <span>{{ row.displayAddress }}</span>
+          <span>{{ row.hostId }} · {{ row.displayAddress }}</span>
         </div>
         <span class="state" :class="row.state"><i />{{ stateText(row) }}</span>
       </div>
@@ -59,9 +59,9 @@ const percent = (value: number | null) => (value === null ? "--" : `${value}%`);
 const ratio = (value: number | null) => (value === null ? 0 : value / 100);
 const progressColor = (value: number | null) =>
   value !== null && value >= 80 ? "#dc2626" : value !== null && value >= 60 ? "#d97706" : "#16a34a";
-const stateText = (row: HostMonitorRow) => (row.state === "online" ? "在线" : row.state === "offline" ? "离线" : "未接入监控");
+const stateText = (row: HostMonitorRow) => (row.state === "online" ? "在线" : row.state === "offline" ? "离线" : "未上报");
 const lastSeenText = (row: HostMonitorRow) => {
-  if (!row.monitor) return "尚未部署或配置 Host Agent";
+  if (!row.monitor) return "尚未收到主机指标";
   const age = Date.now() - Date.parse(row.monitor.timestamp);
   if (!Number.isFinite(age) || age < 0) return "刚刚上报";
   if (age < 60_000) return `${Math.max(1, Math.floor(age / 1_000))} 秒前上报`;

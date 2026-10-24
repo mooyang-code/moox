@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { HostMetrics } from "@/api/modules/host-monitor";
-import type { SSHHost } from "@/api/modules/ssh";
-import { buildHostMonitorRows, normalizeMonitorViewMode } from "./host-monitor-mapping";
+import type { DeploymentHost } from "@/api/admin/types";
+import { buildHostMonitorRows, countUnregisteredAgents, normalizeMonitorViewMode } from "./host-monitor-mapping";
 
 function monitor(overrides: Partial<HostMetrics> = {}): HostMetrics {
   return {
-    host_id: "agent-1",
-    host_name: "prod-a",
-    address: "agent-1",
+    agent_id: "agent-1",
+    host_id: "control",
+    hostname: "VM-0-1-ubuntu",
     status: "online",
     timestamp: "2026-07-15T02:00:00Z",
     cpu: { usage: 24, usage_available: true, cores: 4 },
@@ -42,77 +42,57 @@ function monitor(overrides: Partial<HostMetrics> = {}): HostMetrics {
   };
 }
 
-function ssh(overrides: Partial<SSHHost> = {}): SSHHost {
-  return {
-    id: 1,
-    name: "prod-a",
-    address: "10.0.0.1",
-    port: 22,
-    user: "ubuntu",
-    auth_type: "pwd",
-    net_type: "tcp4",
-    font_size: 14,
-    background: "#000000",
-    foreground: "#ffffff",
-    cursor_color: "#ffffff",
-    font_family: "monospace",
-    cursor_style: "block",
-    shell: "/bin/bash",
-    pty_type: "xterm-256color",
-    ...overrides
-  };
+function host(overrides: Partial<DeploymentHost> = {}): DeploymentHost {
+  return { host_id: "control", label: "控制机", address: "203.0.113.10", status: "enabled", ssh_port: 22, ...overrides };
 }
 
 describe("buildHostMonitorRows", () => {
-  it("matches a monitor agent to an SSH host by exact unique name", () => {
-    const rows = buildHostMonitorRows(
-      [monitor({ host_name: "腾讯云-122" })],
-      [ssh({ name: "腾讯云-122", address: "203.0.113.10" })]
-    );
-
+  it("lists registered hosts with the Chinese label, host id and address", () => {
+    const rows = buildHostMonitorRows([host()], [monitor()]);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      match: "unique_name",
-      displayName: "腾讯云-122",
+      key: "control",
+      hostId: "control",
+      displayName: "控制机",
       displayAddress: "203.0.113.10",
       state: "online"
     });
+    expect(rows[0].monitor?.agent_id).toBe("agent-1");
   });
 
-  it("prefers exact address matching before a different display name", () => {
-    const rows = buildHostMonitorRows(
-      [monitor({ address: "43.132.204.177", host_name: "VM-32-13-ubuntu" })],
-      [ssh({ name: "腾讯云-香港", address: "43.132.204.177" })]
-    );
-
-    expect(rows[0].match).toBe("address");
-    expect(rows[0].displayName).toBe("腾讯云-香港");
+  it("falls back to the host id when no label is registered and shows unreported hosts", () => {
+    const rows = buildHostMonitorRows([host({ host_id: "storage", label: "" })], []);
+    expect(rows[0]).toMatchObject({ displayName: "storage", state: "unmonitored", monitor: undefined });
   });
 
-  it("does not match duplicate names and preserves all inventory rows", () => {
+  it("uses the most recently reported agent when a host has several", () => {
     const rows = buildHostMonitorRows(
-      [monitor({ host_id: "agent-a", host_name: "duplicate" })],
-      [ssh({ id: 1, name: "duplicate" }), ssh({ id: 2, name: "duplicate", address: "10.0.0.2" })]
+      [host()],
+      [
+        monitor({ agent_id: "old", timestamp: "2026-07-15T01:00:00Z" }),
+        monitor({ agent_id: "new", timestamp: "2026-07-15T02:00:00Z" }),
+        monitor({ agent_id: "older", timestamp: "2026-07-14T01:00:00Z" })
+      ]
     );
-
-    expect(rows).toHaveLength(3);
-    expect(rows[0].match).toBe("unmatched");
-    expect(rows.filter(row => row.state === "unmonitored")).toHaveLength(2);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].monitor?.agent_id).toBe("new");
   });
 
-  it("keeps SSH-only and agent-only rows with explicit states", () => {
-    const rows = buildHostMonitorRows(
-      [monitor({ host_id: "agent-only", host_name: "agent-only", address: "agent-only" })],
-      [ssh({ id: 9, name: "ssh-only", address: "10.0.0.9" })]
-    );
-
-    expect(rows.map(row => row.state)).toEqual(["online", "unmonitored"]);
-    expect(rows[0].displayAddress).toBe("agent-only");
-    expect(rows[1].displayAddress).toBe("10.0.0.9");
+  it("never turns an unregistered agent into a row and only counts it", () => {
+    const monitors = [
+      monitor({ agent_id: "stray", host_id: "" }),
+      monitor({ agent_id: "ghost", host_id: "retired-host" }),
+      monitor({ agent_id: "stray2", host_id: "" })
+    ];
+    const hosts = [host()];
+    expect(buildHostMonitorRows(hosts, monitors).map(row => row.key)).toEqual(["control"]);
+    expect(buildHostMonitorRows(hosts, monitors)[0].state).toBe("unmonitored");
+    expect(countUnregisteredAgents(hosts, monitors)).toBe(3);
   });
 
   it("derives summaries, attention, and aggregate network rates", () => {
     const rows = buildHostMonitorRows(
+      [host()],
       [
         monitor({
           cpu: { usage: 81.2, usage_available: true, cores: 4 },
@@ -161,8 +141,7 @@ describe("buildHostMonitorRows", () => {
             }
           ]
         })
-      ],
-      []
+      ]
     );
 
     expect(rows[0]).toMatchObject({
@@ -176,14 +155,14 @@ describe("buildHostMonitorRows", () => {
 
   it("does not render offline or unavailable values as zero", () => {
     const rows = buildHostMonitorRows(
+      [host()],
       [
         monitor({
           status: "offline",
           cpu: { usage: 0, usage_available: true, cores: 4 },
           memory: { total: 100, used: 0, available: 100, percent: 0, percent_available: true }
         })
-      ],
-      []
+      ]
     );
 
     expect(rows[0]).toMatchObject({

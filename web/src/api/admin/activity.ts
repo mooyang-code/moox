@@ -14,6 +14,8 @@ export interface ActivityLogItem {
 
 export interface ListActivityLogsRequest {
   space_id?: string;
+  // 为 true 时只查不属于任何空间的全局事件（如登录记录），与 space_id 二选一。
+  global?: boolean;
   source?: string;
   category?: string;
   ref_id?: string;

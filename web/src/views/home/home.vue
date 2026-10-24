@@ -392,7 +392,7 @@ function stepStrategy(delta: number) {
   if (total > 1) strategyIndex.value = (strategyIndex.value + delta + total) % total;
 }
 
-const userName = computed(() => userStore.account.user?.userName || userStore.account.user?.nickName || "Trader");
+const userName = computed(() => userStore.account.user?.userName || "Trader");
 const greeting = computed(() => {
   const hour = new Date(nowMs.value).getHours();
   return hour < 6 ? "凌晨好" : hour < 12 ? "早上好" : hour < 18 ? "下午好" : "晚上好";

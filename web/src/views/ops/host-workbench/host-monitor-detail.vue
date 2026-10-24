@@ -4,7 +4,7 @@
       <div>
         <span>当前主机</span>
         <h3>{{ row.displayName }}</h3>
-        <p>{{ row.displayAddress }}</p>
+        <p>{{ row.hostId }} · {{ row.displayAddress }}</p>
       </div>
       <a-radio-group v-if="row.monitor" v-model="duration" type="button" size="small">
         <a-radio value="1h">1小时</a-radio>
@@ -13,7 +13,9 @@
       </a-radio-group>
     </header>
 
-    <a-alert v-if="!row.monitor" type="info" show-icon>该主机尚未接入监控，请部署并配置 MooX Host Agent。</a-alert>
+    <a-alert v-if="!row.monitor" type="info" show-icon
+      >该主机未上报监控数据，请通过 moox skill 确认 host-agent 已部署并运行。</a-alert
+    >
     <template v-else>
       <a-alert v-if="row.state !== 'online'" type="warning" show-icon class="detail-alert"
         >主机当前离线，设备明细来自最后一次成功上报。</a-alert
@@ -257,7 +259,7 @@ async function loadHistory() {
   if (!monitor) return;
   historyLoading.value = true;
   try {
-    const response = await getHistoryMetrics(monitor.host_id, duration.value);
+    const response = await getHistoryMetrics(monitor.agent_id, duration.value);
     if (requestID !== historyRequestID) return;
     historyData.value = response.history;
     historyNotice.value = !response.storage_available
@@ -274,7 +276,7 @@ async function loadHistory() {
   }
 }
 
-watch([() => props.row?.monitor?.host_id, duration, () => props.refreshKey], loadHistory, { immediate: true });
+watch([() => props.row?.monitor?.agent_id, duration, () => props.refreshKey], loadHistory, { immediate: true });
 onUnmounted(() => {
   historyRequestID++;
   trendChart?.release();

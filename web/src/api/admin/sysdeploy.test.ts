@@ -2,14 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { callControl } from "./http";
-import {
-  decodeCatalog,
-  getHostRoutes,
-  listAllDeploymentHosts,
-  listAllDeployments,
-  setHostStatus,
-  setDeploymentStatus
-} from "./sysdeploy";
+import { decodeCatalog, getHostRoutes, listAllDeploymentHosts, listAllDeployments } from "./sysdeploy";
 vi.mock("./http", () => ({ callControl: vi.fn() }));
 const call = vi.mocked(callControl);
 beforeEach(() => {
@@ -49,16 +42,14 @@ describe("SysDeploy v2", () => {
     });
     expect(await listAllDeployments()).toHaveLength(2);
   });
-  it("sends only the v2 status change and route requests", async () => {
+  // 主机与部署的写操作只能通过 moox skill（moox-cli）：控制台接口层不再提供启停调用。
+  it("exposes only read requests and no status mutation", async () => {
     call.mockResolvedValue({});
-    await setHostStatus("c-main", "disabled");
-    await setDeploymentStatus("storage", "storage-primary", "enabled");
     await getHostRoutes("storage");
-    expect(call.mock.calls).toEqual([
-      ["sysdeploy", "SetHostStatus", { host_id: "c-main", status: "disabled" }],
-      ["sysdeploy", "SetDeploymentStatus", { host_id: "storage", component_id: "storage-primary", status: "enabled" }],
-      ["sysdeploy", "GetHostRoutes", { host_id: "storage" }]
-    ]);
+    expect(call.mock.calls).toEqual([["sysdeploy", "GetHostRoutes", { host_id: "storage" }]]);
+    const api = await import("./sysdeploy");
+    expect(api).not.toHaveProperty("setHostStatus");
+    expect(api).not.toHaveProperty("setDeploymentStatus");
   });
   it("decodes the actual shared catalog used by Admin", () => {
     const catalog_yaml = readFileSync(path.resolve(__dirname, "../../../../packages/servicecatalog/catalog.yaml"), "utf8");

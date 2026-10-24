@@ -4,15 +4,18 @@ import {
   metricValueAvailable,
   type HostMetrics
 } from "@/api/modules/host-monitor";
-import type { SSHHost } from "@/api/modules/ssh";
+import type { DeploymentHost } from "@/api/admin/types";
 
 export type MonitorViewMode = "cards" | "master";
 
 export interface HostMonitorRow {
+  /** 登记主机 ID，也是行的唯一键 */
   key: string;
-  ssh?: SSHHost;
+  hostId: string;
+  host: DeploymentHost;
+  /** 该主机最近上报的采集器；没有上报时为空 */
   monitor?: HostMetrics;
-  match: "address" | "unique_name" | "unmatched";
+  /** 中文名，没有登记中文名时回退为主机 ID */
   displayName: string;
   displayAddress: string;
   state: "online" | "offline" | "unmonitored";
@@ -21,10 +24,6 @@ export interface HostMonitorRow {
   filesystemUsage: number | null;
   networkRate: { rx: number; tx: number } | null;
   attention: boolean;
-}
-
-function normalize(value?: string) {
-  return (value || "").trim().toLowerCase();
 }
 
 function summarize(monitor?: HostMetrics) {
@@ -63,58 +62,37 @@ function summarize(monitor?: HostMetrics) {
   };
 }
 
-function createRow(monitor: HostMetrics | undefined, ssh: SSHHost | undefined, match: HostMonitorRow["match"]): HostMonitorRow {
-  const identity = monitor?.host_id || ssh?.id || ssh?.address || "unknown";
-  return {
-    key: monitor ? `monitor:${identity}` : `ssh:${identity}`,
-    ssh,
-    monitor,
-    match,
-    displayName: ssh?.name || monitor?.host_name || monitor?.host_id || "未知主机",
-    displayAddress: ssh?.address || monitor?.address || monitor?.host_id || "--",
-    ...summarize(monitor)
-  };
+function reportedAt(monitor: HostMetrics) {
+  const time = Date.parse(monitor.timestamp);
+  return Number.isFinite(time) ? time : 0;
 }
 
-export function buildHostMonitorRows(monitors: HostMetrics[], sshHosts: SSHHost[]): HostMonitorRow[] {
-  const rows: HostMonitorRow[] = [];
-  const usedSSH = new Set<number>();
-  const monitorNameCount = new Map<string, number>();
-  const sshNameCount = new Map<string, number>();
-
+// 按登记主机关联采集器：多个采集器（如重装后换了 agent_id）时取最近上报的。
+export function buildHostMonitorRows(hosts: DeploymentHost[], monitors: HostMetrics[]): HostMonitorRow[] {
+  const latest = new Map<string, HostMetrics>();
   for (const monitor of monitors) {
-    const name = normalize(monitor.host_name);
-    monitorNameCount.set(name, (monitorNameCount.get(name) || 0) + 1);
+    if (!monitor.host_id) continue;
+    const current = latest.get(monitor.host_id);
+    if (!current || reportedAt(monitor) > reportedAt(current)) latest.set(monitor.host_id, monitor);
   }
-  for (const host of sshHosts) {
-    const name = normalize(host.name);
-    sshNameCount.set(name, (sshNameCount.get(name) || 0) + 1);
-  }
+  return hosts.map(host => {
+    const monitor = latest.get(host.host_id);
+    return {
+      key: host.host_id,
+      hostId: host.host_id,
+      host,
+      monitor,
+      displayName: host.label || host.host_id,
+      displayAddress: host.address || "--",
+      ...summarize(monitor)
+    };
+  });
+}
 
-  for (const monitor of monitors) {
-    const addresses = new Set([normalize(monitor.address), normalize(monitor.host_id)].filter(Boolean));
-    const addressMatches = sshHosts.filter(
-      host => host.id !== undefined && !usedSSH.has(host.id) && addresses.has(normalize(host.address))
-    );
-    let ssh = addressMatches.length === 1 ? addressMatches[0] : undefined;
-    let match: HostMonitorRow["match"] = ssh ? "address" : "unmatched";
-
-    const name = normalize(monitor.host_name);
-    if (!ssh && name && monitorNameCount.get(name) === 1 && sshNameCount.get(name) === 1) {
-      ssh = sshHosts.find(host => host.id !== undefined && !usedSSH.has(host.id) && normalize(host.name) === name);
-      if (ssh) match = "unique_name";
-    }
-
-    if (ssh?.id !== undefined) usedSSH.add(ssh.id);
-    rows.push(createRow(monitor, ssh, match));
-  }
-
-  for (const host of sshHosts) {
-    if (host.id !== undefined && usedSSH.has(host.id)) continue;
-    rows.push(createRow(undefined, host, "unmatched"));
-  }
-
-  return rows;
+// 没有登记主机 ID、或主机 ID 不在登记里的采集器只统计数量，不进入主机列表。
+export function countUnregisteredAgents(hosts: DeploymentHost[], monitors: HostMetrics[]) {
+  const registered = new Set(hosts.map(host => host.host_id));
+  return new Set(monitors.filter(monitor => !registered.has(monitor.host_id)).map(monitor => monitor.agent_id)).size;
 }
 
 export function normalizeMonitorViewMode(value: string | null): MonitorViewMode {

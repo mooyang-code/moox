@@ -1,51 +1,13 @@
-import type { HostMetrics } from "@/api/modules/host-monitor";
-import type { SSHHost } from "@/api/modules/ssh";
+import type { DeploymentHost } from "@/api/admin/types";
 
-export interface HostWorkbenchRow {
-  key: string;
-  monitor?: HostMetrics;
-  ssh?: SSHHost;
-  match: "address" | "unique_name" | "unmatched";
+export interface SshAvailability {
+  ok: boolean;
+  /** 不可用时给用户看的原因 */
+  reason: string;
 }
 
-function normalize(value?: string) {
-  return (value || "").trim().toLowerCase();
-}
-
-export function mergeHostWorkbenchRows(monitors: HostMetrics[], sshHosts: SSHHost[]): HostWorkbenchRow[] {
-  const rows: HostWorkbenchRow[] = [];
-  const usedSSH = new Set<number>();
-
-  for (const monitor of monitors) {
-    const address = normalize(monitor.address || monitor.host_id);
-    const exact = sshHosts.filter(host => host.id !== undefined && !usedSSH.has(host.id) && normalize(host.address) === address);
-    let ssh = exact.length === 1 ? exact[0] : undefined;
-    let match: HostWorkbenchRow["match"] = ssh ? "address" : "unmatched";
-    if (!ssh) {
-      const sameName = sshHosts.filter(
-        host => host.id !== undefined && !usedSSH.has(host.id) && normalize(host.name) === normalize(monitor.host_name)
-      );
-      if (sameName.length === 1) {
-        ssh = sameName[0];
-        match = "unique_name";
-      }
-    }
-    if (ssh?.id !== undefined) usedSSH.add(ssh.id);
-    rows.push({
-      key: `monitor:${monitor.host_id}`,
-      monitor,
-      ssh,
-      match
-    });
-  }
-
-  for (const host of sshHosts) {
-    if (host.id !== undefined && usedSSH.has(host.id)) continue;
-    rows.push({
-      key: `ssh:${host.id}`,
-      ssh: host,
-      match: "unmatched"
-    });
-  }
-  return rows;
+// 只有登记了 SSH 端口的主机才能从控制台打开终端和文件管理。
+export function sshAvailability(host: DeploymentHost): SshAvailability {
+  if ((host.ssh_port ?? 0) > 0) return { ok: true, reason: "" };
+  return { ok: false, reason: "这台主机没有登记 SSH，请通过 moox skill 登记后再连接" };
 }

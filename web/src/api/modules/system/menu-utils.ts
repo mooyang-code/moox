@@ -2,7 +2,7 @@
  * 路由树递归排序
  * 1、先给当前层排序
  * 2、若当前层有children则递归排序
- * @param {array} tree 根据角色权限过滤后的路由树
+ * @param {array} tree 过滤后的路由树
  * @returns 返回排序之后的树
  */
 export const treeSort = (tree: Menu.MenuOptions[]) => {
@@ -29,34 +29,12 @@ export const treeSort = (tree: Menu.MenuOptions[]) => {
 };
 
 /**
- * 过滤路由树，返回有权限的树
- * 1、根据角色权限过滤原始路由树
- * 2、过滤禁用的菜单，该菜单是不可访问的，直接去掉
- * @param {array} tree 根据角色权限过滤原始路由树
- * @returns 返回有权限的树
+ * 过滤路由树：被禁用的菜单不可访问，直接去掉。
+ * @param {array} tree 原始路由树
+ * @returns 返回可访问的树
  */
-export const filterByDisable = (tree: any, userRoles: Array<string>) => {
-  return tree.filter((item: any) => {
-    // 过滤角色权限
-    if (item?.meta?.roles) {
-      if (!roleBase(item.meta.roles, userRoles)) return false;
-    }
-    // 过滤是否禁用
-    if (item?.meta?.disable) return false;
-    return true;
-  });
-};
-
-/**
- * 校验该角色是否有路由权限
- * @param {array} roles 路由的角色权限
- * @returns 是否有权限 true是 false否
- */
-export const roleBase = (roles: Array<string>, userRoles: Array<string>) => {
-  // 如果是admin则直接放行
-  if (userRoles.includes("admin")) return true;
-  // 否则判断权限
-  return userRoles.some((item: string) => roles.includes(item));
+export const filterByDisable = (tree: any) => {
+  return tree.filter((item: any) => !item?.meta?.disable);
 };
 
 /**

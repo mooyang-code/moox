@@ -7,13 +7,7 @@
 
       <div class="workbench-content">
         <template v-if="activeTab === 'hosts'">
-          <SshHosts
-            embedded
-            :monitor-by-host-id="monitorByHostId"
-            :monitor-only-hosts="monitorOnlyHosts"
-            @connect="openTerminal"
-            @file-manage="openFileManager"
-          />
+          <SshHosts :rows="rows" :loading="monitorLoading" @connect="openTerminal" @file-manage="openFileManager" />
         </template>
         <HostMonitor v-else />
       </div>
@@ -58,9 +52,12 @@ import SshHosts from "@/views/container/ssh-hosts/ssh-hosts.vue";
 import SshTerminal from "@/views/container/ssh-terminal/ssh-terminal.vue";
 import SshFileManager from "@/views/container/ssh-file-manager/ssh-file-manager.vue";
 import HostMonitor from "./host-monitor.vue";
+import { listAllDeploymentHosts } from "@/api/admin/sysdeploy";
+import type { DeploymentHost } from "@/api/admin/types";
 import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
-import { createSSHSession, disconnectSSHSession, listSSHHosts, type SSHHost } from "@/api/modules/ssh";
-import { mergeHostWorkbenchRows, type HostWorkbenchRow } from "./host-workbench-utils";
+import { createSSHSession, disconnectSSHSession } from "@/api/modules/ssh";
+import { buildHostMonitorRows } from "./host-monitor-mapping";
+import { sshAvailability } from "./host-workbench-utils";
 
 const route = useRoute();
 const router = useRouter();
@@ -77,33 +74,29 @@ if (route.query.tab !== undefined && route.query.tab !== activeTab.value) {
 const monitorLoading = ref(false);
 const loadError = ref("");
 const monitors = ref<HostMetrics[]>([]);
-const sshHosts = ref<SSHHost[]>([]);
+const hosts = ref<DeploymentHost[]>([]);
 const terminalVisible = ref(false);
-const terminalHostId = ref<number>();
+const terminalHostId = ref("");
 const fileManagerVisible = ref(false);
 const fileManagerLoading = ref(false);
 const fileManagerSessionId = ref("");
 const terminalTitle = computed(() => {
-  const host = sshHosts.value.find(item => item.id === terminalHostId.value);
-  if (!host?.address) return "SSH 终端";
-  return host.name ? `SSH 终端 - ${host.address}（${host.name}）` : `SSH 终端 - ${host.address}`;
+  const host = hosts.value.find(item => item.host_id === terminalHostId.value);
+  if (!host) return "SSH 终端";
+  return `SSH 终端 - ${host.label || host.host_id}（${host.address}）`;
 });
-const rows = computed<HostWorkbenchRow[]>(() => mergeHostWorkbenchRows(monitors.value, sshHosts.value));
-const monitorByHostId = computed(() =>
-  Object.fromEntries(rows.value.filter(row => row.ssh?.id !== undefined && row.monitor).map(row => [row.ssh!.id, row.monitor]))
-);
-const monitorOnlyHosts = computed(() => rows.value.filter(row => row.monitor && !row.ssh).map(row => row.monitor!));
+const rows = computed(() => buildHostMonitorRows(hosts.value, monitors.value));
 
 async function loadMonitorData() {
   monitorLoading.value = true;
   loadError.value = "";
   try {
-    const results = await Promise.allSettled([getCurrentMetrics(), listSSHHosts({ limit: 500 })]);
-    const [monitorRsp, sshRsp] = results;
+    const results = await Promise.allSettled([getCurrentMetrics(), listAllDeploymentHosts()]);
+    const [monitorRsp, hostRsp] = results;
     if (monitorRsp.status === "fulfilled") monitors.value = monitorRsp.value.metrics;
-    else loadError.value = "资源监控暂不可用，仍可管理 SSH 主机。";
-    if (sshRsp.status === "fulfilled") sshHosts.value = sshRsp.value.hosts || [];
-    else loadError.value = `${loadError.value ? `${loadError.value} ` : ""}SSH 主机配置加载失败。`;
+    else loadError.value = "资源监控暂不可用，仍可连接已登记 SSH 的主机。";
+    if (hostRsp.status === "fulfilled") hosts.value = hostRsp.value;
+    else loadError.value = `${loadError.value ? `${loadError.value} ` : ""}登记主机清单加载失败。`;
   } finally {
     monitorLoading.value = false;
   }
@@ -114,19 +107,19 @@ function onTabChange(value: string | number) {
   void router.replace({ query: { ...route.query, tab: activeTab.value } });
 }
 
-function openTerminal(hostId: number) {
+function openTerminal(hostId: string) {
   terminalHostId.value = hostId;
   terminalVisible.value = true;
 }
 
 function clearTerminal() {
-  terminalHostId.value = undefined;
+  terminalHostId.value = "";
 }
 
 // 建连序号：连续点击不同主机时建连响应可能乱序；只有最新一次请求能更新弹窗与会话，页面卸载也使进行中的建连失效
 let fileManagerRequest = 0;
 
-async function openFileManager(hostId: number) {
+async function openFileManager(hostId: string) {
   const request = ++fileManagerRequest;
   fileManagerLoading.value = true;
   try {
@@ -163,8 +156,9 @@ watch(
 
 onMounted(async () => {
   await loadMonitorData();
-  const hostId = Number(route.query.hostId);
-  if (Number.isFinite(hostId) && hostId > 0) openTerminal(hostId);
+  const hostId = typeof route.query.host_id === "string" ? route.query.host_id : "";
+  const target = hosts.value.find(item => item.host_id === hostId);
+  if (target && sshAvailability(target).ok) openTerminal(hostId);
 });
 
 onBeforeUnmount(() => {

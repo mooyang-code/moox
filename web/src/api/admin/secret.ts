@@ -12,8 +12,6 @@ export interface Secret {
   secret_value?: string;
   extra_config?: string;
   status?: string;
-  last_used_at?: string;
-  last_used_by?: string;
   creator?: string;
   create_time?: string;
   modify_time?: string;

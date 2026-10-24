@@ -18,7 +18,9 @@ export function getCatalog() {
 export function listDeploymentHosts(req: { host_id?: string; status?: DeploymentStatus; page?: PageReq } = {}) {
   return callControl<typeof req, { hosts?: DeploymentHost[]; page_result?: PageResult }>("sysdeploy", "ListHosts", req);
 }
-export function listDeployments(req: { host_id?: string; component_id?: string; status?: DeploymentStatus; page?: PageReq } = {}) {
+export function listDeployments(
+  req: { host_id?: string; component_id?: string; status?: DeploymentStatus; page?: PageReq } = {}
+) {
   return callControl<typeof req, { deployments?: ComponentDeployment[]; page_result?: PageResult }>(
     "sysdeploy",
     "ListDeployments",
@@ -31,20 +33,6 @@ export function getHostRoutes(hostId: string) {
 export function getDirectory() {
   return callControl<Record<string, never>, { directory?: ServiceDirectory }>("sysdeploy", "GetDirectory", {});
 }
-export function setHostStatus(hostId: string, status: DeploymentStatus) {
-  return callControl<{ host_id: string; status: DeploymentStatus }, Record<string, never>>("sysdeploy", "SetHostStatus", {
-    host_id: hostId,
-    status
-  });
-}
-export function setDeploymentStatus(hostId: string, componentId: string, status: DeploymentStatus) {
-  return callControl<{ host_id: string; component_id: string; status: DeploymentStatus }, Record<string, never>>(
-    "sysdeploy",
-    "SetDeploymentStatus",
-    { host_id: hostId, component_id: componentId, status }
-  );
-}
-
 // Admin caps each page at 100. Do not silently hide later hosts or deployments.
 async function allPages<T>(read: (page: number) => Promise<{ items: T[]; page_result?: PageResult }>, key: (row: T) => string) {
   const rows: T[] = [];

@@ -77,29 +77,22 @@ import { Terminal } from "@xterm/xterm";
 import { AttachAddon } from "@xterm/addon-attach";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import {
-  createSSHSession,
-  disconnectSSHSession,
-  resizeSSHTerminal,
-  getSSHWebSocketUrl,
-  getSSHHostDetail,
-  type SSHHost
-} from "@/api/modules/ssh";
+import { createSSHSession, disconnectSSHSession, resizeSSHTerminal, getSSHWebSocketUrl } from "@/api/modules/ssh";
+import { loadTerminalAppearance } from "./terminal-appearance";
 import SshFileManager from "@/views/container/ssh-file-manager/ssh-file-manager.vue";
 
 const route = useRoute();
-const props = defineProps<{ initialHostId?: number; disconnectOnUnmount?: boolean }>();
+const props = defineProps<{ initialHostId?: string; disconnectOnUnmount?: boolean }>();
 
 // ---------- Tab management ----------
 
 interface TerminalTab {
   id: string;
-  hostId: number;
+  hostId: string;
   connected: boolean;
   terminal?: Terminal;
   fitAddon?: FitAddon;
   ws?: WebSocket;
-  config?: SSHHost;
 }
 
 const tabs = ref<TerminalTab[]>([]);
@@ -191,22 +184,7 @@ const handleWindowResize = () => {
 
 // ---------- Connection flow ----------
 
-const connectToHost = async (hostId: number) => {
-  // Fetch host detail for terminal config
-  let hostConfig: SSHHost | undefined;
-  try {
-    const detailRes = await getSSHHostDetail(hostId);
-    hostConfig = detailRes.host;
-  } catch {
-    Message.error("获取主机信息失败");
-    return;
-  }
-
-  if (!hostConfig) {
-    Message.error("主机信息为空");
-    return;
-  }
-
+const connectToHost = async (hostId: string) => {
   // Create session
   let sessionId: string;
   try {
@@ -225,8 +203,7 @@ const connectToHost = async (hostId: number) => {
   const tab: TerminalTab = {
     id: sessionId,
     hostId: hostId,
-    connected: false,
-    config: hostConfig
+    connected: false
   };
 
   tabs.value.push(tab);
@@ -246,17 +223,17 @@ const initTerminal = async (tab: TerminalTab) => {
     return;
   }
 
-  const config = tab.config;
+  const appearance = loadTerminalAppearance();
 
   const term = new Terminal({
-    fontSize: config?.font_size || 14,
-    fontFamily: config?.font_family || "'Consolas', 'Monaco', 'Courier New', monospace",
-    cursorStyle: config?.cursor_style || "block",
+    fontSize: appearance.fontSize,
+    fontFamily: appearance.fontFamily,
+    cursorStyle: appearance.cursorStyle,
     cursorBlink: true,
     theme: {
-      background: config?.background || "#1e1e1e",
-      foreground: config?.foreground || "#d4d4d4",
-      cursor: config?.cursor_color || "#ffffff"
+      background: appearance.background,
+      foreground: appearance.foreground,
+      cursor: appearance.cursorColor
     },
     allowProposedApi: true,
     scrollback: 5000
@@ -403,13 +380,8 @@ onMounted(async () => {
   window.addEventListener("resize", handleWindowResize);
 
   // Priority 1: Auto-connect if hostId is provided in query
-  const hostIdQuery = props.initialHostId || route.query.hostId;
-  if (hostIdQuery) {
-    const hostId = Number(hostIdQuery);
-    if (!isNaN(hostId) && hostId > 0) {
-      await connectToHost(hostId);
-    }
-  }
+  const hostId = props.initialHostId || (typeof route.query.host_id === "string" ? route.query.host_id : "");
+  if (hostId) await connectToHost(hostId);
 });
 
 onUnmounted(() => {

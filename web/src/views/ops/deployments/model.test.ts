@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CatalogComponent, DeploymentHost, HostGatewayRoute, HostRoutesResponse } from "@/api/admin/types";
-import { canToggleDeployment, componentPorts, gatewayLabel, groupRoutes, loadHostRoutes, deploymentRows, routeSync } from "./model";
+import { componentPorts, gatewayLabel, groupRoutes, loadHostRoutes, deploymentRows, routeSync } from "./model";
 const host: DeploymentHost = { host_id: "a", address: "example.test", status: "enabled" };
 const component: CatalogComponent = {
   id: "access",
@@ -26,10 +26,6 @@ describe("deployment presentation", () => {
       components: [{ host_id: "b", component_id: "access", status: "healthy" }]
     });
     expect(rows[0].status).toBe("unknown");
-    expect(canToggleDeployment(host, rows[0])).toBe(true);
-    expect(canToggleDeployment(host, { ...rows[0], definition: { ...component, protected: true } })).toBe(false);
-    expect(canToggleDeployment(host, { ...rows[0], definition: undefined })).toBe(false);
-    expect(canToggleDeployment({ ...host, status: "disabled" }, rows[0])).toBe(false);
     expect(
       deploymentRows({ ...host, status: "disabled" }, [rows[0].deployment], [component], {
         components: [{ host_id: "a", component_id: "access", status: "healthy" }]

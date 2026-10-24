@@ -36,18 +36,16 @@ export function formatCheckedAt(value?: string) {
   return Number.isNaN(date.getTime()) ? "暂无" : date.toLocaleString("zh-CN", { hour12: false });
 }
 
-export function hostHref(agentID?: string, hostID?: string) {
-  return (
-    "#/ops/hosts?" +
-    new URLSearchParams({ tab: "monitor", ...(agentID ? { agent_id: agentID } : {}), ...(hostID ? { host_id: hostID } : {}) })
-  );
+// 主机页只按登记的 host_id 定位；历史曲线用的采集器由页面按该主机最近上报的采集器选择。
+export function hostHref(hostID?: string) {
+  return "#/ops/hosts?" + new URLSearchParams({ tab: "monitor", ...(hostID ? { host_id: hostID } : {}) });
 }
 
 const COLLECTOR_RESULTS = { href: "#/collector/tasks?tab=results", label: "查看采集结果" };
 
 /** 告警对象的处理入口：页面地址与链接文字。 */
 export function alertLink(object?: HealthObject): { href: string; label: string } {
-  if (object?.type === "host") return { href: hostHref(object.agent_id, object.host_id), label: "查看主机" };
+  if (object?.type === "host") return { href: hostHref(object.host_id), label: "查看主机" };
   if (object?.type === "dataset") {
     switch (object.producer) {
       case "factor":

@@ -251,8 +251,7 @@ const EXTERNAL_ICONS: Record<string, string> = {
   "ext:market": "public",
   "ext:console": "desktop",
   "ext:moox-cli": "code-square",
-  "ext:scf-collector": "cloud",
-  "ext:factor-engine": "computer"
+  "ext:scf-collector": "cloud"
 };
 const uid = `topology-${useId()}`;
 const mode = ref<"flow" | "calls">("flow");

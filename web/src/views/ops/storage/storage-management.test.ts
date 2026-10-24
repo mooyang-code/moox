@@ -96,14 +96,12 @@ describe("storage configuration workbench", () => {
     expect(fs.existsSync(path.resolve(__dirname, "routes.vue"))).toBe(false);
   });
 
-  it("renders read-only node identity, wrapped Dataset tags, deep links, and safe delete affordances", async () => {
+  it("renders read-only node identity, wrapped Dataset tags, deep links, and no write affordances", async () => {
     const wrapper = mount(DataNodes, {
       global: {
         plugins: [ArcoVue],
         stubs: {
           "icon-eye": true,
-          "icon-delete": true,
-          "icon-edit": true,
           "icon-info-circle": true
         }
       }
@@ -119,10 +117,9 @@ describe("storage configuration workbench", () => {
     expect(wrapper.find(".dataset-tags").exists()).toBe(true);
     expect(wrapper.find(".dataset-tags").attributes("style")).toBeUndefined();
     expect(wrapper.findAll(".dataset-tag")).toHaveLength(1);
-    expect(wrapper.findAll('[aria-label="删除数据节点"]')).toHaveLength(2);
-    expect(wrapper.findAll('[aria-label="删除数据节点"]').every(button => button.attributes("disabled") !== undefined)).toBe(
-      false
-    );
+    expect(wrapper.findAll('[aria-label="删除数据节点"]')).toHaveLength(0);
+    expect(wrapper.text()).not.toContain("编辑");
+    expect(wrapper.text()).not.toContain("删除");
 
     await wrapper.find(".dataset-tag").trigger("click");
     expect(mocks.push).toHaveBeenCalledWith({
@@ -135,6 +132,7 @@ describe("storage configuration workbench", () => {
     expect(mocks.push).toHaveBeenCalledTimes(3);
     expect(wrapper.find(".dataset-tag").attributes("role")).toBe("link");
     expect(wrapper.find(".dataset-tag").attributes("tabindex")).toBe("0");
+    wrapper.unmount();
   });
 
   it("does not register the retired Dataset redirect", () => {

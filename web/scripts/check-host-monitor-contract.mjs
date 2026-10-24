@@ -24,7 +24,10 @@ const required = [
   'label: "主机监控"',
   'normalizeTab(route.query.tab)',
   'getCurrentMetrics',
-  'listSSHHosts',
+  'listAllDeploymentHosts',
+  'buildHostMonitorRows',
+  'countUnregisteredAgents',
+  'sshAvailability',
   '15_000',
   "'cards'",
   'value="master"',
@@ -52,6 +55,24 @@ const required = [
 const missing = required.filter((token) => !sources.includes(token));
 if (missing.length) {
   console.error(`host monitor contract missing: ${missing.join(', ')}`);
+  process.exit(1);
+}
+
+// 主机只来自 SysDeploy 登记，监控页不再有 SSH 主机清单或按地址、名称猜测的关联。
+const removedHostSourceTokens = [
+  'listSSHHosts',
+  'createSSHHost',
+  'updateSSHHost',
+  'deleteSSHHost',
+  'getSSHHostDetail',
+  'mergeHostWorkbenchRows',
+  'deployment_host_id',
+  'unique_name',
+  'monitorOnly',
+];
+const remainingHostSourceTokens = removedHostSourceTokens.filter((token) => sources.includes(token));
+if (remainingHostSourceTokens.length) {
+  console.error(`host monitor must only use registered hosts, still present: ${remainingHostSourceTokens.join(', ')}`);
   process.exit(1);
 }
 

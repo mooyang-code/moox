@@ -7,10 +7,8 @@
           <a-tooltip v-model:popup-visible="nodeInfoVisible" position="right">
             <template #content>
               <div class="node-concepts">
-                <div>节点身份和服务目标由部署流程拥有，管理台只能修改名称和状态。</div>
-                <div>Dataset 直接绑定 DataNode，不再经过独立路由层。</div>
-                <div>Dataset 首次激活后会锁定绑定，不能再迁移。</div>
-                <div>只有已禁用且没有 Dataset 的节点才能删除。</div>
+                <div>数据节点由部署流程登记，管理台只读；增删和启停请通过 moox skill（moox-cli）操作。</div>
+                <div>Dataset 直接绑定 DataNode，首次激活后锁定绑定，不能再迁移。</div>
               </div>
             </template>
             <button
@@ -81,64 +79,19 @@
           <a-table-column title="更新时间" :width="180">
             <template #cell="{ record }">{{ formatTime(record.node.updated_at) }}</template>
           </a-table-column>
-          <a-table-column title="操作" :width="170" align="center" :fixed="'right'">
+          <a-table-column title="操作" :width="90" align="center" :fixed="'right'">
             <template #cell="{ record }">
               <a-space class="row-actions" :size="4" wrap>
                 <a-button size="mini" type="text" @click="openDetail(record)">
                   <template #icon><icon-eye /></template>
                   查看
                 </a-button>
-                <a-button size="mini" type="text" @click="openEdit(record)">
-                  <template #icon><icon-edit /></template>
-                  编辑
-                </a-button>
-                <a-tooltip :content="deleteHint(record)">
-                  <span class="delete-trigger">
-                    <a-button
-                      size="mini"
-                      type="text"
-                      status="danger"
-                      :disabled="!canDelete(record)"
-                      aria-label="删除数据节点"
-                      @click="remove(record)"
-                    >
-                      <template #icon><icon-delete /></template>
-                      删除
-                    </a-button>
-                  </span>
-                </a-tooltip>
               </a-space>
             </template>
           </a-table-column>
         </template>
       </a-table>
     </div>
-
-    <a-modal
-      v-model:visible="visible"
-      data-testid="data-node-edit-modal"
-      width="620px"
-      title="编辑数据节点"
-      :ok-loading="submitting"
-      @ok="submit"
-    >
-      <a-form :model="form" auto-label-width>
-        <a-form-item field="node_id" label="节点ID">
-          <a-input :model-value="form.node_id" disabled />
-        </a-form-item>
-        <a-form-item field="service_target" label="服务目标">
-          <a-input :model-value="form.service_target" disabled />
-        </a-form-item>
-        <a-form-item field="name" label="名称" required>
-          <a-input v-model="form.name" aria-label="节点名称" placeholder="节点名称" />
-        </a-form-item>
-        <a-form-item field="status" label="状态" required>
-          <a-select v-model="form.status">
-            <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
-          </a-select>
-        </a-form-item>
-      </a-form>
-    </a-modal>
 
     <a-modal
       v-model:visible="detailVisible"
@@ -213,11 +166,9 @@
 </template>
 
 <script setup lang="ts">
-import { createSubmitScope } from "@/utils/submit-scope";
-import { computed, onMounted, reactive, ref, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
-import { deleteDataNode, listDataNodes, updateDataNode } from "@/api/storage/metadata";
+import { listDataNodes } from "@/api/storage/metadata";
 import type { DataNodeListItem, DatasetSummary } from "@/api/storage/types";
 import { formatRetention, retentionSourceLabel } from "@/utils/retention";
 import {
@@ -227,8 +178,7 @@ import {
   formatTime,
   optionLabel,
   statusColor,
-  statusLabel,
-  statusOptions
+  statusLabel
 } from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "OpsStorageDataNodes" });
@@ -236,8 +186,6 @@ defineOptions({ name: "OpsStorageDataNodes" });
 const router = useRouter();
 const rows = ref<DataNodeListItem[]>([]);
 const loading = ref(false);
-const submitting = ref(false);
-const visible = ref(false);
 const nodeInfoVisible = ref(false);
 const detailVisible = ref(false);
 const detailNode = ref<DataNodeListItem>();
@@ -250,14 +198,11 @@ const detailPagination = reactive({
   hideOnSinglePage: false
 });
 const pagination = reactive(defaultPagination());
-const form = reactive({ node_id: "", name: "", service_target: "", status: "disabled" });
 const detailDatasetRows = computed(() => {
   if (!detailNode.value) return [];
   const start = (detailPagination.current - 1) * detailPagination.pageSize;
   return detailNode.value.datasets.slice(start, start + detailPagination.pageSize);
 });
-
-const selectedNodeId = computed(() => form.node_id);
 
 async function load() {
   loading.value = true;
@@ -270,11 +215,6 @@ async function load() {
   }
 }
 
-function openEdit(record: DataNodeListItem) {
-  Object.assign(form, record.node);
-  visible.value = true;
-}
-
 function openDetail(record: DataNodeListItem) {
   detailNode.value = record;
   detailPagination.current = 1;
@@ -284,41 +224,6 @@ function openDetail(record: DataNodeListItem) {
 
 function onDetailPageChange(page: number) {
   detailPagination.current = page;
-}
-
-function canDelete(record: DataNodeListItem) {
-  return record.node.status === "disabled" && record.datasets.length === 0;
-}
-
-function deleteHint(record: DataNodeListItem) {
-  if (record.node.status !== "disabled") return "请先禁用节点";
-  if (record.datasets.length > 0) return "请先解绑全部 Dataset";
-  return "删除数据节点";
-}
-
-async function submit() {
-  if (!selectedNodeId.value || !form.name.trim()) {
-    Message.warning("名称不能为空");
-    return;
-  }
-  const submission = nodeScope.begin();
-  submitting.value = true;
-  try {
-    await updateDataNode({ node_id: form.node_id, name: form.name.trim(), status: form.status });
-    Message.success("数据节点已保存");
-    if (!submission.isCurrent()) return;
-    visible.value = false;
-    await load();
-  } finally {
-    if (submission.isCurrent()) submitting.value = false;
-  }
-}
-
-async function remove(record: DataNodeListItem) {
-  if (!canDelete(record)) return;
-  await deleteDataNode({ node_id: record.node.node_id });
-  Message.success("数据节点已删除");
-  await load();
 }
 
 function openDataset(summary: DatasetSummary) {
@@ -340,15 +245,6 @@ function onPageSizeChange(pageSize: number) {
 }
 
 onMounted(load);
-
-// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
-const nodeScope = createSubmitScope({ global: true });
-watch(visible, open => {
-  if (open) {
-    nodeScope.invalidate();
-    submitting.value = false; // 重新打开时旧提交的 loading 不能遗留
-  }
-});
 </script>
 
 <style scoped>
@@ -423,12 +319,8 @@ watch(visible, open => {
 }
 
 .row-actions {
-  width: 170px;
+  width: 90px;
   justify-content: center;
-}
-
-.delete-trigger {
-  display: inline-flex;
 }
 
 .detail-datasets {

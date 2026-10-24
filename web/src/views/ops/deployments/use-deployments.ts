@@ -1,20 +1,10 @@
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { Message } from "@arco-design/web-vue";
-import {
-  decodeCatalog,
-  getCatalog,
-  getHostRoutes,
-  listAllDeploymentHosts,
-  listAllDeployments,
-  setHostStatus,
-  setDeploymentStatus
-} from "@/api/admin/sysdeploy";
+import { decodeCatalog, getCatalog, getHostRoutes, listAllDeploymentHosts, listAllDeployments } from "@/api/admin/sysdeploy";
 import type { ComponentCatalog, ComponentDeployment, DeploymentHost, HostRoutesResponse } from "@/api/admin/types";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { reportControlError } from "@/api/admin/http";
-import { canToggleDeployment, loadHostRoutes, deploymentRows, type DeploymentRow } from "./model";
+import { loadHostRoutes, deploymentRows } from "./model";
 
 export function useDeployments() {
   const route = useRoute();
@@ -31,7 +21,6 @@ export function useDeployments() {
   const error = ref("");
   const monitorError = ref("");
   const loaded = ref(false);
-  const busy = ref("");
   const search = ref("");
   const filter = ref("all");
   const showDisabled = ref(false);
@@ -89,6 +78,7 @@ export function useDeployments() {
         const needle = search.value.trim().toLowerCase();
         const hostMatches = [
           group.host.host_id,
+          group.host.label,
           group.host.address,
           group.host.private_address,
           group.host.region,
@@ -202,37 +192,12 @@ export function useDeployments() {
       if (request.isLatest()) loading.value = false;
     }
   }
-  async function mutate(key: string, action: () => Promise<unknown>) {
-    if (busy.value || error.value || !active) return;
-    busy.value = key;
-    try {
-      await action();
-      if (active) {
-        Message.success("部署状态已更新，等待网关应用快照");
-        await refresh();
-      }
-    } catch (reason) {
-      if (active) reportControlError(reason);
-    } finally {
-      busy.value = "";
-    }
-  }
-  function toggleHost(host: DeploymentHost) {
-    if (host.host_id === controlHostId.value) return;
-    return mutate(`host:${host.host_id}`, () => setHostStatus(host.host_id, host.status === "enabled" ? "disabled" : "enabled"));
-  }
-  function toggleDeployment(host: DeploymentHost, row: DeploymentRow) {
-    if (!canToggleDeployment(host, row)) return;
-    return mutate(row.key, () =>
-      setDeploymentStatus(host.host_id, row.deployment.component_id, row.deployment.status === "enabled" ? "disabled" : "enabled")
-    );
-  }
   function start() {
     if (active) return;
     active = true;
     void refresh();
     timer = setInterval(() => {
-      if (!loading.value && !busy.value) void refresh();
+      if (!loading.value) void refresh();
     }, 15000);
   }
   function stop() {
@@ -258,7 +223,6 @@ export function useDeployments() {
     loaded,
     error,
     monitorError,
-    busy,
     search,
     filter,
     showDisabled,
@@ -279,8 +243,6 @@ export function useDeployments() {
     clearLocator,
     selectRouteHost,
     gatewaySignal,
-    refresh,
-    toggleHost,
-    toggleDeployment
+    refresh
   };
 }

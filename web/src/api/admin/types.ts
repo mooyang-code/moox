@@ -33,6 +33,11 @@ export interface Space {
 export type DeploymentStatus = "enabled" | "disabled";
 export interface DeploymentHost {
   host_id: string;
+  /** 中文名，如“控制机”；没有时回退显示主机 ID */
+  label?: string;
+  /** 控制台终端使用的 SSH 端口与用户；端口为 0（或缺省）表示控制台不能 SSH 到这台主机 */
+  ssh_port?: number;
+  ssh_user?: string;
   address: string;
   private_address?: string;
   region?: string;
@@ -71,6 +76,8 @@ export interface CatalogComponent {
   scope: "host" | "control" | "any";
   replicas: "single" | "multi";
   protected: boolean;
+  /** 外部程序（因子引擎、归档 worker）：由 systemd 用户服务托管，不经主机网关路由 */
+  external_program?: boolean;
   ports?: number[];
   health: { kind: string; port?: number; loopback?: boolean; ready_body?: string };
   services?: CatalogService[];
