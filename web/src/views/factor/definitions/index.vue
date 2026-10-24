@@ -42,7 +42,7 @@
       </div>
 
       <a-alert class="definitions-policy-alert" type="info" show-icon>
-        因子定义只描述算法本身；要让因子运行，请到「计算任务」里添加并启用。被启用中的计算任务使用的定义不能编辑，仍被使用的不能删除。
+        因子定义只描述算法；要让因子运行，请到「计算任务」里添加并启用。
       </a-alert>
       <a-alert v-if="!spaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
       <template v-else>
