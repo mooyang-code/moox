@@ -61,6 +61,7 @@ export interface GetTaskListRequest {
   data_type?: string;
   enabled?: boolean;
   task_id?: string;
+  keyword?: string;
   page?: { page?: number; size?: number; cursor?: string };
 }
 

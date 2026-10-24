@@ -32,30 +32,75 @@ describe("collector task workbench", () => {
     expect(source).not.toContain("CollectorRule");
   });
 
-  it("renders the task list with operational result columns and no rule terminology", () => {
+  it("renders the task list focused on configuration and keeps run info in the detail drawer", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
-    for (const label of [
-      "任务名称",
-      "数据类型",
-      "数据范围标签",
-      "来源 / 市场",
-      "频率",
-      "结果状态",
-      "最近数据时间",
-      "启用状态",
-      "操作"
-    ]) {
+    for (const label of ["任务名称", "数据类型", "数据范围标签", "来源 / 市场", "频率", "启用状态", "操作"]) {
       expect(source).toContain(`title="${label}"`);
     }
+    // 运行状态类信息离开列表列，收敛进详情抽屉的「运行信息」分组
+    expect(source).not.toContain('title="结果状态"');
+    expect(source).not.toContain('title="最近数据时间"');
+    expect(source).toContain('label="结果状态"');
+    expect(source).toContain('label="最近数据时间"');
+    expect(source).toContain("运行信息");
     expect(source).toContain("新建采集任务");
-    expect(source).toContain('ok-text="保存任务"');
-    expect(source).toContain("请创建新任务");
+    expect(source).toContain("保存任务");
     expect(source).toContain("删除任务，保留结果数据");
     expect(source).toContain("删除任务并物理删除结果数据和数据视图");
     expect(source).not.toContain(["采集", "规则"].join(""));
     expect(source).not.toContain("采集参数");
-    expect(source).not.toContain(["Dataset", " ID"].join(""));
-    expect(source).not.toContain(["数据集", "管理"].join(""));
+  });
+
+  it("searches by task name or id with enter-to-query and keeps filters in the URL", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
+    expect(source).toContain('v-model="filters.keyword"');
+    expect(source).toContain('placeholder="搜索任务名称 / 任务 ID"');
+    expect(source).toContain('@press-enter="search"');
+    expect(source).toContain('@clear="search"');
+    expect(source).toContain("syncListQuery");
+    expect(source).toContain("route.query.keyword");
+    // 后端模糊匹配走 keyword，列表不再按内部 task_id 精确筛选
+    expect(source).not.toContain("filters.taskId");
+    expect(source).not.toContain("{ task_id: filters");
+  });
+
+  it("keeps enable toggles behind a confirmation with row-level loading", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
+    expect(source).toContain("confirmEnableChange");
+    expect(source).toContain("Modal.confirm");
+    expect(source).toContain("不再采集新周期数据");
+    expect(source).toContain("togglingTaskId");
+    expect(source).not.toContain('@click="handleEnableChange(record, !record.enabled)"');
+  });
+
+  it("keeps only primary row actions inline and folds the rest into the more menu", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
+    expect(source).toContain("<a-dropdown");
+    expect(source).toContain('confirmEnableChange(record)');
+    expect(source).toContain('openBackfill(record)');
+    expect(source).toContain('openDelete(record)');
+    expect(source).toContain("action-danger");
+    // 平铺的操作按钮只剩「修改」
+    expect(source).not.toContain('status="record.enabled ? \'warning\' : \'success\'');
+  });
+
+  it("opens the create and edit forms and the detail view as drawers with readonly summaries", () => {
+    const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
+    for (const drawer of [
+      'v-model:visible="editorVisible"',
+      'v-model:visible="outputFieldsVisible"',
+      'v-model:visible="detailVisible"'
+    ]) {
+      expect(source).toContain(drawer);
+    }
+    // 删除确认弹窗（radio 二选一）保留为弹窗，其余表面全部抽屉化
+    expect(source).toContain('v-model:visible="deleteVisible"');
+    expect(source).not.toContain('<a-modal v-model:visible="editorVisible"');
+    expect(source).not.toContain('<a-modal v-model:visible="outputFieldsVisible"');
+    expect(source).not.toContain('<a-modal v-model:visible="detailVisible"');
+    expect(source).toContain("saveEditor");
+    expect(source).toContain("readonly-summary");
+    expect(source).toContain("editorSubjectTags");
   });
 
   it("lets the wide task table fill the spin wrapper so the fixed action column is not clipped", () => {
@@ -73,11 +118,11 @@ describe("collector task workbench", () => {
     expect(backfill).toContain("内部行情 `crypto`");
     expect(backfill).not.toContain("ruleId");
   });
+
   it("shows output fields in both task detail and edit surfaces", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "collection-tasks.vue"), "utf8");
     expect(source).toContain('<section class="editor-section editor-section--output">');
     expect(source).not.toContain('<section v-if="!editing" class="editor-section editor-section--output">');
-    expect(source).toContain('label="输出字段" :span="2"');
     expect(source).toContain("detailOutputFieldLabels");
     expect(source).toContain("selectedOutputFields.value = input.outputFields || []");
     expect(source).toContain("outputFields: selectedOutputFields.value");
@@ -91,7 +136,7 @@ describe("collector task workbench", () => {
     );
     expect(loader).toContain("subjectTagIds.value = []");
     expect(loader).toContain("sourceTagsPending = task");
-    const submit = source.slice(source.indexOf("async function handleOk"));
+    const submit = source.slice(source.indexOf("async function saveEditor"));
     expect(submit.indexOf("await sourceTagsPending")).toBeGreaterThan(-1);
     expect(submit.indexOf("await sourceTagsPending")).toBeLessThan(submit.indexOf("currentTaskInput()"));
   });

@@ -220,6 +220,7 @@ func (s *Service) GetTaskList(ctx context.Context, req *pb.GetTaskListReq) (*pb.
 		DataType: req.GetDataType(),
 		Enabled:  req.Enabled,
 		TaskID:   req.GetTaskId(),
+		Keyword:  req.GetKeyword(),
 		Page:     page,
 		PageSize: size,
 	})

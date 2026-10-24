@@ -20,6 +20,7 @@ type TaskFilter struct {
 	DataType string
 	Enabled  *bool
 	TaskID   string
+	Keyword  string
 	Page     int
 	PageSize int
 }
@@ -498,5 +499,15 @@ func (r *TaskRepository) applyFilter(q *gorm.DB, filter TaskFilter) *gorm.DB {
 	if v := strings.TrimSpace(filter.TaskID); v != "" {
 		q = q.Where("c_task_id = ?", v)
 	}
+	if v := strings.ToLower(strings.TrimSpace(filter.Keyword)); v != "" {
+		pattern := "%" + escapeLikePattern(v) + "%"
+		q = q.Where("(LOWER(c_task_name) LIKE ? ESCAPE '\\' OR LOWER(c_task_id) LIKE ? ESCAPE '\\')", pattern, pattern)
+	}
 	return q
+}
+
+func escapeLikePattern(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	return strings.ReplaceAll(value, `_`, `\_`)
 }

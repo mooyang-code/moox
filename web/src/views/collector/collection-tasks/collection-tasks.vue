@@ -7,7 +7,14 @@
             <template #icon><icon-plus /></template>
             新建采集任务
           </a-button>
-          <a-input v-model="filters.taskId" placeholder="按内部任务 ID 筛选" allow-clear style="width: 180px" />
+          <a-input
+            v-model="filters.keyword"
+            placeholder="搜索任务名称 / 任务 ID"
+            allow-clear
+            style="width: 220px"
+            @press-enter="search"
+            @clear="search"
+          />
           <a-select v-model="filters.dataType" placeholder="数据类型" allow-clear style="width: 140px">
             <a-option v-for="config in availableDataTypeConfigs" :key="config.data_type" :value="config.data_type">
               {{ config.type_name }}
@@ -30,11 +37,17 @@
           :data="taskList"
           :bordered="{ cell: true }"
           :loading="loading"
-          :scroll="{ x: 1450 }"
+          :scroll="{ x: 1050 }"
           :pagination="paginationConfig"
           @page-change="onPageChange"
           @page-size-change="onPageSizeChange"
         >
+          <template #empty>
+            <a-empty :description="listEmptyDescription">
+              <a-button v-if="hasActiveFilters" size="small" @click="clearFilters">清除筛选</a-button>
+              <a-button v-else type="primary" status="success" size="small" @click="onAdd">新建采集任务</a-button>
+            </a-empty>
+          </template>
           <template #columns>
             <a-table-column title="任务名称" data-index="task_name" :width="240">
               <template #cell="{ record }">
@@ -53,14 +66,6 @@
             <a-table-column title="频率" :width="90">
               <template #cell="{ record }">{{ taskFrequency(record) }}</template>
             </a-table-column>
-            <a-table-column title="结果状态" :width="120" align="center">
-              <template #cell="{ record }">
-                <a-tag size="small" :color="resultStatusColor(record)">{{ resultStatusLabel(record) }}</a-tag>
-              </template>
-            </a-table-column>
-            <a-table-column title="最近数据时间" :width="180">
-              <template #cell="{ record }">{{ formatDateTime(record.result?.last_data_time) }}</template>
-            </a-table-column>
             <a-table-column title="启用状态" :width="100" align="center">
               <template #cell="{ record }">
                 <a-tag size="small" :color="record.enabled ? 'green' : 'orange'">
@@ -68,25 +73,38 @@
                 </a-tag>
               </template>
             </a-table-column>
-            <a-table-column title="操作" :width="220" align="center" fixed="right">
+            <a-table-column title="操作" :width="170" align="center" fixed="right">
               <template #cell="{ record }">
                 <a-space wrap>
                   <a-button
+                    type="primary"
                     size="mini"
-                    :status="record.enabled ? 'warning' : 'success'"
-                    @click="handleEnableChange(record, !record.enabled)"
+                    :disabled="togglingTaskId === record.task_id"
+                    @click="onUpdate(record)"
                   >
-                    {{ record.enabled ? "禁用" : "启用" }}
-                  </a-button>
-                  <a-button v-if="record.data_type === 'kline_resample'" type="text" size="mini" @click="openBackfill(record)">
-                    <template #icon><icon-refresh /></template>
-                    回填
-                  </a-button>
-                  <a-button type="primary" size="mini" @click="onUpdate(record)">
                     <template #icon><icon-edit /></template>
                     修改
                   </a-button>
-                  <a-button status="danger" type="text" size="mini" @click="openDelete(record)">删除</a-button>
+                  <a-dropdown trigger="click" position="br">
+                    <a-button
+                      size="mini"
+                      :loading="togglingTaskId === record.task_id"
+                      :disabled="deleteTarget?.task_id === record.task_id && deleteLoading"
+                    >
+                      <template #icon><icon-more /></template>
+                    </a-button>
+                    <template #content>
+                      <a-doption :disabled="togglingTaskId === record.task_id" @click="confirmEnableChange(record)">
+                        <span :class="record.enabled ? 'action-warning' : 'action-success'">
+                          {{ record.enabled ? "禁用" : "启用" }}
+                        </span>
+                      </a-doption>
+                      <a-doption v-if="record.data_type === 'kline_resample'" @click="openBackfill(record)">
+                        回填
+                      </a-doption>
+                      <a-doption class="action-danger" @click="openDelete(record)">删除</a-doption>
+                    </template>
+                  </a-dropdown>
                 </a-space>
               </template>
             </a-table-column>
@@ -95,15 +113,13 @@
       </div>
     </a-spin>
 
-    <a-modal
+    <a-drawer
       v-model:visible="editorVisible"
       :title="editorTitle"
-      ok-text="保存任务"
-      width="860px"
-      :ok-loading="submitLoading"
-      @before-ok="handleOk"
+      width="680px"
+      :mask-closable="false"
+      unmount-on-close
       @close="afterClose"
-      @cancel="afterClose"
     >
       <a-form ref="formRef" auto-label-width :rules="rules" :model="editor" layout="vertical">
         <a-alert v-if="editing" type="info" show-icon class="immutable-hint">
@@ -152,49 +168,52 @@
             <h3>执行方式</h3>
             <span>选择采集方法及其必需参数</span>
           </header>
-          <a-row :gutter="16">
-            <a-col :span="12">
-              <a-form-item field="data_type" label="执行任务类型" required>
-                <a-select
-                  v-model="editor.data_type"
-                  placeholder="请选择执行任务类型"
-                  :disabled="editing"
-                  @change="onDataTypeChange"
+          <div v-if="editing" class="readonly-summary">
+            <div class="readonly-summary__row">
+              <span class="readonly-summary__label">执行任务类型</span>
+              <a-tag color="arcoblue">{{ dataTypeLabel(editor.data_type) }}</a-tag>
+            </div>
+            <div class="readonly-summary__row">
+              <span class="readonly-summary__label">{{
+                taskFieldLabel(editor.data_type === "kline_resample" ? "target_frequency" : "intervals", "频率")
+              }}</span>
+              <span>{{ frequencyValue || "-" }}</span>
+            </div>
+          </div>
+          <template v-else>
+            <a-row :gutter="16">
+              <a-col :span="12">
+                <a-form-item field="data_type" label="执行任务类型" required>
+                  <a-select v-model="editor.data_type" placeholder="请选择执行任务类型" @change="onDataTypeChange">
+                    <a-option v-for="config in availableDataTypeConfigs" :key="config.data_type" :value="config.data_type">{{
+                      config.type_name
+                    }}</a-option>
+                  </a-select>
+                </a-form-item>
+              </a-col>
+            </a-row>
+            <a-row :gutter="16">
+              <a-col :span="12">
+                <a-form-item
+                  field="frequency"
+                  :label="
+                    taskFieldLabel(
+                      editor.data_type === 'kline_resample' ? 'target_frequency' : 'intervals',
+                      editor.data_type === 'kline_resample' ? '目标频率' : '采集频率'
+                    )
+                  "
+                  required
                 >
-                  <a-option v-for="config in availableDataTypeConfigs" :key="config.data_type" :value="config.data_type">{{
-                    config.type_name
-                  }}</a-option>
-                </a-select>
-              </a-form-item>
-            </a-col>
-          </a-row>
-          <a-row :gutter="16">
-            <a-col :span="12">
-              <a-form-item
-                field="frequency"
-                :label="
-                  taskFieldLabel(
-                    editor.data_type === 'kline_resample' ? 'target_frequency' : 'intervals',
-                    editor.data_type === 'kline_resample' ? '目标频率' : '采集频率'
-                  )
-                "
-                required
-              >
-                <a-select
-                  v-if="frequencyOptions.length"
-                  v-model="frequencyValue"
-                  placeholder="请选择频率"
-                  allow-clear
-                  :disabled="editing"
-                >
-                  <a-option v-for="option in frequencyOptions" :key="option.value" :value="option.value">{{
-                    option.label
-                  }}</a-option>
-                </a-select>
-                <a-input v-else v-model="frequencyValue" placeholder="例如 1m、5m、1h" allow-clear :disabled="editing" />
-              </a-form-item>
-            </a-col>
-          </a-row>
+                  <a-select v-if="frequencyOptions.length" v-model="frequencyValue" placeholder="请选择频率" allow-clear>
+                    <a-option v-for="option in frequencyOptions" :key="option.value" :value="option.value">{{
+                      option.label
+                    }}</a-option>
+                  </a-select>
+                  <a-input v-else v-model="frequencyValue" placeholder="例如 1m、5m、1h" allow-clear />
+                </a-form-item>
+              </a-col>
+            </a-row>
+          </template>
         </section>
 
         <section class="editor-section">
@@ -202,77 +221,96 @@
             <h3>采集范围</h3>
             <span>确定本任务要处理的标的或源数据</span>
           </header>
-          <a-form-item
-            v-if="editor.data_type === 'kline' || editor.data_type === 'kline_resample'"
-            label="采集标的"
-            :required="editor.data_type === 'kline'"
-          >
-            <a-select
-              v-model="subjectTagIds"
-              placeholder="请选择一个或多个标签"
-              :loading="loadingTags"
-              allow-search
-              allow-clear
-              multiple
-              :disabled="editing || editor.data_type === 'kline_resample'"
-            >
-              <a-option v-for="tag in tags" :key="tag.tag_id" :value="tag.tag_id">
-                {{ tag.tag_name }}（{{ tag.source || "-" }} / {{ tag.market_type || "-" }}）
-              </a-option>
-            </a-select>
-            <span class="field-hint"
-              >Provider
-              和市场由标签固定绑定；同一任务的标签必须来自同一来源和市场。重采样任务继承源行情的标的范围，不可修改。</span
-            >
-          </a-form-item>
+          <template v-if="editor.data_type === 'kline' || editor.data_type === 'kline_resample'">
+            <div v-if="editing" class="readonly-summary">
+              <div class="readonly-summary__row">
+                <span class="readonly-summary__label">采集标的</span>
+                <a-tag v-for="tag in editorSubjectTags" :key="tag.tag_id">
+                  {{ tag.tag_name || tag.tag_id }}
+                </a-tag>
+                <span v-if="!editorSubjectTags.length">-</span>
+              </div>
+              <span class="field-hint"
+                >Provider 和市场由标签固定绑定；同一任务的标签必须来自同一来源和市场。编辑任务时标签范围不可修改。</span
+              >
+            </div>
+            <a-form-item v-else label="采集标的" :required="editor.data_type === 'kline'">
+              <a-select
+                v-model="subjectTagIds"
+                placeholder="请选择一个或多个标签"
+                :loading="loadingTags"
+                allow-search
+                allow-clear
+                multiple
+                :disabled="editor.data_type === 'kline_resample'"
+              >
+                <a-option v-for="tag in tags" :key="tag.tag_id" :value="tag.tag_id">
+                  {{ tag.tag_name }}（{{ tag.source || "-" }} / {{ tag.market_type || "-" }}）
+                </a-option>
+              </a-select>
+              <span class="field-hint"
+                >Provider
+                和市场由标签固定绑定；同一任务的标签必须来自同一来源和市场。重采样任务继承源行情的标的范围，不可修改。</span
+              >
+            </a-form-item>
+          </template>
           <a-alert v-else type="info" show-icon>当前执行任务类型没有标的范围，此项留空。</a-alert>
 
           <template v-if="editor.data_type === 'kline_resample'">
-            <a-form-item :label="taskFieldLabel('source_dataset_id', '源行情')" required>
-              <a-select
-                v-model="sourceIdValue"
-                placeholder="请选择源行情"
-                @change="loadSourceSubjectTags"
-                :loading="loadingSources"
-                allow-search
-                allow-clear
-                :disabled="editing"
-              >
-                <a-option v-for="source in resampleSourceOptions" :key="source.source_id" :value="source.source_id">{{
-                  source.name || "源行情"
-                }}</a-option>
-              </a-select>
-            </a-form-item>
-            <a-row :gutter="16">
-              <a-col :span="12"
-                ><a-form-item :label="taskFieldLabel('source_frequency', '源周期')" required
-                  ><a-input
-                    v-model="sourceFrequencyValue"
-                    placeholder="例如 1m、5m、1h"
-                    allow-clear
-                    :disabled="editing" /></a-form-item
-              ></a-col>
-              <a-col :span="12"
-                ><a-form-item :label="taskFieldLabel('source_series_tag', '序列标签')" required
-                  ><a-input
-                    v-model="sourceSeriesTagValue"
-                    placeholder="例如 venue:binance"
-                    allow-clear
-                    :disabled="editing" /></a-form-item
-              ></a-col>
-            </a-row>
-            <a-form-item :label="taskFieldLabel('settle_delay_ms', '收盘等待（毫秒）')">
-              <a-input-number
-                v-model="settleDelayMSValue"
-                :min="0"
-                :max="86400000"
-                :precision="0"
-                placeholder="留空使用默认值"
-                allow-clear
-                :disabled="editing"
-                style="width: 100%"
-              />
-            </a-form-item>
+            <div v-if="editing" class="readonly-summary">
+              <div class="readonly-summary__row">
+                <span class="readonly-summary__label">{{ taskFieldLabel("source_dataset_id", "源行情") }}</span>
+                <span>{{ resampleSourceOptions.find(source => source.source_id === sourceIdValue)?.name || sourceIdValue || "-" }}</span>
+              </div>
+              <div class="readonly-summary__row">
+                <span class="readonly-summary__label">{{ taskFieldLabel("source_frequency", "源周期") }}</span>
+                <span>{{ sourceFrequencyValue || "-" }}</span>
+              </div>
+              <div class="readonly-summary__row">
+                <span class="readonly-summary__label">{{ taskFieldLabel("source_series_tag", "序列标签") }}</span>
+                <span>{{ sourceSeriesTagValue || "-" }}</span>
+              </div>
+            </div>
+            <template v-else>
+              <a-form-item :label="taskFieldLabel('source_dataset_id', '源行情')" required>
+                <a-select
+                  v-model="sourceIdValue"
+                  placeholder="请选择源行情"
+                  @change="loadSourceSubjectTags"
+                  :loading="loadingSources"
+                  allow-search
+                  allow-clear
+                >
+                  <a-option v-for="source in resampleSourceOptions" :key="source.source_id" :value="source.source_id">{{
+                    source.name || "源行情"
+                  }}</a-option>
+                </a-select>
+              </a-form-item>
+              <a-row :gutter="16">
+                <a-col :span="12"
+                  ><a-form-item :label="taskFieldLabel('source_frequency', '源周期')" required
+                    ><a-input
+                      v-model="sourceFrequencyValue"
+                      placeholder="例如 1m、5m、1h"
+                      allow-clear /></a-form-item
+                ></a-col>
+                <a-col :span="12"
+                  ><a-form-item :label="taskFieldLabel('source_series_tag', '序列标签')" required
+                    ><a-input v-model="sourceSeriesTagValue" placeholder="例如 venue:binance" allow-clear /></a-form-item
+                ></a-col>
+              </a-row>
+              <a-form-item :label="taskFieldLabel('settle_delay_ms', '收盘等待（毫秒）')">
+                <a-input-number
+                  v-model="settleDelayMSValue"
+                  :min="0"
+                  :max="86400000"
+                  :precision="0"
+                  placeholder="留空使用默认值"
+                  allow-clear
+                  style="width: 100%"
+                />
+              </a-form-item>
+            </template>
           </template>
         </section>
 
@@ -317,16 +355,20 @@
           </a-collapse-item>
         </a-collapse>
       </a-form>
-    </a-modal>
+      <template #footer>
+        <a-space>
+          <a-button @click="editorVisible = false">取消</a-button>
+          <a-button type="primary" :loading="submitLoading" @click="saveEditor">保存任务</a-button>
+        </a-space>
+      </template>
+    </a-drawer>
 
-    <a-modal
+    <a-drawer
       v-model:visible="outputFieldsVisible"
       title="选择输出字段"
-      width="900px"
-      ok-text="确认选择"
-      :ok-loading="loadingOutputFields"
-      @before-ok="confirmOutputFieldSelection"
-      @cancel="cancelOutputFieldSelection"
+      width="720px"
+      :mask-closable="false"
+      unmount-on-close
       @close="cancelOutputFieldSelection"
     >
       <a-alert type="info" show-icon>展示当前空间全部分类的启用字段，可按需选择输出字段。</a-alert>
@@ -381,39 +423,63 @@
           />
         </div>
       </a-spin>
-    </a-modal>
+      <template #footer>
+        <a-space>
+          <a-button @click="outputFieldsVisible = false">取消</a-button>
+          <a-button type="primary" @click="confirmOutputFieldSelection">确认选择</a-button>
+        </a-space>
+      </template>
+    </a-drawer>
 
-    <a-modal v-model:visible="detailVisible" title="任务详情" :footer="false" width="800px">
-      <a-descriptions v-if="detailData" :column="2" bordered>
-        <a-descriptions-item label="任务 ID">{{ detailData.task_id }}</a-descriptions-item>
-        <a-descriptions-item label="任务名称">{{ detailData.task_name || "-" }}</a-descriptions-item>
-        <a-descriptions-item label="数据类型">{{ dataTypeLabel(detailData.data_type) }}</a-descriptions-item>
-        <a-descriptions-item label="标签">{{ taskTagSummary(detailData) }}</a-descriptions-item>
-        <a-descriptions-item label="来源 / 市场">{{ taskRouteSummary(detailData) }}</a-descriptions-item>
-        <a-descriptions-item label="频率">{{ taskFrequency(detailData) }}</a-descriptions-item>
-        <a-descriptions-item label="结果状态">{{ resultStatusLabel(detailData) }}</a-descriptions-item>
-        <a-descriptions-item label="输出字段" :span="2">
-          <div v-if="detailOutputFieldLabels.length" class="selected-output-tags">
+    <a-drawer v-model:visible="detailVisible" title="任务详情" width="640px" unmount-on-close>
+      <template v-if="detailData">
+        <section class="detail-section">
+          <h4 class="detail-section__title">基本信息</h4>
+          <a-descriptions :column="2" bordered>
+            <a-descriptions-item label="任务名称">{{ detailData.task_name || "-" }}</a-descriptions-item>
+            <a-descriptions-item label="任务 ID">{{ detailData.task_id }}</a-descriptions-item>
+            <a-descriptions-item label="数据类型">{{ dataTypeLabel(detailData.data_type) }}</a-descriptions-item>
+            <a-descriptions-item label="启用状态">
+              <a-tag size="small" :color="detailData.enabled ? 'green' : 'orange'">
+                {{ detailData.enabled ? "启用" : "禁用" }}
+              </a-tag>
+            </a-descriptions-item>
+            <a-descriptions-item label="创建人">{{ detailData.creator || "-" }}</a-descriptions-item>
+            <a-descriptions-item label="创建时间">{{ formatDateTime(detailData.create_time) }}</a-descriptions-item>
+          </a-descriptions>
+        </section>
+        <section class="detail-section">
+          <h4 class="detail-section__title">执行方式</h4>
+          <a-descriptions :column="2" bordered>
+            <a-descriptions-item label="频率">{{ taskFrequency(detailData) }}</a-descriptions-item>
+            <a-descriptions-item label="来源 / 市场">{{ taskRouteSummary(detailData) }}</a-descriptions-item>
+            <a-descriptions-item label="数据范围标签" :span="2">{{ taskTagSummary(detailData) }}</a-descriptions-item>
+          </a-descriptions>
+        </section>
+        <section class="detail-section">
+          <h4 class="detail-section__title">输出字段</h4>
+          <div v-if="detailOutputFieldLabels.length" class="selected-output-tags detail-output-tags">
             <a-tag v-for="field in detailOutputFieldLabels" :key="field.id" color="arcoblue" :title="field.id">
               {{ field.name }}
             </a-tag>
           </div>
-          <span v-else>-</span>
-        </a-descriptions-item>
-        <a-descriptions-item label="最近数据时间">{{ formatDateTime(detailData.result?.last_data_time) }}</a-descriptions-item>
-        <a-descriptions-item label="启用状态">{{ detailData.enabled ? "启用" : "禁用" }}</a-descriptions-item>
-        <a-descriptions-item label="创建人">{{ detailData.creator || "-" }}</a-descriptions-item>
-        <a-descriptions-item label="创建时间">{{ formatDateTime(detailData.create_time) }}</a-descriptions-item>
-        <a-descriptions-item label="修改时间">{{ formatDateTime(detailData.modify_time) }}</a-descriptions-item>
-      </a-descriptions>
-      <a-divider />
-      <a-descriptions v-if="detailData" :column="1" bordered>
-        <a-descriptions-item label="任务描述">{{ detailData.description || "-" }}</a-descriptions-item>
-        <a-descriptions-item v-if="detailData.last_error" label="准备信息">
-          {{ detailData.last_error }}
-        </a-descriptions-item>
-      </a-descriptions>
-    </a-modal>
+          <span v-else class="field-hint">未选择时使用采集方法的默认输出字段。</span>
+        </section>
+        <section class="detail-section">
+          <h4 class="detail-section__title">运行信息</h4>
+          <a-descriptions :column="2" bordered>
+            <a-descriptions-item label="结果状态">
+              <a-tag size="small" :color="resultStatusColor(detailData)">{{ resultStatusLabel(detailData) }}</a-tag>
+            </a-descriptions-item>
+            <a-descriptions-item label="最近数据时间">{{ formatDateTime(detailData.result?.last_data_time) }}</a-descriptions-item>
+            <a-descriptions-item label="任务描述" :span="2">{{ detailData.description || "-" }}</a-descriptions-item>
+            <a-descriptions-item v-if="detailData.last_error" label="准备信息" :span="2">
+              {{ detailData.last_error }}
+            </a-descriptions-item>
+          </a-descriptions>
+        </section>
+      </template>
+    </a-drawer>
 
     <a-modal v-model:visible="deleteVisible" title="删除采集任务" :ok-loading="deleteLoading" @before-ok="handleDeleteOk">
       <a-alert type="warning" show-icon>
@@ -442,15 +508,14 @@
 <script setup lang="ts">
 import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { useRoute } from "vue-router";
-import { Message } from "@arco-design/web-vue";
+import { useRoute, useRouter } from "vue-router";
+import { Message, Modal } from "@arco-design/web-vue";
 import {
   CreateTask,
   DeleteTask,
   DisableTask,
   GetDataTypeConfigs,
   GetDataTypeConfigWithFields,
-  GetTaskDetail,
   GetTaskList,
   UpdateTask,
   getKlineResampleBackfillStatus,
@@ -466,7 +531,6 @@ import {
   buildCollectionTaskPayload,
   collectionSourceMatches,
   collectionTaskResultLabel,
-  inspectCollectionTaskResults,
   collectionTaskNameError,
   KLINE_OUTPUT_FIELD_IDS,
   normalizeCollectionTask,
@@ -580,6 +644,7 @@ const selectedOutputFieldLabels = computed(() =>
     return { id, name: field?.name || id };
   })
 );
+const editorSubjectTags = computed(() => tags.value.filter(tag => subjectTagIds.value.includes(tag.tag_id)));
 const detailOutputFieldLabels = computed(() => {
   if (!detailData.value) return [];
   const outputFields = parseCollectionTaskInput(detailData.value).outputFields || [];
@@ -597,14 +662,22 @@ const resultConfig = reactive({
   description: ""
 });
 
+const queryText = (value: unknown) => (typeof value === "string" ? value : "");
+function normalizeEnabledFilter(value: unknown): EnabledFilter {
+  return value === "true" || value === "false" ? value : "";
+}
+
+const route = useRoute();
+const router = useRouter();
+
 const filters = reactive<{
-  taskId: string;
+  keyword: string;
   dataType: string;
   enabled: EnabledFilter;
 }>({
-  taskId: "",
-  dataType: "",
-  enabled: ""
+  keyword: queryText(route.query.keyword),
+  dataType: queryText(route.query.dataType),
+  enabled: normalizeEnabledFilter(route.query.enabled)
 });
 
 const editor = reactive<EditorForm>({
@@ -620,16 +693,42 @@ const editor = reactive<EditorForm>({
 });
 
 const pagination = reactive({
-  current: 1,
+  current: Math.max(1, Number.parseInt(queryText(route.query.page), 10) || 1),
   pageSize: 10,
   total: 0
 });
 
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
-const route = useRoute();
 const userInfoStore = useUserInfoStore();
 const { account } = storeToRefs(userInfoStore);
+
+// 行内启停的确认与执行状态：菜单项点击先确认，请求期间锁定该行操作。
+const togglingTaskId = ref("");
+
+const hasActiveFilters = computed(() => Boolean(filters.keyword.trim() || filters.dataType || filters.enabled));
+const listEmptyDescription = computed(() =>
+  hasActiveFilters.value ? "没有匹配的任务，试试调整筛选条件" : "还没有采集任务，创建一个开始采集行情"
+);
+
+function clearFilters() {
+  filters.keyword = "";
+  filters.dataType = "";
+  filters.enabled = "";
+  search();
+}
+
+// 列表筛选与分页写入 URL：刷新、分享后可还原；taskId 是详情深链参数，原样保留。
+function syncListQuery() {
+  const query: Record<string, string> = {};
+  if (typeof route.query.tab === "string") query.tab = route.query.tab;
+  if (typeof route.query.taskId === "string") query.taskId = route.query.taskId;
+  if (filters.keyword.trim()) query.keyword = filters.keyword.trim();
+  if (filters.dataType) query.dataType = filters.dataType;
+  if (filters.enabled) query.enabled = filters.enabled;
+  if (pagination.current > 1) query.page = String(pagination.current);
+  void router.replace({ path: "/collector/tasks", query });
+}
 
 const editorTitle = computed(() => (editorMode.value === "create" ? "新建采集任务" : "修改采集任务"));
 const editing = computed(() => editorMode.value === "edit");
@@ -862,7 +961,6 @@ function toggleOutputFieldSection(fields: Field[]) {
 function confirmOutputFieldSelection() {
   selectedOutputFields.value = outputFieldDraft.value.slice();
   outputFieldsVisible.value = false;
-  return true;
 }
 
 function cancelOutputFieldSelection() {
@@ -947,8 +1045,9 @@ async function validateEditor() {
   }
 }
 
-async function handleOk(): Promise<boolean> {
-  if (!(await validateEditor())) return false;
+// 抽屉底部「保存任务」：校验失败或提交失败时抽屉保持打开；保存成功后手动关闭并刷新列表。
+async function saveEditor() {
+  if (!(await validateEditor())) return;
   // 来源回填还没返回时先等它，保存用的是回填之后的标签与市场。
   if (sourceTagsPending) await sourceTagsPending;
   // 提交快照：预检（getDataset）等待期间用户可能取消并重新打开表单，旧提交只能用它自己的输入，
@@ -1001,41 +1100,20 @@ async function handleOk(): Promise<boolean> {
       });
       Message.success("变更成功，将从下一采集周期开始生效");
     }
-    // 任务已保存；表单已被取消/重新打开或空间已切换时，不关闭当前窗口
-    if (!submission.isCurrent()) return false;
+    // 任务已保存；表单已被取消/重新打开或空间已切换时，不动新打开的窗口
+    if (!submission.isCurrent()) return;
     editorVisible.value = false;
     await getTaskList();
-    return true;
   } catch (error) {
-    if (!submission.isCurrent()) return false;
+    if (!submission.isCurrent()) return;
     Message.error(error instanceof Error ? error.message : "保存任务失败");
-    return false;
   } finally {
     if (submission.isCurrent()) submitLoading.value = false;
   }
 }
 
-// Identifies the list request whose rows the live result inspection updates;
-// answers for a page the user already left are discarded.
+// Identifies the newest list request so responses from a page the user already left are discarded.
 let taskListGeneration = 0;
-
-async function inspectTaskListResults(spaceId: string, generation: number) {
-  await inspectCollectionTaskResults(
-    taskList.value,
-    async task => {
-      const response = await GetTaskDetail({ space_id: spaceId, task_id: task.task_id });
-      return response.task ? normalizeCollectionTask(response.task) : undefined;
-    },
-    detail => {
-      if (generation !== taskListGeneration) return;
-      const row = taskList.value.find(task => task.task_id === detail.task_id);
-      if (!row) return;
-      row.result = detail.result;
-      row.last_error = detail.last_error;
-      row.prepare_state = detail.prepare_state;
-    }
-  );
-}
 
 async function getTaskList() {
   const generation = ++taskListGeneration;
@@ -1050,14 +1128,13 @@ async function getTaskList() {
     const response = await GetTaskList({
       space_id: spaceId,
       page: { page: pagination.current, size: pagination.pageSize },
-      ...(filters.taskId.trim() ? { task_id: filters.taskId.trim() } : {}),
+      ...(filters.keyword.trim() ? { keyword: filters.keyword.trim() } : {}),
       ...(filters.dataType ? { data_type: filters.dataType } : {}),
       ...(selectEnabledFilter() === undefined ? {} : { enabled: selectEnabledFilter() })
     });
     if (generation !== taskListGeneration) return;
     taskList.value = (response.tasks || []).map(normalizeCollectionTask);
     pagination.total = Number(response.page?.total ?? taskList.value.length);
-    void inspectTaskListResults(spaceId, generation);
     const requestedTaskID = typeof route.query.taskId === "string" ? route.query.taskId : "";
     if (requestedTaskID) {
       const requestedTask = taskList.value.find(task => task.task_id === requestedTaskID);
@@ -1239,18 +1316,35 @@ async function loadDataNodes() {
 
 function search() {
   pagination.current = 1;
+  syncListQuery();
   void getTaskList();
 }
 
 function onPageChange(current: number) {
   pagination.current = current;
+  syncListQuery();
   void getTaskList();
 }
 
 function onPageSizeChange(pageSize: number) {
   pagination.pageSize = pageSize;
   pagination.current = 1;
+  syncListQuery();
   void getTaskList();
+}
+
+// 启停会立刻影响数据采集，先确认再执行；执行期间该行操作保持加载态。
+function confirmEnableChange(record: CollectionTaskRecord) {
+  const enabled = !record.enabled;
+  Modal.confirm({
+    title: enabled ? "启用采集任务" : "禁用采集任务",
+    content: enabled
+      ? `启用「${record.task_name || record.task_id}」后将从下一采集周期恢复采集，确认启用？`
+      : `禁用「${record.task_name || record.task_id}」后不再采集新周期数据，已采集数据与结果保留。确认禁用？`,
+    okText: enabled ? "启用" : "禁用",
+    cancelText: "取消",
+    onOk: () => handleEnableChange(record, enabled)
+  });
 }
 
 async function handleEnableChange(record: CollectionTaskRecord, enabled: boolean) {
@@ -1259,6 +1353,7 @@ async function handleEnableChange(record: CollectionTaskRecord, enabled: boolean
     Message.error("请先选择空间");
     return;
   }
+  togglingTaskId.value = record.task_id;
   try {
     if (!enabled) {
       await DisableTask({ space_id: spaceId, task_id: record.task_id });
@@ -1278,6 +1373,8 @@ async function handleEnableChange(record: CollectionTaskRecord, enabled: boolean
     await getTaskList();
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "状态更新失败");
+  } finally {
+    togglingTaskId.value = "";
   }
 }
 
@@ -1362,7 +1459,12 @@ watch(selectedSpaceId, () => {
   loadingOutputFields.value = false;
   if (!editing.value) selectedOutputFields.value = [];
   if (outputFieldsVisible.value) void loadOutputFieldCatalog();
+  // 筛选参数属于旧空间：换空间后任务清单不同，连同 URL 一起清掉。
+  filters.keyword = "";
+  filters.dataType = "";
+  filters.enabled = "";
   pagination.current = 1;
+  syncListQuery();
   // 空间初始化完成或切换后重新加载；数据类型配置同样按空间授权，不能只在挂载时请求一次。
   if (selectedSpaceId.value) {
     void getDataTypeConfigs();
@@ -1587,6 +1689,64 @@ pre {
 
 .immutable-hint {
   margin-bottom: var(--moox-space-4);
+}
+
+/* 编辑态不可变项的只读摘要：替代一排禁用控件，一眼可读 */
+.readonly-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 6px;
+  background: var(--color-fill-1);
+}
+
+.readonly-summary__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.readonly-summary__label {
+  flex: none;
+  min-width: 96px;
+  color: var(--color-text-3);
+  font-size: 13px;
+}
+
+.readonly-summary .field-hint {
+  margin-top: 0;
+}
+
+/* 任务详情抽屉的分组标题 */
+.detail-section {
+  margin-bottom: var(--moox-space-5);
+}
+
+.detail-section__title {
+  margin: 0 0 var(--moox-space-3);
+  color: var(--color-text-1);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.detail-output-tags {
+  margin-top: 0;
+}
+
+/* 「⋯」菜单里启停与删除的语义色 */
+.action-warning {
+  color: rgb(var(--orange-6));
+}
+
+.action-success {
+  color: rgb(var(--green-6));
+}
+
+.action-danger {
+  color: rgb(var(--red-6));
 }
 
 .delete-options {
