@@ -17,7 +17,6 @@ import (
 	setupdomain "github.com/mooyang-code/moox/modules/admin/internal/service/setup"
 	setuprpc "github.com/mooyang-code/moox/modules/admin/internal/service/setup/rpc"
 	adminspace "github.com/mooyang-code/moox/modules/admin/internal/service/space"
-	sshmodel "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
@@ -77,10 +76,6 @@ func TestSetupPrivateHTTPTransactionE2E(t *testing.T) {
 	decrypted, err := mooxsecurity.Decrypt(secret.SecretValue, encryptionKey)
 	require.NoError(t, err)
 	assert.Equal(t, "cloud-e2e-secret", decrypted)
-	var hosts []sshmodel.SSHHost
-	require.NoError(t, manager.GetDB().Order("c_address").Find(&hosts).Error)
-	require.Len(t, hosts, 2)
-	assert.NotEqual(t, "control-e2e-password", hosts[0].Password)
 	var spaces []adminspace.Space
 	require.NoError(t, manager.GetDB().Order("c_space_id").Find(&spaces).Error)
 	require.Len(t, spaces, 2)
@@ -101,7 +96,7 @@ func TestSetupPrivateHTTPTransactionE2E(t *testing.T) {
 	assert.Zero(t, status.GetConflicts())
 	assert.Equal(t, int32(2), status.GetSpaces())
 
-	require.NoError(t, manager.GetDB().Where("c_name = ?", "compute-1").Delete(&sshmodel.SSHHost{}).Error)
+	require.NoError(t, manager.GetDB().Where("c_space_id = ?", "crypto").Delete(&adminspace.Space{}).Error)
 	partial := &pb.ApplySetupRsp{}
 	postSetupProto(t, privateServer.URL+"/trpc.moox.admin.Setup/ApplySetup", request, partial)
 	assert.Equal(t, "created", partial.GetAction())
@@ -132,8 +127,6 @@ func setupApplyRequest() *pb.ApplySetupReq {
 	return &pb.ApplySetupReq{
 		Admin:        &pb.SetupAdmin{Username: "admin", Password: "admin-e2e-password"},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: "AKID-e2e", SecretKey: "cloud-e2e-secret"},
-		ControlHost:  &pb.SetupHost{Name: "control", Address: "192.0.2.10", Port: 22, Username: "ubuntu", Password: "control-e2e-password"},
-		OtherHosts:   []*pb.SetupHost{{Name: "compute-1", Address: "192.0.2.11", Port: 22, Username: "ubuntu", Password: "compute-e2e-password"}},
 		Spaces: []*pb.SetupSpace{
 			{SpaceId: "stockcn", Name: "A股市场", Owner: "quant", Market: "CN", Timezone: "Asia/Shanghai", Status: "active", AttributesJson: "{}"},
 			{SpaceId: "crypto", Name: "加密货币市场", Owner: "quant", Market: "crypto", Timezone: "UTC", Status: "active", AttributesJson: "{}"},
@@ -144,7 +137,7 @@ func setupApplyRequest() *pb.ApplySetupReq {
 func setupStatusRequest(request *pb.ApplySetupReq) *pb.GetSetupStatusReq {
 	return &pb.GetSetupStatusReq{
 		Admin: request.Admin, TencentCloud: request.TencentCloud,
-		ControlHost: request.ControlHost, OtherHosts: request.OtherHosts, Spaces: request.Spaces,
+		Spaces: request.Spaces,
 	}
 }
 

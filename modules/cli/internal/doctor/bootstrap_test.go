@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type deploymentClientStub struct{ rows []Placement }
+type deploymentClientStub struct{ rows []Deployment }
 
-func (s deploymentClientStub) ListPlacements(context.Context, string) ([]Placement, error) {
+func (s deploymentClientStub) ListDeployments(context.Context, string) ([]Deployment, error) {
 	return s.rows, nil
 }
 
@@ -21,9 +21,9 @@ func TestRunBootstrapInventory(t *testing.T) {
 	manifest, err := core.LoadEmbeddedManifest()
 	require.NoError(t, err)
 	root := t.TempDir()
-	rows := make([]Placement, 0, len(manifest.Components))
+	rows := make([]Deployment, 0, len(manifest.Components))
 	for _, component := range manifest.Components {
-		rows = append(rows, Placement{ComponentID: component.ComponentID, HostID: "node-a", Status: "enabled"})
+		rows = append(rows, Deployment{ComponentID: component.ComponentID, HostID: "node-a", Status: "enabled"})
 	}
 	datasetHealthPolicyPath := filepath.Join(root, "dataset-health-policy.yaml")
 	manifestDir := filepath.Join(root, "config", "servicecatalog")
@@ -52,7 +52,7 @@ func TestBootstrapRunnerUsesInjectedHostCapabilities(t *testing.T) {
 	pathCalls, processCalls := 0, 0
 	runner := &bootstrapRunner{
 		manifest:    manifest,
-		deployments: map[string]Placement{"factor-mgr": {ComponentID: "factor-mgr", Status: "enabled"}},
+		deployments: map[string]Deployment{"factor-mgr": {ComponentID: "factor-mgr", Status: "enabled"}},
 		options: BootstrapOptions{
 			NodeID:        "node-a",
 			ReleaseRoot:   t.TempDir(),

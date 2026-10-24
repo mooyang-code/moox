@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/deployment"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/packages/doctor"
 	"github.com/mooyang-code/moox/packages/report"
@@ -28,7 +28,7 @@ const (
 )
 
 type Builder struct {
-	Deployments         placement.Source
+	Deployments         deployment.Source
 	Checks              *store.CheckRepository
 	Results             *store.ResultRepository
 	Alerts              *store.AlertRepository
@@ -97,14 +97,14 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 	}
 	for _, component := range components {
 		found := false
-		for _, deployed := range snapshot.Placements {
+		for _, deployed := range snapshot.Deployments {
 			if deployed.GetComponentId() != component.ComponentID || (nodeID != "" && deployed.GetHostId() != nodeID) {
 				continue
 			}
 			found = true
 			healthURL := ""
 			if b.Checks != nil {
-				check, err := b.Checks.Get(ctx, "", placement.CheckID(deployed.GetHostId(), component.ComponentID))
+				check, err := b.Checks.Get(ctx, "", deployment.CheckID(deployed.GetHostId(), component.ComponentID))
 				if err == nil {
 					healthURL = check.URL
 				} else if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -123,7 +123,7 @@ func (b Builder) Build(ctx context.Context, nodeID string, componentIDs, healthC
 		}
 	}
 	if deploymentErr != nil {
-		out.MissingObservations = append(out.MissingObservations, Observation{Kind: "placement", Status: "UNKNOWN", Summary: "部署事实暂不可用：" + deploymentErr.Error()})
+		out.MissingObservations = append(out.MissingObservations, Observation{Kind: "deployment", Status: "UNKNOWN", Summary: "部署事实暂不可用：" + deploymentErr.Error()})
 	}
 	if err := b.addHealth(ctx, components, now, &out); err != nil {
 		return Context{}, err
@@ -189,9 +189,9 @@ func (b Builder) addIngestDiagnostics(ctx context.Context, now time.Time, out *C
 	}
 }
 
-func (b Builder) loadDeployments(ctx context.Context) (placement.Snapshot, error) {
+func (b Builder) loadDeployments(ctx context.Context) (deployment.Snapshot, error) {
 	if b.Deployments == nil {
-		return placement.Snapshot{}, fmt.Errorf("placement source is unavailable")
+		return deployment.Snapshot{}, fmt.Errorf("deployment source is unavailable")
 	}
 	return b.Deployments.Snapshot(ctx)
 }
@@ -205,7 +205,7 @@ func (b Builder) addHealth(ctx context.Context, components []doctor.Component, n
 		if !expected.Expected || componentByService[expected.ServiceName].HealthPath == "" {
 			continue
 		}
-		checkID := placement.CheckID(expected.NodeID, expected.ComponentID)
+		checkID := deployment.CheckID(expected.NodeID, expected.ComponentID)
 		check, err := b.Checks.Get(ctx, "", checkID)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			out.MissingObservations = append(out.MissingObservations, Observation{Kind: "health", ComponentID: expected.ComponentID, ServiceName: expected.ServiceName, NodeID: expected.NodeID, Status: "MISSING", Summary: "health check is not registered"})

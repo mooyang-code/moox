@@ -77,6 +77,10 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		log.ErrorContextf(ctx, "初始化 collector schema 失败: %v", err)
 		return nil, err
 	}
+	if err := seedBuiltinTasks(ctx, dbm.Tasks(), builtinTasksPath); err != nil {
+		log.ErrorContextf(ctx, "写入内置采集任务失败: %v", err)
+		return nil, err
+	}
 	process.gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "collector directory refresh failed: %v", err) })
 	if err != nil {
 		return nil, fmt.Errorf("initialize collector gateway: %w", err)

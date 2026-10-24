@@ -13,13 +13,12 @@ not a deployment artifact.
 ```
 
 命令在 `127.0.0.1` 起一个一次性页面并用系统浏览器打开，用户分步填写：腾讯云密钥（先验证）→ 服务器
-（数据存储、管理台；可选的海外服务器只在使用加密货币行情时需要；可选的因子计算机可以是这台电脑或
-局域网里的 Linux/macOS/Windows 机器）→ 管理员与告警 → 确认。腾讯云服务器只填公网 IP 和 SSH 登录方式，
-地域与规格按 IP 从当前账号识别，不在账号下的 IP 不能用；因子计算机提交前要通过环境检测，首次 SSH 连接由
+（数据存储、管理台；可选的海外服务器只在使用加密货币行情时需要；可选的因子机是局域网里的 Linux 机器，
+运行因子引擎与归档 Worker）→ 管理员与告警 → 确认。腾讯云服务器只填公网 IP 和 SSH 登录方式，
+地域与规格按 IP 从当前账号识别，不在账号下的 IP 不能用；因子机提交前要通过环境检测，首次 SSH 连接由
 用户在页面上确认主机指纹。确认后直接写出仓库根目录的 `moox.toml`（权限 0600，**整份加密保存**，解密密钥在
 系统钥匙串里：macOS 钥匙串、Windows 凭据管理器或 Linux Secret Service；没有钥匙串时是 `~/.config/moox/config.key`），
-所有 `moox-cli` 命令会自动解密，`[factor_engine]` 记录因子引擎
-所在的机器（`local` 表示这台电脑）。规则：
+所有 `moox-cli` 命令会自动解密。规则：
 
 - 腾讯云密钥建议用子用户（访问管理 → 用户列表，编程访问），需要授权 6 个预设策略：
   `QcloudSCFFullAccess`（采集云函数）、`QcloudCOSFullAccess`（函数代码包）、`QcloudCLSFullAccess`（日志）、
@@ -46,10 +45,12 @@ not a deployment artifact.
 
 ### 拓扑怎么写
 
-- `[hosts.<主机ID>]` 是唯一的主机目录：`address`、`region`、`provider`、`ssh = { port, username }`，
+- `[hosts.<主机ID>]` 是唯一的主机目录：`label`（中文名）、`address`、`region`、`provider`、`ssh = { port, username }`，
   控制主机另有 `tls_mode`（`auto` 按地址选公网证书或内部 CA）。只能出站的主机写 `reachability = "outbound"`。
-- `[placements]` 按主机 ID 列出业务组件；`host-gateway` 与 `host-agent` 由代码为每台部署主机自动补齐。
-- `[factor_engine]` 记录因子引擎所在的机器。构建一律在本机进行（含 CGO 的 Storage 在 Docker 里构建），环境见 `docs/构建手册.md`；`[compile_host]` 已退役，配置里出现会被拒绝。
+  主机的登记、启停与移除见 [`host-registry.md`](host-registry.md)。
+- `[deployments]` 按主机 ID 列出业务组件；`host-gateway` 与 `host-agent` 由代码为每台部署主机自动补齐；
+  因子机列 `factor-engine`、`archive-worker`（外部程序组件）。
+- 构建一律在本机进行（含 CGO 的 Storage 在 Docker 里构建），环境见 `docs/构建手册.md`；`[compile_host]` 已退役，配置里出现会被拒绝。
 - `[eventbus]` 只写公网连接事实（地址、端口、TLS）；账号、token、CA 和私钥由 MooX 在部署时生成。
 - `[paths]` 统一声明运行时根目录（默认 `/data/moox`）。
 - `[notification]` 的 webhook 地址是凭据：留空时仍采集和展示监控数据，只是不发站外告警。
@@ -65,11 +66,12 @@ test -e ./moox.toml || exit 2
 ./bin/moox-cli setup deploy-host --file ./moox.toml --source-dir . --host <主机ID>      # 每台非 control 主机
 ./bin/moox-cli setup build-linux --module storage --source-dir .
 ./bin/moox-cli setup deploy-unit --file ./moox.toml --source-dir . --host <主机ID> --profile storage --binary-dir ./bin
-./bin/moox-cli setup deploy-unit --file ./moox.toml --source-dir . --host <主机ID> --profile access   # 以及 egress-proxy、trade
+./bin/moox-cli setup deploy-unit --file ./moox.toml --source-dir . --host <主机ID> --profile access   # 以及 egress-proxy、trade、collector-stream
 ./bin/moox-cli setup bootstrap --stage control --file ./moox.toml --source-dir .
 ```
 
-- 每个 `deploy-unit` 只安装 `[placements]` 里登记在该主机上的单元；按实际放置逐台执行，不要自行挑主机。
+- 每个 `deploy-unit` 只安装 `[deployments]` 里登记在该主机上的单元；按实际部署逐台执行，不要自行挑主机。
+- 因子机的 `factor-engine`、`archive-worker` 在 `setup init` 之后用 `setup deploy-unit --profile factor-engine|archive-worker --release <ID>` 部署，详见 [`host-registry.md`](host-registry.md)。
 - 控制主机 `tls_mode = "internal"` 的首次安装要给 `bootstrap --stage control` 加 `--create-proxy-ca`；公网模式不加。
   internal CA 部署后用 `./bin/moox-cli setup trust-browser --file ./moox.toml` 让本机浏览器信任。
 - 所有阶段使用同一个 `moox.toml` 和同一个 `--state-dir`；重试复用原请求。`*-paused` 不是 ready。
@@ -79,6 +81,17 @@ If validation reports `host_key_unknown`, obtain each SHA256 host fingerprint
 through an independent trusted channel, run `setup trust-host`, and repeat
 validation. Never accept a fingerprint merely because the same SSH connection
 reported it.
+
+### macOS：初始化后让浏览器信任管理台证书
+
+`setup init` 末尾的“浏览器信任”只检查证书是否进了钥匙串，不保证浏览器真的信任它。用户在 Mac 上操作时，初始化完成后要**主动提醒用户**这一步（internal TLS 才需要）：
+
+```bash
+security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db ~/.moox/certs/moox-caddy-root-<控制机地址>.crt
+```
+
+macOS 会弹出系统授权框（密码或指纹），不需要在终端里输密码；也可以在“钥匙串访问”里双击该证书，把“使用此证书时”设为“始终信任”。用 `security verify-cert -c <证书文件>` 能确认是否生效。
+不要清理钥匙串里的这张证书（包括“清理旧 CA”时），否则浏览器访问管理台和登录接口会立刻报证书错误。用户不想改钥匙串时，改为在浏览器里对该站点点一次“继续访问”。
 
 ## Phase 3: Default Metadata Initialization
 

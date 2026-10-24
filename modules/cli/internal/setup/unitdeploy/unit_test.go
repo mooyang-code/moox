@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBusinessUnitSelectionAndExportRolesFollowActualPlacements(t *testing.T) {
-	manifest := setupconfig.Manifest{Placements: map[string][]string{"storage1": {"storage-primary", "storage-node"}, "view1": {"storage-view"}, "edge1": {"access", "egress-proxy"}, "trade1": {"trade"}}}
+func TestBusinessUnitSelectionAndExportRolesFollowActualDeployments(t *testing.T) {
+	manifest := setupconfig.Manifest{Deployments: map[string][]string{"storage1": {"storage-primary", "storage-node"}, "view1": {"storage-view"}, "edge1": {"access", "egress-proxy"}, "trade1": {"trade"}}}
 	for _, test := range []struct {
 		host, profile     string
 		components, roles []string
@@ -34,7 +34,7 @@ func TestBusinessUnitSelectionAndExportRolesFollowActualPlacements(t *testing.T)
 }
 
 func TestStorageEnvironmentSharesOnlyRequiredPersistentCredentials(t *testing.T) {
-	manifest := setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "192.0.2.1"}, "primary": {Address: "192.0.2.2"}, "view": {Address: "192.0.2.3"}}, Placements: map[string][]string{"control": {"admin"}, "primary": {"storage-primary", "storage-node", "storage-view"}}}
+	manifest := setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "192.0.2.1"}, "primary": {Address: "192.0.2.2"}, "view": {Address: "192.0.2.3"}}, Deployments: map[string][]string{"control": {"admin"}, "primary": {"storage-primary", "storage-node", "storage-view"}}}
 	identity := runtimeIdentity{StorageNodeSecret: strings.Repeat("n", 32), StoragePrimarySecret: strings.Repeat("p", 32), StorageViewSecret: strings.Repeat("v", 32)}
 	components := []string{"storage-primary", "storage-node", "storage-view", "access"}
 	environment, err := unitEnvironment(manifest, identity, "primary", components)
@@ -51,15 +51,15 @@ func TestStorageEnvironmentSharesOnlyRequiredPersistentCredentials(t *testing.T)
 	require.Equal(t, "view", environment["storage-view"]["MOOX_STORAGE_ROLE"])
 	_, err = unitEnvironment(manifest, runtimeIdentity{}, "primary", components)
 	require.Error(t, err, "missing durable secrets must not be regenerated")
-	manifest.Placements["primary"] = []string{"storage-primary", "storage-node"}
-	manifest.Placements["view"] = []string{"storage-view"}
+	manifest.Deployments["primary"] = []string{"storage-primary", "storage-node"}
+	manifest.Deployments["view"] = []string{"storage-view"}
 	_, err = unitEnvironment(manifest, identity, "view", []string{"storage-view"})
 	require.Error(t, err, "loopback RPC templates cannot reach a different host")
 }
 
 // collector-stream 只拿到按 Storage 主密钥派生的 moox-collector 应用密钥，不拿主密钥。
 func TestCollectorStreamGetsOnlyTheDerivedCollectorAppKey(t *testing.T) {
-	manifest := setupconfig.Manifest{Placements: map[string][]string{"overseas": {"access", "collector-stream"}}}
+	manifest := setupconfig.Manifest{Deployments: map[string][]string{"overseas": {"access", "collector-stream"}}}
 	components, err := unitComponents(manifest, "overseas", "collector-stream")
 	require.NoError(t, err)
 	require.Equal(t, []string{"collector-stream"}, components)

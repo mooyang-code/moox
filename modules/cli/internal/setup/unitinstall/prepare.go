@@ -88,7 +88,7 @@ func prepareComponents(options PrepareOptions) ([]string, error) {
 			return nil, errors.New("prepared components must be distinct members of their software unit")
 		}
 		if options.Profile != "host" && !slices.Contains(options.MaterialOptions.Components, id) {
-			return nil, errors.New("prepared component is absent from the registered host placement")
+			return nil, errors.New("prepared component is absent from the registered host deployment")
 		}
 		seen[id] = true
 	}

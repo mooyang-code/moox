@@ -818,8 +818,8 @@ func TestBusinessFreshnessReporterDisablesReporterForDisabledDeployment(t *testi
 	repositories := manager.Repositories()
 	for _, check := range []*domain.Check{
 		{
-			CheckID: "placement:control:factor-mgr", Name: "factor-mgr@control",
-			Source: domain.CheckSourcePlacement, Enabled: false, IntervalSeconds: 30,
+			CheckID: "deployment:control:factor-mgr", Name: "factor-mgr@control",
+			Source: domain.CheckSourceDeployment, Enabled: false, IntervalSeconds: 30,
 		},
 		{
 			SpaceID: monmetrics.InternalMetricSpaceID,
@@ -890,8 +890,8 @@ func TestBusinessFreshnessReporterResolvesDatasetForDisabledProducer(t *testing.
 	repositories := manager.Repositories()
 	for _, check := range []*domain.Check{
 		{
-			CheckID: "placement:control:factor-mgr", Name: "factor-mgr@control",
-			Source: domain.CheckSourcePlacement, Enabled: false, IntervalSeconds: 30,
+			CheckID: "deployment:control:factor-mgr", Name: "factor-mgr@control",
+			Source: domain.CheckSourceDeployment, Enabled: false, IntervalSeconds: 30,
 		},
 		{
 			SpaceID: "crypto", CheckID: "dataset:factor:factor_output:1m",
@@ -1061,7 +1061,7 @@ func seedBusinessTopology(t *testing.T, repositories *store.Repositories, hostID
 	if !enabled {
 		status = servicecatalog.Disabled
 	}
-	_, err = repositories.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: time.Now().UTC(), Hosts: []domain.TopologyHost{{HostID: hostID, Address: "host.example.test", Status: servicecatalog.Enabled}}, Placements: []domain.TopologyPlacement{{HostID: hostID, ComponentID: componentID, Status: status}}}, nil)
+	_, err = repositories.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: time.Now().UTC(), Hosts: []domain.TopologyHost{{HostID: hostID, Address: "host.example.test", Status: servicecatalog.Enabled}}, Deployments: []domain.TopologyDeployment{{HostID: hostID, ComponentID: componentID, Status: status}}}, nil)
 	require.NoError(t, err)
 }
 

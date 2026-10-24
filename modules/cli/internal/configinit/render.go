@@ -18,7 +18,7 @@ import (
 //go:embed moox.toml.example
 var exampleTemplate string
 
-// Render 把请求渲染成一份完整的 moox.toml：先借助 env 识别服务器、检测因子计算机，
+// Render 把请求渲染成一份完整的 moox.toml：先借助 env 识别服务器、检测因子机，
 // 再用 CLI 自己的严格解码和校验确认结果可用。失败时返回的错误信息不含任何秘密值。
 func Render(ctx context.Context, request *Request, env Environment) ([]byte, error) {
 	if err := request.normalize(ctx, env); err != nil {
@@ -52,7 +52,7 @@ func Render(ctx context.Context, request *Request, env Environment) ([]byte, err
 	return raw, nil
 }
 
-// replaceTopology 把示例里从第一个 [hosts.*] 到 [egress_proxy] 之前的主机和放置段整体换成生成的拓扑。
+// replaceTopology 把示例里从第一个 [hosts.*] 到 [egress_proxy] 之前的主机和部署段整体换成生成的拓扑。
 func replaceTopology(lines []string, topology []string) ([]string, error) {
 	start, end := -1, -1
 	for i, line := range lines {
@@ -80,15 +80,7 @@ func renderTopology(request *Request) []string {
 		out = append(out, renderHost(host)...)
 		out = append(out, "")
 	}
-	if request.factorRemote.ID != "" {
-		out = append(out, "# 因子计算机：运行因子引擎。它只登记登录方式，不加入 MooX 部署拓扑。")
-		out = append(out, renderHost(request.factorRemote)...)
-		out = append(out, "")
-	}
-	if request.factorEngine != "" {
-		out = append(out, "# 因子引擎所在的机器：local 表示运行 moox-cli 的这台电脑。", "[factor_engine]", "host = "+tomlString(request.factorEngine), "")
-	}
-	out = append(out, "# host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。", "[placements]")
+	out = append(out, "# host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。", "[deployments]")
 	for _, host := range request.hosts {
 		quoted := make([]string, len(host.Components))
 		for i, id := range host.Components {
@@ -100,7 +92,14 @@ func renderTopology(request *Request) []string {
 }
 
 func renderHost(host Host) []string {
-	out := []string{"[hosts." + host.ID + "]", "address = " + tomlString(host.Address)}
+	out := []string{"[hosts." + host.ID + "]"}
+	if label := setupconfig.DefaultHostLabel(host.ID); label != "" {
+		out = append(out, "label = "+tomlString(label))
+	}
+	out = append(out, "address = "+tomlString(host.Address))
+	if host.Outbound {
+		out = append(out, `reachability = "outbound"`)
+	}
 	if host.Region != "" {
 		out = append(out, "region = "+tomlString(host.Region))
 	}

@@ -143,7 +143,7 @@ func (s *Service) CreateSecret(ctx context.Context, req *pb.CreateSecretReq) (*p
 		secretRecord.Status = "active"
 	}
 	// 从 JWT 自动填充 creator，忽略客户端传入值
-	if userID, username, _, err := utils.GetUserInfoFromCtx(ctx); err == nil && username != "" {
+	if userID, username, err := utils.GetUserInfoFromCtx(ctx); err == nil && username != "" {
 		secretRecord.Creator = username
 	} else if userID != "" {
 		secretRecord.Creator = userID
@@ -302,8 +302,6 @@ func secretModelToPB(s *model.Secret) *pb.Secret {
 		SecretValue: maskSecretValue(s.SecretValue),
 		ExtraConfig: redactExtraConfig(s.ExtraConfig),
 		Status:      s.Status,
-		LastUsedAt:  formatTimePtr(s.LastUsedAt),
-		LastUsedBy:  s.LastUsedBy,
 		Creator:     s.Creator,
 		CreateTime:  formatTime(s.CreateTime),
 		ModifyTime:  formatTime(s.ModifyTime),
@@ -369,13 +367,6 @@ func maskSecretValue(value string) string {
 
 func formatTime(t time.Time) string {
 	if t.IsZero() {
-		return ""
-	}
-	return t.Format("2006-01-02 15:04:05")
-}
-
-func formatTimePtr(t *time.Time) string {
-	if t == nil || t.IsZero() {
 		return ""
 	}
 	return t.Format("2006-01-02 15:04:05")

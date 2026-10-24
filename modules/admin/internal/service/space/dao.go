@@ -78,29 +78,19 @@ func (d *DAO) UpdateSpace(ctx context.Context, item *Space) error {
 	return nil
 }
 
-// DeleteSpace permanently removes an isolated management Space and its members.
+// DeleteSpace 永久删除一个隔离的管理 Space。
 func (d *DAO) DeleteSpace(ctx context.Context, spaceID string) error {
 	if strings.TrimSpace(spaceID) == "" {
 		return fmt.Errorf("space_id is required")
 	}
-	tx := d.db.WithContext(ctx).Begin()
-	if tx.Error != nil {
-		return tx.Error
-	}
-	if err := tx.Exec("DELETE FROM t_space_members WHERE c_space_id = ?", spaceID).Error; err != nil {
-		tx.Rollback()
-		return err
-	}
-	result := tx.Exec("DELETE FROM t_spaces WHERE c_space_id = ? AND c_is_deleted = ?", spaceID, softdelete.IsDeletedFalse)
+	result := d.db.WithContext(ctx).Exec("DELETE FROM t_spaces WHERE c_space_id = ? AND c_is_deleted = ?", spaceID, softdelete.IsDeletedFalse)
 	if result.Error != nil {
-		tx.Rollback()
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		tx.Rollback()
 		return fmt.Errorf("space not found: %s", spaceID)
 	}
-	return tx.Commit().Error
+	return nil
 }
 
 // ListSpaces 按 owner/status 分页查询有效 Space。
@@ -123,50 +113,20 @@ func (d *DAO) ListSpaces(ctx context.Context, owner string, status string, offse
 	return rows, total, nil
 }
 
-// ListSpaceMembers 分页查询指定 Space 下的成员。
-func (d *DAO) ListSpaceMembers(ctx context.Context, spaceID string, offset int, limit int) ([]SpaceMember, int64, error) {
-	query := d.db.WithContext(ctx).Model(&SpaceMember{}).Where("c_space_id = ?", spaceID)
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, err
+// AuthorizeSpaceRequest 校验 Space 存在且处于 active 状态。
+func (d *DAO) AuthorizeSpaceRequest(ctx context.Context, spaceID string) error {
+	spaceID = strings.TrimSpace(spaceID)
+	if spaceID == "" {
+		return fmt.Errorf("space_id is required")
 	}
-	var rows []SpaceMember
-	if err := query.Order("c_mtime DESC, c_id DESC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
-		return nil, 0, err
-	}
-	return rows, total, nil
-}
-
-// AuthorizeSpaceRequest enforces the Admin BFF's Space boundary. Global
-// administrators may operate any active Space; ordinary users must have an
-// active membership, and mutating operations require owner/admin role.
-func (d *DAO) AuthorizeSpaceRequest(ctx context.Context, userID, spaceID string, mutates bool, globalRole int32) error {
-	userID, spaceID = strings.TrimSpace(userID), strings.TrimSpace(spaceID)
-	if userID == "" || spaceID == "" {
-		return fmt.Errorf("user_id and space_id are required")
-	}
-	var item Space
-	if err := d.db.WithContext(ctx).Where("c_space_id = ? AND c_is_deleted = ? AND c_status = ?", spaceID, softdelete.IsDeletedFalse, "active").First(&item).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return fmt.Errorf("space is unavailable: %s", spaceID)
-		}
+	var count int64
+	if err := d.db.WithContext(ctx).Model(&Space{}).
+		Where("c_space_id = ? AND c_is_deleted = ? AND c_status = ?", spaceID, softdelete.IsDeletedFalse, "active").
+		Count(&count).Error; err != nil {
 		return err
 	}
-	if globalRole >= 2 {
-		return nil
-	}
-	var member SpaceMember
-	if err := d.db.WithContext(ctx).Where("c_space_id = ? AND c_user_id = ? AND c_status = ?", spaceID, userID, "active").First(&member).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return fmt.Errorf("user is not an active member of space")
-		}
-		return err
-	}
-	if mutates {
-		role := strings.ToLower(strings.TrimSpace(member.Role))
-		if role != "owner" && role != "admin" {
-			return fmt.Errorf("mutation requires space owner or admin role")
-		}
+	if count == 0 {
+		return fmt.Errorf("space is unavailable: %s", spaceID)
 	}
 	return nil
 }

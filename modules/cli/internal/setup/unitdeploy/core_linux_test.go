@@ -228,7 +228,7 @@ ssh = {username="fixture",password="synthetic-ssh-password"}
 [hosts.compute1]
 address = "127.0.0.3"
 ssh = {username="fixture",password="synthetic-ssh-password"}
-[placements]
+[deployments]
 control = ["admin","eventbus","console-proxy","web-host","monitor","collector","cloudfunction","factor-mgr","strategy","access","egress-proxy","trade","storage-primary","storage-node","storage-view"]
 storage = ["access"]
 compute1 = ["access"]
@@ -503,15 +503,11 @@ func nativeAdminPasswordHash(t *testing.T, release, username string) string {
 	require.NoError(t, err)
 	defer connection.Close()
 	var user struct {
-		Hash   string `gorm:"column:c_password_hash"`
-		Role   int    `gorm:"column:c_role"`
-		Status int    `gorm:"column:c_status"`
+		Hash string `gorm:"column:c_password_hash"`
 	}
-	result := db.Raw("SELECT c_password_hash, c_role, c_status FROM t_users WHERE c_username = ? AND c_is_deleted = 0", username).Scan(&user)
+	result := db.Raw("SELECT c_password_hash FROM t_users WHERE c_username = ?", username).Scan(&user)
 	require.NoError(t, result.Error)
 	require.EqualValues(t, 1, result.RowsAffected)
-	require.Equal(t, 3, user.Role)
-	require.Equal(t, 1, user.Status)
 	return user.Hash
 }
 

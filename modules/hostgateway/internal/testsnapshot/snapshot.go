@@ -17,7 +17,7 @@ func New(t testing.TB, hostID string, components ...string) *pb.HostGatewaySnaps
 	return build(t, hostID, "", components)
 }
 
-// NewWithOutbound 在拓扑里加入一台只能出站、由 control 中转的主机（放置全部主机级组件），返回 hostID 的快照。
+// NewWithOutbound 在拓扑里加入一台只能出站、由 control 中转的主机（部署全部主机级组件），返回 hostID 的快照。
 func NewWithOutbound(t testing.TB, hostID, outbound string, components ...string) *pb.HostGatewaySnapshot {
 	t.Helper()
 	return build(t, hostID, outbound, components)
@@ -40,7 +40,7 @@ func build(t testing.TB, hostID, outbound string, components []string) *pb.HostG
 	add := func(host, component string) {
 		key := host + "/" + component
 		if !seen[key] {
-			topology.Placements = append(topology.Placements, servicecatalog.Placement{HostID: host, ComponentID: component, Status: servicecatalog.Enabled})
+			topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: host, ComponentID: component, Status: servicecatalog.Enabled})
 			seen[key] = true
 		}
 	}

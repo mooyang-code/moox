@@ -2,7 +2,6 @@ package console
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
@@ -70,7 +69,6 @@ func Authorize() filter.ServerFilter {
 		// 同时将用户信息保存到上下文中（底层接口需要这些信息）
 		trpc.SetMetaData(ctx, model.CtxUserID, []byte(claims.UserID))
 		trpc.SetMetaData(ctx, model.CtxUsername, []byte(claims.Username))
-		trpc.SetMetaData(ctx, model.CtxUserRole, []byte(fmt.Sprintf("%d", claims.Role)))
 		trpc.SetMetaData(ctx, model.CtxSessionID, []byte(claims.SessionID))
 
 		traceID := getTokenFromHeader(header, model.CtxTraceID)
@@ -138,7 +136,6 @@ func getAccessTokenFromRequest(ctx context.Context, header *thttp.Header, req in
 type accessClaims struct {
 	UserID    string
 	Username  string
-	Role      int32
 	SessionID string
 	ExpiresAt time.Time
 }
@@ -165,7 +162,6 @@ func validateAccessToken(ctx context.Context, accessToken string) (*accessClaims
 		return nil, false
 	}
 	username, _ := claims["username"].(string)
-	role, _ := claims["role"].(float64)
 	sessionID, _ := claims["sid"].(string)
 	expiresUnix, ok := claims["exp"].(float64)
 	if sessionID == "" || !ok {
@@ -175,7 +171,7 @@ func validateAccessToken(ctx context.Context, accessToken string) (*accessClaims
 	if !time.Now().Before(expiresAt) {
 		return nil, false
 	}
-	return &accessClaims{UserID: userID, Username: username, Role: int32(role), SessionID: sessionID, ExpiresAt: expiresAt}, true
+	return &accessClaims{UserID: userID, Username: username, SessionID: sessionID, ExpiresAt: expiresAt}, true
 }
 
 // createAuthFailResponse 创建鉴权失败响应

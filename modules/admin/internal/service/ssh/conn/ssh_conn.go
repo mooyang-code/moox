@@ -17,10 +17,16 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+// 终端固定使用 xterm-256color 与 bash；外观（字体、配色）由浏览器本地保存。
+const (
+	ptyType = "xterm-256color"
+	shell   = "bash"
+)
+
 // SSHConn SSH 连接封装
 type SSHConn struct {
-	// 主机配置
-	Host *model.SSHHost
+	// 连接目标
+	Target model.Target
 	// HostKeys 记录并校验服务端主机密钥。
 	HostKeys HostKeyStore
 
@@ -43,8 +49,7 @@ type SSHConn struct {
 func (s *SSHConn) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&struct {
 		SessionID      string `json:"session_id"`
-		HostID         int    `json:"host_id"`
-		HostName       string `json:"host_name"`
+		HostID         string `json:"host_id"`
 		Address        string `json:"address"`
 		Port           int    `json:"port"`
 		User           string `json:"user"`
@@ -53,11 +58,10 @@ func (s *SSHConn) MarshalJSON() ([]byte, error) {
 		StartTime      string `json:"start_time"`
 	}{
 		SessionID:      s.SessionID,
-		HostID:         s.Host.ID,
-		HostName:       s.Host.Name,
-		Address:        s.Host.Address,
-		Port:           s.Host.Port,
-		User:           s.Host.User,
+		HostID:         s.Target.HostID,
+		Address:        s.Target.Address,
+		Port:           s.Target.Port,
+		User:           s.Target.User,
 		ClientIP:       s.ClientIP,
 		LastActiveTime: s.LastActive().Format("2006-01-02 15:04:05"),
 		StartTime:      s.StartTime.Format("2006-01-02 15:04:05"),
@@ -66,21 +70,21 @@ func (s *SSHConn) MarshalJSON() ([]byte, error) {
 
 // HostKeyStore 记录每台主机已信任的 SSH 主机密钥指纹（SHA256）。
 type HostKeyStore interface {
-	// PinHostKey 原子地确定主机在该地址上受信任的指纹：没有记录时记录 fingerprint（首次信任），已有记录则不改动；
-	// 返回生效的指纹。并发的首次连接只有第一个会被记录，其余看到的是已记录的值。
-	PinHostKey(hostID int, address, fingerprint string) (string, error)
+	// PinHostKey 原子地确定主机在该“地址:端口”上受信任的指纹：没有记录（或记录属于别的地址、端口）时记录 fingerprint（首次信任），
+	// 已有记录则不改动；返回生效的指纹。并发的首次连接只有第一个会被记录，其余看到的是已记录的值。
+	PinHostKey(hostID, endpoint, fingerprint string) (string, error)
 }
 
 // hostKeyCallback 校验服务端主机密钥：已记录指纹必须一致，不一致在发送任何认证信息之前拒绝；
 // 首次连接记录指纹（TOFU），之后固定。没有配置存储时一律拒绝，不再接受任意主机密钥。
 func (s *SSHConn) hostKeyCallback() ssh.HostKeyCallback {
 	return func(_ string, _ net.Addr, key ssh.PublicKey) error {
-		if s.HostKeys == nil || s.Host == nil {
+		if s.HostKeys == nil || s.Target.HostID == "" {
 			return errors.New("未配置 SSH 主机密钥校验，拒绝连接")
 		}
-		address := fmt.Sprintf("%s:%d", s.Host.Address, s.Host.Port)
+		address := s.Target.Endpoint()
 		fingerprint := ssh.FingerprintSHA256(key)
-		pinned, err := s.HostKeys.PinHostKey(s.Host.ID, address, fingerprint)
+		pinned, err := s.HostKeys.PinHostKey(s.Target.HostID, address, fingerprint)
 		if err != nil {
 			return fmt.Errorf("记录或读取主机密钥失败: %w", err)
 		}
@@ -97,50 +101,41 @@ func (s *SSHConn) Connect(clientIP string) error {
 	s.StartTime = time.Now()
 	s.RefreshActiveTime()
 
+	credential := s.Target.Credential
 	config := ssh.ClientConfig{
-		User: s.Host.User,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(s.Host.Password),
-			ssh.KeyboardInteractive(func(name, instruction string, questions []string, echos []bool) ([]string, error) {
-				answers := make([]string, len(questions))
-				for i := range answers {
-					answers[i] = s.Host.Password
-				}
-				return answers, nil
-			}),
-		},
+		User:            s.Target.User,
 		HostKeyCallback: s.hostKeyCallback(),
 		Timeout:         30 * time.Second,
 	}
-
-	// 证书认证
-	if s.Host.AuthType == "cert" {
-		privateKeyBytes := []byte(s.Host.CertData)
-		if s.Host.CertPwd != "" {
-			signer, err := ssh.ParsePrivateKeyWithPassphrase(privateKeyBytes, []byte(s.Host.CertPwd))
-			if err != nil {
-				log.Errorf("[SSH Conn] 解析带密码私钥失败: %v", err)
-				return fmt.Errorf("解析证书失败: %w", err)
-			}
-			config.Auth = []ssh.AuthMethod{ssh.PublicKeys(signer)}
+	if credential.PrivateKey != "" {
+		privateKey := []byte(credential.PrivateKey)
+		var signer ssh.Signer
+		var err error
+		if credential.Passphrase != "" {
+			signer, err = ssh.ParsePrivateKeyWithPassphrase(privateKey, []byte(credential.Passphrase))
 		} else {
-			signer, err := ssh.ParsePrivateKey(privateKeyBytes)
-			if err != nil {
-				log.Errorf("[SSH Conn] 解析私钥失败: %v", err)
-				return fmt.Errorf("解析证书失败: %w", err)
-			}
-			config.Auth = []ssh.AuthMethod{ssh.PublicKeys(signer)}
+			signer, err = ssh.ParsePrivateKey(privateKey)
+		}
+		if err != nil {
+			log.Errorf("[SSH Conn] 解析私钥失败: %v", err)
+			return fmt.Errorf("解析私钥失败: %w", err)
+		}
+		config.Auth = []ssh.AuthMethod{ssh.PublicKeys(signer)}
+	} else {
+		config.Auth = []ssh.AuthMethod{
+			ssh.Password(credential.Password),
+			ssh.KeyboardInteractive(func(name, instruction string, questions []string, echos []bool) ([]string, error) {
+				answers := make([]string, len(questions))
+				for i := range answers {
+					answers[i] = credential.Password
+				}
+				return answers, nil
+			}),
 		}
 	}
 
-	// 构建地址
-	addr := fmt.Sprintf("%s:%d", s.Host.Address, s.Host.Port)
-	if s.Host.NetType == "tcp6" {
-		addr = fmt.Sprintf("[%s]:%d", s.Host.Address, s.Host.Port)
-	}
-
 	// 建立 SSH 连接
-	sshClient, err := ssh.Dial(s.Host.NetType, addr, &config)
+	sshClient, err := ssh.Dial("tcp", s.Target.Endpoint(), &config)
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}
@@ -208,19 +203,11 @@ func (s *SSHConn) RunTerminal(stdout, stderr io.Writer, stdin io.Reader, w, h in
 	s.sshSession.Stdin = &activeReader{reader: stdin, conn: s}
 
 	modes := ssh.TerminalModes{}
-	ptyType := s.Host.PtyType
-	if ptyType == "" {
-		ptyType = "xterm-256color"
-	}
 	if err := s.sshSession.RequestPty(ptyType, h, w, modes); err != nil {
 		log.Errorf("[SSH Conn] RequestPty 失败: %v", err)
 		return fmt.Errorf("RequestPty 失败: %w", err)
 	}
 
-	shell := s.Host.Shell
-	if shell == "" {
-		shell = "bash"
-	}
 	err := s.sshSession.Run(shell)
 	if err != nil {
 		log.Errorf("[SSH Conn] Run shell 失败: %v", err)

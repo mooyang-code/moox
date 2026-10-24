@@ -53,7 +53,7 @@ password = "control-password"
 channel_type = "wecom"
 webhook_url = ""
 
-[placements]
+[deployments]
 control = ["admin", "console-proxy", "web-host", "eventbus"]
 `
 
@@ -121,12 +121,17 @@ func TestValidateRejectsStorageRootOverlapWithControl(t *testing.T) {
 		DeployRoot:  "/data/moox",
 		ControlRoot: "/data/moox/prod",
 		StorageRoot: "/data/moox/prod/storage",
+		ArchiveRoot: "/data/moox/archive",
 	}
 	require.ErrorContains(t, validatePaths(paths), "must not overlap")
 	paths.StorageRoot = "/data/moox"
 	require.ErrorContains(t, validatePaths(paths), "must not overlap")
 	paths.StorageRoot = "/data/moox/storage"
 	require.NoError(t, validatePaths(paths))
+	paths.ArchiveRoot = "/data/moox/storage/archive"
+	require.ErrorContains(t, validatePaths(paths), "archive_root must not overlap")
+	paths.ArchiveRoot = "/data/moox"
+	require.ErrorContains(t, validatePaths(paths), "archive_root must not overlap")
 }
 
 func TestLoadLocalLogRotationFromManifest(t *testing.T) {
@@ -166,7 +171,7 @@ storage_root = "/data/custom/storage"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
-	assert.Equal(t, Paths{DeployRoot: "/data/custom", ControlRoot: "/data/custom/control", StorageRoot: "/data/custom/storage"}, snapshot.Manifest.Paths)
+	assert.Equal(t, Paths{DeployRoot: "/data/custom", ControlRoot: "/data/custom/control", StorageRoot: "/data/custom/storage", ArchiveRoot: "/data/custom/archive"}, snapshot.Manifest.Paths)
 }
 
 func TestLoadAllowsStorageRootOnSeparateHostMount(t *testing.T) {
@@ -573,24 +578,24 @@ domains = ["FAPI.BINANCE.COM.", "api.binance.com"]
 		})
 	}
 }
-func TestPlacementsRejectAmbiguousOrInvalidComponents(t *testing.T) {
+func TestDeploymentsRejectAmbiguousOrInvalidComponents(t *testing.T) {
 	m := Manifest{HostCatalog: map[string]HostDefinition{
 		"control": {Address: "192.0.2.10"}, "compute": {Address: "192.0.2.11"},
 	}}
-	for _, placements := range []map[string][]string{
+	for _, deployments := range []map[string][]string{
 		{"missing": {"trade"}}, {"compute": {"missing"}}, {"compute": {"trade", "trade"}},
 		{"control": {"admin", "console-proxy", "web-host", "trade"}, "compute": {"trade"}},
 		{"compute": {"host-gateway"}}, {"compute": {"admin"}}, {"compute": {"web-host"}},
 	} {
-		if _, ok := placements["control"]; !ok {
-			placements["control"] = []string{"admin", "console-proxy", "web-host", "eventbus"}
+		if _, ok := deployments["control"]; !ok {
+			deployments["control"] = []string{"admin", "console-proxy", "web-host", "eventbus"}
 		}
-		m.Placements = placements
-		require.Error(t, validatePlacements(&m))
+		m.Deployments = deployments
+		require.Error(t, validateDeployments(&m))
 	}
-	m.Placements = map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "compute": {"trade", "egress-proxy"}}
-	require.NoError(t, validatePlacements(&m))
-	require.Equal(t, "compute", m.PlacementHost("trade"))
+	m.Deployments = map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "compute": {"trade", "egress-proxy"}}
+	require.NoError(t, validateDeployments(&m))
+	require.Equal(t, "compute", m.ComponentHost("trade"))
 }
 
 // [compile_host] 已退役：编译在本机进行。留着它要明确报错，提示删除，而不是静默忽略。
@@ -644,13 +649,12 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{"eventbus explicit zero port", strings.Replace(validManifest, "port = 4222", "port = 0", 1), "eventbus.port"},
 		{"eventbus invalid port", strings.Replace(validManifest, "port = 4222", "port = 70000", 1), "eventbus.port"},
 		{"eventbus tls disabled", strings.Replace(validManifest, "tls_enabled = true", "tls_enabled = false", 1), "eventbus.tls_enabled"},
-		{"missing eventbus placement", strings.Replace(validManifest, `, "eventbus"`, "", 1), "placements must include eventbus"},
+		{"missing eventbus deployment", strings.Replace(validManifest, `, "eventbus"`, "", 1), "deployments must include eventbus"},
 		{"protected component missing", strings.Replace(validManifest, `"console-proxy", `, "", 1), "protected component"},
-		{"unknown placement", validManifest + "unknown = [\"trade\"]\n", "placements host ID"},
+		{"unknown deployment", validManifest + "unknown = [\"trade\"]\n", "deployments host ID"},
 		{"automatic component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "host-gateway"`, 1), "automatic component"},
 		{"unknown field", "unexpected = true\n" + validManifest, "unknown field"},
-		{"unknown factor engine host", validManifest + "[factor_engine]\nhost = \"missing\"\n", "factor_engine.host"},
-		{"factor engine with credentials", validManifest + "[factor_engine]\nhost = \"local\"\npassword = \"x\"\n", "factor_engine accepts only"},
+		{"retired factor engine section", validManifest + "[factor_engine]\nhost = \"missing\"\n", "[factor_engine] 已取消"},
 		{"duplicate address", validManifest + "[hosts.compute]\naddress = \"192.0.2.10\"\nssh = { username = \"ubuntu\" }\n", "duplicates hosts."},
 	}
 	for _, hook := range []string{"http://example.test/hook", "not-a-url", "https://open.feishu.cn/hook", "https://example.invalid/hook"} {
@@ -674,7 +678,7 @@ func TestLoadRejectsRetiredDeploymentKeys(t *testing.T) {
 			root := t.TempDir()
 			_, err := Load(writeManifest(t, root, validManifest+"["+section+"]\nname = \"control\"\n", 0o600), root)
 			require.ErrorContains(t, err, "[hosts.<host-id>]")
-			require.ErrorContains(t, err, "[placements]")
+			require.ErrorContains(t, err, "[deployments]")
 		})
 	}
 	t.Run("scf_fetcher", func(t *testing.T) {

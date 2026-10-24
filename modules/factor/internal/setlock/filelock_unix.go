@@ -1,5 +1,3 @@
-//go:build !windows
-
 package setlock
 
 import "golang.org/x/sys/unix"

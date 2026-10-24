@@ -1,51 +1,48 @@
 import type {
   CatalogComponent,
-  ComponentPlacement,
+  ComponentDeployment,
   DeploymentHost,
   HostGatewayRoute,
   HostRoutesResponse
 } from "@/api/admin/types";
 import type { HealthComponent, HealthGatewaySignal, HealthOverview, HealthStatus } from "@/api/monitor";
 
-export interface PlacementRow {
+export interface DeploymentRow {
   key: string;
-  placement: ComponentPlacement;
+  deployment: ComponentDeployment;
   definition?: CatalogComponent;
   health?: HealthComponent;
   status: HealthStatus;
 }
-export function placementKey(hostId: string, componentId: string) {
+export function deploymentKey(hostId: string, componentId: string) {
   return `${hostId}\0${componentId}`;
 }
-export function placementRows(
+export function deploymentRows(
   host: DeploymentHost,
-  placements: ComponentPlacement[],
+  deployments: ComponentDeployment[],
   components: CatalogComponent[],
   overview?: HealthOverview
-): PlacementRow[] {
+): DeploymentRow[] {
   const definitions = new Map(components.map(item => [item.id, item]));
   const health = new Map(
-    (overview?.components || []).map(item => [placementKey(item.host_id || "", item.component_id || ""), item])
+    (overview?.components || []).map(item => [deploymentKey(item.host_id || "", item.component_id || ""), item])
   );
-  return placements
+  return deployments
     .filter(item => item.host_id === host.host_id)
-    .map(placement => {
-      const key = placementKey(placement.host_id, placement.component_id);
-      const enabled = host.status === "enabled" && placement.status === "enabled";
+    .map(deployment => {
+      const key = deploymentKey(deployment.host_id, deployment.component_id);
+      const enabled = host.status === "enabled" && deployment.status === "enabled";
       const observed = health.get(key);
       // Admin enablement may be newer than Monitor's last topology sample.
       const currentHealth = enabled && observed?.status === "disabled" ? undefined : observed;
       return {
         key,
-        placement,
-        definition: definitions.get(placement.component_id),
+        deployment,
+        definition: definitions.get(deployment.component_id),
         health: currentHealth,
         status: enabled ? currentHealth?.status || "unknown" : "disabled"
       };
     });
-}
-export function canTogglePlacement(host: DeploymentHost, row: PlacementRow) {
-  return host.status === "enabled" && !!row.definition && !row.definition.protected;
 }
 export function componentPorts(component?: CatalogComponent) {
   return [

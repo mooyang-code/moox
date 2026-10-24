@@ -13,12 +13,15 @@ describe("storage page actions contract", () => {
     expect(pages.nodes).not.toContain("openCreate");
   });
 
-  it("keeps the DataNode title explanation and fixed row operation affordances", () => {
+  it("keeps the DataNode title explanation as a read-only page", () => {
     expect(pages.nodes).toContain('aria-label="数据节点说明"');
-    expect(pages.nodes).toContain("部署流程拥有");
-    expect(pages.nodes).toContain("不再经过独立路由层");
-    expect(pages.nodes).toContain("只有已禁用且没有 Dataset 的节点才能删除");
-    expect(pages.nodes).toContain('title="操作" :width="170"');
+    expect(pages.nodes).toContain("管理台只读");
+    expect(pages.nodes).toContain("moox skill");
+    expect(pages.nodes).toContain("Dataset 直接绑定 DataNode");
+    for (const retired of ["openEdit", "updateDataNode", "deleteDataNode", "data-node-edit-modal"]) {
+      expect(pages.nodes).not.toContain(retired);
+    }
+    expect(pages.nodes).toContain('title="操作" :width="90"');
     expect(pages.nodes).toContain("display: flex;\n  flex-wrap: wrap;");
     expect(pages.nodes).toContain('path: "/collector/tasks"');
     expect(pages.nodes).toContain('query: { tab: "results", space_id: summary.space_id }');

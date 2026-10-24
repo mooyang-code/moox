@@ -24,7 +24,7 @@ for scenario in \
   object-and-exact-raw-pb-json-local-and-tls \
   tls-trust-plaintext-acl-and-durable-replay \
   new-caller-next-snapshot-without-restart \
-  placement-withdrawal-and-automatic-target-switch \
+  deployment-withdrawal-and-automatic-target-switch \
   normal-restart-and-live-instance-conflict \
   offline-routing-90-second-readiness-and-cache-restart; do
   grep -Fq -- "SCENARIO PASS ${scenario}" "${LOG}"

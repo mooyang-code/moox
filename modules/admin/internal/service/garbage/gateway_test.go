@@ -98,7 +98,7 @@ func TestGarbageUsesProvisionedAdminIdentityThroughNativeGateway(t *testing.T) {
 	gateway, err := gatewayclient.New(gatewayclient.Config{CAFile: caPath, Mode: gatewayclient.Internal, Credentials: credentials, LocalHostID: "control", LocalAddress: listener.Addr().String(), Serialization: codec.SerializationTypeJSON, Source: directorySource{directory}})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gateway.Close()) })
-	collector, err := NewCollector(db, gateway)
+	collector, err := NewCollector(gateway)
 	require.NoError(t, err)
 	require.NoError(t, collector.Run(t.Context()))
 	require.NoError(t, collector.Run(t.Context()))

@@ -8,7 +8,7 @@ import (
 )
 
 func TestConfigRoundTripAndReleaseRelativePaths(t *testing.T) {
-	for _, host := range []string{"control", "compute-1"} {
+	for _, host := range []string{"control", "overseas"} {
 		config := Default(host, "control", "2001:db8::1", "fixture-key-id")
 		raw, err := Encode(config)
 		if err != nil {

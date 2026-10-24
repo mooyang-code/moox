@@ -61,7 +61,7 @@ describe("user-info store setAccount", () => {
     const request = store.setAccount();
     store.token = "token-2";
     store.sessionId = "session-2";
-    pending.resolve({ user_info: { user_id: "old-user", username: "old", role: 2 } });
+    pending.resolve({ user_info: { user_id: "old-user", username: "old" } });
 
     await expect(request).rejects.toMatchObject({ name: "StaleAccountRequestError" });
     expect(store.account.user).toEqual({});
@@ -76,5 +76,21 @@ describe("user-info store setAccount", () => {
     await expect(store.setAccount()).rejects.toMatchObject({ name: "AuthenticationError" });
     expect(store.token).toBe("");
     expect(clearBrowserSession).toHaveBeenCalled();
+  });
+
+  // 系统只有一个超级用户：用户信息里没有 role 也要拿到完整账号，不再被当成游客。
+  it("accepts a user profile without any role fields", async () => {
+    const store = useUserInfoStore();
+    store.token = "token-1";
+    store.sessionId = "session-1";
+    vi.mocked(getUserInfoAPI).mockResolvedValue({
+      user_info: { user_id: "u1", username: "admin", last_login_ip: "1.2.3.4", last_login_at: 1700000000, created_at: 1690000000 }
+    } as never);
+
+    await store.setAccount();
+
+    expect(store.account.user).toMatchObject({ id: "u1", userName: "admin", loginIp: "1.2.3.4" });
+    expect(store.account).not.toHaveProperty("roles");
+    expect(store.account).not.toHaveProperty("permissions");
   });
 });

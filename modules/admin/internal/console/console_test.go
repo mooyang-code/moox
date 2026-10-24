@@ -13,15 +13,12 @@ import (
 )
 
 type fakeSpaceAuthorizer struct {
-	err        error
-	userID     string
-	spaceID    string
-	mutates    bool
-	globalRole int32
+	err     error
+	spaceID string
 }
 
-func (a *fakeSpaceAuthorizer) AuthorizeSpaceRequest(_ context.Context, userID, spaceID string, mutates bool, globalRole int32) error {
-	a.userID, a.spaceID, a.mutates, a.globalRole = userID, spaceID, mutates, globalRole
+func (a *fakeSpaceAuthorizer) AuthorizeSpaceRequest(_ context.Context, spaceID string) error {
+	a.spaceID = spaceID
 	return a.err
 }
 

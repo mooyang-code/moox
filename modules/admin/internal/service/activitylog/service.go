@@ -14,7 +14,7 @@ import (
 )
 
 // Service 实现全局活动日志的写入与查询。写入只允许内部组件（服务目录 ACL 限定），
-// 查询时浏览器用户必须指定空间并且是该空间成员。
+// 浏览器用户查询时必须指定一个可用的空间，或查询不属于任何空间的全局事件。
 type Service struct {
 	pb.UnimplementedActivityLog
 	dao        *DAO
@@ -30,7 +30,7 @@ func ret(code pb.ErrorCode, message string) *pb.RetInfo { return &pb.RetInfo{Cod
 
 // isBrowserCaller 判断请求是否来自已登录的浏览器用户；内部组件由网关 ACL 限定，没有用户身份。
 func isBrowserCaller(ctx context.Context) bool {
-	_, _, _, err := utils.GetUserInfoFromCtx(ctx)
+	_, _, err := utils.GetUserInfoFromCtx(ctx)
 	return err == nil
 }
 
@@ -75,15 +75,18 @@ func (s *Service) ListActivityLogs(ctx context.Context, req *pb.ListActivityLogs
 		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, "request is required")}, nil
 	}
 	spaceID := strings.TrimSpace(req.GetSpaceId())
-	if userID, _, role, err := utils.GetUserInfoFromCtx(ctx); err == nil {
+	if req.GetGlobal() && spaceID != "" {
+		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, "space_id and global are mutually exclusive")}, nil
+	}
+	if _, _, err := utils.GetUserInfoFromCtx(ctx); err == nil && !req.GetGlobal() {
 		if spaceID == "" {
-			return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, "space_id is required")}, nil
+			return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, "space_id or global is required")}, nil
 		}
 		if s.authorizer == nil {
 			return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INNER_ERR, "space authorizer is unavailable")}, nil
 		}
-		if err := s.authorizer.AuthorizeSpaceRequest(ctx, userID, spaceID, false, role); err != nil {
-			return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_NO_PERMISSION, "activity logs require space membership")}, nil
+		if err := s.authorizer.AuthorizeSpaceRequest(ctx, spaceID); err != nil {
+			return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_NO_PERMISSION, "space is unavailable")}, nil
 		}
 	}
 	since, err := parseTimeFilter("since", req.GetSince())
@@ -94,7 +97,7 @@ func (s *Service) ListActivityLogs(ctx context.Context, req *pb.ListActivityLogs
 	if err != nil {
 		return &pb.ListActivityLogsRsp{RetInfo: ret(pb.ErrorCode_INVALID_PARAM, err.Error())}, nil
 	}
-	filter := Filter{SpaceID: spaceID, Source: strings.TrimSpace(req.GetSource()), Category: strings.TrimSpace(req.GetCategory()), RefID: strings.TrimSpace(req.GetRefId()), Since: since, Until: until, Page: int(req.GetPage().GetPage()), Size: int(req.GetPage().GetSize())}
+	filter := Filter{SpaceID: spaceID, Global: req.GetGlobal(), Source: strings.TrimSpace(req.GetSource()), Category: strings.TrimSpace(req.GetCategory()), RefID: strings.TrimSpace(req.GetRefId()), Since: since, Until: until, Page: int(req.GetPage().GetPage()), Size: int(req.GetPage().GetSize())}
 	items, total, err := s.dao.List(ctx, filter)
 	if err != nil {
 		log.ErrorContextf(ctx, "list activity logs: %v", err)

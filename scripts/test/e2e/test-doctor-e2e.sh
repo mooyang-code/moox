@@ -17,7 +17,7 @@ if rg -n 'ActivateDataset\(' "${ROOT}/modules/cli/internal/doctor/storage_activa
 fi
 
 # Catalog/Doctor and release-byte identity are checked by packages/doctor.
-# The deployment inventory migrates to HostPlacements in the gateway plan.
+# The deployment inventory migrates to HostDeployments in the gateway plan.
 if [[ -e "${ROOT}/packages/doctor/components.yaml" ]]; then
   echo "Doctor must not retain a duplicate component catalog" >&2
   exit 1

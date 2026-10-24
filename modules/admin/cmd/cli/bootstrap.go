@@ -132,20 +132,30 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 	}()
 	control := topology.Hosts[slices.IndexFunc(topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == topology.ControlHostID })]
 	err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 主机的 SSH 凭据加密要用主密钥：同步校验通过、要写凭据时才取得（没有则创建），拓扑非法时不会创建它。
+		var master string
+		masterKey := func() (string, error) {
+			if master != "" {
+				return master, nil
+			}
+			value, err := bootstrapMaster(tx, masterRoot, filepath.Base(opts.masterFile))
+			master = value
+			return value, err
+		}
 		dao, err := sysdeploy.NewTopologyDAO(tx, topology.ControlHostID)
 		if err != nil {
 			return err
 		}
+		dao.WithEncryptionKeyFunc(masterKey)
 		specs := make([]sysdeploy.HostSpec, 0, len(topology.Hosts))
 		for _, h := range topology.Hosts {
-			specs = append(specs, sysdeploy.HostSpec{HostID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Reachability: h.Reachability, Description: h.Description, Components: h.Components})
+			specs = append(specs, hostSpec(h))
 		}
 		// This also reserves SQLite's writer before validating the full fleet.
 		if err := dao.SyncHosts(ctx, specs); err != nil {
 			return err
 		}
-		master, err := bootstrapMaster(tx, masterRoot, filepath.Base(opts.masterFile))
-		if err != nil {
+		if _, err := masterKey(); err != nil {
 			return err
 		}
 		store, err := keys.NewStore(tx, master)
@@ -202,6 +212,21 @@ func bootstrapAdmin(ctx context.Context, opts bootstrapOptions, topology hostbun
 		return err
 	}
 	return writeJSON(stdout, result)
+}
+
+// hostSpec 把离线拓扑里的主机转换成部署同步的输入；SSH 凭据随主机一起写入。
+func hostSpec(h hostbundle.Host) sysdeploy.HostSpec {
+	spec := sysdeploy.HostSpec{HostID: h.HostID, Label: h.Label, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Reachability: h.Reachability, Description: h.Description, Components: h.Components}
+	if h.SSH != nil && h.SSH.Port != 0 {
+		ssh := &sysdeploy.SSHSpec{Port: h.SSH.Port, User: h.SSH.User}
+		if h.SSH.AuthType == "private_key" {
+			ssh.PrivateKey, ssh.Passphrase = h.SSH.Secret, h.SSH.Passphrase
+		} else {
+			ssh.Password = h.SSH.Secret
+		}
+		spec.SSH = ssh
+	}
+	return spec
 }
 
 func bootstrapMaster(tx *gorm.DB, root *os.Root, name string) (string, error) {

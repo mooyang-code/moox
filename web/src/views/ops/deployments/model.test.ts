@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CatalogComponent, DeploymentHost, HostGatewayRoute, HostRoutesResponse } from "@/api/admin/types";
-import { canTogglePlacement, componentPorts, gatewayLabel, groupRoutes, loadHostRoutes, placementRows, routeSync } from "./model";
+import { componentPorts, gatewayLabel, groupRoutes, loadHostRoutes, deploymentRows, routeSync } from "./model";
 const host: DeploymentHost = { host_id: "a", address: "example.test", status: "enabled" };
 const component: CatalogComponent = {
   id: "access",
@@ -22,16 +22,12 @@ const snapshot: HostRoutesResponse = {
 };
 describe("deployment presentation", () => {
   it("uses host plus component identity and never equates enablement with health", () => {
-    const rows = placementRows(host, [{ host_id: "a", component_id: "access", status: "enabled" }], [component], {
+    const rows = deploymentRows(host, [{ host_id: "a", component_id: "access", status: "enabled" }], [component], {
       components: [{ host_id: "b", component_id: "access", status: "healthy" }]
     });
     expect(rows[0].status).toBe("unknown");
-    expect(canTogglePlacement(host, rows[0])).toBe(true);
-    expect(canTogglePlacement(host, { ...rows[0], definition: { ...component, protected: true } })).toBe(false);
-    expect(canTogglePlacement(host, { ...rows[0], definition: undefined })).toBe(false);
-    expect(canTogglePlacement({ ...host, status: "disabled" }, rows[0])).toBe(false);
     expect(
-      placementRows({ ...host, status: "disabled" }, [rows[0].placement], [component], {
+      deploymentRows({ ...host, status: "disabled" }, [rows[0].deployment], [component], {
         components: [{ host_id: "a", component_id: "access", status: "healthy" }]
       })[0].status
     ).toBe("disabled");

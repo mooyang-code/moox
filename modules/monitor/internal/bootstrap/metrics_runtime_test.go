@@ -38,8 +38,8 @@ func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T
 	}
 	now := time.Now().UTC()
 	snapshot := domain.TopologySnapshot{Catalog: catalog, ObservedAt: now,
-		Hosts:      []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}},
-		Placements: []domain.TopologyPlacement{{HostID: "control", ComponentID: "factor-mgr", Status: "enabled"}},
+		Hosts:       []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}},
+		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "factor-mgr", Status: "enabled"}},
 	}
 	repos := manager.Repositories()
 	_, err = repos.Topology.Reconcile(t.Context(), snapshot, nil)
@@ -60,7 +60,7 @@ func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T
 	checks, err := repos.Checks.List(t.Context(), store.ListChecksOptions{Source: domain.CheckSourceObservability, Page: store.Page{PageSize: 10}})
 	require.NoError(t, err)
 	require.Len(t, checks, 1)
-	snapshot.Placements[0].Status = "disabled"
+	snapshot.Deployments[0].Status = "disabled"
 	_, err = repos.Topology.Reconcile(t.Context(), snapshot, nil)
 	require.NoError(t, err)
 	require.NoError(t, run(t.Context()))
@@ -70,7 +70,7 @@ func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T
 	results, err = repos.Results.Recent(t.Context(), "mooxsys", id, 10)
 	require.NoError(t, err)
 	require.Len(t, results, 2, "disable does not fabricate a successful report")
-	snapshot.Placements[0].Status = "enabled"
+	snapshot.Deployments[0].Status = "enabled"
 	_, err = repos.Topology.Reconcile(t.Context(), snapshot, nil)
 	require.NoError(t, err)
 	require.NoError(t, run(t.Context()))
@@ -80,13 +80,13 @@ func TestReporterExpectationWithNoProbeUsesStableDeploymentIdentity(t *testing.T
 	results, err = repos.Results.Recent(t.Context(), "mooxsys", id, 10)
 	require.NoError(t, err)
 	require.Len(t, results, 3)
-	snapshot.Placements = nil
+	snapshot.Deployments = nil
 	_, err = repos.Topology.Reconcile(t.Context(), snapshot, nil)
 	require.NoError(t, err)
 	require.NoError(t, run(t.Context()))
 	check, err = repos.Checks.Get(t.Context(), "mooxsys", id)
 	require.NoError(t, err)
-	require.False(t, check.Enabled, "deleting a placement retires its reporter check")
+	require.False(t, check.Enabled, "deleting a deployment retires its reporter check")
 
 }
 

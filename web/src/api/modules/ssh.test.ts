@@ -7,7 +7,7 @@ vi.mock("@/api/gateway", () => ({
   gatewayWebSocketURL: (path: string) => path
 }));
 
-import { getSftpDownloadUrl, getSftpUploadUrl, getSSHWebSocketUrl } from "./ssh";
+import { createSSHSession, getSftpDownloadUrl, getSftpUploadUrl, getSSHWebSocketUrl } from "./ssh";
 
 describe("raw SSH ticket binding", () => {
   beforeEach(() => callControl.mockReset().mockResolvedValue({ ticket: "ticket-1" }));
@@ -25,5 +25,13 @@ describe("raw SSH ticket binding", () => {
   it("passes the SSH session when issuing an upload ticket", async () => {
     await getSftpUploadUrl("ssh-3");
     expect(callControl).toHaveBeenCalledWith("auth", "IssueRawSessionTicket", { operation: "sftp_upload", session_id: "ssh-3" });
+  });
+});
+
+describe("SSH session creation", () => {
+  it("passes the registered host id as a string", async () => {
+    callControl.mockReset().mockResolvedValue({ session_id: "ssh-9" });
+    await createSSHSession({ host_id: "control" });
+    expect(callControl).toHaveBeenCalledWith("ssh", "CreateSession", { host_id: "control" });
   });
 });

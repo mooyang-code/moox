@@ -14,7 +14,7 @@ describe("health display", () => {
   });
   it("links each alert to the page that handles it", () => {
     expect(alertLink({ type: "host", host_id: "control", agent_id: "pwU2" })).toEqual({
-      href: "#/ops/hosts?tab=monitor&agent_id=pwU2&host_id=control",
+      href: "#/ops/hosts?tab=monitor&host_id=control",
       label: "查看主机"
     });
     expect(alertLink({ type: "dataset", producer: "strategy" }).href).toBe("#/strategy/tasks");

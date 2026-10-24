@@ -41,7 +41,7 @@ func (r *TopologyRepository) Reconcile(ctx context.Context, snapshot domain.Topo
 			return err
 		}
 		var err error
-		count, err = reconcilePlacementChecks(tx, checks)
+		count, err = reconcileDeploymentChecks(tx, checks)
 		if err != nil {
 			return err
 		}

@@ -6,12 +6,12 @@ import (
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/alerting"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
+	monitordeployment "github.com/mooyang-code/moox/modules/monitor/internal/deployment"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/healthview"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	monitorplacement "github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/probe"
 	monitorrpc "github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
@@ -64,12 +64,12 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 	if cfg == nil || runtime == nil {
 		return nil
 	}
-	if !cfg.Placement.Enabled {
+	if !cfg.Deployment.Enabled {
 		registerMonitorSyncTimer(s, nil)
 		return nil
 	}
-	syncer := monitorplacement.NewSyncer(runtime.Repositories.Topology, monitorplacement.NewClientSource(runtime.Gateway), cfg.Placement.HTTPS, runtime.Repositories.Gateways)
-	syncer.SetLocalHost(cfg.Placement.LocalHostID)
+	syncer := monitordeployment.NewSyncer(runtime.Repositories.Topology, monitordeployment.NewClientSource(runtime.Gateway), cfg.Deployment.HTTPS, runtime.Repositories.Gateways)
+	syncer.SetLocalHost(cfg.Deployment.LocalHostID)
 	syncFunc := serializedMonitorSync(func(syncCtx context.Context) (int, error) {
 		count, err := syncer.Sync(syncCtx)
 		if err != nil {
@@ -93,12 +93,12 @@ func monitorSyncFunc(ctx context.Context, s *server.Server, cfg *config.Config, 
 
 func registerMonitorSyncTimer(s *server.Server, handler func(context.Context) error) {
 	if s == nil {
-		log.Warn("monitor placement timer server is unavailable, skip register")
+		log.Warn("monitor deployment timer server is unavailable, skip register")
 		return
 	}
-	service := s.Service("trpc.moox.monitor.placement.timer")
+	service := s.Service("trpc.moox.monitor.deployment.timer")
 	if service == nil {
-		log.Warn("monitor placement timer service is not configured, skip register")
+		log.Warn("monitor deployment timer service is not configured, skip register")
 		return
 	}
 	if handler == nil {
@@ -124,11 +124,11 @@ func monitorSyncHandler(syncFunc func(context.Context) (int, error)) func(contex
 	return func(ctx context.Context) error {
 		n, err := syncFunc(ctx)
 		if err != nil {
-			log.WarnContextf(ctx, "monitor placement sync failed: %v", err)
+			log.WarnContextf(ctx, "monitor deployment sync failed: %v", err)
 			return err
 		}
 		if n > 0 {
-			log.InfoContextf(ctx, "monitor placement sync updated %d checks", n)
+			log.InfoContextf(ctx, "monitor deployment sync updated %d checks", n)
 		}
 		return nil
 	}

@@ -2,10 +2,8 @@ package configinit
 
 import (
 	"context"
-	"encoding/base64"
 	"strings"
 	"testing"
-	"unicode/utf16"
 
 	"github.com/mooyang-code/moox/packages/cloudprovider/tencent"
 )
@@ -20,7 +18,7 @@ func statusOf(report ProbeReport, name string) (string, string) {
 }
 
 func TestEvaluateAcceptsAWellEquippedLinuxMachine(t *testing.T) {
-	report := evaluate(parseFacts("os=Linux\narch=x86_64\nosname=Ubuntu 26.04 LTS\ncpu=88\nmem_kb=263854080\ndisk_kb=1800000000\n"), true)
+	report := evaluate(parseFacts("os=Linux\narch=x86_64\nosname=Ubuntu 26.04 LTS\ncpu=88\nmem_kb=263854080\ndisk_kb=1800000000\n"))
 	if !report.OK || report.OS != "linux" {
 		t.Fatalf("report = %+v", report)
 	}
@@ -35,7 +33,7 @@ func TestEvaluateAcceptsAWellEquippedLinuxMachine(t *testing.T) {
 }
 
 func TestEvaluateWarnsBelowTheRecommendationButOnlyFailsWhenItCannotInstall(t *testing.T) {
-	report := evaluate(parseFacts("os=Darwin\narch=arm64\nosname=macOS 15.1\ncpu=4\nmem_bytes=8589934592\ndisk_kb=10485760\n"), true)
+	report := evaluate(parseFacts("os=Linux\narch=arm64\nosname=Ubuntu 26.04\ncpu=4\nmem_kb=8388608\ndisk_kb=10485760\n"))
 	if !report.OK {
 		t.Fatalf("只是低于建议配置时应通过: %+v", report)
 	}
@@ -45,55 +43,38 @@ func TestEvaluateWarnsBelowTheRecommendationButOnlyFailsWhenItCannotInstall(t *t
 		}
 	}
 
-	minimal := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\n"), true)
+	minimal := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\n"))
 	if !minimal.OK {
 		t.Fatal("满足最低配置时应通过")
 	}
-	tinyDisk := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=1048576\n"), true)
+	tinyDisk := evaluate(parseFacts("os=Linux\ncpu=16\nmem_kb=33554432\ndisk_kb=1048576\n"))
 	if tinyDisk.OK {
 		t.Fatal("可用磁盘不足 5 GB 时应失败")
 	}
 }
 
-func TestEvaluateWindowsAndUnknownSystems(t *testing.T) {
-	windows := evaluate(parseFacts("os=Windows\nosname=Microsoft Windows 11 专业版\ncpu=16\nmem_bytes=34359738368\ndisk_bytes=214748364800\n"), true)
-	if !windows.OK || windows.OS != "windows" {
-		t.Fatalf("Windows 可以登记: %+v", windows)
-	}
-	if status, detail := statusOf(windows, "系统"); status != CheckWarn || !strings.Contains(detail, "手动安装") {
-		t.Fatalf("Windows 应提醒一键安装暂不支持，实际 %s %s", status, detail)
-	}
-	if unknown := evaluate(parseFacts("garbage"), true); unknown.OK {
-		t.Fatal("认不出系统时应失败")
-	}
-}
-
-func TestPowershellCommandCarriesTheScriptAsUTF16(t *testing.T) {
-	command := powershellCommand()
-	encoded := command[strings.LastIndex(command, " ")+1:]
-	raw, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil || len(raw)%2 != 0 {
-		t.Fatalf("不是合法的 UTF-16LE base64: %v", err)
-	}
-	units := make([]uint16, len(raw)/2)
-	for i := range units {
-		units[i] = uint16(raw[2*i]) | uint16(raw[2*i+1])<<8
-	}
-	if string(utf16.Decode(units)) != windowsProbe {
-		t.Fatal("解码后应与检测脚本一致")
+func TestEvaluateRejectsNonLinuxSystems(t *testing.T) {
+	for name, facts := range map[string]string{
+		"macOS":   "os=Darwin\narch=arm64\nosname=macOS 15.1\ncpu=16\nmem_kb=33554432\ndisk_kb=104857600\n",
+		"Windows": "os=Windows\nosname=Microsoft Windows 11\ncpu=16\n",
+		"未知":      "garbage",
+	} {
+		report := evaluate(parseFacts(facts))
+		if report.OK {
+			t.Fatalf("%s：因子引擎只支持 Linux，应拒绝: %+v", name, report)
+		}
+		if status, detail := statusOf(report, "系统"); status != CheckFail || !strings.Contains(detail, "只支持 Linux") && name != "未知" {
+			t.Fatalf("%s：系统检测应失败并说明只支持 Linux，实际 %s %s", name, status, detail)
+		}
 	}
 }
 
 func TestFactorServerNormalize(t *testing.T) {
-	local, err := FactorServer{Mode: " local ", Address: "x", SSHPassword: "secret"}.normalize()
-	if err != nil || local != (FactorServer{Mode: FactorLocal}) {
-		t.Fatalf("本机模式应丢掉其余字段: %+v %v", local, err)
-	}
-	remote, err := FactorServer{Mode: FactorRemote, Address: " 192.168.0.9 ", SSHUser: " me ", SSHPassword: " pw "}.normalize()
+	remote, err := FactorServer{Address: " 192.168.0.9 ", SSHUser: " me ", SSHPassword: " pw "}.normalize()
 	if err != nil || remote.Address != "192.168.0.9" || remote.SSHUser != "me" || remote.SSHPassword != " pw " || remote.SSHPort != 22 {
 		t.Fatalf("remote = %+v %v", remote, err)
 	}
-	for _, bad := range []FactorServer{{Mode: ""}, {Mode: FactorRemote, SSHUser: "u", SSHPassword: "p"}, {Mode: FactorRemote, Address: "a", SSHUser: "u", SSHPassword: "p", SSHPort: 70000}} {
+	for _, bad := range []FactorServer{{}, {SSHUser: "u", SSHPassword: "p"}, {Address: "a", SSHUser: "u", SSHPassword: "p", SSHPort: 70000}} {
 		if _, err := bad.normalize(); err == nil {
 			t.Fatalf("%+v 应被拒绝", bad)
 		}

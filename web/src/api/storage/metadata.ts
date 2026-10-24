@@ -1,6 +1,5 @@
 import { callStorage as callMetadata, type StorageCallOptions } from "./http";
 import type {
-  DataNode,
   DataNodeListItem,
   DataSource,
   Dataset,
@@ -227,15 +226,6 @@ export function listViewRebuildLogs(params: { space_id: string; view_id: string;
 
 export function listDataNodes(params: { status?: string; page?: Page }) {
   return callMetadata<typeof params, RetRsp & { items: DataNodeListItem[]; page_result: PageResult }>("ListDataNodes", params);
-}
-
-export async function updateDataNode(params: { node_id: string; name: string; status: string }) {
-  const rsp = await callMetadata<typeof params, RetRsp & { node: DataNode }>("UpdateDataNode", params);
-  return rsp.node;
-}
-
-export function deleteDataNode(params: { node_id: string }) {
-  return callMetadata<typeof params, RetRsp & { node: DataNode }>("DeleteDataNode", params);
 }
 
 /** 分页读取空间内全部数据集（最多 20 页 × 500 条）。 */

@@ -42,7 +42,7 @@ func servicePtr(c *Catalog, path string) *Service {
 
 func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 	c := mustCatalog(t)
-	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "console-proxy": 19528, "web-host": 19527, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "cloudfunction": 11411, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-node": 20212, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451}
+	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "console-proxy": 19528, "web-host": 19527, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "cloudfunction": 11411, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-node": 20212, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "factor-engine": 11417, "archive-worker": 11418}
 	if len(c.Components) != len(want) {
 		t.Fatalf("components = %d", len(c.Components))
 	}
@@ -102,13 +102,32 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		{"console without permission", func(c *Catalog) {
 			servicePtr(c, cloud).ACL = []Grant{{Methods: []string{"CollectGarbage"}, Callers: []string{"admin"}}}
 		}},
-		{"ambiguous console method", func(c *Catalog) { servicePtr(c, "trpc.moox.ops.Ssh").ConsoleName = "sysdeploy" }},
+		{"ambiguous console method", func(c *Catalog) { servicePtr(c, "trpc.moox.admin.SpaceMgr").ConsoleName = "storage" }},
 		{"unknown principal method", func(c *Catalog) { c.Principals[0].Allow[0].Methods = []string{"Unregistered"} }},
 		{"unknown principal service", func(c *Catalog) { c.Principals[0].Allow[0].Service = "trpc.moox.typo.Service" }},
 		{"duplicate principal", func(c *Catalog) { c.Principals = append(c.Principals, c.Principals[0]) }},
 		{"host instance on business service", func(c *Catalog) { servicePtr(c, cloud).ACL[0].Callers = []string{"host-gateway@*"} }},
 		{"unsafe doctor path", func(c *Catalog) { c.Components[0].Doctor.WritablePaths = []string{"../outside"} }},
 		{"unknown dependency", func(c *Catalog) { c.Components[0].Doctor.Dependencies = []string{"unknown"} }},
+		{"regular component shares an external principal ID", func(c *Catalog) { componentPtr(c, "factor-engine").ExternalProgram = false }},
+		{"external program without its principal", func(c *Catalog) {
+			c.Principals = slices.DeleteFunc(c.Principals, func(p Principal) bool { return p.ID == "factor-engine" })
+		}},
+		{"external program declares a service", func(c *Catalog) {
+			componentPtr(c, "factor-engine").Services = []Service{{Path: "trpc.moox.factor.Engine", Port: 11999, Methods: []string{"Ping"}}}
+		}},
+		{"external program declares a port", func(c *Catalog) { componentPtr(c, "archive-worker").Ports = []int{11999} }},
+		{"external program without a health port", func(c *Catalog) {
+			component := componentPtr(c, "archive-worker")
+			component.Health = Health{Kind: "none"}
+		}},
+		{"external program with loopback health", func(c *Catalog) { componentPtr(c, "archive-worker").Health.Loopback = true }},
+		{"external program is an internal caller", func(c *Catalog) { servicePtr(c, cloud).ACL[0].Callers = []string{"factor-engine"} }},
+		{"external program outside systemd", func(c *Catalog) { componentPtr(c, "factor-engine").Doctor.Supervisor = SupervisorMooxRuntime }},
+		{"systemd unit is missing", func(c *Catalog) { componentPtr(c, "factor-engine").Doctor.Unit = "" }},
+		{"systemd unit is malformed", func(c *Catalog) { componentPtr(c, "factor-engine").Doctor.Unit = "../factor" }},
+		{"unit without systemd", func(c *Catalog) { componentPtr(c, "monitor").Doctor.Unit = "moox-monitor" }},
+		{"unknown supervisor", func(c *Catalog) { componentPtr(c, "monitor").Doctor.Supervisor = "launchd" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -133,8 +152,8 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"trade", "trpc.moox.ops.SecretMgr", "GetSecretValue", true},
 		{"console", "trpc.moox.admin.CollectorPublishLease", "AcquireCollectorPublishLease", true},
 		{"cloudfunction", "trpc.moox.admin.CollectorPublishLease", "BeginCollectorPublishOperation", true},
-		{"console", "trpc.moox.ops.SysDeploy", "SyncHostPlacements", false},
-		{"moox-cli", "trpc.moox.ops.SysDeploy", "SyncHostPlacements", true},
+		{"console", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", false},
+		{"moox-cli", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", true},
 		{"monitor", "trpc.moox.collector.CollectMgr", "GetTaskResultInventory", true},
 		{"monitor", "trpc.moox.collector.CollectMgr", "GetTaskList", false},
 		{"monitor", "trpc.moox.collector.CollectMgr", "CreateTask", false},
@@ -146,11 +165,11 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"monitor", "trpc.moox.storage.PrimaryStore", "WriteFactorRows", false},
 		{"monitor", "trpc.moox.storage.PrimaryStore", "DeleteDatasetRows", false},
 		{"monitor", "trpc.moox.ops.SysDeploy", "ListHosts", true},
-		{"monitor", "trpc.moox.ops.SysDeploy", "ListPlacements", true},
+		{"monitor", "trpc.moox.ops.SysDeploy", "ListDeployments", true},
 		{"monitor", "trpc.moox.ops.SysDeploy", "GetHostRoutes", true},
 		{"monitor", "trpc.moox.ops.SysDeploy", "SetHostStatus", false},
-		{"monitor", "trpc.moox.ops.SysDeploy", "SetPlacementStatus", false},
-		{"monitor", "trpc.moox.ops.SysDeploy", "SyncHostPlacements", false},
+		{"monitor", "trpc.moox.ops.SysDeploy", "SetDeploymentStatus", false},
+		{"monitor", "trpc.moox.ops.SysDeploy", "SyncHostDeployments", false},
 		{"strategy", "trpc.moox.trade.TradeConsoleService", "GetLogicalAccount", true},
 		{"strategy", "trpc.moox.trade.TradeConsoleService", "PlaceManualOrder", false},
 		{"console", "trpc.moox.trade.TradeConsoleService", "ClaimLogicalAccountOwner", false},
@@ -368,6 +387,66 @@ func TestCollectorActivationPermissionRemainsBounded(t *testing.T) {
 	for _, method := range []string{"RebindDatasetDataNode", "DeleteDataNode", "RegisterDataNode"} {
 		if c.Allowed("collector", "trpc.moox.storage.Metadata", method) {
 			t.Fatalf("unexpected Collector administration grant: %s", method)
+		}
+	}
+}
+
+// 外部程序组件：以同名外部身份经 Access 访问系统，目录里它们没有服务，也不出现在任何内部 ACL 里。
+func TestExternalProgramComponents(t *testing.T) {
+	c := mustCatalog(t)
+	for _, id := range []string{"factor-engine", "archive-worker"} {
+		component, ok := c.Component(id)
+		if !ok || !component.ExternalProgram || component.Doctor.Supervisor != SupervisorSystemdUser || component.Doctor.Unit != "moox-"+id {
+			t.Fatalf("external program %s is not registered correctly: %+v", id, component)
+		}
+		if len(component.Services) != 0 || len(component.Ports) != 0 || component.Health.Kind != "readyz" || component.Health.Loopback {
+			t.Fatalf("external program %s must only own a health port", id)
+		}
+		for _, other := range c.Components {
+			for _, service := range other.Services {
+				for _, grant := range service.ACL {
+					if slices.Contains(grant.Callers, id) {
+						t.Fatalf("%s is an internal caller of %s", id, service.Path)
+					}
+				}
+			}
+		}
+	}
+	if err := ValidateSupervisor("", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSupervisor(SupervisorSystemdUser, "moox-factor-engine"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 部署页和控制台只读：启停、主机登记、数据节点修改与归档 worker 退役只留给 moox-cli。
+func TestConsoleCannotMutateDeploymentState(t *testing.T) {
+	c := mustCatalog(t)
+	for _, tc := range []struct{ path, method string }{
+		{"trpc.moox.ops.SysDeploy", "SetHostStatus"},
+		{"trpc.moox.ops.SysDeploy", "SetDeploymentStatus"},
+		{"trpc.moox.ops.SysDeploy", "SyncHostDeployments"},
+		{"trpc.moox.ops.SysDeploy", "DeleteHost"},
+		{"trpc.moox.storage.Metadata", "UpdateDataNode"},
+		{"trpc.moox.storage.Metadata", "DeleteDataNode"},
+		{"trpc.moox.archive.ArchiveMgr", "RetireArchiveWorker"},
+	} {
+		if c.Allowed("console", tc.path, tc.method) {
+			t.Fatalf("console can call %s/%s", tc.path, tc.method)
+		}
+		if !c.Allowed("moox-cli", tc.path, tc.method) {
+			t.Fatalf("moox-cli cannot call %s/%s", tc.path, tc.method)
+		}
+	}
+	for _, tc := range []struct{ path, method string }{
+		{"trpc.moox.ops.SysDeploy", "ListHosts"},
+		{"trpc.moox.ops.SysDeploy", "ListDeployments"},
+		{"trpc.moox.storage.Metadata", "ListDataNodes"},
+		{"trpc.moox.storage.Metadata", "GetDataNode"},
+	} {
+		if !c.Allowed("console", tc.path, tc.method) {
+			t.Fatalf("console lost read access to %s/%s", tc.path, tc.method)
 		}
 	}
 }

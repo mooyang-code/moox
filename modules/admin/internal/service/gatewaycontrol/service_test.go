@@ -56,7 +56,7 @@ func newControlFixture(t *testing.T) *controlFixture {
 	require.NoError(t, f.topology.SyncHosts(context.Background(), []sysdeploy.HostSpec{
 		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host", "collector"}},
 		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-node", "storage-view"}},
-		{HostID: "compute-1", Address: "compute.example.test", Components: []string{"access", "trade"}},
+		{HostID: "overseas", Address: "compute.example.test", Components: []string{"access", "trade"}},
 	}))
 	f.keys, err = keys.NewStore(f.db, fixtureMaster)
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestSnapshotsCoverActualKeysAndOnlyTargetHostPermissions(t *testing.T) {
 	storage := f.snapshot(t, "storage")
 	require.NotEmpty(t, storage.Hash)
 	for _, key := range storage.VerificationKeys {
-		require.NotContains(t, []string{"scf-collector", "factor-engine", "moox-skill", "admin", "host-gateway@compute-1"}, key.Caller)
+		require.NotContains(t, []string{"scf-collector", "factor-engine", "moox-skill", "admin", "host-gateway@overseas"}, key.Caller)
 	}
 	unchanged, err := f.service.PullSnapshot(hostContext("storage"), &pb.PullSnapshotReq{HostId: "storage", CurrentHash: storage.Hash})
 	require.NoError(t, err)
@@ -148,7 +148,7 @@ func TestSnapshotReadsTopologyAndKeysFromOneDatabaseState(t *testing.T) {
 	writerDB := openControlDB(t, f.path)
 	var changed atomic.Bool
 	require.NoError(t, f.db.Callback().Query().After("gorm:query").Register("fixture:rotate-after-topology", func(tx *gorm.DB) {
-		if tx.Statement.Table != "t_placements" || !changed.CompareAndSwap(false, true) {
+		if tx.Statement.Table != "t_deployments" || !changed.CompareAndSwap(false, true) {
 			return
 		}
 		require.NoError(t, writerDB.Transaction(func(writer *gorm.DB) error {
@@ -288,7 +288,7 @@ func TestMissingMasterCopiesFailClosedUntilExplicitProvisioning(t *testing.T) {
 	f := newControlFixture(t)
 	ctx := context.Background()
 	before := f.snapshot(t, "control")
-	require.NoError(t, f.topology.SyncHostPlacements(ctx, sysdeploy.HostSpec{HostID: "new-host", Address: "new.example.test"}))
+	require.NoError(t, f.topology.SyncHostDeployments(ctx, sysdeploy.HostSpec{HostID: "new-host", Address: "new.example.test"}))
 	response, err := f.service.PullSnapshot(hostContext("control"), &pb.PullSnapshotReq{HostId: "control"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, response.GetRetInfo().GetCode())

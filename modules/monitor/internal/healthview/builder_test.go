@@ -48,7 +48,10 @@ func TestOverviewV2MixedFactsSnapshot(t *testing.T) {
 	require.Len(t, view.Components, 5)
 	require.Equal(t, "目录中的控制台入口", view.Components[1].Name)
 	require.Equal(t, "healthy", view.Components[1].Status, "page failure must not overwrite proxy readiness")
-	require.Equal(t, "control", view.Hosts[1].HostId, "hostname alone must not consume the registered control host")
+	require.Len(t, view.Hosts, 2, "没有 host_id 的采集器不进入主机列表")
+	require.Equal(t, "control", view.Hosts[0].HostId, "hostname alone must not consume the registered control host")
+	require.Equal(t, "unknown", view.Hosts[0].Status, "登记主机没有上报采集器时显示未上报")
+	require.Equal(t, "offline", view.Hosts[1].HostId)
 	require.Equal(t, int32(1), view.Summary.Components.HealthyCount)
 	require.Equal(t, int32(1), view.Summary.UnregisteredCount)
 	wire, err := protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}.Marshal(view)
@@ -75,7 +78,7 @@ func TestActiveHostAlertsAndRecoveryKeepCauseAndLatestCheckSeparate(t *testing.T
 	require.NoError(t, manager.ApplySchema(schema.SQL()))
 	repos := manager.Repositories()
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
-	checkID := "placement:control:web-host"
+	checkID := "deployment:control:web-host"
 	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: checkID, Name: "任意名称", Kind: domain.CheckKindExternal, Enabled: true}))
 	require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: "failed", CheckID: checkID, Status: "down", ErrorMessage: "health check failed", RawError: "x509: 原始错误\ncertificate expired", CheckedAt: now.Add(-time.Hour)}))
 	for i := 0; i < 20; i++ {
@@ -122,11 +125,11 @@ func TestUnknownTopologyNeverInventsComponentsAndNamesNeverMatchSubstrings(t *te
 }
 
 func TestDisabledHostAgentDoesNotTurnAnEnabledHostIntoSilenceFailure(t *testing.T) {
-	facts := observability.Overview{TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "control", Status: "enabled"}}, Placements: []domain.TopologyPlacement{{HostID: "control", ComponentID: "host-agent", Status: "disabled"}}}, Hosts: []observability.HostStatus{{HostID: "control", AgentID: "AB12", Status: "down", LastSeenAt: time.Now().Add(-time.Hour)}}, GatewaySignals: []observability.GatewaySignal{{HostID: "control", Kind: "heartbeat", Status: "healthy", Reason: "主机网关心跳正常"}}}
+	facts := observability.Overview{TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "control", Status: "enabled"}}, Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "host-agent", Status: "disabled"}}}, Hosts: []observability.HostStatus{{HostID: "control", AgentID: "AB12", Status: "down", LastSeenAt: time.Now().Add(-time.Hour)}}, GatewaySignals: []observability.GatewaySignal{{HostID: "control", Kind: "heartbeat", Status: "healthy", Reason: "主机网关心跳正常"}}}
 	view := projectFacts(facts)
 	require.Equal(t, "healthy", view.Hosts[0].Status)
 	require.Empty(t, view.Alerts)
-	facts.Topology.Placements[0].Status = "enabled"
+	facts.Topology.Deployments[0].Status = "enabled"
 	view = projectFacts(facts)
 	require.Equal(t, "down", view.Hosts[0].Status)
 	require.Len(t, view.Alerts, 1)
@@ -136,10 +139,10 @@ func TestDisabledHostAgentDoesNotTurnAnEnabledHostIntoSilenceFailure(t *testing.
 	require.Empty(t, view.Alerts)
 }
 
-// 主机从拓扑中删除（改名后移除旧主机）：旧主机上的采集代理不再显示，也不再报失联；拓扑未知时照常显示。
+// 主机从拓扑中删除（移除旧主机）：旧主机上的采集代理不再显示，也不再报失联；拓扑未知时照常显示。
 func TestAgentOfRemovedHostIsNeitherListedNorAlerted(t *testing.T) {
 	facts := observability.Overview{TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{{HostID: "overseas", Status: "enabled"}}}, Hosts: []observability.HostStatus{
-		{HostID: "compute-1", AgentID: "OLD1", Status: "down", LastSeenAt: time.Now().Add(-time.Hour)},
+		{HostID: "legacy-1", AgentID: "OLD1", Status: "down", LastSeenAt: time.Now().Add(-time.Hour)},
 		{HostID: "overseas", AgentID: "NEW1", Status: "healthy", LastSeenAt: time.Now()},
 	}}
 	view := projectFacts(facts)
@@ -186,4 +189,31 @@ func TestSeriesLimitAlertIsAWarning(t *testing.T) {
 	require.Equal(t, "metrics_ingest", object.Kind)
 	require.Equal(t, "warning", alertSeverity("metrics_ingest:series_limit", object))
 	require.Equal(t, "critical", alertSeverity("dataset:storage:bars:1m", alertObject("crypto", "dataset:storage:bars:1m", observability.Overview{})), "数据集告警仍是严重")
+}
+
+// 同一台登记主机有新旧两个采集器时只取最近上报的；旧的超时不产生失联告警；没有 host_id 或未登记的采集器不进入主机列表。
+func TestOnlyTheLatestAgentOfEachRegisteredHostSummarizesTheHost(t *testing.T) {
+	now := time.Now()
+	facts := observability.Overview{TopologyKnown: true, Topology: &domain.TopologySnapshot{Hosts: []domain.TopologyHost{
+		{HostID: "control", Status: "enabled"}, {HostID: "storage", Status: "enabled"},
+	}, Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "host-agent", Status: "enabled"}, {HostID: "storage", ComponentID: "host-agent", Status: "enabled"}}}, Hosts: []observability.HostStatus{
+		{HostID: "control", AgentID: "OLD1", Status: "down", LastSeenAt: now.Add(-48 * time.Hour)},
+		{HostID: "control", AgentID: "NEW1", Status: "healthy", LastSeenAt: now},
+		{HostID: "", AgentID: "NOHOST", Hostname: "control", Status: "down", LastSeenAt: now.Add(-time.Hour)},
+		{HostID: "legacy-1", AgentID: "GONE", Status: "down", LastSeenAt: now.Add(-time.Hour)},
+	}}
+	view := projectFacts(facts)
+	require.Len(t, view.Hosts, 2)
+	require.Equal(t, "control", view.Hosts[0].HostId)
+	require.Equal(t, "NEW1", view.Hosts[0].AgentId, "旧采集器不参与汇总")
+	require.Equal(t, "healthy", view.Hosts[0].Status)
+	require.Equal(t, "storage", view.Hosts[1].HostId)
+	require.Equal(t, "unknown", view.Hosts[1].Status, "登记主机没有采集器上报时显示未上报")
+	require.Empty(t, view.Alerts, "旧采集器、无主机、未登记的采集器超时都不产生失联告警")
+
+	facts.Hosts[1].Status = "down"
+	facts.Hosts[1].LastSeenAt = now.Add(-10 * time.Minute)
+	view = projectFacts(facts)
+	require.Len(t, view.Alerts, 1)
+	require.Equal(t, "host-presence:NEW1", view.Alerts[0].Id, "只有当前选中的采集器失联才告警")
 }

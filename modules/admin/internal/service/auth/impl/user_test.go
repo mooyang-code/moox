@@ -19,15 +19,10 @@ func TestGetUserInfoRequiresContextMetadata(t *testing.T) {
 	ctx := context.Background()
 	secretKey := "test-secret-for-get-user-info"
 	user := &model.User{
-		UserID:             "user-1",
-		Username:           "admin",
-		Nickname:           "Admin",
-		Email:              "admin@example.local",
-		Role:               int32(pb.UserRole_USER_ROLE_ADMIN),
-		Status:             int32(pb.UserStatus_USER_STATUS_ACTIVE),
-		CreatedAt:          time.Now(),
-		UpdatedAt:          time.Now(),
-		LastPasswordChange: time.Now(),
+		UserID:    "user-1",
+		Username:  "admin",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
 	}
 	svc := newAuthServiceForUserTest(t, secretKey, user)
 	rsp, err := svc.GetUserInfo(ctx, &pb.GetUserInfoReq{})
@@ -39,10 +34,9 @@ func TestGetUserInfoRequiresContextMetadata(t *testing.T) {
 	}
 }
 
-func authCtx(userID string, role int32) context.Context {
+func authCtx(userID string) context.Context {
 	ctx := trpc.BackgroundContext()
 	trpc.SetMetaData(ctx, model.CtxUserID, []byte(userID))
-	trpc.SetMetaData(ctx, model.CtxUserRole, []byte("2"))
 	return ctx
 }
 

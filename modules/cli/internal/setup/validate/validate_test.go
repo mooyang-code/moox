@@ -78,7 +78,7 @@ port = 22
 username = "ubuntu"
 password = "recognizable-compute-password"
 
-[placements]
+[deployments]
 control = ["admin", "console-proxy", "web-host", "eventbus"]
 overseas = []
 `

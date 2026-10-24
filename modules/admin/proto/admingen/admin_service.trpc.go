@@ -26,8 +26,6 @@ type SpaceMgrService interface {
 	DeleteSpace(ctx context.Context, req *DeleteSpaceReq) (*DeleteSpaceRsp, error)
 
 	ListSpaces(ctx context.Context, req *ListSpacesReq) (*ListSpacesRsp, error)
-
-	ListSpaceMembers(ctx context.Context, req *ListSpaceMembersReq) (*ListSpaceMembersRsp, error)
 }
 
 func SpaceMgrService_CreateSpace_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -102,24 +100,6 @@ func SpaceMgrService_ListSpaces_Handler(svr interface{}, ctx context.Context, f 
 	return rsp, nil
 }
 
-func SpaceMgrService_ListSpaceMembers_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListSpaceMembersReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SpaceMgrService).ListSpaceMembers(ctx, reqbody.(*ListSpaceMembersReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // SpaceMgrServer_ServiceDesc descriptor for server.RegisterService.
 var SpaceMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.admin.SpaceMgr",
@@ -140,10 +120,6 @@ var SpaceMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.admin.SpaceMgr/ListSpaces",
 			Func: SpaceMgrService_ListSpaces_Handler,
-		},
-		{
-			Name: "/trpc.moox.admin.SpaceMgr/ListSpaceMembers",
-			Func: SpaceMgrService_ListSpaceMembers_Handler,
 		},
 	},
 }
@@ -171,9 +147,6 @@ func (s *UnimplementedSpaceMgr) DeleteSpace(ctx context.Context, req *DeleteSpac
 func (s *UnimplementedSpaceMgr) ListSpaces(ctx context.Context, req *ListSpacesReq) (*ListSpacesRsp, error) {
 	return nil, errors.New("rpc ListSpaces of service SpaceMgr is not implemented")
 }
-func (s *UnimplementedSpaceMgr) ListSpaceMembers(ctx context.Context, req *ListSpaceMembersReq) (*ListSpaceMembersRsp, error) {
-	return nil, errors.New("rpc ListSpaceMembers of service SpaceMgr is not implemented")
-}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -190,8 +163,6 @@ type SpaceMgrClientProxy interface {
 	DeleteSpace(ctx context.Context, req *DeleteSpaceReq, opts ...client.Option) (rsp *DeleteSpaceRsp, err error)
 
 	ListSpaces(ctx context.Context, req *ListSpacesReq, opts ...client.Option) (rsp *ListSpacesRsp, err error)
-
-	ListSpaceMembers(ctx context.Context, req *ListSpaceMembersReq, opts ...client.Option) (rsp *ListSpaceMembersRsp, err error)
 }
 
 type SpaceMgrClientProxyImpl struct {
@@ -277,26 +248,6 @@ func (c *SpaceMgrClientProxyImpl) ListSpaces(ctx context.Context, req *ListSpace
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &ListSpacesRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *SpaceMgrClientProxyImpl) ListSpaceMembers(ctx context.Context, req *ListSpaceMembersReq, opts ...client.Option) (*ListSpaceMembersRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.admin.SpaceMgr/ListSpaceMembers")
-	msg.WithCalleeServiceName(SpaceMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("admin")
-	msg.WithCalleeService("SpaceMgr")
-	msg.WithCalleeMethod("ListSpaceMembers")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListSpaceMembersRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

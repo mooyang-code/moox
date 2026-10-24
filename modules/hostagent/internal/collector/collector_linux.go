@@ -265,7 +265,7 @@ func filesystemMetrics() ([]*hostmetricpb.FilesystemMetric, error) {
 }
 func excludedFS(fs string) bool {
 	switch fs {
-	case "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup", "cgroup2", "overlay", "squashfs", "pstore", "securityfs", "debugfs", "tracefs", "configfs", "fusectl", "mqueue", "hugetlbfs", "autofs", "binfmt_misc":
+	case "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup", "cgroup2", "overlay", "squashfs", "pstore", "securityfs", "debugfs", "tracefs", "configfs", "fusectl", "mqueue", "hugetlbfs", "autofs", "binfmt_misc", "efivarfs", "bpf", "rpc_pipefs", "nsfs":
 		return true
 	}
 	return strings.HasPrefix(fs, "nfs") || strings.HasPrefix(fs, "fuse")

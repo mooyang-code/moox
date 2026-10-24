@@ -4,31 +4,6 @@ import { issueRawSessionTicketAPI } from "@/api/modules/user";
 
 // ========== 类型定义 ==========
 
-export interface SSHHost {
-  id?: number;
-  name: string;
-  address: string;
-  port: number;
-  user: string;
-  password?: string;
-  auth_type: "pwd" | "cert";
-  net_type: "tcp4" | "tcp6";
-  cert_data?: string;
-  cert_pwd?: string;
-  font_size: number;
-  background: string;
-  foreground: string;
-  cursor_color: string;
-  font_family: string;
-  cursor_style: "block" | "underline" | "bar";
-  shell: string;
-  pty_type: string;
-  init_cmd?: string;
-  creator?: string;
-  create_time?: string;
-  modify_time?: string;
-}
-
 export interface SftpFileItem {
   path: string;
   name: string;
@@ -45,24 +20,9 @@ export interface PathBreadcrumb {
 
 // SSH 直连端点已并入统一网关 rawhandler，前端直连固定网关端口。
 
-// ========== 主机配置 ==========
-
-export const listSSHHosts = (params: { keyword?: string; offset?: number; limit?: number }) =>
-  callControl<typeof params, { hosts?: SSHHost[]; total?: number }>("ssh", "ListHosts", params);
-
-export const createSSHHost = (data: Partial<SSHHost>) =>
-  callControl<{ host: Partial<SSHHost> }, { id?: number }>("ssh", "CreateHost", { host: data });
-
-export const updateSSHHost = (data: Partial<SSHHost>) =>
-  callControl<{ host: Partial<SSHHost> }, Record<string, never>>("ssh", "UpdateHost", { host: data });
-
-export const deleteSSHHost = (id: number) => callControl<{ id: number }, Record<string, never>>("ssh", "DeleteHost", { id });
-
-export const getSSHHostDetail = (id: number) => callControl<{ id: number }, { host?: SSHHost }>("ssh", "GetHost", { id });
-
 // ========== SSH 会话 ==========
 
-export const createSSHSession = (data: { host_id: number }) =>
+export const createSSHSession = (data: { host_id: string }) =>
   callControl<typeof data, { session_id?: string }>("ssh", "CreateSession", data);
 
 export const disconnectSSHSession = (sessionId: string) =>

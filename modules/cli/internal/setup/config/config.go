@@ -91,6 +91,8 @@ type Paths struct {
 	DeployRoot  string `toml:"deploy_root"`
 	ControlRoot string `toml:"control_root"`
 	StorageRoot string `toml:"storage_root"`
+	// ArchiveRoot 是归档 worker 存放分区文件与暂存库的目录（在运行 worker 的主机上）。
+	ArchiveRoot string `toml:"archive_root"`
 }
 
 // LocalLogs bounds process stdout/stderr and framework log files under each
@@ -110,9 +112,13 @@ func (p Paths) Resolved() Paths {
 	if strings.TrimSpace(p.StorageRoot) == "" {
 		p.StorageRoot = filepath.Join(p.DeployRoot, "storage")
 	}
+	if strings.TrimSpace(p.ArchiveRoot) == "" {
+		p.ArchiveRoot = filepath.Join(p.DeployRoot, "archive")
+	}
 	p.DeployRoot = filepath.Clean(strings.TrimSpace(p.DeployRoot))
 	p.ControlRoot = filepath.Clean(strings.TrimSpace(p.ControlRoot))
 	p.StorageRoot = filepath.Clean(strings.TrimSpace(p.StorageRoot))
+	p.ArchiveRoot = filepath.Clean(strings.TrimSpace(p.ArchiveRoot))
 	return p
 }
 
@@ -137,7 +143,7 @@ type Observability struct {
 	DeliverPolicy string `toml:"deliver_policy"`
 }
 
-// EgressProxy separates upstream policy from service placement.
+// EgressProxy separates upstream policy from service deployment.
 type EgressProxy struct {
 	HTTPDomains []string  `toml:"http_domains"`
 	DNS         EgressDNS `toml:"dns"`
@@ -225,18 +231,26 @@ type Host struct {
 	TLSMode        string
 	// Reachability 为空表示可直达，outbound 表示只能出站。
 	Reachability string
-	// Label 是主机的中文名（例如“海外机”），登记为 Admin 的主机描述，用于界面展示。
+	// Label 是主机的中文名（例如“海外机”），登记到 Admin 用于界面展示；配置里没写时按主机 ID 生成。
 	Label string
+	// PrivateKeyFile 与 PrivateKeyPassphrase 来自 ssh 段，只用于同步控制台终端的登录信息。
+	PrivateKeyFile       string
+	PrivateKeyPassphrase string `json:"-"`
 }
 
+// SSHConfig 是登录主机的方式。password 与 private_key_file 都用于 moox-cli 自己连接主机；
+// 直达主机配了其中之一（私钥优先），才会同步给控制台用作终端登录，没配的主机在控制台里置灰。
 type SSHConfig struct {
 	Port     int    `toml:"port"`
 	Username string `toml:"username"`
 	Password string `toml:"password" json:"-"`
+	// PrivateKeyFile 是运行 moox-cli 的机器上的私钥文件路径，支持以 ~ 开头。
+	PrivateKeyFile       string `toml:"private_key_file"`
+	PrivateKeyPassphrase string `toml:"private_key_passphrase" json:"-"`
 }
 
 type HostDefinition struct {
-	// Label 是主机的中文名，例如“控制机”“存储机”“海外机”“因子机”；英文 ID 是表名里的主机 ID。
+	// Label 是主机的中文名，例如“控制机”“存储机”“海外机”“因子机”；不写时按主机 ID 生成（overseas-2 → 海外机 2）。
 	Label          string `toml:"label"`
 	Address        string `toml:"address"`
 	PrivateAddress string `toml:"private_address"`
@@ -246,15 +260,6 @@ type HostDefinition struct {
 	// Reachability：direct（默认）或 outbound（只能出站，例如家庭网络，经 control 网关反向连接）。
 	Reachability string    `toml:"reachability"`
 	SSH          SSHConfig `toml:"ssh"`
-}
-
-// FactorEngineLocal 表示因子引擎运行在执行 moox-cli 的这台电脑上。
-const FactorEngineLocal = "local"
-
-// FactorEngineReference 记录因子引擎所在的机器：local，或 [hosts.*] 里的主机 ID。
-// 该主机只登记登录方式，不放置组件时不属于 MooX 部署拓扑。
-type FactorEngineReference struct {
-	Host string `toml:"host"`
 }
 
 type SCFCloudAccountConfig struct {
@@ -309,7 +314,7 @@ type Manifest struct {
 	EventBus           EventBus                  `toml:"eventbus"`
 	Paths              Paths                     `toml:"paths"`
 	EgressProxy        EgressProxy               `toml:"egress_proxy"`
-	Placements         map[string][]string       `toml:"placements"`
+	Deployments        map[string][]string       `toml:"deployments"`
 	StorageRetention   StorageRetention          `toml:"storage_retention"`
 	StorageView        StorageView               `toml:"storage_view"`
 	CollectorRetention CollectorRetention        `toml:"collector_retention"`
@@ -319,7 +324,6 @@ type Manifest struct {
 	Factors            FactorSetup               `toml:"factors"`
 	SCFPlan            SCFPlan                   `toml:"scf_plan"`
 	HostCatalog        map[string]HostDefinition `toml:"hosts"`
-	FactorEngineRef    FactorEngineReference     `toml:"factor_engine"`
 }
 
 type Snapshot struct {
@@ -455,21 +459,23 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		section := string(keys[0][0])
 		switch section {
 		case "control_host", "storage_host", "view_host", "strategy_host", "other_hosts":
-			return fmt.Errorf("config_invalid: %s is retired; use [hosts.<host-id>] with address and ssh, and [placements]", section)
+			return fmt.Errorf("config_invalid: %s is retired; use [hosts.<host-id>] with address and ssh, and [deployments]", section)
 		case "hosts":
 			return fmt.Errorf("config_invalid: invalid hosts field; use [hosts.<host-id>] with address and ssh = { port, username, password }")
 		case "scf_fetcher":
 			return fmt.Errorf("config_invalid: [scf_fetcher] is retired; use [scf_plan] (cloud_account, regions, spaces)")
 		case "eventbus":
 			if first == "eventbus.host" {
-				return fmt.Errorf("config_invalid: eventbus.host is derived from the eventbus component in [placements]")
+				return fmt.Errorf("config_invalid: eventbus.host is derived from the eventbus component in [deployments]")
 			}
 		case "dns_resolver":
 			return fmt.Errorf("config_invalid: dns_resolver is retired; use [egress_proxy.dns] and remove trade_node")
 		case "compile_host":
 			return fmt.Errorf("config_invalid: [compile_host] is retired; builds run on the local machine (see docs/构建手册.md); remove [compile_host] and any host that was only used for compiling")
+		case "placements":
+			return fmt.Errorf("config_invalid: [placements] 已改名为 [deployments]；运行 moox-cli config migrate 转换")
 		case "factor_engine":
-			return fmt.Errorf("config_invalid: factor_engine accepts only host = \"local\" or <host-id>; SSH credentials belong to hosts.<host-id>.ssh")
+			return fmt.Errorf("config_invalid: [factor_engine] 已取消：因子机是普通主机，请在 [hosts.<主机ID>] 设置 reachability = \"outbound\"，并在 [deployments] 里为它部署 factor-engine 与 archive-worker；运行 moox-cli config migrate 转换")
 		}
 		return fmt.Errorf("config_invalid: unknown field %s", first)
 	}
@@ -488,12 +494,12 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		definition.TLSMode = strings.ToLower(strings.TrimSpace(definition.TLSMode))
 		definition.Reachability = strings.ToLower(strings.TrimSpace(definition.Reachability))
 		definition.SSH.Username = strings.TrimSpace(definition.SSH.Username)
+		definition.SSH.PrivateKeyFile = strings.TrimSpace(definition.SSH.PrivateKeyFile)
 		if !md.IsDefined("hosts", id, "ssh", "port") {
 			definition.SSH.Port = 22
 		}
 		out.HostCatalog[id] = definition
 	}
-	out.FactorEngineRef.Host = strings.TrimSpace(out.FactorEngineRef.Host)
 	out.Paths = out.Paths.Resolved()
 	if !md.IsDefined("factors", "enabled") {
 		out.Factors.Enabled = false
@@ -656,7 +662,7 @@ func validate(manifest *Manifest) error {
 	if err := validateEgressProxy(&manifest.EgressProxy); err != nil {
 		return err
 	}
-	if err := validatePlacements(manifest); err != nil {
+	if err := validateDeployments(manifest); err != nil {
 		return err
 	}
 	return validateSCFPlan(manifest)
@@ -669,8 +675,9 @@ func validatePaths(paths *Paths) error {
 	paths.DeployRoot = filepath.Clean(strings.TrimSpace(paths.DeployRoot))
 	paths.ControlRoot = filepath.Clean(strings.TrimSpace(paths.ControlRoot))
 	paths.StorageRoot = filepath.Clean(strings.TrimSpace(paths.StorageRoot))
+	paths.ArchiveRoot = filepath.Clean(strings.TrimSpace(paths.ArchiveRoot))
 	for name, value := range map[string]string{
-		"deploy_root": paths.DeployRoot, "control_root": paths.ControlRoot, "storage_root": paths.StorageRoot,
+		"deploy_root": paths.DeployRoot, "control_root": paths.ControlRoot, "storage_root": paths.StorageRoot, "archive_root": paths.ArchiveRoot,
 	} {
 		if value == "" || !filepath.IsAbs(value) || value == "/" || strings.ContainsAny(value, "\x00\r\n") {
 			return fmt.Errorf("config_invalid: paths.%s must be a non-root absolute path", name)
@@ -688,6 +695,9 @@ func validatePaths(paths *Paths) error {
 	}
 	if paths.StorageRoot == paths.DeployRoot || pathsOverlap(paths.StorageRoot, paths.ControlRoot) {
 		return fmt.Errorf("config_invalid: paths.storage_root must not overlap deploy_root or control_root")
+	}
+	if paths.ArchiveRoot == paths.DeployRoot || pathsOverlap(paths.ArchiveRoot, paths.ControlRoot) || pathsOverlap(paths.ArchiveRoot, paths.StorageRoot) {
+		return fmt.Errorf("config_invalid: paths.archive_root must not overlap deploy_root, control_root or storage_root")
 	}
 	return nil
 }
@@ -756,11 +766,11 @@ func validateEgressProxy(cfg *EgressProxy) error {
 	return nil
 }
 
-// PlacementHost returns the selected host for a single component. Multi-copy
+// ComponentHost returns the selected host for a single component. Multi-copy
 // components are addressed through the compiled Directory instead.
-func (m Manifest) PlacementHost(component string) string {
+func (m Manifest) ComponentHost(component string) string {
 	selected := ""
-	for host, components := range m.Placements {
+	for host, components := range m.Deployments {
 		for _, id := range components {
 			if id != component {
 				continue
@@ -773,19 +783,19 @@ func (m Manifest) PlacementHost(component string) string {
 	}
 	return selected
 }
-func validatePlacements(m *Manifest) error {
+func validateDeployments(m *Manifest) error {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return err
 	}
-	for host := range m.Placements {
+	for host := range m.Deployments {
 		if _, ok := m.HostCatalog[host]; !ok {
-			return fmt.Errorf("config_invalid: placements host ID %q is unknown", host)
+			return fmt.Errorf("config_invalid: deployments host ID %q is unknown", host)
 		}
-		for _, id := range m.Placements[host] {
+		for _, id := range m.Deployments[host] {
 			component, ok := catalog.Component(id)
 			if !ok || component.Scope == servicecatalog.ScopeHost {
-				return fmt.Errorf("config_invalid: placements contains an unknown or automatic component")
+				return fmt.Errorf("config_invalid: deployments contains an unknown or automatic component")
 			}
 		}
 	}
@@ -794,7 +804,7 @@ func validatePlacements(m *Manifest) error {
 		return err
 	}
 	if err := catalog.ValidateTopology(topology); err != nil {
-		return fmt.Errorf("config_invalid: placements: %w", err)
+		return fmt.Errorf("config_invalid: deployments: %w", err)
 	}
 	return nil
 }

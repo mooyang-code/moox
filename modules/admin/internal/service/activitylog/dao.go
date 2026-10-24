@@ -47,9 +47,10 @@ type Item struct {
 	CreatedAt time.Time
 }
 
-// Filter 是查询条件；Since 与 Until 为零值表示不限。
+// Filter 是查询条件；Since 与 Until 为零值表示不限。Global 为 true 时只查不属于任何空间的全局事件。
 type Filter struct {
 	SpaceID  string
+	Global   bool
 	Source   string
 	Category string
 	RefID    string
@@ -134,7 +135,9 @@ func (d *DAO) Append(ctx context.Context, entries []Entry, now time.Time) (int, 
 // List 按时间倒序分页查询，返回总数。
 func (d *DAO) List(ctx context.Context, filter Filter) ([]Item, int64, error) {
 	query := d.db.WithContext(ctx).Model(&logRow{})
-	if filter.SpaceID != "" {
+	if filter.Global {
+		query = query.Where("c_space_id = ''")
+	} else if filter.SpaceID != "" {
 		query = query.Where("c_space_id = ?", filter.SpaceID)
 	}
 	if filter.Source != "" {

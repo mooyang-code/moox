@@ -3,10 +3,13 @@
     <div class="moox-inner">
       <div class="page-head">
         <PageTitleTabs v-model="tab" :items="tabs" aria-label="服务部署" />
-        <a-button :loading="loading" :disabled="!!busy" aria-label="刷新部署状态" @click="refresh">刷新</a-button>
+        <a-button :loading="loading" aria-label="刷新部署状态" @click="refresh">刷新</a-button>
       </div>
-      <p class="muted">主机与组件由部署清单登记。停用会撤下路由和健康检查，进程仍由部署工具管理。</p>
-      <a-alert v-if="error" type="error">{{ error }}。以下保留上次数据，健康状态未知，暂不可修改。</a-alert>
+      <p class="muted">
+        主机与组件的新增、部署、启停和移除都通过 moox skill 操作（让 Agent 使用 moox skill
+        完成），控制台只展示。停用会撤下路由和健康检查。
+      </p>
+      <a-alert v-if="error" type="error">{{ error }}。以下保留上次数据，健康状态未知。</a-alert>
       <a-alert v-if="monitorError" type="warning">{{ monitorError }}。组件健康状态暂不可确认。</a-alert>
       <a-alert v-if="locatorError" type="warning">{{ locatorError }}</a-alert>
       <div v-if="requestedHost || requestedComponent" class="locator-filter">
@@ -26,7 +29,9 @@
             <div class="host-heading">
               <div>
                 <h3>
-                  {{ group.host.host_id }} <a-tag v-if="group.host.host_id === controlHostId">控制主机 · 受保护</a-tag
+                  {{ group.host.label || group.host.host_id }}
+                  <small v-if="group.host.label" class="host-id">{{ group.host.host_id }}</small>
+                  <a-tag v-if="group.host.host_id === controlHostId">控制主机 · 受保护</a-tag
                   ><a-tag v-if="group.host.status === 'disabled'">已停用</a-tag
                   ><a-tag v-if="group.host.reachability === 'outbound'">只能出站 · 经控制主机中转</a-tag>
                 </h3>
@@ -37,18 +42,6 @@
                 </p>
                 <p v-if="group.host.description" class="muted">{{ group.host.description }}</p>
               </div>
-              <button
-                v-if="group.host.host_id !== controlHostId"
-                type="button"
-                class="status-toggle"
-                role="switch"
-                :aria-checked="group.host.status === 'enabled'"
-                :aria-label="`主机 ${group.host.host_id} 启用状态`"
-                :disabled="!!busy || !!error"
-                @click="toggleHost(group.host)"
-              >
-                {{ group.host.status === "enabled" ? "停用主机" : "启用主机" }}
-              </button>
             </div>
             <p class="gateway-summary">
               主机网关：<strong>{{ error ? "状态未知" : gatewayLabel(routes[group.host.host_id]) }}</strong> · 路由：{{
@@ -60,7 +53,7 @@
               <span v-else-if="syncFor(group.host.host_id).label === '待同步'">（起点尚未观测）</span>
               · 组件：{{
                 group.rows
-                  .map(row => `${row.definition?.name || row.placement.component_id} ${statusLabel(row.status)}`)
+                  .map(row => `${row.definition?.name || row.deployment.component_id} ${statusLabel(row.status)}`)
                   .join(" / ")
               }}
             </p>
@@ -83,11 +76,11 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="row in group.rows" :key="row.key" :data-component-id="row.placement.component_id">
+                  <tr v-for="row in group.rows" :key="row.key" :data-component-id="row.deployment.component_id">
                     <td>
                       <button type="button" class="detail-link" @click="drawerKey = row.key">
-                        {{ row.definition?.name || row.placement.component_id }}</button
-                      ><small>{{ row.placement.component_id }}</small>
+                        {{ row.definition?.name || row.deployment.component_id }}</button
+                      ><small>{{ row.deployment.component_id }}</small>
                     </td>
                     <td>
                       <a-tag :color="statusColor(row.status)">{{ statusLabel(row.status) }}</a-tag
@@ -107,18 +100,12 @@
                       <span v-if="!row.health?.instances?.length" class="muted">暂无上报</span>
                     </td>
                     <td>
-                      <a-tag v-if="row.definition?.protected">受保护</a-tag><span v-else-if="!row.definition">目录中不存在</span
-                      ><button
-                        v-else
-                        type="button"
-                        class="status-toggle"
-                        role="switch"
-                        :aria-checked="row.placement.status === 'enabled'"
-                        :aria-label="`${group.host.host_id} ${row.placement.component_id} 启用状态`"
-                        :disabled="!!busy || !!error || !canTogglePlacement(group.host, row)"
-                        @click="togglePlacement(group.host, row)"
-                      >
-                        {{ row.placement.status === "enabled" ? "停用" : "启用" }}</button
+                      <a-tag v-if="row.definition?.protected">受保护</a-tag
+                      ><a-tag v-if="row.definition?.external_program">外部程序</a-tag
+                      ><span v-if="!row.definition">目录中不存在</span
+                      ><a-tag v-else :color="row.deployment.status === 'enabled' ? 'green' : 'gray'">{{
+                        row.deployment.status === "enabled" ? "已启用" : "已停用"
+                      }}</a-tag
                       ><small v-if="group.host.status === 'disabled'">主机已停用</small>
                     </td>
                   </tr>
@@ -222,16 +209,16 @@
       >
       <a-drawer v-model:visible="drawerVisible" :width="640" title="组件详情" :footer="false">
         <template v-if="detail">
-          <h3>{{ detail.row.definition?.name || detail.row.placement.component_id }}</h3>
+          <h3>{{ detail.row.definition?.name || detail.row.deployment.component_id }}</h3>
           <dl class="component-detail">
             <dt>组件 ID</dt>
-            <dd>{{ detail.row.placement.component_id }}</dd>
+            <dd>{{ detail.row.deployment.component_id }}</dd>
             <dt>二进制</dt>
             <dd>{{ detail.row.definition?.binary || "目录中不存在" }}</dd>
             <dt>部署主机</dt>
             <dd>{{ detail.host.host_id }} · {{ detail.host.address }}</dd>
             <dt>部署状态</dt>
-            <dd>{{ detail.host.status === "disabled" || detail.row.placement.status === "disabled" ? "已停用" : "已启用" }}</dd>
+            <dd>{{ detail.host.status === "disabled" || detail.row.deployment.status === "disabled" ? "已停用" : "已启用" }}</dd>
             <dt>范围 / 副本</dt>
             <dd>{{ detail.row.definition?.scope }} / {{ detail.row.definition?.replicas }}</dd>
             <dt>端口</dt>
@@ -248,7 +235,7 @@
             <dd>{{ statusLabel(detail.row.health?.probe?.status) }} / {{ statusLabel(detail.row.health?.reporter?.status) }}</dd>
             <dt>登记 / 更新</dt>
             <dd>
-              {{ formatCheckedAt(detail.row.placement.created_at) }} / {{ formatCheckedAt(detail.row.placement.updated_at) }}
+              {{ formatCheckedAt(detail.row.deployment.created_at) }} / {{ formatCheckedAt(detail.row.deployment.updated_at) }}
             </dd>
           </dl>
           <section v-if="detail.row.health?.probe?.raw_error">
@@ -282,7 +269,7 @@ import { computed, ref, watch } from "vue";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import RawError from "@/views/ops/monitor/raw-error.vue";
 import { formatCheckedAt, statusColor, statusLabel } from "@/views/ops/monitor/health-display";
-import { canTogglePlacement, componentPorts, gatewayLabel, groupRoutes, routeSync } from "./model";
+import { componentPorts, gatewayLabel, groupRoutes, routeSync } from "./model";
 import TopologyView from "./topology-view.vue";
 import { useDeployments } from "./use-deployments";
 defineOptions({ name: "OpsDeployments" });
@@ -303,7 +290,6 @@ const {
   loaded,
   error,
   monitorError,
-  busy,
   search,
   filter,
   showDisabled,
@@ -324,9 +310,7 @@ const {
   clearLocator,
   selectRouteHost,
   gatewaySignal,
-  refresh,
-  toggleHost,
-  togglePlacement
+  refresh
 } = useDeployments();
 const caller = ref("");
 const method = ref("");
@@ -424,18 +408,10 @@ th {
   border: 0;
   text-align: left;
 }
-.status-toggle {
-  padding: 5px 10px;
-  color: var(--color-text-1);
-  cursor: pointer;
-  background: var(--color-fill-2);
-  border: 1px solid var(--color-border-2);
-  border-radius: 4px;
-  white-space: nowrap;
-}
-.status-toggle:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
+.host-id {
+  margin: 0 8px 0 4px;
+  color: var(--color-text-3);
+  font-weight: normal;
 }
 .empty {
   padding: 24px;

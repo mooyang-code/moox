@@ -22,9 +22,6 @@ import (
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
-// 按角色命名的主机 ID 对应的中文名（docs/部署与运维.md「主机命名」）。
-var hostLabels = map[string]string{"control": "控制机", "storage": "存储机", "overseas": "海外机", "factor": "因子机"}
-
 const defaultFactorSourceDir = "modules/factor/factors"
 
 // MigrateOptions 控制 config migrate 的行为。
@@ -35,6 +32,13 @@ type MigrateOptions struct {
 	RenameFrom, RenameTo string
 	// TLSModeHost / TLSMode 非空时设置该主机的控制台证书模式（--set-tls-mode 主机=auto|public|internal）。
 	TLSModeHost, TLSMode string
+	// FactorsEnabled 非空（"true"/"false"）时设置 [factors] enabled（--set-factors-enabled）。
+	FactorsEnabled string
+	// ReachabilityHost / Reachability 非空时设置该主机的可达性（--set-reachability 主机=direct|outbound）。
+	ReachabilityHost, Reachability string
+	// AddDeploymentHost / AddDeploymentComponents 非空时把这些组件加进该主机的 [deployments] 条目（--add-deployment 主机=组件,组件）。
+	AddDeploymentHost       string
+	AddDeploymentComponents []string
 	// SCFImport 非空时用这份 JSON 整体替换 [scf_plan]，并给相关主机补上 region 与 private_address（--import-scf）。
 	SCFImport string
 	// Write 为 true 时校验通过后写回（备份原文件并重新加密）；否则只预览。
@@ -57,6 +61,11 @@ type HostLabelMigration struct {
 	Label string `json:"label"`
 }
 
+// FactorEngineMigration 记录旧的 [factor_engine] 被转成了哪台主机的只能出站与外部程序部署。
+type FactorEngineMigration struct {
+	Host string `json:"host"`
+}
+
 // HostRename 记录主机 ID 改名涉及的位置数。
 type HostRename struct {
 	From    string `json:"from"`
@@ -64,14 +73,14 @@ type HostRename struct {
 	Changes int    `json:"changes"`
 }
 
-// ComponentRename 记录 [placements] 里一个旧组件身份改成当前名字涉及的位置数。
+// ComponentRename 记录 [deployments] 里一个旧组件身份改成当前名字涉及的位置数。
 type ComponentRename struct {
 	From    string `json:"from"`
 	To      string `json:"to"`
 	Changes int    `json:"changes"`
 }
 
-// legacyComponents 是已经改名的组件身份：旧名字不再出现在服务目录里，[placements] 里还写旧名字会让所有命令拒绝配置。
+// legacyComponents 是已经改名的组件身份：旧名字不再出现在服务目录里，[deployments] 里还写旧名字会让所有命令拒绝配置。
 var legacyComponents = map[string]string{"cloudnode": "cloudfunction"}
 
 // SCFImportReport 记录导入的 SCF 计划概要（地域、空间与市场、更新了网络信息的主机），不含任何配置值。
@@ -88,15 +97,25 @@ type MigrateReport struct {
 	Factors   []FactorMigration    `json:"factors,omitempty"`
 	Labels    []HostLabelMigration `json:"labels,omitempty"`
 	Rename    *HostRename          `json:"rename,omitempty"`
-	// Components 记录 [placements] 里被改成当前名字的旧组件身份（例如 cloudnode → cloudfunction）及位置数。
+	// FactorEngine 不为空表示旧的 [factor_engine] 已转成该主机的 reachability = "outbound" 与两个外部程序部署。
+	FactorEngine *FactorEngineMigration `json:"factor_engine,omitempty"`
+	// Components 记录 [deployments] 里被改成当前名字的旧组件身份（例如 cloudnode → cloudfunction）及位置数。
 	Components []ComponentRename `json:"components,omitempty"`
-	SCF        *SCFImportReport  `json:"scf,omitempty"`
-	TLSMode    map[string]string `json:"tls_mode,omitempty"`
-	Changed    bool              `json:"changed"`
-	Valid      bool              `json:"valid"`
-	Written    bool              `json:"written"`
-	Backup     string            `json:"backup,omitempty"`
-	NextAction string            `json:"next_action,omitempty"`
+	// Deployments 为 true 表示旧的 [placements] 表被改名为 [deployments]。
+	Deployments bool              `json:"deployments,omitempty"`
+	SCF         *SCFImportReport  `json:"scf,omitempty"`
+	TLSMode     map[string]string `json:"tls_mode,omitempty"`
+	// FactorsEnabled 记录 --set-factors-enabled 的结果。
+	FactorsEnabled string `json:"factors_enabled,omitempty"`
+	// Reachability 记录 --set-reachability 的结果。
+	Reachability map[string]string `json:"reachability,omitempty"`
+	// AddedDeployments 记录 --add-deployment 新增到各主机的组件。
+	AddedDeployments map[string][]string `json:"added_deployments,omitempty"`
+	Changed          bool                `json:"changed"`
+	Valid            bool                `json:"valid"`
+	Written          bool                `json:"written"`
+	Backup           string              `json:"backup,omitempty"`
+	NextAction       string              `json:"next_action,omitempty"`
 }
 
 // MigrateFile 在本机解密 moox.toml，把它改写成当前格式并校验；Write 时备份原文件、重新加密写回。
@@ -133,6 +152,27 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 			return report, err
 		}
 		report.TLSMode = map[string]string{opts.TLSModeHost: opts.TLSMode}
+	}
+	if opts.FactorsEnabled != "" {
+		if migrated, err = setFactorsEnabled(migrated, opts.FactorsEnabled); err != nil {
+			return report, err
+		}
+		report.FactorsEnabled = opts.FactorsEnabled
+	}
+	if opts.ReachabilityHost != "" {
+		if migrated, err = setHostReachability(migrated, opts.ReachabilityHost, opts.Reachability); err != nil {
+			return report, err
+		}
+		report.Reachability = map[string]string{opts.ReachabilityHost: opts.Reachability}
+	}
+	if opts.AddDeploymentHost != "" {
+		var added []string
+		if migrated, added, err = addHostDeployments(migrated, opts.AddDeploymentHost, opts.AddDeploymentComponents); err != nil {
+			return report, err
+		}
+		if len(added) > 0 {
+			report.AddedDeployments = map[string][]string{opts.AddDeploymentHost: added}
+		}
 	}
 	if opts.SCFImport != "" {
 		plan, err := readSCFImport(opts.SCFImport)
@@ -345,12 +385,19 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 			return nil, errors.New("[[factors.items]] 是更早的格式，需要先手工拆成 [[factors.definitions]] 与 [[factors.members]]")
 		}
 	}
+	if err := renameLegacyPlacements(blocks, report); err != nil {
+		return nil, err
+	}
+	var err error
+	if blocks, err = migrateFactorEngine(blocks, report); err != nil {
+		return nil, err
+	}
 	if renameFrom != "" || renameTo != "" {
 		if err := renameHost(blocks, renameFrom, renameTo, report); err != nil {
 			return nil, err
 		}
 	}
-	renamePlacementComponents(blocks, report)
+	renameDeploymentComponents(blocks, report)
 	for i := range blocks {
 		if blocks[i].header == "factors.definitions" && blocks[i].array {
 			change, err := migrateFactorBlock(&blocks[i], library)
@@ -367,8 +414,8 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 		if !ok || blocks[i].array || strings.Contains(id, ".") {
 			continue
 		}
-		label, known := hostLabels[id]
-		if !known || blockHasKey(blocks[i], "label") {
+		label := setupconfig.DefaultHostLabel(id)
+		if label == "" || blockHasKey(blocks[i], "label") {
 			continue
 		}
 		b := &blocks[i]
@@ -382,11 +429,121 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 	return []byte(strings.Join(out, "\n")), nil
 }
 
-// renamePlacementComponents 把 [placements] 各主机组件列表里的旧组件身份改成当前名字。
-func renamePlacementComponents(blocks []block, report *MigrateReport) {
+// factorExternalPrograms 是因子机上部署的两个外部程序组件。
+var factorExternalPrograms = []string{"factor-engine", "archive-worker"}
+
+// migrateFactorEngine 把旧的 [factor_engine] host = "<主机>" 转成该主机的 reachability = "outbound"
+// 和 factor-engine、archive-worker 两个部署，并删除 [factor_engine]；local 已不再支持。重复执行结果不变。
+func migrateFactorEngine(blocks []block, report *MigrateReport) ([]block, error) {
+	at := slices.IndexFunc(blocks, func(b block) bool { return b.header == "factor_engine" && !b.array })
+	if at < 0 {
+		return blocks, nil
+	}
+	host := ""
+	for _, line := range blocks[at].lines[1:] {
+		if key, value, ok := keyValue(line); ok && key == "host" {
+			host = strings.TrimSpace(quotedValue(value))
+		}
+	}
+	switch {
+	case host == "":
+		return nil, errors.New("[factor_engine] 没有写 host：把因子机登记成 [hosts.factor]，加 reachability = \"outbound\"，并在 [deployments] 里部署 factor-engine 与 archive-worker，然后删除 [factor_engine]")
+	case host == "local":
+		return nil, errors.New("[factor_engine] host = \"local\" 已不再支持：因子引擎只运行在 Linux 主机上。请把因子机登记成 [hosts.factor]（加 reachability = \"outbound\"），在 [deployments] 里部署 factor-engine 与 archive-worker，然后删除 [factor_engine]")
+	}
+	hostAt := slices.IndexFunc(blocks, func(b block) bool { return b.header == "hosts."+host && !b.array })
+	if hostAt < 0 {
+		return nil, fmt.Errorf("[factor_engine] 指向的主机 %s 没有登记在 [hosts.%s]", host, host)
+	}
+	setBlockKey(&blocks[hostAt], "reachability", `"outbound"`)
+	deployAt := slices.IndexFunc(blocks, func(b block) bool { return b.header == "deployments" && !b.array })
+	if deployAt < 0 {
+		return nil, errors.New("moox.toml 里没有 [deployments]，无法部署因子机上的外部程序")
+	}
+	if err := ensureDeployments(&blocks[deployAt], host, factorExternalPrograms); err != nil {
+		return nil, err
+	}
+	// [factor_engine] 前面紧挨着的说明注释属于它，一并删除。
+	previous := blocks[at-1]
+	for len(previous.lines) > 0 && strings.HasPrefix(strings.TrimSpace(previous.lines[len(previous.lines)-1]), "#") {
+		previous.lines = previous.lines[:len(previous.lines)-1]
+	}
+	blocks[at-1] = previous
+	blocks = slices.Delete(blocks, at, at+1)
+	report.FactorEngine = &FactorEngineMigration{Host: host}
+	return blocks, nil
+}
+
+// ensureDeployments 保证 [deployments] 里主机 host 的单行数组包含 components；没有这个键时追加一行。
+func ensureDeployments(b *block, host string, components []string) error {
+	for i := 1; i < len(b.lines); i++ {
+		key, value, ok := keyValue(b.lines[i])
+		if !ok || key != host {
+			continue
+		}
+		if valueEnd(b.lines, i) != i || !strings.HasSuffix(strings.TrimSpace(value), "]") {
+			return fmt.Errorf("[deployments] 里 %s 的组件列表写成了多行，请手工加上 %s 后再运行", host, strings.Join(components, "、"))
+		}
+		var wanted []string
+		for _, match := range componentPattern.FindAllStringSubmatch(value, -1) {
+			wanted = append(wanted, match[1])
+		}
+		for _, component := range components {
+			if !slices.Contains(wanted, component) {
+				wanted = append(wanted, component)
+			}
+		}
+		quoted := make([]string, len(wanted))
+		for j, id := range wanted {
+			quoted[j] = fmt.Sprintf("%q", id)
+		}
+		b.lines[i] = host + " = [" + strings.Join(quoted, ", ") + "]"
+		return nil
+	}
+	quoted := make([]string, len(components))
+	for j, id := range components {
+		quoted[j] = fmt.Sprintf("%q", id)
+	}
+	line := host + " = [" + strings.Join(quoted, ", ") + "]"
+	end := len(b.lines)
+	for end > 1 && strings.TrimSpace(b.lines[end-1]) == "" {
+		end--
+	}
+	b.lines = append(b.lines[:end], append([]string{line}, b.lines[end:]...)...)
+	return nil
+}
+
+var componentPattern = regexp.MustCompile(`["']([^"']+)["']`)
+
+// renameLegacyPlacements 把旧的 [placements] 表改名为 [deployments]；两张表同时存在时拒绝，避免悄悄丢掉其中一份。
+func renameLegacyPlacements(blocks []block, report *MigrateReport) error {
+	legacy := -1
+	for i, b := range blocks {
+		switch b.header {
+		case "placements":
+			legacy = i
+		case "deployments":
+			for _, other := range blocks {
+				if other.header == "placements" {
+					return errors.New("moox.toml 里同时有 [placements] 与 [deployments]，请手工合并后再运行")
+				}
+			}
+		}
+	}
+	if legacy < 0 {
+		return nil
+	}
+	blocks[legacy].lines[0] = strings.Replace(blocks[legacy].lines[0], "placements", "deployments", 1)
+	blocks[legacy].header = "deployments"
+	report.Deployments = true
+	return nil
+}
+
+// renameDeploymentComponents 把 [deployments] 各主机组件列表里的旧组件身份改成当前名字。
+func renameDeploymentComponents(blocks []block, report *MigrateReport) {
 	counts := map[string]int{}
 	for i := range blocks {
-		if blocks[i].header != "placements" {
+		if blocks[i].header != "deployments" {
 			continue
 		}
 		for j := 1; j < len(blocks[i].lines); j++ {
@@ -471,7 +628,7 @@ func migrateFactorBlock(b *block, library map[string]string) (*FactorMigration, 
 	return &FactorMigration{FactorID: factorID, File: file, RemovedKeys: removed}, nil
 }
 
-// renameHost 改主机表名、[placements] 键以及 access_host / host 引用。
+// renameHost 改主机表名、[deployments] 键以及 access_host / host 引用。
 func renameHost(blocks []block, from, to string, report *MigrateReport) error {
 	if !servicecatalog.ValidHostID(from) || !servicecatalog.ValidHostID(to) || from == to {
 		return errors.New("--rename-host 需要写成 旧ID=新ID，两者都是合法且不同的主机 ID")
@@ -503,7 +660,7 @@ func renameHost(blocks []block, from, to string, report *MigrateReport) error {
 				continue
 			}
 			switch {
-			case b.header == "placements" && key == from:
+			case b.header == "deployments" && key == from:
 				b.lines[j] = strings.Replace(b.lines[j], from, to, 1)
 				rename.Changes++
 			case (key == "access_host" || key == "host") && quotedValue(value) == from:
@@ -660,6 +817,93 @@ func setBlockKey(b *block, key, value string) {
 		}
 	}
 	b.lines = append(b.lines[:at], append([]string{line}, b.lines[at:]...)...)
+}
+
+// setFactorsEnabled 设置 [factors] 的 enabled；没有 [factors] 表时报错，不凭空创建。
+func setFactorsEnabled(plain []byte, value string) ([]byte, error) {
+	if value != "true" && value != "false" {
+		return nil, errors.New("--set-factors-enabled 的取值只能是 true 或 false")
+	}
+	blocks := splitBlocks(strings.Split(string(plain), "\n"))
+	i := slices.IndexFunc(blocks, func(b block) bool { return b.header == "factors" && !b.array })
+	if i < 0 {
+		return nil, errors.New("moox.toml 里没有 [factors]")
+	}
+	setBlockKey(&blocks[i], "enabled", value)
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.lines...)
+	}
+	return []byte(strings.Join(out, "\n")), nil
+}
+
+// setHostReachability 设置 [hosts.<host>] 的 reachability：direct 表示可直达（删除该键），outbound 表示只能出站。
+func setHostReachability(plain []byte, host, mode string) ([]byte, error) {
+	if mode != "direct" && mode != "outbound" {
+		return nil, errors.New("--set-reachability 的取值只能是 direct 或 outbound")
+	}
+	blocks := splitBlocks(strings.Split(string(plain), "\n"))
+	i := slices.IndexFunc(blocks, func(b block) bool { return b.header == "hosts."+host && !b.array })
+	if i < 0 {
+		return nil, fmt.Errorf("moox.toml 里没有主机 %s", host)
+	}
+	if mode == "outbound" {
+		setBlockKey(&blocks[i], "reachability", `"outbound"`)
+	} else {
+		lines := blocks[i].lines[:1]
+		for _, line := range blocks[i].lines[1:] {
+			if key, _, ok := keyValue(line); !ok || key != "reachability" {
+				lines = append(lines, line)
+			}
+		}
+		blocks[i].lines = lines
+	}
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.lines...)
+	}
+	return []byte(strings.Join(out, "\n")), nil
+}
+
+// addHostDeployments 把组件并入 [deployments] 里该主机的列表（没有就新建条目，已有的组件不重复），返回实际新增的组件。
+func addHostDeployments(plain []byte, host string, components []string) ([]byte, []string, error) {
+	blocks := splitBlocks(strings.Split(string(plain), "\n"))
+	if !slices.ContainsFunc(blocks, func(b block) bool { return b.header == "hosts."+host && !b.array }) {
+		return nil, nil, fmt.Errorf("moox.toml 里没有主机 %s", host)
+	}
+	i := slices.IndexFunc(blocks, func(b block) bool { return b.header == "deployments" && !b.array })
+	if i < 0 {
+		return nil, nil, errors.New("moox.toml 里没有 [deployments]")
+	}
+	var current []string
+	for _, line := range blocks[i].lines[1:] {
+		if key, value, ok := keyValue(line); ok && key == host {
+			for _, item := range regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(value, -1) {
+				current = append(current, item[1])
+			}
+		}
+	}
+	var added []string
+	merged := slices.Clone(current)
+	for _, component := range components {
+		if component = strings.TrimSpace(component); component != "" && !slices.Contains(merged, component) {
+			merged = append(merged, component)
+			added = append(added, component)
+		}
+	}
+	if len(added) == 0 {
+		return plain, nil, nil
+	}
+	quoted := make([]string, len(merged))
+	for n, component := range merged {
+		quoted[n] = fmt.Sprintf("%q", component)
+	}
+	setBlockKey(&blocks[i], host, "["+strings.Join(quoted, ", ")+"]")
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.lines...)
+	}
+	return []byte(strings.Join(out, "\n")), added, nil
 }
 
 // setHostTLSMode 设置 [hosts.<host>] 的 tls_mode。

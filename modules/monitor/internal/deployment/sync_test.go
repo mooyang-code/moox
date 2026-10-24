@@ -1,0 +1,261 @@
+package deployment
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"testing"
+	"time"
+
+	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/modules/monitor/internal/store"
+	"github.com/mooyang-code/moox/modules/monitor/schema"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+)
+
+type memorySource struct {
+	snapshot Snapshot
+	err      error
+}
+
+func (s *memorySource) Snapshot(context.Context) (Snapshot, error) { return s.snapshot, s.err }
+
+func testSnapshot(t *testing.T) Snapshot {
+	t.Helper()
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	return Snapshot{Catalog: catalog,
+		Hosts: []*adminpb.DeploymentHost{
+			{HostId: "control", Address: "control.example.test", Region: "ap-guangzhou", Status: "enabled"},
+			{HostId: "storage", Address: "storage.example.test", PrivateAddress: "2001:db8::2", Region: "ap-guangzhou", Status: "enabled"},
+		},
+		Deployments: []*adminpb.ComponentDeployment{
+			{HostId: "control", ComponentId: "console-proxy", Status: "enabled"},
+			{HostId: "storage", ComponentId: "storage-primary", Status: "enabled"},
+		},
+	}
+}
+
+func TestChecksUseCatalogHealthAndPreserveProxyLoopback(t *testing.T) {
+	snapshot := testSnapshot(t)
+	snapshot.LocalHostID = "control"
+	checks, err := Checks(snapshot, map[string]domain.HTTPSConfig{"console-proxy": {
+		URL: "https://console.example.test:9527/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public",
+	}})
+	require.NoError(t, err)
+	require.Len(t, checks, 3)
+	require.Equal(t, "deployment:control:console-proxy", checks[0].CheckID)
+	require.Equal(t, "http://127.0.0.1:19528/readyz", checks[0].URL)
+	require.Equal(t, `"ready":true`, checks[0].BodyContains)
+	require.Equal(t, domain.CheckSourceDeployment, checks[0].Source)
+	require.Equal(t, "console-page:control:console-proxy", checks[1].CheckID)
+	require.Equal(t, "127.0.0.1:9527", checks[1].ConnectAddress)
+	require.Equal(t, "200-399", checks[1].ExpectedStatus)
+	require.Empty(t, checks[1].BodyContains)
+	require.Equal(t, "http://[2001:db8::2]:20210/readyz", checks[2].URL)
+
+	for index := range snapshot.Catalog.Components {
+		if snapshot.Catalog.Components[index].ID == "storage-primary" {
+			snapshot.Catalog.Components[index].Health = servicecatalog.Health{Kind: "none"}
+		}
+	}
+	checks, err = Checks(snapshot, testHTTPS())
+	require.NoError(t, err)
+	require.Len(t, checks, 2, "health:none does not create an unknown probe")
+}
+
+func TestSyncDeploymentLifecyclePreservesHistoryAndRetiresAlerts(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	repos := manager.Repositories()
+	source := &memorySource{snapshot: testSnapshot(t)}
+	syncer := NewSyncer(repos.Topology, source, testHTTPS(), nil)
+	_, err = syncer.Sync(t.Context())
+	require.NoError(t, err)
+	id := CheckID("control", "console-proxy")
+	checkedAt := time.Now().UTC().Add(-time.Minute)
+	nextAt := checkedAt.Add(time.Hour)
+	require.NoError(t, repos.Checks.MarkChecked(t.Context(), "", id, checkedAt, nextAt))
+	require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: "probe", CheckID: id, CheckedAt: checkedAt, Status: "ok", Success: true}))
+	_, err = syncer.Sync(t.Context())
+	require.NoError(t, err)
+	check, err := repos.Checks.Get(t.Context(), "", id)
+	require.NoError(t, err)
+	require.WithinDuration(t, nextAt, *check.NextCheckAt, time.Millisecond)
+	require.NoError(t, repos.Alerts.CreateRule(t.Context(), &domain.AlertRule{RuleID: "default:" + id, CheckID: id, Enabled: true}))
+	require.NoError(t, repos.Alerts.UpsertState(t.Context(), &domain.AlertState{RuleID: "default:" + id, CheckID: id, Status: domain.AlertStatusFiring}))
+
+	for _, disableHost := range []bool{false, true} {
+		if disableHost {
+			source.snapshot.Hosts[0].Status = "disabled"
+		} else {
+			source.snapshot.Deployments[0].Status = "disabled"
+		}
+		_, err = syncer.Sync(t.Context())
+		require.NoError(t, err)
+		check, err = repos.Checks.Get(t.Context(), "", id)
+		require.NoError(t, err)
+		require.False(t, check.Enabled)
+		_, err = repos.Alerts.GetRule(t.Context(), "", "default:"+id)
+		require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+		source.snapshot.Hosts[0].Status, source.snapshot.Deployments[0].Status = "enabled", "enabled"
+		_, err = syncer.Sync(t.Context())
+		require.NoError(t, err)
+		check, err = repos.Checks.Get(t.Context(), "", id)
+		require.NoError(t, err)
+		require.True(t, check.Enabled)
+		require.Nil(t, check.NextCheckAt, "enabled deployment must be checked immediately")
+	}
+
+	// An incomplete API response must not remove checks or the authoritative topology.
+	previousTopology, err := repos.Topology.Snapshot(t.Context())
+	require.NoError(t, err)
+	source.err = errors.New("directory temporarily unavailable")
+	_, err = syncer.Sync(t.Context())
+	require.Error(t, err)
+	preservedTopology, topologyErr := repos.Topology.Snapshot(t.Context())
+	require.NoError(t, topologyErr)
+	require.Equal(t, previousTopology, preservedTopology)
+	source.err = nil
+	source.snapshot.Deployments[0].ComponentId = "unknown-component"
+	_, err = syncer.Sync(t.Context())
+	require.Error(t, err)
+	_, err = repos.Checks.Get(t.Context(), "", id)
+	require.NoError(t, err)
+	source.snapshot.Deployments = source.snapshot.Deployments[1:]
+	_, err = syncer.Sync(t.Context())
+	require.NoError(t, err)
+	_, err = repos.Checks.Get(t.Context(), "", id)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	history, err := repos.Results.Recent(t.Context(), "", id, 10)
+	require.NoError(t, err)
+	require.Empty(t, history)
+}
+
+func testHTTPS() map[string]domain.HTTPSConfig {
+	return map[string]domain.HTTPSConfig{"console-proxy": {URL: "https://console.example.test:9527/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public"}}
+}
+
+func TestSyncRollsBackAllDefinitionsOnOwnershipCollision(t *testing.T) {
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	repos := manager.Repositories()
+	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: CheckID("storage", "storage-primary"), Source: domain.CheckSourceObservability}))
+	syncer := NewSyncer(repos.Topology, &memorySource{snapshot: testSnapshot(t)}, testHTTPS(), nil)
+	count, err := syncer.Sync(t.Context())
+	require.ErrorContains(t, err, "collides")
+	require.Zero(t, count)
+	_, err = repos.Checks.Get(t.Context(), "", CheckID("control", "console-proxy"))
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound, "earlier upserts must roll back")
+}
+
+func TestChecksProbeLocalHostThroughLoopback(t *testing.T) {
+	snapshot := testSnapshot(t)
+	snapshot.Deployments = append(snapshot.Deployments, &adminpb.ComponentDeployment{HostId: "control", ComponentId: "admin", Status: "enabled"})
+	addressOf := func(checks []domain.Check, checkID string) string {
+		for _, check := range checks {
+			if check.CheckID == checkID {
+				return check.URL
+			}
+		}
+		t.Fatalf("check %s not found", checkID)
+		return ""
+	}
+
+	checks, err := Checks(snapshot, testHTTPS())
+	require.NoError(t, err)
+	require.Contains(t, addressOf(checks, "deployment:control:admin"), "control.example.test", "没有指定本机时按对外地址探测")
+	require.Contains(t, addressOf(checks, "deployment:storage:storage-primary"), "storage.example.test", "不知道本机地域时不用私网地址")
+
+	snapshot.LocalHostID = "control"
+	checks, err = Checks(snapshot, testHTTPS())
+	require.NoError(t, err)
+	require.Contains(t, addressOf(checks, "deployment:control:admin"), "127.0.0.1:", "Monitor 所在主机上的组件连回环地址")
+	require.Contains(t, addressOf(checks, "deployment:storage:storage-primary"), "2001:db8::2", "同地域的其他主机按私网地址探测")
+
+	snapshot.Hosts[1].Region = "ap-hongkong"
+	checks, err = Checks(snapshot, testHTTPS())
+	require.NoError(t, err)
+	require.Contains(t, addressOf(checks, "deployment:storage:storage-primary"), "storage.example.test", "跨地域私网不通，按公网地址探测")
+}
+
+// 只能出站的主机：健康检查使用合成主机名，由探测器经 control 中转连接。
+func TestChecksProbeOutboundHostThroughRelay(t *testing.T) {
+	snapshot := testSnapshot(t)
+	snapshot.LocalHostID = "control"
+	snapshot.Hosts = append(snapshot.Hosts, &adminpb.DeploymentHost{HostId: "home", Address: "192.168.0.103", Status: "enabled", Reachability: "outbound"})
+	snapshot.Deployments = append(snapshot.Deployments, &adminpb.ComponentDeployment{HostId: "home", ComponentId: "host-agent", Status: "enabled"})
+	checks, err := Checks(snapshot, testHTTPS())
+	require.NoError(t, err)
+	for _, check := range checks {
+		if check.CheckID == "deployment:home:host-agent" {
+			require.Contains(t, check.URL, "//home.moox-relay:")
+			return
+		}
+	}
+	t.Fatal("outbound host check not found")
+}
+
+// 只能出站主机上的外部程序组件：生成经 control 中转的 readyz 检查（健康端口 11417、11418），不用本机回环；
+// 中转许可包含这两个端口，调用方是 monitor 与 moox-cli。
+func TestChecksProbeExternalProgramsOnOutboundHostThroughRelay(t *testing.T) {
+	snapshot := testSnapshot(t)
+	snapshot.LocalHostID = "control"
+	snapshot.Hosts = append(snapshot.Hosts, &adminpb.DeploymentHost{HostId: "factor", Address: "192.168.0.103", Status: "enabled", Reachability: "outbound"})
+	snapshot.Deployments = append(snapshot.Deployments,
+		&adminpb.ComponentDeployment{HostId: "factor", ComponentId: "host-agent", Status: "enabled"},
+		&adminpb.ComponentDeployment{HostId: "factor", ComponentId: "factor-engine", Status: "enabled"},
+		&adminpb.ComponentDeployment{HostId: "factor", ComponentId: "archive-worker", Status: "enabled"},
+	)
+	checks, err := Checks(snapshot, testHTTPS())
+	require.NoError(t, err)
+	urls := map[string]string{}
+	for _, check := range checks {
+		urls[check.CheckID] = check.URL
+	}
+	require.Contains(t, urls["deployment:factor:factor-engine"], "//factor.moox-relay:11417/readyz")
+	require.Contains(t, urls["deployment:factor:archive-worker"], "//factor.moox-relay:11418/readyz")
+	for _, id := range []string{"deployment:factor:factor-engine", "deployment:factor:archive-worker"} {
+		require.NotContains(t, urls[id], "127.0.0.1", "不设 loopback，经中转探测")
+	}
+
+	catalog, err := servicecatalog.LoadEmbedded()
+	require.NoError(t, err)
+	topology := servicecatalog.Topology{ControlHostID: "control", Hosts: []servicecatalog.Host{
+		{ID: "control", Address: "198.51.100.10", Status: servicecatalog.Enabled},
+		{ID: "factor", Address: "192.168.0.103", Status: servicecatalog.Enabled, Reachability: servicecatalog.ReachabilityOutbound},
+	}}
+	for _, host := range topology.Hosts {
+		for _, id := range []string{"host-gateway", "host-agent"} {
+			topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: host.ID, ComponentID: id, Status: servicecatalog.Enabled})
+		}
+	}
+	for _, id := range []string{"admin", "console-proxy", "web-host", "eventbus"} {
+		topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: "control", ComponentID: id, Status: servicecatalog.Enabled})
+	}
+	topology.Deployments = append(topology.Deployments,
+		servicecatalog.Deployment{HostID: "factor", ComponentID: "factor-engine", Status: servicecatalog.Enabled},
+		servicecatalog.Deployment{HostID: "factor", ComponentID: "archive-worker", Status: servicecatalog.Enabled})
+	compiled, err := catalog.Compile(topology, "control")
+	require.NoError(t, err)
+	var ports []int
+	for _, relay := range compiled.Relays {
+		if relay.HostID != "factor" {
+			continue
+		}
+		for _, port := range relay.Ports {
+			if port.Port == 11417 || port.Port == 11418 {
+				ports = append(ports, port.Port)
+				require.ElementsMatch(t, []string{"monitor", "moox-cli"}, port.Callers)
+			}
+		}
+	}
+	require.ElementsMatch(t, []int{11417, 11418}, ports)
+}

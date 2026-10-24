@@ -67,7 +67,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupInitCommand(deps),
 		newSetupFactorsCommand(deps),
 		newSetupHostsCommand(deps),
-		newSetupSyncPlacementsCommand(deps),
+		newSetupSyncDeploymentsCommand(deps),
 		newSetupRemoveHostCommand(deps),
 		newSetupValidateCommand(deps),
 		newSetupTrustHostCommand(deps),
@@ -91,6 +91,8 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupExportSkillConfigCommand(deps),
 		newSetupFirewallCommand(deps),
 		newSetupStorageAuthCommand(deps),
+		newSetupHostStatusCommand(deps, defaultStatusEnv),
+		newSetupDeploymentStatusCommand(deps, defaultStatusEnv),
 	)
 	return cmd
 }
@@ -449,7 +451,7 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 			}
 			tradeConsoleHost := ""
 			tradeConsolePort := 0
-			if tradeNode := snapshot.Manifest.PlacementHost("trade"); tradeNode != "" {
+			if tradeNode := snapshot.Manifest.ComponentHost("trade"); tradeNode != "" {
 				tradeHost, tradeErr := findSetupHost(snapshot.Manifest, tradeNode)
 				if tradeErr != nil {
 					return tradeErr
@@ -610,7 +612,7 @@ func newSetupTrustBrowserCommand(deps setupDeps) *cobra.Command {
 
 func newSetupApplyCommand(deps setupDeps) *cobra.Command {
 	var file string
-	cmd := &cobra.Command{Use: "apply", Short: "写入初始用户、云凭据和主机", RunE: func(cmd *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: "apply", Short: "写入初始用户与云凭据", RunE: func(cmd *cobra.Command, _ []string) error {
 		snapshot, err := deps.load(file)
 		if err != nil {
 			return err

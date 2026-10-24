@@ -84,9 +84,6 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	// 更新用户登录信息
 	s.userDAO.UpdateUserLoginInfo(ctx, user.UserID, req.ClientIp)
 
-	// 记录登录历史
-	s.recordLoginHistory(ctx, user, req, model.LoginResultSuccess, "")
-
 	sessionID, err := mooxsecurity.RandomHex(16)
 	if err != nil {
 		return loginInternalError(), nil
@@ -114,7 +111,6 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 	accessToken, err := mooxsecurity.SignToken(map[string]any{
 		"user_id":    user.UserID,
 		"username":   user.Username,
-		"role":       user.Role,
 		"token_type": "access",
 		"sid":        sessionID,
 	}, s.cfg.JWT.SecretKey, "moox-admin", time.Until(expiresAt))
@@ -128,6 +124,9 @@ func (s *AuthServiceImpl) Login(ctx context.Context, req *pb.LoginReq) (*pb.Logi
 			},
 		}, nil
 	}
+
+	// 会话与令牌都签发成功后才写入全局活动日志，登录失败不留“登录成功”记录
+	s.recordLoginLog(ctx, user, req)
 
 	// 构造用户信息（安全转义）
 	userInfo := authutils.BuildSafeUserInfo(user)

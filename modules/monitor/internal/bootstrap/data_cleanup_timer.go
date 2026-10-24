@@ -104,16 +104,16 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 			return err
 		}
 		ops.pruneSeries = func(ctx context.Context, now time.Time) error {
-			var registered []monmetrics.ReporterPlacement
+			var registered []monmetrics.ReporterDeployment
 			if runtime.Repositories != nil && runtime.Repositories.Topology != nil {
 				snapshot, err := runtime.Repositories.Topology.Snapshot(ctx)
 				if err != nil {
 					return err
 				}
 				if snapshot != nil {
-					registered = make([]monmetrics.ReporterPlacement, 0, len(snapshot.Placements))
-					for _, placement := range snapshot.Placements {
-						registered = append(registered, monmetrics.ReporterPlacement{NodeID: placement.HostID, ServiceName: placement.ComponentID})
+					registered = make([]monmetrics.ReporterDeployment, 0, len(snapshot.Deployments))
+					for _, deployment := range snapshot.Deployments {
+						registered = append(registered, monmetrics.ReporterDeployment{NodeID: deployment.HostID, ServiceName: deployment.ComponentID})
 					}
 				}
 			}

@@ -3,26 +3,16 @@ import { createMemoryHistory, createRouter } from "vue-router";
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stringify } from "yaml";
-import {
-  getCatalog,
-  getHostRoutes,
-  listAllDeploymentHosts,
-  listAllPlacements,
-  setHostStatus,
-  setPlacementStatus
-} from "@/api/admin/sysdeploy";
+import { getCatalog, getHostRoutes, listAllDeploymentHosts, listAllDeployments } from "@/api/admin/sysdeploy";
 import { monitorApi } from "@/api/monitor";
-import { reportControlError } from "@/api/admin/http";
-import type { CatalogComponent, CatalogResponse, DeploymentHost, ComponentPlacement } from "@/api/admin/types";
+import type { CatalogComponent, CatalogResponse, DeploymentHost, ComponentDeployment } from "@/api/admin/types";
 import Deployments from "./index.vue";
 vi.mock("@/api/admin/sysdeploy", async original => ({
   ...(await original<typeof import("@/api/admin/sysdeploy")>()),
   getCatalog: vi.fn(),
   getHostRoutes: vi.fn(),
   listAllDeploymentHosts: vi.fn(),
-  listAllPlacements: vi.fn(),
-  setHostStatus: vi.fn(),
-  setPlacementStatus: vi.fn()
+  listAllDeployments: vi.fn()
 }));
 vi.mock("@/api/monitor", () => ({ monitorApi: { getOverview: vi.fn() } }));
 vi.mock("@/api/admin/http", () => ({ callControl: vi.fn(), reportControlError: vi.fn() }));
@@ -56,7 +46,7 @@ const hostRows: DeploymentHost[] = [
   { host_id: "c-main", address: "control.example.test", status: "enabled" },
   { host_id: "storage", address: "storage.example.test", status: "enabled" }
 ];
-const placementItems: ComponentPlacement[] = hostRows.flatMap(host =>
+const deploymentItems: ComponentDeployment[] = hostRows.flatMap(host =>
   ["host-gateway", "access"].map(component_id => ({ host_id: host.host_id, component_id, status: "enabled" }))
 );
 const box = defineComponent({ template: "<div><slot /></div>" });
@@ -113,7 +103,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.mocked(getCatalog).mockResolvedValue(definition());
   vi.mocked(listAllDeploymentHosts).mockResolvedValue(hostRows);
-  vi.mocked(listAllPlacements).mockResolvedValue(placementItems);
+  vi.mocked(listAllDeployments).mockResolvedValue(deploymentItems);
   vi.mocked(getHostRoutes).mockImplementation(async host_id => ({
     host_id,
     definition_hash: "definition",
@@ -147,8 +137,6 @@ beforeEach(() => {
       unregistered: [{ host_id: "other", component_id: "collector", reason: "部署未登记" }]
     }
   });
-  vi.mocked(setHostStatus).mockResolvedValue({});
-  vi.mocked(setPlacementStatus).mockResolvedValue({});
 });
 afterEach(() => {
   wrapper?.unmount();
@@ -156,20 +144,27 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("deployment page", () => {
-  it("uses the authoritative control host ID and exposes no protected toggles", async () => {
+  it("uses the authoritative control host ID and is read-only with a skill hint", async () => {
     const { page } = await render();
     expect(page.find('[aria-label="主机 c-main 启用状态"]').exists()).toBe(false);
     expect(page.find('[aria-label="c-main host-gateway 启用状态"]').exists()).toBe(false);
     expect(page.text()).toContain("受保护");
     expect(page.text()).toContain("process-a · v1");
-    expect(page.text()).toContain("moox.toml");
-    await page.get('[aria-label="storage access 启用状态"]').trigger("click");
-    await flushPromises();
-    expect(setPlacementStatus).toHaveBeenCalledWith("storage", "access", "disabled");
-    expect(setHostStatus).not.toHaveBeenCalled();
-    await page.get('[aria-label="主机 storage 启用状态"]').trigger("click");
-    await flushPromises();
-    expect(setHostStatus).toHaveBeenCalledWith("storage", "disabled");
+    expect(page.text()).toContain("moox skill");
+    // 控制台没有任何启停开关：主机与部署的启停只能通过 moox skill。
+    expect(page.findAll('[role="switch"]')).toHaveLength(0);
+    expect(page.find('[aria-label="storage access 启用状态"]').exists()).toBe(false);
+    expect(page.find('[aria-label="主机 storage 启用状态"]').exists()).toBe(false);
+  });
+  it("shows the host's Chinese label next to its ID and marks external programs", async () => {
+    vi.mocked(listAllDeploymentHosts).mockResolvedValue(
+      hostRows.map(host => (host.host_id === "storage" ? { ...host, label: "存储机" } : host))
+    );
+    const { page } = await render();
+    const group = page.get('[data-host-id="storage"]');
+    expect(group.text()).toContain("存储机");
+    expect(group.text()).toContain("storage");
+    expect(group.text()).toContain("已启用");
   });
   it("selects the exact host and component from Monitor links and keeps a closed drawer closed on polling", async () => {
     const { page } = await render({ tab: "services", host_id: "storage", component_id: "access" });
@@ -257,25 +252,15 @@ describe("deployment page", () => {
     expect(page.text()).toContain("monitor unavailable");
     expect(page.text()).not.toContain("没有符合筛选条件的路由");
   });
-  it("reports a failed mutation and keeps the recorded enablement unchanged", async () => {
-    vi.mocked(setPlacementStatus).mockRejectedValue(new Error("protected by server"));
-    const { page } = await render();
-    await page.get('[aria-label="storage access 启用状态"]').trigger("click");
-    await flushPromises();
-    expect(reportControlError).toHaveBeenCalledWith(expect.objectContaining({ message: "protected by server" }));
-    expect(page.get('[aria-label="storage access 启用状态"]').attributes("aria-checked")).toBe("true");
-  });
-  it("keeps enablement available for a disabled host while disabling its component switches", async () => {
+  it("shows a disabled host only when disabled entries are requested and labels it as disabled", async () => {
     vi.mocked(listAllDeploymentHosts).mockResolvedValue(
       hostRows.map(host => (host.host_id === "storage" ? { ...host, status: "disabled" } : host))
     );
     const { page } = await render();
     expect(page.find('[data-host-id="storage"]').exists()).toBe(false);
     await page.get('input[type="checkbox"]').setValue(true);
-    expect(page.get('[aria-label="storage access 启用状态"]').attributes("disabled")).toBeDefined();
-    await page.get('[aria-label="主机 storage 启用状态"]').trigger("click");
-    await flushPromises();
-    expect(setHostStatus).toHaveBeenCalledWith("storage", "enabled");
+    expect(page.get('[data-host-id="storage"]').text()).toContain("已停用");
+    expect(page.findAll('[role="switch"]')).toHaveLength(0);
   });
   it("keeps a newly enabled deployment visible until Monitor catches up and removes already-registered hints", async () => {
     vi.mocked(monitorApi.getOverview).mockResolvedValue({
@@ -300,7 +285,6 @@ describe("deployment page", () => {
     await flushPromises();
     expect(page.text()).toContain("Admin unavailable");
     expect(page.get('[data-host-id="c-main"] [data-component-id="access"]').text()).toContain("未知");
-    expect(page.get('[aria-label="storage access 启用状态"]').attributes("disabled")).toBeDefined();
   });
   it("persists a route host selection through polling", async () => {
     const { page, router } = await render({ tab: "routes", host_id: "storage" });

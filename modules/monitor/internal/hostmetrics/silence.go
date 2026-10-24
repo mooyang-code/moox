@@ -52,9 +52,18 @@ func (s *SilenceScanner) Scan(ctx context.Context, now time.Time) error {
 		if err != nil {
 			return err
 		}
-		if status == pending.To {
-			retained = append(retained, pending)
+		if status != pending.To {
+			continue
 		}
+		// 登记主机上已有新采集器在线：这台主机并没有失联，待重发的失联通知作废。
+		if pending.To == PresenceUnreachable && pending.HostID != "" {
+			if registered := s.registry.registeredHosts(ctx); registered != nil && registered[pending.HostID] {
+				if other, err := s.registry.HostHasOtherReachableAgent(ctx, pending.HostID, pending.AgentID); err == nil && other {
+					continue
+				}
+			}
+		}
+		retained = append(retained, pending)
 	}
 	transitions = append(retained, transitions...)
 	s.pending = nil

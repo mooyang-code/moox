@@ -19,7 +19,7 @@ import (
 )
 
 type DeploymentClient interface {
-	ListPlacements(context.Context, string) ([]Placement, error)
+	ListDeployments(context.Context, string) ([]Deployment, error)
 }
 
 type DoctorContextClient interface {
@@ -36,12 +36,16 @@ type BootstrapOptions struct {
 	Now                                                       func() time.Time
 	ProbeWritable                                             func(context.Context, string, string) error
 	ProcessAlive                                              func(string) bool
+	// Systemd 检查 systemd_user 托管的组件（外部程序）：开机自启、运行中与 linger 三项都满足才通过；为空时退回 PID 检查。
+	Systemd SystemdChecker
+	// DeployRoot 是部署根目录：外部程序的安装目录是 <部署根>/<组件>，它声明的路径相对部署根而不是发布目录。
+	DeployRoot string
 }
 
 type bootstrapRunner struct {
 	options                BootstrapOptions
 	manifest               core.Manifest
-	deployments            map[string]Placement
+	deployments            map[string]Deployment
 	loadErr                error
 	datasetHealthPolicy    report.DatasetHealthPolicy
 	datasetHealthPolicyErr error
@@ -62,7 +66,7 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 	if err != nil {
 		return core.Report{}, err
 	}
-	runner := &bootstrapRunner{options: options, manifest: manifest, deployments: map[string]Placement{}}
+	runner := &bootstrapRunner{options: options, manifest: manifest, deployments: map[string]Deployment{}}
 	if options.ReleaseRoot == "" {
 		runner.manifestErr = fmt.Errorf("release root is required")
 	} else {
@@ -78,7 +82,7 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 	if options.Client == nil {
 		runner.loadErr = fmt.Errorf("SysDeploy client is unavailable")
 	} else {
-		rows, loadErr := options.Client.ListPlacements(ctx, options.NodeID)
+		rows, loadErr := options.Client.ListDeployments(ctx, options.NodeID)
 		runner.loadErr = loadErr
 		for _, row := range rows {
 			runner.deployments[row.ComponentID] = row
@@ -153,12 +157,12 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			contractErr = r.datasetHealthPolicyErr
 		}
 		if contractErr != nil {
-			return checkResult(spec.ID, core.StatusFail, "release contract is incomplete", contractErr, "sync_host_placements")
+			return checkResult(spec.ID, core.StatusFail, "release contract is incomplete", contractErr, "sync_host_deployments")
 		}
 		return checkResult(spec.ID, core.StatusPass, "release catalog, checksum, and Dataset health policy are available", nil)
 	case "bootstrap.inventory":
 		if r.loadErr != nil {
-			return checkResult(spec.ID, core.StatusFail, "SysDeploy inventory is unavailable", r.loadErr, "sync_host_placements")
+			return checkResult(spec.ID, core.StatusFail, "SysDeploy inventory is unavailable", r.loadErr, "sync_host_deployments")
 		}
 		missing := []string{}
 		required := []string{"host-gateway", "host-agent"}
@@ -171,9 +175,9 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			}
 		}
 		if len(missing) > 0 {
-			return checkResult(spec.ID, core.StatusFail, "required deployment inventory is missing: "+strings.Join(missing, ", "), nil, "sync_host_placements")
+			return checkResult(spec.ID, core.StatusFail, "required deployment inventory is missing: "+strings.Join(missing, ", "), nil, "sync_host_deployments")
 		}
-		return checkResult(spec.ID, core.StatusPass, "host placements match the component catalog", nil)
+		return checkResult(spec.ID, core.StatusPass, "host deployments match the component catalog", nil)
 	}
 	if spec.ID == "monitor.metrics_delivery" {
 		if r.deliveryErr != nil || r.delivery == nil {
@@ -251,17 +255,25 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		if len(component.WritablePaths) == 0 {
 			return checkResult(spec.ID, core.StatusSkipped, "component declares no writable paths", nil)
 		}
+		pathRoot := r.options.ReleaseRoot
+		if _, systemd := systemdUnit(r.manifest, component.ComponentID); systemd && r.options.DeployRoot != "" {
+			pathRoot = r.options.DeployRoot
+		}
 		for _, path := range component.WritablePaths {
 			probeWritable := r.options.ProbeWritable
 			if probeWritable == nil {
 				probeWritable = ProbeWritablePath
 			}
-			if err := probeWritable(ctx, r.options.ReleaseRoot, path); err != nil {
+			if err := probeWritable(ctx, pathRoot, path); err != nil {
 				return checkResult(spec.ID, core.StatusFail, "writable path probe failed", err, "repair_path_permissions")
 			}
 		}
 		return checkResult(spec.ID, core.StatusPass, "declared writable paths accept bounded temporary probes", nil)
 	case "service_autostart":
+		if unit, systemd := systemdUnit(r.manifest, component.ComponentID); systemd && r.options.Systemd != nil {
+			state, err := r.options.Systemd(ctx, r.options.NodeID, unit)
+			return supervisorResult(spec.ID, unit, state, err)
+		}
 		pidPath := filepath.Join(r.options.ReleaseRoot, "run", component.ComponentID+".pid")
 		isAlive := r.options.ProcessAlive
 		if isAlive == nil {
@@ -360,7 +372,7 @@ func validateManifestChecksumFile(path, want string) error {
 	return nil
 }
 
-func healthURL(placement Placement, path string) string { return placement.HealthAddress + path }
+func healthURL(deployment Deployment, path string) string { return deployment.HealthAddress + path }
 
 func checkResult(id string, status core.CheckStatus, summary string, err error, actions ...string) core.CheckResult {
 	result := core.CheckResult{ID: id, Status: status, Summary: summary, RecoveryActionIDs: actions}

@@ -222,7 +222,7 @@ func TestMetricMessageStorePrunesRetiredSeriesAndReporters(t *testing.T) {
 		Update("c_last_seen_at", now.Add(-RetiredSeriesAfter-time.Minute)).Error)
 	require.NoError(t, r.db.Model(&MetricService{}).Where("c_service_name = ?", report.ServiceName).
 		Update("c_last_seen_at", now.Add(-time.Minute)).Error)
-	pruned, err := r.PruneRetiredSeries(context.Background(), now, []ReporterPlacement{})
+	pruned, err := r.PruneRetiredSeries(context.Background(), now, []ReporterDeployment{})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, pruned)
 	var services []MetricService
@@ -239,7 +239,7 @@ func TestMetricMessageStorePrunesRetiredSeriesAndReporters(t *testing.T) {
 	require.Equal(t, "live", series[0].SeriesID)
 }
 
-func TestMetricCleanupKeepsLastReportOfEveryRegisteredPlacement(t *testing.T) {
+func TestMetricCleanupKeepsLastReportOfEveryRegisteredDeployment(t *testing.T) {
 	mgr, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
@@ -260,7 +260,7 @@ func TestMetricCleanupKeepsLastReportOfEveryRegisteredPlacement(t *testing.T) {
 	var count int64
 	require.NoError(t, r.db.Model(&MetricService{}).Count(&count).Error)
 	require.EqualValues(t, 5, count, "unknown discovery cannot discard reporter history")
-	_, err = r.PruneRetiredSeries(t.Context(), now, []ReporterPlacement{{NodeID: "control", ServiceName: "collector"}, {NodeID: "other-host", ServiceName: "admin"}})
+	_, err = r.PruneRetiredSeries(t.Context(), now, []ReporterDeployment{{NodeID: "control", ServiceName: "collector"}, {NodeID: "other-host", ServiceName: "admin"}})
 	require.NoError(t, err)
 	rows, _, err := NewCatalog(r).ListServicesAt(t.Context(), "", 0, 10, now)
 	require.NoError(t, err)
@@ -274,7 +274,7 @@ func TestMetricCleanupKeepsLastReportOfEveryRegisteredPlacement(t *testing.T) {
 			require.WithinDuration(t, now.Add(-2*RetiredSeriesAfter), row.LastSeenAt, time.Millisecond)
 		}
 	}
-	_, err = r.PruneRetiredSeries(t.Context(), now, []ReporterPlacement{})
+	_, err = r.PruneRetiredSeries(t.Context(), now, []ReporterDeployment{})
 	require.NoError(t, err)
 	require.NoError(t, r.db.Model(&MetricService{}).Count(&count).Error)
 	require.Zero(t, count, "a successfully discovered empty deployment set removes retired history")

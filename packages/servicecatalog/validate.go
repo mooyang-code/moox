@@ -13,6 +13,7 @@ var (
 	identifier  = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 	servicePath = regexp.MustCompile(`^trpc\.[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$`)
 	methodName  = regexp.MustCompile(`^[A-Z][A-Za-z0-9]*$`)
+	unitName    = regexp.MustCompile(`^moox-[a-z0-9]+(?:-[a-z0-9]+)*$`)
 	hostLabel   = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
 )
 
@@ -22,6 +23,10 @@ func (c Catalog) Validate() error {
 	}
 	ids, binaries, paths := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	consoleRoutes := map[string]string{}
+	external := map[string]bool{}
+	for _, component := range c.Components {
+		external[component.ID] = component.ExternalProgram
+	}
 	for _, component := range c.Components {
 		if !identifier.MatchString(component.ID) || component.Name == "" || component.Binary != "moox-"+component.ID {
 			return fmt.Errorf("component %q requires a canonical ID, name and binary", component.ID)
@@ -40,6 +45,11 @@ func (c Catalog) Validate() error {
 		}
 		if !slices.Contains([]string{"readyz", "https", "none"}, component.Health.Kind) {
 			return fmt.Errorf("component %q has invalid health.kind", component.ID)
+		}
+		if component.ExternalProgram {
+			if len(component.Services) != 0 || len(component.Ports) != 0 || component.Health.Kind != "readyz" || component.Health.Loopback {
+				return fmt.Errorf("external program %q cannot declare services or ports and must use a readyz health port", component.ID)
+			}
 		}
 		ports := map[int]bool{}
 		addPort := func(port int) error {
@@ -132,6 +142,8 @@ func (c Catalog) Validate() error {
 						}
 					} else if !ids[caller] && caller != "console" && caller != "moox-cli" {
 						return fmt.Errorf("service %q has unknown caller %q", service.Path, caller)
+					} else if external[caller] {
+						return fmt.Errorf("service %q lists external program %q as an internal caller; grant it through principals", service.Path, caller)
 					}
 					if caller == "console" {
 						consoleAllowed = true
@@ -157,7 +169,8 @@ func (c Catalog) Validate() error {
 	}
 	principals := map[string]bool{}
 	for _, principal := range c.Principals {
-		if !slices.Contains([]string{"scf-collector", "factor-engine", "archive-worker", "moox-skill", "collector-operator"}, principal.ID) || principals[principal.ID] || ids[principal.ID] || len(principal.Allow) == 0 {
+		// 外部身份不能和普通组件同名；只有声明了 external_program 的组件才和同名外部身份对应。
+		if !slices.Contains([]string{"scf-collector", "factor-engine", "archive-worker", "moox-skill", "collector-operator"}, principal.ID) || principals[principal.ID] || (ids[principal.ID] && !external[principal.ID]) || len(principal.Allow) == 0 {
 			return fmt.Errorf("invalid or duplicate external principal %q", principal.ID)
 		}
 		principals[principal.ID] = true
@@ -175,6 +188,11 @@ func (c Catalog) Validate() error {
 			if err := declaredMethods(permission.Methods, declared); err != nil {
 				return fmt.Errorf("principal %q: %w", principal.ID, err)
 			}
+		}
+	}
+	for _, component := range c.Components {
+		if component.ExternalProgram && !principals[component.ID] {
+			return fmt.Errorf("external program %q requires an external principal with the same ID", component.ID)
 		}
 	}
 	if len(c.Principals) != 0 && !ids["access"] {
@@ -202,6 +220,12 @@ func validateDoctor(component Component, ids map[string]bool) error {
 	if !slices.Contains([]string{"reporter", "host_snapshot", "health_only"}, d.Transport) || !slices.Contains([]string{"active", "deferred", "not_applicable"}, d.FunctionalObservability) {
 		return fmt.Errorf("component %q has invalid doctor transport or observability", component.ID)
 	}
+	if err := ValidateSupervisor(d.Supervisor, d.Unit); err != nil {
+		return fmt.Errorf("component %q: %w", component.ID, err)
+	}
+	if component.ExternalProgram && d.Supervisor != SupervisorSystemdUser {
+		return fmt.Errorf("external program %q must be supervised by systemd_user", component.ID)
+	}
 	seen := map[string]bool{}
 	for _, dep := range d.Dependencies {
 		if !ids[dep] || dep == component.ID || seen[dep] {
@@ -219,6 +243,23 @@ func validateDoctor(component Component, ids map[string]bool) error {
 		if !slices.Contains(allowed, action) {
 			return fmt.Errorf("component %q has unknown recovery action %q", component.ID, action)
 		}
+	}
+	return nil
+}
+
+// ValidateSupervisor 校验进程托管方式与单元名的组合：systemd_user 必须带合法的单元名，其余托管方式不能带单元名。
+func ValidateSupervisor(supervisor, unit string) error {
+	switch supervisor {
+	case "", SupervisorMooxRuntime:
+		if unit != "" {
+			return fmt.Errorf("unit is only valid for supervisor %s", SupervisorSystemdUser)
+		}
+	case SupervisorSystemdUser:
+		if !unitName.MatchString(unit) {
+			return fmt.Errorf("supervisor %s requires a valid unit name", SupervisorSystemdUser)
+		}
+	default:
+		return fmt.Errorf("unknown supervisor %q", supervisor)
 	}
 	return nil
 }

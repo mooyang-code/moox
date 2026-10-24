@@ -161,23 +161,6 @@ func (d *SecretDAO) UpdateStatus(ctx context.Context, secretID, status string) e
 	return nil
 }
 
-// UpdateLastUsed 更新最后使用信息
-func (d *SecretDAO) UpdateLastUsed(ctx context.Context, secretID, usedBy string) error {
-	result := d.db.WithContext(ctx).Scopes(userSecrets).Model(&model.Secret{}).
-		Where("c_secret_id = ? AND c_is_deleted = ?", secretID, softdelete.IsDeletedFalse).
-		Updates(map[string]interface{}{
-			"c_last_used_at": time.Now(),
-			"c_last_used_by": usedBy,
-		})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrSecretNotFound
-	}
-	return nil
-}
-
 // encryptSensitiveFields 加密敏感字段。
 // 防御纵深：拒绝含 • (脱敏字符) 的串，防止脱敏串被当明文加密入库。
 // 真实秘钥不会包含 •，但可能包含 *，因此用 • 做脱敏标记。
@@ -222,9 +205,12 @@ func GenerateSecretID() string {
 }
 
 func isSystemSecret(secret *model.Secret) bool {
-	return secret != nil && (secret.SecretType == model.GatewayKeyringType || strings.HasPrefix(secret.SecretID, model.GatewayKeyringIDPrefix))
+	return secret != nil && secret.IsSystem()
 }
 
 func userSecrets(db *gorm.DB) *gorm.DB {
-	return db.Where("c_secret_type <> ? AND substr(c_secret_id, 1, ?) <> ?", model.GatewayKeyringType, len(model.GatewayKeyringIDPrefix), model.GatewayKeyringIDPrefix)
+	return db.Where("c_secret_type <> ? AND substr(c_secret_id, 1, ?) <> ? AND substr(c_secret_id, 1, ?) <> ?",
+		model.GatewayKeyringType,
+		len(model.GatewayKeyringIDPrefix), model.GatewayKeyringIDPrefix,
+		len(model.SSHHostIDPrefix), model.SSHHostIDPrefix)
 }

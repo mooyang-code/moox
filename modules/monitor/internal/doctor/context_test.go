@@ -8,9 +8,9 @@ import (
 	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/modules/monitor/internal/deployment"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/store"
 	"github.com/mooyang-code/moox/modules/monitor/schema"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -23,12 +23,12 @@ import (
 )
 
 type deploymentSourceStub struct {
-	rows []*adminpb.ComponentPlacement
+	rows []*adminpb.ComponentDeployment
 	err  error
 }
 
-func TestBuilderKeepsEveryHostPlacementAndDoesNotInferMissingDefaults(t *testing.T) {
-	builder := Builder{Deployments: deploymentSourceStub{rows: []*adminpb.ComponentPlacement{
+func TestBuilderKeepsEveryHostDeploymentAndDoesNotInferMissingDefaults(t *testing.T) {
+	builder := Builder{Deployments: deploymentSourceStub{rows: []*adminpb.ComponentDeployment{
 		{ComponentId: "access", HostId: "node-a", Status: "enabled"},
 		{ComponentId: "access", HostId: "node-b", Status: "disabled"},
 	}}}
@@ -51,11 +51,11 @@ func TestBuilderHealthUsesPerComponentFreshnessAndConsecutiveFailures(t *testing
 	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
 	require.NoError(t, mgr.ApplySchema(schema.SQL()))
 	repos := mgr.Repositories()
-	require.NoError(t, repos.Checks.Create(context.Background(), &domain.Check{SpaceID: "", CheckID: "placement:node-a:monitor", IntervalSeconds: 30, Enabled: true}))
+	require.NoError(t, repos.Checks.Create(context.Background(), &domain.Check{SpaceID: "", CheckID: "deployment:node-a:monitor", IntervalSeconds: 30, Enabled: true}))
 	for i := 0; i < 3; i++ {
-		require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: time.Now().Add(time.Duration(i) * time.Nanosecond).String(), CheckID: "placement:node-a:monitor", Status: domain.CheckStatusDegraded, Success: false, BodyExcerpt: `{"service":"monitor","instance_id":"monitor@node-a","node_id":"node-a","boot_id":"boot-a"}`, CheckedAt: now.Add(-time.Duration(i+3) * time.Minute)}))
+		require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: time.Now().Add(time.Duration(i) * time.Nanosecond).String(), CheckID: "deployment:node-a:monitor", Status: domain.CheckStatusDegraded, Success: false, BodyExcerpt: `{"service":"monitor","instance_id":"monitor@node-a","node_id":"node-a","boot_id":"boot-a"}`, CheckedAt: now.Add(-time.Duration(i+3) * time.Minute)}))
 	}
-	builder := Builder{Deployments: deploymentSourceStub{rows: []*adminpb.ComponentPlacement{{ComponentId: "monitor", HostId: "node-a", Status: "enabled"}}}, Checks: repos.Checks, Results: repos.Results, HealthChecks: report.BuiltInModuleHealthChecks(), Now: func() time.Time { return now }}
+	builder := Builder{Deployments: deploymentSourceStub{rows: []*adminpb.ComponentDeployment{{ComponentId: "monitor", HostId: "node-a", Status: "enabled"}}}, Checks: repos.Checks, Results: repos.Results, HealthChecks: report.BuiltInModuleHealthChecks(), Now: func() time.Time { return now }}
 	got, err := builder.Build(context.Background(), "node-a", []string{"monitor"}, nil)
 	require.NoError(t, err)
 	require.Len(t, got.HealthObservations, 1)
@@ -64,10 +64,10 @@ func TestBuilderHealthUsesPerComponentFreshnessAndConsecutiveFailures(t *testing
 	require.Equal(t, 30, got.HealthObservations[0].IntervalSeconds)
 }
 
-func (s deploymentSourceStub) Snapshot(context.Context) (placement.Snapshot, error) {
+func (s deploymentSourceStub) Snapshot(context.Context) (deployment.Snapshot, error) {
 	catalog, _ := servicecatalog.LoadEmbedded()
 	hosts := map[string]bool{}
-	snapshot := placement.Snapshot{Catalog: catalog, Placements: s.rows}
+	snapshot := deployment.Snapshot{Catalog: catalog, Deployments: s.rows}
 	for _, row := range s.rows {
 		if !hosts[row.GetHostId()] {
 			hosts[row.GetHostId()] = true
@@ -79,7 +79,7 @@ func (s deploymentSourceStub) Snapshot(context.Context) (placement.Snapshot, err
 
 func TestBuilderMarksDisabledAsNotExpectedAndStorageDeferred(t *testing.T) {
 	builder := Builder{
-		Deployments: deploymentSourceStub{rows: []*adminpb.ComponentPlacement{
+		Deployments: deploymentSourceStub{rows: []*adminpb.ComponentDeployment{
 			{ComponentId: "factor-mgr", HostId: "node-a", Status: "disabled"},
 			{ComponentId: "storage-primary", HostId: "node-a", Status: "enabled"},
 		}},
@@ -105,10 +105,10 @@ func TestBuilderDoesNotRequireReporterIdentityForNotApplicableComponent(t *testi
 	t.Cleanup(func() { require.NoError(t, mgr.Close()) })
 	require.NoError(t, mgr.ApplySchema(schema.SQL()))
 	repos := mgr.Repositories()
-	require.NoError(t, repos.Checks.Create(context.Background(), &domain.Check{SpaceID: "", CheckID: "placement:node-a:eventbus", IntervalSeconds: 30, Enabled: true}))
-	require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: "eventbus-result", CheckID: "placement:node-a:eventbus", Status: domain.CheckStatusOK, Success: true, BodyExcerpt: `{}`, CheckedAt: now}))
+	require.NoError(t, repos.Checks.Create(context.Background(), &domain.Check{SpaceID: "", CheckID: "deployment:node-a:eventbus", IntervalSeconds: 30, Enabled: true}))
+	require.NoError(t, repos.Results.Insert(context.Background(), &domain.CheckResult{ResultID: "eventbus-result", CheckID: "deployment:node-a:eventbus", Status: domain.CheckStatusOK, Success: true, BodyExcerpt: `{}`, CheckedAt: now}))
 	builder := Builder{
-		Deployments: deploymentSourceStub{rows: []*adminpb.ComponentPlacement{{ComponentId: "eventbus", HostId: "node-a", Status: "enabled"}}},
+		Deployments: deploymentSourceStub{rows: []*adminpb.ComponentDeployment{{ComponentId: "eventbus", HostId: "node-a", Status: "enabled"}}},
 		Checks:      repos.Checks,
 		Results:     repos.Results,
 		Now:         func() time.Time { return now },
@@ -175,7 +175,7 @@ func TestBuilderReadsCanonicalModuleMetricNames(t *testing.T) {
 		ID: "monitor-metrics", Module: "monitor", Enabled: true, CheckWatermark: true,
 	}}
 	got, err := (Builder{
-		Deployments: deploymentSourceStub{rows: []*adminpb.ComponentPlacement{{
+		Deployments: deploymentSourceStub{rows: []*adminpb.ComponentDeployment{{
 			ComponentId: "monitor", HostId: "node-a", Status: "enabled",
 		}}},
 		Metrics:      messageQuery(messageStore),

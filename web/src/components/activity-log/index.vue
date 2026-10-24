@@ -58,12 +58,14 @@ import { activityDetailText, activityLevelColor, activityTimeText, rangeToISO } 
 const props = withDefaults(
   defineProps<{
     spaceId?: string;
+    // 只看不属于任何空间的全局事件（如登录记录），与 spaceId 二选一。
+    global?: boolean;
     category?: string;
     pageSize?: number;
     showFilters?: boolean;
     showSpace?: boolean;
   }>(),
-  { spaceId: "", category: "", pageSize: 20, showFilters: false, showSpace: false }
+  { spaceId: "", global: false, category: "", pageSize: 20, showFilters: false, showSpace: false }
 );
 
 const guard = createLatestRequestGuard();
@@ -85,7 +87,8 @@ async function load() {
   try {
     const range = filters.value.range;
     const data = await listActivityLogs({
-      space_id: props.spaceId || undefined,
+      space_id: props.global ? undefined : props.spaceId || undefined,
+      global: props.global || undefined,
       category: filters.value.category.trim() || undefined,
       source: filters.value.source.trim() || undefined,
       since: range?.[0] ? rangeToISO(range[0]) : undefined,
@@ -119,7 +122,7 @@ function showDetail(record: ActivityLogItem) {
 }
 
 watch(
-  () => [props.spaceId, props.category],
+  () => [props.spaceId, props.global, props.category],
   () => {
     filters.value.category = props.category;
     guard.invalidate();

@@ -194,6 +194,22 @@ func normalizeSeedTagIDs(values []string) []string {
 
 // SeedMissing inserts only absent (space_id, task_id) pairs. Existing rows are
 // deliberately left untouched so a user disable or edit survives redeploy.
+// SeedIfEmpty 只在任务表完全为空（全新安装）时写入内置任务；已有任何任务时不动，
+// 所以用户删除或改动过默认任务后，重启不会把它们加回来。
+func SeedIfEmpty(ctx context.Context, repo *store.TaskRepository, tasks []domain.CollectionTask) (SeedSummary, error) {
+	if repo == nil {
+		return SeedSummary{}, fmt.Errorf("task repository is required")
+	}
+	_, total, err := repo.List(ctx, store.TaskFilter{Page: 1, PageSize: 1})
+	if err != nil {
+		return SeedSummary{}, fmt.Errorf("check existing tasks: %w", err)
+	}
+	if total > 0 {
+		return SeedSummary{}, nil
+	}
+	return SeedMissing(ctx, repo, tasks)
+}
+
 func SeedMissing(ctx context.Context, repo *store.TaskRepository, tasks []domain.CollectionTask) (SeedSummary, error) {
 	if repo == nil {
 		return SeedSummary{}, fmt.Errorf("task repository is required")

@@ -2,14 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { callControl } from "./http";
-import {
-  decodeCatalog,
-  getHostRoutes,
-  listAllDeploymentHosts,
-  listAllPlacements,
-  setHostStatus,
-  setPlacementStatus
-} from "./sysdeploy";
+import { decodeCatalog, getHostRoutes, listAllDeploymentHosts, listAllDeployments } from "./sysdeploy";
 vi.mock("./http", () => ({ callControl: vi.fn() }));
 const call = vi.mocked(callControl);
 beforeEach(() => {
@@ -32,33 +25,31 @@ describe("SysDeploy v2", () => {
     expect(call).toHaveBeenNthCalledWith(2, "sysdeploy", "ListHosts", { page: { page: 2, size: 100 } });
   });
   it("rejects broken or changing pagination rather than displaying a partial topology", async () => {
-    call.mockResolvedValue({ placements: [], page_result: { has_more: true } });
-    await expect(listAllPlacements()).rejects.toThrow("空页");
+    call.mockResolvedValue({ deployments: [], page_result: { has_more: true } });
+    await expect(listAllDeployments()).rejects.toThrow("空页");
     call.mockResolvedValue({
-      placements: [{ host_id: "a", component_id: "collector", status: "enabled" }],
+      deployments: [{ host_id: "a", component_id: "collector", status: "enabled" }],
       page_result: { has_more: true }
     });
-    await expect(listAllPlacements()).rejects.toThrow("分页期间变化");
+    await expect(listAllDeployments()).rejects.toThrow("分页期间变化");
   });
-  it("keeps placement identity separate for the same component on different hosts", async () => {
+  it("keeps deployment identity separate for the same component on different hosts", async () => {
     call.mockResolvedValue({
-      placements: [
+      deployments: [
         { host_id: "a", component_id: "access", status: "enabled" },
         { host_id: "b", component_id: "access", status: "disabled" }
       ]
     });
-    expect(await listAllPlacements()).toHaveLength(2);
+    expect(await listAllDeployments()).toHaveLength(2);
   });
-  it("sends only the v2 status change and route requests", async () => {
+  // 主机与部署的写操作只能通过 moox skill（moox-cli）：控制台接口层不再提供启停调用。
+  it("exposes only read requests and no status mutation", async () => {
     call.mockResolvedValue({});
-    await setHostStatus("c-main", "disabled");
-    await setPlacementStatus("storage", "storage-primary", "enabled");
     await getHostRoutes("storage");
-    expect(call.mock.calls).toEqual([
-      ["sysdeploy", "SetHostStatus", { host_id: "c-main", status: "disabled" }],
-      ["sysdeploy", "SetPlacementStatus", { host_id: "storage", component_id: "storage-primary", status: "enabled" }],
-      ["sysdeploy", "GetHostRoutes", { host_id: "storage" }]
-    ]);
+    expect(call.mock.calls).toEqual([["sysdeploy", "GetHostRoutes", { host_id: "storage" }]]);
+    const api = await import("./sysdeploy");
+    expect(api).not.toHaveProperty("setHostStatus");
+    expect(api).not.toHaveProperty("setDeploymentStatus");
   });
   it("decodes the actual shared catalog used by Admin", () => {
     const catalog_yaml = readFileSync(path.resolve(__dirname, "../../../../packages/servicecatalog/catalog.yaml"), "utf8");

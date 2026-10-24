@@ -19,9 +19,6 @@ type adminUserRow struct {
 	UserID       string `gorm:"column:c_user_id"`
 	Username     string `gorm:"column:c_username"`
 	PasswordHash string `gorm:"column:c_password_hash"`
-	Role         int32  `gorm:"column:c_role"`
-	Status       int32  `gorm:"column:c_status"`
-	Nickname     string `gorm:"column:c_nickname"`
 }
 
 func TestAdminUserEnsureCreatesSuperAdminAndIsIdempotent(t *testing.T) {
@@ -31,8 +28,6 @@ func TestAdminUserEnsureCreatesSuperAdminAndIsIdempotent(t *testing.T) {
 
 	db := openUserTestDB(t, dbPath)
 	row := readAdminUser(t, db, "admin")
-	assert.Equal(t, int32(3), row.Role)
-	assert.Equal(t, int32(1), row.Status)
 	assert.True(t, mooxsecurity.VerifyPassword("first password", row.PasswordHash))
 	firstHash := row.PasswordHash
 

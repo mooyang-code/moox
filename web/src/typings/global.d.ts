@@ -19,7 +19,6 @@ declare namespace Menu {
     affix: boolean;
     link?: string;
     iframe?: boolean;
-    roles: Array<string>;
     icon?: string;
     svgIcon?: string;
     sort?: number;

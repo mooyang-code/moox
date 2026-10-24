@@ -68,21 +68,6 @@ func TestIsUserLocked_ExceedAttempts_ShouldReturnTrue(t *testing.T) {
 	assert.True(t, svc.isUserLocked(ctx, "alice", "1.1.1.1"))
 }
 
-func TestRecordLoginHistory_ShouldNotPanic(t *testing.T) {
-	svc := newAuthServiceForHelperTest(t)
-	user := &model.User{UserID: "u1", Username: "bob"}
-	require.NotPanics(t, func() {
-		svc.recordLoginHistory(context.Background(), user, &pb.LoginReq{ClientIp: "1.1.1.1"}, model.LoginResultSuccess, "")
-	})
-}
-
-func TestLogUserAction_ShouldNotPanic(t *testing.T) {
-	svc := newAuthServiceForHelperTest(t)
-	require.NotPanics(t, func() {
-		svc.logUserAction(context.Background(), "u1", "login", "", "ok", "1.1.1.1", "ua", "success")
-	})
-}
-
 func newAuthServiceForRegisterTest(t *testing.T) *AuthServiceImpl {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
@@ -94,17 +79,6 @@ func newAuthServiceForRegisterTest(t *testing.T) *AuthServiceImpl {
 	}
 }
 
-func TestUpdateUserInfo_ValidUser_ShouldUpdateNickname(t *testing.T) {
-	user := &model.User{UserID: "user-profile-1", Username: "alice", PasswordHash: "unused", Role: int32(pb.UserRole_USER_ROLE_ADMIN), Status: int32(pb.UserStatus_USER_STATUS_ACTIVE)}
-	svc := newAuthServiceForUserTest(t, "secret", user)
-	ctx := authCtx(user.UserID, user.Role)
-
-	rsp, err := svc.UpdateUserInfo(ctx, &pb.UpdateUserInfoReq{Nick: "new-nick"})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	assert.Equal(t, "new-nick", rsp.GetUserInfo().GetNickname())
-}
-
 func TestGetUserInfo_NoAuth_ShouldReturnNoAuth(t *testing.T) {
 	svc := newAuthServiceForRegisterTest(t)
 	rsp, err := svc.GetUserInfo(context.Background(), &pb.GetUserInfoReq{})
@@ -112,10 +86,10 @@ func TestGetUserInfo_NoAuth_ShouldReturnNoAuth(t *testing.T) {
 	assert.Equal(t, pb.ErrorCode_NO_AUTH, rsp.GetRetInfo().GetCode())
 }
 
-func TestGetUserInfo_AdminQueryOtherUser_ShouldSucceed(t *testing.T) {
-	user := &model.User{UserID: "user-info-1", Username: "alice", PasswordHash: "unused", Role: int32(pb.UserRole_USER_ROLE_ADMIN), Status: int32(pb.UserStatus_USER_STATUS_ACTIVE)}
+func TestGetUserInfo_LoggedInUser_ShouldSucceed(t *testing.T) {
+	user := &model.User{UserID: "user-info-1", Username: "alice", PasswordHash: "unused"}
 	svc := newAuthServiceForUserTest(t, "secret", user)
-	ctx := authCtx(user.UserID, user.Role)
+	ctx := authCtx(user.UserID)
 
 	rsp, err := svc.GetUserInfo(ctx, &pb.GetUserInfoReq{})
 	require.NoError(t, err)

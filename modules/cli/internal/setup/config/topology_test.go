@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -31,18 +33,18 @@ ssh = { username = "ubuntu" }
 	require.NoError(t, catalog.ValidateTopology(topology))
 	for _, id := range []string{"control", "compute"} {
 		for _, component := range []string{"host-gateway", "host-agent"} {
-			assert.Contains(t, topology.Placements, servicecatalog.Placement{HostID: id, ComponentID: component, Status: servicecatalog.Enabled})
+			assert.Contains(t, topology.Deployments, servicecatalog.Deployment{HostID: id, ComponentID: component, Status: servicecatalog.Enabled})
 		}
 	}
-	// A role follows the placement, and SSH data follows the host definition.
-	m.Placements["compute"] = []string{"storage-primary", "storage-view"}
+	// A role follows the deployment, and SSH data follows the host definition.
+	m.Deployments["compute"] = []string{"storage-primary", "storage-view"}
 	assert.Equal(t, "compute", m.StorageHost().Name)
 	assert.Equal(t, m.StorageHost(), m.ViewHost())
 	host := m.HostCatalog["compute"]
 	host.Address = "192.0.2.12"
 	m.HostCatalog["compute"] = host
 	assert.Equal(t, "192.0.2.12", m.StorageHost().Address)
-	delete(m.Placements, "compute")
+	delete(m.Deployments, "compute")
 	assert.False(t, m.HasStorageHost())
 	assert.Empty(t, m.HostByID("missing"))
 	// Projections are values; they cannot silently mutate the source of truth.
@@ -51,29 +53,76 @@ ssh = { username = "ubuntu" }
 	assert.Equal(t, "192.0.2.10", m.ControlHost().Address)
 }
 
-func TestFactorEngineHostIsRecordedButNotDeployed(t *testing.T) {
+func TestFactorHostIsAnOrdinaryOutboundHostWithExternalPrograms(t *testing.T) {
 	root := t.TempDir()
 	body := validManifest + `
 [hosts.factor]
 address = "192.168.0.103"
+reachability = "outbound"
 ssh = { username = "builder" }
-[factor_engine]
-host = "factor"
 `
+	body = strings.Replace(body, "[deployments]\n", "[deployments]\nfactor = [\"factor-engine\", \"archive-worker\"]\n", 1)
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
 	m := snapshot.Manifest
-	assert.Equal(t, "192.168.0.103", m.FactorEngineHost().Address)
-	assert.False(t, m.FactorEngineIsLocal())
+	var names []string
 	for _, host := range m.Hosts() {
-		assert.NotEqual(t, "factor", host.Name, "因子计算机不放置组件时不是部署主机")
+		names = append(names, host.Name)
 	}
+	assert.Contains(t, names, "factor", "因子机是部署主机")
+	factor := m.HostByID("factor")
+	assert.Equal(t, "因子机", factor.Label, "中文名按主机 ID 生成")
+	assert.Equal(t, servicecatalog.ReachabilityOutbound, factor.Reachability)
+	assert.Equal(t, []string{"factor-engine", "archive-worker"}, m.Deployments["factor"])
+}
 
-	dir := t.TempDir()
-	local, err := Load(writeManifest(t, dir, validManifest+"[factor_engine]\nhost = \"local\"\n", 0o600), dir)
+func TestFactorEngineSectionIsRejectedWithMigrationHint(t *testing.T) {
+	for _, value := range []string{"local", "factor"} {
+		root := t.TempDir()
+		_, err := Load(writeManifest(t, root, validManifest+"[factor_engine]\nhost = \""+value+"\"\n", 0o600), root)
+		require.ErrorContains(t, err, "[factor_engine] 已取消")
+		require.ErrorContains(t, err, "config migrate")
+	}
+}
+
+func TestDefaultHostLabel(t *testing.T) {
+	for id, want := range map[string]string{
+		"control": "控制机", "storage": "存储机", "overseas": "海外机", "factor": "因子机",
+		"overseas-2": "海外机 2", "storage-10": "存储机 10", "legacy-1": "", "ops": "", "overseas2": "",
+	} {
+		assert.Equal(t, want, DefaultHostLabel(id), id)
+	}
+}
+
+func TestConsoleSSHSyncRules(t *testing.T) {
+	key := filepath.Join(t.TempDir(), "id_ed25519")
+	require.NoError(t, os.WriteFile(key, []byte("PRIVATE KEY BODY\n"), 0o600))
+	direct := Host{Name: "storage", Port: 22, Username: "ubuntu"}
+
+	none, err := direct.ConsoleSSH()
 	require.NoError(t, err)
-	assert.True(t, local.Manifest.FactorEngineIsLocal())
-	assert.Empty(t, local.Manifest.FactorEngineHost().Name)
+	assert.Nil(t, none, "没有配置密码或私钥时控制台置灰")
+
+	direct.Password = "p4ss"
+	got, err := direct.ConsoleSSH()
+	require.NoError(t, err)
+	assert.Equal(t, &ConsoleSSH{Port: 22, User: "ubuntu", AuthType: ConsoleSSHPassword, Secret: "p4ss"}, got)
+
+	direct.PrivateKeyFile, direct.PrivateKeyPassphrase = key, "phrase"
+	got, err = direct.ConsoleSSH()
+	require.NoError(t, err)
+	assert.Equal(t, ConsoleSSHPrivateKey, got.AuthType, "私钥优先于密码")
+	assert.Equal(t, "PRIVATE KEY BODY\n", got.Secret)
+	assert.Equal(t, "phrase", got.Passphrase)
+
+	direct.PrivateKeyFile = filepath.Join(t.TempDir(), "missing")
+	_, err = direct.ConsoleSSH()
+	require.ErrorContains(t, err, "private_key_file")
+
+	outbound := Host{Name: "factor", Port: 22, Username: "builder", Password: "p4ss", Reachability: servicecatalog.ReachabilityOutbound}
+	got, err = outbound.ConsoleSSH()
+	require.NoError(t, err)
+	assert.Nil(t, got, "只能出站的主机不同步 SSH")
 }
 
 func TestLoadHostNormalizationAndSecretRedaction(t *testing.T) {

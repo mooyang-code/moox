@@ -22,7 +22,7 @@ type Config struct {
 	HealthAuth     HealthAuthConfig         `yaml:"health_auth"`
 	Instance       InstanceConfig           `yaml:"instance"`
 	Scheduler      SchedulerConfig          `yaml:"scheduler"`
-	Placement      PlacementConfig          `yaml:"placement"`
+	Deployment     DeploymentConfig         `yaml:"deployment"`
 	Alert          AlertConfig              `yaml:"alert"`
 	Observability  ObservabilityConfig      `yaml:"observability"`
 	Metrics        MetricsConfig            `yaml:"metrics"`
@@ -63,7 +63,7 @@ type SchedulerConfig struct {
 	MaxConcurrency      int `yaml:"max_concurrency"`
 }
 
-type PlacementConfig struct {
+type DeploymentConfig struct {
 	Enabled bool                          `yaml:"enabled"`
 	HTTPS   map[string]domain.HTTPSConfig `yaml:"https"`
 	// LocalHostID 是 Monitor 自己所在的部署主机 ID；该主机上的组件健康检查直接连 127.0.0.1。
@@ -194,13 +194,13 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.applyDefaults()
 	cfg.applyEnv()
-	for id, target := range cfg.Placement.HTTPS {
+	for id, target := range cfg.Deployment.HTTPS {
 		for _, path := range []*string{&target.CAFile, &target.CABaseline} {
 			if *path != "" && !filepath.IsAbs(*path) {
 				*path = filepath.Join(filepath.Dir(absolutePath), *path)
 			}
 		}
-		cfg.Placement.HTTPS[id] = target
+		cfg.Deployment.HTTPS[id] = target
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -230,7 +230,7 @@ func Default() *Config {
 			ResultRetentionDays: 14,
 			MaxConcurrency:      16,
 		},
-		Placement: PlacementConfig{Enabled: true},
+		Deployment: DeploymentConfig{Enabled: true},
 		Alert: AlertConfig{
 			SendTimeoutSeconds: 10,
 		},
@@ -514,13 +514,13 @@ func (c *Config) Validate() error {
 	if len(c.MarketHealth.InstrumentRequiredExchanges) == 0 {
 		return fmt.Errorf("market_health.instrument_required_exchanges must not be empty")
 	}
-	for id, target := range c.Placement.HTTPS {
+	for id, target := range c.Deployment.HTTPS {
 		if err := target.Validate(); err != nil {
-			return fmt.Errorf("placement.https.%s: %w", id, err)
+			return fmt.Errorf("deployment.https.%s: %w", id, err)
 		}
 	}
-	if c.Placement.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
-		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when placement monitoring is enabled")
+	if c.Deployment.Enabled && (strings.TrimSpace(c.HealthAuth.Version) == "" || strings.TrimSpace(c.HealthAuth.AccessKey) == "" || strings.TrimSpace(c.HealthAuth.SecretKey) == "") {
+		return fmt.Errorf("health_auth version, access_key, and secret_key must not be empty when deployment monitoring is enabled")
 	}
 	if c.Metrics.HostStorage.Enabled {
 		h := c.Metrics.HostStorage

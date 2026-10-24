@@ -69,7 +69,7 @@ func unitFixtureOptions(t *testing.T, profile, arch string) Options {
 }
 
 func TestUnitPackagesHaveExactComponentBoundariesAndRepeatableDigests(t *testing.T) {
-	for _, profile := range []string{"host", "control", "storage", "access", "egress-proxy", "trade"} {
+	for _, profile := range []string{"host", "control", "storage", "access", "egress-proxy", "trade", "factor-engine", "archive-worker"} {
 		for _, arch := range []string{"amd64", "arm64"} {
 			t.Run(profile+"/"+arch, func(t *testing.T) {
 				opts := unitFixtureOptions(t, profile, arch)
@@ -104,6 +104,19 @@ func TestUnitPackagesHaveExactComponentBoundariesAndRepeatableDigests(t *testing
 					assert.Contains(t, ids, "archive-mgr")
 					assert.NotContains(t, ids, "trade")
 					assert.NotContains(t, ids, "access")
+				}
+				if profile == "factor-engine" || profile == "archive-worker" {
+					// 外部程序包带安装脚本与服务模板，布局与仓库一致，不含 launchd/PowerShell 文件。
+					assert.Equal(t, []string{profile}, ids)
+					var paths []string
+					for _, file := range result.Manifest.Files {
+						paths = append(paths, file.Path)
+						assert.NotContains(t, file.Path, "launchd")
+						assert.NotContains(t, file.Path, ".ps1")
+					}
+					assert.Contains(t, paths, profile+"/scripts/deploy/deploy-"+profile+".sh")
+					assert.Contains(t, paths, profile+"/deploy/systemd/user/moox-"+profile+".service.tmpl")
+					assert.Contains(t, paths, "bin/moox-"+profile)
 				}
 				for _, file := range result.Manifest.Files {
 					assert.NotContains(t, file.Path, "moox-unrelated")

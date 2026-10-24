@@ -36,7 +36,6 @@ type ApplyResult struct {
 	Action          string `json:"action"`
 	Users           int    `json:"users"`
 	Secrets         int    `json:"secrets"`
-	Hosts           int    `json:"hosts"`
 	Spaces          int    `json:"spaces"`
 	SpacesCreated   int    `json:"spaces_created"`
 	SpacesUnchanged int    `json:"spaces_unchanged"`
@@ -46,7 +45,6 @@ type StatusResult struct {
 	State     string `json:"state"`
 	Users     int    `json:"users"`
 	Secrets   int    `json:"secrets"`
-	Hosts     int    `json:"hosts"`
 	Spaces    int    `json:"spaces"`
 	Missing   int    `json:"missing"`
 	Conflicts int    `json:"conflicts"`
@@ -84,8 +82,8 @@ func (c *Client) ApplyWithSpaces(
 	}
 	return ApplyResult{
 		Action: response.GetAction(), Users: int(response.GetUsers()),
-		Secrets: int(response.GetSecrets()), Hosts: int(response.GetHosts()),
-		Spaces: int(response.GetSpaces()), SpacesCreated: int(response.GetSpacesCreated()),
+		Secrets: int(response.GetSecrets()),
+		Spaces:  int(response.GetSpaces()), SpacesCreated: int(response.GetSpacesCreated()),
 		SpacesUnchanged: int(response.GetSpacesUnchanged()),
 	}, nil
 }
@@ -118,7 +116,7 @@ func (c *Client) StatusWithSpaces(
 	}
 	return StatusResult{
 		State: response.GetState(), Users: int(response.GetUsers()), Secrets: int(response.GetSecrets()),
-		Hosts: int(response.GetHosts()), Spaces: int(response.GetSpaces()),
+		Spaces:  int(response.GetSpaces()),
 		Missing: int(response.GetMissing()), Conflicts: int(response.GetConflicts()),
 	}, nil
 }
@@ -159,8 +157,6 @@ func applyRequest(manifest setupconfig.Manifest, spaces []Space) *pb.ApplySetupR
 	return &pb.ApplySetupReq{
 		Admin:        &pb.SetupAdmin{Username: manifest.Admin.Username, Password: manifest.Admin.Password},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey},
-		ControlHost:  hostToPB(manifest.ControlHost()),
-		OtherHosts:   hostsToPB(manifest.OtherHosts()),
 		Spaces:       spacesToPB(spaces),
 	}
 }
@@ -169,8 +165,6 @@ func statusRequest(manifest setupconfig.Manifest, spaces []Space) *pb.GetSetupSt
 	return &pb.GetSetupStatusReq{
 		Admin:        &pb.SetupAdmin{Username: manifest.Admin.Username, Password: manifest.Admin.Password},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey},
-		ControlHost:  hostToPB(manifest.ControlHost()),
-		OtherHosts:   hostsToPB(manifest.OtherHosts()),
 		Spaces:       spacesToPB(spaces),
 	}
 }
@@ -185,19 +179,4 @@ func spacesToPB(spaces []Space) []*pb.SetupSpace {
 		})
 	}
 	return result
-}
-
-func hostsToPB(hosts []setupconfig.Host) []*pb.SetupHost {
-	result := make([]*pb.SetupHost, 0, len(hosts))
-	for _, host := range hosts {
-		result = append(result, hostToPB(host))
-	}
-	return result
-}
-
-func hostToPB(host setupconfig.Host) *pb.SetupHost {
-	return &pb.SetupHost{
-		Name: host.Name, Address: host.Address, Port: int32(host.Port),
-		Username: host.Username, Password: host.Password,
-	}
 }

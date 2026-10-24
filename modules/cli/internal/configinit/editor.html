@@ -253,7 +253,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     var body = $('servers').tBodies[0];
     body.replaceChildren();
     (view.servers || []).forEach(function (server) {
-      var uses = el('span', { class: 'uses' }, (server.uses.length ? server.uses : ['未放置服务']).map(function (u) { return el('span', { text: u }); }));
+      var uses = el('span', { class: 'uses' }, (server.uses.length ? server.uses : ['未部署服务']).map(function (u) { return el('span', { text: u }); }));
       body.append(el('tr', {}, [
         el('td', {}, [uses]),
         el('td', { class: 'mono', text: server.address }),
@@ -269,8 +269,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
       ['管理员', el('span', { text: view.admin })],
       ['管理员密码', secret('admin.password')],
       ['告警', el('span', { text: view.channel || '—' })],
-      ['告警 Webhook', view.has_webhook ? secret('notification.webhook_url') : el('span', { class: 'muted', text: '未填写' })],
-      ['因子计算', el('span', { text: view.factor_engine || '未配置' })]
+      ['告警 Webhook', view.has_webhook ? secret('notification.webhook_url') : el('span', { class: 'muted', text: '未填写' })]
     ];
     $('accounts').replaceChildren.apply($('accounts'), rows.map(function (row) { return el('tr', {}, [el('th', { text: row[0] }), el('td', {}, [row[1]])]); }));
     var privacy = $('privacy');

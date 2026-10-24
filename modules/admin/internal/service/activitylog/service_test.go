@@ -117,26 +117,27 @@ func TestListFiltersAndPaginatesNewestFirst(t *testing.T) {
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode())
 }
 
-type memberAuthorizer struct {
+type spaceAuthorizer struct {
 	spaceSvc.Service
 	allowed map[string]bool
 }
 
-func (a memberAuthorizer) AuthorizeSpaceRequest(_ context.Context, _, spaceID string, mutates bool, _ int32) error {
-	if mutates || !a.allowed[spaceID] {
-		return errors.New("not a member")
+func (a spaceAuthorizer) AuthorizeSpaceRequest(_ context.Context, spaceID string) error {
+	if !a.allowed[spaceID] {
+		return errors.New("space unavailable")
 	}
 	return nil
 }
 
-func TestBrowserCallersNeedMembershipAndCannotWrite(t *testing.T) {
-	service, _ := newTestService(t, memberAuthorizer{allowed: map[string]bool{"crypto": true}})
-	_, err := service.AppendActivityLogs(context.Background(), &pb.AppendActivityLogsReq{Entries: []*pb.ActivityLogEntry{entry("crypto", "c", "t", ""), entry("stockcn", "c", "t2", "")}})
+func TestBrowserCallersNeedAvailableSpaceOrGlobalAndCannotWrite(t *testing.T) {
+	service, _ := newTestService(t, spaceAuthorizer{allowed: map[string]bool{"crypto": true}})
+	_, err := service.AppendActivityLogs(context.Background(), &pb.AppendActivityLogsReq{Entries: []*pb.ActivityLogEntry{
+		entry("crypto", "c", "t", ""), entry("stockcn", "c", "t2", ""), entry("", "auth.login", "login", ""),
+	}})
 	require.NoError(t, err)
 
 	ctx := trpc.BackgroundContext()
-	trpc.SetMetaData(ctx, model.CtxUserID, []byte("member"))
-	trpc.SetMetaData(ctx, model.CtxUserRole, []byte("1"))
+	trpc.SetMetaData(ctx, model.CtxUserID, []byte("admin"))
 
 	denied, err := service.AppendActivityLogs(ctx, &pb.AppendActivityLogsReq{Entries: []*pb.ActivityLogEntry{entry("crypto", "c", "t", "")}})
 	require.NoError(t, err)
@@ -152,4 +153,14 @@ func TestBrowserCallersNeedMembershipAndCannotWrite(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, own.GetRetInfo().GetCode())
 	require.Len(t, own.GetItems(), 1)
+
+	global, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{Global: true})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, global.GetRetInfo().GetCode())
+	require.Len(t, global.GetItems(), 1)
+	require.Equal(t, "auth.login", global.GetItems()[0].GetCategory())
+
+	both, err := service.ListActivityLogs(ctx, &pb.ListActivityLogsReq{Global: true, SpaceId: "crypto"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, both.GetRetInfo().GetCode())
 }

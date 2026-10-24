@@ -23,7 +23,7 @@ type SysDeployService interface {
 
 	ListHosts(ctx context.Context, req *ListDeploymentHostsReq) (*ListDeploymentHostsRsp, error)
 
-	ListPlacements(ctx context.Context, req *ListPlacementsReq) (*ListPlacementsRsp, error)
+	ListDeployments(ctx context.Context, req *ListDeploymentsReq) (*ListDeploymentsRsp, error)
 
 	GetHostRoutes(ctx context.Context, req *GetHostRoutesReq) (*GetHostRoutesRsp, error)
 
@@ -31,9 +31,9 @@ type SysDeployService interface {
 
 	SetHostStatus(ctx context.Context, req *SetHostStatusReq) (*SetHostStatusRsp, error)
 
-	SetPlacementStatus(ctx context.Context, req *SetPlacementStatusReq) (*SetPlacementStatusRsp, error)
+	SetDeploymentStatus(ctx context.Context, req *SetDeploymentStatusReq) (*SetDeploymentStatusRsp, error)
 
-	SyncHostPlacements(ctx context.Context, req *SyncHostPlacementsReq) (*SyncHostPlacementsRsp, error)
+	SyncHostDeployments(ctx context.Context, req *SyncHostDeploymentsReq) (*SyncHostDeploymentsRsp, error)
 
 	DeleteHost(ctx context.Context, req *DeleteDeploymentHostReq) (*DeleteDeploymentHostRsp, error)
 
@@ -80,14 +80,14 @@ func SysDeployService_ListHosts_Handler(svr interface{}, ctx context.Context, f 
 	return rsp, nil
 }
 
-func SysDeployService_ListPlacements_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListPlacementsReq{}
+func SysDeployService_ListDeployments_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListDeploymentsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SysDeployService).ListPlacements(ctx, reqbody.(*ListPlacementsReq))
+		return svr.(SysDeployService).ListDeployments(ctx, reqbody.(*ListDeploymentsReq))
 	}
 
 	var rsp interface{}
@@ -152,14 +152,14 @@ func SysDeployService_SetHostStatus_Handler(svr interface{}, ctx context.Context
 	return rsp, nil
 }
 
-func SysDeployService_SetPlacementStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &SetPlacementStatusReq{}
+func SysDeployService_SetDeploymentStatus_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SetDeploymentStatusReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SysDeployService).SetPlacementStatus(ctx, reqbody.(*SetPlacementStatusReq))
+		return svr.(SysDeployService).SetDeploymentStatus(ctx, reqbody.(*SetDeploymentStatusReq))
 	}
 
 	var rsp interface{}
@@ -170,14 +170,14 @@ func SysDeployService_SetPlacementStatus_Handler(svr interface{}, ctx context.Co
 	return rsp, nil
 }
 
-func SysDeployService_SyncHostPlacements_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &SyncHostPlacementsReq{}
+func SysDeployService_SyncHostDeployments_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SyncHostDeploymentsReq{}
 	filters, err := f(req)
 	if err != nil {
 		return nil, err
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SysDeployService).SyncHostPlacements(ctx, reqbody.(*SyncHostPlacementsReq))
+		return svr.(SysDeployService).SyncHostDeployments(ctx, reqbody.(*SyncHostDeploymentsReq))
 	}
 
 	var rsp interface{}
@@ -274,8 +274,8 @@ var SysDeployServer_ServiceDesc = server.ServiceDesc{
 			Func: SysDeployService_ListHosts_Handler,
 		},
 		{
-			Name: "/trpc.moox.ops.SysDeploy/ListPlacements",
-			Func: SysDeployService_ListPlacements_Handler,
+			Name: "/trpc.moox.ops.SysDeploy/ListDeployments",
+			Func: SysDeployService_ListDeployments_Handler,
 		},
 		{
 			Name: "/trpc.moox.ops.SysDeploy/GetHostRoutes",
@@ -290,12 +290,12 @@ var SysDeployServer_ServiceDesc = server.ServiceDesc{
 			Func: SysDeployService_SetHostStatus_Handler,
 		},
 		{
-			Name: "/trpc.moox.ops.SysDeploy/SetPlacementStatus",
-			Func: SysDeployService_SetPlacementStatus_Handler,
+			Name: "/trpc.moox.ops.SysDeploy/SetDeploymentStatus",
+			Func: SysDeployService_SetDeploymentStatus_Handler,
 		},
 		{
-			Name: "/trpc.moox.ops.SysDeploy/SyncHostPlacements",
-			Func: SysDeployService_SyncHostPlacements_Handler,
+			Name: "/trpc.moox.ops.SysDeploy/SyncHostDeployments",
+			Func: SysDeployService_SyncHostDeployments_Handler,
 		},
 		{
 			Name: "/trpc.moox.ops.SysDeploy/DeleteHost",
@@ -333,8 +333,8 @@ func (s *UnimplementedSysDeploy) GetCatalog(ctx context.Context, req *GetCatalog
 func (s *UnimplementedSysDeploy) ListHosts(ctx context.Context, req *ListDeploymentHostsReq) (*ListDeploymentHostsRsp, error) {
 	return nil, errors.New("rpc ListHosts of service SysDeploy is not implemented")
 }
-func (s *UnimplementedSysDeploy) ListPlacements(ctx context.Context, req *ListPlacementsReq) (*ListPlacementsRsp, error) {
-	return nil, errors.New("rpc ListPlacements of service SysDeploy is not implemented")
+func (s *UnimplementedSysDeploy) ListDeployments(ctx context.Context, req *ListDeploymentsReq) (*ListDeploymentsRsp, error) {
+	return nil, errors.New("rpc ListDeployments of service SysDeploy is not implemented")
 }
 func (s *UnimplementedSysDeploy) GetHostRoutes(ctx context.Context, req *GetHostRoutesReq) (*GetHostRoutesRsp, error) {
 	return nil, errors.New("rpc GetHostRoutes of service SysDeploy is not implemented")
@@ -345,11 +345,11 @@ func (s *UnimplementedSysDeploy) GetDirectory(ctx context.Context, req *GetDirec
 func (s *UnimplementedSysDeploy) SetHostStatus(ctx context.Context, req *SetHostStatusReq) (*SetHostStatusRsp, error) {
 	return nil, errors.New("rpc SetHostStatus of service SysDeploy is not implemented")
 }
-func (s *UnimplementedSysDeploy) SetPlacementStatus(ctx context.Context, req *SetPlacementStatusReq) (*SetPlacementStatusRsp, error) {
-	return nil, errors.New("rpc SetPlacementStatus of service SysDeploy is not implemented")
+func (s *UnimplementedSysDeploy) SetDeploymentStatus(ctx context.Context, req *SetDeploymentStatusReq) (*SetDeploymentStatusRsp, error) {
+	return nil, errors.New("rpc SetDeploymentStatus of service SysDeploy is not implemented")
 }
-func (s *UnimplementedSysDeploy) SyncHostPlacements(ctx context.Context, req *SyncHostPlacementsReq) (*SyncHostPlacementsRsp, error) {
-	return nil, errors.New("rpc SyncHostPlacements of service SysDeploy is not implemented")
+func (s *UnimplementedSysDeploy) SyncHostDeployments(ctx context.Context, req *SyncHostDeploymentsReq) (*SyncHostDeploymentsRsp, error) {
+	return nil, errors.New("rpc SyncHostDeployments of service SysDeploy is not implemented")
 }
 func (s *UnimplementedSysDeploy) DeleteHost(ctx context.Context, req *DeleteDeploymentHostReq) (*DeleteDeploymentHostRsp, error) {
 	return nil, errors.New("rpc DeleteHost of service SysDeploy is not implemented")
@@ -376,7 +376,7 @@ type SysDeployClientProxy interface {
 
 	ListHosts(ctx context.Context, req *ListDeploymentHostsReq, opts ...client.Option) (rsp *ListDeploymentHostsRsp, err error)
 
-	ListPlacements(ctx context.Context, req *ListPlacementsReq, opts ...client.Option) (rsp *ListPlacementsRsp, err error)
+	ListDeployments(ctx context.Context, req *ListDeploymentsReq, opts ...client.Option) (rsp *ListDeploymentsRsp, err error)
 
 	GetHostRoutes(ctx context.Context, req *GetHostRoutesReq, opts ...client.Option) (rsp *GetHostRoutesRsp, err error)
 
@@ -384,9 +384,9 @@ type SysDeployClientProxy interface {
 
 	SetHostStatus(ctx context.Context, req *SetHostStatusReq, opts ...client.Option) (rsp *SetHostStatusRsp, err error)
 
-	SetPlacementStatus(ctx context.Context, req *SetPlacementStatusReq, opts ...client.Option) (rsp *SetPlacementStatusRsp, err error)
+	SetDeploymentStatus(ctx context.Context, req *SetDeploymentStatusReq, opts ...client.Option) (rsp *SetDeploymentStatusRsp, err error)
 
-	SyncHostPlacements(ctx context.Context, req *SyncHostPlacementsReq, opts ...client.Option) (rsp *SyncHostPlacementsRsp, err error)
+	SyncHostDeployments(ctx context.Context, req *SyncHostDeploymentsReq, opts ...client.Option) (rsp *SyncHostDeploymentsRsp, err error)
 
 	DeleteHost(ctx context.Context, req *DeleteDeploymentHostReq, opts ...client.Option) (rsp *DeleteDeploymentHostRsp, err error)
 
@@ -446,20 +446,20 @@ func (c *SysDeployClientProxyImpl) ListHosts(ctx context.Context, req *ListDeplo
 	return rsp, nil
 }
 
-func (c *SysDeployClientProxyImpl) ListPlacements(ctx context.Context, req *ListPlacementsReq, opts ...client.Option) (*ListPlacementsRsp, error) {
+func (c *SysDeployClientProxyImpl) ListDeployments(ctx context.Context, req *ListDeploymentsReq, opts ...client.Option) (*ListDeploymentsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/ListPlacements")
+	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/ListDeployments")
 	msg.WithCalleeServiceName(SysDeployServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("ops")
 	msg.WithCalleeService("SysDeploy")
-	msg.WithCalleeMethod("ListPlacements")
+	msg.WithCalleeMethod("ListDeployments")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &ListPlacementsRsp{}
+	rsp := &ListDeploymentsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
@@ -526,40 +526,40 @@ func (c *SysDeployClientProxyImpl) SetHostStatus(ctx context.Context, req *SetHo
 	return rsp, nil
 }
 
-func (c *SysDeployClientProxyImpl) SetPlacementStatus(ctx context.Context, req *SetPlacementStatusReq, opts ...client.Option) (*SetPlacementStatusRsp, error) {
+func (c *SysDeployClientProxyImpl) SetDeploymentStatus(ctx context.Context, req *SetDeploymentStatusReq, opts ...client.Option) (*SetDeploymentStatusRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/SetPlacementStatus")
+	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/SetDeploymentStatus")
 	msg.WithCalleeServiceName(SysDeployServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("ops")
 	msg.WithCalleeService("SysDeploy")
-	msg.WithCalleeMethod("SetPlacementStatus")
+	msg.WithCalleeMethod("SetDeploymentStatus")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &SetPlacementStatusRsp{}
+	rsp := &SetDeploymentStatusRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}
 	return rsp, nil
 }
 
-func (c *SysDeployClientProxyImpl) SyncHostPlacements(ctx context.Context, req *SyncHostPlacementsReq, opts ...client.Option) (*SyncHostPlacementsRsp, error) {
+func (c *SysDeployClientProxyImpl) SyncHostDeployments(ctx context.Context, req *SyncHostDeploymentsReq, opts ...client.Option) (*SyncHostDeploymentsRsp, error) {
 	ctx, msg := codec.WithCloneMessage(ctx)
 	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/SyncHostPlacements")
+	msg.WithClientRPCName("/trpc.moox.ops.SysDeploy/SyncHostDeployments")
 	msg.WithCalleeServiceName(SysDeployServer_ServiceDesc.ServiceName)
 	msg.WithCalleeApp("moox")
 	msg.WithCalleeServer("ops")
 	msg.WithCalleeService("SysDeploy")
-	msg.WithCalleeMethod("SyncHostPlacements")
+	msg.WithCalleeMethod("SyncHostDeployments")
 	msg.WithSerializationType(codec.SerializationTypePB)
 	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
-	rsp := &SyncHostPlacementsRsp{}
+	rsp := &SyncHostDeploymentsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

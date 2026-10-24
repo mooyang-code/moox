@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,7 +14,7 @@ func TestSessionManager_StoreLoad_RoundTrip_ShouldWork(t *testing.T) {
 	mgr := NewSessionManager()
 	conn := &SSHConn{
 		SessionID: "s1",
-		Host:      &model.SSHHost{ID: 1, Name: "dev", Address: "10.0.0.1", Port: 22, User: "root"},
+		Target:    model.Target{HostID: "storage", Address: "10.0.0.1", Port: 22, User: "root"},
 		StartTime: time.Now(),
 	}
 	mgr.Store("s1", conn)
@@ -25,7 +26,7 @@ func TestSessionManager_StoreLoad_RoundTrip_ShouldWork(t *testing.T) {
 
 func TestSessionManager_Delete_RemovesSession_ShouldNotLoad(t *testing.T) {
 	mgr := NewSessionManager()
-	conn := &SSHConn{SessionID: "s2", Host: &model.SSHHost{ID: 2}}
+	conn := &SSHConn{SessionID: "s2", Target: model.Target{HostID: "storage"}}
 	mgr.Store("s2", conn)
 	mgr.Delete("s2")
 
@@ -35,8 +36,8 @@ func TestSessionManager_Delete_RemovesSession_ShouldNotLoad(t *testing.T) {
 
 func TestSessionManager_Count_MultipleSessions_ShouldMatch(t *testing.T) {
 	mgr := NewSessionManager()
-	mgr.Store("a", &SSHConn{SessionID: "a", Host: &model.SSHHost{}})
-	mgr.Store("b", &SSHConn{SessionID: "b", Host: &model.SSHHost{}})
+	mgr.Store("a", &SSHConn{SessionID: "a", Target: model.Target{HostID: "storage"}})
+	mgr.Store("b", &SSHConn{SessionID: "b", Target: model.Target{HostID: "overseas"}})
 	assert.Equal(t, 2, mgr.Count())
 }
 
@@ -50,8 +51,8 @@ func TestSSHConn_RefreshActiveTime_ShouldUpdateTimestamp(t *testing.T) {
 func TestSSHConn_MarshalJSON_ShouldHideSensitiveFields(t *testing.T) {
 	conn := &SSHConn{
 		SessionID: "s4",
-		Host: &model.SSHHost{
-			ID: 4, Name: "db", Address: "10.0.0.4", Port: 22, User: "dba", Password: "secret",
+		Target: model.Target{
+			HostID: "storage", Address: "10.0.0.4", Port: 22, User: "dba", Credential: secretmodel.SSHCredential{Password: "secret"},
 		},
 		StartTime:      time.Now(),
 		LastActiveTime: time.Now(),
@@ -71,3 +72,15 @@ func TestSSHConn_ResizeWindow_NoSession_ShouldError(t *testing.T) {
 }
 
 // Connect / RunTerminal 需要真实 SSH 服务端，单测环境无法稳定执行，跳过。
+
+func TestSessionManager_DeleteByHost_ClosesOnlyThatHost(t *testing.T) {
+	mgr := NewSessionManager()
+	mgr.Store("a", &SSHConn{SessionID: "a", Target: model.Target{HostID: "storage"}})
+	mgr.Store("b", &SSHConn{SessionID: "b", Target: model.Target{HostID: "storage"}})
+	mgr.Store("c", &SSHConn{SessionID: "c", Target: model.Target{HostID: "overseas"}})
+	assert.Equal(t, 2, mgr.DeleteByHost("storage"))
+	assert.Equal(t, 1, mgr.Count())
+	_, ok := mgr.Load("c")
+	assert.True(t, ok)
+	assert.Zero(t, mgr.DeleteByHost("storage"))
+}

@@ -300,7 +300,7 @@ func TestIssueBoundsLeafByCAExpiryAndSupportsIPv6(t *testing.T) {
 	first, err := store.EnsureCA()
 	require.NoError(t, err)
 	store.now = func() time.Time { return first.NotAfter.AddDate(-2, 0, 0) }
-	issued, err := store.Issue(HostIdentity{HostID: "compute-1", Address: "2001:db8::1", PrivateAddress: "fd00::1"}, filepath.Join(privateFixtureDir(t), "ipv6"))
+	issued, err := store.Issue(HostIdentity{HostID: "overseas", Address: "2001:db8::1", PrivateAddress: "fd00::1"}, filepath.Join(privateFixtureDir(t), "ipv6"))
 	require.NoError(t, err)
 	require.Equal(t, first.NotAfter, issued.NotAfter)
 	cert := parseFixtureCertificate(t, issued.Certificate)

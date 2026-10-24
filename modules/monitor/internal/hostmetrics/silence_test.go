@@ -141,3 +141,29 @@ func TestSilenceScannerDropsPendingOfflineNoticeAfterRecovery(t *testing.T) {
 	require.Equal(t, []string{PresenceReachable}, delivered, "过期的离线通知不能在恢复通知之后补发")
 	require.Empty(t, scanner.pending)
 }
+
+// 旧采集器的失联通知发送失败，随后同一登记主机上的新采集器开始上报：待重发的失联通知作废。
+func TestSilenceScannerDropsPendingLostNoticeOnceANewAgentReports(t *testing.T) {
+	ctx := context.Background()
+	registry := NewRegistry(openRegistryTestDB(t))
+	registry.SetRegisteredHosts(func(context.Context) (map[string]bool, error) { return map[string]bool{"control": true}, nil })
+	t0 := time.Date(2026, 10, 24, 1, 0, 0, 0, time.UTC)
+	observeAgent(t, registry, "control", "OLD", t0)
+
+	var sent []PresenceTransition
+	fail := true
+	scanner := NewSilenceScanner(registry, 90*time.Second, PresenceTransitionFunc(func(_ context.Context, transition PresenceTransition) error {
+		if fail {
+			return errors.New("webhook down")
+		}
+		sent = append(sent, transition)
+		return nil
+	}))
+	require.NoError(t, scanner.Scan(ctx, t0.Add(2*time.Minute)))
+	require.Empty(t, sent)
+
+	observeAgent(t, registry, "control", "NEW", t0.Add(3*time.Minute))
+	fail = false
+	require.NoError(t, scanner.Scan(ctx, t0.Add(3*time.Minute+10*time.Second)))
+	require.Empty(t, sent, "主机已由新采集器接替，不能再补发失联通知")
+}

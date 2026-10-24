@@ -263,23 +263,23 @@ func (r *MetricMessageStore) PruneDedupe(ctx context.Context, now time.Time) (in
 // reporter that is reported again is simply recreated.
 const RetiredSeriesAfter = 24 * time.Hour
 
-// ReporterPlacement identifies a registered component without relying on probes.
-type ReporterPlacement struct{ NodeID, ServiceName string }
+// ReporterDeployment identifies a registered component without relying on probes.
+type ReporterDeployment struct{ NodeID, ServiceName string }
 
 // PruneRetiredSeries removes the series not reported since RetiredSeriesAfter
 // before now, together with their latest values and retired reporter history.
-// The newest reporter per registered placement survives cleanup, so a stopped
+// The newest reporter per registered deployment survives cleanup, so a stopped
 // component cannot become "never reported". A nil registration list means
 // discovery is still unknown; an empty non-nil list is authoritative.
-// maxRegisteredPlacements 与拓扑上限一致（1024 台主机，每台最多放置全部组件）。
-const maxRegisteredPlacements = 1024 * 24
+// maxRegisteredDeployments 与拓扑上限一致（1024 台主机，每台最多部署全部组件）。
+const maxRegisteredDeployments = 1024 * 24
 
-func (r *MetricMessageStore) PruneRetiredSeries(ctx context.Context, now time.Time, registered []ReporterPlacement) (int64, error) {
+func (r *MetricMessageStore) PruneRetiredSeries(ctx context.Context, now time.Time, registered []ReporterDeployment) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, errors.New("message store is not initialized")
 	}
-	if len(registered) > maxRegisteredPlacements {
-		return 0, fmt.Errorf("registered metric placements exceed limit %d", maxRegisteredPlacements)
+	if len(registered) > maxRegisteredDeployments {
+		return 0, fmt.Errorf("registered metric deployments exceed limit %d", maxRegisteredDeployments)
 	}
 	cutoff := now.UTC().Add(-RetiredSeriesAfter)
 	var pruned int64
@@ -299,17 +299,17 @@ func (r *MetricMessageStore) PruneRetiredSeries(ctx context.Context, now time.Ti
 		retired := tx.Where("c_last_seen_at < ?", cutoff)
 		if len(registered) > 0 {
 			pairs := make([][]any, 0, len(registered))
-			for _, placement := range registered {
-				pairs = append(pairs, []any{placement.NodeID, placement.ServiceName})
+			for _, deployment := range registered {
+				pairs = append(pairs, []any{deployment.NodeID, deployment.ServiceName})
 			}
 			latest := tx.Raw(`SELECT c_id FROM (
 				SELECT c_id, ROW_NUMBER() OVER (
 					PARTITION BY c_node_id, c_service_name
 					ORDER BY c_last_seen_at DESC, c_id DESC
-				) AS placement_rank
+				) AS deployment_rank
 				FROM t_monitor_metric_services
 				WHERE (c_node_id, c_service_name) IN ?
-			) WHERE placement_rank = 1`, pairs)
+			) WHERE deployment_rank = 1`, pairs)
 			retired = retired.Where("c_id NOT IN (?)", latest)
 		}
 		return retired.Delete(&MetricService{}).Error

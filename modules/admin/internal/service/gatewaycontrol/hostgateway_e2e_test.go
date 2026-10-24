@@ -158,7 +158,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 
 	// A newly registered host is also a new caller. Its signature must become
 	// accepted through the already running control gateway after the next pull.
-	require.NoError(t, f.topology.SyncHostPlacements(ctx, sysdeploy.HostSpec{HostID: "joining", Address: "127.0.0.3"}))
+	require.NoError(t, f.topology.SyncHostDeployments(ctx, sysdeploy.HostSpec{HostID: "joining", Address: "127.0.0.3"}))
 	joining, err := f.keys.Ensure(ctx, "host-gateway@joining")
 	require.NoError(t, err)
 	joiningBody, err := codec.Marshal(codec.SerializationTypePB, &pb.PullSnapshotReq{HostId: "joining"})
@@ -176,8 +176,8 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 	require.Equal(t, initialControlInstance, controlStatus.InstanceID)
 	t.Log("SCENARIO PASS new-caller-next-snapshot-without-restart")
 
-	require.NoError(t, f.topology.SetPlacementStatus(ctx, "storage", "storage-primary", servicecatalog.Disabled))
-	waitForE2E(t, 15*time.Second, "disabled placement explicitly rejected", func() bool {
+	require.NoError(t, f.topology.SetDeploymentStatus(ctx, "storage", "storage-primary", servicecatalog.Disabled))
+	waitForE2E(t, 15*time.Second, "disabled deployment explicitly rejected", func() bool {
 		_, err := clients["control"].Forward(ctx, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body)
 		return err != nil && (strings.Contains(err.Error(), "no enabled deployment") || strings.Contains(err.Error(), "not deployed"))
 	})
@@ -203,7 +203,7 @@ func TestHostGatewayRealAdminE2E(t *testing.T) {
 		_, err := e2eRawCall(configs["storage"].Server.LocalAddr, nil, primaryPath, "ReadTimeSeriesRows", codec.SerializationTypePB, body, signedE2E(t, collector.Credentials(), "storage", primaryPath, "ReadTimeSeriesRows", body))
 		return err != nil && strings.Contains(err.Error(), "not deployed")
 	})
-	t.Log("SCENARIO PASS placement-withdrawal-and-automatic-target-switch")
+	t.Log("SCENARIO PASS deployment-withdrawal-and-automatic-target-switch")
 
 	storageProcess.stop(t)
 	storageProcess = startGatewayExecutable(t, binary, framework, configs["storage"])

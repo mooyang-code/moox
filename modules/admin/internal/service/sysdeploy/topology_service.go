@@ -71,29 +71,29 @@ func (s *ServiceImpl) ListHosts(ctx context.Context, req *pb.ListDeploymentHosts
 	response.PageResult = page
 	hosts = hosts[start:end]
 	for _, h := range hosts {
-		response.Hosts = append(response.Hosts, &pb.DeploymentHost{HostId: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Reachability: servicecatalog.ReachabilityName(h.Reachability), Description: h.Description, CreatedAt: h.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: h.UpdatedAt.UTC().Format(time.RFC3339Nano)})
+		response.Hosts = append(response.Hosts, &pb.DeploymentHost{HostId: h.HostID, Label: h.Label, SshPort: int32(h.SSHPort), SshUser: h.SSHUser, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Reachability: servicecatalog.ReachabilityName(h.Reachability), Description: h.Description, CreatedAt: h.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: h.UpdatedAt.UTC().Format(time.RFC3339Nano)})
 	}
 	return response, nil
 }
 
-func (s *ServiceImpl) ListPlacements(ctx context.Context, req *pb.ListPlacementsReq) (*pb.ListPlacementsRsp, error) {
+func (s *ServiceImpl) ListDeployments(ctx context.Context, req *pb.ListDeploymentsReq) (*pb.ListDeploymentsRsp, error) {
 	dao, err := s.topologyDAO()
 	if err != nil {
-		return &pb.ListPlacementsRsp{RetInfo: topologyRet(err)}, nil
+		return &pb.ListDeploymentsRsp{RetInfo: topologyRet(err)}, nil
 	}
-	_, placements, err := dao.Read(ctx)
-	response := &pb.ListPlacementsRsp{RetInfo: topologyRet(err)}
+	_, deployments, err := dao.Read(ctx)
+	response := &pb.ListDeploymentsRsp{RetInfo: topologyRet(err)}
 	if err != nil {
 		return response, nil
 	}
-	placements = slices.DeleteFunc(placements, func(p PlacementRecord) bool {
+	deployments = slices.DeleteFunc(deployments, func(p DeploymentRecord) bool {
 		return req.GetHostId() != "" && p.HostID != req.GetHostId() || req.GetComponentId() != "" && p.ComponentID != req.GetComponentId() || req.GetStatus() != "" && p.Status != req.GetStatus()
 	})
-	start, end, page := topologyPage(req.GetPage(), len(placements))
+	start, end, page := topologyPage(req.GetPage(), len(deployments))
 	response.PageResult = page
-	placements = placements[start:end]
-	for _, p := range placements {
-		response.Placements = append(response.Placements, &pb.ComponentPlacement{HostId: p.HostID, ComponentId: p.ComponentID, Status: p.Status, CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: p.UpdatedAt.UTC().Format(time.RFC3339Nano)})
+	deployments = deployments[start:end]
+	for _, p := range deployments {
+		response.Deployments = append(response.Deployments, &pb.ComponentDeployment{HostId: p.HostID, ComponentId: p.ComponentID, Status: p.Status, CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: p.UpdatedAt.UTC().Format(time.RFC3339Nano)})
 	}
 	return response, nil
 }
@@ -144,12 +144,27 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 	return response, nil
 }
 
-func (s *ServiceImpl) SyncHostPlacements(ctx context.Context, req *pb.SyncHostPlacementsReq) (*pb.SyncHostPlacementsRsp, error) {
+func (s *ServiceImpl) SyncHostDeployments(ctx context.Context, req *pb.SyncHostDeploymentsReq) (*pb.SyncHostDeploymentsRsp, error) {
+	spec := HostSpec{HostID: req.GetHostId(), Label: req.GetLabel(), Address: req.GetAddress(), PrivateAddress: req.GetPrivateAddress(), Region: req.GetRegion(), Reachability: req.GetReachability(), Description: req.GetDescription(), Components: req.GetComponentIds()}
+	if req.GetSshPort() != 0 {
+		ssh := &SSHSpec{Port: int(req.GetSshPort()), User: req.GetSshUser()}
+		switch req.GetSshAuthType() {
+		case "password":
+			ssh.Password = req.GetSshSecret()
+		case "private_key":
+			ssh.PrivateKey, ssh.Passphrase = req.GetSshSecret(), req.GetSshPassphrase()
+		}
+		spec.SSH = ssh
+	}
 	dao, err := s.topologyDAO()
 	if err == nil {
-		err = dao.SyncHostPlacements(ctx, HostSpec{HostID: req.GetHostId(), Address: req.GetAddress(), PrivateAddress: req.GetPrivateAddress(), Region: req.GetRegion(), Reachability: req.GetReachability(), Description: req.GetDescription(), Components: req.GetComponentIds()})
+		err = dao.SyncHostDeployments(ctx, spec)
 	}
-	return &pb.SyncHostPlacementsRsp{RetInfo: topologyRet(err)}, nil
+	if err == nil {
+		// 连接信息可能变了：旧终端和文件会话不能继续连着旧凭据或旧地址。
+		s.closeHostSessions(req.GetHostId())
+	}
+	return &pb.SyncHostDeploymentsRsp{RetInfo: topologyRet(err)}, nil
 }
 
 func (s *ServiceImpl) SetHostStatus(ctx context.Context, req *pb.SetHostStatusReq) (*pb.SetHostStatusRsp, error) {
@@ -163,15 +178,15 @@ func (s *ServiceImpl) SetHostStatus(ctx context.Context, req *pb.SetHostStatusRe
 	return &pb.SetHostStatusRsp{RetInfo: topologyRet(err)}, nil
 }
 
-func (s *ServiceImpl) SetPlacementStatus(ctx context.Context, req *pb.SetPlacementStatusReq) (*pb.SetPlacementStatusRsp, error) {
+func (s *ServiceImpl) SetDeploymentStatus(ctx context.Context, req *pb.SetDeploymentStatusReq) (*pb.SetDeploymentStatusRsp, error) {
 	if req.GetHostId() == "" || req.GetComponentId() == "" {
-		return &pb.SetPlacementStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "host_id and component_id are required")}, nil
+		return &pb.SetDeploymentStatusRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "host_id and component_id are required")}, nil
 	}
 	dao, err := s.topologyDAO()
 	if err == nil {
-		err = dao.SetPlacementStatus(ctx, req.GetHostId(), req.GetComponentId(), req.GetStatus())
+		err = dao.SetDeploymentStatus(ctx, req.GetHostId(), req.GetComponentId(), req.GetStatus())
 	}
-	return &pb.SetPlacementStatusRsp{RetInfo: topologyRet(err)}, nil
+	return &pb.SetDeploymentStatusRsp{RetInfo: topologyRet(err)}, nil
 }
 
 func (s *ServiceImpl) DeleteHost(ctx context.Context, req *pb.DeleteDeploymentHostReq) (*pb.DeleteDeploymentHostRsp, error) {
@@ -181,6 +196,9 @@ func (s *ServiceImpl) DeleteHost(ctx context.Context, req *pb.DeleteDeploymentHo
 	dao, err := s.topologyDAO()
 	if err == nil {
 		err = dao.DeleteHost(ctx, req.GetHostId())
+	}
+	if err == nil {
+		s.closeHostSessions(req.GetHostId())
 	}
 	return &pb.DeleteDeploymentHostRsp{RetInfo: topologyRet(err)}, nil
 }

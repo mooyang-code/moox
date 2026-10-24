@@ -10,10 +10,10 @@ import (
 )
 
 // Service 提供 Control/Admin Space 的业务能力，实现 pb.SpaceMgrService。
-// DAO 层保留 GORM model（Space/SpaceMember），service 内完成 model→PB 映射。
+// DAO 层保留 GORM model（Space），service 内完成 model→PB 映射。
 type Service interface {
 	pb.SpaceMgrService
-	AuthorizeSpaceRequest(ctx context.Context, userID, spaceID string, mutates bool, globalRole int32) error
+	AuthorizeSpaceRequest(ctx context.Context, spaceID string) error
 }
 
 type service struct {
@@ -25,11 +25,10 @@ func NewService(dbManager *database.Manager) Service {
 	return &service{dao: NewDAO(dbManager.GetDB())}
 }
 
-// AuthorizeSpaceRequest is deliberately exposed separately from the Space RPC
-// surface so the Admin HTTP BFF can enforce the same membership boundary
-// before forwarding a browser request.
-func (s *service) AuthorizeSpaceRequest(ctx context.Context, userID, spaceID string, mutates bool, globalRole int32) error {
-	return s.dao.AuthorizeSpaceRequest(ctx, userID, spaceID, mutates, globalRole)
+// AuthorizeSpaceRequest 供 Admin HTTP BFF 在转发浏览器请求前校验 Space 可用。
+// 系统只有一个超级用户，不再区分成员与角色。
+func (s *service) AuthorizeSpaceRequest(ctx context.Context, spaceID string) error {
+	return s.dao.AuthorizeSpaceRequest(ctx, spaceID)
 }
 
 func normalizePage(page *pb.Page) (int, int, int) {
@@ -113,26 +112,6 @@ func (s *service) ListSpaces(ctx context.Context, req *pb.ListSpacesReq) (*pb.Li
 	}, nil
 }
 
-func (s *service) ListSpaceMembers(ctx context.Context, req *pb.ListSpaceMembersReq) (*pb.ListSpaceMembersRsp, error) {
-	if req.GetSpaceId() == "" {
-		return nil, fmt.Errorf("space_id is required")
-	}
-	pageNo, offset, limit := normalizePage(req.GetPage())
-	rows, total, err := s.dao.ListSpaceMembers(ctx, req.GetSpaceId(), offset, limit)
-	if err != nil {
-		return nil, err
-	}
-	members := make([]*pb.SpaceMember, 0, len(rows))
-	for i := range rows {
-		members = append(members, modelToPBSpaceMember(&rows[i]))
-	}
-	return &pb.ListSpaceMembersRsp{
-		RetInfo:    &pb.RetInfo{Code: pb.ErrorCode_SUCCESS, Msg: "success"},
-		Members:    members,
-		PageResult: makePageResult(pageNo, limit, total),
-	}, nil
-}
-
 // modelToPBSpace 把 GORM model 映射为 PB Space（时间用 RFC3339 字符串）。
 func modelToPBSpace(m *Space) *pb.Space {
 	if m == nil {
@@ -150,23 +129,6 @@ func modelToPBSpace(m *Space) *pb.Space {
 		Attributes:  m.Attributes,
 		CreatedAt:   formatTime(m.CreatedAt),
 		UpdatedAt:   formatTime(m.UpdatedAt),
-	}
-}
-
-// modelToPBSpaceMember 把 GORM model 映射为 PB SpaceMember。
-func modelToPBSpaceMember(m *SpaceMember) *pb.SpaceMember {
-	if m == nil {
-		return nil
-	}
-	return &pb.SpaceMember{
-		Id:         m.ID,
-		SpaceId:    m.SpaceID,
-		UserId:     m.UserID,
-		Role:       m.Role,
-		Status:     m.Status,
-		Attributes: m.Attributes,
-		CreatedAt:  formatTime(m.CreatedAt),
-		UpdatedAt:  formatTime(m.UpdatedAt),
 	}
 }
 

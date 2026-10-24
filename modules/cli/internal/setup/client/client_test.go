@@ -60,7 +60,7 @@ port = 22
 username = "ubuntu"
 password = "recognizable-compute-password"
 
-[placements]
+[deployments]
 control = ["admin", "console-proxy", "web-host", "eventbus"]
 compute = []
 `
@@ -79,7 +79,7 @@ func TestApplyUsesCommandGateway(t *testing.T) {
 		body, _ := io.ReadAll(request.Body)
 		_ = protojson.Unmarshal(body, &capturedRequest)
 		response, _ := protojson.Marshal(&pb.ApplySetupRsp{
-			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Action: "created", Users: 1, Secrets: 1, Hosts: 2,
+			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Action: "created", Users: 1, Secrets: 1,
 		})
 		_, _ = w.Write(response)
 	})}
@@ -87,7 +87,6 @@ func TestApplyUsesCommandGateway(t *testing.T) {
 	result, err := New(forwarder).Apply(context.Background(), clientSnapshot(t))
 	require.NoError(t, err)
 	assert.Equal(t, "created", result.Action)
-	assert.Equal(t, 2, result.Hosts)
 	assert.Equal(t, "trpc.moox.admin.Setup", forwarder.remote)
 	assert.Equal(t, "/trpc.moox.admin.Setup/ApplySetup", capturedPath)
 	assert.Equal(t, "recognizable-secret-key", capturedRequest.GetTencentCloud().GetSecretKey())
@@ -101,7 +100,7 @@ func TestApplyWithSpacesMapsAdminSpaceContractAndCounts(t *testing.T) {
 		_ = protojson.Unmarshal(body, &capturedRequest)
 		response, _ := protojson.Marshal(&pb.ApplySetupRsp{
 			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Action: "created",
-			Users: 1, Secrets: 1, Hosts: 2, Spaces: 1, SpacesCreated: 1,
+			Users: 1, Secrets: 1, Spaces: 1, SpacesCreated: 1,
 		})
 		_, _ = w.Write(response)
 	})}
@@ -129,7 +128,7 @@ func TestStatusSendsManifestAndReturnsSanitizedState(t *testing.T) {
 		body, _ := io.ReadAll(request.Body)
 		_ = protojson.Unmarshal(body, &capturedRequest)
 		response, _ := protojson.Marshal(&pb.GetSetupStatusRsp{
-			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, State: "completed", Users: 1, Secrets: 1, Hosts: 2,
+			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, State: "completed", Users: 1, Secrets: 1,
 		})
 		_, _ = w.Write(response)
 	})}
@@ -148,7 +147,7 @@ func TestStatusWithSpacesReturnsSpaceCount(t *testing.T) {
 		_ = protojson.Unmarshal(body, &capturedRequest)
 		response, _ := protojson.Marshal(&pb.GetSetupStatusRsp{
 			RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, State: "completed",
-			Users: 1, Secrets: 1, Hosts: 2, Spaces: 1,
+			Users: 1, Secrets: 1, Spaces: 1,
 		})
 		_, _ = w.Write(response)
 	})}

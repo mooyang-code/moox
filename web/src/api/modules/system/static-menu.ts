@@ -5,7 +5,6 @@ const baseMeta = {
   affix: false,
   link: "",
   iframe: false,
-  roles: ["admin", "common"],
   icon: "icon-menu",
   sort: 1,
   type: 2

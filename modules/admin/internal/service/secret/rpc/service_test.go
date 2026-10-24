@@ -59,11 +59,6 @@ func TestFormatTimeHelpers(t *testing.T) {
 	assert.Equal(t, "", formatTime(time.Time{}))
 	now := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
 	assert.Equal(t, "2024-01-02 03:04:05", formatTime(now))
-
-	assert.Equal(t, "", formatTimePtr(nil))
-	zero := time.Time{}
-	assert.Equal(t, "", formatTimePtr(&zero))
-	assert.Equal(t, "2024-01-02 03:04:05", formatTimePtr(&now))
 }
 
 func TestSecretModelConversions(t *testing.T) {
@@ -83,8 +78,6 @@ func TestSecretModelConversions(t *testing.T) {
 		SecretValue: "super-secret-value",
 		ExtraConfig: `{}`,
 		Status:      "active",
-		LastUsedAt:  &used,
-		LastUsedBy:  "u",
 		Creator:     "c1",
 		CreateTime:  used,
 		ModifyTime:  used,
@@ -94,7 +87,6 @@ func TestSecretModelConversions(t *testing.T) {
 	assert.Equal(t, "sec_1", pbSecret.SecretId)
 	assert.NotEqual(t, "super-secret-value", pbSecret.SecretValue)
 	assert.Contains(t, pbSecret.SecretValue, maskChar)
-	assert.Equal(t, "2024-02-03 04:05:06", pbSecret.LastUsedAt)
 
 	plain := secretModelToPlainPB(m)
 	require.NotNil(t, plain)

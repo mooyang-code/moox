@@ -48,7 +48,7 @@ check("dataset:firing:1m", 1)
 result("dataset:firing:1m", "数据落后 3 根")
 check("dataset:gone:1m", 1)
 result("dataset:gone:1m", RETIRED)
-check("placement:control:admin", 1, "placement", "components")
+check("deployment:control:admin", 1, "deployment", "components")
 db.execute("INSERT INTO t_monitor_alert_rules (c_space_id, c_rule_id, c_check_id, c_failure_threshold, c_success_threshold, c_enabled, c_description) "
            "VALUES ('crypto', 'default:dataset:firing:1m', 'dataset:firing:1m', 1, 1, 1, 'Default MooX monitoring notification')")
 db.execute("INSERT INTO t_monitor_alert_rules (c_space_id, c_rule_id, c_check_id, c_failure_threshold, c_success_threshold, c_enabled, c_description) "

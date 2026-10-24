@@ -52,42 +52,15 @@ func TestDAO_ListSpaces_WithFilter_ShouldReturnMatches(t *testing.T) {
 	assert.Equal(t, "us", rows[0].SpaceID)
 }
 
-func TestDAO_ListSpaceMembers_EmptySpace_ShouldReturnZero(t *testing.T) {
-	d := NewDAO(setupSpaceTestDB(t))
-	rows, total, err := d.ListSpaceMembers(context.Background(), "empty", 0, 10)
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), total)
-	assert.Empty(t, rows)
-}
-
-func TestDAO_AuthorizeSpaceRequest_RequiresActiveMembershipForOrdinaryUser(t *testing.T) {
+func TestDAO_AuthorizeSpaceRequest_ActiveSpaceOnly(t *testing.T) {
 	db := setupSpaceTestDB(t)
 	d := NewDAO(db)
 	require.NoError(t, d.CreateSpace(context.Background(), &Space{SpaceID: "crypto", Name: "Crypto", Status: "active"}))
-	err := d.AuthorizeSpaceRequest(context.Background(), "user-1", "crypto", false, 1)
-	assert.Error(t, err)
-	require.NoError(t, db.Create(&SpaceMember{SpaceID: "crypto", UserID: "user-1", Role: "member", Status: "active"}).Error)
-	require.NoError(t, d.AuthorizeSpaceRequest(context.Background(), "user-1", "crypto", false, 1))
-	assert.Error(t, d.AuthorizeSpaceRequest(context.Background(), "user-1", "crypto", true, 1))
-}
-
-// 空间成员只能读，写操作要空间 owner / admin。
-func TestDAO_AuthorizeSpaceRequest_MemberCanReadButNotMutate(t *testing.T) {
-	db := setupSpaceTestDB(t)
-	d := NewDAO(db)
-	require.NoError(t, d.CreateSpace(context.Background(), &Space{SpaceID: "crypto", Name: "Crypto", Status: "active"}))
-	require.NoError(t, db.Create(&SpaceMember{SpaceID: "crypto", UserID: "user-1", Role: "member", Status: "active"}).Error)
-	require.NoError(t, d.AuthorizeSpaceRequest(context.Background(), "user-1", "crypto", false, 1))
-	assert.Error(t, d.AuthorizeSpaceRequest(context.Background(), "user-1", "crypto", true, 1))
-}
-
-func TestDAO_AuthorizeSpaceRequest_GlobalAdminAndInactiveSpace(t *testing.T) {
-	db := setupSpaceTestDB(t)
-	d := NewDAO(db)
-	require.NoError(t, d.CreateSpace(context.Background(), &Space{SpaceID: "crypto", Name: "Crypto", Status: "active"}))
-	require.NoError(t, d.AuthorizeSpaceRequest(context.Background(), "admin-1", "crypto", true, 2))
+	require.NoError(t, d.AuthorizeSpaceRequest(context.Background(), "crypto"))
+	assert.Error(t, d.AuthorizeSpaceRequest(context.Background(), "missing"))
+	assert.Error(t, d.AuthorizeSpaceRequest(context.Background(), ""))
 	require.NoError(t, db.Model(&Space{}).Where("c_space_id = ?", "crypto").Update("c_status", "disabled").Error)
-	assert.Error(t, d.AuthorizeSpaceRequest(context.Background(), "admin-1", "crypto", false, 2))
+	assert.Error(t, d.AuthorizeSpaceRequest(context.Background(), "crypto"))
 }
 
 func TestService_CreateSpace_MissingRequired_ShouldError(t *testing.T) {
@@ -134,12 +107,6 @@ func TestService_UpdateSpace_ValidRequest_ShouldPersist(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	assert.Equal(t, "Crypto Updated", rsp.GetSpace().GetName())
-}
-
-func TestService_ListSpaceMembers_MissingSpaceID_ShouldError(t *testing.T) {
-	svc := newTestService(t)
-	_, err := svc.ListSpaceMembers(context.Background(), &pb.ListSpaceMembersReq{})
-	require.Error(t, err)
 }
 
 func TestNormalizePage_InvalidValues_ShouldUseDefaults(t *testing.T) {

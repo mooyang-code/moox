@@ -12,7 +12,7 @@
       >
         <div>
           <strong>{{ row.displayName }}</strong
-          ><span>{{ row.displayAddress }}</span>
+          ><span>{{ row.hostId }} · {{ row.displayAddress }}</span>
         </div>
         <span class="rail-state" :class="row.state">{{ stateText(row) }}</span>
         <dl>
@@ -45,7 +45,7 @@ defineProps<{ rows: HostMonitorRow[]; selectedKey: string; selectedRow: HostMoni
 defineEmits<{ select: [key: string] }>();
 
 const percent = (value: number | null) => (value === null ? "--" : `${value}%`);
-const stateText = (row: HostMonitorRow) => (row.state === "online" ? "在线" : row.state === "offline" ? "离线" : "未接入");
+const stateText = (row: HostMonitorRow) => (row.state === "online" ? "在线" : row.state === "offline" ? "离线" : "未上报");
 </script>
 
 <style scoped lang="scss">

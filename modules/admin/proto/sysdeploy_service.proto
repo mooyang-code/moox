@@ -8,7 +8,7 @@ import "gatewaycontrol.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
-// SysDeploy 管理规范主机和组件放置。
+// SysDeploy 管理规范主机和组件部署。
 message DeploymentHost {
   string host_id = 1;
   string address = 2;
@@ -20,9 +20,14 @@ message DeploymentHost {
   string updated_at = 8;
   // direct 或 outbound（只能出站，经 control 网关反向连接中转）。
   string reachability = 9;
+  // 控制台展示用的中文名，如“控制机”。
+  string label = 10;
+  // 控制台终端使用的 SSH 端口与用户；端口为 0 表示控制台不能 SSH 到这台主机。凭据与指纹不外传。
+  int32 ssh_port = 11;
+  string ssh_user = 12;
 }
 
-message ComponentPlacement {
+message ComponentDeployment {
   string host_id = 1;
   string component_id = 2;
   string status = 3;
@@ -68,15 +73,15 @@ message ListDeploymentHostsRsp {
   trpc.moox.common.PageResult page_result = 3;
 }
 
-message ListPlacementsReq {
+message ListDeploymentsReq {
   string host_id = 1;
   string component_id = 2;
   string status = 3;
   trpc.moox.common.Page page = 4;
 }
-message ListPlacementsRsp {
+message ListDeploymentsRsp {
   trpc.moox.common.RetInfo ret_info = 1;
-  repeated ComponentPlacement placements = 2;
+  repeated ComponentDeployment deployments = 2;
   trpc.moox.common.PageResult page_result = 3;
 }
 
@@ -109,16 +114,16 @@ message SetHostStatusReq {
 message SetHostStatusRsp {
   trpc.moox.common.RetInfo ret_info = 1;
 }
-message SetPlacementStatusReq {
+message SetDeploymentStatusReq {
   string host_id = 1;
   string component_id = 2;
   string status = 3;
 }
-message SetPlacementStatusRsp {
+message SetDeploymentStatusRsp {
   trpc.moox.common.RetInfo ret_info = 1;
 }
 
-message SyncHostPlacementsReq {
+message SyncHostDeploymentsReq {
   string host_id = 1;
   string address = 2;
   string private_address = 3;
@@ -128,8 +133,16 @@ message SyncHostPlacementsReq {
   repeated string component_ids = 6;
   // 空或 direct 表示可直达，outbound 表示只能出站。
   string reachability = 7;
+  string label = 8;
+  // SSH 登录信息：ssh_port 为 0 表示控制台不能 SSH（同时清除已存的凭据）。
+  // ssh_auth_type 为 password 或 private_key，ssh_secret 是对应的密码或私钥；ssh_passphrase 是私钥口令。
+  int32 ssh_port = 9;
+  string ssh_user = 10;
+  string ssh_auth_type = 11;
+  string ssh_secret = 12;
+  string ssh_passphrase = 13;
 }
-message SyncHostPlacementsRsp {
+message SyncHostDeploymentsRsp {
   trpc.moox.common.RetInfo ret_info = 1;
 }
 
@@ -182,12 +195,12 @@ message PurgeEventBusSubjectsRsp {
 service SysDeploy {
   rpc GetCatalog(GetCatalogReq) returns (GetCatalogRsp);
   rpc ListHosts(ListDeploymentHostsReq) returns (ListDeploymentHostsRsp);
-  rpc ListPlacements(ListPlacementsReq) returns (ListPlacementsRsp);
+  rpc ListDeployments(ListDeploymentsReq) returns (ListDeploymentsRsp);
   rpc GetHostRoutes(GetHostRoutesReq) returns (GetHostRoutesRsp);
   rpc GetDirectory(GetDirectoryReq) returns (GetDirectoryRsp);
   rpc SetHostStatus(SetHostStatusReq) returns (SetHostStatusRsp);
-  rpc SetPlacementStatus(SetPlacementStatusReq) returns (SetPlacementStatusRsp);
-  rpc SyncHostPlacements(SyncHostPlacementsReq) returns (SyncHostPlacementsRsp);
+  rpc SetDeploymentStatus(SetDeploymentStatusReq) returns (SetDeploymentStatusRsp);
+  rpc SyncHostDeployments(SyncHostDeploymentsReq) returns (SyncHostDeploymentsRsp);
   rpc DeleteHost(DeleteDeploymentHostReq) returns (DeleteDeploymentHostRsp);
   rpc InspectEventBus(InspectEventBusReq) returns (InspectEventBusRsp);
   rpc DeleteEventBusConsumers(DeleteEventBusConsumersReq) returns (DeleteEventBusConsumersRsp);

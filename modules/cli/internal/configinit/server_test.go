@@ -170,7 +170,7 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 		}
 	}
 	// 用户不需要理解底层细节：页面里不出现文件名和路径。
-	for _, detail := range []string{h.output, "moox.toml", "placements"} {
+	for _, detail := range []string{h.output, "moox.toml", "deployments"} {
 		if strings.Contains(body, detail) {
 			t.Fatalf("页面不应出现底层细节 %q", detail)
 		}
@@ -454,7 +454,7 @@ func TestTencentEndpointsVerifyKeysAndRecognizeServers(t *testing.T) {
 func TestFactorCheckAsksToConfirmTheHostKeyFirst(t *testing.T) {
 	h := start(t, time.Minute)
 	h.prober.hostKey = "SHA256:abcdef"
-	target := FactorServer{Mode: FactorRemote, Address: "192.168.0.103", SSHUser: "builder", SSHPassword: "pw-build"}
+	target := FactorServer{Address: "192.168.0.103", SSHUser: "builder", SSHPassword: "pw-build"}
 	status, reply := h.post("factor/check", target)
 	if status != http.StatusOK || reply.Report == nil || reply.Report.HostKey != "SHA256:abcdef" || len(reply.Report.Items) != 0 {
 		t.Fatalf("首次连接应返回指纹待确认: %d %+v", status, reply)
@@ -466,10 +466,7 @@ func TestFactorCheckAsksToConfirmTheHostKeyFirst(t *testing.T) {
 	if status != http.StatusOK || reply.Report == nil || !reply.Report.OK || reply.Report.OS != "linux" {
 		t.Fatalf("确认指纹后应完成检测: %d %+v", status, reply)
 	}
-	if status, _ := h.post("factor/trust", map[string]any{"target": FactorServer{Mode: FactorLocal}, "fingerprint": "SHA256:abcdef"}); status != http.StatusUnprocessableEntity {
-		t.Fatal("本机不需要确认指纹")
-	}
-	if status, reply := h.post("factor/check", FactorServer{Mode: FactorRemote, Address: "192.168.0.103"}); status != http.StatusUnprocessableEntity || reply.OK {
+	if status, reply := h.post("factor/check", FactorServer{Address: "192.168.0.103"}); status != http.StatusUnprocessableEntity || reply.OK {
 		t.Fatalf("缺少 SSH 信息应 422: %d %+v", status, reply)
 	}
 	if strings.Contains(h.notice.String(), "pw-build") {

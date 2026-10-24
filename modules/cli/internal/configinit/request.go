@@ -21,7 +21,7 @@ type Request struct {
 		ChannelType string `json:"channel_type"`
 		WebhookURL  string `json:"webhook_url"`
 	} `json:"notification"`
-	// Servers 按用途收集服务器；海外服务器和因子计算机可选（nil 表示不配置）。
+	// Servers 按用途收集服务器；海外服务器和因子机可选（nil 表示不配置）。
 	Servers struct {
 		Storage  *Server       `json:"storage"`
 		Control  *Server       `json:"control"`
@@ -30,10 +30,8 @@ type Request struct {
 	} `json:"servers"`
 
 	// 以下由 normalize 算出，供渲染使用。
-	hosts        []Host
-	factorRemote Host // 远程的因子计算机：只登记登录方式，不加入部署拓扑
-	factorEngine string
-	region       string
+	hosts  []Host
+	region string
 }
 
 // Server 是一台腾讯云服务器的填写内容；地域等信息由公网 IP 识别得到，不让用户填。
@@ -46,7 +44,7 @@ type Server struct {
 	SSHPassword string `json:"ssh_password"`
 }
 
-// Host 是渲染进 moox.toml 的一台主机。Components 只对部署主机有意义，因子计算机不放置组件。
+// Host 是渲染进 moox.toml 的一台主机。
 type Host struct {
 	ID          string
 	Address     string
@@ -56,10 +54,12 @@ type Host struct {
 	SSHPort     int
 	SSHUser     string
 	SSHPassword string
-	Components  []string
+	// Outbound 为 true 表示只能出站（因子机），经 control 网关的反向连接中转。
+	Outbound   bool
+	Components []string
 }
 
-// Environment 是换算拓扑时要用的外部能力：识别腾讯云服务器、检测因子计算机。
+// Environment 是换算拓扑时要用的外部能力：识别腾讯云服务器、检测因子机。
 type Environment struct {
 	Lookup func(ctx context.Context, keys Keys, address string) (Instance, error)
 	Probe  func(ctx context.Context, target FactorServer) (ProbeReport, error)
@@ -67,7 +67,7 @@ type Environment struct {
 
 const maxFieldBytes = 512
 
-// normalize 检查填写内容，并借助 env 把服务器换算成主机与组件放置；格式与拓扑的语义校验交给 config.Parse。
+// normalize 检查填写内容，并借助 env 把服务器换算成主机与组件部署；格式与拓扑的语义校验交给 config.Parse。
 // 秘密字段原样保留（密码里的空格是有意义的），只拒绝控制字符与超长。
 func (r *Request) normalize(ctx context.Context, env Environment) error {
 	r.Admin.Username = strings.TrimSpace(r.Admin.Username)
@@ -89,7 +89,7 @@ func (r *Request) normalize(ctx context.Context, env Environment) error {
 	return r.buildTopology(ctx, env)
 }
 
-// buildTopology 把各类服务器换算成部署主机（含组件放置）和因子引擎位置。
+// buildTopology 把各类服务器换算成部署主机（含组件部署）。
 func (r *Request) buildTopology(ctx context.Context, env Environment) error {
 	roles, err := loadRoles()
 	if err != nil {
@@ -99,9 +99,9 @@ func (r *Request) buildTopology(ctx context.Context, env Environment) error {
 	if err != nil {
 		return err
 	}
-	r.hosts, r.factorRemote, r.factorEngine, r.region = nil, Host{}, "", ""
+	r.hosts, r.region = nil, ""
 	byRole := map[string]int{}
-	var titles []string // 与 hosts（以及排在最后的因子计算机）一一对应，用于错误提示
+	var titles []string // 与 hosts 一一对应，用于错误提示
 	for _, item := range []struct {
 		key    string
 		server *Server
@@ -149,20 +149,16 @@ func (r *Request) buildTopology(ctx context.Context, env Environment) error {
 		}
 	}
 	if r.Servers.Factor != nil {
-		factor, err := r.factorHost(ctx, env, roleByKey(roles, RoleFactor))
+		role := roleByKey(roles, RoleFactor)
+		factor, err := r.factorHost(ctx, env, role, catalog)
 		if err != nil {
 			return err
 		}
-		if factor != nil {
-			titles = append(titles, roleByKey(roles, RoleFactor).Title)
-		}
-	}
-	all := append([]Host(nil), r.hosts...)
-	if r.factorEngine != "" && r.factorEngine != FactorLocal {
-		all = append(all, factorHostOf(r))
+		r.hosts = append(r.hosts, factor)
+		titles = append(titles, role.Title)
 	}
 	addresses := map[string]string{}
-	for i, host := range all {
+	for i, host := range r.hosts {
 		if other, ok := addresses[host.Address]; ok {
 			if other == roleByKey(roles, RoleControl).Title || titles[i] == roleByKey(roles, RoleControl).Title {
 				return fmt.Errorf("%s和%s的 IP 相同；如果是同一台服务器，请在管理台服务器里选择共用", other, titles[i])
@@ -174,11 +170,6 @@ func (r *Request) buildTopology(ctx context.Context, env Environment) error {
 	return nil
 }
 
-// factorHostOf 返回因子计算机的主机定义。
-func factorHostOf(r *Request) Host {
-	return r.factorRemote
-}
-
 func canShare(role Role, with string) bool {
 	for _, option := range role.Share {
 		if option.Value != "" && option.Value == with {
@@ -188,7 +179,7 @@ func canShare(role Role, with string) bool {
 	return false
 }
 
-// host 校验一台腾讯云服务器的填写内容，用公网 IP 识别它，并换算成带组件放置的主机。
+// host 校验一台腾讯云服务器的填写内容，用公网 IP 识别它，并换算成带组件部署的主机。
 func (s *Server) host(ctx context.Context, env Environment, keys Keys, role Role, catalog servicecatalog.Catalog) (Host, error) {
 	s.Address = strings.TrimSpace(s.Address)
 	s.SSHUser = strings.TrimSpace(s.SSHUser)
@@ -218,36 +209,36 @@ func (s *Server) host(ctx context.Context, env Environment, keys Keys, role Role
 	}, nil
 }
 
-// factorHost 检测因子计算机并决定怎么写：本机只记 local；另一台机器登记登录方式。
-// 返回 nil 表示没有需要登记的主机（本机）。
-func (r *Request) factorHost(ctx context.Context, env Environment, role Role) (*Host, error) {
+// factorHost 检测因子机并换算成只能出站的部署主机，部署 factor-engine 与 archive-worker。
+func (r *Request) factorHost(ctx context.Context, env Environment, role Role, catalog servicecatalog.Catalog) (Host, error) {
 	target, err := r.Servers.Factor.normalize()
 	if err != nil {
-		return nil, err
+		return Host{}, err
+	}
+	for _, id := range role.components {
+		if component, ok := catalog.Component(id); !ok || component.Scope == servicecatalog.ScopeHost {
+			return Host{}, fmt.Errorf("%s的组件 %q 不在服务目录里，请同步模板", role.Title, id)
+		}
 	}
 	report, err := env.Probe(ctx, target)
 	if err != nil {
-		return nil, err
+		return Host{}, err
 	}
 	if report.HostKey != "" {
-		return nil, fmt.Errorf("第一次连接%s，请先点「检测环境」并确认它的主机指纹", role.Title)
+		return Host{}, fmt.Errorf("第一次连接%s，请先点「检测环境」并确认它的主机指纹", role.Title)
 	}
 	if !report.OK {
 		for _, item := range report.Items {
 			if item.Status == CheckFail {
-				return nil, fmt.Errorf("%s环境检测没有通过：%s %s", role.Title, item.Name, item.Detail)
+				return Host{}, fmt.Errorf("%s环境检测没有通过：%s %s", role.Title, item.Name, item.Detail)
 			}
 		}
-		return nil, fmt.Errorf("%s环境检测没有通过", role.Title)
+		return Host{}, fmt.Errorf("%s环境检测没有通过", role.Title)
 	}
-	if target.Mode == FactorLocal {
-		r.factorEngine = FactorLocal
-		return nil, nil
-	}
-	host := Host{ID: role.hostID, Address: target.Address, SSHPort: target.SSHPort, SSHUser: target.SSHUser, SSHPassword: target.SSHPassword}
-	r.factorEngine = host.ID
-	r.factorRemote = host
-	return &host, nil
+	return Host{
+		ID: role.hostID, Address: target.Address, SSHPort: target.SSHPort, SSHUser: target.SSHUser, SSHPassword: target.SSHPassword,
+		Outbound: true, Components: append([]string(nil), role.components...),
+	}, nil
 }
 
 func sshPort(title string, port int) (int, error) {

@@ -45,117 +45,36 @@ CREATE TABLE IF NOT EXISTS t_spaces (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_spaces_space_id_deleted
 ON t_spaces (c_space_id, c_is_deleted);
 
-CREATE TABLE IF NOT EXISTS t_space_members (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_space_id TEXT NOT NULL,
-    c_user_id TEXT NOT NULL,
-    c_role TEXT NOT NULL DEFAULT 'member',
-    c_status TEXT NOT NULL DEFAULT 'active',
-    c_attributes TEXT NOT NULL DEFAULT '{}',
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_space_members_space_user
-ON t_space_members (c_space_id, c_user_id);
-CREATE INDEX IF NOT EXISTS idx_space_members_user_id
-ON t_space_members (c_user_id);
-
 -- ************ 用户表 ************
+-- 系统只有一个超级用户：没有角色、状态和个人资料；登录记录写入全局活动日志（auth.login）。
 CREATE TABLE IF NOT EXISTS t_users (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 自增ID
-    c_user_id TEXT NOT NULL,                                   -- 用户UUID (对应代码中的string类型)
-    c_username TEXT NOT NULL,                                  -- 用户名
-    c_password_hash TEXT NOT NULL,                             -- 密码哈希
-    c_nickname TEXT DEFAULT '',                                -- 昵称
-    c_email TEXT DEFAULT '',                                   -- 邮箱
-    c_avatar TEXT DEFAULT '',                                  -- 头像URL
-    c_role INTEGER NOT NULL DEFAULT 1,                        -- 用户角色: 0-GUEST, 1-USER, 2-ADMIN, 3-SUPER_ADMIN
-    c_status INTEGER NOT NULL DEFAULT 1,                      -- 用户状态: 0-INACTIVE, 1-ACTIVE, 2-SUSPENDED, 3-BANNED
-    c_last_login_at DATETIME,                                  -- 最后登录时间
-    c_last_login_ip TEXT DEFAULT '',                           -- 最后登录IP
-    c_last_password_change DATETIME DEFAULT CURRENT_TIMESTAMP, -- 最后密码修改时间
-    c_is_deleted INTEGER NOT NULL DEFAULT 0,                    -- 删除标记: 0=有效,1=删除
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,               -- 创建时间
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                -- 修改时间
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_user_id TEXT NOT NULL,
+    c_username TEXT NOT NULL,
+    c_password_hash TEXT NOT NULL,
+    c_last_login_at DATETIME,
+    c_last_login_ip TEXT NOT NULL DEFAULT '',
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- ************ 登录历史表 (安全审计) ************
-CREATE TABLE IF NOT EXISTS t_login_history (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 自增ID
-    c_user_id TEXT NOT NULL,                                   -- 用户UUID
-    c_username TEXT NOT NULL,                                  -- 用户名 (冗余存储，便于查询)
-    c_login_type TEXT NOT NULL DEFAULT 'password',             -- 登录类型: password, sms, third_party
-    c_client_ip TEXT NOT NULL,                                 -- 客户端IP
-    c_user_agent TEXT DEFAULT '',                              -- 用户代理
-    c_device_id TEXT DEFAULT '',                               -- 设备ID
-    c_location TEXT DEFAULT '',                                -- 登录地理位置 (可选)
-    c_login_result TEXT NOT NULL,                              -- 登录结果: success, failed, locked
-    c_failure_reason TEXT DEFAULT '',                          -- 失败原因
-    c_session_duration INTEGER DEFAULT 0,                     -- 会话时长(秒) (登出时更新)
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,               -- 登录时间
-
-    FOREIGN KEY (c_user_id) REFERENCES t_users (c_user_id) ON DELETE CASCADE
-);
-
--- ************ 创建索引 ************
--- 用户表索引
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_user_id ON t_users (c_user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON t_users (c_username);
-CREATE INDEX IF NOT EXISTS idx_users_email ON t_users (c_email);
-CREATE INDEX IF NOT EXISTS idx_users_status ON t_users (c_status);
-CREATE INDEX IF NOT EXISTS idx_users_role ON t_users (c_role);
-CREATE INDEX IF NOT EXISTS idx_users_last_login ON t_users (c_last_login_at);
 
--- 登录历史索引
-CREATE INDEX IF NOT EXISTS idx_login_history_user_id ON t_login_history (c_user_id);
-CREATE INDEX IF NOT EXISTS idx_login_history_ip ON t_login_history (c_client_ip);
-CREATE INDEX IF NOT EXISTS idx_login_history_time ON t_login_history (c_ctime);
-CREATE INDEX IF NOT EXISTS idx_login_history_result ON t_login_history (c_login_result);
-
--- ************ 创建触发器，自动更新修改时间 ************
--- 用户表触发器 - 更新时间
 CREATE TRIGGER IF NOT EXISTS update_users_mtime
 AFTER UPDATE ON t_users
 BEGIN
     UPDATE t_users SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
 END;
 
--- ============ SSH 主机管理系统表设计 ============
+-- ============ 主机登记与部署 ============
 
--- ************ SSH 主机配置表 ************
-CREATE TABLE IF NOT EXISTS t_ssh_host (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
-    c_space_id TEXT NOT NULL DEFAULT '',                       -- 空间ID
-    c_name TEXT NOT NULL,                                       -- 主机名称
-    c_address TEXT NOT NULL,                                    -- 主机地址（IP或域名）
-    c_port INTEGER NOT NULL DEFAULT 22,                        -- SSH端口
-    c_user TEXT NOT NULL,                                       -- 登录用户名
-    c_password TEXT DEFAULT '',                                 -- 登录密码（AES加密存储）
-    c_auth_type TEXT NOT NULL DEFAULT 'pwd',                   -- 认证方式: pwd=密码, cert=证书
-    c_net_type TEXT NOT NULL DEFAULT 'tcp4',                   -- 网络类型: tcp4=IPv4, tcp6=IPv6
-    c_cert_data TEXT,                                           -- 证书数据（AES加密存储）
-    c_cert_pwd TEXT DEFAULT '',                                 -- 证书密码（AES加密存储）
-    -- 终端外观配置
-    c_font_size INTEGER NOT NULL DEFAULT 14,                   -- 终端字体大小
-    c_background TEXT NOT NULL DEFAULT '#000000',               -- 终端背景色
-    c_foreground TEXT NOT NULL DEFAULT '#FFFFFF',               -- 终端前景色
-    c_cursor_color TEXT NOT NULL DEFAULT '#FFFFFF',             -- 光标颜色
-    c_font_family TEXT NOT NULL DEFAULT 'Courier New',         -- 字体
-    c_cursor_style TEXT NOT NULL DEFAULT 'block',              -- 光标样式: block/underline/bar
-    -- Shell 配置
-    c_shell TEXT NOT NULL DEFAULT 'bash',                      -- Shell类型
-    c_pty_type TEXT NOT NULL DEFAULT 'xterm-256color',         -- 终端类型
-    c_init_cmd TEXT,                                            -- 连接后初始命令
-    -- 元数据
-    c_creator TEXT NOT NULL DEFAULT '',                         -- 创建人
-    c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                -- 创建时间
-    c_mtime DATETIME DEFAULT CURRENT_TIMESTAMP                 -- 修改时间
-);
-
--- 部署配置与网关运行状态分表，SSH 主机仅通过地址关联。
+-- 主机登记表：唯一的主机来源，只能通过 moox-cli 维护。
+-- 部署配置与网关运行状态分表；SSH 的端口、用户和指纹是本表的列，密码或私钥存在 t_secrets（moox:ssh-host:<主机ID>）。
 CREATE TABLE IF NOT EXISTS t_hosts (
     c_host_id TEXT NOT NULL PRIMARY KEY,
+    -- 控制台展示用的中文名，如“控制机”
+    c_label TEXT NOT NULL DEFAULT '',
     c_address TEXT NOT NULL,
     c_private_address TEXT NOT NULL DEFAULT '',
     c_region TEXT NOT NULL DEFAULT '',
@@ -163,10 +82,16 @@ CREATE TABLE IF NOT EXISTS t_hosts (
     -- direct：可直达；outbound：只能出站，经 control 网关反向连接中转
     c_reachability TEXT NOT NULL DEFAULT 'direct',
     c_description TEXT NOT NULL DEFAULT '',
+    -- 0 表示控制台不能 SSH 到这台主机
+    c_ssh_port INTEGER NOT NULL DEFAULT 0,
+    c_ssh_user TEXT NOT NULL DEFAULT '',
+    -- 首次连接记录的主机密钥指纹，格式为“地址:端口 指纹”，地址或端口变化后自然失效
+    c_ssh_fingerprint TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('enabled', 'disabled')),
     CHECK (c_reachability IN ('direct', 'outbound')),
+    CHECK (c_ssh_port BETWEEN 0 AND 65535),
     UNIQUE (c_address)
 );
 
@@ -178,7 +103,7 @@ BEGIN
     UPDATE t_hosts SET c_mtime = CURRENT_TIMESTAMP WHERE c_host_id = OLD.c_host_id;
 END;
 
-CREATE TABLE IF NOT EXISTS t_placements (
+CREATE TABLE IF NOT EXISTS t_deployments (
     c_host_id TEXT NOT NULL,
     c_component_id TEXT NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'enabled',
@@ -189,14 +114,14 @@ CREATE TABLE IF NOT EXISTS t_placements (
     PRIMARY KEY (c_host_id, c_component_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_placements_component ON t_placements (c_component_id);
+CREATE INDEX IF NOT EXISTS idx_t_deployments_component ON t_deployments (c_component_id);
 
-CREATE TRIGGER IF NOT EXISTS trg_t_placements_mtime
-AFTER UPDATE ON t_placements
+CREATE TRIGGER IF NOT EXISTS trg_t_deployments_mtime
+AFTER UPDATE ON t_deployments
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_placements SET c_mtime = CURRENT_TIMESTAMP
+    UPDATE t_deployments SET c_mtime = CURRENT_TIMESTAMP
     WHERE c_host_id = OLD.c_host_id AND c_component_id = OLD.c_component_id;
 END;
 
@@ -219,50 +144,6 @@ CREATE TABLE IF NOT EXISTS t_host_gateway_status (
     FOREIGN KEY (c_host_id) REFERENCES t_hosts (c_host_id)
 );
 
--- ************ SSH 主机密钥指纹（首次连接记录，之后固定） ************
-CREATE TABLE IF NOT EXISTS t_ssh_host_key (
-    c_host_id INTEGER NOT NULL PRIMARY KEY,                    -- 关联主机ID
-    c_address TEXT NOT NULL,                                    -- 记录指纹时的 地址:端口
-    c_fingerprint TEXT NOT NULL,                                -- SHA256 指纹
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP        -- 记录时间
-);
-
--- ************ SSH 会话表（用于会话管理） ************
-CREATE TABLE IF NOT EXISTS t_ssh_session (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,           -- 主键ID
-    c_space_id TEXT NOT NULL DEFAULT '',                       -- 空间ID
-    c_session_id TEXT NOT NULL,                                 -- 会话唯一标识
-    c_host_id INTEGER NOT NULL,                                -- 关联主机ID
-    c_host_name TEXT DEFAULT '',                                -- 主机名称（冗余）
-    c_host_address TEXT NOT NULL,                               -- 主机地址（冗余）
-    c_client_ip TEXT DEFAULT '',                                -- 客户端IP
-    c_username TEXT DEFAULT '',                                 -- 登录用户名
-    c_status TEXT NOT NULL DEFAULT 'connected',                -- 状态: connected/disconnected/error
-    c_connect_time DATETIME,                                    -- 连接时间
-    c_close_time DATETIME,                                      -- 关闭时间
-    c_error_msg TEXT                                              -- 错误信息
-);
-
--- ************ 创建SSH相关索引 ************
-CREATE INDEX IF NOT EXISTS idx_ssh_host_space_id ON t_ssh_host (c_space_id);
-CREATE INDEX IF NOT EXISTS idx_ssh_host_name ON t_ssh_host (c_name);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_host_address ON t_ssh_host (c_address);
-CREATE INDEX IF NOT EXISTS idx_ssh_host_mtime ON t_ssh_host (c_mtime);
-
-CREATE INDEX IF NOT EXISTS idx_ssh_session_space_id ON t_ssh_session (c_space_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ssh_session_session_id ON t_ssh_session (c_session_id);
-CREATE INDEX IF NOT EXISTS idx_ssh_session_host_id ON t_ssh_session (c_host_id);
-CREATE INDEX IF NOT EXISTS idx_ssh_session_status ON t_ssh_session (c_status);
-CREATE INDEX IF NOT EXISTS idx_ssh_session_connect_time ON t_ssh_session (c_connect_time);
-
--- ************ 创建SSH相关触发器 ************
-DROP TRIGGER IF EXISTS update_ssh_host_mtime;
-CREATE TRIGGER IF NOT EXISTS update_ssh_host_mtime
-AFTER UPDATE ON t_ssh_host
-BEGIN
-    UPDATE t_ssh_host SET c_mtime = CURRENT_TIMESTAMP WHERE rowid = NEW.rowid;
-END;
-
 -- ============ 秘钥管理系统表设计 ============
 
 -- ************ 秘钥管理表 ************
@@ -283,8 +164,6 @@ CREATE TABLE IF NOT EXISTS t_secrets (
     c_secret_value TEXT NOT NULL,                               -- 秘钥值（AES加密存储，返回时脱敏）
     c_extra_config TEXT NOT NULL DEFAULT '{}',                  -- 额外配置 (JSON: cert_pwd/passphrase/region/permissions等)
     c_status TEXT NOT NULL DEFAULT 'active',                    -- 状态: active=启用, inactive=禁用
-    c_last_used_at DATETIME,                                    -- 最后使用时间
-    c_last_used_by TEXT NOT NULL DEFAULT '',                    -- 最后使用方（服务/模块名）
     c_creator TEXT NOT NULL DEFAULT '',                         -- 创建人
     c_is_deleted INTEGER NOT NULL DEFAULT 0,                    -- 软删除标记: 0=有效,1=删除
     c_ctime DATETIME DEFAULT CURRENT_TIMESTAMP,                 -- 创建时间

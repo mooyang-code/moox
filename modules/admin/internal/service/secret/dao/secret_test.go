@@ -93,18 +93,6 @@ func TestSecretDAO_UpdateStatus_ValidSecret_ShouldUpdate(t *testing.T) {
 	assert.Equal(t, "inactive", got.Status)
 }
 
-func TestSecretDAO_UpdateLastUsed_ValidSecret_ShouldUpdate(t *testing.T) {
-	d := NewSecretDAO(setupSecretDAOTestDB(t))
-	secret := sampleSecret()
-	require.NoError(t, d.Create(context.Background(), secret))
-	require.NoError(t, d.UpdateLastUsed(context.Background(), secret.SecretID, "trade"))
-
-	got, err := d.FindByID(context.Background(), secret.SecretID)
-	require.NoError(t, err)
-	assert.Equal(t, "trade", got.LastUsedBy)
-	assert.NotNil(t, got.LastUsedAt)
-}
-
 func TestGenerateSecretID_ShouldReturnUUID(t *testing.T) {
 	id1 := GenerateSecretID()
 	id2 := GenerateSecretID()
@@ -122,6 +110,7 @@ func TestSystemGatewayKeysAreInvisibleAndImmutableThroughGenericDAO(t *testing.T
 	for _, row := range []*model.Secret{
 		{SecretID: model.GatewayKeyringIDPrefix + "console", SecretType: "api_key"},
 		{SecretID: "opaque-system-record", SecretType: model.GatewayKeyringType},
+		{SecretID: model.SSHHostSecretID("storage"), SecretType: "password"},
 	} {
 		row.Name = "system"
 		row.Description = "visible description"
@@ -135,7 +124,6 @@ func TestSystemGatewayKeysAreInvisibleAndImmutableThroughGenericDAO(t *testing.T
 		require.ErrorIs(t, d.Update(ctx, row), ErrSystemSecret)
 		require.ErrorIs(t, d.Delete(ctx, row.SecretID), ErrSecretNotFound)
 		require.ErrorIs(t, d.UpdateStatus(ctx, row.SecretID, "inactive"), ErrSecretNotFound)
-		require.ErrorIs(t, d.UpdateLastUsed(ctx, row.SecretID, "forged"), ErrSecretNotFound)
 		// A caller cannot evade the write scope by changing the requested type.
 		forged := sampleSecret()
 		forged.SecretID = row.SecretID

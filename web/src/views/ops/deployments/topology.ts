@@ -1,9 +1,9 @@
 import type { ComponentCatalog, DeploymentHost } from "@/api/admin/types";
 import type { HealthStatus } from "@/api/monitor";
-import type { PlacementRow } from "./model";
+import type { DeploymentRow } from "./model";
 
-// 服务拓扑：调用关系只依据组件目录（ACL、principals）、主机与放置推导，不凭印象补关系；
-// 数据流向是总体设计第 5、6 节的固定链路（事件订阅不在目录里），按实际放置落到节点上。
+// 服务拓扑：调用关系只依据组件目录（ACL、principals）、主机与部署推导，不凭印象补关系；
+// 数据流向是总体设计第 5、6 节的固定链路（事件订阅不在目录里），按实际部署落到节点上。
 // 坐标在这里一次算好，HTML 节点和 SVG 连线共用，刷新时不抖动，也能在无 DOM 环境下测试。
 
 export type TopologyLayer = "entry" | "control" | "business" | "storage" | "infra" | "other";
@@ -35,6 +35,8 @@ const LAYER_OF: Record<string, TopologyLayer> = {
   "collector-stream": "business",
   cloudfunction: "business",
   "factor-mgr": "business",
+  "factor-engine": "business",
+  "archive-worker": "business",
   "archive-mgr": "business",
   strategy: "business",
   trade: "business",
@@ -50,10 +52,8 @@ const EXTERNAL_LABELS: Record<string, { name: string; note: string }> = {
   // 数据流向经过的外部节点排在一起，避免流向线横穿其他外部节点。
   market: { name: "行情源", note: "交易所 / 行情接口" },
   "scf-collector": { name: "SCF 采集函数", note: "腾讯云函数" },
-  "factor-engine": { name: "因子引擎", note: "操作员机器" },
   console: { name: "管理台", note: "浏览器 · HTTPS 9527" },
   "moox-cli": { name: "moox-cli", note: "运维命令行" },
-  "archive-worker": { name: "归档 Worker", note: "外部进程" },
   "collector-operator": { name: "采集运维", note: "外部调用方" },
   "moox-skill": { name: "Skill", note: "外部调用方" }
 };
@@ -93,8 +93,8 @@ export const DATA_FLOW: FlowStep[] = [
   { from: "collector-stream", to: "storage-primary", kind: "data", stage: "WS 推送", label: "写入 K 线" },
   { from: "storage-primary", to: "storage-node", kind: "data", stage: "存储", label: "写入事实存储，到点固化采集周期" },
   { from: "storage-node", to: "storage-view", kind: "event", stage: "存储", label: "行变更与周期标记，构建 View" },
-  { from: "storage-node", to: "ext:factor-engine", kind: "event", stage: "因子", label: "采集周期完成，触发因子计算" },
-  { from: "ext:factor-engine", to: "access", kind: "data", stage: "因子", label: "写回因子结果", near: "storage-primary" },
+  { from: "storage-node", to: "factor-engine", kind: "event", stage: "因子", label: "采集周期完成，触发因子计算" },
+  { from: "factor-engine", to: "access", kind: "data", stage: "因子", label: "写回因子结果", near: "storage-primary" },
   { from: "storage-view", to: "strategy", kind: "event", stage: "策略交易", label: "View 数据就绪，计算目标权重" },
   { from: "strategy", to: "trade", kind: "event", stage: "策略交易", label: "目标权重请求，收敛下单" }
 ];
@@ -160,7 +160,7 @@ export interface Topology {
 }
 export interface TopologyInput {
   catalog?: ComponentCatalog;
-  groups: { host: DeploymentHost; rows: PlacementRow[] }[];
+  groups: { host: DeploymentHost; rows: DeploymentRow[] }[];
   controlHostId: string;
   showDisabled: boolean;
 }
@@ -178,9 +178,9 @@ export function buildTopology(input: TopologyInput): Topology {
 
   // 1. 按“主机列 × 分层行”排布组件；各层行高取所有主机里最高的一格，保证层次横向对齐。
   const cells = groups.map(group => {
-    const byLayer = new Map<TopologyLayer, PlacementRow[]>();
+    const byLayer = new Map<TopologyLayer, DeploymentRow[]>();
     for (const row of group.rows) {
-      const layer = layerOf(row.placement.component_id);
+      const layer = layerOf(row.deployment.component_id);
       byLayer.set(layer, [...(byLayer.get(layer) || []), row]);
     }
     return byLayer;
@@ -214,10 +214,10 @@ export function buildTopology(input: TopologyInput): Topology {
         nodes.push({
           id: row.key,
           kind: "component",
-          name: row.definition?.name || row.placement.component_id,
-          sub: row.placement.component_id,
-          hostId: row.placement.host_id,
-          componentId: row.placement.component_id,
+          name: row.definition?.name || row.deployment.component_id,
+          sub: row.deployment.component_id,
+          hostId: row.deployment.host_id,
+          componentId: row.deployment.component_id,
           layer: layer.key,
           status: row.status,
           x: columnsX[column] + CELL_PAD + (index % 2) * (NODE_W + GAP_X),
@@ -279,12 +279,12 @@ export function buildTopology(input: TopologyInput): Topology {
     }
   }
   for (const principal of input.catalog?.principals || []) {
-    const source = nodeById.get(`ext:${principal.id}`);
-    if (!source) continue;
+    const sources = sourcesOf(principal.id, placed, nodeById);
+    const category = categoryOf(principal.id, componentIds.has(principal.id));
     for (const grant of principal.allow) {
       const componentId = owner.get(grant.service);
       for (const target of (componentId && placed.get(componentId)) || [])
-        link(source, target, "entry", grant.service, "经外部接入 access :11004 转发");
+        for (const source of sources) link(source, target, category, grant.service, "经外部接入 access :11004 转发");
     }
   }
   for (const entry of ENTRY_LINKS) {
@@ -295,7 +295,7 @@ export function buildTopology(input: TopologyInput): Topology {
   }
 
   const unplacedIds = new Set(components.map(item => item.id));
-  for (const group of input.groups) for (const row of group.rows) unplacedIds.delete(row.placement.component_id);
+  for (const group of input.groups) for (const row of group.rows) unplacedIds.delete(row.deployment.component_id);
   return {
     nodes,
     edges: [...edges.values()],
@@ -315,7 +315,7 @@ function collectExternals(catalog?: ComponentCatalog) {
     for (const service of component.services || [])
       for (const grant of service.acl)
         for (const caller of grant.callers) if (!componentIds.has(caller) && caller !== "host-gateway@*") ids.add(caller);
-  for (const principal of catalog?.principals || []) ids.add(principal.id);
+  for (const principal of catalog?.principals || []) if (!componentIds.has(principal.id)) ids.add(principal.id);
   const order = Object.keys(EXTERNAL_LABELS);
   return [...ids]
     .sort((a, b) => rank(order, a) - rank(order, b) || a.localeCompare(b))

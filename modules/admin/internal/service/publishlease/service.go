@@ -28,7 +28,7 @@ func (s *Service) AcquireCollectorPublishLease(ctx context.Context, req *pb.Acqu
 		return leaseRspError(pb.ErrorCode_INVALID_PARAM, "space_id and holder_id are required"), nil
 	}
 	if err := s.authorizeUser(ctx, req.GetSpaceId()); err != nil {
-		return leaseRspError(pb.ErrorCode_NO_PERMISSION, "collector publish lease requires space owner or admin"), nil
+		return leaseRspError(pb.ErrorCode_NO_PERMISSION, "collector publish lease requires an available space"), nil
 	}
 	var lease *leaseRecord
 	var err error
@@ -54,7 +54,7 @@ func (s *Service) RenewCollectorPublishLease(ctx context.Context, req *pb.RenewC
 		return leaseRspError(pb.ErrorCode_INVALID_PARAM, "space_id and lease identity are required"), nil
 	}
 	if err := s.authorizeUser(ctx, req.GetSpaceId()); err != nil {
-		return leaseRspError(pb.ErrorCode_NO_PERMISSION, "collector publish lease requires space owner or admin"), nil
+		return leaseRspError(pb.ErrorCode_NO_PERMISSION, "collector publish lease requires an available space"), nil
 	}
 	lease, err := s.dao.Renew(ctx, req.GetSpaceId(), req.GetLeaseId(), req.GetFencingToken(), time.Now().UTC())
 	if err != nil {
@@ -71,7 +71,7 @@ func (s *Service) ReleaseCollectorPublishLease(ctx context.Context, req *pb.Rele
 		return &pb.ReleaseCollectorPublishLeaseRsp{RetInfo: leaseRet(pb.ErrorCode_INVALID_PARAM, "lease request is required")}, nil
 	}
 	if err := s.authorizeUser(ctx, req.GetSpaceId()); err != nil {
-		return &pb.ReleaseCollectorPublishLeaseRsp{RetInfo: leaseRet(pb.ErrorCode_NO_PERMISSION, "collector publish lease requires space owner or admin")}, nil
+		return &pb.ReleaseCollectorPublishLeaseRsp{RetInfo: leaseRet(pb.ErrorCode_NO_PERMISSION, "collector publish lease requires an available space")}, nil
 	}
 	released, err := s.dao.Release(ctx, req.GetSpaceId(), req.GetLeaseId(), req.GetFencingToken(), time.Now().UTC())
 	if err != nil {
@@ -85,7 +85,7 @@ func (s *Service) ValidateCollectorPublishLease(ctx context.Context, req *pb.Val
 		return &pb.ValidateCollectorPublishLeaseRsp{RetInfo: leaseRet(pb.ErrorCode_INVALID_PARAM, "space_id, lease_id, and positive fencing_token are required")}, nil
 	}
 	if err := s.authorizeUser(ctx, req.GetSpaceId()); err != nil {
-		return &pb.ValidateCollectorPublishLeaseRsp{RetInfo: leaseRet(pb.ErrorCode_NO_PERMISSION, "collector publish lease requires space owner or admin")}, nil
+		return &pb.ValidateCollectorPublishLeaseRsp{RetInfo: leaseRet(pb.ErrorCode_NO_PERMISSION, "collector publish lease requires an available space")}, nil
 	}
 	current, valid, err := s.dao.Validate(ctx, req.GetSpaceId(), req.GetLeaseId(), req.GetFencingToken(), time.Now().UTC())
 	if err != nil {
@@ -104,7 +104,7 @@ func (s *Service) BeginCollectorPublishOperation(ctx context.Context, req *pb.Be
 		return operationRspError(pb.ErrorCode_INVALID_PARAM, "space_id, lease_id, operation_id, and positive fencing_token are required"), nil
 	}
 	if err := s.authorizeUser(ctx, req.GetSpaceId()); err != nil {
-		return operationRspError(pb.ErrorCode_NO_PERMISSION, "collector publish operation requires space owner or admin"), nil
+		return operationRspError(pb.ErrorCode_NO_PERMISSION, "collector publish operation requires an available space"), nil
 	}
 	operation, err := s.dao.BeginOperation(ctx, req.GetSpaceId(), req.GetLeaseId(), req.GetOperationId(), req.GetFencingToken(), time.Now().UTC())
 	if err != nil {
@@ -121,7 +121,7 @@ func (s *Service) RenewCollectorPublishOperation(ctx context.Context, req *pb.Co
 		return operationRspError(pb.ErrorCode_INVALID_PARAM, "space_id, operation_id, and positive fencing_token are required"), nil
 	}
 	if err := s.authorizeUser(ctx, req.GetSpaceId()); err != nil {
-		return operationRspError(pb.ErrorCode_NO_PERMISSION, "collector publish operation requires space owner or admin"), nil
+		return operationRspError(pb.ErrorCode_NO_PERMISSION, "collector publish operation requires an available space"), nil
 	}
 	operation, err := s.dao.RenewOperation(ctx, req.GetSpaceId(), req.GetOperationId(), req.GetFencingToken(), time.Now().UTC())
 	if err != nil {
@@ -138,7 +138,7 @@ func (s *Service) EndCollectorPublishOperation(ctx context.Context, req *pb.Coll
 		return operationRspError(pb.ErrorCode_INVALID_PARAM, "space_id, operation_id, and positive fencing_token are required"), nil
 	}
 	if err := s.authorizeUser(ctx, req.GetSpaceId()); err != nil {
-		return operationRspError(pb.ErrorCode_NO_PERMISSION, "collector publish operation requires space owner or admin"), nil
+		return operationRspError(pb.ErrorCode_NO_PERMISSION, "collector publish operation requires an available space"), nil
 	}
 	_, err := s.dao.EndOperation(ctx, req.GetSpaceId(), req.GetOperationId(), req.GetFencingToken())
 	if err != nil {
@@ -148,17 +148,17 @@ func (s *Service) EndCollectorPublishOperation(ctx context.Context, req *pb.Coll
 }
 
 func (s *Service) authorizeUser(ctx context.Context, spaceID string) error {
-	userID, _, role, err := utils.GetUserInfoFromCtx(ctx)
+	_, _, err := utils.GetUserInfoFromCtx(ctx)
 	if err != nil {
 		// Service callers are restricted to moox-cli/admin-gateway by the
 		// Node Service Gateway route ACL. Browser requests pass the JWT filter
-		// and are checked against Space membership below.
+		// and are checked against the Space below.
 		return nil
 	}
 	if s.authorizer == nil {
 		return fmt.Errorf("space authorizer is unavailable")
 	}
-	return s.authorizer.AuthorizeSpaceRequest(ctx, userID, strings.TrimSpace(spaceID), true, role)
+	return s.authorizer.AuthorizeSpaceRequest(ctx, strings.TrimSpace(spaceID))
 }
 
 func leaseRsp(record *leaseRecord) *pb.CollectorPublishLeaseRsp {

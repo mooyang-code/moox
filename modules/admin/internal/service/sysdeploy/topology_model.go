@@ -5,20 +5,25 @@ import "time"
 const GatewayConflictWindow = 5 * time.Minute
 
 type HostRecord struct {
-	HostID         string    `gorm:"column:c_host_id;primaryKey"`
-	Address        string    `gorm:"column:c_address"`
-	PrivateAddress string    `gorm:"column:c_private_address"`
-	Region         string    `gorm:"column:c_region"`
-	Status         string    `gorm:"column:c_status"`
-	Reachability   string    `gorm:"column:c_reachability"`
-	Description    string    `gorm:"column:c_description"`
+	HostID         string `gorm:"column:c_host_id;primaryKey"`
+	Label          string `gorm:"column:c_label"`
+	Address        string `gorm:"column:c_address"`
+	PrivateAddress string `gorm:"column:c_private_address"`
+	Region         string `gorm:"column:c_region"`
+	Status         string `gorm:"column:c_status"`
+	Reachability   string `gorm:"column:c_reachability"`
+	Description    string `gorm:"column:c_description"`
+	// SSHPort 为 0 表示控制台不能 SSH；指纹由 SSH 服务首次连接时写回，同步不会改它。
+	SSHPort        int       `gorm:"column:c_ssh_port"`
+	SSHUser        string    `gorm:"column:c_ssh_user"`
+	SSHFingerprint string    `gorm:"column:c_ssh_fingerprint"`
 	CreatedAt      time.Time `gorm:"column:c_ctime;autoCreateTime"`
 	UpdatedAt      time.Time `gorm:"column:c_mtime;autoUpdateTime"`
 }
 
 func (HostRecord) TableName() string { return "t_hosts" }
 
-type PlacementRecord struct {
+type DeploymentRecord struct {
 	HostID      string    `gorm:"column:c_host_id;primaryKey"`
 	ComponentID string    `gorm:"column:c_component_id;primaryKey"`
 	Status      string    `gorm:"column:c_status"`
@@ -26,7 +31,7 @@ type PlacementRecord struct {
 	UpdatedAt   time.Time `gorm:"column:c_mtime;autoUpdateTime"`
 }
 
-func (PlacementRecord) TableName() string { return "t_placements" }
+func (DeploymentRecord) TableName() string { return "t_deployments" }
 
 type HostGatewayStatus struct {
 	HostID             string     `gorm:"column:c_host_id;primaryKey"`
@@ -56,9 +61,10 @@ func (s *HostGatewayStatus) ClearExpiredConflict(now time.Time) {
 }
 
 // HostSpec contains deployment input, not runtime status. Synchronization keeps
-// the existing host and placement enablement values.
+// the existing host and deployment enablement values.
 type HostSpec struct {
 	HostID         string
+	Label          string
 	Address        string
 	PrivateAddress string
 	// Reachability 为空或 direct 表示可直达，outbound 表示只能出站。
@@ -66,4 +72,15 @@ type HostSpec struct {
 	Region       string
 	Description  string
 	Components   []string
+	// SSH 为空表示控制台不能 SSH 到这台主机，已存的凭据同时被清除。
+	SSH *SSHSpec
+}
+
+// SSHSpec 是主机的 SSH 登录信息。凭据明文只在写入事务里使用，加密后存进 t_secrets。
+type SSHSpec struct {
+	Port       int
+	User       string
+	Password   string
+	PrivateKey string
+	Passphrase string
 }

@@ -6,7 +6,7 @@
 
 准备流程如下：
 
-1. 根据目标机实际平台验证并解包软件，检查所选组件属于软件单元和主机完整放置。
+1. 根据目标机实际平台验证并解包软件，检查所选组件属于软件单元和主机完整部署。
 2. 取得部署根共用维护锁并核对持久主机身份；已有调用方通过真实继承 FD 复用锁。
 3. 只注入所选组件的私密身份。host 单元包含 host-gateway 与 host-agent；主机网关的 MooX TLS 材料只进入 host 单元。Access 的验证表包含其外部调用方密钥，其他业务单元不携带它；操作员身份不进入任何发布。
 4. 写入实际 KeyID、组件签名文件路径、健康绑定和 Host Agent 的规范 `host_id`，生成每个组件的 0600 环境文件。Host Agent 的 EventBus 配置由已签发材料生成，或由部署器显式提供规范私密配置；不会使用软件包中的占位凭据。
@@ -49,4 +49,4 @@ Linux 完整门禁 `make test-unit-install-linux` 必须提供本机预先构建
 
 `Deploy` / `moox-runtime deploy --request PATH` 负责 host、Access、出口代理、Trade 和 Storage 单元。请求摘要绑定软件、实际身份与 EventBus 清单以及配置覆盖字节；`deployment.json` 在准备和激活前持久记录候选。中断激活先恢复旧快照，回滚后以同一原始请求准备新候选，保留退役候选。完成请求修复缺失进程，保留用户暂停；旧完成请求不能重新接管已变更的 current。原生 `setup deploy-host` 和 `setup deploy-unit` 已调用此流程，整个发布的回滚仍须外层编排。
 
-包含 storage-primary 的候选在旧进程停止、独立复制/导入状态之后执行预构建的 `moox-storage-cli init`，再核验候选并切换 current。子进程只接受私有 MOOX 环境，数据根强制为候选内 `./var/storage`，继承维护锁并设置 Linux 父进程死亡信号；失败输出省略，取消先等待其退出。关闭 SQLite 后同步元数据文件与目录，不遍历全部数据集。初始化失败沿用激活恢复，旧快照不被改写。只有 View 或 Node 的 Storage 放置不初始化主库。
+包含 storage-primary 的候选在旧进程停止、独立复制/导入状态之后执行预构建的 `moox-storage-cli init`，再核验候选并切换 current。子进程只接受私有 MOOX 环境，数据根强制为候选内 `./var/storage`，继承维护锁并设置 Linux 父进程死亡信号；失败输出省略，取消先等待其退出。关闭 SQLite 后同步元数据文件与目录，不遍历全部数据集。初始化失败沿用激活恢复，旧快照不被改写。只有 View 或 Node 的 Storage 部署不初始化主库。

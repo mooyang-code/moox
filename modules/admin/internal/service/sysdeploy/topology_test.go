@@ -18,7 +18,7 @@ func topologySpecs() []HostSpec {
 	return []HostSpec{
 		{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host", "collector"}},
 		{HostID: "storage", Address: "storage.example.test", Components: []string{"storage-primary", "storage-node", "storage-view"}},
-		{HostID: "compute-1", Address: "compute.example.test", Components: []string{"trade", "access"}},
+		{HostID: "overseas", Address: "compute.example.test", Components: []string{"trade", "access"}},
 	}
 }
 
@@ -37,35 +37,35 @@ func topologyDAO(t *testing.T) *TopologyDAO {
 
 func TestTopologySyncPreservesStateAndRebuildsDirectory(t *testing.T) {
 	dao, ctx := topologyDAO(t), context.Background()
-	require.NoError(t, dao.SetPlacementStatus(ctx, "control", "collector", servicecatalog.Disabled))
-	require.NoError(t, dao.SetHostStatus(ctx, "compute-1", servicecatalog.Disabled))
+	require.NoError(t, dao.SetDeploymentStatus(ctx, "control", "collector", servicecatalog.Disabled))
+	require.NoError(t, dao.SetHostStatus(ctx, "overseas", servicecatalog.Disabled))
 	control := topologySpecs()[0]
 	control.Description = "updated metadata"
 	control.Components = append(control.Components, "monitor")
-	require.NoError(t, dao.SyncHostPlacements(ctx, control))
+	require.NoError(t, dao.SyncHostDeployments(ctx, control))
 	compute := topologySpecs()[2]
 	compute.Components = []string{"access"}
-	require.NoError(t, dao.SyncHostPlacements(ctx, compute))
-	hosts, placements, err := dao.Read(ctx)
+	require.NoError(t, dao.SyncHostDeployments(ctx, compute))
+	hosts, deployments, err := dao.Read(ctx)
 	require.NoError(t, err)
 	for _, h := range hosts {
-		if h.HostID == "compute-1" {
+		if h.HostID == "overseas" {
 			require.Equal(t, servicecatalog.Disabled, h.Status)
 		}
 	}
-	for _, p := range placements {
+	for _, p := range deployments {
 		if p.HostID == "control" && p.ComponentID == "collector" {
 			require.Equal(t, servicecatalog.Disabled, p.Status)
 		}
-		require.False(t, p.HostID == "compute-1" && p.ComponentID == "trade", "components removed from the full list are deleted")
+		require.False(t, p.HostID == "overseas" && p.ComponentID == "trade", "components removed from the full list are deleted")
 	}
 	compiled, err := dao.Compile(ctx, "control")
 	require.NoError(t, err)
 	require.NoError(t, compiled.Directory.Validate())
-	require.NotContains(t, compiled.Directory.Hosts, "compute-1")
+	require.NotContains(t, compiled.Directory.Hosts, "overseas")
 	require.NotContains(t, compiled.Directory.Services, "trpc.moox.collector.CollectMgr")
-	// The same offline DAO is used to recover a disabled placement.
-	require.NoError(t, dao.SetPlacementStatus(ctx, "control", "collector", servicecatalog.Enabled))
+	// The same offline DAO is used to recover a disabled deployment.
+	require.NoError(t, dao.SetDeploymentStatus(ctx, "control", "collector", servicecatalog.Enabled))
 	recovered, err := dao.Compile(ctx, "control")
 	require.NoError(t, err)
 	require.NotEqual(t, compiled.Directory.Version, recovered.Directory.Version)
@@ -94,49 +94,49 @@ func TestTopologyRejectsInvalidSynchronizationWithoutChangingDatabase(t *testing
 			specs := topologySpecs()
 			specs[0].Description = "must roll back"
 			require.Error(t, dao.SyncHosts(ctx, tc.change(specs)))
-			afterHosts, afterPlacements, err := dao.Read(ctx)
+			afterHosts, afterDeployments, err := dao.Read(ctx)
 			require.NoError(t, err)
 			require.Equal(t, beforeHosts, afterHosts)
-			require.Equal(t, beforePlacements, afterPlacements)
+			require.Equal(t, beforePlacements, afterDeployments)
 		})
 	}
 }
 
-func TestTopologyRollsBackHostWhenPlacementWriteFails(t *testing.T) {
+func TestTopologyRollsBackHostWhenDeploymentWriteFails(t *testing.T) {
 	dao, ctx := topologyDAO(t), context.Background()
 	beforeHosts, beforePlacements, err := dao.Read(ctx)
 	require.NoError(t, err)
-	require.NoError(t, dao.db.Exec(`CREATE TRIGGER fail_new_placement BEFORE INSERT ON t_placements
+	require.NoError(t, dao.db.Exec(`CREATE TRIGGER fail_new_deployment BEFORE INSERT ON t_deployments
 WHEN NEW.c_host_id = 'new-host' BEGIN SELECT RAISE(ABORT, 'simulated disk failure'); END;`).Error)
 	specs := []HostSpec{topologySpecs()[0], {HostID: "new-host", Address: "new.example.test"}}
 	specs[0].Description = "must also roll back"
 	require.Error(t, dao.SyncHosts(ctx, specs))
-	afterHosts, afterPlacements, err := dao.Read(ctx)
+	afterHosts, afterDeployments, err := dao.Read(ctx)
 	require.NoError(t, err)
 	require.Equal(t, beforeHosts, afterHosts)
-	require.Equal(t, beforePlacements, afterPlacements)
+	require.Equal(t, beforePlacements, afterDeployments)
 }
 
 func TestTopologyProtectsControlAndDeletesOnlyEmptyHosts(t *testing.T) {
 	dao, ctx := topologyDAO(t), context.Background()
 	require.Error(t, dao.SetHostStatus(ctx, "control", servicecatalog.Disabled))
-	require.Error(t, dao.SetPlacementStatus(ctx, "control", "admin", servicecatalog.Disabled))
-	require.Error(t, dao.SetPlacementStatus(ctx, "storage", "host-gateway", servicecatalog.Disabled))
+	require.Error(t, dao.SetDeploymentStatus(ctx, "control", "admin", servicecatalog.Disabled))
+	require.Error(t, dao.SetDeploymentStatus(ctx, "storage", "host-gateway", servicecatalog.Disabled))
 	require.Error(t, dao.DeleteHost(ctx, "control"))
-	require.Error(t, dao.DeleteHost(ctx, "compute-1"))
+	require.Error(t, dao.DeleteHost(ctx, "overseas"))
 	require.ErrorIs(t, dao.SetHostStatus(ctx, "unknown", servicecatalog.Enabled), gorm.ErrRecordNotFound)
-	require.ErrorIs(t, dao.SetPlacementStatus(ctx, "storage", "collector", servicecatalog.Enabled), gorm.ErrRecordNotFound)
+	require.ErrorIs(t, dao.SetDeploymentStatus(ctx, "storage", "collector", servicecatalog.Enabled), gorm.ErrRecordNotFound)
 	compute := topologySpecs()[2]
 	compute.Components = nil
-	require.NoError(t, dao.SyncHostPlacements(ctx, compute))
-	require.NoError(t, dao.db.Create(&HostGatewayStatus{HostID: "compute-1", InstanceID: "previous-process"}).Error)
-	require.NoError(t, dao.DeleteHost(ctx, "compute-1"))
-	hosts, placements, err := dao.Read(ctx)
+	require.NoError(t, dao.SyncHostDeployments(ctx, compute))
+	require.NoError(t, dao.db.Create(&HostGatewayStatus{HostID: "overseas", InstanceID: "previous-process"}).Error)
+	require.NoError(t, dao.DeleteHost(ctx, "overseas"))
+	hosts, deployments, err := dao.Read(ctx)
 	require.NoError(t, err)
-	require.False(t, slices.ContainsFunc(hosts, func(h HostRecord) bool { return h.HostID == "compute-1" }))
-	require.False(t, slices.ContainsFunc(placements, func(p PlacementRecord) bool { return p.HostID == "compute-1" }))
+	require.False(t, slices.ContainsFunc(hosts, func(h HostRecord) bool { return h.HostID == "overseas" }))
+	require.False(t, slices.ContainsFunc(deployments, func(p DeploymentRecord) bool { return p.HostID == "overseas" }))
 	var count int64
-	require.NoError(t, dao.db.Model(&HostGatewayStatus{}).Where("c_host_id = ?", "compute-1").Count(&count).Error)
+	require.NoError(t, dao.db.Model(&HostGatewayStatus{}).Where("c_host_id = ?", "overseas").Count(&count).Error)
 	require.Zero(t, count)
 }
 
@@ -164,7 +164,7 @@ func TestConcurrentTopologyWritersCannotEnableTwoSingleReplicas(t *testing.T) {
 		go func() {
 			<-start
 			item.spec.Components = append(slices.Clone(item.spec.Components), "collector")
-			results <- item.dao.SyncHostPlacements(context.Background(), item.spec)
+			results <- item.dao.SyncHostDeployments(context.Background(), item.spec)
 		}()
 	}
 	close(start)
@@ -186,7 +186,7 @@ func TestConcurrentTopologyWritersCannotEnableTwoSingleReplicas(t *testing.T) {
 func TestTopologyOutboundHostReachability(t *testing.T) {
 	dao, ctx := topologyDAO(t), context.Background()
 	home := HostSpec{HostID: "home", Address: "192.168.0.103", Reachability: "outbound"}
-	require.NoError(t, dao.SyncHostPlacements(ctx, home))
+	require.NoError(t, dao.SyncHostDeployments(ctx, home))
 	hosts, _, err := dao.Read(ctx)
 	require.NoError(t, err)
 	for _, h := range hosts {
@@ -202,8 +202,8 @@ func TestTopologyOutboundHostReachability(t *testing.T) {
 	require.Len(t, compiled.Relays, 1)
 
 	home.Reachability = "inbound"
-	require.ErrorIs(t, dao.SyncHostPlacements(ctx, home), ErrInvalidTopology)
+	require.ErrorIs(t, dao.SyncHostDeployments(ctx, home), ErrInvalidTopology)
 	control := topologySpecs()[0]
 	control.Reachability = "outbound"
-	require.ErrorIs(t, dao.SyncHostPlacements(ctx, control), ErrInvalidTopology)
+	require.ErrorIs(t, dao.SyncHostDeployments(ctx, control), ErrInvalidTopology)
 }

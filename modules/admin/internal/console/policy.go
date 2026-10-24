@@ -7,9 +7,6 @@ import (
 	"strings"
 )
 
-// globalAdminRole 是全局管理员的角色值。
-const globalAdminRole = 2
-
 // 第一组服务必须携带 X-Space-Id；第二组（Storage、Factor）既有空间内数据，
 // 也有全局运维接口，请求里没有空间时按全局运维处理。
 func requiresSpaceHeader(serviceID string) bool {
@@ -26,48 +23,6 @@ func spaceOptional(serviceID string) bool {
 
 func isSpaceScopedService(serviceID string) bool {
 	return requiresSpaceHeader(serviceID) || spaceOptional(serviceID)
-}
-
-// adminOnlyWriteService 的写方法没有空间归属，只允许全局管理员，普通登录用户不能改全局状态。
-func adminOnlyWriteService(serviceID string) bool {
-	switch serviceID {
-	case "ssh", "secret", "sysdeploy", "setup", "monitor", "space":
-		return true
-	}
-	return false
-}
-
-// adminOnlyService 的全部方法（含读）只允许全局管理员：主机的 SSH 配置、会话和文件传输等价于登录这些主机，
-// 普通用户不能看到、也不能间接使用。
-// adminOnlyMethods 是空间管理员也不能调用、只允许全局管理员的方法。
-//
-// 因子定义没有空间归属（按全局 factor_id 定位，可以被多个空间的因子集引用），空间管理员改定义会影响其他空间：
-// 创建与修改只允许全局管理员。校验表达式（ValidateFactorSpec）与函数清单是无副作用的读；试算（PreviewFactor）
-// 按因子集的空间授权，只读该空间的源数据。
-//
-// 云账户没有空间归属（表里没有 space 字段，按 account_id 全局定位），创建是 UPSERT，空间管理员改它会影响其他空间共用的账户，
-// 所以写方法同样只允许全局管理员。
-//
-// 推送渠道的 Webhook URL 本身就是推送凭据（拿到即可往群里发消息），列出渠道的接口只给全局管理员；
-// 其他登录用户从监控概览只能看到渠道数量和平台。增删渠道是 monitor 的写方法，本来就只允许全局管理员。
-//
-// 秘钥导出的迁移包里有全部秘钥的明文（用导出口令加密），导入会覆盖秘钥：都只允许全局管理员。secret 的写方法本来就要求
-// 全局管理员，这里显式列出，导出即使以后被标为只读（可重试）也不会放宽。
-var adminOnlyMethods = map[string]bool{
-	"monitor/ListNotificationChannels": true,
-	"secret/ExportSecrets":             true, "secret/ImportSecrets": true,
-	"factor-mgr/CreateFactor": true, "factor-mgr/UpdateFactor": true,
-	// 因子分类与因子的分类归属同样没有空间归属（全局分类，所有空间的因子共用）。
-	"factor-mgr/UpsertFactorCategory": true, "factor-mgr/DeleteFactorCategory": true, "factor-mgr/SetFactorCategory": true,
-	// 策略定义没有空间归属（按全局 strategy_id 定位），实例与回放按空间授权：空间管理员改定义会影响其他空间已引用它的实例。
-	"strategy/CreateStrategy": true, "strategy/UpdateStrategy": true, "strategy/DeleteStrategy": true,
-	"cloudfunction/CreateCloudAccount": true, "cloudfunction/UpdateCloudAccount": true, "cloudfunction/DeleteCloudAccount": true,
-}
-
-func adminOnlyMethod(serviceID, method string) bool { return adminOnlyMethods[serviceID+"/"+method] }
-
-func adminOnlyService(serviceID string) bool {
-	return serviceID == "ssh"
 }
 
 // bodySpaceIDs 收集请求体（含嵌套对象）里出现的 space_id。
@@ -122,8 +77,8 @@ func effectiveSpaceID(header string, body []byte) (string, error) {
 	return space, nil
 }
 
-// storageGlobalMethods 没有空间归属（节点、归档、空间目录本身），读写都只允许全局管理员，
-// 不能靠请求头声明某个空间来获得授权。
+// storageGlobalMethods 没有空间归属（节点、归档、空间目录本身），不做空间授权，
+// 也不会用请求头声明的空间回填请求体。
 var storageGlobalMethods = map[string]bool{
 	"CreateSpace": true, "UpdateSpace": true, "DeleteSpace": true, "ListSpaces": true,
 	"UpdateDataNode": true, "DeleteDataNode": true, "GetDataNode": true, "ListDataNodes": true,

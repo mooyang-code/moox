@@ -207,7 +207,7 @@ func (m Manifest) SCFPlanAccess(region string) (address, id string, err error) {
 	region = strings.ToLower(strings.TrimSpace(region))
 	var inRegion, usable []Host
 	for _, host := range m.Hosts() {
-		if host.Region != region || !slices.Contains(m.Placements[host.Name], "access") {
+		if host.Region != region || !slices.Contains(m.Deployments[host.Name], "access") {
 			continue
 		}
 		inRegion = append(inRegion, host)

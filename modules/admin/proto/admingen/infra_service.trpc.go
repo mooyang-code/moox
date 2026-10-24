@@ -29,8 +29,6 @@ type AuthService interface {
 	IssueRawSessionTicket(ctx context.Context, req *IssueRawSessionTicketReq) (*IssueRawSessionTicketRsp, error)
 	// GetUserInfo 获取用户信息
 	GetUserInfo(ctx context.Context, req *GetUserInfoReq) (*GetUserInfoRsp, error)
-	// UpdateUserInfo 更新用户信息
-	UpdateUserInfo(ctx context.Context, req *UpdateUserInfoReq) (*UpdateUserInfoRsp, error)
 }
 
 func AuthService_GetLoginSalt_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -123,24 +121,6 @@ func AuthService_GetUserInfo_Handler(svr interface{}, ctx context.Context, f ser
 	return rsp, nil
 }
 
-func AuthService_UpdateUserInfo_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateUserInfoReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(AuthService).UpdateUserInfo(ctx, reqbody.(*UpdateUserInfoReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 // AuthServer_ServiceDesc descriptor for server.RegisterService.
 var AuthServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.infra.Auth",
@@ -165,10 +145,6 @@ var AuthServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.infra.Auth/GetUserInfo",
 			Func: AuthService_GetUserInfo_Handler,
-		},
-		{
-			Name: "/trpc.moox.infra.Auth/UpdateUserInfo",
-			Func: AuthService_UpdateUserInfo_Handler,
 		},
 	},
 }
@@ -205,11 +181,6 @@ func (s *UnimplementedAuth) GetUserInfo(ctx context.Context, req *GetUserInfoReq
 	return nil, errors.New("rpc GetUserInfo of service Auth is not implemented")
 }
 
-// UpdateUserInfo 更新用户信息
-func (s *UnimplementedAuth) UpdateUserInfo(ctx context.Context, req *UpdateUserInfoReq) (*UpdateUserInfoRsp, error) {
-	return nil, errors.New("rpc UpdateUserInfo of service Auth is not implemented")
-}
-
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
 // END ======================================= Server Service Definition ======================================= END
@@ -228,8 +199,6 @@ type AuthClientProxy interface {
 	IssueRawSessionTicket(ctx context.Context, req *IssueRawSessionTicketReq, opts ...client.Option) (rsp *IssueRawSessionTicketRsp, err error)
 	// GetUserInfo 获取用户信息
 	GetUserInfo(ctx context.Context, req *GetUserInfoReq, opts ...client.Option) (rsp *GetUserInfoRsp, err error)
-	// UpdateUserInfo 更新用户信息
-	UpdateUserInfo(ctx context.Context, req *UpdateUserInfoReq, opts ...client.Option) (rsp *UpdateUserInfoRsp, err error)
 }
 
 type AuthClientProxyImpl struct {
@@ -335,26 +304,6 @@ func (c *AuthClientProxyImpl) GetUserInfo(ctx context.Context, req *GetUserInfoR
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &GetUserInfoRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *AuthClientProxyImpl) UpdateUserInfo(ctx context.Context, req *UpdateUserInfoReq, opts ...client.Option) (*UpdateUserInfoRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.infra.Auth/UpdateUserInfo")
-	msg.WithCalleeServiceName(AuthServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("infra")
-	msg.WithCalleeService("Auth")
-	msg.WithCalleeMethod("UpdateUserInfo")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &UpdateUserInfoRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

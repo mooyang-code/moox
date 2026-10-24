@@ -133,10 +133,10 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 	for _, host := range request.Topology.Hosts {
 		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: host.HostID, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Status: servicecatalog.Enabled, Reachability: host.Reachability})
 		for _, id := range []string{"host-gateway", "host-agent"} {
-			topology.Placements = append(topology.Placements, servicecatalog.Placement{HostID: host.HostID, ComponentID: id, Status: servicecatalog.Enabled})
+			topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: host.HostID, ComponentID: id, Status: servicecatalog.Enabled})
 		}
 		for _, id := range host.Components {
-			topology.Placements = append(topology.Placements, servicecatalog.Placement{HostID: host.HostID, ComponentID: id, Status: servicecatalog.Enabled})
+			topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: host.HostID, ComponentID: id, Status: servicecatalog.Enabled})
 		}
 		if host.HostID == topology.ControlHostID {
 			result.components = slices.Clone(host.Components)
@@ -145,7 +145,7 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 	if catalog.ValidateTopology(topology) != nil {
 		return result, errors.New("bootstrap topology does not satisfy the service catalog")
 	}
-	placements := slices.Clone(result.components)
+	deployments := slices.Clone(result.components)
 	if len(request.Host.Components) != 0 && !slices.Equal(request.Host.Components, []string{"host-gateway", "host-agent"}) {
 		return result, errors.New("bootstrap host selection must contain both host components")
 	}
@@ -153,8 +153,8 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 		result.components = slices.Clone(request.Control.Components)
 		seen := map[string]bool{}
 		for _, id := range result.components {
-			if seen[id] || !slices.Contains(placements, id) {
-				return result, errors.New("bootstrap selection must be a unique subset of control placements")
+			if seen[id] || !slices.Contains(deployments, id) {
+				return result, errors.New("bootstrap selection must be a unique subset of control deployments")
 			}
 			seen[id] = true
 		}
@@ -179,7 +179,7 @@ func validate(ctx context.Context, request Request) (inputs, error) {
 	}
 	for _, id := range result.components {
 		if !slices.ContainsFunc(available, func(c unitpackage.Component) bool { return c.ID == id }) {
-			return result, errors.New("control host placements must belong to the control software unit")
+			return result, errors.New("control host deployments must belong to the control software unit")
 		}
 	}
 	for i, unit := range []Unit{request.Host, request.Control} {

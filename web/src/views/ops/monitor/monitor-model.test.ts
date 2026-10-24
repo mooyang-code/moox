@@ -391,7 +391,7 @@ describe("layers", () => {
       ["内存", "warn", 90],
       ["磁盘", "idle", null]
     ]);
-    expect(card.href).toBe("#/ops/hosts?tab=monitor&agent_id=pwU2&host_id=control");
+    expect(card.href).toBe("#/ops/hosts?tab=monitor&host_id=control");
   });
 
   it("shows host capacity next to each usage meter", () => {

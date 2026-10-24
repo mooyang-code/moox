@@ -181,7 +181,6 @@ components:
           - Logout
           - IssueRawSessionTicket
           - GetUserInfo
-          - UpdateUserInfo
         read_only_methods:
           - GetLoginSalt
           - GetUserInfo
@@ -192,7 +191,6 @@ components:
               - Logout
               - IssueRawSessionTicket
               - GetUserInfo
-              - UpdateUserInfo
             callers:
               - console
       - path: trpc.moox.ops.Ssh
@@ -201,27 +199,14 @@ components:
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
-          - ListHosts
-          - CreateHost
-          - UpdateHost
-          - DeleteHost
-          - GetHost
           - CreateSession
           - DisconnectSession
           - ResizeWindow
           - SftpList
           - SftpMkdir
           - SftpDelete
-        read_only_methods:
-          - ListHosts
-          - GetHost
         acl:
           - methods:
-              - ListHosts
-              - CreateHost
-              - UpdateHost
-              - DeleteHost
-              - GetHost
               - CreateSession
               - DisconnectSession
               - ResizeWindow
@@ -230,7 +215,6 @@ components:
               - SftpDelete
             callers:
               - console
-              - moox-cli
       - path: trpc.moox.admin.SpaceMgr
         port: 11107
         console_name: space
@@ -241,17 +225,14 @@ components:
           - UpdateSpace
           - DeleteSpace
           - ListSpaces
-          - ListSpaceMembers
         read_only_methods:
           - ListSpaces
-          - ListSpaceMembers
         acl:
           - methods:
               - CreateSpace
               - UpdateSpace
               - DeleteSpace
               - ListSpaces
-              - ListSpaceMembers
             callers:
               - console
               - moox-cli
@@ -315,12 +296,12 @@ components:
         methods:
           - GetCatalog
           - ListHosts
-          - ListPlacements
+          - ListDeployments
           - GetHostRoutes
           - GetDirectory
           - SetHostStatus
-          - SetPlacementStatus
-          - SyncHostPlacements
+          - SetDeploymentStatus
+          - SyncHostDeployments
           - DeleteHost
           - InspectEventBus
           - DeleteEventBusConsumers
@@ -328,7 +309,7 @@ components:
         read_only_methods:
           - GetCatalog
           - ListHosts
-          - ListPlacements
+          - ListDeployments
           - GetHostRoutes
           - GetDirectory
           - InspectEventBus
@@ -336,23 +317,23 @@ components:
           - methods:
               - GetCatalog
               - ListHosts
-              - ListPlacements
+              - ListDeployments
               - GetHostRoutes
               - GetDirectory
-              - SetHostStatus
-              - SetPlacementStatus
             callers:
               - console
               - moox-cli
           - methods:
-              - SyncHostPlacements
+              - SetHostStatus
+              - SetDeploymentStatus
+              - SyncHostDeployments
               - DeleteHost
             callers:
               - moox-cli
           - methods:
               - GetCatalog
               - ListHosts
-              - ListPlacements
+              - ListDeployments
               - GetHostRoutes
             callers:
               - monitor
@@ -1136,9 +1117,12 @@ components:
               - GetArchiveRun
               - ListArchivePartitions
               - GetArchivePartition
-              - RetireArchiveWorker
             callers:
               - console
+              - moox-cli
+          - methods:
+              - RetireArchiveWorker
+            callers:
               - moox-cli
           - methods:
               - GetArchiveOverview
@@ -1467,14 +1451,14 @@ components:
               - DeleteFieldGroup
               - UpsertDatasetColumn
               - ListDatasetColumns
-              - UpdateDataNode
               - GetDataNode
               - ListDataNodes
-              - DeleteDataNode
             callers:
               - console
               - moox-cli
           - methods:
+              - UpdateDataNode
+              - DeleteDataNode
               - RegisterDataNode
               - CreateDevice
               - UpdateDevice
@@ -1988,6 +1972,76 @@ components:
       recovery_action_ids:
         - restart_service_manually
       required_in_default_profile: false
+  # 外部程序：运行在登记主机上（通常是只能出站的因子机），以同名外部身份经 Access 访问系统，不经主机网关路由；
+  # 由 systemd 用户服务托管，部署健康由 Monitor 经中转探测本机健康端口。
+  - id: factor-engine
+    name: 因子引擎
+    binary: moox-factor-engine
+    scope: any
+    replicas: single
+    protected: false
+    external_program: true
+    health:
+      kind: readyz
+      port: 11417
+      ready_body: '"ready":true'
+    doctor:
+      role: factor-engine
+      description: Factor compute engine that consumes period events and writes factor results through Access
+      duties:
+        - compute factor periods and recalculation jobs
+      inputs:
+        - period completion events and source windows
+      outputs:
+        - factor result rows and period markers
+      dependencies:
+        - factor-mgr
+        - access
+      transport: health_only
+      functional_observability: deferred
+      config_paths:
+        - factor-engine/config/engine.yaml
+      writable_paths:
+        - factor-engine/data
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: false
+      supervisor: systemd_user
+      unit: moox-factor-engine
+  - id: archive-worker
+    name: 数据归档执行器
+    binary: moox-archive-worker
+    scope: any
+    replicas: single
+    protected: false
+    external_program: true
+    health:
+      kind: readyz
+      port: 11418
+      ready_body: '"ready":true'
+    doctor:
+      role: archive-worker
+      description: Archive worker that pulls archive runs and exports partitions
+      duties:
+        - export archive partitions
+      inputs:
+        - archive runs from archive-mgr
+      outputs:
+        - archive partitions
+      dependencies:
+        - archive-mgr
+        - access
+      transport: health_only
+      functional_observability: deferred
+      config_paths:
+        - archive-worker/config/app.yaml
+      writable_paths:
+        - archive-worker/data
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: false
+      supervisor: systemd_user
+      unit: moox-archive-worker
 principals:
   - id: scf-collector
     allow:

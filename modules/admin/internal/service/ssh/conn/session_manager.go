@@ -54,6 +54,21 @@ func (m *SessionManager) Delete(sessionID string) {
 	conn.Close()
 }
 
+// DeleteByHost 关闭并删除某台主机上的全部会话，返回关闭的数量。
+func (m *SessionManager) DeleteByHost(hostID string) int {
+	var ids []string
+	m.Range(func(sessionID string, conn *SSHConn) bool {
+		if conn.Target.HostID == hostID {
+			ids = append(ids, sessionID)
+		}
+		return true
+	})
+	for _, id := range ids {
+		m.Delete(id)
+	}
+	return len(ids)
+}
+
 // Range 遍历所有会话
 func (m *SessionManager) Range(fn func(sessionID string, conn *SSHConn) bool) {
 	m.clients.Range(func(key, value any) bool {

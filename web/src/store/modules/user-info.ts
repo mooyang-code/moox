@@ -6,42 +6,16 @@ import { logoutAPI } from "@/api/modules/user/index";
 import { clearBrowserSession } from "@/api/admin/signed-client";
 import { loadSigningSession, saveSigningSession } from "@/utils/request-signing";
 
+// 系统只有一个超级用户：没有角色、权限与个人资料，登录即拥有全部功能。
 interface Account {
-  user: any; // 用户信息
-  roles: string[]; // 角色
-  permissions: string[]; // 权限
+  user: {
+    id?: string;
+    userName?: string;
+    loginIp?: string;
+    loginDate?: string;
+    createTime?: string;
+  };
 }
-
-/**
- * 用户角色枚举值映射
- * 根据proto定义：
- * GUEST = 0;       // 游客
- * USER = 1;        // 普通用户
- * ADMIN = 2;       // 管理员
- * SUPER_ADMIN = 3; // 超级管理员
- */
-const mapUserRoleToString = (roleValue: number): string[] => {
-  switch (roleValue) {
-    case 0:
-      return ["guest"]; // 游客
-    case 1:
-      return ["common"]; // 普通用户
-    case 2:
-      return ["admin"]; // 管理员
-    case 3:
-      return ["admin"]; // 超级管理员，也归类为admin权限
-    default:
-      return ["guest"]; // 默认游客权限
-  }
-};
-
-/**
- * 判断是否为管理员角色
- * UserRole值为2或3为管理员
- */
-const isAdminRole = (roleValue: number): boolean => {
-  return roleValue === 2 || roleValue === 3;
-};
 
 /**
  * 用户信息
@@ -59,11 +33,7 @@ function staleAccountRequestError(): Error {
 
 const userInfoStore = () => {
   // 账号信息
-  const account = ref<Account>({
-    user: {}, // 用户信息
-    roles: [], // 角色
-    permissions: [] // 权限
-  });
+  const account = ref<Account>({ user: {} });
   // token
   const token = ref<string>("");
   const sessionId = ref<string>("");
@@ -92,29 +62,14 @@ const userInfoStore = () => {
 
       if (data.user_info) {
         const userInfo = data.user_info;
-
-        // 根据UserRole枚举值判断角色
-        const roleStrings = mapUserRoleToString(userInfo.role);
-        const isAdmin = isAdminRole(userInfo.role);
-
         account.value = {
           user: {
             id: userInfo.user_id || "",
             userName: userInfo.username || "",
-            nickName: userInfo.nickname || "",
-            email: userInfo.email || "",
-            phone: userInfo.phone || "",
-            avatar: userInfo.avatar || "",
-            status: userInfo.status || 0,
-            role: userInfo.role || 0,
-            roles: roleStrings,
-            admin: isAdmin,
             loginIp: userInfo.last_login_ip || "",
             loginDate: userInfo.last_login_at ? new Date(userInfo.last_login_at * 1000).toISOString() : "",
             createTime: userInfo.created_at ? new Date(userInfo.created_at * 1000).toISOString() : ""
-          },
-          roles: roleStrings,
-          permissions: isAdmin ? ["*:*:*"] : []
+          }
         };
       } else {
         const errorMessage = "获取用户信息失败：响应格式错误";
@@ -132,11 +87,7 @@ const userInfoStore = () => {
       console.error("setAccount: 获取用户信息失败", error);
 
       // 清空用户信息，避免死循环
-      account.value = {
-        user: {},
-        roles: [],
-        permissions: []
-      };
+      account.value = { user: {} };
 
       // 关键修复：获取用户信息失败时，完全清除token状态，避免路由守卫死循环
       token.value = "";
@@ -182,11 +133,7 @@ const userInfoStore = () => {
       // Local logout is authoritative even when the server cannot be reached.
     }
     // 清除账号数据
-    account.value = {
-      user: {},
-      roles: [],
-      permissions: []
-    };
+    account.value = { user: {} };
     token.value = "";
     sessionId.value = "";
     expiresAt.value = 0;

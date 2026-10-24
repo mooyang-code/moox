@@ -91,6 +91,9 @@ var unitProfiles = map[string][]string{
 	"trade":        {"trade"},
 	// WS 推送采集与本地执行端：放在能直连交易所的海外机，独立成单元，首次安装与升级都不动其他单元。
 	"collector-stream": {"collector-stream"},
+	// 外部程序：由 systemd 用户服务托管，不经主机网关路由；安装脚本与服务模板随软件包一起交付。
+	"factor-engine":  {"factor-engine"},
+	"archive-worker": {"archive-worker"},
 }
 
 func configAsset(module, component string) unitAsset {
@@ -116,6 +119,8 @@ var unitSpecs = map[string]unitComponentSpec{
 	}},
 	"collector": {[]string{"moox-collector-cli"}, []unitAsset{
 		configAsset("collector", "collector"), schemaAsset("collector", "collector"),
+		// 全新安装时 Collector 启动会把它写成默认采集任务（任务表为空才写）。
+		{"config/setup/collection-tasks.yaml", "collector/config/collection-tasks.yaml", false},
 		{"modules/collector/configs/sources", "collector/configs/sources", true},
 		// A 股行情供应商（sina 等）的路由配置，Collector 启动时必须能读到。
 		{"modules/collector/configs/scf/stockcn/sources", "collector/configs/scf/stockcn/sources", true},
@@ -154,13 +159,23 @@ var unitSpecs = map[string]unitComponentSpec{
 		// 数据源配置（WS 地址与限额、REST 端点、Storage 绑定）与 Collector 同一份。
 		{"modules/collector/configs/sources/market/binance.yaml", "collector-stream/config/sources/market/binance.yaml", false},
 	}},
+	// 外部程序的目录布局与仓库一致（scripts/deploy、deploy/systemd、modules/...），安装脚本据此按相对位置找到服务模板与框架配置。
+	"factor-engine": {assets: []unitAsset{
+		{"scripts/deploy/deploy-factor-engine.sh", "factor-engine/scripts/deploy/deploy-factor-engine.sh", false},
+		{"deploy/systemd/user/moox-factor-engine.service.tmpl", "factor-engine/deploy/systemd/user/moox-factor-engine.service.tmpl", false},
+		{"modules/factor/config/trpc_go.engine.yaml", "factor-engine/modules/factor/config/trpc_go.engine.yaml", false},
+	}},
+	"archive-worker": {assets: []unitAsset{
+		{"scripts/deploy/deploy-archive-worker.sh", "archive-worker/scripts/deploy/deploy-archive-worker.sh", false},
+		{"deploy/systemd/user/moox-archive-worker.service.tmpl", "archive-worker/deploy/systemd/user/moox-archive-worker.service.tmpl", false},
+	}},
 }
 
 // Components returns the exact process boundary of a deployment unit.
 func Components(profile string) ([]Component, error) {
 	ids, ok := unitProfiles[profile]
 	if !ok {
-		return nil, fmt.Errorf("unsupported deployment profile %q; use host, control, storage, access, egress-proxy, trade, or collector-stream", profile)
+		return nil, fmt.Errorf("unsupported deployment profile %q; use host, control, storage, access, egress-proxy, trade, collector-stream, factor-engine, or archive-worker", profile)
 	}
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {

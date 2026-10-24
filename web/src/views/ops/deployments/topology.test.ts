@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import type { ComponentCatalog, ComponentPlacement, DeploymentHost } from "@/api/admin/types";
-import { placementKey, placementRows } from "./model";
+import type { ComponentCatalog, ComponentDeployment, DeploymentHost } from "@/api/admin/types";
+import { deploymentKey, deploymentRows } from "./model";
 import {
   DATA_FLOW,
   NODE_H,
@@ -22,25 +22,27 @@ const catalog = parse(
 const hosts: DeploymentHost[] = [
   { host_id: "storage", address: "203.0.113.11", region: "ap-nanjing", status: "enabled" },
   { host_id: "control", address: "203.0.113.10", region: "ap-guangzhou", status: "enabled" },
-  { host_id: "overseas", address: "203.0.113.12", region: "ap-hongkong", status: "enabled", reachability: "outbound" }
+  { host_id: "overseas", address: "203.0.113.12", region: "ap-hongkong", status: "enabled", reachability: "outbound" },
+  { host_id: "factor", address: "198.51.100.20", region: "lan", status: "enabled", reachability: "outbound" }
 ];
 const layout: Record<string, string[]> = {
   control: ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"],
-  storage: ["storage-primary", "storage-node", "storage-view", "access"],
-  overseas: ["trade", "access", "egress-proxy", "collector-stream"]
+  storage: ["storage-primary", "storage-node", "storage-view", "access", "archive-worker"],
+  overseas: ["trade", "access", "egress-proxy", "collector-stream"],
+  factor: ["factor-engine"]
 };
-const placements: ComponentPlacement[] = hosts.flatMap(host =>
+const deployments: ComponentDeployment[] = hosts.flatMap(host =>
   [...layout[host.host_id], "host-gateway", "host-agent"].map(component_id => ({
     host_id: host.host_id,
     component_id,
     status: "enabled" as const
   }))
 );
-function build(items = placements, showDisabled = false) {
-  const groups = hosts.map(host => ({ host, rows: placementRows(host, items, catalog.components) }));
+function build(items = deployments, showDisabled = false) {
+  const groups = hosts.map(host => ({ host, rows: deploymentRows(host, items, catalog.components) }));
   return buildTopology({ catalog, groups, controlHostId: "control", showDisabled });
 }
-const key = placementKey;
+const key = deploymentKey;
 function edge(edges: TopologyEdge[], from: string, to: string) {
   return edges.find(item => item.from === from && item.to === to);
 }
@@ -48,11 +50,11 @@ function edge(edges: TopologyEdge[], from: string, to: string) {
 describe("service topology", () => {
   it("puts the control host first and aligns every layer across host columns", () => {
     const topology = build();
-    expect(topology.hosts.map(item => item.host.host_id)).toEqual(["control", "storage", "overseas"]);
+    expect(topology.hosts.map(item => item.host.host_id)).toEqual(["control", "storage", "overseas", "factor"]);
     expect(topology.bands.map(item => item.layer)).toEqual(["entry", "control", "business", "storage", "infra"]);
     const infra = topology.bands.find(item => item.layer === "infra")!;
     const gateways = topology.nodes.filter(node => node.componentId === "host-gateway");
-    expect(gateways).toHaveLength(3);
+    expect(gateways).toHaveLength(4);
     expect(new Set(gateways.map(node => node.y)).size).toBe(1);
     expect(gateways[0].y).toBeGreaterThanOrEqual(infra.y);
     // 节点不重叠，且都落在画布内。
@@ -83,11 +85,13 @@ describe("service topology", () => {
     const topology = build();
     const ids = topology.nodes.filter(node => node.kind === "external").map(node => node.id);
     // 数据流向经过的外部节点排在最前，彼此相邻。
-    expect(ids.slice(0, 5)).toEqual(["ext:market", "ext:scf-collector", "ext:factor-engine", "ext:console", "ext:moox-cli"]);
-    expect(ids).toContain("ext:factor-engine");
-    // FactorEngine 的 ACL 没有调用方，只能从 principals 推出因子引擎这条链路。
-    expect(edge(topology.edges, "ext:factor-engine", key("control", "factor-mgr"))).toMatchObject({
-      category: "entry",
+    expect(ids.slice(0, 4)).toEqual(["ext:market", "ext:scf-collector", "ext:console", "ext:moox-cli"]);
+    // 因子引擎、归档 Worker 是登记在主机上的外部程序组件，不再作为外部节点。
+    expect(ids).not.toContain("ext:factor-engine");
+    expect(ids).not.toContain("ext:archive-worker");
+    // FactorEngine 的 ACL 没有调用方，只能从 principals 推出因子机上的因子引擎到因子管理的链路。
+    expect(edge(topology.edges, key("factor", "factor-engine"), key("control", "factor-mgr"))).toMatchObject({
+      category: "business",
       services: ["trpc.moox.factor.FactorEngine"]
     });
     expect(edge(topology.edges, "ext:scf-collector", key("storage", "storage-primary"))?.via).toContain("access");
@@ -97,8 +101,8 @@ describe("service topology", () => {
     expect(topology.unplaced).toEqual(["数据归档管理服务"]);
   });
 
-  it("hides disabled placements unless asked and keeps neighborhoods to direct links", () => {
-    const disabled = placements.map(item =>
+  it("hides disabled deployments unless asked and keeps neighborhoods to direct links", () => {
+    const disabled = deployments.map(item =>
       item.host_id === "control" && item.component_id === "strategy" ? { ...item, status: "disabled" as const } : item
     );
     expect(build(disabled).nodes.some(node => node.id === key("control", "strategy"))).toBe(false);
@@ -124,12 +128,12 @@ describe("service topology", () => {
       [key("overseas", "collector-stream"), key("storage", "storage-primary")],
       [key("storage", "storage-primary"), key("storage", "storage-node")],
       [key("storage", "storage-node"), key("storage", "storage-view")],
-      [key("storage", "storage-node"), "ext:factor-engine"],
-      ["ext:factor-engine", key("storage", "access")],
+      [key("storage", "storage-node"), key("factor", "factor-engine")],
+      [key("factor", "factor-engine"), key("storage", "access")],
       [key("storage", "storage-view"), key("control", "strategy")],
       [key("control", "strategy"), key("overseas", "trade")]
     ]);
-    const withoutStream = build(placements.filter(item => item.component_id !== "collector-stream"));
+    const withoutStream = build(deployments.filter(item => item.component_id !== "collector-stream"));
     const steps = buildDataFlow(withoutStream);
     expect(steps).toHaveLength(11);
     expect(steps.map(item => item.step)).toEqual(steps.map((_, index) => index + 1));

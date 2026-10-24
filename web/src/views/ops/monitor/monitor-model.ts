@@ -811,6 +811,6 @@ export function hostCards(overview: HealthOverview | undefined, nowMs: number): 
         value: signal.signal?.reason || statusLabel(signal.signal?.status)
       })),
     lastReported: relativeTime(host.last_reported_at, nowMs),
-    href: hostHref(host.agent_id, host.host_id)
+    href: hostHref(host.host_id)
   }));
 }

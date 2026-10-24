@@ -21,7 +21,7 @@
 
     <section class="monitor-summary" aria-label="主机监控总览">
       <div>
-        <span>主机</span><strong>{{ sshHosts.length }}</strong>
+        <span>主机</span><strong>{{ hosts.length }}</strong>
       </div>
       <div>
         <span>监控在线</span><strong class="healthy">{{ onlineCount }}</strong>
@@ -30,7 +30,7 @@
         <span>需关注</span><strong :class="{ danger: attentionCount > 0 }">{{ attentionCount }}</strong>
       </div>
       <div>
-        <span>未接入监控</span><strong :class="{ warning: unmonitoredCount > 0 }">{{ unmonitoredCount }}</strong>
+        <span>未上报</span><strong :class="{ warning: unmonitoredCount > 0 }">{{ unmonitoredCount }}</strong>
       </div>
       <div>
         <span>历史存储</span><strong :class="storageAvailable && !dataGap ? 'healthy' : 'danger'">{{ storageStatus }}</strong>
@@ -38,9 +38,12 @@
     </section>
 
     <a-alert v-if="loadError" type="warning" show-icon class="monitor-alert">{{ loadError }}</a-alert>
+    <a-alert v-if="unregisteredCount > 0" type="info" show-icon class="monitor-alert">
+      有 {{ unregisteredCount }} 个采集器没有关联登记主机，已忽略；清理旧采集器请通过 moox skill 操作。
+    </a-alert>
 
     <div v-if="!rows.length && loading" class="monitor-empty"><a-spin /></div>
-    <a-empty v-else-if="!rows.length" description="暂无 SSH 主机或监控数据" class="monitor-empty" />
+    <a-empty v-else-if="!rows.length" description="还没有登记主机，请通过 moox skill 初始化部署" class="monitor-empty" />
     <template v-else>
       <template v-if="viewMode === 'cards'">
         <HostMonitorCardGrid :rows="rows" :selected-key="selectedKey" @select="selectedKey = $event" />
@@ -62,21 +65,26 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
-import { listSSHHosts, type SSHHost } from "@/api/modules/ssh";
+import { listAllDeploymentHosts } from "@/api/admin/sysdeploy";
+import type { DeploymentHost } from "@/api/admin/types";
 import HostMonitorCardGrid from "./host-monitor-card-grid.vue";
 import HostMonitorMasterDetail from "./host-monitor-master-detail.vue";
 import HostMonitorDetail from "./host-monitor-detail.vue";
-import { buildHostMonitorRows, normalizeMonitorViewMode, type MonitorViewMode } from "./host-monitor-mapping";
+import {
+  buildHostMonitorRows,
+  countUnregisteredAgents,
+  normalizeMonitorViewMode,
+  type MonitorViewMode
+} from "./host-monitor-mapping";
 
 const route = useRoute();
-const requestedAgentID = computed(() => (typeof route.query.agent_id === "string" ? route.query.agent_id : ""));
 const requestedHostID = computed(() => (typeof route.query.host_id === "string" ? route.query.host_id : ""));
 const AUTO_REFRESH_MS = 15_000;
 const VIEW_MODE_KEY = "moox.host-monitor.view-mode";
 const loading = ref(false);
 const autoRefresh = ref(true);
 const monitors = ref<HostMetrics[]>([]);
-const sshHosts = ref<SSHHost[]>([]);
+const hosts = ref<DeploymentHost[]>([]);
 const storageAvailable = ref(true);
 const dataGap = ref(false);
 const loadError = ref("");
@@ -86,7 +94,8 @@ const viewMode = ref<MonitorViewMode>(normalizeMonitorViewMode(localStorage.getI
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let requestID = 0;
 
-const rows = computed(() => buildHostMonitorRows(monitors.value, sshHosts.value));
+const rows = computed(() => buildHostMonitorRows(hosts.value, monitors.value));
+const unregisteredCount = computed(() => countUnregisteredAgents(hosts.value, monitors.value));
 const selectedRow = computed(() => rows.value.find(row => row.key === selectedKey.value) || null);
 const onlineCount = computed(() => rows.value.filter(row => row.state === "online").length);
 const attentionCount = computed(() => rows.value.filter(row => row.attention || row.state === "offline").length);
@@ -96,9 +105,9 @@ const storageStatus = computed(() => (!storageAvailable.value ? "不可用" : da
 async function refreshData(refreshHistory = false) {
   const currentRequestID = ++requestID;
   loading.value = true;
-  const results = await Promise.allSettled([getCurrentMetrics(), listSSHHosts({ limit: 500 })]);
+  const results = await Promise.allSettled([getCurrentMetrics(), listAllDeploymentHosts()]);
   if (currentRequestID !== requestID) return;
-  const [monitorResult, sshResult] = results;
+  const [monitorResult, hostResult] = results;
   const errors: string[] = [];
   if (monitorResult.status === "fulfilled") {
     monitors.value = monitorResult.value.metrics;
@@ -107,10 +116,10 @@ async function refreshData(refreshHistory = false) {
   } else {
     errors.push("Monitor 实时数据加载失败，继续显示上次成功结果");
   }
-  if (sshResult.status === "fulfilled") {
-    sshHosts.value = sshResult.value.hosts || [];
+  if (hostResult.status === "fulfilled") {
+    hosts.value = hostResult.value;
   } else {
-    errors.push("SSH 主机清单加载失败，地址可能显示为 Agent ID");
+    errors.push("登记主机清单加载失败，继续显示上次成功结果");
   }
   loadError.value = errors.join("；");
   if (refreshHistory) historyRefreshKey.value++;
@@ -128,14 +137,10 @@ function stopAutoRefresh() {
 function manualRefresh() {
   return refreshData(true);
 }
-watch([rows, requestedAgentID, requestedHostID], ([value, agentID, hostID]) => {
-  const requested = agentID
-    ? value.find(row => row.monitor?.host_id === agentID)
-    : hostID
-      ? value.find(row => row.monitor?.deployment_host_id === hostID)
-      : undefined;
+watch([rows, requestedHostID], ([value, hostID]) => {
+  const requested = hostID ? value.find(row => row.hostId === hostID) : undefined;
   if (requested) selectedKey.value = requested.key;
-  else if (agentID || hostID) selectedKey.value = "";
+  else if (hostID) selectedKey.value = "";
   else if (!value.length) selectedKey.value = "";
   else if (!value.some(row => row.key === selectedKey.value)) selectedKey.value = value[0].key;
 });

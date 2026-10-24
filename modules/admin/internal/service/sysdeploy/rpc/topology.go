@@ -14,8 +14,8 @@ func (s *Service) ListHosts(ctx context.Context, req *pb.ListDeploymentHostsReq)
 	return s.svc.ListHosts(ctx, req)
 }
 
-func (s *Service) ListPlacements(ctx context.Context, req *pb.ListPlacementsReq) (*pb.ListPlacementsRsp, error) {
-	return s.svc.ListPlacements(ctx, req)
+func (s *Service) ListDeployments(ctx context.Context, req *pb.ListDeploymentsReq) (*pb.ListDeploymentsRsp, error) {
+	return s.svc.ListDeployments(ctx, req)
 }
 
 func (s *Service) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesReq) (*pb.GetHostRoutesRsp, error) {
@@ -30,12 +30,12 @@ func (s *Service) SetHostStatus(ctx context.Context, req *pb.SetHostStatusReq) (
 	return s.svc.SetHostStatus(ctx, req)
 }
 
-func (s *Service) SetPlacementStatus(ctx context.Context, req *pb.SetPlacementStatusReq) (*pb.SetPlacementStatusRsp, error) {
-	return s.svc.SetPlacementStatus(ctx, req)
+func (s *Service) SetDeploymentStatus(ctx context.Context, req *pb.SetDeploymentStatusReq) (*pb.SetDeploymentStatusRsp, error) {
+	return s.svc.SetDeploymentStatus(ctx, req)
 }
 
-func (s *Service) SyncHostPlacements(ctx context.Context, req *pb.SyncHostPlacementsReq) (*pb.SyncHostPlacementsRsp, error) {
-	return s.svc.SyncHostPlacements(ctx, req)
+func (s *Service) SyncHostDeployments(ctx context.Context, req *pb.SyncHostDeploymentsReq) (*pb.SyncHostDeploymentsRsp, error) {
+	return s.svc.SyncHostDeployments(ctx, req)
 }
 
 func (s *Service) DeleteHost(ctx context.Context, req *pb.DeleteDeploymentHostReq) (*pb.DeleteDeploymentHostRsp, error) {

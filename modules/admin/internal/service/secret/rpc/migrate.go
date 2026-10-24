@@ -21,11 +21,11 @@ const exportPageSize = 200
 
 // ExportSecrets 把全部秘钥（含明文）加密成迁移包，方便迁移到另一套环境。属于本环境的秘钥（系统空间里的网关密钥环、
 // EventBus 内部凭据，以及配置备份，见 model.Secret.EnvironmentBound）不导出。
-// 仅全局管理员可调用（控制台层对 secret 的写方法也只放行全局管理员，这里再校验一次）。
+// 只接受已登录用户调用。
 func (s *Service) ExportSecrets(ctx context.Context, req *pb.ExportSecretsReq) (*pb.ExportSecretsRsp, error) {
-	user, ok := globalAdmin(ctx)
+	user, ok := currentUser(ctx)
 	if !ok {
-		return &pb.ExportSecretsRsp{RetInfo: retErr(pb.ErrorCode_NO_PERMISSION, "仅全局管理员可以导出秘钥")}, nil
+		return &pb.ExportSecretsRsp{RetInfo: retErr(pb.ErrorCode_NO_PERMISSION, "需要登录后才能导出秘钥")}, nil
 	}
 	if utf8.RuneCountInString(req.GetPassphrase()) < minPassphraseRunes {
 		return &pb.ExportSecretsRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, errWeakPassphrase.Error())}, nil
@@ -56,11 +56,11 @@ func (s *Service) ExportSecrets(ctx context.Context, req *pb.ExportSecretsReq) (
 }
 
 // ImportSecrets 用导出口令解开迁移包并逐个导入：保留原 secret_id，引用它的配置（交易账户、云账户等）迁移后仍然有效。
-// 同一 secret_id 已存在时按 overwrite 覆盖或跳过；单个秘钥失败不影响其余，结果里列出原因。仅全局管理员可调用。
+// 同一 secret_id 已存在时按 overwrite 覆盖或跳过；单个秘钥失败不影响其余，结果里列出原因。只接受已登录用户调用。
 func (s *Service) ImportSecrets(ctx context.Context, req *pb.ImportSecretsReq) (*pb.ImportSecretsRsp, error) {
-	user, ok := globalAdmin(ctx)
+	user, ok := currentUser(ctx)
 	if !ok {
-		return &pb.ImportSecretsRsp{RetInfo: retErr(pb.ErrorCode_NO_PERMISSION, "仅全局管理员可以导入秘钥")}, nil
+		return &pb.ImportSecretsRsp{RetInfo: retErr(pb.ErrorCode_NO_PERMISSION, "需要登录后才能导入秘钥")}, nil
 	}
 	items, err := openBundle(req.GetBundle(), req.GetPassphrase())
 	if err != nil {
@@ -117,10 +117,10 @@ func (s *Service) ImportSecrets(ctx context.Context, req *pb.ImportSecretsReq) (
 	return rsp, nil
 }
 
-// globalAdmin 返回当前用户名（没有用户名时是用户 ID），以及他是否为全局管理员。
-func globalAdmin(ctx context.Context) (string, bool) {
-	userID, username, role, err := utils.GetUserInfoFromCtx(ctx)
-	if err != nil || role < int32(pb.UserRole_USER_ROLE_ADMIN) {
+// currentUser 返回当前用户名（没有用户名时是用户 ID）；没有登录身份时 ok 为 false。
+func currentUser(ctx context.Context) (string, bool) {
+	userID, username, err := utils.GetUserInfoFromCtx(ctx)
+	if err != nil {
 		return "", false
 	}
 	if username != "" {

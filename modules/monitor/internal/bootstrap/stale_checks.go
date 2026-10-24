@@ -20,7 +20,7 @@ import (
 //   - 一直处于“不再检查”超过宽限期（默认 1 小时，避免重启后暂时没数据的检查被误删），并且没有未恢复的告警；
 //   - 已停用超过保留期（默认 7 天）。
 //
-// 主机组件检查（来源 placement）、控制台页面检查等不是自动生成的业务检查，不碰。对象再次出现时检查会按原有逻辑重建。
+// 主机组件检查（来源 deployment）、控制台页面检查等不是自动生成的业务检查，不碰。对象再次出现时检查会按原有逻辑重建。
 const (
 	defaultRetiredCheckGrace      = time.Hour
 	defaultDisabledCheckRetention = 7 * 24 * time.Hour

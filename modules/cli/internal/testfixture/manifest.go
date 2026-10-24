@@ -13,9 +13,9 @@ func SetHost(manifest *setupconfig.Manifest, host setupconfig.Host, components .
 		SSH: setupconfig.SSHConfig{Port: host.Port, Username: host.Username, Password: host.Password},
 	}
 	if components != nil {
-		if manifest.Placements == nil {
-			manifest.Placements = make(map[string][]string)
+		if manifest.Deployments == nil {
+			manifest.Deployments = make(map[string][]string)
 		}
-		manifest.Placements[host.Name] = components
+		manifest.Deployments[host.Name] = components
 	}
 }

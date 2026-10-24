@@ -61,7 +61,6 @@ use (
 	./packages/seriesreplay
 	./packages/seriesset
 	./packages/servicecatalog
-	./packages/servicehost
 	./packages/storagepb
 	./packages/storagepolicy
 	./packages/sysctl

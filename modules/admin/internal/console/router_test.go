@@ -20,7 +20,6 @@ import (
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/requestauth"
-	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go"
@@ -99,7 +98,7 @@ func TestConsoleNamesResolveToCatalogAndPreserveExactJSON(t *testing.T) {
 				} else {
 					require.Equal(t, body, raw)
 				}
-				require.Equal(t, gatewayclient.CallMetadata{SpaceID: "space-1", UserID: "u1", UserRole: "2", TraceID: "trace-1"}, gatewayclient.CallMetadataFromContext(ctx))
+				require.Equal(t, gatewayclient.CallMetadata{SpaceID: "space-1", UserID: "u1", TraceID: "trace-1"}, gatewayclient.CallMetadataFromContext(ctx))
 				return response, nil
 			})
 			authorizer := &fakeSpaceAuthorizer{}
@@ -107,17 +106,13 @@ func TestConsoleNamesResolveToCatalogAndPreserveExactJSON(t *testing.T) {
 			r := browserRequest(t, secret, key, sid, "/api/admin/"+tc.name+"/"+tc.method, "space-1", body)
 			r.Header.Set("X-Trace-Id", "trace-1")
 			r.Header.Set("X-User-Id", "spoofed")
-			r.Header.Set("X-User-Role", "999")
 			rr := httptest.NewRecorder()
 			router.ServeHTTP(rr, r)
 			require.Equal(t, http.StatusOK, rr.Code)
 			require.Equal(t, response, rr.Body.Bytes())
 			require.Equal(t, 1, calls)
 			if isSpaceScopedService(tc.name) {
-				require.Equal(t, "u1", authorizer.userID)
 				require.Equal(t, "space-1", authorizer.spaceID)
-				require.Equal(t, !catalogReadOnly(t, tc.path, tc.method), authorizer.mutates)
-				require.Equal(t, int32(2), authorizer.globalRole)
 			}
 		})
 	}
@@ -131,7 +126,7 @@ func TestConsoleRejectsMachineMethodsAndNonCatalogAliasesBeforeDispatch(t *testi
 	for _, suffix := range []string{
 		"secret/GetSecretValue", "SecretMgr/getsecretvalue", "trpc.moox.ops.SecretMgr/GetSecretValue",
 		"cloudfunction/CollectGarbage", "publishlease/ValidateCollectorPublishLease",
-		"publishlease/BeginCollectorPublishOperation", "sysdeploy/SyncHostPlacements", "sysdeploy/DeleteHost",
+		"publishlease/BeginCollectorPublishOperation", "sysdeploy/SyncHostDeployments", "sysdeploy/DeleteHost",
 		"trade/ReleaseLogicalAccountOwner", "trade/ClaimLogicalAccountOwner", "trade/RebindLogicalAccountOwner",
 		"trade_owner/ReleaseLogicalAccountOwner", "trade_console/ListOrders", "collectmgr/GetTaskList",
 		"factormgr/ListFactors", "moox_monitor/GetHealthOverview", "collector_market_runtime/ClaimTimerBatch",
@@ -203,7 +198,7 @@ func TestConsoleRetainsSpaceAuthorizationAndRejectsNestedSpaceMismatch(t *testin
 			_, secret, key, sid := setupRequestAuthTest(t)
 			authorizer := &fakeSpaceAuthorizer{}
 			if tc.denied {
-				authorizer.err = errors.New("space membership denied")
+				authorizer.err = errors.New("space unavailable")
 			}
 			gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) {
 				t.Fatal("unauthorized space reached gateway")
@@ -286,29 +281,6 @@ func TestConsoleDoesNotExposeArbitraryRawHandlerRegistration(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rr.Code)
 }
 
-func TestConsoleManualViewRebuildStillRequiresAdministrator(t *testing.T) {
-	for _, role := range []int32{1, 2} {
-		t.Run(fmt.Sprint(role), func(t *testing.T) {
-			_, secret, key, sid := setupRequestAuthTest(t)
-			calls := 0
-			gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { calls++; return []byte(`{}`), nil })
-			r := browserRequest(t, secret, key, sid, "/api/admin/storage/RequestViewRebuild", "", []byte(`{"space_id":"space-1"}`))
-			token, err := mooxsecurity.SignToken(map[string]any{"user_id": "u1", "username": "admin", "role": role, "token_type": "access", "sid": sid}, secret, "moox-admin", time.Hour)
-			require.NoError(t, err)
-			r.Header.Set("Authorization", token)
-			rr := httptest.NewRecorder()
-			newTestRouter(t, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, r)
-			if role < 2 {
-				require.Equal(t, http.StatusForbidden, rr.Code)
-				require.Zero(t, calls)
-			} else {
-				require.Equal(t, http.StatusOK, rr.Code)
-				require.Equal(t, 1, calls)
-			}
-		})
-	}
-}
-
 func TestConsoleRawRouteCannotBypassTicketThroughNoAuthConfiguration(t *testing.T) {
 	setupRequestAuthTest(t)
 	SetConfig(&Config{Console: ConsoleConfig{NoAuthMethods: []string{"/api/admin/ssh/WsConnect"}}})
@@ -319,110 +291,36 @@ func TestConsoleRawRouteCannotBypassTicketThroughNoAuthConfiguration(t *testing.
 	require.Equal(t, http.StatusUnauthorized, rr.Code)
 }
 
-// 普通用户不能改全局部署状态；管理员可以。
-func TestConsoleGlobalWritesRequireAdministrator(t *testing.T) {
-	for _, tc := range []struct {
-		path   string
-		role   int
-		status int
-	}{
-		{"/api/admin/sysdeploy/SetPlacementStatus", 1, http.StatusForbidden},
-		{"/api/admin/sysdeploy/SetHostStatus", 1, http.StatusForbidden},
-		{"/api/admin/sysdeploy/SetPlacementStatus", 2, http.StatusOK},
-		{"/api/admin/sysdeploy/ListPlacements", 1, http.StatusOK},
-		// SSH 主机配置与会话等价于登录主机：普通用户连读都不行。
-		{"/api/admin/ssh/ListHosts", 1, http.StatusForbidden},
-		{"/api/admin/ssh/GetHost", 1, http.StatusForbidden},
-		{"/api/admin/ssh/ListHosts", 2, http.StatusOK},
-		// 因子定义是全局的，会被所有空间的因子集引用：只有全局管理员可以保存。
-		{"/api/admin/factor-mgr/CreateFactor", 1, http.StatusForbidden},
-		{"/api/admin/factor-mgr/UpdateFactor", 1, http.StatusForbidden},
-		{"/api/admin/factor-mgr/UpsertFactorCategory", 1, http.StatusForbidden},
-		{"/api/admin/factor-mgr/DeleteFactorCategory", 1, http.StatusForbidden},
-		{"/api/admin/factor-mgr/SetFactorCategory", 1, http.StatusForbidden},
-		// 策略定义是全局的：空间管理员不能改被其他空间实例引用的定义；读取仍按空间授权。
-		{"/api/admin/strategy/CreateStrategy", 1, http.StatusForbidden},
-		{"/api/admin/strategy/UpdateStrategy", 1, http.StatusForbidden},
-		{"/api/admin/strategy/DeleteStrategy", 1, http.StatusForbidden},
-		{"/api/admin/cloudfunction/CreateCloudAccount", 1, http.StatusForbidden},
-		{"/api/admin/cloudfunction/UpdateCloudAccount", 1, http.StatusForbidden},
-		{"/api/admin/cloudfunction/DeleteCloudAccount", 1, http.StatusForbidden},
-		{"/api/admin/factor-mgr/ListFactors", 1, http.StatusForbidden}, // 无空间的 Factor 请求本来就要管理员
-		// 推送渠道的完整 Webhook URL 是凭据：只有全局管理员能列出、增删；概览仍对所有登录用户开放。
-		{"/api/admin/monitor/ListNotificationChannels", 1, http.StatusForbidden},
-		{"/api/admin/monitor/ListNotificationChannels", 2, http.StatusOK},
-		{"/api/admin/monitor/AddNotificationChannel", 1, http.StatusForbidden},
-		{"/api/admin/monitor/DeleteNotificationChannel", 1, http.StatusForbidden},
-		{"/api/admin/monitor/AddNotificationChannel", 2, http.StatusOK},
-		{"/api/admin/monitor/GetHealthOverview", 1, http.StatusOK},
-	} {
-		_, secret, key, sid := setupRequestAuthTest(t)
-		testTokenRole = tc.role
-		gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })
-		rr := httptest.NewRecorder()
-		router := newTestRouter(t, nil, gateway).buildControlRouter()
-		router.ServeHTTP(rr, browserRequest(t, secret, key, sid, tc.path, "", []byte(`{}`)))
-		if tc.status == http.StatusForbidden {
-			require.Equal(t, tc.status, rr.Code, "%s role=%d", tc.path, tc.role)
-		} else {
-			require.NotEqual(t, http.StatusForbidden, rr.Code, "%s role=%d", tc.path, tc.role)
-		}
-	}
-}
-
-// Storage / Factor 请求同样受空间成员资格约束，无空间的请求只允许全局管理员。
+// Storage / Factor 请求受空间可用性约束；无空间的全局请求直接放行（只有一个超级用户）。
 func TestConsoleStorageAndFactorAreSpaceAuthorized(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		path   string
 		space  string
 		body   string
-		role   int
 		deny   bool
 		status int
 	}{
-		{"member reads own space", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, 1, false, http.StatusOK},
-		{"member blocked by authorizer", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, 1, true, http.StatusForbidden},
-		{"body space without header is authorized", "/api/admin/storage/ListDatasets", "", `{"space_id":"space-2"}`, 1, true, http.StatusForbidden},
-		{"header and body mismatch", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-2"}`, 1, false, http.StatusBadRequest},
-		{"member without space", "/api/admin/storage/ListDatasets", "", `{}`, 1, false, http.StatusBadRequest},
-		{"admin without space", "/api/admin/storage/ListDataNodes", "", `{}`, 2, false, http.StatusOK},
-		{"factor member blocked", "/api/admin/factor-mgr/DeleteFactorSet", "space-1", `{}`, 1, true, http.StatusForbidden},
-		{"factor member without space", "/api/admin/factor-mgr/ListFactors", "", `{}`, 1, false, http.StatusForbidden},
+		{"reads own space", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, false, http.StatusOK},
+		{"space blocked by authorizer", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, true, http.StatusForbidden},
+		{"body space without header is authorized", "/api/admin/storage/ListDatasets", "", `{"space_id":"space-2"}`, true, http.StatusForbidden},
+		{"header and body mismatch", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-2"}`, false, http.StatusBadRequest},
+		{"space method without space", "/api/admin/storage/ListDatasets", "", `{}`, false, http.StatusBadRequest},
+		{"global storage method without space", "/api/admin/storage/ListDataNodes", "", `{}`, false, http.StatusOK},
+		{"factor blocked by authorizer", "/api/admin/factor-mgr/DeleteFactorSet", "space-1", `{}`, true, http.StatusForbidden},
+		{"factor global request without space", "/api/admin/factor-mgr/ListFactors", "", `{}`, false, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, secret, key, sid := setupRequestAuthTest(t)
-			testTokenRole = tc.role
 			authorizer := &fakeSpaceAuthorizer{}
 			if tc.deny {
-				authorizer.err = errors.New("space membership denied")
+				authorizer.err = errors.New("space unavailable")
 			}
 			gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })
 			rr := httptest.NewRecorder()
 			newTestRouter(t, nil, gateway, authorizer).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, tc.path, tc.space, []byte(tc.body)))
 			require.Equal(t, tc.status, rr.Code, rr.Body.String())
 		})
-	}
-}
-
-// Collector 的只读方法对空间普通成员是只读授权，写方法才要求 owner/admin。
-func TestConsoleCatalogReadOnlyDrivesSpaceMutationClass(t *testing.T) {
-	for _, tc := range []struct {
-		path    string
-		mutates bool
-	}{
-		{"/api/admin/collector/GetTaskList", false},
-		{"/api/admin/cloudfunction/ListFunctionInstances", false},
-		{"/api/admin/collector/CreateTask", true},
-	} {
-		_, secret, key, sid := setupRequestAuthTest(t)
-		testTokenRole = 1
-		authorizer := &fakeSpaceAuthorizer{}
-		gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })
-		rr := httptest.NewRecorder()
-		newTestRouter(t, nil, gateway, authorizer).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, tc.path, "space-1", []byte(`{}`)))
-		require.Equal(t, http.StatusOK, rr.Code, tc.path)
-		require.Equal(t, tc.mutates, authorizer.mutates, tc.path)
 	}
 }
 
@@ -448,38 +346,22 @@ func TestConsoleRateLimitsConfiguredMethodsOnRealRoute(t *testing.T) {
 	}
 }
 
-// Storage 方法的授权空间必须由请求体声明，防止请求头授权 S 而后端按空 space_id 查询全部空间；
-// 节点等全局方法只允许全局管理员，不能借空间管理权限执行。
-func TestConsoleStorageBindsAuthorizedSpaceAndProtectsGlobalMethods(t *testing.T) {
+// Storage 方法的授权空间必须由请求体声明，防止请求头授权 S 而后端按空 space_id 查询全部空间。
+func TestConsoleStorageBindsAuthorizedSpace(t *testing.T) {
 	for _, tc := range []struct {
 		name, path, space, body string
-		role                    int
 		status                  int
 	}{
-		{"header space injected when body has none", "/api/admin/storage/ListDatasets", "space-1", `{}`, 1, http.StatusOK},
-		{"empty space id is replaced by header space", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":""}`, 1, http.StatusOK},
-		{"body space ok", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, 1, http.StatusOK},
-		{"node write needs admin even with space header", "/api/admin/storage/UpdateDataNode", "space-1", `{"space_id":"space-1","node_id":"n1"}`, 1, http.StatusForbidden},
-		{"node read needs admin", "/api/admin/storage/ListDataNodes", "", `{}`, 1, http.StatusForbidden},
-		{"admin node write", "/api/admin/storage/UpdateDataNode", "", `{"node_id":"n1"}`, 2, http.StatusOK},
-		{"space delete denied for member", "/api/admin/space/DeleteSpace", "", `{"space_id":"space-2"}`, 1, http.StatusForbidden},
-		{"space update denied for member", "/api/admin/space/UpdateSpace", "space-1", `{"space":{"space_id":"space-1"}}`, 1, http.StatusForbidden},
-		{"members need membership", "/api/admin/space/ListSpaceMembers", "", `{"space_id":"space-2"}`, 1, http.StatusForbidden},
-		{"null body", "/api/admin/storage/ListDatasets", "", `null`, 2, http.StatusBadRequest},
+		{"header space injected when body has none", "/api/admin/storage/ListDatasets", "space-1", `{}`, http.StatusOK},
+		{"empty space id is replaced by header space", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":""}`, http.StatusOK},
+		{"body space ok", "/api/admin/storage/ListDatasets", "space-1", `{"space_id":"space-1"}`, http.StatusOK},
+		{"null body", "/api/admin/storage/ListDatasets", "", `null`, http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, secret, key, sid := setupRequestAuthTest(t)
-			testTokenRole = tc.role
-			authorizer := &fakeSpaceAuthorizer{}
-			if tc.status == http.StatusForbidden && strings.Contains(tc.name, "members need") {
-				authorizer.err = errors.New("not a member")
-			}
 			gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })
 			rr := httptest.NewRecorder()
-			newTestRouter(t, nil, gateway, authorizer).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, tc.path, tc.space, []byte(tc.body)))
-			if strings.HasPrefix(tc.path, "/api/admin/space/") && tc.status == http.StatusOK {
-				return
-			}
+			newTestRouter(t, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, tc.path, tc.space, []byte(tc.body)))
 			require.Equal(t, tc.status, rr.Code, rr.Body.String())
 		})
 	}
@@ -538,11 +420,6 @@ func TestConsoleInjectsHeaderSpaceIntoStorageBodyWhenAbsent(t *testing.T) {
 	rr = httptest.NewRecorder()
 	newTestRouter(t, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, "/api/admin/storage/UpdateView", "space-1", []byte(`{"view":{"view_id":"v1"}}`)))
 	require.Equal(t, http.StatusBadRequest, rr.Code)
-	// ListSpaceMembers 同样要求请求体声明空间。
-	_, secret, key, sid = setupRequestAuthTest(t)
-	rr = httptest.NewRecorder()
-	newTestRouter(t, nil, gateway, &fakeSpaceAuthorizer{}).buildControlRouter().ServeHTTP(rr, browserRequest(t, secret, key, sid, "/api/admin/space/ListSpaceMembers", "space-1", []byte(`{}`)))
-	require.Equal(t, http.StatusBadRequest, rr.Code)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(raw, &got))
 	require.Equal(t, "space-1", got["space_id"])
@@ -587,5 +464,25 @@ func TestStorageTopLevelSpaceMethodsMatchProto(t *testing.T) {
 		request, ok := requests[method]
 		require.True(t, ok, "%s 不在 storage proto 中", method)
 		require.True(t, messages[request], "%s 的请求消息 %s 没有顶层 space_id，不能回填", method, request)
+	}
+}
+
+// 部署、数据节点与归档 worker 的写操作只留给 moox-cli：控制台没有这些路由，一律 404。
+func TestConsoleHasNoDeploymentWriteRoutes(t *testing.T) {
+	for _, path := range []string{
+		"/api/admin/sysdeploy/SetHostStatus",
+		"/api/admin/sysdeploy/SetDeploymentStatus",
+		"/api/admin/sysdeploy/SyncHostDeployments",
+		"/api/admin/sysdeploy/DeleteHost",
+		"/api/admin/storage/UpdateDataNode",
+		"/api/admin/storage/DeleteDataNode",
+		"/api/admin/archive/RetireArchiveWorker",
+	} {
+		_, secret, key, sid := setupRequestAuthTest(t)
+		gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })
+		rr := httptest.NewRecorder()
+		router := newTestRouter(t, nil, gateway).buildControlRouter()
+		router.ServeHTTP(rr, browserRequest(t, secret, key, sid, path, "", []byte(`{}`)))
+		require.Equal(t, http.StatusNotFound, rr.Code, path)
 	}
 }

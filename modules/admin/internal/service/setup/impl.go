@@ -13,7 +13,6 @@ import (
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	adminspace "github.com/mooyang-code/moox/modules/admin/internal/service/space"
-	sshmodel "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"gorm.io/gorm"
 )
@@ -49,13 +48,6 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 			created += n
 			result.SpacesCreated += n
 		}
-		for _, host := range manifest.Hosts() {
-			n, err = s.ensureHost(ctx, tx, host)
-			if err != nil {
-				return err
-			}
-			created += n
-		}
 		return nil
 	})
 	if err != nil {
@@ -88,7 +80,7 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 	if err != nil {
 		return Status{}, err
 	}
-	status := Status{State: "completed", Users: 1, Secrets: 1, Hosts: len(manifest.Hosts()), Spaces: len(spaces)}
+	status := Status{State: "completed", Users: 1, Secrets: 1, Spaces: len(spaces)}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		state, err := s.inspectAdmin(ctx, tx, manifest.Admin)
 		if err != nil {
@@ -102,13 +94,6 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 		status.add(state)
 		for _, space := range spaces {
 			state, err = s.inspectSpace(ctx, tx, space)
-			if err != nil {
-				return err
-			}
-			status.add(state)
-		}
-		for _, host := range manifest.Hosts() {
-			state, err = s.inspectHost(ctx, tx, host)
 			if err != nil {
 				return err
 			}
@@ -129,21 +114,15 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 
 func expectedResult(manifest Manifest) Result {
 	return Result{
-		Users: 1, Secrets: 1, Hosts: len(manifest.Hosts()),
+		Users: 1, Secrets: 1,
 		Spaces: len(manifest.Spaces), SpacesUnchanged: len(manifest.Spaces),
 	}
 }
 
 func validateManifest(manifest Manifest, db *gorm.DB, encryptionKey string) error {
 	if db == nil || encryptionKey == "" || strings.TrimSpace(manifest.Admin.Username) == "" || manifest.Admin.Password == "" ||
-		strings.TrimSpace(manifest.TencentCloud.SecretID) == "" || manifest.TencentCloud.SecretKey == "" || len(manifest.Hosts()) == 0 {
+		strings.TrimSpace(manifest.TencentCloud.SecretID) == "" || manifest.TencentCloud.SecretKey == "" {
 		return ErrInvalid
-	}
-	for _, host := range manifest.Hosts() {
-		if strings.TrimSpace(host.Name) == "" || strings.TrimSpace(host.Address) == "" || host.Port < 1 || host.Port > 65535 ||
-			strings.TrimSpace(host.Username) == "" || host.Password == "" {
-			return ErrInvalid
-		}
 	}
 	if _, err := normalizeSpaces(manifest.Spaces); err != nil {
 		return err
@@ -183,7 +162,7 @@ func (s *Service) ensureAdmin(ctx context.Context, tx *gorm.DB, input Admin) (in
 	now := time.Now()
 	user := &authmodel.User{
 		UserID: uuid.NewString(), Username: strings.TrimSpace(input.Username), PasswordHash: hash,
-		Role: 3, Status: 1, LastPasswordChange: now, CreatedAt: now, UpdatedAt: now,
+		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := tx.WithContext(ctx).Create(user).Error; err != nil {
 		return 0, ErrStorage
@@ -196,9 +175,9 @@ func (s *Service) ensureAdmin(ctx context.Context, tx *gorm.DB, input Admin) (in
 
 func (s *Service) inspectAdmin(ctx context.Context, tx *gorm.DB, input Admin) (recordState, error) {
 	var user authmodel.User
-	err := tx.WithContext(ctx).Where("c_username = ? AND c_is_deleted = 0", strings.TrimSpace(input.Username)).First(&user).Error
+	err := tx.WithContext(ctx).Where("c_username = ?", strings.TrimSpace(input.Username)).First(&user).Error
 	if err == nil {
-		if user.Role == 3 && user.Status == 1 && mooxsecurity.VerifyPassword(input.Password, user.PasswordHash) {
+		if mooxsecurity.VerifyPassword(input.Password, user.PasswordHash) {
 			return recordMatch, nil
 		}
 		return recordConflict, nil
@@ -206,12 +185,12 @@ func (s *Service) inspectAdmin(ctx context.Context, tx *gorm.DB, input Admin) (r
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return recordConflict, ErrStorage
 	}
-	var otherAdmins int64
-	if err := tx.WithContext(ctx).Model(&authmodel.User{}).
-		Where("c_role = 3 AND c_status = 1 AND c_is_deleted = 0").Count(&otherAdmins).Error; err != nil {
+	// 系统只有一个超级用户：库里已有别的用户就是冲突。
+	var otherUsers int64
+	if err := tx.WithContext(ctx).Model(&authmodel.User{}).Count(&otherUsers).Error; err != nil {
 		return recordConflict, ErrStorage
 	}
-	if otherAdmins > 0 {
+	if otherUsers > 0 {
 		return recordConflict, nil
 	}
 	return recordMissing, nil
@@ -312,58 +291,6 @@ func (s *Service) inspectSpace(ctx context.Context, tx *gorm.DB, input Space) (r
 		stored.Timezone == input.Timezone &&
 		stored.Status == input.Status &&
 		storedAttributes == input.AttributesJSON {
-		return recordMatch, nil
-	}
-	return recordConflict, nil
-}
-
-func (s *Service) ensureHost(ctx context.Context, tx *gorm.DB, input Host) (int, error) {
-	state, err := s.inspectHost(ctx, tx, input)
-	if err != nil || state == recordMatch {
-		return 0, err
-	}
-	if state == recordConflict {
-		return 0, ErrConflict
-	}
-	encrypted, err := mooxsecurity.Encrypt(input.Password, s.encryptionKey)
-	if err != nil {
-		return 0, ErrStorage
-	}
-	now := time.Now()
-	host := &sshmodel.SSHHost{
-		Name: strings.TrimSpace(input.Name), Address: strings.TrimSpace(input.Address), Port: input.Port,
-		User: strings.TrimSpace(input.Username), Password: encrypted, AuthType: "pwd", NetType: "tcp4",
-		FontSize: 14, Background: "#000000", Foreground: "#FFFFFF", CursorColor: "#FFFFFF",
-		FontFamily: "Courier New", CursorStyle: "block", Shell: "bash", PtyType: "xterm-256color",
-		Creator: "setup", CreateTime: now, ModifyTime: now,
-	}
-	if err := tx.WithContext(ctx).Create(host).Error; err != nil {
-		return 0, ErrStorage
-	}
-	if err := s.afterWrite("host:" + host.Name); err != nil {
-		return 0, err
-	}
-	return 1, nil
-}
-
-func (s *Service) inspectHost(ctx context.Context, tx *gorm.DB, input Host) (recordState, error) {
-	var host sshmodel.SSHHost
-	err := tx.WithContext(ctx).
-		Where("c_address = ? OR c_name = ?", strings.TrimSpace(input.Address), strings.TrimSpace(input.Name)).
-		First(&host).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return recordMissing, nil
-	}
-	if err != nil {
-		return recordConflict, ErrStorage
-	}
-	plain, err := mooxsecurity.Decrypt(host.Password, s.encryptionKey)
-	if err != nil {
-		return recordConflict, ErrStorage
-	}
-	metadataMatches := host.Name == strings.TrimSpace(input.Name) && host.Address == strings.TrimSpace(input.Address) &&
-		host.Port == input.Port && host.User == strings.TrimSpace(input.Username) && host.AuthType == "pwd"
-	if metadataMatches && secretEqual(plain, input.Password) {
 		return recordMatch, nil
 	}
 	return recordConflict, nil

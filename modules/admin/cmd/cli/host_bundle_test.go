@@ -65,10 +65,10 @@ func TestHostBundleScopesPrivateIdentityReissuesLeafAndPreservesTopology(t *test
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
 	require.NoError(t, dao.SetHostStatus(context.Background(), "storage", "disabled"))
-	require.NoError(t, dao.SetPlacementStatus(context.Background(), "compute-1", "access", "disabled"))
+	require.NoError(t, dao.SetDeploymentStatus(context.Background(), "overseas", "access", "disabled"))
 	beforeHosts, beforePlacements, err := dao.Read(context.Background())
 	require.NoError(t, err)
-	for _, hostID := range []string{"control", "storage", "compute-1"} {
+	for _, hostID := range []string{"control", "storage", "overseas"} {
 		t.Run(hostID, func(t *testing.T) {
 			first := runHostBundleFixture(t, opts, hostID)
 			again := runHostBundleFixture(t, opts, hostID)
@@ -155,17 +155,17 @@ func TestHostBundleScopesPrivateIdentityReissuesLeafAndPreservesTopology(t *test
 				require.Equal(t, hex.EncodeToString(digest[:]), file.SHA256)
 				require.EqualValues(t, len(raw), file.Size)
 			}
-			if hostID == "compute-1" {
+			if hostID == "overseas" {
 				require.Equal(t, "secrets/access/access-verification.json", first.VerificationFile)
 			} else {
 				require.Empty(t, first.VerificationFile)
 			}
 		})
 	}
-	afterHosts, afterPlacements, err := dao.Read(context.Background())
+	afterHosts, afterDeployments, err := dao.Read(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, beforeHosts, afterHosts)
-	require.Equal(t, beforePlacements, afterPlacements)
+	require.Equal(t, beforePlacements, afterDeployments)
 }
 
 func TestHostBundleExportsOnlyExternalAccessKeysAcrossRotation(t *testing.T) {
@@ -182,11 +182,11 @@ func TestHostBundleExportsOnlyExternalAccessKeysAcrossRotation(t *testing.T) {
 	require.NoError(t, err)
 	current, err := store.Rotate(context.Background(), "scf-collector")
 	require.NoError(t, err)
-	first := runHostBundleFixture(t, opts, "compute-1")
+	first := runHostBundleFixture(t, opts, "overseas")
 	registryPath := filepath.Join(first.BundleDir, first.VerificationFile)
 	registry, err := gatewayauth.LoadCredentialRegistry(registryPath)
 	require.NoError(t, err)
-	request := gatewayauth.Request{Method: "POST", Path: "/trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch", TargetNode: "access@compute-1", Callee: "trpc.moox.storage.PrimaryStore", Func: "CommitTimeSeriesBatch"}
+	request := gatewayauth.Request{Method: "POST", Path: "/trpc.moox.storage.PrimaryStore/CommitTimeSeriesBatch", TargetNode: "access@overseas", Callee: "trpc.moox.storage.PrimaryStore", Func: "CommitTimeSeriesBatch"}
 	verify := func(registry *gatewayauth.CredentialRegistry, key keys.SigningKey) error {
 		header, err := gatewayauth.Sign(key.Credentials(), request, time.Now())
 		require.NoError(t, err)
@@ -204,7 +204,7 @@ func TestHostBundleExportsOnlyExternalAccessKeysAcrossRotation(t *testing.T) {
 		require.NotContains(t, string(raw), caller)
 	}
 	require.NoError(t, store.Retire(context.Background(), "scf-collector", old.KeyID))
-	again := runHostBundleFixture(t, opts, "compute-1")
+	again := runHostBundleFixture(t, opts, "overseas")
 	registry, err = gatewayauth.LoadCredentialRegistry(filepath.Join(again.BundleDir, again.VerificationFile))
 	require.NoError(t, err)
 	require.Error(t, verify(registry, old))
@@ -219,10 +219,10 @@ func TestHostBundleProvisionsNewlyRegisteredHostAndUsesPersistedAddresses(t *tes
 	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	require.NoError(t, dao.SyncHostPlacements(context.Background(), sysdeploy.HostSpec{HostID: "compute-2", Address: "192.0.2.90", PrivateAddress: "2001:db8::90"}))
+	require.NoError(t, dao.SyncHostDeployments(context.Background(), sysdeploy.HostSpec{HostID: "compute-2", Address: "192.0.2.90", PrivateAddress: "2001:db8::90"}))
 	first := runHostBundleFixture(t, opts, "compute-2")
 	require.Len(t, first.Credentials, 2)
-	require.NoError(t, dao.SyncHostPlacements(context.Background(), sysdeploy.HostSpec{HostID: "compute-2", Address: "compute-2.example.test", PrivateAddress: "2001:db8::91"}))
+	require.NoError(t, dao.SyncHostDeployments(context.Background(), sysdeploy.HostSpec{HostID: "compute-2", Address: "compute-2.example.test", PrivateAddress: "2001:db8::91"}))
 	again := runHostBundleFixture(t, opts, "compute-2")
 	require.Equal(t, first.Credentials, again.Credentials)
 	config, err := hostgatewayconfig.Load(filepath.Join(again.BundleDir, again.ConfigFile))
@@ -342,7 +342,7 @@ func TestHostBundleConcurrentProcessesReuseKeysAndIssueDistinctLeaves(t *testing
 	runBootstrapFixture(t, opts)
 	executable, err := os.Executable()
 	require.NoError(t, err)
-	raw, err := json.Marshal(hostBundleArguments(opts, "compute-1"))
+	raw, err := json.Marshal(hostBundleArguments(opts, "overseas"))
 	require.NoError(t, err)
 	const writers = 3
 	var outputs [writers]bytes.Buffer

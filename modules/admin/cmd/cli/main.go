@@ -72,7 +72,7 @@ func main() {
 	}
 
 	if !isInitCommand(os.Args) {
-		printInitError(os.Stderr, fmt.Errorf("unknown command: use bootstrap, host-bundle, host, placement, init, reset-business, user, random-secret, eventbus-credentials, keys, pki"))
+		printInitError(os.Stderr, fmt.Errorf("unknown command: use bootstrap, host-bundle, host, deployment, init, reset-business, user, random-secret, eventbus-credentials, keys, pki"))
 		os.Exit(2)
 	}
 	if err := runInitCommand(os.Args[1:], os.Stdout, os.Stderr); err != nil {

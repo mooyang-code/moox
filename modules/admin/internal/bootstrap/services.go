@@ -113,9 +113,8 @@ func createCoreServices(ctx context.Context, dbManager *database.Manager, cfg *C
 
 	// 创建 SSH 服务
 	log.Info("[Bootstrap] 正在创建 SSH 服务...")
-	sshHostDAO := sshdao.NewSSHHostDAO(db)
-	sshSessionDAO := sshdao.NewSSHSessionDAO(db)
-	sshService := ssh.NewService(sshHostDAO, sshSessionDAO)
+	sshService := ssh.NewService(sshdao.NewHostDAO(db))
+	sysDeployService.SetSessionCloser(sshService)
 
 	// 创建秘钥管理服务
 	log.Info("[Bootstrap] 正在创建秘钥管理服务...")

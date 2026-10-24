@@ -3,18 +3,17 @@ package impl
 import (
 	"context"
 
-	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	authutils "github.com/mooyang-code/moox/modules/admin/internal/service/auth/utils"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// GetUserInfo 获取用户信息
+// GetUserInfo 获取当前登录用户的信息。
 func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoReq) (*pb.GetUserInfoRsp, error) {
 	log.InfoContext(ctx, "[Auth] # GetUserInfo")
 
-	currentUserID, _, role, err := authutils.GetUserInfoFromCtx(ctx)
+	currentUserID, _, err := authutils.GetUserInfoFromCtx(ctx)
 	if err != nil {
 		return &pb.GetUserInfoRsp{
 			RetInfo: &pb.RetInfo{
@@ -24,23 +23,7 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 		}, nil
 	}
 
-	// 确定要查询的用户ID
-	targetUserID := currentUserID
-	if req.UserId != "" {
-		// 检查权限：只有管理员可以查询其他用户信息
-		if role < int32(pb.UserRole_USER_ROLE_ADMIN) {
-			return &pb.GetUserInfoRsp{
-				RetInfo: &pb.RetInfo{
-					Code: pb.ErrorCode_NO_PERMISSION,
-					Msg:  "权限不足",
-				},
-			}, nil
-		}
-		targetUserID = req.UserId
-	}
-
-	// 查询用户信息
-	user, err := s.userDAO.GetUserByID(ctx, targetUserID)
+	user, err := s.userDAO.GetUserByID(ctx, currentUserID)
 	if err != nil {
 		return &pb.GetUserInfoRsp{
 			RetInfo: &pb.RetInfo{
@@ -50,81 +33,11 @@ func (s *AuthServiceImpl) GetUserInfo(ctx context.Context, req *pb.GetUserInfoRe
 		}, nil
 	}
 
-	// 记录操作日志
-	s.logUserAction(ctx, currentUserID, model.ActionGetUserInfo, targetUserID, "获取用户信息", "", "", "success")
-
-	// 构造用户信息（安全转义）
-	userInfo := authutils.BuildSafeUserInfo(user)
-
 	return &pb.GetUserInfoRsp{
 		RetInfo: &pb.RetInfo{
 			Code: pb.ErrorCode_SUCCESS,
 			Msg:  "获取用户信息成功",
 		},
-		UserInfo: userInfo,
-	}, nil
-}
-
-// UpdateUserInfo 更新用户信息
-func (s *AuthServiceImpl) UpdateUserInfo(ctx context.Context, req *pb.UpdateUserInfoReq) (*pb.UpdateUserInfoRsp, error) {
-	// 从HTTP header获取用户信息（网关中间件已验证）
-	currentUserID, _, _, err := authutils.GetUserInfoFromCtx(ctx)
-	if err != nil {
-		return &pb.UpdateUserInfoRsp{
-			RetInfo: &pb.RetInfo{
-				Code: pb.ErrorCode_NO_AUTH,
-				Msg:  "用户身份验证失败:" + err.Error(),
-			},
-		}, nil
-	}
-
-	// 查询用户信息
-	user, err := s.userDAO.GetUserByID(ctx, currentUserID)
-	if err != nil {
-		return &pb.UpdateUserInfoRsp{
-			RetInfo: &pb.RetInfo{
-				Code: pb.ErrorCode_NOT_FOUND,
-				Msg:  "用户不存在",
-			},
-		}, nil
-	}
-
-	// 更新用户信息
-	updateData := map[string]interface{}{}
-	if req.Nick != "" {
-		updateData["c_nickname"] = req.Nick
-	}
-	if req.Email != "" {
-		updateData["c_email"] = req.Email
-	}
-	if req.Avatar != "" {
-		updateData["c_avatar"] = req.Avatar
-	}
-
-	if len(updateData) > 0 {
-		err = s.userDAO.UpdateUser(ctx, user.UserID, updateData)
-		if err != nil {
-			log.ErrorContextf(ctx, "[Auth] 更新用户信息失败: %v", err)
-			return &pb.UpdateUserInfoRsp{
-				RetInfo: &pb.RetInfo{
-					Code: pb.ErrorCode_INNER_ERR,
-					Msg:  "更新用户信息失败",
-				},
-			}, nil
-		}
-
-		// 重新查询更新后的用户信息
-		user, _ = s.userDAO.GetUserByID(ctx, currentUserID)
-	}
-
-	// 记录操作日志
-	s.logUserAction(ctx, user.UserID, model.ActionUpdateProfile, "", "更新用户信息", "", "", "success")
-
-	return &pb.UpdateUserInfoRsp{
-		RetInfo: &pb.RetInfo{
-			Code: pb.ErrorCode_SUCCESS,
-			Msg:  "更新用户信息成功",
-		},
-		UserInfo: authutils.BuildSafeUserInfo(user), // 构造用户信息（安全转义）
+		UserInfo: authutils.BuildSafeUserInfo(user),
 	}, nil
 }

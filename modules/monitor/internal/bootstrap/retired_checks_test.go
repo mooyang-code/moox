@@ -20,7 +20,7 @@ func TestEnsureDefaultCheckAlertRulesSkipsDisabledChecks(t *testing.T) {
 	ctx := t.Context()
 	for _, check := range []domain.Check{
 		{SpaceID: "crypto", CheckID: "dataset:collector:dataset_binance_kline_1m:1m", Kind: domain.CheckKindExternal, Source: domain.CheckSourceObservability, Enabled: true},
-		{CheckID: "placement:control:storage-view", Kind: domain.CheckKindHTTP, Source: domain.CheckSourcePlacement, Enabled: false},
+		{CheckID: "deployment:control:storage-view", Kind: domain.CheckKindHTTP, Source: domain.CheckSourceDeployment, Enabled: false},
 	} {
 		check := check
 		if err := repositories.Checks.Create(ctx, &check); err != nil {
@@ -33,7 +33,7 @@ func TestEnsureDefaultCheckAlertRulesSkipsDisabledChecks(t *testing.T) {
 	if _, err := repositories.Alerts.GetRule(ctx, "crypto", "default:dataset:collector:dataset_binance_kline_1m:1m"); err != nil {
 		t.Fatalf("kept 1m collector rule: %v", err)
 	}
-	if _, err := repositories.Alerts.GetRule(ctx, "", "default:placement:control:storage-view"); !errors.Is(err, gorm.ErrRecordNotFound) {
+	if _, err := repositories.Alerts.GetRule(ctx, "", "default:deployment:control:storage-view"); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("disabled sysdeploy rule = %v, want not found", err)
 	}
 }

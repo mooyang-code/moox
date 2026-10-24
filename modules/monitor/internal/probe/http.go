@@ -55,7 +55,7 @@ func (r HTTPRunner) Run(ctx context.Context, check domain.Check) domain.CheckRes
 	for k, v := range parseHeaders(check.Headers) {
 		req.Header.Set(k, v)
 	}
-	if r.HealthSigner != nil && check.Source == domain.CheckSourcePlacement && check.TrustMode == "" && isHealthPath(req.URL) {
+	if r.HealthSigner != nil && check.Source == domain.CheckSourceDeployment && check.TrustMode == "" && isHealthPath(req.URL) {
 		now := time.Now
 		if r.Now != nil {
 			now = r.Now

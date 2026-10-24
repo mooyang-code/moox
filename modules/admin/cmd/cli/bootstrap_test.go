@@ -38,7 +38,7 @@ func newBootstrapFixture(t *testing.T) bootstrapOptions {
 	writeBootstrapTopology(t, opts, hostbundle.Topology{Version: 1, ControlHostID: "control", Hosts: []hostbundle.Host{
 		{HostID: "control", Address: "192.0.2.1", PrivateAddress: "control.internal.example.test", Components: []string{"admin", "console-proxy", "web-host", "collector"}},
 		{HostID: "storage", Address: "192.0.2.2", Components: []string{"storage-primary", "storage-node", "storage-view"}},
-		{HostID: "compute-1", Address: "192.0.2.3", Components: []string{"access", "trade"}},
+		{HostID: "overseas", Address: "192.0.2.3", Components: []string{"access", "trade"}},
 	}})
 	return opts
 }
@@ -102,10 +102,10 @@ func TestBootstrapEmptyEnvironmentExportsWorkingCredentialsCertificateAndConfig(
 	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	hosts, placements, err := dao.Read(context.Background())
+	hosts, deployments, err := dao.Read(context.Background())
 	require.NoError(t, err)
 	require.Len(t, hosts, 3)
-	require.Len(t, placements, 15)
+	require.Len(t, deployments, 15)
 	_, snapshot, err := dao.CompileSnapshot(context.Background(), "control", strings.TrimSpace(string(master)))
 	require.NoError(t, err)
 	require.Equal(t, result.ExpectedHash, snapshot.Hash)
@@ -142,11 +142,11 @@ func TestBootstrapEmptyEnvironmentExportsWorkingCredentialsCertificateAndConfig(
 	var callers []string
 	for _, entry := range result.Credentials {
 		require.NotContains(t, entry.Caller, "@storage")
-		require.NotContains(t, entry.Caller, "@compute-1")
+		require.NotContains(t, entry.Caller, "@overseas")
 		require.False(t, slices.Contains([]string{"factor-engine", "trade"}, entry.Caller))
 		callers = append(callers, entry.Caller)
 	}
-	require.Contains(t, callers, "scf-collector", "放置了 Collector 的主机要带上交给采集云函数的 scf-collector 身份")
+	require.Contains(t, callers, "scf-collector", "部署了 Collector 的主机要带上交给采集云函数的 scf-collector 身份")
 	require.NoError(t, filepath.WalkDir(result.BundleDir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -179,8 +179,8 @@ func TestBootstrapRetryKeepsMasterCAKeysAndDisabledStates(t *testing.T) {
 		args := append([]string{kind, "set-status", "--db-path", opts.dbPath, "--control-host-id", "control", "--host-id", host, "--status", status}, extra...)
 		require.NoError(t, runTopologyRecoveryCommand(args, nil, nil))
 	}
-	recovery("host", "compute-1", "disabled")
-	recovery("placement", "control", "disabled", "--component-id", "collector")
+	recovery("host", "overseas", "disabled")
+	recovery("deployment", "control", "disabled", "--component-id", "collector")
 	again := runBootstrapFixture(t, opts)
 	require.False(t, again.CA.Created)
 	require.Equal(t, first.CA.CertificateInfo, again.CA.CertificateInfo)
@@ -197,14 +197,14 @@ func TestBootstrapRetryKeepsMasterCAKeysAndDisabledStates(t *testing.T) {
 	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	compiled, err := dao.Compile(context.Background(), "compute-1")
+	compiled, err := dao.Compile(context.Background(), "overseas")
 	require.NoError(t, err)
 	require.True(t, compiled.Disabled)
 	control, err := dao.Compile(context.Background(), "control")
 	require.NoError(t, err)
 	require.False(t, slices.ContainsFunc(control.Routes, func(r servicecatalog.Route) bool { return r.ComponentID == "collector" }))
-	recovery("host", "compute-1", "enabled")
-	recovery("placement", "control", "enabled", "--component-id", "collector")
+	recovery("host", "overseas", "enabled")
+	recovery("deployment", "control", "enabled", "--component-id", "collector")
 	recovered := runBootstrapFixture(t, opts)
 	require.Equal(t, first.ExpectedHash, recovered.ExpectedHash)
 	require.Equal(t, first.Credentials, recovered.Credentials)
@@ -320,7 +320,7 @@ BEGIN SELECT RAISE(ABORT, 'fixture key persistence failure'); END`).Error)
 	var out bytes.Buffer
 	require.Error(t, runBootstrapCommand(bootstrapArguments(opts), &out, nil))
 	require.Empty(t, out.String())
-	for _, table := range []string{"t_hosts", "t_placements", "t_secrets"} {
+	for _, table := range []string{"t_hosts", "t_deployments", "t_secrets"} {
 		var count int64
 		require.NoError(t, db.Table(table).Count(&count).Error)
 		require.Zero(t, count, table)

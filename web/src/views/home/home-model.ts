@@ -400,7 +400,7 @@ export function hostRows(hosts: HealthHost[]): HostRow[] {
       memory: percentText(host.memory_percent, host.memory_available),
       disk: percentText(host.disk_percent, host.disk_available),
       hot,
-      path: `/ops/hosts?tab=monitor&host_id=${encodeURIComponent(host.host_id || "")}&agent_id=${encodeURIComponent(host.agent_id || "")}`
+      path: `/ops/hosts?tab=monitor&host_id=${encodeURIComponent(host.host_id || "")}`
     };
   });
 }

@@ -113,22 +113,22 @@ func exportHostBundle(ctx context.Context, opts hostBundleOptions, stdout io.Wri
 		if err != nil {
 			return err
 		}
-		hosts, placements, err := dao.Read(ctx)
+		hosts, deployments, err := dao.Read(ctx)
 		if err != nil {
 			return err
 		}
 		target := slices.IndexFunc(hosts, func(h sysdeploy.HostRecord) bool { return h.HostID == opts.hostID })
 		control := slices.IndexFunc(hosts, func(h sysdeploy.HostRecord) bool { return h.HostID == opts.controlHostID })
 		if target < 0 || control < 0 {
-			return errors.New("host-bundle requires registered target and control hosts; sync placements first")
+			return errors.New("host-bundle requires registered target and control hosts; sync deployments first")
 		}
 		h := hosts[target]
 		reachability, _ := servicecatalog.ParseReachability(h.Reachability)
 		material.host = hostbundle.Host{HostID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Reachability: reachability}
 		material.control = hostbundle.Host{HostID: hosts[control].HostID, Address: hosts[control].Address}
-		for _, placement := range placements {
-			if placement.HostID == h.HostID {
-				material.host.Components = append(material.host.Components, placement.ComponentID)
+		for _, deployment := range deployments {
+			if deployment.HostID == h.HostID {
+				material.host.Components = append(material.host.Components, deployment.ComponentID)
 			}
 		}
 		// Validate the persisted fleet before provisioning any new identity.

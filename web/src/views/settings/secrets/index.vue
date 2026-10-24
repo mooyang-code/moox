@@ -79,9 +79,6 @@
             </template>
           </a-table-column>
           <a-table-column title="创建人" data-index="creator" :width="100" />
-          <a-table-column title="最后使用" :width="180">
-            <template #cell="{ record }">{{ formatTime(record.last_used_at) || "-" }}</template>
-          </a-table-column>
           <a-table-column title="更新时间" :width="180">
             <template #cell="{ record }">{{ formatTime(record.modify_time) }}</template>
           </a-table-column>

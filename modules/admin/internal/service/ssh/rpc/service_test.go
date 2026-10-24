@@ -8,7 +8,6 @@ import (
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	ssh "github.com/mooyang-code/moox/modules/admin/internal/service/ssh"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/conn"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"github.com/pkg/sftp"
 	"github.com/stretchr/testify/assert"
@@ -21,24 +20,11 @@ type fakeSSHService struct {
 	ssh.Service
 }
 
-func (f *fakeSSHService) ListHosts(ctx context.Context, keyword string, offset, limit int) ([]model.SSHHost, int64, error) {
-	return nil, 0, nil
-}
-
-func (f *fakeSSHService) CreateHost(ctx context.Context, host *model.SSHHost) error {
-	host.ID = 42
-	return nil
-}
-
-func (f *fakeSSHService) UpdateHost(ctx context.Context, host *model.SSHHost) error { return nil }
-func (f *fakeSSHService) DeleteHost(ctx context.Context, id int) error              { return nil }
-func (f *fakeSSHService) GetHost(ctx context.Context, id int) (*model.SSHHost, error) {
-	return &model.SSHHost{ID: 1, Name: "dev"}, nil
-}
-
-func (f *fakeSSHService) CreateSession(ctx context.Context, hostID int, clientIP, userID string) (string, error) {
+func (f *fakeSSHService) CreateSession(ctx context.Context, hostID, clientIP, userID string) (string, error) {
 	return "sess-mock", nil
 }
+
+func (f *fakeSSHService) CloseHostSessions(string) {}
 
 func (f *fakeSSHService) DisconnectSession(ctx context.Context, sessionID string) error { return nil }
 func (f *fakeSSHService) ResizeWindow(ctx context.Context, sessionID string, w, h int) error {
@@ -71,41 +57,13 @@ func newMockSSHService(t *testing.T) ssh.Service {
 	t.Cleanup(func() { mock.Reset() })
 
 	sshSvc := (ssh.Service)(nil)
-	mock.Interface(&sshSvc).Method("CreateSession").Apply(func(_ *mocker.IContext, _ context.Context, hostID int, _, _ string) (string, error) {
-		if hostID == 0 {
+	mock.Interface(&sshSvc).Method("CreateSession").Apply(func(_ *mocker.IContext, _ context.Context, hostID, _, _ string) (string, error) {
+		if hostID == "" {
 			return "", assert.AnError
 		}
 		return "sess-mock", nil
 	})
 	return &fakeSSHService{}
-}
-
-func TestService_CreateHost_NilHost_ShouldReturnInvalidParam(t *testing.T) {
-	svc := NewService(&fakeSSHService{})
-	rsp, err := svc.CreateHost(context.Background(), &pb.CreateHostReq{})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-}
-
-func TestService_UpdateHost_MissingID_ShouldReturnInvalidParam(t *testing.T) {
-	svc := NewService(&fakeSSHService{})
-	rsp, err := svc.UpdateHost(context.Background(), &pb.UpdateHostReq{Host: &pb.SSHHost{}})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-}
-
-func TestService_DeleteHost_MissingID_ShouldReturnInvalidParam(t *testing.T) {
-	svc := NewService(&fakeSSHService{})
-	rsp, err := svc.DeleteHost(context.Background(), &pb.DeleteHostReq{})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-}
-
-func TestService_GetHost_MissingID_ShouldReturnInvalidParam(t *testing.T) {
-	svc := NewService(&fakeSSHService{})
-	rsp, err := svc.GetHost(context.Background(), &pb.GetHostReq{})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 }
 
 func TestService_CreateSession_MissingHostID_ShouldReturnInvalidParam(t *testing.T) {
@@ -119,7 +77,7 @@ func TestService_CreateSession_ValidHostID_ShouldReturnSession(t *testing.T) {
 	svc := NewService(&fakeSSHService{})
 	ctx := trpc.BackgroundContext()
 	trpc.SetMetaData(ctx, authmodel.CtxUserID, []byte("user-1"))
-	rsp, err := svc.CreateSession(ctx, &pb.CreateSessionReq{HostId: 1})
+	rsp, err := svc.CreateSession(ctx, &pb.CreateSessionReq{HostId: "storage"})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 	assert.Equal(t, "sess-mock", rsp.GetSessionId())
@@ -151,13 +109,6 @@ func TestService_SftpMkdir_MissingParams_ShouldReturnInvalidParam(t *testing.T) 
 	rsp, err := svc.SftpMkdir(context.Background(), &pb.SftpMkdirReq{})
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
-}
-
-func TestService_ListHosts_Success_ShouldReturnOK(t *testing.T) {
-	svc := NewService(&fakeSSHService{})
-	rsp, err := svc.ListHosts(context.Background(), &pb.ListHostsReq{})
-	require.NoError(t, err)
-	assert.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
 }
 
 func TestParsePathsPB_AbsolutePath_ShouldBuildBreadcrumbs(t *testing.T) {

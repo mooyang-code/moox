@@ -109,12 +109,21 @@ func loadIdentity(root *os.Root, host setupconfig.Host, deployment string) (runt
 	return stored, nil
 }
 
-func coreRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host, control unitpackage.Result) unitbootstrap.Request {
+func coreRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host, control unitpackage.Result) (unitbootstrap.Request, error) {
 	topology := hostbundle.Topology{Version: 1, ControlHostID: manifest.ControlHost().Name}
 	for _, h := range manifest.Hosts() {
-		components := slices.Clone(manifest.Placements[h.Name])
+		components := slices.Clone(manifest.Deployments[h.Name])
 		slices.Sort(components)
-		topology.Hosts = append(topology.Hosts, hostbundle.Host{HostID: h.Name, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Components: components, Reachability: h.Reachability, Description: h.Label})
+		entry := hostbundle.Host{HostID: h.Name, Label: h.Label, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Components: components, Reachability: h.Reachability}
+		// 与实时同步一致：直达主机配了密码或私钥，才把 SSH 登录信息一起写进空库。
+		ssh, err := h.ConsoleSSH()
+		if err != nil {
+			return unitbootstrap.Request{}, err
+		}
+		if ssh != nil {
+			entry.SSH = &hostbundle.SSH{Port: ssh.Port, User: ssh.User, AuthType: ssh.AuthType, Secret: ssh.Secret, Passphrase: ssh.Passphrase}
+		}
+		topology.Hosts = append(topology.Hosts, entry)
 	}
 	health := map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": identity.HealthAccessKey, "MOOX_HEALTH_AUTH_SECRET_KEY": identity.HealthSecret}
 	unit := func(result unitpackage.Result, name string, components []string) unitbootstrap.Unit {
@@ -128,7 +137,7 @@ func coreRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host, 
 	request.Control.UnitRoot = manifest.Paths.ControlRoot
 	request.InitialAdmin = &unitbootstrap.AdminUser{Username: manifest.Admin.Username, Password: manifest.Admin.Password}
 	request.Control.Environment["admin"]["MOOX_ADMIN_JWT_SECRET_KEY"] = identity.JWTSecret
-	return request
+	return request, nil
 }
 
 // BootstrapCore establishes Admin, EventBus and both host components. Its
@@ -211,7 +220,10 @@ func bootstrap(ctx context.Context, snapshot *setupconfig.Snapshot, options Core
 	if err != nil {
 		return result, err
 	}
-	request := coreRequest(snapshot.Manifest, identity, packages[0], packages[1])
+	request, err := coreRequest(snapshot.Manifest, identity, packages[0], packages[1])
+	if err != nil {
+		return result, err
+	}
 	overrides := [2]map[string][]byte{{}, {}}
 	if controlOptions != nil {
 		request, overrides[1], err = controlInput(ctx, snapshot, root, transport, request, identity, packages[1], *controlOptions)

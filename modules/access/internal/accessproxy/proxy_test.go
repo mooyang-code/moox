@@ -114,7 +114,7 @@ func TestProxyRejectsReplayTamperingWrongInstanceUnknownCallerAndNonceFailure(t 
 		target     string
 		body       []byte
 	}{
-		{credential, "storage", body}, {credential, "access@compute-1", body}, {credential, "access@storage", []byte("tampered")},
+		{credential, "storage", body}, {credential, "access@overseas", body}, {credential, "access@storage", []byte("tampered")},
 		{gatewayauth.Credentials{Caller: "scf-collector", KeyID: "unknown-key", Secret: credential.Secret}, "access@storage", body},
 	} {
 		_, err := proxy.Forward(signedContext(t, wrong.credential, wrong.target, primaryService, "CommitTimeSeriesBatch", wrong.body), &codec.Body{Data: body})
@@ -237,7 +237,7 @@ func TestNativeAccessForwardsExactBytesThroughSharedInternalClient(t *testing.T)
 		external, err := gatewayclient.New(gatewayclient.Config{Mode: gatewayclient.External, Credentials: credentials[index], AccessAddress: accessListener.Addr().String(), AccessInstanceID: "access@storage"})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, external.Close()) })
-		ctx, cancel := context.WithTimeout(gatewayclient.WithCallMetadata(t.Context(), gatewayclient.CallMetadata{SpaceID: "crypto", TraceID: "trace-fixture", UserRole: "forged-admin"}), 5*time.Second)
+		ctx, cancel := context.WithTimeout(gatewayclient.WithCallMetadata(t.Context(), gatewayclient.CallMetadata{SpaceID: "crypto", TraceID: "trace-fixture"}), 5*time.Second)
 		defer cancel()
 		for _, grant := range principal.Allow {
 			for _, method := range grant.Methods {

@@ -7,12 +7,10 @@ export const loginAPI = async (data: { username: string; password: string; verif
 
 export const getUserInfoAPI = async (accessToken: string) => {
   try {
-    return await callControl<{ user_id: string }, { user_info?: Record<string, any> }>(
+    return await callControl<Record<string, never>, { user_info?: Record<string, any> }>(
       "auth",
       "GetUserInfo",
-      {
-        user_id: "" // 空字符串表示获取当前用户信息
-      },
+      {},
       {
         headers: {
           Authorization: accessToken,

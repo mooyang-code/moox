@@ -49,8 +49,6 @@ func setupRequest() *pb.ApplySetupReq {
 	return &pb.ApplySetupReq{
 		Admin:        &pb.SetupAdmin{Username: "admin", Password: "recognizable-admin-password"},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: "recognizable-secret-id", SecretKey: "recognizable-secret-key"},
-		ControlHost:  &pb.SetupHost{Name: "control", Address: "192.0.2.10", Port: 22, Username: "ubuntu", Password: "recognizable-control-password"},
-		OtherHosts:   []*pb.SetupHost{{Name: "compute", Address: "192.0.2.11", Port: 22, Username: "ubuntu", Password: "recognizable-compute-password"}},
 		Spaces: []*pb.SetupSpace{{
 			SpaceId: "stockcn", Name: "A股市场", Description: "A股行情",
 			Owner: "quant", Market: "CN", Timezone: "Asia/Shanghai",
@@ -63,13 +61,13 @@ func statusRequest() *pb.GetSetupStatusReq {
 	request := setupRequest()
 	return &pb.GetSetupStatusReq{
 		Admin: request.Admin, TencentCloud: request.TencentCloud,
-		ControlHost: request.ControlHost, OtherHosts: request.OtherHosts, Spaces: request.Spaces,
+		Spaces: request.Spaces,
 	}
 }
 
 func TestApplySetupMapsRequestAndSanitizesResponse(t *testing.T) {
 	fake := &fakeSetupService{applyResult: setup.Result{
-		Action: "created", Users: 1, Secrets: 1, Hosts: 2,
+		Action: "created", Users: 1, Secrets: 1,
 		Spaces: 1, SpacesCreated: 1,
 	}}
 	response, err := NewService(fake).ApplySetup(context.Background(), setupRequest())
@@ -88,7 +86,7 @@ func TestApplySetupMapsRequestAndSanitizesResponse(t *testing.T) {
 
 	raw, err := protojson.Marshal(response)
 	require.NoError(t, err)
-	for _, secret := range []string{"recognizable-admin-password", "recognizable-secret-id", "recognizable-secret-key", "recognizable-control-password", "recognizable-compute-password"} {
+	for _, secret := range []string{"recognizable-admin-password", "recognizable-secret-id", "recognizable-secret-key"} {
 		assert.NotContains(t, string(raw), secret)
 	}
 }
@@ -116,7 +114,7 @@ func TestApplySetupMapsDomainErrors(t *testing.T) {
 }
 
 func TestGetSetupStatusReturnsRecordDerivedState(t *testing.T) {
-	fake := &fakeSetupService{status: setup.Status{State: "incomplete", Users: 1, Secrets: 1, Hosts: 2, Spaces: 1, Missing: 1}}
+	fake := &fakeSetupService{status: setup.Status{State: "incomplete", Users: 1, Secrets: 1, Spaces: 1, Missing: 1}}
 	response, err := NewService(fake).GetSetupStatus(context.Background(), statusRequest())
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode())
