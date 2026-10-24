@@ -119,6 +119,8 @@ var unitSpecs = map[string]unitComponentSpec{
 	}},
 	"collector": {[]string{"moox-collector-cli"}, []unitAsset{
 		configAsset("collector", "collector"), schemaAsset("collector", "collector"),
+		// 全新安装时 Collector 启动会把它写成默认采集任务（任务表为空才写）。
+		{"config/setup/collection-tasks.yaml", "collector/config/collection-tasks.yaml", false},
 		{"modules/collector/configs/sources", "collector/configs/sources", true},
 		// A 股行情供应商（sina 等）的路由配置，Collector 启动时必须能读到。
 		{"modules/collector/configs/scf/stockcn/sources", "collector/configs/scf/stockcn/sources", true},

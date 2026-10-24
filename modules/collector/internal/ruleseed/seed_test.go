@@ -147,3 +147,28 @@ func TestSeedMissingIsIdempotentAndPreservesEdits(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, got.Enabled)
 }
+
+// 内置任务只在任务表为空的全新安装时写入：已有任何任务（包括用户删到只剩一个）就不再补回。
+func TestSeedIfEmptyOnlySeedsAFreshDatabase(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	defer db.Close()
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	tasks, err := loadTaskSeed(strings.NewReader(validSeed))
+	require.NoError(t, err)
+
+	summary, err := SeedIfEmpty(ctx, db.Tasks(), tasks)
+	require.NoError(t, err)
+	assert.Equal(t, 1, summary.TasksCreated)
+
+	require.NoError(t, db.Tasks().DeleteByTaskID(ctx, "crypto", "test-task-1"))
+	other := tasks[0]
+	other.TaskID, other.TaskName = "other-task", "Binance 合约 K 线 1m"
+	require.NoError(t, db.Tasks().Create(ctx, other))
+	summary, err = SeedIfEmpty(ctx, db.Tasks(), tasks)
+	require.NoError(t, err)
+	assert.Equal(t, 0, summary.TasksCreated, "已有其他任务，不再补回默认任务")
+	_, err = db.Tasks().GetByTaskID(ctx, "crypto", "test-task-1")
+	assert.Error(t, err)
+}

@@ -135,6 +135,7 @@
                 :data="previewRows"
                 :pagination="{ pageSize: 20, size: 'mini' }"
                 size="small"
+                :bordered="{ cell: true }"
                 row-key="key"
                 :scroll="{ x: 'max-content' }"
               >

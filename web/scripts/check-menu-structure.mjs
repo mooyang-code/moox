@@ -12,7 +12,7 @@ const collectorTaskResults = fs.readFileSync(path.join(root, "src/views/collecto
 const collectorTaskUI = [
   collectorTaskWorkbench,
   fs.readFileSync(path.join(root, "src/views/collector/collection-tasks/collection-tasks.vue"), "utf8"),
-  fs.readFileSync(path.join(root, "src/views/collector/collection-tasks/resample-backfill.vue"), "utf8"),
+  fs.readFileSync(path.join(root, "src/views/collector/collection-tasks/resample-jobs-drawer.vue"), "utf8"),
   fs.readFileSync(path.join(root, "src/views/collector/runtime-status/runtime-status.vue"), "utf8"),
   fs.readFileSync(path.join(root, "src/views/home/home.vue"), "utf8"),
   collectorTaskResults

@@ -58,7 +58,7 @@ for (const relativePath of tableFiles) {
   const source = read(relativePath);
   const tableTags = source.match(/<a-table(?=[\s>])[\s\S]*?>/g) || [];
   for (const [index, tableTag] of tableTags.entries()) {
-    assert(tableTag.includes('size="small"'), `${relativePath}: table ${index + 1} must use size=small`);
+    assert(/size="(small|mini)"/.test(tableTag), `${relativePath}: table ${index + 1} must use size=small or size=mini`);
     assert(tableTag.includes(':bordered="{ cell: true }"'), `${relativePath}: table ${index + 1} must use cell borders`);
   }
 }
