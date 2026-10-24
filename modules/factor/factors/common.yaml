@@ -1,7 +1,7 @@
 # 因子库（表达式写法）：常用技术指标，只用 K 线的开高低收与成交量，所有指标都是时序因子。
 # 格式同 xbx.yaml：一个文件可以包含多个因子；窗口是可调参数，策略可在范围内逐期调整，回看按参数上限推导。
 # 分类：趋势类（trend）、动量类（momentum）、波动类（volatility）、成交量类（volume）。
-# 带指数衰减的指标（EMA、MACD、RSI）按截断到起点权重低于 1e-9 的根数取回看，所以窗口上限比普通均线小，避免预热过长。
+# 带指数衰减的指标（EMA、MACD、RSI）按截断到起点权重低于 1e-9 的根数取回看，回看比同窗口的普通均线长。
 - factor_id: Ma
   name: 简单移动平均（MA）
   category_id: trend
@@ -16,7 +16,7 @@
   category_id: trend
   category_name: 趋势类
   spec: |
-    params: {window: {type: int, min: 2, max: 40, default: 20}}
+    params: {window: {type: int, min: 2, max: 120, default: 20}}
     outputs:
       ema: ema(close, window)
 
@@ -38,7 +38,7 @@
   category_id: momentum
   category_name: 动量类
   spec: |
-    params: {window: {type: int, min: 2, max: 20, default: 14}}
+    params: {window: {type: int, min: 2, max: 120, default: 14}}
     let:
       d: delta(close, 1)
       gain: where(d > 0, d, 0)
@@ -74,7 +74,7 @@
   category_id: volatility
   category_name: 波动类
   spec: |
-    params: {window: {type: int, min: 2, max: 60, default: 14}}
+    params: {window: {type: int, min: 2, max: 120, default: 14}}
     let:
       tr: max(high - low, max(abs(high - delay(close, 1)), abs(low - delay(close, 1))))
       atr_v: ts_mean(tr, window)
