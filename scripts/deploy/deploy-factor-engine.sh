@@ -146,8 +146,6 @@ compute:
   max_memory: 1GiB
 
 pipeline:
-  read_batch_subjects: 50
-  read_timeout: 60s
   write_batch_rows: 1000
   period_budget_min: 60s
   period_budget_max: 15m

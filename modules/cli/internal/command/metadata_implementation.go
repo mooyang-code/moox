@@ -593,9 +593,24 @@ func verifyMetadataResource(resource string, request, actual proto.Message) erro
 			column := expected.(*pb.ViewColumn)
 			return fmt.Errorf("metadata view_columns %s/%s/%s exists but contract differs", column.GetSpaceId(), column.GetViewId(), column.GetColumnName())
 		}
+		if source, ok := expected.(*pb.DataSource); ok {
+			return fmt.Errorf("metadata data_sources %s/%s exists but contract differs", source.GetSpaceId(), source.GetDataSourceId())
+		}
 		return fmt.Errorf("metadata %s exists but contract differs", resource)
 	}
 	return nil
+}
+
+// withoutRuntimeAttributes 去掉由运行中的模块维护的属性：Collector 会把 subject_listing 写进数据源，
+// 初始化重跑时它不属于种子契约，不能因此判成冲突。
+func withoutRuntimeAttributes(attributes map[string]string) map[string]string {
+	out := make(map[string]string, len(attributes))
+	for key, value := range attributes {
+		if key != "subject_listing" {
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func metadataContractsEqual(resource string, a, b proto.Message) bool {
@@ -613,7 +628,7 @@ func metadataContractsEqual(resource string, a, b proto.Message) bool {
 			x.GetTimezone() == y.GetTimezone() &&
 			x.GetConfigJson() == y.GetConfigJson() &&
 			x.GetStatus() == y.GetStatus() &&
-			maps.Equal(x.GetAttributes(), y.GetAttributes())
+			maps.Equal(withoutRuntimeAttributes(x.GetAttributes()), withoutRuntimeAttributes(y.GetAttributes()))
 	}
 	if resource == "datasets" {
 		x, y := a.(*pb.Dataset), b.(*pb.Dataset)

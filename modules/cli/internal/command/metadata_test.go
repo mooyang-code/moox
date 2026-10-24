@@ -911,3 +911,13 @@ func TestApplyProbeResultDatasetColumns(t *testing.T) {
 }
 
 func storageOK() *storagepb.RetInfo { return &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS} }
+
+// Collector 运行后会把 subject_listing 写进数据源属性；初始化重跑时它不算种子契约的差异，其他属性差异仍然冲突。
+func TestMetadataContractsEqualIgnoresCollectorOwnedSubjectListing(t *testing.T) {
+	seed := &pb.DataSource{SpaceId: "stockcn", DataSourceId: "eastmoney", Name: "东方财富", Status: "active", ConfigJson: "{}"}
+	running := proto.Clone(seed).(*pb.DataSource)
+	running.Attributes = map[string]string{"subject_listing": `{"instrument_types":["stock"]}`}
+	assert.True(t, metadataContractsEqual("data_sources", seed, running))
+	running.Attributes["owner"] = "someone"
+	assert.False(t, metadataContractsEqual("data_sources", seed, running))
+}

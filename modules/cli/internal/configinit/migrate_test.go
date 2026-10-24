@@ -292,3 +292,40 @@ func TestMigrateRejectsFactorEngineWithUnknownHost(t *testing.T) {
 	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys})
 	require.ErrorContains(t, err, "没有登记在 [hosts.missing]")
 }
+
+// --add-deployment 把组件并入主机的 [deployments] 列表：保留已有组件、不重复，写回后仍是合法配置。
+func TestMigrateAddsMissingDeploymentsToAHost(t *testing.T) {
+	path, root, keys := migrateFixture(t, legacyFactorText(t, "factor"))
+	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true})
+	require.NoError(t, err)
+
+	report, err := MigrateFile(path, MigrateOptions{
+		RepoRoot: root, Keys: keys, Write: true, Now: func() time.Time { return time.Now().Add(time.Hour) },
+		AddDeploymentHost: "factor", AddDeploymentComponents: []string{"factor-engine", "access"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{"factor": {"access"}}, report.AddedDeployments)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	snapshot, err := setupconfig.Parse(plain)
+	require.NoError(t, err)
+	require.Equal(t, []string{"factor-engine", "archive-worker", "access"}, snapshot.Deployments["factor"])
+
+	again, err := MigrateFile(path, MigrateOptions{
+		RepoRoot: root, Keys: keys,
+		AddDeploymentHost: "factor", AddDeploymentComponents: []string{"access"},
+	})
+	require.NoError(t, err)
+	require.Empty(t, again.AddedDeployments)
+	require.False(t, again.Changed, "重复执行不产生改动")
+}
+
+func TestMigrateAddDeploymentRejectsUnknownHostAndComponent(t *testing.T) {
+	path, root, keys := migrateFixture(t, sampleText(t))
+	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, AddDeploymentHost: "nowhere", AddDeploymentComponents: []string{"access"}})
+	require.ErrorContains(t, err, "没有主机 nowhere")
+	_, err = MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, AddDeploymentHost: "storage", AddDeploymentComponents: []string{"no-such-component"}})
+	require.Error(t, err, "未知组件由配置校验拒绝")
+}

@@ -32,6 +32,9 @@ type MigrateOptions struct {
 	RenameFrom, RenameTo string
 	// TLSModeHost / TLSMode 非空时设置该主机的控制台证书模式（--set-tls-mode 主机=auto|public|internal）。
 	TLSModeHost, TLSMode string
+	// AddDeploymentHost / AddDeploymentComponents 非空时把这些组件加进该主机的 [deployments] 条目（--add-deployment 主机=组件,组件）。
+	AddDeploymentHost       string
+	AddDeploymentComponents []string
 	// SCFImport 非空时用这份 JSON 整体替换 [scf_plan]，并给相关主机补上 region 与 private_address（--import-scf）。
 	SCFImport string
 	// Write 为 true 时校验通过后写回（备份原文件并重新加密）；否则只预览。
@@ -98,11 +101,13 @@ type MigrateReport struct {
 	Deployments bool              `json:"deployments,omitempty"`
 	SCF         *SCFImportReport  `json:"scf,omitempty"`
 	TLSMode     map[string]string `json:"tls_mode,omitempty"`
-	Changed     bool              `json:"changed"`
-	Valid       bool              `json:"valid"`
-	Written     bool              `json:"written"`
-	Backup      string            `json:"backup,omitempty"`
-	NextAction  string            `json:"next_action,omitempty"`
+	// AddedDeployments 记录 --add-deployment 新增到各主机的组件。
+	AddedDeployments map[string][]string `json:"added_deployments,omitempty"`
+	Changed          bool                `json:"changed"`
+	Valid            bool                `json:"valid"`
+	Written          bool                `json:"written"`
+	Backup           string              `json:"backup,omitempty"`
+	NextAction       string              `json:"next_action,omitempty"`
 }
 
 // MigrateFile 在本机解密 moox.toml，把它改写成当前格式并校验；Write 时备份原文件、重新加密写回。
@@ -139,6 +144,15 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 			return report, err
 		}
 		report.TLSMode = map[string]string{opts.TLSModeHost: opts.TLSMode}
+	}
+	if opts.AddDeploymentHost != "" {
+		var added []string
+		if migrated, added, err = addHostDeployments(migrated, opts.AddDeploymentHost, opts.AddDeploymentComponents); err != nil {
+			return report, err
+		}
+		if len(added) > 0 {
+			report.AddedDeployments = map[string][]string{opts.AddDeploymentHost: added}
+		}
 	}
 	if opts.SCFImport != "" {
 		plan, err := readSCFImport(opts.SCFImport)
@@ -783,6 +797,47 @@ func setBlockKey(b *block, key, value string) {
 		}
 	}
 	b.lines = append(b.lines[:at], append([]string{line}, b.lines[at:]...)...)
+}
+
+// addHostDeployments 把组件并入 [deployments] 里该主机的列表（没有就新建条目，已有的组件不重复），返回实际新增的组件。
+func addHostDeployments(plain []byte, host string, components []string) ([]byte, []string, error) {
+	blocks := splitBlocks(strings.Split(string(plain), "\n"))
+	if !slices.ContainsFunc(blocks, func(b block) bool { return b.header == "hosts."+host && !b.array }) {
+		return nil, nil, fmt.Errorf("moox.toml 里没有主机 %s", host)
+	}
+	i := slices.IndexFunc(blocks, func(b block) bool { return b.header == "deployments" && !b.array })
+	if i < 0 {
+		return nil, nil, errors.New("moox.toml 里没有 [deployments]")
+	}
+	var current []string
+	for _, line := range blocks[i].lines[1:] {
+		if key, value, ok := keyValue(line); ok && key == host {
+			for _, item := range regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(value, -1) {
+				current = append(current, item[1])
+			}
+		}
+	}
+	var added []string
+	merged := slices.Clone(current)
+	for _, component := range components {
+		if component = strings.TrimSpace(component); component != "" && !slices.Contains(merged, component) {
+			merged = append(merged, component)
+			added = append(added, component)
+		}
+	}
+	if len(added) == 0 {
+		return plain, nil, nil
+	}
+	quoted := make([]string, len(merged))
+	for n, component := range merged {
+		quoted[n] = fmt.Sprintf("%q", component)
+	}
+	setBlockKey(&blocks[i], host, "["+strings.Join(quoted, ", ")+"]")
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.lines...)
+	}
+	return []byte(strings.Join(out, "\n")), added, nil
 }
 
 // setHostTLSMode 设置 [hosts.<host>] 的 tls_mode。
