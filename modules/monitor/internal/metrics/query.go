@@ -77,6 +77,14 @@ func (q *QueryService) DatasetDisplayName(ctx context.Context, spaceID, datasetI
 	return q.storage.DatasetDisplayName(ctx, spaceID, datasetID)
 }
 
+// DatasetGone 报告数据集已在 Storage 里被删除（见 StorageAdapter.DatasetGone）；没有配置元数据时恒为假。
+func (q *QueryService) DatasetGone(ctx context.Context, spaceID, datasetID string) bool {
+	if q == nil || q.storage == nil {
+		return false
+	}
+	return q.storage.DatasetGone(ctx, spaceID, datasetID)
+}
+
 // SeriesLimitStatus 返回新序列限额的使用情况，供健康概览判断指标目录是否在失控增长。
 func (q *QueryService) SeriesLimitStatus(ctx context.Context, now time.Time) (SeriesLimitStatus, error) {
 	if q == nil || q.messageStore == nil {

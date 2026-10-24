@@ -31,6 +31,13 @@ type StorageAdapter struct {
 	subjects         map[string]cachedSubjectCatalog
 	nameMu           sync.Mutex
 	datasetNames     map[string]cachedDatasetName
+	goneMu           sync.Mutex
+	datasetGone      map[string]cachedDatasetGone
+}
+
+type cachedDatasetGone struct {
+	loadedAt time.Time
+	gone     bool
 }
 
 type cachedDatasetName struct {
@@ -43,6 +50,7 @@ const (
 	maxDatasetSubjects     = 100000
 	subjectCatalogTTL      = time.Minute
 	datasetNameTTL         = 10 * time.Minute
+	datasetGoneTTL         = time.Minute
 )
 
 type cachedSubjectCatalog struct {
@@ -51,7 +59,7 @@ type cachedSubjectCatalog struct {
 }
 
 func NewStorageAdapter(metadata MetadataClient) *StorageAdapter {
-	return &StorageAdapter{metadata: metadata, auth: storageauth.Primary("monitor"), subjects: make(map[string]cachedSubjectCatalog), datasetNames: make(map[string]cachedDatasetName)}
+	return &StorageAdapter{metadata: metadata, auth: storageauth.Primary("monitor"), subjects: make(map[string]cachedSubjectCatalog), datasetNames: make(map[string]cachedDatasetName), datasetGone: make(map[string]cachedDatasetGone)}
 }
 
 func isActive(status string) bool { return strings.EqualFold(strings.TrimSpace(status), "active") }
@@ -150,6 +158,35 @@ func (a *StorageAdapter) DatasetDisplayName(ctx context.Context, spaceID, datase
 	a.datasetNames[key] = cachedDatasetName{loadedAt: now, name: name}
 	a.nameMu.Unlock()
 	return name
+}
+
+// DatasetGone 报告数据集在 Storage 里已经不存在（被删除）。只有 Storage 明确回答“数据集不存在”才为真：
+// 读取失败、超时、没有配置元数据时都按“还在”处理，不会因为 Storage 暂时不可达就把数据集从监控里藏起来。结果缓存 datasetGoneTTL。
+func (a *StorageAdapter) DatasetGone(ctx context.Context, spaceID, datasetID string) bool {
+	if a == nil || a.metadata == nil || strings.TrimSpace(datasetID) == "" {
+		return false
+	}
+	key := strings.TrimSpace(spaceID) + "\x00" + strings.TrimSpace(datasetID)
+	now := time.Now()
+	a.goneMu.Lock()
+	cached, ok := a.datasetGone[key]
+	a.goneMu.Unlock()
+	if ok && now.Sub(cached.loadedAt) < datasetGoneTTL {
+		return cached.gone
+	}
+	rsp, err := a.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: a.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil || rsp == nil || rsp.GetRetInfo() == nil {
+		return cached.gone && ok
+	}
+	code := rsp.GetRetInfo().GetCode()
+	gone := code == commonpb.ErrorCode_NOT_FOUND || code == commonpb.ErrorCode_DATASET_NOT_FOUND
+	if !gone && code != commonpb.ErrorCode_SUCCESS {
+		return false // 其他错误：不能确定，按还在处理
+	}
+	a.goneMu.Lock()
+	a.datasetGone[key] = cachedDatasetGone{loadedAt: now, gone: gone}
+	a.goneMu.Unlock()
+	return gone
 }
 
 // ListTags returns the tag definitions and live member counters used by the

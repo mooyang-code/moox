@@ -531,6 +531,11 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			if interval <= 0 {
 				continue
 			}
+			// View 指向的数据集已在 Storage 里被删除（例如删除策略实例连同私有因子结果）：它留下的指标序列不再代表任何在运行的东西，
+			// 不进入概览，也就不会一直显示“数据生产端长时间未更新”。
+			if b.Metrics.DatasetGone(ctx, viewSpaceID, labels["dataset_id"]) {
+				continue
+			}
 			latest, err := b.Metrics.Latest(ctx, series.SeriesID)
 			if err != nil {
 				return nil, err
