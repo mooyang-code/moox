@@ -1,28 +1,47 @@
 <template>
   <div class="topology">
-    <div class="filters">
-      <span class="filter-label">连线</span>
-      <a-checkbox
-        v-for="item in EDGE_CATEGORIES"
-        :key="item.key"
-        :model-value="categories.includes(item.key)"
-        @update:model-value="toggleCategory(item.key, $event)"
-        ><i class="swatch" :class="item.key" />{{ item.label }} {{ edgeCount(item.key) }}</a-checkbox
-      >
+    <div class="toolbar">
+      <a-radio-group v-model="mode" type="button" size="small" aria-label="拓扑视图">
+        <a-radio value="flow">数据流向</a-radio>
+        <a-radio value="calls">调用关系</a-radio>
+      </a-radio-group>
+      <template v-if="mode === 'calls'">
+        <a-checkbox
+          v-for="item in EDGE_CATEGORIES"
+          :key="item.key"
+          :model-value="categories.includes(item.key)"
+          @update:model-value="toggleCategory(item.key, $event)"
+          >{{ item.label }} {{ edgeCount(item.key) }}</a-checkbox
+        >
+      </template>
       <a-checkbox v-model="showDisabled">显示已停用</a-checkbox>
     </div>
     <div class="legend">
-      <span
-        ><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" /></svg>本机调用（经本机网关 :11002）</span
-      >
-      <span
-        ><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke-dasharray="6 4" /></svg>跨主机（网关 :11003
-        TLS）</span
-      >
-      <span
-        ><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke-dasharray="2 4" /></svg>经控制主机中转</span
-      >
-      <span v-for="item in STATUS_LEGEND" :key="item.status" class="state" :class="item.status"><i />{{ item.label }}</span>
+      <template v-if="mode === 'flow'">
+        <span
+          ><svg width="28" height="8"><line class="flow data" x1="0" y1="4" x2="28" y2="4" /></svg>数据写入</span
+        >
+        <span
+          ><svg width="28" height="8"><line class="flow event" x1="0" y1="4" x2="28" y2="4" /></svg>事件（经消息总线）</span
+        >
+        <span
+          ><svg width="28" height="8"><line class="flow control" x1="0" y1="4" x2="28" y2="4" /></svg>调度控制</span
+        >
+      </template>
+      <template v-else>
+        <span
+          ><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" /></svg>本机调用</span
+        >
+        <span
+          ><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke-dasharray="6 4" /></svg>跨主机（网关
+          :11003）</span
+        >
+        <span
+          ><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke-dasharray="2 4" /></svg>经控制主机中转</span
+        >
+      </template>
+      <span class="divider" />
+      <span v-for="item in STATUS_LEGEND" :key="item.status"><i class="chip" :class="item.status" />{{ item.label }}</span>
     </div>
     <div v-if="selectedNode" class="focus-bar" role="region" aria-label="选中组件的调用关系">
       <div class="focus-head">
@@ -40,7 +59,7 @@
         <section>
           <h4>调用 {{ outgoing.length }}</h4>
           <p v-for="item in outgoing" :key="item.edge.id">
-            <i class="swatch" :class="item.edge.category" /><strong>{{ item.node.name }}</strong>
+            <strong>{{ item.node.name }}</strong>
             <span class="muted"
               >{{ item.node.hostId || "外部" }} · {{ serviceNames(item.edge) }} · {{ ROUTE_LABELS[item.edge.route] }}</span
             >
@@ -50,7 +69,7 @@
         <section>
           <h4>被调用 {{ incoming.length }}</h4>
           <p v-for="item in incoming" :key="item.edge.id">
-            <i class="swatch" :class="item.edge.category" /><strong>{{ item.node.name }}</strong>
+            <strong>{{ item.node.name }}</strong>
             <span class="muted"
               >{{ item.node.hostId || "外部" }} · {{ serviceNames(item.edge) }} ·
               {{ item.edge.via || ROUTE_LABELS[item.edge.route] }}</span
@@ -60,19 +79,32 @@
         </section>
       </div>
     </div>
+    <div v-else-if="mode === 'flow'" class="flow-steps" aria-label="数据流向步骤">
+      <section v-for="stage in flowStages" :key="stage.name">
+        <h4>{{ stage.name }}</h4>
+        <p
+          v-for="edge in stage.edges"
+          :key="edge.id"
+          :class="{ hot: hoveredStep === edge.step }"
+          @mouseenter="hoveredStep = edge.step"
+          @mouseleave="hoveredStep = 0"
+        >
+          <b class="step">{{ edge.step }}</b
+          ><span
+            >{{ nodeById.get(edge.from)?.name }} → {{ nodeById.get(edge.to)?.name }}<small>{{ edge.label }}</small></span
+          >
+        </p>
+      </section>
+    </div>
     <p v-else class="muted hint">点击组件查看它的上下游；选中后显示全部类别的直接关系。</p>
     <div class="canvas-scroll">
       <div class="canvas" :style="{ width: `${topology.width}px`, height: `${topology.height}px` }" @click.self="selectedId = ''">
-        <div class="lane-label" :style="{ top: `${topology.externalsY}px` }">外部调用方</div>
+        <div class="lane-label" :style="{ top: `${topology.externalsY}px` }">外部</div>
         <div
           v-for="host in topology.hosts"
           :key="host.host.host_id"
           class="host-card"
-          :class="{
-            control: host.isControl,
-            disabled: host.host.status === 'disabled',
-            located: host.host.host_id === props.locatedHost
-          }"
+          :class="{ disabled: host.host.status === 'disabled', located: host.host.host_id === props.locatedHost }"
           :data-host-id="host.host.host_id"
           :style="box(host)"
         >
@@ -81,15 +113,13 @@
             <a-tag v-if="host.isControl" size="small">控制主机</a-tag>
             <a-tag v-if="host.host.reachability === 'outbound'" size="small">只能出站</a-tag>
             <a-tag v-if="host.host.status === 'disabled'" size="small">已停用</a-tag>
+            <span class="host-health">
+              <span v-if="host.counts.down" class="down">{{ host.counts.down }} 异常</span>
+              <span v-if="host.counts.degraded" class="degraded">{{ host.counts.degraded }} 需关注</span>
+              <span v-if="!host.counts.down && !host.counts.degraded && host.counts.healthy" class="healthy">运行正常</span>
+            </span>
           </div>
-          <p>
-            {{ host.host.address }} · {{ host.host.region || "未指定地域" }}
-            <span class="counts"
-              ><b class="ok">{{ host.counts.healthy }}</b> 正常<template v-if="host.counts.abnormal">
-                · <b class="bad">{{ host.counts.abnormal }}</b> 异常</template
-              ><template v-if="host.counts.other"> · {{ host.counts.other }} 其他</template></span
-            >
-          </p>
+          <p>{{ host.host.address }} · {{ host.host.region || "未指定地域" }}</p>
         </div>
         <div
           v-for="band in topology.bands"
@@ -102,49 +132,82 @@
         <svg class="edges" :width="topology.width" :height="topology.height" aria-hidden="true">
           <defs>
             <marker
-              v-for="item in EDGE_CATEGORIES"
-              :id="`${uid}-${item.key}`"
-              :key="item.key"
+              v-for="tone in ['rest', 'active']"
+              :id="`${uid}-${tone}`"
+              :key="tone"
               viewBox="0 0 8 8"
               refX="7"
               refY="4"
-              markerWidth="7"
-              markerHeight="7"
+              markerWidth="6"
+              markerHeight="6"
               orient="auto-start-reverse"
             >
-              <path d="M 0 0 L 8 4 L 0 8 z" class="arrow" :class="item.key" />
+              <path d="M 0 0 L 8 4 L 0 8 z" class="arrow" :class="tone" />
             </marker>
           </defs>
           <path
             v-for="edge in drawnEdges"
             :key="edge.id"
             class="edge"
-            :class="[edge.category, edge.route, { active: focus?.edges.has(edge.id), dim: focus && !focus.edges.has(edge.id) }]"
+            :class="[edge.route, { active: focus?.edges.has(edge.id), dim: focus && !focus.edges.has(edge.id) }]"
             :d="edge.d"
-            :marker-end="`url(#${uid}-${edge.category})`"
+            :marker-end="`url(#${uid}-${focus?.edges.has(edge.id) ? 'active' : 'rest'})`"
           />
+          <g
+            v-for="edge in drawnFlow"
+            :key="edge.id"
+            class="flow-edge"
+            :class="{ dim: !!focus || (hoveredStep && hoveredStep !== edge.step), hot: hoveredStep === edge.step }"
+          >
+            <path class="flow" :class="edge.kind" :d="edge.d" :marker-end="`url(#${uid}-active)`" />
+          </g>
         </svg>
         <button
           v-for="node in topology.nodes"
           :key="node.id"
           type="button"
           class="node"
-          :class="[node.kind, node.status, { selected: node.id === selectedId, dim: focus && !focus.nodes.has(node.id) }]"
+          :class="[
+            node.kind,
+            node.status,
+            {
+              selected: node.id === selectedId,
+              dim: focus ? !focus.nodes.has(node.id) : mode === 'flow' && !flowNodes.has(node.id)
+            }
+          ]"
           :style="{ left: `${node.x}px`, top: `${node.y}px`, width: `${NODE_W}px`, height: `${NODE_H}px` }"
           :aria-pressed="node.id === selectedId"
           :aria-label="`${node.hostId ? `${node.hostId} ` : ''}${node.name}${node.status ? ` ${statusLabel(node.status)}` : ''}`"
-          :title="`${node.name} · ${node.sub}`"
+          :title="`${node.name} · ${node.sub}${node.status ? ` · ${statusLabel(node.status)}` : ''}`"
           @mouseenter="hoveredId = node.id"
           @mouseleave="hoveredId = ''"
           @click="selectedId = selectedId === node.id ? '' : node.id"
         >
-          <strong>{{ node.name }}</strong
-          ><small>{{ node.sub }}</small>
+          <component :is="`icon-${externalIcon(node.id)}`" v-if="node.kind === 'external'" class="ext-icon" /><span>{{
+            node.name
+          }}</span>
         </button>
+        <!-- 步骤编号画在节点之上，避免被节点遮住 -->
+        <svg class="edges" :width="topology.width" :height="topology.height" aria-hidden="true">
+          <g
+            v-for="edge in drawnFlow"
+            :key="edge.id"
+            class="flow-edge"
+            :class="{ dim: !!focus || (hoveredStep && hoveredStep !== edge.step) }"
+          >
+            <circle :cx="edge.mid.x" :cy="edge.mid.y" r="7.5" class="step-badge" />
+            <text :x="edge.mid.x" :y="edge.mid.y" class="step-text">{{ edge.step }}</text>
+          </g>
+        </svg>
       </div>
     </div>
     <p class="muted footnote">
-      关系依据组件目录的逐方法 ACL 与外部调用方（principals）推导；消息总线的事件订阅未在目录登记，图中不画。
+      <template v-if="mode === 'flow'"
+        >数据流向依据总体设计的采集、因子、策略链路，按当前部署落到节点上；未部署的环节自动略过。</template
+      >
+      <template v-else
+        >调用关系依据组件目录的逐方法 ACL 与外部调用方（principals）推导；消息总线的事件订阅见「数据流向」。</template
+      >
       <template v-if="topology.unplaced.length">目录中未部署：{{ topology.unplaced.join("、") }}。</template>
     </p>
   </div>
@@ -159,12 +222,15 @@ import {
   NODE_H,
   NODE_W,
   ROUTE_LABELS,
+  buildDataFlow,
   buildTopology,
-  edgePath,
+  edgeGeometry,
   neighborhood,
   type EdgeCategory,
+  type FlowEdge,
   type TopologyEdge,
-  type TopologyHost
+  type TopologyHost,
+  type TopologyNode
 } from "./topology";
 
 const props = defineProps<{
@@ -179,13 +245,22 @@ const STATUS_LEGEND = [
   { status: "healthy", label: "正常" },
   { status: "degraded", label: "需关注" },
   { status: "down", label: "异常" },
-  { status: "unknown", label: "未知 / 已停用" }
+  { status: "unknown", label: "未知" }
 ];
+const EXTERNAL_ICONS: Record<string, string> = {
+  "ext:market": "public",
+  "ext:console": "desktop",
+  "ext:moox-cli": "code-square",
+  "ext:scf-collector": "cloud",
+  "ext:factor-engine": "computer"
+};
 const uid = `topology-${useId()}`;
+const mode = ref<"flow" | "calls">("flow");
 const categories = ref<EdgeCategory[]>(["business", "entry"]);
 const showDisabled = ref(false);
 const selectedId = ref("");
 const hoveredId = ref("");
+const hoveredStep = ref(0);
 const topology = computed(() =>
   buildTopology({
     catalog: props.catalog,
@@ -204,16 +279,31 @@ watch(nodeById, nodes => {
 // 选中优先于悬停：关系面板出现会让画布下移，鼠标落到别的节点上不应改变聚焦。
 const focusId = computed(() => selectedId.value || hoveredId.value);
 const focus = computed(() => (focusId.value ? neighborhood(topology.value.edges, focusId.value) : undefined));
-// 聚焦时显示该节点全部类别的直接关系，其余按连线类别筛选。
+const flow = computed(() => buildDataFlow(topology.value));
+const flowNodes = computed(() => new Set(flow.value.flatMap(edge => [edge.from, edge.to])));
+const flowStages = computed(() => {
+  const stages = new Map<string, FlowEdge[]>();
+  for (const edge of flow.value) stages.set(edge.stage, [...(stages.get(edge.stage) || []), edge]);
+  return [...stages].map(([name, edges]) => ({ name, edges }));
+});
+function withGeometry<T extends { from: string; to: string }>(edges: T[], obstacles: TopologyNode[] = []) {
+  return edges.flatMap(edge => {
+    const from = nodeById.value.get(edge.from);
+    const to = nodeById.value.get(edge.to);
+    return from && to ? [{ ...edge, ...edgeGeometry(from, to, obstacles) }] : [];
+  });
+}
+// 调用关系视图按类别筛选；数据流向视图只在聚焦节点时叠加它的直接调用关系。
 const drawnEdges = computed(() =>
-  topology.value.edges
-    .filter(edge => categories.value.includes(edge.category) || focus.value?.edges.has(edge.id))
-    .flatMap(edge => {
-      const from = nodeById.value.get(edge.from);
-      const to = nodeById.value.get(edge.to);
-      return from && to ? [{ ...edge, d: edgePath(from, to) }] : [];
-    })
+  withGeometry(
+    topology.value.edges.filter(edge =>
+      mode.value === "calls"
+        ? categories.value.includes(edge.category) || focus.value?.edges.has(edge.id)
+        : focus.value?.edges.has(edge.id)
+    )
+  )
 );
+const drawnFlow = computed(() => (mode.value === "flow" ? withGeometry(flow.value, topology.value.nodes) : []));
 const outgoing = computed(() => relations(edge => edge.from === selectedId.value, "to"));
 const incoming = computed(() => relations(edge => edge.to === selectedId.value, "from"));
 function relations(match: (edge: TopologyEdge) => boolean, side: "from" | "to") {
@@ -234,12 +324,15 @@ function toggleCategory(category: EdgeCategory, checked: boolean | (string | num
 function serviceNames(edge: TopologyEdge) {
   return edge.services.map(path => path.split(".").pop()).join(" / ") || "—";
 }
+function externalIcon(id: string) {
+  return EXTERNAL_ICONS[id] || "user";
+}
 function box(host: TopologyHost) {
   return { left: `${host.x}px`, top: `${host.y}px`, width: `${host.width}px`, height: `${host.height}px` };
 }
 </script>
 <style scoped>
-.filters,
+.toolbar,
 .legend,
 .focus-head {
   display: flex;
@@ -247,11 +340,8 @@ function box(host: TopologyHost) {
   gap: var(--moox-space-3);
   flex-wrap: wrap;
 }
-.filters {
+.toolbar {
   margin-bottom: var(--moox-space-2);
-}
-.filter-label {
-  color: var(--color-text-3);
 }
 .legend {
   margin-bottom: var(--moox-space-3);
@@ -264,51 +354,21 @@ function box(host: TopologyHost) {
   gap: 6px;
 }
 .legend line {
-  stroke: var(--color-text-3);
-  stroke-width: 1.5;
+  stroke: var(--color-neutral-6);
+  stroke-width: 1.2;
 }
-.swatch {
-  display: inline-block;
-  width: 10px;
-  height: 3px;
-  margin-right: 6px;
-  vertical-align: middle;
-  border-radius: 2px;
+.legend line.flow {
+  stroke: rgb(var(--primary-6));
+  stroke-width: 2;
 }
-.swatch.business,
-.arrow.business {
-  background: rgb(var(--primary-6));
-  fill: rgb(var(--primary-6));
+.legend line.flow.control {
+  stroke: rgb(var(--primary-4));
+  stroke-width: 1.2;
 }
-.swatch.entry,
-.arrow.entry {
-  background: rgb(var(--green-6));
-  fill: rgb(var(--green-6));
-}
-.swatch.monitor,
-.arrow.monitor {
-  background: rgb(var(--orange-6));
-  fill: rgb(var(--orange-6));
-}
-.swatch.ops,
-.arrow.ops {
-  background: rgb(var(--purple-6));
-  fill: rgb(var(--purple-6));
-}
-.state i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #94a3b8;
-}
-.state.healthy i {
-  background: #16a34a;
-}
-.state.degraded i {
-  background: #d97706;
-}
-.state.down i {
-  background: #dc2626;
+.legend .divider {
+  width: 1px;
+  height: 12px;
+  background: var(--color-border-2);
 }
 .muted {
   color: var(--color-text-3);
@@ -317,12 +377,12 @@ function box(host: TopologyHost) {
   margin: 0 0 var(--moox-space-2);
   font-size: 12px;
 }
-.focus-bar {
+.focus-bar,
+.flow-steps {
   padding: 12px 16px;
   margin-bottom: var(--moox-space-3);
   border: 1px solid var(--color-border-2);
-  border-left: 3px solid rgb(var(--primary-6));
-  border-radius: 6px;
+  border-radius: 4px;
 }
 .focus-actions {
   display: inline-flex;
@@ -335,7 +395,8 @@ function box(host: TopologyHost) {
   gap: var(--moox-space-4);
   margin-top: var(--moox-space-2);
 }
-.relations h4 {
+.relations h4,
+.flow-steps h4 {
   margin: 0 0 6px;
   font-size: 13px;
 }
@@ -349,11 +410,48 @@ function box(host: TopologyHost) {
   margin-right: 6px;
   font-weight: 500;
 }
+.flow-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: var(--moox-space-2) var(--moox-space-4);
+}
+.flow-steps h4 {
+  color: var(--color-text-2);
+}
+.flow-steps p {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 3px 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: default;
+  border-radius: 2px;
+}
+.flow-steps p.hot {
+  background: var(--color-fill-2);
+}
+.flow-steps small {
+  display: block;
+  color: var(--color-text-3);
+}
+.step {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: center;
+  background: rgb(var(--primary-6));
+  border-radius: 50%;
+}
 .canvas-scroll {
   overflow: auto;
-  background: var(--color-fill-1);
   border: 1px solid var(--color-border-2);
-  border-radius: 8px;
+  border-radius: 4px;
 }
 .canvas {
   position: relative;
@@ -362,15 +460,9 @@ function box(host: TopologyHost) {
 .lane-label {
   position: absolute;
   left: 16px;
-  width: 64px;
-  padding-top: 12px;
+  padding-top: 8px;
   color: var(--color-text-3);
   font-size: 12px;
-  line-height: 1.4;
-}
-.band .lane-label {
-  left: 16px;
-  top: 0;
 }
 .band {
   position: absolute;
@@ -379,16 +471,16 @@ function box(host: TopologyHost) {
   border-top: 1px dashed var(--color-border-2);
   pointer-events: none;
 }
+.band .lane-label {
+  top: 0;
+}
 .host-card {
   position: absolute;
   box-sizing: border-box;
   padding: 10px 12px;
-  background: var(--color-bg-2);
+  background: var(--color-fill-1);
   border: 1px solid var(--color-border-2);
-  border-radius: 8px;
-}
-.host-card.control {
-  border-top: 3px solid rgb(var(--primary-6));
+  border-radius: 4px;
 }
 .host-card.disabled {
   opacity: 0.6;
@@ -403,24 +495,30 @@ function box(host: TopologyHost) {
   gap: 6px;
 }
 .host-head strong {
-  font-size: 15px;
+  font-size: 14px;
+}
+.host-health {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: auto;
+  font-size: 12px;
+}
+.host-health .down {
+  color: rgb(var(--danger-6));
+}
+.host-health .degraded {
+  color: rgb(var(--warning-6));
+}
+.host-health .healthy {
+  color: rgb(var(--success-6));
 }
 .host-card p {
   margin: 4px 0 0;
+  overflow: hidden;
   color: var(--color-text-3);
   font-size: 12px;
   white-space: nowrap;
-  overflow: hidden;
   text-overflow: ellipsis;
-}
-.counts {
-  margin-left: 4px;
-}
-.counts .ok {
-  color: #16803c;
-}
-.counts .bad {
-  color: #dc2626;
 }
 .edges {
   position: absolute;
@@ -429,21 +527,10 @@ function box(host: TopologyHost) {
 }
 .edge {
   fill: none;
-  stroke-width: 1.4;
-  opacity: 0.5;
+  stroke: var(--color-neutral-5);
+  stroke-width: 1;
+  opacity: 0.8;
   transition: opacity 0.15s ease;
-}
-.edge.business {
-  stroke: rgb(var(--primary-6));
-}
-.edge.entry {
-  stroke: rgb(var(--green-6));
-}
-.edge.monitor {
-  stroke: rgb(var(--orange-6));
-}
-.edge.ops {
-  stroke: rgb(var(--purple-6));
 }
 .edge.cross {
   stroke-dasharray: 6 4;
@@ -452,63 +539,122 @@ function box(host: TopologyHost) {
   stroke-dasharray: 2 4;
 }
 .edge.active {
-  stroke-width: 2;
+  stroke: rgb(var(--primary-6));
+  stroke-width: 1.5;
   opacity: 1;
 }
 .edge.dim {
-  opacity: 0.06;
+  opacity: 0.12;
+}
+.arrow.rest {
+  fill: var(--color-neutral-5);
+}
+.arrow.active {
+  fill: rgb(var(--primary-6));
+}
+.flow {
+  fill: none;
+  stroke: rgb(var(--primary-6));
+  stroke-width: 2;
+}
+.flow.event {
+  stroke-dasharray: 7 4;
+}
+.flow.control {
+  stroke: rgb(var(--primary-4));
+  stroke-width: 1.2;
+  stroke-dasharray: 2 3;
+}
+.flow-edge {
+  transition: opacity 0.15s ease;
+}
+.flow-edge.dim {
+  opacity: 0.2;
+}
+.flow-edge.hot .flow {
+  stroke-width: 3;
+}
+.step-badge {
+  fill: rgb(var(--primary-6));
+  stroke: var(--color-bg-2);
+  stroke-width: 1.5;
+}
+.step-text {
+  fill: #fff;
+  font-size: 10px;
+  font-weight: 500;
+  text-anchor: middle;
+  dominant-baseline: central;
 }
 .node {
   position: absolute;
   box-sizing: border-box;
-  padding: 5px 8px 5px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
   overflow: hidden;
-  color: inherit;
+  color: var(--color-text-1);
   font: inherit;
-  text-align: left;
+  font-size: 12px;
+  white-space: nowrap;
   cursor: pointer;
   background: var(--color-bg-2);
   border: 1px solid var(--color-border-2);
-  border-left: 3px solid #94a3b8;
-  border-radius: 6px;
+  border-radius: 4px;
   transition:
     border-color 0.15s ease,
     box-shadow 0.15s ease,
     opacity 0.15s ease;
 }
-.node strong,
-.node small {
-  display: block;
+.node span {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.node strong {
-  font-size: 13px;
-  font-weight: 600;
+/* 状态底色用主题色的半透明淡染叠在不透明底上：亮暗主题都保持“淡”，且连线不会透出节点 */
+.node.healthy,
+.chip.healthy {
+  background: linear-gradient(rgba(var(--success-6), 0.08), rgba(var(--success-6), 0.08)), var(--color-bg-2);
+  border: 1px solid rgba(var(--success-6), 0.35);
 }
-.node small {
-  margin-top: 2px;
-  color: var(--color-text-3);
-  font-family: monospace;
-  font-size: 11px;
+.node.degraded,
+.chip.degraded {
+  color: rgb(var(--warning-6));
+  background: linear-gradient(rgba(var(--warning-6), 0.1), rgba(var(--warning-6), 0.1)), var(--color-bg-2);
+  border: 1px solid rgba(var(--warning-6), 0.7);
 }
-.node.healthy {
-  border-left-color: #16a34a;
+.node.down,
+.chip.down {
+  color: rgb(var(--danger-6));
+  background: linear-gradient(rgba(var(--danger-6), 0.1), rgba(var(--danger-6), 0.1)), var(--color-bg-2);
+  border: 1px solid rgba(var(--danger-6), 0.7);
 }
-.node.degraded {
-  border-left-color: #d97706;
-}
-.node.down {
-  border-left-color: #dc2626;
+.node.unknown,
+.node.unchecked {
+  color: var(--color-text-2);
+  background: var(--color-fill-2);
+  border: 1px dashed var(--color-neutral-5);
 }
 .node.disabled {
-  background: var(--color-fill-2);
+  color: var(--color-text-4);
+  background: var(--color-fill-1);
+}
+/* 外部节点没有边框，名称允许溢出到右侧空白，不截断 */
+.node.external,
+.node.external span {
+  overflow: visible;
 }
 .node.external {
-  background: var(--color-fill-2);
-  border-style: dashed;
-  border-left: 1px dashed var(--color-border-3);
+  justify-content: flex-start;
+  color: var(--color-text-2);
+  background: transparent;
+  border-color: transparent;
+}
+.ext-icon {
+  flex: none;
+  color: var(--color-text-3);
+  font-size: 14px;
 }
 .node:hover {
   border-color: rgb(var(--primary-5));
@@ -519,10 +665,18 @@ function box(host: TopologyHost) {
 }
 .node.selected {
   border-color: rgb(var(--primary-6));
-  box-shadow: 0 0 0 2px rgba(var(--primary-6), 0.15);
+  box-shadow: 0 0 0 2px rgba(var(--primary-6), 0.2);
 }
 .node.dim {
-  opacity: 0.35;
+  opacity: 0.4;
+}
+.chip {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  background: var(--color-fill-2);
+  border: 1px dashed var(--color-neutral-5);
+  border-radius: 2px;
 }
 .footnote {
   margin: var(--moox-space-2) 0 0;

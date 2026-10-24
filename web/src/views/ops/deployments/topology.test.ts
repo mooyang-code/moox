@@ -4,7 +4,17 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import type { ComponentCatalog, ComponentPlacement, DeploymentHost } from "@/api/admin/types";
 import { placementKey, placementRows } from "./model";
-import { NODE_H, NODE_W, buildTopology, edgePath, layerOf, neighborhood, type TopologyEdge } from "./topology";
+import {
+  DATA_FLOW,
+  NODE_H,
+  NODE_W,
+  buildDataFlow,
+  buildTopology,
+  edgeGeometry,
+  layerOf,
+  neighborhood,
+  type TopologyEdge
+} from "./topology";
 
 const catalog = parse(
   readFileSync(path.resolve(__dirname, "../../../../../packages/servicecatalog/catalog.yaml"), "utf8")
@@ -72,7 +82,8 @@ describe("service topology", () => {
   it("links principals and console callers as external sources", () => {
     const topology = build();
     const ids = topology.nodes.filter(node => node.kind === "external").map(node => node.id);
-    expect(ids.slice(0, 2)).toEqual(["ext:console", "ext:moox-cli"]);
+    // 数据流向经过的外部节点排在最前，彼此相邻。
+    expect(ids.slice(0, 5)).toEqual(["ext:market", "ext:scf-collector", "ext:factor-engine", "ext:console", "ext:moox-cli"]);
     expect(ids).toContain("ext:factor-engine");
     // FactorEngine 的 ACL 没有调用方，只能从 principals 推出因子引擎这条链路。
     expect(edge(topology.edges, "ext:factor-engine", key("control", "factor-mgr"))).toMatchObject({
@@ -98,9 +109,56 @@ describe("service topology", () => {
     expect(near.nodes.has(key("storage", "storage-node"))).toBe(false);
   });
 
-  it("draws vertical curves across rows and horizontal curves within a row", () => {
+  it("lays the collection data flow onto placed nodes and skips steps whose components are not deployed", () => {
+    const topology = build();
+    const flow = buildDataFlow(topology);
+    expect(flow.map(item => item.step)).toEqual(flow.map((_, index) => index + 1));
+    expect(flow.map(item => [item.from, item.to])).toEqual([
+      [key("control", "collector"), key("control", "cloudfunction")],
+      [key("control", "cloudfunction"), "ext:scf-collector"],
+      ["ext:market", "ext:scf-collector"],
+      // 多副本的 access 取与存储主服务同主机的那一台。
+      ["ext:scf-collector", key("storage", "access")],
+      [key("storage", "access"), key("storage", "storage-primary")],
+      ["ext:market", key("overseas", "collector-stream")],
+      [key("overseas", "collector-stream"), key("storage", "storage-primary")],
+      [key("storage", "storage-primary"), key("storage", "storage-node")],
+      [key("storage", "storage-node"), key("storage", "storage-view")],
+      [key("storage", "storage-node"), "ext:factor-engine"],
+      ["ext:factor-engine", key("storage", "access")],
+      [key("storage", "storage-view"), key("control", "strategy")],
+      [key("control", "strategy"), key("overseas", "trade")]
+    ]);
+    const withoutStream = build(placements.filter(item => item.component_id !== "collector-stream"));
+    const steps = buildDataFlow(withoutStream);
+    expect(steps).toHaveLength(11);
+    expect(steps.map(item => item.step)).toEqual(steps.map((_, index) => index + 1));
+  });
+
+  it("only references components and external callers that the catalog still declares", () => {
+    const externals = new Set(
+      build()
+        .nodes.filter(node => node.kind === "external")
+        .map(node => node.id)
+    );
+    const components = new Set(catalog.components.map(item => item.id));
+    for (const step of DATA_FLOW)
+      for (const ref of [step.from, step.to, step.near].filter(Boolean) as string[])
+        expect(ref.startsWith("ext:") ? externals.has(ref) : components.has(ref), ref).toBe(true);
+  });
+
+  it("draws vertical curves across rows and horizontal curves within a row with a midpoint for step badges", () => {
     const a = { id: "a", kind: "component" as const, name: "a", sub: "a", x: 0, y: 0 };
-    expect(edgePath(a, { ...a, id: "b", y: 200 })).toMatch(/^M 59 44 C/);
-    expect(edgePath(a, { ...a, id: "b", x: 300 })).toMatch(/^M 118 22 C/);
+    const b = { ...a, id: "b", y: 200 };
+    const vertical = edgeGeometry(a, b);
+    expect(vertical.d).toMatch(new RegExp(`^M ${NODE_W / 2} ${NODE_H} C`));
+    expect(vertical.mid).toEqual({ x: NODE_W / 2, y: (NODE_H + 200) / 2 });
+    const horizontal = edgeGeometry(a, { ...a, id: "c", x: 300 });
+    expect(horizontal.d).toMatch(new RegExp(`^M ${NODE_W} ${NODE_H / 2} C`));
+    expect(horizontal.mid).toEqual({ x: (NODE_W + 300) / 2, y: NODE_H / 2 });
+    // 中点压在其他节点上时，编号沿曲线挪到空白处。
+    const blocker = { ...a, id: "blocker", y: (NODE_H + 200) / 2 - NODE_H / 2 };
+    const moved = edgeGeometry(a, b, [a, b, blocker]).mid;
+    expect(moved.y < blocker.y - 10 || moved.y > blocker.y + NODE_H + 10).toBe(true);
   });
 });

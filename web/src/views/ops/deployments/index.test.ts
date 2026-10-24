@@ -99,6 +99,8 @@ async function render(query: Record<string, string> = {}) {
         "a-select": select,
         "a-option": option,
         "a-checkbox": checkbox,
+        "a-radio-group": select,
+        "a-radio": option,
         "a-drawer": drawer
       }
     }
@@ -233,6 +235,10 @@ describe("deployment page", () => {
     expect(page.findAll(".host-card").map(item => item.attributes("data-host-id"))).toEqual(["c-main", "storage"]);
     expect(page.get('.host-card[data-host-id="storage"]').classes()).toContain("located");
     expect(page.find('[aria-label="reader"]').exists()).toBe(true);
+    // 默认是数据流向；测试目录里没有采集链路的组件，所以既没有流向也不画调用关系。
+    expect(page.findAll(".flow-edge")).toHaveLength(0);
+    expect(page.findAll("path.edge")).toHaveLength(0);
+    await page.get('[aria-label="拓扑视图"]').setValue("calls");
     expect(page.findAll("path.edge")).toHaveLength(4);
     await page.get('[aria-label="storage 外部接入 异常"]').trigger("click");
     expect(page.get(".focus-bar").text()).toContain("被调用 1");

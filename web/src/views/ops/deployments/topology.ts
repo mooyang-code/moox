@@ -2,7 +2,8 @@ import type { ComponentCatalog, DeploymentHost } from "@/api/admin/types";
 import type { HealthStatus } from "@/api/monitor";
 import type { PlacementRow } from "./model";
 
-// 服务拓扑：只依据组件目录（ACL、principals）、主机与放置推导，不凭印象补关系。
+// 服务拓扑：调用关系只依据组件目录（ACL、principals）、主机与放置推导，不凭印象补关系；
+// 数据流向是总体设计第 5、6 节的固定链路（事件订阅不在目录里），按实际放置落到节点上。
 // 坐标在这里一次算好，HTML 节点和 SVG 连线共用，刷新时不抖动，也能在无 DOM 环境下测试。
 
 export type TopologyLayer = "entry" | "control" | "business" | "storage" | "infra" | "other";
@@ -46,10 +47,12 @@ const LAYER_OF: Record<string, TopologyLayer> = {
 };
 // 外部调用方的展示名；目录里新增的 principal 没有登记时直接显示 ID。
 const EXTERNAL_LABELS: Record<string, { name: string; note: string }> = {
-  console: { name: "管理台", note: "浏览器 · HTTPS 9527" },
-  "moox-cli": { name: "moox-cli", note: "运维命令行" },
+  // 数据流向经过的外部节点排在一起，避免流向线横穿其他外部节点。
+  market: { name: "行情源", note: "交易所 / 行情接口" },
   "scf-collector": { name: "SCF 采集函数", note: "腾讯云函数" },
   "factor-engine": { name: "因子引擎", note: "操作员机器" },
+  console: { name: "管理台", note: "浏览器 · HTTPS 9527" },
+  "moox-cli": { name: "moox-cli", note: "运维命令行" },
   "archive-worker": { name: "归档 Worker", note: "外部进程" },
   "collector-operator": { name: "采集运维", note: "外部调用方" },
   "moox-skill": { name: "Skill", note: "外部调用方" }
@@ -61,11 +64,48 @@ const ENTRY_LINKS: { from: string; to: string; label: string }[] = [
   { from: "console-proxy", to: "admin", label: "/api/admin/*" }
 ];
 
-export const NODE_W = 118;
-export const NODE_H = 44;
+// 数据流向：行情从源头进入存储，再驱动视图、因子、策略与交易。
+// kind：data 为同步调用/写入，event 经消息总线投递，control 为调度控制。
+// 端点是组件 ID 或 ext:<外部 ID>；near 指定多副本组件（如 access）优先取与哪个组件同主机的实例。
+export type FlowKind = "data" | "event" | "control";
+export interface FlowStep {
+  from: string;
+  to: string;
+  kind: FlowKind;
+  stage: string;
+  label: string;
+  near?: string;
+}
+export const DATA_FLOW: FlowStep[] = [
+  { from: "collector", to: "cloudfunction", kind: "control", stage: "采集调度", label: "规划采集计划，下发函数配置" },
+  { from: "cloudfunction", to: "ext:scf-collector", kind: "control", stage: "采集调度", label: "Timer / Invoke 触发采集" },
+  { from: "ext:market", to: "ext:scf-collector", kind: "data", stage: "SCF 采集", label: "拉取 K 线等行情" },
+  { from: "ext:scf-collector", to: "access", kind: "data", stage: "SCF 采集", label: "签名写入 :11004", near: "storage-primary" },
+  {
+    from: "access",
+    to: "storage-primary",
+    kind: "data",
+    stage: "SCF 采集",
+    label: "CommitTimeSeriesBatch 写入 K 线",
+    near: "storage-primary"
+  },
+  { from: "ext:market", to: "collector-stream", kind: "data", stage: "WS 推送", label: "交易所 WS 实时推送" },
+  { from: "collector-stream", to: "storage-primary", kind: "data", stage: "WS 推送", label: "写入 K 线" },
+  { from: "storage-primary", to: "storage-node", kind: "data", stage: "存储", label: "写入事实存储，到点固化采集周期" },
+  { from: "storage-node", to: "storage-view", kind: "event", stage: "存储", label: "行变更与周期标记，构建 View" },
+  { from: "storage-node", to: "ext:factor-engine", kind: "event", stage: "因子", label: "采集周期完成，触发因子计算" },
+  { from: "ext:factor-engine", to: "access", kind: "data", stage: "因子", label: "写回因子结果", near: "storage-primary" },
+  { from: "storage-view", to: "strategy", kind: "event", stage: "策略交易", label: "View 数据就绪，计算目标权重" },
+  { from: "strategy", to: "trade", kind: "event", stage: "策略交易", label: "目标权重请求，收敛下单" }
+];
+
+export const NODE_W = 112;
+export const NODE_H = 30;
 const NODE_GAP = 8;
+// 横向间距留出步骤编号的位置。
+const GAP_X = 20;
 const CELL_PAD = 12;
-const COL_W = CELL_PAD * 2 + NODE_W * 2 + NODE_GAP;
+const COL_W = CELL_PAD * 2 + NODE_W * 2 + GAP_X;
 const COL_GAP = 20;
 const PAD = 16;
 const LABEL_W = 72;
@@ -96,7 +136,7 @@ export interface TopologyEdge {
 export interface TopologyHost {
   host: DeploymentHost;
   isControl: boolean;
-  counts: Record<"healthy" | "abnormal" | "other", number>;
+  counts: Record<"healthy" | "degraded" | "down" | "other", number>;
   x: number;
   y: number;
   width: number;
@@ -150,7 +190,7 @@ export function buildTopology(input: TopologyInput): Topology {
   const externals = collectExternals(input.catalog);
   const columnsX = groups.map((_, index) => PAD + LABEL_W + index * (COL_W + COL_GAP));
   const contentRight = groups.length ? columnsX[columnsX.length - 1] + COL_W : PAD + LABEL_W + COL_W;
-  const perLine = Math.max(1, Math.floor((contentRight - PAD - LABEL_W + NODE_GAP) / (NODE_W + NODE_GAP)));
+  const perLine = Math.max(1, Math.floor((contentRight - PAD - LABEL_W + GAP_X) / (NODE_W + GAP_X)));
   const externalsY = PAD;
   const externalLines = Math.max(1, Math.ceil(externals.length / perLine));
   const hostsTop = externalsY + externalLines * (NODE_H + NODE_GAP) - NODE_GAP + BAND_GAP;
@@ -160,7 +200,7 @@ export function buildTopology(input: TopologyInput): Topology {
     kind: "external",
     name: item.name,
     sub: item.note,
-    x: PAD + LABEL_W + (index % perLine) * (NODE_W + NODE_GAP),
+    x: PAD + LABEL_W + (index % perLine) * (NODE_W + GAP_X),
     y: externalsY + Math.floor(index / perLine) * (NODE_H + NODE_GAP)
   }));
   const bands: TopologyBand[] = [];
@@ -180,7 +220,7 @@ export function buildTopology(input: TopologyInput): Topology {
           componentId: row.placement.component_id,
           layer: layer.key,
           status: row.status,
-          x: columnsX[column] + CELL_PAD + (index % 2) * (NODE_W + NODE_GAP),
+          x: columnsX[column] + CELL_PAD + (index % 2) * (NODE_W + GAP_X),
           y: y + CELL_PAD + Math.floor(index / 2) * (NODE_H + NODE_GAP)
         });
       });
@@ -193,7 +233,8 @@ export function buildTopology(input: TopologyInput): Topology {
     isControl: group.host.host_id === input.controlHostId,
     counts: {
       healthy: group.rows.filter(row => row.status === "healthy").length,
-      abnormal: group.rows.filter(row => row.status === "down" || row.status === "degraded").length,
+      degraded: group.rows.filter(row => row.status === "degraded").length,
+      down: group.rows.filter(row => row.status === "down").length,
       other: group.rows.filter(row => !["healthy", "down", "degraded"].includes(row.status)).length
     },
     x: columnsX[column],
@@ -269,7 +310,7 @@ export function buildTopology(input: TopologyInput): Topology {
 
 function collectExternals(catalog?: ComponentCatalog) {
   const componentIds = new Set((catalog?.components || []).map(item => item.id));
-  const ids = new Set<string>(["console"]);
+  const ids = new Set<string>(["market", "console"]);
   for (const component of catalog?.components || [])
     for (const service of component.services || [])
       for (const grant of service.acl)
@@ -319,28 +360,105 @@ export function neighborhood(edges: TopologyEdge[], id: string) {
   return { nodes, edges: new Set(related.map(edge => edge.id)) };
 }
 
-// 连线锚点：上下错开走竖向贝塞尔，同一行走横向贝塞尔，同一位置附近绕到右侧。
-export function edgePath(from: TopologyNode, to: TopologyNode) {
+export interface FlowEdge {
+  id: string;
+  step: number;
+  from: string;
+  to: string;
+  kind: FlowKind;
+  stage: string;
+  label: string;
+}
+
+// 把数据流步骤落到实际节点；端点组件没有部署的步骤直接略过，编号保持连续。
+export function buildDataFlow(topology: Topology, steps = DATA_FLOW): FlowEdge[] {
+  const placed = new Map<string, TopologyNode[]>();
+  for (const node of topology.nodes)
+    if (node.componentId) placed.set(node.componentId, [...(placed.get(node.componentId) || []), node]);
+  const external = new Map(topology.nodes.filter(node => node.kind === "external").map(node => [node.id, node]));
+  const resolve = (ref: string, near?: string) => {
+    if (ref.startsWith("ext:")) return external.get(ref);
+    const nodes = placed.get(ref) || [];
+    const hosts = new Set((near && placed.get(near)?.map(node => node.hostId)) || []);
+    return nodes.find(node => hosts.has(node.hostId)) || nodes[0];
+  };
+  const edges: FlowEdge[] = [];
+  for (const step of steps) {
+    const from = resolve(step.from, step.near);
+    const to = resolve(step.to, step.near);
+    if (!from || !to || from.id === to.id) continue;
+    edges.push({
+      id: `flow:${from.id}->${to.id}`,
+      step: edges.length + 1,
+      from: from.id,
+      to: to.id,
+      kind: step.kind,
+      stage: step.stage,
+      label: step.label
+    });
+  }
+  return edges;
+}
+
+// 连线锚点：上下错开走竖向贝塞尔，同一行走横向贝塞尔，同一位置附近绕到右侧；
+// mid 用来放数据流的步骤编号：从曲线中点向两端找第一个不压在节点上的位置。
+const BADGE_T = [0.5, 0.42, 0.58, 0.34, 0.66, 0.26, 0.74, 0.18, 0.82];
+const BADGE_CLEARANCE = 10;
+export function edgeGeometry(from: TopologyNode, to: TopologyNode, obstacles: TopologyNode[] = []) {
   const fx = from.x + NODE_W / 2;
   const tx = to.x + NODE_W / 2;
+  let points: [number, number][];
   if (Math.abs(from.y - to.y) >= NODE_H) {
     const down = to.y > from.y;
     const sy = down ? from.y + NODE_H : from.y;
     const ty = down ? to.y : to.y + NODE_H;
     const bend = Math.max(24, Math.abs(ty - sy) / 2) * (down ? 1 : -1);
-    return `M ${fx} ${sy} C ${fx} ${sy + bend}, ${tx} ${ty - bend}, ${tx} ${ty}`;
+    points = [
+      [fx, sy],
+      [fx, sy + bend],
+      [tx, ty - bend],
+      [tx, ty]
+    ];
+  } else {
+    const cy = from.y + NODE_H / 2;
+    const ty = to.y + NODE_H / 2;
+    if (Math.abs(fx - tx) < NODE_W) {
+      const sx = Math.max(from.x, to.x) + NODE_W + 28;
+      points = [
+        [from.x + NODE_W, cy],
+        [sx, cy],
+        [sx, ty],
+        [to.x + NODE_W, ty]
+      ];
+    } else {
+      const right = tx > fx;
+      const sx = right ? from.x + NODE_W : from.x;
+      const ex = right ? to.x : to.x + NODE_W;
+      const bend = Math.max(24, Math.abs(ex - sx) / 2) * (right ? 1 : -1);
+      points = [
+        [sx, cy],
+        [sx + bend, cy],
+        [ex - bend, ty],
+        [ex, ty]
+      ];
+    }
   }
-  const cy = from.y + NODE_H / 2;
-  const ty = to.y + NODE_H / 2;
-  if (Math.abs(fx - tx) < NODE_W) {
-    const sx = Math.max(from.x, to.x) + NODE_W;
-    return `M ${from.x + NODE_W} ${cy} C ${sx + 28} ${cy}, ${sx + 28} ${ty}, ${to.x + NODE_W} ${ty}`;
-  }
-  const right = tx > fx;
-  const sx = right ? from.x + NODE_W : from.x;
-  const ex = right ? to.x : to.x + NODE_W;
-  const bend = Math.max(24, Math.abs(ex - sx) / 2) * (right ? 1 : -1);
-  return `M ${sx} ${cy} C ${sx + bend} ${cy}, ${ex - bend} ${ty}, ${ex} ${ty}`;
+  const [p0, p1, p2, p3] = points;
+  const at = (t: number) => {
+    const u = 1 - t;
+    const [a, b, c, d] = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t];
+    return { x: a * p0[0] + b * p1[0] + c * p2[0] + d * p3[0], y: a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1] };
+  };
+  const covered = (point: { x: number; y: number }) =>
+    obstacles.some(
+      node =>
+        point.x > node.x - BADGE_CLEARANCE &&
+        point.x < node.x + NODE_W + BADGE_CLEARANCE &&
+        point.y > node.y - BADGE_CLEARANCE &&
+        point.y < node.y + NODE_H + BADGE_CLEARANCE
+    );
+  const mid = BADGE_T.map(at).find(point => !covered(point)) || at(0.5);
+  return { d: `M ${p0[0]} ${p0[1]} C ${p1[0]} ${p1[1]}, ${p2[0]} ${p2[1]}, ${p3[0]} ${p3[1]}`, mid };
 }
 
 export const ROUTE_LABELS: Record<EdgeRoute, string> = {
