@@ -113,7 +113,7 @@
             :data="cloudFunctionList"
             :bordered="{ cell: true }"
             :loading="loading"
-            :scroll="{ x: '100%', y: '100%', minWidth: 1100 }"
+            :scroll="{ x: '100%', y: '100%', minWidth: 1000 }"
             :pagination="paginationConfig"
             :row-selection="batchChangeProcessing ? undefined : { type: 'checkbox', showCheckedAll: true }"
             :selected-keys="selectedKeys"
@@ -123,12 +123,12 @@
             @page-size-change="onPageSizeChange"
           >
             <template #columns>
-              <a-table-column title="实例ID" data-index="instance_id" :width="360">
+              <a-table-column title="实例ID" data-index="instance_id" :width="380">
                 <template #cell="{ record }">
                   <a-link class="instance-id-link" @click="onViewInstanceDetail(record)">{{ record.instance_id }}</a-link>
                 </template>
               </a-table-column>
-              <a-table-column title="命名空间" data-index="namespace" :width="136"></a-table-column>
+              <a-table-column title="命名空间" data-index="namespace" :width="140"></a-table-column>
               <a-table-column title="实例类型" data-index="function_type" :width="122">
                 <template #cell="{ record }">
                   <a-tag size="small" :color="getFunctionTypeColor(record.function_type)">
@@ -150,7 +150,7 @@
                   </span>
                 </template>
               </a-table-column>
-              <a-table-column title="地区" data-index="region" :width="116">
+              <a-table-column title="地区" data-index="region" :width="120">
                 <template #cell="{ record }">
                   {{ getRegionName(record.region) }}
                   <a-tag
@@ -162,7 +162,7 @@
                   </a-tag>
                 </template>
               </a-table-column>
-              <a-table-column title="代码包版本" data-index="package_version" :width="92">
+              <a-table-column title="代码包版本" data-index="package_version" :width="100">
                 <template #cell="{ record }">
                   <a-link
                     v-if="record.package_version && record.package_version !== '-'"
@@ -172,11 +172,6 @@
                     {{ record.package_version }}
                   </a-link>
                   <span v-else>-</span>
-                </template>
-              </a-table-column>
-              <a-table-column title="最近协调时间" data-index="reconciled_at" :width="124">
-                <template #cell="{ record }">
-                  <span :title="getReconciledAtText(record, true)">{{ getReconciledAtText(record) }}</span>
                 </template>
               </a-table-column>
               <a-table-column title="操作" :width="56" align="center" fixed="right">
@@ -412,7 +407,6 @@ import { createFunctionJobPoller } from "./function-job-poller";
 import { captureDeleteSelection, updateDeleteSelection, type FunctionInstanceDeleteSnapshotMap } from "./delete-selection";
 import {
   formatDateTime,
-  formatShortDateTime,
   formatFileSize,
   formatMetadata,
   getBatchChangeTypeText,
@@ -844,13 +838,6 @@ const timerMetadataText = (key: string) => {
   const value = selectedTimerMetadata.value[key];
   if (value === undefined || value === null || value === "") return "-";
   return String(value);
-};
-// 表格里的最近协调时间：只有 Timer 实例才有。
-// 表格里用短格式节省宽度，完整时间放在悬浮提示里。
-const getReconciledAtText = (record: FunctionInstance, full = false) => {
-  const value = record.trigger_type === "timer" ? parseMetadata(record.metadata).runtime_config_reconciled_at : "";
-  if (typeof value !== "string" || !value) return "-";
-  return full ? formatDateTime(value) : formatShortDateTime(value);
 };
 const timerEnabledLabel = () => {
   const value = timerMetadataText("timer_enabled");

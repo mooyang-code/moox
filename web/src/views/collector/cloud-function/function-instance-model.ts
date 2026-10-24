@@ -137,14 +137,6 @@ export function formatDateTime(value?: string) {
   }
 }
 
-/** 表格用的短时间：月-日 时:分:秒（本地时间）。 */
-export function formatShortDateTime(value?: string) {
-  const parsed = new Date(value || "");
-  if (Number.isNaN(parsed.getTime())) return value || "-";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())} ${pad(parsed.getHours())}:${pad(parsed.getMinutes())}:${pad(parsed.getSeconds())}`;
-}
-
 export const formatTime = formatDateTime;
 
 export function formatMetadata(metadata: string | Record<string, unknown>) {
