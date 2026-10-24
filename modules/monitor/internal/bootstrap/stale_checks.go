@@ -24,6 +24,10 @@ const (
 	defaultRetiredCheckGrace      = time.Hour
 	defaultDisabledCheckRetention = 7 * 24 * time.Hour
 	defaultStaleCheckBatch        = 100
+	// orphanRuleMinAge 是孤儿默认规则的最小存在时间：刚创建的规则可能属于本轮读取检查列表之后才出现的新检查。
+	orphanRuleMinAge = 10 * time.Minute
+	// defaultRuleDescription 是 ensureDefaultCheckAlertRules 写入的描述；主机规则的描述是阈值 JSON，不会被当成孤儿规则。
+	defaultRuleDescription = "Default MooX monitoring notification"
 )
 
 // staleCheckPolicy 是清理参数；零值取默认。
@@ -58,6 +62,7 @@ func pruneStaleChecks(ctx context.Context, repositories *store.Repositories, now
 		return nil, err
 	}
 	var pruned []string
+	defer func() { pruneOrphanDefaultRules(ctx, repositories, checks, now) }()
 	for index := range checks {
 		if len(pruned) >= policy.MaxPerRun || ctx.Err() != nil {
 			break
@@ -98,6 +103,45 @@ func pruneStaleChecks(ctx context.Context, repositories *store.Repositories, now
 		log.Infof("monitor_stale_checks_pruned count=%d checks=%v", len(pruned), pruned)
 	}
 	return pruned, nil
+}
+
+// pruneOrphanDefaultRules 清掉检查已不存在的默认告警规则。清理检查与补齐默认规则（启动、业务新鲜度评估）并发时，
+// 规则可能在检查被删之后又被按旧的检查列表补建出来，没有检查对应的规则永远不会再被评估，只会留着。
+// 只处理描述为默认规则、存在超过 orphanRuleMinAge、且没有未恢复告警状态的规则。
+func pruneOrphanDefaultRules(ctx context.Context, repositories *store.Repositories, checks []domain.Check, now time.Time) {
+	existing := make(map[string]bool, len(checks))
+	spaces := make(map[string]bool)
+	for index := range checks {
+		existing[checks[index].SpaceID+"\x00"+checks[index].CheckID] = true
+		spaces[checks[index].SpaceID] = true
+	}
+	var removed []string
+	for space := range spaces {
+		rules, err := repositories.Alerts.ListRules(ctx, space)
+		if err != nil {
+			log.Warnf("monitor_orphan_rules_list_failed space=%s err=%v", space, err)
+			continue
+		}
+		for index := range rules {
+			rule := &rules[index]
+			if rule.Description != defaultRuleDescription || existing[rule.SpaceID+"\x00"+rule.CheckID] ||
+				now.Sub(rule.CreatedAt) < orphanRuleMinAge {
+				continue
+			}
+			unresolved, err := hasUnresolvedAlert(ctx, repositories, &domain.Check{SpaceID: rule.SpaceID, CheckID: rule.CheckID}, []domain.AlertRule{*rule})
+			if err != nil || unresolved {
+				continue
+			}
+			if err := repositories.Alerts.DeleteRule(ctx, rule.SpaceID, rule.RuleID); err != nil {
+				log.Warnf("monitor_orphan_rule_delete_failed rule=%s err=%v", rule.RuleID, err)
+				continue
+			}
+			removed = append(removed, rule.RuleID)
+		}
+	}
+	if len(removed) > 0 {
+		log.Infof("monitor_orphan_rules_pruned count=%d rules=%v", len(removed), removed)
+	}
 }
 
 // checkIsStale 判断检查是否已经失效到可以清理：已停用超过保留期；或启用着但最近的结果一直是“不再检查”且已持续超过宽限期。

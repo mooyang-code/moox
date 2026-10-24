@@ -130,3 +130,32 @@ func TestPruneStaleChecksHonorsBatchLimit(t *testing.T) {
 	require.Len(t, f.prune(staleCheckPolicy{MaxPerRun: 2}), 1)
 	require.Empty(t, f.prune(staleCheckPolicy{MaxPerRun: 2}))
 }
+
+// 检查已不存在、存在超过最小时间的默认规则（清理与补齐并发时留下的孤儿）一并清掉；
+// 新建的规则、有检查的规则、非默认描述的规则（如主机阈值规则）、仍在告警的规则不动。
+func TestPruneStaleChecksRemovesOrphanDefaultRules(t *testing.T) {
+	f := newStaleFixture(t)
+	f.addCheck("dataset:live:1m", true, domain.CheckSourceObservability, "business")
+
+	addRule := func(id, checkID, description string, age time.Duration) {
+		require.NoError(t, f.repositories.Alerts.CreateRule(t.Context(), &domain.AlertRule{
+			SpaceID: "crypto", RuleID: id, CheckID: checkID, FailureThreshold: 1, SuccessThreshold: 1, Enabled: true,
+			Description: description, CreatedAt: f.now.Add(-age)}))
+	}
+	addRule("default:dataset:orphan:1m", "dataset:orphan:1m", defaultRuleDescription, time.Hour)
+	addRule("default:dataset:fresh:1m", "dataset:fresh:1m", defaultRuleDescription, time.Minute)
+	addRule("default:host:abcd:cpu", "host:abcd:cpu", `{"threshold":80}`, time.Hour)
+	addRule("default:dataset:firing:1m", "dataset:firing:1m", defaultRuleDescription, time.Hour)
+	require.NoError(t, f.repositories.Alerts.UpsertState(t.Context(), &domain.AlertState{
+		SpaceID: "crypto", RuleID: "default:dataset:firing:1m", CheckID: "dataset:firing:1m", Status: domain.AlertStatusFiring}))
+
+	f.prune(staleCheckPolicy{})
+
+	rules, err := f.repositories.Alerts.ListRules(t.Context(), "crypto")
+	require.NoError(t, err)
+	var ids []string
+	for _, rule := range rules {
+		ids = append(ids, rule.RuleID)
+	}
+	require.ElementsMatch(t, []string{"default:dataset:live:1m", "default:dataset:fresh:1m", "default:host:abcd:cpu", "default:dataset:firing:1m"}, ids)
+}
