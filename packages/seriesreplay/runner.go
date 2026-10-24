@@ -267,7 +267,17 @@ func (r *Runner) processPeriod(ctx context.Context, spec Spec, binding StrategyB
 			return periodOutcome{}, fmt.Errorf("策略求值 %s：%w", t.Format(time.RFC3339), err)
 		}
 		advance := buildAdvance(spec.ReplayID, t.Add(step), decision, frame)
-		decision.EffectiveParams = mergeParams(params, decision.NextParams)
+		// 下一期请求的参数以引擎本期实际生效的为基础叠加策略的新参数：策略产出的不合法参数在下一期被引擎拒绝后沿用上一期，
+		// 不会连同非法快照一起被保存、续跑时反复用到。
+		// 引擎返回了生效参数或拒绝原因就以它为准（成员全被拒绝时生效参数为空）；两者都没有（旧版引擎，或没有请求参数）按请求的计。
+		applied := params
+		if frame.AppliedParams != nil || len(frame.RejectedParams) > 0 {
+			applied = frame.AppliedParams
+		}
+		for _, rejection := range frame.RejectedParams {
+			r.logf("回放 %s：%s 的成员 %s 的参数被因子引擎拒绝，沿用上一期：%s", spec.ReplayID, t.Format(time.RFC3339), rejection.Member, rejection.Reason)
+		}
+		decision.EffectiveParams = mergeParams(applied, decision.NextParams)
 		rec = Record{ReplayID: spec.ReplayID, Period: t.Unix(), Decision: decision, State: decision.State, Advance: advance, FactorMillis: factorMs, StrategyMs: time.Since(startedStrategy).Milliseconds()}
 		if err := r.Store.SaveRecord(rec); err != nil {
 			return periodOutcome{}, err

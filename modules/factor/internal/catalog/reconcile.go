@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 
@@ -140,6 +141,11 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet,
 			if !compatibleResultColumn(existing, col) {
 				return fmt.Errorf("result column %q conflicts with the current source/factor contract", col.ColumnName)
 			}
+			// 身份一致但属性过期（成员换绑了另一个定义：factor_id、分类等变了）：刷新属性，否则策略按旧属性固化因子身份。
+			if refreshed, stale := refreshedColumnAttributes(existing, col); stale {
+				col.Attributes = refreshed
+				missing = append(missing, col)
+			}
 			continue
 		}
 		known[col.ColumnName] = col
@@ -153,6 +159,21 @@ func (s *Service) ensureResultColumns(ctx context.Context, set domain.FactorSet,
 		return fmt.Errorf("upsert factor result columns: %w", err)
 	}
 	return nil
+}
+
+// refreshedColumnAttributes 返回把期望的属性叠到已有属性上的结果，以及已有属性是否过期（期望的某个键与已有值不同）。
+// 只覆盖期望里写出的键，其他键（例如别处设置的显示属性）保留。
+func refreshedColumnAttributes(existing, wanted storageio.ColumnInfo) (map[string]string, bool) {
+	merged := make(map[string]string, len(existing.Attributes)+len(wanted.Attributes))
+	maps.Copy(merged, existing.Attributes)
+	stale := false
+	for key, value := range wanted.Attributes {
+		if existing.Attributes[key] != value {
+			stale = true
+		}
+		merged[key] = value
+	}
+	return merged, stale
 }
 
 func compatibleResultColumn(existing, wanted storageio.ColumnInfo) bool {

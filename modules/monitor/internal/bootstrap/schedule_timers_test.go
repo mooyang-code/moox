@@ -29,7 +29,7 @@ func TestMonitorScheduleTimerConfigs(t *testing.T) {
 		network string
 		timeout int
 	}{
-		monitorDataCleanupTimerService: {11500, "0 0 */6 * * *?startAtOnce=1", 120000},
+		monitorDataCleanupTimerService: {11500, "0 */5 * * * *?startAtOnce=1", 120000},
 		monitorCheckTimerService:       {11501, "*/30 * * * * *?startAtOnce=1", 30000},
 		monitorHostSilenceTimerService: {11503, "*/30 * * * * *?startAtOnce=1", 30000},
 	}

@@ -460,3 +460,68 @@ func TestModulePauseClosesEveryObjectGate(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ctrl.Allowed(obj))
 }
+
+// AutoStart 认定的对象随周期刷新自动 init → start 进入预热；其他对象不动，预热到运行仍要 confirm；
+// 手动暂停的对象不会被拉起，检查失败的对象等检查通过后再推进。
+func TestAutoAdvanceMovesOptedInObjectsToWarming(t *testing.T) {
+	ctx := context.Background()
+	f := newFake()
+	f.module = []Check{pass("本地存储")}
+	other := Ref{Kind: "factor_set", ID: "shared"}
+	f.refs = []Ref{set1, other}
+	f.setObject(set1, pass("窗口"))
+	f.setObject(other, pass("窗口"))
+	hooks := f.hooks()
+	hooks.AutoStart = func(ref Ref) bool { return ref == set1 }
+	c, err := New(Options{Module: "factor-engine", Hooks: hooks})
+	require.NoError(t, err)
+	c.Refresh(ctx)
+
+	c.AutoAdvance(ctx)
+	require.Equal(t, StageWarming, c.Stage(set1))
+	require.Equal(t, StageUninitialized, c.Stage(other), "没有选择自动推进的对象不动")
+	require.Equal(t, []Ref{{}, set1}, f.inits, "模块自身由刷新初始化，自动推进只初始化选中的对象")
+
+	c.AutoAdvance(ctx)
+	require.Equal(t, StageWarming, c.Stage(set1), "重复推进不会越过预热")
+
+	// 手动暂停之后不会被自动拉起。
+	_, err = c.Execute(ctx, Request{Command: CmdPause, Ref: set1, By: "tester"})
+	require.NoError(t, err)
+	c.AutoAdvance(ctx)
+	require.Equal(t, StagePaused, c.Stage(set1))
+}
+
+// 检查没通过的对象自动推进到未就绪为止，检查通过之后下一轮再启动；初始化失败不会推进。
+func TestAutoAdvanceWaitsForChecksAndInitErrors(t *testing.T) {
+	ctx := context.Background()
+	f := newFake()
+	f.module = []Check{pass("本地存储")}
+	f.refs = []Ref{set1}
+	f.setObject(set1, fail("窗口", "还没载入"))
+	hooks := f.hooks()
+	hooks.AutoStart = func(Ref) bool { return true }
+	c, err := New(Options{Module: "factor-engine", Hooks: hooks})
+	require.NoError(t, err)
+	c.Refresh(ctx)
+
+	c.AutoAdvance(ctx)
+	require.Equal(t, StageNotReady, c.Stage(set1))
+	f.setObject(set1, pass("窗口"))
+	c.Refresh(ctx)
+	c.AutoAdvance(ctx)
+	require.Equal(t, StageWarming, c.Stage(set1), "检查通过后推进到预热")
+
+	f2 := newFake()
+	f2.module = []Check{pass("本地存储")}
+	f2.refs = []Ref{set1}
+	f2.setObject(set1, pass("窗口"))
+	f2.initFail = errors.New("读取失败")
+	hooks2 := f2.hooks()
+	hooks2.AutoStart = func(Ref) bool { return true }
+	c2, err := New(Options{Module: "factor-engine", Hooks: hooks2})
+	require.NoError(t, err)
+	c2.Refresh(ctx)
+	c2.AutoAdvance(ctx)
+	require.Equal(t, StageUninitialized, c2.Stage(set1), "初始化失败不推进，下一轮重试")
+}

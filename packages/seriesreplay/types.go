@@ -128,6 +128,16 @@ type FactorStepResponse struct {
 	States        map[string]FactorState   `json:"factor_states"`
 	Rows          int                      `json:"rows,omitempty"`
 	ComputeMillis int64                    `json:"compute_ms"`
+	// AppliedParams 是引擎本期实际生效的请求参数（不合法的成员已沿用上一期实际用的）；旧版引擎不返回，此时按请求的参数计。
+	AppliedParams MemberParams `json:"applied_params,omitempty"`
+	// RejectedParams 是本期被引擎拒绝的成员参数与原因。
+	RejectedParams []ParamRejection `json:"rejected_params,omitempty"`
+}
+
+// ParamRejection 是被拒绝的成员参数：与实时提交一样，被拒绝的成员沿用上一期实际用的参数。
+type ParamRejection struct {
+	Member string `json:"member"`
+	Reason string `json:"reason"`
 }
 
 // ---------------------------------------------------------------- 策略

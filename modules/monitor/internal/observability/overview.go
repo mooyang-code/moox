@@ -531,6 +531,11 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 			if interval <= 0 {
 				continue
 			}
+			// View 指向的数据集已在 Storage 里被删除（例如删除策略实例连同私有因子结果）：它留下的指标序列不再代表任何在运行的东西，
+			// 不进入概览，也就不会一直显示“数据生产端长时间未更新”。
+			if b.Metrics.DatasetGone(ctx, viewSpaceID, labels["dataset_id"]) {
+				continue
+			}
 			latest, err := b.Metrics.Latest(ctx, series.SeriesID)
 			if err != nil {
 				return nil, err
@@ -541,7 +546,7 @@ func (b Builder) buildDatasets(ctx context.Context, spaceID string, now time.Tim
 				return nil, err
 			}
 			key := datasetKey{service: series.ServiceName, producer: "storage_view", instance: series.InstanceID, spaceID: viewSpaceID, datasetID: viewID, primaryDatasetID: labels["dataset_id"], freq: freq, labels: series.LabelsJSON}
-			values[key] = datasetValues{interval: interval.Seconds(), lastRun: float64(observed), lastSuccess: float64(observed), output: latest.Value, arrival: arrival, reporterStale: series.IsStale, reportedAt: latest.ObservedAt.UTC()}
+			values[key] = datasetValues{interval: interval.Seconds(), lastRun: float64(observed), lastSuccess: float64(observed), output: latest.Value, arrival: arrival, reporterStale: viewReporterStale(series, interval, now), reportedAt: latest.ObservedAt.UTC()}
 		}
 	}
 	type aggregatedDataset struct {
@@ -825,6 +830,26 @@ func ensureDatasetLimit(count int) error {
 
 func datasetLimitError() error {
 	return fmt.Errorf("dataset frequency statuses exceed limit %d", MaxDatasetFrequencyStatuses)
+}
+
+const (
+	// lowFrequencyViewInterval 是视图被当作低频的最短周期；lowFrequencyViewGrace 是低频视图在一个周期之外多容忍的静默时间。
+	lowFrequencyViewInterval = 5 * time.Minute
+	lowFrequencyViewGrace    = 5 * time.Minute
+)
+
+// viewReporterStale 判断视图的输出水位序列是否算“生产端停止上报”。视图只在输出提交（每个周期一次）时刷新水位指标，
+// Storage 重启后指标也要等到下一次提交才重新出现；周期为 1 小时的视图正常情况下就会静默接近一个小时，
+// 不能按通用的 2 分钟无数据判定。低频视图（周期不短于 lowFrequencyViewInterval）容忍一个完整周期再加 lowFrequencyViewGrace，
+// 真正停止的视图仍会被这里或后面的运行过期判断发现；分钟级视图沿用通用判定。
+func viewReporterStale(series monmetrics.MetricSeries, interval time.Duration, now time.Time) bool {
+	if !series.IsStale {
+		return false
+	}
+	if interval < lowFrequencyViewInterval {
+		return true
+	}
+	return now.Sub(series.LastSeenAt) > interval+lowFrequencyViewGrace
 }
 
 // datasetStatus 判定一个数据集的状态。新鲜度看“最新一根 K 线是否按时到达”：按市场交易日历算出此刻应已收线的最新一根（预期 K 线），

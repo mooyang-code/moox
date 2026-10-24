@@ -100,3 +100,33 @@ func TestRunUsesInstancePrivateFactorSet(t *testing.T) {
 	_, err = r3.Run(context.Background(), missing)
 	require.ErrorContains(t, err, "set_id")
 }
+
+// 策略产出了引擎拒绝的参数：记录里保存的生效参数以引擎实际用的为基础，非法快照不会留下来，续跑也不会反复用到它；
+// 之后策略产出合法的参数照常生效。
+func TestClosedLoopDropsParamsRejectedByFactorEngine(t *testing.T) {
+	r, f, s, _ := newRunner(t)
+	bad := window(999)
+	s.next = func(period time.Time) MemberParams {
+		switch period.Minute() {
+		case 0:
+			return bad // 第 1 期会被引擎拒绝
+		case 2:
+			return window(30)
+		}
+		return nil
+	}
+	f.applied = func(req FactorStepRequest) (MemberParams, []ParamRejection) {
+		if got := req.Params["f"]["window"].Default; got == 999 {
+			return nil, []ParamRejection{{Member: "f", Reason: "参数 window 超出范围"}}
+		}
+		return req.Params, nil
+	}
+	_, err := r.Run(context.Background(), noWrite(spec(5)))
+	require.NoError(t, err)
+	rec, err := r.Store.GetRecord("r1", t0.Add(2*time.Minute).Unix())
+	require.NoError(t, err)
+	require.Equal(t, window(30), rec.Decision.EffectiveParams)
+	rec, err = r.Store.GetRecord("r1", t0.Add(time.Minute).Unix())
+	require.NoError(t, err)
+	require.NotContains(t, rec.Decision.EffectiveParams, "f", "被拒绝的非法快照不留在记录里")
+}

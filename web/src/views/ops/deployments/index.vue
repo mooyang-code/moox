@@ -135,7 +135,7 @@
             </p>
           </section>
         </template>
-        <template v-else>
+        <template v-else-if="tab === 'routes'">
           <div class="filters">
             <a-select
               :model-value="selectedHostId"
@@ -205,6 +205,17 @@
           </div>
           <p v-else-if="loaded && !currentRouteError" class="empty">请选择已登记的主机</p>
         </template>
+        <template v-else>
+          <TopologyView
+            v-if="loaded"
+            :catalog="catalog"
+            :groups="groups"
+            :control-host-id="controlHostId"
+            :located-host="requestedHost"
+            @detail="drawerKey = $event"
+          />
+          <p v-else class="empty">正在读取部署清单</p>
+        </template>
       </div>
       <small v-if="catalog" class="muted"
         >组件目录 v{{ catalog.version }} · {{ catalogHash }} · Monitor {{ formatCheckedAt(overview?.generated_at) }}</small
@@ -272,11 +283,13 @@ import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import RawError from "@/views/ops/monitor/raw-error.vue";
 import { formatCheckedAt, statusColor, statusLabel } from "@/views/ops/monitor/health-display";
 import { canTogglePlacement, componentPorts, gatewayLabel, groupRoutes, routeSync } from "./model";
+import TopologyView from "./topology-view.vue";
 import { useDeployments } from "./use-deployments";
 defineOptions({ name: "OpsDeployments" });
 const tabs = [
   { key: "services", label: "服务" },
-  { key: "routes", label: "网关路由" }
+  { key: "routes", label: "网关路由" },
+  { key: "topology", label: "服务拓扑" }
 ];
 const {
   tab,
@@ -295,6 +308,7 @@ const {
   filter,
   showDisabled,
   selectedHostId,
+  groups,
   visibleGroups,
   selectedGroup,
   currentRoutes,

@@ -31,6 +31,7 @@ func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
 			CheckObject: r.checkSet,
 			Objects:     r.lifecycleObjects,
 			Init:        r.initSet,
+			AutoStart:   r.autoStartSet,
 			Catchup:     r.catchupHook,
 			Reset:       r.resetSpec(),
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
@@ -139,6 +140,16 @@ func (r *Runtime) initSet(ctx context.Context, ref lifecycle.Ref) error {
 		return nil
 	}
 	return r.preload.PrepareSet(ctx, ref.ID)
+}
+
+// autoStartSet 报告集合是否随创建自动 init、start：策略实例的私有因子集（有拥有者）没有人会逐个执行生命周期命令，
+// 实例启用时它被建立，就该直接开始预热计算；共享的计算任务仍由用户按流程 init、start、confirm。
+func (r *Runtime) autoStartSet(ref lifecycle.Ref) bool {
+	if ref.Kind != factorSetKind {
+		return false
+	}
+	set, lookup := r.catalog.SetByID(ref.ID)
+	return lookup == SetFound && set.Set.OwnerInstanceID != ""
 }
 
 // lifecycleRoutes 是挂在健康端口上的生命周期接口（状态与命令）。

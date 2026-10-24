@@ -95,6 +95,15 @@ type replaySession struct {
 	mu       sync.Mutex
 	cache    map[int64]*replayPeriod
 	lastUsed time.Time
+	// applied 是各期实际生效的、由请求带来（或沿用上一期请求）的成员参数快照，键是期次的 Unix 秒：
+	// 某期请求里的成员参数不合法时沿用上一期实际用的，而不是让回放整个失败。只留最近几期。
+	applied map[int64]map[string]domain.ParamSnapshot
+}
+
+// ReplayParamRejection 是被拒绝的成员参数：本期沿用上一期实际用的参数（没有就按冻结记录或默认值）。
+type ReplayParamRejection struct {
+	Member string `json:"member"`
+	Reason string `json:"reason"`
 }
 
 // replayPeriod 是一期的计算结果（缓存，下一期取上一期的因子值用）；digest 是这一期所用参数的摘要。
@@ -343,7 +352,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	session := &replaySession{
 		id: req.ReplayID, set: set, src: src, clock: clock, step: step, from: from, to: to, start: start,
 		subjects: subjects, numeric: numeric, lookback: lookback, carry: carry, types: types, view: view, cols: snapshot,
-		earliest: earliest, release: release, quote: quote, intervals: intervals, cache: map[int64]*replayPeriod{}, lastUsed: m.deps.Now(),
+		earliest: earliest, release: release, quote: quote, intervals: intervals, cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
 	}
 	cleanup = nil
 	m.mu.Lock()
@@ -401,6 +410,10 @@ type ReplayStepResponse struct {
 	Rows int `json:"rows,omitempty"`
 	// ComputeMillis 是本期因子计算耗时。
 	ComputeMillis int64 `json:"compute_ms"`
+	// AppliedParams 是本期实际生效的、由请求带来（或沿用上一期请求）的成员参数：策略回放以它为基础叠加下一期的新参数，
+	// 不合法的请求参数不会留在回放记录里。RejectedParams 是本期被拒绝的成员与原因。
+	AppliedParams  map[string]domain.ParamSnapshot `json:"applied_params,omitempty"`
+	RejectedParams []ReplayParamRejection          `json:"rejected_params,omitempty"`
 }
 
 func (m *replayManager) handleStep(rw http.ResponseWriter, r *http.Request) {
@@ -440,7 +453,7 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 	defer s.mu.Unlock()
 	s.lastUsed = m.deps.Now()
 	started := time.Now()
-	params, err := s.params(period, req.Params)
+	params, applied, rejected, err := s.params(period, req.Params)
 	if err != nil {
 		return ReplayStepResponse{}, http.StatusBadRequest, err
 	}
@@ -450,7 +463,7 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 	}
 	previous := s.cache[period.Add(-s.step).Unix()]
 	if previous == nil && !period.Add(-s.step).Before(s.start) {
-		prevParams, err := s.params(period.Add(-s.step), nil)
+		prevParams, _, _, err := s.params(period.Add(-s.step), nil)
 		if err != nil {
 			return ReplayStepResponse{}, http.StatusInternalServerError, err
 		}
@@ -461,6 +474,13 @@ func (m *replayManager) Step(ctx context.Context, req ReplayStepRequest) (Replay
 	rsp := ReplayStepResponse{
 		ReplayID: s.id, Period: period.Format(time.RFC3339), DecisionAt: period.Add(s.step).Format(time.RFC3339),
 		Subjects: make(map[string]ReplaySubjectFrame, len(s.subjects)), States: current.states,
+		AppliedParams: applied, RejectedParams: rejected,
+	}
+	s.applied[period.Unix()] = applied
+	for at := range s.applied {
+		if at < period.Unix()-int64(4*s.step/time.Second) {
+			delete(s.applied, at)
+		}
 	}
 	wanted := s.sourceColumns(req.SourceColumns)
 	now, prev := period.Unix(), period.Add(-s.step).Unix()
@@ -558,28 +578,47 @@ func (s *replaySession) sourceColumns(requested []string) []string {
 }
 
 // params 返回一期各成员用的参数：请求带来的快照（校验合法）优先，其次是冻结记录（沿用最近的区间），都没有时为默认值。
-func (s *replaySession) params(period time.Time, requested map[string]domain.ParamSnapshot) (map[string]domain.ParamFreeze, error) {
+// 请求里某个成员的参数不合法（范围、类型、联合约束、标的不在范围内）时，和实时提交被拒绝一样沿用上一期实际用的参数
+// （没有就按冻结记录、默认值），并作为拒绝返回；成员别名不存在是调用方的错误，仍然整期失败。
+// 第二个返回值是本期实际生效的请求参数（来自请求，或沿用上一期请求）。
+func (s *replaySession) params(period time.Time, requested map[string]domain.ParamSnapshot) (map[string]domain.ParamFreeze, map[string]domain.ParamSnapshot, []ReplayParamRejection, error) {
 	for alias := range requested {
 		found := false
 		for _, member := range s.set.Members {
 			found = found || member.Alias == alias
 		}
 		if !found {
-			return nil, fmt.Errorf("集合里没有成员 %s", alias)
+			return nil, nil, nil, fmt.Errorf("集合里没有成员 %s", alias)
 		}
 	}
 	out := make(map[string]domain.ParamFreeze, len(s.set.Members))
+	var applied map[string]domain.ParamSnapshot
+	var rejected []ReplayParamRejection
 	for _, member := range s.set.Members {
 		if snapshot, ok := requested[member.Alias]; ok {
-			if err := domain.CheckSnapshotNumbers(snapshot); err != nil {
-				return nil, err
+			err := domain.CheckSnapshotNumbers(snapshot)
+			if err == nil {
+				err = domain.ValidateSnapshot(member, snapshot, s.set.Set.InScope)
 			}
-			if err := domain.ValidateSnapshot(member, snapshot, s.set.Set.InScope); err != nil {
-				return nil, err
+			if err == nil {
+				out[member.Alias] = domain.ParamFreeze{SetID: s.set.Set.SetID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: snapshot,
+					SnapshotHash: snapshot.Hash(), Source: domain.ParamsRequested}
+				if applied == nil {
+					applied = map[string]domain.ParamSnapshot{}
+				}
+				applied[member.Alias] = snapshot
+				continue
 			}
-			out[member.Alias] = domain.ParamFreeze{SetID: s.set.Set.SetID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: snapshot,
-				SnapshotHash: snapshot.Hash(), Source: domain.ParamsRequested}
-			continue
+			rejected = append(rejected, ReplayParamRejection{Member: member.Alias, Reason: err.Error()})
+			if previous, ok := s.applied[period.Add(-s.step).Unix()][member.Alias]; ok {
+				out[member.Alias] = domain.ParamFreeze{SetID: s.set.Set.SetID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: previous,
+					SnapshotHash: previous.Hash(), Source: domain.ParamsCarried}
+				if applied == nil {
+					applied = map[string]domain.ParamSnapshot{}
+				}
+				applied[member.Alias] = previous
+				continue
+			}
 		}
 		var previous *domain.ParamInterval
 		for i := range s.intervals[member.Alias] {
@@ -603,7 +642,7 @@ func (s *replaySession) params(period time.Time, requested map[string]domain.Par
 				Snapshot: previous.Snapshot, SnapshotHash: previous.SnapshotHash, Source: source}
 		}
 	}
-	return out, nil
+	return out, applied, rejected, nil
 }
 
 func paramsDigest(params map[string]domain.ParamFreeze) string {

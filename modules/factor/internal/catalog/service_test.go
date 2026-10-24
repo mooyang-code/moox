@@ -1103,3 +1103,71 @@ func TestEnableMemberReturnsTheStoredJobWhenMergedIntoAQueuedBackfill(t *testing
 	require.NoError(t, err, "返回的任务号必须能读到")
 	require.ElementsMatch(t, []string{"momentum", "bias"}, job.Members)
 }
+
+// 结果数据集清理失败时参数冻结历史还在：参数记录在数据集清理成功之后才删，集合停在 deleting 可以重试。
+func TestDeleteSetKeepsParamHistoryWhenPurgeFails(t *testing.T) {
+	ctx := context.Background()
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := NewService(db, meta)
+	set, err := svc.CreateSet(ctx, newSet())
+	require.NoError(t, err)
+	require.NoError(t, db.SetSetStatus(ctx, set.SetID, domain.SetStatusEnabled, domain.SetStatusDisabled))
+	at := time.Unix(1_800_000_000, 0).UTC()
+	_, err = db.FreezeParams(ctx, set.SetID, at, at.Add(-time.Minute),
+		[]store.FreezeMember{{Alias: "fast", Defaults: domain.ParamSnapshot{"window": {Default: 20}}}})
+	require.NoError(t, err)
+	meta.deleteErrs = 1
+
+	require.Error(t, svc.DeleteSet(ctx, set.SetID, true))
+	intervals, err := db.ListParamIntervals(ctx, set.SetID, "", at.Add(-time.Hour), at.Add(time.Hour))
+	require.NoError(t, err)
+	require.Len(t, intervals, 1, "清理失败时冻结历史必须保留")
+
+	require.NoError(t, svc.Reconcile(ctx))
+	intervals, err = db.ListParamIntervals(ctx, set.SetID, "", at.Add(-time.Hour), at.Add(time.Hour))
+	require.NoError(t, err)
+	require.Empty(t, intervals)
+}
+
+// 结果列身份一致但属性过期（成员换绑了另一个定义后列上还留着旧的 factor_id、分类）：对账刷新属性并保留别处设置的其他属性。
+func TestReconcileRefreshesStaleResultColumnAttributes(t *testing.T) {
+	ctx := context.Background()
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := newReadyService(t, db, meta)
+	svc.recalc = &recalcFake{db: db}
+	addMember(t, svc, testSetID(), "momentum", domain.MemberStatusEnabled)
+	key := resultKey("crypto", domain.ResultDatasetID(testSetID()))
+	columns := meta.columns[key]
+	stale := -1
+	for i, col := range columns {
+		if col.ColumnName == "momentum" {
+			stale = i
+		}
+	}
+	require.GreaterOrEqual(t, stale, 0)
+	want := columns[stale].Attributes["factor_id"]
+	require.NotEmpty(t, want)
+	attributes := map[string]string{}
+	for k, v := range columns[stale].Attributes {
+		attributes[k] = v
+	}
+	attributes["factor_id"] = "旧定义"
+	attributes["note"] = "别处设置的属性"
+	columns[stale].Attributes = attributes
+	meta.writeOps = nil
+
+	require.NoError(t, svc.ReconcileSet(ctx, testSetID()))
+
+	require.Equal(t, []string{"upsert_columns"}, meta.writeOps)
+	for _, col := range meta.columns[key] {
+		if col.ColumnName == "momentum" {
+			require.Equal(t, want, col.Attributes["factor_id"])
+			require.Equal(t, "别处设置的属性", col.Attributes["note"], "只覆盖期望里写出的键")
+		}
+	}
+	meta.writeOps = nil
+	require.NoError(t, svc.ReconcileSet(ctx, testSetID()))
+	require.Empty(t, meta.writeOps, "属性已是最新时不再写 Storage")
+}

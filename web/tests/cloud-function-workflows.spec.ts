@@ -24,6 +24,15 @@ describe("cloud instance workflows", () => {
     expect(source).not.toContain("completeCloudFunctionJobChange");
   });
 
+  it("passes the workload type to the package manager under its current prop name", () => {
+    const parent = readFileSync(resolve(__dirname, "../src/views/collector/cloud-function/function-instance.vue"), "utf8");
+    const child = readFileSync(resolve(__dirname, "../src/views/collector/cloud-function/function-package-manage.vue"), "utf8");
+
+    expect(child).toContain("workloadType?: string");
+    expect(parent).toContain(':workload-type="currentWorkloadType"');
+    expect(parent).not.toContain(":biz-type");
+  });
+
   it("stops a space-scoped batch poll when the selected space changes", () => {
     const source = readFileSync(resolve(__dirname, "../src/views/collector/cloud-function/function-instance.vue"), "utf8");
     const watcherStart = source.indexOf("watch(selectedSpaceId");

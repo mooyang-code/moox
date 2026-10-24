@@ -98,6 +98,34 @@ func (r *ResultRepository) Stats(ctx context.Context, spaceID string, since time
 	return float64(successes) / float64(len(results)), p95, nil
 }
 
+// LatestWithoutMessage 返回检查最近一条说明不等于 message 的结果；没有时返回 nil。
+func (r *ResultRepository) LatestWithoutMessage(ctx context.Context, spaceID, checkID, message string) (*domain.CheckResult, error) {
+	var results []domain.CheckResult
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_check_id = ? AND c_error_message <> ?", spaceID, checkID, message).
+		Order("c_checked_at DESC, c_id DESC").
+		Limit(1).
+		Find(&results).Error
+	if err != nil || len(results) == 0 {
+		return nil, err
+	}
+	return &results[0], nil
+}
+
+// Earliest 返回检查最早一条结果；没有时返回 nil。
+func (r *ResultRepository) Earliest(ctx context.Context, spaceID, checkID string) (*domain.CheckResult, error) {
+	var results []domain.CheckResult
+	err := r.db.WithContext(ctx).
+		Where("c_space_id = ? AND c_check_id = ?", spaceID, checkID).
+		Order("c_checked_at ASC, c_id ASC").
+		Limit(1).
+		Find(&results).Error
+	if err != nil || len(results) == 0 {
+		return nil, err
+	}
+	return &results[0], nil
+}
+
 func (r *ResultRepository) DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	return DeleteBefore(ctx, r.db, "t_monitor_check_results", "c_checked_at", cutoff)
 }

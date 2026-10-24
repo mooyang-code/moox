@@ -24,6 +24,8 @@ type monitorDataCleanupOps struct {
 	pruneSeries   func(context.Context, time.Time) error
 	// pruneArrivals 按 monmetrics.BarArrivalRetention 清理数据链路逐根到达记录（按到达时间）。
 	pruneArrivals func(context.Context, time.Time) error
+	// pruneChecks 清理失效的业务检查（对象已删除、长期不再被期望的检查及其告警规则与状态，见 stale_checks.go）。
+	pruneChecks func(context.Context, time.Time) error
 }
 
 func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error {
@@ -58,6 +60,11 @@ func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error
 			errs = append(errs, fmt.Errorf("prune bar arrivals: %w", err))
 		}
 	}
+	if ops.pruneChecks != nil {
+		if err := ops.pruneChecks(ctx, now); err != nil {
+			errs = append(errs, fmt.Errorf("prune stale checks: %w", err))
+		}
+	}
 	return errors.Join(errs...)
 }
 
@@ -82,6 +89,12 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 		}
 		ops.deleteAlerts = func(ctx context.Context, cutoff time.Time) error {
 			_, err := runtime.Repositories.Alerts.DeleteEventsOlderThan(ctx, cutoff)
+			return err
+		}
+	}
+	if runtime != nil && runtime.Repositories != nil {
+		ops.pruneChecks = func(ctx context.Context, now time.Time) error {
+			_, err := pruneStaleChecks(ctx, runtime.Repositories, now, staleCheckPolicy{Retain: runtime.recreatedCheck})
 			return err
 		}
 	}

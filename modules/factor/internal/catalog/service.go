@@ -251,9 +251,6 @@ func (s *Service) DeleteSet(ctx context.Context, setID string, purge bool) error
 	if memberCount != 0 {
 		return errors.New("factor set must not contain members before deletion")
 	}
-	if err := s.db.DeleteSetParams(ctx, setID); err != nil {
-		return fmt.Errorf("delete factor set params: %w", err)
-	}
 	if purge {
 		if s.metadata == nil {
 			return errors.New("Storage metadata is required to purge the result dataset")
@@ -266,6 +263,10 @@ func (s *Service) DeleteSet(ctx context.Context, setID string, purge bool) error
 		if err := s.metadata.DeleteDataset(ctx, set.SpaceID, set.ResultDatasetID); err != nil {
 			return fmt.Errorf("delete factor result dataset: %w", err)
 		}
+	}
+	// 参数记录最后删：结果数据集清理失败（例如还有额外的 View 引用）时集合停在 deleting，冻结历史还在，可以重试。
+	if err := s.db.DeleteSetParams(ctx, setID); err != nil {
+		return fmt.Errorf("delete factor set params: %w", err)
 	}
 	if err := s.db.DeleteSet(ctx, setID); err != nil {
 		return err

@@ -229,6 +229,10 @@ type Hooks struct {
 	Objects func() []Ref
 	// Init 执行初始化动作（可为 nil）；ref 为空表示模块自身。
 	Init func(ctx context.Context, ref Ref) error
+	// AutoStart 报告对象是否随创建自动推进到预热（init → start）：返回 true 的对象在未初始化、就绪时由周期刷新自动
+	// init、start，不必用户逐个执行命令（例如策略实例的私有因子集、启用后的策略实例）。暂停、恢复追赶、重置、故障、未就绪
+	// 的对象不动，预热到运行的确认（confirm）仍由用户执行。为 nil 表示没有对象自动推进。
+	AutoStart func(ref Ref) bool
 	// Catchup 报告一个对象（ref 为空是模块自身）的恢复追赶进度；since 是最早一次暂停的时间。
 	// 为 nil 表示没有数据需要追赶，恢复后立即视为追平。钩子应只写历史数据，不下单、不发目标。
 	Catchup func(ctx context.Context, ref Ref, since time.Time) (Catchup, error)

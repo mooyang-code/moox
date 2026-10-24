@@ -534,6 +534,38 @@ func (m *ViewMetrics) ObserveViewOutputWatermark(spaceID, viewID, datasetID, fre
 	report.NotifyOutputAdvanced(spaceID)
 }
 
+// ViewKey identifies a View by space and view ID.
+type ViewKey struct {
+	SpaceID string
+	ViewID  string
+}
+
+// RetainViews drops the per-View output series of Views that are no longer
+// active (deleted or deactivated). Gauge series are exported by the process
+// until they are removed, so without this a deleted View keeps reporting its
+// frozen output watermark as if it were alive and Monitor alerts that it is
+// late forever. Call it only with the complete active-View set.
+func (m *ViewMetrics) RetainViews(active map[ViewKey]struct{}) {
+	if m == nil {
+		return
+	}
+	m.viewWatermarkMu.Lock()
+	for key := range m.viewWatermarks {
+		parts := strings.Split(key, "\x00")
+		if len(parts) != 4 {
+			continue
+		}
+		if _, keep := active[ViewKey{SpaceID: parts[0], ViewID: parts[1]}]; keep {
+			continue
+		}
+		m.viewOutputWatermark.DeleteLabelValues(parts...)
+		m.viewOutputArrival.DeleteLabelValues(parts...)
+		delete(m.viewWatermarks, key)
+	}
+	m.viewWatermarkMu.Unlock()
+	m.viewSubjects.retain(active)
+}
+
 // ObservePeriodWaiting records the current missing-dataset count for a View
 // period. View and frequency are the only labels so this remains bounded.
 func (m *ViewMetrics) ObservePeriodWaiting(view, frequency string, waiting int) {

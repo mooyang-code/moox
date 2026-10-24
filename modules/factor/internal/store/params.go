@@ -238,7 +238,12 @@ func freezeMember(tx *gorm.DB, setID string, member FreezeMember, period, previo
 		if ok {
 			// 从未提交过时沿用的仍是默认值，来源记为 default（连续沿用的告警只看真正提交过之后的沿用）。
 			freeze.Snapshot, freeze.Source = last.Snapshot, domain.ParamsCarried
+			// 来源链可能被离线冻结（carried_offline）打断，所以不能只看上一个区间的来源：成员从没有提交生效过，沿用的就还是默认值。
 			if last.Source == domain.ParamsDefault {
+				freeze.Source = domain.ParamsDefault
+			} else if requested, err := everRequested(tx, setID, member.Alias); err != nil {
+				return domain.ParamFreeze{}, err
+			} else if !requested {
 				freeze.Source = domain.ParamsDefault
 			}
 		} else {
@@ -258,6 +263,14 @@ func freezeMember(tx *gorm.DB, setID string, member FreezeMember, period, previo
 		}
 	}
 	return freeze, nil
+}
+
+// everRequested 报告成员是否有过提交生效的冻结区间。
+func everRequested(tx *gorm.DB, setID, alias string) (bool, error) {
+	var n int64
+	err := tx.Raw(`SELECT COUNT(*) FROM (SELECT 1 FROM t_factor_param_freezes WHERE c_set_id = ? AND c_member_alias = ? AND c_source = ? LIMIT 1)`,
+		setID, alias, domain.ParamsRequested).Scan(&n).Error
+	return n > 0, err
 }
 
 // sameParamNames 判断两份快照的参数名集合是否一致。

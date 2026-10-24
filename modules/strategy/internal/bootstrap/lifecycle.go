@@ -45,6 +45,7 @@ func newLifecycle(dbPath string, deps lifecycleDeps) (*lifecycle.Controller, err
 			CheckModule: deps.checkModule,
 			CheckObject: deps.checkInstance,
 			Objects:     deps.instances,
+			AutoStart:   func(ref lifecycle.Ref) bool { return ref.Kind == instanceKind },
 			Catchup:     deps.catchup,
 			Reset:       strategyResetSpec(deps.db, dbPath),
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {

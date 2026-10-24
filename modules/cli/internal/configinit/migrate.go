@@ -64,6 +64,16 @@ type HostRename struct {
 	Changes int    `json:"changes"`
 }
 
+// ComponentRename 记录 [placements] 里一个旧组件身份改成当前名字涉及的位置数。
+type ComponentRename struct {
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Changes int    `json:"changes"`
+}
+
+// legacyComponents 是已经改名的组件身份：旧名字不再出现在服务目录里，[placements] 里还写旧名字会让所有命令拒绝配置。
+var legacyComponents = map[string]string{"cloudnode": "cloudfunction"}
+
 // SCFImportReport 记录导入的 SCF 计划概要（地域、空间与市场、更新了网络信息的主机），不含任何配置值。
 type SCFImportReport struct {
 	Regions []string            `json:"regions"`
@@ -73,18 +83,20 @@ type SCFImportReport struct {
 
 // MigrateReport 只包含键名、因子 ID、文件名、主机 ID 与中文名，不含任何配置值。
 type MigrateReport struct {
-	Path       string               `json:"path"`
-	Encrypted  bool                 `json:"encrypted"`
-	Factors    []FactorMigration    `json:"factors,omitempty"`
-	Labels     []HostLabelMigration `json:"labels,omitempty"`
-	Rename     *HostRename          `json:"rename,omitempty"`
-	SCF        *SCFImportReport     `json:"scf,omitempty"`
-	TLSMode    map[string]string    `json:"tls_mode,omitempty"`
-	Changed    bool                 `json:"changed"`
-	Valid      bool                 `json:"valid"`
-	Written    bool                 `json:"written"`
-	Backup     string               `json:"backup,omitempty"`
-	NextAction string               `json:"next_action,omitempty"`
+	Path      string               `json:"path"`
+	Encrypted bool                 `json:"encrypted"`
+	Factors   []FactorMigration    `json:"factors,omitempty"`
+	Labels    []HostLabelMigration `json:"labels,omitempty"`
+	Rename    *HostRename          `json:"rename,omitempty"`
+	// Components 记录 [placements] 里被改成当前名字的旧组件身份（例如 cloudnode → cloudfunction）及位置数。
+	Components []ComponentRename `json:"components,omitempty"`
+	SCF        *SCFImportReport  `json:"scf,omitempty"`
+	TLSMode    map[string]string `json:"tls_mode,omitempty"`
+	Changed    bool              `json:"changed"`
+	Valid      bool              `json:"valid"`
+	Written    bool              `json:"written"`
+	Backup     string            `json:"backup,omitempty"`
+	NextAction string            `json:"next_action,omitempty"`
 }
 
 // MigrateFile 在本机解密 moox.toml，把它改写成当前格式并校验；Write 时备份原文件、重新加密写回。
@@ -338,6 +350,7 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 			return nil, err
 		}
 	}
+	renamePlacementComponents(blocks, report)
 	for i := range blocks {
 		if blocks[i].header == "factors.definitions" && blocks[i].array {
 			change, err := migrateFactorBlock(&blocks[i], library)
@@ -367,6 +380,39 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 		out = append(out, b.lines...)
 	}
 	return []byte(strings.Join(out, "\n")), nil
+}
+
+// renamePlacementComponents 把 [placements] 各主机组件列表里的旧组件身份改成当前名字。
+func renamePlacementComponents(blocks []block, report *MigrateReport) {
+	counts := map[string]int{}
+	for i := range blocks {
+		if blocks[i].header != "placements" {
+			continue
+		}
+		for j := 1; j < len(blocks[i].lines); j++ {
+			// 多行数组的续行没有 key = value，所以逐行处理（跳过注释行）；双引号与单引号字符串都改。
+			if strings.HasPrefix(strings.TrimSpace(blocks[i].lines[j]), "#") {
+				continue
+			}
+			for from, to := range legacyComponents {
+				for _, quote := range []string{`"`, `'`} {
+					old := quote + from + quote
+					if strings.Contains(blocks[i].lines[j], old) {
+						blocks[i].lines[j] = strings.ReplaceAll(blocks[i].lines[j], old, quote+to+quote)
+						counts[from]++
+					}
+				}
+			}
+		}
+	}
+	froms := make([]string, 0, len(counts))
+	for from := range counts {
+		froms = append(froms, from)
+	}
+	sort.Strings(froms)
+	for _, from := range froms {
+		report.Components = append(report.Components, ComponentRename{From: from, To: legacyComponents[from], Changes: counts[from]})
+	}
 }
 
 func blockHasKey(b block, key string) bool {

@@ -8,6 +8,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -80,6 +81,39 @@ type KlineFreshnessEvaluator struct {
 	inventory   *TaskResultInventoryCache
 	policy      report.RealtimeTimeSeriesPolicy
 	firstSeen   SubjectFirstSeenStore
+
+	disabledMu     sync.Mutex
+	disabledChecks map[string]struct{}
+}
+
+// RuleDisabledCheckIDs 返回最近一次评估时规则存在但关闭了新鲜度监控的检查 ID。这些检查会在每次评估里被补建出来（页面据此显示“已关闭”），
+// 不是失效的检查，清理时必须保留。还没成功评估过时第二个返回值为 false：此时不知道哪些检查会被补建，调用方不应清理 K 线检查。
+func (e *KlineFreshnessEvaluator) RuleDisabledCheckIDs() (map[string]struct{}, bool) {
+	if e == nil {
+		return nil, false
+	}
+	e.disabledMu.Lock()
+	defer e.disabledMu.Unlock()
+	if e.disabledChecks == nil {
+		return nil, false
+	}
+	out := make(map[string]struct{}, len(e.disabledChecks))
+	for id := range e.disabledChecks {
+		out[id] = struct{}{}
+	}
+	return out, true
+}
+
+func (e *KlineFreshnessEvaluator) recordDisabledChecks(rules []KlineFreshnessRule) {
+	disabled := make(map[string]struct{})
+	for _, rule := range rules {
+		if !rule.Enabled {
+			disabled[KlineFreshnessCheckID(rule)] = struct{}{}
+		}
+	}
+	e.disabledMu.Lock()
+	e.disabledChecks = disabled
+	e.disabledMu.Unlock()
 }
 
 // SubjectFirstSeenStore 持久化活跃对象第一次出现在采集清单里的时间。ObserveSubjects 返回新上线对象（不含部署前的存量）
@@ -137,6 +171,7 @@ func (e *KlineFreshnessEvaluator) Evaluate(ctx context.Context, nowValues ...tim
 		inventoryEvaluated = true
 		inventoryStale = stale
 	}
+	e.recordDisabledChecks(rules)
 	filters := make([]ViewMetricScope, 0, len(rules))
 	for _, rule := range rules {
 		if !rule.Enabled || rule.ResultStatus == "pending" || rule.ResultStatus == "unverified" {

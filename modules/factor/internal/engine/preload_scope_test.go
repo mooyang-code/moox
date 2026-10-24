@@ -39,6 +39,8 @@ func (f *flakyPrepare) Prepare(context.Context, domain.EngineSet, []string) erro
 	return nil
 }
 
+func (f *flakyPrepare) ReleaseSet(domain.FactorSet) {}
+
 type oneSet struct{ set domain.EngineSet }
 
 func (o oneSet) SetIDs() []string { return []string{o.set.Set.SetID} }
@@ -82,6 +84,8 @@ func (r *recordingPrepare) Prepare(_ context.Context, _ domain.EngineSet, subjec
 	r.calls = append(r.calls, append([]string(nil), subjects...))
 	return nil
 }
+
+func (r *recordingPrepare) ReleaseSet(domain.FactorSet) {}
 
 type mutableSubjects struct{ list []string }
 

@@ -49,4 +49,9 @@ func TestTwoSetsShareOneSource(t *testing.T) {
 	statuses := fx.data.WindowStatuses()
 	require.Len(t, statuses, 1)
 	require.Equal(t, "set1", statuses[0].SetID)
+
+	// 最后一个集合也释放后，数据源的窗口与同步状态被丢弃（不再占内存预算、不再被跟进）。
+	fx.data.ReleaseSet(fx.set.Set)
+	require.Empty(t, fx.data.WindowStatuses())
+	require.Nil(t, fx.data.st(seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}))
 }

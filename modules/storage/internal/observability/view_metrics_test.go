@@ -2,6 +2,7 @@ package observability
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -284,4 +285,44 @@ func gatherGauge(t *testing.T, registry *prometheus.Registry, name string) float
 	}
 	t.Fatalf("metric %q not found", name)
 	return 0
+}
+
+// 删除或停用的 View 不再导出输出水位等序列：RetainViews 只保留活动 View，已被删除的 View 的序列消失，
+// 之后同一 View 重新出现并产出时序列恢复（水位记录也已清掉，不会被旧的更大水位挡住）。
+func TestRetainViewsDropsSeriesOfInactiveViews(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewViewMetrics(registry)
+	require.NoError(t, err)
+	at := time.Date(2026, 10, 24, 1, 0, 0, 0, time.UTC)
+	for _, view := range []string{"view_keep", "view_gone"} {
+		metrics.ObserveViewOutputWatermark("crypto", view, "dataset_"+view, "1m", at)
+		require.NoError(t, metrics.ObserveViewDatasetOutput(ViewDatasetObservation{
+			SpaceID: "crypto", ViewID: view, DatasetID: "dataset_" + view, SubjectID: "BTC", Frequency: "1m", SeriesTag: "t", DataTime: at}))
+	}
+	viewsReported := func() map[string]bool {
+		families, err := registry.Gather()
+		require.NoError(t, err)
+		seen := map[string]bool{}
+		for _, family := range families {
+			if !strings.HasPrefix(family.GetName(), "moox_storage_view_output_") {
+				continue
+			}
+			for _, metric := range family.GetMetric() {
+				for _, label := range metric.GetLabel() {
+					if label.GetName() == "view_id" {
+						seen[label.GetValue()] = true
+					}
+				}
+			}
+		}
+		return seen
+	}
+	require.Equal(t, map[string]bool{"view_keep": true, "view_gone": true}, viewsReported())
+
+	metrics.RetainViews(map[ViewKey]struct{}{{SpaceID: "crypto", ViewID: "view_keep"}: {}})
+	require.Equal(t, map[string]bool{"view_keep": true}, viewsReported())
+
+	// 重新出现的 View 照常产出（旧水位记录已清除）。
+	metrics.ObserveViewOutputWatermark("crypto", "view_gone", "dataset_view_gone", "1m", at.Add(-time.Hour))
+	require.True(t, viewsReported()["view_gone"])
 }

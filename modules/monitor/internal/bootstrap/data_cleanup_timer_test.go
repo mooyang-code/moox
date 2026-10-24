@@ -38,9 +38,14 @@ func TestRunMonitorDataCleanupAttemptsEveryStore(t *testing.T) {
 			assert.Equal(t, time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC), cutoff)
 			return nil
 		},
+		pruneChecks: func(_ context.Context, now time.Time) error {
+			calls = append(calls, "checks")
+			assert.Equal(t, time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC), now)
+			return nil
+		},
 	})
 	require.ErrorIs(t, err, wantErr)
-	assert.Equal(t, []string{"results", "alerts", "dedupe", "series", "arrivals"}, calls)
+	assert.Equal(t, []string{"results", "alerts", "dedupe", "series", "arrivals", "checks"}, calls)
 }
 
 func TestRunMonitorDataCleanupAllowsUnavailableStores(t *testing.T) {

@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 )
@@ -218,7 +219,47 @@ func (c *Controller) summarize(s Snapshot) (Stage, string, bool) {
 }
 
 // Recover 在模块启动完成后调用一次：立刻跑检查，让重启前处于预热、运行的对象在检查通过后回到原阶段。
-func (c *Controller) Recover(ctx context.Context) { c.Refresh(ctx) }
+func (c *Controller) Recover(ctx context.Context) {
+	c.Refresh(ctx)
+	c.AutoAdvance(ctx)
+}
+
+// AutoAdvance 把 AutoStart 钩子认定的对象从未初始化推进到预热：未初始化先 init，就绪再 start。
+// 其他阶段（未就绪、预热、运行、暂停、恢复追赶、重置、故障）不动；命令被拒绝（模块重置中、等待重置后初始化、
+// 模块自身没有放行）时静默跳过，下一轮刷新再试。
+func (c *Controller) AutoAdvance(ctx context.Context) {
+	if c.opts.Hooks.AutoStart == nil || c.opts.Hooks.Objects == nil {
+		return
+	}
+	for _, ref := range c.opts.Hooks.Objects() {
+		if ctx.Err() != nil {
+			return
+		}
+		if !c.opts.Hooks.AutoStart(ref) {
+			continue
+		}
+		if c.Stage(ref) == StageUninitialized {
+			if _, err := c.Command(ctx, CmdInit, ref); err != nil {
+				c.autoAdvanceFailed(ref, CmdInit, err)
+				continue
+			}
+		}
+		if c.Stage(ref) == StageReady {
+			if _, err := c.Command(ctx, CmdStart, ref); err != nil {
+				c.autoAdvanceFailed(ref, CmdStart, err)
+			}
+		}
+	}
+}
+
+// autoAdvanceFailed 记录自动推进失败：被门禁拒绝是预期的等待，不记审计；其他错误（初始化失败）记审计，下一轮重试。
+func (c *Controller) autoAdvanceFailed(ref Ref, cmd Command, err error) {
+	var notAllowed *ErrNotAllowed
+	if errors.As(err, &notAllowed) {
+		return
+	}
+	c.audit("lifecycle_auto_%s_failed module=%s ref=%s/%s error=%q", cmd, c.opts.Module, ref.Kind, ref.ID, err.Error())
+}
 
 // Run 按 interval 周期调用 Refresh，直到 ctx 结束。
 func (c *Controller) Run(ctx context.Context, interval time.Duration) {
@@ -230,6 +271,7 @@ func (c *Controller) Run(ctx context.Context, interval time.Duration) {
 			return
 		case <-ticker.C:
 			c.Refresh(ctx)
+			c.AutoAdvance(ctx)
 		}
 	}
 }
