@@ -34,6 +34,8 @@ type MigrateOptions struct {
 	TLSModeHost, TLSMode string
 	// FactorsEnabled 非空（"true"/"false"）时设置 [factors] enabled（--set-factors-enabled）。
 	FactorsEnabled string
+	// AddDefaultFactors 为 true 时补上内置样例里有、配置里还没有的默认因子定义与成员（--add-default-factors）。
+	AddDefaultFactors bool
 	// ReachabilityHost / Reachability 非空时设置该主机的可达性（--set-reachability 主机=direct|outbound）。
 	ReachabilityHost, Reachability string
 	// AddDeploymentHost / AddDeploymentComponents 非空时把这些组件加进该主机的 [deployments] 条目（--add-deployment 主机=组件,组件）。
@@ -107,6 +109,8 @@ type MigrateReport struct {
 	TLSMode     map[string]string `json:"tls_mode,omitempty"`
 	// FactorsEnabled 记录 --set-factors-enabled 的结果。
 	FactorsEnabled string `json:"factors_enabled,omitempty"`
+	// DefaultFactors 记录 --add-default-factors 补上的定义与成员。
+	DefaultFactors *DefaultFactorsReport `json:"default_factors,omitempty"`
 	// Reachability 记录 --set-reachability 的结果。
 	Reachability map[string]string `json:"reachability,omitempty"`
 	// AddedDeployments 记录 --add-deployment 新增到各主机的组件。
@@ -158,6 +162,13 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 			return report, err
 		}
 		report.FactorsEnabled = opts.FactorsEnabled
+	}
+	if opts.AddDefaultFactors {
+		var added DefaultFactorsReport
+		if migrated, added, err = addDefaultFactors(migrated); err != nil {
+			return report, err
+		}
+		report.DefaultFactors = &added
 	}
 	if opts.ReachabilityHost != "" {
 		if migrated, err = setHostReachability(migrated, opts.ReachabilityHost, opts.Reachability); err != nil {
