@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -563,6 +564,7 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 	s.drainRebuildLogRetries(ctx)
 	firstErr := s.ReplayPendingSubjects(ctx)
 	activeIndexes := make(map[capacityCheckRef]struct{})
+	activeViews := make(map[observability.ViewKey]struct{})
 	for pageNo := uint32(1); ; pageNo++ {
 		rsp, err := opts.Metadata.ListViews(ctx, &pb.ListViewsReq{AuthInfo: auth, Status: "active", Page: &pb.Page{Page: pageNo, Size: 100}})
 		if err != nil {
@@ -570,6 +572,11 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 		}
 		if err := requireSuccess(rsp.GetRetInfo()); err != nil {
 			return err
+		}
+		for _, view := range rsp.GetViews() {
+			if view != nil && view.GetSpaceId() != "" && view.GetViewId() != "" {
+				activeViews[observability.ViewKey{SpaceID: view.GetSpaceId(), ViewID: view.GetViewId()}] = struct{}{}
+			}
 		}
 		// Rebuild the business K-line View before lower-priority system and
 		// derived Views during a cold start. All Views still get processed in
@@ -603,6 +610,9 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 		}
 		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {
 			s.reconcileCapacityCheckInventory(activeIndexes)
+			// 完整列出了活动 View：删除或停用的 View 不再导出输出水位等指标序列，否则它们会一直带着冻结的水位上报，
+			// Monitor 永远认为它迟到。
+			s.metrics.RetainViews(activeViews)
 			return firstErr
 		}
 	}

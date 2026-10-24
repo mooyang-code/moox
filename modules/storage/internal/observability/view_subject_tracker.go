@@ -115,6 +115,20 @@ func (t *viewSubjectTracker) observe(observation ViewDatasetObservation) error {
 	return nil
 }
 
+// retain removes the tracked scopes of Views that are not in active and
+// releases their subject budget.
+func (t *viewSubjectTracker) retain(active map[ViewKey]struct{}) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for scope, state := range t.scopes {
+		if _, keep := active[ViewKey{SpaceID: scope.spaceID, ViewID: scope.viewID}]; keep {
+			continue
+		}
+		t.observed -= len(state.subjects)
+		delete(t.scopes, scope)
+	}
+}
+
 func (t *viewSubjectTracker) Describe(ch chan<- *prometheus.Desc) {
 	ch <- t.latestDesc
 	ch <- t.trackedSinceDesc
