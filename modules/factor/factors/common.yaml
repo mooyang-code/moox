@@ -15,8 +15,9 @@
   name: 指数移动平均（EMA）
   category_id: trend
   category_name: 趋势类
+  # 窗口上限 4825 时最大回看 49995 根（约 34.7 天的 1m），是不超过 5 万根的最大窗口。
   spec: |
-    params: {window: {type: int, min: 2, max: 120, default: 20}}
+    params: {window: {type: int, min: 2, max: 4825, default: 20}}
     outputs:
       ema: ema(close, window)
 
