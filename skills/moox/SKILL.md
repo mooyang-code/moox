@@ -102,6 +102,8 @@ Factor separately. Collector completion events drive Factor reads from Storage P
 the Factor durable is `factor_collector_period_v1`. Use set-labeled period and lane metrics to
 distinguish event backlog, Storage failures, and compute errors (`factor_compile_errors_total`).
 
+初始化完成后，如果用户在 macOS 上操作且控制台是 internal TLS，要提醒用户让浏览器信任管理台 CA（命令见 [`references/custom-setup.md`](references/custom-setup.md) 的“macOS：初始化后让浏览器信任管理台证书”），并且不要替用户清理钥匙串里的这张证书。
+
 ### Host Registry, Naming And External Programs
 
 用户要新增、部署、启停或移除机器，或安装、退役因子引擎与归档 Worker（外部程序，systemd 用户服务）时，读

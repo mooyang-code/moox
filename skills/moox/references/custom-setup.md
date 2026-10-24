@@ -82,6 +82,17 @@ through an independent trusted channel, run `setup trust-host`, and repeat
 validation. Never accept a fingerprint merely because the same SSH connection
 reported it.
 
+### macOS：初始化后让浏览器信任管理台证书
+
+`setup init` 末尾的“浏览器信任”只检查证书是否进了钥匙串，不保证浏览器真的信任它。用户在 Mac 上操作时，初始化完成后要**主动提醒用户**这一步（internal TLS 才需要）：
+
+```bash
+security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db ~/.moox/certs/moox-caddy-root-<控制机地址>.crt
+```
+
+macOS 会弹出系统授权框（密码或指纹），不需要在终端里输密码；也可以在“钥匙串访问”里双击该证书，把“使用此证书时”设为“始终信任”。用 `security verify-cert -c <证书文件>` 能确认是否生效。
+不要清理钥匙串里的这张证书（包括“清理旧 CA”时），否则浏览器访问管理台和登录接口会立刻报证书错误。用户不想改钥匙串时，改为在浏览器里对该站点点一次“继续访问”。
+
 ## Phase 3: Default Metadata Initialization
 
 After Storage is ready, initialize the checked-in A-share and crypto spaces,
