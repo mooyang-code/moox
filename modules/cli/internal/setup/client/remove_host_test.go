@@ -9,7 +9,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 )
 
-func TestRemoveRegisteredHostClearsDeploymentsDeletesHostAndSSHRecords(t *testing.T) {
+func TestRemoveRegisteredHostClearsDeploymentsAndDeletesHost(t *testing.T) {
 	var calls []string
 	gateway := topologyInvoker(func(_ context.Context, service, method string, req, rsp any) error {
 		calls = append(calls, service+"/"+method)
@@ -21,9 +21,6 @@ func TestRemoveRegisteredHostClearsDeploymentsDeletesHostAndSSHRecords(t *testin
 		case "trpc.moox.ops.SysDeploy/ListDeployments":
 			rsp.(*pb.ListDeploymentsRsp).RetInfo = &pb.RetInfo{}
 			rsp.(*pb.ListDeploymentsRsp).Deployments = []*pb.ComponentDeployment{{HostId: "compute-1", ComponentId: "trade"}, {HostId: "compute-1", ComponentId: "access"}}
-		case "trpc.moox.ops.Ssh/ListHosts":
-			rsp.(*pb.ListHostsRsp).RetInfo = &pb.RetInfo{}
-			rsp.(*pb.ListHostsRsp).Hosts = []*pb.SSHHost{{Id: 7, Name: "compute-1", Password: "recognizable-ssh-password"}, {Id: 8, Name: "compute-10"}}
 		case "trpc.moox.ops.SysDeploy/SyncHostDeployments":
 			request := req.(*pb.SyncHostDeploymentsReq)
 			require.Equal(t, "compute-1", request.GetHostId())
@@ -33,9 +30,6 @@ func TestRemoveRegisteredHostClearsDeploymentsDeletesHostAndSSHRecords(t *testin
 		case "trpc.moox.ops.SysDeploy/DeleteHost":
 			require.Equal(t, "compute-1", req.(*pb.DeleteDeploymentHostReq).GetHostId())
 			rsp.(*pb.DeleteDeploymentHostRsp).RetInfo = &pb.RetInfo{}
-		case "trpc.moox.ops.Ssh/DeleteHost":
-			require.Equal(t, int32(7), req.(*pb.DeleteHostReq).GetId(), "只删除同名记录")
-			rsp.(*pb.DeleteHostRsp).RetInfo = &pb.RetInfo{}
 		default:
 			t.Fatalf("unexpected call %s/%s", service, method)
 		}
@@ -45,13 +39,12 @@ func TestRemoveRegisteredHostClearsDeploymentsDeletesHostAndSSHRecords(t *testin
 	host, found, err := client.RegisteredHostByID(t.Context(), "compute-1")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, RegisteredHost{HostID: "compute-1", Address: "198.51.100.7", Components: []string{"access", "trade"}, SSHRecords: 1}, host)
+	require.Equal(t, RegisteredHost{HostID: "compute-1", Address: "198.51.100.7", Components: []string{"access", "trade"}}, host)
 
 	calls = nil
 	require.NoError(t, client.RemoveRegisteredHost(t.Context(), host))
 	require.Equal(t, []string{
 		"trpc.moox.ops.SysDeploy/ListHosts", "trpc.moox.ops.SysDeploy/SyncHostDeployments", "trpc.moox.ops.SysDeploy/DeleteHost",
-		"trpc.moox.ops.Ssh/ListHosts", "trpc.moox.ops.Ssh/DeleteHost",
 	}, calls)
 }
 

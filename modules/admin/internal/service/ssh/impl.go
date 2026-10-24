@@ -12,7 +12,6 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/idgen"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/conn"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/dao"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	"github.com/pkg/sftp"
 
 	"trpc.group/trpc-go/trpc-go/log"
@@ -20,22 +19,17 @@ import (
 
 // ServiceImpl SSH 服务实现
 type ServiceImpl struct {
-	hostDAO    *dao.SSHHostDAO
-	sessionDAO *dao.SSHSessionDAO
+	hosts      *dao.HostDAO
 	sessionMgr *conn.SessionManager
 }
 
 // NewService 创建 SSH 服务
-func NewService(hostDAO *dao.SSHHostDAO, sessionDAO *dao.SSHSessionDAO) *ServiceImpl {
+func NewService(hosts *dao.HostDAO) *ServiceImpl {
 	mgr := conn.NewSessionManager()
 	// 每 30 秒检查一次，超过 30 分钟不活跃的会话自动清理
 	mgr.StartCleanupTimer(30*time.Second, 30*time.Minute)
 
-	return &ServiceImpl{
-		hostDAO:    hostDAO,
-		sessionDAO: sessionDAO,
-		sessionMgr: mgr,
-	}
+	return &ServiceImpl{hosts: hosts, sessionMgr: mgr}
 }
 
 // GetSessionManager 获取会话管理器
@@ -43,43 +37,18 @@ func (s *ServiceImpl) GetSessionManager() *conn.SessionManager {
 	return s.sessionMgr
 }
 
-// ========== 主机配置 ==========
-
-func (s *ServiceImpl) CreateHost(ctx context.Context, host *model.SSHHost) error {
-	return s.hostDAO.Create(host)
-}
-
-func (s *ServiceImpl) UpdateHost(ctx context.Context, host *model.SSHHost) error {
-	return s.hostDAO.Update(host)
-}
-
-func (s *ServiceImpl) DeleteHost(ctx context.Context, id int) error {
-	return s.hostDAO.Delete(id)
-}
-
-func (s *ServiceImpl) GetHost(ctx context.Context, id int) (*model.SSHHost, error) {
-	return s.hostDAO.FindByID(id)
-}
-
-func (s *ServiceImpl) ListHosts(ctx context.Context, keyword string, offset, limit int) ([]model.SSHHost, int64, error) {
-	if keyword != "" {
-		return s.hostDAO.Search(keyword, offset, limit)
-	}
-	return s.hostDAO.List(offset, limit)
-}
-
 // ========== SSH 会话 ==========
 
-func (s *ServiceImpl) CreateSession(ctx context.Context, hostID int, clientIP, userID string) (string, error) {
-	host, err := s.hostDAO.FindByID(hostID)
+func (s *ServiceImpl) CreateSession(ctx context.Context, hostID, clientIP, userID string) (string, error) {
+	target, err := s.hosts.Target(ctx, hostID)
 	if err != nil {
-		return "", fmt.Errorf("主机不存在: %w", err)
+		return "", err
 	}
 
 	sessionID := idgen.GenerateID(16)
 	sshConn := &conn.SSHConn{
-		Host:      host,
-		HostKeys:  s.hostDAO,
+		Target:    target,
+		HostKeys:  s.hosts,
 		SessionID: sessionID,
 		UserID:    userID,
 	}
@@ -89,34 +58,20 @@ func (s *ServiceImpl) CreateSession(ctx context.Context, hostID int, clientIP, u
 	}
 
 	s.sessionMgr.Store(sessionID, sshConn)
-
-	// 记录会话日志
-	sessionLog := &model.SSHSession{
-		SessionID:   sessionID,
-		HostID:      host.ID,
-		HostName:    host.Name,
-		HostAddress: host.Address,
-		ClientIP:    clientIP,
-		Username:    host.User,
-		Status:      "connected",
-		ConnectTime: time.Now(),
-	}
-	if err := s.sessionDAO.Create(sessionLog); err != nil {
-		log.WarnContextf(ctx, "[SSH Service] 记录会话日志失败: %v", err)
-	}
-
-	log.InfoContextf(ctx, "[SSH Service] 创建会话成功: sessionID=%s, host=%s:%d", sessionID, host.Address, host.Port)
+	log.InfoContextf(ctx, "[SSH Service] 创建会话成功: sessionID=%s, host=%s", sessionID, target.HostID)
 	return sessionID, nil
 }
 
 func (s *ServiceImpl) DisconnectSession(ctx context.Context, sessionID string) error {
 	s.sessionMgr.Delete(sessionID)
-	// 更新会话日志
-	if err := s.sessionDAO.UpdateStatus(sessionID, "disconnected", ""); err != nil {
-		log.WarnContextf(ctx, "[SSH Service] 更新会话日志失败: %v", err)
-	}
 	log.InfoContextf(ctx, "[SSH Service] 断开会话: %s", sessionID)
 	return nil
+}
+
+func (s *ServiceImpl) CloseHostSessions(hostID string) {
+	if closed := s.sessionMgr.DeleteByHost(hostID); closed > 0 {
+		log.Infof("[SSH Service] 主机 %s 的连接信息已变化，关闭 %d 个在线会话", hostID, closed)
+	}
 }
 
 func (s *ServiceImpl) ResizeWindow(ctx context.Context, sessionID string, w, h int) error {

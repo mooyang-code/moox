@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/gorilla/mux"
@@ -171,16 +169,7 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 			r = r.WithContext(ctx)
 			trpc.SetMetaData(ctx, authmodel.CtxUserID, []byte(claims.UserID))
 			trpc.SetMetaData(ctx, authmodel.CtxUsername, []byte(claims.Username))
-			trpc.SetMetaData(ctx, authmodel.CtxUserRole, []byte(fmt.Sprintf("%d", claims.Role)))
 			trpc.SetMetaData(ctx, authmodel.CtxSessionID, []byte(claims.SessionID))
-		}
-	}
-	if serviceID == "storage" && method == "RequestViewRebuild" {
-		role, err := strconv.ParseInt(string(trpc.GetMetaData(ctx, authmodel.CtxUserRole)), 10, 32)
-		if err != nil || role < 2 {
-			log.WarnContextf(ctx, "manual view rebuild denied: administrator role required")
-			http.Error(w, "administrator role required", http.StatusForbidden)
-			return
 		}
 	}
 	// 提取HTTP头部信息
@@ -190,13 +179,10 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 	if uid, ok := ctx.Value(authmodel.CtxUserID).(string); ok && uid != "" {
 		headers["user_id"] = uid
 	}
-	if role := string(trpc.GetMetaData(ctx, authmodel.CtxUserRole)); role != "" {
-		headers["user_role"] = role
-	}
 
 	ctx = spacecontext.InjectFromHeaders(ctx, headers)
 	ctx = gatewayclient.WithCallMetadata(ctx, gatewayclient.CallMetadata{
-		SpaceID: headers["space_id"], UserID: headers["user_id"], UserRole: headers["user_role"], TraceID: headers["trace_id"],
+		SpaceID: headers["space_id"], UserID: headers["user_id"], TraceID: headers["trace_id"],
 	})
 	if rawRoute {
 		if !rawAndServe(ctx, w, r, serviceID, method, headers) {
@@ -212,8 +198,7 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		writeRequestBodyError(w, err)
 		return
 	}
-	readOnly := hr.catalog.ReadOnly(spec.Path, method)
-	authorizedSpace, injectSpace, status, err := hr.authorizeRequest(ctx, r, serviceID, method, readOnly, body)
+	authorizedSpace, injectSpace, status, err := hr.authorizeRequest(ctx, r, serviceID, method, body)
 	if err != nil {
 		log.WarnContextf(ctx, "console request denied service=%s method=%s: %v", serviceID, method, err)
 		if status == http.StatusBadRequest {
@@ -228,7 +213,7 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		headers["space_id"] = authorizedSpace
 		ctx = spacecontext.InjectFromHeaders(ctx, headers)
 		ctx = gatewayclient.WithCallMetadata(ctx, gatewayclient.CallMetadata{
-			SpaceID: authorizedSpace, UserID: headers["user_id"], UserRole: headers["user_role"], TraceID: headers["trace_id"],
+			SpaceID: authorizedSpace, UserID: headers["user_id"], TraceID: headers["trace_id"],
 		})
 	}
 	var target RPCForwarder = hr.gateway
@@ -271,30 +256,21 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 	writeForwardResponse(w, response, headers)
 }
 
-// authorizeRequest 在转发前完成用户级授权，返回最终授权的空间（可能来自请求体）：
-// 全局状态的写操作与 Storage 全局方法只允许全局管理员，空间内服务按空间成员资格与只读/写区分授权。
-func (hr *HTTPRouter) authorizeRequest(ctx context.Context, r *http.Request, serviceID, method string, readOnly bool, body []byte) (string, bool, int, error) {
-	role, _ := strconv.ParseInt(string(trpc.GetMetaData(ctx, authmodel.CtxUserRole)), 10, 32)
-	isAdmin := role >= globalAdminRole
-	if (adminOnlyService(serviceID) || adminOnlyMethod(serviceID, method) || adminOnlyWriteService(serviceID) && !readOnly) && !isAdmin {
-		return "", false, http.StatusForbidden, errors.New("administrator role required")
-	}
+// authorizeRequest 在转发前完成空间授权，返回最终授权的空间（可能来自请求体）。
+// 系统只有一个超级用户：全局方法不做空间授权，空间内服务只核对空间存在且可用。
+func (hr *HTTPRouter) authorizeRequest(ctx context.Context, r *http.Request, serviceID, method string, body []byte) (string, bool, int, error) {
 	if serviceID == "storage" && storageGlobalMethods[method] {
-		if !isAdmin {
-			return "", false, http.StatusForbidden, errors.New("administrator role required")
-		}
 		return "", false, 0, nil
 	}
-	scoped := isSpaceScopedService(serviceID) || serviceID == "space" && method == "ListSpaceMembers"
-	if !scoped {
+	if !isSpaceScopedService(serviceID) {
 		return "", false, 0, nil
 	}
 	var spaceID string
 	var inject bool
 	var err error
 	switch {
-	case serviceID == "storage" || serviceID == "space":
-		spaceID, inject, err = requestBodySpace(r.Header.Get("X-Space-Id"), body, serviceID == "storage" && storageTopLevelSpaceMethods[method])
+	case serviceID == "storage":
+		spaceID, inject, err = requestBodySpace(r.Header.Get("X-Space-Id"), body, storageTopLevelSpaceMethods[method])
 	default:
 		spaceID, err = effectiveSpaceID(r.Header.Get("X-Space-Id"), body)
 	}
@@ -305,21 +281,13 @@ func (hr *HTTPRouter) authorizeRequest(ctx context.Context, r *http.Request, ser
 		if requiresSpaceHeader(serviceID) {
 			return "", false, http.StatusForbidden, errors.New("space_id is required")
 		}
-		// Factor 的无空间请求属于全局运维接口。
-		if !isAdmin {
-			return "", false, http.StatusForbidden, errors.New("administrator role required for requests without a space")
-		}
+		// Storage、Factor 的无空间请求属于全局运维接口。
 		return "", false, 0, nil
 	}
 	if hr.spaceAuthorizer == nil {
 		return "", false, http.StatusForbidden, errors.New("space authorizer is unavailable")
 	}
-	userID, _ := ctx.Value(authmodel.CtxUserID).(string)
-	userID = strings.TrimSpace(userID)
-	if userID == "" {
-		return "", false, http.StatusForbidden, errors.New("authenticated user is required")
-	}
-	if err := hr.spaceAuthorizer.AuthorizeSpaceRequest(ctx, userID, spaceID, !readOnly, int32(role)); err != nil {
+	if err := hr.spaceAuthorizer.AuthorizeSpaceRequest(ctx, spaceID); err != nil {
 		return "", false, http.StatusForbidden, err
 	}
 	return spaceID, inject, 0, nil

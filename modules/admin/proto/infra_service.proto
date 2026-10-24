@@ -13,39 +13,17 @@ option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;a
 // code=SUCCESS(0) 表示成功，非 0 均为错误码；网关直接返回 PB JSON 不加工。
 //
 // 未鉴权接口（auth 的 GetLoginSalt/Login）由网关 no_auth_methods 配置放行；
-// 其余接口由网关 authorize filter 校验 JWT 并将 user_id/username/role 注入 ctx metadata。
+// 其余接口由网关 authorize filter 校验 JWT 并将 user_id/username 注入 ctx metadata。
 
 // ========== 认证（Auth）==========
 
-// UserStatus 用户状态。
-enum UserStatus {
-  USER_STATUS_INACTIVE = 0;
-  USER_STATUS_ACTIVE = 1;
-  USER_STATUS_SUSPENDED = 2;
-  USER_STATUS_BANNED = 3;
-}
-
-// UserRole 用户角色。
-enum UserRole {
-  USER_ROLE_GUEST = 0;
-  USER_ROLE_USER = 1;
-  USER_ROLE_ADMIN = 2;
-  USER_ROLE_SUPER_ADMIN = 3;
-}
-
-// UserInfo 用户信息。
+// UserInfo 用户信息。系统只有一个超级用户，登录即拥有全部权限，没有角色与状态。
 message UserInfo {
   string user_id = 1;
   string username = 2;
-  string nickname = 3;
-  string email = 4;
-  string phone = 5;
-  string avatar = 6;
-  UserStatus status = 7;
-  UserRole role = 8;
-  int64 created_at = 9;     // 创建时间戳
-  int64 last_login_at = 10; // 最后登录时间戳
-  string last_login_ip = 11;
+  int64 created_at = 3;     // 创建时间戳
+  int64 last_login_at = 4;  // 最后登录时间戳
+  string last_login_ip = 5;
 }
 
 // ========== 登录盐值 ==========
@@ -100,22 +78,9 @@ message IssueRawSessionTicketRsp {
 
 // ========== 用户信息 ==========
 
-message GetUserInfoReq {
-  string user_id = 1;
-}
+message GetUserInfoReq {}
 
 message GetUserInfoRsp {
-  common.RetInfo ret_info = 1;
-  UserInfo user_info = 2;
-}
-
-message UpdateUserInfoReq {
-  string nick = 1;    // 昵称
-  string email = 2;
-  string avatar = 3;  // 头像URL
-}
-
-message UpdateUserInfoRsp {
   common.RetInfo ret_info = 1;
   UserInfo user_info = 2;
 }
@@ -131,6 +96,4 @@ service Auth {
   rpc IssueRawSessionTicket(IssueRawSessionTicketReq) returns (IssueRawSessionTicketRsp);
   // 获取用户信息
   rpc GetUserInfo(GetUserInfoReq) returns (GetUserInfoRsp);
-  // 更新用户信息
-  rpc UpdateUserInfo(UpdateUserInfoReq) returns (UpdateUserInfoRsp);
 }

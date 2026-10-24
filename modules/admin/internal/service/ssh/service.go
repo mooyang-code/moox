@@ -5,22 +5,16 @@ import (
 	"mime/multipart"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/conn"
-	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	"github.com/pkg/sftp"
 )
 
 // Service SSH 服务接口
 type Service interface {
-	// 主机配置
-	CreateHost(ctx context.Context, host *model.SSHHost) error
-	UpdateHost(ctx context.Context, host *model.SSHHost) error
-	DeleteHost(ctx context.Context, id int) error
-	GetHost(ctx context.Context, id int) (*model.SSHHost, error)
-	ListHosts(ctx context.Context, keyword string, offset, limit int) ([]model.SSHHost, int64, error)
-
-	// SSH 会话
-	CreateSession(ctx context.Context, hostID int, clientIP, userID string) (string, error)
+	// SSH 会话。主机来自登记表 t_hosts，终端与文件只能连接登记了 SSH 信息的主机。
+	CreateSession(ctx context.Context, hostID, clientIP, userID string) (string, error)
 	DisconnectSession(ctx context.Context, sessionID string) error
+	// CloseHostSessions 关闭某台主机上全部在线会话（主机连接信息变化或被删除后调用）。
+	CloseHostSessions(hostID string)
 	ResizeWindow(ctx context.Context, sessionID string, w, h int) error
 	GetSessionConn(sessionID string) (*conn.SSHConn, bool)
 	SessionBelongsToUser(sessionID, userID string) bool

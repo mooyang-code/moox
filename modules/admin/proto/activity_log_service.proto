@@ -46,6 +46,7 @@ message ActivityLogItem {
 }
 
 message ListActivityLogsReq {
+  // space_id 与 global 二选一：global 为 true 时只返回不属于任何空间的全局事件（如登录记录）。
   string space_id = 1;
   string source = 2;
   string category = 3;
@@ -54,6 +55,7 @@ message ListActivityLogsReq {
   string since = 5;
   string until = 6;
   common.Page page = 7;
+  bool global = 8;
 }
 
 message ListActivityLogsRsp {

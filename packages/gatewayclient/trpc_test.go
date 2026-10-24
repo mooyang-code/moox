@@ -71,7 +71,7 @@ func startWireServer(t *testing.T, listener net.Listener, credentials gatewayaut
 			}
 			if len(expected) > 0 {
 				want := expected[0]
-				got := CallMetadata{SpaceID: headers.Get("X-Space-Id"), UserID: headers.Get("X-User-Id"), UserRole: headers.Get("X-User-Role"), TraceID: headers.Get("X-Trace-Id")}
+				got := CallMetadata{SpaceID: headers.Get("X-Space-Id"), UserID: headers.Get("X-User-Id"), TraceID: headers.Get("X-Trace-Id")}
 				if want != got {
 					t.Errorf("wire metadata = %+v, want %+v", got, want)
 				}
@@ -103,7 +103,7 @@ func TestRealTRPCForwardsTrustedMetadataWithoutChangingSignedBody(t *testing.T) 
 	source := &sourceStub{directory: testDirectory(t, "storage")}
 	config := tunnelConfig(source)
 	config.Tunnels = tunnelFunc(func(context.Context, string) (string, error) { return listener.Addr().String(), nil })
-	metadata := CallMetadata{SpaceID: "space-1", UserID: "user-1", UserRole: "2", TraceID: "trace-1"}
+	metadata := CallMetadata{SpaceID: "space-1", UserID: "user-1", TraceID: "trace-1"}
 	startWireServer(t, listener, config.Credentials, "storage", metadata)
 	c := newTestClient(t, config)
 	body := []byte(" {\n\"data\": \"exact bytes\", \"number\": 1e+03 }\n")

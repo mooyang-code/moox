@@ -32,10 +32,10 @@ func TestSetupCommandContractAndSecrecy(t *testing.T) {
 		},
 		trustHost: func(context.Context, *setupconfig.Snapshot, string, string) error { return nil },
 		apply: func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error) {
-			return setupclient.ApplyResult{Action: "created", Users: 1, Secrets: 1, Hosts: 2}, nil
+			return setupclient.ApplyResult{Action: "created", Users: 1, Secrets: 1}, nil
 		},
 		status: func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error) {
-			return setupclient.StatusResult{State: "completed", Users: 1, Secrets: 1, Hosts: 2}, nil
+			return setupclient.StatusResult{State: "completed", Users: 1, Secrets: 1}, nil
 		},
 		login: func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error) {
 			return setupclient.LoginResult{LoginAPI: "valid"}, nil

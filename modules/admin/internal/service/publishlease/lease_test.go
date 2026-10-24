@@ -227,7 +227,7 @@ type rejectingLeaseAuthorizer struct {
 	err error
 }
 
-func (a rejectingLeaseAuthorizer) AuthorizeSpaceRequest(context.Context, string, string, bool, int32) error {
+func (a rejectingLeaseAuthorizer) AuthorizeSpaceRequest(context.Context, string) error {
 	return a.err
 }
 
@@ -237,10 +237,9 @@ func TestLeaseServiceRequiresSpaceAuthorizationForRenewAndRelease(t *testing.T) 
 	lease, err := dao.Acquire(context.Background(), "crypto", "publisher", now)
 	require.NoError(t, err)
 
-	service := &Service{dao: dao, authorizer: rejectingLeaseAuthorizer{err: errors.New("member cannot publish")}}
+	service := &Service{dao: dao, authorizer: rejectingLeaseAuthorizer{err: errors.New("space unavailable")}}
 	ctx := trpc.BackgroundContext()
-	trpc.SetMetaData(ctx, model.CtxUserID, []byte("member"))
-	trpc.SetMetaData(ctx, model.CtxUserRole, []byte("1"))
+	trpc.SetMetaData(ctx, model.CtxUserID, []byte("admin"))
 
 	renewed, err := service.RenewCollectorPublishLease(ctx, &pb.RenewCollectorPublishLeaseReq{
 		SpaceId: lease.SpaceID, LeaseId: lease.LeaseID, FencingToken: lease.FencingToken,

@@ -173,7 +173,7 @@ func TestSetupInitRunsStagesInOrder(t *testing.T) {
 		"firewall":{"status":"ready","targets":3,"rules":0,"skipped":0,"already_open":0,"created":0},
 		"business_spaces":1,
 		"business_space_ids":["crypto"],
-		"admin":{"action":"created","users":0,"secrets":0,"hosts":0,"spaces":1,"spaces_created":1,"spaces_unchanged":0},
+		"admin":{"action":"created","users":0,"secrets":0,"spaces":1,"spaces_created":1,"spaces_unchanged":0},
 		"cloud_accounts":{"enabled":true,"planned":1,"registered":1,"unchanged":0},
 		"admin_state":"completed",
 		"login_api":"valid",

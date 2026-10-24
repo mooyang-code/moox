@@ -420,8 +420,7 @@ func (c *Client) Forward(ctx context.Context, service, method string, serializat
 		}
 		metadata := CallMetadataFromContext(ctx)
 		for name, value := range map[string]string{
-			"X-Space-Id": metadata.SpaceID, "X-User-Id": metadata.UserID,
-			"X-User-Role": metadata.UserRole, "X-Trace-Id": metadata.TraceID,
+			"X-Space-Id": metadata.SpaceID, "X-User-Id": metadata.UserID, "X-Trace-Id": metadata.TraceID,
 		} {
 			if value != "" {
 				headers.Set(name, value)

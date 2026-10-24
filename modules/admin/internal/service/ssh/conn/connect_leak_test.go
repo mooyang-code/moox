@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
@@ -44,7 +45,7 @@ func TestConnectClosesSSHConnectionWhenSessionIsRejected(t *testing.T) {
 	}()
 	address := listener.Addr().(*net.TCPAddr)
 	conn := &SSHConn{
-		Host:     &model.SSHHost{ID: 1, Address: "127.0.0.1", Port: address.Port, User: "u", Password: "p", NetType: "tcp4"},
+		Target:   model.Target{HostID: "storage", Address: "127.0.0.1", Port: address.Port, User: "u", Credential: secretmodel.SSHCredential{Password: "p"}},
 		HostKeys: &memoryPins{pins: map[string]string{}},
 	}
 	require.Error(t, conn.Connect("127.0.0.1"))

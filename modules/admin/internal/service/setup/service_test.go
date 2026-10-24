@@ -11,7 +11,6 @@ import (
 	authmodel "github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	adminspace "github.com/mooyang-code/moox/modules/admin/internal/service/space"
-	sshmodel "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/model"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
 	mooxsecurity "github.com/mooyang-code/moox/packages/security"
 	"github.com/stretchr/testify/assert"
@@ -34,8 +33,6 @@ func testManifest() Manifest {
 	return Manifest{
 		Admin:        Admin{Username: "admin", Password: "admin-password"},
 		TencentCloud: TencentCloud{SecretID: "secret-id", SecretKey: "secret-key"},
-		ControlHost:  Host{Name: "control", Address: "192.0.2.10", Port: 22, Username: "ubuntu", Password: "control-password"},
-		OtherHosts:   []Host{{Name: "compute-1", Address: "192.0.2.11", Port: 22, Username: "ubuntu", Password: "compute-password"}},
 	}
 }
 
@@ -98,8 +95,8 @@ func TestApplyRollsBackSpaceOnLaterFailure(t *testing.T) {
 	db := setupDB(t)
 	service := NewService(db, testEncryptionKey)
 	service.writeHook = func(stage string) error {
-		if stage == "host:control" {
-			return errors.New("injected host failure")
+		if stage == "space:stockcn" {
+			return errors.New("injected space failure")
 		}
 		return nil
 	}
@@ -135,12 +132,9 @@ func TestApplyCreatesAllRecordsAndInspectCompletes(t *testing.T) {
 	assert.Equal(t, "created", result.Action)
 	assert.Equal(t, 1, result.Users)
 	assert.Equal(t, 1, result.Secrets)
-	assert.Equal(t, 2, result.Hosts)
 
 	var user authmodel.User
 	require.NoError(t, db.Where("c_username = ?", manifest.Admin.Username).First(&user).Error)
-	assert.Equal(t, int32(3), user.Role)
-	assert.Equal(t, int32(1), user.Status)
 	assert.True(t, mooxsecurity.VerifyPassword(manifest.Admin.Password, user.PasswordHash))
 
 	var secret secretmodel.Secret
@@ -152,14 +146,6 @@ func TestApplyCreatesAllRecordsAndInspectCompletes(t *testing.T) {
 	secretValue, err := mooxsecurity.Decrypt(secret.SecretValue, testEncryptionKey)
 	require.NoError(t, err)
 	assert.Equal(t, manifest.TencentCloud.SecretKey, secretValue)
-
-	var hosts []sshmodel.SSHHost
-	require.NoError(t, db.Order("c_address").Find(&hosts).Error)
-	require.Len(t, hosts, 2)
-	assert.NotEqual(t, manifest.ControlHost.Password, hosts[0].Password)
-	controlPassword, err := mooxsecurity.Decrypt(hosts[0].Password, testEncryptionKey)
-	require.NoError(t, err)
-	assert.Equal(t, manifest.ControlHost.Password, controlPassword)
 
 	status, err := service.Inspect(context.Background(), manifest)
 	require.NoError(t, err)
@@ -224,7 +210,7 @@ func TestApplyCompletesMatchingPartialState(t *testing.T) {
 	hash, err := mooxsecurity.HashPassword(manifest.Admin.Password)
 	require.NoError(t, err)
 	require.NoError(t, db.Create(&authmodel.User{
-		UserID: "existing-user", Username: manifest.Admin.Username, PasswordHash: hash, Role: 3, Status: 1,
+		UserID: "existing-user", Username: manifest.Admin.Username, PasswordHash: hash,
 	}).Error)
 
 	result, err := NewService(db, testEncryptionKey).Apply(context.Background(), manifest)
@@ -237,9 +223,6 @@ func TestApplyCompletesMatchingPartialState(t *testing.T) {
 	var secrets int64
 	require.NoError(t, db.Model(&secretmodel.Secret{}).Count(&secrets).Error)
 	assert.Equal(t, int64(1), secrets)
-	var hosts int64
-	require.NoError(t, db.Model(&sshmodel.SSHHost{}).Count(&hosts).Error)
-	assert.Equal(t, int64(2), hosts)
 }
 
 func TestApplyRejectsDifferentInitialAdministrator(t *testing.T) {
@@ -247,7 +230,7 @@ func TestApplyRejectsDifferentInitialAdministrator(t *testing.T) {
 	hash, err := mooxsecurity.HashPassword("other-password")
 	require.NoError(t, err)
 	require.NoError(t, db.Create(&authmodel.User{
-		UserID: "other-user", Username: "other-admin", PasswordHash: hash, Role: 3, Status: 1,
+		UserID: "other-user", Username: "other-admin", PasswordHash: hash,
 	}).Error)
 
 	_, err = NewService(db, testEncryptionKey).Apply(context.Background(), testManifest())
@@ -275,7 +258,7 @@ func TestApplyConflictRollsBackEarlierWrites(t *testing.T) {
 }
 
 func TestApplyInjectedFailureRollsBackAllWrites(t *testing.T) {
-	for _, stage := range []string{"admin", "secret", "host:control", "host:compute-1"} {
+	for _, stage := range []string{"admin", "secret", "space:stockcn"} {
 		t.Run(stage, func(t *testing.T) {
 			db := setupDB(t)
 			service := NewService(db, testEncryptionKey)
@@ -286,12 +269,12 @@ func TestApplyInjectedFailureRollsBackAllWrites(t *testing.T) {
 				return nil
 			}
 
-			_, err := service.Apply(context.Background(), testManifest())
+			_, err := service.Apply(context.Background(), setupSpaceManifest())
 			require.ErrorIs(t, err, ErrStorage)
 			for name, model := range map[string]any{
 				"users":   &authmodel.User{},
 				"secrets": &secretmodel.Secret{},
-				"hosts":   &sshmodel.SSHHost{},
+				"spaces":  &adminspace.Space{},
 			} {
 				var count int64
 				require.NoError(t, db.Model(model).Count(&count).Error)
@@ -306,7 +289,7 @@ func TestInspectReportsIncompleteWithoutWriting(t *testing.T) {
 	status, err := NewService(db, testEncryptionKey).Inspect(context.Background(), testManifest())
 	require.NoError(t, err)
 	assert.Equal(t, "incomplete", status.State)
-	assert.Equal(t, 4, status.Missing)
+	assert.Equal(t, 2, status.Missing)
 
 	var users int64
 	require.NoError(t, db.Model(&authmodel.User{}).Count(&users).Error)

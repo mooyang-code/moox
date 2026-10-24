@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
-	"github.com/mooyang-code/moox/modules/admin/internal/softdelete"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -44,7 +43,7 @@ func (d *UserDAO) CreateUser(ctx context.Context, user *model.User) error {
 func (d *UserDAO) GetUserByID(ctx context.Context, userID string) (*model.User, error) {
 	var user model.User
 	err := d.db.WithContext(ctx).
-		Where("c_user_id = ? AND c_is_deleted = ?", userID, softdelete.IsDeletedFalse).
+		Where("c_user_id = ?", userID).
 		First(&user).Error
 
 	if err != nil {
@@ -58,7 +57,7 @@ func (d *UserDAO) GetUserByID(ctx context.Context, userID string) (*model.User, 
 func (d *UserDAO) GetUserByUsername(ctx context.Context, username string) (*model.User, error) {
 	var user model.User
 	if err := d.db.WithContext(ctx).
-		Where("c_username = ? AND c_is_deleted = ?", username, softdelete.IsDeletedFalse).
+		Where("c_username = ?", username).
 		First(&user).Error; err != nil {
 		return nil, err
 	}
@@ -71,21 +70,20 @@ func (d *UserDAO) UpdateUser(ctx context.Context, userID string, updates map[str
 
 	return d.db.WithContext(ctx).
 		Model(&model.User{}).
-		Where("c_user_id = ? AND c_is_deleted = ?", userID, softdelete.IsDeletedFalse).
+		Where("c_user_id = ?", userID).
 		Updates(updates).Error
 }
 
 // UpdateUserPassword 更新用户密码
 func (d *UserDAO) UpdateUserPassword(ctx context.Context, userID, passwordHash string) error {
 	updates := map[string]interface{}{
-		"c_password_hash":        passwordHash,
-		"c_last_password_change": time.Now(),
-		"c_mtime":                time.Now(),
+		"c_password_hash": passwordHash,
+		"c_mtime":         time.Now(),
 	}
 
 	return d.db.WithContext(ctx).
 		Model(&model.User{}).
-		Where("c_user_id = ? AND c_is_deleted = ?", userID, softdelete.IsDeletedFalse).
+		Where("c_user_id = ?", userID).
 		Updates(updates).Error
 }
 
@@ -100,17 +98,8 @@ func (d *UserDAO) UpdateUserLoginInfo(ctx context.Context, userID, clientIP stri
 
 	return d.db.WithContext(ctx).
 		Model(&model.User{}).
-		Where("c_user_id = ? AND c_is_deleted = ?", userID, softdelete.IsDeletedFalse).
+		Where("c_user_id = ?", userID).
 		Updates(updates).Error
-}
-
-// ===== 登录历史操作 =====
-
-// CreateLoginHistory 创建登录历史记录
-func (d *UserDAO) CreateLoginHistory(ctx context.Context, history *model.LoginHistory) error {
-	history.CreatedAt = time.Now()
-
-	return d.db.WithContext(ctx).Create(history).Error
 }
 
 // ===== 缓存操作 =====

@@ -75,23 +75,6 @@ func TestUserDAO_UpdateUserLoginInfo_ValidUser_ShouldUpdate(t *testing.T) {
 	assert.NotNil(t, got.LastLoginAt)
 }
 
-func TestUserDAO_CreateLoginHistory_ValidRecord_ShouldPersist(t *testing.T) {
-	db, cache := setupUserTestDB(t)
-	d := NewUserDAO(db, cache)
-
-	user := &model.User{Username: "alice", PasswordHash: "h"}
-	require.NoError(t, d.CreateUser(context.Background(), user))
-
-	history := &model.LoginHistory{
-		UserID:      user.UserID,
-		Username:    "alice",
-		ClientIP:    "127.0.0.1",
-		LoginResult: model.LoginResultSuccess,
-	}
-	require.NoError(t, d.CreateLoginHistory(context.Background(), history))
-	assert.False(t, history.CreatedAt.IsZero())
-}
-
 func TestUserDAO_SetGetLoginSalt_RoundTrip_ShouldWork(t *testing.T) {
 	db, cache := setupUserTestDB(t)
 	d := NewUserDAO(db, cache)

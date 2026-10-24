@@ -181,7 +181,6 @@ components:
           - Logout
           - IssueRawSessionTicket
           - GetUserInfo
-          - UpdateUserInfo
         read_only_methods:
           - GetLoginSalt
           - GetUserInfo
@@ -192,7 +191,6 @@ components:
               - Logout
               - IssueRawSessionTicket
               - GetUserInfo
-              - UpdateUserInfo
             callers:
               - console
       - path: trpc.moox.ops.Ssh
@@ -201,27 +199,14 @@ components:
         timeout_ms: 5000
         max_body_bytes: 4194304
         methods:
-          - ListHosts
-          - CreateHost
-          - UpdateHost
-          - DeleteHost
-          - GetHost
           - CreateSession
           - DisconnectSession
           - ResizeWindow
           - SftpList
           - SftpMkdir
           - SftpDelete
-        read_only_methods:
-          - ListHosts
-          - GetHost
         acl:
           - methods:
-              - ListHosts
-              - CreateHost
-              - UpdateHost
-              - DeleteHost
-              - GetHost
               - CreateSession
               - DisconnectSession
               - ResizeWindow
@@ -230,7 +215,6 @@ components:
               - SftpDelete
             callers:
               - console
-              - moox-cli
       - path: trpc.moox.admin.SpaceMgr
         port: 11107
         console_name: space
@@ -241,17 +225,14 @@ components:
           - UpdateSpace
           - DeleteSpace
           - ListSpaces
-          - ListSpaceMembers
         read_only_methods:
           - ListSpaces
-          - ListSpaceMembers
         acl:
           - methods:
               - CreateSpace
               - UpdateSpace
               - DeleteSpace
               - ListSpaces
-              - ListSpaceMembers
             callers:
               - console
               - moox-cli

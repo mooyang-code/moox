@@ -6,10 +6,9 @@ import "context"
 // request body. Callers must authenticate the user and authorize the space
 // before setting it. Gateway signing credentials cannot be overridden here.
 type CallMetadata struct {
-	SpaceID  string
-	UserID   string
-	UserRole string
-	TraceID  string
+	SpaceID string
+	UserID  string
+	TraceID string
 }
 
 type callMetadataKey struct{}

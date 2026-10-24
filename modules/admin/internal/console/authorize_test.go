@@ -43,7 +43,6 @@ func TestValidateAccessToken_ValidToken_ShouldReturnClaims(t *testing.T) {
 	token, err := mooxsecurity.SignToken(map[string]any{
 		"user_id":    "user-1",
 		"username":   "admin",
-		"role":       int32(pb.UserRole_USER_ROLE_ADMIN),
 		"token_type": "access",
 		"sid":        "session-1",
 	}, secret, "moox-admin", time.Hour)
@@ -61,7 +60,6 @@ func TestValidateAccessToken_WrongIssuer_ShouldReject(t *testing.T) {
 	token, err := mooxsecurity.SignToken(map[string]any{
 		"user_id":    "user-1",
 		"username":   "admin",
-		"role":       int32(pb.UserRole_USER_ROLE_ADMIN),
 		"token_type": "access",
 	}, secret, "other-service", time.Hour)
 	require.NoError(t, err)

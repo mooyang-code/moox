@@ -20,6 +20,11 @@ message DeploymentHost {
   string updated_at = 8;
   // direct 或 outbound（只能出站，经 control 网关反向连接中转）。
   string reachability = 9;
+  // 控制台展示用的中文名，如“控制机”。
+  string label = 10;
+  // 控制台终端使用的 SSH 端口与用户；端口为 0 表示控制台不能 SSH 到这台主机。凭据与指纹不外传。
+  int32 ssh_port = 11;
+  string ssh_user = 12;
 }
 
 message ComponentDeployment {
@@ -128,6 +133,14 @@ message SyncHostDeploymentsReq {
   repeated string component_ids = 6;
   // 空或 direct 表示可直达，outbound 表示只能出站。
   string reachability = 7;
+  string label = 8;
+  // SSH 登录信息：ssh_port 为 0 表示控制台不能 SSH（同时清除已存的凭据）。
+  // ssh_auth_type 为 password 或 private_key，ssh_secret 是对应的密码或私钥；ssh_passphrase 是私钥口令。
+  int32 ssh_port = 9;
+  string ssh_user = 10;
+  string ssh_auth_type = 11;
+  string ssh_secret = 12;
+  string ssh_passphrase = 13;
 }
 message SyncHostDeploymentsRsp {
   trpc.moox.common.RetInfo ret_info = 1;

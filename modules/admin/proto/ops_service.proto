@@ -6,7 +6,7 @@ import "moox_common.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
-// Ops 域合并 SSH 管理（Ssh）与监控（Monitor）。
+// Ops 域合并 SSH 终端与文件（Ssh）与监控（Monitor）。主机的 SSH 登录信息随主机登记，只能由 moox-cli 维护。
 // 由主机网关转发原生 tRPC；控制台通过生成的 handler 在 Admin 进程内调用。
 //
 // 响应设计参考 storage/access：每个响应首字段 common.RetInfo（code/msg），
@@ -16,84 +16,11 @@ option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;a
 // 注意：WebSocket 终端、SFTP 流式上传/下载（multipart）不经本 RPC 服务，
 // 由统一网关 rawhandler 分派（session_id 鉴权），见 ssh/rpc/rawhandler。
 
-// ========== SSH 主机配置（Ssh）==========
-
-// SSHHost 主机配置（对应 t_ssh_host 表，敏感字段由 DAO 加解密）。
-message SSHHost {
-  int32 id = 1;
-  string name = 2;
-  string address = 3;
-  int32 port = 4;
-  string user = 5;
-  string password = 6;       // 敏感，DAO 层加解密
-  string auth_type = 7;      // pwd | cert
-  string net_type = 8;       // tcp4 | tcp6
-  string cert_data = 9;
-  string cert_pwd = 10;
-  int32 font_size = 11;
-  string background = 12;
-  string foreground = 13;
-  string cursor_color = 14;
-  string font_family = 15;
-  string cursor_style = 16;  // block | underline | bar
-  string shell = 17;
-  string pty_type = 18;
-  string init_cmd = 19;
-  string creator = 20;
-  string create_time = 21;   // 格式化时间字符串
-  string modify_time = 22;
-}
-
-message ListHostsReq {
-  string keyword = 1;
-  int32 offset = 2;
-  int32 limit = 3;
-}
-
-message ListHostsRsp {
-  common.RetInfo ret_info = 1;
-  repeated SSHHost hosts = 2;
-  int64 total = 3;
-}
-
-message CreateHostReq {
-  SSHHost host = 1;
-}
-
-message CreateHostRsp {
-  common.RetInfo ret_info = 1;
-  int32 id = 2;
-}
-
-message UpdateHostReq {
-  SSHHost host = 1;
-}
-
-message UpdateHostRsp {
-  common.RetInfo ret_info = 1;
-}
-
-message DeleteHostReq {
-  int32 id = 1;
-}
-
-message DeleteHostRsp {
-  common.RetInfo ret_info = 1;
-}
-
-message GetHostReq {
-  int32 id = 1;
-}
-
-message GetHostRsp {
-  common.RetInfo ret_info = 1;
-  SSHHost host = 2;
-}
-
 // ========== SSH 会话 ==========
 
 message CreateSessionReq {
-  int32 host_id = 1;
+  // 登记主机的 ID（t_hosts.c_host_id）。
+  string host_id = 1;
 }
 
 message CreateSessionRsp {
@@ -172,13 +99,6 @@ message SftpDeleteRsp {
 // ========== Services ==========
 
 service Ssh {
-  // 主机配置
-  rpc ListHosts(ListHostsReq) returns (ListHostsRsp);
-  rpc CreateHost(CreateHostReq) returns (CreateHostRsp);
-  rpc UpdateHost(UpdateHostReq) returns (UpdateHostRsp);
-  rpc DeleteHost(DeleteHostReq) returns (DeleteHostRsp);
-  rpc GetHost(GetHostReq) returns (GetHostRsp);
-
   // SSH 会话
   rpc CreateSession(CreateSessionReq) returns (CreateSessionRsp);
   rpc DisconnectSession(DisconnectSessionReq) returns (DisconnectSessionRsp);

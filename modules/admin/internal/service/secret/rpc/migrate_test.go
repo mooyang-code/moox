@@ -78,11 +78,10 @@ func (m *memSecrets) ToggleSecretStatus(_ context.Context, secretID, status stri
 	return nil
 }
 
-func userCtx(role string) context.Context {
+func userCtx() context.Context {
 	ctx := trpc.BackgroundContext()
 	trpc.SetMetaData(ctx, authmodel.CtxUserID, []byte("u-1"))
 	trpc.SetMetaData(ctx, authmodel.CtxUsername, []byte("ops"))
-	trpc.SetMetaData(ctx, authmodel.CtxUserRole, []byte(role))
 	return ctx
 }
 
@@ -100,7 +99,7 @@ func TestExportThenImportSecretsKeepsIDsAndValues(t *testing.T) {
 		model.Secret{SpaceID: "mooxsys", SecretID: "eb-admin", Name: "EventBus internal-admin", Category: "eventbus", Provider: "moox_eventbus",
 			SecretType: "token", KeyID: "eventbus_internal_admin", SecretValue: "source-env-token"},
 	)
-	exported, err := NewService(source).ExportSecrets(userCtx("2"), &pb.ExportSecretsReq{Passphrase: testPassphrase})
+	exported, err := NewService(source).ExportSecrets(userCtx(), &pb.ExportSecretsReq{Passphrase: testPassphrase})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, exported.GetRetInfo().GetCode(), exported.GetRetInfo().GetMsg())
 	require.EqualValues(t, 2, exported.GetCount())
@@ -114,13 +113,13 @@ func TestExportThenImportSecretsKeepsIDsAndValues(t *testing.T) {
 
 	target := newMemSecrets(model.Secret{SecretID: "sec_other", Name: "目标环境已有", Category: "other", SecretValue: "x"})
 	service := NewService(target)
-	wrong, err := service.ImportSecrets(userCtx("2"), &pb.ImportSecretsReq{Bundle: exported.GetBundle(), Passphrase: "another passphrase"})
+	wrong, err := service.ImportSecrets(userCtx(), &pb.ImportSecretsReq{Bundle: exported.GetBundle(), Passphrase: "another passphrase"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, wrong.GetRetInfo().GetCode())
 	require.Equal(t, errBundleDecrypt.Error(), wrong.GetRetInfo().GetMsg())
 	require.Len(t, target.byID, 1, "口令错误什么都不写")
 
-	imported, err := service.ImportSecrets(userCtx("3"), &pb.ImportSecretsReq{Bundle: exported.GetBundle(), Passphrase: testPassphrase})
+	imported, err := service.ImportSecrets(userCtx(), &pb.ImportSecretsReq{Bundle: exported.GetBundle(), Passphrase: testPassphrase})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, imported.GetRetInfo().GetCode())
 	require.EqualValues(t, 2, imported.GetCreated())
@@ -145,7 +144,7 @@ func TestImportSecretsSkipsOrOverwritesExisting(t *testing.T) {
 	target := newMemSecrets(model.Secret{SecretID: "sec_a", Name: "A-old", Category: "exchange", SecretValue: "old-a", Creator: "alice", Status: "inactive"})
 	service := NewService(target)
 
-	rsp, err := service.ImportSecrets(userCtx("2"), &pb.ImportSecretsReq{Bundle: bundle, Passphrase: testPassphrase})
+	rsp, err := service.ImportSecrets(userCtx(), &pb.ImportSecretsReq{Bundle: bundle, Passphrase: testPassphrase})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, rsp.GetCreated())
 	require.Equal(t, []string{"A"}, rsp.GetSkipped())
@@ -153,7 +152,7 @@ func TestImportSecretsSkipsOrOverwritesExisting(t *testing.T) {
 	require.Equal(t, "active", target.byID["sec_b"].Status, "没有状态时默认启用")
 	require.Equal(t, "api_key", target.byID["sec_b"].SecretType)
 
-	rsp, err = service.ImportSecrets(userCtx("2"), &pb.ImportSecretsReq{Bundle: bundle, Passphrase: testPassphrase, Overwrite: true})
+	rsp, err = service.ImportSecrets(userCtx(), &pb.ImportSecretsReq{Bundle: bundle, Passphrase: testPassphrase, Overwrite: true})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, rsp.GetUpdated())
 	updated := target.byID["sec_a"]
@@ -175,7 +174,7 @@ func TestImportSecretsReportsInvalidItems(t *testing.T) {
 	}, testPassphrase, time.Now())
 	require.NoError(t, err)
 	target := newMemSecrets()
-	rsp, err := NewService(target).ImportSecrets(userCtx("2"), &pb.ImportSecretsReq{Bundle: bundle, Passphrase: testPassphrase})
+	rsp, err := NewService(target).ImportSecrets(userCtx(), &pb.ImportSecretsReq{Bundle: bundle, Passphrase: testPassphrase})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, rsp.GetCreated())
 	require.Equal(t, []string{"Masked：秘钥值是脱敏后的值", "BadCategory：分类无效", "Backup：系统秘钥不导入", "EventBus：系统秘钥不导入"}, rsp.GetFailed())
@@ -188,15 +187,15 @@ func TestImportSecretsReportsInvalidItems(t *testing.T) {
 	}
 
 	target.createErr = errors.New("unique constraint")
-	rsp, err = NewService(target).ImportSecrets(userCtx("2"), &pb.ImportSecretsReq{Bundle: bundle, Passphrase: testPassphrase})
+	rsp, err = NewService(target).ImportSecrets(userCtx(), &pb.ImportSecretsReq{Bundle: bundle, Passphrase: testPassphrase})
 	require.NoError(t, err)
 	require.Contains(t, rsp.GetFailed(), "NoID：创建失败")
 }
 
-// 只有全局管理员可以导出、导入；导出口令太短拒绝。
-func TestSecretMigrationRequiresGlobalAdminAndStrongPassphrase(t *testing.T) {
+// 只有已登录用户可以导出、导入；导出口令太短拒绝。
+func TestSecretMigrationRequiresLoginAndStrongPassphrase(t *testing.T) {
 	service := NewService(newMemSecrets(model.Secret{SecretID: "sec_a", Name: "A", Category: "other", SecretValue: "v"}))
-	for _, ctx := range []context.Context{userCtx("1"), trpc.BackgroundContext()} {
+	for _, ctx := range []context.Context{trpc.BackgroundContext()} {
 		exported, err := service.ExportSecrets(ctx, &pb.ExportSecretsReq{Passphrase: testPassphrase})
 		require.NoError(t, err)
 		require.Equal(t, pb.ErrorCode_NO_PERMISSION, exported.GetRetInfo().GetCode())
@@ -205,7 +204,7 @@ func TestSecretMigrationRequiresGlobalAdminAndStrongPassphrase(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, pb.ErrorCode_NO_PERMISSION, imported.GetRetInfo().GetCode())
 	}
-	short, err := service.ExportSecrets(userCtx("2"), &pb.ExportSecretsReq{Passphrase: "short-口令"})
+	short, err := service.ExportSecrets(userCtx(), &pb.ExportSecretsReq{Passphrase: "short-口令"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INVALID_PARAM, short.GetRetInfo().GetCode())
 	require.Empty(t, short.GetBundle())

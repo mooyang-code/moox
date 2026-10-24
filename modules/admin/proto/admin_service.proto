@@ -7,7 +7,7 @@ option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;a
 import "moox_common.proto";
 
 // ========== 工作空间管理（SpaceMgr）==========
-// 对应 internal/service/space 的 t_spaces / t_space_members 表，
+// 对应 internal/service/space 的 t_spaces 表，
 // 由本进程 SpaceMgr 实现，经统一网关透传 /api/admin/space/{method}。
 
 message Space {
@@ -22,17 +22,6 @@ message Space {
   string attributes = 9;
   string created_at = 10;
   string updated_at = 11;
-}
-
-message SpaceMember {
-  int64 id = 1;
-  string space_id = 2;
-  string user_id = 3;
-  string role = 4;
-  string status = 5;
-  string attributes = 6;
-  string created_at = 7;
-  string updated_at = 8;
 }
 
 message CreateSpaceReq {
@@ -65,16 +54,6 @@ message ListSpacesRsp {
   repeated Space spaces = 2;
   common.PageResult page_result = 3;
 }
-message ListSpaceMembersReq {
-  string space_id = 1;
-  common.Page page = 2;
-}
-message ListSpaceMembersRsp {
-  common.RetInfo ret_info = 1;
-  repeated SpaceMember members = 2;
-  common.PageResult page_result = 3;
-}
-
 // ========== Services ==========
 
 service SpaceMgr {
@@ -82,5 +61,4 @@ service SpaceMgr {
   rpc UpdateSpace(UpdateSpaceReq) returns (UpdateSpaceRsp);
   rpc DeleteSpace(DeleteSpaceReq) returns (DeleteSpaceRsp);
   rpc ListSpaces(ListSpacesReq) returns (ListSpacesRsp);
-  rpc ListSpaceMembers(ListSpaceMembersReq) returns (ListSpaceMembersRsp);
 }

@@ -2,9 +2,11 @@ package impl
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/admin/internal/service/activitylog"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
 	pb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	"trpc.group/trpc-go/trpc-go/http"
@@ -49,26 +51,30 @@ func (s *AuthServiceImpl) recordLoginAttempt(ctx context.Context, username, ip s
 	s.userDAO.SetLoginAttempt(ctx, username, ip, *attempt)
 }
 
-// recordLoginHistory 记录登录历史
-func (s *AuthServiceImpl) recordLoginHistory(ctx context.Context, user *model.User, req *pb.LoginReq, result, reason string) {
-	history := &model.LoginHistory{
-		UserID:        user.UserID,
-		Username:      user.Username,
-		LoginType:     "password",
-		ClientIP:      req.ClientIp,
-		UserAgent:     req.UserAgent,
-		DeviceID:      req.DeviceId,
-		LoginResult:   result,
-		FailureReason: reason,
+// recordLoginLog 把成功登录写进全局活动日志（不属于任何空间）；写入失败只记日志，不影响登录。
+func (s *AuthServiceImpl) recordLoginLog(ctx context.Context, user *model.User, req *pb.LoginReq) {
+	if s.loginLog == nil {
+		return
 	}
-
-	s.userDAO.CreateLoginHistory(ctx, history)
-}
-
-// logUserAction 记录本地用户操作日志
-func (s *AuthServiceImpl) logUserAction(ctx context.Context, userID, action, resource, details, clientIP, userAgent, result string) {
-	log.InfoContextf(ctx, "admin_user_action user_id=%s action=%s resource=%s result=%s client_ip=%s details=%q user_agent=%q",
-		userID, action, resource, result, clientIP, details, userAgent)
+	detail, err := json.Marshal(map[string]string{
+		"username":   user.Username,
+		"ip":         req.ClientIp,
+		"user_agent": req.UserAgent,
+	})
+	if err != nil {
+		return
+	}
+	entry := activitylog.Entry{
+		Source:   model.LoginLogSource,
+		Category: model.LoginLogCategory,
+		Level:    "info",
+		Title:    "用户 " + user.Username + " 登录",
+		Detail:   string(detail),
+		RefID:    user.UserID,
+	}
+	if _, err := s.loginLog.Append(ctx, []activitylog.Entry{entry}, time.Now()); err != nil {
+		log.ErrorContextf(ctx, "[Auth] 写入登录活动日志失败: %v", err)
+	}
 }
 
 // extractClientIPFromContext 从上下文中提取真实客户端IP

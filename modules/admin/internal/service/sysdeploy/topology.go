@@ -5,8 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
+	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
+	secretdao "github.com/mooyang-code/moox/modules/admin/internal/service/secret/dao"
+	secretmodel "github.com/mooyang-code/moox/modules/admin/internal/service/secret/model"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -20,6 +24,8 @@ type TopologyDAO struct {
 	db            *gorm.DB
 	catalog       servicecatalog.Catalog
 	controlHostID string
+	// encryptionKey 返回加密主机 SSH 凭据用的主密钥，只在真正要写凭据时才调用；为空时从环境读取（线上 Admin 进程）。
+	encryptionKey func() (string, error)
 }
 
 func NewTopologyDAO(db *gorm.DB, controlHostID string) (*TopologyDAO, error) {
@@ -31,6 +37,13 @@ func NewTopologyDAO(db *gorm.DB, controlHostID string) (*TopologyDAO, error) {
 		return nil, err
 	}
 	return &TopologyDAO{db: db, catalog: catalog, controlHostID: controlHostID}, nil
+}
+
+// WithEncryptionKeyFunc 指定取得 SSH 凭据主密钥的方式，离线 bootstrap 在进程环境之外使用。
+// 主机拓扑校验通过、真正要写凭据时才会调用，所以拓扑非法时不会因此创建主密钥。
+func (d *TopologyDAO) WithEncryptionKeyFunc(fn func() (string, error)) *TopologyDAO {
+	d.encryptionKey = fn
+	return d
 }
 
 func (d *TopologyDAO) records(tx *gorm.DB) ([]HostRecord, []DeploymentRecord, error) {
@@ -116,7 +129,9 @@ func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 			return err
 		}
 		seen := map[string]bool{}
+		specByHost := map[string]HostSpec{}
 		for _, spec := range specs {
+			specByHost[spec.HostID] = spec
 			if seen[spec.HostID] {
 				return fmt.Errorf("%w: duplicate host in synchronization", ErrInvalidTopology)
 			}
@@ -135,8 +150,11 @@ func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 			}
 			host.UpdatedAt = time.Now().UTC()
 			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "c_host_id"}}, DoUpdates: clause.AssignmentColumns([]string{
-				"c_address", "c_private_address", "c_region", "c_reachability", "c_description", "c_mtime",
+				"c_label", "c_address", "c_private_address", "c_region", "c_reachability", "c_description", "c_ssh_port", "c_ssh_user", "c_mtime",
 			})}).Create(&host).Error; err != nil {
+				return err
+			}
+			if err := d.writeSSHCredential(tx, host.HostID, specByHost[host.HostID].SSH); err != nil {
 				return err
 			}
 			var componentIDs []string
@@ -165,6 +183,13 @@ func (d *TopologyDAO) propose(hosts []HostRecord, deployments []DeploymentRecord
 	if !ok {
 		return nil, nil, fmt.Errorf("%w: unknown host reachability %q", ErrInvalidTopology, spec.Reachability)
 	}
+	if len([]rune(spec.Label)) > 64 {
+		return nil, nil, fmt.Errorf("%w: host label exceeds 64 characters", ErrInvalidTopology)
+	}
+	sshPort, sshUser, err := d.validateSSH(spec, reachability)
+	if err != nil {
+		return nil, nil, err
+	}
 	wanted := map[string]bool{}
 	for _, id := range spec.Components {
 		component, ok := d.catalog.Component(id)
@@ -178,9 +203,9 @@ func (d *TopologyDAO) propose(hosts []HostRecord, deployments []DeploymentRecord
 			wanted[component.ID] = true
 		}
 	}
-	host := HostRecord{HostID: spec.HostID, Address: spec.Address, PrivateAddress: spec.PrivateAddress, Region: spec.Region, Reachability: servicecatalog.ReachabilityName(reachability), Description: spec.Description, Status: servicecatalog.Enabled}
+	host := HostRecord{HostID: spec.HostID, Label: spec.Label, Address: spec.Address, PrivateAddress: spec.PrivateAddress, Region: spec.Region, Reachability: servicecatalog.ReachabilityName(reachability), Description: spec.Description, SSHPort: sshPort, SSHUser: sshUser, Status: servicecatalog.Enabled}
 	if i := slices.IndexFunc(hosts, func(h HostRecord) bool { return h.HostID == spec.HostID }); i >= 0 {
-		host.Status, host.CreatedAt = hosts[i].Status, hosts[i].CreatedAt
+		host.Status, host.CreatedAt, host.SSHFingerprint = hosts[i].Status, hosts[i].CreatedAt, hosts[i].SSHFingerprint
 		hosts[i] = host
 	} else {
 		hosts = append(hosts, host)
@@ -276,6 +301,54 @@ func (d *TopologyDAO) DeleteHost(ctx context.Context, hostID string) error {
 		if err := tx.Where("c_host_id = ?", hostID).Delete(&DeploymentRecord{}).Error; err != nil {
 			return err
 		}
+		if err := secretdao.DeleteSystemSecret(tx, secretmodel.SSHHostSecretID(hostID)); err != nil {
+			return err
+		}
 		return tx.Where("c_host_id = ?", hostID).Delete(&HostRecord{}).Error
+	})
+}
+
+// validateSSH 校验 SSH 信息并返回要写入 t_hosts 的端口与用户；没有 SSH 信息时端口为 0。
+// 只能出站的主机不能被控制台直连，不接受 SSH 信息。
+func (d *TopologyDAO) validateSSH(spec HostSpec, reachability string) (int, string, error) {
+	if spec.SSH == nil {
+		return 0, "", nil
+	}
+	if reachability == servicecatalog.ReachabilityOutbound {
+		return 0, "", fmt.Errorf("%w: outbound host %q cannot carry SSH credentials", ErrInvalidTopology, spec.HostID)
+	}
+	ssh := spec.SSH
+	if ssh.Port < 1 || ssh.Port > 65535 || strings.TrimSpace(ssh.User) == "" || len(ssh.User) > 128 {
+		return 0, "", fmt.Errorf("%w: SSH requires a port in 1..65535 and a user name", ErrInvalidTopology)
+	}
+	if err := (secretmodel.SSHCredential{Password: ssh.Password, PrivateKey: ssh.PrivateKey, Passphrase: ssh.Passphrase}).Validate(); err != nil {
+		return 0, "", fmt.Errorf("%w: %v", ErrInvalidTopology, err)
+	}
+	return ssh.Port, strings.TrimSpace(ssh.User), nil
+}
+
+// writeSSHCredential 在同一事务里写入或清除主机的 SSH 凭据；凭据不进日志和错误信息。
+func (d *TopologyDAO) writeSSHCredential(tx *gorm.DB, hostID string, ssh *SSHSpec) error {
+	secretID := secretmodel.SSHHostSecretID(hostID)
+	if ssh == nil {
+		return secretdao.DeleteSystemSecret(tx, secretID)
+	}
+	credential := secretmodel.SSHCredential{Password: ssh.Password, PrivateKey: ssh.PrivateKey, Passphrase: ssh.Passphrase}
+	plain, err := credential.Encode()
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
+	}
+	keyFn := d.encryptionKey
+	if keyFn == nil {
+		keyFn = adminsecurity.GetEncryptionKey
+	}
+	key, err := keyFn()
+	if err != nil {
+		return err
+	}
+	return secretdao.PutSystemSecret(tx, key, &secretmodel.Secret{
+		SecretID: secretID, Name: "SSH " + hostID, Category: secretmodel.SSHCategory,
+		SecretType: credential.Type(), KeyID: strings.TrimSpace(ssh.User), SecretValue: plain,
+		ExtraConfig: "{}", Status: "active", Creator: "moox-cli",
 	})
 }

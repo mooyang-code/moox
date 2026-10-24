@@ -17,11 +17,6 @@ func BuildSafeUserInfo(user *model.User) *pb.UserInfo {
 	return &pb.UserInfo{
 		UserId:      user.UserID,
 		Username:    html.EscapeString(user.Username),
-		Nickname:    html.EscapeString(user.Nickname),
-		Email:       html.EscapeString(user.Email),
-		Avatar:      html.EscapeString(user.Avatar),
-		Status:      pb.UserStatus(user.Status),
-		Role:        pb.UserRole(user.Role),
 		CreatedAt:   user.CreatedAt.Unix(),
 		LastLoginAt: lastLoginAt,
 		LastLoginIp: html.EscapeString(user.LastLoginIP),

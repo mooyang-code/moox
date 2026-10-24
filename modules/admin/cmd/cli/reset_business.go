@@ -19,8 +19,8 @@ import (
 
 // moox-admin-cli reset-business：系统重置里 Admin 的业务部分（设计 5.2）。
 //
-// 清掉业务空间及成员（默认空间除外）、采集发布租约与操作、活动日志；
-// 保留引导身份层——用户、登录历史、密钥、主机与放置、SSH、主机网关状态——它们决定谁能进来、能连哪些机器，
+// 清掉业务空间（默认空间除外）、采集发布租约与操作、活动日志（含登录记录）；
+// 保留引导身份层——用户、密钥、主机与部署（含 SSH 信息）、主机网关状态——它们决定谁能进来、能连哪些机器，
 // 清掉后重置自己就无法继续。默认空间由 setup init 重建，所以这里也保留它。
 // 重置前用 VACUUM INTO 备份整个库到数据库所在目录的 reset-backups/（保留最近 3 份），这个命令不依赖 Admin 进程是否在运行。
 
@@ -31,13 +31,10 @@ const defaultSpaceID = "mooxsys"
 var businessResetData = []string{"t_activity_logs", "t_collector_publish_leases", "t_collector_publish_operations"}
 
 // businessResetConfig 是业务配置：只有 --scope all 清（默认空间除外）。
-var businessResetConfig = []string{"t_space_members", "t_spaces"}
+var businessResetConfig = []string{"t_spaces"}
 
-// businessKeep 是引导身份层与登录记录：任何范围都不清。
-var businessKeep = []string{
-	"t_host_gateway_status", "t_hosts", "t_login_history", "t_deployments", "t_secrets",
-	"t_ssh_host", "t_ssh_host_key", "t_ssh_session", "t_users",
-}
+// businessKeep 是引导身份层：任何范围都不清。
+var businessKeep = []string{"t_host_gateway_status", "t_hosts", "t_deployments", "t_secrets", "t_users"}
 
 type businessResetResult struct {
 	Module  string           `json:"module"`
@@ -142,7 +139,7 @@ func resetBusiness(ctx context.Context, db *sql.DB, dbPath, scope string, dryRun
 	for _, t := range tables {
 		query := "DELETE FROM " + t
 		var args []any
-		if t == "t_spaces" || t == "t_space_members" {
+		if t == "t_spaces" {
 			query += " WHERE c_space_id <> ?"
 			args = append(args, defaultSpaceID)
 		}
@@ -197,7 +194,7 @@ func checkBusinessTables(ctx context.Context, db *sql.DB) error {
 func countBusinessRows(ctx context.Context, db *sql.DB, table string) (int64, error) {
 	query := "SELECT COUNT(*) FROM " + table
 	var args []any
-	if table == "t_spaces" || table == "t_space_members" {
+	if table == "t_spaces" {
 		query += " WHERE c_space_id <> ?"
 		args = append(args, defaultSpaceID)
 	}

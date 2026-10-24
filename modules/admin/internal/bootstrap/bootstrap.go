@@ -55,7 +55,7 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := registerCertificateWatchTimer(ctx, s, newCertificateWatchFromEnvironment(services.DBManager.GetDB())); err != nil {
 		return nil, err
 	}
-	collector, err := garbage.NewCollector(services.DBManager.GetDB(), services.machineGateway)
+	collector, err := garbage.NewCollector(services.machineGateway)
 	if err != nil {
 		return nil, err
 	}

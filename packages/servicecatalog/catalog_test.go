@@ -102,7 +102,7 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 		{"console without permission", func(c *Catalog) {
 			servicePtr(c, cloud).ACL = []Grant{{Methods: []string{"CollectGarbage"}, Callers: []string{"admin"}}}
 		}},
-		{"ambiguous console method", func(c *Catalog) { servicePtr(c, "trpc.moox.ops.Ssh").ConsoleName = "sysdeploy" }},
+		{"ambiguous console method", func(c *Catalog) { servicePtr(c, "trpc.moox.admin.SpaceMgr").ConsoleName = "storage" }},
 		{"unknown principal method", func(c *Catalog) { c.Principals[0].Allow[0].Methods = []string{"Unregistered"} }},
 		{"unknown principal service", func(c *Catalog) { c.Principals[0].Allow[0].Service = "trpc.moox.typo.Service" }},
 		{"duplicate principal", func(c *Catalog) { c.Principals = append(c.Principals, c.Principals[0]) }},

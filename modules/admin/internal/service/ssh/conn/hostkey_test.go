@@ -18,7 +18,7 @@ type memoryPins struct {
 }
 
 // PinHostKey 与 DAO 的语义一致：已有记录不改，没有记录则记录，返回生效的指纹。
-func (m *memoryPins) PinHostKey(id int, address, fingerprint string) (string, error) {
+func (m *memoryPins) PinHostKey(_, address, fingerprint string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.pins[address] == "" {
@@ -39,7 +39,7 @@ func publicKey(t *testing.T) ssh.PublicKey {
 // 服务端主机密钥必须校验：首次记录，之后不一致拒绝；没有配置存储时一律拒绝。
 func TestHostKeyCallbackPinsFirstKeyAndRejectsMismatch(t *testing.T) {
 	pins := &memoryPins{pins: map[string]string{}}
-	c := &SSHConn{Host: &model.SSHHost{ID: 1, Address: "10.0.0.1", Port: 22}, HostKeys: pins}
+	c := &SSHConn{Target: model.Target{HostID: "storage", Address: "10.0.0.1", Port: 22}, HostKeys: pins}
 	first, other := publicKey(t), publicKey(t)
 	require.NoError(t, c.hostKeyCallback()("", nil, first), "首次连接记录指纹")
 	require.NoError(t, c.hostKeyCallback()("", nil, first), "同一密钥可继续连接")
@@ -47,7 +47,7 @@ func TestHostKeyCallbackPinsFirstKeyAndRejectsMismatch(t *testing.T) {
 	require.ErrorContains(t, err, "不一致")
 	require.NoError(t, c.hostKeyCallback()("", nil, first), "不一致不得覆盖记录")
 
-	unconfigured := &SSHConn{Host: &model.SSHHost{ID: 1, Address: "10.0.0.1", Port: 22}}
+	unconfigured := &SSHConn{Target: model.Target{HostID: "storage", Address: "10.0.0.1", Port: 22}}
 	require.ErrorContains(t, unconfigured.hostKeyCallback()("", nil, first), "未配置")
 }
 
@@ -87,7 +87,7 @@ func TestLastActiveTimeIsSafeUnderConcurrentRefreshAndCleanup(t *testing.T) {
 // 两个首次连接收到不同的主机密钥并发到达：只有一个会被信任，另一个必须在认证前失败。
 func TestHostKeyCallbackConcurrentFirstConnectionsTrustOnlyOne(t *testing.T) {
 	pins := &memoryPins{pins: map[string]string{}}
-	c := &SSHConn{Host: &model.SSHHost{ID: 1, Address: "10.0.0.1", Port: 22}, HostKeys: pins}
+	c := &SSHConn{Target: model.Target{HostID: "storage", Address: "10.0.0.1", Port: 22}, HostKeys: pins}
 	keys := []ssh.PublicKey{publicKey(t), publicKey(t)}
 	results := make(chan error, len(keys))
 	start := make(chan struct{})

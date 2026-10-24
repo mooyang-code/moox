@@ -19,16 +19,6 @@ import (
 
 // SshService defines service.
 type SshService interface {
-	// ListHosts 主机配置
-	ListHosts(ctx context.Context, req *ListHostsReq) (*ListHostsRsp, error)
-
-	CreateHost(ctx context.Context, req *CreateHostReq) (*CreateHostRsp, error)
-
-	UpdateHost(ctx context.Context, req *UpdateHostReq) (*UpdateHostRsp, error)
-
-	DeleteHost(ctx context.Context, req *DeleteHostReq) (*DeleteHostRsp, error)
-
-	GetHost(ctx context.Context, req *GetHostReq) (*GetHostRsp, error)
 	// CreateSession SSH 会话
 	CreateSession(ctx context.Context, req *CreateSessionReq) (*CreateSessionRsp, error)
 
@@ -41,96 +31,6 @@ type SshService interface {
 	SftpMkdir(ctx context.Context, req *SftpMkdirReq) (*SftpMkdirRsp, error)
 
 	SftpDelete(ctx context.Context, req *SftpDeleteReq) (*SftpDeleteRsp, error)
-}
-
-func SshService_ListHosts_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &ListHostsReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SshService).ListHosts(ctx, reqbody.(*ListHostsReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func SshService_CreateHost_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &CreateHostReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SshService).CreateHost(ctx, reqbody.(*CreateHostReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func SshService_UpdateHost_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateHostReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SshService).UpdateHost(ctx, reqbody.(*UpdateHostReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func SshService_DeleteHost_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &DeleteHostReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SshService).DeleteHost(ctx, reqbody.(*DeleteHostReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func SshService_GetHost_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &GetHostReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(SshService).GetHost(ctx, reqbody.(*GetHostReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
 }
 
 func SshService_CreateSession_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -247,26 +147,6 @@ var SshServer_ServiceDesc = server.ServiceDesc{
 	HandlerType: ((*SshService)(nil)),
 	Methods: []server.Method{
 		{
-			Name: "/trpc.moox.ops.Ssh/ListHosts",
-			Func: SshService_ListHosts_Handler,
-		},
-		{
-			Name: "/trpc.moox.ops.Ssh/CreateHost",
-			Func: SshService_CreateHost_Handler,
-		},
-		{
-			Name: "/trpc.moox.ops.Ssh/UpdateHost",
-			Func: SshService_UpdateHost_Handler,
-		},
-		{
-			Name: "/trpc.moox.ops.Ssh/DeleteHost",
-			Func: SshService_DeleteHost_Handler,
-		},
-		{
-			Name: "/trpc.moox.ops.Ssh/GetHost",
-			Func: SshService_GetHost_Handler,
-		},
-		{
 			Name: "/trpc.moox.ops.Ssh/CreateSession",
 			Func: SshService_CreateSession_Handler,
 		},
@@ -304,23 +184,6 @@ func RegisterSshService(s server.Service, svr SshService) {
 
 type UnimplementedSsh struct{}
 
-// ListHosts 主机配置
-func (s *UnimplementedSsh) ListHosts(ctx context.Context, req *ListHostsReq) (*ListHostsRsp, error) {
-	return nil, errors.New("rpc ListHosts of service Ssh is not implemented")
-}
-func (s *UnimplementedSsh) CreateHost(ctx context.Context, req *CreateHostReq) (*CreateHostRsp, error) {
-	return nil, errors.New("rpc CreateHost of service Ssh is not implemented")
-}
-func (s *UnimplementedSsh) UpdateHost(ctx context.Context, req *UpdateHostReq) (*UpdateHostRsp, error) {
-	return nil, errors.New("rpc UpdateHost of service Ssh is not implemented")
-}
-func (s *UnimplementedSsh) DeleteHost(ctx context.Context, req *DeleteHostReq) (*DeleteHostRsp, error) {
-	return nil, errors.New("rpc DeleteHost of service Ssh is not implemented")
-}
-func (s *UnimplementedSsh) GetHost(ctx context.Context, req *GetHostReq) (*GetHostRsp, error) {
-	return nil, errors.New("rpc GetHost of service Ssh is not implemented")
-}
-
 // CreateSession SSH 会话
 func (s *UnimplementedSsh) CreateSession(ctx context.Context, req *CreateSessionReq) (*CreateSessionRsp, error) {
 	return nil, errors.New("rpc CreateSession of service Ssh is not implemented")
@@ -351,16 +214,6 @@ func (s *UnimplementedSsh) SftpDelete(ctx context.Context, req *SftpDeleteReq) (
 
 // SshClientProxy defines service client proxy
 type SshClientProxy interface {
-	// ListHosts 主机配置
-	ListHosts(ctx context.Context, req *ListHostsReq, opts ...client.Option) (rsp *ListHostsRsp, err error)
-
-	CreateHost(ctx context.Context, req *CreateHostReq, opts ...client.Option) (rsp *CreateHostRsp, err error)
-
-	UpdateHost(ctx context.Context, req *UpdateHostReq, opts ...client.Option) (rsp *UpdateHostRsp, err error)
-
-	DeleteHost(ctx context.Context, req *DeleteHostReq, opts ...client.Option) (rsp *DeleteHostRsp, err error)
-
-	GetHost(ctx context.Context, req *GetHostReq, opts ...client.Option) (rsp *GetHostRsp, err error)
 	// CreateSession SSH 会话
 	CreateSession(ctx context.Context, req *CreateSessionReq, opts ...client.Option) (rsp *CreateSessionRsp, err error)
 
@@ -382,106 +235,6 @@ type SshClientProxyImpl struct {
 
 var NewSshClientProxy = func(opts ...client.Option) SshClientProxy {
 	return &SshClientProxyImpl{client: client.DefaultClient, opts: opts}
-}
-
-func (c *SshClientProxyImpl) ListHosts(ctx context.Context, req *ListHostsReq, opts ...client.Option) (*ListHostsRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Ssh/ListHosts")
-	msg.WithCalleeServiceName(SshServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Ssh")
-	msg.WithCalleeMethod("ListHosts")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &ListHostsRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *SshClientProxyImpl) CreateHost(ctx context.Context, req *CreateHostReq, opts ...client.Option) (*CreateHostRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Ssh/CreateHost")
-	msg.WithCalleeServiceName(SshServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Ssh")
-	msg.WithCalleeMethod("CreateHost")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &CreateHostRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *SshClientProxyImpl) UpdateHost(ctx context.Context, req *UpdateHostReq, opts ...client.Option) (*UpdateHostRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Ssh/UpdateHost")
-	msg.WithCalleeServiceName(SshServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Ssh")
-	msg.WithCalleeMethod("UpdateHost")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &UpdateHostRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *SshClientProxyImpl) DeleteHost(ctx context.Context, req *DeleteHostReq, opts ...client.Option) (*DeleteHostRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Ssh/DeleteHost")
-	msg.WithCalleeServiceName(SshServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Ssh")
-	msg.WithCalleeMethod("DeleteHost")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &DeleteHostRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *SshClientProxyImpl) GetHost(ctx context.Context, req *GetHostReq, opts ...client.Option) (*GetHostRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.ops.Ssh/GetHost")
-	msg.WithCalleeServiceName(SshServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("ops")
-	msg.WithCalleeService("Ssh")
-	msg.WithCalleeMethod("GetHost")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &GetHostRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
 }
 
 func (c *SshClientProxyImpl) CreateSession(ctx context.Context, req *CreateSessionReq, opts ...client.Option) (*CreateSessionRsp, error) {

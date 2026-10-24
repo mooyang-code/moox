@@ -110,7 +110,7 @@ func ensureAdminUser(db *gorm.DB, username, password string, stdout io.Writer) e
 		if err != nil {
 			return err
 		}
-		result := db.Exec(`INSERT INTO t_users (c_user_id, c_username, c_password_hash, c_role, c_status) VALUES (?, ?, ?, 3, 1)`, uuid.NewString(), username, hash)
+		result := db.Exec(`INSERT INTO t_users (c_user_id, c_username, c_password_hash) VALUES (?, ?, ?)`, uuid.NewString(), username, hash)
 		if result.Error != nil {
 			return fmt.Errorf("create admin user: %w", result.Error)
 		}

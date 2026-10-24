@@ -48,7 +48,7 @@ func (s *fakeRequestAuthStore) ConsumeRawSessionTicket(_ context.Context, id str
 
 func signedAdminRequest(t *testing.T, secret, key, sid, path string, body []byte, timestamp int64, nonce string) *http.Request {
 	t.Helper()
-	token, err := mooxsecurity.SignToken(map[string]any{"user_id": "u1", "username": "admin", "role": testTokenRole, "token_type": "access", "sid": sid}, secret, "moox-admin", time.Hour)
+	token, err := mooxsecurity.SignToken(map[string]any{"user_id": "u1", "username": "admin", "token_type": "access", "sid": sid}, secret, "moox-admin", time.Hour)
 	require.NoError(t, err)
 	sig, err := requestauth.Sign(key, requestauth.Material{Method: http.MethodPost, Path: path, Body: body, Timestamp: timestamp, Nonce: nonce})
 	require.NoError(t, err)
@@ -60,16 +60,11 @@ func signedAdminRequest(t *testing.T, secret, key, sid, path string, body []byte
 	return r
 }
 
-// testTokenRole 是 signedAdminRequest 签发令牌里的全局角色，默认管理员。
-var testTokenRole = 2
-
 func setupRequestAuthTest(t *testing.T) (*fakeRequestAuthStore, string, string, string) {
 	t.Helper()
 	t.Setenv("MOOX_ADMIN_ENCRYPTION_KEY", "encryption-key-for-tests")
 	t.Setenv("MOOX_STORAGE_PRIMARY_AUTH_SECRET", "primary-secret")
 	t.Setenv("MOOX_STORAGE_VIEW_AUTH_SECRET", "view-secret")
-	testTokenRole = 2
-	t.Cleanup(func() { testTokenRole = 2 })
 	secret, key, sid := "jwt-secret-for-request-auth", "signing-key", "sid-1"
 	encrypted, err := mooxsecurity.Encrypt(key, "encryption-key-for-tests")
 	require.NoError(t, err)
@@ -116,7 +111,7 @@ func TestAdminRequestRejectsChangedSpaceHeader(t *testing.T) {
 	timestamp := time.Now().Unix()
 	nonce := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 	path := "/api/admin/auth/GetUserInfo"
-	token, err := mooxsecurity.SignToken(map[string]any{"user_id": "u1", "username": "admin", "role": testTokenRole, "token_type": "access", "sid": sid}, secret, "moox-admin", time.Hour)
+	token, err := mooxsecurity.SignToken(map[string]any{"user_id": "u1", "username": "admin", "token_type": "access", "sid": sid}, secret, "moox-admin", time.Hour)
 	require.NoError(t, err)
 	sig, err := requestauth.Sign(key, requestauth.Material{
 		Method: http.MethodPost, Path: path, Headers: map[string]string{"X-Space-Id": "space-1"}, Timestamp: timestamp, Nonce: nonce,

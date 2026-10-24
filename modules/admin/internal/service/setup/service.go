@@ -25,14 +25,6 @@ type TencentCloud struct {
 	SecretKey string
 }
 
-type Host struct {
-	Name     string
-	Address  string
-	Port     int
-	Username string
-	Password string
-}
-
 type Space struct {
 	SpaceID        string
 	Name           string
@@ -47,23 +39,13 @@ type Space struct {
 type Manifest struct {
 	Admin        Admin
 	TencentCloud TencentCloud
-	ControlHost  Host
-	OtherHosts   []Host
 	Spaces       []Space
-}
-
-func (m Manifest) Hosts() []Host {
-	hosts := make([]Host, 0, 1+len(m.OtherHosts))
-	hosts = append(hosts, m.ControlHost)
-	hosts = append(hosts, m.OtherHosts...)
-	return hosts
 }
 
 type Result struct {
 	Action          string
 	Users           int
 	Secrets         int
-	Hosts           int
 	Spaces          int
 	SpacesCreated   int
 	SpacesUnchanged int
@@ -73,7 +55,6 @@ type Status struct {
 	State     string
 	Users     int
 	Secrets   int
-	Hosts     int
 	Spaces    int
 	Missing   int
 	Conflicts int

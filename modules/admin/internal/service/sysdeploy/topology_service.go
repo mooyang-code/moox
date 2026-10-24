@@ -71,7 +71,7 @@ func (s *ServiceImpl) ListHosts(ctx context.Context, req *pb.ListDeploymentHosts
 	response.PageResult = page
 	hosts = hosts[start:end]
 	for _, h := range hosts {
-		response.Hosts = append(response.Hosts, &pb.DeploymentHost{HostId: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Reachability: servicecatalog.ReachabilityName(h.Reachability), Description: h.Description, CreatedAt: h.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: h.UpdatedAt.UTC().Format(time.RFC3339Nano)})
+		response.Hosts = append(response.Hosts, &pb.DeploymentHost{HostId: h.HostID, Label: h.Label, SshPort: int32(h.SSHPort), SshUser: h.SSHUser, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Reachability: servicecatalog.ReachabilityName(h.Reachability), Description: h.Description, CreatedAt: h.CreatedAt.UTC().Format(time.RFC3339Nano), UpdatedAt: h.UpdatedAt.UTC().Format(time.RFC3339Nano)})
 	}
 	return response, nil
 }
@@ -145,9 +145,24 @@ func (s *ServiceImpl) GetHostRoutes(ctx context.Context, req *pb.GetHostRoutesRe
 }
 
 func (s *ServiceImpl) SyncHostDeployments(ctx context.Context, req *pb.SyncHostDeploymentsReq) (*pb.SyncHostDeploymentsRsp, error) {
+	spec := HostSpec{HostID: req.GetHostId(), Label: req.GetLabel(), Address: req.GetAddress(), PrivateAddress: req.GetPrivateAddress(), Region: req.GetRegion(), Reachability: req.GetReachability(), Description: req.GetDescription(), Components: req.GetComponentIds()}
+	if req.GetSshPort() != 0 {
+		ssh := &SSHSpec{Port: int(req.GetSshPort()), User: req.GetSshUser()}
+		switch req.GetSshAuthType() {
+		case "password":
+			ssh.Password = req.GetSshSecret()
+		case "private_key":
+			ssh.PrivateKey, ssh.Passphrase = req.GetSshSecret(), req.GetSshPassphrase()
+		}
+		spec.SSH = ssh
+	}
 	dao, err := s.topologyDAO()
 	if err == nil {
-		err = dao.SyncHostDeployments(ctx, HostSpec{HostID: req.GetHostId(), Address: req.GetAddress(), PrivateAddress: req.GetPrivateAddress(), Region: req.GetRegion(), Reachability: req.GetReachability(), Description: req.GetDescription(), Components: req.GetComponentIds()})
+		err = dao.SyncHostDeployments(ctx, spec)
+	}
+	if err == nil {
+		// 连接信息可能变了：旧终端和文件会话不能继续连着旧凭据或旧地址。
+		s.closeHostSessions(req.GetHostId())
 	}
 	return &pb.SyncHostDeploymentsRsp{RetInfo: topologyRet(err)}, nil
 }
@@ -181,6 +196,9 @@ func (s *ServiceImpl) DeleteHost(ctx context.Context, req *pb.DeleteDeploymentHo
 	dao, err := s.topologyDAO()
 	if err == nil {
 		err = dao.DeleteHost(ctx, req.GetHostId())
+	}
+	if err == nil {
+		s.closeHostSessions(req.GetHostId())
 	}
 	return &pb.DeleteDeploymentHostRsp{RetInfo: topologyRet(err)}, nil
 }
