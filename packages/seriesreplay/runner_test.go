@@ -24,6 +24,8 @@ type fakeFactor struct {
 	gone     bool
 	// params 记录每期（不含写回）请求带来的参数快照。
 	params map[string]MemberParams
+	// applied 非空时模拟引擎的参数校验：返回这一期实际生效的参数与被拒绝的成员。
+	applied func(req FactorStepRequest) (MemberParams, []ParamRejection)
 }
 
 func (f *fakeFactor) Open(_ context.Context, req FactorOpenRequest) (FactorOpenResponse, error) {
@@ -53,7 +55,11 @@ func (f *fakeFactor) Step(_ context.Context, req FactorStepRequest) (FactorStepR
 		}
 		f.params[req.Period] = req.Params
 	}
-	return FactorStepResponse{Period: req.Period, Subjects: map[string]FactorSubject{"A": {Close: 100, Exec: 101, Factors: map[string]map[string]float64{"f": {"m": 1}}}}, States: map[string]FactorState{"f": {Status: "complete", DefinitionHash: "h1"}}}, nil
+	rsp := FactorStepResponse{Period: req.Period, Subjects: map[string]FactorSubject{"A": {Close: 100, Exec: 101, Factors: map[string]map[string]float64{"f": {"m": 1}}}}, States: map[string]FactorState{"f": {Status: "complete", DefinitionHash: "h1"}}}
+	if f.applied != nil {
+		rsp.AppliedParams, rsp.RejectedParams = f.applied(req)
+	}
+	return rsp, nil
 }
 
 func (f *fakeFactor) Close(context.Context, string) error { return nil }

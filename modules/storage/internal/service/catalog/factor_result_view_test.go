@@ -348,3 +348,57 @@ func TestGetDatasetReturnsLiveSubjectsRevision(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, second.GetSubjectsRevision(), first.GetSubjectsRevision(), "新增标的后 GetDataset 返回的修订号必须递增")
 }
+
+// 已有因子结果列只改了属性（成员换绑了另一个因子定义：factor_id、分类变化）时，默认结果 View 的同名列也带上新属性，
+// 排序与其他列不变，View 版本前进一次。
+func TestFactorResultColumnAttributeChangeRefreshesDefaultViewColumn(t *testing.T) {
+	ctx := context.Background()
+	store, service, dataset := newFactorResultActivationFixture(t, "factor_result")
+	activateFactorResultFixture(t, service, dataset)
+	column := func(factorID, category string) *pb.DatasetColumn {
+		return &pb.DatasetColumn{
+			SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId(), ColumnName: "fast_bias",
+			OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FACTOR, OriginId: "fast_bias",
+			ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE,
+			Attributes: map[string]string{
+				"display_name": "fast_bias", "factor_output": "fast_bias", "origin_factor_id": "fast_bias",
+				"member_alias": "fast", "factor_id": factorID, "category_id": category, "column_kind": "output",
+			},
+		}
+	}
+	_, err := store.UpsertDatasetColumn(ctx, column("BiasA", "momentum"))
+	require.NoError(t, err)
+	view, err := store.GetView(ctx, dataset.GetSpaceId(), "view_factor_btc_1m")
+	require.NoError(t, err)
+	revision := view.GetDesiredViewRevision()
+	var before *pb.ViewColumn
+	for _, item := range view.GetColumns() {
+		if item.GetColumnName() == "fast_bias" {
+			before = item
+		}
+	}
+	require.NotNil(t, before)
+	require.Equal(t, "BiasA", before.GetAttributes()["factor_id"])
+
+	_, err = store.UpsertDatasetColumn(ctx, column("BiasB", "volume"))
+	require.NoError(t, err)
+	view, err = store.GetView(ctx, dataset.GetSpaceId(), "view_factor_btc_1m")
+	require.NoError(t, err)
+	var after *pb.ViewColumn
+	for _, item := range view.GetColumns() {
+		if item.GetColumnName() == "fast_bias" {
+			after = item
+		}
+	}
+	require.NotNil(t, after)
+	require.Equal(t, "BiasB", after.GetAttributes()["factor_id"])
+	require.Equal(t, "volume", after.GetAttributes()["category_id"])
+	require.Equal(t, before.GetSortOrder(), after.GetSortOrder(), "只刷新属性，排序不动")
+	require.Equal(t, revision+1, view.GetDesiredViewRevision())
+
+	_, err = store.UpsertDatasetColumn(ctx, column("BiasB", "volume"))
+	require.NoError(t, err)
+	view, err = store.GetView(ctx, dataset.GetSpaceId(), "view_factor_btc_1m")
+	require.NoError(t, err)
+	require.Equal(t, revision+1, view.GetDesiredViewRevision(), "属性没变的重复 upsert 不再提升版本")
+}

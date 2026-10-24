@@ -43,11 +43,28 @@ func TestReplayStepAppliesRequestedParams(t *testing.T) {
 	require.InDelta(t, 2, step.Subjects["B"].Factors["fast"]["fast__window"], 1e-9)
 	require.Equal(t, domain.ParamsRequested, step.States["fast"].ParamsSource)
 
-	// 不合法的快照（超出范围、没有的成员）被拒绝。
-	_, status, err := m.Step(ctx, ReplayStepRequest{ReplayID: "tuned", Period: at, Params: map[string]domain.ParamSnapshot{"fast": {"window": {Default: 99}}}})
+	// 没有的成员是调用方的错误：整期失败。
+	_, status, err := m.Step(ctx, ReplayStepRequest{ReplayID: "tuned", Period: at, Params: map[string]domain.ParamSnapshot{"nope": {"window": {Default: 3}}}})
 	require.Error(t, err)
 	require.Equal(t, http.StatusBadRequest, status)
-	_, status, err = m.Step(ctx, ReplayStepRequest{ReplayID: "tuned", Period: at, Params: map[string]domain.ParamSnapshot{"nope": {"window": {Default: 3}}}})
-	require.Error(t, err)
-	require.Equal(t, http.StatusBadRequest, status)
+
+	// 不合法的快照（超出范围）与实时提交被拒绝一样：这个成员沿用上一期实际用的参数，整期不失败，拒绝原因随响应返回，
+	// 实际生效的参数也返回（策略回放据此保存，非法快照不会留在记录里）。
+	next := rt0.Add(16 * time.Minute).Format(time.RFC3339)
+	step, _, err = m.Step(ctx, ReplayStepRequest{ReplayID: "tuned", Period: next, Params: map[string]domain.ParamSnapshot{"fast": {"window": {Default: 99}}}})
+	require.NoError(t, err)
+	require.Len(t, step.RejectedParams, 1)
+	require.Equal(t, "fast", step.RejectedParams[0].Member)
+	require.NotEmpty(t, step.RejectedParams[0].Reason)
+	require.InDelta(t, 4, step.Subjects["A"].Factors["fast"]["fast__window"], 1e-9, "沿用上一期实际用的窗口（A 的覆盖 4）")
+	require.InDelta(t, 2, step.Subjects["B"].Factors["fast"]["fast__window"], 1e-9)
+	require.Equal(t, 2.0, step.AppliedParams["fast"]["window"].Default)
+	require.Equal(t, 4.0, step.AppliedParams["fast"]["window"].Overrides["A"])
+
+	// 合法的请求没有拒绝，实际生效的就是请求的。
+	step, _, err = m.Step(ctx, ReplayStepRequest{ReplayID: "tuned", Period: rt0.Add(17 * time.Minute).Add(-time.Minute).Format(time.RFC3339),
+		Params: map[string]domain.ParamSnapshot{"fast": {"window": {Default: 3}}}})
+	require.NoError(t, err)
+	require.Empty(t, step.RejectedParams)
+	require.Equal(t, 3.0, step.AppliedParams["fast"]["window"].Default)
 }

@@ -24,6 +24,7 @@ func (noopPeriodReader) ReadWindow(context.Context, storageio.ReadRequest) (map[
 type failingPrepare struct{ err error }
 
 func (f failingPrepare) Prepare(context.Context, domain.EngineSet, []string) error { return f.err }
+func (f failingPrepare) ReleaseSet(domain.FactorSet)                               {}
 
 func newCatchupRuntime(t *testing.T) (*Runtime, *watermark.Store) {
 	t.Helper()

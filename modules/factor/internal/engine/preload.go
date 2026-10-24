@@ -33,6 +33,8 @@ type preloadCatalog interface {
 // preloadData 是预载用到的数据层能力。
 type preloadData interface {
 	Prepare(ctx context.Context, set domain.EngineSet, subjects []string) error
+	// ReleaseSet 取消集合在数据源上的登记（集合离开目录或换了数据源）。
+	ReleaseSet(set domain.FactorSet)
 }
 
 type preloader struct {
@@ -54,6 +56,8 @@ type preloader struct {
 
 // preparedState 是集合预载成功时的回看根数和标的范围的指纹。
 type preparedState struct {
+	// set 是预载时的集合：离开目录或换了数据源后，用它找到并取消旧数据源上的登记。
+	set      domain.FactorSet
 	lookback int
 	scope    string
 	// subjects 是预载时标的清单的指纹：「全部标的」的集合标的来自数据集，用户在数据集的标签里删除（或新增）标的后清单会变，
@@ -97,6 +101,43 @@ func (p *preloader) upToDate(set domain.EngineSet) bool {
 	return ok && state.lookback >= maxLookbackOf(set) && state.scope == scopeOf(set)
 }
 
+// releaseGone 取消已经离开目录的集合的登记（删除、停用）：数据源没有别的集合用时，窗口与同步随之释放。
+func (p *preloader) releaseGone() {
+	inCatalog := map[string]struct{}{}
+	for _, id := range p.sets.SetIDs() {
+		inCatalog[id] = struct{}{}
+	}
+	p.mu.Lock()
+	var gone []preparedState
+	for id, state := range p.prepared {
+		if _, ok := inCatalog[id]; !ok {
+			gone = append(gone, state)
+			delete(p.prepared, id)
+		}
+	}
+	p.mu.Unlock()
+	for _, state := range gone {
+		p.data.ReleaseSet(state.set)
+		log.Infof("factor_preload_released set_id=%s source=%s/%s/%s reason=离开目录", state.set.SetID, state.set.SpaceID, state.set.SourceDatasetID, state.set.Freq)
+	}
+}
+
+// releaseIfRebound 在集合换了数据源（私有因子集随实例改绑 View，集合 ID 不变）之后、重新预载之前，取消旧数据源上的登记。
+func (p *preloader) releaseIfRebound(set domain.EngineSet) {
+	p.mu.Lock()
+	state, ok := p.prepared[set.Set.SetID]
+	p.mu.Unlock()
+	if !ok {
+		return
+	}
+	old := state.set
+	if old.SpaceID == set.Set.SpaceID && old.SourceDatasetID == set.Set.SourceDatasetID && old.Freq == set.Set.Freq {
+		return
+	}
+	p.data.ReleaseSet(old)
+	log.Infof("factor_preload_released set_id=%s source=%s/%s/%s reason=改绑数据源", old.SetID, old.SpaceID, old.SourceDatasetID, old.Freq)
+}
+
 // unmark 在重新预载之前清掉集合的成功记录：重新预载失败时集合不能还当作已就绪（旧的标的列表缓存会让后续重试被跳过）。
 func (p *preloader) unmark(setID string) {
 	p.mu.Lock()
@@ -106,7 +147,7 @@ func (p *preloader) unmark(setID string) {
 
 func (p *preloader) markPrepared(set domain.EngineSet, subjects []string) {
 	p.mu.Lock()
-	p.prepared[set.Set.SetID] = preparedState{lookback: maxLookbackOf(set), scope: scopeOf(set), subjects: subjectsSig(subjects)}
+	p.prepared[set.Set.SetID] = preparedState{set: set.Set, lookback: maxLookbackOf(set), scope: scopeOf(set), subjects: subjectsSig(subjects)}
 	p.mu.Unlock()
 }
 
@@ -217,6 +258,7 @@ func (p *preloader) once(ctx context.Context) {
 	if p.blocked != nil && p.blocked() {
 		return
 	}
+	p.releaseGone()
 	for _, setID := range p.sets.SetIDs() {
 		if ctx.Err() != nil || (p.active != nil && !p.active()) {
 			return
@@ -228,6 +270,7 @@ func (p *preloader) once(ctx context.Context) {
 		if p.upToDate(set) && !p.subjectsChanged(ctx, set) {
 			continue
 		}
+		p.releaseIfRebound(set)
 		p.unmark(setID)
 		subjects, err := p.prepare(ctx, set)
 		if err != nil && ctx.Err() == nil {

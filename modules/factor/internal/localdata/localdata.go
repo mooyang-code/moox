@@ -213,15 +213,35 @@ func (d *Data) lookbackFor(src seriesstore.Source, members []domain.MemberDef) i
 	return maxLookback(members)
 }
 
-// ReleaseSet 取消集合在数据源上的登记（集合离开目录时）；数据源下次准备时按其余集合的范围与回看收缩。
+// ReleaseSet 取消集合在数据源上的登记（集合离开目录、改绑到别的数据源时）。数据源还有其他集合登记时，窗口下次准备时
+// 按其余集合的范围与回看收缩；没有任何登记时直接丢弃数据源的窗口与同步状态，并释放它的常驻内存预算。
+// 等数据源锁与上一期的后台落盘结束再释放，不会打断在途的同步、跟进或落盘。
 func (d *Data) ReleaseSet(set domain.FactorSet) {
-	st := d.lookup(sourceOf(set))
+	src := sourceOf(set)
+	st := d.lookup(src)
 	if st == nil {
 		return
 	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	d.settleFlush(st)
 	st.regsMu.Lock()
 	delete(st.regs, set.SetID)
+	empty := len(st.regs) == 0
 	st.regsMu.Unlock()
+	if !empty {
+		return
+	}
+	d.mu.Lock()
+	if d.sources[src] == st {
+		delete(d.sources, src)
+	}
+	d.mu.Unlock()
+	st.ready.Store(false)
+	st.win.Store(nil)
+	if d.cfg.Admit != nil {
+		d.cfg.Admit.SetResident("window:"+src.String(), 0)
+	}
 }
 
 // lockSource 取数据源锁并度量等待时间：实时同步等锁超过阈值（默认 1 秒）说明导入、跟进或对账占着锁，记告警（设计 4.1）。

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -708,6 +709,11 @@ func (s *Store) UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn)
 		if err := addFactorResultViewColumn(ctx, tx, item); err != nil {
 			return nil, err
 		}
+	} else if isActive && wasActive && getErr == nil && !maps.Equal(existing.GetAttributes(), item.GetAttributes()) {
+		// 已有列只改了属性（例如成员换绑了另一个因子定义，列的 factor_id、分类随之变化）：View 列要带上新属性。
+		if err := refreshFactorResultViewColumnAttributes(ctx, tx, item); err != nil {
+			return nil, err
+		}
 	}
 	if projectionChanged {
 		if err := bumpViewsForDataset(ctx, tx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
@@ -755,6 +761,40 @@ func addFactorResultViewColumn(ctx context.Context, tx *sql.Tx, item *pb.Dataset
 		return bumpViewVersion(ctx, tx, item.GetSpaceId(), viewID)
 	}
 	return nil
+}
+
+// refreshFactorResultViewColumnAttributes 把数据集列的新属性同步到默认结果 View 的同名列：只改属性，排序与其他字段不动；
+// View 里还没有这一列（没有加进 View）时什么都不做。属性变了要提升 View 版本，下游缓存才会刷新。
+func refreshFactorResultViewColumnAttributes(ctx context.Context, tx *sql.Tx, item *pb.DatasetColumn) error {
+	dataset, err := getDatasetTx(ctx, tx, item.GetSpaceId(), item.GetDatasetId())
+	if err != nil {
+		return err
+	}
+	if dataset.GetAttributes()["dataset_role"] != "factor_result" || dataset.GetStatus() != "active" || !dataset.GetBindingLocked() {
+		return nil
+	}
+	viewID, err := factorResultDefaultViewID(dataset.GetDatasetId())
+	if err != nil {
+		return err
+	}
+	column, err := getMessage(ctx, tx, `SELECT c_attrs_json FROM t_view_columns WHERE c_space_id = ? AND c_view_id = ? AND c_column_name = ?`,
+		[]any{item.GetSpaceId(), viewID, item.GetColumnName()}, func() *pb.ViewColumn { return &pb.ViewColumn{} })
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	column.Attributes = cloneMetadataStringMap(item.GetAttributes())
+	raw, err := marshal(column)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE t_view_columns SET c_attrs_json = ? WHERE c_space_id = ? AND c_view_id = ? AND c_column_name = ?`,
+		raw, item.GetSpaceId(), viewID, item.GetColumnName()); err != nil {
+		return err
+	}
+	return bumpViewVersion(ctx, tx, item.GetSpaceId(), viewID)
 }
 
 func factorResultDefaultViewID(datasetID string) (string, error) {

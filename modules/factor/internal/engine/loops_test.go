@@ -337,3 +337,33 @@ func TestHeartbeatWakeSendsWithoutWaitingForTheTicker(t *testing.T) {
 	beat.Wake()
 	(&heartbeater{}).Wake()
 }
+
+// 补算前先把本地历史延长到覆盖「区间起点 − 回看」：区间早于本地最早数据时，否则整段按失败记录；补历史失败不终止任务。
+func TestRecalcLoopExtendsLocalHistoryBeforeRunning(t *testing.T) {
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	loop := newTestLoop(client, runner, &sourceFake{})
+	loop.now = func() time.Time { return client.job.Window.Start.Add(100 * time.Minute) }
+	var gotBars int
+	var gotSubjects []string
+	loop.history = func(_ context.Context, set domain.EngineSet, subjects []string, bars int) error {
+		gotBars, gotSubjects = bars, subjects
+		return nil
+	}
+
+	found, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, 100+maxLookbackOf(client.job.Set)+1, gotBars)
+	require.Equal(t, []string{"BTC"}, gotSubjects)
+	require.Len(t, runner.plans, 3)
+
+	// 补历史失败：任务照常运行（只用已有的本地数据）。
+	failing := &jobClientFake{job: testJob("BTC"), found: true}
+	loop2 := newTestLoop(failing, &planRecorder{out: pipeline.Outcome{Status: "complete"}}, &sourceFake{})
+	loop2.history = func(context.Context, domain.EngineSet, []string, int) error { return errors.New("storage 不可达") }
+	_, err = loop2.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, jobStatusSucceeded, failing.reports[len(failing.reports)-1].status)
+}

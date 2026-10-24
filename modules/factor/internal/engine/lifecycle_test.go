@@ -11,7 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type preloadDataFake struct{ prepared []string }
+type preloadDataFake struct {
+	prepared []string
+	released []domain.FactorSet
+}
+
+func (f *preloadDataFake) ReleaseSet(set domain.FactorSet) { f.released = append(f.released, set) }
 
 func (f *preloadDataFake) Prepare(_ context.Context, set domain.EngineSet, _ []string) error {
 	f.prepared = append(f.prepared, set.Set.SetID)

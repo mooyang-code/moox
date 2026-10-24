@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
+	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -48,7 +49,14 @@ type recalcLoop struct {
 	poll     time.Duration
 	// params 提供补算区间的冻结参数（可为 nil：全部按默认参数）。
 	params paramIntervalSource
+	// history 在补算前把本地时序存储的历史延长到能覆盖补算区间加回看（可为 nil：只读已有的本地数据）。
+	history historyExtender
+	// now 取当前时间（测试可替换）。
+	now func() time.Time
 }
+
+// historyExtender 把集合源数据每个标的的本地历史从 Storage 补到最多 bars 根（以本地最新一根往前数）。
+type historyExtender func(ctx context.Context, set domain.EngineSet, subjects []string, bars int) error
 
 // RunOnce pulls and runs at most one job; it reports whether a job was found.
 func (l *recalcLoop) RunOnce(ctx context.Context) (bool, error) {
@@ -88,6 +96,7 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 	set := job.Set
 	// 补算任务自带定义，领取时现场编译（设计 8）。
 	set.Members = CompileMembers(set.Members)
+	l.extendHistory(ctx, job)
 	lastNote := ""
 	report := func(ctx context.Context, progress time.Time, outcome pipeline.Outcome) (bool, error) {
 		status := jobStatusRunning
@@ -129,6 +138,32 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 		return recalcexec.Selection{Set: set.Set, Members: set.Members, Subjects: subjects, Columns: columns, Intervals: intervals}, nil
 	}
 	return l.executor.Run(ctx, job.Window, source, report)
+}
+
+// extendHistory 补算只读本地时序存储：补算区间（加回看）早于本地最早数据时，那些周期所有标的都“没有行”，整段按失败计算，
+// 任务还会标成功。例如新建私有因子集时的初始回填（几千根）远早于只预载了回看根数的本地数据。读之前先把本地历史从 Storage 补到
+// 覆盖 [区间起点 − 回看, 现在]；Storage 保留期内没有那么早的数据时有多少补多少，补不上的周期照旧按失败记录。
+// 补历史失败不终止任务（只有已有的本地数据可算），记日志。
+func (l *recalcLoop) extendHistory(ctx context.Context, job *PulledJob) {
+	if l.history == nil {
+		return
+	}
+	step, err := seriesstore.Step(job.Set.Set.Freq)
+	if err != nil {
+		return
+	}
+	now := time.Now
+	if l.now != nil {
+		now = l.now
+	}
+	bars := int(now().Sub(job.Window.Start)/step) + maxLookbackOf(job.Set) + 1
+	if bars < 1 {
+		return
+	}
+	log.InfoContextf(ctx, "factor_recalc_extend_history job_id=%s set_id=%s bars=%d", job.JobID, job.Set.Set.SetID, bars)
+	if err := l.history(ctx, job.Set, job.Subjects, bars); err != nil {
+		log.WarnContextf(ctx, "factor_recalc_extend_history_failed job_id=%s set_id=%s error=%v", job.JobID, job.Set.Set.SetID, err)
+	}
 }
 
 // setSubjects resolves an empty selection the way the manager accepted it:

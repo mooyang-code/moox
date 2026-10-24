@@ -1129,3 +1129,45 @@ func TestDeleteSetKeepsParamHistoryWhenPurgeFails(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, intervals)
 }
+
+// 结果列身份一致但属性过期（成员换绑了另一个定义后列上还留着旧的 factor_id、分类）：对账刷新属性并保留别处设置的其他属性。
+func TestReconcileRefreshesStaleResultColumnAttributes(t *testing.T) {
+	ctx := context.Background()
+	db := openCatalogStore(t)
+	meta := newMetadataFake()
+	svc := newReadyService(t, db, meta)
+	svc.recalc = &recalcFake{db: db}
+	addMember(t, svc, testSetID(), "momentum", domain.MemberStatusEnabled)
+	key := resultKey("crypto", domain.ResultDatasetID(testSetID()))
+	columns := meta.columns[key]
+	stale := -1
+	for i, col := range columns {
+		if col.ColumnName == "momentum" {
+			stale = i
+		}
+	}
+	require.GreaterOrEqual(t, stale, 0)
+	want := columns[stale].Attributes["factor_id"]
+	require.NotEmpty(t, want)
+	attributes := map[string]string{}
+	for k, v := range columns[stale].Attributes {
+		attributes[k] = v
+	}
+	attributes["factor_id"] = "旧定义"
+	attributes["note"] = "别处设置的属性"
+	columns[stale].Attributes = attributes
+	meta.writeOps = nil
+
+	require.NoError(t, svc.ReconcileSet(ctx, testSetID()))
+
+	require.Equal(t, []string{"upsert_columns"}, meta.writeOps)
+	for _, col := range meta.columns[key] {
+		if col.ColumnName == "momentum" {
+			require.Equal(t, want, col.Attributes["factor_id"])
+			require.Equal(t, "别处设置的属性", col.Attributes["note"], "只覆盖期望里写出的键")
+		}
+	}
+	meta.writeOps = nil
+	require.NoError(t, svc.ReconcileSet(ctx, testSetID()))
+	require.Empty(t, meta.writeOps, "属性已是最新时不再写 Storage")
+}
