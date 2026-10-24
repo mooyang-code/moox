@@ -58,6 +58,7 @@ message GetTaskListReq {
   optional bool enabled = 4;
   string task_id = 5;
   common.Page page = 6;
+  string keyword = 7;  // 任务名或任务 ID 的模糊匹配，空则不过滤
 }
 
 message GetTaskListRsp {

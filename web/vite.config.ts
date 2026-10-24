@@ -35,7 +35,9 @@ export default defineConfig(({ mode }) => {
       outDir: "dist", // 指定打包路径，默认为项目根目录下的dist目录
       minify: "esbuild", // Use esbuild to avoid the rollup error
       assetsInlineLimit: 2 * 1024, // 进一步降低内联阈值到2kb
-      chunkSizeWarningLimit: 1000, // 提高警告阈值到1MB
+      // 警告阈值：vchart-all（@visactor/vchart 全量）约 2MB，已是路由懒加载分包，只在图表页加载、不影响首屏。
+      // 其余分包均在 1MB 内；若未来出现新的超标分包，应优先考虑分包拆分而不是继续抬高阈值。
+      chunkSizeWarningLimit: 2100,
       // 开启源码映射用于生产环境调试（可选）
       sourcemap: false,
       // 启用CSS代码拆分
