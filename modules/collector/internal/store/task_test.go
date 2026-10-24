@@ -87,6 +87,44 @@ func TestCollectionTaskRepository_TaskNameLookupIsScopedAndTrimmed(t *testing.T)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
+func TestCollectionTaskRepository_ListKeywordMatchesNameOrTaskID(t *testing.T) {
+	s := newCollectorStore(t)
+	repo := s.Tasks()
+	ctx := context.Background()
+	require.NoError(t, repo.Create(ctx, domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "task-01abc", TaskName: "币安现货主流行情", Enabled: true,
+	}))
+	require.NoError(t, repo.Create(ctx, domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "task-02def", TaskName: "OKX 现货行情", Enabled: true,
+	}))
+	require.NoError(t, repo.Create(ctx, domain.CollectionTask{
+		SpaceID: "stockcn", TaskID: "task-03abc", TaskName: "币安现货主流行情", Enabled: true,
+	}))
+
+	for _, tc := range []struct {
+		keyword string
+		want    []string
+	}{
+		{keyword: "币安", want: []string{"task-01abc"}},
+		{keyword: "okx", want: []string{"task-02def"}},
+		{keyword: "OKX 现货", want: []string{"task-02def"}},
+		{keyword: "01abc", want: []string{"task-01abc"}},
+		{keyword: "TASK-01", want: []string{"task-01abc"}},
+		{keyword: "  币安  ", want: []string{"task-01abc"}},
+		{keyword: "%", want: nil},
+		{keyword: "missing", want: nil},
+	} {
+		tasks, total, err := repo.List(ctx, TaskFilter{SpaceID: "crypto", Keyword: tc.keyword, Page: 1, PageSize: 10})
+		require.NoError(t, err)
+		assert.Equal(t, int64(len(tc.want)), total, "keyword %q", tc.keyword)
+		got := make([]string, 0, len(tasks))
+		for _, task := range tasks {
+			got = append(got, task.TaskID)
+		}
+		assert.ElementsMatch(t, tc.want, got, "keyword %q", tc.keyword)
+	}
+}
+
 func TestCollectionTaskRepository_UpdateMutablePreservesTaskIdentityAndResult(t *testing.T) {
 	s := newCollectorStore(t)
 	repo := s.Tasks()
