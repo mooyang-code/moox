@@ -111,10 +111,14 @@
                           {{ record.enabled ? "禁用" : "启用" }}
                         </span>
                       </a-doption>
-                      <a-doption v-if="record.data_type === 'kline_resample'" @click="openJobs(record)">
+                      <a-doption class="action-danger" @click="openDelete(record)">删除</a-doption>
+                      <a-doption
+                        v-if="record.data_type === 'kline_resample'"
+                        class="action-resample"
+                        @click="openJobs(record)"
+                      >
                         历史合成
                       </a-doption>
-                      <a-doption class="action-danger" @click="openDelete(record)">删除</a-doption>
                     </template>
                   </a-dropdown>
                 </a-space>
@@ -1798,6 +1802,11 @@ pre {
 
 .action-danger {
   color: rgb(var(--red-6));
+}
+
+/* 「历史合成」：合成专属入口，与「新建合成」呼应，菜单里排在最后 */
+.action-resample {
+  color: rgb(var(--arcoblue-6));
 }
 
 .delete-options {
