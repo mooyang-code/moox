@@ -113,7 +113,7 @@
             :data="cloudFunctionList"
             :bordered="{ cell: true }"
             :loading="loading"
-            :scroll="{ x: '100%', y: '100%', minWidth: 1200 }"
+            :scroll="{ x: '100%', y: '100%', minWidth: 1100 }"
             :pagination="paginationConfig"
             :row-selection="batchChangeProcessing ? undefined : { type: 'checkbox', showCheckedAll: true }"
             :selected-keys="selectedKeys"
@@ -123,28 +123,28 @@
             @page-size-change="onPageSizeChange"
           >
             <template #columns>
-              <a-table-column title="实例ID" data-index="instance_id" :width="360">
+              <a-table-column title="实例ID" data-index="instance_id" :width="320">
                 <template #cell="{ record }">
                   <a-link class="instance-id-link" @click="onViewInstanceDetail(record)">{{ record.instance_id }}</a-link>
                 </template>
               </a-table-column>
-              <a-table-column title="命名空间" data-index="namespace" :width="90"></a-table-column>
-              <a-table-column title="实例类型" data-index="function_type" :width="135">
+              <a-table-column title="命名空间" data-index="namespace" :width="150"></a-table-column>
+              <a-table-column title="实例类型" data-index="function_type" :width="130">
                 <template #cell="{ record }">
                   <a-tag size="small" :color="getFunctionTypeColor(record.function_type)">
                     {{ getFunctionTypeLabel(record.function_type) }}
                   </a-tag>
                 </template>
               </a-table-column>
-              <a-table-column title="触发方式" data-index="trigger_type" :width="100">
+              <a-table-column title="触发方式" data-index="trigger_type" :width="90">
                 <template #cell="{ record }">{{ getTriggerTypeLabel(record.trigger_type) }}</template>
               </a-table-column>
-              <a-table-column title="地区" data-index="region" :width="110">
+              <a-table-column title="地区" data-index="region" :width="100">
                 <template #cell="{ record }">
                   {{ getRegionName(record.region) }}
                 </template>
               </a-table-column>
-              <a-table-column title="标签" data-index="tag" :width="80">
+              <a-table-column title="标签" data-index="tag" :width="70">
                 <template #cell="{ record }">
                   <a-tag
                     v-if="getRegionTag(record.region)"
@@ -156,7 +156,7 @@
                   <span v-else>-</span>
                 </template>
               </a-table-column>
-              <a-table-column title="代码包版本" data-index="package_version" :width="150">
+              <a-table-column title="代码包版本" data-index="package_version" :width="130">
                 <template #cell="{ record }">
                   <a-link
                     v-if="record.package_version && record.package_version !== '-'"
@@ -168,7 +168,7 @@
                   <span v-else>-</span>
                 </template>
               </a-table-column>
-              <a-table-column title="操作" :width="72" align="center" fixed="right">
+              <a-table-column title="操作" :width="64" align="center" fixed="right">
                 <template #cell="{ record }">
                   <a-popconfirm
                     content="确定要删除该实例吗？删除后将无法恢复。"
