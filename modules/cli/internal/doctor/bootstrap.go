@@ -36,6 +36,10 @@ type BootstrapOptions struct {
 	Now                                                       func() time.Time
 	ProbeWritable                                             func(context.Context, string, string) error
 	ProcessAlive                                              func(string) bool
+	// Systemd 检查 systemd_user 托管的组件（外部程序）：开机自启、运行中与 linger 三项都满足才通过；为空时退回 PID 检查。
+	Systemd SystemdChecker
+	// DeployRoot 是部署根目录：外部程序的安装目录是 <部署根>/<组件>，它声明的路径相对部署根而不是发布目录。
+	DeployRoot string
 }
 
 type bootstrapRunner struct {
@@ -251,17 +255,25 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 		if len(component.WritablePaths) == 0 {
 			return checkResult(spec.ID, core.StatusSkipped, "component declares no writable paths", nil)
 		}
+		pathRoot := r.options.ReleaseRoot
+		if _, systemd := systemdUnit(r.manifest, component.ComponentID); systemd && r.options.DeployRoot != "" {
+			pathRoot = r.options.DeployRoot
+		}
 		for _, path := range component.WritablePaths {
 			probeWritable := r.options.ProbeWritable
 			if probeWritable == nil {
 				probeWritable = ProbeWritablePath
 			}
-			if err := probeWritable(ctx, r.options.ReleaseRoot, path); err != nil {
+			if err := probeWritable(ctx, pathRoot, path); err != nil {
 				return checkResult(spec.ID, core.StatusFail, "writable path probe failed", err, "repair_path_permissions")
 			}
 		}
 		return checkResult(spec.ID, core.StatusPass, "declared writable paths accept bounded temporary probes", nil)
 	case "service_autostart":
+		if unit, systemd := systemdUnit(r.manifest, component.ComponentID); systemd && r.options.Systemd != nil {
+			state, err := r.options.Systemd(ctx, r.options.NodeID, unit)
+			return supervisorResult(spec.ID, unit, state, err)
+		}
 		pidPath := filepath.Join(r.options.ReleaseRoot, "run", component.ComponentID+".pid")
 		isAlive := r.options.ProcessAlive
 		if isAlive == nil {

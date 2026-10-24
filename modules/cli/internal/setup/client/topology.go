@@ -60,3 +60,41 @@ func (c *Client) SyncHostDeployments(ctx context.Context, snapshot *setupconfig.
 	}
 	return nil
 }
+
+// RegistrationState 是 Admin 里一个部署的启用状态：主机停用或该部署停用时，外部程序安装后不启动、不开机自启。
+type RegistrationState struct {
+	HostEnabled       bool
+	DeploymentEnabled bool
+}
+
+// DeploymentState 读取主机与组件部署在 Admin 里的启用状态；没有登记返回错误。
+func (c *Client) DeploymentState(ctx context.Context, hostID, componentID string) (RegistrationState, error) {
+	hosts := &pb.ListDeploymentHostsRsp{}
+	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "ListHosts", &pb.ListDeploymentHostsReq{HostId: hostID}, hosts); err != nil {
+		return RegistrationState{}, err
+	}
+	if err := remoteRet("ListHosts", hosts.GetRetInfo()); err != nil {
+		return RegistrationState{}, err
+	}
+	hostAt := slices.IndexFunc(hosts.GetHosts(), func(h *pb.DeploymentHost) bool { return h.GetHostId() == hostID })
+	if hostAt < 0 {
+		return RegistrationState{}, fmt.Errorf("主机 %s 没有登记在 Admin", hostID)
+	}
+	deployments := &pb.ListDeploymentsRsp{}
+	if err := c.invoke(ctx, "trpc.moox.ops.SysDeploy", "ListDeployments", &pb.ListDeploymentsReq{HostId: hostID, ComponentId: componentID}, deployments); err != nil {
+		return RegistrationState{}, err
+	}
+	if err := remoteRet("ListDeployments", deployments.GetRetInfo()); err != nil {
+		return RegistrationState{}, err
+	}
+	deploymentAt := slices.IndexFunc(deployments.GetDeployments(), func(d *pb.ComponentDeployment) bool {
+		return d.GetHostId() == hostID && d.GetComponentId() == componentID
+	})
+	if deploymentAt < 0 {
+		return RegistrationState{}, fmt.Errorf("主机 %s 没有登记部署 %s", hostID, componentID)
+	}
+	return RegistrationState{
+		HostEnabled:       hosts.GetHosts()[hostAt].GetStatus() == servicecatalog.Enabled,
+		DeploymentEnabled: deployments.GetDeployments()[deploymentAt].GetStatus() == servicecatalog.Enabled,
+	}, nil
+}

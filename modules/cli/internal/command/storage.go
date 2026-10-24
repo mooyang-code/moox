@@ -30,6 +30,7 @@ func init() {
 	storageCmd.AddCommand(storageForceRebuildViewCmd)
 	storageCmd.AddCommand(storageResetViewConsumersCmd)
 	storageCmd.AddCommand(storageResetMetadataCmd)
+	storageCmd.AddCommand(newStorageNodeCommand())
 }
 
 // storageRepairViewCmd delegates the maintenance implementation to the

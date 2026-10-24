@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -30,7 +29,6 @@ import (
 	"github.com/mooyang-code/moox/packages/gatewayauth"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/requestauth"
-	"github.com/mooyang-code/moox/packages/servicehost"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -59,8 +57,6 @@ func run(args []string) error {
 			return health(args[1:])
 		case "probe":
 			return probe(args[1:])
-		case "service":
-			return serviceCommand(args[1:])
 		}
 	}
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
@@ -72,33 +68,10 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	return servicehost.Run(workerService, func(ctx context.Context) error { return serve(ctx, cfg) })
+	return serve(context.Background(), cfg)
 }
 
-// workerService 是 Windows 服务名。
-const workerService = "moox-archive-worker"
-
-// serviceCommand 处理 Windows 上的 `service install|uninstall|start|stop [-config 路径]`：安装时把配置路径转成绝对路径写进启动参数。
-func serviceCommand(args []string) error {
-	if len(args) == 0 {
-		return servicehost.Command(servicehost.Spec{Name: workerService}, args)
-	}
-	fs := flag.NewFlagSet("service", flag.ContinueOnError)
-	configPath := fs.String("config", "config/app.yaml", "archive worker config")
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
-	}
-	absolute, err := filepath.Abs(*configPath)
-	if err != nil {
-		return err
-	}
-	return servicehost.Command(servicehost.Spec{
-		Name: workerService, DisplayName: "MooX archive worker", Description: "MooX 定时归档 worker（运维机外部程序）",
-		Args: []string{"-config", absolute},
-	}, args[:1])
-}
-
-// serve 运行 worker 直到收到退出信号，或 parent 结束（Windows 服务收到停止请求）。
+// serve 运行 worker 直到收到退出信号，或 parent 结束。
 func serve(parent context.Context, cfg *config.Config) (err error) {
 	gateway, err := cfg.OpenGateway()
 	if err != nil {

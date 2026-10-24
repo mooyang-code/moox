@@ -18,7 +18,7 @@ import (
 //go:embed moox.toml.example
 var exampleTemplate string
 
-// Render 把请求渲染成一份完整的 moox.toml：先借助 env 识别服务器、检测因子计算机，
+// Render 把请求渲染成一份完整的 moox.toml：先借助 env 识别服务器、检测因子机，
 // 再用 CLI 自己的严格解码和校验确认结果可用。失败时返回的错误信息不含任何秘密值。
 func Render(ctx context.Context, request *Request, env Environment) ([]byte, error) {
 	if err := request.normalize(ctx, env); err != nil {

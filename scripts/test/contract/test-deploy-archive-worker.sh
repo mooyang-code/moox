@@ -23,10 +23,13 @@ chmod 0600 "${secrets}"/*
 printf '#!/bin/sh\nexit 0\n' >"${tmp}/moox-archive-worker"
 chmod 0755 "${tmp}/moox-archive-worker"
 
-export MOOX_LAUNCH_AGENTS_DIR="${tmp}/LaunchAgents"
+health_env="${tmp}/health-auth.env"
+printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\nMOOX_HEALTH_AUTH_ACCESS_KEY=health-access-9\nMOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "$(printf 'h%.0s' {1..64})" >"${health_env}"
+chmod 0600 "${health_env}"
+
 export MOOX_SYSTEMD_USER_DIR="${tmp}/systemd"
 args=(--dir "${deploy}" --root-dir "${archive_root}" --worker-id archive-worker@testhost --access-address access.example.test:11004
-  --access-id access@storage --access-key-id key-123 --binary "${tmp}/moox-archive-worker" --no-start)
+  --access-id access@storage --access-key-id key-123 --binary "${tmp}/moox-archive-worker" --health-env "${health_env}" --no-start)
 
 # 输入校验。
 if bash "${SCRIPT}" --dir "${deploy}" --root-dir relative/path --access-address a:1 --access-id access@x --access-key-id k --no-start >"${tmp}/bad1.log" 2>&1; then
@@ -51,15 +54,17 @@ for want in 'access_address: "access.example.test:11004"' 'access_id: "access@st
   "root_dir: ${archive_root}" 'addr: 127.0.0.1:11418'; do
   grep -qF -- "${want}" "${config}" || fail "rendered config misses: ${want}"
 done
-[[ "$(uname -s)" == Darwin ]] && unit="${MOOX_LAUNCH_AGENTS_DIR}/com.moox.archive-worker.plist" || unit="${MOOX_SYSTEMD_USER_DIR}/moox-archive-worker.service"
+unit="${MOOX_SYSTEMD_USER_DIR}/moox-archive-worker.service"
 [[ -s "${unit}" ]] || fail "service definition was not rendered"
 grep -qF "${deploy}/bin/moox-archive-worker" "${unit}" || fail "service definition does not run the installed binary"
 grep -q '__[A-Z_]*__' "${unit}" && fail "unrendered placeholder in the service definition"
-[[ -s "${secrets}/health-auth.env" ]] || fail "health auth env was not generated"
+[[ -s "${secrets}/health-auth.env" ]] || fail "health auth env was not installed"
+grep -qF 'MOOX_HEALTH_AUTH_ACCESS_KEY=health-access-9' "${secrets}/health-auth.env" || fail "health auth env must come from --health-env"
 [[ "$(stat -f '%Lp' "${secrets}/health-auth.env" 2>/dev/null || stat -c '%a' "${secrets}/health-auth.env")" == 600 ]] || fail "health auth env must be mode 0600"
-# 再次部署保留已生成的健康检查凭据。
+# 再次部署不带 --health-env 时保留已安装的健康检查凭据。
 before="$(cat "${secrets}/health-auth.env")"
-bash "${SCRIPT}" "${args[@]}" >/dev/null 2>&1 || fail "second deploy failed"
+bash "${SCRIPT}" --dir "${deploy}" --root-dir "${archive_root}" --worker-id archive-worker@testhost --access-address access.example.test:11004 \
+  --access-id access@storage --access-key-id key-123 --skip-build --no-start >/dev/null 2>&1 || fail "second deploy failed"
 [[ "$(cat "${secrets}/health-auth.env")" == "${before}" ]] || fail "health credentials must be kept across deployments"
 
 echo "deploy-archive-worker contract passed"

@@ -436,7 +436,7 @@ func describe(m setupconfig.Manifest, encrypted bool, where string) Overview {
 		}
 		view.Servers = append(view.Servers, server)
 	}
-	// 按用途排序：管理台、数据存储、海外、因子计算机，其余在后。
+	// 按用途排序：管理台、数据存储、海外、因子机，其余在后。
 	rank := func(server ServerView) int {
 		for i, use := range []string{"管理台", "数据存储", "海外接入与交易", "因子计算"} {
 			if slices.Contains(server.Uses, use) {

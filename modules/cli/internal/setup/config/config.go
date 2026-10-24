@@ -91,6 +91,8 @@ type Paths struct {
 	DeployRoot  string `toml:"deploy_root"`
 	ControlRoot string `toml:"control_root"`
 	StorageRoot string `toml:"storage_root"`
+	// ArchiveRoot 是归档 worker 存放分区文件与暂存库的目录（在运行 worker 的主机上）。
+	ArchiveRoot string `toml:"archive_root"`
 }
 
 // LocalLogs bounds process stdout/stderr and framework log files under each
@@ -110,9 +112,13 @@ func (p Paths) Resolved() Paths {
 	if strings.TrimSpace(p.StorageRoot) == "" {
 		p.StorageRoot = filepath.Join(p.DeployRoot, "storage")
 	}
+	if strings.TrimSpace(p.ArchiveRoot) == "" {
+		p.ArchiveRoot = filepath.Join(p.DeployRoot, "archive")
+	}
 	p.DeployRoot = filepath.Clean(strings.TrimSpace(p.DeployRoot))
 	p.ControlRoot = filepath.Clean(strings.TrimSpace(p.ControlRoot))
 	p.StorageRoot = filepath.Clean(strings.TrimSpace(p.StorageRoot))
+	p.ArchiveRoot = filepath.Clean(strings.TrimSpace(p.ArchiveRoot))
 	return p
 }
 
@@ -669,8 +675,9 @@ func validatePaths(paths *Paths) error {
 	paths.DeployRoot = filepath.Clean(strings.TrimSpace(paths.DeployRoot))
 	paths.ControlRoot = filepath.Clean(strings.TrimSpace(paths.ControlRoot))
 	paths.StorageRoot = filepath.Clean(strings.TrimSpace(paths.StorageRoot))
+	paths.ArchiveRoot = filepath.Clean(strings.TrimSpace(paths.ArchiveRoot))
 	for name, value := range map[string]string{
-		"deploy_root": paths.DeployRoot, "control_root": paths.ControlRoot, "storage_root": paths.StorageRoot,
+		"deploy_root": paths.DeployRoot, "control_root": paths.ControlRoot, "storage_root": paths.StorageRoot, "archive_root": paths.ArchiveRoot,
 	} {
 		if value == "" || !filepath.IsAbs(value) || value == "/" || strings.ContainsAny(value, "\x00\r\n") {
 			return fmt.Errorf("config_invalid: paths.%s must be a non-root absolute path", name)
@@ -688,6 +695,9 @@ func validatePaths(paths *Paths) error {
 	}
 	if paths.StorageRoot == paths.DeployRoot || pathsOverlap(paths.StorageRoot, paths.ControlRoot) {
 		return fmt.Errorf("config_invalid: paths.storage_root must not overlap deploy_root or control_root")
+	}
+	if paths.ArchiveRoot == paths.DeployRoot || pathsOverlap(paths.ArchiveRoot, paths.ControlRoot) || pathsOverlap(paths.ArchiveRoot, paths.StorageRoot) {
+		return fmt.Errorf("config_invalid: paths.archive_root must not overlap deploy_root, control_root or storage_root")
 	}
 	return nil
 }

@@ -121,12 +121,17 @@ func TestValidateRejectsStorageRootOverlapWithControl(t *testing.T) {
 		DeployRoot:  "/data/moox",
 		ControlRoot: "/data/moox/prod",
 		StorageRoot: "/data/moox/prod/storage",
+		ArchiveRoot: "/data/moox/archive",
 	}
 	require.ErrorContains(t, validatePaths(paths), "must not overlap")
 	paths.StorageRoot = "/data/moox"
 	require.ErrorContains(t, validatePaths(paths), "must not overlap")
 	paths.StorageRoot = "/data/moox/storage"
 	require.NoError(t, validatePaths(paths))
+	paths.ArchiveRoot = "/data/moox/storage/archive"
+	require.ErrorContains(t, validatePaths(paths), "archive_root must not overlap")
+	paths.ArchiveRoot = "/data/moox"
+	require.ErrorContains(t, validatePaths(paths), "archive_root must not overlap")
 }
 
 func TestLoadLocalLogRotationFromManifest(t *testing.T) {
@@ -166,7 +171,7 @@ storage_root = "/data/custom/storage"
 `
 	snapshot, err := Load(writeManifest(t, root, body, 0o600), root)
 	require.NoError(t, err)
-	assert.Equal(t, Paths{DeployRoot: "/data/custom", ControlRoot: "/data/custom/control", StorageRoot: "/data/custom/storage"}, snapshot.Manifest.Paths)
+	assert.Equal(t, Paths{DeployRoot: "/data/custom", ControlRoot: "/data/custom/control", StorageRoot: "/data/custom/storage", ArchiveRoot: "/data/custom/archive"}, snapshot.Manifest.Paths)
 }
 
 func TestLoadAllowsStorageRootOnSeparateHostMount(t *testing.T) {

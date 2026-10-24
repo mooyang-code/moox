@@ -151,6 +151,15 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 				return err
 			}
 			prober := doctorcli.HTTPProber{Auth: auth}
+			// 外部程序（systemd 用户服务）与只能出站的主机：状态经 SSH（本机则直接执行）读取，健康经 control 中转探测。
+			var systemd doctorcli.SystemdChecker
+			var relay *doctorcli.RelayProber
+			var deployRoot string
+			if remote := loadDoctorRemote(file, doctorCfg.NodeID, gateway); remote != nil {
+				defer remote.Close()
+				systemd, relay = remote.Systemd(), remote.Relay(auth)
+				deployRoot = remote.manifest.Paths.Resolved().DeployRoot
+			}
 			var reportValue core.Report
 			switch mode {
 			case "bootstrap":
@@ -158,10 +167,11 @@ func newDoctorModeCommand(mode string, deps doctorCommandDeps) *cobra.Command {
 					NodeID: nodeID, LocalNodeID: doctorCfg.NodeID, ReleaseRoot: doctorCfg.ReleaseRoot,
 					DatasetHealthPolicyPath: resolveReleasePath(doctorCfg.ReleaseRoot, doctorCfg.DatasetHealthPolicyPath),
 					CheckIDs:                checks, Client: client, MonitorClient: client, StorageActivation: storageActivation, Prober: prober,
+					Systemd: systemd, DeployRoot: deployRoot,
 				})
 			case "diagnose":
 				reportValue, err = doctorcli.RunDiagnose(cmd.Context(), doctorcli.DiagnoseOptions{
-					NodeID: nodeID, CheckIDs: checks, Client: client, Prober: prober,
+					NodeID: nodeID, CheckIDs: checks, Client: client, Prober: prober, Relay: relay, Systemd: systemd,
 					HealthChecks: report.BuiltInModuleHealthChecks(),
 				})
 			}

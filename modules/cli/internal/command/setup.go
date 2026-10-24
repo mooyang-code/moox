@@ -91,6 +91,8 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupExportSkillConfigCommand(deps),
 		newSetupFirewallCommand(deps),
 		newSetupStorageAuthCommand(deps),
+		newSetupHostStatusCommand(deps, defaultStatusEnv),
+		newSetupDeploymentStatusCommand(deps, defaultStatusEnv),
 	)
 	return cmd
 }

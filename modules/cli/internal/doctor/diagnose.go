@@ -17,17 +17,22 @@ type ContextClient interface {
 }
 
 type DiagnoseOptions struct {
-	NodeID       string
-	CheckIDs     []string
-	Client       ContextClient
-	Prober       HTTPProber
+	NodeID   string
+	CheckIDs []string
+	Client   ContextClient
+	Prober   HTTPProber
+	// Relay 为只能出站的主机提供经 control 中转的健康探测；为空时一律直连。
+	Relay *RelayProber
+	// Systemd 检查 systemd_user 托管的组件（外部程序）的服务状态；为空时这类组件的托管状态记为无法判断。
+	Systemd      SystemdChecker
 	HealthChecks []report.ModuleHealthCheck
 	Now          func() time.Time
 }
 
 type diagnoseRunner struct {
-	options DiagnoseOptions
-	context *monitorpb.GetDoctorContextRsp
+	options  DiagnoseOptions
+	context  *monitorpb.GetDoctorContextRsp
+	manifest core.Manifest
 }
 
 func RunDiagnose(ctx context.Context, options DiagnoseOptions) (core.Report, error) {
@@ -68,12 +73,12 @@ func RunDiagnose(ctx context.Context, options DiagnoseOptions) (core.Report, err
 		report.RunID, report.ManifestChecksum = newRunID(), manifest.Checksum
 		return report, nil
 	}
-	specs := diagnoseSpecs(snapshot, options.HealthChecks)
+	specs := diagnoseSpecs(manifest, snapshot, options.HealthChecks)
 	specs, err = selectSpecs(specs, options.CheckIDs)
 	if err != nil {
 		return core.Report{}, err
 	}
-	runner := &diagnoseRunner{options: options, context: snapshot}
+	runner := &diagnoseRunner{options: options, context: snapshot, manifest: manifest}
 	result, err := (core.Engine{Mode: core.ModeDiagnose, Now: options.Now}).Run(ctx, specs, core.RunnerFunc(runner.run))
 	if err != nil {
 		return core.Report{}, err
@@ -86,7 +91,7 @@ func RunDiagnose(ctx context.Context, options DiagnoseOptions) (core.Report, err
 	return result, nil
 }
 
-func diagnoseSpecs(snapshot *monitorpb.GetDoctorContextRsp, healthChecks []report.ModuleHealthCheck) []core.CheckSpec {
+func diagnoseSpecs(manifest core.Manifest, snapshot *monitorpb.GetDoctorContextRsp, healthChecks []report.ModuleHealthCheck) []core.CheckSpec {
 	specs := []core.CheckSpec{{ID: "diagnose.context"}}
 	health := map[string]string{}
 	freshnessByModule := map[string]string{}
@@ -94,6 +99,9 @@ func diagnoseSpecs(snapshot *monitorpb.GetDoctorContextRsp, healthChecks []repor
 		scope := component.GetComponentId() + "@" + component.GetNodeId()
 		health[component.GetComponentId()] = "service.health:" + scope
 		specs = append(specs, core.CheckSpec{ID: health[component.GetComponentId()], OptionalDependencies: []string{"diagnose.context"}})
+		if _, systemd := systemdUnit(manifest, component.GetComponentId()); systemd {
+			specs = append(specs, core.CheckSpec{ID: "service.supervisor:" + scope, OptionalDependencies: []string{"diagnose.context"}})
+		}
 	}
 	deps := []string{}
 	for _, id := range []string{"eventbus", "monitor"} {
@@ -162,13 +170,25 @@ func (r *diagnoseRunner) run(ctx context.Context, spec core.CheckSpec, _ []core.
 		if component.GetHealthUrl() == "" {
 			return checkResult(spec.ID, core.StatusUnknown, "health observation is missing and no fixed endpoint is available", nil, "run_bootstrap")
 		}
-		probe, err := r.options.Prober.Get(ctx, component.GetHealthUrl())
+		probe, err := r.probeHealth(ctx, component.GetNodeId(), component.GetHealthUrl())
 		if err != nil {
 			return checkResult(spec.ID, core.StatusFail, "direct health evidence confirms a service failure", err, "restart_service_manually")
 		}
 		result := checkResult(spec.ID, core.StatusPass, "missing or stale Monitor health fact was confirmed by a bounded direct read", nil)
 		result.Observations = []core.Observation{{Source: "direct_health", ObservedAt: probe.ObservedAt, Summary: "signed direct health response", Digest: probe.Digest}}
 		return result
+	}
+	if strings.HasPrefix(spec.ID, "service.supervisor:") {
+		component := r.expectedFromID(spec.ID)
+		if component == nil || !component.GetExpected() {
+			return checkResult(spec.ID, core.StatusSkipped, "component is disabled or not expected", nil)
+		}
+		unit, _ := systemdUnit(r.manifest, component.GetComponentId())
+		if r.options.Systemd == nil {
+			return checkResult(spec.ID, core.StatusUnknown, "systemd state checker is unavailable for this run", nil, "restart_service_manually")
+		}
+		state, err := r.options.Systemd(ctx, component.GetNodeId(), unit)
+		return supervisorResult(spec.ID, unit, state, err)
 	}
 	if strings.HasPrefix(spec.ID, "monitor.metrics_delivery:") {
 		missing := false
@@ -557,4 +577,14 @@ func firstNode(snapshot *monitorpb.GetDoctorContextRsp) string {
 func parseWireTime(value string) time.Time {
 	parsed, _ := time.Parse(time.RFC3339Nano, value)
 	return parsed
+}
+
+// probeHealth 直连探测节点的健康地址；只能出站的节点改经 control 中转（用 moox-cli 身份）。
+func (r *diagnoseRunner) probeHealth(ctx context.Context, nodeID, rawURL string) (ProbeResult, error) {
+	if r.options.Relay != nil {
+		if result, handled, err := r.options.Relay.Get(ctx, nodeID, rawURL); handled {
+			return result, err
+		}
+	}
+	return r.options.Prober.Get(ctx, rawURL)
 }

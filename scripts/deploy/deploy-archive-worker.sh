@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# Installs moox-archive-worker on the machine that runs it (macOS with launchd,
-# Linux with a systemd user unit). The worker only dials out: to the fixed
-# native Access for archive-mgr and Storage.
+# Installs moox-archive-worker as a systemd user unit on the Linux machine that
+# runs it. The worker only dials out: to the fixed native Access for archive-mgr
+# and Storage. moox-cli unpacks the release package, uploads the credentials and
+# runs this script (setup deploy-unit --profile archive-worker).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-OS="$(uname -s)"
-# Not under ~/Documents: macOS privacy protection blocks a launchd job from
-# opening a rebuilt binary there until the user approves an invisible prompt.
 DEPLOY_DIR="${HOME}/moox/archive-worker"
 SECRETS_DIR=""
 ROOT_DIR=""
@@ -16,9 +14,9 @@ ACCESS_ADDRESS=""
 ACCESS_ID=""
 ACCESS_KEY_ID=""
 BINARY=""
+HEALTH_ENV=""
 SKIP_BUILD=0
 NO_START=0
-LAUNCH_AGENTS_DIR="${MOOX_LAUNCH_AGENTS_DIR:-${HOME}/Library/LaunchAgents}"
 SYSTEMD_USER_DIR="${MOOX_SYSTEMD_USER_DIR:-${HOME}/.config/systemd/user}"
 
 usage() {
@@ -28,14 +26,16 @@ Usage:
     --access-key-id KEY_ID [options]
 
 Options:
-  --dir <path>              Install directory (binary, config, logs). Default: ~/moox/archive-worker. On macOS keep it out of ~/Documents.
+  --dir <path>              Install directory (binary, config, logs). Default: ~/moox/archive-worker.
   --root-dir <path>         Archive root: partition files and the .state staging database live here. Absolute path, required.
   --secrets-dir <path>      Directory holding the worker credentials. Default: <dir>/secrets.
   --worker-id <id>          Stable worker id. Default: archive-worker@<short hostname>. Keep it when moving the archive root to another machine.
   --access-address <addr>   Fixed native Access host:port for archive-mgr and Storage.
   --access-id <id>          Access identity, e.g. access@storage.
   --access-key-id <id>      KeyID assigned by Admin keys export --caller archive-worker.
-  --binary <path>           Install this prebuilt moox-archive-worker, e.g. cross-built by `scripts/build/build.sh archive-worker`.
+  --binary <path>           Install this prebuilt moox-archive-worker (from the release package).
+  --health-env <path>       Health credential file (MOOX_HEALTH_AUTH_* variables, mode 0600) rendered by moox-cli.
+                            Required for the first deployment; later deployments keep the installed one.
   --skip-build              Reuse <dir>/bin/moox-archive-worker.
   --no-start                Install files only; do not (re)start the service.
 
@@ -64,6 +64,7 @@ while [[ $# -gt 0 ]]; do
     --access-id) ACCESS_ID="$2"; shift 2 ;;
     --access-key-id) ACCESS_KEY_ID="$2"; shift 2 ;;
     --binary) BINARY="$2"; shift 2 ;;
+    --health-env) HEALTH_ENV="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --no-start) NO_START=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -71,7 +72,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "${ROOT_DIR}" = /* && "${ROOT_DIR}" != *$'\n'* && "${ROOT_DIR}" != */Documents/* ]] || fail "--root-dir must be an absolute path outside ~/Documents"
+[[ "${ROOT_DIR}" = /* && "${ROOT_DIR}" != *$'\n'* ]] || fail "--root-dir must be an absolute path"
 [[ "${ACCESS_ADDRESS}" =~ ^(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+):[0-9]+$ ]] || fail "--access-address must be host:port"
 [[ "${ACCESS_ID}" =~ ^access@[a-z][a-z0-9]*(-[a-z0-9]+)*$ ]] || fail "--access-id must be access@host"
 [[ "${ACCESS_KEY_ID}" =~ ^[A-Za-z0-9._@:-]+$ && ${#ACCESS_KEY_ID} -le 128 ]] || fail "--access-key-id must be the assigned credential identifier"
@@ -105,13 +106,6 @@ if [[ -n "${BINARY}" ]]; then
   [[ -f "${BINARY}" ]] || fail "missing binary ${BINARY}"
   install -m 0755 "${BINARY}" "${DEPLOY_DIR}/bin/moox-archive-worker.new"
   mv -f "${DEPLOY_DIR}/bin/moox-archive-worker.new" "${DEPLOY_DIR}/bin/moox-archive-worker"
-elif [[ "${SKIP_BUILD}" -eq 0 ]]; then
-  # Pure Go (SQLite staging). Go module downloads stall behind an operator's local HTTP proxy.
-  log "build moox-archive-worker"
-  version="$(git -C "${ROOT}" describe --always --dirty 2>/dev/null || echo dev)"
-  (cd "${ROOT}/modules/archive" && env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy CGO_ENABLED=0 \
-    go build -ldflags "-X main.Version=${version} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    -o "${DEPLOY_DIR}/bin/moox-archive-worker" ./cmd/worker)
 fi
 [[ -x "${DEPLOY_DIR}/bin/moox-archive-worker" ]] || fail "missing ${DEPLOY_DIR}/bin/moox-archive-worker"
 
@@ -157,14 +151,17 @@ maintenance:
 EOF2
 umask 022
 
+# 健康检查凭据由 moox-cli 按集群运行身份渲染后传入（Monitor 经中转探测时用同一把）；重复部署不带 --health-env 时沿用已有的。
 health_env="${SECRETS_DIR}/health-auth.env"
-if [[ ! -s "${health_env}" ]]; then
-  (umask 077; {
-    printf 'MOOX_HEALTH_AUTH_VERSION=moox-health-v1\n'
-    printf 'MOOX_HEALTH_AUTH_ACCESS_KEY=%s\n' "archive-worker-$(openssl rand -hex 8)"
-    printf 'MOOX_HEALTH_AUTH_SECRET_KEY=%s\n' "$(openssl rand -hex 32)"
-  } >"${health_env}")
+if [[ -n "${HEALTH_ENV}" ]]; then
+  [[ -f "${HEALTH_ENV}" && ! -L "${HEALTH_ENV}" ]] || fail "missing --health-env file ${HEALTH_ENV}"
+  [[ "$(file_mode "${HEALTH_ENV}")" == 600 ]] || fail "--health-env file ${HEALTH_ENV} must have mode 0600"
+  for var in MOOX_HEALTH_AUTH_VERSION MOOX_HEALTH_AUTH_ACCESS_KEY MOOX_HEALTH_AUTH_SECRET_KEY; do
+    grep -Eq "^${var}=[^[:space:]]+$" "${HEALTH_ENV}" || fail "--health-env file lacks ${var}"
+  done
+  (umask 077; cp "${HEALTH_ENV}" "${health_env}.new" && mv -f "${health_env}.new" "${health_env}")
 fi
+[[ -s "${health_env}" ]] || fail "--health-env is required for the first deployment"
 health_access="$(sed -n 's/^MOOX_HEALTH_AUTH_ACCESS_KEY=//p' "${health_env}")"
 health_secret="$(sed -n 's/^MOOX_HEALTH_AUTH_SECRET_KEY=//p' "${health_env}")"
 [[ -n "${health_access}" && -n "${health_secret}" ]] || fail "invalid ${health_env}"
@@ -174,41 +171,15 @@ render_template() {
     -e "s#__HEALTH_SECRET_KEY__#${health_secret}#g" "$1"
 }
 
-if [[ "${OS}" == Darwin ]]; then
-  mkdir -p "${LAUNCH_AGENTS_DIR}"
-  plist="${LAUNCH_AGENTS_DIR}/com.moox.archive-worker.plist"
-  (umask 077; render_template "${ROOT}/deploy/launchd/com.moox.archive-worker.plist.tmpl" >"${plist}")
-  plutil -lint "${plist}" >/dev/null || fail "rendered launchd plist is invalid"
-  if [[ "${NO_START}" -eq 0 ]]; then
-    service="gui/$(id -u)/com.moox.archive-worker"
-    launchctl bootout "${service}" >/dev/null 2>&1 || true
-    # bootout returns before the old job is gone; bootstrapping over it fails
-    # with "Input/output error", so wait for the unload and retry briefly.
-    for _ in $(seq 1 20); do
-      launchctl print "${service}" >/dev/null 2>&1 || break
-      sleep 0.5
-    done
-    bootstrapped=0
-    for _ in 1 2 3 4 5; do
-      if launchctl bootstrap "gui/$(id -u)" "${plist}" 2>/dev/null; then
-        bootstrapped=1
-        break
-      fi
-      sleep 1
-    done
-    [[ "${bootstrapped}" -eq 1 ]] || fail "launchctl bootstrap ${plist} failed"
-  fi
-else
-  mkdir -p "${SYSTEMD_USER_DIR}"
-  render_template "${ROOT}/deploy/systemd/user/moox-archive-worker.service.tmpl" >"${SYSTEMD_USER_DIR}/moox-archive-worker.service"
-  if command -v loginctl >/dev/null 2>&1 && [[ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)" != yes ]]; then
-    log "warning: user lingering is off; the worker stops at logout (enable with: loginctl enable-linger $(id -un))"
-  fi
-  if [[ "${NO_START}" -eq 0 ]]; then
-    systemctl --user daemon-reload
-    systemctl --user enable moox-archive-worker.service
-    systemctl --user restart moox-archive-worker.service
-  fi
+mkdir -p "${SYSTEMD_USER_DIR}"
+render_template "${ROOT}/deploy/systemd/user/moox-archive-worker.service.tmpl" >"${SYSTEMD_USER_DIR}/moox-archive-worker.service"
+if command -v loginctl >/dev/null 2>&1 && [[ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)" != yes ]]; then
+  log "warning: user lingering is off; the worker stops at logout (enable with: loginctl enable-linger $(id -un))"
+fi
+if [[ "${NO_START}" -eq 0 ]]; then
+  systemctl --user daemon-reload
+  systemctl --user enable moox-archive-worker.service
+  systemctl --user restart moox-archive-worker.service
 fi
 
 if [[ "${NO_START}" -eq 1 ]]; then

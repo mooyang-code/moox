@@ -79,7 +79,7 @@ func TestUnitExtractionPublishesVerifiedSoftwareForAllProfiles(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
 		t.Skip("atomic software extraction requires Linux or macOS")
 	}
-	for _, profile := range []string{"host", "control", "storage", "access", "egress-proxy", "trade"} {
+	for _, profile := range []string{"host", "control", "storage", "access", "egress-proxy", "trade", "factor-engine", "archive-worker"} {
 		for _, arch := range []string{"amd64", "arm64"} {
 			t.Run(profile+"/"+arch, func(t *testing.T) {
 				built, err := Package(t.Context(), unitFixtureOptions(t, profile, arch))

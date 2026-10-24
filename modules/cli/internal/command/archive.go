@@ -34,6 +34,7 @@ type archiveFlags struct {
 	From         string
 	To           string
 	RunID        string
+	WorkerID     string
 	PartitionKey string
 	FromMonth    string
 	ToMonth      string
@@ -145,6 +146,19 @@ func runArchiveTasksDelete(ctx context.Context, out io.Writer, f archiveFlags) e
 	return archiveInvoke(ctx, out, f.File, "DeleteArchiveTask", &archivepb.DeleteArchiveTaskReq{SpaceId: f.SpaceID, DatasetId: f.DatasetID}, rsp, rsp.GetRetInfo)
 }
 
+// runArchiveWorkerRetire 删除一条不再使用的 worker 登记；仍持有活动租约的 worker 不能退役。
+func runArchiveWorkerRetire(ctx context.Context, out io.Writer, f archiveFlags) error {
+	workerID := strings.TrimSpace(f.WorkerID)
+	if workerID == "" {
+		return errors.New("--worker 必填")
+	}
+	if !f.Yes {
+		return errors.New("退役会删除这条 worker 登记（仍持有活动租约的 worker 不能退役）；确认后加 --yes")
+	}
+	rsp := &archivepb.RetireArchiveWorkerRsp{}
+	return archiveInvoke(ctx, out, f.File, "RetireArchiveWorker", &archivepb.RetireArchiveWorkerReq{WorkerId: workerID}, rsp, rsp.GetRetInfo)
+}
+
 func runArchiveTasksRun(ctx context.Context, out io.Writer, f archiveFlags) error {
 	if err := f.requireSpaceAndDataset(); err != nil {
 		return err
@@ -244,9 +258,16 @@ func init() {
 	tasks := &cobra.Command{Use: "tasks", Short: "归档任务"}
 	runs := &cobra.Command{Use: "runs", Short: "归档运行"}
 	partitions := &cobra.Command{Use: "partitions", Short: "归档分区"}
+	workers := &cobra.Command{Use: "worker", Short: "归档 worker 登记"}
 	archiveCmd.AddCommand(
 		newArchiveLeaf("overview", "worker、正在执行的运行与告警总览", runArchiveOverview, func(*cobra.Command, *archiveFlags) {}),
-		tasks, runs, partitions,
+		tasks, runs, partitions, workers,
+	)
+	workers.AddCommand(
+		newArchiveLeaf("retire", "退役一个不再使用的 worker 登记（例如换机后的旧记录）", runArchiveWorkerRetire, func(c *cobra.Command, f *archiveFlags) {
+			c.Flags().StringVar(&f.WorkerID, "worker", "", "worker ID（归档总览里的 worker_id）")
+			c.Flags().BoolVar(&f.Yes, "yes", false, "确认退役")
+		}),
 	)
 	tasks.AddCommand(
 		newArchiveLeaf("list", "列出归档任务（--space-id 为空表示全部空间）", runArchiveTasksList, func(c *cobra.Command, f *archiveFlags) { bindSpace(c, f); bindPaging(c, f) }),

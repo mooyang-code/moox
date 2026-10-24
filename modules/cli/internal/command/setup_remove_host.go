@@ -10,7 +10,7 @@ import (
 )
 
 // newSetupRemoveHostCommand 从 Admin 拓扑删除一台已不在 moox.toml 里的主机（例如改名前的旧 ID）。
-// 只改 Admin 的登记：业务组件放置与网关路由撤销、主机删除、控制台 SSH 记录删除；不碰目标机上的进程与文件。
+// 只改 Admin 的登记：业务组件部署与网关路由撤销、主机删除（SSH 登录信息随主机一起删除）；不碰目标机上的进程与文件。
 func newSetupRemoveHostCommand(deps setupDeps) *cobra.Command {
 	var file, host string
 	var yes bool
@@ -18,8 +18,8 @@ func newSetupRemoveHostCommand(deps setupDeps) *cobra.Command {
 		Use:   "remove-host",
 		Short: "从 Admin 删除一台已不在 moox.toml 里的主机（默认只预览）",
 		Long: `用于主机改名或下线：先在 moox.toml 里去掉（或改名）这台主机，再运行本命令删除 Admin 里的旧登记。
-默认只预览这台主机在 Admin 里的地址、组件放置与控制台 SSH 记录；加 --yes 才执行：清空业务组件放置（网关路由随之撤销）、
-删除主机（它的网关签名身份随即失效）、删除控制台 SSH 终端里同名的记录。
+默认只预览这台主机在 Admin 里的地址与组件部署；加 --yes 才执行：清空业务组件部署（网关路由随之撤销）、
+删除主机（它的网关签名身份随即失效，控制台上它的 SSH 登录信息与在线终端一并失效）。
 不会停止或删除目标机上的进程与文件，执行前要先在目标机上停掉这台主机的全部组件。`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

@@ -107,7 +107,7 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		return result, errors.New("unit deployment requires an unchanged setup snapshot")
 	}
 	manifest := snapshot.Manifest
-	if !slices.Contains([]string{"host", "access", "egress-proxy", "trade", "storage", "collector-stream"}, options.Profile) {
+	if !slices.Contains([]string{"host", "access", "egress-proxy", "trade", "storage", "collector-stream", "factor-engine", "archive-worker"}, options.Profile) {
 		return result, errors.New("unsupported native deployment unit")
 	}
 	unitRoot := path.Join(manifest.Paths.DeployRoot, options.Profile)
@@ -346,6 +346,25 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 	}
 	if err := unitbundle.LoadEventBusClientsAt(ctx, exported.EventBus, operation.Source.Roles, localClients); err != nil {
 		return result, err
+	}
+	if isExternalProfile(options.Profile) {
+		// 外部程序不由 moox-runtime 管理：停用状态以 Admin 登记为准，安装走软件包里的 systemd 用户服务脚本。
+		gateway, err := gatewayio.OpenWithIdentity(ctx, snapshot, filepath.Join(options.OperatorDirectory, "gateway-client.yaml"), options.SSH)
+		if err != nil {
+			return result, err
+		}
+		registered, stateErr := setupclient.New(gateway).DeploymentState(ctx, host.Name, options.Profile)
+		if err := errors.Join(stateErr, gateway.Close()); err != nil {
+			return result, err
+		}
+		if err := snapshot.VerifyUnchanged(); err != nil {
+			return result, errors.New("config_changed")
+		}
+		return deployExternal(ctx, externalInstall{
+			options: options, manifest: manifest, host: host, control: control, identity: identity, operation: operation,
+			localClients: localClients, target: target, source: source,
+			disabled: !registered.HostEnabled || !registered.DeploymentEnabled,
+		})
 	}
 	remoteBase := path.Join(manifest.Paths.DeployRoot, "bootstrap-input/host-deploy", operation.Source.ExportID)
 	prepare := unitinstall.PrepareOptions{Archive: path.Join(remoteBase, options.Profile+".tar.gz"), SHA256: operation.Package.SHA256, Profile: options.Profile, DeploymentRoot: manifest.Paths.DeployRoot, UnitRoot: unitRoot, HostUnitRoot: path.Join(manifest.Paths.DeployRoot, "host"), ReleaseID: operation.Prefix, MaterialDirectory: path.Join(remoteBase, "identity"), MaterialOptions: material, Components: components, Environment: environment, Overrides: map[string]string{}, EventBusDirectory: path.Join(remoteBase, "eventbus"), EventBusURL: "tls://" + net.JoinHostPort(control.Address, "4222")}

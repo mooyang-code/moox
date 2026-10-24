@@ -53,7 +53,7 @@ type CheckItem struct {
 	Detail string `json:"detail"`
 }
 
-// ProbeReport 是因子计算机的环境检测结果。HostKey 不为空时表示首次连接，需要用户确认指纹后再检测。
+// ProbeReport 是因子机的环境检测结果。HostKey 不为空时表示首次连接，需要用户确认指纹后再检测。
 type ProbeReport struct {
 	OK      bool        `json:"ok"`
 	OS      string      `json:"os,omitempty"`
@@ -61,7 +61,7 @@ type ProbeReport struct {
 	HostKey string      `json:"host_key,omitempty"`
 }
 
-// Prober 检测因子计算机的环境；测试里替换。
+// Prober 检测因子机的环境；测试里替换。
 type Prober interface {
 	Probe(ctx context.Context, target FactorServer) (ProbeReport, error)
 	Trust(ctx context.Context, target FactorServer, fingerprint string) error
@@ -141,7 +141,7 @@ func (f facts) int(key string) int64 {
 	return value
 }
 
-// 因子计算机的建议配置。
+// 因子机的建议配置。
 const (
 	factorMinCPU      = 8
 	factorMinMemoryGB = 16

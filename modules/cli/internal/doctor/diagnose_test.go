@@ -49,7 +49,10 @@ func TestDiagnoseSpecsOnlyCreateChecksSupportedByBuiltInSignals(t *testing.T) {
 			Transport: "reporter", FunctionalObservability: "active",
 		})
 	}
+	manifest, err := core.LoadEmbeddedManifest()
+	require.NoError(t, err)
 	specs := diagnoseSpecs(
+		manifest,
 		&monitorpb.GetDoctorContextRsp{ExpectedComponents: components},
 		report.BuiltInModuleHealthChecks(),
 	)
