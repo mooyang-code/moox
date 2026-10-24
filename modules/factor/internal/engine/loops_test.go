@@ -367,3 +367,35 @@ func TestRecalcLoopExtendsLocalHistoryBeforeRunning(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, jobStatusSucceeded, failing.reports[len(failing.reports)-1].status)
 }
+
+// 集合刚建立、自动 init/start 还没走完时任务会被生命周期门禁挡住：在限定时间内重试，放行后继续跑完，
+// 不必等任务租约过期（15 分钟）才被重新领取；一直挡住时按原样返回，不报失败。
+func TestRecalcLoopWaitsForTheLifecycleGateToOpen(t *testing.T) {
+	var attempts int
+	executor := func(runner *planRecorder) *recalcexec.Executor {
+		return recalcexec.NewExecutor(runner, recalcexec.WithChunkPeriods(2), recalcexec.WithChunkRetry(1, time.Millisecond),
+			recalcexec.WithGate(func(string) bool { attempts++; return attempts > 2 }))
+	}
+	client := &jobClientFake{job: testJob("BTC"), found: true}
+	runner := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	loop := &recalcLoop{client: client, executor: executor(runner), source: &sourceFake{}, poll: time.Millisecond,
+		gateWait: time.Second, gateRetry: time.Millisecond}
+
+	found, err := loop.RunOnce(context.Background())
+
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, runner.plans, 3, "放行后补算跑完")
+	require.Equal(t, jobStatusSucceeded, client.reports[len(client.reports)-1].status)
+
+	// 一直被挡住：超过等待时间后按没有任务处理，不报失败。
+	client2 := &jobClientFake{job: testJob("BTC"), found: true}
+	runner2 := &planRecorder{out: pipeline.Outcome{Status: "complete"}}
+	blocked := recalcexec.NewExecutor(runner2, recalcexec.WithGate(func(string) bool { return false }))
+	loop2 := &recalcLoop{client: client2, executor: blocked, source: &sourceFake{}, poll: time.Millisecond, gateWait: 20 * time.Millisecond, gateRetry: 5 * time.Millisecond}
+	found, err = loop2.RunOnce(context.Background())
+	require.NoError(t, err)
+	require.False(t, found)
+	require.Empty(t, runner2.plans)
+	require.Empty(t, client2.reports, "被门禁挡住不报失败")
+}

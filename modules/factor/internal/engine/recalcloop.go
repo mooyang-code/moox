@@ -53,7 +53,15 @@ type recalcLoop struct {
 	history historyExtender
 	// now 取当前时间（测试可替换）。
 	now func() time.Time
+	// gateWait、gateRetry：集合还没放行（刚建立、自动 init/start 还没走完）时任务会被门禁挡住；等放行的最长时间与重试间隔，
+	// 为 0 时取默认值（5 分钟、10 秒）。不等的话任务带着租约被丢下，要等租约（15 分钟）过期才会被重新领取。
+	gateWait, gateRetry time.Duration
 }
+
+const (
+	defaultGateWait  = 5 * time.Minute
+	defaultGateRetry = 10 * time.Second
+)
 
 // historyExtender 把集合源数据每个标的的本地历史从 Storage 补到最多 bars 根（以本地最新一根往前数）。
 type historyExtender func(ctx context.Context, set domain.EngineSet, subjects []string, bars int) error
@@ -137,7 +145,31 @@ func (l *recalcLoop) runJob(ctx context.Context, job *PulledJob) error {
 		}
 		return recalcexec.Selection{Set: set.Set, Members: set.Members, Subjects: subjects, Columns: columns, Intervals: intervals}, nil
 	}
-	return l.executor.Run(ctx, job.Window, source, report)
+	return l.runWhenOpen(ctx, func() error { return l.executor.Run(ctx, job.Window, source, report) })
+}
+
+// runWhenOpen 执行补算；被生命周期门禁挡住（集合刚建立，自动 init、start 还在路上）时在限定时间内重试，等集合放行后继续，
+// 超时仍被挡住就按原样返回 ErrGated（集合被暂停等情况：不报失败，租约到期后由放行后的引擎继续）。
+func (l *recalcLoop) runWhenOpen(ctx context.Context, run func() error) error {
+	wait, retry := l.gateWait, l.gateRetry
+	if wait <= 0 {
+		wait = defaultGateWait
+	}
+	if retry <= 0 {
+		retry = defaultGateRetry
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		err := run()
+		if !errors.Is(err, recalcexec.ErrGated) || !time.Now().Before(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(retry):
+		}
+	}
 }
 
 // extendHistory 补算只读本地时序存储：补算区间（加回看）早于本地最早数据时，那些周期所有标的都“没有行”，整段按失败计算，
