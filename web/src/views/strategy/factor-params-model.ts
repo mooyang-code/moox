@@ -1,5 +1,4 @@
-import type { ViewColumn } from "@/api/storage/types";
-import type { DisplayHidden, ParamSubmission, ParamSubmissionStatus } from "@/api/strategy-types";
+import type { ParamSubmission, ParamSubmissionStatus } from "@/api/strategy-types";
 
 /** 实例启用时固化的私有因子集绑定；没有声明 factors 的实例返回 null。 */
 export interface FactorBinding {
@@ -126,24 +125,4 @@ export function submissionRows(submissions: ParamSubmission[]): SubmissionRow[] 
 /** 把冻结记录的秒级时间转成与提交记录一致的文本。 */
 export function freezePeriodText(seconds: number | string) {
   return periodLabel(Number(seconds) * 1000);
-}
-
-/**
- * 按外显设置算出要隐藏的列名：列的分类（category_id）、成员（member_alias）或列名在隐藏清单里就隐藏；
- * 参数列带所属成员的属性，随成员与分类一起显示或隐藏。只影响展示，不影响 View 的列和策略读到的数据。
- */
-export function hiddenColumnNames(columns: ViewColumn[], hidden: DisplayHidden): string[] {
-  const categories = new Set(hidden.categories);
-  const members = new Set(hidden.members);
-  const names = new Set(hidden.columns);
-  return columns
-    .filter(column => {
-      const attributes = column.attributes ?? {};
-      return (
-        names.has(column.column_name) ||
-        (attributes.member_alias && members.has(attributes.member_alias)) ||
-        (attributes.category_id && categories.has(attributes.category_id))
-      );
-    })
-    .map(column => column.column_name);
 }

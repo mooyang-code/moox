@@ -37,7 +37,7 @@ describe("storage view browse workflows", () => {
     const source = readFileSync(resolve(__dirname, "../src/views/data/view-browse/index.vue"), "utf8");
 
     expect(source).toContain(
-      "buildViewFilterFieldOptions(mode.value, viewColumns.value, datasetColumns.value, columnLabels.value)"
+      "buildViewFilterFieldOptions(mode.value, viewColumns.value, datasetColumns.value, columnLabels.value, props.searchColumns)"
     );
     expect(source).toContain("await datasetColumnsPromise");
     expect(source).toContain("repeat(auto-fit, minmax(min(220px, 100%), 1fr))");

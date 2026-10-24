@@ -89,7 +89,7 @@
             <section v-if="derived" class="derived" aria-label="编译结果">
               <a-descriptions :column="{ xs: 1, md: 2 }" size="small" bordered>
                 <a-descriptions-item label="类型">{{ factorTypeLabel(derived.factor_type || "") }}</a-descriptions-item>
-                <a-descriptions-item label="回看周期数">{{ derived.lookback_periods }}</a-descriptions-item>
+                <a-descriptions-item label="最大回看周期">{{ derived.lookback_periods }}</a-descriptions-item>
                 <a-descriptions-item label="输入列">{{ (derived.input_columns || []).join(", ") }}</a-descriptions-item>
                 <a-descriptions-item label="输出列">{{ (derived.outputs || []).join(", ") }}</a-descriptions-item>
                 <a-descriptions-item label="可调参数" :span="2">{{ paramText(derived.params) }}</a-descriptions-item>

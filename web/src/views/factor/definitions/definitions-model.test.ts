@@ -1,8 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { FactorDef, FactorInfo, FactorUsage } from "@/api/factor/types";
-import { definitionDeleteState, definitionEditState, filterDefinitions, usageChips, usageCounts } from "./definitions-model";
+import {
+  categoryCounts,
+  definitionRows,
+  deleteCategoryMovingFactors,
+  moveFactorsToCategory,
+  definitionDeleteState,
+  definitionEditState,
+  filterDefinitions,
+  orderedCategories,
+  usageChips,
+  usageCounts
+} from "./definitions-model";
 
 const def = (id: string, patch: Partial<FactorDef> = {}): FactorDef => ({
   factor_id: id,
@@ -87,18 +98,89 @@ describe("definitions model", () => {
 
 describe("definitions page contract", () => {
   const page = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
+  const table = fs.readFileSync(path.resolve(__dirname, "definition-table.vue"), "utf8");
 
   it("definitions page has no enable/disable action and no status column", () => {
-    expect(page).not.toContain("setFactorMemberStatus");
-    expect(page).not.toContain('title="状态"');
-    expect(page).not.toContain('title="最近周期"');
-    expect(page).toContain('title="使用情况"');
-    expect(page).toContain("未被使用");
+    for (const source of [page, table]) {
+      expect(source).not.toContain("setFactorMemberStatus");
+      expect(source).not.toContain('title="状态"');
+      expect(source).not.toContain('title="最近周期"');
+    }
+    expect(table).toContain('title="使用情况"');
+    expect(table).toContain("未被使用");
   });
 
   it("reads definitions without the spec and fetches it only for the detail view", () => {
     expect(page).toContain("listFactors");
     expect(page).not.toContain("include_spec");
     expect(fs.readFileSync(path.resolve(__dirname, "factor-detail-drawer.vue"), "utf8")).toContain("getFactor");
+  });
+});
+
+describe("分类树", () => {
+  const info = (id: string, category?: string): FactorInfo => ({ factor: def(id, { category_id: category }), usages: [] });
+
+  it("按 sort_order 排序，未分类固定最后（清单里没有时补上）", () => {
+    expect(
+      orderedCategories([
+        { category_id: "uncategorized", name: "未分类", sort_order: 0 },
+        { category_id: "trend", name: "趋势类", sort_order: 2 },
+        { category_id: "momentum", name: "动量类", sort_order: 1 }
+      ]).map(item => item.category_id)
+    ).toEqual(["momentum", "trend", "uncategorized"]);
+    expect(orderedCategories([]).map(item => item.category_id)).toEqual(["uncategorized"]);
+  });
+
+  it("按过滤后的定义计数，没有分类的算未分类", () => {
+    const items = [info("A", "trend"), info("B", "trend"), info("C")];
+    const filtered = filterDefinitions(items, { type: "", usage: "all", keyword: "A" });
+    expect(categoryCounts(items)).toEqual({ trend: 2, uncategorized: 1 });
+    expect(categoryCounts(filtered)).toEqual({ trend: 1 });
+  });
+
+  it("删除非空分类：逐个迁到未分类后再删除；中途失败就停止且不删除", async () => {
+    const items = [info("A", "trend"), info("B", "momentum"), info("C", "trend")];
+    const setCategory = vi.fn().mockResolvedValue(undefined);
+    const deleteCategory = vi.fn().mockResolvedValue(undefined);
+    await expect(deleteCategoryMovingFactors("trend", items, { setCategory, deleteCategory })).resolves.toEqual({
+      deleted: true,
+      moved: ["A", "C"]
+    });
+    expect(setCategory.mock.calls).toEqual([
+      ["A", "uncategorized"],
+      ["C", "uncategorized"]
+    ]);
+    expect(deleteCategory).toHaveBeenCalledWith("trend");
+
+    setCategory.mockReset().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("boom"));
+    deleteCategory.mockReset();
+    const result = await deleteCategoryMovingFactors("trend", items, { setCategory, deleteCategory });
+    expect(result).toMatchObject({ deleted: false, moved: ["A"], failed: "C" });
+    expect(deleteCategory).not.toHaveBeenCalled();
+  });
+});
+
+describe("定义表格与批量移动", () => {
+  it("表格行把 factor_id、updated_at 提到顶层并带分类名、参数与操作状态", () => {
+    const item: FactorInfo = {
+      factor: def("Rsi", {
+        category_id: "momentum",
+        updated_at: "t1",
+        params: [{ name: "window", type: "int", min: 2, max: 120, default_value: 14 }]
+      }),
+      usages: [{ set_id: "s1", status: "enabled" }]
+    };
+    const [row] = definitionRows([item], [{ category_id: "momentum", name: "动量类" }], id => `任务 ${id}`);
+    expect(row).toMatchObject({ factor_id: "Rsi", updated_at: "t1", category: "动量类", paramNames: "window" });
+    expect(row.chips[0].label).toBe("任务 s1");
+    expect(row.edit.disabled).toBe(true);
+    expect(row.remove.disabled).toBe(true);
+  });
+
+  it("逐个移动，中途失败就停止", async () => {
+    const setCategory = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("boom"));
+    const result = await moveFactorsToCategory(["A", "B", "C"], "trend", setCategory);
+    expect(result).toMatchObject({ moved: ["A"], failed: "B" });
+    expect(setCategory).toHaveBeenCalledTimes(2);
   });
 });

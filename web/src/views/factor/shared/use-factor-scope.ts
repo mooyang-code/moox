@@ -49,7 +49,8 @@ export interface FactorScopeOptions {
 
 /**
  * 因子页面共用的样板：空间切换加载、?set= 与 store 同步、轮询。
- * 主区域是 keep-alive 且按 fullPath 重挂载，所以只在空间 id 变化时 reset + load，同一空间重新挂载直接复用 store。
+ * 主区域是 keep-alive；因子页面声明了 reuseOnQuery，query 变化时组件不重建。只在空间 id 变化时 reset + load，
+ * 同一空间重新挂载直接复用 store。失活期间不跟随 ?set=，重新激活时按 URL 补同步一次。
  */
 export function useFactorScope(options: FactorScopeOptions = {}) {
   const requireSet = options.requireSet ?? false;
@@ -65,6 +66,8 @@ export function useFactorScope(options: FactorScopeOptions = {}) {
 
   onActivated(() => {
     active.value = true;
+    // 失活期间别处可能改了 ?set=（例如从任务详情点“查看结果”）；store 未加载时由空间 watch 负责。
+    if (store.isLoadedFor(spaceId.value)) resolveSelection();
   });
   onDeactivated(() => {
     active.value = false;
@@ -114,16 +117,18 @@ export function useFactorScope(options: FactorScopeOptions = {}) {
     if (requireSet && canWriteRoute() && hasSet(value)) store.select(value);
   });
 
+  // 计算任务变了：因子条件 fc 只属于原来的任务。selectSet 自己也会去掉 fc，但它的跳转还没生效时这里会用旧 query 合并，必须同样去掉。
   watch(
     () => store.currentSetId,
     value => {
-      if (requireSet && canWriteRoute() && value !== routeSetId.value) void navigate({ set: value || undefined });
+      if (requireSet && canWriteRoute() && value !== routeSetId.value) void navigate({ set: value || undefined, fc: undefined });
     }
   );
 
+  /** 切换计算任务：job 与因子条件 fc 都只属于原来的任务，一并清掉。 */
   function selectSet(setId: string) {
     store.select(setId);
-    if (requireSet) void navigate({ set: setId, job: undefined });
+    if (requireSet) void navigate({ set: setId, job: undefined, fc: undefined });
   }
 
   if (options.poll !== false) {

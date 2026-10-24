@@ -118,6 +118,11 @@
                   K线
                 </a-button>
                 <a-button size="small" @click="resetQueryControls">清空</a-button>
+                <slot name="toolbar-extra" />
+              </div>
+
+              <div v-if="$slots['query-extra']" class="query-extra">
+                <slot name="query-extra" />
               </div>
             </section>
           </QueryControls>
@@ -152,7 +157,7 @@
                       ></template
                     >
                   </a-table-column>
-                  <a-table-column data-index="freq" :width="96">
+                  <a-table-column v-if="showSystemColumn('freq')" data-index="freq" :width="96">
                     <template #title
                       ><span class="sortable-title"
                         >频率<span class="sort-arrows"
@@ -162,7 +167,7 @@
                       ></template
                     >
                   </a-table-column>
-                  <a-table-column data-index="seriesTag" :width="180">
+                  <a-table-column v-if="showSystemColumn('series_tag')" data-index="seriesTag" :width="180">
                     <template #title
                       ><span class="sortable-title"
                         >序列标签<span class="sort-arrows"
@@ -204,6 +209,11 @@
                       </span>
                     </template>
                     <template #cell="{ record }">{{ record.values[column] || "-" }}</template>
+                  </a-table-column>
+                  <a-table-column v-if="$slots['row-extra']" :title="props.rowExtraTitle" :width="150" align="center">
+                    <template #cell="{ record }">
+                      <slot name="row-extra" :row-key="record.rawKey" :values="record.values" />
+                    </template>
                   </a-table-column>
                   <a-table-column title="操作" :width="92" align="center" fixed="right">
                     <template #cell="{ record }">
@@ -400,14 +410,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
   listAllDatasets,
   listAllViews,
   listDatasetColumns,
+  listAllViewColumns,
   listFields,
-  listViewColumns,
   listViewRebuildLogs,
   requestViewRebuild as requestViewRebuildTask
 } from "@/api/storage/metadata";
@@ -418,6 +428,7 @@ import type {
   Field,
   FieldValueType,
   RecordRow,
+  TimeSeriesKey,
   TimeSeriesRow,
   View,
   ViewColumn,
@@ -484,8 +495,18 @@ const props = withDefaults(
     activeViewId?: string;
     refreshKey?: number;
     hideTechnicalIdentity?: boolean;
-    /** 表格里隐藏的列（只影响展示，不影响查询、筛选与排序用到的列）。 */
-    hiddenColumns?: string[];
+    /** 为 false 时只加载元数据、不发查询：调用方先准备好投影与附加条件，再放行首查。 */
+    queryReady?: boolean;
+    /** 表格显示的系统键（数据ID、时间始终显示）与业务列及其顺序；不传时显示全部列。 */
+    displayColumns?: { system: string[]; business: string[] };
+    /** 时序查询的 column_names，只含业务列且不能为空；不传时投影全部视图列。 */
+    projectColumns?: string[];
+    /** 逐列搜索只为这些业务列生成（系统键始终保留）；不传时为全部列。 */
+    searchColumns?: string[];
+    /** 追加到查询的条件（须自带 valueType），与搜索栅格的条件按“且”组合；不作用于 K 线。 */
+    extraFilters?: ViewFilterState[];
+    /** row-extra 插槽所在列的标题。 */
+    rowExtraTitle?: string;
   }>(),
   {
     embedded: false,
@@ -503,11 +524,18 @@ const props = withDefaults(
     activeViewId: "",
     refreshKey: 0,
     hideTechnicalIdentity: false,
-    hiddenColumns: () => []
+    queryReady: true,
+    displayColumns: undefined,
+    projectColumns: undefined,
+    searchColumns: undefined,
+    extraFilters: undefined,
+    rowExtraTitle: ""
   }
 );
 
-type ViewBrowseTableRow = BrowseTableRow & { freq?: string };
+const emit = defineEmits<{ (event: "cleared"): void }>();
+
+type ViewBrowseTableRow = BrowseTableRow & { freq?: string; rawKey?: TimeSeriesKey };
 
 const spaceStore = useSpaceStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
@@ -553,11 +581,11 @@ const fields = ref<Field[]>([]);
 const activeViewKey = ref("");
 const tableRows = ref<ViewBrowseTableRow[]>([]);
 const tableColumnNames = ref<string[]>([]);
-const visibleColumnNames = computed(() => {
-  if (!props.hiddenColumns.length) return tableColumnNames.value;
-  const hidden = new Set(props.hiddenColumns);
-  return tableColumnNames.value.filter(name => !hidden.has(name));
-});
+const visibleColumnNames = computed(() => props.displayColumns?.business ?? tableColumnNames.value);
+
+function showSystemColumn(name: string) {
+  return !props.displayColumns || props.displayColumns.system.includes(name);
+}
 const detailRow = ref<ViewBrowseTableRow>();
 const detailVisible = ref(false);
 const rebuildLogsVisible = ref(false);
@@ -630,7 +658,7 @@ const filterOperatorOptions: Array<{ label: string; value: ViewFilterOperator }>
   { label: "○ 为空", value: "empty" },
   { label: "Ø 非空", value: "not_empty" }
 ];
-const filterOperatorSymbols: Record<ViewFilterOperator, string> = {
+const filterOperatorSymbols: Partial<Record<ViewFilterOperator, string>> = {
   like: "%",
   prefix: "Ab",
   suffix: "bA",
@@ -686,12 +714,15 @@ const columnLabels = computed(() => {
   return labels;
 });
 const filterFieldOptions = computed(() =>
-  buildViewFilterFieldOptions(mode.value, viewColumns.value, datasetColumns.value, columnLabels.value)
+  buildViewFilterFieldOptions(mode.value, viewColumns.value, datasetColumns.value, columnLabels.value, props.searchColumns)
 );
 const detailColumns = computed(() => {
   const row = detailRow.value;
   if (!row) return [];
-  const names = rowsToColumnNames([rowToSyntheticRecord(row)], tableColumnNames.value);
+  // 调用方指定了显示列时只列这些列：其余列没有投影，列出来只会是一排“-”。
+  const names = props.displayColumns
+    ? visibleColumnNames.value
+    : rowsToColumnNames([rowToSyntheticRecord(row)], tableColumnNames.value);
   return names.map(name => ({ name: columnTitle(name), value: row.values[name] || "-" }));
 });
 const normalizedKlineLimit = computed(() => normalizeKlineLimit(klineLimit.value));
@@ -1091,9 +1122,9 @@ async function loadViewContext() {
       console.warn("加载数据集列失败", error);
       return [] as DatasetColumn[];
     });
-    const columnsRsp = await listViewColumns({ space_id, view_id: contextViewId, page: { page: 1, size: 1000 } });
+    const loadedViewColumns = await listAllViewColumns(space_id, contextViewId);
     if (!isCurrent()) return;
-    viewColumns.value = columnsRsp.columns || [];
+    viewColumns.value = loadedViewColumns;
     const loadedDatasetColumns = await datasetColumnsPromise;
     if (!isCurrent()) return;
     datasetColumns.value = loadedDatasetColumns;
@@ -1118,6 +1149,7 @@ async function loadDatasetColumns(space_id: string, view: View) {
 }
 
 async function reloadRows(retainRowsOnError = false) {
+  if (!props.queryReady) return;
   if (!retainRowsOnError || !lastRowsReadAt.value) tableColumnNames.value = preferredColumnNames.value;
   if (!activeView.value) return;
   if (mode.value === "time_series") {
@@ -1143,11 +1175,12 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false) {
   queryError.value = "";
   try {
     const timeRange = defaultTimeSeriesPreviewRange();
+    const projection = props.projectColumns ?? explicitViewColumnNames.value;
     const rsp = await queryTimeSeriesRows({
       space_id,
       view_id: view.view_id,
       ...(timeRange ? { time_range: timeRange } : {}),
-      ...(explicitViewColumnNames.value.length > 0 ? { column_names: explicitViewColumnNames.value } : {}),
+      ...(projection.length > 0 ? { column_names: projection } : {}),
       filter: activeFilterExprs(),
       sorts: buildViewSorts(sortState),
       page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
@@ -1164,7 +1197,8 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false) {
     tableRows.value = timeSeriesRowsToTableRows(rows).map((row, index) => ({
       ...row,
       freq: rows[index]?.key?.freq || "-",
-      seriesTag: rows[index]?.key?.series_tag || ""
+      seriesTag: rows[index]?.key?.series_tag || "",
+      rawKey: rows[index]?.key
     }));
     tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
     previewHasMore.value = !!rsp.page_result?.has_more;
@@ -1260,6 +1294,11 @@ async function resetQueryControls() {
   resetSortState();
   resetFilterRows();
   pagination.current = 1;
+  // 先让调用方清掉附加条件；条件确有变化时由下面的 watch 重查，避免同一次清空查两遍。
+  const before = extraFiltersKey.value;
+  emit("cleared");
+  await nextTick();
+  if (extraFiltersKey.value !== before) return;
   await reloadRows();
 }
 
@@ -1278,6 +1317,16 @@ function resetSortState() {
 function resetFilterRows() {
   filters.value = filterFieldOptions.value.map(option => createFilterState(option));
 }
+
+// 搜索列随调用方的列设置变化时，保留仍在的检索框里已输入的内容。
+watch(
+  () => filterFieldOptions.value.map(option => option.value).join("\u0000"),
+  () => {
+    if (!viewColumns.value.length && !datasetColumns.value.length) return;
+    const existing = new Map(filters.value.map(filter => [filter.fieldName, filter]));
+    filters.value = filterFieldOptions.value.map(option => existing.get(option.value) ?? createFilterState(option));
+  }
+);
 
 function createFilterState(option?: ViewFilterFieldOption): ViewFilterState {
   const isStockCNKline = activeView.value?.dataset_id === "dataset_stockcn_equity_kline_1m";
@@ -1323,14 +1372,37 @@ function filterFieldLabel(fieldName: string) {
   return filterFieldOptions.value.find(item => item.value === fieldName)?.label || columnTitle(fieldName);
 }
 
-function activeFilterExprs() {
-  return buildViewFilterExprs(
-    filters.value.map(filter => ({
-      ...filter,
-      valueType: filterValueType(filter.fieldName)
-    }))
-  );
+function activeFilterExprs(includeExtra = true) {
+  const own: ViewFilterState[] = filters.value.map(filter => ({
+    ...filter,
+    valueType: filterValueType(filter.fieldName)
+  }));
+  return buildViewFilterExprs(includeExtra ? own.concat(props.extraFilters ?? []) : own);
 }
+
+const extraFiltersKey = computed(() => JSON.stringify(props.extraFilters ?? []));
+const projectionKey = computed(() => JSON.stringify([props.projectColumns ?? null, props.displayColumns?.business ?? null]));
+
+// 调用方放行首查；放行前已经加载好的视图上下文在这里补查第一页。
+watch(
+  () => props.queryReady,
+  ready => {
+    if (!ready || !activeView.value || contextLoading.value) return;
+    pagination.current = 1;
+    void reloadRows();
+  }
+);
+
+// 附加条件变化回到第一页；投影变化重查当前页。首查之前的变化由首查本身带上。
+watch(extraFiltersKey, () => {
+  if (!hasQueried.value || !activeView.value || contextLoading.value) return;
+  pagination.current = 1;
+  void reloadRows();
+});
+watch(projectionKey, () => {
+  if (!hasQueried.value || !activeView.value || contextLoading.value) return;
+  void reloadRows();
+});
 
 function defaultTimeSeriesPreviewRange() {
   if (hasActiveDataTimeFilter()) return undefined;
@@ -1455,7 +1527,7 @@ async function loadKlineRecords(subjectId: string, seriesTag: string) {
   const request = klineRequestGuard.begin();
   // 发起时固定整次查询的筛选、投影列、排序与数量：加载期间修改筛选框不能让后续分页读取另一套条件
   const query = {
-    filter: activeFilterExprs(),
+    filter: activeFilterExprs(false),
     columnNames: [...klineColumnNames.value],
     sorts: buildKlineQuerySorts(),
     limit: normalizedKlineLimit.value
@@ -1524,7 +1596,8 @@ async function fetchKlineTableRows(
   return timeSeriesRowsToTableRows(rows).map((row, index) => ({
     ...row,
     freq: rows[index]?.key?.freq || "-",
-    seriesTag: rows[index]?.key?.series_tag || ""
+    seriesTag: rows[index]?.key?.series_tag || "",
+    rawKey: rows[index]?.key
   }));
 }
 
@@ -1734,6 +1807,12 @@ watch(selectedSpaceId, () => {
 .operator-button:hover {
   border-color: rgb(var(--primary-6));
   color: rgb(var(--primary-6));
+}
+
+/* 调用方追加的检索行（例如因子条件）横跨整行，放在栅格与操作按钮下方。 */
+.query-extra {
+  grid-column: 1 / -1;
+  min-width: 0;
 }
 
 .query-actions {

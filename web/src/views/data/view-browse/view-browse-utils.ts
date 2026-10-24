@@ -23,7 +23,12 @@ export type ViewFilterOperator =
   | "not_contains"
   | "range"
   | "empty"
-  | "not_empty";
+  | "not_empty"
+  // 数值比较只供调用方附加的条件使用（例如因子条件），通用页的算子下拉不提供。
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte";
 
 export interface ViewSortState {
   fieldName: string;
@@ -74,11 +79,13 @@ export type ViewFilterFieldOption = {
   valueType: FieldValueType;
 };
 
+/** 逐列搜索项：系统键加业务列；传了 onlyColumns 时业务列只取其中的列（系统键始终保留）。 */
 export function buildViewFilterFieldOptions(
   mode: ViewBrowseMode,
   viewColumns: Array<Pick<ViewColumn, "column_name" | "value_type">>,
   datasetColumns: Array<Pick<DatasetColumn, "column_name" | "value_type">>,
-  labels: Record<string, string> = {}
+  labels: Record<string, string> = {},
+  onlyColumns?: string[]
 ): ViewFilterFieldOption[] {
   const options: ViewFilterFieldOption[] = [];
   const seen = new Set<string>();
@@ -97,8 +104,9 @@ export function buildViewFilterFieldOptions(
     push("version", "版本", "FIELD_VALUE_TYPE_STRING");
   }
   const projected = viewColumns.some(column => column.column_name) ? viewColumns : datasetColumns;
+  const only = onlyColumns ? new Set(onlyColumns) : undefined;
   for (const column of projected) {
-    if (!column.column_name) continue;
+    if (!column.column_name || (only && !only.has(column.column_name))) continue;
     push(column.column_name, labels[column.column_name] || column.column_name, column.value_type || "FIELD_VALUE_TYPE_STRING");
   }
   return options;
@@ -174,12 +182,23 @@ export function normalizeKlineLimit(value: unknown) {
   return Math.min(MAX_KLINE_LIMIT, Math.max(MIN_KLINE_LIMIT, parsed));
 }
 
+const compareOps: Partial<Record<ViewFilterOperator, FilterCond["op"]>> = {
+  gt: "FILTER_OP_GT",
+  gte: "FILTER_OP_GTE",
+  lt: "FILTER_OP_LT",
+  lte: "FILTER_OP_LTE"
+};
+
 export function buildViewFilterExprs(filters: ViewFilterState[]): FilterSpec | undefined {
   const out: FilterCond[] = [];
   for (const filter of filters) {
     const fieldName = filter.fieldName.trim();
     if (!fieldName) continue;
     const valueType = filter.valueType || "FIELD_VALUE_TYPE_STRING";
+    const push = (op: FilterCond["op"], raw: string) => {
+      const typed = typedFilterValue(raw, valueType);
+      if (typed) out.push({ column: fieldName, op, values: [typed] });
+    };
 
     if (filter.operator === "empty") {
       out.push({
@@ -200,18 +219,18 @@ export function buildViewFilterExprs(filters: ViewFilterState[]): FilterSpec | u
     if (filter.operator === "range") {
       const startValue = (filter.startValue || "").trim();
       const endValue = (filter.endValue || "").trim();
-      if (startValue) {
-        out.push({ column: fieldName, op: "FILTER_OP_GTE", values: [typedFilterValue(startValue, valueType)] });
-      }
-      if (endValue) {
-        out.push({ column: fieldName, op: "FILTER_OP_LTE", values: [typedFilterValue(endValue, valueType)] });
-      }
+      if (startValue) push("FILTER_OP_GTE", startValue);
+      if (endValue) push("FILTER_OP_LTE", endValue);
       continue;
     }
 
     const value = (filter.value || "").trim();
     if (!value) continue;
-    const typedValue = typedFilterValue(value, valueType);
+    const compareOp = compareOps[filter.operator];
+    if (compareOp) {
+      push(compareOp, value);
+      continue;
+    }
     if (filter.operator === "prefix") {
       out.push({ column: fieldName, op: "FILTER_OP_LIKE", values: [{ string_value: `${value}%` }] });
       continue;
@@ -225,11 +244,11 @@ export function buildViewFilterExprs(filters: ViewFilterState[]): FilterSpec | u
       continue;
     }
     if (filter.operator === "eq") {
-      out.push({ column: fieldName, op: "FILTER_OP_EQ", values: [typedValue] });
+      push("FILTER_OP_EQ", value);
       continue;
     }
     if (filter.operator === "neq") {
-      out.push({ column: fieldName, op: "FILTER_OP_NE", values: [typedValue] });
+      push("FILTER_OP_NE", value);
       continue;
     }
     out.push({ column: fieldName, op: "FILTER_OP_LIKE", values: [{ string_value: `%${value}%` }] });
@@ -326,14 +345,15 @@ function isTimeSeriesDataKind(value: unknown) {
   return value === "DATA_KIND_TIME_SERIES" || value === "time_series" || value === 2;
 }
 
-function typedFilterValue(value: string, valueType: FieldValueType): TypedValue {
+/** 按列类型转换检索值；数值列的值不是完整的有限数字时返回 undefined，条件整条丢弃。 */
+function typedFilterValue(value: string, valueType: FieldValueType): TypedValue | undefined {
   if (isValueType(valueType, "FIELD_VALUE_TYPE_INT", 2)) {
-    const parsed = Number.parseInt(value, 10);
-    return { int_value: Number.isFinite(parsed) ? parsed : value };
+    const parsed = Number(value);
+    return Number.isInteger(parsed) ? { int_value: parsed } : undefined;
   }
   if (isValueType(valueType, "FIELD_VALUE_TYPE_DOUBLE", 3)) {
-    const parsed = Number.parseFloat(value);
-    return { double_value: Number.isFinite(parsed) ? parsed : 0 };
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? { double_value: parsed } : undefined;
   }
   if (isValueType(valueType, "FIELD_VALUE_TYPE_BOOL", 4)) {
     return { bool_value: value === "true" || value === "1" || value === "是" };
