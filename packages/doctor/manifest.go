@@ -56,7 +56,7 @@ type Component struct {
 }
 
 var allowedRecoveryActions = map[string]bool{
-	"sync_host_placements":          true,
+	"sync_host_deployments":         true,
 	"verify_service_identity":       true,
 	"repair_path_permissions":       true,
 	"verify_eventbus_credentials":   true,

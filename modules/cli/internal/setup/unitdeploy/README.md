@@ -44,7 +44,7 @@ Access、出口代理、Trade/Trade CLI 和四个 Storage 二进制（仅三个�
 本机状态丢失拒绝替换凭据。其余主机只参与拓扑与签发，未在此场景启动。
 
 核心成功后在本机保存 `core-ready.json` 完成收据。`setup deploy-host --host HOST` 使用同一
-`state-dir` 和 `operator-dir`，经签名 SSH 隧道调用 `SyncHostPlacements`，再由控制机的
+`state-dir` 和 `operator-dir`，经签名 SSH 隧道调用 `SyncHostDeployments`，再由控制机的
 `moox-runtime export-host` 在维护锁内调用运行中 Admin 的离线 CLI 导出身份。导出绑定原始
 运行身份摘要和 MooX CA，只签发目标主机材料；EventBus 只取 `hostagent-publisher`、
 `metrics-publisher` 与公共 CA。操作员身份、Admin 主密钥、MooX CA 私钥和 broker 私钥不随

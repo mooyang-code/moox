@@ -40,7 +40,7 @@ func build(t testing.TB, hostID, outbound string, components []string) *pb.HostG
 	add := func(host, component string) {
 		key := host + "/" + component
 		if !seen[key] {
-			topology.Placements = append(topology.Placements, servicecatalog.Placement{HostID: host, ComponentID: component, Status: servicecatalog.Enabled})
+			topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: host, ComponentID: component, Status: servicecatalog.Enabled})
 			seen[key] = true
 		}
 	}

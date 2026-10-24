@@ -33,7 +33,7 @@ func TestRunInitCommandAppliesAdminSchema(t *testing.T) {
 	}
 	assertTableExists(t, dbPath, "t_users")
 	assertTableExists(t, dbPath, "t_hosts")
-	assertTableExists(t, dbPath, "t_placements")
+	assertTableExists(t, dbPath, "t_deployments")
 	if stdout.String() == "" {
 		t.Fatalf("runInitCommand() wrote empty stdout")
 	}
@@ -56,9 +56,9 @@ func TestRunInitCommandIsIdempotent(t *testing.T) {
 		name string
 	}{
 		{typ: "table", name: "t_hosts"},
-		{typ: "table", name: "t_placements"},
+		{typ: "table", name: "t_deployments"},
 		{typ: "table", name: "t_host_gateway_status"},
-		{typ: "index", name: "idx_t_placements_component"},
+		{typ: "index", name: "idx_t_deployments_component"},
 	} {
 		var count int64
 		if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?", object.typ, object.name).Scan(&count).Error; err != nil {
@@ -84,7 +84,7 @@ func TestRunInitCommandIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestRunInitCommandCreatesHostPlacementConstraints(t *testing.T) {
+func TestRunInitCommandCreatesHostDeploymentConstraints(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "admin.db")
 	if err := runInitCommand([]string{"init", "--db-path", dbPath}, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("runInitCommand() error = %v", err)
@@ -101,12 +101,12 @@ func TestRunInitCommandCreatesHostPlacementConstraints(t *testing.T) {
 	for _, host := range []string{"host-a", "host-b"} {
 		require.NoError(t, db.Exec("INSERT INTO t_hosts(c_host_id,c_address) VALUES (?,?)", host, host+".example.test").Error)
 	}
-	insertPlacement := "INSERT INTO t_placements(c_host_id,c_component_id,c_status) VALUES (?,?,?)"
-	require.NoError(t, db.Exec(insertPlacement, "host-a", "host-agent", "enabled").Error)
-	require.NoError(t, db.Exec(insertPlacement, "host-b", "host-agent", "disabled").Error)
-	require.Error(t, db.Exec(insertPlacement, "host-a", "host-agent", "enabled").Error)
-	require.Error(t, db.Exec(insertPlacement, "missing-host", "host-agent", "enabled").Error)
-	require.Error(t, db.Exec(insertPlacement, "host-a", "host-gateway", "active").Error)
+	insertDeployment := "INSERT INTO t_deployments(c_host_id,c_component_id,c_status) VALUES (?,?,?)"
+	require.NoError(t, db.Exec(insertDeployment, "host-a", "host-agent", "enabled").Error)
+	require.NoError(t, db.Exec(insertDeployment, "host-b", "host-agent", "disabled").Error)
+	require.Error(t, db.Exec(insertDeployment, "host-a", "host-agent", "enabled").Error)
+	require.Error(t, db.Exec(insertDeployment, "missing-host", "host-agent", "enabled").Error)
+	require.Error(t, db.Exec(insertDeployment, "host-a", "host-gateway", "active").Error)
 	require.False(t, db.Migrator().HasTable("t_gateway_nodes"))
 	require.False(t, db.Migrator().HasTable("t_service_deployments"))
 }

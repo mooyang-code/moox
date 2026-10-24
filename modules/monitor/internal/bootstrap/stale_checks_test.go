@@ -71,8 +71,8 @@ func TestPruneStaleChecksRemovesOnlyLongRetiredBusinessChecks(t *testing.T) {
 	require.NoError(t, f.repositories.Alerts.UpsertState(t.Context(), &domain.AlertState{
 		SpaceID: "crypto", RuleID: "default:dataset:factor:firing:1m", CheckID: "dataset:factor:firing:1m", Status: domain.AlertStatusFiring}))
 
-	f.addCheck("placement:control:admin", true, domain.CheckSourcePlacement, "components")
-	f.addResult("placement:control:admin", domain.CheckReasonRetired, 5*time.Hour)
+	f.addCheck("deployment:control:admin", true, domain.CheckSourceDeployment, "components")
+	f.addResult("deployment:control:admin", domain.CheckReasonRetired, 5*time.Hour)
 
 	f.addCheck("console_page:other", true, domain.CheckSourceObservability, "console_page")
 	f.addResult("console_page:other", domain.CheckReasonRetired, 5*time.Hour)
@@ -83,7 +83,7 @@ func TestPruneStaleChecksRemovesOnlyLongRetiredBusinessChecks(t *testing.T) {
 	rules, err := f.repositories.Alerts.ListRulesForCheck(t.Context(), "crypto", dataset)
 	require.NoError(t, err)
 	require.Empty(t, rules, "告警规则随检查一起清掉")
-	for _, kept := range []string{"dataset:strategy:recent:1m", "dataset:factor:live:1m", "dataset:factor:firing:1m", "placement:control:admin", "console_page:other"} {
+	for _, kept := range []string{"dataset:strategy:recent:1m", "dataset:factor:live:1m", "dataset:factor:firing:1m", "deployment:control:admin", "console_page:other"} {
 		require.True(t, f.exists(kept), kept)
 	}
 

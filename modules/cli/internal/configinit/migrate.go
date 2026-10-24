@@ -64,14 +64,14 @@ type HostRename struct {
 	Changes int    `json:"changes"`
 }
 
-// ComponentRename 记录 [placements] 里一个旧组件身份改成当前名字涉及的位置数。
+// ComponentRename 记录 [deployments] 里一个旧组件身份改成当前名字涉及的位置数。
 type ComponentRename struct {
 	From    string `json:"from"`
 	To      string `json:"to"`
 	Changes int    `json:"changes"`
 }
 
-// legacyComponents 是已经改名的组件身份：旧名字不再出现在服务目录里，[placements] 里还写旧名字会让所有命令拒绝配置。
+// legacyComponents 是已经改名的组件身份：旧名字不再出现在服务目录里，[deployments] 里还写旧名字会让所有命令拒绝配置。
 var legacyComponents = map[string]string{"cloudnode": "cloudfunction"}
 
 // SCFImportReport 记录导入的 SCF 计划概要（地域、空间与市场、更新了网络信息的主机），不含任何配置值。
@@ -88,15 +88,17 @@ type MigrateReport struct {
 	Factors   []FactorMigration    `json:"factors,omitempty"`
 	Labels    []HostLabelMigration `json:"labels,omitempty"`
 	Rename    *HostRename          `json:"rename,omitempty"`
-	// Components 记录 [placements] 里被改成当前名字的旧组件身份（例如 cloudnode → cloudfunction）及位置数。
+	// Components 记录 [deployments] 里被改成当前名字的旧组件身份（例如 cloudnode → cloudfunction）及位置数。
 	Components []ComponentRename `json:"components,omitempty"`
-	SCF        *SCFImportReport  `json:"scf,omitempty"`
-	TLSMode    map[string]string `json:"tls_mode,omitempty"`
-	Changed    bool              `json:"changed"`
-	Valid      bool              `json:"valid"`
-	Written    bool              `json:"written"`
-	Backup     string            `json:"backup,omitempty"`
-	NextAction string            `json:"next_action,omitempty"`
+	// Deployments 为 true 表示旧的 [placements] 表被改名为 [deployments]。
+	Deployments bool              `json:"deployments,omitempty"`
+	SCF         *SCFImportReport  `json:"scf,omitempty"`
+	TLSMode     map[string]string `json:"tls_mode,omitempty"`
+	Changed     bool              `json:"changed"`
+	Valid       bool              `json:"valid"`
+	Written     bool              `json:"written"`
+	Backup      string            `json:"backup,omitempty"`
+	NextAction  string            `json:"next_action,omitempty"`
 }
 
 // MigrateFile 在本机解密 moox.toml，把它改写成当前格式并校验；Write 时备份原文件、重新加密写回。
@@ -345,12 +347,15 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 			return nil, errors.New("[[factors.items]] 是更早的格式，需要先手工拆成 [[factors.definitions]] 与 [[factors.members]]")
 		}
 	}
+	if err := renameLegacyPlacements(blocks, report); err != nil {
+		return nil, err
+	}
 	if renameFrom != "" || renameTo != "" {
 		if err := renameHost(blocks, renameFrom, renameTo, report); err != nil {
 			return nil, err
 		}
 	}
-	renamePlacementComponents(blocks, report)
+	renameDeploymentComponents(blocks, report)
 	for i := range blocks {
 		if blocks[i].header == "factors.definitions" && blocks[i].array {
 			change, err := migrateFactorBlock(&blocks[i], library)
@@ -382,11 +387,35 @@ func migrateManifestText(plain []byte, library map[string]string, renameFrom, re
 	return []byte(strings.Join(out, "\n")), nil
 }
 
-// renamePlacementComponents 把 [placements] 各主机组件列表里的旧组件身份改成当前名字。
-func renamePlacementComponents(blocks []block, report *MigrateReport) {
+// renameLegacyPlacements 把旧的 [placements] 表改名为 [deployments]；两张表同时存在时拒绝，避免悄悄丢掉其中一份。
+func renameLegacyPlacements(blocks []block, report *MigrateReport) error {
+	legacy := -1
+	for i, b := range blocks {
+		switch b.header {
+		case "placements":
+			legacy = i
+		case "deployments":
+			for _, other := range blocks {
+				if other.header == "placements" {
+					return errors.New("moox.toml 里同时有 [placements] 与 [deployments]，请手工合并后再运行")
+				}
+			}
+		}
+	}
+	if legacy < 0 {
+		return nil
+	}
+	blocks[legacy].lines[0] = strings.Replace(blocks[legacy].lines[0], "placements", "deployments", 1)
+	blocks[legacy].header = "deployments"
+	report.Deployments = true
+	return nil
+}
+
+// renameDeploymentComponents 把 [deployments] 各主机组件列表里的旧组件身份改成当前名字。
+func renameDeploymentComponents(blocks []block, report *MigrateReport) {
 	counts := map[string]int{}
 	for i := range blocks {
-		if blocks[i].header != "placements" {
+		if blocks[i].header != "deployments" {
 			continue
 		}
 		for j := 1; j < len(blocks[i].lines); j++ {
@@ -471,7 +500,7 @@ func migrateFactorBlock(b *block, library map[string]string) (*FactorMigration, 
 	return &FactorMigration{FactorID: factorID, File: file, RemovedKeys: removed}, nil
 }
 
-// renameHost 改主机表名、[placements] 键以及 access_host / host 引用。
+// renameHost 改主机表名、[deployments] 键以及 access_host / host 引用。
 func renameHost(blocks []block, from, to string, report *MigrateReport) error {
 	if !servicecatalog.ValidHostID(from) || !servicecatalog.ValidHostID(to) || from == to {
 		return errors.New("--rename-host 需要写成 旧ID=新ID，两者都是合法且不同的主机 ID")
@@ -503,7 +532,7 @@ func renameHost(blocks []block, from, to string, report *MigrateReport) error {
 				continue
 			}
 			switch {
-			case b.header == "placements" && key == from:
+			case b.header == "deployments" && key == from:
 				b.lines[j] = strings.Replace(b.lines[j], from, to, 1)
 				rename.Changes++
 			case (key == "access_host" || key == "host") && quotedValue(value) == from:

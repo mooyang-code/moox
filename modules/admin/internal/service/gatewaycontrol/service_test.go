@@ -148,7 +148,7 @@ func TestSnapshotReadsTopologyAndKeysFromOneDatabaseState(t *testing.T) {
 	writerDB := openControlDB(t, f.path)
 	var changed atomic.Bool
 	require.NoError(t, f.db.Callback().Query().After("gorm:query").Register("fixture:rotate-after-topology", func(tx *gorm.DB) {
-		if tx.Statement.Table != "t_placements" || !changed.CompareAndSwap(false, true) {
+		if tx.Statement.Table != "t_deployments" || !changed.CompareAndSwap(false, true) {
 			return
 		}
 		require.NoError(t, writerDB.Transaction(func(writer *gorm.DB) error {
@@ -288,7 +288,7 @@ func TestMissingMasterCopiesFailClosedUntilExplicitProvisioning(t *testing.T) {
 	f := newControlFixture(t)
 	ctx := context.Background()
 	before := f.snapshot(t, "control")
-	require.NoError(t, f.topology.SyncHostPlacements(ctx, sysdeploy.HostSpec{HostID: "new-host", Address: "new.example.test"}))
+	require.NoError(t, f.topology.SyncHostDeployments(ctx, sysdeploy.HostSpec{HostID: "new-host", Address: "new.example.test"}))
 	response, err := f.service.PullSnapshot(hostContext("control"), &pb.PullSnapshotReq{HostId: "control"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_INNER_ERR, response.GetRetInfo().GetCode())

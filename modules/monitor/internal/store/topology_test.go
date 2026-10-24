@@ -25,8 +25,8 @@ func TestTopologyPersistsFullRegistrationAndRollsBackWithChecks(t *testing.T) {
 		}
 	}
 	snapshot := domain.TopologySnapshot{Catalog: catalog, ObservedAt: time.Now().UTC(),
-		Hosts:      []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}},
-		Placements: []domain.TopologyPlacement{{HostID: "control", ComponentID: "web-host", Status: "disabled"}},
+		Hosts:       []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}},
+		Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "web-host", Status: "disabled"}},
 	}
 	_, err = manager.Repositories().Topology.Reconcile(t.Context(), snapshot, nil)
 	require.NoError(t, err)
@@ -42,25 +42,25 @@ func TestTopologyPersistsFullRegistrationAndRollsBackWithChecks(t *testing.T) {
 	require.Equal(t, "none", component.Health.Kind)
 	// The first probe upsert would succeed, but a later ownership collision
 	// must roll back both it and the changed authoritative registration.
-	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: "placement:control:monitor", Source: domain.CheckSourceObservability}))
-	snapshot.Placements[0].Status = "enabled"
+	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: "deployment:control:monitor", Source: domain.CheckSourceObservability}))
+	snapshot.Deployments[0].Status = "enabled"
 	_, err = repos.Topology.Reconcile(t.Context(), snapshot, []domain.Check{
-		{CheckID: "placement:control:collector", Name: "collector", Kind: domain.CheckKindHTTP, Source: domain.CheckSourcePlacement},
-		{CheckID: "placement:control:monitor", Name: "monitor", Kind: domain.CheckKindHTTP, Source: domain.CheckSourcePlacement},
+		{CheckID: "deployment:control:collector", Name: "collector", Kind: domain.CheckKindHTTP, Source: domain.CheckSourceDeployment},
+		{CheckID: "deployment:control:monitor", Name: "monitor", Kind: domain.CheckKindHTTP, Source: domain.CheckSourceDeployment},
 	})
 	require.ErrorContains(t, err, "collides")
 	after, err := repos.Topology.Snapshot(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, before, after)
-	_, err = repos.Checks.Get(t.Context(), "", "placement:control:collector")
+	_, err = repos.Checks.Get(t.Context(), "", "deployment:control:collector")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
-	// A complete, successfully discovered empty placement list removes the
+	// A complete, successfully discovered empty deployment list removes the
 	// registrations; it is distinct from a failed or absent discovery.
-	snapshot.Placements = nil
+	snapshot.Deployments = nil
 	_, err = repos.Topology.Reconcile(t.Context(), snapshot, nil)
 	require.NoError(t, err)
 	after, err = repos.Topology.Snapshot(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, after)
-	require.Empty(t, after.Placements)
+	require.Empty(t, after.Deployments)
 }

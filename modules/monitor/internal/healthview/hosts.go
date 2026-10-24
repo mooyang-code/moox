@@ -17,12 +17,12 @@ func projectHosts(facts observability.Overview) []*pb.HealthHost {
 		for _, host := range facts.Topology.Hosts {
 			byID[host.HostID] = host
 		}
-		for _, placement := range facts.Topology.Placements {
-			if placement.ComponentID == "host-agent" && placement.Status == "disabled" {
-				agentDisabled[placement.HostID] = true
+		for _, deployment := range facts.Topology.Deployments {
+			if deployment.ComponentID == "host-agent" && deployment.Status == "disabled" {
+				agentDisabled[deployment.HostID] = true
 			}
-			if placement.ComponentID == "host-agent" && placement.Status == "enabled" {
-				expectedAgent[placement.HostID] = true
+			if deployment.ComponentID == "host-agent" && deployment.Status == "enabled" {
+				expectedAgent[deployment.HostID] = true
 			}
 		}
 	}
@@ -103,9 +103,9 @@ func hostPresenceAlerts(facts observability.Overview) []*pb.HealthAlert {
 				disabled[host.HostID] = true
 			}
 		}
-		for _, placement := range facts.Topology.Placements {
-			if placement.ComponentID == "host-agent" && placement.Status == "disabled" {
-				disabled[placement.HostID] = true
+		for _, deployment := range facts.Topology.Deployments {
+			if deployment.ComponentID == "host-agent" && deployment.Status == "disabled" {
+				disabled[deployment.HostID] = true
 			}
 		}
 	}

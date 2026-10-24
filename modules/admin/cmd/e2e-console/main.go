@@ -129,7 +129,7 @@ func main() {
 	tests := []struct{ name, path, space, body string }{
 		{"auth/GetUserInfo", "/api/admin/auth/GetUserInfo", "", `{}`},
 		{"space/ListSpaces", "/api/admin/space/ListSpaces", "", `{"page":{"page":1,"size":20}}`},
-		{"sysdeploy/ListPlacements", "/api/admin/sysdeploy/ListPlacements", "", `{"page":{"page":1,"size":100}}`},
+		{"sysdeploy/ListDeployments", "/api/admin/sysdeploy/ListDeployments", "", `{"page":{"page":1,"size":100}}`},
 		{"sysdeploy/ListHosts", "/api/admin/sysdeploy/ListHosts", "", `{"page":{"page":1,"size":20}}`},
 		{"storage/ListDatasets(crypto)", "/api/admin/storage/ListDatasets", "crypto", `{"space_id":"crypto","page":{"page":1,"size":5}}`},
 		{"storage/ListDataNodes", "/api/admin/storage/ListDataNodes", "", `{"page":{"page":1,"size":5}}`},

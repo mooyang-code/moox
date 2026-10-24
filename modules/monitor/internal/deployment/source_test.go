@@ -1,4 +1,4 @@
-package placement
+package deployment
 
 import (
 	"context"
@@ -33,9 +33,9 @@ func TestClientSourceOnlyUsesV2AndReadsAllPages(t *testing.T) {
 		case "ListHosts":
 			page := request.(*adminpb.ListDeploymentHostsReq).GetPage().GetPage()
 			*response.(*adminpb.ListDeploymentHostsRsp) = adminpb.ListDeploymentHostsRsp{RetInfo: &commonpb.RetInfo{}, Hosts: []*adminpb.DeploymentHost{{HostId: fmt.Sprint(page)}}, PageResult: &commonpb.PageResult{HasMore: page < 2}}
-		case "ListPlacements":
-			page := request.(*adminpb.ListPlacementsReq).GetPage().GetPage()
-			*response.(*adminpb.ListPlacementsRsp) = adminpb.ListPlacementsRsp{RetInfo: &commonpb.RetInfo{}, Placements: []*adminpb.ComponentPlacement{{HostId: fmt.Sprint(page)}}, PageResult: &commonpb.PageResult{HasMore: page < 2}}
+		case "ListDeployments":
+			page := request.(*adminpb.ListDeploymentsReq).GetPage().GetPage()
+			*response.(*adminpb.ListDeploymentsRsp) = adminpb.ListDeploymentsRsp{RetInfo: &commonpb.RetInfo{}, Deployments: []*adminpb.ComponentDeployment{{HostId: fmt.Sprint(page)}}, PageResult: &commonpb.PageResult{HasMore: page < 2}}
 		default:
 			t.Fatalf("unexpected discovery RPC %s", method)
 		}
@@ -44,8 +44,8 @@ func TestClientSourceOnlyUsesV2AndReadsAllPages(t *testing.T) {
 	snapshot, err := NewClientSource(gateway).Snapshot(t.Context())
 	require.NoError(t, err)
 	require.Len(t, snapshot.Hosts, 2)
-	require.Len(t, snapshot.Placements, 2)
-	require.Equal(t, []string{"GetCatalog", "ListHosts", "ListHosts", "ListPlacements", "ListPlacements"}, methods)
+	require.Len(t, snapshot.Deployments, 2)
+	require.Equal(t, []string{"GetCatalog", "ListHosts", "ListHosts", "ListDeployments", "ListDeployments"}, methods)
 }
 
 func TestClientSourceRejectsUnverifiedCatalogAndFailedResponses(t *testing.T) {

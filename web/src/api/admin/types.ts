@@ -43,7 +43,7 @@ export interface DeploymentHost {
   created_at?: string;
   updated_at?: string;
 }
-export interface ComponentPlacement {
+export interface ComponentDeployment {
   host_id: string;
   component_id: string;
   status: DeploymentStatus;

@@ -11,12 +11,12 @@ import (
 )
 
 func isTopologyRecoveryCommand(args []string) bool {
-	return len(args) > 1 && (args[1] == "host" || args[1] == "placement")
+	return len(args) > 1 && (args[1] == "host" || args[1] == "deployment")
 }
 
 func runTopologyRecoveryCommand(args []string, stdout, stderr io.Writer) error {
-	if len(args) < 2 || (args[0] != "host" && args[0] != "placement") || args[1] != "set-status" {
-		return errors.New("expected host set-status or placement set-status")
+	if len(args) < 2 || (args[0] != "host" && args[0] != "deployment") || args[1] != "set-status" {
+		return errors.New("expected host set-status or deployment set-status")
 	}
 	if stdout == nil {
 		stdout = io.Discard
@@ -30,7 +30,7 @@ func runTopologyRecoveryCommand(args []string, stdout, stderr io.Writer) error {
 	controlHostID := fs.String("control-host-id", "", "canonical protected control host ID")
 	hostID := fs.String("host-id", "", "canonical host ID")
 	componentID := ""
-	if args[0] == "placement" {
+	if args[0] == "deployment" {
 		fs.StringVar(&componentID, "component-id", "", "canonical deployed component ID")
 	}
 	status := fs.String("status", "", "enabled or disabled")
@@ -40,13 +40,13 @@ func runTopologyRecoveryCommand(args []string, stdout, stderr io.Writer) error {
 	if fs.NArg() != 0 || !servicecatalog.ValidHostID(*hostID) || !servicecatalog.ValidHostID(*controlHostID) || (*status != servicecatalog.Enabled && *status != servicecatalog.Disabled) {
 		return errors.New("recovery requires --control-host-id, --host-id and --status enabled|disabled, with no positional arguments")
 	}
-	if args[0] == "placement" {
+	if args[0] == "deployment" {
 		catalog, err := servicecatalog.LoadEmbedded()
 		if err != nil {
 			return err
 		}
 		if _, ok := catalog.Component(componentID); !ok {
-			return errors.New("placement recovery requires a catalog --component-id")
+			return errors.New("deployment recovery requires a catalog --component-id")
 		}
 	}
 	if err := validateExistingAdminDatabase(*dbPath); err != nil {
@@ -64,7 +64,7 @@ func runTopologyRecoveryCommand(args []string, stdout, stderr io.Writer) error {
 	if args[0] == "host" {
 		err = dao.SetHostStatus(context.Background(), *hostID, *status)
 	} else {
-		err = dao.SetPlacementStatus(context.Background(), *hostID, componentID, *status)
+		err = dao.SetDeploymentStatus(context.Background(), *hostID, componentID, *status)
 	}
 	if err != nil {
 		return err

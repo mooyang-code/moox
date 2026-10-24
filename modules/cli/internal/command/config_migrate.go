@@ -19,8 +19,8 @@ func newConfigMigrateCommand() *cobra.Command {
 		Long: `在本机解密 moox.toml 并改写成当前格式：
 - [[factors.definitions]] 只保留 factor_id，file 指向因子库（factors.source_dir）里包含该因子的 YAML 文件，删除其余旧字段；
 - 给 control、storage、overseas、factor 主机补上中文名 label（已有的不动）；
-- 把 [placements] 里已改名的旧组件身份改成当前名字（cloudnode → cloudfunction）；
-- 加 --rename-host 旧ID=新ID 时把主机 ID 改名（主机表、[placements]、access_host 与 host 引用）；
+- 把 [deployments] 里已改名的旧组件身份改成当前名字（cloudnode → cloudfunction）；
+- 加 --rename-host 旧ID=新ID 时把主机 ID 改名（主机表、[deployments]、access_host 与 host 引用）；
 - 加 --import-scf <JSON> 时整体替换 [scf_plan]（云账号、地域网络与入口主机、空间与市场），并给入口主机补上 region 与 private_address。
 改写后先按当前格式校验。默认只预览改动；加 --yes 才写回：原文件备份为 moox.toml.bak-<时间>，新内容重新加密保存。
 输出只有键名、因子 ID、文件名、主机 ID 与中文名，不输出任何配置值。

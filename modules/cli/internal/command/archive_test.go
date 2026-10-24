@@ -136,16 +136,16 @@ func TestArchiveSurfacesManagerErrors(t *testing.T) {
 	assert.Empty(t, out.String())
 }
 
-func TestArchiveAndSyncPlacementsCommandsAreRegistered(t *testing.T) {
+func TestArchiveAndSyncDeploymentsCommandsAreRegistered(t *testing.T) {
 	var found []string
 	for _, c := range archiveCmd.Commands() {
 		found = append(found, c.Name())
 	}
 	assert.ElementsMatch(t, []string{"overview", "tasks", "runs", "partitions"}, found)
 	setup := newSetupCommand(defaultSetupDeps())
-	sync, _, err := setup.Find([]string{"sync-placements"})
+	sync, _, err := setup.Find([]string{"sync-deployments"})
 	require.NoError(t, err)
-	assert.Equal(t, "sync-placements", sync.Name())
+	assert.Equal(t, "sync-deployments", sync.Name())
 	require.NotNil(t, sync.Flags().Lookup("host"))
 	require.NotNil(t, sync.Flags().Lookup("file"))
 }

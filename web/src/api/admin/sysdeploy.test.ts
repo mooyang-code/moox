@@ -6,9 +6,9 @@ import {
   decodeCatalog,
   getHostRoutes,
   listAllDeploymentHosts,
-  listAllPlacements,
+  listAllDeployments,
   setHostStatus,
-  setPlacementStatus
+  setDeploymentStatus
 } from "./sysdeploy";
 vi.mock("./http", () => ({ callControl: vi.fn() }));
 const call = vi.mocked(callControl);
@@ -32,31 +32,31 @@ describe("SysDeploy v2", () => {
     expect(call).toHaveBeenNthCalledWith(2, "sysdeploy", "ListHosts", { page: { page: 2, size: 100 } });
   });
   it("rejects broken or changing pagination rather than displaying a partial topology", async () => {
-    call.mockResolvedValue({ placements: [], page_result: { has_more: true } });
-    await expect(listAllPlacements()).rejects.toThrow("空页");
+    call.mockResolvedValue({ deployments: [], page_result: { has_more: true } });
+    await expect(listAllDeployments()).rejects.toThrow("空页");
     call.mockResolvedValue({
-      placements: [{ host_id: "a", component_id: "collector", status: "enabled" }],
+      deployments: [{ host_id: "a", component_id: "collector", status: "enabled" }],
       page_result: { has_more: true }
     });
-    await expect(listAllPlacements()).rejects.toThrow("分页期间变化");
+    await expect(listAllDeployments()).rejects.toThrow("分页期间变化");
   });
-  it("keeps placement identity separate for the same component on different hosts", async () => {
+  it("keeps deployment identity separate for the same component on different hosts", async () => {
     call.mockResolvedValue({
-      placements: [
+      deployments: [
         { host_id: "a", component_id: "access", status: "enabled" },
         { host_id: "b", component_id: "access", status: "disabled" }
       ]
     });
-    expect(await listAllPlacements()).toHaveLength(2);
+    expect(await listAllDeployments()).toHaveLength(2);
   });
   it("sends only the v2 status change and route requests", async () => {
     call.mockResolvedValue({});
     await setHostStatus("c-main", "disabled");
-    await setPlacementStatus("storage", "storage-primary", "enabled");
+    await setDeploymentStatus("storage", "storage-primary", "enabled");
     await getHostRoutes("storage");
     expect(call.mock.calls).toEqual([
       ["sysdeploy", "SetHostStatus", { host_id: "c-main", status: "disabled" }],
-      ["sysdeploy", "SetPlacementStatus", { host_id: "storage", component_id: "storage-primary", status: "enabled" }],
+      ["sysdeploy", "SetDeploymentStatus", { host_id: "storage", component_id: "storage-primary", status: "enabled" }],
       ["sysdeploy", "GetHostRoutes", { host_id: "storage" }]
     ]);
   });

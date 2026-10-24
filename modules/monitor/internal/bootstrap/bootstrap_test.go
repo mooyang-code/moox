@@ -134,7 +134,7 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 	startObservabilityConsumer(ctx, cfg, nil, nil, nil)
 	startObservabilityConsumer(ctx, cfg, &Runtime{}, hostmetrics.NewStore(nil, nil), nil)
 
-	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{Placement: config.PlacementConfig{Enabled: false}}, rt))
+	assert.Nil(t, monitorSyncFunc(ctx, nil, &config.Config{Deployment: config.DeploymentConfig{Enabled: false}}, rt))
 	assert.Nil(t, monitorSyncFunc(ctx, nil, nil, rt))
 
 	registerMetricsReporter(nil, nil)
@@ -142,7 +142,7 @@ func TestStartHelpersEarlyReturn(t *testing.T) {
 }
 
 func TestMonitorSyncHandlerPropagatesTimerFailure(t *testing.T) {
-	wantErr := errors.New("placement unavailable")
+	wantErr := errors.New("deployment unavailable")
 	called := 0
 	handler := monitorSyncHandler(func(context.Context) (int, error) {
 		called++
@@ -176,7 +176,7 @@ func TestSerializedMonitorSyncPreventsOverlappingRuns(t *testing.T) {
 	require.NoError(t, <-firstDone)
 }
 
-func TestMonitorTRPCConfigDeclaresPlacementTimer(t *testing.T) {
+func TestMonitorTRPCConfigDeclaresDeploymentTimer(t *testing.T) {
 	raw, err := os.ReadFile("../../config/trpc_go.yaml")
 	require.NoError(t, err)
 	var trpcConfig struct {
@@ -191,7 +191,7 @@ func TestMonitorTRPCConfigDeclaresPlacementTimer(t *testing.T) {
 	}
 	require.NoError(t, yaml.Unmarshal(raw, &trpcConfig))
 	for _, service := range trpcConfig.Server.Services {
-		if service.Name != "trpc.moox.monitor.placement.timer" {
+		if service.Name != "trpc.moox.monitor.deployment.timer" {
 			continue
 		}
 		assert.Equal(t, "0 * * * * *", service.Network)
@@ -199,7 +199,7 @@ func TestMonitorTRPCConfigDeclaresPlacementTimer(t *testing.T) {
 		assert.Equal(t, 30000, service.Timeout)
 		return
 	}
-	t.Fatal("missing trpc.moox.monitor.placement.timer service")
+	t.Fatal("missing trpc.moox.monitor.deployment.timer service")
 }
 
 // MonitorMgr 必须显式用 go-net：tnet 的空闲定时器会提前关闭仍在按 30 秒轮询使用的连接。

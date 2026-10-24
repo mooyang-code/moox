@@ -64,7 +64,7 @@ func TestHTTPSProbeConnectsLoopbackWithPublicHostAndSNI(t *testing.T) {
 				w.Header().Set("Location", "https://redirect-must-not-be-followed.invalid/")
 				w.WriteHeader(response)
 			}))
-			check := domain.Check{URL: "https://console.example.test:9527/readyz", ConnectAddress: srv.Listener.Addr().String(), ServerName: "console.example.test", TrustMode: "internal", CAFile: root, CABaseline: baseline, Source: domain.CheckSourcePlacement, ExpectedStatus: "200-399"}
+			check := domain.Check{URL: "https://console.example.test:9527/readyz", ConnectAddress: srv.Listener.Addr().String(), ServerName: "console.example.test", TrustMode: "internal", CAFile: root, CABaseline: baseline, Source: domain.CheckSourceDeployment, ExpectedStatus: "200-399"}
 			runner := HTTPRunner{HealthSigner: &HealthSigner{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "test-health-secret"}}
 			result := runner.Run(t.Context(), check)
 			require.True(t, result.Success, result.RawError)
@@ -114,9 +114,9 @@ func TestPageDependencyFailureDoesNotChangeProxyReadiness(t *testing.T) {
 		_, _ = w.Write([]byte("web-host is unavailable"))
 	}))
 	runner := HTTPRunner{HealthSigner: &HealthSigner{Version: "moox-health-v1", AccessKey: "monitor", SecretKey: "test-health-secret"}}
-	pageResult := runner.Run(t.Context(), domain.Check{CheckID: "console-page:control:console-proxy", Source: domain.CheckSourcePlacement, URL: "https://console.example.test:9527/", ConnectAddress: page.Listener.Addr().String(), ServerName: "console.example.test", TrustMode: "internal", CAFile: root, CABaseline: baseline, ExpectedStatus: "200-399"})
+	pageResult := runner.Run(t.Context(), domain.Check{CheckID: "console-page:control:console-proxy", Source: domain.CheckSourceDeployment, URL: "https://console.example.test:9527/", ConnectAddress: page.Listener.Addr().String(), ServerName: "console.example.test", TrustMode: "internal", CAFile: root, CABaseline: baseline, ExpectedStatus: "200-399"})
 	require.False(t, pageResult.Success)
 	require.Contains(t, pageResult.RawError, "web-host is unavailable")
-	proxyResult := runner.Run(t.Context(), domain.Check{CheckID: "placement:control:console-proxy", Source: domain.CheckSourcePlacement, URL: ready.URL + "/readyz", BodyContains: `"ready":true`})
+	proxyResult := runner.Run(t.Context(), domain.Check{CheckID: "deployment:control:console-proxy", Source: domain.CheckSourceDeployment, URL: ready.URL + "/readyz", BodyContains: `"ready":true`})
 	require.True(t, proxyResult.Success, proxyResult.RawError)
 }

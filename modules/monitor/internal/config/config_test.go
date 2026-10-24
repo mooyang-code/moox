@@ -16,7 +16,7 @@ import (
 func TestHTTPSProbeConfigurationResolvesTrustRelativeToModuleConfig(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "app.yaml")
-	raw := "placement:\n  enabled: false\n  https:\n    console-proxy:\n      url: https://console.example.test:9527/\n      connect_address: 127.0.0.1:9527\n      server_name: console.example.test\n      trust_mode: internal\n      ca_file: ../../certs/caddy/root.crt\n      ca_baseline: ../../certs/caddy/root.sha256\n"
+	raw := "deployment:\n  enabled: false\n  https:\n    console-proxy:\n      url: https://console.example.test:9527/\n      connect_address: 127.0.0.1:9527\n      server_name: console.example.test\n      trust_mode: internal\n      ca_file: ../../certs/caddy/root.crt\n      ca_baseline: ../../certs/caddy/root.sha256\n"
 	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestHTTPSProbeConfigurationResolvesTrustRelativeToModuleConfig(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	target := cfg.Placement.HTTPS["console-proxy"]
+	target := cfg.Deployment.HTTPS["console-proxy"]
 	if target.CAFile != filepath.Clean(filepath.Join(directory, "../../certs/caddy/root.crt")) || !filepath.IsAbs(target.CABaseline) {
 		t.Fatalf("unresolved HTTPS trust files: %+v", target)
 	}
@@ -38,8 +38,8 @@ func TestHTTPSProbeConfigurationRejectsAmbiguousTrust(t *testing.T) {
 		{URL: "https://console.example.test/", ConnectAddress: "127.0.0.1:9527", ServerName: "console.example.test", TrustMode: "public", CAFile: "root.crt", CABaseline: "root.sha256"},
 	} {
 		cfg := Default()
-		cfg.Placement.Enabled = false
-		cfg.Placement.HTTPS = map[string]domain.HTTPSConfig{"console-proxy": target}
+		cfg.Deployment.Enabled = false
+		cfg.Deployment.HTTPS = map[string]domain.HTTPSConfig{"console-proxy": target}
 		if err := cfg.Validate(); err == nil {
 			t.Fatalf("invalid HTTPS configuration accepted: %+v", target)
 		}
@@ -64,8 +64,8 @@ func TestMonitorConfigDefaults(t *testing.T) {
 	if cfg.Scheduler.MaxConcurrency != 16 {
 		t.Fatalf("max concurrency = %d", cfg.Scheduler.MaxConcurrency)
 	}
-	if !cfg.Placement.Enabled {
-		t.Fatalf("placement = %+v", cfg.Placement)
+	if !cfg.Deployment.Enabled {
+		t.Fatalf("deployment = %+v", cfg.Deployment)
 	}
 	if cfg.Alert.SendTimeoutSeconds != 10 {
 		t.Fatalf("alert send timeout = %d", cfg.Alert.SendTimeoutSeconds)
@@ -125,8 +125,8 @@ func TestMonitorConfigTRPCPort(t *testing.T) {
 	if cfg.Server.Service[2].Name != "trpc.moox.monitor.metrics.timer" || cfg.Server.Service[2].Port != 11415 {
 		t.Fatalf("metrics timer service = %+v", cfg.Server.Service[2])
 	}
-	if cfg.Server.Service[3].Name != "trpc.moox.monitor.placement.timer" || cfg.Server.Service[3].Port != 11416 {
-		t.Fatalf("placement timer service = %+v", cfg.Server.Service[3])
+	if cfg.Server.Service[3].Name != "trpc.moox.monitor.deployment.timer" || cfg.Server.Service[3].Port != 11416 {
+		t.Fatalf("deployment timer service = %+v", cfg.Server.Service[3])
 	}
 }
 
@@ -222,14 +222,14 @@ func TestMonitorConfigLoadsHealthAuthOnlyFromEnvironment(t *testing.T) {
 	}
 }
 
-func TestMonitorConfigRequiresHealthCredentialsWhenPlacementEnabled(t *testing.T) {
+func TestMonitorConfigRequiresHealthCredentialsWhenDeploymentEnabled(t *testing.T) {
 	cfg := Default()
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want health credential error")
 	}
-	cfg.Placement.Enabled = false
+	cfg.Deployment.Enabled = false
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("Validate() with placement disabled = %v", err)
+		t.Fatalf("Validate() with deployment disabled = %v", err)
 	}
 }
 
@@ -352,7 +352,7 @@ func TestMonitorConfigValidatesHostStorageContract(t *testing.T) {
 
 func TestMonitorConfigRequiresPresenceAwareMarketCanarySeriesTag(t *testing.T) {
 	cfg := Default()
-	cfg.Placement.Enabled = false
+	cfg.Deployment.Enabled = false
 	cfg.MarketCanary.Enabled = true
 	cfg.MarketCanary.Subjects = []MarketCanarySubject{{SpaceID: "crypto", DatasetID: "dataset_task", Symbol: "BTC-USDT", Frequency: "1m"}}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "requires series_tag") {
@@ -374,7 +374,7 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 		!reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
 		t.Fatalf("kline freshness defaults = %+v", cfg.KlineFreshness)
 	}
-	cfg.Placement.Enabled = false
+	cfg.Deployment.Enabled = false
 	cfg.KlineFreshness.Enabled = true
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid kline freshness config rejected: %v", err)
@@ -414,7 +414,7 @@ func TestMonitorConfigRejectsUnknownKlineFields(t *testing.T) {
 
 func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
 	cfg := Default()
-	cfg.Placement.Enabled = false
+	cfg.Deployment.Enabled = false
 	cfg.MarketCanary.Enabled = true
 	cfg.MarketCanary.ClosedBarMinCoverage = 1.01
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "closed_bar_min_coverage") {
@@ -422,14 +422,14 @@ func TestMonitorConfigValidatesMarketHealthThresholds(t *testing.T) {
 	}
 
 	cfg = Default()
-	cfg.Placement.Enabled = false
+	cfg.Deployment.Enabled = false
 	cfg.MarketHealth.TimerCoordinationStaleAfter = -time.Second
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "timer_coordination_stale_after") {
 		t.Fatalf("Validate() error = %v, want timer coordination threshold error", err)
 	}
 
 	cfg = Default()
-	cfg.Placement.Enabled = false
+	cfg.Deployment.Enabled = false
 	cfg.MarketHealth.TimerCoordinationLeaseGrace = -time.Second
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "timer_coordination_lease_grace") {
 		t.Fatalf("Validate() error = %v, want lease grace error", err)

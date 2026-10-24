@@ -228,7 +228,7 @@ ssh = {username="fixture",password="synthetic-ssh-password"}
 [hosts.compute1]
 address = "127.0.0.3"
 ssh = {username="fixture",password="synthetic-ssh-password"}
-[placements]
+[deployments]
 control = ["admin","eventbus","console-proxy","web-host","monitor","collector","cloudfunction","factor-mgr","strategy","access","egress-proxy","trade","storage-primary","storage-node","storage-view"]
 storage = ["access"]
 compute1 = ["access"]

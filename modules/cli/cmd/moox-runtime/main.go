@@ -382,7 +382,7 @@ func inspectBundle(ctx context.Context, args []string, stdout, stderr io.Writer)
 	flags.BoolVar(&options.Outbound, "outbound", false, "target is an outbound-only host whose gateway certificate also allows client auth")
 	flags.StringVar(&options.ExpectedCA, "ca-sha256", "", "pinned DER CA fingerprint")
 	flags.StringVar(&options.ExpectedHash, "snapshot-sha256", "", "expected compiled snapshot hash")
-	flags.StringVar(&components, "components", "", "complete target placement, comma-separated")
+	flags.StringVar(&components, "components", "", "complete target deployment, comma-separated")
 	flags.BoolVar(&options.AllowOperator, "bootstrap-operator", false, "expect a control bootstrap operator identity")
 	if err := flags.Parse(args); err != nil {
 		return err

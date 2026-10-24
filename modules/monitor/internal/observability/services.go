@@ -21,7 +21,7 @@ type ReporterInstance struct {
 	LastSeenAt                          time.Time
 }
 
-// buildServices joins all registered placements with reporters by exact host
+// buildServices joins all registered deployments with reporters by exact host
 // and component identity. Probe existence never determines registration.
 func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceStatus, []ServiceStatus, *domain.TopologySnapshot, error) {
 	if b.Topology == nil {
@@ -35,27 +35,27 @@ func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceSta
 	if err != nil {
 		return nil, nil, snapshot, err
 	}
-	byPlacement := make(map[string][]monmetrics.MetricService)
+	byDeployment := make(map[string][]monmetrics.MetricService)
 	for _, row := range rows {
-		key := placementKey(row.NodeID, row.ServiceName)
-		byPlacement[key] = append(byPlacement[key], row)
+		key := deploymentKey(row.NodeID, row.ServiceName)
+		byDeployment[key] = append(byDeployment[key], row)
 	}
 	hosts := make(map[string]domain.TopologyHost, len(snapshot.Hosts))
 	for _, host := range snapshot.Hosts {
 		hosts[host.HostID] = host
 	}
-	registered := make(map[string]bool, len(snapshot.Placements))
-	services := make([]ServiceStatus, 0, len(snapshot.Placements))
-	for _, placement := range snapshot.Placements {
-		key := placementKey(placement.HostID, placement.ComponentID)
+	registered := make(map[string]bool, len(snapshot.Deployments))
+	services := make([]ServiceStatus, 0, len(snapshot.Deployments))
+	for _, deployment := range snapshot.Deployments {
+		key := deploymentKey(deployment.HostID, deployment.ComponentID)
 		registered[key] = true
-		component, _ := snapshot.Catalog.Component(placement.ComponentID)
+		component, _ := snapshot.Catalog.Component(deployment.ComponentID)
 		item := ServiceStatus{
-			NodeID: placement.HostID, ServiceName: placement.ComponentID,
-			Enabled: placement.Status == servicecatalog.Enabled && hosts[placement.HostID].Status == servicecatalog.Enabled,
+			NodeID: deployment.HostID, ServiceName: deployment.ComponentID,
+			Enabled: deployment.Status == servicecatalog.Enabled && hosts[deployment.HostID].Status == servicecatalog.Enabled,
 			Status:  "unknown", Reason: "health not checked", ProbeStatus: "unknown",
 		}
-		reporterRows := byPlacement[key]
+		reporterRows := byDeployment[key]
 		// 功能指标不适用（not_applicable）的组件不要求上报指标，与 doctor 诊断的豁免一致；它们没有上报行时不产生"缺失上报"告警。
 		if (component.Doctor.Transport == "reporter" && component.Doctor.FunctionalObservability != "not_applicable") || len(reporterRows) > 0 {
 			item = withReporters(item, reporterRows)
@@ -63,7 +63,7 @@ func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceSta
 
 		var latest *domain.CheckResult
 		if component.Health.Kind != "none" {
-			checkID := "placement:" + placement.HostID + ":" + placement.ComponentID
+			checkID := "deployment:" + deployment.HostID + ":" + deployment.ComponentID
 			if b.Checks != nil {
 				check, err := b.Checks.Get(ctx, "", checkID)
 				if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -97,7 +97,7 @@ func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceSta
 		}
 		services = append(services, item)
 	}
-	// Catalog principals run outside host placements (for example SCF). Their
+	// Catalog principals run outside host deployments (for example SCF). Their
 	// metrics remain available to business checks without inventing deployments.
 	external := make(map[string]bool, len(snapshot.Catalog.Principals))
 	for _, principal := range snapshot.Catalog.Principals {
@@ -105,7 +105,7 @@ func (b Builder) buildServices(ctx context.Context, now time.Time) ([]ServiceSta
 	}
 	var unregistered []ServiceStatus
 	for _, row := range rows {
-		if registered[placementKey(row.NodeID, row.ServiceName)] || external[row.ServiceName] || row.IsStale || row.LastSeenAt.IsZero() {
+		if registered[deploymentKey(row.NodeID, row.ServiceName)] || external[row.ServiceName] || row.IsStale || row.LastSeenAt.IsZero() {
 			continue
 		}
 		item := withReporters(ServiceStatus{NodeID: row.NodeID, ServiceName: row.ServiceName}, []monmetrics.MetricService{row})
@@ -140,7 +140,7 @@ func (b Builder) reporters(ctx context.Context, now time.Time) ([]monmetrics.Met
 	return rows, nil
 }
 
-func placementKey(hostID, componentID string) string { return hostID + "\x00" + componentID }
+func deploymentKey(hostID, componentID string) string { return hostID + "\x00" + componentID }
 
 func withReporters(item ServiceStatus, rows []monmetrics.MetricService) ServiceStatus {
 	item.ReporterStatus, item.Status, item.Reason = "missing", "unknown", "reporter missing"

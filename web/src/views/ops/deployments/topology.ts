@@ -1,6 +1,6 @@
 import type { ComponentCatalog, DeploymentHost } from "@/api/admin/types";
 import type { HealthStatus } from "@/api/monitor";
-import type { PlacementRow } from "./model";
+import type { DeploymentRow } from "./model";
 
 // 服务拓扑：调用关系只依据组件目录（ACL、principals）、主机与放置推导，不凭印象补关系；
 // 数据流向是总体设计第 5、6 节的固定链路（事件订阅不在目录里），按实际放置落到节点上。
@@ -160,7 +160,7 @@ export interface Topology {
 }
 export interface TopologyInput {
   catalog?: ComponentCatalog;
-  groups: { host: DeploymentHost; rows: PlacementRow[] }[];
+  groups: { host: DeploymentHost; rows: DeploymentRow[] }[];
   controlHostId: string;
   showDisabled: boolean;
 }
@@ -178,9 +178,9 @@ export function buildTopology(input: TopologyInput): Topology {
 
   // 1. 按“主机列 × 分层行”排布组件；各层行高取所有主机里最高的一格，保证层次横向对齐。
   const cells = groups.map(group => {
-    const byLayer = new Map<TopologyLayer, PlacementRow[]>();
+    const byLayer = new Map<TopologyLayer, DeploymentRow[]>();
     for (const row of group.rows) {
-      const layer = layerOf(row.placement.component_id);
+      const layer = layerOf(row.deployment.component_id);
       byLayer.set(layer, [...(byLayer.get(layer) || []), row]);
     }
     return byLayer;
@@ -214,10 +214,10 @@ export function buildTopology(input: TopologyInput): Topology {
         nodes.push({
           id: row.key,
           kind: "component",
-          name: row.definition?.name || row.placement.component_id,
-          sub: row.placement.component_id,
-          hostId: row.placement.host_id,
-          componentId: row.placement.component_id,
+          name: row.definition?.name || row.deployment.component_id,
+          sub: row.deployment.component_id,
+          hostId: row.deployment.host_id,
+          componentId: row.deployment.component_id,
           layer: layer.key,
           status: row.status,
           x: columnsX[column] + CELL_PAD + (index % 2) * (NODE_W + GAP_X),
@@ -295,7 +295,7 @@ export function buildTopology(input: TopologyInput): Topology {
   }
 
   const unplacedIds = new Set(components.map(item => item.id));
-  for (const group of input.groups) for (const row of group.rows) unplacedIds.delete(row.placement.component_id);
+  for (const group of input.groups) for (const row of group.rows) unplacedIds.delete(row.deployment.component_id);
   return {
     nodes,
     edges: [...edges.values()],

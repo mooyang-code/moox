@@ -28,7 +28,7 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 	directory := t.TempDir()
 	for id, template := range map[string]string{
 		"console-proxy": "public: {host: localhost, port: 9527, http3: true}\ntls: {mode: internal, storage_root: ../data/caddy/caddy}\nlifecycle: {drain_timeout: 91s}\n",
-		"monitor":       "placement: {enabled: true, https: {}}\nmetrics: {enabled: true, no_data_intervals: 7}\n",
+		"monitor":       "deployment: {enabled: true, https: {}}\nmetrics: {enabled: true, no_data_intervals: 7}\n",
 		"collector":     "database: {path: ./data/collector.db}\nstorage: {result_data_node_id: obsolete-node}\nscf_access: {key_id: original-scf-id}\nperiod_readiness: {grace: 7m}\n",
 		"factor-mgr":    "engine: {lease_ttl: 73s}\n",
 	} {
@@ -36,7 +36,7 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 		require.NoError(t, os.MkdirAll(parent, 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(parent, "app.yaml"), []byte(template), 0o600))
 	}
-	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "2001:db8::10", TLSMode: "internal"}, "storage1": {Address: "192.0.2.20"}}, Placements: map[string][]string{"control": {"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr"}, "storage1": {"storage-primary", "storage-node", "storage-view"}}, CollectorRetention: setupconfig.CollectorRetention{MaintenanceInterval: "2m", MaxRowsPerPass: 19}}}
+	snapshot := &setupconfig.Snapshot{Manifest: setupconfig.Manifest{HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "2001:db8::10", TLSMode: "internal"}, "storage1": {Address: "192.0.2.20"}}, Deployments: map[string][]string{"control": {"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr"}, "storage1": {"storage-primary", "storage-node", "storage-view"}}, CollectorRetention: setupconfig.CollectorRetention{MaintenanceInterval: "2m", MaxRowsPerPass: 19}}}
 	components := []string{"admin", "eventbus", "console-proxy", "monitor", "collector", "factor-mgr"}
 	rendered, err := controlConfigurations(snapshot, directory, components)
 	require.NoError(t, err)
@@ -50,7 +50,7 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 	proxy, monitor, collector := decode("console-proxy"), decode("monitor"), decode("collector")
 	require.Equal(t, "2001:db8::10", proxy["public"].(map[string]any)["host"])
 	require.Equal(t, "91s", proxy["lifecycle"].(map[string]any)["drain_timeout"])
-	https := monitor["placement"].(map[string]any)["https"].(map[string]any)["console-proxy"].(map[string]any)
+	https := monitor["deployment"].(map[string]any)["https"].(map[string]any)["console-proxy"].(map[string]any)
 	require.Equal(t, "https://[2001:db8::10]:9527/", https["url"])
 	require.Equal(t, "[2001:db8::10]:9527", https["connect_address"])
 	require.Equal(t, "../../console-proxy/data/caddy/internal-ca.sha256", https["ca_baseline"])
@@ -65,7 +65,7 @@ func TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints(t *
 	snapshot.Manifest.HostCatalog["control"] = definition
 	rendered, err = controlConfigurations(snapshot, directory, components)
 	require.NoError(t, err)
-	https = decode("monitor")["placement"].(map[string]any)["https"].(map[string]any)["console-proxy"].(map[string]any)
+	https = decode("monitor")["deployment"].(map[string]any)["https"].(map[string]any)["console-proxy"].(map[string]any)
 	require.Equal(t, "public", https["trust_mode"])
 	require.NotContains(t, https, "ca_file")
 	require.NotContains(t, https, "ca_baseline")

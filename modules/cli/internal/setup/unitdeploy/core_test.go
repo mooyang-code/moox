@@ -34,7 +34,7 @@ tls_enabled = true
 [hosts.control]
 address = "192.0.2.10"
 ssh = {username="fixture"}
-[placements]
+[deployments]
 control = ["admin","eventbus","console-proxy","web-host"]
 `
 	directory, err := filepath.EvalSymlinks(t.TempDir())

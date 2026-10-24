@@ -18,7 +18,7 @@ type HostRecord struct {
 
 func (HostRecord) TableName() string { return "t_hosts" }
 
-type PlacementRecord struct {
+type DeploymentRecord struct {
 	HostID      string    `gorm:"column:c_host_id;primaryKey"`
 	ComponentID string    `gorm:"column:c_component_id;primaryKey"`
 	Status      string    `gorm:"column:c_status"`
@@ -26,7 +26,7 @@ type PlacementRecord struct {
 	UpdatedAt   time.Time `gorm:"column:c_mtime;autoUpdateTime"`
 }
 
-func (PlacementRecord) TableName() string { return "t_placements" }
+func (DeploymentRecord) TableName() string { return "t_deployments" }
 
 type HostGatewayStatus struct {
 	HostID             string     `gorm:"column:c_host_id;primaryKey"`
@@ -56,7 +56,7 @@ func (s *HostGatewayStatus) ClearExpiredConflict(now time.Time) {
 }
 
 // HostSpec contains deployment input, not runtime status. Synchronization keeps
-// the existing host and placement enablement values.
+// the existing host and deployment enablement values.
 type HostSpec struct {
 	HostID         string
 	Address        string

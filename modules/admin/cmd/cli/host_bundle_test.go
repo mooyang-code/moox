@@ -65,7 +65,7 @@ func TestHostBundleScopesPrivateIdentityReissuesLeafAndPreservesTopology(t *test
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
 	require.NoError(t, dao.SetHostStatus(context.Background(), "storage", "disabled"))
-	require.NoError(t, dao.SetPlacementStatus(context.Background(), "compute-1", "access", "disabled"))
+	require.NoError(t, dao.SetDeploymentStatus(context.Background(), "compute-1", "access", "disabled"))
 	beforeHosts, beforePlacements, err := dao.Read(context.Background())
 	require.NoError(t, err)
 	for _, hostID := range []string{"control", "storage", "compute-1"} {
@@ -162,10 +162,10 @@ func TestHostBundleScopesPrivateIdentityReissuesLeafAndPreservesTopology(t *test
 			}
 		})
 	}
-	afterHosts, afterPlacements, err := dao.Read(context.Background())
+	afterHosts, afterDeployments, err := dao.Read(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, beforeHosts, afterHosts)
-	require.Equal(t, beforePlacements, afterPlacements)
+	require.Equal(t, beforePlacements, afterDeployments)
 }
 
 func TestHostBundleExportsOnlyExternalAccessKeysAcrossRotation(t *testing.T) {
@@ -219,10 +219,10 @@ func TestHostBundleProvisionsNewlyRegisteredHostAndUsesPersistedAddresses(t *tes
 	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	require.NoError(t, dao.SyncHostPlacements(context.Background(), sysdeploy.HostSpec{HostID: "compute-2", Address: "192.0.2.90", PrivateAddress: "2001:db8::90"}))
+	require.NoError(t, dao.SyncHostDeployments(context.Background(), sysdeploy.HostSpec{HostID: "compute-2", Address: "192.0.2.90", PrivateAddress: "2001:db8::90"}))
 	first := runHostBundleFixture(t, opts, "compute-2")
 	require.Len(t, first.Credentials, 2)
-	require.NoError(t, dao.SyncHostPlacements(context.Background(), sysdeploy.HostSpec{HostID: "compute-2", Address: "compute-2.example.test", PrivateAddress: "2001:db8::91"}))
+	require.NoError(t, dao.SyncHostDeployments(context.Background(), sysdeploy.HostSpec{HostID: "compute-2", Address: "compute-2.example.test", PrivateAddress: "2001:db8::91"}))
 	again := runHostBundleFixture(t, opts, "compute-2")
 	require.Equal(t, first.Credentials, again.Credentials)
 	config, err := hostgatewayconfig.Load(filepath.Join(again.BundleDir, again.ConfigFile))

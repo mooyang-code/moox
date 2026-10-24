@@ -8,8 +8,8 @@ import (
 	"time"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/modules/monitor/internal/deployment"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
-	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
@@ -21,15 +21,17 @@ import (
 	"trpc.group/trpc-go/trpc-go/transport"
 )
 
-type doctorDeploymentSource struct{ rows []*adminpb.ComponentPlacement }
+type doctorDeploymentSource struct {
+	rows []*adminpb.ComponentDeployment
+}
 
-func (s doctorDeploymentSource) Snapshot(context.Context) (placement.Snapshot, error) {
+func (s doctorDeploymentSource) Snapshot(context.Context) (deployment.Snapshot, error) {
 	catalog, _ := servicecatalog.LoadEmbedded()
-	return placement.Snapshot{Catalog: catalog, Hosts: []*adminpb.DeploymentHost{{HostId: "node-a", Address: "node-a.example.test", Status: "enabled"}}, Placements: s.rows}, nil
+	return deployment.Snapshot{Catalog: catalog, Hosts: []*adminpb.DeploymentHost{{HostId: "node-a", Address: "node-a.example.test", Status: "enabled"}}, Deployments: s.rows}, nil
 }
 
 func TestGetDoctorContextReturnsBoundedFacts(t *testing.T) {
-	builder := &monitordoctor.Builder{Deployments: doctorDeploymentSource{rows: []*adminpb.ComponentPlacement{{ComponentId: "monitor", HostId: "node-a", Status: "enabled"}}}}
+	builder := &monitordoctor.Builder{Deployments: doctorDeploymentSource{rows: []*adminpb.ComponentDeployment{{ComponentId: "monitor", HostId: "node-a", Status: "enabled"}}}}
 	service := &Service{doctorContext: builder}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

@@ -216,7 +216,7 @@
 import { computed, ref, useId, watch } from "vue";
 import type { ComponentCatalog, DeploymentHost } from "@/api/admin/types";
 import { statusColor, statusLabel } from "@/views/ops/monitor/health-display";
-import type { PlacementRow } from "./model";
+import type { DeploymentRow } from "./model";
 import {
   EDGE_CATEGORIES,
   NODE_H,
@@ -235,7 +235,7 @@ import {
 
 const props = defineProps<{
   catalog?: ComponentCatalog;
-  groups: { host: DeploymentHost; rows: PlacementRow[] }[];
+  groups: { host: DeploymentHost; rows: DeploymentRow[] }[];
   controlHostId: string;
   /** 链接里 host_id 定位的主机，在拓扑中描边高亮 */
   locatedHost?: string;

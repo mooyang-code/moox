@@ -24,11 +24,11 @@ go test -count=1 ./modules/admin/...
 
 重跑复用 CA、主密钥和调用方密钥，保留主机与组件启停状态；每次部署重新签发叶证书。已存在加密记录却丢失主密钥，或已有网关密钥却丢失 CA 时，必须恢复原件。数据库提交后的输出错误可直接重跑，失败暂存目录不会成为可安装包。
 
-后续主机部署先通过 `SyncHostPlacements` 登记，再经 control 的可信 SSH 执行 `moox-admin-cli host-bundle --host-id <目标主机> --control-host-id <控制主机> --db-path <现有数据库> --encryption-key-file <持久主密钥> --pki-dir <持久CA目录> --output-dir <私密输出父目录>`。该命令只使用现有数据库、主密钥和 CA，从持久拓扑读取目标地址与完整放置，事务性地生成缺少的调用方密钥、复用已有 KeyID，再为本次部署重签叶证书并发布新的 0700 包；所有文件为 0600。停用主机和组件的材料也可导出，启停状态保持不变。未登记主机、错误控制主机、丢失或损坏的身份材料均拒绝继续。
+后续主机部署先通过 `SyncHostDeployments` 登记，再经 control 的可信 SSH 执行 `moox-admin-cli host-bundle --host-id <目标主机> --control-host-id <控制主机> --db-path <现有数据库> --encryption-key-file <持久主密钥> --pki-dir <持久CA目录> --output-dir <私密输出父目录>`。该命令只使用现有数据库、主密钥和 CA，从持久拓扑读取目标地址与完整放置，事务性地生成缺少的调用方密钥、复用已有 KeyID，再为本次部署重签叶证书并发布新的 0700 包；所有文件为 0600。停用主机和组件的材料也可导出，启停状态保持不变。未登记主机、错误控制主机、丢失或损坏的身份材料均拒绝继续。
 
 普通主机包只包含目标主机和它所放置组件的签名身份；control 才包含 `console`，正常重部署不导出操作员身份。包含 Access 的主机另有 `secrets/access/access-verification.json` 及外部调用方验证文件，保留轮换重叠期，退役后下次导出移除旧项；内部身份不进入该表。CA 私钥和 Admin 主密钥不进入任何输出包。`bundle.json` 的 `files` 覆盖全部载荷文件（自身除外），记录 SHA256 与长度，供部署端传输时核对。
 
-离线恢复使用 `host set-status` 或 `placement set-status`，两者均要求 `--db-path`、`--control-host-id`、`--host-id`、`--status enabled|disabled`；后者还要求 `--component-id`。数据库必须是已有的 0600 普通文件，恢复命令不会建表。受保护对象及目录校验规则与在线 API 相同。
+离线恢复使用 `host set-status` 或 `deployment set-status`，两者均要求 `--db-path`、`--control-host-id`、`--host-id`、`--status enabled|disabled`；后者还要求 `--component-id`。数据库必须是已有的 0600 普通文件，恢复命令不会建表。受保护对象及目录校验规则与在线 API 相同。
 
 共享客户端已使用规范主机网关路径；SSH 取回、安装配置注入、操作员身份本机安装和实际五步首次部署仍由执行计划 G/J 验收。
 

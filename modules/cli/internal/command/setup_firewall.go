@@ -232,7 +232,7 @@ func setupFirewallTargets(manifest setupconfig.Manifest) []setupFirewallTarget {
 	if setupconfigHostConfigured(manifest.ViewHost()) {
 		add(manifest.ViewHost(), []cloudtencent.CreateFirewallRulesOptions{{Protocol: "TCP", Ports: "11003", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Description: "MooX remote Storage native gateway"}})
 	}
-	tradeNode := strings.TrimSpace(manifest.PlacementHost("trade"))
+	tradeNode := strings.TrimSpace(manifest.ComponentHost("trade"))
 	for _, host := range manifest.Hosts() {
 		if strings.EqualFold(strings.TrimSpace(host.Name), tradeNode) {
 			add(host, []cloudtencent.CreateFirewallRulesOptions{
@@ -254,7 +254,7 @@ func healthProbeFirewallRules(manifest setupconfig.Manifest, host setupconfig.Ho
 	if strings.EqualFold(strings.TrimSpace(host.Name), strings.TrimSpace(control.Name)) || !isPublicFirewallIP(control.Address) {
 		return nil
 	}
-	// 与控制机同一地域且有私网地址的主机，Monitor 走私网探测，不经过公网防火墙（与 Monitor 放置同步的规则一致）。
+	// 与控制机同一地域且有私网地址的主机，Monitor 走私网探测，不经过公网防火墙（与 Monitor 部署同步的规则一致）。
 	if host.PrivateAddress != "" && host.Region != "" && host.Region == control.Region {
 		return nil
 	}
@@ -263,7 +263,7 @@ func healthProbeFirewallRules(manifest setupconfig.Manifest, host setupconfig.Ho
 		return nil
 	}
 	var rules []cloudtencent.CreateFirewallRulesOptions
-	for _, id := range manifest.Placements[host.Name] {
+	for _, id := range manifest.Deployments[host.Name] {
 		component, ok := catalog.Component(id)
 		if !ok || component.Health.Kind != "readyz" || component.Health.Port <= 0 || component.Health.Loopback {
 			continue

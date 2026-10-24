@@ -254,7 +254,7 @@ func TestSetupFirewallTargetsCoverRuntimeHosts(t *testing.T) {
 	manifest := setupconfig.Manifest{
 		HostCatalog: map[string]setupconfig.HostDefinition{"control": {Address: "203.0.113.8"}, "storage": {Address: "203.0.113.10"}, "compute": {Address: "203.0.113.9"}},
 		EventBus:    setupconfig.EventBus{PublicAddress: "203.0.113.8", Port: 4222},
-		Placements:  map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "storage": {"storage-primary"}, "compute": {"trade"}},
+		Deployments: map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "storage": {"storage-primary"}, "compute": {"trade"}},
 	}
 	targets := setupFirewallTargets(manifest)
 	require.Len(t, targets, 3)
@@ -361,7 +361,7 @@ port = 22
 username = "ubuntu"
 password = "other-ssh-password"
 
-[placements]
+[deployments]
 control = ["admin", "console-proxy", "web-host", "eventbus"]
 compute = []
 `)

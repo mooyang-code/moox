@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// This is the intended three-host placement, not a claim that production has
+// This is the intended three-host deployment, not a claim that production has
 // migrated. The old service IDs and duplicate compute gateway are not inputs.
 func productionTopology() Topology {
 	t := Topology{ControlHostID: "control", Hosts: []Host{
@@ -18,7 +18,7 @@ func productionTopology() Topology {
 	}}
 	for _, host := range t.Hosts {
 		for _, id := range []string{"host-gateway", "host-agent"} {
-			t.Placements = append(t.Placements, Placement{HostID: host.ID, ComponentID: id, Status: Enabled})
+			t.Deployments = append(t.Deployments, Deployment{HostID: host.ID, ComponentID: id, Status: Enabled})
 		}
 	}
 	for host, ids := range map[string][]string{
@@ -27,35 +27,35 @@ func productionTopology() Topology {
 		"compute-1": {"access", "egress-proxy", "trade", "collector-stream"},
 	} {
 		for _, id := range ids {
-			t.Placements = append(t.Placements, Placement{HostID: host, ComponentID: id, Status: Enabled})
+			t.Deployments = append(t.Deployments, Deployment{HostID: host, ComponentID: id, Status: Enabled})
 		}
 	}
 	return t
 }
 
-func TestTopologyRejectsInvalidPlacementsAtomically(t *testing.T) {
+func TestTopologyRejectsInvalidDeploymentsAtomically(t *testing.T) {
 	cases := []struct {
 		name   string
 		mutate func(*Catalog, *Topology)
 	}{
 		{"control component elsewhere", func(c *Catalog, p *Topology) {
-			for i := range p.Placements {
-				if p.Placements[i].ComponentID == "console-proxy" {
-					p.Placements[i].HostID = "storage"
+			for i := range p.Deployments {
+				if p.Deployments[i].ComponentID == "console-proxy" {
+					p.Deployments[i].HostID = "storage"
 				}
 			}
 		}},
 		{"single replicas", func(c *Catalog, p *Topology) {
-			p.Placements = append(p.Placements, Placement{HostID: "compute-1", ComponentID: "collector", Status: Enabled})
+			p.Deployments = append(p.Deployments, Deployment{HostID: "compute-1", ComponentID: "collector", Status: Enabled})
 		}},
 		{"single on disabled host still counts", func(c *Catalog, p *Topology) {
 			p.Hosts[2].Status = Disabled
-			p.Placements = append(p.Placements, Placement{HostID: "compute-1", ComponentID: "collector", Status: Enabled})
+			p.Deployments = append(p.Deployments, Deployment{HostID: "compute-1", ComponentID: "collector", Status: Enabled})
 		}},
 		{"same-host port conflict", func(c *Catalog, p *Topology) { componentPtr(c, "access").Health.Port = 11012 }},
-		{"unknown host", func(c *Catalog, p *Topology) { p.Placements[0].HostID = "unknown" }},
-		{"unknown component", func(c *Catalog, p *Topology) { p.Placements[0].ComponentID = "unknown" }},
-		{"duplicate placement", func(c *Catalog, p *Topology) { p.Placements = append(p.Placements, p.Placements[0]) }},
+		{"unknown host", func(c *Catalog, p *Topology) { p.Deployments[0].HostID = "unknown" }},
+		{"unknown component", func(c *Catalog, p *Topology) { p.Deployments[0].ComponentID = "unknown" }},
+		{"duplicate deployment", func(c *Catalog, p *Topology) { p.Deployments = append(p.Deployments, p.Deployments[0]) }},
 		{"duplicate host", func(c *Catalog, p *Topology) { p.Hosts = append(p.Hosts, p.Hosts[0]) }},
 		{"duplicate address", func(c *Catalog, p *Topology) { p.Hosts[1].Address = p.Hosts[0].Address }},
 		{"host address includes scheme", func(c *Catalog, p *Topology) { p.Hosts[1].Address = "http://storage:11003" }},
@@ -63,20 +63,20 @@ func TestTopologyRejectsInvalidPlacementsAtomically(t *testing.T) {
 		{"host ID exceeds directory limit", func(c *Catalog, p *Topology) { p.Hosts[1].ID = strings.Repeat("s", 129) }},
 		{"region exceeds directory limit", func(c *Catalog, p *Topology) { p.Hosts[1].Region = strings.Repeat("r", 129) }},
 		{"invalid host status", func(c *Catalog, p *Topology) { p.Hosts[1].Status = "active" }},
-		{"invalid placement status", func(c *Catalog, p *Topology) { p.Placements[0].Status = "active" }},
+		{"invalid deployment status", func(c *Catalog, p *Topology) { p.Deployments[0].Status = "active" }},
 		{"control disabled", func(c *Catalog, p *Topology) { p.Hosts[0].Status = Disabled }},
 		{"protected disabled", func(c *Catalog, p *Topology) {
-			for i := range p.Placements {
-				if p.Placements[i].ComponentID == "admin" {
-					p.Placements[i].Status = Disabled
+			for i := range p.Deployments {
+				if p.Deployments[i].ComponentID == "admin" {
+					p.Deployments[i].Status = Disabled
 				}
 			}
 		}},
 		{"protected removed", func(c *Catalog, p *Topology) {
-			p.Placements = slices.DeleteFunc(p.Placements, func(p Placement) bool { return p.ComponentID == "admin" })
+			p.Deployments = slices.DeleteFunc(p.Deployments, func(p Deployment) bool { return p.ComponentID == "admin" })
 		}},
-		{"automatic host placement removed", func(c *Catalog, p *Topology) {
-			p.Placements = slices.DeleteFunc(p.Placements, func(p Placement) bool { return p.ComponentID == "host-agent" && p.HostID == "storage" })
+		{"automatic host deployment removed", func(c *Catalog, p *Topology) {
+			p.Deployments = slices.DeleteFunc(p.Deployments, func(p Deployment) bool { return p.ComponentID == "host-agent" && p.HostID == "storage" })
 		}},
 	}
 	for _, tc := range cases {
@@ -94,10 +94,10 @@ func TestTopologyRejectsInvalidPlacementsAtomically(t *testing.T) {
 	}
 }
 
-func TestPortCollisionIsPerHostAndDisabledPlacementHasNoListener(t *testing.T) {
+func TestPortCollisionIsPerHostAndDisabledDeploymentHasNoListener(t *testing.T) {
 	c, p := mustCatalog(t), productionTopology()
 	componentPtr(&c, "egress-proxy").Health.Port = 20211 // same as storage-view, on another host
-	p.Placements = append(p.Placements, Placement{HostID: "compute-1", ComponentID: "collector", Status: Disabled})
+	p.Deployments = append(p.Deployments, Deployment{HostID: "compute-1", ComponentID: "collector", Status: Disabled})
 	if err := c.ValidateTopology(p); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":   {192, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "832e6a9469c807735fac33c2342ae0b6f57d950ae533c9824c6b9bb59db64e19"},
+		"control":   {192, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@compute-1", "host-gateway@control", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "3e830137fed314810ec87932f8102ef51379516ac176c3569e701b8e3e3a8daf"},
 		"storage":   {96, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "storage-view", "strategy"}, "f82d253dce0822c850d1d2ba10a87030ff5b55e8fa457d68a67676272de06ff9"},
 		"compute-1": {38, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "c70f86fd7005fda74ffae56c86dd6c2d0f93dfa707150492d6b6977487bf5f9b"},
 	}
@@ -140,8 +140,8 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 				t.Fatalf("unbounded route: %+v", route)
 			}
 			found := false
-			for _, placement := range p.Placements {
-				found = found || placement.HostID == host.ID && placement.ComponentID == route.ComponentID
+			for _, deployment := range p.Deployments {
+				found = found || deployment.HostID == host.ID && deployment.ComponentID == route.ComponentID
 			}
 			if !found {
 				t.Fatalf("route forwards to another host: %+v", route)
@@ -199,7 +199,7 @@ func TestCompilationIsOrderIndependentAndDoesNotMutateInputs(t *testing.T) {
 	slices.Reverse(c.Components)
 	slices.Reverse(c.Principals)
 	slices.Reverse(p.Hosts)
-	slices.Reverse(p.Placements)
+	slices.Reverse(p.Deployments)
 	for i := range c.Components {
 		for j := range c.Components[i].Services {
 			s := &c.Components[i].Services[j]
@@ -245,7 +245,7 @@ func TestHashTracksRemoteDirectoryAndLocalACLChanges(t *testing.T) {
 	}
 }
 
-func TestDisabledHostAndPlacementWithdrawRoutes(t *testing.T) {
+func TestDisabledHostAndDeploymentWithdrawRoutes(t *testing.T) {
 	c, p := mustCatalog(t), productionTopology()
 	p.Hosts[2].Status = Disabled
 	compiled, err := c.Compile(p, "compute-1")
@@ -269,9 +269,9 @@ func TestDisabledHostAndPlacementWithdrawRoutes(t *testing.T) {
 		t.Fatal("disabled host cannot fetch disabled snapshot")
 	}
 	p = productionTopology()
-	for i := range p.Placements {
-		if p.Placements[i].ComponentID == "collector" {
-			p.Placements[i].Status = Disabled
+	for i := range p.Deployments {
+		if p.Deployments[i].ComponentID == "collector" {
+			p.Deployments[i].Status = Disabled
 		}
 	}
 	compiled, err = c.Compile(p, "control")
@@ -280,11 +280,11 @@ func TestDisabledHostAndPlacementWithdrawRoutes(t *testing.T) {
 	}
 	for _, route := range compiled.Routes {
 		if route.ComponentID == "collector" {
-			t.Fatal("disabled placement retains a route")
+			t.Fatal("disabled deployment retains a route")
 		}
 	}
 	if len(compiled.Directory.Services["trpc.moox.collector.CollectMgr"]) != 0 {
-		t.Fatal("disabled placement remains discoverable")
+		t.Fatal("disabled deployment remains discoverable")
 	}
 	if _, err := c.Compile(p, "unknown"); err == nil {
 		t.Fatal("unknown host compiled")
@@ -315,7 +315,7 @@ func TestRouteTimeoutUsesMethodOverride(t *testing.T) {
 
 func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 	c, p := mustCatalog(t), productionTopology()
-	p.Placements = append(p.Placements, Placement{HostID: "control", ComponentID: "archive-mgr", Status: Enabled})
+	p.Deployments = append(p.Deployments, Deployment{HostID: "control", ComponentID: "archive-mgr", Status: Enabled})
 	if err := c.ValidateTopology(p); err != nil {
 		t.Fatal(err)
 	}

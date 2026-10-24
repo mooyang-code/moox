@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import type { ComponentCatalog, ComponentPlacement, DeploymentHost } from "@/api/admin/types";
-import { placementKey, placementRows } from "./model";
+import type { ComponentCatalog, ComponentDeployment, DeploymentHost } from "@/api/admin/types";
+import { deploymentKey, deploymentRows } from "./model";
 import {
   DATA_FLOW,
   NODE_H,
@@ -29,18 +29,18 @@ const layout: Record<string, string[]> = {
   storage: ["storage-primary", "storage-node", "storage-view", "access"],
   overseas: ["trade", "access", "egress-proxy", "collector-stream"]
 };
-const placements: ComponentPlacement[] = hosts.flatMap(host =>
+const deployments: ComponentDeployment[] = hosts.flatMap(host =>
   [...layout[host.host_id], "host-gateway", "host-agent"].map(component_id => ({
     host_id: host.host_id,
     component_id,
     status: "enabled" as const
   }))
 );
-function build(items = placements, showDisabled = false) {
-  const groups = hosts.map(host => ({ host, rows: placementRows(host, items, catalog.components) }));
+function build(items = deployments, showDisabled = false) {
+  const groups = hosts.map(host => ({ host, rows: deploymentRows(host, items, catalog.components) }));
   return buildTopology({ catalog, groups, controlHostId: "control", showDisabled });
 }
-const key = placementKey;
+const key = deploymentKey;
 function edge(edges: TopologyEdge[], from: string, to: string) {
   return edges.find(item => item.from === from && item.to === to);
 }
@@ -97,8 +97,8 @@ describe("service topology", () => {
     expect(topology.unplaced).toEqual(["数据归档管理服务"]);
   });
 
-  it("hides disabled placements unless asked and keeps neighborhoods to direct links", () => {
-    const disabled = placements.map(item =>
+  it("hides disabled deployments unless asked and keeps neighborhoods to direct links", () => {
+    const disabled = deployments.map(item =>
       item.host_id === "control" && item.component_id === "strategy" ? { ...item, status: "disabled" as const } : item
     );
     expect(build(disabled).nodes.some(node => node.id === key("control", "strategy"))).toBe(false);
@@ -129,7 +129,7 @@ describe("service topology", () => {
       [key("storage", "storage-view"), key("control", "strategy")],
       [key("control", "strategy"), key("overseas", "trade")]
     ]);
-    const withoutStream = build(placements.filter(item => item.component_id !== "collector-stream"));
+    const withoutStream = build(deployments.filter(item => item.component_id !== "collector-stream"));
     const steps = buildDataFlow(withoutStream);
     expect(steps).toHaveLength(11);
     expect(steps.map(item => item.step)).toEqual(steps.map((_, index) => index + 1));

@@ -7,22 +7,22 @@ import {
   getCatalog,
   getHostRoutes,
   listAllDeploymentHosts,
-  listAllPlacements,
+  listAllDeployments,
   setHostStatus,
-  setPlacementStatus
+  setDeploymentStatus
 } from "@/api/admin/sysdeploy";
 import { monitorApi } from "@/api/monitor";
 import { reportControlError } from "@/api/admin/http";
-import type { CatalogComponent, CatalogResponse, DeploymentHost, ComponentPlacement } from "@/api/admin/types";
+import type { CatalogComponent, CatalogResponse, DeploymentHost, ComponentDeployment } from "@/api/admin/types";
 import Deployments from "./index.vue";
 vi.mock("@/api/admin/sysdeploy", async original => ({
   ...(await original<typeof import("@/api/admin/sysdeploy")>()),
   getCatalog: vi.fn(),
   getHostRoutes: vi.fn(),
   listAllDeploymentHosts: vi.fn(),
-  listAllPlacements: vi.fn(),
+  listAllDeployments: vi.fn(),
   setHostStatus: vi.fn(),
-  setPlacementStatus: vi.fn()
+  setDeploymentStatus: vi.fn()
 }));
 vi.mock("@/api/monitor", () => ({ monitorApi: { getOverview: vi.fn() } }));
 vi.mock("@/api/admin/http", () => ({ callControl: vi.fn(), reportControlError: vi.fn() }));
@@ -56,7 +56,7 @@ const hostRows: DeploymentHost[] = [
   { host_id: "c-main", address: "control.example.test", status: "enabled" },
   { host_id: "storage", address: "storage.example.test", status: "enabled" }
 ];
-const placementItems: ComponentPlacement[] = hostRows.flatMap(host =>
+const deploymentItems: ComponentDeployment[] = hostRows.flatMap(host =>
   ["host-gateway", "access"].map(component_id => ({ host_id: host.host_id, component_id, status: "enabled" }))
 );
 const box = defineComponent({ template: "<div><slot /></div>" });
@@ -113,7 +113,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.mocked(getCatalog).mockResolvedValue(definition());
   vi.mocked(listAllDeploymentHosts).mockResolvedValue(hostRows);
-  vi.mocked(listAllPlacements).mockResolvedValue(placementItems);
+  vi.mocked(listAllDeployments).mockResolvedValue(deploymentItems);
   vi.mocked(getHostRoutes).mockImplementation(async host_id => ({
     host_id,
     definition_hash: "definition",
@@ -148,7 +148,7 @@ beforeEach(() => {
     }
   });
   vi.mocked(setHostStatus).mockResolvedValue({});
-  vi.mocked(setPlacementStatus).mockResolvedValue({});
+  vi.mocked(setDeploymentStatus).mockResolvedValue({});
 });
 afterEach(() => {
   wrapper?.unmount();
@@ -165,7 +165,7 @@ describe("deployment page", () => {
     expect(page.text()).toContain("moox.toml");
     await page.get('[aria-label="storage access 启用状态"]').trigger("click");
     await flushPromises();
-    expect(setPlacementStatus).toHaveBeenCalledWith("storage", "access", "disabled");
+    expect(setDeploymentStatus).toHaveBeenCalledWith("storage", "access", "disabled");
     expect(setHostStatus).not.toHaveBeenCalled();
     await page.get('[aria-label="主机 storage 启用状态"]').trigger("click");
     await flushPromises();
@@ -258,7 +258,7 @@ describe("deployment page", () => {
     expect(page.text()).not.toContain("没有符合筛选条件的路由");
   });
   it("reports a failed mutation and keeps the recorded enablement unchanged", async () => {
-    vi.mocked(setPlacementStatus).mockRejectedValue(new Error("protected by server"));
+    vi.mocked(setDeploymentStatus).mockRejectedValue(new Error("protected by server"));
     const { page } = await render();
     await page.get('[aria-label="storage access 启用状态"]').trigger("click");
     await flushPromises();

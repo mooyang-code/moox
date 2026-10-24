@@ -19,7 +19,7 @@ import (
 )
 
 type DeploymentClient interface {
-	ListPlacements(context.Context, string) ([]Placement, error)
+	ListDeployments(context.Context, string) ([]Deployment, error)
 }
 
 type DoctorContextClient interface {
@@ -41,7 +41,7 @@ type BootstrapOptions struct {
 type bootstrapRunner struct {
 	options                BootstrapOptions
 	manifest               core.Manifest
-	deployments            map[string]Placement
+	deployments            map[string]Deployment
 	loadErr                error
 	datasetHealthPolicy    report.DatasetHealthPolicy
 	datasetHealthPolicyErr error
@@ -62,7 +62,7 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 	if err != nil {
 		return core.Report{}, err
 	}
-	runner := &bootstrapRunner{options: options, manifest: manifest, deployments: map[string]Placement{}}
+	runner := &bootstrapRunner{options: options, manifest: manifest, deployments: map[string]Deployment{}}
 	if options.ReleaseRoot == "" {
 		runner.manifestErr = fmt.Errorf("release root is required")
 	} else {
@@ -78,7 +78,7 @@ func RunBootstrap(ctx context.Context, options BootstrapOptions) (core.Report, e
 	if options.Client == nil {
 		runner.loadErr = fmt.Errorf("SysDeploy client is unavailable")
 	} else {
-		rows, loadErr := options.Client.ListPlacements(ctx, options.NodeID)
+		rows, loadErr := options.Client.ListDeployments(ctx, options.NodeID)
 		runner.loadErr = loadErr
 		for _, row := range rows {
 			runner.deployments[row.ComponentID] = row
@@ -153,12 +153,12 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			contractErr = r.datasetHealthPolicyErr
 		}
 		if contractErr != nil {
-			return checkResult(spec.ID, core.StatusFail, "release contract is incomplete", contractErr, "sync_host_placements")
+			return checkResult(spec.ID, core.StatusFail, "release contract is incomplete", contractErr, "sync_host_deployments")
 		}
 		return checkResult(spec.ID, core.StatusPass, "release catalog, checksum, and Dataset health policy are available", nil)
 	case "bootstrap.inventory":
 		if r.loadErr != nil {
-			return checkResult(spec.ID, core.StatusFail, "SysDeploy inventory is unavailable", r.loadErr, "sync_host_placements")
+			return checkResult(spec.ID, core.StatusFail, "SysDeploy inventory is unavailable", r.loadErr, "sync_host_deployments")
 		}
 		missing := []string{}
 		required := []string{"host-gateway", "host-agent"}
@@ -171,9 +171,9 @@ func (r *bootstrapRunner) run(ctx context.Context, spec core.CheckSpec, _ []core
 			}
 		}
 		if len(missing) > 0 {
-			return checkResult(spec.ID, core.StatusFail, "required deployment inventory is missing: "+strings.Join(missing, ", "), nil, "sync_host_placements")
+			return checkResult(spec.ID, core.StatusFail, "required deployment inventory is missing: "+strings.Join(missing, ", "), nil, "sync_host_deployments")
 		}
-		return checkResult(spec.ID, core.StatusPass, "host placements match the component catalog", nil)
+		return checkResult(spec.ID, core.StatusPass, "host deployments match the component catalog", nil)
 	}
 	if spec.ID == "monitor.metrics_delivery" {
 		if r.deliveryErr != nil || r.delivery == nil {
@@ -360,7 +360,7 @@ func validateManifestChecksumFile(path, want string) error {
 	return nil
 }
 
-func healthURL(placement Placement, path string) string { return placement.HealthAddress + path }
+func healthURL(deployment Deployment, path string) string { return deployment.HealthAddress + path }
 
 func checkResult(id string, status core.CheckStatus, summary string, err error, actions ...string) core.CheckResult {
 	result := core.CheckResult{ID: id, Status: status, Summary: summary, RecoveryActionIDs: actions}

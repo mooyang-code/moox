@@ -1,4 +1,4 @@
-package placement
+package deployment
 
 import (
 	"context"
@@ -33,11 +33,11 @@ func NewSyncer(topology *store.TopologyRepository, source Source, https map[stri
 // SetLocalHost 指定 Monitor 所在的部署主机；该主机上的组件健康检查连 127.0.0.1。
 func (s *Syncer) SetLocalHost(hostID string) { s.localHostID = hostID }
 
-func CheckID(hostID, componentID string) string { return "placement:" + hostID + ":" + componentID }
+func CheckID(hostID, componentID string) string { return "deployment:" + hostID + ":" + componentID }
 
 func (s *Syncer) Sync(ctx context.Context) (int, error) {
 	if s == nil || s.source == nil || s.topology == nil {
-		return 0, fmt.Errorf("placement synchronization is not initialized")
+		return 0, fmt.Errorf("deployment synchronization is not initialized")
 	}
 	snapshot, err := s.source.Snapshot(ctx)
 	if err != nil {
@@ -60,8 +60,8 @@ func topologySnapshot(snapshot Snapshot, now time.Time) domain.TopologySnapshot 
 	for _, host := range snapshot.Hosts {
 		out.Hosts = append(out.Hosts, domain.TopologyHost{HostID: host.GetHostId(), Address: host.GetAddress(), PrivateAddress: host.GetPrivateAddress(), Region: host.GetRegion(), Status: host.GetStatus()})
 	}
-	for _, placement := range snapshot.Placements {
-		out.Placements = append(out.Placements, domain.TopologyPlacement{HostID: placement.GetHostId(), ComponentID: placement.GetComponentId(), Status: placement.GetStatus()})
+	for _, deployment := range snapshot.Deployments {
+		out.Deployments = append(out.Deployments, domain.TopologyDeployment{HostID: deployment.GetHostId(), ComponentID: deployment.GetComponentId(), Status: deployment.GetStatus()})
 	}
 	return out
 }
@@ -91,12 +91,12 @@ func Checks(snapshot Snapshot, https map[string]domain.HTTPSConfig) ([]domain.Ch
 	}
 	seen := map[string]bool{}
 	var checks []domain.Check
-	for _, placement := range snapshot.Placements {
-		host := hosts[placement.GetHostId()]
-		component, ok := snapshot.Catalog.Component(placement.GetComponentId())
-		id := CheckID(placement.GetHostId(), placement.GetComponentId())
-		if host == nil || !ok || !validStatus(placement.GetStatus()) || seen[id] {
-			return nil, fmt.Errorf("invalid or duplicate placement %q", id)
+	for _, deployment := range snapshot.Deployments {
+		host := hosts[deployment.GetHostId()]
+		component, ok := snapshot.Catalog.Component(deployment.GetComponentId())
+		id := CheckID(deployment.GetHostId(), deployment.GetComponentId())
+		if host == nil || !ok || !validStatus(deployment.GetStatus()) || seen[id] {
+			return nil, fmt.Errorf("invalid or duplicate deployment %q", id)
 		}
 		seen[id] = true
 		if component.ID == "console-proxy" {
@@ -107,7 +107,7 @@ func Checks(snapshot Snapshot, https map[string]domain.HTTPSConfig) ([]domain.Ch
 		if component.Health.Kind == "none" {
 			continue
 		}
-		check := baseCheck(host, placement, component)
+		check := baseCheck(host, deployment, component)
 		switch component.Health.Kind {
 		case "readyz":
 			// 私网地址只在与 Monitor 所在主机同一地域时可达（跨地域私网不通），否则用公网地址。
@@ -132,7 +132,7 @@ func Checks(snapshot Snapshot, https map[string]domain.HTTPSConfig) ([]domain.Ch
 		}
 		checks = append(checks, check)
 		if target, ok := https[component.ID]; ok && component.ID == "console-proxy" {
-			page := baseCheck(host, placement, component)
+			page := baseCheck(host, deployment, component)
 			page.CheckID = "console-page:" + host.GetHostId() + ":" + component.ID
 			page.Name = "控制台 HTTPS 页面（" + host.GetHostId() + "）"
 			page.GroupName = "console_page"
@@ -144,13 +144,13 @@ func Checks(snapshot Snapshot, https map[string]domain.HTTPSConfig) ([]domain.Ch
 	return checks, nil
 }
 
-func baseCheck(host *adminpb.DeploymentHost, placement *adminpb.ComponentPlacement, component servicecatalog.Component) domain.Check {
+func baseCheck(host *adminpb.DeploymentHost, deployment *adminpb.ComponentDeployment, component servicecatalog.Component) domain.Check {
 	return domain.Check{
 		CheckID: CheckID(host.GetHostId(), component.ID), Name: component.Name + "（" + host.GetHostId() + "）· 健康检查",
 		GroupName: "components", Kind: domain.CheckKindHTTP, Method: "GET", Headers: "{}",
 		IntervalSeconds: 30, TimeoutMS: 3000, ExpectedStatus: "200-299",
-		Enabled: host.GetStatus() == servicecatalog.Enabled && placement.GetStatus() == servicecatalog.Enabled,
-		Source:  domain.CheckSourcePlacement, Labels: labels(host.GetHostId(), component.ID, "component"), Description: component.Doctor.Description,
+		Enabled: host.GetStatus() == servicecatalog.Enabled && deployment.GetStatus() == servicecatalog.Enabled,
+		Source:  domain.CheckSourceDeployment, Labels: labels(host.GetHostId(), component.ID, "component"), Description: component.Doctor.Description,
 	}
 }
 

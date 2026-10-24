@@ -90,7 +90,7 @@ func wanted(options Options) ([]string, error) {
 	for _, id := range options.Components {
 		component, ok := catalog.Component(id)
 		if !ok || seen[id] || component.Scope == servicecatalog.ScopeControl && options.HostID != options.ControlHostID {
-			return nil, errors.New("host material components do not match a valid target placement")
+			return nil, errors.New("host material components do not match a valid target deployment")
 		}
 		seen[id] = true
 		if id != "host-gateway" {
@@ -145,7 +145,7 @@ func validateMetadata(metadata hostbundle.Metadata, options Options) error {
 		wantVerification = "secrets/access/access-verification.json"
 	}
 	if metadata.VerificationFile != wantVerification {
-		return errors.New("host material Access verification table does not match placement")
+		return errors.New("host material Access verification table does not match deployment")
 	}
 	if wantVerification != "" {
 		allowed[wantVerification] = true

@@ -19,10 +19,10 @@ func TestTopologySnapshotAcceptsSysDeployScale(t *testing.T) {
 		host := fmt.Sprintf("h%d", i)
 		snapshot.Hosts = append(snapshot.Hosts, TopologyHost{HostID: host, Address: fmt.Sprintf("10.0.%d.%d", i/250, i%250+1), Status: servicecatalog.Enabled})
 		for _, component := range []string{"host-gateway", "host-agent"} {
-			snapshot.Placements = append(snapshot.Placements, TopologyPlacement{HostID: host, ComponentID: component, Status: servicecatalog.Enabled})
+			snapshot.Deployments = append(snapshot.Deployments, TopologyDeployment{HostID: host, ComponentID: component, Status: servicecatalog.Enabled})
 		}
 	}
-	if len(snapshot.Placements) <= 1500 {
+	if len(snapshot.Deployments) <= 1500 {
 		t.Fatal("测试夹具必须超过原先 1500 的上限")
 	}
 	if err := snapshot.Validate(); err != nil {

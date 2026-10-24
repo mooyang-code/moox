@@ -28,13 +28,13 @@ func TestHealthOverviewRPCV2CarriesIdentityIndependentSignalsAndStatusSince(t *t
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
-	_, err = repos.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: now, Hosts: []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}}, Placements: []domain.TopologyPlacement{{HostID: "control", ComponentID: "web-host", Status: "enabled"}}}, nil)
+	_, err = repos.Topology.Reconcile(t.Context(), domain.TopologySnapshot{Catalog: catalog, ObservedAt: now, Hosts: []domain.TopologyHost{{HostID: "control", Address: "control.test", Status: "enabled"}}, Deployments: []domain.TopologyDeployment{{HostID: "control", ComponentID: "web-host", Status: "enabled"}}}, nil)
 	require.NoError(t, err)
-	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: "placement:control:web-host", URL: "http://127.0.0.1:11002/healthz", Kind: domain.CheckKindHTTP, Enabled: true, Headers: `{"Authorization":"test-only-header"}`}))
+	require.NoError(t, repos.Checks.Create(t.Context(), &domain.Check{CheckID: "deployment:control:web-host", URL: "http://127.0.0.1:11002/healthz", Kind: domain.CheckKindHTTP, Enabled: true, Headers: `{"Authorization":"test-only-header"}`}))
 	for i := 1; i < 12; i++ {
-		require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: fmt.Sprintf("history-%d", i), CheckID: "placement:control:web-host", Status: "ok", Success: true, CheckedAt: now.Add(-time.Duration(i) * time.Minute)}))
+		require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: fmt.Sprintf("history-%d", i), CheckID: "deployment:control:web-host", Status: "ok", Success: true, CheckedAt: now.Add(-time.Duration(i) * time.Minute)}))
 	}
-	require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: "failed", CheckID: "placement:control:web-host", Status: "down", ErrorMessage: "页面服务探测失败", RawError: "dial tcp: refused\n原始错误", CheckedAt: now}))
+	require.NoError(t, repos.Results.Insert(t.Context(), &domain.CheckResult{ResultID: "failed", CheckID: "deployment:control:web-host", Status: "down", ErrorMessage: "页面服务探测失败", RawError: "dial tcp: refused\n原始错误", CheckedAt: now}))
 	require.NoError(t, repos.ComponentHealth.Reconcile(t.Context(), []domain.ComponentHealthState{{HostID: "control", ComponentID: "web-host", Status: "down"}}, now.Add(-time.Minute)))
 	facts := &observability.Builder{Checks: repos.Checks, Topology: repos.Topology, Results: repos.Results, Now: func() time.Time { return now }}
 	service := New(repos, Options{HealthView: &healthview.Builder{Facts: facts, ComponentHealth: repos.ComponentHealth, Now: func() time.Time { return now }}})

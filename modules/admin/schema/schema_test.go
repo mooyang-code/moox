@@ -40,8 +40,8 @@ func TestHostTopologySchemaEnforcesReferencesAndStatuses(t *testing.T) {
 	for _, statement := range []string{
 		`INSERT INTO t_hosts (c_host_id, c_address, c_status) VALUES ('invalid', 'invalid.example.test', 'active')`,
 		`INSERT INTO t_hosts (c_host_id, c_address) VALUES ('duplicate', 'control.example.test')`,
-		`INSERT INTO t_placements (c_host_id, c_component_id) VALUES ('missing', 'admin')`,
-		`INSERT INTO t_placements (c_host_id, c_component_id, c_status) VALUES ('control', 'admin', 'active')`,
+		`INSERT INTO t_deployments (c_host_id, c_component_id) VALUES ('missing', 'admin')`,
+		`INSERT INTO t_deployments (c_host_id, c_component_id, c_status) VALUES ('control', 'admin', 'active')`,
 		`INSERT INTO t_host_gateway_status (c_host_id) VALUES ('missing')`,
 		`INSERT INTO t_host_gateway_status (c_host_id, c_route_count) VALUES ('control', -1)`,
 	} {
@@ -49,11 +49,11 @@ func TestHostTopologySchemaEnforcesReferencesAndStatuses(t *testing.T) {
 			t.Fatalf("schema accepted invalid input: %s", statement)
 		}
 	}
-	if _, err := db.Exec(`INSERT INTO t_placements (c_host_id, c_component_id) VALUES ('control', 'admin')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO t_deployments (c_host_id, c_component_id) VALUES ('control', 'admin')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`DELETE FROM t_hosts WHERE c_host_id = 'control'`); err == nil {
-		t.Fatal("host with placements was deleted without removing dependent rows")
+		t.Fatal("host with deployments was deleted without removing dependent rows")
 	}
 }
 

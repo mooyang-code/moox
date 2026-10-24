@@ -16,14 +16,14 @@ func (d *TopologyDAO) CompileSnapshot(ctx context.Context, hostID, encryptionKey
 	var compiled servicecatalog.CompiledHost
 	var snapshot *pb.HostGatewaySnapshot
 	err := d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		hosts, placements, err := d.records(tx)
+		hosts, deployments, err := d.records(tx)
 		if err != nil {
 			return err
 		}
 		if !slices.ContainsFunc(hosts, func(host HostRecord) bool { return host.HostID == hostID }) {
 			return gorm.ErrRecordNotFound
 		}
-		compiled, err = d.catalog.Compile(d.topology(hosts, placements), hostID)
+		compiled, err = d.catalog.Compile(d.topology(hosts, deployments), hostID)
 		if err != nil {
 			return err
 		}

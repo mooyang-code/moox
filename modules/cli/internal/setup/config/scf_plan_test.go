@@ -16,7 +16,7 @@ func scfPlanTestManifest() Manifest {
 			"storage":  {Address: "2.2.2.2", Region: "ap-nanjing", PrivateAddress: "10.206.0.5"},
 			"overseas": {Address: "3.3.3.3", Region: "ap-hongkong", PrivateAddress: "172.19.32.13"},
 		},
-		Placements: map[string][]string{"control": {"admin", "collector"}, "storage": {"storage-primary", "access"}, "overseas": {"access"}},
+		Deployments: map[string][]string{"control": {"admin", "collector"}, "storage": {"storage-primary", "access"}, "overseas": {"access"}},
 		SCFPlan: SCFPlan{
 			Enabled: true, CloudAccount: account,
 			Regions: map[string]SCFPlanRegion{"ap-hongkong": {VPCID: "vpc-hk", SubnetID: "subnet-hk"}},
@@ -77,7 +77,7 @@ func TestSCFPlanValidationRejectsIncompleteOrInconsistentSettings(t *testing.T) 
 		"missing vpc":        func(m *Manifest) { m.SCFPlan.Regions["ap-hongkong"] = SCFPlanRegion{} },
 		"unused region":      func(m *Manifest) { m.SCFPlan.Regions["ap-nanjing"] = SCFPlanRegion{VPCID: "v", SubnetID: "s"} },
 		"unsupported region": func(m *Manifest) { m.SCFPlan.Spaces[0].Markets["spot"] = []string{"mars-1"} },
-		"no access host":     func(m *Manifest) { m.Placements["overseas"] = nil },
+		"no access host":     func(m *Manifest) { m.Deployments["overseas"] = nil },
 		"access has no VPC ip": func(m *Manifest) {
 			definition := m.HostCatalog["overseas"]
 			definition.PrivateAddress = ""
@@ -104,8 +104,8 @@ func TestSCFPlanAccessSelectionHandlesSeveralHostsInOneRegion(t *testing.T) {
 	manifest := scfPlanTestManifest()
 	manifest.HostCatalog["compute-2"] = HostDefinition{Address: "4.4.4.4", Region: "ap-hongkong", PrivateAddress: "172.19.32.14"}
 	manifest.HostCatalog["compute-0"] = HostDefinition{Address: "5.5.5.5", Region: "ap-hongkong"} // 没有私网地址
-	manifest.Placements["compute-2"] = []string{"access"}
-	manifest.Placements["compute-0"] = []string{"access"}
+	manifest.Deployments["compute-2"] = []string{"access"}
+	manifest.Deployments["compute-0"] = []string{"access"}
 
 	// 两台都有私网地址：必须显式指定。
 	_, _, err := manifest.SCFPlanAccess("ap-hongkong")
@@ -134,7 +134,7 @@ func TestSCFPlanAccessSelectionHandlesSeveralHostsInOneRegion(t *testing.T) {
 	// 第一台（按名称排序）没有私网地址、只有一台可用：自动选可用的那台。
 	manifest = scfPlanTestManifest()
 	manifest.HostCatalog["a-compute"] = HostDefinition{Address: "6.6.6.6", Region: "ap-hongkong"}
-	manifest.Placements["a-compute"] = []string{"access"}
+	manifest.Deployments["a-compute"] = []string{"access"}
 	address, id, err = manifest.SCFPlanAccess("ap-hongkong")
 	require.NoError(t, err)
 	require.Equal(t, "172.19.32.13:11004", address)

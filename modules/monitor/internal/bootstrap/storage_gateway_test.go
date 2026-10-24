@@ -22,8 +22,8 @@ import (
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
 	"github.com/mooyang-code/moox/modules/monitor/internal/config"
+	"github.com/mooyang-code/moox/modules/monitor/internal/deployment"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
-	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storageauth"
 	"github.com/mooyang-code/moox/modules/monitor/internal/storagegateway"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -176,7 +176,7 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	go func() { _ = svc.Serve() }()
 	t.Cleanup(func() { _ = svc.Close(nil) })
 	data := filepath.Join(root, "data", "monitor")
-	raw := "placement:\n  enabled: false\ndatabase:\n  path: " + filepath.Join(data, "monitor.db") + "\ngateway_client:\n  caller: monitor\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-monitor.key\n"
+	raw := "deployment:\n  enabled: false\ndatabase:\n  path: " + filepath.Join(data, "monitor.db") + "\ngateway_client:\n  caller: monitor\n  key_id: " + credentials.KeyID + "\n  key_file: ../../secrets/caller-monitor.key\n"
 	require.NoError(t, os.WriteFile(configPath, []byte(raw), 0o600))
 	cfg, err := config.Load(configPath)
 	require.NoError(t, err)
@@ -194,16 +194,16 @@ func TestMonitorStorageUsesDeploymentIdentityAndClosesOwnedClient(t *testing.T) 
 	inventoryResponse, err := inventory.GetTaskResultInventory(t.Context(), &collectorpb.GetTaskResultInventoryReq{SpaceId: "crypto", SnapshotId: "generation-1"})
 	require.NoError(t, err)
 	require.Equal(t, "generation-1", inventoryResponse.GetSnapshotId())
-	source := placement.NewClientSource(runtime.Gateway)
+	source := deployment.NewClientSource(runtime.Gateway)
 	snapshot, err := source.Snapshot(t.Context())
 	require.NoError(t, err)
-	require.Len(t, snapshot.Placements, 1)
+	require.Len(t, snapshot.Deployments, 1)
 	require.Equal(t, "control.example.test", snapshot.Hosts[0].GetAddress())
 	gatewayStatus, err := source.GatewayStatus(t.Context(), "control")
 	require.NoError(t, err)
 	require.Equal(t, "control-instance", gatewayStatus.GetInstanceId())
-	var forbidden adminpb.SetPlacementStatusRsp
-	require.Error(t, runtime.Gateway.Invoke(t.Context(), "trpc.moox.ops.SysDeploy", "SetPlacementStatus", &adminpb.SetPlacementStatusReq{}, &forbidden))
+	var forbidden adminpb.SetDeploymentStatusRsp
+	require.Error(t, runtime.Gateway.Invoke(t.Context(), "trpc.moox.ops.SysDeploy", "SetDeploymentStatus", &adminpb.SetDeploymentStatusReq{}, &forbidden))
 	wire.mu.Lock()
 	reads, writes, nonces, refreshes := wire.reads, wire.writes, len(wire.nonces), wire.refreshes
 	wire.mu.Unlock()
@@ -250,9 +250,9 @@ func (w monitorSysDeployWire) ListHosts(ctx context.Context, req *adminpb.ListDe
 	}
 	return &adminpb.ListDeploymentHostsRsp{RetInfo: &adminpb.RetInfo{}, Hosts: []*adminpb.DeploymentHost{{HostId: "control", Address: "control.example.test", Status: "enabled"}}}, nil
 }
-func (w monitorSysDeployWire) ListPlacements(ctx context.Context, req *adminpb.ListPlacementsReq) (*adminpb.ListPlacementsRsp, error) {
-	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "ListPlacements", req); err != nil {
+func (w monitorSysDeployWire) ListDeployments(ctx context.Context, req *adminpb.ListDeploymentsReq) (*adminpb.ListDeploymentsRsp, error) {
+	if err := w.wire.verify(ctx, "trpc.moox.ops.SysDeploy", "ListDeployments", req); err != nil {
 		return nil, err
 	}
-	return &adminpb.ListPlacementsRsp{RetInfo: &adminpb.RetInfo{}, Placements: []*adminpb.ComponentPlacement{{HostId: "control", ComponentId: "admin", Status: "enabled"}}}, nil
+	return &adminpb.ListDeploymentsRsp{RetInfo: &adminpb.RetInfo{}, Deployments: []*adminpb.ComponentDeployment{{HostId: "control", ComponentId: "admin", Status: "enabled"}}}, nil
 }

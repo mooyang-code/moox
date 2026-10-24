@@ -131,7 +131,7 @@ func TestConsoleRejectsMachineMethodsAndNonCatalogAliasesBeforeDispatch(t *testi
 	for _, suffix := range []string{
 		"secret/GetSecretValue", "SecretMgr/getsecretvalue", "trpc.moox.ops.SecretMgr/GetSecretValue",
 		"cloudfunction/CollectGarbage", "publishlease/ValidateCollectorPublishLease",
-		"publishlease/BeginCollectorPublishOperation", "sysdeploy/SyncHostPlacements", "sysdeploy/DeleteHost",
+		"publishlease/BeginCollectorPublishOperation", "sysdeploy/SyncHostDeployments", "sysdeploy/DeleteHost",
 		"trade/ReleaseLogicalAccountOwner", "trade/ClaimLogicalAccountOwner", "trade/RebindLogicalAccountOwner",
 		"trade_owner/ReleaseLogicalAccountOwner", "trade_console/ListOrders", "collectmgr/GetTaskList",
 		"factormgr/ListFactors", "moox_monitor/GetHealthOverview", "collector_market_runtime/ClaimTimerBatch",
@@ -326,10 +326,10 @@ func TestConsoleGlobalWritesRequireAdministrator(t *testing.T) {
 		role   int
 		status int
 	}{
-		{"/api/admin/sysdeploy/SetPlacementStatus", 1, http.StatusForbidden},
+		{"/api/admin/sysdeploy/SetDeploymentStatus", 1, http.StatusForbidden},
 		{"/api/admin/sysdeploy/SetHostStatus", 1, http.StatusForbidden},
-		{"/api/admin/sysdeploy/SetPlacementStatus", 2, http.StatusOK},
-		{"/api/admin/sysdeploy/ListPlacements", 1, http.StatusOK},
+		{"/api/admin/sysdeploy/SetDeploymentStatus", 2, http.StatusOK},
+		{"/api/admin/sysdeploy/ListDeployments", 1, http.StatusOK},
 		// SSH 主机配置与会话等价于登录主机：普通用户连读都不行。
 		{"/api/admin/ssh/ListHosts", 1, http.StatusForbidden},
 		{"/api/admin/ssh/GetHost", 1, http.StatusForbidden},

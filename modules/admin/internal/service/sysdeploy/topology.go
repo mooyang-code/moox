@@ -33,50 +33,50 @@ func NewTopologyDAO(db *gorm.DB, controlHostID string) (*TopologyDAO, error) {
 	return &TopologyDAO{db: db, catalog: catalog, controlHostID: controlHostID}, nil
 }
 
-func (d *TopologyDAO) records(tx *gorm.DB) ([]HostRecord, []PlacementRecord, error) {
+func (d *TopologyDAO) records(tx *gorm.DB) ([]HostRecord, []DeploymentRecord, error) {
 	var hosts []HostRecord
-	var placements []PlacementRecord
+	var deployments []DeploymentRecord
 	if err := tx.Order("c_host_id ASC").Find(&hosts).Error; err != nil {
 		return nil, nil, err
 	}
-	if err := tx.Order("c_host_id ASC, c_component_id ASC").Find(&placements).Error; err != nil {
+	if err := tx.Order("c_host_id ASC, c_component_id ASC").Find(&deployments).Error; err != nil {
 		return nil, nil, err
 	}
-	return hosts, placements, nil
+	return hosts, deployments, nil
 }
 
-func (d *TopologyDAO) topology(hosts []HostRecord, placements []PlacementRecord) servicecatalog.Topology {
+func (d *TopologyDAO) topology(hosts []HostRecord, deployments []DeploymentRecord) servicecatalog.Topology {
 	t := servicecatalog.Topology{ControlHostID: d.controlHostID}
 	for _, h := range hosts {
 		reachability, _ := servicecatalog.ParseReachability(h.Reachability)
 		t.Hosts = append(t.Hosts, servicecatalog.Host{ID: h.HostID, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Status: h.Status, Reachability: reachability})
 	}
-	for _, p := range placements {
-		t.Placements = append(t.Placements, servicecatalog.Placement{HostID: p.HostID, ComponentID: p.ComponentID, Status: p.Status})
+	for _, p := range deployments {
+		t.Deployments = append(t.Deployments, servicecatalog.Deployment{HostID: p.HostID, ComponentID: p.ComponentID, Status: p.Status})
 	}
 	return t
 }
 
 // Read returns a consistent configuration snapshot. Runtime heartbeats are read
 // separately so frequent status writes do not alter the compiled directory.
-func (d *TopologyDAO) Read(ctx context.Context) (hosts []HostRecord, placements []PlacementRecord, err error) {
+func (d *TopologyDAO) Read(ctx context.Context) (hosts []HostRecord, deployments []DeploymentRecord, err error) {
 	err = d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var readErr error
-		hosts, placements, readErr = d.records(tx)
+		hosts, deployments, readErr = d.records(tx)
 		return readErr
 	})
 	return
 }
 
 func (d *TopologyDAO) Compile(ctx context.Context, hostID string) (servicecatalog.CompiledHost, error) {
-	hosts, placements, err := d.Read(ctx)
+	hosts, deployments, err := d.Read(ctx)
 	if err != nil {
 		return servicecatalog.CompiledHost{}, err
 	}
 	if !slices.ContainsFunc(hosts, func(h HostRecord) bool { return h.HostID == hostID }) {
 		return servicecatalog.CompiledHost{}, gorm.ErrRecordNotFound
 	}
-	return d.catalog.Compile(d.topology(hosts, placements), hostID)
+	return d.catalog.Compile(d.topology(hosts, deployments), hostID)
 }
 
 func (d *TopologyDAO) GetGatewayStatus(ctx context.Context, hostID string) (*HostGatewayStatus, error) {
@@ -100,18 +100,18 @@ func (d *TopologyDAO) mutate(ctx context.Context, fn func(*gorm.DB) error) error
 	})
 }
 
-func (d *TopologyDAO) SyncHostPlacements(ctx context.Context, spec HostSpec) error {
+func (d *TopologyDAO) SyncHostDeployments(ctx context.Context, spec HostSpec) error {
 	return d.SyncHosts(ctx, []HostSpec{spec})
 }
 
 // SyncHosts supports offline bootstrap of a complete fleet in one transaction.
-// A live synchronization uses SyncHostPlacements for exactly one host.
+// A live synchronization uses SyncHostDeployments for exactly one host.
 func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 	if len(specs) == 0 || len(specs) > 1024 {
 		return fmt.Errorf("%w: host synchronization requires 1..1024 hosts", ErrInvalidTopology)
 	}
 	return d.mutate(ctx, func(tx *gorm.DB) error {
-		hosts, placements, err := d.records(tx)
+		hosts, deployments, err := d.records(tx)
 		if err != nil {
 			return err
 		}
@@ -121,12 +121,12 @@ func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 				return fmt.Errorf("%w: duplicate host in synchronization", ErrInvalidTopology)
 			}
 			seen[spec.HostID] = true
-			hosts, placements, err = d.propose(hosts, placements, spec)
+			hosts, deployments, err = d.propose(hosts, deployments, spec)
 			if err != nil {
 				return err
 			}
 		}
-		if err := d.catalog.ValidateTopology(d.topology(hosts, placements)); err != nil {
+		if err := d.catalog.ValidateTopology(d.topology(hosts, deployments)); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
 		}
 		for _, host := range hosts {
@@ -140,16 +140,16 @@ func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 				return err
 			}
 			var componentIDs []string
-			for _, placement := range placements {
-				if placement.HostID != host.HostID {
+			for _, deployment := range deployments {
+				if deployment.HostID != host.HostID {
 					continue
 				}
-				componentIDs = append(componentIDs, placement.ComponentID)
-				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&placement).Error; err != nil {
+				componentIDs = append(componentIDs, deployment.ComponentID)
+				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&deployment).Error; err != nil {
 					return err
 				}
 			}
-			if err := tx.Where("c_host_id = ? AND c_component_id NOT IN ?", host.HostID, componentIDs).Delete(&PlacementRecord{}).Error; err != nil {
+			if err := tx.Where("c_host_id = ? AND c_component_id NOT IN ?", host.HostID, componentIDs).Delete(&DeploymentRecord{}).Error; err != nil {
 				return err
 			}
 		}
@@ -157,7 +157,7 @@ func (d *TopologyDAO) SyncHosts(ctx context.Context, specs []HostSpec) error {
 	})
 }
 
-func (d *TopologyDAO) propose(hosts []HostRecord, placements []PlacementRecord, spec HostSpec) ([]HostRecord, []PlacementRecord, error) {
+func (d *TopologyDAO) propose(hosts []HostRecord, deployments []DeploymentRecord, spec HostSpec) ([]HostRecord, []DeploymentRecord, error) {
 	if len(spec.Description) > 4096 || len(spec.Components) > len(d.catalog.Components) {
 		return nil, nil, fmt.Errorf("%w: host description or component list exceeds limit", ErrInvalidTopology)
 	}
@@ -185,30 +185,30 @@ func (d *TopologyDAO) propose(hosts []HostRecord, placements []PlacementRecord, 
 	} else {
 		hosts = append(hosts, host)
 	}
-	kept := make([]PlacementRecord, 0, len(placements)+len(wanted))
-	for _, placement := range placements {
-		if placement.HostID != spec.HostID {
-			kept = append(kept, placement)
+	kept := make([]DeploymentRecord, 0, len(deployments)+len(wanted))
+	for _, deployment := range deployments {
+		if deployment.HostID != spec.HostID {
+			kept = append(kept, deployment)
 			continue
 		}
-		if wanted[placement.ComponentID] {
-			kept = append(kept, placement)
-			delete(wanted, placement.ComponentID)
+		if wanted[deployment.ComponentID] {
+			kept = append(kept, deployment)
+			delete(wanted, deployment.ComponentID)
 			continue
 		}
-		if component, ok := d.catalog.Component(placement.ComponentID); ok && component.Protected {
+		if component, ok := d.catalog.Component(deployment.ComponentID); ok && component.Protected {
 			return nil, nil, fmt.Errorf("%w: protected component %q cannot be removed", ErrInvalidTopology, component.ID)
 		}
 	}
 	for id := range wanted {
-		kept = append(kept, PlacementRecord{HostID: spec.HostID, ComponentID: id, Status: servicecatalog.Enabled})
+		kept = append(kept, DeploymentRecord{HostID: spec.HostID, ComponentID: id, Status: servicecatalog.Enabled})
 	}
 	return hosts, kept, nil
 }
 
 func (d *TopologyDAO) SetHostStatus(ctx context.Context, hostID, status string) error {
 	return d.mutate(ctx, func(tx *gorm.DB) error {
-		hosts, placements, err := d.records(tx)
+		hosts, deployments, err := d.records(tx)
 		if err != nil {
 			return err
 		}
@@ -217,32 +217,32 @@ func (d *TopologyDAO) SetHostStatus(ctx context.Context, hostID, status string) 
 			return gorm.ErrRecordNotFound
 		}
 		hosts[i].Status = status
-		if err := d.catalog.ValidateTopology(d.topology(hosts, placements)); err != nil {
+		if err := d.catalog.ValidateTopology(d.topology(hosts, deployments)); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
 		}
 		return tx.Model(&HostRecord{}).Where("c_host_id = ?", hostID).Updates(map[string]interface{}{"c_status": status, "c_mtime": time.Now().UTC()}).Error
 	})
 }
 
-func (d *TopologyDAO) SetPlacementStatus(ctx context.Context, hostID, componentID, status string) error {
+func (d *TopologyDAO) SetDeploymentStatus(ctx context.Context, hostID, componentID, status string) error {
 	component, ok := d.catalog.Component(componentID)
 	if !ok || component.Scope == servicecatalog.ScopeHost {
 		return fmt.Errorf("%w: unknown or automatic component", ErrInvalidTopology)
 	}
 	return d.mutate(ctx, func(tx *gorm.DB) error {
-		hosts, placements, err := d.records(tx)
+		hosts, deployments, err := d.records(tx)
 		if err != nil {
 			return err
 		}
-		i := slices.IndexFunc(placements, func(p PlacementRecord) bool { return p.HostID == hostID && p.ComponentID == componentID })
+		i := slices.IndexFunc(deployments, func(p DeploymentRecord) bool { return p.HostID == hostID && p.ComponentID == componentID })
 		if i < 0 {
 			return gorm.ErrRecordNotFound
 		}
-		placements[i].Status = status
-		if err := d.catalog.ValidateTopology(d.topology(hosts, placements)); err != nil {
+		deployments[i].Status = status
+		if err := d.catalog.ValidateTopology(d.topology(hosts, deployments)); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
 		}
-		return tx.Model(&PlacementRecord{}).Where("c_host_id = ? AND c_component_id = ?", hostID, componentID).Updates(map[string]interface{}{"c_status": status, "c_mtime": time.Now().UTC()}).Error
+		return tx.Model(&DeploymentRecord{}).Where("c_host_id = ? AND c_component_id = ?", hostID, componentID).Updates(map[string]interface{}{"c_status": status, "c_mtime": time.Now().UTC()}).Error
 	})
 }
 
@@ -251,7 +251,7 @@ func (d *TopologyDAO) DeleteHost(ctx context.Context, hostID string) error {
 		return fmt.Errorf("%w: control host cannot be deleted", ErrInvalidTopology)
 	}
 	return d.mutate(ctx, func(tx *gorm.DB) error {
-		hosts, placements, err := d.records(tx)
+		hosts, deployments, err := d.records(tx)
 		if err != nil {
 			return err
 		}
@@ -259,21 +259,21 @@ func (d *TopologyDAO) DeleteHost(ctx context.Context, hostID string) error {
 		if i < 0 {
 			return gorm.ErrRecordNotFound
 		}
-		for _, placement := range placements {
-			component, ok := d.catalog.Component(placement.ComponentID)
-			if placement.HostID == hostID && (!ok || component.Scope != servicecatalog.ScopeHost) {
-				return fmt.Errorf("%w: host still has component placements", ErrInvalidTopology)
+		for _, deployment := range deployments {
+			component, ok := d.catalog.Component(deployment.ComponentID)
+			if deployment.HostID == hostID && (!ok || component.Scope != servicecatalog.ScopeHost) {
+				return fmt.Errorf("%w: host still has component deployments", ErrInvalidTopology)
 			}
 		}
 		hosts = slices.Delete(hosts, i, i+1)
-		placements = slices.DeleteFunc(placements, func(p PlacementRecord) bool { return p.HostID == hostID })
-		if err := d.catalog.ValidateTopology(d.topology(hosts, placements)); err != nil {
+		deployments = slices.DeleteFunc(deployments, func(p DeploymentRecord) bool { return p.HostID == hostID })
+		if err := d.catalog.ValidateTopology(d.topology(hosts, deployments)); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidTopology, err)
 		}
 		if err := tx.Where("c_host_id = ?", hostID).Delete(&HostGatewayStatus{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("c_host_id = ?", hostID).Delete(&PlacementRecord{}).Error; err != nil {
+		if err := tx.Where("c_host_id = ?", hostID).Delete(&DeploymentRecord{}).Error; err != nil {
 			return err
 		}
 		return tx.Where("c_host_id = ?", hostID).Delete(&HostRecord{}).Error

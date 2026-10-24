@@ -83,7 +83,7 @@ func TestMigrateWritesBackupAndReencryptsCurrentFormat(t *testing.T) {
 	manifest, err := setupconfig.Parse(plain)
 	require.NoError(t, err)
 	require.Equal(t, "海外机", manifest.HostByID("overseas").Label)
-	require.Equal(t, []string{"trade", "access", "egress-proxy", "collector-stream"}, manifest.Placements["overseas"])
+	require.Equal(t, []string{"trade", "access", "egress-proxy", "collector-stream"}, manifest.Deployments["overseas"])
 	require.NotContains(t, string(plain), "compute-1")
 	require.NotContains(t, string(plain), "factor_type")
 	require.Contains(t, string(plain), "# 主机命名", "注释保持不动")
@@ -149,8 +149,8 @@ func TestMigrateImportsSCFPlanAndEntryHostNetwork(t *testing.T) {
 	require.ErrorContains(t, err, "没有主机 nope")
 }
 
-// 旧组件身份 cloudnode 改名为 cloudfunction 之后，[placements] 里的旧名字会让所有命令拒绝配置；migrate 把它改成新名字。
-func TestMigrateRenamesLegacyPlacementComponent(t *testing.T) {
+// 旧组件身份 cloudnode 改名为 cloudfunction 之后，[deployments] 里的旧名字会让所有命令拒绝配置；migrate 把它改成新名字。
+func TestMigrateRenamesLegacyDeploymentComponent(t *testing.T) {
 	text := legacyText(t)
 	require.Contains(t, text, `"cloudfunction"`)
 	text = strings.Replace(text, `"cloudfunction"`, `"cloudnode"`, 1)
@@ -168,10 +168,41 @@ func TestMigrateRenamesLegacyPlacementComponent(t *testing.T) {
 	require.Contains(t, string(plain), `"cloudfunction"`)
 }
 
+// 旧的 [placements] 表改名为 [deployments]：新版解析器不再认旧表，migrate 负责转换，而且可以重复执行。
+func TestMigrateRenamesLegacyPlacementsTable(t *testing.T) {
+	header := regexp.MustCompile(`(?m)^\[deployments\]$`)
+	text := header.ReplaceAllString(legacyText(t), "[placements]")
+	require.NotRegexp(t, header, text)
+	_, err := setupconfig.Parse([]byte(header.ReplaceAllString(sampleText(t), "[placements]")))
+	require.ErrorContains(t, err, "[placements] 已改名为 [deployments]")
+	path, root, keys := migrateFixture(t, text)
+
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "compute-1", RenameTo: "overseas", Write: true})
+	require.NoError(t, err)
+	require.True(t, report.Deployments && report.Valid && report.Written)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	require.Regexp(t, header, string(plain))
+	require.NotRegexp(t, `(?m)^\[placements\]$`, string(plain))
+
+	again, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys})
+	require.NoError(t, err)
+	require.False(t, again.Changed || again.Deployments, "已转换的配置不再变化")
+}
+
+func TestMigrateRejectsBothPlacementsAndDeployments(t *testing.T) {
+	text := legacyText(t) + "\n[placements]\ncontrol = [\"admin\"]\n"
+	path, root, keys := migrateFixture(t, text)
+	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, RenameFrom: "compute-1", RenameTo: "overseas"})
+	require.ErrorContains(t, err, "同时有 [placements] 与 [deployments]")
+}
+
 // 单引号字符串与多行数组里的旧组件身份同样改名，注释行不动。
-func TestRenameLegacyPlacementComponentHandlesQuotesAndMultilineArrays(t *testing.T) {
+func TestRenameLegacyDeploymentComponentHandlesQuotesAndMultilineArrays(t *testing.T) {
 	blocks := splitBlocks(strings.Split(strings.Join([]string{
-		"[placements]",
+		"[deployments]",
 		"# 旧名字 \"cloudnode\" 只在注释里，不动",
 		"control = ['admin', 'cloudnode']",
 		"storage = [",
@@ -181,7 +212,7 @@ func TestRenameLegacyPlacementComponentHandlesQuotesAndMultilineArrays(t *testin
 		"",
 	}, "\n"), "\n"))
 	var report MigrateReport
-	renamePlacementComponents(blocks, &report)
+	renameDeploymentComponents(blocks, &report)
 	var out []string
 	for _, b := range blocks {
 		out = append(out, b.lines...)

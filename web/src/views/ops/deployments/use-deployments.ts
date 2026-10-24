@@ -6,15 +6,15 @@ import {
   getCatalog,
   getHostRoutes,
   listAllDeploymentHosts,
-  listAllPlacements,
+  listAllDeployments,
   setHostStatus,
-  setPlacementStatus
+  setDeploymentStatus
 } from "@/api/admin/sysdeploy";
-import type { ComponentCatalog, ComponentPlacement, DeploymentHost, HostRoutesResponse } from "@/api/admin/types";
+import type { ComponentCatalog, ComponentDeployment, DeploymentHost, HostRoutesResponse } from "@/api/admin/types";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { reportControlError } from "@/api/admin/http";
-import { canTogglePlacement, loadHostRoutes, placementRows, type PlacementRow } from "./model";
+import { canToggleDeployment, loadHostRoutes, deploymentRows, type DeploymentRow } from "./model";
 
 export function useDeployments() {
   const route = useRoute();
@@ -23,7 +23,7 @@ export function useDeployments() {
   const catalogHash = ref("");
   const controlHostId = ref("");
   const hosts = ref<DeploymentHost[]>([]);
-  const placements = ref<ComponentPlacement[]>([]);
+  const deployments = ref<ComponentDeployment[]>([]);
   const overview = ref<HealthOverview>();
   const routes = ref<Record<string, HostRoutesResponse>>({});
   const routeErrors = ref<Record<string, string>>({});
@@ -51,16 +51,16 @@ export function useDeployments() {
   const groups = computed(() =>
     hosts.value.map(host => ({
       host,
-      rows: placementRows(
+      rows: deploymentRows(
         host,
-        placements.value,
+        deployments.value,
         catalog.value?.components || [],
         monitorError.value || error.value ? undefined : overview.value
       )
     }))
   );
   const unregistered = computed(() => {
-    const registered = new Set(placements.value.map(item => `${item.host_id}\0${item.component_id}`));
+    const registered = new Set(deployments.value.map(item => `${item.host_id}\0${item.component_id}`));
     return (overview.value?.unregistered || []).filter(
       item => !registered.has(`${item.host_id || ""}\0${item.component_id || ""}`)
     );
@@ -76,7 +76,7 @@ export function useDeployments() {
       !groups.value.some(
         group =>
           (!requestedHost.value || group.host.host_id === requestedHost.value) &&
-          group.rows.some(row => row.placement.component_id === requestedComponent.value)
+          group.rows.some(row => row.deployment.component_id === requestedComponent.value)
       )
     )
       return `未找到部署组件 ${requestedComponent.value}`;
@@ -105,7 +105,7 @@ export function useDeployments() {
               if (!disabled) return false;
             } else if (disabled && !showDisabled.value) return false;
             if (filter.value === "abnormal" && !["down", "degraded", "unknown"].includes(row.status)) return false;
-            return hostMatches || [row.placement.component_id, row.definition?.name].join(" ").toLowerCase().includes(needle);
+            return hostMatches || [row.deployment.component_id, row.definition?.name].join(" ").toLowerCase().includes(needle);
           })
         };
       })
@@ -140,9 +140,9 @@ export function useDeployments() {
       const group = groups.value.find(
         item =>
           (!requested || item.host.host_id === requested) &&
-          item.rows.some(row => row.placement.component_id === requestedComponent.value)
+          item.rows.some(row => row.deployment.component_id === requestedComponent.value)
       );
-      drawerKey.value = group?.rows.find(row => row.placement.component_id === requestedComponent.value)?.key || "";
+      drawerKey.value = group?.rows.find(row => row.deployment.component_id === requestedComponent.value)?.key || "";
       if (group) {
         appliedLocator = locator;
         showDisabled.value = true;
@@ -172,10 +172,10 @@ export function useDeployments() {
     const request = guard.begin();
     loading.value = true;
     try {
-      const [rawCatalog, hostRows, placementItems, health] = await Promise.all([
+      const [rawCatalog, hostRows, deploymentItems, health] = await Promise.all([
         getCatalog(),
         listAllDeploymentHosts(),
-        listAllPlacements(),
+        listAllDeployments(),
         monitorApi
           .getOverview()
           .then(result => ({ overview: result.overview, error: "" }))
@@ -188,7 +188,7 @@ export function useDeployments() {
       catalogHash.value = rawCatalog.sha256;
       controlHostId.value = rawCatalog.control_host_id;
       hosts.value = hostRows;
-      placements.value = placementItems;
+      deployments.value = deploymentItems;
       overview.value = health.overview;
       monitorError.value = health.error || (!health.overview?.topology_known ? "Monitor 尚未取得完整部署清单" : "");
       routes.value = snapshots.routes;
@@ -221,10 +221,10 @@ export function useDeployments() {
     if (host.host_id === controlHostId.value) return;
     return mutate(`host:${host.host_id}`, () => setHostStatus(host.host_id, host.status === "enabled" ? "disabled" : "enabled"));
   }
-  function togglePlacement(host: DeploymentHost, row: PlacementRow) {
-    if (!canTogglePlacement(host, row)) return;
+  function toggleDeployment(host: DeploymentHost, row: DeploymentRow) {
+    if (!canToggleDeployment(host, row)) return;
     return mutate(row.key, () =>
-      setPlacementStatus(host.host_id, row.placement.component_id, row.placement.status === "enabled" ? "disabled" : "enabled")
+      setDeploymentStatus(host.host_id, row.deployment.component_id, row.deployment.status === "enabled" ? "disabled" : "enabled")
     );
   }
   function start() {
@@ -281,6 +281,6 @@ export function useDeployments() {
     gatewaySignal,
     refresh,
     toggleHost,
-    togglePlacement
+    toggleDeployment
   };
 }

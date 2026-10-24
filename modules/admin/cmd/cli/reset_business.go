@@ -35,7 +35,7 @@ var businessResetConfig = []string{"t_space_members", "t_spaces"}
 
 // businessKeep 是引导身份层与登录记录：任何范围都不清。
 var businessKeep = []string{
-	"t_host_gateway_status", "t_hosts", "t_login_history", "t_placements", "t_secrets",
+	"t_host_gateway_status", "t_hosts", "t_login_history", "t_deployments", "t_secrets",
 	"t_ssh_host", "t_ssh_host_key", "t_ssh_session", "t_users",
 }
 

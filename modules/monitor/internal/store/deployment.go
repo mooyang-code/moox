@@ -8,9 +8,9 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// reconcilePlacementChecks preserves probe history and retires alerts for
+// reconcileDeploymentChecks preserves probe history and retires alerts for
 // disabled or removed deployments inside the topology transaction.
-func reconcilePlacementChecks(tx *gorm.DB, desired []domain.Check) (int, error) {
+func reconcileDeploymentChecks(tx *gorm.DB, desired []domain.Check) (int, error) {
 	count := 0
 	var existing []domain.Check
 	if err := tx.Where("c_space_id = ''").Find(&existing).Error; err != nil {
@@ -22,13 +22,13 @@ func reconcilePlacementChecks(tx *gorm.DB, desired []domain.Check) (int, error) 
 	}
 	keep := make(map[string]bool, len(desired))
 	for _, check := range desired {
-		if check.Source != domain.CheckSourcePlacement || check.SpaceID != "" || check.CheckID == "" || keep[check.CheckID] {
-			return 0, fmt.Errorf("invalid or duplicate placement check %q", check.CheckID)
+		if check.Source != domain.CheckSourceDeployment || check.SpaceID != "" || check.CheckID == "" || keep[check.CheckID] {
+			return 0, fmt.Errorf("invalid or duplicate deployment check %q", check.CheckID)
 		}
 		keep[check.CheckID] = true
 		previous, exists := byID[check.CheckID]
-		if exists && previous.Source != domain.CheckSourcePlacement {
-			return 0, fmt.Errorf("placement check %q collides with another source", check.CheckID)
+		if exists && previous.Source != domain.CheckSourceDeployment {
+			return 0, fmt.Errorf("deployment check %q collides with another source", check.CheckID)
 		}
 		columns := []string{"c_name", "c_group_name", "c_kind", "c_url", "c_connect_address", "c_server_name", "c_trust_mode", "c_ca_file", "c_ca_baseline", "c_method", "c_headers", "c_body", "c_tcp_host", "c_tcp_port", "c_interval_seconds", "c_timeout_ms", "c_expected_status", "c_max_response_ms", "c_body_contains", "c_enabled", "c_labels", "c_description"}
 		if exists && !previous.Enabled && check.Enabled {
@@ -41,17 +41,17 @@ func reconcilePlacementChecks(tx *gorm.DB, desired []domain.Check) (int, error) 
 			return 0, err
 		}
 		if !check.Enabled {
-			if err := deletePlacementAlerts(tx, check.CheckID); err != nil {
+			if err := deleteDeploymentAlerts(tx, check.CheckID); err != nil {
 				return 0, err
 			}
 		}
 		count++
 	}
 	for _, check := range existing {
-		if check.Source != domain.CheckSourcePlacement || keep[check.CheckID] {
+		if check.Source != domain.CheckSourceDeployment || keep[check.CheckID] {
 			continue
 		}
-		if err := deletePlacementAlerts(tx, check.CheckID); err != nil {
+		if err := deleteDeploymentAlerts(tx, check.CheckID); err != nil {
 			return 0, err
 		}
 		if err := tx.Where("c_space_id = '' AND c_check_id = ?", check.CheckID).Delete(&domain.CheckResult{}).Error; err != nil {
@@ -65,7 +65,7 @@ func reconcilePlacementChecks(tx *gorm.DB, desired []domain.Check) (int, error) 
 	return count, nil
 }
 
-func deletePlacementAlerts(tx *gorm.DB, checkID string) error {
+func deleteDeploymentAlerts(tx *gorm.DB, checkID string) error {
 	if err := tx.Where("c_space_id = '' AND c_check_id = ?", checkID).Delete(&domain.AlertState{}).Error; err != nil {
 		return err
 	}

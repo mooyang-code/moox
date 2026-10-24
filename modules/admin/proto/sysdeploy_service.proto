@@ -8,7 +8,7 @@ import "gatewaycontrol.proto";
 
 option go_package = "github.com/mooyang-code/moox/modules/admin/proto/admingen;adminpb";
 
-// SysDeploy 管理规范主机和组件放置。
+// SysDeploy 管理规范主机和组件部署。
 message DeploymentHost {
   string host_id = 1;
   string address = 2;
@@ -22,7 +22,7 @@ message DeploymentHost {
   string reachability = 9;
 }
 
-message ComponentPlacement {
+message ComponentDeployment {
   string host_id = 1;
   string component_id = 2;
   string status = 3;
@@ -68,15 +68,15 @@ message ListDeploymentHostsRsp {
   trpc.moox.common.PageResult page_result = 3;
 }
 
-message ListPlacementsReq {
+message ListDeploymentsReq {
   string host_id = 1;
   string component_id = 2;
   string status = 3;
   trpc.moox.common.Page page = 4;
 }
-message ListPlacementsRsp {
+message ListDeploymentsRsp {
   trpc.moox.common.RetInfo ret_info = 1;
-  repeated ComponentPlacement placements = 2;
+  repeated ComponentDeployment deployments = 2;
   trpc.moox.common.PageResult page_result = 3;
 }
 
@@ -109,16 +109,16 @@ message SetHostStatusReq {
 message SetHostStatusRsp {
   trpc.moox.common.RetInfo ret_info = 1;
 }
-message SetPlacementStatusReq {
+message SetDeploymentStatusReq {
   string host_id = 1;
   string component_id = 2;
   string status = 3;
 }
-message SetPlacementStatusRsp {
+message SetDeploymentStatusRsp {
   trpc.moox.common.RetInfo ret_info = 1;
 }
 
-message SyncHostPlacementsReq {
+message SyncHostDeploymentsReq {
   string host_id = 1;
   string address = 2;
   string private_address = 3;
@@ -129,7 +129,7 @@ message SyncHostPlacementsReq {
   // 空或 direct 表示可直达，outbound 表示只能出站。
   string reachability = 7;
 }
-message SyncHostPlacementsRsp {
+message SyncHostDeploymentsRsp {
   trpc.moox.common.RetInfo ret_info = 1;
 }
 
@@ -182,12 +182,12 @@ message PurgeEventBusSubjectsRsp {
 service SysDeploy {
   rpc GetCatalog(GetCatalogReq) returns (GetCatalogRsp);
   rpc ListHosts(ListDeploymentHostsReq) returns (ListDeploymentHostsRsp);
-  rpc ListPlacements(ListPlacementsReq) returns (ListPlacementsRsp);
+  rpc ListDeployments(ListDeploymentsReq) returns (ListDeploymentsRsp);
   rpc GetHostRoutes(GetHostRoutesReq) returns (GetHostRoutesRsp);
   rpc GetDirectory(GetDirectoryReq) returns (GetDirectoryRsp);
   rpc SetHostStatus(SetHostStatusReq) returns (SetHostStatusRsp);
-  rpc SetPlacementStatus(SetPlacementStatusReq) returns (SetPlacementStatusRsp);
-  rpc SyncHostPlacements(SyncHostPlacementsReq) returns (SyncHostPlacementsRsp);
+  rpc SetDeploymentStatus(SetDeploymentStatusReq) returns (SetDeploymentStatusRsp);
+  rpc SyncHostDeployments(SyncHostDeploymentsReq) returns (SyncHostDeploymentsRsp);
   rpc DeleteHost(DeleteDeploymentHostReq) returns (DeleteDeploymentHostRsp);
   rpc InspectEventBus(InspectEventBusReq) returns (InspectEventBusRsp);
   rpc DeleteEventBusConsumers(DeleteEventBusConsumersReq) returns (DeleteEventBusConsumersRsp);

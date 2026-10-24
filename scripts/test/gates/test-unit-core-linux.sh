@@ -26,7 +26,7 @@ required=[
     'TestCoreRequestUsesConfiguredControlRootAndPrivateAdministrator',
     'TestCoreBuildUsesOnlyLocalPureGoAndFrontendTools',
     'TestHostBuildUsesOnlyLocalPureGoTools',
-    'TestBusinessUnitSelectionAndExportRolesFollowActualPlacements',
+    'TestBusinessUnitSelectionAndExportRolesFollowActualDeployments',
     'TestStorageEnvironmentSharesOnlyRequiredPersistentCredentials',
     'TestControlConfigurationsPreserveBusinessSettingsAndBindActualEndpoints',
     'TestControlEnvironmentDistributesOnlyRequiredStorageRoleSecrets',

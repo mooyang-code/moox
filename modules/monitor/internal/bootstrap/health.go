@@ -78,10 +78,10 @@ func monitorHealthSnapshot(cfg *config.Config, runtime *Runtime, hostStore *host
 		}
 		rsp := healthz.Base("monitor", cfg.Instance.InstanceID, "", "", startedAt, ready)
 		rsp.Details = map[string]any{
-			"database":          map[bool]string{true: "ok", false: "error"}[databaseReady],
-			"scheduler_ok":      schedulerReady,
-			"active_checks":     activeChecks,
-			"placement_enabled": cfg.Placement.Enabled,
+			"database":           map[bool]string{true: "ok", false: "error"}[databaseReady],
+			"scheduler_ok":       schedulerReady,
+			"active_checks":      activeChecks,
+			"deployment_enabled": cfg.Deployment.Enabled,
 		}
 		hostStorageReady := !cfg.Metrics.HostStorage.Enabled || (hostStore != nil && hostStore.StorageReady())
 		rsp.Details["host_storage_schema_ready"] = hostStorageReady

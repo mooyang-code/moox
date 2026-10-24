@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { serviceHealth } from "./service-health";
 describe("home component health", () => {
-  it("counts healthy host-component placements rather than enabled registry rows", () => {
+  it("counts healthy host-component deployments rather than enabled registry rows", () => {
     const result = serviceHealth({
       topology_known: true,
       summary: {

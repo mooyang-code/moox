@@ -34,7 +34,7 @@ func TestInitializeDoesNotCreateSchema(t *testing.T) {
 SELECT count(*)
 FROM sqlite_master
 WHERE type = 'table'
-  AND name IN ('t_spaces', 't_users', 't_ssh_host', 't_secrets', 't_hosts', 't_placements', 't_host_gateway_status')
+  AND name IN ('t_spaces', 't_users', 't_ssh_host', 't_secrets', 't_hosts', 't_deployments', 't_host_gateway_status')
 `).Scan(&count).Error; err != nil {
 		t.Fatalf("query table count: %v", err)
 	}

@@ -88,8 +88,8 @@ func TestCollectorRequiresAdminGatewayAndReportsRoutingFailure(t *testing.T) {
 	_, err := NewCollector(db, nil)
 	require.ErrorContains(t, err, "admin gateway")
 	collector, err := NewCollector(db, gatewayFunc(func(context.Context, string, string, any, any) error {
-		return errors.New("no active FunctionInstance placement")
+		return errors.New("no active FunctionInstance deployment")
 	}))
 	require.NoError(t, err)
-	require.ErrorContains(t, collector.Run(context.Background()), "no active FunctionInstance placement")
+	require.ErrorContains(t, collector.Run(context.Background()), "no active FunctionInstance deployment")
 }

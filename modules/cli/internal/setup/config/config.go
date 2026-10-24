@@ -137,7 +137,7 @@ type Observability struct {
 	DeliverPolicy string `toml:"deliver_policy"`
 }
 
-// EgressProxy separates upstream policy from service placement.
+// EgressProxy separates upstream policy from service deployment.
 type EgressProxy struct {
 	HTTPDomains []string  `toml:"http_domains"`
 	DNS         EgressDNS `toml:"dns"`
@@ -309,7 +309,7 @@ type Manifest struct {
 	EventBus           EventBus                  `toml:"eventbus"`
 	Paths              Paths                     `toml:"paths"`
 	EgressProxy        EgressProxy               `toml:"egress_proxy"`
-	Placements         map[string][]string       `toml:"placements"`
+	Deployments        map[string][]string       `toml:"deployments"`
 	StorageRetention   StorageRetention          `toml:"storage_retention"`
 	StorageView        StorageView               `toml:"storage_view"`
 	CollectorRetention CollectorRetention        `toml:"collector_retention"`
@@ -455,19 +455,21 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		section := string(keys[0][0])
 		switch section {
 		case "control_host", "storage_host", "view_host", "strategy_host", "other_hosts":
-			return fmt.Errorf("config_invalid: %s is retired; use [hosts.<host-id>] with address and ssh, and [placements]", section)
+			return fmt.Errorf("config_invalid: %s is retired; use [hosts.<host-id>] with address and ssh, and [deployments]", section)
 		case "hosts":
 			return fmt.Errorf("config_invalid: invalid hosts field; use [hosts.<host-id>] with address and ssh = { port, username, password }")
 		case "scf_fetcher":
 			return fmt.Errorf("config_invalid: [scf_fetcher] is retired; use [scf_plan] (cloud_account, regions, spaces)")
 		case "eventbus":
 			if first == "eventbus.host" {
-				return fmt.Errorf("config_invalid: eventbus.host is derived from the eventbus component in [placements]")
+				return fmt.Errorf("config_invalid: eventbus.host is derived from the eventbus component in [deployments]")
 			}
 		case "dns_resolver":
 			return fmt.Errorf("config_invalid: dns_resolver is retired; use [egress_proxy.dns] and remove trade_node")
 		case "compile_host":
 			return fmt.Errorf("config_invalid: [compile_host] is retired; builds run on the local machine (see docs/构建手册.md); remove [compile_host] and any host that was only used for compiling")
+		case "placements":
+			return fmt.Errorf("config_invalid: [placements] 已改名为 [deployments]；运行 moox-cli config migrate 转换")
 		case "factor_engine":
 			return fmt.Errorf("config_invalid: factor_engine accepts only host = \"local\" or <host-id>; SSH credentials belong to hosts.<host-id>.ssh")
 		}
@@ -656,7 +658,7 @@ func validate(manifest *Manifest) error {
 	if err := validateEgressProxy(&manifest.EgressProxy); err != nil {
 		return err
 	}
-	if err := validatePlacements(manifest); err != nil {
+	if err := validateDeployments(manifest); err != nil {
 		return err
 	}
 	return validateSCFPlan(manifest)
@@ -756,11 +758,11 @@ func validateEgressProxy(cfg *EgressProxy) error {
 	return nil
 }
 
-// PlacementHost returns the selected host for a single component. Multi-copy
+// ComponentHost returns the selected host for a single component. Multi-copy
 // components are addressed through the compiled Directory instead.
-func (m Manifest) PlacementHost(component string) string {
+func (m Manifest) ComponentHost(component string) string {
 	selected := ""
-	for host, components := range m.Placements {
+	for host, components := range m.Deployments {
 		for _, id := range components {
 			if id != component {
 				continue
@@ -773,19 +775,19 @@ func (m Manifest) PlacementHost(component string) string {
 	}
 	return selected
 }
-func validatePlacements(m *Manifest) error {
+func validateDeployments(m *Manifest) error {
 	catalog, err := servicecatalog.LoadEmbedded()
 	if err != nil {
 		return err
 	}
-	for host := range m.Placements {
+	for host := range m.Deployments {
 		if _, ok := m.HostCatalog[host]; !ok {
-			return fmt.Errorf("config_invalid: placements host ID %q is unknown", host)
+			return fmt.Errorf("config_invalid: deployments host ID %q is unknown", host)
 		}
-		for _, id := range m.Placements[host] {
+		for _, id := range m.Deployments[host] {
 			component, ok := catalog.Component(id)
 			if !ok || component.Scope == servicecatalog.ScopeHost {
-				return fmt.Errorf("config_invalid: placements contains an unknown or automatic component")
+				return fmt.Errorf("config_invalid: deployments contains an unknown or automatic component")
 			}
 		}
 	}
@@ -794,7 +796,7 @@ func validatePlacements(m *Manifest) error {
 		return err
 	}
 	if err := catalog.ValidateTopology(topology); err != nil {
-		return fmt.Errorf("config_invalid: placements: %w", err)
+		return fmt.Errorf("config_invalid: deployments: %w", err)
 	}
 	return nil
 }

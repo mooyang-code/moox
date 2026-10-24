@@ -27,7 +27,7 @@ func unitComponents(manifest setupconfig.Manifest, hostID, profile string) ([]st
 	}
 	var selected []string
 	for _, component := range available {
-		if slices.Contains(manifest.Placements[hostID], component.ID) {
+		if slices.Contains(manifest.Deployments[hostID], component.ID) {
 			selected = append(selected, component.ID)
 		}
 	}
@@ -124,8 +124,8 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 		// The prebuilt Storage templates bind internal RPC to loopback. Until
 		// split-role routing is supplied, never report readiness for an
 		// installation whose peers cannot reach one another.
-		primary := manifest.PlacementHost("storage-primary")
-		if primary == "" || manifest.HostByID(primary).Name == "" || primary != manifest.PlacementHost("storage-node") || primary != manifest.PlacementHost("storage-view") {
+		primary := manifest.ComponentHost("storage-primary")
+		if primary == "" || manifest.HostByID(primary).Name == "" || primary != manifest.ComponentHost("storage-node") || primary != manifest.ComponentHost("storage-view") {
 			return nil, errors.New("native Storage requires primary, node and view on one host; split-role RPC routing is not configured")
 		}
 		if id == "storage-node" {

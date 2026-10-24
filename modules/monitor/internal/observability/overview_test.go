@@ -560,7 +560,7 @@ func TestBuilderDoesNotTreatUnknownTimerReadbackAsUnavailable(t *testing.T) {
 	require.Equal(t, "healthy", got.BusinessChecks[0].Status)
 }
 
-func TestBuilderPlacementFailureOverridesFreshReporter(t *testing.T) {
+func TestBuilderDeploymentFailureOverridesFreshReporter(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	query, repositories := openOverviewState(t, func(db *gorm.DB) {
 		if err := db.Create(&monmetrics.MetricService{
@@ -571,9 +571,9 @@ func TestBuilderPlacementFailureOverridesFreshReporter(t *testing.T) {
 		}
 	})
 	check := domain.Check{
-		SpaceID: "", CheckID: "placement:node-a:storage-primary",
+		SpaceID: "", CheckID: "deployment:node-a:storage-primary",
 		Name: "storage-primary@node-a", Kind: domain.CheckKindHTTP,
-		Source: domain.CheckSourcePlacement, Enabled: true,
+		Source: domain.CheckSourceDeployment, Enabled: true,
 		Labels: `{"host_id":"node-a","component_id":"storage-primary"}`,
 	}
 	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
@@ -599,12 +599,12 @@ func TestBuilderPlacementFailureOverridesFreshReporter(t *testing.T) {
 	}
 }
 
-func TestBuilderIncludesPlacementServiceWithoutReporter(t *testing.T) {
+func TestBuilderIncludesDeploymentServiceWithoutReporter(t *testing.T) {
 	query, repositories := openOverviewState(t, func(*gorm.DB) {})
 	check := domain.Check{
-		SpaceID: "", CheckID: "placement:node-b:factor-mgr",
+		SpaceID: "", CheckID: "deployment:node-b:factor-mgr",
 		Name: "factor-mgr@node-b", Kind: domain.CheckKindHTTP,
-		Source: domain.CheckSourcePlacement, Enabled: true,
+		Source: domain.CheckSourceDeployment, Enabled: true,
 		Labels: `{"host_id":"node-b","component_id":"factor-mgr"}`,
 	}
 	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
@@ -633,9 +633,9 @@ func TestBuilderIncludesPlacementServiceWithoutReporter(t *testing.T) {
 func TestBuilderDoesNotRequireReporterFromHealthOnlyService(t *testing.T) {
 	query, repositories := openOverviewState(t, func(*gorm.DB) {})
 	check := domain.Check{
-		SpaceID: "", CheckID: "placement:node-b:web-host",
+		SpaceID: "", CheckID: "deployment:node-b:web-host",
 		Name: "web-host@node-b", Kind: domain.CheckKindHTTP,
-		Source: domain.CheckSourcePlacement, Enabled: true,
+		Source: domain.CheckSourceDeployment, Enabled: true,
 		Labels: `{"host_id":"node-b","component_id":"web-host"}`,
 	}
 	if err := repositories.Checks.Create(t.Context(), &check); err != nil {
@@ -1041,9 +1041,9 @@ func seedServiceTopology(t *testing.T, repositories *store.Repositories, hostID,
 	if !enabled {
 		status = servicecatalog.Disabled
 	}
-	snapshot := domain.TopologySnapshot{Catalog: catalog, ObservedAt: time.Now().UTC(), Hosts: []domain.TopologyHost{{HostID: hostID, Address: "host.example.test", Status: servicecatalog.Enabled}}, Placements: []domain.TopologyPlacement{{HostID: hostID, ComponentID: componentID, Status: status}}}
+	snapshot := domain.TopologySnapshot{Catalog: catalog, ObservedAt: time.Now().UTC(), Hosts: []domain.TopologyHost{{HostID: hostID, Address: "host.example.test", Status: servicecatalog.Enabled}}, Deployments: []domain.TopologyDeployment{{HostID: hostID, ComponentID: componentID, Status: status}}}
 	// Preserve the fixture's existing probe definitions when registering topology.
-	checks, err := repositories.Checks.List(t.Context(), store.ListChecksOptions{Source: domain.CheckSourcePlacement, Page: store.Page{PageSize: 500}})
+	checks, err := repositories.Checks.List(t.Context(), store.ListChecksOptions{Source: domain.CheckSourceDeployment, Page: store.Page{PageSize: 500}})
 	require.NoError(t, err)
 	_, err = repositories.Topology.Reconcile(t.Context(), snapshot, checks)
 	require.NoError(t, err)

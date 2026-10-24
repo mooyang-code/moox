@@ -51,7 +51,7 @@ func TestConfiguredGatewayControlFiltersPreserveSignedWireBytes(t *testing.T) {
 	require.NoError(t, db.Exec(schema.AdminSQL()).Error)
 	topology, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	require.NoError(t, topology.SyncHostPlacements(context.Background(), sysdeploy.HostSpec{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host"}}))
+	require.NoError(t, topology.SyncHostDeployments(context.Background(), sysdeploy.HostSpec{HostID: "control", Address: "control.example.test", Components: []string{"admin", "console-proxy", "web-host"}}))
 	keyStore, err := keys.NewStore(db, master)
 	require.NoError(t, err)
 	_, err = keyStore.EnsureAll(context.Background())

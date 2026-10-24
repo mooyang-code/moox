@@ -17,14 +17,14 @@ func TestTopologyRecoveryProtectsControlAndRejectsInvalidOperations(t *testing.T
 		kind, host, component, status string
 	}{
 		{"host", "control", "", "disabled"},
-		{"placement", "control", "admin", "disabled"},
-		{"placement", "control", "web-host", "disabled"},
-		{"placement", "control", "console-proxy", "disabled"},
-		{"placement", "control", "host-gateway", "disabled"},
-		{"placement", "control", "host-agent", "disabled"},
-		{"placement", "control", "unknown", "enabled"},
+		{"deployment", "control", "admin", "disabled"},
+		{"deployment", "control", "web-host", "disabled"},
+		{"deployment", "control", "console-proxy", "disabled"},
+		{"deployment", "control", "host-gateway", "disabled"},
+		{"deployment", "control", "host-agent", "disabled"},
+		{"deployment", "control", "unknown", "enabled"},
 		{"host", "absent", "", "enabled"},
-		{"placement", "storage", "collector", "enabled"},
+		{"deployment", "storage", "collector", "enabled"},
 	} {
 		args := []string{operation.kind, "set-status", "--db-path", opts.dbPath, "--control-host-id", "control", "--host-id", operation.host, "--status", operation.status}
 		if operation.component != "" {
@@ -37,13 +37,13 @@ func TestTopologyRecoveryProtectsControlAndRejectsInvalidOperations(t *testing.T
 	defer closeAdminCLIDB(db)
 	dao, err := sysdeploy.NewTopologyDAO(db, "control")
 	require.NoError(t, err)
-	hosts, placements, err := dao.Read(context.Background())
+	hosts, deployments, err := dao.Read(context.Background())
 	require.NoError(t, err)
 	for _, host := range hosts {
 		require.Equal(t, "enabled", host.Status)
 	}
-	for _, placement := range placements {
-		require.Equal(t, "enabled", placement.Status)
+	for _, deployment := range deployments {
+		require.Equal(t, "enabled", deployment.Status)
 	}
 }
 
@@ -55,7 +55,7 @@ func TestTopologyRecoveryNeverInitializesOrFollowsSymlinkDatabase(t *testing.T) 
 	_, err := os.Lstat(missing)
 	require.True(t, os.IsNotExist(err))
 	for _, invalid := range [][]string{
-		{"host"}, {"host", "unknown"}, {"placement", "set-status"},
+		{"host"}, {"host", "unknown"}, {"deployment", "set-status"},
 		{"host", "set-status", "--host-id", "storage", "--status", "enabled"},
 		{"host", "set-status", "--control-host-id", "control", "--host-id", "storage", "--status", "invalid"},
 	} {
@@ -75,6 +75,6 @@ func TestTopologyRecoveryNeverInitializesOrFollowsSymlinkDatabase(t *testing.T) 
 	args[3] = link
 	require.ErrorContains(t, runTopologyRecoveryCommand(args, nil, nil), "regular 0600")
 	require.True(t, isTopologyRecoveryCommand([]string{"admin-cli", "host"}))
-	require.True(t, isTopologyRecoveryCommand([]string{"admin-cli", "placement"}))
+	require.True(t, isTopologyRecoveryCommand([]string{"admin-cli", "deployment"}))
 	require.False(t, isTopologyRecoveryCommand([]string{"admin-cli", "bootstrap"}))
 }

@@ -60,7 +60,7 @@
               <span v-else-if="syncFor(group.host.host_id).label === '待同步'">（起点尚未观测）</span>
               · 组件：{{
                 group.rows
-                  .map(row => `${row.definition?.name || row.placement.component_id} ${statusLabel(row.status)}`)
+                  .map(row => `${row.definition?.name || row.deployment.component_id} ${statusLabel(row.status)}`)
                   .join(" / ")
               }}
             </p>
@@ -83,11 +83,11 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="row in group.rows" :key="row.key" :data-component-id="row.placement.component_id">
+                  <tr v-for="row in group.rows" :key="row.key" :data-component-id="row.deployment.component_id">
                     <td>
                       <button type="button" class="detail-link" @click="drawerKey = row.key">
-                        {{ row.definition?.name || row.placement.component_id }}</button
-                      ><small>{{ row.placement.component_id }}</small>
+                        {{ row.definition?.name || row.deployment.component_id }}</button
+                      ><small>{{ row.deployment.component_id }}</small>
                     </td>
                     <td>
                       <a-tag :color="statusColor(row.status)">{{ statusLabel(row.status) }}</a-tag
@@ -113,12 +113,12 @@
                         type="button"
                         class="status-toggle"
                         role="switch"
-                        :aria-checked="row.placement.status === 'enabled'"
-                        :aria-label="`${group.host.host_id} ${row.placement.component_id} 启用状态`"
-                        :disabled="!!busy || !!error || !canTogglePlacement(group.host, row)"
-                        @click="togglePlacement(group.host, row)"
+                        :aria-checked="row.deployment.status === 'enabled'"
+                        :aria-label="`${group.host.host_id} ${row.deployment.component_id} 启用状态`"
+                        :disabled="!!busy || !!error || !canToggleDeployment(group.host, row)"
+                        @click="toggleDeployment(group.host, row)"
                       >
-                        {{ row.placement.status === "enabled" ? "停用" : "启用" }}</button
+                        {{ row.deployment.status === "enabled" ? "停用" : "启用" }}</button
                       ><small v-if="group.host.status === 'disabled'">主机已停用</small>
                     </td>
                   </tr>
@@ -222,16 +222,16 @@
       >
       <a-drawer v-model:visible="drawerVisible" :width="640" title="组件详情" :footer="false">
         <template v-if="detail">
-          <h3>{{ detail.row.definition?.name || detail.row.placement.component_id }}</h3>
+          <h3>{{ detail.row.definition?.name || detail.row.deployment.component_id }}</h3>
           <dl class="component-detail">
             <dt>组件 ID</dt>
-            <dd>{{ detail.row.placement.component_id }}</dd>
+            <dd>{{ detail.row.deployment.component_id }}</dd>
             <dt>二进制</dt>
             <dd>{{ detail.row.definition?.binary || "目录中不存在" }}</dd>
             <dt>部署主机</dt>
             <dd>{{ detail.host.host_id }} · {{ detail.host.address }}</dd>
             <dt>部署状态</dt>
-            <dd>{{ detail.host.status === "disabled" || detail.row.placement.status === "disabled" ? "已停用" : "已启用" }}</dd>
+            <dd>{{ detail.host.status === "disabled" || detail.row.deployment.status === "disabled" ? "已停用" : "已启用" }}</dd>
             <dt>范围 / 副本</dt>
             <dd>{{ detail.row.definition?.scope }} / {{ detail.row.definition?.replicas }}</dd>
             <dt>端口</dt>
@@ -248,7 +248,7 @@
             <dd>{{ statusLabel(detail.row.health?.probe?.status) }} / {{ statusLabel(detail.row.health?.reporter?.status) }}</dd>
             <dt>登记 / 更新</dt>
             <dd>
-              {{ formatCheckedAt(detail.row.placement.created_at) }} / {{ formatCheckedAt(detail.row.placement.updated_at) }}
+              {{ formatCheckedAt(detail.row.deployment.created_at) }} / {{ formatCheckedAt(detail.row.deployment.updated_at) }}
             </dd>
           </dl>
           <section v-if="detail.row.health?.probe?.raw_error">
@@ -282,7 +282,7 @@ import { computed, ref, watch } from "vue";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import RawError from "@/views/ops/monitor/raw-error.vue";
 import { formatCheckedAt, statusColor, statusLabel } from "@/views/ops/monitor/health-display";
-import { canTogglePlacement, componentPorts, gatewayLabel, groupRoutes, routeSync } from "./model";
+import { canToggleDeployment, componentPorts, gatewayLabel, groupRoutes, routeSync } from "./model";
 import TopologyView from "./topology-view.vue";
 import { useDeployments } from "./use-deployments";
 defineOptions({ name: "OpsDeployments" });
@@ -326,7 +326,7 @@ const {
   gatewaySignal,
   refresh,
   toggleHost,
-  togglePlacement
+  toggleDeployment
 } = useDeployments();
 const caller = ref("");
 const method = ref("");

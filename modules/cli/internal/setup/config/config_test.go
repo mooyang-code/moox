@@ -53,7 +53,7 @@ password = "control-password"
 channel_type = "wecom"
 webhook_url = ""
 
-[placements]
+[deployments]
 control = ["admin", "console-proxy", "web-host", "eventbus"]
 `
 
@@ -573,24 +573,24 @@ domains = ["FAPI.BINANCE.COM.", "api.binance.com"]
 		})
 	}
 }
-func TestPlacementsRejectAmbiguousOrInvalidComponents(t *testing.T) {
+func TestDeploymentsRejectAmbiguousOrInvalidComponents(t *testing.T) {
 	m := Manifest{HostCatalog: map[string]HostDefinition{
 		"control": {Address: "192.0.2.10"}, "compute": {Address: "192.0.2.11"},
 	}}
-	for _, placements := range []map[string][]string{
+	for _, deployments := range []map[string][]string{
 		{"missing": {"trade"}}, {"compute": {"missing"}}, {"compute": {"trade", "trade"}},
 		{"control": {"admin", "console-proxy", "web-host", "trade"}, "compute": {"trade"}},
 		{"compute": {"host-gateway"}}, {"compute": {"admin"}}, {"compute": {"web-host"}},
 	} {
-		if _, ok := placements["control"]; !ok {
-			placements["control"] = []string{"admin", "console-proxy", "web-host", "eventbus"}
+		if _, ok := deployments["control"]; !ok {
+			deployments["control"] = []string{"admin", "console-proxy", "web-host", "eventbus"}
 		}
-		m.Placements = placements
-		require.Error(t, validatePlacements(&m))
+		m.Deployments = deployments
+		require.Error(t, validateDeployments(&m))
 	}
-	m.Placements = map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "compute": {"trade", "egress-proxy"}}
-	require.NoError(t, validatePlacements(&m))
-	require.Equal(t, "compute", m.PlacementHost("trade"))
+	m.Deployments = map[string][]string{"control": {"admin", "console-proxy", "web-host", "eventbus"}, "compute": {"trade", "egress-proxy"}}
+	require.NoError(t, validateDeployments(&m))
+	require.Equal(t, "compute", m.ComponentHost("trade"))
 }
 
 // [compile_host] 已退役：编译在本机进行。留着它要明确报错，提示删除，而不是静默忽略。
@@ -644,9 +644,9 @@ func TestLoadRejectsInvalidManifest(t *testing.T) {
 		{"eventbus explicit zero port", strings.Replace(validManifest, "port = 4222", "port = 0", 1), "eventbus.port"},
 		{"eventbus invalid port", strings.Replace(validManifest, "port = 4222", "port = 70000", 1), "eventbus.port"},
 		{"eventbus tls disabled", strings.Replace(validManifest, "tls_enabled = true", "tls_enabled = false", 1), "eventbus.tls_enabled"},
-		{"missing eventbus placement", strings.Replace(validManifest, `, "eventbus"`, "", 1), "placements must include eventbus"},
+		{"missing eventbus deployment", strings.Replace(validManifest, `, "eventbus"`, "", 1), "deployments must include eventbus"},
 		{"protected component missing", strings.Replace(validManifest, `"console-proxy", `, "", 1), "protected component"},
-		{"unknown placement", validManifest + "unknown = [\"trade\"]\n", "placements host ID"},
+		{"unknown deployment", validManifest + "unknown = [\"trade\"]\n", "deployments host ID"},
 		{"automatic component", strings.Replace(validManifest, `"eventbus"`, `"eventbus", "host-gateway"`, 1), "automatic component"},
 		{"unknown field", "unexpected = true\n" + validManifest, "unknown field"},
 		{"unknown factor engine host", validManifest + "[factor_engine]\nhost = \"missing\"\n", "factor_engine.host"},
@@ -674,7 +674,7 @@ func TestLoadRejectsRetiredDeploymentKeys(t *testing.T) {
 			root := t.TempDir()
 			_, err := Load(writeManifest(t, root, validManifest+"["+section+"]\nname = \"control\"\n", 0o600), root)
 			require.ErrorContains(t, err, "[hosts.<host-id>]")
-			require.ErrorContains(t, err, "[placements]")
+			require.ErrorContains(t, err, "[deployments]")
 		})
 	}
 	t.Run("scf_fetcher", func(t *testing.T) {

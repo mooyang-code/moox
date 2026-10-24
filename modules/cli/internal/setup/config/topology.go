@@ -19,10 +19,10 @@ func (m Manifest) HostByID(id string) Host {
 	reachability, _ := servicecatalog.ParseReachability(definition.Reachability)
 	return Host{Name: id, Address: definition.Address, PrivateAddress: definition.PrivateAddress, Region: definition.Region, Port: definition.SSH.Port, Username: definition.SSH.Username, Password: definition.SSH.Password, Provider: definition.Provider, TLSMode: definition.TLSMode, Reachability: reachability, Label: definition.Label}
 }
-func (m Manifest) ControlHost() Host  { return m.HostByID(m.PlacementHost("admin")) }
-func (m Manifest) StorageHost() Host  { return m.HostByID(m.PlacementHost("storage-primary")) }
-func (m Manifest) ViewHost() Host     { return m.HostByID(m.PlacementHost("storage-view")) }
-func (m Manifest) StrategyHost() Host { return m.HostByID(m.PlacementHost("strategy")) }
+func (m Manifest) ControlHost() Host  { return m.HostByID(m.ComponentHost("admin")) }
+func (m Manifest) StorageHost() Host  { return m.HostByID(m.ComponentHost("storage-primary")) }
+func (m Manifest) ViewHost() Host     { return m.HostByID(m.ComponentHost("storage-view")) }
+func (m Manifest) StrategyHost() Host { return m.HostByID(m.ComponentHost("strategy")) }
 
 // FactorEngineHost 返回因子引擎所在的主机；未配置或在本机（local）时返回空 Host。
 func (m Manifest) FactorEngineHost() Host {
@@ -43,7 +43,7 @@ func (m Manifest) Hosts() []Host {
 	for id := range m.HostCatalog {
 		// 因子计算机只登记登录方式；没有放置组件时不是部署主机。
 		if id == m.FactorEngineRef.Host {
-			if _, deployed := m.Placements[id]; !deployed {
+			if _, deployed := m.Deployments[id]; !deployed {
 				continue
 			}
 		}
@@ -72,16 +72,16 @@ func (m Manifest) Topology() (servicecatalog.Topology, error) {
 	if err != nil {
 		return servicecatalog.Topology{}, err
 	}
-	topology := servicecatalog.Topology{ControlHostID: m.PlacementHost("admin")}
+	topology := servicecatalog.Topology{ControlHostID: m.ComponentHost("admin")}
 	for _, host := range m.Hosts() {
 		topology.Hosts = append(topology.Hosts, servicecatalog.Host{ID: host.Name, Address: host.Address, PrivateAddress: host.PrivateAddress, Region: host.Region, Status: servicecatalog.Enabled, Reachability: host.Reachability})
 		for _, component := range catalog.Components {
 			if component.Scope == servicecatalog.ScopeHost {
-				topology.Placements = append(topology.Placements, servicecatalog.Placement{HostID: host.Name, ComponentID: component.ID, Status: servicecatalog.Enabled})
+				topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: host.Name, ComponentID: component.ID, Status: servicecatalog.Enabled})
 			}
 		}
-		for _, id := range m.Placements[host.Name] {
-			topology.Placements = append(topology.Placements, servicecatalog.Placement{HostID: host.Name, ComponentID: id, Status: servicecatalog.Enabled})
+		for _, id := range m.Deployments[host.Name] {
+			topology.Deployments = append(topology.Deployments, servicecatalog.Deployment{HostID: host.Name, ComponentID: id, Status: servicecatalog.Enabled})
 		}
 	}
 	return topology, nil
@@ -151,12 +151,12 @@ func resolveManifestReferences(m *Manifest) error {
 			return fmt.Errorf("config_invalid: factor_engine.host must be \"local\" or an existing host ID")
 		}
 	}
-	if err := validatePlacements(m); err != nil {
+	if err := validateDeployments(m); err != nil {
 		return err
 	}
-	eventbus := m.HostByID(m.PlacementHost("eventbus"))
+	eventbus := m.HostByID(m.ComponentHost("eventbus"))
 	if eventbus.Name == "" {
-		return fmt.Errorf("config_invalid: placements must include eventbus")
+		return fmt.Errorf("config_invalid: deployments must include eventbus")
 	}
 	m.EventBus.PublicAddress = eventbus.Address
 	return nil

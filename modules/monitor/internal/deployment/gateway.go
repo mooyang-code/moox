@@ -1,4 +1,4 @@
-package placement
+package deployment
 
 import (
 	"context"
@@ -22,7 +22,7 @@ func (s *Syncer) syncGateways(ctx context.Context, snapshot Snapshot) error {
 	}
 	source, ok := s.source.(gatewaySource)
 	if !ok {
-		return fmt.Errorf("placement discovery source cannot read host gateway status")
+		return fmt.Errorf("deployment discovery source cannot read host gateway status")
 	}
 	observations := make([]domain.GatewayObservation, 0, len(snapshot.Hosts))
 	var failures []error

@@ -54,7 +54,7 @@ func TestLocalDirectoryVersionsPBJSONAndNoVerificationKeys(t *testing.T) {
 			require.NotContains(t, string(body), string(key.Secret))
 		}
 	}
-	// A placement withdrawal changes the directory on the very next request.
+	// A deployment withdrawal changes the directory on the very next request.
 	second, err := snapshot.Build("storage", testsnapshot.New(t, "storage"))
 	require.NoError(t, err)
 	state.Apply(second)

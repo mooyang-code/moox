@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
+	"github.com/mooyang-code/moox/modules/monitor/internal/deployment"
 	monitordoctor "github.com/mooyang-code/moox/modules/monitor/internal/doctor"
-	"github.com/mooyang-code/moox/modules/monitor/internal/placement"
 	"github.com/mooyang-code/moox/modules/monitor/internal/rpc"
 	monitorpb "github.com/mooyang-code/moox/modules/monitor/proto/monitorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -15,12 +15,14 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type doctorContextDeployments struct{ rows []*adminpb.ComponentPlacement }
+type doctorContextDeployments struct {
+	rows []*adminpb.ComponentDeployment
+}
 
-func (s doctorContextDeployments) Snapshot(context.Context) (placement.Snapshot, error) {
+func (s doctorContextDeployments) Snapshot(context.Context) (deployment.Snapshot, error) {
 	catalog, _ := servicecatalog.LoadEmbedded()
 	hosts := map[string]bool{}
-	snapshot := placement.Snapshot{Catalog: catalog, Placements: s.rows}
+	snapshot := deployment.Snapshot{Catalog: catalog, Deployments: s.rows}
 	for _, row := range s.rows {
 		if !hosts[row.GetHostId()] {
 			hosts[row.GetHostId()] = true
@@ -31,7 +33,7 @@ func (s doctorContextDeployments) Snapshot(context.Context) (placement.Snapshot,
 }
 
 func TestDoctorContextEndToEndDisabledAndDeferredFacts(t *testing.T) {
-	builder := &monitordoctor.Builder{Deployments: doctorContextDeployments{rows: []*adminpb.ComponentPlacement{
+	builder := &monitordoctor.Builder{Deployments: doctorContextDeployments{rows: []*adminpb.ComponentDeployment{
 		{ComponentId: "factor-mgr", HostId: "node-a", Status: "disabled"},
 		{ComponentId: "storage-primary", HostId: "node-a", Status: "enabled"},
 	}}}

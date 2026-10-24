@@ -72,10 +72,10 @@ func TestRenderProducesAManifestTheCLIAccepts(t *testing.T) {
 		t.Fatalf("主机 = %+v", manifest.HostCatalog)
 	}
 	// 角色到组件的映射与示例模板的放置一致。
-	if !slices.Equal(manifest.Placements["control"], []string{"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"}) ||
-		!slices.Equal(manifest.Placements["storage"], []string{"storage-primary", "storage-node", "storage-view", "access"}) ||
-		!slices.Equal(manifest.Placements["overseas"], []string{"trade", "access", "egress-proxy", "collector-stream"}) {
-		t.Fatalf("放置 = %+v", manifest.Placements)
+	if !slices.Equal(manifest.Deployments["control"], []string{"console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"}) ||
+		!slices.Equal(manifest.Deployments["storage"], []string{"storage-primary", "storage-node", "storage-view", "access"}) ||
+		!slices.Equal(manifest.Deployments["overseas"], []string{"trade", "access", "egress-proxy", "collector-stream"}) {
+		t.Fatalf("放置 = %+v", manifest.Deployments)
 	}
 	if manifest.EventBus.PublicAddress != "198.51.100.10" {
 		t.Fatalf("EventBus 地址应由 eventbus 所在主机推出，实际 %q", manifest.EventBus.PublicAddress)
@@ -137,8 +137,8 @@ func TestOverseasServerIsOptional(t *testing.T) {
 	request := sampleRequest()
 	request.Servers.Overseas = nil
 	manifest := render(t, request)
-	if _, ok := manifest.HostCatalog["overseas"]; ok || manifest.PlacementHost("trade") != "" || manifest.PlacementHost("egress-proxy") != "" {
-		t.Fatalf("不配海外服务器时不应有交易与出口代理: %+v", manifest.Placements)
+	if _, ok := manifest.HostCatalog["overseas"]; ok || manifest.ComponentHost("trade") != "" || manifest.ComponentHost("egress-proxy") != "" {
+		t.Fatalf("不配海外服务器时不应有交易与出口代理: %+v", manifest.Deployments)
 	}
 	request.Servers.Control = &Server{SharedWith: RoleOverseas}
 	if err := renderErr(request, nil); err == nil || !strings.Contains(err.Error(), "没有配置海外服务器") {
@@ -155,8 +155,8 @@ func TestControlCanShareAServerWithStorageOrOverseas(t *testing.T) {
 		if len(manifest.HostCatalog) != 2 {
 			t.Fatalf("%s：应只有两台主机，实际 %v", target.role, manifest.HostCatalog)
 		}
-		if manifest.PlacementHost("admin") != target.host || manifest.PlacementHost("console-proxy") != target.host {
-			t.Fatalf("%s：管理台组件应放到 %s，实际 %+v", target.role, target.host, manifest.Placements)
+		if manifest.ComponentHost("admin") != target.host || manifest.ComponentHost("console-proxy") != target.host {
+			t.Fatalf("%s：管理台组件应放到 %s，实际 %+v", target.role, target.host, manifest.Deployments)
 		}
 		if manifest.HostCatalog[target.host].TLSMode != "auto" {
 			t.Fatalf("%s：管理台的 HTTPS 入口应跟着搬过去，证书模式 %q", target.role, manifest.HostCatalog[target.host].TLSMode)

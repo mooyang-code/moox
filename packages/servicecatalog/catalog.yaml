@@ -315,12 +315,12 @@ components:
         methods:
           - GetCatalog
           - ListHosts
-          - ListPlacements
+          - ListDeployments
           - GetHostRoutes
           - GetDirectory
           - SetHostStatus
-          - SetPlacementStatus
-          - SyncHostPlacements
+          - SetDeploymentStatus
+          - SyncHostDeployments
           - DeleteHost
           - InspectEventBus
           - DeleteEventBusConsumers
@@ -328,7 +328,7 @@ components:
         read_only_methods:
           - GetCatalog
           - ListHosts
-          - ListPlacements
+          - ListDeployments
           - GetHostRoutes
           - GetDirectory
           - InspectEventBus
@@ -336,23 +336,23 @@ components:
           - methods:
               - GetCatalog
               - ListHosts
-              - ListPlacements
+              - ListDeployments
               - GetHostRoutes
               - GetDirectory
               - SetHostStatus
-              - SetPlacementStatus
+              - SetDeploymentStatus
             callers:
               - console
               - moox-cli
           - methods:
-              - SyncHostPlacements
+              - SyncHostDeployments
               - DeleteHost
             callers:
               - moox-cli
           - methods:
               - GetCatalog
               - ListHosts
-              - ListPlacements
+              - ListDeployments
               - GetHostRoutes
             callers:
               - monitor

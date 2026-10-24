@@ -26,7 +26,7 @@ func alertObject(spaceID, checkID string, facts observability.Overview) *pb.Heal
 	object.Kind = parts[0]
 	if len(parts) == 3 {
 		switch parts[0] {
-		case "placement", "reporter":
+		case "deployment", "reporter":
 			object.Type, object.HostId, object.ComponentId = "component", parts[1], parts[2]
 		case "console-page":
 			object.HostId, object.ComponentId = parts[1], parts[2]

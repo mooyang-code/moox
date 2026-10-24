@@ -33,7 +33,7 @@ type ControlOptions struct {
 }
 
 // BootstrapControl promotes the original core software to every control
-// placement. It does not rerun the core-only request or replace its receipt.
+// deployment. It does not rerun the core-only request or replace its receipt.
 func BootstrapControl(ctx context.Context, snapshot *setupconfig.Snapshot, options ControlOptions) (CoreResult, error) {
 	return bootstrap(ctx, snapshot, options.CoreOptions, &options)
 }
@@ -129,19 +129,19 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 			}
 			tls["mode"] = mode
 		case "monitor":
-			placement, err := mapping("placement")
+			deployment, err := mapping("deployment")
 			if err != nil {
 				return nil, err
 			}
 			// 控制主机上的组件由同机的 Monitor 探测，直接连回环地址（公网地址从本机常常访问不通）。
-			placement["local_host_id"] = control.Name
+			deployment["local_host_id"] = control.Name
 			if slices.Contains(components, "console-proxy") {
 				endpoint := (&url.URL{Scheme: "https", Host: net.JoinHostPort(control.Address, "9527"), Path: "/"}).String()
 				target := map[string]string{"url": endpoint, "connect_address": net.JoinHostPort(control.Address, "9527"), "server_name": control.Address, "trust_mode": mode}
 				if mode == "internal" {
 					target["ca_file"], target["ca_baseline"] = "../../console-proxy/certs/caddy/root.crt", "../../console-proxy/data/caddy/internal-ca.sha256"
 				}
-				placement["https"] = map[string]any{"console-proxy": target}
+				deployment["https"] = map[string]any{"console-proxy": target}
 			}
 			metrics, err := mapping("metrics")
 			if err != nil {
@@ -153,9 +153,9 @@ func controlConfigurations(snapshot *setupconfig.Snapshot, directory string, com
 			if err != nil {
 				return nil, err
 			}
-			node := snapshot.Manifest.PlacementHost("storage-node")
+			node := snapshot.Manifest.ComponentHost("storage-node")
 			if node == "" {
-				return nil, errors.New("Collector requires a registered Storage node placement")
+				return nil, errors.New("Collector requires a registered Storage node deployment")
 			}
 			// 与 unit.go 里 Storage 节点的固定 ID 一致（元数据种子也使用该 ID）。
 			storage["result_data_node_id"] = storageNodeID
@@ -225,7 +225,7 @@ func checkControlDependencyRecords(snapshot *setupconfig.Snapshot, root *os.Root
 			found = true
 		}
 		if !found {
-			return errors.New("control upgrade is missing a required Storage or egress placement")
+			return errors.New("control upgrade is missing a required Storage or egress deployment")
 		}
 	}
 	return nil
@@ -304,7 +304,7 @@ func checkControlDependencies(ctx context.Context, snapshot *setupconfig.Snapsho
 			}
 		}
 		if !found {
-			return errors.New("full control is missing a required Storage or egress placement")
+			return errors.New("full control is missing a required Storage or egress deployment")
 		}
 	}
 	return nil

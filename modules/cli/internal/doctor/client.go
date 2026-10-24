@@ -62,15 +62,15 @@ func (c *Client) GetHealthOverview(ctx context.Context, spaceID string) (*monito
 	return rsp.GetOverview(), nil
 }
 
-// Placement contains catalog-derived health information for one canonical component.
-type Placement struct {
+// Deployment contains catalog-derived health information for one canonical component.
+type Deployment struct {
 	HostID        string
 	ComponentID   string
 	Status        string
 	HealthAddress string
 }
 
-func (c *Client) ListPlacements(ctx context.Context, hostID string) ([]Placement, error) {
+func (c *Client) ListDeployments(ctx context.Context, hostID string) ([]Deployment, error) {
 	if c == nil || c.gateway == nil {
 		return nil, fmt.Errorf("SysDeploy client is unavailable")
 	}
@@ -94,27 +94,27 @@ func (c *Client) ListPlacements(ctx context.Context, hostID string) ([]Placement
 	}
 	const pageSize = 100
 	const maxRows = 500
-	rows := make([]Placement, 0)
+	rows := make([]Deployment, 0)
 	seen := map[string]bool{}
 	for page := uint32(1); page <= maxRows/pageSize; page++ {
-		rsp := &adminpb.ListPlacementsRsp{}
-		err := c.gateway.Invoke(ctx, "trpc.moox.ops.SysDeploy", "ListPlacements", &adminpb.ListPlacementsReq{HostId: hostID, Page: &commonpb.Page{Page: page, Size: pageSize}}, rsp)
+		rsp := &adminpb.ListDeploymentsRsp{}
+		err := c.gateway.Invoke(ctx, "trpc.moox.ops.SysDeploy", "ListDeployments", &adminpb.ListDeploymentsReq{HostId: hostID, Page: &commonpb.Page{Page: page, Size: pageSize}}, rsp)
 		if err != nil {
 			return nil, err
 		}
 		if rsp.GetRetInfo() == nil || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
-			return nil, fmt.Errorf("SysDeploy placements query failed")
+			return nil, fmt.Errorf("SysDeploy deployments query failed")
 		}
-		if len(rows)+len(rsp.GetPlacements()) > maxRows {
+		if len(rows)+len(rsp.GetDeployments()) > maxRows {
 			return nil, fmt.Errorf("SysDeploy response exceeds %d rows", maxRows)
 		}
-		for _, placement := range rsp.GetPlacements() {
-			component, exists := catalog.Component(placement.GetComponentId())
-			if placement.GetHostId() != hostID || !exists || seen[placement.GetComponentId()] || (placement.GetStatus() != servicecatalog.Enabled && placement.GetStatus() != servicecatalog.Disabled) {
-				return nil, fmt.Errorf("SysDeploy placements inventory is inconsistent")
+		for _, deployment := range rsp.GetDeployments() {
+			component, exists := catalog.Component(deployment.GetComponentId())
+			if deployment.GetHostId() != hostID || !exists || seen[deployment.GetComponentId()] || (deployment.GetStatus() != servicecatalog.Enabled && deployment.GetStatus() != servicecatalog.Disabled) {
+				return nil, fmt.Errorf("SysDeploy deployments inventory is inconsistent")
 			}
-			seen[placement.GetComponentId()] = true
-			status := placement.GetStatus()
+			seen[deployment.GetComponentId()] = true
+			status := deployment.GetStatus()
 			if host.GetStatus() != servicecatalog.Enabled {
 				status = servicecatalog.Disabled
 			}
@@ -126,7 +126,7 @@ func (c *Client) ListPlacements(ctx context.Context, hostID string) ([]Placement
 			if component.Health.Port != 0 {
 				healthAddress = "http://" + net.JoinHostPort(address, strconv.Itoa(component.Health.Port))
 			}
-			rows = append(rows, Placement{HostID: hostID, ComponentID: component.ID, Status: status, HealthAddress: healthAddress})
+			rows = append(rows, Deployment{HostID: hostID, ComponentID: component.ID, Status: status, HealthAddress: healthAddress})
 		}
 		if !rsp.GetPageResult().GetHasMore() {
 			return rows, nil

@@ -548,7 +548,7 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 	require.NoError(t, factorConsumer.Close())
 }
 
-func TestEventBusURLFollowsRemotePlacementAndRejectsDisabledHost(t *testing.T) {
+func TestEventBusURLFollowsRemoteDeploymentAndRejectsDisabledHost(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "admin.db")), &gorm.Config{})
 	require.NoError(t, err)
 	defer closeAdminCLIDB(db)
@@ -564,5 +564,5 @@ func TestEventBusURLFollowsRemotePlacementAndRejectsDisabledHost(t *testing.T) {
 	require.Equal(t, "tls://bus.example.test:4222", address)
 	require.NoError(t, dao.SetHostStatus(t.Context(), "bus", "disabled"))
 	_, err = eventBusNATSURL(db, "control")
-	require.ErrorContains(t, err, "active EventBus placement not found")
+	require.ErrorContains(t, err, "active EventBus deployment not found")
 }

@@ -178,7 +178,7 @@ BEGIN
     UPDATE t_hosts SET c_mtime = CURRENT_TIMESTAMP WHERE c_host_id = OLD.c_host_id;
 END;
 
-CREATE TABLE IF NOT EXISTS t_placements (
+CREATE TABLE IF NOT EXISTS t_deployments (
     c_host_id TEXT NOT NULL,
     c_component_id TEXT NOT NULL,
     c_status TEXT NOT NULL DEFAULT 'enabled',
@@ -189,14 +189,14 @@ CREATE TABLE IF NOT EXISTS t_placements (
     PRIMARY KEY (c_host_id, c_component_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_placements_component ON t_placements (c_component_id);
+CREATE INDEX IF NOT EXISTS idx_t_deployments_component ON t_deployments (c_component_id);
 
-CREATE TRIGGER IF NOT EXISTS trg_t_placements_mtime
-AFTER UPDATE ON t_placements
+CREATE TRIGGER IF NOT EXISTS trg_t_deployments_mtime
+AFTER UPDATE ON t_deployments
 FOR EACH ROW
 WHEN NEW.c_mtime = OLD.c_mtime
 BEGIN
-    UPDATE t_placements SET c_mtime = CURRENT_TIMESTAMP
+    UPDATE t_deployments SET c_mtime = CURRENT_TIMESTAMP
     WHERE c_host_id = OLD.c_host_id AND c_component_id = OLD.c_component_id;
 END;
 

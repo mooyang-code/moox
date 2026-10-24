@@ -88,7 +88,7 @@ func renderTopology(request *Request) []string {
 	if request.factorEngine != "" {
 		out = append(out, "# 因子引擎所在的机器：local 表示运行 moox-cli 的这台电脑。", "[factor_engine]", "host = "+tomlString(request.factorEngine), "")
 	}
-	out = append(out, "# host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。", "[placements]")
+	out = append(out, "# host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。", "[deployments]")
 	for _, host := range request.hosts {
 		quoted := make([]string, len(host.Components))
 		for i, id := range host.Components {

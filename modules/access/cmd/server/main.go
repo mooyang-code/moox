@@ -117,7 +117,7 @@ func run(ctx context.Context, cfg config.Config) error {
 }
 
 // Readiness follows the client's verified directory. Control-plane downtime
-// does not withdraw valid cached routes; missing service placements do.
+// does not withdraw valid cached routes; missing service deployments do.
 func updateReady(state *healthz.State, gateway *gatewayclient.Client) {
 	directory := gateway.Directory()
 	catalog, err := servicecatalog.LoadEmbedded()

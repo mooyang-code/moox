@@ -90,7 +90,7 @@ var roleCatalog = []Role{
 	},
 }
 
-// loadRoles 从示例模板读出各角色的组件放置、主机 ID 与默认值，避免在代码里再抄一份。
+// loadRoles 从示例模板读出各角色的组件部署、主机 ID 与默认值，避免在代码里再抄一份。
 func loadRoles() ([]Role, error) {
 	var example struct {
 		Hosts map[string]struct {
@@ -99,7 +99,7 @@ func loadRoles() ([]Role, error) {
 				Username string `toml:"username"`
 			} `toml:"ssh"`
 		} `toml:"hosts"`
-		Placements map[string][]string `toml:"placements"`
+		Deployments map[string][]string `toml:"deployments"`
 	}
 	if _, err := toml.Decode(exampleTemplate, &example); err != nil {
 		return nil, err
@@ -108,7 +108,7 @@ func loadRoles() ([]Role, error) {
 	for i, role := range roleCatalog {
 		if role.exampleHost != "" {
 			host, ok := example.Hosts[role.exampleHost]
-			placed, placedOK := example.Placements[role.exampleHost]
+			placed, placedOK := example.Deployments[role.exampleHost]
 			if !ok || !placedOK {
 				return nil, fmt.Errorf("示例配置里没有主机 %s 或它的放置，请同步模板", role.exampleHost)
 			}

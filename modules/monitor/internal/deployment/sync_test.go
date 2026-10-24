@@ -1,4 +1,4 @@
-package placement
+package deployment
 
 import (
 	"context"
@@ -32,7 +32,7 @@ func testSnapshot(t *testing.T) Snapshot {
 			{HostId: "control", Address: "control.example.test", Region: "ap-guangzhou", Status: "enabled"},
 			{HostId: "storage", Address: "storage.example.test", PrivateAddress: "2001:db8::2", Region: "ap-guangzhou", Status: "enabled"},
 		},
-		Placements: []*adminpb.ComponentPlacement{
+		Deployments: []*adminpb.ComponentDeployment{
 			{HostId: "control", ComponentId: "console-proxy", Status: "enabled"},
 			{HostId: "storage", ComponentId: "storage-primary", Status: "enabled"},
 		},
@@ -47,10 +47,10 @@ func TestChecksUseCatalogHealthAndPreserveProxyLoopback(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	require.Len(t, checks, 3)
-	require.Equal(t, "placement:control:console-proxy", checks[0].CheckID)
+	require.Equal(t, "deployment:control:console-proxy", checks[0].CheckID)
 	require.Equal(t, "http://127.0.0.1:19528/readyz", checks[0].URL)
 	require.Equal(t, `"ready":true`, checks[0].BodyContains)
-	require.Equal(t, domain.CheckSourcePlacement, checks[0].Source)
+	require.Equal(t, domain.CheckSourceDeployment, checks[0].Source)
 	require.Equal(t, "console-page:control:console-proxy", checks[1].CheckID)
 	require.Equal(t, "127.0.0.1:9527", checks[1].ConnectAddress)
 	require.Equal(t, "200-399", checks[1].ExpectedStatus)
@@ -67,7 +67,7 @@ func TestChecksUseCatalogHealthAndPreserveProxyLoopback(t *testing.T) {
 	require.Len(t, checks, 2, "health:none does not create an unknown probe")
 }
 
-func TestSyncPlacementLifecyclePreservesHistoryAndRetiresAlerts(t *testing.T) {
+func TestSyncDeploymentLifecyclePreservesHistoryAndRetiresAlerts(t *testing.T) {
 	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, manager.Close()) })
@@ -94,7 +94,7 @@ func TestSyncPlacementLifecyclePreservesHistoryAndRetiresAlerts(t *testing.T) {
 		if disableHost {
 			source.snapshot.Hosts[0].Status = "disabled"
 		} else {
-			source.snapshot.Placements[0].Status = "disabled"
+			source.snapshot.Deployments[0].Status = "disabled"
 		}
 		_, err = syncer.Sync(t.Context())
 		require.NoError(t, err)
@@ -103,7 +103,7 @@ func TestSyncPlacementLifecyclePreservesHistoryAndRetiresAlerts(t *testing.T) {
 		require.False(t, check.Enabled)
 		_, err = repos.Alerts.GetRule(t.Context(), "", "default:"+id)
 		require.ErrorIs(t, err, gorm.ErrRecordNotFound)
-		source.snapshot.Hosts[0].Status, source.snapshot.Placements[0].Status = "enabled", "enabled"
+		source.snapshot.Hosts[0].Status, source.snapshot.Deployments[0].Status = "enabled", "enabled"
 		_, err = syncer.Sync(t.Context())
 		require.NoError(t, err)
 		check, err = repos.Checks.Get(t.Context(), "", id)
@@ -122,12 +122,12 @@ func TestSyncPlacementLifecyclePreservesHistoryAndRetiresAlerts(t *testing.T) {
 	require.NoError(t, topologyErr)
 	require.Equal(t, previousTopology, preservedTopology)
 	source.err = nil
-	source.snapshot.Placements[0].ComponentId = "unknown-component"
+	source.snapshot.Deployments[0].ComponentId = "unknown-component"
 	_, err = syncer.Sync(t.Context())
 	require.Error(t, err)
 	_, err = repos.Checks.Get(t.Context(), "", id)
 	require.NoError(t, err)
-	source.snapshot.Placements = source.snapshot.Placements[1:]
+	source.snapshot.Deployments = source.snapshot.Deployments[1:]
 	_, err = syncer.Sync(t.Context())
 	require.NoError(t, err)
 	_, err = repos.Checks.Get(t.Context(), "", id)
@@ -158,7 +158,7 @@ func TestSyncRollsBackAllDefinitionsOnOwnershipCollision(t *testing.T) {
 
 func TestChecksProbeLocalHostThroughLoopback(t *testing.T) {
 	snapshot := testSnapshot(t)
-	snapshot.Placements = append(snapshot.Placements, &adminpb.ComponentPlacement{HostId: "control", ComponentId: "admin", Status: "enabled"})
+	snapshot.Deployments = append(snapshot.Deployments, &adminpb.ComponentDeployment{HostId: "control", ComponentId: "admin", Status: "enabled"})
 	addressOf := func(checks []domain.Check, checkID string) string {
 		for _, check := range checks {
 			if check.CheckID == checkID {
@@ -171,19 +171,19 @@ func TestChecksProbeLocalHostThroughLoopback(t *testing.T) {
 
 	checks, err := Checks(snapshot, testHTTPS())
 	require.NoError(t, err)
-	require.Contains(t, addressOf(checks, "placement:control:admin"), "control.example.test", "没有指定本机时按对外地址探测")
-	require.Contains(t, addressOf(checks, "placement:storage:storage-primary"), "storage.example.test", "不知道本机地域时不用私网地址")
+	require.Contains(t, addressOf(checks, "deployment:control:admin"), "control.example.test", "没有指定本机时按对外地址探测")
+	require.Contains(t, addressOf(checks, "deployment:storage:storage-primary"), "storage.example.test", "不知道本机地域时不用私网地址")
 
 	snapshot.LocalHostID = "control"
 	checks, err = Checks(snapshot, testHTTPS())
 	require.NoError(t, err)
-	require.Contains(t, addressOf(checks, "placement:control:admin"), "127.0.0.1:", "Monitor 所在主机上的组件连回环地址")
-	require.Contains(t, addressOf(checks, "placement:storage:storage-primary"), "2001:db8::2", "同地域的其他主机按私网地址探测")
+	require.Contains(t, addressOf(checks, "deployment:control:admin"), "127.0.0.1:", "Monitor 所在主机上的组件连回环地址")
+	require.Contains(t, addressOf(checks, "deployment:storage:storage-primary"), "2001:db8::2", "同地域的其他主机按私网地址探测")
 
 	snapshot.Hosts[1].Region = "ap-hongkong"
 	checks, err = Checks(snapshot, testHTTPS())
 	require.NoError(t, err)
-	require.Contains(t, addressOf(checks, "placement:storage:storage-primary"), "storage.example.test", "跨地域私网不通，按公网地址探测")
+	require.Contains(t, addressOf(checks, "deployment:storage:storage-primary"), "storage.example.test", "跨地域私网不通，按公网地址探测")
 }
 
 // 只能出站的主机：健康检查使用合成主机名，由探测器经 control 中转连接。
@@ -191,11 +191,11 @@ func TestChecksProbeOutboundHostThroughRelay(t *testing.T) {
 	snapshot := testSnapshot(t)
 	snapshot.LocalHostID = "control"
 	snapshot.Hosts = append(snapshot.Hosts, &adminpb.DeploymentHost{HostId: "home", Address: "192.168.0.103", Status: "enabled", Reachability: "outbound"})
-	snapshot.Placements = append(snapshot.Placements, &adminpb.ComponentPlacement{HostId: "home", ComponentId: "host-agent", Status: "enabled"})
+	snapshot.Deployments = append(snapshot.Deployments, &adminpb.ComponentDeployment{HostId: "home", ComponentId: "host-agent", Status: "enabled"})
 	checks, err := Checks(snapshot, testHTTPS())
 	require.NoError(t, err)
 	for _, check := range checks {
-		if check.CheckID == "placement:home:host-agent" {
+		if check.CheckID == "deployment:home:host-agent" {
 			require.Contains(t, check.URL, "//home.moox-relay:")
 			return
 		}

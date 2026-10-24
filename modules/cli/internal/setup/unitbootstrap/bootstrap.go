@@ -139,7 +139,7 @@ func Run(ctx context.Context, request Request) (result Result, returnErr error) 
 			control := request.Topology.Hosts[slices.IndexFunc(request.Topology.Hosts, func(h hostbundle.Host) bool { return h.HostID == j.HostID })]
 			for _, id := range previous.Components {
 				if slices.Contains(control.Components, id) && !slices.Contains(input.components, id) {
-					return errors.New("bootstrap cannot narrow an installed control placement to a core subset")
+					return errors.New("bootstrap cannot narrow an installed control deployment to a core subset")
 				}
 			}
 		}

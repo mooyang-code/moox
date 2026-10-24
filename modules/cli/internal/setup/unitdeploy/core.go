@@ -112,7 +112,7 @@ func loadIdentity(root *os.Root, host setupconfig.Host, deployment string) (runt
 func coreRequest(manifest setupconfig.Manifest, identity runtimeIdentity, host, control unitpackage.Result) unitbootstrap.Request {
 	topology := hostbundle.Topology{Version: 1, ControlHostID: manifest.ControlHost().Name}
 	for _, h := range manifest.Hosts() {
-		components := slices.Clone(manifest.Placements[h.Name])
+		components := slices.Clone(manifest.Deployments[h.Name])
 		slices.Sort(components)
 		topology.Hosts = append(topology.Hosts, hostbundle.Host{HostID: h.Name, Address: h.Address, PrivateAddress: h.PrivateAddress, Region: h.Region, Components: components, Reachability: h.Reachability, Description: h.Label})
 	}

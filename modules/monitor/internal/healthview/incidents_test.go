@@ -36,7 +36,7 @@ func TestIncidentsPairTriggerAndRecoveryWithinWindow(t *testing.T) {
 		}
 		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: string(rune('a' + seq)), SpaceID: space, RuleID: "default:" + check, CheckID: check, EventType: eventType, Status: "firing", Payload: payload, CreatedAt: at}))
 	}
-	reporter, strategy, webHost, fetch := "reporter:control:collector", "dataset:strategy:s1:1m", "placement:control:web-host", "market_fetch:scf_timer"
+	reporter, strategy, webHost, fetch := "reporter:control:collector", "dataset:strategy:s1:1m", "deployment:control:web-host", "market_fetch:scf_timer"
 	presence := hostmetrics.PresenceCheckID("AGENT01")
 	require.NoError(t, repos.Checks.Create(ctx, &domain.Check{SpaceID: "mooxsys", CheckID: reporter, Name: "行情采集服务（control 节点）· 运行指标上报", Kind: domain.CheckKindExternal, Enabled: true}))
 	require.NoError(t, repos.Checks.Create(ctx, &domain.Check{CheckID: webHost, Name: "控制台前端（control）· 健康检查", Kind: domain.CheckKindHTTP, Enabled: true}))
@@ -73,9 +73,9 @@ func TestIncidentsPairTriggerAndRecoveryWithinWindow(t *testing.T) {
 		byCheck[item.Object.Kind] = item
 		order = append(order, item.Object.Kind)
 	}
-	require.Equal(t, []string{"placement", "market_fetch", "presence", "reporter", "dataset"}, order, "newest trigger first")
+	require.Equal(t, []string{"deployment", "market_fetch", "presence", "reporter", "dataset"}, order, "newest trigger first")
 
-	item := byCheck["placement"]
+	item := byCheck["deployment"]
 	require.True(t, item.Active)
 	require.Empty(t, item.ResolvedAt)
 	require.Equal(t, "控制台前端（control）· 健康检查", item.Title)

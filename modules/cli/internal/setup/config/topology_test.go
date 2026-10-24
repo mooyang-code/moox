@@ -31,18 +31,18 @@ ssh = { username = "ubuntu" }
 	require.NoError(t, catalog.ValidateTopology(topology))
 	for _, id := range []string{"control", "compute"} {
 		for _, component := range []string{"host-gateway", "host-agent"} {
-			assert.Contains(t, topology.Placements, servicecatalog.Placement{HostID: id, ComponentID: component, Status: servicecatalog.Enabled})
+			assert.Contains(t, topology.Deployments, servicecatalog.Deployment{HostID: id, ComponentID: component, Status: servicecatalog.Enabled})
 		}
 	}
-	// A role follows the placement, and SSH data follows the host definition.
-	m.Placements["compute"] = []string{"storage-primary", "storage-view"}
+	// A role follows the deployment, and SSH data follows the host definition.
+	m.Deployments["compute"] = []string{"storage-primary", "storage-view"}
 	assert.Equal(t, "compute", m.StorageHost().Name)
 	assert.Equal(t, m.StorageHost(), m.ViewHost())
 	host := m.HostCatalog["compute"]
 	host.Address = "192.0.2.12"
 	m.HostCatalog["compute"] = host
 	assert.Equal(t, "192.0.2.12", m.StorageHost().Address)
-	delete(m.Placements, "compute")
+	delete(m.Deployments, "compute")
 	assert.False(t, m.HasStorageHost())
 	assert.Empty(t, m.HostByID("missing"))
 	// Projections are values; they cannot silently mutate the source of truth.

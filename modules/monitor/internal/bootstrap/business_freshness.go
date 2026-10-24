@@ -533,8 +533,8 @@ func serviceDeploymentExpected(ctx context.Context, topology *store.TopologyRepo
 	for _, host := range snapshot.Hosts {
 		hosts[host.HostID] = host.Status == "enabled"
 	}
-	for _, placement := range snapshot.Placements {
-		if placement.ComponentID == componentID && placement.Status == "enabled" && hosts[placement.HostID] {
+	for _, deployment := range snapshot.Deployments {
+		if deployment.ComponentID == componentID && deployment.Status == "enabled" && hosts[deployment.HostID] {
 			return true, nil
 		}
 	}

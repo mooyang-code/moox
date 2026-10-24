@@ -50,16 +50,16 @@ func ReachabilityName(value string) string {
 // HostGatewayRemotePort 是主机网关的跨主机 TLS 端口。
 const HostGatewayRemotePort = 11003
 
-type Placement struct {
+type Deployment struct {
 	HostID      string `json:"host_id"`
 	ComponentID string `json:"component_id"`
 	Status      string `json:"status"`
 }
 
 type Topology struct {
-	ControlHostID string      `json:"control_host_id"`
-	Hosts         []Host      `json:"hosts"`
-	Placements    []Placement `json:"placements"`
+	ControlHostID string       `json:"control_host_id"`
+	Hosts         []Host       `json:"hosts"`
+	Deployments   []Deployment `json:"deployments"`
 }
 
 type DirectoryHost struct {
@@ -145,20 +145,20 @@ func (c Catalog) ValidateTopology(t Topology) error {
 	if control.Reachability == ReachabilityOutbound {
 		return fmt.Errorf("control host must be directly reachable")
 	}
-	placements := map[string]Placement{}
+	deployments := map[string]Deployment{}
 	singles := map[string]string{}
 	ports := map[string]map[int]string{}
-	for _, p := range t.Placements {
+	for _, p := range t.Deployments {
 		_, hostExists := hosts[p.HostID]
 		component, ok := c.Component(p.ComponentID)
 		if !hostExists || !ok || !validStatus(p.Status) {
-			return fmt.Errorf("invalid placement %s/%s", p.HostID, p.ComponentID)
+			return fmt.Errorf("invalid deployment %s/%s", p.HostID, p.ComponentID)
 		}
 		key := p.HostID + "/" + p.ComponentID
-		if _, exists := placements[key]; exists {
-			return fmt.Errorf("duplicate placement %s", key)
+		if _, exists := deployments[key]; exists {
+			return fmt.Errorf("duplicate deployment %s", key)
 		}
-		placements[key] = p
+		deployments[key] = p
 		if component.Scope == ScopeControl && p.HostID != t.ControlHostID {
 			return fmt.Errorf("control component %q cannot be placed on %q", component.ID, p.HostID)
 		}
@@ -186,7 +186,7 @@ func (c Catalog) ValidateTopology(t Topology) error {
 	}
 	for _, component := range c.Components {
 		if component.Protected && component.Scope == ScopeControl {
-			if _, ok := placements[t.ControlHostID+"/"+component.ID]; !ok {
+			if _, ok := deployments[t.ControlHostID+"/"+component.ID]; !ok {
 				return fmt.Errorf("protected component %q is missing on control", component.ID)
 			}
 		}
@@ -194,8 +194,8 @@ func (c Catalog) ValidateTopology(t Topology) error {
 			continue
 		}
 		for id := range hosts {
-			if _, ok := placements[id+"/"+component.ID]; !ok {
-				return fmt.Errorf("host %q is missing automatic placement %q", id, component.ID)
+			if _, ok := deployments[id+"/"+component.ID]; !ok {
+				return fmt.Errorf("host %q is missing automatic deployment %q", id, component.ID)
 			}
 		}
 	}
@@ -240,14 +240,14 @@ func (c Catalog) Compile(t Topology, hostID string) (CompiledHost, error) {
 	}
 	compiled := CompiledHost{HostID: hostID, Disabled: current.Status != Enabled, Routes: []Route{}, VerificationCallers: []string{}}
 	verification := map[string]bool{}
-	for _, placement := range t.Placements {
-		if placement.Status != Enabled || hosts[placement.HostID].Status != Enabled {
+	for _, deployment := range t.Deployments {
+		if deployment.Status != Enabled || hosts[deployment.HostID].Status != Enabled {
 			continue
 		}
-		component, _ := c.Component(placement.ComponentID)
+		component, _ := c.Component(deployment.ComponentID)
 		for _, service := range component.Services {
-			directory.Services[service.Path] = append(directory.Services[service.Path], placement.HostID)
-			if placement.HostID != hostID {
+			directory.Services[service.Path] = append(directory.Services[service.Path], deployment.HostID)
+			if deployment.HostID != hostID {
 				continue
 			}
 			for _, method := range service.Methods {
@@ -311,11 +311,11 @@ func (c Catalog) relayTargets(t Topology, hosts map[string]Host) []RelayTarget {
 		}
 		gateway := map[string]bool{}
 		health := map[int]bool{}
-		for _, placement := range t.Placements {
-			if placement.HostID != host.ID || placement.Status != Enabled {
+		for _, deployment := range t.Deployments {
+			if deployment.HostID != host.ID || deployment.Status != Enabled {
 				continue
 			}
-			component, _ := c.Component(placement.ComponentID)
+			component, _ := c.Component(deployment.ComponentID)
 			if component.Health.Port > 0 {
 				health[component.Health.Port] = true
 			}

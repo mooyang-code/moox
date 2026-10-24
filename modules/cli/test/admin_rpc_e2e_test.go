@@ -79,12 +79,12 @@ func TestAdminClientsUseSharedSSHNativeGateway(t *testing.T) {
 	applied, err := setup.Apply(t.Context(), snapshot)
 	require.NoError(t, err)
 	require.Equal(t, "created", applied.Action)
-	require.NoError(t, setup.SyncHostPlacements(t.Context(), snapshot, snapshot.Manifest.ControlHost().Name))
+	require.NoError(t, setup.SyncHostDeployments(t.Context(), snapshot, snapshot.Manifest.ControlHost().Name))
 	doctor := doctorcli.New(gateway)
 	doctorContext, err := doctor.GetDoctorContext(t.Context(), &monitorpb.GetDoctorContextReq{NodeId: "control"})
 	require.NoError(t, err)
 	require.Equal(t, "fixture-doctor-checksum", doctorContext.GetManifestChecksum())
-	rows, err := doctor.ListPlacements(t.Context(), "control")
+	rows, err := doctor.ListDeployments(t.Context(), "control")
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	var space adminpb.CreateSpaceRsp
@@ -125,8 +125,8 @@ func (w *adminRPCWire) ApplySetup(_ context.Context, req *adminpb.ApplySetupReq)
 func (w *adminRPCWire) ListHosts(_ context.Context, req *adminpb.ListDeploymentHostsReq) (*adminpb.ListDeploymentHostsRsp, error) {
 	return &adminpb.ListDeploymentHostsRsp{RetInfo: &adminpb.RetInfo{}, Hosts: []*adminpb.DeploymentHost{{HostId: "control", Address: "127.0.0.1", Status: "enabled"}}}, nil
 }
-func (w *adminRPCWire) ListPlacements(_ context.Context, req *adminpb.ListPlacementsReq) (*adminpb.ListPlacementsRsp, error) {
-	return &adminpb.ListPlacementsRsp{RetInfo: &adminpb.RetInfo{}, Placements: []*adminpb.ComponentPlacement{{HostId: "control", ComponentId: "admin", Status: "enabled"}}}, nil
+func (w *adminRPCWire) ListDeployments(_ context.Context, req *adminpb.ListDeploymentsReq) (*adminpb.ListDeploymentsRsp, error) {
+	return &adminpb.ListDeploymentsRsp{RetInfo: &adminpb.RetInfo{}, Deployments: []*adminpb.ComponentDeployment{{HostId: "control", ComponentId: "admin", Status: "enabled"}}}, nil
 }
 
 func (w *adminRPCWire) CreateSpace(_ context.Context, req *adminpb.CreateSpaceReq) (*adminpb.CreateSpaceRsp, error) {
@@ -140,9 +140,9 @@ func (*adminRPCWire) GetDoctorContext(_ context.Context, req *monitorpb.GetDocto
 	return &monitorpb.GetDoctorContextRsp{RetInfo: &commonpb.RetInfo{}, ManifestChecksum: "fixture-doctor-checksum", GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano)}, nil
 }
 
-func (w *adminRPCWire) SyncHostPlacements(_ context.Context, req *adminpb.SyncHostPlacementsReq) (*adminpb.SyncHostPlacementsRsp, error) {
+func (w *adminRPCWire) SyncHostDeployments(_ context.Context, req *adminpb.SyncHostDeploymentsReq) (*adminpb.SyncHostDeploymentsRsp, error) {
 	if req.GetHostId() == "" || len(req.GetComponentIds()) == 0 {
-		return &adminpb.SyncHostPlacementsRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_INVALID_PARAM}}, nil
+		return &adminpb.SyncHostDeploymentsRsp{RetInfo: &adminpb.RetInfo{Code: adminpb.ErrorCode_INVALID_PARAM}}, nil
 	}
-	return &adminpb.SyncHostPlacementsRsp{RetInfo: &adminpb.RetInfo{}}, nil
+	return &adminpb.SyncHostDeploymentsRsp{RetInfo: &adminpb.RetInfo{}}, nil
 }

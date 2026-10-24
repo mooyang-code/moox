@@ -67,7 +67,7 @@ func newSetupCommand(deps setupDeps) *cobra.Command {
 		newSetupInitCommand(deps),
 		newSetupFactorsCommand(deps),
 		newSetupHostsCommand(deps),
-		newSetupSyncPlacementsCommand(deps),
+		newSetupSyncDeploymentsCommand(deps),
 		newSetupRemoveHostCommand(deps),
 		newSetupValidateCommand(deps),
 		newSetupTrustHostCommand(deps),
@@ -449,7 +449,7 @@ func newSetupRenderRuntimeConfigCommand(deps setupDeps) *cobra.Command {
 			}
 			tradeConsoleHost := ""
 			tradeConsolePort := 0
-			if tradeNode := snapshot.Manifest.PlacementHost("trade"); tradeNode != "" {
+			if tradeNode := snapshot.Manifest.ComponentHost("trade"); tradeNode != "" {
 				tradeHost, tradeErr := findSetupHost(snapshot.Manifest, tradeNode)
 				if tradeErr != nil {
 					return tradeErr

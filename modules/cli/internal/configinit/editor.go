@@ -429,7 +429,7 @@ func describe(m setupconfig.Manifest, encrypted bool, where string) Overview {
 		if host.Region != "" {
 			server.Region = regionName(host.Region)
 		}
-		placed := m.Placements[id]
+		placed := m.Deployments[id]
 		for _, use := range []struct {
 			label      string
 			components []string

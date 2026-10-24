@@ -170,7 +170,7 @@ func TestPageIsServedWithStrictHeadersAndNoSecrets(t *testing.T) {
 		}
 	}
 	// 用户不需要理解底层细节：页面里不出现文件名和路径。
-	for _, detail := range []string{h.output, "moox.toml", "placements"} {
+	for _, detail := range []string{h.output, "moox.toml", "deployments"} {
 		if strings.Contains(body, detail) {
 			t.Fatalf("页面不应出现底层细节 %q", detail)
 		}

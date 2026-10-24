@@ -154,7 +154,7 @@ func (r *CheckRepository) ListDue(ctx context.Context, now time.Time, limit int)
 	}
 	var candidates []domain.Check
 	err := r.db.WithContext(ctx).
-		Where("c_enabled = 1 AND c_kind IN ? AND c_source IN ?", []string{domain.CheckKindHTTP, domain.CheckKindTCP}, []string{domain.CheckSourcePlacement, domain.CheckSourceObservability}).
+		Where("c_enabled = 1 AND c_kind IN ? AND c_source IN ?", []string{domain.CheckKindHTTP, domain.CheckKindTCP}, []string{domain.CheckSourceDeployment, domain.CheckSourceObservability}).
 		Order("c_next_check_at ASC, c_id ASC").
 		Find(&candidates).Error
 	if err != nil {

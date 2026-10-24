@@ -70,11 +70,11 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	require.Equal(t, hex.EncodeToString(sum[:]), catalog.GetSha256())
 	_, err = servicecatalog.Decode(bytes.NewBufferString(catalog.GetCatalogYaml()))
 	require.NoError(t, err)
-	for _, spec := range []*pb.SyncHostPlacementsReq{
+	for _, spec := range []*pb.SyncHostDeploymentsReq{
 		{HostId: "control", Address: "control.example.test", ComponentIds: []string{"admin", "console-proxy", "web-host"}},
 		{HostId: "storage", Address: "storage.example.test", ComponentIds: []string{"storage-primary"}},
 	} {
-		response, err := proxy.SyncHostPlacements(ctx, spec)
+		response, err := proxy.SyncHostDeployments(ctx, spec)
 		check(response.GetRetInfo(), err)
 	}
 	keyStore, err := keys.NewStore(db, master)
@@ -93,9 +93,9 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	check(page.GetRetInfo(), err)
 	require.Equal(t, "storage", page.GetHosts()[0].GetHostId())
 	require.False(t, page.GetPageResult().GetHasMore())
-	placements, err := proxy.ListPlacements(ctx, &pb.ListPlacementsReq{HostId: "storage"})
-	check(placements.GetRetInfo(), err)
-	require.Len(t, placements.GetPlacements(), 3, "two host components are maintained automatically")
+	deployments, err := proxy.ListDeployments(ctx, &pb.ListDeploymentsReq{HostId: "storage"})
+	check(deployments.GetRetInfo(), err)
+	require.Len(t, deployments.GetDeployments(), 3, "two host components are maintained automatically")
 	directory, err := proxy.GetDirectory(ctx, &pb.GetDirectoryReq{})
 	check(directory.GetRetInfo(), err)
 	require.Contains(t, directory.GetDirectory().GetServices(), "trpc.moox.storage.Metadata")
@@ -126,8 +126,8 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	routes, err = proxy.GetHostRoutes(ctx, &pb.GetHostRoutesReq{HostId: "unknown"})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NOT_FOUND, routes.GetRetInfo().GetCode())
-	placement, err := proxy.SetPlacementStatus(ctx, &pb.SetPlacementStatusReq{HostId: "storage", ComponentId: "storage-primary", Status: "disabled"})
-	check(placement.GetRetInfo(), err)
+	deployment, err := proxy.SetDeploymentStatus(ctx, &pb.SetDeploymentStatusReq{HostId: "storage", ComponentId: "storage-primary", Status: "disabled"})
+	check(deployment.GetRetInfo(), err)
 	directory, err = proxy.GetDirectory(ctx, &pb.GetDirectoryReq{})
 	check(directory.GetRetInfo(), err)
 	require.NotContains(t, directory.GetDirectory().GetServices(), "trpc.moox.storage.Metadata")
@@ -138,8 +138,8 @@ func TestHostTopologyAPIOverRealTRPC(t *testing.T) {
 	require.NotContains(t, directory.GetDirectory().GetHosts(), "storage")
 	refused, err := proxy.DeleteHost(ctx, &pb.DeleteDeploymentHostReq{HostId: "storage"})
 	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_INVALID_PARAM, refused.GetRetInfo().GetCode(), "disabled business placements still prevent deletion")
-	synced, err := proxy.SyncHostPlacements(ctx, &pb.SyncHostPlacementsReq{HostId: "storage", Address: "storage.example.test"})
+	require.Equal(t, pb.ErrorCode_INVALID_PARAM, refused.GetRetInfo().GetCode(), "disabled business deployments still prevent deletion")
+	synced, err := proxy.SyncHostDeployments(ctx, &pb.SyncHostDeploymentsReq{HostId: "storage", Address: "storage.example.test"})
 	check(synced.GetRetInfo(), err)
 	deleted, err := proxy.DeleteHost(ctx, &pb.DeleteDeploymentHostReq{HostId: "storage"})
 	check(deleted.GetRetInfo(), err)

@@ -210,7 +210,7 @@ enabled = false
 # cos_bucket = "moox-scf-guangzhou-<app_id>"
 
 # 函数在地域 VPC 内运行，通过同地域主机的私网地址访问 Access：
-# 该地域必须有一台 [hosts.<id>] 配置了 region 与 private_address、并在 [placements] 里带 access 组件。
+# 该地域必须有一台 [hosts.<id>] 配置了 region 与 private_address、并在 [deployments] 里带 access 组件。
 # [scf_plan.regions.ap-hongkong]
 # vpc_id = "vpc-xxxxxxxx"
 # subnet_id = "subnet-xxxxxxxx"
@@ -254,7 +254,7 @@ provider = "tencent"
 ssh = { port = 22, username = "ubuntu" }
 
 # 因子机：运行因子引擎，可以是局域网里的机器。
-# 它只登记登录方式，不加入 MooX 部署拓扑；如需同时部署组件，在 placements 中显式声明。
+# 它只登记登录方式，不加入 MooX 部署拓扑；如需同时部署组件，在 deployments 中显式声明。
 [hosts.factor]
 label = "因子机"
 address = "192.0.2.30"
@@ -265,7 +265,7 @@ ssh = { port = 22, username = "builder" }
 host = "factor"
 
 # host-gateway 与 host-agent 由代码为每台部署主机自动补齐，无需手工列出。
-[placements]
+[deployments]
 control = ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"]
 storage = ["storage-primary", "storage-node", "storage-view", "access"]
 # collector-stream 接收交易所 WS 推送并提供本地执行端，必须放在能直连交易所的海外机；首次安装用 setup deploy-unit --profile collector-stream。
