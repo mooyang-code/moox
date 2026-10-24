@@ -37,7 +37,7 @@
       <a-table-column title="输出列" :width="170" :ellipsis="true" :tooltip="true">
         <template #cell="{ record }">{{ record.factor.outputs.join(", ") || "-" }}</template>
       </a-table-column>
-      <a-table-column title="回看周期" :width="90" align="right">
+      <a-table-column title="最大回看周期" :width="110" align="right">
         <template #cell="{ record }">{{ record.factor.lookback_periods }}</template>
       </a-table-column>
       <a-table-column title="使用情况" :width="240">

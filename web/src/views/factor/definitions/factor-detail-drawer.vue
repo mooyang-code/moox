@@ -16,7 +16,7 @@
           <a-descriptions-item label="展示名">{{ factor.name }}</a-descriptions-item>
           <a-descriptions-item label="类型">{{ factorTypeLabel(factor.factor_type) }}</a-descriptions-item>
           <a-descriptions-item label="分类">{{ categoryName(props.categories ?? [], factor.category_id) }}</a-descriptions-item>
-          <a-descriptions-item label="回看周期数">{{ factor.lookback_periods }}</a-descriptions-item>
+          <a-descriptions-item label="最大回看周期">{{ factor.lookback_periods }}</a-descriptions-item>
           <a-descriptions-item v-if="factor.factor_type === 'cross_section'" label="允许部分对象" :span="2">
             {{ factor.allow_partial_universe ? "是" : "否" }}
           </a-descriptions-item>
