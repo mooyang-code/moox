@@ -100,7 +100,7 @@ type EventBusConfig struct {
 type ComputeConfig struct {
 	// Workers 是一次程序执行的并行度，默认 min(4, 核数)。
 	Workers int `yaml:"workers"`
-	// MaxMemory 是一个计算分块（实时周期视为 1 个周期的分块）估算峰值内存的上限，例如 "1GiB"、"512MiB"，默认 1GiB。
+	// MaxMemory 是一个计算分块（实时周期视为 1 个周期的分块）估算峰值内存的上限，例如 "1GiB"、"512MiB"，默认 4GiB（默认因子 EMA 回看 5 万根，500 多个标的一期约需 1.1GB）。
 	MaxMemory ByteSize `yaml:"max_memory"`
 }
 
@@ -127,8 +127,8 @@ type WindowConfig struct {
 // MaxLookbackLimit 是回看数量 N 的绝对上限，与表达式引擎的回看上限一致。
 const MaxLookbackLimit = 100000
 
-// DefaultWindowBars 是回看数量 N 的默认值。
-const DefaultWindowBars = 10000
+// DefaultWindowBars 是回看数量 N 的默认值：要装得下默认因子 EMA 的最大回看 49995 根。
+const DefaultWindowBars = 50000
 
 // LookbackFor 返回数据源的回看数量 N：先看按数据源的覆盖，再取全局默认。
 func (c WindowConfig) LookbackFor(spaceID, datasetID, freq string) int {
@@ -254,7 +254,7 @@ func Default() *Config {
 		CatalogSync:   CatalogSyncConfig{Interval: time.Minute, Offset: 45 * time.Second, StateFile: "./data/engine/catalog.json"},
 		Storage:       StorageConfig{AuthSecretFile: "./secrets/storage-primary-auth.secret"},
 		EventBus:      EventBusConfig{FetchMaxWait: 10 * time.Second},
-		Compute:       ComputeConfig{Workers: min(4, runtime.NumCPU()), MaxMemory: 1 << 30},
+		Compute:       ComputeConfig{Workers: min(4, runtime.NumCPU()), MaxMemory: 4 << 30},
 		SeriesStore:   SeriesStoreConfig{Dir: "./data/seriesstore", BlockCache: 512 << 20},
 		Sync:          SyncConfig{Workers: 4, BatchSubjects: 100, FollowInterval: 30 * time.Second},
 		Pipeline:      PipelineConfig{WriteBatchRows: 1000, PeriodBudgetMin: time.Minute, PeriodBudgetMax: 15 * time.Minute},

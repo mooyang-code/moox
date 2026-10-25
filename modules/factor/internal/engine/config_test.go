@@ -44,7 +44,7 @@ func TestEngineConfigDefaultsAndPaths(t *testing.T) {
 	require.Equal(t, "assigned-factor-engine-47", cfg.GatewayClient.KeyID)
 	require.Equal(t, filepath.Join(root, "secrets/storage-primary-auth.secret"), cfg.Storage.AuthSecretFile)
 	require.Equal(t, 500, cfg.Recalc.ChunkPeriods)
-	require.Equal(t, ByteSize(1<<30), cfg.Compute.MaxMemory)
+	require.Equal(t, ByteSize(4<<30), cfg.Compute.MaxMemory)
 }
 
 func TestEngineConfigRejectsDatabaseSection(t *testing.T) {
@@ -140,5 +140,5 @@ func TestWindowLookbackConfig(t *testing.T) {
 
 	cfg := Default()
 	cfg.applyDefaults()
-	require.Equal(t, DefaultWindowBars, cfg.Window.Lookback, "没写 window.lookback 时默认 1 万")
+	require.Equal(t, DefaultWindowBars, cfg.Window.Lookback, "没写 window.lookback 时默认 5 万")
 }

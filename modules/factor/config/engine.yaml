@@ -33,10 +33,10 @@ eventbus:
   fetch_max_wait: 10s
 
 # 表达式执行器：workers 是一次程序执行的并行度（默认 min(4, 核数)）；
-# max_memory 是一个计算分块估算峰值内存的上限（默认 1GiB）。
+# max_memory 是一个计算分块估算峰值内存的上限（默认 4GiB；默认因子 EMA 回看 5 万根，500 多个标的一期约需 1.1GB）。
 compute:
   workers: 4
-  max_memory: 1GiB
+  max_memory: 4GiB
 
 # 本地时序存储（Pebble，数据永不删除）：K 线先同步到这里，实时计算、补算、重算都从本地读，Storage 只补增量和修正。
 seriesstore:
@@ -46,6 +46,7 @@ seriesstore:
 # 内存列式滑动窗口：每个数据源一份，保留集合内最大回看根数。max_memory 是所有窗口常驻内存的上限，
 # 新启用的集合会超出时拒绝启用；0 表示不限制。初始化（moox-cli setup）按探测到的内存写入。
 window:
+  lookback: 50000               # 回看数量 N：集合内因子的回看都不能超过它（默认因子 EMA 最长 49995 根）
   max_memory: 0
   headroom: 0                   # 每个序列数组的余量根数，0 取窗口长度的 1/4（至少 16）
 
