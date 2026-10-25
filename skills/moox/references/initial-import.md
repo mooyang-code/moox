@@ -88,7 +88,8 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline backfill-retry  --file
 env -u HTTP_PROXY -u HTTPS_PROXY moox-cli collector kline check --deep --file ./moox.toml --space-id <空间> --dataset-id <数据集> --from <末根+1期> --to <现在>
 ```
 
-`check` 必须是 `missing: 0`。用一两个标的 `data rows export` 数一下 `[末根+1期, 现在)` 的行数是否等于应有根数。
+`check` 必须是 `missing: 0`，但**新数据集的采集计划生效点是创建当天，补采段在生效点之前时 `expected` 为 0，这时 `missing: 0` 不能说明任何事**，以行数为准：
+用几个标的 `data rows export`（`--page-size` 大于应有根数）数一下 `[末根+1期, 实时起点)` 的行数是否等于应有根数（按 5m 每天 288 根算）。
 
 ## 6. 传文件到因子机（rsync）
 
@@ -170,6 +171,24 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor unmute --file ./moox.toml
 
 建因子集或策略实例。**启用不会自动补算历史**：因子从引擎同步到新目录之后的周期开始计算（目录每分钟第 45 秒同步一次，
 本地窗口完整，同步之后的第一期就能算出所有标的）；启用到同步之间收盘的周期不会补算，策略私有因子集预热期间跳过的周期会由引擎的跳过账本自动补上，其余的需要时手动补算。
+
+- **新建的共享因子集（不属于策略实例）要在因子机手动走生命周期，否则引擎里一直是“未初始化”，收到周期事件也不算**
+  （策略实例的私有因子集由引擎自动 init、start，不用手动）。环境变量同第 7 步，`<集合>` 是因子集 ID：
+
+  ```bash
+  ssh <用户>@<因子机>
+  cd <导入目录>
+  set -a; . /data/moox/factor-engine/secrets/health-auth.env; set +a
+  E="--endpoint http://127.0.0.1:11417 --set <集合>"
+  ./moox-cli lifecycle init $E      # 载入本地窗口，未初始化 → 就绪
+  ./moox-cli lifecycle start $E     # 进入预热，因子已经在算
+  # 等第一个周期算完：引擎日志出现 factor_period_done（rows 等于标的数），再确认
+  ./moox-cli lifecycle confirm $E   # 预热 → 运行
+  ./moox-cli lifecycle status --endpoint http://127.0.0.1:11417   # 该集合应为“运行”
+  ```
+
+  `init` 之前先看 `lifecycle status`，该集合应是“未初始化”；init 会读取本地窗口，数据源有 5 万根历史时耗时可达一两分钟。
+- 共享因子集的成员只用定义里的默认参数；需要固定的非默认参数（例如 `ema(close, 20, 50000)` 的预热根数）写在因子定义的表达式里，不要指望成员参数。
 
 - 策略 `min_age_bars` 按绑定的 **K 线 View** 判断，不看私有因子结果 View。
 - 用到 `bars[-1]` 因子列的规则，启用后的第一期会以 `previous_version_unknown` 整期跳过，第二期起正常（新实例没有持仓，不会触发退出）。
