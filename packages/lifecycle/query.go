@@ -22,6 +22,19 @@ func (c *Controller) Stage(ref Ref) Stage {
 	return StageUninitialized
 }
 
+// StageSince 返回对象进入当前阶段的时间（对象不存在时为零值）。
+func (c *Controller) StageSince(ref Ref) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ref == (Ref{}) {
+		return c.self.Since
+	}
+	if r := c.objects[ref.key()]; r != nil {
+		return r.Since
+	}
+	return time.Time{}
+}
+
 // moduleOpen 报告模块自身是否放行实时计算：没有控制意图，且自身阶段是就绪、预热或运行。
 // 自身未初始化、未就绪、暂停、恢复追赶、重置、故障时一律不放行，不沿用「本来就不计算」的隐含假设。
 // 调用方持有锁。
@@ -224,7 +237,8 @@ func (c *Controller) Recover(ctx context.Context) {
 	c.AutoAdvance(ctx)
 }
 
-// AutoAdvance 把 AutoStart 钩子认定的对象从未初始化推进到预热：未初始化先 init，就绪再 start。
+// AutoAdvance 把 AutoStart 钩子认定的对象从未初始化推进到预热：未初始化先 init，就绪再 start；
+// 预热中的对象在 AutoConfirm 钩子认可时自动确认进入运行。
 // 其他阶段（未就绪、预热、运行、暂停、恢复追赶、重置、故障）不动；命令被拒绝（模块重置中、等待重置后初始化、
 // 模块自身没有放行）时静默跳过，下一轮刷新再试。
 func (c *Controller) AutoAdvance(ctx context.Context) {
@@ -247,6 +261,11 @@ func (c *Controller) AutoAdvance(ctx context.Context) {
 		if c.Stage(ref) == StageReady {
 			if _, err := c.Command(ctx, CmdStart, ref); err != nil {
 				c.autoAdvanceFailed(ref, CmdStart, err)
+			}
+		}
+		if c.opts.Hooks.AutoConfirm != nil && c.Stage(ref) == StageWarming && c.opts.Hooks.AutoConfirm(ref, c.StageSince(ref)) {
+			if _, err := c.Command(ctx, CmdConfirm, ref); err != nil {
+				c.autoAdvanceFailed(ref, CmdConfirm, err)
 			}
 		}
 	}

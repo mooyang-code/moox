@@ -525,3 +525,45 @@ func TestAutoAdvanceWaitsForChecksAndInitErrors(t *testing.T) {
 	c2.AutoAdvance(ctx)
 	require.Equal(t, StageUninitialized, c2.Stage(set1), "初始化失败不推进，下一轮重试")
 }
+
+// AutoConfirm 认定的预热对象在周期刷新时自动确认进入运行；钩子拿到的是进入预热的时间。
+// 没有认定、已经暂停、检查失败的对象不会被确认。
+func TestAutoAdvanceConfirmsWarmingObjectsWhenHookAgrees(t *testing.T) {
+	ctx := context.Background()
+	f := newFake()
+	f.module = []Check{pass("本地存储")}
+	f.refs = []Ref{set1}
+	f.setObject(set1, pass("窗口"))
+	hooks := f.hooks()
+	hooks.AutoStart = func(Ref) bool { return true }
+	var asked []time.Time
+	agree := false
+	hooks.AutoConfirm = func(_ Ref, since time.Time) bool {
+		asked = append(asked, since)
+		return agree
+	}
+	c, err := New(Options{Module: "factor-engine", Hooks: hooks})
+	require.NoError(t, err)
+	c.Refresh(ctx)
+
+	c.AutoAdvance(ctx)
+	require.Equal(t, StageWarming, c.Stage(set1), "钩子不同意就停在预热")
+	require.NotEmpty(t, asked)
+	require.False(t, asked[0].IsZero())
+	require.Equal(t, c.StageSince(set1), asked[0], "钩子拿到的是进入预热的时间")
+
+	agree = true
+	c.AutoAdvance(ctx)
+	require.Equal(t, StageRunning, c.Stage(set1))
+
+	asked = nil
+	c.AutoAdvance(ctx)
+	require.Empty(t, asked, "已经是运行阶段，不再询问")
+
+	// 手动暂停的对象不会被确认，也不会被询问。
+	_, err = c.Execute(ctx, Request{Command: CmdPause, Ref: set1, By: "tester"})
+	require.NoError(t, err)
+	c.AutoAdvance(ctx)
+	require.Equal(t, StagePaused, c.Stage(set1))
+	require.Empty(t, asked)
+}

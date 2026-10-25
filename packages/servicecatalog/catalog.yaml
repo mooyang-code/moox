@@ -937,7 +937,6 @@ components:
         max_body_bytes: 4194304
         methods:
           - CreateFactorSet
-          - UpdateFactorSet
           - SetFactorSetStatus
           - DeleteFactorSet
           - GetFactorSet
@@ -984,7 +983,6 @@ components:
         acl:
           - methods:
               - CreateFactorSet
-              - UpdateFactorSet
               - SetFactorSetStatus
               - DeleteFactorSet
               - GetFactorSet

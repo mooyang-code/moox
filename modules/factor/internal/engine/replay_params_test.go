@@ -68,3 +68,31 @@ func TestReplayStepAppliesRequestedParams(t *testing.T) {
 	require.Empty(t, step.RejectedParams)
 	require.Equal(t, 3.0, step.AppliedParams["fast"]["window"].Default)
 }
+
+// 共享任务的成员带固定参数：回放按固定值计算，因子帧里没有参数列，请求里逐期提交的参数被拒绝并沿用固定值。
+func TestReplayFixedParamMemberIgnoresRequestedParams(t *testing.T) {
+	def := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 6, default: 2}\noutputs:\n  m: ts_mean(close, window)\n")
+	set := uncompiled(domain.EngineSet{
+		Set: domain.FactorSet{SetID: "fset_replay", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m",
+			ResultDatasetID: "result_dataset_a", Status: domain.SetStatusEnabled},
+		Members: []domain.MemberDef{{Alias: "fixed4", Factor: def, Params: map[string]float64{"window": 4}}}, ResultReady: true,
+	})
+	m, _ := newReplayManagerWithSet(t, set)
+	ctx := context.Background()
+	_, _, err := m.Open(ctx, ReplayOpenRequest{ReplayID: "fixed", SetID: "fset_replay", From: rt0.Add(14 * time.Minute).Format(time.RFC3339), To: rt0.Add(17 * time.Minute).Format(time.RFC3339)})
+	require.NoError(t, err)
+	at := rt0.Add(15 * time.Minute).Format(time.RFC3339)
+
+	step, _, err := m.Step(ctx, ReplayStepRequest{ReplayID: "fixed", Period: at})
+	require.NoError(t, err)
+	a := step.Subjects["A"].Factors["fixed4"]
+	require.InDelta(t, 113.5, a["fixed4_m"], 1e-9, "窗口 4：(112+113+114+115)/4")
+	require.NotContains(t, a, "fixed4__window", "固定参数成员不写参数列")
+
+	step, _, err = m.Step(ctx, ReplayStepRequest{ReplayID: "fixed", Period: at,
+		Params: map[string]domain.ParamSnapshot{"fixed4": {"window": {Default: 2}}}})
+	require.NoError(t, err)
+	require.Len(t, step.RejectedParams, 1)
+	require.Contains(t, step.RejectedParams[0].Reason, "固定参数")
+	require.InDelta(t, 113.5, step.Subjects["A"].Factors["fixed4"]["fixed4_m"], 1e-9, "仍按固定值计算")
+}

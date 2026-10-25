@@ -79,7 +79,7 @@ func (c *RPCClient) EnsureInstanceFactorSet(ctx context.Context, request Instanc
 		return InstanceFactorSet{}, errors.New("Factor 客户端未配置")
 	}
 	req := &factorpb.EnsureInstanceFactorSetReq{InstanceId: request.InstanceID, SpaceId: request.SpaceID,
-		SourceDatasetId: request.SourceDatasetID, Freq: request.Freq, SubjectMode: "all"}
+		SourceDatasetId: request.SourceDatasetID, Freq: request.Freq}
 	for _, member := range request.Members {
 		req.Members = append(req.Members, &factorpb.InstanceSetMember{MemberAlias: member.Alias, FactorId: member.FactorID})
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
 	"github.com/mooyang-code/moox/modules/factor/internal/localdata"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
@@ -32,6 +33,7 @@ func (r *Runtime) newLifecycle() (*lifecycle.Controller, error) {
 			Objects:     r.lifecycleObjects,
 			Init:        r.initSet,
 			AutoStart:   r.autoStartSet,
+			AutoConfirm: r.autoConfirmSet,
 			Catchup:     r.catchupHook,
 			Reset:       r.resetSpec(),
 			OnChange: func(ref lifecycle.Ref, from, to lifecycle.Stage, reason string) {
@@ -142,14 +144,54 @@ func (r *Runtime) initSet(ctx context.Context, ref lifecycle.Ref) error {
 	return r.preload.PrepareSet(ctx, ref.ID)
 }
 
-// autoStartSet 报告集合是否随创建自动 init、start：策略实例的私有因子集（有拥有者）没有人会逐个执行生命周期命令，
-// 实例启用时它被建立，就该直接开始预热计算；共享的计算任务仍由用户按流程 init、start、confirm。
+// autoStartSet 报告集合是否随创建自动 init、start：目录里的计算任务没有人会逐个执行生命周期命令，
+// 建好就该直接开始预热计算（策略实例的私有因子集在实例启用时建立，同样如此）。
 func (r *Runtime) autoStartSet(ref lifecycle.Ref) bool {
 	if ref.Kind != factorSetKind {
 		return false
 	}
+	_, lookup := r.catalog.SetByID(ref.ID)
+	return lookup == SetFound
+}
+
+// autoConfirmSet 报告预热中的计算任务能否自动确认进入运行：只对非专属任务（专属任务的预热阶段有“策略对预热实例发影子目标”的语义，
+// 不自动确认）。证据只放在引擎内存里：任务进入预热之后，有一期所有启用成员都完整算完（没有失败、没有预热中的标的）、
+// 写入了结果行，且这一期的成员清单与当前目录一致。成员变化、再次进入预热、引擎重启都会使证据作废，
+// 代价至多是晚一个周期转为运行；因子计算在预热阶段本来就是完整的。
+func (r *Runtime) autoConfirmSet(ref lifecycle.Ref, since time.Time) bool {
+	if ref.Kind != factorSetKind {
+		return false
+	}
 	set, lookup := r.catalog.SetByID(ref.ID)
-	return lookup == SetFound && set.Set.OwnerInstanceID != ""
+	if lookup != SetFound || set.Set.OwnerInstanceID != "" {
+		return false
+	}
+	run, ok := r.runs.lastRecorded(ref.ID)
+	if !ok || !run.completedAt.After(since) {
+		return false
+	}
+	return runConfirmsWarmup(run, set.Members)
+}
+
+// runConfirmsWarmup 报告一期的结果能否作为预热完成的证据。
+func runConfirmsWarmup(run trackedRun, members []domain.MemberDef) bool {
+	if run.status != "complete" || run.warming > 0 || len(run.failedSubjects) > 0 || run.rows == 0 || len(members) == 0 {
+		return false
+	}
+	if len(run.factors) != len(members) {
+		return false
+	}
+	want := make(map[string]struct{}, len(members))
+	for _, member := range members {
+		want[member.Alias] = struct{}{}
+	}
+	for _, factor := range run.factors {
+		if _, ok := want[factor.MemberAlias]; !ok || factor.Status != "complete" || len(factor.FailedSubjects) > 0 || len(factor.GapSubjects) > 0 {
+			return false
+		}
+		delete(want, factor.MemberAlias)
+	}
+	return len(want) == 0
 }
 
 // lifecycleRoutes 是挂在健康端口上的生命周期接口（状态与命令）。
