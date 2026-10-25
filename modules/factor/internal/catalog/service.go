@@ -68,17 +68,11 @@ func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.Fa
 	if in.ResultDatasetID == "" {
 		in.ResultDatasetID = domain.ResultDatasetID(in.SetID)
 	}
-	if in.SubjectMode == "" {
-		in.SubjectMode = domain.SubjectModeAll
-	}
 	if in.Status == "" {
 		in.Status = domain.SetStatusPending
 	}
 	if in.Status != domain.SetStatusPending {
 		return domain.FactorSet{}, errors.New("new factor sets must start pending")
-	}
-	if in.Subjects == nil {
-		in.Subjects = []string{}
 	}
 	if err := domain.ValidateSet(in); err != nil {
 		return domain.FactorSet{}, err
@@ -135,35 +129,6 @@ func (s *Service) CreateSet(ctx context.Context, in domain.FactorSet) (domain.Fa
 	}
 	s.markReady(in.SetID, true)
 	return s.db.GetSet(ctx, in.SetID)
-}
-
-func (s *Service) UpdateSetSubjects(ctx context.Context, setID, mode string, subjects []string) (domain.FactorSet, error) {
-	unlock, err := s.locks.LockContext(ctx, strings.TrimSpace(setID))
-	if err != nil {
-		return domain.FactorSet{}, err
-	}
-	defer unlock()
-	set, err := s.db.GetSet(ctx, setID)
-	if err != nil {
-		return domain.FactorSet{}, err
-	}
-	if set.Status == domain.SetStatusPending {
-		return domain.FactorSet{}, errors.New("pending factor set cannot be updated")
-	}
-	if set.Status == domain.SetStatusDeleting {
-		return domain.FactorSet{}, errors.New("factor set purge is pending")
-	}
-	set.SubjectMode, set.Subjects = mode, append([]string(nil), subjects...)
-	if set.Subjects == nil {
-		set.Subjects = []string{}
-	}
-	if err := domain.ValidateSet(set); err != nil {
-		return domain.FactorSet{}, err
-	}
-	if err := s.db.UpdateSet(ctx, set); err != nil {
-		return domain.FactorSet{}, err
-	}
-	return s.db.GetSet(ctx, set.SetID)
 }
 
 func (s *Service) SetSetStatus(ctx context.Context, setID, status string) (domain.FactorSet, error) {
@@ -326,7 +291,11 @@ func (s *Service) UpdateFactor(ctx context.Context, in domain.FactorDef) (domain
 		if err != nil {
 			return domain.FactorDef{}, err
 		}
-		if _, err := s.validateMembership(ctx, set, domain.MemberDef{Alias: usage.MemberAlias, Factor: factor}); err != nil {
+		// 成员保存的固定参数在新定义上必须仍然合法（参数名仍声明、类型与范围仍成立）。
+		if err := domain.CheckMemberParams(factor, usage.Params); err != nil {
+			return domain.FactorDef{}, fmt.Errorf("factor set %q member %q 的固定参数不再合法：%w", usage.SetID, usage.MemberAlias, err)
+		}
+		if _, err := s.validateMembership(ctx, set, domain.MemberDef{Alias: usage.MemberAlias, Factor: factor, Params: usage.Params}); err != nil {
 			return domain.FactorDef{}, fmt.Errorf("factor set %q member %q: %w", usage.SetID, usage.MemberAlias, err)
 		}
 	}
@@ -403,14 +372,15 @@ func (s *Service) ListFactors(ctx context.Context, setID, status string) ([]doma
 	return infos, nil
 }
 
-// AddFactorToSet attaches a definition to a set as a disabled member under
-// alias (the definition id when empty) after validating it against the set's
-// source dataset. It neither adds result columns nor submits a backfill.
-func (s *Service) AddFactorToSet(ctx context.Context, setID, alias, factorID string) (domain.SetMember, error) {
+// AddFactorToSet attaches a definition to a set as a disabled member after
+// validating it against the set's source dataset. It neither adds result columns
+// nor submits a backfill.
+//
+// 非策略专属任务的成员带固定参数：params 给出的参数加上定义的默认值补全成完整参数并校验，之后不变；别名为空时按参数生成
+// （全默认沿用因子 ID）；同任务内同因子同参数只能有一个成员。策略专属任务的参数由写入方逐期提交，不能带固定参数，
+// 别名为空时取因子 ID。
+func (s *Service) AddFactorToSet(ctx context.Context, setID, alias, factorID string, params map[string]float64) (domain.SetMember, error) {
 	setID, alias, factorID = strings.TrimSpace(setID), strings.TrimSpace(alias), strings.TrimSpace(factorID)
-	if alias == "" {
-		alias = factorID
-	}
 	unlock, err := s.lockMemberContext(ctx, setID, factorID)
 	if err != nil {
 		return domain.SetMember{}, err
@@ -428,10 +398,14 @@ func (s *Service) AddFactorToSet(ctx context.Context, setID, alias, factorID str
 	if err != nil {
 		return domain.SetMember{}, err
 	}
-	if _, err := s.validateMembership(ctx, set, domain.MemberDef{Alias: alias, Factor: factor}); err != nil {
+	fixed, alias, err := s.resolveNewMember(ctx, set, factor, alias, params)
+	if err != nil {
 		return domain.SetMember{}, err
 	}
-	member, err := s.db.AddMember(ctx, setID, alias, factorID)
+	if _, err := s.validateMembership(ctx, set, domain.MemberDef{Alias: alias, Factor: factor, Params: fixed}); err != nil {
+		return domain.SetMember{}, err
+	}
+	member, err := s.db.AddMember(ctx, setID, alias, factorID, fixed)
 	if err != nil {
 		return domain.SetMember{}, err
 	}
@@ -499,7 +473,7 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, alias, statu
 	}
 	// Definitions may have been edited and source columns may have changed while
 	// the member was disabled, so enabling repeats the full membership checks.
-	enabling := domain.MemberDef{Alias: alias, Factor: factor}
+	enabling := domain.MemberDef{Alias: alias, Factor: factor, Params: member.Params}
 	members, err := s.validateMembership(ctx, set, enabling)
 	if err != nil {
 		return domain.SetMember{}, err
@@ -740,4 +714,48 @@ func replaceMember(members []domain.MemberDef, next domain.MemberDef) []domain.M
 		}
 	}
 	return append(members, next)
+}
+
+// resolveNewMember 决定新成员的固定参数与别名，并校验同任务内同因子同参数不重复。
+func (s *Service) resolveNewMember(ctx context.Context, set domain.FactorSet, factor domain.FactorDef, alias string, params map[string]float64) (map[string]float64, string, error) {
+	if set.OwnerInstanceID != "" {
+		if len(params) > 0 {
+			return nil, "", fmt.Errorf("策略实例专属任务的成员参数由实例逐期提交，不能带固定参数")
+		}
+		if alias == "" {
+			alias = factor.FactorID
+		}
+		return nil, alias, nil
+	}
+	fixed, err := domain.ResolveMemberParams(factor, params)
+	if err != nil {
+		return nil, "", err
+	}
+	if alias == "" {
+		if alias, err = domain.DeriveMemberAlias(factor, fixed); err != nil {
+			return nil, "", err
+		}
+	}
+	members, err := s.db.ListMembers(ctx, set.SetID, "")
+	if err != nil {
+		return nil, "", err
+	}
+	for _, existing := range members {
+		if existing.FactorID == factor.FactorID && sameParams(existing.Params, fixed) {
+			return nil, "", fmt.Errorf("%w: 任务 %q 里已有成员 %q 使用因子 %q 的同一组参数", store.ErrConflict, set.SetID, existing.MemberAlias, factor.FactorID)
+		}
+	}
+	return fixed, alias, nil
+}
+
+func sameParams(a, b map[string]float64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, value := range a {
+		if other, ok := b[name]; !ok || other != value {
+			return false
+		}
+	}
+	return true
 }

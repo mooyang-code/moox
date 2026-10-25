@@ -21,7 +21,6 @@ var _ factorpb.FactorMgrService = (*Service)(nil)
 // CatalogAPI is the catalog boundary exposed to FactorMgr.
 type CatalogAPI interface {
 	CreateSet(ctx context.Context, in domain.FactorSet) (domain.FactorSet, error)
-	UpdateSetSubjects(ctx context.Context, setID, mode string, subjects []string) (domain.FactorSet, error)
 	SetSetStatus(ctx context.Context, setID, status string) (domain.FactorSet, error)
 	DeleteSet(ctx context.Context, setID string, purge bool) error
 	GetSet(ctx context.Context, setID string) (domain.FactorSet, []domain.SetMember, error)
@@ -31,7 +30,7 @@ type CatalogAPI interface {
 	DeleteFactor(ctx context.Context, factorID string) error
 	GetFactor(ctx context.Context, factorID string) (domain.FactorInfo, error)
 	ListFactors(ctx context.Context, setID, status string) ([]domain.FactorInfo, error)
-	AddFactorToSet(ctx context.Context, setID, alias, factorID string) (domain.SetMember, error)
+	AddFactorToSet(ctx context.Context, setID, alias, factorID string, params map[string]float64) (domain.SetMember, error)
 	RemoveFactorFromSet(ctx context.Context, setID, alias string) error
 	SetFactorMemberStatus(ctx context.Context, setID, alias, status string) (domain.SetMember, error)
 	ListCategories(ctx context.Context) ([]domain.FactorCategory, error)
@@ -167,26 +166,6 @@ func (s *Service) CreateFactorSet(ctx context.Context, req *factorpb.CreateFacto
 		return &factorpb.CreateFactorSetRsp{RetInfo: inner(err)}, nil
 	}
 	return &factorpb.CreateFactorSetRsp{RetInfo: success(), FactorSet: factorwire.SetToPB(set)}, nil
-}
-
-func (s *Service) UpdateFactorSet(ctx context.Context, req *factorpb.UpdateFactorSetReq) (*factorpb.UpdateFactorSetRsp, error) {
-	if err := s.mutationAllowed(); err != nil {
-		return &factorpb.UpdateFactorSetRsp{RetInfo: unavailable(err)}, nil
-	}
-	if req == nil || strings.TrimSpace(req.GetSetId()) == "" {
-		return &factorpb.UpdateFactorSetRsp{RetInfo: invalid(fmt.Errorf("set_id is required"))}, nil
-	}
-	if err := s.checkSetSpace(ctx, req.GetSetId()); err != nil {
-		return &factorpb.UpdateFactorSetRsp{RetInfo: invalid(err)}, nil
-	}
-	if err := s.rejectOwnedSet(ctx, req.GetSetId()); err != nil {
-		return &factorpb.UpdateFactorSetRsp{RetInfo: invalid(err)}, nil
-	}
-	set, err := s.catalog.UpdateSetSubjects(ctx, req.GetSetId(), req.GetSubjectMode(), factorwire.CloneStrings(req.GetSubjects()))
-	if err != nil {
-		return &factorpb.UpdateFactorSetRsp{RetInfo: inner(err)}, nil
-	}
-	return &factorpb.UpdateFactorSetRsp{RetInfo: success(), FactorSet: factorwire.SetToPB(set)}, nil
 }
 
 func (s *Service) SetFactorSetStatus(ctx context.Context, req *factorpb.SetFactorSetStatusReq) (*factorpb.SetFactorSetStatusRsp, error) {
@@ -333,7 +312,7 @@ func (s *Service) AddFactorToSet(ctx context.Context, req *factorpb.AddFactorToS
 	if err := s.rejectOwnedSet(ctx, req.GetSetId()); err != nil {
 		return &factorpb.AddFactorToSetRsp{RetInfo: invalid(err)}, nil
 	}
-	member, err := s.catalog.AddFactorToSet(ctx, req.GetSetId(), req.GetMemberAlias(), req.GetFactorId())
+	member, err := s.catalog.AddFactorToSet(ctx, req.GetSetId(), req.GetMemberAlias(), req.GetFactorId(), factorwire.CloneParams(req.GetParams()))
 	if err != nil {
 		return &factorpb.AddFactorToSetRsp{RetInfo: inner(err)}, nil
 	}

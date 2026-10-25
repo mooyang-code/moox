@@ -17,14 +17,12 @@ type InstanceMember struct {
 	FactorID string
 }
 
-// InstanceSetRequest 描述策略实例的私有因子集（因子动态调参执行计划 2.3）：源数据集、频率、标的范围与声明的成员。
+// InstanceSetRequest 描述策略实例的私有因子集（因子动态调参执行计划 2.3）：源数据集、频率与声明的成员。
 type InstanceSetRequest struct {
 	InstanceID      string
 	SpaceID         string
 	SourceDatasetID string
 	Freq            string
-	SubjectMode     string
-	Subjects        []string
 	Members         []InstanceMember
 }
 
@@ -64,7 +62,7 @@ func (s *Service) EnsureInstanceSet(ctx context.Context, request InstanceSetRequ
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		set, err = s.CreateSet(ctx, domain.FactorSet{
 			SpaceID: request.SpaceID, SourceDatasetID: request.SourceDatasetID, Freq: request.Freq,
-			SubjectMode: request.SubjectMode, Subjects: request.Subjects, OwnerInstanceID: request.InstanceID,
+			OwnerInstanceID: request.InstanceID,
 		})
 		if err != nil {
 			return InstanceSet{}, fmt.Errorf("创建私有因子集：%w", err)
@@ -84,15 +82,6 @@ func (s *Service) EnsureInstanceSet(ctx context.Context, request InstanceSetRequ
 		}
 		if set.Status == domain.SetStatusDisabled {
 			if set, err = s.SetSetStatus(ctx, set.SetID, domain.SetStatusEnabled); err != nil {
-				return InstanceSet{}, err
-			}
-		}
-		mode := request.SubjectMode
-		if mode == "" {
-			mode = domain.SubjectModeAll
-		}
-		if mode != set.SubjectMode || !equalStrings(sortedCopy(request.Subjects), sortedCopy(set.Subjects)) {
-			if set, err = s.UpdateSetSubjects(ctx, set.SetID, mode, request.Subjects); err != nil {
 				return InstanceSet{}, err
 			}
 		}
@@ -129,7 +118,7 @@ func (s *Service) EnsureInstanceSet(ctx context.Context, request InstanceSetRequ
 	for _, alias := range aliases {
 		want := declared[alias]
 		if _, ok := present[alias]; !ok {
-			if _, err := s.AddFactorToSet(ctx, set.SetID, alias, want.FactorID); err != nil {
+			if _, err := s.AddFactorToSet(ctx, set.SetID, alias, want.FactorID, nil); err != nil {
 				return InstanceSet{}, fmt.Errorf("加入成员 %s：%w", alias, err)
 			}
 		}
@@ -192,10 +181,4 @@ func (s *Service) ReleaseInstanceSet(ctx context.Context, instanceID string) err
 		}
 	}
 	return s.DeleteSet(ctx, set.SetID, true)
-}
-
-func sortedCopy(values []string) []string {
-	out := append([]string(nil), values...)
-	sort.Strings(out)
-	return out
 }

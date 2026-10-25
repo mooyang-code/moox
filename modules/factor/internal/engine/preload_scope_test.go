@@ -9,25 +9,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 集合的标的列表变化后，预载要重新做（窗口释放被移出的标的）；只是顺序不同不算变化。
-func TestPreloaderRepreparesWhenSubjectListChanges(t *testing.T) {
+// 集合的数据源（源数据集）变了，预载要重新做；标的清单变化由 subjectsChanged 单独检测。
+func TestPreloaderRepreparesWhenSourceChanges(t *testing.T) {
 	p := newPreloader(nil, nil, nil, nil, nil)
-	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1", SubjectMode: domain.SubjectModeInclude, Subjects: []string{"A", "B"}}}
+	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m"}}
 	require.False(t, p.upToDate(set))
-	p.markPrepared(set, set.Set.Subjects)
+	p.markPrepared(set, nil)
 	require.True(t, p.upToDate(set))
 
-	reordered := set
-	reordered.Set.Subjects = []string{"B", "A"}
-	require.True(t, p.upToDate(reordered))
+	rebound := set
+	rebound.Set.SourceDatasetID = "dataset_b"
+	require.False(t, p.upToDate(rebound), "改绑数据源后要重新预载")
+}
 
-	removed := set
-	removed.Set.Subjects = []string{"A"}
-	require.False(t, p.upToDate(removed), "标的被移出后要重新预载")
+// 源数据集的标的清单变了（上市、下架），subjectsChanged 报告需要重新预载；只是顺序不同不算变化。
+func TestPreloaderDetectsSourceSubjectChanges(t *testing.T) {
+	source := &listSubjects{subjects: []string{"A", "B"}}
+	p := newPreloader(nil, source, nil, nil, nil)
+	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m"}}
+	p.markPrepared(set, source.subjects)
+	require.False(t, p.subjectsChanged(context.Background(), set))
 
-	all := domain.EngineSet{Set: domain.FactorSet{SetID: "s2", SubjectMode: domain.SubjectModeAll}}
-	p.markPrepared(all, nil)
-	require.True(t, p.upToDate(all))
+	source.subjects = []string{"B", "A"}
+	require.False(t, p.subjectsChanged(context.Background(), set), "顺序不同不算变化")
+
+	source.subjects = []string{"A"}
+	require.True(t, p.subjectsChanged(context.Background(), set), "标的被移出后要重新预载")
+}
+
+type listSubjects struct{ subjects []string }
+
+func (l *listSubjects) DatasetColumns(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+func (l *listSubjects) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	return append([]string(nil), l.subjects...), nil
 }
 
 type flakyPrepare struct{ fail bool }
@@ -48,21 +64,21 @@ func (o oneSet) SetByID(string) (domain.EngineSet, SetLookup) {
 	return o.set, SetFound
 }
 
-// 重新预载失败后，集合不能还当作已预载：后面按提示改回原来的标的列表时才会重新预载（审查意见 4）。
+// 重新预载失败后，集合不能还当作已预载：后面改回原来的数据源时才会重新预载（审查意见 4）。
 func TestFailedRepreparationClearsPreparedState(t *testing.T) {
-	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1", SubjectMode: domain.SubjectModeInclude, Subjects: []string{"A"}}}
+	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1"}}
 	data := &flakyPrepare{}
 	p := newPreloader(oneSet{set}, includeSubjects{}, data, nil, nil)
 	require.NoError(t, p.PrepareSet(context.Background(), "s1"))
 	require.True(t, p.Ready("s1"))
 
-	set.Set.Subjects = []string{"A", "G"}
+	set.Set.SourceDatasetID = "dataset_b" // 改绑数据源，需要重新预载
 	p.sets = oneSet{set}
 	data.fail = true
 	require.Error(t, p.PrepareSet(context.Background(), "s1"))
 	require.False(t, p.Ready("s1"), "预载失败，集合不再就绪")
 
-	set.Set.Subjects = []string{"A"} // 按提示移除零数据标的，回到原来的列表
+	set.Set.SourceDatasetID = "" // 回到原来的数据源
 	p.sets = oneSet{set}
 	data.fail = false
 	require.NoError(t, p.PrepareSet(context.Background(), "s1"))
@@ -98,7 +114,7 @@ func (m *mutableSubjects) ListDatasetSubjects(context.Context, string, string) (
 
 // 「全部标的」的集合：用户在数据集的标签里删除标的后，清单变了，下一轮预载要重新准备，窗口才会释放它（设计 6.2）。
 func TestPreloaderRepreparesWhenDatasetSubjectsChange(t *testing.T) {
-	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1", SubjectMode: domain.SubjectModeAll}}
+	set := domain.EngineSet{Set: domain.FactorSet{SetID: "s1"}}
 	source := &mutableSubjects{list: []string{"A", "B", "C"}}
 	data := &recordingPrepare{}
 	p := newPreloader(oneSet{set}, source, data, nil, nil)

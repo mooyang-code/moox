@@ -64,7 +64,7 @@ func TestLoadRecalcReadsFromLookbackStart(t *testing.T) {
 	require.Equal(t, start.Add(-19*time.Minute), got)
 
 	live, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
-		Set:     domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.SetStatusEnabled, SubjectMode: domain.SubjectModeAll},
+		Set:     domain.FactorSet{SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.SetStatusEnabled},
 		Members: domain.AsMembers(domain.FactorDef{FactorID: "short", LookbackPeriods: 5}, domain.FactorDef{FactorID: "long", LookbackPeriods: 20}), PeriodTime: start, Universe: []string{"BTC"}, CarryColumns: []string{"close"},
 	})
 	require.NoError(t, err)

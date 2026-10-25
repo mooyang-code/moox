@@ -56,7 +56,7 @@ func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	expected := intersectSubjects(input.Universe, input.Set)
+	expected := uniqueSorted(input.Universe)
 	upstreamFailed := intersectLists(expected, input.UpstreamFailed)
 	failedSet := make(map[string]struct{}, len(upstreamFailed))
 	for _, subject := range upstreamFailed {
@@ -75,17 +75,6 @@ func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
 		CarryColumns: uniqueSorted(input.CarryColumns), WriteCarry: true,
 		TriggerEventID: strings.TrimSpace(input.TriggerEventID), Budget: input.Budget,
 	}, nil
-}
-
-func intersectSubjects(universe []string, set domain.FactorSet) []string {
-	unique := uniqueSorted(universe)
-	out := make([]string, 0, len(unique))
-	for _, subject := range unique {
-		if set.InScope(subject) {
-			out = append(out, subject)
-		}
-	}
-	return out
 }
 
 func intersectLists(left, right []string) []string {

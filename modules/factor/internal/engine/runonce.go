@@ -88,7 +88,7 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	// 此时用默认参数写正式结果会覆盖按冻结参数算出的值，所以直接拒绝，请改用补算（持有租约的引擎按冻结记录执行）。
 	var intervals map[string][]domain.ParamInterval
 	for _, member := range members {
-		if len(domain.DefaultSnapshot(member.Factor)) == 0 {
+		if member.FixedParams() || len(domain.DefaultSnapshot(member.Factor)) == 0 {
 			continue
 		}
 		if managerErr != nil {
@@ -124,7 +124,7 @@ func selectSetMembers(set domain.EngineSet, aliases []string) ([]domain.MemberDe
 	for _, member := range set.Members {
 		members = append(members, domain.SetMember{
 			FactorSetMember: domain.FactorSetMember{SetID: set.Set.SetID, MemberAlias: member.Alias, FactorID: member.Factor.FactorID,
-				Status: domain.MemberStatusEnabled},
+				Status: domain.MemberStatusEnabled, Params: member.Params},
 			Factor: member.Factor,
 		})
 	}

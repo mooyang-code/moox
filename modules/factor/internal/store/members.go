@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -16,18 +17,46 @@ type memberRow struct {
 	FactorID          string    `gorm:"column:c_factor_id"`
 	Status            string    `gorm:"column:c_status"`
 	CarryAlertPeriods int       `gorm:"column:c_carry_alert_periods"`
+	Params            string    `gorm:"column:c_params"`
 	CreatedAt         time.Time `gorm:"column:c_ctime"`
 	UpdatedAt         time.Time `gorm:"column:c_mtime"`
 }
 
-func (r memberRow) domain() domain.FactorSetMember {
+func (r memberRow) domain() (domain.FactorSetMember, error) {
+	params, err := decodeMemberParams(r.Params)
+	if err != nil {
+		return domain.FactorSetMember{}, fmt.Errorf("member %s/%s: %w", r.SetID, r.MemberAlias, err)
+	}
 	return domain.FactorSetMember{
 		SetID: r.SetID, MemberAlias: r.MemberAlias, FactorID: r.FactorID, Status: r.Status,
-		CarryAlertPeriods: r.CarryAlertPeriods, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
-	}
+		CarryAlertPeriods: r.CarryAlertPeriods, Params: params, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+	}, nil
 }
 
-const memberColumns = `c_set_id, c_member_alias, c_factor_id, c_status, c_carry_alert_periods, c_ctime, c_mtime`
+// encodeMemberParams 把成员固定参数写成规范 JSON（键有序）；没有固定参数存空对象。
+func encodeMemberParams(params map[string]float64) (string, error) {
+	if len(params) == 0 {
+		return "{}", nil
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func decodeMemberParams(raw string) (map[string]float64, error) {
+	if raw == "" || raw == "{}" {
+		return nil, nil
+	}
+	var params map[string]float64
+	if err := json.Unmarshal([]byte(raw), &params); err != nil {
+		return nil, fmt.Errorf("member params is not valid JSON: %w", err)
+	}
+	return params, nil
+}
+
+const memberColumns = `c_set_id, c_member_alias, c_factor_id, c_status, c_carry_alert_periods, c_params, c_ctime, c_mtime`
 
 // joinedMemberRow is one member row joined with its definition.
 type joinedMemberRow struct {
@@ -35,17 +64,19 @@ type joinedMemberRow struct {
 	MemberAlias       string       `gorm:"column:m_member_alias"`
 	MemberStatus      string       `gorm:"column:m_status"`
 	CarryAlertPeriods int          `gorm:"column:m_carry_alert_periods"`
+	Params            string       `gorm:"column:m_params"`
 	MemberCreatedAt   time.Time    `gorm:"column:m_ctime"`
 	MemberUpdatedAt   time.Time    `gorm:"column:m_mtime"`
 	Def               factorDefRow `gorm:"embedded"`
 }
 
 const joinedMemberColumns = `m.c_set_id AS m_set_id, m.c_member_alias AS m_member_alias, m.c_status AS m_status,
-	 m.c_carry_alert_periods AS m_carry_alert_periods, m.c_ctime AS m_ctime, m.c_mtime AS m_mtime,
+	 m.c_carry_alert_periods AS m_carry_alert_periods, m.c_params AS m_params, m.c_ctime AS m_ctime, m.c_mtime AS m_mtime,
 	 d.c_factor_id, d.c_name, d.c_category_id, d.c_spec, d.c_spec_hash, d.c_allow_partial_universe, d.c_ctime, d.c_mtime`
 
-// AddMember attaches a definition to a factor set as a disabled member under alias.
-func (s *Store) AddMember(ctx context.Context, setID, alias, factorID string) (domain.FactorSetMember, error) {
+// AddMember attaches a definition to a factor set as a disabled member under alias. params 是成员的固定参数
+// （完整参数，之后不变；策略专属任务的成员传 nil，参数由写入方逐期提交）。
+func (s *Store) AddMember(ctx context.Context, setID, alias, factorID string, params map[string]float64) (domain.FactorSetMember, error) {
 	if s == nil || s.db == nil {
 		return domain.FactorSetMember{}, fmt.Errorf("factor database is not open")
 	}
@@ -53,8 +84,12 @@ func (s *Store) AddMember(ctx context.Context, setID, alias, factorID string) (d
 	if setID == "" || alias == "" || factorID == "" {
 		return domain.FactorSetMember{}, fmt.Errorf("set id, member alias and factor id are required")
 	}
+	encoded, err := encodeMemberParams(params)
+	if err != nil {
+		return domain.FactorSetMember{}, err
+	}
 	now := time.Now().UTC()
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for table, column := range map[string]struct{ name, value string }{
 			"t_factor_sets": {"c_set_id", setID}, "t_factor_defs": {"c_factor_id", factorID},
 		} {
@@ -67,9 +102,9 @@ func (s *Store) AddMember(ctx context.Context, setID, alias, factorID string) (d
 			}
 		}
 		err := tx.Exec(`
-			INSERT INTO t_factor_set_members (c_set_id, c_member_alias, c_factor_id, c_status, c_carry_alert_periods, c_ctime, c_mtime)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, setID, alias, factorID, domain.MemberStatusDisabled, domain.DefaultCarryAlertPeriods, now, now).Error
+			INSERT INTO t_factor_set_members (c_set_id, c_member_alias, c_factor_id, c_status, c_carry_alert_periods, c_params, c_ctime, c_mtime)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, setID, alias, factorID, domain.MemberStatusDisabled, domain.DefaultCarryAlertPeriods, encoded, now, now).Error
 		if err != nil && isUniqueConstraint(err) {
 			return fmt.Errorf("%w: member %q already exists in set %q", ErrConflict, alias, setID)
 		}
@@ -167,7 +202,7 @@ func (s *Store) GetMember(ctx context.Context, setID, alias string) (domain.Fact
 	if result.RowsAffected == 0 {
 		return domain.FactorSetMember{}, gorm.ErrRecordNotFound
 	}
-	return row.domain(), nil
+	return row.domain()
 }
 
 // ListMembers returns one set's members joined with their definitions, sorted
@@ -195,10 +230,14 @@ func (s *Store) ListMembers(ctx context.Context, setID, status string) ([]domain
 		if err != nil {
 			return nil, err
 		}
+		params, err := decodeMemberParams(row.Params)
+		if err != nil {
+			return nil, fmt.Errorf("member %s/%s: %w", row.MemberSetID, row.MemberAlias, err)
+		}
 		members = append(members, domain.SetMember{
 			FactorSetMember: domain.FactorSetMember{
 				SetID: row.MemberSetID, MemberAlias: row.MemberAlias, FactorID: def.FactorID, Status: row.MemberStatus,
-				CarryAlertPeriods: row.CarryAlertPeriods, CreatedAt: row.MemberCreatedAt, UpdatedAt: row.MemberUpdatedAt,
+				CarryAlertPeriods: row.CarryAlertPeriods, Params: params, CreatedAt: row.MemberCreatedAt, UpdatedAt: row.MemberUpdatedAt,
 			},
 			Factor: def,
 		})
@@ -225,7 +264,13 @@ func (s *Store) ListUsages(ctx context.Context, factorIDs ...string) (map[string
 	}
 	usages := make(map[string][]domain.FactorUsage)
 	for _, row := range rows {
-		usages[row.FactorID] = append(usages[row.FactorID], domain.FactorUsage{SetID: row.SetID, MemberAlias: row.MemberAlias, Status: row.Status})
+		member, err := row.domain()
+		if err != nil {
+			return nil, err
+		}
+		usages[row.FactorID] = append(usages[row.FactorID], domain.FactorUsage{
+			SetID: row.SetID, MemberAlias: row.MemberAlias, Status: row.Status, Params: member.Params,
+		})
 	}
 	return usages, nil
 }

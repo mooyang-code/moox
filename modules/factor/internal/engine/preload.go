@@ -72,17 +72,10 @@ func subjectsSig(subjects []string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// scopeOf 是集合预载范围的指纹：数据源（空间、源数据集、频率）加标的范围。私有因子集改绑 View 后集合 ID 不变、数据源变了，
-// 必须重新预载；只列出标的的集合还看标的列表，全部标的的集合不看（标的清单来自数据集，由重启或 init 刷新）。
+// scopeOf 是集合预载范围的指纹：数据源（空间、源数据集、频率）。私有因子集改绑 View 后集合 ID 不变、数据源变了，
+// 必须重新预载；标的清单来自数据集，由 subjectsChanged 检测变化。
 func scopeOf(set domain.EngineSet) string {
-	source := set.Set.SpaceID + "/" + set.Set.SourceDatasetID + "/" + set.Set.Freq + "/"
-	if set.Set.SubjectMode != domain.SubjectModeInclude {
-		return source + set.Set.SubjectMode
-	}
-	subjects := append([]string(nil), set.Set.Subjects...)
-	sort.Strings(subjects)
-	sum := sha256.Sum256([]byte(strings.Join(subjects, "\x00")))
-	return source + set.Set.SubjectMode + ":" + hex.EncodeToString(sum[:8])
+	return set.Set.SpaceID + "/" + set.Set.SourceDatasetID + "/" + set.Set.Freq
 }
 
 // Ready 报告集合是否已经预载（窗口就绪）：生命周期检查用。
@@ -151,10 +144,10 @@ func (p *preloader) markPrepared(set domain.EngineSet, subjects []string) {
 	p.mu.Unlock()
 }
 
-// subjectsChanged 报告「全部标的」的集合的标的清单（数据集里状态为 active 的标的）自上次预载以来是否变了。
+// subjectsChanged 报告集合的标的清单（数据集里状态为 active 的标的）自上次预载以来是否变了。
 // 列清单失败时按没变处理，下一轮再查，不因一次失败去重新预载。
 func (p *preloader) subjectsChanged(ctx context.Context, set domain.EngineSet) bool {
-	if set.Set.SubjectMode == domain.SubjectModeInclude || p.source == nil {
+	if p.source == nil {
 		return false
 	}
 	subjects, err := setSubjects(ctx, p.source, set, nil)

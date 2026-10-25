@@ -97,8 +97,6 @@ func TestOwnedSetsRejectManualMaintenance(t *testing.T) {
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, status.GetRetInfo().GetCode())
 	setStatus, _ := svc.SetFactorSetStatus(ctx, &factorpb.SetFactorSetStatusReq{SetId: "fset_i1", Status: domain.SetStatusDisabled})
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, setStatus.GetRetInfo().GetCode())
-	update, _ := svc.UpdateFactorSet(ctx, &factorpb.UpdateFactorSetReq{SetId: "fset_i1", SubjectMode: "all"})
-	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, update.GetRetInfo().GetCode())
 	create, _ := svc.CreateFactorSet(ctx, &factorpb.CreateFactorSetReq{FactorSet: &factorpb.FactorSet{SetId: "fset_x", SpaceId: "crypto", SourceDatasetId: "ds", Freq: "1m", OwnerInstanceId: "inst-2"}})
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, create.GetRetInfo().GetCode())
 

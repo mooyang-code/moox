@@ -12,9 +12,6 @@ const (
 	MemberStatusEnabled    = "enabled"
 	MemberStatusDisabled   = "disabled"
 
-	SubjectModeAll     = "all"
-	SubjectModeInclude = "include"
-
 	SetStatusPending  = "pending"
 	SetStatusEnabled  = "enabled"
 	SetStatusDisabled = "disabled"
@@ -28,14 +25,13 @@ const DefaultCategoryID = "uncategorized"
 const DefaultCarryAlertPeriods = 10
 
 // FactorSet groups member definitions over one source dataset and frequency.
-// OwnerInstanceID 非空时是某个策略实例的私有集合：该实例是唯一的参数写入方；为空时没有写入方，成员永远用默认参数。
+// OwnerInstanceID 非空时是某个策略实例的私有集合：该实例是唯一的参数写入方；为空时没有写入方，成员带固定参数。
+// 任务的标的就是源数据集当前的标的，没有单独的对象范围。
 type FactorSet struct {
 	SetID           string    `json:"set_id" gorm:"column:c_set_id;primaryKey"`
 	SpaceID         string    `json:"space_id" gorm:"column:c_space_id"`
 	SourceDatasetID string    `json:"source_dataset_id" gorm:"column:c_source_dataset_id"`
 	Freq            string    `json:"freq" gorm:"column:c_freq"`
-	SubjectMode     string    `json:"subject_mode" gorm:"column:c_subject_mode"`
-	Subjects        []string  `json:"subjects" gorm:"column:c_subjects_json;serializer:json"`
 	ResultDatasetID string    `json:"result_dataset_id" gorm:"column:c_result_dataset_id"`
 	OwnerInstanceID string    `json:"owner_instance_id" gorm:"column:c_owner_instance_id"`
 	Status          string    `json:"status" gorm:"column:c_status"`
@@ -89,9 +85,11 @@ type FactorSetMember struct {
 	FactorID    string `json:"factor_id" gorm:"column:c_factor_id"`
 	Status      string `json:"status" gorm:"column:c_status"`
 	// CarryAlertPeriods 是连续沿用参数多少期后告警。
-	CarryAlertPeriods int       `json:"carry_alert_periods" gorm:"column:c_carry_alert_periods"`
-	CreatedAt         time.Time `json:"created_at" gorm:"column:c_ctime"`
-	UpdatedAt         time.Time `json:"updated_at" gorm:"column:c_mtime"`
+	CarryAlertPeriods int `json:"carry_alert_periods" gorm:"column:c_carry_alert_periods"`
+	// Params 是成员的固定参数（见 MemberDef.Params），落库为规范 JSON。
+	Params    map[string]float64 `json:"params,omitempty" gorm:"column:c_params;serializer:json"`
+	CreatedAt time.Time          `json:"created_at" gorm:"column:c_ctime"`
+	UpdatedAt time.Time          `json:"updated_at" gorm:"column:c_mtime"`
 }
 
 func (FactorSetMember) TableName() string { return "t_factor_set_members" }
@@ -104,7 +102,7 @@ type SetMember struct {
 
 // Def 返回成员的计算视图。
 func (m SetMember) Def() MemberDef {
-	return MemberDef{Alias: m.MemberAlias, Factor: m.Factor, CarryAlertPeriods: m.CarryAlertPeriods}
+	return MemberDef{Alias: m.MemberAlias, Factor: m.Factor, CarryAlertPeriods: m.CarryAlertPeriods, Params: m.Params}
 }
 
 // AsMembers 把定义按“别名即定义 ID”转成成员，用于命令行工具和测试里不需要别名的场合。
@@ -122,6 +120,9 @@ type MemberDef struct {
 	Factor FactorDef `json:"factor"`
 	// CarryAlertPeriods 是连续沿用参数超过多少期告警（0 取 DefaultCarryAlertPeriods）；只用于监控，不影响计算。
 	CarryAlertPeriods int `json:"carry_alert_periods,omitempty"`
+	// Params 是成员的固定参数（参数名 → 取值，加成员时给定的完整参数，之后不变）。非空时参数由成员自己决定，
+	// 不写参数列；为空时参数由写入方（策略实例）逐期提交，没有提交就取定义的默认值，并写参数列。
+	Params map[string]float64 `json:"params,omitempty"`
 }
 
 // CarryAlertAfter 返回连续沿用多少期之后告警。
@@ -165,8 +166,11 @@ func (m MemberDef) ParamNames() []string {
 	return names
 }
 
-// ParamColumns 返回全部参数列名，与 ParamNames 一一对应。
+// ParamColumns 返回全部参数列名，与 ParamNames 一一对应。成员带固定参数时参数不会变，不写参数列，返回空。
 func (m MemberDef) ParamColumns() []string {
+	if m.FixedParams() {
+		return nil
+	}
 	names := m.ParamNames()
 	columns := make([]string, len(names))
 	for i, name := range names {
@@ -174,6 +178,9 @@ func (m MemberDef) ParamColumns() []string {
 	}
 	return columns
 }
+
+// FixedParams 报告成员是否带固定参数：带固定参数的成员（非策略专属任务）不写参数列。
+func (m MemberDef) FixedParams() bool { return len(m.Params) > 0 }
 
 // Key 返回成员在计算组程序里的内部身份。
 func (m MemberDef) Key(setID string) string { return setID + "/" + m.Alias }
@@ -183,6 +190,8 @@ type FactorUsage struct {
 	SetID       string
 	MemberAlias string
 	Status      string
+	// Params 是成员的固定参数（空表示参数由写入方逐期提交）。
+	Params map[string]float64
 }
 
 // FactorInfo is the definition-side view: a definition and where it is used.

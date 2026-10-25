@@ -22,7 +22,6 @@ func openTestStore(t *testing.T) *Store {
 func testSet(setID, status string) domain.FactorSet {
 	return domain.FactorSet{
 		SetID: setID, SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m",
-		SubjectMode: domain.SubjectModeAll, Subjects: []string{},
 		ResultDatasetID: "dataset_factor_prices", Status: status,
 	}
 }
@@ -45,7 +44,7 @@ func addTestMember(t *testing.T, s *Store, setID, factorID, status string) {
 	if _, err := s.GetFactor(ctx, factorID); err != nil {
 		require.NoError(t, s.CreateFactor(ctx, testFactorDef(factorID)))
 	}
-	_, err := s.AddMember(ctx, setID, factorID, factorID)
+	_, err := s.AddMember(ctx, setID, factorID, factorID, nil)
 	require.NoError(t, err)
 	if status == domain.MemberStatusEnabled {
 		require.NoError(t, s.SetMemberStatus(ctx, setID, factorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
@@ -96,19 +95,10 @@ func TestSetCRUDAndFactorCRUD(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	set := testSet("set_prices", domain.SetStatusPending)
-	set.SubjectMode = domain.SubjectModeInclude
-	set.Subjects = []string{"BTCUSDT", "ETHUSDT"}
 	require.NoError(t, s.CreateSet(ctx, set))
 	got, err := s.GetSet(ctx, set.SetID)
 	require.NoError(t, err)
-	require.Equal(t, set.Subjects, got.Subjects)
-
-	set.Subjects = []string{"SOLUSDT"}
-	set.Status = domain.SetStatusEnabled
-	require.NoError(t, s.UpdateSet(ctx, set))
-	got, err = s.GetSet(ctx, set.SetID)
-	require.NoError(t, err)
-	require.Equal(t, []string{"SOLUSDT"}, got.Subjects)
+	require.Equal(t, set.SourceDatasetID, got.SourceDatasetID)
 	require.Equal(t, domain.SetStatusPending, got.Status)
 
 	sets, err := s.ListSets(ctx)
@@ -148,7 +138,7 @@ func TestLifecycleStatusWritesUseExpectedStatus(t *testing.T) {
 
 	factor := testFactorDef("factor_close")
 	require.NoError(t, s.CreateFactor(ctx, factor))
-	_, err = s.AddMember(ctx, set.SetID, factor.FactorID, factor.FactorID)
+	_, err = s.AddMember(ctx, set.SetID, factor.FactorID, factor.FactorID, nil)
 	require.NoError(t, err)
 	require.NoError(t, s.SetMemberStatus(ctx, set.SetID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusEnabled))
 	require.ErrorIs(t, s.SetMemberStatus(ctx, set.SetID, factor.FactorID, domain.MemberStatusDisabled, domain.MemberStatusDisabled), ErrConflict)

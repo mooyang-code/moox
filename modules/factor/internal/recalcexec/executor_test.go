@@ -216,7 +216,7 @@ func pipelineSelection(factors ...recalcMember) Selection {
 	return Selection{
 		Set: domain.FactorSet{
 			SetID: "fset_bars_1m", SpaceID: "crypto", SourceDatasetID: "dataset_bars_1m", Freq: "1m",
-			SubjectMode: domain.SubjectModeInclude, Subjects: []string{"BTC"},
+
 			ResultDatasetID: "dataset_factor_bars_1m", Status: domain.SetStatusEnabled,
 		},
 		Members: domain.AsMembers(defs...), Subjects: []string{"BTC"}, Columns: []string{"close"},

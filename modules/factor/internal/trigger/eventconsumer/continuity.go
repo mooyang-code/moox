@@ -245,15 +245,12 @@ func (c *Continuity) advance(ctx context.Context, h *Handler, set domain.FactorS
 	return nil
 }
 
-// missing 返回该期期望的标的（按集合范围，扣除确认没有的）、未确认缺失的失败标的与范围内确认没有的标的。
+// missing 返回该期期望的标的（该期事件的全集，扣除确认没有的）、未确认缺失的失败标的与确认没有的标的。
 func (c *Continuity) missing(set domain.FactorSet, period time.Time, universe, failed []string) ([]string, []string, map[string]struct{}) {
 	absent := c.absentAt(set.SetID, period)
 	var expected []string
 	confirmed := map[string]struct{}{}
 	for _, subject := range uniqueStrings(universe) {
-		if !set.InScope(subject) {
-			continue
-		}
 		if _, ok := absent[subject]; ok {
 			confirmed[subject] = struct{}{}
 			continue
@@ -305,12 +302,7 @@ func (c *Continuity) invalid(setID string, expected, missing []string, confirmed
 
 // readback 读回一期源数据，返回还没有行的期望标的。
 func (c *Continuity) readback(ctx context.Context, h *Handler, set domain.FactorSet, members []domain.MemberDef, period time.Time, universe []string) ([]string, error) {
-	var subjects []string
-	for _, subject := range uniqueStrings(universe) {
-		if set.InScope(subject) {
-			subjects = append(subjects, subject)
-		}
-	}
+	subjects := uniqueStrings(universe)
 	if len(subjects) == 0 {
 		return nil, nil
 	}

@@ -14,10 +14,10 @@ import (
 
 func TestSubmitIsIdempotentByRequestID(t *testing.T) {
 	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
+	seedRecalcSet(t, db,
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
 	)
-	svc := NewService(db, WithClock(periodclock.Continuous{}))
+	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	end := start.Add(5 * time.Minute)
 	one, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-1", start, end)
@@ -29,7 +29,7 @@ func TestSubmitIsIdempotentByRequestID(t *testing.T) {
 
 func TestSubmitRetriesOmittedSelectorsAfterEnvironmentChanges(t *testing.T) {
 	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeAll, nil,
+	seedRecalcSet(t, db,
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
 	)
 	subjects := &changingSubjects{values: []string{"BTC"}}
@@ -65,11 +65,11 @@ func (emptySubjects) ListDatasetSubjects(context.Context, string, string) ([]str
 
 func TestRecalcUsesSelectedFactorsOnly(t *testing.T) {
 	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
+	seedRecalcSet(t, db,
 		testRecalcFactor("one", domain.MemberStatusEnabled, 2),
 		testRecalcFactor("two", domain.MemberStatusEnabled, 5),
 	)
-	svc := NewService(db, WithClock(periodclock.Continuous{}))
+	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 	job, err := svc.Submit(context.Background(), "fset_bars_1m", []string{"two"}, nil, "req-1", start, start.Add(time.Minute))
 	require.NoError(t, err)
@@ -91,11 +91,11 @@ type recalcMember struct {
 	status string
 }
 
-func seedRecalcSet(t *testing.T, db *store.Store, mode string, subjects []string, members ...recalcMember) {
+func seedRecalcSet(t *testing.T, db *store.Store, members ...recalcMember) {
 	t.Helper()
 	set := domain.FactorSet{
 		SetID: "fset_bars_1m", SpaceID: "crypto", SourceDatasetID: "dataset_bars_1m",
-		Freq: "1m", SubjectMode: mode, Subjects: subjects,
+		Freq:            "1m",
 		ResultDatasetID: "dataset_factor_bars_1m", Status: domain.SetStatusEnabled,
 	}
 	require.NoError(t, db.CreateSet(context.Background(), set))
@@ -107,7 +107,7 @@ func seedRecalcSet(t *testing.T, db *store.Store, mode string, subjects []string
 func addRecalcMember(t *testing.T, db *store.Store, setID string, member recalcMember) {
 	t.Helper()
 	require.NoError(t, db.CreateFactor(context.Background(), member.def))
-	_, err := db.AddMember(context.Background(), setID, member.def.FactorID, member.def.FactorID)
+	_, err := db.AddMember(context.Background(), setID, member.def.FactorID, member.def.FactorID, nil)
 	require.NoError(t, err)
 	if member.status == domain.MemberStatusEnabled {
 		require.NoError(t, db.SetMemberStatus(context.Background(), setID, member.def.FactorID,
@@ -122,12 +122,12 @@ func testRecalcFactor(id, status string, lookback int) recalcMember {
 
 func TestRecalcRejectsFactorThatIsNotAMember(t *testing.T) {
 	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
+	seedRecalcSet(t, db,
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
 	)
 	// A definition that exists but was never added to this set.
 	require.NoError(t, db.CreateFactor(context.Background(), testRecalcFactor("outsider", "", 1).def))
-	svc := NewService(db, WithClock(periodclock.Continuous{}))
+	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 
 	_, err := svc.Submit(context.Background(), "fset_bars_1m", []string{"outsider"}, nil, "req-outsider", start, start.Add(time.Minute))
@@ -136,11 +136,11 @@ func TestRecalcRejectsFactorThatIsNotAMember(t *testing.T) {
 
 func TestRecalcRejectsDisabledMember(t *testing.T) {
 	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
+	seedRecalcSet(t, db,
 		testRecalcFactor("close_factor", domain.MemberStatusEnabled, 3),
 		testRecalcFactor("parked", domain.MemberStatusDisabled, 3),
 	)
-	svc := NewService(db, WithClock(periodclock.Continuous{}))
+	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 
 	_, err := svc.Submit(context.Background(), "fset_bars_1m", []string{"parked"}, nil, "req-parked", start, start.Add(time.Minute))
@@ -149,15 +149,22 @@ func TestRecalcRejectsDisabledMember(t *testing.T) {
 
 func TestRecalcDefaultsToAllEnabledMembers(t *testing.T) {
 	db := openRecalcStore(t)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"},
+	seedRecalcSet(t, db,
 		testRecalcFactor("a_factor", domain.MemberStatusEnabled, 3),
 		testRecalcFactor("b_parked", domain.MemberStatusDisabled, 3),
 		testRecalcFactor("c_factor", domain.MemberStatusEnabled, 3),
 	)
-	svc := NewService(db, WithClock(periodclock.Continuous{}))
+	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(recalcSubjects{"BTC"}))
 	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
 
 	job, err := svc.Submit(context.Background(), "fset_bars_1m", nil, nil, "req-default", start, start.Add(time.Minute))
 	require.NoError(t, err)
 	require.Equal(t, []string{"a_factor", "c_factor"}, job.Members)
+}
+
+// recalcSubjects 是测试用的源数据集标的清单。
+type recalcSubjects []string
+
+func (r recalcSubjects) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	return append([]string(nil), r...), nil
 }

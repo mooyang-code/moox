@@ -1,0 +1,94 @@
+[
+  {
+    "name": "全默认沿用因子 ID",
+    "factor_id": "Ema",
+    "spec": "params:\n  span: {type: int, min: 2, max: 4825, default: 20}\n  warmup: {type: int, min: 0, max: 50000, default: 0}\noutputs:\n  ema: ema(close, span, warmup)\n",
+    "params": {},
+    "alias": "Ema"
+  },
+  {
+    "name": "显式给出默认值",
+    "factor_id": "Ema",
+    "spec": "params:\n  span: {type: int, min: 2, max: 4825, default: 20}\n  warmup: {type: int, min: 0, max: 50000, default: 0}\noutputs:\n  ema: ema(close, span, warmup)\n",
+    "params": {
+      "span": 20,
+      "warmup": 0
+    },
+    "alias": "Ema"
+  },
+  {
+    "name": "只改预热",
+    "factor_id": "Ema",
+    "spec": "params:\n  span: {type: int, min: 2, max: 4825, default: 20}\n  warmup: {type: int, min: 0, max: 50000, default: 0}\noutputs:\n  ema: ema(close, span, warmup)\n",
+    "params": {
+      "warmup": 50000
+    },
+    "alias": "Ema_20_50000"
+  },
+  {
+    "name": "两个都改",
+    "factor_id": "Ema",
+    "spec": "params:\n  span: {type: int, min: 2, max: 4825, default: 20}\n  warmup: {type: int, min: 0, max: 50000, default: 0}\noutputs:\n  ema: ema(close, span, warmup)\n",
+    "params": {
+      "span": 50,
+      "warmup": 20000
+    },
+    "alias": "Ema_50_20000"
+  },
+  {
+    "name": "只改第一个",
+    "factor_id": "Ema",
+    "spec": "params:\n  span: {type: int, min: 2, max: 4825, default: 20}\n  warmup: {type: int, min: 0, max: 50000, default: 0}\noutputs:\n  ema: ema(close, span, warmup)\n",
+    "params": {
+      "span": 50
+    },
+    "alias": "Ema_50_0"
+  },
+  {
+    "name": "小数与负号",
+    "factor_id": "Fx",
+    "spec": "params:\n  k: {type: float, min: -10, max: 10, default: 1.5}\n  m: {type: int, min: 1, max: 100, default: 3}\noutputs:\n  o: close * k + m\n",
+    "params": {
+      "k": -0.5,
+      "m": 7
+    },
+    "alias": "Fx_n0p5_7"
+  },
+  {
+    "name": "小数默认值",
+    "factor_id": "Fx",
+    "spec": "params:\n  k: {type: float, min: -10, max: 10, default: 1.5}\n  m: {type: int, min: 1, max: 100, default: 3}\noutputs:\n  o: close * k + m\n",
+    "params": {
+      "k": 1.5,
+      "m": 3
+    },
+    "alias": "Fx"
+  },
+  {
+    "name": "负零按零",
+    "factor_id": "Fx",
+    "spec": "params:\n  k: {type: float, min: -10, max: 10, default: 1.5}\n  m: {type: int, min: 1, max: 100, default: 3}\noutputs:\n  o: close * k + m\n",
+    "params": {
+      "k": 0,
+      "m": 3
+    },
+    "alias": "Fx_0_3"
+  },
+  {
+    "name": "没有参数的因子",
+    "factor_id": "Plain",
+    "spec": "outputs:\n  o: close\n",
+    "params": {},
+    "alias": "Plain"
+  },
+  {
+    "name": "别名超长要求手填",
+    "factor_id": "AVeryLongFactorIdentifierName",
+    "spec": "params:\n  span: {type: int, min: 2, max: 4825, default: 20}\n  warmup: {type: int, min: 0, max: 50000, default: 0}\noutputs:\n  ema: ema(close, span, warmup)\n",
+    "params": {
+      "warmup": 50000
+    },
+    "alias": "",
+    "error": "超过 32 个字符"
+  }
+]

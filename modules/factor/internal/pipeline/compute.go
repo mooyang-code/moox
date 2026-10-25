@@ -59,7 +59,9 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 				r.cfg.OnCompileError(plan.Set.SetID, member.Factor.FactorID)
 			}
 		}
-		compiled[member.Alias] = domain.MemberDef{Alias: member.Alias, Factor: def}
+		withDef := member
+		withDef.Factor = def // 复制原成员，只替换已编译的定义：固定参数等成员属性要保留。
+		compiled[member.Alias] = withDef
 		factor := member.Factor
 		status := "complete"
 		failed := uniqueSorted(append([]string(nil), missing...))
@@ -140,7 +142,7 @@ func memberParams(plan Plan, member domain.MemberDef) (string, string) {
 	if freeze, ok := plan.Params[member.Alias]; ok {
 		return freeze.Source, domain.ParamsDigest(freeze.Snapshot)
 	}
-	return domain.ParamsDefault, domain.ParamsDigest(domain.DefaultSnapshot(member.Factor))
+	return domain.ParamsDefault, domain.ParamsDigest(domain.MemberSnapshot(member))
 }
 
 // snapshotOf 返回成员本次计算用的参数快照。
@@ -148,7 +150,7 @@ func snapshotOf(plan Plan, member domain.MemberDef) domain.ParamSnapshot {
 	if freeze, ok := plan.Params[member.Alias]; ok && freeze.Snapshot != nil {
 		return freeze.Snapshot
 	}
-	return domain.DefaultSnapshot(member.Factor)
+	return domain.MemberSnapshot(member)
 }
 
 // compile 返回编译好的定义。引擎目录里的定义来自 JSON 快照，没有编译结果；按 (factor_id, spec) 缓存编译结果。

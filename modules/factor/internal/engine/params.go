@@ -203,8 +203,9 @@ func (f *paramFreezer) freezeOffline(set domain.FactorSet, members []domain.Memb
 		// 同一期重试（事件重投）沿用已经离线冻结的那一份，不重复记录。
 		snapshot, pending := f.pendingOfflineLocked(set.SetID, member.Alias, period)
 		if !pending {
-			snapshot = domain.DefaultSnapshot(member.Factor)
-			if last, ok := f.state.Last[lastKey(set.SetID, member.Alias)]; ok && last.Snapshot != nil {
+			snapshot = domain.MemberSnapshot(member)
+			// 带固定参数的成员离线时也取自己的固定值；只有逐期提交参数的成员才沿用上一期的快照。
+			if last, ok := f.state.Last[lastKey(set.SetID, member.Alias)]; ok && last.Snapshot != nil && !member.FixedParams() {
 				snapshot = last.Snapshot
 			}
 			f.state.Offline = append(f.state.Offline, offlineFreeze{SetID: set.SetID, Member: member.Alias, Period: period.UTC(), Snapshot: snapshot})

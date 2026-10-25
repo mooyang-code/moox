@@ -213,7 +213,7 @@ func TestRecalcFactorsValidatesTimeRange(t *testing.T) {
 				SpaceID:         "crypto",
 				SourceDatasetID: "dataset_binance_kline_1m",
 				Freq:            "1m",
-				SubjectMode:     domain.SubjectModeAll,
+
 				ResultDatasetID: "dataset_factor_binance_kline_1m",
 				Status:          domain.SetStatusEnabled,
 			}}
@@ -241,7 +241,7 @@ func TestRecalcFactorsSubmitsAlignedRange(t *testing.T) {
 		SpaceID:         "crypto",
 		SourceDatasetID: "dataset_binance_kline_1m",
 		Freq:            "1m",
-		SubjectMode:     domain.SubjectModeAll,
+
 		ResultDatasetID: "dataset_factor_binance_kline_1m",
 		Status:          domain.SetStatusEnabled,
 	}}
@@ -274,7 +274,7 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 	require.NotNil(t, service)
 
 	want := []string{
-		"CreateFactorSet", "UpdateFactorSet", "SetFactorSetStatus", "DeleteFactorSet", "GetFactorSet", "ListFactorSets",
+		"CreateFactorSet", "SetFactorSetStatus", "DeleteFactorSet", "GetFactorSet", "ListFactorSets",
 		"CreateFactor", "UpdateFactor", "DeleteFactor", "GetFactor", "ListFactors",
 		"AddFactorToSet", "RemoveFactorFromSet", "SetFactorMemberStatus",
 		"RecalcFactors", "ListRecalcJobs", "GetRecalcJob", "CancelRecalcJob", "GetStatus",
@@ -310,10 +310,6 @@ func (f *catalogFake) CreateSet(_ context.Context, in domain.FactorSet) (domain.
 	f.set = in
 	return in, nil
 }
-func (f *catalogFake) UpdateSetSubjects(_ context.Context, _, mode string, subjects []string) (domain.FactorSet, error) {
-	f.set.SubjectMode, f.set.Subjects = mode, subjects
-	return f.set, nil
-}
 func (f *catalogFake) SetSetStatus(_ context.Context, _, status string) (domain.FactorSet, error) {
 	f.set.Status = status
 	return f.set, nil
@@ -344,7 +340,7 @@ func (f *catalogFake) ListFactors(_ context.Context, setID, status string) ([]do
 	f.listSetID, f.listStatus = setID, status
 	return f.infos, nil
 }
-func (f *catalogFake) AddFactorToSet(_ context.Context, setID, alias, factorID string) (domain.SetMember, error) {
+func (f *catalogFake) AddFactorToSet(_ context.Context, setID, alias, factorID string, _ map[string]float64) (domain.SetMember, error) {
 	if f.err != nil {
 		return domain.SetMember{}, f.err
 	}

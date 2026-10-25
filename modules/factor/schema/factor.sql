@@ -5,15 +5,12 @@ CREATE TABLE IF NOT EXISTS t_factor_sets (
     c_space_id TEXT NOT NULL,
     c_source_dataset_id TEXT NOT NULL,
     c_freq TEXT NOT NULL,
-    c_subject_mode TEXT NOT NULL DEFAULT 'all',
-    c_subjects_json TEXT NOT NULL DEFAULT '[]',
     c_result_dataset_id TEXT NOT NULL,
-    -- 私有集合所属的策略实例（唯一的参数写入方）；空串表示没有写入方，成员永远用默认参数
+    -- 私有集合所属的策略实例（唯一的参数写入方）；空串表示没有写入方，成员带固定参数
     c_owner_instance_id TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL DEFAULT 'pending',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (c_subject_mode IN ('all', 'include')),
     CHECK (c_status IN ('pending', 'enabled', 'disabled', 'deleting')),
     UNIQUE (c_result_dataset_id)
 );
@@ -57,6 +54,8 @@ CREATE TABLE IF NOT EXISTS t_factor_set_members (
     c_status TEXT NOT NULL DEFAULT 'disabled',
     -- 连续沿用参数多少期后告警
     c_carry_alert_periods INTEGER NOT NULL DEFAULT 10,
+    -- 成员的固定参数（参数名 → 取值的规范 JSON，加成员时的完整参数，之后不变）；空对象表示参数由写入方逐期提交
+    c_params TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (c_set_id, c_member_alias),

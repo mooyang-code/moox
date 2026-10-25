@@ -182,7 +182,7 @@ func newFixture(t *testing.T, factors ...domain.FactorDef) *fixture {
 	fx.data = New(Config{Store: store, Storage: st, Clock: periodclock.Continuous{}, Admit: memadmit.New(0), Workers: 2, BatchSubjects: 2, Now: func() time.Time { return fx.now }})
 	fx.runner = pipeline.NewRunner(st, fx.data, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
 	fx.set = domain.EngineSet{
-		Set: domain.FactorSet{SetID: "set1", SpaceID: "crypto", SourceDatasetID: "spot", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+		Set: domain.FactorSet{SetID: "set1", SpaceID: "crypto", SourceDatasetID: "spot", Freq: "1m",
 			ResultDatasetID: "factor_spot", Status: domain.SetStatusEnabled},
 		Members: domain.AsMembers(factors...),
 	}

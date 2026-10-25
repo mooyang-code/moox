@@ -34,7 +34,7 @@ func ValidateCategory(category FactorCategory) error {
 	return validateName(category.Name)
 }
 
-// ValidateSet checks the stable identity and subject-scope contract of a set.
+// ValidateSet checks the stable identity contract of a set.
 func ValidateSet(set FactorSet) error {
 	for name, value := range map[string]string{
 		"set_id": set.SetID, "space_id": set.SpaceID, "source_dataset_id": set.SourceDatasetID,
@@ -59,28 +59,6 @@ func ValidateSet(set FactorSet) error {
 	}
 	if set.ResultDatasetID != ResultDatasetID(set.SetID) {
 		return fmt.Errorf("result_dataset_id must be %q", ResultDatasetID(set.SetID))
-	}
-	switch set.SubjectMode {
-	case SubjectModeAll:
-		if len(set.Subjects) != 0 {
-			return fmt.Errorf("subjects must be empty when subject_mode is %q", SubjectModeAll)
-		}
-	case SubjectModeInclude:
-		if len(set.Subjects) == 0 {
-			return fmt.Errorf("subjects must contain at least one subject in include mode")
-		}
-		seen := make(map[string]struct{}, len(set.Subjects))
-		for _, subject := range set.Subjects {
-			if strings.TrimSpace(subject) == "" || subject != strings.TrimSpace(subject) {
-				return fmt.Errorf("subjects must not contain empty or whitespace-padded values")
-			}
-			if _, ok := seen[subject]; ok {
-				return fmt.Errorf("subjects contains duplicate subject %q", subject)
-			}
-			seen[subject] = struct{}{}
-		}
-	default:
-		return fmt.Errorf("subject_mode must be %q or %q", SubjectModeAll, SubjectModeInclude)
 	}
 	switch set.Status {
 	case SetStatusPending, SetStatusEnabled, SetStatusDisabled, SetStatusDeleting:
@@ -232,26 +210,6 @@ func validResultColumn(name string) bool { return resultColumnPattern.MatchStrin
 func isReservedColumn(name string) bool {
 	for _, reserved := range ReservedColumns {
 		if name == reserved {
-			return true
-		}
-	}
-	return false
-}
-
-// InScope reports whether the subject belongs to this set's configured universe.
-func (s FactorSet) InScope(subjectID string) bool {
-	if s.SubjectMode == SubjectModeAll {
-		return true
-	}
-	if s.SubjectMode != SubjectModeInclude {
-		return false
-	}
-	subjectID = strings.TrimSpace(subjectID)
-	if subjectID == "" {
-		return false
-	}
-	for _, subject := range s.Subjects {
-		if subject == subjectID {
 			return true
 		}
 	}

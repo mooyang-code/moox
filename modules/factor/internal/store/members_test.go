@@ -15,16 +15,16 @@ func TestMemberUniqueAndForeignKeys(t *testing.T) {
 	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", domain.SetStatusEnabled)))
 	require.NoError(t, s.CreateFactor(ctx, testFactorDef("factor_close")))
 
-	member, err := s.AddMember(ctx, "set_prices", "factor_close", "factor_close")
+	member, err := s.AddMember(ctx, "set_prices", "factor_close", "factor_close", nil)
 	require.NoError(t, err)
 	require.Equal(t, domain.MemberStatusDisabled, member.Status)
 	require.NotZero(t, member.CreatedAt)
 
-	_, err = s.AddMember(ctx, "set_prices", "factor_close", "factor_close")
+	_, err = s.AddMember(ctx, "set_prices", "factor_close", "factor_close", nil)
 	require.ErrorIs(t, err, ErrConflict)
-	_, err = s.AddMember(ctx, "set_prices", "missing", "missing")
+	_, err = s.AddMember(ctx, "set_prices", "missing", "missing", nil)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
-	_, err = s.AddMember(ctx, "missing", "factor_close", "factor_close")
+	_, err = s.AddMember(ctx, "missing", "factor_close", "factor_close", nil)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 

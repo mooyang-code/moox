@@ -24,7 +24,7 @@ func engineSet(setID, datasetID string, ready bool, factorIDs ...string) domain.
 	return domain.EngineSet{
 		Set: domain.FactorSet{
 			SetID: setID, SpaceID: "crypto", SourceDatasetID: datasetID, Freq: "1m",
-			SubjectMode: domain.SubjectModeAll, ResultDatasetID: "result_" + datasetID, Status: domain.SetStatusEnabled,
+			ResultDatasetID: "result_" + datasetID, Status: domain.SetStatusEnabled,
 		},
 		Members: domain.AsMembers(factors...), ResultReady: ready,
 	}

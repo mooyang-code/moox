@@ -152,7 +152,7 @@ func TestReconcileResumesDurableResultDatasetPurge(t *testing.T) {
 	require.Equal(t, domain.SetStatusDeleting, pending.Status)
 	_, err = svc.SetSetStatus(context.Background(), set.SetID, domain.SetStatusEnabled)
 	require.ErrorContains(t, err, "purge is pending")
-	_, err = svc.AddFactorToSet(context.Background(), set.SetID, "", "momentum")
+	_, err = svc.AddFactorToSet(context.Background(), set.SetID, "", "momentum", nil)
 	require.ErrorContains(t, err, "purge is pending")
 
 	// Reconcile runs at startup and periodically. It resumes after failures at
@@ -177,8 +177,6 @@ func TestDeletingSetRejectsLifecycleMutation(t *testing.T) {
 	retry.Status = domain.SetStatusPending
 	_, err = svc.CreateSet(context.Background(), retry)
 	require.ErrorContains(t, err, "purge is pending")
-	_, err = svc.UpdateSetSubjects(context.Background(), set.SetID, domain.SubjectModeInclude, []string{"BTC"})
-	require.ErrorContains(t, err, "purge is pending")
 	_, err = svc.SetSetStatus(context.Background(), set.SetID, domain.SetStatusDisabled)
 	require.ErrorContains(t, err, "purge is pending")
 
@@ -186,9 +184,9 @@ func TestDeletingSetRejectsLifecycleMutation(t *testing.T) {
 	// still cannot alter the pending purge into an enabled or stuck state.
 	factor, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
-	_, err = svc.AddFactorToSet(context.Background(), set.SetID, "", factor.FactorID)
+	_, err = svc.AddFactorToSet(context.Background(), set.SetID, "", factor.FactorID, nil)
 	require.ErrorContains(t, err, "purge is pending")
-	_, err = db.AddMember(context.Background(), set.SetID, factor.FactorID, factor.FactorID)
+	_, err = db.AddMember(context.Background(), set.SetID, factor.FactorID, factor.FactorID, nil)
 	require.NoError(t, err)
 	_, err = svc.SetFactorMemberStatus(context.Background(), set.SetID, factor.FactorID, domain.MemberStatusEnabled)
 	require.ErrorContains(t, err, "purge is pending")
@@ -253,13 +251,13 @@ func TestAddFactorToSetValidatesAgainstSourceColumns(t *testing.T) {
 	unknown := factorWithSpec("unknown_input", "outputs:\n  unknown_input: missing\n")
 	_, err := svc.CreateFactor(context.Background(), unknown)
 	require.NoError(t, err)
-	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "unknown_input")
+	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "unknown_input", nil)
 	require.ErrorContains(t, err, "unknown input column")
 
 	collide := factorWithSpec("collide", "outputs:\n  close: close * 2\n")
 	_, err = svc.CreateFactor(context.Background(), collide)
 	require.NoError(t, err)
-	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "collide")
+	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "collide", nil)
 	require.ErrorContains(t, err, "与源列重名")
 	_, err = db.GetMember(context.Background(), testSetID(), "collide")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
@@ -273,15 +271,15 @@ func TestAddFactorToSetRejectsPendingOrDeletingSet(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.SetSetStatus(context.Background(), testSetID(), domain.SetStatusEnabled, domain.SetStatusDisabled))
 	require.NoError(t, db.SetSetStatus(context.Background(), testSetID(), domain.SetStatusDisabled, domain.SetStatusDeleting))
-	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum")
+	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum", nil)
 	require.ErrorContains(t, err, "purge is pending")
 
 	pending := domain.FactorSet{
 		SetID: "fset_pending_1m", SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "5m",
-		SubjectMode: domain.SubjectModeAll, Subjects: []string{}, ResultDatasetID: "dataset_factor_pending", Status: domain.SetStatusPending,
+		ResultDatasetID: "dataset_factor_pending", Status: domain.SetStatusPending,
 	}
 	require.NoError(t, db.CreateSet(context.Background(), pending))
-	_, err = svc.AddFactorToSet(context.Background(), pending.SetID, "", "momentum")
+	_, err = svc.AddFactorToSet(context.Background(), pending.SetID, "", "momentum", nil)
 	require.ErrorContains(t, err, "not ready")
 }
 
@@ -299,7 +297,7 @@ func TestAddFactorToSetRejectsOutputOwnedByOtherFactor(t *testing.T) {
 	_, err = svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
 
-	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum")
+	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum", nil)
 	require.ErrorContains(t, err, "已属于")
 }
 
@@ -311,7 +309,7 @@ func TestAddFactorToSetDoesNotAddColumnsOrSubmitRecalc(t *testing.T) {
 	require.NoError(t, err)
 	meta.writeOps = nil
 
-	member, err := svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum")
+	member, err := svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum", nil)
 	require.NoError(t, err)
 	require.Equal(t, domain.MemberStatusDisabled, member.Status)
 	require.Equal(t, "momentum", member.Factor.FactorID)
@@ -327,7 +325,7 @@ func TestReaddAfterRemoveReusesRetainedColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.RemoveFactorFromSet(context.Background(), testSetID(), "momentum"))
 
-	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum")
+	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum", nil)
 	require.NoError(t, err)
 	_, err = svc.SetFactorMemberStatus(context.Background(), testSetID(), "momentum", domain.MemberStatusEnabled)
 	require.NoError(t, err)
@@ -419,7 +417,7 @@ func TestSameDefinitionEnablesIndependentlyInTwoSets(t *testing.T) {
 	require.NoError(t, err)
 	hourlyID := domain.SetID(hourlySource.DatasetID, "1h")
 	addMember(t, svc, testSetID(), "momentum", domain.MemberStatusEnabled)
-	_, err = svc.AddFactorToSet(context.Background(), hourlyID, "", "momentum")
+	_, err = svc.AddFactorToSet(context.Background(), hourlyID, "", "momentum", nil)
 	require.NoError(t, err)
 
 	first, err := db.GetMember(context.Background(), testSetID(), "momentum")
@@ -517,13 +515,13 @@ func TestAddAndUpdateDoNotInterleave(t *testing.T) {
 	svc := newReadyService(t, db, newMetadataFake())
 	_, err := svc.CreateFactor(context.Background(), testFactor())
 	require.NoError(t, err)
-	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum")
+	_, err = svc.AddFactorToSet(context.Background(), testSetID(), "", "momentum", nil)
 	require.NoError(t, err)
 	unlock, err := svc.Locks().LockFactorContext(context.Background(), "momentum")
 	require.NoError(t, err)
 	done := make(chan error, 3)
 	go func() {
-		_, err := svc.AddFactorToSet(context.Background(), testSetID(), "slow", "momentum")
+		_, err := svc.AddFactorToSet(context.Background(), testSetID(), "slow", "momentum", nil)
 		done <- err
 	}()
 	go func() { _, err := svc.UpdateFactor(context.Background(), testFactor()); done <- err }()
@@ -592,14 +590,6 @@ func TestReconcileContinuesAfterOneSetFailure(t *testing.T) {
 	secondInput.ResultDatasetID = ""
 	second, err := svc.CreateSet(context.Background(), secondInput)
 	require.NoError(t, err)
-	firstSet, err := db.GetSet(context.Background(), first.SetID)
-	require.NoError(t, err)
-	firstSet.Status = domain.SetStatusEnabled
-	secondSet, err := db.GetSet(context.Background(), second.SetID)
-	require.NoError(t, err)
-	secondSet.Status = domain.SetStatusEnabled
-	require.NoError(t, db.UpdateSet(context.Background(), firstSet))
-	require.NoError(t, db.UpdateSet(context.Background(), secondSet))
 	meta.datasets[resultKey("crypto", first.SourceDatasetID)] = storageio.DatasetInfo{}
 	meta.sourceColumnsByDataset[second.SourceDatasetID] = []storageio.ColumnInfo{sourceColumn("close"), sourceColumn("volume")}
 	meta.writeOps = nil
@@ -621,7 +611,7 @@ func TestLifecycleOpsSerializeWithPeriodLock(t *testing.T) {
 	go func() {
 		close(started)
 		defer close(done)
-		_, _ = svc.UpdateSetSubjects(context.Background(), domain.SetID("dataset_prices", "1m"), domain.SubjectModeInclude, []string{"BTCUSDT"})
+		_, _ = svc.SetSetStatus(context.Background(), domain.SetID("dataset_prices", "1m"), domain.SetStatusDisabled)
 	}()
 	<-started
 	select {
@@ -656,7 +646,6 @@ func newReadyService(t *testing.T, db *store.Store, meta *metadataFake) *Service
 func newSet() domain.FactorSet {
 	return domain.FactorSet{
 		SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m",
-		SubjectMode: domain.SubjectModeAll, Subjects: []string{},
 	}
 }
 
@@ -680,7 +669,7 @@ func addMember(t *testing.T, svc *Service, setID, factorID, status string) {
 		_, err = svc.CreateFactor(ctx, factorWithSpec(factorID, "outputs:\n  "+factorID+": ts_mean(close, 3)\n"))
 		require.NoError(t, err)
 	}
-	_, err := svc.AddFactorToSet(ctx, setID, "", factorID)
+	_, err := svc.AddFactorToSet(ctx, setID, "", factorID, nil)
 	require.NoError(t, err)
 	if status == domain.MemberStatusEnabled {
 		_, err = svc.SetFactorMemberStatus(ctx, setID, factorID, domain.MemberStatusEnabled)

@@ -15,7 +15,7 @@ import (
 func TestReplayStepAppliesRequestedParams(t *testing.T) {
 	def := domain.MustDefinition("pmean", "pmean", "params:\n  window: {type: int, min: 2, max: 6, default: 2}\noutputs:\n  m: ts_mean(close, window)\n")
 	set := uncompiled(domain.EngineSet{
-		Set: domain.FactorSet{SetID: "fset_replay", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m", SubjectMode: domain.SubjectModeAll,
+		Set: domain.FactorSet{SetID: "fset_replay", SpaceID: "crypto", SourceDatasetID: "dataset_a", Freq: "1m",
 			ResultDatasetID: "result_dataset_a", Status: domain.SetStatusEnabled, OwnerInstanceID: "inst"},
 		Members: []domain.MemberDef{{Alias: "fast", Factor: def}}, ResultReady: true,
 	})

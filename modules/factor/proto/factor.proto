@@ -11,13 +11,11 @@ message FactorSet {
   string space_id = 2;
   string source_dataset_id = 3;
   string freq = 4;
-  string subject_mode = 5;
-  repeated string subjects = 6;
   string result_dataset_id = 7;
   string status = 8;
   string created_at = 9;
   string updated_at = 10;
-  // owner_instance_id 非空时是策略实例的私有集合，该实例是唯一的参数写入方；为空时成员永远用默认参数。
+  // owner_instance_id 非空时是策略实例的私有集合，该实例是唯一的参数写入方；为空时成员带固定参数。
   string owner_instance_id = 11;
 }
 
@@ -65,6 +63,8 @@ message FactorUsage {
   string set_id = 1;
   string status = 2;
   string member_alias = 3;
+  // params 是成员的固定参数（空表示参数由策略实例逐期提交）。
+  map<string, double> params = 4;
 }
 
 message FactorInfo {
@@ -85,6 +85,8 @@ message FactorMember {
   // output_columns、param_columns 是成员在结果数据集里的列名（派生，只读）。
   repeated string output_columns = 9;
   repeated string param_columns = 10;
+  // params 是成员的固定参数（完整参数，加成员时给定，之后不变；策略实例专属任务的成员为空，参数逐期提交）。
+  map<string, double> params = 11;
 }
 
 message FactorPeriodState {
@@ -143,16 +145,6 @@ message CreateFactorSetRsp {
   FactorSet factor_set = 2;
 }
 
-message UpdateFactorSetReq {
-  string set_id = 1;
-  string subject_mode = 2;
-  repeated string subjects = 3;
-}
-message UpdateFactorSetRsp {
-  common.RetInfo ret_info = 1;
-  FactorSet factor_set = 2;
-}
-
 message SetFactorSetStatusReq {
   string set_id = 1;
   string status = 2;
@@ -201,8 +193,10 @@ message UpdateFactorRsp {
 message AddFactorToSetReq {
   string set_id = 1;
   string factor_id = 2;
-  // member_alias 为空时取 factor_id。
+  // member_alias 为空时：普通任务按参数生成（全部参数等于默认值时取 factor_id），策略实例专属任务取 factor_id。
   string member_alias = 3;
+  // params 是成员的固定参数；没给的参数取定义的默认值。策略实例专属任务不能带固定参数。
+  map<string, double> params = 4;
 }
 message AddFactorToSetRsp {
   common.RetInfo ret_info = 1;
@@ -430,8 +424,6 @@ message EnsureInstanceFactorSetReq {
   string space_id = 2;
   string source_dataset_id = 3;
   string freq = 4;
-  string subject_mode = 5;
-  repeated string subjects = 6;
   repeated InstanceSetMember members = 7;
 }
 message EnsureInstanceFactorSetRsp {
@@ -525,7 +517,6 @@ message GetFactorParamsRsp {
 
 service FactorMgr {
   rpc CreateFactorSet(CreateFactorSetReq) returns (CreateFactorSetRsp);
-  rpc UpdateFactorSet(UpdateFactorSetReq) returns (UpdateFactorSetRsp);
   rpc SetFactorSetStatus(SetFactorSetStatusReq) returns (SetFactorSetStatusRsp);
   rpc DeleteFactorSet(DeleteFactorSetReq) returns (DeleteFactorSetRsp);
   rpc GetFactorSet(GetFactorSetReq) returns (GetFactorSetRsp);
@@ -571,6 +562,8 @@ message EngineMember {
   FactorDef factor = 2;
   // carry_alert_periods 是连续沿用参数超过多少期告警（0 取默认值）。
   int32 carry_alert_periods = 3;
+  // params 是成员的固定参数（空表示参数由策略实例逐期提交）。
+  map<string, double> params = 4;
 }
 
 message EngineSet {

@@ -55,6 +55,17 @@ func DefaultSnapshot(def FactorDef) ParamSnapshot {
 	return snapshot
 }
 
+// MemberSnapshot 返回成员的参数快照：以定义的默认值为底，成员带固定参数时用固定参数覆盖（没有标的覆盖）。
+func MemberSnapshot(member MemberDef) ParamSnapshot {
+	snapshot := DefaultSnapshot(member.Factor)
+	for name, value := range member.Params {
+		if _, ok := snapshot[name]; ok {
+			snapshot[name] = ParamValue{Default: value}
+		}
+	}
+	return snapshot
+}
+
 // Value 返回参数 name 在标的 subject 上的取值。
 func (s ParamSnapshot) Value(name, subject string) float64 {
 	value := s[name]

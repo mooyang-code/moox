@@ -596,9 +596,11 @@ func (s *replaySession) params(period time.Time, requested map[string]domain.Par
 	var rejected []ReplayParamRejection
 	for _, member := range s.set.Members {
 		if snapshot, ok := requested[member.Alias]; ok {
-			err := domain.CheckSnapshotNumbers(snapshot)
-			if err == nil {
-				err = domain.ValidateSnapshot(member, snapshot, s.set.Set.InScope)
+			var err error
+			if member.FixedParams() {
+				err = fmt.Errorf("成员 %s 带固定参数，不接受逐期提交的参数", member.Alias)
+			} else if err = domain.CheckSnapshotNumbers(snapshot); err == nil {
+				err = domain.ValidateSnapshot(member, snapshot, nil)
 			}
 			if err == nil {
 				out[member.Alias] = domain.ParamFreeze{SetID: s.set.Set.SetID, MemberAlias: member.Alias, PeriodTime: period, Snapshot: snapshot,
@@ -844,6 +846,9 @@ func uniqueStrings(in []string) []string {
 // 策略回放读 <别名>__<参数名> 拿到的是这一期真正生效的参数。
 func addParamValues(values pipeline.FactorValues, members []domain.MemberDef, universe []string, params map[string]domain.ParamFreeze) {
 	for _, member := range members {
+		if member.FixedParams() {
+			continue // 带固定参数的成员不写参数列。
+		}
 		freeze, ok := params[member.Alias]
 		names, columns := member.ParamNames(), member.ParamColumns()
 		for _, subject := range universe {

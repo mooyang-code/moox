@@ -29,8 +29,7 @@ func (m *mutableSets) SetByID(id string) (domain.EngineSet, SetLookup) {
 }
 
 func includeSet(id, dataset string) domain.EngineSet {
-	return domain.EngineSet{Set: domain.FactorSet{SetID: id, SpaceID: "crypto", SourceDatasetID: dataset, Freq: "1m",
-		SubjectMode: domain.SubjectModeInclude, Subjects: []string{"A"}}}
+	return domain.EngineSet{Set: domain.FactorSet{SetID: id, SpaceID: "crypto", SourceDatasetID: dataset, Freq: "1m"}}
 }
 
 // 集合离开目录（删除、停用）：预载循环取消它在数据源上的登记，数据源没有别的集合用时窗口与同步随之释放。

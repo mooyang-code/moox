@@ -66,13 +66,24 @@ func TestCatalogHashChanges(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ready, unchanged, "editing a disabled member does not change what the engine computes")
 
-	set, err := db.GetSet(ctx, "set_a")
+}
+
+// 成员的固定参数进目录指纹：同一别名换了参数，引擎必须重新同步。
+func TestCatalogHashCoversMemberParams(t *testing.T) {
+	member := domain.AsMembers(testFactor("bias"))[0]
+	base := []domain.EngineSet{{Set: domain.FactorSet{SetID: "set_a"}, Members: []domain.MemberDef{member}}}
+	first, err := CatalogHash(base)
 	require.NoError(t, err)
-	set.SubjectMode, set.Subjects = domain.SubjectModeInclude, []string{"BTC"}
-	require.NoError(t, db.UpdateSet(ctx, set))
-	scoped, _, _, err := hub.Snapshot(ctx, "")
+
+	member.Params = map[string]float64{"window": 20}
+	withParams, err := CatalogHash([]domain.EngineSet{{Set: domain.FactorSet{SetID: "set_a"}, Members: []domain.MemberDef{member}}})
 	require.NoError(t, err)
-	require.NotEqual(t, ready, scoped, "changing the set scope changes the hash")
+	require.NotEqual(t, first, withParams)
+
+	member.Params = map[string]float64{"window": 50}
+	other, err := CatalogHash([]domain.EngineSet{{Set: domain.FactorSet{SetID: "set_a"}, Members: []domain.MemberDef{member}}})
+	require.NoError(t, err)
+	require.NotEqual(t, withParams, other)
 }
 
 func TestCatalogHashIgnoresTimestamps(t *testing.T) {

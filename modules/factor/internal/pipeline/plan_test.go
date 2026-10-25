@@ -9,10 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildLivePlanIntersectsUniverseAndScope(t *testing.T) {
+func TestBuildLivePlanUsesEventUniverse(t *testing.T) {
 	set := domain.FactorSet{
 		SpaceID: "crypto", SourceDatasetID: "dataset_bars", Freq: "1m", Status: domain.SetStatusEnabled,
-		SubjectMode: domain.SubjectModeInclude, Subjects: []string{"BTC", "ETH"},
 	}
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
 	plan, err := BuildLivePlan(periodclock.Continuous{}, LiveInput{
@@ -25,9 +24,9 @@ func TestBuildLivePlanIntersectsUniverseAndScope(t *testing.T) {
 		UpstreamFailed: []string{"ETH", "SOL"}, CarryColumns: []string{"volume", "close"}, TriggerEventID: "evt-1",
 	})
 	require.NoError(t, err)
-	require.Equal(t, []string{"BTC", "ETH"}, plan.Expected)
+	require.Equal(t, []string{"BTC", "ETH", "SOL"}, plan.Expected)
 	require.Equal(t, []string{"BTC"}, plan.Available)
-	require.Equal(t, []string{"ETH"}, plan.UpstreamFailed)
+	require.Equal(t, []string{"ETH", "SOL"}, plan.UpstreamFailed)
 	require.Equal(t, target.Add(-19*time.Minute), plan.TargetStart)
 	require.Equal(t, target, plan.PeriodTime)
 	require.Equal(t, target.Add(time.Minute), plan.TargetEnd)

@@ -78,13 +78,12 @@ func TestFactorDefUsesDatasetPipelineFields(t *testing.T) {
 	require.NotContains(t, fields, "source_path")
 }
 
-func TestValidateSetRequiresCanonicalIdentityAndScope(t *testing.T) {
+func TestValidateSetRequiresCanonicalIdentity(t *testing.T) {
 	set := FactorSet{
 		SetID:           SetID("dataset_binance_kline_1m", "1m"),
 		SpaceID:         "crypto",
 		SourceDatasetID: "dataset_binance_kline_1m",
 		Freq:            "1m",
-		SubjectMode:     SubjectModeAll,
 		ResultDatasetID: ResultDatasetID(SetID("dataset_binance_kline_1m", "1m")),
 		Status:          SetStatusPending,
 	}
@@ -94,14 +93,9 @@ func TestValidateSetRequiresCanonicalIdentityAndScope(t *testing.T) {
 	require.ErrorContains(t, ValidateSet(set), "result_dataset_id")
 
 	set.ResultDatasetID = ResultDatasetID(set.SetID)
-	set.SubjectMode = SubjectModeInclude
-	require.ErrorContains(t, ValidateSet(set), "at least one subject")
-	set.Subjects = []string{"BTC", "BTC"}
-	require.ErrorContains(t, ValidateSet(set), "duplicate subject")
 
 	// 私有集合的 ID 必须由实例推出。
 	private := set
-	private.SubjectMode, private.Subjects = SubjectModeAll, nil
 	private.OwnerInstanceID = "inst-1"
 	require.ErrorContains(t, ValidateSet(private), "set_id must be")
 	private.SetID = InstanceSetID("inst-1")
@@ -183,17 +177,6 @@ func TestMemberColumns(t *testing.T) {
 	// 参数列与源列冲突、别名不合法都拒绝。
 	require.ErrorContains(t, ValidateMembership(FactorSet{}, MemberDef{Alias: "x__y", Factor: factor}, closeColumns, nil, nil), "别名")
 	require.ErrorContains(t, ValidateMembership(FactorSet{}, fast, append(closeColumns, SourceColumn{Name: "fast__w", Numeric: true}), nil, nil), "与源列重名")
-}
-
-func TestSetInScope(t *testing.T) {
-	all := FactorSet{SubjectMode: SubjectModeAll}
-	require.True(t, all.InScope("ETH"))
-	require.True(t, all.InScope(""))
-
-	include := FactorSet{SubjectMode: SubjectModeInclude, Subjects: []string{"BTC", "ETH"}}
-	require.True(t, include.InScope("BTC"))
-	require.False(t, include.InScope("SOL"))
-	require.False(t, include.InScope(" "))
 }
 
 func compiledFactor(t *testing.T, factorID, spec string) FactorDef {

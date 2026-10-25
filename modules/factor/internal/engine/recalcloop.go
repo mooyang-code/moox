@@ -199,13 +199,10 @@ func (l *recalcLoop) extendHistory(ctx context.Context, job *PulledJob) {
 }
 
 // setSubjects resolves an empty selection the way the manager accepted it:
-// an include set uses its own subjects, an all set the source dataset's.
+// the source dataset's current subjects.
 func setSubjects(ctx context.Context, source SourceDataset, set domain.EngineSet, requested []string) ([]string, error) {
 	if len(requested) > 0 {
 		return requested, nil
-	}
-	if set.Set.SubjectMode == domain.SubjectModeInclude {
-		return set.Set.Subjects, nil
 	}
 	subjects, err := source.ListDatasetSubjects(ctx, set.Set.SpaceID, set.Set.SourceDatasetID)
 	if err != nil {

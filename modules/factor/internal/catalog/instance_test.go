@@ -13,7 +13,7 @@ const paramSpec = "params:\n  window: {type: int, min: 2, max: 30, default: 5}\n
 
 func instanceRequest(members ...InstanceMember) InstanceSetRequest {
 	return InstanceSetRequest{InstanceID: "inst-1", SpaceID: "crypto", SourceDatasetID: "dataset_prices", Freq: "1m",
-		SubjectMode: domain.SubjectModeAll, Members: members}
+		Members: members}
 }
 
 func resultColumns(meta *metadataFake, setID string) map[string]map[string]string {

@@ -19,7 +19,7 @@ func factorDefToPBListed(factor domain.FactorDef, includeSpec bool) *factorpb.Fa
 func usagesToPB(usages []domain.FactorUsage) []*factorpb.FactorUsage {
 	out := make([]*factorpb.FactorUsage, 0, len(usages))
 	for _, usage := range usages {
-		out = append(out, &factorpb.FactorUsage{SetId: usage.SetID, MemberAlias: usage.MemberAlias, Status: usage.Status})
+		out = append(out, &factorpb.FactorUsage{SetId: usage.SetID, MemberAlias: usage.MemberAlias, Status: usage.Status, Params: factorwire.CloneParams(usage.Params)})
 	}
 	return out
 }
@@ -45,6 +45,7 @@ func memberToPB(member domain.SetMember, includeSpec bool) *factorpb.FactorMembe
 		CarryAlertPeriods: int32(member.CarryAlertPeriods),
 		OutputColumns:     def.OutputColumns(),
 		ParamColumns:      def.ParamColumns(),
+		Params:            factorwire.CloneParams(member.Params),
 		CreatedAt:         factorwire.FormatTime(member.CreatedAt),
 		UpdatedAt:         factorwire.FormatTime(member.UpdatedAt),
 	}

@@ -97,7 +97,7 @@ func (s *Service) EnsureInstanceFactorSet(ctx context.Context, req *factorpb.Ens
 	}
 	result, err := s.catalog.EnsureInstanceSet(ctx, catalog.InstanceSetRequest{
 		InstanceID: req.GetInstanceId(), SpaceID: req.GetSpaceId(), SourceDatasetID: req.GetSourceDatasetId(), Freq: req.GetFreq(),
-		SubjectMode: req.GetSubjectMode(), Subjects: factorwire.CloneStrings(req.GetSubjects()), Members: members,
+		Members: members,
 	})
 	if err != nil {
 		return &factorpb.EnsureInstanceFactorSetRsp{RetInfo: inner(err)}, nil

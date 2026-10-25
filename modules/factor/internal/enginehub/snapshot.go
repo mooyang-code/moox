@@ -51,8 +51,6 @@ type hashedSet struct {
 	SpaceID         string         `json:"space_id"`
 	SourceDatasetID string         `json:"source_dataset_id"`
 	Freq            string         `json:"freq"`
-	SubjectMode     string         `json:"subject_mode"`
-	Subjects        []string       `json:"subjects"`
 	ResultDatasetID string         `json:"result_dataset_id"`
 	OwnerInstanceID string         `json:"owner_instance_id"`
 	Status          string         `json:"status"`
@@ -68,6 +66,8 @@ type hashedMember struct {
 	SpecHash             string `json:"spec_hash"`
 	DefinitionHash       string `json:"definition_hash"`
 	AllowPartialUniverse bool   `json:"allow_partial_universe"`
+	// Params 是成员的固定参数；同一别名删除重加、换参数后目录指纹必须变化，引擎才会重新同步。
+	Params map[string]float64 `json:"params,omitempty"`
 }
 
 // CatalogHash fingerprints everything the engine computes with. Timestamps are
@@ -82,11 +82,12 @@ func CatalogHash(sets []domain.EngineSet) (string, error) {
 			members = append(members, hashedMember{
 				Alias: member.Alias, FactorID: factor.FactorID, CategoryID: factor.CategoryID, Name: factor.Name, SpecHash: factor.SpecHash,
 				DefinitionHash: domain.DefinitionHash(factor), AllowPartialUniverse: factor.AllowPartialUniverse,
+				Params: member.Params,
 			})
 		}
 		hashed = append(hashed, hashedSet{
 			SetID: set.Set.SetID, SpaceID: set.Set.SpaceID, SourceDatasetID: set.Set.SourceDatasetID,
-			Freq: set.Set.Freq, SubjectMode: set.Set.SubjectMode, Subjects: set.Set.Subjects,
+			Freq:            set.Set.Freq,
 			ResultDatasetID: set.Set.ResultDatasetID, OwnerInstanceID: set.Set.OwnerInstanceID, Status: set.Set.Status,
 			ResultReady: set.ResultReady, Members: members,
 		})

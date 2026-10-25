@@ -99,7 +99,11 @@ func runImport(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	result := map[string]any{"ok": true, "factor_id": factor.FactorID, "spec_hash": factor.SpecHash,
 		"definition_hash": domain.DefinitionHash(factor)}
 	if target != nil {
-		if _, err := db.AddMember(ctx, target.set.SetID, factor.FactorID, factor.FactorID); err != nil {
+		params, err := defaultMemberParams(target.set, factor)
+		if err != nil {
+			return err
+		}
+		if _, err := db.AddMember(ctx, target.set.SetID, factor.FactorID, factor.FactorID, params); err != nil {
 			return fmt.Errorf("add factor to set: %w", err)
 		}
 		result["set_id"], result["member_status"] = target.set.SetID, domain.MemberStatusDisabled
@@ -217,7 +221,11 @@ func runImportCatalog(ctx context.Context, cfg cliConfig, out io.Writer) error {
 	for _, factor := range prepared {
 		item := map[string]string{"factor_id": factor.FactorID, "spec_hash": factor.SpecHash}
 		if target != nil {
-			if _, err := db.AddMember(ctx, target.set.SetID, factor.FactorID, factor.FactorID); err != nil {
+			params, err := defaultMemberParams(target.set, factor)
+			if err != nil {
+				return err
+			}
+			if _, err := db.AddMember(ctx, target.set.SetID, factor.FactorID, factor.FactorID, params); err != nil {
 				return fmt.Errorf("add factor %s to set: %w", factor.FactorID, err)
 			}
 			item["member_status"] = domain.MemberStatusDisabled
@@ -347,20 +355,13 @@ func runRecalc(ctx context.Context, cli cliConfig, out io.Writer) error {
 			return err
 		}
 	}
-	set, err := db.GetSet(ctx, cli.SetID)
-	if err != nil {
-		return fmt.Errorf("get factor set: %w", err)
+	// 任务的标的就是源数据集当前的标的：指定或不指定标的都要查询源数据集成员。
+	storage, closeStorage, clientErr := newStorageClient(config)
+	if clientErr != nil {
+		return clientErr
 	}
-	options := []recalc.Option{recalc.WithClock(periodclock.Continuous{})}
-	if len(cli.Subjects) == 0 && set.SubjectMode == domain.SubjectModeAll {
-		storage, closeStorage, clientErr := newStorageClient(config)
-		if clientErr != nil {
-			return clientErr
-		}
-		defer closeStorage()
-		options = append(options, recalc.WithSubjectProvider(storage))
-	}
-	svc := recalc.NewService(db, options...)
+	defer closeStorage()
+	svc := recalc.NewService(db, recalc.WithClock(periodclock.Continuous{}), recalc.WithSubjectProvider(storage))
 	job, err := svc.Submit(ctx, cli.SetID, cli.Members, cli.Subjects, requestID, cli.StartTime, cli.EndTime)
 	if err != nil {
 		return err
@@ -457,4 +458,12 @@ func newStorageClient(cfg runtimeConfig) (*storageio.Client, func() error, error
 		return nil, nil, err
 	}
 	return storageio.NewGatewayClient(gateway, storageio.AuthInfo(requestID)), gateway.Close, nil
+}
+
+// defaultMemberParams 返回命令行直接加成员时的固定参数：普通任务按定义的默认值补全，策略实例专属任务没有固定参数。
+func defaultMemberParams(set domain.FactorSet, factor domain.FactorDef) (map[string]float64, error) {
+	if set.OwnerInstanceID != "" {
+		return nil, nil
+	}
+	return domain.ResolveMemberParams(factor, nil)
 }

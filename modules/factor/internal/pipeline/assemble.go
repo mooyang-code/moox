@@ -362,8 +362,8 @@ func planParams(plan Plan) map[string]memberParamColumns {
 	out := make(map[string]memberParamColumns, len(plan.Members))
 	for _, member := range plan.Members {
 		names := member.ParamNames()
-		if len(names) == 0 {
-			continue
+		if len(names) == 0 || member.FixedParams() {
+			continue // 没有参数，或带固定参数（不写参数列）。
 		}
 		out[member.Alias] = memberParamColumns{names: names, columns: member.ParamColumns(), snapshot: snapshotOf(plan, member)}
 	}

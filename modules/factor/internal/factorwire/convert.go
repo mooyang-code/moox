@@ -16,8 +16,6 @@ func SetToPB(set domain.FactorSet) *factorpb.FactorSet {
 		SpaceId:         set.SpaceID,
 		SourceDatasetId: set.SourceDatasetID,
 		Freq:            set.Freq,
-		SubjectMode:     set.SubjectMode,
-		Subjects:        CloneStrings(set.Subjects),
 		ResultDatasetId: set.ResultDatasetID,
 		OwnerInstanceId: set.OwnerInstanceID,
 		Status:          set.Status,
@@ -43,8 +41,6 @@ func SetFromPB(pb *factorpb.FactorSet) (domain.FactorSet, error) {
 		SpaceID:         pb.GetSpaceId(),
 		SourceDatasetID: pb.GetSourceDatasetId(),
 		Freq:            pb.GetFreq(),
-		SubjectMode:     pb.GetSubjectMode(),
-		Subjects:        CloneStrings(pb.GetSubjects()),
 		ResultDatasetID: pb.GetResultDatasetId(),
 		OwnerInstanceID: pb.GetOwnerInstanceId(),
 		Status:          pb.GetStatus(),
@@ -242,7 +238,7 @@ func EngineStatusFromPB(pb *factorpb.EngineRuntimeStatus) (domain.EngineStatus, 
 func EngineSetToPB(set domain.EngineSet) *factorpb.EngineSet {
 	members := make([]*factorpb.EngineMember, 0, len(set.Members))
 	for _, member := range set.Members {
-		members = append(members, &factorpb.EngineMember{MemberAlias: member.Alias, Factor: DefToPB(member.Factor), CarryAlertPeriods: int32(member.CarryAlertPeriods)})
+		members = append(members, &factorpb.EngineMember{MemberAlias: member.Alias, Factor: DefToPB(member.Factor), CarryAlertPeriods: int32(member.CarryAlertPeriods), Params: CloneParams(member.Params)})
 	}
 	return &factorpb.EngineSet{FactorSet: SetToPB(set.Set), Members: members, ResultReady: set.ResultReady}
 }
@@ -258,7 +254,7 @@ func EngineSetFromPB(pb *factorpb.EngineSet) (domain.EngineSet, error) {
 		if err != nil {
 			return domain.EngineSet{}, fmt.Errorf("member %s: %w", raw.GetMemberAlias(), err)
 		}
-		members = append(members, domain.MemberDef{Alias: raw.GetMemberAlias(), Factor: factor, CarryAlertPeriods: int(raw.GetCarryAlertPeriods())})
+		members = append(members, domain.MemberDef{Alias: raw.GetMemberAlias(), Factor: factor, CarryAlertPeriods: int(raw.GetCarryAlertPeriods()), Params: CloneParams(raw.GetParams())})
 	}
 	return domain.EngineSet{Set: set, Members: members, ResultReady: pb.GetResultReady()}, nil
 }
@@ -344,4 +340,16 @@ func CloneStrings(values []string) []string {
 		return nil
 	}
 	return append([]string{}, values...)
+}
+
+// CloneParams 复制成员的固定参数；没有固定参数时返回 nil。
+func CloneParams(params map[string]float64) map[string]float64 {
+	if len(params) == 0 {
+		return nil
+	}
+	out := make(map[string]float64, len(params))
+	for name, value := range params {
+		out[name] = value
+	}
+	return out
 }

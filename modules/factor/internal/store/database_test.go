@@ -60,7 +60,7 @@ func TestFactorMtimeTriggersUpdateOnDirectSQL(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, s.CreateSet(ctx, testSet("set_prices", "disabled")))
 	require.NoError(t, s.CreateFactor(ctx, testFactorDef("factor_close")))
-	_, err := s.AddMember(ctx, "set_prices", "factor_close", "factor_close")
+	_, err := s.AddMember(ctx, "set_prices", "factor_close", "factor_close", nil)
 	require.NoError(t, err)
 	_, err = s.CreateRecalcJob(ctx, RecalcJob{
 		JobID: "job-1", RequestID: "req-1", SetID: "set_prices", StartTime: 100, EndTime: 200,

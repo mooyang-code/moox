@@ -111,7 +111,7 @@ func (s *Store) validateSchemaTables(tables []string, requireAll bool) error {
 			"c_factor_id", "c_name", "c_category_id", "c_spec", "c_spec_hash", "c_allow_partial_universe", "c_ctime", "c_mtime",
 		},
 		"t_factor_set_members": {
-			"c_set_id", "c_member_alias", "c_factor_id", "c_status", "c_carry_alert_periods", "c_ctime", "c_mtime",
+			"c_set_id", "c_member_alias", "c_factor_id", "c_status", "c_carry_alert_periods", "c_params", "c_ctime", "c_mtime",
 		},
 		"t_factor_param_requests": {
 			"c_seq", "c_request_id", "c_set_id", "c_member_alias", "c_period_time", "c_based_on_period",
@@ -133,8 +133,8 @@ func (s *Store) validateSchemaTables(tables []string, requireAll bool) error {
 			"c_engine_id", "c_lease_token", "c_lease_expires_at", "c_ctime", "c_mtime",
 		},
 		"t_factor_sets": {
-			"c_set_id", "c_space_id", "c_source_dataset_id", "c_freq", "c_subject_mode",
-			"c_subjects_json", "c_result_dataset_id", "c_owner_instance_id", "c_status", "c_ctime", "c_mtime",
+			"c_set_id", "c_space_id", "c_source_dataset_id", "c_freq",
+			"c_result_dataset_id", "c_owner_instance_id", "c_status", "c_ctime", "c_mtime",
 		},
 		"t_factor_engine_heartbeat": {
 			"c_id", "c_engine_id", "c_boot_id", "c_heartbeat_at", "c_mtime",

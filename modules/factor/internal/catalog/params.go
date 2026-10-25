@@ -93,7 +93,7 @@ func (s *Service) SubmitParams(ctx context.Context, writer string, submissions [
 			reject(err.Error())
 			continue
 		}
-		if err := domain.ValidateSnapshot(member.Def(), submission.Snapshot, set.InScope); err != nil {
+		if err := domain.ValidateSnapshot(member.Def(), submission.Snapshot, nil); err != nil {
 			reject(err.Error())
 			continue
 		}
@@ -169,7 +169,7 @@ func (s *Service) FreezeParams(ctx context.Context, setIDs []string, period time
 		}
 		freezeMembers := make([]store.FreezeMember, 0, len(members))
 		for _, member := range members {
-			freezeMembers = append(freezeMembers, store.FreezeMember{Alias: member.MemberAlias, Defaults: domain.DefaultSnapshot(member.Factor)})
+			freezeMembers = append(freezeMembers, store.FreezeMember{Alias: member.MemberAlias, Defaults: domain.MemberSnapshot(member.Def())})
 		}
 		freezes, err := s.db.FreezeParams(ctx, set.SetID, period.UTC(), previous, freezeMembers)
 		if err != nil {

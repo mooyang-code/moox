@@ -16,8 +16,6 @@ type factorSetRow struct {
 	SpaceID         string    `gorm:"column:c_space_id"`
 	SourceDatasetID string    `gorm:"column:c_source_dataset_id"`
 	Freq            string    `gorm:"column:c_freq"`
-	SubjectMode     string    `gorm:"column:c_subject_mode"`
-	SubjectsJSON    string    `gorm:"column:c_subjects_json"`
 	ResultDatasetID string    `gorm:"column:c_result_dataset_id"`
 	OwnerInstanceID string    `gorm:"column:c_owner_instance_id"`
 	Status          string    `gorm:"column:c_status"`
@@ -26,13 +24,9 @@ type factorSetRow struct {
 }
 
 func (r factorSetRow) domain() (domain.FactorSet, error) {
-	subjects, err := unmarshalStringSlice(r.SubjectsJSON)
-	if err != nil {
-		return domain.FactorSet{}, fmt.Errorf("decode factor set subjects: %w", err)
-	}
 	return domain.FactorSet{
 		SetID: r.SetID, SpaceID: r.SpaceID, SourceDatasetID: r.SourceDatasetID,
-		Freq: r.Freq, SubjectMode: r.SubjectMode, Subjects: subjects,
+		Freq:            r.Freq,
 		ResultDatasetID: r.ResultDatasetID, OwnerInstanceID: r.OwnerInstanceID, Status: r.Status,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}, nil
@@ -53,18 +47,8 @@ func (s *Store) CreateSet(ctx context.Context, set domain.FactorSet) error {
 	if set.SetID == "" || set.SpaceID == "" || set.SourceDatasetID == "" || set.Freq == "" || set.ResultDatasetID == "" {
 		return fmt.Errorf("factor set identity is incomplete")
 	}
-	if set.SubjectMode == "" {
-		set.SubjectMode = domain.SubjectModeAll
-	}
 	if set.Status == "" {
 		set.Status = domain.SetStatusPending
-	}
-	if set.Subjects == nil {
-		set.Subjects = []string{}
-	}
-	subjectsJSON, err := marshalStringSlice(set.Subjects)
-	if err != nil {
-		return err
 	}
 	now := time.Now().UTC()
 	if set.CreatedAt.IsZero() {
@@ -73,48 +57,16 @@ func (s *Store) CreateSet(ctx context.Context, set domain.FactorSet) error {
 	set.UpdatedAt = now
 	result := s.db.WithContext(ctx).Exec(`
 		INSERT INTO t_factor_sets
-		(c_set_id, c_space_id, c_source_dataset_id, c_freq, c_subject_mode, c_subjects_json,
+		(c_set_id, c_space_id, c_source_dataset_id, c_freq,
 		 c_result_dataset_id, c_owner_instance_id, c_status, c_ctime, c_mtime)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, set.SetID, set.SpaceID, set.SourceDatasetID, set.Freq, set.SubjectMode, subjectsJSON,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, set.SetID, set.SpaceID, set.SourceDatasetID, set.Freq,
 		set.ResultDatasetID, set.OwnerInstanceID, set.Status, set.CreatedAt, set.UpdatedAt)
 	if result.Error != nil {
 		if isUniqueConstraint(result.Error) {
 			return fmt.Errorf("%w: factor set %q already exists", ErrConflict, set.SetID)
 		}
 		return result.Error
-	}
-	return nil
-}
-
-// UpdateSet changes only the set's subject scope. Set identity, result dataset,
-// and lifecycle status are controlled by the lifecycle service.
-func (s *Store) UpdateSet(ctx context.Context, set domain.FactorSet) error {
-	if s == nil || s.db == nil {
-		return fmt.Errorf("factor database is not open")
-	}
-	set.SetID = strings.TrimSpace(set.SetID)
-	if set.SetID == "" {
-		return fmt.Errorf("factor set id is required")
-	}
-	if set.SubjectMode == "" {
-		set.SubjectMode = domain.SubjectModeAll
-	}
-	if set.Subjects == nil {
-		set.Subjects = []string{}
-	}
-	subjectsJSON, err := marshalStringSlice(set.Subjects)
-	if err != nil {
-		return err
-	}
-	result := s.db.WithContext(ctx).Exec(`
-		UPDATE t_factor_sets SET c_subject_mode = ?, c_subjects_json = ?, c_mtime = ? WHERE c_set_id = ?
-	`, set.SubjectMode, subjectsJSON, time.Now().UTC(), set.SetID)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
 	}
 	return nil
 }
@@ -208,8 +160,7 @@ func (s *Store) DeleteSet(ctx context.Context, setID string) error {
 	return nil
 }
 
-const setColumns = `c_set_id, c_space_id, c_source_dataset_id, c_freq, c_subject_mode,
-	c_subjects_json, c_result_dataset_id, c_owner_instance_id, c_status, c_ctime, c_mtime`
+const setColumns = `c_set_id, c_space_id, c_source_dataset_id, c_freq, c_result_dataset_id, c_owner_instance_id, c_status, c_ctime, c_mtime`
 
 // GetSetByOwner returns the private factor set of a strategy instance.
 func (s *Store) GetSetByOwner(ctx context.Context, instanceID string) (domain.FactorSet, error) {

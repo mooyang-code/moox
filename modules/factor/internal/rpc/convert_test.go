@@ -104,8 +104,7 @@ func TestConvertFactorSetRoundTrip(t *testing.T) {
 		SpaceID:         "crypto",
 		SourceDatasetID: "dataset_binance_kline_1m",
 		Freq:            "1m",
-		SubjectMode:     domain.SubjectModeInclude,
-		Subjects:        []string{"BTCUSDT", "ETHUSDT"},
+
 		ResultDatasetID: "dataset_factor_binance_kline_1m",
 		Status:          domain.SetStatusEnabled,
 		CreatedAt:       createdAt,

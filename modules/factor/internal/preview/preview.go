@@ -89,7 +89,7 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 		if err := domain.CheckSnapshotNumbers(req.Params); err != nil {
 			return Result{}, err
 		}
-		if err := domain.ValidateSnapshot(member, req.Params, req.Set.InScope); err != nil {
+		if err := domain.ValidateSnapshot(member, req.Params, nil); err != nil {
 			return Result{}, err
 		}
 		params[member.Alias] = domain.ParamFreeze{MemberAlias: member.Alias, Snapshot: req.Params, Source: domain.ParamsRequested}
@@ -166,9 +166,6 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 }
 
 func (s *Service) universe(ctx context.Context, set domain.FactorSet) ([]string, error) {
-	if set.SubjectMode == domain.SubjectModeInclude {
-		return append([]string(nil), set.Subjects...), nil
-	}
 	subjects, err := s.source.ListDatasetSubjects(ctx, set.SpaceID, set.SourceDatasetID)
 	if err != nil {
 		return nil, fmt.Errorf("列出源数据集的标的：%w", err)

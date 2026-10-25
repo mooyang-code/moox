@@ -312,7 +312,7 @@ func (s *mutableFilterSetSource) EnabledSet(_ context.Context, setID string) (do
 func enabledTestSet() domain.FactorSet {
 	return domain.FactorSet{
 		SetID: "fset_bars_1m", SpaceID: "crypto", SourceDatasetID: "bars", Freq: "1m",
-		SubjectMode: domain.SubjectModeAll, Status: domain.SetStatusEnabled, ResultDatasetID: "dataset_factor_bars_1m",
+		Status: domain.SetStatusEnabled, ResultDatasetID: "dataset_factor_bars_1m",
 	}
 }
 

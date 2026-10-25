@@ -21,8 +21,6 @@ import (
 type FactorMgrService interface {
 	CreateFactorSet(ctx context.Context, req *CreateFactorSetReq) (*CreateFactorSetRsp, error)
 
-	UpdateFactorSet(ctx context.Context, req *UpdateFactorSetReq) (*UpdateFactorSetRsp, error)
-
 	SetFactorSetStatus(ctx context.Context, req *SetFactorSetStatusReq) (*SetFactorSetStatusRsp, error)
 
 	DeleteFactorSet(ctx context.Context, req *DeleteFactorSetReq) (*DeleteFactorSetRsp, error)
@@ -92,24 +90,6 @@ func FactorMgrService_CreateFactorSet_Handler(svr interface{}, ctx context.Conte
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(FactorMgrService).CreateFactorSet(ctx, reqbody.(*CreateFactorSetReq))
-	}
-
-	var rsp interface{}
-	rsp, err = filters.Filter(ctx, req, handleFunc)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func FactorMgrService_UpdateFactorSet_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
-	req := &UpdateFactorSetReq{}
-	filters, err := f(req)
-	if err != nil {
-		return nil, err
-	}
-	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
-		return svr.(FactorMgrService).UpdateFactorSet(ctx, reqbody.(*UpdateFactorSetReq))
 	}
 
 	var rsp interface{}
@@ -670,10 +650,6 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: FactorMgrService_CreateFactorSet_Handler,
 		},
 		{
-			Name: "/trpc.moox.factor.FactorMgr/UpdateFactorSet",
-			Func: FactorMgrService_UpdateFactorSet_Handler,
-		},
-		{
 			Name: "/trpc.moox.factor.FactorMgr/SetFactorSetStatus",
 			Func: FactorMgrService_SetFactorSetStatus_Handler,
 		},
@@ -996,9 +972,6 @@ type UnimplementedFactorMgr struct{}
 func (s *UnimplementedFactorMgr) CreateFactorSet(ctx context.Context, req *CreateFactorSetReq) (*CreateFactorSetRsp, error) {
 	return nil, errors.New("rpc CreateFactorSet of service FactorMgr is not implemented")
 }
-func (s *UnimplementedFactorMgr) UpdateFactorSet(ctx context.Context, req *UpdateFactorSetReq) (*UpdateFactorSetRsp, error) {
-	return nil, errors.New("rpc UpdateFactorSet of service FactorMgr is not implemented")
-}
 func (s *UnimplementedFactorMgr) SetFactorSetStatus(ctx context.Context, req *SetFactorSetStatusReq) (*SetFactorSetStatusRsp, error) {
 	return nil, errors.New("rpc SetFactorSetStatus of service FactorMgr is not implemented")
 }
@@ -1124,8 +1097,6 @@ func (s *UnimplementedFactorEngine) ListParamIntervals(ctx context.Context, req 
 type FactorMgrClientProxy interface {
 	CreateFactorSet(ctx context.Context, req *CreateFactorSetReq, opts ...client.Option) (rsp *CreateFactorSetRsp, err error)
 
-	UpdateFactorSet(ctx context.Context, req *UpdateFactorSetReq, opts ...client.Option) (rsp *UpdateFactorSetRsp, err error)
-
 	SetFactorSetStatus(ctx context.Context, req *SetFactorSetStatusReq, opts ...client.Option) (rsp *SetFactorSetStatusRsp, err error)
 
 	DeleteFactorSet(ctx context.Context, req *DeleteFactorSetReq, opts ...client.Option) (rsp *DeleteFactorSetRsp, err error)
@@ -1210,26 +1181,6 @@ func (c *FactorMgrClientProxyImpl) CreateFactorSet(ctx context.Context, req *Cre
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &CreateFactorSetRsp{}
-	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
-func (c *FactorMgrClientProxyImpl) UpdateFactorSet(ctx context.Context, req *UpdateFactorSetReq, opts ...client.Option) (*UpdateFactorSetRsp, error) {
-	ctx, msg := codec.WithCloneMessage(ctx)
-	defer codec.PutBackMessage(msg)
-	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/UpdateFactorSet")
-	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
-	msg.WithCalleeApp("moox")
-	msg.WithCalleeServer("factor")
-	msg.WithCalleeService("FactorMgr")
-	msg.WithCalleeMethod("UpdateFactorSet")
-	msg.WithSerializationType(codec.SerializationTypePB)
-	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
-	callopts = append(callopts, c.opts...)
-	callopts = append(callopts, opts...)
-	rsp := &UpdateFactorSetRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

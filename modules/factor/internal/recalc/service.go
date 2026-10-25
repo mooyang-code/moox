@@ -179,27 +179,31 @@ func (s *Service) selection(ctx context.Context, setID string, aliases, subjects
 }
 
 func (s *Service) resolveSubjects(ctx context.Context, set domain.FactorSet, requested []string) ([]string, error) {
-	if len(requested) == 0 {
-		if set.SubjectMode == domain.SubjectModeInclude {
-			requested = append([]string(nil), set.Subjects...)
-		} else {
-			if s.cfg.subjects == nil {
-				return nil, errors.New("Storage subject provider is required for an all-subject factor set")
-			}
-			var err error
-			requested, err = s.cfg.subjects.ListDatasetSubjects(ctx, set.SpaceID, set.SourceDatasetID)
-			if err != nil {
-				return nil, fmt.Errorf("list source dataset subjects: %w", err)
-			}
-		}
+	if s.cfg.subjects == nil {
+		return nil, errors.New("Storage subject provider is required to resolve factor set subjects")
+	}
+	// 任务的标的就是源数据集当前的标的：不指定时取全部，指定时必须都属于源数据集。
+	all, err := s.cfg.subjects.ListDatasetSubjects(ctx, set.SpaceID, set.SourceDatasetID)
+	if err != nil {
+		return nil, fmt.Errorf("list source dataset subjects: %w", err)
+	}
+	explicit := len(requested) > 0
+	if !explicit {
+		requested = all
 	}
 	resolved, err := normalizeSubjects(requested)
 	if err != nil {
 		return nil, err
 	}
-	for _, subject := range resolved {
-		if !set.InScope(subject) {
-			return nil, fmt.Errorf("subject %q is outside factor set scope", subject)
+	if explicit {
+		inDataset := make(map[string]struct{}, len(all))
+		for _, subject := range all {
+			inDataset[subject] = struct{}{}
+		}
+		for _, subject := range resolved {
+			if _, ok := inDataset[subject]; !ok {
+				return nil, fmt.Errorf("subject %q is not in source dataset %s", subject, set.SourceDatasetID)
+			}
 		}
 	}
 	return resolved, nil

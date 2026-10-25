@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/stretchr/testify/require"
 )
@@ -70,15 +69,12 @@ func TestWindowLengthIsConfiguredLookback(t *testing.T) {
 func TestRemovedSubjectsLeaveWindowAndFollow(t *testing.T) {
 	fx := newFixture(t, mean3())
 	fx.data.cfg.Lookback = func(seriesstore.Source) int { return 10 }
-	fx.set.Set.SubjectMode = domain.SubjectModeInclude
-	fx.set.Set.Subjects = []string{"A", "B"}
 	fx.st.put("A", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 	fx.st.put("B", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"A", "B"}))
 	window := fx.data.st(startupSrc).win.Load()
 	require.Equal(t, []string{"A", "B"}, window.Subjects())
 
-	fx.set.Set.Subjects = []string{"A"}
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"A"}))
 	require.Equal(t, []string{"A"}, window.Subjects(), "B 已移出集合，窗口释放它占的内存")
 
@@ -103,8 +99,6 @@ func TestLongGapThreshold(t *testing.T) {
 func TestReaddedSubjectIsResynced(t *testing.T) {
 	fx := newFixture(t, mean3())
 	fx.data.cfg.Lookback = func(seriesstore.Source) int { return 10 }
-	fx.set.Set.SubjectMode = domain.SubjectModeInclude
-	fx.set.Set.Subjects = []string{"A", "B"}
 	fx.st.put("A", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 	fx.st.put("B", 100, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"A", "B"}))
