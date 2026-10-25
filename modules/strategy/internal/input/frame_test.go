@@ -249,3 +249,46 @@ func TestLoadBarRejectsInactiveView(t *testing.T) {
 		t.Fatalf("非 active 的 View 应记 config_error：%v", err)
 	}
 }
+
+// 声明了 factors 的实例：年龄探针读绑定的 K 线 View，不读私有因子结果 View，且不沿用结果 View 的修订号。
+// 启用成员不自动补算历史，私有因子结果 View 只有启用之后的行，按它判断会让所有标的都被当作新上市。
+func TestLoadBarProbesAgeOnTheSourceViewForInstancesWithFactors(t *testing.T) {
+	client := newFakeClient("spot")
+	client.views["view_kline_1h"] = ViewInfo{ViewID: "view_kline_1h", DatasetID: "ds_factor", Frequency: "1h", Status: "active", ActiveIndexID: "idx_k",
+		IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, Columns: []ViewColumn{plainColumn("close")}}
+	// 私有因子结果 View 刚建立：覆盖只到启用的这一期。
+	factorView := client.views["view_factor_1h"]
+	factorView.IndexedFrom, factorView.IndexedTo = barStart, barStart
+	client.views["view_factor_1h"] = factorView
+	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
+	resolved, program, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.rows = func(query Query) ([]Row, uint64, error) {
+		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4}}), 11, nil
+	}
+
+	// 没有源 View：按因子结果 View 判断，覆盖只到当期，整期 history_insufficient。
+	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
+	var skip *SkipError
+	if !errors.As(err, &skip) || skip.Reason != SkipHistoryInsufficient {
+		t.Fatalf("按空的因子结果 View 判断应记 history_insufficient：%v", err)
+	}
+
+	resolved.SourceViewID = "view_kline_1h"
+	client.queries = nil
+	if _, err := (Loader{Client: client}).LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart}); err != nil {
+		t.Fatalf("K 线 View 覆盖足够时应通过年龄探针：%v", err)
+	}
+	var probes int
+	for _, query := range client.queries[1:] {
+		if query.ViewID != "view_kline_1h" || query.ExpectedIndexID != "idx_k" || query.ExpectedRevision != 0 {
+			t.Fatalf("探针应读 K 线 View、固定它自己的索引且不沿用主查询修订号：%+v", query)
+		}
+		probes++
+	}
+	if probes == 0 || client.queries[0].ViewID != "view_factor_1h" {
+		t.Fatalf("主查询读因子结果 View，探针读 K 线 View：%+v", client.queries)
+	}
+}

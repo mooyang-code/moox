@@ -262,3 +262,34 @@ func TestResolveChecksTagsAndInstruments(t *testing.T) {
 		t.Fatalf("正确的引用应通过：%v", err)
 	}
 }
+
+// 声明了 factors 的实例：启用不自动补算历史，刚建立的私有因子结果 View 是空的，
+// min_age_bars 的覆盖检查按绑定的 K 线 View（SourceViewID）判断。
+func TestCheckCoverageUsesTheSourceViewForInstancesWithFactors(t *testing.T) {
+	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 240\n", 1))
+	client := newFakeClient("spot")
+	client.views["view_kline_1h"] = ViewInfo{ViewID: "view_kline_1h", DatasetID: "ds_kline", Frequency: "1h", Status: "active", ActiveIndexID: "idx_k",
+		IndexedFrom: barStart.Add(-300 * time.Hour), IndexedTo: barStart}
+	// 私有因子结果 View 刚建立，还没有任何行。
+	empty := client.views["view_factor_1h"]
+	empty.IndexedFrom, empty.IndexedTo = time.Time{}, time.Time{}
+	client.views["view_factor_1h"] = empty
+	resolved, _, err := Resolve(context.Background(), client, "space", "view_factor_1h", strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err == nil || !strings.Contains(err.Error(), "覆盖范围未知") {
+		t.Fatalf("没有源 View 时仍按因子结果 View 校验，空 View 应拒绝：%v", err)
+	}
+	resolved.SourceViewID = "view_kline_1h"
+	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err != nil {
+		t.Fatalf("K 线 View 覆盖足够时应允许启用：%v", err)
+	}
+	short := client.views["view_kline_1h"]
+	short.IndexedFrom = barStart.Add(-100 * time.Hour)
+	client.views["view_kline_1h"] = short
+	if err := CheckCoverage(context.Background(), client, "space", resolved, testNow); err == nil || !strings.Contains(err.Error(), "当前只覆盖") || !strings.Contains(err.Error(), "view_kline_1h") {
+		t.Fatalf("K 线 View 覆盖不足时仍应拒绝，并指明是 K 线 View：%v", err)
+	}
+}

@@ -218,9 +218,15 @@ func referencedTags(strategy dsl.Strategy) []string {
 // CheckCoverage 在启用实例时校验 View 的覆盖（需要读取覆盖统计，统计未缓存时现算）：A 股日线总是校验行键是交易日的
 // 上海零点（按 UTC 零点写行的数据集启用后每一期都会被丢弃）；设置了 min_age_bars 时校验能追溯所需的历史。两者都不
 // 涉及时不读取。
+//
+// 声明了 factors 的实例按绑定的 K 线 View（SourceViewID）校验，而不是私有因子结果 View：启用成员不自动补算历史，
+// 刚建立的私有因子集的结果 View 是空的，历史长度由源 K 线决定（因子的回看由因子机本地数据保证）。
 func CheckCoverage(ctx context.Context, client Client, spaceID string, resolved Resolved, now time.Time) error {
 	if resolved.MinAgeBars <= 0 && !stockDaily(resolved.Calendar, resolved.Bar) {
 		return nil
+	}
+	if resolved.SourceViewID != "" {
+		resolved.ViewID = resolved.SourceViewID
 	}
 	view, err := client.GetView(ctx, spaceID, resolved.ViewID)
 	if err != nil {
