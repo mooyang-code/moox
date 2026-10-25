@@ -29,10 +29,23 @@ func (v *MetadataValidator) ValidateRow(ctx context.Context, row *pb.RowFieldUps
 	return v.validateRow(ctx, row, v.snapshotReader(ctx))
 }
 
+// ValidateRows 校验一批行。数据集与列定义按 (space, dataset) 只查一次：快照查询是对全部元数据条目的线性扫描，
+// 逐行查询时一个 1000 行的请求要扫两千遍。
 func (v *MetadataValidator) ValidateRows(ctx context.Context, rows []*pb.RowFieldUpsert) error {
 	reader := v.snapshotReader(ctx)
+	schemas := make(map[[2]string]*datasetSchema)
 	for _, row := range rows {
-		if err := v.validateRow(ctx, row, reader); err != nil {
+		key := row.GetKey()
+		id := [2]string{key.GetSpaceId(), key.GetDatasetId()}
+		schema, ok := schemas[id]
+		if !ok {
+			var err error
+			if schema, err = v.loadDatasetSchema(ctx, reader, key.GetSpaceId(), key.GetDatasetId()); err != nil {
+				return err
+			}
+			schemas[id] = schema
+		}
+		if err := schema.check(row); err != nil {
 			return err
 		}
 	}
@@ -89,33 +102,34 @@ func (v *MetadataValidator) RequestSnapshot() metadata.RequestSnapshot {
 }
 
 func (v *MetadataValidator) validateRow(ctx context.Context, row *pb.RowFieldUpsert, reader metadataReader) error {
-	if v == nil || reader == nil {
-		return fmt.Errorf("metadata validator is not configured")
-	}
 	key := row.GetKey()
-	dataset, err := reader.GetDataset(ctx, key.GetSpaceId(), key.GetDatasetId())
+	schema, err := v.loadDatasetSchema(ctx, reader, key.GetSpaceId(), key.GetDatasetId())
 	if err != nil {
 		return err
 	}
-	if dataset == nil || (dataset.GetStatus() != "" && dataset.GetStatus() != "active") {
-		return fmt.Errorf("dataset %q is not active", key.GetDatasetId())
+	return schema.check(row)
+}
+
+// datasetSchema 是校验一个数据集的行所需的元数据：数据集本身与按列名、来源 ID 索引的启用列。
+type datasetSchema struct {
+	dataset *pb.Dataset
+	allowed map[string]*pb.DatasetColumn
+}
+
+func (v *MetadataValidator) loadDatasetSchema(ctx context.Context, reader metadataReader, spaceID, datasetID string) (*datasetSchema, error) {
+	if v == nil || reader == nil {
+		return nil, fmt.Errorf("metadata validator is not configured")
 	}
-	if dataset.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES && key.GetTimeSeries() == nil {
-		return fmt.Errorf("dataset %q requires time-series row key", key.GetDatasetId())
-	}
-	if dataset.GetDataKind() == pb.DataKind_DATA_KIND_RECORD && key.GetRecord() == nil {
-		return fmt.Errorf("dataset %q requires record row key", key.GetDatasetId())
-	}
-	// 每个 Dataset 只有一个规范频率，频率不同（含 1H 这类别名）的行一律拒绝。
-	if series := key.GetTimeSeries(); series != nil && series.GetFreq() != dataset.GetFreq() {
-		return fmt.Errorf("row freq %q does not match dataset %q freq %q", series.GetFreq(), key.GetDatasetId(), dataset.GetFreq())
+	dataset, err := reader.GetDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		return nil, err
 	}
 	const pageSize = uint32(1000)
 	var columns []*pb.DatasetColumn
 	for pageNo := uint32(1); ; pageNo++ {
-		items, page, err := reader.ListDatasetColumns(ctx, key.GetSpaceId(), key.GetDatasetId(), &pb.Page{Page: pageNo, Size: pageSize})
+		items, page, err := reader.ListDatasetColumns(ctx, spaceID, datasetID, &pb.Page{Page: pageNo, Size: pageSize})
 		if err != nil {
-			return err
+			return nil, err
 		}
 		columns = append(columns, items...)
 		if page == nil || !page.GetHasMore() || len(items) == 0 {
@@ -130,8 +144,26 @@ func (v *MetadataValidator) validateRow(ctx context.Context, row *pb.RowFieldUps
 		allowed[column.GetColumnName()] = column
 		allowed[column.GetOriginId()] = column
 	}
+	return &datasetSchema{dataset: dataset, allowed: allowed}, nil
+}
+
+func (d *datasetSchema) check(row *pb.RowFieldUpsert) error {
+	key, dataset := row.GetKey(), d.dataset
+	if dataset == nil || (dataset.GetStatus() != "" && dataset.GetStatus() != "active") {
+		return fmt.Errorf("dataset %q is not active", key.GetDatasetId())
+	}
+	if dataset.GetDataKind() == pb.DataKind_DATA_KIND_TIME_SERIES && key.GetTimeSeries() == nil {
+		return fmt.Errorf("dataset %q requires time-series row key", key.GetDatasetId())
+	}
+	if dataset.GetDataKind() == pb.DataKind_DATA_KIND_RECORD && key.GetRecord() == nil {
+		return fmt.Errorf("dataset %q requires record row key", key.GetDatasetId())
+	}
+	// 每个 Dataset 只有一个规范频率，频率不同（含 1H 这类别名）的行一律拒绝。
+	if series := key.GetTimeSeries(); series != nil && series.GetFreq() != dataset.GetFreq() {
+		return fmt.Errorf("row freq %q does not match dataset %q freq %q", series.GetFreq(), key.GetDatasetId(), dataset.GetFreq())
+	}
 	for _, field := range row.GetFields() {
-		column := allowed[field.GetFieldId()]
+		column := d.allowed[field.GetFieldId()]
 		if column == nil {
 			return fmt.Errorf("field %q is not registered in dataset %q", field.GetFieldId(), key.GetDatasetId())
 		}
