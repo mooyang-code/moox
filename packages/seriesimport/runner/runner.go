@@ -566,7 +566,9 @@ func expand(paths []string, format string) ([]string, error) {
 
 func stableJobID(req Request, files []string) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s|%s|%s|%s|%s|%s|%d|%t|%t;", req.Space, req.Dataset, req.Freq, req.Subject, req.TimeColumn, req.SeriesTag, req.batchRows(), req.AllowMissing, req.Recalc)
+	// TailRows 进断点身份：同一批文件先按尾部 1000 行导入、再改成 6000 行时，不能沿用「文件已写完」的断点把新增的行跳过。
+	// TailCutoff 随「现在」变化，不进身份，否则每次重跑都换任务、续传失效；它只会单调后移，已写的行不受影响。
+	fmt.Fprintf(h, "%s|%s|%s|%s|%s|%s|%d|%t|%t|%d;", req.Space, req.Dataset, req.Freq, req.Subject, req.TimeColumn, req.SeriesTag, req.batchRows(), req.AllowMissing, req.Recalc, req.TailRows)
 	for _, f := range files {
 		info, err := os.Stat(f)
 		if err != nil {

@@ -20,8 +20,9 @@ import (
 // 免得真问题被吞掉：仍未恢复的告警逐条列出，期间触发后又恢复的按检查项列出次数与时间范围。
 
 const (
-	muteSummaryEventLimit = 2000
-	muteSummaryLineLimit  = 20
+	muteSummaryEventLimit  = 2000
+	muteSummaryFiringLimit = 500
+	muteSummaryLineLimit   = 20
 	// muteSummaryFallbackWindow 是重启后丢了静默起点时回看的范围（一次屏蔽最长 24 小时）。
 	muteSummaryFallbackWindow = 24 * time.Hour
 )
@@ -53,7 +54,14 @@ func (r *Runtime) onLifecycleChange(ref lifecycle.Ref, from, to lifecycle.Stage,
 	}
 	switch {
 	case to == lifecycle.StagePaused:
-		r.mutes.enter(time.Now())
+		// 起点取生命周期持久化的暂停时间：Monitor 在静默期间重启时，回调里的「现在」是重启时刻，会丢掉重启前的事件。
+		at := time.Now()
+		if life := r.life.Load(); life != nil {
+			if since := life.Snapshot().Self.PausedSince; !since.IsZero() {
+				at = since
+			}
+		}
+		r.mutes.enter(at)
 	case silenced(from) && !silenced(to) && to.Active():
 		since := r.mutes.leave()
 		if since.IsZero() {
@@ -105,10 +113,12 @@ func (r *Runtime) buildMuteSummary(ctx context.Context, since, until time.Time) 
 	if err != nil {
 		return "", "", false, err
 	}
-	firing, err := r.Repositories.Alerts.ListFiringStates(ctx, "", 0)
+	firing, err := r.Repositories.Alerts.ListFiringStates(ctx, "", muteSummaryFiringLimit)
 	if err != nil {
 		return "", "", false, err
 	}
+	// 事件和触发态都有上限：达到上限时汇总只覆盖最近的部分，在正文里写明，不能悄悄少报。
+	truncated := len(events) >= muteSummaryEventLimit || len(firing) >= muteSummaryFiringLimit
 	stillFiring := make(map[string]bool, len(firing))
 	for _, state := range firing {
 		stillFiring[state.SpaceID+"/"+state.CheckID] = true
@@ -178,6 +188,9 @@ func (r *Runtime) buildMuteSummary(ctx context.Context, since, until time.Time) 
 	}
 	section("仍未恢复", open)
 	section("期间触发后已恢复", recovered)
+	if truncated {
+		fmt.Fprintf(&body, "\n注意：静默期间的告警事件太多，上面只统计了最近 %d 条事件、%d 个触发中的告警，更早的以告警记录为准。\n", muteSummaryEventLimit, muteSummaryFiringLimit)
+	}
 	severity := notification.SeverityInfo
 	if len(open) > 0 {
 		severity = notification.SeverityWarning

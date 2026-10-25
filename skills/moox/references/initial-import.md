@@ -50,11 +50,12 @@ import-pack/
 ## 2. 预检（操作机，只读）
 
 ```bash
-env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --manifest-pack <包目录> --target storage --dry-run --min-rows <回看数量> --manifest ./moox.toml
+env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --manifest-pack <包目录> --target storage --dry-run --min-rows <回看数量> \
+  --tail-rows 6000 --allow-missing --manifest ./moox.toml > preflight.json
 ```
 
-输出每个文件的行数、首尾时间、**尾部窗口起点与行数**（`tail_from`、`tail_rows`，不加 `--tail-rows` 时没有）。有任何一项不合格就停下，
-把问题原文交给用户整理包；不要自己改包。回看数量查因子机 `/data/moox/factor-engine/config/engine.yaml` 的 `window.lookback`（数据源有 `lookback_overrides` 的取覆盖值）。
+`--min-rows` 是必填的硬约束；`--allow-missing` 让允许缺周期的包通过；`--tail-rows` 必须与第 8 步一致，预检输出里才有每个文件的**尾部窗口起点与行数**（`tail_from`、`tail_rows`），第 10 步的校验要用。
+有任何一项不合格就停下，把问题原文交给用户整理包；不要自己改包。回看数量查因子机 `/data/moox/factor-engine/config/engine.yaml` 的 `window.lookback`（数据源有 `lookback_overrides` 的取覆盖值）。
 
 ## 3. 核对 series_tag（操作机，只读）
 
@@ -144,8 +145,14 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli import --manifest-pack <包目录> --t
 
 ## 10. 校验（只比边界与行数）
 
-- **Storage**：`collector kline check --from <末根+1期> --to <现在>` 为 `missing: 0`；每个标的在 `[max(尾部首行, 现在 − 保留期 + 1 天), 文件末根]` 内的行数等于 CSV 在同一区间内的行数
-  （预检输出的 `tail_from` 就是这个起点，沿用它）。抽样 8 个标的，必须含导入时失败重试过的。
+- **Storage**：`collector kline check --from <末根+1期> --to <现在>` 为 `missing: 0`；**每个标的**在 `[tail_from, 文件末根]` 内的行数等于 CSV 在同一区间内的行数——
+  用脚本逐个核对（`tail_from` 取自第 2 步的预检输出，已经包含了保留期截止点）：
+
+  ```bash
+  python3 -I skills/moox/scripts/import_verify.py --pack <包目录> --preflight preflight.json --moox-cli <moox-cli 路径> --moox-toml ./moox.toml
+  ```
+
+  退出码非零或有“行数不一致 / 读取失败”的标的就停下汇报（读取失败多半是 Storage 忙，稍后重跑脚本即可）。
 - **因子机本地**：每个标的本地最早一根等于 `manifest.json` 的 `first_utc`；因子机同步器接上之后本地最晚一根等于 Storage 最晚一根；
   `[文件末根, 现在]` 内没有填充行（有说明缺口没补全）。本地边界用引擎接口：`GET http://127.0.0.1:11417/v1/series/bounds?space=…&dataset=…&freq=…&subject=…`（带健康鉴权，因子机上执行）。
 
@@ -159,7 +166,8 @@ env -u HTTP_PROXY -u HTTPS_PROXY moox-cli monitor unmute --file ./moox.toml
 
 ## 12. 启用
 
-建因子集或策略实例。**启用不会自动补算历史**：因子从启用那一期开始计算（本地窗口完整，第一期就能算出所有标的）。
+建因子集或策略实例。**启用不会自动补算历史**：因子从引擎同步到新目录之后的周期开始计算（目录每分钟第 45 秒同步一次，
+本地窗口完整，同步之后的第一期就能算出所有标的）；启用到同步之间收盘的周期不会补算，策略私有因子集预热期间跳过的周期会由引擎的跳过账本自动补上，其余的需要时手动补算。
 
 - 策略 `min_age_bars` 按绑定的 **K 线 View** 判断，不看私有因子结果 View。
 - 用到 `bars[-1]` 因子列的规则，启用后的第一期会以 `previous_version_unknown` 整期跳过，第二期起正常（新实例没有持仓，不会触发退出）。

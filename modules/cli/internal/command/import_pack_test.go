@@ -161,14 +161,14 @@ func TestImportPackRejectsBrokenManifestsAndNameMismatch(t *testing.T) {
 
 func TestApplyImportPackFillsOptionsAndRejectsConflicts(t *testing.T) {
 	dir := writePack(t, map[string]int{"BTC-USDT": 60}, 3*24*time.Hour)
-	opts := importOptions{Pack: dir}
+	opts := importOptions{Pack: dir, MinRows: 50}
 	if _, err := applyImportPack(&opts); err != nil {
 		t.Fatal(err)
 	}
 	if opts.Space != "crypto" || opts.Dataset != "dataset_x" || opts.Freq != "5m" || opts.SeriesTag == "" || len(opts.Paths) != 1 {
 		t.Fatalf("没有从清单补全：%+v", opts)
 	}
-	for _, conflict := range []importOptions{{Pack: dir, Freq: "1h"}, {Pack: dir, Dataset: "other"}, {Pack: dir, Paths: []string{"x.csv"}}, {Pack: dir, Subject: "A"}} {
+	for _, conflict := range []importOptions{{Pack: dir, MinRows: 50, Freq: "1h"}, {Pack: dir, MinRows: 50, Dataset: "other"}, {Pack: dir, MinRows: 50, Paths: []string{"x.csv"}}, {Pack: dir, MinRows: 50, Subject: "A"}} {
 		if _, err := applyImportPack(&conflict); err == nil {
 			t.Fatalf("%+v 应报冲突", conflict)
 		}
@@ -185,5 +185,14 @@ func TestImportPackTailCutoffUsesRetentionWithMargin(t *testing.T) {
 	forever := importPackLimits{Now: packNow, Retention: storagepolicy.Period{Forever: true}, RetentionKnown: true}
 	if !forever.tailCutoff().IsZero() || forever.maxGap() != importPackMaxGap {
 		t.Fatal("永久保留没有尾部下限，缺口上限仍是 30 天")
+	}
+}
+
+// 导入包预检的最少行数是硬约束：不给 --min-rows 就拒绝，而不是悄悄不检查。
+func TestApplyImportPackRequiresMinRows(t *testing.T) {
+	dir := writePack(t, map[string]int{"BTC-USDT": 60}, 3*24*time.Hour)
+	opts := importOptions{Pack: dir}
+	if _, err := applyImportPack(&opts); err == nil || !strings.Contains(err.Error(), "--min-rows") {
+		t.Fatalf("没给 --min-rows 应拒绝：%v", err)
 	}
 }

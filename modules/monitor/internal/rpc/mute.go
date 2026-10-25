@@ -33,8 +33,19 @@ func (s *Service) MuteAlerts(ctx context.Context, req *monitorpb.MuteAlertsReq) 
 	if seconds == 0 || time.Duration(seconds)*time.Second > MaxMuteDuration {
 		return &monitorpb.MuteAlertsRsp{RetInfo: invalid(fmt.Errorf("duration_seconds must be within [1, %d]", int(MaxMuteDuration/time.Second)))}, nil
 	}
-	if current := muteState(life.Snapshot().Self); current.GetMuted() {
+	self := life.Snapshot().Self
+	if current := muteState(self); current.GetMuted() {
 		return &monitorpb.MuteAlertsRsp{RetInfo: invalid(errors.New("alerts are already muted; unmute first")), State: current}, nil
+	}
+	// 模块已经因为别的原因暂停（系统暂停、手动暂停、恢复追赶、重置、故障）或带着控制意图时不能再设置屏蔽：
+	// 手动暂停会覆盖已有的暂停信息，解除或到期时还会连别的暂停一起放行。
+	switch self.Stage {
+	case lifecycle.StageReady, lifecycle.StageWarming, lifecycle.StageRunning:
+	default:
+		return &monitorpb.MuteAlertsRsp{RetInfo: invalid(fmt.Errorf("monitor is %s (%s); alerts can only be muted while it is ready or running", self.Stage, self.Reason))}, nil
+	}
+	if self.Hold != lifecycle.HoldNone {
+		return &monitorpb.MuteAlertsRsp{RetInfo: invalid(fmt.Errorf("monitor is under %s; alerts cannot be muted", self.Hold))}, nil
 	}
 	reason := muteReasonPrefix
 	if text := strings.TrimSpace(req.GetReason()); text != "" {

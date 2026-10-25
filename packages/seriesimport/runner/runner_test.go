@@ -404,3 +404,32 @@ func TestTailRowsResumeKeepsBatchBoundaries(t *testing.T) {
 		require.True(t, all[i].After(all[i-1]))
 	}
 }
+
+// 尾部窗口行数进断点身份：先按尾部 5 行导入、再改成 12 行并复用同一个断点库时，新增的行必须写进去，
+// 不能因为「文件已写完」的断点被跳过。
+func TestChangingTailRowsDoesNotReuseTheCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	file := writeCSV(t, dir, "BTCUSDT.csv", "data_time,close,volume", minuteRows(0, 50))
+	cps, err := checkpoint.Open(filepath.Join(dir, "cp.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cps.Close() })
+
+	small := &tailRecorder{recorder{name: "storage"}}
+	req := baseRequest(file)
+	req.TailRows = 5
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{small}, cps)
+	require.NoError(t, err)
+	require.Len(t, chunkTimes(small.chunks), 5)
+
+	large := &tailRecorder{recorder{name: "storage"}}
+	req.TailRows = 12
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{large}, cps)
+	require.NoError(t, err)
+	require.Len(t, chunkTimes(large.chunks), 12, "窗口变大后不能沿用旧窗口的断点")
+
+	// 同样的窗口重跑才续传：已写完，什么都不再写。
+	again := &tailRecorder{recorder{name: "storage"}}
+	_, err = Run(context.Background(), req, Meta{Fields: fields}, []Target{again}, cps)
+	require.NoError(t, err)
+	require.Empty(t, again.chunks)
+}

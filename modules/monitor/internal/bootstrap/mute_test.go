@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -134,4 +135,56 @@ func TestLifecycleChangeTracksMuteWindow(t *testing.T) {
 	runtime.onLifecycleChange(lifecycle.Ref{}, lifecycle.StageResuming, lifecycle.StageRunning, "")
 	require.Zero(t, runtime.mutes.since.Load(), "回到放行阶段后起点被取走")
 	runtime.workers.Wait()
+}
+
+// 模块已经因为别的原因暂停（系统暂停等）时不能再设置屏蔽：否则手动暂停会覆盖已有的暂停，解除或到期时连别的暂停一起放行。
+func TestMuteIsRejectedWhileTheModuleIsPausedForAnotherReason(t *testing.T) {
+	life, _, runtime := newMonitorResetEnv(t)
+	ctx := context.Background()
+	service := monitorrpc.New(runtime.Repositories, monitorrpc.Options{Lifecycle: runtime.life.Load})
+	_, err := life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseSystem, Reason: "系统维护"})
+	require.NoError(t, err)
+
+	rsp, err := service.MuteAlerts(ctx, &monitorpb.MuteAlertsReq{DurationSeconds: 60})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Equal(t, lifecycle.StagePaused, life.Snapshot().Self.Stage, "系统暂停原样保留")
+	require.Equal(t, lifecycle.PauseSystem, life.Snapshot().Self.Pause.Kind)
+
+	// 屏蔽的解除也不影响系统暂停。
+	un, err := service.UnmuteAlerts(ctx, &monitorpb.UnmuteAlertsReq{})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, un.GetRetInfo().GetCode())
+	require.Equal(t, lifecycle.StagePaused, life.Snapshot().Self.Stage)
+}
+
+// 进入暂停时静默起点取生命周期持久化的暂停时间，而不是回调触发时的「现在」（Monitor 在静默期间重启时两者不同）。
+func TestLifecycleChangeUsesPersistedPauseStartAsMuteStart(t *testing.T) {
+	life, _, runtime := newMonitorResetEnv(t)
+	ctx := context.Background()
+	_, err := life.Execute(ctx, lifecycle.Request{Command: lifecycle.CmdPause, PauseKind: lifecycle.PauseManual, Reason: "告警屏蔽"})
+	require.NoError(t, err)
+	persisted := life.Snapshot().Self.PausedSince
+	require.False(t, persisted.IsZero())
+
+	time.Sleep(20 * time.Millisecond)
+	runtime.onLifecycleChange(lifecycle.Ref{}, lifecycle.StageNotReady, lifecycle.StagePaused, "重启后回到暂停")
+	require.Equal(t, persisted.UnixNano(), runtime.mutes.since.Load(), "起点应是持久化的暂停时间")
+}
+
+// 事件或触发态达到上限时，汇总正文写明只统计了最近的部分，不能悄悄少报。
+func TestMuteSummaryStatesWhenTruncated(t *testing.T) {
+	_, _, runtime := newMonitorResetEnv(t)
+	ctx := context.Background()
+	base := time.Date(2026, 10, 25, 4, 0, 0, 0, time.UTC)
+	for i := 0; i < muteSummaryEventLimit; i++ {
+		require.NoError(t, runtime.Repositories.Alerts.CreateEvent(ctx, &domain.AlertEvent{
+			EventID: fmt.Sprintf("e%d", i), SpaceID: "crypto", RuleID: "default:c", CheckID: fmt.Sprintf("c%d", i%7),
+			EventType: domain.AlertEventTriggered, Status: "firing", CreatedAt: base.Add(time.Duration(i) * time.Second),
+		}))
+	}
+	body, _, ok, err := runtime.buildMuteSummary(ctx, base, base.Add(2*time.Hour))
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Contains(t, body, "太多")
 }

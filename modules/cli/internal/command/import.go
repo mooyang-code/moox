@@ -259,6 +259,9 @@ func applyImportPack(opts *importOptions) (*importPack, error) {
 	if len(opts.Paths) > 0 || opts.Subject != "" {
 		return nil, errors.New("用了 --manifest-pack 就不要再指定 --path 或 --subject：文件清单取自导入包")
 	}
+	if opts.MinRows <= 0 {
+		return nil, errors.New("用了 --manifest-pack 必须同时给 --min-rows（该数据源的回看数量，见因子引擎 engine.yaml 的 window.lookback）：行数不够时因子窗口凑不满，这是预检的硬约束")
+	}
 	opts.Paths = pack.paths()
 	return pack, nil
 }
