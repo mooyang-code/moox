@@ -143,7 +143,7 @@ func TestLiveWriteBaseline(t *testing.T) {
 			return tx.Rollback()
 		})
 	}
-	upsert := func(names []string, rows int) string { return upsertSQLBatch(names, viewindex.LiveWrite, rows) }
+	upsert := func(names []string, rows int) string { return legacyUpsertSQLBatch(names, viewindex.LiveWrite, rows) }
 	plain := func(names []string, rows int) string {
 		return upsertSQLPlainInsert(names, rows)
 	}

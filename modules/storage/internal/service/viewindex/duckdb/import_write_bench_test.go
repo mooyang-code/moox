@@ -16,7 +16,7 @@ import (
 )
 
 // TestImportWriteThroughput 复现历史导入时 K 线 View 的写入：7 个 K 线列，每批 4000 行（4 个事件 × 1000 行，
-// 同一标的连续时间），索引里已有 subjects × bars 行。对比现状 Write 与「按列整体绑定、一条语句写完一批」的原型。
+// 同一标的连续时间），索引里已有 subjects × bars 行。对比改造前的写入（legacy_write_oracle_test.go）与按列批量写入（IndexManager.Write）。
 // 默认跳过；MOOX_DUCK_BENCH=1 时运行。MOOX_DUCK_BENCH_SUBJECTS / MOOX_DUCK_BENCH_BARS 指定预置规模，
 // MOOX_DUCK_BENCH_BATCHES 指定每种写法写多少批。
 func TestImportWriteThroughput(t *testing.T) {
@@ -134,108 +134,26 @@ func TestImportWriteThroughput(t *testing.T) {
 			total.Round(time.Millisecond), float64(rows)/total.Seconds(), count, counted)
 	}
 
-	t.Run("现状", func(t *testing.T) {
-		run(t, "current", func(manager *IndexManager, id string, writes []viewindex.RowWrite) error {
+	t.Run("改造前", func(t *testing.T) {
+		run(t, "legacy", func(manager *IndexManager, id string, writes []viewindex.RowWrite) error {
+			db, columns, _, _, err := manager.getIndex(ctx, id)
+			if err != nil {
+				return err
+			}
+			tx, err := db.BeginTx(ctx, nil)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = tx.Rollback() }()
+			if err := legacyWrite(ctx, tx, columns, writes, viewindex.LiveWrite); err != nil {
+				return err
+			}
+			return tx.Commit()
+		})
+	})
+	t.Run("按列批量", func(t *testing.T) {
+		run(t, "bulk", func(manager *IndexManager, id string, writes []viewindex.RowWrite) error {
 			return manager.Write(ctx, id, viewindex.ViewIndexWriteBatch{RowWrites: writes, ViewRevision: 1, ViewSchemaHash: schema.SchemaHash, WriteMode: viewindex.LiveWrite})
 		})
 	})
-	t.Run("按列绑定", func(t *testing.T) {
-		run(t, "lists", func(manager *IndexManager, id string, writes []viewindex.RowWrite) error {
-			return writeByColumnLists(ctx, manager, id, schema, writes)
-		})
-	})
-}
-
-// writeByColumnLists 是原型：每个列绑定成一个 LIST 参数，用 unnest 展开，一批只执行两条语句
-// （先按新键累加计数，再整批 UPSERT），代替现状的每 32 行一条、每行两轮。
-func writeByColumnLists(ctx context.Context, manager *IndexManager, id string, schema viewindex.ViewIndexSchema, writes []viewindex.RowWrite) error {
-	writes = collapseRowWrites(writes)
-	db, columns, _, _, err := manager.getIndex(ctx, id)
-	if err != nil {
-		return err
-	}
-	names := []string{"subject_id", "freq", "data_time", "series_tag"}
-	for _, column := range schema.Columns {
-		names = append(names, column.GetColumnName())
-	}
-	lists := make([][]any, len(names))
-	for i := range lists {
-		lists[i] = make([]any, 0, len(writes))
-	}
-	for _, write := range writes {
-		values, err := rowArgs(columns, names, write, viewindex.LiveWrite)
-		if err != nil {
-			return err
-		}
-		for i, value := range values {
-			lists[i] = append(lists[i], value)
-		}
-	}
-	typed := func(i int) string {
-		switch {
-		case names[i] == "data_time":
-			return "TIMESTAMP_NS[]"
-		case i < 4:
-			return "VARCHAR[]"
-		case columns[names[i]] == pb.FieldValueType_FIELD_VALUE_TYPE_INT:
-			return "BIGINT[]"
-		default:
-			return "DOUBLE[]"
-		}
-	}
-	selects := make([]string, len(names))
-	args := make([]any, len(names))
-	for i, name := range names {
-		selects[i] = fmt.Sprintf("unnest(?::%s) AS %s", typed(i), quote(name))
-		args[i] = toTypedSlice(lists[i], typed(i))
-	}
-	source := "SELECT " + strings.Join(selects, ", ")
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	counts := `INSERT INTO view_series_counts (subject_id, freq, series_tag, row_count)
-		SELECT s.subject_id, s.freq, s.series_tag, count(*) FROM (` + source + `) s
-		WHERE NOT EXISTS (SELECT 1 FROM view_rows v WHERE v.subject_id = s.subject_id AND v.freq = s.freq AND v.data_time = s.data_time AND v.series_tag = s.series_tag)
-		GROUP BY ALL
-		ON CONFLICT (subject_id, freq, series_tag) DO UPDATE SET row_count = view_series_counts.row_count + excluded.row_count`
-	if _, err := tx.ExecContext(ctx, counts, args...); err != nil {
-		return fmt.Errorf("计数: %w", err)
-	}
-	sets := make([]string, 0, len(names)-4)
-	for _, name := range names[4:] {
-		sets = append(sets, fmt.Sprintf("%s = excluded.%s", quote(name), quote(name)))
-	}
-	upsert := fmt.Sprintf("INSERT INTO view_rows (%s) %s ON CONFLICT (subject_id, freq, data_time, series_tag) DO UPDATE SET %s",
-		joinQuoted(names), source, strings.Join(sets, ", "))
-	if _, err := tx.ExecContext(ctx, upsert, args...); err != nil {
-		return fmt.Errorf("写入: %w", err)
-	}
-	return tx.Commit()
-}
-
-func toTypedSlice(values []any, sqlType string) any {
-	switch sqlType {
-	case "TIMESTAMP_NS[]":
-		out := make([]time.Time, len(values))
-		for i, value := range values {
-			out[i], _ = value.(time.Time)
-		}
-		return out
-	case "VARCHAR[]":
-		out := make([]string, len(values))
-		for i, value := range values {
-			out[i], _ = value.(string)
-		}
-		return out
-	case "BIGINT[]":
-		out := make([]any, len(values))
-		copy(out, values)
-		return out
-	default:
-		out := make([]any, len(values))
-		copy(out, values)
-		return out
-	}
 }
