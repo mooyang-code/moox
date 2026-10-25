@@ -30,8 +30,11 @@ func (v *MetadataValidator) ValidateRow(ctx context.Context, row *pb.RowFieldUps
 }
 
 // ValidateRows 校验一批行。数据集与列定义按 (space, dataset) 只查一次：快照查询是对全部元数据条目的线性扫描，
-// 逐行查询时一个 1000 行的请求要扫两千遍。
+// 逐行查询时一个 1000 行的请求要扫两千遍。检查顺序与逐行校验相同（数据集、行键、频率，再到列）。
 func (v *MetadataValidator) ValidateRows(ctx context.Context, rows []*pb.RowFieldUpsert) error {
+	if v == nil {
+		return fmt.Errorf("metadata validator is not configured")
+	}
 	reader := v.snapshotReader(ctx)
 	schemas := make(map[[2]string]*datasetSchema)
 	for _, row := range rows {
@@ -39,13 +42,10 @@ func (v *MetadataValidator) ValidateRows(ctx context.Context, rows []*pb.RowFiel
 		id := [2]string{key.GetSpaceId(), key.GetDatasetId()}
 		schema, ok := schemas[id]
 		if !ok {
-			var err error
-			if schema, err = v.loadDatasetSchema(ctx, reader, key.GetSpaceId(), key.GetDatasetId()); err != nil {
-				return err
-			}
+			schema = &datasetSchema{reader: reader, spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
 			schemas[id] = schema
 		}
-		if err := schema.check(row); err != nil {
+		if err := schema.check(ctx, row); err != nil {
 			return err
 		}
 	}
@@ -102,32 +102,46 @@ func (v *MetadataValidator) RequestSnapshot() metadata.RequestSnapshot {
 }
 
 func (v *MetadataValidator) validateRow(ctx context.Context, row *pb.RowFieldUpsert, reader metadataReader) error {
-	key := row.GetKey()
-	schema, err := v.loadDatasetSchema(ctx, reader, key.GetSpaceId(), key.GetDatasetId())
-	if err != nil {
-		return err
-	}
-	return schema.check(row)
-}
-
-// datasetSchema 是校验一个数据集的行所需的元数据：数据集本身与按列名、来源 ID 索引的启用列。
-type datasetSchema struct {
-	dataset *pb.Dataset
-	allowed map[string]*pb.DatasetColumn
-}
-
-func (v *MetadataValidator) loadDatasetSchema(ctx context.Context, reader metadataReader, spaceID, datasetID string) (*datasetSchema, error) {
 	if v == nil || reader == nil {
+		return fmt.Errorf("metadata validator is not configured")
+	}
+	key := row.GetKey()
+	schema := &datasetSchema{reader: reader, spaceID: key.GetSpaceId(), datasetID: key.GetDatasetId()}
+	return schema.check(ctx, row)
+}
+
+// datasetSchema 按需加载并缓存校验一个数据集的行所需的元数据：先取数据集，用到时再取列定义。
+type datasetSchema struct {
+	reader             metadataReader
+	spaceID, datasetID string
+	dataset            *pb.Dataset
+	datasetLoaded      bool
+	allowed            map[string]*pb.DatasetColumn
+	columnsLoaded      bool
+}
+
+func (d *datasetSchema) loadDataset(ctx context.Context) (*pb.Dataset, error) {
+	if d.reader == nil {
 		return nil, fmt.Errorf("metadata validator is not configured")
 	}
-	dataset, err := reader.GetDataset(ctx, spaceID, datasetID)
-	if err != nil {
-		return nil, err
+	if !d.datasetLoaded {
+		dataset, err := d.reader.GetDataset(ctx, d.spaceID, d.datasetID)
+		if err != nil {
+			return nil, err
+		}
+		d.dataset, d.datasetLoaded = dataset, true
+	}
+	return d.dataset, nil
+}
+
+func (d *datasetSchema) loadColumns(ctx context.Context) (map[string]*pb.DatasetColumn, error) {
+	if d.columnsLoaded {
+		return d.allowed, nil
 	}
 	const pageSize = uint32(1000)
 	var columns []*pb.DatasetColumn
 	for pageNo := uint32(1); ; pageNo++ {
-		items, page, err := reader.ListDatasetColumns(ctx, spaceID, datasetID, &pb.Page{Page: pageNo, Size: pageSize})
+		items, page, err := d.reader.ListDatasetColumns(ctx, d.spaceID, d.datasetID, &pb.Page{Page: pageNo, Size: pageSize})
 		if err != nil {
 			return nil, err
 		}
@@ -144,11 +158,16 @@ func (v *MetadataValidator) loadDatasetSchema(ctx context.Context, reader metada
 		allowed[column.GetColumnName()] = column
 		allowed[column.GetOriginId()] = column
 	}
-	return &datasetSchema{dataset: dataset, allowed: allowed}, nil
+	d.allowed, d.columnsLoaded = allowed, true
+	return allowed, nil
 }
 
-func (d *datasetSchema) check(row *pb.RowFieldUpsert) error {
-	key, dataset := row.GetKey(), d.dataset
+func (d *datasetSchema) check(ctx context.Context, row *pb.RowFieldUpsert) error {
+	key := row.GetKey()
+	dataset, err := d.loadDataset(ctx)
+	if err != nil {
+		return err
+	}
 	if dataset == nil || (dataset.GetStatus() != "" && dataset.GetStatus() != "active") {
 		return fmt.Errorf("dataset %q is not active", key.GetDatasetId())
 	}
@@ -162,8 +181,12 @@ func (d *datasetSchema) check(row *pb.RowFieldUpsert) error {
 	if series := key.GetTimeSeries(); series != nil && series.GetFreq() != dataset.GetFreq() {
 		return fmt.Errorf("row freq %q does not match dataset %q freq %q", series.GetFreq(), key.GetDatasetId(), dataset.GetFreq())
 	}
+	allowed, err := d.loadColumns(ctx)
+	if err != nil {
+		return err
+	}
 	for _, field := range row.GetFields() {
-		column := d.allowed[field.GetFieldId()]
+		column := allowed[field.GetFieldId()]
 		if column == nil {
 			return fmt.Errorf("field %q is not registered in dataset %q", field.GetFieldId(), key.GetDatasetId())
 		}
