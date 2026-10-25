@@ -3,6 +3,7 @@ package primarystore
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -184,5 +185,57 @@ func TestMetadataValidatorRejectsRowFreqOtherThanTheDatasetFreq(t *testing.T) {
 		if err := validator.ValidateRow(context.Background(), row(freq)); err == nil {
 			t.Fatalf("row freq %q accepted for a 1h Dataset", freq)
 		}
+	}
+}
+
+// countingMetadataReader 记录查询次数；columnsErr 非空时列查询失败。
+type countingMetadataReader struct {
+	datasetCalls, columnCalls int
+	columnsErr                error
+}
+
+func (r *countingMetadataReader) GetDataset(context.Context, string, string) (*pb.Dataset, error) {
+	r.datasetCalls++
+	return &pb.Dataset{DatasetId: "bars", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1h", Status: "active"}, nil
+}
+
+func (r *countingMetadataReader) ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+	r.columnCalls++
+	if r.columnsErr != nil {
+		return nil, nil, r.columnsErr
+	}
+	return []*pb.DatasetColumn{{ColumnName: "close", OriginId: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, Status: "active"}}, &pb.PageResult{}, nil
+}
+
+func barsRow(freq string) *pb.RowFieldUpsert {
+	return &pb.RowFieldUpsert{
+		Key: &pb.RowKey{SpaceId: "crypto", DatasetId: "bars", Kind: &pb.RowKey_TimeSeries{TimeSeries: &pb.TimeSeriesRowKey{
+			SubjectId: "BTC-USDT", Freq: freq, DataTime: "2026-10-08T10:00:00Z",
+		}}},
+		Fields: []*pb.FieldValue{{FieldId: "close", Value: &pb.TypedValue{Value: &pb.TypedValue_DoubleValue{DoubleValue: 1}}}},
+	}
+}
+
+// 一个请求里同一数据集的多行只查一次数据集与列定义。
+func TestMetadataValidatorValidateRowsLooksUpEachDatasetOnce(t *testing.T) {
+	reader := &countingMetadataReader{}
+	rows := []*pb.RowFieldUpsert{barsRow("1h"), barsRow("1h"), barsRow("1h")}
+	if err := NewMetadataValidator(reader).ValidateRows(context.Background(), rows); err != nil {
+		t.Fatal(err)
+	}
+	if reader.datasetCalls != 1 || reader.columnCalls != 1 {
+		t.Fatalf("查询次数 dataset=%d columns=%d，期望各 1 次", reader.datasetCalls, reader.columnCalls)
+	}
+}
+
+// 检查顺序与逐行校验一致：首行频率不符时报频率错误，不被列查询失败盖掉。
+func TestMetadataValidatorValidateRowsReportsRowErrorBeforeColumnLookup(t *testing.T) {
+	reader := &countingMetadataReader{columnsErr: fmt.Errorf("columns unavailable")}
+	err := NewMetadataValidator(reader).ValidateRows(context.Background(), []*pb.RowFieldUpsert{barsRow("5m"), barsRow("1h")})
+	if err == nil || !strings.Contains(err.Error(), "does not match dataset") {
+		t.Fatalf("期望频率不符的错误，得到 %v", err)
+	}
+	if reader.columnCalls != 0 {
+		t.Fatalf("首行已失败，不应查询列定义（查询了 %d 次）", reader.columnCalls)
 	}
 }

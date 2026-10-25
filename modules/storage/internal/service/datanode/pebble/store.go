@@ -244,7 +244,7 @@ func (s *Store) writeFieldsEvent(ctx context.Context, rows []*pb.RowFieldUpsert,
 	defer prepared.batch.Close()
 	s.outboxMu.Lock()
 	defer s.outboxMu.Unlock()
-	return s.commitFieldsWriteLocked(prepared, "", true, nil)
+	return s.commitFieldsWriteLocked(ctx, prepared, "", true, nil)
 }
 
 func (s *Store) normalizeWriteRows(ctx context.Context, rows []*pb.RowFieldUpsert) ([]*pb.RowFieldUpsert, error) {
@@ -311,7 +311,7 @@ func (s *Store) writeFieldsEventLocked(ctx context.Context, normalizedRows []*pb
 		return nil, err
 	}
 	defer prepared.batch.Close()
-	return s.commitFieldsWriteLocked(prepared, sourceEventID, changeLog, decorate)
+	return s.commitFieldsWriteLocked(ctx, prepared, sourceEventID, changeLog, decorate)
 }
 
 // preparedFieldsWrite 是一次写入在锁外准备好的部分：已写入字段、属性与行索引 KV 的 batch，以及每个数据集
@@ -409,7 +409,11 @@ func (s *Store) prepareFieldsWrite(ctx context.Context, grouped map[datasetGroup
 
 // commitFieldsWriteLocked 在 outboxMu 内完成写入：检查数据集未删除、按数据集顺序分配 outbox 编号并绑定到事件、
 // 追加变更日志与来源事件标记，然后提交。调用方必须持有 outboxMu。
-func (s *Store) commitFieldsWriteLocked(prepared *preparedFieldsWrite, sourceEventID string, changeLog bool, decorate func(*cpebble.Batch, []*OutboxEntry) error) ([]*OutboxEntry, error) {
+func (s *Store) commitFieldsWriteLocked(ctx context.Context, prepared *preparedFieldsWrite, sourceEventID string, changeLog bool, decorate func(*cpebble.Batch, []*OutboxEntry) error) ([]*OutboxEntry, error) {
+	// 等锁期间请求可能已超时或取消：此时不再提交，避免客户端重试后写出重复事件。
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	batch, grouped := prepared.batch, prepared.grouped
 	for group := range grouped {
 		deleted, err := s.isDatasetDeleted(group.spaceID, group.datasetID)
