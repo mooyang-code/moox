@@ -7,7 +7,6 @@ import {
   enabledMemberIds,
   estimateRecalc,
   jobDisplay,
-  jobSource,
   progressPercent,
   quickRange,
   segmentStatuses
@@ -44,11 +43,6 @@ describe("recalc model", () => {
     expect(segmentStatuses("running")).toEqual(["accepted", "running"]);
     expect(segmentStatuses("succeeded")).toEqual(["succeeded"]);
     expect(segmentStatuses("failed")).toEqual(["failed", "cancelled"]);
-  });
-
-  it("source tag: factor-enable- prefix means 启用回填", () => {
-    expect(jobSource(job({ request_id: "factor-enable-Bias-123" }))).toEqual({ kind: "enable", label: "启用回填" });
-    expect(jobSource(job({ request_id: "factor-recalc-9" }))).toEqual({ kind: "manual", label: "手动" });
   });
 
   it("degraded note renders as 部分降级 not error", () => {

@@ -273,7 +273,7 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
 ### 7.7 向用户汇报并确认
 
 给用户看：原 Python 关键代码与 DSL spec 并排、`check` 的派生字段（尤其 lookback 与原目录的差异）、两份数据的 `compare` 汇总表、
-所有放行的差异及原因、写入方式（第 8 节）和影响（加入并启用成员会触发回填）。**用户明确同意后再写入。**
+所有放行的差异及原因、写入方式（第 8 节）和影响（启用成员不会自动补算历史，需要历史因子值时另行提交补算）。**用户明确同意后再写入。**
 
 ## 8. 写入系统
 
@@ -310,7 +310,7 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
    输出 JSON 的 `factors` 里先确认 `enabled` 为 true、`definitions` 等于登记的个数，再看 `imported`、`unchanged`、`members_added`、`members_enabled`
    的实际变化；FactorMgr 会重新编译定义，编不过会整体报错。
    再次执行是幂等的：定义没变时记为 `unchanged`。
-4. 核对无误后把成员改成 `status = "enabled"` 再执行一次（启用会给该因子集建一个回填任务，默认最近 5000 期）。
+4. 核对无误后把成员改成 `status = "enabled"` 再执行一次（启用不会自动补算历史；需要历史因子值时用 `moox-factor-mgr-cli recalc` 指定范围）。
 5. 仓库里的因子库改动按项目规范提交。
 
 ### 方式 B：控制台
@@ -324,7 +324,7 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
 1. **定义**：控制台因子详情（或 `GetFactor`）里的类型、输入列、输出列、回看与 7.3 的 `check` 结果一致。
 2. **引擎**：引擎每分钟第 45 秒同步目录；启用成员后，下一期起结果数据集出现新列。
    控制台「因子计算」总览 / `GetStatus` 里引擎在线、目录一致，`factor_compile_errors_total` 不增长（编译失败只会出现在引擎与管理端的表达式版本不一致时）。
-3. **回填**：「计算任务」页或 `moox-factor-mgr-cli status` 能看到 `factor-enable-` 回填任务从排队到完成。
+3. **补算**：启用不会自动补算；需要历史因子值时提交补算，在「计算任务」页或 `moox-factor-mgr-cli status` 看任务从排队到完成。
 4. **生产数值复核**：取一段时间的源 K 线和结果列，本地 `eval` 后与生产结果比较，两边是同一个引擎，应当逐值一致。
    时序因子取一两个标的即可；**截面因子必须导出该计算任务在这段时间的全部标的**（不带 `--subject`，或逐个导出后合并），否则本地排名、标准化的样本不同，
    结果必然对不上。源数据要比比较区间提前至少“因子回看”个周期，比较时用 `--start`、`--end` 只比较目标区间：

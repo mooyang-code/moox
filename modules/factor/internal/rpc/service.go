@@ -33,8 +33,7 @@ type CatalogAPI interface {
 	ListFactors(ctx context.Context, setID, status string) ([]domain.FactorInfo, error)
 	AddFactorToSet(ctx context.Context, setID, alias, factorID string) (domain.SetMember, error)
 	RemoveFactorFromSet(ctx context.Context, setID, alias string) error
-	// SetFactorMemberStatus returns the backfill job id when the member is enabled.
-	SetFactorMemberStatus(ctx context.Context, setID, alias, status string) (domain.SetMember, string, error)
+	SetFactorMemberStatus(ctx context.Context, setID, alias, status string) (domain.SetMember, error)
 	ListCategories(ctx context.Context) ([]domain.FactorCategory, error)
 	UpsertCategory(ctx context.Context, category domain.FactorCategory) (domain.FactorCategory, error)
 	DeleteCategory(ctx context.Context, categoryID string) error
@@ -377,19 +376,11 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, req *factorpb.SetFa
 	if status != domain.MemberStatusEnabled && status != domain.MemberStatusDisabled {
 		return &factorpb.SetFactorMemberStatusRsp{RetInfo: invalid(fmt.Errorf("status must be %q or %q", domain.MemberStatusEnabled, domain.MemberStatusDisabled))}, nil
 	}
-	member, backfillJobID, err := s.catalog.SetFactorMemberStatus(ctx, req.GetSetId(), req.GetMemberAlias(), status)
+	member, err := s.catalog.SetFactorMemberStatus(ctx, req.GetSetId(), req.GetMemberAlias(), status)
 	if err != nil {
 		return &factorpb.SetFactorMemberStatusRsp{RetInfo: inner(err)}, nil
 	}
-	rsp := &factorpb.SetFactorMemberStatusRsp{RetInfo: success(), Member: memberToPB(member, false)}
-	if backfillJobID != "" {
-		job, err := s.recalc.Get(ctx, backfillJobID)
-		if err != nil {
-			return &factorpb.SetFactorMemberStatusRsp{RetInfo: inner(fmt.Errorf("load backfill job %s: %w", backfillJobID, err))}, nil
-		}
-		rsp.BackfillJob = recalcJobToPB(job)
-	}
-	return rsp, nil
+	return &factorpb.SetFactorMemberStatusRsp{RetInfo: success(), Member: memberToPB(member, false)}, nil
 }
 
 func (s *Service) DeleteFactor(ctx context.Context, req *factorpb.DeleteFactorReq) (*factorpb.DeleteFactorRsp, error) {

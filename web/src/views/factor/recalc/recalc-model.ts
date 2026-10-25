@@ -1,6 +1,6 @@
 import type { FactorSetInfo, RecalcJob, RecalcJobStatus, SubjectMode } from "@/api/factor/types";
 import { freqSeconds } from "@/views/factor/shared/health";
-import { jobProgress, jobSourceLabel, jobStatusTag, splitJobNote } from "@/views/factor/shared/status";
+import { jobProgress, jobStatusTag, splitJobNote } from "@/views/factor/shared/status";
 
 export type StatusSegment = "all" | "running" | "succeeded" | "failed";
 
@@ -19,11 +19,6 @@ export function segmentStatuses(segment: StatusSegment): RecalcJobStatus[] | und
     succeeded: ["succeeded"] as RecalcJobStatus[],
     failed: ["failed", "cancelled"] as RecalcJobStatus[]
   }[segment];
-}
-
-/** `factor-enable-` 前缀的请求是启用回填，其余是手动补算。 */
-export function jobSource(job: Pick<RecalcJob, "request_id">): { kind: "enable" | "manual"; label: string } {
-  return jobSourceLabel(job) === "启用回填" ? { kind: "enable", label: "启用回填" } : { kind: "manual", label: "手动" };
 }
 
 /** 成功任务 error 里以 `degraded:` 开头的是降级说明，展示为「部分降级」而不是错误。 */

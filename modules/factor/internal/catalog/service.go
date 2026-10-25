@@ -13,38 +13,12 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/setlock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
-	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"gorm.io/gorm"
 )
-
-// RecalcSubmitter durably accepts an initial historical backfill before the
-// factor becomes visible to live triggers.
-type RecalcSubmitter interface {
-	PrepareEnableBackfill(ctx context.Context, set domain.FactorSet, member domain.MemberDef, start, end time.Time) (store.RecalcJob, error)
-}
-
-type EarliestPeriodProvider interface {
-	EarliestDatasetPeriod(ctx context.Context, spaceID, datasetID, freq string) (time.Time, bool, error)
-}
 
 type Option func(*Service)
 
 func WithLockDir(path string) Option { return func(s *Service) { s.locks = setlock.New(path) } }
-func WithRecalcSubmitter(submitter RecalcSubmitter) Option {
-	return func(s *Service) { s.recalc = submitter }
-}
-func WithEarliestPeriodProvider(provider EarliestPeriodProvider) Option {
-	return func(s *Service) { s.earliestPeriod = provider }
-}
-
-// DefaultMaxBackfillPeriods 是启用成员时默认回填的最大期数。
-// 时序 View 只保留最近 view_rows_per_series（默认 5000）根，更早的因子结果没有读取方；
-// 回填一整年（结果数据集的保留期）会让 DataNode 把大量早已无人读取的窗口读一遍，2026-10-14 的 1h 因子集回填就因此打满了 storage-node。
-// 需要更长的历史时，用手工补算（recalc）指定范围。
-const DefaultMaxBackfillPeriods = 5000
-
-// WithMaxBackfillPeriods 设置启用成员时默认回填的最大期数；0 表示不限制（只受结果数据集的保留期约束）。
-func WithMaxBackfillPeriods(n int) Option { return func(s *Service) { s.maxBackfillPeriods = n } }
 
 // WithReadyRecorder receives whether each set's result dataset accepted its
 // columns; the compute engine only writes to ready sets.
@@ -54,19 +28,15 @@ func WithReadyRecorder(record func(setID string, ready bool)) Option {
 
 // Service coordinates local factor definitions with Storage metadata.
 type Service struct {
-	db             *store.Store
-	metadata       storageio.Metadata
-	recalc         RecalcSubmitter
-	earliestPeriod EarliestPeriodProvider
-	recordReady    func(setID string, ready bool)
-	locks          *setlock.Locks
-	now            func() time.Time
-	// maxBackfillPeriods 是启用成员时回填的最大期数，见 DefaultMaxBackfillPeriods。
-	maxBackfillPeriods int
+	db          *store.Store
+	metadata    storageio.Metadata
+	recordReady func(setID string, ready bool)
+	locks       *setlock.Locks
+	now         func() time.Time
 }
 
 func NewService(db *store.Store, metadata storageio.Metadata, options ...Option) *Service {
-	s := &Service{db: db, metadata: metadata, now: time.Now, locks: setlock.New(""), maxBackfillPeriods: DefaultMaxBackfillPeriods}
+	s := &Service{db: db, metadata: metadata, now: time.Now, locks: setlock.New("")}
 	for _, option := range options {
 		if option != nil {
 			option(s)
@@ -486,64 +456,57 @@ func (s *Service) RemoveFactorFromSet(ctx context.Context, setID, alias string) 
 	return s.db.RemoveMember(ctx, setID, alias)
 }
 
-// SetFactorMemberStatus enables or disables one member. Enabling re-validates,
-// adds result columns, accepts a backfill and returns its job id; disabling only
-// stops writes and keeps the columns.
-func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, alias, status string) (domain.SetMember, string, error) {
+// SetFactorMemberStatus enables or disables one member. Enabling re-validates
+// and adds result columns, but does not backfill history; disabling only stops
+// writes and keeps the columns.
+func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, alias, status string) (domain.SetMember, error) {
 	setID, alias = strings.TrimSpace(setID), strings.TrimSpace(alias)
 	unlock, factorID, err := s.lockExistingMember(ctx, setID, alias)
 	if err != nil {
-		return domain.SetMember{}, "", err
+		return domain.SetMember{}, err
 	}
 	defer unlock()
 	set, err := s.db.GetSet(ctx, setID)
 	if err != nil {
-		return domain.SetMember{}, "", err
+		return domain.SetMember{}, err
 	}
 	if set.Status == domain.SetStatusDeleting {
-		return domain.SetMember{}, "", errors.New("factor set purge is pending")
+		return domain.SetMember{}, errors.New("factor set purge is pending")
 	}
 	if status != domain.MemberStatusEnabled && status != domain.MemberStatusDisabled {
-		return domain.SetMember{}, "", fmt.Errorf("status must be %q or %q", domain.MemberStatusEnabled, domain.MemberStatusDisabled)
+		return domain.SetMember{}, fmt.Errorf("status must be %q or %q", domain.MemberStatusEnabled, domain.MemberStatusDisabled)
 	}
 	member, err := s.db.GetMember(ctx, setID, alias)
 	if err != nil {
-		return domain.SetMember{}, "", err
+		return domain.SetMember{}, err
 	}
 	factor, err := s.db.GetFactor(ctx, factorID)
 	if err != nil {
-		return domain.SetMember{}, "", err
+		return domain.SetMember{}, err
 	}
 	result := domain.SetMember{FactorSetMember: member, Factor: factor}
 	if member.Status == status {
-		return result, "", nil
+		return result, nil
 	}
 	if status == domain.MemberStatusDisabled {
 		if err := s.db.SetMemberStatus(ctx, setID, alias, member.Status, status); err != nil {
-			return domain.SetMember{}, "", err
+			return domain.SetMember{}, err
 		}
 		return s.reloadMember(ctx, setID, alias, factor)
 	}
 	if set.Status == domain.SetStatusPending {
-		return domain.SetMember{}, "", errors.New("factor set is not ready")
-	}
-	if s.recalc == nil {
-		return domain.SetMember{}, "", errors.New("recalc submitter is required to enable a factor")
+		return domain.SetMember{}, errors.New("factor set is not ready")
 	}
 	// Definitions may have been edited and source columns may have changed while
 	// the member was disabled, so enabling repeats the full membership checks.
 	enabling := domain.MemberDef{Alias: alias, Factor: factor}
 	members, err := s.validateMembership(ctx, set, enabling)
 	if err != nil {
-		return domain.SetMember{}, "", err
+		return domain.SetMember{}, err
 	}
 	source, columns, err := s.sourceDataset(ctx, set)
 	if err != nil {
-		return domain.SetMember{}, "", err
-	}
-	start, end, err := s.backfillWindow(ctx, set)
-	if err != nil {
-		return domain.SetMember{}, "", err
+		return domain.SetMember{}, err
 	}
 	active := make([]domain.MemberDef, 0, len(members)+1)
 	for _, candidate := range members {
@@ -553,31 +516,22 @@ func (s *Service) SetFactorMemberStatus(ctx context.Context, setID, alias, statu
 	}
 	active = replaceMember(active, enabling)
 	if err := s.ensureResultColumns(ctx, set, source, columns, active...); err != nil {
-		return domain.SetMember{}, "", err
+		return domain.SetMember{}, err
 	}
 	s.markReady(set.SetID, true)
-	// Persist the accepted backfill and expose the member in one SQLite
-	// transaction so neither the worker nor live triggers can observe half of
-	// the activation.
-	job, err := s.recalc.PrepareEnableBackfill(ctx, set, enabling, start, end)
-	if err != nil {
-		return domain.SetMember{}, "", fmt.Errorf("prepare factor backfill: %w", err)
+	// 启用只让成员参与此后每期的计算，不自动补算历史：需要历史因子值时用手动补算（recalc）指定范围。
+	if err := s.db.SetMemberStatus(ctx, setID, alias, member.Status, status); err != nil {
+		return domain.SetMember{}, err
 	}
-	// 同一因子集排队中的回填任务会把新成员并进去，真正入库的任务号可能不是刚生成的那个，所以返回入库后的任务号。
-	stored, err := s.db.EnableMemberWithRecalcJob(ctx, setID, alias, member.Status, job)
-	if err != nil {
-		return domain.SetMember{}, "", err
-	}
-	updated, _, err := s.reloadMember(ctx, setID, alias, factor)
-	return updated, stored.JobID, err
+	return s.reloadMember(ctx, setID, alias, factor)
 }
 
-func (s *Service) reloadMember(ctx context.Context, setID, alias string, factor domain.FactorDef) (domain.SetMember, string, error) {
+func (s *Service) reloadMember(ctx context.Context, setID, alias string, factor domain.FactorDef) (domain.SetMember, error) {
 	member, err := s.db.GetMember(ctx, setID, alias)
 	if err != nil {
-		return domain.SetMember{}, "", err
+		return domain.SetMember{}, err
 	}
-	return domain.SetMember{FactorSetMember: member, Factor: factor}, "", nil
+	return domain.SetMember{FactorSetMember: member, Factor: factor}, nil
 }
 
 // lockExistingMember 找到成员引用的定义，按固定顺序（定义锁、集合锁）加锁后再确认成员仍引用同一定义。
@@ -658,80 +612,6 @@ func requireSetOpen(set domain.FactorSet) error {
 		return errors.New("factor set purge is pending")
 	}
 	return nil
-}
-
-func (s *Service) backfillWindow(ctx context.Context, set domain.FactorSet) (time.Time, time.Time, error) {
-	if s.now == nil {
-		return time.Time{}, time.Time{}, errors.New("catalog clock is required")
-	}
-	now := s.now().UTC()
-	clock, err := periodclock.ForSpace(set.SpaceID)
-	if err != nil {
-		return time.Time{}, time.Time{}, err
-	}
-	duration, err := clock.Duration(set.Freq)
-	if err != nil {
-		return time.Time{}, time.Time{}, err
-	}
-	periodSeconds := int64(duration / time.Second)
-	if periodSeconds <= 0 {
-		return time.Time{}, time.Time{}, errors.New("factor period duration is invalid")
-	}
-	endUnix := now.Unix() - now.Unix()%periodSeconds
-	if now.Unix() < 0 && now.Unix()%periodSeconds != 0 {
-		endUnix -= periodSeconds
-	}
-	end := time.Unix(endUnix, 0).UTC()
-	dataset, err := s.metadata.GetDataset(ctx, set.SpaceID, set.ResultDatasetID)
-	if err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("get result dataset retention: %w", err)
-	}
-	var start time.Time
-	retention, err := storagepolicy.ParsePeriod(dataset.Retention)
-	if err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("result dataset retention: %w", err)
-	}
-	if retention.Forever {
-		if s.earliestPeriod == nil {
-			return time.Time{}, time.Time{}, errors.New("earliest source period provider is required for unlimited retention backfill")
-		}
-		var found bool
-		start, found, err = s.earliestPeriod.EarliestDatasetPeriod(ctx, set.SpaceID, set.SourceDatasetID, set.Freq)
-		if err != nil {
-			return time.Time{}, time.Time{}, fmt.Errorf("find earliest source period: %w", err)
-		}
-		if found {
-			start = floorPeriod(start, periodSeconds)
-		} else {
-			// An empty source has no historical range to backfill. Keep the
-			// accepted job bounded to the most recent completed period.
-			start = end.Add(-duration)
-		}
-	} else {
-		start = floorPeriod(now.Add(-retention.Duration), periodSeconds)
-	}
-	// 回填最多取最近 maxBackfillPeriods 期：更早的因子结果没有读取方，却要把整段源数据窗口读一遍。
-	if s.maxBackfillPeriods > 0 {
-		if earliest := end.Add(-time.Duration(s.maxBackfillPeriods) * duration); start.Before(earliest) {
-			start = earliest
-		}
-	}
-	if _, err := clock.Align(start, set.Freq); err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("align factor backfill start: %w", err)
-	}
-	if !start.Before(end) {
-		return time.Time{}, time.Time{}, errors.New("factor backfill window is empty")
-	}
-	return start, end, nil
-}
-
-func floorPeriod(value time.Time, periodSeconds int64) time.Time {
-	seconds := value.Unix()
-	remainder := seconds % periodSeconds
-	if remainder < 0 {
-		remainder += periodSeconds
-	}
-	return time.Unix(seconds-remainder, 0).UTC()
 }
 
 func (s *Service) markReady(setID string, ready bool) {

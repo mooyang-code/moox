@@ -44,7 +44,6 @@ export const factorTypeLabel = (type: string) =>
 export const isActiveJob = (job: Pick<RecalcJob, "status">) => job.status === "accepted" || job.status === "running";
 
 const DEGRADED_PREFIX = "degraded:";
-const ENABLE_REQUEST_PREFIX = "factor-enable-";
 
 /** 后端把分块降级说明写在成功任务的 error 字段，以 `degraded:` 为前缀；它不是错误。 */
 export function splitJobNote(job: Pick<RecalcJob, "status" | "error">) {
@@ -53,9 +52,6 @@ export function splitJobNote(job: Pick<RecalcJob, "status" | "error">) {
   if (text.startsWith(DEGRADED_PREFIX)) return { degraded: text.slice(DEGRADED_PREFIX.length).trim() || "部分降级", error: "" };
   return { degraded: "", error: text };
 }
-
-export const jobSourceLabel = (job: Pick<RecalcJob, "request_id">) =>
-  job.request_id.startsWith(ENABLE_REQUEST_PREFIX) ? "启用回填" : "手动补算";
 
 export function jobProgress(job: Pick<RecalcJob, "status" | "start_time" | "end_time" | "progress_time">) {
   if (job.status === "succeeded") return 100;

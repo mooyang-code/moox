@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"gorm.io/gorm"
 )
 
@@ -111,128 +110,6 @@ func (s *Store) CreateRecalcJob(ctx context.Context, job RecalcJob) (RecalcJob, 
 		return RecalcJob{}, err
 	}
 	return stored, nil
-}
-
-// EnableMemberWithRecalcJob atomically accepts a member's initial backfill and
-// makes the member visible to live trigger selection.
-func (s *Store) EnableMemberWithRecalcJob(ctx context.Context, setID, alias, expectedStatus string, job RecalcJob) (RecalcJob, error) {
-	if s == nil || s.db == nil {
-		return RecalcJob{}, fmt.Errorf("factor database is not open")
-	}
-	setID = strings.TrimSpace(setID)
-	alias = strings.TrimSpace(alias)
-	if setID == "" || alias == "" || setID != strings.TrimSpace(job.SetID) ||
-		expectedStatus != domain.MemberStatusDisabled || job.Status != RecalcStatusAccepted {
-		return RecalcJob{}, fmt.Errorf("factor activation request is invalid")
-	}
-	job, membersJSON, subjectsJSON, err := normalizeRecalcJob(job)
-	if err != nil {
-		return RecalcJob{}, err
-	}
-	if !containsString(job.Members, alias) {
-		return RecalcJob{}, fmt.Errorf("factor activation job does not include member %q", alias)
-	}
-	var stored RecalcJob
-	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 同一个因子集连续启用多个成员时，只保留一个还没开始跑的回填任务，把新成员并进去：
-		// 每个成员各建一个全量回填任务，会让同一个窗口被重复读 N 遍（11 个因子就是 11 遍）。
-		merged, mergeErr := mergeQueuedEnableBackfill(tx, job, alias)
-		if mergeErr != nil {
-			return mergeErr
-		}
-		var created bool
-		var insertErr error
-		if merged != nil {
-			stored, created = *merged, true
-		} else {
-			stored, created, insertErr = insertRecalcJob(tx, job, membersJSON, subjectsJSON)
-			if insertErr != nil {
-				return insertErr
-			}
-			if !created && !sameRecalcRequest(stored, job) {
-				return fmt.Errorf("%w: request_id %q belongs to a different recalc request", ErrConflict, job.RequestID)
-			}
-		}
-		result := tx.Exec(`
-			UPDATE t_factor_set_members SET c_status = ?, c_mtime = ?
-			WHERE c_set_id = ? AND c_member_alias = ? AND c_status = ?
-		`, domain.MemberStatusEnabled, time.Now().UTC(), setID, alias, expectedStatus)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected > 0 {
-			return nil
-		}
-		var current struct {
-			Status string `gorm:"column:c_status"`
-		}
-		lookup := tx.Raw(`SELECT c_status FROM t_factor_set_members WHERE c_set_id = ? AND c_member_alias = ?`, setID, alias).Scan(&current)
-		if lookup.Error != nil {
-			return lookup.Error
-		}
-		if lookup.RowsAffected == 0 {
-			return gorm.ErrRecordNotFound
-		}
-		if !created && current.Status == domain.MemberStatusEnabled {
-			return nil
-		}
-		return fmt.Errorf("%w: member %q of set %q status is %q, expected %q", ErrConflict, alias, setID, current.Status, expectedStatus)
-	})
-	if err != nil {
-		return RecalcJob{}, err
-	}
-	return stored, nil
-}
-
-// enableBackfillRequestPrefix 是启用成员时生成的回填任务的请求号前缀，只有这类任务才会被合并。
-const enableBackfillRequestPrefix = "factor-enable-"
-
-// mergeQueuedEnableBackfill 把新启用的成员并进同一因子集里排队中、尚未被引擎领取的回填任务，窗口取两者的并集；
-// 没有可合并的任务时返回 nil，由调用方新建。手工补算（请求号不是 factor-enable- 开头）、已领取或已结束的任务不合并。
-func mergeQueuedEnableBackfill(tx *gorm.DB, job RecalcJob, alias string) (*RecalcJob, error) {
-	var row recalcJobRow
-	lookup := tx.Raw(`
-		SELECT `+recalcJobColumns+`
-		FROM t_factor_recalc_jobs
-		WHERE c_set_id = ? AND c_status = ? AND c_engine_id = '' AND c_lease_token = '' AND c_request_id LIKE ?
-		  AND c_subjects_omitted = 0 AND c_members_omitted = 0
-		ORDER BY c_ctime, c_job_id LIMIT 1
-	`, job.SetID, RecalcStatusAccepted, enableBackfillRequestPrefix+"%").Scan(&row)
-	if lookup.Error != nil {
-		return nil, lookup.Error
-	}
-	if lookup.RowsAffected == 0 {
-		return nil, nil
-	}
-	existing, err := row.job()
-	if err != nil {
-		return nil, err
-	}
-	if len(existing.Subjects) != len(job.Subjects) {
-		return nil, nil
-	}
-	members := append([]string(nil), existing.Members...)
-	if !containsString(members, alias) {
-		members = append(members, alias)
-	}
-	sort.Strings(members)
-	membersJSON, err := marshalStringSlice(members)
-	if err != nil {
-		return nil, err
-	}
-	start, end := min(existing.StartTime, job.StartTime), max(existing.EndTime, job.EndTime)
-	result := tx.Exec(`
-		UPDATE t_factor_recalc_jobs SET c_members_json = ?, c_start_time = ?, c_end_time = ?, c_mtime = ?
-		WHERE c_job_id = ? AND c_status = ? AND c_engine_id = '' AND c_lease_token = ''
-	`, membersJSON, start, end, time.Now().UTC(), existing.JobID, RecalcStatusAccepted)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	if result.RowsAffected == 0 {
-		return nil, nil
-	}
-	existing.Members, existing.StartTime, existing.EndTime = members, start, end
-	return &existing, nil
 }
 
 func normalizeRecalcJob(job RecalcJob) (RecalcJob, string, string, error) {

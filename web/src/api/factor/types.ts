@@ -302,7 +302,6 @@ export interface GetFactorRsp {
 
 export interface SetFactorMemberStatusResult {
   member: FactorMember;
-  backfill_job?: RecalcJob;
 }
 
 /** 一个参数一期的取值：统一值加按标的覆盖。 */

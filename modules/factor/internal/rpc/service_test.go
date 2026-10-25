@@ -357,15 +357,11 @@ func (f *catalogFake) AddFactorToSet(_ context.Context, setID, alias, factorID s
 	}, nil
 }
 func (f *catalogFake) RemoveFactorFromSet(context.Context, string, string) error { return f.err }
-func (f *catalogFake) SetFactorMemberStatus(_ context.Context, setID, factorID, status string) (domain.SetMember, string, error) {
-	member := domain.SetMember{
+func (f *catalogFake) SetFactorMemberStatus(_ context.Context, setID, factorID, status string) (domain.SetMember, error) {
+	return domain.SetMember{
 		FactorSetMember: domain.FactorSetMember{SetID: setID, MemberAlias: factorID, FactorID: factorID, Status: status},
 		Factor:          domain.FactorDef{FactorID: factorID},
-	}
-	if status == domain.MemberStatusEnabled {
-		return member, "factor-enable-" + factorID, nil
-	}
-	return member, "", nil
+	}, nil
 }
 func (f *catalogFake) ListCategories(context.Context) ([]domain.FactorCategory, error) {
 	return nil, f.err
@@ -437,19 +433,18 @@ func (f *recalcFake) Cancel(context.Context, string) (RecalcJob, error) {
 	return f.job, nil
 }
 
-func TestSetFactorMemberStatusReturnsBackfillJobOnEnable(t *testing.T) {
+func TestSetFactorMemberStatusEnablesAndDisablesMembers(t *testing.T) {
 	svc := NewService(&catalogFake{}, &recalcFake{})
 
 	enabled, err := svc.SetFactorMemberStatus(context.Background(), &factorpb.SetFactorMemberStatusReq{SetId: "fset_a", MemberAlias: "momentum", Status: domain.MemberStatusEnabled})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_SUCCESS, enabled.GetRetInfo().GetCode())
-	require.Equal(t, "factor-enable-momentum", enabled.GetBackfillJob().GetJobId())
 	require.Equal(t, "enabled", enabled.GetMember().GetStatus())
 	require.Equal(t, "fset_a", enabled.GetMember().GetSetId())
 
 	disabled, err := svc.SetFactorMemberStatus(context.Background(), &factorpb.SetFactorMemberStatusReq{SetId: "fset_a", MemberAlias: "momentum", Status: domain.MemberStatusDisabled})
 	require.NoError(t, err)
-	require.Nil(t, disabled.GetBackfillJob())
+	require.Equal(t, "disabled", disabled.GetMember().GetStatus())
 
 	invalid, err := svc.SetFactorMemberStatus(context.Background(), &factorpb.SetFactorMemberStatusReq{SetId: "fset_a", MemberAlias: "momentum", Status: "bogus"})
 	require.NoError(t, err)

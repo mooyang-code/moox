@@ -223,7 +223,6 @@ message SetFactorMemberStatusReq {
 message SetFactorMemberStatusRsp {
   common.RetInfo ret_info = 1;
   FactorMember member = 2;
-  RecalcJob backfill_job = 3;
 }
 
 message DeleteFactorReq { string factor_id = 1; }
@@ -441,7 +440,6 @@ message EnsureInstanceFactorSetRsp {
   repeated FactorMember members = 3;
   // view_id 是私有结果数据集的默认 View，实例绑定它读取。
   string view_id = 4;
-  repeated string backfill_job_ids = 5;
 }
 
 message SetInstanceFactorSetEnabledReq {

@@ -153,23 +153,7 @@ async function mockGateway(route: Route) {
   if (method === "SetFactorMemberStatus") {
     members = members.map(item => (item.member_alias === body.member_alias ? { ...item, status: body.status } : item));
     const updated = members.find(item => item.member_alias === body.member_alias);
-    const backfill_job =
-      body.status === "enabled"
-        ? {
-            job_id: "backfill-1",
-            request_id: "backfill-1",
-            set_id: factorSet.set_id,
-            members: [body.member_alias],
-            subjects: [],
-            start_time: "",
-            end_time: "",
-            status: "accepted",
-            progress_time: "",
-            error: ""
-          }
-        : undefined;
-    if (backfill_job) jobs = [backfill_job, ...jobs];
-    return route.fulfill({ json: ok({ member: updated, backfill_job }) });
+    return route.fulfill({ json: ok({ member: updated }) });
   }
   if (method === "GetView") {
     return route.fulfill({
@@ -366,7 +350,7 @@ test("new definition is created without a set and highlights the definitions men
   expect(createdFactor).not.toHaveProperty("set_id");
 });
 
-test("adding a factor to a task then enabling it reports the backfill", async ({ page }) => {
+test("adding a factor to a task then enabling it does not start a backfill", async ({ page }) => {
   await page.goto("/#/factor/tasks");
   await page
     .getByRole("link", { name: /dataset_binance_kline_1m|现货K线/ })
@@ -381,7 +365,8 @@ test("adding a factor to a task then enabling it reports the backfill", async ({
     .click();
   await expect(drawer.getByText("rsi", { exact: true })).toBeVisible();
   await drawer.getByRole("button", { name: "启用" }).last().click();
-  await expect(drawer.getByText(/历史回填任务 backfill-1/)).toBeVisible();
+  await expect(page.getByText(/已启用（不自动补算历史/)).toBeVisible();
+  await expect(drawer.getByText(/历史回填任务/)).toHaveCount(0);
 });
 
 test("overview page is read-only and links to tasks", async ({ page }) => {

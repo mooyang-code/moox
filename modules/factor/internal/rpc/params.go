@@ -103,7 +103,7 @@ func (s *Service) EnsureInstanceFactorSet(ctx context.Context, req *factorpb.Ens
 		return &factorpb.EnsureInstanceFactorSetRsp{RetInfo: inner(err)}, nil
 	}
 	return &factorpb.EnsureInstanceFactorSetRsp{RetInfo: success(), FactorSet: factorwire.SetToPB(result.Set),
-		Members: membersToPB(result.Members), ViewId: domain.ResultViewID(result.Set.SetID), BackfillJobIds: result.BackfillJobs}, nil
+		Members: membersToPB(result.Members), ViewId: domain.ResultViewID(result.Set.SetID)}, nil
 }
 
 func (s *Service) SetInstanceFactorSetEnabled(ctx context.Context, req *factorpb.SetInstanceFactorSetEnabledReq) (*factorpb.SetInstanceFactorSetEnabledRsp, error) {

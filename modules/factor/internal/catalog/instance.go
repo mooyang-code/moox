@@ -28,15 +28,14 @@ type InstanceSetRequest struct {
 	Members         []InstanceMember
 }
 
-// InstanceSet 是 EnsureInstanceSet 的结果：集合、成员与这次启用提交的回填任务。
+// InstanceSet 是 EnsureInstanceSet 的结果：集合与成员。
 type InstanceSet struct {
-	Set          domain.FactorSet
-	Members      []domain.SetMember
-	BackfillJobs []string
+	Set     domain.FactorSet
+	Members []domain.SetMember
 }
 
 // EnsureInstanceSet 建立或对齐策略实例的私有因子集，可重复调用：集合不存在时创建（实例是唯一的参数写入方），
-// 已存在时核对源数据集与频率；声明的成员都加入并启用（启用会补齐结果列并提交回填，同一集合排队中的回填合并成一个），
+// 已存在时核对源数据集与频率；声明的成员都加入并启用（启用会补齐结果列，不自动补算历史），
 // 不再声明的成员停用并移出（已写入的列与值保留）；集合处于停用时重新启用。
 func (s *Service) EnsureInstanceSet(ctx context.Context, request InstanceSetRequest) (InstanceSet, error) {
 	request.InstanceID = strings.TrimSpace(request.InstanceID)
@@ -112,7 +111,7 @@ func (s *Service) EnsureInstanceSet(ctx context.Context, request InstanceSetRequ
 			continue
 		}
 		if member.Status == domain.MemberStatusEnabled {
-			if _, _, err := s.SetFactorMemberStatus(ctx, set.SetID, alias, domain.MemberStatusDisabled); err != nil {
+			if _, err := s.SetFactorMemberStatus(ctx, set.SetID, alias, domain.MemberStatusDisabled); err != nil {
 				return InstanceSet{}, err
 			}
 		}
@@ -127,7 +126,6 @@ func (s *Service) EnsureInstanceSet(ctx context.Context, request InstanceSetRequ
 	}
 	sort.Strings(aliases)
 	result := InstanceSet{Set: set}
-	jobs := map[string]bool{}
 	for _, alias := range aliases {
 		want := declared[alias]
 		if _, ok := present[alias]; !ok {
@@ -135,13 +133,8 @@ func (s *Service) EnsureInstanceSet(ctx context.Context, request InstanceSetRequ
 				return InstanceSet{}, fmt.Errorf("加入成员 %s：%w", alias, err)
 			}
 		}
-		_, jobID, err := s.SetFactorMemberStatus(ctx, set.SetID, alias, domain.MemberStatusEnabled)
-		if err != nil {
+		if _, err := s.SetFactorMemberStatus(ctx, set.SetID, alias, domain.MemberStatusEnabled); err != nil {
 			return InstanceSet{}, fmt.Errorf("启用成员 %s：%w", alias, err)
-		}
-		if jobID != "" && !jobs[jobID] {
-			jobs[jobID] = true
-			result.BackfillJobs = append(result.BackfillJobs, jobID)
 		}
 	}
 	if result.Set, result.Members, err = s.GetSet(ctx, set.SetID); err != nil {
@@ -184,7 +177,7 @@ func (s *Service) ReleaseInstanceSet(ctx context.Context, instanceID string) err
 		}
 		for _, member := range members {
 			if member.Status == domain.MemberStatusEnabled {
-				if _, _, err := s.SetFactorMemberStatus(ctx, set.SetID, member.MemberAlias, domain.MemberStatusDisabled); err != nil {
+				if _, err := s.SetFactorMemberStatus(ctx, set.SetID, member.MemberAlias, domain.MemberStatusDisabled); err != nil {
 					return err
 				}
 			}

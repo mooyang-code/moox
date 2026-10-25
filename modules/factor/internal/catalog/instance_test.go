@@ -45,7 +45,7 @@ func TestEnsureInstanceSetCreatesPrivateSetWithAliasedMembers(t *testing.T) {
 	for _, member := range result.Members {
 		require.Equal(t, domain.MemberStatusEnabled, member.Status)
 	}
-	require.NotEmpty(t, result.BackfillJobs)
+
 	columns := resultColumns(meta, setID)
 	require.Equal(t, ColumnKindOutput, columns["fast_mean"]["column_kind"])
 	require.Equal(t, "fast", columns["fast_mean"]["member_alias"])

@@ -56,9 +56,6 @@
               <a-table-column title="任务" :width="260">
                 <template #cell="{ record }">
                   <div class="job-id" :title="record.job.job_id">{{ record.job.job_id }}</div>
-                  <a-tag size="small" :color="record.source.kind === 'enable' ? 'arcoblue' : 'gray'">{{
-                    record.source.label
-                  }}</a-tag>
                 </template>
               </a-table-column>
               <a-table-column title="因子" :width="180" :ellipsis="true" :tooltip="true">
@@ -123,7 +120,7 @@ import SetSelect from "@/views/factor/shared/set-select.vue";
 import { isActiveJob } from "@/views/factor/shared/status";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import RecalcCreateDrawer from "./recalc-create-drawer.vue";
-import { STATUS_SEGMENTS, jobDisplay, jobSource, progressPercent, segmentStatuses, type StatusSegment } from "./recalc-model";
+import { STATUS_SEGMENTS, jobDisplay, progressPercent, segmentStatuses, type StatusSegment } from "./recalc-model";
 
 defineOptions({ name: "FactorRecalc" });
 
@@ -148,7 +145,6 @@ const rows = computed(() =>
   jobs.value.map(job => ({
     job_id: job.job_id,
     job,
-    source: jobSource(job),
     display: jobDisplay(job),
     progress: progressPercent(job)
   }))

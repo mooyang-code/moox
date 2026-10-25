@@ -94,7 +94,7 @@ export async function setFactorMemberStatus(
     { set_id: string; member_alias: string; status: string },
     FactorRetRsp<SetFactorMemberStatusResult>
   >("SetFactorMemberStatus", { set_id, member_alias, status });
-  return { member: rsp.member, backfill_job: rsp.backfill_job };
+  return { member: rsp.member };
 }
 
 export async function listFactorCategories() {

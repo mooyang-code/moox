@@ -101,13 +101,10 @@ describe("FactorMgr factor-set API", () => {
     expect(call).toHaveBeenLastCalledWith("RemoveFactorFromSet", { set_id: "set-1", member_alias: "f1" });
   });
 
-  it("setFactorMemberStatus returns the backfill job", async () => {
+  it("setFactorMemberStatus returns the member", async () => {
     const member = { set_id: "set-1", factor_id: "f1", status: "enabled" };
-    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, member, backfill_job: { job_id: "factor-enable-1" } });
-    await expect(setFactorMemberStatus("set-1", "f1", "enabled")).resolves.toEqual({
-      member,
-      backfill_job: { job_id: "factor-enable-1" }
-    });
+    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, member });
+    await expect(setFactorMemberStatus("set-1", "f1", "enabled")).resolves.toEqual({ member });
     expect(call).toHaveBeenLastCalledWith("SetFactorMemberStatus", { set_id: "set-1", member_alias: "f1", status: "enabled" });
   });
 

@@ -125,10 +125,10 @@ describe("factor pages contract", () => {
     expect(overviewPage).toContain("usePolling");
   });
 
-  it("changes member status only through setFactorMemberStatus and surfaces the backfill job", () => {
+  it("changes member status only through setFactorMemberStatus without a backfill job", () => {
     expect(memberSection).toContain("setFactorMemberStatus(member.set_id, alias, target)");
     expect(memberSection).toContain("removeFactorFromSet");
-    expect(memberSection).toContain("backfill_job");
+    expect(memberSection).not.toContain("backfill_job");
     expect(memberModel).toContain("需要先停用");
     expect(addFactorModal).toContain("addFactorToSet");
     expect(addFactorModal).toContain("listDatasetColumns");

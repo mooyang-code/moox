@@ -57,38 +57,6 @@ func (s *changingSubjects) ListDatasetSubjects(context.Context, string, string) 
 	return append([]string(nil), s.values...), nil
 }
 
-func TestEnableBackfillAcceptsDisabledFactorWithAtomicVisibility(t *testing.T) {
-	db := openRecalcStore(t)
-	factor := testRecalcFactor("new_factor", domain.MemberStatusDisabled, 2)
-	seedRecalcSet(t, db, domain.SubjectModeInclude, []string{"BTC"}, factor)
-	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	svc := NewService(db, WithClock(periodclock.Continuous{}))
-	job, err := svc.PrepareEnableBackfill(context.Background(), "fset_bars_1m", "new_factor", "enable-new-factor", start, start.Add(3*time.Minute))
-	require.NoError(t, err)
-	require.Equal(t, []string{"new_factor"}, job.Members)
-	require.Equal(t, []string{"BTC"}, job.Subjects)
-	stored, err := db.EnableMemberWithRecalcJob(context.Background(), "fset_bars_1m", "new_factor", domain.MemberStatusDisabled, job)
-	require.NoError(t, err)
-	require.Equal(t, store.RecalcStatusAccepted, stored.Status)
-	active, err := db.GetMember(context.Background(), "fset_bars_1m", "new_factor")
-	require.NoError(t, err)
-	require.Equal(t, domain.MemberStatusEnabled, active.Status)
-}
-
-func TestEnableBackfillWithEmptyDatasetCompletesAsNoop(t *testing.T) {
-	db := openRecalcStore(t)
-	factor := testRecalcFactor("new_factor", domain.MemberStatusDisabled, 2)
-	seedRecalcSet(t, db, domain.SubjectModeAll, nil, factor)
-	start := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
-	svc := NewService(db, WithClock(periodclock.Continuous{}), WithSubjectProvider(emptySubjects{}))
-	job, err := svc.PrepareEnableBackfill(context.Background(), "fset_bars_1m", "new_factor", "enable-empty", start, start.Add(time.Minute))
-	require.NoError(t, err)
-	require.Empty(t, job.Subjects, "an empty source dataset yields a job the engine completes without computing")
-	stored, err := db.EnableMemberWithRecalcJob(context.Background(), "fset_bars_1m", "new_factor", domain.MemberStatusDisabled, job)
-	require.NoError(t, err)
-	require.Equal(t, store.RecalcStatusAccepted, stored.Status)
-}
-
 type emptySubjects struct{}
 
 func (emptySubjects) ListDatasetSubjects(context.Context, string, string) ([]string, error) {

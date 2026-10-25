@@ -12,11 +12,6 @@
       </a-tooltip>
     </div>
 
-    <a-alert v-if="backfill" type="success" show-icon closable class="member-section__notice" @close="backfill = null">
-      因子 {{ backfill.factorId }} 已启用，历史回填任务 {{ backfill.jobId }} 已创建。
-      <a-link @click="openBackfill">查看回填</a-link>
-    </a-alert>
-
     <a-empty v-if="!props.info.members.length" description="还没有因子。点击「添加因子」，从「因子定义」中选择。" />
     <ul v-else class="member-list">
       <li v-for="row in rows" :key="row.alias" class="member-row">
@@ -122,7 +117,6 @@ const router = useRouter();
 const store = useFactorStore();
 const addVisible = ref(false);
 const pending = ref("");
-const backfill = ref<{ factorId: string; jobId: string } | null>(null);
 
 const counts = computed(() => memberCounts(props.info));
 const addState = computed(() => addFactorState(props.info.factor_set));
@@ -158,13 +152,10 @@ async function toggle(member: FactorMember, target: MemberStatus) {
   const alias = member.member_alias || member.factor_id;
   pending.value = alias;
   try {
-    const result = await setFactorMemberStatus(member.set_id, alias, target);
-    if (target === "enabled") {
-      backfill.value = result.backfill_job ? { factorId: alias, jobId: result.backfill_job.job_id } : null;
-      Message.success(result.backfill_job ? `因子 ${alias} 已启用，历史回填已开始` : `因子 ${alias} 已启用`);
-    } else {
-      Message.success(`因子 ${alias} 已停用`);
-    }
+    await setFactorMemberStatus(member.set_id, alias, target);
+    Message.success(
+      target === "enabled" ? `因子 ${alias} 已启用（不自动补算历史，需要时到「补算」手动提交）` : `因子 ${alias} 已停用`
+    );
     await reload();
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "更新因子状态失败");
@@ -183,14 +174,6 @@ async function remove(member: FactorMember) {
     Message.error(error instanceof Error ? error.message : "移除因子失败");
   }
 }
-
-function openBackfill() {
-  if (!backfill.value) return;
-  void router.push({
-    path: "/factor/tasks",
-    query: { tab: "recalc", set: props.info.factor_set.set_id, job: backfill.value.jobId }
-  });
-}
 </script>
 
 <style scoped>
@@ -205,10 +188,6 @@ function openBackfill() {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-}
-
-.member-section__notice {
-  margin-bottom: var(--moox-space-2);
 }
 
 .member-list {

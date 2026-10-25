@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isActiveJob, jobProgress, jobSourceLabel, jobStatusTag, setStatusTag, splitJobNote } from "./status";
+import { isActiveJob, jobProgress, jobStatusTag, setStatusTag, splitJobNote } from "./status";
 
 describe("splitJobNote", () => {
   it("treats the degraded prefix as a note, not an error", () => {
@@ -16,11 +16,6 @@ describe("splitJobNote", () => {
 });
 
 describe("job helpers", () => {
-  it("labels the origin of a job by request id", () => {
-    expect(jobSourceLabel({ request_id: "factor-enable-ab12" })).toBe("启用回填");
-    expect(jobSourceLabel({ request_id: "factor-recalc-1" })).toBe("手动补算");
-  });
-
   it("computes progress inside the window and caps at the bounds", () => {
     const job = {
       status: "running" as const,

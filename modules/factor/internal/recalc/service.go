@@ -122,51 +122,6 @@ func matchesSubmitRequest(job store.RecalcJob, setID string, aliases, subjects [
 	return true
 }
 
-// PrepareEnableBackfill validates and builds the accepted job that must be
-// committed atomically with enabling a disabled set member in the catalog store.
-func (s *Service) PrepareEnableBackfill(ctx context.Context, setID, alias, requestID string, start, end time.Time) (store.RecalcJob, error) {
-	if s == nil || s.db == nil {
-		return store.RecalcJob{}, errors.New("factor recalc store is required")
-	}
-	setID = strings.TrimSpace(setID)
-	alias = strings.TrimSpace(alias)
-	requestID = strings.TrimSpace(requestID)
-	if setID == "" || alias == "" || requestID == "" {
-		return store.RecalcJob{}, errors.New("request_id, set_id and member alias are required")
-	}
-	set, err := s.db.GetSet(ctx, setID)
-	if err != nil {
-		return store.RecalcJob{}, err
-	}
-	if set.Status != domain.SetStatusEnabled {
-		return store.RecalcJob{}, fmt.Errorf("factor set %q is not enabled", set.SetID)
-	}
-	member, err := s.db.GetMember(ctx, setID, alias)
-	if err != nil {
-		return store.RecalcJob{}, err
-	}
-	if member.Status != domain.MemberStatusDisabled {
-		return store.RecalcJob{}, fmt.Errorf("member %q must be disabled in set %q before activation", alias, setID)
-	}
-	clock, err := s.clockFor(set.SpaceID)
-	if err != nil {
-		return store.RecalcJob{}, err
-	}
-	start, end, err = alignRange(clock, set.Freq, start, end)
-	if err != nil {
-		return store.RecalcJob{}, err
-	}
-	subjects, err := s.resolveSubjects(ctx, set, nil)
-	if err != nil {
-		return store.RecalcJob{}, err
-	}
-	return store.RecalcJob{
-		JobID: requestID, RequestID: requestID, SetID: setID,
-		Members: []string{alias}, Subjects: subjects,
-		StartTime: start.Unix(), EndTime: end.Unix(), Status: store.RecalcStatusAccepted,
-	}, nil
-}
-
 func (s *Service) Get(ctx context.Context, jobID string) (store.RecalcJob, error) {
 	if s == nil || s.db == nil {
 		return store.RecalcJob{}, errors.New("factor recalc store is required")
