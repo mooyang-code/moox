@@ -24,7 +24,6 @@ import {
   setFactorMemberStatus,
   setFactorSetStatus,
   updateFactor,
-  updateFactorSet,
   validateFactorSpec,
   previewFactor,
   listFactorFunctions
@@ -108,14 +107,16 @@ describe("FactorMgr factor-set API", () => {
     expect(call).toHaveBeenLastCalledWith("SetFactorMemberStatus", { set_id: "set-1", member_alias: "f1", status: "enabled" });
   });
 
-  it("addFactorToSet sends an alias only when it differs from the definition id", async () => {
+  it("addFactorToSet sends the alias and fixed params only when given", async () => {
     call.mockResolvedValue({ ret_info: { code: 0, msg: "" }, member: { set_id: "set-1" } });
     await addFactorToSet("set-1", "bias");
     expect(call).toHaveBeenLastCalledWith("AddFactorToSet", { set_id: "set-1", factor_id: "bias" });
-    await addFactorToSet("set-1", "bias", "bias");
-    expect(call).toHaveBeenLastCalledWith("AddFactorToSet", { set_id: "set-1", factor_id: "bias" });
     await addFactorToSet("set-1", "bias", "fast");
     expect(call).toHaveBeenLastCalledWith("AddFactorToSet", { set_id: "set-1", factor_id: "bias", member_alias: "fast" });
+    await addFactorToSet("set-1", "Ema", undefined, { span: 20, warmup: 50000 });
+    expect(call).toHaveBeenLastCalledWith("AddFactorToSet", { set_id: "set-1", factor_id: "Ema", params: { span: 20, warmup: 50000 } });
+    await addFactorToSet("set-1", "Ema", "ema20", {});
+    expect(call).toHaveBeenLastCalledWith("AddFactorToSet", { set_id: "set-1", factor_id: "Ema", member_alias: "ema20" });
   });
 
   it("manages categories, factor category and parameter history", async () => {
@@ -172,14 +173,6 @@ describe("FactorMgr factor-set API", () => {
   });
 
   it("exposes set and factor detail, update, and delete operations", async () => {
-    call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor_set: { set_id: "set-1" } });
-    await updateFactorSet("set-1", "include", ["BTC-USDT"]);
-    expect(call).toHaveBeenLastCalledWith("UpdateFactorSet", {
-      set_id: "set-1",
-      subject_mode: "include",
-      subjects: ["BTC-USDT"]
-    });
-
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" } });
     await deleteFactorSet("set-1", true);
     expect(call).toHaveBeenLastCalledWith("DeleteFactorSet", { set_id: "set-1", purge: true });

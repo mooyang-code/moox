@@ -4,7 +4,8 @@ export type MemberStatus = "enabled" | "disabled";
 export type FactorSetStatus = "pending" | "enabled" | "disabled" | "deleting";
 export type PeriodFactorStatus = "complete" | "degraded" | "skipped";
 export type RecalcJobStatus = "accepted" | "running" | "succeeded" | "failed" | "cancelled";
-export type SubjectMode = "all" | "include";
+/** 补算作业的标的范围选择：全部（源数据集的全部标的）或指定一组。不是计算任务的属性。 */
+export type RecalcSubjectMode = "all" | "include";
 export type FactorType = "timeseries" | "cross_section";
 
 export interface FactorSet {
@@ -12,13 +13,11 @@ export interface FactorSet {
   space_id: string;
   source_dataset_id: string;
   freq: string;
-  subject_mode: SubjectMode;
-  subjects: string[];
   result_dataset_id: string;
   status: FactorSetStatus;
   created_at?: string;
   updated_at?: string;
-  /** 非空表示策略实例的私有因子集：该实例是唯一的参数写入方；为空是共享因子集，成员永远用默认参数。 */
+  /** 非空表示策略实例的专属任务：该实例是唯一的参数写入方；为空是普通计算任务，成员带固定参数。 */
   owner_instance_id?: string;
 }
 
@@ -143,6 +142,8 @@ export interface FactorUsage {
   status: MemberStatus;
   /** 成员在这个集合里的别名（同一定义可以用不同别名出现多次）。 */
   member_alias?: string;
+  /** 成员的固定参数（空表示参数由策略实例逐期提交）。 */
+  params?: Record<string, number>;
 }
 
 export interface FactorInfo {
@@ -164,6 +165,8 @@ export interface FactorMember {
   /** 成员在结果数据集里的列名（派生，只读）：输出列与参数列。 */
   output_columns?: string[];
   param_columns?: string[];
+  /** 成员的固定参数（加成员时给定，之后不变；策略实例专属任务的成员为空）。 */
+  params?: Record<string, number>;
 }
 
 /** 一期冻结参数的来源：requested 提交生效、carried 沿用、carried_offline 引擎离线沿用、default 从未提交过。 */

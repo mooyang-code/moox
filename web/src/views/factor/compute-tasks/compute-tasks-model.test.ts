@@ -8,7 +8,6 @@ import {
   memberCountText,
   memberCounts,
   memberPeriodState,
-  scopeText,
   setActionKind
 } from "./compute-tasks-model";
 
@@ -17,8 +16,6 @@ const set = (patch: Partial<FactorSet> = {}): FactorSet => ({
   space_id: "crypto",
   source_dataset_id: "dataset_kline",
   freq: "1m",
-  subject_mode: "all",
-  subjects: [],
   result_dataset_id: "dataset_factor_set_a",
   status: "enabled",
   ...patch
@@ -55,11 +52,6 @@ describe("compute task list model", () => {
     expect(memberCounts(value)).toEqual({ enabled: 2, total: 3 });
     expect(memberCountText(value)).toBe("2 / 3");
     expect(memberCountText(info())).toBe("0 / 0");
-  });
-
-  it("scope text distinguishes all and included subjects", () => {
-    expect(scopeText(set())).toBe("全部对象");
-    expect(scopeText(set({ subject_mode: "include", subjects: ["BTC-USDT", "ETH-USDT"] }))).toBe("指定 2 个");
   });
 
   it("row status action follows the set status", () => {

@@ -90,8 +90,6 @@ describe("factor API contract", () => {
       space_id: "crypto",
       source_dataset_id: "dataset_crypto_kline_1m",
       freq: "1m",
-      subject_mode: "all",
-      subjects: [],
       result_dataset_id: "dataset_factor_crypto_1m",
       status: "deleting"
     };
@@ -178,7 +176,6 @@ describe("factor pages contract", () => {
   });
 
   it("offers lifecycle actions for compute tasks including purge delete", () => {
-    expect(computeTasks).toContain("updateFactorSet");
     expect(computeTasks).toContain("deleteFactorSet(current.set_id, purge.value)");
     expect(computeTasks).toContain("setFactorSetStatus");
   });

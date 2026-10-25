@@ -4,7 +4,17 @@
     "factor_id": "Ema",
     "spec": "params:\n  span: {type: int, min: 2, max: 4825, default: 20}\n  warmup: {type: int, min: 0, max: 50000, default: 0}\noutputs:\n  ema: ema(close, span, warmup)\n",
     "params": {},
-    "alias": "Ema"
+    "alias": "Ema",
+    "decl": [
+      {
+        "name": "span",
+        "default": 20
+      },
+      {
+        "name": "warmup",
+        "default": 0
+      }
+    ]
   },
   {
     "name": "显式给出默认值",
@@ -14,7 +24,17 @@
       "span": 20,
       "warmup": 0
     },
-    "alias": "Ema"
+    "alias": "Ema",
+    "decl": [
+      {
+        "name": "span",
+        "default": 20
+      },
+      {
+        "name": "warmup",
+        "default": 0
+      }
+    ]
   },
   {
     "name": "只改预热",
@@ -23,7 +43,17 @@
     "params": {
       "warmup": 50000
     },
-    "alias": "Ema_20_50000"
+    "alias": "Ema_20_50000",
+    "decl": [
+      {
+        "name": "span",
+        "default": 20
+      },
+      {
+        "name": "warmup",
+        "default": 0
+      }
+    ]
   },
   {
     "name": "两个都改",
@@ -33,7 +63,17 @@
       "span": 50,
       "warmup": 20000
     },
-    "alias": "Ema_50_20000"
+    "alias": "Ema_50_20000",
+    "decl": [
+      {
+        "name": "span",
+        "default": 20
+      },
+      {
+        "name": "warmup",
+        "default": 0
+      }
+    ]
   },
   {
     "name": "只改第一个",
@@ -42,7 +82,17 @@
     "params": {
       "span": 50
     },
-    "alias": "Ema_50_0"
+    "alias": "Ema_50_0",
+    "decl": [
+      {
+        "name": "span",
+        "default": 20
+      },
+      {
+        "name": "warmup",
+        "default": 0
+      }
+    ]
   },
   {
     "name": "小数与负号",
@@ -52,7 +102,17 @@
       "k": -0.5,
       "m": 7
     },
-    "alias": "Fx_n0p5_7"
+    "alias": "Fx_n0p5_7",
+    "decl": [
+      {
+        "name": "k",
+        "default": 1.5
+      },
+      {
+        "name": "m",
+        "default": 3
+      }
+    ]
   },
   {
     "name": "小数默认值",
@@ -62,7 +122,17 @@
       "k": 1.5,
       "m": 3
     },
-    "alias": "Fx"
+    "alias": "Fx",
+    "decl": [
+      {
+        "name": "k",
+        "default": 1.5
+      },
+      {
+        "name": "m",
+        "default": 3
+      }
+    ]
   },
   {
     "name": "负零按零",
@@ -72,14 +142,25 @@
       "k": 0,
       "m": 3
     },
-    "alias": "Fx_0_3"
+    "alias": "Fx_0_3",
+    "decl": [
+      {
+        "name": "k",
+        "default": 1.5
+      },
+      {
+        "name": "m",
+        "default": 3
+      }
+    ]
   },
   {
     "name": "没有参数的因子",
     "factor_id": "Plain",
     "spec": "outputs:\n  o: close\n",
     "params": {},
-    "alias": "Plain"
+    "alias": "Plain",
+    "decl": []
   },
   {
     "name": "别名超长要求手填",
@@ -89,6 +170,16 @@
       "warmup": 50000
     },
     "alias": "",
-    "error": "超过 32 个字符"
+    "error": "超过 32 个字符",
+    "decl": [
+      {
+        "name": "span",
+        "default": 20
+      },
+      {
+        "name": "warmup",
+        "default": 0
+      }
+    ]
   }
 ]

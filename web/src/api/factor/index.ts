@@ -25,7 +25,7 @@ import type {
   SetFactorMemberStatusResult
 } from "./types";
 
-export type CreateFactorSetInput = Pick<FactorSet, "space_id" | "source_dataset_id" | "freq" | "subject_mode" | "subjects"> &
+export type CreateFactorSetInput = Pick<FactorSet, "space_id" | "source_dataset_id" | "freq"> &
   Partial<Pick<FactorSet, "set_id" | "result_dataset_id" | "status">>;
 
 export async function createFactorSet(factorSet: CreateFactorSetInput) {
@@ -33,13 +33,6 @@ export async function createFactorSet(factorSet: CreateFactorSetInput) {
     factor_set: factorSet
   });
   return rsp.factor_set;
-}
-
-export function updateFactorSet(set_id: string, subject_mode: string, subjects: string[]) {
-  return callFactor<{ set_id: string; subject_mode: string; subjects: string[] }, FactorRetRsp<{ factor_set: FactorSet }>>(
-    "UpdateFactorSet",
-    { set_id, subject_mode, subjects }
-  );
 }
 
 export async function setFactorSetStatus(set_id: string, status: string) {
@@ -72,10 +65,14 @@ export function listFactors(params: ListFactorsReq = {}) {
   return callFactor<ListFactorsReq, FactorRetRsp<ListFactorsRsp>>("ListFactors", params);
 }
 
-/** 把定义加入因子集；member_alias 缺省时取定义 ID（共享集合不需要别名）。 */
-export async function addFactorToSet(set_id: string, factor_id: string, member_alias?: string) {
-  const body: { set_id: string; factor_id: string; member_alias?: string } = { set_id, factor_id };
-  if (member_alias && member_alias !== factor_id) body.member_alias = member_alias;
+/**
+ * 把定义加入计算任务。params 是成员的固定参数（没给的参数取定义的默认值，加成员之后不再改）；
+ * member_alias 缺省时由服务端按参数生成：全部参数等于默认值时取定义 ID，否则是“定义ID_参数1_参数2…”。
+ */
+export async function addFactorToSet(set_id: string, factor_id: string, member_alias?: string, params?: Record<string, number>) {
+  const body: { set_id: string; factor_id: string; member_alias?: string; params?: Record<string, number> } = { set_id, factor_id };
+  if (member_alias) body.member_alias = member_alias;
+  if (params && Object.keys(params).length) body.params = params;
   const rsp = await callFactor<typeof body, FactorRetRsp<{ member: FactorMember }>>("AddFactorToSet", body);
   return rsp.member;
 }

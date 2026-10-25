@@ -18,7 +18,6 @@
       <a-form-item label="频率">
         <a-input :model-value="sourceFreq" disabled placeholder="由源数据集决定" />
       </a-form-item>
-      <SubjectScopeFields v-model:mode="form.subject_mode" v-model:subjects="subjects" />
     </a-form>
   </a-modal>
 </template>
@@ -28,13 +27,11 @@ import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createFactorSet } from "@/api/factor";
-import type { SubjectMode } from "@/api/factor/types";
 import { listDatasets } from "@/api/storage/metadata";
 import type { Dataset } from "@/api/storage/types";
 import { useSpaceStore } from "@/store/modules/space";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
-import SubjectScopeFields from "./subject-scope-fields.vue";
 
 defineOptions({ name: "FactorSetCreateModal" });
 
@@ -45,10 +42,9 @@ const spaceStore = useSpaceStore();
 const sourceDatasets = ref<Dataset[]>([]);
 const datasetsLoading = ref(false);
 const submitting = ref(false);
-const subjects = ref<string[]>([]);
-const form = reactive({ source_dataset_id: "", subject_mode: "all" as SubjectMode });
+const form = reactive({ source_dataset_id: "" });
 
-// A Dataset has exactly one frequency, so the factor set takes the source's.
+// A Dataset has exactly one frequency, so the factor set takes the source's. 任务的标的就是源数据集当前的标的。
 const sourceFreq = computed(() => sourceDatasets.value.find(item => item.dataset_id === form.source_dataset_id)?.freq || "");
 
 async function loadSourceDatasets(spaceId: string) {
@@ -69,8 +65,6 @@ async function loadSourceDatasets(spaceId: string) {
 
 async function prepare() {
   form.source_dataset_id = "";
-  form.subject_mode = "all";
-  subjects.value = [];
   // 打开时先清空：上一次（可能属于其他空间）的选项不能在新空间加载失败后继续可选
   sourceDatasets.value = [];
   const spaceId = spaceStore.selectedSpaceId;
@@ -92,10 +86,6 @@ async function submit() {
     Message.warning("请选择源数据集");
     return false;
   }
-  if (form.subject_mode === "include" && !subjects.value.length) {
-    Message.warning("指定对象模式至少需要一个对象 ID");
-    return false;
-  }
   const submission = createScope.begin();
   const submitGeneration = selectedSpaceGeneration();
   const stale = () =>
@@ -105,9 +95,7 @@ async function submit() {
     const created = await createFactorSet({
       space_id: spaceId,
       source_dataset_id: form.source_dataset_id,
-      freq: sourceFreq.value,
-      subject_mode: form.subject_mode,
-      subjects: form.subject_mode === "include" ? [...subjects.value] : []
+      freq: sourceFreq.value
     });
     if (stale()) {
       // 创建请求属于原空间：不在新空间发出 created（父页面会刷新新空间列表并把原空间的任务 ID 写入详情路由）

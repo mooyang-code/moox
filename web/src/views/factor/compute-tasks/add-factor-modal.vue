@@ -15,29 +15,61 @@
     <a-spin :loading="loading" class="add-factor__spin">
       <a-empty v-if="!rows.length && !loading" description="因子定义库里没有可选的因子，请先到「因子定义」新增" />
       <div v-else class="add-factor__list" role="group" aria-label="候选因子">
-        <label v-for="row in rows" :key="row.factor.factor_id" class="add-factor__row" :class="{ 'is-disabled': !row.check.ok }">
-          <a-checkbox
-            :model-value="selected.includes(row.factor.factor_id)"
-            :disabled="!row.check.ok || submitting"
-            @change="toggle(row.factor.factor_id, $event)"
-          />
-          <span class="add-factor__main">
-            <span class="add-factor__name">
-              <strong>{{ row.factor.factor_id }}</strong>
-              <a-tag size="small">{{ factorTypeLabel(row.factor.factor_type) }}</a-tag>
+        <div v-for="row in rows" :key="row.factor.factor_id" class="add-factor__item">
+          <label class="add-factor__row" :class="{ 'is-disabled': row.locked }">
+            <a-checkbox
+              :model-value="selected.includes(row.factor.factor_id)"
+              :disabled="(row.locked && !selected.includes(row.factor.factor_id)) || submitting"
+              @change="toggle(row.factor.factor_id, $event)"
+            />
+            <span class="add-factor__main">
+              <span class="add-factor__name">
+                <strong>{{ row.factor.factor_id }}</strong>
+                <a-tag size="small">{{ factorTypeLabel(row.factor.factor_type) }}</a-tag>
+              </span>
+              <span class="add-factor__io"
+                >输入 {{ row.factor.input_columns.join(", ") }} · 输出 {{ row.factor.outputs.join(", ") }}</span
+              >
             </span>
-            <span class="add-factor__io"
-              >输入 {{ row.factor.input_columns.join(", ") }} · 输出 {{ row.factor.outputs.join(", ") }}</span
-            >
-          </span>
-          <span class="add-factor__note" :class="noteClass(row)">{{ noteText(row) }}</span>
-        </label>
+            <span class="add-factor__note" :class="noteClass(row)">{{ noteText(row) }}</span>
+          </label>
+          <div v-if="selected.includes(row.factor.factor_id)" class="add-factor__config">
+            <span v-for="decl in row.decls" :key="decl.name" class="add-factor__param">
+              <span class="add-factor__param-name">{{ decl.name }}</span>
+              <a-input-number
+                :model-value="paramValue(row.factor.factor_id, decl)"
+                :min="decl.min"
+                :max="decl.max"
+                :precision="decl.type === 'int' ? 0 : undefined"
+                :disabled="submitting"
+                size="small"
+                hide-button
+                class="add-factor__param-input"
+                @change="setParam(row.factor.factor_id, decl.name, $event)"
+              />
+              <span class="add-factor__param-hint">{{ decl.min }} ~ {{ decl.max }}，默认 {{ decl.default_value }}</span>
+            </span>
+            <span class="add-factor__param">
+              <span class="add-factor__param-name">成员别名</span>
+              <a-input
+                :model-value="drafts[row.factor.factor_id]?.alias ?? ''"
+                :placeholder="row.check.ok ? row.check.alias : row.factor.factor_id"
+                :disabled="submitting"
+                size="small"
+                allow-clear
+                class="add-factor__alias-input"
+                @update:model-value="setAlias(row.factor.factor_id, $event)"
+              />
+              <span class="add-factor__param-hint">{{ columnsHint(row) }}</span>
+            </span>
+          </div>
+        </div>
       </div>
     </a-spin>
     <template #footer>
       <a-space>
         <a-button :disabled="submitting" @click="visible = false">取消</a-button>
-        <a-button type="primary" status="success" :loading="submitting" :disabled="!selected.length" @click="submit">
+        <a-button type="primary" status="success" :loading="submitting" :disabled="!canSubmit" @click="submit">
           添加（{{ selected.length }}）
         </a-button>
       </a-space>
@@ -50,12 +82,12 @@ import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, ref, watch, onBeforeUnmount } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { addFactorToSet, listFactors } from "@/api/factor";
-import type { FactorDef, FactorSetInfo } from "@/api/factor/types";
+import type { FactorDef, FactorParamDecl, FactorSetInfo } from "@/api/factor/types";
 import { listDatasetColumns } from "@/api/storage/metadata";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { useSpaceStore } from "@/store/modules/space";
 import { factorTypeLabel } from "@/views/factor/shared/status";
-import { precheckAddFactor, type PrecheckResult } from "./add-factor-precheck";
+import { precheckAddFactor, type PrecheckMember, type PrecheckResult } from "./add-factor-precheck";
 
 defineOptions({ name: "FactorAddFactorModal" });
 
@@ -69,7 +101,6 @@ const factors = ref<FactorDef[]>([]);
 const sourceColumns = ref<string[] | null>(null);
 const keyword = ref("");
 const selected = ref<string[]>([]);
-const added = ref<string[]>([]);
 const errors = ref<Record<string, string>>({});
 const loading = ref(false);
 const loadError = ref("");
@@ -77,18 +108,73 @@ const submitting = ref(false);
 
 interface CandidateRow {
   factor: FactorDef;
+  decls: FactorParamDecl[];
   check: PrecheckResult;
+  /** 这个因子本身加不进去（不是改参数或别名能解决的）：行置灰，不能选。 */
+  locked: boolean;
 }
 
-const memberDefs = computed(() => props.info.members.map(member => member.factor));
+/** 每个选中因子的草稿：固定参数（只存改过的）与手填的别名。 */
+const drafts = ref<Record<string, { params: Record<string, number>; alias: string }>>({});
+/** 本次弹窗里已经加入的成员（别名与固定参数），预检把它们算作已有成员。 */
+const addedMembers = ref<PrecheckMember[]>([]);
+
+const memberViews = computed<PrecheckMember[]>(() => [
+  ...props.info.members.map(member => ({
+    factor_id: member.factor_id,
+    alias: member.member_alias || member.factor_id,
+    params: member.params,
+    output_columns: member.output_columns?.length ? member.output_columns : member.factor.outputs
+  })),
+  ...addedMembers.value
+]);
 
 const rows = computed<CandidateRow[]>(() => {
   const text = keyword.value.trim().toLowerCase();
-  const members = [...memberDefs.value, ...factors.value.filter(item => added.value.includes(item.factor_id))];
   return factors.value
     .filter(item => !text || item.factor_id.toLowerCase().includes(text) || item.name.toLowerCase().includes(text))
-    .map(item => ({ factor: item, check: precheckAddFactor({ candidate: item, members, sourceColumns: sourceColumns.value }) }));
+    .map(item => {
+      const draft = drafts.value[item.factor_id];
+      const check = precheckAddFactor({
+        candidate: item,
+        members: memberViews.value,
+        sourceColumns: sourceColumns.value,
+        params: selected.value.includes(item.factor_id) ? draft?.params : undefined,
+        alias: selected.value.includes(item.factor_id) ? draft?.alias : undefined
+      });
+      return { factor: item, decls: item.params ?? [], check, locked: !check.ok && !check.fixable };
+    });
 });
+
+const canSubmit = computed(
+  () => selected.value.length > 0 && selected.value.every(id => rows.value.find(row => row.factor.factor_id === id)?.check.ok)
+);
+
+function paramValue(factorId: string, decl: FactorParamDecl) {
+  return drafts.value[factorId]?.params[decl.name] ?? decl.default_value;
+}
+
+function draftOf(factorId: string) {
+  return (drafts.value[factorId] ??= { params: {}, alias: "" });
+}
+
+function setParam(factorId: string, name: string, value: number | undefined) {
+  const draft = draftOf(factorId);
+  if (value === undefined || value === null || Number.isNaN(value)) delete draft.params[name];
+  else draft.params[name] = value;
+}
+
+function setAlias(factorId: string, value: string) {
+  draftOf(factorId).alias = value ?? "";
+}
+
+/** 选中后在行下方提示这个成员的结果列名（别名等于因子 ID 时就是输出名）。 */
+function columnsHint(row: CandidateRow) {
+  if (!row.check.ok) return "";
+  const alias = row.check.alias;
+  const columns = row.factor.outputs.map(output => (alias === row.factor.factor_id ? output : `${alias}_${output}`));
+  return `结果列 ${columns.join(", ")}`;
+}
 
 async function fetchAllFactors() {
   const items: FactorDef[] = [];
@@ -115,7 +201,8 @@ async function fetchSourceColumns(spaceId: string, datasetId: string) {
 async function prepare() {
   keyword.value = "";
   selected.value = [];
-  added.value = [];
+  addedMembers.value = [];
+  drafts.value = {};
   errors.value = {};
   loadError.value = "";
   sourceColumns.value = null;
@@ -141,7 +228,7 @@ function toggle(factorId: string, checked: boolean | (string | number | boolean)
 function noteText(row: CandidateRow) {
   const failure = errors.value[row.factor.factor_id];
   if (failure) return failure;
-  return row.check.ok ? "可添加" : row.check.reason;
+  return row.check.ok ? (row.check.alias === row.factor.factor_id ? "可添加" : `可添加，别名 ${row.check.alias}`) : row.check.reason;
 }
 
 function noteClass(row: CandidateRow) {
@@ -168,7 +255,21 @@ async function submit() {
     for (const factorId of [...selected.value]) {
       if (stale()) break;
       try {
-        await addFactorToSet(setId, factorId);
+        const draft = drafts.value[factorId];
+        const row = rows.value.find(item => item.factor.factor_id === factorId);
+        const decls = row?.decls ?? [];
+        // 有参数的因子把完整参数一起提交（没改的取默认值）；别名留空时由服务端按参数生成。
+        const params = decls.length ? Object.fromEntries(decls.map(decl => [decl.name, draft?.params[decl.name] ?? decl.default_value])) : undefined;
+        const member = await addFactorToSet(setId, factorId, draft?.alias?.trim() || undefined, params);
+        addedMembers.value = [
+          ...addedMembers.value,
+          {
+            factor_id: factorId,
+            alias: member.member_alias || factorId,
+            params: member.params ?? params,
+            output_columns: member.output_columns ?? []
+          }
+        ];
         done.push(factorId);
       } catch (error) {
         if (stale()) break; // 弹窗已被关闭/重新打开：失败原因不能写进新弹窗的行
@@ -184,8 +285,8 @@ async function submit() {
     return;
   }
   if (done.length) {
-    added.value = [...added.value, ...done];
     selected.value = selected.value.filter(id => !done.includes(id));
+    for (const id of done) delete drafts.value[id];
     emit("added", done);
   }
   if (!Object.keys(errors.value).length) {
@@ -241,17 +342,52 @@ onBeforeUnmount(() => addScope.invalidate());
   border-radius: 4px;
 }
 
+.add-factor__item {
+  border-bottom: 1px solid var(--color-border-2);
+}
+
+.add-factor__item:last-child {
+  border-bottom: 0;
+}
+
+.add-factor__config {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--moox-space-3) var(--moox-space-4);
+  padding: 0 12px 10px 44px;
+}
+
+.add-factor__param {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--moox-space-2);
+}
+
+.add-factor__param-name {
+  color: var(--color-text-2);
+  font-size: 12px;
+}
+
+.add-factor__param-input {
+  width: 96px;
+}
+
+.add-factor__alias-input {
+  width: 180px;
+}
+
+.add-factor__param-hint {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
 .add-factor__row {
   display: flex;
   align-items: center;
   gap: var(--moox-space-3);
   padding: 10px 12px;
-  border-bottom: 1px solid var(--color-border-2);
   cursor: pointer;
-}
-
-.add-factor__row:last-child {
-  border-bottom: 0;
 }
 
 .add-factor__row.is-disabled {

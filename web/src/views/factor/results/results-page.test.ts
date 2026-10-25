@@ -65,8 +65,6 @@ function setInfo(setId: string, ownerInstanceId = ""): FactorSetInfo {
       space_id: "crypto",
       source_dataset_id: "kline",
       freq: "1m",
-      subject_mode: "all",
-      subjects: [],
       result_dataset_id: `r_${setId}`,
       status: "enabled",
       owner_instance_id: ownerInstanceId

@@ -50,9 +50,6 @@
               <template #cell="{ record }">{{ record.sourceName }}</template>
             </a-table-column>
             <a-table-column title="频率" data-index="freq" :width="80" />
-            <a-table-column title="对象范围" :width="110">
-              <template #cell="{ record }">{{ record.scope }}</template>
-            </a-table-column>
             <a-table-column title="因子" :width="90" align="center">
               <template #cell="{ record }">{{ record.members }}</template>
             </a-table-column>
@@ -128,16 +125,8 @@
       @close="closeDetail"
       @retry="retryActivation"
       @toggle-status="toggleStatus"
-      @edit-scope="openScope"
       @delete="openDelete"
     />
-
-    <a-modal v-model:visible="scopeVisible" title="修改对象范围" :width="560" :ok-loading="busy" :on-before-ok="saveScope">
-      <a-alert type="info" show-icon class="dialog-tip">从下一个周期起生效；已写入的历史需要手动补算。</a-alert>
-      <a-form layout="vertical">
-        <SubjectScopeFields v-model:mode="scopeMode" v-model:subjects="scopeSubjects" />
-      </a-form>
-    </a-modal>
 
     <a-modal
       v-model:visible="deleteVisible"
@@ -164,8 +153,8 @@ import { useSpaceStore } from "@/store/modules/space";
 import { computed, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import { Message } from "@arco-design/web-vue";
-import { createFactorSet, deleteFactorSet, setFactorSetStatus, updateFactorSet } from "@/api/factor";
-import type { FactorSet, FactorSetInfo, SubjectMode } from "@/api/factor/types";
+import { createFactorSet, deleteFactorSet, setFactorSetStatus } from "@/api/factor";
+import type { FactorSet, FactorSetInfo } from "@/api/factor/types";
 import { barLagText, formatPeriod } from "@/views/factor/shared/health";
 import HealthTag from "@/views/factor/shared/health-tag.vue";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
@@ -176,12 +165,10 @@ import {
   ENABLE_ENGINE_HINT,
   filterSets,
   memberCountText,
-  scopeText,
   setActionKind,
   type TaskFilters
 } from "./compute-tasks-model";
 import SetCreateModal from "./set-create-modal.vue";
-import SubjectScopeFields from "./subject-scope-fields.vue";
 import TaskDetailDrawer from "./task-detail-drawer.vue";
 
 defineOptions({ name: "FactorComputeTasks" });
@@ -209,7 +196,6 @@ const rows = computed(() =>
     label: store.setLabel(info.factor_set),
     sourceName: store.datasetNames[info.factor_set.source_dataset_id] || info.factor_set.source_dataset_id,
     freq: info.factor_set.freq,
-    scope: scopeText(info.factor_set),
     members: memberCountText(info),
     statusTag: setStatusTag(info.factor_set.status),
     action: setActionKind(info.factor_set),
@@ -282,9 +268,7 @@ function retryActivation(set: FactorSet) {
         space_id: set.space_id,
         source_dataset_id: set.source_dataset_id,
         freq: set.freq,
-        result_dataset_id: set.result_dataset_id,
-        subject_mode: set.subject_mode,
-        subjects: set.subjects
+        result_dataset_id: set.result_dataset_id
       }),
     "已重新提交激活",
     "重试激活失败"
@@ -292,31 +276,6 @@ function retryActivation(set: FactorSet) {
 }
 
 const target = ref<FactorSet | null>(null);
-const scopeVisible = ref(false);
-const scopeMode = ref<SubjectMode>("all");
-const scopeSubjects = ref<string[]>([]);
-
-function openScope(set: FactorSet) {
-  target.value = set;
-  scopeMode.value = set.subject_mode;
-  scopeSubjects.value = [...(set.subjects || [])];
-  scopeVisible.value = true;
-}
-
-async function saveScope() {
-  const current = target.value;
-  if (!current) return false;
-  if (scopeMode.value === "include" && !scopeSubjects.value.length) {
-    Message.warning("指定对象模式至少需要一个对象 ID");
-    return false;
-  }
-  return run(
-    () => updateFactorSet(current.set_id, scopeMode.value, scopeMode.value === "include" ? [...scopeSubjects.value] : []),
-    "对象范围已更新",
-    "更新对象范围失败"
-  );
-}
-
 const deleteVisible = ref(false);
 const purge = ref(false);
 const confirmText = ref("");

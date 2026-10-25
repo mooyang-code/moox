@@ -1,5 +1,5 @@
 <template>
-  <a-form-item label="对象范围" required>
+  <a-form-item label="补算对象" required>
     <a-radio-group v-model="mode" type="button">
       <a-radio value="all">全部对象</a-radio>
       <a-radio value="include">指定对象</a-radio>
@@ -11,10 +11,10 @@
 </template>
 
 <script setup lang="ts">
-import type { SubjectMode } from "@/api/factor/types";
+import type { RecalcSubjectMode } from "@/api/factor/types";
 
 defineOptions({ name: "FactorSubjectScopeFields" });
 
-const mode = defineModel<SubjectMode>("mode", { required: true });
+const mode = defineModel<RecalcSubjectMode>("mode", { required: true });
 const subjects = defineModel<string[]>("subjects", { required: true });
 </script>

@@ -38,8 +38,6 @@ const info = (setId: string, spaceId = "crypto"): FactorSetInfo => ({
     space_id: spaceId,
     source_dataset_id: "d",
     freq: "1m",
-    subject_mode: "all",
-    subjects: [],
     result_dataset_id: `r_${setId}`,
     status: "enabled"
   },

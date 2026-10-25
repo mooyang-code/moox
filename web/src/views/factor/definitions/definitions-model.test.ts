@@ -72,9 +72,21 @@ describe("definitions model", () => {
       setId => labels[setId] ?? setId
     );
     expect(chips).toEqual([
-      { key: "set_a/", setId: "set_a", label: "现货K线 · 1m", status: "enabled", statusLabel: "已启用" },
-      { key: "set_gone/", setId: "set_gone", label: "set_gone", status: "disabled", statusLabel: "已停用" }
+      { key: "set_a/", setId: "set_a", label: "现货K线 · 1m", status: "enabled", statusLabel: "已启用", paramsText: undefined },
+      { key: "set_gone/", setId: "set_gone", label: "set_gone", status: "disabled", statusLabel: "已停用", paramsText: undefined }
     ]);
+  });
+
+  it("usage chips show the fixed params of each member", () => {
+    const chips = usageChips(
+      [
+        { set_id: "set_a", member_alias: "Ema", status: "enabled", params: { span: 20, warmup: 0 } },
+        { set_id: "set_a", member_alias: "Ema_20_50000", status: "enabled", params: { warmup: 50000, span: 20 } }
+      ],
+      () => "5m 因子集"
+    );
+    expect(chips.map(chip => chip.paramsText)).toEqual(["span=20, warmup=0", "span=20, warmup=50000"]);
+    expect(chips.map(chip => chip.key)).toEqual(["set_a/Ema", "set_a/Ema_20_50000"]);
   });
 
   it("edit locked when any enabled usage, with reason", () => {

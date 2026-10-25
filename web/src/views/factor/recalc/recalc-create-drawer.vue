@@ -19,7 +19,7 @@
           </a-select>
         </a-form-item>
 
-        <SubjectScopeFields v-model:mode="form.subject_mode" v-model:subjects="form.subjects" />
+        <SubjectScopeFields v-model:mode="form.subjectMode" v-model:subjects="form.subjects" />
 
         <a-form-item label="开始时间" required>
           <a-date-picker v-model="form.start_time" show-time value-format="timestamp" format="YYYY-MM-DD HH:mm:ss" />
@@ -48,8 +48,8 @@ import { Message } from "@arco-design/web-vue";
 import { recalcFactors } from "@/api/factor";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { useSpaceStore } from "@/store/modules/space";
-import type { FactorSetInfo, RecalcJob, SubjectMode } from "@/api/factor/types";
-import SubjectScopeFields from "@/views/factor/compute-tasks/subject-scope-fields.vue";
+import type { FactorSetInfo, RecalcJob, RecalcSubjectMode } from "@/api/factor/types";
+import SubjectScopeFields from "@/views/factor/recalc/subject-scope-fields.vue";
 import { defaultRange, enabledMemberIds, estimateRecalc, quickRange } from "./recalc-model";
 
 defineOptions({ name: "FactorRecalcCreateDrawer" });
@@ -74,7 +74,7 @@ const quickItems = [
 const submitting = ref(false);
 const form = reactive({
   members: [] as string[],
-  subject_mode: "all" as SubjectMode,
+  subjectMode: "all" as RecalcSubjectMode,
   subjects: [] as string[],
   start_time: undefined as number | undefined,
   end_time: undefined as number | undefined,
@@ -89,7 +89,7 @@ const estimate = computed(() =>
     start: form.start_time,
     end: form.end_time,
     factorCount: form.members.length,
-    subjectMode: form.subject_mode,
+    subjectMode: form.subjectMode,
     subjectCount: form.subjects.length
   })
 );
@@ -112,7 +112,7 @@ function applyQuick(kind: "periods" | "day" | "week") {
 
 function prepare() {
   form.members = [...candidates.value];
-  form.subject_mode = "all";
+  form.subjectMode = "all";
   form.subjects = [];
   form.request_id = "";
   setRange(defaultRange(freq.value));
@@ -133,7 +133,7 @@ async function submit() {
     Message.warning("结束时间必须晚于开始时间");
     return false;
   }
-  if (form.subject_mode === "include" && !form.subjects.length) {
+  if (form.subjectMode === "include" && !form.subjects.length) {
     Message.warning("指定对象模式至少需要一个对象 ID");
     return false;
   }
@@ -147,7 +147,7 @@ async function submit() {
     const job = await recalcFactors({
       set_id: current.set_id,
       members: [...form.members],
-      subjects: form.subject_mode === "include" ? [...form.subjects] : [],
+      subjects: form.subjectMode === "include" ? [...form.subjects] : [],
       start_time: new Date(form.start_time).toISOString(),
       end_time: new Date(form.end_time).toISOString(),
       request_id: form.request_id.trim() || `factor-recalc-${Date.now()}`

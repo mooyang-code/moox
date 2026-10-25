@@ -10,8 +10,6 @@ const factorSet = {
   space_id: "crypto",
   source_dataset_id: "dataset_binance_kline_1m",
   freq: "1m",
-  subject_mode: "all",
-  subjects: [],
   result_dataset_id: "dataset_factor_binance_kline_1m",
   status: "enabled"
 };

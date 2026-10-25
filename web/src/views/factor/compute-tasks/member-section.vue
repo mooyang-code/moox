@@ -22,6 +22,7 @@
             <a-tag size="small">{{ factorTypeLabel(row.member.factor.factor_type) }}</a-tag>
           </div>
           <div class="member-row__outputs">输出 {{ row.outputs.join(", ") || "-" }}</div>
+          <div v-if="row.fixedParams" class="member-row__outputs">固定参数 {{ row.fixedParams }}</div>
           <div v-if="row.params.length" class="member-row__outputs">参数列 {{ row.params.join(", ") }}</div>
         </div>
         <a-tag size="small" :color="memberStatusTag(row.member.status).color">{{
@@ -79,7 +80,7 @@
       </li>
     </ul>
 
-    <p class="member-section__hint">启用时加列并自动回填历史；停用保留结果列。已启用的因子需先停用才能编辑定义或移除。</p>
+    <p class="member-section__hint">启用时加列，不自动补算历史（需要时到「补算」手动提交）；停用保留结果列。已启用的因子需先停用才能编辑定义或移除。固定参数加成员之后不再改，要换参数请另加一个成员。</p>
     <p v-if="props.info.last_run?.last_period_time" class="member-section__hint">
       最近周期 {{ formatPeriod(props.info.last_run.last_period_time) }}，{{
         barLagText(props.info.factor_set.freq, props.info.last_run)
@@ -98,6 +99,7 @@ import { removeFactorFromSet, setFactorMemberStatus } from "@/api/factor";
 import type { FactorMember, FactorSetInfo, MemberStatus } from "@/api/factor/types";
 import { useFactorStore } from "@/store/modules/factor";
 import { barLagText, formatPeriod } from "@/views/factor/shared/health";
+import { fixedParamsText } from "@/views/factor/shared/member-params";
 import { factorTypeLabel, memberStatusTag, periodStatusTag } from "@/views/factor/shared/status";
 import AddFactorModal from "./add-factor-modal.vue";
 import {
@@ -131,6 +133,7 @@ const rows = computed(() =>
       period,
       outputs: member.output_columns?.length ? member.output_columns : member.factor.outputs,
       params: member.param_columns ?? [],
+      fixedParams: fixedParamsText(member.params),
       paramsTag: paramsSourceLabel(period?.params_source)
     };
   })

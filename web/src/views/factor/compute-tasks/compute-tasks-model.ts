@@ -48,10 +48,6 @@ export function memberCountText(info: Pick<FactorSetInfo, "members">) {
   return `${enabled} / ${total}`;
 }
 
-export function scopeText(set: Pick<FactorSet, "subject_mode" | "subjects">) {
-  return set.subject_mode === "include" ? `指定 ${(set.subjects || []).length} 个` : "全部对象";
-}
-
 export type SetActionKind = "retry" | "disable" | "enable" | "none";
 
 /** 列表行 / 抽屉上与状态相关的主动作：激活失败重试，运行中停用，已停用启用。 */

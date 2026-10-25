@@ -10,8 +10,6 @@ const set = (patch: Partial<FactorSet> = {}): FactorSet => ({
   space_id: "crypto",
   source_dataset_id: "dataset_kline",
   freq: "1m",
-  subject_mode: "all",
-  subjects: [],
   result_dataset_id: "dataset_factor_set_a",
   status: "enabled",
   ...patch

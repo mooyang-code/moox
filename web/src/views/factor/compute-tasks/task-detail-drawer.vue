@@ -36,11 +36,6 @@
           <a-descriptions-item label="计算任务 ID">{{ set.set_id }}</a-descriptions-item>
           <a-descriptions-item label="频率">{{ set.freq }}</a-descriptions-item>
           <a-descriptions-item label="源数据集" :span="2">{{ sourceName }}（{{ set.source_dataset_id }}）</a-descriptions-item>
-          <a-descriptions-item label="对象范围" :span="2">
-            {{ scopeText(set) }}
-            <span v-if="set.subject_mode === 'include'" class="detail-subjects">{{ set.subjects.join(", ") }}</span>
-            <a-button size="mini" type="text" :disabled="locked" @click="emit('editScope', set)">修改</a-button>
-          </a-descriptions-item>
           <a-descriptions-item label="结果数据集" :span="2">{{ set.result_dataset_id }}</a-descriptions-item>
           <a-descriptions-item label="结果视图" :span="2">{{ resultViewId || "-" }}</a-descriptions-item>
           <a-descriptions-item label="创建时间">{{ formatTime(set.created_at) }}</a-descriptions-item>
@@ -82,7 +77,7 @@ import { RequestGate } from "@/utils/request-gate";
 import { setHealth } from "@/views/factor/shared/health";
 import HealthTag from "@/views/factor/shared/health-tag.vue";
 import { setStatusTag } from "@/views/factor/shared/status";
-import { deleteState, ENABLE_ENGINE_HINT, scopeText, setActionKind } from "./compute-tasks-model";
+import { deleteState, ENABLE_ENGINE_HINT, setActionKind } from "./compute-tasks-model";
 import MemberSection from "./member-section.vue";
 
 defineOptions({ name: "FactorTaskDetailDrawer" });
@@ -92,7 +87,6 @@ const emit = defineEmits<{
   (e: "close"): void;
   (e: "retry", set: FactorSet): void;
   (e: "toggleStatus", set: FactorSet, next: "enabled" | "disabled"): void;
-  (e: "editScope", set: FactorSet): void;
   (e: "delete", set: FactorSet): void;
 }>();
 
@@ -104,7 +98,6 @@ const title = computed(() => (props.info ? store.setLabel(set.value) : ""));
 const statusTag = computed(() => setStatusTag(set.value?.status || ""));
 const health = computed(() => setHealth(set.value ?? { status: "pending", freq: "" }, props.info?.last_run));
 const actionKind = computed(() => (set.value ? setActionKind(set.value) : "none"));
-const locked = computed(() => set.value?.status === "deleting" || set.value?.status === "pending");
 const removeState = computed(() => (props.info ? deleteState(props.info) : { disabled: true, reason: "" }));
 const sourceName = computed(() =>
   set.value ? store.datasetNames[set.value.source_dataset_id] || set.value.source_dataset_id : ""
@@ -179,10 +172,6 @@ function goTab(tab: "results" | "recalc") {
   font-weight: 600;
 }
 
-.detail-subjects {
-  margin-left: var(--moox-space-2);
-  color: var(--color-text-3);
-}
 
 .detail-hint {
   margin: var(--moox-space-2) 0 0;

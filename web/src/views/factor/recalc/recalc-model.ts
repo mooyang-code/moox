@@ -1,4 +1,4 @@
-import type { FactorSetInfo, RecalcJob, RecalcJobStatus, SubjectMode } from "@/api/factor/types";
+import type { FactorSetInfo, RecalcJob, RecalcJobStatus, RecalcSubjectMode } from "@/api/factor/types";
 import { freqSeconds } from "@/views/factor/shared/health";
 import { jobProgress, jobStatusTag, splitJobNote } from "@/views/factor/shared/status";
 
@@ -74,7 +74,7 @@ export interface EstimateInput {
   start?: number;
   end?: number;
   factorCount: number;
-  subjectMode: SubjectMode;
+  subjectMode: RecalcSubjectMode;
   subjectCount: number;
 }
 
