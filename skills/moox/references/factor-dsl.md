@@ -313,6 +313,20 @@ python3 "$SKILL_ROOT/scripts/factor_py_check.py" compare --expected "$W/py.csv" 
 4. 核对无误后把成员改成 `status = "enabled"` 再执行一次（启用不会自动补算历史；需要历史因子值时用 `moox-factor-mgr-cli recalc` 指定范围）。
 5. 仓库里的因子库改动按项目规范提交。
 
+**同一个因子的多组参数**：定义里用 `params` 声明可调参数，一个定义可以用不同的固定参数多次加入同一个计算任务，
+每个成员带自己的参数，别名按参数生成（全默认沿用因子 ID，否则“因子ID_参数1_参数2…”，按声明顺序写全部参数值）。
+不要为了换参数新建把参数写死的定义（例如 `Ema20Warmup50000`）。`moox.toml` 里的写法：
+
+```toml
+[[factors.members]]
+source_dataset_id = "dataset_dasftksvjhj2jom4vhd0"
+freq = "1m"
+factor_id = "Ema"
+params = { span = 20, warmup = 50000 }   # 没给的参数取定义的默认值；member_alias 缺省按参数生成（这里是 Ema_20_50000）
+```
+
+固定参数加成员之后不再改，要换参数就另加一个成员；策略实例专属任务的参数由策略逐期提交，不用固定参数。
+
 ### 方式 B：控制台
 
 「因子计算 → 因子定义 → 新建」：填 `factor_id` 与名称，把 spec 粘进编辑器（输入时自动校验，显示“编译通过”），
