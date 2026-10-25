@@ -35,7 +35,7 @@ func TestResolvePrefersSpaceOverride(t *testing.T) {
 	cases := []struct {
 		space, freq, want, source string
 	}{
-		{"crypto", "1m", "192h", SourceDefault},
+		{"crypto", "1m", "840h", SourceDefault},
 		{"crypto", "1d", Forever, SourceDefault},
 		{"stockcn", "1m", "1440h", SourceSpace},
 		{"stockhk", "1m", "1080h", SourceSpace},
@@ -211,7 +211,7 @@ func TestRetentionBarsAndMinRetention(t *testing.T) {
 		t.Fatalf("crypto 1h: bars=%v forever=%v estimated=%v err=%v", bars, forever, estimated, err)
 	}
 	bars, forever, estimated, err = policy.RetentionBars("crypto", "1m")
-	if err != nil || forever || estimated || bars != 8*24*60 {
+	if err != nil || forever || estimated || bars != 35*24*60 {
 		t.Fatalf("crypto 1m: bars=%v forever=%v estimated=%v err=%v", bars, forever, estimated, err)
 	}
 	if _, forever, _, err = policy.RetentionBars("crypto", "1d"); err != nil || !forever {

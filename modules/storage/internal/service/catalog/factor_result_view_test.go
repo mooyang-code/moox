@@ -319,13 +319,13 @@ func TestMetadataReturnsDatasetRetentionFromPolicy(t *testing.T) {
 	got, err := service.GetDataset(ctx, &pb.GetDatasetReq{SpaceId: dataset.GetSpaceId(), DatasetId: dataset.GetDatasetId()})
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, got.GetRetInfo().GetCode(), got.GetRetInfo().GetMsg())
-	require.Equal(t, "192h", got.GetDataset().GetRetention(), "a 1m Dataset in a space without overrides keeps 8 days")
+	require.Equal(t, "840h", got.GetDataset().GetRetention(), "a 1m Dataset in a space without overrides keeps 35 days")
 	require.Equal(t, "default", got.GetDataset().GetRetentionSource())
 
 	listed, err := service.ListDatasets(ctx, &pb.ListDatasetsReq{SpaceId: dataset.GetSpaceId()})
 	require.NoError(t, err)
 	require.Len(t, listed.GetDatasets(), 1)
-	require.Equal(t, "192h", listed.GetDatasets()[0].GetRetention())
+	require.Equal(t, "840h", listed.GetDatasets()[0].GetRetention())
 
 	retention, source := service.datasetRetention(&pb.Dataset{DataKind: pb.DataKind_DATA_KIND_RECORD})
 	require.Equal(t, "forever", retention)

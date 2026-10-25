@@ -176,7 +176,7 @@ func Default() Policy {
 	policy := Policy{
 		Retention: Retention{
 			Defaults: map[string]string{
-				"30s": "90h", "1m": "8d", "5m": "35d", "15m": "105d", "30m": "210d",
+				"30s": "90h", "1m": "35d", "5m": "35d", "15m": "105d", "30m": "210d",
 				"1h": "420d", "4h": "1700d", "1d": Forever, "1w": Forever, "1mo": Forever,
 			},
 			Spaces: map[string]map[string]string{

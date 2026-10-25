@@ -222,7 +222,7 @@ view_rows_per_series = 777
 	// replaces the recommended space overrides instead of merging with them.
 	period, source, err = policy.Retention.Resolve("stockcn", "1m")
 	require.NoError(t, err)
-	assert.Equal(t, "192h", period.String())
+	assert.Equal(t, "840h", period.String())
 	assert.Equal(t, storagepolicy.SourceDefault, source)
 }
 
