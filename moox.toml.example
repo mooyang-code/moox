@@ -37,7 +37,7 @@ view_rows_per_series = 10000  # 每个序列 View 保留最近 N 根；超过 ce
 # 7×24 小时交易的空间（crypto 等，以及没有单独配置的空间）
 [storage_retention.defaults]
 "30s" = "90h"
-"1m" = "8d"
+"1m" = "35d"  # 要装得下默认因子 EMA 的最大回看 49995 根（约 34.7 天）
 "5m" = "35d"
 "15m" = "105d"
 "30m" = "210d"

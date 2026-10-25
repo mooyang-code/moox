@@ -76,8 +76,8 @@ func TestDatasetCleanupUsesPolicyRetentionBySpaceAndFrequency(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		// crypto 1m keeps 8 days, stockcn 1m 60 days; whole day buckets.
-		"crypto/prices_1m":  "2026-07-12T00:00:00.000000000Z",
+		// crypto 1m keeps 35 days, stockcn 1m 60 days; whole day buckets.
+		"crypto/prices_1m":  "2026-06-15T00:00:00.000000000Z",
 		"stockcn/equity_1m": "2026-05-21T00:00:00.000000000Z",
 	}
 	if len(node.requests) != len(want) {
@@ -204,7 +204,7 @@ func TestLoadStoragePolicyDefaultsWithoutStorageConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if policy.View.Bars != 10000 || policy.View.TrimBars != 12000 || policy.Retention.Defaults["1m"] != "192h" {
+	if policy.View.Bars != 10000 || policy.View.TrimBars != 12000 || policy.Retention.Defaults["1m"] != "840h" {
 		t.Fatalf("default policy = %#v", policy)
 	}
 }

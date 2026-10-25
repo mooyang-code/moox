@@ -198,7 +198,7 @@ func TestEditorFormShowsTheCommonSettings(t *testing.T) {
 	if len(form.Hosts) != 3 || form.Hosts[0].ID != "control" || form.Hosts[0].SSHUser != "ubuntu" || form.Hosts[0].SSHPassword != "pw-control" || form.Hosts[0].Address == "" {
 		t.Fatalf("主机 = %+v", form.Hosts)
 	}
-	if form.Retention.ViewBars != 10000 || form.Retention.Defaults["1m"] != "8d" || len(form.Retention.Frequencies) != 10 {
+	if form.Retention.ViewBars != 10000 || form.Retention.Defaults["1m"] != "35d" || len(form.Retention.Frequencies) != 10 {
 		t.Fatalf("保留期 = %+v", form.Retention)
 	}
 	names := map[string]string{}

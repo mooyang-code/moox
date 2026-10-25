@@ -11,7 +11,7 @@ import (
 )
 
 func newConfigMigrateCommand() *cobra.Command {
-	var file, renameHost, importSCF, tlsMode, addDeployment, reachability, factorsEnabled string
+	var file, renameHost, importSCF, tlsMode, addDeployment, reachability, factorsEnabled, retention string
 	var yes, addDefaultFactors bool
 	cmd := &cobra.Command{
 		Use:   "migrate",
@@ -22,6 +22,7 @@ func newConfigMigrateCommand() *cobra.Command {
 - 把 [deployments] 里已改名的旧组件身份改成当前名字（cloudnode → cloudfunction）；
 - 加 --rename-host 旧ID=新ID 时把主机 ID 改名（主机表、[deployments]、access_host 与 host 引用）；
 - 加 --set-factors-enabled true|false 时设置 [factors] enabled；
+- 加 --set-retention defaults.<频率>=<时长> 或 <空间>.<频率>=<时长> 时设置该频率的保留期（生效要重装 Storage 单元）；
 - 加 --add-default-factors 时补上内置样例里有、配置里还没有的默认因子定义与成员（已有的不动，成员沿用样例的 status）；
 - 加 --set-reachability 主机ID=direct|outbound 时设置主机可达性；
 - 加 --add-deployment 主机ID=组件ID[,组件ID] 时把组件并入该主机的 [deployments]（已有的不重复）；
@@ -42,6 +43,13 @@ func newConfigMigrateCommand() *cobra.Command {
 			}
 			opts.FactorsEnabled = strings.TrimSpace(factorsEnabled)
 			opts.AddDefaultFactors = addDefaultFactors
+			if retention != "" {
+				target, value, ok := strings.Cut(retention, "=")
+				if !ok {
+					return errors.New("--set-retention 需要写成 defaults.<频率>=<时长>，例如 defaults.1m=35d")
+				}
+				opts.RetentionTarget, opts.RetentionValue = strings.TrimSpace(target), strings.TrimSpace(value)
+			}
 			if reachability != "" {
 				host, mode, ok := strings.Cut(reachability, "=")
 				if !ok {
@@ -79,6 +87,7 @@ func newConfigMigrateCommand() *cobra.Command {
 	cmd.Flags().StringVar(&renameHost, "rename-host", "", "把主机 ID 改名，写成 旧ID=新ID，例如 legacy-1=overseas")
 	cmd.Flags().StringVar(&importSCF, "import-scf", "", "用这份 JSON 整体替换 [scf_plan]，并给入口主机补上 region 与 private_address")
 	cmd.Flags().StringVar(&factorsEnabled, "set-factors-enabled", "", "设置 [factors] enabled，取 true 或 false（true 时 setup init / setup factors 才会导入因子）")
+	cmd.Flags().StringVar(&retention, "set-retention", "", "设置某个频率的保留期，写成 defaults.<频率>=<时长> 或 <空间>.<频率>=<时长>，例如 defaults.1m=35d")
 	cmd.Flags().BoolVar(&addDefaultFactors, "add-default-factors", false, "补上内置样例里有、配置里还没有的默认因子定义与成员（之后用 setup factors 导入）")
 	cmd.Flags().StringVar(&reachability, "set-reachability", "", "设置主机的可达性，写成 主机ID=direct|outbound（只能出站的内网机器用 outbound）")
 	cmd.Flags().StringVar(&addDeployment, "add-deployment", "", "把组件加进主机的 [deployments]，写成 主机ID=组件ID[,组件ID]，例如 factor=factor-engine,archive-worker")

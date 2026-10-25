@@ -36,6 +36,8 @@ type MigrateOptions struct {
 	FactorsEnabled string
 	// AddDefaultFactors 为 true 时补上内置样例里有、配置里还没有的默认因子定义与成员（--add-default-factors）。
 	AddDefaultFactors bool
+	// RetentionTarget / RetentionValue 非空时设置某个频率的保留期（--set-retention defaults.1m=35d）。
+	RetentionTarget, RetentionValue string
 	// ReachabilityHost / Reachability 非空时设置该主机的可达性（--set-reachability 主机=direct|outbound）。
 	ReachabilityHost, Reachability string
 	// AddDeploymentHost / AddDeploymentComponents 非空时把这些组件加进该主机的 [deployments] 条目（--add-deployment 主机=组件,组件）。
@@ -109,6 +111,8 @@ type MigrateReport struct {
 	TLSMode     map[string]string `json:"tls_mode,omitempty"`
 	// FactorsEnabled 记录 --set-factors-enabled 的结果。
 	FactorsEnabled string `json:"factors_enabled,omitempty"`
+	// Retention 记录 --set-retention 的结果。
+	Retention map[string]string `json:"retention,omitempty"`
 	// DefaultFactors 记录 --add-default-factors 补上的定义与成员。
 	DefaultFactors *DefaultFactorsReport `json:"default_factors,omitempty"`
 	// Reachability 记录 --set-reachability 的结果。
@@ -162,6 +166,12 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 			return report, err
 		}
 		report.FactorsEnabled = opts.FactorsEnabled
+	}
+	if opts.RetentionTarget != "" {
+		if migrated, err = setStorageRetention(migrated, opts.RetentionTarget, opts.RetentionValue); err != nil {
+			return report, err
+		}
+		report.Retention = map[string]string{opts.RetentionTarget: opts.RetentionValue}
 	}
 	if opts.AddDefaultFactors {
 		var added DefaultFactorsReport
