@@ -127,8 +127,8 @@ type WindowConfig struct {
 // MaxLookbackLimit 是回看数量 N 的绝对上限，与表达式引擎的回看上限一致。
 const MaxLookbackLimit = 100000
 
-// DefaultWindowBars 是回看数量 N 的默认值。
-const DefaultWindowBars = 10000
+// DefaultWindowBars 是回看数量 N 的默认值：要装得下默认因子 EMA 的最大回看 49995 根。
+const DefaultWindowBars = 50000
 
 // LookbackFor 返回数据源的回看数量 N：先看按数据源的覆盖，再取全局默认。
 func (c WindowConfig) LookbackFor(spaceID, datasetID, freq string) int {

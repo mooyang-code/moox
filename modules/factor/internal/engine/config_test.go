@@ -140,5 +140,5 @@ func TestWindowLookbackConfig(t *testing.T) {
 
 	cfg := Default()
 	cfg.applyDefaults()
-	require.Equal(t, DefaultWindowBars, cfg.Window.Lookback, "没写 window.lookback 时默认 1 万")
+	require.Equal(t, DefaultWindowBars, cfg.Window.Lookback, "没写 window.lookback 时默认 5 万")
 }
