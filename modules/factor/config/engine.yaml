@@ -33,10 +33,10 @@ eventbus:
   fetch_max_wait: 10s
 
 # 表达式执行器：workers 是一次程序执行的并行度（默认 min(4, 核数)）；
-# max_memory 是一个计算分块估算峰值内存的上限（默认 1GiB）。
+# max_memory 是一个计算分块估算峰值内存的上限（默认 4GiB；默认因子 EMA 回看 5 万根，500 多个标的一期约需 1.1GB）。
 compute:
   workers: 4
-  max_memory: 1GiB
+  max_memory: 4GiB
 
 # 本地时序存储（Pebble，数据永不删除）：K 线先同步到这里，实时计算、补算、重算都从本地读，Storage 只补增量和修正。
 seriesstore:

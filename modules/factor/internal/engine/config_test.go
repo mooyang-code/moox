@@ -44,7 +44,7 @@ func TestEngineConfigDefaultsAndPaths(t *testing.T) {
 	require.Equal(t, "assigned-factor-engine-47", cfg.GatewayClient.KeyID)
 	require.Equal(t, filepath.Join(root, "secrets/storage-primary-auth.secret"), cfg.Storage.AuthSecretFile)
 	require.Equal(t, 500, cfg.Recalc.ChunkPeriods)
-	require.Equal(t, ByteSize(1<<30), cfg.Compute.MaxMemory)
+	require.Equal(t, ByteSize(4<<30), cfg.Compute.MaxMemory)
 }
 
 func TestEngineConfigRejectsDatabaseSection(t *testing.T) {
